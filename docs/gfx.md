@@ -3057,6 +3057,20 @@ texture_update, and that a success keeps it. Mutants cv-01 (a failure
 that writes nothing) and cv-02 (a success that drops the message) are
 caught.
 
+**What the message costs a draw.** Every public call on a gfx hides the
+old message's first byte on entry and puts it back on success, so each
+call stores one byte of the cold message buffer. Measured on 2026-10-10
+(Iris Xe laptop, Windows 11, AC power, MSVC 19.44 /O2, the measurement
+lock held, base `0a16f22` and v0.12.0 alternated): 256 `ygfx_draw()`
+calls a frame for 400 frames on the simulated display's null backend, so
+the queue is the whole cost. Median ns a draw over 6 runs each: v0.11.1
+75.6 (runs 73.0 to 85.5), v0.12.0 75.8 (70.7 to 84.8). The difference
+is under the run-to-run spread. `gfx_bench --only gabors` (1 to 1000
+draws a frame, ANGLE on D3D11) and `gfx_rdk_bench` over 5 alternated
+rounds also showed no difference above their noise, which is 10 to 30 %
+a workload on this laptop. So the hot calls keep the same wrapper as the
+others; no direct path.
+
 ## v0.11.1: the open in two calls
 
 `ygfx_open_start()` does the first half of `ygfx_open()`: the desc's
