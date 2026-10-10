@@ -16,308 +16,6 @@
  *   the C dialect MSVC compiles by default. Nothing but the OS.
  *
  *   ---------------------------------------------------------------------
- *   CHANGELOG
- *   ---------------------------------------------------------------------
- *   v0.8.0 - The ysp conventions (README.md, Conventions); breaks the API.
- *          Every time is int64_t ns: yrt_now_ns(), yrt_sleep_until(),
- *          yrt_sleep_ns(), yrt_spin_until(), yrt_worker_submit(),
- *          yrt_pump_wait(), yrt_event.t_ns, the zone's dur_ns, yrt_corr,
- *          yrt_job_info, yrt_sched_deadline, yrt_clock_info and
- *          yrt_report. yrt_now_us() is gone. Unit macros YRT_NS(),
- *          YRT_US(), YRT_MS(), YRT_S(), YRT_TO_MS() and YRT_TO_S().
- *          Open and close: yrt_worker_start/stop() and
- *          yrt_pump_start/stop() are yrt_worker_open/close() and
- *          yrt_pump_open/close(); yrt_fit_init() is yrt_fit_open(), which
- *          returns bool with the reason in yrt_fit_error(), and
- *          yrt_fit_close() is new; yrt_ring_close() is new.
- *          yrt_sched_normalize(), yrt_thread_set_timer_slack(),
- *          yrt_thread_pin(), yrt_process_lock_memory() and
- *          yrt_timer_resolution_begin() return 0 or a negative code
- *          (YRT_ERR_UNSUPPORTED, YRT_ERR_REFUSED, YRT_ERR_ARG) instead of
- *          bool.
- *   v0.7.0 - Per-user folders: yrt_user_dir(YRT_DIR_CACHE or
- *          YRT_DIR_CONFIG, subdir, out, cap) gives <base>/ysp/<subdir>,
- *          the base from the platform's per-user cache or config location,
- *          checked as ysp/gfx.h's ygfx_default_cache_dir() checked its
- *          folder (that function is now a wrapper of this one). See
- *          PER-USER FOLDERS. Nothing else changed.
- *   v0.6.0 - The device clock fit: yrt_fit maps a device's own counter
- *          (a response box's ms timer, a board's micros(), a tracker's
- *          clock) to the ysp_rt clock from (ticks, host time) pairs. Three
- *          estimators: LATE (the lower envelope, for stamps that are late
- *          and never early), BRACKET (the least late of bracketed reads,
- *          wide brackets refused) and UNBIASED (least squares). Counter
- *          unwrap, a restart on a clock reset, a fixed window of 1024
- *          points, no allocation. With a ring it logs the thinned pairs
- *          (YRT_KIND_CLOCK) and each fit (YRT_KIND_FIT, new) for an
- *          offline refit. YRT_SRC_DEVICE (12) reserved for ysp/device.h.
- *          See DEVICE CLOCK FIT. Nothing else changed.
- *   v0.5.0 - The event ring: yrt_ring, a wait-free ring of 64-byte
- *          yrt_event records in memory the caller supplies, pushed from
- *          any number of threads (an audio callback included) and drained
- *          by one. A full ring refuses the new record, counts it, and the
- *          next drain reports the count in band as a YRT_KIND_LOSS
- *          record. See EVENT RING.
- *          yrt_correlate(): the ysp_rt clock against another clock read
- *          between two of its own reads, the tightest of N tries, with the
- *          bracket's width; an edge mode for coarse clocks.
- *          yrt_interrupt_time_100ns(), the Windows interrupt-time clock,
- *          and yrt_ticks_to_ns(), the exact conversion yrt_now_ns()
- *          applies to a QPC value. yrt_thread_id(). See CLOCK
- *          CORRELATION.
- *          The instrumentation macros (YRT_ZONE, YRT_FRAME_MARK,
- *          YRT_PLOT, YRT_MESSAGE and the rest): nothing by default, the
- *          Tracy C API with YRT_TRACY, records in a trace ring with
- *          YRT_TRACE_RING. The worker, the pump and yrt_sleep_until()
- *          are instrumented. See INSTRUMENTATION.
- *          YRT_OK, the YRT_ERR_* codes and yrt_strerror() are now
- *          outside the YRT_NO_THREADS guard, because the ring and the
- *          correlation use them; a no-threads build gains them and loses
- *          nothing. YRT_ERR_FULL's text is "ring full, not taken", for
- *          the pump and the event ring alike.
- *          Windows 11 power throttling: yrt_timer_resolution_begin() also
- *          opts the process out of the timer throttling a minimized process
- *          gets, and yrt_thread_elevate() and the pump thread opt their
- *          thread out of EcoQoS. yrt_report gains timer_throttle_off,
- *          ecoqos_off and throttle_known, and the yrt_describe() line ends
- *          in timer_throttle= and ecoqos= on every platform. See POWER
- *          THROTTLING under SCHEDULING.
- *          yrt_cpu_core_type() and yrt_core_type_name(): P-core or
- *          E-core, from Windows' EfficiencyClass. yrt_thread_elevate()
- *          prefers the P-cores on a hybrid CPU (Windows), and
- *          yrt_thread_pin() records what it pinned. yrt_report gains
- *          pinned_cpu, pinned_core and pcores_preferred, and the line
- *          gains pin= and cores=. A 256-byte buffer now always holds the
- *          line. See CORE TYPES under SCHEDULING.
- *   v0.4.1 - MinGW: the worker and pump threads start with the x87 control
- *          word of the thread that started them, not Windows' default, so
- *          x87 libm code (mingw-w64's msvcrt exp and pow) gives the same bits
- *          on the pump as on the main thread.
- *   v0.4.0 - An Emscripten branch, so the pump, the worker and the adaptive
- *          headers' async layers run in node and in a browser worker. It is
- *          the POSIX path with the Linux- and Mach-only calls taken out: the
- *          scheduling ladder collapses to YRT_POLICY_NORMAL, pinning,
- *          timer slack, memory locking and timer resolution report false,
- *          sleeps are the relative nanosleep loop, and
- *          yrt_get_clock_info() measures the clock's step instead of
- *          trusting Emscripten's clock_getres(). yrt_describe() adds
- *          "platform=wasm ladder=none" there and nowhere else. A worker or
- *          pump started in a module built without -pthread fails with a
- *          message naming the flag. No other platform changes behavior. See
- *          WEBASSEMBLY.
- *   v0.3.1 - yrt_pump_wait() is safe against a concurrent yrt_pump_stop()
- *          or yrt_pump_start() at ANY point, not only once it has parked.
- *          v0.3 checked for a live pump and then took its mutex, and a stop
- *          landing between the two destroyed the mutex under it; a binding
- *          had to slice its waits and defer its stop to cover that. A wait now
- *          registers in an atomic counter before it looks, a stop closes the
- *          door, releases every registered waiter and destroys nothing until
- *          the counter reads zero, and a restart never plain-writes the
- *          fields a racing wait reads. A wait racing a DRAINING stop now also
- *          waits for the drain, so a seq already in the queue returns 0
- *          instead of YRT_ERR_STOPPED. See STOP under PUMP.
- *          YRT_VERSION_MAJOR / _MINOR / _PATCH / _STRING and
- *          yrt_version(), so a binding reads its version from the header.
- *   v0.3 - yrt_pump, a background-compute worker: one thread, a fixed-size
- *          message ring, a callback per message in submit order, an idle
- *          callback for spare work, a "done through seq" the frame loop polls
- *          or waits on, and a lock the caller shares with the callbacks. It is
- *          the opposite end of yrt_worker: that one runs a short job AT a
- *          deadline at the top of the scheduling ladder, this one runs a long
- *          job BETWEEN deadlines at or below normal priority. See PUMP.
- *          Two new return codes, YRT_ERR_FULL and YRT_ERR_TIMEOUT, and a
- *          new bottom rung YRT_POLICY_BELOW_NORMAL, appended to
- *          yrt_policy so every existing value keeps its number. Only the
- *          pump ever returns it; yrt_thread_elevate() never lowers.
- *          yrt_strerror() names both new codes, and the YRT_ERR_STOPPED
- *          text now says "worker or pump" because both use it.
- *          The worker is unchanged.
- *   v0.2 - yrt_worker_desc.on_start, a hook that runs ON THE WORKER THREAD
- *          after elevation and before yrt_worker_start() publishes
- *          readiness, and fails the start when it returns false. The
- *          parallel port's DIRECT backend needs exactly that: Linux grants
- *          port I/O permission per THREAD, so the grant has to happen on the
- *          worker and a refusal has to fail ypar_open() rather than surface
- *          one trial later.
- *          yrt_job_info.seq and yrt_worker_pending(). Every submit
- *          stamps the job with a sequence number and RETURNS it, so a job
- *          can tell whether it is still the one a caller is waiting for.
- *          yrt_worker_submit() therefore returns a positive seq on success
- *          instead of YRT_OK; failures are still negative YRT_ERR_*, so
- *          the test is `rc < 0`, not `rc != YRT_OK`.
- *          The Linux feature-test macro is now _DEFAULT_SOURCE, and it is
- *          set on the FIRST include of this header rather than only in an
- *          implementation translation unit. Including ysp/rt.h before a
- *          transport header no longer hides what that transport needs
- *          (CRTSCTS, realpath) behind strict POSIX.
- *          The compile-time assertions fall back to a negative-array-size
- *          typedef, and _Alignof to a struct offset, before C11. MSVC's
- *          default C dialect, which is what setuptools and mex compile with,
- *          now builds this header without /std:c11.
- *   v0.1 - first release.
- *
- *   STATUS: v0.7.0. yrt_user_dir() (v0.7.0) is built with warnings as errors
- *   by MSVC, MinGW gcc and gcc on WSL2, and by emcc in CI's wasm job;
- *   tests/adapt/rt_test.c checks both kinds against environments it sets
- *   (Windows: non-ASCII, UNC, relative, missing, a trailing slash, the exact
- *   fit; POSIX: XDG absolute and relative, HOME, /tmp refused; the web:
- *   always refused) and the subfolder rules, and ysp/gfx.h's test of
- *   ygfx_default_cache_dir() passes unchanged. Its mutants are in
- *   tests/mutate/rt.toml.
- *   The device clock fit (v0.6.0) is built with warnings
- *   as errors by MSVC 19.44 (/W4 /WX, C11 and C++17), MinGW-w64 gcc 16.1
- *   (C99, C11, C++17) and gcc 11.4 on WSL2 (C99, C++17), and its tests in
- *   tests/adapt/rt_test_fit.h pass on all three, also under ASan and
- *   UBSan on WSL2. They run seeded synthetic devices against the true line
- *   (computed in long double) and against a brute-force envelope and the
- *   closed form of least squares (both within 2 ns). Map minus truth at
- *   each new pair's tick, over four seed sets, from 10 s on and (in
- *   brackets) from 205 s on, when the window is full: LATE, a ms timer at
- *   100 pairs a second behind a 1 ms USB frame, an exponential tail, 16 ms
- *   bursts and 60 to 200 ms stalls, -75 to +240 us (-47 to +91); LATE, a
- *   us counter that wraps, -12 to +46 us (-5 to +18); BRACKET, 0.4 to 3 ms
- *   brackets every 100 ms, -327 to +628 us (-42 to +110); UNBIASED, SD
- *   115 us, -23 to +22 us (-5 to +7); LATE, a press every 2 to 4 s behind a
- *   16 ms latency timer, up to +8.7 ms at 2 min and -1.4 to +3.2 ms from
- *   205 s. Before the slope (the first 5 s), a 500 ppm clock: -541 to +160
- *   us at the pair, -641 to +60 us 200 ms ahead. Rates within 0.9 ppm of
- *   the truth at the end of each run. A counter reset gives
- *   one restart 1.0 to 1.3 s later; a 300 ms stall gives none. With a full
- *   window a pair costs 0.1 us at p99 without a refit, and a refit 9 to 23
- *   us at p50 (up to 50 us max; one per 200 ms bucket), measured with gcc
- *   and MSVC on the laptop below. 17 of 17 mutants are caught
- *   (tests/mutate/rt.toml). No device has fed it: every number here is
- *   synthetic.
- *   v0.5.0's event ring, the correlation and the macros (v0.5.0)
- *   are built with warnings as errors by MSVC 19.44 (/W4 /WX, its default C
- *   dialect, /std:c11 and /std:c++17), by MinGW-w64 gcc 16.1 (C99, C11,
- *   C++17) on Windows 11, and by gcc 11.4 on WSL2 (C99, C11, C++17), in all
- *   three macro modes; also by MSVC for 32-bit x86, and by emcc 6.0.10 (C11
- *   and C++17, with and without -pthread, with YRT_NO_THREADS and with
- *   YRT_TRACE_RING). YRT_TRACY is built and run against Tracy v0.14.1
- *   by MSVC and gcc. tests/adapt/rt_test.c, which runs in
- *   YRT_TRACE_RING mode, passes on all of them (under node with -pthread)
- *   and is clean under ThreadSanitizer and ASan+UBSan on Linux. It checks open and sizing, order, seq, the stamps,
- *   a full ring and its LOSS record, and a stress run of 2, 4 and 8
- *   producers pushing 20,000 records each into 256 slots against one
- *   drainer, where every record carries words derived from (producer,
- *   index): no torn record, no duplicate, per-producer order, no seq gap,
- *   and drained + refused equal to pushed exactly, with the LOSS records
- *   adding up to the refusals. Three deliberately broken copies of the
- *   header are caught by it: publishing before the copy (every run, and
- *   by TSan), no admission check (every run), and freeing the slots before
- *   copying them out (2 runs of 3). The trace test checks every macro and
- *   the zone and thread name the worker emits; the correlation test checks
- *   a known offset, a 1 ms clock's edge within half the width, the
- *   timeout, and on Windows that interrupt time runs at the QPC rate and
- *   that yrt_ticks_to_ns() brackets yrt_now_ns() and matches a 128-bit
- *   reference. examples/rt/ring_bench.c measured, on a 16-thread Windows 11
- *   machine (MSVC and MinGW) and in WSL2 on the same machine (8 vCPUs),
- *   per push: 11 to 16 ns from one thread with the stamps set (14 to 37 ns
- *   in WSL2) and 37 to 43 ns with t_ns and tid stamped by the ring; 0.4 to
- *   0.6 us mean with 8 threads pushing back-to-back on Windows (1.5 us in
- *   WSL2, where 9 threads share 8 vCPUs). A TIME_CRITICAL producer pushing
- *   once a millisecond while 7 others hammered took 1.5 to 2.2 us at the
- *   99.9th percentile, clock reads included, against 115 to 553 us for the
- *   same records behind a lock. Drain: 1.5 to 6 ns per record. A zone in
- *   YRT_TRACE_RING mode costs 52 to 95 ns with a ring attached and under
- *   1 ns over an empty loop without one (471 ns attached under node, where
- *   one clock read costs 190 ns); the default mode is the empty
- *   loop; Tracy v0.14.1 costs 2 to 10 ns per zone on demand and not
- *   connected, 65 to 90 ns buffering. Correlation: a 100 ns width (one QPC
- *   tick, the floor) against QPC and interrupt time on Windows and 41 to
- *   46 ns against CLOCK_MONOTONIC_RAW in WSL2, 1 to 2 us per call; an edge
- *   of GetTickCount64 to 100 to 200 ns, in 62 ms for 4 edges. The
- *   head-of-line stall in EVENT RING is real: with producers at 1.1 million
- *   records a second, drains waited up to 5 ms on a producer descheduled
- *   inside its push, and the elevated producer's pushes were refused (up
- *   to 684 of 5000); with a stall injected at 6000 records a second the
- *   refusals began between 0.6 and 0.8 s, as 4096 / 6000 predicts. As root
- *   under WSL2 the bench's worker obtained YRT_POLICY_DEADLINE. The
- *   tables are in docs/rt.md.
- *   POWER THROTTLING was measured on an i7-1360P laptop (4 P-cores, 8
- *   E-cores) under Windows 11 25H2 build 26200, on AC power, by a probe
- *   that owns a window, visible, minimized and covered by a second
- *   process's window, with 12 s to settle. Minimized, timeBeginPeriod(1)
- *   waits of 1 and 2 ms woke 13 to 14 ms late (3 of 3 runs); with the
- *   IGNORE_TIMER_RESOLUTION opt-out, 0.44 to 0.76 ms. The high-resolution
- *   timer that yrt_sleep_until(), the worker and the pump use woke 0.26 to
- *   0.46 ms late (p50) in every state, with or without either opt-out.
- *   Minimized, 99 to 100% of the threads ran on E-cores; one computation
- *   alternated on one thread took 1.12 to 1.22 ms opted out of EcoQoS
- *   against 1.42 to 1.60 ms not (2 runs), and 7 to 12% less while visible.
- *   SetProcessInformation and SetThreadInformation returned success for
- *   every mask, also in a 32-bit process, where GetThreadInformation cannot
- *   read the state back (ERROR_INVALID_PARAMETER) and the report uses what
- *   this header set. CORE TYPES was measured on the same laptop with 8
- *   spinning threads of a second process loading all cores, alternating
- *   the setting every 200 ms on the same threads for 30 s, two runs each
- *   visible and minimized. With the EcoQoS opt-out alone, the elevated
- *   frame thread and the worker ran on E-cores 55 to 90% of the time;
- *   steered to every P-core CPU set, 0%, their fixed computation was 9 to
- *   25% faster at p50, and their wake p99 was lower in 7 of 8 pairs (by 3
- *   to 15%, and 9% higher in the eighth). Splitting the P-cores so the two
- *   elevated threads never share a physical core measured the same as
- *   steering both to all of them. The pump, steered, was 8 to 20% faster
- *   but its wake p99 was 14.5 ms in 1 run of 4 against 0.14 ms. Without
- *   the load every thread already ran on P-cores 92 to 100% of the time.
- *   Covering the window throttled the timer in 1 of 19 runs
- *   only, and battery power was not available to test.
- *   The Windows path is built and measured on Windows 11 by
- *   examples/rt/jitter.c, and also builds in MSVC's default (pre-C11) C mode,
- *   which is what the Python and MEX bindings compile with. The Linux path is
- *   built as C11, as C++17 and with YRT_NO_THREADS (warnings as errors) and
- *   run under a WSL2 kernel, including a ThreadSanitizer run of the worker's
- *   submit, replace, cancel, flush, seq and on_start paths. The macOS path
- *   has not been compiled or run at all; CI compiles it.
- *   The pump is built and run on Windows 11 (MSVC /W4 /WX) and on the same
- *   WSL2 kernel as C11, C99 and C++17, clean under ThreadSanitizer and under
- *   AddressSanitizer with UndefinedBehaviorSanitizer, by
- *   tests/adapt/rt_test.c (order, seq, done_seq, wait, ERR_FULL,
- *   on_idle, drain, drop, the publish lock over a few thousand messages, the
- *   inline and the caller-supplied ring, on_start refusal, a stop releasing a
- *   blocked wait, a zeroed handle, a double stop, a submit after stop) and by
- *   examples/rt/pump.c. The v0.3.1 wait-versus-stop guarantee is checked by a
- *   hammer in the same test (two threads in a loop of 0.3 ms waits while the
- *   main thread stops and restarts the pump 300 times, idle, draining and
- *   dropping), clean under ThreadSanitizer on Linux and run on Windows; a
- *   copy of the header whose stop skips the waiter drain is caught by the
- *   same TSan run, so the clean result is not an instrumentation accident.
- *   Both platforms returned YRT_POLICY_BELOW_NORMAL, and on Linux the nice
- *   value moved on the pump thread only (+5) with the calling thread's left
- *   alone, which is what the per-thread claim in PUMP rests on.
- *   The Emscripten path is built with emcc 6.0.10 as C11 and C++17 with
- *   warnings as errors, with -pthread, without it and with YRT_NO_THREADS,
- *   and run under node 24 with -pthread -sPROXY_TO_PTHREAD=1: the whole of
- *   tests/adapt/rt_test.c passes there, wait-versus-stop hammer
- *   included, as do examples/rt/jitter.c, examples/rt/pump.c, and the
- *   QUEST+ and GP test suites with their async layers on. Under node the
- *   clock claims 1 ns and shows a smallest step of 0.26 us on a pthread and
- *   0.48 us on the main thread, where one read costs 0.6 us and 3.4 us. Over
- *   five rt_jitter runs of 2 ms waits on a pthread, on a loaded development
- *   machine running node inside Docker, the median wake was 118 to 251 us
- *   late with no spin window, 0.1 to 47 us with the default 200 us, and
- *   0.1 us with 1 ms; the p99 ranged from 0.1 ms to 20 ms and belongs to the
- *   host, not to wasm. Measure on the machine you will use.
- *   No browser has run any of it: the WEBASSEMBLY notes on the main thread,
- *   cross-origin isolation and coarsened clocks are the platform's
- *   documented rules, not measurements.
- *   The macOS pump, like the rest of the macOS path, has not been compiled or
- *   run here at all, so its relative condition wait and its
- *   THREAD_PRECEDENCE_POLICY rung are written, not tested; CI compiles them and
- *   a rig should print what yrt_pump_policy() reports before believing it.
- *   The top of the ladder is barely exercised: the test hosts run without
- *   CAP_SYS_NICE, so the tests see YRT_POLICY_TIME_CRITICAL (Windows) and
- *   YRT_POLICY_NORMAL. YRT_POLICY_DEADLINE was obtained once, by
- *   rt_ring_bench run as root under WSL2 (v0.5.0), and nothing timed there
- *   is a claim about a real kernel; YRT_POLICY_FIFO and
- *   YRT_POLICY_TIME_CONSTRAINT have never been obtained. Treat the
- *   real-time rungs as written, not as tested, and check what
- *   yrt_describe() reports on your rig.
- *   Outside this STATUS block, no number in this header is a measurement.
- *   Every latency statement is a bound or a pointer at rt_jitter.
- *
- *   ---------------------------------------------------------------------
  *   USAGE
  *   ---------------------------------------------------------------------
  *   Do this:
@@ -364,8 +62,8 @@
  *   field or parameter whose unit the name does not already say ends in
  *   _ns, and YRT_S(), YRT_MS() and YRT_US() write one from another unit:
  *   ytl_wait(&q, YRT_MS(500)). A bare 0.5 where nanoseconds are expected
- *   converts to 0; MSVC warns (C4244 at /W3), and so do clang
- *   (-Wliteral-conversion, on by default) and gcc -Wfloat-conversion.
+ *   converts to 0; MSVC warns (C4244 at its default /W3), and gcc warns
+ *   with -Wfloat-conversion, which the repository's CMake build turns on.
  *   Seconds stay in files, scripts and the Python and MATLAB bindings.
  *
  *   yrt_ticks_to_ns() is the conversion yrt_now_ns() applies to the raw
@@ -1295,6 +993,308 @@
  *       cl /O2 /Iinclude examples\rt\jitter.c
  *       emcc -O2 -pthread -sPROXY_TO_PTHREAD=1 -sEXIT_RUNTIME=1 -Iinclude \
  *            -o rt_jitter.js examples/rt/jitter.c     # then: node rt_jitter.js
+ *
+ *   ---------------------------------------------------------------------
+ *   CHANGELOG
+ *   ---------------------------------------------------------------------
+ *   v0.8.0 - The ysp conventions (README.md, Conventions); breaks the API.
+ *          Every time is int64_t ns: yrt_now_ns(), yrt_sleep_until(),
+ *          yrt_sleep_ns(), yrt_spin_until(), yrt_worker_submit(),
+ *          yrt_pump_wait(), yrt_event.t_ns, the zone's dur_ns, yrt_corr,
+ *          yrt_job_info, yrt_sched_deadline, yrt_clock_info and
+ *          yrt_report. yrt_now_us() is gone. Unit macros YRT_NS(),
+ *          YRT_US(), YRT_MS(), YRT_S(), YRT_TO_MS() and YRT_TO_S().
+ *          Open and close: yrt_worker_start/stop() and
+ *          yrt_pump_start/stop() are yrt_worker_open/close() and
+ *          yrt_pump_open/close(); yrt_fit_init() is yrt_fit_open(), which
+ *          returns bool with the reason in yrt_fit_error(), and
+ *          yrt_fit_close() is new; yrt_ring_close() is new.
+ *          yrt_sched_normalize(), yrt_thread_set_timer_slack(),
+ *          yrt_thread_pin(), yrt_process_lock_memory() and
+ *          yrt_timer_resolution_begin() return 0 or a negative code
+ *          (YRT_ERR_UNSUPPORTED, YRT_ERR_REFUSED, YRT_ERR_ARG) instead of
+ *          bool.
+ *   v0.7.0 - Per-user folders: yrt_user_dir(YRT_DIR_CACHE or
+ *          YRT_DIR_CONFIG, subdir, out, cap) gives <base>/ysp/<subdir>,
+ *          the base from the platform's per-user cache or config location,
+ *          checked as ysp/gfx.h's ygfx_default_cache_dir() checked its
+ *          folder (that function is now a wrapper of this one). See
+ *          PER-USER FOLDERS. Nothing else changed.
+ *   v0.6.0 - The device clock fit: yrt_fit maps a device's own counter
+ *          (a response box's ms timer, a board's micros(), a tracker's
+ *          clock) to the ysp_rt clock from (ticks, host time) pairs. Three
+ *          estimators: LATE (the lower envelope, for stamps that are late
+ *          and never early), BRACKET (the least late of bracketed reads,
+ *          wide brackets refused) and UNBIASED (least squares). Counter
+ *          unwrap, a restart on a clock reset, a fixed window of 1024
+ *          points, no allocation. With a ring it logs the thinned pairs
+ *          (YRT_KIND_CLOCK) and each fit (YRT_KIND_FIT, new) for an
+ *          offline refit. YRT_SRC_DEVICE (12) reserved for ysp/device.h.
+ *          See DEVICE CLOCK FIT. Nothing else changed.
+ *   v0.5.0 - The event ring: yrt_ring, a wait-free ring of 64-byte
+ *          yrt_event records in memory the caller supplies, pushed from
+ *          any number of threads (an audio callback included) and drained
+ *          by one. A full ring refuses the new record, counts it, and the
+ *          next drain reports the count in band as a YRT_KIND_LOSS
+ *          record. See EVENT RING.
+ *          yrt_correlate(): the ysp_rt clock against another clock read
+ *          between two of its own reads, the tightest of N tries, with the
+ *          bracket's width; an edge mode for coarse clocks.
+ *          yrt_interrupt_time_100ns(), the Windows interrupt-time clock,
+ *          and yrt_ticks_to_ns(), the exact conversion yrt_now_ns()
+ *          applies to a QPC value. yrt_thread_id(). See CLOCK
+ *          CORRELATION.
+ *          The instrumentation macros (YRT_ZONE, YRT_FRAME_MARK,
+ *          YRT_PLOT, YRT_MESSAGE and the rest): nothing by default, the
+ *          Tracy C API with YRT_TRACY, records in a trace ring with
+ *          YRT_TRACE_RING. The worker, the pump and yrt_sleep_until()
+ *          are instrumented. See INSTRUMENTATION.
+ *          YRT_OK, the YRT_ERR_* codes and yrt_strerror() are now
+ *          outside the YRT_NO_THREADS guard, because the ring and the
+ *          correlation use them; a no-threads build gains them and loses
+ *          nothing. YRT_ERR_FULL's text is "ring full, not taken", for
+ *          the pump and the event ring alike.
+ *          Windows 11 power throttling: yrt_timer_resolution_begin() also
+ *          opts the process out of the timer throttling a minimized process
+ *          gets, and yrt_thread_elevate() and the pump thread opt their
+ *          thread out of EcoQoS. yrt_report gains timer_throttle_off,
+ *          ecoqos_off and throttle_known, and the yrt_describe() line ends
+ *          in timer_throttle= and ecoqos= on every platform. See POWER
+ *          THROTTLING under SCHEDULING.
+ *          yrt_cpu_core_type() and yrt_core_type_name(): P-core or
+ *          E-core, from Windows' EfficiencyClass. yrt_thread_elevate()
+ *          prefers the P-cores on a hybrid CPU (Windows), and
+ *          yrt_thread_pin() records what it pinned. yrt_report gains
+ *          pinned_cpu, pinned_core and pcores_preferred, and the line
+ *          gains pin= and cores=. A 256-byte buffer now always holds the
+ *          line. See CORE TYPES under SCHEDULING.
+ *   v0.4.1 - MinGW: the worker and pump threads start with the x87 control
+ *          word of the thread that started them, not Windows' default, so
+ *          x87 libm code (mingw-w64's msvcrt exp and pow) gives the same bits
+ *          on the pump as on the main thread.
+ *   v0.4.0 - An Emscripten branch, so the pump, the worker and the adaptive
+ *          headers' async layers run in node and in a browser worker. It is
+ *          the POSIX path with the Linux- and Mach-only calls taken out: the
+ *          scheduling ladder collapses to YRT_POLICY_NORMAL, pinning,
+ *          timer slack, memory locking and timer resolution report false,
+ *          sleeps are the relative nanosleep loop, and
+ *          yrt_get_clock_info() measures the clock's step instead of
+ *          trusting Emscripten's clock_getres(). yrt_describe() adds
+ *          "platform=wasm ladder=none" there and nowhere else. A worker or
+ *          pump started in a module built without -pthread fails with a
+ *          message naming the flag. No other platform changes behavior. See
+ *          WEBASSEMBLY.
+ *   v0.3.1 - yrt_pump_wait() is safe against a concurrent yrt_pump_stop()
+ *          or yrt_pump_start() at ANY point, not only once it has parked.
+ *          v0.3 checked for a live pump and then took its mutex, and a stop
+ *          landing between the two destroyed the mutex under it; a binding
+ *          had to slice its waits and defer its stop to cover that. A wait now
+ *          registers in an atomic counter before it looks, a stop closes the
+ *          door, releases every registered waiter and destroys nothing until
+ *          the counter reads zero, and a restart never plain-writes the
+ *          fields a racing wait reads. A wait racing a DRAINING stop now also
+ *          waits for the drain, so a seq already in the queue returns 0
+ *          instead of YRT_ERR_STOPPED. See STOP under PUMP.
+ *          YRT_VERSION_MAJOR / _MINOR / _PATCH / _STRING and
+ *          yrt_version(), so a binding reads its version from the header.
+ *   v0.3 - yrt_pump, a background-compute worker: one thread, a fixed-size
+ *          message ring, a callback per message in submit order, an idle
+ *          callback for spare work, a "done through seq" the frame loop polls
+ *          or waits on, and a lock the caller shares with the callbacks. It is
+ *          the opposite end of yrt_worker: that one runs a short job AT a
+ *          deadline at the top of the scheduling ladder, this one runs a long
+ *          job BETWEEN deadlines at or below normal priority. See PUMP.
+ *          Two new return codes, YRT_ERR_FULL and YRT_ERR_TIMEOUT, and a
+ *          new bottom rung YRT_POLICY_BELOW_NORMAL, appended to
+ *          yrt_policy so every existing value keeps its number. Only the
+ *          pump ever returns it; yrt_thread_elevate() never lowers.
+ *          yrt_strerror() names both new codes, and the YRT_ERR_STOPPED
+ *          text now says "worker or pump" because both use it.
+ *          The worker is unchanged.
+ *   v0.2 - yrt_worker_desc.on_start, a hook that runs ON THE WORKER THREAD
+ *          after elevation and before yrt_worker_start() publishes
+ *          readiness, and fails the start when it returns false. The
+ *          parallel port's DIRECT backend needs exactly that: Linux grants
+ *          port I/O permission per THREAD, so the grant has to happen on the
+ *          worker and a refusal has to fail ypar_open() rather than surface
+ *          one trial later.
+ *          yrt_job_info.seq and yrt_worker_pending(). Every submit
+ *          stamps the job with a sequence number and RETURNS it, so a job
+ *          can tell whether it is still the one a caller is waiting for.
+ *          yrt_worker_submit() therefore returns a positive seq on success
+ *          instead of YRT_OK; failures are still negative YRT_ERR_*, so
+ *          the test is `rc < 0`, not `rc != YRT_OK`.
+ *          The Linux feature-test macro is now _DEFAULT_SOURCE, and it is
+ *          set on the FIRST include of this header rather than only in an
+ *          implementation translation unit. Including ysp/rt.h before a
+ *          transport header no longer hides what that transport needs
+ *          (CRTSCTS, realpath) behind strict POSIX.
+ *          The compile-time assertions fall back to a negative-array-size
+ *          typedef, and _Alignof to a struct offset, before C11. MSVC's
+ *          default C dialect, which is what setuptools and mex compile with,
+ *          now builds this header without /std:c11.
+ *   v0.1 - first release.
+ *
+ *   STATUS: v0.7.0. yrt_user_dir() (v0.7.0) is built with warnings as errors
+ *   by MSVC, MinGW gcc and gcc on WSL2, and by emcc in CI's wasm job;
+ *   tests/adapt/rt_test.c checks both kinds against environments it sets
+ *   (Windows: non-ASCII, UNC, relative, missing, a trailing slash, the exact
+ *   fit; POSIX: XDG absolute and relative, HOME, /tmp refused; the web:
+ *   always refused) and the subfolder rules, and ysp/gfx.h's test of
+ *   ygfx_default_cache_dir() passes unchanged. Its mutants are in
+ *   tests/mutate/rt.toml.
+ *   The device clock fit (v0.6.0) is built with warnings
+ *   as errors by MSVC 19.44 (/W4 /WX, C11 and C++17), MinGW-w64 gcc 16.1
+ *   (C99, C11, C++17) and gcc 11.4 on WSL2 (C99, C++17), and its tests in
+ *   tests/adapt/rt_test_fit.h pass on all three, also under ASan and
+ *   UBSan on WSL2. They run seeded synthetic devices against the true line
+ *   (computed in long double) and against a brute-force envelope and the
+ *   closed form of least squares (both within 2 ns). Map minus truth at
+ *   each new pair's tick, over four seed sets, from 10 s on and (in
+ *   brackets) from 205 s on, when the window is full: LATE, a ms timer at
+ *   100 pairs a second behind a 1 ms USB frame, an exponential tail, 16 ms
+ *   bursts and 60 to 200 ms stalls, -75 to +240 us (-47 to +91); LATE, a
+ *   us counter that wraps, -12 to +46 us (-5 to +18); BRACKET, 0.4 to 3 ms
+ *   brackets every 100 ms, -327 to +628 us (-42 to +110); UNBIASED, SD
+ *   115 us, -23 to +22 us (-5 to +7); LATE, a press every 2 to 4 s behind a
+ *   16 ms latency timer, up to +8.7 ms at 2 min and -1.4 to +3.2 ms from
+ *   205 s. Before the slope (the first 5 s), a 500 ppm clock: -541 to +160
+ *   us at the pair, -641 to +60 us 200 ms ahead. Rates within 0.9 ppm of
+ *   the truth at the end of each run. A counter reset gives
+ *   one restart 1.0 to 1.3 s later; a 300 ms stall gives none. With a full
+ *   window a pair costs 0.1 us at p99 without a refit, and a refit 9 to 23
+ *   us at p50 (up to 50 us max; one per 200 ms bucket), measured with gcc
+ *   and MSVC on the laptop below. 17 of 17 mutants are caught
+ *   (tests/mutate/rt.toml). No device has fed it: every number here is
+ *   synthetic.
+ *   v0.5.0's event ring, the correlation and the macros (v0.5.0)
+ *   are built with warnings as errors by MSVC 19.44 (/W4 /WX, its default C
+ *   dialect, /std:c11 and /std:c++17), by MinGW-w64 gcc 16.1 (C99, C11,
+ *   C++17) on Windows 11, and by gcc 11.4 on WSL2 (C99, C11, C++17), in all
+ *   three macro modes; also by MSVC for 32-bit x86, and by emcc 6.0.10 (C11
+ *   and C++17, with and without -pthread, with YRT_NO_THREADS and with
+ *   YRT_TRACE_RING). YRT_TRACY is built and run against Tracy v0.14.1
+ *   by MSVC and gcc. tests/adapt/rt_test.c, which runs in
+ *   YRT_TRACE_RING mode, passes on all of them (under node with -pthread)
+ *   and is clean under ThreadSanitizer and ASan+UBSan on Linux. It checks open and sizing, order, seq, the stamps,
+ *   a full ring and its LOSS record, and a stress run of 2, 4 and 8
+ *   producers pushing 20,000 records each into 256 slots against one
+ *   drainer, where every record carries words derived from (producer,
+ *   index): no torn record, no duplicate, per-producer order, no seq gap,
+ *   and drained + refused equal to pushed exactly, with the LOSS records
+ *   adding up to the refusals. Three deliberately broken copies of the
+ *   header are caught by it: publishing before the copy (every run, and
+ *   by TSan), no admission check (every run), and freeing the slots before
+ *   copying them out (2 runs of 3). The trace test checks every macro and
+ *   the zone and thread name the worker emits; the correlation test checks
+ *   a known offset, a 1 ms clock's edge within half the width, the
+ *   timeout, and on Windows that interrupt time runs at the QPC rate and
+ *   that yrt_ticks_to_ns() brackets yrt_now_ns() and matches a 128-bit
+ *   reference. examples/rt/ring_bench.c measured, on a 16-thread Windows 11
+ *   machine (MSVC and MinGW) and in WSL2 on the same machine (8 vCPUs),
+ *   per push: 11 to 16 ns from one thread with the stamps set (14 to 37 ns
+ *   in WSL2) and 37 to 43 ns with t_ns and tid stamped by the ring; 0.4 to
+ *   0.6 us mean with 8 threads pushing back-to-back on Windows (1.5 us in
+ *   WSL2, where 9 threads share 8 vCPUs). A TIME_CRITICAL producer pushing
+ *   once a millisecond while 7 others hammered took 1.5 to 2.2 us at the
+ *   99.9th percentile, clock reads included, against 115 to 553 us for the
+ *   same records behind a lock. Drain: 1.5 to 6 ns per record. A zone in
+ *   YRT_TRACE_RING mode costs 52 to 95 ns with a ring attached and under
+ *   1 ns over an empty loop without one (471 ns attached under node, where
+ *   one clock read costs 190 ns); the default mode is the empty
+ *   loop; Tracy v0.14.1 costs 2 to 10 ns per zone on demand and not
+ *   connected, 65 to 90 ns buffering. Correlation: a 100 ns width (one QPC
+ *   tick, the floor) against QPC and interrupt time on Windows and 41 to
+ *   46 ns against CLOCK_MONOTONIC_RAW in WSL2, 1 to 2 us per call; an edge
+ *   of GetTickCount64 to 100 to 200 ns, in 62 ms for 4 edges. The
+ *   head-of-line stall in EVENT RING is real: with producers at 1.1 million
+ *   records a second, drains waited up to 5 ms on a producer descheduled
+ *   inside its push, and the elevated producer's pushes were refused (up
+ *   to 684 of 5000); with a stall injected at 6000 records a second the
+ *   refusals began between 0.6 and 0.8 s, as 4096 / 6000 predicts. As root
+ *   under WSL2 the bench's worker obtained YRT_POLICY_DEADLINE. The
+ *   tables are in docs/rt.md.
+ *   POWER THROTTLING was measured on an i7-1360P laptop (4 P-cores, 8
+ *   E-cores) under Windows 11 25H2 build 26200, on AC power, by a probe
+ *   that owns a window, visible, minimized and covered by a second
+ *   process's window, with 12 s to settle. Minimized, timeBeginPeriod(1)
+ *   waits of 1 and 2 ms woke 13 to 14 ms late (3 of 3 runs); with the
+ *   IGNORE_TIMER_RESOLUTION opt-out, 0.44 to 0.76 ms. The high-resolution
+ *   timer that yrt_sleep_until(), the worker and the pump use woke 0.26 to
+ *   0.46 ms late (p50) in every state, with or without either opt-out.
+ *   Minimized, 99 to 100% of the threads ran on E-cores; one computation
+ *   alternated on one thread took 1.12 to 1.22 ms opted out of EcoQoS
+ *   against 1.42 to 1.60 ms not (2 runs), and 7 to 12% less while visible.
+ *   SetProcessInformation and SetThreadInformation returned success for
+ *   every mask, also in a 32-bit process, where GetThreadInformation cannot
+ *   read the state back (ERROR_INVALID_PARAMETER) and the report uses what
+ *   this header set. CORE TYPES was measured on the same laptop with 8
+ *   spinning threads of a second process loading all cores, alternating
+ *   the setting every 200 ms on the same threads for 30 s, two runs each
+ *   visible and minimized. With the EcoQoS opt-out alone, the elevated
+ *   frame thread and the worker ran on E-cores 55 to 90% of the time;
+ *   steered to every P-core CPU set, 0%, their fixed computation was 9 to
+ *   25% faster at p50, and their wake p99 was lower in 7 of 8 pairs (by 3
+ *   to 15%, and 9% higher in the eighth). Splitting the P-cores so the two
+ *   elevated threads never share a physical core measured the same as
+ *   steering both to all of them. The pump, steered, was 8 to 20% faster
+ *   but its wake p99 was 14.5 ms in 1 run of 4 against 0.14 ms. Without
+ *   the load every thread already ran on P-cores 92 to 100% of the time.
+ *   Covering the window throttled the timer in 1 of 19 runs
+ *   only, and battery power was not available to test.
+ *   The Windows path is built and measured on Windows 11 by
+ *   examples/rt/jitter.c, and also builds in MSVC's default (pre-C11) C mode,
+ *   which is what the Python and MEX bindings compile with. The Linux path is
+ *   built as C11, as C++17 and with YRT_NO_THREADS (warnings as errors) and
+ *   run under a WSL2 kernel, including a ThreadSanitizer run of the worker's
+ *   submit, replace, cancel, flush, seq and on_start paths. The macOS path
+ *   has not been compiled or run at all; CI compiles it.
+ *   The pump is built and run on Windows 11 (MSVC /W4 /WX) and on the same
+ *   WSL2 kernel as C11, C99 and C++17, clean under ThreadSanitizer and under
+ *   AddressSanitizer with UndefinedBehaviorSanitizer, by
+ *   tests/adapt/rt_test.c (order, seq, done_seq, wait, ERR_FULL,
+ *   on_idle, drain, drop, the publish lock over a few thousand messages, the
+ *   inline and the caller-supplied ring, on_start refusal, a stop releasing a
+ *   blocked wait, a zeroed handle, a double stop, a submit after stop) and by
+ *   examples/rt/pump.c. The v0.3.1 wait-versus-stop guarantee is checked by a
+ *   hammer in the same test (two threads in a loop of 0.3 ms waits while the
+ *   main thread stops and restarts the pump 300 times, idle, draining and
+ *   dropping), clean under ThreadSanitizer on Linux and run on Windows; a
+ *   copy of the header whose stop skips the waiter drain is caught by the
+ *   same TSan run, so the clean result is not an instrumentation accident.
+ *   Both platforms returned YRT_POLICY_BELOW_NORMAL, and on Linux the nice
+ *   value moved on the pump thread only (+5) with the calling thread's left
+ *   alone, which is what the per-thread claim in PUMP rests on.
+ *   The Emscripten path is built with emcc 6.0.10 as C11 and C++17 with
+ *   warnings as errors, with -pthread, without it and with YRT_NO_THREADS,
+ *   and run under node 24 with -pthread -sPROXY_TO_PTHREAD=1: the whole of
+ *   tests/adapt/rt_test.c passes there, wait-versus-stop hammer
+ *   included, as do examples/rt/jitter.c, examples/rt/pump.c, and the
+ *   QUEST+ and GP test suites with their async layers on. Under node the
+ *   clock claims 1 ns and shows a smallest step of 0.26 us on a pthread and
+ *   0.48 us on the main thread, where one read costs 0.6 us and 3.4 us. Over
+ *   five rt_jitter runs of 2 ms waits on a pthread, on a loaded development
+ *   machine running node inside Docker, the median wake was 118 to 251 us
+ *   late with no spin window, 0.1 to 47 us with the default 200 us, and
+ *   0.1 us with 1 ms; the p99 ranged from 0.1 ms to 20 ms and belongs to the
+ *   host, not to wasm. Measure on the machine you will use.
+ *   No browser has run any of it: the WEBASSEMBLY notes on the main thread,
+ *   cross-origin isolation and coarsened clocks are the platform's
+ *   documented rules, not measurements.
+ *   The macOS pump, like the rest of the macOS path, has not been compiled or
+ *   run here at all, so its relative condition wait and its
+ *   THREAD_PRECEDENCE_POLICY rung are written, not tested; CI compiles them and
+ *   a rig should print what yrt_pump_policy() reports before believing it.
+ *   The top of the ladder is barely exercised: the test hosts run without
+ *   CAP_SYS_NICE, so the tests see YRT_POLICY_TIME_CRITICAL (Windows) and
+ *   YRT_POLICY_NORMAL. YRT_POLICY_DEADLINE was obtained once, by
+ *   rt_ring_bench run as root under WSL2 (v0.5.0), and nothing timed there
+ *   is a claim about a real kernel; YRT_POLICY_FIFO and
+ *   YRT_POLICY_TIME_CONSTRAINT have never been obtained. Treat the
+ *   real-time rungs as written, not as tested, and check what
+ *   yrt_describe() reports on your rig.
+ *   Outside this STATUS block, no number in this header is a measurement.
+ *   Every latency statement is a bound or a pointer at rt_jitter.
  *
  *   ---------------------------------------------------------------------
  *   LICENSE: public domain / MIT-0, see end of file.

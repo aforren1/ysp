@@ -184,7 +184,7 @@ CMakeLists.txt            builds examples, compile checks and tests; registers l
   | `y<x>_close(h)` | Releases what open acquired. Safe on a zeroed handle, after a failed open, and a second time. Every open has a close, also when the close has nothing to release. | `void` |
   | `start`, `stop` | Begin and end an activity on an open handle (`yrdk_start()` starts a field's motion, `ytl_stop()` stops a timeline base). They never acquire the handle. | `int` |
   | `init` | Fills a plain struct from arguments, without a desc: a value, a decoder's state, an arena on the caller's memory (`ybox_init()`, `yrig_init()`, `yjs_arena_init()`). No close. A struct that grows into heap memory after init has a `_free` (`yjs_arena_free()`, `yol_path_free()`). | `void`, or `int` when it checks its arguments |
-  | `load`, `save`, `view` | Read or write a plain struct as bytes or a file (`yrig_load()`, `ycol_cal_load()`, `yol_font_load()`). A view keeps pointers into the caller's bytes (`ypak_cset_view()`). | `int` |
+  | `load`, `save`, `view` | Read or write a plain struct as bytes or a file (`yrig_load()`, `ycol_cal_load()`). A view keeps pointers into the caller's bytes (`ypak_cset_view()`, `yol_font_view()`). | `int` |
 
   An object inside an open handle (a texture, a buffer, a sound) is an id.
   The call that makes one has the object's name, and `_free` releases it.
