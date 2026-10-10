@@ -472,7 +472,7 @@ Outputs use the same instance, role and log as inputs. Three calls:
 | Kind | When | Payload |
 |---|---|---|
 | `DEVICE_OPEN` | identified | role index, family id, kind, instance id; the key's hash; then `MESSAGE` records with the key, model and firmware text (40 bytes each) |
-| `DEVICE_SOURCE` | at open and when bounds change | tier, partial, lo_us, hi_us, stamp source |
+| `DEVICE_SOURCE` | at open and when bounds change | tier, partial, lo_ns, hi_ns, stamp source |
 | `DEVICE_STATE` | each lifecycle change | old state, new state, reason code, OS error |
 | `DEVICE_GAP` | LOST to RUNNING | first and last time of the gap |
 | `DEVICE_FIT` | each refit, at most 1 per second | offset, ppm, spread, points, epoch |

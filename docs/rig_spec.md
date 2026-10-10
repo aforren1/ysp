@@ -1604,7 +1604,7 @@ flat session in `ysp/trials.h` and a within-trial sequence in
 | `post_trial_gap`, `default_iti` | Blank screen after the trial | None | A wait on the session base | A node or session parameter |
 | `rt` | From the call that registers the key listener (`performance.now()`), not from a flip (pluginAPI docs) | Caller's record | Onset record of the stimulus event | RT from the stimulus's flip onset estimate (or audio onset fit), with its tier in the row |
 | `choices`, `"ALL_KEYS"`, `"NO_KEYS"` | `KeyboardEvent.key` strings, lowercased by default | None | None | Accept jsPsych key names; map to SDL keycodes; log the scancode too |
-| `minimum_valid_rt`, `wait_for_key_release`, `rt_key_duration`, `allow_held_key`, `persist` | Key listener options | `ysp/response.h` v0.1.0 | None | Options of `yrsp_desc` (`allow_held_key` and `persist` semantics: docs/response.md) |
+| `minimum_valid_rt`, `wait_for_key_release`, `rt_key_duration`, `allow_held_key`, `persist` | Key listener options | `ysp/response.h` v0.1.0 | None | Options of `yrsp_desc` (`min_rt_ns` for `minimum_valid_rt`, in ns since response.h v0.3.0; `allow_held_key` and `persist` semantics: docs/response.md) |
 | `name`, `abortTimelineByName`, `abortCurrentTimeline`, `abortExperiment`, `pauseExperiment` | Flow control | None | None | Node names; abort and pause over the runner protocol and `yscr_request_abort()` |
 | `extensions: [{type, params}]` per trial | Extension hooks per trial | None | None | Input-source extensions (12) enabled per node or trial |
 | Simulation mode (`data-only`, `visual`), `simulation_options` | Runs without a participant | The SIM display; simulated observers in examples | None | A player mode: data-only runs with a simulated observer on the SIM display |
