@@ -1,7 +1,8 @@
 # ysp/device.h
 
 Status: v0.3.0, 2026-10-10 (v0.2.0, 2026-10-08, for the outputs); the rig profile, `ysp/rigfile.h` v0.2.0,
-2026-10-09 (v0.2.0 adds roles bound to LSL streams, docs/net.md). The headers' manuals are the reference (OUTPUTS, AT THE FLIP
+2026-10-09 (v0.2.0 adds roles bound to LSL streams, docs/net.md; v0.3.0,
+2026-10-10, opens the device with `yrig_open_device()`). The headers' manuals are the reference (OUTPUTS, AT THE FLIP
 and ROLES of `ysp/device.h`; THE FILE, CHECKS AT LOAD and BINDING of
 `ysp/rigfile.h`). This page records the decisions the plan
 (`docs/devices_spec.md`, steps 2 and 3 of section 14.2, and 11.2) left
@@ -134,7 +135,7 @@ A machine with two rigs keeps `<NAME>.json` beside `profile.json`: give
 `--rig NAME` to both programs. `--dir DIR` (`rigfile_profile`) and
 `--rig-dir DIR` (`device_out_latency`) use another folder, for a test.
 
-## How-to: start a role's device from the profile
+## How-to: open a role's device from the profile
 
 ```c
 #define YSP_RIGFILE_IMPLEMENTATION
@@ -146,16 +147,18 @@ static ydev_roles roles;
 char err[256], hash[65];
 if (yrig_load(&prof, NULL, err, sizeof err) != YRIG_OK) die(err);
 for (int i = 0; i < prof.n_notes; i++) log_line(prof.notes[i]);
-yrig_hash(&prof, hash);              /* into the data file header */
+if (yrig_hash(&prof, hash) != YRIG_OK) die("hash");   /* into the data file header */
 ydev_desc base = { 0 };
 base.roles = &roles;
 base.ring = &log_ring;
-if (!yrig_start(&trig, &prof, "trig", &base, err, sizeof err)) die(err);
+if (!yrig_open_device(&trig, &prof, "trig", &base)) die(ydev_error(&trig));
+if (ydev_wait_running(&trig, YRT_S(3)) < 0) die(ydev_error(&trig));
 ```
 
-`yrig_start()` takes family, key, baud, latched and the rig's pulse width
-from the profile and everything else from `base`. The profile must live
-as long as the instance. `yrig_source(&prof, &dev)` gives an input's
+`yrig_open_device()` takes family, key, baud, latched and the rig's pulse
+width from the profile and everything else from `base`. Its message is in
+`ydev_error()`, also when the profile refuses the role. The device copies
+the role and the key, so the profile may go before the instance. `yrig_source(&prof, &dev)` gives an input's
 source entry with tier 1 and its bounds only when its loopback file
 checked.
 
@@ -213,7 +216,16 @@ checked.
 | Writing | `yrig_save()` reads its own bytes back before it writes, sets `written`, makes the folder (0700 on POSIX), writes a temporary file and renames it | A profile that would not load is never written; a reader never sees half a file |
 | The folder | `yrt_user_dir(YRT_DIR_CONFIG, "rig")` only; refused means `YRIG_ERR_FOLDER`, no other folder | A folder another user can write may hold a planted profile (POSIX; on Windows `yrt_user_dir` reads no ACL) |
 | Limits | 1 MiB of text, 32 roles (`ydev_roles`), 16 buttons, nesting 8 | A profile is a few KB; bounds keep a hostile file cheap |
-| LSL streams (v0.2.0) | Family `lsl` (`YRIG_FAMILY_LSL`, 64: no `ysp/box.h` number), key `lsl:<name>:<type>:<source_id>:<hostname>` without a quote; no `baud`, `ftdi_latency_s`, `latched` or `pulse_s`; `yrig_desc()` and `yrig_start()` refuse it and name `ysp/net.h`; `yrig_source_role()` gives the tier rule by role name, and counts `lsl` as a device clock | A rig profile names a stream as it names a port. The file format does not change, so v0.1.0 profiles load unchanged. `ysp/rigfile.h` does not include `ysp/net.h`: the player passes the role's key to the inlet |
+| LSL streams (v0.2.0) | Family `lsl` (`YRIG_FAMILY_LSL`, 64: no `ysp/box.h` number), key `lsl:<name>:<type>:<source_id>:<hostname>` without a quote; no `baud`, `ftdi_latency_s`, `latched` or `pulse_s`; `yrig_desc()` and `yrig_start()` (v0.3.0: `yrig_open_device()`) refuse it and name `ysp/net.h`; `yrig_source_role()` gives the tier rule by role name, and counts `lsl` as a device clock | A rig profile names a stream as it names a port. The file format does not change, so v0.1.0 profiles load unchanged. `ysp/rigfile.h` does not include `ysp/net.h`: the player passes the role's key to the inlet |
+| Opening a role's device (v0.3.0) | `bool yrig_open_device(dev, p, role, base)`, the message in `ydev_error(dev)`; it was `yrig_start(..., err, cap)` | It opens a ysp/device.h handle, so its message belongs where every open's message is (README.md, Conventions). A role the profile refuses (missing, unbound, lsl) writes its message there before the open, so the caller reads one place. `yrig_init()` stays an init; `yrig_load*()` and `yrig_save*()` stay load and save with a caller buffer: they fill a plain struct from a file |
+
+The rig profile v0.3.0 was checked on 2026-10-10 (Windows 11, MSVC 19.44
+/W4 /WX, MinGW-w64 gcc 16.1 -Werror): `tests/adapt/rigfile_test.c` with new
+checks (the messages of a refused role and of a refused open in
+`ydev_error()`, a close after each, the device's copies of role and key
+outliving the profile); `tests/compile/rigfile.c` names every entry point by
+type. Its mutation list's anchors all match; mutant `rig-29` (a refused
+role's message not in `ydev_error()`) is new and was caught.
 
 ### Open, close and the wait for RUNNING (v0.3.0)
 
@@ -226,7 +238,7 @@ breaks the API.
 | The first output | `ydev_wait_running(dev, timeout_ns)`: `YDEV_RUNNING`, `YDEV_ERR_TIMEOUT` (new), or `YDEV_ERR_STATE` when the instance ends FAILED or CLOSED; the reason in `ydev_error()` | The v0.2 USAGE and this page sent a pulse right after the start, while the device was OPENING. The pulse returned `YDEV_ERR_STATE`, nobody checked it, and the first EEG trigger of a session was lost. Each example had its own wait loop; one call replaces them |
 | The wait in manual mode | It calls `ydev_poll()` itself and sleeps 1 ms between steps; with `desc.now` it gives up when a poll does not move that clock | A manual instance has no thread to advance it. The caller owns a virtual clock, so a wait that cannot move it must not spin |
 | The wait's message | Written under the instance's lock; a FAILED instance keeps the reader thread's reason ("did not answer as a line device") | The reader thread writes that message, so both writers take one lock, and the more specific reason wins |
-| Key and role | Copied into the handle: `key_buf[YDEV_KEY_MAX]` (128) and `role_buf[YDEV_ROLE_MAX]` (32, a role table's name); longer fails `ydev_open()` with a message | The reader thread read `desc.key` again at every reconnect, through the caller's pointer. A key built in a stack buffer was gone by the first replug. No allocation: the handle grows by 160 bytes |
+| Key and role | Copied into the handle: `key_buf[YDEV_KEY_MAX]` (160, as a role's key in a rig profile, and enough for `port:` and any port name ysp/serial.h lists) and `role_buf[YDEV_ROLE_MAX]` (32, a role table's name); longer fails `ydev_open()` with a message | The reader thread read `desc.key` again at every reconnect, through the caller's pointer. A key built in a stack buffer was gone by the first replug. No allocation: the handle grows by 192 bytes |
 | Times | `ydev_poll(dev, timeout_ns)`, `desc.read_timeout_ns`, `ydev_transport.read(conn, buf, cap, timeout_ns)` | Every C time is `int64_t` ns. A transport written for v0.2 fails to compile instead of reading 20 ns as 20 ms |
 | `xid_width_ms` | Kept, in the handle | It is the XID protocol's own unit (`mp` takes whole ms), state the encoder compares with, not a time the caller writes |
 | The output calls | Return a code only; `ydev_strerror()` (new) names it | Several threads call them at once (README.md, Conventions, Errors) |

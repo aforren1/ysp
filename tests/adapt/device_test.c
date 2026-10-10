@@ -647,12 +647,12 @@ static void test_desc(void) {
         char longkey[YDEV_KEY_MAX + 1], longrole[YDEV_ROLE_MAX + 1];
         memset(longkey, 'k', sizeof longkey);
         memcpy(longkey, "serial:", 7);
-        longkey[YDEV_KEY_MAX] = '\0';          /* 128 characters: one too many */
+        longkey[YDEV_KEY_MAX] = '\0';          /* 160 characters: one too many */
         memset(longrole, 'r', sizeof longrole);
         longrole[YDEV_ROLE_MAX] = '\0';        /* 32 characters: one too many */
         e = d; e.key = longkey;  CHECK(!ydev_open(&g_dev, &e) && strstr(ydev_error(&g_dev), "YDEV_KEY_MAX"));
         e = d; e.role = longrole; CHECK(!ydev_open(&g_dev, &e) && strstr(ydev_error(&g_dev), "YDEV_ROLE_MAX"));
-        longkey[YDEV_KEY_MAX - 1] = '\0';      /* 127: fits */
+        longkey[YDEV_KEY_MAX - 1] = '\0';      /* 159: fits */
         longrole[YDEV_ROLE_MAX - 1] = '\0';    /* 31: fits */
         e = d; e.key = longkey; e.role = longrole;
         CHECK(ydev_open(&g_dev, &e));

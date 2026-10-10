@@ -74,9 +74,10 @@
  *   ydev_open() copies desc.key and desc.role into the handle, because the
  *   reader thread reads the key again at every reconnect: the caller's
  *   strings need not outlive the call. A key has at most YDEV_KEY_MAX - 1
- *   (127) characters and a role at most YDEV_ROLE_MAX - 1 (31, the length
- *   of a name in the role table); a longer one fails ydev_open() with a
- *   message. No allocation.
+ *   (159) characters, as a role's key in ysp/rigfile.h, which holds any
+ *   "port:" with a yser_port_info name; a role at most YDEV_ROLE_MAX - 1
+ *   (31, the length of a name in the role table). A longer one fails
+ *   ydev_open() with a message. No allocation.
  *
  *   ---------------------------------------------------------------------
  *   LIFECYCLE
@@ -355,7 +356,7 @@ typedef enum ydev_lifecycle {
 
 /* The longest desc.key and desc.role, with the NUL: the handle keeps a
  * copy of each (MATCH KEYS). A role is a name in ydev_roles. */
-#define YDEV_KEY_MAX  128
+#define YDEV_KEY_MAX  160
 #define YDEV_ROLE_MAX 32
 
 /* YDEV_REC_OUT flags (u16[18]) and ydev_out_info.flags. */
@@ -1523,7 +1524,7 @@ YDEV_API bool ydev_open(ydev_device* dev, const ydev_desc* desc) {
     if (desc->transport.open && (!desc->transport.write || !desc->transport.close ||
                                  (!desc->transport.read && (ybox_caps(desc->family) & YBOX_CAP_IN))))
         YDEV__FAIL("desc.transport needs open, read, write and close (read only for an output-only family)");
-    if (strlen(desc->key) >= sizeof dev->key_buf) YDEV__FAIL("desc.key: at most 127 characters (YDEV_KEY_MAX)");
+    if (strlen(desc->key) >= sizeof dev->key_buf) YDEV__FAIL("desc.key: at most 159 characters (YDEV_KEY_MAX)");
     if (strlen(desc->role) >= sizeof dev->role_buf) YDEV__FAIL("desc.role: at most 31 characters (YDEV_ROLE_MAX)");
     dev->d = *desc;
     /* the reader thread reads the key again at every reconnect: the
