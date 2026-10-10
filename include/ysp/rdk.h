@@ -385,13 +385,13 @@
  *          and yrdk_snapshot() take a non-const field. The header defines
  *          ysp/rt.h's YRT_* macros under the same guard. The rules and
  *          the digests do not change for the same L. USAGE builds as C99
- *          and C++17; the CHANGELOG moved to the end of this comment.
+ *          (C, { 0 }); the CHANGELOG moved to the end of this comment.
  *   v0.1.0 - first version.
  *
  *   STATUS: v0.2.0, 2026-10-10: the test passes with its golden digests and
  *   new checks of close and the messages (MinGW-w64 gcc 16.1, MSVC 19.44);
  *   the Python binding's C trial is the same bytes; the USAGE blocks
- *   compile as C99 and C++17; 2 of 2 new mutants caught (docs/rdk.md,
+ *   compile as C99 (C, { 0 }); 2 of 2 new mutants caught (docs/rdk.md,
  *   "Lifetime in ns").
  *   v0.1.0. See docs/rdk.md for the tables.
  *   Built with MSVC 19.44 (/W4 /WX: the default C dialect, C11, C++17),

@@ -649,7 +649,7 @@
  *          the frame thread writes yau_error() (ERRORS); the producer's
  *          calls return codes only. yau_stream_sample_at() and
  *          yau_stream_time_of() take a non-const handle for it. USAGE
- *          builds as C99 and C++17; the CHANGELOG moved to the end of
+ *          builds as C99 (C, { 0 }); the CHANGELOG moved to the end of
  *          this comment.
  *   v0.3.1 - HALT: an underrun of about a period is now found. On WASAPI
  *          shared mode it halts the position short of the frames written,
@@ -701,7 +701,7 @@
  *
  *   STATUS: v0.4.0, 2026-10-10: tests/adapt/audio_test.c passes on the
  *   scripted device with new checks of close and the messages (MinGW-w64
- *   gcc 16.1, MSVC 19.44); the USAGE blocks compile as C99 and C++17;
+ *   gcc 16.1, MSVC 19.44); the USAGE blocks compile as C99 (C, { 0 });
  *   3 of 3 new mutants caught (docs/audio.md, "Units, open and close").
  *   v0.3.1. Halts, measured on the same laptop (docs/audio.md,
  *   "Halts"): injected callback stalls of 5, 10, 15, 20 and 30 ms, 21 of

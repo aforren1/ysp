@@ -444,7 +444,7 @@
  *          gets "ysp_video: <call>: <code's text>". Time parameters say
  *          ns (t_ns, movie_ns, resume_at_ns, m_ns, period_ns); every
  *          time was already int64_t ns. YVID_NS_PER_S is gone (YRT_S(1)).
- *          USAGE builds as C99 and C++17.
+ *          USAGE builds as C99 (C, { 0 }).
  *   v0.2.2 - XXH64 on MSVC: little-endian loads through memcpy instead of
  *          byte by byte, which MSVC did not fuse; yvid_xxh64() on 1 GiB
  *          went from 5.9 to 6.3 GB/s to 11.9 to 14.1 GB/s (MinGW gcc

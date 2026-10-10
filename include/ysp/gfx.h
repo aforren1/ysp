@@ -1200,7 +1200,7 @@
  *          code only. ysp/color.h v0.2's ycol_ctx_open() builds the color
  *          context. No signature and no time field changed: the desc and
  *          the stimuli hold no time (NOTHING READS A CLOCK). USAGE builds
- *          as C99 and C++17.
+ *          as C99 (C, { 0 }).
  *   v0.11.1 - ygfx_open_start() (OPEN START): the open in two calls, so
  *          the programs compile while ysp/screen.h v0.5.2's open()
  *          settles. Called from desc.on_context, it submits every built-in

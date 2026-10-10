@@ -343,8 +343,8 @@
  *          stamp_hi_ns (were us); yrsp_onset.t_ns, residual_ns and
  *          uncertainty_ns. The header defines ysp/rt.h's YRT_* macros under
  *          the same guard. Every failing call writes yrsp_error(). Needs
- *          ysp/input.h v0.4.0 (lo_ns, hi_ns). USAGE builds as C99 and
- *          C++17; the CHANGELOG moved to the end of this comment.
+ *          ysp/input.h v0.4.0 (lo_ns, hi_ns). USAGE builds as C99 (C,
+ *          { 0 }); the CHANGELOG moved to the end of this comment.
  *   v0.2.0 - Trimmed (docs/response.md, "What the examples show"). The
  *          second-report rule R3 moved to ysp/screen.h v0.4.1's input
  *          bridge, so every consumer of yscr_event_input() gets it, not
@@ -387,7 +387,7 @@
  *   STATUS: v0.3.0, 2026-10-10: the test (20,595 checks; 20,660 with the
  *   SDL adapter) and the compile checks pass with MinGW-w64 gcc 16.1 and
  *   MSVC 19.44, with new checks of close, the messages and YRSP_NO_TIME;
- *   the USAGE block compiles as C99 and C++17; every mutant whose anchor
+ *   the USAGE block compiles as C99 (C, { 0 }); every mutant whose anchor
  *   moved, and 2 new ones, caught (docs/response.md, "Times in ns").
  *   v0.2.0, 2026-10-09. Built and run on Windows 11 with MinGW-w64
  *   gcc 16.1 as C11, C99 and C++17 under -Wall -Wextra -Wpedantic -Wshadow

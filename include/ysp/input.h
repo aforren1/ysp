@@ -161,7 +161,7 @@
  *          in us, the one exception to "every time is int64_t ns": an
  *          int64_t would make the event 56 bytes and ysp/screen.h's input
  *          slot 72, past one cache line (THE EVENT). USAGE builds as C99
- *          and C++17; the CHANGELOG moved to the end of this comment.
+ *          (C, { 0 }); the CHANGELOG moved to the end of this comment.
  *   v0.3.0 - For specialized devices (docs/devices_spec.md): YIN_KIND_SYNC
  *          (7) for timing events that are not a participant's response
  *          (scanner pulses, TTL inputs, photodiode and sound-key edges);
@@ -185,7 +185,7 @@
  *   layout (int64_t bounds at 8 and 16, 32 bytes); the event is still 48
  *   bytes. Measured with MinGW-w64 gcc 16.1 (x64): an int64_t unc_ns at
  *   the end would make the event 56 bytes and a ysp/screen.h input slot
- *   72 (64 now). The USAGE block builds as C99 and C++17.
+ *   72 (64 now). The USAGE block builds as C99 (C, { 0 }).
  *   v0.3.0, 2026-10-08 (v0.2.0's checks, and the new fields' offsets
  *   and constants). Built with MinGW-w64 gcc 16.1 as C11, C99
  *   and C++17 under -Wall -Wextra -Wpedantic -Wshadow -Werror and with

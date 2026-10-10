@@ -976,7 +976,9 @@ header. Four decisions:
   `yvid_out.pts` is in the stream's own units (`timescale`), not ns.
 
 Checked on 2026-10-10 (Windows 11, MSVC 19.44 /W4 /WX, and MinGW-w64 gcc
--std=c99 and -std=c++17 -pedantic for USAGE): `tests/adapt/video_test.c`
+-std=c99 and -std=c++17 -pedantic for USAGE, then with memset; the merge
+made the USAGE descs `= { 0 }`, C only, as README.md, Conventions says):
+`tests/adapt/video_test.c`
 checks the writer's message after a full write, that a success keeps
 it, finish twice, close on a zeroed writer, after a failed open and
 twice, a close that finishes, and `yvid_probe()`'s codes.

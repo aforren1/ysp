@@ -3049,7 +3049,9 @@ this header. The sweep found two things to do and one not to do:
 verbs).
 
 Checked on 2026-10-10 (Windows 11, MSVC 19.44 /W4 /WX, and MinGW-w64 gcc
--std=c99 and -std=c++17 -pedantic for USAGE): `tests/adapt/gfx_test.c`
+-std=c99 and -std=c++17 -pedantic for USAGE, then with memset; the merge
+made the USAGE descs `= { 0 }`, C only, as README.md, Conventions says):
+`tests/adapt/gfx_test.c`
 checks the message after a failing end, draw, begin, texture and
 texture_update, and that a success keeps it. Mutants cv-01 (a failure
 that writes nothing) and cv-02 (a success that drops the message) are
