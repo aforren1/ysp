@@ -1,6 +1,6 @@
 # ysp/net.h
 
-Status: v0.1.0, 2026-10-09. Lab Streaming Layer (LSL) outlets and inlets on
+Status: v0.2.0, 2026-10-10 (v0.1.0, 2026-10-09, for the measurements). Lab Streaming Layer (LSL) outlets and inlets on
 the ysp_rt clock, with liblsl loaded at run time. This is step 4 of
 `docs/devices_spec.md` section 14.2 and the LSL part of `docs/rig_spec.md`
 4.7. The header's manual is the reference; this page has the decisions,
@@ -11,7 +11,7 @@ rig_spec 4.7 are not in this version.
 
 ## How-to: get liblsl
 
-`ysp/net.h` does not link liblsl. It loads it when `ynet_lsl_load()` runs:
+`ysp/net.h` does not link liblsl. It loads it when `ynet_lsl_open()` runs:
 
 | Platform | Names it tries, in order |
 |---|---|
@@ -55,17 +55,21 @@ The macOS names were not checked against a release.
 static ynet_lsl lib;
 static ynet_outlet out;
 ynet_outlet_desc d = { 0 };
-if (ynet_lsl_load(&lib, NULL) != YNET_OK) die(lib.error);
+if (!ynet_lsl_open(&lib, NULL)) die(ynet_lsl_error(&lib));
 d.lib = &lib;
 d.role = "marks";
 d.key = "lsl:ysp-markers:Markers:booth2-ysp";   /* name:type:source_id */
 d.device = 3;                                   /* the role's index */
 d.format = YNET_STRING;
 d.ring = &log_ring;
-if (!ynet_outlet_start(&out, &d)) die(ynet_outlet_error(&out));
-ynet_out_mark(&out, 12, "target_on");           /* now */
-ynet_out_mark_at(&out, 12, "white", flip_onset_ns);   /* a past or future ysp_rt time */
+if (!ynet_outlet_open(&out, &d)) die(ynet_outlet_error(&out));
+int rc = ynet_out_mark(&out, 12, "target_on");  /* now */
+if (rc < 0) fprintf(stderr, "marker: %s\n", ynet_strerror(rc));
+rc = ynet_out_mark_at(&out, 12, "white", flip_onset_ns);   /* a past or future ysp_rt time */
 ```
+
+The output calls return a code and never write `ynet_outlet_error()`:
+several threads may call them at once.
 
 `examples/net/marker_send.c` does this and prints the cost of each call.
 
@@ -75,7 +79,7 @@ ynet_out_mark_at(&out, 12, "white", flip_onset_ns);   /* a past or future ysp_rt
 static ynet_inlet in;
 static unsigned char mem[YNET_STREAM_BYTES(65536, 6)];
 static ynet_stream ring;
-ynet_stream_init(&ring, mem, sizeof mem, 6);
+if (ynet_stream_init(&ring, mem, sizeof mem, 6) < 0) die("stream ring");
 ynet_inlet_desc d = { 0 };
 d.lib = &lib;
 d.role = "ref";
@@ -90,7 +94,9 @@ d.edges[0].hysteresis = 0.2f;
 d.n_edges = 1;                     /* edges as SYNC events to the sink */
 d.sink = to_bridge;                /* yscr_push_input() */
 d.ring = &log_ring;
-ynet_inlet_start(&in, &d);
+if (!ynet_inlet_open(&in, &d)) die(ynet_inlet_error(&in));
+/* open returns while the inlet resolves its key */
+if (ynet_inlet_wait_running(&in, YRT_S(5)) < 0) die(ynet_inlet_error(&in));
 ```
 
 The data writer drains `ynet_stream_read()`; a gaze-contingent display reads
@@ -132,6 +138,30 @@ below.
 | Threads | One reader thread per inlet, elevated; `desc.manual` and `ynet_inlet_poll()` for none; outlets have no thread (liblsl sends). At open the reader waits in the first time correction (liblsl probes for it); samples queue in liblsl meanwhile and are mapped correctly after | devices_spec 4.8. Not waiting would give the first events the read time and unc_us 65535. The loopback's first run showed the wait as a 90 ms tail in marker latency when markers came during it |
 | Same-host offset | Not assumed 0: liblsl's estimate is used for a stream of this machine too | Measured: liblsl's offset for a same-host stream was -7 to -16 us, not 0, and the mapping error followed it. A rule "hostname equal, offset 0" would remove it; not done, because the hostname is the sender's claim |
 | Allocation | None after start, except what liblsl does inside | devices_spec principle 5. liblsl allocates each string sample; the header frees it with `lsl_destroy_string()` |
+
+### Open, close, nanoseconds and LSL's own values (v0.2.0)
+
+v0.2.0 applies the repository conventions (README.md, Conventions). It
+breaks the API.
+
+| Question | Decision | Why |
+|---|---|---|
+| The library | `bool ynet_lsl_open(lib, path)`, `void ynet_lsl_close(lib)`, `ynet_lsl_error(lib)`; were `ynet_lsl_load()` returning `YNET_ERR_NOLIB` or `YNET_ERR_SYMBOL`, and `ynet_lsl_unload()` | Loading the library fills a handle: an open. The two codes told apart only what the message already says (where it looked, or which function is missing), and no caller acted on the difference. The codes stay defined for `ynet_strerror()` |
+| Outlets and inlets | `ynet_outlet_open/close()`, `ynet_inlet_open/close()` | They take a desc and make liblsl objects and a thread: an open |
+| The first sample | `ynet_inlet_wait_running(in, timeout_ns)` and `YNET_ERR_TIMEOUT`, as `ydev_wait_running()` | `ynet_inlet_open()` returns while the key resolves. The caller had to poll the state itself |
+| Key and role | Copied into the handle: `YNET_KEY_MAX` 240 (the size of `ynet_found.key`), `YNET_ROLE_MAX` 32; longer fails the open | The reader resolved `desc.key` again after every loss through the caller's pointer |
+| Times | `ynet_resolve_all(..., wait_ns)`, `ynet_inlet_poll(in, timeout_ns)`, `desc.read_timeout_ns` | Every C time is `int64_t` ns. liblsl takes seconds; the header converts at the call |
+| LSL's values | `desc.lsl_max_buflen` (was `buffer_s`), `ynet_stats.lsl_offset_s` and `lsl_rtt_s` (were `offset_s`, `rtt_s`) | They are liblsl's numbers in liblsl's units: `max_buflen` is seconds, or hundreds of samples for an irregular stream, and the time correction is in seconds on the LSL clocks. The `lsl_` prefix says so, as on the stamps (`lsl_s`), which stay double seconds |
+| `ynet_stream_init()` | Returns 0 or `YNET_ERR_ARG` | It is an init that checks its arguments |
+
+Checked on 2026-10-10 on Windows 11, MSVC 19.44 (/W4 /WX) and MinGW-w64
+gcc 16.1 (-Werror): `tests/adapt/net_test.c` with new checks (the loader's
+messages and a close on a zeroed lib, after a failed open and twice; the
+copied key and role; the role limit; the wait reaching RUNNING, on a closed
+inlet, on a wrong stream at once with its reason, and a timeout with nobody
+sending). `tests/compile/net.c` names every entry point by type. Mutants
+`net-18` (the inlet keeps the caller's key) and `net-19` (a FAILED wait
+waits out its timeout) are new; both were caught.
 
 ## The LabStreamer
 

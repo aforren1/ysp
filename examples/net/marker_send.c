@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
     const char* key = "lsl:ysp-markers:Markers:ysp-marker-send";
     const char* path = NULL;
     double interval = 0.1, wait = 10.0, drift_max = 0;
-    int n = 200, as_int = 0, i, failed = 0, rc;
+    int n = 200, as_int = 0, i, failed = 0;
     int64_t next, end;
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--key") && i + 1 < argc) key = argv[++i];
@@ -61,7 +61,7 @@ int main(int argc, char** argv) {
         }
     }
     if (n < 1 || n > MAX_N || interval < 0) { fprintf(stderr, "n: 1 to %d; interval >= 0\n", MAX_N); return 2; }
-    if ((rc = ynet_lsl_load(&lib, path)) != YNET_OK) { fprintf(stderr, "%s\n", lib.error); return 2; }
+    if (!ynet_lsl_open(&lib, path)) { fprintf(stderr, "%s\n", ynet_lsl_error(&lib)); return 2; }
     printf("liblsl %d.%d from %s\n", (int)lib.version / 100, (int)lib.version % 100, lib.path);
     memset(&d, 0, sizeof d);
     d.lib = &lib;
@@ -69,15 +69,15 @@ int main(int argc, char** argv) {
     d.key = key;
     d.device = 1;
     d.format = as_int ? YNET_INT32 : YNET_STRING;
-    if (!ynet_outlet_start(&out, &d)) { fprintf(stderr, "%s\n", ynet_outlet_error(&out)); ynet_lsl_unload(&lib); return 2; }
+    if (!ynet_outlet_open(&out, &d)) { fprintf(stderr, "%s\n", ynet_outlet_error(&out)); ynet_lsl_close(&lib); return 2; }
     (void)yrt_thread_elevate(NULL);
     printf("outlet %s (%s); waiting up to %.0f s for an inlet\n", key, as_int ? "int32" : "string", wait);
     end = yrt_now_ns() + (int64_t)(wait * 1e9);
     while (yrt_now_ns() < end && !ynet_outlet_consumers(&out)) (void)yrt_sleep_ns(50000000);
     if (!ynet_outlet_consumers(&out)) {
         fprintf(stderr, "no inlet connected in %.0f s\n", wait);
-        ynet_outlet_stop(&out);
-        ynet_lsl_unload(&lib);
+        ynet_outlet_close(&out);
+        ynet_lsl_close(&lib);
         return 1;
     }
     next = yrt_now_ns() + 200000000;
@@ -100,7 +100,7 @@ int main(int argc, char** argv) {
            (double)cost[0] / 1e3, (double)cost[n / 2] / 1e3, (double)cost[n * 99 / 100] / 1e3,
            (double)cost[n - 1] / 1e3);
     printf("LSL stamp against the local fit: max |%.1f| us\n", drift_max * 1e6);
-    ynet_outlet_stop(&out);
-    ynet_lsl_unload(&lib);
+    ynet_outlet_close(&out);
+    ynet_lsl_close(&lib);
     return failed ? 1 : 0;
 }

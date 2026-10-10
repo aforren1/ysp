@@ -154,7 +154,7 @@ name = "the remote stamp read as local"
 test = "net"
 why = "Without liblsl's offset a remote sender's stamps are on another clock: seconds off."
 find = '''    if (in->st.remote.ready && in->have_rorigin) return yrt_fit_map(&in->remote, ynet__ticks(s, in->rorigin_s));
-    if (in->have_offset) return yrt_fit_map(&in->local, ynet__ticks(s + in->st.offset_s, in->origin_s));'''
+    if (in->have_offset) return yrt_fit_map(&in->local, ynet__ticks(s + in->st.lsl_offset_s, in->origin_s));'''
 replace = '''    if (in->have_offset) return yrt_fit_map(&in->local, ynet__ticks(s, in->origin_s));'''
 
 [[mutant]]
@@ -168,3 +168,19 @@ find = '''    ynet__fit_init(&in->remote, YRT_FIT_UNBIASED, in->d.device, 0, in-
     in->have_rorigin = 0;'''
 replace = '''    ynet__fit_init(&in->remote, YRT_FIT_BRACKET, in->d.device, in->d.max_unc_ns, in->d.ring);
     in->have_rorigin = 0;'''
+
+[[mutant]]
+id = "net-18"
+name = "the inlet keeps the caller's key (v0.2.0)"
+test = "net"
+why = "The reader resolves the key again after every loss; a caller's buffer that is gone by then resolves nothing."
+find = '''    in->d.key = in->key_buf;'''
+replace = ''
+
+[[mutant]]
+id = "net-19"
+name = "a wait on a FAILED inlet waits out its timeout (v0.2.0)"
+test = "net"
+why = "A wrong stream never runs: the wait must end at once with the reason."
+find = '''        if (s == YNET_FAILED || s == YNET_CLOSED) return ynet__wait_fail(in, YNET_ERR_STATE, s);'''
+replace = '''        if (s == YNET_CLOSED) return ynet__wait_fail(in, YNET_ERR_STATE, s);'''
