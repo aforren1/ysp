@@ -374,7 +374,7 @@ static void check_entries(const char* path) {
     CHECK(ypak_first_of(&p, YPAK_KIND_EXPERIMENT, &e) == 0 && e.name_len == 20 && !memcmp(e.name, "experiment/main.json", 20), "experiment");
     if ((x = entry(&p, "conditions.pstb", &e)) != NULL) {
         ytb_table t;
-        CHECK(ytb_view(&t, x, (size_t)e.size) && t.n_rows == 4 && strcmp(ytb_text(&t, 1, ytb_col(&t, "word")), "dog, big") == 0 &&
+        CHECK(ytb_open_view(&t, x, (size_t)e.size) && t.n_rows == 4 && strcmp(ytb_text(&t, 1, ytb_col(&t, "word")), "dog, big") == 0 &&
               ytb_num(&t, 3, ytb_col(&t, "contrast")) == 0.0625, "table: %s", ytb_error(&t));
     }
     if ((x = entry(&p, "display.yspcal", &e)) != NULL) {

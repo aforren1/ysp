@@ -265,7 +265,7 @@ hostile:
   consistency check does the first part).
 - Every kind's header (section 4) is bounds-checked by its view function
   before a pointer leaves the reader. The deep checks of a form stay with
-  its owner (`ytb_view()`, `ygfx_cset_check()`, `ycol_cal` checks,
+  its owner (`ytb_open_view()`, `ygfx_cset_check()`, `ycol_cal` checks,
   ysp/audio.h's WAV parser, `yvid` index checks).
 - `tests/fuzz/pack_fuzz.c` (libFuzzer, as `table_fuzz.c`): its input is a
   pack in memory; it opens it, looks up every name and random ones, reads
@@ -460,8 +460,8 @@ the deep checks stay with each form's owner.
 
 ### 4.1 TABLE
 
-The PSTB block (docs/table.md, format 1), unchanged; `ytb_view()` reads
-it in place. Source: CSV or TSV through `ytb_csv()`. Parameters:
+The PSTB block (docs/table.md, format 1), unchanged; `ytb_open_view()` reads
+it in place. Source: CSV or TSV through `ytb_open_csv()`. Parameters:
 `delimiter` (`","`, `";"` or `"\t"`; default `","`), `types` (column name
 to `"integer"`, `"number"` or `"string"`), `allow_empty` (default false).
 
@@ -759,7 +759,7 @@ the tool and requires the same bytes (open question 2).
 
 | Kind | Player call | Copy at load |
 |---|---|---|
-| TABLE | `ytb_view(data, size)` | none |
+| TABLE | `ytb_open_view(data, size)` | none |
 | CALIBRATION | `memcpy` into a `ycol_cal`, then its check | 62528 bytes |
 | FONT | `ylay_add_font(data, size, ...)`, `yol` | none |
 | CURVESET, ARTWORK | view, `ygfx_cset_check()`, `ygfx_cset_make()` | GPU upload only |

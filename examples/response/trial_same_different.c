@@ -192,7 +192,7 @@ int main(int argc, char** argv) {
     cd.len = sizeof conditions_csv - 1;
     cd.arena = table_arena;
     cd.arena_size = sizeof table_arena;
-    if (!ytb_csv(&tab, &cd)) { fprintf(stderr, "trial_same_different: %s\n", ytb_error(&tab)); return 1; }
+    if (!ytb_open_csv(&tab, &cd)) { fprintf(stderr, "trial_same_different: %s\n", ytb_error(&tab)); return 1; }
     first_col = ytb_col(&tab, "first");
     second_col = ytb_col(&tab, "second");
     answer_col = ytb_col(&tab, "answer");

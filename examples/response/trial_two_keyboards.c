@@ -220,7 +220,7 @@ int main(int argc, char** argv) {
     cd.len = sizeof conditions_csv - 1;
     cd.arena = table_arena;
     cd.arena_size = sizeof table_arena;
-    if (!ytb_csv(&tab, &cd)) { fprintf(stderr, "trial_two_keyboards: %s\n", ytb_error(&tab)); return 1; }
+    if (!ytb_open_csv(&tab, &cd)) { fprintf(stderr, "trial_two_keyboards: %s\n", ytb_error(&tab)); return 1; }
     memset(&rd, 0, sizeof rd);
     rd.table = &tab;
     rd.reps = reps;

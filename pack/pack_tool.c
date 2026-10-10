@@ -541,13 +541,13 @@ static int build_table(B* b, E* e) {
         d.n_types = jn(types);
     }
     memset(&t, 0, sizeof t);
-    (void)ytb_csv(&t, &d);
+    (void)ytb_open_csv(&t, &d);
     if (!t.need) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s", e->name, ytb_error(&t));
     arena = calloc_c(b->c, t.need + 16);
     if (!arena) return cfail(b->c, YPAK_ERR_NOMEM, "'%s': out of memory", e->name);
     d.arena = arena;
     d.arena_size = t.need;
-    if (!ytb_csv(&t, &d)) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s", e->name, ytb_error(&t));
+    if (!ytb_open_csv(&t, &d)) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s", e->name, ytb_error(&t));
     e->data = t.base;
     e->size = (int64_t)t.size;
     snprintf(ver, sizeof ver, "ysp/table.h %s", YTB_VERSION_STRING);

@@ -1362,7 +1362,7 @@ static void test_save_load(void) {
             memset(&g_u, 0xA5, sizeof(g_u));   /* load must not rely on zeroed */
             rig_desc(&g_rb, &g_u, true);
             g_rb.seed = seed_at_cut;
-            if (!ytr_load(&g_u, &g_rb.d, g_snap_b, (size_t)sz2)) {
+            if (!ytr_open_saved(&g_u, &g_rb.d, g_snap_b, (size_t)sz2)) {
                 fail(__LINE__, ytr_error(&g_u));
                 continue;
             }
@@ -1382,37 +1382,37 @@ static void test_save_load(void) {
     memset(&g_rb, 0, sizeof(g_rb));
     rig_desc(&g_rb, &g_u, true);
     g_rb.d.reps = 11;
-    CHECK(!ytr_load(&g_u, &g_rb.d, g_snap_a, (size_t)sz));
+    CHECK(!ytr_open_saved(&g_u, &g_rb.d, g_snap_a, (size_t)sz));
     CHECK_HAS(ytr_error(&g_u), "desc.reps does not match");
     CHECK(!ytr_is_open(&g_u));
     rig_desc(&g_rb, &g_u, true);
     g_rb.d.constraints[1] = ytr_min_gap(1, 2, 2);
-    CHECK(!ytr_load(&g_u, &g_rb.d, g_snap_a, (size_t)sz));
+    CHECK(!ytr_open_saved(&g_u, &g_rb.d, g_snap_a, (size_t)sz));
     CHECK_HAS(ytr_error(&g_u), "desc.constraints[].n does not match");
     rig_desc(&g_rb, &g_u, true);
     g_rb.d.tracks[1].weight = 3.0;
-    CHECK(!ytr_load(&g_u, &g_rb.d, g_snap_a, (size_t)sz));
+    CHECK(!ytr_open_saved(&g_u, &g_rb.d, g_snap_a, (size_t)sz));
     CHECK_HAS(ytr_error(&g_u), "tracks[].weight");
     rig_desc(&g_rb, &g_u, true);
     g_rb.d.record_size = 0;
     g_rb.d.records = NULL;
-    CHECK(!ytr_load(&g_u, &g_rb.d, g_snap_a, (size_t)sz));
+    CHECK(!ytr_open_saved(&g_u, &g_rb.d, g_snap_a, (size_t)sz));
     CHECK_HAS(ytr_error(&g_u), "record_size");
     rig_desc(&g_rb, &g_u, true);
-    CHECK(!ytr_load(&g_u, &g_rb.d, g_snap_a, (size_t)sz - 1));
+    CHECK(!ytr_open_saved(&g_u, &g_rb.d, g_snap_a, (size_t)sz - 1));
     CHECK_HAS(ytr_error(&g_u), "truncated");
-    CHECK(!ytr_load(&g_u, &g_rb.d, g_snap_a, 20));
-    CHECK(!ytr_load(&g_u, &g_rb.d, g_snap_a, 3));
+    CHECK(!ytr_open_saved(&g_u, &g_rb.d, g_snap_a, 20));
+    CHECK(!ytr_open_saved(&g_u, &g_rb.d, g_snap_a, 3));
     memcpy(g_snap_b, g_snap_a, (size_t)sz);
     g_snap_b[sz] = 0;
-    CHECK(!ytr_load(&g_u, &g_rb.d, g_snap_b, (size_t)sz + 1));
+    CHECK(!ytr_open_saved(&g_u, &g_rb.d, g_snap_b, (size_t)sz + 1));
     CHECK_HAS(ytr_error(&g_u), "after the snapshot's end");
     g_snap_b[0] = 'X';
-    CHECK(!ytr_load(&g_u, &g_rb.d, g_snap_b, (size_t)sz));
+    CHECK(!ytr_open_saved(&g_u, &g_rb.d, g_snap_b, (size_t)sz));
     CHECK_HAS(ytr_error(&g_u), "not a ysp_trials snapshot");
     memcpy(g_snap_b, g_snap_a, (size_t)sz);
     g_snap_b[4] = 2;
-    CHECK(!ytr_load(&g_u, &g_rb.d, g_snap_b, (size_t)sz));
+    CHECK(!ytr_open_saved(&g_u, &g_rb.d, g_snap_b, (size_t)sz));
     CHECK_HAS(ytr_error(&g_u), "format");
     /* A schedule entry out of range: find the state section by saving a
      * handle and corrupting the first schedule byte pair. The desc section
@@ -1425,16 +1425,16 @@ static void test_save_load(void) {
         memcpy(g_snap_b, g_snap_a, (size_t)sz);
         g_snap_b[w.pos + 13 * 4] = 0x7f;   /* schedule[0], low byte */
         g_snap_b[w.pos + 13 * 4 + 1] = 0x00;
-        CHECK(!ytr_load(&g_u, &g_rb.d, g_snap_b, (size_t)sz));
+        CHECK(!ytr_open_saved(&g_u, &g_rb.d, g_snap_b, (size_t)sz));
         CHECK_HAS(ytr_error(&g_u), "corrupt");
         memcpy(g_snap_b, g_snap_a, (size_t)sz);
         g_snap_b[w.pos + 4] = 0xff;        /* n_run */
-        CHECK(!ytr_load(&g_u, &g_rb.d, g_snap_b, (size_t)sz));
+        CHECK(!ytr_open_saved(&g_u, &g_rb.d, g_snap_b, (size_t)sz));
         CHECK_HAS(ytr_error(&g_u), "counters");
     }
-    CHECK(!ytr_load(&g_u, &g_rb.d, NULL, 100));
-    CHECK(!ytr_load(&g_u, NULL, g_snap_a, (size_t)sz));
-    CHECK(!ytr_load(NULL, &g_rb.d, g_snap_a, (size_t)sz));
+    CHECK(!ytr_open_saved(&g_u, &g_rb.d, NULL, 100));
+    CHECK(!ytr_open_saved(&g_u, NULL, g_snap_a, (size_t)sz));
+    CHECK(!ytr_open_saved(NULL, &g_rb.d, g_snap_a, (size_t)sz));
 
     /* save() into a buffer that is too small. */
     CHECK_I(ytr_save(&g_t, g_snap_b, (size_t)sz - 1), YTR_ERR_ARG);

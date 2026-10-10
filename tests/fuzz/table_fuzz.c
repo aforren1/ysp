@@ -1,9 +1,9 @@
 /* table_fuzz.c - fuzz target for ysp/table.h. The first input byte
  * picks the target, the rest is its input:
- *   even  CSV: ytb_csv() (the second byte picks the delimiter, allow_empty
- *         and one declared type), then ytb_view() of a copy of the block
+ *   even  CSV: ytb_open_csv() (the second byte picks the delimiter, allow_empty
+ *         and one declared type), then ytb_open_view() of a copy of the block
  *         it made and every lookup on every cell
- *   odd   block: ytb_view() of the raw bytes (copied to 8-byte aligned
+ *   odd   block: ytb_open_view() of the raw bytes (copied to 8-byte aligned
  *         memory, as a pack gives), then every lookup
  * Every input must return without a sanitizer report. A refusal is a
  * correct answer to a bad input, so the target asserts nothing else.
@@ -75,11 +75,11 @@ static void fuzz_csv(const uint8_t* p, size_t n) {
     d.len = n;
     d.arena = g_arena;
     d.arena_size = sizeof(g_arena);
-    if (!ytb_csv(&t, &d)) return;
+    if (!ytb_open_csv(&t, &d)) return;
     sweep(&t);
     if (t.size <= sizeof(g_copy)) {
         memcpy(g_copy, t.base, t.size);
-        if (ytb_view(&v, g_copy, t.size)) sweep(&v);
+        if (ytb_open_view(&v, g_copy, t.size)) sweep(&v);
     }
 }
 
@@ -87,7 +87,7 @@ static void fuzz_view(const uint8_t* p, size_t n) {
     ytb_table v;
     if (n > sizeof(g_copy)) return;
     memcpy(g_copy, p, n);
-    if (ytb_view(&v, g_copy, n)) sweep(&v);
+    if (ytb_open_view(&v, g_copy, n)) sweep(&v);
 }
 
 int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size);
@@ -149,7 +149,7 @@ int main(int argc, char** argv) {
             d.arena_size = sizeof(g_arena);
             if (i == 4) d.delimiter = ';';
             if (i == 5) d.delimiter = '\t';
-            if (ytb_csv(&t, &d)) {
+            if (ytb_open_csv(&t, &d)) {
                 snprintf(name, sizeof(name), "block%02u", (unsigned)i);
                 put(argv[1], name, &one, 1, t.base, t.size);
                 nseed++;

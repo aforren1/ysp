@@ -258,7 +258,7 @@ static int tb_adopt(TableObject* o, const void* block, size_t size) {
     ytb_table v;
     if (!mem) { PyErr_NoMemory(); return -1; }
     memcpy(mem, block, size);
-    if (!ytb_view(&v, mem, size)) {
+    if (!ytb_open_view(&v, mem, size)) {
         PyErr_SetString(TArgumentError, ytb_error(&v));
         PyMem_Free(mem);
         return -1;
@@ -330,7 +330,7 @@ static int Table_init(PyObject* self, PyObject* args, PyObject* kwds) {
     d.text = PyBytes_AsString(bytes);
     d.len = (size_t)PyBytes_Size(bytes);
     /* A sizing pass, then the parse into an arena of that size. */
-    ytb_csv(&t, &d);
+    ytb_open_csv(&t, &d);
     if (t.need == 0) {
         Py_XDECREF(keys);
         Py_DECREF(bytes);
@@ -342,7 +342,7 @@ static int Table_init(PyObject* self, PyObject* args, PyObject* kwds) {
     d.arena = arena;
     d.arena_size = t.need;
     Py_BEGIN_ALLOW_THREADS
-    ok = ytb_csv(&t, &d);
+    ok = ytb_open_csv(&t, &d);
     Py_END_ALLOW_THREADS
     Py_XDECREF(keys);
     Py_DECREF(bytes);
@@ -1565,7 +1565,7 @@ static PyObject* Trials_load(PyObject* cls, PyObject* args, PyObject* kwds) {
         const char* p = PyBytes_AsString(bytes);
         size_t len = (size_t)PyBytes_Size(bytes);
         Py_BEGIN_ALLOW_THREADS
-        ok = ytr_load(&o->t, &d, p, len);
+        ok = ytr_open_saved(&o->t, &d, p, len);
         Py_END_ALLOW_THREADS
     }
     o->busy = 0;

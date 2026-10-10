@@ -27,265 +27,6 @@
  *   C99, C11 and C++17, and in the C dialect MSVC compiles by default.
  *
  *   ---------------------------------------------------------------------
- *   CHANGELOG
- *   ---------------------------------------------------------------------
- *   v0.2.1 - jitter: a random duration per trial (a foreperiod, an ITI,
- *          an SOA), drawn from the session's generator in a fixed order, so
- *          restore() and load() reproduce it, and logged in the data line
- *          (JITTER). Uniform on an interval, uniform over a list
- *          (ytr_choice()), and an exponential truncated to an interval
- *          (a non-aging foreperiod); any of them snapped to whole frames of
- *          a rate num/den. In seconds, also as int64 nanoseconds and frame
- *          counts. Every draw is integer arithmetic on the variate's 53
- *          bits (a fixed-point logarithm for the exponential), so it is the
- *          same nanosecond on every C library, compiler and flag set.
- *          desc.jitters[] with per-condition intervals from table
- *          columns, ytr_jitter() and ytr_jitter_index(); call-level
- *          ytr_jitter_draw(), ytr_jitter_map(), ytr_jitter_check();
- *          the rules statement `jitter`.
- *          - Every v0.2.0 desc gives the same schedule, draws, history,
- *            records, tallies, format lines (but the version token) and
- *            snapshot bytes as v0.2.0: tests/adapt/trials_pins_v02.h
- *            holds the hashes of 320 sessions (16 v0.2 designs x 20 seeds)
- *            made by v0.2.0, beside the 600 of v0.1.1.
- *          - Snapshot format 3 for a desc with jitters (format 2 plus the
- *            jitters and their draws); formats 1 and 2 as before.
- *          - The handle grew by 8 bytes per trial per YTR_MAX_JITTERS (4):
- *            243344 bytes at the defaults on a 64-bit ABI. Define
- *            YTR_MAX_JITTERS lower to save it.
- *   v0.2.0 - tables, sampling, groups, units, balance, Latin squares, rules
- *          text. Every v0.1 desc gives the same schedule, draws, history,
- *          records, tallies, format lines (but the version token) and
- *          snapshot bytes as v0.1.1: tests/adapt/trials_pins.h holds
- *          the hashes of 600 sessions (30 designs x 20 seeds) made by
- *          v0.1.1, and the test checks them.
- *          - REQUIRES ysp/table.h. desc.table: a table's rows are the
- *            conditions and its columns the factors (TABLES).
- *          - YTR_ORDER_LIST and YTR_ORDER_WITH_REPLACEMENT, desc.subset
- *            (ORDER LISTS, DRAWS, SUBSETS); desc.groups (GROUPS).
- *          - Structural rules ytr_followed_by(), ytr_preceded_by(),
- *            ytr_chunk() (STRUCTURE: UNITS); ytr_balance(),
- *            ytr_balance_no_repeat(), ytr_balance_flags() (BALANCE);
- *            ytr_latin() (LATIN SQUARES); ytr_rules() and
- *            ytr_format_rules() (GRAMMAR).
- *          - YTR_FLAG_LEADIN on the lead-in of a balanced order. No
- *            field was added to ytr_trial_info, so a positional
- *            initializer of it stays warning-free (the history flag and
- *            rep -1 tell the lead-in).
- *          - Snapshot format 2 for a desc with any v0.2 field; format 1,
- *            the v0.1.1 bytes, for any other. load() takes the format the
- *            desc implies.
- *          - format_meta() adds the v0.2 keys (the table's hash among them)
- *            after the v0.1 ones, and only for a desc with a v0.2 field;
- *            format_header() and format_row() add a `leadin` column only for
- *            a balanced order with a lead-in.
- *          - The handle grew by 19 KB (scratch for open() and the units'
- *            run-time moves, the table's level pointers): 110528 bytes at the
- *            defaults on a 64-bit ABI.
- *          - A desc that puts an out-of-range value in an enum field is
- *            still refused; in C++ such a value must lie in the enum's bit
- *            range or reading it is undefined (the test now respects that).
- *   v0.1.1 - hardening for newer compilers (gcc 13 and 16, clang 18 at -O3
- *          with warnings as errors), no change to any order, draw or
- *          snapshot byte. Every loop over a fixed-size array is bounded by
- *          the array's size as well as its count, every memmove size is
- *          visibly nonnegative and inside the arrays, and open() copies
- *          desc.cond_reps and desc.warmup_conditions into the handle,
- *          reading each entry once, so neither needs to outlive open().
- *          open() now rejects n_warmup_conditions above
- *          YTR_MAX_CONDITIONS. The handle grew by 4 KB.
- *   v0.1.0 - first implementation. Defining YSP_TRIALS_IMPLEMENTATION now
- *          compiles the library instead of failing. The manual gained what
- *          a specification could leave open and an implementation cannot:
- *          the exact generator draw order (RANDOMNESS), the snapshot byte
- *          layout, how blocks are counted and where practice sits, what a
- *          constraint window does at a block boundary (it is clipped),
- *          what ytr_requeue() does to the schedule and the block count,
- *          and the rest of the descs ytr_open() rejects. Behavior that
- *          differs from the v0.0 text:
- *          - Constraints hold on the MAIN sequence (every trial but
- *            practice and warmup, track trials included as trials with no
- *            level), and next() enforces them at run time as well as at
- *            open: a scheduled trial that would break one gives way to a
- *            track trial, or to a later scheduled trial that fits. Without
- *            that, the second USAGE example (one catch condition and three
- *            tracks) could not be expressed. With tracks, a repair that
- *            runs out of swaps is therefore not an open() failure.
- *          - The repair swaps the offending trial with the first of up to
- *            64 slots, from a random start, that leaves both slots legal,
- *            not with a blind random later slot: the blind swap failed
- *            about 15% of easy designs (3 rows x 10, no immediate repeat)
- *            by getting trapped at the end of the schedule.
- *          - YTR_ANY_LEVEL works for max_in_window and min_gap as well
- *            as max_run. no_transition is clipped at block boundaries like
- *            the others; first_not is about the session's first main
- *            trial only.
- *          - ytr_requeue() records the new outcome YTR_REQUEUE (-2),
- *            and ytr_restore() re-queues on YTR_REQUEUE, not on
- *            YTR_INVALID, so update(YTR_INVALID) and requeue() replay
- *            differently and the history's outcomes feed restore directly.
- *            update() rejects outcomes below YTR_INVALID.
- *          - Practice and warmup trials cannot be re-queued (YTR_ERR_ARG).
- *          - Two history flags: YTR_FLAG_FIRST_IN_BLOCK and
- *            YTR_FLAG_VIOLATION.
- *          - ytr_format_row() and ytr_format_header() add warmup and
- *            after_break columns, and end the line with a newline.
- *          - A record pointer with no records buffer is ignored rather
- *            than an error, and a NULL record zero-fills the trial's slot.
- *          - ytr_condition_at() indexes the practice slots too.
- *   v0.0 - specification. Declarations and the manual, no implementation.
- *
- *   STATUS: v0.2.1, 2026-10-07. The jitter release, built and run as
- *   v0.2.0 below (gcc 16.1 C11, C99, C++17; MSVC 19.44 C and C++17; WSL2
- *   gcc 11.4 C11 and C++17 under ASan and UBSan; YTR_MAX_TRIALS 256) and
- *   at YTR_MAX_JITTERS 1. The 600 v0.1.1 pins and 320 new v0.2.0 pins
- *   (tests/adapt/trials_pins_v02.h: 16 v0.2 designs x 20 seeds, made
- *   by v0.2.0) match on every build, so no earlier draw moved.
- *   The jitter draws are integer arithmetic: golden digests of 200000
- *   draws of each of six kinds (tests/adapt/trials_jitter_golden.h)
- *   match under MinGW gcc 16.1 -O0 to -Ofast -march=native
- *   -ffp-contract=fast, MSVC 19.44 /Od to /O2 /arch:AVX2 /fp:fast, WSL gcc
- *   11.4 -O2 to -Ofast -march=native and under ASan and UBSan, each with
- *   and without the compilers' 128-bit types, and in the Python binding;
- *   CI checks them on Linux, macOS arm64, MSVC and MinGW and builds
- *   tests/adapt/trials_jitter_repro.c at -O3 native and -Ofast. The
- *   fixed-point -ln(1 - u) is within 0.71 x 2^-58 of mpmath over 1000000
- *   values (tests/compare/trials_jitter_ref.py). tests/adapt/
- *   trials_test_jitter.h also checks every refusal by name; values
- *   at fixed variates and the frame ends; each distribution against its
- *   CDF (200000 draws each, the snapped exponential 1000000; worst
- *   chi-square at 0.80 of its bound) and the truncated mean; 20000 random
- *   snaps inside their intervals; the draw order against a logged
- *   generator; no draw for the pending trial; restore() and save/load
- *   (format 3) reproducing every draw and data line; per-condition
- *   columns; the rules text round trip. Measured per-frame hazard of the
- *   exponential snapped to 60 Hz, 0.5 to 2.0 s, scale 0.4: within 6.2 % of
- *   flat up to 0.8 s (truncation alone accounts for 5.2 %), within 4.4 %
- *   of the truncated geometric's exact hazard; flat per-frame hazard x 60
- *   = 2.4486/s against 1/s = 2.5/s. Fuzzed (tests/fuzz/trials_fuzz.c,
- *   jitter seeds added) under MSVC libFuzzer with ASan: 9,003,538 inputs
- *   in 1201 s, then 4,221,162 in 601 s on the integer version, no crash;
- *   the 2495 corpus files replayed on Linux under ASan and UBSan, no
- *   report. Mutations: tests/mutate/trials.toml, 47 of 47 killed (18 for
- *   jitter). Python binding 156 tests; MEX test_mex.m in MATLAB R2023a and
- *   Octave 10.1. Costs measured (Iris Xe laptop, AC, measurement lock,
- *   examples/trials/bench.c, medians, gcc 16.1 -O2 / MSVC 19.44 /O2): one
- *   ytr_jitter_draw() 66 / 54 ns uniform snapped, 82 / 109 ns
- *   exponential snapped, 32 / 62 ns exponential, 12 / 16 ns choice;
- *   next() + update() with 4 jitters mean 0.16 / 0.20 us, worst 5.2 / 4.8
- *   us. A design without jitters runs as fast as under v0.2.0 (an
- *   interleaved A/B of open(), docs/trials.md).
- *   v0.2.0 STATUS, kept as written: built and run on Windows 11 with MinGW-w64
- *   gcc 16.1 as C11, C99 and C++17 under -Wall -Wextra -Wpedantic -Wshadow
- *   -Werror and with MSVC 19.44 under /W4 /WX, in its default C dialect and
- *   as /std:c++17; on Linux (WSL2) with gcc 11.4 as C11 and C++17 under
- *   -fsanitize=address,undefined -fno-sanitize-recover=all with no
- *   diagnostic; and at YTR_MAX_TRIALS 256. The extra gcc 11.4 warnings
- *   and the clang 11.1 builds of v0.1.1 (below) were not repeated for
- *   v0.2; CI's compilers give that verdict.
- *   v0.1 behavior: tests/adapt/trials_pins.h holds the hashes of 600
- *   v0.1.1 sessions (30 designs x 20 seeds: schedule, history, tallies,
- *   records, format lines, snapshot bytes); all 600 match on gcc, MSVC and
- *   Linux gcc. Both v0.1 examples print what v0.1.1 printed but the
- *   version token.
- *   v0.2 checks (tests/adapt/trials_test_v02.h): a table as the
- *   conditions, its names and texts in the data line; ORDER_LIST played as
- *   given; WITH_REPLACEMENT counts against three weight sets (worst
- *   chi-square at 0.20 of its 99.9 % bound), pairs independent (1.3 on 8
- *   df), and a variate on a running sum never drawing a zero-weight row;
- *   subsets uniform (2-subsets of 5: 13.8 on 9 df); Latin and Williams
- *   squares for n = 1..64, every row, position and adjacent pair; BLOCKED
- *   groups in Williams order for 8 participants, a RANDOM group order
- *   uniform (3.1 on 5 df), LIST, ALTERNATE cycling exactly under a repair;
- *   units: 200 seeds of followed_by with max_run, re-queues and blocks, 0
- *   broken pairs (at most 69 repair moves), 0 units split by a track, the
- *   order uniform over the 6 valid orders (7.4 on 5 df) and a free
- *   trial's slot uniform; balance: exact pair counts on 1600 orders of 8
- *   designs with and without the lead-in, uniform over all balanced orders
- *   of 3 levels (216 seen of 216, 183.0 on 215 df; without self pairs 18
- *   of 18, 19.7 on 17 df); the rules text giving the same schedule as the
- *   C calls, format_rules() pasting back, OpenSesame's lines, 14 error
- *   messages; snapshot format 2 saved and loaded at every third cut of
- *   units, groups and balance sessions, identical to the uninterrupted run;
- *   a digest of v0.2 sessions, identical on gcc (C11, C99, C++17), MSVC (C,
- *   C++17) and Linux gcc.
- *   Fuzzed: tests/fuzz/trials_fuzz.c (rules text, open, a run with
- *   re-queues, breaks, the format functions, a save and a load) under MSVC
- *   libFuzzer with ASan, 9,734,743 inputs in 1351 s, no crash; the 1383
- *   corpus files replayed on Linux under ASan and UBSan, C11 and C++17,
- *   with no report. Mutations: 29 in tests/mutate/trials.toml, all
- *   killed. Python binding: 152 tests,
- *   including the parser against Python's csv module and float(). MEX:
- *   test_mex.m passes in MATLAB R2023a and Octave 10.1.
- *   Costs measured (Iris Xe laptop, AC, measurement lock, 2026-10-07,
- *   examples/trials/bench.c, 21 rounds, medians, gcc 16.1 -O2 / MSVC
- *   19.44 /O2) for open() of a 10,000-row table: file order 0.02 / 0.02
- *   ms, FULL_RANDOM 0.04 / 0.04, CONSTRAINED max_run 3 1.82 / 1.54, units
- *   with max_run 3 5.02 / 7.03, 10,000 draws with replacement 0.73 / 1.33,
- *   a 5,000-row subset 0.14 / 0.14, balance over 8 levels 0.26 / 0.30,
- *   8 BLOCKED groups in Williams order with max_run 3 1.79 / 1.73; the
- *   worst next() + update() of 54,034 in a units session with re-queues
- *   19.0 / 2.2 us. docs/trials.md has the ranges.
- *   What is NOT done (v0.2): no run on macOS or big-endian hardware; the
- *   unit repair is measured to be biased under extra rules (docs/
- *   trials.md), less than a rule-based repair; balance is first order
- *   only and refuses tracks, groups, units and rules on its own factor.
- *   v0.1.1 STATUS, kept as written: built and run on Linux (WSL2) with
- *   gcc 11.4 as C99, C11 and C++17 under -Wall -Wextra -Wpedantic
- *   -Wshadow -Werror, and under -fsanitize=address,undefined
- *   -fno-sanitize-recover=all with no diagnostic; on Windows 11 with MSVC
- *   19.44 under /W4 /WX, in its default C dialect and as /std:c++17. The
- *   header, its test and both
- *   examples also build at -O2 and -O3 under gcc 11.4 with
- *   -Warray-bounds=2 -Wstringop-overflow=4 -Wmaybe-uninitialized
- *   -Waggressive-loop-optimizations -Wnull-dereference added, and under
- *   clang 11.1 as C11, C99 and C++17, all with -Werror; the newer gcc 13,
- *   gcc 16 and clang 18 of CI were not available locally, so their verdict
- *   is CI's. Both examples print byte for
- *   byte the same on the two compilers, and the test prints the same
- *   apart from its timings.
- *   tests/adapt/trials_test.c runs at YTR_MAX_TRIALS 256 and at the
- *   default 4096 and checks: the factorial index round trip; the orders'
- *   properties over 400 seeds (SEQUENTIAL identical to PsychoPy's order,
- *   RANDOM one of each row per repetition, FULL_RANDOM exact counts and a
- *   first slot near uniform, weighted repetitions) and the Fisher-Yates
- *   draw order against a hand trace; every constraint rule on every
- *   repaired order of eight designs x 200 seeds, by a checker written
- *   separately from the header's, including block-clipped windows and
- *   runs; the failure message on impossible designs; track interleaving
- *   at rates 0.5 and 1 and 0 (rejected with conditions), round robin
- *   against a hand trace, weights, and that a finished track is never
- *   picked or asked again; practice and warmup flags, blocks and tallies;
- *   re-queues with and without a gap, and 760 random re-queues under a
- *   no-repeat rule with no unflagged violation in the realized order;
- *   ytr_mark_break() ending a run; tallies against a hand count;
- *   ytr_restore() reproducing history, schedule, tallies, records and
- *   the generator's position bit for bit, with and without tracks;
- *   ytr_save() at 42 cut points (with and without a pending trial)
- *   then ytr_load() into a garbage-filled handle and finishing,
- *   compared bit for bit with the uninterrupted run, snapshot bytes
- *   included; every load refusal; every rejected desc; YTR_ERR_FULL;
- *   the format functions against fixed strings.
- *   Compared with PsychoPy's psychopy.data.TrialHandler and TrialHandlerExt
- *   through the Python binding (tests/compare/compare_trials_psychopy.py),
- *   on the same condition lists over 100 seeds per design. The two use
- *   different generators, so random orders are compared by the properties
- *   each promises: SEQUENTIAL is identical to PsychoPy's order; under RANDOM
- *   every repetition is one block holding each condition once, on both
- *   sides; FULL_RANDOM and weighted FULL_RANDOM give exact counts per
- *   condition on both sides. The weighted SEQUENTIAL orders differ by
- *   design (PsychoPy runs a row's copies back to back, this header cycles
- *   the rows); the script reports that and does not fail on it.
- *   What is NOT done: no run on macOS or big-endian hardware, so the
- *   snapshot's portability is by construction, not by test; no loading
- *   of a snapshot written by another compiler; the constraint repair's
- *   success rate is measured only on the designs in the test, and a
- *   tight design can still need a larger desc.max_swaps. Nothing here is
- *   a timing measurement of a real session. A -DYTR_API=static build
- *   needs a translation unit that calls every function, or
- *   -Wno-unused-function.
- *
- *   ---------------------------------------------------------------------
  *   USAGE
  *   ---------------------------------------------------------------------
  *   Do this:
@@ -933,17 +674,17 @@
  *                                                numbers and the counts, as
  *                                                key=value pairs, to head a
  *                                                data file
- *       ytr_save / ytr_load                  a versioned byte snapshot
+ *       ytr_save / ytr_open_saved                  a versioned byte snapshot
  *                                                of the whole state, for
  *                                                resuming after a crash
- *     ytr_save() writes ytr_save_size(t) bytes; ytr_load() rebuilds a
+ *     ytr_save() writes ytr_save_size(t) bytes; ytr_open_saved() rebuilds a
  *     handle from them plus a desc that re-supplies what a snapshot cannot
  *     carry (the pointers: rng and its state, records, cond_reps, the
  *     warmup list, factor names, tracks), checks that the desc's numbers
  *     match the saved ones, and continues at the pending trial when one
  *     was pending. The generator's state is the caller's: save it beside
  *     the snapshot (for ytr_splitmix, the uint64_t) and put it back
- *     before the next draw. ytr_load() draws nothing and calls no track.
+ *     before the next draw. ytr_open_saved() draws nothing and calls no track.
  *     SNAPSHOT LAYOUT, format 1. Every integer is little-endian two's
  *     complement, written and read byte by byte, so a snapshot moves
  *     between compilers and platforms; an f64 is the IEEE 754 bit pattern
@@ -987,7 +728,7 @@
  *     scale column (-1 for none); and after the records, n_run x n_jitters
  *     i64 draws in trial order (nanoseconds, or the frame count of a
  *     snapped jitter).
- *     ytr_load() compares the desc section with the desc it is given and
+ *     ytr_open_saved() compares the desc section with the desc it is given and
  *     names the first field that differs, then range-checks every number
  *     it reads, so a wrong, truncated or corrupt snapshot fails the load
  *     with a message instead of indexing outside the handle. When
@@ -1096,7 +837,7 @@
  *   ---------------------------------------------------------------------
  *   RETURN VALUES AND ERRORS
  *   ---------------------------------------------------------------------
- *   ytr_open() and ytr_load() return bool and fill ytr_error().
+ *   ytr_open() and ytr_open_saved() return bool and fill ytr_error().
  *   Everything else returns a value or a code and never touches the
  *   message. ytr_next() returns the trial index (>= 0) or YTR_DONE
  *   (-1) or an error below -1; ytr_strerror() names a code.
@@ -1165,6 +906,265 @@
  *
  *       cc -O2 -Iinclude -o trials_mocs examples/trials/mocs.c
  *       cl /O2 /Iinclude examples\trials\mocs.c
+ *
+ *   ---------------------------------------------------------------------
+ *   CHANGELOG
+ *   ---------------------------------------------------------------------
+ *   v0.2.1 - jitter: a random duration per trial (a foreperiod, an ITI,
+ *          an SOA), drawn from the session's generator in a fixed order, so
+ *          restore() and load() reproduce it, and logged in the data line
+ *          (JITTER). Uniform on an interval, uniform over a list
+ *          (ytr_choice()), and an exponential truncated to an interval
+ *          (a non-aging foreperiod); any of them snapped to whole frames of
+ *          a rate num/den. In seconds, also as int64 nanoseconds and frame
+ *          counts. Every draw is integer arithmetic on the variate's 53
+ *          bits (a fixed-point logarithm for the exponential), so it is the
+ *          same nanosecond on every C library, compiler and flag set.
+ *          desc.jitters[] with per-condition intervals from table
+ *          columns, ytr_jitter() and ytr_jitter_index(); call-level
+ *          ytr_jitter_draw(), ytr_jitter_map(), ytr_jitter_check();
+ *          the rules statement `jitter`.
+ *          - Every v0.2.0 desc gives the same schedule, draws, history,
+ *            records, tallies, format lines (but the version token) and
+ *            snapshot bytes as v0.2.0: tests/adapt/trials_pins_v02.h
+ *            holds the hashes of 320 sessions (16 v0.2 designs x 20 seeds)
+ *            made by v0.2.0, beside the 600 of v0.1.1.
+ *          - Snapshot format 3 for a desc with jitters (format 2 plus the
+ *            jitters and their draws); formats 1 and 2 as before.
+ *          - The handle grew by 8 bytes per trial per YTR_MAX_JITTERS (4):
+ *            243344 bytes at the defaults on a 64-bit ABI. Define
+ *            YTR_MAX_JITTERS lower to save it.
+ *   v0.2.0 - tables, sampling, groups, units, balance, Latin squares, rules
+ *          text. Every v0.1 desc gives the same schedule, draws, history,
+ *          records, tallies, format lines (but the version token) and
+ *          snapshot bytes as v0.1.1: tests/adapt/trials_pins.h holds
+ *          the hashes of 600 sessions (30 designs x 20 seeds) made by
+ *          v0.1.1, and the test checks them.
+ *          - REQUIRES ysp/table.h. desc.table: a table's rows are the
+ *            conditions and its columns the factors (TABLES).
+ *          - YTR_ORDER_LIST and YTR_ORDER_WITH_REPLACEMENT, desc.subset
+ *            (ORDER LISTS, DRAWS, SUBSETS); desc.groups (GROUPS).
+ *          - Structural rules ytr_followed_by(), ytr_preceded_by(),
+ *            ytr_chunk() (STRUCTURE: UNITS); ytr_balance(),
+ *            ytr_balance_no_repeat(), ytr_balance_flags() (BALANCE);
+ *            ytr_latin() (LATIN SQUARES); ytr_rules() and
+ *            ytr_format_rules() (GRAMMAR).
+ *          - YTR_FLAG_LEADIN on the lead-in of a balanced order. No
+ *            field was added to ytr_trial_info, so a positional
+ *            initializer of it stays warning-free (the history flag and
+ *            rep -1 tell the lead-in).
+ *          - Snapshot format 2 for a desc with any v0.2 field; format 1,
+ *            the v0.1.1 bytes, for any other. load() takes the format the
+ *            desc implies.
+ *          - format_meta() adds the v0.2 keys (the table's hash among them)
+ *            after the v0.1 ones, and only for a desc with a v0.2 field;
+ *            format_header() and format_row() add a `leadin` column only for
+ *            a balanced order with a lead-in.
+ *          - The handle grew by 19 KB (scratch for open() and the units'
+ *            run-time moves, the table's level pointers): 110528 bytes at the
+ *            defaults on a 64-bit ABI.
+ *          - A desc that puts an out-of-range value in an enum field is
+ *            still refused; in C++ such a value must lie in the enum's bit
+ *            range or reading it is undefined (the test now respects that).
+ *   v0.1.1 - hardening for newer compilers (gcc 13 and 16, clang 18 at -O3
+ *          with warnings as errors), no change to any order, draw or
+ *          snapshot byte. Every loop over a fixed-size array is bounded by
+ *          the array's size as well as its count, every memmove size is
+ *          visibly nonnegative and inside the arrays, and open() copies
+ *          desc.cond_reps and desc.warmup_conditions into the handle,
+ *          reading each entry once, so neither needs to outlive open().
+ *          open() now rejects n_warmup_conditions above
+ *          YTR_MAX_CONDITIONS. The handle grew by 4 KB.
+ *   v0.1.0 - first implementation. Defining YSP_TRIALS_IMPLEMENTATION now
+ *          compiles the library instead of failing. The manual gained what
+ *          a specification could leave open and an implementation cannot:
+ *          the exact generator draw order (RANDOMNESS), the snapshot byte
+ *          layout, how blocks are counted and where practice sits, what a
+ *          constraint window does at a block boundary (it is clipped),
+ *          what ytr_requeue() does to the schedule and the block count,
+ *          and the rest of the descs ytr_open() rejects. Behavior that
+ *          differs from the v0.0 text:
+ *          - Constraints hold on the MAIN sequence (every trial but
+ *            practice and warmup, track trials included as trials with no
+ *            level), and next() enforces them at run time as well as at
+ *            open: a scheduled trial that would break one gives way to a
+ *            track trial, or to a later scheduled trial that fits. Without
+ *            that, the second USAGE example (one catch condition and three
+ *            tracks) could not be expressed. With tracks, a repair that
+ *            runs out of swaps is therefore not an open() failure.
+ *          - The repair swaps the offending trial with the first of up to
+ *            64 slots, from a random start, that leaves both slots legal,
+ *            not with a blind random later slot: the blind swap failed
+ *            about 15% of easy designs (3 rows x 10, no immediate repeat)
+ *            by getting trapped at the end of the schedule.
+ *          - YTR_ANY_LEVEL works for max_in_window and min_gap as well
+ *            as max_run. no_transition is clipped at block boundaries like
+ *            the others; first_not is about the session's first main
+ *            trial only.
+ *          - ytr_requeue() records the new outcome YTR_REQUEUE (-2),
+ *            and ytr_restore() re-queues on YTR_REQUEUE, not on
+ *            YTR_INVALID, so update(YTR_INVALID) and requeue() replay
+ *            differently and the history's outcomes feed restore directly.
+ *            update() rejects outcomes below YTR_INVALID.
+ *          - Practice and warmup trials cannot be re-queued (YTR_ERR_ARG).
+ *          - Two history flags: YTR_FLAG_FIRST_IN_BLOCK and
+ *            YTR_FLAG_VIOLATION.
+ *          - ytr_format_row() and ytr_format_header() add warmup and
+ *            after_break columns, and end the line with a newline.
+ *          - A record pointer with no records buffer is ignored rather
+ *            than an error, and a NULL record zero-fills the trial's slot.
+ *          - ytr_condition_at() indexes the practice slots too.
+ *   v0.0 - specification. Declarations and the manual, no implementation.
+ *
+ *   STATUS: v0.2.1, 2026-10-07. The jitter release, built and run as
+ *   v0.2.0 below (gcc 16.1 C11, C99, C++17; MSVC 19.44 C and C++17; WSL2
+ *   gcc 11.4 C11 and C++17 under ASan and UBSan; YTR_MAX_TRIALS 256) and
+ *   at YTR_MAX_JITTERS 1. The 600 v0.1.1 pins and 320 new v0.2.0 pins
+ *   (tests/adapt/trials_pins_v02.h: 16 v0.2 designs x 20 seeds, made
+ *   by v0.2.0) match on every build, so no earlier draw moved.
+ *   The jitter draws are integer arithmetic: golden digests of 200000
+ *   draws of each of six kinds (tests/adapt/trials_jitter_golden.h)
+ *   match under MinGW gcc 16.1 -O0 to -Ofast -march=native
+ *   -ffp-contract=fast, MSVC 19.44 /Od to /O2 /arch:AVX2 /fp:fast, WSL gcc
+ *   11.4 -O2 to -Ofast -march=native and under ASan and UBSan, each with
+ *   and without the compilers' 128-bit types, and in the Python binding;
+ *   CI checks them on Linux, macOS arm64, MSVC and MinGW and builds
+ *   tests/adapt/trials_jitter_repro.c at -O3 native and -Ofast. The
+ *   fixed-point -ln(1 - u) is within 0.71 x 2^-58 of mpmath over 1000000
+ *   values (tests/compare/trials_jitter_ref.py). tests/adapt/
+ *   trials_test_jitter.h also checks every refusal by name; values
+ *   at fixed variates and the frame ends; each distribution against its
+ *   CDF (200000 draws each, the snapped exponential 1000000; worst
+ *   chi-square at 0.80 of its bound) and the truncated mean; 20000 random
+ *   snaps inside their intervals; the draw order against a logged
+ *   generator; no draw for the pending trial; restore() and save/load
+ *   (format 3) reproducing every draw and data line; per-condition
+ *   columns; the rules text round trip. Measured per-frame hazard of the
+ *   exponential snapped to 60 Hz, 0.5 to 2.0 s, scale 0.4: within 6.2 % of
+ *   flat up to 0.8 s (truncation alone accounts for 5.2 %), within 4.4 %
+ *   of the truncated geometric's exact hazard; flat per-frame hazard x 60
+ *   = 2.4486/s against 1/s = 2.5/s. Fuzzed (tests/fuzz/trials_fuzz.c,
+ *   jitter seeds added) under MSVC libFuzzer with ASan: 9,003,538 inputs
+ *   in 1201 s, then 4,221,162 in 601 s on the integer version, no crash;
+ *   the 2495 corpus files replayed on Linux under ASan and UBSan, no
+ *   report. Mutations: tests/mutate/trials.toml, 47 of 47 killed (18 for
+ *   jitter). Python binding 156 tests; MEX test_mex.m in MATLAB R2023a and
+ *   Octave 10.1. Costs measured (Iris Xe laptop, AC, measurement lock,
+ *   examples/trials/bench.c, medians, gcc 16.1 -O2 / MSVC 19.44 /O2): one
+ *   ytr_jitter_draw() 66 / 54 ns uniform snapped, 82 / 109 ns
+ *   exponential snapped, 32 / 62 ns exponential, 12 / 16 ns choice;
+ *   next() + update() with 4 jitters mean 0.16 / 0.20 us, worst 5.2 / 4.8
+ *   us. A design without jitters runs as fast as under v0.2.0 (an
+ *   interleaved A/B of open(), docs/trials.md).
+ *   v0.2.0 STATUS, kept as written: built and run on Windows 11 with MinGW-w64
+ *   gcc 16.1 as C11, C99 and C++17 under -Wall -Wextra -Wpedantic -Wshadow
+ *   -Werror and with MSVC 19.44 under /W4 /WX, in its default C dialect and
+ *   as /std:c++17; on Linux (WSL2) with gcc 11.4 as C11 and C++17 under
+ *   -fsanitize=address,undefined -fno-sanitize-recover=all with no
+ *   diagnostic; and at YTR_MAX_TRIALS 256. The extra gcc 11.4 warnings
+ *   and the clang 11.1 builds of v0.1.1 (below) were not repeated for
+ *   v0.2; CI's compilers give that verdict.
+ *   v0.1 behavior: tests/adapt/trials_pins.h holds the hashes of 600
+ *   v0.1.1 sessions (30 designs x 20 seeds: schedule, history, tallies,
+ *   records, format lines, snapshot bytes); all 600 match on gcc, MSVC and
+ *   Linux gcc. Both v0.1 examples print what v0.1.1 printed but the
+ *   version token.
+ *   v0.2 checks (tests/adapt/trials_test_v02.h): a table as the
+ *   conditions, its names and texts in the data line; ORDER_LIST played as
+ *   given; WITH_REPLACEMENT counts against three weight sets (worst
+ *   chi-square at 0.20 of its 99.9 % bound), pairs independent (1.3 on 8
+ *   df), and a variate on a running sum never drawing a zero-weight row;
+ *   subsets uniform (2-subsets of 5: 13.8 on 9 df); Latin and Williams
+ *   squares for n = 1..64, every row, position and adjacent pair; BLOCKED
+ *   groups in Williams order for 8 participants, a RANDOM group order
+ *   uniform (3.1 on 5 df), LIST, ALTERNATE cycling exactly under a repair;
+ *   units: 200 seeds of followed_by with max_run, re-queues and blocks, 0
+ *   broken pairs (at most 69 repair moves), 0 units split by a track, the
+ *   order uniform over the 6 valid orders (7.4 on 5 df) and a free
+ *   trial's slot uniform; balance: exact pair counts on 1600 orders of 8
+ *   designs with and without the lead-in, uniform over all balanced orders
+ *   of 3 levels (216 seen of 216, 183.0 on 215 df; without self pairs 18
+ *   of 18, 19.7 on 17 df); the rules text giving the same schedule as the
+ *   C calls, format_rules() pasting back, OpenSesame's lines, 14 error
+ *   messages; snapshot format 2 saved and loaded at every third cut of
+ *   units, groups and balance sessions, identical to the uninterrupted run;
+ *   a digest of v0.2 sessions, identical on gcc (C11, C99, C++17), MSVC (C,
+ *   C++17) and Linux gcc.
+ *   Fuzzed: tests/fuzz/trials_fuzz.c (rules text, open, a run with
+ *   re-queues, breaks, the format functions, a save and a load) under MSVC
+ *   libFuzzer with ASan, 9,734,743 inputs in 1351 s, no crash; the 1383
+ *   corpus files replayed on Linux under ASan and UBSan, C11 and C++17,
+ *   with no report. Mutations: 29 in tests/mutate/trials.toml, all
+ *   killed. Python binding: 152 tests,
+ *   including the parser against Python's csv module and float(). MEX:
+ *   test_mex.m passes in MATLAB R2023a and Octave 10.1.
+ *   Costs measured (Iris Xe laptop, AC, measurement lock, 2026-10-07,
+ *   examples/trials/bench.c, 21 rounds, medians, gcc 16.1 -O2 / MSVC
+ *   19.44 /O2) for open() of a 10,000-row table: file order 0.02 / 0.02
+ *   ms, FULL_RANDOM 0.04 / 0.04, CONSTRAINED max_run 3 1.82 / 1.54, units
+ *   with max_run 3 5.02 / 7.03, 10,000 draws with replacement 0.73 / 1.33,
+ *   a 5,000-row subset 0.14 / 0.14, balance over 8 levels 0.26 / 0.30,
+ *   8 BLOCKED groups in Williams order with max_run 3 1.79 / 1.73; the
+ *   worst next() + update() of 54,034 in a units session with re-queues
+ *   19.0 / 2.2 us. docs/trials.md has the ranges.
+ *   What is NOT done (v0.2): no run on macOS or big-endian hardware; the
+ *   unit repair is measured to be biased under extra rules (docs/
+ *   trials.md), less than a rule-based repair; balance is first order
+ *   only and refuses tracks, groups, units and rules on its own factor.
+ *   v0.1.1 STATUS, kept as written: built and run on Linux (WSL2) with
+ *   gcc 11.4 as C99, C11 and C++17 under -Wall -Wextra -Wpedantic
+ *   -Wshadow -Werror, and under -fsanitize=address,undefined
+ *   -fno-sanitize-recover=all with no diagnostic; on Windows 11 with MSVC
+ *   19.44 under /W4 /WX, in its default C dialect and as /std:c++17. The
+ *   header, its test and both
+ *   examples also build at -O2 and -O3 under gcc 11.4 with
+ *   -Warray-bounds=2 -Wstringop-overflow=4 -Wmaybe-uninitialized
+ *   -Waggressive-loop-optimizations -Wnull-dereference added, and under
+ *   clang 11.1 as C11, C99 and C++17, all with -Werror; the newer gcc 13,
+ *   gcc 16 and clang 18 of CI were not available locally, so their verdict
+ *   is CI's. Both examples print byte for
+ *   byte the same on the two compilers, and the test prints the same
+ *   apart from its timings.
+ *   tests/adapt/trials_test.c runs at YTR_MAX_TRIALS 256 and at the
+ *   default 4096 and checks: the factorial index round trip; the orders'
+ *   properties over 400 seeds (SEQUENTIAL identical to PsychoPy's order,
+ *   RANDOM one of each row per repetition, FULL_RANDOM exact counts and a
+ *   first slot near uniform, weighted repetitions) and the Fisher-Yates
+ *   draw order against a hand trace; every constraint rule on every
+ *   repaired order of eight designs x 200 seeds, by a checker written
+ *   separately from the header's, including block-clipped windows and
+ *   runs; the failure message on impossible designs; track interleaving
+ *   at rates 0.5 and 1 and 0 (rejected with conditions), round robin
+ *   against a hand trace, weights, and that a finished track is never
+ *   picked or asked again; practice and warmup flags, blocks and tallies;
+ *   re-queues with and without a gap, and 760 random re-queues under a
+ *   no-repeat rule with no unflagged violation in the realized order;
+ *   ytr_mark_break() ending a run; tallies against a hand count;
+ *   ytr_restore() reproducing history, schedule, tallies, records and
+ *   the generator's position bit for bit, with and without tracks;
+ *   ytr_save() at 42 cut points (with and without a pending trial)
+ *   then ytr_load() into a garbage-filled handle and finishing,
+ *   compared bit for bit with the uninterrupted run, snapshot bytes
+ *   included; every load refusal; every rejected desc; YTR_ERR_FULL;
+ *   the format functions against fixed strings.
+ *   Compared with PsychoPy's psychopy.data.TrialHandler and TrialHandlerExt
+ *   through the Python binding (tests/compare/compare_trials_psychopy.py),
+ *   on the same condition lists over 100 seeds per design. The two use
+ *   different generators, so random orders are compared by the properties
+ *   each promises: SEQUENTIAL is identical to PsychoPy's order; under RANDOM
+ *   every repetition is one block holding each condition once, on both
+ *   sides; FULL_RANDOM and weighted FULL_RANDOM give exact counts per
+ *   condition on both sides. The weighted SEQUENTIAL orders differ by
+ *   design (PsychoPy runs a row's copies back to back, this header cycles
+ *   the rows); the script reports that and does not fail on it.
+ *   What is NOT done: no run on macOS or big-endian hardware, so the
+ *   snapshot's portability is by construction, not by test; no loading
+ *   of a snapshot written by another compiler; the constraint repair's
+ *   success rate is measured only on the designs in the test, and a
+ *   tight design can still need a larger desc.max_swaps. Nothing here is
+ *   a timing measurement of a real session. A -DYTR_API=static build
+ *   needs a translation unit that calls every function, or
+ *   -Wno-unused-function.
  *
  *   ---------------------------------------------------------------------
  *   LICENSE: public domain / MIT-0, see end of file.
@@ -1511,7 +1511,7 @@ typedef struct ytr__jit {
 } ytr__jit;
 
 /* Handle. The caller allocates it and treats every field as opaque.
- * ytr_open() and ytr_load() reset it, so it may be reused. Sized by
+ * ytr_open() and ytr_open_saved() reset it, so it may be reused. Sized by
  * YTR_MAX_TRIALS and YTR_MAX_CONDITIONS; see MEMORY AND THREADS. */
 typedef struct ytr_trials {
     ytr_desc  desc;                         /* defaults resolved          */
@@ -1575,7 +1575,7 @@ typedef struct ytr_trials {
 /* Validate `desc`, build the condition table, draw the practice trials,
  * order the schedule and repair it to the constraints. Returns false with
  * ytr_error() set on any failure, including (without tracks) an
- * unsatisfiable constraint set. It and ytr_load() are the only functions
+ * unsatisfiable constraint set. It and ytr_open_saved() are the only functions
  * that write the message buffer. */
 YTR_API bool ytr_open(ytr_trials* t, const ytr_desc* desc);
 
@@ -1702,7 +1702,7 @@ YTR_API int ytr_rules(ytr_desc* d, const ytr_rules_desc* r, char* err, size_t ca
  * ytr_error(). SAVING, REPLAY AND RESUME gives the layout. */
 YTR_API size_t ytr_save_size(const ytr_trials* t);
 YTR_API int    ytr_save(const ytr_trials* t, void* buf, size_t cap);
-YTR_API bool   ytr_load(ytr_trials* t, const ytr_desc* desc, const void* buf, size_t len);
+YTR_API bool   ytr_open_saved(ytr_trials* t, const ytr_desc* desc, const void* buf, size_t len);
 
 /* Re-apply `n` outcomes (and records, record_size bytes each, or NULL) to a
  * freshly opened handle with the same desc and seed, advancing the schedule
@@ -3654,7 +3654,7 @@ static bool ytr__setup(ytr_trials* t, const ytr_desc* d) {
     if (d->table) {
         const ytb_table* tb = d->table;
         if (!tb->base || tb->n_cols < 1 || tb->n_cols > YTB_MAX_COLUMNS)
-            return ytr__fail(t, "desc.table is not a table from ytb_csv() or ytb_view()");
+            return ytr__fail(t, "desc.table is not a table from ytb_open_csv() or ytb_open_view()");
         if (d->n_factors != 0) return ytr__fail(t, "desc.table and desc.factors cannot both be given");
         if (tb->n_rows < 1) return ytr__fail(t, "desc.table has no rows");
         if (tb->n_rows > YTR_MAX_CONDITIONS)
@@ -6098,7 +6098,7 @@ static uint64_t ytr__get(ytr__r* r, int nbytes) {
 static int ytr__get_i32(ytr__r* r) { return (int)(int32_t)(uint32_t)ytr__get(r, 4); }
 static int ytr__get_i16(ytr__r* r) { return (int)(int16_t)(uint16_t)ytr__get(r, 2); }
 
-YTR_API bool ytr_load(ytr_trials* t, const ytr_desc* desc, const void* buf, size_t len) {
+YTR_API bool ytr_open_saved(ytr_trials* t, const ytr_desc* desc, const void* buf, size_t len) {
     ytr__w w;
     ytr__r r;
     const unsigned char* in = (const unsigned char*)buf;
@@ -6109,15 +6109,15 @@ YTR_API bool ytr_load(ytr_trials* t, const ytr_desc* desc, const void* buf, size
 
     if (!t) return false;
     if (!ytr__setup(t, desc)) return false;
-    if (!in) return ytr__fail(t, "ytr_load: null snapshot");
+    if (!in) return ytr__fail(t, "ytr_open_saved: null snapshot");
     if (len < 8 || in[0] != 'P' || in[1] != 'S' || in[2] != 'T' || in[3] != 'R')
-        return ytr__fail(t, "ytr_load: not a ysp_trials snapshot");
+        return ytr__fail(t, "ytr_open_saved: not a ysp_trials snapshot");
     memset(&r, 0, sizeof(r));
     r.in = in;
     r.len = len;
     r.pos = 4;
     if ((uint32_t)ytr__get(&r, 4) != ytr__snap_format(t))
-        return ytr__fail(t, "ytr_load: snapshot format is not %u", (unsigned)ytr__snap_format(t));
+        return ytr__fail(t, "ytr_open_saved: snapshot format is not %u", (unsigned)ytr__snap_format(t));
 
     memset(&w, 0, sizeof(w));
     w.cmp = in;
@@ -6125,7 +6125,7 @@ YTR_API bool ytr_load(ytr_trials* t, const ytr_desc* desc, const void* buf, size
     w.pos = 8;
     ytr__put_desc(&w, t);
     if (w.diff)
-        return ytr__fail(t, "ytr_load: desc.%s does not match the snapshot", w.diff);
+        return ytr__fail(t, "ytr_open_saved: desc.%s does not match the snapshot", w.diff);
     r.pos = w.pos;
 
     t->n_scheduled  = ytr__get_i32(&r);
@@ -6162,7 +6162,7 @@ YTR_API bool ytr_load(ytr_trials* t, const ytr_desc* desc, const void* buf, size
         t->n_main < 0 || t->n_main > t->n_run ||
         t->seg_start < 0 || t->seg_start > t->n_main ||
         t->warm_done < 0 || t->warm_done > t->desc.n_warmup || t->swaps < 0)
-        return ytr__fail(t, "ytr_load: the snapshot's counters are corrupt or truncated");
+        return ytr__fail(t, "ytr_open_saved: the snapshot's counters are corrupt or truncated");
 
     for (i = 0; i < ytr__nsch(t); i++) {
         v = ytr__get_i16(&r);
@@ -6221,9 +6221,9 @@ YTR_API bool ytr_load(ytr_trials* t, const ytr_desc* desc, const void* buf, size
         }
     }
     if (r.bad)
-        return ytr__fail(t, "ytr_load: the snapshot is corrupt or truncated");
+        return ytr__fail(t, "ytr_open_saved: the snapshot is corrupt or truncated");
     if (r.pos != r.len)
-        return ytr__fail(t, "ytr_load: %lu bytes after the snapshot's end",
+        return ytr__fail(t, "ytr_open_saved: %lu bytes after the snapshot's end",
                            (unsigned long)(r.len - r.pos));
 
     t->desc.weights = NULL;

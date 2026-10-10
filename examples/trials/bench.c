@@ -119,7 +119,7 @@ static bool parse(ytb_table* tb) {
     d.len = g_len;
     d.arena = g_arena;
     d.arena_size = g_arena_size;
-    return ytb_csv(tb, &d);
+    return ytb_open_csv(tb, &d);
 }
 
 static void bench_parse(void) {
@@ -147,7 +147,7 @@ static void bench_parse(void) {
         memcpy(g_arena2, tb.base, tb.size);
         for (i = 0; i < g_rounds; i++) {
             double t0 = now_ms();
-            bool ok = ytb_view(&tv, g_arena2, tb.size);
+            bool ok = ytb_open_view(&tv, g_arena2, tb.size);
             v[i] = now_ms() - t0;
             if (!ok) { printf("view failed: %s\n", ytb_error(&tv)); return; }
         }
@@ -236,7 +236,7 @@ static void bench_open(void) {
         cd.len = sizeof(csv8) - 1;
         cd.arena = g_arena2;
         cd.arena_size = 1 << 16;
-        if (!ytb_csv(&g_bt, &cd)) { printf("table: %s\n", ytb_error(&g_bt)); return; }
+        if (!ytb_open_csv(&g_bt, &cd)) { printf("table: %s\n", ytb_error(&g_bt)); return; }
     }
     printf("open(), %d rounds (sizeof(ytr_trials) = %lu at 16384 trials):\n", g_rounds,
            (unsigned long)sizeof(ytr_trials));

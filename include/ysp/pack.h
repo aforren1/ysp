@@ -19,40 +19,6 @@
  *   pure computation. C99 is the floor: it builds as C99, C11 and C++17.
  *
  *   ---------------------------------------------------------------------
- *   CHANGELOG
- *   ---------------------------------------------------------------------
- *   v0.1.0 - first version: the container of docs/pack.md format 1, the
- *          index and lookup, the four sources, the three verification
- *          policies, cursors, the views of the pack's own forms (curve
- *          set, artwork, glyph runs, shader, texture, QOI), XXH64,
- *          SHA-256 and CRC-32.
- *
- *   STATUS: v0.1.0, 2026-10-08. Built and run with MSVC 19.44 (/W4 /WX),
- *   MinGW-w64 gcc 16.1 (-Wall -Wextra -Wpedantic -Wshadow -Werror; also
- *   C99), emcc 6.0.10 under node, and Linux gcc 11.4 (WSL2) as C11 and
- *   C++17 under ASan and UBSan with no report. tests/adapt/pack_test.c
- *   (its own writer, independent of the tool's): every one of 135,240
- *   single-bit flips and 16,905 truncations of a small pack refused; 29
- *   rule faults each refused with its own error; the four sources;
- *   cursors over a damaged chunk; a virtual 4.3 GB entry and 65,537
- *   entries (zip64 by size, offset and count); the views. Fuzzed
- *   (tests/fuzz/pack_fuzz.c, MSVC libFuzzer with ASan): 28,706,212 inputs
- *   in 3601 s, no finding; the 750 corpus files replayed on Linux under
- *   ASan and UBSan with no report. Mutations: 36 in
- *   tests/mutate/pack.toml, 36 killed. Costs (Iris Xe laptop, AC,
- *   measurement lock, examples/pack/bench.c, gcc 16.1 -O2 / MSVC 19.44
- *   /O2): open of a mapped pack 0.23 / 0.25 ms at 100 entries and
- *   14.7 / 15.6 ms at 10,000 (most of it the manifest's SHA-256); lookup
- *   0.06 to 0.14 us; entry hash 11.6 to 17.1 GB/s; verify_all of a 1 GiB
- *   pack at mapped first touch 3.45 / 3.65 GB/s, of 10,000 small entries
- *   1.51 / 1.20 GB/s; one 1 MiB chunk through a cursor over fread 0.28 ms;
- *   0 allocations after open. Six zip readers read the packs the tool
- *   writes (docs/pack.md 9.1).
- *   What is NOT done: no run on macOS or ARM; a player signed after its
- *   pack was appended (the end record must end the file); big-endian
- *   hosts are refused.
- *
- *   ---------------------------------------------------------------------
  *   USAGE
  *   ---------------------------------------------------------------------
  *   Do this:
@@ -70,7 +36,7 @@
  *       if (ypak_find(&pk, "conditions.pstb", &e) == 0) {
  *           const void* p = ypak_data(&pk, &e);      // verified, zero-copy
  *           ytb_table t;
- *           if (p && ytb_view(&t, p, (size_t)e.size)) ...
+ *           if (p && ytb_open_view(&t, p, (size_t)e.size)) ...
  *       }
  *       // a long sound or a film, read on the producer thread:
  *       ypak_cursor c;
@@ -140,7 +106,7 @@
  *   ypak_cset_view(), ypak_art_view(), ypak_runs_view(), ypak_shader_view()
  *   and ypak_texture_view() check the bounds of the pack's own headers
  *   (docs/pack.md 4) and give pointers into the entry. The deep checks stay
- *   with each form's owner: ygfx_cset_check() for curve sets, ytb_view()
+ *   with each form's owner: ygfx_cset_check() for curve sets, ytb_open_view()
  *   for tables, ysp/color.h for calibrations, ysp/audio.h for WAV,
  *   ysp/video.h for video and its index.
  *
@@ -150,6 +116,40 @@
  *   Nothing to link. Define YPAK_API to override `extern`, YPAK_MALLOC and
  *   YPAK_FREE to replace malloc and free (used at open and close only). A
  *   big-endian host refuses to open: the format is little-endian.
+ *
+ *   ---------------------------------------------------------------------
+ *   CHANGELOG
+ *   ---------------------------------------------------------------------
+ *   v0.1.0 - first version: the container of docs/pack.md format 1, the
+ *          index and lookup, the four sources, the three verification
+ *          policies, cursors, the views of the pack's own forms (curve
+ *          set, artwork, glyph runs, shader, texture, QOI), XXH64,
+ *          SHA-256 and CRC-32.
+ *
+ *   STATUS: v0.1.0, 2026-10-08. Built and run with MSVC 19.44 (/W4 /WX),
+ *   MinGW-w64 gcc 16.1 (-Wall -Wextra -Wpedantic -Wshadow -Werror; also
+ *   C99), emcc 6.0.10 under node, and Linux gcc 11.4 (WSL2) as C11 and
+ *   C++17 under ASan and UBSan with no report. tests/adapt/pack_test.c
+ *   (its own writer, independent of the tool's): every one of 135,240
+ *   single-bit flips and 16,905 truncations of a small pack refused; 29
+ *   rule faults each refused with its own error; the four sources;
+ *   cursors over a damaged chunk; a virtual 4.3 GB entry and 65,537
+ *   entries (zip64 by size, offset and count); the views. Fuzzed
+ *   (tests/fuzz/pack_fuzz.c, MSVC libFuzzer with ASan): 28,706,212 inputs
+ *   in 3601 s, no finding; the 750 corpus files replayed on Linux under
+ *   ASan and UBSan with no report. Mutations: 36 in
+ *   tests/mutate/pack.toml, 36 killed. Costs (Iris Xe laptop, AC,
+ *   measurement lock, examples/pack/bench.c, gcc 16.1 -O2 / MSVC 19.44
+ *   /O2): open of a mapped pack 0.23 / 0.25 ms at 100 entries and
+ *   14.7 / 15.6 ms at 10,000 (most of it the manifest's SHA-256); lookup
+ *   0.06 to 0.14 us; entry hash 11.6 to 17.1 GB/s; verify_all of a 1 GiB
+ *   pack at mapped first touch 3.45 / 3.65 GB/s, of 10,000 small entries
+ *   1.51 / 1.20 GB/s; one 1 MiB chunk through a cursor over fread 0.28 ms;
+ *   0 allocations after open. Six zip readers read the packs the tool
+ *   writes (docs/pack.md 9.1).
+ *   What is NOT done: no run on macOS or ARM; a player signed after its
+ *   pack was appended (the end record must end the file); big-endian
+ *   hosts are refused.
  *
  *   ---------------------------------------------------------------------
  *   LICENSE: public domain / MIT-0, see end of file.

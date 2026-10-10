@@ -354,17 +354,17 @@ static uint64_t* t_parse_table(const mxArray* a, ytb_table* out) {
     if (!text) pm_err("arg", "the CSV text is not convertible to UTF-8");
     cd.text = text;
     cd.len = strlen(text);
-    ytb_csv(&t, &cd);                       /* sizing */
+    ytb_open_csv(&t, &cd);                       /* sizing */
     if (t.need == 0) pm_err("table", "%s", ytb_error(&t));
     arena = (uint64_t*)mxMalloc((t.need + 7) & ~(size_t)7);
     cd.arena = arena;
     cd.arena_size = t.need;
-    if (!ytb_csv(&t, &cd)) pm_err("table", "%s", ytb_error(&t));
+    if (!ytb_open_csv(&t, &cd)) pm_err("table", "%s", ytb_error(&t));
     mem = (uint64_t*)malloc((t.size + 7) & ~(size_t)7);
     if (!mem) pm_err("memory", "out of memory");
     memcpy(mem, t.base, t.size);
     mxFree(arena);
-    if (!ytb_view(out, mem, t.size)) { free(mem); pm_err("table", "%s", ytb_error(out)); }
+    if (!ytb_open_view(out, mem, t.size)) { free(mem); pm_err("table", "%s", ytb_error(out)); }
     return mem;
 }
 
@@ -631,7 +631,7 @@ static tn* t_make(const mxArray* s, const uint8_t* bytes, size_t len) {
     pm_register(n);
     t_read_desc(s, &d, n, &cond_reps, &warm);
     n->busy = 1;
-    ok = bytes ? ytr_load(&n->t, &d, bytes, len) : ytr_open(&n->t, &d);
+    ok = bytes ? ytr_open_saved(&n->t, &d, bytes, len) : ytr_open(&n->t, &d);
     n->busy = 0;
     free(n->rules_arena);
     n->rules_arena = NULL;

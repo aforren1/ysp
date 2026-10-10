@@ -65,7 +65,7 @@ what the implementation changed; the header says what it does.
 | Re-running missed trials | none built in (users append to `trialList`) | `ytr_requeue` with an optional gap |
 | Practice | a separate handler | `n_practice`, flagged, untallied |
 | Data | `addData`, `saveAsWideText` | a fixed-size caller record per trial, `ytr_format_row`, the history array |
-| Resume | `saveAsPickle` | `ytr_save` / `ytr_load` byte snapshot, or `ytr_restore` from the outcomes plus the seed (a re-queue is its own outcome value so replay can tell it from an invalid response) |
+| Resume | `saveAsPickle` | `ytr_save` / `ytr_open_saved` byte snapshot, or `ytr_restore` from the outcomes plus the seed (a re-queue is its own outcome value so replay can tell it from an invalid response) |
 
 Psychtoolbox has no equivalent; labs write their own. Palamedes has none.
 
@@ -179,7 +179,7 @@ what it likes, and chooses whether the track hears about it.
 
 The sequencer's state is small and scalar, so it saves three ways: CSV
 rows for analysis, a key=value metadata line to head a data file, and a
-versioned byte snapshot (`ytr_save`, `ytr_load`) that resumes a
+versioned byte snapshot (`ytr_save`, `ytr_open_saved`) that resumes a
 crashed session without replaying the seed. No JSON parser: a header that
 parses text is the wrong header. The caller's per-trial data is
 deliberately bounded to `record_size` bytes. Anything large or variable
@@ -436,7 +436,7 @@ A foreperiod, an inter-trial interval or an SOA that varies from trial
 to trial is a random draw like the order, so it belongs to the same
 generator and the same contract (rig_spec 14.7 rank 9). In the session
 it gets three things a caller's own draw does not: `ytr_restore()` and
-`ytr_load()` reproduce it, the data line logs it, and a table column
+`ytr_open_saved()` reproduce it, the data line logs it, and a table column
 can set its interval per condition. The header draws and logs; the
 caller waits.
 
@@ -744,7 +744,7 @@ The header's STATUS block has the numbers. In summary:
   760 random re-queues under a no-repeat rule with no unflagged violation;
   `ytr_mark_break` ending a run; tallies against a hand count;
   `ytr_restore` reproducing a run bit for bit, with and without tracks;
-  `ytr_save` at 42 cut points then `ytr_load` into a garbage-filled
+  `ytr_save` at 42 cut points then `ytr_open_saved` into a garbage-filled
   handle, identical to the uninterrupted run, snapshot bytes included;
   every load refusal and every rejected desc; the format functions against
   fixed strings.

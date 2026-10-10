@@ -31,7 +31,7 @@ static bool csv_table(ytb_table* tb, const char* csv) {
     cd.len = strlen(csv);
     cd.arena = g_tab_arena64;
     cd.arena_size = sizeof(g_tab_arena64);
-    if (!ytb_csv(tb, &cd)) {
+    if (!ytb_open_csv(tb, &cd)) {
         fprintf(stderr, "trials_test: table: %s\n", ytb_error(tb));
         return false;
     }
@@ -1126,7 +1126,7 @@ static void test_snapshot_v2(void) {
             len = ytr_save(&g_t, snap, sizeof(snap));
             CHECK(len > 0);
             memset(&g_u, 0xA5, sizeof(g_u));
-            if (!ytr_load(&g_u, &d, snap, (size_t)len)) {
+            if (!ytr_open_saved(&g_u, &d, snap, (size_t)len)) {
                 CHECK(false);
                 fprintf(stderr, "%s\n", ytr_error(&g_u));
                 return;
@@ -1145,7 +1145,7 @@ static void test_snapshot_v2(void) {
             zero_desc(&v1);
             v1.n_conditions = 6;
             v1.reps = 3;
-            CHECK(!ytr_load(&g_u, &v1, snap, (size_t)len));
+            CHECK(!ytr_open_saved(&g_u, &v1, snap, (size_t)len));
         }
     }
     printf("  snapshot format 2: units, BLOCKED groups and balance, a load at every third cut, "

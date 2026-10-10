@@ -643,7 +643,7 @@ static void test_jitter_session(void) {
         jt_desc(&d, true);
         memset(&g_u, 0x5A, sizeof(g_u));
         g_jl.state = st_at;
-        CHECK(ytr_load(&g_u, &d, snap, (size_t)n));
+        CHECK(ytr_open_saved(&g_u, &d, snap, (size_t)n));
         for (i = k; i < nrun; i++) {
             rc = ytr_next(&g_u, NULL);
             if (rc < 0) { CHECK(false); break; }
@@ -661,13 +661,13 @@ static void test_jitter_session(void) {
     CHECK(ytr_open(&g_u, &d));
     n = ytr_save(&g_u, snap, sizeof(snap));
     d.jitters[1].scale = 0.5;
-    CHECK(!ytr_load(&g_u, &d, snap, (size_t)n));
+    CHECK(!ytr_open_saved(&g_u, &d, snap, (size_t)n));
     CHECK_HAS(ytr_error(&g_u), "desc.jitters[].scale does not match");
     d.jitters[1].scale = 0.4;
     d.n_jitters = 2;
-    CHECK(!ytr_load(&g_u, &d, snap, (size_t)n));
+    CHECK(!ytr_open_saved(&g_u, &d, snap, (size_t)n));
     d.n_jitters = 0;
-    CHECK(!ytr_load(&g_u, &d, snap, (size_t)n));
+    CHECK(!ytr_open_saved(&g_u, &d, snap, (size_t)n));
     CHECK_HAS(ytr_error(&g_u), "snapshot format is not 1");
     printf("  jitter session: open draws unchanged, %d trials each +3 variates after their own, "
            "restore and %d save/load cut points identical, format 3\n", nrun, (nrun - 3 + 8) / 9);

@@ -3200,7 +3200,7 @@ YQST_API const yqst_trial* yqst_history(const yqst_quest* q, int* n) {
 /* ======================================================================= *
  *  SNAPSHOT
  *
- *  In the shape of ysp/trials.h's ytr_save / ytr_load: versioned,
+ *  In the shape of ysp/trials.h's ytr_save / ytr_open_saved: versioned,
  *  little-endian, written and read one byte at a time so a snapshot moves
  *  between compilers and platforms. One writer does three jobs (count, write,
  *  compare), which is how yqst_open_saved() checks the desc against the snapshot

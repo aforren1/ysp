@@ -155,7 +155,7 @@ int main(int argc, char** argv) {
     cd.len = sizeof conditions_csv - 1;
     cd.arena = table_arena;
     cd.arena_size = sizeof table_arena;
-    if (!ytb_csv(&tab, &cd)) { fprintf(stderr, "trial_audio_keyboard: %s\n", ytb_error(&tab)); return 1; }
+    if (!ytb_open_csv(&tab, &cd)) { fprintf(stderr, "trial_audio_keyboard: %s\n", ytb_error(&tab)); return 1; }
     stim_col = ytb_col(&tab, "stimulus");
     key_col = ytb_col(&tab, "key_answer");
     for (i = 0; i < 2; i++) {

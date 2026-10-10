@@ -927,7 +927,7 @@ number still reproduces.
    (log marginal -68.503 against -68.500, threshold 1.318 against
    1.314 dB); the default path is bit-identical to v0.13.1.
 7. Snapshots for the GP and QUEST+ handles, in the shape of
-   `ytr_save` / `ytr_load`, so a session resumes without replay. The
+   `ytr_save` / `ytr_open_saved`, so a session resumes without replay. The
    GP test resumes 132 sessions over 11 configurations, and the QUEST+
    test cuts 5 configurations at 4 trials each; every resume is
    byte-identical to the uninterrupted run under gcc and MSVC.

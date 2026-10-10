@@ -282,7 +282,7 @@ int main(int argc, char** argv) {
     cd.len = sizeof conditions_csv - 1;
     cd.arena = table_arena;
     cd.arena_size = sizeof table_arena;
-    if (!ytb_csv(&tab, &cd)) { fprintf(stderr, "trial_sternberg: %s\n", ytb_error(&tab)); return 1; }
+    if (!ytb_open_csv(&tab, &cd)) { fprintf(stderr, "trial_sternberg: %s\n", ytb_error(&tab)); return 1; }
     size_col = ytb_col(&tab, "set_size");
     probe_col = ytb_col(&tab, "probe");
     answer_col = ytb_col(&tab, "answer");
