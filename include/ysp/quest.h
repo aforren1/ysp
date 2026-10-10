@@ -1,4 +1,4 @@
-/* ysp/quest.h - v0.5.2 - public domain single-header Bayesian adaptive library
+/* ysp/quest.h - v0.6.0 - public domain single-header Bayesian adaptive library
  *
  *   Parametric Bayesian adaptive estimation on a grid: QUEST+ (Watson 2017),
  *   which contains QUEST (Watson & Pelli 1983), the Psi method (Kontsevich
@@ -18,210 +18,6 @@
  *   C99, C11 and C++17, and in the C dialect MSVC compiles by default.
  *
  *   ---------------------------------------------------------------------
- *   CHANGELOG
- *   ---------------------------------------------------------------------
- *   v0.5.2 - documentation only: STATUS records the comparisons against
- *          mQUESTPlus, Palamedes' PAL_AMPM and Watson's own notebook runs,
- *          which are now done. No code changed.
- *   v0.5.1 - builds clean on gcc 16 (MinGW, -O3) and current clang, which
- *          CI found and this machine's compilers do not. No behavior change,
- *          and the default build's arithmetic is bit for bit v0.5.0. gcc 16
- *          constant-propagated a test's deliberately bad arguments (axis 9,
- *          a three-element parameter array for a three-parameter model) into
- *          paths that open()'s invariants make impossible, and with
- *          -Werror=aggressive-loop-optimizations and -Werror=array-bounds it
- *          refused them. Neither was an over-read at run time. The header now
- *          makes the invariants visible instead of assuming them: every axis a
- *          caller passes is checked against the array it will index as well as
- *          against the handle, every loop over the stimulus or parameter axes
- *          is bounded by the array it indexes, and every array a caller hands
- *          in or gets back is copied once, exactly n_stim / n_param / K
- *          elements, to or from a local of the compile-time maximum, so no
- *          caller's array is ever indexed past what the handle says it holds on
- *          any path an optimizer can build. The test initializes every array
- *          a header call fills and fills its deliberately bad desc with 0xA5
- *          instead of leaving it uninitialized.
- *   v0.5.0 - snapshots: yqst_save_size(), yqst_save() and yqst_load(), in the
- *          shape of ysp/trials.h's ytr_save / ytr_load. A session saved
- *          at any trial resumes without replay and continues bit for bit as
- *          the uninterrupted one would have, which the test checks at four
- *          cut points in five configurations. And yqst_async_desc.queue_depth:
- *          how far the trial loop may run ahead of the inference is now a
- *          session's choice, under YQST_ASYNC_QUEUE as the capacity, where it
- *          used to be the macro itself. That was the one compile-time knob a
- *          binding could not reach; see BUILDING for the ones that stay.
- *   v0.4.1 - two small things a binding asked for: version macros
- *          (YQST_VERSION_MAJOR / MINOR / PATCH / STRING) and yqst_version(),
- *          so a program can log which header it was built from, and
- *          yqst_stim_axis_n() / yqst_param_axis_n(), so a caller can read an
- *          axis's size back from the handle instead of keeping its own copy
- *          of the desc. No behavior changed.
- *   v0.4 - an opt-in async layer, compiled only under YQST_ASYNC: yqst_async,
- *          a background thread that owns a yqst_quest between start and stop,
- *          takes responses through a fixed-size queue and publishes a snapshot
- *          (the next stimulus, an estimate, the entropy, the stop state) that
- *          the frame loop polls or waits on. It is ysp/rt.h's yrt_pump with
- *          yqst_update() and yqst_next() in its on_msg, so an async run and a
- *          synchronous replay of the same responses agree bit for bit, which
- *          the test asserts. Without YQST_ASYNC the header is unchanged, still
- *          includes nothing but the C standard library, and produces the same
- *          numbers bit for bit; examples/quest/async.c is a 16 ms frame loop
- *          driving it. See ASYNC and docs/adapt.md, "Inference on a
- *          thread".
- *   v0.3.1 - no code in the header changed, and the default build is bit for
- *          bit v0.3. Two lower-precision variants were built and measured to
- *          answer whether they are worth having: a float posterior and
- *          accumulators, and a 16-bit likelihood table. Neither earned its
- *          place, both were removed, and PRECISION records the numbers so the
- *          question does not have to be reopened. examples/quest/bench.c lost
- *          a measurement bug in the process: its memory-floor pass did the
- *          same arithmetic every trial, so at -O3 the compiler hoisted it out
- *          of the timing loop and the floor came out 30 times too fast. The
- *          pass now perturbs the posterior first.
- *   v0.3 - a batch entry point for the custom psychometric function,
- *          yqst_pf_batch_fn and desc.pf_batch, beside the per-cell
- *          desc.pf_fn. It fills a whole stimulus's worth of cells in one
- *          call, which is what a binding needs: a vectorized Python callable
- *          is entered once per stimulus instead of S*P times (140 times
- *          instead of 156,800 for examples/quest/qcsf.c, which now uses it
- *          and keeps the per-cell version beside it to check against).
- *          YQST_PF_CUSTOM takes exactly one of the two; open() rejects both
- *          or neither. The two paths produce tables that are equal bit for
- *          bit, which the test asserts. The cell entropy row is now computed
- *          from the likelihoods AS STORED, so the decomposition is exact
- *          against the floats the selection reads.
- *   v0.2 - yqst_next() made fast, and measured. Same API; two changes
- *          inside, both of them visible only in memory and in the clock:
- *            - the expected entropy is computed from its decomposition,
- *              E[H] = H(theta) - H(y | s) + sum_theta post h(s, theta), with
- *              the cell outcome entropy h tabulated at open as one more table
- *              row. That takes the logarithm out of the per-cell loop: a
- *              joint selection is now S*P*(K+1) multiply-adds and S*K
- *              logarithms, where v0.1 needed S*P*K logarithms. The row costs
- *              S*P floats, 50% more table at K = 2, and is only built when
- *              it will be used: a desc with a nuisance axis takes its
- *              logarithms on the marginal and does not pay for it.
- *            - the table is stored transposed, L[S][K][P] with the parameter
- *              index fastest, and the parameter axes are permuted internally
- *              so the nuisance ones are the slowest. Every sweep is then a
- *              contiguous dot product or a contiguous multiply-accumulate
- *              over the parameter grid, which gcc and MSVC vectorize. The
- *              public index order is unchanged; see LAYOUT.
- *          Measured on one laptop, a Psi-marginal selection went from 6.3 ms
- *          to 0.95 ms and an update from 30 us to 19 us; the numbers and the
- *          memory floor they are measured against are under MEMORY, COST AND
- *          THREADS, and examples/quest/bench.c prints them for your machine.
- *          No SIMD intrinsics: at the measured rate the sweep is bound by
- *          memory, not by arithmetic, and -mavx2 changes nothing.
- *   v0.1 - the implementation. The API and the declarations are v0.0's, and
- *          the handle gained three private fields (the selection scores and
- *          the nuisance marginal's strides). Everywhere the specification
- *          was optimistic, silent or self-contradictory, this manual now
- *          says what the code does:
- *            - a selection costs one logarithm per table CELL, S*P*K of
- *              them, not S*K, and that is what a selection costs. Flagging
- *              nuisance axes makes it cheaper, not dearer. See MEMORY, COST
- *              AND THREADS, which also has measured times.
- *            - yqst_memory_size() covers the arena, not the trial history:
- *              the history is inline in the handle. It also carries seven
- *              bytes of slack so an unaligned caller buffer works.
- *            - desc.tie_tolerance is in the units of the score. Those are
- *              bits only under YQST_SELECT_ENTROPY; under the placement
- *              rules they are the units of stimulus axis 0.
- *            - a stop criterion, once fired, stays fired, and the criteria
- *              are tested at open() as well as after every update.
- *            - a quantile is a grid point, not an interpolation, and the
- *              placement rules read the marginal of desc.select_param.
- *            - an update whose outcome is impossible under every parameter
- *              point returns YQST_ERR_ARG and changes nothing.
- *            - yqst_update_values() records stim_index = -1 even on a grid
- *              point, and agrees with yqst_update() to float precision.
- *            - yqst_next() caches its proposal; yqst_next_subset() does not,
- *              and overwrites that cache.
- *            - YQST_PF_WEIBULL needs a positive stimulus axis 0 and a
- *              positive alpha axis; open() rejects anything else.
- *            - open() checks a custom pf in every cell it tabulates, and in
- *              nine cells under desc.no_table.
- *            - RETURN VALUES AND ERRORS now lists every desc open() refuses.
- *   v0.0 - specification. Declarations and the manual, no implementation.
- *
- *   STATUS: v0.5.2. Implemented and tested against an independent
- *   double-precision reference written from the definitions in
- *   tests/adapt/quest_test.c: 14770 checks over the posterior update, the
- *   expected-entropy selection (joint and marginalized over nuisance axes),
- *   every built-in psychometric function, every placement rule, every
- *   tiebreak rule, every stop criterion, every estimator, a three-outcome
- *   custom model, the no_table and off-grid paths, a nuisance axis in the
- *   middle of the parameter list (which makes the internal and the public
- *   axis orders differ), both custom-callback entry points, the arena
- *   accounting, and every desc the manual says open() rejects. desc.pf_batch
- *   and desc.pf_fn, given the same model, fill the table equal BIT FOR BIT
- *   and make identical selections, with and without the permutation and at
- *   K = 2 and K = 3; the batch path's off-grid and single-cell results agree
- *   with the per-cell path's to float precision, as the manual says they
- *   will. The posterior and the selection scores agree with the
- *   reference to 1e-12 under desc.no_table (both in double) and to 1e-6
- *   through the float table, and the selected stimulus is identical. The
- *   decomposed selection score agrees with the definition to 1.3e-15 in
- *   double; through the float table the worst difference is 5.3e-8, which is
- *   the rounding of the tabulated cell entropy to float, nothing else, and is
- *   below the table's own error. A 20-replication simulated Psi run of 100 trials
- *   recovers a threshold of -1.72 log10 units with a mean absolute error of
- *   0.032 and a bias of -0.003. A snapshot taken at trials 0, 1, 7 and 23 of a
- *   24-trial run, both between an update and the next selection and between a
- *   selection and its update, resumes to the uninterrupted run BIT FOR BIT
- *   (proposals, posterior, history, estimates, entropy, and the caller's
- *   generator state) in five configurations: joint, a nuisance axis last and
- *   in the middle, pf_batch, and a random subset with random ties; and a load
- *   refuses, with the field named and the handle left closed, a desc that
- *   differs in any compared number, the other callback kind, a wrong magic or
- *   format, a truncated or trailing snapshot, and corrupt counters, posterior
- *   or history.
- *
- *   The async layer has its own block in that test, built and run both ways:
- *   14770 checks without YQST_ASYNC and 15121 with it, the extra ones covering
- *   an async run against a bit-for-bit synchronous replay, the initial
- *   proposal at seq 0, a poll that is never ahead of what was submitted nor
- *   behind a previous poll, a queue driven until it returns YQST_ERR_BUSY with
- *   the replay still matching afterwards, a stop that drains, an off-grid
- *   submit, every call on a zeroed or stopped handle, and queue_depth 1
- *   pushing back on a second submit.
- *
- *   Clean under gcc 11.4 -fsanitize=address,undefined, and with YQST_ASYNC
- *   also under -fsanitize=thread. Compiles and runs warning-free as C99, C11
- *   and C++17 under gcc 11.4 with -Wall -Wextra -Wpedantic -Wshadow -Werror,
- *   at -O2 and at -O3, with and without YQST_ASYNC. Also built and run on
- *   Windows 11 with MSVC 19.44 (VS 2022) under /W4 /WX, in its default C
- *   dialect and as C++, both ways: the test prints the same passes and the
- *   same simulation numbers as gcc, and the four examples build and exit 0.
- *
- *   The cost numbers under MEMORY, COST AND THREADS come from
- *   examples/quest/bench.c on one x86-64 laptop (an i7-1360P under WSL2),
- *   measured on v0.5.2; the two lower-precision variants under PRECISION were
- *   measured on the same laptop at v0.3.1 and then removed. They are the only
- *   measurement of cost there is.
- *
- *   Compared cell by cell against the reference implementations, through the
- *   MEX binding in MATLAB R2023a (tests/compare/compare_quest_mquestplus.m).
- *   Against mQUESTPlus, which drives each run so that both are updated with
- *   the stimulus it chose, on the paper's figure 2 threshold (32 trials),
- *   figure 3 threshold, slope and lapse (200), figure 4's normal through
- *   desc.pf_batch on qpPFNormal (128), and a marginalized case with the
- *   nuisance axis in the middle (64): no selection differs. 32 selections are
- *   ties within 6.9e-10 bits, which this header resolves to the lowest index
- *   under desc.tie_tolerance where mQUESTPlus takes the strict argmin, and in
- *   all of them the two picked the same stimulus. The posteriors agree within
- *   4.3e-7, which is the float table (LAYOUT). Against Palamedes' PAL_AMPM,
- *   Psi and Psi-marginal: identical selections over 60 trials each, posteriors
- *   within 5.7e-8. And Watson's own QUEST+ notebook runs replay identically, 17
- *   of 17 (tests/compare/methods_compare.py --replay).
- *
- *   NOT yet verified: Psychtoolbox's Quest, the one reference implementation
- *   not compared; any platform but x86-64 (the header has no intrinsics, so
- *   vectorization elsewhere is the compiler's business, but it is untested on
- *   ARM).
- *
- *   ---------------------------------------------------------------------
  *   USAGE
  *   ---------------------------------------------------------------------
  *   Do this:
@@ -237,26 +33,26 @@
  *       #define YSP_QUEST_IMPLEMENTATION
  *       #include "ysp/quest.h"
  *
- *       yqst_desc d = {                           // unset fields are 0
- *           .stim    = { yqst_linspace(-3.0, 0.0, 31) }, // log10 contrast
- *           .n_stim  = 1,
- *           .param   = { yqst_linspace(-3.0, 0.0, 61),   // threshold (log10)
- *                        yqst_linspace( 0.5, 6.0, 12),   // slope
- *                        yqst_fixed(0.5),                // guess: 2AFC
- *                        yqst_fixed(0.02) },             // lapse
- *           .n_param = 4,
- *           .pf      = YQST_PF_GUMBEL,             // Weibull in log units
- *           .stop_trials = 60,
- *       };
+ *       yqst_desc d = { 0 };                          // unset fields are 0
+ *       d.stim[0]  = yqst_linspace(-3.0, 0.0, 31);    // log10 contrast
+ *       d.n_stim   = 1;
+ *       d.param[0] = yqst_linspace(-3.0, 0.0, 61);    // threshold (log10)
+ *       d.param[1] = yqst_linspace( 0.5, 6.0, 12);    // slope
+ *       d.param[2] = yqst_fixed(0.5);                 // guess: 2AFC
+ *       d.param[3] = yqst_fixed(0.02);                // lapse
+ *       d.n_param  = 4;
+ *       d.pf       = YQST_PF_GUMBEL;                  // Weibull in log units
+ *       d.stop_trials = 60;
  *
- *       yqst_quest q;
+ *       static yqst_quest q;                          // about 100 KB of history
  *       if (!yqst_open(&q, &d)) { fputs(yqst_error(&q), stderr); return 1; }
  *
  *       while (!yqst_done(&q)) {
  *           int    si = yqst_next(&q);              // stimulus grid index
+ *           if (si < 0) { fputs(yqst_error(&q), stderr); break; }
  *           double x  = yqst_stim_value(&q, si, 0); // its log10 contrast
  *           int correct = run_trial(pow(10.0, x));  // 1 = correct, 0 = not
- *           yqst_update(&q, si, correct);
+ *           if (yqst_update(&q, si, correct) < 0) { fputs(yqst_error(&q), stderr); break; }
  *       }
  *       double est[4];
  *       yqst_estimate(&q, YQST_EST_MEAN, est);      // est[0] = threshold
@@ -565,9 +361,12 @@
  *   ---------------------------------------------------------------------
  *   RETURN VALUES AND ERRORS
  *   ---------------------------------------------------------------------
- *   yqst_open() returns bool and fills yqst_error() on failure. Every other
- *   function returns a value or a code and never touches the message
- *   buffer. Index-returning functions return >= 0 or a negative YQST_ERR_*;
+ *   yqst_open() and yqst_open_saved() return bool and fill yqst_error() on
+ *   failure; they clear it on entry. The calls that change the handle
+ *   (yqst_next(), yqst_next_subset(), yqst_update(), yqst_update_values())
+ *   also write yqst_error() when they fail. The queries take a const handle
+ *   and return a code or NaN without writing it, so a reader with a const
+ *   pointer never writes to the handle. Index-returning functions return >= 0 or a negative YQST_ERR_*;
  *   the counting functions return how many values they wrote; the functions
  *   that return a double return NaN on a bad argument; yqst_strerror() names
  *   a code.
@@ -812,7 +611,9 @@
  *       size_t n = yqst_save_size(&q);
  *       yqst_save(&q, buf, n);                    // write buf to disk
  *       ...
- *       yqst_load(&q, &desc, buf, n);             // q resumes where it was
+ *       yqst_close(&q);
+ *       if (!yqst_open_saved(&q, &desc, buf, n))  // q resumes where it was
+ *           fputs(yqst_error(&q), stderr);
  *
  *   What is saved: the posterior, the history, the pending proposal (a
  *   yqst_next() that was answered by no yqst_update() yet is not made again,
@@ -821,7 +622,7 @@
  *   numbers. What is not: the likelihood table, which is a function of the
  *   desc and is rebuilt at load, and anything behind a pointer.
  *
- *   yqst_load() is yqst_open() and then a restore. It takes a desc because a
+ *   yqst_open_saved() is yqst_open() and then a restore. It takes a desc because a
  *   snapshot cannot carry what the desc points at: the axis arrays, the
  *   callbacks and their contexts, desc.rng and its context, desc.memory. That
  *   desc must agree with the snapshot on every number the resumed session
@@ -850,7 +651,7 @@
  *   COST, measured on the Psi-marginal grid of MEMORY, COST AND THREADS: a
  *   snapshot after 100 trials is 149 KB, nearly all of it the posterior (P
  *   doubles; the history is 9 bytes plus 8 per stimulus dimension a trial).
- *   yqst_save() took under a millisecond. yqst_load() took what yqst_open()
+ *   yqst_save() took under a millisecond. yqst_open_saved() took what yqst_open()
  *   takes, 24 to 38 ms against 26 to 30 ms for the open, because both are the
  *   table rebuild: S*P evaluations of the model. That is the trade: the
  *   snapshot is the size of the posterior instead of the size of the table,
@@ -880,9 +681,9 @@
  *   a failed load leaves the handle closed. The format number changes when
  *   this layout does.
  *
- *   Under YQST_ASYNC the handle belongs to the thread between start and stop,
- *   so save after yqst_async_stop(), and start a new async session on the
- *   handle yqst_load() rebuilt.
+ *   Under YQST_ASYNC the handle belongs to the thread between
+ *   yqst_async_open() and yqst_async_close(), so save after the close, and
+ *   open a new async session on the handle yqst_open_saved() rebuilt.
  *
  *   ---------------------------------------------------------------------
  *   ASYNC (YQST_ASYNC)
@@ -898,11 +699,12 @@
  *       #define YSP_QUEST_IMPLEMENTATION
  *       #include "ysp/quest.h"          // brings ysp/rt.h with it
  *
- *       yqst_quest q;
+ *       static yqst_quest q;
  *       yqst_open(&q, &desc);           // as usual, on this thread
- *       yqst_async a;
- *       yqst_async_desc ad = { .quest = &q };
- *       if (!yqst_async_start(&a, &ad)) die(yqst_async_error(&a));
+ *       static yqst_async a;
+ *       yqst_async_desc ad = { 0 };
+ *       ad.quest = &q;
+ *       if (!yqst_async_open(&a, &ad)) die(yqst_async_error(&a));
  *
  *       yqst_snapshot s;
  *       yqst_async_poll(&a, &s);        // the first proposal, already there
@@ -911,10 +713,10 @@
  *           int seq = yqst_async_submit(&a, s.proposed, k);
  *           while (drawing_frames())              // the interval
  *               if (yqst_async_poll(&a, &s) >= seq) break;
- *           yqst_async_wait(&a, (uint32_t)seq, 20000000ull, &s);  // or block
+ *           yqst_async_wait(&a, (uint32_t)seq, YRT_MS(20), &s);  // or block
  *           if (s.done) break;
  *       }
- *       yqst_async_stop(&a);            // drains; the handle is yours again
+ *       yqst_async_close(&a);           // drains; the handle is yours again
  *
  *   WHAT IT IS. ysp/rt.h's yrt_pump with yqst_update() and yqst_next() in
  *   its on_msg: one thread, a queue of YQST_ASYNC_QUEUE responses (8 by
@@ -925,8 +727,8 @@
  *   layer is a hundred lines on top of it and adds no concurrency of its own.
  *
  *   OWNERSHIP, which is the rule to get right. The caller opens the quest
- *   handle and yqst_async_start() takes it over: from then until
- *   yqst_async_stop() returns, NO yqst_* call on that handle is allowed from
+ *   handle and yqst_async_open() takes it over: from then until
+ *   yqst_async_close() returns, NO yqst_* call on that handle is allowed from
  *   any thread, including the const ones and including yqst_simulate() (a
  *   custom pf_batch model writes to the handle's staging row, so even
  *   evaluating the model is a write). Everything a trial loop needs is in the
@@ -942,11 +744,11 @@
  *   frame loop can afford it every frame. yqst_async_wait() is the blocking
  *   form with a relative timeout, for the end of an interval.
  *
- *   Seq 0 is the proposal yqst_async_start() computed before the thread
- *   existed, so a snapshot always exists once start() has returned true and
+ *   Seq 0 is the proposal yqst_async_open() computed before the thread
+ *   existed, so a snapshot always exists once open has returned true and
  *   the first trial reads its stimulus from a poll that returns 0. That is why
  *   there is no "nothing published yet" state to handle: the alternatives were
- *   a sentinel or a flag, and having start() publish is simpler than either.
+ *   a sentinel or a flag, and having open publish is simpler than either.
  *
  *   THE QUEUE's capacity is YQST_ASYNC_QUEUE, which sizes the handle; how
  *   much of it a session uses is yqst_async_desc.queue_depth (0 for all of
@@ -1027,6 +829,226 @@
  *       cl /O2 /Iinclude examples\quest\sim.c
  *
  *   ---------------------------------------------------------------------
+ *   CHANGELOG
+ *   ---------------------------------------------------------------------
+ *   v0.6.0 - the repository conventions (README.md, Conventions). Breaks
+ *          the API: yqst_async_start() / yqst_async_stop() are
+ *          yqst_async_open() / yqst_async_close(), yqst_load() is
+ *          yqst_open_saved(), yqst_async_wait() takes an int64_t timeout_ns
+ *          (0 or less polls), and yqst_prior_normal() returns 0 or
+ *          YQST_ERR_ARG instead of a bool. yqst_next(), yqst_next_subset(),
+ *          yqst_update() and yqst_update_values() write yqst_error() when
+ *          they fail; the const queries still return a code only. The USAGE
+ *          and ASYNC examples zero the desc and set fields, so they build as
+ *          C99 and C++17. No number changed: the arithmetic is v0.5.2's.
+ *   v0.5.2 - documentation only: STATUS records the comparisons against
+ *          mQUESTPlus, Palamedes' PAL_AMPM and Watson's own notebook runs,
+ *          which are now done. No code changed.
+ *   v0.5.1 - builds clean on gcc 16 (MinGW, -O3) and current clang, which
+ *          CI found and this machine's compilers do not. No behavior change,
+ *          and the default build's arithmetic is bit for bit v0.5.0. gcc 16
+ *          constant-propagated a test's deliberately bad arguments (axis 9,
+ *          a three-element parameter array for a three-parameter model) into
+ *          paths that open()'s invariants make impossible, and with
+ *          -Werror=aggressive-loop-optimizations and -Werror=array-bounds it
+ *          refused them. Neither was an over-read at run time. The header now
+ *          makes the invariants visible instead of assuming them: every axis a
+ *          caller passes is checked against the array it will index as well as
+ *          against the handle, every loop over the stimulus or parameter axes
+ *          is bounded by the array it indexes, and every array a caller hands
+ *          in or gets back is copied once, exactly n_stim / n_param / K
+ *          elements, to or from a local of the compile-time maximum, so no
+ *          caller's array is ever indexed past what the handle says it holds on
+ *          any path an optimizer can build. The test initializes every array
+ *          a header call fills and fills its deliberately bad desc with 0xA5
+ *          instead of leaving it uninitialized.
+ *   v0.5.0 - snapshots: yqst_save_size(), yqst_save() and yqst_load(), in the
+ *          shape of ysp/trials.h's ytr_save / ytr_load. A session saved
+ *          at any trial resumes without replay and continues bit for bit as
+ *          the uninterrupted one would have, which the test checks at four
+ *          cut points in five configurations. And yqst_async_desc.queue_depth:
+ *          how far the trial loop may run ahead of the inference is now a
+ *          session's choice, under YQST_ASYNC_QUEUE as the capacity, where it
+ *          used to be the macro itself. That was the one compile-time knob a
+ *          binding could not reach; see BUILDING for the ones that stay.
+ *   v0.4.1 - two small things a binding asked for: version macros
+ *          (YQST_VERSION_MAJOR / MINOR / PATCH / STRING) and yqst_version(),
+ *          so a program can log which header it was built from, and
+ *          yqst_stim_axis_n() / yqst_param_axis_n(), so a caller can read an
+ *          axis's size back from the handle instead of keeping its own copy
+ *          of the desc. No behavior changed.
+ *   v0.4 - an opt-in async layer, compiled only under YQST_ASYNC: yqst_async,
+ *          a background thread that owns a yqst_quest between start and stop,
+ *          takes responses through a fixed-size queue and publishes a snapshot
+ *          (the next stimulus, an estimate, the entropy, the stop state) that
+ *          the frame loop polls or waits on. It is ysp/rt.h's yrt_pump with
+ *          yqst_update() and yqst_next() in its on_msg, so an async run and a
+ *          synchronous replay of the same responses agree bit for bit, which
+ *          the test asserts. Without YQST_ASYNC the header is unchanged, still
+ *          includes nothing but the C standard library, and produces the same
+ *          numbers bit for bit; examples/quest/async.c is a 16 ms frame loop
+ *          driving it. See ASYNC and docs/adapt.md, "Inference on a
+ *          thread".
+ *   v0.3.1 - no code in the header changed, and the default build is bit for
+ *          bit v0.3. Two lower-precision variants were built and measured to
+ *          answer whether they are worth having: a float posterior and
+ *          accumulators, and a 16-bit likelihood table. Neither earned its
+ *          place, both were removed, and PRECISION records the numbers so the
+ *          question does not have to be reopened. examples/quest/bench.c lost
+ *          a measurement bug in the process: its memory-floor pass did the
+ *          same arithmetic every trial, so at -O3 the compiler hoisted it out
+ *          of the timing loop and the floor came out 30 times too fast. The
+ *          pass now perturbs the posterior first.
+ *   v0.3 - a batch entry point for the custom psychometric function,
+ *          yqst_pf_batch_fn and desc.pf_batch, beside the per-cell
+ *          desc.pf_fn. It fills a whole stimulus's worth of cells in one
+ *          call, which is what a binding needs: a vectorized Python callable
+ *          is entered once per stimulus instead of S*P times (140 times
+ *          instead of 156,800 for examples/quest/qcsf.c, which now uses it
+ *          and keeps the per-cell version beside it to check against).
+ *          YQST_PF_CUSTOM takes exactly one of the two; open() rejects both
+ *          or neither. The two paths produce tables that are equal bit for
+ *          bit, which the test asserts. The cell entropy row is now computed
+ *          from the likelihoods AS STORED, so the decomposition is exact
+ *          against the floats the selection reads.
+ *   v0.2 - yqst_next() made fast, and measured. Same API; two changes
+ *          inside, both of them visible only in memory and in the clock:
+ *            - the expected entropy is computed from its decomposition,
+ *              E[H] = H(theta) - H(y | s) + sum_theta post h(s, theta), with
+ *              the cell outcome entropy h tabulated at open as one more table
+ *              row. That takes the logarithm out of the per-cell loop: a
+ *              joint selection is now S*P*(K+1) multiply-adds and S*K
+ *              logarithms, where v0.1 needed S*P*K logarithms. The row costs
+ *              S*P floats, 50% more table at K = 2, and is only built when
+ *              it will be used: a desc with a nuisance axis takes its
+ *              logarithms on the marginal and does not pay for it.
+ *            - the table is stored transposed, L[S][K][P] with the parameter
+ *              index fastest, and the parameter axes are permuted internally
+ *              so the nuisance ones are the slowest. Every sweep is then a
+ *              contiguous dot product or a contiguous multiply-accumulate
+ *              over the parameter grid, which gcc and MSVC vectorize. The
+ *              public index order is unchanged; see LAYOUT.
+ *          Measured on one laptop, a Psi-marginal selection went from 6.3 ms
+ *          to 0.95 ms and an update from 30 us to 19 us; the numbers and the
+ *          memory floor they are measured against are under MEMORY, COST AND
+ *          THREADS, and examples/quest/bench.c prints them for your machine.
+ *          No SIMD intrinsics: at the measured rate the sweep is bound by
+ *          memory, not by arithmetic, and -mavx2 changes nothing.
+ *   v0.1 - the implementation. The API and the declarations are v0.0's, and
+ *          the handle gained three private fields (the selection scores and
+ *          the nuisance marginal's strides). Everywhere the specification
+ *          was optimistic, silent or self-contradictory, this manual now
+ *          says what the code does:
+ *            - a selection costs one logarithm per table CELL, S*P*K of
+ *              them, not S*K, and that is what a selection costs. Flagging
+ *              nuisance axes makes it cheaper, not dearer. See MEMORY, COST
+ *              AND THREADS, which also has measured times.
+ *            - yqst_memory_size() covers the arena, not the trial history:
+ *              the history is inline in the handle. It also carries seven
+ *              bytes of slack so an unaligned caller buffer works.
+ *            - desc.tie_tolerance is in the units of the score. Those are
+ *              bits only under YQST_SELECT_ENTROPY; under the placement
+ *              rules they are the units of stimulus axis 0.
+ *            - a stop criterion, once fired, stays fired, and the criteria
+ *              are tested at open() as well as after every update.
+ *            - a quantile is a grid point, not an interpolation, and the
+ *              placement rules read the marginal of desc.select_param.
+ *            - an update whose outcome is impossible under every parameter
+ *              point returns YQST_ERR_ARG and changes nothing.
+ *            - yqst_update_values() records stim_index = -1 even on a grid
+ *              point, and agrees with yqst_update() to float precision.
+ *            - yqst_next() caches its proposal; yqst_next_subset() does not,
+ *              and overwrites that cache.
+ *            - YQST_PF_WEIBULL needs a positive stimulus axis 0 and a
+ *              positive alpha axis; open() rejects anything else.
+ *            - open() checks a custom pf in every cell it tabulates, and in
+ *              nine cells under desc.no_table.
+ *            - RETURN VALUES AND ERRORS now lists every desc open() refuses.
+ *   v0.0 - specification. Declarations and the manual, no implementation.
+ *
+ *   STATUS: v0.6.0. Implemented and tested against an independent
+ *   double-precision reference written from the definitions in
+ *   tests/adapt/quest_test.c: 14770 checks over the posterior update, the
+ *   expected-entropy selection (joint and marginalized over nuisance axes),
+ *   every built-in psychometric function, every placement rule, every
+ *   tiebreak rule, every stop criterion, every estimator, a three-outcome
+ *   custom model, the no_table and off-grid paths, a nuisance axis in the
+ *   middle of the parameter list (which makes the internal and the public
+ *   axis orders differ), both custom-callback entry points, the arena
+ *   accounting, and every desc the manual says open() rejects. desc.pf_batch
+ *   and desc.pf_fn, given the same model, fill the table equal BIT FOR BIT
+ *   and make identical selections, with and without the permutation and at
+ *   K = 2 and K = 3; the batch path's off-grid and single-cell results agree
+ *   with the per-cell path's to float precision, as the manual says they
+ *   will. The posterior and the selection scores agree with the
+ *   reference to 1e-12 under desc.no_table (both in double) and to 1e-6
+ *   through the float table, and the selected stimulus is identical. The
+ *   decomposed selection score agrees with the definition to 1.3e-15 in
+ *   double; through the float table the worst difference is 5.3e-8, which is
+ *   the rounding of the tabulated cell entropy to float, nothing else, and is
+ *   below the table's own error. A 20-replication simulated Psi run of 100 trials
+ *   recovers a threshold of -1.72 log10 units with a mean absolute error of
+ *   0.032 and a bias of -0.003. A snapshot taken at trials 0, 1, 7 and 23 of a
+ *   24-trial run, both between an update and the next selection and between a
+ *   selection and its update, resumes to the uninterrupted run BIT FOR BIT
+ *   (proposals, posterior, history, estimates, entropy, and the caller's
+ *   generator state) in five configurations: joint, a nuisance axis last and
+ *   in the middle, pf_batch, and a random subset with random ties; and a load
+ *   refuses, with the field named and the handle left closed, a desc that
+ *   differs in any compared number, the other callback kind, a wrong magic or
+ *   format, a truncated or trailing snapshot, and corrupt counters, posterior
+ *   or history.
+ *
+ *   The async layer has its own block in that test, built and run both ways:
+ *   14770 checks without YQST_ASYNC and 15121 with it, the extra ones covering
+ *   an async run against a bit-for-bit synchronous replay, the initial
+ *   proposal at seq 0, a poll that is never ahead of what was submitted nor
+ *   behind a previous poll, a queue driven until it returns YQST_ERR_BUSY with
+ *   the replay still matching afterwards, a stop that drains, an off-grid
+ *   submit, every call on a zeroed or stopped handle, and queue_depth 1
+ *   pushing back on a second submit.
+ *
+ *   v0.6.0 on 2026-10-10 (Windows 11, MSVC 19.44 /W4 /WX, C and C++17, with
+ *   and without YQST_ASYNC, and MinGW-w64 gcc -Werror): 14782 checks without
+ *   YQST_ASYNC and 15133 with it. The 12 new ones cover the messages the
+ *   handle-changing calls leave and yqst_close() on a zeroed handle, after a
+ *   failed open and twice; the counts above are v0.5.2's.
+ *
+ *   Clean under gcc 11.4 -fsanitize=address,undefined, and with YQST_ASYNC
+ *   also under -fsanitize=thread. Compiles and runs warning-free as C99, C11
+ *   and C++17 under gcc 11.4 with -Wall -Wextra -Wpedantic -Wshadow -Werror,
+ *   at -O2 and at -O3, with and without YQST_ASYNC. Also built and run on
+ *   Windows 11 with MSVC 19.44 (VS 2022) under /W4 /WX, in its default C
+ *   dialect and as C++, both ways: the test prints the same passes and the
+ *   same simulation numbers as gcc, and the four examples build and exit 0.
+ *
+ *   The cost numbers under MEMORY, COST AND THREADS come from
+ *   examples/quest/bench.c on one x86-64 laptop (an i7-1360P under WSL2),
+ *   measured on v0.5.2; the two lower-precision variants under PRECISION were
+ *   measured on the same laptop at v0.3.1 and then removed. They are the only
+ *   measurement of cost there is.
+ *
+ *   Compared cell by cell against the reference implementations, through the
+ *   MEX binding in MATLAB R2023a (tests/compare/compare_quest_mquestplus.m).
+ *   Against mQUESTPlus, which drives each run so that both are updated with
+ *   the stimulus it chose, on the paper's figure 2 threshold (32 trials),
+ *   figure 3 threshold, slope and lapse (200), figure 4's normal through
+ *   desc.pf_batch on qpPFNormal (128), and a marginalized case with the
+ *   nuisance axis in the middle (64): no selection differs. 32 selections are
+ *   ties within 6.9e-10 bits, which this header resolves to the lowest index
+ *   under desc.tie_tolerance where mQUESTPlus takes the strict argmin, and in
+ *   all of them the two picked the same stimulus. The posteriors agree within
+ *   4.3e-7, which is the float table (LAYOUT). Against Palamedes' PAL_AMPM,
+ *   Psi and Psi-marginal: identical selections over 60 trials each, posteriors
+ *   within 5.7e-8. And Watson's own QUEST+ notebook runs replay identically, 17
+ *   of 17 (tests/compare/methods_compare.py --replay).
+ *
+ *   NOT yet verified: Psychtoolbox's Quest, the one reference implementation
+ *   not compared; any platform but x86-64 (the header has no intrinsics, so
+ *   vectorization elsewhere is the compiler's business, but it is untested on
+ *   ARM).
+ *
+ *   ---------------------------------------------------------------------
  *   LICENSE: public domain / MIT-0, see end of file.
  */
 #ifndef YSP_QUEST_H_INCLUDED
@@ -1035,9 +1057,9 @@
 /* The version of this header, for a log line or a compile-time check. The
  * string is the three numbers, and the test asserts that it stays so. */
 #define YQST_VERSION_MAJOR  0
-#define YQST_VERSION_MINOR  5
-#define YQST_VERSION_PATCH  2
-#define YQST_VERSION_STRING "0.5.2"
+#define YQST_VERSION_MINOR  6
+#define YQST_VERSION_PATCH  0
+#define YQST_VERSION_STRING "0.6.0"
 
 /* The one optional dependency, and it comes FIRST: ysp/rt.h sets a
  * feature-test macro for the Linux clock calls and can only do that before the
@@ -1114,8 +1136,9 @@ YQST_API yqst_axis yqst_values(const double* values, int n);
 YQST_API yqst_axis yqst_fixed(double value);
 
 /* Fill `out[n]` with an unnormalized Gaussian over the axis's points, for
- * yqst_axis.prior. Returns false when the axis is invalid. */
-YQST_API bool yqst_prior_normal(const yqst_axis* axis, double mean, double sd, double* out);
+ * yqst_axis.prior. Returns 0, or YQST_ERR_ARG for a null axis or `out`, an
+ * invalid axis, or an sd that is not finite and positive. */
+YQST_API int yqst_prior_normal(const yqst_axis* axis, double mean, double sd, double* out);
 
 typedef enum yqst_pf {
     YQST_PF_GUMBEL = 0,   /* log-Weibull; QUEST's function (default)       */
@@ -1284,8 +1307,8 @@ typedef struct yqst_quest {
 YQST_API size_t yqst_memory_size(const yqst_desc* desc);
 
 /* Validate `desc`, take memory, build the table (unless no_table), install
- * the prior. Returns false with yqst_error() set on any failure. The only
- * function that writes the message buffer. Cost: S*P pf evaluations. */
+ * the prior. Returns false with yqst_error() set on any failure; clears the
+ * message on entry. Cost: S*P pf evaluations. */
 YQST_API bool yqst_open(yqst_quest* q, const yqst_desc* desc);
 
 /* Release what open() allocated (nothing when the caller gave memory). Safe
@@ -1293,7 +1316,8 @@ YQST_API bool yqst_open(yqst_quest* q, const yqst_desc* desc);
  * yqst_error() message readable. */
 YQST_API void yqst_close(yqst_quest* q);
 
-/* Last yqst_open() message for this handle ("" if none). */
+/* The message of the last failed open or handle-changing call ("" if none).
+ * See RETURN VALUES AND ERRORS. */
 YQST_API const char* yqst_error(const yqst_quest* q);
 YQST_API bool        yqst_is_open(const yqst_quest* q);
 
@@ -1413,15 +1437,16 @@ YQST_API const yqst_trial* yqst_history(const yqst_quest* q, int* n);
 /* Save a session and resume it later without replaying it. yqst_save_size()
  * is the bytes yqst_save() writes (0 on a handle that is not open);
  * yqst_save() writes them and returns the count, or YQST_ERR_ARG when `cap`
- * is too small, or YQST_ERR_CLOSED. yqst_load() opens `q` from `desc` exactly
+ * is too small, or YQST_ERR_CLOSED. yqst_open_saved() opens `q` from `desc` exactly
  * as yqst_open() would, checks that the desc agrees with the snapshot, and
  * then puts the posterior, the history, the pending proposal and the tie
  * state back, so the next yqst_next() is the one the saved session would have
  * made. On any failure it returns false, leaves `q` closed, and says why in
- * yqst_error(). SNAPSHOTS in the manual gives the layout and the rules. */
+ * yqst_error(). It opens, so close `q` first if it is open, and close it
+ * when done. SNAPSHOTS in the manual gives the layout and the rules. */
 YQST_API size_t yqst_save_size(const yqst_quest* q);
 YQST_API int    yqst_save(const yqst_quest* q, void* buf, size_t cap);
-YQST_API bool   yqst_load(yqst_quest* q, const yqst_desc* desc, const void* buf, size_t len);
+YQST_API bool   yqst_open_saved(yqst_quest* q, const yqst_desc* desc, const void* buf, size_t len);
 
 /* --- async ------------------------------------------------------------- *
  *  Compiled only under YQST_ASYNC. See ASYNC in the manual.
@@ -1447,7 +1472,7 @@ typedef struct yqst_snapshot {
     uint32_t  seq;         /* the submit this accounts for: every update
                             * through this seq is applied and `proposed` was
                             * computed after them. 0 is the proposal made at
-                            * yqst_async_start(), before any response.      */
+                            * yqst_async_open(), before any response.      */
     int       proposed;    /* stimulus grid index for the next trial, or a
                             * negative YQST_ERR_* if the selection failed   */
     double    stim[YQST_MAX_STIM_DIMS];  /* its values, as yqst_stim_values */
@@ -1468,7 +1493,7 @@ typedef struct yqst_snapshot {
  * required and must already be open. */
 typedef struct yqst_async_desc {
     yqst_quest*    quest;      /* the handle the thread drives. The layer
-                                * OWNS it from start() to stop(): no yqst_*
+                                * OWNS it from open to close: no yqst_*
                                 * call on it meanwhile, from any thread.    */
     yqst_estimator estimator;  /* which estimate the snapshot carries;
                                 * YQST_EST_MEAN (0) by default              */
@@ -1493,7 +1518,7 @@ typedef struct yqst_async_msg {
 
 /* Async handle. The caller allocates it and treats every field as opaque. It
  * owns no heap: the pump, the response ring and the snapshot are all inline.
- * Must be zeroed or stopped before yqst_async_start(). */
+ * Must be zeroed or closed before yqst_async_open(). */
 typedef struct yqst_async {
     yrt_pump     pump;
     yqst_quest*    quest;
@@ -1508,18 +1533,20 @@ typedef struct yqst_async {
 /* Start the thread and publish the first proposal. Returns true with a
  * snapshot already available (yqst_async_poll() returns 0 and fills it), false
  * with yqst_async_error() set: a null handle or desc, a quest that is not
- * open, an estimator out of range, or a pump the OS would not start. The only
- * async call that writes the message, and the only one that must not race
- * another call on the same handle. Cost: one yqst_next() on the calling
- * thread, before the thread exists. */
-YQST_API bool yqst_async_start(yqst_async* a, const yqst_async_desc* desc);
+ * open, an estimator out of range, or a pump the OS would not start; clears
+ * the message on entry. The only async call that writes the message: submit
+ * may run on any thread, so the others return a code and leave the message
+ * alone rather than race on it (yqst_strerror() names the code). Open must
+ * not race another call on the same handle. Cost: one yqst_next() on the
+ * calling thread, before the thread exists. */
+YQST_API bool yqst_async_open(yqst_async* a, const yqst_async_desc* desc);
 
 /* Deliver every response already queued, then join the thread. After it the
  * quest handle is the caller's again and every yqst_* call on it is legal.
- * Safe on a zeroed or already-stopped handle. Must not race another call on
+ * Safe on a zeroed handle, after a failed open and twice. Must not race another call on
  * the same handle, except a yqst_async_wait() already blocked, which comes out
  * with YQST_ERR_CLOSED. */
-YQST_API void yqst_async_stop(yqst_async* a);
+YQST_API void yqst_async_close(yqst_async* a);
 
 /* Hand one trial to the thread: the stimulus by grid index, or by value for an
  * off-grid trial, and the outcome. Returns a POSITIVE seq, increasing, which
@@ -1535,7 +1562,7 @@ YQST_API int yqst_async_submit_values(yqst_async* a, const double* stim, int out
 /* Copy the newest snapshot into `out` (which may be NULL to ask only for the
  * seq) and return the seq it accounts for: every response through that seq is
  * applied and its proposal is the one in the snapshot. 0 means the proposal
- * made at start(), before any response had landed, so a caller that wants the
+ * made at open, before any response had landed, so a caller that wants the
  * first stimulus reads it from a poll that returns 0. Negative on error. One
  * atomic load plus a struct copy under the pump's publish lock: cheap enough
  * for every frame. */
@@ -1545,9 +1572,9 @@ YQST_API int yqst_async_poll(const yqst_async* a, yqst_snapshot* out);
  * or `timeout_ns` of monotonic time has passed. Returns the seq accounted for
  * (>= seq on success), YQST_ERR_TIMEOUT if the time ran out first,
  * YQST_ERR_CLOSED if the thread stopped without reaching it. timeout_ns is
- * relative; 0 polls. This is the end-of-interval call; poll() is the frame
- * loop's. */
-YQST_API int yqst_async_wait(yqst_async* a, uint32_t seq, uint64_t timeout_ns,
+ * relative, in ns (YRT_MS(20)); 0 or less polls. This is the end-of-interval
+ * call; poll() is the frame loop's. */
+YQST_API int yqst_async_wait(yqst_async* a, uint32_t seq, int64_t timeout_ns,
                              yqst_snapshot* out);
 
 /* Responses queued and not yet applied (the one being worked on is not
@@ -1555,7 +1582,7 @@ YQST_API int yqst_async_wait(yqst_async* a, uint32_t seq, uint64_t timeout_ns,
  * takes the queue's mutex. */
 YQST_API int yqst_async_pending(const yqst_async* a);
 
-/* Last yqst_async_start() message for this handle ("" if none). */
+/* Last failed yqst_async_open() message for this handle ("" if none). */
 YQST_API const char* yqst_async_error(const yqst_async* a);
 
 /* True while the thread is running. */
@@ -1563,7 +1590,7 @@ YQST_API bool yqst_async_is_running(const yqst_async* a);
 
 /* What the thread runs at: YRT_POLICY_NORMAL, or YRT_POLICY_BELOW_NORMAL
  * when desc.below_normal was set AND the OS granted the drop, which is not an
- * error either way. YRT_POLICY_NONE before a start and after a stop. Log it:
+ * error either way. YRT_POLICY_NONE before an open and after a close. Log it:
  * "the inference was ready in time" means something different at each rung. */
 YQST_API yrt_policy yqst_async_policy(const yqst_async* a);
 
@@ -2513,16 +2540,16 @@ YQST_API yqst_axis yqst_fixed(double value) {
     return a;
 }
 
-YQST_API bool yqst_prior_normal(const yqst_axis* axis, double mean, double sd, double* out) {
+YQST_API int yqst_prior_normal(const yqst_axis* axis, double mean, double sd, double* out) {
     int i;
-    if (!axis || !out || axis->n < 1) return false;
-    if (!yqst__finite(mean) || !yqst__finite(sd) || sd <= 0.0) return false;
-    if (!yqst__axis_ok(axis, true, "prior", 0, NULL, 0)) return false;
+    if (!axis || !out || axis->n < 1) return YQST_ERR_ARG;
+    if (!yqst__finite(mean) || !yqst__finite(sd) || sd <= 0.0) return YQST_ERR_ARG;
+    if (!yqst__axis_ok(axis, true, "prior", 0, NULL, 0)) return YQST_ERR_ARG;
     for (i = 0; i < axis->n; i++) {
         double z = (yqst__axis_at(axis, i) - mean) / sd;
         out[i] = exp(-0.5 * z * z);
     }
-    return true;
+    return YQST_OK;
 }
 
 YQST_API size_t yqst_memory_size(const yqst_desc* desc) {
@@ -2884,7 +2911,7 @@ YQST_API int yqst_param_axis_n(const yqst_quest* q, int axis) {
     return q->n_param_axis[axis];
 }
 
-YQST_API int yqst_next(yqst_quest* q) {
+static int yqst__next(yqst_quest* q) {
     if (!q) return YQST_ERR_ARG;
     if (!q->open) return YQST_ERR_CLOSED;
     if (q->proposed >= 0) return q->proposed;
@@ -2897,7 +2924,7 @@ YQST_API int yqst_next(yqst_quest* q) {
     return q->proposed;
 }
 
-YQST_API int yqst_next_subset(yqst_quest* q, const int* subset, int n) {
+static int yqst__next_subset(yqst_quest* q, const int* subset, int n) {
     int i;
     if (!q) return YQST_ERR_ARG;
     if (!q->open) return YQST_ERR_CLOSED;
@@ -2940,7 +2967,7 @@ static void yqst__record(yqst_quest* q, const double* stim, int stim_index, int 
     yqst__update_stop(q);
 }
 
-YQST_API int yqst_update(yqst_quest* q, int index, int outcome) {
+static int yqst__update(yqst_quest* q, int index, int outcome) {
     double sv[YQST_MAX_STIM_DIMS];
     int rc;
     if (!q) return YQST_ERR_ARG;
@@ -2960,7 +2987,7 @@ YQST_API int yqst_update(yqst_quest* q, int index, int outcome) {
     return YQST_OK;
 }
 
-YQST_API int yqst_update_values(yqst_quest* q, const double* stim, int outcome) {
+static int yqst__update_values(yqst_quest* q, const double* stim, int outcome) {
     double sv[YQST_MAX_STIM_DIMS];
     int i, n, rc;
     if (!q) return YQST_ERR_ARG;
@@ -2976,6 +3003,31 @@ YQST_API int yqst_update_values(yqst_quest* q, const double* stim, int outcome) 
     if (rc != YQST_OK) return rc;
     yqst__record(q, sv, -1, outcome);
     return YQST_OK;
+}
+
+/* The handle-changing calls leave a message on failure (README.md,
+ * Conventions); the work is in the yqst__ bodies so each return path does
+ * not repeat the snprintf. */
+static int yqst__fail(yqst_quest* q, int rc, const char* what) {
+    if (q && rc < 0)
+        snprintf(q->error, sizeof(q->error), "ysp_quest: %s: %s", what, yqst_strerror(rc));
+    return rc;
+}
+
+YQST_API int yqst_next(yqst_quest* q) {
+    return yqst__fail(q, yqst__next(q), "yqst_next");
+}
+
+YQST_API int yqst_next_subset(yqst_quest* q, const int* subset, int n) {
+    return yqst__fail(q, yqst__next_subset(q, subset, n), "yqst_next_subset");
+}
+
+YQST_API int yqst_update(yqst_quest* q, int index, int outcome) {
+    return yqst__fail(q, yqst__update(q, index, outcome), "yqst_update");
+}
+
+YQST_API int yqst_update_values(yqst_quest* q, const double* stim, int outcome) {
+    return yqst__fail(q, yqst__update_values(q, stim, outcome), "yqst_update_values");
 }
 
 YQST_API bool yqst_done(const yqst_quest* q) {
@@ -3151,7 +3203,7 @@ YQST_API const yqst_trial* yqst_history(const yqst_quest* q, int* n) {
  *  In the shape of ysp/trials.h's ytr_save / ytr_load: versioned,
  *  little-endian, written and read one byte at a time so a snapshot moves
  *  between compilers and platforms. One writer does three jobs (count, write,
- *  compare), which is how yqst_load() checks the desc against the snapshot
+ *  compare), which is how yqst_open_saved() checks the desc against the snapshot
  *  without a second description of the layout that could drift from the first.
  * ======================================================================= */
 
@@ -3331,13 +3383,13 @@ static void yqst__from_public(const yqst_quest* q, const double* src, double* ds
  * leaves nothing half-restored behind. */
 static bool yqst__load_fail(yqst_quest* q, const char* why) {
     char msg[sizeof(q->error)];
-    snprintf(msg, sizeof(msg), "ysp_quest: yqst_load: %s", why);
+    snprintf(msg, sizeof(msg), "ysp_quest: yqst_open_saved: %s", why);
     yqst_close(q);
     memcpy(q->error, msg, sizeof(msg));
     return false;
 }
 
-YQST_API bool yqst_load(yqst_quest* q, const yqst_desc* desc, const void* buf, size_t len) {
+YQST_API bool yqst_open_saved(yqst_quest* q, const yqst_desc* desc, const void* buf, size_t len) {
     const unsigned char* in = (const unsigned char*)buf;
     yqst__w w;
     yqst__r r;
@@ -3349,7 +3401,7 @@ YQST_API bool yqst_load(yqst_quest* q, const yqst_desc* desc, const void* buf, s
     /* The cheap checks first: the open that follows rebuilds the table. */
     if (!in || len < 8 || in[0] != 'P' || in[1] != 'S' || in[2] != 'Y' || in[3] != 'Q') {
         memset(q->error, 0, sizeof(q->error));
-        snprintf(q->error, sizeof(q->error), "ysp_quest: yqst_load: not a ysp_quest snapshot");
+        snprintf(q->error, sizeof(q->error), "ysp_quest: yqst_open_saved: not a ysp_quest snapshot");
         q->open = false;
         return false;
     }
@@ -3360,7 +3412,7 @@ YQST_API bool yqst_load(yqst_quest* q, const yqst_desc* desc, const void* buf, s
     if ((uint32_t)yqst__get(&r, 4) != YQST__SNAP_FORMAT) {
         memset(q->error, 0, sizeof(q->error));
         snprintf(q->error, sizeof(q->error),
-                 "ysp_quest: yqst_load: snapshot format is not %u", YQST__SNAP_FORMAT);
+                 "ysp_quest: yqst_open_saved: snapshot format is not %u", YQST__SNAP_FORMAT);
         q->open = false;
         return false;
     }
@@ -3494,14 +3546,14 @@ static int yqst__async_rc(int rt_rc) {
     }
 }
 
-YQST_API bool yqst_async_start(yqst_async* a, const yqst_async_desc* desc) {
+YQST_API bool yqst_async_open(yqst_async* a, const yqst_async_desc* desc) {
     yrt_pump_desc pd;
     if (!a) return false;
     memset(a->error, 0, sizeof(a->error));
     a->running = false;
     a->published = false;
     if (!desc || !desc->quest) {
-        snprintf(a->error, sizeof(a->error), "ysp_quest: yqst_async_start needs desc.quest");
+        snprintf(a->error, sizeof(a->error), "ysp_quest: yqst_async_open needs desc.quest");
         return false;
     }
     if (!yqst_is_open(desc->quest)) {
@@ -3547,7 +3599,7 @@ YQST_API bool yqst_async_start(yqst_async* a, const yqst_async_desc* desc) {
     return true;
 }
 
-YQST_API void yqst_async_stop(yqst_async* a) {
+YQST_API void yqst_async_close(yqst_async* a) {
     if (!a) return;
     yrt_pump_close(&a->pump);   /* drains, then joins */
     a->running = false;
@@ -3601,7 +3653,7 @@ YQST_API int yqst_async_poll(const yqst_async* a, yqst_snapshot* out) {
     return seq;
 }
 
-YQST_API int yqst_async_wait(yqst_async* a, uint32_t seq, uint64_t timeout_ns,
+YQST_API int yqst_async_wait(yqst_async* a, uint32_t seq, int64_t timeout_ns,
                              yqst_snapshot* out) {
     int rc;
     if (!a) return YQST_ERR_ARG;
