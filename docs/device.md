@@ -1,6 +1,6 @@
 # ysp/device.h
 
-Status: v0.2.0, 2026-10-08; the rig profile, `ysp/rigfile.h` v0.2.0,
+Status: v0.2.1 (v0.2.0, the outputs, 2026-10-08); the rig profile, `ysp/rigfile.h` v0.2.0,
 2026-10-09 (v0.2.0 adds roles bound to LSL streams, docs/net.md). The headers' manuals are the reference (OUTPUTS, AT THE FLIP
 and ROLES of `ysp/device.h`; THE FILE, CHECKS AT LOAD and BINDING of
 `ysp/rigfile.h`). This page records the decisions the plan
