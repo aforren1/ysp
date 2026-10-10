@@ -8,7 +8,9 @@
 The files are downloaded from raw.githubusercontent.com at the full commit
 SHA below and compared byte for byte with the SHA-256 values here; nothing
 else is accepted. The pack tool (CMake option YSP_BUILD_PACK) needs them; the
-layout library (YSP_BUILD_LAYOUT) does not. Standard library only. The
+layout library (YSP_BUILD_LAYOUT) does not. This is the only fetch the core
+pack tool needs (tables, WAV, textures, verify, list); tools/vendor_layout.py
+is for glyph runs only (docs/pack.md 5.1). Standard library only. The
 sibling tools/vendor_layout.py fetches the layout stack the same way.
 """
 import argparse

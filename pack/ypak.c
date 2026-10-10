@@ -15,6 +15,9 @@
 
 static int usage(void) {
     fputs("ypak " YPT_VERSION_STRING " - ysp pack tool (docs/pack.md)\n"
+#ifdef YPT_NO_LAYOUT
+          "core build: no glyph runs (configure with -DYSP_BUILD_LAYOUT=ON for them)\n"
+#endif
           "usage:\n"
           "  ypak build SOURCE.json -o OUT.ysppak [--sources DIR] [-v]\n"
           "  ypak verify PACK\n"

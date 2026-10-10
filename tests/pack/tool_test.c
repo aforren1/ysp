@@ -8,7 +8,12 @@
  * bytes), appends to a program, extracts, damages packs, and refuses a list
  * of bad descriptions, each by its message. It writes corpus.ysppak and
  * pack_corpus.txt (the pack ID and each entry's SHA-256) for the
- * comparison across compilers (docs/pack.md, open question 2). */
+ * comparison across compilers (docs/pack.md, open question 2).
+ *
+ * Built against the core tool (YPT_NO_LAYOUT) the corpus has no glyph runs,
+ * and the test checks that the tool refuses them by name. Both builds write
+ * core.ysppak from the description without glyph runs: CI compares the two
+ * files byte for byte, and each build's ypak verifies the other's. */
 #if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_WARNINGS)
 #define _CRT_SECURE_NO_WARNINGS
 #endif
@@ -24,7 +29,9 @@
 #include "ysp/gfx.h"
 #include "ysp/color.h"
 #include "ysp/audio.h"
+#ifndef YPT_NO_LAYOUT
 #include "ysp/layout.h"
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -312,36 +319,50 @@ static void make_sources(void) {
     copy_in("readme.txt");
 }
 
-static const char* g_desc =
-    "{\n"
-    "  \"format\": \"ysp-pack-source\", \"version\": 1,\n"
-    "  \"experiment\": {\"entry\": \"experiment/main.json\", \"source\": \"main.json\", \"media_type\": \"application/vnd.ysp.experiment\"},\n"
-    "  \"audio\": {\"rate\": 48000, \"channels\": 2},\n"
-    "  \"resources\": [\n"
-    "    {\"kind\": \"table\", \"source\": \"conditions.csv\", \"types\": {\"word\": \"string\"}},\n"
-    "    {\"kind\": \"calibration\", \"source\": \"display.yspcal\"},\n"
-    "    {\"kind\": \"font\", \"source\": \"fonts/box.ttf\", \"license\": \"CC0-1.0\"},\n"
+#define DESC_HEAD \
+    "{\n" \
+    "  \"format\": \"ysp-pack-source\", \"version\": 1,\n" \
+    "  \"experiment\": {\"entry\": \"experiment/main.json\", \"source\": \"main.json\", \"media_type\": \"application/vnd.ysp.experiment\"},\n" \
+    "  \"audio\": {\"rate\": 48000, \"channels\": 2},\n" \
+    "  \"resources\": [\n" \
+    "    {\"kind\": \"table\", \"source\": \"conditions.csv\", \"types\": {\"word\": \"string\"}},\n" \
+    "    {\"kind\": \"calibration\", \"source\": \"display.yspcal\"},\n" \
+    "    {\"kind\": \"font\", \"source\": \"fonts/box.ttf\", \"license\": \"CC0-1.0\"},\n" \
     "    {\"kind\": \"curveset\", \"from\": \"fonts/box.ttf\"},\n"
-    "    {\"kind\": \"glyphruns\", \"name\": \"text/pages.ysprun\", \"fonts\": [\"fonts/box.ttf\"], \"blocks\": [\n"
-    "      {\"key\": \"intro\", \"text\": \"Press a key to start.\", \"size\": \"32\", \"width\": \"400\"},\n"
-    "      {\"key\": \"rtl\", \"text\": \"\\u05e9\\u05dc\\u05d5\\u05dd world\", \"size\": \"24\"},\n"
+
+#define DESC_RUNS \
+    "    {\"kind\": \"glyphruns\", \"name\": \"text/pages.ysprun\", \"fonts\": [\"fonts/box.ttf\"], \"blocks\": [\n" \
+    "      {\"key\": \"intro\", \"text\": \"Press a key to start.\", \"size\": \"32\", \"width\": \"400\"},\n" \
+    "      {\"key\": \"rtl\", \"text\": \"\\u05e9\\u05dc\\u05d5\\u05dd world\", \"size\": \"24\"},\n" \
     "      {\"key\": \"end\", \"text\": \"Thank you!\", \"size\": \"40\", \"align\": \"center\", \"width\": \"600\"}]},\n"
-    "    {\"kind\": \"artwork\", \"source\": \"art/fixation.svg\"},\n"
-    "    {\"kind\": \"audio\", \"source\": \"audio/tone.wav\"},\n"
-    "    {\"kind\": \"audio\", \"source\": \"audio/long.wav\", \"stream\": true},\n"
-    "    {\"kind\": \"audio\", \"source\": \"audio/u8.wav\"},\n"
-    "    {\"kind\": \"audio\", \"source\": \"audio/s32.wav\"},\n"
-    "    {\"kind\": \"audio\", \"source\": \"audio/f64.wav\"},\n"
-    "    {\"kind\": \"shader\", \"source\": \"shaders/plaid.glsl\", \"mode\": \"modulation\"},\n"
-    "    {\"kind\": \"texture\", \"source\": \"img/gray.png\"},\n"
-    "    {\"kind\": \"texture\", \"source\": \"img/rgba.png\", \"compression\": \"qoi\", \"primaries\": \"bt709\"},\n"
-    "    {\"kind\": \"texture\", \"name\": \"img/rgba_raw.ysptex\", \"source\": \"img/rgba.png\", \"primaries\": \"device\"},\n"
-    "    {\"kind\": \"texture\", \"source\": \"img/gray16.png\", \"encoding\": \"linear\"},\n"
-    "    {\"kind\": \"texture\", \"source\": \"img/rgb16.png\", \"format\": \"rgba32f\", \"encoding\": \"linear\"},\n"
-    "    {\"kind\": \"file\", \"source\": \"readme.txt\"},\n"
-    "    {\"kind\": \"file\", \"source\": \"data/big.bin\"}\n"
-    "  ]\n"
-    "}\n";
+
+#define DESC_TAIL \
+    "    {\"kind\": \"artwork\", \"source\": \"art/fixation.svg\"},\n" \
+    "    {\"kind\": \"audio\", \"source\": \"audio/tone.wav\"},\n" \
+    "    {\"kind\": \"audio\", \"source\": \"audio/long.wav\", \"stream\": true},\n" \
+    "    {\"kind\": \"audio\", \"source\": \"audio/u8.wav\"},\n" \
+    "    {\"kind\": \"audio\", \"source\": \"audio/s32.wav\"},\n" \
+    "    {\"kind\": \"audio\", \"source\": \"audio/f64.wav\"},\n" \
+    "    {\"kind\": \"shader\", \"source\": \"shaders/plaid.glsl\", \"mode\": \"modulation\"},\n" \
+    "    {\"kind\": \"texture\", \"source\": \"img/gray.png\"},\n" \
+    "    {\"kind\": \"texture\", \"source\": \"img/rgba.png\", \"compression\": \"qoi\", \"primaries\": \"bt709\"},\n" \
+    "    {\"kind\": \"texture\", \"name\": \"img/rgba_raw.ysptex\", \"source\": \"img/rgba.png\", \"primaries\": \"device\"},\n" \
+    "    {\"kind\": \"texture\", \"source\": \"img/gray16.png\", \"encoding\": \"linear\"},\n" \
+    "    {\"kind\": \"texture\", \"source\": \"img/rgb16.png\", \"format\": \"rgba32f\", \"encoding\": \"linear\"},\n" \
+    "    {\"kind\": \"file\", \"source\": \"readme.txt\"},\n" \
+    "    {\"kind\": \"file\", \"source\": \"data/big.bin\"}\n" \
+    "  ]\n" \
+    "}\n"
+
+/* The core description: every kind but glyph runs. */
+static const char* g_desc_core = DESC_HEAD DESC_TAIL;
+#ifdef YPT_NO_LAYOUT
+static const char* g_desc = DESC_HEAD DESC_TAIL;
+#define N_ENTRIES 21u
+#else
+static const char* g_desc = DESC_HEAD DESC_RUNS DESC_TAIL;
+#define N_ENTRIES 22u
+#endif
 
 static int build_text(const char* text, const char* out, char* err, size_t cap) {
     return ypt_build_text(text, strlen(text), W, out, NULL, err, cap);
@@ -370,7 +391,7 @@ static void check_entries(const char* path) {
     rc = ypak_open(&p, &d);
     CHECK(rc == 0, "open %s: %s", path, ypak_error(&p));
     if (rc) return;
-    CHECK(p.n == 22, "entries %u", p.n);
+    CHECK(p.n == N_ENTRIES, "entries %u", p.n);
     CHECK(ypak_first_of(&p, YPAK_KIND_EXPERIMENT, &e) == 0 && e.name_len == 20 && !memcmp(e.name, "experiment/main.json", 20), "experiment");
     if ((x = entry(&p, "conditions.pstb", &e)) != NULL) {
         ytb_table t;
@@ -390,6 +411,7 @@ static void check_entries(const char* path) {
         CHECK(ygfx_cset_check(&cd, err, sizeof err) == 0, "cset check: %s", err);
         CHECK(s.n_glyphs == 2 + 31 + 31 + 30 + 59, "cset glyphs %u", s.n_glyphs);
     }
+#ifndef YPT_NO_LAYOUT
     if ((x = entry(&p, "text/pages.ysprun", &e)) != NULL) {
         ypak_runs r;
         int k;
@@ -401,6 +423,7 @@ static void check_entries(const char* path) {
         CHECK(k >= 0 && r.blocks[k].resolved_dir == YLAY_DIR_RTL && r.blocks[k].n_runs >= 1, "runs rtl block");
         CHECK(strcmp(ypak_runs_str(&r, r.fonts[0].cset_off), "fonts/box.yspcset") == 0, "runs font names");
     }
+#endif
     if ((x = entry(&p, "art/fixation.yspart", &e)) != NULL) {
         ypak_art a;
         ygfx_cset_desc cd;
@@ -596,13 +619,6 @@ static void test_refusals(void) {
     expect_refusal("shader mode", "{\"kind\": \"shader\", \"source\": \"shaders/plaid.glsl\", \"mode\": \"blend\"}", "mode must be", 0);
     expect_refusal("csv", "{\"kind\": \"table\", \"source\": \"readme.txt\", \"types\": {\"A\": \"integer\"}}", "", 0);
     expect_refusal("curveset from", "{\"kind\": \"curveset\", \"from\": \"readme.txt\"}, {\"kind\": \"file\", \"source\": \"readme.txt\"}", "not a font entry", 0);
-    expect_refusal("runs without set",
-                   "{\"kind\": \"font\", \"source\": \"fonts/box.ttf\"}, {\"kind\": \"glyphruns\", \"name\": \"t.ysprun\", \"fonts\": [\"fonts/box.ttf\"], "
-                   "\"blocks\": [{\"key\": \"a\", \"text\": \"hi\", \"size\": \"10\"}]}", "no curveset entry", 0);
-    expect_refusal("missing glyph",
-                   "{\"kind\": \"font\", \"source\": \"fonts/box.ttf\"}, {\"kind\": \"curveset\", \"from\": \"fonts/box.ttf\"}, {\"kind\": \"glyphruns\", "
-                   "\"name\": \"t.ysprun\", \"fonts\": [\"fonts/box.ttf\"], \"blocks\": [{\"key\": \"a\", \"text\": \"mail@example\", \"size\": \"10\"}]}",
-                   "no font maps", 0);
     expect_refusal("kind", "{\"kind\": \"video\", \"source\": \"readme.txt\"}", "not one this tool builds", 0);
     /* open question 7's default: a restricted font is accepted in a private pack */
     {
@@ -611,6 +627,20 @@ static void test_refusals(void) {
         CHECK(build_text(t, W "/private.ysppak", err, sizeof err) == 0, "private pack: %s", err);
         CHECK(ypt_verify(W "/private.ysppak", NULL, err, sizeof err) == 0, "private pack verifies: %s", err);
     }
+#ifdef YPT_NO_LAYOUT
+    /* the core tool names what it lacks */
+    expect_refusal("runs in the core tool",
+                   "{\"kind\": \"font\", \"source\": \"fonts/box.ttf\"}, {\"kind\": \"curveset\", \"from\": \"fonts/box.ttf\"}, {\"kind\": \"glyphruns\", "
+                   "\"name\": \"t.ysprun\", \"fonts\": [\"fonts/box.ttf\"], \"blocks\": [{\"key\": \"a\", \"text\": \"hi\", \"size\": \"10\"}]}",
+                   "glyph runs need the layout library", 0);
+#else
+    expect_refusal("runs without set",
+                   "{\"kind\": \"font\", \"source\": \"fonts/box.ttf\"}, {\"kind\": \"glyphruns\", \"name\": \"t.ysprun\", \"fonts\": [\"fonts/box.ttf\"], "
+                   "\"blocks\": [{\"key\": \"a\", \"text\": \"hi\", \"size\": \"10\"}]}", "no curveset entry", 0);
+    expect_refusal("missing glyph",
+                   "{\"kind\": \"font\", \"source\": \"fonts/box.ttf\"}, {\"kind\": \"curveset\", \"from\": \"fonts/box.ttf\"}, {\"kind\": \"glyphruns\", "
+                   "\"name\": \"t.ysprun\", \"fonts\": [\"fonts/box.ttf\"], \"blocks\": [{\"key\": \"a\", \"text\": \"mail@example\", \"size\": \"10\"}]}",
+                   "no font maps", 0);
     /* glyphs "used": .notdef and the glyphs of the text */
     {
         static const char t[] = "{\"format\": \"ysp-pack-source\", \"version\": 1, \"resources\": ["
@@ -634,6 +664,7 @@ static void test_refusals(void) {
             ypak_close(&p);
         }
     }
+#endif
 }
 
 static int same_file(const char* a, const char* b) {
@@ -653,6 +684,43 @@ static void flip_copy(const char* src, const char* dst, long at) {
     d[at] ^= 0x01;
     write_file(dst, d, n);
     free(d);
+}
+
+/* 1 when the pack's manifest names the layout library. */
+static int names_layout(const char* path) {
+    ypak_pack p;
+    ypak_desc d;
+    ypak_entry e;
+    int r = -1;
+    memset(&d, 0, sizeof d);
+    d.path = path;
+    if (ypak_open(&p, &d) != 0) return -1;
+    if (ypak_find(&p, "ysp/manifest.json", &e) == 0) {
+        const char* m = (const char*)ypak_data(&p, &e);
+        char* z = (char*)malloc((size_t)e.size + 1);
+        if (m && z) {
+            memcpy(z, m, (size_t)e.size);
+            z[e.size] = 0;
+            r = strstr(z, "\"layout\": ") != NULL;
+        }
+        free(z);
+    }
+    ypak_close(&p);
+    return r;
+}
+
+/* The pack both builds make: the core and the full tool must give the same
+ * bytes, which needs a manifest that names no layout library. */
+static void test_core_pack(void) {
+    char err[1024];
+    int rc = build_text(g_desc_core, W "/core.ysppak", err, sizeof err);
+    CHECK(rc == 0, "core pack: %s", err);
+    if (rc) return;
+    CHECK(ypt_verify(W "/core.ysppak", NULL, err, sizeof err) == 0, "core pack verifies: %s", err);
+    CHECK(names_layout(W "/core.ysppak") == 0, "the core pack's manifest names no layout library");
+#ifndef YPT_NO_LAYOUT
+    CHECK(names_layout(W "/corpus.ysppak") == 1, "a pack with glyph runs names the layout library");
+#endif
 }
 
 int main(void) {
@@ -729,7 +797,7 @@ int main(void) {
             CHECK(rep && ypt_list(W "/corpus.ysppak", rep, err, sizeof err) == 0 && ypt_info(W "/corpus.ysppak", rep, err, sizeof err) == 0, "list, info");
             if (rep) fclose(rep);
             x = read_all(W "/list.txt", &n);
-            CHECK(x && strstr((const char*)x, "glyphruns") && strstr((const char*)x, "experiment: experiment/main.json") &&
+            CHECK(x && strstr((const char*)x, N_ENTRIES == 22u ? "glyphruns" : "curveset") && strstr((const char*)x, "experiment: experiment/main.json") &&
                   strstr((const char*)x, "audio: 48000 Hz"), "list and info text");
             free(x);
         }
@@ -792,6 +860,10 @@ int main(void) {
                         char got[65];
                         int k;
                         if (sscanf(line, "%64s %1023s", hx, name) != 2) continue;
+#ifdef YPT_NO_LAYOUT
+                        /* no glyph runs, so another chunk list */
+                        if (!strcmp(name, "text/pages.ysprun") || !strcmp(name, "ysp/chunks")) continue;
+#endif
                         lines++;
                         if (ypak_find(&p, name, &e) != 0) { CHECK(0, "pinned entry %s is not in the corpus pack", name); continue; }
                         ypak_sha256(ypak_data(&p, &e), (size_t)e.size, sha);
@@ -801,7 +873,7 @@ int main(void) {
                                     name, got, hx, pin_path);
                     }
                     if (pin) fclose(pin);
-                    CHECK(lines == (int)p.n - 1 && same == lines, "corpus pin: %d of %d entries as pinned (%u in the pack besides the manifest)",
+                    CHECK(lines == (int)p.n - 1 - (N_ENTRIES == 22u ? 0 : 1) && same == lines, "corpus pin: %d of %d entries as pinned (%u in the pack besides the manifest)",
                           same, lines, p.n - 1);
                 }
                 ypak_close(&p);
@@ -809,6 +881,7 @@ int main(void) {
             if (f) fclose(f);
         }
     }
+    test_core_pack();
     test_refusals();
     printf("tool_test: %d checks, %d failed\n", g_checks, g_fail);
     return g_fail ? 1 : 0;

@@ -409,7 +409,7 @@ test corpus:
       "ysp/table.h": "0.1.0"
     },
     "name": "ypak",
-    "version": "0.2.0"
+    "version": "0.3.0"
   },
   "version": 1
 }
@@ -419,6 +419,10 @@ Rules:
 
 - `version` equals the comment's version. The reader checks the comment;
   `ypak verify` checks both.
+- `tool.libraries`: the version of each library the tool built with.
+  `layout` is there only when the pack has a GLYPHRUNS entry (from
+  pack_tool.h v0.3.0), so the core and the full tool give one pack ID for
+  a pack both can build (5.1).
 - `entries` lists every entry except the manifest, in pack order, with
   `ysp/chunks` included. `size`, `sha256`, `xxh64`, `crc32` and `stream`
   equal the container's (`ypak verify`).
@@ -675,13 +679,37 @@ Bytes, unchanged. The experiment comes from the description's top-level
 ysp/table.h, ysp/outline.h, ysp/gfx.h (without SDL: the shader wrapper
 and the curve set check), ysp/color.h, ysp/audio.h (without miniaudio:
 the WAV probe) and ysp/rt.h once, so a program that links the library
-defines none of them. It also links `pack/layout` (Skribidi) and lodepng (compiled as C
-from a copy, its warnings off). CMake: `YSP_BUILD_PACK=ON`, which needs
-`YSP_BUILD_LAYOUT=ON` and `third_party/lodepng/`; configure stops with
-the fetch command (`uv run --no-project python tools/vendor_pack.py
---write`) when it is missing. It builds with MSVC, MinGW, Linux gcc and
-emcc, so the designer can run the same code in the browser (the tool
-test passes under node).
+defines none of them. It also links lodepng (compiled as C from a copy,
+its warnings off) and, in the full tool only, `pack/layout` (Skribidi and
+HarfBuzz). It builds with MSVC, MinGW, Linux gcc and emcc, so the designer
+can run the same code in the browser (the tool test passes under node).
+
+Two builds of one tool (decided 2026-10-10, review decision E). The CLI,
+the library's calls and the pack format are the same in both:
+
+| Build | CMake | Fetch once | Kinds |
+|---|---|---|---|
+| Core | `YSP_BUILD_PACK=ON` | `tools/vendor_pack.py --write` (lodepng) | every kind but GLYPHRUNS: tables, calibrations, fonts, curve sets, artwork, audio, shaders, textures, files, the experiment; and verify, list, info, extract, cat, rebuild, append |
+| Full | `YSP_BUILD_PACK=ON` and `YSP_BUILD_LAYOUT=ON` | also `tools/vendor_layout.py --write` | all, GLYPHRUNS too |
+
+Configure stops with the fetch command when a file set is missing. The
+core build compiles the library with `YPT_NO_LAYOUT` (a public definition
+of the `ysp_pack_tool` target) and links no layout code. It refuses a
+GLYPHRUNS resource by name ("glyph runs need the layout library; this
+ypak was built without it"), so `ypak rebuild` of a pack with glyph runs
+also fails there. `ypak` with no arguments prints "core build" on its
+second line.
+
+The manifest names the layout library (`tool.libraries.layout`) only when
+the pack has a GLYPHRUNS entry (pack_tool.h v0.3.0). So for a pack without
+glyph runs the two builds write the same bytes and the same pack ID, and
+each `ypak` verifies and rebuilds the other's pack. CI checks this: the
+tool test of each build writes `core.ysppak` from one description, and the
+two files must be identical. A CURVESET with `"glyphs": "used"` takes its
+glyphs from the pack's glyph runs; without glyph runs it holds .notdef only,
+in both builds.
+
+Sizes and build times: section 8.1.
 
 `ypak`, the CLI (`pack/ypak.c`):
 
@@ -791,7 +819,7 @@ bytes. What makes it so:
 - **Numbers in, bits out**: decimal text is parsed by ysp/table.h's
   correctly rounded parser, never `strtod` (locale) or `printf("%f")`.
 - **Pinned code**: the manifest records every library version, the
-  Skribidi commit and patch hashes, and the lodepng commit (with
+  Skribidi commit and patch hashes (packs with glyph runs only), and the lodepng commit (with
   `,tree-differs` when the fetched file is not the pinned one). It does
   not record the compiler (changed in phase 2): the builds agree, and a
   compiler in the manifest would give one pack a different ID per
@@ -840,6 +868,27 @@ entries of 1 to 4000 bytes (476,598 bytes), 10,000 such entries
 Frame budget: after load, a lookup (0.06 to 0.14 us) is the only reader
 call a frame needs. Verifying a whole entry happens at load; a chunk
 through a cursor costs 0.27 ms on the decode or producer thread.
+
+### 8.1 The core and the full tool: size and build time
+
+2026-10-10, the same laptop (i7-1360P, 16 logical processors), AC, under
+the measurement lock (load 12 % at the start). Each round configures a
+new build folder and builds the `ypak` target alone (examples and tests
+off), Release, `--parallel 16`; 3 rounds, core and full alternating. The
+fetched sources were already on disk, so no time is download time.
+
+| | Core (`YSP_BUILD_PACK`) | Full (`YSP_BUILD_PACK`, `YSP_BUILD_LAYOUT`) |
+|---|---|---|
+| Sources fetched | lodepng, 3 files (0.4 MB) | also the layout trees (about 8 MB) |
+| MSVC 19.44, configure | 10.2 to 13.6 s | 10.1 to 20.7 s |
+| MSVC 19.44, build `ypak` | 7.2 to 17.8 s | 35.7 to 44.8 s |
+| MSVC 19.44, configure and build | 18.2 to 28.0 s | 45.8 to 65.5 s |
+| `ypak.exe`, MSVC Release | 446,976 bytes | 1,853,440 bytes |
+| `ypak.exe`, MinGW gcc 16.1 Release (`-O3`), not stripped | 1,135,016 bytes | 3,399,699 bytes |
+
+The core `ypak` from MSVC and from MinGW and the full `ypak` from
+both compilers wrote the same `core.ysppak` (the tool test's description
+without glyph runs), byte for byte.
 
 ## 9. Explanation
 
@@ -1136,9 +1185,9 @@ one function in the tool.
 | `include/ysp/pack.h` | 0.1.0 | The reader (2.12) |
 | `include/ysp/audio.h` | 0.2.1 | `yau_wav_probe()` (docs/audio.md, "The WAV probe") |
 | `include/ysp/gfx.h` | 0.10.5 | `YGFX_SHADER_CONTRACT` (docs/gfx.md, "v0.10.3"; 2 from v0.10.5); encoded R8 and RG8 textures, so a TEXTURE entry loads as stored (docs/gfx.md, "v0.10.5") |
-| `pack/ysp/pack_tool.h`, `pack/pack_tool.c`, `pack/pack_impl.c` | 0.2.0 | The tool library. 0.1.1 (2026-10-09): the JSON reader and writer moved to `include/ysp/json.h`; every corpus pack is byte-identical to 0.1.0's but for the manifest, which now names ysp/json.h. 0.2.0 (2026-10-09): TEXTURE encoding bytes as `ygfx_texture()` takes them, `primaries` (4.9); the shader contract 2 in SHADER entries |
+| `pack/ysp/pack_tool.h`, `pack/pack_tool.c`, `pack/pack_impl.c` | 0.3.0 | The tool library. 0.1.1 (2026-10-09): the JSON reader and writer moved to `include/ysp/json.h`; every corpus pack is byte-identical to 0.1.0's but for the manifest, which now names ysp/json.h. 0.2.0 (2026-10-09): TEXTURE encoding bytes as `ygfx_texture()` takes them, `primaries` (4.9); the shader contract 2 in SHADER entries. 0.3.0 (2026-10-10): the core build without pack/layout (5.1); the manifest names the layout library only for a pack with glyph runs |
 | `include/ysp/json.h` | 0.1.0 | The strict JSON reader and canonical writer (docs/json.md) |
-| `pack/ypak.c` | 0.2.0 | The CLI (it prints the tool library's version) |
+| `pack/ypak.c` | 0.3.0 | The CLI (it prints the tool library's version, and "core build" without pack/layout) |
 | `tools/vendor_pack.py` | | Fetches and verifies lodepng |
 | `tests/adapt/pack_test.c` | | The reader's test, with its own writer: 29 faults, every bit flip and truncation of a small pack, the four sources, cursors, the arena, a virtual 4.3 GB entry and 65,537 entries (zip64 by size, offset and count), the views |
 | `tests/compile/pack.c`, `pack.cpp` | | C11 and C++17 compile checks |
@@ -1150,7 +1199,8 @@ one function in the tool.
 
 CMake: ysp/pack.h is in the library list (group `ysp::core`), so its
 compile checks and `test_pack` build with every configuration; the tool,
-`ypak` and `test_pack_tool` build with `YSP_BUILD_PACK=ON`.
+`ypak` and `test_pack_tool` build with `YSP_BUILD_PACK=ON`, with glyph runs
+when `YSP_BUILD_LAYOUT=ON` too (5.1).
 
 ### Not done
 
