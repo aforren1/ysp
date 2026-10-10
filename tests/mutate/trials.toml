@@ -443,3 +443,221 @@ test = "trials"
 why = "An EXPONENTIAL of mean 0 ns is no distribution; the scale check moved from seconds to ns."
 find = 'if (p->dist == (int)YTR_JITTER_EXPONENTIAL && (p->scale < 1 || p->scale > mx))'
 replace = 'if (p->dist == (int)YTR_JITTER_EXPONENTIAL && (p->scale < 0 || p->scale > mx))'
+
+# --- data writer (v0.4.0) ------------------------------------------------------
+
+[[mutant]]
+id = "d-01"
+name = "a lone CR left unquoted"
+test = "trials"
+why = "A field with a CR and no other special byte would split the record on read; the quoting test has lone CRs."
+find = '''if (p[k] == ',' || p[k] == '"' || p[k] == '\n' || p[k] == '\r') { quote = true; break; }'''
+replace = '''if (p[k] == ',' || p[k] == '"' || p[k] == '\n') { quote = true; break; }'''
+
+[[mutant]]
+id = "d-02"
+name = "a quote not doubled"
+test = "trials"
+why = "RFC 4180 doubles a quote inside a quoted field; one quote ends the field early."
+find = '''ytr__dput(w, "\"\"", 2);'''
+replace = '''ytr__dput(w, "\"", 1);'''
+
+[[mutant]]
+id = "d-03"
+name = "an invalid byte passed through"
+test = "trials"
+why = "ysp/table.h refuses a file with bad UTF-8, so one bad byte in a response string would make the whole file unreadable."
+find = '''ytr__dput(w, "\xEF\xBF\xBD", 3);'''
+replace = '''ytr__dput(w, s + i, 1);'''
+
+[[mutant]]
+id = "d-04"
+name = "surrogates taken as UTF-8"
+test = "trials"
+why = "ED A0 80 encodes a surrogate, which ysp/table.h refuses; the writer must replace it."
+find = '''if ((c == 0xE0 && p[1] < 0xA0) || (c == 0xED && p[1] > 0x9F)) return 0;'''
+replace = '''if (c == 0xE0 && p[1] < 0xA0) return 0;'''
+
+[[mutant]]
+id = "d-05"
+name = "time truncated, not rounded"
+test = "trials"
+why = "1.2345678 s at 3 decimals is 1.235; truncation writes 1.234."
+find = '''u = u / scale + (u % scale >= (scale + 1u) / 2u && scale > 1u ? 1u : 0u);'''
+replace = '''u = u / scale;'''
+
+[[mutant]]
+id = "d-06"
+name = "time half rounded down"
+test = "trials"
+why = "0.0005 s at 3 decimals is 0.001 (half away from zero), not 0.000."
+find = '''u = u / scale + (u % scale >= (scale + 1u) / 2u && scale > 1u ? 1u : 0u);'''
+replace = '''u = u / scale + (u % scale > (scale + 1u) / 2u && scale > 1u ? 1u : 0u);'''
+
+[[mutant]]
+id = "d-07"
+name = "a sign on a zero time"
+test = "trials"
+why = "-0.0004 s at 3 decimals rounds to zero; '-0.000' is a different text for the same value."
+find = '''if (neg && u != 0) b[n++] = '-';'''
+replace = '''if (neg) b[n++] = '-';'''
+
+[[mutant]]
+id = "d-08"
+name = "doubles always at 17 digits"
+test = "trials"
+why = "0.1 would be written 0.10000000000000001: exact, but not the shortest text, which the format test expects."
+find = '''        for (prec = 15; prec <= 17; prec++) {
+            n = snprintf(b, sizeof(b), "%.*g", prec, x);'''
+replace = '''        for (prec = 17; prec <= 17; prec++) {
+            n = snprintf(b, sizeof(b), "%.*g", prec, x);'''
+
+[[mutant]]
+id = "d-09"
+name = "doubles at most 16 digits"
+test = "trials"
+why = "Some doubles need 17 significant digits to read back; the bit-for-bit read-back of 2000 random doubles finds them."
+find = '''        for (prec = 15; prec <= 17; prec++) {
+            n = snprintf(b, sizeof(b), "%.*g", prec, x);'''
+replace = '''        for (prec = 15; prec <= 16; prec++) {
+            n = snprintf(b, sizeof(b), "%.*g", prec, x);'''
+
+[[mutant]]
+id = "d-10"
+name = "fixed decimals keep the locale's comma"
+test = "trials"
+why = "Under a decimal-comma locale snprintf writes 0,25, which splits the field; the test writes under German where the C library has it (Windows)."
+find = '''    if (n <= 0 || n >= (int)sizeof(b)) return;
+    for (i = 0; i < n; i++)
+        if (!((b[i] >= '0' && b[i] <= '9') || b[i] == 'e' || b[i] == '-' || b[i] == '+')) b[i] = '.';'''
+replace = '''    if (n <= 0 || n >= (int)sizeof(b)) return;'''
+
+[[mutant]]
+id = "d-11"
+name = "a write with a trial pending"
+test = "trials"
+why = "A write before update() would pair this trial's values with the previous trial's columns, off by one for the rest of the file."
+find = '''if (ytr_n_run(w->trials) != last + 1 || last < w->next_trial) return YTR_ERR_ORDER;'''
+replace = '''if (last < w->next_trial) return YTR_ERR_ORDER;'''
+
+[[mutant]]
+id = "d-12"
+name = "a trial written twice"
+test = "trials"
+why = "Without the cursor a second write repeats the trial's row."
+find = '''if (last >= 0) w->next_trial = last + 1;'''
+replace = '''(void)last;'''
+
+[[mutant]]
+id = "d-13"
+name = "a set value kept for the next row"
+test = "trials"
+why = "addData semantics: a value set for one row must not leak into the next, where the column is missing."
+find = '''        w->col[i].set = false;'''
+replace = '''        (void)0;'''
+
+[[mutant]]
+id = "d-14"
+name = "the int sentinel written"
+test = "trials"
+why = "YTR_MISSING_INT must be an empty field, not -2147483648."
+find = '''have = v != YTR_MISSING_INT; break; }'''
+replace = '''have = true; break; }'''
+
+[[mutant]]
+id = "d-15"
+name = "a name may start with a digit"
+test = "trials"
+why = "ysp/table.h refuses such a header, so the file would not read back."
+find = '''              (i > 0 && c >= '0' && c <= '9')))
+            return false;'''
+replace = '''              (c >= '0' && c <= '9')))
+            return false;'''
+
+[[mutant]]
+id = "d-16"
+name = "duplicate names accepted"
+test = "trials"
+why = "ysp/table.h refuses a header with a name twice; a caller's 'outcome' would collide with the session's."
+find = '''            if (strcmp(names[i], names[j]) == 0)'''
+replace = '''            if (strcmp(names[i], names[j]) == 0 && i < 0)'''
+
+[[mutant]]
+id = "d-17"
+name = "field size not checked"
+test = "trials"
+why = "An int field declared DOUBLE would read 4 bytes of the int and 4 of the next field."
+find = '''if (c->type == YTR_COL_CHARS ? c->size == 0 : (c->size != 0 && c->size != (size_t)tsz))'''
+replace = '''if (c->type == YTR_COL_CHARS ? c->size == 0 : false)'''
+
+[[mutant]]
+id = "d-18"
+name = "rows written after a failure"
+test = "trials"
+why = "After a failed write the file has a hole; later rows would land after it as though nothing were lost. Two guards hold the latch (write() returns early, the spill skips), so the mutant removes both: the first form removed one and survived as equivalent."
+find = '''    if (!w->open) return YTR_ERR_CLOSED;
+    if (w->io_failed) return YTR_ERR_IO;
+    if (!row)'''
+replace = '''    if (!w->open) return YTR_ERR_CLOSED;
+    if (!row)'''
+also = [ { find = '''    if (!w->io_failed) {
+        bool ok;''', replace = '''    if (true) {
+        bool ok;''' } ]
+
+[[mutant]]
+id = "d-19"
+name = "a full CHARS array cut"
+test = "trials"
+why = "A char array with no NUL holds size bytes of text; a writer that needs the NUL drops them."
+find = '''sl = z ? (size_t)((const unsigned char*)z - p) : d->size;'''
+replace = '''sl = z ? (size_t)((const unsigned char*)z - p) : 0;'''
+
+[[mutant]]
+id = "d-20"
+name = "no comma after the session's columns"
+test = "trials"
+why = "The first caller field would join the last session field."
+find = '''        if (i > 0 || w->trials) ytr__dputc(w, ',');
+        ytr__dfield(w, &w->col[i], (const unsigned char*)row);'''
+replace = '''        if (i > 0) ytr__dputc(w, ',');
+        ytr__dfield(w, &w->col[i], (const unsigned char*)row);'''
+
+[[mutant]]
+id = "d-21"
+name = "no closing line in the sidecar"
+test = "trials"
+why = "The closing line tells a finished session from one cut short."
+find = '''fprintf(m, "rows=%lld closed=1\n", (long long)w->rows) > 0;'''
+replace = '''true;'''
+
+[[mutant]]
+id = "d-22"
+name = "the file buffered by stdio"
+test = "trials"
+why = "With a stdio buffer the rows wait in the process and a crash loses them; the test reads the file after each row, before close."
+find = '''        setvbuf(f, NULL, _IONBF, 0);'''
+replace = '''        (void)0;'''
+
+[[mutant]]
+id = "d-23"
+name = "close does not finish"
+test = "trials"
+why = "ytr_data_close() on a writer left open must end the file and the sidecar; without it a cleanup path that only closes loses the closing line and leaves the writer open."
+find = '''if (w && w->open) (void)ytr_data_finish(w);'''
+replace = '''(void)w;'''
+
+[[mutant]]
+id = "d-24"
+name = "a TIME_NS column keeps _ns"
+test = "trials"
+why = "The file holds seconds; a column named rt_ns would tell an analyst the wrong unit."
+find = '''if (c->type == YTR_COL_TIME_NS && ytr__dname_ns(d->name, k)) {'''
+replace = '''if (c->type == YTR_COL_TIME_NS && ytr__dname_ns(d->name, k) && 0) {'''
+
+[[mutant]]
+id = "d-25"
+name = "a setter on a closed writer leaves no message"
+test = "trials"
+why = "Every call on a handle that fails writes its message (README.md, Conventions)."
+find = '''ytr__dfail(w, "%s: the writer is not open", what);'''
+replace = '''(void)what;'''

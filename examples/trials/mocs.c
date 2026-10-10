@@ -9,7 +9,10 @@
  * Prints the meta line and the CSV (header and one row per trial) that a
  * real session would write to its data file, then the proportion correct per
  * condition beside the observer's true probability, and the longest run of
- * one orientation, which the constraint caps at 3.
+ * one orientation, which the constraint caps at 3. The CSV comes from the
+ * data writer (ytr_data, v0.4) with a write function that prints, so the
+ * rows are the bytes a file would get: the session's columns and the
+ * contrast shown, in the stimulus's own units.
  *
  * The generator is ytr_splitmix on a seed the program owns and prints,
  * which is the whole reproducibility story: the same seed prints the same
@@ -41,11 +44,23 @@ static double p_correct(double c) {
     return 0.5 + 0.5 * (1.0 - exp(-pow(c / alpha, beta)));
 }
 
+/* The data row's own column, beside the session's. */
+typedef struct shown { double contrast_value; } shown;
+static const ytr_col cols[] = { YTR_COL(shown, contrast_value, YTR_COL_DOUBLE) };
+
+/* The data writer's bytes to stdout, where a session would give a path. */
+static bool print_bytes(void* ctx, const void* bytes, size_t n) {
+    (void)ctx;
+    return fwrite(bytes, 1, n, stdout) == n;
+}
+
 int main(int argc, char** argv) {
-    static ytr_trials t;           /* about 90 KB: not on the stack */
+    static ytr_trials t;           /* about 240 KB: not on the stack */
+    static ytr_data w;             /* about 18 KB */
     uint64_t seed = 20260923u;
     uint64_t sim = 0;                /* the observer's own stream */
     ytr_desc d;
+    ytr_data_desc dd;
     ytr_trial_info ti = ti_zero;
     char line[512];
     int c, i, n = 0, run = 0, longest = 0, prev_ori = -1;
@@ -72,16 +87,30 @@ int main(int argc, char** argv) {
     }
     ytr_format_meta(&t, line, sizeof(line));
     printf("# %s", line);
-    ytr_format_header(&t, line, sizeof(line));
-    fputs(line, stdout);
+
+    /* The session's columns, then the contrast as shown (the factor's
+     * column holds its level index). */
+    memset(&dd, 0, sizeof(dd));
+    dd.write = print_bytes;
+    dd.trials = &t;
+    dd.cols = cols;
+    dd.n_cols = 1;
+    if (!ytr_data_open(&w, &dd)) {
+        fprintf(stderr, "trials_mocs: %s\n", ytr_data_error(&w));
+        return 1;
+    }
 
     while (ytr_next(&t, &ti) >= 0) {
-        double con = contrasts[ytr_level(&t, ti.condition, 1)];
-        int correct = ytr_splitmix(&sim) < p_correct(con) ? 1 : 0;
-        ytr_update(&t, correct, NULL);
-        ytr_format_row(&t, ti.index, line, sizeof(line));
-        fputs(line, stdout);
+        shown r;
+        r.contrast_value = contrasts[ytr_level(&t, ti.condition, 1)];
+        ytr_update(&t, ytr_splitmix(&sim) < p_correct(r.contrast_value) ? 1 : 0, NULL);
+        ytr_data_write(&w, &r);
     }
+    if (ytr_data_finish(&w) < 0) {
+        fprintf(stderr, "trials_mocs: %s\n", ytr_data_error(&w));
+        return 1;
+    }
+    ytr_data_close(&w);
 
     printf("\ncond  ori  contrast   n   p(correct)  true p\n");
     for (c = 0; c < ytr_n_conditions(&t); c++) {
@@ -99,5 +128,6 @@ int main(int argc, char** argv) {
     }
     printf("\n%d trials; longest run of one orientation: %d (the constraint allows 3); "
            "repair swaps at open: %d\n", n, longest, t.swaps);
+    ytr_close(&t);
     return 0;
 }
