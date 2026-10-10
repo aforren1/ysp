@@ -324,10 +324,10 @@ int main(int argc, char** argv) {
     memset(&pd, 0, sizeof pd);
     pd.choices = keys;
     pd.n_choices = 2;
-    pd.duration = RESPONSE_S;
+    pd.duration_ns = YRT_S(RESPONSE_S);
     pd.sources = sources;
     pd.n_sources = 1;
-    if (!yrsp_init(&rsp, &pd)) { fprintf(stderr, "trial_2afc_adaptive: %s\n", yrsp_error(&rsp)); return 1; }
+    if (!yrsp_open(&rsp, &pd)) { fprintf(stderr, "trial_2afc_adaptive: %s\n", yrsp_error(&rsp)); return 1; }
 
     out = fopen(out_path, "w");
     if (!out) { fprintf(stderr, "trial_2afc_adaptive: cannot write %s\n", out_path); return 1; }
@@ -446,7 +446,7 @@ int main(int argc, char** argv) {
                     else { x = log10(x); yqst_update_values(&quest, &x, correct); }
                 }
                 ytr_update(&trials, responded ? correct : YTR_INVALID, NULL);
-                sec(rt, sizeof rt, res.rt);
+                sec(rt, sizeof rt, res.rt_ns == YRSP_NO_TIME ? NAN : YRT_TO_S(res.rt_ns));
                 sec(lres, sizeof lres, (double)landing_residual / 1e9);
                 sec(est, sizeof est, estimate(track));
                 fprintf(out, "%d,%s,%s,%s,%s,%d,%s,%.6f,%.6f,%.6f,%u,%u,%s,%u,%u,%s,%lld,%u,%d\n", ti.index,
@@ -484,10 +484,10 @@ int main(int argc, char** argv) {
         want[QUEST] = OBS_ALPHA;
         for (i = 0; i < rows && i < MAX_TRIALS; i++) {
             const yrsp_result* r = &sim_res[i];
-            if (!(r->flags & YRSP_R_RESPONDED) || r->response != sim_key[i] || fabs(r->rt - sim_rt[i]) > 1e-6 ||
+            if (!(r->flags & YRSP_R_RESPONDED) || r->response != sim_key[i] || fabs(YRT_TO_S(r->rt_ns) - sim_rt[i]) > 1e-6 ||
                 r->onset_tier != YSCR_TIER_SIM || r->onset_src != YRSP_ONSET_FLIP) {
                 fprintf(stderr, "trial_2afc_adaptive: --sim: trial %d: rt %.9f (want %.9f) response %d (want %d) "
-                                "onset tier %d src %d\n", i, r->rt, sim_rt[i], r->response, sim_key[i],
+                                "onset tier %d src %d\n", i, YRT_TO_S(r->rt_ns), sim_rt[i], r->response, sim_key[i],
                         r->onset_tier, r->onset_src);
                 sim_bad = 1;
             }

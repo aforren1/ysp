@@ -1,4 +1,4 @@
-/* ysp/response.h - v0.2.0 - public domain single-header response collector
+/* ysp/response.h - v0.3.0 - public domain single-header response collector
  *
  *   Turns timestamped input events from any device into the response of a
  *   trial: which key or button, when, measured from the stimulus onset that
@@ -20,66 +20,6 @@
  *   SDL_events.h was included before it.
  *
  *   ---------------------------------------------------------------------
- *   CHANGELOG
- *   ---------------------------------------------------------------------
- *   v0.2.0 - Trimmed (docs/response.md, "What the examples show"). The
- *          second-report rule R3 moved to ysp/screen.h v0.4.1's input
- *          bridge, so every consumer of yscr_event_input() gets it, not
- *          only the collector: desc.dedup, YRSP_E_DUPLICATE and
- *          result.n_duplicates are gone (REPEATS, HELD KEYS AND DOUBLE
- *          REPORTS says what a producer that is not the bridge must do).
- *          Also gone, used by no example: yrsp_format_header() and
- *          yrsp_format_row() (each program writes its own columns) and
- *          desc.settle (a press stamped before the deadline counts
- *          whenever it is fed).
- *   v0.1.4 - YRSP_KINDS_ALL in ALL mode takes every kind but SYNC
- *          (ysp/input.h v0.3.0's YIN_KIND_SYNC: a scanner pulse, a TTL
- *          input, a photodiode edge), so a timing event never ends a trial.
- *          A mask that names the SYNC bit, or a LIST choice of kind SYNC,
- *          still takes it. YRSP_KIND_SYNC; the data row names kind 7
- *          "sync". Needs ysp/input.h v0.3.0.
- *   v0.1.3 - The input event, its constants, the source entry and the SDL
- *          and raw mouse adapters moved to ysp/input.h (yin_ names);
- *          this header includes it and keeps every yrsp_ and YRSP_
- *          name as an alias. API and behavior unchanged.
- *   v0.1.2 - Raw mice: yrsp_from_mouse() turns ysp/screen.h v0.3.5's
- *          raw mouse reports (desc.raw_mice) into mouse inputs per device
- *          (axes YRSP_AXIS_DELTA, _ABSOLUTE, _WHEEL), with
- *          yrsp_raw_mouse_source(); yrsp_cursor integrates one mouse's
- *          movement with a stated gain. SDL's mouse events with which 0
- *          (its absolute mode, message-timed) now get tier 3.
- *   v0.1.1 - Devices (DEVICES): two reports merge only when their devices
- *          are equal or one is 0, so two keyboards (or boxes) pressing one
- *          key within 50 ms are two presses; down state and releases are
- *          per device too, and a repeat of a key that only another
- *          keyboard holds is a press (SDL keeps one key state for all
- *          keyboards). The keyboard's 512-bit down table is gone: every
- *          kind uses the held table, now 64 entries.
- *   v0.1.0 - first version: the input event, the source table, choices
- *          (scancode, keycode, key names, ALL, NONE, analog crossings),
- *          the window, onset refinement, double-report removal, held keys,
- *          releases, the trace, the result and its CSV row, the SDL3
- *          adapter.
- *
- *   STATUS: v0.2.0, 2026-10-09. Built and run on Windows 11 with MinGW-w64
- *   gcc 16.1 as C11, C99 and C++17 under -Wall -Wextra -Wpedantic -Wshadow
- *   -Werror and with MSVC 19.44 under /W4 /WX as C11 and C++17.
- *   tests/adapt/response_test.c covers every rule on synthetic streams,
- *   with 20,000 random streams against a direct reading of the entries,
- *   and the SDL adapter against SDL 3.4.0's headers (docs/response.md has
- *   the counts). Mutations: every mutant of tests/mutate/response.toml
- *   caught.
- *   examples/response/trial_keyboard.c --sim (simulated display, synthetic
- *   participant) passes its own checks on both compilers; in a window on
- *   the Iris Xe laptop, keys sent with SendInput (scan codes and
- *   virtual-key taps) went through yscr_poll(), yrsp_from_sdl() and
- *   the collector: 6 trials, final onsets from flip records of tier 1
- *   and 2, the virtual-key taps' second reports removed. NOT done: a key
- *   pressed by hand (screen_input --hand is the check); Linux and macOS
- *   (CI runs the test and the example on the simulated display); the
- *   timing of mouse, touch, pen and gamepad events; any response box.
- *
- *   ---------------------------------------------------------------------
  *   USAGE
  *   ---------------------------------------------------------------------
  *   Do this:
@@ -95,11 +35,17 @@
  *   window of 1.5 s from the stimulus onset, responses before 0.1 s are
  *   anticipations (examples/response/trial_keyboard.c is the whole program):
  *
- *       static const yrsp_choice keys[] = { { .key = "f" }, { .key = "j" } };
- *       yrsp_collector rsp;
- *       yrsp_desc d = { .choices = keys, .n_choices = 2,
- *                         .duration = 1.5, .minimum_valid_rt = 0.1 };
- *       if (!yrsp_init(&rsp, &d)) { fputs(yrsp_error(&rsp), stderr); return 1; }
+ *       static yrsp_collector rsp;
+ *       yrsp_choice keys[2];                          // copied at open
+ *       memset(keys, 0, sizeof keys);
+ *       keys[0].key = "f";
+ *       keys[1].key = "j";
+ *       yrsp_desc d = { 0 };
+ *       d.choices = keys;
+ *       d.n_choices = 2;
+ *       d.duration_ns = YRT_S(1.5);                   // jsPsych trial_duration
+ *       d.min_rt_ns = YRT_MS(100);                    // minimum_valid_rt
+ *       if (!yrsp_open(&rsp, &d)) { fputs(yrsp_error(&rsp), stderr); return 1; }
  *
  *       yrsp_arm(&rsp, f.onset);                      // at the fixation
  *       // every frame:
@@ -114,8 +60,12 @@
  *       if (yrsp_update(&rsp, f.onset) == YRSP_ENDED) { ... hide, feedback }
  *       // after the trial:
  *       yrsp_result r;
- *       yrsp_finish(&rsp, &r);
- *       printf("rt %.3f s, key %s, onset tier %d\n", r.rt, r.response_name, r.onset_tier);
+ *       if (yrsp_finish(&rsp, &r) < 0) fputs(yrsp_error(&rsp), stderr);
+ *       if (r.rt_ns != YRSP_NO_TIME)                  // seconds in the data
+ *           printf("rt %.3f s, key %s, onset tier %d\n", YRT_TO_S(r.rt_ns),
+ *                  r.response_name, r.onset_tier);
+ *       // at the end of the session:
+ *       yrsp_close(&rsp);
  *
  *   ---------------------------------------------------------------------
  *   THE EVENT (yrsp_input)
@@ -140,7 +90,7 @@
  *   the physical key, which is what a lab means by "the F and J keys" and
  *   which a keyboard layout does not move. match = YRSP_MATCH_KEYCODE
  *   matches the layout's key instead (jsPsych's KeyboardEvent.key).
- *   choice.key is a convenience: a key name, resolved at init to the key's
+ *   choice.key is a convenience: a key name, resolved at open to the key's
  *   scancode ON THE US LAYOUT ("f" is the key right of D on any keyboard,
  *   which types "f" on QWERTY and AZERTY alike and "u" on Dvorak), or with
  *   KEYCODE to the keycode that name types. Names, case-insensitive: a to
@@ -169,10 +119,10 @@
  *   yrsp_set_onset() gives the onset that RT is measured from. For each
  *   press, rt = t - onset, and the press is
  *     EARLY         rt < 0, or no onset yet
- *     ANTICIPATION  0 <= rt < minimum_valid_rt
- *     on time       minimum_valid_rt <= rt < duration (no upper bound when
- *                   duration is 0)
- *     LATE          rt >= duration
+ *     ANTICIPATION  0 <= rt < min_rt_ns (jsPsych's minimum_valid_rt)
+ *     on time       min_rt_ns <= rt < duration_ns (no upper bound when
+ *                   duration_ns is 0)
+ *     LATE          rt >= duration_ns
  *   An on-time press of a choice is VALID: a response. EARLY, ANTICIPATION
  *   and LATE presses are logged and counted, never dropped, and never end
  *   the window. jsPsych drops a press before minimum_valid_rt; ysp keeps
@@ -182,8 +132,8 @@
  *       response_ends_trial = false, or persist); with persist, after
  *       desc.max_responses responses (0 = never);
  *     - with desc.wait_for_key_release, at that response's release, or
- *       desc.max_hold (0 = 2 s) after the press;
- *     - at onset + duration, in update(). A press fed after ENDED with t
+ *       desc.max_hold_ns (0 = 2 s) after the press;
+ *     - at onset + duration_ns, in update(). A press fed after ENDED with t
  *       before the end still counts: a report stamped before the deadline
  *       and delivered after it.
  *   Presses with t at or after the press that ended the window are
@@ -191,8 +141,9 @@
  *   The result's response is the VALID entry with the earliest t, not the
  *   first to arrive: a box report read late but stamped by the device's
  *   clock wins over a key press that arrived first and happened later.
- *   RT in the result: seconds, a double, NaN when there is none (jsPsych's
- *   null). The ns times are there too (t_response, t_onset).
+ *   RT in the result: rt_ns, YRSP_NO_TIME when there is none (jsPsych's
+ *   null); YRT_TO_S(rt_ns) is jsPsych's rt in seconds for a data file.
+ *   The times it comes from are there too (t_response, t_onset).
  *
  *   ---------------------------------------------------------------------
  *   THE ONSET (yrsp_onset, yrsp_set_onset)
@@ -299,8 +250,8 @@
  *   ---------------------------------------------------------------------
  *   A RELEASE closes every logged press of the same kind, control and
  *   device (DEVICES) that has none: the press and, with allow_held_key, its
- *   HELD repeats, which are one press. rt_key_duration = release - press
- *   of the response, NaN when no release came. A release of a control
+ *   HELD repeats, which are one press. rt_key_duration_ns = release -
+ *   press of the response, YRSP_NO_TIME when no release came. A release of a control
  *   that is not down is dropped (counted). Releases pair after ENDED and
  *   after finish() too; call finish() again for the duration. jsPsych's
  *   rt_key_duration runs from the key's first keydown; ysp's from the
@@ -337,8 +288,9 @@
  *   ---------------------------------------------------------------------
  *   THE RESULT (yrsp_result)
  *   ---------------------------------------------------------------------
- *   jsPsych's names: rt, response, rt_key_duration. Then the response's
- *   kind, scancode (control), keycode, device and stamp tier and bounds;
+ *   jsPsych's names, in ns: rt_ns, response, rt_key_duration_ns. Then the
+ *   response's kind, scancode (control), keycode, device and stamp tier
+ *   and bounds (stamp_lo_ns, stamp_hi_ns);
  *   the onset's time, tier, source, residual, uncertainty and frame;
  *   counts; flags (YRSP_R_*). The program writes the columns it wants
  *   (examples/response/ has seven programs that do). The entries
@@ -360,6 +312,12 @@
  *   nothing is allocated. One thread: a
  *   reader thread (a serial port, an eye tracker) queues its events, and
  *   the frame thread feeds them.
+ *   Errors: yrsp_open() clears the message, and a failed open leaves one.
+ *   Every other call that returns an error code (set_onset, feed, update,
+ *   finish) writes the message before it returns ("ysp_response:
+ *   yrsp_feed: bad argument"), on the failure path only. yrsp_close()
+ *   marks the collector closed (it owns nothing) and keeps the message;
+ *   it is safe on a zeroed collector, after a failed open, and twice.
  *
  *   ---------------------------------------------------------------------
  *   NOT DONE
@@ -376,15 +334,90 @@
  *   default `extern` linkage.
  *
  *   ---------------------------------------------------------------------
+ *   CHANGELOG
+ *   ---------------------------------------------------------------------
+ *   v0.3.0 - the repository conventions (README.md). Breaks the API:
+ *          yrsp_init() is yrsp_open(), with yrsp_close(). Times are int64_t
+ *          ns: desc.min_rt_ns (was minimum_valid_rt, seconds),
+ *          duration_ns, max_hold_ns; result.rt_ns and rt_key_duration_ns
+ *          (were seconds, NaN for none; now YRSP_NO_TIME), stamp_lo_ns and
+ *          stamp_hi_ns (were us); yrsp_onset.t_ns, residual_ns and
+ *          uncertainty_ns. The header defines ysp/rt.h's YRT_* macros under
+ *          the same guard. Every failing call writes yrsp_error(). Needs
+ *          ysp/input.h v0.4.0 (lo_ns, hi_ns). USAGE builds as C99 and
+ *          C++17; the CHANGELOG moved to the end of this comment.
+ *   v0.2.0 - Trimmed (docs/response.md, "What the examples show"). The
+ *          second-report rule R3 moved to ysp/screen.h v0.4.1's input
+ *          bridge, so every consumer of yscr_event_input() gets it, not
+ *          only the collector: desc.dedup, YRSP_E_DUPLICATE and
+ *          result.n_duplicates are gone (REPEATS, HELD KEYS AND DOUBLE
+ *          REPORTS says what a producer that is not the bridge must do).
+ *          Also gone, used by no example: yrsp_format_header() and
+ *          yrsp_format_row() (each program writes its own columns) and
+ *          desc.settle (a press stamped before the deadline counts
+ *          whenever it is fed).
+ *   v0.1.4 - YRSP_KINDS_ALL in ALL mode takes every kind but SYNC
+ *          (ysp/input.h v0.3.0's YIN_KIND_SYNC: a scanner pulse, a TTL
+ *          input, a photodiode edge), so a timing event never ends a trial.
+ *          A mask that names the SYNC bit, or a LIST choice of kind SYNC,
+ *          still takes it. YRSP_KIND_SYNC; the data row names kind 7
+ *          "sync". Needs ysp/input.h v0.3.0.
+ *   v0.1.3 - The input event, its constants, the source entry and the SDL
+ *          and raw mouse adapters moved to ysp/input.h (yin_ names);
+ *          this header includes it and keeps every yrsp_ and YRSP_
+ *          name as an alias. API and behavior unchanged.
+ *   v0.1.2 - Raw mice: yrsp_from_mouse() turns ysp/screen.h v0.3.5's
+ *          raw mouse reports (desc.raw_mice) into mouse inputs per device
+ *          (axes YRSP_AXIS_DELTA, _ABSOLUTE, _WHEEL), with
+ *          yrsp_raw_mouse_source(); yrsp_cursor integrates one mouse's
+ *          movement with a stated gain. SDL's mouse events with which 0
+ *          (its absolute mode, message-timed) now get tier 3.
+ *   v0.1.1 - Devices (DEVICES): two reports merge only when their devices
+ *          are equal or one is 0, so two keyboards (or boxes) pressing one
+ *          key within 50 ms are two presses; down state and releases are
+ *          per device too, and a repeat of a key that only another
+ *          keyboard holds is a press (SDL keeps one key state for all
+ *          keyboards). The keyboard's 512-bit down table is gone: every
+ *          kind uses the held table, now 64 entries.
+ *   v0.1.0 - first version: the input event, the source table, choices
+ *          (scancode, keycode, key names, ALL, NONE, analog crossings),
+ *          the window, onset refinement, double-report removal, held keys,
+ *          releases, the trace, the result and its CSV row, the SDL3
+ *          adapter.
+ *
+ *   STATUS: v0.3.0, 2026-10-10: the test (20,595 checks; 20,660 with the
+ *   SDL adapter) and the compile checks pass with MinGW-w64 gcc 16.1 and
+ *   MSVC 19.44, with new checks of close, the messages and YRSP_NO_TIME;
+ *   the USAGE block compiles as C99 and C++17; every mutant whose anchor
+ *   moved, and 2 new ones, caught (docs/response.md, "Times in ns").
+ *   v0.2.0, 2026-10-09. Built and run on Windows 11 with MinGW-w64
+ *   gcc 16.1 as C11, C99 and C++17 under -Wall -Wextra -Wpedantic -Wshadow
+ *   -Werror and with MSVC 19.44 under /W4 /WX as C11 and C++17.
+ *   tests/adapt/response_test.c covers every rule on synthetic streams,
+ *   with 20,000 random streams against a direct reading of the entries,
+ *   and the SDL adapter against SDL 3.4.0's headers (docs/response.md has
+ *   the counts). Mutations: every mutant of tests/mutate/response.toml
+ *   caught.
+ *   examples/response/trial_keyboard.c --sim (simulated display, synthetic
+ *   participant) passes its own checks on both compilers; in a window on
+ *   the Iris Xe laptop, keys sent with SendInput (scan codes and
+ *   virtual-key taps) went through yscr_poll(), yrsp_from_sdl() and
+ *   the collector: 6 trials, final onsets from flip records of tier 1
+ *   and 2, the virtual-key taps' second reports removed. NOT done: a key
+ *   pressed by hand (screen_input --hand is the check); Linux and macOS
+ *   (CI runs the test and the example on the simulated display); the
+ *   timing of mouse, touch, pen and gamepad events; any response box.
+ *
+ *   ---------------------------------------------------------------------
  *   LICENSE: public domain / MIT-0, see end of file.
  */
 #ifndef YSP_RESPONSE_H_INCLUDED
 #define YSP_RESPONSE_H_INCLUDED
 
 #define YRSP_VERSION_MAJOR 0
-#define YRSP_VERSION_MINOR 2
+#define YRSP_VERSION_MINOR 3
 #define YRSP_VERSION_PATCH 0
-#define YRSP_VERSION_STRING "0.2.0"
+#define YRSP_VERSION_STRING "0.3.0"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -411,7 +444,23 @@ extern "C" {
 #define YRSP_OPEN      1   /* armed, not ended                          */
 #define YRSP_ENDED     2   /* a response or the deadline ended it       */
 #define YRSP_ERR_ARG   (-1)
-#define YRSP_ERR_STATE (-2) /* the collector was not initialized        */
+#define YRSP_ERR_STATE (-2) /* the collector is not open                 */
+
+/* rt_ns and rt_key_duration_ns of a result that has none (jsPsych's
+ * null). Not -1: a release stamped on another path can come a little
+ * before its press. */
+#define YRSP_NO_TIME   INT64_MIN
+
+/* Units, the same block as ysp/rt.h's under the same guard, so one
+ * spelling works with or without it: d.duration_ns = YRT_S(1.5). */
+#ifndef YRT_S
+#define YRT_NS(x)    ((int64_t)(x))
+#define YRT_US(x)    ((int64_t)((x) * 1e3 + ((x) < 0 ? -0.5 : 0.5)))
+#define YRT_MS(x)    ((int64_t)((x) * 1e6 + ((x) < 0 ? -0.5 : 0.5)))
+#define YRT_S(x)     ((int64_t)((x) * 1e9 + ((x) < 0 ? -0.5 : 0.5)))
+#define YRT_TO_MS(ns) ((double)(ns) / 1e6)
+#define YRT_TO_S(ns)  ((double)(ns) / 1e9)
+#endif
 
 /* ysp/input.h's names under this header's prefix: ysp/response.h's API
  * as it was before the split (v0.1.2). */
@@ -500,7 +549,7 @@ typedef enum yrsp_cross {
 /* One accepted response. A zeroed choice is keyboard scancode 0, which
  * matches no key: set key, control or code. */
 typedef struct yrsp_choice {
-    const char* key;           /* a key name (CHOICES), resolved at init   */
+    const char* key;           /* a key name (CHOICES), resolved at open   */
     const char* name;          /* the response column; NULL = key          */
     uint8_t     kind;          /* yrsp_kind; 0 = keyboard                */
     uint8_t     match;         /* yrsp_match                             */
@@ -521,23 +570,25 @@ typedef enum yrsp_choices {
 
 /* The rules, constant over a block. Zero is the jsPsych default trial: any
  * key, no minimum, no deadline, the first press ends it, held keys do not
- * count. Durations in seconds. */
+ * count. Durations in ns (jsPsych's minimum_valid_rt, trial_duration and
+ * the like are seconds in a definition: convert at the script layer). */
 typedef struct yrsp_desc {
-    const yrsp_choice* choices;   /* copied at init                      */
+    const yrsp_choice* choices;   /* copied at open                      */
     int       n_choices;            /* > 0 implies LIST                    */
     int       mode;                 /* yrsp_choices                      */
     uint16_t  kinds;                /* ALL mode: 0 = THE KEYBOARD ONLY;
                                      * YRSP_KINDS_ALL = every kind but
                                      * SYNC                                */
-    double    minimum_valid_rt;     /* s; earlier is ANTICIPATION, logged  */
-    double    duration;             /* s from the onset; 0 = no deadline   */
+    int64_t   min_rt_ns;            /* jsPsych's minimum_valid_rt; earlier
+                                     * is ANTICIPATION, logged; >= 0       */
+    int64_t   duration_ns;          /* from the onset; 0 = no deadline     */
     bool      persist;              /* the first response does not end it  */
     int       max_responses;        /* with persist: end after this many;
                                      * 0 = never                           */
     bool      allow_held_key;       /* a held key's press can count        */
     bool      wait_for_key_release; /* end at the response's release       */
-    double    max_hold;             /* s; 0 = 2                            */
-    const yrsp_source* sources;   /* copied at init                      */
+    int64_t   max_hold_ns;          /* 0 = 2 s                             */
+    const yrsp_source* sources;   /* copied at open                      */
     int       n_sources;
     yrsp_input* trace;            /* the caller's array; NULL = none     */
     int       trace_cap;
@@ -552,9 +603,9 @@ typedef enum yrsp_onset_src {
 } yrsp_onset_src;
 
 typedef struct yrsp_onset {
-    int64_t t;                      /* ysp_rt ns                           */
-    int64_t residual;               /* ns, the landing's or the record's   */
-    int64_t uncertainty;            /* ns, half-width you state; 0 = none  */
+    int64_t t_ns;                   /* on the ysp_rt clock                 */
+    int64_t residual_ns;            /* the landing's or the record's       */
+    int64_t uncertainty_ns;         /* half-width you state; 0 = none      */
     int64_t frame;                  /* flip index, or -1                   */
     uint8_t tier;                   /* the producer's tier                 */
     uint8_t src;                    /* yrsp_onset_src                    */
@@ -607,8 +658,8 @@ typedef struct yrsp_entry {
 #define YRSP_R_HOLD_TIMEOUT 0x0200u /* wait_for_key_release gave up      */
 
 typedef struct yrsp_result {
-    double      rt;                 /* s; NaN = none                       */
-    double      rt_key_duration;    /* s; NaN = no release                 */
+    int64_t     rt_ns;              /* YRSP_NO_TIME = none                 */
+    int64_t     rt_key_duration_ns; /* YRSP_NO_TIME = no release           */
     int32_t     response;           /* choice index; -1 = none or ALL      */
     int32_t     entry;              /* the response's entry; -1 = none     */
     const char* response_name;      /* the choice's name, or NULL          */
@@ -618,7 +669,7 @@ typedef struct yrsp_result {
     uint8_t     stamp_tier;
     uint8_t     stamp_partial;
     uint8_t     onset_tier;
-    int32_t     stamp_lo_us, stamp_hi_us;
+    int64_t     stamp_lo_ns, stamp_hi_ns; /* the source's bounds          */
     uint8_t     onset_src;
     uint8_t     reserved_[3];
     uint32_t    flags;              /* YRSP_R_*                          */
@@ -659,13 +710,20 @@ YRSP_API const char* yrsp_version(void);
 YRSP_API const char* yrsp_strerror(int code);
 
 /* Validates and copies the rules (choices and sources too); clears the
- * held state. false with yrsp_error() set. */
-YRSP_API bool        yrsp_init(yrsp_collector* c, const yrsp_desc* d);
+ * held state and the message. false with yrsp_error() set. */
+YRSP_API bool        yrsp_open(yrsp_collector* c, const yrsp_desc* d);
+
+/* Ends the use of the collector: it owns nothing, so this marks it closed
+ * and keeps the message. Safe on a zeroed collector, after a failed open,
+ * and twice. Calls after it return YRSP_ERR_STATE. */
+YRSP_API void        yrsp_close(yrsp_collector* c);
+
+/* The message of the last failure ("" after a successful open). */
 YRSP_API const char* yrsp_error(const yrsp_collector* c);
 
-/* Starts a window at t: clears the entries, the onset and the trace
- * count; keeps which keys are down. */
-YRSP_API void yrsp_arm(yrsp_collector* c, int64_t t);
+/* Starts a window at t_ns: clears the entries, the onset and the trace
+ * count; keeps which keys are down. Does nothing on a closed collector. */
+YRSP_API void yrsp_arm(yrsp_collector* c, int64_t t_ns);
 
 /* Sets or refines the onset and classifies every entry again. A plan
  * (final 0) does not replace a final onset. Returns the status. */
@@ -675,10 +733,10 @@ YRSP_API int  yrsp_set_onset(yrsp_collector* c, const yrsp_onset* o);
  * type or kind out of range. */
 YRSP_API int  yrsp_feed(yrsp_collector* c, const yrsp_input* in);
 
-/* The clock without input: ENDED at onset + duration, or at the
- * press + max_hold while waiting for a release. Call it once a frame with
- * f.onset or yrt_now_ns(). */
-YRSP_API int  yrsp_update(yrsp_collector* c, int64_t now);
+/* The clock without input: ENDED at onset + duration_ns, or at the
+ * press + max_hold_ns while waiting for a release. Call it once a frame
+ * with f.onset or yrt_now_ns(). */
+YRSP_API int  yrsp_update(yrsp_collector* c, int64_t now_ns);
 
 /* Classifies against the onset as it is now and fills *out. Ends the
  * window: no later press ends anything, and the trace stops. Presses fed
@@ -704,9 +762,9 @@ YRSP_API const char* yrsp_key_name(uint32_t scancode);
  * (SKIPPED, CANCELED: onset 0) gives its planned vblank as a plan. */
 static inline yrsp_onset yrsp_onset_flip(const yscr_record* r) {
     yrsp_onset o;
-    o.t = r->onset ? r->onset : r->planned;
-    o.residual = r->residual;
-    o.uncertainty = 0;
+    o.t_ns = r->onset ? r->onset : r->planned;
+    o.residual_ns = r->residual;
+    o.uncertainty_ns = 0;
     o.frame = r->index;
     o.tier = r->tier;
     o.src = (uint8_t)(r->onset ? YRSP_ONSET_FLIP : YRSP_ONSET_PLAN);
@@ -721,9 +779,9 @@ static inline yrsp_onset yrsp_onset_flip(const yscr_record* r) {
 /* The onset of a sound: final once it is not pending. */
 static inline yrsp_onset yrsp_onset_audio(const yau_onset* r) {
     yrsp_onset o;
-    o.t = r->onset;
-    o.residual = r->residual;
-    o.uncertainty = 0;
+    o.t_ns = r->onset;
+    o.residual_ns = r->residual;
+    o.uncertainty_ns = 0;
     o.frame = -1;
     o.tier = r->tier;
     o.src = (uint8_t)YRSP_ONSET_AUDIO;
@@ -738,9 +796,9 @@ static inline yrsp_onset yrsp_onset_audio(const yau_onset* r) {
  * onset and the landing residual. */
 static inline yrsp_onset yrsp_onset_landing(const ytl_event* e) {
     yrsp_onset o;
-    o.t = e->onset;
-    o.residual = e->residual;
-    o.uncertainty = 0;
+    o.t_ns = e->onset;
+    o.residual_ns = e->residual;
+    o.uncertainty_ns = 0;
     o.frame = e->frame;
     o.tier = 0;
     o.src = (uint8_t)YRSP_ONSET_PLAN;
@@ -771,14 +829,6 @@ static inline yrsp_onset yrsp_onset_landing(const ytl_event* e) {
 #include <stdio.h>
 #include <string.h>
 
-#ifdef NAN
-    #define YRSP__NAN ((double)NAN)
-#else
-    #define YRSP__NAN (HUGE_VAL - HUGE_VAL)
-#endif
-
-#define YRSP__NS_PER_S 1000000000.0
-
 YRSP_API const char* yrsp_version(void) { return YRSP_VERSION_STRING; }
 
 YRSP_API const char* yrsp_strerror(int code) {
@@ -787,7 +837,7 @@ YRSP_API const char* yrsp_strerror(int code) {
     case YRSP_OPEN:      return "open";
     case YRSP_ENDED:     return "ended";
     case YRSP_ERR_ARG:   return "bad argument";
-    case YRSP_ERR_STATE: return "the collector is not initialized";
+    case YRSP_ERR_STATE: return "the collector is not open";
     default:               return "unknown";
     }
 }
@@ -806,6 +856,16 @@ static bool yrsp__fail(yrsp_collector* c, const char* fmt, ...) {
     va_end(ap);
     c->ok = 0;
     return false;
+}
+
+/* A failed call's message, written on the failure path only. */
+static int yrsp__err(yrsp_collector* c, int rc, const char* what) {
+    if (c) snprintf(c->error, sizeof c->error, "ysp_response: %s: %s", what, yrsp_strerror(rc));
+    return rc;
+}
+
+YRSP_API void yrsp_close(yrsp_collector* c) {
+    if (c) c->ok = 0;
 }
 
 /* --- key names --------------------------------------------------------- */
@@ -875,13 +935,15 @@ YRSP_API const char* yrsp_key_name(uint32_t sc) {
 
 /* --- init ---------------------------------------------------------------- */
 
-static bool yrsp__dur(yrsp_collector* c, const char* what, double s, int64_t* out) {
-    if (!(s >= 0.0) || s > 1e6) return yrsp__fail(c, "ysp_response: %s %g is not a duration in s (0..1e6)", what, s);
-    *out = (int64_t)llround(s * YRSP__NS_PER_S);
+/* 1e6 s bounds a duration so that onset + duration cannot overflow. */
+static bool yrsp__dur(yrsp_collector* c, const char* what, int64_t ns, int64_t* out) {
+    if (ns < 0 || ns > YRT_S(1e6))
+        return yrsp__fail(c, "ysp_response: desc.%s %.9g s is not a duration in 0..1e6 s", what, YRT_TO_S(ns));
+    *out = ns;
     return true;
 }
 
-YRSP_API bool yrsp_init(yrsp_collector* c, const yrsp_desc* d) {
+YRSP_API bool yrsp_open(yrsp_collector* c, const yrsp_desc* d) {
     int i;
     if (!c) return false;
     memset(c, 0, sizeof *c);
@@ -946,21 +1008,21 @@ YRSP_API bool yrsp_init(yrsp_collector* c, const yrsp_desc* d) {
     if (d->n_sources > 0 && !d->sources) return yrsp__fail(c, "ysp_response: n_sources %d with NULL sources", d->n_sources);
     for (i = 0; i < d->n_sources; i++) {
         c->src[i] = d->sources[i];
-        if (c->src[i].kind > 15 || c->src[i].tier > YRSP_TIER_SIM || c->src[i].lo_us > c->src[i].hi_us)
+        if (c->src[i].kind > 15 || c->src[i].tier > YRSP_TIER_SIM || c->src[i].lo_ns > c->src[i].hi_ns)
             return yrsp__fail(c, "ysp_response: source %d: kind, tier or bounds out of range", i);
     }
     c->d.sources = c->src;
     if (d->trace_cap < 0 || (d->trace_cap > 0 && !d->trace))
         return yrsp__fail(c, "ysp_response: trace_cap %d with %s trace", d->trace_cap, d->trace ? "a" : "a NULL");
     if (d->max_responses < 0) return yrsp__fail(c, "ysp_response: max_responses %d < 0", d->max_responses);
-    if (!yrsp__dur(c, "minimum_valid_rt", d->minimum_valid_rt, &c->min_rt_ns) ||
-        !yrsp__dur(c, "duration", d->duration, &c->duration_ns) ||
-        !yrsp__dur(c, "max_hold", d->max_hold, &c->max_hold_ns))
+    if (!yrsp__dur(c, "min_rt_ns", d->min_rt_ns, &c->min_rt_ns) ||
+        !yrsp__dur(c, "duration_ns", d->duration_ns, &c->duration_ns) ||
+        !yrsp__dur(c, "max_hold_ns", d->max_hold_ns, &c->max_hold_ns))
         return false;
     if (c->duration_ns > 0 && c->min_rt_ns >= c->duration_ns)
-        return yrsp__fail(c, "ysp_response: minimum_valid_rt %g s leaves no time in a duration of %g s",
-                            d->minimum_valid_rt, d->duration);
-    if (c->max_hold_ns == 0) c->max_hold_ns = 2000000000;
+        return yrsp__fail(c, "ysp_response: min_rt_ns %.9g s leaves no time in a duration of %.9g s",
+                            YRT_TO_S(d->min_rt_ns), YRT_TO_S(d->duration_ns));
+    if (c->max_hold_ns == 0) c->max_hold_ns = YRT_S(2);
     c->end_entry = -1;
     c->status = YRSP_IDLE;
     c->ok = 1;
@@ -1030,7 +1092,7 @@ static const yrsp_source* yrsp__source(const yrsp_collector* c, int kind, uint32
 static uint16_t yrsp__time_class(const yrsp_collector* c, int64_t t) {
     int64_t rt;
     if (!c->have_onset) return YRSP_E_EARLY;
-    rt = t - c->onset.t;
+    rt = t - c->onset.t_ns;
     if (rt < 0) return YRSP_E_EARLY;
     if (rt < c->min_rt_ns) return YRSP_E_ANTICIPATION;
     if (c->duration_ns > 0 && rt >= c->duration_ns) return YRSP_E_LATE;
@@ -1227,14 +1289,14 @@ static void yrsp__sample(yrsp_collector* c, const yrsp_input* in) {
 
 /* --- API ------------------------------------------------------------------ */
 
-YRSP_API void yrsp_arm(yrsp_collector* c, int64_t t) {
+YRSP_API void yrsp_arm(yrsp_collector* c, int64_t t_ns) {
     int i;
     if (!c || !c->ok) return;
     c->armed = 1;
     c->finished = 0;
     c->have_onset = 0;
     memset(&c->onset, 0, sizeof c->onset);
-    c->t_arm = t;
+    c->t_arm = t_ns;
     c->t_end = 0;
     c->status = YRSP_OPEN;
     c->ended_by = 0;
@@ -1265,8 +1327,8 @@ YRSP_API void yrsp_arm(yrsp_collector* c, int64_t t) {
 }
 
 YRSP_API int yrsp_set_onset(yrsp_collector* c, const yrsp_onset* o) {
-    if (!c || !c->ok) return YRSP_ERR_STATE;
-    if (!o) return YRSP_ERR_ARG;
+    if (!c || !c->ok) return yrsp__err(c, YRSP_ERR_STATE, "yrsp_set_onset");
+    if (!o) return yrsp__err(c, YRSP_ERR_ARG, "yrsp_set_onset");
     if (!c->armed) return c->status;
     if (c->have_onset && c->onset.final && !o->final) return c->status;
     c->onset = *o;
@@ -1277,8 +1339,9 @@ YRSP_API int yrsp_set_onset(yrsp_collector* c, const yrsp_onset* o) {
 }
 
 YRSP_API int yrsp_feed(yrsp_collector* c, const yrsp_input* in) {
-    if (!c || !c->ok) return YRSP_ERR_STATE;
-    if (!in || in->type < YRSP_PRESS || in->type > YRSP_PROXIMITY || in->kind > 15) return YRSP_ERR_ARG;
+    if (!c || !c->ok) return yrsp__err(c, YRSP_ERR_STATE, "yrsp_feed");
+    if (!in || in->type < YRSP_PRESS || in->type > YRSP_PROXIMITY || in->kind > 15)
+        return yrsp__err(c, YRSP_ERR_ARG, "yrsp_feed");
     if (c->armed && !c->finished && c->d.trace && (c->d.trace_kinds == 0 || ((c->d.trace_kinds >> in->kind) & 1u))) {
         if (c->n_trace < c->d.trace_cap) c->d.trace[c->n_trace++] = *in;
         else c->n_lost_trace++;
@@ -1292,31 +1355,31 @@ YRSP_API int yrsp_feed(yrsp_collector* c, const yrsp_input* in) {
     return c->status;
 }
 
-YRSP_API int yrsp_update(yrsp_collector* c, int64_t now) {
-    if (!c || !c->ok) return YRSP_ERR_STATE;
+YRSP_API int yrsp_update(yrsp_collector* c, int64_t now_ns) {
+    if (!c || !c->ok) return yrsp__err(c, YRSP_ERR_STATE, "yrsp_update");
     if (c->status != YRSP_OPEN || c->finished) return c->status;
     if (c->closing) {
-        if (now >= c->t_end + c->max_hold_ns) {
+        if (now_ns >= c->t_end + c->max_hold_ns) {
             c->closing = 0;
             c->status = YRSP_ENDED;
             c->ended_by = 3;
         }
         return c->status;
     }
-    if (c->have_onset && c->duration_ns > 0 && now >= c->onset.t + c->duration_ns) {
+    if (c->have_onset && c->duration_ns > 0 && now_ns >= c->onset.t_ns + c->duration_ns) {
         c->status = YRSP_ENDED;
         c->ended_by = 2;
-        c->t_end = c->onset.t + c->duration_ns;
+        c->t_end = c->onset.t_ns + c->duration_ns;
     }
     return c->status;
 }
 
 YRSP_API int yrsp_finish(yrsp_collector* c, yrsp_result* r) {
     int i, best = -1;
-    if (!c || !c->ok) return YRSP_ERR_STATE;
-    if (!r) return YRSP_ERR_ARG;
+    if (!c || !c->ok) return yrsp__err(c, YRSP_ERR_STATE, "yrsp_finish");
+    if (!r) return yrsp__err(c, YRSP_ERR_ARG, "yrsp_finish");
     memset(r, 0, sizeof *r);
-    r->rt = r->rt_key_duration = YRSP__NAN;
+    r->rt_ns = r->rt_key_duration_ns = YRSP_NO_TIME;
     r->response = -1;
     r->entry = -1;
     r->onset_frame = -1;
@@ -1350,9 +1413,9 @@ YRSP_API int yrsp_finish(yrsp_collector* c, yrsp_result* r) {
     if (c->held_at_open) r->flags |= YRSP_R_HELD_AT_OPEN;
     if (c->ended_by == 3) r->flags |= YRSP_R_HOLD_TIMEOUT;
     if (c->have_onset) {
-        r->t_onset = c->onset.t;
-        r->onset_residual = c->onset.residual;
-        r->onset_uncertainty = c->onset.uncertainty;
+        r->t_onset = c->onset.t_ns;
+        r->onset_residual = c->onset.residual_ns;
+        r->onset_uncertainty = c->onset.uncertainty_ns;
         r->onset_frame = c->onset.frame;
         r->onset_tier = c->onset.tier;
         r->onset_src = c->onset.src;
@@ -1370,8 +1433,8 @@ YRSP_API int yrsp_finish(yrsp_collector* c, yrsp_result* r) {
         r->response = e->choice;
         r->response_name = e->choice >= 0 ? c->ch[e->choice].name : NULL;
         r->t_response = e->t;
-        r->rt = (double)(e->t - c->onset.t) / YRSP__NS_PER_S;
-        if (e->flags & YRSP_E_RELEASED) r->rt_key_duration = (double)(e->t_release - e->t) / YRSP__NS_PER_S;
+        r->rt_ns = e->t - c->onset.t_ns;
+        if (e->flags & YRSP_E_RELEASED) r->rt_key_duration_ns = e->t_release - e->t;
         r->control = e->control;
         r->code = e->code;
         r->device = e->device;
@@ -1379,8 +1442,8 @@ YRSP_API int yrsp_finish(yrsp_collector* c, yrsp_result* r) {
         r->stamp_tier = e->stamp;
         if (s && s->tier == e->stamp) {
             r->stamp_partial = s->partial;
-            r->stamp_lo_us = s->lo_us;
-            r->stamp_hi_us = s->hi_us;
+            r->stamp_lo_ns = s->lo_ns;
+            r->stamp_hi_ns = s->hi_ns;
         }
     } else if (c->duration_ns > 0) {
         r->flags |= YRSP_R_TIMEOUT;

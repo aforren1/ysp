@@ -214,9 +214,9 @@ int main(int argc, char** argv) {
     memset(&pd, 0, sizeof pd);
     pd.choices = keys;
     pd.n_choices = 2;
-    pd.duration = RESPONSE_S;
-    pd.minimum_valid_rt = MIN_RT_S;
-    if (!yrsp_init(&rsp, &pd)) { fprintf(stderr, "trial_same_different: %s\n", yrsp_error(&rsp)); return 1; }
+    pd.duration_ns = YRT_S(RESPONSE_S);
+    pd.min_rt_ns = YRT_S(MIN_RT_S);
+    if (!yrsp_open(&rsp, &pd)) { fprintf(stderr, "trial_same_different: %s\n", yrsp_error(&rsp)); return 1; }
 
     out = fopen(out_path, "w");
     if (!out) { fprintf(stderr, "trial_same_different: cannot write %s\n", out_path); return 1; }
@@ -329,8 +329,8 @@ int main(int argc, char** argv) {
                 int correct;
                 yrsp_finish(&rsp, &res);
                 correct = (res.flags & YRSP_R_RESPONDED) && !strcmp(keys[res.response].key, answer);
-                sec(rt, sizeof rt, res.rt);
-                sec(soa, sizeof soa, res.t_onset && first_onset.t ? (double)(res.t_onset - first_onset.t) / 1e9 : NAN);
+                sec(rt, sizeof rt, res.rt_ns == YRSP_NO_TIME ? NAN : YRT_TO_S(res.rt_ns));
+                sec(soa, sizeof soa, res.t_onset && first_onset.t_ns ? (double)(res.t_onset - first_onset.t_ns) / 1e9 : NAN);
                 fprintf(out, "%d,%s,%s,%s,%s,%s,%d,%u,%s,%u,%u,%u,%u,%d,%d,%d\n", ti.index,
                         ytb_text(&tab, ti.condition, first_col), ytb_text(&tab, ti.condition, second_col), answer,
                         res.response_name ? res.response_name : "", rt, correct, (unsigned)first_onset.tier, soa,
@@ -379,12 +379,12 @@ int main(int argc, char** argv) {
              * a whole number of periods. A logic error does not. */
             int ok = whole_frames(sim_soa[i], FIRST_S + GAP_S, f.period);
             if (i == 2) ok = ok && !(r->flags & YRSP_R_RESPONDED) && (r->flags & YRSP_R_TIMEOUT);
-            else ok = ok && (r->flags & YRSP_R_RESPONDED) && whole_frames(r->rt, want_rt[i], f.period);
+            else ok = ok && (r->flags & YRSP_R_RESPONDED) && whole_frames(YRT_TO_S(r->rt_ns), want_rt[i], f.period);
             if (i == 1) ok = ok && r->n_early == 1;
             ok = ok && sim_correct[i] == (i < 2);
             ok = ok && r->onset_tier == YSCR_TIER_SIM && r->onset_src == YRSP_ONSET_FLIP;
             if (!ok) {
-                fprintf(stderr, "trial_same_different: --sim: trial %d: rt %.9f soa %.9f flags 0x%x n_early %d\n", i, r->rt,
+                fprintf(stderr, "trial_same_different: --sim: trial %d: rt %.9f soa %.9f flags 0x%x n_early %d\n", i, YRT_TO_S(r->rt_ns),
                         sim_soa[i], (unsigned)r->flags, r->n_early);
                 bad = 1;
             }

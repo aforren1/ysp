@@ -182,9 +182,9 @@ int main(int argc, char** argv) {
     memset(&pd, 0, sizeof pd);
     pd.choices = keys;
     pd.n_choices = 2;
-    pd.duration = RESPONSE_S;
-    pd.minimum_valid_rt = MIN_RT_S;
-    if (!yrsp_init(&rsp, &pd)) { fprintf(stderr, "trial_audio_keyboard: %s\n", yrsp_error(&rsp)); return 1; }
+    pd.duration_ns = YRT_S(RESPONSE_S);
+    pd.min_rt_ns = YRT_S(MIN_RT_S);
+    if (!yrsp_open(&rsp, &pd)) { fprintf(stderr, "trial_audio_keyboard: %s\n", yrsp_error(&rsp)); return 1; }
 
     out = fopen(out_path, "w");
     if (!out) { fprintf(stderr, "trial_audio_keyboard: cannot write %s\n", out_path); return 1; }
@@ -271,7 +271,7 @@ int main(int argc, char** argv) {
             int correct;
             yrsp_finish(&rsp, &res);
             correct = (res.flags & YRSP_R_RESPONDED) && res.response_name && !strcmp(res.response_name, key_answer);
-            if (res.rt == res.rt) snprintf(rt, sizeof rt, "%.9f", res.rt);
+            if (res.rt_ns != YRSP_NO_TIME) snprintf(rt, sizeof rt, "%.9f", YRT_TO_S(res.rt_ns));
             else rt[0] = 0;
             fprintf(out, "%d,%s,%s,%s,%s,%d,%.9f,%u,%u,%.9f,%u,%u,%u,%d,%d\n", ti.index,
                     ytb_text(&tab, ti.condition, stim_col), key_answer, res.response_name ? res.response_name : "", rt,
@@ -315,12 +315,12 @@ int main(int argc, char** argv) {
                      !(r->flags & YRSP_R_ONSET_PLAN) && llabs(r->onset_residual) <= YAU_MS(10);
             if (i == 3) ok = ok && !(r->flags & YRSP_R_RESPONDED) && (r->flags & YRSP_R_TIMEOUT);
             else ok = ok && (r->flags & YRSP_R_RESPONDED) &&
-                      fabs(r->rt - (double)(sim_t_press[i] - r->t_onset) / 1e9) < 1e-9 && sim_correct[i] == (i < 2);
+                      fabs(YRT_TO_S(r->rt_ns) - (double)(sim_t_press[i] - r->t_onset) / 1e9) < 1e-9 && sim_correct[i] == (i < 2);
             if (i == 1) ok = ok && r->n_early == 1;
             if (i == 2) ok = ok && r->n_anticipations == 1;
             if (!ok) {
                 fprintf(stderr, "trial_audio_keyboard: --sim: trial %d: rt %.9f flags 0x%x tier %u src %u residual %lld "
-                                "n_early %d n_anticipations %d\n", i, r->rt, (unsigned)r->flags, (unsigned)r->onset_tier,
+                                "n_early %d n_anticipations %d\n", i, YRT_TO_S(r->rt_ns), (unsigned)r->flags, (unsigned)r->onset_tier,
                         (unsigned)r->onset_src, (long long)r->onset_residual, r->n_early, r->n_anticipations);
                 bad = 1;
             }

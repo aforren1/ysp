@@ -1,4 +1,4 @@
-/* ysp/input.h - v0.3.0 - public domain single-header input event
+/* ysp/input.h - v0.4.0 - public domain single-header input event
  *
  *   One timestamped input event for every device a rig reads: keyboards,
  *   mice, touch, pens, gamepads, response and button boxes, eye trackers.
@@ -16,44 +16,18 @@
  *   this header is included again after it).
  *
  *   ---------------------------------------------------------------------
- *   CHANGELOG
- *   ---------------------------------------------------------------------
- *   v0.3.0 - For specialized devices (docs/devices_spec.md): YIN_KIND_SYNC
- *          (7) for timing events that are not a participant's response
- *          (scanner pulses, TTL inputs, photodiode and sound-key edges);
- *          unc_us, the event's own uncertainty, in the 2 bytes that were
- *          reserved_ (offset 26); ticks, the device clock's raw count, in
- *          the 4 bytes of tail padding (offset 44), valid with the new flag
- *          YIN_DEVTICKS; the eye controls YIN_EYE_* and eye codes. The
- *          size (48) and every existing offset and value are unchanged.
- *   v0.2.0 - The raw mouse report (yin_mouse_report, YIN_MOUSE_*) moved
- *          here from ysp/screen.h, so yin_from_mouse() needs no other
- *          header; ysp/screen.h's yscr_mouse_event and YSCR_MOUSE_*
- *          are its aliases. The SDL3 adapter is defined when this header
- *          is included again after SDL3, so ysp/screen.h's implementation
- *          uses it for yscr_event_input().
- *   v0.1.0 - split out of ysp/response.h v0.1.2: the event, its kinds,
- *          types, flags, controls and axes, the source entry and tiers,
- *          the SDL3 adapter and the raw mouse adapter, renamed from
- *          yrsp_ to yin_ (ysp/response.h keeps its names as aliases).
- *
- *   STATUS: v0.3.0, 2026-10-08 (v0.2.0's checks, and the new fields' offsets
- *   and constants). Built with MinGW-w64 gcc 16.1 as C11, C99
- *   and C++17 under -Wall -Wextra -Wpedantic -Wshadow -Werror and with
- *   MSVC 19.44 under /W4 /WX as C11 and C++17. tests/adapt/input_test.c
- *   checks the layout (48 bytes, the field offsets producers write), the
- *   constants' values (they are in data files), and both adapters on
- *   events filled by hand; ysp/response.h's test runs every adapter case
- *   again through its aliases.
- *
- *   ---------------------------------------------------------------------
  *   USAGE
  *   ---------------------------------------------------------------------
  *   Include it; there is no implementation to define. A producer:
  *
- *       yin_event e = { .t = yrt_now_ns(), .kind = YIN_KIND_BOX,
- *                         .device = port, .control = button,
- *                         .type = YIN_PRESS, .value = 1 };
+ *       yin_event e;
+ *       memset(&e, 0, sizeof e);
+ *       e.t = yrt_now_ns();
+ *       e.kind = YIN_KIND_BOX;
+ *       e.device = port;
+ *       e.control = button;
+ *       e.type = YIN_PRESS;
+ *       e.value = 1.0f;
  *
  *   From SDL3 (include SDL3 or ysp/screen.h first):
  *
@@ -91,7 +65,11 @@
  *     unc_us   this event's own uncertainty in us: a device clock fit's
  *              spread at this time, a bracket's width, a stamp's known
  *              quantizer; 0 = the source entry's bounds; 65535 = 65.5 ms
- *              or more
+ *              or more. The one time in ysp that is not int64_t ns: a
+ *              uint16_t in the 2 bytes that were free, because an int64_t
+ *              would make the event 56 bytes and ysp/screen.h's input
+ *              slot (16 bytes of state and the event) 72, past one cache
+ *              line. Its name says the unit
  *     x, y     position: window coordinates for mouse and pen, 0..1 for
  *              touch; pen tilt
  *     value    an axis value, pressure; 1 for a press, 0 for a release
@@ -123,7 +101,7 @@
  *     YIN_TIER_2  good under stated conditions, measured
  *     YIN_TIER_3  development only: a tick-quantized OS time, a poll
  *     YIN_TIER_SIM synthetic input, exact by construction
- *   An entry also gives measured bounds (lo_us, hi_us: stamp minus event)
+ *   An entry also gives measured bounds (lo_ns, hi_ns: stamp minus event)
  *   and `partial` when they cover the host part only (the OS saw it ->
  *   the stamp), not the device's scan, debounce and USB poll. The entry of
  *   a kind with device 0 covers every device of that kind; an entry with
@@ -176,15 +154,58 @@
  *   input only).
  *
  *   ---------------------------------------------------------------------
+ *   CHANGELOG
+ *   ---------------------------------------------------------------------
+ *   v0.4.0 - the repository conventions (README.md). Breaks the API:
+ *          yin_source's bounds are int64_t ns, lo_ns and hi_ns (were
+ *          int32_t us, lo_us and hi_us). yin_event.unc_us stays a uint16_t
+ *          in us, the one exception to "every time is int64_t ns": an
+ *          int64_t would make the event 56 bytes and ysp/screen.h's input
+ *          slot 72, past one cache line (THE EVENT). USAGE builds as C99
+ *          and C++17; the CHANGELOG moved to the end of this comment.
+ *   v0.3.0 - For specialized devices (docs/devices_spec.md): YIN_KIND_SYNC
+ *          (7) for timing events that are not a participant's response
+ *          (scanner pulses, TTL inputs, photodiode and sound-key edges);
+ *          unc_us, the event's own uncertainty, in the 2 bytes that were
+ *          reserved_ (offset 26); ticks, the device clock's raw count, in
+ *          the 4 bytes of tail padding (offset 44), valid with the new flag
+ *          YIN_DEVTICKS; the eye controls YIN_EYE_* and eye codes. The
+ *          size (48) and every existing offset and value are unchanged.
+ *   v0.2.0 - The raw mouse report (yin_mouse_report, YIN_MOUSE_*) moved
+ *          here from ysp/screen.h, so yin_from_mouse() needs no other
+ *          header; ysp/screen.h's yscr_mouse_event and YSCR_MOUSE_*
+ *          are its aliases. The SDL3 adapter is defined when this header
+ *          is included again after SDL3, so ysp/screen.h's implementation
+ *          uses it for yscr_event_input().
+ *   v0.1.0 - split out of ysp/response.h v0.1.2: the event, its kinds,
+ *          types, flags, controls and axes, the source entry and tiers,
+ *          the SDL3 adapter and the raw mouse adapter, renamed from
+ *          yrsp_ to yin_ (ysp/response.h keeps its names as aliases).
+ *
+ *   STATUS: v0.4.0, 2026-10-10: v0.3.0's checks, and yin_source's new
+ *   layout (int64_t bounds at 8 and 16, 32 bytes); the event is still 48
+ *   bytes. Measured with MinGW-w64 gcc 16.1 (x64): an int64_t unc_ns at
+ *   the end would make the event 56 bytes and a ysp/screen.h input slot
+ *   72 (64 now). The USAGE block builds as C99 and C++17.
+ *   v0.3.0, 2026-10-08 (v0.2.0's checks, and the new fields' offsets
+ *   and constants). Built with MinGW-w64 gcc 16.1 as C11, C99
+ *   and C++17 under -Wall -Wextra -Wpedantic -Wshadow -Werror and with
+ *   MSVC 19.44 under /W4 /WX as C11 and C++17. tests/adapt/input_test.c
+ *   checks the layout (48 bytes, the field offsets producers write), the
+ *   constants' values (they are in data files), and both adapters on
+ *   events filled by hand; ysp/response.h's test runs every adapter case
+ *   again through its aliases.
+ *
+ *   ---------------------------------------------------------------------
  *   LICENSE: public domain / MIT-0, see end of file.
  */
 #ifndef YSP_INPUT_H_INCLUDED
 #define YSP_INPUT_H_INCLUDED
 
 #define YIN_VERSION_MAJOR 0
-#define YIN_VERSION_MINOR 3
+#define YIN_VERSION_MINOR 4
 #define YIN_VERSION_PATCH 0
-#define YIN_VERSION_STRING "0.3.0"
+#define YIN_VERSION_STRING "0.4.0"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -273,7 +294,8 @@ typedef struct yin_event {
     uint8_t  type;       /* yin_type                                    */
     uint8_t  flags;      /* YIN_*                                    */
     uint8_t  stamp;      /* yin_tier; 0 = the source table's            */
-    uint16_t unc_us;     /* this event's uncertainty, us; 0 = the source's */
+    uint16_t unc_us;     /* this event's uncertainty, us (not ns: THE
+                          * EVENT); 0 = the source's                     */
     float    x, y;
     float    value;
     float    aux;
@@ -287,7 +309,7 @@ typedef struct yin_source {
     uint8_t     partial;       /* 1: the bounds cover the host part only   */
     uint8_t     reserved_;
     uint32_t    device;        /* 0 = every device of the kind             */
-    int32_t     lo_us, hi_us;  /* stamp minus event time; both 0 = unknown */
+    int64_t     lo_ns, hi_ns;  /* stamp minus event time; both 0 = unknown */
     const char* note;          /* one line for the data file               */
 } yin_source;
 
@@ -558,14 +580,14 @@ static inline yin_source yin_sdl_source(const yin_sdl_ctx* ctx, int kind) {
     if (kind == YIN_KIND_KEYBOARD && (!ctx || ctx->raw_keyboard)) {
         s.tier = (uint8_t)YIN_TIER_UNKNOWN;
         s.partial = 1;
-        s.lo_us = 160;
-        s.hi_us = 670;
+        s.lo_ns = 160000;
+        s.hi_ns = 670000;
         s.note = "SDL 3.4 raw keyboard: host part measured with SendInput; scan and USB poll not measured";
     } else if (kind == YIN_KIND_KEYBOARD) {
         s.tier = (uint8_t)YIN_TIER_3;
         s.partial = 1;
-        s.lo_us = -6200;
-        s.hi_us = 12100;
+        s.lo_ns = -6200000;
+        s.hi_ns = 12100000;
         s.note = "SDL 3.4 keyboard message path: message tick, measured with SendInput";
     } else if (kind == YIN_KIND_MOUSE || kind == YIN_KIND_TOUCH || kind == YIN_KIND_PEN) {
         s.tier = (uint8_t)YIN_TIER_3;

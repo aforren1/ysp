@@ -222,7 +222,7 @@ int main(int argc, char** argv) {
     memset(&pd, 0, sizeof pd);
     pd.choices = confirm;
     pd.n_choices = 1;
-    if (!yrsp_init(&rsp, &pd)) { fprintf(stderr, "trial_adjustment: %s\n", yrsp_error(&rsp)); return 1; }
+    if (!yrsp_open(&rsp, &pd)) { fprintf(stderr, "trial_adjustment: %s\n", yrsp_error(&rsp)); return 1; }
 
     out = fopen(out_path, "w");
     traj = fopen(traj_path, "w");
@@ -361,7 +361,7 @@ int main(int argc, char** argv) {
                 char rt[32];
                 int ref = atoi(ytb_text(&tab, ti.condition, ref_col)), k;
                 yrsp_finish(&rsp, &res);
-                if (res.rt == res.rt) snprintf(rt, sizeof rt, "%.9f", res.rt);
+                if (res.rt_ns != YRSP_NO_TIME) snprintf(rt, sizeof rt, "%.9f", YRT_TO_S(res.rt_ns));
                 else rt[0] = 0;
                 fprintf(out, "%d,%d,%.2f,%.2f,%.1f,%d,%s,%u,%u,%u,%u\n", ti.index, ref, start_value, value,
                         bar_length(value) - ref, n_steps, rt, (unsigned)res.onset_tier, (unsigned)res.onset_src,
@@ -412,11 +412,11 @@ int main(int argc, char** argv) {
         for (i = 0; i < rows && i < SIM_TRIALS; i++) {
             const yrsp_result* r = &sim_res[i];
             int ok = sim_steps[i] == want_steps[i] && fabs(sim_final[i] - sim_start[i] - want_net[i] * STEP) < 1e-9 &&
-                     (r->flags & YRSP_R_RESPONDED) && fabs(r->rt - sim_confirm_at[i]) < 1e-6 &&
+                     (r->flags & YRSP_R_RESPONDED) && fabs(YRT_TO_S(r->rt_ns) - sim_confirm_at[i]) < 1e-6 &&
                      r->onset_tier == YSCR_TIER_SIM && r->onset_src == YRSP_ONSET_FLIP;
             if (!ok) {
                 fprintf(stderr, "trial_adjustment: --sim: trial %d: %d steps, %.2f -> %.2f, rt %.9f flags 0x%x\n", i,
-                        sim_steps[i], sim_start[i], sim_final[i], r->rt, (unsigned)r->flags);
+                        sim_steps[i], sim_start[i], sim_final[i], YRT_TO_S(r->rt_ns), (unsigned)r->flags);
                 bad = 1;
             }
         }

@@ -211,7 +211,7 @@ int main(int argc, char** argv) {
     memset(&pd, 0, sizeof pd);
     pd.choices = keys;
     pd.n_choices = 4;
-    if (!yrsp_init(&rsp, &pd)) { fprintf(stderr, "trial_srt: %s\n", yrsp_error(&rsp)); return 1; }
+    if (!yrsp_open(&rsp, &pd)) { fprintf(stderr, "trial_srt: %s\n", yrsp_error(&rsp)); return 1; }
 
     out = fopen(out_path, "w");
     if (!out) { fprintf(stderr, "trial_srt: cannot write %s\n", out_path); return 1; }
@@ -309,7 +309,7 @@ int main(int argc, char** argv) {
                 int correct;
                 yrsp_finish(&rsp, &res);
                 correct = (res.flags & YRSP_R_RESPONDED) && res.response == position;
-                if (res.rt == res.rt) snprintf(rt, sizeof rt, "%.9f", res.rt);
+                if (res.rt_ns != YRSP_NO_TIME) snprintf(rt, sizeof rt, "%.9f", YRT_TO_S(res.rt_ns));
                 else rt[0] = 0;
                 fprintf(out, "%d,%s,%d,%d,%s,%s,%d,%u,%u,%u,%u,%d,%d\n", block,
                         blocks[block] == 'S' ? "sequence" : "random", trial_index, position,
@@ -317,7 +317,7 @@ int main(int argc, char** argv) {
                         (unsigned)res.onset_src, (unsigned)res.stamp_tier, (unsigned)res.flags, res.n_after_end,
                         (int)(key_doubles() - doubles_at_arm));
                 fflush(out);
-                if (correct) { sum_rt[block] += res.rt; n_correct[block]++; }
+                if (correct) { sum_rt[block] += YRT_TO_S(res.rt_ns); n_correct[block]++; }
                 ytr_update(&trials, correct, NULL);
                 if (trial_index < SIM_TRIALS) { sim_res[trial_index] = res; sim_correct[trial_index] = correct; }
                 rows++;
@@ -349,11 +349,11 @@ int main(int argc, char** argv) {
             const yrsp_result* r = &sim_res[i];
             int s = i < SEQ_LEN, k = i % SEQ_LEN;
             double want = s ? SIM_RT_S : k == 2 ? SIM_WRONG_RT : SIM_RT_R;
-            int ok = (r->flags & YRSP_R_RESPONDED) && fabs(r->rt - want) < 1e-6 &&
+            int ok = (r->flags & YRSP_R_RESPONDED) && fabs(YRT_TO_S(r->rt_ns) - want) < 1e-6 &&
                      sim_correct[i] == (s || k != 2) && r->n_after_end == (s && k == 4) &&
                      r->onset_tier == YSCR_TIER_SIM && r->onset_src == YRSP_ONSET_FLIP;
             if (!ok) {
-                fprintf(stderr, "trial_srt: --sim: trial %d: rt %.9f correct %d flags 0x%x n_after_end %d\n", i, r->rt,
+                fprintf(stderr, "trial_srt: --sim: trial %d: rt %.9f correct %d flags 0x%x n_after_end %d\n", i, YRT_TO_S(r->rt_ns),
                         sim_correct[i], (unsigned)r->flags, r->n_after_end);
                 bad = 1;
             }

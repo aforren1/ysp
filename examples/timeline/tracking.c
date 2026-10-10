@@ -130,8 +130,8 @@ int main(void) {
             end.time_ns = bt + tween_len;
             end.base = TRIAL;
             /* Field by field so the example also builds as C++17; in C99
-             * this is &(ytl_tween_desc){ .start = bt, .start_set = true,
-             * .duration = tween_len, .ease = YTL_EASE_COSINE }. */
+             * this is &(ytl_tween_desc){ .start_ns = bt, .start_set = true,
+             * .duration_ns = tween_len, .ease = YTL_EASE_COSINE }. */
             memset(&fade, 0, sizeof(fade));
             fade.start_ns = bt;
             fade.start_set = true;

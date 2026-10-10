@@ -120,7 +120,7 @@
  *   stay in the struct for the log, never for a tier. Without a folder
  *   every check is YRIG_CHECK_NOT_RUN. A file that fails its check is not
  *   a load error: the rig can still run, with the tier it can prove.
- *   TIER. yrig_source() gives YIN_TIER_1 and the bounds (lo_us, hi_us)
+ *   TIER. yrig_source() gives YIN_TIER_1 and the bounds (lo_ns, hi_ns)
  *   only for a role whose bounds' check is OK and whose family maps a
  *   device clock (an input family: xid, line, photo; and lsl, whose
  *   sender's clock ysp/net.h maps), as ysp/input.h defines tier 1; else
@@ -1349,12 +1349,12 @@ YRIG_API bool yrig_start(ydev_device* dev, const yrig_profile* p, const char* ro
 static yin_source yrig__tier(const yrig_role* r, int fam, yin_source s) {
     bool clock = fam == YRIG_FAMILY_LSL || (fam >= 1 && fam <= YBOX_FAMILY_LAST && (ybox_caps(fam) & YBOX_CAP_IN));
     s.tier = (uint8_t)YIN_TIER_UNKNOWN;
-    s.lo_us = s.hi_us = 0;
+    s.lo_ns = s.hi_ns = 0;
     if (r && r->bounds.set && r->bounds.check == YRIG_CHECK_OK && clock && yrig__family_id(r->family) == fam) {
         /* ysp/input.h's tier 1: a device clock whose fit a loopback checked */
         s.tier = (uint8_t)YIN_TIER_1;
-        s.lo_us = (int32_t)(r->bounds.lo_ns >= 0 ? (r->bounds.lo_ns + 500) / 1000 : -((-r->bounds.lo_ns + 500) / 1000));
-        s.hi_us = (int32_t)(r->bounds.hi_ns >= 0 ? (r->bounds.hi_ns + 500) / 1000 : -((-r->bounds.hi_ns + 500) / 1000));
+        s.lo_ns = r->bounds.lo_ns;
+        s.hi_ns = r->bounds.hi_ns;
         s.note = "ysp_rig: bounds from a loopback the rig profile names, checked by SHA-256";
     } else {
         s.note = "ysp_rig: no checked loopback for this role: tier UNKNOWN";

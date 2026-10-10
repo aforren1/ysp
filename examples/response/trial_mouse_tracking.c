@@ -305,7 +305,7 @@ int main(int argc, char** argv) {
     pd.trace = trace;
     pd.trace_cap = TRACE_CAP;
     pd.trace_kinds = YRSP_KIND_BIT(YRSP_KIND_MOUSE);
-    if (!yrsp_init(&rsp, &pd)) { fprintf(stderr, "trial_mouse_tracking: %s\n", yrsp_error(&rsp)); return 1; }
+    if (!yrsp_open(&rsp, &pd)) { fprintf(stderr, "trial_mouse_tracking: %s\n", yrsp_error(&rsp)); return 1; }
 
     out = fopen(out_path, "w");
     traj = fopen(traj_path, "w");
@@ -409,7 +409,7 @@ int main(int argc, char** argv) {
                 ent = yrsp_entries(&rsp, &n_ent);   /* n_early counts the start click too */
                 for (k = 0; k < n_ent; k++)
                     if ((ent[k].flags & YRSP_E_CROSSING) && (ent[k].flags & YRSP_E_EARLY)) early_move = 1;
-                if (res.rt == res.rt) snprintf(init, sizeof init, "%.9f", res.rt);
+                if (res.rt_ns != YRSP_NO_TIME) snprintf(init, sizeof init, "%.9f", YRT_TO_S(res.rt_ns));
                 else init[0] = 0;
                 snprintf(rt, sizeof rt, "%.9f", (double)(t_click - res.t_onset) / 1e9);
                 for (k = 0; k < res.n_trace; k++) {
@@ -443,7 +443,7 @@ int main(int argc, char** argv) {
                        init[0] ? init : "-", rt, dev, n_samples);
                 ytr_update(&trials, correct, NULL);
                 if (ti.index < 2) {
-                    sim_init[ti.index] = res.rt;
+                    sim_init[ti.index] = res.rt_ns == YRSP_NO_TIME ? NAN : YRT_TO_S(res.rt_ns);
                     sim_dev[ti.index] = dev;
                     sim_correct[ti.index] = correct;
                     sim_samples[ti.index] = n_samples;

@@ -229,8 +229,8 @@ int main(int argc, char** argv) {
     memset(&pd, 0, sizeof pd);
     pd.choices = keys;
     pd.n_choices = 2;
-    pd.duration = RESPONSE_S;
-    if (!yrsp_init(&rsp, &pd)) { fprintf(stderr, "trial_stop_signal: %s\n", yrsp_error(&rsp)); return 1; }
+    pd.duration_ns = YRT_S(RESPONSE_S);
+    if (!yrsp_open(&rsp, &pd)) { fprintf(stderr, "trial_stop_signal: %s\n", yrsp_error(&rsp)); return 1; }
 
     out = fopen(out_path, "w");
     if (!out) { fprintf(stderr, "trial_stop_signal: cannot write %s\n", out_path); return 1; }
@@ -360,14 +360,14 @@ int main(int argc, char** argv) {
                     n_respond += responded;
                     sum_ssd += actual;
                 } else if (correct) {
-                    sum_go_rt += res.rt;
+                    sum_go_rt += YRT_TO_S(res.rt_ns);
                     n_go_rt++;
-                    sim_go_rt = res.rt;
+                    sim_go_rt = res.rt_ns == YRSP_NO_TIME ? NAN : YRT_TO_S(res.rt_ns);
                 }
                 if (stop) snprintf(tone_tier, sizeof tone_tier, "%u", (unsigned)rec.tier);
                 sec(s_ssd, sizeof s_ssd, ssd);
                 sec(s_act, sizeof s_act, actual);
-                sec(rt, sizeof rt, res.rt);
+                sec(rt, sizeof rt, res.rt_ns == YRSP_NO_TIME ? NAN : YRT_TO_S(res.rt_ns));
                 fprintf(out, "%d,%s,%s,%s,%s,%s,%s,%s,%d,%s,%u,%s,%u,%u\n", ti.index,
                         ytb_text(&tab, ti.condition, stim_col), key_answer, stop ? "stop" : "go", s_ssd, s_act,
                         res.response_name ? res.response_name : "", rt, correct, stopped < 0 ? "" : stopped ? "1" : "0",
