@@ -75,23 +75,23 @@ int main(int argc, char** argv) {
 
     /* 2 ms trigger pulse: `code`, then 0x00. Bracket it with the library's
      * clock so the log has both bounds of the onset. */
-    uint64_t t0 = yser_now_us();
-    int r = yser_pulse(&sp, (uint8_t)code, 0x00, 2000);
-    uint64_t t1 = yser_now_us();
+    int64_t t0 = yrt_now_ns();
+    int r = yser_pulse(&sp, (uint8_t)code, 0x00, YRT_MS(2));
+    int64_t t1 = yrt_now_ns();
     if (r < 0) {
         fprintf(stderr, "pulse failed: %s (oserr %d)\n", yser_strerror(r), sp.wr_oserr);
         yser_close(&sp);
         return 1;
     }
-    printf("sent trigger 0x%02lX (2 ms blocking pulse), accepted between +0 and +%llu us\n",
-           code & 0xFF, (unsigned long long)(t1 - t0));
+    printf("sent trigger 0x%02lX (2 ms blocking pulse), accepted between +0 and +%lld us\n",
+           code & 0xFF, (long long)((t1 - t0) / 1000));
 
     /* Echo incoming bytes for ~2 s. YSER_READ_ANY returns as soon as anything
      * arrives, so the 100 ms timeout only bounds the idle wait. */
     printf("listening for 2 s...\n");
     uint8_t buf[64];
     for (int i = 0; i < 20; i++) {
-        int n = yser_read(&sp, buf, (int)sizeof(buf), 100, YSER_READ_ANY);
+        int n = yser_read(&sp, buf, (int)sizeof(buf), YRT_MS(100), YSER_READ_ANY);
         if (n < 0) { fprintf(stderr, "read failed: %s (oserr %d)\n", yser_strerror(n), sp.rd_oserr); break; }
         for (int k = 0; k < n; k++) printf("%02X ", buf[k]);
         if (n) { printf("\n"); fflush(stdout); }

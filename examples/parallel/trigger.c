@@ -48,7 +48,7 @@ static void demo_sleep_ms(unsigned ms) {
 int main(int argc, char** argv) {
     unsigned long code = (argc > 1) ? strtoul(argv[1], NULL, 0) : 0x01;
 
-    ypar_port pp;
+    ypar_port pp = { 0 };
     /* All defaults: ppdev "/dev/parport0" on Linux, inpout @ LPT1 on Windows.
      * For raw x86 port I/O instead (root):
      *     ypar_desc desc = { .backend = YPAR_BACKEND_DIRECT, .base_addr = YPAR_LPT1 };
@@ -66,7 +66,7 @@ int main(int argc, char** argv) {
            pp.backend, pp.base_addr, yrt_policy_name(pp.async_policy));
 
     /* Send a 2 ms trigger pulse carrying `code`. */
-    if (!ypar_pulse(&pp, (uint8_t)code, 2000)) {
+    if (ypar_pulse(&pp, (uint8_t)code, YRT_MS(2)) < 0) {
         fprintf(stderr, "pulse failed: %s\n", ypar_error(&pp));
         ypar_close(&pp);
         return 1;
@@ -76,7 +76,7 @@ int main(int argc, char** argv) {
     /* Non-blocking pulse: returns immediately, a real-time worker thread
      * drops the line after the requested width. The onset is written here on
      * this thread, so it is not delayed by the worker waking up. */
-    if (!ypar_pulse_async(&pp, (uint8_t)code, 2000)) {
+    if (ypar_pulse_async(&pp, (uint8_t)code, YRT_MS(2)) < 0) {
         fprintf(stderr, "async pulse failed: %s\n", ypar_error(&pp));
     } else {
         printf("queued async trigger 0x%02lX (returned without blocking)\n",
@@ -94,7 +94,12 @@ int main(int argc, char** argv) {
     }
 
     /* Read back the input lines. */
-    uint8_t status = ypar_read_status(&pp);
+    int status = ypar_read_status(&pp);
+    if (status < 0) {
+        fprintf(stderr, "status read failed: %s\n", ypar_error(&pp));
+        ypar_close(&pp);
+        return 1;
+    }
     printf("status = 0x%02X  busy=%d ack=%d paper=%d select=%d error=%d\n",
            status,
            (status & YPAR_STATUS_BUSY)   ? 1 : 0,

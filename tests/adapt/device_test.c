@@ -223,9 +223,9 @@ static void* t_open(void* user, const char* key, char* found, size_t cap) {
     return b;
 }
 
-static int t_read(void* conn, uint8_t* buf, int cap, int timeout_ms) {
+static int t_read(void* conn, uint8_t* buf, int cap, int64_t timeout_ns) {
     board* b = (board*)conn;
-    int64_t t = now_fn(NULL), end = t + (int64_t)timeout_ms * 1000000;
+    int64_t t = now_fn(NULL), end = t + timeout_ns;
     int n = 0;
     if (b_gone(b, t)) { b->open = false; return -1; }
     b_run(b, g_real ? t : end);
@@ -333,7 +333,7 @@ static ydev_desc desc_for(int family) {
 static void run_until(int64_t t) {
     while (g_now < t) {
         int64_t before = g_now;
-        (void)ydev_poll(&g_dev, 20);
+        (void)ydev_poll(&g_dev, YRT_MS(20));
         if (g_now == before) g_now += 20000000;
     }
 }
@@ -374,9 +374,9 @@ static void test_line_unplug(void) {
     g_b.reset_on_return = true;
     {
         ydev_desc d = desc_for(YBOX_LINE);
-        CHECK(ydev_start(&g_dev, &d));
+        CHECK(ydev_open(&g_dev, &d));
     }
-    CHECK_I(ydev_poll(&g_dev, 20), YDEV_RUNNING);
+    CHECK_I(ydev_poll(&g_dev, YRT_MS(20)), YDEV_RUNNING);
     ydev_get_stats(&g_dev, &st);
     CHECK(strcmp(st.ident, "ysp-line 1 sim test") == 0);
     CHECK(strcmp(st.found, "SIM1") == 0);
@@ -413,7 +413,7 @@ static void test_line_unplug(void) {
     printf("  line: %llu probes, %llu answers, %llu pairs, refused %llu, fit %+.2f ppm, spread %.1f us, width %.1f us\n",
            (unsigned long long)st.probes, (unsigned long long)st.answers, (unsigned long long)st.pairs,
            (unsigned long long)st.refused, st.fit.ppm, (double)st.fit.spread_ns / 1e3, (double)st.fit.width_ns / 1e3);
-    ydev_stop(&g_dev);
+    ydev_close(&g_dev);
     CHECK_I(ydev_state(&g_dev), YDEV_CLOSED);
     /* the log */
     recs = yrt_ring_drain(&g_ring, g_rec, 16384);
@@ -453,9 +453,9 @@ static void test_xid(void) {
     schedule_edges(t_start + 500000000, t_start + 300000000000LL, 2000000000, 2000000000);
     {
         ydev_desc d = desc_for(YBOX_XID);
-        CHECK(ydev_start(&g_dev, &d));
+        CHECK(ydev_open(&g_dev, &d));
     }
-    CHECK_I(ydev_poll(&g_dev, 20), YDEV_RUNNING);
+    CHECK_I(ydev_poll(&g_dev, YRT_MS(20)), YDEV_RUNNING);
     run_until(t_start + 300000000000LL);
     ydev_get_stats(&g_dev, &st);
     CHECK(strcmp(st.ident, "xid product 2 model 1 firmware 2") == 0);
@@ -474,7 +474,7 @@ static void test_xid(void) {
     printf("  xid: the last event's unc_us %u\n", (unsigned)g_ev[g_nev - 1].unc_us);
     CHECK(g_nev > 0 && g_ev[0].kind == YIN_KIND_BOX && g_ev[0].control == 1 && g_ev[0].device == 3);
     CHECK(st.answers > 2000);
-    ydev_stop(&g_dev);
+    ydev_close(&g_dev);
 }
 
 /* The photodiode frame: no queries, syncs every 100 ms. */
@@ -490,7 +490,7 @@ static void test_photo(void) {
     {
         ydev_desc d = desc_for(YBOX_PHOTO);
         d.kind = 0;   /* the family's: SYNC */
-        CHECK(ydev_start(&g_dev, &d));
+        CHECK(ydev_open(&g_dev, &d));
     }
     run_until(t_start + 60000000000LL);
     ydev_get_stats(&g_dev, &st);
@@ -500,7 +500,7 @@ static void test_photo(void) {
     CHECK(n > 300 && lo > -150e3 && hi < 400e3);
     CHECK_I(st.probes, 0);
     CHECK(g_nev > 0 && g_ev[0].kind == YIN_KIND_SYNC && g_ev[0].unc_us > 0 && (g_ev[0].flags & YIN_DEVTICKS));
-    ydev_stop(&g_dev);
+    ydev_close(&g_dev);
 }
 
 /* An edge stamped 60 ms past its arrival (a board bug): its pair is held
@@ -517,7 +517,7 @@ static void test_clamp(void) {
     g_b.future_edge = 60;
     {
         ydev_desc d = desc_for(YBOX_LINE);
-        CHECK(ydev_start(&g_dev, &d));
+        CHECK(ydev_open(&g_dev, &d));
     }
     run_until(t_start + 20000000000LL);
     ydev_get_stats(&g_dev, &st);
@@ -525,7 +525,7 @@ static void test_clamp(void) {
     for (i = 0; i < g_nev; i++)
         if (g_ev[i].t > g_b.edges[60] + 30000000 && g_ev[i].t < g_b.edges[60] + 100000000) found++;
     CHECK_I(found, 0);   /* no event mapped into the future */
-    ydev_stop(&g_dev);
+    ydev_close(&g_dev);
     printf("  an edge stamped 60 ms ahead: clamped to its read time, counted: ok\n");
 }
 
@@ -540,7 +540,7 @@ static void test_silence(void) {
     g_b.mute_until = t_start + 13000000000LL;
     {
         ydev_desc d = desc_for(YBOX_LINE);
-        CHECK(ydev_start(&g_dev, &d));
+        CHECK(ydev_open(&g_dev, &d));
     }
     run_until(t_start + 12500000000LL);
     CHECK_I(ydev_state(&g_dev), YDEV_LOST);
@@ -548,7 +548,7 @@ static void test_silence(void) {
     CHECK_I(ydev_state(&g_dev), YDEV_RUNNING);
     ydev_get_stats(&g_dev, &st);
     CHECK_I(st.opens, 2);
-    ydev_stop(&g_dev);
+    ydev_close(&g_dev);
     printf("  silence: lost after 2 s, running again: ok\n");
 }
 
@@ -561,16 +561,19 @@ static void test_wrong_device(void) {
     g_b.no_identity = true;
     {
         ydev_desc d = desc_for(YBOX_LINE);
-        CHECK(ydev_start(&g_dev, &d));
+        CHECK(ydev_open(&g_dev, &d));
     }
-    CHECK_I(ydev_poll(&g_dev, 20), YDEV_FAILED);
+    CHECK_I(ydev_poll(&g_dev, YRT_MS(20)), YDEV_FAILED);
     CHECK(g_now - t_start >= 1500000000LL && g_now - t_start < 2000000000LL);
     run_until(g_now + 5000000000LL);
     ydev_get_stats(&g_dev, &st);
     CHECK_I(st.state, YDEV_FAILED);
     CHECK_I(g_b.opens, 1);
     CHECK(strstr(ydev_error(&g_dev), "did not answer") != NULL);
-    ydev_stop(&g_dev);
+    /* a wait on a FAILED instance ends at once and keeps the reason */
+    CHECK_I(ydev_wait_running(&g_dev, YRT_S(1)), YDEV_ERR_STATE);
+    CHECK(strstr(ydev_error(&g_dev), "did not answer") != NULL);
+    ydev_close(&g_dev);
     printf("  wrong device: failed after 1.5 s, not retried: ok\n");
 }
 
@@ -590,10 +593,12 @@ static void test_thread(void) {
         d.manual = false;
         d.now = NULL;          /* the reader thread's own clock */
         d.no_elevate = true;   /* a test thread need not be elevated */
-        CHECK(ydev_start(&g_dev, &d));
+        CHECK(ydev_open(&g_dev, &d));
     }
+    /* the reader thread opens and identifies; the wait polls ydev_state() */
+    CHECK_I(ydev_wait_running(&g_dev, YRT_S(3)), YDEV_RUNNING);
     (void)yrt_sleep_ns(1200000000);
-    ydev_stop(&g_dev);         /* joins: g_ev is ours again */
+    ydev_close(&g_dev);         /* joins: g_ev is ours again */
     ydev_get_stats(&g_dev, &st);
     printf("  thread: %d events in 1.2 s, %llu probes, state %s after stop\n", g_nev,
            (unsigned long long)st.probes, ydev_state_name(st.state));
@@ -629,25 +634,90 @@ static void test_keys(void) {
 static void test_desc(void) {
     ydev_desc d = desc_for(YBOX_LINE);
     ydev_desc e;
-    e = d; e.role = NULL;      CHECK(!ydev_start(&g_dev, &e) && strstr(ydev_error(&g_dev), "role"));
-    e = d; e.family = 9;       CHECK(!ydev_start(&g_dev, &e) && strstr(ydev_error(&g_dev), "family"));
-    e = d; e.key = "";         CHECK(!ydev_start(&g_dev, &e) && strstr(ydev_error(&g_dev), "key"));
-    e = d; e.device = 0;       CHECK(!ydev_start(&g_dev, &e) && strstr(ydev_error(&g_dev), "device"));
-    e = d; e.kind = 16;        CHECK(!ydev_start(&g_dev, &e) && strstr(ydev_error(&g_dev), "kind"));
-    e = d; e.transport.read = NULL; CHECK(!ydev_start(&g_dev, &e) && strstr(ydev_error(&g_dev), "transport"));
+    e = d; e.role = NULL;      CHECK(!ydev_open(&g_dev, &e) && strstr(ydev_error(&g_dev), "role"));
+    e = d; e.family = 9;       CHECK(!ydev_open(&g_dev, &e) && strstr(ydev_error(&g_dev), "family"));
+    e = d; e.key = "";         CHECK(!ydev_open(&g_dev, &e) && strstr(ydev_error(&g_dev), "key"));
+    e = d; e.device = 0;       CHECK(!ydev_open(&g_dev, &e) && strstr(ydev_error(&g_dev), "device"));
+    e = d; e.kind = 16;        CHECK(!ydev_open(&g_dev, &e) && strstr(ydev_error(&g_dev), "kind"));
+    e = d; e.transport.read = NULL; CHECK(!ydev_open(&g_dev, &e) && strstr(ydev_error(&g_dev), "transport"));
     e = d; memset(&e.transport, 0, sizeof e.transport); e.key = "usb:1";
-    CHECK(!ydev_start(&g_dev, &e) && strstr(ydev_error(&g_dev), "serial:"));
-    ydev_stop(&g_dev);         /* a stop after a failed start is harmless */
+    CHECK(!ydev_open(&g_dev, &e) && strstr(ydev_error(&g_dev), "serial:"));
+    {
+        /* key and role are copied into the handle: limits (v0.3.0) */
+        char longkey[YDEV_KEY_MAX + 1], longrole[YDEV_ROLE_MAX + 1];
+        memset(longkey, 'k', sizeof longkey);
+        memcpy(longkey, "serial:", 7);
+        longkey[YDEV_KEY_MAX] = '\0';          /* 160 characters: one too many */
+        memset(longrole, 'r', sizeof longrole);
+        longrole[YDEV_ROLE_MAX] = '\0';        /* 32 characters: one too many */
+        e = d; e.key = longkey;  CHECK(!ydev_open(&g_dev, &e) && strstr(ydev_error(&g_dev), "YDEV_KEY_MAX"));
+        e = d; e.role = longrole; CHECK(!ydev_open(&g_dev, &e) && strstr(ydev_error(&g_dev), "YDEV_ROLE_MAX"));
+        longkey[YDEV_KEY_MAX - 1] = '\0';      /* 159: fits */
+        longrole[YDEV_ROLE_MAX - 1] = '\0';    /* 31: fits */
+        e = d; e.key = longkey; e.role = longrole;
+        CHECK(ydev_open(&g_dev, &e));
+        CHECK(g_dev.d.key != longkey && strcmp(g_dev.d.key, longkey) == 0);
+        CHECK(g_dev.d.role != longrole && strcmp(g_dev.d.role, longrole) == 0);
+        ydev_close(&g_dev);
+    }
+    ydev_close(&g_dev);         /* a close after a failed open is harmless */
     {
         yin_source s;
         board_init(YBOX_LINE, 0.0, 125000.0, 50000.0);
-        CHECK(ydev_start(&g_dev, &d));
+        CHECK(ydev_open(&g_dev, &d));
         s = ydev_source(&g_dev);
         CHECK(s.kind == YIN_KIND_SYNC && s.device == 3 && s.tier == YIN_TIER_UNKNOWN && s.note != NULL);
-        ydev_stop(&g_dev);
-        ydev_stop(&g_dev);     /* twice */
+        ydev_close(&g_dev);
+        ydev_close(&g_dev);     /* twice */
     }
     printf("  desc checks and the source entry: ok\n");
+}
+
+/* ydev_open() returns while OPENING; ydev_wait_running() waits for
+ * RUNNING (v0.3.0). The v0.2 USAGE pulsed at once and lost that trigger. */
+static void test_wait_running(void) {
+    char key[64];
+    ring_reset();
+    board_init(YBOX_LINE, 0.0, 125000.0, 50000.0);
+    {
+        ydev_desc d = desc_for(YBOX_LINE);
+        snprintf(key, sizeof key, "%s", "serial:16C0:0483::");
+        d.key = key;
+        CHECK(ydev_open(&g_dev, &d));
+    }
+    key[0] = '\0';              /* the caller's buffer is gone: the handle has a copy */
+    CHECK_I(ydev_state(&g_dev), YDEV_OPENING);
+    /* the old USAGE: a pulse right after the open is refused */
+    CHECK_I(ydev_out_pulse(&g_dev, 1, YRT_MS(2)), YDEV_ERR_STATE);
+    CHECK_I(ydev_wait_running(&g_dev, YRT_S(3)), YDEV_RUNNING);
+    CHECK_I(ydev_out_pulse(&g_dev, 1, YRT_MS(2)), YDEV_OK);
+    CHECK_I(ydev_wait_running(&g_dev, 0), YDEV_RUNNING);   /* already: look once */
+    /* unplugged: LOST, and found again by the copied key */
+    g_b.gone_from = g_now;
+    g_b.gone_until = g_now + 1500000000LL;
+    run_until(g_now + 500000000LL);
+    CHECK_I(ydev_state(&g_dev), YDEV_LOST);
+    run_until(g_now + 2500000000LL);   /* the caller's clock passes the gap */
+    CHECK_I(ydev_wait_running(&g_dev, 0), YDEV_RUNNING);
+    CHECK_I(g_b.opens, 2);
+    ydev_close(&g_dev);
+    /* closed: the wait ends at once with a message */
+    CHECK_I(ydev_wait_running(&g_dev, YRT_S(1)), YDEV_ERR_STATE);
+    CHECK(strstr(ydev_error(&g_dev), "not open") != NULL);
+    /* no device at the key: the virtual clock stands still while the open
+     * fails, so the wait gives up instead of spinning */
+    board_init(YBOX_LINE, 0.0, 125000.0, 50000.0);
+    g_b.gone_from = 0;
+    {
+        ydev_desc d = desc_for(YBOX_LINE);
+        CHECK(ydev_open(&g_dev, &d));
+    }
+    CHECK_I(ydev_wait_running(&g_dev, YRT_S(1)), YDEV_ERR_TIMEOUT);
+    CHECK(strstr(ydev_error(&g_dev), "did not run in time") != NULL);
+    ydev_close(&g_dev);
+    CHECK(strcmp(ydev_strerror(YDEV_ERR_TIMEOUT), "the device did not run in time") == 0);
+    CHECK(strcmp(ydev_strerror(0), "ok") == 0);
+    printf("  wait for RUNNING, the copied key, a refused early pulse: ok\n");
 }
 
 /* --- outputs ---------------------------------------------------------------------- */
@@ -678,10 +748,10 @@ static void* o_open(void* user, const char* key, char* found, size_t cap) {
     return o;
 }
 
-static int o_read(void* conn, uint8_t* buf, int cap, int timeout_ms) {
+static int o_read(void* conn, uint8_t* buf, int cap, int64_t timeout_ns) {
     (void)conn; (void)buf; (void)cap;
     if (g_real) (void)yrt_sleep_ns(1000000);
-    else g_now += (int64_t)timeout_ms * 1000000;
+    else g_now += timeout_ns;
     return 0;
 }
 
@@ -736,7 +806,7 @@ static ydev_device g_out;
 static void orun_until(int64_t t) {
     while (g_now < t) {
         int64_t before = g_now;
-        (void)ydev_poll(&g_out, 1);
+        (void)ydev_poll(&g_out, YRT_MS(1));
         if (g_now == before) g_now += 1000000;
     }
 }
@@ -755,8 +825,8 @@ static bool obytes_are(const uint8_t* want, int n) {
 static void ostart(const ydev_desc* d) {
     memset(&g_o, 0, sizeof g_o);
     ring_reset();
-    CHECK(ydev_start(&g_out, d));
-    CHECK_I(ydev_poll(&g_out, 1), YDEV_RUNNING);
+    CHECK(ydev_open(&g_out, d));
+    CHECK_I(ydev_poll(&g_out, YRT_MS(1)), YDEV_RUNNING);
 }
 
 /* The OUT records in the ring, in order. */
@@ -796,7 +866,7 @@ static void test_out_bytes(void) {
         orun_until(g_now + 5000000);
         CHECK_I(ydev_out_pulse(&g_out, 1, 0), YDEV_ERR_ARG);     /* no width: no pulse */
         CHECK_I(ydev_out_set(&g_out, 256), YDEV_ERR_ARG);
-        ydev_stop(&g_out);
+        ydev_close(&g_out);
         CHECK(obytes_are(want, (int)sizeof want));
     }
     /* BioSemi: every code is the box's 8 ms pulse; no 0 at the open or the
@@ -810,10 +880,10 @@ static void test_out_bytes(void) {
         CHECK_I(ydev_out_pulse(&g_out, 5, 0), YDEV_OK);
         CHECK_I(ydev_out_pulse(&g_out, 5, 8500000), YDEV_OK);
         orun_until(g_now + 20000000);
-        ydev_stop(&g_out);
+        ydev_close(&g_out);
         CHECK(obytes_are(want, (int)sizeof want));
         d.pulse_ns = 2000000;
-        CHECK(!ydev_start(&g_out, &d) && strstr(ydev_error(&g_out), "8 ms"));
+        CHECK(!ydev_open(&g_out, &d) && strstr(ydev_error(&g_out), "8 ms"));
     }
     /* MMBT-S at switch P is BioSemi's case; at switch S a byte holds */
     {
@@ -823,13 +893,13 @@ static void test_out_bytes(void) {
         ostart(&d);
         CHECK_I(ydev_out_pulse(&g_out, 7, 2000000), YDEV_ERR_ARG);
         CHECK_I(ydev_out_pulse(&g_out, 7, 8000000), YDEV_OK);
-        ydev_stop(&g_out);
+        ydev_close(&g_out);
         CHECK(obytes_are(want_p, 1));
         d.latched = true;
         ostart(&d);
         CHECK_I(ydev_out_pulse(&g_out, 7, 2000000), YDEV_OK);
         orun_until(g_now + 4000000);
-        ydev_stop(&g_out);
+        ydev_close(&g_out);
         CHECK(obytes_are(want_s, 3));
     }
     /* The parallel port's family on a transport without read */
@@ -839,10 +909,10 @@ static void test_out_bytes(void) {
         ostart(&d);
         CHECK_I(ydev_out_pulse(&g_out, 0x81, 1000000), YDEV_OK);
         orun_until(g_now + 2000000);
-        ydev_stop(&g_out);
+        ydev_close(&g_out);
         CHECK(obytes_are(want, 3));
         memset(&d.transport, 0, sizeof d.transport);
-        CHECK(!ydev_start(&g_out, &d) && strstr(ydev_error(&g_out), "ydev_parallel_transport"));
+        CHECK(!ydev_open(&g_out, &d) && strstr(ydev_error(&g_out), "ydev_parallel_transport"));
     }
     /* DTR and RTS: both low at the open; only the lines that change */
     {
@@ -852,7 +922,7 @@ static void test_out_bytes(void) {
         CHECK_I(ydev_out_pulse(&g_out, 2, 1000000), YDEV_OK);
         orun_until(g_now + 2000000);
         CHECK_I(ydev_out_set(&g_out, 4), YDEV_ERR_ARG);
-        ydev_stop(&g_out);
+        ydev_close(&g_out);
         CHECK_I(g_o.nl, 4);
         CHECK(g_o.lcode[0] == 0 && g_o.lchanged[0] == 3);
         CHECK(g_o.lcode[1] == 1 && g_o.lchanged[1] == 1);
@@ -878,7 +948,7 @@ static void test_out_bytes(void) {
         CHECK_I(ydev_out_pulse(&g_out, 2, 5000000), YDEV_OK);
         CHECK_I(ydev_out_set(&g_out, 0), YDEV_OK);
         CHECK_I(ydev_out_set(&g_out, 0x10000), YDEV_ERR_ARG);
-        ydev_stop(&g_out);
+        ydev_close(&g_out);
         CHECK(obytes_are(want, (int)sizeof want));
         CHECK_I(g_o.nw, 5);
     }
@@ -889,7 +959,7 @@ static void test_out_bytes(void) {
         ostart(&d);
         CHECK_I(ydev_out_set(&g_out, 5), YDEV_OK);
         CHECK_I(ydev_out_pulse(&g_out, 1, 2000000), YDEV_OK);
-        ydev_stop(&g_out);     /* the board ends p at 0: nothing held at the stop */
+        ydev_close(&g_out);     /* the board ends p at 0: nothing held at the stop */
         CHECK(obytes_are((const uint8_t*)want, (int)sizeof want - 1));
     }
     /* No outputs: a photodiode */
@@ -897,7 +967,7 @@ static void test_out_bytes(void) {
         d = odesc(YBOX_PHOTO);
         ostart(&d);
         CHECK_I(ydev_out_set(&g_out, 1), YDEV_ERR_FAMILY);
-        ydev_stop(&g_out);
+        ydev_close(&g_out);
     }
     printf("  output bytes: TriggerBox, BioSemi, MMBT-S (P and S), parallel, DTR and RTS, XID, line: ok\n");
 }
@@ -981,15 +1051,15 @@ static void test_out_records(void) {
     }
     /* a pending edge at the stop: written at once, flagged */
     CHECK_I(ydev_out_pulse(&g_out, 8, 50000000), YDEV_OK);
-    ydev_stop(&g_out);
+    ydev_close(&g_out);
     odrain();
     CHECK(g_nout >= 2 && g_outrec[1].u.u16[18] == (YDEV_OUT_TRAILING | YDEV_OUT_FLUSHED));
     /* not running: refused and recorded */
     d.key = "serial:0403:6001:NOPE:";
     memset(&g_o, 0, sizeof g_o);
     ring_reset();
-    CHECK(ydev_start(&g_out, &d));
-    CHECK_I(ydev_poll(&g_out, 1), YDEV_OPENING);
+    CHECK(ydev_open(&g_out, &d));
+    CHECK_I(ydev_poll(&g_out, YRT_MS(1)), YDEV_OPENING);
     CHECK_I(ydev_out_pulse(&g_out, 1, 1000000), YDEV_ERR_STATE);
     odrain();
     CHECK(g_nout == 1 && (g_outrec[0].u.u16[18] & YDEV_OUT_FAILED));
@@ -999,7 +1069,7 @@ static void test_out_records(void) {
         ydev_get_stats(&g_out, &st);
         CHECK(st.outs == 1 && st.out_errors == 1);
     }
-    ydev_stop(&g_out);
+    ydev_close(&g_out);
     CHECK_I(ydev_out_set(&g_out, 1), YDEV_ERR_STATE);   /* after the stop */
     printf("  output records: pulse and trailing edge, replaced, canceled, failed, mark, trigger channel: ok\n");
 }
@@ -1014,7 +1084,7 @@ static void test_out_report(void) {
     board_init(YBOX_LINE, 15.0, 125000.0, 50000.0);
     {
         ydev_desc d = desc_for(YBOX_LINE);
-        CHECK(ydev_start(&g_dev, &d));
+        CHECK(ydev_open(&g_dev, &d));
     }
     run_until(t_start + 10000000000LL);
     g_b.nout = 0;
@@ -1034,7 +1104,7 @@ static void test_out_report(void) {
         n++;
     }
     CHECK_I(n, 20);
-    ydev_stop(&g_dev);
+    ydev_close(&g_dev);
     printf("  line O reports: 20 of 20, mapped within 100 us of the board's change: ok\n");
 }
 
@@ -1049,34 +1119,34 @@ static void test_roles(void) {
     d.device = 0;
     d.roles = &roles;
     d.role = "trig";
-    CHECK(ydev_start(&a, &d));
+    CHECK(ydev_open(&a, &d));
     e = d;
     e.role = "aux";
-    CHECK(ydev_start(&b, &e));
+    CHECK(ydev_open(&b, &e));
     CHECK(a.d.device == 1 && b.d.device == 2);
     CHECK(ydev_role_index(&roles, "aux") == 2 && ydev_role_index(&roles, "eye") == 0);
     CHECK(ydev_role_device(&roles, 1) == &a && ydev_role_device(&roles, 2) == &b && ydev_role_device(&roles, 3) == NULL);
     CHECK(strcmp(ydev_role_name(&roles, 2), "aux") == 0 && ydev_role_name(&roles, 0) == NULL);
-    (void)ydev_poll(&a, 1);
-    (void)ydev_poll(&b, 1);
+    (void)ydev_poll(&a, YRT_MS(1));
+    (void)ydev_poll(&b, YRT_MS(1));
     CHECK_I(ydev_out_set(&b, 9), YDEV_OK);
     odrain();
     CHECK(g_nout >= 1 && g_outrec[g_nout - 1].aux == 2);
     /* a second running instance cannot take a role */
     {
         static ydev_device c;
-        CHECK(!ydev_start(&c, &e) && strstr(ydev_error(&c), "bound"));
+        CHECK(!ydev_open(&c, &e) && strstr(ydev_error(&c), "bound"));
     }
-    ydev_stop(&a);
+    ydev_close(&a);
     CHECK(ydev_role_device(&roles, 1) == NULL);
-    CHECK(ydev_start(&a, &d) && a.d.device == 1);        /* the same index again */
+    CHECK(ydev_open(&a, &d) && a.d.device == 1);        /* the same index again */
     e.device = 4;
     {
         static ydev_device c;
-        CHECK(!ydev_start(&c, &e) && strstr(ydev_error(&c), "leave it 0"));
+        CHECK(!ydev_open(&c, &e) && strstr(ydev_error(&c), "leave it 0"));
     }
-    ydev_stop(&a);
-    ydev_stop(&b);
+    ydev_close(&a);
+    ydev_close(&b);
     CHECK_I(roles.n, 2);
     printf("  roles: indexes 1 and 2, kept across a restart, one instance each: ok\n");
 }
@@ -1111,7 +1181,7 @@ static void test_out_timing(void) {
     d.no_elevate = false;
     memset(&g_o, 0, sizeof g_o);
     ring_reset();
-    CHECK(ydev_start(&g_out, &d));
+    CHECK(ydev_open(&g_out, &d));
     for (i = 0; i < 200 && ydev_state(&g_out) != YDEV_RUNNING; i++) (void)yrt_sleep_ns(1000000);
     CHECK_I(ydev_state(&g_out), YDEV_RUNNING);
     for (i = 0; i < N; i++) {
@@ -1125,7 +1195,7 @@ static void test_out_timing(void) {
         (void)yrt_sleep_ns(3000000 + (int64_t)(u01() * 4000000.0));
     }
     pol = yrt_policy_name(yrt_worker_policy(&g_out.worker));
-    ydev_stop(&g_out);
+    ydev_close(&g_out);
     g_real = false;
     /* writes: the open's 0, then each code and, unless the next pulse moved
      * it, its 0; the close's 0xFF */
@@ -1179,6 +1249,7 @@ int main(void) {
     test_clamp();
     test_silence();
     test_wrong_device();
+    test_wait_running();
     test_thread();
     test_out_bytes();
     test_out_records();

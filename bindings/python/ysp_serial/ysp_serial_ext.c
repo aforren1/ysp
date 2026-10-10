@@ -51,6 +51,15 @@ static PyObject* PsClosed;
 
 #define AS_PORT(self) (&((PortObject*)(self))->port)
 
+/* The module keeps its units (timeouts in ms, widths in us) and its
+ * TIMEOUT_INFINITE of 0xFFFFFFFF, so Python code and its tests do not change;
+ * the C API takes int64 ns and -1 for forever. */
+#define PS_TIMEOUT_INFINITE_MS 0xFFFFFFFFu
+#define PS_DEFAULT_WRITE_TIMEOUT_MS 1000u
+static int64_t ps_ms_to_ns(unsigned long long ms) {
+    return ms == PS_TIMEOUT_INFINITE_MS ? YSER_TIMEOUT_INFINITE : (int64_t)ms * 1000000;
+}
+
 /* Raise the exception matching a negative YSER_ERR_* code. `oserr` is the
  * per-role slot of the call that failed (rd_oserr, wr_oserr or misc_oserr);
  * it is read before any Python call, because another thread in the same role
@@ -91,7 +100,7 @@ static int Port_init(PyObject* self, PyObject* args, PyObject* kwds) {
     desc.parity = (yser_parity)parity;
     desc.stop_bits = (yser_stop_bits)stop_bits;
     desc.flow = (yser_flow)flow;
-    desc.write_timeout_ms = write_timeout_ms;
+    desc.write_timeout_ns = ps_ms_to_ns(write_timeout_ms);
     desc.exclusive = exclusive ? true : false;
     desc.low_latency = low_latency ? true : false;
     desc.dtr_low_on_open = dtr_low ? true : false;
@@ -159,7 +168,7 @@ static PyObject* Port_read(PyObject* self, PyObject* args, PyObject* kwds) {
     /* Release the GIL: yser_read blocks for up to timeout_ms, and interrupt()
      * has to reach it from another Python thread. */
     Py_BEGIN_ALLOW_THREADS
-    got = yser_read(AS_PORT(self), buf, n, timeout_ms,
+    got = yser_read(AS_PORT(self), buf, n, ps_ms_to_ns(timeout_ms),
                     all ? YSER_READ_ALL : YSER_READ_ANY);
     Py_END_ALLOW_THREADS
     if (got < 0) {
@@ -240,7 +249,7 @@ static PyObject* Port_pulse(PyObject* self, PyObject* args, PyObject* kwds) {
     int n;
     /* Release the GIL: yser_pulse holds the line for `usec`. */
     Py_BEGIN_ALLOW_THREADS
-    n = yser_pulse(AS_PORT(self), (uint8_t)on, (uint8_t)off, usec);
+    n = yser_pulse(AS_PORT(self), (uint8_t)on, (uint8_t)off, (int64_t)usec * 1000);
     Py_END_ALLOW_THREADS
     if (n < 0) return ps_fail(n, AS_PORT(self)->wr_oserr);
     return PyLong_FromLong(n);
@@ -258,7 +267,7 @@ static PyObject* Port_pulse_async(PyObject* self, PyObject* args, PyObject* kwds
     /* The call returns before the width elapses, but its onset write still
      * goes through the driver and can block up to write_timeout_ms. */
     Py_BEGIN_ALLOW_THREADS
-    n = yser_pulse_async(AS_PORT(self), (uint8_t)on, (uint8_t)off, usec);
+    n = yser_pulse_async(AS_PORT(self), (uint8_t)on, (uint8_t)off, (int64_t)usec * 1000);
     Py_END_ALLOW_THREADS
     if (n < 0) return ps_fail(n, AS_PORT(self)->wr_oserr);
     return PyLong_FromLong(n);
@@ -271,7 +280,7 @@ static PyObject* Port_send_break(PyObject* self, PyObject* args, PyObject* kwds)
     int rc;
     /* Release the GIL: the break is held for `ms` on the calling thread. */
     Py_BEGIN_ALLOW_THREADS
-    rc = yser_send_break(AS_PORT(self), ms);
+    rc = yser_send_break(AS_PORT(self), (int64_t)ms * 1000000);
     Py_END_ALLOW_THREADS
     if (rc < 0) return ps_fail(rc, AS_PORT(self)->wr_oserr);
     Py_RETURN_NONE;
@@ -371,7 +380,9 @@ static PyObject* Port_get_flow(PyObject* self, void* Py_UNUSED(closure)) {
     return PyLong_FromLong((long)AS_PORT(self)->flow);
 }
 static PyObject* Port_get_write_timeout_ms(PyObject* self, void* Py_UNUSED(closure)) {
-    return PyLong_FromUnsignedLong(AS_PORT(self)->write_timeout_ms);
+    int64_t ns = AS_PORT(self)->write_timeout_ns;
+    return PyLong_FromUnsignedLong(ns == YSER_TIMEOUT_INFINITE ? PS_TIMEOUT_INFINITE_MS
+                                                               : (unsigned long)(ns / 1000000));
 }
 static PyObject* Port_get_low_latency(PyObject* self, void* Py_UNUSED(closure)) {
     return PyBool_FromLong(AS_PORT(self)->low_latency);
@@ -557,7 +568,7 @@ static PyObject* mod_find_ports(PyObject* Py_UNUSED(self), PyObject* args, PyObj
  * can bracket a write with the same time base instead of mixing in
  * time.monotonic(), which is a different clock on Windows. */
 static PyObject* mod_now_us(PyObject* Py_UNUSED(self), PyObject* Py_UNUSED(args)) {
-    return PyLong_FromUnsignedLongLong((unsigned long long)yser_now_us());
+    return PyLong_FromUnsignedLongLong((unsigned long long)yrt_now_ns() / 1000u);
 }
 
 static PyMethodDef module_methods[] = {
@@ -671,9 +682,9 @@ PyMODINIT_FUNC PyInit_serial(void) {
     PyModule_AddIntConstant(m, "ASYNC_TIME_CRITICAL",   YRT_POLICY_TIME_CRITICAL);
     PyModule_AddIntConstant(m, "ASYNC_NORMAL",          YRT_POLICY_NORMAL);
     /* defaults */
-    if (ps_add_uint(m, "TIMEOUT_INFINITE", YSER_TIMEOUT_INFINITE) < 0 ||
+    if (ps_add_uint(m, "TIMEOUT_INFINITE", PS_TIMEOUT_INFINITE_MS) < 0 ||
         ps_add_uint(m, "DEFAULT_BAUD", YSER_DEFAULT_BAUD) < 0 ||
-        ps_add_uint(m, "DEFAULT_WRITE_TIMEOUT_MS", YSER_DEFAULT_WRITE_TIMEOUT_MS) < 0 ||
+        ps_add_uint(m, "DEFAULT_WRITE_TIMEOUT_MS", PS_DEFAULT_WRITE_TIMEOUT_MS) < 0 ||
         ps_add_uint(m, "DEFAULT_RT_RUNTIME_NS", YSER_DEFAULT_RT_RUNTIME_NS) < 0 ||
         ps_add_uint(m, "DEFAULT_RT_DEADLINE_NS", YSER_DEFAULT_RT_DEADLINE_NS) < 0 ||
         ps_add_uint(m, "DEFAULT_RT_PERIOD_NS", YSER_DEFAULT_RT_PERIOD_NS) < 0) {

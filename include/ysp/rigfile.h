@@ -1,11 +1,11 @@
-/* ysp/rigfile.h - v0.2.0 - public domain single-header rig profile
+/* ysp/rigfile.h - v0.3.0 - public domain single-header rig profile
  *
  *   The file on a rig that says which device plays each role and what the
  *   rig's loopbacks measured, kept outside every pack (docs/devices_spec.md
  *   11.2, decided 2026-10-09): "ysp-rig 1", JSON in one canonical form,
  *   in the user's config folder. Load it with errors that name the field,
  *   check every loopback file it names by SHA-256, give a role's desc for
- *   ysp/device.h and start the instance, change a binding, store a
+ *   ysp/device.h and open the instance, change a binding, store a
  *   loopback result, write it back canonically, and give its hash for the
  *   data file header.
  *
@@ -16,21 +16,6 @@
  *   floor: it builds as C99, C11 and C++17.
  *
  *   ---------------------------------------------------------------------
- *   CHANGELOG
- *   ---------------------------------------------------------------------
- *   v0.2.0 - Family "lsl": a role bound to a Lab Streaming Layer stream
- *          (ysp/net.h), keyed "lsl:<name>:<type>:<source_id>:<hostname>",
- *          with no serial options and no pulse_s; YRIG_FAMILY_LSL;
- *          yrig_desc() and yrig_start() refuse it, naming ysp/net.h;
- *          yrig_source_role(), the tier rule by role name, for instances
- *          that are not ysp/device.h's. The file format is unchanged.
- *   v0.1.0 - first version: the "ysp-rig 1" format, load, check, write,
- *          hash, bind, store a loopback result.
- *
- *   STATUS: v0.2.0, 2026-10-09. docs/device.md ("The rig profile") has the
- *   how-to, the reference and the test counts.
- *
- *   ---------------------------------------------------------------------
  *   USAGE
  *   ---------------------------------------------------------------------
  *       #define YSP_RIGFILE_IMPLEMENTATION
@@ -39,14 +24,18 @@
  *       static yrig_profile prof;                      // about 50 KB
  *       static ydev_device resp;
  *       char err[256], hash[65];
+ *       int i;
  *       if (yrig_load(&prof, NULL, err, sizeof err) != YRIG_OK) die(err);
- *       for (i = 0; i < prof.n_notes; i++) log(prof.notes[i]);   // checks
- *       yrig_hash(&prof, hash);                        // for the data file
+ *       for (i = 0; i < prof.n_notes; i++) log_line(prof.notes[i]);   // checks
+ *       if (yrig_hash(&prof, hash) != YRIG_OK) die("hash"); // for the data file
  *       ydev_desc base = { 0 };                        // sink, ring, roles
  *       base.sink = to_bridge;
  *       base.roles = &roles;
- *       if (!yrig_start(&resp, &prof, "resp", &base, err, sizeof err)) die(err);
+ *       if (!yrig_open_device(&resp, &prof, "resp", &base)) die(ydev_error(&resp));
+ *       if (ydev_wait_running(&resp, YRT_S(3)) < 0) die(ydev_error(&resp));
  *       yin_source src = yrig_source(&prof, &resp);    // tier 1 only when checked
+ *       ...
+ *       ydev_close(&resp);
  *
  *   ---------------------------------------------------------------------
  *   THE FILE
@@ -132,16 +121,44 @@
  *   BINDING
  *   ---------------------------------------------------------------------
  *   yrig_desc() fills role, family, key, baud, latched and (when the rig
- *   fixes it) pulse_ns of a ydev_desc; yrig_start() copies a base desc
- *   (sink, ring, roles, transport, ...) and starts the instance with
- *   them. desc.role and desc.key point into the profile, so the profile
- *   must outlive the instance. Both refuse an lsl role (YRIG_ERR_FORMAT,
- *   the message names ysp/net.h): give its key to a ysp/net.h inlet or
- *   outlet instead (yrig_find(p, role)->key). yrig_bind() sets a role's
+ *   fixes it) pulse_ns of a ydev_desc; desc.role and desc.key point into
+ *   the profile. yrig_open_device() copies a base desc (sink, ring, roles,
+ *   transport, ...), fills it the same way and opens the instance with
+ *   ydev_open(), which copies the role and the key: the profile need not
+ *   outlive the instance. It returns false with the message in
+ *   ydev_error(dev), also when the profile refuses the role before the
+ *   device opens; ydev_close(dev) is safe after it either way. Both
+ *   refuse an lsl role (YRIG_ERR_FORMAT, the message names ysp/net.h):
+ *   give its key to a ysp/net.h inlet or outlet instead (yrig_find(p,
+ *   role)->key). yrig_init() is an init (no file, no close); yrig_load*()
+ *   and yrig_save*() write their message into the caller's err buffer,
+ *   which may be NULL. yrig_bind() sets a role's
  *   family and key
  *   (a binder by activity, the designer's Run view) and clears its
  *   latency and bounds, which belonged to the old device; yrig_save()
  *   writes it.
+ *
+ *   ---------------------------------------------------------------------
+ *   CHANGELOG
+ *   ---------------------------------------------------------------------
+ *   v0.3.0 - The ysp conventions (README.md, Conventions); breaks the API.
+ *          yrig_start(dev, p, role, base, err, cap) is
+ *          bool yrig_open_device(dev, p, role, base): it opens a device,
+ *          so its message is the device's, in ydev_error(dev), also for
+ *          a role the profile refuses before the open. On ysp/device.h
+ *          v0.3.0, which copies the key and the role: the profile need
+ *          not outlive the instance any more. Nothing else changed.
+ *   v0.2.0 - Family "lsl": a role bound to a Lab Streaming Layer stream
+ *          (ysp/net.h), keyed "lsl:<name>:<type>:<source_id>:<hostname>",
+ *          with no serial options and no pulse_s; YRIG_FAMILY_LSL;
+ *          yrig_desc() and yrig_start() refuse it, naming ysp/net.h;
+ *          yrig_source_role(), the tier rule by role name, for instances
+ *          that are not ysp/device.h's. The file format is unchanged.
+ *   v0.1.0 - first version: the "ysp-rig 1" format, load, check, write,
+ *          hash, bind, store a loopback result.
+ *
+ *   STATUS: v0.2.0, 2026-10-09. docs/device.md ("The rig profile") has the
+ *   how-to, the reference and the test counts.
  *
  *   ---------------------------------------------------------------------
  *   LICENSE: public domain / MIT-0, see end of file.
@@ -150,9 +167,9 @@
 #define YSP_RIGFILE_H_INCLUDED
 
 #define YRIG_VERSION_MAJOR 0
-#define YRIG_VERSION_MINOR 2
+#define YRIG_VERSION_MINOR 3
 #define YRIG_VERSION_PATCH 0
-#define YRIG_VERSION_STRING "0.2.0"
+#define YRIG_VERSION_STRING "0.3.0"
 
 #include "ysp/device.h"
 #include "ysp/json.h"
@@ -287,9 +304,13 @@ YRIG_API int  yrig_read_latency(const char* text, size_t n, yrig_loopback* out, 
 YRIG_API void yrig_sha256(const void* data, size_t n, uint8_t out[32]);
 
 /* --- binding (ysp/device.h) ---------------------------------------------------- */
+/* Fills role, family, key, baud, latched and pulse_ns of d (BINDING); the
+ * strings point into p. */
 YRIG_API int  yrig_desc(const yrig_profile* p, const char* role, ydev_desc* d, char* err, size_t cap);
-YRIG_API bool yrig_start(ydev_device* dev, const yrig_profile* p, const char* role, const ydev_desc* base,
-                         char* err, size_t cap);
+/* base (NULL = zeroed) filled by yrig_desc(), then ydev_open(). false with
+ * the message in ydev_error(dev): the profile's ("roles.trig: no device is
+ * bound") or the device layer's, after "roles.<role>: ". */
+YRIG_API bool yrig_open_device(ydev_device* dev, const yrig_profile* p, const char* role, const ydev_desc* base);
 YRIG_API yin_source yrig_source(const yrig_profile* p, const ydev_device* dev);
 /* The same rule by role name: src with tier 1 and the role's bounds when
  * they checked and the family maps a device clock, else src with tier
@@ -1331,14 +1352,18 @@ YRIG_API int yrig_desc(const yrig_profile* p, const char* role, ydev_desc* d, ch
     return YRIG_OK;
 }
 
-YRIG_API bool yrig_start(ydev_device* dev, const yrig_profile* p, const char* role, const ydev_desc* base, char* err, size_t cap) {
+YRIG_API bool yrig_open_device(ydev_device* dev, const yrig_profile* p, const char* role, const ydev_desc* base) {
     ydev_desc d;
-    if (!dev) { yrig__err(err, cap, YRIG_ERR_ARG, "yrig_start: NULL"); return false; }
+    char msg[sizeof dev->err];
+    if (!dev) return false;
     if (base) d = *base;
     else memset(&d, 0, sizeof d);
-    if (yrig_desc(p, role, &d, err, cap) != YRIG_OK) return false;
-    if (!ydev_start(dev, &d)) {
-        yrig__err(err, cap, YRIG_ERR_ARG, "roles.%s: %s", role, ydev_error(dev));
+    /* a refusal before the open goes where an open's message goes, so the
+     * caller reads one place */
+    if (yrig_desc(p, role, &d, dev->err, sizeof dev->err) != YRIG_OK) return false;
+    if (!ydev_open(dev, &d)) {
+        snprintf(msg, sizeof msg, "%s", ydev_error(dev));
+        yrig__err(dev->err, sizeof dev->err, YRIG_ERR_ARG, "roles.%.31s: %s", role, msg);
         return false;
     }
     return true;

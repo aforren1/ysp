@@ -241,7 +241,7 @@ Ctrl-C are all dispatched on that same thread, so **nothing can interrupt a
 blocked `read`**: a `timer` whose callback calls `interrupt` never runs while
 the read is in flight.
 
-Never pass `TIMEOUT_INFINITE` (the header's `YSER_TIMEOUT_INFINITE`,
+Never pass `TIMEOUT_INFINITE` (forever,
 `4294967295`) from MATLAB or Octave. Poll in short slices instead, so the
 interpreter gets the thread back between them:
 

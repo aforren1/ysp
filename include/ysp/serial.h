@@ -1,73 +1,9 @@
-/* ysp/serial.h - v0.4 - public domain single-header serial-port library
+/* ysp/serial.h - v0.5.0 - public domain single-header serial-port library
  *
  *   REQUIRES ysp/rt.h, its sibling in this collection, on the include path.
  *   This header includes it for the clock, the waits, the scheduling ladder
  *   and the deadline worker that writes the trailing edge of an async pulse.
  *   Copy TWO files, not one.
- *
- *   STATUS: IMPLEMENTED on Windows (Win32 COM API, overlapped I/O) and POSIX
- *   (Linux and macOS termios). Tested against a virtual port pair on Linux,
- *   including one reader thread plus one writer thread on a single handle
- *   under ThreadSanitizer. Windows and macOS compile clean in CI but have
- *   never run on a device: on Windows the open-time validation and the
- *   enumeration entry point run, but no byte has moved through the backend,
- *   and on macOS (IOSSIOSPEED, /dev/cu.* enumeration, the select() waits)
- *   nothing but the compiler has seen the code. No timing number in this
- *   header has been measured on a rig yet. The timing code is ysp/rt.h's, so
- *   its STATUS block applies too: the real-time rungs of the worker's ladder
- *   have never been granted on any machine here.
- *
- *   v0.4, the current version, deletes this header's private timing code and
- *   depends on ysp/rt.h for it:
- *     - The monotonic clock, the pulse-width wait, the break sleep, the
- *       SCHED_DEADLINE / SCHED_FIFO ladder, the sched_setattr declarations and
- *       the async-pulse worker thread are all gone from here. yser_now_us() is
- *       yrt_now_us(), so "your timestamps and the library's share one base"
- *       is true by construction instead of by two copies of the same code
- *       agreeing. There were three such copies in this repository; the Windows
- *       spin bug that only this one had is the reason there is now one.
- *     - yser_sched_deadline is a typedef of yrt_sched_deadline and
- *       yser_async_policy of yrt_policy. The YSER_ASYNC_*, YSER_DEFAULT_RT_*
- *       and type names all still work, but the NUMERIC VALUES of the policy
- *       enum changed, because yrt_policy has a macOS rung between DEADLINE
- *       and FIFO: recompile anything that stored those integers, do not just
- *       relink it. On macOS async_policy can now report
- *       YRT_POLICY_TIME_CONSTRAINT, a rung this header did not have.
- *     - Blocking yser_pulse() no longer busy-spins the whole width on Windows.
- *       It sleeps to the deadline and spins only the last
- *       YRT_DEFAULT_SPIN_NS, as the async worker always did.
- *     - The async worker is one yrt_worker plus a small writer mutex that
- *       stays here, because the mutex is about the byte stream, not about the
- *       deadline. THREADING says what each one owns.
- *
- *   v0.3 was a correctness pass over the two backends nobody has run yet,
- *   plus two documentation corrections:
- *     - Windows: a failed GetOverlappedResult on a write no longer reports a
- *       driver error as a short count (which a caller retries forever); an
- *       aborted read that was neither an interrupt nor a disconnect waits out
- *       the rest of its timeout instead of returning 0; a failed
- *       SetCommTimeouts maps through the disconnect test; the worker's
- *       sub-millisecond spin now yields to a replacement pulse and to quit.
- *     - macOS: the reader and the writer wait with select(), not poll(),
- *       because Apple's poll(2) still documents that it does not support
- *       devices. Linux keeps poll(). See POSIX WAITS.
- *     - Linux: the low_latency readback resolves the device name first, so a
- *       /dev/serial/by-id/... symlink no longer leaves low_latency false.
- *     - yser_close()'s flush of a pending trailing byte is bounded by 50 ms
- *       instead of by write_timeout_ms, so a wedged device cannot hold a
- *       close open for a second, or forever under YSER_TIMEOUT_INFINITE.
- *     - yser_open() refuses a handle that is still open instead of leaking
- *       its descriptor and its worker thread.
- *     - YSER_API is on the definitions too, so `static` works.
- *
- *   v0.2 changed five signatures from the v0.1 specification: yser_interrupt,
- *   yser_purge, yser_send_break, yser_set_dtr and yser_set_rts return int
- *   (0 or a YSER_ERR_* code), not bool, because they can be called from a
- *   thread that does not own the message buffer. See RETURN VALUES. It also
- *   added yser_pulse_async() and its worker thread; that worker has so far
- *   only been observed at YSER_ASYNC_NORMAL, because the test machine grants
- *   no CAP_SYS_NICE, so the real-time rungs of its ladder are unexercised.
- *   docs/serial.md holds the design rationale.
  *
  *   A small, dependency-free C library for byte I/O over serial ports:
  *   legacy RS-232, USB-CDC (Arduino, Teensy), and USB-serial bridges (FTDI,
@@ -114,27 +50,28 @@
  *       #include "ysp/serial.h"
  *
  *       yser_port sp = { 0 };                  // zeroed, or closed; required
- *       yser_desc desc = {                     // designated init: C99 or C++20
- *           .device = "COM3",                  // or "/dev/ttyUSB0"
- *           .baud   = 115200,                  // 0 = default (115200)
- *       };
+ *       yser_desc desc = { 0 };
+ *       desc.device = "COM3";                  // or "/dev/ttyUSB0"
+ *       desc.baud = 115200;                    // 0 = default (115200)
  *       if (!yser_open(&sp, &desc)) {
  *           fprintf(stderr, "open failed: %s\n", yser_error(&sp));
  *           return 1;
  *       }
- *       yser_write_byte(&sp, 0x55);            // raise a trigger
- *       yser_pulse(&sp, 0x55, 0x00, 2000);     // 0x55, hold 2 ms, then 0x00
- *       yser_pulse_async(&sp, 0x55, 0x00, 2000); // same, without blocking
+ *       int rc = yser_write_byte(&sp, 0x55);   // raise a trigger
+ *       if (rc < 0) fprintf(stderr, "write: %s\n", yser_strerror(rc));
+ *       yser_pulse(&sp, 0x55, 0x00, YRT_MS(2));        // 0x55, hold 2 ms, then 0x00
+ *       yser_pulse_async(&sp, 0x55, 0x00, YRT_MS(2));  // same, without blocking
  *
  *       uint8_t buf[64];
- *       int n = yser_read(&sp, buf, (int)sizeof buf, 100, YSER_READ_ANY);  // bytes within 100 ms
- *       int m = yser_read(&sp, buf, 6, 500, YSER_READ_ALL);           // a 6-byte frame within 500 ms
+ *       int n = yser_read(&sp, buf, (int)sizeof buf, YRT_MS(100), YSER_READ_ANY); // within 100 ms
+ *       int m = yser_read(&sp, buf, 6, YRT_MS(500), YSER_READ_ALL);   // a 6-byte frame within 500 ms
  *       if (n < 0) fprintf(stderr, "read: %s\n", yser_strerror(n));
  *       yser_close(&sp);
  *
  *   Find a box by USB id instead of hard-coding the port name:
  *
- *       yser_port_filter f = { .vid = 0x0403, .pid = 0x6001 };   // FTDI FT232R
+ *       yser_port_filter f = { 0 };
+ *       f.vid = 0x0403; f.pid = 0x6001;                          // FTDI FT232R
  *       yser_port_info info;
  *       if (yser_find_ports(&f, &info, 1) == 1)                  // exactly one match
  *           desc.device = info.name;
@@ -166,16 +103,19 @@
  *       YSER_ERR_ARG           bad argument
  *
  *   READ SEMANTICS
- *     yser_read(p, buf, cap, timeout_ms, flags)
+ *     yser_read(p, buf, cap, timeout_ns, flags)
  *       flags = YSER_READ_ANY (0): returns as soon as at least one byte is
  *       available, with everything buffered at that moment (up to `cap`).
- *       Returns 0 if nothing arrives within timeout_ms. timeout_ms = 0
+ *       Returns 0 if nothing arrives within timeout_ns. timeout_ns = 0
  *       polls: it returns at once with whatever is buffered, possibly 0
- *       bytes. YSER_TIMEOUT_INFINITE blocks until data, interrupt or
- *       disconnect. This covers both "poll the response box once per frame"
+ *       bytes. YSER_TIMEOUT_INFINITE (-1) blocks until data, interrupt or
+ *       disconnect. Another negative timeout polls, so a timeout computed
+ *       as a deadline minus now does not block after the deadline. The OS
+ *       waits in whole milliseconds, so a timeout rounds up to the next
+ *       millisecond. This covers both "poll the response box once per frame"
  *       (timeout 0) and "wait for a button press" (timeout > 0).
  *       flags = YSER_READ_ALL: keeps reading until exactly `cap` bytes were
- *       read or timeout_ms elapsed in total; returns the count actually
+ *       read or timeout_ns elapsed in total; returns the count actually
  *       read. For framed protocols (a Cedrus XID key report is 6 bytes).
  *       A disconnect is an error (YSER_ERR_DISCONNECTED), never a 0, so a
  *       listener with a long timeout cannot spin on a dead port.
@@ -184,7 +124,7 @@
  *
  *   WRITE SEMANTICS
  *     yser_write(p, buf, len) blocks until every byte is accepted by the
- *     driver or desc.write_timeout_ms elapses; on timeout it returns the
+ *     driver or desc.write_timeout_ns elapses; on timeout it returns the
  *     count accepted (< len), never an error code. Accepted is not
  *     delivered: the bytes are then queued for the UART or the USB pipe.
  *
@@ -198,14 +138,14 @@
  *         default to 16 ms. Set desc.low_latency = true to request 1 ms; the
  *         LOW LATENCY section says what each platform can actually do.
  *     To timestamp a trigger, bracket the call:
- *         uint64_t t0 = yser_now_us();
+ *         int64_t t0 = yrt_now_ns();
  *         yser_write_byte(&sp, code);
- *         uint64_t t1 = yser_now_us();
+ *         int64_t t1 = yrt_now_ns();
  *     and record both. The physical edge lies after t0 and, on USB, after
  *     the next frame boundary following the driver's acceptance; t1 - t0 is
  *     the syscall cost (10 to 100 us). Neither is the onset; they bound it.
- *     yser_now_us() IS yrt_now_us(), not a second clock that agrees with
- *     it, so these timestamps, ysp/rt.h's deadlines and anything ysp/rt.h
+ *     yrt_now_ns() is the clock this header times its own deadlines with,
+ *     so these timestamps, ysp/rt.h's deadlines and anything ysp/rt.h
  *     reports are all differences of one counter.
  *     Measure the offset once with a scope and apply it.
  *     yser_pulse() widths below a few milliseconds are unreliable over USB.
@@ -265,7 +205,7 @@
  *     write that means "hold this". The price, which the parallel port does not
  *     pay because outb cannot block: if the worker's trailing write is stuck
  *     in the driver (a wedged device, a peer that stopped draining), a user
- *     write waits behind it for up to write_timeout_ms, and the other way
+ *     write waits behind it for up to write_timeout_ns, and the other way
  *     round. One byte stream, one writer at a time.
  *     yser_close() stops the worker before it closes anything and has it write
  *     any pending trailing byte immediately instead of waiting out the rest of
@@ -274,9 +214,9 @@
  *     callback reads). That one write happens with the writer mutex held, and
  *     yser_close() joins the worker thread behind it, so "at once" is about the
  *     deadline, not about the call returning: it is bounded by a fixed 50 ms
- *     and NOT by write_timeout_ms,
+ *     and NOT by write_timeout_ns,
  *     so a wedged device delays a close by at most that, whatever
- *     write_timeout_ms says and even at YSER_TIMEOUT_INFINITE. A close with no
+ *     write_timeout_ns says and even at YSER_TIMEOUT_INFINITE. A close with no
  *     pulse pending does not wait at all.
  *     yser_interrupt() is a reader-side wake and does not touch the worker.
  *     Nothing but yser_open and yser_close touches the message buffer, so the
@@ -402,10 +342,96 @@
  *       cl /O2 /Iinclude examples\serial\trigger.c
  *
  *   ---------------------------------------------------------------------
+ *   CHANGELOG
+ *   ---------------------------------------------------------------------
+ *   v0.5.0 - The ysp conventions (README.md, Conventions); breaks the API.
+ *          Every time is int64_t ns on the yrt_now_ns() clock:
+ *          yser_pulse() and yser_pulse_async() take width_ns,
+ *          yser_read() takes timeout_ns, yser_send_break() takes
+ *          duration_ns, and yser_desc.write_timeout_ms and
+ *          yser_port.write_timeout_ms are write_timeout_ns.
+ *          YSER_TIMEOUT_INFINITE is -1 and YSER_DEFAULT_WRITE_TIMEOUT_MS is
+ *          YSER_DEFAULT_WRITE_TIMEOUT_NS. yser_now_us() is gone: bracket a
+ *          write with yrt_now_ns(). A negative width or break duration is
+ *          YSER_ERR_ARG. YSER_VERSION_* macros. The OS waits stay in whole
+ *          milliseconds: a timeout rounds up to the next millisecond.
+ *
+ *   v0.4 deleted this header's private timing code and
+ *   depends on ysp/rt.h for it:
+ *     - The monotonic clock, the pulse-width wait, the break sleep, the
+ *       SCHED_DEADLINE / SCHED_FIFO ladder, the sched_setattr declarations and
+ *       the async-pulse worker thread are all gone from here. yser_now_us() is
+ *       yrt_now_us(), so "your timestamps and the library's share one base"
+ *       is true by construction instead of by two copies of the same code
+ *       agreeing. There were three such copies in this repository; the Windows
+ *       spin bug that only this one had is the reason there is now one.
+ *     - yser_sched_deadline is a typedef of yrt_sched_deadline and
+ *       yser_async_policy of yrt_policy. The YSER_ASYNC_*, YSER_DEFAULT_RT_*
+ *       and type names all still work, but the NUMERIC VALUES of the policy
+ *       enum changed, because yrt_policy has a macOS rung between DEADLINE
+ *       and FIFO: recompile anything that stored those integers, do not just
+ *       relink it. On macOS async_policy can now report
+ *       YRT_POLICY_TIME_CONSTRAINT, a rung this header did not have.
+ *     - Blocking yser_pulse() no longer busy-spins the whole width on Windows.
+ *       It sleeps to the deadline and spins only the last
+ *       YRT_DEFAULT_SPIN_NS, as the async worker always did.
+ *     - The async worker is one yrt_worker plus a small writer mutex that
+ *       stays here, because the mutex is about the byte stream, not about the
+ *       deadline. THREADING says what each one owns.
+ *
+ *   v0.3 was a correctness pass over the two backends nobody has run yet,
+ *   plus two documentation corrections:
+ *     - Windows: a failed GetOverlappedResult on a write no longer reports a
+ *       driver error as a short count (which a caller retries forever); an
+ *       aborted read that was neither an interrupt nor a disconnect waits out
+ *       the rest of its timeout instead of returning 0; a failed
+ *       SetCommTimeouts maps through the disconnect test; the worker's
+ *       sub-millisecond spin now yields to a replacement pulse and to quit.
+ *     - macOS: the reader and the writer wait with select(), not poll(),
+ *       because Apple's poll(2) still documents that it does not support
+ *       devices. Linux keeps poll(). See POSIX WAITS.
+ *     - Linux: the low_latency readback resolves the device name first, so a
+ *       /dev/serial/by-id/... symlink no longer leaves low_latency false.
+ *     - yser_close()'s flush of a pending trailing byte is bounded by 50 ms
+ *       instead of by write_timeout_ms, so a wedged device cannot hold a
+ *       close open for a second, or forever under YSER_TIMEOUT_INFINITE.
+ *     - yser_open() refuses a handle that is still open instead of leaking
+ *       its descriptor and its worker thread.
+ *     - YSER_API is on the definitions too, so `static` works.
+ *
+ *   v0.2 changed five signatures from the v0.1 specification: yser_interrupt,
+ *   yser_purge, yser_send_break, yser_set_dtr and yser_set_rts return int
+ *   (0 or a YSER_ERR_* code), not bool, because they can be called from a
+ *   thread that does not own the message buffer. See RETURN VALUES. It also
+ *   added yser_pulse_async() and its worker thread; that worker has so far
+ *   only been observed at YSER_ASYNC_NORMAL, because the test machine grants
+ *   no CAP_SYS_NICE, so the real-time rungs of its ladder are unexercised.
+ *   docs/serial.md holds the design rationale.
+ *
+ *   STATUS: IMPLEMENTED on Windows (Win32 COM API, overlapped I/O) and POSIX
+ *   (Linux and macOS termios). Tested against a virtual port pair on Linux,
+ *   including one reader thread plus one writer thread on a single handle
+ *   under ThreadSanitizer. Windows and macOS compile clean in CI but have
+ *   never run on a device: on Windows the open-time validation and the
+ *   enumeration entry point run, but no byte has moved through the backend,
+ *   and on macOS (IOSSIOSPEED, /dev/cu.* enumeration, the select() waits)
+ *   nothing but the compiler has seen the code. No timing number in this
+ *   header has been measured on a rig yet. The timing code is ysp/rt.h's, so
+ *   its STATUS block applies too: the real-time rungs of the worker's ladder
+ *   have never been granted on any machine here.
+ *
+ *   ---------------------------------------------------------------------
  *   LICENSE: public domain / MIT-0, see end of file.
  */
 #ifndef YSP_SERIAL_H_INCLUDED
 #define YSP_SERIAL_H_INCLUDED
+
+/* The version of this header, for a binding's __version__ and for a log line.
+ * The string always matches the three numbers. */
+#define YSER_VERSION_MAJOR  0
+#define YSER_VERSION_MINOR  5
+#define YSER_VERSION_PATCH  0
+#define YSER_VERSION_STRING "0.5.0"
 
 /* CancelIoEx (Vista) is what lets yser_interrupt() end a pending overlapped
  * read. The MSVC SDK targets a recent Windows by default, but MinGW headers
@@ -443,9 +469,10 @@
     #define YRT_NO_THREADS
 #endif
 
-/* The dependency. yser_desc.sched, yser_port.async_policy and yser_now_us()
- * are ysp/rt.h's types and ysp/rt.h's clock, so it is included from the public
- * section, not just from the implementation. */
+/* The dependency. yser_desc.sched and yser_port.async_policy are ysp/rt.h's
+ * types, every time is on ysp/rt.h's clock, and its unit macros (YRT_MS())
+ * write the widths, so it is included from the public section, not just from
+ * the implementation. */
 #include "ysp/rt.h"
 
 #include <stdint.h>
@@ -466,8 +493,9 @@ extern "C" {
 #endif
 
 #define YSER_DEFAULT_BAUD             115200u
-#define YSER_DEFAULT_WRITE_TIMEOUT_MS 1000u
-#define YSER_TIMEOUT_INFINITE         0xFFFFFFFFu
+#define YSER_DEFAULT_WRITE_TIMEOUT_NS ((int64_t)1000000000)  /* 1 s */
+/* A timeout that never ends: yser_read() and desc.write_timeout_ns. */
+#define YSER_TIMEOUT_INFINITE         ((int64_t)-1)
 
 /* Negative return codes of the data-path functions. See RETURN VALUES. */
 #define YSER_ERR_IO           (-1)
@@ -554,9 +582,9 @@ typedef yrt_policy yser_async_policy;
 #define YSER_ASYNC_TIME_CRITICAL YRT_POLICY_TIME_CRITICAL /* Windows        */
 #define YSER_ASYNC_NORMAL        YRT_POLICY_NORMAL        /* nothing granted */
 
-/* Open description. Use a designated initializer and set only what you need
- * (yser_desc d = { .device = "COM3" };); zero fields take the defaults noted
- * here. `device` is the one required field.
+/* Open description. Zero it and set only what you need
+ * (yser_desc d = { 0 }; d.device = "COM3";); zero fields take the defaults
+ * noted here. `device` is the one required field.
  *
  * Any baud rate is passed to the driver as given. A rate the driver rejects
  * fails yser_open() with the OS error; on POSIX that means rates without a
@@ -572,8 +600,10 @@ typedef struct yser_desc {
     yser_parity    parity;            /* default YSER_PARITY_NONE                         */
     yser_stop_bits stop_bits;         /* default YSER_STOP_BITS_1                         */
     yser_flow      flow;              /* default YSER_FLOW_NONE                           */
-    uint32_t       write_timeout_ms;  /* default 1000 (0 = default; the minimum is 1);
-                                       * YSER_TIMEOUT_INFINITE blocks                    */
+    int64_t        write_timeout_ns;  /* ns; 0 = YSER_DEFAULT_WRITE_TIMEOUT_NS (1 s);
+                                       * rounded up to whole ms, so at least 1 ms;
+                                       * YSER_TIMEOUT_INFINITE blocks; another
+                                       * negative value fails yser_open()        */
     bool           exclusive;         /* POSIX: TIOCEXCL, refuse other opens. Windows
                                        * ports are always exclusive.                     */
     bool           low_latency;       /* request the driver's minimum RX latency;
@@ -595,7 +625,7 @@ typedef struct yser_desc {
  * Every field is written once by yser_open() and then only by its own role,
  * which is what makes the threading promise hold. `async`, `sched` and
  * `async_policy` are set by yser_open() and cleared by yser_close(); on
- * Windows `pa_ovl` and `pa_event` belong to the worker thread alone. write_timeout_ms in
+ * Windows `pa_ovl` and `pa_event` belong to the worker thread alone. write_timeout_ns in
  * particular is immutable while the port is open: on Windows the reader
  * rewrites the whole COMMTIMEOUTS structure and reconstructs the writer's
  * constant from this field, so a caller that poked it would change the
@@ -624,7 +654,7 @@ typedef struct yser_port {
     int      wr_oserr;              /* same for the writer side                               */
     int      misc_oserr;            /* same for the any-role calls (interrupt, get_lines,
                                      * set_dtr, set_rts), which have no direction             */
-    uint32_t write_timeout_ms;      /* immutable while open; see the comment above            */
+    int64_t  write_timeout_ns;      /* immutable while open; see the comment above            */
 
     /* Effective settings, filled by yser_open() after defaults are applied. */
     uint32_t       baud;
@@ -705,7 +735,8 @@ YSER_API int yser_list_ports(yser_port_info* out, int max);
  * match a vid/pid filter: add serial_number or location to pick one, or take
  * the array and choose. Platform-independent, built on yser_list_ports().
  *
- *   yser_port_filter f = { .vid = 0x0403, .pid = 0x6001 };
+ *   yser_port_filter f = { 0 };
+ *   f.vid = 0x0403; f.pid = 0x6001;
  *   yser_port_info info;
  *   if (yser_find_ports(&f, &info, 1) == 1) desc.device = info.name;
  */
@@ -733,7 +764,7 @@ YSER_API bool yser_open(yser_port* p, const yser_desc* desc);
  * already-closed handle. Both the reader and the writer must have returned;
  * see THREADING. A pulse still pending has its trailing byte written first,
  * immediately rather than at its deadline, so this can block for up to 50 ms
- * on a wedged device; it never waits out write_timeout_ms. */
+ * on a wedged device; it never waits out write_timeout_ns. */
 YSER_API void yser_close(yser_port* p);
 
 /* Wake a yser_read() blocked on another thread; it returns
@@ -755,16 +786,10 @@ YSER_API const char* yser_strerror(int code);
 /* True if the handle currently owns an open port. */
 YSER_API bool yser_is_open(const yser_port* p);
 
-/* Monotonic microseconds: yrt_now_us(), which is CLOCK_MONOTONIC on POSIX
- * and QueryPerformanceCounter on Windows. Use it to bracket writes. It is the
- * same call, not a second clock that agrees with ysp/rt.h's, so the one base
- * this collection promises holds by construction. */
-YSER_API uint64_t yser_now_us(void);
-
 /* --- output (writer role) ---------------------------------------------- */
 
 /* Write `len` bytes. Blocks until the driver accepted all of them or
- * write_timeout_ms elapsed. Returns the count accepted (== len on success,
+ * write_timeout_ns elapsed. Returns the count accepted (== len on success,
  * fewer on timeout) or a YSER_ERR_* code. */
 YSER_API int yser_write(yser_port* p, const void* buf, int len);
 
@@ -783,7 +808,7 @@ YSER_API int yser_drain(yser_port* p);
  * the direction, and to wr_oserr when both are purged. */
 YSER_API int yser_purge(yser_port* p, int which);
 
-/* Write `on`, hold for `usec` microseconds, then write `off`. The two-byte
+/* Write `on`, hold for width_ns nanoseconds, then write `off`. The two-byte
  * trigger pulse for boxes that latch the last byte received (TriggerBox,
  * BioSemi, DIY): on = code, off = 0x00. Do not use it with a command
  * protocol such as XID, where 0x00 is a protocol byte. Blocking; the hold
@@ -791,8 +816,8 @@ YSER_API int yser_purge(yser_port* p, int which);
  * wait is yrt_sleep_until() with the platform's default spin window, so the
  * calling thread sleeps for most of the width and spins only the tail.
  * Returns 2 on success, the count of bytes accepted on timeout, or a
- * YSER_ERR_* code. */
-YSER_API int yser_pulse(yser_port* p, uint8_t on, uint8_t off, uint32_t usec);
+ * YSER_ERR_* code (YSER_ERR_ARG for a negative width, before any write). */
+YSER_API int yser_pulse(yser_port* p, uint8_t on, uint8_t off, int64_t width_ns);
 
 /* Non-blocking pulse. Writes `on` on the calling thread and returns at once;
  * the async-pulse worker writes `off` at an absolute deadline taken right
@@ -803,8 +828,9 @@ YSER_API int yser_pulse(yser_port* p, uint8_t on, uint8_t off, uint32_t usec);
  *
  * Returns 1 (the onset byte was accepted), 0 if the onset write timed out, or
  * a YSER_ERR_* code; YSER_ERR_IO with wr_oserr == 0 means there is no worker
- * (YSER_NO_THREADS, or yser_open() could not start one). A timed-out or failed
- * onset schedules no trailing byte.
+ * (YSER_NO_THREADS, or yser_open() could not start one), YSER_ERR_ARG a
+ * negative width_ns (nothing written). A timed-out or failed onset schedules
+ * no trailing byte.
  *
  * Writer role, like yser_write. The worker keeps ONE pending trailing byte per
  * handle: a second yser_pulse_async() while one is pending moves that single
@@ -812,15 +838,16 @@ YSER_API int yser_pulse(yser_port* p, uint8_t on, uint8_t off, uint32_t usec);
  * yser_write_byte / yser_pulse cancels it, because a write means "hold this"
  * and a stale `off` must not undo it. See THREADING for the shared-lock cost
  * and yser_close()'s flush. */
-YSER_API int yser_pulse_async(yser_port* p, uint8_t on, uint8_t off, uint32_t usec);
+YSER_API int yser_pulse_async(yser_port* p, uint8_t on, uint8_t off, int64_t width_ns);
 
 /* --- input (reader role) ----------------------------------------------- */
 
 /* Read up to `cap` bytes. With flags = YSER_READ_ANY (0): returns as soon as
  * at least one byte is available, with everything buffered at that moment;
- * 0 if nothing arrived within timeout_ms (0 = poll, YSER_TIMEOUT_INFINITE =
- * block). With YSER_READ_ALL: keeps reading until `cap` bytes were read or
- * timeout_ms elapsed in total, and returns the count actually read (== cap
+ * 0 if nothing arrived within timeout_ns (0 = poll, YSER_TIMEOUT_INFINITE =
+ * block, another negative value polls; rounded up to whole ms). With
+ * YSER_READ_ALL: keeps reading until `cap` bytes were read or timeout_ns
+ * elapsed in total, and returns the count actually read (== cap
  * on success, fewer on timeout). Negative: YSER_ERR_DISCONNECTED,
  * YSER_ERR_INTERRUPTED, YSER_ERR_CLOSED, YSER_ERR_IO.
  * A negative return discards the count: YSER_READ_ALL interrupted or
@@ -829,7 +856,7 @@ YSER_API int yser_pulse_async(yser_port* p, uint8_t on, uint8_t off, uint32_t us
  * because a half frame is not usable and yser_interrupt() means shutdown, not
  * "give me what you have". Use YSER_READ_ANY in a loop if you need to keep
  * partial input. */
-YSER_API int yser_read(yser_port* p, void* buf, int cap, uint32_t timeout_ms, int flags);
+YSER_API int yser_read(yser_port* p, void* buf, int cap, int64_t timeout_ns, int flags);
 
 /* Bytes waiting in the driver's receive buffer, or a YSER_ERR_* code. */
 YSER_API int yser_available(yser_port* p);
@@ -846,10 +873,11 @@ YSER_API int yser_set_rts(yser_port* p, bool on);
  * OS error in misc_oserr. */
 YSER_API int yser_get_lines(yser_port* p);
 
-/* Hold the TX line in the break (space) state for `ms` milliseconds (writer
- * role; sleeps, does not spin). Returns 0 or a YSER_ERR_* code with the OS
- * error in wr_oserr. */
-YSER_API int yser_send_break(yser_port* p, uint32_t ms);
+/* Hold the TX line in the break (space) state for duration_ns nanoseconds
+ * (writer role; sleeps the bulk, spins the tail). Returns 0 or a YSER_ERR_*
+ * code with the OS error in wr_oserr; YSER_ERR_ARG for a negative
+ * duration. */
+YSER_API int yser_send_break(yser_port* p, int64_t duration_ns);
 
 #ifdef __cplusplus
 } /* extern "C" */
@@ -964,11 +992,26 @@ YSER_API bool yser_is_open(const yser_port* p) {
 
 /* How long yser_close() lets the worker's flush of a pending trailing byte
  * block. The flush runs with the writer mutex held and yser_close() joins the
- * worker thread behind it, so write_timeout_ms would make a wedged device hold
+ * worker thread behind it, so write_timeout_ns would make a wedged device hold
  * a close for a second, and YSER_TIMEOUT_INFINITE would hold it forever. A healthy device
  * accepts one byte in microseconds, so this bound only ever fires on a device
  * that is already lost. */
 #define YSER__CLOSE_FLUSH_MS 50u
+
+/* The OS waits below take whole milliseconds (COMMTIMEOUTS, poll, select),
+ * so the public nanoseconds become milliseconds once, at the entry points.
+ * This is the internal "forever". */
+#define YSER__INF_MS 0xFFFFFFFFu
+
+/* Rounded up, so a sub-millisecond timeout still waits once instead of
+ * degrading into a poll. Any other negative value polls: a timeout computed
+ * as a deadline minus now must not block after the deadline. */
+static uint32_t yser__ms(int64_t ns) {
+    if (ns == YSER_TIMEOUT_INFINITE) return YSER__INF_MS;
+    if (ns <= 0) return 0;
+    int64_t ms = ns / 1000000 + (ns % 1000000 != 0);
+    return ms >= (int64_t)YSER__INF_MS ? YSER__INF_MS - 1u : (uint32_t)ms;
+}
 
 /* Per-platform write that assumes an open port and a validated length, takes
  * no writer mutex, and gives up after timeout_ms. The public yser_write()
@@ -977,7 +1020,7 @@ static int yser__write_timed(yser_port* p, const void* buf, int len, uint32_t ti
 
 /* The ordinary writer-role write: the port's own timeout, as documented. */
 static int yser__write_nolock(yser_port* p, const void* buf, int len) {
-    return yser__write_timed(p, buf, len, p->write_timeout_ms);
+    return yser__write_timed(p, buf, len, yser__ms(p->write_timeout_ns));
 }
 
 #ifndef YSER_NO_THREADS
@@ -985,13 +1028,13 @@ static int yser__write_nolock(yser_port* p, const void* buf, int len) {
 static bool yser__async_start(yser_port* p);
 static void yser__async_stop(yser_port* p);
 static int  yser__write_cancel(yser_port* p, const void* buf, int len);
-static int  yser__async_submit(yser_port* p, uint8_t on, uint8_t off, uint32_t usec);
+static int  yser__async_submit(yser_port* p, uint8_t on, uint8_t off, int64_t width_ns);
 #endif
 
-/* One clock for the library, the caller and ysp/rt.h. A wrapper rather than a
- * second reader of the same OS counter: two copies of this conversion are two
- * things to keep in agreement, and the manual promises one base. */
-YSER_API uint64_t yser_now_us(void) {
+/* One clock for the library, the caller and ysp/rt.h, in the microseconds the
+ * millisecond deadlines below are kept in. A wrapper rather than a second
+ * reader of the same OS counter: the manual promises one base. */
+static uint64_t yser__now_us(void) {
     return (uint64_t)yrt_now_ns() / 1000u;
 }
 
@@ -1036,7 +1079,7 @@ static void yser__append(char* dst, size_t cap, const char* src) {
  * poll. Clamped to INT32_MAX because poll() and select() take an int and a
  * struct timeval built from one. */
 static uint32_t yser__remaining_ms(uint64_t deadline_us) {
-    uint64_t now = yser_now_us();
+    uint64_t now = yser__now_us();
     if (now >= deadline_us) return 0;
     uint64_t ms = (deadline_us - now + 999ull) / 1000ull;
     return ms > 0x7FFFFFFFull ? 0x7FFFFFFFu : (uint32_t)ms;
@@ -1301,7 +1344,7 @@ static bool yser__set_read_timeout(yser_port* p, uint32_t ms) {
         t.ReadTotalTimeoutConstant   = ms;
     }
     t.WriteTotalTimeoutConstant =
-        (p->write_timeout_ms == YSER_TIMEOUT_INFINITE) ? 0 : p->write_timeout_ms;
+        (p->write_timeout_ns == YSER_TIMEOUT_INFINITE) ? 0 : yser__ms(p->write_timeout_ns);
     if (!SetCommTimeouts((HANDLE)p->handle, &t)) {
         p->rd_oserr = (int)GetLastError();
         return false;
@@ -1451,7 +1494,7 @@ static int yser__write_ovl(yser_port* p, const void* buf, int len, uint32_t time
          * (yser_close()'s flush) waits on the event itself and cancels the
          * rest, because rewriting the port-global COMMTIMEOUTS for one byte
          * would change the reader's timeouts too. */
-        if (timeout_ms != p->write_timeout_ms &&
+        if (timeout_ms != yser__ms(p->write_timeout_ns) &&
             WaitForSingleObject(ev, (DWORD)timeout_ms) != WAIT_OBJECT_0)
             CancelIoEx((HANDLE)p->handle, ovl);
         if (!GetOverlappedResult((HANDLE)p->handle, ovl, &done, TRUE)) {
@@ -1512,11 +1555,11 @@ YSER_API int yser_purge(yser_port* p, int which) {
 static int yser__read_some(yser_port* p, void* buf, int cap, uint32_t timeout_ms) {
     HANDLE h = (HANDLE)p->handle;
     OVERLAPPED* ovl = YSER__OVL(p->rd_ovl);
-    bool infinite = (timeout_ms == YSER_TIMEOUT_INFINITE);
+    bool infinite = (timeout_ms == YSER__INF_MS);
     /* An abort that was neither an interrupt nor a disconnect resumes the
      * wait, so what is left of a finite timeout has to be measured against an
      * absolute deadline rather than restarted from the caller's duration. */
-    uint64_t deadline = infinite ? 0 : yser_now_us() + (uint64_t)timeout_ms * 1000ull;
+    uint64_t deadline = infinite ? 0 : yser__now_us() + (uint64_t)timeout_ms * 1000ull;
     uint32_t remaining = timeout_ms;
 
     for (;;) {
@@ -1528,7 +1571,7 @@ static int yser__read_some(yser_port* p, void* buf, int cap, uint32_t timeout_ms
             p->rd_oserr = 0;
             return YSER_ERR_INTERRUPTED;
         }
-        /* YSER_TIMEOUT_INFINITE is MAXDWORD, which the timeout structure
+        /* YSER__INF_MS is MAXDWORD, which the timeout structure
          * reserves for its "return at once" case, so an infinite wait is a
          * loop over long finite ones. */
         uint32_t slice = infinite ? 0x7FFFFFFFu : remaining;
@@ -1655,18 +1698,17 @@ YSER_API int yser_get_lines(yser_port* p) {
     return mask;
 }
 
-YSER_API int yser_send_break(yser_port* p, uint32_t ms) {
+YSER_API int yser_send_break(yser_port* p, int64_t duration_ns) {
     if (!yser_is_open(p)) return YSER_ERR_CLOSED;
+    if (duration_ns < 0) return YSER_ERR_ARG;
     if (!SetCommBreak((HANDLE)p->handle)) {
         DWORD e = GetLastError();
         p->wr_oserr = (int)e;
         return yser__gone(e) ? YSER_ERR_DISCONNECTED : YSER_ERR_IO;
     }
     /* yrt_sleep_ns() hands the bulk of the wait to the OS and spins only its
-     * tail, so a break no longer has the 15.6 ms Windows tick as its floor.
-     * The multiply is 64-bit: ms * 1000000 overflows 32 bits at about 4.3 s,
-     * and this call takes the caller's number as given. */
-    (void)yrt_sleep_ns((int64_t)ms * 1000000);
+     * tail, so a break no longer has the 15.6 ms Windows tick as its floor. */
+    (void)yrt_sleep_ns(duration_ns);
     if (!ClearCommBreak((HANDLE)p->handle)) {
         DWORD e = GetLastError();
         p->wr_oserr = (int)e;
@@ -2174,9 +2216,9 @@ YSER_API int yser_interrupt(yser_port* p) {
 static int yser__write_timed(yser_port* p, const void* buf, int len, uint32_t timeout_ms) {
     const uint8_t* src = (const uint8_t*)buf;
     int got = 0;
-    bool infinite = (timeout_ms == YSER_TIMEOUT_INFINITE);
+    bool infinite = (timeout_ms == YSER__INF_MS);
     uint64_t deadline = infinite ? 0
-                                 : yser_now_us() + (uint64_t)timeout_ms * 1000ull;
+                                 : yser__now_us() + (uint64_t)timeout_ms * 1000ull;
     while (got < len) {
         ssize_t n = write(p->fd, src + got, (size_t)(len - got));
         if (n > 0) { got += (int)n; continue; }
@@ -2243,8 +2285,8 @@ YSER_API int yser_purge(yser_port* p, int which) {
  * byte. The platform primitive under yser_read(); same return contract as
  * YSER_READ_ANY. */
 static int yser__read_some(yser_port* p, void* buf, int cap, uint32_t timeout_ms) {
-    bool infinite = (timeout_ms == YSER_TIMEOUT_INFINITE);
-    uint64_t deadline = infinite ? 0 : yser_now_us() + (uint64_t)timeout_ms * 1000ull;
+    bool infinite = (timeout_ms == YSER__INF_MS);
+    uint64_t deadline = infinite ? 0 : yser__now_us() + (uint64_t)timeout_ms * 1000ull;
 
     for (;;) {
         int tmo = infinite ? -1 : (int)yser__remaining_ms(deadline);
@@ -2338,16 +2380,16 @@ YSER_API int yser_get_lines(yser_port* p) {
     return mask;
 }
 
-YSER_API int yser_send_break(yser_port* p, uint32_t ms) {
+YSER_API int yser_send_break(yser_port* p, int64_t duration_ns) {
     if (!yser_is_open(p)) return YSER_ERR_CLOSED;
+    if (duration_ns < 0) return YSER_ERR_ARG;
     /* TIOCSBRK rather than tcsendbreak(), whose duration is 0.25 to 0.5 s and
      * not under the caller's control. */
     if (ioctl(p->fd, TIOCSBRK) != 0) {
         p->wr_oserr = errno;
         return yser__gone(errno) ? YSER_ERR_DISCONNECTED : YSER_ERR_IO;
     }
-    /* 64-bit multiply: ms * 1000000 overflows 32 bits at about 4.3 s. */
-    (void)yrt_sleep_ns((int64_t)ms * 1000000);
+    (void)yrt_sleep_ns(duration_ns);
     if (ioctl(p->fd, TIOCCBRK) != 0) {
         p->wr_oserr = errno;
         return yser__gone(errno) ? YSER_ERR_DISCONNECTED : YSER_ERR_IO;
@@ -2464,7 +2506,7 @@ static int yser__write_worker(yser_port* p, uint8_t value, uint32_t timeout_ms) 
  * its own callback would do a moment later anyway.
  *
  * A flush (yrt_worker_close, which is yser_close) writes whatever is armed
- * at once, bounded by YSER__CLOSE_FLUSH_MS rather than write_timeout_ms,
+ * at once, bounded by YSER__CLOSE_FLUSH_MS rather than write_timeout_ns,
  * because yser_close() is joining this thread behind the write. */
 static void yser__off_job(void* ctx, const yrt_job_info* info) {
     yser__async* a = (yser__async*)ctx;
@@ -2473,7 +2515,7 @@ static void yser__off_job(void* ctx, const yrt_job_info* info) {
         a->armed = 0;
         (void)yser__write_worker(a->port, a->off_byte,
                                  info->flushed ? YSER__CLOSE_FLUSH_MS
-                                               : a->port->write_timeout_ms);
+                                               : yser__ms(a->port->write_timeout_ns));
     }
     yser__unlock(a);
 }
@@ -2538,7 +2580,7 @@ static int yser__write_cancel(yser_port* p, const void* buf, int len) {
     return r;
 }
 
-static int yser__async_submit(yser_port* p, uint8_t on, uint8_t off, uint32_t usec) {
+static int yser__async_submit(yser_port* p, uint8_t on, uint8_t off, int64_t width_ns) {
     yser__async* a = (yser__async*)p->async;
     yser__lock(a);
     /* Onset under the mutex, so the trailing byte of an in-flight pulse cannot
@@ -2547,9 +2589,9 @@ static int yser__async_submit(yser_port* p, uint8_t on, uint8_t off, uint32_t us
     if (r == 1) {
         /* The width runs from the onset write, not from entry, so the syscall
          * is not subtracted from it. */
-        uint64_t at = yrt_now_ns() + (uint64_t)usec * 1000ull;
+        int64_t at = yrt_now_ns() + width_ns;
         a->off_byte  = off;
-        a->off_at_ns = at;
+        a->off_at_ns = (uint64_t)at;
         a->armed     = 1;
         /* A positive return is this job's seq; only a negative one is an
          * error. The armed/deadline pair is what this header identifies the
@@ -2701,7 +2743,12 @@ YSER_API bool yser_open(yser_port* p, const yser_desc* desc) {
     p->parity    = d.parity;
     p->stop_bits = d.stop_bits;
     p->flow      = d.flow;
-    p->write_timeout_ms = d.write_timeout_ms ? d.write_timeout_ms : YSER_DEFAULT_WRITE_TIMEOUT_MS;
+    if (d.write_timeout_ns < 0 && d.write_timeout_ns != YSER_TIMEOUT_INFINITE) {
+        yser__set_error(p, "invalid desc.write_timeout_ns %lld: require > 0, 0 for the "
+                           "default or YSER_TIMEOUT_INFINITE", (long long)d.write_timeout_ns);
+        return false;
+    }
+    p->write_timeout_ns = d.write_timeout_ns ? d.write_timeout_ns : YSER_DEFAULT_WRITE_TIMEOUT_NS;
     p->keep_dtr_on_close = d.keep_dtr_on_close;
 
     /* Resolve the worker's RT reservation with ysp/rt.h's own rules, so the
@@ -2746,12 +2793,13 @@ YSER_API int yser_write_byte(yser_port* p, uint8_t value) {
     return yser_write(p, &value, 1);
 }
 
-YSER_API int yser_pulse_async(yser_port* p, uint8_t on, uint8_t off, uint32_t usec) {
+YSER_API int yser_pulse_async(yser_port* p, uint8_t on, uint8_t off, int64_t width_ns) {
     if (!yser_is_open(p)) return YSER_ERR_CLOSED;
+    if (width_ns < 0) return YSER_ERR_ARG;
 #ifndef YSER_NO_THREADS
-    if (p->async) return yser__async_submit(p, on, off, usec);
+    if (p->async) return yser__async_submit(p, on, off, width_ns);
 #else
-    (void)on; (void)off; (void)usec;
+    (void)on; (void)off;
 #endif
     /* No worker: built with YSER_NO_THREADS, or yser_open() could not start
      * one (its message says why). wr_oserr = 0 tells this apart from a driver
@@ -2761,7 +2809,9 @@ YSER_API int yser_pulse_async(yser_port* p, uint8_t on, uint8_t off, uint32_t us
     return YSER_ERR_IO;
 }
 
-YSER_API int yser_pulse(yser_port* p, uint8_t on, uint8_t off, uint32_t usec) {
+YSER_API int yser_pulse(yser_port* p, uint8_t on, uint8_t off, int64_t width_ns) {
+    if (!yser_is_open(p)) return YSER_ERR_CLOSED;
+    if (width_ns < 0) return YSER_ERR_ARG;
     int r = yser_write_byte(p, on);
     if (r != 1) return r;
     /* The deadline is taken after the onset write, so the width does not
@@ -2769,16 +2819,17 @@ YSER_API int yser_pulse(yser_port* p, uint8_t on, uint8_t off, uint32_t usec) {
      * default; a caller who has measured its rig with examples/rt/jitter.c and
      * wants a different one can call yrt_sleep_until() around two
      * yser_write_byte() calls, which is all this function is. */
-    if (usec) (void)yrt_sleep_until(yrt_now_ns() + (int64_t)usec * 1000,
+    if (width_ns) (void)yrt_sleep_until(yrt_now_ns() + width_ns,
                                       YRT_DEFAULT_SPIN_NS);
     r = yser_write_byte(p, off);
     return r < 0 ? r : 1 + r;
 }
 
-YSER_API int yser_read(yser_port* p, void* buf, int cap, uint32_t timeout_ms, int flags) {
+YSER_API int yser_read(yser_port* p, void* buf, int cap, int64_t timeout_ns, int flags) {
     if (!yser_is_open(p)) return YSER_ERR_CLOSED;
     if (!buf || cap < 0) return YSER_ERR_ARG;
     if (cap == 0) return 0;
+    uint32_t timeout_ms = yser__ms(timeout_ns);
     if (!(flags & YSER_READ_ALL)) return yser__read_some(p, buf, cap, timeout_ms);
 
     /* YSER_READ_ALL: repeat single reads against one overall deadline. The
@@ -2791,8 +2842,8 @@ YSER_API int yser_read(yser_port* p, void* buf, int cap, uint32_t timeout_ms, in
      * ever matters, read the frame with YSER_READ_ANY in a loop. */
     uint8_t* dst = (uint8_t*)buf;
     int got = 0;
-    bool infinite = (timeout_ms == YSER_TIMEOUT_INFINITE);
-    uint64_t deadline = infinite ? 0 : yser_now_us() + (uint64_t)timeout_ms * 1000ull;
+    bool infinite = (timeout_ms == YSER__INF_MS);
+    uint64_t deadline = infinite ? 0 : yser__now_us() + (uint64_t)timeout_ms * 1000ull;
     uint32_t remaining = timeout_ms;
     for (;;) {
         int n = yser__read_some(p, dst + got, cap - got, remaining);

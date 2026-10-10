@@ -89,7 +89,7 @@ static void send_markers(const char* key, int n) {
     int64_t next, end;
     memset(&d, 0, sizeof d);
     d.lib = &g_lib; d.role = "marks"; d.key = key; d.device = 1;
-    if (!ynet_outlet_start(&o, &d)) { printf("outlet: %s\n", ynet_outlet_error(&o)); g_fail++; return; }
+    if (!ynet_outlet_open(&o, &d)) { printf("outlet: %s\n", ynet_outlet_error(&o)); g_fail++; return; }
     end = yrt_now_ns() + 10000000000LL;
     while (!ynet_outlet_consumers(&o) && yrt_now_ns() < end) (void)yrt_sleep_ns(10000000);
     (void)yrt_sleep_ns(2000000000);  /* the inlet blocks in its first time correction (liblsl probes for it) */
@@ -105,7 +105,7 @@ static void send_markers(const char* key, int n) {
         (void)ynet_out_mark(&o, (uint32_t)(i + 1), text);
     }
     (void)yrt_sleep_ns(300000000);
-    ynet_outlet_stop(&o);
+    ynet_outlet_close(&o);
 }
 
 static void recv_markers(const char* key, int local_sender) {
@@ -115,14 +115,14 @@ static void recv_markers(const char* key, int local_sender) {
     memset(&d, 0, sizeof d);
     d.lib = &g_lib; d.role = "marks_in"; d.key = key; d.device = 2; d.format = YNET_STRING; d.text_sink = on_mark;
     g_nm = 0;
-    CHECK(ynet_inlet_start(&in, &d));
+    CHECK(ynet_inlet_open(&in, &d));
     if (local_sender) send_markers(key, g_nmark);
     else {
         end = yrt_now_ns() + 30000000000LL;
         while (g_nm < g_nmark && yrt_now_ns() < end) (void)yrt_sleep_ns(10000000);
     }
     (void)yrt_sleep_ns(200000000);
-    ynet_inlet_stop(&in);
+    ynet_inlet_close(&in);
     printf("markers: %d of %d\n", g_nm, g_nmark);
     CHECK(g_nm == g_nmark);
     dist("arrival - push (latency)", g_lat, g_nm);
@@ -138,7 +138,7 @@ static void stream_start(const char* key) {
     ynet_outlet_desc d;
     memset(&d, 0, sizeof d);
     d.lib = &g_lib; d.role = "emg"; d.key = key; d.device = 3; d.format = YNET_FLOAT32; d.channels = 4; d.rate_hz = 10000;
-    if (!ynet_outlet_start(&g_so, &d)) { printf("outlet: %s\n", ynet_outlet_error(&g_so)); g_fail++; }
+    if (!ynet_outlet_open(&g_so, &d)) { printf("outlet: %s\n", ynet_outlet_error(&g_so)); g_fail++; }
 }
 
 #if defined(_WIN32)
@@ -203,11 +203,11 @@ static void recv_stream(const char* key, double secs, int local_sender, int life
     rd.memory = logmem; rd.bytes = sizeof logmem;
     memset(&log, 0, sizeof log);
     (void)yrt_ring_open(&log, &rd);
-    CHECK(ynet_stream_init(&ring, mem, sizeof mem, 4));
+    CHECK(ynet_stream_init(&ring, mem, sizeof mem, 4) == 0);
     memset(&d, 0, sizeof d);
     d.lib = &g_lib; d.role = "emg_in"; d.key = key; d.device = 4; d.format = YNET_FLOAT32; d.channels = 4;
     d.stream = &ring; d.ring = &log;
-    CHECK(ynet_inlet_start(&in, &d));
+    CHECK(ynet_inlet_open(&in, &d));
     if (local_sender) {
         stream_start(key);
         end = yrt_now_ns() + 10000000000LL;
@@ -261,7 +261,7 @@ static void recv_stream(const char* key, double secs, int local_sender, int life
            (unsigned long long)st.samples, (long long)got, st.measured_hz, (unsigned long long)st.dropped,
            (unsigned long long)st.gaps, (unsigned long long)st.missing, (unsigned long long)st.clamped,
            st.samples ? (double)st.busy_ns / (double)st.samples : 0.0,
-           st.chunks ? (double)st.samples / (double)st.chunks : 0.0, (double)lag / 1e6, st.offset_s * 1e6, st.rtt_s * 1e6);
+           st.chunks ? (double)st.samples / (double)st.chunks : 0.0, (double)lag / 1e6, st.lsl_offset_s * 1e6, st.lsl_rtt_s * 1e6);
     printf("  local fit: %+.3f ppm, widest bracket %.2f us; remote fit: %+.3f ppm, %u points, spread %.1f us\n",
            st.local.ppm, (double)st.local.width_ns / 1e3, st.remote.ppm, (unsigned)st.remote.points,
            (double)st.remote.spread_ns / 1e3);
@@ -270,7 +270,7 @@ static void recv_stream(const char* key, double secs, int local_sender, int life
     CHECK(st.gaps == 0);
     if (lifecycle) {
         int64_t t_gone;
-        ynet_outlet_stop(&g_so);
+        ynet_outlet_close(&g_so);
         t_gone = yrt_now_ns();
         (void)yrt_sleep_ns(3000000000LL);
         printf("lifecycle: outlet destroyed: %s after 3 s\n", ynet_state_name(ynet_inlet_state(&in)));
@@ -280,7 +280,7 @@ static void recv_stream(const char* key, double secs, int local_sender, int life
         ynet_inlet_stats(&in, &st);
         printf("lifecycle: made again: %s, opens %u\n", ynet_state_name(st.state), (unsigned)st.opens);
         CHECK(st.state == YNET_RUNNING && st.opens == 2);
-        ynet_outlet_stop(&g_so);
+        ynet_outlet_close(&g_so);
         n = yrt_ring_drain(&log, recs, 4096);
         for (i = 0; i < n; i++)
             if (recs[i].source == YRT_SRC_NET && recs[i].kind == YNET_REC_GAP) {
@@ -290,9 +290,9 @@ static void recv_stream(const char* key, double secs, int local_sender, int life
             }
         CHECK(gaps == 1);
     } else if (local_sender) {
-        ynet_outlet_stop(&g_so);
+        ynet_outlet_close(&g_so);
     }
-    ynet_inlet_stop(&in);
+    ynet_inlet_close(&in);
 }
 
 /* lsl_local_clock() against yrt_now_ns(): 10000 brackets over 2 s. The
@@ -324,12 +324,12 @@ static void resolve_timeout(void) {
     memset(&d, 0, sizeof d);
     snprintf(key, sizeof key, "lsl:ysp-no-such-stream-%u", (unsigned)(yrt_now_ns() % 1000000u));
     d.lib = &g_lib; d.role = "none"; d.key = key; d.device = 5; d.resolve_ns = 250000000;
-    CHECK(ynet_inlet_start(&in, &d));
+    CHECK(ynet_inlet_open(&in, &d));
     (void)yrt_sleep_ns(3000000000LL);
     ynet_inlet_stats(&in, &st);
     printf("resolve: %s after 3 s, %llu resolves\n", ynet_state_name(st.state), (unsigned long long)st.resolves);
     CHECK(st.state == YNET_OPENING && st.resolves >= 2 && st.resolves <= 4);
-    ynet_inlet_stop(&in);
+    ynet_inlet_close(&in);
 }
 
 static int spawn_child(const char* self, const char* lib, double secs) {
@@ -364,7 +364,7 @@ static int spawn_child(const char* self, const char* lib, double secs) {
 int main(int argc, char** argv) {
     const char* lib = NULL;
     double secs = 10;
-    int two = 0, child = 0, i, rc;
+    int two = 0, child = 0, i;
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--lib") && i + 1 < argc) lib = argv[++i];
         else if (!strcmp(argv[i], "--seconds") && i + 1 < argc) secs = atof(argv[++i]);
@@ -377,8 +377,8 @@ int main(int argc, char** argv) {
     /* CMake's copy from tools/vendor_lsl.py, unless --lib or YSP_LSL_PATH names another */
     if (!lib && !getenv("YSP_LSL_PATH")) lib = YNET_LOOPBACK_LIB;
 #endif
-    if ((rc = ynet_lsl_load(&g_lib, lib)) != YNET_OK) {
-        printf("skip: %s\n", g_lib.error);
+    if (!ynet_lsl_open(&g_lib, lib)) {
+        printf("skip: %s\n", ynet_lsl_error(&g_lib));
         return 77;
     }
     if (child) {
@@ -388,8 +388,8 @@ int main(int argc, char** argv) {
         (void)yrt_sleep_ns(2000000000LL);
         run_producer(secs);
         (void)yrt_sleep_ns(500000000);
-        ynet_outlet_stop(&g_so);
-        ynet_lsl_unload(&g_lib);
+        ynet_outlet_close(&g_so);
+        ynet_lsl_close(&g_lib);
         return 0;
     }
     printf("liblsl %d from %s\n", (int)g_lib.version, g_lib.path);
@@ -409,7 +409,7 @@ int main(int argc, char** argv) {
 #endif
         }
     }
-    ynet_lsl_unload(&g_lib);
+    ynet_lsl_close(&g_lib);
     printf("%s\n", g_fail ? "FAILED" : "ok");
     return g_fail ? 1 : 0;
 }

@@ -260,7 +260,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
          * library's share one base. ysp_serial('now_us') reads the same
          * clock. A double holds whole microseconds exactly up to 2^53, which
          * is 285 years of uptime. */
-        plhs[0] = mxCreateDoubleScalar((double)yrt_now_us());
+        plhs[0] = mxCreateDoubleScalar((double)(yrt_now_ns() / 1000));
         mxFree(cmd);
         return;
     }
@@ -271,17 +271,17 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
 
     if (strcmp(cmd, "write") == 0) {
         if (nrhs < 3) mexErrMsgIdAndTxt("ysp_parallel:usage", "write needs a value");
-        check(port, ypar_write_data(port, pp_byte(prhs[2], "value")));
+        check(port, ypar_write_data(port, pp_byte(prhs[2], "value")) >= 0);
 
     } else if (strcmp(cmd, "read") == 0) {
-        uint8_t v = ypar_read_data(port);
-        check(port, ypar_error(port)[0] == '\0');
-        plhs[0] = pp_scalar_u8(v);
+        int v = ypar_read_data(port);
+        check(port, v >= 0);
+        plhs[0] = pp_scalar_u8((uint8_t)v);
 
     } else if (strcmp(cmd, "status") == 0) {
-        uint8_t v = ypar_read_status(port);
-        check(port, ypar_error(port)[0] == '\0');
-        plhs[0] = pp_scalar_u8(v);
+        int v = ypar_read_status(port);
+        check(port, v >= 0);
+        plhs[0] = pp_scalar_u8((uint8_t)v);
 
     } else if (strcmp(cmd, "sched") == 0) {
         /* effective async-worker RT params (ns) plus the policy the worker
@@ -296,25 +296,28 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
 
     } else if (strcmp(cmd, "control") == 0) {
         if (nrhs >= 3) {                       /* write control */
-            check(port, ypar_write_control(port, pp_byte(prhs[2], "value")));
+            check(port, ypar_write_control(port, pp_byte(prhs[2], "value")) >= 0);
         } else {                               /* read control */
-            uint8_t v = ypar_read_control(port);
-            check(port, ypar_error(port)[0] == '\0');
-            plhs[0] = pp_scalar_u8(v);
+            int v = ypar_read_control(port);
+            check(port, v >= 0);
+            plhs[0] = pp_scalar_u8((uint8_t)v);
         }
 
     } else if (strcmp(cmd, "setdir") == 0) {
         if (nrhs < 3) mexErrMsgIdAndTxt("ysp_parallel:usage", "setdir needs isInput");
         /* mxGetScalar yields 0/1 for logical and numeric alike. */
-        check(port, ypar_set_data_dir(port, mxGetScalar(prhs[2]) != 0));
+        check(port, ypar_set_data_dir(port, mxGetScalar(prhs[2]) != 0) >= 0);
 
     } else if (strcmp(cmd, "pulse") == 0) {
         if (nrhs < 4) mexErrMsgIdAndTxt("ysp_parallel:usage", "pulse needs value, usec");
-        check(port, ypar_pulse(port, pp_byte(prhs[2], "value"), pp_u32(prhs[3], "usec")));
+        /* MATLAB and Octave keep microseconds; the C API takes ns. */
+        check(port, ypar_pulse(port, pp_byte(prhs[2], "value"),
+                               (int64_t)pp_u32(prhs[3], "usec") * 1000) >= 0);
 
     } else if (strcmp(cmd, "pulseasync") == 0) {
         if (nrhs < 4) mexErrMsgIdAndTxt("ysp_parallel:usage", "pulseasync needs value, usec");
-        check(port, ypar_pulse_async(port, pp_byte(prhs[2], "value"), pp_u32(prhs[3], "usec")));
+        check(port, ypar_pulse_async(port, pp_byte(prhs[2], "value"),
+                                     (int64_t)pp_u32(prhs[3], "usec") * 1000) >= 0);
 
     } else if (strcmp(cmd, "close") == 0) {
         ypar_close(port);

@@ -521,7 +521,7 @@ static void reset_fake(void) {
 static void poll_until(ynet_inlet* in, int64_t until) {
     while (g_now < until) {
         int64_t before = g_now;
-        ynet_inlet_poll(in, 10);
+        ynet_inlet_poll(in, YRT_MS(10));
         if (g_now == before) g_now += 100000;   /* nothing waited: move on */
     }
 }
@@ -530,32 +530,38 @@ static void poll_until(ynet_inlet* in, int64_t until) {
 
 static void test_loader(void) {
     ynet_lsl lib;
-    int rc = ynet_lsl_load(&lib, "ysp-no-such-liblsl-here");
-    CHECK_I(rc, YNET_ERR_NOLIB);
-    CHECK(strstr(lib.error, "ysp-no-such-liblsl-here") != NULL);
+    bool ok;
+    memset(&lib, 0, sizeof lib);
+    ynet_lsl_close(&lib);                       /* a zeroed lib: safe */
+    ok = ynet_lsl_open(&lib, "ysp-no-such-liblsl-here");
+    CHECK(!ok);
+    CHECK(strstr(ynet_lsl_error(&lib), "liblsl not found") != NULL);
+    CHECK(strstr(ynet_lsl_error(&lib), "ysp-no-such-liblsl-here") != NULL);
     CHECK(lib.handle == NULL);
+    ynet_lsl_close(&lib);                       /* after a failed open */
+    ynet_lsl_close(&lib);                       /* twice */
     /* a library that is there but is not liblsl */
 #if defined(_WIN32)
-    rc = ynet_lsl_load(&lib, "C:\\Windows\\System32\\kernel32.dll");
+    ok = ynet_lsl_open(&lib, "C:\\Windows\\System32\\kernel32.dll");
 #elif defined(__APPLE__)
-    rc = ynet_lsl_load(&lib, "/usr/lib/libSystem.B.dylib");
+    ok = ynet_lsl_open(&lib, "/usr/lib/libSystem.B.dylib");
 #else
-    rc = ynet_lsl_load(&lib, "libm.so.6");
+    ok = ynet_lsl_open(&lib, "libm.so.6");
 #endif
-    CHECK_I(rc, YNET_ERR_SYMBOL);
-    CHECK(strstr(lib.error, "lsl_library_version") != NULL);
+    CHECK(!ok);
+    CHECK(strstr(ynet_lsl_error(&lib), "lsl_library_version") != NULL);
     CHECK(lib.handle == NULL);
     /* the default names: liblsl is not installed where CI runs this */
-    rc = ynet_lsl_load(&lib, NULL);
-    if (rc == YNET_OK) {
+    ok = ynet_lsl_open(&lib, NULL);
+    if (ok) {
         printf("net_test: liblsl found at %s, version %d\n", lib.path, (int)lib.version);
         CHECK(lib.version >= 113);
-        ynet_lsl_unload(&lib);
+        CHECK(ynet_lsl_error(&lib)[0] == '\0');
+        ynet_lsl_close(&lib);
     } else {
-        CHECK_I(rc, YNET_ERR_NOLIB);
-        CHECK(strstr(lib.error, "YSP_LSL_PATH") != NULL);
+        CHECK(strstr(ynet_lsl_error(&lib), "YSP_LSL_PATH") != NULL);
     }
-    ynet_lsl_unload(&lib);
+    ynet_lsl_close(&lib);
     CHECK(strcmp(ynet_strerror(YNET_ERR_NOLIB), "liblsl not found") == 0);
     CHECK(strcmp(ynet_version(), YNET_VERSION_STRING) == 0);
 }
@@ -593,10 +599,10 @@ static void test_stream_ring(void) {
     double l[16], ll[8];
     float x[48], y[24];
     int i, n;
-    CHECK(!ynet_stream_init(&s, mem, 10, 3));
-    CHECK(!ynet_stream_init(&s, mem, sizeof mem, 0));
-    CHECK(!ynet_stream_init(&s, mem, sizeof mem, 65));
-    CHECK(ynet_stream_init(&s, mem + 1, sizeof mem - 1, 3));   /* any alignment */
+    CHECK_I(ynet_stream_init(&s, mem, 10, 3), YNET_ERR_ARG);   /* an init: 0 or a code (v0.2.0) */
+    CHECK_I(ynet_stream_init(&s, mem, sizeof mem, 0), YNET_ERR_ARG);
+    CHECK_I(ynet_stream_init(&s, mem, sizeof mem, 65), YNET_ERR_ARG);
+    CHECK_I(ynet_stream_init(&s, mem + 1, sizeof mem - 1, 3), 0);   /* any alignment */
     CHECK_I(ynet_stream_capacity(&s), 8);
     CHECK(((uintptr_t)s.rec & 7u) == 0);
     CHECK(!ynet_stream_newest(&s, t, l, x));
@@ -638,7 +644,7 @@ static void test_markers(void) {
     od.device = 3;
     od.ring = &g_ring;
     od.now = now_fn;
-    CHECK(ynet_outlet_start(&o, &od));
+    CHECK(ynet_outlet_open(&o, &od));
     CHECK_I(ynet_outlet_consumers(&o), 0);
     memset(&id, 0, sizeof id);
     id.lib = &g_lib;
@@ -651,7 +657,7 @@ static void test_markers(void) {
     id.ring = &g_ring;
     id.manual = true;
     id.now = now_fn;
-    CHECK(ynet_inlet_start(&in, &id));
+    CHECK(ynet_inlet_open(&in, &id));
     CHECK_I(ynet_inlet_state(&in), YNET_OPENING);
     poll_until(&in, g_now + 100000000);
     CHECK_I(ynet_inlet_state(&in), YNET_RUNNING);
@@ -728,21 +734,21 @@ static void test_markers(void) {
     memset(&od, 0, sizeof od);
     od.lib = &g_lib; od.role = "codes"; od.key = "lsl:ysp-codes:Markers"; od.device = 5; od.format = YNET_INT32;
     od.now = now_fn;
-    CHECK(ynet_outlet_start(&oi, &od));
+    CHECK(ynet_outlet_open(&oi, &od));
     memset(&id, 0, sizeof id);
     id.lib = &g_lib; id.role = "codes_in"; id.key = "lsl:ysp-codes"; id.device = 6; id.format = YNET_INT32;
     id.kind = YIN_KIND_BOX; id.sink = sink; id.manual = true; id.now = now_fn;
-    CHECK(ynet_inlet_start(&ii, &id));
+    CHECK(ynet_inlet_open(&ii, &id));
     poll_until(&ii, g_now + 100000000);
     g_nev = 0;
     CHECK_I(ynet_out_mark(&oi, 254, "text goes to the log only"), YNET_OK);
     poll_until(&ii, g_now + 5000000);
     CHECK(g_nev == 1 && g_ev[0].code == 254 && g_ev[0].kind == YIN_KIND_BOX && g_ev[0].device == 6);
-    ynet_inlet_stop(&ii);
-    ynet_outlet_stop(&oi);
-    ynet_inlet_stop(&in);
+    ynet_inlet_close(&ii);
+    ynet_outlet_close(&oi);
+    ynet_inlet_close(&in);
     CHECK_I(ynet_inlet_state(&in), YNET_CLOSED);
-    ynet_outlet_stop(&o);
+    ynet_outlet_close(&o);
     CHECK_I(ynet_out_mark(&o, 1, NULL), YNET_ERR_STATE);
     CHECK_I(fk_infos_alive(), 0);
     CHECK_I(fk_inlets_alive(), 0);
@@ -785,17 +791,17 @@ static void test_remote_stream(void) {
     idx = fk_remote_stream("Data", "LabStreamer", "ls-0001", YNET_FLOAT32, 6, 10000.0);
     h0 = g_now + 200000000;
     fk_remote_samples(idx, h0, 200000, 10000.0, square, 0);          /* 20 s */
-    CHECK(ynet_stream_init(&ring, mem, sizeof mem, 6));
+    CHECK_I(ynet_stream_init(&ring, mem, sizeof mem, 6), 0);
     memset(&id, 0, sizeof id);
     id.lib = &g_lib; id.role = "ref"; id.key = "lsl:Data::"; id.device = 7;
     id.format = YNET_FLOAT32; id.channels = 6; id.stream = &ring;
     id.edges[0].channel = 0; id.edges[0].level = 1.0f; id.edges[0].hysteresis = 0.4f;
     id.n_edges = 1;
     id.sink = sink; id.ring = &g_ring; id.manual = true; id.now = now_fn;
-    CHECK(ynet_inlet_start(&in, &id));
+    CHECK(ynet_inlet_open(&in, &id));
     while (g_now < h0 + 21000000000LL) {
         int64_t before = g_now;
-        ynet_inlet_poll(&in, 10);
+        ynet_inlet_poll(&in, YRT_MS(10));
         if (g_now == before) g_now += 100000;
         while ((n = ynet_stream_read(&ring, tt, ll, xx, 4096)) > 0)
             for (i = 0; i < n; i++) {
@@ -834,7 +840,7 @@ static void test_remote_stream(void) {
     }
     CHECK_I(edges, 1999);
     CHECK(edges_ok);
-    ynet_inlet_stop(&in);
+    ynet_inlet_close(&in);
     ring_drain();
     CHECK(count_rec(YRT_SRC_RT, YRT_KIND_FIT) > 5);
     CHECK(count_rec(YRT_SRC_NET, YNET_REC_OFFSET) >= 9);
@@ -855,12 +861,12 @@ static void test_lifecycle(void) {
     reset_fake();
     g_corr_fail = 1;
     idx = fk_remote_stream("Force", "Analog", "f1", YNET_FLOAT32, 2, 1000.0);
-    CHECK(ynet_stream_init(&ring, mem, sizeof mem, 2));
+    CHECK_I(ynet_stream_init(&ring, mem, sizeof mem, 2), 0);
     memset(&id, 0, sizeof id);
     id.lib = &g_lib; id.role = "force"; id.key = "lsl:Force"; id.device = 9; id.stream = &ring;
     id.edges[0].channel = 1; id.edges[0].level = 0.5f; id.n_edges = 1;
     id.sink = sink; id.ring = &g_ring; id.manual = true; id.now = now_fn;
-    CHECK(ynet_inlet_start(&in, &id));
+    CHECK(ynet_inlet_open(&in, &id));
     poll_until(&in, g_now + 10000000);
     CHECK_I(ynet_inlet_state(&in), YNET_RUNNING);
     h = g_now;
@@ -922,7 +928,7 @@ static void test_lifecycle(void) {
     ynet_inlet_stats(&in, &st);
     CHECK_I(st.opens, 3);
     CHECK(llabs(ynet_inlet_map(&in, remote_of(g_now)) - g_now) < 1000000);   /* the new clock */
-    ynet_inlet_stop(&in);
+    ynet_inlet_close(&in);
     ring_drain();
     CHECK_I(count_rec(YRT_SRC_NET, YNET_REC_GAP), 2);
     r = find_rec(YRT_SRC_NET, YNET_REC_GAP, 0);
@@ -963,7 +969,7 @@ static void test_band_and_refusal(void) {
     id.lib = &g_lib; id.role = "ramp"; id.key = "lsl:Ramp"; id.device = 12; id.manual = true; id.now = now_fn;
     id.edges[0].channel = 0; id.edges[0].level = 1.0f; id.edges[0].hysteresis = 0.4f; id.n_edges = 1;
     id.sink = sink;
-    CHECK(ynet_inlet_start(&in, &id));
+    CHECK(ynet_inlet_open(&in, &id));
     g_nev = 0;
     poll_until(&in, g_now + 2500000000LL);
     for (i = 0; i < g_nev; i++) {
@@ -976,7 +982,7 @@ static void test_band_and_refusal(void) {
     CHECK(st.corrections >= 1 && st.refused == st.corrections);
     CHECK(!st.remote.ready);                /* the fit took none of them */
     CHECK(g_nev == 1 && g_ev[0].unc_us >= 4000);   /* half the round trip at least */
-    ynet_inlet_stop(&in);
+    ynet_inlet_close(&in);
 }
 
 static void test_resolve(void) {
@@ -990,7 +996,7 @@ static void test_resolve(void) {
     id.lib = &g_lib; id.role = "none"; id.key = "lsl:NoSuchStream"; id.device = 2; id.manual = true; id.now = now_fn;
     id.ring = &g_ring;
     id.resolve_ns = 250000000;
-    CHECK(ynet_inlet_start(&in, &id));
+    CHECK(ynet_inlet_open(&in, &id));
     t0 = g_now;
     calls = g_resolve_calls;
     poll_until(&in, t0 + 5050000000LL);
@@ -999,18 +1005,18 @@ static void test_resolve(void) {
     CHECK(st.resolves >= 4 && st.resolves <= 6);          /* one a second */
     CHECK_I(g_resolve_calls - calls, (int)st.resolves);
     CHECK(fabs(g_resolve_timeout - 0.25) < 1e-9);
-    ynet_inlet_stop(&in);
+    ynet_inlet_close(&in);
     /* two streams match: no match, said once */
     reset_fake();
     (void)fk_remote_stream("Twin", "Markers", "a", YNET_STRING, 1, 0.0);
     (void)fk_remote_stream("Twin", "Markers", "b", YNET_STRING, 1, 0.0);
     id.key = "lsl:Twin";
-    CHECK(ynet_inlet_start(&in, &id));
+    CHECK(ynet_inlet_open(&in, &id));
     poll_until(&in, g_now + 3500000000LL);
     ynet_inlet_stats(&in, &st);
     CHECK_I(ynet_inlet_state(&in), YNET_OPENING);
     CHECK(st.ambiguous >= 3);
-    ynet_inlet_stop(&in);
+    ynet_inlet_close(&in);
     ring_drain();
     CHECK(find_text("ambiguous 2 streams match"));
     {
@@ -1022,35 +1028,35 @@ static void test_resolve(void) {
     /* the source_id tells them apart */
     ring_open();
     id.key = "lsl:Twin::b";
-    CHECK(ynet_inlet_start(&in, &id));
+    CHECK(ynet_inlet_open(&in, &id));
     poll_until(&in, g_now + 1000000000LL);
     CHECK_I(ynet_inlet_state(&in), YNET_RUNNING);
-    ynet_inlet_stop(&in);
+    ynet_inlet_close(&in);
     /* the wrong stream: FAILED, not tried again */
     id.key = "lsl:Twin::a";
     id.format = YNET_FLOAT32;
-    CHECK(ynet_inlet_start(&in, &id));
+    CHECK(ynet_inlet_open(&in, &id));
     poll_until(&in, g_now + 3000000000LL);
     ynet_inlet_stats(&in, &st);
     CHECK_I(ynet_inlet_state(&in), YNET_FAILED);
     CHECK_I(st.resolves, 1);
     CHECK(strstr(ynet_inlet_error(&in), "format 3") != NULL);
-    ynet_inlet_stop(&in);
+    ynet_inlet_close(&in);
     id.format = YNET_STRING;
     id.channels = 2;
-    CHECK(ynet_inlet_start(&in, &id));
+    CHECK(ynet_inlet_open(&in, &id));
     poll_until(&in, g_now + 1000000000LL);
     CHECK_I(ynet_inlet_state(&in), YNET_FAILED);
-    ynet_inlet_stop(&in);
+    ynet_inlet_close(&in);
     /* an edge on a channel the stream lacks */
     id.channels = 0;
     id.format = 0;
     id.n_edges = 1;
     id.edges[0].channel = 3;
-    CHECK(ynet_inlet_start(&in, &id));
+    CHECK(ynet_inlet_open(&in, &id));
     poll_until(&in, g_now + 1000000000LL);
     CHECK_I(ynet_inlet_state(&in), YNET_FAILED);
-    ynet_inlet_stop(&in);
+    ynet_inlet_close(&in);
     CHECK_I(fk_infos_alive(), 0);
     CHECK_I(fk_inlets_alive(), 0);
 }
@@ -1066,59 +1072,127 @@ static void test_desc(void) {
     memset(&empty, 0, sizeof empty);
     memset(&id, 0, sizeof id);
     id.lib = &g_lib; id.role = "r"; id.key = "lsl:x"; id.device = 1; id.manual = true; id.now = now_fn;
-    CHECK(ynet_inlet_start(&in, &id));
-    ynet_inlet_stop(&in);
+    CHECK(ynet_inlet_open(&in, &id));
+    ynet_inlet_close(&in);
     id.lib = &empty;
-    CHECK(!ynet_inlet_start(&in, &id) && strstr(ynet_inlet_error(&in), "desc.lib"));
+    CHECK(!ynet_inlet_open(&in, &id) && strstr(ynet_inlet_error(&in), "desc.lib"));
     id.lib = &g_lib;
     id.key = "lsl:::";
-    CHECK(!ynet_inlet_start(&in, &id) && strstr(ynet_inlet_error(&in), "desc.key"));
+    CHECK(!ynet_inlet_open(&in, &id) && strstr(ynet_inlet_error(&in), "desc.key"));
     id.key = "serial:x";
-    CHECK(!ynet_inlet_start(&in, &id));
+    CHECK(!ynet_inlet_open(&in, &id));
     id.key = "lsl:x";
     id.device = 0;
-    CHECK(!ynet_inlet_start(&in, &id));
+    CHECK(!ynet_inlet_open(&in, &id));
     id.device = 1;
     id.format = 2;              /* double64: not supported */
-    CHECK(!ynet_inlet_start(&in, &id));
+    CHECK(!ynet_inlet_open(&in, &id));
     id.format = 0;
     id.channels = 65;
-    CHECK(!ynet_inlet_start(&in, &id));
+    CHECK(!ynet_inlet_open(&in, &id));
     id.channels = 0;
     id.n_edges = 9;
-    CHECK(!ynet_inlet_start(&in, &id));
+    CHECK(!ynet_inlet_open(&in, &id));
     id.n_edges = 1;
     id.edges[0].channel = 64;
-    CHECK(!ynet_inlet_start(&in, &id));
+    CHECK(!ynet_inlet_open(&in, &id));
     id.edges[0].channel = 0;
     id.edges[0].hysteresis = -1;
-    CHECK(!ynet_inlet_start(&in, &id));
+    CHECK(!ynet_inlet_open(&in, &id));
     id.n_edges = 0;
     memset(&bad, 0, sizeof bad);
     id.stream = &bad;
-    CHECK(!ynet_inlet_start(&in, &id) && strstr(ynet_inlet_error(&in), "desc.stream"));
+    CHECK(!ynet_inlet_open(&in, &id) && strstr(ynet_inlet_error(&in), "desc.stream"));
     id.stream = NULL;
     id.role = NULL;
-    CHECK(!ynet_inlet_start(&in, &id));
-    CHECK(!ynet_inlet_start(&in, NULL));
+    CHECK(!ynet_inlet_open(&in, &id));
+    CHECK(!ynet_inlet_open(&in, NULL));
     memset(&od, 0, sizeof od);
     od.lib = &g_lib; od.role = "o"; od.key = "lsl::Markers"; od.device = 1; od.now = now_fn;
-    CHECK(!ynet_outlet_start(&o, &od) && strstr(ynet_outlet_error(&o), "with a name"));
+    CHECK(!ynet_outlet_open(&o, &od) && strstr(ynet_outlet_error(&o), "with a name"));
     od.key = "lsl:m";
     od.channels = 2;
-    CHECK(!ynet_outlet_start(&o, &od) && strstr(ynet_outlet_error(&o), "one channel"));
+    CHECK(!ynet_outlet_open(&o, &od) && strstr(ynet_outlet_error(&o), "one channel"));
     od.channels = 0;
     od.rate_hz = -1;
-    CHECK(!ynet_outlet_start(&o, &od));
+    CHECK(!ynet_outlet_open(&o, &od));
     od.rate_hz = 0;
     od.device = 0;
-    CHECK(!ynet_outlet_start(&o, &od));
+    CHECK(!ynet_outlet_open(&o, &od));
     od.device = 1;
-    CHECK(ynet_outlet_start(&o, &od));
-    ynet_outlet_stop(&o);
-    ynet_outlet_stop(&o);       /* twice is safe */
-    ynet_inlet_stop(&in);
+    CHECK(ynet_outlet_open(&o, &od));
+    ynet_outlet_close(&o);
+    ynet_outlet_close(&o);       /* twice is safe */
+    ynet_inlet_close(&in);
+    {
+        /* key and role are copied into the handles (v0.2.0) */
+        char key[64], role[16], longrole[YNET_ROLE_MAX + 1];
+        snprintf(key, sizeof key, "%s", "lsl:x");
+        snprintf(role, sizeof role, "%s", "r");
+        id.key = key;
+        id.role = role;
+        CHECK(ynet_inlet_open(&in, &id));
+        key[0] = role[0] = '\0';
+        CHECK(strcmp(in.d.key, "lsl:x") == 0 && strcmp(in.d.role, "r") == 0);
+        ynet_inlet_close(&in);
+        snprintf(key, sizeof key, "%s", "lsl:m");
+        snprintf(role, sizeof role, "%s", "o");
+        od.key = key;
+        od.role = role;
+        CHECK(ynet_outlet_open(&o, &od));
+        key[0] = role[0] = '\0';
+        CHECK(strcmp(o.d.key, "lsl:m") == 0 && strcmp(o.d.role, "o") == 0);
+        ynet_outlet_close(&o);
+        memset(longrole, 'r', sizeof longrole);
+        longrole[YNET_ROLE_MAX] = '\0';       /* 32 characters: one too many */
+        id.key = "lsl:x";
+        id.role = longrole;
+        CHECK(!ynet_inlet_open(&in, &id) && strstr(ynet_inlet_error(&in), "YNET_ROLE_MAX"));
+        od.key = "lsl:m";
+        od.role = longrole;
+        CHECK(!ynet_outlet_open(&o, &od) && strstr(ynet_outlet_error(&o), "YNET_ROLE_MAX"));
+        ynet_inlet_close(&in);      /* after a failed open */
+        ynet_outlet_close(&o);
+    }
     CHECK_I(fk_infos_alive(), 0);
+}
+
+/* ynet_inlet_open() returns while OPENING; the wait (v0.2.0). */
+static void test_wait(void) {
+    static ynet_outlet o;
+    static ynet_inlet in;
+    ynet_outlet_desc od;
+    ynet_inlet_desc id;
+    reset_fake();
+    memset(&od, 0, sizeof od);
+    od.lib = &g_lib; od.role = "marks"; od.key = "lsl:ysp-wait:Markers:w1"; od.device = 3; od.now = now_fn;
+    CHECK(ynet_outlet_open(&o, &od));
+    memset(&id, 0, sizeof id);
+    id.lib = &g_lib; id.role = "in"; id.key = "lsl:ysp-wait::w1"; id.device = 4; id.manual = true; id.now = now_fn;
+    id.format = YNET_STRING;
+    CHECK(ynet_inlet_open(&in, &id));
+    CHECK_I(ynet_inlet_state(&in), YNET_OPENING);
+    CHECK_I(ynet_inlet_wait_running(&in, YRT_S(2)), YNET_RUNNING);
+    CHECK_I(ynet_inlet_wait_running(&in, 0), YNET_RUNNING);
+    ynet_inlet_close(&in);
+    CHECK_I(ynet_inlet_wait_running(&in, YRT_S(1)), YNET_ERR_STATE);
+    CHECK(strstr(ynet_inlet_error(&in), "not open") != NULL);
+    /* a wrong stream: FAILED at once, the reason kept */
+    id.format = YNET_INT32;
+    CHECK(ynet_inlet_open(&in, &id));
+    CHECK_I(ynet_inlet_wait_running(&in, YRT_S(2)), YNET_ERR_STATE);
+    CHECK(strstr(ynet_inlet_error(&in), "has format") != NULL);
+    ynet_inlet_close(&in);
+    /* nobody sends: a timeout with a message */
+    id.format = YNET_STRING;
+    id.key = "lsl:ysp-nobody::";
+    CHECK(ynet_inlet_open(&in, &id));
+    CHECK_I(ynet_inlet_wait_running(&in, YRT_MS(100)), YNET_ERR_TIMEOUT);
+    CHECK(strstr(ynet_inlet_error(&in), "not running in time") != NULL);
+    ynet_inlet_close(&in);
+    ynet_outlet_close(&o);
+    CHECK_I(fk_infos_alive(), 0);
+    printf("  the wait for RUNNING: running, closed, a wrong stream, nobody: ok\n");
 }
 
 /* A synthetic LabStreamer in this process: an outlet with the Data stream's
@@ -1153,22 +1227,22 @@ static void test_labstreamer_like(void) {
     memset(&od, 0, sizeof od);
     od.lib = &g_lib; od.role = "ls_data"; od.key = "lsl:Data:LabStreamer:ls-sim"; od.device = 20;
     od.format = YNET_FLOAT32; od.channels = 6; od.rate_hz = 10000.0; od.now = now_fn;
-    CHECK(ynet_outlet_start(&data, &od));
+    CHECK(ynet_outlet_open(&data, &od));
     memset(&od, 0, sizeof od);
     od.lib = &g_lib; od.role = "marks"; od.key = "lsl:ysp-flips:Markers"; od.device = ynet_role(&roles, "marks");
     od.code_names = names; od.n_code_names = 2; od.ring = &g_ring; od.now = now_fn;
-    CHECK(ynet_outlet_start(&marks, &od));
-    CHECK(ynet_stream_init(&ring, mem, sizeof mem, 6));
+    CHECK(ynet_outlet_open(&marks, &od));
+    CHECK_I(ynet_stream_init(&ring, mem, sizeof mem, 6), 0);
     memset(&id, 0, sizeof id);
     id.lib = &g_lib; id.role = "ref"; id.key = "lsl:Data::"; id.device = ynet_role(&roles, "ref");
     id.format = YNET_FLOAT32; id.channels = 6; id.stream = &ring;
     id.edges[0].channel = 0; id.edges[0].level = 1.0f; id.edges[0].hysteresis = 0.2f; id.n_edges = 1;
     id.sink = edge_sink; id.manual = true; id.now = now_fn;
-    CHECK(ynet_inlet_start(&in, &id));
+    CHECK(ynet_inlet_open(&in, &id));
     memset(&id, 0, sizeof id);
     id.lib = &g_lib; id.role = "lat"; id.key = "lsl:ysp-flips"; id.device = 21; id.format = YNET_STRING;
     id.sink = sink; id.text_sink = text_sink; id.manual = true; id.now = now_fn;
-    CHECK(ynet_inlet_start(&lat, &id));
+    CHECK(ynet_inlet_open(&lat, &id));
     poll_until(&in, g_now + 50000000);
     poll_until(&lat, g_now + 50000000);
     CHECK_I(ynet_inlet_state(&in), YNET_RUNNING);
@@ -1249,15 +1323,15 @@ static void test_labstreamer_like(void) {
     CHECK_I(ynet_out_mark(&data, 1, NULL), YNET_ERR_FORMAT);
     {
         ynet_found f[8];
-        int n = ynet_resolve_all(&g_lib, f, 8, 0.1);
+        int n = ynet_resolve_all(&g_lib, f, 8, YRT_MS(100));
         CHECK_I(n, 2);
         CHECK(n == 2 && !strcmp(f[0].key, "lsl:Data:LabStreamer:ls-sim:testhost") && f[0].channels == 6 &&
               f[0].format == YNET_FLOAT32 && f[0].rate_hz == 10000.0);
     }
-    ynet_inlet_stop(&lat);
-    ynet_inlet_stop(&in);
-    ynet_outlet_stop(&marks);
-    ynet_outlet_stop(&data);
+    ynet_inlet_close(&lat);
+    ynet_inlet_close(&in);
+    ynet_outlet_close(&marks);
+    ynet_outlet_close(&data);
     CHECK_I(fk_infos_alive(), 0);
     CHECK_I(fk_inlets_alive(), 0);
     CHECK_I(g_strings, 0);
@@ -1327,13 +1401,13 @@ static void test_thread_10khz(void) {
     memset(&od, 0, sizeof od);
     od.lib = &g_lib; od.role = "sim"; od.key = "lsl:Sim:EMG:sim-1"; od.device = 30;
     od.format = YNET_FLOAT32; od.channels = 4; od.rate_hz = 10000.0;
-    CHECK(ynet_outlet_start(&g_prod_out, &od));
-    CHECK(ynet_stream_init(&ring, mem, sizeof mem, 4));
+    CHECK(ynet_outlet_open(&g_prod_out, &od));
+    CHECK_I(ynet_stream_init(&ring, mem, sizeof mem, 4), 0);
     memset(&id, 0, sizeof id);
     id.lib = &g_lib; id.role = "emg"; id.key = "lsl:Sim"; id.device = 31; id.format = YNET_FLOAT32; id.channels = 4;
     id.stream = &ring; id.edges[0].channel = 0; id.edges[0].level = 0.5f; id.n_edges = 1; id.sink = sink;
     id.ring = &g_ring;
-    CHECK(ynet_inlet_start(&in, &id));
+    CHECK(ynet_inlet_open(&in, &id));
     end = yrt_now_ns() + 3000000000LL;
     while (yrt_now_ns() < end && ynet_inlet_state(&in) != YNET_RUNNING) (void)yrt_sleep_ns(1000000);
     CHECK_I(ynet_inlet_state(&in), YNET_RUNNING);
@@ -1380,8 +1454,8 @@ static void test_thread_10khz(void) {
         got += n;
     }
     ynet_inlet_stats(&in, &st);
-    ynet_inlet_stop(&in);
-    ynet_outlet_stop(&g_prod_out);
+    ynet_inlet_close(&in);
+    ynet_outlet_close(&g_prod_out);
     g_real = 0;
     printf("net_test: reader thread, 10 kHz x 4 channels for %.0f s: %lld pushed, %lld in the ring, %llu samples, "
            "%llu chunks (%.1f samples each), dropped %llu, gaps %llu; reader busy %.1f ns per sample; "
@@ -1406,6 +1480,7 @@ int main(void) {
     test_keys();
     test_stream_ring();
     test_desc();
+    test_wait();
     test_markers();
     test_remote_stream();
     test_lifecycle();

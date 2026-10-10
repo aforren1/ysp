@@ -52,7 +52,7 @@ static const char* fmt_name(int f) { return f == YNET_FLOAT32 ? "float32" : f ==
 
 static int list(double wait) {
     static ynet_found f[64];
-    int n = ynet_resolve_all(&g_lib, f, 64, wait), i;
+    int n = ynet_resolve_all(&g_lib, f, 64, YRT_S(wait)), i;
     if (n < 0) { fprintf(stderr, "resolve failed: %s\n", ynet_strerror(n)); return 2; }
     for (i = 0; i < n; i++)
         printf("%-60s %-8s %3d ch %9.1f Hz\n", f[i].key, fmt_name(f[i].format), f[i].channels, f[i].rate_hz);
@@ -89,10 +89,10 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
-    if ((rc = ynet_lsl_load(&g_lib, path)) != YNET_OK) { fprintf(stderr, "%s\n", g_lib.error); return 2; }
+    if (!ynet_lsl_open(&g_lib, path)) { fprintf(stderr, "%s\n", ynet_lsl_error(&g_lib)); return 2; }
     printf("liblsl %d.%d from %s\n", (int)g_lib.version / 100, (int)g_lib.version % 100, g_lib.path);
-    if (do_list) { rc = list(wait); ynet_lsl_unload(&g_lib); return rc; }
-    if (!key) { fprintf(stderr, "--key or --list\n"); ynet_lsl_unload(&g_lib); return 2; }
+    if (do_list) { rc = list(wait); ynet_lsl_close(&g_lib); return rc; }
+    if (!key) { fprintf(stderr, "--key or --list\n"); ynet_lsl_close(&g_lib); return 2; }
     memset(&d, 0, sizeof d);
     d.lib = &g_lib;
     d.role = "view";
@@ -100,7 +100,7 @@ int main(int argc, char** argv) {
     d.device = 1;
     d.sink = on_event;
     d.text_sink = on_text;
-    if (!ynet_stream_init(&ring, mem, sizeof mem, YNET_MAX_CHANNELS)) return 2;
+    if (ynet_stream_init(&ring, mem, sizeof mem, YNET_MAX_CHANNELS) < 0) return 2;
     d.stream = &ring;   /* 64 channels wide: holds any stream */
     if (edge) {
         d.edges[0].channel = edge_ch;
@@ -108,7 +108,7 @@ int main(int argc, char** argv) {
         d.edges[0].hysteresis = hyst;
         d.n_edges = 1;
     }
-    if (!ynet_inlet_start(&in, &d)) { fprintf(stderr, "%s\n", ynet_inlet_error(&in)); ynet_lsl_unload(&g_lib); return 2; }
+    if (!ynet_inlet_open(&in, &d)) { fprintf(stderr, "%s\n", ynet_inlet_error(&in)); ynet_lsl_close(&g_lib); return 2; }
     memset(&prev, 0, sizeof prev);
     for (sec = 0; sec < (int)seconds; sec++) {
         int64_t t_new = 0;
@@ -129,7 +129,7 @@ int main(int argc, char** argv) {
                "rtt %.1f us; fit %+.2f ppm, %u points, spread %.1f us%s; events %u\n",
                sec + 1, (unsigned long long)(st.samples - prev.samples), st.measured_hz, (unsigned long long)st.gaps,
                (unsigned long long)st.missing, (unsigned long long)st.dropped, (unsigned long long)st.clamped,
-               st.offset_s, st.rtt_s * 1e6, st.remote.ppm, (unsigned)st.remote.points,
+               st.lsl_offset_s, st.lsl_rtt_s * 1e6, st.remote.ppm, (unsigned)st.remote.points,
                (double)st.remote.spread_ns / 1e3, st.remote.slope ? "" : " (nominal)", (unsigned)g_events);
         if (st.format == YNET_FLOAT32 && ynet_stream_newest(&ring, &t_new, &l_new, x)) {
             int c;
@@ -144,7 +144,7 @@ int main(int argc, char** argv) {
         }
         prev = st;
     }
-    ynet_inlet_stop(&in);
+    ynet_inlet_close(&in);
     ynet_inlet_stats(&in, &st);
     printf("total: %llu samples, %llu events, %llu chunks, %llu gaps, %llu missing, %llu dropped, %llu clamped, "
            "%llu backward; %llu corrections (%llu refused), %llu resolves (%llu ambiguous); reader busy %.1f ns per sample\n",
@@ -155,6 +155,6 @@ int main(int argc, char** argv) {
            st.samples ? (double)st.busy_ns / (double)st.samples : 0.0);
     printf("local fit: %+.3f ppm, bracket %.1f us; source: %s\n", st.local.ppm, (double)st.local.width_ns / 1e3,
            ynet_inlet_source(&in).note);
-    ynet_lsl_unload(&g_lib);
+    ynet_lsl_close(&g_lib);
     return st.opens > 0 ? 0 : 1;
 }

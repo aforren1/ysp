@@ -185,7 +185,7 @@ int main(int argc, char** argv) {
     const char* marks_name = "ysp-flips";
     const char* backend = NULL;
     const char* path = NULL;
-    int frames = 1200, i, run = 0, level = 0, record_mode = 0, use_lat = 1, channel = 0, rc;
+    int frames = 1200, i, run = 0, level = 0, record_mode = 0, use_lat = 1, channel = 0;
     int n_os = 0, n_eo = 0, n_es = 0, n_lat = 0, n_x = 0, changes = 0, missing_edge = 0, missing_lat = 0;
     int by_time = 0;
     float thr = 1.0f, hyst = 0.2f;
@@ -219,7 +219,7 @@ int main(int argc, char** argv) {
     }
     if (frames < 120 || frames > MAX_FRAMES) { fprintf(stderr, "frames must be 120..%d\n", MAX_FRAMES); return 2; }
     if (channel < 0 || channel >= YNET_MAX_CHANNELS || hyst < 0) { fprintf(stderr, "channel 0..63, hyst >= 0\n"); return 2; }
-    if ((rc = ynet_lsl_load(&g_lib, path)) != YNET_OK) { fprintf(stderr, "%s\n", g_lib.error); return 2; }
+    if (!ynet_lsl_open(&g_lib, path)) { fprintf(stderr, "%s\n", ynet_lsl_error(&g_lib)); return 2; }
     printf("liblsl %d.%d from %s\n", (int)g_lib.version / 100, (int)g_lib.version % 100, g_lib.path);
 
     rd.memory = ring_mem;
@@ -238,7 +238,7 @@ int main(int argc, char** argv) {
     od.code_names = g_names;
     od.n_code_names = 2;
     od.ring = &ring;
-    if (!ynet_outlet_start(&g_marks, &od)) { fprintf(stderr, "%s\n", ynet_outlet_error(&g_marks)); return 2; }
+    if (!ynet_outlet_open(&g_marks, &od)) { fprintf(stderr, "%s\n", ynet_outlet_error(&g_marks)); return 2; }
 
     memset(&sd, 0, sizeof sd);
     sd.ring = &ring;
@@ -272,7 +272,7 @@ int main(int argc, char** argv) {
     id.n_edges = 1;
     id.sink = to_bridge;
     id.ring = &ring;
-    if (!ynet_inlet_start(&g_data, &id)) { fprintf(stderr, "%s\n", ynet_inlet_error(&g_data)); yscr_close(&scr); return 2; }
+    if (!ynet_inlet_open(&g_data, &id)) { fprintf(stderr, "%s\n", ynet_inlet_error(&g_data)); yscr_close(&scr); return 2; }
     if (use_lat) {
         memset(&id, 0, sizeof id);
         id.lib = &g_lib;
@@ -282,7 +282,7 @@ int main(int argc, char** argv) {
         id.format = YNET_STRING;
         id.text_sink = on_lat;
         id.ring = &ring;
-        if (!ynet_inlet_start(&g_latin, &id)) { fprintf(stderr, "%s\n", ynet_inlet_error(&g_latin)); yscr_close(&scr); return 2; }
+        if (!ynet_inlet_open(&g_latin, &id)) { fprintf(stderr, "%s\n", ynet_inlet_error(&g_latin)); yscr_close(&scr); return 2; }
     }
     (void)yrt_thread_elevate(NULL);
 
@@ -303,10 +303,10 @@ int main(int argc, char** argv) {
             fprintf(stderr, "after 10 s: %s is %s, %s is %s (net_stream_view --list shows the streams)\n", data_key,
                     ynet_state_name(ynet_inlet_state(&g_data)), use_lat ? lat_key : "--no-lat",
                     use_lat ? ynet_state_name(ynet_inlet_state(&g_latin)) : "-");
-            if (use_lat) ynet_inlet_stop(&g_latin);
-            ynet_inlet_stop(&g_data);
+            if (use_lat) ynet_inlet_close(&g_latin);
+            ynet_inlet_close(&g_data);
             yscr_close(&scr);
-            ynet_outlet_stop(&g_marks);
+            ynet_outlet_close(&g_marks);
             return 2;
         }
         if (!ynet_outlet_consumers(&g_marks))
@@ -360,15 +360,15 @@ int main(int argc, char** argv) {
         }
     }
     ynet_inlet_stats(&g_data, &st);
-    if (use_lat) ynet_inlet_stop(&g_latin);
-    ynet_inlet_stop(&g_data);
+    if (use_lat) ynet_inlet_close(&g_latin);
+    ynet_inlet_close(&g_data);
     yscr_close(&scr);
     take_records(&ring, evs, 8192);
-    ynet_outlet_stop(&g_marks);
+    ynet_outlet_close(&g_marks);
 
     printf("Data stream: %s, %llu samples, %.1f Hz, gaps %llu (%llu missing), offset %+.6f s, rtt %.1f us, "
            "fit %+.2f ppm over %u points\n", ynet_state_name(st.state), (unsigned long long)st.samples, st.measured_hz,
-           (unsigned long long)st.gaps, (unsigned long long)st.missing, st.offset_s, st.rtt_s * 1e6, st.remote.ppm,
+           (unsigned long long)st.gaps, (unsigned long long)st.missing, st.lsl_offset_s, st.lsl_rtt_s * 1e6, st.remote.ppm,
            (unsigned)st.remote.points);
 
     if (csv) fprintf(csv, "frame,level,onset_ns,stamp_ns,marker_lsl_s,edge_ns,edge_minus_onset_us,edge_minus_stamp_us,"
@@ -440,6 +440,6 @@ int main(int argc, char** argv) {
         dist("edge-stamp - latency", v_x, n_x);
     }
     if (g_lat_mx) SDL_DestroyMutex(g_lat_mx);
-    ynet_lsl_unload(&g_lib);
+    ynet_lsl_close(&g_lib);
     return (changes > 0 && missing_edge == 0 && (!use_lat || missing_lat == 0)) ? 0 : 1;
 }

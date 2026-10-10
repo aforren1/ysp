@@ -138,7 +138,7 @@ static int start_board(ydev_device* dev, const char* role, const char* key, uint
     dd.device = device;
     dd.kind = YIN_KIND_SYNC;
     dd.sink = to_bridge;
-    if (ydev_start(dev, &dd)) return 1;
+    if (ydev_open(dev, &dd)) return 1;
     fprintf(stderr, "audio_av_sync: %s board: %s\n", role, ydev_error(dev));
     return 0;
 }
@@ -366,7 +366,7 @@ int main(int argc, char** argv) {
     else if (sim) bad = 1;
 
 done:
-    if (board) { ydev_stop(&dev_light); if (sound_board) ydev_stop(&dev_sound); }
+    if (board) { ydev_close(&dev_light); if (sound_board) ydev_close(&dev_sound); }
     if (csv) fclose(csv);
     yau_describe(&au, line, sizeof line);
     printf("%s\n", line);

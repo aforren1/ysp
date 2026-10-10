@@ -1,4 +1,4 @@
-/* ysp/net.h - v0.1.0 - public domain single-header Lab Streaming Layer glue
+/* ysp/net.h - v0.2.0 - public domain single-header Lab Streaming Layer glue
  *
  *   Lab Streaming Layer (LSL) on the ysp_rt clock: marker outlets for a
  *   rig's event codes and text, numeric outlets, and inlets that resolve a
@@ -19,34 +19,13 @@
  *   later have it in libc).
  *
  *   ---------------------------------------------------------------------
- *   CHANGELOG
- *   ---------------------------------------------------------------------
- *   v0.1.0 - first version: the run-time loader, string, int32 and float32
- *          outlets, inlets with the lifecycle, two clock fits, marker and
- *          edge events, the stream ring; the ysp/screen.h trigger channel
- *          and the ysp/device.h role glue.
- *
- *   STATUS: v0.1.0, 2026-10-09. Built with MSVC 19.44 (/W4 /WX, C11 and
- *   C++17), MinGW-w64 gcc 16.1 and gcc 11.4 on WSL2 (C99, C11, C++17,
- *   -Werror). tests/adapt/net_test.c runs every path against a fake liblsl
- *   (a table of functions in the test): marker round trips, both fits
- *   against known offsets, drift and round trips, a 10 kHz stream on the
- *   reader thread, resolve timeouts, an ambiguous key, a wrong stream, a
- *   stream that disappears and returns, and the loader without liblsl.
- *   tests/loopback/net_loopback.c ran against the real liblsl, 1.17.7 on
- *   Windows (tools/vendor_lsl.py) and 1.17.5 and 1.17.7 on WSL2, in one
- *   process and in two; tests/compile/lsl_abi.cpp checks the declarations
- *   against lsl_c.h. No LabStreamer was attached: docs/net.md has the
- *   numbers and what that leaves open.
- *
- *   ---------------------------------------------------------------------
  *   USAGE
  *   ---------------------------------------------------------------------
  *       #define YSP_NET_IMPLEMENTATION
  *       #include "ysp/net.h"
  *
  *       static ynet_lsl lib;
- *       if (ynet_lsl_load(&lib, NULL) != YNET_OK) die(lib.error);
+ *       if (!ynet_lsl_open(&lib, NULL)) die(ynet_lsl_error(&lib));
  *
  *       static ynet_outlet marks;                       // an outlet
  *       ynet_outlet_desc o = { 0 };
@@ -55,8 +34,9 @@
  *       o.key = "lsl:ysp-markers:Markers:booth2";       // name:type:source_id
  *       o.device = 3;
  *       o.ring = &log_ring;
- *       if (!ynet_outlet_start(&marks, &o)) die(ynet_outlet_error(&marks));
- *       ynet_out_mark(&marks, 12, "target_on");
+ *       if (!ynet_outlet_open(&marks, &o)) die(ynet_outlet_error(&marks));
+ *       int rc = ynet_out_mark(&marks, 12, "target_on");
+ *       if (rc < 0) fprintf(stderr, "marker: %s\n", ynet_strerror(rc));
  *
  *       static ynet_inlet ref;                          // an inlet, ~190 KB
  *       ynet_inlet_desc d = { 0 };
@@ -67,25 +47,28 @@
  *       d.sink = to_bridge;                             // yscr_push_input()
  *       d.stream = &ring;                               // numeric samples
  *       d.ring = &log_ring;
- *       ynet_inlet_start(&ref, &d);
+ *       if (!ynet_inlet_open(&ref, &d)) die(ynet_inlet_error(&ref));
+ *       // open returns while the inlet resolves its key (OPENING)
+ *       if (ynet_inlet_wait_running(&ref, YRT_S(5)) < 0) die(ynet_inlet_error(&ref));
  *       ...
- *       ynet_inlet_stop(&ref);
- *       ynet_outlet_stop(&marks);
- *       ynet_lsl_unload(&lib);
+ *       ynet_inlet_close(&ref);
+ *       ynet_outlet_close(&marks);
+ *       ynet_lsl_close(&lib);
  *
  *   ---------------------------------------------------------------------
  *   THE LIBRARY (ynet_lsl)
  *   ---------------------------------------------------------------------
- *   ynet_lsl_load(lib, path) opens liblsl and finds the functions this
+ *   ynet_lsl_open(lib, path) opens liblsl and finds the functions this
  *   header uses (their declarations follow liblsl's lsl_c.h; the struct
  *   names them without "lsl_"). path NULL tries $YSP_LSL_PATH, then
  *   lsl.dll and liblsl.dll (Windows), liblsl.so, .so.2, .so.1 (Linux),
- *   liblsl.dylib, liblsl.2.dylib (macOS). Returns YNET_OK, YNET_ERR_NOLIB
- *   (no library: lib->error says where it looked) or YNET_ERR_SYMBOL (a
- *   function is missing: an old liblsl). lib->version is
+ *   liblsl.dylib, liblsl.2.dylib (macOS). Returns true, or false with the
+ *   reason in ynet_lsl_error(lib): no library (it says where it looked), or
+ *   a function is missing (an old liblsl). lib->version is
  *   lsl_library_version() (116 is 1.16). A caller may also fill the table
- *   itself (a test's fake) and leave handle NULL. Load once, before any
- *   instance starts; unload after every instance stopped.
+ *   itself (a test's fake) and leave handle NULL. Open once, before any
+ *   instance opens; ynet_lsl_close() after every instance closed. The
+ *   close is safe on a zeroed table, after a failed open, and twice.
  *
  *   ---------------------------------------------------------------------
  *   MATCH KEYS (desc.key)
@@ -98,11 +81,15 @@
  *   (add the source_id or the hostname). An outlet's key gives the name
  *   (required), the type and the source_id of the stream it makes.
  *   ynet_resolve_all() lists the streams on the network with their keys.
+ *   An outlet and an inlet copy desc.key and desc.role into their handle
+ *   (an inlet resolves its key again after every loss): a key has at most
+ *   YNET_KEY_MAX - 1 (239) characters, a role YNET_ROLE_MAX - 1 (31); a
+ *   longer one fails the open with a message. No allocation.
  *
  *   ---------------------------------------------------------------------
  *   OUTLETS
  *   ---------------------------------------------------------------------
- *   ynet_outlet_start() makes the stream (desc.format YNET_STRING, the
+ *   ynet_outlet_open() makes the stream (desc.format YNET_STRING, the
  *   default, YNET_INT32 or YNET_FLOAT32; desc.channels, 1 by default;
  *   desc.rate_hz, 0 = irregular). Calls from any thread:
  *     ynet_out_mark(o, code, text)          one marker, stamped now
@@ -121,7 +108,10 @@
  *   target time of _at or a trigger (else 0), u32[8] the code, u16[18]
  *   YNET_OUT_* flags, u16[19] the mark's number; with text, TEXT records
  *   "mark ..." follow (34 characters each). Numeric pushes are counted,
- *   not recorded. Each call returns YNET_OK or a YNET_ERR_*.
+ *   not recorded. Each call returns YNET_OK or a YNET_ERR_* and never
+ *   writes ynet_outlet_error(): several threads may call them at once, and
+ *   the message would race (README.md, Conventions, Errors).
+ *   ynet_strerror() names the code; ynet_out_last() gives the last call.
  *
  *   ---------------------------------------------------------------------
  *   INLETS AND THEIR LIFECYCLE
@@ -135,7 +125,12 @@
  *              the inlet is destroyed and the key resolved again
  *     FAILED   the stream at the key has another format or channel count
  *              than desc.format and desc.channels: a wrong stream. No retry
- *     CLOSED   stopped
+ *     CLOSED   closed
+ *   ynet_inlet_open() returns while the inlet is OPENING.
+ *   ynet_inlet_wait_running(in, timeout_ns) waits until it is RUNNING: it
+ *   returns YNET_RUNNING, YNET_ERR_TIMEOUT, or YNET_ERR_STATE when the
+ *   inlet ends FAILED (a wrong stream) or is CLOSED, with the reason in
+ *   ynet_inlet_error(). In manual mode it calls ynet_inlet_poll() itself.
  *   liblsl's own recovery is off, so a loss is seen and logged. Each open
  *   restarts the remote fit (an outlet that comes back may run on another
  *   clock); a GAP record gives the last arrival before the loss and the
@@ -209,13 +204,19 @@
  *   ---------------------------------------------------------------------
  *   THREADS AND MANUAL MODE
  *   ---------------------------------------------------------------------
- *   ynet_inlet_start() starts one reader thread, elevated with
+ *   ynet_inlet_open() starts one reader thread, elevated with
  *   yrt_thread_elevate() unless desc.no_elevate. Its pulls wait at most
- *   read_timeout_ms (10 ms). ynet_inlet_stop() joins it; that can take a
+ *   read_timeout_ns (10 ms). ynet_inlet_close() joins it; that can take a
  *   resolve's wait. desc.manual: no thread; call ynet_inlet_poll() from
  *   your loop. desc.now replaces yrt_now_ns() (tests). Nothing allocates
- *   after start except inside liblsl; liblsl allocates each string sample
- *   and the header frees it with lsl_destroy_string().
+ *   after the open except inside liblsl; liblsl allocates each string
+ *   sample and the header frees it with lsl_destroy_string().
+ *   desc.lsl_max_buflen is liblsl's max_buflen, passed as given: seconds
+ *   of data (or hundreds of samples for an irregular stream) that liblsl
+ *   keeps for the inlet, 0 = 30. It is an LSL protocol value, like the
+ *   lsl_ stamps (double seconds on liblsl's clock) and lsl_offset_s and
+ *   lsl_rtt_s in ynet_stats (liblsl's newest time correction); every
+ *   other time is int64_t ns on the ysp_rt clock.
  *
  *   ---------------------------------------------------------------------
  *   GLUE
@@ -228,15 +229,50 @@
  *   running ysp/device.h instance has the role).
  *
  *   ---------------------------------------------------------------------
+ *   CHANGELOG
+ *   ---------------------------------------------------------------------
+ *   v0.2.0 - The ysp conventions (README.md, Conventions); breaks the API.
+ *          ynet_lsl_load() and ynet_lsl_unload() are bool ynet_lsl_open()
+ *          and void ynet_lsl_close(), with ynet_lsl_error() (do not read
+ *          lib.error). ynet_outlet_start/stop() and ynet_inlet_start/stop()
+ *          are ynet_outlet_open/close() and ynet_inlet_open/close(). Times
+ *          are int64_t ns: ynet_resolve_all(..., wait_ns),
+ *          ynet_inlet_poll(in, timeout_ns), desc.read_timeout_ns (was
+ *          read_timeout_ms). desc.buffer_s is desc.lsl_max_buflen, and
+ *          ynet_stats.offset_s and rtt_s are lsl_offset_s and lsl_rtt_s:
+ *          liblsl's own values, named so. ynet_stream_init() returns 0 or
+ *          YNET_ERR_ARG. New ynet_inlet_wait_running() and
+ *          YNET_ERR_TIMEOUT. The outlet and the inlet copy desc.key and
+ *          desc.role into the handle (YNET_KEY_MAX, YNET_ROLE_MAX): the
+ *          reader thread read the caller's key again at every reconnect.
+ *   v0.1.0 - first version: the run-time loader, string, int32 and float32
+ *          outlets, inlets with the lifecycle, two clock fits, marker and
+ *          edge events, the stream ring; the ysp/screen.h trigger channel
+ *          and the ysp/device.h role glue.
+ *
+ *   STATUS: v0.1.0, 2026-10-09. Built with MSVC 19.44 (/W4 /WX, C11 and
+ *   C++17), MinGW-w64 gcc 16.1 and gcc 11.4 on WSL2 (C99, C11, C++17,
+ *   -Werror). tests/adapt/net_test.c runs every path against a fake liblsl
+ *   (a table of functions in the test): marker round trips, both fits
+ *   against known offsets, drift and round trips, a 10 kHz stream on the
+ *   reader thread, resolve timeouts, an ambiguous key, a wrong stream, a
+ *   stream that disappears and returns, and the loader without liblsl.
+ *   tests/loopback/net_loopback.c ran against the real liblsl, 1.17.7 on
+ *   Windows (tools/vendor_lsl.py) and 1.17.5 and 1.17.7 on WSL2, in one
+ *   process and in two; tests/compile/lsl_abi.cpp checks the declarations
+ *   against lsl_c.h. No LabStreamer was attached: docs/net.md has the
+ *   numbers and what that leaves open.
+ *
+ *   ---------------------------------------------------------------------
  *   LICENSE: public domain / MIT-0, see end of file.
  */
 #ifndef YSP_NET_H_INCLUDED
 #define YSP_NET_H_INCLUDED
 
 #define YNET_VERSION_MAJOR 0
-#define YNET_VERSION_MINOR 1
+#define YNET_VERSION_MINOR 2
 #define YNET_VERSION_PATCH 0
-#define YNET_VERSION_STRING "0.1.0"
+#define YNET_VERSION_STRING "0.2.0"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -261,6 +297,12 @@ extern "C" {
 #define YNET_ERR_STATE  -4    /* not running                                  */
 #define YNET_ERR_LSL    -5    /* liblsl returned an error                     */
 #define YNET_ERR_FORMAT -6    /* the call does not fit the stream's format    */
+#define YNET_ERR_TIMEOUT -7   /* not RUNNING within the wait                  */
+
+/* The longest desc.key and desc.role, with the NUL: the handles keep a
+ * copy (MATCH KEYS). A key fits ynet_found.key; a role, ydev_roles. */
+#define YNET_KEY_MAX  240
+#define YNET_ROLE_MAX 32
 
 /* Lifecycle: ysp/device.h's numbers */
 #define YNET_CLOSED  0
@@ -343,12 +385,16 @@ typedef struct ynet_lsl {
     void*         handle;          /* the loaded library; NULL for a filled table */
     int32_t       version;         /* lsl_library_version()                       */
     char          path[260];       /* what loaded                                 */
-    char          error[300];
+    char          error[300];      /* read it with ynet_lsl_error()               */
 } ynet_lsl;
 
 YNET_API const char* ynet_version(void);
-YNET_API int  ynet_lsl_load(ynet_lsl* lib, const char* path);
-YNET_API void ynet_lsl_unload(ynet_lsl* lib);
+/* THE LIBRARY: true, or false with the reason in ynet_lsl_error(). */
+YNET_API bool ynet_lsl_open(ynet_lsl* lib, const char* path);
+/* Unloads liblsl and zeroes lib. Safe on a zeroed lib, after a failed
+ * open, and twice. */
+YNET_API void ynet_lsl_close(ynet_lsl* lib);
+YNET_API const char* ynet_lsl_error(const ynet_lsl* lib);
 /* lsl_local_clock() in ns: the LSL clock of this machine, not ysp_rt. */
 YNET_API int64_t ynet_lsl_now_ns(const ynet_lsl* lib);
 YNET_API const char* ynet_strerror(int code);
@@ -376,8 +422,9 @@ typedef struct ynet_found {
     int    format, channels;
     double rate_hz;
 } ynet_found;
-/* Every stream liblsl sees within wait_s; the count (at most cap), or < 0. */
-YNET_API int  ynet_resolve_all(const ynet_lsl* lib, ynet_found* out, int cap, double wait_s);
+/* Every stream liblsl sees within wait_ns (ns); the count (at most cap), or
+ * < 0. */
+YNET_API int  ynet_resolve_all(const ynet_lsl* lib, ynet_found* out, int cap, int64_t wait_ns);
 
 /* --- the stream ring ------------------------------------------------------------ */
 
@@ -401,9 +448,10 @@ typedef struct ynet_stream {
     float             newest[YNET_MAX_CHANNELS];
 } ynet_stream;
 
-/* Lay out a ring of the largest power of two of records that fits. false
- * for room for fewer than 2, or channels outside 1..64. */
-YNET_API bool     ynet_stream_init(ynet_stream* s, void* mem, size_t bytes, int channels);
+/* An init (no close): lay out a ring of the largest power of two of
+ * records that fits. 0, or YNET_ERR_ARG for room for fewer than 2, or
+ * channels outside 1..64. */
+YNET_API int      ynet_stream_init(ynet_stream* s, void* mem, size_t bytes, int channels);
 /* Up to max samples, oldest first: t (ysp_rt ns), lsl (the stamp, s), x
  * (max * channels floats); any of them NULL to skip. The count. */
 YNET_API int      ynet_stream_read(ynet_stream* s, int64_t* t, double* lsl, float* x, int max);
@@ -416,8 +464,9 @@ YNET_API uint32_t ynet_stream_dropped(ynet_stream* s);
 
 typedef struct ynet_outlet_desc {
     const ynet_lsl*    lib;
-    const char*        role;          /* logged                                 */
-    const char*        key;           /* lsl:<name>:<type>:<source_id>          */
+    const char*        role;          /* logged; copied, < YNET_ROLE_MAX        */
+    const char*        key;           /* lsl:<name>:<type>:<source_id>; copied,
+                                       * < YNET_KEY_MAX characters              */
     uint32_t           device;        /* the role's index (aux), > 0            */
     int                format;        /* 0 = YNET_STRING                        */
     int                channels;      /* 0 = 1                                  */
@@ -450,11 +499,14 @@ typedef struct ynet_outlet {
     ynet_out_info  last;
     int            started;
     union { unsigned char b[64]; void* p; int64_t i; double f; } lock_mem;
+    char           key_buf[YNET_KEY_MAX];    /* d.key points here              */
+    char           role_buf[YNET_ROLE_MAX];  /* d.role points here             */
     char           err[160];
 } ynet_outlet;
 
-YNET_API bool ynet_outlet_start(ynet_outlet* o, const ynet_outlet_desc* desc);
-YNET_API void ynet_outlet_stop(ynet_outlet* o);
+YNET_API bool ynet_outlet_open(ynet_outlet* o, const ynet_outlet_desc* desc);
+YNET_API void ynet_outlet_close(ynet_outlet* o);
+/* The output calls (OUTLETS): any thread, codes only. */
 YNET_API int  ynet_out_mark(ynet_outlet* o, uint32_t code, const char* text);
 YNET_API int  ynet_out_mark_at(ynet_outlet* o, uint32_t code, const char* text, int64_t t_ns);
 /* desc.code_names or the code, stamped with deadline_ns, flagged FLIP: what
@@ -482,8 +534,8 @@ typedef struct ynet_edge {
 
 typedef struct ynet_inlet_desc {
     const ynet_lsl* lib;
-    const char*    role;
-    const char*    key;              /* MATCH KEYS                             */
+    const char*    role;             /* copied, < YNET_ROLE_MAX characters     */
+    const char*    key;              /* MATCH KEYS; copied, < YNET_KEY_MAX     */
     uint32_t       device;           /* the role's index, > 0                  */
     int            kind;             /* events' yin kind; 0 = YIN_KIND_SYNC    */
     int            format;           /* required format; 0 = any of the three  */
@@ -502,9 +554,10 @@ typedef struct ynet_inlet_desc {
                                       * an irregular one); < 0 = never         */
     int64_t        correct_ns;       /* time corrections: 0 = every 1 s        */
     int64_t        max_unc_ns;       /* 0 = 5 ms                               */
-    int32_t        buffer_s;         /* liblsl's buffer: 0 = 30 (s, or x100
-                                      * samples for an irregular stream)       */
-    int            read_timeout_ms;  /* 0 = 10                                 */
+    int32_t        lsl_max_buflen;   /* liblsl's max_buflen, an LSL value: 0 =
+                                      * 30 (s, or x100 samples for an irregular
+                                      * stream)                                */
+    int64_t        read_timeout_ns;  /* the reader's longest pull: 0 = 10 ms   */
     bool           manual;           /* no thread: call ynet_inlet_poll()      */
     bool           no_elevate;
     int64_t      (*now)(void* ctx);  /* the clock; NULL = yrt_now_ns()         */
@@ -518,7 +571,7 @@ typedef struct ynet_stats {
     uint64_t     resolves, ambiguous, corrections, refused;
     int64_t      last_rx_ns;         /* ysp_rt time of the last arrival        */
     int64_t      busy_ns;            /* time the reader spent on samples       */
-    double       offset_s, rtt_s;    /* the newest time correction             */
+    double       lsl_offset_s, lsl_rtt_s; /* liblsl's newest time correction (s) */
     double       rate_hz;            /* nominal                                */
     double       measured_hz;        /* samples in the last whole second       */
     int          format, channels;
@@ -549,12 +602,21 @@ typedef struct ynet_inlet {
     float          data[YNET__CHUNK_FLOATS];
     double         ts[YNET__CHUNK_SAMPLES];
     union { unsigned char b[64]; void* p; int64_t i; double f; } thread_mem, lock_mem;
+    char           key_buf[YNET_KEY_MAX];    /* d.key points here              */
+    char           role_buf[YNET_ROLE_MAX];  /* d.role points here             */
     char           err[160];
 } ynet_inlet;
 
-YNET_API bool ynet_inlet_start(ynet_inlet* in, const ynet_inlet_desc* desc);
-YNET_API void ynet_inlet_stop(ynet_inlet* in);
-YNET_API int  ynet_inlet_poll(ynet_inlet* in, int timeout_ms);
+YNET_API bool ynet_inlet_open(ynet_inlet* in, const ynet_inlet_desc* desc);
+YNET_API void ynet_inlet_close(ynet_inlet* in);
+/* Manual mode: one step, pulling for at most timeout_ns (ns). The state. */
+YNET_API int  ynet_inlet_poll(ynet_inlet* in, int64_t timeout_ns);
+/* Wait at most timeout_ns (ns; 0 or less: look once) for RUNNING (INLETS AND
+ * THEIR LIFECYCLE): YNET_RUNNING, YNET_ERR_TIMEOUT, or YNET_ERR_STATE when
+ * the inlet ends FAILED or CLOSED; on failure ynet_inlet_error() says why.
+ * In manual mode it calls ynet_inlet_poll(); with desc.now it gives up when
+ * a poll does not advance that clock. From the thread that opened in. */
+YNET_API int  ynet_inlet_wait_running(ynet_inlet* in, int64_t timeout_ns);
 YNET_API int  ynet_inlet_state(ynet_inlet* in);
 YNET_API void ynet_inlet_stats(ynet_inlet* in, ynet_stats* out);
 /* The ysp_rt time of a stamp of this stream, from the newest fits; 0 before
@@ -682,6 +744,7 @@ YNET_API const char* ynet_strerror(int code) {
     case YNET_ERR_STATE:  return "not running";
     case YNET_ERR_LSL:    return "liblsl error";
     case YNET_ERR_FORMAT: return "wrong format for the stream";
+    case YNET_ERR_TIMEOUT: return "not running in time";
     default:              return "?";
     }
 }
@@ -738,7 +801,7 @@ static void ynet__close(void* h) {
 #endif
 }
 
-YNET_API int ynet_lsl_load(ynet_lsl* lib, const char* path) {
+YNET_API bool ynet_lsl_open(ynet_lsl* lib, const char* path) {
 #if defined(_WIN32)
     static const char* const names[] = { "lsl.dll", "liblsl.dll", NULL };
 #elif defined(__APPLE__)
@@ -752,7 +815,7 @@ YNET_API int ynet_lsl_load(ynet_lsl* lib, const char* path) {
     int nt = 0, i;
     size_t k;
     void* h = NULL;
-    if (!lib) return YNET_ERR_ARG;
+    if (!lib) return false;
     memset(lib, 0, sizeof *lib);
 #if defined(_WIN32)
     {   /* not getenv(): MSVC deprecates it */
@@ -778,7 +841,7 @@ YNET_API int ynet_lsl_load(ynet_lsl* lib, const char* path) {
         for (i = 0; i < nt && n < sizeof lib->error; i++)
             n += (size_t)snprintf(lib->error + n, sizeof lib->error - n, " %s", tried[i]);
         if (n < sizeof lib->error) snprintf(lib->error + n, sizeof lib->error - n, "); set YSP_LSL_PATH");
-        return YNET_ERR_NOLIB;
+        return false;
     }
     for (k = 0; k < sizeof ynet__syms / sizeof ynet__syms[0]; k++) {
 #if defined(_WIN32)
@@ -791,17 +854,19 @@ YNET_API int ynet_lsl_load(ynet_lsl* lib, const char* path) {
                      lib->path, ynet__syms[k].name);
             ynet__close(h);
             lib->path[0] = '\0';
-            return YNET_ERR_SYMBOL;
+            return false;
         }
         /* a function pointer into its slot: memcpy, which no cast warning sees */
         memcpy((unsigned char*)lib + ynet__syms[k].off, &f, sizeof f);
     }
     lib->handle = h;
     lib->version = lib->library_version();
-    return YNET_OK;
+    return true;
 }
 
-YNET_API void ynet_lsl_unload(ynet_lsl* lib) {
+YNET_API const char* ynet_lsl_error(const ynet_lsl* lib) { return lib ? lib->error : "ysp_net: NULL lib"; }
+
+YNET_API void ynet_lsl_close(ynet_lsl* lib) {
     if (!lib) return;
     ynet__close(lib->handle);
     memset(lib, 0, sizeof *lib);
@@ -895,11 +960,12 @@ static void ynet__info_key(const ynet_lsl* lib, void* info, ynet_key* k) {
     ynet__clean(k->hostname, sizeof k->hostname, lib->get_hostname(info));
 }
 
-YNET_API int ynet_resolve_all(const ynet_lsl* lib, ynet_found* out, int cap, double wait_s) {
+YNET_API int ynet_resolve_all(const ynet_lsl* lib, ynet_found* out, int cap, int64_t wait_ns) {
     void* buf[64];
     int n, i;
     if (!ynet__lib_ok(lib) || !out || cap <= 0) return YNET_ERR_ARG;
-    n = lib->resolve_all(buf, 64, wait_s);
+    /* liblsl takes seconds */
+    n = lib->resolve_all(buf, 64, wait_ns > 0 ? (double)wait_ns / 1e9 : 0.0);
     if (n < 0) return YNET_ERR_LSL;
     for (i = 0; i < n; i++) {
         if (i < cap) {
@@ -918,23 +984,23 @@ YNET_API int ynet_resolve_all(const ynet_lsl* lib, ynet_found* out, int cap, dou
 
 /* --- the stream ring ---------------------------------------------------------------------- */
 
-YNET_API bool ynet_stream_init(ynet_stream* s, void* mem, size_t bytes, int channels) {
+YNET_API int ynet_stream_init(ynet_stream* s, void* mem, size_t bytes, int channels) {
     uintptr_t a;
     size_t stride, n = 1;
-    if (!s) return false;
+    if (!s) return YNET_ERR_ARG;
     memset(s, 0, sizeof *s);
-    if (!mem || channels < 1 || channels > YNET_MAX_CHANNELS) return false;
+    if (!mem || channels < 1 || channels > YNET_MAX_CHANNELS) return YNET_ERR_ARG;
     a = ((uintptr_t)mem + 7u) & ~(uintptr_t)7u;
-    if (bytes < (size_t)(a - (uintptr_t)mem)) return false;
+    if (bytes < (size_t)(a - (uintptr_t)mem)) return YNET_ERR_ARG;
     bytes -= (size_t)(a - (uintptr_t)mem);
     stride = YNET_STREAM_STRIDE(channels);
     while (n * 2 * stride <= bytes && n < ((size_t)1 << 30)) n *= 2;
-    if (n < 2 || n * stride > bytes) return false;
+    if (n < 2 || n * stride > bytes) return YNET_ERR_ARG;
     s->rec = (unsigned char*)a;
     s->mask = (uint32_t)(n - 1);
     s->stride = (uint32_t)stride;
     s->channels = (uint32_t)channels;
-    return true;
+    return 0;
 }
 
 YNET_API uint32_t ynet_stream_capacity(const ynet_stream* s) { return s && s->rec ? s->mask + 1u : 0u; }
@@ -1089,7 +1155,7 @@ static int64_t ynet__onow(const ynet_outlet* o) { return ynet__clock(o->d.now, o
 
 YNET_API const char* ynet_outlet_error(const ynet_outlet* o) { return o ? o->err : "ysp_net: NULL outlet"; }
 
-YNET_API bool ynet_outlet_start(ynet_outlet* o, const ynet_outlet_desc* desc) {
+YNET_API bool ynet_outlet_open(ynet_outlet* o, const ynet_outlet_desc* desc) {
     double l = 0.0;
     int64_t end = 0, w = 0;
     int i;
@@ -1097,7 +1163,7 @@ YNET_API bool ynet_outlet_start(ynet_outlet* o, const ynet_outlet_desc* desc) {
     memset(o, 0, sizeof *o);
 #define YNET__OFAIL(...) do { snprintf(o->err, sizeof o->err, "ysp_net: " __VA_ARGS__); return false; } while (0)
     if (!desc) YNET__OFAIL("NULL desc");
-    if (!ynet__lib_ok(desc->lib)) YNET__OFAIL("desc.lib is not a loaded liblsl (ynet_lsl_load)");
+    if (!ynet__lib_ok(desc->lib)) YNET__OFAIL("desc.lib is not an open liblsl (ynet_lsl_open)");
     if (!desc->role || !desc->role[0]) YNET__OFAIL("desc.role is required");
     if (!desc->key || !ynet_key_parse(desc->key, &o->k) || !o->k.name[0])
         YNET__OFAIL("desc.key must be lsl:<name>:<type>:<source_id> with a name (MATCH KEYS)");
@@ -1107,7 +1173,13 @@ YNET_API bool ynet_outlet_start(ynet_outlet* o, const ynet_outlet_desc* desc) {
     if (desc->channels < 0 || desc->channels > YNET_MAX_CHANNELS) YNET__OFAIL("desc.channels: 0 to 64");
     if (desc->format != YNET_FLOAT32 && desc->channels > 1) YNET__OFAIL("a marker outlet has one channel");
     if (desc->rate_hz < 0) YNET__OFAIL("desc.rate_hz must be >= 0");
+    if (strlen(desc->key) >= sizeof o->key_buf) YNET__OFAIL("desc.key: at most 239 characters (YNET_KEY_MAX)");
+    if (strlen(desc->role) >= sizeof o->role_buf) YNET__OFAIL("desc.role: at most 31 characters (YNET_ROLE_MAX)");
     o->d = *desc;
+    memcpy(o->key_buf, desc->key, strlen(desc->key) + 1);
+    memcpy(o->role_buf, desc->role, strlen(desc->role) + 1);
+    o->d.key = o->key_buf;
+    o->d.role = o->role_buf;
     if (!o->d.format) o->d.format = YNET_STRING;
     if (!o->d.channels) o->d.channels = 1;
     o->info = o->d.lib->create_streaminfo(o->k.name, o->k.type, o->d.channels, o->d.rate_hz, o->d.format,
@@ -1145,7 +1217,7 @@ YNET_API bool ynet_outlet_start(ynet_outlet* o, const ynet_outlet_desc* desc) {
     return true;
 }
 
-YNET_API void ynet_outlet_stop(ynet_outlet* o) {
+YNET_API void ynet_outlet_close(ynet_outlet* o) {
     yrt_payload u;
     if (!o || !o->started) return;
     ynet__lock(ynet__omx(o));
@@ -1315,7 +1387,7 @@ static void ynet__refresh(ynet_inlet* in) {
     yrt_fit_get(&in->local, &in->st.local);
     yrt_fit_get(&in->remote, &in->st.remote);
     {
-        int64_t half = (int64_t)(in->st.rtt_s * 0.5e9);
+        int64_t half = (int64_t)(in->st.lsl_rtt_s * 0.5e9);
         int64_t r = in->st.remote.ready && in->st.remote.spread_ns > half ? in->st.remote.spread_ns : half;
         in->unc_ns = r + in->st.local.width_ns;
     }
@@ -1362,8 +1434,8 @@ static void ynet__correct(ynet_inlet* in, double timeout_s) {
     if (ec != 0 || remote == 0.0) return;
     if (in->have_offset && remote == in->last_remote) return;   /* liblsl's cached estimate */
     in->last_remote = remote;
-    in->st.offset_s = off;
-    in->st.rtt_s = unc;
+    in->st.lsl_offset_s = off;
+    in->st.lsl_rtt_s = unc;
     in->have_offset = 1;
     in->st.corrections++;
     if (!in->have_rorigin) { in->rorigin_s = remote; in->have_rorigin = 1; }
@@ -1383,7 +1455,7 @@ static void ynet__correct(ynet_inlet* in, double timeout_s) {
 /* A stamp of the stream on ysp_rt: 0 when nothing maps it yet. */
 static int64_t ynet__map(const ynet_inlet* in, double s) {
     if (in->st.remote.ready && in->have_rorigin) return yrt_fit_map(&in->remote, ynet__ticks(s, in->rorigin_s));
-    if (in->have_offset) return yrt_fit_map(&in->local, ynet__ticks(s + in->st.offset_s, in->origin_s));
+    if (in->have_offset) return yrt_fit_map(&in->local, ynet__ticks(s + in->st.lsl_offset_s, in->origin_s));
     return 0;
 }
 
@@ -1541,19 +1613,24 @@ static void ynet__try_open(ynet_inlet* in, int64_t t) {
         char msg[64];
         snprintf(msg, sizeof msg, "format %d, %d channels", fmt, ch);
         ynet__text(in->d.ring, in->d.device, ynet__inow(in), "wrong", msg);
-        snprintf(in->err, sizeof in->err, "ysp_net: the stream at %s has format %d and %d channels", in->d.key, fmt, ch);
+        /* under the lock: ynet_inlet_wait_running() writes the message too */
+        ynet__lock(ynet__imx(in));
+        snprintf(in->err, sizeof in->err, "ysp_net: the stream at %.100s has format %d and %d channels", in->d.key, fmt, ch);
+        ynet__unlock(ynet__imx(in));
         ynet__drop_inlet(in);
         ynet__set_state(in, YNET_FAILED, YNET_WHY_WRONG_STREAM);
         return;
     }
     for (i = 0; i < in->d.n_edges; i++)
         if (in->d.edges[i].channel >= ch) {
+            ynet__lock(ynet__imx(in));
             snprintf(in->err, sizeof in->err, "ysp_net: edge %d reads channel %d of %d", i, in->d.edges[i].channel, ch);
+            ynet__unlock(ynet__imx(in));
             ynet__drop_inlet(in);
             ynet__set_state(in, YNET_FAILED, YNET_WHY_WRONG_STREAM);
             return;
         }
-    in->inlet = in->d.lib->create_inlet(in->info, in->d.buffer_s, 0, 0);
+    in->inlet = in->d.lib->create_inlet(in->info, in->d.lsl_max_buflen, 0, 0);
     if (!in->inlet) { ynet__drop_inlet(in); return; }
     in->d.lib->open_stream(in->inlet, (double)in->d.resolve_ns / 1e9 + 1.0, &ec);
     if (ec != 0) { ynet__drop_inlet(in); return; }
@@ -1595,10 +1672,10 @@ static void ynet__try_open(ynet_inlet* in, int64_t t) {
     ynet__set_state(in, YNET_RUNNING, YNET_WHY_OPENED);
 }
 
-static void ynet__pull(ynet_inlet* in, int timeout_ms) {
+static void ynet__pull(ynet_inlet* in, int64_t timeout_ns) {
     int32_t ec = 0;
     int64_t t_read, t_done;
-    double tmo = (double)timeout_ms / 1000.0;
+    double tmo = (double)timeout_ns / 1e9;     /* liblsl takes seconds */
     int n = 0;
     if (in->st.format == YNET_FLOAT32) {
         unsigned long cap = (unsigned long)(YNET__CHUNK_FLOATS / in->st.channels);
@@ -1637,7 +1714,7 @@ static void ynet__pull(ynet_inlet* in, int timeout_ms) {
         ynet__lose(in, YNET_WHY_SILENT);
 }
 
-static void ynet__step(ynet_inlet* in, int timeout_ms) {
+static void ynet__step(ynet_inlet* in, int64_t timeout_ns) {
     int64_t t = ynet__inow(in);
     if (t >= in->next_local) {
         ynet__local_pair(in);
@@ -1647,15 +1724,14 @@ static void ynet__step(ynet_inlet* in, int timeout_ms) {
         if (t >= in->next_try) ynet__try_open(in, t);
         else if (!in->d.now) {
             int64_t w = in->next_try - t;
-            int64_t cap = (int64_t)timeout_ms * 1000000;
-            (void)yrt_sleep_ns((int64_t)(w < cap ? w : cap));
+            (void)yrt_sleep_ns(w < timeout_ns ? w : timeout_ns);
         }
     } else if (in->state == YNET_RUNNING) {
         if (t >= in->next_corr) {
             ynet__correct(in, 0.1);
             in->next_corr = t + in->d.correct_ns;
         }
-        ynet__pull(in, timeout_ms);
+        ynet__pull(in, timeout_ns);
         t = ynet__inow(in);
         if (t - in->rate_t0 >= 1000000000) {
             in->st.measured_hz = (double)(in->st.samples - in->rate_n0) * 1e9 / (double)(t - in->rate_t0);
@@ -1663,7 +1739,7 @@ static void ynet__step(ynet_inlet* in, int timeout_ms) {
             in->rate_n0 = in->st.samples;
         }
     } else if (!in->d.now) {
-        (void)yrt_sleep_ns((int64_t)timeout_ms * 1000000);   /* FAILED: nothing to do */
+        (void)yrt_sleep_ns(timeout_ns);   /* FAILED: nothing to do */
     }
     ynet__publish(in);
 }
@@ -1684,7 +1760,7 @@ static void* ynet__thread(void* arg)
 {
     ynet_inlet* in = (ynet_inlet*)arg;
     if (!in->d.no_elevate) (void)yrt_thread_elevate(NULL);
-    while (!ynet__stopping(in)) ynet__step(in, in->d.read_timeout_ms);
+    while (!ynet__stopping(in)) ynet__step(in, in->d.read_timeout_ns);
 #if defined(_WIN32)
     return 0;
 #else
@@ -1692,13 +1768,13 @@ static void* ynet__thread(void* arg)
 #endif
 }
 
-YNET_API bool ynet_inlet_start(ynet_inlet* in, const ynet_inlet_desc* desc) {
+YNET_API bool ynet_inlet_open(ynet_inlet* in, const ynet_inlet_desc* desc) {
     int i;
     if (!in) return false;
     memset(in, 0, sizeof *in);
 #define YNET__IFAIL(...) do { snprintf(in->err, sizeof in->err, "ysp_net: " __VA_ARGS__); return false; } while (0)
     if (!desc) YNET__IFAIL("NULL desc");
-    if (!ynet__lib_ok(desc->lib)) YNET__IFAIL("desc.lib is not a loaded liblsl (ynet_lsl_load)");
+    if (!ynet__lib_ok(desc->lib)) YNET__IFAIL("desc.lib is not an open liblsl (ynet_lsl_open)");
     if (!desc->role || !desc->role[0]) YNET__IFAIL("desc.role is required");
     if (!desc->key || !ynet_key_parse(desc->key, &in->k) || ynet_key_predicate(&in->k, in->pred, sizeof in->pred) < 0)
         YNET__IFAIL("desc.key must be lsl:<name>:<type>:<source_id>:<hostname> with one field set, "
@@ -1713,16 +1789,24 @@ YNET_API bool ynet_inlet_start(ynet_inlet* in, const ynet_inlet_desc* desc) {
         if (desc->edges[i].channel < 0 || desc->edges[i].channel >= YNET_MAX_CHANNELS || desc->edges[i].hysteresis < 0)
             YNET__IFAIL("desc.edges[%d]: channel 0 to 63, hysteresis >= 0", i);
     if (desc->stream && !desc->stream->rec) YNET__IFAIL("desc.stream is not initialized (ynet_stream_init)");
-    if (desc->buffer_s < 0) YNET__IFAIL("desc.buffer_s must be >= 0");
+    if (desc->lsl_max_buflen < 0) YNET__IFAIL("desc.lsl_max_buflen must be >= 0");
+    if (strlen(desc->key) >= sizeof in->key_buf) YNET__IFAIL("desc.key: at most 239 characters (YNET_KEY_MAX)");
+    if (strlen(desc->role) >= sizeof in->role_buf) YNET__IFAIL("desc.role: at most 31 characters (YNET_ROLE_MAX)");
     in->d = *desc;
+    /* the reader resolves the key again after every loss: the caller's
+     * strings need not outlive this call */
+    memcpy(in->key_buf, desc->key, strlen(desc->key) + 1);
+    memcpy(in->role_buf, desc->role, strlen(desc->role) + 1);
+    in->d.key = in->key_buf;
+    in->d.role = in->role_buf;
     if (!in->d.kind) in->d.kind = YIN_KIND_SYNC;
     if (in->d.resolve_ns <= 0) in->d.resolve_ns = 500000000;
     if (in->d.retry_ns <= 0) in->d.retry_ns = 1000000000;
     if (in->d.silent_ns == 0) in->d.silent_ns = 1000000000;
     if (in->d.correct_ns <= 0) in->d.correct_ns = 1000000000;
     if (in->d.max_unc_ns <= 0) in->d.max_unc_ns = 5000000;
-    if (in->d.buffer_s == 0) in->d.buffer_s = 30;
-    if (in->d.read_timeout_ms <= 0) in->d.read_timeout_ms = 10;
+    if (in->d.lsl_max_buflen == 0) in->d.lsl_max_buflen = 30;
+    if (in->d.read_timeout_ns <= 0) in->d.read_timeout_ns = 10000000;
     ynet__lock_init(ynet__imx(in));
     ynet__fit_init(&in->local, YRT_FIT_BRACKET, 0x10000u + in->d.device, 0, in->d.ring);
     ynet__fit_init(&in->remote, YRT_FIT_UNBIASED, in->d.device, 0, in->d.ring);
@@ -1762,7 +1846,7 @@ YNET_API bool ynet_inlet_start(ynet_inlet* in, const ynet_inlet_desc* desc) {
     return true;
 }
 
-YNET_API void ynet_inlet_stop(ynet_inlet* in) {
+YNET_API void ynet_inlet_close(ynet_inlet* in) {
     if (!in || !in->started) return;
     ynet__lock(ynet__imx(in));
     in->stop = 1;
@@ -1787,10 +1871,45 @@ YNET_API void ynet_inlet_stop(ynet_inlet* in) {
     ynet__lock_free(ynet__imx(in));
 }
 
-YNET_API int ynet_inlet_poll(ynet_inlet* in, int timeout_ms) {
+YNET_API int ynet_inlet_poll(ynet_inlet* in, int64_t timeout_ns) {
     if (!in || !in->started || !in->d.manual) return in ? in->state : YNET_CLOSED;
-    ynet__step(in, timeout_ms < 0 ? 0 : timeout_ms);
+    ynet__step(in, timeout_ns < 0 ? 0 : timeout_ns);
     return in->state;
+}
+
+/* The wait's failure message, under the lock: the reader thread writes the
+ * FAILED message there. */
+static int ynet__wait_fail(ynet_inlet* in, int rc, int state) {
+    ynet__lock(ynet__imx(in));
+    if (state != YNET_FAILED || !in->err[0])
+        snprintf(in->err, sizeof in->err, "ysp_net: %s: %s (state %s)", in->d.role, ynet_strerror(rc),
+                 ynet_state_name(state));
+    ynet__unlock(ynet__imx(in));
+    return rc;
+}
+
+YNET_API int ynet_inlet_wait_running(ynet_inlet* in, int64_t timeout_ns) {
+    int64_t end;
+    if (!in) return YNET_ERR_STATE;
+    if (!in->started) {
+        snprintf(in->err, sizeof in->err, "ysp_net: ynet_inlet_wait_running: not open");
+        return YNET_ERR_STATE;
+    }
+    end = ynet__inow(in) + (timeout_ns > 0 ? timeout_ns : 0);
+    for (;;) {
+        int64_t before = ynet__inow(in), now;
+        int s = in->d.manual ? ynet_inlet_poll(in, 0) : ynet_inlet_state(in);
+        if (s == YNET_RUNNING) return YNET_RUNNING;
+        if (s == YNET_FAILED || s == YNET_CLOSED) return ynet__wait_fail(in, YNET_ERR_STATE, s);
+        now = ynet__inow(in);
+        if (now >= end) return ynet__wait_fail(in, YNET_ERR_TIMEOUT, s);
+        if (in->d.now) {
+            /* the caller's clock: a poll that does not move it never will */
+            if (now == before) return ynet__wait_fail(in, YNET_ERR_TIMEOUT, s);
+        } else {
+            (void)yrt_sleep_ns(end - now < 1000000 ? end - now : 1000000);
+        }
+    }
 }
 
 YNET_API int ynet_inlet_state(ynet_inlet* in) {
@@ -1828,7 +1947,7 @@ YNET_API int64_t ynet_inlet_map(ynet_inlet* in, double lsl_s) {
     lo = in->snap_origin;
     ynet__unlock(ynet__imx(in));
     if (s.remote.ready) r = ynet__info_map(&s.remote, ynet__ticks(lsl_s, ro));
-    else if (s.corrections && s.local.ready) r = ynet__info_map(&s.local, ynet__ticks(lsl_s + s.offset_s, lo));
+    else if (s.corrections && s.local.ready) r = ynet__info_map(&s.local, ynet__ticks(lsl_s + s.lsl_offset_s, lo));
     return r;
 }
 

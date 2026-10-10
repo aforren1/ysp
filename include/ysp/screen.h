@@ -1014,7 +1014,7 @@
  *   worker (ysp/rt.h WORKER) that open() starts when desc.n_triggers > 0.
  *   The callback runs on that thread, elevated; keep it to a port write:
  *       static void ttl(void* port, const yscr_trigger_info* i) {
- *           ypar_pulse_async((ypar_port*)port, (uint8_t)i->code, 2000);
+ *           ypar_pulse_async((ypar_port*)port, (uint8_t)i->code, YRT_MS(2));
  *       }
  *   ypar_pulse_async() writes the leading edge on the calling thread, here
  *   the worker at the deadline. yscr_trigger_at(s, channel, code, t)

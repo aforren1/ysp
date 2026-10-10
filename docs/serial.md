@@ -1,6 +1,6 @@
 # ysp/serial.h design
 
-Status: **v0.4, implemented.** Windows uses the Win32 COM API with overlapped
+Status: **v0.5.0, implemented.** Windows uses the Win32 COM API with overlapped
 I/O; Linux and macOS share a termios backend. Since v0.4 the header depends on
 `ysp/rt.h` for the clock, the waits, the scheduling ladder and the deadline
 worker; see [Depends on ysp/rt.h](#depends-on-ysprth). Verified on Linux against a
@@ -68,7 +68,7 @@ unexercised. The header's top comment is the user-facing documentation
 ### Depends on ysp/rt.h
 
 v0.4 deletes every line of timing code in this header and includes `ysp/rt.h`
-instead: `yser_now_us` is `yrt_now_us`, the pulse-width wait is
+instead: `yser_now_us` became `yrt_now_us` (v0.5.0 removed it), the pulse-width wait is
 `yrt_sleep_until`, the reservation type is `yrt_sched_deadline`, the policy
 enum is `yrt_policy`, and the async-pulse thread is a `yrt_worker`. It is a
 hard dependency, in the `stb_truetype.h` / `stb_rect_pack.h` and
@@ -106,7 +106,7 @@ whole cost, and it is paid once at copy time.
 oversight in `ysp/rt.h`, it is what makes the callback usable: the callback may
 re-arm its own worker and may block, and a submit from another thread never
 waits behind it. But this library's trailing byte is a write into a byte stream
-that can block for up to `write_timeout_ms`, and the library's promise is that
+that can block for up to `write_timeout_ns`, and the library's promise is that
 exactly one thread writes the port at a time. Running the callback under the
 worker's lock would buy that serialization and deadlock the first time a submit
 raced a stalled write; so a straight substitution of `yrt_worker` for the old
@@ -226,9 +226,9 @@ read, and shutdown is the only documented use of the call.
 
 ### Read model
 
-`yser_read(p, buf, cap, timeout_ms, flags)` with `YSER_READ_ANY` returns
+`yser_read(p, buf, cap, timeout_ns, flags)` with `YSER_READ_ANY` returns
 when at least one byte is available, with everything buffered at that moment.
-`timeout_ms = 0` polls, `YSER_TIMEOUT_INFINITE` blocks. This is the pyserial
+`timeout_ns = 0` polls, `YSER_TIMEOUT_INFINITE` (-1) blocks. This is the pyserial
 `timeout` model reduced to one call with a per-call timeout instead of
 port-level state, so a frame loop can poll with 0 and a listener thread can
 block, on the same handle, without reconfiguring the port.
@@ -291,7 +291,7 @@ documented response to a short count is to send the rest again.
 
 ### Write model
 
-`yser_write` blocks until the driver accepted every byte or `write_timeout_ms`
+`yser_write` blocks until the driver accepted every byte or `write_timeout_ns`
 elapsed, and returns the count accepted; a short count is the timeout signal,
 not an error code. The timeout is port-level (in `desc`) because a trigger
 write should never wait on a policy decision at the call site; the 1 s
@@ -303,14 +303,14 @@ round trip to the bridge chip per trigger.
 
 ### Pulse
 
-`yser_pulse(p, on, off, usec)` takes both bytes because `0x00` is the idle
+`yser_pulse(p, on, off, width_ns)` takes both bytes because `0x00` is the idle
 byte for latching boxes (TriggerBox, BioSemi, DIY) and a protocol byte for
 XID. It is blocking and spins on Windows; the header says to prefer
 device-timed pulses.
 
 ### Async pulse
 
-`yser_pulse_async(p, on, off, usec)` writes `on` on the calling thread and
+`yser_pulse_async(p, on, off, width_ns)` writes `on` on the calling thread and
 returns; a worker thread the library owns writes `off` at an absolute deadline
 taken right after the onset write. Since v0.4 that thread is a `yrt_worker`,
 so the ladder, the ready handshake that makes `yser_port.async_policy` final
@@ -341,7 +341,7 @@ every writer-role write takes the writer mutex (PI `pthread_mutex` where the
 platform has one, critical section on Windows), the worker reports failures
 through `wr_oserr` like any writer, and if a stalled device blocks one of them
 the other waits for up to
-`write_timeout_ms`. `ysp/parallel.h` does not pay that because `outb` cannot
+`write_timeout_ns`. `ysp/parallel.h` does not pay that because `outb` cannot
 block. The alternative, giving the worker its own queue and never blocking a
 user write, would reorder bytes on a stream where order is the protocol.
 
@@ -360,13 +360,13 @@ reaped by the thread that started it, so it never borrows the user writer's.
 That flush is not free: it runs with the worker's lock held and `yser_close`
 is blocked in the join behind it, so "at once" is a statement about the
 deadline, not about the call returning. It is bounded by a fixed 50 ms rather
-than by `write_timeout_ms`, which a trigger sender may well have set to a
+than by `write_timeout_ns`, which a trigger sender may well have set to a
 second or to `YSER_TIMEOUT_INFINITE`; a close that hangs forever on a wedged
 device is worse than a trailing byte that never lands. A healthy device takes
 one byte in microseconds, so the bound only ever fires on a device that is
 already lost, and the loopback check of this path measures a few hundred
 microseconds. The header states the 50 ms, because a promise of "at once" that
-is really "up to `write_timeout_ms`" is the kind of claim this collection must
+is really "up to `write_timeout_ns`" is the kind of claim this collection must
 not make.
 
 The Windows worker's sub-millisecond spin used to re-check the quit flag and a
@@ -384,11 +384,12 @@ Windows (about 1.2 ms) than on Linux and macOS (200 us), for the reasons
 The header states the USB latency budget up front (about 1 ms host-to-device,
 16 ms device-to-host on FTDI defaults) so users do not treat a serial pulse as
 a parallel-port pulse. "Take your timestamp after the write" was a guess; the
-header now says to bracket the call with `yser_now_us()` and record both
+header now says to bracket the call with `yrt_now_ns()` and record both
 sides, and to measure the offset to the physical edge once with a scope.
-`yser_now_us` is public so the caller and the library share one clock base, and
-since v0.4 it is literally `yrt_now_us`, so that base is shared with
-`ysp/rt.h` and with every other header built on it.
+Until v0.5.0 the header had its own `yser_now_us()`, a wrapper of the
+`ysp/rt.h` clock in microseconds; v0.5.0 removed it, because every time in
+the C API is now nanoseconds on that clock, and a second name for one clock
+in a second unit is a way to mix units in a log.
 
 ### Threading
 
@@ -591,6 +592,47 @@ macro, on their first include, and both stand down when any of
 already set. The include order between them therefore does not matter. The one
 rule that remains is the rule for any system header: an implementation file
 that includes other system headers first defines `_DEFAULT_SOURCE` itself.
+
+### Nanoseconds and version macros (v0.5.0)
+
+v0.5.0 applies the repository conventions (README.md, Conventions). Every
+time a caller writes is an `int64_t` count of nanoseconds: the pulse width
+(`yser_pulse()`, `yser_pulse_async()`), the read timeout (`yser_read()`),
+the break duration (`yser_send_break()`) and `yser_desc.write_timeout_ns`.
+The old parameters were `uint32_t` microseconds and milliseconds. The new
+names say the unit, so a caller that still sets `write_timeout_ms` gets a
+compile error instead of a timeout one million times too short.
+
+Decisions:
+
+- **The OS waits stay in milliseconds.** `COMMTIMEOUTS`, `poll()` and
+  `select()` (as this header uses it) take whole milliseconds. The entry
+  points convert once and round up, so a 0.5 ms timeout waits 1 ms instead
+  of becoming a poll. The internal code keeps its millisecond deadlines.
+- **`YSER_TIMEOUT_INFINITE` is -1.** Another negative read timeout polls, so
+  a timeout computed as a deadline minus now does not block after the
+  deadline. A negative `write_timeout_ns` other than -1 fails `yser_open()`
+  with a message, and a negative width or break duration returns
+  `YSER_ERR_ARG` before any write.
+- **`yser_now_us()` is gone.** Callers bracket a write with `yrt_now_ns()`.
+  The Python and MATLAB bindings keep their `now_us()`, computed from
+  `yrt_now_ns()`, and keep their millisecond and microsecond arguments and
+  their `TIMEOUT_INFINITE` of 4294967295: the C glue converts.
+- **Return codes stay as they were.** Every call except `yser_open()` may run
+  on a reader or a writer thread, so none of them writes the message (README,
+  Conventions, Errors: the second-thread exception). They return a
+  `YSER_ERR_*` code.
+
+`YSER_VERSION_MAJOR`, `_MINOR`, `_PATCH` and `_STRING` are new, as in
+`ysp/rt.h`. The CHANGELOG and STATUS moved to the end of the top comment, and
+the USAGE block zeroes the desc and sets fields, so it builds as C99 and
+C++17.
+
+Checked on 2026-10-10 on Windows 11: `tests/compile/serial.c` (C11, C++17,
+`YSER_NO_THREADS`) now names every entry point by type and calls the time
+entry points on a closed handle; MSVC 19.44 (/W4 /WX) and MinGW-w64 gcc 16.1
+(-Werror) build the tree. No port was opened: as before, no byte has moved
+through the Windows backend.
 
 ## Tests
 

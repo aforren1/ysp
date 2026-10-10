@@ -758,9 +758,9 @@ static void* f_open(void* user, const char* key, char* found, size_t cap) {
     snprintf(found, cap, "fake");
     return f;
 }
-static int f_read(void* conn, uint8_t* buf, int cap, int timeout_ms) {
+static int f_read(void* conn, uint8_t* buf, int cap, int64_t timeout_ns) {
     (void)conn; (void)buf; (void)cap;
-    g_now += (int64_t)timeout_ms * 1000000;
+    g_now += timeout_ns;
     return 0;
 }
 static int f_write(void* conn, const uint8_t* buf, int n) {
@@ -814,8 +814,8 @@ static void check_binding(void) {
      * the role its index, and the box gets its bytes */
     g_p.role[yrig_find(&g_p, "trig") - g_p.role].pulse_ns = 2000000;
     memset(&g_fb, 0, sizeof g_fb);
-    CHECK(yrig_start(&dev, &g_p, "trig", &base, g_err, sizeof g_err));
-    CHECK_I(ydev_poll(&dev, 1), YDEV_RUNNING);
+    CHECK(yrig_open_device(&dev, &g_p, "trig", &base));
+    CHECK_I(ydev_wait_running(&dev, YRT_MS(5)), YDEV_RUNNING);
     CHECK_S(g_fb.key, "serial:0403:6001:TB0123:");
     CHECK_I(ydev_role_index(&roles, "trig"), 1);
     CHECK(ydev_role_device(&roles, 1) == &dev);
@@ -824,7 +824,7 @@ static void check_binding(void) {
     CHECK_I(ydev_out_mark(&dev, 7, "m"), YDEV_OK);      /* desc.pulse_ns from the profile: 2 ms */
     {
         int64_t t0 = g_now;
-        while (g_now < t0 + 3000000) (void)ydev_poll(&dev, 1);
+        while (g_now < t0 + 3000000) (void)ydev_poll(&dev, YRT_MS(1));
     }
     CHECK(g_fb.n == 4 && g_fb.bytes[0] == 0 && g_fb.bytes[1] == 5 && g_fb.bytes[2] == 7 && g_fb.bytes[3] == 0);
     s = yrig_source(&g_p, &dev);
@@ -839,9 +839,9 @@ static void check_binding(void) {
         tr->bounds.set = false;
         tr->bounds.check = YRIG_CHECK_NONE;
     }
-    ydev_stop(&dev);
+    ydev_close(&dev);
     /* an input role whose bounds were checked: tier 1 with its bounds */
-    CHECK(yrig_start(&dev, &g_p, "resp", &base, g_err, sizeof g_err));
+    CHECK(yrig_open_device(&dev, &g_p, "resp", &base));
     s = yrig_source(&g_p, &dev);
     CHECK_I(s.tier, YIN_TIER_UNKNOWN);                  /* NOT_RUN: no folder */
     yrig_find(&g_p, "resp")->bounds.check = YRIG_CHECK_OK;
@@ -856,15 +856,34 @@ static void check_binding(void) {
     CHECK(s.tier == YIN_TIER_UNKNOWN && s.lo_us == 0 && s.hi_us == 0);
     yrig_find(&g_p, "resp")->bounds.check = YRIG_CHECK_OK;
     CHECK_I(yrig_source(&g_q, &dev).tier, YIN_TIER_UNKNOWN);   /* another profile without the role */
-    ydev_stop(&dev);
+    ydev_close(&dev);
     /* a start that the device layer refuses names the role */
     d = base;
     d.device = 0;
     d.roles = NULL;
-    CHECK(!yrig_start(&dev, &g_p, "trig", &d, g_err, sizeof g_err));
-    CHECK_HAS(g_err, "roles.trig: ");
-    CHECK(!yrig_start(&dev, &g_p, "eye", &base, g_err, sizeof g_err));
-    CHECK(!yrig_start(NULL, &g_p, "trig", &base, g_err, sizeof g_err));
+    CHECK(!yrig_open_device(&dev, &g_p, "trig", &d));
+    CHECK_HAS(ydev_error(&dev), "roles.trig: ysp_device: desc.device");
+    ydev_close(&dev);                                   /* after a failed open */
+    /* refused by the profile before the open: the message is in the
+     * device's place too (v0.3.0) */
+    CHECK(!yrig_open_device(&dev, &g_p, "eye", &base));
+    CHECK_HAS(ydev_error(&dev), "has no role \"eye\"");
+    CHECK(!yrig_open_device(&dev, &g_p, "unbound", &base));
+    CHECK_HAS(ydev_error(&dev), "roles.unbound: no device is bound");
+    ydev_close(&dev);
+    ydev_close(&dev);                                   /* twice */
+    CHECK(!yrig_open_device(NULL, &g_p, "trig", &base));
+    {
+        /* the device keeps its own copy of the role and the key: the
+         * profile may go (v0.3.0, ysp/device.h copies them) */
+        static yrig_profile tmp;
+        tmp = g_p;
+        CHECK(yrig_open_device(&dev, &tmp, "trig", &base));
+        memset(&tmp, 0, sizeof tmp);
+        CHECK_S(dev.d.key, "serial:0403:6001:TB0123:");
+        CHECK_S(dev.d.role, "trig");
+        ydev_close(&dev);
+    }
     /* a binder rebinds a role and saves it */
     CHECK_I(yrig_bind(&g_p, "trig", YBOX_LINES, "serial:0403:6001:AD1:"), YRIG_OK);
     d = base;

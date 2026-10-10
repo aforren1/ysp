@@ -243,3 +243,11 @@ test = "rig"
 why = "A baud on a stream means nothing; accepting it hides a role bound to the wrong family."
 find = '''        if (ro->family_id == YRIG_FAMILY_LSL && (yjs_get(opt, "baud") || yjs_get(opt, "ftdi_latency_s") || yjs_get(opt, "latched")))'''
 replace = '''        if (ro->family_id == YRIG_FAMILY_LSL && 0)'''
+
+[[mutant]]
+id = "rig-29"
+name = "a refused role's message not in the device's place (v0.3.0)"
+test = "rig"
+why = "yrig_open_device() has no err buffer: a role the profile refuses must still say why, in ydev_error(dev)."
+find = '''    if (yrig_desc(p, role, &d, dev->err, sizeof dev->err) != YRIG_OK) return false;'''
+replace = '''    if (yrig_desc(p, role, &d, NULL, 0) != YRIG_OK) return false;'''

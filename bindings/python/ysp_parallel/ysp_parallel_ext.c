@@ -178,7 +178,7 @@ static PyObject* Port_write_data(PyObject* self, PyObject* arg) {
     if (v == (unsigned long)-1 && PyErr_Occurred()) return NULL;
     if (v > 0xFF) { PyErr_SetString(PyExc_ValueError, "value must be 0..255"); return NULL; }
     pp_lock(self);
-    bool ok = ypar_write_data(AS_PORT(self), (uint8_t)v);
+    bool ok = ypar_write_data(AS_PORT(self), (uint8_t)v) >= 0;
     if (!ok) pp_raise(AS_PORT(self));
     pp_unlock(self);
     if (!ok) return NULL;
@@ -187,12 +187,12 @@ static PyObject* Port_write_data(PyObject* self, PyObject* arg) {
 
 static PyObject* Port_read_data(PyObject* self, PyObject* Py_UNUSED(ignored)) {
     pp_lock(self);
-    uint8_t v = ypar_read_data(AS_PORT(self));
-    bool ok = ypar_error(AS_PORT(self))[0] == '\0';
+    int v = ypar_read_data(AS_PORT(self));
+    bool ok = v >= 0;
     if (!ok) pp_raise(AS_PORT(self));
     pp_unlock(self);
     if (!ok) return NULL;
-    return PyLong_FromUnsignedLong(v);
+    return PyLong_FromUnsignedLong((unsigned long)v);
 }
 
 static PyObject* Port_set_data_dir(PyObject* self, PyObject* args, PyObject* kwds) {
@@ -200,7 +200,7 @@ static PyObject* Port_set_data_dir(PyObject* self, PyObject* args, PyObject* kwd
     int input = 0;
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "p", kw, &input)) return NULL;
     pp_lock(self);
-    bool ok = ypar_set_data_dir(AS_PORT(self), input ? true : false);
+    bool ok = ypar_set_data_dir(AS_PORT(self), input ? true : false) >= 0;
     if (!ok) pp_raise(AS_PORT(self));
     pp_unlock(self);
     if (!ok) return NULL;
@@ -217,7 +217,8 @@ static PyObject* Port_pulse(PyObject* self, PyObject* args, PyObject* kwds) {
      * keeps another thread out of the library while it does. */
     pp_lock(self);
     Py_BEGIN_ALLOW_THREADS
-    ok = ypar_pulse(AS_PORT(self), (uint8_t)value, usec);
+    /* The module keeps microseconds; the C API takes ns. */
+    ok = ypar_pulse(AS_PORT(self), (uint8_t)value, (int64_t)usec * 1000) >= 0;
     Py_END_ALLOW_THREADS
     if (!ok) pp_raise(AS_PORT(self));
     pp_unlock(self);
@@ -235,7 +236,7 @@ static PyObject* Port_pulse_async(PyObject* self, PyObject* args, PyObject* kwds
      * goes to the port and takes the worker's lock. */
     pp_lock(self);
     Py_BEGIN_ALLOW_THREADS
-    ok = ypar_pulse_async(AS_PORT(self), (uint8_t)value, usec);
+    ok = ypar_pulse_async(AS_PORT(self), (uint8_t)value, (int64_t)usec * 1000) >= 0;
     Py_END_ALLOW_THREADS
     if (!ok) pp_raise(AS_PORT(self));
     pp_unlock(self);
@@ -247,12 +248,12 @@ static PyObject* Port_pulse_async(PyObject* self, PyObject* args, PyObject* kwds
 
 static PyObject* Port_read_status(PyObject* self, PyObject* Py_UNUSED(ignored)) {
     pp_lock(self);
-    uint8_t v = ypar_read_status(AS_PORT(self));
-    bool ok = ypar_error(AS_PORT(self))[0] == '\0';
+    int v = ypar_read_status(AS_PORT(self));
+    bool ok = v >= 0;
     if (!ok) pp_raise(AS_PORT(self));
     pp_unlock(self);
     if (!ok) return NULL;
-    return PyLong_FromUnsignedLong(v);
+    return PyLong_FromUnsignedLong((unsigned long)v);
 }
 
 static PyObject* Port_get_status_bit(PyObject* self, PyObject* arg) {
@@ -260,7 +261,7 @@ static PyObject* Port_get_status_bit(PyObject* self, PyObject* arg) {
     if (mask == (unsigned long)-1 && PyErr_Occurred()) return NULL;
     pp_lock(self);
     int set = ypar_get_status_bit(AS_PORT(self), (uint8_t)mask);
-    bool ok = ypar_error(AS_PORT(self))[0] == '\0';
+    bool ok = set >= 0;
     if (!ok) pp_raise(AS_PORT(self));
     pp_unlock(self);
     if (!ok) return NULL;
@@ -269,12 +270,12 @@ static PyObject* Port_get_status_bit(PyObject* self, PyObject* arg) {
 
 static PyObject* Port_read_control(PyObject* self, PyObject* Py_UNUSED(ignored)) {
     pp_lock(self);
-    uint8_t v = ypar_read_control(AS_PORT(self));
-    bool ok = ypar_error(AS_PORT(self))[0] == '\0';
+    int v = ypar_read_control(AS_PORT(self));
+    bool ok = v >= 0;
     if (!ok) pp_raise(AS_PORT(self));
     pp_unlock(self);
     if (!ok) return NULL;
-    return PyLong_FromUnsignedLong(v);
+    return PyLong_FromUnsignedLong((unsigned long)v);
 }
 
 static PyObject* Port_write_control(PyObject* self, PyObject* arg) {
@@ -282,7 +283,7 @@ static PyObject* Port_write_control(PyObject* self, PyObject* arg) {
     if (v == (unsigned long)-1 && PyErr_Occurred()) return NULL;
     if (v > 0xFF) { PyErr_SetString(PyExc_ValueError, "value must be 0..255"); return NULL; }
     pp_lock(self);
-    bool ok = ypar_write_control(AS_PORT(self), (uint8_t)v);
+    bool ok = ypar_write_control(AS_PORT(self), (uint8_t)v) >= 0;
     if (!ok) pp_raise(AS_PORT(self));
     pp_unlock(self);
     if (!ok) return NULL;
@@ -295,7 +296,7 @@ static PyObject* Port_set_control_bit(PyObject* self, PyObject* args, PyObject* 
     int on;
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "Ip", kw, &mask, &on)) return NULL;
     pp_lock(self);
-    bool ok = ypar_set_control_bit(AS_PORT(self), (uint8_t)mask, on ? true : false);
+    bool ok = ypar_set_control_bit(AS_PORT(self), (uint8_t)mask, on ? true : false) >= 0;
     if (!ok) pp_raise(AS_PORT(self));
     pp_unlock(self);
     if (!ok) return NULL;
@@ -455,7 +456,7 @@ static PyObject* mod_list_ports(PyObject* Py_UNUSED(self), PyObject* Py_UNUSED(a
  * same time base instead of mixing in time.monotonic(), which is a different
  * clock on Windows. ysp.serial.now_us() reads the same clock. */
 static PyObject* mod_now_us(PyObject* Py_UNUSED(self), PyObject* Py_UNUSED(args)) {
-    return PyLong_FromUnsignedLongLong((unsigned long long)yrt_now_us());
+    return PyLong_FromUnsignedLongLong((unsigned long long)yrt_now_ns() / 1000u);
 }
 
 static PyMethodDef module_methods[] = {
