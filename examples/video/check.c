@@ -64,7 +64,7 @@ int main(int argc, char** argv) {
         char err[300];
         memset(&q, 0, sizeof q);
         q.path = file;
-        if (!yvid_probe(&q, &info, err, sizeof err)) { fprintf(stderr, "video_check: %s\n", err); return 1; }
+        if (yvid_probe(&q, &info, err, sizeof err) < 0) { fprintf(stderr, "video_check: %s\n", err); return 1; }
     }
     w = info.w; h = info.h;
     memset(&sd, 0, sizeof sd);

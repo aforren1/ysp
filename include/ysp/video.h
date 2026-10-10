@@ -1,4 +1,4 @@
-/* ysp/video.h - v0.2.2 - public domain single-header video playback library
+/* ysp/video.h - v0.3.0 - public domain single-header video playback library
  *
  *   A movie as a stimulus. On each display frame the header takes the
  *   frame's PREDICTED ONSET, asks the movie clock for the movie time at
@@ -24,80 +24,6 @@
  *   compiles by default.
  *
  *   ---------------------------------------------------------------------
- *   CHANGELOG
- *   ---------------------------------------------------------------------
- *   v0.2.2 - XXH64 on MSVC: little-endian loads through memcpy instead of
- *          byte by byte, which MSVC did not fuse; yvid_xxh64() on 1 GiB
- *          went from 5.9 to 6.3 GB/s to 11.9 to 14.1 GB/s (MinGW gcc
- *          unchanged at 13.0 to 13.6), the same hashes. A 1080p I420
- *          frame's hash is half as long on the decode thread.
- *   v0.2.1 - Fixed: after a decoder's YVID_PENDING the decode thread
- *          slept until the next seek or control, so a custom decoder that
- *          stalled once showed no new frame again (the frame on screen
- *          REPEATED with DECODE_LATE). It now asks again once a display
- *          frame, and catches up as before: it decodes the due frame (from
- *          its keyframe), and the frames passed over are DROPPED with
- *          DECODE_LATE. The built-in backends never return PENDING.
- *   v0.2.0 - Media Foundation (Windows): H.264 and HEVC (8-bit 4:2:0) in
- *          MP4, decoded into NV12 by the software decoder or DXVA
- *          (desc.hw_decode; AUTO is DXVA, by measurement). yvid_index_make()
- *          makes the index of an MP4 file too: B-frames, a rate that no
- *          frame grid fits, a varying GOP, an edit list, interlace,
- *          rotation, non-square pixels, 10-bit and 4:2:2 or 4:4:4 are
- *          refused by name, the color is read from the H.264 SPS, and every
- *          keyframe is decoded again after a seek to prove it is a clean
- *          entry point. Planar upload: a YUV slot holds its planes and
- *          ysp/gfx.h's video program converts them, so light EOTF works;
- *          the CPU conversion left the play path (yvid_yuv_to_rgba()
- *          stays). YVID_PATH_GPU: DXVA on the screen's device, one GPU
- *          copy a frame, no readback and no upload. yvid_soundtrack(): a
- *          WAV played as a ysp/audio.h stream, locked to the picture by
- *          yvid_follow_audio(). Base rates: the movie plays at its
- *          ysp/timeline.h base's rate. Fixed: after a PENDING decode the
- *          decode thread pushed its slot onto the free queue, whose one
- *          producer is the frame thread (a data race). Breaking:
- *          yvid_index_desc gains backend, hw and no_seek_check;
- *          yvid_desc gains hw_decode and yvid_info gains hw;
- *          YVID_PATH_ZERO_COPY is now YVID_PATH_GPU; a YUV movie's
- *          texture is YGFX_NV12 or YGFX_I420, not RGBA8; light AUTO is
- *          EOTF under a calibration; a file that is not a frame sequence,
- *          MPEG-PS or MP4 is refused at open.
- *   v0.1.0 - first release: the scheduler (due frame by the timeline's
- *          lead rule, cadence, slips, drops and repeats with reasons), the
- *          movie clock read from a ysp_timeline base, the decoder
- *          interface, the frame sequence container (raw, QOI), pl_mpeg
- *          with its index, decode-ahead on a pump, upload through
- *          ysp/gfx.h, I420 and NV12 converted to RGBA8 on the decode
- *          thread, manual mode, seek, loop, the records.
- *
- *   STATUS: v0.2.0, on one Windows 11 laptop (i7-1360P, Iris Xe, ANGLE),
- *   in a 640 x 360 composed window (tier 2); docs/video.md has the
- *   tables. Measured at 1920 x 1080 with Media Foundation: yvid_update()
- *   on the frame thread with the planar upload 0.39 to 0.61 ms mean, 0.7
- *   to 1.3 ms p99 (v0.1's RGBA8 upload 0.9 to 1.07 / 1.5 to 2.0 ms), a
- *   repeat 0.01 ms, YVID_PATH_GPU 0.01 to 0.02 ms. The decode thread at
- *   1080p60: DXVA 5.3 ms mean, 8.5 ms p99 a frame; the software decoder
- *   1.9 / 3.3 ms on it but 13 to 21 ms of CPU a frame on Media
- *   Foundation's threads. Open 115 to 308 ms cold; a seek 32 to 42 ms mean
- *   with DXVA, about 155 ms with the software decoder. pl_mpeg 5.5 ms a
- *   1080p frame. The soundtrack on the real device (WASAPI shared, 48 kHz):
- *   each start within 14 us of its target on ysp_audio's fit, and the
- *   flips' onsets within -0.42 to +0.08 ms (p1 to p99) of each frame's
- *   time on the audio clock, outside a few frames the composed window
- *   flipped a vblank early or late; no gap, no underrun. No heap call per
- *   frame. The core test (a scripted decoder, display and audio device on
- *   a virtual clock; with YVID_TEST_MEDIA the generated MP4 clips)
- *   passes on MSVC 19.44 (C, C++17), MinGW gcc 16.1 (C99, C++17) and gcc
- *   11.4 (C99 -O3, ASan and UBSan, ThreadSanitizer); emcc ran for v0.1.
- *   Mutations: 23 of 23 (v0.1), 29 of 31 (v0.2; two Media Foundation
- *   checks not caught, docs/video.md says why). Not measured: light
- *   and sound (no photodiode or microphone), fullscreen, slips on the
- *   real panel, another GPU. Not built: YVID_PATH_SHARED, AVFoundation, FFmpeg,
- *   capture; open() refuses the ones a desc can ask for, by name.
- *   Outside it and this block, a number in this header is a measurement
- *   only where the text says "measured".
- *
- *   ---------------------------------------------------------------------
  *   USAGE
  *   ---------------------------------------------------------------------
  *   Do this:
@@ -111,20 +37,30 @@
  *   Play a movie, centered at 1:1:
  *
  *       static yscr_screen scr; static ygfx_gfx gfx; static yvid_movie mv;
- *       yscr_open(&scr, &(yscr_desc){0});
- *       ygfx_open(&gfx, &(ygfx_desc){ .screen = &scr });
- *       if (!yvid_open(&mv, &gfx, &(yvid_desc){ .path = "clip.yspseq" }))
- *           die(yvid_error(&mv));
- *       ygfx_stim film = yvid_stim(&mv, &(yvid_stim_desc){0});
- *       yvid_play_at(&mv, YVID_ASAP);
+ *       yscr_desc sd = { 0 };
+ *       if (!yscr_open(&scr, &sd)) die(yscr_error(&scr));
+ *       ygfx_desc gd = { 0 };
+ *       gd.screen = &scr;
+ *       if (!ygfx_open(&gfx, &gd)) die(ygfx_error(&gfx));
+ *       yvid_desc vd = { 0 };
+ *       vd.path = "clip.yspseq";
+ *       if (!yvid_open(&mv, &gfx, &vd)) die(yvid_error(&mv));
+ *       yvid_stim_desc st;                  // an enum first: memset, not { 0 }
+ *       memset(&st, 0, sizeof st);
+ *       ygfx_stim film = yvid_stim(&mv, &st);
+ *       if (yvid_play_at(&mv, YVID_ASAP) < 0) die(yvid_error(&mv));
  *       yscr_frame f;
- *       while (yscr_begin(&scr, &f) == YSCR_OK && yvid_update(&mv, &f) == YVID_OK) {
+ *       int rc = YVID_OK;
+ *       while (yscr_begin(&scr, &f) == YSCR_OK && (rc = yvid_update(&mv, &f)) == YVID_OK) {
  *           ygfx_begin(&gfx, &f); ygfx_draw(&gfx, &film); ygfx_end(&gfx);
  *           yscr_flip(&scr);
  *       }
+ *       if (rc < 0) die(yvid_error(&mv));
+ *       yvid_close(&mv); ygfx_close(&gfx); yscr_close(&scr);
  *
- *   The loop ends at the movie's end, or when yscr_begin() stops (Shift+Esc
- *   by default, ysp/screen.h's abort).
+ *   The loop ends at the movie's end (YVID_ENDED), or when yscr_begin()
+ *   stops (Shift+Esc by default, ysp/screen.h's abort). Every call on the
+ *   movie that fails writes yvid_error() before it returns its code.
  *
  *   Psychtoolbox and PsychoPy, for comparison (from their documentation):
  *
@@ -147,8 +83,9 @@
  *   frame to frame. yvid_update() picks the frame due at f.onset; it
  *   never waits and never reads a clock. The file must be in the canonical
  *   form (CANONICAL FORM); the others accept any file and convert rate,
- *   size and color without a record. There is no rate argument. In C++17,
- *   zero a desc and set its fields one by one.
+ *   size and color without a record. There is no rate argument. In C99
+ *   and C++20 a compound literal does a desc in one line:
+ *   yvid_open(&mv, &gfx, &(yvid_desc){ .path = "clip.yspseq" }).
  *
  *   ---------------------------------------------------------------------
  *   MODEL
@@ -490,14 +427,105 @@
  *   built without -pthread): the movie plays, each decode inside
  *   yvid_update() on the frame thread, and yvid_describe() says so.
  *   Define YVID_API to change the linkage.
+ *
+ *   ---------------------------------------------------------------------
+ *   CHANGELOG
+ *   ---------------------------------------------------------------------
+ *   v0.3.0 - The ysp conventions (README.md, Conventions); breaks the API.
+ *          The frame sequence writer opens, finishes and closes:
+ *          yvid_seq_create() is yvid_seq_open(); yvid_seq_finish() (new)
+ *          writes the index and the header and returns 0 or a code;
+ *          yvid_seq_close() returns void, is safe on a zeroed writer,
+ *          after a failed open and twice, and finishes a writer that was
+ *          not finished. yvid_probe() returns 0 or a negative code
+ *          instead of bool. Every call on a movie or a writer that fails
+ *          writes yvid_error() or yvid_seq_error() first (play_at,
+ *          pause_at, seek, seek_frame, show, update, follow, soundtrack,
+ *          follow_audio, seq_write, seq_finish); a call that wrote none
+ *          gets "ysp_video: <call>: <code's text>". Time parameters say
+ *          ns (t_ns, movie_ns, resume_at_ns, m_ns, period_ns); every
+ *          time was already int64_t ns. YVID_NS_PER_S is gone (YRT_S(1)).
+ *          USAGE builds as C99 and C++17.
+ *   v0.2.2 - XXH64 on MSVC: little-endian loads through memcpy instead of
+ *          byte by byte, which MSVC did not fuse; yvid_xxh64() on 1 GiB
+ *          went from 5.9 to 6.3 GB/s to 11.9 to 14.1 GB/s (MinGW gcc
+ *          unchanged at 13.0 to 13.6), the same hashes. A 1080p I420
+ *          frame's hash is half as long on the decode thread.
+ *   v0.2.1 - Fixed: after a decoder's YVID_PENDING the decode thread
+ *          slept until the next seek or control, so a custom decoder that
+ *          stalled once showed no new frame again (the frame on screen
+ *          REPEATED with DECODE_LATE). It now asks again once a display
+ *          frame, and catches up as before: it decodes the due frame (from
+ *          its keyframe), and the frames passed over are DROPPED with
+ *          DECODE_LATE. The built-in backends never return PENDING.
+ *   v0.2.0 - Media Foundation (Windows): H.264 and HEVC (8-bit 4:2:0) in
+ *          MP4, decoded into NV12 by the software decoder or DXVA
+ *          (desc.hw_decode; AUTO is DXVA, by measurement). yvid_index_make()
+ *          makes the index of an MP4 file too: B-frames, a rate that no
+ *          frame grid fits, a varying GOP, an edit list, interlace,
+ *          rotation, non-square pixels, 10-bit and 4:2:2 or 4:4:4 are
+ *          refused by name, the color is read from the H.264 SPS, and every
+ *          keyframe is decoded again after a seek to prove it is a clean
+ *          entry point. Planar upload: a YUV slot holds its planes and
+ *          ysp/gfx.h's video program converts them, so light EOTF works;
+ *          the CPU conversion left the play path (yvid_yuv_to_rgba()
+ *          stays). YVID_PATH_GPU: DXVA on the screen's device, one GPU
+ *          copy a frame, no readback and no upload. yvid_soundtrack(): a
+ *          WAV played as a ysp/audio.h stream, locked to the picture by
+ *          yvid_follow_audio(). Base rates: the movie plays at its
+ *          ysp/timeline.h base's rate. Fixed: after a PENDING decode the
+ *          decode thread pushed its slot onto the free queue, whose one
+ *          producer is the frame thread (a data race). Breaking:
+ *          yvid_index_desc gains backend, hw and no_seek_check;
+ *          yvid_desc gains hw_decode and yvid_info gains hw;
+ *          YVID_PATH_ZERO_COPY is now YVID_PATH_GPU; a YUV movie's
+ *          texture is YGFX_NV12 or YGFX_I420, not RGBA8; light AUTO is
+ *          EOTF under a calibration; a file that is not a frame sequence,
+ *          MPEG-PS or MP4 is refused at open.
+ *   v0.1.0 - first release: the scheduler (due frame by the timeline's
+ *          lead rule, cadence, slips, drops and repeats with reasons), the
+ *          movie clock read from a ysp_timeline base, the decoder
+ *          interface, the frame sequence container (raw, QOI), pl_mpeg
+ *          with its index, decode-ahead on a pump, upload through
+ *          ysp/gfx.h, I420 and NV12 converted to RGBA8 on the decode
+ *          thread, manual mode, seek, loop, the records.
+ *
+ *   STATUS: v0.3.0: tests/adapt/video_test.c checks the writer's open,
+ *   finish and close, yvid_probe()'s codes and the movie's messages; the
+ *   rest is v0.2.0's. v0.2.0, on one Windows 11 laptop (i7-1360P, Iris Xe, ANGLE),
+ *   in a 640 x 360 composed window (tier 2); docs/video.md has the
+ *   tables. Measured at 1920 x 1080 with Media Foundation: yvid_update()
+ *   on the frame thread with the planar upload 0.39 to 0.61 ms mean, 0.7
+ *   to 1.3 ms p99 (v0.1's RGBA8 upload 0.9 to 1.07 / 1.5 to 2.0 ms), a
+ *   repeat 0.01 ms, YVID_PATH_GPU 0.01 to 0.02 ms. The decode thread at
+ *   1080p60: DXVA 5.3 ms mean, 8.5 ms p99 a frame; the software decoder
+ *   1.9 / 3.3 ms on it but 13 to 21 ms of CPU a frame on Media
+ *   Foundation's threads. Open 115 to 308 ms cold; a seek 32 to 42 ms mean
+ *   with DXVA, about 155 ms with the software decoder. pl_mpeg 5.5 ms a
+ *   1080p frame. The soundtrack on the real device (WASAPI shared, 48 kHz):
+ *   each start within 14 us of its target on ysp_audio's fit, and the
+ *   flips' onsets within -0.42 to +0.08 ms (p1 to p99) of each frame's
+ *   time on the audio clock, outside a few frames the composed window
+ *   flipped a vblank early or late; no gap, no underrun. No heap call per
+ *   frame. The core test (a scripted decoder, display and audio device on
+ *   a virtual clock; with YVID_TEST_MEDIA the generated MP4 clips)
+ *   passes on MSVC 19.44 (C, C++17), MinGW gcc 16.1 (C99, C++17) and gcc
+ *   11.4 (C99 -O3, ASan and UBSan, ThreadSanitizer); emcc ran for v0.1.
+ *   Mutations: 23 of 23 (v0.1), 29 of 31 (v0.2; two Media Foundation
+ *   checks not caught, docs/video.md says why). Not measured: light
+ *   and sound (no photodiode or microphone), fullscreen, slips on the
+ *   real panel, another GPU. Not built: YVID_PATH_SHARED, AVFoundation, FFmpeg,
+ *   capture; open() refuses the ones a desc can ask for, by name.
+ *   Outside it and this block, a number in this header is a measurement
+ *   only where the text says "measured".
  */
 #ifndef YSP_VIDEO_H_INCLUDED
 #define YSP_VIDEO_H_INCLUDED
 
 #define YVID_VERSION_MAJOR 0
-#define YVID_VERSION_MINOR 2
-#define YVID_VERSION_PATCH 2
-#define YVID_VERSION_STRING "0.2.2"
+#define YVID_VERSION_MINOR 3
+#define YVID_VERSION_PATCH 0
+#define YVID_VERSION_STRING "0.3.0"
 
 #include "ysp/gfx.h"
 #include "ysp/timeline.h"
@@ -534,8 +562,6 @@ extern "C" {
 #define YVID_ASAP           0          /* play_at, seek: the first frame it can */
 #define YVID_STAY_PAUSED  (-1)         /* seek: show the target, stay paused */
 #define YVID_LEAD_NONE   (-1.0)        /* desc.lead: never early             */
-
-#define YVID_NS_PER_S INT64_C(1000000000)
 
 /* --- formats and color ------------------------------------------------------ */
 
@@ -998,18 +1024,22 @@ typedef struct yvid_movie {
 YVID_API const char* yvid_version(void);
 YVID_API const char* yvid_strerror(int code);
 
-/* The rule and the times, as pure functions. num/den is the rate; m a
- * movie time; lead_ns = yvid_lead_ns(lead, period). */
+/* The rule and the times, as pure functions, in ns. num/den is the rate;
+ * m_ns a movie time; lead_ns = yvid_lead_ns(lead, period_ns), lead a
+ * fraction of the period. yvid_frame_time() is frame i's movie time. */
 YVID_API int64_t yvid_frame_time(int32_t num, int32_t den, int64_t i);
-YVID_API int64_t yvid_due(int32_t num, int32_t den, int64_t m, int64_t lead_ns);
-YVID_API int64_t yvid_lead_ns(double lead, int64_t period);
+YVID_API int64_t yvid_due(int32_t num, int32_t den, int64_t m_ns, int64_t lead_ns);
+YVID_API int64_t yvid_lead_ns(double lead, int64_t period_ns);
 
 /* Reads the description (a frame sequence's header, or the index of a
- * codec file) without opening a movie. */
-YVID_API bool        yvid_probe(const yvid_desc* d, yvid_info* out, char* err, size_t cap);
+ * codec file) without opening a movie. 0, or a negative code with the
+ * reason in err (may be NULL). */
+YVID_API int         yvid_probe(const yvid_desc* d, yvid_info* out, char* err, size_t cap);
 
 /* Opens the movie on a gfx (NULL: decode and schedule, no texture). The
- * handle must be zeroed or closed. False with yvid_error() set. */
+ * handle must be zeroed or closed. False with yvid_error() set. Every
+ * later call on the movie that returns a negative code writes yvid_error()
+ * first; the calls on a const movie read it and return the code only. */
 YVID_API bool        yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* d);
 YVID_API void        yvid_close(yvid_movie* mv);
 YVID_API const char* yvid_error(const yvid_movie* mv);
@@ -1019,11 +1049,13 @@ YVID_API int         yvid_describe(const yvid_movie* mv, char* buf, size_t cap);
 YVID_API ygfx_stim yvid_stim(const yvid_movie* mv, const yvid_stim_desc* d);
 YVID_API ygfx_tex  yvid_texture(const yvid_movie* mv);
 
-/* Controls. Each returns an id > 0, or a negative code. */
-YVID_API int64_t yvid_play_at(yvid_movie* mv, int64_t t);
-YVID_API int64_t yvid_pause_at(yvid_movie* mv, int64_t t);
-YVID_API int64_t yvid_seek(yvid_movie* mv, int64_t movie_t, int64_t resume_at);
-YVID_API int64_t yvid_seek_frame(yvid_movie* mv, int64_t frame, int64_t resume_at);
+/* Controls. Each returns an id > 0, or a negative code. Times are ns:
+ * t_ns and resume_at_ns on the ysp_rt clock (or YVID_ASAP,
+ * YVID_STAY_PAUSED), movie_ns on the movie's clock. */
+YVID_API int64_t yvid_play_at(yvid_movie* mv, int64_t t_ns);
+YVID_API int64_t yvid_pause_at(yvid_movie* mv, int64_t t_ns);
+YVID_API int64_t yvid_seek(yvid_movie* mv, int64_t movie_ns, int64_t resume_at_ns);
+YVID_API int64_t yvid_seek_frame(yvid_movie* mv, int64_t frame, int64_t resume_at_ns);
 YVID_API int     yvid_show(yvid_movie* mv, int64_t frame);
 YVID_API int     yvid_result(const yvid_movie* mv, int64_t id, yrt_event* out);
 
@@ -1031,7 +1063,8 @@ YVID_API int     yvid_result(const yvid_movie* mv, int64_t id, yrt_event* out);
 YVID_API int     yvid_update(yvid_movie* mv, const yscr_frame* f);
 YVID_API void    yvid_flip_done(yvid_movie* mv, const yscr_record* r);
 YVID_API int     yvid_last(const yvid_movie* mv, yvid_record* out);
-YVID_API int64_t yvid_movie_time(const yvid_movie* mv, int64_t t);
+/* The movie time, ns, at t_ns on the ysp_rt clock. */
+YVID_API int64_t yvid_movie_time(const yvid_movie* mv, int64_t t_ns);
 
 /* Following another clock: before yvid_update(), every frame. unit_at(t)
  * is the clock's unit (a stream frame) at RT time t; rate its units per
@@ -1040,11 +1073,18 @@ typedef int64_t (*yvid_unit_at_fn)(void* ctx, int64_t t);
 YVID_API int yvid_follow(yvid_movie* mv, const yscr_frame* f,
                              yvid_unit_at_fn unit_at, void* ctx, uint32_t rate);
 
-/* Frame sequences. */
-YVID_API bool yvid_seq_create(yvid_seq* w, const yvid_seq_desc* d);
+/* Frame sequences. open creates the file (false with yvid_seq_error());
+ * write appends a frame; finish writes the index and the header and
+ * closes the file, and returns 0 or a negative code: the file is complete
+ * only after a finish that returned 0. close releases the writer: safe on
+ * a zeroed writer, after a failed open, after finish and twice; a writer
+ * not finished is finished first, its outcome in yvid_seq_error(). Each
+ * failing call writes yvid_seq_error(). */
+YVID_API bool yvid_seq_open(yvid_seq* w, const yvid_seq_desc* d);
 YVID_API int  yvid_seq_write(yvid_seq* w, const void* const planes[3],
                                  const int32_t strides[3], const yvid_seq_meta* meta);
-YVID_API int  yvid_seq_close(yvid_seq* w);
+YVID_API int  yvid_seq_finish(yvid_seq* w);
+YVID_API void yvid_seq_close(yvid_seq* w);
 YVID_API const char* yvid_seq_error(const yvid_seq* w);
 
 /* The index of an MPEG-1 (pl_mpeg) or MP4 (Media Foundation) file: decodes
@@ -1231,7 +1271,7 @@ YVID_API uint64_t yvid_heap_calls(void) { return (uint64_t)yvid__ld64((const int
 extern "C" {
 #endif
 
-#define YVID__NS YVID_NS_PER_S
+#define YVID__NS INT64_C(1000000000)
 
 enum { YVID__STOPPED = 0, YVID__PLAYING, YVID__PAUSED, YVID__SEEKING, YVID__MANUAL,
        YVID__ENDED, YVID__FAILED };
@@ -1281,6 +1321,28 @@ YVID_API const char* yvid_strerror(int code) {
     case YVID_ERR_NOT_IMPLEMENTED: return "not implemented";
     default: return code >= 0 ? "ok" : "unknown error";
     }
+}
+
+/* A call on a handle: hides the message's first byte while the call runs,
+ * so yvid__done() can tell whether the call wrote one. One byte each way,
+ * in the frame loop too. e is the handle's error buffer (256 bytes or
+ * more), or NULL. */
+static char yvid__hold(char* e) {
+    char c0 = 0;
+    if (e) { c0 = e[0]; e[0] = '\0'; }
+    return c0;
+}
+
+/* A failure that wrote nothing gets the call's name and the code's text;
+ * a success leaves the message of the last failure as it was. */
+static int64_t yvid__done(char* e, char c0, int64_t rc, const char* what) {
+    if (!e) return rc;
+    if (rc < 0) {
+        if (!e[0]) yvid__fmt(e, 256, "ysp_video: %s: %s", what, yvid_strerror((int)rc));
+    } else if (!e[0]) {
+        e[0] = c0;
+    }
+    return rc;
 }
 
 /* --- time ----------------------------------------------------------------- */
@@ -2062,7 +2124,7 @@ static const uint8_t yvid__zeros[YVID__SEQ_ALIGN] = { 0 };
 
 YVID_API const char* yvid_seq_error(const yvid_seq* w) { return w ? w->error : ""; }
 
-YVID_API bool yvid_seq_create(yvid_seq* w, const yvid_seq_desc* d) {
+YVID_API bool yvid_seq_open(yvid_seq* w, const yvid_seq_desc* d) {
     yvid__canon c;
     yvid_planes pl;
     char e[200];
@@ -2096,8 +2158,8 @@ YVID_API bool yvid_seq_create(yvid_seq* w, const yvid_seq_desc* d) {
     return true;
 }
 
-YVID_API int yvid_seq_write(yvid_seq* w, const void* const planes[3], const int32_t strides[3],
-                                const yvid_seq_meta* meta) {
+static int yvid__seq_write(yvid_seq* w, const void* const planes[3], const int32_t strides[3],
+                           const yvid_seq_meta* meta) {
     yvid_planes in;
     uint8_t fh[YVID__SEQ_FHDR];
     FILE* f;
@@ -2174,7 +2236,14 @@ YVID_API int yvid_seq_write(yvid_seq* w, const void* const planes[3], const int3
     return YVID_OK;
 }
 
-YVID_API int yvid_seq_close(yvid_seq* w) {
+YVID_API int yvid_seq_write(yvid_seq* w, const void* const planes[3], const int32_t strides[3],
+                            const yvid_seq_meta* meta) {
+    char* e = w ? w->error : NULL;
+    char c0 = yvid__hold(e);
+    return (int)yvid__done(e, c0, yvid__seq_write(w, planes, strides, meta), "seq_write");
+}
+
+static int yvid__seq_finish(yvid_seq* w) {
     uint8_t hdr[128];
     yvid__canon c;
     FILE* f;
@@ -2196,6 +2265,18 @@ YVID_API int yvid_seq_close(yvid_seq* w) {
     w->open = 0;
     if (rc == YVID_OK && w->n == 0) { yvid__fmt(w->error, sizeof w->error, "ysp_video: seq: no frames written"); rc = YVID_ERR_ARG; }
     return rc;
+}
+
+YVID_API int yvid_seq_finish(yvid_seq* w) {
+    char* e = w ? w->error : NULL;
+    char c0 = yvid__hold(e);
+    return (int)yvid__done(e, c0, yvid__seq_finish(w), "seq_finish");
+}
+
+YVID_API void yvid_seq_close(yvid_seq* w) {
+    /* not finished: finish, so the frames are not lost; the outcome is in
+     * yvid_seq_error() */
+    if (w && w->open) (void)yvid_seq_finish(w);
 }
 
 /* --- frame sequence: reader backend ------------------------------------------------ */
@@ -4408,10 +4489,11 @@ static int yvid__backend_for(const yvid_desc* d) {
     return -2;   /* none of the three */
 }
 
-YVID_API bool yvid_probe(const yvid_desc* d, yvid_info* out, char* err, size_t cap) {
+YVID_API int yvid_probe(const yvid_desc* d, yvid_info* out, char* err, size_t cap) {
     yvid__canon c;
-    int b;
-    if (!d || !out) { yvid__fmt(err, cap, "no desc"); return false; }
+    int b, rc;
+    if (err && cap) err[0] = '\0';
+    if (!d || !out) { yvid__fmt(err, cap, "ysp_video: probe: no desc or no info"); return YVID_ERR_ARG; }
     memset(out, 0, sizeof *out);
     b = yvid__backend_for(d);
     if (b == YVID_BACKEND_SEQ) {
@@ -4420,23 +4502,23 @@ YVID_API bool yvid_probe(const yvid_desc* d, yvid_info* out, char* err, size_t c
         int32_t comp;
         int64_t io;
         if (yvid__src_open(&s, d->path, d->data, d->size, d->reader, d->reader_ctx) != YVID_OK ||
-            yvid__src_read(&s, 0, hdr, sizeof hdr) != YVID_OK) { yvid__src_close(&s); yvid__fmt(err, cap, "cannot read the file"); return false; }
+            yvid__src_read(&s, 0, hdr, sizeof hdr) != YVID_OK) { yvid__src_close(&s); yvid__fmt(err, cap, "cannot read the file"); return YVID_ERR_IO; }
         yvid__src_close(&s);
-        if (yvid__seq_parse(hdr, &c, &comp, &io, err, cap) < 0) return false;
+        if ((rc = yvid__seq_parse(hdr, &c, &comp, &io, err, cap)) < 0) return rc;
     } else if (b == YVID_BACKEND_PLMPEG || b == YVID_BACKEND_MF) {
         yvid__index ix;
-        if (yvid__index_load(d, &ix, 0, err, cap) < 0) return false;
+        if ((rc = yvid__index_load(d, &ix, 0, err, cap)) < 0) return rc;
         c = ix.c;
     } else {
         yvid__fmt(err, cap, "yvid_probe reads frame sequences and indexed MPEG-1 and MP4 files only");
-        return false;
+        return YVID_ERR_REFUSED;
     }
     out->w = c.w; out->h = c.h; out->fps_num = c.fps_num; out->fps_den = c.fps_den;
     out->frames = c.frames; out->gop = c.gop; out->codec = c.codec; out->format = c.format;
     out->matrix = c.matrix; out->range = c.range; out->transfer = c.transfer; out->primaries = c.primaries; out->siting = c.siting;
     out->duration = yvid_frame_time(c.fps_num, c.fps_den, c.frames);
     out->backend = (yvid_backend)b;
-    return true;
+    return YVID_OK;
 }
 
 static int yvid__fill(int32_t* have, int32_t from_index, const char* what, char* err, size_t cap) {
@@ -4837,7 +4919,7 @@ YVID_API ygfx_stim yvid_stim(const yvid_movie* mv, const yvid_stim_desc* d) {
 
 /* --- controls ------------------------------------------------------------------- */
 
-YVID_API int64_t yvid_play_at(yvid_movie* mv, int64_t t) {
+static int64_t yvid__play_at_body(yvid_movie* mv, int64_t t) {
     if (!mv || !mv->open) return YVID_ERR_CLOSED;
     if (mv->state == YVID__FAILED) return YVID_ERR_DECODER;
     if (mv->state == YVID__ENDED || mv->state == YVID__PLAYING) return YVID_ERR_ORDER;
@@ -4854,7 +4936,13 @@ YVID_API int64_t yvid_play_at(yvid_movie* mv, int64_t t) {
     return mv->ctl.id;
 }
 
-YVID_API int64_t yvid_pause_at(yvid_movie* mv, int64_t t) {
+YVID_API int64_t yvid_play_at(yvid_movie* mv, int64_t t) {
+    char* e = mv ? mv->error : NULL;
+    char c0 = yvid__hold(e);
+    return yvid__done(e, c0, yvid__play_at_body(mv, t), "play_at");
+}
+
+static int64_t yvid__pause_at_body(yvid_movie* mv, int64_t t) {
     if (!mv || !mv->open) return YVID_ERR_CLOSED;
     if (mv->state != YVID__PLAYING) return YVID_ERR_ORDER;
     mv->ctl.op = YVID__OP_PAUSE;
@@ -4865,7 +4953,13 @@ YVID_API int64_t yvid_pause_at(yvid_movie* mv, int64_t t) {
     return mv->ctl.id;
 }
 
-YVID_API int64_t yvid_seek_frame(yvid_movie* mv, int64_t frame, int64_t resume_at) {
+YVID_API int64_t yvid_pause_at(yvid_movie* mv, int64_t t) {
+    char* e = mv ? mv->error : NULL;
+    char c0 = yvid__hold(e);
+    return yvid__done(e, c0, yvid__pause_at_body(mv, t), "pause_at");
+}
+
+static int64_t yvid__seek_frame_body(yvid_movie* mv, int64_t frame, int64_t resume_at) {
     if (!mv || !mv->open) return YVID_ERR_CLOSED;
     if (mv->state == YVID__FAILED) return YVID_ERR_DECODER;
     if (frame < 0 || frame >= mv->info.frames) return YVID_ERR_ARG;
@@ -4887,13 +4981,25 @@ YVID_API int64_t yvid_seek_frame(yvid_movie* mv, int64_t frame, int64_t resume_a
     return mv->seek_id;
 }
 
-YVID_API int64_t yvid_seek(yvid_movie* mv, int64_t movie_t, int64_t resume_at) {
+YVID_API int64_t yvid_seek_frame(yvid_movie* mv, int64_t frame, int64_t resume_at) {
+    char* e = mv ? mv->error : NULL;
+    char c0 = yvid__hold(e);
+    return yvid__done(e, c0, yvid__seek_frame_body(mv, frame, resume_at), "seek_frame");
+}
+
+static int64_t yvid__seek_body(yvid_movie* mv, int64_t movie_t, int64_t resume_at) {
     if (!mv || !mv->open) return YVID_ERR_CLOSED;
     if (movie_t < 0 || movie_t >= mv->info.duration) return YVID_ERR_ARG;
     return yvid_seek_frame(mv, yvid__dueg(mv, movie_t, 0), resume_at);
 }
 
-YVID_API int yvid_show(yvid_movie* mv, int64_t frame) {
+YVID_API int64_t yvid_seek(yvid_movie* mv, int64_t movie_t, int64_t resume_at) {
+    char* e = mv ? mv->error : NULL;
+    char c0 = yvid__hold(e);
+    return yvid__done(e, c0, yvid__seek_body(mv, movie_t, resume_at), "seek");
+}
+
+static int yvid__show_body(yvid_movie* mv, int64_t frame) {
     if (!mv || !mv->open) return YVID_ERR_CLOSED;
     if (mv->state == YVID__FAILED) return YVID_ERR_DECODER;
     if (frame < 0 || frame >= mv->info.frames) return YVID_ERR_ARG;
@@ -4907,6 +5013,12 @@ YVID_API int yvid_show(yvid_movie* mv, int64_t frame) {
     mv->manual_g = frame;
     mv->manual_req = 1;
     return YVID_OK;
+}
+
+YVID_API int yvid_show(yvid_movie* mv, int64_t frame) {
+    char* e = mv ? mv->error : NULL;
+    char c0 = yvid__hold(e);
+    return (int)yvid__done(e, c0, yvid__show_body(mv, frame), "show");
 }
 
 YVID_API int yvid_result(const yvid_movie* mv, int64_t id, yrt_event* out) {
@@ -5329,7 +5441,9 @@ static void yvid__inline_decode(yvid_movie* mv) {
 /* A decoder failure ends the movie once the frames it made before are
  * used up: they are good frames. */
 static int yvid__fail_check(yvid_movie* mv) {
-    if (mv->state == YVID__FAILED) return YVID_ERR_DECODER;
+    /* a failed movie says why at each call (v0.3: a failing call writes
+     * its message) */
+    if (mv->state == YVID__FAILED) { yvid__fmt(mv->error, sizeof mv->error, "%s", mv->dt_error); return YVID_ERR_DECODER; }
     if (yvid__ld32(&mv->dec_err) && yvid__ready_count(mv) == 0) {
         if (mv->state != YVID__FAILED) {
             yvid__fmt(mv->error, sizeof mv->error, "%s", mv->dt_error);
@@ -5340,7 +5454,7 @@ static int yvid__fail_check(yvid_movie* mv) {
     return YVID_OK;
 }
 
-YVID_API int yvid_update(yvid_movie* mv, const yscr_frame* f) {
+static int yvid__update_body(yvid_movie* mv, const yscr_frame* f) {
     int64_t lead_ns, m, i;
     int rc = YVID_OK, refused = 0;
     YRT_ZONE(z, "yvid.update");
@@ -5581,7 +5695,10 @@ YVID_API int yvid_update(yvid_movie* mv, const yscr_frame* f) {
     }
 
     if (mv->state == YVID__PLAYING && yvid__rate_refused(mv)) {
-        /* strict_cadence at a rate that judders: the frame on screen holds */
+        /* strict_cadence at a rate that judders: the frame on screen holds;
+         * each refusal says why (v0.3: a failing call writes its message) */
+        yvid__err(mv, "ysp_video: the movie base runs at %lld/%lld: %.4f display frames per frame, not a multiple, and desc.strict_cadence refuses judder; the frame holds until the rate gives a multiple",
+                    (long long)mv->rate_num, (long long)mv->rate_den, mv->info.per_frame);
         refused = 1;
     } else if (mv->state == YVID__PLAYING) {
         m = yvid__movie_time(mv, f->onset);
@@ -5640,6 +5757,12 @@ YVID_API int yvid_update(yvid_movie* mv, const yscr_frame* f) {
     return mv->state == YVID__ENDED ? YVID_ENDED : YVID_OK;
 }
 
+YVID_API int yvid_update(yvid_movie* mv, const yscr_frame* f) {
+    char* e = mv ? mv->error : NULL;
+    char c0 = yvid__hold(e);
+    return (int)yvid__done(e, c0, yvid__update_body(mv, f), "update");
+}
+
 /* --- following another clock ------------------------------------------------------- */
 
 /* Re-anchors the movie clock at f->onset to global movie time mg, read
@@ -5657,7 +5780,7 @@ static int yvid__follow_to(yvid_movie* mv, const yscr_frame* f, int64_t mg) {
     return YVID_OK;
 }
 
-YVID_API int yvid_follow(yvid_movie* mv, const yscr_frame* f, yvid_unit_at_fn unit_at, void* ctx, uint32_t rate) {
+static int yvid__follow_body(yvid_movie* mv, const yscr_frame* f, yvid_unit_at_fn unit_at, void* ctx, uint32_t rate) {
     int64_t num, den, u, m;
     if (!mv || !mv->open) return YVID_ERR_CLOSED;
     if (!f || !unit_at || rate == 0) return YVID_ERR_ARG;
@@ -5682,6 +5805,12 @@ YVID_API int yvid_follow(yvid_movie* mv, const yscr_frame* f, yvid_unit_at_fn un
     u = unit_at(ctx, f->onset);
     m = (int64_t)floor((double)(u - mv->follow_f0) * 1e9 / (double)rate + 0.5);
     return yvid__follow_to(mv, f, m);
+}
+
+YVID_API int yvid_follow(yvid_movie* mv, const yscr_frame* f, yvid_unit_at_fn unit_at, void* ctx, uint32_t rate) {
+    char* e = mv ? mv->error : NULL;
+    char c0 = yvid__hold(e);
+    return (int)yvid__done(e, c0, yvid__follow_body(mv, f, unit_at, ctx, rate), "follow");
 }
 
 /* --- describe and params ---------------------------------------------------------- */
@@ -5890,7 +6019,7 @@ static const struct yvid__snd_ops yvid__snd_table = {
 
 static int64_t yvid__gcd64(int64_t a, int64_t b) { while (b) { int64_t t = a % b; a = b; b = t; } return a; }
 
-YVID_API int yvid_soundtrack(yvid_movie* mv, yau_audio* au, const yvid_soundtrack_desc* d) {
+static int yvid__soundtrack_body(yvid_movie* mv, yau_audio* au, const yvid_soundtrack_desc* d) {
     yau_caps c;
     yau_wav_desc wd;
     yvid__snd* s;
@@ -5966,6 +6095,12 @@ YVID_API int yvid_soundtrack(yvid_movie* mv, yau_audio* au, const yvid_soundtrac
     return YVID_OK;
 }
 
+YVID_API int yvid_soundtrack(yvid_movie* mv, yau_audio* au, const yvid_soundtrack_desc* d) {
+    char* e = mv ? mv->error : NULL;
+    char c0 = yvid__hold(e);
+    return (int)yvid__done(e, c0, yvid__soundtrack_body(mv, au, d), "soundtrack");
+}
+
 /* Sample s's time on the movie clock, counted from the first cycle. */
 static int64_t yvid__snd_ns(int64_t s, uint32_t rate) {
     int64_t q = yvid__floordiv(s, (int64_t)rate), r = s - q * (int64_t)rate;
@@ -5974,7 +6109,7 @@ static int64_t yvid__snd_ns(int64_t s, uint32_t rate) {
 
 static int64_t yvid__au_unit_at(void* ctx, int64_t t) { return yau_frame_at((const yau_audio*)ctx, t); }
 
-YVID_API int yvid_follow_audio(yvid_movie* mv, yau_audio* au, const yscr_frame* f) {
+static int yvid__follow_audio_body(yvid_movie* mv, yau_audio* au, const yscr_frame* f) {
     yau_caps c;
     if (!au) return YVID_ERR_ARG;
     if (mv && mv->open && mv->snd) {
@@ -5995,6 +6130,12 @@ YVID_API int yvid_follow_audio(yvid_movie* mv, yau_audio* au, const yscr_frame* 
     }
     yau_get_caps(au, &c);
     return yvid_follow(mv, f, yvid__au_unit_at, au, c.rate);
+}
+
+YVID_API int yvid_follow_audio(yvid_movie* mv, yau_audio* au, const yscr_frame* f) {
+    char* e = mv ? mv->error : NULL;
+    char c0 = yvid__hold(e);
+    return (int)yvid__done(e, c0, yvid__follow_audio_body(mv, au, f), "follow_audio");
 }
 #ifdef __cplusplus
 }

@@ -9,6 +9,24 @@
 
 #include <stdio.h>
 
+/* v0.3.0: the writer's lifecycle and the probe, by type, so a changed
+ * signature is a compile error here rather than a surprise in a caller. */
+typedef struct video_api {
+    bool (*seq_open)(yvid_seq*, const yvid_seq_desc*);
+    int  (*seq_write)(yvid_seq*, const void* const*, const int32_t*, const yvid_seq_meta*);
+    int  (*seq_finish)(yvid_seq*);
+    void (*seq_close)(yvid_seq*);
+    const char* (*seq_error)(const yvid_seq*);
+    int  (*probe)(const yvid_desc*, yvid_info*, char*, size_t);
+    int64_t (*play_at)(yvid_movie*, int64_t);
+    int64_t (*seek)(yvid_movie*, int64_t, int64_t);
+} video_api;
+
+static const video_api g_api = {
+    yvid_seq_open, yvid_seq_write, yvid_seq_finish, yvid_seq_close, yvid_seq_error, yvid_probe,
+    yvid_play_at, yvid_seek
+};
+
 int main(void) {
     yscr_screen s;
     yscr_desc d;
@@ -44,13 +62,15 @@ int main(void) {
     memset(&st, 0, sizeof st);
     sd.path = path; sd.w = 16; sd.h = 8; sd.format = YVID_FMT_RGBA8;
     sd.compression = YVID_SEQ_QOI; sd.fps_num = 30; sd.fps_den = 1;
-    if (!yvid_seq_create(&w, &sd)) return 1;
+    if (!yvid_seq_open(&w, &sd)) return 1;
     planes[0] = px; planes[1] = NULL; planes[2] = NULL;
     for (i = 0; i < 4; i++) {
         memset(px, i * 40, sizeof px);
         if (yvid_seq_write(&w, planes, strides, NULL) != YVID_OK) return 2;
     }
-    if (yvid_seq_close(&w) != YVID_OK) return 3;
+    if (yvid_seq_finish(&w) != YVID_OK) return 3;
+    g_api.seq_close(&w);   /* v0.3: void, after finish */
+    yvid_seq_close(&w);
     d.backend = YSCR_BACKEND_SIM;
     d.sim_period_ns = 2000000;
     if (!yscr_open(&s, &d)) return 4;
