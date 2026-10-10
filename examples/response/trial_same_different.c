@@ -230,6 +230,7 @@ int main(int argc, char** argv) {
     printf("%s\n", line);
     memset(&first_onset, 0, sizeof first_onset);
 
+    ygfx_prime(&gfx);   /* each kind's first draw now, not on a trial's first frames (docs/gfx.md) */
     for (;;) {
         SDL_Event ev;
         int64_t bt = 0;

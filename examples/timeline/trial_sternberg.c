@@ -321,6 +321,7 @@ int main(int argc, char** argv) {
     printf("%s\n", line);
     probe = digit_run(&probe_glyph, 0, AMBER);
 
+    ygfx_prime(&gfx);   /* each kind's first draw now, not on a trial's first frames (docs/gfx.md) */
     for (;;) {
         SDL_Event ev;
         int64_t bt = 0;

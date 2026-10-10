@@ -237,6 +237,7 @@ int main(int argc, char** argv) {
     fprintf(traj, "trial_index,t,key,repeat,value\n");
     printf("%s\n", line);
 
+    ygfx_prime(&gfx);   /* each kind's first draw now, not on a trial's first frames (docs/gfx.md) */
     for (;;) {
         SDL_Event ev;
         int64_t bt = 0;

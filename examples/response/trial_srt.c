@@ -222,6 +222,7 @@ int main(int argc, char** argv) {
                  "n_rsi_presses,n_duplicates\n");
     printf("%s\n", line);
 
+    ygfx_prime(&gfx);   /* each kind's first draw now, not on a trial's first frames (docs/gfx.md) */
     for (;;) {
         SDL_Event ev;
         int64_t bt = 0;

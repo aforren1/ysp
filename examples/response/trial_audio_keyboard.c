@@ -198,6 +198,7 @@ int main(int argc, char** argv) {
                  "audio_flags,rsp_tier,rsp_flags,n_early,n_anticipations\n");
     printf("%s\n%s\n", line, aline);
 
+    ygfx_prime(&gfx);   /* each kind's first draw now, not on a trial's first frames (docs/gfx.md) */
     for (;;) {
         SDL_Event ev;
         yrsp_input in;
