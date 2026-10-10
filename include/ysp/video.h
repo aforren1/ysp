@@ -5850,7 +5850,7 @@ static int64_t yvid__snd_start(void* v, int64_t t) {
     yau_id id;
     memset(&pd, 0, sizeof pd);
     pd.stream = &s->w.stream;
-    pd.at = t;
+    pd.at_ns = t;
     pd.db = s->db;
     pd.channels = s->mask;
     id = yau_play(s->au, &pd);
@@ -5924,7 +5924,7 @@ YVID_API int yvid_soundtrack(yvid_movie* mv, yau_audio* au, const yvid_soundtrac
     wd.ring = cap;
     wd.memory = s->ring;
     wd.id = mv->d.movie_index;
-    rc = yau_wav_open(au, &s->w, &wd);
+    rc = yau_wav_open(au, &s->w, &wd) ? 0 : s->w.error_code;
     if (rc < 0) {
         /* rate, channels, sample type and damage: ysp_audio's refusals */
         yvid__err(mv, "ysp_video: the soundtrack: %s", yau_wav_error(&s->w));

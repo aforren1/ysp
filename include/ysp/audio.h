@@ -1,4 +1,4 @@
-/* ysp/audio.h - v0.3.1 - public domain single-header audio library
+/* ysp/audio.h - v0.4.0 - public domain single-header audio library
  *
  *   Sound at a time on the ysp/rt.h clock. A buffer is played with
  *   yau_play_at(buf, t); the header plans its first sample on the device
@@ -24,148 +24,6 @@
  *   compiles by default.
  *
  *   ---------------------------------------------------------------------
- *   CHANGELOG
- *   ---------------------------------------------------------------------
- *   v0.3.1 - HALT: an underrun of about a period is now found. On WASAPI
- *          shared mode it halts the position short of the frames written,
- *          so v0.3.0 never saw it, and every later onset time was off by
- *          the halt (10 ms here) while its record said tier 2. A report late
- *          against the fit by more than half a period, three moving reports
- *          in a row, is a halt: an XRUN record (u.i64[2] the halt in ns,
- *          [3] the position where it was seen), counted in caps.xruns, the
- *          fit starts over from that report, and every sound in flight is
- *          flagged XRUN, UNCONFIRMED, tier 3. Late reports confirm nothing
- *          until the run ends. An early report that comes just before the
- *          run (measured at queue 2) is the same underrun, counted once.
- *   v0.3.0 - QUEUE: on WASAPI shared mode the device thread renders a
- *          block only when the engine has taken the buffer down to
- *          desc.queue - 1 periods (default 2), on the event miniaudio waits
- *          on, instead of a period before it waits. Shortest safe lead on
- *          the test laptop 50 ms before, 40 ms at the default, 30 ms at
- *          desc.queue = 1; each period saved is also a period less margin
- *          against a stalled callback. miniaudio's own order (0 before) is
- *          gone. yau_desc.queue, yau_caps.queue, yau_device_open.queue,
- *          yau_device_caps.queue; queue= in the describe line. WASAPI
- *          exclusive mode asks miniaudio for one period per buffer: with
- *          three, each event took three callbacks in a burst and the run had
- *          underruns and onsets 62 ms off the plan; with one, no underrun and
- *          onsets on the plan, but this laptop's driver still buffers about
- *          100 ms in exclusive mode (docs/audio.md, "Periods and buffers").
- *   v0.2.1 - yau_wav_probe(): the WAV parse without a device, for the pack
- *          tool (docs/pack.md, AUDIO), with the same refusals except the
- *          device's rate, channels and speaker map, which the caller
- *          compares with the project's. The parse is split into that scan
- *          and the device checks; yau_wav_open() and yau_wav_load() give
- *          the same results and messages as v0.2.0.
- *   v0.2.0 - streams: yau_stream, a ring-fed voice played by yau_play()
- *          with .stream (or yau_play_stream), planned, recorded and
- *          confirmed as a buffer is; sample s on stream frame origin + s,
- *          late starts and ring underruns skip samples (GAPS); records
- *          YAU_EV_STREAM and YAU_EV_GAP, flag YAU_ONSET_GAP,
- *          yau_onset.sample and .gap_frames, yau_caps.gaps. WAV files:
- *          yau_wav (RIFF, RF64, BW64; 16-bit, 24-bit, 24 in 32, float)
- *          streamed from a path, memory or a byte-range reader, with
- *          yrt_pump hooks, and yau_wav_load into the arena. One gain,
- *          fade and routing kernel for buffers and streams (a buffer's
- *          output is byte for byte v0.1.0's). YAU_ERR_IO.
- *   v0.1.0 - first release: the scheduler and mixer, the device-clock fit,
- *          the onset confirmed by position reports past its frame, WASAPI
- *          shared and exclusive through miniaudio with IAudioClock
- *          positions, miniaudio's null device, the device and source
- *          interfaces, synthesis, the records, the parameter table.
- *
- *   STATUS: v0.3.1. Halts, measured on the same laptop (docs/audio.md,
- *   "Halts"): injected callback stalls of 5, 10, 15, 20 and 30 ms, 21 of
- *   each at queue 1 and at queue 2. Every stall that halted the position
- *   was found (126 of 126), 49 to 70 ms after the stall, the halt in the
- *   record within -0.19 to +0.36 ms of the position's shift; no record
- *   for the 84 stalls the queue rode out. False records in the long runs
- *   of v0.3.0, run again (10 minutes idle and 3 under load at queue 2 and
- *   at queue 1, 156,325 callbacks) and in 60 s of exclusive mode: 0. No
- *   report there was more than 0.72 ms late against its own line; the
- *   rule's threshold is 5 ms. With a sound each frame through 21 halts at
- *   queue 1, every flagged onset's time was within -150 to +161 us (p1 to
- *   p99) of the reports after the halt; at queue 2, 80 of 105 were, and
- *   25 that an early report passed kept the old time, 10.1 ms before
- *   (which is right is not known: no loopback). Shortest safe lead and
- *   tier 2 residuals as in v0.3.0. Queue 1 stays opt-in: its margin is 8
- *   to 10 ms of callback lateness, at the 8 ms measured with MMCSS.
- *   v0.3.0. Periods and buffers, measured on the same laptop
- *   (docs/audio.md, "Periods and buffers"): the endpoint's shared-mode
- *   engine period is 480 frames only (IAudioClient3 minimum = maximum =
- *   default), so no shared stream runs under 10 ms here; the shared buffer
- *   is 1056 frames. Frames written minus the device position, 10 minutes
- *   idle: 1898 (39.5 ms) before, 1418 at the default queue, 938 at queue 1.
- *   0 underruns at each queue in 10 minutes idle and 3 minutes under load;
- *   callback interval p99 10.17 to 10.34 ms, max 11.6 to 12.5 ms. Shortest
- *   safe lead (audio_schedule, 2 runs each): 50, 40 and 30 ms. A callback
- *   stall the queue rides out: 25 but not 35 ms before, 15 but not 25 ms at
- *   the default, 8 but not 15 ms at queue 1. Onset residuals within -32 to
- *   +21 us, tier 2, at every queue. An underrun that a stall of that size
- *   causes halts the position for about a period and was not detected
- *   (xruns 0; the position never reaches the frames written): v0.3.1
- *   finds it.
- *   Exclusive mode: 0 underruns in 60 s at 480 and 144 frames, onsets on
- *   the plan, but the driver queues 30 to 110 ms and the shortest safe lead
- *   is 125 ms; raw WASAPI shows the same, so it is the driver.
- *   v0.2.0. Streams, measured on the same laptop and device (AC,
- *   MSVC /O2, rows interleaved; docs/audio.md "Streams"): render cost
- *   per callback with 32 voices 10.35 us mean (v0.1.0 in the same session
- *   11.38), with 1 stream 10.48, with 4 streams 12.07 (p99 34.7); 0 gaps
- *   and 0 underruns in every row. A WAV stream on a yrt_pump under load
- *   (8 spinning threads, a 60 Hz frame loop) had 0 gaps for 3 minutes with
- *   rings of 0.25, 0.5 and 1 s; the default stays 1 s for the margin it
- *   leaves a producer that stalls (480 ms). 0 heap calls while 4 streams
- *   play. A WAV feed of 4096 frames costs the producer 5 to 24 us mean.
- *   Placement through a stream was checked on the scripted device only
- *   (every sample on frame origin + s, 2880 ring wraps, gaps, late starts,
- *   drift +-100 ppm); no loopback run with a stream yet (--line --stream
- *   is built). The buffer path is byte for byte v0.1.0's. The rest of
- *   this block is v0.1.0's, unchanged. Software timestamps only, on one Windows 11 25H2 laptop
- *   (i7-1360P), "Speakers (Realtek(R) Audio)" in WASAPI shared mode at 48000
- *   Hz, float, 2 channels, through miniaudio 0.11.25. No loopback cable was
- *   available: the delay to sound is UNMEASURED, desc.onset_offset_ns stays
- *   0 until tests/loopback/audio_loopback.c --line runs, and the OS's
- *   claim (0 ms on WASAPI) is not checked. docs/audio.md has the tables.
- *   Shared mode ran a 10 ms period whatever was asked; 10 minutes idle and
- *   3 minutes under load (8 spinning threads and a 60 Hz frame loop) gave 0
- *   underruns, callback interval p99 10.29 to 10.35 ms. The device ran +3.9
- *   ppm against QPC. Placement, through WASAPI's own loopback capture of the
- *   same endpoint (after the endpoint volume and an effect, so not bit-exact
- *   there): every burst at its planned frame distance from the one before in
- *   runs whose capture had no gap (700 of 700 idle, 500 of 500 under load).
- *   Time, capture against the onset record: deviation from the median 21.8
- *   us p50 and 67.3 us p99 idle (bar: 20.8 us, one frame; missed), 6.2 and
- *   19.8 us under load; the median, 33 ms, is the tap's offset, not a
- *   latency. The shortest lead with no LATE record was 43.5 to 54.5 ms.
- *   A WASAPI position is the engine's last pass stamped at the call (a
- *   report can be hundreds of us late); the reports are fitted by least
- *   squares on the least late report of each 200 ms, which predicted the
- *   next second within 110 us p99 over 10 minutes against 357 us for the
- *   lower envelope; callback times by the envelope (207 against 359 us). In
- *   a 60 ms stall the position halted at the frames written and later
- *   frames played 40 ms later; the fit restarts. Under load the position
- *   once jumped up to 45 ms ahead for tens of seconds; such reports are now
- *   kept out of the fit and flag the sounds in flight. Tiers: an onset's
- *   time is always the fit's, never observed, so no path is tier 1; WASAPI
- *   shared onsets confirmed by position reports are tier 2 on the
- *   conditions above (67 us p99 from the median idle, 20 us under load in
- *   one run, against a one-frame bar of 20.8 us). Exclusive mode (3
- *   runs of 30 s) delivered callbacks in bursts with 2 underruns a run: not
- *   usable on this machine. Cost per callback with 32 voices: 18.7 us mean,
- *   56.7 us p99; GetPosition() 2 to 4 us p50; one refit 5.5 us p50; the
- *   frame thread 1.5 us mean, 2.6 us p99 per play. No heap call from the
- *   header after open, none in open with a caller's arena (MSVC debug, the
- *   C runtime's hook; miniaudio's 10 at open are its own). A core test with
- *   a scripted device on a virtual clock (no miniaudio, no sound hardware)
- *   on MSVC, MinGW gcc 16.1, gcc 11.4 (C99 -O3, ASan and UBSan,
- *   ThreadSanitizer) and emcc (node); fourteen mutations of the header each
- *   make it fail. Compiled, never run: CoreAudio (with its latency claims),
- *   ALSA, PulseAudio, Web Audio (emcc as gnu11).
- *   Outside this STATUS block and docs/audio.md, a number in this header
- *   is a measurement only where the text says "measured".
- *
- *   ---------------------------------------------------------------------
  *   USAGE
  *   ---------------------------------------------------------------------
  *   Do this:
@@ -183,11 +41,16 @@
  *       #include "ysp/audio.h"
  *
  *       static yau_audio au;                          // zeroed
- *       if (!yau_open(&au, &(yau_desc){0}))         // 48 kHz, 2 channels
- *           die(yau_error(&au));
- *       yau_buf beep = yau_tone(&au, &(yau_tone_desc){
- *           .hz = 1000, .dur = YAU_MS(100), .peak = 0.03f, .ramp = YAU_MS(5) });
+ *       yau_desc d;
+ *       memset(&d, 0, sizeof d);                      // 48 kHz, 2 channels
+ *       if (!yau_open(&au, &d)) die(yau_error(&au));
+ *       yau_tone_desc td;
+ *       memset(&td, 0, sizeof td);
+ *       td.hz = 1000; td.dur_ns = YRT_MS(100); td.peak = 0.03f;
+ *       td.ramp_ns = YRT_MS(5);
+ *       yau_buf beep = yau_tone(&au, &td);
  *       yau_id id = yau_play_at(&au, beep, t);
+ *       if (id < 0) die(yau_error(&au));
  *       ...
  *       yau_onset r;
  *       if (yau_result(&au, id, &r) == YAU_OK)      // or yau_wait()
@@ -204,19 +67,23 @@
  *
  *   yau_play_at() does not block. Its record arrives later, in the handle
  *   (yau_result) and in the event ring. yau_wait() blocks for it, as
- *   PsychPortAudio's waitForStart does. In C++17, zero a desc and set its
- *   fields one by one.
+ *   PsychPortAudio's waitForStart does.
  *
  *   A long WAV file, streamed, at t, with a fade 30 s later:
  *
  *       static yau_wav story;                         // zeroed; owns its ring
- *       if (yau_wav_open(&au, &story, &(yau_wav_desc){ .path = "story.wav" }) < 0)
- *           die(yau_wav_error(&story));
+ *       yau_wav_desc wd;
+ *       memset(&wd, 0, sizeof wd);
+ *       wd.path = "story.wav";
+ *       if (!yau_wav_open(&au, &story, &wd)) die(yau_wav_error(&story));
  *       yau_wav_feed(&story, 0);                      // fill the ring (1 s)
  *       yau_id id = yau_play_stream(&au, &story.stream, t);
- *       yau_stop_at(&au, id, t + YAU_S(30), YAU_MS(50));
+ *       yau_stop_at(&au, id, t + YRT_S(30), YRT_MS(50));
  *       ...                                             // each frame: feed it,
  *       yau_wav_feed(&story, 0);                      // or let a pump do it (WAV FILES)
+ *       ...
+ *       yau_wav_close(&au, &story);                   // ends a play still running
+ *       yau_close(&au);
  *
  *   From ysp/timeline.h: an event on a channel that the program maps to a
  *   sound goes to yau_play_at() at the event's own RT time, before that
@@ -471,12 +338,12 @@
  *   ---------------------------------------------------------------------
  *   PLAYING
  *   ---------------------------------------------------------------------
- *   yau_play_at(au, buf, t) and yau_play(au, &desc) queue a sound and
+ *   yau_play_at(au, buf, t_ns) and yau_play(au, &desc) queue a sound and
  *   return its id, a positive number (with desc.stream, a stream: STREAMS). A negative return is an error code:
  *   a bad argument, a full queue, every voice in use, a closed or lost
  *   device, a buffer whose channel count is neither 1 nor the project's.
  *   A target already too late is not an error; the record says LATE.
- *   desc.at 0 means the first frame the stream can still reach. desc.db is
+ *   desc.at_ns 0 means the first frame the stream can still reach. desc.db is
  *   the gain (0 = unity), desc.channels a mask of output channels (0 =
  *   all): a mono buffer is copied to every channel in the mask, a buffer
  *   with the project's channel count plays only the channels in it.
@@ -503,7 +370,10 @@
  *   samples come from differs.
  *
  *       static yau_stream st;                         // yours; 256 bytes
- *       yau_stream_init(&au, &st, &(yau_stream_desc){ .channels = 1 });
+ *       yau_stream_desc sd;
+ *       memset(&sd, 0, sizeof sd);
+ *       sd.channels = 1;
+ *       if (!yau_stream_open(&au, &st, &sd)) die(yau_error(&au));
  *       ...                                             // the producer thread:
  *       int64_t n;
  *       float* p;
@@ -581,8 +451,17 @@
  *   yau_wav does it (.loops). .loops, .offset, .frames and .buf with
  *   .stream are YAU_ERR_ARG.
  *
- *   yau_stream_release() ends an arena stream's hold on
- *   yau_arena_reset(), which is YAU_ERR_BUSY while one exists.
+ *   CLOSE. yau_stream_close() ends an arena stream's hold on
+ *   yau_arena_reset(), which is YAU_ERR_BUSY while one exists. It never
+ *   fails: a play that still runs is canceled, and close waits for the
+ *   device to end it (the device's buffer and two periods, 20 ms to 1 s),
+ *   because the device reads the stream's struct and ring on every block.
+ *   When the device does not answer in that time (it stopped, or a CUSTOM
+ *   device's render runs on the closing thread), close leaves the stream
+ *   detached with its memory in place: keep the struct and the ring valid,
+ *   and an arena ring stays held, until yau_close(). yau_wav_close() does
+ *   the same for its stream. Stop the producer (a pump that feeds a
+ *   yau_wav) before a close; close does not stop your threads.
  *
  *   ---------------------------------------------------------------------
  *   WAV FILES
@@ -631,7 +510,7 @@
  *   a zeroed one to fill yourself. yau_fill_tone() and yau_fill_noise()
  *   do the same into your memory, with no handle. Levels are linear and
  *   required, because a zero default must not mean full scale: .peak for a
- *   tone or a click, .rms for noise; yau_db(-30) is 0.0316. .ramp is a
+ *   tone or a click, .rms for noise; yau_db(-30) is 0.0316. .ramp_ns is a
  *   raised-cosine onset and offset, each that long. The sine is computed
  *   from the frame index, so a long tone does not drift in phase. A
  *   synthesized buffer is mono unless .channels says otherwise, and play
@@ -725,6 +604,21 @@
  *   thread is miniaudio's; on WASAPI it joins MMCSS's "Pro Audio" task.
  *
  *   ---------------------------------------------------------------------
+ *   ERRORS
+ *   ---------------------------------------------------------------------
+ *   yau_open() clears the message, and a failed open leaves one. Every
+ *   call of the frame thread that returns a negative code writes
+ *   yau_error() before it returns, in the frame loop too (yau_play,
+ *   yau_update, yau_result, yau_stop_at, ...), with the call's name and the
+ *   code's text, or a more specific message the call wrote; synthesis and
+ *   yau_stream_open() write theirs. The write is an snprintf on the failure
+ *   path only. The producer's calls (acquire, commit, write, end, reset)
+ *   return codes and write nothing: they run on another thread, and a
+ *   write into the handle would race with the frame thread's. yau_wav has
+ *   a message of its own (yau_wav_error), which open and yau_wav_feed
+ *   write, and open's code in error_code. The callback writes nothing.
+ *
+ *   ---------------------------------------------------------------------
  *   BUILDING
  *   ---------------------------------------------------------------------
  *   Put miniaudio.h (0.11.25 or a later 0.11) on the include path, or name
@@ -742,14 +636,176 @@
  *   yau.mix, yau.fit; a plot of the queue depth in frames.
  *
  *   LICENSE: public domain / MIT-0, see end of file.
+ *
+ *   ---------------------------------------------------------------------
+ *   CHANGELOG
+ *   ---------------------------------------------------------------------
+ *   v0.4.0 - the repository conventions (README.md). Breaks the API:
+ *          yau_stream_init()/yau_stream_release() are bool
+ *          yau_stream_open() and void yau_stream_close(), which never
+ *          fails (a play still running is canceled and close waits for
+ *          the device: STREAMS, CLOSE); yau_wav_open() returns bool (code
+ *          in w->error_code), yau_wav_close() is void and never fails.
+ *          YAU_S and YAU_MS are gone: ysp/rt.h's YRT_S and YRT_MS.
+ *          Desc time fields end in _ns: yau_play_desc.at_ns,
+ *          yau_tone_desc, yau_noise_desc and yau_click_desc dur_ns and
+ *          ramp_ns; time parameters are named _ns. Every failing call of
+ *          the frame thread writes yau_error() (ERRORS); the producer's
+ *          calls return codes only. yau_stream_sample_at() and
+ *          yau_stream_time_of() take a non-const handle for it. USAGE
+ *          builds as C99 and C++17; the CHANGELOG moved to the end of
+ *          this comment.
+ *   v0.3.1 - HALT: an underrun of about a period is now found. On WASAPI
+ *          shared mode it halts the position short of the frames written,
+ *          so v0.3.0 never saw it, and every later onset time was off by
+ *          the halt (10 ms here) while its record said tier 2. A report late
+ *          against the fit by more than half a period, three moving reports
+ *          in a row, is a halt: an XRUN record (u.i64[2] the halt in ns,
+ *          [3] the position where it was seen), counted in caps.xruns, the
+ *          fit starts over from that report, and every sound in flight is
+ *          flagged XRUN, UNCONFIRMED, tier 3. Late reports confirm nothing
+ *          until the run ends. An early report that comes just before the
+ *          run (measured at queue 2) is the same underrun, counted once.
+ *   v0.3.0 - QUEUE: on WASAPI shared mode the device thread renders a
+ *          block only when the engine has taken the buffer down to
+ *          desc.queue - 1 periods (default 2), on the event miniaudio waits
+ *          on, instead of a period before it waits. Shortest safe lead on
+ *          the test laptop 50 ms before, 40 ms at the default, 30 ms at
+ *          desc.queue = 1; each period saved is also a period less margin
+ *          against a stalled callback. miniaudio's own order (0 before) is
+ *          gone. yau_desc.queue, yau_caps.queue, yau_device_open.queue,
+ *          yau_device_caps.queue; queue= in the describe line. WASAPI
+ *          exclusive mode asks miniaudio for one period per buffer: with
+ *          three, each event took three callbacks in a burst and the run had
+ *          underruns and onsets 62 ms off the plan; with one, no underrun and
+ *          onsets on the plan, but this laptop's driver still buffers about
+ *          100 ms in exclusive mode (docs/audio.md, "Periods and buffers").
+ *   v0.2.1 - yau_wav_probe(): the WAV parse without a device, for the pack
+ *          tool (docs/pack.md, AUDIO), with the same refusals except the
+ *          device's rate, channels and speaker map, which the caller
+ *          compares with the project's. The parse is split into that scan
+ *          and the device checks; yau_wav_open() and yau_wav_load() give
+ *          the same results and messages as v0.2.0.
+ *   v0.2.0 - streams: yau_stream, a ring-fed voice played by yau_play()
+ *          with .stream (or yau_play_stream), planned, recorded and
+ *          confirmed as a buffer is; sample s on stream frame origin + s,
+ *          late starts and ring underruns skip samples (GAPS); records
+ *          YAU_EV_STREAM and YAU_EV_GAP, flag YAU_ONSET_GAP,
+ *          yau_onset.sample and .gap_frames, yau_caps.gaps. WAV files:
+ *          yau_wav (RIFF, RF64, BW64; 16-bit, 24-bit, 24 in 32, float)
+ *          streamed from a path, memory or a byte-range reader, with
+ *          yrt_pump hooks, and yau_wav_load into the arena. One gain,
+ *          fade and routing kernel for buffers and streams (a buffer's
+ *          output is byte for byte v0.1.0's). YAU_ERR_IO.
+ *   v0.1.0 - first release: the scheduler and mixer, the device-clock fit,
+ *          the onset confirmed by position reports past its frame, WASAPI
+ *          shared and exclusive through miniaudio with IAudioClock
+ *          positions, miniaudio's null device, the device and source
+ *          interfaces, synthesis, the records, the parameter table.
+ *
+ *   STATUS: v0.4.0, 2026-10-10: tests/adapt/audio_test.c passes on the
+ *   scripted device with new checks of close and the messages (MinGW-w64
+ *   gcc 16.1, MSVC 19.44); the USAGE blocks compile as C99 and C++17;
+ *   3 of 3 new mutants caught (docs/audio.md, "Units, open and close").
+ *   v0.3.1. Halts, measured on the same laptop (docs/audio.md,
+ *   "Halts"): injected callback stalls of 5, 10, 15, 20 and 30 ms, 21 of
+ *   each at queue 1 and at queue 2. Every stall that halted the position
+ *   was found (126 of 126), 49 to 70 ms after the stall, the halt in the
+ *   record within -0.19 to +0.36 ms of the position's shift; no record
+ *   for the 84 stalls the queue rode out. False records in the long runs
+ *   of v0.3.0, run again (10 minutes idle and 3 under load at queue 2 and
+ *   at queue 1, 156,325 callbacks) and in 60 s of exclusive mode: 0. No
+ *   report there was more than 0.72 ms late against its own line; the
+ *   rule's threshold is 5 ms. With a sound each frame through 21 halts at
+ *   queue 1, every flagged onset's time was within -150 to +161 us (p1 to
+ *   p99) of the reports after the halt; at queue 2, 80 of 105 were, and
+ *   25 that an early report passed kept the old time, 10.1 ms before
+ *   (which is right is not known: no loopback). Shortest safe lead and
+ *   tier 2 residuals as in v0.3.0. Queue 1 stays opt-in: its margin is 8
+ *   to 10 ms of callback lateness, at the 8 ms measured with MMCSS.
+ *   v0.3.0. Periods and buffers, measured on the same laptop
+ *   (docs/audio.md, "Periods and buffers"): the endpoint's shared-mode
+ *   engine period is 480 frames only (IAudioClient3 minimum = maximum =
+ *   default), so no shared stream runs under 10 ms here; the shared buffer
+ *   is 1056 frames. Frames written minus the device position, 10 minutes
+ *   idle: 1898 (39.5 ms) before, 1418 at the default queue, 938 at queue 1.
+ *   0 underruns at each queue in 10 minutes idle and 3 minutes under load;
+ *   callback interval p99 10.17 to 10.34 ms, max 11.6 to 12.5 ms. Shortest
+ *   safe lead (audio_schedule, 2 runs each): 50, 40 and 30 ms. A callback
+ *   stall the queue rides out: 25 but not 35 ms before, 15 but not 25 ms at
+ *   the default, 8 but not 15 ms at queue 1. Onset residuals within -32 to
+ *   +21 us, tier 2, at every queue. An underrun that a stall of that size
+ *   causes halts the position for about a period and was not detected
+ *   (xruns 0; the position never reaches the frames written): v0.3.1
+ *   finds it.
+ *   Exclusive mode: 0 underruns in 60 s at 480 and 144 frames, onsets on
+ *   the plan, but the driver queues 30 to 110 ms and the shortest safe lead
+ *   is 125 ms; raw WASAPI shows the same, so it is the driver.
+ *   v0.2.0. Streams, measured on the same laptop and device (AC,
+ *   MSVC /O2, rows interleaved; docs/audio.md "Streams"): render cost
+ *   per callback with 32 voices 10.35 us mean (v0.1.0 in the same session
+ *   11.38), with 1 stream 10.48, with 4 streams 12.07 (p99 34.7); 0 gaps
+ *   and 0 underruns in every row. A WAV stream on a yrt_pump under load
+ *   (8 spinning threads, a 60 Hz frame loop) had 0 gaps for 3 minutes with
+ *   rings of 0.25, 0.5 and 1 s; the default stays 1 s for the margin it
+ *   leaves a producer that stalls (480 ms). 0 heap calls while 4 streams
+ *   play. A WAV feed of 4096 frames costs the producer 5 to 24 us mean.
+ *   Placement through a stream was checked on the scripted device only
+ *   (every sample on frame origin + s, 2880 ring wraps, gaps, late starts,
+ *   drift +-100 ppm); no loopback run with a stream yet (--line --stream
+ *   is built). The buffer path is byte for byte v0.1.0's. The rest of
+ *   this block is v0.1.0's, unchanged. Software timestamps only, on one Windows 11 25H2 laptop
+ *   (i7-1360P), "Speakers (Realtek(R) Audio)" in WASAPI shared mode at 48000
+ *   Hz, float, 2 channels, through miniaudio 0.11.25. No loopback cable was
+ *   available: the delay to sound is UNMEASURED, desc.onset_offset_ns stays
+ *   0 until tests/loopback/audio_loopback.c --line runs, and the OS's
+ *   claim (0 ms on WASAPI) is not checked. docs/audio.md has the tables.
+ *   Shared mode ran a 10 ms period whatever was asked; 10 minutes idle and
+ *   3 minutes under load (8 spinning threads and a 60 Hz frame loop) gave 0
+ *   underruns, callback interval p99 10.29 to 10.35 ms. The device ran +3.9
+ *   ppm against QPC. Placement, through WASAPI's own loopback capture of the
+ *   same endpoint (after the endpoint volume and an effect, so not bit-exact
+ *   there): every burst at its planned frame distance from the one before in
+ *   runs whose capture had no gap (700 of 700 idle, 500 of 500 under load).
+ *   Time, capture against the onset record: deviation from the median 21.8
+ *   us p50 and 67.3 us p99 idle (bar: 20.8 us, one frame; missed), 6.2 and
+ *   19.8 us under load; the median, 33 ms, is the tap's offset, not a
+ *   latency. The shortest lead with no LATE record was 43.5 to 54.5 ms.
+ *   A WASAPI position is the engine's last pass stamped at the call (a
+ *   report can be hundreds of us late); the reports are fitted by least
+ *   squares on the least late report of each 200 ms, which predicted the
+ *   next second within 110 us p99 over 10 minutes against 357 us for the
+ *   lower envelope; callback times by the envelope (207 against 359 us). In
+ *   a 60 ms stall the position halted at the frames written and later
+ *   frames played 40 ms later; the fit restarts. Under load the position
+ *   once jumped up to 45 ms ahead for tens of seconds; such reports are now
+ *   kept out of the fit and flag the sounds in flight. Tiers: an onset's
+ *   time is always the fit's, never observed, so no path is tier 1; WASAPI
+ *   shared onsets confirmed by position reports are tier 2 on the
+ *   conditions above (67 us p99 from the median idle, 20 us under load in
+ *   one run, against a one-frame bar of 20.8 us). Exclusive mode (3
+ *   runs of 30 s) delivered callbacks in bursts with 2 underruns a run: not
+ *   usable on this machine. Cost per callback with 32 voices: 18.7 us mean,
+ *   56.7 us p99; GetPosition() 2 to 4 us p50; one refit 5.5 us p50; the
+ *   frame thread 1.5 us mean, 2.6 us p99 per play. No heap call from the
+ *   header after open, none in open with a caller's arena (MSVC debug, the
+ *   C runtime's hook; miniaudio's 10 at open are its own). A core test with
+ *   a scripted device on a virtual clock (no miniaudio, no sound hardware)
+ *   on MSVC, MinGW gcc 16.1, gcc 11.4 (C99 -O3, ASan and UBSan,
+ *   ThreadSanitizer) and emcc (node); fourteen mutations of the header each
+ *   make it fail. Compiled, never run: CoreAudio (with its latency claims),
+ *   ALSA, PulseAudio, Web Audio (emcc as gnu11).
+ *   Outside this STATUS block and docs/audio.md, a number in this header
+ *   is a measurement only where the text says "measured".
+ *
  */
 #ifndef YSP_AUDIO_H_INCLUDED
 #define YSP_AUDIO_H_INCLUDED
 
 #define YAU_VERSION_MAJOR 0
-#define YAU_VERSION_MINOR 3
-#define YAU_VERSION_PATCH 1
-#define YAU_VERSION_STRING "0.3.1"
+#define YAU_VERSION_MINOR 4
+#define YAU_VERSION_PATCH 0
+#define YAU_VERSION_STRING "0.4.0"
 
 #include "ysp/rt.h"
 
@@ -784,10 +840,6 @@ extern "C" {
 #define YAU_MAX_VOICES   64
 #define YAU_FOREVER     (-1)      /* yau_play_desc.loops, yau_wav_desc.loops */
 #define YAU_PREROLL_NONE (-1)     /* yau_stream_desc.preroll: start at once */
-
-/* Seconds and milliseconds to ns, rounded to nearest; constant expressions. */
-#define YAU_S(x)  ((int64_t)((x) * 1e9 + ((x) < 0 ? -0.5 : 0.5)))
-#define YAU_MS(x) ((int64_t)((x) * 1e6 + ((x) < 0 ? -0.5 : 0.5)))
 
 /* Channel positions, the same numbers as miniaudio's MA_CHANNEL_*. */
 #define YAU_CH_NONE  0
@@ -904,7 +956,7 @@ typedef struct yau_buf {
 
 typedef struct yau_play_desc {
     yau_buf buf;
-    int64_t   at;               /* target, ysp_rt ns; 0 = as soon as it can  */
+    int64_t   at_ns;            /* target, ysp_rt; 0 = as soon as it can     */
     float     db;               /* gain; 0 = unity                           */
     uint64_t  channels;         /* output mask; 0 = all                      */
     int64_t   offset;           /* first frame of buf                        */
@@ -917,7 +969,7 @@ typedef struct yau_play_desc {
 /* The record of one sound. */
 typedef struct yau_onset {
     yau_id id;
-    int64_t  target;            /* desc.at                                   */
+    int64_t  target;            /* desc.at_ns                                */
     int64_t  onset;             /* the device-clock fit's time for start_frame,
                                  * ysp_rt ns (+ onset_offset_ns); a model
                                  * value, never an observed time         */
@@ -1069,24 +1121,24 @@ typedef struct yau_param {
 
 typedef struct yau_tone_desc {
     double   hz;                /* required, below half the rate             */
-    int64_t  dur;               /* ns, required; rounded to a frame          */
+    int64_t  dur_ns;            /* required; rounded to a frame              */
     float    peak;              /* required, (0, 1]                          */
-    int64_t  ramp;              /* raised-cosine on and off, ns each; 0 = none */
+    int64_t  ramp_ns;           /* raised-cosine on and off, each; 0 = none  */
     double   phase;             /* radians at frame 0                        */
     uint16_t channels;          /* 0 = 1                                     */
 } yau_tone_desc;
 
 typedef struct yau_noise_desc {
-    int64_t  dur;               /* ns, required                              */
+    int64_t  dur_ns;            /* required                                  */
     float    rms;               /* required; noise that would clip is refused */
-    int64_t  ramp;
+    int64_t  ramp_ns;
     uint64_t seed;
     int32_t  dist;              /* YAU_GAUSS (0) or YAU_UNIFORM          */
     uint16_t channels;          /* 0 = 1; each channel its own noise         */
 } yau_noise_desc;
 
 typedef struct yau_click_desc {
-    int64_t  dur;               /* ns; 0 = one frame                         */
+    int64_t  dur_ns;            /* 0 = one frame                             */
     float    peak;              /* required, [-1, 1], not 0                  */
 } yau_click_desc;
 
@@ -1103,7 +1155,7 @@ typedef struct yau_stream_desc {
 } yau_stream_desc;
 
 /* Caller-allocated (static, or inside your own struct), set up by
- * yau_stream_init(); every field is private. One cache line per writer:
+ * yau_stream_open(); every field is private. One cache line per writer:
  * the producer's, the device thread's, the read-mostly setup, and the
  * device thread's private state, so no line is written by two threads. */
 struct yau_stream {
@@ -1206,6 +1258,7 @@ typedef struct yau__wsrc {      /* private: where a WAV file's bytes come from *
 typedef struct yau_wav {
     yau_stream   stream;      /* play this                                 */
     yau_wav_info info;
+    int32_t        error_code;  /* the YAU_ERR_* of a failed open, else 0    */
     /* private */
     yau__wsrc    src_;
     int32_t        loops_;
@@ -1315,6 +1368,8 @@ typedef struct yau_audio {
     /* --- frame thread --- */
     int            open;
     int            started;
+    uint32_t       err_n;       /* messages written: a call's own beats the
+                                 * generic one (ERRORS)                    */
     char           error[512];
     yau_desc     desc;
     yau_format   fmt;
@@ -1385,7 +1440,7 @@ YAU_API bool        yau_open(yau_audio* au, const yau_desc* desc);
  * open() allocated it. Safe on a closed or zeroed handle. */
 YAU_API void        yau_close(yau_audio* au);
 
-/* The last open() or synthesis message; "" when there is none. */
+/* The message of the last failure (ERRORS); "" when there is none. */
 YAU_API const char* yau_error(const yau_audio* au);
 YAU_API bool        yau_is_open(const yau_audio* au);
 YAU_API void        yau_get_caps(const yau_audio* au, yau_caps* out);
@@ -1396,11 +1451,11 @@ YAU_API void        yau_get_caps(const yau_audio* au, yau_caps* out);
 YAU_API int         yau_describe(const yau_audio* au, char* buf, size_t cap);
 
 /* Queue a sound (PLAYING). Returns its id (> 0) or a negative code. */
-YAU_API yau_id yau_play_at(yau_audio* au, yau_buf buf, int64_t t);
+YAU_API yau_id yau_play_at(yau_audio* au, yau_buf buf, int64_t t_ns);
 YAU_API yau_id yau_play(yau_audio* au, const yau_play_desc* d);
 YAU_API int  yau_cancel(yau_audio* au, yau_id id);
-YAU_API int  yau_stop_at(yau_audio* au, yau_id id, int64_t t, int64_t ramp_ns);
-YAU_API int  yau_gain_at(yau_audio* au, yau_id id, int64_t t, float db, int64_t ramp_ns);
+YAU_API int  yau_stop_at(yau_audio* au, yau_id id, int64_t t_ns, int64_t ramp_ns);
+YAU_API int  yau_gain_at(yau_audio* au, yau_id id, int64_t t_ns, float db, int64_t ramp_ns);
 
 /* Moves completed records from the callback into the handle. Returns the
  * number moved, or YAU_ERR_LOST once the device has gone away. */
@@ -1419,9 +1474,9 @@ YAU_API int  yau_wait(yau_audio* au, yau_id id, int64_t timeout_ns, yau_onset* o
  * the first callback. */
 YAU_API int64_t yau_lead_ns(const yau_audio* au);
 
-/* The fit (THE FIT): the stream frame on which time t falls (the nearest),
- * and the time of a stream frame. -1 before the first fit. */
-YAU_API int64_t yau_frame_at(const yau_audio* au, int64_t t);
+/* The fit (THE FIT): the stream frame on which time t_ns falls (the
+ * nearest), and the time of a stream frame. -1 before the first fit. */
+YAU_API int64_t yau_frame_at(const yau_audio* au, int64_t t_ns);
 YAU_API int64_t yau_time_of(const yau_audio* au, int64_t frame);
 
 /* The device side of the DEVICE contract. */
@@ -1450,13 +1505,17 @@ YAU_API int yau_ramp(float* f, int64_t n, uint16_t ch, int64_t on_frames, int64_
 YAU_API int yau_mix(float* dst, int64_t dst_n, uint16_t ch, const float* src,
                         int64_t src_n, int64_t at_frame, float gain);
 
-/* Streams (STREAMS). Frame thread: init takes the ring from desc.memory or
- * the arena; release ends an arena stream's hold on yau_arena_reset()
- * (YAU_ERR_BUSY unless IDLE or ENDED). */
-YAU_API int yau_stream_init(yau_audio* au, yau_stream* st, const yau_stream_desc* d);
-YAU_API int yau_stream_release(yau_audio* au, yau_stream* st);
-/* yau_play() with .stream = st and .at = t. */
-YAU_API yau_id yau_play_stream(yau_audio* au, yau_stream* st, int64_t t);
+/* Streams (STREAMS). Frame thread. open takes the ring from desc.memory
+ * or the arena; false with the message in the owner's yau_error(au) (the
+ * stream has no buffer of its own: it is laid out a cache line per
+ * thread). close never fails: a play still running is canceled and close
+ * waits for the device to let go of the stream (STREAMS, "Close"), then
+ * ends an arena stream's hold on yau_arena_reset(). Safe on a zeroed
+ * stream, after a failed open, and twice. */
+YAU_API bool yau_stream_open(yau_audio* au, yau_stream* st, const yau_stream_desc* d);
+YAU_API void yau_stream_close(yau_audio* au, yau_stream* st);
+/* yau_play() with .stream = st and .at_ns = t_ns. */
+YAU_API yau_id yau_play_stream(yau_audio* au, yau_stream* st, int64_t t_ns);
 
 /* The producer: one thread at a time, which may be the frame thread.
  * Wait-free. acquire returns the contiguous free region (up to the ring's
@@ -1475,21 +1534,24 @@ YAU_API int     yau_stream_reset(yau_stream* st, int64_t first);
  * snapshot. */
 YAU_API int yau_stream_get_info(const yau_stream* st, yau_stream_info* out);
 
-/* Frame thread: the sample of a started stream at ysp_rt time t (the nearest
- * frame minus origin), and the time of a sample, from the fit.
- * YAU_PENDING until the start fixes origin. */
-YAU_API int yau_stream_sample_at(const yau_audio* au, const yau_stream* st, int64_t t, int64_t* sample);
-YAU_API int yau_stream_time_of(const yau_audio* au, const yau_stream* st, int64_t sample, int64_t* t);
+/* Frame thread: the sample of a started stream at ysp_rt time t_ns (the
+ * nearest frame minus origin), and the time of a sample, from the fit.
+ * YAU_PENDING until the start fixes origin. Not const: a failure writes
+ * the message. */
+YAU_API int yau_stream_sample_at(yau_audio* au, const yau_stream* st, int64_t t_ns, int64_t* sample);
+YAU_API int yau_stream_time_of(yau_audio* au, const yau_stream* st, int64_t sample, int64_t* t_ns);
 
-/* WAV files (WAV FILES). open and close: frame thread. feed, seek, step
- * and on_msg: the producer. wants: any thread. feed writes up to
+/* WAV files (WAV FILES). open and close: frame thread; open returns false
+ * with the message in yau_wav_error(w) and the code in w->error_code;
+ * close never fails, as yau_stream_close(). feed, seek, step and on_msg:
+ * the producer; they return codes, and feed writes yau_wav_error(w). wants: any thread. feed writes up to
  * max_frames (0 = until the ring is full or the file ends) and returns the
  * frames written or a negative code. step is a yrt_idle_fn (one block of
  * up to 4096 frames; true while the ring has room and the file has
  * samples); on_msg is a yrt_msg_fn for yau_wav_msg (a seek, or -1 to
  * wake). load reads a whole file into the arena as a buffer. */
-YAU_API int       yau_wav_open(yau_audio* au, yau_wav* w, const yau_wav_desc* d);
-YAU_API int       yau_wav_close(yau_audio* au, yau_wav* w);
+YAU_API bool      yau_wav_open(yau_audio* au, yau_wav* w, const yau_wav_desc* d);
+YAU_API void      yau_wav_close(yau_audio* au, yau_wav* w);
 YAU_API int64_t   yau_wav_feed(yau_wav* w, int64_t max_frames);
 YAU_API int       yau_wav_seek(yau_wav* w, int64_t sample);
 YAU_API bool      yau_wav_wants(const yau_wav* w);
@@ -1655,10 +1717,21 @@ static void yau__st64(int64_t* p, int64_t v) { __atomic_store_n(p, v, __ATOMIC_R
 
 static void yau__err(yau_audio* au, const char* fmt, ...) {
     va_list ap;
+    au->err_n++;
     va_start(ap, fmt);
     vsnprintf(au->error, sizeof au->error, fmt, ap);
     va_end(ap);
 }
+
+YAU_API const char* yau_strerror(int code);
+
+/* A frame-thread call's failure, in yau_error(), unless the call wrote a
+ * more specific message itself (err_n moved). snprintf on failure only. */
+static int64_t yau__fail(yau_audio* au, uint32_t n0, int64_t rc, const char* what) {
+    if (rc < 0 && au && au->err_n == n0) yau__err(au, "ysp_audio: %s: %s", what, yau_strerror((int)rc));
+    return rc;
+}
+#define YAU__N0(au) ((au) ? (au)->err_n : 0u)
 
 static int64_t yau__frames_of(int64_t ns, uint32_t rate) {
     /* nearest frame; ns up to 2^62 does not overflow through a double */
@@ -3024,7 +3097,7 @@ static void yau__res_put(yau_audio* au, const yau_onset* rec, int stage) {
     }
 }
 
-YAU_API int yau_update(yau_audio* au) {
+static int yau__update_rc(yau_audio* au) {
     uint32_t head, tail;
     int n = 0;
     if (!au || !au->open) return YAU_ERR_CLOSED;
@@ -3062,7 +3135,7 @@ static yau_id yau__play_stream(yau_audio* au, const yau_play_desc* d) {
     yau__cmd c;
     yau__res* r;
     yau_stream* st = d->stream;
-    if (d->buf.frames || d->buf.n || d->offset || d->frames || d->loops || d->at < 0
+    if (d->buf.frames || d->buf.n || d->offset || d->frames || d->loops || d->at_ns < 0
         || st->au_ != au || !st->mem_) return YAU_ERR_ARG;
     if (au->outstanding >= au->voices_max) return YAU_ERR_FULL;
     /* the claim: a reset cannot run from here until the play has ended */
@@ -3070,7 +3143,7 @@ static yau_id yau__play_stream(yau_audio* au, const yau_play_desc* d) {
     memset(&c, 0, sizeof c);
     c.op = YAU__OP_PLAY;
     c.id = au->next_id + 1;
-    c.t = d->at;
+    c.t = d->at_ns;
     c.db = d->db;
     c.ch = st->ch_;
     c.buf_id = st->buf_id_;
@@ -3087,8 +3160,8 @@ static yau_id yau__play_stream(yau_audio* au, const yau_play_desc* d) {
     memset(r, 0, sizeof *r);
     r->used = 1;
     r->rec.id = c.id;
-    r->rec.target = d->at;
-    r->rec.onset = d->at;
+    r->rec.target = d->at_ns;
+    r->rec.onset = d->at_ns;
     r->rec.start_frame = -1;
     r->rec.device_pos = -1;
     r->rec.buffer_id = st->buf_id_;
@@ -3097,16 +3170,16 @@ static yau_id yau__play_stream(yau_audio* au, const yau_play_desc* d) {
     return c.id;
 }
 
-YAU_API yau_id yau_play(yau_audio* au, const yau_play_desc* d) {
+static yau_id yau__play_rc(yau_audio* au, const yau_play_desc* d) {
     yau__cmd c;
     yau__res* r;
     int64_t len;
     if (!au || !d) return YAU_ERR_ARG;
     if (!au->open) return YAU_ERR_CLOSED;
-    if (yau_update(au) == YAU_ERR_LOST) return YAU_ERR_LOST;
+    if (yau__update_rc(au) == YAU_ERR_LOST) return YAU_ERR_LOST;
     if (d->stream) return yau__play_stream(au, d);
     if (!d->buf.frames || d->buf.n <= 0 || d->offset < 0 || d->offset >= d->buf.n
-        || d->frames < 0 || d->at < 0 || d->loops < YAU_FOREVER) return YAU_ERR_ARG;
+        || d->frames < 0 || d->at_ns < 0 || d->loops < YAU_FOREVER) return YAU_ERR_ARG;
     if (!yau__project_channels_ok(au, d->buf.channels)) return YAU_ERR_FORMAT;
     len = d->frames ? d->frames : d->buf.n - d->offset;
     if (d->offset + len > d->buf.n) return YAU_ERR_ARG;
@@ -3114,7 +3187,7 @@ YAU_API yau_id yau_play(yau_audio* au, const yau_play_desc* d) {
     memset(&c, 0, sizeof c);
     c.op = YAU__OP_PLAY;
     c.id = au->next_id + 1;
-    c.t = d->at;
+    c.t = d->at_ns;
     c.db = d->db;
     c.ch = d->buf.channels;
     c.buf_id = d->buf.id;
@@ -3133,8 +3206,8 @@ YAU_API yau_id yau_play(yau_audio* au, const yau_play_desc* d) {
     memset(r, 0, sizeof *r);
     r->used = 1;
     r->rec.id = c.id;
-    r->rec.target = d->at;
-    r->rec.onset = d->at;
+    r->rec.target = d->at_ns;
+    r->rec.onset = d->at_ns;
     r->rec.start_frame = -1;
     r->rec.device_pos = -1;
     r->rec.buffer_id = d->buf.id;
@@ -3143,21 +3216,21 @@ YAU_API yau_id yau_play(yau_audio* au, const yau_play_desc* d) {
     return c.id;
 }
 
-YAU_API yau_id yau_play_at(yau_audio* au, yau_buf buf, int64_t t) {
+static yau_id yau__play_at_rc(yau_audio* au, yau_buf buf, int64_t t) {
     yau_play_desc d;
     memset(&d, 0, sizeof d);
     d.buf = buf;
-    d.at = t;
-    return yau_play(au, &d);
+    d.at_ns = t;
+    return yau__play_rc(au, &d);
 }
 
-YAU_API yau_id yau_play_stream(yau_audio* au, yau_stream* st, int64_t t) {
+static yau_id yau__play_stream_rc(yau_audio* au, yau_stream* st, int64_t t) {
     yau_play_desc d;
     if (!st) return YAU_ERR_ARG;
     memset(&d, 0, sizeof d);
     d.stream = st;
-    d.at = t;
-    return yau_play(au, &d);
+    d.at_ns = t;
+    return yau__play_rc(au, &d);
 }
 
 /* --- streams: setup and the producer ------------------------------------------ */
@@ -3182,7 +3255,7 @@ static void yau__stream_clear(yau_stream* st, int64_t first) {
     st->gap_xr_ = 0;
 }
 
-YAU_API int yau_stream_init(yau_audio* au, yau_stream* st, const yau_stream_desc* d) {
+static int yau__stream_open_rc(yau_audio* au, yau_stream* st, const yau_stream_desc* d) {
     int64_t cap, pre;
     uint16_t ch;
     float* mem;
@@ -3219,16 +3292,50 @@ YAU_API int yau_stream_init(yau_audio* au, yau_stream* st, const yau_stream_desc
     return 0;
 }
 
-YAU_API int yau_stream_release(yau_audio* au, yau_stream* st) {
+static int yau__cancel_rc(yau_audio* au, yau_id id);
+
+YAU_API bool yau_stream_open(yau_audio* au, yau_stream* st, const yau_stream_desc* d) {
+    uint32_t n0 = YAU__N0(au);
+    int rc = yau__stream_open_rc(au, st, d);
+    if (rc < 0) (void)yau__fail(au, n0, rc, "yau_stream_open");
+    return rc == 0;
+}
+
+/* The device reads a playing stream's struct and ring on every block, so
+ * close cancels the play and waits for the device to end it (it stores
+ * ENDED last, yau__stream_detach) before it lets go: the device's buffer
+ * and two periods, 20 ms to 1 s. A device that does not answer in that
+ * time (stopped, or a CUSTOM device whose render runs on this thread)
+ * leaves the stream detached with its memory in place: the device may
+ * still read it, so its ring stays valid and an arena ring stays held
+ * until yau_close(). A lost device reads nothing more. */
+YAU_API void yau_stream_close(yau_audio* au, yau_stream* st) {
     uint32_t s;
-    if (!au || !st || st->au_ != au) return YAU_ERR_ARG;
+    if (!au || !st || !st->mem_ || st->au_ != au) return;
     s = yau__ld32(&st->state_);
-    if (s != YAU_STREAM_IDLE && s != YAU_STREAM_ENDED) return YAU_ERR_BUSY;
+    if (s != YAU_STREAM_IDLE && s != YAU_STREAM_ENDED && au->open && !yau__ld32(&au->lost)) {
+        int64_t id = yau__ld64(&st->id_), rate = au->dcaps.rate, wait_ns = 0, end;
+        if (id > 0) (void)yau__cancel_rc(au, id);
+        if (rate > 0)
+            wait_ns = ((int64_t)au->dcaps.buffer + 2 * (int64_t)au->dcaps.period) * 1000000000 / rate;
+        if (wait_ns < 20000000) wait_ns = 20000000;
+        if (wait_ns > 1000000000) wait_ns = 1000000000;
+        end = YAU__NOW() + wait_ns;
+        for (;;) {
+            (void)yau__update_rc(au);
+            s = yau__ld32(&st->state_);
+            if (s == YAU_STREAM_IDLE || s == YAU_STREAM_ENDED || yau__ld32(&au->lost)) break;
+            if (YAU__NOW() >= end) {
+                st->au_ = NULL;   /* detached: memory and hold stay (above) */
+                return;
+            }
+            YAU__SLEEP_UNTIL(YAU__NOW() + 1000000);
+        }
+    }
     if (st->in_arena_) au->arena_streams--;
     st->in_arena_ = 0;
     st->mem_ = NULL;
     st->au_ = NULL;
-    return 0;
 }
 
 YAU_API float* yau_stream_acquire(yau_stream* st, int64_t* frames) {
@@ -3319,7 +3426,7 @@ YAU_API int yau_stream_get_info(const yau_stream* st, yau_stream_info* out) {
     return 0;
 }
 
-YAU_API int yau_stream_sample_at(const yau_audio* au, const yau_stream* st, int64_t t, int64_t* sample) {
+static int yau__stream_sample_at_rc(yau_audio* au, const yau_stream* st, int64_t t, int64_t* sample) {
     int64_t origin;
     if (!au || !st || !sample) return YAU_ERR_ARG;
     if (!au->open) return YAU_ERR_CLOSED;
@@ -3329,7 +3436,7 @@ YAU_API int yau_stream_sample_at(const yau_audio* au, const yau_stream* st, int6
     return YAU_OK;
 }
 
-YAU_API int yau_stream_time_of(const yau_audio* au, const yau_stream* st, int64_t sample, int64_t* t) {
+static int yau__stream_time_of_rc(yau_audio* au, const yau_stream* st, int64_t sample, int64_t* t) {
     int64_t origin;
     if (!au || !st || !t) return YAU_ERR_ARG;
     if (!au->open) return YAU_ERR_CLOSED;
@@ -3350,32 +3457,32 @@ static int yau__send(yau_audio* au, int op, yau_id id, int64_t t, int64_t ramp, 
     return yau__cmd_push(au, &c);
 }
 
-YAU_API int yau_cancel(yau_audio* au, yau_id id) {
+static int yau__cancel_rc(yau_audio* au, yau_id id) {
     if (id <= 0) return YAU_ERR_ARG;
     return yau__send(au, YAU__OP_CANCEL, id, 0, 0, 0);
 }
-YAU_API int yau_stop_at(yau_audio* au, yau_id id, int64_t t, int64_t ramp_ns) {
+static int yau__stop_at_rc(yau_audio* au, yau_id id, int64_t t, int64_t ramp_ns) {
     return yau__send(au, YAU__OP_STOP, id, t, ramp_ns, 0);
 }
-YAU_API int yau_gain_at(yau_audio* au, yau_id id, int64_t t, float db, int64_t ramp_ns) {
+static int yau__gain_at_rc(yau_audio* au, yau_id id, int64_t t, float db, int64_t ramp_ns) {
     return yau__send(au, YAU__OP_GAIN, id, t, ramp_ns, db);
 }
 
-YAU_API int yau_result(yau_audio* au, yau_id id, yau_onset* out) {
+static int yau__result_rc(yau_audio* au, yau_id id, yau_onset* out) {
     yau__res* r;
     if (!au || id <= 0) return YAU_ERR_ARG;
     if (!au->open) return YAU_ERR_CLOSED;
-    (void)yau_update(au);
+    (void)yau__update_rc(au);
     r = &au->res[(uint64_t)id % YAU__RESULTS];
     if (!r->used || r->rec.id != id) return YAU_ERR_NOT_FOUND;
     if (out) *out = r->rec;
     return r->used == 2 ? YAU_OK : YAU_PENDING;
 }
 
-YAU_API int yau_wait(yau_audio* au, yau_id id, int64_t timeout_ns, yau_onset* out) {
+static int yau__wait_rc(yau_audio* au, yau_id id, int64_t timeout_ns, yau_onset* out) {
     int64_t end = YAU__NOW() + timeout_ns;
     for (;;) {
-        int rc = yau_result(au, id, out);
+        int rc = yau__result_rc(au, id, out);
         if (rc != YAU_PENDING) return rc;
         if (yau__ld32(&au->lost)) return YAU_ERR_LOST;
         if (YAU__NOW() >= end) return YAU_ERR_TIMEOUT;
@@ -3609,7 +3716,7 @@ YAU_API bool yau_open(yau_audio* au, const yau_desc* desc) {
     if (d.backend != YAU_BACKEND_CUSTOM) {
         int64_t end = YAU__NOW() + 3000000000LL;
         while (!au->fit_ft.ready) {
-            (void)yau_update(au);
+            (void)yau__update_rc(au);
             if (au->fit_ft.ready) break;
             if (yau__ld32(&au->lost) || YAU__NOW() > end) {
                 /* which of three failures: a lost device, no callbacks at
@@ -3632,7 +3739,7 @@ YAU_API void yau_close(yau_audio* au) {
     if (au->started && au->dev->stop) au->dev->stop(au->dev_ctx);
     au->started = 0;
     /* the device thread has stopped: its state is ours now */
-    (void)yau_update(au);
+    (void)yau__update_rc(au);
     for (i = 0; i < YAU_MAX_VOICES; i++) {
         yau__voice* v = &au->voice[i];
         if (!v->state) continue;
@@ -3641,7 +3748,7 @@ YAU_API void yau_close(yau_audio* au) {
         if (!v->onset_done) yau__onset_done(au, v, yau__fit_time(&au->fit, v->start), -1, 0);
         if (v->state == 2) { v->flags |= YAU_ONSET_STOPPED; yau__end_voice(au, v, au->w); }
     }
-    (void)yau_update(au);
+    (void)yau__update_rc(au);
     if (au->dev->close) au->dev->close(au->dev_ctx);
     if (au->arena_owned) free(au->arena);
     au->arena = NULL;
@@ -3681,14 +3788,14 @@ YAU_API int yau_fill_tone(float* out, int64_t n, uint16_t ch, uint32_t rate,
     int c;
     double w;
     if (!out || !d || n <= 0 || ch == 0 || rate == 0) return YAU_ERR_ARG;
-    if (!(d->hz > 0) || d->hz >= rate / 2.0 || !(d->peak > 0) || d->peak > 1.0f || d->ramp < 0) return YAU_ERR_ARG;
+    if (!(d->hz > 0) || d->hz >= rate / 2.0 || !(d->peak > 0) || d->peak > 1.0f || d->ramp_ns < 0) return YAU_ERR_ARG;
     w = 2.0 * 3.14159265358979323846 * d->hz / (double)rate;
     for (i = 0; i < n; i++) {
         /* from the frame index, so the phase does not accumulate error */
         float s = (float)(d->peak * sin(w * (double)i + d->phase));
         for (c = 0; c < ch; c++) out[i * ch + c] = s;
     }
-    r = yau__frames_of(d->ramp, rate);
+    r = yau__frames_of(d->ramp_ns, rate);
     if (2 * r > n) return YAU_ERR_ARG;
     return yau_ramp(out, n, ch, r, r);
 }
@@ -3715,7 +3822,7 @@ YAU_API int yau_fill_noise(float* out, int64_t n, uint16_t ch, uint32_t rate,
     int64_t i, total, r;
     float pk = 0;
     if (peak) *peak = 0;
-    if (!out || !d || n <= 0 || ch == 0 || rate == 0 || !(d->rms > 0) || d->ramp < 0
+    if (!out || !d || n <= 0 || ch == 0 || rate == 0 || !(d->rms > 0) || d->ramp_ns < 0
         || (d->dist != YAU_GAUSS && d->dist != YAU_UNIFORM)) return YAU_ERR_ARG;
     x = d->seed;
     s[0] = yau__splitmix(&x); s[1] = yau__splitmix(&x);
@@ -3732,7 +3839,7 @@ YAU_API int yau_fill_noise(float* out, int64_t n, uint16_t ch, uint32_t rate,
             if (i + 1 < total) out[i + 1] = (float)(m * sin(2.0 * 3.14159265358979323846 * u2));
         }
     }
-    r = yau__frames_of(d->ramp, rate);
+    r = yau__frames_of(d->ramp_ns, rate);
     if (2 * r > n) return YAU_ERR_ARG;
     (void)yau_ramp(out, n, ch, r, r);
     for (i = 0; i < total; i++) { float a = out[i] < 0 ? -out[i] : out[i]; if (a > pk) pk = a; }
@@ -3773,15 +3880,15 @@ YAU_API yau_buf yau_tone(yau_audio* au, const yau_tone_desc* d) {
     size_t mark;
     uint16_t ch;
     if (!au || !au->open || !d) { if (au) yau__err(au, "ysp_audio: tone needs an open handle and a desc"); return b; }
-    n = yau__frames_of(d->dur, au->dcaps.rate);
+    n = yau__frames_of(d->dur_ns, au->dcaps.rate);
     ch = d->channels ? d->channels : 1;
-    if (n <= 0) { yau__err(au, "ysp_audio: tone .dur rounds to 0 frames"); return b; }
+    if (n <= 0) { yau__err(au, "ysp_audio: tone .dur_ns rounds to 0 frames"); return b; }
     mark = au->arena_used;
     b = yau_alloc(au, n, ch);
     if (!b.frames) return b;
     if (yau_fill_tone(b.frames, n, ch, au->dcaps.rate, d) < 0) {
         au->arena_used = mark;
-        yau__err(au, "ysp_audio: tone needs 0 < .hz < %u, 0 < .peak <= 1 and two ramps that fit in .dur",
+        yau__err(au, "ysp_audio: tone needs 0 < .hz < %u, 0 < .peak <= 1 and two ramps that fit in .dur_ns",
                    (unsigned)(au->dcaps.rate / 2));
         return yau__nobuf();
     }
@@ -3796,9 +3903,9 @@ YAU_API yau_buf yau_noise(yau_audio* au, const yau_noise_desc* d) {
     float pk = 0;
     int rc;
     if (!au || !au->open || !d) { if (au) yau__err(au, "ysp_audio: noise needs an open handle and a desc"); return b; }
-    n = yau__frames_of(d->dur, au->dcaps.rate);
+    n = yau__frames_of(d->dur_ns, au->dcaps.rate);
     ch = d->channels ? d->channels : 1;
-    if (n <= 0) { yau__err(au, "ysp_audio: noise .dur rounds to 0 frames"); return b; }
+    if (n <= 0) { yau__err(au, "ysp_audio: noise .dur_ns rounds to 0 frames"); return b; }
     mark = au->arena_used;
     b = yau_alloc(au, n, ch);
     if (!b.frames) return b;
@@ -3812,7 +3919,7 @@ YAU_API yau_buf yau_noise(yau_audio* au, const yau_noise_desc* d) {
     }
     if (rc < 0) {
         au->arena_used = mark;
-        yau__err(au, "ysp_audio: noise needs .rms > 0, a known .dist and two ramps that fit in .dur");
+        yau__err(au, "ysp_audio: noise needs .rms > 0, a known .dist and two ramps that fit in .dur_ns");
         return yau__nobuf();
     }
     return b;
@@ -3822,8 +3929,8 @@ YAU_API yau_buf yau_click(yau_audio* au, const yau_click_desc* d) {
     yau_buf b = yau__nobuf();
     int64_t n, i;
     if (!au || !au->open || !d) { if (au) yau__err(au, "ysp_audio: click needs an open handle and a desc"); return b; }
-    if (d->peak == 0 || d->peak > 1.0f || d->peak < -1.0f || d->dur < 0) { yau__err(au, "ysp_audio: click needs .peak in [-1, 1], not 0"); return b; }
-    n = d->dur ? yau__frames_of(d->dur, au->dcaps.rate) : 1;
+    if (d->peak == 0 || d->peak > 1.0f || d->peak < -1.0f || d->dur_ns < 0) { yau__err(au, "ysp_audio: click needs .peak in [-1, 1], not 0"); return b; }
+    n = d->dur_ns ? yau__frames_of(d->dur_ns, au->dcaps.rate) : 1;
     if (n < 1) n = 1;
     b = yau_alloc(au, n, 1);
     if (!b.frames) return b;
@@ -3831,10 +3938,10 @@ YAU_API yau_buf yau_click(yau_audio* au, const yau_click_desc* d) {
     return b;
 }
 
-YAU_API int yau_arena_reset(yau_audio* au) {
+static int yau__arena_reset_rc(yau_audio* au) {
     if (!au) return YAU_ERR_ARG;
     if (!au->open) return YAU_ERR_CLOSED;
-    (void)yau_update(au);
+    (void)yau__update_rc(au);
     if (au->arena_live > 0 || au->arena_streams > 0) return YAU_ERR_BUSY;
     au->arena_used = 0;
     return 0;
@@ -4075,15 +4182,12 @@ static int64_t yau__widen(float* dst, const unsigned char* src, int64_t n, int f
 
 YAU_API const char* yau_wav_error(const yau_wav* w) { return w ? w->error_ : ""; }
 
-YAU_API int yau_wav_open(yau_audio* au, yau_wav* w, const yau_wav_desc* d) {
+static int yau__wav_open_rc(yau_audio* au, yau_wav* w, const yau_wav_desc* d) {
     yau_stream_desc sd;
     int rc;
-    if (!au || !w || !d) return YAU_ERR_ARG;
+    if (!au || !d) return YAU_ERR_ARG;
     if (!au->open) return YAU_ERR_CLOSED;
-    if (w->open_) {
-        rc = yau_wav_close(au, w);
-        if (rc < 0) return rc;
-    }
+    if (w->open_) yau_wav_close(au, w);
     memset(w, 0, sizeof *w);
     if (d->loops < YAU_FOREVER || d->start < 0 || d->ring < 0) { snprintf(w->error_, sizeof w->error_, "ysp_audio: WAV loops, start or ring out of range"); return YAU_ERR_ARG; }
     rc = yau__wsrc_open(&w->src_, d, w->error_, sizeof w->error_);
@@ -4099,7 +4203,7 @@ YAU_API int yau_wav_open(yau_audio* au, yau_wav* w, const yau_wav_desc* d) {
         sd.channels = w->info.channels;
         sd.id = d->id;
         sd.first = d->start;
-        rc = yau_stream_init(au, &w->stream, &sd);
+        rc = yau__stream_open_rc(au, &w->stream, &sd);
         if (rc < 0) snprintf(w->error_, sizeof w->error_, "%.200s", au->error[0] ? au->error : "ysp_audio: the stream did not start");
     }
     if (rc < 0) { yau__wsrc_close(&w->src_); return rc; }
@@ -4111,15 +4215,22 @@ YAU_API int yau_wav_open(yau_audio* au, yau_wav* w, const yau_wav_desc* d) {
     return 0;
 }
 
-YAU_API int yau_wav_close(yau_audio* au, yau_wav* w) {
+YAU_API bool yau_wav_open(yau_audio* au, yau_wav* w, const yau_wav_desc* d) {
     int rc;
-    if (!au || !w) return YAU_ERR_ARG;
-    if (!w->open_) return 0;
-    rc = yau_stream_release(au, &w->stream);
-    if (rc < 0) { snprintf(w->error_, sizeof w->error_, "ysp_audio: the WAV stream is still playing; stop it first"); return rc; }
+    if (!w) return false;
+    rc = yau__wav_open_rc(au, w, d);
+    if (rc < 0 && !w->error_[0])
+        snprintf(w->error_, sizeof w->error_, "ysp_audio: yau_wav_open: %s", yau_strerror(rc));
+    w->error_code = rc < 0 ? rc : 0;
+    return rc == 0;
+}
+
+/* Never fails: yau_stream_close() ends a play that still runs. */
+YAU_API void yau_wav_close(yau_audio* au, yau_wav* w) {
+    if (!au || !w || !w->open_) return;
+    yau_stream_close(au, &w->stream);
     yau__wsrc_close(&w->src_);
     w->open_ = 0;
-    return 0;
 }
 
 static int yau__wav_seek_now(yau_wav* w, int64_t sample) {
@@ -4285,6 +4396,57 @@ YAU_API const yau_param* yau_params(int* n) {
 #ifdef __cplusplus
 }
 #endif
+
+/* --- the calls that write the message (ERRORS) --------------------------- */
+
+YAU_API int yau_update(yau_audio* au) {
+    uint32_t n0 = YAU__N0(au);
+    return (int)yau__fail(au, n0, yau__update_rc(au), "yau_update");
+}
+YAU_API yau_id yau_play(yau_audio* au, const yau_play_desc* d) {
+    uint32_t n0 = YAU__N0(au);
+    return yau__fail(au, n0, yau__play_rc(au, d), "yau_play");
+}
+YAU_API yau_id yau_play_at(yau_audio* au, yau_buf buf, int64_t t_ns) {
+    uint32_t n0 = YAU__N0(au);
+    return yau__fail(au, n0, yau__play_at_rc(au, buf, t_ns), "yau_play_at");
+}
+YAU_API yau_id yau_play_stream(yau_audio* au, yau_stream* st, int64_t t_ns) {
+    uint32_t n0 = YAU__N0(au);
+    return yau__fail(au, n0, yau__play_stream_rc(au, st, t_ns), "yau_play_stream");
+}
+YAU_API int yau_cancel(yau_audio* au, yau_id id) {
+    uint32_t n0 = YAU__N0(au);
+    return (int)yau__fail(au, n0, yau__cancel_rc(au, id), "yau_cancel");
+}
+YAU_API int yau_stop_at(yau_audio* au, yau_id id, int64_t t_ns, int64_t ramp_ns) {
+    uint32_t n0 = YAU__N0(au);
+    return (int)yau__fail(au, n0, yau__stop_at_rc(au, id, t_ns, ramp_ns), "yau_stop_at");
+}
+YAU_API int yau_gain_at(yau_audio* au, yau_id id, int64_t t_ns, float db, int64_t ramp_ns) {
+    uint32_t n0 = YAU__N0(au);
+    return (int)yau__fail(au, n0, yau__gain_at_rc(au, id, t_ns, db, ramp_ns), "yau_gain_at");
+}
+YAU_API int yau_result(yau_audio* au, yau_id id, yau_onset* out) {
+    uint32_t n0 = YAU__N0(au);
+    return (int)yau__fail(au, n0, yau__result_rc(au, id, out), "yau_result");
+}
+YAU_API int yau_wait(yau_audio* au, yau_id id, int64_t timeout_ns, yau_onset* out) {
+    uint32_t n0 = YAU__N0(au);
+    return (int)yau__fail(au, n0, yau__wait_rc(au, id, timeout_ns, out), "yau_wait");
+}
+YAU_API int yau_arena_reset(yau_audio* au) {
+    uint32_t n0 = YAU__N0(au);
+    return (int)yau__fail(au, n0, yau__arena_reset_rc(au), "yau_arena_reset");
+}
+YAU_API int yau_stream_sample_at(yau_audio* au, const yau_stream* st, int64_t t_ns, int64_t* sample) {
+    uint32_t n0 = YAU__N0(au);
+    return (int)yau__fail(au, n0, yau__stream_sample_at_rc(au, st, t_ns, sample), "yau_stream_sample_at");
+}
+YAU_API int yau_stream_time_of(yau_audio* au, const yau_stream* st, int64_t sample, int64_t* t_ns) {
+    uint32_t n0 = YAU__N0(au);
+    return (int)yau__fail(au, n0, yau__stream_time_of_rc(au, st, sample, t_ns), "yau_stream_time_of");
+}
 
 #endif /* YSP_AUDIO_IMPLEMENTATION_GUARD */
 #endif /* YSP_AUDIO_IMPLEMENTATION */

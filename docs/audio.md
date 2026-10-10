@@ -937,6 +937,52 @@ single ones (no record, the sound they pass tier 2). Mutations: 9 more in
 `tests/mutate/audio.toml` (20 in all), 20 killed. `audio_clockstats
 --stall-every` repeats the stall and lists every XRUN record.
 
+## Units, open and close, messages (v0.4.0)
+
+v0.4.0 applies the repository conventions (README.md, Conventions). No
+rule of the mixer, the fit or the plan changes.
+
+- **Desc time fields end in `_ns`.** `yau_play_desc.at_ns` and the
+  synthesis descs' `dur_ns` and `ramp_ns`. They were `int64_t` ns
+  already, so only the names change: code that wrote `.dur = 0.1` now
+  fails to compile. `YAU_S()` and `YAU_MS()` are gone; ysp/rt.h's
+  `YRT_S()` and `YRT_MS()` are the same macros. The record's fields
+  (`target`, `onset`, `residual`, `rendered_at`) keep their names: the
+  caller only reads them, and they are `int64_t` ns.
+- **`yau_stream_open()` and `yau_stream_close()`.** `yau_stream_init()`
+  took a desc and the ring, which is what open means. The stream has no
+  message buffer: it is four cache lines, one per thread that writes it,
+  and a message would add a fifth for one writer. Its open writes the
+  owner's `yau_error()`.
+- **Close never fails.** `yau_stream_release()` and `yau_wav_close()`
+  returned `YAU_ERR_BUSY` while the device still played the stream, and a
+  caller that ignored the code freed memory the device still read. Now
+  close cancels the play and waits for the device to end it. The device
+  stores ENDED after its last read of the stream, so when close sees
+  ENDED, the struct and the ring are free. The wait is the device's
+  buffer and two periods, from 20 ms to 1 s. A device that does not
+  answer in that time (it stopped, or a CUSTOM device whose blocks run
+  on the closing thread) gets the stream detached with its memory in
+  place, because the device can still read it. An arena ring then stays
+  held until `yau_close()`. ysp/video.h already waited for the device
+  before it closed the soundtrack, and it still does.
+- **Messages.** Every call of the frame thread that fails writes
+  `yau_error()` with the call's name, unless the call wrote a more
+  specific message first (a counter in the handle tells). The producer's
+  calls run on another thread and return codes only, because a write to
+  the handle's message would race with the frame thread.
+  `yau_stream_sample_at()` and `yau_stream_time_of()` take a non-const
+  handle for it. `yau_wav_open()` returns `bool`; its code is in
+  `w->error_code`, which ysp/video.h reads to tell an unreadable file
+  from a refused one.
+
+Checked on 2026-10-10 (Windows 11, MinGW-w64 gcc 16.1 and MSVC 19.44,
+the scripted device on a virtual clock): `tests/adapt/audio_test.c`
+passes, with a new test of close on a playing stream (the bound in
+virtual time, the hold kept, the next block ending the play) and of the
+messages. The USAGE blocks compile as C99 and C++17. Mutants `conv-01`
+to `conv-03` are caught.
+
 ## Not measured
 
 - Latency to sound. No loopback cable; `--line` is built, not run. It

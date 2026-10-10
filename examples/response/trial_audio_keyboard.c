@@ -162,9 +162,9 @@ int main(int argc, char** argv) {
         yau_tone_desc t;
         memset(&t, 0, sizeof t);
         t.hz = atof(ytb_text(&tab, i, ytb_col(&tab, "hz")));
-        t.dur = YAU_S(TONE_S);
+        t.dur_ns = YRT_S(TONE_S);
         t.peak = yau_db(TONE_DB);
-        t.ramp = YAU_MS(5);
+        t.ramp_ns = YRT_MS(5);
         tones[i] = yau_tone(&au, &t);
         if (!tones[i].frames) { fprintf(stderr, "trial_audio_keyboard: %s\n", yau_error(&au)); return 1; }
     }
@@ -228,7 +228,7 @@ int main(int argc, char** argv) {
                     yrsp_input* e = &sim_ev[n_sim_ev];
                     if (p->trial != ti.index || n_sim_ev + 2 > 8) continue;
                     memset(e, 0, sizeof *e);
-                    e->t = t_tone + YAU_S(p->at);
+                    e->t = t_tone + YRT_S(p->at);
                     e->type = YRSP_PRESS;
                     e->control = (uint32_t)yrsp_scancode(key);
                     e->stamp = YRSP_TIER_SIM;
@@ -236,7 +236,7 @@ int main(int argc, char** argv) {
                     sim_ev[n_sim_ev + 1] = *e;
                     sim_ev[n_sim_ev + 1].type = YRSP_RELEASE;
                     sim_ev[n_sim_ev + 1].value = 0;
-                    sim_ev[n_sim_ev + 1].t = e->t + YAU_MS(80);
+                    sim_ev[n_sim_ev + 1].t = e->t + YRT_MS(80);
                     n_sim_ev += 2;
                     if (ti.index < SIM_TRIALS) sim_t_press[ti.index] = e->t;   /* the last press is the response */
                 }
@@ -266,7 +266,7 @@ int main(int argc, char** argv) {
         }
 
         /* the interval is over and the record is complete: the row */
-        if (!responding && rc == YAU_OK && f.onset >= t_end + YAU_S(ITI_S)) {
+        if (!responding && rc == YAU_OK && f.onset >= t_end + YRT_S(ITI_S)) {
             char rt[32];
             int correct;
             yrsp_finish(&rsp, &res);
@@ -312,7 +312,7 @@ int main(int argc, char** argv) {
         for (i = 0; i < rows && i < SIM_TRIALS; i++) {
             const yrsp_result* r = &sim_res[i];
             int ok = r->onset_src == YRSP_ONSET_AUDIO && r->onset_tier == YAU_TIER_SIM &&
-                     !(r->flags & YRSP_R_ONSET_PLAN) && llabs(r->onset_residual) <= YAU_MS(10);
+                     !(r->flags & YRSP_R_ONSET_PLAN) && llabs(r->onset_residual) <= YRT_MS(10);
             if (i == 3) ok = ok && !(r->flags & YRSP_R_RESPONDED) && (r->flags & YRSP_R_TIMEOUT);
             else ok = ok && (r->flags & YRSP_R_RESPONDED) &&
                       fabs(YRT_TO_S(r->rt_ns) - (double)(sim_t_press[i] - r->t_onset) / 1e9) < 1e-9 && sim_correct[i] == (i < 2);

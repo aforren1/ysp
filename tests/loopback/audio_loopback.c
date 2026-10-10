@@ -530,7 +530,7 @@ static void stream_clicks(int n, yser_port* ttl, int64_t* t_ttl, yau_id* ids, ui
     g_click_t = (int64_t*)calloc((size_t)n, sizeof *g_click_t);
     memset(&sd, 0, sizeof sd);
     sd.channels = 1;
-    if (!g_click_t || yau_stream_init(&au, &st, &sd) != 0) { fprintf(stderr, "stream: %s\n", yau_error(&au)); return; }
+    if (!g_click_t || !yau_stream_open(&au, &st, &sd)) { fprintf(stderr, "stream: %s\n", yau_error(&au)); return; }
     for (;;) {
         int64_t k;
         float* p;
@@ -565,7 +565,7 @@ static void stream_clicks(int n, yser_port* ttl, int64_t* t_ttl, yau_id* ids, ui
     if (yau_result(&au, ids[0], &r) == YAU_OK)
         printf("line: stream onset tier %d, flags 0x%x, %lld silent frames\n", r.tier, (unsigned)r.flags, (long long)r.gap_frames);
     g_stream_gaps = in.gaps;
-    (void)yau_stream_release(&au, &st);
+    yau_stream_close(&au, &st);
 }
 
 #define LINE_MAX_FRAMES (48000 * 120)

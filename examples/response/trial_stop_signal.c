@@ -184,9 +184,9 @@ int main(int argc, char** argv) {
     if (!yau_open(&au, &ad)) { fprintf(stderr, "trial_stop_signal: %s\n", yau_error(&au)); return 1; }
     memset(&tdesc, 0, sizeof tdesc);
     tdesc.hz = 750;
-    tdesc.dur = YAU_S(TONE_S);
+    tdesc.dur_ns = YRT_S(TONE_S);
     tdesc.peak = yau_db(-30);
-    tdesc.ramp = YAU_MS(5);
+    tdesc.ramp_ns = YRT_MS(5);
     tone = yau_tone(&au, &tdesc);
     if (!tone.frames) { fprintf(stderr, "trial_stop_signal: %s\n", yau_error(&au)); return 1; }
 
@@ -285,7 +285,7 @@ int main(int argc, char** argv) {
             ssd = NAN;
             if (stop) {
                 ssd = yst_next(&stair);
-                id = yau_play_at(&au, tone, t_go + YAU_S(ssd));
+                id = yau_play_at(&au, tone, t_go + YRT_S(ssd));
                 if (id <= 0) { fprintf(stderr, "trial_stop_signal: play: %s\n", yau_strerror((int)id)); failed = 1; break; }
             }
             yrsp_arm(&rsp, f.onset);
@@ -297,7 +297,7 @@ int main(int argc, char** argv) {
             if (sim && (!stop || n_stop == 1)) {
                 yrsp_input* e = &sim_ev[0];
                 memset(e, 0, sizeof *e);
-                e->t = t_go + YAU_S(stop ? SIM_FAIL_RT : SIM_GO_RT);
+                e->t = t_go + YRT_S(stop ? SIM_FAIL_RT : SIM_GO_RT);
                 e->type = YRSP_PRESS;
                 e->control = (uint32_t)yrsp_scancode(key_answer);
                 e->stamp = YRSP_TIER_SIM;
@@ -305,7 +305,7 @@ int main(int argc, char** argv) {
                 sim_ev[1] = *e;
                 sim_ev[1].type = YRSP_RELEASE;
                 sim_ev[1].value = 0;
-                sim_ev[1].t = e->t + YAU_MS(80);
+                sim_ev[1].t = e->t + YRT_MS(80);
                 n_sim_ev = 2;
             }
         }
