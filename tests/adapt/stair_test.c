@@ -649,6 +649,7 @@ static void test_closed_and_bad_args(void) {
     CHECK(!yst_is_open(&z));
     CHECK_NAN(yst_next(&z));
     CHECK_I(yst_update(&z, 1.0, 1), YST_ERR_CLOSED);
+    CHECK(strstr(yst_error(&z), "not open") != NULL);   /* v0.2: update writes */
     CHECK(!yst_done(&z));
     CHECK_I(yst_stop_reason(&z), YST_STOP_NONE);
     CHECK_NAN(yst_estimate(&z, YST_EST_REVERSALS));
@@ -685,6 +686,7 @@ static void test_closed_and_bad_args(void) {
     base_desc(&d);
     CHECK(yst_open(&g_s, &d));
     CHECK_I(yst_update(&g_s, 10.0, 2), YST_ERR_ARG);
+    CHECK(strstr(yst_error(&g_s), "response") != NULL);
     CHECK_I(yst_update(&g_s, 10.0, -1), YST_ERR_ARG);
     CHECK_I(yst_update(&g_s, HUGE_VAL, 1), YST_ERR_ARG);
     CHECK_I(yst_update(&g_s, -HUGE_VAL, 0), YST_ERR_ARG);
@@ -706,6 +708,20 @@ static void test_closed_and_bad_args(void) {
     CHECK_I(yst_simulate_response(0.5, 0.6), 0);
     CHECK_I(yst_simulate_response(0.0, 0.0), 0);
     CHECK_I(yst_simulate_response(1.0, 0.999999), 1);
+
+    /* close: safe on a zeroed handle, after a failed open and twice; a
+     * closed handle answers as a never-opened one. */
+    memset(&z, 0, sizeof(z));
+    yst_close(&z);
+    yst_close(NULL);
+    CHECK(!yst_open(&z, NULL));
+    yst_close(&z);
+    CHECK(yst_open(&g_s, &d));
+    yst_close(&g_s);
+    yst_close(&g_s);
+    CHECK(!yst_is_open(&g_s));
+    CHECK_NAN(yst_next(&g_s));
+    CHECK_I(yst_update(&g_s, 1.0, 1), YST_ERR_CLOSED);
 }
 
 /* ------------------------------------------------- every rejected desc */
@@ -885,7 +901,7 @@ static void test_version(void) {
     CHECK(strcmp(yst_version(), YST_VERSION_STRING) == 0);
     /* Pinned, and compared at run time: a constant condition is MSVC's C4127,
      * and the string from the implementation is the thing worth pinning. */
-    CHECK(strcmp(yst_version(), "0.1.2") == 0);
+    CHECK(strcmp(yst_version(), "0.2.0") == 0);
 }
 
 int main(void) {

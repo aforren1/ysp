@@ -1,4 +1,4 @@
-/* ysp/stair.h - v0.1.2 - public domain single-header adaptive staircase library
+/* ysp/stair.h - v0.2.0 - public domain single-header adaptive staircase library
  *
  *   Nonparametric adaptive procedures for psychophysics: transformed and
  *   weighted up/down staircases (Wetherill & Levitt 1965; Levitt 1971;
@@ -14,73 +14,6 @@
  *   C99, C11 and C++17, and in the C dialect MSVC compiles by default.
  *
  *   ---------------------------------------------------------------------
- *   CHANGELOG
- *   ---------------------------------------------------------------------
- *   v0.1.2 - documentation only. STATUS records the replay against
- *          Palamedes' PAL_AMUD, now done. The rule's counter sentence said
- *          "the counters reset on every step and on every change of
- *          direction", which could be read two ways; it now says what the
- *          code does (the opposite counter resets on every response, both on
- *          every step) and where that differs from PAL_AMUD. No code changed.
- *   v0.1.1 - version macros (YST_VERSION_MAJOR / MINOR / PATCH / STRING)
- *          and yst_version(), so a program can log which header it was
- *          built from. No behavior changed.
- *   v0.1 - first implementation. Defining YSP_STAIR_IMPLEMENTATION now
- *          compiles the library instead of failing. The manual gained the
- *          detail a specification could leave open and an implementation
- *          cannot: which step size the reversal trial itself takes (the new
- *          one, as in PsychoPy), the sign convention of YST_RULE_ASA and
- *          what its m_k counts, which recorded level each estimator
- *          averages, the order the stop criteria are tested in, and the
- *          rest of the descs yst_open() rejects. YST_EVENT_STEP now
- *          means "the rule stepped", not "the value changed", so a step
- *          held by a limit still reports one.
- *   v0.0 - specification. Declarations and the manual, no implementation.
- *
- *   STATUS: v0.1.2. Built and run on Linux (WSL2) with gcc 11.4 as C11, C99 and
- *   C++17 under -Wall -Wextra -Wpedantic -Wshadow -Werror, and once under
- *   -fsanitize=address,undefined -fno-sanitize-recover=all with no
- *   diagnostic. Also built and run on Windows 11 with MSVC 14.51 under
- *   /W4 /WX, both in its default (pre-C11) C dialect and as /std:c++17;
- *   every number the test prints is identical on the two compilers.
- *   tests/adapt/stair_test.c, at YST_MAX_TRIALS 128 and
- *   YST_MAX_REVERSALS 32, checks hand-derived tracks for 1-up-1-down,
- *   1-up-2-down, 1-up-3-down and 2-up-1-down (proposals, reversal indices,
- *   reversal levels), the step schedule, the initial rule, LIN / LOG / DB steps, the
- *   limits and every stop reason, the weighted rule, ASA, all four
- *   estimators, YST_ERR_FULL at YST_MAX_TRIALS, and every desc
- *   yst_open() is documented to reject. A simulated Weibull observer over
- *   204000 pooled trials puts the empirical proportion correct within 0.007
- *   of yst_convergence_p for 1-up-2-down (0.7105 against 0.7071),
- *   1-up-3-down (0.7970 against 0.7937) and a weighted 1-up-1-down (0.7565
- *   against 0.7500), against a 0.01 tolerance. All three sit ABOVE the
- *   target, which is the finite-step bias of the rule and not noise; shrink
- *   the step to shrink it.
- *   Replayed against Palamedes' PAL_AMUD through the MEX binding in MATLAB
- *   R2023a (tests/compare/compare_stair_palamedes.m), on fixed 80-trial
- *   response sequences: 1-up-2-down, 1-up-3-down, 2-up-1-down, a reversal
- *   stop, a weighted 1-up-1-down, limits, log10 steps and a caller-driven
- *   step schedule are identical, level for level and reversal for reversal.
- *   PAL_AMUD always applies the initial rule, so those descs set
- *   initial_rule. Two differences are documented rather than papered over.
- *   PAL_AMUD keeps the opposite-direction counter when a response causes no
- *   step, where this header resets it on every response; the two agree
- *   whenever n_up or n_down is 1 (see RULES). And a caller who changes
- *   Palamedes' step after the reversing update gives the reversal trial the
- *   OLD step, where this header, like PsychoPy, gives it the new one.
- *   PsychoPy's StairHandler is replayed too, through the Python binding
- *   (tests/compare/compare_stair_psychopy.py): on seven configurations
- *   (1-up-2-down and 1-up-3-down and 2-up-1-down, step schedules, the
- *   initial rule on and off, limits, linear, dB and log steps) no proposal
- *   differs on any trial, the reversal indices and levels are the same, and
- *   the estimates agree, the log and dB cases to 1e-15 because PsychoPy
- *   multiplies where this header adds in log units.
- *   What is NOT done here: nothing here is a timing measurement. No
- *   estimator is a fit and none carries a confidence interval. A
- *   -DYST_API=static build needs a translation unit that calls every
- *   function, or -Wno-unused-function.
- *
- *   ---------------------------------------------------------------------
  *   USAGE
  *   ---------------------------------------------------------------------
  *   Do this:
@@ -93,29 +26,29 @@
  *       #define YSP_STAIR_IMPLEMENTATION
  *       #include "ysp/stair.h"
  *
- *       yst_desc d = {                  // unset fields are 0: the defaults
- *           .start          = 0.5,        // starting level, caller's units
- *           .n_up           = 1,          // 1-up ...
- *           .n_down         = 3,          // ... 3-down: converges on 79.4%
- *           .step_type      = YST_STEP_LOG,
- *           .steps          = { 0.3,      // log10 units: a factor of 2
- *                               0.15,     // halved after the first reversal
- *                               0.075 },  // and again after the second
- *           .n_steps        = 3,
- *           .min            = 0.001,
- *           .max            = 1.0,
- *           .stop_reversals = 10,
- *       };
+ *       yst_desc d = { 0 };             // unset fields are 0: the defaults
+ *       d.start          = 0.5;         // starting level, caller's units
+ *       d.n_up           = 1;           // 1-up ...
+ *       d.n_down         = 3;           // ... 3-down: converges on 79.4%
+ *       d.step_type      = YST_STEP_LOG;
+ *       d.steps[0]       = 0.3;         // log10 units: a factor of 2
+ *       d.steps[1]       = 0.15;        // halved after the first reversal
+ *       d.steps[2]       = 0.075;       // and again after the second
+ *       d.n_steps        = 3;
+ *       d.min            = 0.001;
+ *       d.max            = 1.0;
+ *       d.stop_reversals = 10;
  *
- *       yst_stair s;
+ *       static yst_stair s;             // about 28 KB; see MEMORY AND THREADS
  *       if (!yst_open(&s, &d)) { fputs(yst_error(&s), stderr); return 1; }
  *
  *       while (!yst_done(&s)) {
  *           double level = yst_next(&s);
  *           int correct  = run_trial(level);          // 1 = correct, 0 = not
- *           yst_update(&s, level, correct);
+ *           if (yst_update(&s, level, correct) < 0) { fputs(yst_error(&s), stderr); break; }
  *       }
  *       double thr = yst_estimate(&s, YST_EST_REVERSALS);
+ *       yst_close(&s);
  *
  *   ---------------------------------------------------------------------
  *   MODEL
@@ -286,18 +219,21 @@
  *   ---------------------------------------------------------------------
  *   RETURN VALUES AND ERRORS
  *   ---------------------------------------------------------------------
- *   yst_open() returns bool and fills yst_error() on failure. Every
- *   other function returns a value or a code and never touches the message
- *   buffer, matching the collection's convention. update() returns 0, or a
- *   positive YST_EVENT_* mask for a step or a reversal, or a negative
- *   YST_ERR_*. yst_strerror() names a code.
+ *   yst_open() returns bool and fills yst_error() on failure; it clears the
+ *   message on entry. update() returns 0, or a positive YST_EVENT_* mask
+ *   for a step or a reversal, or a negative YST_ERR_*, and on a failure it
+ *   also writes yst_error() (a null handle has nowhere to write).
+ *   yst_strerror() names a code. The queries return a value and never write
+ *   the message. yst_close() releases nothing (the handle owns no
+ *   resource); it zeroes the handle, and is safe on a zeroed handle, after
+ *   a failed open and a second time.
  *
  *     YST_ERR_ARG      null handle, response not 0 or 1, level not finite,
  *                        or a level <= 0 under YST_STEP_LOG / _DB
  *     YST_ERR_CLOSED   the handle was never opened
  *     YST_ERR_FULL     YST_MAX_TRIALS trials recorded
  *
- *   A closed handle answers every other call without touching it: next()
+ *   A closed handle answers every query without touching it: next()
  *   and estimate() give NaN, estimate_count() and n_trials() give 0,
  *   history() gives NULL, done() and is_open() give false, stop_reason()
  *   gives YST_STOP_NONE, reversal_level() gives NaN and
@@ -339,6 +275,81 @@
  *       cl /O2 /Iinclude examples\stair\sim.c
  *
  *   ---------------------------------------------------------------------
+ *   CHANGELOG
+ *   ---------------------------------------------------------------------
+ *   v0.2.0 - the repository conventions (README.md, Conventions). Breaks
+ *          the API: yst_close() is new (it zeroes the handle; every open
+ *          has a close), and a failed yst_update() now writes yst_error()
+ *          as well as returning the code. The USAGE block zeroes the desc
+ *          and sets fields, so it builds as C99 and C++17. No rule changed.
+ *   v0.1.2 - documentation only. STATUS records the replay against
+ *          Palamedes' PAL_AMUD, now done. The rule's counter sentence said
+ *          "the counters reset on every step and on every change of
+ *          direction", which could be read two ways; it now says what the
+ *          code does (the opposite counter resets on every response, both on
+ *          every step) and where that differs from PAL_AMUD. No code changed.
+ *   v0.1.1 - version macros (YST_VERSION_MAJOR / MINOR / PATCH / STRING)
+ *          and yst_version(), so a program can log which header it was
+ *          built from. No behavior changed.
+ *   v0.1 - first implementation. Defining YSP_STAIR_IMPLEMENTATION now
+ *          compiles the library instead of failing. The manual gained the
+ *          detail a specification could leave open and an implementation
+ *          cannot: which step size the reversal trial itself takes (the new
+ *          one, as in PsychoPy), the sign convention of YST_RULE_ASA and
+ *          what its m_k counts, which recorded level each estimator
+ *          averages, the order the stop criteria are tested in, and the
+ *          rest of the descs yst_open() rejects. YST_EVENT_STEP now
+ *          means "the rule stepped", not "the value changed", so a step
+ *          held by a limit still reports one.
+ *   v0.0 - specification. Declarations and the manual, no implementation.
+ *
+ *   STATUS: v0.2.0. Built and run on Linux (WSL2) with gcc 11.4 as C11, C99 and
+ *   C++17 under -Wall -Wextra -Wpedantic -Wshadow -Werror, and once under
+ *   -fsanitize=address,undefined -fno-sanitize-recover=all with no
+ *   diagnostic. Also built and run on Windows 11 with MSVC 14.51 under
+ *   /W4 /WX, both in its default (pre-C11) C dialect and as /std:c++17;
+ *   every number the test prints is identical on the two compilers.
+ *   tests/adapt/stair_test.c, at YST_MAX_TRIALS 128 and
+ *   YST_MAX_REVERSALS 32, checks hand-derived tracks for 1-up-1-down,
+ *   1-up-2-down, 1-up-3-down and 2-up-1-down (proposals, reversal indices,
+ *   reversal levels), the step schedule, the initial rule, LIN / LOG / DB steps, the
+ *   limits and every stop reason, the weighted rule, ASA, all four
+ *   estimators, YST_ERR_FULL at YST_MAX_TRIALS, and every desc
+ *   yst_open() is documented to reject. A simulated Weibull observer over
+ *   204000 pooled trials puts the empirical proportion correct within 0.007
+ *   of yst_convergence_p for 1-up-2-down (0.7105 against 0.7071),
+ *   1-up-3-down (0.7970 against 0.7937) and a weighted 1-up-1-down (0.7565
+ *   against 0.7500), against a 0.01 tolerance. All three sit ABOVE the
+ *   target, which is the finite-step bias of the rule and not noise; shrink
+ *   the step to shrink it.
+ *   Replayed against Palamedes' PAL_AMUD through the MEX binding in MATLAB
+ *   R2023a (tests/compare/compare_stair_palamedes.m), on fixed 80-trial
+ *   response sequences: 1-up-2-down, 1-up-3-down, 2-up-1-down, a reversal
+ *   stop, a weighted 1-up-1-down, limits, log10 steps and a caller-driven
+ *   step schedule are identical, level for level and reversal for reversal.
+ *   PAL_AMUD always applies the initial rule, so those descs set
+ *   initial_rule. Two differences are documented rather than papered over.
+ *   PAL_AMUD keeps the opposite-direction counter when a response causes no
+ *   step, where this header resets it on every response; the two agree
+ *   whenever n_up or n_down is 1 (see RULES). And a caller who changes
+ *   Palamedes' step after the reversing update gives the reversal trial the
+ *   OLD step, where this header, like PsychoPy, gives it the new one.
+ *   PsychoPy's StairHandler is replayed too, through the Python binding
+ *   (tests/compare/compare_stair_psychopy.py): on seven configurations
+ *   (1-up-2-down and 1-up-3-down and 2-up-1-down, step schedules, the
+ *   initial rule on and off, limits, linear, dB and log steps) no proposal
+ *   differs on any trial, the reversal indices and levels are the same, and
+ *   the estimates agree, the log and dB cases to 1e-15 because PsychoPy
+ *   multiplies where this header adds in log units.
+ *   v0.2.0 on 2026-10-10 (Windows 11, MSVC 19.44 /W4 /WX, C and C++17, and
+ *   MinGW-w64 gcc -Werror): the test adds yst_close() on a zeroed handle,
+ *   after a failed open and twice, and the messages a failed update leaves.
+ *   What is NOT done here: nothing here is a timing measurement. No
+ *   estimator is a fit and none carries a confidence interval. A
+ *   -DYST_API=static build needs a translation unit that calls every
+ *   function, or -Wno-unused-function.
+ *
+ *   ---------------------------------------------------------------------
  *   LICENSE: public domain / MIT-0, see end of file.
  */
 #ifndef YSP_STAIR_H_INCLUDED
@@ -347,9 +358,9 @@
 /* The version of this header, for a log line or a compile-time check. The
  * string is the three numbers, and the test asserts that it stays so. */
 #define YST_VERSION_MAJOR  0
-#define YST_VERSION_MINOR  1
-#define YST_VERSION_PATCH  2
-#define YST_VERSION_STRING "0.1.2"
+#define YST_VERSION_MINOR  2
+#define YST_VERSION_PATCH  0
+#define YST_VERSION_STRING "0.2.0"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -496,10 +507,15 @@ typedef struct yst_stair {
  * stop_* or est_*, stop_reversals > YST_MAX_REVERSALS, stop_trials >
  * YST_MAX_TRIALS, an out-of-range rule or step_type, ASA without a
  * target_p in (0, 1), and ASA with n_steps != 1 or step_down_scale not 0 or
- * 1. The only function that writes the message buffer. */
+ * 1. Clears the message on entry. */
 YST_API bool yst_open(yst_stair* s, const yst_desc* desc);
 
-/* Last yst_open() message for this handle ("" if none). */
+/* Zero the handle. It owns nothing, so this releases nothing; every open
+ * has a close. Safe on a zeroed handle, after a failed open and twice. */
+YST_API void yst_close(yst_stair* s);
+
+/* The message of the last failed yst_open() or yst_update() on this handle
+ * ("" if none). */
 YST_API const char* yst_error(const yst_stair* s);
 
 /* True after a successful yst_open(). */
@@ -514,8 +530,8 @@ YST_API double yst_next(const yst_stair* s);
 
 /* Record a trial shown at `level` with `response` (1 = correct / detected,
  * 0 = incorrect / missed) and advance the rule. Returns a YST_EVENT_*
- * mask (0 when nothing but the counters moved) or a negative YST_ERR_*.
- * `level` is recorded but does not alter the rule's own level; see MODEL. */
+ * mask (0 when nothing but the counters moved) or a negative YST_ERR_*,
+ * with the reason in yst_error(). `level` is recorded but does not alter the rule's own level; see MODEL. */
 YST_API int yst_update(yst_stair* s, double level, int response);
 
 /* True once a stop criterion has fired. Stays true; later updates are still
@@ -656,6 +672,13 @@ YST_API const char* yst_version(void) { return YST_VERSION_STRING; }
 
 /* --- lifecycle --------------------------------------------------------- */
 
+/* A failed update leaves a message of the same form open() does, so a
+ * caller logs one string whichever call failed. */
+static int yst__fail(yst_stair* s, int rc, const char* what) {
+    snprintf(s->error, sizeof(s->error), "ysp_stair: %s: %s", what, yst_strerror(rc));
+    return rc;
+}
+
 #define YST__FAIL(s, msg) \
     do { snprintf((s)->error, sizeof((s)->error), "ysp_stair: %s", (msg)); \
          return false; } while (0)
@@ -732,6 +755,10 @@ YST_API bool yst_open(yst_stair* s, const yst_desc* desc) {
     return true;
 }
 
+YST_API void yst_close(yst_stair* s) {
+    if (s) memset(s, 0, sizeof(*s));
+}
+
 YST_API const char* yst_error(const yst_stair* s) {
     return s ? s->error : "ysp_stair: null staircase handle";
 }
@@ -753,15 +780,18 @@ YST_API int yst_update(yst_stair* s, double level, int response) {
     bool reversal;
 
     if (!s) return YST_ERR_ARG;
-    if (!s->open) return YST_ERR_CLOSED;
-    if (response != 0 && response != 1) return YST_ERR_ARG;
-    if (!yst__finite(level)) return YST_ERR_ARG;
+    if (!s->open) return yst__fail(s, YST_ERR_CLOSED, "yst_update");
+    if (response != 0 && response != 1)
+        return yst__fail(s, YST_ERR_ARG, "yst_update: response is not 0 or 1");
+    if (!yst__finite(level))
+        return yst__fail(s, YST_ERR_ARG, "yst_update: level is not finite");
     /* A LOG or DB history is averaged as a logarithm, so a non-positive
      * shown level would poison the estimate rather than fail here. */
-    if (s->desc.step_type != YST_STEP_LIN && level <= 0.0) return YST_ERR_ARG;
+    if (s->desc.step_type != YST_STEP_LIN && level <= 0.0)
+        return yst__fail(s, YST_ERR_ARG, "yst_update: level must be positive under a LOG or DB step");
     if (s->n_trials >= YST_MAX_TRIALS) {
         if (s->stop == YST_STOP_NONE) s->stop = YST_STOP_FULL;
-        return YST_ERR_FULL;
+        return yst__fail(s, YST_ERR_FULL, "yst_update");
     }
 
     ti = s->n_trials;
