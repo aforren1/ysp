@@ -795,6 +795,43 @@ MATLAB needs a license, but they are the acceptance tests.
   unit with the implementation. No check includes a header a second time
   without it, in the same program.
 
+## Open and close, messages and signed timeouts (stair v0.2.0, quest v0.6.0, aep v0.15.0)
+
+These versions apply the repository conventions (README.md, Conventions)
+to the three headers. No number changed: the posterior, the proposals and
+the snapshots are bit for bit the previous versions'.
+
+- **One lifecycle.** The async layers make a thread from a desc, so they
+  open and close: `yqst_async_open()`, `yaep_async_close()`. A snapshot
+  restore fills a handle and allocates, so it is an open too:
+  `yqst_open_saved()` and `yaep_open_saved()`. `yst_close()` is new and
+  releases nothing, so that every open has a close.
+- **Messages from the calls that change the handle.** Before, only open
+  wrote the message. Now a failed next, update or fit writes it too, so a
+  log line can say why the trial loop stopped. The work moved into private
+  bodies and the public call adds the message, so the success path gains
+  one branch and no `snprintf`. The const queries (predictions,
+  estimates, grids) still return a code or NaN and write nothing: a reader
+  that holds a const pointer never writes the handle. `yaep_next()` and
+  `yaep_argmax()` return -1 for a point that is not a candidate, so only a
+  code below -1 writes a message.
+- **Signed timeouts.** `yqst_async_wait()` and `yaep_async_wait()` take an
+  `int64_t` timeout in nanoseconds, the type of `yrt_pump_wait()`. The
+  Python and MATLAB bindings keep `timeout_s` in seconds and convert; their
+  "wait forever" is `INT64_MAX` now.
+- **`yqst_prior_normal()` returns an int.** False meant only "bad
+  arguments", so it is 0 or `YQST_ERR_ARG` like every other call that can
+  fail.
+- **USAGE builds as C99 and C++17.** The examples zero the desc and set
+  fields. Designated initializers are C++20, and MSVC rejects them in
+  C++17 (C7555).
+
+Checked on 2026-10-10 (Windows 11, MSVC 19.44 /W4 /WX as C and C++17, with
+and without the async layers, and MinGW-w64 gcc -Werror): the three tests
+pass with new checks for the messages and for close on a zeroed handle,
+after a failed open and twice. The compile checks name the open, close and
+wait calls by type.
+
 ## Bindings
 
 In the shape of the transport bindings: one distribution per header under

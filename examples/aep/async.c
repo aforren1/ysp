@@ -32,14 +32,14 @@
 #include <math.h>
 #include <string.h>
 
-#define FRAME_NS   16666667ull   /* 60 Hz */
+#define FRAME_NS   YRT_NS(16666667)   /* 60 Hz */
 #define N_TRIALS   200
 #define SLOPE      3.0
 #define Z75        0.67448975019608171
 #define MAX_WAIT_FRAMES 60       /* a proposal later than a second is a bug */
 /* A wall-clock cap, because how many frames a trial waits depends on what else
  * the machine is doing and this is an example, not a session. */
-#define TIME_CAP_NS 15000000000ull
+#define TIME_CAP_NS YRT_S(15)
 
 /* The observer: the 50% point moves with the context, the rise is fixed. */
 static double x50_of(double c) { return -0.2 + 0.3 * sin(3.0 * c); }
@@ -70,7 +70,7 @@ int main(void) {
     yaep_async a;
     yaep_async_desc ad;
     yaep_snapshot s;
-    uint64_t frame_deadline, t_start;
+    int64_t frame_deadline, t_start;
     int ready_next_frame = 0, late = 0, busy = 0, frames = 0, worst_frames = 0;
     long total_wait = 0;
 
@@ -98,14 +98,14 @@ int main(void) {
     ad.fit_in_idle = true;       /* the fit lives in the gaps */
     ad.below_normal = true;      /* never above the frame loop */
     ad.context[0] = ctxs[1];     /* the snapshot's threshold, at c = 0.5 */
-    if (!yaep_async_start(&a, &ad)) {
+    if (!yaep_async_open(&a, &ad)) {
         fprintf(stderr, "aep_async: %s\n", yaep_async_error(&a));
         yaep_close(&g);
         return 1;
     }
     printf("aep_async: %d trials, EAVC on a %d-point grid, %d ms frames, "
            "fit in the gaps\n", N_TRIALS, yaep_n_candidates(&g),
-           (int)(FRAME_NS / 1000000ull));
+           (int)(FRAME_NS / 1000000));
     printf("thread policy: %s\n",
            yaep_async_policy(&a) == YRT_POLICY_BELOW_NORMAL
            ? "below normal" : "normal (the OS refused the drop)");
@@ -163,10 +163,10 @@ int main(void) {
            yaep_n_trials(&g), (double)(yrt_now_ns() - t_start) / 1e9,
            frames, ready_next_frame, late,
            yaep_n_trials(&g) ? (double)total_wait / yaep_n_trials(&g) : 0.0,
-           worst_frames, (int)((uint64_t)worst_frames * FRAME_NS / 1000000ull),
+           worst_frames, (int)((int64_t)worst_frames * FRAME_NS / 1000000),
            busy);
 
-    yaep_async_stop(&a);        /* drains; the handle is ours again */
+    yaep_async_close(&a);        /* drains; the handle is ours again */
     {
         yaep_hyper h;
         memset(&h, 0, sizeof(h));

@@ -923,7 +923,7 @@ static int gp_setup(GPObject* o, PyObject* kwds, const void* snap, size_t len) {
         /* The load rebuilds every matrix from the image, with no refit. */
         o->busy = 1;
         Py_BEGIN_ALLOW_THREADS
-        ok = yaep_load(&o->g, &d, snap, len);
+        ok = yaep_open_saved(&o->g, &d, snap, len);
         Py_END_ALLOW_THREADS
         o->busy = 0;
     } else {
@@ -1713,7 +1713,7 @@ static void async_stop(AsyncObject* o) {
     /* The pump drains the queue and joins; the thread touches no Python
      * object, so it can finish with the GIL down. */
     Py_BEGIN_ALLOW_THREADS
-    yaep_async_stop(&o->a);
+    yaep_async_close(&o->a);
     Py_END_ALLOW_THREADS
     o->stopping = 0;
     o->started = 0;
@@ -1746,7 +1746,7 @@ static PyObject* Async_start(PyObject* self, PyObject* Py_UNUSED(ignored)) {
     /* start() runs one yaep_next() and one yaep_threshold() on this thread
      * before the pump exists; that is tens of ms under EAVC. */
     Py_BEGIN_ALLOW_THREADS
-    ok = yaep_async_start(&o->a, &d);
+    ok = yaep_async_open(&o->a, &d);
     Py_END_ALLOW_THREADS
     if (!ok) {
         o->gp->owned = 0;
@@ -1825,7 +1825,7 @@ static PyObject* Async_wait(PyObject* self, PyObject* args, PyObject* kwds) {
     AsyncObject* o = AS_ASYNC(self);
     PyObject* to = Py_None;
     unsigned long seq;
-    uint64_t ns = UINT64_MAX;
+    int64_t ns = INT64_MAX;
     yaep_snapshot s;
     int rc;
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "k|O", kw, &seq, &to)) return NULL;
@@ -1835,7 +1835,7 @@ static PyObject* Async_wait(PyObject* self, PyObject* args, PyObject* kwds) {
         double t;
         if (gp_as_double(to, &t) < 0) return NULL;
         if (!(t >= 0.0)) return gp_fail_msg(PyExc_ValueError, "timeout_s must be >= 0");
-        ns = t >= 1.8e10 ? UINT64_MAX : (uint64_t)(t * 1e9);
+        ns = t >= 9.2e9 ? INT64_MAX : (int64_t)(t * 1e9);
     }
     o->waiters++;
     Py_BEGIN_ALLOW_THREADS

@@ -1,4 +1,4 @@
-/* ysp/aep.h - v0.14.1 - public domain single-header Gaussian-process adaptive library
+/* ysp/aep.h - v0.15.0 - public domain single-header Gaussian-process adaptive library
  *
  *   Nonparametric and semiparametric Bayesian adaptive psychophysics: a
  *   Gaussian-process model over a multidimensional stimulus space with
@@ -20,452 +20,6 @@
  *   C99, C11 and C++17, and in the C dialect MSVC compiles by default.
  *
  *   ---------------------------------------------------------------------
- *   CHANGELOG
- *   ---------------------------------------------------------------------
- *   v0.14.1 - two fixes. (1) A desc.memory buffer that was not 8-byte
- *          aligned: yaep_open() aligned the base, but every later call laid
- *          its scratch out from the unaligned address, so the quadrature
- *          weights and every scratch vector read a few bytes off what open()
- *          had written (the macOS CI failure: outcome probabilities summing
- *          to 8e280, in the build whose static test buffer landed on an odd
- *          address). malloc'd handles were never affected. (2)
- *          yaep_threshold()'s band read an unset edge when neither shifted
- *          curve crossed; the band is now the whole box there, which is what
- *          the unset read produced in practice. Results with malloc'd or
- *          aligned memory are v0.14.0's to the bit.
- *   v0.14.0 - desc.fit_pcg (a new field at the end of yaep_desc, off by
- *          default): conjugate-gradient Newton steps in a fit's evaluations
- *          and in the psychometric model's mode search, rejected line-search
- *          points undone by a copy, and no refit of a point the model already
- *          stands at; 2.6 times on a 500-trial 6-D GP fit and 3.7 times on
- *          the psychometric model's. The explicit B^-1 of the gradient walks
- *          rows instead of columns, 2.7 times faster with the same bits, so
- *          every result at the defaults is v0.13.1's. See CONJUGATE GRADIENTS
- *          IN A FIT under MEMORY, COST AND THREADS.
- *   v0.13.1 - no code change. The 6-D contrast sensitivity problem's stuck
- *          flat model (guess 0.5, mean at its bound, p = 0.5 everywhere)
- *          is v0.4.1's behavior, fixed since v0.5.0 by the mean prior; the
- *          test now replays its first 30 trials with and without the prior.
- *          The cost section quotes the 6-D numbers.
- *   v0.13.0 - desc.fit_max_evals and desc.fit_tol (0 = the old 40 and 1e-8),
- *          yaep_fit() returns 1 when converged and 0 when the budget ran
- *          out (it returned 0 for both), and yaep_fit_delta() reads the
- *          objective's change. A yaep_fit() after one the budget stopped
- *          continues with its step length. A caller that tested
- *          yaep_fit() == 0 for success must test >= 0. Scheduled fits, and
- *          so every session result at the defaults, are v0.12.0's.
- *   v0.12.0 - snapshots: yaep_save_size(), yaep_save() and yaep_load(), a
- *          versioned little-endian byte image of the whole session that
- *          resumes it bit for bit without replay. See SNAPSHOTS under
- *          MEMORY, COST AND THREADS.
- *   v0.11.0 - desc.pcg_threshold: above it (default 512, so never at the
- *          default YAEP_MAX_TRIALS), an update's Newton steps are
- *          preconditioned conjugate-gradient solves with the previous factor
- *          as the preconditioner, 2.6 to 3.3 times faster from N = 1024 on.
- *          The history moves from the handle into the memory block, so the
- *          handle is 2.5 KB and YAEP_MAX_TRIALS can be raised to 2048 with
- *          the caller's memory; yaep_memory_size() grows by 144 bytes a
- *          trial. yaep_desc gains pcg_threshold at its end.
- *   v0.10.0 - desc.monotone_dims, AEPsych's monotonic projection of the
- *          posterior mean along the masked dimensions, for predict_p,
- *          predict_p_many, predict_p_var, the threshold and the level-set
- *          acquisitions; a new field at the end of yaep_desc. The copies
- *          whose count is an int are loops instead of memcpy, which gcc 13's
- *          -Wstringop-overflow flagged at -O3 under _FORTIFY_SOURCE; results
- *          are v0.9.0's to the bit. See MONOTONIC PROJECTION under KERNELS.
- *   v0.9.0 - mixed parameters: desc.dim_kind[] (CONTINUOUS, INTEGER,
- *          CATEGORICAL) and desc.dim_levels[], new fields at the end of
- *          yaep_desc that a binding must add. A categorical kernel factor
- *          exp(-(1 - delta) / l); candidates, init points, refinement,
- *          updates and threshold contexts honor the kinds. A description
- *          with every dimension CONTINUOUS gives v0.8.0's results to the bit.
- *          See DIMENSION KINDS under KERNELS.
- *   v0.8.0 - YAEP_LIK_PAIRWISE, comparisons of two stimuli, with
- *          yaep_next_pair(), yaep_update_pair() and yaep_predict_pair().
- *          yaep_trial gains x2 at its end and the handle a second stimulus
- *          array; a binding that mirrors yaep_trial must add the field.
- *          Nothing else changes. See MODEL and examples/aep/pairwise.c.
- *   v0.7.0 - optimization: YAEP_ACQ_UCB, YAEP_ACQ_EI and YAEP_ACQ_THOMPSON
- *          for finding the stimulus the observer prefers most, desc.minimize
- *          (a new field at the end of yaep_desc), and yaep_argmax(). See
- *          ACQUISITION and examples/aep/optimize.c. Nothing else changes.
- *   v0.6.0 - desc.priors: every weak-prior parameter at run time, a
- *          {center, sd, ceiling} per hyperparameter with zero meaning the
- *          measured default, and yaep_get_priors() to read what is in force.
- *          The compile-time YAEP__PS_MG_RISE, YAEP__PRIOR_MG_SD,
- *          YAEP__PS_MG_HI and YAEP__PS_OS_G are gone. yaep_desc gains
- *          priors at its end, so a binding that mirrors it must add the
- *          field; at the defaults every result is v0.5.0's to the bit.
- *   v0.5.0 - three defects the cross-method comparison
- *          (tests/compare/methods_compare.py) found, fixed, each with its
- *          recorded trials replayed in the test. (1) A psychometric-model fit
- *          could restore its accepted point from a rejected point's mode, run
- *          the mode search into its step cap on a saturated plateau, and leave
- *          a log marginal likelihood of -1e49 with no error: the mode search
- *          now rejects a result below Psi at the prior mean and restarts cold
- *          (YAEP_ERR_NUMERIC if that fails), a restore that misses its value
- *          is refitted cold, and a whole fit that ends worse than it began is
- *          undone. (2) A GP-model fit could jump to a data-favored
- *          short-lengthscale mode that redraws the level set: a fit that
- *          reclassifies more than 5% of the candidates after a settled one is
- *          undone once. (3) The GP model's mean had no prior and ran to its
- *          bound on data that are mostly one way: it now has a normal prior
- *          (sd 0.7) on the discrete likelihoods, and EAVC falls back to the
- *          straddle when its expected level set is empty or full. (2) and (3)
- *          change what the GP model computes by default; nothing changes in a
- *          run none of them touches except through the mean prior. See
- *          HYPERPARAMETERS and ACQUISITION.
- *   v0.4.1 - no behavior changed. Why YAEP_MODEL_PSYCHOMETRIC's fitted mean
- *          slope is about half the true one (its prior, not the Laplace
- *          approximation), and why that prior stays (every looser setting
- *          measured reopens the threshold tail under LSE and leaves the band
- *          error where it was), under HYPERPARAMETERS; and the prior's center,
- *          sd and ceiling as compile-time knobs for measuring it.
- *   v0.4.0 - three changes to YAEP_MODEL_PSYCHOMETRIC. Its hyperparameter
- *          gradient is analytic (one conjugate-gradient adjoint solve through
- *          the true Hessian, preconditioned by the Gauss-Newton posterior),
- *          which cuts the cost of a fit about five times. It supports EAVC and
- *          LOCALMI, through a rank-one look-ahead in the collapsed system. And
- *          the log-slope GP's output-scale prior is centered at 0.3 rather than
- *          1, which removes a 7 to 12 dB tail on the audiometric sensory
- *          phenotype. The last one changes what the model computes by default;
- *          nothing changes under YAEP_MODEL_GP. No public struct changed.
- *   v0.3.0 - desc.model and YAEP_MODEL_PSYCHOMETRIC: Keeley et al. 2023's
- *          semiparametric model in its own form, a threshold GP and a
- *          log-slope GP over the context feeding a probit or logit in the
- *          intensity, for the observer whose psychometric rise is narrow
- *          against the box (see MODEL, and STATUS for what it measured).
- *          yaep_hyper gains lengthscale_g, outputscale_g and mean_g, and
- *          yaep_desc gains model; both at the end of their structs, so every
- *          earlier field keeps its offset, but both structs are larger and a
- *          binding that mirrors them must add the fields. The default model
- *          is YAEP_MODEL_GP, and with it nothing computes differently from
- *          v0.2.1; YAEP_KERNEL_SEMIP is unchanged.
- *   v0.2.1 - version macros (YAEP_VERSION_MAJOR / MINOR / PATCH / STRING)
- *          and yaep_version(), so a program can log which header it was
- *          built from and a binding can read its version from the header;
- *          and desc.refine_steps, a golden-section refinement of the grid
- *          winner off the candidate set (see CANDIDATES). refine_steps is the
- *          LAST field of yaep_desc, so every earlier field keeps its offset,
- *          but the struct is larger and a binding that mirrors it must add the
- *          field. At its default of 0 nothing computes differently from v0.2.
- *   v0.2 - the optional async layer, YAEP_ASYNC: ysp/rt.h's yrt_pump with
- *          yaep_update(), yaep_next() and yaep_threshold() on one thread, a
- *          queue of responses, a published snapshot a frame loop polls, and
- *          desc.fit_in_idle, which spends the gaps between trials on
- *          yaep_fit_step(). Nothing changed in the synchronous header, which
- *          still includes nothing but the C standard library and is bit for bit
- *          what v0.1 computed; see ASYNC.
- *   v0.1 - the implementation. All four likelihoods, both kernels, all six
- *          acquisitions, the analytic marginal-likelihood gradient (numerical
- *          under CATEGORICAL), the threshold search, and five things v0.0 did
- *          not plan: yaep_fit_step(), which makes a hyperparameter fit
- *          resumable one evaluation at a time, and desc.refit_every with
- *          yaep_refit(), which trades the exact Newton refit of every trial
- *          for an O(N^2) rank-one update, and desc.guess / desc.lapse, a
- *          floor and a ceiling on the Bernoulli and ordinal links so a
- *          two-interval task states its chance level instead of faking it.
- *          YAEP_REAL makes the kernel matrix, the Laplace factors and the
- *          look-ahead covariance float on request; see PRECISION for what that
- *          buys, which is memory rather than time.
- *          It also fits a MAP rather than a type-II maximum likelihood: weak
- *          log-normal priors on the lengthscales and the output scales
- *          (desc.no_hyper_prior turns them off), which is what stops a nearly
- *          separable run from interpolating its own trials; yaep_next()
- *          guards against an acquisition that has stopped discriminating;
- *          and yaep_predict_p_many() / yaep_predict_f_many() evaluate a
- *          field in one blocked pass. Three changes to what
- *          v0.0 specified: EAVC measures the level set with the EXPECTED
- *          count of candidates above the level rather than the count of
- *          candidates whose mean is above it (the count is integer-valued,
- *          and it pins the acquisition to one stimulus as soon as no
- *          candidate can flip); the semiparametric kernel measures the
- *          intensity from the middle of the box; and the hyperparameter
- *          gradient under CATEGORICAL is central differences, not analytic.
- *   v0.0 - specification. Declarations and the manual, no implementation.
- *
- *   STATUS: v0.14.1. Implemented and checked by tests/adapt/aep_test.c,
- *   which builds and passes as C11, C99 and C++17 under gcc with -Wall
- *   -Wextra -Wpedantic -Wshadow -Werror, with and without YAEP_ASYNC, as
- *   MSVC's default C dialect with /W4 /WX both ways, and is clean under
- *   -fsanitize=address,undefined and, with the async layer, under
- *   -fsanitize=thread.
- *   What it verifies, with the numbers it measured: the Cholesky and the
- *   triangular solves against a hand-built SPD matrix (1e-12); the kernel
- *   symmetric and positive definite on random points for both kernels; the
- *   20-node Gauss-Hermite rule integrating x^0 to x^6 against the Gaussian
- *   to 1e-11; the exact Gaussian posterior, its variance and its log
- *   marginal likelihood against a dense Gauss-Jordan solve (1e-9); the
- *   Bernoulli probit Laplace mode satisfying f = m + K grad log p(y|f) at
- *   six points (1e-8) and its predictive variance against a dense
- *   (K^-1 + W)^-1 (1e-9); the softmax mode satisfying the same condition
- *   per class with three classes (1e-7); the analytic gradient of the
- *   Laplace log
- *   marginal likelihood against central differences for every free
- *   hyperparameter under RBF and SEMIP crossed with Bernoulli, ordinal and
- *   Gaussian, and again with the logit link, worst relative error below
- *   1e-4; the rank-one look-ahead
- *   covariance against a brute-force refit with W frozen (1e-10);
- *   yaep_memory_size() exact to the byte; the Halton points; the desc
- *   validation; a caller-owned candidate list, the random acquisition and
- *   the threshold-width stop rule running a session; yaep_predict_p_many()
- *   and yaep_predict_f_many() agreeing with the one-point calls to the last
- *   bit over a 900-point grid; and a reported
- *   Cholesky failure leaving the previous
- *   posterior in force. On a simulated 1-D probit observer (slope 8,
- *   50% point 0.40, box [0, 1]) over 8 response streams of 100 trials, the
- *   mean absolute error of the 75% threshold is 0.011 for LSE, 0.010 for
- *   EAVC and 0.037 for BALD, against a binomial noise floor near 0.02 for
- *   a hundred trials; the tolerance the test enforces is 0.08. Over 20
- *   further streams outside the test the same three come out at 0.013,
- *   0.013 and 0.032, worst case 0.05, 0.04 and 0.12, with no run failing to
- *   find a crossing. The other
- *   three likelihoods recover their simulated field: rms error 0.003 for
- *   GAUSSIAN over 60 trials, 0.076 for the ordinal P(y >= 2) with four
- *   categories over 150 trials, and 0.069 for the three softmax class
- *   probabilities over 120 trials.
- *
- *   The floor and the ceiling are checked the same way: the analytic
- *   gradient still matches central differences to better than 1e-4 with
- *   guess = 0.5 and lapse = 0.02 under both links, both kernels, and both
- *   Bernoulli and ordinal; and a simulated two-interval observer
- *   (p = 0.5 + 0.48 Phi(8 (x - 0.4))) recovers its 75% threshold with a mean
- *   absolute error of 0.022 over 5 streams of 120 trials.
- *
- *   The weak priors of HYPERPARAMETERS are in the same comparison: without
- *   them the same eight streams give 0.050 for LSE and 0.043 for BALD, and
- *   two of the eight collapse onto a diffuse fit whose threshold is 0.14
- *   out. The gradient check covers them, since they are part of the
- *   objective the finite differences see, and desc.no_hyper_prior is how the
- *   comparison was run.
- *
- *   examples/aep/audiometric.c is the harder test, and the numbers that justify
- *   the priors and the acquisition guard come from it: the audiometric observer
- *   of Owen et al. 2021, four phenotypes by 20 replications of 150 trials, same
- *   seeds throughout. Pooled over the phenotypes at trial 150, threshold error
- *   in dB at beta = 2 then beta = 0.5: LOCALMI 1.74 / 1.75, LSE 2.04 / 2.28,
- *   EAVC 2.14 / 2.03, BALV 3.76 / 3.40, BALD 5.66 / 5.28, RANDOM 5.42 / 5.45,
- *   SEMIP with BALV 3.41 / 3.46, SEMIP with LSE 8.05 / 8.14, and eight
- *   interleaved staircases given the frequencies and the psychometric width
- *   2.72 / 2.07. Surface error MAE(p): BALV 0.0558 / 0.0621, which is the best
- *   of the nine in all eight phenotype-by-beta cells, then EAVC 0.0668, BALD
- *   0.0672, LOCALMI 0.0733, RANDOM 0.0763, LSE 0.0824; the staircase reads
- *   0.0186 there, with beta known for free. So the level-set acquisitions win
- *   the threshold and the variance-based ones win the field, which is the
- *   paper's own finding, and a classical staircase that is told the frequencies
- *   and the width is still competitive on both.
- *
- *   That run is also the before-and-after for the two v0.1 fixes. The weak
- *   priors: LSE was 3.20 / 3.07 dB without them and BALD 8.48 / 8.91, against
- *   2.04 / 2.28 and 5.66 / 5.28 with them, and the output scale sat at a bound
- *   in 130 of 1600 runs rather than 1580, all 130 in the BALV, LOCALMI or
- *   beta = 0.5 cells where the latent really is steep. They cost early
- *   accuracy: at trial 25, MAE(p) is 0.03 to 0.11 worse with the prior than
- *   without. The acquisition guard: SEMIP with a level-set acquisition used to
- *   separate its own data and then propose one candidate forever, and its
- *   threshold contour left the box in 7 to 19 of 30 context columns in every
- *   cell; now no cell of the 24 has a single non-crossing column. Over all 1600
- *   runs, YAEP_ERR_NUMERIC 0 and a multi-crossing threshold 0. SEMIP with LSE
- *   at 8 dB is still the worst configuration measured, and the reason is in the
- *   model rather than the fit: see SEMIP below, and ACQUISITION for what the
- *   guard does and does not repair.
- *
- *   The two cost knobs are checked too: yaep_fit_step() run to completion
- *   lands on the same hyperparameters (1e-12) and the same log marginal
- *   likelihood (1e-9) as yaep_fit(), and desc.refit_every = 5 replayed against
- *   refit_every = 1 on one 78-trial response stream differs by at most
- *   1.7e-4 of probability, which yaep_refit() then erases to 6e-15.
- *
- *   The Laplace log marginal likelihood itself is checked against an
- *   independent dense evaluation of R&W eq. 3.32 (1e-8), which matters
- *   because it is the larger half of what the fit maximizes. The weak priors
- *   are the other half, and a fit that ran away in spite of them still shows
- *   up as a log marginal far closer to zero than the responses allow;
- *   HYPERPARAMETERS says how that looks and what else to do about it.
- *
- *   YAEP_MODEL_PSYCHOMETRIC is checked by the same test, under both links:
- *   the 2N-latent mode satisfies z - mean = K grad log p(y | z) to 4e-8 of
- *   the latent (the Newton tolerance is 1e-8); the predictive mean and
- *   covariance of (m, g) agree with a dense (K2^-1 + W2)^-1 over all 2N
- *   latents to 2e-10 and 2e-9; the Laplace log marginal likelihood agrees
- *   with a dense evaluation through log|K2| + log|K2^-1 + W2| to 1e-8; the
- *   quadrature is checked as MODEL says; the closed-form threshold agrees with
- *   a 40-node quadrature of the crossing to 3e-12; the analytic
- *   hyperparameter gradient agrees with central differences to 2e-8 to 2e-6
- *   over all six hyperparameters under probit and logit, with guess 0.5 and
- *   lapse 0.02, and over all eight with four ordinal outcomes (the mode
- *   converged to 1e-13 for that check, so the differences resolve it); the
- *   look-ahead's cross-covariance between two contexts agrees with the dense
- *   2N posterior to 3e-10, and its rank-one update with a dense update of the
- *   two contexts' joint 4 x 4 covariance to 2e-9; LOCALMI's candidate score
- *   equals its point score to the last bit; ordinal and two-interval sessions
- *   run clean; and on a 2-D observer with a curved threshold and a 7 dB rise
- *   the model's EAVC and LOCALMI find the threshold to 0.7 and 1.0 dB in 80
- *   trials.
- *   On examples/aep/audiometric.c, 20 replications, trial 150: field MAE(p) /
- *   band MAE(p) / threshold error in dB, the worst replication's threshold
- *   error, and ms per trial with fits every 20 trials. semip2 is this model,
- *   YAEP_MODEL_PSYCHOMETRIC, under the example's name for it:
- *
- *                      metabolic, beta 2              metabolic, beta 0.5
- *     RBF LSE       .077 .213 1.98 +- .32 3.9  3   .083 .298 2.49 +- .32 4.9  3
- *     RBF EAVC      .058 .204 1.98 +- .16 2.9  7   .056 .285 2.28 +- .15 2.7  7
- *     semip2-lse    .013 .160 1.41 +- .12 2.0  9   .013 .302 1.54 +- .05 1.8  9
- *     semip2-balv   .011 .153 1.28 +- .16 2.2 10   .011 .316 1.41 +- .08 1.9  8
- *     semip2-bald   .008 .129 1.08 +- .09 1.7 11   .011 .316 1.42 +- .09 2.0 10
- *     semip2-eavc   .011 .140 1.18 +- .11 2.0 24   .011 .264 1.25 +- .23 3.1 29
- *     semip2-lmi    .011 .152 1.25 +- .07 1.6 11   .012 .321 1.44 +- .07 1.8 10
- *     staircase     .017 .267 2.60 +- .22 3.5      .014 .322 2.06 +- .17 3.0
- *
- *                      sensory, beta 2                sensory, beta 0.5
- *     RBF LSE       .092 .249 1.77 +- .19 3.1  3   .092 .276 2.82 +- .21 3.2  3
- *     RBF EAVC      .069 .216 2.14 +- .16 2.9  7   .078 .200 2.33 +- .20 3.2  7
- *     semip2-lse    .016 .193 1.89 +- .20 2.8 11   .033 .230 2.89 +- .33 3.6  9
- *     semip2-balv   .009 .156 1.16 +- .22 2.1  8   .030 .287 3.23 +- .82 5.9  7
- *     semip2-bald   .007 .126 0.93 +- .14 1.6 11   .026 .295 3.18 +- .80 5.5 10
- *     semip2-eavc   .009 .149 1.18 +- .22 2.6 25   .022 .204 1.98 +- .50 4.3 26
- *     semip2-lmi    .013 .168 1.44 +- .20 2.2 12   .021 .240 2.05 +- .31 3.3 11
- *     staircase     .018 .277 2.49 +- .31 3.5      .014 .539 1.90 +- .09 2.4
- *
- *   On three of the four cells every semip2 method beats the RBF GP and the
- *   staircase (which is given the psychometric width) on threshold: BALD
- *   0.93 to 1.42 dB, EAVC 1.18 to 1.25, against 2.06 to 2.60 for the
- *   staircase and 1.77 to 2.49 for the RBF GP. The worst replication is 3.1
- *   dB or less there, and 5.9 dB over all four cells, where v0.3.0's was
- *   11.6. Sensory at beta 0.5, a 27 dB climb in two octaves with a 2.6 dB
- *   rise, is the hard cell: there EAVC (1.98 dB) and LOCALMI (2.05) match
- *   the staircase (1.90) and beat both RBF methods, and the per-point
- *   acquisitions do not (2.9 to 3.2). The field error is 3 to 10 times
- *   smaller than the RBF GP's everywhere and already 0.04 to 0.12 at trial
- *   25, against 0.22 to 0.28. The band error is under the RBF GP's at
- *   beta 2 (0.13 to 0.19 against 0.20 to 0.25); at beta 0.5 the band is about
- *   one grid point per column and measures the threshold's location, not the
- *   model's shape, and the staircase given the true width scores 0.32 and
- *   0.54 there. The cost is 8 to 11 ms a trial for the per-point
- *   acquisitions and about 25 for EAVC, against 3 and 7 for the RBF GP.
- *   BALD is the best of the per-point acquisitions on this model and EAVC
- *   the most robust overall.
- *
- *   The async layer of v0.2 is checked by the same test, in a YAEP_ASYNC
- *   block: a 60-trial session driven through yaep_async_submit() reproduces
- *   the synchronous session bit for bit (memcmp of the history and of the
- *   proposal stream, and the same log marginal likelihood and threshold to the
- *   last bit) with fit_in_idle off; with it on, the log marginal improved in an
- *   idle gap on 27 of 60 trials while the proposals kept up, and
- *   desc.fit_every was parked at 0 for the session and restored at stop; and a
- *   burst that outruns the thread gives YAEP_ERR_BUSY with nothing copied
- *   (8 accepted, 3 refused, 8 still pending at a stop that drained them). That
- *   test is clean under -fsanitize=thread with no warnings, and the rest of the
- *   test's output is byte-identical between the YAEP_ASYNC build and the plain
- *   one. examples/aep/async.c runs 200 EAVC trials through a 16 ms frame loop in
- *   11.2 s: with fit_in_idle on and a 225-candidate grid the proposal was ready
- *   by the next frame on 28 trials and late on 172, 2.4 frames of waiting on
- *   average and 5 at worst, the queue never filled, and the threshold at three
- *   contexts came out 0.007 to 0.060 from the truth.
- *
- *   desc.refine_steps is checked there too: the point score it climbs equals
- *   the candidate score to the last bit at every candidate for LSE, BALV,
- *   BALD and LOCALMI, including under CATEGORICAL; every refined proposal stays
- *   within one grid step of the winner it started from and never scores below
- *   it, under all five acquisitions; and the eight LSE streams above give a
- *   mean threshold error of 0.0111 with refine_steps = 2 against 0.0112
- *   without, which on a 65-point grid is what refinement should change: next
- *   to nothing. CANDIDATES has the audiometric numbers, where the grid is
- *   coarse and it matters.
- *
- *   The later additions are checked there as well, and each section says
- *   what it measured: PAIRWISE's trial kernel, mode and predictions against a
- *   dense 2N posterior; the mixed dimension kinds' kernel values, their
- *   analytic lengthscale gradient against differences (2e-5 at worst) and
- *   every proposal on its levels and integers; the monotonic projection
- *   against a brute force through yaep_predict_f(), to the bit; the
- *   conjugate-gradient Newton steps against factoring, to 4e-11; desc.fit_pcg's
- *   fits against the factored fits in lockstep, step by step, to 2e-9; and
- *   132 snapshot resumes against the uninterrupted sessions, byte for byte.
- *
- *   The float build of YAEP_REAL passes the same test with the tolerances
- *   PRECISION lists, measured rather than assumed, with YAEP_LIK_GAUSSIAN
- *   rejected at open and its checks skipped. That includes the psychometric
- *   model, whose float mode PRECISION describes, and whose analytic gradient
- *   the float test can check against differences only to 7e-2, since a float
- *   objective is too rough for differences to resolve more; on the 7 dB
- *   observer the float build's threshold error is 0.98 dB against the double
- *   build's 1.12, band error 0.143 against 0.141, same streams.
- *
- *   KNOWN TAILS. The cross-method comparison (tests/compare/methods_compare.py,
- *   streams seeded [20170310, problem, replication]) has no collapsed run
- *   left after v0.5.0, and three single replications that are poor for a
- *   reason the header does not fix:
- *   - csf6 (6-D), GP model, LSE, replication 5: MAE(p) 0.125 and 82 contexts
- *     of 118 with no crossing at trial 300 (0.077 and 57 at trial 500). No
- *     hyperparameter is at a bound (contrast lengthscale 1.35 in 0.075 to 3,
- *     output scale 0.61, mean 0.05). The cause is the problem's numbers: with
- *     guess 0.5 and no lapse, p at the prior mean is 0.75, the target, so in
- *     every context the data have not reached the column crosses or not on
- *     the sign of a mean near 0, and LSE in 6-D leaves most contexts
- *     unreached. Replication 4 of the same method has 25.
- *   - The psychometric model with LSE: metabolic+sensory beta 2 replication
- *     14 (9.5 dB) and older-normal beta 0.5 replication 10 (7.6 dB). The
- *     log-slope output scale is not at its ceiling (0.33 and 0.49 of 10). In
- *     both a fit shortens the threshold GP's frequency lengthscale (3.2 to
- *     0.55 at trial 65; 9.1 to 1.35 at trial 125, after the model had sat at
- *     1.15 dB for 40 trials), the defect-2 jump of the GP model, and LSE then
- *     puts 59 and 49 of its 150 trials in one frequency column. The level-set
- *     guard that stops the jump in the GP model does not run for the
- *     psychometric model; extended to it as a trial, it sees 4.8% of the
- *     candidates flip at the trial-125 fit, under its 5% trigger, so it would
- *     take retuning to one run to catch it, and that was not done. EAVC on
- *     the same streams ends at 0.85 and 0.93 dB.
- *   - The 2-D CSF, GP model, EAVC, replication 12: 7.0 dB. The error is all in
- *     the highest-frequency columns, whose threshold (-5 dB) is at the top of
- *     the box: the posterior mean falls and rises again along intensity there,
- *     and the first crossing is at -42 dB. desc.monotone_dims on the
- *     intensity removes it (1.9 dB); over the 20 replications it takes the
- *     mean threshold error from 1.65 to 1.58 dB and the worst from 6.99 to
- *     2.51, but MAE(p) from 0.086 to 0.092, and five replications get worse
- *     (three by 1 to 1.5 dB), which is why the projection stays opt-in.
- *
- *   COMPARED with AEPsych 0.8.0 through the Python binding, in one process
- *   on one response stream (tests/compare/compare_gp_aepsych.py): the
- *   metabolic phenotype of examples/aep/audiometric.c at beta 2, 10
- *   replications, both libraries given the same Sobol init points. AEPsych
- *   runs its variational GP and its own LSE, EAVC and BALV, optimized over
- *   the box. Threshold error at trial 150, this header's GP model against
- *   AEPsych: EAVC 2.09 against 2.23 dB (inside the replication error), BALV
- *   4.45 against 7.10, LSE 2.06 against 1.29. The LSE gap is the 11 x 21
- *   candidate grid: with refine_steps = 2 LSE reaches 1.44 +- 0.16 dB and
- *   EAVC 1.44 +- 0.28 (CANDIDATES). The field error MAE(p) is about half of
- *   AEPsych's for every acquisition at 100 and 150 trials. The psychometric
- *   model with EAVC reaches 1.26 +- 0.09 dB and a field error of 0.012,
- *   against AEPsych's best of 1.29 dB and 0.18. Fitted from scratch to the
- *   same trials, with AEPsych's output scale fitted (a ScaleKernel) instead
- *   of fixed at 1, the two GP models agree: the fields differ by 0.016 and
- *   the threshold curves by 0.14 dB. The cost per trial is 6 to 13 ms here
- *   against 4 to 8 s for AEPsych, which refits every trial; both ran on one
- *   loaded machine, so the ratio is an order of magnitude, not a number.
- *   On human data (tests/compare/compare_gp_csfdata.py: Letham et al.
- *   2022's 1001-trial 6-D contrast sensitivity set, 5-fold
- *   cross-validation) the held-out log loss is 0.537 to 0.541 for both
- *   models here, 0.529 for AEPsych and 0.543 for logistic regression, all
- *   inside the fold noise. docs/adapt.md,
- *   "Verification", and docs/adapt_comparison.md have the details.
- *
- *   NOT verified: the Laplace band's 95% coverage is unmeasured, and the
- *   categorical one-against-the-rest acquisitions have no Monte Carlo check.
- *   The timings vary by tens of percent between runs of the same binary, so
- *   the frame-budget trial counts are an order of magnitude and not a
- *   specification (examples/aep/bench.c prints its own numbers; MEMORY, COST
- *   AND THREADS quotes them), and the async layer's late counts are a
- *   property of that machine and that grid, not of the header. No
- *   platform other than x86-64 has been built or run. The async layer has run
- *   on Linux (pthreads) and on Windows (MSVC, native threads, and the OS
- *   granted the below-normal drop); ysp/rt.h's macOS path is untested here.
- *   gcc 13 has not built this header here: the fix for its
- *   -Wstringop-overflow report at -O3 is by construction (no memcpy takes a
- *   size derived from an int), and clang 18 (zig cc 0.13) builds the test,
- *   the examples and both compile units clean with -Werror.
- *
- *   ---------------------------------------------------------------------
  *   USAGE
  *   ---------------------------------------------------------------------
  *   Do this:
@@ -481,28 +35,27 @@
  *       #define YSP_AEP_IMPLEMENTATION
  *       #include "ysp/aep.h"
  *
- *       yaep_desc d = {                    // unset fields are 0: defaults
- *           .n_dims        = 2,
- *           .lo            = { 0.0, -3.0 },  // log10 spatial frequency,
- *           .hi            = { 1.5,  0.0 },  // log10 contrast (intensity)
- *           .intensity_dim = 1,
- *           .kernel        = YAEP_KERNEL_SEMIP, // linear in contrast
- *           .fit           = true,           // fit the hyperparameters
- *           .fit_every     = 10,
- *           .acq           = YAEP_ACQ_EAVC,     // look-ahead level set
- *           .target_p      = 0.75,
- *           .n_init        = 10,             // Halton trials first
- *           .stop_trials   = 150,
- *       };
+ *       yaep_desc d = { 0 };               // unset fields are 0: defaults
+ *       d.n_dims        = 2;
+ *       d.lo[0] = 0.0;  d.hi[0] = 1.5;     // log10 spatial frequency,
+ *       d.lo[1] = -3.0; d.hi[1] = 0.0;     // log10 contrast (intensity)
+ *       d.intensity_dim = 1;
+ *       d.kernel        = YAEP_KERNEL_SEMIP; // linear in contrast
+ *       d.fit           = true;            // fit the hyperparameters
+ *       d.fit_every     = 10;
+ *       d.acq           = YAEP_ACQ_EAVC;   // look-ahead level set
+ *       d.target_p      = 0.75;
+ *       d.n_init        = 10;              // Halton trials first
+ *       d.stop_trials   = 150;
  *
- *       yaep_gp g;
+ *       static yaep_gp g;
  *       if (!yaep_open(&g, &d)) { fputs(yaep_error(&g), stderr); return 1; }
  *
  *       while (!yaep_done(&g)) {
  *           double x[2];
- *           yaep_next(&g, x);                        // fills x[0], x[1]
+ *           if (yaep_next(&g, x) < -1) { fputs(yaep_error(&g), stderr); break; }
  *           int seen = run_trial(x);                  // 1 = yes, 0 = no
- *           yaep_update(&g, x, seen);
+ *           if (yaep_update(&g, x, seen) < 0) fputs(yaep_error(&g), stderr);
  *       }
  *       double ctx[1] = { 0.7 }, thr, lo, hi;
  *       yaep_threshold(&g, ctx, 0.75, &thr, &lo, &hi); // contrast at 0.7
@@ -1652,8 +1205,12 @@
  *   ---------------------------------------------------------------------
  *   RETURN VALUES AND ERRORS
  *   ---------------------------------------------------------------------
- *   yaep_open() returns bool and fills yaep_error(). Every other function
- *   returns a value or a code and never touches the message buffer.
+ *   yaep_open() and yaep_open_saved() return bool and fill yaep_error();
+ *   they clear it on entry. The calls that change the handle (yaep_next(),
+ *   yaep_next_pair(), yaep_next_subset(), yaep_update(), yaep_update_real(),
+ *   yaep_update_pair(), yaep_fit(), yaep_fit_step(), yaep_refit() and
+ *   yaep_argmax()) also write yaep_error() when they fail. The queries take a
+ *   const handle and return a code or NaN without writing the message.
  *   yaep_strerror() names a code.
  *
  *     YAEP_ERR_ARG        null handle, x outside the box, outcome out of
@@ -1676,7 +1233,8 @@
  *   and a code below -1 for a failure. YAEP_ERR_ARG is -1 and therefore
  *   unusable there, so a null handle, a null x, a closed handle and a bad
  *   subset all come back as YAEP_ERR_CLOSED, and a full handle as
- *   YAEP_ERR_FULL.
+ *   YAEP_ERR_FULL. yaep_argmax() returns -1 the same way, for a refined
+ *   point. Both write the message only for a code below -1.
  *
  *   ---------------------------------------------------------------------
  *   MEMORY, COST AND THREADS
@@ -1932,8 +1490,8 @@
  *   replay with the same fit_every, and a stepped fit's progress is not in
  *   the history. A snapshot (SNAPSHOTS) restores it without the replay.
  *
- *   SNAPSHOTS (yaep_save_size, yaep_save, yaep_load)
- *     yaep_save() writes yaep_save_size(g) bytes; yaep_load() opens a
+ *   SNAPSHOTS (yaep_save_size, yaep_save, yaep_open_saved)
+ *     yaep_save() writes yaep_save_size(g) bytes; yaep_open_saved() opens a
  *     handle from them and a desc that re-supplies what a snapshot cannot
  *     carry (the pointers: rng and rng_ctx, candidates, memory), checks the
  *     desc's numbers against the saved ones, and the session continues where
@@ -1988,7 +1546,7 @@
  *     next yaep_next() rebuilds it. Size: about (K + 1 + [psychometric]) N^2
  *     / 2 yaep_reals plus 30 N f64s, 23 KB at N = 40 in two dimensions,
  *     about 200 KB at N = 150 and 2.1 MB at N = 512.
- *     yaep_load() compares the desc section with the desc it is given and
+ *     yaep_open_saved() compares the desc section with the desc it is given and
  *     names the first field that differs, range-checks the counters, and
  *     fails a wrong, truncated or corrupt snapshot with a message and the
  *     handle closed. Nothing but the bytes is checked: a snapshot edited to
@@ -2084,16 +1642,15 @@
  *       #define YSP_AEP_IMPLEMENTATION
  *       #include "ysp/aep.h"             // brings ysp/rt.h with it
  *
- *       yaep_gp g;
+ *       static yaep_gp g;
  *       yaep_open(&g, &desc);          // as usual, on this thread
- *       yaep_async a;
- *       yaep_async_desc ad = {
- *           .gp           = &g,
- *           .context      = { 0.5 },    // where the snapshot's threshold is
- *           .fit_in_idle  = true,       // the fit lives in the gaps
- *           .below_normal = true,       // never above the frame loop
- *       };
- *       if (!yaep_async_start(&a, &ad)) die(yaep_async_error(&a));
+ *       static yaep_async a;
+ *       yaep_async_desc ad = { 0 };
+ *       ad.gp           = &g;
+ *       ad.context[0]   = 0.5;         // where the snapshot's threshold is
+ *       ad.fit_in_idle  = true;        // the fit lives in the gaps
+ *       ad.below_normal = true;        // never above the frame loop
+ *       if (!yaep_async_open(&a, &ad)) die(yaep_async_error(&a));
  *
  *       yaep_snapshot s;
  *       yaep_async_poll(&a, &s);       // the first proposal, already there
@@ -2104,7 +1661,7 @@
  *               if (yaep_async_poll(&a, &s) >= seq) break;
  *           if (s.done) break;
  *       }
- *       yaep_async_stop(&a);           // drains; the handle is yours again
+ *       yaep_async_close(&a);          // drains; the handle is yours again
  *
  *   WHAT IT IS. ysp/rt.h's yrt_pump with yaep_update(), yaep_next() and
  *   yaep_threshold() in its on_msg: one thread, a queue of YAEP_ASYNC_QUEUE
@@ -2118,7 +1675,7 @@
  *   desc.fit_in_idle puts one yaep_fit_step() in the pump's on_idle, which
  *   runs whenever the response queue is empty, and takes over from
  *   desc.fit_every, which the layer parks at 0 for the duration and restores at
- *   stop(). The effect is that the hyperparameters keep improving between
+ *   close. The effect is that the hyperparameters keep improving between
  *   trials and cost the trial loop nothing, and that a response never waits
  *   behind a whole fit: on_idle returns after one evaluation, the queue is
  *   checked, and the response goes first. A snapshot published from an idle
@@ -2129,7 +1686,7 @@
  *   every fit_every rather than a spread cost.
  *
  *   OWNERSHIP, which is the rule to get right. The caller opens the gp handle
- *   and yaep_async_start() takes it over: from then until yaep_async_stop()
+ *   and yaep_async_open() takes it over: from then until yaep_async_close()
  *   returns, NO yaep_* call on that handle is allowed from any thread,
  *   including the const ones (yaep_predict_p() writes the handle's prediction
  *   scratch, so even a read of the posterior is a write). Everything a trial
@@ -2148,8 +1705,8 @@
  *   frame loop can afford it every frame. yaep_async_wait() is the blocking
  *   form with a relative timeout, for the end of an interval.
  *
- *   Seq 0 is the proposal yaep_async_start() computed before the thread
- *   existed, so a snapshot always exists once start() has returned true and the
+ *   Seq 0 is the proposal yaep_async_open() computed before the thread
+ *   existed, so a snapshot always exists once open has returned true and the
  *   first trial reads its stimulus from a poll that returns 0. That is why
  *   there is no "nothing published yet" state to handle.
  *
@@ -2179,7 +1736,7 @@
  *   needs it), plus 80 bytes a queued response and a 440-byte snapshot.
  *   A submit is a mutex, an 80-byte copy and a condition-variable signal. A
  *   poll is an atomic load and a 440-byte copy under a lock nothing else holds
- *   for long. Nothing allocates, at start or after.
+ *   for long. Nothing allocates, at open or after.
  *
  *   ---------------------------------------------------------------------
  *   BUILDING
@@ -2209,6 +1766,465 @@
  *       cc -O2 -pthread -Iinclude -o aep_async examples/aep/async.c -lm
  *
  *   ---------------------------------------------------------------------
+ *   CHANGELOG
+ *   ---------------------------------------------------------------------
+ *   v0.15.0 - the repository conventions (README.md, Conventions). Breaks
+ *          the API: yaep_async_start() / yaep_async_stop() are
+ *          yaep_async_open() / yaep_async_close(), yaep_load() is
+ *          yaep_open_saved(), and yaep_async_wait() takes an int64_t
+ *          timeout_ns (0 or less polls). The handle-changing calls (next,
+ *          update, fit, refit, argmax) write yaep_error() when they fail;
+ *          the const queries still return a code only. The USAGE and ASYNC
+ *          examples zero the desc and set fields, so they build as C99 and
+ *          C++17. No number changed: the arithmetic is v0.14.1's.
+ *   v0.14.1 - two fixes. (1) A desc.memory buffer that was not 8-byte
+ *          aligned: yaep_open() aligned the base, but every later call laid
+ *          its scratch out from the unaligned address, so the quadrature
+ *          weights and every scratch vector read a few bytes off what open()
+ *          had written (the macOS CI failure: outcome probabilities summing
+ *          to 8e280, in the build whose static test buffer landed on an odd
+ *          address). malloc'd handles were never affected. (2)
+ *          yaep_threshold()'s band read an unset edge when neither shifted
+ *          curve crossed; the band is now the whole box there, which is what
+ *          the unset read produced in practice. Results with malloc'd or
+ *          aligned memory are v0.14.0's to the bit.
+ *   v0.14.0 - desc.fit_pcg (a new field at the end of yaep_desc, off by
+ *          default): conjugate-gradient Newton steps in a fit's evaluations
+ *          and in the psychometric model's mode search, rejected line-search
+ *          points undone by a copy, and no refit of a point the model already
+ *          stands at; 2.6 times on a 500-trial 6-D GP fit and 3.7 times on
+ *          the psychometric model's. The explicit B^-1 of the gradient walks
+ *          rows instead of columns, 2.7 times faster with the same bits, so
+ *          every result at the defaults is v0.13.1's. See CONJUGATE GRADIENTS
+ *          IN A FIT under MEMORY, COST AND THREADS.
+ *   v0.13.1 - no code change. The 6-D contrast sensitivity problem's stuck
+ *          flat model (guess 0.5, mean at its bound, p = 0.5 everywhere)
+ *          is v0.4.1's behavior, fixed since v0.5.0 by the mean prior; the
+ *          test now replays its first 30 trials with and without the prior.
+ *          The cost section quotes the 6-D numbers.
+ *   v0.13.0 - desc.fit_max_evals and desc.fit_tol (0 = the old 40 and 1e-8),
+ *          yaep_fit() returns 1 when converged and 0 when the budget ran
+ *          out (it returned 0 for both), and yaep_fit_delta() reads the
+ *          objective's change. A yaep_fit() after one the budget stopped
+ *          continues with its step length. A caller that tested
+ *          yaep_fit() == 0 for success must test >= 0. Scheduled fits, and
+ *          so every session result at the defaults, are v0.12.0's.
+ *   v0.12.0 - snapshots: yaep_save_size(), yaep_save() and yaep_load(), a
+ *          versioned little-endian byte image of the whole session that
+ *          resumes it bit for bit without replay. See SNAPSHOTS under
+ *          MEMORY, COST AND THREADS.
+ *   v0.11.0 - desc.pcg_threshold: above it (default 512, so never at the
+ *          default YAEP_MAX_TRIALS), an update's Newton steps are
+ *          preconditioned conjugate-gradient solves with the previous factor
+ *          as the preconditioner, 2.6 to 3.3 times faster from N = 1024 on.
+ *          The history moves from the handle into the memory block, so the
+ *          handle is 2.5 KB and YAEP_MAX_TRIALS can be raised to 2048 with
+ *          the caller's memory; yaep_memory_size() grows by 144 bytes a
+ *          trial. yaep_desc gains pcg_threshold at its end.
+ *   v0.10.0 - desc.monotone_dims, AEPsych's monotonic projection of the
+ *          posterior mean along the masked dimensions, for predict_p,
+ *          predict_p_many, predict_p_var, the threshold and the level-set
+ *          acquisitions; a new field at the end of yaep_desc. The copies
+ *          whose count is an int are loops instead of memcpy, which gcc 13's
+ *          -Wstringop-overflow flagged at -O3 under _FORTIFY_SOURCE; results
+ *          are v0.9.0's to the bit. See MONOTONIC PROJECTION under KERNELS.
+ *   v0.9.0 - mixed parameters: desc.dim_kind[] (CONTINUOUS, INTEGER,
+ *          CATEGORICAL) and desc.dim_levels[], new fields at the end of
+ *          yaep_desc that a binding must add. A categorical kernel factor
+ *          exp(-(1 - delta) / l); candidates, init points, refinement,
+ *          updates and threshold contexts honor the kinds. A description
+ *          with every dimension CONTINUOUS gives v0.8.0's results to the bit.
+ *          See DIMENSION KINDS under KERNELS.
+ *   v0.8.0 - YAEP_LIK_PAIRWISE, comparisons of two stimuli, with
+ *          yaep_next_pair(), yaep_update_pair() and yaep_predict_pair().
+ *          yaep_trial gains x2 at its end and the handle a second stimulus
+ *          array; a binding that mirrors yaep_trial must add the field.
+ *          Nothing else changes. See MODEL and examples/aep/pairwise.c.
+ *   v0.7.0 - optimization: YAEP_ACQ_UCB, YAEP_ACQ_EI and YAEP_ACQ_THOMPSON
+ *          for finding the stimulus the observer prefers most, desc.minimize
+ *          (a new field at the end of yaep_desc), and yaep_argmax(). See
+ *          ACQUISITION and examples/aep/optimize.c. Nothing else changes.
+ *   v0.6.0 - desc.priors: every weak-prior parameter at run time, a
+ *          {center, sd, ceiling} per hyperparameter with zero meaning the
+ *          measured default, and yaep_get_priors() to read what is in force.
+ *          The compile-time YAEP__PS_MG_RISE, YAEP__PRIOR_MG_SD,
+ *          YAEP__PS_MG_HI and YAEP__PS_OS_G are gone. yaep_desc gains
+ *          priors at its end, so a binding that mirrors it must add the
+ *          field; at the defaults every result is v0.5.0's to the bit.
+ *   v0.5.0 - three defects the cross-method comparison
+ *          (tests/compare/methods_compare.py) found, fixed, each with its
+ *          recorded trials replayed in the test. (1) A psychometric-model fit
+ *          could restore its accepted point from a rejected point's mode, run
+ *          the mode search into its step cap on a saturated plateau, and leave
+ *          a log marginal likelihood of -1e49 with no error: the mode search
+ *          now rejects a result below Psi at the prior mean and restarts cold
+ *          (YAEP_ERR_NUMERIC if that fails), a restore that misses its value
+ *          is refitted cold, and a whole fit that ends worse than it began is
+ *          undone. (2) A GP-model fit could jump to a data-favored
+ *          short-lengthscale mode that redraws the level set: a fit that
+ *          reclassifies more than 5% of the candidates after a settled one is
+ *          undone once. (3) The GP model's mean had no prior and ran to its
+ *          bound on data that are mostly one way: it now has a normal prior
+ *          (sd 0.7) on the discrete likelihoods, and EAVC falls back to the
+ *          straddle when its expected level set is empty or full. (2) and (3)
+ *          change what the GP model computes by default; nothing changes in a
+ *          run none of them touches except through the mean prior. See
+ *          HYPERPARAMETERS and ACQUISITION.
+ *   v0.4.1 - no behavior changed. Why YAEP_MODEL_PSYCHOMETRIC's fitted mean
+ *          slope is about half the true one (its prior, not the Laplace
+ *          approximation), and why that prior stays (every looser setting
+ *          measured reopens the threshold tail under LSE and leaves the band
+ *          error where it was), under HYPERPARAMETERS; and the prior's center,
+ *          sd and ceiling as compile-time knobs for measuring it.
+ *   v0.4.0 - three changes to YAEP_MODEL_PSYCHOMETRIC. Its hyperparameter
+ *          gradient is analytic (one conjugate-gradient adjoint solve through
+ *          the true Hessian, preconditioned by the Gauss-Newton posterior),
+ *          which cuts the cost of a fit about five times. It supports EAVC and
+ *          LOCALMI, through a rank-one look-ahead in the collapsed system. And
+ *          the log-slope GP's output-scale prior is centered at 0.3 rather than
+ *          1, which removes a 7 to 12 dB tail on the audiometric sensory
+ *          phenotype. The last one changes what the model computes by default;
+ *          nothing changes under YAEP_MODEL_GP. No public struct changed.
+ *   v0.3.0 - desc.model and YAEP_MODEL_PSYCHOMETRIC: Keeley et al. 2023's
+ *          semiparametric model in its own form, a threshold GP and a
+ *          log-slope GP over the context feeding a probit or logit in the
+ *          intensity, for the observer whose psychometric rise is narrow
+ *          against the box (see MODEL, and STATUS for what it measured).
+ *          yaep_hyper gains lengthscale_g, outputscale_g and mean_g, and
+ *          yaep_desc gains model; both at the end of their structs, so every
+ *          earlier field keeps its offset, but both structs are larger and a
+ *          binding that mirrors them must add the fields. The default model
+ *          is YAEP_MODEL_GP, and with it nothing computes differently from
+ *          v0.2.1; YAEP_KERNEL_SEMIP is unchanged.
+ *   v0.2.1 - version macros (YAEP_VERSION_MAJOR / MINOR / PATCH / STRING)
+ *          and yaep_version(), so a program can log which header it was
+ *          built from and a binding can read its version from the header;
+ *          and desc.refine_steps, a golden-section refinement of the grid
+ *          winner off the candidate set (see CANDIDATES). refine_steps is the
+ *          LAST field of yaep_desc, so every earlier field keeps its offset,
+ *          but the struct is larger and a binding that mirrors it must add the
+ *          field. At its default of 0 nothing computes differently from v0.2.
+ *   v0.2 - the optional async layer, YAEP_ASYNC: ysp/rt.h's yrt_pump with
+ *          yaep_update(), yaep_next() and yaep_threshold() on one thread, a
+ *          queue of responses, a published snapshot a frame loop polls, and
+ *          desc.fit_in_idle, which spends the gaps between trials on
+ *          yaep_fit_step(). Nothing changed in the synchronous header, which
+ *          still includes nothing but the C standard library and is bit for bit
+ *          what v0.1 computed; see ASYNC.
+ *   v0.1 - the implementation. All four likelihoods, both kernels, all six
+ *          acquisitions, the analytic marginal-likelihood gradient (numerical
+ *          under CATEGORICAL), the threshold search, and five things v0.0 did
+ *          not plan: yaep_fit_step(), which makes a hyperparameter fit
+ *          resumable one evaluation at a time, and desc.refit_every with
+ *          yaep_refit(), which trades the exact Newton refit of every trial
+ *          for an O(N^2) rank-one update, and desc.guess / desc.lapse, a
+ *          floor and a ceiling on the Bernoulli and ordinal links so a
+ *          two-interval task states its chance level instead of faking it.
+ *          YAEP_REAL makes the kernel matrix, the Laplace factors and the
+ *          look-ahead covariance float on request; see PRECISION for what that
+ *          buys, which is memory rather than time.
+ *          It also fits a MAP rather than a type-II maximum likelihood: weak
+ *          log-normal priors on the lengthscales and the output scales
+ *          (desc.no_hyper_prior turns them off), which is what stops a nearly
+ *          separable run from interpolating its own trials; yaep_next()
+ *          guards against an acquisition that has stopped discriminating;
+ *          and yaep_predict_p_many() / yaep_predict_f_many() evaluate a
+ *          field in one blocked pass. Three changes to what
+ *          v0.0 specified: EAVC measures the level set with the EXPECTED
+ *          count of candidates above the level rather than the count of
+ *          candidates whose mean is above it (the count is integer-valued,
+ *          and it pins the acquisition to one stimulus as soon as no
+ *          candidate can flip); the semiparametric kernel measures the
+ *          intensity from the middle of the box; and the hyperparameter
+ *          gradient under CATEGORICAL is central differences, not analytic.
+ *   v0.0 - specification. Declarations and the manual, no implementation.
+ *
+ *   STATUS: v0.15.0. Implemented and checked by tests/adapt/aep_test.c,
+ *   which builds and passes as C11, C99 and C++17 under gcc with -Wall
+ *   -Wextra -Wpedantic -Wshadow -Werror, with and without YAEP_ASYNC, as
+ *   MSVC's default C dialect with /W4 /WX both ways, and is clean under
+ *   -fsanitize=address,undefined and, with the async layer, under
+ *   -fsanitize=thread. v0.15.0 was checked on 2026-10-10 with MSVC 19.44
+ *   /W4 /WX (C and C++17, with and without YAEP_ASYNC) and MinGW-w64 gcc
+ *   -Werror; the new checks cover the messages the handle-changing calls
+ *   leave and yaep_close() on a zeroed handle, after a failed open and
+ *   twice. The sanitizer runs are v0.14.1's.
+ *   What it verifies, with the numbers it measured: the Cholesky and the
+ *   triangular solves against a hand-built SPD matrix (1e-12); the kernel
+ *   symmetric and positive definite on random points for both kernels; the
+ *   20-node Gauss-Hermite rule integrating x^0 to x^6 against the Gaussian
+ *   to 1e-11; the exact Gaussian posterior, its variance and its log
+ *   marginal likelihood against a dense Gauss-Jordan solve (1e-9); the
+ *   Bernoulli probit Laplace mode satisfying f = m + K grad log p(y|f) at
+ *   six points (1e-8) and its predictive variance against a dense
+ *   (K^-1 + W)^-1 (1e-9); the softmax mode satisfying the same condition
+ *   per class with three classes (1e-7); the analytic gradient of the
+ *   Laplace log
+ *   marginal likelihood against central differences for every free
+ *   hyperparameter under RBF and SEMIP crossed with Bernoulli, ordinal and
+ *   Gaussian, and again with the logit link, worst relative error below
+ *   1e-4; the rank-one look-ahead
+ *   covariance against a brute-force refit with W frozen (1e-10);
+ *   yaep_memory_size() exact to the byte; the Halton points; the desc
+ *   validation; a caller-owned candidate list, the random acquisition and
+ *   the threshold-width stop rule running a session; yaep_predict_p_many()
+ *   and yaep_predict_f_many() agreeing with the one-point calls to the last
+ *   bit over a 900-point grid; and a reported
+ *   Cholesky failure leaving the previous
+ *   posterior in force. On a simulated 1-D probit observer (slope 8,
+ *   50% point 0.40, box [0, 1]) over 8 response streams of 100 trials, the
+ *   mean absolute error of the 75% threshold is 0.011 for LSE, 0.010 for
+ *   EAVC and 0.037 for BALD, against a binomial noise floor near 0.02 for
+ *   a hundred trials; the tolerance the test enforces is 0.08. Over 20
+ *   further streams outside the test the same three come out at 0.013,
+ *   0.013 and 0.032, worst case 0.05, 0.04 and 0.12, with no run failing to
+ *   find a crossing. The other
+ *   three likelihoods recover their simulated field: rms error 0.003 for
+ *   GAUSSIAN over 60 trials, 0.076 for the ordinal P(y >= 2) with four
+ *   categories over 150 trials, and 0.069 for the three softmax class
+ *   probabilities over 120 trials.
+ *
+ *   The floor and the ceiling are checked the same way: the analytic
+ *   gradient still matches central differences to better than 1e-4 with
+ *   guess = 0.5 and lapse = 0.02 under both links, both kernels, and both
+ *   Bernoulli and ordinal; and a simulated two-interval observer
+ *   (p = 0.5 + 0.48 Phi(8 (x - 0.4))) recovers its 75% threshold with a mean
+ *   absolute error of 0.022 over 5 streams of 120 trials.
+ *
+ *   The weak priors of HYPERPARAMETERS are in the same comparison: without
+ *   them the same eight streams give 0.050 for LSE and 0.043 for BALD, and
+ *   two of the eight collapse onto a diffuse fit whose threshold is 0.14
+ *   out. The gradient check covers them, since they are part of the
+ *   objective the finite differences see, and desc.no_hyper_prior is how the
+ *   comparison was run.
+ *
+ *   examples/aep/audiometric.c is the harder test, and the numbers that justify
+ *   the priors and the acquisition guard come from it: the audiometric observer
+ *   of Owen et al. 2021, four phenotypes by 20 replications of 150 trials, same
+ *   seeds throughout. Pooled over the phenotypes at trial 150, threshold error
+ *   in dB at beta = 2 then beta = 0.5: LOCALMI 1.74 / 1.75, LSE 2.04 / 2.28,
+ *   EAVC 2.14 / 2.03, BALV 3.76 / 3.40, BALD 5.66 / 5.28, RANDOM 5.42 / 5.45,
+ *   SEMIP with BALV 3.41 / 3.46, SEMIP with LSE 8.05 / 8.14, and eight
+ *   interleaved staircases given the frequencies and the psychometric width
+ *   2.72 / 2.07. Surface error MAE(p): BALV 0.0558 / 0.0621, which is the best
+ *   of the nine in all eight phenotype-by-beta cells, then EAVC 0.0668, BALD
+ *   0.0672, LOCALMI 0.0733, RANDOM 0.0763, LSE 0.0824; the staircase reads
+ *   0.0186 there, with beta known for free. So the level-set acquisitions win
+ *   the threshold and the variance-based ones win the field, which is the
+ *   paper's own finding, and a classical staircase that is told the frequencies
+ *   and the width is still competitive on both.
+ *
+ *   That run is also the before-and-after for the two v0.1 fixes. The weak
+ *   priors: LSE was 3.20 / 3.07 dB without them and BALD 8.48 / 8.91, against
+ *   2.04 / 2.28 and 5.66 / 5.28 with them, and the output scale sat at a bound
+ *   in 130 of 1600 runs rather than 1580, all 130 in the BALV, LOCALMI or
+ *   beta = 0.5 cells where the latent really is steep. They cost early
+ *   accuracy: at trial 25, MAE(p) is 0.03 to 0.11 worse with the prior than
+ *   without. The acquisition guard: SEMIP with a level-set acquisition used to
+ *   separate its own data and then propose one candidate forever, and its
+ *   threshold contour left the box in 7 to 19 of 30 context columns in every
+ *   cell; now no cell of the 24 has a single non-crossing column. Over all 1600
+ *   runs, YAEP_ERR_NUMERIC 0 and a multi-crossing threshold 0. SEMIP with LSE
+ *   at 8 dB is still the worst configuration measured, and the reason is in the
+ *   model rather than the fit: see SEMIP below, and ACQUISITION for what the
+ *   guard does and does not repair.
+ *
+ *   The two cost knobs are checked too: yaep_fit_step() run to completion
+ *   lands on the same hyperparameters (1e-12) and the same log marginal
+ *   likelihood (1e-9) as yaep_fit(), and desc.refit_every = 5 replayed against
+ *   refit_every = 1 on one 78-trial response stream differs by at most
+ *   1.7e-4 of probability, which yaep_refit() then erases to 6e-15.
+ *
+ *   The Laplace log marginal likelihood itself is checked against an
+ *   independent dense evaluation of R&W eq. 3.32 (1e-8), which matters
+ *   because it is the larger half of what the fit maximizes. The weak priors
+ *   are the other half, and a fit that ran away in spite of them still shows
+ *   up as a log marginal far closer to zero than the responses allow;
+ *   HYPERPARAMETERS says how that looks and what else to do about it.
+ *
+ *   YAEP_MODEL_PSYCHOMETRIC is checked by the same test, under both links:
+ *   the 2N-latent mode satisfies z - mean = K grad log p(y | z) to 4e-8 of
+ *   the latent (the Newton tolerance is 1e-8); the predictive mean and
+ *   covariance of (m, g) agree with a dense (K2^-1 + W2)^-1 over all 2N
+ *   latents to 2e-10 and 2e-9; the Laplace log marginal likelihood agrees
+ *   with a dense evaluation through log|K2| + log|K2^-1 + W2| to 1e-8; the
+ *   quadrature is checked as MODEL says; the closed-form threshold agrees with
+ *   a 40-node quadrature of the crossing to 3e-12; the analytic
+ *   hyperparameter gradient agrees with central differences to 2e-8 to 2e-6
+ *   over all six hyperparameters under probit and logit, with guess 0.5 and
+ *   lapse 0.02, and over all eight with four ordinal outcomes (the mode
+ *   converged to 1e-13 for that check, so the differences resolve it); the
+ *   look-ahead's cross-covariance between two contexts agrees with the dense
+ *   2N posterior to 3e-10, and its rank-one update with a dense update of the
+ *   two contexts' joint 4 x 4 covariance to 2e-9; LOCALMI's candidate score
+ *   equals its point score to the last bit; ordinal and two-interval sessions
+ *   run clean; and on a 2-D observer with a curved threshold and a 7 dB rise
+ *   the model's EAVC and LOCALMI find the threshold to 0.7 and 1.0 dB in 80
+ *   trials.
+ *   On examples/aep/audiometric.c, 20 replications, trial 150: field MAE(p) /
+ *   band MAE(p) / threshold error in dB, the worst replication's threshold
+ *   error, and ms per trial with fits every 20 trials. semip2 is this model,
+ *   YAEP_MODEL_PSYCHOMETRIC, under the example's name for it:
+ *
+ *                      metabolic, beta 2              metabolic, beta 0.5
+ *     RBF LSE       .077 .213 1.98 +- .32 3.9  3   .083 .298 2.49 +- .32 4.9  3
+ *     RBF EAVC      .058 .204 1.98 +- .16 2.9  7   .056 .285 2.28 +- .15 2.7  7
+ *     semip2-lse    .013 .160 1.41 +- .12 2.0  9   .013 .302 1.54 +- .05 1.8  9
+ *     semip2-balv   .011 .153 1.28 +- .16 2.2 10   .011 .316 1.41 +- .08 1.9  8
+ *     semip2-bald   .008 .129 1.08 +- .09 1.7 11   .011 .316 1.42 +- .09 2.0 10
+ *     semip2-eavc   .011 .140 1.18 +- .11 2.0 24   .011 .264 1.25 +- .23 3.1 29
+ *     semip2-lmi    .011 .152 1.25 +- .07 1.6 11   .012 .321 1.44 +- .07 1.8 10
+ *     staircase     .017 .267 2.60 +- .22 3.5      .014 .322 2.06 +- .17 3.0
+ *
+ *                      sensory, beta 2                sensory, beta 0.5
+ *     RBF LSE       .092 .249 1.77 +- .19 3.1  3   .092 .276 2.82 +- .21 3.2  3
+ *     RBF EAVC      .069 .216 2.14 +- .16 2.9  7   .078 .200 2.33 +- .20 3.2  7
+ *     semip2-lse    .016 .193 1.89 +- .20 2.8 11   .033 .230 2.89 +- .33 3.6  9
+ *     semip2-balv   .009 .156 1.16 +- .22 2.1  8   .030 .287 3.23 +- .82 5.9  7
+ *     semip2-bald   .007 .126 0.93 +- .14 1.6 11   .026 .295 3.18 +- .80 5.5 10
+ *     semip2-eavc   .009 .149 1.18 +- .22 2.6 25   .022 .204 1.98 +- .50 4.3 26
+ *     semip2-lmi    .013 .168 1.44 +- .20 2.2 12   .021 .240 2.05 +- .31 3.3 11
+ *     staircase     .018 .277 2.49 +- .31 3.5      .014 .539 1.90 +- .09 2.4
+ *
+ *   On three of the four cells every semip2 method beats the RBF GP and the
+ *   staircase (which is given the psychometric width) on threshold: BALD
+ *   0.93 to 1.42 dB, EAVC 1.18 to 1.25, against 2.06 to 2.60 for the
+ *   staircase and 1.77 to 2.49 for the RBF GP. The worst replication is 3.1
+ *   dB or less there, and 5.9 dB over all four cells, where v0.3.0's was
+ *   11.6. Sensory at beta 0.5, a 27 dB climb in two octaves with a 2.6 dB
+ *   rise, is the hard cell: there EAVC (1.98 dB) and LOCALMI (2.05) match
+ *   the staircase (1.90) and beat both RBF methods, and the per-point
+ *   acquisitions do not (2.9 to 3.2). The field error is 3 to 10 times
+ *   smaller than the RBF GP's everywhere and already 0.04 to 0.12 at trial
+ *   25, against 0.22 to 0.28. The band error is under the RBF GP's at
+ *   beta 2 (0.13 to 0.19 against 0.20 to 0.25); at beta 0.5 the band is about
+ *   one grid point per column and measures the threshold's location, not the
+ *   model's shape, and the staircase given the true width scores 0.32 and
+ *   0.54 there. The cost is 8 to 11 ms a trial for the per-point
+ *   acquisitions and about 25 for EAVC, against 3 and 7 for the RBF GP.
+ *   BALD is the best of the per-point acquisitions on this model and EAVC
+ *   the most robust overall.
+ *
+ *   The async layer of v0.2 is checked by the same test, in a YAEP_ASYNC
+ *   block: a 60-trial session driven through yaep_async_submit() reproduces
+ *   the synchronous session bit for bit (memcmp of the history and of the
+ *   proposal stream, and the same log marginal likelihood and threshold to the
+ *   last bit) with fit_in_idle off; with it on, the log marginal improved in an
+ *   idle gap on 27 of 60 trials while the proposals kept up, and
+ *   desc.fit_every was parked at 0 for the session and restored at stop; and a
+ *   burst that outruns the thread gives YAEP_ERR_BUSY with nothing copied
+ *   (8 accepted, 3 refused, 8 still pending at a stop that drained them). That
+ *   test is clean under -fsanitize=thread with no warnings, and the rest of the
+ *   test's output is byte-identical between the YAEP_ASYNC build and the plain
+ *   one. examples/aep/async.c runs 200 EAVC trials through a 16 ms frame loop in
+ *   11.2 s: with fit_in_idle on and a 225-candidate grid the proposal was ready
+ *   by the next frame on 28 trials and late on 172, 2.4 frames of waiting on
+ *   average and 5 at worst, the queue never filled, and the threshold at three
+ *   contexts came out 0.007 to 0.060 from the truth.
+ *
+ *   desc.refine_steps is checked there too: the point score it climbs equals
+ *   the candidate score to the last bit at every candidate for LSE, BALV,
+ *   BALD and LOCALMI, including under CATEGORICAL; every refined proposal stays
+ *   within one grid step of the winner it started from and never scores below
+ *   it, under all five acquisitions; and the eight LSE streams above give a
+ *   mean threshold error of 0.0111 with refine_steps = 2 against 0.0112
+ *   without, which on a 65-point grid is what refinement should change: next
+ *   to nothing. CANDIDATES has the audiometric numbers, where the grid is
+ *   coarse and it matters.
+ *
+ *   The later additions are checked there as well, and each section says
+ *   what it measured: PAIRWISE's trial kernel, mode and predictions against a
+ *   dense 2N posterior; the mixed dimension kinds' kernel values, their
+ *   analytic lengthscale gradient against differences (2e-5 at worst) and
+ *   every proposal on its levels and integers; the monotonic projection
+ *   against a brute force through yaep_predict_f(), to the bit; the
+ *   conjugate-gradient Newton steps against factoring, to 4e-11; desc.fit_pcg's
+ *   fits against the factored fits in lockstep, step by step, to 2e-9; and
+ *   132 snapshot resumes against the uninterrupted sessions, byte for byte.
+ *
+ *   The float build of YAEP_REAL passes the same test with the tolerances
+ *   PRECISION lists, measured rather than assumed, with YAEP_LIK_GAUSSIAN
+ *   rejected at open and its checks skipped. That includes the psychometric
+ *   model, whose float mode PRECISION describes, and whose analytic gradient
+ *   the float test can check against differences only to 7e-2, since a float
+ *   objective is too rough for differences to resolve more; on the 7 dB
+ *   observer the float build's threshold error is 0.98 dB against the double
+ *   build's 1.12, band error 0.143 against 0.141, same streams.
+ *
+ *   KNOWN TAILS. The cross-method comparison (tests/compare/methods_compare.py,
+ *   streams seeded [20170310, problem, replication]) has no collapsed run
+ *   left after v0.5.0, and three single replications that are poor for a
+ *   reason the header does not fix:
+ *   - csf6 (6-D), GP model, LSE, replication 5: MAE(p) 0.125 and 82 contexts
+ *     of 118 with no crossing at trial 300 (0.077 and 57 at trial 500). No
+ *     hyperparameter is at a bound (contrast lengthscale 1.35 in 0.075 to 3,
+ *     output scale 0.61, mean 0.05). The cause is the problem's numbers: with
+ *     guess 0.5 and no lapse, p at the prior mean is 0.75, the target, so in
+ *     every context the data have not reached the column crosses or not on
+ *     the sign of a mean near 0, and LSE in 6-D leaves most contexts
+ *     unreached. Replication 4 of the same method has 25.
+ *   - The psychometric model with LSE: metabolic+sensory beta 2 replication
+ *     14 (9.5 dB) and older-normal beta 0.5 replication 10 (7.6 dB). The
+ *     log-slope output scale is not at its ceiling (0.33 and 0.49 of 10). In
+ *     both a fit shortens the threshold GP's frequency lengthscale (3.2 to
+ *     0.55 at trial 65; 9.1 to 1.35 at trial 125, after the model had sat at
+ *     1.15 dB for 40 trials), the defect-2 jump of the GP model, and LSE then
+ *     puts 59 and 49 of its 150 trials in one frequency column. The level-set
+ *     guard that stops the jump in the GP model does not run for the
+ *     psychometric model; extended to it as a trial, it sees 4.8% of the
+ *     candidates flip at the trial-125 fit, under its 5% trigger, so it would
+ *     take retuning to one run to catch it, and that was not done. EAVC on
+ *     the same streams ends at 0.85 and 0.93 dB.
+ *   - The 2-D CSF, GP model, EAVC, replication 12: 7.0 dB. The error is all in
+ *     the highest-frequency columns, whose threshold (-5 dB) is at the top of
+ *     the box: the posterior mean falls and rises again along intensity there,
+ *     and the first crossing is at -42 dB. desc.monotone_dims on the
+ *     intensity removes it (1.9 dB); over the 20 replications it takes the
+ *     mean threshold error from 1.65 to 1.58 dB and the worst from 6.99 to
+ *     2.51, but MAE(p) from 0.086 to 0.092, and five replications get worse
+ *     (three by 1 to 1.5 dB), which is why the projection stays opt-in.
+ *
+ *   COMPARED with AEPsych 0.8.0 through the Python binding, in one process
+ *   on one response stream (tests/compare/compare_gp_aepsych.py): the
+ *   metabolic phenotype of examples/aep/audiometric.c at beta 2, 10
+ *   replications, both libraries given the same Sobol init points. AEPsych
+ *   runs its variational GP and its own LSE, EAVC and BALV, optimized over
+ *   the box. Threshold error at trial 150, this header's GP model against
+ *   AEPsych: EAVC 2.09 against 2.23 dB (inside the replication error), BALV
+ *   4.45 against 7.10, LSE 2.06 against 1.29. The LSE gap is the 11 x 21
+ *   candidate grid: with refine_steps = 2 LSE reaches 1.44 +- 0.16 dB and
+ *   EAVC 1.44 +- 0.28 (CANDIDATES). The field error MAE(p) is about half of
+ *   AEPsych's for every acquisition at 100 and 150 trials. The psychometric
+ *   model with EAVC reaches 1.26 +- 0.09 dB and a field error of 0.012,
+ *   against AEPsych's best of 1.29 dB and 0.18. Fitted from scratch to the
+ *   same trials, with AEPsych's output scale fitted (a ScaleKernel) instead
+ *   of fixed at 1, the two GP models agree: the fields differ by 0.016 and
+ *   the threshold curves by 0.14 dB. The cost per trial is 6 to 13 ms here
+ *   against 4 to 8 s for AEPsych, which refits every trial; both ran on one
+ *   loaded machine, so the ratio is an order of magnitude, not a number.
+ *   On human data (tests/compare/compare_gp_csfdata.py: Letham et al.
+ *   2022's 1001-trial 6-D contrast sensitivity set, 5-fold
+ *   cross-validation) the held-out log loss is 0.537 to 0.541 for both
+ *   models here, 0.529 for AEPsych and 0.543 for logistic regression, all
+ *   inside the fold noise. docs/adapt.md,
+ *   "Verification", and docs/adapt_comparison.md have the details.
+ *
+ *   NOT verified: the Laplace band's 95% coverage is unmeasured, and the
+ *   categorical one-against-the-rest acquisitions have no Monte Carlo check.
+ *   The timings vary by tens of percent between runs of the same binary, so
+ *   the frame-budget trial counts are an order of magnitude and not a
+ *   specification (examples/aep/bench.c prints its own numbers; MEMORY, COST
+ *   AND THREADS quotes them), and the async layer's late counts are a
+ *   property of that machine and that grid, not of the header. No
+ *   platform other than x86-64 has been built or run. The async layer has run
+ *   on Linux (pthreads) and on Windows (MSVC, native threads, and the OS
+ *   granted the below-normal drop); ysp/rt.h's macOS path is untested here.
+ *   gcc 13 has not built this header here: the fix for its
+ *   -Wstringop-overflow report at -O3 is by construction (no memcpy takes a
+ *   size derived from an int), and clang 18 (zig cc 0.13) builds the test,
+ *   the examples and both compile units clean with -Werror.
+ *
+ *   ---------------------------------------------------------------------
  *   LICENSE: public domain / MIT-0, see end of file.
  */
 #ifndef YSP_AEP_H_INCLUDED
@@ -2217,9 +2233,9 @@
 /* The version of this header, for a log line or a compile-time check. The
  * string is the three numbers, and the test asserts that it stays so. */
 #define YAEP_VERSION_MAJOR  0
-#define YAEP_VERSION_MINOR  14
-#define YAEP_VERSION_PATCH  1
-#define YAEP_VERSION_STRING "0.14.1"
+#define YAEP_VERSION_MINOR  15
+#define YAEP_VERSION_PATCH  0
+#define YAEP_VERSION_STRING "0.15.0"
 
 /* The one optional dependency, and it comes FIRST: ysp/rt.h sets a
  * feature-test macro for the Linux clock calls and can only do that before the
@@ -2598,13 +2614,15 @@ typedef struct yaep_gp {
 YAEP_API size_t yaep_memory_size(const yaep_desc* desc);
 
 /* Validate `desc`, take memory, generate the candidate set. Returns false
- * with yaep_error() set on failure. The only function that writes the
- * message buffer. */
+ * with yaep_error() set on failure; clears the message on entry. */
 YAEP_API bool yaep_open(yaep_gp* g, const yaep_desc* desc);
 
-/* Release what open() allocated. Safe on a zeroed or closed handle. */
+/* Release what open() allocated and zero the handle. Safe on a zeroed
+ * handle, after a failed open and twice. */
 YAEP_API void yaep_close(yaep_gp* g);
 
+/* The message of the last failed open or handle-changing call ("" if none).
+ * See RETURN VALUES AND ERRORS. */
 YAEP_API const char* yaep_error(const yaep_gp* g);
 YAEP_API bool        yaep_is_open(const yaep_gp* g);
 
@@ -2761,10 +2779,11 @@ YAEP_API const yaep_trial* yaep_history(const yaep_gp* g, int* n);
  * candidates, memory) and must agree with the snapshot on every number; a
  * mismatch, a wrong magic, format or YAEP_REAL, or a truncated or corrupt
  * snapshot fails the load with a message in yaep_error() and leaves the
- * handle closed. SNAPSHOTS gives the layout. */
+ * handle closed. yaep_open_saved() opens, so close an open handle first and
+ * close it when done. SNAPSHOTS gives the layout. */
 YAEP_API size_t yaep_save_size(const yaep_gp* g);
 YAEP_API int    yaep_save(const yaep_gp* g, void* buf, size_t cap);
-YAEP_API bool   yaep_load(yaep_gp* g, const yaep_desc* desc, const void* buf,
+YAEP_API bool   yaep_open_saved(yaep_gp* g, const yaep_desc* desc, const void* buf,
                             size_t len);
 
 /* --- simulation -------------------------------------------------------- */
@@ -2798,7 +2817,7 @@ typedef struct yaep_snapshot {
     uint32_t    seq;           /* the submit this accounts for: every update
                                 * through this seq is applied and `x` was
                                 * computed after them. 0 is the proposal made
-                                * at yaep_async_start(), before any response */
+                                * at yaep_async_open(), before any response */
     double      x[YAEP_MAX_DIMS];  /* the next stimulus                     */
     int         proposed;      /* its candidate index, -1 for a Halton, rng
                                 * or refined point, or a YAEP_ERR_* below -1
@@ -2830,7 +2849,7 @@ typedef struct yaep_snapshot {
  * required and must already be open. */
 typedef struct yaep_async_desc {
     yaep_gp* gp;              /* the handle the thread drives. The layer
-                                * OWNS it from start() to stop(): no yaep_*
+                                * OWNS it from open to close: no yaep_*
                                 * call on it meanwhile, from any thread.    */
     double    context[YAEP_MAX_DIMS]; /* the n_dims - 1 coordinates the
                                 * snapshot's threshold is taken at; unused
@@ -2855,7 +2874,7 @@ typedef struct yaep_async_msg {
 
 /* Async handle. The caller allocates it and treats every field as opaque. It
  * owns no heap: the pump, the response ring and the snapshot are all inline.
- * Must be zeroed or stopped before yaep_async_start(). */
+ * Must be zeroed or closed before yaep_async_open(). */
 typedef struct yaep_async {
     yrt_pump      pump;
     yaep_gp*       gp;
@@ -2875,18 +2894,20 @@ typedef struct yaep_async {
 /* Start the thread and publish the first proposal. Returns true with a
  * snapshot already available (yaep_async_poll() returns 0 and fills it),
  * false with yaep_async_error() set: a null handle or desc, a gp that is not
- * open, a context outside the box, or a pump the OS would not start. The only
- * async call that writes the message, and the only one that must not race
- * another call on the same handle. Cost: one yaep_next() and one
+ * open, a context outside the box, or a pump the OS would not start; clears
+ * the message on entry. The only async call that writes the message: submit
+ * may run on any thread, so the others return a code and leave the message
+ * alone rather than race on it (yaep_strerror() names the code). Open must
+ * not race another call on the same handle. Cost: one yaep_next() and one
  * yaep_threshold() on the calling thread, before the thread exists. */
-YAEP_API bool yaep_async_start(yaep_async* a, const yaep_async_desc* desc);
+YAEP_API bool yaep_async_open(yaep_async* a, const yaep_async_desc* desc);
 
 /* Deliver every response already queued, then join the thread. After it the gp
  * handle is the caller's again and every yaep_* call on it is legal. Safe on
- * a zeroed or already-stopped handle. Must not race another call on the same
+ * a zeroed handle, after a failed open and twice. Must not race another call on the same
  * handle, except a yaep_async_wait() already blocked, which comes out with
  * YAEP_ERR_CLOSED. */
-YAEP_API void yaep_async_stop(yaep_async* a);
+YAEP_API void yaep_async_close(yaep_async* a);
 
 /* Hand one trial to the thread: what was shown and the outcome. Returns a
  * POSITIVE seq, increasing, which yaep_async_poll() and yaep_async_wait()
@@ -2902,7 +2923,7 @@ YAEP_API int yaep_async_submit_real(yaep_async* a, const double* x, double y);
 /* Copy the newest snapshot into `out` (which may be NULL to ask only for the
  * seq) and return the seq it accounts for: every response through that seq is
  * applied and its proposal is the one in the snapshot. 0 means the proposal
- * made at start(), before any response had landed, so a caller that wants the
+ * made at open, before any response had landed, so a caller that wants the
  * first stimulus reads it from a poll that returns 0. Negative on error. One
  * atomic load plus a struct copy under the pump's publish lock: cheap enough
  * for every frame. */
@@ -2912,9 +2933,9 @@ YAEP_API int yaep_async_poll(const yaep_async* a, yaep_snapshot* out);
  * `timeout_ns` of monotonic time has passed. Returns the seq accounted for
  * (>= seq on success), YAEP_ERR_TIMEOUT if the time ran out first,
  * YAEP_ERR_CLOSED if the thread stopped without reaching it. timeout_ns is
- * relative; 0 polls. This is the end-of-interval call; poll() is the frame
- * loop's. */
-YAEP_API int yaep_async_wait(yaep_async* a, uint32_t seq, uint64_t timeout_ns,
+ * relative, in ns (YRT_MS(20)); 0 or less polls. This is the end-of-interval
+ * call; poll() is the frame loop's. */
+YAEP_API int yaep_async_wait(yaep_async* a, uint32_t seq, int64_t timeout_ns,
                                yaep_snapshot* out);
 
 /* Responses queued and not yet applied (the one being worked on is not
@@ -2922,7 +2943,7 @@ YAEP_API int yaep_async_wait(yaep_async* a, uint32_t seq, uint64_t timeout_ns,
  * takes the queue's mutex. */
 YAEP_API int yaep_async_pending(const yaep_async* a);
 
-/* Last yaep_async_start() message for this handle ("" if none). */
+/* Last failed yaep_async_open() message for this handle ("" if none). */
 YAEP_API const char* yaep_async_error(const yaep_async* a);
 
 /* True while the thread is running. */
@@ -2930,7 +2951,7 @@ YAEP_API bool yaep_async_is_running(const yaep_async* a);
 
 /* What the thread runs at: YRT_POLICY_NORMAL, or YRT_POLICY_BELOW_NORMAL
  * when desc.below_normal was set AND the OS granted the drop, which is not an
- * error either way. YRT_POLICY_NONE before a start and after a stop. Log it:
+ * error either way. YRT_POLICY_NONE before an open and after a close. Log it:
  * "the inference was ready in time" means something different at each rung. */
 YAEP_API yrt_policy yaep_async_policy(const yaep_async* a);
 
@@ -6452,7 +6473,7 @@ static void yaep__unstash(yaep_gp* g, const double* th, int np) {
     g->fit_th_n = np;
 }
 
-YAEP_API int yaep_fit_step(yaep_gp* g) {
+static int yaep__fit_step(yaep_gp* g) {
     yaep__scr s;
     yaep__param p[YAEP__NTHETA];
     double *th, *cand, *gr;
@@ -6618,7 +6639,7 @@ static int yaep__fit_run(yaep_gp* g, bool resume) {
     g->fit_state = YAEP__FIT_IDLE;
     g->fit_resume = resume && g->fit_conv == 0 && g->fit_step > 0.0;
     g->fit_conv = 1;
-    while ((rc = yaep_fit_step(g)) > 0) { }
+    while ((rc = yaep__fit_step(g)) > 0) { }
     g->fit_state = YAEP__FIT_IDLE;
     g->fit_resume = false;
     if (lguard && rc == YAEP_OK && g->fit_valid) {
@@ -8042,7 +8063,7 @@ static int yaep__next_impl(yaep_gp* g, const int* subset, int nsub, double* x) {
     return g->proposed;
 }
 
-YAEP_API int yaep_next(yaep_gp* g, double* x) {
+static int yaep__next(yaep_gp* g, double* x) {
     if (g && g->open && yaep__is_pair(g)) return YAEP_ERR_CLOSED;  /* next_pair */
     return yaep__next_impl(g, NULL, 0, x);
 }
@@ -8085,7 +8106,7 @@ static int yaep__draw_argmax(yaep_gp* g, yaep__scr* s, bool ok, int not_j) {
     return best;
 }
 
-YAEP_API int yaep_next_pair(yaep_gp* g, double* x1, double* x2) {
+static int yaep__next_pair(yaep_gp* g, double* x1, double* x2) {
     yaep__scr s;
     int nd, M, j1 = -1, j2 = -1;
     if (!g || !g->open) return YAEP_ERR_CLOSED;
@@ -8141,7 +8162,7 @@ YAEP_API int yaep_next_pair(yaep_gp* g, double* x1, double* x2) {
     return YAEP_OK;
 }
 
-YAEP_API int yaep_next_subset(yaep_gp* g, const int* subset, int n, double* x) {
+static int yaep__next_subset(yaep_gp* g, const int* subset, int n, double* x) {
     if (!subset) return YAEP_ERR_CLOSED;
     return yaep__next_impl(g, subset, n, x);
 }
@@ -8231,7 +8252,7 @@ static int yaep__record(yaep_gp* g, const double* x, const double* x2, double yv
     return YAEP_OK;
 }
 
-YAEP_API int yaep_update(yaep_gp* g, const double* x, int outcome) {
+static int yaep__update(yaep_gp* g, const double* x, int outcome) {
     int nout;
     if (!g || !g->open) return YAEP_ERR_CLOSED;
     if (g->desc.lik == YAEP_LIK_GAUSSIAN || yaep__is_pair(g)) return YAEP_ERR_ARG;
@@ -8240,8 +8261,8 @@ YAEP_API int yaep_update(yaep_gp* g, const double* x, int outcome) {
     return yaep__record(g, x, NULL, (double)outcome);
 }
 
-YAEP_API int yaep_update_pair(yaep_gp* g, const double* x1, const double* x2,
-                                int outcome) {
+static int yaep__update_pair(yaep_gp* g, const double* x1, const double* x2,
+                             int outcome) {
     if (!g || !g->open) return YAEP_ERR_CLOSED;
     if (!yaep__is_pair(g) || (outcome != 0 && outcome != 1)) return YAEP_ERR_ARG;
     return yaep__record(g, x1, x2, (double)outcome);
@@ -8267,7 +8288,7 @@ YAEP_API double yaep_predict_pair(const yaep_gp* g, const double* x1,
     return yaep__q_smooth(g, &s, m1 - m2, sqrt(vd > 0.0 ? vd : 0.0), 0.0);
 }
 
-YAEP_API int yaep_update_real(yaep_gp* g, const double* x, double y) {
+static int yaep__update_real(yaep_gp* g, const double* x, double y) {
     if (!g || !g->open) return YAEP_ERR_CLOSED;
     if (g->desc.lik != YAEP_LIK_GAUSSIAN) return YAEP_ERR_ARG;
     if (!(y == y)) return YAEP_ERR_ARG;
@@ -8560,7 +8581,7 @@ YAEP_API bool yaep_threshold_multi_cross(const yaep_gp* g) {
 
 /* --- public: hyperparameters -------------------------------------------- */
 
-YAEP_API int yaep_fit(yaep_gp* g) {
+static int yaep__fit(yaep_gp* g) {
     if (!g || !g->open) return YAEP_ERR_CLOSED;
     if (g->N < 2) { g->fit_delta = 0.0; return 1; }
     if (!g->fit_valid) return YAEP_ERR_NUMERIC;
@@ -8572,13 +8593,13 @@ YAEP_API double yaep_fit_delta(const yaep_gp* g) {
     return g->fit_delta;
 }
 
-YAEP_API int yaep_refit(yaep_gp* g) {
+static int yaep__refit(yaep_gp* g) {
     if (!g || !g->open) return YAEP_ERR_CLOSED;
     if (g->N == 0) return YAEP_OK;
     return yaep__infer(g, YAEP__START_KEEP, 0);
 }
 
-YAEP_API int yaep_argmax(yaep_gp* g, double* x, double* value) {
+static int yaep__argmax(yaep_gp* g, double* x, double* value) {
     yaep__scr s;
     int nd, best = -1, rc;
     double bv = -HUGE_VAL;
@@ -8599,6 +8620,49 @@ YAEP_API int yaep_argmax(yaep_gp* g, double* x, double* value) {
     if (g->desc.refine_steps > 0 && yaep__refine(g, &s, x, yaep__mean_score)) rc = -1;
     if (value) *value = yaep__opt_sign(g) * yaep__mean_score(g, &s, x);
     return rc;
+}
+
+/* The handle-changing calls leave a message on failure (README.md,
+ * Conventions); the work is in the yaep__ bodies so each return path does
+ * not repeat the snprintf. `floor` is -1 for the two calls where -1 is a
+ * result (a point that is not a candidate), so only a code below it is a
+ * failure. */
+static int yaep__fail(yaep_gp* g, int rc, int floor, const char* what) {
+    if (g && rc < floor)
+        snprintf(g->error, sizeof(g->error), "ysp_aep: %s: %s", what, yaep_strerror(rc));
+    return rc;
+}
+
+YAEP_API int yaep_next(yaep_gp* g, double* x) {
+    return yaep__fail(g, yaep__next(g, x), -1, "yaep_next");
+}
+YAEP_API int yaep_next_pair(yaep_gp* g, double* x1, double* x2) {
+    return yaep__fail(g, yaep__next_pair(g, x1, x2), 0, "yaep_next_pair");
+}
+YAEP_API int yaep_next_subset(yaep_gp* g, const int* subset, int n, double* x) {
+    return yaep__fail(g, yaep__next_subset(g, subset, n, x), -1, "yaep_next_subset");
+}
+YAEP_API int yaep_update(yaep_gp* g, const double* x, int outcome) {
+    return yaep__fail(g, yaep__update(g, x, outcome), 0, "yaep_update");
+}
+YAEP_API int yaep_update_pair(yaep_gp* g, const double* x1, const double* x2,
+                                int outcome) {
+    return yaep__fail(g, yaep__update_pair(g, x1, x2, outcome), 0, "yaep_update_pair");
+}
+YAEP_API int yaep_update_real(yaep_gp* g, const double* x, double y) {
+    return yaep__fail(g, yaep__update_real(g, x, y), 0, "yaep_update_real");
+}
+YAEP_API int yaep_fit_step(yaep_gp* g) {
+    return yaep__fail(g, yaep__fit_step(g), 0, "yaep_fit_step");
+}
+YAEP_API int yaep_fit(yaep_gp* g) {
+    return yaep__fail(g, yaep__fit(g), 0, "yaep_fit");
+}
+YAEP_API int yaep_refit(yaep_gp* g) {
+    return yaep__fail(g, yaep__refit(g), 0, "yaep_refit");
+}
+YAEP_API int yaep_argmax(yaep_gp* g, double* x, double* value) {
+    return yaep__fail(g, yaep__argmax(g, x, value), -1, "yaep_argmax");
 }
 
 YAEP_API int yaep_get_priors(const yaep_gp* g, yaep_priors* out) {
@@ -8659,7 +8723,7 @@ YAEP_API const yaep_trial* yaep_history(const yaep_gp* g, int* n) {
 
 /* One writer for three jobs, as in ysp/trials.h: count (out and cmp NULL),
  * write (out), and compare against a snapshot (cmp), which is how
- * yaep_load() checks the desc without a second description of the layout
+ * yaep_open_saved() checks the desc without a second description of the layout
  * that could drift from the first. */
 typedef struct yaep__w {
     unsigned char*       out;
@@ -8993,7 +9057,7 @@ static bool yaep__load_fail(yaep_gp* g, const char* msg, const char* field) {
     return false;
 }
 
-YAEP_API bool yaep_load(yaep_gp* g, const yaep_desc* desc, const void* buf, size_t len) {
+YAEP_API bool yaep_open_saved(yaep_gp* g, const yaep_desc* desc, const void* buf, size_t len) {
     yaep__w w;
     yaep__r r;
     yaep__scr s;
@@ -9003,18 +9067,18 @@ YAEP_API bool yaep_load(yaep_gp* g, const yaep_desc* desc, const void* buf, size
     if (!g) return false;
     if (!yaep_open(g, desc)) return false;
     if (!in)
-        return yaep__load_fail(g, "yaep_load: null snapshot", NULL);
+        return yaep__load_fail(g, "yaep_open_saved: null snapshot", NULL);
     if (len < 9 || in[0] != 'P' || in[1] != 'S' || in[2] != 'G' || in[3] != 'P')
-        return yaep__load_fail(g, "yaep_load: not a ysp_aep snapshot", NULL);
+        return yaep__load_fail(g, "yaep_open_saved: not a ysp_aep snapshot", NULL);
     memset(&r, 0, sizeof(r));
     r.in = in;
     r.len = len;
     r.pos = 4;
     if ((uint32_t)yaep__get(&r, 4) != YAEP__SNAP_FORMAT)
-        return yaep__load_fail(g, "yaep_load: the snapshot's format is not this "
+        return yaep__load_fail(g, "yaep_open_saved: the snapshot's format is not this "
                                 "header's", NULL);
     if (yaep__get(&r, 1) != (uint64_t)sizeof(yaep_real))
-        return yaep__load_fail(g, "yaep_load: the snapshot was written by a build "
+        return yaep__load_fail(g, "yaep_open_saved: the snapshot was written by a build "
                                 "with another YAEP_REAL", NULL);
     memset(&w, 0, sizeof(w));
     w.cmp = in;
@@ -9022,7 +9086,7 @@ YAEP_API bool yaep_load(yaep_gp* g, const yaep_desc* desc, const void* buf, size
     w.pos = r.pos;
     yaep__put_desc(&w, &g->desc);
     if (w.diff)
-        return yaep__load_fail(g, "yaep_load: desc.%s does not match the snapshot",
+        return yaep__load_fail(g, "yaep_open_saved: desc.%s does not match the snapshot",
                                 w.diff);
     r.pos = w.pos;
 
@@ -9048,7 +9112,7 @@ YAEP_API bool yaep_load(yaep_gp* g, const yaep_desc* desc, const void* buf, size
         g->last_index < -1 || g->last_index >= M || g->repeats < 0 ||
         g->fit_state < 0 || g->fit_state > 2 || g->fit_evals < 0 || g->fit_back < 0 ||
         (int)g->stop < (int)YAEP_STOP_NONE || (int)g->stop > (int)YAEP_STOP_FULL)
-        return yaep__load_fail(g, "yaep_load: the snapshot's counters are corrupt "
+        return yaep__load_fail(g, "yaep_open_saved: the snapshot's counters are corrupt "
                                 "or truncated", NULL);
     g->N = n;
     g->fit_step = yaep__get_f64(&r);
@@ -9103,10 +9167,10 @@ YAEP_API bool yaep_load(yaep_gp* g, const yaep_desc* desc, const void* buf, size
         }
     }
     if (r.bad)
-        return yaep__load_fail(g, "yaep_load: the snapshot is corrupt or truncated",
+        return yaep__load_fail(g, "yaep_open_saved: the snapshot is corrupt or truncated",
                                 NULL);
     if (r.pos != r.len)
-        return yaep__load_fail(g, "yaep_load: bytes after the snapshot's end", NULL);
+        return yaep__load_fail(g, "yaep_open_saved: bytes after the snapshot's end", NULL);
     g->cand_valid = false;
     g->error[0] = '\0';
     return true;
@@ -9207,7 +9271,7 @@ static int yaep__async_rc(int rt_rc) {
     }
 }
 
-YAEP_API bool yaep_async_start(yaep_async* a, const yaep_async_desc* desc) {
+YAEP_API bool yaep_async_open(yaep_async* a, const yaep_async_desc* desc) {
     yrt_pump_desc pd;
     if (!a) return false;
     memset(a->error, 0, sizeof(a->error));
@@ -9217,7 +9281,7 @@ YAEP_API bool yaep_async_start(yaep_async* a, const yaep_async_desc* desc) {
     a->fit_active = false;
     if (!desc || !desc->gp) {
         snprintf(a->error, sizeof(a->error),
-                 "ysp_aep: yaep_async_start needs desc.gp");
+                 "ysp_aep: yaep_async_open needs desc.gp");
         return false;
     }
     if (!yaep_is_open(desc->gp)) {
@@ -9276,7 +9340,7 @@ YAEP_API bool yaep_async_start(yaep_async* a, const yaep_async_desc* desc) {
     return true;
 }
 
-YAEP_API void yaep_async_stop(yaep_async* a) {
+YAEP_API void yaep_async_close(yaep_async* a) {
     if (!a) return;
     yrt_pump_close(&a->pump);   /* drains, then joins */
     if (a->running && a->gp && a->fit_in_idle) a->gp->desc.fit_every = a->fit_every;
@@ -9341,7 +9405,7 @@ YAEP_API int yaep_async_poll(const yaep_async* a, yaep_snapshot* out) {
     return seq;
 }
 
-YAEP_API int yaep_async_wait(yaep_async* a, uint32_t seq, uint64_t timeout_ns,
+YAEP_API int yaep_async_wait(yaep_async* a, uint32_t seq, int64_t timeout_ns,
                                yaep_snapshot* out) {
     int rc;
     if (!a) return YAEP_ERR_ARG;
