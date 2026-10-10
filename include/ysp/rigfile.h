@@ -26,7 +26,7 @@
  *       char err[256], hash[65];
  *       int i;
  *       if (yrig_load(&prof, NULL, err, sizeof err) != YRIG_OK) die(err);
- *       for (i = 0; i < prof.n_notes; i++) log(prof.notes[i]);   // checks
+ *       for (i = 0; i < prof.n_notes; i++) log_line(prof.notes[i]);   // checks
  *       if (yrig_hash(&prof, hash) != YRIG_OK) die("hash"); // for the data file
  *       ydev_desc base = { 0 };                        // sink, ring, roles
  *       base.sink = to_bridge;

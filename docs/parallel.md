@@ -37,9 +37,13 @@ the API.
 
 `YPAR_VERSION_MAJOR`, `_MINOR`, `_PATCH` and `_STRING` are new, as in
 `ysp/rt.h`. The CHANGELOG moved to the end of the top comment. The USAGE block
-zeroes the handle (`ypar_port pp = { 0 };`; the old block left it on the
-stack, which `ypar_open()` documents as a leak risk) and tests each return
-code.
+zeroes the handle and the desc with `memset()` and tests each return code.
+The old block left the handle on the stack, which `ypar_open()` documents as
+a leak risk, and its `ypar_desc desc = {0};` did not build as C++: both
+structs start with the `ypar_backend` enum, and C++ does not convert 0 to an
+enum. `= { 0 }` works for these structs in C only. The USAGE blocks of the
+device headers were each compiled as C99 (gcc -Wall -Wextra -Werror) and
+C++17 (g++) on 2026-10-10.
 
 The Python and MATLAB bindings keep their API: widths in microseconds and an
 exception (or a MATLAB error) on failure. Their C glue converts the units and

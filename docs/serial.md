@@ -68,7 +68,7 @@ unexercised. The header's top comment is the user-facing documentation
 ### Depends on ysp/rt.h
 
 v0.4 deletes every line of timing code in this header and includes `ysp/rt.h`
-instead: `yser_now_us` is `yrt_now_us`, the pulse-width wait is
+instead: `yser_now_us` became `yrt_now_us` (v0.5.0 removed it), the pulse-width wait is
 `yrt_sleep_until`, the reservation type is `yrt_sched_deadline`, the policy
 enum is `yrt_policy`, and the async-pulse thread is a `yrt_worker`. It is a
 hard dependency, in the `stb_truetype.h` / `stb_rect_pack.h` and

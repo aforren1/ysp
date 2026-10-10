@@ -37,7 +37,8 @@
  *       ybox_decoder dec;
  *       yin_event ev[32];
  *       ybox_pair pair[32];
- *       ybox_out out = { ev, 32, 0, pair, 32, 0 };
+ *       ybox_out out = { 0 };
+ *       out.ev = ev; out.ev_cap = 32; out.pair = pair; out.pair_cap = 32;
  *       if (ybox_init(&dec, YBOX_LINE, YIN_KIND_SYNC, 1) < 0) return 1;
  *       // for each read of n bytes at host time t_read:
  *       size_t used = 0;
