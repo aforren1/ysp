@@ -1,4 +1,4 @@
-/* ysp/gfx.h - v0.11.1 - public domain single-header stimulus graphics library
+/* ysp/gfx.h - v0.12.0 - public domain single-header stimulus graphics library
  *   (with MIT-licensed parts: see below)
  *
  *   Stimuli on GL ES 3.0, on top of ysp/screen.h: signed-distance shapes
@@ -35,436 +35,6 @@
  *   / MIT-0.
  *
  *   ---------------------------------------------------------------------
- *   CHANGELOG
- *   ---------------------------------------------------------------------
- *   v0.11.1 - ygfx_open_start() (OPEN START): the open in two calls, so
- *          the programs compile while ysp/screen.h v0.5.2's open()
- *          settles. Called from desc.on_context, it submits every built-in
- *          program and returns; ygfx_open() then waits for the link
- *          statuses. Without GL_KHR_parallel_shader_compile it submits
- *          nothing and ygfx_open() does the whole open, as before; the
- *          describe line says which (open_start=parallel or
- *          open_start=serial(...)). caps.parallel_compile in the backend
- *          interface (version unchanged). ygfx_close() deletes nothing
- *          when the screen's context is gone. Measured on the Iris Xe
- *          (docs/gfx.md, "v0.11.1"), cold program cache, on AC: gfx
- *          ready 2.57 s after yscr_open() was called in a window, was
- *          4.79 to 4.83 s; 2.46 to 2.47 s fullscreen, was 2.87 to 2.91 s
- *          (on battery 3.41 against 5.37 to 5.40 s, and 3.46 to 3.47
- *          against 3.85 to 3.89 s); a warm cache 24 to 51 ms earlier.
- *   v0.11.0 - ygfx_prime() (PRIME): draws every program made so far once,
- *          as zero-size quads, and waits for the GPU, so a kind's first
- *          trial frame does not pay ANGLE's first draw. Measured on the
- *          Iris Xe (docs/gfx.md, "Priming"): each kind's first frame cost
- *          2.5 to 12.9 ms more CPU in ygfx_end() without it, from a warm
- *          program cache too, and 0.09 to 0.42 ms with it; the prime of 20
- *          programs took 63 to 73 ms. With ysp/screen.h v0.5.0 (open()
- *          settles the display).
- *   v0.10.5 - VIDEO: an R8 or RG8 texture may state an encoding (matrix
- *          RGB, primaries DEVICE: gray is the display's white), drawn as a
- *          color image through the video program with the level in r and
- *          alpha in g. A pack's TEXTURE entry (docs/pack.md 4.9) now goes
- *          into ygfx_texture() as stored: an 8-bit gray PNG is sRGB codes,
- *          which the tool could linearize to 8 bits only by merging the
- *          dark codes. Other primaries on a gray texture are refused. An
- *          encoded texture used as a modulation, add, coverage or shader
- *          texture is refused as before, with a message that says why.
- *          YGFX_SHADER_CONTRACT is 2 (decided 2026-10-09 by the user): a
- *          body that samples ysp_tex0 needs v0.10.4's binding, and a
- *          contract-1 player would run it and read garbage.
- *   v0.10.4 - SHADER CONTRACT: stim.tex (user_desc.tex) is the body's
- *          ysp_tex0, ysp_utex0 for an R16UI texture: an uploaded texture
- *          or a render target. Before, a USER draw bound no texture, so
- *          ysp_tex0 read what the previous draw had left on its unit, and
- *          the feedback check could not see a body that sampled its own
- *          target. A tex that is not this gfx's, or a video texture, is
- *          refused (YGFX_ERR_ARG); a draw into the target it samples is
- *          YGFX_ERR_ORDER, as for an image. Found by
- *          examples/gfx/gratings.c (docs/rig_spec.md 15.6). The contract's
- *          version stays 1: the wrapper's text did not change.
- *   v0.10.3 - YGFX_SHADER_CONTRACT, the shader contract's version (1). A
- *          pack records it with each shader (docs/pack.md, SHADER) and the
- *          player refuses a shader built for another contract. It changes
- *          only when the wrapper's meaning changes; the test pins the
- *          wrapper's text, so a change to the text forces that decision.
- *   v0.10.2 - ygfx_default_cache_dir() is a wrapper of ysp/rt.h v0.7.0's
- *          yrt_user_dir(YRT_DIR_CACHE, "progcache"), which took over its
- *          rules unchanged. Needs ysp/rt.h v0.7.0.
- *   v0.10.1 - PROGRAM CACHE: ygfx_default_cache_dir() gives the per-user
- *          cache folder (it makes no file or folder). The describe line names
- *          the cache folder and gives hits and misses.
- *   v0.10.0 - NOISE: dist YGFX_SIMPLEX, 3D simplex gradient noise as fBm
- *          (noise_desc.scale, z, octaves, lacunarity, gain; stimulus fields
- *          gn_*; parameters YGFX_P_NOISE_SCALE, _Z, _LACUNARITY, _GAIN,
- *          appended), in 32-bit integers on the GPU, so that
- *          ygfx_simplex_value() gives the same bits on the CPU. Not
- *          band-limited (NOISE). Breaking: ygfx_stim grew; the noise
- *          program's cache key changed.
- *   v0.9.0 - NOISE, the noise dither and ygfx_noise_gauss() draw new
- *          patterns. The hash is triple32 (Chris Wellons, hash-prospector,
- *          public domain), not pcg_hash; the key of a point is its index
- *          times an odd key of the seed, XOR a second key, through one hash
- *          (ygfx_hash2(), ysp_hash2()), not three nested hashes. The
- *          nested form, hash(x ^ hash(y ^ hash(seed))), made 29 % of
- *          full-screen frames hold two rows that were copies of each other
- *          (each 2048-value block permuted), whatever the hash; PractRand
- *          failed it at 256 MB. The new form passes 16 GB, frame by frame
- *          and seed by seed (docs/gfx.md, v0.9). The same GPU cost.
- *          Breaking: every noise pattern, the dither pattern, and a user
- *          shader's ysp_hash() values; ygfx_noise_value() and the GPU
- *          still agree bit for bit.
- *   v0.8.0 - SETUP PASSES: ygfx_begin_setup() and ygfx_end_setup()
- *          run target passes outside a screen frame: a page of text, a
- *          blur layer, artwork rendered at setup. CURVE RUNS: a run whose
- *          items are all turned off the quarter turns, or an aliased run,
- *          takes the rays program by itself (the same bits, 0.5 to 0.8 ms
- *          less on a turned page); the rays program is made at
- *          ygfx_crun() for turned, aliased, grouped and YGFX_I_ORI
- *          runs. Breaking: none (a turned run's cache key set gains the
- *          rays program).
- *   v0.7.0 - CURVE RUNS: crun_desc.rays (YGFX_STIM_RAYS, appended) draws
- *          a run by the rays even where the exact area applies, on a second
- *          text program made at the first such run: a 12 px page 5.3 ms
- *          against 7.5. The text program works in px with y down, so a run
- *          drawn once into a target and composited at 1:1 on whole px has
- *          the run's coverage bit for bit. NOISE: dist YGFX_GAUSSIAN, a
- *          table of 65536 normal quantiles (256 KB, made at open), the same
- *          bits on the GPU and from ygfx_noise_value(). VECTOR: three
- *          specialized copies of the vector program for large RRECTs,
- *          dashed CIRCLEs and CIRCLE compounds (14 programs at open; the
- *          kinds worker's design, docs/gfx.md). ELLIPSE's quarter
- *          perimeter by the arithmetic-geometric mean: a pack 0.06 us, was
- *          36 us (1000 ELLIPSEs 0.06 ms of CPU, was 36 ms); the same floats.
- *          Fixed: none. Breaking: ygfx_crun_desc grew (rays); the text and
- *          noise programs' cache keys changed.
- *   v0.6.0 - CURVE SETS: ygfx_cset_make(), ygfx_cset_add(),
- *          ygfx_cset_free(), and with no gfx ygfx_cset_check() and
- *          ygfx_cset_winding(): one font or artwork set as two arrays
- *          (texels, words), the format of docs/gfx.md "Curve sets: the
- *          format" (version 1), uploaded as one RGBA32F and one RGBA32UI
- *          texture. CURVE RUNS: ygfx_crun() and ygfx_crun_desc, items
- *          ygfx_citem (ygfx_inst's layout with glyph in phase's place),
- *          kind YGFX_TEXT (until now not implemented), YGFX_P_SIZE,
- *          YGFX_STIM_ALIASED; ygfx_hit() and ygfx_hit_index() on a
- *          run. BLUR: ygfx_blur, ygfx_blur_desc, ygfx_blur_make(),
- *          ygfx_blur_apply(), ygfx_blur_free(); targets in R16F and
- *          RGBA32F; image_desc.coverage (YGFX_STIM_COVERAGE). The video
- *          program reads its constants as flat inputs: NV12 at 1080p costs
- *          1.10 to 1.16 times an RGBA8 image (was 1.64). Backend: the
- *          format YGFX_RGBA32UI, caps.max_texture (appended; 0 = 2048),
- *          a sampler in the vertex shader; version 3 still. Breaking:
- *          ygfx_stim grew (set, items, size); every program's cache key
- *          changed (the vertex text), so a cache compiles once again.
- *   v0.5.0 - COLOR: the calibration is ysp/color.h's. ygfx_cal and its
- *          calls are ycol_cal and ycol_cal_* (init, add, set_spectra,
- *          derive, check, save, load, nominal, lms, dir_cone, dkl_matrix,
- *          dir_dkl), YGFX_CAL_* and YGFX_GUN_* are YCOL_CAL_* and
- *          YCOL_GUN_*, ygfx_dkl_from_sph and ygfx_max_contrast are
- *          ycol_dkl_from_sph and ycol_max_contrast, and
- *          ygfx_cone_fundamentals(nm, lms) is
- *          ycol_cone_fundamentals(YCOL_CONES_SS2, nm, lms): the same
- *          code, the same bits, the same .yspcal bytes. desc.cal is a
- *          const ycol_cal*. ysp/color.h must be beside ysp/gfx.h.
- *          open() makes a ysp/color.h context (ycol_ctx) from desc.cal,
- *          desc.background and the new desc.cones and desc.lum, and takes
- *          PAINT's matrices and VIDEO's primaries from it;
- *          ygfx_color(g) returns it, so a caller converts colors and
- *          DKL directions with the background and luminance PAINT uses. A
- *          YGFX_EV_COLOR ring record at open logs it. desc.lum (a
- *          participant's luminance from flicker photometry) sets the DKL
- *          luminance axis for DKL_POLAR paint; desc.cones picks the 2 or
- *          10 degree cones. OKLAB paint now works on absolute XYZ, the
- *          display's black included, against the display's white:
- *          ysp/color.h's Oklab. A calibration whose black has no light
- *          gives the same pixels as v0.4 (every calibration in v0.4's
- *          test); one with 0.5 cd/m2 of black under a white of 80 moves
- *          the test's OKLAB gradient by up to 5.2e-3 of full scale. A calibration that
- *          is not sealed (no CRC after the last change) is refused at
- *          open: ycol_cal_derive() and ycol_cal_save() seal it.
- *   v0.4.0 - PROGRAM CACHE: desc.cache (a load and store pair the caller
- *          owns), ygfx_file_cache_init(), ygfx_program_stats(); an
- *          entry is checked by a second hash of its key and a hash of its
- *          binary before the driver sees it. VIDEO: YGFX_NV12 and
- *          YGFX_I420 textures with a stated encoding (matrix, range,
- *          transfer, primaries, siting) converted to linear light in the
- *          image program; encoded RGB textures; texture_update_planes(),
- *          texture_update_plane(), texture_import() (GL names; D3D11 RGBA
- *          and NV12 through ANGLE), texture_rebind(). INSTANCES:
- *          ygfx_instances(), ygfx_inst_grid(), ygfx_hit_index(),
- *          ygfx_inst_resolve(), desc.max_instances. ygfx_screen(),
- *          ygfx_calibrated(), ygfx_features(). Fixed (found by the
- *          gallery): ygfx_cal_derive() seals the CRC (the manual's recipe
- *          failed open with "CRC mismatch" until a save; cal_add() and
- *          cal_set_spectra() unseal it); a straight-alpha image drawn with
- *          linear filtering is filtered as premultiplied texels (clear
- *          texels darkened its edges; image_desc.premultiplied states a
- *          premultiplied texture); the range rule holds on DIST atlases
- *          with texture_desc.sdf_range (glyph runs and src rectangles on
- *          one without it are refused); a glyph run with no buffer read
- *          past the pool. Added: first (a run or dot field from any record
- *          of a shared buffer) on glyph and dot descs; shape_p on the
- *          grating, noise and user descs. Breaking: backend version 3
- *          (BACKENDS says what an out-of-tree backend changes);
- *          ygfx_texture_update() on a planar texture is refused; a
- *          straight-alpha image drawn linear looks different at its
- *          transparent edges (correct now). Also: end() reorders draws
- *          that do not overlap, so runs form across interleaved kinds
- *          (DRAW ORDER; identical pixels); a stimulus that can cover no
- *          pixel is refused with a message (v0.3 drew nothing); a dot
- *          field with no aperture set draws (v0.1 to v0.3 culled every
- *          dot); a POLYGON with no box takes its vertices' own; an empty
- *          dot field or glyph run returns OK; every refusal in draw()
- *          names its reason.
- *   v0.3.0 - the vector program (VECTOR SHAPES): SHAPE kinds RRECT, ARC,
- *          PIE, CAPSULE, NGON, STAR, ELLIPSE, QBEZIER, POLYLINE and
- *          COMPOUND (ygfx_compound(), up to 56 primitives folded by
- *          UNION, INTERSECT, SUBTRACT, XOR and smooth variants, onion);
- *          POLYGON fillets; offset (dilation) on every SHAPE; dashes,
- *          dash_offset, dash_snap, trim and caps; effects in one pass
- *          (drop shadow, glow, inner shadow, two bands, an exact blur for a
- *          sharp RECT's shadow); paint (LINEAR, RADIAL, ANGULAR, VERTEX;
- *          mixed in RGB, OKLAB or DKL_POLAR); blend modes OVER, ADD and
- *          MULTIPLY on color stimuli; ygfx_length(); the parameter tables
- *          ygfx_prim_params(), ygfx_fx_params(), ygfx_paint_params()
- *          and ygfx_bind.field. DISTANCE TEXTURES: MSDF and MTSDF masks
- *          with sdf_range and the range rule; a mask's src rectangle;
- *          ygfx_glyphs(), an instanced glyph run. The edge model's limits
- *          are stated and measured (EDGES, EXACTNESS). Backend version 2:
- *          deferred pipelines and pipeline_finish (ANGLE compiles the
- *          programs in parallel), bindings.blend, YGFX_BLEND_MULTIPLY,
- *          two vec4 instance attributes. Breaking: a backend must set
- *          version 2 and may leave pipeline_finish NULL; max_draws counts
- *          uniform blocks (a vector stimulus with data takes more than
- *          one); a USER stimulus with a MASK_TEX aperture loses p[28..31]
- *          to the mask's rectangle.
- *   v0.2.0 - strokes on every SDF shape and aperture (CENTER, INSIDE or
- *          OUTSIDE, the same edge profile on both sides of the band; ROUND
- *          or MITER joins, MITER on RECT, CROSS and convex POLYGON with a
- *          miter limit and a bevel beyond it); YGFX_MASK_TEX, a shape from
- *          a signed-distance texture, and ygfx_sdf_from_mask(); sprites:
- *          an IMAGE's source rectangle, nearest or linear, with no bleed;
- *          tint; flat groups (ygfx_group: place, anchor, box, x, y, ori,
- *          scale, opacity) with bindings; render targets
- *          (ygfx_target(), ygfx_begin_target(), ygfx_end_target(),
- *          ygfx_read_target()) and YGFX_STIM_ADD images; the YGFX_ADD
- *          shader mode; the GL state cache follows yscr_gl_epoch().
- *          Breaking: ysp_look.w in the shader contract is the stroke band's
- *          center offset, not visible; ygfx_stim and ygfx_bind grew
- *          (zero a ygfx_bind you fill field by field; an initializer list
- *          gets a NULL group for gcc -Wextra); the OVER blend now
- *          accumulates alpha (the scene's output is unchanged); IMAGE's
- *          linear sampling is by hand from four texelFetch, clamped to the
- *          source rectangle, not the sampler's.
- *   v0.1.0 - first release.
- *
- *   STATUS: v0.10.0 (docs/gfx.md "v0.10"): SIMPLEX on the GPU equals
- *   ygfx_simplex_value() at every pixel of 6 fields (227000 pixels; 1 to
- *   8 octaves, lacunarity 1 to 3, z negative and fractional) on the Iris
- *   Xe, WARP and SwiftShader. The integer form is within 1.4e-3 of the same
- *   noise in double. Full screen on the Iris Xe: 1.83 ms for one octave,
- *   6.56 ms for four, 12.96 ms for eight (UNIFORM 0.40).
- *   v0.9.0 (docs/gfx.md "v0.9" has the hash's evaluation):
- *   NOISE on the GPU equals ygfx_noise_value() at every check, for
- *   UNIFORM, BINARY and GAUSSIAN, on the Iris Xe, WARP and SwiftShader.
- *   v0.8.0 (docs/gfx.md "v0.8"). A page rendered in a setup
- *   pass equals the page rendered in a frame, target and composite, bit for
- *   bit; a blur applied in a setup pass equals one applied in a frame; the
- *   frame after a setup pass equals one with none before it, scene and
- *   output codes (Iris Xe, WARP, SwiftShader). Turned, aliased and
- *   item-turned runs on the rays program equal the exact-area program's
- *   pixels, bit for bit, on all three; a run with one item on a quarter
- *   turn, or with its items in a buffer, stays on the exact-area program.
- *   A 12 px page turned 15 degrees: 5.09 to 5.10 ms, was 5.83 to 6.03; a
- *   16 px CJK page turned: 5.92 to 5.94 ms, was 6.39 to 6.61.
- *   v0.7.0 (docs/gfx.md "v0.7" has the tables). A run with
- *   .rays draws what the program without the exact area draws, bit for bit;
- *   a run cached in an RGBA16F or RGBA32F target and composited at 1:1
- *   equals the run drawn, bit for bit, over black (Iris Xe, WARP,
- *   SwiftShader); over a gray background an RGBA16F target differs by one
- *   f16 step (its alpha was rounded before the blend), an RGBA32F one not
- *   at all. ysp/outline.h's set of the test glyphs, overlaps resolved:
- *   every glyph within 1.15e-5 of the exact coverage. NOISE GAUSSIAN: the
- *   table within 6e-8 (relative) of quantiles found by bisection on erfc,
- *   variance 1, symmetric bit for bit; 10^6 checks pass Kolmogorov-Smirnov
- *   at 1 % (D 0.00095); the GPU equals ygfx_noise_value() at every check
- *   on all three renderers. The specialized vector programs: 117 stimuli
- *   drawn by each and by the generic program, 0 values differ. Cost (Iris
- *   Xe, AC, the shared guard): a 12 px page (ysp/outline.h's set) 7.43 to
- *   7.50 ms exact, 5.28 to 5.31 ms with .rays, 0.50 ms composited from a
- *   target; GAUSSIAN noise full screen 0.41 to 0.42 ms against UNIFORM's
- *   0.37 to 0.39; RRECT fill 0.56 to 0.59 ms (was 0.95), a dashed circle
- *   0.50 to 0.53 (was 0.92 to 0.95), a compound of 8 with every effect 0.94
- *   to 0.98 (was 1.60 to 1.62); ygfx_open() 2.20 to 2.49 s, was 2.04 to
- *   2.12 (three more programs).
- *   v0.6.0 (docs/gfx.md "v0.6" has the tables). Curve runs
- *   against the exact box coverage of each pixel in double (scanlines,
- *   Gauss-Kronrod in y, the fill rule per scanline): on resolved glyphs
- *   not turned, the exact area is within 1.8e-5 of it; elsewhere the rays'
- *   mean error on edge pixels is 0.029, 0.019, 0.009 and 0.004 at 8, 12, 24
- *   and 48 px per em, the same at 0, 15 and 45 degrees (Lengyel's ramp
- *   alone: 0.031 to 0.074 at 8 px, the turned ones worst), and the largest
- *   error 0.56, at corners and self-intersections. Iris Xe, WARP and
- *   SwiftShader agree pixel by pixel within 6.5e-5 but for one SwiftShader
- *   pixel (0.087, where a ray passes a corner). The probe's 0.49
- *   difference between renderers came from interpolated em coordinates:
- *   with them, SwiftShader moved 26156 pixels by more than 1e-3 (up to
- *   0.48) from the Iris Xe; from gl_FragCoord, none. A curve run equals
- *   its items drawn alone and a buffer copied items, bit for bit; a glyph
- *   added at run time draws as one made at open; ygfx_hit() agrees with
- *   aliased coverage at all 64000 pixels. The blur against the exact blur
- *   of a rect (erf products): 0.20, 0.031, 0.0087, 0.0022, 5.4e-4 and
- *   1.5e-4 at sigma 0.5, 1, 2, 4, 8 and 16 (RGBA32F); a 2x source 0.038,
- *   0.0076, 0.0021, 5.4e-4, 1.4e-4 and 3.8e-5; 16-bit targets level off at
- *   about 8e-4. 29 deliberate faults in v0.6, each caught (docs/gfx.md);
- *   two first survived and led to a fix (a curve that turns back before a
- *   ray counted as crossing it).
- *   Cost on the Iris Xe at 1920 x 1200 (AC, the lock held, interleaved; GPU
- *   over an empty frame; backward lists): a 12 px Latin page of 26205
- *   glyphs 7.9 to 8.2 ms with the exact area, 5.5 to 5.8 ms by the rays
- *   alone; a 16 px CJK page of 7140 glyphs 10.0 to 10.2 and 7.2 to 7.7 ms;
- *   1612 glyphs at 48 px 1.7 ms; 45 glyphs at 200 px 1.1 ms (rays 1.6); a
- *   40-glyph line with its items copied each frame 0.09 ms of GPU and 17 us
- *   of CPU. The text program compiles in 430 ms (140 ms without the exact
- *   area) on ANGLE's D3D11; the program cache loads it after. The blur, full
- *   screen R16F: 1.42, 1.96, 3.34 and 5.96 ms at sigma 0.5, 1, 2 and 4;
- *   RGBA32F at sigma 2 3.57 ms; a 400 x 200 layer drawn, blurred and drawn
- *   0.10 to 0.27 ms at sigma 0.5 to 4 (1x), 0.17 to 0.66 ms (2x). Video
- *   1080p: NV12 0.64 to 0.68 ms, RGBA8 0.56 to 0.59 ms (v0.5: NV12 0.96).
- *   ygfx_open() and every v0.3 and v0.4 row: unchanged (interleaved
- *   against v0.5.0).
- *   v0.5.0: the calibration moved to ysp/color.h with the same
- *   bits: every scene and output readback of the test, hashed, is the same
- *   as v0.4's on the Iris Xe, WARP and SwiftShader, and v0.4's calibration
- *   code and ysp/color.h's agreed bit for bit before the move (52
- *   calibrations, 2100 raw calls, PAINT's matrices and the video
- *   primaries; docs/color.md). The new OKLAB black term: within 7.3e-7
- *   of an independent double reference on all three, on a calibration
- *   whose black has 0.5 cd/m2 under a white of 80, where v0.4's black-free
- *   form would have moved the gradient by 5.2e-3. What follows is v0.4's
- *   status, which v0.5 does not change.
- *   v0.4.0: built and run on one Windows 11 laptop (Intel Iris Xe,
- *   a 1920 x 1200 panel at 60 Hz) with the ANGLE in Docker Desktop's
- *   Electron folder (2.1.23876, git fffbc739779a) and with CI's, from
- *   Electron v38.8.6 (2.1.25848, git 85cc0e0b9cc3): the same numbers. No
- *   photometer, spectroradiometer, photodiode or Bits# has been used: no
- *   number here is a measurement of light.
- *   Pixels (tests/adapt/gfx_test.c, offscreen, every stimulus read back
- *   from a float32 scene against a CPU reference in double at pixel
- *   centers, positions through the inverse of the one coordinate transform)
- *   on four GL ES 3.0 renderers: ANGLE on D3D11 (Iris Xe), on D3D11 WARP,
- *   on Vulkan SwiftShader, and Mesa 23.2 llvmpipe (WSL2). Largest errors
- *   (Iris Xe, WARP, llvmpipe / SwiftShader): soft edges 1.7e-5 / 9.5e-5,
- *   grating 1.7e-5 / 1.4e-4, gabor 1.2e-6 / 8.8e-5, dots 1.5e-5 / 9.5e-5,
- *   strokes 1.6e-5 / 9.5e-5, MASK_TEX 1.4e-5 / 9.5e-5, linear sprites
- *   8.4e-7, tint 6.3e-8, group members against the same stimuli placed
- *   alone 6.0e-8 of full scale; images, noise, hard edges and hard bands,
- *   MITER and bevels against their CPU form, sprite borders (no bleed),
- *   shapes through a target against direct drawing, the output stage's
- *   codes (all 256, a CLUT, rounding at 0.005 above each halfway point, a
- *   CLUT through a target), the 8 x 8 ordered dither, the scene with v0.2's
- *   OVER alpha against v0.1's, the anchor's invariance and batched against
- *   single draws: exact. ygfx_hit() agrees with the GPU's coverage >= 0.5
- *   on every pixel not within 1e-3 px of an edge, strokes and groups
- *   included. ygfx_sdf_from_mask() equals a brute-force search. A present
- *   callback that changes GL state leaves the next frame exact (without
- *   the epoch, 901 values differ). docs/gfx.md has the tables and the
- *   tolerances. 14 deliberate faults in v0.1 and 18 in v0.2 were each
- *   caught.
- *   Calibration math against published values: sRGB primaries to XYZ
- *   within 3.9e-5 of IEC 61966-2-1's printed matrix; the CLUT of a display
- *   with sRGB's transfer function within 1.3e-3 (17 levels) and 3.6e-5 (64
- *   levels) of sRGB's encoding; the embedded cone fundamentals equal CVRL's
- *   linss2_10e_1; RGB to LMS, the DKL matrix and its unit axes within 7e-8
- *   (relative) of Psychtoolbox's ComputeDKL_M run in MATLAB R2023a on its
- *   own B_monitor spectra.
- *   Cost on the Iris Xe at 1920 x 1200 (examples/gfx/bench.c, GPU time from
- *   frames between two glFinish calls, AC and battery runs): an empty frame
- *   (scene clear and the output stage) 0.42 to 1.34 ms of GPU; 1000 gabors
- *   of 256 x 256 about 9.3 to 11 ms of GPU and 0.2 to 0.5 ms of CPU
- *   (batched; 2.1 to 5.0 ms one draw each); 100000 dots uploaded each frame
- *   1.5 to 2.0 ms of GPU and 0.65 to 1.3 ms of CPU; a full-frame RGBA8
- *   upload 1.1 to 2.6 ms of CPU. end()'s own CPU time for an empty frame is
- *   56 to 260 us mean, which misses the 10 us planned; the time is in
- *   ANGLE's calls, not broken down further. ygfx_open() 1.96 to 2.14 s
- *   in v0.3 (three runs; eleven programs, the vector program always
- *   included; ANGLE compiles them in parallel when every link starts
- *   before any status is read: a probe of four programs went from 7.3 s
- *   to 3.0 s. v0.2's nine took 1.3 to 1.4 s).
- *   v0.2 (AC, two runs): a stroke costs 1.05 to 1.17 times its fill's GPU
- *   time; a full-screen target drawn as an image 0.43 ms of GPU, so 1000
- *   gabors rendered once and added each frame cost 0.43 ms against 9.1 to
- *   9.2 ms drawn each frame; a target pass 4.7 us of CPU; 1000 sprites
- *   from one atlas 0.49 ms of GPU and 155 us of CPU.
- *   v0.3 pixels (the same method; docs/gfx.md has the tables, Iris Xe
- *   / WARP / SwiftShader / llvmpipe): the new kinds, filled and stroked,
- *   soft, against their CPU form 1.7e-5 / 8.2e-6 / 9.6e-5 / 8.2e-6; with
- *   dashes or trim 4.0e-4 / 4.0e-4 / 2.5e-3 / 5.8e-5 (the arc length's
- *   float error at a dash end); the exact kinds against F(brute-force
- *   Euclidean distance) 4.3e-6 / 4.9e-6 / 4.9e-6 / 4.9e-6; QBEZIER as
- *   chords 0.0050 px from the curve; effects in one pass against the same
- *   layers drawn apart 1.9e-5 / 5.7e-6 / 1.2e-4 / 5.7e-6; EXACT_BLUR
- *   against the erf product 1.5e-7 to 1.7e-7; paint RGB 1.2e-6, OKLAB
- *   against Ottosson's matrices through the calibration 1.8e-6, DKL_POLAR
- *   against ycol_cal_dir_dkl() 1.5e-5 / 6.3e-6 / 1.6e-4 / 1.3e-6,
- *   VERTEX against barycentric 1.1e-7; MSDF against the CPU's bilinear
- *   median 3.5e-6; glyph runs, batching and MULTIPLY: exact or 4.8e-8. The
- *   edge model against a supersampled Gaussian blur: 0.2500 at a right
- *   angle, 0.0406 and 0.0100 on discs of 5 and 20 SD, a union's crease
- *   0.0822 (0.0830 predicted), a MITER corner 0.0800, on all four. 26
- *   deliberate faults in v0.3: 24 caught on llvmpipe, one (the star's
- *   reflection) only on D3D11, one equivalent (EXACTNESS).
- *   v0.3 cost (Iris Xe, AC, GPU over an empty frame, full screen): v0.2
- *   rounded rect 0.40 ms, RRECT 0.93 ms (2.3x, the bar was 1.3x), with RGB
- *   paint 1.38 ms, OKLAB 1.54 ms (1.65x solid, bar 1.1x), STAR 0.86 ms,
- *   ELLIPSE 1.32 ms; an 8 px stroke 0.27 ms, dashed 0.90 ms; a compound of
- *   1, 2, 8 and 32 circles 0.78, 1.22, 3.53 and 12.4 ms (0.163 ms per
- *   primitive per Mpx, bar 0.15); a compound of 8 in a 600 x 400 box 0.62
- *   ms, with every effect 1.62 ms (bar 1.0); 100 compounds of 4, 120 us of
- *   CPU (bar 600); a run of 200 MSDF glyphs 0.12 ms of GPU and 18 us of CPU
- *   (bars 0.2 ms, 20 us).
- *   In an 800 x 600 window on the composition swapchain, 1 minute each
- *   (v0.1): DRAW p99 0.48 to 0.79 ms with up to 100 gabors or 10000 dots, 0
- *   to 2 late targets per minute. No C runtime heap call in 566 frames of
- *   an MSVC debug build (v0.1; a control with one malloc per frame counted
- *   569).
- *   Builds, warnings as errors: MSVC 19.44 (CMake) and 19.51 (C11 and
- *   C++17), MinGW-w64 gcc 16.1 (C99, C11, C++17), gcc 11.4 on WSL2 (C99,
- *   C11, C++17, ASan and UBSan), emcc 6.0.10 (C11 run in node; C++17
- *   compiled); v0.3 again on each. Under ASan the
- *   test leaves GL out unless YGFX_TEST_DEVICES names it: Mesa leaks 112
- *   bytes from a module it unloads.
- *   NOT done: 10-bit, Mono++ and Color++ output (refused: ysp/screen.h makes
- *   RGBA8 back buffers, this panel's link is 8 bits per color, and no
- *   device was there to verify); stereo (refused); text layout (a glyph
- *   run draws placed glyphs; there is no atlas tool yet); cubic Beziers;
- *   filtered noise on the GPU; fullscreen runs; specialized vector programs
- *   past the three that met their bars (docs/gfx.md); any other GPU,
- *   macOS, X11 or Wayland (ysp/screen.h's stubs), WebGL; v0.4 on WSL,
- *   llvmpipe and emcc.
- *   v0.4 (docs/gfx.md has the tables; Iris Xe, WARP, SwiftShader):
- *   the program cache: every frame drawn from cached programs equals the
- *   same frame compiled, bit for bit, and a damaged, truncated, colliding
- *   or foreign entry is compiled instead (11 cases); ygfx_open() 11.4 to
- *   35 ms warm against 2.3 to 5.3 s without a cache (AC). Video: NV12 and
- *   I420 through 3 matrices, 2 ranges, 3 sitings and 2 chroma filters
- *   within 3.1e-7 of a double reference; the transfers 7.5e-7; primaries
- *   through a calibration 1.3e-6; the 256 codes through TRC_DEVICE and a
- *   CLUT exact; D3D11 NV12 import (an array slice, an NT handle with a
- *   keyed mutex, a legacy shared handle) 5.2e-7. 1080p: NV12 0.91 ms of
- *   GPU and 0.30 to 0.39 ms to update, RGBA8 0.56 ms and 0.91 to 1.03 ms.
- *   Instances: each element within 9.2e-6 of the same stimulus drawn
- *   alone, the palette's integer entries exact, ygfx_hit_index() equal
- *   to the GPU's coverage; 10000 gabors 177 to 191 us of CPU and 1.26 to
- *   1.33 ms of GPU (5.5 ms one stimulus each). The draw order: 20 frames
- *   reordered equal call order bit for bit; 1000 interleaved stimuli of 4
- *   kinds 1.1 ms of GPU and 0.47 ms of CPU (7.2 and 3.3 in call order).
- *   35 deliberate faults in v0.4, each caught. Fixed: v0.1's dot fields
- *   with no aperture set drew nothing (aperture 0 was a 0 x 0 RECT): the
- *   dot rows measured before v0.4 are void.
- *   Outside this block and docs/gfx.md, a number in this header is a
- *   measurement only where the text says "measured".
- *
- *   ---------------------------------------------------------------------
  *   USAGE
  *   ---------------------------------------------------------------------
  *   Do this:
@@ -490,22 +60,33 @@
  *       }
  *
  *       int main(void) {
- *           ygfx_desc gd = { .background = { 0.5f, 0.5f, 0.5f } };
- *           if (!yscr_open(&scr, &(yscr_desc){ .windowed = true,
- *                              .on_context = start_gfx, .on_context_ctx = &gd })) return 1;
- *           if (!ygfx_open(&gfx, &gd)) return 1;
- *           ygfx_stim g = ygfx_gabor(&(ygfx_gabor_desc){
- *               .sf = 1 / 32.0f, .sigma = 32, .contrast = 0.5f });
+ *           ygfx_desc gd = { 0 };
+ *           gd.background[0] = gd.background[1] = gd.background[2] = 0.5f;
+ *           yscr_desc sd = { 0 };
+ *           sd.windowed = true;
+ *           sd.on_context = start_gfx;
+ *           sd.on_context_ctx = &gd;
+ *           if (!yscr_open(&scr, &sd)) return fail(yscr_error(&scr));
+ *           if (!ygfx_open(&gfx, &gd)) return fail(ygfx_error(&gfx));
+ *           ygfx_gabor_desc ga;                 // an enum first: memset, not { 0 }
+ *           memset(&ga, 0, sizeof ga);
+ *           ga.sf = 1 / 32.0f; ga.sigma = 32; ga.contrast = 0.5f;
+ *           ygfx_stim g = ygfx_gabor(&ga);
  *           yscr_frame f;
  *           while (yscr_begin(&scr, &f) == YSCR_OK) {   // Shift+Esc ends it
  *               ygfx_begin(&gfx, &f);
  *               ygfx_draw(&gfx, &g);
- *               ygfx_end(&gfx);
+ *               if (ygfx_end(&gfx) < 0) fail(ygfx_error(&gfx));
  *               yscr_flip(&scr);
  *           }
  *           ygfx_close(&gfx);
  *           yscr_close(&scr);
  *       }
+ *
+ *   Every call on a gfx that fails writes ygfx_error() before it returns
+ *   its code (or its 0 id). In C99 and C++20 compound literals do a desc
+ *   in one line: ygfx_gabor(&(ygfx_gabor_desc){ .sf = 1 / 32.0f, .sigma =
+ *   32, .contrast = 0.5f }).
  *
  *   PsychoPy and Psychtoolbox, for comparison:
  *
@@ -537,13 +118,14 @@
  *   A trial with timeline bindings (examples/timeline/gfx_trial.c runs it):
  *
  *       static ygfx_stim grating;
- *       static const ygfx_bind binds[] = {
- *           { .stim = &grating, .param = YGFX_P_VISIBLE,  .channel = GRATING_ON }, // onset, offset
- *           { .stim = &grating, .param = YGFX_P_CONTRAST, .channel = CONTRAST   }, // a tween or keys
+ *       static const ygfx_bind binds[] = {   // stim, param, channel
+ *           { &grating, YGFX_P_VISIBLE,  GRATING_ON },   // onset, offset
+ *           { &grating, YGFX_P_CONTRAST, CONTRAST   },   // a tween or keys
  *       };
  *       ...
  *       yscr_begin(&scr, &f);
- *       ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, fired, 8);
+ *       ytl_frame tf = { f.onset, f.period, f.index };
+ *       ytl_evaluate(&tl, &tf, fired, 8);
  *       ygfx_apply(binds, 2, ytl_values(&tl));
  *       yscr_mark(&scr, YSCR_PHASE_EVALUATE);
  *       ygfx_texture_update(&gfx, noise, 0, 0, w, h, next_noise, 0);  // if any
@@ -1602,14 +1184,460 @@
  *
  *   LICENSE: public domain / MIT-0, with the MIT-licensed parts named at
  *   the top; all notices are at the end of the file.
+ *
+ *   ---------------------------------------------------------------------
+ *   CHANGELOG
+ *   ---------------------------------------------------------------------
+ *   v0.12.0 - The ysp conventions (README.md, Conventions). Every call on
+ *          a gfx that fails writes ygfx_error() before it returns: the
+ *          frame calls (begin, draw, draw_n, end, the target and setup
+ *          passes, prime), the uploads and reads, the LUT, the blur and
+ *          curve set calls, and the makers of textures, targets, buffers,
+ *          pipelines and curve sets (a 0 id). A specific message stays; a
+ *          call that wrote none gets "ysp_gfx: <call>: <code's text>".
+ *          Before, a draw outside begin..end or a full queue returned its
+ *          code with the message of an older failure. The calls on a const
+ *          gfx (describe, hit_index, simplex_value) read it and return the
+ *          code only. ysp/color.h v0.2's ycol_ctx_open() builds the color
+ *          context. No signature and no time field changed: the desc and
+ *          the stimuli hold no time (NOTHING READS A CLOCK). USAGE builds
+ *          as C99 and C++17.
+ *   v0.11.1 - ygfx_open_start() (OPEN START): the open in two calls, so
+ *          the programs compile while ysp/screen.h v0.5.2's open()
+ *          settles. Called from desc.on_context, it submits every built-in
+ *          program and returns; ygfx_open() then waits for the link
+ *          statuses. Without GL_KHR_parallel_shader_compile it submits
+ *          nothing and ygfx_open() does the whole open, as before; the
+ *          describe line says which (open_start=parallel or
+ *          open_start=serial(...)). caps.parallel_compile in the backend
+ *          interface (version unchanged). ygfx_close() deletes nothing
+ *          when the screen's context is gone. Measured on the Iris Xe
+ *          (docs/gfx.md, "v0.11.1"), cold program cache, on AC: gfx
+ *          ready 2.57 s after yscr_open() was called in a window, was
+ *          4.79 to 4.83 s; 2.46 to 2.47 s fullscreen, was 2.87 to 2.91 s
+ *          (on battery 3.41 against 5.37 to 5.40 s, and 3.46 to 3.47
+ *          against 3.85 to 3.89 s); a warm cache 24 to 51 ms earlier.
+ *   v0.11.0 - ygfx_prime() (PRIME): draws every program made so far once,
+ *          as zero-size quads, and waits for the GPU, so a kind's first
+ *          trial frame does not pay ANGLE's first draw. Measured on the
+ *          Iris Xe (docs/gfx.md, "Priming"): each kind's first frame cost
+ *          2.5 to 12.9 ms more CPU in ygfx_end() without it, from a warm
+ *          program cache too, and 0.09 to 0.42 ms with it; the prime of 20
+ *          programs took 63 to 73 ms. With ysp/screen.h v0.5.0 (open()
+ *          settles the display).
+ *   v0.10.5 - VIDEO: an R8 or RG8 texture may state an encoding (matrix
+ *          RGB, primaries DEVICE: gray is the display's white), drawn as a
+ *          color image through the video program with the level in r and
+ *          alpha in g. A pack's TEXTURE entry (docs/pack.md 4.9) now goes
+ *          into ygfx_texture() as stored: an 8-bit gray PNG is sRGB codes,
+ *          which the tool could linearize to 8 bits only by merging the
+ *          dark codes. Other primaries on a gray texture are refused. An
+ *          encoded texture used as a modulation, add, coverage or shader
+ *          texture is refused as before, with a message that says why.
+ *          YGFX_SHADER_CONTRACT is 2 (decided 2026-10-09 by the user): a
+ *          body that samples ysp_tex0 needs v0.10.4's binding, and a
+ *          contract-1 player would run it and read garbage.
+ *   v0.10.4 - SHADER CONTRACT: stim.tex (user_desc.tex) is the body's
+ *          ysp_tex0, ysp_utex0 for an R16UI texture: an uploaded texture
+ *          or a render target. Before, a USER draw bound no texture, so
+ *          ysp_tex0 read what the previous draw had left on its unit, and
+ *          the feedback check could not see a body that sampled its own
+ *          target. A tex that is not this gfx's, or a video texture, is
+ *          refused (YGFX_ERR_ARG); a draw into the target it samples is
+ *          YGFX_ERR_ORDER, as for an image. Found by
+ *          examples/gfx/gratings.c (docs/rig_spec.md 15.6). The contract's
+ *          version stays 1: the wrapper's text did not change.
+ *   v0.10.3 - YGFX_SHADER_CONTRACT, the shader contract's version (1). A
+ *          pack records it with each shader (docs/pack.md, SHADER) and the
+ *          player refuses a shader built for another contract. It changes
+ *          only when the wrapper's meaning changes; the test pins the
+ *          wrapper's text, so a change to the text forces that decision.
+ *   v0.10.2 - ygfx_default_cache_dir() is a wrapper of ysp/rt.h v0.7.0's
+ *          yrt_user_dir(YRT_DIR_CACHE, "progcache"), which took over its
+ *          rules unchanged. Needs ysp/rt.h v0.7.0.
+ *   v0.10.1 - PROGRAM CACHE: ygfx_default_cache_dir() gives the per-user
+ *          cache folder (it makes no file or folder). The describe line names
+ *          the cache folder and gives hits and misses.
+ *   v0.10.0 - NOISE: dist YGFX_SIMPLEX, 3D simplex gradient noise as fBm
+ *          (noise_desc.scale, z, octaves, lacunarity, gain; stimulus fields
+ *          gn_*; parameters YGFX_P_NOISE_SCALE, _Z, _LACUNARITY, _GAIN,
+ *          appended), in 32-bit integers on the GPU, so that
+ *          ygfx_simplex_value() gives the same bits on the CPU. Not
+ *          band-limited (NOISE). Breaking: ygfx_stim grew; the noise
+ *          program's cache key changed.
+ *   v0.9.0 - NOISE, the noise dither and ygfx_noise_gauss() draw new
+ *          patterns. The hash is triple32 (Chris Wellons, hash-prospector,
+ *          public domain), not pcg_hash; the key of a point is its index
+ *          times an odd key of the seed, XOR a second key, through one hash
+ *          (ygfx_hash2(), ysp_hash2()), not three nested hashes. The
+ *          nested form, hash(x ^ hash(y ^ hash(seed))), made 29 % of
+ *          full-screen frames hold two rows that were copies of each other
+ *          (each 2048-value block permuted), whatever the hash; PractRand
+ *          failed it at 256 MB. The new form passes 16 GB, frame by frame
+ *          and seed by seed (docs/gfx.md, v0.9). The same GPU cost.
+ *          Breaking: every noise pattern, the dither pattern, and a user
+ *          shader's ysp_hash() values; ygfx_noise_value() and the GPU
+ *          still agree bit for bit.
+ *   v0.8.0 - SETUP PASSES: ygfx_begin_setup() and ygfx_end_setup()
+ *          run target passes outside a screen frame: a page of text, a
+ *          blur layer, artwork rendered at setup. CURVE RUNS: a run whose
+ *          items are all turned off the quarter turns, or an aliased run,
+ *          takes the rays program by itself (the same bits, 0.5 to 0.8 ms
+ *          less on a turned page); the rays program is made at
+ *          ygfx_crun() for turned, aliased, grouped and YGFX_I_ORI
+ *          runs. Breaking: none (a turned run's cache key set gains the
+ *          rays program).
+ *   v0.7.0 - CURVE RUNS: crun_desc.rays (YGFX_STIM_RAYS, appended) draws
+ *          a run by the rays even where the exact area applies, on a second
+ *          text program made at the first such run: a 12 px page 5.3 ms
+ *          against 7.5. The text program works in px with y down, so a run
+ *          drawn once into a target and composited at 1:1 on whole px has
+ *          the run's coverage bit for bit. NOISE: dist YGFX_GAUSSIAN, a
+ *          table of 65536 normal quantiles (256 KB, made at open), the same
+ *          bits on the GPU and from ygfx_noise_value(). VECTOR: three
+ *          specialized copies of the vector program for large RRECTs,
+ *          dashed CIRCLEs and CIRCLE compounds (14 programs at open; the
+ *          kinds worker's design, docs/gfx.md). ELLIPSE's quarter
+ *          perimeter by the arithmetic-geometric mean: a pack 0.06 us, was
+ *          36 us (1000 ELLIPSEs 0.06 ms of CPU, was 36 ms); the same floats.
+ *          Fixed: none. Breaking: ygfx_crun_desc grew (rays); the text and
+ *          noise programs' cache keys changed.
+ *   v0.6.0 - CURVE SETS: ygfx_cset_make(), ygfx_cset_add(),
+ *          ygfx_cset_free(), and with no gfx ygfx_cset_check() and
+ *          ygfx_cset_winding(): one font or artwork set as two arrays
+ *          (texels, words), the format of docs/gfx.md "Curve sets: the
+ *          format" (version 1), uploaded as one RGBA32F and one RGBA32UI
+ *          texture. CURVE RUNS: ygfx_crun() and ygfx_crun_desc, items
+ *          ygfx_citem (ygfx_inst's layout with glyph in phase's place),
+ *          kind YGFX_TEXT (until now not implemented), YGFX_P_SIZE,
+ *          YGFX_STIM_ALIASED; ygfx_hit() and ygfx_hit_index() on a
+ *          run. BLUR: ygfx_blur, ygfx_blur_desc, ygfx_blur_make(),
+ *          ygfx_blur_apply(), ygfx_blur_free(); targets in R16F and
+ *          RGBA32F; image_desc.coverage (YGFX_STIM_COVERAGE). The video
+ *          program reads its constants as flat inputs: NV12 at 1080p costs
+ *          1.10 to 1.16 times an RGBA8 image (was 1.64). Backend: the
+ *          format YGFX_RGBA32UI, caps.max_texture (appended; 0 = 2048),
+ *          a sampler in the vertex shader; version 3 still. Breaking:
+ *          ygfx_stim grew (set, items, size); every program's cache key
+ *          changed (the vertex text), so a cache compiles once again.
+ *   v0.5.0 - COLOR: the calibration is ysp/color.h's. ygfx_cal and its
+ *          calls are ycol_cal and ycol_cal_* (init, add, set_spectra,
+ *          derive, check, save, load, nominal, lms, dir_cone, dkl_matrix,
+ *          dir_dkl), YGFX_CAL_* and YGFX_GUN_* are YCOL_CAL_* and
+ *          YCOL_GUN_*, ygfx_dkl_from_sph and ygfx_max_contrast are
+ *          ycol_dkl_from_sph and ycol_max_contrast, and
+ *          ygfx_cone_fundamentals(nm, lms) is
+ *          ycol_cone_fundamentals(YCOL_CONES_SS2, nm, lms): the same
+ *          code, the same bits, the same .yspcal bytes. desc.cal is a
+ *          const ycol_cal*. ysp/color.h must be beside ysp/gfx.h.
+ *          open() makes a ysp/color.h context (ycol_ctx) from desc.cal,
+ *          desc.background and the new desc.cones and desc.lum, and takes
+ *          PAINT's matrices and VIDEO's primaries from it;
+ *          ygfx_color(g) returns it, so a caller converts colors and
+ *          DKL directions with the background and luminance PAINT uses. A
+ *          YGFX_EV_COLOR ring record at open logs it. desc.lum (a
+ *          participant's luminance from flicker photometry) sets the DKL
+ *          luminance axis for DKL_POLAR paint; desc.cones picks the 2 or
+ *          10 degree cones. OKLAB paint now works on absolute XYZ, the
+ *          display's black included, against the display's white:
+ *          ysp/color.h's Oklab. A calibration whose black has no light
+ *          gives the same pixels as v0.4 (every calibration in v0.4's
+ *          test); one with 0.5 cd/m2 of black under a white of 80 moves
+ *          the test's OKLAB gradient by up to 5.2e-3 of full scale. A calibration that
+ *          is not sealed (no CRC after the last change) is refused at
+ *          open: ycol_cal_derive() and ycol_cal_save() seal it.
+ *   v0.4.0 - PROGRAM CACHE: desc.cache (a load and store pair the caller
+ *          owns), ygfx_file_cache_init(), ygfx_program_stats(); an
+ *          entry is checked by a second hash of its key and a hash of its
+ *          binary before the driver sees it. VIDEO: YGFX_NV12 and
+ *          YGFX_I420 textures with a stated encoding (matrix, range,
+ *          transfer, primaries, siting) converted to linear light in the
+ *          image program; encoded RGB textures; texture_update_planes(),
+ *          texture_update_plane(), texture_import() (GL names; D3D11 RGBA
+ *          and NV12 through ANGLE), texture_rebind(). INSTANCES:
+ *          ygfx_instances(), ygfx_inst_grid(), ygfx_hit_index(),
+ *          ygfx_inst_resolve(), desc.max_instances. ygfx_screen(),
+ *          ygfx_calibrated(), ygfx_features(). Fixed (found by the
+ *          gallery): ygfx_cal_derive() seals the CRC (the manual's recipe
+ *          failed open with "CRC mismatch" until a save; cal_add() and
+ *          cal_set_spectra() unseal it); a straight-alpha image drawn with
+ *          linear filtering is filtered as premultiplied texels (clear
+ *          texels darkened its edges; image_desc.premultiplied states a
+ *          premultiplied texture); the range rule holds on DIST atlases
+ *          with texture_desc.sdf_range (glyph runs and src rectangles on
+ *          one without it are refused); a glyph run with no buffer read
+ *          past the pool. Added: first (a run or dot field from any record
+ *          of a shared buffer) on glyph and dot descs; shape_p on the
+ *          grating, noise and user descs. Breaking: backend version 3
+ *          (BACKENDS says what an out-of-tree backend changes);
+ *          ygfx_texture_update() on a planar texture is refused; a
+ *          straight-alpha image drawn linear looks different at its
+ *          transparent edges (correct now). Also: end() reorders draws
+ *          that do not overlap, so runs form across interleaved kinds
+ *          (DRAW ORDER; identical pixels); a stimulus that can cover no
+ *          pixel is refused with a message (v0.3 drew nothing); a dot
+ *          field with no aperture set draws (v0.1 to v0.3 culled every
+ *          dot); a POLYGON with no box takes its vertices' own; an empty
+ *          dot field or glyph run returns OK; every refusal in draw()
+ *          names its reason.
+ *   v0.3.0 - the vector program (VECTOR SHAPES): SHAPE kinds RRECT, ARC,
+ *          PIE, CAPSULE, NGON, STAR, ELLIPSE, QBEZIER, POLYLINE and
+ *          COMPOUND (ygfx_compound(), up to 56 primitives folded by
+ *          UNION, INTERSECT, SUBTRACT, XOR and smooth variants, onion);
+ *          POLYGON fillets; offset (dilation) on every SHAPE; dashes,
+ *          dash_offset, dash_snap, trim and caps; effects in one pass
+ *          (drop shadow, glow, inner shadow, two bands, an exact blur for a
+ *          sharp RECT's shadow); paint (LINEAR, RADIAL, ANGULAR, VERTEX;
+ *          mixed in RGB, OKLAB or DKL_POLAR); blend modes OVER, ADD and
+ *          MULTIPLY on color stimuli; ygfx_length(); the parameter tables
+ *          ygfx_prim_params(), ygfx_fx_params(), ygfx_paint_params()
+ *          and ygfx_bind.field. DISTANCE TEXTURES: MSDF and MTSDF masks
+ *          with sdf_range and the range rule; a mask's src rectangle;
+ *          ygfx_glyphs(), an instanced glyph run. The edge model's limits
+ *          are stated and measured (EDGES, EXACTNESS). Backend version 2:
+ *          deferred pipelines and pipeline_finish (ANGLE compiles the
+ *          programs in parallel), bindings.blend, YGFX_BLEND_MULTIPLY,
+ *          two vec4 instance attributes. Breaking: a backend must set
+ *          version 2 and may leave pipeline_finish NULL; max_draws counts
+ *          uniform blocks (a vector stimulus with data takes more than
+ *          one); a USER stimulus with a MASK_TEX aperture loses p[28..31]
+ *          to the mask's rectangle.
+ *   v0.2.0 - strokes on every SDF shape and aperture (CENTER, INSIDE or
+ *          OUTSIDE, the same edge profile on both sides of the band; ROUND
+ *          or MITER joins, MITER on RECT, CROSS and convex POLYGON with a
+ *          miter limit and a bevel beyond it); YGFX_MASK_TEX, a shape from
+ *          a signed-distance texture, and ygfx_sdf_from_mask(); sprites:
+ *          an IMAGE's source rectangle, nearest or linear, with no bleed;
+ *          tint; flat groups (ygfx_group: place, anchor, box, x, y, ori,
+ *          scale, opacity) with bindings; render targets
+ *          (ygfx_target(), ygfx_begin_target(), ygfx_end_target(),
+ *          ygfx_read_target()) and YGFX_STIM_ADD images; the YGFX_ADD
+ *          shader mode; the GL state cache follows yscr_gl_epoch().
+ *          Breaking: ysp_look.w in the shader contract is the stroke band's
+ *          center offset, not visible; ygfx_stim and ygfx_bind grew
+ *          (zero a ygfx_bind you fill field by field; an initializer list
+ *          gets a NULL group for gcc -Wextra); the OVER blend now
+ *          accumulates alpha (the scene's output is unchanged); IMAGE's
+ *          linear sampling is by hand from four texelFetch, clamped to the
+ *          source rectangle, not the sampler's.
+ *   v0.1.0 - first release.
+ *
+ *   STATUS: v0.12.0: tests/adapt/gfx_test.c checks the message of each
+ *   failing call it makes on a gfx; the rest is as below. v0.10.0
+ *   (docs/gfx.md "v0.10"): SIMPLEX on the GPU equals
+ *   ygfx_simplex_value() at every pixel of 6 fields (227000 pixels; 1 to
+ *   8 octaves, lacunarity 1 to 3, z negative and fractional) on the Iris
+ *   Xe, WARP and SwiftShader. The integer form is within 1.4e-3 of the same
+ *   noise in double. Full screen on the Iris Xe: 1.83 ms for one octave,
+ *   6.56 ms for four, 12.96 ms for eight (UNIFORM 0.40).
+ *   v0.9.0 (docs/gfx.md "v0.9" has the hash's evaluation):
+ *   NOISE on the GPU equals ygfx_noise_value() at every check, for
+ *   UNIFORM, BINARY and GAUSSIAN, on the Iris Xe, WARP and SwiftShader.
+ *   v0.8.0 (docs/gfx.md "v0.8"). A page rendered in a setup
+ *   pass equals the page rendered in a frame, target and composite, bit for
+ *   bit; a blur applied in a setup pass equals one applied in a frame; the
+ *   frame after a setup pass equals one with none before it, scene and
+ *   output codes (Iris Xe, WARP, SwiftShader). Turned, aliased and
+ *   item-turned runs on the rays program equal the exact-area program's
+ *   pixels, bit for bit, on all three; a run with one item on a quarter
+ *   turn, or with its items in a buffer, stays on the exact-area program.
+ *   A 12 px page turned 15 degrees: 5.09 to 5.10 ms, was 5.83 to 6.03; a
+ *   16 px CJK page turned: 5.92 to 5.94 ms, was 6.39 to 6.61.
+ *   v0.7.0 (docs/gfx.md "v0.7" has the tables). A run with
+ *   .rays draws what the program without the exact area draws, bit for bit;
+ *   a run cached in an RGBA16F or RGBA32F target and composited at 1:1
+ *   equals the run drawn, bit for bit, over black (Iris Xe, WARP,
+ *   SwiftShader); over a gray background an RGBA16F target differs by one
+ *   f16 step (its alpha was rounded before the blend), an RGBA32F one not
+ *   at all. ysp/outline.h's set of the test glyphs, overlaps resolved:
+ *   every glyph within 1.15e-5 of the exact coverage. NOISE GAUSSIAN: the
+ *   table within 6e-8 (relative) of quantiles found by bisection on erfc,
+ *   variance 1, symmetric bit for bit; 10^6 checks pass Kolmogorov-Smirnov
+ *   at 1 % (D 0.00095); the GPU equals ygfx_noise_value() at every check
+ *   on all three renderers. The specialized vector programs: 117 stimuli
+ *   drawn by each and by the generic program, 0 values differ. Cost (Iris
+ *   Xe, AC, the shared guard): a 12 px page (ysp/outline.h's set) 7.43 to
+ *   7.50 ms exact, 5.28 to 5.31 ms with .rays, 0.50 ms composited from a
+ *   target; GAUSSIAN noise full screen 0.41 to 0.42 ms against UNIFORM's
+ *   0.37 to 0.39; RRECT fill 0.56 to 0.59 ms (was 0.95), a dashed circle
+ *   0.50 to 0.53 (was 0.92 to 0.95), a compound of 8 with every effect 0.94
+ *   to 0.98 (was 1.60 to 1.62); ygfx_open() 2.20 to 2.49 s, was 2.04 to
+ *   2.12 (three more programs).
+ *   v0.6.0 (docs/gfx.md "v0.6" has the tables). Curve runs
+ *   against the exact box coverage of each pixel in double (scanlines,
+ *   Gauss-Kronrod in y, the fill rule per scanline): on resolved glyphs
+ *   not turned, the exact area is within 1.8e-5 of it; elsewhere the rays'
+ *   mean error on edge pixels is 0.029, 0.019, 0.009 and 0.004 at 8, 12, 24
+ *   and 48 px per em, the same at 0, 15 and 45 degrees (Lengyel's ramp
+ *   alone: 0.031 to 0.074 at 8 px, the turned ones worst), and the largest
+ *   error 0.56, at corners and self-intersections. Iris Xe, WARP and
+ *   SwiftShader agree pixel by pixel within 6.5e-5 but for one SwiftShader
+ *   pixel (0.087, where a ray passes a corner). The probe's 0.49
+ *   difference between renderers came from interpolated em coordinates:
+ *   with them, SwiftShader moved 26156 pixels by more than 1e-3 (up to
+ *   0.48) from the Iris Xe; from gl_FragCoord, none. A curve run equals
+ *   its items drawn alone and a buffer copied items, bit for bit; a glyph
+ *   added at run time draws as one made at open; ygfx_hit() agrees with
+ *   aliased coverage at all 64000 pixels. The blur against the exact blur
+ *   of a rect (erf products): 0.20, 0.031, 0.0087, 0.0022, 5.4e-4 and
+ *   1.5e-4 at sigma 0.5, 1, 2, 4, 8 and 16 (RGBA32F); a 2x source 0.038,
+ *   0.0076, 0.0021, 5.4e-4, 1.4e-4 and 3.8e-5; 16-bit targets level off at
+ *   about 8e-4. 29 deliberate faults in v0.6, each caught (docs/gfx.md);
+ *   two first survived and led to a fix (a curve that turns back before a
+ *   ray counted as crossing it).
+ *   Cost on the Iris Xe at 1920 x 1200 (AC, the lock held, interleaved; GPU
+ *   over an empty frame; backward lists): a 12 px Latin page of 26205
+ *   glyphs 7.9 to 8.2 ms with the exact area, 5.5 to 5.8 ms by the rays
+ *   alone; a 16 px CJK page of 7140 glyphs 10.0 to 10.2 and 7.2 to 7.7 ms;
+ *   1612 glyphs at 48 px 1.7 ms; 45 glyphs at 200 px 1.1 ms (rays 1.6); a
+ *   40-glyph line with its items copied each frame 0.09 ms of GPU and 17 us
+ *   of CPU. The text program compiles in 430 ms (140 ms without the exact
+ *   area) on ANGLE's D3D11; the program cache loads it after. The blur, full
+ *   screen R16F: 1.42, 1.96, 3.34 and 5.96 ms at sigma 0.5, 1, 2 and 4;
+ *   RGBA32F at sigma 2 3.57 ms; a 400 x 200 layer drawn, blurred and drawn
+ *   0.10 to 0.27 ms at sigma 0.5 to 4 (1x), 0.17 to 0.66 ms (2x). Video
+ *   1080p: NV12 0.64 to 0.68 ms, RGBA8 0.56 to 0.59 ms (v0.5: NV12 0.96).
+ *   ygfx_open() and every v0.3 and v0.4 row: unchanged (interleaved
+ *   against v0.5.0).
+ *   v0.5.0: the calibration moved to ysp/color.h with the same
+ *   bits: every scene and output readback of the test, hashed, is the same
+ *   as v0.4's on the Iris Xe, WARP and SwiftShader, and v0.4's calibration
+ *   code and ysp/color.h's agreed bit for bit before the move (52
+ *   calibrations, 2100 raw calls, PAINT's matrices and the video
+ *   primaries; docs/color.md). The new OKLAB black term: within 7.3e-7
+ *   of an independent double reference on all three, on a calibration
+ *   whose black has 0.5 cd/m2 under a white of 80, where v0.4's black-free
+ *   form would have moved the gradient by 5.2e-3. What follows is v0.4's
+ *   status, which v0.5 does not change.
+ *   v0.4.0: built and run on one Windows 11 laptop (Intel Iris Xe,
+ *   a 1920 x 1200 panel at 60 Hz) with the ANGLE in Docker Desktop's
+ *   Electron folder (2.1.23876, git fffbc739779a) and with CI's, from
+ *   Electron v38.8.6 (2.1.25848, git 85cc0e0b9cc3): the same numbers. No
+ *   photometer, spectroradiometer, photodiode or Bits# has been used: no
+ *   number here is a measurement of light.
+ *   Pixels (tests/adapt/gfx_test.c, offscreen, every stimulus read back
+ *   from a float32 scene against a CPU reference in double at pixel
+ *   centers, positions through the inverse of the one coordinate transform)
+ *   on four GL ES 3.0 renderers: ANGLE on D3D11 (Iris Xe), on D3D11 WARP,
+ *   on Vulkan SwiftShader, and Mesa 23.2 llvmpipe (WSL2). Largest errors
+ *   (Iris Xe, WARP, llvmpipe / SwiftShader): soft edges 1.7e-5 / 9.5e-5,
+ *   grating 1.7e-5 / 1.4e-4, gabor 1.2e-6 / 8.8e-5, dots 1.5e-5 / 9.5e-5,
+ *   strokes 1.6e-5 / 9.5e-5, MASK_TEX 1.4e-5 / 9.5e-5, linear sprites
+ *   8.4e-7, tint 6.3e-8, group members against the same stimuli placed
+ *   alone 6.0e-8 of full scale; images, noise, hard edges and hard bands,
+ *   MITER and bevels against their CPU form, sprite borders (no bleed),
+ *   shapes through a target against direct drawing, the output stage's
+ *   codes (all 256, a CLUT, rounding at 0.005 above each halfway point, a
+ *   CLUT through a target), the 8 x 8 ordered dither, the scene with v0.2's
+ *   OVER alpha against v0.1's, the anchor's invariance and batched against
+ *   single draws: exact. ygfx_hit() agrees with the GPU's coverage >= 0.5
+ *   on every pixel not within 1e-3 px of an edge, strokes and groups
+ *   included. ygfx_sdf_from_mask() equals a brute-force search. A present
+ *   callback that changes GL state leaves the next frame exact (without
+ *   the epoch, 901 values differ). docs/gfx.md has the tables and the
+ *   tolerances. 14 deliberate faults in v0.1 and 18 in v0.2 were each
+ *   caught.
+ *   Calibration math against published values: sRGB primaries to XYZ
+ *   within 3.9e-5 of IEC 61966-2-1's printed matrix; the CLUT of a display
+ *   with sRGB's transfer function within 1.3e-3 (17 levels) and 3.6e-5 (64
+ *   levels) of sRGB's encoding; the embedded cone fundamentals equal CVRL's
+ *   linss2_10e_1; RGB to LMS, the DKL matrix and its unit axes within 7e-8
+ *   (relative) of Psychtoolbox's ComputeDKL_M run in MATLAB R2023a on its
+ *   own B_monitor spectra.
+ *   Cost on the Iris Xe at 1920 x 1200 (examples/gfx/bench.c, GPU time from
+ *   frames between two glFinish calls, AC and battery runs): an empty frame
+ *   (scene clear and the output stage) 0.42 to 1.34 ms of GPU; 1000 gabors
+ *   of 256 x 256 about 9.3 to 11 ms of GPU and 0.2 to 0.5 ms of CPU
+ *   (batched; 2.1 to 5.0 ms one draw each); 100000 dots uploaded each frame
+ *   1.5 to 2.0 ms of GPU and 0.65 to 1.3 ms of CPU; a full-frame RGBA8
+ *   upload 1.1 to 2.6 ms of CPU. end()'s own CPU time for an empty frame is
+ *   56 to 260 us mean, which misses the 10 us planned; the time is in
+ *   ANGLE's calls, not broken down further. ygfx_open() 1.96 to 2.14 s
+ *   in v0.3 (three runs; eleven programs, the vector program always
+ *   included; ANGLE compiles them in parallel when every link starts
+ *   before any status is read: a probe of four programs went from 7.3 s
+ *   to 3.0 s. v0.2's nine took 1.3 to 1.4 s).
+ *   v0.2 (AC, two runs): a stroke costs 1.05 to 1.17 times its fill's GPU
+ *   time; a full-screen target drawn as an image 0.43 ms of GPU, so 1000
+ *   gabors rendered once and added each frame cost 0.43 ms against 9.1 to
+ *   9.2 ms drawn each frame; a target pass 4.7 us of CPU; 1000 sprites
+ *   from one atlas 0.49 ms of GPU and 155 us of CPU.
+ *   v0.3 pixels (the same method; docs/gfx.md has the tables, Iris Xe
+ *   / WARP / SwiftShader / llvmpipe): the new kinds, filled and stroked,
+ *   soft, against their CPU form 1.7e-5 / 8.2e-6 / 9.6e-5 / 8.2e-6; with
+ *   dashes or trim 4.0e-4 / 4.0e-4 / 2.5e-3 / 5.8e-5 (the arc length's
+ *   float error at a dash end); the exact kinds against F(brute-force
+ *   Euclidean distance) 4.3e-6 / 4.9e-6 / 4.9e-6 / 4.9e-6; QBEZIER as
+ *   chords 0.0050 px from the curve; effects in one pass against the same
+ *   layers drawn apart 1.9e-5 / 5.7e-6 / 1.2e-4 / 5.7e-6; EXACT_BLUR
+ *   against the erf product 1.5e-7 to 1.7e-7; paint RGB 1.2e-6, OKLAB
+ *   against Ottosson's matrices through the calibration 1.8e-6, DKL_POLAR
+ *   against ycol_cal_dir_dkl() 1.5e-5 / 6.3e-6 / 1.6e-4 / 1.3e-6,
+ *   VERTEX against barycentric 1.1e-7; MSDF against the CPU's bilinear
+ *   median 3.5e-6; glyph runs, batching and MULTIPLY: exact or 4.8e-8. The
+ *   edge model against a supersampled Gaussian blur: 0.2500 at a right
+ *   angle, 0.0406 and 0.0100 on discs of 5 and 20 SD, a union's crease
+ *   0.0822 (0.0830 predicted), a MITER corner 0.0800, on all four. 26
+ *   deliberate faults in v0.3: 24 caught on llvmpipe, one (the star's
+ *   reflection) only on D3D11, one equivalent (EXACTNESS).
+ *   v0.3 cost (Iris Xe, AC, GPU over an empty frame, full screen): v0.2
+ *   rounded rect 0.40 ms, RRECT 0.93 ms (2.3x, the bar was 1.3x), with RGB
+ *   paint 1.38 ms, OKLAB 1.54 ms (1.65x solid, bar 1.1x), STAR 0.86 ms,
+ *   ELLIPSE 1.32 ms; an 8 px stroke 0.27 ms, dashed 0.90 ms; a compound of
+ *   1, 2, 8 and 32 circles 0.78, 1.22, 3.53 and 12.4 ms (0.163 ms per
+ *   primitive per Mpx, bar 0.15); a compound of 8 in a 600 x 400 box 0.62
+ *   ms, with every effect 1.62 ms (bar 1.0); 100 compounds of 4, 120 us of
+ *   CPU (bar 600); a run of 200 MSDF glyphs 0.12 ms of GPU and 18 us of CPU
+ *   (bars 0.2 ms, 20 us).
+ *   In an 800 x 600 window on the composition swapchain, 1 minute each
+ *   (v0.1): DRAW p99 0.48 to 0.79 ms with up to 100 gabors or 10000 dots, 0
+ *   to 2 late targets per minute. No C runtime heap call in 566 frames of
+ *   an MSVC debug build (v0.1; a control with one malloc per frame counted
+ *   569).
+ *   Builds, warnings as errors: MSVC 19.44 (CMake) and 19.51 (C11 and
+ *   C++17), MinGW-w64 gcc 16.1 (C99, C11, C++17), gcc 11.4 on WSL2 (C99,
+ *   C11, C++17, ASan and UBSan), emcc 6.0.10 (C11 run in node; C++17
+ *   compiled); v0.3 again on each. Under ASan the
+ *   test leaves GL out unless YGFX_TEST_DEVICES names it: Mesa leaks 112
+ *   bytes from a module it unloads.
+ *   NOT done: 10-bit, Mono++ and Color++ output (refused: ysp/screen.h makes
+ *   RGBA8 back buffers, this panel's link is 8 bits per color, and no
+ *   device was there to verify); stereo (refused); text layout (a glyph
+ *   run draws placed glyphs; there is no atlas tool yet); cubic Beziers;
+ *   filtered noise on the GPU; fullscreen runs; specialized vector programs
+ *   past the three that met their bars (docs/gfx.md); any other GPU,
+ *   macOS, X11 or Wayland (ysp/screen.h's stubs), WebGL; v0.4 on WSL,
+ *   llvmpipe and emcc.
+ *   v0.4 (docs/gfx.md has the tables; Iris Xe, WARP, SwiftShader):
+ *   the program cache: every frame drawn from cached programs equals the
+ *   same frame compiled, bit for bit, and a damaged, truncated, colliding
+ *   or foreign entry is compiled instead (11 cases); ygfx_open() 11.4 to
+ *   35 ms warm against 2.3 to 5.3 s without a cache (AC). Video: NV12 and
+ *   I420 through 3 matrices, 2 ranges, 3 sitings and 2 chroma filters
+ *   within 3.1e-7 of a double reference; the transfers 7.5e-7; primaries
+ *   through a calibration 1.3e-6; the 256 codes through TRC_DEVICE and a
+ *   CLUT exact; D3D11 NV12 import (an array slice, an NT handle with a
+ *   keyed mutex, a legacy shared handle) 5.2e-7. 1080p: NV12 0.91 ms of
+ *   GPU and 0.30 to 0.39 ms to update, RGBA8 0.56 ms and 0.91 to 1.03 ms.
+ *   Instances: each element within 9.2e-6 of the same stimulus drawn
+ *   alone, the palette's integer entries exact, ygfx_hit_index() equal
+ *   to the GPU's coverage; 10000 gabors 177 to 191 us of CPU and 1.26 to
+ *   1.33 ms of GPU (5.5 ms one stimulus each). The draw order: 20 frames
+ *   reordered equal call order bit for bit; 1000 interleaved stimuli of 4
+ *   kinds 1.1 ms of GPU and 0.47 ms of CPU (7.2 and 3.3 in call order).
+ *   35 deliberate faults in v0.4, each caught. Fixed: v0.1's dot fields
+ *   with no aperture set drew nothing (aperture 0 was a 0 x 0 RECT): the
+ *   dot rows measured before v0.4 are void.
+ *   Outside this block and docs/gfx.md, a number in this header is a
+ *   measurement only where the text says "measured".
  */
 #ifndef YSP_GFX_H_INCLUDED
 #define YSP_GFX_H_INCLUDED
 
 #define YGFX_VERSION_MAJOR 0
-#define YGFX_VERSION_MINOR 11
-#define YGFX_VERSION_PATCH 1
-#define YGFX_VERSION_STRING "0.11.1"
+#define YGFX_VERSION_MINOR 12
+#define YGFX_VERSION_PATCH 0
+#define YGFX_VERSION_STRING "0.12.0"
 
 #include "ysp/screen.h"
 #include "ysp/color.h"
@@ -2760,6 +2788,9 @@ YGFX_API bool        ygfx_open(ygfx_gfx* g, const ygfx_desc* d);
  * ygfx_error() set, as ygfx_open(); the handle is then closed. */
 YGFX_API bool        ygfx_open_start(ygfx_gfx* g, const ygfx_desc* d);
 YGFX_API void        ygfx_close(ygfx_gfx* g);
+/* The message of the last call on g that failed: open's, or a later
+ * call's, which writes it before it returns a negative code or a 0 id.
+ * The calls that take a const gfx only read it and return the code. */
 YGFX_API const char* ygfx_error(const ygfx_gfx* g);
 YGFX_API bool        ygfx_is_open(const ygfx_gfx* g);
 /* One line for the log: backend, renderer, size, scene format, CLUT, dither,
@@ -6499,7 +6530,7 @@ static int ygfx__sync(ygfx_gfx* g) {
     return YGFX_OK;
 }
 
-YGFX_API int ygfx_begin(ygfx_gfx* g, const yscr_frame* f) {
+static int ygfx__begin(ygfx_gfx* g, const yscr_frame* f) {
     float* fb;
     uint32_t* fu;
     int32_t* fi;
@@ -7568,7 +7599,7 @@ static uint32_t ygfx__inst_draw(ygfx_gfx* g, const ygfx_stim* s, float* b, ygfx_
     return *slot;
 }
 
-YGFX_API int ygfx_draw(ygfx_gfx* g, const ygfx_stim* s) {
+static int ygfx__draw(ygfx_gfx* g, const ygfx_stim* s) {
     ygfx__cmd* cmd;
     uint32_t pipe;
     int why;
@@ -7610,7 +7641,7 @@ YGFX_API int ygfx_draw(ygfx_gfx* g, const ygfx_stim* s) {
     return YGFX_OK;
 }
 
-YGFX_API int ygfx_draw_n(ygfx_gfx* g, const ygfx_stim* s, int n) {
+static int ygfx__draw_n(ygfx_gfx* g, const ygfx_stim* s, int n) {
     int i, rc, first = YGFX_OK;
     if (!s || n < 0) return YGFX_ERR_ARG;
     for (i = 0; i < n; i++) {
@@ -7637,7 +7668,7 @@ static void ygfx__seg_next(ygfx_gfx* g, uint32_t target, int w, int h, int topdo
     if (clear) { sg->has_clear = 1; memcpy(sg->clear, clear, sizeof sg->clear); }
 }
 
-YGFX_API int ygfx_begin_target(ygfx_gfx* g, ygfx_tex t, const float* clear) {
+static int ygfx__begin_target(ygfx_gfx* g, ygfx_tex t, const float* clear) {
     ygfx__res* r;
     if (!g || !g->open) return YGFX_ERR_CLOSED;
     if (!g->in_frame || g->in_target || g->n_targets >= YGFX_MAX_PASSES) return YGFX_ERR_ORDER;
@@ -7655,7 +7686,7 @@ YGFX_API int ygfx_begin_target(ygfx_gfx* g, ygfx_tex t, const float* clear) {
     return YGFX_OK;
 }
 
-YGFX_API int ygfx_end_target(ygfx_gfx* g) {
+static int ygfx__end_target(ygfx_gfx* g) {
     if (!g || !g->open) return YGFX_ERR_CLOSED;
     if (!g->in_frame || !g->in_target) return YGFX_ERR_ORDER;
     g->in_target = 0;
@@ -7753,7 +7784,7 @@ static void ygfx__reorder(ygfx_gfx* g) {
 /* A setup pass: the frame's bookkeeping with a frame of time 0 (frame
  * block 0 is written, as begin() does, so the target passes see the same
  * layout), and the GL context made current, as yscr_begin() would. */
-YGFX_API int ygfx_begin_setup(ygfx_gfx* g) {
+static int ygfx__begin_setup(ygfx_gfx* g) {
     yscr_frame f;
     int rc;
     if (!g || !g->open) return YGFX_ERR_CLOSED;
@@ -7770,7 +7801,7 @@ YGFX_API int ygfx_begin_setup(ygfx_gfx* g) {
 }
 
 static int ygfx__end(ygfx_gfx* g, int setup);
-YGFX_API int ygfx_end_setup(ygfx_gfx* g) {
+static int ygfx__end_setup(ygfx_gfx* g) {
     if (!g || !g->open) return YGFX_ERR_CLOSED;
     if (!g->in_frame || !g->in_setup) {
         ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: end_setup without begin_setup");
@@ -7779,7 +7810,7 @@ YGFX_API int ygfx_end_setup(ygfx_gfx* g) {
     return ygfx__end(g, 1);
 }
 
-YGFX_API int ygfx_end(ygfx_gfx* g) {
+static int ygfx__end_frame(ygfx_gfx* g) {
     if (g && g->open && g->in_setup) {
         ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: a setup pass ends with end_setup");
         return YGFX_ERR_ORDER;
@@ -7877,7 +7908,7 @@ static int ygfx__end(ygfx_gfx* g, int setup) {
 
 /* PRIME. Zero-size quads: the stim block is zeros, so no fragment runs and
  * no shader loops over data, but each program is bound and drawn once. */
-YGFX_API int ygfx_prime(ygfx_gfx* g) {
+static int ygfx__prime(ygfx_gfx* g) {
     ygfx_bindings bd;
     uint32_t ids[YGFX__N_BUILTIN * 2 + YGFX__N_VSPEC + 8 + 2 * YGFX_MAX_PIPELINES];
     unsigned char inst[sizeof ids / sizeof ids[0]];
@@ -8068,7 +8099,7 @@ static int ygfx__make_planes(ygfx_gfx* g, ygfx__res* r, int w, int h, int format
     return rc;
 }
 
-YGFX_API ygfx_tex ygfx_texture(ygfx_gfx* g, const ygfx_texture_desc* d) {
+static ygfx_tex ygfx__texture(ygfx_gfx* g, const ygfx_texture_desc* d) {
     ygfx_tex t;
     ygfx__res* r;
     ygfx_planes one;
@@ -8113,7 +8144,7 @@ YGFX_API ygfx_tex ygfx_texture(ygfx_gfx* g, const ygfx_texture_desc* d) {
     return t;
 }
 
-YGFX_API ygfx_tex ygfx_texture_import(ygfx_gfx* g, const ygfx_import_desc* d) {
+static ygfx_tex ygfx__texture_import(ygfx_gfx* g, const ygfx_import_desc* d) {
     ygfx_tex t;
     ygfx__res* r;
     uint32_t need;
@@ -8153,7 +8184,7 @@ YGFX_API ygfx_tex ygfx_texture_import(ygfx_gfx* g, const ygfx_import_desc* d) {
     return t;
 }
 
-YGFX_API int ygfx_texture_rebind(ygfx_gfx* g, ygfx_tex t, ygfx_tex src) {
+static int ygfx__texture_rebind(ygfx_gfx* g, ygfx_tex t, ygfx_tex src) {
     ygfx__res *a, *b;
     if (!g || !g->open) return YGFX_ERR_CLOSED;
     if (g->in_frame) return YGFX_ERR_ORDER;
@@ -8184,8 +8215,8 @@ static int ygfx__update(ygfx_gfx* g, ygfx_tex t, int plane, int x, int y, int w,
     return g->be->texture_update(g->bctx, plane ? r->plane_bid[plane - 1] : r->bid, x, y, w, h, data, stride);
 }
 
-YGFX_API int ygfx_texture_update(ygfx_gfx* g, ygfx_tex t, int x, int y, int w, int h,
-                                     const void* data, size_t stride) {
+static int ygfx__texture_update(ygfx_gfx* g, ygfx_tex t, int x, int y, int w, int h,
+                                    const void* data, size_t stride) {
     int rc;
     YRT_ZONE(z, "ygfx.upload");
     if (g && g->open && t.id >= 1 && t.id <= YGFX_MAX_TEXTURES && ygfx__planar(g->tex[t.id - 1].format)) {
@@ -8198,8 +8229,8 @@ YGFX_API int ygfx_texture_update(ygfx_gfx* g, ygfx_tex t, int x, int y, int w, i
     return rc;
 }
 
-YGFX_API int ygfx_texture_update_plane(ygfx_gfx* g, ygfx_tex t, int plane, int x, int y, int w, int h,
-                                           const void* data, size_t stride) {
+static int ygfx__texture_update_plane(ygfx_gfx* g, ygfx_tex t, int plane, int x, int y, int w, int h,
+                                          const void* data, size_t stride) {
     int rc;
     YRT_ZONE(z, "ygfx.upload");
     rc = ygfx__update(g, t, plane, x, y, w, h, data, stride);
@@ -8207,7 +8238,7 @@ YGFX_API int ygfx_texture_update_plane(ygfx_gfx* g, ygfx_tex t, int plane, int x
     return rc;
 }
 
-YGFX_API int ygfx_texture_update_planes(ygfx_gfx* g, ygfx_tex t, const ygfx_planes* p) {
+static int ygfx__texture_update_planes(ygfx_gfx* g, ygfx_tex t, const ygfx_planes* p) {
     int k, n, rc = YGFX_OK;
     YRT_ZONE(z, "ygfx.upload");
     if (!g || !g->open || !p || t.id < 1 || t.id > YGFX_MAX_TEXTURES || !g->tex[t.id - 1].used) {
@@ -8238,7 +8269,7 @@ YGFX_API void ygfx_texture_free(ygfx_gfx* g, ygfx_tex t) {
     for (i = 0; i < YGFX_MAX_TEXTURES; i++) if (g->tex[i].view == (int32_t)t.id) g->tex[i].view = 0;
 }
 
-YGFX_API ygfx_buf ygfx_buffer(ygfx_gfx* g, size_t bytes) {
+static ygfx_buf ygfx__buffer(ygfx_gfx* g, size_t bytes) {
     ygfx_buf b;
     int slot;
     b.id = 0;
@@ -8257,7 +8288,7 @@ YGFX_API ygfx_buf ygfx_buffer(ygfx_gfx* g, size_t bytes) {
     return b;
 }
 
-YGFX_API int ygfx_buffer_update(ygfx_gfx* g, ygfx_buf b, size_t off, const void* data, size_t n) {
+static int ygfx__buffer_update(ygfx_gfx* g, ygfx_buf b, size_t off, const void* data, size_t n) {
     int rc;
     YRT_ZONE(z, "ygfx.upload");
     if (!g || !g->open) { YRT_ZONE_END(z); return YGFX_ERR_CLOSED; }
@@ -8279,7 +8310,7 @@ YGFX_API void ygfx_buffer_free(ygfx_gfx* g, ygfx_buf b) {
     memset(&g->buf[b.id - 1], 0, sizeof g->buf[0]);
 }
 
-YGFX_API ygfx_pipe ygfx_pipeline(ygfx_gfx* g, const ygfx_pipeline_desc* d) {
+static ygfx_pipe ygfx__pipeline(ygfx_gfx* g, const ygfx_pipeline_desc* d) {
     ygfx_pipe p;
     int slot;
     p.id = 0;
@@ -8316,7 +8347,7 @@ YGFX_API void ygfx_pipeline_free(ygfx_gfx* g, ygfx_pipe p) {
     memset(&g->pipe[p.id - 1], 0, sizeof g->pipe[0]);
 }
 
-YGFX_API int ygfx_set_lut(ygfx_gfx* g, const float* lut, int n) {
+static int ygfx__set_lut(ygfx_gfx* g, const float* lut, int n) {
     int rc;
     YRT_ZONE(z, "ygfx.upload");
     if (!g || !g->open) { YRT_ZONE_END(z); return YGFX_ERR_CLOSED; }
@@ -8348,7 +8379,7 @@ static void ygfx__flip_rows(unsigned char* p, int w, int h, size_t bpp) {
     }
 }
 
-YGFX_API int ygfx_read_scene(ygfx_gfx* g, int x, int y, int w, int h, float* rgba) {
+static int ygfx__read_scene(ygfx_gfx* g, int x, int y, int w, int h, float* rgba) {
     int rc;
     if (!g || !g->open) return YGFX_ERR_CLOSED;
     if (g->in_frame) return YGFX_ERR_ORDER;
@@ -8360,7 +8391,7 @@ YGFX_API int ygfx_read_scene(ygfx_gfx* g, int x, int y, int w, int h, float* rgb
     return rc;
 }
 
-YGFX_API int ygfx_read_output(ygfx_gfx* g, int x, int y, int w, int h, uint8_t* rgba) {
+static int ygfx__read_output(ygfx_gfx* g, int x, int y, int w, int h, uint8_t* rgba) {
     int rc;
     if (!g || !g->open) return YGFX_ERR_CLOSED;
     if (g->in_frame) return YGFX_ERR_ORDER;
@@ -8372,7 +8403,7 @@ YGFX_API int ygfx_read_output(ygfx_gfx* g, int x, int y, int w, int h, uint8_t* 
     return rc;
 }
 
-YGFX_API ygfx_tex ygfx_target(ygfx_gfx* g, const ygfx_target_desc* d) {
+static ygfx_tex ygfx__target(ygfx_gfx* g, const ygfx_target_desc* d) {
     ygfx_tex t;
     ygfx_texture_src src;
     ygfx_format fmt;
@@ -8413,7 +8444,7 @@ YGFX_API ygfx_tex ygfx_target(ygfx_gfx* g, const ygfx_target_desc* d) {
 }
 
 /* A target's rows are top first already: no turn. */
-YGFX_API int ygfx_read_target(ygfx_gfx* g, ygfx_tex t, int x, int y, int w, int h, float* rgba) {
+static int ygfx__read_target(ygfx_gfx* g, ygfx_tex t, int x, int y, int w, int h, float* rgba) {
     const ygfx__res* r;
     int rc;
     if (!g || !g->open) return YGFX_ERR_CLOSED;
@@ -8689,7 +8720,7 @@ static void ygfx__cs_box(ygfx__cs* c, const uint32_t* w, uint32_t g) {
     for (k = 0; k < 4; k++) b[k] = o && (w[o + 4] & 0xFFFFu) ? ygfx__u2f(w[o + k]) : 0.0f;
 }
 
-YGFX_API ygfx_cset ygfx_cset_make(ygfx_gfx* g, const ygfx_cset_desc* d) {
+static ygfx_cset ygfx__cset_make(ygfx_gfx* g, const ygfx_cset_desc* d) {
     ygfx_cset out;
     ygfx_texture_src ts;
     ygfx__cs* c;
@@ -8759,7 +8790,7 @@ YGFX_API ygfx_cset ygfx_cset_make(ygfx_gfx* g, const ygfx_cset_desc* d) {
     return out;
 }
 
-YGFX_API int ygfx_cset_add(ygfx_gfx* g, ygfx_cset s, const ygfx_cset_desc* now, const uint32_t* glyphs, int n) {
+static int ygfx__cset_add(ygfx_gfx* g, ygfx_cset s, const ygfx_cset_desc* now, const uint32_t* glyphs, int n) {
     ygfx__cs* c;
     char msg[300];
     int i, rc;
@@ -9051,7 +9082,7 @@ static int ygfx__blur_program(ygfx_gfx* g) {
     return YGFX_OK;
 }
 
-YGFX_API int ygfx_blur_make(ygfx_gfx* g, ygfx_blur* b, const ygfx_blur_desc* d) {
+static int ygfx__blur_make(ygfx_gfx* g, ygfx_blur* b, const ygfx_blur_desc* d) {
     ygfx_target_desc td;
     ygfx_image_desc id;
     ygfx_format f;
@@ -9097,7 +9128,7 @@ YGFX_API int ygfx_blur_make(ygfx_gfx* g, ygfx_blur* b, const ygfx_blur_desc* d) 
     return YGFX_OK;
 }
 
-YGFX_API int ygfx_blur_apply(ygfx_gfx* g, ygfx_blur* b) {
+static int ygfx__blur_apply(ygfx_gfx* g, ygfx_blur* b) {
     double r, var, sp;
     int pass;
     if (!g || !g->open) return YGFX_ERR_CLOSED;
@@ -10735,6 +10766,180 @@ static const yscr_param ygfx__desc_params[] = {
 YGFX_API const yscr_param* ygfx_desc_params(int* n) {
     if (n) *n = (int)(sizeof ygfx__desc_params / sizeof ygfx__desc_params[0]);
     return ygfx__desc_params;
+}
+
+/* --- the calls on a gfx: a failure always leaves a message ------------------ */
+
+/* Hides the message during a call, so ygfx__done() can tell whether the
+ * call wrote one; one byte each way, in the frame loop too. */
+static char ygfx__hold(ygfx_gfx* g) {
+    char c0 = 0;
+    if (g) { c0 = g->error[0]; g->error[0] = '\0'; }
+    return c0;
+}
+
+/* A failure that wrote nothing gets the call's name and the code's text;
+ * a success leaves the message of the last failure as it was. */
+static int ygfx__done(ygfx_gfx* g, char c0, int rc, const char* what) {
+    if (!g) return rc;
+    if (rc < 0) {
+        if (!g->error[0]) ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: %s: %s", what, ygfx_strerror(rc));
+    } else if (!g->error[0]) {
+        g->error[0] = c0;
+    }
+    return rc;
+}
+
+/* An id maker that returned 0. */
+static int ygfx__made(const ygfx_gfx* g, uint32_t id) {
+    return id ? YGFX_OK : (!g || !g->open) ? YGFX_ERR_CLOSED : YGFX_ERR_ARG;
+}
+
+YGFX_API int ygfx_cset_add(ygfx_gfx* g, ygfx_cset s, const ygfx_cset_desc* now, const uint32_t* glyphs, int n) {
+    char c0 = ygfx__hold(g);
+    return ygfx__done(g, c0, ygfx__cset_add(g, s, now, glyphs, n), "cset_add");
+}
+
+YGFX_API int ygfx_blur_make(ygfx_gfx* g, ygfx_blur* b, const ygfx_blur_desc* d) {
+    char c0 = ygfx__hold(g);
+    return ygfx__done(g, c0, ygfx__blur_make(g, b, d), "blur_make");
+}
+
+YGFX_API int ygfx_blur_apply(ygfx_gfx* g, ygfx_blur* b) {
+    char c0 = ygfx__hold(g);
+    return ygfx__done(g, c0, ygfx__blur_apply(g, b), "blur_apply");
+}
+
+YGFX_API int ygfx_begin(ygfx_gfx* g, const yscr_frame* f) {
+    char c0 = ygfx__hold(g);
+    return ygfx__done(g, c0, ygfx__begin(g, f), "begin");
+}
+
+YGFX_API int ygfx_draw(ygfx_gfx* g, const ygfx_stim* s) {
+    char c0 = ygfx__hold(g);
+    return ygfx__done(g, c0, ygfx__draw(g, s), "draw");
+}
+
+YGFX_API int ygfx_draw_n(ygfx_gfx* g, const ygfx_stim* s, int n) {
+    char c0 = ygfx__hold(g);
+    return ygfx__done(g, c0, ygfx__draw_n(g, s, n), "draw_n");
+}
+
+YGFX_API int ygfx_end(ygfx_gfx* g) {
+    char c0 = ygfx__hold(g);
+    return ygfx__done(g, c0, ygfx__end_frame(g), "end");
+}
+
+YGFX_API int ygfx_begin_setup(ygfx_gfx* g) {
+    char c0 = ygfx__hold(g);
+    return ygfx__done(g, c0, ygfx__begin_setup(g), "begin_setup");
+}
+
+YGFX_API int ygfx_end_setup(ygfx_gfx* g) {
+    char c0 = ygfx__hold(g);
+    return ygfx__done(g, c0, ygfx__end_setup(g), "end_setup");
+}
+
+YGFX_API int ygfx_prime(ygfx_gfx* g) {
+    char c0 = ygfx__hold(g);
+    return ygfx__done(g, c0, ygfx__prime(g), "prime");
+}
+
+YGFX_API int ygfx_begin_target(ygfx_gfx* g, ygfx_tex t, const float* clear) {
+    char c0 = ygfx__hold(g);
+    return ygfx__done(g, c0, ygfx__begin_target(g, t, clear), "begin_target");
+}
+
+YGFX_API int ygfx_end_target(ygfx_gfx* g) {
+    char c0 = ygfx__hold(g);
+    return ygfx__done(g, c0, ygfx__end_target(g), "end_target");
+}
+
+YGFX_API int ygfx_read_target(ygfx_gfx* g, ygfx_tex t, int x, int y, int w, int h, float* rgba) {
+    char c0 = ygfx__hold(g);
+    return ygfx__done(g, c0, ygfx__read_target(g, t, x, y, w, h, rgba), "read_target");
+}
+
+YGFX_API int ygfx_texture_update(ygfx_gfx* g, ygfx_tex t, int x, int y, int w, int h, const void* data, size_t stride) {
+    char c0 = ygfx__hold(g);
+    return ygfx__done(g, c0, ygfx__texture_update(g, t, x, y, w, h, data, stride), "texture_update");
+}
+
+YGFX_API int ygfx_texture_update_planes(ygfx_gfx* g, ygfx_tex t, const ygfx_planes* p) {
+    char c0 = ygfx__hold(g);
+    return ygfx__done(g, c0, ygfx__texture_update_planes(g, t, p), "texture_update_planes");
+}
+
+YGFX_API int ygfx_texture_update_plane(ygfx_gfx* g, ygfx_tex t, int plane, int x, int y, int w, int h, const void* data, size_t stride) {
+    char c0 = ygfx__hold(g);
+    return ygfx__done(g, c0, ygfx__texture_update_plane(g, t, plane, x, y, w, h, data, stride), "texture_update_plane");
+}
+
+YGFX_API int ygfx_texture_rebind(ygfx_gfx* g, ygfx_tex t, ygfx_tex src) {
+    char c0 = ygfx__hold(g);
+    return ygfx__done(g, c0, ygfx__texture_rebind(g, t, src), "texture_rebind");
+}
+
+YGFX_API int ygfx_buffer_update(ygfx_gfx* g, ygfx_buf b, size_t off, const void* data, size_t n) {
+    char c0 = ygfx__hold(g);
+    return ygfx__done(g, c0, ygfx__buffer_update(g, b, off, data, n), "buffer_update");
+}
+
+YGFX_API int ygfx_set_lut(ygfx_gfx* g, const float* lut, int n) {
+    char c0 = ygfx__hold(g);
+    return ygfx__done(g, c0, ygfx__set_lut(g, lut, n), "set_lut");
+}
+
+YGFX_API int ygfx_read_scene(ygfx_gfx* g, int x, int y, int w, int h, float* rgba) {
+    char c0 = ygfx__hold(g);
+    return ygfx__done(g, c0, ygfx__read_scene(g, x, y, w, h, rgba), "read_scene");
+}
+
+YGFX_API int ygfx_read_output(ygfx_gfx* g, int x, int y, int w, int h, uint8_t* rgba) {
+    char c0 = ygfx__hold(g);
+    return ygfx__done(g, c0, ygfx__read_output(g, x, y, w, h, rgba), "read_output");
+}
+
+YGFX_API ygfx_cset ygfx_cset_make(ygfx_gfx* g, const ygfx_cset_desc* d) {
+    char c0 = ygfx__hold(g);
+    ygfx_cset r = ygfx__cset_make(g, d);
+    ygfx__done(g, c0, ygfx__made(g, r.id), "cset_make");
+    return r;
+}
+
+YGFX_API ygfx_tex ygfx_target(ygfx_gfx* g, const ygfx_target_desc* d) {
+    char c0 = ygfx__hold(g);
+    ygfx_tex r = ygfx__target(g, d);
+    ygfx__done(g, c0, ygfx__made(g, r.id), "target");
+    return r;
+}
+
+YGFX_API ygfx_tex ygfx_texture(ygfx_gfx* g, const ygfx_texture_desc* d) {
+    char c0 = ygfx__hold(g);
+    ygfx_tex r = ygfx__texture(g, d);
+    ygfx__done(g, c0, ygfx__made(g, r.id), "texture");
+    return r;
+}
+
+YGFX_API ygfx_tex ygfx_texture_import(ygfx_gfx* g, const ygfx_import_desc* d) {
+    char c0 = ygfx__hold(g);
+    ygfx_tex r = ygfx__texture_import(g, d);
+    ygfx__done(g, c0, ygfx__made(g, r.id), "texture_import");
+    return r;
+}
+
+YGFX_API ygfx_buf ygfx_buffer(ygfx_gfx* g, size_t bytes) {
+    char c0 = ygfx__hold(g);
+    ygfx_buf r = ygfx__buffer(g, bytes);
+    ygfx__done(g, c0, ygfx__made(g, r.id), "buffer");
+    return r;
+}
+
+YGFX_API ygfx_pipe ygfx_pipeline(ygfx_gfx* g, const ygfx_pipeline_desc* d) {
+    char c0 = ygfx__hold(g);
+    ygfx_pipe r = ygfx__pipeline(g, d);
+    ygfx__done(g, c0, ygfx__made(g, r.id), "pipeline");
+    return r;
 }
 
 #ifdef __cplusplus

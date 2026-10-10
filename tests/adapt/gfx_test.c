@@ -600,14 +600,20 @@ static void test_null_and_ring(void) {
     gab.sigma = 10; gab.sf = 0.1f; gab.contrast = 1.5f;   /* leaves 0..1 */
     s = ygfx_gabor(&gab);
     CHECK(ygfx_end(&g) == YGFX_ERR_ORDER);
+    CHECK(strstr(ygfx_error(&g), "ysp_gfx: end: ") != NULL);   /* v0.12: a message for each failure */
     CHECK(ygfx_draw(&g, &s) == YGFX_ERR_ORDER);
+    CHECK(strstr(ygfx_error(&g), "ysp_gfx: draw: ") != NULL);
+    CHECK(ygfx_texture(&g, NULL).id == 0 && strstr(ygfx_error(&g), "ysp_gfx: texture: ") != NULL);
     for (i = 0; i < 2; i++) {
         CHECK(yscr_begin(&scr, &f) == YSCR_OK);
         CHECK(ygfx_begin(&g, &f) == YGFX_OK);
         CHECK(ygfx_begin(&g, &f) == YGFX_ERR_ORDER);
+        CHECK(strstr(ygfx_error(&g), "ysp_gfx: begin: ") != NULL);
         CHECK(ygfx_texture_update(&g, ygfx_texture(&g, NULL), 0, 0, 1, 1, px, 0) == YGFX_ERR_ORDER);
+        CHECK(strstr(ygfx_error(&g), "ysp_gfx: texture_update: ") != NULL);
         if (i == 0) CHECK(ygfx_draw(&g, &s) == YGFX_OK);
         CHECK(ygfx_end(&g) == YGFX_OK);
+        CHECK(strstr(ygfx_error(&g), "ysp_gfx: texture_update: ") != NULL);   /* a success keeps it */
         CHECK(yscr_flip(&scr) == YSCR_OK);
     }
     CHECK(ygfx_clipped(&g) == 1);
@@ -1917,8 +1923,10 @@ static void gl_targets(stats* st) {
         CHECK(ygfx_draw_n(&R->g, shapes, 3) == YGFX_OK);
         S2.lost_ok += ygfx_end(&R->g) == YGFX_ERR_LOST;
         S2.lost_ok += !ygfx_is_open(&R->g);
-        S2.lost_ok += ygfx_read_output(&R->g, 0, 0, W, H, R->out) == YGFX_ERR_CLOSED;
         S2.lost_ok += strstr(ygfx_error(&R->g), "context is new") != NULL;
+        /* v0.12: the message is the last failure's, this read's */
+        S2.lost_ok += ygfx_read_output(&R->g, 0, 0, W, H, R->out) == YGFX_ERR_CLOSED &&
+                      strstr(ygfx_error(&R->g), "read_output") != NULL;
         CHECK(yscr_flip(&R->scr) == YSCR_OK);
         R->scr.gl_generation = keep;
         ygfx_close(&R->g);
