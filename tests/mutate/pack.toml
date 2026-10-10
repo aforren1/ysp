@@ -310,3 +310,22 @@ test = "pack"
 why = "The body is given to GL as a C string."
 find = '    if (b[s + len] != 0) return 0;'
 replace = ''
+
+# --- conventions (v0.2.0) ---------------------------------------------------------
+
+[[mutant]]
+id = "conv-01"
+name = "a failure leaves no code"
+test = "pack"
+why = "pk.error_code is how a caller of the bool open, or a log, gets the YPAK_ERR_* beside the message."
+find = '    p->error_code = code;'
+replace = ''
+
+[[mutant]]
+id = "conv-02"
+name = "the message claim is never released"
+test = "pack"
+why = "A claim held after a failure would silence every later message on the pack."
+find = '    YPAK__UNCLAIM(p);'
+replace = ''
+

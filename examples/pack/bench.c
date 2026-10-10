@@ -72,7 +72,7 @@ int main(int argc, char** argv) {
         memset(&d, 0, sizeof d);
         d.path = argv[1];
         t0 = yrt_now_ns();
-        if (ypak_open(&p, &d) != 0) { fprintf(stderr, "%s\n", ypak_error(&p)); return 1; }
+        if (!ypak_open(&p, &d)) { fprintf(stderr, "%s\n", ypak_error(&p)); return 1; }
         t_open[r] = (double)(yrt_now_ns() - t0) / 1e6;
         before = g_mallocs;
         n = p.n;
@@ -143,7 +143,7 @@ int main(int argc, char** argv) {
             memset(&d, 0, sizeof d);
             d.reader = &rd;
             d.reader_ctx = &fr;
-            if (ypak_open(&p, &d) != 0) { fprintf(stderr, "%s\n", ypak_error(&p)); return 1; }
+            if (!ypak_open(&p, &d)) { fprintf(stderr, "%s\n", ypak_error(&p)); return 1; }
             memset(&big, 0, sizeof big);
             for (i = 0; i < p.n; i++) { ypak_at(&p, i, &e); if (e.size > big.size) big = e; }
             ypak_cursor_init(&c, &p, &big, scratch, sizeof scratch);

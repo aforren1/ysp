@@ -411,13 +411,21 @@ static const tin g_basic[] = {
 };
 #define N_BASIC ((int)(sizeof(g_basic) / sizeof(g_basic[0])))
 
+/* v0.2.0: ypak_open() is bool and the code is pk.error_code; these tests
+ * kept their int checks through this: 0 open, YPAK_NEED when an incremental
+ * open wants bytes, else the failure's code. */
+static int open_rc(ypak_pack* pk, const ypak_desc* d) {
+    if (!ypak_open(pk, d)) return pk ? pk->error_code : YPAK_ERR_ARG;
+    return pk->need_len > 0 ? YPAK_NEED : 0;
+}
+
 static int open_mem(ypak_pack* pk, const uint8_t* m, int64_t n, ypak_verify v) {
     ypak_desc d;
     memset(&d, 0, sizeof(d));
     d.data = m;
     d.size = (size_t)n;
     d.verify = v;
-    return ypak_open(pk, &d);
+    return open_rc(pk, &d);
 }
 
 /* Every entry of g_basic is in pk with its bytes. */
@@ -564,10 +572,10 @@ static void test_basic(void) {
         ypak_desc d;
         memset(&d, 0, sizeof(d));
         d.data = m; d.size = (size_t)f.size; d.arena = arena; d.arena_size = 64;
-        rc = ypak_open(&pk, &d);
+        rc = open_rc(&pk, &d);
         CHECK(rc == YPAK_ERR_FULL && pk.need > 64 && pk.need <= sizeof(arena), "arena too small: %d need %zu", rc, pk.need);
         d.arena_size = pk.need;
-        rc = ypak_open(&pk, &d);
+        rc = open_rc(&pk, &d);
         CHECK(rc == 0, "arena of pk.need: %s", ypak_error(&pk));
         if (rc == 0) { check_contents(&pk, "arena"); ypak_close(&pk); }
     }
@@ -622,7 +630,7 @@ static void test_sources(void) {
     memset(&d, 0, sizeof(d));
     d.reader = &rd;
     d.reader_ctx = &f;
-    rc = ypak_open(&pr, &d);
+    rc = open_rc(&pr, &d);
     CHECK(rc == 0, "reader open: %s", ypak_error(&pr));
     if (rc == 0) {
         uint8_t* scratch = (uint8_t*)malloc((size_t)YPAK_CHUNK);
@@ -658,7 +666,7 @@ static void test_sources(void) {
         d.tail = m + f.size - (int64_t)tail;
         d.tail_size = tail;
         d.file_size = f.size;
-        rc = ypak_open(&pk, &d);
+        rc = open_rc(&pk, &d);
         while (rc == YPAK_NEED && steps < 10) {
             rc = ypak_feed(&pk, m + pk.need_off, (size_t)pk.need_len);
             steps++;
@@ -694,14 +702,14 @@ static void test_sources(void) {
         d.tail = m;
         d.tail_size = (size_t)f.size;
         d.file_size = f.size;
-        CHECK(ypak_open(&pk, &d) == 0, "incremental with everything: %s", ypak_error(&pk));
+        CHECK(open_rc(&pk, &d) == 0, "incremental with everything: %s", ypak_error(&pk));
         ypak_close(&pk);
         /* a short tail */
         memset(&d, 0, sizeof(d));
         d.tail = m + f.size - 100;
         d.tail_size = 100;
         d.file_size = f.size;
-        CHECK(ypak_open(&pk, &d) < 0, "tail of 100 bytes refused");
+        CHECK(!ypak_open(&pk, &d) && pk.error_code < 0, "tail of 100 bytes refused");
         CHECK(ypak_feed(&pk, m, 10) == YPAK_ERR_ARG, "feed without a need");
     }
 #if !defined(YPAK_NO_FILE) && !defined(__EMSCRIPTEN__)
@@ -714,7 +722,7 @@ static void test_sources(void) {
             fclose(o);
             memset(&d, 0, sizeof(d));
             d.path = path;
-            rc = ypak_open(&pk, &d);
+            rc = open_rc(&pk, &d);
             CHECK(rc == 0, "file open: %s", ypak_error(&pk));
             if (rc == 0) {
                 ypak_entry e;
@@ -727,11 +735,11 @@ static void test_sources(void) {
         }
         memset(&d, 0, sizeof(d));
         d.path = "no such pack.ysppak";
-        CHECK(ypak_open(&pk, &d) == YPAK_ERR_IO, "missing file");
+        CHECK(open_rc(&pk, &d) == YPAK_ERR_IO, "missing file");
     }
 #endif
     memset(&d, 0, sizeof(d));
-    CHECK(ypak_open(&pk, &d) == YPAK_ERR_ARG && ypak_open(&pk, NULL) == YPAK_ERR_ARG, "no source");
+    CHECK(open_rc(&pk, &d) == YPAK_ERR_ARG && open_rc(&pk, NULL) == YPAK_ERR_ARG, "no source");
     free(m);
     vf_free(&f);
 }
@@ -876,7 +884,7 @@ static void test_big(void) {
     memset(&d, 0, sizeof(d));
     d.reader = &rd;
     d.reader_ctx = &f;
-    rc = ypak_open(&pk, &d);
+    rc = open_rc(&pk, &d);
     CHECK(rc == 0, "4.3 GB pack: %s", ypak_error(&pk));
     if (rc == 0) {
         ypak_entry e;
@@ -924,7 +932,7 @@ static void test_count(void) {
     memset(&d, 0, sizeof(d));
     d.reader = &rd;
     d.reader_ctx = &f;
-    rc = ypak_open(&pk, &d);
+    rc = open_rc(&pk, &d);
     CHECK(rc == 0 && pk.n == N + 2, "65,537 entries: %s", ypak_error(&pk));
     if (rc == 0) {
         ypak_entry e;
@@ -1107,6 +1115,88 @@ static void test_views(void) {
           ypak_kind_id("nope") == 0, "kind names");
 }
 
+/* v0.2.0: lookups on several threads fail at once; each failure writes the
+ * message under an atomic claim, so the message after them is one whole
+ * failure's text, never a mix. The two names share no byte past their
+ * prefix, so a torn write shows as both letters. Close is safe on a zeroed
+ * handle, after a failed open and twice. */
+#define CLAIM_N 20000
+static ypak_pack g_claim_pk;
+static const char* const g_claim_names[2] = {
+    "missing/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "missing/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+};
+static int g_claim_bad[2];
+
+static void claim_run(int k) {
+    int i;
+    ypak_entry e;
+    for (i = 0; i < CLAIM_N; i++)
+        if (ypak_find(&g_claim_pk, g_claim_names[k], &e) != YPAK_ERR_NOT_FOUND) g_claim_bad[k]++;
+}
+
+#if defined(_WIN32)
+#include <windows.h>
+static DWORD WINAPI claim_thread(LPVOID arg) { claim_run((int)(intptr_t)arg); return 0; }
+#define CLAIM_THREADS 1
+#elif !defined(__EMSCRIPTEN__)
+#include <pthread.h>
+static void* claim_thread(void* arg) { claim_run((int)(intptr_t)arg); return NULL; }
+#define CLAIM_THREADS 1
+#endif
+
+static void test_claim(void) {
+    vfile f;
+    uint8_t* m;
+    ypak_pack z;
+    ypak_desc d;
+    char want[2][160];
+    int k;
+    memset(&z, 0, sizeof(z));
+    ypak_close(&z);
+    ypak_close(&z);
+    ypak_close(NULL);
+    memset(&d, 0, sizeof(d));
+    CHECK(!ypak_open(&z, &d) && z.error_code == YPAK_ERR_ARG && strstr(ypak_error(&z), "names no source"),
+          "a desc with no source: %s", ypak_error(&z));
+    ypak_close(&z);
+    ypak_close(&z);
+    CHECK(strcmp(ypak_strerror(YPAK_ERR_CORRUPT), "hash mismatch") == 0 && strcmp(ypak_strerror(0), "ok") == 0 &&
+          strcmp(ypak_strerror(-99), "unknown error") == 0, "ypak_strerror");
+    build(&f, g_basic, N_BASIC, F_NONE, 0, 0);
+    m = vf_flat(&f);
+    if (open_mem(&g_claim_pk, m, f.size, YPAK_VERIFY_USE) != 0) {
+        CHECK(0, "claim: open: %s", ypak_error(&g_claim_pk));
+    } else {
+        CHECK(ypak_error(&g_claim_pk)[0] == 0 && g_claim_pk.error_code == 0, "open leaves no message");
+        for (k = 0; k < 2; k++) snprintf(want[k], sizeof(want[k]), "ysp_pack: no entry '%s'", g_claim_names[k]);
+#if defined(CLAIM_THREADS)
+        {
+#if defined(_WIN32)
+            HANDLE th[2];
+            for (k = 0; k < 2; k++) th[k] = CreateThread(NULL, 0, claim_thread, (LPVOID)(intptr_t)k, 0, NULL);
+            for (k = 0; k < 2; k++) if (th[k]) { WaitForSingleObject(th[k], INFINITE); CloseHandle(th[k]); }
+#else
+            pthread_t th[2];
+            for (k = 0; k < 2; k++) pthread_create(&th[k], NULL, claim_thread, (void*)(intptr_t)k);
+            for (k = 0; k < 2; k++) pthread_join(th[k], NULL);
+#endif
+        }
+#else
+        claim_run(0);
+        claim_run(1);
+#endif
+        CHECK(g_claim_bad[0] == 0 && g_claim_bad[1] == 0, "claim: every lookup is NOT_FOUND");
+        CHECK(strcmp(ypak_error(&g_claim_pk), want[0]) == 0 || strcmp(ypak_error(&g_claim_pk), want[1]) == 0,
+              "claim: the message is one failure's, whole: %s", ypak_error(&g_claim_pk));
+        CHECK(g_claim_pk.error_code == YPAK_ERR_NOT_FOUND && g_claim_pk.err_claim_ == 0, "claim: code, released");
+        ypak_close(&g_claim_pk);
+        ypak_close(&g_claim_pk);
+    }
+    free(m);
+    vf_free(&f);
+}
+
 int main(void) {
     const char* quick = getenv("YPAK_TEST_QUICK");
     int full = !(quick && quick[0] == '1');
@@ -1118,6 +1208,7 @@ int main(void) {
     test_appended();
     test_faults();
     test_views();
+    test_claim();
     if (full) {
         test_flips();
         test_big();

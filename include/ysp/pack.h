@@ -1,4 +1,4 @@
-/* ysp/pack.h - v0.1.0 - public domain single-header pack reader
+/* ysp/pack.h - v0.2.0 - public domain single-header pack reader
  *
  *   Reads a ysp pack (docs/pack.md): one zip file in store-only mode, every
  *   entry's data aligned to 4096 bytes, a JSON manifest first, a private
@@ -31,7 +31,7 @@
  *       ypak_pack pk;
  *       ypak_desc d = { 0 };
  *       d.path = "study.ysppak";
- *       if (ypak_open(&pk, &d) != 0) { fputs(ypak_error(&pk), stderr); return 1; }
+ *       if (!ypak_open(&pk, &d)) { fputs(ypak_error(&pk), stderr); return 1; }
  *       ypak_entry e;
  *       if (ypak_find(&pk, "conditions.pstb", &e) == 0) {
  *           const void* p = ypak_data(&pk, &e);      // verified, zero-copy
@@ -42,7 +42,7 @@
  *       ypak_cursor c;
  *       ypak_cursor_init(&c, &pk, &e, NULL, 0);     // mapped: no scratch
  *       yau_reader rd = { ypak_cursor_read, e.size };
- *       ... yau_wav_desc wd = { .reader = &rd, .reader_ctx = &c };
+ *       ... yau_wav_desc wd = { 0 }; wd.reader = &rd; wd.reader_ctx = &c;
  *       ypak_close(&pk);
  *
  *   ---------------------------------------------------------------------
@@ -60,12 +60,13 @@
  *                 through a cursor or fetch and ypak_check().
  *   desc.tail     incremental: the last tail_size bytes of a file of
  *                 file_size bytes (a suffix range of 64 KB or more holds
- *                 the end record). ypak_open() returns YPAK_NEED with
- *                 pk.need_off and pk.need_len; fetch exactly that range and
- *                 pass it to ypak_feed(), which returns YPAK_NEED again or
- *                 0 when the pack is open. The reader does no I/O. Then
- *                 fetch each entry's [header_off, data_off + size) and pass
- *                 it to ypak_check().
+ *                 the end record). ypak_open() returns true with
+ *                 pk.need_len > 0: fetch exactly pk.need_off and
+ *                 pk.need_len and pass them to ypak_feed(), which returns
+ *                 YPAK_NEED again, 0 when the pack is open, or a negative
+ *                 YPAK_ERR_*. The reader does no I/O. Then fetch each
+ *                 entry's [header_off, data_off + size) and pass it to
+ *                 ypak_check().
  *
  *   ---------------------------------------------------------------------
  *   VERIFICATION
@@ -92,8 +93,16 @@
  *   After open, any number of threads may call the lookups, ypak_data(),
  *   ypak_check() and their own cursors; verified flags are bytes stored
  *   with release semantics, so two threads that verify one chunk both
- *   store 1. ypak_error() holds the last failure of any thread. A cursor
- *   belongs to one thread. Nothing allocates after open: open makes one
+ *   store 1. A cursor belongs to one thread.
+ *   MESSAGES are the exception README.md (Conventions) names for this
+ *   header: every failing call writes ypak_error() and pk.error_code, also
+ *   the calls that several threads may make at once. Each write first takes
+ *   an atomic claim on the message; a failure that finds it taken by
+ *   another thread's write returns its code and leaves that message whole,
+ *   so two failures never mix their text. ypak_error() is then the last
+ *   failure of some thread: read it on the thread that saw the failure,
+ *   when the other threads are not failing, or log the code, which
+ *   ypak_strerror() names. Nothing allocates after open: open makes one
  *   block (desc.arena, or YPAK_MALLOC) for the index (56 bytes an entry),
  *   one flag byte per entry and per chunk, and, without a mapping, copies
  *   of the central directory and the chunk table. Lookups are a binary
@@ -120,13 +129,28 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.2.0 - the repository conventions (README.md, Conventions). Breaks
+ *          the API: ypak_open() returns bool (true also for an incremental
+ *          open that wants bytes: pk.need_len > 0 then; ypak_feed() still
+ *          returns YPAK_NEED, 0 or a negative code), and pk.error_code
+ *          holds the YPAK_ERR_* of the last failure beside its message;
+ *          ypak_strerror() names a code.
+ *          Concurrent failures write the message under an atomic claim, so
+ *          two never interleave (THREADS AND COST). ypak_close() is safe on
+ *          a zeroed handle, after a failed open and twice, as before. The
+ *          USAGE block builds as C99 and C++17 and comes before the
+ *          CHANGELOG. No format change.
  *   v0.1.0 - first version: the container of docs/pack.md format 1, the
  *          index and lookup, the four sources, the three verification
  *          policies, cursors, the views of the pack's own forms (curve
  *          set, artwork, glyph runs, shader, texture, QOI), XXH64,
  *          SHA-256 and CRC-32.
  *
- *   STATUS: v0.1.0, 2026-10-08. Built and run with MSVC 19.44 (/W4 /WX),
+ *   STATUS: v0.2.0 on 2026-10-10: tests/adapt/pack_test.c, the pack tool's
+ *   test and the fuzz target build and pass with MSVC 19.44 /W4 /WX and
+ *   MinGW-w64 gcc -Werror, with a test of the claim (two threads failing
+ *   lookups at once, every message whole). The rest is v0.1.0's:
+ *   v0.1.0, 2026-10-08. Built and run with MSVC 19.44 (/W4 /WX),
  *   MinGW-w64 gcc 16.1 (-Wall -Wextra -Wpedantic -Wshadow -Werror; also
  *   C99), emcc 6.0.10 under node, and Linux gcc 11.4 (WSL2) as C11 and
  *   C++17 under ASan and UBSan with no report. tests/adapt/pack_test.c
@@ -158,9 +182,9 @@
 #define YSP_PACK_H_INCLUDED
 
 #define YPAK_VERSION_MAJOR 0
-#define YPAK_VERSION_MINOR 1
+#define YPAK_VERSION_MINOR 2
 #define YPAK_VERSION_PATCH 0
-#define YPAK_VERSION_STRING "0.1.0"
+#define YPAK_VERSION_STRING "0.2.0"
 
 /* The file source's mmap(), open() and fstat() under -std=c11: the same
  * feature-test macro, for the same reasons, as ysp/rt.h's (set before the
@@ -205,6 +229,10 @@ extern "C" {
 #define YPAK_ERR_CORRUPT (-13)    /* a hash does not match                   */
 #define YPAK_ERR_VERSION (-14)    /* another pack format version             */
 #define YPAK_ERR_NOT_FOUND (-15)
+
+/* A static name for a YPAK_* code ("ok" for 0, "need bytes" for
+ * YPAK_NEED), for a log line that has the code and not the message. */
+YPAK_API const char* ypak_strerror(int code);
 
 /* Kinds (docs/pack.md 2.11). The ids are part of format 1. */
 enum {
@@ -282,7 +310,8 @@ typedef struct ypak_pack {
     int64_t  need_off, need_len;     /* after YPAK_NEED                             */
     size_t   need;                   /* arena bytes open needs (YPAK_ERR_FULL)      */
     uint64_t hashed_bytes;           /* data hashed so far (approximate with threads) */
-    char     error[256];
+    int32_t  error_code;             /* YPAK_ERR_* of the last failure, 0 if none    */
+    char     error[256];             /* its message; see THREADS AND COST            */
     /* private */
     const uint8_t*     base_;
     const ypak_reader* rd_;
@@ -306,11 +335,21 @@ typedef struct ypak_pack {
     void*              map_;
     intptr_t           fh_, mh_;
     int64_t            map_size_;
+    long               err_claim_;    /* 1 while a failure writes the message        */
 } ypak_pack;
 
-YPAK_API int  ypak_open(ypak_pack* p, const ypak_desc* d);    /* 0, YPAK_NEED, or < 0 */
+/* Open a pack from one source of `d` (SOURCES). True when it is open, or,
+ * for desc.tail, when it wants bytes: pk.need_len > 0, and ypak_feed() takes
+ * them. False with ypak_error() and pk.error_code set; nothing to close then,
+ * though closing is safe. Clears the message on entry. */
+YPAK_API bool ypak_open(ypak_pack* p, const ypak_desc* d);
+/* The bytes an incremental open asked for. YPAK_NEED (fetch need_off and
+ * need_len again), 0 when the pack is open, or a negative YPAK_ERR_*. */
 YPAK_API int  ypak_feed(ypak_pack* p, const void* bytes, size_t n);
+/* Unmap and free what open took. Safe on a zeroed handle, after a failed
+ * open and twice. */
 YPAK_API void ypak_close(ypak_pack* p);
+/* The last failure's message ("" if none); see THREADS AND COST. */
 YPAK_API const char* ypak_error(const ypak_pack* p);
 
 /* Lookups: 0 or YPAK_ERR_NOT_FOUND (the message names a match that differs
@@ -501,6 +540,20 @@ YPAK_API const char* ypak_runs_str(const ypak_runs* r, uint32_t off);
 #endif
 #endif
 
+/* The message claim: one failure writes the message at a time; one that
+ * finds it taken returns its code and leaves the other's text whole. */
+#if defined(__GNUC__) || defined(__clang__)
+#define YPAK__CLAIM(p)   (__atomic_exchange_n(&(p)->err_claim_, 1L, __ATOMIC_ACQUIRE) == 0)
+#define YPAK__UNCLAIM(p) __atomic_store_n(&(p)->err_claim_, 0L, __ATOMIC_RELEASE)
+#elif defined(_MSC_VER)
+#include <intrin.h>
+#define YPAK__CLAIM(p)   (_InterlockedExchange((volatile long*)&(p)->err_claim_, 1) == 0)
+#define YPAK__UNCLAIM(p) ((void)_InterlockedExchange((volatile long*)&(p)->err_claim_, 0))
+#else
+#define YPAK__CLAIM(p)   ((p)->err_claim_ == 0 ? ((p)->err_claim_ = 1, 1) : 0)
+#define YPAK__UNCLAIM(p) ((p)->err_claim_ = 0)
+#endif
+
 /* Flags are bytes another thread may store at the same time (same value). */
 #if defined(__GNUC__) || defined(__clang__)
 #define YPAK__LOAD(p)   __atomic_load_n((p), __ATOMIC_ACQUIRE)
@@ -550,14 +603,33 @@ static int ypak__fail(ypak_pack* p, int code, const char* fmt, ...) {
     va_list ap;
     int n;
     if (!p) return code;
+    if (!YPAK__CLAIM(p)) return code;   /* another thread is writing its failure */
+    p->error_code = code;
     n = snprintf(p->error, sizeof(p->error), "ysp_pack: ");
     va_start(ap, fmt);
     vsnprintf(p->error + n, sizeof(p->error) - (size_t)n, fmt, ap);
     va_end(ap);
+    YPAK__UNCLAIM(p);
     return code;
 }
 
 YPAK_API const char* ypak_error(const ypak_pack* p) { return p ? p->error : ""; }
+
+YPAK_API const char* ypak_strerror(int code) {
+    switch (code) {
+    case YPAK_OK:            return "ok";
+    case YPAK_NEED:          return "need bytes";
+    case YPAK_ERR_ARG:       return "invalid argument";
+    case YPAK_ERR_IO:        return "cannot read";
+    case YPAK_ERR_FULL:      return "arena too small";
+    case YPAK_ERR_FORMAT:    return "not a valid pack";
+    case YPAK_ERR_NOMEM:     return "out of memory";
+    case YPAK_ERR_CORRUPT:   return "hash mismatch";
+    case YPAK_ERR_VERSION:   return "another pack format";
+    case YPAK_ERR_NOT_FOUND: return "not found";
+    default:                 return code > 0 ? "ok" : "unknown error";
+    }
+}
 
 /* --- XXH64 (Yann Collet's algorithm, written from its specification) ------- */
 
@@ -1521,7 +1593,7 @@ static int ypak__run(ypak_pack* p, const ypak__src* w) {
     }
 }
 
-YPAK_API int ypak_open(ypak_pack* p, const ypak_desc* d) {
+static int ypak__open(ypak_pack* p, const ypak_desc* d) {
     ypak__src w;
     int rc;
     if (!p) return YPAK_ERR_ARG;
@@ -1570,6 +1642,17 @@ YPAK_API int ypak_open(ypak_pack* p, const ypak_desc* d) {
     }
     if (rc < 0) ypak__release(p);
     return rc;
+}
+
+YPAK_API bool ypak_open(ypak_pack* p, const ypak_desc* d) {
+    int rc = ypak__open(p, d);
+    if (!p) return false;
+    if (rc < 0) {
+        p->error_code = rc;
+        return false;
+    }
+    if (rc == 0) p->need_off = p->need_len = 0;
+    return true;
 }
 
 YPAK_API int ypak_feed(ypak_pack* p, const void* bytes, size_t n) {

@@ -128,7 +128,7 @@ int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     case 0:
         d.data = m;
         d.size = size;
-        if (ypak_open(&pk, &d) == 0) { sweep(&pk, 1, NULL, 0); ypak_close(&pk); }
+        if (ypak_open(&pk, &d)) { sweep(&pk, 1, NULL, 0); ypak_close(&pk); }
         break;
     case 1: {
         size_t tail = (size_t)data[1] * 64 + 22;
@@ -137,7 +137,7 @@ int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
         d.tail = m + size - tail;
         d.tail_size = tail;
         d.file_size = (int64_t)size;
-        rc = ypak_open(&pk, &d);
+        rc = !ypak_open(&pk, &d) ? pk.error_code : pk.need_len > 0 ? YPAK_NEED : 0;
         while (rc == YPAK_NEED && steps++ < 8) {
             if (pk.need_off < 0 || pk.need_len < 0 || pk.need_off + pk.need_len > (int64_t)size) { ypak_close(&pk); rc = -1; break; }
             rc = ypak_feed(&pk, m + pk.need_off, (size_t)pk.need_len);
@@ -165,7 +165,7 @@ int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
         d.reader = &rd;
         d.reader_ctx = &mm;
         d.verify = (data[1] & 1) ? YPAK_VERIFY_OPEN : YPAK_VERIFY_USE;
-        if (ypak_open(&pk, &d) == 0) { sweep(&pk, 0, g_scratch, sizeof g_scratch); ypak_close(&pk); }
+        if (ypak_open(&pk, &d)) { sweep(&pk, 0, g_scratch, sizeof g_scratch); ypak_close(&pk); }
     } break;
     default:
         views(m, (int64_t)size, data[1]);
@@ -210,7 +210,7 @@ int main(int argc, char** argv) {
         memset(&d, 0, sizeof d);
         d.data = buf;
         d.size = n;
-        if (ypak_open(&pk, &d) == 0) {
+        if (ypak_open(&pk, &d)) {
             uint32_t i;
             for (i = 0; i < pk.n; i++) {
                 ypak_entry e;

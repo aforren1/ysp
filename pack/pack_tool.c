@@ -1824,12 +1824,10 @@ int ypt_build(const char* desc_path, const char* out_path, const ypt_options* o,
 
 static int open_pack(C* c, ypak_pack* p, const char* path, ypak_verify v) {
     ypak_desc d;
-    int rc;
     memset(&d, 0, sizeof d);
     d.path = path;
     d.verify = v;
-    rc = ypak_open(p, &d);
-    if (rc) return cfail(c, rc, "%s: %s", path, ypak_error(p));
+    if (!ypak_open(p, &d)) return cfail(c, p->error_code, "%s: %s", path, ypak_error(p));
     return 0;
 }
 
