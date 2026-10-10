@@ -241,3 +241,19 @@ find = '''                bad = stat(out, &st) == 0 && ((st.st_mode & S_IWOTH) !
 replace = '''                bad = stat(out, &st) == 0 && st.st_uid != me && st.st_uid != 0;'''
 expect = "survived"
 note = "POSIX code, so the Windows runner cannot reach it. Killed by hand on WSL2 (gcc 11.4) on 2026-10-08: the /tmp cases of rt_test_userdir.h fail."
+
+[[mutant]]
+id = "conv-01"
+name = "fit open takes a zero tick"
+test = "fit"
+why = "A zero ns_per_tick is what every fit call reads as not open: an open that accepts it gives a fit that refuses every pair without a word."
+find = '''    if (!(d->ns_per_tick > 0.0) || d->tick_bits > 64u) {'''
+replace = '''    if (d->tick_bits > 64u) {'''
+
+[[mutant]]
+id = "conv-02"
+name = "fit close keeps the map"
+test = "fit"
+why = "A closed handle must refuse pairs and report no map, as a zeroed one does."
+find = '''    if (f) memset(f, 0, sizeof *f);'''
+replace = '''    (void)f;'''

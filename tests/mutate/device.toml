@@ -60,8 +60,8 @@ id = "dev-06"
 name = "the fit kept across a reconnect"
 test = "device"
 why = "A device's clock can reset on power-up; the old map would put every later event far off."
-find = '''    (void)yrt_fit_init(&dev->fit, &fd);'''
-replace = '''    if (dev->st.opens <= 1) (void)yrt_fit_init(&dev->fit, &fd);'''
+find = '''    (void)yrt_fit_open(&dev->fit, &fd);'''
+replace = '''    if (dev->st.opens <= 1) (void)yrt_fit_open(&dev->fit, &fd);'''
 
 [[mutant]]
 id = "dev-07"

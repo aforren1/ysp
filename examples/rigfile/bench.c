@@ -121,7 +121,7 @@ int main(int argc, char** argv) {
     (void)yrt_thread_elevate(NULL);
 
     for (r = 0; r < rounds; r++) {
-        int64_t t0 = (int64_t)yrt_now_ns();
+        int64_t t0 = yrt_now_ns();
         for (i = 0; i < 2000; i++) {
             yjs_arena a;
             yjs_value* root;
@@ -129,41 +129,41 @@ int main(int argc, char** argv) {
             if (yjs_parse(&a, g_profile, g_profile_n, NULL, &root, NULL) != YJS_OK) return 1;
             g_sink += root->n;
         }
-        v[r] = (double)((int64_t)yrt_now_ns() - t0) / 2000.0 / 1000.0;
+        v[r] = (double)(yrt_now_ns() - t0) / 2000.0 / 1000.0;
     }
     report("yjs_parse, profile (fixed arena)", v, rounds, "us");
 
     for (r = 0; r < rounds; r++) {
-        int64_t t0 = (int64_t)yrt_now_ns();
+        int64_t t0 = yrt_now_ns();
         for (i = 0; i < 1000; i++) {
             if (yrig_parse(&g_p, g_profile, g_profile_n, NULL, err, sizeof err) != YRIG_OK) { fprintf(stderr, "%s\n", err); return 1; }
             g_sink += (size_t)g_p.n_roles;
         }
-        v[r] = (double)((int64_t)yrt_now_ns() - t0) / 1000.0 / 1000.0;
+        v[r] = (double)(yrt_now_ns() - t0) / 1000.0 / 1000.0;
     }
     report("yrig_parse, profile (all checks)", v, rounds, "us");
 
     for (r = 0; r < rounds; r++) {
-        int64_t t0 = (int64_t)yrt_now_ns();
+        int64_t t0 = yrt_now_ns();
         for (i = 0; i < 1000; i++) g_sink += yrig_write(&g_p, g_out, sizeof g_out);
-        v[r] = (double)((int64_t)yrt_now_ns() - t0) / 1000.0 / 1000.0;
+        v[r] = (double)(yrt_now_ns() - t0) / 1000.0 / 1000.0;
     }
     report("yrig_write, profile", v, rounds, "us");
 
     for (r = 0; r < rounds; r++) {
-        int64_t t0 = (int64_t)yrt_now_ns();
+        int64_t t0 = yrt_now_ns();
         for (i = 0; i < 500; i++) g_sink += (size_t)yrig_hash(&g_p, hash);
-        v[r] = (double)((int64_t)yrt_now_ns() - t0) / 500.0 / 1000.0;
+        v[r] = (double)(yrt_now_ns() - t0) / 500.0 / 1000.0;
     }
     report("yrig_hash, profile", v, rounds, "us");
 
     for (r = 0; r < rounds; r++) {
         yjs_arena a;
         yjs_value* root;
-        int64_t t0 = (int64_t)yrt_now_ns(), t1;
+        int64_t t0 = yrt_now_ns(), t1;
         yjs_arena_init(&a, g_mem, sizeof g_mem);
         if (yjs_parse(&a, big, bn, NULL, &root, NULL) != YJS_OK) return 1;
-        t1 = (int64_t)yrt_now_ns();
+        t1 = yrt_now_ns();
         v[r] = (double)bn / ((double)(t1 - t0) / 1e9) / 1e6;
         g_sink += root->n;
     }
@@ -175,9 +175,9 @@ int main(int argc, char** argv) {
         yjs_arena_init(&a, g_mem, sizeof g_mem);
         if (yjs_parse(&a, big, bn, NULL, &root, NULL) != YJS_OK) return 1;
         for (r = 0; r < rounds; r++) {
-            int64_t t0 = (int64_t)yrt_now_ns(), t1;
+            int64_t t0 = yrt_now_ns(), t1;
             size_t n = yjs_write_mem(root, YJS_WRITE_PRETTY, g_out, sizeof g_out);
-            t1 = (int64_t)yrt_now_ns();
+            t1 = yrt_now_ns();
             v[r] = (double)n / ((double)(t1 - t0) / 1e9) / 1e6;
             g_sink += n;
         }

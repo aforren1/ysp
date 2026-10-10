@@ -75,7 +75,7 @@ typedef struct off_path {
 static int off_open(void* ctx, const yscr_presenter_open* in, yscr_caps* caps, char* err, size_t cap) {
     off_path* o = (off_path*)ctx;
     (void)in; (void)err; (void)cap;
-    o->t0 = (int64_t)yrt_now_ns();
+    o->t0 = yrt_now_ns();
     o->period = 16666667;
     caps->kind = YSCR_FIXED_GRID;
     caps->period_ns = o->period;
@@ -96,7 +96,7 @@ static int off_acquire(void* ctx, int64_t deadline_ns, yscr_vblank* newest) {
 }
 static int off_present(void* ctx, const yscr_present_req* req) {
     off_path* o = (off_path*)ctx;
-    o->count = ((int64_t)yrt_now_ns() - o->t0) / o->period;
+    o->count = (yrt_now_ns() - o->t0) / o->period;
     o->t = o->t0 + o->count * o->period;
     o->id = req->present_id;
     o->has = 1;

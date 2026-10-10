@@ -101,7 +101,7 @@ static void read_device(yser_port* p) {
     int64_t now;
     n = yser_read(p, g_buf + g_nbuf, (int)sizeof g_buf - g_nbuf, 0, YSER_READ_ANY);
     if (n <= 0) return;
-    now = (int64_t)yrt_now_ns();
+    now = yrt_now_ns();
     g_nbuf += n;
     i = 0;
     while (g_nbuf - i >= 6) {
@@ -225,8 +225,8 @@ int main(int argc, char** argv) {
             }
     }
     {   /* the light lags; collect for 300 ms more */
-        int64_t end = (int64_t)yrt_now_ns() + 300000000;
-        while ((int64_t)yrt_now_ns() < end) { read_device(&port); yrt_sleep_ns(5000000); }
+        int64_t end = yrt_now_ns() + 300000000;
+        while (yrt_now_ns() < end) { read_device(&port); yrt_sleep_ns(5000000); }
     }
     yser_close(&port);
     frames = i;
@@ -238,7 +238,7 @@ int main(int argc, char** argv) {
         fd.mode = YRT_FIT_LATE;
         fd.ns_per_tick = 1000.0;   /* micros() */
         fd.tick_bits = 32;
-        if (yrt_fit_init(&g_fit, &fd) != YRT_OK) { fprintf(stderr, "fit: init\n"); return 2; }
+        if (!yrt_fit_open(&g_fit, &fd)) { fprintf(stderr, "fit: %s\n", yrt_fit_error(&g_fit)); return 2; }
         for (k = 0; k < g_ns; k++) (void)yrt_fit_add(&g_fit, g_sync[k].dev_us, g_sync[k].arrival, 0);
         yrt_fit_get(&g_fit, &fi);
         printf("device clock fit: %u pairs, %u points over %.1f s, %+.2f ppm, spread (p99 above) %.1f us, "

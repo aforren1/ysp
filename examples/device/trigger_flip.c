@@ -52,13 +52,13 @@ static void* fb_open(void* user, const char* key, char* found, size_t cap) {
 }
 static int fb_read(void* conn, uint8_t* buf, int cap, int timeout_ms) {
     (void)conn; (void)buf; (void)cap;
-    (void)yrt_sleep_ns((uint64_t)timeout_ms * 1000000u);
+    (void)yrt_sleep_ns((int64_t)timeout_ms * 1000000);
     return 0;
 }
 static int fb_write(void* conn, const uint8_t* buf, int n) {
     fakebox* f = (fakebox*)conn;
     /* writes come under the device's output lock: one at a time */
-    if (f->n < 4096 && n > 0) { f->t[f->n] = (int64_t)yrt_now_ns(); f->b[f->n++] = buf[n - 1]; }
+    if (f->n < 4096 && n > 0) { f->t[f->n] = yrt_now_ns(); f->b[f->n++] = buf[n - 1]; }
     return n;
 }
 static void fb_close(void* conn) { (void)conn; }

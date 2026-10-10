@@ -401,7 +401,7 @@ and the measured error on synthetic devices. In short:
 
 | Item | As built |
 |---|---|
-| API | `yrt_fit_init(f, desc)` (returns `YRT_OK` or `YRT_ERR_ARG`), `yrt_fit_add(f, ticks, host_ns, width_ns)` (returns `YRT_FIT_POINT`, `_REFIT`, `_RESTART`, `_REJECTED`, `_PENDING` bits), `yrt_fit_map(f, ticks)` (0 before the first pair), `yrt_fit_unwrap()`, `yrt_fit_get(f, &info)` |
+| API | `yrt_fit_open(f, desc)` (returns true, or false with the reason in `yrt_fit_error(f)`), `yrt_fit_add(f, ticks, host_ns, width_ns)` (returns `YRT_FIT_POINT`, `_REFIT`, `_RESTART`, `_REJECTED`, `_PENDING` bits), `yrt_fit_map(f, ticks)` (0 before the first pair), `yrt_fit_unwrap()`, `yrt_fit_get(f, &info)` |
 | Modes | LATE: the lower envelope (the hull edge spanning the mean x). BRACKET: LATE on the bracket ends (`host_ns` = t1), brackets over `max_width_ns` (1.3 ms) refused, so per bucket the smallest t1 minus device time wins. UNBIASED: bucket means, least squares |
 | Defaults | bucket 200 ms; slope nominal until the points span 5 s (the draft said 60 s; `ysp/audio.h` measured 5 s); hold a pair more than 50 ms off the map, restart when held pairs agree for 1 s |
 | Memory | 1024 points in the struct, about 40 KB, no allocation |
@@ -410,7 +410,7 @@ and the measured error on synthetic devices. In short:
 | Error on synthetic devices | Dense LATE pairs: tens of us after a few minutes (-47 to +91 us for a ms timer behind a modeled USB path). Sparse pairs behind a 16 ms timer: ms for minutes (up to +8.7 ms at 2 min). BRACKET: -42 to +110 us with a full window. Rates within 0.9 ppm |
 | Cost | 0.1 us a pair; a refit 9 to 23 us at p50, about 5 a second |
 
-Differences from this section's draft of the same day: `yrt_fit_init`
+Differences from this section's draft of the same day: `yrt_fit_open`
 returns a code; `desc.tick_bits` is `uint32_t`, `desc.mode` an `int`;
 `restart_hold_ns`, `clock_id` and `ring` were added; the info gives the
 anchor (`t0_ns`, `ticks0`) instead of "the time of tick 0", because the

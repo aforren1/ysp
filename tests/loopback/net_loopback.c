@@ -71,7 +71,7 @@ static int g_nclock = 10000;   /* --quick: 2000 */
 static volatile int g_nm;
 static void on_mark(void* ctx, const yin_event* e, const char* text) {
     long long push_mid = 0;
-    int64_t now = (int64_t)yrt_now_ns();
+    int64_t now = yrt_now_ns();
     (void)ctx;
     if (g_nm < g_nmark && sscanf(text, "t=%lld", &push_mid) == 1) {
         g_lat[g_nm] = now - (int64_t)push_mid;
@@ -90,17 +90,17 @@ static void send_markers(const char* key, int n) {
     memset(&d, 0, sizeof d);
     d.lib = &g_lib; d.role = "marks"; d.key = key; d.device = 1;
     if (!ynet_outlet_start(&o, &d)) { printf("outlet: %s\n", ynet_outlet_error(&o)); g_fail++; return; }
-    end = (int64_t)yrt_now_ns() + 10000000000LL;
-    while (!ynet_outlet_consumers(&o) && (int64_t)yrt_now_ns() < end) (void)yrt_sleep_ns(10000000);
+    end = yrt_now_ns() + 10000000000LL;
+    while (!ynet_outlet_consumers(&o) && yrt_now_ns() < end) (void)yrt_sleep_ns(10000000);
     (void)yrt_sleep_ns(2000000000);  /* the inlet blocks in its first time correction (liblsl probes for it) */
-    next = (int64_t)yrt_now_ns();
+    next = yrt_now_ns();
     for (i = 0; i < n; i++) {
         char text[40];
         int64_t t;
         next += 10000000;
-        (void)yrt_sleep_until((uint64_t)next, 500000);
+        (void)yrt_sleep_until(next, 500000);
         /* the stamp liblsl gets is read right after this; the text is the push's time */
-        t = (int64_t)yrt_now_ns();
+        t = yrt_now_ns();
         snprintf(text, sizeof text, "t=%lld", (long long)t);
         (void)ynet_out_mark(&o, (uint32_t)(i + 1), text);
     }
@@ -118,8 +118,8 @@ static void recv_markers(const char* key, int local_sender) {
     CHECK(ynet_inlet_start(&in, &d));
     if (local_sender) send_markers(key, g_nmark);
     else {
-        end = (int64_t)yrt_now_ns() + 30000000000LL;
-        while (g_nm < g_nmark && (int64_t)yrt_now_ns() < end) (void)yrt_sleep_ns(10000000);
+        end = yrt_now_ns() + 30000000000LL;
+        while (g_nm < g_nmark && yrt_now_ns() < end) (void)yrt_sleep_ns(10000000);
     }
     (void)yrt_sleep_ns(200000000);
     ynet_inlet_stop(&in);
@@ -151,7 +151,7 @@ static void* producer(void* arg)
     float x[40];
     double ts[10];
     double l0 = (double)ynet_lsl_now_ns(&g_lib) / 1e9 - 1e-3;
-    int64_t next = (int64_t)yrt_now_ns();
+    int64_t next = yrt_now_ns();
     uint64_t k = 0;
     int i;
     (void)arg;
@@ -163,7 +163,7 @@ static void* producer(void* arg)
         }
         (void)ynet_out_push(&g_so, x, 10, ts);
         next += 1000000;
-        (void)yrt_sleep_until((uint64_t)next, 200000);
+        (void)yrt_sleep_until(next, 200000);
     }
     return 0;
 }
@@ -172,7 +172,7 @@ static void run_producer(double secs) {
 #if defined(_WIN32)
     uintptr_t th = _beginthreadex(NULL, 0, producer, NULL, 0, NULL);
     g_stop = 0;
-    (void)yrt_sleep_ns((uint64_t)(secs * 1e9));
+    (void)yrt_sleep_ns((int64_t)(secs * 1e9));
     g_stop = 1;
     WaitForSingleObject((HANDLE)th, INFINITE);
     CloseHandle((HANDLE)th);
@@ -180,7 +180,7 @@ static void run_producer(double secs) {
     pthread_t th;
     g_stop = 0;
     pthread_create(&th, NULL, producer, NULL);
-    (void)yrt_sleep_ns((uint64_t)(secs * 1e9));
+    (void)yrt_sleep_ns((int64_t)(secs * 1e9));
     g_stop = 1;
     pthread_join(th, NULL);
 #endif
@@ -210,8 +210,8 @@ static void recv_stream(const char* key, double secs, int local_sender, int life
     CHECK(ynet_inlet_start(&in, &d));
     if (local_sender) {
         stream_start(key);
-        end = (int64_t)yrt_now_ns() + 10000000000LL;
-        while (ynet_inlet_state(&in) != YNET_RUNNING && (int64_t)yrt_now_ns() < end) (void)yrt_sleep_ns(10000000);
+        end = yrt_now_ns() + 10000000000LL;
+        while (ynet_inlet_state(&in) != YNET_RUNNING && yrt_now_ns() < end) (void)yrt_sleep_ns(10000000);
 #if defined(_WIN32)
         {
             uintptr_t th;
@@ -223,11 +223,11 @@ static void recv_stream(const char* key, double secs, int local_sender, int life
             g_stop = 0;
             pthread_create(&th, NULL, producer, NULL);
 #endif
-            end = (int64_t)yrt_now_ns() + (int64_t)(secs * 1e9);
-            while ((int64_t)yrt_now_ns() < end) {
+            end = yrt_now_ns() + (int64_t)(secs * 1e9);
+            while (yrt_now_ns() < end) {
                 (void)yrt_sleep_ns(10000000);
                 while ((n = ynet_stream_read(&ring, t, NULL, x, 8192)) > 0) {
-                    int64_t now = (int64_t)yrt_now_ns();
+                    int64_t now = yrt_now_ns();
                     for (i = 0; i < n; i++) if (now - t[i] > lag) lag = now - t[i];
                     got += n;
                 }
@@ -241,11 +241,11 @@ static void recv_stream(const char* key, double secs, int local_sender, int life
 #endif
         }
     } else {
-        end = (int64_t)yrt_now_ns() + (int64_t)((secs + 15) * 1e9);
-        while ((int64_t)yrt_now_ns() < end) {
+        end = yrt_now_ns() + (int64_t)((secs + 15) * 1e9);
+        while (yrt_now_ns() < end) {
             (void)yrt_sleep_ns(10000000);
             while ((n = ynet_stream_read(&ring, t, NULL, x, 8192)) > 0) {
-                int64_t now = (int64_t)yrt_now_ns();
+                int64_t now = yrt_now_ns();
                 for (i = 0; i < n; i++) if (now - t[i] > lag) lag = now - t[i];
                 got += n;
             }
@@ -271,7 +271,7 @@ static void recv_stream(const char* key, double secs, int local_sender, int life
     if (lifecycle) {
         int64_t t_gone;
         ynet_outlet_stop(&g_so);
-        t_gone = (int64_t)yrt_now_ns();
+        t_gone = yrt_now_ns();
         (void)yrt_sleep_ns(3000000000LL);
         printf("lifecycle: outlet destroyed: %s after 3 s\n", ynet_state_name(ynet_inlet_state(&in)));
         CHECK(ynet_inlet_state(&in) == YNET_LOST);
@@ -302,9 +302,9 @@ static void clock_check(void) {
     int i;
     int64_t base;
     for (i = 0; i < g_nclock; i++) {
-        int64_t a = (int64_t)yrt_now_ns();
+        int64_t a = yrt_now_ns();
         int64_t l = ynet_lsl_now_ns(&g_lib);
-        int64_t b = (int64_t)yrt_now_ns();
+        int64_t b = yrt_now_ns();
         w[i] = b - a;
         off[i] = l - (a + b) / 2;
         (void)yrt_sleep_ns(200000);

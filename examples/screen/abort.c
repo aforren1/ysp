@@ -58,7 +58,7 @@ static int g_fake_gamma = -1;
 static void last_words(void* ctx) {
     (void)ctx;
     printf("last words: %.1f ms into the panic, gamma_claimed=%d\n",
-           (double)((int64_t)yrt_now_ns() - yscr__wd.t_panic) / 1e6,
+           (double)(yrt_now_ns() - yscr__wd.t_panic) / 1e6,
            g_fake_gamma >= 0 ? yscr__gamma[g_fake_gamma].used == 0 : -1);
     fflush(stdout);
 }
@@ -130,11 +130,11 @@ static int child(int argc, char** argv) {
         SendInput(1, &in, sizeof in);
         SetForegroundWindow((HWND)g_scr.hwnd);
     }
-    t0 = (int64_t)yrt_now_ns();
+    t0 = yrt_now_ns();
     until = t0 + (hang ? hang_after : 9000000000LL);
     printf("ready %lu\n", (unsigned long)GetCurrentProcessId());
     fflush(stdout);
-    while ((int64_t)yrt_now_ns() < until) {
+    while (yrt_now_ns() < until) {
         SDL_Event ev;
         int rc;
         while (yscr_poll(&g_scr, &ev, NULL)) { }   /* the events read before begin() */
@@ -258,7 +258,7 @@ static int64_t press(const kid* k, int shift, int repeats) {
     int i;
     if (!child_in_front(k)) { printf("  the child is not in front: no key sent\n"); return 0; }
     if (shift) key(VK_LSHIFT, 0);
-    t = (int64_t)yrt_now_ns();
+    t = yrt_now_ns();
     key(VK_ESCAPE, 0);
     for (i = 0; i < repeats; i++) { Sleep(30); key(VK_ESCAPE, 0); }
     key(VK_ESCAPE, 1);
@@ -303,11 +303,11 @@ static double three(kid* k, DWORD* code) {
         m.dmSize = sizeof m;
         if (g_mode_back_ms < 0 && g_desk_w && EnumDisplaySettingsW(NULL, ENUM_CURRENT_SETTINGS, &m) &&
             m.dmPelsWidth == g_desk_w)
-            g_mode_back_ms = (double)((int64_t)yrt_now_ns() - t) / 1e6;
-        if ((int64_t)yrt_now_ns() - t > 5000000000LL) return -1;
+            g_mode_back_ms = (double)(yrt_now_ns() - t) / 1e6;
+        if (yrt_now_ns() - t > 5000000000LL) return -1;
     }
     GetExitCodeProcess(k->pi.hProcess, code);
-    return (double)((int64_t)yrt_now_ns() - t) / 1e6;
+    return (double)(yrt_now_ns() - t) / 1e6;
 }
 
 static void case_live(void) {

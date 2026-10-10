@@ -100,7 +100,7 @@ static void measure(uint32_t spin_ns, int iters, uint64_t period_ns) {
 /* The worker job records when it ran and tells the main thread. `done` is
  * written by the worker thread and read by the main thread after a wait on
  * the clock, which is enough here: the main thread only reads it, and the
- * worker is joined by yrt_worker_stop() before the value is used for
+ * worker is joined by yrt_worker_close() before the value is used for
  * anything else. */
 typedef struct job_result {
     volatile int done;
@@ -127,8 +127,8 @@ int main(int argc, char** argv) {
 
     /* Ask for everything, in the order the manual gives: the process-wide
      * settings first, then the thread. Each one reports what it got. */
-    bool locked = yrt_process_lock_memory();
-    bool timeres = yrt_timer_resolution_begin();
+    bool locked = yrt_process_lock_memory() == 0;
+    bool timeres = yrt_timer_resolution_begin() == 0;
     yrt_policy pol = yrt_thread_elevate(NULL);
 
     yrt_report rep;
@@ -156,7 +156,7 @@ int main(int argc, char** argv) {
     wd.spin_ns = 0; /* 0 asks for YRT_DEFAULT_SPIN_NS, the row tagged
                      * (default) above, so the worker is measured in the same
                      * configuration a zeroed desc gives an experiment. */
-    if (!yrt_worker_start(&w, &wd)) {
+    if (!yrt_worker_open(&w, &wd)) {
         fprintf(stderr, "\nworker start failed: %s\n", yrt_worker_error(&w));
     } else {
         job_result r;
@@ -171,7 +171,7 @@ int main(int argc, char** argv) {
              * which joins it: after that the job has either run or been
              * flushed, and r is settled. */
             yrt_sleep_ns(20000000ull);
-            yrt_worker_stop(&w);
+            yrt_worker_close(&w);
             if (r.done)
                 printf("  job ran %.1f us %s its 5 ms deadline%s\n",
                        (double)(r.late_ns < 0 ? -r.late_ns : r.late_ns) / 1000.0,
@@ -180,7 +180,7 @@ int main(int argc, char** argv) {
             else
                 printf("  job did not run\n");
         }
-        if (yrt_worker_is_running(&w)) yrt_worker_stop(&w);
+        if (yrt_worker_is_running(&w)) yrt_worker_close(&w);
     }
 #endif
 

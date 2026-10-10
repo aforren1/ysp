@@ -83,12 +83,12 @@ static void cs_on_tick(const void* aup, const void* tkp) {
     g_ticks[i].pos = tk->pos;
     g_ticks[i].pos_t = tk->pos_t;
     g_ticks[i].w = au->w;
-    g_ticks[i].t_hook = (int64_t)yrt_now_ns();
+    g_ticks[i].t_hook = yrt_now_ns();
 }
 static void cs_on_end(void) {
     long i = g_nticks;
     if (i >= CS_MAX) return;
-    g_ticks[i].t_end = (int64_t)yrt_now_ns();
+    g_ticks[i].t_end = yrt_now_ns();
     g_nticks = i + 1;
     if (g_allocs_control) free(malloc(16));
 }
@@ -99,11 +99,11 @@ static long g_stalls = 0;
 static int64_t g_stall_req = 0;   /* for the summary */
 static void stall_render(void* ctx, float* out, int32_t frames, const yau_clock* clk) {
     (void)ctx; (void)out; (void)frames; (void)clk;
-    if (g_stall_ns && (int64_t)yrt_now_ns() >= g_stall_at) {
+    if (g_stall_ns && yrt_now_ns() >= g_stall_at) {
         int64_t ns = g_stall_ns;
         if (g_stall_every) g_stall_at += g_stall_every; else g_stall_ns = 0;
         g_stalls++;
-        yrt_sleep_until(yrt_now_ns() + (uint64_t)ns, 0);
+        yrt_sleep_until(yrt_now_ns() + ns, 0);
     }
 }
 static const yau_source g_stall_src = { YAU_SOURCE_VERSION, "stall", stall_render };
@@ -273,7 +273,7 @@ int main(int argc, char** argv) {
     if (allocs) { static float arena[1 << 14]; d.arena = arena; d.arena_bytes = sizeof arena; }
     if (g_stall_ns) {
         d.source = &g_stall_src;
-        g_stall_at = (int64_t)yrt_now_ns() + (int64_t)(stall_at * 1e9);   /* from before open */
+        g_stall_at = yrt_now_ns() + (int64_t)(stall_at * 1e9);   /* from before open */
     }
     else g_stall_ns = 0;
 #if defined(_WIN32) && defined(_DEBUG)
@@ -322,7 +322,7 @@ int main(int argc, char** argv) {
         yrt_pump_desc pd;
         memset(&pd, 0, sizeof pd);
         pd.msg_size = 8; pd.capacity = 4; pd.on_msg = cs_wav_msg; pd.on_idle = cs_wav_step;
-        if (!yrt_pump_start(&g_pump, &pd)) { fprintf(stderr, "%s\n", yrt_pump_error(&g_pump)); return 1; }
+        if (!yrt_pump_open(&g_pump, &pd)) { fprintf(stderr, "%s\n", yrt_pump_error(&g_pump)); return 1; }
     } else if (g_nstreams) {
 #if defined(_WIN32)
         _beginthreadex(NULL, 0, producer, NULL, 0, NULL);
@@ -348,8 +348,8 @@ int main(int argc, char** argv) {
         if (fr) fprintf(fr, "source,kind,t_ns,aux,i0,i1,i2,i3,f1,f2,u6,u7,u16_18,u16_19\n");
     }
     {
-        int64_t t_end = (int64_t)yrt_now_ns() + (int64_t)(seconds * 1e9);
-        int64_t next = (int64_t)yrt_now_ns();
+        int64_t t_end = yrt_now_ns() + (int64_t)(seconds * 1e9);
+        int64_t next = yrt_now_ns();
         yrt_policy pol = frame_work >= 0 ? yrt_thread_elevate(NULL) : YRT_POLICY_NONE;
         (void)pol;
         if (allocs) {
@@ -359,21 +359,21 @@ int main(int argc, char** argv) {
             g_counting = 1;
 #endif
         }
-        while ((int64_t)yrt_now_ns() < t_end) {
+        while (yrt_now_ns() < t_end) {
             int k;
             next += 16666667;
-            yrt_sleep_until((uint64_t)next, YRT_DEFAULT_SPIN_NS);
+            yrt_sleep_until(next, YRT_DEFAULT_SPIN_NS);
             if (frame_work >= 0) {
-                int64_t a = (int64_t)yrt_now_ns(), b;
+                int64_t a = yrt_now_ns(), b;
                 yau_buf sb;
                 memset(&sb, 0, sizeof sb);
                 sb.frames = g_silence; sb.n = 480; sb.channels = 2;
                 (void)yau_play_at(&au, sb, a + yau_lead_ns(&au) + YAU_MS(20));
                 (void)yau_update(&au);
                 cs_streams_frame();
-                b = (int64_t)yrt_now_ns();
+                b = yrt_now_ns();
                 if (nframes < (long)(sizeof g_frame_cost / sizeof g_frame_cost[0])) g_frame_cost[nframes++] = b - a;
-                if (frame_work > 0) yrt_spin_until((uint64_t)(a + (int64_t)(frame_work * 1e6)));
+                if (frame_work > 0) yrt_spin_until((int64_t)(a + (int64_t)(frame_work * 1e6)));
             } else {
                 (void)yau_update(&au);
                 cs_streams_frame();
@@ -403,7 +403,7 @@ int main(int argc, char** argv) {
     yau_describe(&au, line, sizeof line);
     g_stop = 1;
 #if YAU_VERSION_MINOR >= 2
-    if (g_nstreams && g_wav_path) yrt_pump_stop(&g_pump);
+    if (g_nstreams && g_wav_path) yrt_pump_close(&g_pump);
     if (g_nstreams) {
         yau_caps c;
         yau_get_caps(&au, &c);

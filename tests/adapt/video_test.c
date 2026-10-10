@@ -71,7 +71,7 @@ static void vsleep_until(long long t);
 
 static long long vnow(void) { return g_virtual ? g_vt : (long long)yrt_now_ns(); }
 static void vsleep_until(long long t) {
-    if (!g_virtual) { yrt_sleep_until((uint64_t)t, 0); return; }
+    if (!g_virtual) { yrt_sleep_until(t, 0); return; }
     if (t > g_vt) g_vt = t;
 }
 
@@ -1844,19 +1844,19 @@ static void test_threaded(void) {
      * the frame thread as its only producer; ThreadSanitizer checks) */
     g_sd.stall_frame = 40;
     g_sd.stall_all = 1;
-    g_sd.stall_until = (int64_t)yrt_now_ns() + 300000000;
+    g_sd.stall_until = yrt_now_ns() + 300000000;
     desc_default(&vd);
     vd.inline_decode = false;
     vd.refresh_num = 250;
     vd.ahead = 4;
     if (!open_mv(&vd)) { g_virtual = 1; return; }
     CHECK(yvid_play_at(&g_mv, YVID_ASAP) > 0);
-    t0 = (int64_t)yrt_now_ns() + 20000000;
+    t0 = yrt_now_ns() + 20000000;
     k_end = (g_sd.stall_until - t0 + P - 1) / P;   /* the first display frame after the stall */
     for (k = 0; k < 400 && rc >= 0; k++) {
         memset(&f, 0, sizeof f);
         f.onset = t0 + k * P; f.period = P; f.index = k; f.vblank = k;
-        yrt_sleep_until((uint64_t)(f.onset - P / 2), 0);
+        yrt_sleep_until((int64_t)(f.onset - P / 2), 0);
         rc = yvid_update(&g_mv, &f);
         if (g_mv.has_last && g_mv.last.display == k && g_mv.last.decision == YVID_SHOWN) {
             if (g_mv.last.frame <= last) order_bad++;
@@ -1891,10 +1891,10 @@ static void test_threaded(void) {
 /* Waits until the decode thread has nothing to do: every slot full, or the
  * decoder PENDING. 0 after 2 s. */
 static int wait_settled(void) {
-    uint64_t until = yrt_now_ns() + 2000000000u;
+    int64_t until = yrt_now_ns() + 2000000000;
     while (!yvid__ld32(&g_mv.idle)) {
         if (yrt_now_ns() > until) return 0;
-        yrt_sleep_until(yrt_now_ns() + 100000u, 0);
+        yrt_sleep_until(yrt_now_ns() + 100000, 0);
     }
     return 1;
 }
@@ -3113,11 +3113,11 @@ static void test_mf_threaded(void) {
     g_up_bytes = 0;
     if (!yvid_open(&g_mv, &g_gfx, &vd)) { fail(__LINE__, yvid_error(&g_mv)); g_virtual = 1; return; }
     CHECK(yvid_play_at(&g_mv, YVID_ASAP) > 0);
-    t0 = (int64_t)yrt_now_ns() + 20000000;
+    t0 = yrt_now_ns() + 20000000;
     for (k = 0; k < 400 && rc == YVID_OK; k++) {
         memset(&f, 0, sizeof f);
         f.onset = t0 + k * P; f.period = P; f.index = k; f.vblank = k;
-        yrt_sleep_until((uint64_t)(f.onset - P / 2), 0);
+        yrt_sleep_until((int64_t)(f.onset - P / 2), 0);
         g_planes_off = 0; g_plane_i = 0;
         rc = yvid_update(&g_mv, &f);
         if (g_mv.has_last && g_mv.last.display == k && g_mv.last.decision == YVID_SHOWN) {

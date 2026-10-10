@@ -370,10 +370,12 @@ set(YSP_PLATFORMS_video    Windows Linux Darwin)
 set(YSP_THREADS_video      OFF)
 set(YSP_DEPS_video         SDL3::SDL3)
 
+# -Wfloat-conversion: every time is int64_t ns, so seconds passed where ns
+# go (ytl_wait(&q, 0.5)) must not compile quietly; MSVC's /W4 has C4244.
 if(MSVC)
     set(YSP_WARNINGS /W4 /WX)
 else()
-    set(YSP_WARNINGS -Wall -Wextra -Wpedantic -Wshadow -Werror)
+    set(YSP_WARNINGS -Wall -Wextra -Wpedantic -Wshadow -Wfloat-conversion -Werror)
 endif()
 
 # ysp_add_program(<target> <src> <group>...): the groups are those of the

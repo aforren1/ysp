@@ -214,16 +214,16 @@ int main(int argc, char** argv) {
     yvid_play_at(&mv, YVID_ASAP);
 
     while (yscr_begin(&scr, &f) == YSCR_OK) {   /* Shift+Esc ends it */
-        int64_t t0 = (int64_t)yrt_now_ns(), dt;
+        int64_t t0 = yrt_now_ns(), dt;
         yvid_record r;
         rc = yvid_update(&mv, &f);
-        dt = (int64_t)yrt_now_ns() - t0;
+        dt = yrt_now_ns() - t0;
         if (rc < 0) { fprintf(stderr, "video_play: %s (%s)\n", yvid_strerror(rc), yvid_error(&mv)); failed = 1; break; }
         if (!t_start) t_start = f.onset;
         if (f.index == 120) {
             heap0 = yvid_heap_calls();
             cpu0 = cpu_ns();
-            wall0 = (int64_t)yrt_now_ns();
+            wall0 = yrt_now_ns();
         }
         if (yvid_last(&mv, &r) == YVID_OK && r.display == f.index) {
             int shown = r.decision == YVID_SHOWN;
@@ -248,7 +248,7 @@ int main(int argc, char** argv) {
         {
             /* on the GPU path a decoder shares the screen's device and
              * context, so the GL and present calls may wait for it */
-            int64_t d0 = (int64_t)yrt_now_ns();
+            int64_t d0 = yrt_now_ns();
             ygfx_begin(&gfx, &f);
             ygfx_draw(&gfx, &film);
             ygfx_end(&gfx);
@@ -261,7 +261,7 @@ int main(int argc, char** argv) {
                     if (!nc) break;
                     dcost = nc;
                 }
-                dcost[n_dcost++] = (int64_t)yrt_now_ns() - d0;
+                dcost[n_dcost++] = yrt_now_ns() - d0;
             }
         }
         if (rc == YVID_ENDED) break;
@@ -280,7 +280,7 @@ int main(int argc, char** argv) {
     yvid_describe(&mv, line, sizeof line);
     printf("%s\n", line);
     if (wall0) {
-        int64_t dc = cpu_ns() - cpu0, dw = (int64_t)yrt_now_ns() - wall0;
+        int64_t dc = cpu_ns() - cpu0, dw = yrt_now_ns() - wall0;
         printf("video_play: process CPU after frame 120: %.1f%% of one core (%.3f s over %.3f s)\n",
                100.0 * (double)dc / (double)dw, (double)dc / 1e9, (double)dw / 1e9);
     }

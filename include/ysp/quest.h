@@ -3537,7 +3537,7 @@ YQST_API bool yqst_async_start(yqst_async* a, const yqst_async_desc* desc) {
     pd.ctx = a;
     pd.below_normal = desc->below_normal;
     pd.pin_cpu = desc->pin_cpu;
-    if (!yrt_pump_start(&a->pump, &pd)) {
+    if (!yrt_pump_open(&a->pump, &pd)) {
         snprintf(a->error, sizeof(a->error), "ysp_quest: %.200s",
                  yrt_pump_error(&a->pump));
         a->published = false;
@@ -3549,7 +3549,7 @@ YQST_API bool yqst_async_start(yqst_async* a, const yqst_async_desc* desc) {
 
 YQST_API void yqst_async_stop(yqst_async* a) {
     if (!a) return;
-    yrt_pump_stop(&a->pump);   /* drains, then joins */
+    yrt_pump_close(&a->pump);   /* drains, then joins */
     a->running = false;
 }
 

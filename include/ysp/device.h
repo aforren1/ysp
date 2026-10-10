@@ -629,7 +629,7 @@ YDEV_API const char* ydev_state_name(int state) {
 }
 
 static int64_t ydev__now(const ydev_device* dev) {
-    return dev->d.now ? dev->d.now(dev->d.now_ctx) : (int64_t)yrt_now_ns();
+    return dev->d.now ? dev->d.now(dev->d.now_ctx) : yrt_now_ns();
 }
 
 /* --- keys ---------------------------------------------------------------------- */
@@ -1103,7 +1103,7 @@ static int ydev__out(ydev_device* dev, uint32_t code, int64_t width_ns, uint32_t
             dev->trail_seq = seq;
 #ifndef YRT_NO_THREADS
             if (dev->have_worker) {
-                int job = yrt_worker_submit(&dev->worker, (uint64_t)dev->trail_at, ydev__trail_job, dev);
+                int job = yrt_worker_submit(&dev->worker, dev->trail_at, ydev__trail_job, dev);
                 dev->trail_token = job > 0 ? (uint32_t)job : 0u;
                 if (job <= 0) rc = YDEV_ERR_IO;
             } else
@@ -1237,7 +1237,7 @@ static void ydev__fit_start(ydev_device* dev) {
     fd.max_width_ns = dev->d.max_width_ns;
     fd.clock_id = dev->d.device;
     fd.ring = dev->d.ring;
-    (void)yrt_fit_init(&dev->fit, &fd);
+    (void)yrt_fit_open(&dev->fit, &fd);
     ybox_init(&dev->dec, dev->d.family, (uint8_t)dev->d.kind, dev->d.device);
     dev->probe_pending = 0;
 }
@@ -1320,7 +1320,7 @@ static void ydev__read(ydev_device* dev, int timeout_ms) {
     ybox_out o;
     if (!dev->tr.read) {
         /* an output-only transport: nothing to read */
-        if (timeout_ms > 0 && !dev->d.now) (void)yrt_sleep_ns((uint64_t)timeout_ms * 1000000u);
+        if (timeout_ms > 0 && !dev->d.now) (void)yrt_sleep_ns((int64_t)timeout_ms * 1000000);
         return;
     }
     n = dev->tr.read(dev->conn, dev->rx, (int)sizeof dev->rx, timeout_ms);
@@ -1480,7 +1480,7 @@ YDEV_API bool ydev_start(ydev_device* dev, const ydev_desc* desc) {
         yrt_worker_desc wd;
         memset(&wd, 0, sizeof wd);
         wd.no_elevate = dev->d.no_elevate;
-        if (!yrt_worker_start(&dev->worker, &wd)) {
+        if (!yrt_worker_open(&dev->worker, &wd)) {
             snprintf(dev->err, sizeof dev->err, "ysp_device: the trailing-edge worker did not start: %.100s",
                      yrt_worker_error(&dev->worker));
             ydev__lock_free(ydev__omx(dev));
@@ -1516,7 +1516,7 @@ YDEV_API bool ydev_start(ydev_device* dev, const ydev_desc* desc) {
 #endif
     if (!dev->have_thread) {
 #ifndef YRT_NO_THREADS
-        if (dev->have_worker) { yrt_worker_stop(&dev->worker); dev->have_worker = 0; }
+        if (dev->have_worker) { yrt_worker_close(&dev->worker); dev->have_worker = 0; }
 #endif
         ydev__lock_free(ydev__omx(dev));
         ydev__lock_free(ydev__mx(dev));
@@ -1549,7 +1549,7 @@ YDEV_API void ydev_stop(ydev_device* dev) {
     }
     /* outputs end idle: a pending trailing edge now, then a held code */
 #ifndef YRT_NO_THREADS
-    if (dev->have_worker) { yrt_worker_stop(&dev->worker); dev->have_worker = 0; }
+    if (dev->have_worker) { yrt_worker_close(&dev->worker); dev->have_worker = 0; }
     else
 #endif
     if (dev->trail_token) ydev__trail(dev, 0, true);

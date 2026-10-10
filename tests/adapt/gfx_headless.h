@@ -194,7 +194,7 @@ static int ygfx_hl__open(void* vctx, const yscr_presenter_open* in, yscr_caps* c
     get_string = (ygfx_hl__str_fn)ygfx_hl__sym(h, "glGetString");
     snprintf(h->renderer, sizeof h->renderer, "%s", get_string ? (const char*)get_string(0x1F01) : "?");
     h->period = in->sim_period_ns > 0 ? in->sim_period_ns : 16666667;
-    h->t0 = (int64_t)yrt_now_ns();
+    h->t0 = yrt_now_ns();
     h->has_pend = h->has_done = 0;
     caps->kind = YSCR_FIXED_GRID;
     caps->period_ns = h->period;
@@ -232,7 +232,7 @@ static int ygfx_hl__acquire(void* vctx, int64_t deadline_ns, yscr_vblank* newest
     (void)deadline_ns;
     if (h->has_pend) {
         int64_t t = h->t0 + h->pend_count * h->period;
-        if (t > (int64_t)yrt_now_ns()) yrt_sleep_until((uint64_t)t, YRT_DEFAULT_SPIN_NS);
+        if (t > yrt_now_ns()) yrt_sleep_until(t, YRT_DEFAULT_SPIN_NS);
         h->done.present_id = h->pend_id;
         h->done.t_ns = t;
         h->done.count = h->pend_count;
@@ -242,7 +242,7 @@ static int ygfx_hl__acquire(void* vctx, int64_t deadline_ns, yscr_vblank* newest
         h->has_done = 1;
         h->has_pend = 0;
     }
-    c = ygfx_hl__count(h, (int64_t)yrt_now_ns());
+    c = ygfx_hl__count(h, yrt_now_ns());
     newest->present_id = 0;
     newest->count = c;
     newest->t_ns = h->t0 + c * h->period;
@@ -255,7 +255,7 @@ static int ygfx_hl__acquire(void* vctx, int64_t deadline_ns, yscr_vblank* newest
 
 static int ygfx_hl__present(void* vctx, const yscr_present_req* req) {
     ygfx_headless* h = (ygfx_headless*)vctx;
-    int64_t next = ygfx_hl__count(h, (int64_t)yrt_now_ns()) + 1;
+    int64_t next = ygfx_hl__count(h, yrt_now_ns()) + 1;
     if (h->flush) h->flush();
     h->pend_id = req->present_id;
     h->pend_count = req->target_count > next ? req->target_count : next;

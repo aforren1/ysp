@@ -1,4 +1,4 @@
-/* ysp/rt.h - v0.7.0 - public domain single-header real-time timing library
+/* ysp/rt.h - v0.8.0 - public domain single-header real-time timing library
  *
  *   The clock, the waits, the scheduling ladder, the one-shot deadline
  *   worker, the background-compute pump, the event ring, the clock
@@ -18,6 +18,23 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.8.0 - The ysp conventions (README.md, Conventions); breaks the API.
+ *          Every time is int64_t ns: yrt_now_ns(), yrt_sleep_until(),
+ *          yrt_sleep_ns(), yrt_spin_until(), yrt_worker_submit(),
+ *          yrt_pump_wait(), yrt_event.t_ns, the zone's dur_ns, yrt_corr,
+ *          yrt_job_info, yrt_sched_deadline, yrt_clock_info and
+ *          yrt_report. yrt_now_us() is gone. Unit macros YRT_NS(),
+ *          YRT_US(), YRT_MS(), YRT_S(), YRT_TO_MS() and YRT_TO_S().
+ *          Open and close: yrt_worker_start/stop() and
+ *          yrt_pump_start/stop() are yrt_worker_open/close() and
+ *          yrt_pump_open/close(); yrt_fit_init() is yrt_fit_open(), which
+ *          returns bool with the reason in yrt_fit_error(), and
+ *          yrt_fit_close() is new; yrt_ring_close() is new.
+ *          yrt_sched_normalize(), yrt_thread_set_timer_slack(),
+ *          yrt_thread_pin(), yrt_process_lock_memory() and
+ *          yrt_timer_resolution_begin() return 0 or a negative code
+ *          (YRT_ERR_UNSUPPORTED, YRT_ERR_REFUSED, YRT_ERR_ARG) instead of
+ *          bool.
  *   v0.7.0 - Per-user folders: yrt_user_dir(YRT_DIR_CACHE or
  *          YRT_DIR_CONFIG, subdir, out, cap) gives <base>/ysp/<subdir>,
  *          the base from the platform's per-user cache or config location,
@@ -320,27 +337,36 @@
  *       yrt_describe(&rep, line, sizeof line);
  *       puts(line);                      // log this next to your timings
  *
- *       uint64_t t = yrt_now_ns();
+ *       int64_t t = yrt_now_ns();
  *       for (int i = 0; i < 100; i++) {
- *           t += 10000000ull;                       // a 10 ms frame
- *           uint64_t late = yrt_sleep_until(t, YRT_DEFAULT_SPIN_NS);
+ *           t += YRT_MS(10);                        // a 10 ms frame
+ *           int64_t late = yrt_sleep_until(t, YRT_DEFAULT_SPIN_NS);
  *           do_frame(i, late);
  *       }
  *
  *   ---------------------------------------------------------------------
  *   CLOCK
  *   ---------------------------------------------------------------------
- *   yrt_now_ns() and yrt_now_us() read a monotonic clock:
+ *   yrt_now_ns() reads a monotonic clock:
  *   CLOCK_MONOTONIC on Linux and macOS, QueryPerformanceCounter on Windows,
  *   converted with integer arithmetic split so that a TSC-rate counter
  *   cannot overflow the multiply. The clock never steps and never goes
  *   backwards; its zero is arbitrary, so only differences mean anything.
  *
- *   This is the SAME clock base as ysp/serial.h's yser_now_us() and the same
- *   base ysp/parallel.h times its pulses against, on every platform the two
- *   share. A timestamp from yrt_now_us() and one from yser_now_us() taken
- *   in the same process are directly comparable; subtract them. They are not
- *   comparable across a reboot or with wall-clock time.
+ *   It returns int64_t, the type of every time in ysp, so the difference of
+ *   two times is signed. Every header times against it: ysp/serial.h and
+ *   ysp/parallel.h time their pulses on it, ysp/screen.h and ysp/audio.h map
+ *   their onsets to it. Times from two headers taken in the same process are
+ *   directly comparable; subtract them. They are not comparable across a
+ *   reboot or with wall-clock time.
+ *
+ *   UNITS. Every time in a ysp C API is an int64_t count of nanoseconds, a
+ *   field or parameter whose unit the name does not already say ends in
+ *   _ns, and YRT_S(), YRT_MS() and YRT_US() write one from another unit:
+ *   ytl_wait(&q, YRT_MS(500)). A bare 0.5 where nanoseconds are expected
+ *   converts to 0; MSVC warns (C4244 at /W3), and so do clang
+ *   (-Wliteral-conversion, on by default) and gcc -Wfloat-conversion.
+ *   Seconds stay in files, scripts and the Python and MATLAB bindings.
  *
  *   yrt_ticks_to_ns() is the conversion yrt_now_ns() applies to the raw
  *   counter, as a function. On Windows, give it a QueryPerformanceCounter
@@ -597,9 +623,9 @@
  *   WORKER
  *   ---------------------------------------------------------------------
  *   yrt_worker is one thread that runs one callback at one absolute
- *   deadline. The caller allocates the handle, yrt_worker_start() spawns
+ *   deadline. The caller allocates the handle, yrt_worker_open() spawns
  *   the thread, and the thread elevates ITSELF up the ladder above and
- *   publishes the rung it got before start() returns, so the policy is known
+ *   publishes the rung it got before open() returns, so the policy is known
  *   before the first trial and no trial pays for thread creation.
  *
  *     yrt_worker_submit(w, deadline_ns, fn, ctx)
@@ -609,7 +635,7 @@
  *         deadlines starts two workers.
  *     yrt_worker_cancel(w)
  *         Drops the pending job.
- *     yrt_worker_stop(w)
+ *     yrt_worker_close(w)
  *         Runs a pending job IMMEDIATELY (a flush, with info->flushed set)
  *         and then joins. This is what the transport headers do when they
  *         close with a pulse in flight: a trailing edge that never lands is
@@ -625,7 +651,7 @@
  *   the caller's own lock. Nothing in the callback's data is protected by
  *   ysp/rt.h.
  *
- *   Nothing allocates after yrt_worker_start() returns. The handle carries
+ *   Nothing allocates after yrt_worker_open() returns. The handle carries
  *   its own OS objects, the job is three fields, and submit, cancel and the
  *   worker's own wait are all allocation-free.
  *
@@ -637,9 +663,9 @@
  *   at YRT_DEFAULT_SPIN_NS. See WAITS.
  *
  *   yrt_worker_desc.on_start runs ON THE WORKER THREAD, after the thread
- *   elevates itself and before yrt_worker_start() returns, and a false
- *   return fails the start. It is for state the OS keeps PER THREAD, which
- *   the thread that calls start() cannot set up on the worker's behalf: the
+ *   elevates itself and before yrt_worker_open() returns, and a false
+ *   return fails the open. It is for state the OS keeps PER THREAD, which
+ *   the thread that calls open() cannot set up on the worker's behalf: the
  *   parallel port's DIRECT backend grants itself ioperm()/iopl() there,
  *   because those are per-thread on Linux and a refused grant has to fail
  *   the open, not the first trigger.
@@ -687,7 +713,7 @@
  *           .on_idle  = fit_one_step,  // optional; true = call me again
  *           .ctx      = &model,
  *       };
- *       if (!yrt_pump_start(&pump, &d)) die(yrt_pump_error(&pump));
+ *       if (!yrt_pump_open(&pump, &d)) die(yrt_pump_error(&pump));
  *
  *       int seq = yrt_pump_submit(&pump, &result);   // < 0 is an error
  *       ...                                           // draw some frames
@@ -740,8 +766,8 @@
  *   ring is empty. Return true and it is called again (after a re-check of the
  *   ring, so a submit is never starved by a busy idle callback); return false,
  *   or leave on_idle NULL, and the thread blocks on a condition variable until
- *   the next submit or the stop. It must return promptly, a few milliseconds:
- *   a stop cannot join the thread until it does, and a message cannot be
+ *   the next submit or the close. It must return promptly, a few milliseconds:
+ *   a close cannot join the thread until it does, and a message cannot be
  *   dispatched until it does. One gradient step, not a whole fit.
  *
  *   PRIORITY. The pump runs at normal priority, or below it when
@@ -767,7 +793,7 @@
  *   the other half of the same idea: pin the pump to a core the frame loop
  *   does not use and its cache footprint stops being the frame loop's problem.
  *
- *   STOP. yrt_pump_stop() refuses new submits first (they get
+ *   CLOSE. yrt_pump_close() refuses new submits first (they get
  *   YRT_ERR_STOPPED), then DRAINS: every message already in the ring is
  *   still delivered to on_msg, in order, before the thread is joined. A
  *   submitted response must not be lost because the session ended. Set
@@ -777,26 +803,26 @@
  *   YRT_ERR_STOPPED. Drain when the messages are data; drop when they are
  *   requests for a result nobody will read.
  *
- *   Both stop forms join the thread, so on_msg and on_idle are guaranteed not
- *   to be running when yrt_pump_stop() returns. That is what makes it safe
- *   to free or reuse the context and the ring afterwards. Stop is safe on a
- *   zeroed handle and on one already stopped.
+ *   Both close forms join the thread, so on_msg and on_idle are guaranteed not
+ *   to be running when yrt_pump_close() returns. That is what makes it safe
+ *   to free or reuse the context and the ring afterwards. Close is safe on a
+ *   zeroed handle and on one already closed.
  *
- *   yrt_pump_wait() is SAFE AGAINST A CONCURRENT STOP AT ANY POINT, and
+ *   yrt_pump_wait() is SAFE AGAINST A CONCURRENT CLOSE AT ANY POINT, and
  *   against a restart. A thread may sit in a loop of short waits while
- *   another stops and starts the pump as often as it likes; no wait touches a
+ *   another closes and opens the pump as often as it likes; no wait touches a
  *   destroyed mutex, none hangs past its timeout, and each returns 0 (the seq
  *   was reached), YRT_ERR_TIMEOUT or YRT_ERR_STOPPED. The mechanism: a
  *   wait registers itself in an atomic counter before it looks at anything
- *   else, and backs out if the pump's mutexes are already gone; a stop marks
+ *   else, and backs out if the pump's mutexes are already gone; a close marks
  *   them gone, lets every registered waiter out, and destroys nothing until
  *   the counter is zero. So a binding needs no wait slicing and no deferral
  *   of its own. The other calls keep the ordinary rule: do not race a submit,
- *   a lock or a start with a stop. One cost follows from the counter: a
+ *   a lock or an open with a close. One cost follows from the counter: a
  *   thread that calls yrt_pump_wait() in a tight loop on a pump that is
  *   stopping keeps the counter above zero part of the time, and the stop
  *   waits in 100 us polls until it catches a zero. The test's hammer does
- *   exactly that, with two such threads, and its 300 start-and-stop cycles
+ *   exactly that, with two such threads, and its 300 open-and-close cycles
  *   took 0.4 to 4.3 s in all across Linux, Windows and node, thread creation
  *   included; a caller that sleeps between waits never sees it.
  *
@@ -959,7 +985,7 @@
  *   pairs: the device's counter and the ysp_rt time that goes with it.
  *
  *       static yrt_fit fit;                  // about 40 KB: not on a stack
- *       yrt_fit_init(&fit, &(yrt_fit_desc){ .mode = YRT_FIT_LATE,
+ *       yrt_fit_open(&fit, &(yrt_fit_desc){ .mode = YRT_FIT_LATE,
  *                                                .ns_per_tick = 1000.0,
  *                                                .tick_bits = 32 });
  *       // the reader thread, for each sync frame:
@@ -1196,7 +1222,7 @@
  *     Threads  The worker and the pump need -pthread, and in a browser the
  *              page must be cross-origin isolated for SharedArrayBuffer to
  *              exist. Built without -pthread they still compile and link
- *              (Emscripten provides pthread stubs), and start() fails with a
+ *              (Emscripten provides pthread stubs), and open() fails with a
  *              message that names the missing flag; YRT_NO_THREADS drops
  *              them as on every other platform. With -pthread, build the
  *              program with -sPROXY_TO_PTHREAD=1 so main() itself runs on a
@@ -1279,9 +1305,9 @@
 /* The version of this header, for a binding's __version__ and for a log line.
  * The string always matches the three numbers. */
 #define YRT_VERSION_MAJOR  0
-#define YRT_VERSION_MINOR  7
+#define YRT_VERSION_MINOR  8
 #define YRT_VERSION_PATCH  0
-#define YRT_VERSION_STRING "0.7.0"
+#define YRT_VERSION_STRING "0.8.0"
 
 /* Feature-test macro for clock_nanosleep() and mlockall() in the Linux
  * implementation. Defined here, before the first system header, so it takes
@@ -1340,13 +1366,28 @@ YRT_API const char* yrt_version(void);
 
 /* Monotonic nanoseconds. CLOCK_MONOTONIC on Linux and macOS,
  * QueryPerformanceCounter on Windows. The zero point is arbitrary; only
- * differences are meaningful. This is the clock every deadline in this header
- * is expressed in, and the same base as ysp/serial.h's yser_now_us(). */
-YRT_API uint64_t yrt_now_ns(void);
+ * differences are meaningful. This is the clock every deadline in ysp is
+ * expressed in. Signed, like every other time in ysp, so a difference such
+ * as `onset - yrt_now_ns()` is negative when the onset is past, instead of
+ * wrapping. Counts from the OS's own zero (boot, or a process-wide origin),
+ * so it stays positive for 292 years. */
+YRT_API int64_t yrt_now_ns(void);
 
-/* Monotonic microseconds, the same clock truncated. Use it where a uint64 of
- * nanoseconds is more precision than the record needs. */
-YRT_API uint64_t yrt_now_us(void);
+/* Units. Every time in a ysp C API is an int64_t count of nanoseconds; these
+ * macros write one from another unit, rounded to the nearest nanosecond and
+ * exact for whole numbers (to 2^53 ns, 104 days): .duration_ns = YRT_MS(200).
+ * YRT_TO_S and YRT_TO_MS go back to a double for a person to read. Constant
+ * expressions, so they work in a static initializer. The headers that do not
+ * include this one (ysp/timeline.h, ysp/trials.h, ysp/response.h,
+ * ysp/rdk.h) define the same macros under the same guard. */
+#ifndef YRT_S
+#define YRT_NS(x)    ((int64_t)(x))
+#define YRT_US(x)    ((int64_t)((x) * 1e3 + ((x) < 0 ? -0.5 : 0.5)))
+#define YRT_MS(x)    ((int64_t)((x) * 1e6 + ((x) < 0 ? -0.5 : 0.5)))
+#define YRT_S(x)     ((int64_t)((x) * 1e9 + ((x) < 0 ? -0.5 : 0.5)))
+#define YRT_TO_MS(ns) ((double)(ns) / 1e6)
+#define YRT_TO_S(ns)  ((double)(ns) / 1e9)
+#endif
 
 /* The conversion yrt_now_ns() applies to the platform's raw counter, for a
  * timestamp an API hands over in that counter's units. On Windows `ticks` is
@@ -1380,7 +1421,7 @@ YRT_API uint64_t yrt_interrupt_time_100ns(void);
  * yrt_get_clock_info(); every field is a property of the machine, not of
  * any one thread. */
 typedef struct yrt_clock_info {
-    uint64_t resolution_ns; /* the tick the clock counts in: clock_getres() on
+    int64_t  resolution_ns; /* the tick the clock counts in: clock_getres() on
                              * POSIX, 1 s / QueryPerformanceFrequency() on
                              * Windows, and on Emscripten the larger of
                              * clock_getres() and the smallest step two reads
@@ -1408,9 +1449,9 @@ YRT_API void yrt_get_clock_info(yrt_clock_info* out);
  * says why. Measure it on the rig with examples/rt/jitter.c before you trust
  * it, and pass your own window rather than editing this one. */
 #if defined(_WIN32)
-    #define YRT_DEFAULT_SPIN_NS 1200000u
+    #define YRT_DEFAULT_SPIN_NS ((int64_t)1200000)
 #else
-    #define YRT_DEFAULT_SPIN_NS 200000u
+    #define YRT_DEFAULT_SPIN_NS ((int64_t)200000)
 #endif
 
 /* Wait until the absolute monotonic time `deadline_ns`, then return how late
@@ -1427,22 +1468,22 @@ YRT_API void yrt_get_clock_info(yrt_clock_info* out);
  *
  * Callable from any thread, including several at once. Allocates nothing; on
  * Windows it creates one waitable timer per calling thread on first use (see
- * yrt_thread_cleanup). */
-YRT_API uint64_t yrt_sleep_until(uint64_t deadline_ns, uint32_t spin_ns);
+ * yrt_thread_cleanup). A negative deadline or spin_ns counts as 0. */
+YRT_API int64_t yrt_sleep_until(int64_t deadline_ns, int64_t spin_ns);
 
 /* Wait `ns` nanoseconds from now with YRT_DEFAULT_SPIN_NS as the spin
  * window, and return how late the wake was. The deadline is taken on entry,
  * so the call's own overhead comes out of the wait, not on top of it. For a
  * sequence of frames use yrt_sleep_until() against a running absolute
  * deadline instead, so wake latency cannot accumulate. */
-YRT_API uint64_t yrt_sleep_ns(uint64_t ns);
+YRT_API int64_t yrt_sleep_ns(int64_t ns);
 
 /* Spin on the clock until `deadline_ns` and return how late the loop exited.
  * No syscall, no sleep, a pause instruction per iteration so a sibling
  * hyperthread keeps its share of the core. As accurate as the clock, and it
  * costs a whole CPU for the duration: this is the floor the other waits are
  * measured against, not a general-purpose sleep. */
-YRT_API uint64_t yrt_spin_until(uint64_t deadline_ns);
+YRT_API int64_t yrt_spin_until(int64_t deadline_ns);
 
 /* Release the per-thread resources ysp/rt.h created for the CALLING thread
  * (today: the Windows waitable timer yrt_sleep_until() caches). Optional.
@@ -1468,22 +1509,22 @@ YRT_API void yrt_thread_cleanup(void);
  * 0 < runtime_ns <= deadline_ns <= period_ns must hold, with a zero period
  * read as "same as deadline". See yrt_sched_normalize(). */
 typedef struct yrt_sched_deadline {
-    uint64_t runtime_ns;
-    uint64_t deadline_ns;
-    uint64_t period_ns;
+    int64_t runtime_ns;
+    int64_t deadline_ns;
+    int64_t period_ns;
 } yrt_sched_deadline;
 
-#define YRT_DEFAULT_RT_RUNTIME_NS   1000000ull  /*  1 ms */
-#define YRT_DEFAULT_RT_DEADLINE_NS 10000000ull  /* 10 ms */
-#define YRT_DEFAULT_RT_PERIOD_NS   10000000ull  /* 10 ms */
+#define YRT_DEFAULT_RT_RUNTIME_NS  ((int64_t)1000000)   /*  1 ms */
+#define YRT_DEFAULT_RT_DEADLINE_NS ((int64_t)10000000)  /* 10 ms */
+#define YRT_DEFAULT_RT_PERIOD_NS   ((int64_t)10000000)  /* 10 ms */
 
 /* Apply the defaults and the validation described above to `rt`, in place.
  * All-zero becomes the YRT_DEFAULT_RT_* reservation; a zero period_ns
- * becomes deadline_ns. Returns false, leaving `rt` alone, when the result
- * would violate 0 < runtime <= deadline <= period, so a half-filled struct
- * fails loudly instead of silently degrading to the next rung down.
- * A NULL `rt` returns false. */
-YRT_API bool yrt_sched_normalize(yrt_sched_deadline* rt);
+ * becomes deadline_ns. Returns 0, or YRT_ERR_ARG, leaving `rt` alone, when
+ * the result would violate 0 < runtime <= deadline <= period, so a
+ * half-filled struct fails loudly instead of silently degrading to the next
+ * rung down. A NULL `rt` returns YRT_ERR_ARG. */
+YRT_API int yrt_sched_normalize(yrt_sched_deadline* rt);
 
 /* A rung of the scheduling ladder. See SCHEDULING in the manual for what each
  * one costs to get and what it buys. Log the value you obtained with your
@@ -1491,7 +1532,7 @@ YRT_API bool yrt_sched_normalize(yrt_sched_deadline* rt);
  * rungs. */
 typedef enum yrt_policy {
     YRT_POLICY_NONE = 0,       /* nothing was attempted, or a worker is not
-                                  * running (YRT_NO_THREADS, start failed) */
+                                  * running (YRT_NO_THREADS, open failed) */
     YRT_POLICY_DEADLINE,       /* Linux SCHED_DEADLINE                     */
     YRT_POLICY_TIME_CONSTRAINT,/* macOS THREAD_TIME_CONSTRAINT_POLICY      */
     YRT_POLICY_FIFO,           /* SCHED_FIFO, priority 80 or system max    */
@@ -1532,14 +1573,16 @@ YRT_API yrt_policy yrt_thread_elevate(const yrt_sched_deadline* rt);
 /* Ask the kernel to stop deliberately firing this thread's timers late.
  * Linux only (PR_SET_TIMERSLACK): a normal thread's default is 50000 ns, and
  * every clock_nanosleep in this header pays it. `ns` is clamped to at least 1;
- * the kernel keeps its own floor. Returns true if it was applied, false on
- * every other platform and when the call was refused. Real-time policies
- * ignore timer slack entirely, so this only matters at YRT_POLICY_NORMAL,
- * where yrt_thread_elevate() already does it for you. */
-YRT_API bool yrt_thread_set_timer_slack(uint64_t ns);
+ * the kernel keeps its own floor. Returns 0 if it was applied,
+ * YRT_ERR_UNSUPPORTED on every other platform and YRT_ERR_REFUSED when the
+ * call was refused. Real-time policies ignore timer slack entirely, so this
+ * only matters at YRT_POLICY_NORMAL, where yrt_thread_elevate() already
+ * does it for you. */
+YRT_API int yrt_thread_set_timer_slack(int64_t ns);
 
-/* Bind the calling thread to logical CPU `cpu`. Returns true if the OS
- * applied it.
+/* Bind the calling thread to logical CPU `cpu`. Returns 0 if the OS applied
+ * it, YRT_ERR_ARG for a CPU number out of range, YRT_ERR_REFUSED when the
+ * OS said no.
  *
  * PINNING DEFEATS SCHED_DEADLINE. The kernel's admission control requires a
  * deadline task to be schedulable over the whole root domain, so a pinned
@@ -1549,9 +1592,9 @@ YRT_API bool yrt_thread_set_timer_slack(uint64_t ns);
  * nohz_full, irqaffinity). Do not expect both.
  *
  * macOS has no thread pinning, only THREAD_AFFINITY_POLICY, which is a
- * cache-locality hint the scheduler may ignore; this returns false there
- * rather than pretend. */
-YRT_API bool yrt_thread_pin(int cpu);
+ * cache-locality hint the scheduler may ignore; this returns
+ * YRT_ERR_UNSUPPORTED there rather than pretend. */
+YRT_API int yrt_thread_pin(int cpu);
 
 /* What kind of core a logical CPU is, on a CPU with more than one kind. */
 typedef enum yrt_core_type {
@@ -1573,16 +1616,19 @@ YRT_API const char* yrt_core_type_name(yrt_core_type t);
 
 /* Lock this PROCESS's pages into RAM so no wait can end in a page fault:
  * mlockall(MCL_CURRENT|MCL_FUTURE) on POSIX, which needs RLIMIT_MEMLOCK
- * headroom or CAP_IPC_LOCK. Returns true if it was applied.
+ * headroom or CAP_IPC_LOCK. Returns 0 if it was applied, YRT_ERR_REFUSED
+ * if it was not.
  *
- * Returns false and does nothing on Windows, which has no equivalent:
- * VirtualLock and SetProcessWorkingSetSize operate on pages and on a working
- * set the memory manager still owns, and calling them would buy a claim this
- * header cannot honor. Process-wide, so call it once from the main thread. */
-YRT_API bool yrt_process_lock_memory(void);
+ * Returns YRT_ERR_UNSUPPORTED and does nothing on Windows and WebAssembly.
+ * Windows has no equivalent: VirtualLock and SetProcessWorkingSetSize
+ * operate on pages and on a working set the memory manager still owns, and
+ * calling them would buy a claim this header cannot honor. Process-wide, so
+ * call it once from the main thread. */
+YRT_API int yrt_process_lock_memory(void);
 
 /* Windows: timeBeginPeriod(1), raising this process's timer resolution to
- * 1 ms. Returns true if it was applied. winmm is loaded at run time, so the
+ * 1 ms. Returns 0 if it was applied, YRT_ERR_REFUSED when winmm refused it,
+ * YRT_ERR_UNSUPPORTED without winmm. winmm is loaded at run time, so the
  * header still links against nothing.
  *
  * Since Windows 10 2004 this is per-process, not machine-wide, so it neither
@@ -1591,14 +1637,14 @@ YRT_API bool yrt_process_lock_memory(void);
  * rarely needs it. It still shortens Sleep() and the fallback waitable timer,
  * which is what an older machine or a third-party library in the same process
  * will be using. Pair every call with yrt_timer_resolution_end(): the OS
- * reference-counts them. Process-wide; call from one thread. No-op and false
- * elsewhere.
+ * reference-counts them. Process-wide; call from one thread. No-op and
+ * YRT_ERR_UNSUPPORTED elsewhere.
  *
  * On success it also opts the process out of Windows 11's timer throttling
  * (PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION), without which a
  * minimized or hidden process loses the raised resolution; see POWER
  * THROTTLING. yrt_report.timer_throttle_off says whether that took. */
-YRT_API bool yrt_timer_resolution_begin(void);
+YRT_API int yrt_timer_resolution_begin(void);
 
 /* Undo one yrt_timer_resolution_begin(). No-op elsewhere, and no-op if the
  * resolution was never raised. */
@@ -1613,8 +1659,8 @@ typedef struct yrt_report {
     yrt_policy policy;            /* the rung the caller obtained; the OS
                                      * cannot be asked about every rung, so
                                      * the caller supplies this one          */
-    uint64_t clock_res_ns;          /* yrt_clock_info.resolution_ns        */
-    uint64_t timer_slack_ns;        /* Linux PR_GET_TIMERSLACK               */
+    int64_t  clock_res_ns;          /* yrt_clock_info.resolution_ns        */
+    int64_t  timer_slack_ns;        /* Linux PR_GET_TIMERSLACK               */
     bool     timer_slack_known;     /* false where the OS has no such notion */
     bool     hires_timer;           /* yrt_clock_info.hires_timer          */
     bool     memory_locked;         /* yrt_process_lock_memory() succeeded */
@@ -1660,12 +1706,12 @@ YRT_API int yrt_describe(const yrt_report* r, char* buf, size_t cap);
 
 /* --- return codes ------------------------------------------------------- */
 
-/* Return codes for the functions a second thread may call. A count, a job
- * seq, or 0 when >= 0; one of these when negative. yrt_strerror() names
- * them. YRT_OK is what "no error, nothing to report" means; do not compare
- * against it, compare against 0. Outside the YRT_NO_THREADS guard since
- * v0.5.0, because the event ring and the clock correlation use them and
- * neither is a threading feature. */
+/* Return codes of every call that returns int: a count, a job seq, or 0 when
+ * >= 0; one of these when negative. yrt_strerror() names them. YRT_OK is
+ * what "no error, nothing to report" means; do not compare against it,
+ * compare against 0. Outside the YRT_NO_THREADS guard since v0.5.0, because
+ * the event ring and the clock correlation use them and neither is a
+ * threading feature. */
 #define YRT_OK           0
 #define YRT_ERR_ARG    (-1)  /* null handle, null callback, null message  */
 #define YRT_ERR_STOPPED (-2) /* the worker or pump is not running         */
@@ -1673,6 +1719,8 @@ YRT_API int yrt_describe(const yrt_report* r, char* buf, size_t cap);
                                 * ring is full and NOTHING was taken        */
 #define YRT_ERR_TIMEOUT (-4) /* yrt_pump_wait: the timeout expired;
                                 * yrt_correlate: the clock never ticked   */
+#define YRT_ERR_UNSUPPORTED (-5) /* this platform has no such facility    */
+#define YRT_ERR_REFUSED (-6) /* the OS refused the request               */
 
 /* Static description of a YRT_ERR_* code ("ok" for values >= 0). */
 YRT_API const char* yrt_strerror(int code);
@@ -1705,7 +1753,7 @@ typedef union yrt_payload {
     uint16_t      u16[20];
     char          text[40];   /* NUL-terminated in ysp/rt.h's own kinds    */
     unsigned char bytes[40];
-    struct { const yrt_srcloc* loc; uint64_t dur_ns; uint64_t value; } zone;
+    struct { const yrt_srcloc* loc; int64_t dur_ns; uint64_t value; } zone;
     struct { const char* name; double value; } plot;  /* PLOT and FRAME     */
 } yrt_payload;
 
@@ -1719,7 +1767,7 @@ typedef struct yrt_event {
                         * refused push takes no ticket, so a gap never means
                         * loss; the LOSS record does (see EVENT RING).      */
     uint32_t tid;      /* the pushing thread; 0 = yrt_thread_id()         */
-    uint64_t t_ns;     /* on the ysp_rt clock; 0 = stamped at the push      */
+    int64_t  t_ns;     /* on the ysp_rt clock; 0 = stamped at the push      */
     uint16_t source;   /* who: a YRT_SRC_* number                          */
     uint16_t kind;     /* what: its meaning belongs to the source            */
     uint32_t aux;      /* the producer's: a code, an index, a count          */
@@ -1820,10 +1868,15 @@ typedef struct yrt_ring {
  * now rather than in the first push from an audio callback. Returns false
  * with a message in yrt_ring_error() for a NULL desc, NULL memory, or room
  * for fewer than 2 records. Must not run while anything pushes or drains;
- * on an open ring it starts over, discarding what was in it. There is no
- * close: stop the producers (and detach it from the trace) before you free
- * the memory or the handle. */
+ * on an open ring it starts over, discarding what was in it. */
 YRT_API bool yrt_ring_open(yrt_ring* r, const yrt_ring_desc* desc);
+
+/* Detach the ring from desc.memory: a push or drain after it returns
+ * YRT_ERR_ARG. The ring owns nothing, so this frees nothing. Stop the
+ * producers (and detach it from the trace) first; a push racing the close
+ * may still write. Safe on a zeroed or closed ring and after a failed
+ * open. */
+YRT_API void yrt_ring_close(yrt_ring* r);
 
 /* Last yrt_ring_open() message for this handle ("" if none). */
 YRT_API const char* yrt_ring_error(const yrt_ring* r);
@@ -1870,14 +1923,14 @@ typedef struct yrt_corr_desc {
     bool     edge;        /* the other clock is coarse: time a CHANGE of its
                            * value instead of one read. Spins until it has
                            * seen `tries` changes; see CLOCK CORRELATION    */
-    uint64_t timeout_ns;  /* edge mode: give up after this long; 0 = 100 ms */
+    int64_t  timeout_ns;  /* edge mode: give up after this long; 0 = 100 ms */
 } yrt_corr_desc;
 
 /* One correspondence between the two clocks. */
 typedef struct yrt_corr {
-    uint64_t rt_ns;       /* the ysp_rt time at which...                     */
+    int64_t  rt_ns;       /* the ysp_rt time at which...                     */
     uint64_t other;       /* ...the other clock read this, in its own units  */
-    uint64_t width_ns;    /* the bracket around rt_ns: the true time is
+    int64_t  width_ns;    /* the bracket around rt_ns: the true time is
                            * within width_ns / 2 of it. Never 0: at least the
                            * ysp_rt clock's tick. In plain mode the other
                            * clock's own tick comes on top.                  */
@@ -1983,11 +2036,20 @@ typedef struct yrt_fit {
     int64_t  pw[YRT_FIT_POINTS];  /* bracket width                           */
     int32_t  hull[YRT_FIT_POINTS];
     int64_t  scratch[YRT_FIT_POINTS];
+    char     error[128];
 } yrt_fit;
 
-/* Start a fit. YRT_OK, or YRT_ERR_ARG for a NULL pointer, an unknown
- * mode, ns_per_tick <= 0 or tick_bits > 64. Allocates nothing. */
-YRT_API int yrt_fit_init(yrt_fit* f, const yrt_fit_desc* desc);
+/* Start a fit. False, with the reason in yrt_fit_error(), for a NULL desc,
+ * an unknown mode, ns_per_tick <= 0 or tick_bits > 64. Allocates nothing.
+ * Opening an open fit starts it over. */
+YRT_API bool yrt_fit_open(yrt_fit* f, const yrt_fit_desc* desc);
+
+/* Forget the fit. Holds no resource, so this only zeroes the handle; safe on
+ * a zeroed or closed handle and after a failed open. */
+YRT_API void yrt_fit_close(yrt_fit* f);
+
+/* The last yrt_fit_open() message ("" if none). */
+YRT_API const char* yrt_fit_error(const yrt_fit* f);
 
 /* One pair: the device's counter as it reported it (wrapped), the host time
  * of the pair on the ysp_rt clock, and for BRACKET the bracket's length
@@ -2029,7 +2091,7 @@ YRT_API yrt_ring* yrt_trace_ring(void);
 
 /* An open zone in YRT_TRACE_RING mode. Declared by YRT_ZONE. */
 typedef struct yrt_zone {
-    uint64_t            t0_ns;  /* 0 = no trace ring at the begin       */
+    int64_t             t0_ns;  /* 0 = no trace ring at the begin       */
     const yrt_srcloc* loc;
     uint64_t            value;  /* YRT_ZONE_VALUE                     */
 } yrt_zone;
@@ -2151,15 +2213,15 @@ int yrt__messagef_check(const char* fmt, ...);
 /* What the worker thread knows about the job it is running. Valid only for
  * the duration of the callback. */
 typedef struct yrt_job_info {
-    uint64_t deadline_ns; /* the deadline this job was submitted for        */
-    uint64_t at_ns;       /* the clock when the worker entered the callback */
+    int64_t  deadline_ns; /* the deadline this job was submitted for        */
+    int64_t  at_ns;       /* the clock when the worker entered the callback */
     int64_t  late_ns;     /* at_ns - deadline_ns; negative only on a flush  */
     uint32_t seq;         /* what yrt_worker_submit() returned for this
                            * job. Positive, increasing and unique within one
                            * worker; a job that must know whether it is the
                            * one a caller is still waiting for compares this
                            * with the number that caller kept.             */
-    bool     flushed;     /* run early by yrt_worker_stop(), not by its
+    bool     flushed;     /* run early by yrt_worker_close(), not by its
                            * deadline. A trailing edge, a cleanup write or a
                            * "the trial ended" hook still has to happen; a
                            * job that is only meaningful on time should check
@@ -2174,15 +2236,15 @@ typedef struct yrt_job_info {
 typedef void (*yrt_job_fn)(void* ctx, const yrt_job_info* info);
 
 /* Optional start hook. Runs ONCE, on the worker thread, after the thread has
- * elevated itself and before yrt_worker_start() returns. Return true to let
- * the worker run. Return false and the start FAILS: the thread exits, no job
+ * elevated itself and before yrt_worker_open() returns. Return true to let
+ * the worker run. Return false and the open FAILS: the thread exits, no job
  * can be submitted, and `err` (or a fixed message when the hook wrote none)
  * is what yrt_worker_error() reports.
  *
  * This exists for state the OS keeps per THREAD, which the thread calling
- * yrt_worker_start() cannot set up on the worker's behalf. Write at most
+ * yrt_worker_open() cannot set up on the worker's behalf. Write at most
  * `err_cap` bytes into `err`, NUL-terminated; snprintf() is the expected
- * tool. Keep it short: yrt_worker_start() is blocked until it returns. */
+ * tool. Keep it short: yrt_worker_open() is blocked until it returns. */
 typedef bool (*yrt_start_fn)(void* ctx, char* err, size_t err_cap);
 
 /* Worker description. Zero-initialize it and set only what you need. */
@@ -2190,10 +2252,10 @@ typedef struct yrt_worker_desc {
     yrt_sched_deadline sched; /* reservation for the DEADLINE and
                                  * TIME_CONSTRAINT rungs; all-zero = defaults */
     yrt_start_fn on_start;    /* per-thread setup, on the worker thread;
-                                 * NULL = none. False fails the start.        */
+                                 * NULL = none. False fails the open.        */
     void*    start_ctx;         /* passed to on_start. Separate from the ctx a
                                  * job carries, which belongs to one submit.  */
-    uint32_t spin_ns;           /* spin window for the worker's own wait;
+    int64_t  spin_ns;           /* spin window for the worker's own wait;
                                  * 0 = YRT_DEFAULT_SPIN_NS. See WAITS.      */
     bool     no_elevate;        /* skip the ladder entirely and run the worker
                                  * as a normal thread. For a shared machine, a
@@ -2206,8 +2268,8 @@ typedef struct yrt_worker_desc {
  * submit touches: the job fields and the lock share the first cache lines,
  * because a submit takes the lock and then writes the job, and the 256-byte
  * error buffer is cold and sits last so it cannot push the lock away from the
- * job. Must be zeroed or stopped before yrt_worker_start(); a fresh handle
- * has no valid running flag, so start() cannot detect and stop a worker
+ * job. Must be zeroed or closed before yrt_worker_open(); a fresh handle
+ * has no valid running flag, so open() cannot detect and stop a worker
  * already running in it. */
 typedef struct yrt_worker {
     /* --- hot: read or written on every submit and every wake --- */
@@ -2223,7 +2285,7 @@ typedef struct yrt_worker {
     int          quit;
     int          ready;
     yrt_policy policy;   /* the rung the worker thread got; final once
-                            * yrt_worker_start() returns true             */
+                            * yrt_worker_open() returns true             */
     int          running;  /* read and written atomically: it is the one
                             * field a submit consults before it dares touch
                             * the lock, so it cannot be guarded by the lock */
@@ -2237,7 +2299,7 @@ typedef struct yrt_worker {
     yrt_start_fn on_start;
     void*        start_ctx;
     int          start_failed; /* the hook refused; written before the ready
-                                * handshake, read by start() after it        */
+                                * handshake, read by open() after it        */
     bool         no_elevate;
     char         error[256];
 } yrt_worker;
@@ -2249,13 +2311,13 @@ typedef struct yrt_worker {
  * and the thread is joined before this returns. This is the only worker call
  * that writes that message, and the only one that must not run while another
  * thread is using the handle. */
-YRT_API bool yrt_worker_start(yrt_worker* w, const yrt_worker_desc* desc);
+YRT_API bool yrt_worker_open(yrt_worker* w, const yrt_worker_desc* desc);
 
-/* Stop the worker and join its thread. A pending job is run IMMEDIATELY
+/* Close the worker: join its thread. A pending job is run IMMEDIATELY
  * first, with yrt_job_info.flushed set, so work that must happen is never
- * dropped just because the session ended. Safe on a zeroed or already-stopped
+ * dropped just because the session ended. Safe on a zeroed or already-closed
  * handle. Must not race another call on the same handle. */
-YRT_API void yrt_worker_stop(yrt_worker* w);
+YRT_API void yrt_worker_close(yrt_worker* w);
 
 /* Install `fn(ctx, ...)` to run at the absolute monotonic time
  * `deadline_ns`, replacing any pending job (earlier or later; the worker
@@ -2266,7 +2328,7 @@ YRT_API void yrt_worker_stop(yrt_worker* w);
  * also sees as yrt_job_info.seq; on failure a negative YRT_ERR_ARG or
  * YRT_ERR_STOPPED. Test `rc < 0`, not `rc != YRT_OK`. Callable from any
  * thread, including from a job on this same worker. Allocates nothing. */
-YRT_API int yrt_worker_submit(yrt_worker* w, uint64_t deadline_ns,
+YRT_API int yrt_worker_submit(yrt_worker* w, int64_t deadline_ns,
                                   yrt_job_fn fn, void* ctx);
 
 /* Drop the pending job, if any. Returns 1 if a job was canceled, 0 if there
@@ -2285,7 +2347,7 @@ YRT_API uint32_t yrt_worker_pending(const yrt_worker* w);
  * start and after a stop. */
 YRT_API yrt_policy yrt_worker_policy(const yrt_worker* w);
 
-/* Last yrt_worker_start() message for this handle ("" if none). */
+/* Last yrt_worker_open() message for this handle ("" if none). */
 YRT_API const char* yrt_worker_error(const yrt_worker* w);
 
 /* True while the worker thread is running. */
@@ -2312,8 +2374,8 @@ typedef void (*yrt_msg_fn)(void* ctx, const void* msg, uint32_t seq);
 
 /* Spare-time work, on the pump thread, with neither lock held, called whenever
  * the ring is empty. Return true to be called again, false to let the thread
- * block until the next submit or the stop. MUST RETURN PROMPTLY, in a few
- * milliseconds: a queued message and yrt_pump_stop() both wait behind it.
+ * block until the next submit or the close. MUST RETURN PROMPTLY, in a few
+ * milliseconds: a queued message and yrt_pump_close() both wait behind it.
  * One step of a resumable fit is the intended shape. */
 typedef bool (*yrt_idle_fn)(void* ctx);
 
@@ -2335,8 +2397,8 @@ typedef struct yrt_pump_desc {
     void*         ctx;        /* passed to on_msg and on_idle                */
     yrt_start_fn on_start;  /* per-thread setup, on the pump thread, after
                                * the priority and the pin and before
-                               * yrt_pump_start() returns; NULL = none.
-                               * False fails the start. Same contract as
+                               * yrt_pump_open() returns; NULL = none.
+                               * False fails the open. Same contract as
                                * yrt_worker_desc.on_start.                 */
     void*    start_ctx;       /* passed to on_start                          */
     bool     below_normal;    /* run the thread BELOW normal priority. Default
@@ -2360,21 +2422,21 @@ typedef struct yrt_pump_desc {
  * seq first, because polling it every frame is the hot path and it is read
  * without any lock, then the ring's bookkeeping and the callbacks, then the OS
  * objects, and the error buffer and the inline ring last, where the cold bytes
- * cannot push the hot ones out of a line. Must be zeroed or stopped before
- * yrt_pump_start(); a fresh handle has no valid running flag, so start()
+ * cannot push the hot ones out of a line. Must be zeroed or closed before
+ * yrt_pump_open(); a fresh handle has no valid running flag, so start()
  * cannot detect a pump already running in it. */
 typedef struct yrt_pump {
     /* --- the door: fields another thread may touch at ANY moment, including
-     * while yrt_pump_stop() tears the pump down and yrt_pump_start()
-     * builds it again. Every access is atomic and yrt_pump_start() never
-     * memsets them, so a yrt_pump_wait() racing a stop or a restart touches
+     * while yrt_pump_close() tears the pump down and yrt_pump_open()
+     * builds it again. Every access is atomic and yrt_pump_open() never
+     * memsets them, so a yrt_pump_wait() racing a close or a reopen touches
      * nothing a plain store is writing. `done` is also the frame loop's poll,
      * which is why the door is first. --- */
     int      done;          /* highest seq whose on_msg returned            */
     int      running;       /* submits are accepted                         */
     int      locks_live;    /* the mutexes exist and a new waiter may take
                              * them. Outlives `running`: the callbacks still
-                             * publish during a drain, after a stop has
+                             * publish during a drain, after a close has
                              * already refused new submits                  */
     int      waiters;       /* yrt_pump_wait()s registered on this pump. A
                              * stop destroys nothing until it reads 0       */
@@ -2405,7 +2467,7 @@ typedef struct yrt_pump {
     yrt_start_fn on_start;
     void*    start_ctx;
     int      start_failed;  /* the hook refused; written before the ready
-                             * handshake, read by start() after it          */
+                             * handshake, read by open() after it          */
     int      drop_on_stop;
     int      pin_cpu;
     bool     below_normal;
@@ -2424,15 +2486,15 @@ typedef struct yrt_pump {
  * be created. This is the only pump call that writes that message. It must
  * not run while another thread submits, locks or stops the same handle; a
  * yrt_pump_wait() on another thread is allowed (see that function). */
-YRT_API bool yrt_pump_start(yrt_pump* p, const yrt_pump_desc* desc);
+YRT_API bool yrt_pump_open(yrt_pump* p, const yrt_pump_desc* desc);
 
 /* Refuse further submits, deliver what is already queued (or discard it, with
  * desc.drop_on_stop), and join the thread. on_msg and on_idle are not running
  * when this returns, so the ring and the ctx can be reused or freed. Safe on a
- * zeroed or already-stopped handle. Must not race a start, a submit, a
- * yrt_pump_lock() or another stop on the same handle. It MAY race
+ * zeroed or already-closed handle. Must not race an open, a submit, a
+ * yrt_pump_lock() or another close on the same handle. It MAY race
  * yrt_pump_wait() from any thread at any point: see that function. */
-YRT_API void yrt_pump_stop(yrt_pump* p);
+YRT_API void yrt_pump_close(yrt_pump* p);
 
 /* Copy `msg` (desc.msg_size bytes) into the ring and return its sequence
  * number, always POSITIVE and increasing, which on_msg also receives and
@@ -2478,16 +2540,16 @@ YRT_API uint32_t yrt_pump_done_seq(const yrt_pump* p);
  * instead.
  *
  * Callable from any thread, several at once, and CONCURRENTLY WITH
- * yrt_pump_stop() AND yrt_pump_start() AT ANY POINT: before the stop, in
- * the middle of it, after it, or across a stop and a restart. It never touches
- * an OS object the stop has destroyed or the start has not finished building,
- * and the stop does not destroy anything until every wait that got in has left.
- * A wait racing a stop returns 0 if the pump reached the seq (a draining stop
+ * yrt_pump_close() AND yrt_pump_open() AT ANY POINT: before the close, in
+ * the middle of it, after it, or across a close and a reopen. It never touches
+ * an OS object the close has destroyed or the open has not finished building,
+ * and the close does not destroy anything until every wait that got in has left.
+ * A wait racing a close returns 0 if the pump reached the seq (a draining close
  * still delivers the queue, so a seq already submitted usually is reached),
  * YRT_ERR_STOPPED if it did not, and never hangs past its timeout. A wait
- * racing a restart may see either pump; the seq numbers of the new one start
- * again at 1, so a seq kept across a restart is the caller's to retire. */
-YRT_API int yrt_pump_wait(yrt_pump* p, uint32_t seq, uint64_t timeout_ns);
+ * racing a reopen may see either pump; the seq numbers of the new one start
+ * again at 1, so a seq kept across a reopen is the caller's to retire. */
+YRT_API int yrt_pump_wait(yrt_pump* p, uint32_t seq, int64_t timeout_ns);
 
 /* Take and release the pump's PUBLISH mutex, which is not the ring's: it
  * guards nothing inside the pump and exists only so the caller and the
@@ -2496,19 +2558,19 @@ YRT_API int yrt_pump_wait(yrt_pump* p, uint32_t seq, uint64_t timeout_ns);
  * copy costs, so holding it in the caller stalls nothing but that publish, not
  * the inference, not a submit, not a done_seq poll. Recursive locking is not
  * supported. A lock on a pump that is not running is a no-op, which keeps a
- * caller's read-the-results path working after a stop. */
+ * caller's read-the-results path working after a close. */
 YRT_API void yrt_pump_lock(yrt_pump* p);
 YRT_API void yrt_pump_unlock(yrt_pump* p);
 
 /* True while the pump thread is running. */
 YRT_API bool yrt_pump_is_running(const yrt_pump* p);
 
-/* Last yrt_pump_start() message for this handle ("" if none). */
+/* Last yrt_pump_open() message for this handle ("" if none). */
 YRT_API const char* yrt_pump_error(const yrt_pump* p);
 
 /* What the pump thread runs at: YRT_POLICY_NORMAL, or
  * YRT_POLICY_BELOW_NORMAL when desc.below_normal was set AND the OS granted
- * the drop. YRT_POLICY_NONE before a successful start and after a stop.
+ * the drop. YRT_POLICY_NONE before a successful open and after a close.
  * Never anything higher: the pump does not climb the ladder. */
 YRT_API yrt_policy yrt_pump_policy(const yrt_pump* p);
 
@@ -2565,6 +2627,13 @@ YRT_API yrt_policy yrt_pump_policy(const yrt_pump* p);
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
+
+/* The implementation keeps unsigned clock arithmetic, where a deadline before
+ * the clock's zero saturates instead of wrapping; the public calls take and
+ * return int64_t and convert at the boundary. */
+static uint64_t yrt__now(void);
+static uint64_t yrt__spin_until(uint64_t deadline_ns);
+static uint64_t yrt__sleep_until(uint64_t deadline_ns, uint64_t spin_ns);
 
 /* Pick the concrete platform once. */
 #if defined(_WIN32)
@@ -2745,7 +2814,7 @@ static uint64_t yrt__qpc_to_ns(uint64_t t, uint64_t fr) {
     return (t / fr) * 1000000000ull + (t % fr) * 1000000000ull / fr;
 }
 
-uint64_t yrt_now_ns(void) {
+static uint64_t yrt__now(void) {
     LARGE_INTEGER f, c;
     QueryPerformanceFrequency(&f);
     QueryPerformanceCounter(&c);
@@ -2841,7 +2910,7 @@ void yrt_thread_cleanup(void) {
 /* Hand the wait to the OS until an absolute monotonic time. Returns as soon
  * as the timer fires; the caller re-reads the clock and decides what is left. */
 static void yrt__coarse_wait_until(HANDLE timer, uint64_t until_ns) {
-    uint64_t now = yrt_now_ns();
+    uint64_t now = yrt__now();
     if (until_ns <= now) return;
     uint64_t delta = until_ns - now;
     if (timer) {
@@ -2862,33 +2931,33 @@ void yrt_get_clock_info(yrt_clock_info* out) {
     LARGE_INTEGER f;
     QueryPerformanceFrequency(&f);
     uint64_t fr = (uint64_t)f.QuadPart;
-    out->resolution_ns = fr ? (1000000000ull + fr - 1) / fr : 0;
+    out->resolution_ns = fr ? (int64_t)((1000000000ull + fr - 1) / fr) : 0;
     bool hires = false;
     HANDLE h = yrt__timer_create(&hires);
     if (h) CloseHandle(h);
     out->hires_timer = hires;
 }
 
-uint64_t yrt_sleep_until(uint64_t deadline_ns, uint32_t spin_ns) {
+static uint64_t yrt__sleep_until(uint64_t deadline_ns, uint64_t spin_ns) {
     yrt__tls* t = yrt__tls_get();
     uint64_t spin = spin_ns;
     /* The fallback timer only fires on the system tick, so the coarse wait
      * has to stop a whole tick early and spin the rest. Overshooting the
      * deadline by 15 ms is worse than burning 15 ms of one core. */
     if (!t->hires && spin < YRT__TICK_NS) spin = YRT__TICK_NS;
-    uint64_t now = yrt_now_ns();
+    uint64_t now = yrt__now();
     if (now >= deadline_ns) return now - deadline_ns;
     YRT_ZONE(z, "yrt.sleep");
     uint64_t wake = (deadline_ns > spin) ? deadline_ns - spin : 0;
     if (now < wake) yrt__coarse_wait_until(t->timer, wake);
-    uint64_t late = yrt_spin_until(deadline_ns);
+    uint64_t late = yrt__spin_until(deadline_ns);
     YRT_ZONE_END(z);
     return late;
 }
 
-bool yrt_thread_set_timer_slack(uint64_t ns) {
+int yrt_thread_set_timer_slack(int64_t ns) {
     (void)ns;
-    return false; /* Windows has no per-thread timer slack to set. */
+    return YRT_ERR_UNSUPPORTED; /* Windows has no per-thread timer slack to set. */
 }
 
 /* CPU sets (Windows 10 and later), looked up at run time like the other
@@ -2974,10 +3043,10 @@ static void yrt__prefer_pcores(void) {
     if (sel(GetCurrentThread(), t.pids, (ULONG)t.npids)) yrt__pcores_set = 1;
 }
 
-bool yrt_thread_pin(int cpu) {
-    if (cpu < 0 || cpu >= (int)(8 * sizeof(DWORD_PTR))) return false;
+int yrt_thread_pin(int cpu) {
+    if (cpu < 0 || cpu >= (int)(8 * sizeof(DWORD_PTR))) return YRT_ERR_ARG;
     DWORD_PTR mask = (DWORD_PTR)1 << cpu;
-    if (SetThreadAffinityMask(GetCurrentThread(), mask) == 0) return false;
+    if (SetThreadAffinityMask(GetCurrentThread(), mask) == 0) return YRT_ERR_REFUSED;
     /* The pin is the explicit choice: drop a P-core preference that could
      * disagree with it. */
     {
@@ -2985,14 +3054,14 @@ bool yrt_thread_pin(int cpu) {
         if (sel && sel(GetCurrentThread(), NULL, 0)) yrt__pcores_set = 0;
     }
     yrt__pinned_plus1 = cpu + 1;
-    return true;
+    return 0;
 }
 
-bool yrt_process_lock_memory(void) {
+int yrt_process_lock_memory(void) {
     /* Deliberately empty. See the declaration: nothing Windows offers is
      * mlockall, and a partial measure logged as a success is worse than a
-     * documented false. */
-    return false;
+     * documented refusal. */
+    return YRT_ERR_UNSUPPORTED;
 }
 
 /* winmm is loaded at run time so this header still links against nothing.
@@ -3064,14 +3133,14 @@ static int yrt__thread_ecoqos_off(void) {
  * thread, like yrt__timer_res_raised. */
 static bool yrt__timer_throttle_off = false;
 
-bool yrt_timer_resolution_begin(void) {
-    if (yrt__timer_res_raised) return true;
+int yrt_timer_resolution_begin(void) {
+    if (yrt__timer_res_raised) return 0;
     if (!yrt__winmm) {
         /* System32 only: this is a system DLL and must not be picked up from
          * a data directory next to the experiment. */
         yrt__winmm = LoadLibraryExA("winmm.dll", NULL,
                                       LOAD_LIBRARY_SEARCH_SYSTEM32);
-        if (!yrt__winmm) return false;
+        if (!yrt__winmm) return YRT_ERR_UNSUPPORTED;
     }
     /* FARPROC to the real signature by way of void (*)(void): ISO C has no
      * conversion between object and function pointers, so a void* detour is
@@ -3081,15 +3150,15 @@ bool yrt_timer_resolution_begin(void) {
         GetProcAddress(yrt__winmm, "timeBeginPeriod");
     yrt__time_end = (yrt__timeperiod_fn)(void (*)(void))
         GetProcAddress(yrt__winmm, "timeEndPeriod");
-    if (!begin || !yrt__time_end) return false;
-    if (begin(1) != 0 /*TIMERR_NOERROR*/) return false;
+    if (!begin || !yrt__time_end) return YRT_ERR_UNSUPPORTED;
+    if (begin(1) != 0 /*TIMERR_NOERROR*/) return YRT_ERR_REFUSED;
     yrt__timer_res_raised = true;
     /* Windows 11 drops a raised resolution while the process's windows are
      * minimized or hidden, and Sleep() and the fallback timer then wake on
      * the 15.6 ms tick again (measured: 13 ms late instead of 0.5 ms; see
      * docs/rt.md). This is the documented opt-out. */
     yrt__timer_throttle_off = yrt__throttle_off(false, YRT__PT_IGNORE_TIMER);
-    return true;
+    return 0;
 }
 
 void yrt_timer_resolution_end(void) {
@@ -3160,7 +3229,7 @@ extern long syscall(long, ...);
     #include <mach/thread_act.h>
 #endif
 
-uint64_t yrt_now_ns(void) {
+static uint64_t yrt__now(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
@@ -3179,9 +3248,9 @@ int64_t yrt_ticks_to_ns(int64_t ticks) {
  * preemption can inflate, hence 64 samples rather than a few. 0 when the
  * clock did not move at all in 5 ms. */
 static uint64_t yrt__measure_step_ns(void) {
-    uint64_t start = yrt_now_ns(), prev = start, now, step = UINT64_MAX;
+    uint64_t start = yrt__now(), prev = start, now, step = UINT64_MAX;
     int changes = 0;
-    while (changes < 64 && (now = yrt_now_ns()) - start < 5000000ull) {
+    while (changes < 64 && (now = yrt__now()) - start < 5000000ull) {
         if (now != prev) {
             if (now - prev < step) step = now - prev;
             prev = now;
@@ -3260,7 +3329,7 @@ static void yrt__coarse_wait_until(uint64_t until_ns) {
      * early or interrupted wake cannot shorten the total, and a late one is
      * not paid twice. */
     for (;;) {
-        uint64_t now = yrt_now_ns();
+        uint64_t now = yrt__now();
         if (now >= until_ns) return;
         struct timespec rel;
         yrt__ns_to_ts(until_ns - now, &rel);
@@ -3280,7 +3349,7 @@ void yrt_get_clock_info(yrt_clock_info* out) {
     if (!out) return;
     struct timespec res;
     if (clock_getres(CLOCK_MONOTONIC, &res) == 0)
-        out->resolution_ns = (uint64_t)res.tv_sec * 1000000000ull + (uint64_t)res.tv_nsec;
+        out->resolution_ns = (int64_t)res.tv_sec * 1000000000 + (int64_t)res.tv_nsec;
     else
         out->resolution_ns = 0;
 #if defined(YRT__EMSCRIPTEN)
@@ -3288,7 +3357,7 @@ void yrt_get_clock_info(yrt_clock_info* out) {
         /* The only platform where this measures instead of asking; see
          * yrt__measure_step_ns() for why. */
         uint64_t step = yrt__measure_step_ns();
-        if (step > out->resolution_ns) out->resolution_ns = step;
+        if ((int64_t)step > out->resolution_ns) out->resolution_ns = (int64_t)step;
     }
 #endif
     /* The POSIX sleep syscalls already work at the clock's own resolution;
@@ -3296,43 +3365,43 @@ void yrt_get_clock_info(yrt_clock_info* out) {
     out->hires_timer = true;
 }
 
-uint64_t yrt_sleep_until(uint64_t deadline_ns, uint32_t spin_ns) {
-    uint64_t now = yrt_now_ns();
+static uint64_t yrt__sleep_until(uint64_t deadline_ns, uint64_t spin_ns) {
+    uint64_t now = yrt__now();
     if (now >= deadline_ns) return now - deadline_ns;
     YRT_ZONE(z, "yrt.sleep");
     uint64_t wake = (deadline_ns > spin_ns) ? deadline_ns - spin_ns : 0;
     if (now < wake) yrt__coarse_wait_until(wake);
-    uint64_t late = yrt_spin_until(deadline_ns);
+    uint64_t late = yrt__spin_until(deadline_ns);
     YRT_ZONE_END(z);
     return late;
 }
 
-bool yrt_thread_set_timer_slack(uint64_t ns) {
+int yrt_thread_set_timer_slack(int64_t ns) {
 #if defined(YRT__LINUX)
     unsigned long v = (ns < 1) ? 1UL : (unsigned long)ns;
-    return prctl(PR_SET_TIMERSLACK, v, 0UL, 0UL, 0UL) == 0;
+    return prctl(PR_SET_TIMERSLACK, v, 0UL, 0UL, 0UL) == 0 ? 0 : YRT_ERR_REFUSED;
 #else
     (void)ns;
-    return false; /* Darwin has no timer slack to set. */
+    return YRT_ERR_UNSUPPORTED; /* Darwin has no timer slack to set. */
 #endif
 }
 
-bool yrt_thread_pin(int cpu) {
+int yrt_thread_pin(int cpu) {
 #if defined(YRT__LINUX)
     /* The raw syscall, with the mask built by hand, so this compiles without
      * _GNU_SOURCE and the CPU_SET macros it hides. Thread id 0 is "me": on
      * Linux affinity is a per-thread property. */
-    if (cpu < 0 || cpu >= 1024) return false;
+    if (cpu < 0 || cpu >= 1024) return YRT_ERR_ARG;
     unsigned long mask[1024 / (8 * sizeof(unsigned long))];
     memset(mask, 0, sizeof(mask));
     size_t bits = 8 * sizeof(unsigned long);
     mask[(size_t)cpu / bits] |= 1UL << ((size_t)cpu % bits);
-    if (syscall(SYS_sched_setaffinity, 0, (unsigned)sizeof(mask), mask) != 0) return false;
+    if (syscall(SYS_sched_setaffinity, 0, (unsigned)sizeof(mask), mask) != 0) return YRT_ERR_REFUSED;
     yrt__pinned_plus1 = cpu + 1;
-    return true;
+    return 0;
 #else
     (void)cpu;
-    return false; /* Darwin: affinity sets are a hint, not a binding. */
+    return YRT_ERR_UNSUPPORTED; /* Darwin: affinity sets are a hint, not a binding. */
 #endif
 }
 
@@ -3345,21 +3414,21 @@ yrt_core_type yrt_cpu_core_type(int cpu) {
     return YRT_CORE_UNKNOWN;
 }
 
-bool yrt_process_lock_memory(void) {
+int yrt_process_lock_memory(void) {
 #if defined(YRT__EMSCRIPTEN)
     /* A wasm heap is one ArrayBuffer the JavaScript engine owns; there is
      * nothing to lock and no call that could. Emscripten's mlockall stub
      * returns 0, which would be logged as a lock that never happened. */
-    return false;
+    return YRT_ERR_UNSUPPORTED;
 #else
-    if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) return false;
+    if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) return YRT_ERR_REFUSED;
     yrt__mem_locked = true;
-    return true;
+    return 0;
 #endif
 }
 
-bool yrt_timer_resolution_begin(void) {
-    return false; /* POSIX has no global timer tick to raise. */
+int yrt_timer_resolution_begin(void) {
+    return YRT_ERR_UNSUPPORTED; /* POSIX has no global timer tick to raise. */
 }
 
 void yrt_timer_resolution_end(void) {
@@ -3436,7 +3505,7 @@ yrt_policy yrt_thread_elevate(const yrt_sched_deadline* rt) {
     yrt_sched_deadline r;
     memset(&r, 0, sizeof(r));
     if (rt) r = *rt;
-    bool have_rt = yrt_sched_normalize(&r);
+    bool have_rt = yrt_sched_normalize(&r) == 0;
 
 #if defined(YRT__LINUX)
     if (have_rt) {
@@ -3484,39 +3553,51 @@ yrt_policy yrt_thread_elevate(const yrt_sched_deadline* rt) {
 
 const char* yrt_version(void) { return YRT_VERSION_STRING; }
 
-uint64_t yrt_now_us(void) {
-    return yrt_now_ns() / 1000ull;
+int64_t yrt_now_ns(void) {
+    return (int64_t)yrt__now();
 }
 
-uint64_t yrt_spin_until(uint64_t deadline_ns) {
-    uint64_t now = yrt_now_ns();
+static uint64_t yrt__spin_until(uint64_t deadline_ns) {
+    uint64_t now = yrt__now();
     while (now < deadline_ns) {
         YRT__PAUSE();
-        now = yrt_now_ns();
+        now = yrt__now();
     }
     return now - deadline_ns;
 }
 
-uint64_t yrt_sleep_ns(uint64_t ns) {
-    /* The deadline is taken here, so the call's own overhead comes out of the
-     * wait instead of being added to it. */
-    return yrt_sleep_until(yrt_now_ns() + ns, YRT_DEFAULT_SPIN_NS);
+/* A deadline before the clock's zero is already past. */
+static uint64_t yrt__unsigned(int64_t t) { return t > 0 ? (uint64_t)t : 0u; }
+
+int64_t yrt_sleep_until(int64_t deadline_ns, int64_t spin_ns) {
+    return (int64_t)yrt__sleep_until(yrt__unsigned(deadline_ns), yrt__unsigned(spin_ns));
 }
 
-bool yrt_sched_normalize(yrt_sched_deadline* rt) {
-    if (!rt) return false;
+int64_t yrt_spin_until(int64_t deadline_ns) {
+    return (int64_t)yrt__spin_until(yrt__unsigned(deadline_ns));
+}
+
+int64_t yrt_sleep_ns(int64_t ns) {
+    /* The deadline is taken here, so the call's own overhead comes out of the
+     * wait instead of being added to it. */
+    return (int64_t)yrt__sleep_until(yrt__now() + yrt__unsigned(ns),
+                                     (uint64_t)YRT_DEFAULT_SPIN_NS);
+}
+
+int yrt_sched_normalize(yrt_sched_deadline* rt) {
+    if (!rt) return YRT_ERR_ARG;
     if (rt->runtime_ns == 0 && rt->deadline_ns == 0 && rt->period_ns == 0) {
         rt->runtime_ns  = YRT_DEFAULT_RT_RUNTIME_NS;
         rt->deadline_ns = YRT_DEFAULT_RT_DEADLINE_NS;
         rt->period_ns   = YRT_DEFAULT_RT_PERIOD_NS;
-        return true;
+        return 0;
     }
-    uint64_t period = rt->period_ns ? rt->period_ns : rt->deadline_ns;
-    if (rt->runtime_ns == 0 || rt->deadline_ns == 0 ||
+    int64_t period = rt->period_ns ? rt->period_ns : rt->deadline_ns;
+    if (rt->runtime_ns <= 0 || rt->deadline_ns <= 0 ||
         rt->runtime_ns > rt->deadline_ns || rt->deadline_ns > period)
-        return false;
+        return YRT_ERR_ARG;
     rt->period_ns = period;
-    return true;
+    return 0;
 }
 
 const char* yrt_core_type_name(yrt_core_type t) {
@@ -3569,7 +3650,7 @@ void yrt_report_get(yrt_report* out, yrt_policy policy) {
      * error and 0 is a legitimate (if unusual) answer. */
     int slack = prctl(PR_GET_TIMERSLACK, 0UL, 0UL, 0UL, 0UL);
     if (slack >= 0) {
-        out->timer_slack_ns    = (uint64_t)slack;
+        out->timer_slack_ns    = (int64_t)slack;
         out->timer_slack_known = true;
     }
 #endif
@@ -3580,8 +3661,8 @@ int yrt_describe(const yrt_report* r, char* buf, size_t cap) {
     if (!r) { buf[0] = '\0'; return 0; }
     char slack[32];
     if (r->timer_slack_known)
-        snprintf(slack, sizeof(slack), "%lluns",
-                 (unsigned long long)r->timer_slack_ns);
+        snprintf(slack, sizeof(slack), "%lldns",
+                 (long long)r->timer_slack_ns);
     else
         snprintf(slack, sizeof(slack), "n/a");
 #if defined(YRT__EMSCRIPTEN)
@@ -3604,11 +3685,11 @@ int yrt_describe(const yrt_report* r, char* buf, size_t cap) {
     else
         snprintf(pin, sizeof(pin), "none");
     int n = snprintf(buf, cap,
-                     "ysp_rt: policy=%s clock_res=%lluns slack=%s "
+                     "ysp_rt: policy=%s clock_res=%lldns slack=%s "
                      "hires_timer=%s mlock=%s timer_res=%s "
                      "timer_throttle=%s ecoqos=%s pin=%s cores=%s%s",
                      yrt_policy_name(r->policy),
-                     (unsigned long long)r->clock_res_ns,
+                     (long long)r->clock_res_ns,
                      slack,
                      r->hires_timer ? "yes" : "no",
                      r->memory_locked ? "yes" : "no",
@@ -3626,6 +3707,8 @@ const char* yrt_strerror(int code) {
         case YRT_ERR_STOPPED: return "worker or pump not running";
         case YRT_ERR_FULL:    return "ring full, not taken";
         case YRT_ERR_TIMEOUT: return "timed out";
+        case YRT_ERR_UNSUPPORTED: return "not on this platform";
+        case YRT_ERR_REFUSED: return "refused by the OS";
         default:                return code >= 0 ? "ok" : "unknown error";
     }
 }
@@ -3675,6 +3758,12 @@ bool yrt_ring_open(yrt_ring* r, const yrt_ring_desc* desc) {
     return true;
 }
 
+void yrt_ring_close(yrt_ring* r) {
+    if (!r) return;
+    r->slots = NULL;
+    r->mask  = 0u;
+}
+
 const char* yrt_ring_error(const yrt_ring* r) {
     return r ? r->error : "null ring handle";
 }
@@ -3689,12 +3778,12 @@ uint32_t yrt_ring_dropped(const yrt_ring* r) {
 
 int yrt_ring_push(yrt_ring* r, const yrt_event* ev) {
     unsigned char* s;
-    uint64_t t_ns;
+    int64_t t_ns;
     uint32_t tid, n, t;
     if (!r || !ev || !r->slots) return YRT_ERR_ARG;
     /* Before the claim: between its ticket and its publish a push holds up
      * the drainer, so nothing optional happens in that window. */
-    t_ns = ev->t_ns ? ev->t_ns : yrt_now_ns();
+    t_ns = ev->t_ns ? ev->t_ns : (int64_t)yrt__now();
     tid  = ev->tid ? ev->tid : yrt_thread_id();
     n = yrt__rfadd(&r->used, 1u);
     if (n > r->mask) {
@@ -3727,7 +3816,7 @@ int yrt_ring_drain(yrt_ring* r, yrt_event* out, int cap) {
         r->dropped_seen = d;
         r->lost += delta;
         memset(&out[0], 0, sizeof(out[0]));
-        out[0].t_ns   = yrt_now_ns();
+        out[0].t_ns   = (int64_t)yrt__now();
         out[0].tid    = yrt_thread_id();
         out[0].source = (uint16_t)YRT_SRC_RT;
         out[0].kind   = (uint16_t)YRT_KIND_LOSS;
@@ -3768,7 +3857,7 @@ yrt_zone yrt__zone_begin(const yrt_srcloc* loc) {
     z.value = 0;
     /* No ring, no clock read: an untraced build that happens to be compiled
      * in ring mode pays one pointer load per zone. */
-    z.t0_ns = yrt__pload(&yrt__trace_ptr) ? yrt_now_ns() : 0;
+    z.t0_ns = yrt__pload(&yrt__trace_ptr) ? (int64_t)yrt__now() : 0;
     return z;
 }
 
@@ -3787,7 +3876,7 @@ void yrt__zone_end(const yrt_zone* z) {
     yrt__trace_event(&e, (uint16_t)YRT_KIND_ZONE);
     e.t_ns = z->t0_ns;
     e.u.zone.loc    = z->loc;
-    e.u.zone.dur_ns = yrt_now_ns() - z->t0_ns;
+    e.u.zone.dur_ns = (int64_t)yrt__now() - z->t0_ns;
     e.u.zone.value  = z->value;
     (void)yrt_ring_push(r, &e);
 }
@@ -3859,9 +3948,9 @@ int yrt_correlate(const yrt_corr_desc* d, yrt_corr* out) {
     tries = d->tries > 0 ? d->tries : (d->edge ? 4 : 16);
     if (!d->edge) {
         for (taken = 0; taken < tries; taken++) {
-            a = yrt_now_ns();
+            a = yrt__now();
             v = yrt__corr_read(d);
-            b = yrt_now_ns();
+            b = yrt__now();
             w = b - a;
             if (w < best_w) { best_w = w; best_rt = a + w / 2u; best_o = v; }
         }
@@ -3869,14 +3958,14 @@ int yrt_correlate(const yrt_corr_desc* d, yrt_corr* out) {
         /* The value changed somewhere between the start of the last read
          * that still saw the old value and the end of the first that saw
          * the new one. */
-        uint64_t timeout = d->timeout_ns ? d->timeout_ns : 100000000ull;
-        uint64_t a_old = yrt_now_ns();
+        uint64_t timeout = d->timeout_ns > 0 ? (uint64_t)d->timeout_ns : 100000000ull;
+        uint64_t a_old = yrt__now();
         uint64_t v_old = yrt__corr_read(d);
         uint64_t end = a_old + timeout;
         while (taken < tries) {
-            a = yrt_now_ns();
+            a = yrt__now();
             v = yrt__corr_read(d);
-            b = yrt_now_ns();
+            b = yrt__now();
             if (v != v_old) {
                 w = b - a_old;
                 if (w < best_w) { best_w = w; best_rt = a_old + w / 2u; best_o = v; }
@@ -3891,9 +3980,9 @@ int yrt_correlate(const yrt_corr_desc* d, yrt_corr* out) {
     /* A 100 ns counter can read the same tick on both sides, and a width of
      * 0 would claim an exact match and break a 1 / width^2 weight. */
     step = yrt__clock_step_ns();
-    out->rt_ns    = best_rt;
+    out->rt_ns    = (int64_t)best_rt;
     out->other    = best_o;
-    out->width_ns = best_w < step ? step : best_w;
+    out->width_ns = (int64_t)(best_w < step ? step : best_w);
     out->tries    = taken;
     return taken;
 }
@@ -4208,10 +4297,19 @@ static int yrt__fit_add1(yrt_fit* f, uint64_t ticks, int64_t y, int64_t w) {
     return rc | yrt__fit_point(f, u, y, w, res < 0 && f->d.mode != YRT_FIT_UNBIASED);
 }
 
-int yrt_fit_init(yrt_fit* f, const yrt_fit_desc* d) {
-    if (!f || !d) return YRT_ERR_ARG;
-    if (d->mode < YRT_FIT_LATE || d->mode > YRT_FIT_UNBIASED) return YRT_ERR_ARG;
-    if (!(d->ns_per_tick > 0.0) || d->tick_bits > 64u) return YRT_ERR_ARG;
+bool yrt_fit_open(yrt_fit* f, const yrt_fit_desc* d) {
+    if (!f) return false;
+    if (!d) { snprintf(f->error, sizeof f->error, "ysp_rt: fit: NULL desc"); return false; }
+    if (d->mode < YRT_FIT_LATE || d->mode > YRT_FIT_UNBIASED) {
+        snprintf(f->error, sizeof f->error, "ysp_rt: fit: mode %d is not a yrt_fit_mode", d->mode);
+        return false;
+    }
+    if (!(d->ns_per_tick > 0.0) || d->tick_bits > 64u) {
+        snprintf(f->error, sizeof f->error,
+                 "ysp_rt: fit: ns_per_tick must be > 0 and tick_bits at most 64 (got %g, %u)",
+                 d->ns_per_tick, (unsigned)d->tick_bits);
+        return false;
+    }
     memset(f, 0, sizeof *f);
     f->d = *d;
     if (f->d.bucket_ns <= 0)       f->d.bucket_ns = 200000000LL;
@@ -4221,7 +4319,16 @@ int yrt_fit_init(yrt_fit* f, const yrt_fit_desc* d) {
     if (f->d.max_width_ns <= 0)    f->d.max_width_ns = 1300000LL;
     f->modulus = (d->tick_bits > 0u && d->tick_bits < 64u) ? (1ull << d->tick_bits) : 0u;
     f->k = d->ns_per_tick;
-    return YRT_OK;
+    return true;
+}
+
+void yrt_fit_close(yrt_fit* f) {
+    /* A zero ns_per_tick is what every other fit call reads as "not open". */
+    if (f) memset(f, 0, sizeof *f);
+}
+
+const char* yrt_fit_error(const yrt_fit* f) {
+    return f ? f->error : "ysp_rt: NULL fit";
 }
 
 int yrt_fit_add(yrt_fit* f, uint64_t ticks, int64_t host_ns, int64_t width_ns) {
@@ -4388,7 +4495,7 @@ int yrt_user_dir(int kind, const char* subdir, char* out, size_t cap) {
  *  DEADLINE WORKER
  *
  *  One thread, one pending job, one absolute deadline. The thread elevates
- *  itself and publishes the rung before yrt_worker_start() returns, so the
+ *  itself and publishes the rung before yrt_worker_open() returns, so the
  *  policy is known before the first trial and no trial pays for thread
  *  creation. Everything the worker needs lives in the caller's handle, so
  *  nothing allocates once it is running.
@@ -4407,7 +4514,7 @@ int yrt_user_dir(int kind, const char* subdir, char* out, size_t cap) {
 #endif
 
 /* `running` is the one field that crosses threads outside the worker lock:
- * a job may call yrt_worker_submit() at the instant yrt_worker_stop()
+ * a job may call yrt_worker_submit() at the instant yrt_worker_close()
  * clears the flag, and a flag whose whole job is to say whether the lock is
  * still there cannot itself be guarded by that lock. One integer, read and
  * written atomically, is the whole synchronization. */
@@ -4566,7 +4673,7 @@ static void yrt__worker_run(yrt_worker* w, bool flushed) {
     yrt_job_fn fn = w->fn;
     void* ctx = w->ctx;
     yrt_job_info info;
-    info.deadline_ns = w->deadline_ns;
+    info.deadline_ns = (int64_t)w->deadline_ns;
     info.flushed = flushed;
     /* The generation the submit stamped this job with, read before the bump
      * that retires it. */
@@ -4574,8 +4681,8 @@ static void yrt__worker_run(yrt_worker* w, bool flushed) {
     w->has_job = 0;
     w->gen = yrt__next_gen(w->gen);
     yrt__worker_unlock(w);
-    info.at_ns = yrt_now_ns();
-    info.late_ns = (int64_t)(info.at_ns - info.deadline_ns);
+    info.at_ns = (int64_t)yrt__now();
+    info.late_ns = info.at_ns - info.deadline_ns;
     if (fn) {
         YRT_ZONE(z, "yrt.worker.job");
         YRT_ZONE_VALUE(z, info.late_ns);
@@ -4605,7 +4712,7 @@ static void yrt__worker_wait_until(yrt_worker* w, uint64_t until_ns) {
     /* Darwin has no pthread_condattr_setclock, so an absolute wait would run
      * against CLOCK_REALTIME and step with the wall clock. Wait relative to
      * the monotonic clock instead. */
-    uint64_t now = yrt_now_ns();
+    uint64_t now = yrt__now();
     if (until_ns <= now) return;
     struct timespec rel;
     yrt__ns_to_ts(until_ns - now, &rel);
@@ -4634,7 +4741,7 @@ static void* yrt__worker_main(void* arg) {
      * before the handshake, so a refusal fails the start instead of a job. */
     bool ok = yrt__worker_on_start(w);
     yrt__worker_lock(w);
-    /* Publish the rung and release yrt_worker_start(), which waits for it
+    /* Publish the rung and release yrt_worker_open(), which waits for it
      * so w->policy is final when start returns. */
     w->policy = ok ? pol : YRT_POLICY_NONE;
     w->start_failed = ok ? 0 : 1;
@@ -4645,7 +4752,7 @@ static void* yrt__worker_main(void* arg) {
     return NULL;
 }
 
-bool yrt_worker_start(yrt_worker* w, const yrt_worker_desc* desc) {
+bool yrt_worker_open(yrt_worker* w, const yrt_worker_desc* desc) {
     if (!w) return false;
     yrt_worker_desc d;
     memset(&d, 0, sizeof(d));
@@ -4654,13 +4761,13 @@ bool yrt_worker_start(yrt_worker* w, const yrt_worker_desc* desc) {
 
     memset(w, 0, sizeof(*w));
     w->sched = d.sched;
-    if (!yrt_sched_normalize(&w->sched)) {
+    if (yrt_sched_normalize(&w->sched) < 0) {
         snprintf(w->error, sizeof(w->error),
                  "invalid desc.sched: require 0 < runtime_ns <= deadline_ns <= "
                  "period_ns (period_ns 0 means same as deadline_ns)");
         return false;
     }
-    w->spin_ns    = d.spin_ns ? d.spin_ns : YRT_DEFAULT_SPIN_NS;
+    w->spin_ns    = (uint32_t)(d.spin_ns > 0 && d.spin_ns < (int64_t)UINT32_MAX ? d.spin_ns : YRT_DEFAULT_SPIN_NS);
     w->no_elevate = d.no_elevate;
     w->on_start   = d.on_start;
     w->start_ctx  = d.start_ctx;
@@ -4718,7 +4825,7 @@ bool yrt_worker_start(yrt_worker* w, const yrt_worker_desc* desc) {
     return true;
 }
 
-void yrt_worker_stop(yrt_worker* w) {
+void yrt_worker_close(yrt_worker* w) {
     if (!w || !yrt__flag_load(&w->running)) return;
     yrt__wstate* s = yrt__w(w);
     /* Clear `running` first: a submit racing this teardown (a contract
@@ -4735,13 +4842,13 @@ void yrt_worker_stop(yrt_worker* w) {
     w->policy = YRT_POLICY_NONE;
 }
 
-int yrt_worker_submit(yrt_worker* w, uint64_t deadline_ns,
+int yrt_worker_submit(yrt_worker* w, int64_t deadline_ns,
                         yrt_job_fn fn, void* ctx) {
     if (!w || !fn) return YRT_ERR_ARG;
     if (!yrt__flag_load(&w->running)) return YRT_ERR_STOPPED;
     yrt__wstate* s = yrt__w(w);
     pthread_mutex_lock(&s->mtx);
-    w->deadline_ns = deadline_ns;
+    w->deadline_ns = yrt__unsigned(deadline_ns);
     w->fn  = fn;
     w->ctx = ctx;
     w->has_job = 1;
@@ -4783,7 +4890,7 @@ static void yrt__worker_wait_idle(yrt_worker* w) {
 static void yrt__worker_wait_until(yrt_worker* w, uint64_t until_ns) {
     yrt__wstate* s = yrt__w(w);
     yrt__worker_unlock(w);
-    uint64_t now = yrt_now_ns();
+    uint64_t now = yrt__now();
     if (until_ns > now) {
         uint64_t delta = until_ns - now;
         LARGE_INTEGER due; /* negative = relative, 100 ns units */
@@ -4825,7 +4932,7 @@ static DWORD yrt__worker_thread(yrt_worker* w) {
     /* See the POSIX twin: after the elevation, before the handshake. */
     bool ok = yrt__worker_on_start(w);
     yrt__worker_lock(w);
-    /* Publish the rung and release yrt_worker_start(). */
+    /* Publish the rung and release yrt_worker_open(). */
     w->policy = ok ? pol : YRT_POLICY_NONE;
     w->start_failed = ok ? 0 : 1;
     w->ready = 1;
@@ -4835,7 +4942,7 @@ static DWORD yrt__worker_thread(yrt_worker* w) {
     return 0;
 }
 
-bool yrt_worker_start(yrt_worker* w, const yrt_worker_desc* desc) {
+bool yrt_worker_open(yrt_worker* w, const yrt_worker_desc* desc) {
     if (!w) return false;
     yrt_worker_desc d;
     memset(&d, 0, sizeof(d));
@@ -4844,13 +4951,13 @@ bool yrt_worker_start(yrt_worker* w, const yrt_worker_desc* desc) {
 
     memset(w, 0, sizeof(*w));
     w->sched = d.sched;
-    if (!yrt_sched_normalize(&w->sched)) {
+    if (yrt_sched_normalize(&w->sched) < 0) {
         snprintf(w->error, sizeof(w->error),
                  "invalid desc.sched: require 0 < runtime_ns <= deadline_ns <= "
                  "period_ns (period_ns 0 means same as deadline_ns)");
         return false;
     }
-    w->spin_ns    = d.spin_ns ? d.spin_ns : YRT_DEFAULT_SPIN_NS;
+    w->spin_ns    = (uint32_t)(d.spin_ns > 0 && d.spin_ns < (int64_t)UINT32_MAX ? d.spin_ns : YRT_DEFAULT_SPIN_NS);
     w->no_elevate = d.no_elevate;
     w->on_start   = d.on_start;
     w->start_ctx  = d.start_ctx;
@@ -4898,7 +5005,7 @@ bool yrt_worker_start(yrt_worker* w, const yrt_worker_desc* desc) {
     return true;
 }
 
-void yrt_worker_stop(yrt_worker* w) {
+void yrt_worker_close(yrt_worker* w) {
     if (!w || !yrt__flag_load(&w->running)) return;
     yrt__wstate* s = yrt__w(w);
     /* Clear `running` first; see the POSIX twin. */
@@ -4916,13 +5023,13 @@ void yrt_worker_stop(yrt_worker* w) {
     w->policy = YRT_POLICY_NONE;
 }
 
-int yrt_worker_submit(yrt_worker* w, uint64_t deadline_ns,
+int yrt_worker_submit(yrt_worker* w, int64_t deadline_ns,
                         yrt_job_fn fn, void* ctx) {
     if (!w || !fn) return YRT_ERR_ARG;
     if (!yrt__flag_load(&w->running)) return YRT_ERR_STOPPED;
     yrt__wstate* s = yrt__w(w);
     EnterCriticalSection(&s->cs);
-    w->deadline_ns = deadline_ns;
+    w->deadline_ns = yrt__unsigned(deadline_ns);
     w->fn  = fn;
     w->ctx = ctx;
     w->has_job = 1;
@@ -4976,7 +5083,7 @@ static void yrt__worker_loop(yrt_worker* w) {
          * than a system tick, so the last tick is spun. See yrt_sleep_until. */
         if (!yrt__w(w)->hires && spin < YRT__TICK_NS) spin = YRT__TICK_NS;
 #endif
-        uint64_t now = yrt_now_ns();
+        uint64_t now = yrt__now();
         uint64_t wake = (deadline > spin) ? deadline - spin : 0;
         if (now < wake) {
             /* Wakes on the deadline OR on a submit, then re-evaluates from
@@ -4990,14 +5097,14 @@ static void yrt__worker_loop(yrt_worker* w) {
              * thread does not block behind it; the generation check is what
              * makes that safe. */
             yrt__worker_unlock(w);
-            yrt_spin_until(deadline);
+            yrt__spin_until(deadline);
             yrt__worker_lock(w);
             if (w->quit || !w->has_job || w->gen != gen) continue;
         }
         yrt__worker_run(w, false);
     }
     /* Run a pending job immediately rather than waiting out its deadline:
-     * yrt_worker_stop() is tearing the session down, and work that has to
+     * yrt_worker_close() is tearing the session down, and work that has to
      * happen (a trailing edge, a cleanup write) is better early than never. */
     if (w->has_job) yrt__worker_run(w, true);
 }
@@ -5112,7 +5219,7 @@ static void yrt__pump_done_wait(yrt_pump* p, uint64_t until_ns) {
 #if defined(YRT__DARWIN)
     /* Darwin has no pthread_condattr_setclock, so an absolute wait would run
      * against CLOCK_REALTIME and step with the wall clock. */
-    uint64_t now = yrt_now_ns();
+    uint64_t now = yrt__now();
     struct timespec rel;
     if (until_ns <= now) return;
     yrt__ns_to_ts(until_ns - now, &rel);
@@ -5138,7 +5245,7 @@ static void yrt__pump_done_wake(yrt_pump* p) {
 }
 static void yrt__pump_done_wait(yrt_pump* p, uint64_t until_ns) {
     yrt__pstate* s = yrt__p(p);
-    uint64_t now = yrt_now_ns();
+    uint64_t now = yrt__now();
     DWORD ms = 0;
     if (until_ns > now) {
         /* Rounded UP: a sub-millisecond remainder must still wait, or the
@@ -5282,8 +5389,8 @@ int yrt_pump_pending(const yrt_pump* p) {
     return (int)n;
 }
 
-int yrt_pump_wait(yrt_pump* p, uint32_t seq, uint64_t timeout_ns) {
-    uint64_t now, until;
+int yrt_pump_wait(yrt_pump* p, uint32_t seq, int64_t timeout_ns) {
+    uint64_t now, until, tmo = yrt__unsigned(timeout_ns);
     int rc = YRT_ERR_TIMEOUT;
     if (!p) return YRT_ERR_ARG;
     /* The lock-free answer first: a seq already passed is the common case and
@@ -5302,8 +5409,8 @@ int yrt_pump_wait(yrt_pump* p, uint32_t seq, uint64_t timeout_ns) {
         (void)yrt__sc_add(&p->waiters, -1);
         return rc;
     }
-    now = yrt_now_ns();
-    until = (timeout_ns > UINT64_MAX - now) ? UINT64_MAX : now + timeout_ns;
+    now = yrt__now();
+    until = (tmo > UINT64_MAX - now) ? UINT64_MAX : now + tmo;
     yrt__pump_lock_ring(p);
     for (;;) {
         uint64_t slice;
@@ -5312,7 +5419,7 @@ int yrt_pump_wait(yrt_pump* p, uint32_t seq, uint64_t timeout_ns) {
          * submits but is still delivering the queue, and a seq in that queue
          * is still going to be reached. */
         if (p->exited) { rc = YRT_ERR_STOPPED; break; }
-        now = yrt_now_ns();
+        now = yrt__now();
         if (now >= until) { rc = YRT_ERR_TIMEOUT; break; }
         /* One second at a time, and the loop re-checks: a caller who passes an
          * enormous timeout as a stand-in for "forever" must not land on an
@@ -5402,7 +5509,7 @@ static void yrt__pump_close_door(yrt_pump* p) {
         yrt__pump_lock_ring(p);
         yrt__pump_done_wake(p);
         yrt__pump_unlock_ring(p);
-        (void)yrt_sleep_until(yrt_now_ns() + 100000ull, 0);
+        (void)yrt__sleep_until(yrt__now() + 100000ull, 0);
     }
 }
 
@@ -5444,7 +5551,7 @@ static void* yrt__pump_main(void* arg) {
     return NULL;
 }
 
-bool yrt_pump_start(yrt_pump* p, const yrt_pump_desc* desc) {
+bool yrt_pump_open(yrt_pump* p, const yrt_pump_desc* desc) {
     yrt_pump_desc d;
     yrt__pstate* s;
     pthread_mutexattr_t ma;
@@ -5532,7 +5639,7 @@ bool yrt_pump_start(yrt_pump* p, const yrt_pump_desc* desc) {
     return true;
 }
 
-void yrt_pump_stop(yrt_pump* p) {
+void yrt_pump_close(yrt_pump* p) {
     yrt__pstate* s;
     if (!p || !yrt__flag_load(&p->running)) return;
     s = yrt__p(p);
@@ -5591,7 +5698,7 @@ static DWORD yrt__pump_thread(yrt_pump* p) {
     return 0;
 }
 
-bool yrt_pump_start(yrt_pump* p, const yrt_pump_desc* desc) {
+bool yrt_pump_open(yrt_pump* p, const yrt_pump_desc* desc) {
     yrt_pump_desc d;
     yrt__pstate* s;
     int refused;
@@ -5642,7 +5749,7 @@ bool yrt_pump_start(yrt_pump* p, const yrt_pump_desc* desc) {
     return true;
 }
 
-void yrt_pump_stop(yrt_pump* p) {
+void yrt_pump_close(yrt_pump* p) {
     yrt__pstate* s;
     if (!p || !yrt__flag_load(&p->running)) return;
     s = yrt__p(p);

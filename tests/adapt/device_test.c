@@ -47,7 +47,7 @@ static double u01(void) {
 
 static int64_t g_now = 1000000000000LL;    /* the host clock reads 1000 s */
 static bool    g_real;                     /* the thread test: the real clock */
-static int64_t now_fn(void* ctx) { (void)ctx; return g_real ? (int64_t)yrt_now_ns() : g_now; }
+static int64_t now_fn(void* ctx) { (void)ctx; return g_real ? yrt_now_ns() : g_now; }
 
 /* --- the simulated board ---------------------------------------------------- */
 
@@ -579,7 +579,7 @@ static void test_thread(void) {
     ydev_stats st;
     int64_t t0;
     g_real = true;
-    t0 = (int64_t)yrt_now_ns();
+    t0 = yrt_now_ns();
     ring_reset();
     g_nev = 0;
     board_init(YBOX_LINE, 20.0, 125000.0, 50000.0);
@@ -1116,13 +1116,13 @@ static void test_out_timing(void) {
     CHECK_I(ydev_state(&g_out), YDEV_RUNNING);
     for (i = 0; i < N; i++) {
         ydev_out_info oi;
-        int64_t c0 = (int64_t)yrt_now_ns(), c1;
+        int64_t c0 = yrt_now_ns(), c1;
         CHECK_I(ydev_out_pulse(&g_out, (uint32_t)(1 + (i % 200)), 2000000), YDEV_OK);
-        c1 = (int64_t)yrt_now_ns();
+        c1 = yrt_now_ns();
         ydev_out_last(&g_out, &oi);
         call[i] = c1 - c0;
         wr[i] = oi.t_after - oi.t_before;
-        (void)yrt_sleep_ns(3000000 + (uint64_t)(u01() * 4000000.0));
+        (void)yrt_sleep_ns(3000000 + (int64_t)(u01() * 4000000.0));
     }
     pol = yrt_policy_name(yrt_worker_policy(&g_out.worker));
     ydev_stop(&g_out);

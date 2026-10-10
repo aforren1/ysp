@@ -88,11 +88,11 @@ static int run_path(yscr_screen* s, int mode, int count) {
     int nd = 0, injected = 0, waiting = 0, quit = 0;
     int64_t t_inj = 0, give_up = 0;
     uint32_t rng = 777u + (uint32_t)mode;
-    int64_t end = (int64_t)yrt_now_ns() + (int64_t)count * 60000000 + 5000000000LL;
+    int64_t end = yrt_now_ns() + (int64_t)count * 60000000 + 5000000000LL;
     HWND hwnd = (HWND)SDL_GetPointerProperty(SDL_GetWindowProperties(yscr_window(s)),
                                              SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
     SDL_SetHint(SDL_HINT_WINDOWS_RAW_KEYBOARD, mode == 1 ? "1" : "0");
-    while (injected < count && !quit && (int64_t)yrt_now_ns() < end) {
+    while (injected < count && !quit && yrt_now_ns() < end) {
         yscr_frame f;
         SDL_Event ev;
         int64_t t_ev;
@@ -107,12 +107,12 @@ static int run_path(yscr_screen* s, int mode, int count) {
                 waiting = 0;
             }
         }
-        if (waiting && yrt_now_ns() > (uint64_t)give_up) waiting = 0;   /* lost: not counted */
+        if (waiting && yrt_now_ns() > give_up) waiting = 0;   /* lost: not counted */
         if (!waiting && !quit && (mode == 2 || SDL_GetKeyboardFocus() == yscr_window(s))) {
             /* a random phase inside the frame, so the frame loop is no clock */
             rng = rng * 1664525u + 1013904223u;
             yrt_sleep_until(yrt_now_ns() + (rng >> 8) % 8000000u, 0);
-            t_inj = (int64_t)yrt_now_ns();
+            t_inj = yrt_now_ns();
             if (mode == 2) {
                 PostMessageW(hwnd, WM_KEYDOWN, VK_F24, 1 | (0x76u << 16));
                 PostMessageW(hwnd, WM_KEYUP, VK_F24, 1 | (0x76u << 16) | (3u << 30));
@@ -154,12 +154,12 @@ static void inject_key(int scan, int up) {
 
 static int run_reports(yscr_screen* s, int scan, int hold_ms, int count, report_tally* r) {
     int state = 0, quit = 0, downs_this = 0;
-    int64_t t_next = (int64_t)yrt_now_ns() + 100000000, t_down = 0, t_first = 0;
-    int64_t end = (int64_t)yrt_now_ns() + (int64_t)count * 400000000LL + 3000000000LL;
+    int64_t t_next = yrt_now_ns() + 100000000, t_down = 0, t_first = 0;
+    int64_t end = yrt_now_ns() + (int64_t)count * 400000000LL + 3000000000LL;
     memset(r, 0, sizeof *r);
     SDL_SetHint(SDL_HINT_WINDOWS_RAW_KEYBOARD, "1");
-    while (!quit && (int64_t)yrt_now_ns() < end && (r->presses < count || state != 0 ||
-                                                       (int64_t)yrt_now_ns() < t_next)) {
+    while (!quit && yrt_now_ns() < end && (r->presses < count || state != 0 ||
+                                                       yrt_now_ns() < t_next)) {
         yscr_frame f;
         SDL_Event ev;
         int64_t t_ev, now;
@@ -177,7 +177,7 @@ static int run_reports(yscr_screen* s, int scan, int hold_ms, int count, report_
             }
             if (ev.type == SDL_EVENT_KEY_UP && ev.key.scancode == SDL_SCANCODE_F24) r->ups++;
         }
-        now = (int64_t)yrt_now_ns();
+        now = yrt_now_ns();
         if (state == 0 && r->presses < count && now >= t_next && SDL_GetKeyboardFocus() == yscr_window(s)) {
             downs_this = 0;
             inject_key(scan, 0);
@@ -222,11 +222,11 @@ static int reports_mode(yscr_screen* s, int count) {
 static int hand_mode(yscr_screen* s, int seconds) {
     static int64_t last_down[SDL_SCANCODE_COUNT];
     int presses = 0, second = 0, raw = 0, msg = 0, repeats = 0, quit = 0;
-    int64_t end = (int64_t)yrt_now_ns() + (int64_t)seconds * 1000000000LL;
+    int64_t end = yrt_now_ns() + (int64_t)seconds * 1000000000LL;
     memset(last_down, 0, sizeof last_down);
     SDL_SetHint(SDL_HINT_WINDOWS_RAW_KEYBOARD, "1");
     printf("press keys by hand for %d s (letters, space; Esc ends early)\n", seconds);
-    while (!quit && (int64_t)yrt_now_ns() < end) {
+    while (!quit && yrt_now_ns() < end) {
         yscr_frame f;
         SDL_Event ev;
         int64_t t_ev;
@@ -271,9 +271,9 @@ static void devices_mode(yscr_screen* s) {
     static const char* const kinds[6] = { "?", "keyboard", "mouse", "gamepad", "touch", "pen" };
     static const char* const changes[3] = { "present", "added", "removed" };
     int i, n;
-    int64_t end = (int64_t)yrt_now_ns() + 5000000000LL;
+    int64_t end = yrt_now_ns() + 5000000000LL;
     printf("press keys or click in the window for 5 s (Esc ends early)\n");
-    while ((int64_t)yrt_now_ns() < end) {
+    while (yrt_now_ns() < end) {
         yscr_frame f;
         SDL_Event ev;
         int64_t t;
@@ -321,10 +321,10 @@ static void devices_mode(yscr_screen* s) {
 static void mice_mode(yscr_screen* s, int seconds) {
     struct { uint32_t device; long reports, clicks, wheel; long long ax, ay; int unlisted; } dev[16];
     int i, n, nd = 0, physical = 0;
-    int64_t end = (int64_t)yrt_now_ns() + (int64_t)seconds * 1000000000LL;
+    int64_t end = yrt_now_ns() + (int64_t)seconds * 1000000000LL;
     memset(dev, 0, sizeof dev);
     printf("move and click each mouse in the window for %d s (Esc ends early)\n", seconds);
-    while ((int64_t)yrt_now_ns() < end) {
+    while (yrt_now_ns() < end) {
         yscr_frame f;
         SDL_Event ev;
         yin_event m;
@@ -404,7 +404,7 @@ int main(int argc, char** argv) {
             }
         }
     }
-    if (timer_res) printf("timeBeginPeriod(1): %s\n", yrt_timer_resolution_begin() ? "granted" : "refused");
+    if (timer_res) printf("timeBeginPeriod(1): %s\n", yrt_timer_resolution_begin() == 0 ? "granted" : "refused");
     memset(&s, 0, sizeof s);
     memset(&d, 0, sizeof d);
     d.windowed = true;
@@ -459,7 +459,7 @@ int main(int argc, char** argv) {
         /* SendInput reaches only the foreground window. Windows gives the
          * foreground to a program started from the background after the
          * program sends one input event: a zero-size mouse move. */
-        int64_t until = (int64_t)yrt_now_ns() + 2000000000LL;
+        int64_t until = yrt_now_ns() + 2000000000LL;
         {
             HWND hw = (HWND)SDL_GetPointerProperty(SDL_GetWindowProperties(yscr_window(&s)),
                                                    SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
@@ -470,7 +470,7 @@ int main(int argc, char** argv) {
             SendInput(1, &in, sizeof in);
             SetForegroundWindow(hw);
         }
-        while (SDL_GetKeyboardFocus() != yscr_window(&s) && (int64_t)yrt_now_ns() < until) {
+        while (SDL_GetKeyboardFocus() != yscr_window(&s) && yrt_now_ns() < until) {
             yscr_frame f;
             if (yscr_begin(&s, &f) != YSCR_OK) break;
             yscr_flip(&s);

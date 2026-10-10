@@ -1165,7 +1165,7 @@ YVID_API int yvid_soundtrack(yvid_movie* mv, yau_audio* au, const yvid_soundtrac
 #define YVID_FREE(p)       free(p)
 #endif
 #ifndef YVID__NOW
-#define YVID__NOW() ((int64_t)yrt_now_ns())
+#define YVID__NOW() (yrt_now_ns())
 #endif
 
 
@@ -4450,7 +4450,7 @@ static int yvid__fill(int32_t* have, int32_t from_index, const char* what, char*
 
 static void yvid__close_partial(yvid_movie* mv) {
 #if !defined(YRT_NO_THREADS)
-    if (!mv->inline_mode) yrt_pump_stop(&mv->pump);
+    if (!mv->inline_mode) yrt_pump_close(&mv->pump);
 #endif
     if (mv->snd) { mv->snd_ops->close(mv->snd); mv->snd = NULL; mv->snd_ops = NULL; }
 #if YVID__MF
@@ -4776,7 +4776,7 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
         pd.ctx = mv;
         pd.on_start = yvid__on_start;
         pd.pin_cpu = desc->pin_cpu;
-        if (!yrt_pump_start(&mv->pump, &pd)) {
+        if (!yrt_pump_open(&mv->pump, &pd)) {
             /* A target without threads (wasm without -pthread) still plays,
              * decoding inside yvid_update(); describe() says so. */
             yvid__fmt(mv->inline_why, sizeof mv->inline_why, "%s", yrt_pump_error(&mv->pump));

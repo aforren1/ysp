@@ -270,7 +270,7 @@
  *     yser_close() stops the worker before it closes anything and has it write
  *     any pending trailing byte immediately instead of waiting out the rest of
  *     the width, so a latching box is never left holding a trigger code
- *     (yrt_worker_stop() runs a pending job at once, with a flush flag the
+ *     (yrt_worker_close() runs a pending job at once, with a flush flag the
  *     callback reads). That one write happens with the writer mutex held, and
  *     yser_close() joins the worker thread behind it, so "at once" is about the
  *     deadline, not about the call returning: it is bounded by a fixed 50 ms
@@ -992,7 +992,7 @@ static int  yser__async_submit(yser_port* p, uint8_t on, uint8_t off, uint32_t u
  * second reader of the same OS counter: two copies of this conversion are two
  * things to keep in agreement, and the manual promises one base. */
 YSER_API uint64_t yser_now_us(void) {
-    return yrt_now_us();
+    return (uint64_t)yrt_now_ns() / 1000u;
 }
 
 /* Case-insensitive helpers; MSVC has no strcasestr/strcasecmp. */
@@ -1666,7 +1666,7 @@ YSER_API int yser_send_break(yser_port* p, uint32_t ms) {
      * tail, so a break no longer has the 15.6 ms Windows tick as its floor.
      * The multiply is 64-bit: ms * 1000000 overflows 32 bits at about 4.3 s,
      * and this call takes the caller's number as given. */
-    (void)yrt_sleep_ns((uint64_t)ms * 1000000ull);
+    (void)yrt_sleep_ns((int64_t)ms * 1000000);
     if (!ClearCommBreak((HANDLE)p->handle)) {
         DWORD e = GetLastError();
         p->wr_oserr = (int)e;
@@ -2347,7 +2347,7 @@ YSER_API int yser_send_break(yser_port* p, uint32_t ms) {
         return yser__gone(errno) ? YSER_ERR_DISCONNECTED : YSER_ERR_IO;
     }
     /* 64-bit multiply: ms * 1000000 overflows 32 bits at about 4.3 s. */
-    (void)yrt_sleep_ns((uint64_t)ms * 1000000ull);
+    (void)yrt_sleep_ns((int64_t)ms * 1000000);
     if (ioctl(p->fd, TIOCCBRK) != 0) {
         p->wr_oserr = errno;
         return yser__gone(errno) ? YSER_ERR_DISCONNECTED : YSER_ERR_IO;
@@ -2463,13 +2463,13 @@ static int yser__write_worker(yser_port* p, uint8_t value, uint32_t timeout_ms) 
  * deadline unless it is already due, in which case writing it here is what
  * its own callback would do a moment later anyway.
  *
- * A flush (yrt_worker_stop, which is yser_close) writes whatever is armed
+ * A flush (yrt_worker_close, which is yser_close) writes whatever is armed
  * at once, bounded by YSER__CLOSE_FLUSH_MS rather than write_timeout_ms,
  * because yser_close() is joining this thread behind the write. */
 static void yser__off_job(void* ctx, const yrt_job_info* info) {
     yser__async* a = (yser__async*)ctx;
     yser__lock(a);
-    if (a->armed && (info->flushed || yrt_now_ns() >= a->off_at_ns)) {
+    if (a->armed && (info->flushed || (uint64_t)yrt_now_ns() >= a->off_at_ns)) {
         a->armed = 0;
         (void)yser__write_worker(a->port, a->off_byte,
                                  info->flushed ? YSER__CLOSE_FLUSH_MS
@@ -2493,13 +2493,13 @@ static bool yser__async_start(yser_port* p) {
     yrt_worker_desc wd;
     memset(&wd, 0, sizeof(wd));
     wd.sched = p->sched;   /* already normalized by yser_open() */
-    if (!yrt_worker_start(&a->rt, &wd)) {
+    if (!yrt_worker_open(&a->rt, &wd)) {
         yser__set_error(p, "async pulse: %s", yrt_worker_error(&a->rt));
         yser__mutex_destroy(&a->mtx);
         free(a);
         return false;
     }
-    /* yrt_worker_start() returns only once the thread has published its
+    /* yrt_worker_open() returns only once the thread has published its
      * rung, so async_policy is final when yser_open() returns. */
     p->async_policy = yrt_worker_policy(&a->rt);
     p->async = a;
@@ -2518,7 +2518,7 @@ static void yser__async_stop(yser_port* p) {
     /* Runs a pending job immediately through yser__off_job with info->flushed
      * set, then joins. Called without the mutex, because that callback takes
      * it. */
-    yrt_worker_stop(&a->rt);
+    yrt_worker_close(&a->rt);
     yser__mutex_destroy(&a->mtx);
     free(a);
     p->async_policy = YSER_ASYNC_NONE;
@@ -2705,14 +2705,14 @@ YSER_API bool yser_open(yser_port* p, const yser_desc* desc) {
     p->keep_dtr_on_close = d.keep_dtr_on_close;
 
     /* Resolve the worker's RT reservation with ysp/rt.h's own rules, so the
-     * reservation this header accepts and the one yrt_worker_start() accepts
+     * reservation this header accepts and the one yrt_worker_open() accepts
      * cannot drift apart. All-zero means defaults; a zero period becomes the
      * deadline (as the kernel does); anything else that breaks
      * 0 < runtime <= deadline <= period fails loudly here rather than silently
      * degrading one rung (the kernel rejects deadline_ns == 0 with EINVAL). A
      * valid reservation the kernel merely cannot admit still falls back. */
     p->sched = d.sched;
-    if (!yrt_sched_normalize(&p->sched)) {
+    if (yrt_sched_normalize(&p->sched) < 0) {
         yser__set_error(p, "invalid desc.sched: require 0 < runtime_ns <= "
                            "deadline_ns <= period_ns (period_ns 0 means "
                            "same as deadline_ns)");
@@ -2769,7 +2769,7 @@ YSER_API int yser_pulse(yser_port* p, uint8_t on, uint8_t off, uint32_t usec) {
      * default; a caller who has measured its rig with examples/rt/jitter.c and
      * wants a different one can call yrt_sleep_until() around two
      * yser_write_byte() calls, which is all this function is. */
-    if (usec) (void)yrt_sleep_until(yrt_now_ns() + (uint64_t)usec * 1000ull,
+    if (usec) (void)yrt_sleep_until(yrt_now_ns() + (int64_t)usec * 1000,
                                       YRT_DEFAULT_SPIN_NS);
     r = yser_write_byte(p, off);
     return r < 0 ? r : 1 + r;

@@ -876,7 +876,7 @@ static void t4_fonts(void) {
     {
         static const double want[18] = { 0, 0, 0, 0, 1, 0, 1, 0, 1, -1, 1, -1, 0, -1, 0, -1, 0, 0 };
         int same = p.n_contours == 2 && p.n_pts >= 9;
-        for (k = 0; same && k < 18; k++) if (p.pts[k] != want[k] || (p.pts[k] == 0 && signbit(p.pts[k]))) same = 0;
+        for (k = 0; same && k < 18; k++) if (p.pts[k] != want[k] || (p.pts[k] == 0 && 1.0 / p.pts[k] < 0.0)) same = 0;   /* -0: MinGW's signbit() narrows to float */
         CHECK(same);
         CHECK(path_closed(&p) && yol_path_area(&p) == -0.75);
     }

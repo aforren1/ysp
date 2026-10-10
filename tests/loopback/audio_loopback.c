@@ -349,14 +349,14 @@ static int digital(int mute, int exclusive, int leads) {
     {
         /* targets at random sub-frame phases, 50 to 110 ms ahead, every 120 ms */
         uint64_t x = 12345;
-        int64_t t0 = (int64_t)yrt_now_ns();
+        int64_t t0 = yrt_now_ns();
         for (i = 0; i < n + nlead; i++) {
             int64_t slot = t0 + (int64_t)i * 120000000LL, t, lead;
             x = x * 6364136223846793005ull + 1442695040888963407ull;
             if (i < n) lead = 50000000 + (int64_t)((x >> 33) % 60000000);
             else lead = 60000000 - (int64_t)(i - n) * 290000;   /* 60 ms down to 2 ms */
             t = slot + 120000000 + (int64_t)((x >> 20) % 20833);
-            yrt_sleep_until((uint64_t)(t - lead), 0);
+            yrt_sleep_until((int64_t)(t - lead), 0);
             ids[i] = yau_play_at(&au, b, t);
             yau_update(&au);
             drain_ring();
@@ -544,16 +544,16 @@ static void stream_clicks(int n, yser_port* ttl, int64_t* t_ttl, yau_id* ids, ui
             next += k;
         }
         if (next >= total) yau_stream_end(&st);
-        if (!ids[0]) ids[0] = yau_play_stream(&au, &st, (int64_t)yrt_now_ns() + 300000000);
+        if (!ids[0]) ids[0] = yau_play_stream(&au, &st, yrt_now_ns() + 300000000);
         yau_update(&au);
         yau_stream_get_info(&st, &in);
         if (in.started) {
             for (i = 0; i < n; i++)
                 if (!g_click_t[i]) (void)yau_stream_time_of(&au, &st, (int64_t)i * spacing, &g_click_t[i]);
-            if (ttl && i_t < n && (int64_t)yrt_now_ns() >= g_click_t[i_t] - 2000000) {
-                yrt_sleep_until((uint64_t)g_click_t[i_t], YRT_DEFAULT_SPIN_NS);
+            if (ttl && i_t < n && yrt_now_ns() >= g_click_t[i_t] - 2000000) {
+                yrt_sleep_until(g_click_t[i_t], YRT_DEFAULT_SPIN_NS);
                 yser_set_dtr(ttl, true);
-                t_ttl[i_t] = (int64_t)yrt_now_ns();
+                t_ttl[i_t] = yrt_now_ns();
                 yrt_sleep_until(yrt_now_ns() + 5000000, 0);
                 yser_set_dtr(ttl, false);
                 i_t++;
@@ -581,7 +581,7 @@ static void line_cb(ma_device* dv, void* out, const void* in, ma_uint32 n) {
     const float* x = (const float*)in;
     ma_uint32 i, ch = dv->capture.channels;
     (void)out;
-    if (g_in_blocks < 200000) { g_in_t[g_in_blocks] = (int64_t)yrt_now_ns(); g_in_w[g_in_blocks] = g_in_n; g_in_blocks++; }
+    if (g_in_blocks < 200000) { g_in_t[g_in_blocks] = yrt_now_ns(); g_in_w[g_in_blocks] = g_in_n; g_in_blocks++; }
     for (i = 0; i < n && g_in_n < LINE_MAX_FRAMES; i++, g_in_n++) {
         g_in[g_in_n] = x[i * ch];
         if (g_ttl_ch >= 0 && (ma_uint32)g_ttl_ch < ch) g_in_ttl[g_in_n] = x[i * ch + (ma_uint32)g_ttl_ch];
@@ -644,12 +644,12 @@ static int line_mode(const char* in_name, const char* dtr_port, int64_t ttl_lat)
         n = 0;   /* the clicks are out; the loop below has nothing to play */
     }
     for (i = 0; i < n; i++) {
-        int64_t t = (int64_t)yrt_now_ns() + 150000000;
+        int64_t t = yrt_now_ns() + 150000000;
         ids[i] = yau_play_at(&au, b, t);
         if (have_ttl) {
-            yrt_sleep_until((uint64_t)t, YRT_DEFAULT_SPIN_NS);
+            yrt_sleep_until(t, YRT_DEFAULT_SPIN_NS);
             yser_set_dtr(&port, true);
-            t_ttl[i] = (int64_t)yrt_now_ns();
+            t_ttl[i] = yrt_now_ns();
             yrt_sleep_until(yrt_now_ns() + 5000000, 0);
             yser_set_dtr(&port, false);
         }

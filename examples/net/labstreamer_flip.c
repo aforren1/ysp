@@ -288,8 +288,8 @@ int main(int argc, char** argv) {
 
     /* gray until the inlets run and the LabStreamer has subscribed (up to 10 s) */
     {
-        int64_t end = (int64_t)yrt_now_ns() + 10000000000LL;
-        while ((int64_t)yrt_now_ns() < end) {
+        int64_t end = yrt_now_ns() + 10000000000LL;
+        while (yrt_now_ns() < end) {
             if (yscr_begin(&scr, &f) != YSCR_OK) break;
             yscr_set_patch(&scr, 0.5f);
             yscr_flip(&scr);
@@ -351,9 +351,9 @@ int main(int argc, char** argv) {
     frames = i;
     {   /* the light, the Data stream and the LabStreamer's answers lag: 1.5 s more */
         yscr_record r;
-        int64_t end = (int64_t)yrt_now_ns() + 1500000000;
+        int64_t end = yrt_now_ns() + 1500000000;
         yscr_wait_flip(&scr, &r);
-        while ((int64_t)yrt_now_ns() < end) {
+        while (yrt_now_ns() < end) {
             take_input(&scr);
             take_records(&ring, evs, 8192);
             (void)yrt_sleep_ns(5000000);

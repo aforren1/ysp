@@ -101,7 +101,7 @@ static void on_trial(void* ctx, const void* msg, uint32_t seq) {
     uint64_t took;
     /* Stand-in for yqst_update + yqst_next, or a GP refit. A sleep rather than
      * a spin so the numbers are about the pump, not about a busy core. */
-    (void)yrt_sleep_until(t0 + (uint64_t)m->work_ns_k * 1000ull, 0);
+    (void)yrt_sleep_until(t0 + (int64_t)m->work_ns_k * 1000, 0);
     took = yrt_now_ns() - t0;
     if (took > k->worst_ns) k->worst_ns = took;
     k->total_ns += took;
@@ -169,7 +169,7 @@ int main(int argc, char** argv) {
     d.on_msg   = on_trial;
     d.on_idle  = on_fit_step;
     d.ctx      = &k;
-    if (!yrt_pump_start(&pump, &d)) {
+    if (!yrt_pump_open(&pump, &d)) {
         fprintf(stderr, "rt_pump: pump start failed: %s\n", yrt_pump_error(&pump));
         return 0;            /* documented: this program always exits 0 */
     }
@@ -236,7 +236,7 @@ int main(int argc, char** argv) {
     }
     /* The stop drains, so every accepted message did run; anything the tail
      * loop did not see landed after the last frame it watched. */
-    yrt_pump_stop(&pump);
+    yrt_pump_close(&pump);
     while ((int)next_stamp <= submitted) {
         g_done_frame[next_stamp - 1] = frames + tail;
         next_stamp++;

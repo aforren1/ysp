@@ -176,10 +176,10 @@ static void* sim_open(void* user, const char* key, char* found, size_t cap) {
 
 static int sim_read(void* conn, uint8_t* buf, int cap, int timeout_ms) {
     simboard* b = (simboard*)conn;
-    int64_t end = (int64_t)yrt_now_ns() + (int64_t)timeout_ms * 1000000;
+    int64_t end = yrt_now_ns() + (int64_t)timeout_ms * 1000000;
     for (;;) {
         int n = 0;
-        int64_t t = (int64_t)yrt_now_ns();
+        int64_t t = yrt_now_ns();
         sim_lock(&b->mx);
         sim_run(b, t);
         while (n < cap && b->qh != b->qtail && b->qt[b->qh % SIMQ] <= t) buf[n++] = b->q[b->qh++ % SIMQ];
@@ -193,7 +193,7 @@ static int sim_read(void* conn, uint8_t* buf, int cap, int timeout_ms) {
 /* Commands to the board arrive after a native-USB OUT transfer. */
 static int sim_write(void* conn, const uint8_t* buf, int n) {
     simboard* b = (simboard*)conn;
-    int64_t t = (int64_t)yrt_now_ns(), at;
+    int64_t t = yrt_now_ns(), at;
     int i;
     sim_lock(&b->mx);
     at = t + 30000 + (int64_t)(sim_u01(b) * 125000.0);
@@ -243,7 +243,7 @@ static void* ad_open(void* user, const char* key, char* found, size_t cap) {
 static int ad_write(void* conn, const uint8_t* buf, int n) { (void)conn; (void)buf; return n; }
 static int ad_lines(void* conn, uint32_t code, uint32_t changed) {
     simboard* b = (simboard*)conn;
-    int64_t t = (int64_t)yrt_now_ns();
+    int64_t t = yrt_now_ns();
     if (!(changed & 1u)) return 0;
     sim_lock(&b->mx);
     if (code & 1u) { b->call_t = t; b->want_truth = 1; }
@@ -255,9 +255,9 @@ static int ad_lines(void* conn, uint32_t code, uint32_t changed) {
 static void sim_init(int self) {
     memset(&g_sim, 0, sizeof g_sim);
     sim_lock_init(&g_sim.mx);
-    g_sim.t0 = (int64_t)yrt_now_ns() - 5000000000LL;
+    g_sim.t0 = yrt_now_ns() - 5000000000LL;
     g_sim.tick = 1000.0 * (1.0 - 20e-6);
-    g_sim.next_sync = (int64_t)yrt_now_ns();
+    g_sim.next_sync = yrt_now_ns();
     g_sim.level = self ? 0 : 1;   /* a board pin idles low, a TTL adapter's DTR high */
     g_sim.rng = 0x9E3779B97F4A7C15ull;
 }
@@ -503,7 +503,7 @@ int main(int argc, char** argv) {
     ydev_get_stats(&g_out, &ost);
     printf("out_latency: out %s at %s (role %d), %s; warming up %.1f s\n", famname, ost.found, g_out.d.device,
            self ? "wired to its own input" : "into the board at --in", warmup_s);
-    (void)yrt_sleep_ns((uint64_t)(warmup_s * 1e9));
+    (void)yrt_sleep_ns((int64_t)(warmup_s * 1e9));
     {
         yrt_event junk[256];
         while (yrt_ring_drain(&g_edges, junk, 256) > 0) { }
@@ -517,7 +517,7 @@ int main(int argc, char** argv) {
         ydev_out_last(&g_out, &oi);
         if (rc != YDEV_OK) { fprintf(stderr, "out_latency: pulse %d: error %d\n", i, rc); missed++; continue; }
         until = oi.t_before + 100000000;
-        while ((int64_t)yrt_now_ns() < until && got < 2) {
+        while (yrt_now_ns() < until && got < 2) {
             yrt_event r[16];
             int k, m = yrt_ring_drain(&g_edges, r, 16);
             for (k = 0; k < m; k++) {
@@ -537,7 +537,7 @@ int main(int argc, char** argv) {
             if (m == 0) (void)yrt_sleep_ns(200000);
         }
         if (!got) missed++;
-        (void)yrt_sleep_ns((uint64_t)(50e6 + 100e6 * (double)rand() / (double)RAND_MAX));
+        (void)yrt_sleep_ns((int64_t)(50e6 + 100e6 * (double)rand() / (double)RAND_MAX));
     }
     ydev_get_stats(&g_out, &ost);
     if (!self) ydev_get_stats(&g_in, &ist); else ist = ost;

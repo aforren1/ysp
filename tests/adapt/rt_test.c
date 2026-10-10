@@ -75,7 +75,7 @@ static void fail_i(int line, const char* what, long got, long want) {
 /* A pure OS wait, no spin window: the test sleeps for hundreds of
  * milliseconds at a time and must not burn a core doing it. */
 static void nap_ms(unsigned ms) {
-    (void)yrt_sleep_until(yrt_now_ns() + (uint64_t)ms * 1000000ull, 0);
+    (void)yrt_sleep_until(yrt_now_ns() + (int64_t)ms * 1000000, 0);
 }
 
 /* Submit, treating a full ring as back pressure rather than an error, which is
@@ -140,7 +140,7 @@ static void test_order(void* ring, const char* label) {
     d.ring     = ring;
     d.on_msg   = order_on_msg;
     d.ctx      = &o;
-    if (!yrt_pump_start(&p, &d)) {
+    if (!yrt_pump_open(&p, &d)) {
         fail(__LINE__, yrt_pump_error(&p));
         printf("  (%s)\n", label);
         return;
@@ -157,15 +157,15 @@ static void test_order(void* ring, const char* label) {
         CHECK_I(rc, i + 1, "submit should return a seq of 1, 2, 3, ...");
     }
     /* wait and done_seq must agree about the last message. */
-    CHECK_I(yrt_pump_wait(&p, (uint32_t)rc, 5000000000ull), YRT_OK,
+    CHECK_I(yrt_pump_wait(&p, (uint32_t)rc, 5000000000LL), YRT_OK,
             "wait for the last seq");
     CHECK(yrt_pump_done_seq(&p) >= (uint32_t)rc,
           "done_seq must have passed the seq wait returned for");
     CHECK_I(yrt_pump_pending(&p), 0, "nothing should be pending after the wait");
     /* A seq that will never be reached must time out, not hang or lie. */
-    CHECK_I(yrt_pump_wait(&p, (uint32_t)rc + 1000u, 20000000ull),
+    CHECK_I(yrt_pump_wait(&p, (uint32_t)rc + 1000, 20000000LL),
             YRT_ERR_TIMEOUT, "wait for a seq never submitted");
-    yrt_pump_stop(&p);
+    yrt_pump_close(&p);
 
     CHECK_I(o.n, ORDER_N, "every message must reach on_msg");
     CHECK_I(o.out_of_order, 0, "on_msg must see seq in submit order");
@@ -216,7 +216,7 @@ static void test_full(void) {
     d.capacity = 8;
     d.on_msg   = slow_on_msg;
     d.ctx      = &s;
-    if (!yrt_pump_start(&p, &d)) { fail(__LINE__, yrt_pump_error(&p)); return; }
+    if (!yrt_pump_open(&p, &d)) { fail(__LINE__, yrt_pump_error(&p)); return; }
 
     memset(&probe, 0xa5, sizeof(probe));
     probe.tag = 0xdeadbeefu;
@@ -234,7 +234,7 @@ static void test_full(void) {
     CHECK(memcmp(&probe, &probe_copy, sizeof(probe)) == 0,
           "YRT_ERR_FULL must not touch the caller's message");
     CHECK(yrt_pump_pending(&p) > 0, "a full ring must report pending messages");
-    yrt_pump_stop(&p);                 /* drains the eight */
+    yrt_pump_close(&p);                 /* drains the eight */
     CHECK_I(s.delivered, 8, "a drain must deliver every accepted message");
     printf("  ERR_FULL at capacity, message intact, drain of 8: ok\n");
 }
@@ -293,7 +293,7 @@ static void test_idle(void) {
     d.on_msg   = idle_on_msg;
     d.on_idle  = idle_on_idle;
     d.ctx      = &k;
-    if (!yrt_pump_start(&p, &d)) { fail(__LINE__, yrt_pump_error(&p)); return; }
+    if (!yrt_pump_open(&p, &d)) { fail(__LINE__, yrt_pump_error(&p)); return; }
 
     nap_ms(60);
     c1 = idle_read_calls(&p, &k);
@@ -304,12 +304,12 @@ static void test_idle(void) {
 
     rc = yrt_pump_submit(&p, &dummy);
     CHECK(rc > 0, "submit while the pump is blocked on the idle condvar");
-    CHECK_I(yrt_pump_wait(&p, (uint32_t)rc, 2000000000ull), YRT_OK,
+    CHECK_I(yrt_pump_wait(&p, (uint32_t)rc, 2000000000LL), YRT_OK,
             "a submit must wake a pump that is blocked");
     nap_ms(60);
     c3 = idle_read_calls(&p, &k);
     CHECK_I(c3, 7, "on_idle resumes after a message (2 yes, 1 no more)");
-    yrt_pump_stop(&p);
+    yrt_pump_close(&p);
     CHECK_I(k.msgs, 1, "the one message must have been delivered");
     printf("  on_idle: 4 calls idle, stops on false, 3 more after a submit: ok\n");
 }
@@ -334,7 +334,7 @@ static void test_stop(bool drop, int expect, const char* label) {
     d.on_msg       = slow_on_msg;
     d.ctx          = &s;
     d.drop_on_stop = drop;
-    if (!yrt_pump_start(&p, &d)) { fail(__LINE__, yrt_pump_error(&p)); return; }
+    if (!yrt_pump_open(&p, &d)) { fail(__LINE__, yrt_pump_error(&p)); return; }
     for (i = 0; i < 20; i++) {
         v = (uint32_t)i;
         if (yrt_pump_submit(&p, &v) > 0) submitted++;
@@ -347,7 +347,7 @@ static void test_stop(bool drop, int expect, const char* label) {
         for (i = 0; i < 2000 && yrt_pump_pending(&p) != 19; i++) nap_ms(1);
         CHECK_I(yrt_pump_pending(&p), 19, "one in flight, nineteen queued");
     }
-    yrt_pump_stop(&p);
+    yrt_pump_close(&p);
     CHECK_I(s.delivered, expect, label);
     CHECK_I(yrt_pump_pending(&p), 0, "pending is 0 once the pump is stopped");
     printf("  stop %s: %d of %d messages delivered\n",
@@ -394,7 +394,7 @@ static void test_publish_lock(void) {
     d.capacity = 16;
     d.on_msg   = ck_on_msg;
     d.ctx      = &k;
-    if (!yrt_pump_start(&p, &d)) { fail(__LINE__, yrt_pump_error(&p)); return; }
+    if (!yrt_pump_open(&p, &d)) { fail(__LINE__, yrt_pump_error(&p)); return; }
     for (i = 0; i < CK_N; i++) {
         uint32_t v[2];
         ck_pub got;
@@ -412,9 +412,9 @@ static void test_publish_lock(void) {
             if (got.b != got.a * 7u + 13u) torn++;
         }
     }
-    CHECK_I(yrt_pump_wait(&p, (uint32_t)rc, 5000000000ull), YRT_OK,
+    CHECK_I(yrt_pump_wait(&p, (uint32_t)rc, 5000000000LL), YRT_OK,
             "wait for the last of the checksum messages");
-    yrt_pump_stop(&p);
+    yrt_pump_close(&p);
     CHECK_I(reads, CK_N, "every read under the lock");
     CHECK_I(torn, 0, "the publish lock must never expose a half-written struct");
     CHECK(seen > CK_N / 10, "the main thread should see most publications");
@@ -459,7 +459,7 @@ static void test_priority_and_start(void) {
     d.pin_cpu      = 1;
     d.on_start     = count_start;
     d.start_ctx    = &starts;
-    if (!yrt_pump_start(&p, &d)) {
+    if (!yrt_pump_open(&p, &d)) {
         fail(__LINE__, yrt_pump_error(&p));
     } else {
         yrt_policy pol = yrt_pump_policy(&p);
@@ -473,9 +473,9 @@ static void test_priority_and_start(void) {
                yrt_policy_name(pol));
         rc = yrt_pump_submit(&p, &v);
         CHECK(rc > 0, "submit to a below-normal pump");
-        CHECK_I(yrt_pump_wait(&p, (uint32_t)rc, 2000000000ull), YRT_OK,
+        CHECK_I(yrt_pump_wait(&p, (uint32_t)rc, 2000000000LL), YRT_OK,
                 "a below-normal pump still runs its messages");
-        yrt_pump_stop(&p);
+        yrt_pump_close(&p);
         CHECK_I(yrt_pump_policy(&p), YRT_POLICY_NONE,
                 "policy is NONE after a stop");
     }
@@ -487,10 +487,10 @@ static void test_priority_and_start(void) {
     d.msg_size = sizeof(v);
     d.capacity = 2;
     d.on_msg   = no_op_msg;
-    if (!yrt_pump_start(&p, &d)) fail(__LINE__, yrt_pump_error(&p));
+    if (!yrt_pump_open(&p, &d)) fail(__LINE__, yrt_pump_error(&p));
     CHECK_I(yrt_pump_policy(&p), YRT_POLICY_NORMAL,
             "a default pump runs at normal priority");
-    yrt_pump_stop(&p);
+    yrt_pump_close(&p);
 
     /* A refused on_start fails the start and leaves the hook's message. */
     memset(&p, 0, sizeof(p));
@@ -499,7 +499,7 @@ static void test_priority_and_start(void) {
     d.capacity = 2;
     d.on_msg   = no_op_msg;
     d.on_start = refuse_start;
-    CHECK(!yrt_pump_start(&p, &d), "a refused on_start must fail the start");
+    CHECK(!yrt_pump_open(&p, &d), "a refused on_start must fail the start");
     CHECK(strstr(yrt_pump_error(&p), "test refuses") != NULL,
           "the hook's own message must reach yrt_pump_error");
     CHECK(!yrt_pump_is_running(&p), "nothing runs after a refused start");
@@ -507,7 +507,7 @@ static void test_priority_and_start(void) {
             "no policy after a refused start");
     CHECK_I(yrt_pump_submit(&p, &v), YRT_ERR_STOPPED,
             "submit after a refused start");
-    yrt_pump_stop(&p);   /* must be safe */
+    yrt_pump_close(&p);   /* must be safe */
     printf("  priority, on_start and its refusal: ok\n");
 }
 
@@ -527,29 +527,29 @@ static void test_edges(void) {
     CHECK_I(yrt_pump_wait(&p, 1u, 0), YRT_ERR_STOPPED, "wait on a zeroed handle");
     yrt_pump_lock(&p);      /* a no-op, not a crash */
     yrt_pump_unlock(&p);
-    yrt_pump_stop(&p);      /* a no-op */
+    yrt_pump_close(&p);      /* a no-op */
     CHECK_I(yrt_pump_submit(NULL, &v), YRT_ERR_ARG, "submit with a null handle");
     CHECK_I(yrt_pump_wait(NULL, 1u, 0), YRT_ERR_ARG, "wait with a null handle");
-    yrt_pump_stop(NULL);
+    yrt_pump_close(NULL);
     yrt_pump_lock(NULL);
     yrt_pump_unlock(NULL);
 
     /* Descs that cannot work must fail at start, with a message. */
-    CHECK(!yrt_pump_start(&p, NULL), "a NULL desc has no on_msg");
+    CHECK(!yrt_pump_open(&p, NULL), "a NULL desc has no on_msg");
     CHECK(yrt_pump_error(&p)[0] != '\0', "a failed start leaves a message");
     memset(&d, 0, sizeof(d));
     d.msg_size = sizeof(v);
     d.capacity = 4;
-    CHECK(!yrt_pump_start(&p, &d), "on_msg is required");
+    CHECK(!yrt_pump_open(&p, &d), "on_msg is required");
     d.on_msg = no_op_msg;
     d.msg_size = 0;
-    CHECK(!yrt_pump_start(&p, &d), "msg_size is required");
+    CHECK(!yrt_pump_open(&p, &d), "msg_size is required");
     d.msg_size = sizeof(v);
     d.capacity = 0;
-    CHECK(!yrt_pump_start(&p, &d), "capacity is required");
+    CHECK(!yrt_pump_open(&p, &d), "capacity is required");
     d.capacity = 4;
     d.msg_size = YRT_PUMP_INLINE_BYTES;   /* 4 x that does not fit inline */
-    CHECK(!yrt_pump_start(&p, &d), "a ring too big for the inline buffer");
+    CHECK(!yrt_pump_open(&p, &d), "a ring too big for the inline buffer");
     CHECK(strstr(yrt_pump_error(&p), "YRT_PUMP_INLINE_BYTES") != NULL,
           "the message must name the macro that fixes it");
 
@@ -559,19 +559,19 @@ static void test_edges(void) {
     d.msg_size = sizeof(v);
     d.capacity = 4;
     d.on_msg   = no_op_msg;
-    if (!yrt_pump_start(&p, &d)) { fail(__LINE__, yrt_pump_error(&p)); return; }
+    if (!yrt_pump_open(&p, &d)) { fail(__LINE__, yrt_pump_error(&p)); return; }
     rc = yrt_pump_submit(&p, &v);
     CHECK(rc > 0, "one message before the stop");
-    CHECK_I(yrt_pump_wait(&p, (uint32_t)rc, 2000000000ull), YRT_OK, "wait");
-    yrt_pump_stop(&p);
-    yrt_pump_stop(&p);   /* the second one must be a no-op */
+    CHECK_I(yrt_pump_wait(&p, (uint32_t)rc, 2000000000LL), YRT_OK, "wait");
+    yrt_pump_close(&p);
+    yrt_pump_close(&p);   /* the second one must be a no-op */
     CHECK(!yrt_pump_is_running(&p), "not running after a stop");
     CHECK_I(yrt_pump_submit(&p, &v), YRT_ERR_STOPPED, "submit after a stop");
     /* A seq the pump did reach is still a yes after the stop; one it never
      * reached is YRT_ERR_STOPPED, not a hang. */
     CHECK_I(yrt_pump_wait(&p, (uint32_t)rc, 0), YRT_OK,
             "a seq already done is done after a stop");
-    CHECK_I(yrt_pump_wait(&p, (uint32_t)rc + 1u, 10000000ull), YRT_ERR_STOPPED,
+    CHECK_I(yrt_pump_wait(&p, (uint32_t)rc + 1u, 10000000LL), YRT_ERR_STOPPED,
             "a seq never reached, on a stopped pump");
     CHECK(yrt_pump_done_seq(&p) == (uint32_t)rc,
           "done_seq survives the stop, for the caller's last check");
@@ -590,10 +590,10 @@ static void test_edges(void) {
 /* The stop has to come from another thread, and ysp/rt.h already has one: a
  * deadline worker fires it while the main thread sits in yrt_pump_wait() for
  * a seq that will never arrive. This is the one exception the declaration of
- * yrt_pump_stop() allows to its "do not race another call" rule. */
+ * yrt_pump_close() allows to its "do not race another call" rule. */
 static void stop_job(void* ctx, const yrt_job_info* info) {
     (void)info;
-    yrt_pump_stop((yrt_pump*)ctx);
+    yrt_pump_close((yrt_pump*)ctx);
 }
 
 static void test_stop_releases_wait(void) {
@@ -601,32 +601,32 @@ static void test_stop_releases_wait(void) {
     yrt_pump_desc d;
     yrt_worker w;
     yrt_worker_desc wd;
-    uint64_t t0, waited;
+    int64_t t0, waited;
     int rc;
     memset(&p, 0, sizeof(p));
     memset(&d, 0, sizeof(d));
     d.msg_size = sizeof(uint32_t);
     d.capacity = 4;
     d.on_msg   = no_op_msg;
-    if (!yrt_pump_start(&p, &d)) { fail(__LINE__, yrt_pump_error(&p)); return; }
+    if (!yrt_pump_open(&p, &d)) { fail(__LINE__, yrt_pump_error(&p)); return; }
     memset(&w, 0, sizeof(w));
     memset(&wd, 0, sizeof(wd));
     wd.no_elevate = true;   /* a test host is not a rig; do not ask for FIFO */
-    if (!yrt_worker_start(&w, &wd)) {
+    if (!yrt_worker_open(&w, &wd)) {
         fail(__LINE__, yrt_worker_error(&w));
-        yrt_pump_stop(&p);
+        yrt_pump_close(&p);
         return;
     }
-    if (yrt_worker_submit(&w, yrt_now_ns() + 200000000ull, stop_job, &p) < 0)
+    if (yrt_worker_submit(&w, yrt_now_ns() + 200000000LL, stop_job, &p) < 0)
         fail(__LINE__, "worker submit");
     t0 = yrt_now_ns();
-    rc = yrt_pump_wait(&p, 99u, 10000000000ull);   /* 10 s it must not use */
+    rc = yrt_pump_wait(&p, 99u, 10000000000LL);   /* 10 s it must not use */
     waited = yrt_now_ns() - t0;
-    yrt_worker_stop(&w);
+    yrt_worker_close(&w);
     CHECK_I(rc, YRT_ERR_STOPPED, "a stop must release a blocked wait");
-    CHECK(waited < 3000000000ull, "the wait must return with the stop, not the timeout");
+    CHECK(waited < 3000000000LL, "the wait must return with the stop, not the timeout");
     CHECK(!yrt_pump_is_running(&p), "the pump is stopped");
-    yrt_pump_stop(&p);   /* already stopped: a no-op */
+    yrt_pump_close(&p);   /* already stopped: a no-op */
     printf("  a stop releases a blocked wait after %.0f ms\n",
            (double)waited / 1e6);
 }
@@ -663,7 +663,7 @@ static void hammer_job(void* ctx, const yrt_job_info* info) {
     (void)info;
     while (!t_load(h->quit)) {
         uint32_t seq = (h->calls & 1) ? 1u : 0x7fff0000u;
-        int rc = yrt_pump_wait(h->p, seq, 300000ull);   /* 0.3 ms */
+        int rc = yrt_pump_wait(h->p, seq, 300000LL);   /* 0.3 ms */
         h->calls++;
         if (rc == YRT_OK) h->ok++;
         else if (rc == YRT_ERR_TIMEOUT) h->timeout++;
@@ -682,7 +682,7 @@ static void test_hammer_wait_vs_stop(void) {
     int i, started = 0, restarts = 0;
     uint32_t v = 1u;
     long calls = 0, ok = 0, timeout = 0, stopped = 0, other = 0;
-    uint64_t t0 = yrt_now_ns();
+    int64_t t0 = yrt_now_ns();
 
     memset(&p, 0, sizeof(p));
     memset(&wd, 0, sizeof(wd));
@@ -692,7 +692,7 @@ static void test_hammer_wait_vs_stop(void) {
         h[i].p = &p;
         h[i].quit = &quit;
         memset(&w[i], 0, sizeof(w[i]));
-        if (!yrt_worker_start(&w[i], &wd)) {
+        if (!yrt_worker_open(&w[i], &wd)) {
             fail(__LINE__, yrt_worker_error(&w[i]));
             break;
         }
@@ -709,18 +709,18 @@ static void test_hammer_wait_vs_stop(void) {
         d.capacity     = 4;
         d.on_msg       = no_op_msg;
         d.drop_on_stop = (i % 3 == 2);
-        if (!yrt_pump_start(&p, &d)) { fail(__LINE__, yrt_pump_error(&p)); break; }
+        if (!yrt_pump_open(&p, &d)) { fail(__LINE__, yrt_pump_error(&p)); break; }
         restarts++;
         if (i % 2) {
             (void)yrt_pump_submit(&p, &v);
             (void)yrt_pump_submit(&p, &v);
         }
         if (i % 5 == 0) nap_ms(1);
-        yrt_pump_stop(&p);
+        yrt_pump_close(&p);
     }
 
     t_store(&quit, 1);
-    for (i = 0; i < started; i++) yrt_worker_stop(&w[i]);   /* joins */
+    for (i = 0; i < started; i++) yrt_worker_close(&w[i]);   /* joins */
     for (i = 0; i < started; i++) {
         calls += h[i].calls; ok += h[i].ok; timeout += h[i].timeout;
         stopped += h[i].stopped; other += h[i].other;
@@ -746,7 +746,7 @@ static void test_ring_basic(void) {
     yrt_ring r;
     yrt_ring_desc d;
     yrt_event ev, out[16];
-    uint64_t t0, t1;
+    int64_t t0, t1;
     int i, n;
 
     memset(&r, 0, sizeof(r));
@@ -871,7 +871,7 @@ static void stress_job(void* ctx, const yrt_job_info* info) {
         ev.source = (uint16_t)YRT_SRC_USER;
         ev.kind = (uint16_t)(s->pid + 1);
         ev.aux = i;
-        ev.t_ns = (uint64_t)i + 1u;
+        ev.t_ns = (int64_t)i + 1;
         for (k = 0; k < 5; k++) ev.u.u64[k] = stress_word(s->pid, i, k);
         if (yrt_ring_push(s->r, &ev) == YRT_ERR_FULL) {
             s->refused_at[i] = 1;
@@ -879,7 +879,7 @@ static void stress_job(void* ctx, const yrt_job_info* info) {
         }
         /* Bursts with gaps, so the drainer keeps up most of the time and
          * the pushes interleave with drains rather than only with refusals. */
-        if (i % 32u == 31u) (void)yrt_spin_until(yrt_now_ns() + 20000u);
+        if (i % 32u == 31u) (void)yrt_spin_until(yrt_now_ns() + 20000);
     }
     t_store(&s->done, 1);
 }
@@ -897,7 +897,8 @@ static void test_ring_stress(int producers) {
     int go = 0, started = 0, i, all_done = 0, naps = 0;
     long drained = 0, refused = 0, torn = 0, dup = 0, order = 0, seq_gap = 0, bad_tid = 0;
     long accounting = 0;
-    uint64_t loss = 0, t0, t_nap;
+    uint64_t loss = 0;
+    int64_t t0, t_nap;
 
     memset(&d, 0, sizeof(d));
     d.memory = mem;
@@ -916,7 +917,7 @@ static void test_ring_stress(int producers) {
         have_last[i] = 0;
         last_i[i] = 0;
         memset(&w[i], 0, sizeof(w[i]));
-        if (!yrt_worker_start(&w[i], &wd)) { fail(__LINE__, yrt_worker_error(&w[i])); break; }
+        if (!yrt_worker_open(&w[i], &wd)) { fail(__LINE__, yrt_worker_error(&w[i])); break; }
         started++;
         if (yrt_worker_submit(&w[i], 0, stress_job, &c[i]) < 0) fail(__LINE__, "stress submit");
     }
@@ -945,7 +946,7 @@ static void test_ring_stress(int producers) {
             if (pid < 0 || pid >= started || e->aux >= STRESS_M) { torn++; continue; }
             for (k = 0; k < 5; k++)
                 if (e->u.u64[k] != stress_word(pid, e->aux, k)) { torn++; break; }
-            if (e->t_ns != (uint64_t)e->aux + 1u) torn++;
+            if (e->t_ns != (int64_t)e->aux + 1) torn++;
             if (e->tid != c[pid].tid) bad_tid++;
             if (g_stress_seen[pid][e->aux]) dup++;
             g_stress_seen[pid][e->aux] = 1;
@@ -956,7 +957,7 @@ static void test_ring_stress(int producers) {
         }
         /* Fall behind for 1 ms in every 6, so the ring fills and refuses
          * some of the time and keeps up the rest. */
-        if (!all_done && yrt_now_ns() - t_nap > 5000000u) {
+        if (!all_done && yrt_now_ns() - t_nap > 5000000) {
             nap_ms(1);
             t_nap = yrt_now_ns();
             naps++;
@@ -965,7 +966,7 @@ static void test_ring_stress(int producers) {
          * came back empty. */
         if (was_done && n == 0) break;
     }
-    for (i = 0; i < started; i++) yrt_worker_stop(&w[i]);
+    for (i = 0; i < started; i++) yrt_worker_close(&w[i]);
     for (i = 0; i < started; i++) {
         uint32_t j;
         refused += c[i].refused;
@@ -1003,7 +1004,7 @@ static void test_trace(void) {
     yrt_worker_desc wd;
     int n, i, zones = 0, plots = 0, msgs = 0, frames = 0, names = 0;
     int worker_zone = 0, worker_name = 0;
-    uint64_t t0;
+    int64_t t0;
 
     memset(&d, 0, sizeof(d));
     d.memory = mem;
@@ -1040,10 +1041,10 @@ static void test_trace(void) {
     memset(&w, 0, sizeof(w));
     memset(&wd, 0, sizeof(wd));
     wd.no_elevate = true;
-    if (yrt_worker_start(&w, &wd)) {
+    if (yrt_worker_open(&w, &wd)) {
         (void)yrt_worker_submit(&w, 0, trace_job, NULL);
         nap_ms(30);
-        yrt_worker_stop(&w);
+        yrt_worker_close(&w);
     } else {
         fail(__LINE__, yrt_worker_error(&w));
     }
@@ -1102,21 +1103,23 @@ static void test_trace(void) {
 /* ------------------------------------------------------ clock correlation */
 
 static uint64_t offset_clock(void* ctx) { return yrt_now_ns() + *(const uint64_t*)ctx; }
-static uint64_t ms_clock(void* ctx) { (void)ctx; return yrt_now_ns() / 1000000u; }
+static uint64_t ms_clock(void* ctx) { (void)ctx; return yrt_now_ns() / 1000000; }
 static uint64_t frozen_clock(void) { return 7u; }
+static uint64_t rt_clock(void) { return (uint64_t)yrt_now_ns(); }
 
 static uint64_t abs_diff(uint64_t a, uint64_t b) { return a > b ? a - b : b - a; }
 
 static void test_correlate(void) {
     yrt_corr_desc d;
     yrt_corr c;
-    uint64_t off = 123456789u, t0, el, self_w;
+    uint64_t off = 123456789u;
+    int64_t t0, el, self_w;
     int rc;
 
     memset(&d, 0, sizeof(d));
     CHECK_I(yrt_correlate(&d, &c), YRT_ERR_ARG, "no reader");
     CHECK_I(yrt_correlate(NULL, &c), YRT_ERR_ARG, "NULL desc");
-    d.read = yrt_now_ns;
+    d.read = rt_clock;
     d.read_ctx = offset_clock;
     CHECK_I(yrt_correlate(&d, &c), YRT_ERR_ARG, "two readers");
     d.read_ctx = NULL;
@@ -1125,7 +1128,7 @@ static void test_correlate(void) {
     /* The clock against itself: the read lies inside its own bracket. */
     CHECK_I(yrt_correlate(&d, &c), 16, "plain mode takes 16 tries by default");
     CHECK(c.width_ns > 0, "the width is never 0");
-    CHECK(abs_diff(c.other, c.rt_ns) <= c.width_ns / 2u + 1u,
+    CHECK(abs_diff(c.other, (uint64_t)c.rt_ns) <= (uint64_t)c.width_ns / 2u + 1u,
           "the clock against itself agrees within half the width");
     self_w = c.width_ns;
 
@@ -1135,7 +1138,7 @@ static void test_correlate(void) {
     d.ctx = &off;
     d.tries = 5;
     CHECK_I(yrt_correlate(&d, &c), 5, "tries is honored");
-    CHECK(abs_diff(c.other - off, c.rt_ns) <= c.width_ns / 2u + 1u, "offset recovered");
+    CHECK(abs_diff(c.other - off, (uint64_t)c.rt_ns) <= (uint64_t)c.width_ns / 2u + 1u, "offset recovered");
 
     /* Edge mode on a 1 ms clock made from ours: the edge is exactly at
      * value * 1e6 on our clock, so it must lie within half the width. */
@@ -1146,7 +1149,7 @@ static void test_correlate(void) {
     rc = yrt_correlate(&d, &c);
     el = yrt_now_ns() - t0;
     CHECK_I(rc, 4, "edge mode takes 4 edges by default");
-    CHECK(abs_diff(c.other * 1000000u, c.rt_ns) <= c.width_ns / 2u + 1u,
+    CHECK(abs_diff(c.other * 1000000u, (uint64_t)c.rt_ns) <= (uint64_t)c.width_ns / 2u + 1u,
           "edge mode finds the tick boundary within half the width");
     CHECK(c.width_ns < 1000000u, "an edge is far tighter than the tick");
     CHECK(el < 50000000u, "4 edges of a 1 ms clock take about 4 ms");
@@ -1215,12 +1218,12 @@ static void test_throttle(void) {
     memset(&wd, 0, sizeof(wd));
     wd.on_start = eco_probe;   /* elevates first, then runs the hook */
     g_eco_seen = -1;
-    if (yrt_worker_start(&w, &wd)) yrt_worker_stop(&w);
+    if (yrt_worker_open(&w, &wd)) yrt_worker_close(&w);
     worker_eco = g_eco_seen;
     wd.no_elevate = true;
     g_eco_seen = -1;
     memset(&w, 0, sizeof(w));
-    if (yrt_worker_start(&w, &wd)) yrt_worker_stop(&w);
+    if (yrt_worker_open(&w, &wd)) yrt_worker_close(&w);
     plain_eco = g_eco_seen;
     memset(&p, 0, sizeof(p));
     memset(&pd, 0, sizeof(pd));
@@ -1230,14 +1233,14 @@ static void test_throttle(void) {
     pd.on_start = eco_probe;
     pd.below_normal = true;
     g_eco_seen = -1;
-    if (yrt_pump_start(&p, &pd)) yrt_pump_stop(&p);
+    if (yrt_pump_open(&p, &pd)) yrt_pump_close(&p);
     pump_eco = g_eco_seen;
     CHECK(worker_eco >= 0, "Windows 10 1709+ reports the thread's EcoQoS state");
     CHECK_I(worker_eco, 1, "an elevated worker thread is opted out of EcoQoS");
     CHECK_I(plain_eco, 0, "a no_elevate worker is left to the OS");
     CHECK_I(pump_eco, 1, "the pump thread is opted out of EcoQoS, below normal too");
 
-    CHECK(yrt_timer_resolution_begin(), "timeBeginPeriod(1)");
+    CHECK(yrt_timer_resolution_begin() == 0, "timeBeginPeriod(1)");
     yrt_report_get(&rep, YRT_POLICY_NORMAL);
     CHECK(rep.timer_throttle_off, "raising the resolution opts out of its throttling");
     yrt_describe(&rep, line, sizeof(line));
@@ -1276,7 +1279,7 @@ static bool core_probe_start(void* ctx, char* err, size_t cap) {
     (void)err; (void)cap;
     yrt_report_get(&rep, YRT_POLICY_NONE);
     c->pref_after_elevate = rep.pcores_preferred;
-    if (c->e_cpu >= 0 && yrt_thread_pin(c->e_cpu)) {
+    if (c->e_cpu >= 0 && yrt_thread_pin(c->e_cpu) == 0) {
 #if defined(_WIN32)
         int k;
         c->pinned_runs_there = true;
@@ -1330,7 +1333,7 @@ static void test_core_types(void) {
         memset(&wd, 0, sizeof(wd));
         wd.on_start = core_probe_start;
         wd.start_ctx = &c;
-        if (yrt_worker_start(&w, &wd)) yrt_worker_stop(&w);
+        if (yrt_worker_open(&w, &wd)) yrt_worker_close(&w);
         CHECK(c.pref_after_elevate, "an elevated thread prefers the P-cores on a hybrid CPU");
         CHECK(!c.pref_after_pin, "a pin drops the preference");
         CHECK(c.pinned_runs_there, "the pinned thread runs on its E-core");
@@ -1372,16 +1375,15 @@ static void test_core_types(void) {
 static void test_ticks(void) {
 #if defined(_WIN32)
     LARGE_INTEGER f, a, b;
-    uint64_t now;
+    int64_t now;
     int i, bad = 0;
     QueryPerformanceFrequency(&f);
     for (i = 0; i < 1000; i++) {
         QueryPerformanceCounter(&a);
         now = yrt_now_ns();
         QueryPerformanceCounter(&b);
-        if ((uint64_t)yrt_ticks_to_ns(a.QuadPart) > now ||
-            (uint64_t)yrt_ticks_to_ns(b.QuadPart) < now) bad++;
-        if (a.QuadPart == b.QuadPart && (uint64_t)yrt_ticks_to_ns(a.QuadPart) != now) bad++;
+        if (yrt_ticks_to_ns(a.QuadPart) > now || yrt_ticks_to_ns(b.QuadPart) < now) bad++;
+        if (a.QuadPart == b.QuadPart && yrt_ticks_to_ns(a.QuadPart) != now) bad++;
     }
     CHECK_I(bad, 0, "yrt_ticks_to_ns(QPC) brackets yrt_now_ns(), and equals it on one tick");
     CHECK(yrt_ticks_to_ns(f.QuadPart * 3600) == 3600000000000ll, "an hour of counts is an hour");
@@ -1432,10 +1434,10 @@ static void test_platform(void) {
 #if defined(__EMSCRIPTEN__)
     CHECK_I(yrt_thread_elevate(NULL), YRT_POLICY_NORMAL,
             "wasm has no ladder: elevate returns NORMAL");
-    CHECK(!yrt_thread_pin(0), "wasm cannot pin a thread");
-    CHECK(!yrt_thread_set_timer_slack(1), "wasm has no timer slack");
-    CHECK(!yrt_process_lock_memory(), "wasm cannot lock memory");
-    CHECK(!yrt_timer_resolution_begin(), "wasm has no timer resolution");
+    CHECK(yrt_thread_pin(0) == YRT_ERR_UNSUPPORTED, "wasm cannot pin a thread");
+    CHECK(yrt_thread_set_timer_slack(1) == YRT_ERR_UNSUPPORTED, "wasm has no timer slack");
+    CHECK(yrt_process_lock_memory() == YRT_ERR_UNSUPPORTED, "wasm cannot lock memory");
+    CHECK(yrt_timer_resolution_begin() == YRT_ERR_UNSUPPORTED, "wasm has no timer resolution");
     yrt_timer_resolution_end();
     CHECK(strstr(line, "platform=wasm ladder=none") != NULL,
           "yrt_describe must say the ladder is absent on wasm");

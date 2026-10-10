@@ -96,7 +96,7 @@ static void bench(const char* name, const ygfx_stim* s, int n, void (*prep)(int)
     t0 = yrt_now_ns();
     for (i = 0; i < FRAMES; i++) {
         f.index = i;
-        f.onset = (int64_t)yrt_now_ns();
+        f.onset = yrt_now_ns();
         a = yrt_now_ns();
         if (prep) prep(i);
         if (!timed_prep) a = yrt_now_ns();

@@ -56,23 +56,23 @@ static void bench_size(int w, int h, int reps) {
     yvid__planes_layout(YVID_FMT_I420, w, h, yuv, &p);
     for (k = 0; k < (int)(px + 2 * (size_t)((w + 1) / 2) * ((h + 1) / 2)); k++) yuv[k] = (uint8_t)(k * 2654435761u >> 24);
     for (r = 0; r < reps; r++) {
-        int64_t t0 = (int64_t)yrt_now_ns();
+        int64_t t0 = yrt_now_ns();
         yvid_yuv_to_rgba(&p, YVID_FMT_I420, w, h, YVID_MATRIX_BT709, YVID_RANGE_LIMITED, YVID_SITING_LEFT,
                            YVID_CHROMA_SITED, rgba, w * 4, rows);
-        t[r] = (int64_t)yrt_now_ns() - t0;
+        t[r] = yrt_now_ns() - t0;
     }
     report("I420 to RGBA8, sited chroma", t, reps, (double)px * 4);
     for (r = 0; r < reps; r++) {
-        int64_t t0 = (int64_t)yrt_now_ns();
+        int64_t t0 = yrt_now_ns();
         yvid_yuv_to_rgba(&p, YVID_FMT_I420, w, h, YVID_MATRIX_BT709, YVID_RANGE_LIMITED, YVID_SITING_LEFT,
                            YVID_CHROMA_NEAREST, rgba, w * 4, rows);
-        t[r] = (int64_t)yrt_now_ns() - t0;
+        t[r] = yrt_now_ns() - t0;
     }
     report("I420 to RGBA8, nearest chroma", t, reps, (double)px * 4);
     for (r = 0; r < reps; r++) {
-        int64_t t0 = (int64_t)yrt_now_ns();
+        int64_t t0 = yrt_now_ns();
         sink ^= yvid__hash_planes(YVID_FMT_I420, &p);
-        t[r] = (int64_t)yrt_now_ns() - t0;
+        t[r] = yrt_now_ns() - t0;
     }
     report("XXH64 of the I420 planes", t, reps, (double)px * 1.5);
     for (k = 0; k < 2; k++) {
@@ -85,9 +85,9 @@ static void bench_size(int w, int h, int reps) {
         }
         n = yvid_qoi_encode(rgba, w, h, 4, enc, yvid_qoi_max_bytes(w, h, 4));
         for (r = 0; r < reps; r++) {
-            int64_t t0 = (int64_t)yrt_now_ns();
+            int64_t t0 = yrt_now_ns();
             if (yvid_qoi_decode(enc, (size_t)n, back, w, h) != YVID_OK) { fprintf(stderr, "video_bench: QOI failed\n"); exit(1); }
-            t[r] = (int64_t)yrt_now_ns() - t0;
+            t[r] = yrt_now_ns() - t0;
         }
         if (memcmp(back, rgba, px * 4) != 0) { fprintf(stderr, "video_bench: QOI round trip differs\n"); exit(1); }
         snprintf(what, sizeof what, "QOI decode, %s (%.1f:1)", k == 0 ? "smooth" : "noise", (double)px * 4 / (double)n);
@@ -116,20 +116,20 @@ static int bench_mpg(const char* path) {
     if (!t || !th || !tc || !rgba || !rows) return 1;
     printf("%s: %d x %d at %.3f fps\n", path, w, h, plm_get_framerate(plm));
     for (;;) {
-        int64_t t0 = (int64_t)yrt_now_ns(), t1, t2;
+        int64_t t0 = yrt_now_ns(), t1, t2;
         plm_frame_t* f = plm_decode_video(plm);
         yvid_planes p;
         if (!f || n >= cap) break;
-        t1 = (int64_t)yrt_now_ns();
+        t1 = yrt_now_ns();
         memset(&p, 0, sizeof p);
         p.data[0] = f->y.data; p.stride[0] = (int32_t)f->y.width; p.w[0] = w; p.h[0] = h;
         p.data[1] = f->cb.data; p.stride[1] = (int32_t)f->cb.width; p.w[1] = (w + 1) / 2; p.h[1] = (h + 1) / 2;
         p.data[2] = f->cr.data; p.stride[2] = (int32_t)f->cr.width; p.w[2] = (w + 1) / 2; p.h[2] = (h + 1) / 2;
         (void)yvid__hash_planes(YVID_FMT_I420, &p);
-        t2 = (int64_t)yrt_now_ns();
+        t2 = yrt_now_ns();
         yvid_yuv_to_rgba(&p, YVID_FMT_I420, w, h, YVID_MATRIX_BT601, YVID_RANGE_LIMITED, YVID_SITING_CENTER,
                            YVID_CHROMA_SITED, rgba, w * 4, rows);
-        tc[n] = (int64_t)yrt_now_ns() - t2;
+        tc[n] = yrt_now_ns() - t2;
         th[n] = t2 - t1;
         t[n] = t1 - t0;
         n++;
@@ -180,7 +180,7 @@ static int bench_mp4(const char* path, int hw, int seeks) {
     memset(&in, 0, sizeof in);
     in.path = path;
     for (k = 0; k < 5; k++) {   /* the first is the cold one */
-        int64_t t0 = (int64_t)yrt_now_ns();
+        int64_t t0 = yrt_now_ns();
         memset(&st, 0, sizeof st);
         rc = yvid__mf_open_ex(m, &in, &st, hw, NULL, 0, ix.c.fps_num, ix.c.fps_den, err, sizeof err);
         if (rc == YVID_OK) {
@@ -189,7 +189,7 @@ static int bench_mp4(const char* path, int hw, int seeks) {
             memset(&o, 0, sizeof o);
             rc = yvid__mf_next(m, &d, &o);   /* to the first frame in hand */
         }
-        opens[k] = (int64_t)yrt_now_ns() - t0;
+        opens[k] = yrt_now_ns() - t0;
         if (rc != YVID_OK) { fprintf(stderr, "video_bench: %s: %s\n", path, err); return 1; }
         if (k < 4) yvid__mf_close(m);
     }
@@ -216,15 +216,15 @@ static int bench_mp4(const char* path, int hw, int seeks) {
     for (;;) {
         yvid_out o;
         yvid_planes d;
-        int64_t t0 = (int64_t)yrt_now_ns(), t1, t2, t3, t4;
+        int64_t t0 = yrt_now_ns(), t1, t2, t3, t4;
         memset(&o, 0, sizeof o);
         if (n >= cap || yvid__mf_next(m, &d, &o) != YVID_OK) break;
-        t1 = (int64_t)yrt_now_ns();
+        t1 = yrt_now_ns();
         (void)yvid__hash_planes(YVID_FMT_NV12, &o.planes);
-        t2 = (int64_t)yrt_now_ns();
+        t2 = yrt_now_ns();
         yvid_yuv_to_rgba(&o.planes, YVID_FMT_NV12, ix.c.w, ix.c.h, YVID_MATRIX_BT709, YVID_RANGE_LIMITED,
                            YVID_SITING_LEFT, YVID_CHROMA_SITED, rgba, ix.c.w * 4, rows);
-        t3 = (int64_t)yrt_now_ns();
+        t3 = yrt_now_ns();
         {   /* the planar path's step instead of the conversion: the planes,
              * with the decoder's pitch, into a slot's tight ones */
             yvid_planes sp;
@@ -236,7 +236,7 @@ static int bench_mp4(const char* path, int hw, int seeks) {
                     memcpy(sp.data[pk] + (size_t)y * (size_t)sp.stride[pk], o.planes.data[pk] + (size_t)y * (size_t)o.planes.stride[pk], rb);
             }
         }
-        t4 = (int64_t)yrt_now_ns();
+        t4 = yrt_now_ns();
         td[n] = t1 - t0; th[n] = t2 - t1; tc[n] = t3 - t2; tt[n] = t3 - t0; tp[n] = t4 - t3; tq[n] = (t2 - t0) + (t4 - t3);
         n++;
     }
@@ -261,13 +261,13 @@ static int bench_mp4(const char* path, int hw, int seeks) {
             r ^= r << 13; r ^= r >> 7; r ^= r << 17;
             target = (int64_t)(r % (uint64_t)ix.c.frames);
             key = target - target % ix.c.gop;
-            t0 = (int64_t)yrt_now_ns();
+            t0 = yrt_now_ns();
             if (yvid__mf_seek(m, key, 0) != YVID_OK) { fprintf(stderr, "video_bench: seek failed\n"); return 1; }
             for (j = key; j <= target; j++) {
                 memset(&o, 0, sizeof o);
                 if (yvid__mf_next(m, j == target ? &d : NULL, &o) != YVID_OK) { fprintf(stderr, "video_bench: decode after seek failed\n"); return 1; }
             }
-            ts[k] = (int64_t)yrt_now_ns() - t0;
+            ts[k] = yrt_now_ns() - t0;
         }
         report("seek to a random frame", ts, seeks, 0);
         free(ts);

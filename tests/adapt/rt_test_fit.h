@@ -120,7 +120,7 @@ static void fit_simulate(fit_run* run, fit_stats* st, yrt_fit_info* info) {
     double  h = 0.0;
     bool    reset_done = false;
     fit_stats_init(st);
-    CHECK(yrt_fit_init(&g_fit, &run->desc) == YRT_OK, "fit: init");
+    CHECK(yrt_fit_open(&g_fit, &run->desc), "fit: init");
     while (h < run->secs * 1e9) {
         uint64_t u;
         int64_t host, m;
@@ -314,7 +314,7 @@ static void test_fit_bracket(void) {
     d.tick_bits = 32;
     dev.t0 = 0; dev.u0 = 99; dev.bits = 32; dev.tick = 1e6L * (1.0L + 70e-6L);
     fit_stats_init(&st);
-    CHECK(yrt_fit_init(&g_fit, &d) == YRT_OK, "fit bracket: init");
+    CHECK(yrt_fit_open(&g_fit, &d), "fit bracket: init");
     while (h < 600e9) {
         double w = 0.4e6 + fit_u01(&r) * 2.6e6;
         double t_read = h + fit_u01(&r) * w;      /* the device reads its timer here */
@@ -355,7 +355,7 @@ static void test_fit_unbiased(void) {
     d.ns_per_tick = 1e3;
     dev.t0 = 0; dev.u0 = 5000000000ull; dev.bits = 0; dev.tick = 1e3L * (1.0L - 50e-6L);
     fit_stats_init(&st);
-    CHECK(yrt_fit_init(&g_fit, &d) == YRT_OK, "fit unbiased: init");
+    CHECK(yrt_fit_open(&g_fit, &d), "fit unbiased: init");
     while (h < 600e9) {
         uint64_t u = fit_tick_at(&dev, (long double)h);
         double noise = (fit_u01(&r) + fit_u01(&r) + fit_u01(&r) + fit_u01(&r) - 2.0) * 200e3;
@@ -392,7 +392,7 @@ static void test_fit_reference(void) {
         d.mode = mode == 0 ? YRT_FIT_LATE : YRT_FIT_UNBIASED;
         d.ns_per_tick = 1e3;
         d.slope_span_ns = 1;   /* fit the slope at once */
-        CHECK(yrt_fit_init(&g_fit, &d) == YRT_OK, "fit reference: init");
+        CHECK(yrt_fit_open(&g_fit, &d), "fit reference: init");
         for (i = 0; i < NP; i++) {
             /* 250 ms apart: one pair per 200 ms bucket */
             xs[i] = 1000000 + (int64_t)i * 250000 + (int64_t)(fit_u01(&r) * 1000.0);
@@ -442,7 +442,7 @@ static void test_fit_records(void) {
     yrt_fit_desc d;
     yrt_ring_desc rd;
     int i, n, clocks = 0, fits = 0, bad = 0;
-    uint64_t last_t = 0;
+    int64_t last_t = 0;
     memset(&rd, 0, sizeof rd);
     rd.memory = mem; rd.bytes = sizeof mem;
     CHECK(yrt_ring_open(&ring, &rd), "fit records: ring");
@@ -452,7 +452,7 @@ static void test_fit_records(void) {
     d.tick_bits = 32;
     d.clock_id = 77;
     d.ring = &ring;
-    CHECK(yrt_fit_init(&g_fit, &d) == YRT_OK, "fit records: init");
+    CHECK(yrt_fit_open(&g_fit, &d), "fit records: init");
     /* 30 s at 100 Hz from host 1000 s: 150 buckets of 200 ms */
     for (i = 0; i < 3000; i++)
         (void)yrt_fit_add(&g_fit, (uint64_t)(500 + i * 10), 1000000000000LL + (int64_t)i * 10000000LL + 300000, 0);
@@ -465,7 +465,7 @@ static void test_fit_records(void) {
             if (ev[i].t_ns < last_t) bad++;
             last_t = ev[i].t_ns;
             if ((ev[i].u.u64[0] - 500u) % 10u != 0 || ev[i].u.u64[2] != 0) bad++;
-            if (ev[i].t_ns != 1000000000000ull + (ev[i].u.u64[0] - 500u) * 1000000ull + 300000u) bad++;
+            if (ev[i].t_ns != 1000000000000LL + (int64_t)(ev[i].u.u64[0] - 500u) * 1000000 + 300000) bad++;
         } else if (ev[i].kind == YRT_KIND_FIT) {
             fits++;
             if (ev[i].u.f64[2] < 0.99e6 || ev[i].u.f64[2] > 1.01e6) bad++;
@@ -481,19 +481,19 @@ static void test_fit_args(void) {
     yrt_fit_desc d;
     yrt_fit_info in;
     memset(&d, 0, sizeof d);
-    CHECK(yrt_fit_init(NULL, &d) == YRT_ERR_ARG, "fit args: NULL fit");
-    CHECK(yrt_fit_init(&g_fit, NULL) == YRT_ERR_ARG, "fit args: NULL desc");
-    CHECK(yrt_fit_init(&g_fit, &d) == YRT_ERR_ARG, "fit args: no tick");
+    CHECK(!yrt_fit_open(NULL, &d), "fit args: NULL fit");
+    CHECK(!yrt_fit_open(&g_fit, NULL), "fit args: NULL desc");
+    CHECK(!yrt_fit_open(&g_fit, &d), "fit args: no tick");
     d.ns_per_tick = 1e3;
     d.mode = 3;
-    CHECK(yrt_fit_init(&g_fit, &d) == YRT_ERR_ARG, "fit args: unknown mode");
+    CHECK(!yrt_fit_open(&g_fit, &d), "fit args: unknown mode");
     d.mode = YRT_FIT_LATE;
     d.tick_bits = 65;
-    CHECK(yrt_fit_init(&g_fit, &d) == YRT_ERR_ARG, "fit args: 65 bits");
+    CHECK(!yrt_fit_open(&g_fit, &d), "fit args: 65 bits");
     memset(&g_fit, 0, sizeof g_fit);
     CHECK(yrt_fit_add(&g_fit, 1, 1, 0) == YRT_ERR_ARG, "fit args: a zeroed fit refuses pairs");
     d.tick_bits = 16;
-    CHECK(yrt_fit_init(&g_fit, &d) == YRT_OK, "fit args: 16 bits");
+    CHECK(yrt_fit_open(&g_fit, &d), "fit args: 16 bits");
     CHECK(yrt_fit_map(&g_fit, 5) == 0, "fit args: no map before a pair");
     yrt_fit_get(&g_fit, &in);
     CHECK(!in.ready, "fit args: not ready before a pair");
@@ -512,6 +512,15 @@ static void test_fit_args(void) {
           "fit args: an out-of-order pair is refused");
     yrt_fit_get(&g_fit, &in);
     CHECK(in.ready && in.pairs == 4 && in.rejected == 2, "fit args: counts");
+    CHECK(yrt_fit_error(&g_fit)[0] == '\0', "fit args: no message after an open that worked");
+    yrt_fit_close(&g_fit);
+    CHECK(yrt_fit_add(&g_fit, 65500, 10500000000LL, 0) == YRT_ERR_ARG, "fit args: a closed fit refuses pairs");
+    yrt_fit_get(&g_fit, &in);
+    CHECK(!in.ready, "fit args: a closed fit has no map");
+    yrt_fit_close(&g_fit);
+    d.ns_per_tick = 0.0;
+    CHECK(!yrt_fit_open(&g_fit, &d) && strstr(yrt_fit_error(&g_fit), "ns_per_tick") != NULL,
+          "fit args: the message names the field");
 }
 
 /* The first 5 s, before the slope is fitted: a 500 ppm clock (a ceramic
@@ -529,7 +538,7 @@ static void test_fit_early(void) {
     dev.t0 = 0; dev.u0 = 0; dev.bits = 0; dev.tick = 1e3L * (1.0L + 500e-6L);
     memset(&path, 0, sizeof path);
     path.frame_ns = 1e6; path.tail_ns = 1e5;
-    CHECK(yrt_fit_init(&g_fit, &d) == YRT_OK, "fit early: init");
+    CHECK(yrt_fit_open(&g_fit, &d), "fit early: init");
     while (h < 4.9e9) {
         uint64_t u;
         h += 10e6;

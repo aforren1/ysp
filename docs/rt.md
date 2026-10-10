@@ -293,6 +293,43 @@ Checked on 2026-10-08:
 Not checked: macOS (CI compiles and runs the test there; its two bases are
 in the test's macOS branch).
 
+## Signed time, unit macros and open/close (v0.8.0)
+
+v0.8.0 applies the repository conventions (README.md, Conventions) to this
+header. Three decisions:
+
+- **`yrt_now_ns()` is `int64_t`.** Every other time in ysp was already
+  signed: flip onsets, audio onsets, timeline times, deadlines. The tree
+  had 123 casts of `yrt_now_ns()` to `int64_t`, and without one,
+  `onset - yrt_now_ns()` wraps when the onset is past. A signed count of
+  nanoseconds from the OS's zero (boot, on every platform here) lasts 292
+  years. The implementation keeps its unsigned arithmetic, where a deadline
+  before the clock's zero saturates, and converts at the public calls. A
+  negative deadline or spin window counts as 0.
+- **The unit macros live here.** `YRT_S()`, `YRT_MS()`, `YRT_US()` and
+  `YRT_NS()` replace `YTL_S()`, `YAU_S()` and the like. They round to the
+  nearest nanosecond, so whole numbers are exact (to 2^53 ns). The headers
+  that do not include this one define the same macros under the same
+  `#ifndef YRT_S` guard, so one spelling works with or without ysp/rt.h.
+- **Requests to the OS return a code.** `yrt_thread_pin()`,
+  `yrt_thread_set_timer_slack()`, `yrt_process_lock_memory()` and
+  `yrt_timer_resolution_begin()` returned false both for "this platform
+  has no such call" and for "the OS refused". They return
+  `YRT_ERR_UNSUPPORTED` and `YRT_ERR_REFUSED` now, so a log can tell the
+  two apart.
+
+The worker and the pump open and close (`yrt_worker_open()`,
+`yrt_pump_close()`): they make a thread from a desc, which is what open
+means in every header. `yrt_fit_open()` checks its desc and leaves a
+message, and `yrt_ring_close()` exists so that every open has a close.
+
+Checked on 2026-10-10 (Windows 11, MSVC 19.44 /W4 /WX and MinGW-w64 gcc
+16.1 -Werror): `tests/adapt/rt_test.c` and `tests/compile/rt.c` (C11,
+C++17, `YRT_NO_THREADS`) pass. The compile check now names the clock, the
+waits and the fit calls by type and checks the macros' values in a static
+initializer. Mutants `conv-01` (an open that takes a zero tick) and
+`conv-02` (a close that keeps the map) are caught.
+
 ## Windows 11 power throttling
 
 Windows 11 can throttle a process when all its windows are minimized,

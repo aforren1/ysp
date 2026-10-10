@@ -606,7 +606,7 @@
  *   true while there is room) and yau_wav_on_msg a yrt_msg_fn (a
  *   yau_wav_msg: a seek, or -1 to wake), so a pump does the reading:
  *
- *       yrt_pump_start(&pump, &(yrt_pump_desc){
+ *       yrt_pump_open(&pump, &(yrt_pump_desc){
  *           .msg_size = sizeof(yau_wav_msg), .capacity = 4,
  *           .on_msg = yau_wav_on_msg, .on_idle = yau_wav_step, .ctx = &story });
  *       ...                                                  // each frame
@@ -1584,10 +1584,10 @@ extern "C" {
 /* Test-only seam, not API: tests/adapt/audio_test.c defines these to
  * run the frame-thread side on a virtual clock. */
 #ifndef YAU__NOW
-#define YAU__NOW() ((int64_t)yrt_now_ns())
+#define YAU__NOW() (yrt_now_ns())
 #endif
 #ifndef YAU__SLEEP_UNTIL
-#define YAU__SLEEP_UNTIL(t) yrt_sleep_until((uint64_t)(t), 0u)
+#define YAU__SLEEP_UNTIL(t) yrt_sleep_until((int64_t)(t), 0)
 #endif
 /* Measurement seam, not API: examples/audio/clockstats.c records every
  * tick and the cost of every render through these. */
@@ -2730,7 +2730,7 @@ static void yau__ma_data(ma_device* d, void* out, const void* in, ma_uint32 n) {
 #if defined(MA_SUPPORT_WASAPI)
     if (m->gate) yau__ma_gate(m, d);
 #endif
-    tk.t_entry = (int64_t)yrt_now_ns();
+    tk.t_entry = yrt_now_ns();
     tk.pos = -1;
     tk.pos_t = 0;
     tk.flags = 0;

@@ -40,7 +40,7 @@ static ynet_lsl  g_lib;
 static void on_event(void* ctx, const yin_event* e) {
     (void)ctx;
     g_last = *e;
-    g_arrived = (int64_t)yrt_now_ns();
+    g_arrived = yrt_now_ns();
     g_events++;
 }
 static void on_text(void* ctx, const yin_event* e, const char* t) {

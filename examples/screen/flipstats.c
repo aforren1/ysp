@@ -288,8 +288,8 @@ static uint32_t rng_state = 12345u;
 static uint32_t rnd(void) { rng_state = rng_state * 1664525u + 1013904223u; return rng_state >> 8; }
 
 static void busy_ms(double ms) {
-    int64_t end = (int64_t)yrt_now_ns() + (int64_t)(ms * 1e6);
-    while ((int64_t)yrt_now_ns() < end) { }
+    int64_t end = yrt_now_ns() + (int64_t)(ms * 1e6);
+    while (yrt_now_ns() < end) { }
 }
 
 #if defined(_WIN32)
@@ -563,7 +563,7 @@ int main(int argc, char** argv) {
         }
         rc = n_screens == 1 ? yscr_flip_at(&scr[0], t, NULL) : yscr_flip_group_at(sp, n_screens, t);
         /* the present call returned a few us before this (header cost in flip) */
-        if (i < MAX_FRAMES) g_tret[i] = (int64_t)yrt_now_ns();
+        if (i < MAX_FRAMES) g_tret[i] = yrt_now_ns();
         if (rc < 0) { fprintf(stderr, "flip: %s\n", yscr_strerror(rc)); break; }
         ran++;
         g_count_allocs = 0;

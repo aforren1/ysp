@@ -61,9 +61,9 @@ int main(int argc, char** argv) {
     if (!tone.frames) { fprintf(stderr, "%s\n", yau_error(&au)); yau_close(&au); return 1; }
     if (silent) memset(tone.frames, 0, (size_t)tone.n * sizeof(float));
     for (i = 0; i < count; i++) {
-        int64_t t = (int64_t)yrt_now_ns() + YAU_MS(200);
+        int64_t t = yrt_now_ns() + YAU_MS(200);
         ids[i] = yau_play_at(&au, tone, t);
-        yrt_sleep_until((uint64_t)(t + YAU_MS(100)), YRT_DEFAULT_SPIN_NS);
+        yrt_sleep_until((int64_t)(t + YAU_MS(100)), YRT_DEFAULT_SPIN_NS);
     }
     for (i = 0; i < count; i++) {
         yau_onset r;

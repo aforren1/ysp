@@ -130,7 +130,7 @@ acquiring the writer mutex, and in that window a user write may have disarmed
 the byte (the callback must write nothing) or a new pulse may have armed a
 different byte at a later deadline (the callback must leave it to its own
 deadline). Asking "what is armed, and is it due?" answers both, and a flush
-from `yrt_worker_stop` writes whatever is armed at once, which is what
+from `yrt_worker_close` writes whatever is armed at once, which is what
 `yser_close` needs.
 
 Lock order is writer mutex, then `ysp/rt.h`'s lock; the callback holds nothing

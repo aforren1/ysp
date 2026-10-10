@@ -26,9 +26,9 @@ static int read_ramp(const WCHAR* dev, WORD r[3][256], double* us) {
     int64_t t0;
     BOOL ok;
     if (!dc) return 0;
-    t0 = (int64_t)yrt_now_ns();
+    t0 = yrt_now_ns();
     ok = yscr__win.get_ramp(dc, r);
-    if (us) *us = (double)((int64_t)yrt_now_ns() - t0) / 1e3;
+    if (us) *us = (double)(yrt_now_ns() - t0) / 1e3;
     yscr__win.delete_dc(dc);
     return ok ? 1 : 0;
 }
@@ -60,9 +60,9 @@ int main(int argc, char** argv) {
            before[0][1], before[0][128], before[0][255], us_get);
     /* 2: the same ramp again: no visible change */
     dc = yscr__win.create_dc(mi.szDevice, NULL, NULL, NULL);
-    t0 = (int64_t)yrt_now_ns();
+    t0 = yrt_now_ns();
     if (!yscr__win.set_ramp(dc, before)) { printf("SetDeviceGammaRamp(same ramp): refused\n"); ok = 0; }
-    us_set = (double)((int64_t)yrt_now_ns() - t0) / 1e3;
+    us_set = (double)(yrt_now_ns() - t0) / 1e3;
     yscr__win.delete_dc(dc);
     read_ramp(mi.szDevice, back, NULL);
     printf("SetDeviceGammaRamp(same ramp) %.1f us; read back %s\n", us_set,

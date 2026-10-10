@@ -126,7 +126,7 @@ static DWORD WINAPI inject_main(LPVOID arg) {
         in.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
         in.mi.dx = (LONG)((inject_wx + x) * 65535.0 / (sw - 1) + 0.5);
         in.mi.dy = (LONG)((inject_wy + WH / 2) * 65535.0 / (sh - 1) + 0.5);
-        send_t[k & 255] = (int64_t)yrt_now_ns();
+        send_t[k & 255] = yrt_now_ns();
         send_x[k & 255] = x;
         InterlockedExchange(&sends, k + 1);
         SendInput(1, &in, sizeof in);

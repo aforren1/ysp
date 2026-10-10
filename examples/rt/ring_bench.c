@@ -291,7 +291,7 @@ static int start_workers(prod* ps, int n, bool elevate) {
     wd.no_elevate = !elevate;
     for (i = 0; i < n; i++) {
         memset(&ps[i].w, 0, sizeof(ps[i].w));
-        if (!yrt_worker_start(&ps[i].w, &wd)) {
+        if (!yrt_worker_open(&ps[i].w, &wd)) {
             fprintf(stderr, "rt_ring_bench: worker: %s\n", yrt_worker_error(&ps[i].w));
             return i;
         }
@@ -329,7 +329,7 @@ static void b2(size_t pushes, int max_p) {
         el = yrt_now_ns() - t0;
         drain_all();
         for (i = 0; i < started; i++) {
-            yrt_worker_stop(&g_prod[i].w);
+            yrt_worker_close(&g_prod[i].w);
             refused += g_prod[i].refused;
             if (m + g_prod[i].nblk <= sizeof(merged) / sizeof(merged[0])) {
                 memcpy(merged + m, g_prod[i].blk, g_prod[i].nblk * sizeof(uint64_t));
@@ -405,7 +405,7 @@ static void b3_run(int mutex, int control, int ms, int hammers, uint64_t* lat,
         yrt_worker_desc wd;
         memset(&wd, 0, sizeof(wd));
         wd.spin_ns = 1;
-        if (!yrt_worker_start(&g_elev.w, &wd)) {
+        if (!yrt_worker_open(&g_elev.w, &wd)) {
             fprintf(stderr, "rt_ring_bench: elevated worker: %s\n", yrt_worker_error(&g_elev.w));
             return;
         }
@@ -449,8 +449,8 @@ static void b3_run(int mutex, int control, int ms, int hammers, uint64_t* lat,
         for (i = 0; i < started; i++) if (!b_load(&g_prod[i].done)) all = 0;
         if (all) break;
     }
-    for (i = 0; i < started; i++) { yrt_worker_stop(&g_prod[i].w); hrefused += g_prod[i].refused; }
-    yrt_worker_stop(&g_elev.w);
+    for (i = 0; i < started; i++) { yrt_worker_close(&g_prod[i].w); hrefused += g_prod[i].refused; }
+    yrt_worker_close(&g_elev.w);
     while (any_drain(g_out, 4096) > 0) { }
     snprintf(label, sizeof(label), "%s, %s, refused %ld of %d (others %ld)", what,
              yrt_policy_name(g_elev.policy), g_elev.refused, ms, hrefused);
@@ -533,7 +533,7 @@ static void b3b(int ms) {
     wd.no_elevate = true;
     for (i = 0; i < ns; i++) {
         g_spin[i].quit = &quit;
-        if (!yrt_worker_start(&g_spin[i].w, &wd)) { ns = i; break; }
+        if (!yrt_worker_open(&g_spin[i].w, &wd)) { ns = i; break; }
         (void)yrt_worker_submit(&g_spin[i].w, 0, spin_job, &g_spin[i]);
     }
     memset(&g_low, 0, sizeof(g_low));
@@ -546,12 +546,12 @@ static void b3b(int ms) {
     pd.ctx = &g_low;
     pd.below_normal = true;
     memset(&pump, 0, sizeof(pump));
-    if (!yrt_pump_start(&pump, &pd)) fprintf(stderr, "pump: %s\n", yrt_pump_error(&pump));
+    if (!yrt_pump_open(&pump, &pd)) fprintf(stderr, "pump: %s\n", yrt_pump_error(&pump));
     low_policy = yrt_pump_policy(&pump);
     memset(&g_elev, 0, sizeof(g_elev));
     memset(&wd, 0, sizeof(wd));
     wd.spin_ns = 1;
-    if (!yrt_worker_start(&g_elev.w, &wd)) return;
+    if (!yrt_worker_open(&g_elev.w, &wd)) return;
     g_elev.go = &go;
     g_elev.count = ms;
     g_elev.lat = lat;
@@ -578,9 +578,9 @@ static void b3b(int ms) {
         }
     }
     b_store(&quit, 1);
-    yrt_worker_stop(&g_elev.w);
-    yrt_pump_stop(&pump);
-    for (i = 0; i < ns; i++) yrt_worker_stop(&g_spin[i].w);
+    yrt_worker_close(&g_elev.w);
+    yrt_pump_close(&pump);
+    for (i = 0; i < ns; i++) yrt_worker_close(&g_spin[i].w);
     drain_all();
     snprintf(label, sizeof(label), "%d spinners on %d CPUs, %s, refused %ld of %d", ns, ncpu(),
              yrt_policy_name(g_elev.policy), g_elev.refused, ms);
@@ -729,6 +729,9 @@ static uint64_t realtime(void) {
 }
 #endif
 
+/* yrt_corr_desc.read takes the other clock's raw count, unsigned. */
+static uint64_t rt_raw(void) { return (uint64_t)yrt_now_ns(); }
+
 static void b6_clock(const char* label, uint64_t (*rd)(void), bool edge, int calls) {
     static uint64_t w[1000], cost[1000];
     yrt_corr_desc d;
@@ -756,7 +759,7 @@ static void b6(void) {
     printf("\nB6. yrt_correlate, default tries\n\n"
            "| %-44s | min width ns | median | p99 | median call us |\n"
            "|---|---|---|---|---|\n", "clock");
-    b6_clock("yrt_now_ns (itself), 100 calls", yrt_now_ns, false, 100);
+    b6_clock("yrt_now_ns (itself), 100 calls", rt_raw, false, 100);
 #if defined(_WIN32)
     b6_clock("QueryInterruptTimePrecise, 100 calls", yrt_interrupt_time_100ns, false, 100);
     b6_clock("GetTickCount64, edge mode, 10 calls", tick64, true, 10);

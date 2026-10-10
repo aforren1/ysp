@@ -46,7 +46,7 @@ static unsigned char g_ring_mem[YRT_RING_BYTES(16384)];
 static yrt_ring    g_ring;
 static yrt_event   g_rec[16384];
 
-static uint32_t board_us(void) { return (uint32_t)((int64_t)yrt_now_us() + g_offset_us); }
+static uint32_t board_us(void) { return (uint32_t)(yrt_now_ns() / 1000 + g_offset_us); }
 
 static void board_send(const char* s) { (void)yser_write(&g_board, s, (int)strlen(s)); }
 
@@ -58,12 +58,12 @@ static void* board_thread(void* arg)
 {
     char line[64], out[96];
     int nline = 0, level = 0;
-    int64_t next_sync = (int64_t)yrt_now_ns(), next_edge = next_sync + 30000000;
+    int64_t next_sync = yrt_now_ns(), next_edge = next_sync + 30000000;
     (void)arg;
     while (!g_board_stop) {
         uint8_t b[64];
         int n = yser_read(&g_board, b, (int)sizeof b, 2, YSER_READ_ANY), i;
-        int64_t now = (int64_t)yrt_now_ns();
+        int64_t now = yrt_now_ns();
         for (i = 0; i < n; i++) {
             uint32_t t = board_us();
             if (b[i] == '\n') {
@@ -83,7 +83,7 @@ static void* board_thread(void* arg)
             next_sync += 100000000;
         }
         if (now >= next_edge && g_n_edges < 4096) {
-            int64_t th = (int64_t)yrt_now_ns();
+            int64_t th = yrt_now_ns();
             uint32_t t = (uint32_t)(th / 1000 + g_offset_us);
             level ^= 1;
             snprintf(out, sizeof out, "E %lu 1 %d\n", (unsigned long)t, level);
@@ -177,12 +177,12 @@ int main(int argc, char** argv) {
     if (st.probes < 30 || st.answers < st.probes * 9 / 10) { puts("FAIL: timer queries"); fails++; }
     if (argc > 3) {
 #if !defined(_WIN32)
-        int64_t t_kill = (int64_t)yrt_now_ns();
+        int64_t t_kill = yrt_now_ns();
         kill((pid_t)atoi(argv[3]), SIGTERM);
-        while (ydev_state(&g_dev) == YDEV_RUNNING && (int64_t)yrt_now_ns() - t_kill < 3000000000LL) (void)yrt_sleep_ns(10000000);
+        while (ydev_state(&g_dev) == YDEV_RUNNING && yrt_now_ns() - t_kill < 3000000000LL) (void)yrt_sleep_ns(10000000);
         printf("after the hang-up: %s in %.3f s\n", ydev_state_name(ydev_state(&g_dev)),
-               (double)((int64_t)yrt_now_ns() - t_kill) / 1e9);
-        if (ydev_state(&g_dev) != YDEV_LOST || (int64_t)yrt_now_ns() - t_kill > 2000000000LL) { puts("FAIL: not lost"); fails++; }
+               (double)(yrt_now_ns() - t_kill) / 1e9);
+        if (ydev_state(&g_dev) != YDEV_LOST || yrt_now_ns() - t_kill > 2000000000LL) { puts("FAIL: not lost"); fails++; }
 #endif
     }
     g_board_stop = 1;

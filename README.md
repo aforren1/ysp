@@ -11,7 +11,7 @@ carries its own documentation in its top comment.
 
 | Header | Prefix | Purpose | Platforms | Needs | Status |
 |---|---|---|---|---|---|
-| [ysp/rt.h](include/ysp/rt.h) | `yrt_`, `YRT_` | The shared base: monotonic clock, deadline waits, thread elevation, a one-shot deadline worker, a background pump for inference between trials, a wait-free event ring for the rig's log, clock correlation, a device clock fit (a box's or a board's own clock mapped to the rig's: lower envelope, bracketed reads or least squares, with unwrap and restart), per-user cache and config folders with ownership checks, and instrumentation macros (nothing, Tracy, or the ring). The transport headers and the async layers of the adaptive headers use it. | Windows, Linux, macOS, WebAssembly (Emscripten, no scheduling ladder) | OS only; Tracy, opt-in | v0.7.0 (per-user folders: `yrt_user_dir()`, the rules of gfx's program cache folder, tested on Windows, WSL2 and emcc). v0.6.0 (the device clock fit: on synthetic devices within tens of us of the truth for dense pairs, ms for sparse pairs behind a 16 ms timer; 17 of 17 mutants caught; no real device yet). v0.5.0: event ring stress-tested with 2 to 8 producers (no torn or lost record unaccounted for), ThreadSanitizer clean; a push costs 11 to 37 ns natively and a TIME_CRITICAL producer's p99.9 stays near 2 us while 7 others push, against 0.1 to 0.5 ms behind a lock; Tracy mode built against Tracy v0.14.1 ([design notes and tables](docs/rt.md)). Pump built and run on Windows, Linux and under node (Emscripten); on MinGW the worker and pump threads inherit the x87 control word so a thread computes the same bits as the caller, ThreadSanitizer clean including a wait-versus-stop hammer; the deadline worker as before: Windows measured with [rt_jitter](examples/rt/jitter.c); Linux built and run under WSL2, worker clean under ThreadSanitizer; CI compiles the macOS backend, which has not run on a Mac. No test host grants CAP_SYS_NICE, so the SCHED_FIFO and Mach time-constraint rungs are unexercised. |
+| [ysp/rt.h](include/ysp/rt.h) | `yrt_`, `YRT_` | The shared base: monotonic clock, deadline waits, thread elevation, a one-shot deadline worker, a background pump for inference between trials, a wait-free event ring for the rig's log, clock correlation, a device clock fit (a box's or a board's own clock mapped to the rig's: lower envelope, bracketed reads or least squares, with unwrap and restart), per-user cache and config folders with ownership checks, and instrumentation macros (nothing, Tracy, or the ring). The transport headers and the async layers of the adaptive headers use it. | Windows, Linux, macOS, WebAssembly (Emscripten, no scheduling ladder) | OS only; Tracy, opt-in | v0.8.0 (the Conventions below: `yrt_now_ns()` and every time `int64_t` ns, `YRT_S()`/`YRT_MS()`/`YRT_US()`, worker and pump open/close, `yrt_fit_open()`; 2 mutants added, both caught). v0.7.0 (per-user folders: `yrt_user_dir()`, the rules of gfx's program cache folder, tested on Windows, WSL2 and emcc). v0.6.0 (the device clock fit: on synthetic devices within tens of us of the truth for dense pairs, ms for sparse pairs behind a 16 ms timer; 17 of 17 mutants caught; no real device yet). v0.5.0: event ring stress-tested with 2 to 8 producers (no torn or lost record unaccounted for), ThreadSanitizer clean; a push costs 11 to 37 ns natively and a TIME_CRITICAL producer's p99.9 stays near 2 us while 7 others push, against 0.1 to 0.5 ms behind a lock; Tracy mode built against Tracy v0.14.1 ([design notes and tables](docs/rt.md)). Pump built and run on Windows, Linux and under node (Emscripten); on MinGW the worker and pump threads inherit the x87 control word so a thread computes the same bits as the caller, ThreadSanitizer clean including a wait-versus-stop hammer; the deadline worker as before: Windows measured with [rt_jitter](examples/rt/jitter.c); Linux built and run under WSL2, worker clean under ThreadSanitizer; CI compiles the macOS backend, which has not run on a Mac. No test host grants CAP_SYS_NICE, so the SCHED_FIFO and Mach time-constraint rungs are unexercised. |
 | [ysp/parallel.h](include/ysp/parallel.h) | `ypar_`, `YPAR_` | Parallel port (LPT) trigger output and line input, blocking and async pulses. | Windows, Linux | ysp/rt.h; InpOut driver on Windows | v0.3, on ysp/rt.h. Linux tested; Windows backend compiled but not run on hardware. |
 | [ysp/serial.h](include/ysp/serial.h) | `yser_`, `YSER_` | Serial port (RS-232, USB-serial, USB-CDC) byte I/O for trigger and response boxes, blocking and async pulses. | Windows, Linux, macOS | ysp/rt.h | v0.4, on ysp/rt.h. Linux tested against a virtual port pair; the Windows and macOS backends compile in CI but have never run on a device. [Design notes](docs/serial.md). |
 | [ysp/trials.h](include/ysp/trials.h) | `ytr_`, `YTR_` | Trial sequencing above the adaptive methods: conditions and repetitions (constant stimuli), sequential, random and constrained-random orders, interleaved adaptive tracks, blocks, practice and catch trials, re-queues, tallies, a replayable history. From v0.2: conditions files and trial lists as tables, order lists, draws with replacement, subsets, blocked and alternating groups in Latin-square order, units ("b always follows a"), exact first-order transition balance, Latin and Williams squares by participant, and a rules text with one statement per C call. From v0.2.1: jitter, a duration per trial (uniform, a list, or a non-aging truncated exponential, optionally whole frames) drawn in a fixed order, logged and replayed. No heap, no I/O. | any | ysp/table.h | v0.2.1. The hashes of 600 v0.1.1 and 320 v0.2.0 sessions match on gcc, MSVC and Linux; jitter distributions checked against their CDFs, the draws integer-only with golden digests that match under every compiler and flag set tried (-Ofast and /fp:fast included), and the snapped exponential's hazard measured; each v0.2 order checked by chi-square against its stated distribution, units and balance uniform over every valid order of small designs; 22.9 million fuzz inputs and 47 of 47 mutations caught; gcc and MSVC, sanitizer clean. Sequential order identical to PsychoPy's TrialHandler and the random orders' block properties matched over 100 seeds ([tests/compare/](tests/compare/)). open() of a 10,000-trial design 0.02 to 7 ms. [Design notes](docs/trials.md). |
@@ -169,18 +169,60 @@ CMakeLists.txt            builds examples, compile checks and tests; registers l
   prefix short while it stays unique. The
   implementation macro is `YSP_<NAME>_IMPLEMENTATION`. Private symbols use a
   double underscore (`ypar__set_error`).
-- **Handles.** The caller allocates the handle struct, zeroed or closed.
-  `y<x>_open(p, desc)` fills it. A zero field in `desc` means "default";
-  set fields with designated initializers (`yser_desc d = { .device =
-  "COM3" };`, C99 or C++20) so everything unset is zero. Some headers have a
-  required field (`yser_desc.device`); the header says so.
-- **Errors.** A function that cannot run while another thread uses the handle
-  returns `bool` and leaves a message in the handle, cleared on entry;
-  `y<x>_error(p)` reads it. Every function a second thread may call returns
-  an `int` count or a negative code and never touches the message buffer.
-  Where the line falls is per header: `ysp/parallel.h` puts all its setup
-  calls in the first group, `ysp/serial.h` only `yser_open`, because its
-  shutdown recipe has a reader, a writer and a main thread on one handle.
+- **Handles.** The caller allocates the handle struct and zeroes it. Large
+  handles (a timeline, a trial list, a device) belong in static storage. A
+  zero field in a desc means "default"; some headers have a required field
+  (`yser_desc.device`), and the header says so. Each USAGE block builds as
+  C99 and as C++17, so it zeroes a desc and then sets fields
+  (`yser_desc d = { 0 }; d.device = "COM3";`). In C and C++20,
+  designated initializers do the same.
+- **Lifecycle verbs.** One set of verbs, with one meaning each:
+
+  | Verb | Meaning | Returns |
+  |---|---|---|
+  | `y<x>_open(h, desc)` | Fills a handle from a desc: acquires memory, a thread, a device or a window, or checks the desc and keeps the result. A variant adds a word (`ygfx_open_start()`, `yqst_open_saved()`, `ytb_open_csv()`). A handle that belongs to another handle takes the owner first (`yau_wav_open(&au, &wav, &d)`). | `bool`, true on success |
+  | `y<x>_close(h)` | Releases what open acquired. Safe on a zeroed handle, after a failed open, and a second time. Every open has a close, also when the close has nothing to release. | `void` |
+  | `start`, `stop` | Begin and end an activity on an open handle (`yrdk_start()` starts a field's motion, `ytl_stop()` stops a timeline base). They never acquire the handle. | `int` |
+  | `init` | Fills a plain struct from arguments, without a desc: a value, a decoder's state, an arena on the caller's memory (`ybox_init()`, `yrig_init()`, `yjs_arena_init()`). No close. A struct that grows into heap memory after init has a `_free` (`yjs_arena_free()`, `yol_path_free()`). | `void`, or `int` when it checks its arguments |
+  | `load`, `save`, `view` | Read or write a plain struct as bytes or a file (`yrig_load()`, `ycol_cal_load()`, `yol_font_load()`). A view keeps pointers into the caller's bytes (`ypak_cset_view()`). | `int` |
+
+  An object inside an open handle (a texture, a buffer, a sound) is an id.
+  The call that makes one has the object's name, and `_free` releases it.
+- **Return values.** `open` returns `bool`. A predicate returns `bool`
+  (`y<x>_is_open()`, `ytr_done()`, `yscr_poll()` when an event arrived).
+  Every other call that can fail returns `int`: 0 or more is success (a
+  count, an id, a sequence number, or 0), and a negative value is a
+  `Y<X>_ERR_*` code that `y<x>_strerror(code)` names. Test `rc < 0`; do not
+  test `!rc`, because 0 is success. A call that cannot fail returns `void`
+  or its value.
+- **Errors.** The handle holds the message, and `y<x>_error(h)` reads it.
+  `open` clears it on entry. Every other call on the handle that fails
+  writes it before it returns, in the frame loop too, so the message
+  belongs to the last failure. Three exceptions, each stated in its header:
+  - A call that the header lets a second thread make on the same handle
+    (`yrt_worker_submit()`, `yser_write()`, `ydev_out_pulse()`) returns the
+    code and does not write the message, because the write would race.
+    `y<x>_strerror(code)` names the code.
+  - A call without a handle (`init`, `load`, `view`, a parser of the
+    caller's bytes) writes its message into a caller buffer (`char* err,
+    size_t cap`). The buffer may be NULL.
+  - `ysp/pack.h`: lookups and reads may run on several threads at once.
+    Each failure writes the pack's message under an atomic claim, so two
+    failures do not mix, and the message is the last failure of any
+    thread.
+- **Units.** Every time in a C API is an `int64_t` count of nanoseconds on
+  the `yrt_now_ns()` clock, unless the name says another clock (`_ticks`
+  for a device's own counter, `lsl_` for an LSL stamp). A field or a
+  parameter whose name does not already say its unit ends in `_ns`. Write a
+  literal with `YRT_S()`, `YRT_MS()` or `YRT_US()` (`.duration_ns =
+  YRT_MS(500)`); `YRT_TO_S()` gives seconds back for a person to read.
+  `ysp/rt.h` defines these macros, and a header that does not include it
+  defines the same ones under the same guard. A bare `0.5` where
+  nanoseconds go converts to 0: MSVC warns at its default level (C4244 at
+  /W3), and gcc warns with `-Wfloat-conversion`, which the CMake build
+  turns on. Seconds stay in files, experiment definitions, scripts, data
+  and the Python, MATLAB and Octave bindings. Text for a person (describe
+  lines, CSV columns) keeps its units.
 - **Threads.** Headers that spawn a worker thread honor `Y<X>_NO_THREADS`
   to drop it, and link `-pthread` on POSIX otherwise.
 - **Platforms.** A header `#error`s on platforms it does not support, so an

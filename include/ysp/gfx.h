@@ -5449,9 +5449,9 @@ static void ygfx__prog_store2(ygfx_gfx* g, uint32_t id, const ygfx__prec* r) {
 static void ygfx__prog_store(ygfx_gfx* g, uint32_t id, const ygfx__prec* r) {
     int64_t t0;
     if (!r->store || !id) return;
-    t0 = (int64_t)yrt_now_ns();
+    t0 = yrt_now_ns();
     ygfx__prog_store2(g, id, r);
-    g->progs.store_ns += (int64_t)yrt_now_ns() - t0;
+    g->progs.store_ns += yrt_now_ns() - t0;
 }
 
 /* Builds one program from its text, from desc.cache when an entry there is
@@ -5798,7 +5798,7 @@ static bool ygfx__open_b(ygfx_gfx* g, const ygfx_desc* d) {
     g->max_draws = d->max_draws > 0 ? d->max_draws : 1024;
     g->max_batch = YGFX__BATCH;
     g->inst_cap = d->max_instances > 0 ? d->max_instances : 16384;
-    g->t_open = (int64_t)yrt_now_ns();
+    g->t_open = yrt_now_ns();
     /* The one allocation: the frame's uniform staging and its draw queue. */
     g->staging = (unsigned char*)calloc((size_t)YGFX__FRAME_BYTES + ((size_t)g->max_draws + 16) * YGFX__BLOCK, 1);
     g->cur_w = g->w; g->cur_h = g->h; g->cur_top = 0;
@@ -5942,7 +5942,7 @@ static bool ygfx__open_c(ygfx_gfx* g, const ygfx_desc* d, int64_t t_start) {
         uint32_t u[10];
         u[0] = (uint32_t)g->lut_n; u[1] = (uint32_t)g->dither; u[2] = (uint32_t)d->output;
         u[3] = g->cal_crc; u[4] = d->cal ? d->cal->flags : 0u; u[5] = (uint32_t)g->w; u[6] = (uint32_t)g->h;
-        g->progs.open_ns += (int64_t)yrt_now_ns() - t_start;
+        g->progs.open_ns += yrt_now_ns() - t_start;
         u[7] = g->progs.loaded; u[8] = g->progs.compiled; u[9] = (uint32_t)(g->progs.open_ns / 1000000);
         ygfx__push(g, (uint16_t)YGFX_EV_OPEN, 0, (uint32_t)g->scene_format, u, 10, 0);
         if (g->has_color) {
@@ -5963,7 +5963,7 @@ fail:
 }
 
 YGFX_API bool ygfx_open(ygfx_gfx* g, const ygfx_desc* d) {
-    int64_t t_start = (int64_t)yrt_now_ns();
+    int64_t t_start = yrt_now_ns();
     if (!g) return false;
     if (g->started) {   /* after ygfx_open_start(): its desc, not this one */
         int st = g->started;
@@ -5986,7 +5986,7 @@ YGFX_API bool ygfx_open(ygfx_gfx* g, const ygfx_desc* d) {
 }
 
 YGFX_API bool ygfx_open_start(ygfx_gfx* g, const ygfx_desc* d) {
-    int64_t t_start = (int64_t)yrt_now_ns();
+    int64_t t_start = yrt_now_ns();
     if (!g) return false;
     if (!ygfx__open_a(g, d)) return false;
     g->sdesc = *d;
@@ -5998,7 +5998,7 @@ YGFX_API bool ygfx_open_start(ygfx_gfx* g, const ygfx_desc* d) {
     }
     g->start_mode = g->started;
     g->open = 0;   /* nothing but ygfx_open() and ygfx_close() until it finishes */
-    g->progs.open_ns = (int64_t)yrt_now_ns() - t_start;
+    g->progs.open_ns = yrt_now_ns() - t_start;
     return true;
 }
 

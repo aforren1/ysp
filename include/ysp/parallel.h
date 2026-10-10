@@ -120,7 +120,7 @@
  *   handle is therefore usable from two threads and no others: the thread
  *   that called ypar_open(), and the ysp/rt.h worker thread ypar_open()
  *   started. The worker grants itself permission on its own thread, from
- *   yrt_worker_desc.on_start, which runs there before yrt_worker_start()
+ *   yrt_worker_desc.on_start, which runs there before yrt_worker_open()
  *   returns; so it is safe wherever it was started from, and a REFUSED grant
  *   fails ypar_open() rather than one trigger's trailing edge much later.
  *   outb/inb from any other thread raises
@@ -703,7 +703,7 @@ bool ypar_is_open(const ypar_port* p) {
  * degrading to the next rung down. */
 static bool ypar__set_sched(ypar_port* p, const ypar_desc* d) {
     p->sched = d->sched;
-    if (!yrt_sched_normalize(&p->sched)) {
+    if (yrt_sched_normalize(&p->sched) < 0) {
         ypar__set_error(p, "invalid desc.sched: require 0 < runtime_ns <= "
                            "deadline_ns <= period_ns (period_ns 0 means "
                            "same as deadline_ns)");
@@ -1283,7 +1283,7 @@ static void ypar__lock_release(ypar__lock* m) { LeaveCriticalSection(m); }
  * per-THREAD on Linux, so the thread that will run the trailing edges has to
  * ask for itself, and a missing grant is a SIGSEGV on the outb rather than an
  * error code. yrt_worker_desc.on_start runs on that thread before
- * yrt_worker_start() returns, which is what lets a refusal fail ypar_open()
+ * yrt_worker_open() returns, which is what lets a refusal fail ypar_open()
  * instead of one trigger's offset. Only YPAR_BACKEND_DIRECT needs it: ppdev
  * has a process-wide descriptor and inpout a process-wide DLL. */
 static bool ypar__async_on_start(void* ctx, char* err, size_t cap) {
@@ -1341,13 +1341,13 @@ static bool ypar__async_start(ypar_port* p) {
     wd.sched = p->sched; /* already normalized by ypar_open() */
     wd.on_start = ypar__async_on_start;
     wd.start_ctx = p;
-    if (!yrt_worker_start(&a->w, &wd)) {
+    if (!yrt_worker_open(&a->w, &wd)) {
         ypar__set_error(p, "async: %s", yrt_worker_error(&a->w));
         ypar__lock_destroy(&a->lock);
         free(a);
         return false;
     }
-    /* yrt_worker_start() does not return until the thread has published
+    /* yrt_worker_open() does not return until the thread has published
      * its rung, so async_policy is final when ypar_open() returns. */
     p->async_policy = yrt_worker_policy(&a->w);
     p->async = a;
@@ -1365,7 +1365,7 @@ static void ypar__async_stop(ypar_port* p) {
     /* Runs a pending trailing edge IMMEDIATELY through ypar__async_job
      * instead of waiting out the rest of the width, so the lines are never
      * left asserted. Called without the lock held; the job takes it. */
-    yrt_worker_stop(&a->w);
+    yrt_worker_close(&a->w);
     ypar__lock_destroy(&a->lock);
     free(a);
     p->async_policy = YPAR_ASYNC_NONE;
@@ -1478,7 +1478,7 @@ bool ypar_pulse(ypar_port* p, uint8_t value, uint32_t usec) {
      * priority, which is why PULSES AND TIMING calls this edge the less
      * precise of the two. */
     if (usec)
-        (void)yrt_sleep_until(yrt_now_ns() + (uint64_t)usec * 1000ull,
+        (void)yrt_sleep_until(yrt_now_ns() + (int64_t)usec * 1000,
                                 YRT_DEFAULT_SPIN_NS);
     return ypar_write_data(p, 0);
 }

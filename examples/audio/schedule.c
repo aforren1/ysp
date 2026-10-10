@@ -113,7 +113,7 @@ static item* add(const char* part, const char* name, double at) {
 
 static int64_t at_ns(double s) { return t0 + YAU_S(s); }
 
-static void wait_until(double s) { yrt_sleep_until((uint64_t)at_ns(s), YRT_DEFAULT_SPIN_NS); }
+static void wait_until(double s) { yrt_sleep_until((int64_t)at_ns(s), YRT_DEFAULT_SPIN_NS); }
 
 /* The final record: the onset, and the end frame once the sound ended. */
 static void collect(item* it, int need_end) {
@@ -206,7 +206,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    t0 = (int64_t)yrt_now_ns() + YAU_S(T0_LEAD_S);
+    t0 = yrt_now_ns() + YAU_S(T0_LEAD_S);
     printf("schedule from T0 (the trigger) = %.6f s on the ysp_rt clock; a frame is %.1f us\n", (double)t0 / 1e9, frame_us);
 
     /* schedule: each sound handed over HANDOVER_S before its time */
@@ -259,13 +259,13 @@ int main(int argc, char** argv) {
         late_at[k] = 0;
         for (i = 0; i < probe_n; i++) {
             char nm[32];
-            int64_t now = (int64_t)yrt_now_ns(), t = now + YAU_MS(leads_ms[k]);
+            int64_t now = yrt_now_ns(), t = now + YAU_MS(leads_ms[k]);
             item* it;
             snprintf(nm, sizeof nm, "lead %.0f ms", leads_ms[k]);
             it = add("probe", nm, (double)(t - t0) / 1e9);
             it->lead_now = yau_lead_ns(&au);
             it->id = yau_play_at(&au, silent, t);
-            yrt_sleep_until((uint64_t)(t + YAU_MS(23) + (int64_t)i * 1700000), YRT_DEFAULT_SPIN_NS);
+            yrt_sleep_until((int64_t)(t + YAU_MS(23) + (int64_t)i * 1700000), YRT_DEFAULT_SPIN_NS);
         }
         for (i = first; i < n_items; i++) {
             collect(&items[i], 0);

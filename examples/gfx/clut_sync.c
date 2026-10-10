@@ -251,7 +251,7 @@ int main(int argc, char** argv) {
                 int ok = ramp_set(os_visible && b ? ramp_b : ramp_saved, &us);
                 ramp_refused += !ok;
                 cost_us[ph][n_cost[ph]++] = us;
-                ret = (int64_t)yrt_now_ns();
+                ret = yrt_now_ns();
                 ph_ns = (ret - f.onset) % f.period;
                 lead_ms[n_lead] = (double)(f.onset - ret) / 1e6;
                 grid_ms[n_lead++] = (double)(ph_ns < 0 ? ph_ns + f.period : ph_ns) / 1e6;

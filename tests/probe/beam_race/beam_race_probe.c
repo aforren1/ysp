@@ -168,9 +168,9 @@ static int scan_read(samp* s) {
     int64_t t0, t1;
     LONG r;
     k.hAdapter = g_kmt_adapter; k.VidPnSourceId = g_kmt_source; k.InVerticalBlank = 0; k.ScanLine = 0;
-    t0 = (int64_t)yrt_now_ns();
+    t0 = yrt_now_ns();
     r = g_kmt_scan(&k);
-    t1 = (int64_t)yrt_now_ns();
+    t1 = yrt_now_ns();
     s->t = (t0 + t1) / 2; s->w = (int32_t)(t1 - t0);
     s->line = (uint16_t)(k.ScanLine > 65535u ? 65535u : k.ScanLine);
     s->vb = (uint8_t)(k.InVerticalBlank != 0);
@@ -246,7 +246,7 @@ typedef struct { int64_t t; int kind; int value; } st_rec;   /* kind 0 display (
 static st_rec g_st[256]; static volatile LONG g_nst; static volatile LONG g_st_stop; static HANDLE g_st_th;
 static void st_add(int kind, int value) {
     LONG i = g_nst;
-    if (i < 256) { g_st[i].t = (int64_t)yrt_now_ns(); g_st[i].kind = kind; g_st[i].value = value; g_nst = i + 1; }
+    if (i < 256) { g_st[i].t = yrt_now_ns(); g_st[i].kind = kind; g_st[i].value = value; g_nst = i + 1; }
 }
 static int st_locked_now(void) {
     WTSINFOEXW* info = NULL; DWORD n = 0; int locked = -1;
@@ -745,11 +745,11 @@ static calib gpu_calibrate(int n) {
         ID3D11DeviceContext_End(g_ctx, (ID3D11Asynchronous*)ev);
         get_data(ev, &done, sizeof done);           /* the GPU is idle */
         ID3D11DeviceContext_Begin(g_ctx, (ID3D11Asynchronous*)dis);
-        a = (int64_t)yrt_now_ns();
+        a = yrt_now_ns();
         ID3D11DeviceContext_End(g_ctx, (ID3D11Asynchronous*)ts);
         ID3D11DeviceContext_Flush(g_ctx);
         get_data(ts, &t, sizeof t);
-        b = (int64_t)yrt_now_ns();
+        b = yrt_now_ns();
         ID3D11DeviceContext_End(g_ctx, (ID3D11Asynchronous*)dis);
         if (!get_data(dis, &dj, sizeof dj) || dj.Disjoint || !dj.Frequency) continue;
         g_gpu_freq = (double)dj.Frequency;
@@ -880,9 +880,9 @@ static const char* mode_name(UINT m) {
 /* vsync presents of a changing gray for `sec` seconds (the sampler runs
  * beside it); counts the paths seen */
 static void present_vsync(double sec, int* n_path) {
-    int64_t end = (int64_t)yrt_now_ns() + (int64_t)(sec * 1e9);
+    int64_t end = yrt_now_ns() + (int64_t)(sec * 1e9);
     int i = 0;
-    while ((int64_t)yrt_now_ns() < end && !g_abort) {
+    while (yrt_now_ns() < end && !g_abort) {
         UINT md;
         ID3D11DeviceContext_OMSetRenderTargets(g_ctx, 1, &g_rtv, NULL);
         clear_all(k_base);
@@ -893,8 +893,8 @@ static void present_vsync(double sec, int* n_path) {
     }
 }
 static void idle_wait(double sec) {
-    int64_t end = (int64_t)yrt_now_ns() + (int64_t)(sec * 1e9);
-    while ((int64_t)yrt_now_ns() < end && !g_abort) { pump(); Sleep(10); }
+    int64_t end = yrt_now_ns() + (int64_t)(sec * 1e9);
+    while (yrt_now_ns() < end && !g_abort) { pump(); Sleep(10); }
 }
 
 /* ------------------------------------------------------------------ */
@@ -914,16 +914,16 @@ static void section_path(void) {
         present_vsync(0.2, NULL);
         IDXGISwapChain1_GetFrameStatistics(g_sc, &a);
         IDXGISwapChain1_GetLastPresentCount(g_sc, &pc0);
-        t_start = (int64_t)yrt_now_ns();
+        t_start = yrt_now_ns();
         for (i = 0; i < 240 && !g_abort; i++) {
             UINT md; int64_t c0;
             ID3D11DeviceContext_OMSetRenderTargets(g_ctx, 1, &g_rtv, NULL);
             if (v == 0) clear_all((i & 1) ? k_gray1 : k_gray0);
             else { clear_all(k_base); clear_rows((i & 1) ? k_gray1 : k_gray0, 0, g_H / 2); }   /* not the full screen: see the recipes */
             ID3D11DeviceContext_Flush(g_ctx);
-            c0 = (int64_t)yrt_now_ns();
+            c0 = yrt_now_ns();
             IDXGISwapChain1_Present(g_sc, 0, g_tear_flag);
-            call[i] = (double)((int64_t)yrt_now_ns() - c0) * 1e-3;
+            call[i] = (double)(yrt_now_ns() - c0) * 1e-3;
             if (path_mode(&md) && md < 4) n0[md]++;
             yrt_sleep_until(yrt_now_ns() + 4000000, YRT_DEFAULT_SPIN_NS);   /* about 4 presents per refresh */
             pump();
@@ -933,7 +933,7 @@ static void section_path(void) {
         cd = dist_of(call, (size_t)i);
         say("Present(0, %s) 4 ms apart, %s: %d presents in %.2f s; paths composed %d, overlay %d, none %d, failure %d\n",
             g_tear_flag ? "ALLOW_TEARING" : "0", v == 0 ? "full clear to a new color each frame" : "one clear color, a half-screen ClearView changes the frame",
-            i, (double)((int64_t)yrt_now_ns() - t_start) * 1e-9, n0[0], n0[1], n0[2], n0[3]);
+            i, (double)(yrt_now_ns() - t_start) * 1e-9, n0[0], n0[1], n0[2], n0[3]);
         say("  Present call p50 %.1f p99 %.1f max %.1f us (a call that waits for a vblank takes up to 16.7 ms)\n", cd.p50, cd.p99, cd.max);
         say("  calls %u; DXGI: presents shown %u over %u refreshes, %.2f per refresh (tearing flips show about 4)\n",
             pc1 - pc0, b.PresentCount - a.PresentCount, b.SyncRefreshCount - a.SyncRefreshCount,
@@ -1009,9 +1009,9 @@ static void section_recipes(void) {
             }
             }
             ID3D11DeviceContext_Flush(g_ctx);
-            t0 = (int64_t)yrt_now_ns();
+            t0 = yrt_now_ns();
             IDXGISwapChain1_Present(g_sc, 0, g_tear_flag);
-            call[i] = (double)((int64_t)yrt_now_ns() - t0) * 1e-3;
+            call[i] = (double)(yrt_now_ns() - t0) * 1e-3;
             yrt_sleep_until(yrt_now_ns() + 4000000, YRT_DEFAULT_SPIN_NS);
             pump();
         }
@@ -1057,7 +1057,7 @@ static void section_raster(void) {
     /* fit window: every read for 2 s; then one read per 50 us for the drift */
     sampler_start(12u << 20, 0);
     present_vsync(2.0, NULL);
-    t_fit_end = (int64_t)yrt_now_ns();
+    t_fit_end = yrt_now_ns();
     s->keep_ns = 50000;
     present_vsync(O.drift_s, NULL);
     sampler_stop();
@@ -1332,12 +1332,12 @@ static void run_pass(pass* ps, int N, int draw, double lead_ns, double sec) {
     for (i = 0; i < QRING; i++) g_q[i].idx = -1;
     overlay_build(N, lead_ns);
     g_cal0 = gpu_calibrate(40);
-    now = (double)((int64_t)yrt_now_ns() - g_tbase);
+    now = (double)(yrt_now_ns() - g_tbase);
     Tn = m_entry_before(&g_m, now) + 2 * g_m.P;
     for (r = 0; r < R && !g_abort; r++, Tn += g_m.P) {
         /* behind by a refresh or more (a Present that waited for a vblank):
          * plan the next refresh that can still be met, and count the skip */
-        now = (double)((int64_t)yrt_now_ns() - g_tbase);
+        now = (double)(yrt_now_ns() - g_tbase);
         while (m_time(&g_m, Tn, (double)slice_target(0, N)) - lead_ns - dl < now) { Tn += g_m.P; ps->skipped++; }
         for (k = 0; k < N; k++) {
             prec* p = &ps->rec[ps->n];
@@ -1360,8 +1360,8 @@ static void run_pass(pass* ps, int N, int draw, double lead_ns, double sec) {
                     o->gpu_b = fa; o->gpu_e = fb;   /* GPU ns; mapped after the pass */
                 }
             }
-            yrt_sleep_until((uint64_t)(p->t_target - dl + (double)g_tbase), YRT_DEFAULT_SPIN_NS);
-            p->t_in = (double)((int64_t)yrt_now_ns() - g_tbase);
+            yrt_sleep_until((int64_t)(p->t_target - dl + (double)g_tbase), YRT_DEFAULT_SPIN_NS);
+            p->t_in = (double)(yrt_now_ns() - g_tbase);
             p->late = p->t_in > p->t_target;   /* no time left to draw */
             if (p->late) ps->late++;
             GetCursorPos(&cp);
@@ -1374,10 +1374,10 @@ static void run_pass(pass* ps, int N, int draw, double lead_ns, double sec) {
             if (O.flush) ID3D11DeviceContext_Flush(g_ctx);   /* start the GPU now, not at Present */
             q->idx = (int64_t)ps->n;
             qi++;
-            yrt_sleep_until((uint64_t)(p->t_target + (double)g_tbase), YRT_DEFAULT_SPIN_NS);
-            p->t_call = (double)((int64_t)yrt_now_ns() - g_tbase);
+            yrt_sleep_until((int64_t)(p->t_target + (double)g_tbase), YRT_DEFAULT_SPIN_NS);
+            p->t_call = (double)(yrt_now_ns() - g_tbase);
             IDXGISwapChain1_Present(g_sc, 0, g_tear_flag);
-            p->t_ret = (double)((int64_t)yrt_now_ns() - g_tbase);
+            p->t_ret = (double)(yrt_now_ns() - g_tbase);
             scan_read(&sr);
             p->t_s = (double)(sr.t - g_tbase); p->s_ret = sr.line; p->vb_ret = sr.vb;
             IDXGISwapChain1_GetLastPresentCount(g_sc, &p->pc);
@@ -1583,7 +1583,7 @@ static void sweep_lead(int N) {
         lead_us[s] = O.sweep_a + s * O.sweep_step;
         shift = model_reanchor();   /* a 1-s fit drifts by about a line in 5 s, not in 30 */
         GetLocalTime(&lt);
-        t0_s[s] = (double)((int64_t)yrt_now_ns() - g_tbase) * 1e-9;
+        t0_s[s] = (double)(yrt_now_ns() - g_tbase) * 1e-9;
         say("  step %d of %d: lead %.0f us, from %.1f s (local %02u:%02u:%02u), model re-anchored %+.2f us\n", s + 1, n,
             lead_us[s], t0_s[s], (unsigned)lt.wHour, (unsigned)lt.wMinute, (unsigned)lt.wSecond, shift);
         run_pass(&p, N, DRAW_BANDS, lead_us[s] * 1e3, O.seconds);
@@ -1674,7 +1674,7 @@ static void offscreen_costs(int N) {
             D3D11_QUERY_DATA_TIMESTAMP_DISJOINT dj; UINT64 a, b; BOOL done; int64_t t0, t1;
             ID3D11DeviceContext_End(g_ctx, (ID3D11Asynchronous*)ev);
             get_data(ev, &done, sizeof done);   /* idle */
-            t0 = (int64_t)yrt_now_ns();
+            t0 = yrt_now_ns();
             ID3D11DeviceContext_Begin(g_ctx, (ID3D11Asynchronous*)q->dis);
             ID3D11DeviceContext_End(g_ctx, (ID3D11Asynchronous*)q->t0);
             ID3D11DeviceContext_OMSetRenderTargets(g_ctx, 1, &g_rtv, NULL);
@@ -1689,7 +1689,7 @@ static void offscreen_costs(int N) {
             ID3D11DeviceContext_End(g_ctx, (ID3D11Asynchronous*)ev);
             ID3D11DeviceContext_Flush(g_ctx);
             get_data(ev, &done, sizeof done);
-            t1 = (int64_t)yrt_now_ns();
+            t1 = yrt_now_ns();
             if (!get_data(q->dis, &dj, sizeof dj) || dj.Disjoint || !get_data(q->t0, &a, sizeof a) || !get_data(q->t1, &b, sizeof b)) continue;
             if (i < 10) continue;   /* warm-up */
             gpu[n] = (double)(b - a) * 1e6 / (double)dj.Frequency;
@@ -1861,7 +1861,7 @@ int main(int argc, char** argv) {
         for (s = 5; s > 0; s--) { printf("starting in %d s (Ctrl+C to stop)\r", s); fflush(stdout); Sleep(1000); }
         printf("\n");
     }
-    g_tbase = (int64_t)yrt_now_ns();
+    g_tbase = yrt_now_ns();
     say("beam_race_probe, %s", asctime(tmv));
     say("results: %s\n", g_out);
     say("time zero of the CSV files: %lld ns on the ysp_rt clock (QPC)\n", (long long)g_tbase);

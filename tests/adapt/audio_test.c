@@ -39,7 +39,7 @@ static void vsleep_until(long long t);
 
 static long long vnow(void) { return g_virtual ? g_vt : (long long)yrt_now_ns(); }
 static void vsleep_until(long long t) {
-    if (!g_virtual) { yrt_sleep_until((uint64_t)t, 0); return; }
+    if (!g_virtual) { yrt_sleep_until(t, 0); return; }
     if (t > g_vt) g_vt = t;
 }
 
@@ -1123,7 +1123,7 @@ static void* thr_main(void* p)
     while (!yau__ld32(&g_thr_stop)) {
         yau_tick tk;
         memset(&tk, 0, sizeof tk);
-        tk.t_entry = (int64_t)yrt_now_ns();
+        tk.t_entry = yrt_now_ns();
         tk.pos = s->W > s->L ? s->W - s->L : 0;
         tk.pos_t = tk.t_entry;
         s->render(s->host, s->out_mem, s->period, &tk);
@@ -1945,7 +1945,7 @@ static void* prod_main(void* p)
             continue;
         }
         (void)feed(st, &next, 1 + (int64_t)(prod_rand() * 3000.0), 2);
-        if (prod_rand() < 0.1) yrt_sleep_until(yrt_now_ns() + (uint64_t)(prod_rand() * 40e6), 0);
+        if (prod_rand() < 0.1) yrt_sleep_until(yrt_now_ns() + (int64_t)(prod_rand() * 40e6), 0);
         else yrt_sleep_until(yrt_now_ns() + 2000000, 0);
     }
 #if defined(_WIN32)
@@ -1990,7 +1990,7 @@ static void test_stream_threads(void) {
             }
             id = yau_play_stream(&g_au, &g_st, 0);
             if (id <= 0) { fail_i(__LINE__, "stream play refused", id, 1); break; }
-            yrt_sleep_until(yrt_now_ns() + 20000000 + (uint64_t)(sd_rand(s) * 30e6), 0);
+            yrt_sleep_until(yrt_now_ns() + 20000000 + (int64_t)(sd_rand(s) * 30e6), 0);
             CHECK(yau_stop_at(&g_au, id, 0, 0) == 0);
             for (k = 0; k < 2000; k++) {
                 rc = yau_result(&g_au, id, &recs[i]);
@@ -2369,7 +2369,7 @@ static void test_wav_pump(void) {
     g_wav_A = 5000;
     CHECK_I(yau_wav_open(&g_au, &g_wav, &(yau_wav_desc){ .data = g_wavmem, .size = n, .loops = YAU_FOREVER, .ring = 1920, .memory = g_ring_c }), 0);
     memset(&pump, 0, sizeof pump);
-    CHECK(yrt_pump_start(&pump, &(yrt_pump_desc){ .msg_size = sizeof(yau_wav_msg), .capacity = 8,
+    CHECK(yrt_pump_open(&pump, &(yrt_pump_desc){ .msg_size = sizeof(yau_wav_msg), .capacity = 8,
                                                       .on_msg = yau_wav_on_msg, .on_idle = yau_wav_step, .ctx = &g_wav }));
     yau__st32(&g_thr_stop, 0);
     {
@@ -2417,7 +2417,7 @@ static void test_wav_pump(void) {
         pthread_join(th, NULL);
 #endif
     }
-    yrt_pump_stop(&pump);
+    yrt_pump_close(&pump);
     {
         int64_t f, lim = s->W < TAPE_FRAMES ? s->W : TAPE_FRAMES;
         int p = 0;

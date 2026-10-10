@@ -9265,7 +9265,7 @@ YAEP_API bool yaep_async_start(yaep_async* a, const yaep_async_desc* desc) {
     pd.ctx = a;
     pd.below_normal = desc->below_normal;
     pd.pin_cpu = desc->pin_cpu;
-    if (!yrt_pump_start(&a->pump, &pd)) {
+    if (!yrt_pump_open(&a->pump, &pd)) {
         snprintf(a->error, sizeof(a->error), "ysp_aep: %.200s",
                  yrt_pump_error(&a->pump));
         a->gp->desc.fit_every = a->fit_every;
@@ -9278,7 +9278,7 @@ YAEP_API bool yaep_async_start(yaep_async* a, const yaep_async_desc* desc) {
 
 YAEP_API void yaep_async_stop(yaep_async* a) {
     if (!a) return;
-    yrt_pump_stop(&a->pump);   /* drains, then joins */
+    yrt_pump_close(&a->pump);   /* drains, then joins */
     if (a->running && a->gp && a->fit_in_idle) a->gp->desc.fit_every = a->fit_every;
     a->running = false;
 }

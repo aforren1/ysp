@@ -226,7 +226,7 @@ int main(int argc, char** argv) {
     (void)yrt_thread_elevate(NULL);
 
     /* black while the boards open and their fits get a slope */
-    warm_end = (int64_t)yrt_now_ns() + (board ? YAU_S(3) : YAU_S(1));
+    warm_end = yrt_now_ns() + (board ? YAU_S(3) : YAU_S(1));
     for (;;) {
         SDL_Event ev;
         yin_event in;

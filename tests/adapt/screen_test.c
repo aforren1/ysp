@@ -119,7 +119,7 @@ static void vforget(yscr_screen* s) {
     for (i = 0; i < 4; i++) if (g_armed[i].s == s) g_armed[i].s = NULL;
 }
 static void vsleep_until(long long t) {
-    if (!g_virtual) { yrt_sleep_until((uint64_t)t, YRT_DEFAULT_SPIN_NS); return; }
+    if (!g_virtual) { yrt_sleep_until(t, YRT_DEFAULT_SPIN_NS); return; }
     vrun(t);
     if (t > g_vt) g_vt = t;
 }

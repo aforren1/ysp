@@ -1023,12 +1023,12 @@ static void ynet__fit_init(yrt_fit* f, int mode, uint32_t clock_id, int64_t max_
     fd.clock_id = clock_id;
     fd.max_width_ns = max_width;
     fd.ring = ring;
-    (void)yrt_fit_init(f, &fd);
+    (void)yrt_fit_open(f, &fd);
 }
 
 typedef int64_t (*ynet__now_fn)(void* ctx);
 
-static int64_t ynet__clock(ynet__now_fn now, void* ctx) { return now ? now(ctx) : (int64_t)yrt_now_ns(); }
+static int64_t ynet__clock(ynet__now_fn now, void* ctx) { return now ? now(ctx) : yrt_now_ns(); }
 
 /* lsl_local_clock() between two ysp_rt reads, the tightest of tries. */
 static void ynet__bracket(const ynet_lsl* lib, ynet__now_fn now, void* ctx, int tries,
@@ -1648,7 +1648,7 @@ static void ynet__step(ynet_inlet* in, int timeout_ms) {
         else if (!in->d.now) {
             int64_t w = in->next_try - t;
             int64_t cap = (int64_t)timeout_ms * 1000000;
-            (void)yrt_sleep_ns((uint64_t)(w < cap ? w : cap));
+            (void)yrt_sleep_ns((int64_t)(w < cap ? w : cap));
         }
     } else if (in->state == YNET_RUNNING) {
         if (t >= in->next_corr) {
@@ -1663,7 +1663,7 @@ static void ynet__step(ynet_inlet* in, int timeout_ms) {
             in->rate_n0 = in->st.samples;
         }
     } else if (!in->d.now) {
-        (void)yrt_sleep_ns((uint64_t)timeout_ms * 1000000u);   /* FAILED: nothing to do */
+        (void)yrt_sleep_ns((int64_t)timeout_ms * 1000000);   /* FAILED: nothing to do */
     }
     ynet__publish(in);
 }

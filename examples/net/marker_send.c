@@ -72,19 +72,19 @@ int main(int argc, char** argv) {
     if (!ynet_outlet_start(&out, &d)) { fprintf(stderr, "%s\n", ynet_outlet_error(&out)); ynet_lsl_unload(&lib); return 2; }
     (void)yrt_thread_elevate(NULL);
     printf("outlet %s (%s); waiting up to %.0f s for an inlet\n", key, as_int ? "int32" : "string", wait);
-    end = (int64_t)yrt_now_ns() + (int64_t)(wait * 1e9);
-    while ((int64_t)yrt_now_ns() < end && !ynet_outlet_consumers(&out)) (void)yrt_sleep_ns(50000000);
+    end = yrt_now_ns() + (int64_t)(wait * 1e9);
+    while (yrt_now_ns() < end && !ynet_outlet_consumers(&out)) (void)yrt_sleep_ns(50000000);
     if (!ynet_outlet_consumers(&out)) {
         fprintf(stderr, "no inlet connected in %.0f s\n", wait);
         ynet_outlet_stop(&out);
         ynet_lsl_unload(&lib);
         return 1;
     }
-    next = (int64_t)yrt_now_ns() + 200000000;
+    next = yrt_now_ns() + 200000000;
     for (i = 0; i < n; i++) {
         char text[32];
         double drift;
-        (void)yrt_sleep_until((uint64_t)next, 1000000);
+        (void)yrt_sleep_until(next, 1000000);
         snprintf(text, sizeof text, "mark %d", i + 1);
         if (ynet_out_mark(&out, (uint32_t)(i + 1), text) != YNET_OK) failed++;
         ynet_out_last(&out, &info);

@@ -2858,10 +2858,10 @@ enum {
  * before the implementation to run the core on a virtual clock, so no
  * check there depends on how the host schedules the test. */
 #ifndef YSCR__NOW
-#define YSCR__NOW() ((int64_t)yrt_now_ns())
+#define YSCR__NOW() (yrt_now_ns())
 #endif
 #ifndef YSCR__SLEEP_UNTIL
-#define YSCR__SLEEP_UNTIL(t, spin) yrt_sleep_until((uint64_t)(t), (spin))
+#define YSCR__SLEEP_UNTIL(t, spin) yrt_sleep_until((int64_t)(t), (spin))
 #endif
 /* Whether SDL text input is on for the screen's window now: another
  * library (a GUI) can start it, so the header reads it instead of trusting
@@ -7083,7 +7083,7 @@ static DWORD_PTR yscr__ecore_mask(void) {
 static bool yscr__worker_on_start(void* ctx, char* err, size_t cap) {
     yscr_screen* s = (yscr_screen*)ctx;
     if (s->trig_cpu > 0) {
-        if (!yrt_thread_pin(s->trig_cpu - 1)) {
+        if (yrt_thread_pin(s->trig_cpu - 1) < 0) {
             snprintf(err, cap, "ysp_screen: the trigger worker could not be pinned to CPU %d", s->trig_cpu - 1);
             return false;
         }
@@ -7119,11 +7119,11 @@ static int yscr__worker_start(yscr_screen* s) {
     wd.start_ctx = s;
     wd.spin_ns = s->trig_spin;
     memset(&s->worker, 0, sizeof s->worker);
-    return yrt_worker_start(&s->worker, &wd) ? 1 : 0;
+    return yrt_worker_open(&s->worker, &wd) ? 1 : 0;
 }
-static void yscr__worker_stop(yscr_screen* s) { yrt_worker_stop(&s->worker); }
+static void yscr__worker_stop(yscr_screen* s) { yrt_worker_close(&s->worker); }
 static void yscr__worker_arm(yscr_screen* s, int64_t t) {
-    yrt_worker_submit(&s->worker, (uint64_t)(t > 0 ? t : 0), yscr__trig_job, s);
+    yrt_worker_submit(&s->worker, (int64_t)(t > 0 ? t : 0), yscr__trig_job, s);
 }
 #define YSCR__ARM(s, t)        yscr__worker_arm((s), (t))
 #define YSCR__WORKER_START(s)  yscr__worker_start(s)
@@ -7620,7 +7620,7 @@ static void yscr__restamp_correlate(yscr_screen* s) {
     yrt_corr c;
     memset(&d, 0, sizeof d);
     d.read = SDL_GetTicksNS;
-    if (yrt_correlate(&d, &c) > 0 && (s->sdl_width == 0 || c.width_ns <= 2 * s->sdl_width)) {
+    if (yrt_correlate(&d, &c) > 0 && (s->sdl_width == 0 || (uint64_t)c.width_ns <= 2 * s->sdl_width)) {
         s->sdl_rt = (int64_t)c.rt_ns;
         s->sdl_ticks = (int64_t)c.other;
         s->sdl_width = c.width_ns;

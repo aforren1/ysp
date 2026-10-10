@@ -198,7 +198,7 @@ int main(int argc, char** argv) {
      * A rig's audio thread belongs to the audio library anyway. */
     memset(&wd, 0, sizeof(wd));
     wd.no_elevate = true;
-    if (yrt_worker_start(&audio.w, &wd)) {
+    if (yrt_worker_open(&audio.w, &wd)) {
         audio.next = yrt_now_ns() + AUDIO_NS;
         audio_on = yrt_worker_submit(&audio.w, audio.next, audio_cb, &audio) > 0;
     } else {
@@ -271,7 +271,7 @@ int main(int argc, char** argv) {
     }
 
 #ifndef YRT_NO_THREADS
-    yrt_worker_stop(&audio.w);
+    yrt_worker_close(&audio.w);
 #endif
     yrt_trace_set_ring(NULL);
     while ((n = yrt_ring_drain(&g_ring, ev, 64)) > 0) {

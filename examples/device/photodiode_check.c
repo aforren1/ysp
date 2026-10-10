@@ -120,14 +120,14 @@ static int monitor(ydev_desc* d, double secs) {
     static int64_t t0;
     int64_t end;
     int last = -1;
-    t0 = (int64_t)yrt_now_ns();
+    t0 = yrt_now_ns();
     d->sink = to_console;
     d->sink_ctx = &t0;
     if (!ydev_start(&g_dev, d)) { fprintf(stderr, "%s\n", ydev_error(&g_dev)); return 2; }
     end = t0 + (int64_t)(secs * 1e9);
-    while ((int64_t)yrt_now_ns() < end) {
+    while (yrt_now_ns() < end) {
         int s = ydev_state(&g_dev);
-        if (s != last) { printf("state %s at %+.3f s\n", ydev_state_name(s), (double)((int64_t)yrt_now_ns() - t0) / 1e9); last = s; }
+        if (s != last) { printf("state %s at %+.3f s\n", ydev_state_name(s), (double)(yrt_now_ns() - t0) / 1e9); last = s; }
         (void)yrt_sleep_ns(10000000);
     }
     ydev_stop(&g_dev);
@@ -210,8 +210,8 @@ int main(int argc, char** argv) {
 
     /* 3 s of gray while the device opens and its fit gets a slope */
     {
-        int64_t end = (int64_t)yrt_now_ns() + 3000000000LL;
-        while ((int64_t)yrt_now_ns() < end) {
+        int64_t end = yrt_now_ns() + 3000000000LL;
+        while (yrt_now_ns() < end) {
             SDL_Event ev;
             int64_t t;
             if (yscr_begin(&scr, &f) != YSCR_OK) break;
@@ -267,10 +267,10 @@ int main(int argc, char** argv) {
     frames = i;
     {   /* the last record, and the light that lags: 300 ms more of input */
         yscr_record r;
-        int64_t end = (int64_t)yrt_now_ns() + 300000000;
+        int64_t end = yrt_now_ns() + 300000000;
         int k, n;
         yscr_wait_flip(&scr, &r);
-        while ((int64_t)yrt_now_ns() < end) {
+        while (yrt_now_ns() < end) {
             SDL_Event ev;
             int64_t t;
             yin_event in;

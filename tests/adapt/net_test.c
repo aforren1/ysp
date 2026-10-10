@@ -54,7 +54,7 @@ static double u01(void) {
 
 static int64_t g_now = 1000000000000LL;   /* the host clock reads 1000 s           */
 static int     g_real;                    /* the thread part: the real clock       */
-static int64_t host_now(void) { return g_real ? (int64_t)yrt_now_ns() : g_now; }
+static int64_t host_now(void) { return g_real ? yrt_now_ns() : g_now; }
 static int64_t now_fn(void* ctx) { (void)ctx; return host_now(); }
 
 /* This machine's LSL clock: the host clock plus 123.456789 s. */
@@ -1279,7 +1279,7 @@ static void* producer(void* arg)
      * push, as a device stamps at its clock and sends a block later */
     float x[40];
     double ts[10];
-    int64_t next = (int64_t)yrt_now_ns();
+    int64_t next = yrt_now_ns();
     double l0 = fk_clock() - 1e-3;
     uint64_t k = 0;
     int i;
@@ -1294,7 +1294,7 @@ static void* producer(void* arg)
         (void)ynet_out_push(&g_prod_out, x, 10, ts);
         g_prod_n = k;
         next += 1000000;
-        (void)yrt_sleep_until((uint64_t)next, 200000);
+        (void)yrt_sleep_until(next, 200000);
     }
 #if defined(_WIN32)
     return 0;
@@ -1334,8 +1334,8 @@ static void test_thread_10khz(void) {
     id.stream = &ring; id.edges[0].channel = 0; id.edges[0].level = 0.5f; id.n_edges = 1; id.sink = sink;
     id.ring = &g_ring;
     CHECK(ynet_inlet_start(&in, &id));
-    end = (int64_t)yrt_now_ns() + 3000000000LL;
-    while ((int64_t)yrt_now_ns() < end && ynet_inlet_state(&in) != YNET_RUNNING) (void)yrt_sleep_ns(1000000);
+    end = yrt_now_ns() + 3000000000LL;
+    while (yrt_now_ns() < end && ynet_inlet_state(&in) != YNET_RUNNING) (void)yrt_sleep_ns(1000000);
     CHECK_I(ynet_inlet_state(&in), YNET_RUNNING);
     ynet__st(&g_prod_stop, 0);
 #if defined(_WIN32)
@@ -1346,12 +1346,12 @@ static void test_thread_10khz(void) {
         pthread_t th;
         pthread_create(&th, NULL, producer, NULL);
 #endif
-        end = (int64_t)yrt_now_ns() + (int64_t)(secs * 1e9);
-        while ((int64_t)yrt_now_ns() < end) {
+        end = yrt_now_ns() + (int64_t)(secs * 1e9);
+        while (yrt_now_ns() < end) {
             int64_t tn;
             (void)yrt_sleep_ns(10000000);                    /* a writer that drains every 10 ms */
             while ((n = ynet_stream_read(&ring, tt, ll, xx, 8192)) > 0) {
-                int64_t now = (int64_t)yrt_now_ns();
+                int64_t now = yrt_now_ns();
                 for (i = 0; i < n; i++) {
                     if (got == 0) expect = xx[4 * i + 1];
                     if (xx[4 * i + 1] != expect) order_ok = 0;

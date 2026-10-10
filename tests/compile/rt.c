@@ -31,12 +31,12 @@ static bool pump_idle(void* ctx) {
 /* One field per entry point, spelled out, so a changed signature is a compile
  * error here rather than a surprise in a caller. */
 typedef struct pump_api {
-    bool (*start)(yrt_pump*, const yrt_pump_desc*);
-    void (*stop)(yrt_pump*);
+    bool (*open)(yrt_pump*, const yrt_pump_desc*);
+    void (*close)(yrt_pump*);
     int  (*submit)(yrt_pump*, const void*);
     int  (*pending)(const yrt_pump*);
     uint32_t (*done_seq)(const yrt_pump*);
-    int  (*wait)(yrt_pump*, uint32_t, uint64_t);
+    int  (*wait)(yrt_pump*, uint32_t, int64_t);
     void (*lock)(yrt_pump*);
     void (*unlock)(yrt_pump*);
     bool (*is_running)(const yrt_pump*);
@@ -47,7 +47,7 @@ typedef struct pump_api {
 } pump_api;
 
 static const pump_api g_pump_api = {
-    yrt_pump_start, yrt_pump_stop, yrt_pump_submit, yrt_pump_pending,
+    yrt_pump_open, yrt_pump_close, yrt_pump_submit, yrt_pump_pending,
     yrt_pump_done_seq, yrt_pump_wait, yrt_pump_lock, yrt_pump_unlock,
     yrt_pump_is_running, yrt_pump_error, yrt_pump_policy,
     pump_msg, pump_idle
@@ -74,6 +74,7 @@ static yrt_pump_desc pump_desc(void) {
 
 typedef struct ring_api {
     bool (*open)(yrt_ring*, const yrt_ring_desc*);
+    void (*close)(yrt_ring*);
     const char* (*error)(const yrt_ring*);
     int  (*push)(yrt_ring*, const yrt_event*);
     int  (*drain)(yrt_ring*, yrt_event*, int);
@@ -89,13 +90,76 @@ typedef struct ring_api {
 } ring_api;
 
 static const ring_api g_ring_api = {
-    yrt_ring_open, yrt_ring_error, yrt_ring_push, yrt_ring_drain,
+    yrt_ring_open, yrt_ring_close, yrt_ring_error, yrt_ring_push, yrt_ring_drain,
     yrt_ring_capacity, yrt_ring_dropped, yrt_correlate,
     yrt_trace_set_ring, yrt_trace_ring, yrt_thread_id,
     yrt_interrupt_time_100ns, yrt_strerror, yrt_ticks_to_ns
 };
 
 static unsigned char g_ring_mem[YRT_RING_BYTES(4)];
+
+/* yrt_corr_desc.read has SDL_GetTicksNS's shape: the other clock's raw
+ * count, unsigned. */
+static uint64_t read_rt(void) { return (uint64_t)yrt_now_ns(); }
+
+/* The clock, the waits and the units, by type: every time is int64_t ns. */
+typedef struct clock_api {
+    int64_t (*now_ns)(void);
+    int64_t (*sleep_until)(int64_t, int64_t);
+    int64_t (*sleep_ns)(int64_t);
+    int64_t (*spin_until)(int64_t);
+    int (*sched_normalize)(yrt_sched_deadline*);
+    int (*timer_slack)(int64_t);
+    int (*pin)(int);
+    int (*lock_memory)(void);
+    int (*timer_resolution_begin)(void);
+    bool (*fit_open)(yrt_fit*, const yrt_fit_desc*);
+    void (*fit_close)(yrt_fit*);
+    const char* (*fit_error)(const yrt_fit*);
+} clock_api;
+
+static const clock_api g_clock_api = {
+    yrt_now_ns, yrt_sleep_until, yrt_sleep_ns, yrt_spin_until,
+    yrt_sched_normalize, yrt_thread_set_timer_slack, yrt_thread_pin,
+    yrt_process_lock_memory, yrt_timer_resolution_begin,
+    yrt_fit_open, yrt_fit_close, yrt_fit_error
+};
+
+/* The unit macros are exact for whole numbers and constant in a static
+ * initializer. */
+static const int64_t g_units[4] = { YRT_NS(7), YRT_US(2), YRT_MS(3), YRT_S(1.5) };
+static int64_t g_back[2] = { YRT_MS(250), YRT_US(-1500) };
+
+static yrt_fit g_fit;
+
+static int clock_check(void) {
+    int rc = 0;
+    yrt_sched_deadline sd;
+    yrt_fit_desc fd;
+    int64_t t0 = g_clock_api.now_ns();
+    if (t0 <= 0) rc = 1;
+    if (g_units[0] != 7 || g_units[1] != 2000 || g_units[2] != 3000000 ||
+        g_units[3] != 1500000000) rc = 1;
+    if (YRT_TO_S(g_back[0]) != 0.25 || YRT_TO_MS(g_back[1]) != -1.5) rc = 1;
+    if (g_clock_api.sleep_until(t0 - YRT_MS(1), 0) < YRT_MS(1)) rc = 1;
+    if (g_clock_api.spin_until(0) < 0 || g_clock_api.sleep_ns(-5) < 0) rc = 1;
+    memset(&sd, 0, sizeof sd);
+    if (g_clock_api.sched_normalize(&sd) != 0 || sd.period_ns != YRT_DEFAULT_RT_PERIOD_NS) rc = 1;
+    sd.runtime_ns = -1;
+    if (g_clock_api.sched_normalize(&sd) != YRT_ERR_ARG) rc = 1;
+    if (g_clock_api.pin(-1) != YRT_ERR_ARG && g_clock_api.pin(-1) != YRT_ERR_UNSUPPORTED) rc = 1;
+    (void)g_clock_api.timer_slack;
+    (void)g_clock_api.lock_memory;
+    (void)g_clock_api.timer_resolution_begin;
+    memset(&fd, 0, sizeof fd);
+    if (g_clock_api.fit_open(&g_fit, &fd) || g_clock_api.fit_error(&g_fit)[0] == '\0') rc = 1;
+    g_clock_api.fit_close(&g_fit);
+    g_clock_api.fit_close(&g_fit);
+    fd.ns_per_tick = 1e3;
+    if (!g_clock_api.fit_open(&g_fit, &fd) || g_clock_api.fit_error(&g_fit)[0] != '\0') rc = 1;
+    g_clock_api.fit_close(&g_fit);
+    return rc;
+}
 
 /* One record through a 4-slot ring, a correlation of the clock with itself,
  * and every macro once with the ring attached. */
@@ -121,7 +185,7 @@ static int ring_check(void) {
     if (g_ring_api.dropped(&ring) != 0u || g_ring_api.error(&ring)[0] != '\0') rc = 1;
     if (g_ring_api.strerror(YRT_ERR_FULL)[0] == '\0') rc = 1;
     memset(&cd, 0, sizeof(cd));
-    cd.read = yrt_now_ns;
+    cd.read = read_rt;
     if (g_ring_api.correlate(&cd, &c) != 16 || c.width_ns == 0) rc = 1;
     (void)g_ring_api.interrupt_time();
     if (g_ring_api.ticks_to_ns(0) != 0) rc = 1;
@@ -162,11 +226,14 @@ static int ring_check(void) {
     if (g_ring_api.drain(&ring, out, 8) <= 0) rc = 1;
 #endif
     g_ring_api.trace_set(NULL);
+    g_ring_api.close(&ring);
+    g_ring_api.close(&ring);
+    if (g_ring_api.push(&ring, &ev) != YRT_ERR_ARG) rc = 1;
     return rc;
 }
 
 int main(void) {
-    int rc = ring_check();
+    int rc = ring_check() | clock_check();
 #ifndef YRT_NO_THREADS
     yrt_pump p;
     yrt_pump_desc d = pump_desc();
@@ -183,8 +250,9 @@ int main(void) {
     if (g_pump_api.error(&p)[0] != '\0') rc = 1;
     g_pump_api.lock(&p);
     g_pump_api.unlock(&p);
-    g_pump_api.stop(&p);
-    if (!g_pump_api.start) rc = 1;
+    g_pump_api.close(&p);
+    g_pump_api.close(&p);
+    if (!g_pump_api.open) rc = 1;
 #endif
     return rc;
 }
