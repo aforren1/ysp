@@ -3193,6 +3193,68 @@ with ysp/screen.h v0.5.0, whose `yscr_open()` ended with the presented
 back buffer bound. With v0.5.1, a cold cache, with and without the prime:
 frame 0 late or dropped in 0 of 8 runs of the probe above.
 
+### Priming in the trial examples (2026-10-10)
+
+The question: does `ygfx_prime()` change the first frames of the trial
+examples? None of the 13 `trial_*.c` called it; `gfx_trial` did.
+Measured, not assumed.
+
+Conditions: this laptop (i7-1360P, Iris Xe, ANGLE D3D11-32.0.101.7088,
+the internal panel at 60 Hz), ysp/gfx.h 0.11.1, ysp/screen.h 0.5.2, MSVC
+Release, AC, each session under the measurement lock (load 5 to 11 % at
+the start). Three programs, built from instrumented copies (the
+repository's sources unchanged; the patch script is
+`C:\tmp\psy-work\docsfix\prime\patch.py`, not in the repository):
+an environment variable adds the `ygfx_prime()` call after the stimuli
+are made (in `gfx_trial` it makes its own call optional), a file program cache in a
+given folder, the CPU time of each `ygfx_end()` and every flip record.
+`trial_keyboard` and `trial_stroop`: `--reps 1`, no responses (every trial
+times out), the first 480 frames (8 s), fullscreen and windowed.
+`gfx_trial`: windowed (it has no fullscreen option), its whole 1.3 s run.
+Cache: none (the trial examples' default), cold (an empty folder each
+run) or warm (a folder filled before the session). Each round runs every
+condition once, interleaved; 3 rounds (`gfx_trial`: 5). A first session
+was discarded: its later runs had flip records flagged OCCLUDED (the
+window was hidden) and ran at about 16 frames a second; no run below has
+an OCCLUDED record.
+
+What each program draws first: `trial_keyboard` the fixation cross
+(SHAPE) at frame 0, then the circle or square and the feedback ring, all
+SHAPE. `trial_stroop` the block's banner (curve runs) at frame 0, and the
+first fixation cross (SHAPE) at frame 88 to 90, the first trial's first
+frame. `gfx_trial` the cross at frame 0 and the grating at frame 29 or 30.
+
+`ygfx_end()` of a kind's first frame, ms, minimum to maximum over every
+cache condition; "late" counts runs whose flip record of that frame has
+`dropped` above 0:
+
+| Program, frame | Runs each | Without the prime | After `ygfx_prime()` |
+|---|---|---|---|
+| `trial_keyboard`, frame 0 | 18 | 4.3 to 8.7; late in 0 | 0.08 to 0.23; late in 0 |
+| `trial_stroop`, frame 0 | 18 | 6.3 to 29.3; late in 5 | 0.15 to 0.38; late in 1 |
+| `trial_stroop`, the first fixation | 18 | 2.9 to 6.8; late in 1 | 0.10 to 0.44; late in 0 |
+| `gfx_trial`, frame 0 | 15 | 4.5 to 11.2; late in 1 | 0.08 to 0.18; late in 1 |
+| `gfx_trial`, the grating's onset | 15 | 3.1 to 6.9; late in 0 | 0.10 to 0.22; late in 0 |
+
+`trial_keyboard` has no first use after frame 0: every shape it draws
+uses frame 0's program. Other frames over 2 ms: 1 without the prime (a
+later `trial_stroop` frame, 6.3 ms, in one run) and 2 with it (2.05 and
+2.13 ms). Late frames elsewhere: 7 without the prime and 5 with it, over
+the 51 runs of each, with no pattern. The prime itself took 40.6 to 98.9
+ms at setup.
+
+The cache condition made no difference that these runs show: a warm
+cache gave the same first-frame cost as no cache. ANGLE makes a program's
+D3D shader objects at its first draw, from a cache entry too (above).
+
+Result: without the prime every run paid 2.9 to 29 ms of extra CPU on
+frame 0 and on each later first use; with it no run did. Late frames on
+those frames: 7 of 102 frames without the prime, 2 of 102 with it. The
+counts are small because a drop needs the rest of the frame's work too;
+the cost is in every run, against a 16.7 ms frame, and it falls on frame
+0 and on the first trial's onset. So the trial examples call
+`ygfx_prime()` after they make their stimuli (from 2026-10-10).
+
 ## v0.10.5: a pack's textures load as stored; shader contract 2
 
 Found by `examples/pack/trial_images.c` (docs/rig_spec.md 15.5): the
