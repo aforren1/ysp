@@ -268,7 +268,7 @@ int main(int argc, char** argv) {
     if (!ygfx_open(&gfx, &gd)) { fprintf(stderr, "trial_stroop: %s\n", ygfx_error(&gfx)); return 1; }
 
     /* Every text is laid out here, then each font's set goes up once. */
-    if (yol_init(&ol, NULL) != YOL_OK || ylay_create(&L, &(ylay_desc){ .ol = &ol }) != YLAY_OK) {
+    if (!yol_open(&ol, NULL) || ylay_create(&L, &(ylay_desc){ .ol = &ol }) != YLAY_OK) {
         fprintf(stderr, "trial_stroop: the layout library did not open\n");
         return 1;
     }
@@ -470,7 +470,7 @@ int main(int argc, char** argv) {
     ygfx_close(&gfx);
     yscr_close(&scr);
     ylay_destroy(L);
-    yol_free(&ol);
+    yol_close(&ol);
     free(font);
     printf("%d trials written to %s%s\n", rows, out_path, aborted ? " (stopped with Shift+Esc)" : "");
 

@@ -6138,10 +6138,10 @@ static void cs_ol_build(void) {
     if (cs_ol_ok >= 0) return;
     cs_glyphs();
     cs_ol_ok = 0;
-    if (yol_init(&cs_ol_cx, NULL) != YOL_OK) return;
+    if (!yol_open(&cs_ol_cx, NULL)) return;
     memset(&od, 0, sizeof od);
     od.n_glyphs = CS_N;
-    if (yol_cset_init(&cs_ol, &cs_ol_cx, &od) != YOL_OK) return;
+    if (!yol_cset_open(&cs_ol, &cs_ol_cx, &od)) return;
     yol_path_init(&pa, &cs_ol_cx);
     for (g = 0; g < CS_N; g++) {
         yol_path_clear(&pa);
@@ -6157,7 +6157,7 @@ static void cs_ol_build(void) {
                 if (cx == x0 && cy == y0) yol_line(&pa, x1, y1);
                 else yol_quad(&pa, cx, cy, x1, y1);
             }
-            yol_close(&pa);
+            yol_close_path(&pa);
         }
         if (yol_path_end(&pa) != YOL_OK || yol_cset_add(&cs_ol, (uint32_t)g, &pa) != YOL_OK) { yol_path_free(&pa); return; }
     }
@@ -8058,8 +8058,8 @@ int main(void) {
     if (wanted("mesa", ran)) ran += gl_suite("Mesa llvmpipe", YGFX_HL_MESA_SOFTWARE);
 #endif
     free(R);
-    if (cs_ol_ok == 1) yol_cset_free(&cs_ol);
-    if (cs_ol_ok >= 0) yol_free(&cs_ol_cx);
+    if (cs_ol_ok == 1) yol_cset_close(&cs_ol);
+    if (cs_ol_ok >= 0) yol_close(&cs_ol_cx);
     if (!ran) {
         printf("no GL ES 3.0 renderer opened%s: the GL checks did not run\n",
                sanitized() ? " (a sanitizer build runs GL only with YGFX_TEST_DEVICES)" : "");

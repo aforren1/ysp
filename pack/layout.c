@@ -195,7 +195,7 @@ void ylay_destroy(ylay_lib* L) {
     if (L->layout) skb_layout_destroy(L->layout);
     for (i = 0; i < L->n_fonts; i++) {
         ylay__font* F = &L->fonts[i];
-        yol_cset_free(&F->set);
+        yol_cset_close(&F->set);
         free(F->have); free(F->fresh); free(F->todo); free(F->taken);
     }
     if (L->fc) skb_font_collection_destroy(L->fc);
@@ -222,7 +222,7 @@ int ylay_add_font(ylay_lib* L, const void* bytes, size_t n, int face, const char
     F->face = face;
     /* ysp/outline.h reads the outlines; a font it refuses (CFF2, no outlines)
      * cannot become a curve set, so it is refused here, by its reason. */
-    if (yol_font_open(&F->f, bytes, n, face, err, sizeof err) < 0)
+    if (yol_font_view(&F->f, bytes, n, face, err, sizeof err) < 0)
         return ylay__fail(L, YLAY_ERR_FORMAT, "ysp_layout: %s: %s", F->name, err);
     blob = hb_blob_create_or_fail((const char*)bytes, (unsigned)n, HB_MEMORY_MODE_READONLY, NULL, NULL);
     hf = blob ? hb_face_create_or_fail(blob, (unsigned)face) : NULL;
@@ -236,7 +236,7 @@ int ylay_add_font(ylay_lib* L, const void* bytes, size_t n, int face, const char
     cd.n_glyphs = (uint32_t)F->f.n_glyphs;
     cd.backward = true;   /* the rays are 18 to 27 % faster with them (ysp/gfx.h) */
     F->have = (uint8_t*)calloc(((size_t)F->f.n_glyphs + 7) / 8, 1);
-    if (!F->have || yol_cset_init(&F->set, L->ol, &cd) != YOL_OK) {
+    if (!F->have || !yol_cset_open(&F->set, L->ol, &cd)) {
         skb_font_collection_remove_font(L->fc, F->handle);
         free(F->have);
         return ylay__fail(L, YLAY_ERR_NOMEM, "ysp_layout: %s: no memory for its curve set", F->name);

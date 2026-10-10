@@ -585,3 +585,22 @@ test = "outline"
 why = "A composite takes the phantom points of its USE_MY_METRICS component; with its own instead, 12 of Arial's 13 mismatched composites would move where HarfBuzz does not move them."
 find = 'if (fl & 0x200) x = yol__phantom_x(f, cg, depth + 1);'
 replace = 'if (0) x = yol__phantom_x(f, cg, depth + 1);'
+
+[[mutant]]
+id = "68"
+name = "no generic message"
+test = "outline"
+why = "v0.3: a call on a context that fails without a specific message gets a generic one, so yol_error() belongs to the last failure."
+find = '    if (c && rc < 0 && c->n_err == n0) yol__err(c, rc, "%s: %s", what, yol_strerror(rc));'
+replace = '    (void)n0; (void)what;'
+
+[[mutant]]
+id = "69"
+name = "cset close keeps its pointers"
+test = "outline"
+why = "v0.3: yol_cset_close() must empty the set, so a second close does not free the same block twice."
+find = '''
+        if (s->words) yol__realloc(s->ctx, s->words, 0);
+        memset(s, 0, sizeof *s);'''
+replace = '''
+        if (s->words) yol__realloc(s->ctx, s->words, 0);'''

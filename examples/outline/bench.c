@@ -67,11 +67,11 @@ static double row_set(font* ft, int keep) {
     double t0, t;
     memset(&d, 0, sizeof d);
     d.n_glyphs = (uint32_t)ft->f.n_glyphs; d.keep_overlaps = keep != 0;
-    if (yol_cset_init(&s, &g_cx, &d) < 0) { g_fail = 1; return 0; }
+    if (!yol_cset_open(&s, &g_cx, &d)) { g_fail = 1; return 0; }
     t0 = now_s();
     if (yol_cset_add_font(&s, &ft->f, NULL, 0, 0) < 0) { fprintf(stderr, "%s: %s\n", ft->name, yol_error(&g_cx)); g_fail = 1; }
     t = now_s() - t0;
-    yol_cset_free(&s);
+    yol_cset_close(&s);
     return t;
 }
 
@@ -159,12 +159,12 @@ int main(int argc, char** argv) {
     double sw[2] = { 0, 0 };
     font *latin = NULL, *cjk = NULL, *cff = NULL;
     if (rounds < 1 || rounds > MAX_ROUNDS) { fprintf(stderr, "usage: outline_bench [rounds 1..%d] [font directory]\n", MAX_ROUNDS); return 2; }
-    yol_init(&g_cx, NULL);
+    yol_open(&g_cx, NULL);
     for (i = 0; i < NFONTS; i++) {
         fonts[i].name = names[i];
         snprintf(fonts[i].path, sizeof fonts[i].path, "%s/%s", dir, names[i]);
         fonts[i].data = read_file(fonts[i].path, &fonts[i].n);
-        fonts[i].ok = fonts[i].data && yol_font_open(&fonts[i].f, fonts[i].data, fonts[i].n, 0, NULL, 0) == YOL_OK;
+        fonts[i].ok = fonts[i].data && yol_font_view(&fonts[i].f, fonts[i].data, fonts[i].n, 0, NULL, 0) == YOL_OK;
         any |= fonts[i].ok;
     }
     if (!any) { printf("outline_bench: none of the fonts is in %s\n", dir); return 3; }
@@ -199,6 +199,6 @@ int main(int argc, char** argv) {
     if (cjk) printf("stroke 0.08 em, %s: %.2f s for the font, %.0f us/glyph (bar 1000), slowest %.1f ms (glyph %d)\n", cjk->name,
                     median(t_stroke[1], rounds), 1e6 * median(t_stroke[1], rounds) / cjk->f.n_glyphs, 1e3 * sw[1], swg[1]);
     for (i = 0; i < NFONTS; i++) free(fonts[i].data);
-    yol_free(&g_cx);
+    yol_close(&g_cx);
     return g_fail ? 1 : 0;
 }

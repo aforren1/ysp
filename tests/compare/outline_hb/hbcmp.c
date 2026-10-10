@@ -56,8 +56,8 @@ int main(int argc, char** argv) {
     fd = slurp(argv[1], &nf);
     tx = (char*)slurp(argv[2], &nt);
     if (!fd || !tx) { fprintf(stderr, "hbcmp: cannot read %s\n", fd ? argv[2] : argv[1]); return 2; }
-    yol_init(&c, NULL);
-    if (yol_font_open(&f, fd, nf, face, err, sizeof err) != YOL_OK) { fprintf(stderr, "hbcmp: %s\n", err); return 2; }
+    yol_open(&c, NULL);
+    if (yol_font_view(&f, fd, nf, face, err, sizeof err) != YOL_OK) { fprintf(stderr, "hbcmp: %s\n", err); return 2; }
     if (sscanf(tx, "U %d %d", &upem, &ng) != 2 || upem != f.units_per_em || ng != f.n_glyphs) {
         fprintf(stderr, "hbcmp: the dump is not of this font face\n");
         return 2;
@@ -65,8 +65,8 @@ int main(int argc, char** argv) {
     inv = 1.0 / upem;
     memset(&cd, 0, sizeof cd);
     cd.n_glyphs = (uint32_t)ng;
-    yol_cset_init(&sa, &c, &cd);
-    yol_cset_init(&sb, &c, &cd);
+    yol_cset_open(&sa, &c, &cd);
+    yol_cset_open(&sb, &c, &cd);
     if (yol_cset_add_font(&sa, &f, NULL, 0, 0) != YOL_OK) { fprintf(stderr, "hbcmp: set: %s\n", yol_error(&c)); return 1; }
     yol_path_init(&a, &c);
     yol_path_init(&b, &c);
@@ -98,7 +98,7 @@ int main(int argc, char** argv) {
         else if (op == 'Q' && sscanf(q + 2, "%lf %lf %lf %lf", v, v + 1, v + 2, v + 3) == 4) yol_quad(&b, v[0], v[1], v[2], v[3]);
         else if (op == 'C' && sscanf(q + 2, "%lf %lf %lf %lf %lf %lf", v, v + 1, v + 2, v + 3, v + 4, v + 5) == 6)
             yol_cubic(&b, v[0], v[1], v[2], v[3], v[4], v[5]);
-        else if (op == 'Z') yol_close(&b);
+        else if (op == 'Z') yol_close_path(&b);
         else { fprintf(stderr, "hbcmp: bad dump line near glyph %d\n", g); return 2; }
     }
     sets_eq = sa.n_words == sb.n_words && sa.n_texels == sb.n_texels &&
@@ -110,9 +110,9 @@ int main(int argc, char** argv) {
            (unsigned)sa.n_words, (unsigned)sb.n_words, (unsigned)sa.n_texels, (unsigned)sb.n_texels);
     yol_path_free(&a);
     yol_path_free(&b);
-    yol_cset_free(&sa);
-    yol_cset_free(&sb);
-    yol_free(&c);
+    yol_cset_close(&sa);
+    yol_cset_close(&sb);
+    yol_close(&c);
     free(fd);
     free(tx);
     return (ne || !sets_eq || rc) ? 1 : 0;

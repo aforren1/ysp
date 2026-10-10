@@ -903,7 +903,7 @@ int main(void) {
     const ylay_versions* v = ylay_get_versions();
     int i, nc, fi;
     char stamp[1024];
-    yol_init(&ol, NULL);
+    yol_open(&ol, NULL);
 
     /* 1. versions */
     printf("skribidi %s, patch %s, harfbuzz %s\n", v->skribidi, v->skribidi_patch, v->harfbuzz);
@@ -982,7 +982,7 @@ int main(void) {
     /* 3. the corpus */
     corpus(&ol);
     editor_compare(&ol);
-    yol_free(&ol);
+    yol_close(&ol);
     printf("%s: %d checks, %d failures\n", failures ? "FAIL" : "ok", checks, failures);
     return failures ? 1 : 0;
 }

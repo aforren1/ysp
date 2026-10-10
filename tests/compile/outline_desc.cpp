@@ -13,7 +13,7 @@ int main() {
     yol_path p, o;
     yol_box b;
     yol_cset s;
-    int ok = yol_init(&cx, nullptr) == YOL_OK;
+    int ok = yol_open(&cx, nullptr);
     yol_path_init(&p, &cx);
     yol_path_init(&o, &cx);
     yol_rect(&p, 0, 0, 1, 1, 0.1, 0.1);
@@ -23,14 +23,14 @@ int main() {
     yol_raster_desc rd = { .scale = 16, .x = 1, .y = 1 };
     ok = ok && yol_raster(&cx, &o, &rd, &b) == YOL_OK && b.x1 > b.x0;
     yol_cset_desc cd = { .n_glyphs = 1, .nh = 2, .nv = 2 };
-    ok = ok && yol_cset_init(&s, &cx, &cd) == YOL_OK && yol_cset_add(&s, 0, &o) == YOL_OK;
+    ok = ok && yol_cset_open(&s, &cx, &cd) && yol_cset_add(&s, 0, &o) == YOL_OK;
     yol_glyph_desc gd = { .size = 24, .y_up = true };
     yol_svg_desc svd = { .tol = 0.01, .max_layers = 0 };
     (void)gd; (void)svd;
-    yol_cset_free(&s);
+    yol_cset_close(&s);
     yol_path_free(&p);
     yol_path_free(&o);
-    yol_free(&cx);
+    yol_close(&cx);
     return ok ? 0 : 1;
 }
 #else

@@ -409,6 +409,42 @@ the build made:
 - No `strtod`: numbers are parsed by hand, as in the CFF reader, so the
   locale cannot change them.
 
+## Open, close and messages (v0.3.0)
+
+v0.3.0 applies the repository conventions (README.md, Conventions) to this
+header. Four decisions:
+
+- **The context opens and closes.** `yol_open()` checks its desc (an
+  arena and an allocator both given, an arena off 16 bytes), so it is an
+  open, and it returns `bool`. `yol_close()` frees the scratch buffers. A
+  zeroed context still works as `yol_open(c, NULL)` leaves it, because the
+  pack tool and the tests keep contexts in static storage.
+- **The path builder's close is `yol_close_path()`.** It closes a contour
+  (SVG's Z). With `yol_close()` taken by the context, the old name would
+  close the wrong thing.
+- **A font is a view.** `yol_font_view()` keeps pointers into the
+  caller's bytes and allocates nothing, so it has no close; its message
+  goes to the caller's buffer, as for every call without a handle.
+- **A curve set opens on a context.** `yol_cset_open()` returns `bool` and
+  writes its message into the context it grows on. A set in the caller's
+  storage (context NULL) has no context, so it returns false with no
+  message; the caps are the only thing that can fail there.
+
+Every call on a context that fails now writes `yol_error()`. v0.2 returned
+some codes bare: a NULL argument, and the fixed store of a set full. A
+wrapper on each public call compares a counter of written messages before
+and after the call and writes "<call>: <code's text>" only when the call
+wrote nothing, so a specific message (the glyph, the byte of an SVG) is
+never replaced. It costs one compare per call; snprintf runs only on
+failure.
+
+Checked on 2026-10-10 (Windows 11, MSVC 19.44 /W4 /WX, and MinGW-w64 gcc
+-std=c99 and -std=c++17 -pedantic for USAGE): `tests/adapt/outline_test.c`
+passes with every v0.2.1 check unchanged, plus close on zeroed handles,
+after a failed open and twice, and the generic and specific messages.
+`tests/compile/outline.c` names the lifecycle by type. Mutants 68 (no
+generic message) and 69 (a set close that keeps its pointers) are caught.
+
 ## Next
 
 1. The Latin stroke bar (Cost): the sweep's per-strip positions are what

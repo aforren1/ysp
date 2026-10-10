@@ -843,7 +843,7 @@ int main(int argc, char** argv) {
     printf("%s\n", line);
     ygfx_describe(&gfx, line, sizeof line);
     printf("%s\n", line);
-    if (yol_init(&ol, NULL) != YOL_OK || xlib_open(&X_main, main_order, COUNT(main_order)) < 0 ||
+    if (!yol_open(&ol, NULL) || xlib_open(&X_main, main_order, COUNT(main_order)) < 0 ||
         xlib_open(&X_ja, ja_order, COUNT(ja_order)) < 0) {
         fprintf(stderr, "gfx_layout: the layout library did not open\n");
         ygfx_close(&gfx); yscr_close(&scr);
@@ -990,7 +990,7 @@ int main(int argc, char** argv) {
     ygfx_close(&gfx);
     ylay_destroy(X_main.L);
     ylay_destroy(X_ja.L);
-    yol_free(&ol);
+    yol_close(&ol);
     for (i = 0; i < N_FILES; i++) free(files[i].bytes);
     yscr_close(&scr);
     if (refused) { fprintf(stderr, "gfx_layout: %ld refused draws or setup errors\n", refused); return 1; }

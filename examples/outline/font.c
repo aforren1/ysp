@@ -64,13 +64,13 @@ int main(int argc, char** argv) {
     label = argv[2];
     bytes = read_file(argv[1], &n);
     if (!bytes) { fprintf(stderr, "outline_font: cannot read %s\n", argv[1]); return 1; }
-    if (yol_font_open(&font, bytes, n, 0, err, sizeof err) < 0) { fprintf(stderr, "outline_font: %s\n", err); return 1; }
-    yol_init(&cx, NULL);
+    if (yol_font_view(&font, bytes, n, 0, err, sizeof err) < 0) { fprintf(stderr, "outline_font: %s\n", err); return 1; }
+    yol_open(&cx, NULL);
     yol_path_init(&label_path, &cx);
     yol_path_init(&glyph, &cx);
     memset(&cd, 0, sizeof cd);
     cd.n_glyphs = (uint32_t)font.n_glyphs;
-    if (yol_cset_init(&set, &cx, &cd) < 0) { fprintf(stderr, "outline_font: %s\n", yol_error(&cx)); return 1; }
+    if (!yol_cset_open(&set, &cx, &cd)) { fprintf(stderr, "outline_font: %s\n", yol_error(&cx)); return 1; }
     /* the label: each glyph at the pen, in px, the baseline at y = 0 */
     for (i = 0; label[i]; i++) {
         uint32_t g = yol_font_glyph_index(&font, (unsigned char)label[i]);
@@ -106,10 +106,10 @@ int main(int argc, char** argv) {
     fclose(fp);
     printf("%s: %d x %d px, exact coverage; curve set of %u texels and %u words\n", out, w, h, set.n_texels, set.n_words);
     free(img);
-    yol_cset_free(&set);
+    yol_cset_close(&set);
     yol_path_free(&label_path);
     yol_path_free(&glyph);
-    yol_free(&cx);
+    yol_close(&cx);
     free(bytes);
     return rc;
 }
