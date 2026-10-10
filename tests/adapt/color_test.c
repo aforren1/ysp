@@ -177,7 +177,13 @@ static void make_cals(void) {
  * them, so the checks below compare codes. */
 static int ctx_rc(ycol_ctx* cx, const ycol_ctx_desc* d, char* err, size_t cap) {
     bool ok = ycol_ctx_open(cx, d);
-    if (err && cap) snprintf(err, cap, "%s", ycol_ctx_error(cx));
+    if (err && cap) {   /* truncated to cap, as v0.1 wrote it */
+        const char* m = ycol_ctx_error(cx);
+        size_t k = strlen(m);
+        if (k >= cap) k = cap - 1;
+        memcpy(err, m, k);
+        err[k] = '\0';
+    }
     if (ok != (cx->status == YCOL_OK) || ok != (ycol_ctx_error(cx)[0] == '\0')) return -100;   /* inconsistent */
     return ok ? YCOL_OK : cx->status;
 }
