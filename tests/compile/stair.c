@@ -7,6 +7,8 @@
 #define YSP_STAIR_IMPLEMENTATION
 #include "ysp/stair.h"
 
+#include <string.h>
+
 typedef struct stair_api {
     bool (*open)(yst_stair*, const yst_desc*);
     void (*close)(yst_stair*);
@@ -18,7 +20,8 @@ static const stair_api g_stair_api = { yst_open, yst_close, yst_error, yst_updat
 
 int main(void) {
     static yst_stair s;
-    yst_desc d = { 0 };
+    yst_desc d;
+    memset(&d, 0, sizeof(d));   /* g++ -Wextra flags = { 0 } in C++ */
     d.start = 0.5;
     d.steps[0] = 0.1;
     d.n_steps = 1;
