@@ -761,7 +761,7 @@ static void* ydev__par_open(void* user, const char* key, char* found, size_t fou
 static int ydev__par_write(void* conn, const uint8_t* buf, int n) {
     /* one byte is the whole state of the data lines: the last one counts */
     if (n <= 0) return n;
-    return ypar_write_data((ypar_port*)conn, buf[n - 1]) ? n : -1;
+    return ypar_write_data((ypar_port*)conn, buf[n - 1]) >= 0 ? n : -1;
 }
 
 static void ydev__par_close(void* conn) { ypar_close((ypar_port*)conn); }

@@ -1,4 +1,4 @@
-/* ysp/parallel.h - v0.3 - public domain single-header parallel-port library
+/* ysp/parallel.h - v0.4.0 - public domain single-header parallel-port library
  *
  *   A small C library for reading and writing the PC parallel port (LPT).
  *   Built for low-latency 8-bit trigger output of the kind used in
@@ -20,42 +20,6 @@
  *   C++17, and in the C dialect MSVC compiles by default.
  *
  *   ---------------------------------------------------------------------
- *   CHANGELOG
- *   ---------------------------------------------------------------------
- *   v0.3 - Depends on ysp/rt.h, and its own copies of the monotonic clock,
- *          the sleep-until, the SCHED_DEADLINE/FIFO ladder, the Windows
- *          waitable timers and the worker thread are gone. All three ysp
- *          headers now time against one implementation instead of three.
- *          ypar_sched_deadline is a typedef of yrt_sched_deadline and
- *          ypar_async_policy of yrt_policy. The YPAR_ASYNC_* and
- *          YPAR_DEFAULT_RT_* names survive as aliases, but the policy
- *          VALUES changed: yrt_policy carries a macOS rung
- *          (YRT_POLICY_TIME_CONSTRAINT = 2) that this header never
- *          returns, so FIFO, TIME_CRITICAL and NORMAL each moved up by one.
- *          Code comparing names is unaffected; code that stored, indexed or
- *          wire-formatted the integers must be rebuilt. YPAR_NO_THREADS now
- *          implies YRT_NO_THREADS. ypar_open() validates desc.sched on
- *          Windows too, where it used to be ignored.
- *          On YPAR_BACKEND_DIRECT the worker thread's own ioperm()/iopl()
- *          grant runs from yrt_worker_desc.on_start (ysp/rt.h v0.2), which
- *          executes on the worker thread before yrt_worker_start()
- *          returns. A refused grant therefore fails ypar_open() as it did in
- *          v0.2, instead of waiting to show up as async_write_failed on the
- *          first trailing edge. (An earlier v0.3 draft, before ysp/rt.h had
- *          that hook, did the latter.)
- *   v0.2 - ypar_open() forces the data direction to forward on every
- *          backend, so a port left in reverse mode by a previous client no
- *          longer makes every trigger float. New ypar_desc.dll_path lets a
- *          binding name the inpout DLL explicitly (the loader searches the
- *          EXECUTABLE's directory, which is python.exe or MATLAB for the
- *          bindings). New ypar_port.async_write_failed reports a failed
- *          trailing-edge write from the async worker. The DIRECT backend's
- *          per-thread I/O permission is now granted on the worker thread
- *          itself, and the per-thread rules are documented. Windows creates
- *          ypar_pulse()'s waitable timer in ypar_open(), not on first pulse.
- *   v0.1 - first release.
- *
- *   ---------------------------------------------------------------------
  *   USAGE
  *   ---------------------------------------------------------------------
  *   Copy TWO files into your project, ysp/parallel.h and ysp/rt.h, and keep
@@ -75,14 +39,16 @@
  *       #define YSP_PARALLEL_IMPLEMENTATION
  *       #include "ysp/parallel.h"
  *
- *       ypar_port pp;
- *       ypar_desc desc = {0};                         // sensible defaults
+ *       ypar_port pp = { 0 };                         // zeroed, or closed
+ *       ypar_desc desc = { 0 };                       // sensible defaults
  *       if (!ypar_open(&pp, &desc)) {
  *           fprintf(stderr, "open failed: %s\n", ypar_error(&pp));
  *           return 1;
  *       }
- *       ypar_write_data(&pp, 0x55);                   // raise a trigger
- *       ypar_pulse(&pp, 0x55, 2000);                  // 0x55 for 2 ms, then 0
+ *       if (ypar_write_data(&pp, 0x55) < 0)           // raise a trigger
+ *           fprintf(stderr, "write: %s\n", ypar_error(&pp));
+ *       if (ypar_pulse(&pp, 0x55, YRT_MS(2)) < 0)     // 0x55 for 2 ms, then 0
+ *           fprintf(stderr, "pulse: %s\n", ypar_error(&pp));
  *       ypar_close(&pp);
  *
  *   ---------------------------------------------------------------------
@@ -208,11 +174,10 @@
  *   to ysp/rt.h. Its WAITS and SCHEDULING sections are the reference for
  *   what each one costs and what it is worth, and examples/rt/jitter.c
  *   measures the waits on YOUR rig rather than asserting a number. Pulse
- *   deadlines are yrt_now_ns() times, so a pulse timestamp and a
- *   yrt_now_us() or yser_now_us() timestamp taken in the same process
- *   subtract directly.
+ *   deadlines are yrt_now_ns() times, so a pulse timestamp and any other
+ *   yrt_now_ns() timestamp taken in the same process subtract directly.
  *
- *   ypar_pulse(p, value, usec) writes value, waits until an absolute
+ *   ypar_pulse(p, value, width_ns) writes value, waits until an absolute
  *   deadline taken right after that write, then writes 0. The wait is
  *   yrt_sleep_until() with YRT_DEFAULT_SPIN_NS: the OS gets the bulk of
  *   the width and the last spin window is spun on the clock (about 1.2 ms
@@ -225,7 +190,7 @@
  *   spins the same window on a thread that climbed the ladder. Same wait,
  *   different thread.
  *
- *   ypar_pulse_async(p, value, usec) returns at once. The leading edge is
+ *   ypar_pulse_async(p, value, width_ns) returns at once. The leading edge is
  *   written on the calling thread, so the trigger ONSET is never delayed by
  *   thread scheduling. One ysp/rt.h deadline worker per port writes the
  *   trailing 0 at an absolute deadline taken right after the onset write.
@@ -301,16 +266,90 @@
  *       cl /O2 /Iinclude examples\parallel\trigger.c
  *
  *   ---------------------------------------------------------------------
+ *   RETURN VALUES AND ERRORS
+ *   ---------------------------------------------------------------------
+ *   ypar_open() returns bool. Every other call that can fail returns an int:
+ *   0 or more is success (a register byte, 0..255, for the reads; 1 or 0
+ *   for ypar_get_status_bit()), and a negative value is one of
+ *       YPAR_ERR_IO      the OS refused the register access (ppdev ioctl)
+ *       YPAR_ERR_CLOSED  the port is not open
+ *       YPAR_ERR_ARG     a negative width
+ *       YPAR_ERR_ASYNC   no async worker: YPAR_NO_THREADS, or it did not
+ *                        start (ypar_error() says why)
+ *   which ypar_strerror() names. Test rc < 0. A failing call also writes
+ *   ypar_error() before it returns; a call that succeeds leaves the message
+ *   alone, so it belongs to the last failure. The async worker never writes
+ *   the message: it sets async_write_failed (PULSES AND TIMING). The calls
+ *   on one handle come from one thread at a time, as BACKENDS says for
+ *   DIRECT; the message buffer is not shared with any other thread.
+ *
+ *   ---------------------------------------------------------------------
  *   BINDINGS
  *   ---------------------------------------------------------------------
  *   Python (CPython Limited API) and MATLAB/Octave (MEX) bindings live in
  *   the ysp repository under bindings/python/ysp_parallel and bindings/mex.
  *
  *   ---------------------------------------------------------------------
+ *   CHANGELOG
+ *   ---------------------------------------------------------------------
+ *   v0.4.0 - The ysp conventions (README.md, Conventions); breaks the API.
+ *          ypar_pulse() and ypar_pulse_async() take int64_t width_ns
+ *          instead of uint32_t usec. ypar_write_data(),
+ *          ypar_set_data_dir(), ypar_pulse(), ypar_pulse_async(),
+ *          ypar_write_control() and ypar_set_control_bit() return 0 or a
+ *          negative YPAR_ERR_* code instead of bool; ypar_read_data(),
+ *          ypar_read_status() and ypar_read_control() return the byte
+ *          (0..255) or a YPAR_ERR_* code instead of a uint8_t with the
+ *          failure only in the message; ypar_get_status_bit() returns 1, 0
+ *          or a YPAR_ERR_* code, so a failed read is not "line low". New
+ *          ypar_strerror(). A failing call writes ypar_error(); a call that
+ *          succeeds no longer clears it, so the message belongs to the last
+ *          failure. YPAR_VERSION_* macros.
+ *   v0.3 - Depends on ysp/rt.h, and its own copies of the monotonic clock,
+ *          the sleep-until, the SCHED_DEADLINE/FIFO ladder, the Windows
+ *          waitable timers and the worker thread are gone. All three ysp
+ *          headers now time against one implementation instead of three.
+ *          ypar_sched_deadline is a typedef of yrt_sched_deadline and
+ *          ypar_async_policy of yrt_policy. The YPAR_ASYNC_* and
+ *          YPAR_DEFAULT_RT_* names survive as aliases, but the policy
+ *          VALUES changed: yrt_policy carries a macOS rung
+ *          (YRT_POLICY_TIME_CONSTRAINT = 2) that this header never
+ *          returns, so FIFO, TIME_CRITICAL and NORMAL each moved up by one.
+ *          Code comparing names is unaffected; code that stored, indexed or
+ *          wire-formatted the integers must be rebuilt. YPAR_NO_THREADS now
+ *          implies YRT_NO_THREADS. ypar_open() validates desc.sched on
+ *          Windows too, where it used to be ignored.
+ *          On YPAR_BACKEND_DIRECT the worker thread's own ioperm()/iopl()
+ *          grant runs from yrt_worker_desc.on_start (ysp/rt.h v0.2), which
+ *          executes on the worker thread before yrt_worker_start()
+ *          returns. A refused grant therefore fails ypar_open() as it did in
+ *          v0.2, instead of waiting to show up as async_write_failed on the
+ *          first trailing edge. (An earlier v0.3 draft, before ysp/rt.h had
+ *          that hook, did the latter.)
+ *   v0.2 - ypar_open() forces the data direction to forward on every
+ *          backend, so a port left in reverse mode by a previous client no
+ *          longer makes every trigger float. New ypar_desc.dll_path lets a
+ *          binding name the inpout DLL explicitly (the loader searches the
+ *          EXECUTABLE's directory, which is python.exe or MATLAB for the
+ *          bindings). New ypar_port.async_write_failed reports a failed
+ *          trailing-edge write from the async worker. The DIRECT backend's
+ *          per-thread I/O permission is now granted on the worker thread
+ *          itself, and the per-thread rules are documented. Windows creates
+ *          ypar_pulse()'s waitable timer in ypar_open(), not on first pulse.
+ *   v0.1 - first release.
+ *
+ *   ---------------------------------------------------------------------
  *   LICENSE: public domain / MIT-0, see end of file.
  */
 #ifndef YSP_PARALLEL_H_INCLUDED
 #define YSP_PARALLEL_H_INCLUDED
+
+/* The version of this header, for a binding's __version__ and for a log line.
+ * The string always matches the three numbers. */
+#define YPAR_VERSION_MAJOR  0
+#define YPAR_VERSION_MINOR  4
+#define YPAR_VERSION_PATCH  0
+#define YPAR_VERSION_STRING "0.4.0"
 
 /* Feature-test macro for the Linux implementation. This header's own needs
  * are modest, but the ysp/rt.h implementation it pulls in below wants
@@ -363,6 +402,12 @@ extern "C" {
 #ifndef YPAR_API
 #define YPAR_API extern
 #endif
+
+/* Negative results of every call but ypar_open(); see RETURN VALUES. */
+#define YPAR_ERR_IO     (-1)
+#define YPAR_ERR_CLOSED (-2)
+#define YPAR_ERR_ARG    (-3)
+#define YPAR_ERR_ASYNC  (-4)
 
 /* Default I/O base addresses of the legacy ISA LPT ports. Add-in PCI/PCIe
  * cards usually live elsewhere; check your system (Linux: /proc/ioports;
@@ -549,8 +594,11 @@ YPAR_API bool ypar_open(ypar_port* p, const ypar_desc* desc);
  * another open one on the same thread unable to write. See BACKENDS. */
 YPAR_API void ypar_close(ypar_port* p);
 
-/* Last error message for this handle ("" if none). */
+/* The message of the last failure on this handle ("" if none). */
 YPAR_API const char* ypar_error(const ypar_port* p);
+
+/* Static name of a YPAR_ERR_* code ("ok" for values >= 0). */
+YPAR_API const char* ypar_strerror(int code);
 
 /* True if the handle currently owns an open port. */
 YPAR_API bool ypar_is_open(const ypar_port* p);
@@ -562,31 +610,34 @@ YPAR_API bool ypar_is_open(const ypar_port* p);
  * YPAR_BACKEND_DIRECT: call it from the thread that called ypar_open(). I/O
  * permission on Linux is per-thread, so outb() from another thread raises
  * SIGSEGV instead of failing; this function cannot detect that for you. The
- * ppdev and inpout backends have no such restriction. See BACKENDS. */
-YPAR_API bool ypar_write_data(ypar_port* p, uint8_t value);
+ * ppdev and inpout backends have no such restriction. See BACKENDS.
+ * Returns 0 or a YPAR_ERR_* code. */
+YPAR_API int ypar_write_data(ypar_port* p, uint8_t value);
 
 /* Read the data register back. On a forward (output) port this returns the
  * last value latched; on a bidirectional port in input mode it reads the
- * external lines. */
-YPAR_API uint8_t ypar_read_data(ypar_port* p);
+ * external lines. Returns the byte (0..255) or a YPAR_ERR_* code. */
+YPAR_API int ypar_read_data(ypar_port* p);
 
 /* Set data-line direction on a bidirectional port: input=true switches the
- * data pins to read mode, input=false (default) drives them as outputs. */
-YPAR_API bool ypar_set_data_dir(ypar_port* p, bool input);
+ * data pins to read mode, input=false (default) drives them as outputs.
+ * Returns 0 or a YPAR_ERR_* code. */
+YPAR_API int ypar_set_data_dir(ypar_port* p, bool input);
 
-/* Write `value` to the data lines, hold for `usec` microseconds, then write
+/* Write `value` to the data lines, hold for width_ns nanoseconds, then write
  * 0. The classic fixed-width trigger pulse. It blocks the caller for the
  * width, waiting with yrt_sleep_until() and YRT_DEFAULT_SPIN_NS on the
  * CALLER's thread at the caller's priority, so its trailing edge is less
  * precise than ypar_pulse_async's. Timing is best-effort and bounded by OS
  * scheduling; expect microsecond-to-millisecond jitter on a non-RT kernel,
- * and measure with examples/rt/jitter.c. */
-YPAR_API bool ypar_pulse(ypar_port* p, uint8_t value, uint32_t usec);
+ * and measure with examples/rt/jitter.c. Returns 0 or a YPAR_ERR_* code
+ * (YPAR_ERR_ARG for a negative width, before any write). */
+YPAR_API int ypar_pulse(ypar_port* p, uint8_t value, int64_t width_ns);
 
 /* Non-blocking pulse. Writes `value` to the data lines immediately on the
  * calling thread (so the trigger ONSET is not delayed by thread wake-up),
  * then returns at once; a dedicated real-time worker thread writes the
- * trailing 0 after `usec` microseconds.
+ * trailing 0 after width_ns nanoseconds.
  *
  * The worker is a ysp/rt.h deadline worker, started by ypar_open() (if that
  * failed, the first call here retries and reports; on YPAR_BACKEND_DIRECT
@@ -611,27 +662,34 @@ YPAR_API bool ypar_pulse(ypar_port* p, uint8_t value, uint32_t usec);
  * YPAR_BACKEND_DIRECT that includes the worker thread being refused its own
  * I/O permission, which is per-thread and can only be asked for there.
  *
- * Returns false if the worker could not be started (e.g. built with
- * YPAR_NO_THREADS) or the port is not open; see ypar_error(). Compile with
- * -DYPAR_NO_THREADS to drop threading support and this function entirely. */
-YPAR_API bool ypar_pulse_async(ypar_port* p, uint8_t value, uint32_t usec);
+ * Returns 0, or YPAR_ERR_ASYNC if the worker could not be started (e.g.
+ * built with YPAR_NO_THREADS), YPAR_ERR_CLOSED, YPAR_ERR_ARG for a negative
+ * width or YPAR_ERR_IO; ypar_error() says more. With -DYPAR_NO_THREADS it
+ * always returns YPAR_ERR_ASYNC and writes nothing. */
+YPAR_API int ypar_pulse_async(ypar_port* p, uint8_t value, int64_t width_ns);
 
 /* --- status register (base+1, read-only) ------------------------------- */
 
-/* Read the raw status byte. Combine with YPAR_STATUS_* masks. */
-YPAR_API uint8_t ypar_read_status(ypar_port* p);
+/* Read the raw status byte. Combine with YPAR_STATUS_* masks. Returns the
+ * byte (0..255) or a YPAR_ERR_* code. */
+YPAR_API int ypar_read_status(ypar_port* p);
 
-/* Convenience: test a single status line (raw register bit). */
-YPAR_API bool ypar_get_status_bit(ypar_port* p, uint8_t mask);
+/* Test a single status line (raw register bit): 1 set, 0 clear, or a
+ * YPAR_ERR_* code. Not a bool: a status line is often a response input,
+ * and a failed read must not look like "not pressed". */
+YPAR_API int ypar_get_status_bit(ypar_port* p, uint8_t mask);
 
 /* --- control register (base+2) ----------------------------------------- */
 
-/* Read / write the raw control byte. Combine with YPAR_CONTROL_* masks. */
-YPAR_API uint8_t ypar_read_control(ypar_port* p);
-YPAR_API bool    ypar_write_control(ypar_port* p, uint8_t value);
+/* Read / write the raw control byte. Combine with YPAR_CONTROL_* masks. The
+ * read returns the byte (0..255), the write 0; both a YPAR_ERR_* code on
+ * failure. */
+YPAR_API int ypar_read_control(ypar_port* p);
+YPAR_API int ypar_write_control(ypar_port* p, uint8_t value);
 
-/* Set or clear individual control bits without disturbing the others. */
-YPAR_API bool ypar_set_control_bit(ypar_port* p, uint8_t mask, bool on);
+/* Set or clear individual control bits without disturbing the others.
+ * Returns 0 or a YPAR_ERR_* code; a failed read writes nothing back. */
+YPAR_API int ypar_set_control_bit(ypar_port* p, uint8_t mask, bool on);
 
 #ifdef __cplusplus
 } /* extern "C" */
@@ -687,8 +745,22 @@ static void ypar__clear_error(ypar_port* p) {
     if (p) p->error[0] = '\0';
 }
 
+/* Every failing call writes the message before it returns its code. */
+#define YPAR__FAIL(p, rc, ...) (ypar__set_error((p), __VA_ARGS__), (rc))
+#define YPAR__CLOSED(p) YPAR__FAIL((p), YPAR_ERR_CLOSED, "port not open")
+
 const char* ypar_error(const ypar_port* p) {
     return p ? p->error : "null port handle";
+}
+
+const char* ypar_strerror(int code) {
+    switch (code) {
+    case YPAR_ERR_IO:     return "the OS refused the register access";
+    case YPAR_ERR_CLOSED: return "port not open";
+    case YPAR_ERR_ARG:    return "bad argument";
+    case YPAR_ERR_ASYNC:  return "no async worker";
+    default:              return code >= 0 ? "ok" : "unknown error";
+    }
 }
 
 bool ypar_is_open(const ypar_port* p) {
@@ -714,13 +786,13 @@ static bool ypar__set_sched(ypar_port* p, const ypar_desc* d) {
 
 /* Per-platform data write that sets p->error but takes no data lock. The
  * public ypar_write_data() wraps it with the lock and pending-pulse cancel. */
-static bool ypar__write_data_nolock(ypar_port* p, uint8_t value);
+static int ypar__write_data_nolock(ypar_port* p, uint8_t value);
 
 #ifndef YPAR_NO_THREADS
 /* defined in the async-pulse section below */
 static void ypar__async_stop(ypar_port* p);
 static bool ypar__async_start(ypar_port* p);
-static bool ypar__write_data_cancel(ypar_port* p, uint8_t value);
+static int  ypar__write_data_cancel(ypar_port* p, uint8_t value);
 #endif
 
 /* Shared tail of a successful ypar_open(): start the async worker now, so
@@ -890,20 +962,17 @@ void ypar_close(ypar_port* p) {
     p->is_open = false;
 }
 
-static bool ypar__write_data_nolock(ypar_port* p, uint8_t value) {
-    if (!ypar_is_open(p)) { ypar__set_error(p, "port not open"); return false; }
-    ypar__clear_error(p);
+static int ypar__write_data_nolock(ypar_port* p, uint8_t value) {
+    if (!ypar_is_open(p)) return YPAR__CLOSED(p);
     if (p->direct) {
 #if defined(YPAR__HAVE_IOPORT)
         outb(value, p->base_addr);
-        return true;
+        return 0;
 #endif
     }
-    if (ioctl(p->fd, PPWDATA, &value) != 0) {
-        ypar__set_error(p, "PPWDATA: %s", strerror(errno));
-        return false;
-    }
-    return true;
+    if (ioctl(p->fd, PPWDATA, &value) != 0)
+        return YPAR__FAIL(p, YPAR_ERR_IO, "PPWDATA: %s", strerror(errno));
+    return 0;
 }
 
 #ifndef YPAR_NO_THREADS
@@ -921,9 +990,8 @@ static bool ypar__write_data_raw(ypar_port* p, uint8_t value) {
 }
 #endif
 
-uint8_t ypar_read_data(ypar_port* p) {
-    if (!ypar_is_open(p)) { ypar__set_error(p, "port not open"); return 0; }
-    ypar__clear_error(p);
+int ypar_read_data(ypar_port* p) {
+    if (!ypar_is_open(p)) return YPAR__CLOSED(p);
     if (p->direct) {
 #if defined(YPAR__HAVE_IOPORT)
         return inb(p->base_addr);
@@ -931,32 +999,28 @@ uint8_t ypar_read_data(ypar_port* p) {
     }
     unsigned char v = 0;
     if (ioctl(p->fd, PPRDATA, &v) != 0)
-        ypar__set_error(p, "PPRDATA: %s", strerror(errno));
-    return (uint8_t)v;
+        return YPAR__FAIL(p, YPAR_ERR_IO, "PPRDATA: %s", strerror(errno));
+    return v;
 }
 
-bool ypar_set_data_dir(ypar_port* p, bool input) {
-    if (!ypar_is_open(p)) { ypar__set_error(p, "port not open"); return false; }
-    ypar__clear_error(p);
+int ypar_set_data_dir(ypar_port* p, bool input) {
+    if (!ypar_is_open(p)) return YPAR__CLOSED(p);
     if (p->direct) {
 #if defined(YPAR__HAVE_IOPORT)
         uint8_t c = inb((uint16_t)(p->base_addr + 2));
         c = input ? (c | YPAR_CONTROL_DIR) : (c & (uint8_t)~YPAR_CONTROL_DIR);
         outb(c, (uint16_t)(p->base_addr + 2));
-        return true;
+        return 0;
 #endif
     }
     int dir = input ? 1 : 0; /* PPDATADIR: 0 = forward/out, 1 = reverse/in */
-    if (ioctl(p->fd, PPDATADIR, &dir) != 0) {
-        ypar__set_error(p, "PPDATADIR: %s", strerror(errno));
-        return false;
-    }
-    return true;
+    if (ioctl(p->fd, PPDATADIR, &dir) != 0)
+        return YPAR__FAIL(p, YPAR_ERR_IO, "PPDATADIR: %s", strerror(errno));
+    return 0;
 }
 
-uint8_t ypar_read_status(ypar_port* p) {
-    if (!ypar_is_open(p)) { ypar__set_error(p, "port not open"); return 0; }
-    ypar__clear_error(p);
+int ypar_read_status(ypar_port* p) {
+    if (!ypar_is_open(p)) return YPAR__CLOSED(p);
     if (p->direct) {
 #if defined(YPAR__HAVE_IOPORT)
         return inb((uint16_t)(p->base_addr + 1));
@@ -964,13 +1028,12 @@ uint8_t ypar_read_status(ypar_port* p) {
     }
     unsigned char v = 0;
     if (ioctl(p->fd, PPRSTATUS, &v) != 0)
-        ypar__set_error(p, "PPRSTATUS: %s", strerror(errno));
-    return (uint8_t)v;
+        return YPAR__FAIL(p, YPAR_ERR_IO, "PPRSTATUS: %s", strerror(errno));
+    return v;
 }
 
-uint8_t ypar_read_control(ypar_port* p) {
-    if (!ypar_is_open(p)) { ypar__set_error(p, "port not open"); return 0; }
-    ypar__clear_error(p);
+int ypar_read_control(ypar_port* p) {
+    if (!ypar_is_open(p)) return YPAR__CLOSED(p);
     if (p->direct) {
 #if defined(YPAR__HAVE_IOPORT)
         return inb((uint16_t)(p->base_addr + 2));
@@ -978,24 +1041,21 @@ uint8_t ypar_read_control(ypar_port* p) {
     }
     unsigned char v = 0;
     if (ioctl(p->fd, PPRCONTROL, &v) != 0)
-        ypar__set_error(p, "PPRCONTROL: %s", strerror(errno));
-    return (uint8_t)v;
+        return YPAR__FAIL(p, YPAR_ERR_IO, "PPRCONTROL: %s", strerror(errno));
+    return v;
 }
 
-bool ypar_write_control(ypar_port* p, uint8_t value) {
-    if (!ypar_is_open(p)) { ypar__set_error(p, "port not open"); return false; }
-    ypar__clear_error(p);
+int ypar_write_control(ypar_port* p, uint8_t value) {
+    if (!ypar_is_open(p)) return YPAR__CLOSED(p);
     if (p->direct) {
 #if defined(YPAR__HAVE_IOPORT)
         outb(value, (uint16_t)(p->base_addr + 2));
-        return true;
+        return 0;
 #endif
     }
-    if (ioctl(p->fd, PPWCONTROL, &value) != 0) {
-        ypar__set_error(p, "PPWCONTROL: %s", strerror(errno));
-        return false;
-    }
-    return true;
+    if (ioctl(p->fd, PPWCONTROL, &value) != 0)
+        return YPAR__FAIL(p, YPAR_ERR_IO, "PPWCONTROL: %s", strerror(errno));
+    return 0;
 }
 
 int ypar_list_ports(ypar_port_info* out, int max) {
@@ -1136,11 +1196,10 @@ static uint8_t ypar__in(ypar_port* p, uint16_t addr) {
     return (uint8_t)(((ypar__inp32_t)p->inp_fn)((short)addr) & 0xFF);
 }
 
-static bool ypar__write_data_nolock(ypar_port* p, uint8_t value) {
-    if (!ypar_is_open(p)) { ypar__set_error(p, "port not open"); return false; }
-    ypar__clear_error(p);
+static int ypar__write_data_nolock(ypar_port* p, uint8_t value) {
+    if (!ypar_is_open(p)) return YPAR__CLOSED(p);
     ypar__out(p, p->base_addr, value);
-    return true;
+    return 0;
 }
 
 #ifndef YPAR_NO_THREADS
@@ -1152,38 +1211,33 @@ static bool ypar__write_data_raw(ypar_port* p, uint8_t value) {
 }
 #endif
 
-uint8_t ypar_read_data(ypar_port* p) {
-    if (!ypar_is_open(p)) { ypar__set_error(p, "port not open"); return 0; }
-    ypar__clear_error(p);
+int ypar_read_data(ypar_port* p) {
+    if (!ypar_is_open(p)) return YPAR__CLOSED(p);
     return ypar__in(p, p->base_addr);
 }
 
-bool ypar_set_data_dir(ypar_port* p, bool input) {
-    if (!ypar_is_open(p)) { ypar__set_error(p, "port not open"); return false; }
-    ypar__clear_error(p);
+int ypar_set_data_dir(ypar_port* p, bool input) {
+    if (!ypar_is_open(p)) return YPAR__CLOSED(p);
     uint8_t c = ypar__in(p, (uint16_t)(p->base_addr + 2));
     c = input ? (c | YPAR_CONTROL_DIR) : (c & (uint8_t)~YPAR_CONTROL_DIR);
     ypar__out(p, (uint16_t)(p->base_addr + 2), c);
-    return true;
+    return 0;
 }
 
-uint8_t ypar_read_status(ypar_port* p) {
-    if (!ypar_is_open(p)) { ypar__set_error(p, "port not open"); return 0; }
-    ypar__clear_error(p);
+int ypar_read_status(ypar_port* p) {
+    if (!ypar_is_open(p)) return YPAR__CLOSED(p);
     return ypar__in(p, (uint16_t)(p->base_addr + 1));
 }
 
-uint8_t ypar_read_control(ypar_port* p) {
-    if (!ypar_is_open(p)) { ypar__set_error(p, "port not open"); return 0; }
-    ypar__clear_error(p);
+int ypar_read_control(ypar_port* p) {
+    if (!ypar_is_open(p)) return YPAR__CLOSED(p);
     return ypar__in(p, (uint16_t)(p->base_addr + 2));
 }
 
-bool ypar_write_control(ypar_port* p, uint8_t value) {
-    if (!ypar_is_open(p)) { ypar__set_error(p, "port not open"); return false; }
-    ypar__clear_error(p);
+int ypar_write_control(ypar_port* p, uint8_t value) {
+    if (!ypar_is_open(p)) return YPAR__CLOSED(p);
     ypar__out(p, (uint16_t)(p->base_addr + 2), value);
-    return true;
+    return 0;
 }
 
 int ypar_list_ports(ypar_port_info* out, int max) {
@@ -1371,7 +1425,7 @@ static void ypar__async_stop(ypar_port* p) {
     p->async_policy = YPAR_ASYNC_NONE;
 }
 
-static bool ypar__write_data_cancel(ypar_port* p, uint8_t value) {
+static int ypar__write_data_cancel(ypar_port* p, uint8_t value) {
     ypar__async* a = (ypar__async*)p->async;
     ypar__lock_acquire(&a->lock);
     /* A plain write means "hold these lines"; a pending trailing edge would
@@ -1380,20 +1434,20 @@ static bool ypar__write_data_cancel(ypar_port* p, uint8_t value) {
      * window; the cancel call itself only saves the worker a pointless wake. */
     a->token++;
     (void)yrt_worker_cancel(&a->w);
-    bool ok = ypar__write_data_nolock(p, value);
+    int rc = ypar__write_data_nolock(p, value);
     ypar__lock_release(&a->lock);
-    return ok;
+    return rc;
 }
 
-static bool ypar__async_submit(ypar_port* p, uint8_t value, uint32_t usec) {
+static int ypar__async_submit(ypar_port* p, uint8_t value, int64_t width_ns) {
     ypar__async* a = (ypar__async*)p->async;
     ypar__lock_acquire(&a->lock);
     /* Leading edge under the lock so it cannot be stomped by the trailing
      * edge of an in-flight pulse. */
-    bool ok = ypar__write_data_nolock(p, value);
+    int wrc = ypar__write_data_nolock(p, value);
     /* The width is measured from the onset write, not from entry, so the
      * ioctl round trip is not subtracted from it. */
-    uint64_t off_at = yrt_now_ns() + (uint64_t)usec * 1000ull;
+    int64_t off_at = yrt_now_ns() + width_ns;
     a->token++;
     a->job_token = a->token;
     /* Replaces any pending job, earlier deadline or later, and the worker
@@ -1405,42 +1459,42 @@ static bool ypar__async_submit(ypar_port* p, uint8_t value, uint32_t usec) {
          * the lines must not be left asserted with nothing to clear them. */
         ypar__write_data_raw(p, 0);
         ypar__lock_release(&a->lock);
-        ypar__set_error(p, "async: submit: %s", yrt_strerror(rc));
-        return false;
+        return YPAR__FAIL(p, YPAR_ERR_ASYNC, "async: submit: %s", yrt_strerror(rc));
     }
     ypar__lock_release(&a->lock);
-    return ok;
+    return wrc;
 }
 
-bool ypar_pulse_async(ypar_port* p, uint8_t value, uint32_t usec) {
-    if (!ypar_is_open(p)) { ypar__set_error(p, "port not open"); return false; }
+int ypar_pulse_async(ypar_port* p, uint8_t value, int64_t width_ns) {
+    if (!ypar_is_open(p)) return YPAR__CLOSED(p);
+    if (width_ns < 0) return YPAR__FAIL(p, YPAR_ERR_ARG, "ypar_pulse_async: width_ns < 0");
     if (!p->async) {
         /* ypar_open() normally started the worker; this path only runs if
          * that failed. Write the onset NOW, before paying the worker-thread
          * creation cost, so this trigger's onset is not delayed by thread
          * spin-up (its width will include it). No worker exists yet, so
          * nothing can race this write or stomp it with a trailing edge. */
-        if (!ypar_write_data(p, value)) return false;
+        int rc = ypar_write_data(p, value);
+        if (rc < 0) return rc;
         if (!ypar__async_start(p)) {
             /* Don't leave the data lines asserted with no worker to clear
              * them; use the raw write so ypar__async_start's error survives. */
             ypar__write_data_raw(p, 0);
-            return false;
+            return YPAR_ERR_ASYNC;
         }
     }
     /* Steady state: the leading edge is (re)written inside submit on the
      * caller's thread under the data lock, so onset is not delayed by the
      * worker waking up and the write cannot race the worker's trailing edge.
      * On the first-use path above this re-asserts the same value (no edge). */
-    return ypar__async_submit(p, value, usec);
+    return ypar__async_submit(p, value, width_ns);
 }
 
 #else /* YPAR_NO_THREADS */
 
-bool ypar_pulse_async(ypar_port* p, uint8_t value, uint32_t usec) {
-    (void)value; (void)usec;
-    ypar__set_error(p, "ypar_pulse_async unavailable: built with YPAR_NO_THREADS");
-    return false;
+int ypar_pulse_async(ypar_port* p, uint8_t value, int64_t width_ns) {
+    (void)value; (void)width_ns;
+    return YPAR__FAIL(p, YPAR_ERR_ASYNC, "ypar_pulse_async unavailable: built with YPAR_NO_THREADS");
 }
 
 #endif /* YPAR_NO_THREADS */
@@ -1449,37 +1503,40 @@ bool ypar_pulse_async(ypar_port* p, uint8_t value, uint32_t usec) {
  *  PLATFORM-INDEPENDENT helpers (built on the primitives above)
  * ======================================================================= */
 
-bool ypar_get_status_bit(ypar_port* p, uint8_t mask) {
-    return (ypar_read_status(p) & mask) != 0;
+int ypar_get_status_bit(ypar_port* p, uint8_t mask) {
+    int s = ypar_read_status(p);
+    return s < 0 ? s : (s & mask) != 0;
 }
 
-bool ypar_set_control_bit(ypar_port* p, uint8_t mask, bool on) {
-    uint8_t c = ypar_read_control(p);
-    /* A failed read returns 0 with an error set; writing that back would
-     * clear every control line. */
-    if (!ypar_is_open(p) || p->error[0]) return false;
-    c = on ? (uint8_t)(c | mask) : (uint8_t)(c & (uint8_t)~mask);
-    return ypar_write_control(p, c);
+int ypar_set_control_bit(ypar_port* p, uint8_t mask, bool on) {
+    int c = ypar_read_control(p);
+    /* A failed read must not be written back: 0 would clear every control
+     * line. */
+    if (c < 0) return c;
+    c = on ? (c | mask) : (c & ~(int)mask);
+    return ypar_write_control(p, (uint8_t)c);
 }
 
-bool ypar_write_data(ypar_port* p, uint8_t value) {
+int ypar_write_data(ypar_port* p, uint8_t value) {
 #ifndef YPAR_NO_THREADS
     if (p && p->async) return ypar__write_data_cancel(p, value);
 #endif
     return ypar__write_data_nolock(p, value);
 }
 
-bool ypar_pulse(ypar_port* p, uint8_t value, uint32_t usec) {
-    if (!ypar_write_data(p, value)) return false;
+int ypar_pulse(ypar_port* p, uint8_t value, int64_t width_ns) {
+    if (!ypar_is_open(p)) return YPAR__CLOSED(p);
+    if (width_ns < 0) return YPAR__FAIL(p, YPAR_ERR_ARG, "ypar_pulse: width_ns < 0");
+    int rc = ypar_write_data(p, value);
+    if (rc < 0) return rc;
     /* The deadline is absolute and taken just after the onset write, so the
      * write's own round trip is not added to the width and a signal restart
      * does not stretch it. ysp/rt.h hands the bulk of the wait to the OS and
      * spins the tail; this one runs on the CALLER's thread at the caller's
      * priority, which is why PULSES AND TIMING calls this edge the less
      * precise of the two. */
-    if (usec)
-        (void)yrt_sleep_until(yrt_now_ns() + (int64_t)usec * 1000,
-                                YRT_DEFAULT_SPIN_NS);
+    if (width_ns)
+        (void)yrt_sleep_until(yrt_now_ns() + width_ns, YRT_DEFAULT_SPIN_NS);
     return ypar_write_data(p, 0);
 }
 
