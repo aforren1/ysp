@@ -449,7 +449,7 @@ int main(int argc, char** argv) {
             d.n_triggers = 1;
             d.trigger_fence = fence != 0;
             d.trigger_cpu = trig_cpu;
-            d.trigger_spin_ns = (uint32_t)(trig_spin_us * 1000.0);
+            d.trigger_spin_ns = YRT_US(trig_spin_us);
         }
 #if defined(YSCR__DXGI)
         if (row_method >= 0) yscr__row_clear_max = row_method;
