@@ -7,12 +7,12 @@ headers into graphics, audio, video and the tooling above them. Steps 1 to
 Each header's design note in `docs/` records what was built and measured.
 When a note and this document disagree, the note is newer.
 
-The existing headers and their conventions in [README.md](../README.md)
+The existing headers ([README.md](../README.md)) and their conventions ([conventions.md](conventions.md))
 stay as they are. This document adds to them.
 
 ## 1. Principles
 
-These extend the conventions in the README. Every new header, tool and
+These extend the conventions in conventions.md. Every new header, tool and
 format follows them.
 
 1. **One clock.** Every timestamp in the system is on the `ysp/rt.h`
@@ -36,7 +36,7 @@ format follows them.
    player, or an eject path for the few who need it.
 7. **One external dependency per device header, at most.** Pure
    computation headers depend on nothing. Device headers may depend on
-   one library each, named in a "Needs" column in the README table.
+   one library each, named in the "Needs" line of its entry in status.md.
 8. **Introspectable descriptors.** Every parameter a designer can set is
    a plain value in a `desc` struct, and every new header exports a
    table that enumerates its parameters with type, range, unit and

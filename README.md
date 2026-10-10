@@ -1,366 +1,108 @@
 # ysp
 
-Single-header C libraries for psychophysics and neuroscience rigs, in the
-style of [stb](https://github.com/nothings/stb) and
-[sokol](https://github.com/floooh/sokol). A header needs the OS, the C
-standard library and the ysp headers in its row of
-[Files to copy](#files-to-copy); a few also need an outside library (SDL3,
-miniaudio, liblsl). Every header compiles as C99, C11 or C++17, and in the
-C dialect MSVC compiles by default. Each header carries its own
-documentation in its top comment.
+Single-header, public-domain C libraries for psychophysics and
+neuroscience rigs, in the style of [stb](https://github.com/nothings/stb)
+and [sokol](https://github.com/floooh/sokol). Each header compiles as C99,
+C11 or C++17, and its top comment is its manual.
 
-## Start here
+## Headers
 
-Use this path if you are new to ysp. Each step names its documentation
-type ([Diataxis](https://diataxis.fr/)).
+| Header | Prefix | Purpose | Version | Status |
+|---|---|---|---|---|
+| [rt](docs/rt.md) | `yrt_` | Clock, deadline waits, worker, pump, event ring, clock fit | 0.7.0 | 1 machine |
+| [parallel](include/ysp/parallel.h) | `ypar_` | Parallel port trigger output and line input | 0.3 | no device |
+| [serial](docs/serial.md) | `yser_` | Serial port byte I/O for trigger and response boxes | 0.4 | no device |
+| [trials](docs/trials.md) | `ytr_` | Trial orders, blocks, adaptive tracks, jitter, replay | 0.2.1 | tested |
+| [table](docs/table.md) | `ytb_` | Typed tables and a bounded CSV parser | 0.1.0 | tested |
+| [pack](docs/pack.md) | `ypak_` | Read and verify ysp packs (store-only zip) | 0.1.0 | tested |
+| [json](docs/json.md) | `yjs_` | Strict JSON reader and canonical writer | 0.1.0 | tested |
+| [stair](docs/adapt.md) | `yst_` | Adaptive staircases | 0.1.2 | tested |
+| [quest](docs/adapt.md) | `yqst_` | QUEST+, QUEST, Psi and Psi-marginal on a grid | 0.5.2 | tested |
+| [aep](docs/adapt.md) | `yaep_` | Gaussian-process adaptive estimation (AEPsych features) | 0.14.1 | tested |
+| [timeline](docs/timeline.md) | `ytl_` | Events, tracks and keyframes on the clock | 0.4.0 | tested |
+| [input](docs/input.md) | `yin_` | The input event that every device shares | 0.3.0 | 1 machine |
+| [response](docs/response.md) | `yrsp_` | Trial responses and RT from any input device | 0.2.0 | 1 machine |
+| [box](docs/box.md) | `ybox_` | Response and trigger box protocols, bytes to events | 0.2.0 | no device |
+| [device](docs/device.md) | `ydev_` | Boxes and boards on the rig clock, with outputs | 0.2.1 | no device |
+| [rigfile](docs/device.md#how-to-keep-a-rigs-devices-and-latencies-in-its-rig-profile) | `yrig_` | Rig profile: devices per role, loopback results | 0.2.0 | no device |
+| [net](docs/net.md) | `ynet_` | Lab Streaming Layer markers and streams | 0.1.0 | no device |
+| [color](docs/color.md) | `ycol_` | Display calibration and color space conversions | 0.1.0 | tested |
+| [rdk](docs/rdk.md) | `yrdk_` | Random dot kinematograms, reproducible bit for bit | 0.1.0 | tested |
+| [outline](docs/outline.md) | `yol_` | Paths, font glyphs and SVG into curve sets | 0.2.1 | tested |
+| [screen](docs/screen.md) | `yscr_` | Stimulus window, flip at a time, flip records | 0.5.2 | 1 machine |
+| [audio](docs/audio.md) | `yau_` | Sound at a time on the rig clock | 0.3.1 | 1 machine |
+| [gfx](docs/gfx.md) | `ygfx_` | GL ES 3.0 stimuli: shapes, gratings, gabors, text | 0.11.1 | 1 machine |
+| [video](docs/video.md) | `yvid_` | Movies as stimuli, frame by predicted onset | 0.2.2 | 1 machine |
 
-1. **Tutorial: run your first trial.**
-   [docs/response.md, "Tutorial: a keyboard trial with RT from the flip onset"](docs/response.md#tutorial-a-keyboard-trial-with-rt-from-the-flip-onset).
-   It runs `examples/response/trial_keyboard.c` on the simulated display,
-   then with your keyboard, and explains the code and the data file. Build
-   the examples with SDL3 and ANGLE first (the `msvc-full` preset,
-   [Build](#build)).
-2. **How-to: put the headers in your project.** [Quick start](#quick-start)
-   and [Files to copy](#files-to-copy).
-3. **How-to: choose a trigger path.** [docs/triggers.md](docs/triggers.md).
-4. **How-to guides for one header:** [docs/response.md](docs/response.md)
-   (response boxes, two keyboards, gamepads, RT from a sound),
-   [docs/device.md](docs/device.md) (the photodiode board, trigger codes,
-   codes at the flip, the rig profile), [docs/net.md](docs/net.md) (liblsl,
-   markers, streams), [docs/json.md](docs/json.md).
-5. **Reference:** the top comment of each header (USAGE, build flags, the
-   API).
-6. **Explanation:** `docs/<name>.md`, the design decisions and the
-   measurements of each header.
-7. Before you rely on a timing number, read
-   [Verified on hardware](#verified-on-hardware).
-
-## Libraries
-
-| Header | Prefix | Purpose | Platforms | Needs | Status |
-|---|---|---|---|---|---|
-| [ysp/rt.h](include/ysp/rt.h) | `yrt_`, `YRT_` | The shared base: monotonic clock, deadline waits, thread elevation, a one-shot deadline worker, a background pump for inference between trials, a wait-free event ring for the rig's log, clock correlation, a device clock fit (a box's or a board's own clock mapped to the rig's: lower envelope, bracketed reads or least squares, with unwrap and restart), per-user cache and config folders with ownership checks, and instrumentation macros (nothing, Tracy, or the ring). The transport headers and the async layers of the adaptive headers use it. | Windows, Linux, macOS, WebAssembly (Emscripten, no scheduling ladder) | OS only; Tracy, opt-in | v0.7.0 (per-user folders: `yrt_user_dir()`, the rules of gfx's program cache folder, tested on Windows, WSL2 and emcc). v0.6.0 (the device clock fit: on synthetic devices within tens of us of the truth for dense pairs, ms for sparse pairs behind a 16 ms timer; 17 of 17 mutants caught; no real device yet). v0.5.0: event ring stress-tested with 2 to 8 producers (no torn or lost record unaccounted for), ThreadSanitizer clean; a push costs 11 to 37 ns natively and a TIME_CRITICAL producer's p99.9 stays near 2 us while 7 others push, against 0.1 to 0.5 ms behind a lock; Tracy mode built against Tracy v0.14.1 ([design notes and tables](docs/rt.md)). Pump built and run on Windows, Linux and under node (Emscripten); on MinGW the worker and pump threads inherit the x87 control word so a thread computes the same bits as the caller, ThreadSanitizer clean including a wait-versus-stop hammer; the deadline worker as before: Windows measured with [rt_jitter](examples/rt/jitter.c); Linux built and run under WSL2, worker clean under ThreadSanitizer; CI compiles the macOS backend, which has not run on a Mac. No test host grants CAP_SYS_NICE, so the SCHED_FIFO and Mach time-constraint rungs are unexercised. |
-| [ysp/parallel.h](include/ysp/parallel.h) | `ypar_`, `YPAR_` | Parallel port (LPT) trigger output and line input, blocking and async pulses. | Windows, Linux | ysp/rt.h; InpOut driver on Windows | v0.3, on ysp/rt.h. Linux tested; Windows backend compiled but not run on hardware. |
-| [ysp/serial.h](include/ysp/serial.h) | `yser_`, `YSER_` | Serial port (RS-232, USB-serial, USB-CDC) byte I/O for trigger and response boxes, blocking and async pulses. | Windows, Linux, macOS | ysp/rt.h | v0.4, on ysp/rt.h. Linux tested against a virtual port pair; the Windows and macOS backends compile in CI but have never run on a device. [Design notes](docs/serial.md). |
-| [ysp/trials.h](include/ysp/trials.h) | `ytr_`, `YTR_` | Trial sequencing above the adaptive methods: conditions and repetitions (constant stimuli), sequential, random and constrained-random orders, interleaved adaptive tracks, blocks, practice and catch trials, re-queues, tallies, a replayable history. From v0.2: conditions files and trial lists as tables, order lists, draws with replacement, subsets, blocked and alternating groups in Latin-square order, units ("b always follows a"), exact first-order transition balance, Latin and Williams squares by participant, and a rules text with one statement per C call. From v0.2.1: jitter, a duration per trial (uniform, a list, or a non-aging truncated exponential, optionally whole frames) drawn in a fixed order, logged and replayed. No heap, no I/O. | any | ysp/table.h | v0.2.1. The hashes of 600 v0.1.1 and 320 v0.2.0 sessions match on gcc, MSVC and Linux; jitter distributions checked against their CDFs, the draws integer-only with golden digests that match under every compiler and flag set tried (-Ofast and /fp:fast included), and the snapped exponential's hazard measured; each v0.2 order checked by chi-square against its stated distribution, units and balance uniform over every valid order of small designs; 22.9 million fuzz inputs and 47 of 47 mutations caught; gcc and MSVC, sanitizer clean. Sequential order identical to PsychoPy's TrialHandler and the random orders' block properties matched over 100 seeds ([tests/compare/](tests/compare/)). open() of a 10,000-trial design 0.02 to 7 ms. [Design notes](docs/trials.md). |
-| [ysp/table.h](include/ysp/table.h) | `ytb_`, `YTB_` | Typed tables as one position-independent, hashed block: an RFC 4180 CSV parser with hard bounds (32767 rows, 64 columns, 4096-byte fields), errors that name the line, row and column, int32, number and string columns with levels, and a correctly rounded number syntax no locale can change. The pack stores the same block, and a view checks it in place. No heap; file I/O only with `YTB_STDIO`. | any | nothing | v0.1.0. Numbers equal to strtod bit for bit on 10 million strings per compiler; every single-bit flip of a block refused; 5.9 million fuzz inputs; 24 of 25 mutations caught, the other equivalent. Parse 97 to 218 MB/s. [Design notes](docs/table.md). |
-| [ysp/pack.h](include/ysp/pack.h) | `ypak_`, `YPAK_` | Reads a ysp pack (a store-only zip, entries aligned to 4096, a JSON manifest, XXH64 over 1 MiB chunks, the pack ID in the comment): from a mapped file, memory, a range reader, or bytes a browser fetched; lookups by name, zero-copy entries verified on first use, cursors that verify each chunk as it streams; views of the pack's own forms (curve sets, artwork, glyph runs, shaders, textures with QOI). Hostile input is checked before any pointer leaves it. The pack tool (`pack/ysp/pack_tool.h`, the `ypak` CLI; `YSP_BUILD_PACK`) builds, verifies, rebuilds and appends packs; it needs only lodepng, and glyph runs also need the layout library (`YSP_BUILD_LAYOUT`, HarfBuzz and Skribidi) | Windows, Linux, WebAssembly; macOS not run | OS file mapping (`YPAK_NO_FILE`: nothing) | v0.1.0. Every bit flip and truncation of a test pack refused; 29 rule faults refused for their own reason; a virtual 4.3 GB entry and 65,537 entries (zip64); ASan and UBSan clean on Linux; 36 of 36 mutations caught; 28.7 million fuzz inputs, no finding. Open 0.2 ms at 100 entries, 15 ms at 10,000; lookup 0.06 to 0.14 us; verification 3.4 to 3.6 GB/s on a 1 GiB pack; 0 allocations after open. The tool gives the same bytes from MSVC, MinGW, emcc and Linux gcc builds; six zip readers read its packs. Tool v0.2.0 (2026-10-09): a TEXTURE entry stores the encoding `ygfx_texture()` takes, and sRGB codes in RGB need `"primaries"` in the description. Tool v0.3.0 (2026-10-10): the core tool, without the layout library, packs tables, WAV, textures and every other kind but glyph runs to the same bytes as the full tool (MSVC `ypak.exe` 0.45 MB against 1.85 MB). [Design notes](docs/pack.md). |
-| [ysp/json.h](include/ysp/json.h) | `yjs_`, `YJS_` | The strict JSON reader and canonical writer of the repository (RFC 8259 and nothing more: no comments, trailing commas, duplicate keys, invalid UTF-8 or lone surrogates), with a depth and a size limit and errors that give the line and column. Numbers keep their text, with exact int64 and fixed-point accessors (seconds read as nanoseconds) and a correctly rounded, locale-free double. Objects are sorted once, so lookups are binary searches and the writer needs no sort; values live in the caller's memory or one heap arena. The pack tool and ysp/rigfile.h read through it. | any | nothing | v0.1.0. 470 checks pass on MSVC, MinGW and WSL2 gcc (and ASan with UBSan); doubles equal to strtod bit for bit on 200,000 strings; the pack tool on it gives byte-identical packs; 14.2 million fuzz inputs, no finding; 28 of 28 mutations caught. Parse 351 to 604 MB/s, a typical profile in 4 to 5 us. [Design notes](docs/json.md). |
-| [ysp/stair.h](include/ysp/stair.h) | `yst_`, `YST_` | Adaptive staircases: transformed and weighted up/down, accelerated stochastic approximation. No heap, no threads. | any | nothing | v0.1.2. Hand-derived tracks and a simulated observer in [tests/adapt/](tests/adapt/); gcc and MSVC, sanitizer clean; replays PsychoPy's StairHandler and Palamedes' PAL_AMUD trial for trial ([tests/compare/](tests/compare/)). [Design notes](docs/adapt.md), [comparison of the methods](docs/adapt_comparison.md). |
-| [ysp/quest.h](include/ysp/quest.h) | `yqst_`, `YQST_` | QUEST+ on a grid, with QUEST, Psi and Psi-marginal as configurations; built-in psychometric functions, per-cell and batch callbacks for custom models (quick CSF); optional async layer on ysp/rt.h. | any | nothing; ysp/rt.h for the async layer | v0.5.2. Snapshots the size of the posterior, byte-identical between gcc and MSVC; 14770 checks against an independent reference; a Psi-marginal selection in about 1 ms; gcc and MSVC, sanitizer and ThreadSanitizer clean; identical selections to questplus on 180 of 180 trials, to Watson's own QUEST+ notebook on all 17 of its saved runs, to mQUESTPlus on 424 of 424 (ties included) and to Palamedes' PAL_AMPM ([tests/compare/](tests/compare/)). [Design notes](docs/adapt.md), [comparison of the methods](docs/adapt_comparison.md). |
-| [ysp/aep.h](include/ysp/aep.h) | `yaep_`, `YAEP_` | Gaussian-process adaptive estimation (the AEPsych feature set and Keeley et al.'s psychometric model): Laplace GP with binary, ordinal, categorical, pairwise or continuous outcomes, RBF and semiparametric kernels, a two-latent threshold-and-slope model, integer and categorical dimensions, look-ahead level-set and global acquisitions on a candidate set, priors on the hyperparameters; optional async layer on ysp/rt.h. | any | nothing; ysp/rt.h for the async layer | v0.14.1. Two-latent psychometric model, optimization and pairwise acquisitions, mixed parameters, monotonic projection, conjugate-gradient updates past 512 trials and, opt-in, in the fits; runtime priors; snapshots. Numerics checked against dense references; the Owen et al. 2021 audiometric benchmark reproduced by [aep_audiometric](examples/aep/audiometric.c) and run beside AEPsych on one response stream, where it matches or beats AEPsych's threshold error with EAVC and BALV and halves its field error ([tests/compare/](tests/compare/)); gcc and MSVC, sanitizer clean. [Design notes](docs/adapt.md), [comparison of the methods](docs/adapt_comparison.md). |
-| [ysp/timeline.h](include/ysp/timeline.h) | `ytl_`, `YTL_` | Events and tracks on the clock: onsets, offsets, value changes, triggers and annotations on a trial, movie or RT time base; float channels driven by keyframes with easing (Bezier included), by sampled trajectories (a 10-minute sum-of-sines target in 288 KB), by repeating tracks (flicker) or by tweens; and one call per frame that takes the frame's predicted onset, fills the channel values and reports which events landed on the frame and their residuals. Rewind, late events, a seek that skips what it passes over instead of firing it late, a pure look-ahead of the events due in an RT window (for sound), exact rational base rates (slow motion for a movie base), the frame window as a query, a record of where every event landed. A sequence builder that reads like a GSAP timeline, and the same trial as a table of ops, checked all or none. No heap, no I/O, no clock. | any | nothing | v0.4.0. A test written from the manual alone (skip, peek, rates and sequences by the implementer), with its own model and 32 random model runs; rates against an exact 128-bit reference, sequences against hand-built tracks over 600 random tables; 21 of 24 rate and 19 of 19 sequence mutations of the header caught (3 cannot change a result); gcc, MinGW, MSVC, sanitizer clean; evaluate under 1.6 us p99 on a two-hour movie with 10,000 annotations. [Design notes](docs/timeline.md). |
-| [ysp/input.h](include/ysp/input.h) | `yin_`, `YIN_` | The input event every device shares: one 48-byte record (time on the ysp_rt clock, kind, device, control, type, value) for keyboards, mice, touch, pens, gamepads, response boxes, eye trackers and sync inputs (scanner pulses, photodiode edges), with a per-event uncertainty and the device clock's raw ticks, the source's timing tier and bounds, and inline adapters from SDL3 events and ysp/screen.h's raw mice. Producers and consumers depend on it alone. No implementation, nothing to link. | any | nothing | v0.3.0 (the SYNC kind, `unc_us`, `ticks`, eye controls; size and offsets unchanged). v0.2.0: the raw mouse report moved in. Split out of ysp/response.h; layout and constants pinned by its test; gcc, MinGW, MSVC. [Design notes](docs/input.md). |
-| [ysp/response.h](include/ysp/response.h) | `yrsp_`, `YRSP_` | The response of a trial from any input device: a device-neutral event (keyboard, mouse, touch, pen, gamepad, response box, eye tracker) with its timing quality; choices by physical key (key names resolve to US-layout positions), keycode, ALL or NONE, and threshold crossings on analog channels (a trigger, pen pressure, movement onset); a window bound to the stimulus's flip onset or a sound's onset, refined when the flip record arrives; minimum RT (anticipations logged, not dropped), deadline, first-response or several responses, key release and hold duration, jsPsych's allow_held_key; a trace buffer; a result with RT in seconds beside the onset's tier and residual and the response stamp's tier. An SDL3 adapter; SDL 3.4's second key reports are dropped by ysp/screen.h's input bridge. No heap, no I/O, no clock. Keyboards and, with ysp/screen.h's raw mice, mice are told apart by device (two participants); a per-participant cursor with a stated gain. | any | ysp/input.h | v0.2.0 (a trim: the second-report rule moved to ysp/screen.h v0.4.1's input bridge, so every consumer gets it; the CSV row and `settle` removed). v0.1.4: ALL mode excludes SYNC events. v0.1.3: the event moved to ysp/input.h. Every rule checked on synthetic streams (20,576 checks, 20,000 random streams); 43 of 43 mutations caught; gcc, MinGW, MSVC. `examples/response/` has ten trials as small experiments (keyboard, same-different, serial RT, adjustment, mouse tracking, audio-keyboard, stop-signal, two keyboards, a 2AFC staircase and QUEST+, Stroop), each with a self-checking `--sim` run; what they show about the header is in the design notes. Not measured: a key pressed by hand, mouse, touch, pen and gamepad timing. [Tutorial, how-to guides and design notes](docs/response.md). |
-| [ysp/box.h](include/ysp/box.h) | `ybox_`, `YBOX_` | Box protocols, pure: bytes in, ysp/input.h events and device-clock pairs out, and the bytes of timer and identity queries and of output codes. Cedrus XID (key frames, StimTracker 2 frames, the `_e5` timer answer; `mp` and `mh` outputs), the ysp line protocol v1 (text lines from a microcontroller board: syncs, edges, samples, query answers, identity, output reports; `o` and `p` outputs), the 6-byte photodiode frame, and the trigger interfaces that take one byte (Brain Products TriggerBox, BioSemi USB trigger interface, Neurospec MMBT-S, the parallel port) and a serial port's DTR and RTS lines. No I/O, no clock, no heap. | Windows, Linux, macOS | ysp/input.h | v0.2.0 (outputs: encoders and capabilities for eight families, each byte pinned to the vendor's documentation, pyxid2 or an open-source driver; StimTracker 2 frames). Decoders checked on generated streams split at every byte, with garbage, broken frames and full outputs, and on random bytes; encoders checked byte for byte; 24 of 24 mutants caught. No byte from or to a vendor device yet. [Design notes](docs/box.md). |
-| [ysp/device.h](include/ysp/device.h) | `ydev_`, `YDEV_` | A response box, a trigger interface or a microcontroller board on the ysp_rt clock: one instance per device with its own reader thread (or manual polling), a ysp/box.h decoder and encoders, a ysp/rt.h clock fit fed by timer queries (bracketed pairs), match keys that find the device again after a replug, identify, LOST and reconnect with the fit restarted and the gap logged, records in a ysp/rt.h ring. Outputs: `ydev_out_set`, `_pulse`, `_mark`, each write a record with the times before and after it; pulses timed by the device (XID, line boards, the fixed 8 ms of BioSemi and MMBT-S) or by the instance's own worker; the callback for a ysp/screen.h trigger channel; roles by index. The sink is the caller's: ysp/screen.h's input bridge in the example. | Windows, Linux, macOS | ysp/rt.h, ysp/input.h, ysp/box.h, ysp/serial.h; ysp/parallel.h for the parallel port | v0.2.1 (builds with YRT_NO_THREADS again; host-timed pulses end in ydev_poll() there). v0.2.0 (outputs, the trigger channel, roles). On a fake transport, Windows, MSVC, under the timing guard: a 2 ms host-timed pulse +0.7 to +1.3 us wide at p50, +3.3 to +13.4 us at p99, max +16 to +454 us (3 runs of 300); a pulse call 5.3 to 8.7 us at p50. The serial transport's outputs over a socat pty pair (20 of 20 reported back). The loopback tool on a simulated adapter and board agrees with the model's truth within the input's own uncertainty. v0.1.0: simulated inputs within +5 to +15 us of truth (line board) and -1.0 to +0.9 ms (XID behind a 16 ms timer). TSan, ASan and UBSan clean; 24 of 25 mutants caught, 1 equivalent. No real device opened yet. [Design notes](docs/device.md). |
-| [ysp/rigfile.h](include/ysp/rigfile.h) | `yrig_`, `YRIG_` | The rig profile ("ysp-rig 1", docs/devices_spec.md 11.2): which device plays each role and what the rig's loopbacks measured, in the user's config folder (refused when other users can write it). Load with errors that name the field, a SHA-256 check of each loopback and calibration file it names (a missing or changed file gives that role tier UNKNOWN, with a note), canonical bytes and their hash for the data file header, a role's desc and start on ysp/device.h, a binding (also of a Lab Streaming Layer stream, family `lsl`, for ysp/net.h), a stored loopback result. | Windows, Linux; macOS not run | ysp/device.h, ysp/json.h | v0.2.0. 403 checks pass on MSVC and MinGW, 410 on WSL2 gcc with the planted-folder checks; canonical bytes pinned; 66 refusals by field, 7 more for `lsl` roles; binding through a fake transport; 28 of 28 mutations caught. A 4-role profile read and checked in 18 to 23 us. [Design notes](docs/device.md#how-to-keep-a-rigs-devices-and-latencies-in-its-rig-profile). |
-| [ysp/net.h](include/ysp/net.h) | `ynet_`, `YNET_` | Lab Streaming Layer on the ysp_rt clock, with liblsl (MIT) loaded at run time: marker outlets (string or int32, stamped now or with any ysp_rt time, and a ysp/screen.h trigger channel that sends one at the flip), numeric outlets, and inlets that find a stream by its match key, pull it on their own thread, map the sender's stamps to ysp_rt (a fit of the LSL clock and a fit of liblsl's time corrections), and give markers and threshold crossings as ysp/input.h events and every numeric sample to a stream ring with a newest-sample slot; LOST, reconnect and gaps in the log, as ysp/device.h. The LabStreamer binds as three roles (docs/net.md). | Windows, Linux; macOS not run | ysp/rt.h, ysp/input.h; liblsl at run time | v0.1.0. 340 checks on MSVC and MinGW against a fake liblsl, also under ASan, UBSan and ThreadSanitizer on WSL2; 16 of 16 mutations caught (one control). Against the real liblsl 1.17.5 on WSL2: marker call to sink p50 140 to 194 us, p99 0.4 to 0.8 ms; mapped time within -31 to +52 us of the push; 10 kHz x 4 channels with no drops and no gaps at 44 to 94 ns of reader time a sample. The same on Windows with liblsl 1.17.7 (`tools/vendor_lsl.py`, hash-checked; CI runs the loopback on Windows and Linux): marker p50 89 to 121 us, mapping within -39 to +68 us, 16 to 51 ns a sample. No LabStreamer was attached. [Design notes](docs/net.md). |
-| [ysp/color.h](include/ysp/color.h) | `ycol_`, `YCOL_` | Color on a calibrated display: the display calibration (photometer readings and spectra in, a lookup table and the matrices into CIE 1931 XYZ and Stockman-Sharpe 2 or 10 degree cone space out, the canonical .yspcal file), a conversion context, values tagged with their space, and conversions both ways between linear device RGB, device codes, XYZ, xyY, CIELAB, CIELUV, Oklab, OkLCh, sRGB, Display P3, Rec. 2020, LMS, cone contrast, DKL (spherical and Cartesian) and MacLeod-Boynton. A conversion the calibration cannot support is refused with the reason; a color outside the gamut comes back unclipped with its distance. Gamut questions (the largest contrast along a direction, the boundary in a plane), gamut mapping by a stated method, and a participant's luminance from flicker photometry for the DKL isoluminant plane. No heap, no I/O. | any | nothing | v0.1.0. The calibration is ysp/gfx.h v0.4's, bit for bit (52 calibrations, 2100 raw calls, PAINT's and VIDEO's matrices); conversions within 1e-12 of colour-science 0.4.7 (OkLCh hue of near-grays 3.3e-10); round trips through every space within 1.4e-13; Psychtoolbox's ComputeDKL_M within 6.2e-16, LMSToMacBoyn 1.2e-7, SensorToPrimary 1.5e-8 with the same out-of-gamut flags, MaximizeGamutContrast 7.3e-16 (MATLAB R2023a); 32 of 32 mutations caught; MSVC, MinGW, gcc with ASan and UBSan. A DKL direction 22 to 27 ns a call (MSVC), an OkLCh gamut ring of 360 hues 0.8 to 1.0 ms. No number is a measurement of light. [Design notes](docs/color.md). |
-| [ysp/rdk.h](include/ysp/rdk.h) | `yrdk_`, `YRDK_` | Random dot kinematograms: coherence, direction, speed, density, dot lifetime, the noise rule (random position, random walk, random direction: Scase, Braddick and Raymond 1996) and the signal rule (same, different, least recent), the presets of Pilly and Seitz 2009 (white noise, Movshon/Newsome with 3 interleaved sets, limited lifetime, Brownian); circular or rectangular apertures with a wrap that keeps the density uniform (a dot moves modulo its own chord); motion by the predicted onset of each frame or by a fixed step per frame; transparent motion as two fields. The state is integers and every draw is Philox4x32-10 of (seed, stream, dot, update, slot), so a trial regenerates bit for bit on any platform and the noise is frozen across coherence levels. Output into ysp/gfx.h's dot buffers or straight into its instance records (gabor arrays). No I/O; one allocation at open, or none. | any | nothing | v0.1.0. Statistical tests: the realized coherence from the dots' displacements, density by chi-square in equal-area cells and along the edge (36 configurations), lifetimes, displacement against speed x elapsed time with dropped frames, the noise rules' distributions, frozen noise; 8 golden digests reproduced by an independent Python model and by MSVC, MinGW, gcc (-Ofast too, ASan, UBSan); 26 of 26 non-equivalent mutations caught. 10,000 dots: 102 to 443 us of CPU a frame by rule; with ysp/gfx.h 0.3 ms of CPU and 0.32 to 0.38 ms of GPU. The Python binding `ysp.rdk` replays a C-logged trial into equal NumPy arrays bit for bit. [Design notes](docs/rdk.md). |
-| [ysp/outline.h](include/ysp/outline.h) | `yol_`, `YOL_` | The outline builder, the CPU side of text and artwork: paths of quadratic Bezier curves from C calls (move, line, quadratic, cubic, SVG arcs, rectangles, ellipses, transforms, nonzero and even-odd), glyph outlines from a bounds-checked TrueType and CFF (CID-keyed included) reader for fonts from untrusted packs, an SVG subset reader (paths, basic shapes, transforms, solid fills and strokes; everything else refused by name), overlap removal (winding 0 or 1, every vertex shared), strokes expanded to fills with Nehab's evolute elements so curves tighter than the half width do not fold (round, miter, bevel; butt, round, square; faux bold and inset), exact box-filter alpha per pixel in double, and curve sets for ysp/gfx.h's Slug runs (format v1, the RESOLVED flag). No heap after warm-up, or a fixed arena; no I/O. | any | nothing | v0.2.1. TrueType glyphs placed as HarfBuzz places them: every glyph of Arial and Times New Roman equal to HarfBuzz 14.6.0's outline, and the curve sets equal word for word. Curve sets equal the format's test vector and pass ysp/gfx.h's own check and winding; resolve within 2e-13 and exact alpha within 1.8e-13 of an adaptive Gauss-Kronrod reference; strokes 0 wrong of 1254027 pixel centers on 400 random curves (half bands alone: 186 wrong on 30); 30000 mutated fonts and 20000 mutated SVG files without a crash, also under ASan and UBSan; every glyph of seven Windows fonts builds; 64 of 67 mutants killed, 3 equivalent. A whole Microsoft YaHei into a set 1.7 to 1.9 s; exact alpha for 3000 CJK glyphs at 32 px 0.37 to 0.40 s; a CJK stroke 0.73 to 0.80 ms. Missed: a Latin stroke 289 to 303 us against a 200 us bar, and a CFF CJK set 94 to 103 us a glyph against 66. [Design notes](docs/outline.md). |
-| [ysp/screen.h](include/ysp/screen.h) | `yscr_`, `YSCR_` | The stimulus display: window, GL ES 3.0 context, display modes and the swap path, with flip at a time. Each frame gets the predicted onset of its flip for the timeline, presents for a target time on the ysp/rt.h clock, and gets a record of the vblank it was shown on, the drops, the composition path and where its time went, in ysp/rt.h's event ring. Also the mode whose refresh is a multiple of a video's rate, a photodiode patch, input restamping and several displays. | Windows 10 and 11 (DXGI flip through ANGLE), Windows 11 x64 (the composition swapchain, present at a target time); Linux and macOS: the simulated display only | ysp/rt.h, ysp/input.h, SDL3; ANGLE at run time on Windows | v0.5.2: `desc.on_context`, a hook that `yscr_open()` calls once when the GL context exists, before the warm-up and settling, so work on other threads overlaps them (ysp/gfx.h's `ygfx_open_start()`); its time is added to the settle cap and shown in the describe line. On the Iris Xe with a cold program cache, gfx was ready 2.57 s after the `yscr_open()` call in a window (4.79 to 4.83 s before) and 2.46 to 2.47 s fullscreen (2.87 to 2.91 s) on AC, 3.41 s (5.37 to 5.40 s) and 3.46 to 3.47 s (3.85 to 3.89 s) on battery; settling took the same time and presents with and without the compiles, and all 260 opens settled. 7 of 7 new mutations caught. v0.5.1: `desc.foreground`: AUTO forces the raise fullscreen (SDL's force hint) and honors the OS policy in a window, or HONOR or FORCE; the describe line, the settle record and `yscr_settle_check()` say granted, forced or refused. Started from the background, the OS refused 20 of 21 opens: settling passed, but the keys went to another program; forced, 25 of 25 got it, and close() gave it back to the window that had it in 15 of 15 (without that, a third program got it in 9 of 9). Fixed: on the composition swapchain the first frame after 67 ms or more without a present showed a vblank late (72 of 72; DXGI flip 0 of 54); a thread now waits on the display's vblank event: 0 of 36. With it and the next fix, the first frame after a 2.2 s program compile dropped in 0 of 8 runs (21 of 22 before). Fixed: `yscr_open()` returned with the just-presented back buffer bound, so `ygfx_prime()` before the first frame hung (gfx_hello, gfx_trial). 7 of 7 new mutations caught. v0.5.0: `yscr_open()` settles the display, as Psychtoolbox's sync tests do: black frames until an OS vblank time, 6 clean flips in a row on one path and depth, the last 20 vblank intervals within 50 us SD and 10 us of the mode's period, and 2.5 s in a window; capped at 3 s (4 s in a window). At the cap a fullscreen open fails and names the condition, a window opens with a warning; `desc.settle` and the `YSP_SETTLE` variable change it, and every outcome is in the describe line, a ring record and `yscr_settle_check()`. On the Iris Xe, 100 opens with the window in front: open took 0.56 to 0.67 s fullscreen (median; at most 0.85 s) and 2.5 s in a window, and no early, late, estimated or off-grid record and no path or depth change came after it (v0.4.4: 96 bad records in 20 DXGI flip window opens, 8 to 12 path and depth changes per composition-swapchain window open). A fullscreen window covered at open (a program started from the background) now fails the open. Fixed: a stale second statistic flapped the path and depth of composition-swapchain windows. 20 of 20 new mutations caught. v0.4.4: the depth (vblanks from a present to its flip) comes from the path, never from misses: measured at open, the new path's at each path change, lowered on DXGI flip by a flip that showed early; `desc.depth` pins it, and `desc.depth_learn` keeps the old miss-driven rule as an opt-in (with steady GPU work near a period it dropped 1 to 6 frames in 600 where the default dropped 3 to 57). Each change is a ring record and counted in the describe line. On the v0.4.3 stress runs no frame showed early after heavy frames (3 per run before). AUTO now picks the composition swapchain where it opens with independent flip, else DXGI flip: in 10-minute runs it matched DXGI flip at p99 (1.92 against 1.88 us fullscreen, 1.82 against 1.78 us in a window) and in drops, with no early flip; its present call costs twice as much. Fixed: a window that got no OS time at open kept a guessed grid (every record tier 3, a false sync-guard alarm). 20 of 20 new mutations caught. v0.4.3: fixed held frames shown a vblank early on DXGI flip (26 to 72 of 1200 held frames in fullscreen, idle, in every version since v0.2.0; about 145 more flagged EARLY that were on time). A scanout probe (D3DKMTGetScanLine) showed the vblanks steady while DXGI's count lost about 1 vblank in 25 and 15% of its times were up to half a period off; the grid followed those times and woke the next hold early. Now a flip's vblank is the grid's nearest to the OS's time and only times on the grid move it: 0 early in 1200 held frames, 3 of 3600 under load, misses and holds (from the depth rule). 9 of 9 new mutations caught. v0.4.2: a sync guard for a driver setting that forces vsync off: when 32 of 64 flips came two in one refresh, flipped with no vblank wait, or tore, or presents outran the refreshes, the screen is untimed (tier 3, `YSCR_FLIP_UNSYNCED`, a ring record, and `yscr_sync_check()` with a message that names the AMD, NVIDIA, Intel and Mesa settings). A scripted forced-off driver fires it four ways; legitimate paths give no evidence in the core test, and on the Iris Xe at most 3 of 64 flips under load, misses and held frames. Whether a driver panel overrides `Present(1)` is not measured (a hand test). `screen_sync_check`, PTB's PerceptualVBLSyncTest. Fixed: a second key report's key-up was taken by another keyboard's held key. 16 of 16 new mutations caught. v0.4.1: `yscr_event_input()` drops SDL 3.4's second key reports (a key-down within 50 ms of the last of that key, and its key-up), counted and logged, for every consumer of the bridge (was ysp/response.h's rule only); `desc.key_dedup_ns` sets the window or turns it off; 15 of 15 new mutations caught. v0.4.0: an input bridge: any thread pushes ysp/input.h events, each announced by an SDL event, so one `yscr_poll()` loop sees keys, mice, raw mice, boxes and eye trackers in arrival order, and `yscr_event_input()` decodes any input event; requires ysp/input.h. v0.3.5: `desc.raw_mice` (opt-in, Windows) reads every mouse's Raw Input on a thread: per-device clicks, wheel and unaccelerated movement, stamped when read; a guard renews the registration after SDL's relative mode (per-device separation verified with injected input only). v0.3.4: input devices (keyboards, mice, touch, gamepads, pens) logged to the ring with id and name at open and on hot-plug. v0.3.3: `desc.gamepads` (opt-in) starts SDL's gamepad subsystem and opens each gamepad; `caps.raw_keyboard` says whether keys come on the raw path. Measured: SDL 3.4's second key report comes only for keys without a scan code (virtual-key injection); scan-code injection gave one report per press, so reports of one abort press now merge within 50 ms (was 30). v0.3.2: `yscr_text_input()` turns SDL text input on for a text box and off again, with a ring record per change and a flag on every flip planned meanwhile, because keys then leave the raw timed path; off at open, as before. v0.3.1: Shift+Esc (not Esc alone), a close request, Alt+F4 or a request from any thread makes begin() report an abort once; the caller decides how to stop. An opt-in panic watchdog: Shift+Esc 3 times while the frame loop reports nothing puts back the gamma ramp and ends a hung program (28 to 85 ms after the third press here). A window icon (Escher's impossible cube). A D3D11 device with video support and multithread protection for ysp/video.h, at no measured cost per frame. v0.3.0. Flip hooks: exact device codes in the frame (VPixx Pixel Mode and pixel sync presets, self-tested and read back), triggers at the planned onset on a deadline worker that move when a flip will be late, and an after-flip callback. Software timestamps only, on one Windows 11 laptop at 60 Hz (Iris Xe, Electron's ANGLE 2.1.23876). Fullscreen on a quiet machine, 1 minute each: onset within 2.33 us of the prediction at p99 on DXGI flip and 2.36 us on the composition swapchain, no drop, every frame on the first vblank after the present call (15.96 and 15.63 ms p50 to scanout start). In a window kept on top, the composition swapchain stayed on independent flip while DXGI flip moved between the overlay and the composed path: 2.1 to 2.5 us p99 against 4.5 to 5.4 us, and 0 to 24 drops per minute against 27 to 67 (runs made before the v0.2 depth rule and early-flip fix). Every injected overrun flagged. Each flip carries a timing tier; a composed onset on the composition swapchain is the compositor's plan (tier 3). No photodiode has run the loopback test. A core test with a scripted swap path on a virtual clock (no SDL, no display) on MSVC, MinGW, gcc and clang, sanitizer clean, 43 mutations of the header caught. [Design notes](docs/screen.md). |
-| [ysp/audio.h](include/ysp/audio.h) | `yau_`, `YAU_` | Sound at a time on the ysp/rt.h clock: `yau_play_at(buf, t)` plans the first sample on the device frame t falls on, through a fit of the device clock against the ysp_rt clock, and records where it landed (stream frame, its time from that fit, residual, tier) in the handle and in the event ring. The time is the fit's, confirmed by position reports, never observed: tier 2 at best. A strict open that refuses any rate, channel or format conversion; cancel, stop and gain at a time; loops, routing, clipping flags; tones, noise and clicks at the project rate; the OS's latency claim, kept out of every onset; the Audio device and Audio source extension interfaces. Never resamples, never inserts frames. | Windows (WASAPI shared; exclusive runs but this laptop's driver buffers about 100 ms); CoreAudio, ALSA, PulseAudio and Web Audio compiled through miniaudio, never run | ysp/rt.h, miniaudio 0.11.25 | v0.3.1: an underrun of about a period, which halts the WASAPI position short of the frames written, is now found from reports that stay late against the fit: an XRUN record with the halt's length, the fit restarted, the sounds it moved flagged XRUN, tier 3. 126 of 126 injected halts found (stalls of 5 to 30 ms at queues 1 and 2), none for the 84 stalls ridden out, 0 false records in 26 minutes of the long runs. 20 of 20 mutations caught. v0.3.0: the WASAPI shared queue (`desc.queue`, default 2 periods): shortest safe lead 50 ms before, 40 ms at the default, 30 ms at 1, with 0 underruns in 10 minutes idle and 3 minutes under load at each and residuals within tens of microseconds, tier 2; the endpoint offers 10 ms periods only, so not under 10 ms here. Each period saved is a period less margin against a stalled callback; queue 1 stays opt-in for that margin. Exclusive mode with one period per buffer: no underruns, onsets on the plan, 125 ms lead. 11 of 11 mutations caught. v0.2.1: `yau_wav_probe()`, the WAV parse without a device, for the pack tool (4 of 4 mutations caught). v0.1.0. Software timestamps only, on one Windows 11 laptop, Realtek speakers, WASAPI shared at 48 kHz: 0 underruns in 10 minutes idle and 3 minutes under load; every burst at its planned frame in WASAPI's own loopback capture (700 of 700 idle, 500 of 500 under load); onset time against the capture 67 us p99 from its median idle (one frame, 20.8 us, was the bar: missed) and 20 us under load in one run, so tier 2 with those conditions; 18.7 us per callback with 32 voices; no heap call after open. No loopback cable: the delay to sound is unmeasured. A core test with a scripted device on a virtual clock on MSVC, MinGW, gcc and emcc, sanitizer and ThreadSanitizer clean, fifteen mutations caught. [Design notes](docs/audio.md). |
-| [ysp/gfx.h](include/ysp/gfx.h) | `ygfx_`, `YGFX_` | Stimuli on GL ES 3.0 over ysp/screen.h: signed-distance shapes with a stated edge profile (hard, raised cosine, Gaussian), gratings, gabors, dot fields, image textures and sprites with tint, and hash noise, drawn in linear light into a float scene, then one output stage (a lookup table per channel, ordered or noise dithering, 8-bit codes). Strokes on every shape (inside, centered or outside; round or mitered joins), shapes from signed-distance textures, flat groups and render targets. Vector shapes from closed-form distance functions: rounded rects, arcs, pies, capsules, regular polygons, stars, ellipses, Bezier and polyline paths, compounds of up to 56 primitives with smooth merges, drop shadows, glows and outlines in one pass, dashes and trim, gradients in RGB, Oklab or DKL, add and multiply blends, MSDF atlases and instanced glyph runs; text and artwork from Slug curve sets (exact area per pixel on resolved glyphs), a separable Gaussian blur pass for glow, soft shadows and blurred letters; MIT notices for the SDF functions (Inigo Quilez, 0xfaded). Screen coordinates from the top-left corner, a place and an anchor per stimulus, hit tests by the shader's own SDF. The calibration, its file and the color math are ysp/color.h's (v0.5); `ygfx_color()` gives the context PAINT uses; a user shader contract; timeline bindings; a 19-call backend interface. | Windows 11 through ysp/screen.h (DXGI flip, composition swapchain); headless on any GL ES 3.0 context (tested: ANGLE, Mesa); Linux and macOS: the null backend on the simulated display | ysp/screen.h, ysp/color.h (SDL3; ANGLE at run time on Windows) | v0.11.1: `ygfx_open_start()`, the open's first half, for ysp/screen.h's `desc.on_context`: it submits every program and returns, and `ygfx_open()` waits for the rest, so the compiles run while the screen settles: gfx ready 2.2 s earlier in a window and 0.4 s fullscreen with a cold cache (AC; 2.0 and 0.4 s on battery), 24 to 51 ms with a warm one. Without `GL_KHR_parallel_shader_compile` it submits nothing and the open is as before; the describe line says which. Frames bit-identical to a blocking open on ANGLE (hardware, WARP) and Mesa llvmpipe; 9 of 9 new mutants caught. v0.11.0: `ygfx_prime()` draws every program made so far once, as zero-size quads, and waits for the GPU: on the Iris Xe each kind's first frame cost 2.5 to 12.9 ms more CPU in `ygfx_end()` without it (from a warm program cache too) and 0.09 to 0.42 ms with it; 20 programs prime in 63 to 73 ms; frames before and after are bit-identical; 3 of 3 new mutants caught. The first frame after a setup of 2 s or more was late or dropped in 21 of 22 runs, prime or not, and `ygfx_prime()` right after `ygfx_open()` hung, both from ysp/screen.h v0.5.0; with v0.5.1, 0 of 8 and no hang (docs/gfx.md, "v0.11: priming"). v0.10.5: an R8 or RG8 texture may state a transfer (gray is the display's white), so a pack's TEXTURE entry loads into `ygfx_texture()` as stored (within 5.1e-7 of the formula on three renderers; 4 of 4 new mutants caught); `YGFX_SHADER_CONTRACT` is 2. v0.10.4: a user shader samples `stim.tex`, an image or a render target, as `ysp_tex0`; before, it read whatever the previous draw had left bound (found by `gfx_gratings`; 2 of 2 new mutants caught). v0.10.3: `YGFX_SHADER_CONTRACT` (1), the shader contract's version that packs record; the test pins the wrapper's text. v0.10.2: `ygfx_default_cache_dir()` is a wrapper of ysp/rt.h's `yrt_user_dir()`, same rules. v0.10.1: `ygfx_default_cache_dir()` gives the per-user cache folder (never a shared one such as /tmp), which the examples use unless `--cache` or `--no-cache` is given. v0.10.0: gradient noise (3D simplex fBm: scale, octaves, lacunarity, gain, z to evolve) in integers, bit for bit equal to its CPU twin on four renderers; not band-limited, as the manual states; 1.8 ms full screen for one octave. v0.9.0: new noise and dither patterns: the hash is triple32 and a point's key one hash of its index under seed keys; v0.8's nested hash gave 29 % of full-screen frames two rows that were copies (PractRand failed it at 256 MB; the new key passes 16 GB). v0.8.0: setup passes render text, artwork or a blur layer into a target outside a frame (the same bits as in a frame); turned and aliased curve runs take the rays program by themselves (the same bits; a turned 12 px page 5.1 ms, was 5.9). v0.7.0: curve runs with `.rays` on their own program (a 12 px page 5.3 ms against 7.5), and a page cached in a target equal to the drawn run bit for bit (0.5 ms a frame); Gaussian NOISE from a quantile table, the same bits on the GPU and the CPU; three specialized vector programs (RRECT 0.95 to 0.57 ms, a dashed circle 0.93 to 0.51, a compound of 8 with effects 1.6 to 0.96); ELLIPSE packs 600 times faster; the default test runs in under a minute. v0.6.0: curve runs within 1.8e-5 of the exact pixel coverage on resolved glyphs (rays elsewhere: mean edge error 0.019 at 12 px per em), the same on three renderers to 6.5e-5 but one pixel; a 12 px page of 26205 glyphs 5.5 to 8.2 ms of GPU, a 40-glyph line 0.09 ms; the blur within 0.0087 of the exact blur at sigma 2 (2x: 0.0021), 0.18 ms for a word at sigma 2; NV12 video 1.15 times RGBA8 (was 1.64); 29 of 29 v0.6 mutations caught. v0.5.0: the calibration moved to ysp/color.h with every readback of the test bit-identical on three renderers; OKLAB paint on absolute XYZ, the display's black included (5.2e-3 of full scale on a test display with 0.5 cd/m2 of black); `desc.cones`, `desc.lum`. v0.4.0: a program binary cache (open 11 to 35 ms warm, against 2 s or more), NV12 and I420 video converted to linear light (within 3.1e-7 of a double reference), texture import (GL; D3D11 RGBA and NV12 through ANGLE, shared handles included), instanced stimuli (10000 gabors in 0.18 ms of CPU and 1.3 ms of GPU) with a per-element hit test, and draws reordered where they do not overlap (bit-identical; 1000 interleaved stimuli 7.2 to 1.1 ms of GPU); 35 of 35 v0.4 mutations caught. v0.3.0: pixels checked offscreen against a CPU reference on four renderers (Iris Xe through ANGLE, WARP, SwiftShader, Mesa llvmpipe): largest error 1.7e-5 of full scale (1.4e-4 on SwiftShader), and exact for images, noise, hard edges and bands, sprite borders, targets against direct drawing, output codes and ordered dither; the v0.3 shapes within 4.9e-6 of the profile of the brute-force Euclidean distance, and the edge model's limits (corners, creases, smooth merges) measured against a true blur; 32 mutations in v0.1 and v0.2 and 25 of 26 in v0.3 caught (one equivalent). A stroke costs 1.05 to 1.17 times its fill; a full-screen target composite 0.43 ms of GPU. Calibration math within 3.9e-5 of IEC 61966-2-1's sRGB matrix and 7e-8 of Psychtoolbox's DKL matrix. On the Iris Xe at 1920 x 1200: an empty frame 0.42 to 1.34 ms of GPU, 1000 gabors 0.2 to 0.5 ms of CPU; no heap call per frame. No photometer: no number is a measurement of light. Open takes about 2 s (eleven programs). 10-bit, Bits#, stereo and text layout refused. [Design notes](docs/gfx.md). |
-| [ysp/video.h](include/ysp/video.h) | `yvid_`, `YVID_` | A movie as a stimulus: on each display frame the frame due at the predicted onset by ysp/timeline.h's lead rule, never by counting frames; a cadence that judders (3:2) is shown and named, slips against the display grid are found and named, and every display frame gets a record (frame, due time, flip onset, decision and reason). The movie clock is a ysp_timeline base, so annotations fire on the frame that shows them; it can follow the audio fit. Decode-ahead on a ysp/rt.h pump, upload into a ysp/gfx.h IMAGE; seek, loop, pause, manual frame index. A frame sequence container (raw or QOI, value-exact, read and write), MPEG-1 through pl_mpeg with a hashed index, and the Video decoder extension interface. | Windows through ysp/gfx.h; any platform on the simulated display and CPU decode | ysp/gfx.h, ysp/timeline.h; pl_mpeg (optional) | v0.2.2: XXH64 twice as fast on MSVC (11.9 to 14.1 GB/s), the same hashes. v0.2.1: a custom decoder that returned not-ready was never woken again (a lost wake-up on the decode thread); now it is retried each display frame, and after an outage the due frame shows on time (docs/video.md). v0.2.0: Media Foundation (DXVA by default), planar NV12/I420 upload to ysp_gfx's shader by default, the shared D3D11 GPU path as an option, the soundtrack on ysp/audio.h streams, and ysp_timeline base rates for any rate but 1. v0.1.0. A core test with a scripted decoder and display on a virtual clock (cadences, slips against an exact model, stalls, seeks, the timeline agreement under 20 us of noise); 20 mutations caught. In a 640 x 360 window on the Iris Xe: `yvid_update()` with a 1920 x 1080 RGBA8 upload 0.95 ms mean, 1.8 ms p99; no heap call per frame. pl_mpeg 1080p 5.5 ms a frame plus 7 ms of I420 to RGBA8 on the decode thread. No Media Foundation, no GPU zero-copy, no capture yet. [Design notes](docs/video.md). |
-
-## Files to copy
-
-The `#include` lines of the headers (2026-10-10) give these sets. Copy
-every file in the row into one `ysp/` folder on your include path. Where a
-row has more than one header, define each implementation macro once
-(Quick start, step 2); a header compiles the implementations it includes
-unless your file already did.
-
-| Header | Includes | Copy these files | Outside dependencies |
-|---|---|---|---|
-| rt | | rt.h | Tracy (opt-in) |
-| stair, table, json, pack, timeline, input, color, rdk, outline | | the header | none |
-| quest, aep | rt.h with `YQST_ASYNC`, `YAEP_ASYNC` only | the header (+ rt.h for the async layer) | none |
-| trials | table.h | trials.h, table.h | none |
-| parallel | rt.h | parallel.h, rt.h | InpOut driver on Windows |
-| serial | rt.h | serial.h, rt.h | none |
-| response | input.h | response.h, input.h | none |
-| box | input.h | box.h, input.h | none |
-| device | rt.h, input.h, box.h, serial.h | device.h, rt.h, input.h, box.h, serial.h (+ parallel.h for `YBOX_PARALLEL`) | none |
-| rigfile | device.h, json.h | rigfile.h, json.h, device.h, rt.h, input.h, box.h, serial.h | none |
-| net | rt.h, input.h | net.h, rt.h, input.h | liblsl, loaded at run time |
-| screen | rt.h, input.h | screen.h, rt.h, input.h | SDL3; ANGLE's DLLs at run time on Windows |
-| audio | rt.h | audio.h, rt.h | miniaudio 0.11.25 (`YAU_NO_MINIAUDIO`: none) |
-| gfx | screen.h, color.h | gfx.h, screen.h, color.h, rt.h, input.h | as screen |
-| video | gfx.h, timeline.h | video.h, gfx.h, timeline.h, screen.h, color.h, rt.h, input.h | as screen; pl_mpeg for MPEG-1 (optional) |
-
-ysp/response.h also has adapters for ysp/screen.h, ysp/audio.h and
-ysp/timeline.h; they exist when you include those headers before it.
-
-## Verified on hardware
-
-Only one machine has run these headers on real devices: a Windows 11
-laptop (i7-1360P, Intel Iris Xe driving its internal 1920x1200 60 Hz
-panel, Realtek speakers). No photodiode, photometer, loopback cable,
-external monitor, serial or parallel port, response box, trigger box,
-microcontroller board or LabStreamer was attached (docs/screen.md,
-docs/audio.md, docs/device.md). "Sim" below means simulated displays,
-fake transports, virtual serial pairs, null audio devices or software
-renderers, in tests and CI.
-
-| Header | Ran on real hardware | Only in sim or CI | Source |
-|---|---|---|---|
-| screen | Windows 11, Iris Xe, internal panel, 60 Hz: flip records from software timestamps (both swap paths) | Light (no photodiode); another GPU, rate or display; Linux and macOS (simulated display only) | screen.h STATUS; docs/screen.md |
-| gfx | Windows 11, Iris Xe through ANGLE (D3D11) | Light (no photometer or photodiode); WARP, SwiftShader and Mesa llvmpipe are software | gfx.h STATUS; docs/gfx.md |
-| video | Windows 11, Iris Xe, Media Foundation with DXVA, a 640x360 window; soundtrack on the real WASAPI device | Light and sound; fullscreen | video.h STATUS |
-| audio | Windows 11, WASAPI on the Realtek speakers (shared 48 kHz, exclusive), placement checked by WASAPI loopback capture | Sound at the speaker (no loopback cable: the delay to sound is not measured); CoreAudio, ALSA, PulseAudio, Web Audio | audio.h STATUS; docs/audio.md |
-| rt | Windows 11: clock, waits, worker, event ring | The device clock fit: no real device has fed it; macOS | rt.h STATUS; docs/rt.md |
-| input, response | Windows 11: keys sent with SendInput through SDL 3.4 | A key pressed by hand; mouse, touch, pen, gamepad timing; response boxes | input.h; docs/response.md |
-| net | Windows 11 and WSL2: the real liblsl (1.17.5, 1.17.7) over local loopback | No LabStreamer or other LSL device; macOS | net.h STATUS; docs/net.md |
-| serial | none | Linux virtual port pairs; the Windows and macOS backends never ran on a device | serial.h STATUS; docs/serial.md |
-| parallel | none on Windows; the "Linux tested" note does not say whether a real port was used | The Windows backend never reached hardware | parallel.h STATUS |
-| box | none | Pure protocol code; no byte from or to a vendor device; the firmware never ran on a board | box.h STATUS; docs/box.md |
-| device | none | Fake transports, the simulated display and socat pairs; no box, board or trigger interface opened | device.h STATUS; docs/device.md |
-| rigfile | none | Binds through a fake transport | docs/device.md |
-| color | not applicable (pure computation) | No number is a measurement of light | color.h; docs/color.md |
-| stair, quest, aep, trials, table, json, pack, timeline, rdk, outline | not applicable (pure computation) | | |
+Each header is `include/ysp/<name>.h`; macros use the uppercase prefix
+(`YRT_`). Status: **tested** is pure computation, checked by tests;
+**1 machine** ran on one Windows 11 laptop only; **no device** never ran
+on the hardware it drives.
+[docs/status.md](docs/status.md) has the platforms, the dependencies, the
+measurements and the hardware for each header.
 
 ## Quick start
 
-1. Copy the header and the other files in its row of
-   [Files to copy](#files-to-copy) into a `ysp/` folder in your project.
-2. In exactly one `.c` or `.cpp` file, define the implementation macro before
-   the include:
+1. Copy the header and the files in its row of
+   [Files to copy](docs/status.md#files-to-copy) into a `ysp/` folder on
+   your include path.
+2. In exactly one `.c` or `.cpp` file, define the implementation macro
+   before the include. Include the header normally everywhere else.
 
    ```c
-   #define YSP_PARALLEL_IMPLEMENTATION
-   #include "ysp/parallel.h"
+   #define YSP_STAIR_IMPLEMENTATION
+   #include "ysp/stair.h"
+
+   yst_desc d = { .start = 0.5, .n_up = 1, .n_down = 3,
+                  .steps = { 0.05 }, .n_steps = 1, .stop_reversals = 10 };
+   yst_stair s;
+   if (!yst_open(&s, &d)) { fputs(yst_error(&s), stderr); return 1; }
+   while (!yst_done(&s)) {
+       double level = yst_next(&s);
+       yst_update(&s, level, run_trial(level));   /* 1 = correct */
+   }
+   double threshold = yst_estimate(&s, YST_EST_REVERSALS);
    ```
 
-3. Include the header normally everywhere else.
-4. Read the header's top comment. It is the manual: usage, platform setup,
-   timing notes, build flags, and the API reference.
+3. Read the header's top comment: usage, platform setup, timing, build
+   flags and the API.
 
-### Build
+## Build
 
-To build the examples and compile checks in this repository:
-
-```sh
-cmake -B build/default
-cmake --build build/default
-ctest --test-dir build/default
-```
-
-`CMakePresets.json` names the configurations in use: `msvc` (Visual Studio
-2022, examples and tests), `msvc-full` (`msvc` with SDL3, ANGLE, the layout
-library, the loopback tests and both downloads), `mingw`, and on Linux the CI
-sets `linux`, `clang`, `sanitizers` and `nothreads-cxx`. Each preset builds
-into `build/<preset>/`: `cmake --preset msvc`, then
-`cmake --build --preset msvc` and `ctest --preset msvc`. `msvc-full` reads
-`SDL3_DIR` and `YSP_ANGLE_DIR` from the environment; to keep paths for one
-machine, write a `CMakeUserPresets.json` (git ignores it) that inherits a
-preset.
-
-Three options need files that are fetched, not committed. Run each fetch
-once from the repository root:
-
-| Option | Builds | Fetch |
-|---|---|---|
-| `-DYSP_BUILD_PACK=ON` | the pack tool `ypak` (core: every kind but glyph runs) | `uv run --no-project python tools/vendor_pack.py --write` (lodepng) |
-| `-DYSP_BUILD_LAYOUT=ON` | the layout library; with `YSP_BUILD_PACK`, glyph runs in `ypak` | `uv run --no-project python tools/vendor_layout.py --write` (about 8 MB) |
-| none (ysp/net.h's tests) | the liblsl ABI check and the loopback test | `uv run --no-project python tools/vendor_lsl.py --write` |
-
-Or without CMake, from the repository root:
+To build the examples and tests in this repository:
 
 ```sh
-cc -O2 -pthread -Iinclude -o parallel_trigger examples/parallel/trigger.c   # Linux
-cl /O2 /Iinclude examples\parallel\trigger.c                                # Windows (MSVC)
+cmake --preset msvc          # or msvc-full, mingw, linux, clang, sanitizers, nothreads-cxx
+cmake --build --preset msvc
+ctest --preset msvc
+uv run --no-project python tools/vendor_pack.py --write     # lodepng, for -DYSP_BUILD_PACK=ON
+uv run --no-project python tools/vendor_layout.py --write   # HarfBuzz, Skribidi, for -DYSP_BUILD_LAYOUT=ON
 ```
 
-CMake consumers can `add_subdirectory(ysp)` and link the group that holds the
-headers a program uses. Each group adds the include path, the groups that its
-headers include, and the libraries an implementation file needs:
+`msvc-full` adds SDL3 and ANGLE. [docs/build.md](docs/build.md) has the
+presets, the liblsl fetch, a build without CMake and the CMake groups.
 
-- `ysp::core` holds `ysp/rt.h`, `ysp/timeline.h`, `ysp/table.h`,
-  `ysp/json.h` and `ysp/pack.h`, and links pthreads on POSIX and `libm` on
-  Linux.
-- `ysp::methods` holds `ysp/stair.h`, `ysp/quest.h`, `ysp/aep.h` and
-  `ysp/trials.h`, and links `ysp::core`.
-- `ysp::devices` holds `ysp/serial.h`, `ysp/parallel.h`, `ysp/input.h`,
-  `ysp/response.h`, `ysp/box.h`, `ysp/device.h`, `ysp/rigfile.h` and
-  `ysp/net.h`, and links `ysp::core`, `setupapi` on Windows and `libdl`
-  (ysp/net.h loads liblsl).
-- `ysp::rig` holds `ysp/screen.h`, `ysp/gfx.h`, `ysp/color.h`,
-  `ysp/outline.h`, `ysp/rdk.h`, `ysp/video.h` and `ysp/audio.h`, and links
-  `ysp::core`, `ysp::devices`, `libdl`, and the SDL3, miniaudio and pl_mpeg
-  that exist when it is added (from `find_package(SDL3)`,
-  `YSP_MINIAUDIO_DIR` and `YSP_PL_MPEG_DIR`).
-- `ysp::ysp` links all four groups.
+## Start here
 
-## Layout
+1. Tutorial: [run your first trial](docs/response.md#tutorial-a-keyboard-trial-with-rt-from-the-flip-onset)
+   (build with `msvc-full` first).
+2. How-to: [choose a trigger path](docs/triggers.md), then the how-to
+   guides in [response](docs/response.md), [device](docs/device.md),
+   [net](docs/net.md) and [json](docs/json.md).
+3. Reference: the top comment of each header, and
+   [docs/status.md](docs/status.md).
+4. Explanation: `docs/<name>.md`, the design decisions and measurements of
+   each header, and [docs/conventions.md](docs/conventions.md).
+5. Before you rely on a timing number, read
+   [Verified on hardware](docs/status.md#verified-on-hardware).
 
-```
-include/ysp/rt.h          the shared base: clock, waits, scheduling, worker, pump, event ring, trace macros
-include/ysp/<name>.h      one library per header; the header is the documentation
-examples/<lib>/<name>.c   runnable demos, one or more per library, built as <lib>_<name>;
-                          examples/README.md is the index
-tests/compile/            per-header compile checks (C11, C++17, no-threads, async)
-tests/adapt/              self-checking tests for ysp/rt.h's pump, the adaptive-method
-                          headers, ysp/trials.h, ysp/table.h and ysp/timeline.h, run by ctest
-tests/compare/            side-by-side runs against PsychoPy, questplus, AEPsych,
-                          mQUESTPlus and Palamedes; by hand, not CI
-tests/fuzz/               libFuzzer targets for ysp/table.h, ysp/trials.h, ysp/json.h and ysp/pack.h;
-                          by hand, not CI
-tests/loopback/           opt-in hardware tests (-DYSP_BUILD_LOOPBACK=ON), run by hand
-docs/serial.md            design notes for ysp/serial.h
-docs/adapt.md             design notes and verification for ysp/stair.h, ysp/quest.h, ysp/aep.h
-docs/adapt_comparison.md  the adaptive methods compared on published test problems
-docs/trials.md            design notes and verification for ysp/trials.h
-docs/table.md             design notes, number-parser verification and costs for ysp/table.h
-docs/timeline.md          design notes and measured costs for ysp/timeline.h
-docs/input.md             why the input event is its own header, and its checks
-docs/response.md          tutorial, how-to guides and decisions for ysp/response.h
-docs/box.md               the box protocols: XID checked against pyxid2, the ysp line protocol, checks
-docs/device.md            the device layer: decisions, simulated and pty-pair results, what needs hardware
-docs/net.md               ysp/net.h: how-to guides, the LabStreamer, results against the real liblsl
-docs/json.md              ysp/json.h: how-to guides, the decisions and the checks
-docs/pack.md              the pack format, ysp/pack.h, the pack tool (ypak), costs
-docs/triggers.md          how-to: choose a trigger path (device.h, net.h, parallel.h, serial.h)
-docs/rig_spec.md          the plan: display, audio, video, pack, player, designer
-docs/devices_spec.md      the plan for specialized devices: decomposition, headers, order of work
-firmware/ysp_line/        the photodiode board (Teensy 4.x, Raspberry Pi Pico) on the ysp line protocol
-docs/screen.md            design notes and the swap-path measurements for ysp/screen.h
-docs/audio.md             design notes and the clock and loopback measurements for ysp/audio.h
-docs/gfx.md               design notes, pixel errors per renderer and frame costs for ysp/gfx.h
-docs/color.md             design notes, references, Psychtoolbox comparison and costs for ysp/color.h
-docs/rdk.md               design notes, statistics, mutations and costs for ysp/rdk.h
-docs/outline.md           design notes, references, mutations and build costs for ysp/outline.h
-docs/video.md             design notes, decode and upload costs for ysp/video.h
-docs/rt.md                design notes and measured costs for ysp/rt.h's event ring, correlation, macros,
-                          the device clock fit and the per-user folders
-pack/ysp/layout.h, layout.c  text layout for the pack tool and the player (Skribidi); not a header;
-                          -DYSP_BUILD_LAYOUT=ON builds it, tests/layout/ and examples/layout/gfx_layout.c
-pack/ysp/pack_tool.h, pack_tool.c, ypak.c  the pack tool library and its CLI; -DYSP_BUILD_PACK=ON
-                          builds it (glyph runs need -DYSP_BUILD_LAYOUT=ON too; docs/pack.md 5.1)
-third_party/              Skribidi, HarfBuzz, SheenBidi, libunibreak, budouxc for pack/layout, pinned
-                          and verified byte for byte by tools/vendor_layout.py; lodepng for the pack
-                          tool (tools/vendor_pack.py); liblsl for net.h's tests (tools/vendor_lsl.py)
-docs/*_probe.md           probe results: beam race, ImGui, layout, text, the X11 display
-docs/layout.md            the layout library: pins, the patch, checks against Chromium, costs
-bindings/python/<name>/   one pip package per library
-bindings/mex/             ysp_parallel.c, ysp_serial.c, ysp_stair.c, ysp_quest.c, ysp_aep.c,
-                          ysp_trials.c, ysp_color.c, ysp_mex_util.h, build.m, test_mex.m,
-                          test_mex_color.m, example_<name>.m
-CMakeLists.txt            builds examples, compile checks and tests; registers libraries
-```
+## More
 
-## Conventions
-
-- **Dependencies.** `ysp/rt.h` is the one header the others use. It holds
-  the clock, the deadline waits, the thread elevation, the deadline worker
-  and the pump. [Files to copy](#files-to-copy) lists what each header
-  includes. The adaptive-method headers (`ysp/stair.h`,
-  `ysp/quest.h`, `ysp/aep.h`), `ysp/trials.h`, `ysp/table.h`, `ysp/timeline.h`, `ysp/color.h` and `ysp/outline.h` are pure computation and
-  include nothing but the C standard library. The exceptions are the opt-in
-  async layer of `ysp/quest.h` and `ysp/aep.h` (`YQST_ASYNC`, `YAEP_ASYNC`),
-  which includes `ysp/rt.h` for the pump, and `ysp/trials.h`, which requires
-  `ysp/table.h` (v0.2) and compiles its implementation with its own. The rig headers build on each
-  other: `ysp/screen.h` on `ysp/rt.h`, `ysp/gfx.h` on `ysp/screen.h` and
-  `ysp/color.h`, `ysp/video.h` on `ysp/gfx.h` and `ysp/timeline.h`, and
-  `ysp/audio.h` on `ysp/rt.h`. The device headers build on each other
-  too (`ysp/box.h` on `ysp/input.h`, `ysp/device.h` on `ysp/serial.h` and
-  `ysp/box.h`, `ysp/rigfile.h` on `ysp/device.h` and `ysp/json.h`), and
-  `ysp/screen.h`, `ysp/net.h` and `ysp/response.h` include `ysp/input.h`.
-  Two mechanics
-  follow from this. First, the transport's implementation block also
-  compiles the implementation of `ysp/rt.h`, unless the same translation unit
-  already defined `YSP_RT_IMPLEMENTATION` and included `ysp/rt.h` before it.
-  Either order gives exactly one copy of the implementation. Second,
-  `Y<X>_NO_THREADS` also sets `YRT_NO_THREADS`. If you include `ysp/rt.h`
-  first, it reads its own macro before the transport can set it, so define
-  both macros or neither.
-- **Names.** `ysp/<name>.h` uses a short, unique function prefix `y<x>_`
-  and macro prefix `Y<X>_`, listed in the table's Prefix column. Keep a
-  prefix short while it stays unique. The
-  implementation macro is `YSP_<NAME>_IMPLEMENTATION`. Private symbols use a
-  double underscore (`ypar__set_error`).
-- **Handles.** The caller allocates the handle struct, zeroed or closed.
-  `y<x>_open(p, desc)` fills it. A zero field in `desc` means "default";
-  set fields with designated initializers (`yser_desc d = { .device =
-  "COM3" };`, C99 or C++20) so everything unset is zero. Some headers have a
-  required field (`yser_desc.device`); the header says so.
-- **Errors.** A function that cannot run while another thread uses the handle
-  returns `bool` and leaves a message in the handle, cleared on entry;
-  `y<x>_error(p)` reads it. Every function a second thread may call returns
-  an `int` count or a negative code and never touches the message buffer.
-  Where the line falls is per header: `ysp/parallel.h` puts all its setup
-  calls in the first group, `ysp/serial.h` only `yser_open`, because its
-  shutdown recipe has a reader, a writer and a main thread on one handle.
-- **Threads.** Headers that spawn a worker thread honor `Y<X>_NO_THREADS`
-  to drop it, and link `-pthread` on POSIX otherwise. `ysp/device.h` and
-  `ysp/net.h` have no such macro: their manual mode (`ydev_poll()`,
-  `ynet_inlet_poll()`) is the form without a thread.
-- **Platforms.** A header `#error`s on platforms it does not support, so an
-  unsupported build fails at compile time, not at run time.
-- **Documentation.** sokol-style. The header's top comment holds the manual
-  in labeled sections (USAGE, platform setup, TIMING, BUILDING, ...), and
-  every declaration carries its reference comment. `docs/` holds design notes
-  and comparisons: why a header looks the way it does and how it measured
-  against other toolboxes, never what the header already says. Code comments
-  say why, not how.
-- **Timing.** Anything that claims a latency number measures it. Each header
-  says how.
-
-## Add a library
-
-1. Write `ysp/<name>.h` with the top-comment manual, the API reference on
-   each declaration, and the MIT-0 block, following the conventions above.
-   Build on `ysp/rt.h` for the clock, the waits, the thread scheduling and
-   the deadline worker. Do not write those again.
-2. Add `tests/compile/<name>.c` and `.cpp` (copy an existing pair and
-   change the name).
-3. Register it in `CMakeLists.txt`: append to `YSP_LIBS`, set
-   `YSP_PREFIX_<name>`, `YSP_GROUP_<name>`, `YSP_PLATFORMS_<name>`, and
-   `YSP_THREADS_<name>`,
-   and `YSP_ASYNC_<name>` if it has an opt-in async layer. Compile checks,
-   examples, a `tests/adapt/<name>_test.c` and a
-   `tests/loopback/<name>_loopback.c` if there are ones are found by name
-   from there.
-4. Add at least one `examples/<name>/<example>.c` (built as
-   `<name>_<example>`) and its line in `examples/README.md`. It must exit with a documented
-   code when no hardware is present; add that expectation to the "Run
-   examples" step in `.github/workflows/ci.yml`.
-5. Add a row to the table above.
-6. Bindings are optional: `bindings/python/<name>/` (add it to the CI wheel
-   matrix) and `bindings/mex/ysp_<name>.c` (add a platform gate to
-   `build.m` if the header does not support every OS).
-
-CI builds every registered header on Windows, Linux, and macOS, so step 3 is
-what puts a header under test.
-
-## Bindings
-
-- **Python**: one distribution per library under
-  [bindings/python/](bindings/python/), each a dependency-free CPython
-  extension on the Limited API (one abi3 wheel per platform for CPython
-  3.8+). Each one compiles its header into the extension, plus `ysp/rt.h`
-  where the header uses it. They share the `ysp` namespace (PEP 420, no `__init__.py`), so
-  `pip install ysp-parallel ysp-serial` gives `import ysp.parallel` and
-  `import ysp.serial`, and either installs alone. The adaptive headers have
-  the same: `ysp-stair`, `ysp-quest`, `ysp-aep` and `ysp-trials` give
-  `ysp.stair`, `ysp.quest`, `ysp.aep` and `ysp.trials`, with an `Async`
-  class in quest and aep that runs inference on a C thread the interpreter
-  never sees, and `ysp.trials` taking any of the three as a track.
-  `ysp-color` gives `ysp.color` (calibration, conversions, gamut, a
-  participant's luminance). `ysp-rdk` gives `ysp.rdk` (the dots of a trial
-  again, bit for bit, from its seed and log); it needs NumPy at run time. `tests/compare/`
-  runs them beside PsychoPy, questplus and AEPsych on one response stream.
-  CI builds the wheels with cibuildwheel on Linux, Windows and macOS, except
-  `ysp-parallel` on macOS, which its header does not support.
-- **MATLAB / Octave**: [bindings/mex/](bindings/mex/), one MEX function per
-  library (`ysp_parallel`, `ysp_serial`, `ysp_stair`, `ysp_quest`,
-  `ysp_aep`, `ysp_trials`, `ysp_color`) with ppdev-mex-style command dispatch, built and
-  tested in MATLAB R2023a and Octave 10. `tests/compare/` runs `ysp_quest`
-  beside mQUESTPlus and Palamedes' PAL_AMPM, and `ysp_stair` beside
-  PAL_AMUD, on one response stream; the MEX README has the results.
-  `tests/compare/color_ptb.m` runs `ysp_color` beside Psychtoolbox's
-  colorimetric code (docs/color.md).
+- [docs/bindings.md](docs/bindings.md): Python wheels and MATLAB/Octave
+  MEX functions.
+- [docs/contributing.md](docs/contributing.md): repository layout, how to
+  add a library, how to change a header.
+- [examples/README.md](examples/README.md): the example index.
 
 ## License
 
