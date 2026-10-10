@@ -961,7 +961,7 @@ static bool ydev__host_pulse(const ydev_device* dev) {
 /* XID's mp is in whole ms and 0 means hold: a pulse is never 0 ms. */
 static uint32_t ydev__xid_ms(int64_t width_ns) {
     int64_t ms = (width_ns + 500000) / 1000000;
-    /* ybox_encode() takes us in 32 bits: at most 4294967 ms */
+    /* ybox_encode() takes at most 2^32 - 1 us: 4294967 ms */
     return ms < 1 ? 1u : ms > 4294967 ? 4294967u : (uint32_t)ms;
 }
 
@@ -983,14 +983,14 @@ static int ydev__put(ydev_device* dev, uint32_t code, int64_t width_ns, int64_t*
         /* the box keeps its pulse width: send mp only when it changes */
         uint32_t ms = width_ns > 0 ? ydev__xid_ms(width_ns) : 0u;
         if (ms != dev->xid_width_ms) {
-            k = ybox_encode(fam, YBOX_OP_WIDTH, 0, ms * 1000u, b, (int)sizeof b);
+            k = ybox_encode(fam, YBOX_OP_WIDTH, 0, (int64_t)ms * 1000000, b, (int)sizeof b);
             if (k < 0) return YDEV_ERR_ARG;
             n = k;
         }
         k = ybox_encode(fam, YBOX_OP_SET, code, 0, b + n, (int)sizeof b - n);
     } else {
         k = ybox_encode(fam, width_ns > 0 ? YBOX_OP_PULSE : YBOX_OP_SET, code,
-                        width_ns > 0 ? (uint32_t)((width_ns + 500) / 1000) : 0u, b, (int)sizeof b);
+                        width_ns > 0 ? width_ns : 0, b, (int)sizeof b);
     }
     if (k <= 0) { *t0 = *t1 = ydev__now(dev); return YDEV_ERR_ARG; }
     n += k;

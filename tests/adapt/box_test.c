@@ -214,7 +214,7 @@ static void decode_all(int family, int chunk, int cap) {
     size_t at = 0;
     g_nev = g_npair = g_nout = 0;
     g_garbage = 0;
-    CHECK(ybox_init(&d, family, YIN_KIND_BOX, 7));
+    CHECK_I(ybox_init(&d, family, YIN_KIND_BOX, 7), 0);
     memset(&o, 0, sizeof o);
     o.ev = ev; o.ev_cap = cap; o.pair = pr; o.pair_cap = cap;
     while (at < g_nbytes) {
@@ -417,11 +417,15 @@ static void test_queries(void) {
     CHECK_I(ybox_identify(YBOX_PHOTO, b, 32), 0);
     CHECK(ybox_ns_per_tick(YBOX_XID) == 1e6 && ybox_ns_per_tick(YBOX_LINE) == 1e3);
     CHECK(ybox_slow_write(YBOX_XID) && !ybox_slow_write(YBOX_LINE));
-    CHECK(!ybox_init(NULL, YBOX_XID, 0, 0));
+    /* an init: 0, or YBOX_ERR_ARG (v0.3.0; it was a bool) */
+    CHECK_I(ybox_init(NULL, YBOX_XID, 0, 0), YBOX_ERR_ARG);
     {
         ybox_decoder d;
-        CHECK(!ybox_init(&d, 0, 0, 0) && !ybox_init(&d, 9, 0, 0) && ybox_init(&d, YBOX_PARALLEL, 0, 0));
+        CHECK_I(ybox_init(&d, 0, 0, 0), YBOX_ERR_ARG);
+        CHECK_I(ybox_init(&d, 9, 0, 0), YBOX_ERR_ARG);
+        CHECK_I(ybox_init(&d, YBOX_PARALLEL, 0, 0), 0);
     }
+    CHECK(strcmp(ybox_strerror(YBOX_ERR_ARG), "bad argument") == 0 && strcmp(ybox_strerror(3), "ok") == 0);
     CHECK(strcmp(ybox_family_name(YBOX_LINE), "line") == 0);
     CHECK(strcmp(ybox_version(), YBOX_VERSION_STRING) == 0);
     printf("  queries and names: ok\n");
@@ -441,33 +445,42 @@ static void test_encoders(void) {
      * (pack('<ccI')); 0 ms means SETs hold (Cedrus) */
     CHECK_I(ybox_encode(YBOX_XID, YBOX_OP_SET, 0x1234, 0, b, 64), 4);
     CHECK(memcmp(b, mh, 4) == 0);
-    CHECK_I(ybox_encode(YBOX_XID, YBOX_OP_PULSE, 1, 4600, b, 64), 10);   /* 4.6 ms rounds to 5 */
+    CHECK_I(ybox_encode(YBOX_XID, YBOX_OP_PULSE, 1, YRT_US(4600), b, 64), 10);   /* 4.6 ms rounds to 5 */
     CHECK(memcmp(b, mp_mh, 10) == 0);
-    CHECK_I(ybox_encode(YBOX_XID, YBOX_OP_PULSE, 1, 100, b, 64), 10);    /* never 0 ms: that holds */
+    CHECK_I(ybox_encode(YBOX_XID, YBOX_OP_PULSE, 1, YRT_US(100), b, 64), 10);    /* never 0 ms: that holds */
     CHECK(b[2] == 1 && b[3] == 0);
     CHECK_I(ybox_encode(YBOX_XID, YBOX_OP_WIDTH, 0, 0, b, 64), 6);
     CHECK(memcmp(b, mp0, 6) == 0);
-    CHECK_I(ybox_encode(YBOX_XID, YBOX_OP_WIDTH, 0, 4000000000u, b, 64), 6);
+    CHECK_I(ybox_encode(YBOX_XID, YBOX_OP_WIDTH, 0, YRT_S(4000), b, 64), 6);
     CHECK(b[2] == 0x00 && b[3] == 0x09 && b[4] == 0x3D && b[5] == 0x00);  /* 4,000,000 ms */
     CHECK_I(ybox_encode(YBOX_XID, YBOX_OP_SET, 0x10000, 0, b, 64), -1);
-    CHECK_I(ybox_encode(YBOX_XID, YBOX_OP_PULSE, 1, 5000, b, 9), -1);
+    CHECK_I(ybox_encode(YBOX_XID, YBOX_OP_PULSE, 1, YRT_MS(5), b, 9), -1);
+    /* widths in ns (v0.3.0): negative, or past the 32-bit wire field, is an
+     * error, not a clamp; SET ignores the width */
+    CHECK_I(ybox_encode(YBOX_XID, YBOX_OP_PULSE, 1, -1, b, 64), YBOX_ERR_ARG);
+    CHECK_I(ybox_encode(YBOX_XID, YBOX_OP_WIDTH, 0, (int64_t)0xFFFFFFFF * 1000 + 1, b, 64), YBOX_ERR_ARG);
+    CHECK_I(ybox_encode(YBOX_XID, YBOX_OP_WIDTH, 0, (int64_t)0xFFFFFFFF * 1000, b, 64), 6);
+    CHECK_I(ybox_encode(YBOX_XID, YBOX_OP_SET, 1, -1, b, 64), 4);
     CHECK_I(ybox_encode(YBOX_XID, YBOX_OP_CLOSE, 0, 0, b, 64), 0);
     /* LINE */
     CHECK_I(ybox_encode(YBOX_LINE, YBOX_OP_SET, 5, 0, b, 64), 4);
     CHECK(memcmp(b, "o 5\n", 4) == 0);
-    CHECK_I(ybox_encode(YBOX_LINE, YBOX_OP_PULSE, 255, 2000, b, 64), 11);
+    CHECK_I(ybox_encode(YBOX_LINE, YBOX_OP_PULSE, 255, YRT_MS(2), b, 64), 11);
+    CHECK(memcmp(b, "p 255 2000\n", 11) == 0);
+    CHECK_I(ybox_encode(YBOX_LINE, YBOX_OP_PULSE, 255, 1999501, b, 64), 11);   /* rounds to the us */
     CHECK(memcmp(b, "p 255 2000\n", 11) == 0);
     CHECK_I(ybox_encode(YBOX_LINE, YBOX_OP_PULSE, 1, 0, b, 64), -1);
+    CHECK_I(ybox_encode(YBOX_LINE, YBOX_OP_PULSE, 1, 499, b, 64), -1);          /* 0 us */
     CHECK_I(ybox_encode(YBOX_LINE, YBOX_OP_SET, 256, 0, b, 64), -1);
-    CHECK_I(ybox_encode(YBOX_LINE, YBOX_OP_PULSE, 1, 2000, b, 8), -1);
-    CHECK_I(ybox_encode(YBOX_LINE, YBOX_OP_WIDTH, 1, 2000, b, 64), 0);
+    CHECK_I(ybox_encode(YBOX_LINE, YBOX_OP_PULSE, 1, YRT_MS(2), b, 8), -1);
+    CHECK_I(ybox_encode(YBOX_LINE, YBOX_OP_WIDTH, 1, YRT_MS(2), b, 64), 0);
     /* one byte: TriggerBox, BioSemi, MMBT-S, parallel; no device-timed pulse */
     for (f = YBOX_TRIGGERBOX; f <= YBOX_PARALLEL; f++) {
         if (f == YBOX_LINES) continue;
         CHECK_I(ybox_encode(f, YBOX_OP_SET, 0xA5, 0, b, 64), 1);
         CHECK_I(b[0], 0xA5);
         CHECK_I(ybox_encode(f, YBOX_OP_SET, 256, 0, b, 64), -1);
-        CHECK_I(ybox_encode(f, YBOX_OP_PULSE, 1, 2000, b, 64), 0);
+        CHECK_I(ybox_encode(f, YBOX_OP_PULSE, 1, YRT_MS(2), b, 64), 0);
         CHECK_I(ybox_encode(f, YBOX_OP_SET, 1, 0, b, 0), -1);
         CHECK_I(ybox_code_max(f), 255);
     }

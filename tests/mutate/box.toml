@@ -135,8 +135,8 @@ id = "box-15"
 name = "XID width truncated to ms"
 test = "box"
 why = "A 4.6 ms pulse is nearer 5 ms than 4 ms."
-find = '''        uint32_t ms = (uint32_t)(((uint64_t)arg + 500u) / 1000u);'''
-replace = '''        uint32_t ms = (uint32_t)((uint64_t)arg / 1000u);'''
+find = '''        uint32_t ms = (uint32_t)((width_ns + 500000) / 1000000);'''
+replace = '''        uint32_t ms = (uint32_t)(width_ns / 1000000);'''
 
 [[mutant]]
 id = "box-16"
@@ -202,8 +202,8 @@ name = "single-byte boxes claim a device-timed pulse"
 test = "box"
 why = "No TriggerBox, BioSemi, MMBT-S or parallel port times a pulse of a chosen width; the host must."
 find = '''    if (op == YBOX_OP_PULSE) return 0;
-    if (cap < 1) return -1;'''
-replace = '''    if (cap < 1) return -1;'''
+    if (cap < 1) return YBOX_ERR_ARG;'''
+replace = '''    if (cap < 1) return YBOX_ERR_ARG;'''
 
 [[mutant]]
 id = "box-24"
@@ -216,3 +216,19 @@ find = '''        if (!ybox__u64(&p, &a) || !ybox__u64(&p, &b) || !ybox__end(p) 
 replace = '''        if (!ybox__u64(&p, &a) || !ybox__u64(&p, &b) || !ybox__end(p)) return false;
         ybox__pair(out, a, 0);
         out->has_out = 1;'''
+
+[[mutant]]
+id = "box-25"
+name = "width not range-checked (v0.3.0)"
+test = "box"
+why = "A negative width_ns or one past the 32-bit wire field would wrap into a different pulse instead of failing."
+find = '''    if (op != YBOX_OP_SET && (width_ns < 0 || width_ns > (int64_t)0xFFFFFFFF * 1000)) return YBOX_ERR_ARG;'''
+replace = ''
+
+[[mutant]]
+id = "box-26"
+name = "LINE pulse width rounded up, not to the nearest us (v0.3.0)"
+test = "box"
+why = "width_ns goes to the board's whole microseconds, rounded to the nearest: rounding up makes 499 ns a 1 us pulse instead of an error."
+find = '''            int64_t us = (width_ns + 500) / 1000;'''
+replace = '''            int64_t us = width_ns / 1000 + (width_ns % 1000 != 0);'''

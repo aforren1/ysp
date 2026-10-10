@@ -1,6 +1,6 @@
 # ysp/box.h
 
-Status: v0.2.0, 2026-10-08. The header's manual (its comment block) is the
+Status: v0.3.0, 2026-10-10 (v0.2.0, 2026-10-08, for the bytes). The header's manual (its comment block) is the
 reference for each frame, query and output. This page records why the
 header has its form, what its bytes were checked against, and what is not
 checked. The plan is `docs/devices_spec.md` (sections 4.3 and 10); this
@@ -31,7 +31,7 @@ XID also decodes the StimTracker 2 frame since v0.2.0: `'o'`, port, key
 
 ## Outputs (v0.2.0)
 
-`ybox_encode(family, op, code, arg, buf, cap)` gives the bytes; the
+`ybox_encode(family, op, code, width_ns, buf, cap)` gives the bytes; the
 manual's OUTPUTS section has every byte. Each family's bytes are pinned to
 a source:
 
@@ -110,6 +110,40 @@ Why:
 | A text line | At most 94 characters; printable ASCII only; an overlong line or a control byte drops the whole line | The rest of an overlong line must not read as a line of its own |
 | Encoders | One function, `ybox_encode()`, with an op; capabilities in `ybox_caps()` | The device layer asks what a family can do (who ends a pulse, lines or bytes) instead of naming families |
 | Output-only families | `ybox_init()` takes them; every byte is garbage | One decoder path for every instance; a TriggerBox that reports its inputs cannot be mistaken for frames |
+
+## Init and widths in nanoseconds (v0.3.0)
+
+v0.3.0 applies the repository conventions (README.md, Conventions). It breaks
+the API; no byte changes.
+
+- **`ybox_init()` is an init that returns `int`.** It fills a decoder from
+  arguments, takes no desc and has nothing to close, so it is not an open.
+  It checks its arguments, so it returns 0 or `YBOX_ERR_ARG` (a NULL decoder
+  or an unknown family) instead of a bool. `ybox_strerror()` names the code.
+  `if (!ybox_init(...))` is now wrong: 0 is success.
+- **`ybox_encode()` takes `int64_t width_ns`.** The width was `uint32_t arg`
+  in microseconds, the line protocol's unit. Every C time is nanoseconds
+  now. The encoder converts to the wire's unit: XID's `mp` rounds to the
+  nearest millisecond (at least 1 for a pulse, because 0 means hold), the
+  line protocol's `p` rounds to the nearest microsecond and refuses 0. A
+  negative width, or one past the 32-bit field the old parameter could
+  carry (2^32 - 1 us, 71.6 min), is `YBOX_ERR_ARG`; it was impossible to
+  pass before and must not wrap now. SET ignores the width.
+- **The unit macros.** This header does not include `ysp/rt.h`, so it
+  defines `YRT_NS()`, `YRT_US()`, `YRT_MS()`, `YRT_S()` and the two
+  read-back macros under the same `#ifndef YRT_S` guard, copied from it.
+
+`ybox_ns_per_tick()` stays a `double`: it is a conversion factor, not a
+time. The CHANGELOG and STATUS moved to the end of the top comment; the
+USAGE block now tests `ybox_init()`'s result.
+
+Checked on 2026-10-10 on Windows 11: `tests/adapt/box_test.c` with the new
+checks (init codes, `ybox_strerror()`, negative and oversized widths, the
+rounding of a line pulse to the microsecond), `tests/compile/box.c` naming
+every entry point by type, MSVC 19.44 (/W4 /WX) and MinGW-w64 gcc 16.1
+(-Werror). Mutants `box-25` (no width range check) and `box-26` (a line
+pulse rounded up instead of to the nearest microsecond) are new; both were
+caught, and so were the moved anchors `box-15`, `box-16` and `box-23`.
 
 ## Verification
 
