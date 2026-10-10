@@ -667,6 +667,61 @@ static void test_lifetime(void) {
     yrdk_close(&f);
 }
 
+/* Exact-ns lifetimes on a refresh grid (v0.2.0). A display's onsets are the
+ * ideal grid rounded to the ns, and 300 ms, 250 ms and 1 s are whole frames
+ * at 60 and 120 Hz, so the grid repeats exactly every lifetime: a dot's
+ * death keeps its place between two onsets, and every life after the first
+ * is exactly life x rate frames. v0.1's float seconds (0.3f is 300,000,012
+ * ns) slip 12 ns a life against the grid, so over a long run a dot whose
+ * death sits within that slip of an onset lives one frame more or less
+ * once; the count of such lives is printed for both forms. */
+static int lifetime_grid_run(int64_t life_ns, int rate, long* lives, long* off) {
+    static yrdk_field f;
+    static int born[500];
+    yrdk_desc d = base_desc();
+    int i, k, frames = (int)(life_ns * rate / 1000000000);
+    d.w = 10; d.count = 500; d.lifetime_ns = life_ns; d.coherence = 0.5f; d.speed = 3;
+    if (open_ok(&f, &d) < 0) return -1;
+    yrdk_start(&f, 21, T0);
+    for (i = 0; i < 500; i++) born[i] = -1;
+    *lives = 0; *off = 0;
+    for (k = 1; k <= 40 * frames; k++) {
+        /* the ideal grid rounded to the ns, in integers */
+        int64_t t = T0 + ((int64_t)k * 1000000000 + rate / 2) / rate;
+        yrdk_update(&f, t);
+        for (i = 0; i < 500; i++) {
+            if (f.flags_[i] & YRDK_EV_PLACED) {
+                if (born[i] >= 0) { (*lives)++; if (k - born[i] != frames) (*off)++; }
+                born[i] = k;
+            }
+        }
+    }
+    yrdk_close(&f);
+    return frames;
+}
+
+static void test_lifetime_grid(void) {
+    static const int rates[2] = { 60, 120 };
+    static const float secs[3] = { 0.3f, 0.25f, 1.0f };
+    int r, s;
+    g_where = "lifetime on a refresh grid";
+    for (r = 0; r < 2; r++) {
+        for (s = 0; s < 3; s++) {
+            long lives, off, lives_f, off_f;
+            int ms = (int)(secs[s] * 1000.0f + 0.5f);
+            int frames = lifetime_grid_run(YRT_MS(ms), rates[r], &lives, &off);
+            if (frames < 0) return;
+            (void)lifetime_grid_run(life_s(secs[s]), rates[r], &lives_f, &off_f);
+            CHECK(lives > 10000);
+            CHECK(off == 0);
+            /* the float form differs by a frame in at most a few lives */
+            CHECK_LE((double)off_f, 0.01 * (double)lives_f);
+            printf("  lifetime %4d ms at %3d Hz: %d frames a life; exact ns: %ld of %ld lives off; "
+                   "v0.1 float seconds: %ld of %ld off\n", ms, rates[r], frames, off, lives, off_f, lives_f);
+        }
+    }
+}
+
 /* ------------------------------------------------------- 7. displacement */
 
 static void test_displacement(void) {
@@ -1307,6 +1362,7 @@ int main(void) {
     test_coherence();
     test_density();
     test_lifetime();
+    test_lifetime_grid();
     test_displacement();
     test_noise();
     test_frozen();

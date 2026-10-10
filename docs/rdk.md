@@ -372,6 +372,21 @@ v0.2.0 applies the repository conventions (README.md, Conventions).
   its test and `tests/c_trial.bin` are unchanged, and so is
   `tests/compare/rdk_ref.py`, which models seconds. A Python field and a C
   field are the same when the C caller passes that L.
+- **Exact ns gives the same frame counts.** Deaths are scheduled at
+  start + 1 + a random phase within L, then every L, and a dot is placed
+  again on the first update at or after its death; there is no rounding
+  at a frame boundary. A display's onsets are the ideal grid rounded to
+  the ns, and 300 ms, 250 ms and 1 s are whole frames at 60 and 120 Hz,
+  so with an exact L the grid repeats every lifetime and every life after
+  the first is exactly L x rate frames. `test_lifetime_grid` (in
+  `tests/adapt/rdk_test.c`) runs 40 lifetimes of 500 dots for each of the
+  six cases, with `YRT_MS(n)` and with v0.1's float seconds: 0 of 19,500
+  lives were off the frame count in every case, with either form (MinGW
+  gcc 16.1, 2026-10-10). The float form's 12 ns a life could shift a dot
+  whose death sits within that slip of an onset; none did in these runs.
+  With `YRDK_CLOCK_FRAMES`, `frame_ns` is an integer (16,666,667 at
+  60 Hz), so 18 updates are 300,000,006 ns, not 300 ms: set
+  `lifetime_frames` there when a life must be a whole number of frames.
 - **`yrdk_out.age_s` stays float seconds.** It is a per-dot attribute
   that goes to the GPU next to x, y and the direction (a gabor's phase
   restarts with it). An `int64_t` per dot would double that stream, and a
