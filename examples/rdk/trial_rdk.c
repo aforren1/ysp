@@ -313,7 +313,7 @@ int main(int argc, char** argv) {
             ytl_anchor(&tl, TRIAL, f.onset, 0);
             q = ytl_seq_on(&tl, TRIAL);
             ytl_on(&q, FIX_ON);
-            ytl_wait(&q, YTL_S(FIXATION_S));
+            ytl_wait(&q, YRT_S(FIXATION_S));
             ytl_on(&q, DOTS_ON);
             if (q.err) { fprintf(stderr, "trial_rdk: timeline error %d\n", q.err); failed = 1; break; }
             yrsp_arm(&rsp, f.onset);
@@ -334,7 +334,7 @@ int main(int argc, char** argv) {
             ytl_at(&q, bt);
             ytl_off(&q, DOTS_ON);
             ytl_off(&q, FIX_ON);
-            ytl_wait(&q, YTL_S(ITI_S));
+            ytl_wait(&q, YRT_S(ITI_S));
             ytl_mark(&q, END_OF_TRIAL, 0);
             if (q.err) { fprintf(stderr, "trial_rdk: timeline error %d\n", q.err); failed = 1; break; }
             responding = 0;
@@ -355,7 +355,7 @@ int main(int argc, char** argv) {
                     sim_key[ti.index] = wrong ? !answer : answer;
                     sc = (uint32_t)yrsp_scancode(sim_key[ti.index] ? "right" : "left");
                     memset(sim_ev, 0, sizeof sim_ev);
-                    sim_ev[0].t = f.onset + YTL_S(sim_rt[ti.index]);
+                    sim_ev[0].t = f.onset + YRT_S(sim_rt[ti.index]);
                     sim_ev[0].kind = YRSP_KIND_KEYBOARD;
                     sim_ev[0].type = YRSP_PRESS;
                     sim_ev[0].control = sc;
@@ -364,7 +364,7 @@ int main(int argc, char** argv) {
                     sim_ev[1] = sim_ev[0];
                     sim_ev[1].type = YRSP_RELEASE;
                     sim_ev[1].value = 0;
-                    sim_ev[1].t += YTL_MS(60);
+                    sim_ev[1].t += YRT_MS(60);
                     n_sim_ev = 2;
                     sim_next = 0;
                 }

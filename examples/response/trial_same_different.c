@@ -259,14 +259,14 @@ int main(int argc, char** argv) {
             ytl_anchor(&tl, TRIAL, f.onset, 0);
             q = ytl_seq_on(&tl, TRIAL);
             ytl_on(&q, FIX_ON);
-            ytl_wait(&q, YTL_S(FIXATION_S));
+            ytl_wait(&q, YRT_S(FIXATION_S));
             ytl_off(&q, FIX_ON);
             ytl_on(&q, FIRST_ON);
-            ytl_wait(&q, YTL_S(FIRST_S));
+            ytl_wait(&q, YRT_S(FIRST_S));
             ytl_off(&q, FIRST_ON);
-            ytl_wait(&q, YTL_S(GAP_S));
+            ytl_wait(&q, YRT_S(GAP_S));
             ytl_on(&q, SECOND_ON);
-            ytl_wait(&q, YTL_S(SECOND_S));
+            ytl_wait(&q, YRT_S(SECOND_S));
             ytl_off(&q, SECOND_ON);
             if (q.err) { fprintf(stderr, "trial_same_different: timeline error %d\n", q.err); failed = 1; break; }
             yrsp_arm(&rsp, f.onset);
@@ -276,7 +276,7 @@ int main(int argc, char** argv) {
             in_trial = responding = 1;
             n_sim_ev = sim_next = 0;
             if (sim) {   /* the participant's presses, from the second bar's planned onset */
-                int64_t t2 = f.onset + YTL_S(FIXATION_S + FIRST_S + GAP_S);
+                int64_t t2 = f.onset + YRT_S(FIXATION_S + FIRST_S + GAP_S);
                 int k;
                 for (k = 0; k < (int)(sizeof sim_script / sizeof sim_script[0]); k++) {
                     const sim_press* p = &sim_script[k];
@@ -284,7 +284,7 @@ int main(int argc, char** argv) {
                     yrsp_input* e = &sim_ev[n_sim_ev];
                     if (p->trial != ti.index || n_sim_ev + 2 > 8) continue;
                     memset(e, 0, sizeof *e);
-                    e->t = t2 + YTL_S(p->at);
+                    e->t = t2 + YRT_S(p->at);
                     e->type = YRSP_PRESS;
                     e->control = (uint32_t)yrsp_scancode(key);
                     e->stamp = YRSP_TIER_SIM;
@@ -292,7 +292,7 @@ int main(int argc, char** argv) {
                     sim_ev[n_sim_ev + 1] = *e;
                     sim_ev[n_sim_ev + 1].type = YRSP_RELEASE;
                     sim_ev[n_sim_ev + 1].value = 0;
-                    sim_ev[n_sim_ev + 1].t = e->t + YTL_MS(80);
+                    sim_ev[n_sim_ev + 1].t = e->t + YRT_MS(80);
                     n_sim_ev += 2;
                 }
             }
@@ -307,7 +307,7 @@ int main(int argc, char** argv) {
             ytl_base_time(&tl, TRIAL, f.onset, &bt);
             ytl_at(&q, bt);
             ytl_off(&q, SECOND_ON);
-            ytl_wait(&q, YTL_S(ITI_S));
+            ytl_wait(&q, YRT_S(ITI_S));
             ytl_mark(&q, END_OF_TRIAL, 0);
             if (q.err) { fprintf(stderr, "trial_same_different: timeline error %d\n", q.err); failed = 1; break; }
             responding = 0;

@@ -106,7 +106,7 @@ static void take_foreground(SDL_Window* w) {
 
 #define WIN_W 1200
 #define WIN_H 760
-#define S_NS YTL_NS_PER_S
+#define S_NS YRT_S(1)
 #define MS_NS (S_NS / 1000)
 #define SHOT_FRAMES 120
 #define COUNT(a) (int)(sizeof(a) / sizeof((a)[0]))
@@ -484,8 +484,8 @@ static int yoyo(int ch, float from, float to, double seconds, int ease, int64_t 
     ytl_tween_desc d;
     memset(&d, 0, sizeof d);
     d.from = from; d.from_set = true; d.to = to;
-    d.duration = ytl_ns(seconds);
-    d.start = start; d.start_set = true;
+    d.duration_ns = ytl_ns(seconds);
+    d.start_ns = start; d.start_set = true;
     d.ease = ease; d.cycles = YTL_FOREVER; d.yoyo = true;
     return ytl_tween(&tl, ch, PAGE_BASE, &d);
 }
@@ -555,7 +555,7 @@ static void page_scale(int mode, const yscr_frame* f) {
         /* a geometric sweep, 6 to 600 px per em and back (YTL_EASE_LOG) */
         if (yoyo(CH_GROW, 0.06f, 6.0f, 7.0, YTL_EASE_LOG, 0) < 0) fail("page 1: the size tween");
         memset(&tr, 0, sizeof tr);
-        tr.keys = turn_keys; tr.n_keys = COUNT(turn_keys); tr.period = 16 * S_NS;
+        tr.keys = turn_keys; tr.n_keys = COUNT(turn_keys); tr.period_ns = 16 * S_NS;
         if (ytl_set_track(&tl, CH_TURN, PAGE_BASE, &tr) < 0) fail("page 1: the turn track");
         /* the ladder: small sizes, static, so they go into the label target */
         {
@@ -1124,19 +1124,19 @@ static void page_letters(int mode, const yscr_frame* f) {
         for (k = 0; k < n; k++) {
             ytl_at(&q, (int64_t)k * 60 * MS_NS);
             memset(&t, 0, sizeof t);
-            t.from = 50; t.from_set = true; t.to = 0; t.duration = 600 * MS_NS; t.ease = YTL_EASE_QUAD_OUT;
+            t.from = 50; t.from_set = true; t.to = 0; t.duration_ns = 600 * MS_NS; t.ease = YTL_EASE_QUAD_OUT;
             ytl_to(&q, CH_LY + k, &t);
             t.from = 0.6f; t.to = 1;
             ytl_to(&q, CH_LS + k, &t);
-            t.from = 0; t.to = 1; t.duration = 400 * MS_NS;
+            t.from = 0; t.to = 1; t.duration_ns = 400 * MS_NS;
             ytl_to(&q, CH_LG + k, &t);
             ytl_at(&q, 1600 * MS_NS + (int64_t)k * 80 * MS_NS);
             memset(&t, 0, sizeof t);
-            t.to = -18; t.duration = 400 * MS_NS; t.ease = YTL_EASE_COSINE; t.yoyo = true; t.cycles = 3;
+            t.to = -18; t.duration_ns = 400 * MS_NS; t.ease = YTL_EASE_COSINE; t.yoyo = true; t.cycles = 3;
             ytl_to(&q, CH_LY + k, &t);
             ytl_at(&q, 5600 * MS_NS + (int64_t)k * 40 * MS_NS);
             memset(&t, 0, sizeof t);
-            t.to = -40; t.duration = 500 * MS_NS; t.ease = YTL_EASE_QUAD_IN;
+            t.to = -40; t.duration_ns = 500 * MS_NS; t.ease = YTL_EASE_QUAD_IN;
             ytl_to(&q, CH_LY + k, &t);
             t.to = 0;
             ytl_to(&q, CH_LG + k, &t);

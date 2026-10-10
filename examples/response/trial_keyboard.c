@@ -268,7 +268,7 @@ int main(int argc, char** argv) {
             ytl_anchor(&tl, TRIAL, f.onset, 0);
             q = ytl_seq_on(&tl, TRIAL);
             ytl_on(&q, FIX_ON);
-            ytl_wait(&q, YTL_S(FIXATION_S));
+            ytl_wait(&q, YRT_S(FIXATION_S));
             ytl_off(&q, FIX_ON);
             ytl_on(&q, stim_ch);
             if (q.err) { fprintf(stderr, "trial_keyboard: timeline error %d\n", q.err); failed = 1; break; }
@@ -299,7 +299,7 @@ int main(int argc, char** argv) {
             ytl_at(&q, bt);
             ytl_off(&q, stim_ch);
             ytl_on(&q, fb);
-            ytl_wait(&q, YTL_S(FEEDBACK_S));
+            ytl_wait(&q, YRT_S(FEEDBACK_S));
             ytl_off(&q, fb);
             ytl_wait(&q, iti_ns);
             ytl_mark(&q, END_OF_TRIAL, 0);
@@ -327,7 +327,7 @@ int main(int argc, char** argv) {
                         for (rep = 0; rep <= p->twice && n_sim_ev + 2 <= 16; rep++) {
                             yrsp_input* e = &sim_ev[n_sim_ev++];
                             memset(e, 0, sizeof *e);
-                            e->t = f.onset + YTL_S(p->at) + (int64_t)rep * YTL_MS(9);
+                            e->t = f.onset + YRT_S(p->at) + (int64_t)rep * YRT_MS(9);
                             e->kind = YRSP_KIND_KEYBOARD;
                             e->type = YRSP_PRESS;
                             e->control = sc;
@@ -337,7 +337,7 @@ int main(int argc, char** argv) {
                             sim_ev[n_sim_ev] = *e;
                             sim_ev[n_sim_ev].type = YRSP_RELEASE;
                             sim_ev[n_sim_ev].value = 0;
-                            sim_ev[n_sim_ev++].t = e->t + YTL_S(p->hold);
+                            sim_ev[n_sim_ev++].t = e->t + YRT_S(p->hold);
                         }
                     }
                 }

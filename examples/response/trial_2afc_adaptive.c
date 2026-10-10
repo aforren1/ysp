@@ -230,8 +230,8 @@ int main(int argc, char** argv) {
     }
     if (n_trials == 0) n_trials = sim ? 40 : 60;
     if (n_trials < 5 || n_trials > MAX_TRIALS / 2) { fprintf(stderr, "trial_2afc_adaptive: --trials takes 5..512\n"); return 2; }
-    fix_ns = YTL_S(sim ? 0.1 : 0.5);
-    iti_ns = YTL_S(sim ? 0.05 : 0.5);
+    fix_ns = YRT_S(sim ? 0.1 : 0.5);
+    iti_ns = YRT_S(sim ? 0.05 : 0.5);
     rng_side = seed ^ 0x5157u;
     rng_obs = seed ^ 0x0b5u;
 
@@ -377,7 +377,7 @@ int main(int argc, char** argv) {
             ytl_on(&q, FIX_ON);
             ytl_wait(&q, fix_ns);
             ytl_on(&q, GABOR_ON);
-            ytl_wait(&q, YTL_S(STIM_S));
+            ytl_wait(&q, YRT_S(STIM_S));
             ytl_off(&q, GABOR_ON);
             if (q.err) { fprintf(stderr, "trial_2afc_adaptive: timeline error %d\n", q.err); failed = 1; break; }
             yrsp_arm(&rsp, f.onset);
@@ -393,7 +393,7 @@ int main(int argc, char** argv) {
         /* the response, or the deadline: a blank after the gabor's end */
         if (responding && yrsp_update(&rsp, f.onset) == YRSP_ENDED) {
             ytl_seq q = ytl_seq_on(&tl, TRIAL);
-            int64_t stim_end = fix_ns + YTL_S(STIM_S);
+            int64_t stim_end = fix_ns + YRT_S(STIM_S);
             ytl_base_time(&tl, TRIAL, f.onset, &bt);
             ytl_at(&q, bt > stim_end ? bt : stim_end);
             ytl_off(&q, FIX_ON);
@@ -419,7 +419,7 @@ int main(int argc, char** argv) {
                     sim_key[ti.index] = correct ? side : 1 - side;
                     sc = (uint32_t)yrsp_scancode(side_name[sim_key[ti.index]]);
                     memset(sim_ev, 0, sizeof sim_ev);
-                    sim_ev[0].t = f.onset + YTL_S(sim_rt[ti.index]);
+                    sim_ev[0].t = f.onset + YRT_S(sim_rt[ti.index]);
                     sim_ev[0].kind = YRSP_KIND_KEYBOARD;
                     sim_ev[0].type = YRSP_PRESS;
                     sim_ev[0].control = sc;
@@ -428,7 +428,7 @@ int main(int argc, char** argv) {
                     sim_ev[1] = sim_ev[0];
                     sim_ev[1].type = YRSP_RELEASE;
                     sim_ev[1].value = 0;
-                    sim_ev[1].t += YTL_MS(80);
+                    sim_ev[1].t += YRT_MS(80);
                     n_sim_ev = 2;
                     sim_next = 0;
                 }

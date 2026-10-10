@@ -41,7 +41,7 @@
 enum { TARGET_X, LUMINANCE, CONTRAST, N_CHANNELS };
 enum { TRIAL = 1 };
 
-#define S YTL_NS_PER_S
+#define S YRT_S(1)
 #define RATE 120                      /* samples per second               */
 #define MINUTES 10
 #define N_SAMPLES (MINUTES * 60 * RATE + 1)
@@ -103,7 +103,7 @@ int main(void) {
     memset(&flicker, 0, sizeof(flicker));
     flicker.keys = square;
     flicker.n_keys = 2;
-    flicker.period = period;
+    flicker.period_ns = period;
     flicker.repeats = (int)repeats;
     rc = ytl_set_track(&tl, LUMINANCE, TRIAL, &flicker);
     if (rc < 0) { fprintf(stderr, "flicker: %s\n", ytl_strerror(rc)); return 1; }
@@ -127,15 +127,15 @@ int main(void) {
             ytl_event end;
             ytl_tween_desc fade;
             memset(&end, 0, sizeof(end));
-            end.time = bt + tween_len;
+            end.time_ns = bt + tween_len;
             end.base = TRIAL;
             /* Field by field so the example also builds as C++17; in C99
              * this is &(ytl_tween_desc){ .start = bt, .start_set = true,
              * .duration = tween_len, .ease = YTL_EASE_COSINE }. */
             memset(&fade, 0, sizeof(fade));
-            fade.start = bt;
+            fade.start_ns = bt;
             fade.start_set = true;
-            fade.duration = tween_len;
+            fade.duration_ns = tween_len;
             fade.ease = YTL_EASE_COSINE;
             if (ytl_tween(&tl, CONTRAST, TRIAL, &fade) < 0 || ytl_add(&tl, &end) < 0) {
                 fprintf(stderr, "tween failed\n");

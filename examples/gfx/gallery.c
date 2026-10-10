@@ -83,7 +83,7 @@ static void take_foreground(SDL_Window* w) {
 #define WIN_W 1200
 #define WIN_H 760
 #define PI_F 3.14159265f
-#define S_NS YTL_NS_PER_S
+#define S_NS YRT_S(1)
 #define SHOT_FRAMES 120
 
 static yscr_screen scr;
@@ -151,8 +151,8 @@ static int yoyo(int ch, float from, float to, double seconds) {
     ytl_tween_desc d;
     memset(&d, 0, sizeof d);
     d.from = from; d.from_set = true; d.to = to;
-    d.duration = ytl_ns(seconds);
-    d.start = 0; d.start_set = true;
+    d.duration_ns = ytl_ns(seconds);
+    d.start_ns = 0; d.start_set = true;
     d.ease = YTL_EASE_COSINE; d.cycles = YTL_FOREVER; d.yoyo = true;
     return ytl_tween(&tl, ch, PAGE_BASE, &d);
 }
@@ -183,13 +183,13 @@ static int timeline_setup(void) {
     td.events = tl_storage; td.event_capacity = 4; td.n_channels = N_CH; td.initial = initial;
     if (!ytl_open(&tl, &td)) { fprintf(stderr, "gfx_gallery: %s\n", ytl_error(&tl)); return -1; }
     memset(&tr, 0, sizeof tr);
-    tr.keys = rot_keys; tr.n_keys = 2; tr.period = 10 * S_NS;          /* 36 degrees per second */
+    tr.keys = rot_keys; tr.n_keys = 2; tr.period_ns = 10 * S_NS;          /* 36 degrees per second */
     rc |= ytl_set_track(&tl, CH_ROT, PAGE_BASE, &tr);
-    tr.keys = march_keys; tr.period = S_NS;                            /* 22 px per second */
+    tr.keys = march_keys; tr.period_ns = S_NS;                            /* 22 px per second */
     rc |= ytl_set_track(&tl, CH_MARCH, PAGE_BASE, &tr);
-    tr.keys = z_keys; tr.period = 300 * S_NS;
+    tr.keys = z_keys; tr.period_ns = 300 * S_NS;
     rc |= ytl_set_track(&tl, CH_NOISE_Z, PAGE_BASE, &tr);
-    tr.keys = quarter_keys; tr.n_keys = 9; tr.period = 20 * S_NS;     /* 360 = 0: the wrap does not show */
+    tr.keys = quarter_keys; tr.n_keys = 9; tr.period_ns = 20 * S_NS;     /* 360 = 0: the wrap does not show */
     rc |= ytl_set_track(&tl, CH_QUARTER, PAGE_BASE, &tr);
     rc |= yoyo(CH_TRIM, 0.03f, 1.0f, 1.5);       /* never 0: trim 0, 0 means the whole */
     rc |= yoyo(CH_CONTRAST, 0.05f, 0.4f, 2.0);
@@ -1864,21 +1864,21 @@ static int stagger_tracks(void) {
     ytl_track tr;
     int k, rc = 0;
     memset(&tr, 0, sizeof tr);
-    tr.n_keys = 4; tr.period = 4 * S_NS;
+    tr.n_keys = 4; tr.period_ns = 4 * S_NS;
     for (k = 0; k < WORD_N; k++) {
         int64_t t0 = (int64_t)k * 80000000;   /* 0.08 s apart */
         ytl_key* a = word_y[k];
         ytl_key* b = word_g[k];
         memset(a, 0, sizeof word_y[k]);
         memset(b, 0, sizeof word_g[k]);
-        a[0].time = t0;            a[0].value = 30; a[0].ease = YTL_EASE_QUAD_OUT;   /* px below */
-        a[1].time = t0 + 700000000; a[1].value = 0;
-        a[2].time = 3200000000;    a[2].value = 0;  a[2].ease = YTL_EASE_COSINE;
-        a[3].time = 3700000000;    a[3].value = 0;
-        b[0].time = t0;            b[0].value = 0;  b[0].ease = YTL_EASE_QUAD_OUT;
-        b[1].time = t0 + 700000000; b[1].value = 1;
-        b[2].time = 3200000000;    b[2].value = 1;  b[2].ease = YTL_EASE_COSINE;
-        b[3].time = 3700000000;    b[3].value = 0;
+        a[0].time_ns = t0;            a[0].value = 30; a[0].ease = YTL_EASE_QUAD_OUT;   /* px below */
+        a[1].time_ns = t0 + 700000000; a[1].value = 0;
+        a[2].time_ns = 3200000000;    a[2].value = 0;  a[2].ease = YTL_EASE_COSINE;
+        a[3].time_ns = 3700000000;    a[3].value = 0;
+        b[0].time_ns = t0;            b[0].value = 0;  b[0].ease = YTL_EASE_QUAD_OUT;
+        b[1].time_ns = t0 + 700000000; b[1].value = 1;
+        b[2].time_ns = 3200000000;    b[2].value = 1;  b[2].ease = YTL_EASE_COSINE;
+        b[3].time_ns = 3700000000;    b[3].value = 0;
         tr.keys = a;
         rc |= ytl_set_track(&tl, CH_LETTER_Y + k, PAGE_BASE, &tr);
         tr.keys = b;

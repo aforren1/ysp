@@ -1,4 +1,4 @@
-/* ysp/timeline.h - v0.4.0 - public domain single-header timeline library
+/* ysp/timeline.h - v0.5.0 - public domain single-header timeline library
  *
  *   What a frame shows, as a function of when the frame appears. Events
  *   (onsets, offsets, value changes, triggers, annotations) at times on a
@@ -11,173 +11,13 @@
  *   Written in the single-header style of the stb / sokol libraries. Pure
  *   computation: no OS calls, no threads, no heap, no I/O. Needs nothing
  *   but the C standard library (<math.h> for the cosine and log easings,
- *   snprintf for the open() message). It does not include ysp/rt.h: a time
- *   is an int64_t count of nanoseconds, the unit yrt_now_ns() returns, so
- *   the caller passes ysp/rt.h times in with a cast and nothing else.
+ *   snprintf for the messages). It does not include ysp/rt.h: a time is an
+ *   int64_t count of nanoseconds, the type and unit yrt_now_ns() returns,
+ *   so the caller passes ysp/rt.h times in as they are.
  *
  *   Targets every platform the compiler does. C99 is the floor: it builds as
  *   C99, C11 and C++17, and in the C dialect MSVC compiles by default.
  *
- *   ---------------------------------------------------------------------
- *   CHANGELOG
- *   ---------------------------------------------------------------------
- *   v0.4.0 - base rates: ytl_rate(tl, base, rt, num, den) runs a base at
- *          an exact rational rate from RT time rt on, with no jump and no
- *          rewind (GSAP's timeScale); ytl_get_rate(); ytl_rt_time(),
- *          the first RT time at which a running base reaches a base time.
- *          ytl_window(): the base time a frame's window reaches, the
- *          rule evaluate uses, for a scheduler or ysp/video.h. A time at
- *          or past +-2^62 is clamped only with a record: ytl_clamped()
- *          counts the evaluates and pauses that met one, and the queries
- *          refuse it (before, the sum could overflow). The report is
- *          ordered by when the base reaches each event, which is v0.3.0's
- *          onset - residual at rate 1. A timeline that sets no rate gives
- *          the same bytes as v0.3.0.
- *          Sequences: ytl_seq, a cursor on a base for building a trial
- *          in the order it plays, as a GSAP timeline is built (ytl_on,
- *          ytl_off, ytl_set_value, ytl_trigger, ytl_mark,
- *          ytl_wait, ytl_at, ytl_to, ytl_then, ytl_keyframes,
- *          ytl_on_n), with a sticky error; op tables (ytl_op, the
- *          YTL_ON() ... macros) applied all or none by ytl_run() and
- *          checked at load by ytl_check_ops(); ytl_seq_cancel(). A
- *          sequence's tweens on a channel become one keyed track in a key
- *          arena (desc.keys), so a channel takes any number of them and a
- *          rewind replays them. Every key of a track now reads its curve
- *          through one path (ytl_sample() is unchanged).
- *   v0.3.0 - ytl_skip(): a seek that marks the events it passes over
- *          YTL_EV_SKIPPED instead of firing them late on one frame, and
- *          returns how many; their channel values still apply. A skip
- *          back is an anchor's rewind. ytl_peek(): the pending events
- *          in an RT window, with their RT times, changing nothing, for
- *          the audio path's look-ahead. ytl_lead(): the lead in use.
- *          A rewind now makes skipped events pending again, and prune
- *          deletes skipped events with the fired ones. Nothing else
- *          changes: a timeline that never skips gives the same bytes as
- *          v0.2.0.
- *   v0.2.0 - tracks grow: ytl_track with a keyed or a SAMPLED form
- *          (floats at an integer rate, LINEAR, STEP or Catmull-Rom CUBIC,
- *          for long trajectories such as a sum-of-sines target), a REPEAT
- *          (period and count, for flicker and counterphase), the
- *          YTL_EASE_BEZIER easing (CSS cubic-bezier, from a per-track
- *          curve table), and ytl_tween() with a ytl_tween_desc: to,
- *          from, duration, start or delay, ease, cycles, yoyo, and
- *          keep_velocity (a Hermite takeover with no velocity step); a
- *          tween waits until its start while the old track runs on, and
- *          takes the old track's value there; its keys live in the
- *          handle. YTL_S() and YTL_MS() for literals. A STEP track is
- *          read at the end of the lead window, so its changes land where
- *          events at the same times land; other tracks are read at the
- *          onset. Breaking: the default lead is now half a frame (desc.lead
- *          0 means 0.5), and YTL_LEAD_NONE asks for the old never-early
- *          rule, because under onset noise never-early misplaced about
- *          12% of frame-aligned changes;
- *          ytl_sample() takes a ytl_track; ytl_key's reserved bytes
- *          are now reserved_ (1) and curve (2), so a key written as
- *          { time, value, ease } still compiles.
- *   v0.1.0 - first implementation: time bases with anchor, pause, resume
- *          and rewind (by anchor only); events in a caller-sized array;
- *          keyframe tracks with six easings; evaluate at the predicted
- *          onset with a lead window; late events by the base's reach;
- *          prune, remove and clear; the record of where every event
- *          landed.
- *
- *   STATUS: v0.4.0. Rates and the window, tested by the writer of the
- *   implementation against an exact reference written apart from the
- *   header's arithmetic (32-bit limbs, itself checked against __int128):
- *   200,000 random cases of the mapping and its inverse to +-2^62; rate
- *   grids at 60 to 1000 Hz, six rates, three leads; the change point swept
- *   across a frame at 500 and 1000 Hz (208,000 landings); directed checks
- *   of every RATE rule and clamp; 12 more model runs with rate, window and
- *   rt_time ops; replay. The v0.3.0 test passes unchanged, its 20 model
- *   runs give the same statistics, and the examples print the same bytes
- *   but the version. 9 model mutations of RATE are caught; of 24 header
- *   mutations, 21 are caught and 3 cannot change a result
- *   (docs/timeline.md). MinGW gcc 16.1 (C99, C11, C++17), gcc 11.4
- *   under WSL2 (ASan, UBSan, -O3), MSVC 19.44 (C, C11, C++17). An
- *   evaluate with 7 bases at rate 1 costs 37 to 40 ns against v0.3.0's 26
- *   to 43; a scaled base adds about 4 to 5 ns.
- *   Sequences, also by the writer of the implementation: the rig_spec
- *   4.5.1 trial by calls and as a table (both ramps against a keyed
- *   reference on every frame, a re-anchor replaying them bit for bit);
- *   every ytl_run refusal with the handle, storage and arena unchanged
- *   by memcmp and the same code and index from ytl_check_ops; one
- *   sequence tween against ytl_tween() on 400 random descs, the same
- *   bits; cancel, on_n, the cross-base stop, the arena under clears; and
- *   600 random tables built by the calls, by ytl_run and by hand with
- *   ytl_add and ytl_set_track, compared on 160 frames. 19 of 19
- *   header mutations of the sequence code are caught. The op macros
- *   compile as C99 and as C++20 (tests/compile/timeline_ops.cpp). 32
- *   keyed channels sample within this machine's run-to-run spread of
- *   v0.3.0 (docs/timeline.md, "Sequences").
- *   v0.3.0. Skip, peek and lead: tests/adapt/timeline_test.c
- *   has directed checks for each (the 30-minute seek against an anchor,
- *   skip back against an anchor back, a waiting late event, the reach and
- *   rewind after a skip, prune and remove of skipped events, tracks and a
- *   waiting tween, peek's window edges, order, cap, bases and purity by
- *   memcmp of the whole handle, and a 22 s audio look-ahead at 60 Hz), and
- *   skip and peek are ops of 10 more seeds of the random model check.
- *   Unlike the v0.1 and v0.2 checks, these were written by the writer of
- *   the implementation. Ten model mutations of skip and peek are each
- *   caught; of 23 mutations of the header, 20 are caught and 3 cannot
- *   change a result (docs/timeline.md). The v0.2.0 test, unchanged,
- *   passes with the same model counts, and the examples print the same
- *   bytes but the version. Built and run with gcc 11.4 (WSL2: C99, C11,
- *   C++17, ASan and UBSan), MinGW-w64 gcc 16.1 (C99, C11, C++17), MSVC
- *   19.44 (default C, C11, C++17) and emcc 6.0.10 under node.
- *   timeline_bench at 60 Hz (gcc): trial 51 ns, movie 322 ns mean and
- *   599 ns p99, script 60 ns, tracks 246 ns: inside v0.2.0's ranges.
- *   v0.2.0: Built and run on Linux (WSL2) with gcc 11.4 as C99
- *   and C11 under -Wall -Wextra -Wpedantic -Wshadow -Werror at -O2 and
- *   -O3, and under -fsanitize=address,undefined -fno-sanitize-recover=all
- *   with no diagnostic; the compile checks also as C++17. On Windows 11
- *   with MSVC 19.44 under /W4 /WX, in its default C dialect and as
- *   /std:c++17. examples/timeline/trial.c and timeline_tracking.c print
- *   the same bytes on both compilers.
- *   tests/adapt/timeline_test.c was written from this manual by
- *   writers who did not read the implementation, with its own model, and
- *   checks: every rejected desc and argument; quantization on grids of 60,
- *   144, 240, 360, 500 and 1000 Hz at lead 0, 0.25 and 0.5 against a
- *   ceiling-division model with times on the window edges, and period 0;
- *   base states, pause with a lead, base 0 refusals; channel values by
- *   (time, id), binding and YTL_ERR_BOUND, add_n all or none; the
- *   report's order, cap and total; late events and the reach; anchor
- *   rewinds; remove, prune and clear; next_due. Tracks: every easing
- *   against its own formulas, BEZIER against a bisection solver on ten
- *   curves; sampled placement over 600k samples at rates 1, 7, 60, 120,
- *   999983 and 1e9 in integer arithmetic, LINEAR, STEP and CUBIC with the
- *   phantom ends; REPEAT folding and the hold; the 7.5 Hz flicker against
- *   the frame count at 60 to 500 Hz under onset noise; every
- *   set_track and tween rejection alone; tweens: every desc field and
- *   default, YTL_S and YTL_MS, "now" after evaluates, anchors, pauses
- *   and resumes, the takeover's from at the start for keyed, sampled,
- *   repeating, tween and Hermite old tracks, identical across seven frame
- *   grids, no repeated position on a retarget, keep_velocity's value and
- *   slope continuity against a Hermite model, cycles, FOREVER and yoyo,
- *   cancellation, replacement, the cross-base stop; a STEP track's change landing on
- *   the same frame as an event at the same time over 300 random cases;
- *   replay of the calls into two handles, storages compared with memcmp;
- *   and a random model check, 10 seeds x 800 steps with set_track and
- *   tweens that wait and take over, comparing the whole storage and every
- *   value after each step.
- *   Deliberate mutations of the model (lead off by one, rewind bounds, the
- *   LATE flag, an evaluate-time un-fire, repeated instead of phantom end
- *   samples, a whole-ns sample step, the hold a cycle late or folded, the
- *   Bezier parameter used as x, STEP tracks read at the onset, a tween's
- *   from read at the call, keep_velocity's slope ignored, the yoyo
- *   return leg missing) are each caught, and so is the first version's
- *   rule for "now". examples/timeline/tracking.c runs a 10-minute 5 Hz
- *   sum-of-sines target at 500 Hz within 1.73e-5 of its peak and a 7.5 Hz
- *   flicker with no wrong frame in 300500. examples/timeline/bench.c
- *   measures a frame's evaluate at 46-527 ns mean and under 1.6 us p99 on
- *   the workloads docs/timeline.md lists, the same at 60, 500 and
- *   1000 Hz; at 500 Hz the worst p99 is 0.04% of the 2 ms budget. Rare
- *   slow frames (up to 1.4 ms at 500 Hz) are the machine's, not the
- *   header's: two identical timelines timed in lockstep are slow on
- *   different frames (docs/timeline.md). What is NOT done: no run on
- *   macOS, clang, the newer gcc of CI or under emscripten (CI covers
- *   those); nothing here is a timing measurement of a display: the header
- *   computes, ysp/screen.h and the photodiode measure.
-
  *   ---------------------------------------------------------------------
  *   USAGE
  *   ---------------------------------------------------------------------
@@ -201,48 +41,56 @@
  *       enum { TRIAL = 1 };                                  // a base number
  *
  *       static ytl_event storage[64];
+ *       static ytl_key arena[64];                          // for sequences
  *       static ytl_timeline tl;                            // 64 KB
- *       ytl_desc d = { .events = storage, .event_capacity = 64,
- *                        .n_channels = N_CHANNELS };
+ *       ytl_desc d = { 0 };
+ *       d.events = storage; d.event_capacity = 64; d.n_channels = N_CHANNELS;
+ *       d.keys = arena; d.key_capacity = 64;
  *       if (!ytl_open(&tl, &d)) { fputs(ytl_error(&tl), stderr); return 1; }
  *
- *       const int64_t S = YTL_NS_PER_S;
- *       ytl_event e[] = {
- *           { .time = 0,       .base = TRIAL, .kind = YTL_ONSET,  .target = FIX_ON },
- *           { .time = S/2,     .base = TRIAL, .kind = YTL_OFFSET, .target = FIX_ON },
- *           { .time = S/2,     .base = TRIAL, .kind = YTL_ONSET,  .target = GRATING_ON },
- *           { .time = S/2,     .base = TRIAL, .kind = YTL_TRIGGER, .code = 12 },
- *           { .time = 6*S/5,   .base = TRIAL, .kind = YTL_OFFSET, .target = GRATING_ON },
+ *       ytl_event e = { 0 };                   // a MARK at 0 on the RT base
+ *       e.base = TRIAL;
+ *       e.kind = YTL_ONSET;   e.target = FIX_ON;
+ *       ytl_add(&tl, &e);
+ *       e.kind = YTL_OFFSET;  e.time_ns = YRT_MS(500);
+ *       ytl_add(&tl, &e);
+ *       e.kind = YTL_ONSET;   e.target = GRATING_ON;
+ *       ytl_add(&tl, &e);
+ *       e.kind = YTL_TRIGGER; e.code = 12;     // a TRIGGER's target is the caller's
+ *       ytl_add(&tl, &e);
+ *       e.kind = YTL_OFFSET;  e.code = 0;      e.time_ns = YRT_MS(1200);
+ *       ytl_add(&tl, &e);
+ *       static const ytl_key ramp[] = {  // time_ns, value, ease, 0, 0; outlives use
+ *           { YRT_MS(500),   0.0f, YTL_EASE_COSINE, 0, 0 },
+ *           { YRT_MS(600),   0.5f, YTL_EASE_LINEAR, 0, 0 },     // a hold
+ *           { YRT_MS(1100),  0.5f, YTL_EASE_COSINE, 0, 0 },
+ *           { YRT_MS(1200),  0.0f, YTL_EASE_LINEAR, 0, 0 },
  *       };
- *       static const ytl_key ramp[] = {                    // must outlive use
- *           { S/2,        0.0f, YTL_EASE_COSINE },
- *           { S/2 + S/10, 0.5f },                            // LINEAR, a hold
- *           { 11*S/10,    0.5f, YTL_EASE_COSINE },
- *           { 6*S/5,      0.0f },
- *       };
- *       ytl_add_n(&tl, e, 5);
- *       ytl_set_keys(&tl, CONTRAST, TRIAL, ramp, 4);
+ *       if (ytl_set_keys(&tl, CONTRAST, TRIAL, ramp, 4) < 0) fputs(ytl_error(&tl), stderr);
  *
  *   The same trial as a sequence (SEQUENCES), which reads as the GSAP
  *   timeline gsap.timeline().set(fix, {visible: 1}).set(fix, {visible: 0},
  *   "+=0.5").set(grating, {visible: 1}, "<").to(grating, {contrast: 0.5,
  *   duration: 0.1, ease: "sine.inOut"}, "<").to(grating, {contrast: 0,
  *   duration: 0.1, ease: "sine.inOut"}, "+=0.5").set(grating, {visible: 0})
- *   does; it needs a key arena, desc.keys and desc.key_capacity:
+ *   does; its tweens use the key arena, desc.keys and desc.key_capacity:
+ *
+ *       ytl_tween_desc up = { 0 };
+ *       up.to = 0.5f; up.duration_ns = YRT_MS(100); up.ease = YTL_EASE_COSINE;
+ *       ytl_tween_desc down = up;
+ *       down.to = 0.0f;
  *
  *       ytl_seq q = ytl_seq_on(&tl, TRIAL);           // cursor at 0
  *       ytl_on(&q, FIX_ON);
- *       ytl_wait(&q, YTL_MS(500));
+ *       ytl_wait(&q, YRT_MS(500));
  *       ytl_off(&q, FIX_ON);
  *       ytl_on(&q, GRATING_ON);
  *       ytl_trigger(&q, 12);
- *       ytl_to(&q, CONTRAST, &(ytl_tween_desc){       // the cursor stays
- *           .to = 0.5f, .duration = YTL_MS(100), .ease = YTL_EASE_COSINE });
- *       ytl_wait(&q, YTL_MS(600));
- *       ytl_then(&q, CONTRAST, &(ytl_tween_desc){     // and waits for its end
- *           .to = 0.0f, .duration = YTL_MS(100), .ease = YTL_EASE_COSINE });
+ *       ytl_to(&q, CONTRAST, &up);                     // the cursor stays
+ *       ytl_wait(&q, YRT_MS(600));
+ *       ytl_then(&q, CONTRAST, &down);                 // and waits for its end
  *       ytl_off(&q, GRATING_ON);
- *       if (q.err < 0) report(ytl_strerror(q.err), q.err_call);
+ *       if (q.err < 0) fputs(ytl_error(&tl), stderr);  // names call q.err_call
  *
  *       // Trial time 0 is the first frame of the trial.
  *       ytl_anchor(&tl, TRIAL, next_onset_ns, 0);
@@ -257,6 +105,7 @@
  *           flip_at(next_onset_ns);   // and log fired[] with the flip record
  *           ...
  *       }
+ *       ytl_close(&tl);
  *
  *   A 10-minute sum-of-sines tracking target on the x channel, from a
  *   table of samples at 120 per second, and a 7.5 Hz square-wave flicker
@@ -270,12 +119,12 @@
  *       ytl_set_track(&tl, TARGET_X, TRIAL, &path);
  *
  *       static const ytl_key square[] = {     // on for half a cycle
- *           { 0,              1.0f, YTL_EASE_STEP },
- *           { 2 * S / 30,     0.0f, YTL_EASE_STEP },
+ *           { 0,                  1.0f, YTL_EASE_STEP, 0, 0 },
+ *           { YRT_S(1) * 2 / 30,  0.0f, YTL_EASE_STEP, 0, 0 },
  *       };
  *       ytl_track flicker = { 0 };
  *       flicker.keys = square; flicker.n_keys = 2;
- *       flicker.period = 4 * S / 30;              // 133.33 ms, 7.5 Hz
+ *       flicker.period_ns = YRT_S(1) * 4 / 30;   // 133.33 ms, 7.5 Hz
  *       flicker.repeats = 4500;                   // 10 minutes, then off
  *       ytl_set_track(&tl, LUMINANCE, TRIAL, &flicker);
  *
@@ -283,13 +132,15 @@
  *   a moving dot sent somewhere else in mid-flight with no velocity step
  *   (GSAP: gsap.to(g, {contrast: 0, duration: 0.2, ease: "sine.inOut"})):
  *
- *       ytl_tween(&tl, CONTRAST, TRIAL, &(ytl_tween_desc){
- *           .to = 0.0f, .duration = YTL_MS(200), .ease = YTL_EASE_COSINE });
- *       ytl_tween(&tl, DOT_X, TRIAL, &(ytl_tween_desc){
- *           .to = 4.0f, .duration = YTL_MS(300), .keep_velocity = true });
+ *       ytl_tween_desc fade = { 0 };
+ *       fade.to = 0.0f; fade.duration_ns = YRT_MS(200); fade.ease = YTL_EASE_COSINE;
+ *       ytl_tween(&tl, CONTRAST, TRIAL, &fade);
+ *       ytl_tween_desc move = { 0 };
+ *       move.to = 4.0f; move.duration_ns = YRT_MS(300); move.keep_velocity = true;
+ *       ytl_tween(&tl, DOT_X, TRIAL, &move);
  *
- *   Compound literals and designated initializers are C99; in C++17 fill a
- *   ytl_tween_desc d = {} field by field.
+ *   These blocks build as C99 and as C++17. The op-table macros
+ *   (SEQUENCES) are designated initializers: C99, or C++20.
  *
  *   The next trial clears the trial base and adds its own events, or keeps
  *   them and anchors the base again at its first frame: anchoring moves
@@ -304,8 +155,13 @@
  *     caller's monotonic clock, yrt_now_ns() when ysp/rt.h is in use; a
  *     frame's onset is on it. The header compares and subtracts times and
  *     never reads a clock. Times stay below 2^62 ns (146 years) in
- *     magnitude so that a sum of two cannot overflow. ytl_ns(seconds)
- *     rounds a double to the nearest nanosecond, for tables in seconds.
+ *     magnitude so that a sum of two cannot overflow. A time field the
+ *     caller writes ends in _ns (event.time_ns, key.time_ns,
+ *     track.period_ns, tween.duration_ns), so code that wrote seconds
+ *     there fails to compile. Write a literal with YRT_S(), YRT_MS() or
+ *     YRT_US(), which this header defines as ysp/rt.h does. ytl_ns(seconds)
+ *     rounds a run-time double to the nearest nanosecond and clamps it,
+ *     for tables in seconds.
  *
  *   TIME BASES (ytl_anchor, ytl_pause, ytl_resume, ytl_stop)
  *     An event or a track is on one of YTL_MAX_BASES (8) bases. Base 0,
@@ -407,7 +263,7 @@
  *     ytl_ease, the last key's too, though the last key's is never used
  *     and the LOG and BEZIER checks skip it.
  *     SAMPLED: n_samples floats at track.rate samples per second (an
- *     integer, 1 to 1e9), sample i at base time t0 + i * 1e9 / rate ns,
+ *     integer, 1 to 1e9), sample i at base time t0_ns + i * 1e9 / rate,
  *     exactly, not rounded to a whole ns. For a trajectory that few keys
  *     cannot describe: a sum-of-sines tracking target, a recorded path, a
  *     noise sequence. A sample costs 4 bytes against a key's 16, there is
@@ -416,7 +272,7 @@
  *     (59.94) is a resampling job for the pack tool. A step in whole ns
  *     would drift: at 120 samples/s it is a third of a ns short per
  *     sample, and docs/timeline.md measures what that costs on a
- *     moving target. Before t0 the value is the first sample, from the last
+ *     moving target. Before t0_ns the value is the first sample, from the last
  *     sample's time on the last sample, and between samples i and i+1
  *     by track.interp:
  *       YTL_INTERP_LINEAR (0)  v_i + (v_i+1 - v_i) u
@@ -435,8 +291,8 @@
  *     needs 1000 samples/s for 5e-6, and its velocity steps at every
  *     sample. The pack tool computes the samples once, so the runtime does
  *     no trigonometry and the trajectory is the same bits everywhere.
- *     REPEAT: track.period > 0 repeats the track every period ns from its
- *     start (the first key's time, or t0): base time t reads the track at
+ *     REPEAT: track.period_ns > 0 repeats the track every period from its
+ *     start (the first key's time, or t0_ns): base time t reads the track at
  *     start + ((t - start) mod period). track.repeats cycles (0: forever),
  *     after which the track holds its value at start + period, read
  *     without repeating. Before the start, no repeat applies. A square-wave
@@ -466,17 +322,17 @@
  *     value to another, with its keys in the handle, so the caller keeps no
  *     array alive. Every field of ytl_tween_desc may be left zero:
  *       to             the end value
- *       duration       ns, >= 0; 0 jumps at the start
- *       start          the base time it starts, when start_set; otherwise
+ *       duration_ns    >= 0; 0 jumps at the start
+ *       start_ns       the base time it starts, when start_set; otherwise
  *                      "now": the base time of the base's last evaluated
  *                      onset, unless an anchor, pause, resume or rate
  *                      change of a running base came after it, which set
  *                      "now" to the anchor's base time, the frozen time or
  *                      the base time at the change; 0 on a base never
  *                      evaluated or anchored
- *       delay          added to the start either way, so {.delay = d} is
- *                      "d after now" and {.start = t, .start_set = true,
- *                      .delay = d} is "d after t"
+ *       delay_ns       added to the start either way, so delay_ns = d is
+ *                      "d after now", and start_ns = t, start_set = true,
+ *                      delay_ns = d is "d after t"
  *       from           the start value, when from_set; otherwise the value
  *                      the channel has at the start (below)
  *       ease, curve    a ytl_ease (0 = LINEAR), and for YTL_EASE_BEZIER
@@ -787,12 +643,12 @@
  *                                              of a channel at the cursor
  *       ytl_trigger, ytl_mark(q, code, user)  .call(): a TRIGGER or a
  *                                              MARK at the cursor
- *       ytl_wait(q, dt), ytl_at(q, t)      "+=dt" and an absolute
+ *       ytl_wait(q, dt_ns), ytl_at(q, t_ns)  "+=dt" and an absolute
  *                                              position; q.t is the cursor,
  *                                              so a variable is a label
  *       ytl_to(q, ch, &d)                    .to(target, vars, "<"): a
  *                                              tween from the cursor plus
- *                                              d.delay; the cursor stays;
+ *                                              d.delay_ns; the cursor stays;
  *                                              returns the tween's end
  *       ytl_then(q, ch, &d)                  .to(target, vars): ytl_to
  *                                              and a wait to its end
@@ -805,8 +661,9 @@
  *     absolute base times, and frame placement, sampling and replay are the
  *     core's.
  *     A STICKY ERROR, as in a stream: the first failing call stores its code
- *     in q.err and its index (calls counted from 0) in q.err_call, and every
- *     later call does nothing. One check at the end of a sequence does. The
+ *     in q.err and its index (calls counted from 0) in q.err_call, writes
+ *     the timeline's message (ytl_error), and every later call does
+ *     nothing. One check at the end of a sequence does. The
  *     builder is not atomic: the calls before the error stay. Clear the
  *     base after an error, as a trial does anyway, or cancel the sequence.
  *     ytl_seq_cancel(&q) deletes every event of the sequence's base with
@@ -930,6 +787,24 @@
  *   The intended use is the frame thread only.
  *
  *   ---------------------------------------------------------------------
+ *   ERRORS AND CLOSE
+ *   ---------------------------------------------------------------------
+ *   ytl_open() clears the message, and a failed open leaves one. Every
+ *   other call on the handle that returns a YTL_ERR_* code writes the
+ *   message before it returns, in the frame loop too ("ysp_timeline:
+ *   ytl_evaluate: call out of order"), and so does a sequence call that
+ *   sets q.err ("ysp_timeline: sequence call 3: invalid argument"). The
+ *   message is the last failure's; ytl_error() reads it. The write is an
+ *   snprintf on the failure path only. A query that returns bool
+ *   (ytl_base_time, ytl_rt_time, ytl_window, ytl_get_rate, ytl_next_due)
+ *   answers false and writes nothing: false is an answer there, not a
+ *   failure.
+ *   ytl_close() ends the use of the handle. The handle owns nothing (the
+ *   storage and the key arena are the caller's), so close marks it closed
+ *   and keeps the message; calls after it return YTL_ERR_CLOSED. It is safe
+ *   on a zeroed handle, after a failed open, and a second time.
+ *
+ *   ---------------------------------------------------------------------
  *   BUILDING
  *   ---------------------------------------------------------------------
  *   Link libm on Linux (-lm). Define YTL_API to change the linkage of
@@ -937,15 +812,189 @@
  *   unit that does not call every function needs -Wno-unused-function.
  *
  *   LICENSE: public domain / MIT-0, see end of file.
+ *
+ *   ---------------------------------------------------------------------
+ *   CHANGELOG
+ *   ---------------------------------------------------------------------
+ *   v0.5.0 - the repository conventions (README.md). Breaks the API. Time
+ *          fields the caller writes end in _ns: ytl_event.time_ns,
+ *          ytl_key.time_ns, ytl_track.t0_ns and period_ns,
+ *          ytl_tween_desc.duration_ns, start_ns and delay_ns, ytl_op.t_ns;
+ *          time parameters are named _ns. YTL_S, YTL_MS, YTL_NS_PER_S and
+ *          YTL_NS_PER_MS are gone: the header defines ysp/rt.h's YRT_S,
+ *          YRT_MS, YRT_US, YRT_NS, YRT_TO_S and YRT_TO_MS under the same
+ *          guard. ytl_close(). Every int call that fails writes
+ *          ytl_error(), and so does a sequence call that sets q.err;
+ *          ytl_peek(), ytl_clamped() and ytl_check_ops() take a non-const
+ *          handle for it. The CHANGELOG moved to the end of this comment,
+ *          and USAGE builds as C99 and C++17. Nothing else changes: the
+ *          same calls give the same values, records and bytes.
+ *   v0.4.0 - base rates: ytl_rate(tl, base, rt, num, den) runs a base at
+ *          an exact rational rate from RT time rt on, with no jump and no
+ *          rewind (GSAP's timeScale); ytl_get_rate(); ytl_rt_time(),
+ *          the first RT time at which a running base reaches a base time.
+ *          ytl_window(): the base time a frame's window reaches, the
+ *          rule evaluate uses, for a scheduler or ysp/video.h. A time at
+ *          or past +-2^62 is clamped only with a record: ytl_clamped()
+ *          counts the evaluates and pauses that met one, and the queries
+ *          refuse it (before, the sum could overflow). The report is
+ *          ordered by when the base reaches each event, which is v0.3.0's
+ *          onset - residual at rate 1. A timeline that sets no rate gives
+ *          the same bytes as v0.3.0.
+ *          Sequences: ytl_seq, a cursor on a base for building a trial
+ *          in the order it plays, as a GSAP timeline is built (ytl_on,
+ *          ytl_off, ytl_set_value, ytl_trigger, ytl_mark,
+ *          ytl_wait, ytl_at, ytl_to, ytl_then, ytl_keyframes,
+ *          ytl_on_n), with a sticky error; op tables (ytl_op, the
+ *          YTL_ON() ... macros) applied all or none by ytl_run() and
+ *          checked at load by ytl_check_ops(); ytl_seq_cancel(). A
+ *          sequence's tweens on a channel become one keyed track in a key
+ *          arena (desc.keys), so a channel takes any number of them and a
+ *          rewind replays them. Every key of a track now reads its curve
+ *          through one path (ytl_sample() is unchanged).
+ *   v0.3.0 - ytl_skip(): a seek that marks the events it passes over
+ *          YTL_EV_SKIPPED instead of firing them late on one frame, and
+ *          returns how many; their channel values still apply. A skip
+ *          back is an anchor's rewind. ytl_peek(): the pending events
+ *          in an RT window, with their RT times, changing nothing, for
+ *          the audio path's look-ahead. ytl_lead(): the lead in use.
+ *          A rewind now makes skipped events pending again, and prune
+ *          deletes skipped events with the fired ones. Nothing else
+ *          changes: a timeline that never skips gives the same bytes as
+ *          v0.2.0.
+ *   v0.2.0 - tracks grow: ytl_track with a keyed or a SAMPLED form
+ *          (floats at an integer rate, LINEAR, STEP or Catmull-Rom CUBIC,
+ *          for long trajectories such as a sum-of-sines target), a REPEAT
+ *          (period and count, for flicker and counterphase), the
+ *          YTL_EASE_BEZIER easing (CSS cubic-bezier, from a per-track
+ *          curve table), and ytl_tween() with a ytl_tween_desc: to,
+ *          from, duration, start or delay, ease, cycles, yoyo, and
+ *          keep_velocity (a Hermite takeover with no velocity step); a
+ *          tween waits until its start while the old track runs on, and
+ *          takes the old track's value there; its keys live in the
+ *          handle. YTL_S() and YTL_MS() for literals. A STEP track is
+ *          read at the end of the lead window, so its changes land where
+ *          events at the same times land; other tracks are read at the
+ *          onset. Breaking: the default lead is now half a frame (desc.lead
+ *          0 means 0.5), and YTL_LEAD_NONE asks for the old never-early
+ *          rule, because under onset noise never-early misplaced about
+ *          12% of frame-aligned changes;
+ *          ytl_sample() takes a ytl_track; ytl_key's reserved bytes
+ *          are now reserved_ (1) and curve (2), so a key written as
+ *          { time, value, ease } still compiles.
+ *   v0.1.0 - first implementation: time bases with anchor, pause, resume
+ *          and rewind (by anchor only); events in a caller-sized array;
+ *          keyframe tracks with six easings; evaluate at the predicted
+ *          onset with a lead window; late events by the base's reach;
+ *          prune, remove and clear; the record of where every event
+ *          landed.
+ *
+ *   STATUS: v0.4.0. Rates and the window, tested by the writer of the
+ *   implementation against an exact reference written apart from the
+ *   header's arithmetic (32-bit limbs, itself checked against __int128):
+ *   200,000 random cases of the mapping and its inverse to +-2^62; rate
+ *   grids at 60 to 1000 Hz, six rates, three leads; the change point swept
+ *   across a frame at 500 and 1000 Hz (208,000 landings); directed checks
+ *   of every RATE rule and clamp; 12 more model runs with rate, window and
+ *   rt_time ops; replay. The v0.3.0 test passes unchanged, its 20 model
+ *   runs give the same statistics, and the examples print the same bytes
+ *   but the version. 9 model mutations of RATE are caught; of 24 header
+ *   mutations, 21 are caught and 3 cannot change a result
+ *   (docs/timeline.md). MinGW gcc 16.1 (C99, C11, C++17), gcc 11.4
+ *   under WSL2 (ASan, UBSan, -O3), MSVC 19.44 (C, C11, C++17). An
+ *   evaluate with 7 bases at rate 1 costs 37 to 40 ns against v0.3.0's 26
+ *   to 43; a scaled base adds about 4 to 5 ns.
+ *   Sequences, also by the writer of the implementation: the rig_spec
+ *   4.5.1 trial by calls and as a table (both ramps against a keyed
+ *   reference on every frame, a re-anchor replaying them bit for bit);
+ *   every ytl_run refusal with the handle, storage and arena unchanged
+ *   by memcmp and the same code and index from ytl_check_ops; one
+ *   sequence tween against ytl_tween() on 400 random descs, the same
+ *   bits; cancel, on_n, the cross-base stop, the arena under clears; and
+ *   600 random tables built by the calls, by ytl_run and by hand with
+ *   ytl_add and ytl_set_track, compared on 160 frames. 19 of 19
+ *   header mutations of the sequence code are caught. The op macros
+ *   compile as C99 and as C++20 (tests/compile/timeline_ops.cpp). 32
+ *   keyed channels sample within this machine's run-to-run spread of
+ *   v0.3.0 (docs/timeline.md, "Sequences").
+ *   v0.3.0. Skip, peek and lead: tests/adapt/timeline_test.c
+ *   has directed checks for each (the 30-minute seek against an anchor,
+ *   skip back against an anchor back, a waiting late event, the reach and
+ *   rewind after a skip, prune and remove of skipped events, tracks and a
+ *   waiting tween, peek's window edges, order, cap, bases and purity by
+ *   memcmp of the whole handle, and a 22 s audio look-ahead at 60 Hz), and
+ *   skip and peek are ops of 10 more seeds of the random model check.
+ *   Unlike the v0.1 and v0.2 checks, these were written by the writer of
+ *   the implementation. Ten model mutations of skip and peek are each
+ *   caught; of 23 mutations of the header, 20 are caught and 3 cannot
+ *   change a result (docs/timeline.md). The v0.2.0 test, unchanged,
+ *   passes with the same model counts, and the examples print the same
+ *   bytes but the version. Built and run with gcc 11.4 (WSL2: C99, C11,
+ *   C++17, ASan and UBSan), MinGW-w64 gcc 16.1 (C99, C11, C++17), MSVC
+ *   19.44 (default C, C11, C++17) and emcc 6.0.10 under node.
+ *   timeline_bench at 60 Hz (gcc): trial 51 ns, movie 322 ns mean and
+ *   599 ns p99, script 60 ns, tracks 246 ns: inside v0.2.0's ranges.
+ *   v0.2.0: Built and run on Linux (WSL2) with gcc 11.4 as C99
+ *   and C11 under -Wall -Wextra -Wpedantic -Wshadow -Werror at -O2 and
+ *   -O3, and under -fsanitize=address,undefined -fno-sanitize-recover=all
+ *   with no diagnostic; the compile checks also as C++17. On Windows 11
+ *   with MSVC 19.44 under /W4 /WX, in its default C dialect and as
+ *   /std:c++17. examples/timeline/trial.c and timeline_tracking.c print
+ *   the same bytes on both compilers.
+ *   tests/adapt/timeline_test.c was written from this manual by
+ *   writers who did not read the implementation, with its own model, and
+ *   checks: every rejected desc and argument; quantization on grids of 60,
+ *   144, 240, 360, 500 and 1000 Hz at lead 0, 0.25 and 0.5 against a
+ *   ceiling-division model with times on the window edges, and period 0;
+ *   base states, pause with a lead, base 0 refusals; channel values by
+ *   (time, id), binding and YTL_ERR_BOUND, add_n all or none; the
+ *   report's order, cap and total; late events and the reach; anchor
+ *   rewinds; remove, prune and clear; next_due. Tracks: every easing
+ *   against its own formulas, BEZIER against a bisection solver on ten
+ *   curves; sampled placement over 600k samples at rates 1, 7, 60, 120,
+ *   999983 and 1e9 in integer arithmetic, LINEAR, STEP and CUBIC with the
+ *   phantom ends; REPEAT folding and the hold; the 7.5 Hz flicker against
+ *   the frame count at 60 to 500 Hz under onset noise; every
+ *   set_track and tween rejection alone; tweens: every desc field and
+ *   default, YTL_S and YTL_MS, "now" after evaluates, anchors, pauses
+ *   and resumes, the takeover's from at the start for keyed, sampled,
+ *   repeating, tween and Hermite old tracks, identical across seven frame
+ *   grids, no repeated position on a retarget, keep_velocity's value and
+ *   slope continuity against a Hermite model, cycles, FOREVER and yoyo,
+ *   cancellation, replacement, the cross-base stop; a STEP track's change landing on
+ *   the same frame as an event at the same time over 300 random cases;
+ *   replay of the calls into two handles, storages compared with memcmp;
+ *   and a random model check, 10 seeds x 800 steps with set_track and
+ *   tweens that wait and take over, comparing the whole storage and every
+ *   value after each step.
+ *   Deliberate mutations of the model (lead off by one, rewind bounds, the
+ *   LATE flag, an evaluate-time un-fire, repeated instead of phantom end
+ *   samples, a whole-ns sample step, the hold a cycle late or folded, the
+ *   Bezier parameter used as x, STEP tracks read at the onset, a tween's
+ *   from read at the call, keep_velocity's slope ignored, the yoyo
+ *   return leg missing) are each caught, and so is the first version's
+ *   rule for "now". examples/timeline/tracking.c runs a 10-minute 5 Hz
+ *   sum-of-sines target at 500 Hz within 1.73e-5 of its peak and a 7.5 Hz
+ *   flicker with no wrong frame in 300500. examples/timeline/bench.c
+ *   measures a frame's evaluate at 46-527 ns mean and under 1.6 us p99 on
+ *   the workloads docs/timeline.md lists, the same at 60, 500 and
+ *   1000 Hz; at 500 Hz the worst p99 is 0.04% of the 2 ms budget. Rare
+ *   slow frames (up to 1.4 ms at 500 Hz) are the machine's, not the
+ *   header's: two identical timelines timed in lockstep are slow on
+ *   different frames (docs/timeline.md). What is NOT done: no run on
+ *   macOS, clang, the newer gcc of CI or under emscripten (CI covers
+ *   those); nothing here is a timing measurement of a display: the header
+ *   computes, ysp/screen.h and the photodiode measure.
+ *
  */
 #ifndef YSP_TIMELINE_H_INCLUDED
 #define YSP_TIMELINE_H_INCLUDED
 
 /* The version of this header, for a log line or a compile-time check. */
 #define YTL_VERSION_MAJOR 0
-#define YTL_VERSION_MINOR 4
+#define YTL_VERSION_MINOR 5
 #define YTL_VERSION_PATCH 0
-#define YTL_VERSION_STRING "0.4.0"
+#define YTL_VERSION_STRING "0.5.0"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -985,14 +1034,18 @@ extern "C" {
 #define YTL_LEAD_NONE (-1.0)  /* desc.lead: never early; 0 is the default,
                                  * half a frame                             */
 
-#define YTL_NS_PER_S  INT64_C(1000000000)
-#define YTL_NS_PER_MS INT64_C(1000000)
-
-/* Seconds and milliseconds to ns, rounded to nearest, for literals in a
- * desc: .duration = YTL_MS(200). Constant expressions, so they work in a
- * static initializer. For a run-time double, ytl_ns() also clamps. */
-#define YTL_S(x)  ((int64_t)((x) * 1e9 + ((x) < 0 ? -0.5 : 0.5)))
-#define YTL_MS(x) ((int64_t)((x) * 1e6 + ((x) < 0 ? -0.5 : 0.5)))
+/* Units, the same block as ysp/rt.h's under the same guard, so one spelling
+ * works with or without it: .duration_ns = YRT_MS(200). Rounded to the
+ * nearest ns; constant expressions, so they work in a static initializer.
+ * For a run-time double, ytl_ns() also clamps. */
+#ifndef YRT_S
+#define YRT_NS(x)    ((int64_t)(x))
+#define YRT_US(x)    ((int64_t)((x) * 1e3 + ((x) < 0 ? -0.5 : 0.5)))
+#define YRT_MS(x)    ((int64_t)((x) * 1e6 + ((x) < 0 ? -0.5 : 0.5)))
+#define YRT_S(x)     ((int64_t)((x) * 1e9 + ((x) < 0 ? -0.5 : 0.5)))
+#define YRT_TO_MS(ns) ((double)(ns) / 1e6)
+#define YRT_TO_S(ns)  ((double)(ns) / 1e9)
+#endif
 
 #define YTL_FOREVER (-1)      /* ytl_tween_desc.cycles                  */
 
@@ -1022,10 +1075,10 @@ typedef enum ytl_kind {
 #define YTL_EV_LATE    2u /* it was added after its window had passed     */
 #define YTL_EV_SKIPPED 4u /* a ytl_skip() passed over it; never fires   */
 
-/* One event. The caller fills time, base, kind and its payload; the header
- * assigns id and writes the landing fields. 64 bytes. */
+/* One event. The caller fills time_ns, base, kind and its payload; the
+ * header assigns id and writes the landing fields. 64 bytes. */
 typedef struct ytl_event {
-    int64_t  time;      /* on its base, ns                                  */
+    int64_t  time_ns;   /* on its base                                      */
     int32_t  target;    /* the channel for ONSET, OFFSET and SET; the
                          * caller's for the other kinds                     */
     float    value;     /* SET's value; must be finite                      */
@@ -1040,7 +1093,7 @@ typedef struct ytl_event {
      * skipped (SKIP), and the RT time in a ytl_peek() copy (PEEK) */
     int64_t  frame;     /* ytl_frame.index of the frame it landed on      */
     int64_t  onset;     /* that frame's predicted onset, RT ns              */
-    int64_t  residual;  /* base time at onset minus time, ns                */
+    int64_t  residual;  /* base time at onset minus time_ns, ns             */
 } ytl_event;
 
 /* --- tracks ------------------------------------------------------------ */
@@ -1058,7 +1111,7 @@ typedef enum ytl_ease {
 /* One key: the value at a time on the track's base, and the easing of the
  * segment that starts here. The last key's ease is not used. 16 bytes. */
 typedef struct ytl_key {
-    int64_t  time;
+    int64_t  time_ns;   /* on the track's base                              */
     float    value;     /* must be finite                                   */
     uint8_t  ease;      /* a ytl_ease                                     */
     uint8_t  reserved_;
@@ -1083,10 +1136,10 @@ typedef enum ytl_interp {
 typedef struct ytl_track {
     const ytl_key*   keys;       /* keyed: n_keys keys sorted by time     */
     const ytl_curve* curves;     /* keyed: for YTL_EASE_BEZIER keys     */
-    const float*       samples;    /* sampled: samples[i] at t0 + i/rate s  */
-    int64_t            t0;
+    const float*       samples;    /* sampled: samples[i] at t0_ns + i/rate s */
+    int64_t            t0_ns;      /* sampled: base time of samples[0]      */
     int64_t            rate;       /* sampled: samples per second, 1..1e9   */
-    int64_t            period;     /* > 0: repeat every period ns           */
+    int64_t            period_ns;  /* > 0: repeat every period_ns           */
     int                n_keys;
     int                n_curves;
     int                n_samples;
@@ -1097,20 +1150,21 @@ typedef struct ytl_track {
 /* The value of a track at time t (TRACKS), or 0 when it has neither keys
  * nor samples. No validation: the track is assumed to be one that
  * ytl_set_track() accepts. */
-YTL_API double ytl_sample(const ytl_track* tr, int64_t t);
+YTL_API double ytl_sample(const ytl_track* tr, int64_t t_ns);
 
 /* A tween (TWEENS). Every field may be zero: a zeroed desc is a linear
  * jump to 0 now. GSAP's gsap.to(g, {contrast: 0, duration: 0.2,
  * ease: "sine.inOut"}) is
- *     ytl_tween(&tl, CONTRAST, TRIAL, &(ytl_tween_desc){
- *         .to = 0.0f, .duration = YTL_MS(200), .ease = YTL_EASE_COSINE });
+ *     ytl_tween_desc d = { 0 };
+ *     d.to = 0.0f; d.duration_ns = YRT_MS(200); d.ease = YTL_EASE_COSINE;
+ *     ytl_tween(&tl, CONTRAST, TRIAL, &d);
  */
 typedef struct ytl_tween_desc {
     float       to;
     float       from;           /* with from_set; else the value at start   */
-    int64_t     duration;       /* ns, >= 0; 0 jumps                        */
-    int64_t     start;          /* base time, with start_set; else now      */
-    int64_t     delay;          /* added to start, either way               */
+    int64_t     duration_ns;    /* >= 0; 0 jumps                            */
+    int64_t     start_ns;       /* base time, with start_set; else now      */
+    int64_t     delay_ns;       /* added to start_ns, either way            */
     ytl_curve curve;          /* YTL_EASE_BEZIER only                   */
     int         ease;           /* a ytl_ease; 0 = LINEAR                 */
     int         cycles;         /* 0 or 1: once; n; YTL_FOREVER           */
@@ -1180,7 +1234,7 @@ typedef struct ytl__chan {
     ytl_key   ik[3];       /* a tween's keys (3 with yoyo)                */
     ytl_curve ic;          /* a tween's curve, or its start slope         */
     ytl_tween_desc pend;   /* a tween waiting for its start, resolved:
-                              * pend.start is absolute, pend.delay 0        */
+                              * pend.start_ns is absolute, delay_ns 0     */
     int64_t  last_time;      /* (time, id) of the event the value is from   */
     int32_t  last_id;
     int32_t  seg;            /* the key before the last sample, -1 before
@@ -1197,7 +1251,7 @@ typedef struct ytl__chan {
     uint8_t  has_pend;       /* pend is waiting                             */
     uint8_t  pend_stepped;   /* pend will be a STEP track                   */
     uint8_t  pend_arena;     /* the waiting driver is the arena block at
-                              * poff, not pend (pend.start is its start)    */
+                              * poff, not pend (pend.start_ns its start)   */
     /* SEQUENCES, after the fields an evaluate reads for every track */
     int32_t  aoff;           /* own == 2: the track's keys in the arena     */
     int32_t  poff;           /* pend_arena: the waiting block's keys        */
@@ -1266,7 +1320,7 @@ enum {
 typedef struct ytl_op {
     int              op;
     int              ch;
-    int64_t          t;
+    int64_t          t_ns;     /* WAIT: a duration; AT: a base time */
     int32_t          code;
     float            value;
     uint64_t         user;
@@ -1280,8 +1334,8 @@ typedef struct ytl_op {
 #define YTL_SET_VALUE(c, v)  { .op = YTL_OP_SET_VALUE, .ch = (c), .value = (v) }
 #define YTL_TRIGGER(k)       { .op = YTL_OP_TRIGGER, .code = (k) }
 #define YTL_MARK(k, u)       { .op = YTL_OP_MARK, .code = (k), .user = (u) }
-#define YTL_WAIT(dt)         { .op = YTL_OP_WAIT, .t = (dt) }
-#define YTL_AT(bt)           { .op = YTL_OP_AT, .t = (bt) }
+#define YTL_WAIT(dt)         { .op = YTL_OP_WAIT, .t_ns = (dt) }
+#define YTL_AT(bt)           { .op = YTL_OP_AT, .t_ns = (bt) }
 #define YTL_TO(c, ...)       { .op = YTL_OP_TO, .ch = (c), .tween = { __VA_ARGS__ } }
 #define YTL_THEN(c, ...)     { .op = YTL_OP_THEN, .ch = (c), .tween = { __VA_ARGS__ } }
 #define YTL_COUNT(a)         ((int)(sizeof(a) / sizeof((a)[0])))
@@ -1289,68 +1343,74 @@ typedef struct ytl_op {
 /* --- lifecycle --------------------------------------------------------- */
 
 /* Validate `desc` and reset the handle: no events, base 0 running and the
- * others stopped, channels at their initial values. Returns false with
- * ytl_error() set on a bad or NULL desc, and the handle closed. The only function that writes the
- * message; the others return YTL_ERR_* codes. */
+ * others stopped, channels at their initial values, the message cleared.
+ * Returns false with ytl_error() set on a bad or NULL desc, and the handle
+ * closed. */
 YTL_API bool ytl_open(ytl_timeline* tl, const ytl_desc* desc);
 
-/* The last open() message ("" after a success). */
+/* End the use of the handle (ERRORS AND CLOSE). It owns nothing, so this
+ * marks it closed and keeps the message. Safe on a zeroed handle, after a
+ * failed open, and twice; NULL is a no-op. */
+YTL_API void ytl_close(ytl_timeline* tl);
+
+/* The message of the last failure ("" after a successful open). */
 YTL_API const char* ytl_error(const ytl_timeline* tl);
 YTL_API bool        ytl_is_open(const ytl_timeline* tl);
 
 /* --- time bases -------------------------------------------------------- */
 
-/* Run base `base` (1 .. YTL_MAX_BASES-1) with base time `base_time` at RT
- * time `rt`, from any state. A base_time at or before the furthest base
- * time evaluated on it rewinds it (REWIND). Returns 0, YTL_ERR_ARG (base
- * 0 or out of range, |base_time| >= 2^62) or YTL_ERR_CLOSED. Pause,
- * resume and stop also return YTL_ERR_ARG for base 0. */
-YTL_API int ytl_anchor(ytl_timeline* tl, int base, int64_t rt, int64_t base_time);
+/* Run base `base` (1 .. YTL_MAX_BASES-1) with base time `base_time_ns` at
+ * RT time `rt_ns`, from any state. A base time at or before the furthest
+ * base time evaluated on it rewinds it (REWIND). Returns 0, YTL_ERR_ARG
+ * (base 0 or out of range, |base_time_ns| >= 2^62) or YTL_ERR_CLOSED.
+ * Pause, resume and stop also return YTL_ERR_ARG for base 0. */
+YTL_API int ytl_anchor(ytl_timeline* tl, int base, int64_t rt_ns, int64_t base_time_ns);
 
-/* Freeze a running base at its time at RT time `rt`. YTL_ERR_ORDER when
- * the base is not running. */
-YTL_API int ytl_pause(ytl_timeline* tl, int base, int64_t rt);
+/* Freeze a running base at its time at RT time `rt_ns`. YTL_ERR_ORDER
+ * when the base is not running. */
+YTL_API int ytl_pause(ytl_timeline* tl, int base, int64_t rt_ns);
 
-/* Run a paused base again from its frozen time at RT time `rt`.
+/* Run a paused base again from its frozen time at RT time `rt_ns`.
  * YTL_ERR_ORDER when the base is not paused. */
-YTL_API int ytl_resume(ytl_timeline* tl, int base, int64_t rt);
+YTL_API int ytl_resume(ytl_timeline* tl, int base, int64_t rt_ns);
 
 /* Stop a base: nothing on it fires, rewinds or writes a channel until it is
  * anchored again. */
 YTL_API int ytl_stop(ytl_timeline* tl, int base);
 
-/* Seek base `base` to `base_time` at RT time `rt` without firing what lies
- * between (SKIP): ytl_anchor(), then every pending event of the base
- * before base_time is marked YTL_EV_SKIPPED and never fires. Returns the
+/* Seek base `base` to `base_time_ns` at RT time `rt_ns` without firing
+ * what lies between (SKIP): ytl_anchor(), then every pending event of the
+ * base before base_time_ns is marked YTL_EV_SKIPPED and never fires. Returns the
  * number skipped (>= 0), or what ytl_anchor() returns on an error, with
  * nothing changed. */
-YTL_API int ytl_skip(ytl_timeline* tl, int base, int64_t rt, int64_t base_time);
+YTL_API int ytl_skip(ytl_timeline* tl, int base, int64_t rt_ns, int64_t base_time_ns);
 
-/* The base's time at RT time `rt` into *out, and true, when the base is
+/* The base's time at RT time `rt_ns` into *out, and true, when the base is
  * running or paused (a paused base gives its frozen time); false when it is
  * stopped or the arguments are bad. */
-YTL_API bool ytl_base_time(const ytl_timeline* tl, int base, int64_t rt, int64_t* out);
+YTL_API bool ytl_base_time(const ytl_timeline* tl, int base, int64_t rt_ns, int64_t* out);
 
-/* From RT time `rt` on, run `base` (1 .. YTL_MAX_BASES-1) at num/den base
- * ns per RT ns (RATE). num and den are in [1, 2^31 - 1] and are stored
- * reduced by their gcd. A running base continues from its time at rt with
+/* From RT time `rt_ns` on, run `base` (1 .. YTL_MAX_BASES-1) at num/den
+ * base ns per RT ns (RATE). num and den are in [1, 2^31 - 1] and are stored
+ * reduced by their gcd. A running base continues from its time there with
  * no jump and no rewind; a paused or stopped base keeps the rate for its
  * next resume or anchor; the rate it has already changes nothing. GSAP's
  * movie.timeScale(0.5) is ytl_rate(&tl, MOVIE, next_onset, 1, 2).
- * Returns 0, YTL_ERR_ARG (base 0 or out of range, num or den < 1, |rt| >=
- * 2^62, or a running base whose time at rt is at or past +-2^62) or
+ * Returns 0, YTL_ERR_ARG (base 0 or out of range, num or den < 1, |rt_ns|
+ * >= 2^62, or a running base whose time at rt_ns is at or past +-2^62) or
  * YTL_ERR_CLOSED. */
-YTL_API int ytl_rate(ytl_timeline* tl, int base, int64_t rt, int32_t num, int32_t den);
+YTL_API int ytl_rate(ytl_timeline* tl, int base, int64_t rt_ns, int32_t num, int32_t den);
 
 /* The base's rate, reduced, into *num and *den, and true; base 0 is 1/1, and
  * a stopped base has the rate it will run at. False on bad arguments. */
 YTL_API bool ytl_get_rate(const ytl_timeline* tl, int base, int32_t* num, int32_t* den);
 
-/* The first RT time at which the running base reaches base time `bt`, into
- * *out, and true (RATE): the base has reached bt at RT time t exactly when
- * t >= *out. False when the base is paused or stopped, |bt| >= 2^62, the
- * result is at or past +-2^62, or the arguments are bad. */
-YTL_API bool ytl_rt_time(const ytl_timeline* tl, int base, int64_t bt, int64_t* out);
+/* The first RT time at which the running base reaches base time `bt_ns`,
+ * into *out, and true (RATE): the base has reached bt_ns at RT time t
+ * exactly when t >= *out. False when the base is paused or stopped,
+ * |bt_ns| >= 2^62, the result is at or past +-2^62, or the arguments are
+ * bad. */
+YTL_API bool ytl_rt_time(const ytl_timeline* tl, int base, int64_t bt_ns, int64_t* out);
 
 /* The base time frame f's window reaches on `base`, into *end, and true
  * (QUANTIZATION): the base's time at RT time f->onset + lead x f->period,
@@ -1363,8 +1423,9 @@ YTL_API bool ytl_window(const ytl_timeline* tl, int base, const ytl_frame* f, in
 
 /* How many evaluates and pauses of `base` found its time at or past
  * +-2^62 and used +-2^62 in its place (RATE); 0 while every time stays in
- * range. YTL_ERR_ARG for a bad base, YTL_ERR_CLOSED. */
-YTL_API int ytl_clamped(const ytl_timeline* tl, int base);
+ * range. YTL_ERR_ARG for a bad base, YTL_ERR_CLOSED. Not const: a failure
+ * writes the message. */
+YTL_API int ytl_clamped(ytl_timeline* tl, int base);
 
 /* --- events ------------------------------------------------------------ */
 
@@ -1420,9 +1481,9 @@ YTL_API int ytl_tween(ytl_timeline* tl, int channel, int base,
 YTL_API ytl_seq ytl_seq_on(ytl_timeline* tl, int base);
 YTL_API ytl_seq ytl_seq_now(ytl_timeline* tl, int base);
 
-/* Move the cursor by dt, or to base time t. */
-YTL_API void ytl_wait(ytl_seq* q, int64_t dt);
-YTL_API void ytl_at(ytl_seq* q, int64_t t);
+/* Move the cursor by dt_ns, or to base time t_ns. */
+YTL_API void ytl_wait(ytl_seq* q, int64_t dt_ns);
+YTL_API void ytl_at(ytl_seq* q, int64_t t_ns);
 
 /* An event at the cursor: ONSET, OFFSET, SET, TRIGGER or MARK. */
 YTL_API void ytl_on(ytl_seq* q, int ch);
@@ -1431,20 +1492,20 @@ YTL_API void ytl_set_value(ytl_seq* q, int ch, float value);
 YTL_API void ytl_trigger(ytl_seq* q, int32_t code);
 YTL_API void ytl_mark(ytl_seq* q, int32_t code, uint64_t user);
 
-/* ONSET on chans[i] at the cursor + i x stagger, all or none. */
-YTL_API void ytl_on_n(ytl_seq* q, const int* chans, int n, int64_t stagger);
+/* ONSET on chans[i] at the cursor + i x stagger_ns, all or none. */
+YTL_API void ytl_on_n(ytl_seq* q, const int* chans, int n, int64_t stagger_ns);
 
-/* A tween on `ch` from the cursor + d->delay (SEQUENCES); the cursor stays.
- * Returns the end, start + duration (x 2 with yoyo) x cycles, or the cursor
+/* A tween on `ch` from the cursor + d->delay_ns (SEQUENCES); the cursor
+ * stays. Returns the end, start + duration_ns (x 2 with yoyo) x cycles, or the cursor
  * on an error. ytl_then() is ytl_to() and a wait to that end. */
 YTL_API int64_t ytl_to(ytl_seq* q, int ch, const ytl_tween_desc* d);
 YTL_API void    ytl_then(ytl_seq* q, int ch, const ytl_tween_desc* d);
 
-/* Keys on `ch`: values[i] at the cursor + offsets[i], offsets rising from
- * >= 0, each segment eased by `ease` (not BEZIER). Returns the last key's
- * time, or the cursor on an error; the cursor stays. */
+/* Keys on `ch`: values[i] at the cursor + offsets_ns[i], offsets rising
+ * from >= 0, each segment eased by `ease` (not BEZIER). Returns the last
+ * key's time, or the cursor on an error; the cursor stays. */
 YTL_API int64_t ytl_keyframes(ytl_seq* q, int ch, const float* values,
-                                  const int64_t* offsets, int n, int ease);
+                                  const int64_t* offsets_ns, int n, int ease);
 
 /* Apply ops[0..n) in order, all or none: the whole table is checked first
  * (ytl_check_ops, from the sequence's cursor and blocks), and on a failure
@@ -1453,9 +1514,9 @@ YTL_API int64_t ytl_keyframes(ytl_seq* q, int ch, const float* values,
 YTL_API int ytl_run(ytl_seq* q, const ytl_op* ops, int n);
 
 /* Check ops[0..n) as ytl_run() on a new sequence on `base` would, and
- * change nothing: for a pack's table, when it loads. Returns 0, or the first
- * error with *bad set to its op's index. */
-YTL_API int ytl_check_ops(const ytl_timeline* tl, int base, const ytl_op* ops,
+ * change nothing but the message on a failure: for a pack's table, when it
+ * loads. Returns 0, or the first error with *bad set to its op's index. */
+YTL_API int ytl_check_ops(ytl_timeline* tl, int base, const ytl_op* ops,
                               int n, int* bad);
 
 /* Undo what the sequence added: every event of its base with an id at or
@@ -1474,15 +1535,15 @@ YTL_API int ytl_evaluate(ytl_timeline* tl, const ytl_frame* f,
 
 /* The earliest RT time of a pending event on a running base, and true; a
  * late event's time is in the past. False when nothing is pending. */
-YTL_API bool ytl_next_due(const ytl_timeline* tl, int64_t* rt);
+YTL_API bool ytl_next_due(const ytl_timeline* tl, int64_t* rt_ns);
 
 /* The pending events of `base` (or YTL_ALL_BASES) whose RT time is in
- * [from_rt, to_rt), on running bases only, without changing anything
- * (PEEK). Returns how many; the first min(that, cap) are copied into out[]
- * in RT time order, then id, with onset = the RT time, residual 0 and
- * frame -1. YTL_ERR_ARG for a bad base, cap < 0, out NULL with cap > 0,
- * from_rt > to_rt, or a bound at or past +-2^62. */
-YTL_API int ytl_peek(const ytl_timeline* tl, int base, int64_t from_rt, int64_t to_rt,
+ * [from_rt_ns, to_rt_ns), on running bases only, without changing anything
+ * but the message on a failure (PEEK). Returns how many; the first
+ * min(that, cap) are copied into out[] in RT time order, then id, with
+ * onset = the RT time, residual 0 and frame -1. YTL_ERR_ARG for a bad base, cap < 0, out NULL with cap > 0,
+ * from_rt_ns > to_rt_ns, or a bound at or past +-2^62. */
+YTL_API int ytl_peek(ytl_timeline* tl, int base, int64_t from_rt_ns, int64_t to_rt_ns,
                          ytl_event* out, int cap);
 
 /* The lead in use (QUANTIZATION): 0.5 for a desc lead of 0, 0 for
@@ -1528,6 +1589,7 @@ YTL_API const ytl_event* ytl_find(const ytl_timeline* tl, int id);
 #define YTL__PAUSED  2
 #define YTL__NONE    INT32_MAX
 #define YTL__LIMIT   (INT64_C(1) << 62)
+#define YTL__NS_PER_S INT64_C(1000000000)
 #define YTL__QMAX    (INT64_MAX - (INT64_C(1) << 31))   /* RATE: ytl__scale */
 
 /* The rate-1 base time must inline into the evaluate (RATE). gcc does so
@@ -1577,7 +1639,7 @@ YTL_API int64_t ytl_ns(double seconds) {
     return ns >= 0.0 ? (int64_t)(ns + 0.5) : -(int64_t)(-ns + 0.5);
 }
 
-static bool ytl__fail(ytl_timeline* tl, const char* fmt, ...) {
+static bool ytl__open_fail(ytl_timeline* tl, const char* fmt, ...) {
     va_list ap;
     int n;
     n = snprintf(tl->error, sizeof(tl->error), "ysp_timeline: ");
@@ -1587,6 +1649,13 @@ static bool ytl__fail(ytl_timeline* tl, const char* fmt, ...) {
     va_end(ap);
     tl->open = false;
     return false;
+}
+
+/* The message of a failed call, written on the failure path only, so a
+ * call that succeeds costs one compare. */
+static int ytl__err(ytl_timeline* tl, int rc, const char* what) {
+    if (rc < 0 && tl) snprintf(tl->error, sizeof(tl->error), "ysp_timeline: %s: %s", what, ytl_strerror(rc));
+    return rc;
 }
 
 /* --- tracks ------------------------------------------------------------ */
@@ -1665,7 +1734,7 @@ static int ytl__find_key(const ytl_key* keys, int n, int64_t t) {
     int lo = 0, hi = n;
     while (lo < hi) {
         int mid = lo + (hi - lo) / 2;
-        if (keys[mid].time <= t) lo = mid + 1;
+        if (keys[mid].time_ns <= t) lo = mid + 1;
         else hi = mid;
     }
     return lo - 1;
@@ -1680,7 +1749,7 @@ static double ytl__keys_at(const ytl_key* keys, int n, const ytl_curve* curves,
     a = &keys[i];
     b = &keys[i + 1];
     return ytl__ease(a, curves, keys + n, a->value, b->value,
-                       (double)(t - a->time) / (double)(b->time - a->time));
+                       (double)(t - a->time_ns) / (double)(b->time_ns - a->time_ns));
 }
 
 /* Sample k is at t0 + k * 1e9 / rate exactly. A step in whole ns would
@@ -1693,16 +1762,16 @@ static double ytl__samples_at(const ytl_track* tr, int64_t t) {
     int n = tr->n_samples, i;
     int64_t d, a, b, k, rem;
     double u, p0, p1, p2, p3;
-    if (t <= tr->t0) return v[0];
-    d = t - tr->t0;
-    a = d / YTL_NS_PER_S;
-    b = d % YTL_NS_PER_S;
-    k = a * tr->rate + (b * tr->rate) / YTL_NS_PER_S;
+    if (t <= tr->t0_ns) return v[0];
+    d = t - tr->t0_ns;
+    a = d / YTL__NS_PER_S;
+    b = d % YTL__NS_PER_S;
+    k = a * tr->rate + (b * tr->rate) / YTL__NS_PER_S;
     if (k >= n - 1) return v[n - 1];
     i = (int)k;
     if (tr->interp == YTL_INTERP_STEP) return v[i];
-    rem = (b * tr->rate) % YTL_NS_PER_S;
-    u = (double)rem / (double)YTL_NS_PER_S;
+    rem = (b * tr->rate) % YTL__NS_PER_S;
+    u = (double)rem / (double)YTL__NS_PER_S;
     p1 = v[i];
     p2 = v[i + 1];
     if (tr->interp != YTL_INTERP_CUBIC) return p1 + (p2 - p1) * u;
@@ -1719,10 +1788,10 @@ static double ytl__samples_at(const ytl_track* tr, int64_t t) {
  * value at the end of a cycle, read without folding. */
 static int64_t ytl__cycle(const ytl_track* tr, int64_t start, int64_t t) {
     int64_t q;
-    if (tr->period <= 0 || t <= start) return t;
-    q = (t - start) / tr->period;
-    if (tr->repeats > 0 && q >= tr->repeats) return start + tr->period;
-    return start + (t - start) % tr->period;
+    if (tr->period_ns <= 0 || t <= start) return t;
+    q = (t - start) / tr->period_ns;
+    if (tr->repeats > 0 && q >= tr->repeats) return start + tr->period_ns;
+    return start + (t - start) % tr->period_ns;
 }
 
 /* `keys` and `curves` come apart from tr because a tween's live in the
@@ -1733,13 +1802,13 @@ static double ytl__track_at(const ytl_track* tr, const ytl_key* keys,
     if (keys) {
         int n = tr->n_keys, i;
         bool ok;
-        t = ytl__cycle(tr, keys[0].time, t);
+        t = ytl__cycle(tr, keys[0].time_ns, t);
         if (!seg) return ytl__keys_at(keys, n, curves, ytl__find_key(keys, n, t), t);
         i = *seg;
-        ok = (i < 0 ? t < keys[0].time : keys[i].time <= t)
-             && (i + 1 >= n || t < keys[i + 1].time);
-        if (!ok && i + 2 <= n && keys[i + 1].time <= t
-            && (i + 2 >= n || t < keys[i + 2].time)) {
+        ok = (i < 0 ? t < keys[0].time_ns : keys[i].time_ns <= t)
+             && (i + 1 >= n || t < keys[i + 1].time_ns);
+        if (!ok && i + 2 <= n && keys[i + 1].time_ns <= t
+            && (i + 2 >= n || t < keys[i + 2].time_ns)) {
             i++;
             ok = true;
         }
@@ -1748,7 +1817,7 @@ static double ytl__track_at(const ytl_track* tr, const ytl_key* keys,
         return ytl__keys_at(keys, n, curves, i, t);
     }
     if (tr->samples && tr->n_samples > 0)
-        return ytl__samples_at(tr, ytl__cycle(tr, tr->t0, t));
+        return ytl__samples_at(tr, ytl__cycle(tr, tr->t0_ns, t));
     return 0.0;
 }
 
@@ -1783,21 +1852,21 @@ YTL_API bool ytl_open(ytl_timeline* tl, const ytl_desc* d) {
     int i;
     if (!tl) return false;
     memset(tl, 0, sizeof(*tl));
-    if (!d) return ytl__fail(tl, "null desc");
-    if (d->event_capacity < 0) return ytl__fail(tl, "desc.event_capacity is negative");
+    if (!d) return ytl__open_fail(tl, "null desc");
+    if (d->event_capacity < 0) return ytl__open_fail(tl, "desc.event_capacity is negative");
     if (d->event_capacity > 0 && !d->events)
-        return ytl__fail(tl, "desc.events is NULL with event_capacity %d", d->event_capacity);
-    if (d->key_capacity < 0) return ytl__fail(tl, "desc.key_capacity is negative");
+        return ytl__open_fail(tl, "desc.events is NULL with event_capacity %d", d->event_capacity);
+    if (d->key_capacity < 0) return ytl__open_fail(tl, "desc.key_capacity is negative");
     if (d->key_capacity > 0 && !d->keys)
-        return ytl__fail(tl, "desc.keys is NULL with key_capacity %d", d->key_capacity);
+        return ytl__open_fail(tl, "desc.keys is NULL with key_capacity %d", d->key_capacity);
     if (d->n_channels < 0 || d->n_channels > YTL_MAX_CHANNELS)
-        return ytl__fail(tl, "desc.n_channels must be in [0, %d]", YTL_MAX_CHANNELS);
+        return ytl__open_fail(tl, "desc.n_channels must be in [0, %d]", YTL_MAX_CHANNELS);
     if (!(d->lead == YTL_LEAD_NONE || (d->lead >= 0.0 && d->lead < 1.0)))
-        return ytl__fail(tl, "desc.lead must be in [0, 1) or YTL_LEAD_NONE");
+        return ytl__open_fail(tl, "desc.lead must be in [0, 1) or YTL_LEAD_NONE");
     if (d->initial) {
         for (i = 0; i < d->n_channels; i++)
             if (!ytl__finite(d->initial[i]))
-                return ytl__fail(tl, "desc.initial[%d] is not finite", i);
+                return ytl__open_fail(tl, "desc.initial[%d] is not finite", i);
     }
     tl->events = d->events;
     tl->capacity = d->event_capacity;
@@ -1828,6 +1897,12 @@ YTL_API const char* ytl_error(const ytl_timeline* tl) {
 }
 
 YTL_API bool ytl_is_open(const ytl_timeline* tl) { return tl && tl->open; }
+
+/* The handle owns nothing, so there is nothing to release; the message
+ * stays for a log written after the close. */
+YTL_API void ytl_close(ytl_timeline* tl) {
+    if (tl) tl->open = false;
+}
 
 /* --- time bases -------------------------------------------------------- */
 
@@ -1946,13 +2021,13 @@ static void ytl__unfire_from(ytl_timeline* tl, int bi, int from) {
 static int ytl__upper(const ytl_event* ev, int lo, int hi, int64_t t) {
     while (lo < hi) {
         int mid = lo + (hi - lo) / 2;
-        if (ev[mid].time <= t) lo = mid + 1;
+        if (ev[mid].time_ns <= t) lo = mid + 1;
         else hi = mid;
     }
     return lo;
 }
 
-YTL_API int ytl_anchor(ytl_timeline* tl, int base, int64_t rt, int64_t base_time) {
+static int ytl__anchor(ytl_timeline* tl, int base, int64_t rt, int64_t base_time) {
     ytl__base* b;
     if (!tl || !tl->open) return YTL_ERR_CLOSED;
     if (!ytl__user_base(tl, base)) return YTL_ERR_ARG;
@@ -1976,7 +2051,7 @@ YTL_API int ytl_anchor(ytl_timeline* tl, int base, int64_t rt, int64_t base_time
     return 0;
 }
 
-YTL_API int ytl_pause(ytl_timeline* tl, int base, int64_t rt) {
+static int ytl__pause(ytl_timeline* tl, int base, int64_t rt) {
     ytl__base* b;
     if (!tl || !tl->open) return YTL_ERR_CLOSED;
     if (!ytl__user_base(tl, base)) return YTL_ERR_ARG;
@@ -1993,7 +2068,7 @@ YTL_API int ytl_pause(ytl_timeline* tl, int base, int64_t rt) {
     return 0;
 }
 
-YTL_API int ytl_resume(ytl_timeline* tl, int base, int64_t rt) {
+static int ytl__resume(ytl_timeline* tl, int base, int64_t rt) {
     ytl__base* b;
     if (!tl || !tl->open) return YTL_ERR_CLOSED;
     if (!ytl__user_base(tl, base)) return YTL_ERR_ARG;
@@ -2005,14 +2080,14 @@ YTL_API int ytl_resume(ytl_timeline* tl, int base, int64_t rt) {
     return 0;
 }
 
-YTL_API int ytl_stop(ytl_timeline* tl, int base) {
+static int ytl__stop(ytl_timeline* tl, int base) {
     if (!tl || !tl->open) return YTL_ERR_CLOSED;
     if (!ytl__user_base(tl, base)) return YTL_ERR_ARG;
     tl->bases[base].state = YTL__STOPPED;
     return 0;
 }
 
-YTL_API int ytl_skip(ytl_timeline* tl, int base, int64_t rt, int64_t base_time) {
+static int ytl__skip(ytl_timeline* tl, int base, int64_t rt, int64_t base_time) {
     ytl__base* b;
     int rc, i, start, end, n = 0;
     /* A skip back must rewind as an anchor does, so it goes through the
@@ -2029,7 +2104,7 @@ YTL_API int ytl_skip(ytl_timeline* tl, int base, int64_t rt, int64_t base_time) 
         e->flags = YTL_EV_SKIPPED;
         e->frame = -1;
         e->onset = rt;
-        e->residual = base_time - e->time;
+        e->residual = base_time - e->time_ns;
         if (ytl__drives(e->kind)) ytl__apply(tl, e);
         n++;
     }
@@ -2065,7 +2140,7 @@ YTL_API bool ytl_base_time(const ytl_timeline* tl, int base, int64_t rt, int64_t
     return true;
 }
 
-YTL_API int ytl_rate(ytl_timeline* tl, int base, int64_t rt, int32_t num, int32_t den) {
+static int ytl__rate(ytl_timeline* tl, int base, int64_t rt, int32_t num, int32_t den) {
     ytl__base* b;
     int32_t x, y, g;
     if (!tl || !tl->open) return YTL_ERR_CLOSED;
@@ -2132,7 +2207,7 @@ YTL_API bool ytl_window(const ytl_timeline* tl, int base, const ytl_frame* f, in
     return true;
 }
 
-YTL_API int ytl_clamped(const ytl_timeline* tl, int base) {
+static int ytl__clamped(ytl_timeline* tl, int base) {
     if (!tl || !tl->open) return YTL_ERR_CLOSED;
     if (base < 0 || base >= YTL_MAX_BASES) return YTL_ERR_ARG;
     return tl->bases[base].clamped;
@@ -2153,11 +2228,11 @@ static float ytl__kind_value(const ytl_event* e) {
  * they fired in. */
 static void ytl__apply(ytl_timeline* tl, const ytl_event* e) {
     ytl__chan* c = &tl->chans[e->target];
-    if (c->has_last && (e->time < c->last_time
-                        || (e->time == c->last_time && e->id < c->last_id)))
+    if (c->has_last && (e->time_ns < c->last_time
+                        || (e->time_ns == c->last_time && e->id < c->last_id)))
         return;
     c->has_last = 1;
-    c->last_time = e->time;
+    c->last_time = e->time_ns;
     c->last_id = e->id;
     tl->values[e->target] = ytl__kind_value(e);
 }
@@ -2202,7 +2277,7 @@ static void ytl__free_chan(ytl_timeline* tl, int ch, bool reset_value) {
 static int ytl__check(const ytl_timeline* tl, const ytl_event* e) {
     if (e->base >= YTL_MAX_BASES) return YTL_ERR_ARG;
     if (e->kind > YTL_SET && e->kind < YTL_KIND_USER) return YTL_ERR_ARG;
-    if (e->time >= YTL__LIMIT || e->time <= -YTL__LIMIT) return YTL_ERR_ARG;
+    if (e->time_ns >= YTL__LIMIT || e->time_ns <= -YTL__LIMIT) return YTL_ERR_ARG;
     if (ytl__drives(e->kind)) {
         const ytl__chan* c;
         if (e->target < 0 || e->target >= tl->n_channels) return YTL_ERR_ARG;
@@ -2218,7 +2293,7 @@ static int ytl__check(const ytl_timeline* tl, const ytl_event* e) {
 static void ytl__insert(ytl_timeline* tl, const ytl_event* src) {
     ytl__base* b = &tl->bases[src->base];
     int end = b->begin + b->count;
-    int pos = ytl__upper(tl->events, b->begin, end, src->time);
+    int pos = ytl__upper(tl->events, b->begin, end, src->time_ns);
     ytl_event* e;
     int i;
     if (pos < tl->n_events)
@@ -2235,14 +2310,14 @@ static void ytl__insert(ytl_timeline* tl, const ytl_event* src) {
     tl->n_events++;
     b->count++;
     for (i = src->base + 1; i < YTL_MAX_BASES; i++) tl->bases[i].begin++;
-    if (b->evaluated && src->time <= b->last_hi) {
+    if (b->evaluated && src->time_ns <= b->last_hi) {
         int rel = pos - b->begin;
         b->hi++;
         if (rel < b->dirty) b->dirty = rel;
     }
 }
 
-YTL_API int ytl_add_n(ytl_timeline* tl, const ytl_event* e, int n) {
+static int ytl__add_n(ytl_timeline* tl, const ytl_event* e, int n) {
     int i, rc = 0, first;
     if (!tl || !tl->open) return YTL_ERR_CLOSED;
     if (n < 0 || (n > 0 && !e)) return YTL_ERR_ARG;
@@ -2269,7 +2344,7 @@ YTL_API int ytl_add_n(ytl_timeline* tl, const ytl_event* e, int n) {
     return first;
 }
 
-YTL_API int ytl_add(ytl_timeline* tl, const ytl_event* e) {
+static int ytl__add(ytl_timeline* tl, const ytl_event* e) {
     if (!e) return tl && tl->open ? YTL_ERR_ARG : YTL_ERR_CLOSED;
     return ytl_add_n(tl, e, 1);
 }
@@ -2299,7 +2374,7 @@ static void ytl__delete(ytl_timeline* tl, int k, bool recompute) {
     }
 }
 
-YTL_API int ytl_remove(ytl_timeline* tl, int id) {
+static int ytl__remove(ytl_timeline* tl, int id) {
     int k;
     if (!tl || !tl->open) return YTL_ERR_CLOSED;
     for (k = 0; k < tl->n_events; k++) {
@@ -2356,13 +2431,13 @@ static int ytl__compact(ytl_timeline* tl, int base, bool fired_only, bool reset,
     return removed;
 }
 
-YTL_API int ytl_prune(ytl_timeline* tl, int base) {
+static int ytl__prune(ytl_timeline* tl, int base) {
     if (!tl || !tl->open) return YTL_ERR_CLOSED;
     if (!ytl__base_arg(base)) return YTL_ERR_ARG;
     return ytl__compact(tl, base, true, false, 0);
 }
 
-YTL_API int ytl_clear(ytl_timeline* tl, int base) {
+static int ytl__clear(ytl_timeline* tl, int base) {
     int removed, i;
     if (!tl || !tl->open) return YTL_ERR_CLOSED;
     if (!ytl__base_arg(base)) return YTL_ERR_ARG;
@@ -2398,8 +2473,8 @@ static int ytl__check_track(const ytl_track* tr) {
     has_keys = tr->keys && tr->n_keys > 0;
     has_samples = tr->samples && tr->n_samples > 0;
     if (has_keys == has_samples) return YTL_ERR_ARG;
-    if (tr->period < 0 || tr->period >= YTL__LIMIT || tr->repeats < 0) return YTL_ERR_ARG;
-    if (tr->repeats > 0 && tr->period == 0) return YTL_ERR_ARG;
+    if (tr->period_ns < 0 || tr->period_ns >= YTL__LIMIT || tr->repeats < 0) return YTL_ERR_ARG;
+    if (tr->repeats > 0 && tr->period_ns == 0) return YTL_ERR_ARG;
     for (i = 0; i < tr->n_curves; i++)
         if (!ytl__curve_ok(&tr->curves[i])) return YTL_ERR_ARG;
     if (has_keys) {
@@ -2408,8 +2483,8 @@ static int ytl__check_track(const ytl_track* tr) {
             const ytl_key* k = &tr->keys[i];
             if (!ytl__finite(k->value)) return YTL_ERR_ARG;
             if (k->ease > YTL_EASE_BEZIER) return YTL_ERR_ARG;
-            if (!ytl__time_ok(k->time)) return YTL_ERR_ARG;
-            if (i > 0 && k->time < tr->keys[i - 1].time) return YTL_ERR_ARG;
+            if (!ytl__time_ok(k->time_ns)) return YTL_ERR_ARG;
+            if (i > 0 && k->time_ns < tr->keys[i - 1].time_ns) return YTL_ERR_ARG;
             if (i + 1 < n && k->ease == YTL_EASE_LOG
                 && !(k->value > 0.0f && tr->keys[i + 1].value > 0.0f))
                 return YTL_ERR_ARG;
@@ -2417,7 +2492,7 @@ static int ytl__check_track(const ytl_track* tr) {
                 return YTL_ERR_ARG;
         }
     } else {
-        if (tr->rate < 1 || tr->rate > YTL_NS_PER_S || !ytl__time_ok(tr->t0))
+        if (tr->rate < 1 || tr->rate > YTL__NS_PER_S || !ytl__time_ok(tr->t0_ns))
             return YTL_ERR_ARG;
         if (tr->interp < YTL_INTERP_LINEAR || tr->interp > YTL_INTERP_CUBIC) return YTL_ERR_ARG;
         {
@@ -2425,10 +2500,10 @@ static int ytl__check_track(const ytl_track* tr) {
              * products stay below 2^63: (n-1)/rate < 2^31 s, and the
              * remainder times 1e9 is below 1e18. */
             int64_t m = (int64_t)(tr->n_samples - 1);
-            int64_t rem = (m % tr->rate) * YTL_NS_PER_S;
-            int64_t span = (m / tr->rate) * YTL_NS_PER_S
+            int64_t rem = (m % tr->rate) * YTL__NS_PER_S;
+            int64_t span = (m / tr->rate) * YTL__NS_PER_S
                            + rem / tr->rate + (rem % tr->rate != 0);
-            if (span > YTL__LIMIT - 1 - tr->t0) return YTL_ERR_ARG;
+            if (span > YTL__LIMIT - 1 - tr->t0_ns) return YTL_ERR_ARG;
         }
         for (i = 0; i < tr->n_samples; i++)
             if (!ytl__finite(tr->samples[i])) return YTL_ERR_ARG;
@@ -2467,7 +2542,7 @@ static void ytl__bind_track(ytl_timeline* tl, int channel, int base) {
     tl->track_base[channel] = (uint8_t)(base + 1);
 }
 
-YTL_API int ytl_set_track(ytl_timeline* tl, int channel, int base,
+static int ytl__set_track(ytl_timeline* tl, int channel, int base,
                               const ytl_track* tr) {
     int rc = ytl__chan_arg(tl, channel, base);
     ytl__chan* c;
@@ -2485,7 +2560,7 @@ YTL_API int ytl_set_track(ytl_timeline* tl, int channel, int base,
     return 0;
 }
 
-YTL_API int ytl_set_keys(ytl_timeline* tl, int channel, int base,
+static int ytl__set_keys(ytl_timeline* tl, int channel, int base,
                              const ytl_key* keys, int n) {
     ytl_track tr;
     if (n < 0 || (n > 0 && !keys)) return tl && tl->open ? YTL_ERR_ARG : YTL_ERR_CLOSED;
@@ -2504,16 +2579,16 @@ static int ytl__tween_check(const ytl_timeline* tl, int base,
     int64_t start;
     bool once = d->cycles == 0 || d->cycles == 1;
     if (d->start_set) {
-        if (!ytl__time_ok(d->start)) return YTL_ERR_ARG;
-        start = d->start;
+        if (!ytl__time_ok(d->start_ns)) return YTL_ERR_ARG;
+        start = d->start_ns;
     } else {
         start = b->now_bt;
     }
-    if (!ytl__time_ok(d->delay)) return YTL_ERR_ARG;
-    start += d->delay;
-    if (!ytl__time_ok(start) || d->duration < 0 || d->duration >= YTL__LIMIT)
+    if (!ytl__time_ok(d->delay_ns)) return YTL_ERR_ARG;
+    start += d->delay_ns;
+    if (!ytl__time_ok(start) || d->duration_ns < 0 || d->duration_ns >= YTL__LIMIT)
         return YTL_ERR_ARG;
-    if (!ytl__time_ok(start + (d->yoyo ? 2 : 1) * d->duration)) return YTL_ERR_ARG;
+    if (!ytl__time_ok(start + (d->yoyo ? 2 : 1) * d->duration_ns)) return YTL_ERR_ARG;
     if (!ytl__finite(d->to) || (d->from_set && !ytl__finite(d->from))) return YTL_ERR_ARG;
     if (d->ease < 0 || d->ease > YTL_EASE_BEZIER) return YTL_ERR_ARG;
     if (d->ease == YTL_EASE_BEZIER && !ytl__curve_ok(&d->curve)) return YTL_ERR_ARG;
@@ -2521,20 +2596,20 @@ static int ytl__tween_check(const ytl_timeline* tl, int base,
         && !(d->from_set && d->from > 0.0f && d->to > 0.0f))
         return YTL_ERR_ARG;
     if (d->cycles < YTL_FOREVER) return YTL_ERR_ARG;
-    if (!once && d->duration == 0) return YTL_ERR_ARG;
-    if (d->yoyo && d->duration == 0) return YTL_ERR_ARG;
+    if (!once && d->duration_ns == 0) return YTL_ERR_ARG;
+    if (d->yoyo && d->duration_ns == 0) return YTL_ERR_ARG;
     if (d->keep_velocity
         && (d->ease != YTL_EASE_LINEAR || d->from_set || d->yoyo || !once
-            || d->duration == 0))
+            || d->duration_ns == 0))
         return YTL_ERR_ARG;
     *out = *d;
-    out->start = start;
+    out->start_ns = start;
     out->start_set = true;
-    out->delay = 0;
+    out->delay_ns = 0;
     return 0;
 }
 
-YTL_API int ytl_tween(ytl_timeline* tl, int channel, int base,
+static int ytl__tween(ytl_timeline* tl, int channel, int base,
                           const ytl_tween_desc* d) {
     int rc = ytl__chan_arg(tl, channel, base);
     ytl_tween_desc r;
@@ -2592,7 +2667,7 @@ static void ytl__promote_block(ytl_timeline* tl, int ch);
 static void ytl__promote(ytl_timeline* tl, int ch) {
     ytl__chan* c = &tl->chans[ch];
     const ytl_tween_desc* p = &c->pend;
-    int64_t s = p->start, dur = p->duration;
+    int64_t s = p->start_ns, dur = p->duration_ns;
     double from, slope = 0.0;
     bool once = p->cycles == 0 || p->cycles == 1;
     if (c->pend_arena) {
@@ -2603,15 +2678,15 @@ static void ytl__promote(ytl_timeline* tl, int ch) {
     if (p->from_set) from = p->from;
     memset(&c->tr, 0, sizeof(c->tr));
     memset(c->ik, 0, sizeof(c->ik));
-    c->ik[0].time = s;
+    c->ik[0].time_ns = s;
     c->ik[0].value = (float)from;
     c->ik[0].ease = (uint8_t)p->ease;
-    c->ik[1].time = s + dur;
+    c->ik[1].time_ns = s + dur;
     c->ik[1].value = p->to;
     c->tr.n_keys = 2;
     if (p->yoyo) {
         c->ik[1].ease = (uint8_t)p->ease;
-        c->ik[2].time = s + 2 * dur;
+        c->ik[2].time_ns = s + 2 * dur;
         c->ik[2].value = (float)from;
         c->tr.n_keys = 3;
     }
@@ -2627,7 +2702,7 @@ static void ytl__promote(ytl_timeline* tl, int ch) {
         c->tr.n_curves = 1;
     }
     if (!once) {
-        c->tr.period = p->yoyo ? 2 * dur : dur;
+        c->tr.period_ns = p->yoyo ? 2 * dur : dur;
         c->tr.repeats = p->cycles == YTL_FOREVER ? 0 : p->cycles;
     }
     c->own = 1;
@@ -2653,12 +2728,12 @@ typedef char ytl__curve_fits_key[sizeof(ytl_curve) <= sizeof(ytl_key) ? 1 : -1];
  * or waiting block is at its offset. */
 static void ytl__blk_set(ytl_key* h, int ch, int32_t nk, int32_t nc) {
     memset(h, 0, sizeof(*h));
-    h->time = (int64_t)(((uint64_t)(uint32_t)nk << 32) | (uint32_t)nc);
+    h->time_ns = (int64_t)(((uint64_t)(uint32_t)nk << 32) | (uint32_t)nc);
     h->curve = (uint16_t)ch;
 }
 
-static int32_t ytl__blk_nk(const ytl_key* h) { return (int32_t)((uint64_t)h->time >> 32); }
-static int32_t ytl__blk_nc(const ytl_key* h) { return (int32_t)((uint64_t)h->time & 0xFFFFFFFFu); }
+static int32_t ytl__blk_nk(const ytl_key* h) { return (int32_t)((uint64_t)h->time_ns >> 32); }
+static int32_t ytl__blk_nc(const ytl_key* h) { return (int32_t)((uint64_t)h->time_ns & 0xFFFFFFFFu); }
 
 static bool ytl__blk_live(const ytl_timeline* tl, int ch, int32_t off, bool* pend) {
     const ytl__chan* c;
@@ -2751,7 +2826,7 @@ static void ytl__promote_block(ytl_timeline* tl, int ch) {
     ytl_key* k = tl->arena + c->poff;
     int32_t nk = ytl__blk_nk(&k[-1]), nc = ytl__blk_nc(&k[-1]), i;
     bool kv = k[0].ease == YTL__EASE_HERMITE;
-    double slope, from = ytl__take(tl, ch, k[0].time, kv, &slope);
+    double slope, from = ytl__take(tl, ch, k[0].time_ns, kv, &slope);
     for (i = 0; i < nk; i++) {
         if (k[i].reserved_ & YTL__KEY_TAKE) k[i].value = (float)from;
         k[i].reserved_ = 0;
@@ -2759,7 +2834,7 @@ static void ytl__promote_block(ytl_timeline* tl, int ch) {
     if (kv && nk > 1) {
         ytl_curve h;
         memset(&h, 0, sizeof h);
-        h.x1 = (float)(slope * (double)(k[1].time - k[0].time));
+        h.x1 = (float)(slope * (double)(k[1].time_ns - k[0].time_ns));
         memcpy(&k[nk + k[0].curve], &h, sizeof h);
     }
     memset(&c->tr, 0, sizeof(c->tr));
@@ -2776,6 +2851,17 @@ static void ytl__promote_block(ytl_timeline* tl, int ch) {
 
 /* --- sequences --------------------------------------------------------- */
 
+/* The sticky error's message, in the timeline the sequence builds on. */
+static void ytl__seq_msg(const ytl_seq* q) {
+    if (!q->tl) return;
+    if (q->err_call < 0)
+        snprintf(q->tl->error, sizeof(q->tl->error), "ysp_timeline: sequence on base %d: %s",
+                 q->base, ytl_strerror(q->err));
+    else
+        snprintf(q->tl->error, sizeof(q->tl->error), "ysp_timeline: sequence call %d: %s",
+                 q->err_call, ytl_strerror(q->err));
+}
+
 static ytl_seq ytl__seq_make(ytl_timeline* tl, int base, bool at_now) {
     ytl_seq q;
     memset(&q, 0, sizeof q);
@@ -2784,8 +2870,10 @@ static ytl_seq ytl__seq_make(ytl_timeline* tl, int base, bool at_now) {
     q.err_call = -1;
     if (!tl || !tl->open) {
         q.err = YTL_ERR_CLOSED;
+        ytl__seq_msg(&q);
     } else if (base < 0 || base >= YTL_MAX_BASES) {
         q.err = YTL_ERR_ARG;
+        ytl__seq_msg(&q);
     } else {
         if (++tl->seq_next == 0) ++tl->seq_next;
         q.id = tl->seq_next;
@@ -2806,6 +2894,7 @@ static bool ytl__seq_go(ytl_seq* q) {
     if (!q->tl || !q->tl->open) {
         q->err = YTL_ERR_CLOSED;
         q->err_call = q->n_calls - 1;
+        ytl__seq_msg(q);
         return false;
     }
     return true;
@@ -2815,6 +2904,7 @@ static int ytl__seq_fail(ytl_seq* q, int rc) {
     if (rc < 0 && q->err >= 0) {
         q->err = rc;
         q->err_call = q->n_calls - 1;
+        ytl__seq_msg(q);
     }
     return rc;
 }
@@ -2842,20 +2932,20 @@ static int ytl__seq_tw_plan(const ytl_timeline* tl, int base, int64_t cursor,
      * repeat folds a whole track, so an endless one cannot be a segment. */
     if (d->start_set || d->cycles == YTL_FOREVER) return YTL_ERR_ARG;
     d2 = *d;
-    d2.start = cursor;
+    d2.start_ns = cursor;
     d2.start_set = true;
     rc = ytl__tween_check(tl, base, &d2, &r);
     if (rc < 0) return rc;
     n = d->cycles > 1 ? d->cycles : 1;
-    cyc = d->duration * (d->yoyo ? 2 : 1);
-    if (cyc > 0 && n > (YTL__LIMIT - 1 - r.start) / cyc) return YTL_ERR_ARG;
+    cyc = d->duration_ns * (d->yoyo ? 2 : 1);
+    if (cyc > 0 && n > (YTL__LIMIT - 1 - r.start_ns) / cyc) return YTL_ERR_ARG;
     /* Cutting an eased segment part way changes its shape, so a tween may
      * not start inside the channel's last one. keep_velocity's slope is the
      * takeover's, which only the first segment has. */
-    if (has_prev && (r.start < prev_end || d->keep_velocity)) return YTL_ERR_ARG;
+    if (has_prev && (r.start_ns < prev_end || d->keep_velocity)) return YTL_ERR_ARG;
     if (n > (INT32_MAX / 4)) return YTL_ERR_FULL;
-    *s = r.start;
-    *end = r.start + n * cyc;
+    *s = r.start_ns;
+    *end = r.start_ns + n * cyc;
     *nk = (int32_t)(n * (d->yoyo ? 3 : 2));
     *nc = d->ease == YTL_EASE_BEZIER || d->keep_velocity ? 1 : 0;
     return 0;
@@ -2901,7 +2991,7 @@ static void ytl__seq_fin(ytl_seq* q, int ch, int32_t off, int32_t nk, int32_t nc
             memset(&c->tr, 0, sizeof(c->tr));
         }
         memset(&c->pend, 0, sizeof(c->pend));
-        c->pend.start = k[0].time;
+        c->pend.start_ns = k[0].time_ns;
         c->poff = off;
         c->has_pend = 1;
         c->pend_arena = 1;
@@ -2944,7 +3034,7 @@ static int ytl__seq_tween(ytl_seq* q, int ch, const ytl_tween_desc* d, int64_t* 
     int rc = ytl__chan_arg(tl, ch, q->base);
     if (rc < 0) return rc;
     last = ytl__seq_last(tl, q->id, ch);
-    rc = ytl__seq_tw_plan(tl, q->base, q->t, d, last != NULL, last ? last->time : 0, &s, end, &nk, &nc);
+    rc = ytl__seq_tw_plan(tl, q->base, q->t, d, last != NULL, last ? last->time_ns : 0, &s, end, &nk, &nc);
     if (rc < 0) return rc;
     /* A later tween starts from where the block ends; the first one from
      * the old driver at its start, which only the takeover knows. */
@@ -2962,14 +3052,14 @@ static int ytl__seq_tween(ytl_seq* q, int ch, const ytl_tween_desc* d, int64_t* 
     /* The block's last key holds its value until this start. */
     if (nk0 > 0) k[nk0 - 1].ease = YTL_EASE_STEP;
     n = d->cycles > 1 ? d->cycles : 1;
-    cyc = d->duration * (d->yoyo ? 2 : 1);
+    cyc = d->duration_ns * (d->yoyo ? 2 : 1);
     per = d->yoyo ? 3 : 2;
     /* The cycles are unrolled: a repeat folds a whole track, not a segment. */
     for (j = 0; j < (int32_t)n; j++) {
         ytl_key* a = &k[nk0 + j * per];
         int64_t t0 = s + j * cyc;
         memset(a, 0, (size_t)per * sizeof(*a));
-        a[0].time = t0;
+        a[0].time_ns = t0;
         a[0].value = from;
         a[0].ease = (uint8_t)(d->keep_velocity ? YTL__EASE_HERMITE : d->ease);
         a[0].reserved_ = take;
@@ -2977,12 +3067,12 @@ static int ytl__seq_tween(ytl_seq* q, int ch, const ytl_tween_desc* d, int64_t* 
         /* Every key carries the tween's ease, the ends of cycles too: their
          * zero-length segments are never read, but a STEP tween then stays
          * a STEP track, read where events land, as ytl_tween() makes it. */
-        a[1].time = t0 + d->duration;
+        a[1].time_ns = t0 + d->duration_ns;
         a[1].value = d->to;
         a[1].ease = (uint8_t)d->ease;
         a[1].curve = (uint16_t)nc0;
         if (d->yoyo) {
-            a[2].time = t0 + 2 * d->duration;
+            a[2].time_ns = t0 + 2 * d->duration_ns;
             a[2].value = from;
             a[2].ease = (uint8_t)d->ease;
             a[2].curve = (uint16_t)nc0;
@@ -3015,7 +3105,7 @@ static int ytl__seq_keys(ytl_seq* q, int ch, const float* v, const int64_t* dt, 
         if (ease == YTL_EASE_LOG && n > 1 && !(v[i] > 0.0f)) return YTL_ERR_ARG;
     }
     last = ytl__seq_last(tl, q->id, ch);
-    if (last && q->t + dt[0] < last->time) return YTL_ERR_ARG;
+    if (last && q->t + dt[0] < last->time_ns) return YTL_ERR_ARG;
     if (n > INT32_MAX / 4) return YTL_ERR_FULL;
     rc = ytl__seq_room(q, ch, n, 0, &off, &nk0, &nc0);
     if (rc < 0) return rc;
@@ -3024,7 +3114,7 @@ static int ytl__seq_keys(ytl_seq* q, int ch, const float* v, const int64_t* dt, 
     for (i = 0; i < n; i++) {
         ytl_key* a = &k[nk0 + i];
         memset(a, 0, sizeof(*a));
-        a->time = q->t + dt[i];
+        a->time_ns = q->t + dt[i];
         a->value = v[i];
         a->ease = (uint8_t)(i + 1 < n ? ease : YTL_EASE_LINEAR);
     }
@@ -3037,7 +3127,7 @@ static int ytl__seq_ev(ytl_seq* q, int kind, int ch, float value, int32_t code, 
     ytl_event e;
     int rc;
     memset(&e, 0, sizeof e);
-    e.time = q->t;
+    e.time_ns = q->t;
     e.base = (uint8_t)q->base;
     e.kind = (uint8_t)kind;
     e.target = ch;
@@ -3152,7 +3242,7 @@ static bool ytl__op_is_tween(const ytl_op* o) {
 static int64_t ytl__op_end(const ytl_op* o, int64_t t) {
     const ytl_tween_desc* d = &o->tween;
     int64_t n = d->cycles > 1 ? d->cycles : 1;
-    return t + d->delay + n * d->duration * (d->yoyo ? 2 : 1);
+    return t + d->delay_ns + n * d->duration_ns * (d->yoyo ? 2 : 1);
 }
 
 /* Binding, by a rule and not a table: op i is checked against the first
@@ -3185,7 +3275,7 @@ static void ytl__op_prev(const ytl_timeline* tl, uint32_t id, int64_t cursor, co
     int64_t t = cursor;
     int j;
     *has = last != NULL;
-    *end = last ? last->time : 0;
+    *end = last ? last->time_ns : 0;
     *size = 0;
     if (last) {
         const ytl__chan* c = &tl->chans[ops[i].ch];
@@ -3194,8 +3284,8 @@ static void ytl__op_prev(const ytl_timeline* tl, uint32_t id, int64_t cursor, co
     }
     for (j = 0; j < i; j++) {
         const ytl_op* o = &ops[j];
-        if (o->op == YTL_OP_WAIT) t += o->t;
-        else if (o->op == YTL_OP_AT) t = o->t;
+        if (o->op == YTL_OP_WAIT) t += o->t_ns;
+        else if (o->op == YTL_OP_AT) t = o->t_ns;
         if (!ytl__op_is_tween(o)) continue;
         if (o->ch == ops[i].ch) {
             const ytl_tween_desc* d = &o->tween;
@@ -3222,12 +3312,12 @@ static int ytl__check_ops(const ytl_timeline* tl, int base, int64_t cursor, uint
         *bad = i;
         switch (o->op) {
         case YTL_OP_WAIT:
-            if (!ytl__time_ok(o->t) || !ytl__time_ok(t + o->t)) return YTL_ERR_ARG;
-            t += o->t;
+            if (!ytl__time_ok(o->t_ns) || !ytl__time_ok(t + o->t_ns)) return YTL_ERR_ARG;
+            t += o->t_ns;
             break;
         case YTL_OP_AT:
-            if (!ytl__time_ok(o->t)) return YTL_ERR_ARG;
-            t = o->t;
+            if (!ytl__time_ok(o->t_ns)) return YTL_ERR_ARG;
+            t = o->t_ns;
             break;
         case YTL_OP_ON:
         case YTL_OP_OFF:
@@ -3270,10 +3360,13 @@ static int ytl__check_ops(const ytl_timeline* tl, int base, int64_t cursor, uint
     return 0;
 }
 
-YTL_API int ytl_check_ops(const ytl_timeline* tl, int base, const ytl_op* ops, int n, int* bad) {
+YTL_API int ytl_check_ops(ytl_timeline* tl, int base, const ytl_op* ops, int n, int* bad) {
     int b;
     int rc = ytl__check_ops(tl, base, 0, 0, ops, n, &b);
     if (bad) *bad = b;
+    if (rc < 0 && tl)
+        snprintf(tl->error, sizeof(tl->error), "ysp_timeline: ytl_check_ops: op %d: %s", b,
+                 ytl_strerror(rc));
     return rc;
 }
 
@@ -3286,8 +3379,8 @@ static int ytl__seq_op(ytl_seq* q, const ytl_op* o) {
     case YTL_OP_SET_VALUE: return ytl__seq_ev(q, YTL_SET, o->ch, o->value, 0, 0);
     case YTL_OP_TRIGGER:   return ytl__seq_ev(q, YTL_TRIGGER, 0, 0.0f, o->code, 0);
     case YTL_OP_MARK:      return ytl__seq_ev(q, YTL_MARK, 0, 0.0f, o->code, o->user);
-    case YTL_OP_WAIT:      return ytl__seq_wait(q, o->t);
-    case YTL_OP_AT:        return ytl__seq_at(q, o->t);
+    case YTL_OP_WAIT:      return ytl__seq_wait(q, o->t_ns);
+    case YTL_OP_AT:        return ytl__seq_at(q, o->t_ns);
     case YTL_OP_TO:        return ytl__seq_tween(q, o->ch, &o->tween, &end);
     case YTL_OP_THEN:
         rc = ytl__seq_tween(q, o->ch, &o->tween, &end);
@@ -3305,6 +3398,7 @@ YTL_API int ytl_run(ytl_seq* q, const ytl_op* ops, int n) {
     if (rc < 0) {
         q->err = rc;
         q->err_call = bad;
+        ytl__seq_msg(q);
         return rc;
     }
     for (i = 0; i < n; i++) {
@@ -3323,7 +3417,7 @@ YTL_API int ytl_seq_cancel(ytl_seq* q) {
     int ch, removed;
     if (!q) return YTL_ERR_ARG;
     tl = q->tl;
-    if (!tl || !tl->open) return YTL_ERR_CLOSED;
+    if (!tl || !tl->open) return ytl__err(tl, YTL_ERR_CLOSED, "ytl_seq_cancel");
     q->tl = NULL;
     if (q->id == 0) return 0;
     /* Ids rise in add order, so the sequence's events are those of its base
@@ -3360,7 +3454,7 @@ static int64_t ytl__target(const ytl_timeline* tl, const ytl_event* e) {
         const ytl__base* b = &tl->bases[e->base];
         if (b->scaled && b->state == YTL__RUNNING) {
             bool sat = false;
-            return ytl__rt_s(b, e->time, &sat);
+            return ytl__rt_s(b, e->time_ns, &sat);
         }
     }
     return e->onset - e->residual;
@@ -3384,7 +3478,7 @@ static void ytl__report(const ytl_timeline* tl, ytl_event* out, int cap, int n_o
     out[j] = *e;
 }
 
-YTL_API int ytl_evaluate(ytl_timeline* tl, const ytl_frame* f,
+static int ytl__evaluate(ytl_timeline* tl, const ytl_frame* f,
                              ytl_event* fired, int cap) {
     int64_t lead_ns;
     int bi, i, n_fired = 0;
@@ -3422,7 +3516,7 @@ YTL_API int ytl_evaluate(ytl_timeline* tl, const ytl_frame* f,
             e->flags = (uint16_t)(YTL_EV_FIRED | (i < hi_kept ? YTL_EV_LATE : 0u));
             e->frame = f->index;
             e->onset = f->onset;
-            e->residual = now - e->time;
+            e->residual = now - e->time_ns;
             if (ytl__drives(e->kind)) ytl__apply(tl, e);
             ytl__report(tl, fired, cap, n_fired, e);
             n_fired++;
@@ -3446,7 +3540,7 @@ YTL_API int ytl_evaluate(ytl_timeline* tl, const ytl_frame* f,
         for (i = 0; i < tl->n_channels; i++) {
             ytl__chan* c = &tl->chans[i];
             if (tl->track_base[i] != bi + 1) continue;
-            if (c->has_pend && (c->pend_stepped ? hi_t : now) >= c->pend.start)
+            if (c->has_pend && (c->pend_stepped ? hi_t : now) >= c->pend.start_ns)
                 ytl__promote(tl, i);
             if (c->has_track)
                 tl->values[i] = ytl__sample_chan(tl, c, c->stepped ? hi_t : now);
@@ -3472,7 +3566,7 @@ YTL_API bool ytl_next_due(const ytl_timeline* tl, int64_t* rt) {
             if (e->flags & YTL__DONE) continue;
             /* +-2^62 for an event the base reaches only past the range: a
              * time no caller's clock reaches, not a clamp of a real one. */
-            t = ytl__rt_s(b, e->time, &sat);
+            t = ytl__rt_s(b, e->time_ns, &sat);
             if (!found || t < best) best = t;
             found = true;
             /* Past hi the events are sorted and unfired: the first is it. */
@@ -3483,7 +3577,7 @@ YTL_API bool ytl_next_due(const ytl_timeline* tl, int64_t* rt) {
     return found;
 }
 
-YTL_API int ytl_peek(const ytl_timeline* tl, int base, int64_t from_rt, int64_t to_rt,
+static int ytl__peek(ytl_timeline* tl, int base, int64_t from_rt, int64_t to_rt,
                          ytl_event* out, int cap) {
     int bi, i, n = 0;
     if (!tl || !tl->open) return YTL_ERR_CLOSED;
@@ -3514,7 +3608,7 @@ YTL_API int ytl_peek(const ytl_timeline* tl, int base, int64_t from_rt, int64_t 
             bool sat = false;
             if (e->flags & YTL__DONE) continue;
             c = *e;
-            c.onset = ytl__rt_s(b, e->time, &sat);
+            c.onset = ytl__rt_s(b, e->time_ns, &sat);
             c.residual = 0;
             ytl__report(NULL, out, cap, n, &c);
             n++;
@@ -3555,6 +3649,61 @@ YTL_API const ytl_event* ytl_find(const ytl_timeline* tl, int id) {
     for (k = 0; k < tl->n_events; k++)
         if (tl->events[k].id == id) return &tl->events[k];
     return NULL;
+}
+
+/* --- the calls that write the message (ERRORS AND CLOSE) ---------------- */
+
+YTL_API int ytl_anchor(ytl_timeline* tl, int base, int64_t rt_ns, int64_t base_time_ns) {
+    return ytl__err(tl, ytl__anchor(tl, base, rt_ns, base_time_ns), "ytl_anchor");
+}
+YTL_API int ytl_pause(ytl_timeline* tl, int base, int64_t rt_ns) {
+    return ytl__err(tl, ytl__pause(tl, base, rt_ns), "ytl_pause");
+}
+YTL_API int ytl_resume(ytl_timeline* tl, int base, int64_t rt_ns) {
+    return ytl__err(tl, ytl__resume(tl, base, rt_ns), "ytl_resume");
+}
+YTL_API int ytl_stop(ytl_timeline* tl, int base) {
+    return ytl__err(tl, ytl__stop(tl, base), "ytl_stop");
+}
+YTL_API int ytl_skip(ytl_timeline* tl, int base, int64_t rt_ns, int64_t base_time_ns) {
+    return ytl__err(tl, ytl__skip(tl, base, rt_ns, base_time_ns), "ytl_skip");
+}
+YTL_API int ytl_rate(ytl_timeline* tl, int base, int64_t rt_ns, int32_t num, int32_t den) {
+    return ytl__err(tl, ytl__rate(tl, base, rt_ns, num, den), "ytl_rate");
+}
+YTL_API int ytl_clamped(ytl_timeline* tl, int base) {
+    return ytl__err(tl, ytl__clamped(tl, base), "ytl_clamped");
+}
+YTL_API int ytl_add(ytl_timeline* tl, const ytl_event* e) {
+    return ytl__err(tl, ytl__add(tl, e), "ytl_add");
+}
+YTL_API int ytl_add_n(ytl_timeline* tl, const ytl_event* e, int n) {
+    return ytl__err(tl, ytl__add_n(tl, e, n), "ytl_add_n");
+}
+YTL_API int ytl_remove(ytl_timeline* tl, int id) {
+    return ytl__err(tl, ytl__remove(tl, id), "ytl_remove");
+}
+YTL_API int ytl_prune(ytl_timeline* tl, int base) {
+    return ytl__err(tl, ytl__prune(tl, base), "ytl_prune");
+}
+YTL_API int ytl_clear(ytl_timeline* tl, int base) {
+    return ytl__err(tl, ytl__clear(tl, base), "ytl_clear");
+}
+YTL_API int ytl_set_keys(ytl_timeline* tl, int channel, int base, const ytl_key* keys, int n) {
+    return ytl__err(tl, ytl__set_keys(tl, channel, base, keys, n), "ytl_set_keys");
+}
+YTL_API int ytl_set_track(ytl_timeline* tl, int channel, int base, const ytl_track* tr) {
+    return ytl__err(tl, ytl__set_track(tl, channel, base, tr), "ytl_set_track");
+}
+YTL_API int ytl_tween(ytl_timeline* tl, int channel, int base, const ytl_tween_desc* d) {
+    return ytl__err(tl, ytl__tween(tl, channel, base, d), "ytl_tween");
+}
+YTL_API int ytl_evaluate(ytl_timeline* tl, const ytl_frame* f, ytl_event* fired, int cap) {
+    return ytl__err(tl, ytl__evaluate(tl, f, fired, cap), "ytl_evaluate");
+}
+YTL_API int ytl_peek(ytl_timeline* tl, int base, int64_t from_rt_ns, int64_t to_rt_ns,
+                     ytl_event* out, int cap) {
+    return ytl__err(tl, ytl__peek(tl, base, from_rt_ns, to_rt_ns, out, cap), "ytl_peek");
 }
 
 #endif /* YSP_TIMELINE_IMPLEMENTATION_GUARD */

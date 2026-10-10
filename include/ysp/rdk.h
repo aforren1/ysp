@@ -107,9 +107,9 @@
  *       ytl_seq q = ytl_seq_on(&tl, TRIAL);        // the trial, in order
  *       ytl_set_value(&q, COH, 0.256f);
  *       ytl_on(&q, DOTS_ON);
- *       ytl_wait(&q, YTL_MS(700));                 // DIR is a track: a tween
+ *       ytl_wait(&q, YRT_MS(700));                 // DIR is a track: a tween
  *       ytl_then(&q, DIR, &(ytl_tween_desc){ .from = 0, .from_set = true,
- *                                                 .to = 90, .duration = YTL_MS(300) });
+ *                                                 .to = 90, .duration = YRT_MS(300) });
  *       ytl_off(&q, DOTS_ON);
  *       ...
  *       ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, fired, 8);

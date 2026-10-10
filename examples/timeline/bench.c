@@ -52,7 +52,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define S YTL_NS_PER_S
+#define S YRT_S(1)
 #define N_ANNOT 10000
 #define N_KEYED 32
 #define N_KEYS 256
@@ -136,7 +136,7 @@ static bool open_tl(int n_channels) {
 static ytl_event ev(int64_t t, int base, int kind, int target) {
     ytl_event e;
     memset(&e, 0, sizeof(e));
-    e.time = t;
+    e.time_ns = t;
     e.base = (uint8_t)base;
     e.kind = (uint8_t)kind;
     e.target = target;
@@ -217,7 +217,7 @@ static int bench_movie(const char* name, int32_t num, int32_t den) {
     if (ytl_add_n(&tl, batch, N_ANNOT + N_SET_CH * N_SET_EV) < 0) return 1;
     for (j = 0; j < N_KEYED; j++) {
         for (i = 0; i < N_KEYS; i++) {
-            keys[j][i].time = len * i / (N_KEYS - 1);
+            keys[j][i].time_ns = len * i / (N_KEYS - 1);
             keys[j][i].value = (float)(i % 7) + 1.0f;
             keys[j][i].ease = (uint8_t)(i % 6);
         }
@@ -260,7 +260,7 @@ static int bench_tracks(void) {
     if (!open_tl(7)) return 1;
     for (i = 0; i < TR_SAMPLES; i++) tr_samples[i] = (float)(i % 97) * 0.25f;
     for (i = 0; i < TR_KEYS; i++) {
-        tr_keys[i].time = (int64_t)i * YTL_NS_PER_MS;
+        tr_keys[i].time_ns = (int64_t)i * YRT_MS(1);
         tr_keys[i].value = (float)(i % 89);
     }
     memset(&tr, 0, sizeof(tr));
@@ -273,11 +273,11 @@ static int bench_tracks(void) {
     memset(&tr, 0, sizeof(tr));
     tr.keys = square;
     tr.n_keys = 2;
-    tr.period = 4 * S / 30;
+    tr.period_ns = 4 * S / 30;
     if (ytl_set_track(&tl, 2, 1, &tr) < 0) return 1;
     for (j = 0; j < 4; j++) {
         for (i = 0; i < 64; i++) {
-            bez[j][i].time = (int64_t)i * 600 * S / 63;
+            bez[j][i].time_ns = (int64_t)i * 600 * S / 63;
             bez[j][i].value = (float)((i + j) % 5);
             bez[j][i].ease = YTL_EASE_BEZIER;
         }

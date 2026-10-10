@@ -964,7 +964,7 @@ static void test_seek(void) {
     for (k = 0; k < 200; k++) {
         ytl_event e;
         memset(&e, 0, sizeof e);
-        e.base = 4; e.kind = YTL_MARK; e.time = yvid_frame_time(30, 1, k); e.code = k;
+        e.base = 4; e.kind = YTL_MARK; e.time_ns = yvid_frame_time(30, 1, k); e.code = k;
         ytl_add(&g_tl, &e);
     }
     g_eval_tl = &g_tl;
@@ -1070,7 +1070,7 @@ static void test_loop_end(void) {
     rec_reset();
     tl_open();
     memset(&e, 0, sizeof e);
-    e.base = 1; e.kind = YTL_MARK; e.time = 0; e.code = 1000;
+    e.base = 1; e.kind = YTL_MARK; e.time_ns = 0; e.code = 1000;
     ytl_add(&g_tl, &e);
     sd_default(&g_sd, 30, 1, 10, 1);
     desc_default(&vd);
@@ -1151,14 +1151,14 @@ static void test_manual(void) {
             for (i = 0; i < 200; i++) {
                 ytl_event e;
                 memset(&e, 0, sizeof e);
-                e.base = 2; e.kind = YTL_MARK; e.time = yvid_frame_time(30, 1, i); e.code = i;
+                e.base = 2; e.kind = YTL_MARK; e.time_ns = yvid_frame_time(30, 1, i); e.code = i;
                 ytl_add(&g_tl, &e);
             }
             {
                 /* between frames 5 and 6: a step to 6 fires it */
                 ytl_event e;
                 memset(&e, 0, sizeof e);
-                e.base = 2; e.kind = YTL_MARK; e.time = yvid_frame_time(30, 1, 6) - 1000000; e.code = 1000;
+                e.base = 2; e.kind = YTL_MARK; e.time_ns = yvid_frame_time(30, 1, 6) - 1000000; e.code = 1000;
                 ytl_add(&g_tl, &e);
             }
         }
@@ -1252,7 +1252,7 @@ static void run_agree(const char* name, int32_t num, int32_t den, double hz, dou
     for (k = 0; k < frames; k++) {
         ytl_event e;
         memset(&e, 0, sizeof e);
-        e.base = 3; e.kind = YTL_MARK; e.time = yvid_frame_time(num, den, k); e.code = (int32_t)k;
+        e.base = 3; e.kind = YTL_MARK; e.time_ns = yvid_frame_time(num, den, k); e.code = (int32_t)k;
         ytl_add(&g_tl, &e);
         fired_at[k] = -1;
         first_show[k] = -1;
@@ -2457,7 +2457,7 @@ static void run_agree_rate(const char* name, int32_t num, int32_t den, double hz
     for (k = 0; k < frames; k++) {
         ytl_event e;
         memset(&e, 0, sizeof e);
-        e.base = 3; e.kind = YTL_MARK; e.time = yvid_frame_time(num, den, k); e.code = (int32_t)k;
+        e.base = 3; e.kind = YTL_MARK; e.time_ns = yvid_frame_time(num, den, k); e.code = (int32_t)k;
         ytl_add(&g_tl, &e);
         fired_at[k] = -1;
         first_show[k] = -1;
@@ -2620,7 +2620,7 @@ static void test_rates(void) {
         rec_reset();
         tl_open();
         memset(&e, 0, sizeof e);
-        e.base = 1; e.kind = YTL_MARK; e.time = 0; e.code = 7;
+        e.base = 1; e.kind = YTL_MARK; e.time_ns = 0; e.code = 7;
         ytl_add(&g_tl, &e);
         sd_default(&g_sd, 24000, 1001, 10, 1);
         desc_default(&vd);

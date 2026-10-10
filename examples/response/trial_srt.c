@@ -250,7 +250,7 @@ int main(int argc, char** argv) {
             ytl_clear(&tl, TRIAL);
             ytl_anchor(&tl, TRIAL, f.onset, 0);
             q = ytl_seq_on(&tl, TRIAL);
-            ytl_wait(&q, rest ? YTL_S(REST_S) : 0);
+            ytl_wait(&q, rest ? YRT_S(REST_S) : 0);
             ytl_set_value(&q, TARGET_X, ((float)position - 1.5f) * SPACING);
             ytl_on(&q, TARGET_ON);
             if (q.err) { fprintf(stderr, "trial_srt: timeline error %d\n", q.err); failed = 1; break; }
@@ -271,7 +271,7 @@ int main(int argc, char** argv) {
             ytl_base_time(&tl, TRIAL, f.onset, &bt);
             ytl_at(&q, bt);
             ytl_off(&q, TARGET_ON);
-            ytl_wait(&q, YTL_S(RSI_S));
+            ytl_wait(&q, YRT_S(RSI_S));
             ytl_mark(&q, END_OF_TRIAL, 0);
             if (q.err) { fprintf(stderr, "trial_srt: timeline error %d\n", q.err); failed = 1; break; }
             responding = 0;
@@ -291,7 +291,7 @@ int main(int argc, char** argv) {
                     for (p = 0; p < 1 + (blocks[block] == 'S' && k); p++) {
                         yrsp_input* e = &sim_ev[n_sim_ev];
                         memset(e, 0, sizeof *e);
-                        e->t = fired[i].onset + YTL_S(at + 0.1 * p);
+                        e->t = fired[i].onset + YRT_S(at + 0.1 * p);
                         e->type = YRSP_PRESS;
                         e->control = (uint32_t)yrsp_scancode(keys[(position + wrong) % 4].key);
                         e->stamp = YRSP_TIER_SIM;
@@ -299,7 +299,7 @@ int main(int argc, char** argv) {
                         sim_ev[n_sim_ev + 1] = *e;
                         sim_ev[n_sim_ev + 1].type = YRSP_RELEASE;
                         sim_ev[n_sim_ev + 1].value = 0;
-                        sim_ev[n_sim_ev + 1].t = e->t + YTL_MS(60);
+                        sim_ev[n_sim_ev + 1].t = e->t + YRT_MS(60);
                         n_sim_ev += 2;
                     }
                 }

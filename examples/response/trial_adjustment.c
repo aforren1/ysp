@@ -261,7 +261,7 @@ int main(int argc, char** argv) {
             ytl_anchor(&tl, TRIAL, f.onset, 0);
             q = ytl_seq_on(&tl, TRIAL);
             ytl_on(&q, FIX_ON);
-            ytl_wait(&q, YTL_S(FIXATION_S));
+            ytl_wait(&q, YRT_S(FIXATION_S));
             ytl_off(&q, FIX_ON);
             ytl_on(&q, BARS_ON);
             if (q.err) { fprintf(stderr, "trial_adjustment: timeline error %d\n", q.err); failed = 1; break; }
@@ -288,7 +288,7 @@ int main(int argc, char** argv) {
             ytl_base_time(&tl, TRIAL, f.onset, &bt);
             ytl_at(&q, bt);
             ytl_off(&q, BARS_ON);
-            ytl_wait(&q, YTL_S(ITI_S));
+            ytl_wait(&q, YRT_S(ITI_S));
             ytl_mark(&q, END_OF_TRIAL, 0);
             if (q.err) { fprintf(stderr, "trial_adjustment: timeline error %d\n", q.err); failed = 1; break; }
             responding = bars_up = 0;
@@ -310,7 +310,7 @@ int main(int argc, char** argv) {
                         for (j = 0; j < b->n && n_sim_ev + 4 <= 64; j++) {
                             yrsp_input* e = &sim_ev[n_sim_ev++];
                             memset(e, 0, sizeof *e);
-                            e->t = fired[i].onset + YTL_S(b->at + j * b->every);
+                            e->t = fired[i].onset + YRT_S(b->at + j * b->every);
                             e->type = YRSP_PRESS;
                             e->control = (uint32_t)yrsp_scancode(key);
                             e->flags = (uint8_t)(b->repeat && j > 0 ? YRSP_IN_REPEAT : 0);
@@ -321,13 +321,13 @@ int main(int argc, char** argv) {
                                 sim_ev[n_sim_ev].type = YRSP_RELEASE;
                                 sim_ev[n_sim_ev].flags = 0;
                                 sim_ev[n_sim_ev].value = 0;
-                                sim_ev[n_sim_ev++].t = e->t + YTL_MS(50);
+                                sim_ev[n_sim_ev++].t = e->t + YRT_MS(50);
                             }
                             if (b->twice) {   /* the message path's report of the tap */
                                 sim_ev[n_sim_ev] = sim_ev[n_sim_ev - 2];
                                 sim_ev[n_sim_ev + 1] = sim_ev[n_sim_ev - 1];
-                                sim_ev[n_sim_ev].t += YTL_MS(9);
-                                sim_ev[n_sim_ev + 1].t += YTL_MS(9);
+                                sim_ev[n_sim_ev].t += YRT_MS(9);
+                                sim_ev[n_sim_ev + 1].t += YRT_MS(9);
                                 n_sim_ev += 2;
                             }
                         }
@@ -337,7 +337,7 @@ int main(int argc, char** argv) {
                          * trial's press is a held key, not a response */
                         yrsp_input* e = &sim_ev[n_sim_ev];
                         memset(e, 0, sizeof *e);
-                        e->t = fired[i].onset + YTL_S(sim_confirm_at[ti.index]);
+                        e->t = fired[i].onset + YRT_S(sim_confirm_at[ti.index]);
                         e->type = YRSP_PRESS;
                         e->control = (uint32_t)yrsp_scancode("space");
                         e->stamp = YRSP_TIER_SIM;
@@ -345,7 +345,7 @@ int main(int argc, char** argv) {
                         sim_ev[n_sim_ev + 1] = *e;
                         sim_ev[n_sim_ev + 1].type = YRSP_RELEASE;
                         sim_ev[n_sim_ev + 1].value = 0;
-                        sim_ev[n_sim_ev + 1].t = e->t + YTL_MS(70);
+                        sim_ev[n_sim_ev + 1].t = e->t + YRT_MS(70);
                         n_sim_ev += 2;
                     }
                     /* fed in time order below: a burst can end after the next one starts */

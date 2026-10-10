@@ -34,6 +34,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stddef.h>
+
+/* The handle's state without its message: a failing call writes the
+ * message (v0.5.0) and must change nothing else. */
+#define TL_STATE offsetof(ytl_timeline, error)
 
 /* ---------------------------------------------------------------- harness */
 
@@ -76,10 +81,10 @@ static volatile double g_zero = 0.0;
 static double make_nan(void) { return g_zero / g_zero; }
 static double make_inf(void) { return 1.0 / g_zero; }
 
-#define S_NS  YTL_NS_PER_S
-#define MS_NS YTL_NS_PER_MS
+#define S_NS  YRT_S(1)
+#define MS_NS YRT_MS(1)
 #define P60   INT64_C(16666667)
-#define T0    YTL_NS_PER_S
+#define T0    YRT_S(1)
 #define LIM62 INT64_C(4611686018427387904)
 
 /* Handles are about 12 KB each, so not on the stack. */
@@ -112,7 +117,7 @@ static int64_t rnd_range(int64_t lo, int64_t hi) {
 static ytl_event ev(int base, int64_t time, int kind, int target, float value) {
     ytl_event e;
     memset(&e, 0, sizeof e);
-    e.time = time;
+    e.time_ns = time;
     e.base = (uint8_t)base;
     e.kind = (uint8_t)kind;
     e.target = target;
@@ -128,7 +133,7 @@ static int add1(ytl_timeline* tl, int base, int64_t time, int kind, int target, 
 static ytl_key mkkey(int64_t t, float v, int ease) {
     ytl_key k;
     memset(&k, 0, sizeof k);
-    k.time = t;
+    k.time_ns = t;
     k.value = v;
     k.ease = (uint8_t)ease;
     return k;
@@ -162,7 +167,7 @@ static ytl_track trk_samples(const float* s, int n, int64_t t0, int64_t rate, in
     memset(&tr, 0, sizeof tr);
     tr.samples = s;
     tr.n_samples = n;
-    tr.t0 = t0;
+    tr.t0_ns = t0;
     tr.rate = rate;
     tr.interp = interp;
     return tr;
@@ -207,7 +212,7 @@ static int n_events(const ytl_timeline* tl, int base) {
 
 static int key_cmp(const ytl_event* a, const ytl_event* b) {
     if (a->base != b->base) return a->base < b->base ? -1 : 1;
-    if (a->time != b->time) return a->time < b->time ? -1 : 1;
+    if (a->time_ns != b->time_ns) return a->time_ns < b->time_ns ? -1 : 1;
     if (a->id != b->id) return a->id < b->id ? -1 : 1;
     return 0;
 }
@@ -418,10 +423,10 @@ static double ref_keyed(const ytl_key* k, int n, const ytl_curve* cv, int64_t t)
     int i = 0, j;
     double u;
     if (!k || n < 1) return 0.0;
-    if (t < k[0].time) return k[0].value;
-    if (t >= k[n - 1].time) return k[n - 1].value;
-    for (j = 0; j < n; j++) if (k[j].time <= t) i = j;
-    u = (double)(t - k[i].time) / (double)(k[i + 1].time - k[i].time);
+    if (t < k[0].time_ns) return k[0].value;
+    if (t >= k[n - 1].time_ns) return k[n - 1].value;
+    for (j = 0; j < n; j++) if (k[j].time_ns <= t) i = j;
+    u = (double)(t - k[i].time_ns) / (double)(k[i + 1].time_ns - k[i].time_ns);
     if (k[i].ease == YTL_EASE_BEZIER) {
         double y = cv ? ref_bezier(&cv[k[i].curve], u) : u;
         return (double)k[i].value + ((double)k[i + 1].value - (double)k[i].value) * y;
@@ -439,7 +444,7 @@ static double ref_sample(const ytl_key* k, int n, int64_t t) {
  * exactly. (t - t0) rate may not fit 64 bits, so it is split at whole
  * seconds; r rate < 1e18 does. */
 static int64_t ref_sidx(const ytl_track* tr, int64_t t, int64_t* fnum) {
-    int64_t d = t - tr->t0, q, r;
+    int64_t d = t - tr->t0_ns, q, r;
     *fnum = 0;
     if (d < 0) return -1;
     if (g_mut & MUT_STEP_NS) {
@@ -492,15 +497,15 @@ static double ref_base(const ytl_track* tr, int64_t t) {
  * start, no repeat. */
 static double ref_track(const ytl_track* tr, int64_t t) {
     int64_t start, k;
-    if (tr->period <= 0) return ref_base(tr, t);
-    if (tr->keys && tr->n_keys > 0) start = tr->keys[0].time;
-    else if (tr->samples && tr->n_samples > 0) start = tr->t0;
+    if (tr->period_ns <= 0) return ref_base(tr, t);
+    if (tr->keys && tr->n_keys > 0) start = tr->keys[0].time_ns;
+    else if (tr->samples && tr->n_samples > 0) start = tr->t0_ns;
     else return 0.0;
     if (t < start) return ref_base(tr, t);
-    k = (t - start) / tr->period;
+    k = (t - start) / tr->period_ns;
     if (tr->repeats > 0 && k >= (int64_t)tr->repeats + ((g_mut & MUT_HOLD_LATE) ? 1 : 0))
-        return ref_base(tr, (g_mut & MUT_HOLD_FOLD) ? start : start + tr->period);
-    return ref_base(tr, start + (t - start) % tr->period);
+        return ref_base(tr, (g_mut & MUT_HOLD_FOLD) ? start : start + tr->period_ns);
+    return ref_base(tr, start + (t - start) % tr->period_ns);
 }
 
 /* The track a tween stands for: two keys, from at start to `to` at
@@ -546,13 +551,13 @@ static ytl_tween_desc twd(float to, int64_t dur) {
     ytl_tween_desc d;
     memset(&d, 0, sizeof d);
     d.to = to;
-    d.duration = dur;
+    d.duration_ns = dur;
     return d;
 }
 
 static ytl_tween_desc twd_at(float to, int64_t dur, int64_t start) {
     ytl_tween_desc d = twd(to, dur);
-    d.start = start;
+    d.start_ns = start;
     d.start_set = true;
     return d;
 }
@@ -633,17 +638,17 @@ static void rdrv_tween(rdrv* r, const ytl_tween_desc* d, int64_t s, const rdrv* 
         r->hf = from;
         r->ht = (double)d->to;
         r->hs = s;
-        r->hd = d->duration;
+        r->hd = d->duration_ns;
         r->hm = (old && !(g_mut & MUT_TW_SLOPE))
-                    ? (rdrv_value(old, s) - rdrv_value(old, s - 1000)) / 1000.0 * (double)d->duration
+                    ? (rdrv_value(old, s) - rdrv_value(old, s - 1000)) / 1000.0 * (double)d->duration_ns
                     : 0.0;
         return;
     }
     r->own = 1;
     r->k[0] = mkkey(s, (float)from, d->ease);
-    r->k[1] = mkkey(s + d->duration, d->to, yoyo ? d->ease : YTL_EASE_LINEAR);
+    r->k[1] = mkkey(s + d->duration_ns, d->to, yoyo ? d->ease : YTL_EASE_LINEAR);
     if (yoyo && !(g_mut & MUT_TW_YOYO)) {
-        r->k[2] = mkkey(s + 2 * d->duration, (float)from, YTL_EASE_LINEAR);
+        r->k[2] = mkkey(s + 2 * d->duration_ns, (float)from, YTL_EASE_LINEAR);
         n = 3;
     }
     if (d->ease == YTL_EASE_BEZIER) {
@@ -652,7 +657,7 @@ static void rdrv_tween(rdrv* r, const ytl_tween_desc* d, int64_t s, const rdrv* 
     }
     r->tr.n_keys = n;
     if (multi) {
-        r->tr.period = (yoyo ? 2 : 1) * d->duration;
+        r->tr.period_ns = (yoyo ? 2 : 1) * d->duration_ns;
         r->tr.repeats = d->cycles == YTL_FOREVER ? 0 : d->cycles;
     }
 }
@@ -665,16 +670,16 @@ static int curve_ok(const ytl_curve* c) {
 /* TWEENS' rejections, but the time limits (the callers stay far from them). */
 static int tw_valid(const ytl_tween_desc* d) {
     int multi = d->cycles > 1 || d->cycles == YTL_FOREVER;
-    if (d->duration < 0) return 0;
+    if (d->duration_ns < 0) return 0;
     if (!(fabs((double)d->to) <= 3.4e38)) return 0;
     if (d->from_set && !(fabs((double)d->from) <= 3.4e38)) return 0;
     if (d->ease < 0 || d->ease > YTL_EASE_BEZIER) return 0;
     if (d->ease == YTL_EASE_BEZIER && !curve_ok(&d->curve)) return 0;
     if (d->ease == YTL_EASE_LOG && (!d->from_set || d->from <= 0.0f || d->to <= 0.0f)) return 0;
     if (d->cycles < YTL_FOREVER) return 0;
-    if ((multi || d->yoyo) && d->duration == 0) return 0;
+    if ((multi || d->yoyo) && d->duration_ns == 0) return 0;
     if (d->keep_velocity &&
-        (d->ease != YTL_EASE_LINEAR || d->from_set || d->yoyo || multi || d->duration == 0)) return 0;
+        (d->ease != YTL_EASE_LINEAR || d->from_set || d->yoyo || multi || d->duration_ns == 0)) return 0;
     return 1;
 }
 
@@ -1146,9 +1151,9 @@ static void test_channels(void) {
     b[1] = ev(1, 2000, YTL_OFFSET, 3, 0.0f);
     b[2] = ev(3, 5, YTL_MARK, 0, 0.0f);
     CHECK_I(ytl_add_n(&g_tl, b, 3), 11);
-    CHECK(ytl_find(&g_tl, 11) && ytl_find(&g_tl, 11)->time == 1000 && ytl_find(&g_tl, 11)->kind == YTL_ONSET);
-    CHECK(ytl_find(&g_tl, 12) && ytl_find(&g_tl, 12)->time == 2000 && ytl_find(&g_tl, 12)->kind == YTL_OFFSET);
-    CHECK(ytl_find(&g_tl, 13) && ytl_find(&g_tl, 13)->base == 3 && ytl_find(&g_tl, 13)->time == 5);
+    CHECK(ytl_find(&g_tl, 11) && ytl_find(&g_tl, 11)->time_ns == 1000 && ytl_find(&g_tl, 11)->kind == YTL_ONSET);
+    CHECK(ytl_find(&g_tl, 12) && ytl_find(&g_tl, 12)->time_ns == 2000 && ytl_find(&g_tl, 12)->kind == YTL_OFFSET);
+    CHECK(ytl_find(&g_tl, 13) && ytl_find(&g_tl, 13)->base == 3 && ytl_find(&g_tl, 13)->time_ns == 5);
     CHECK_I(add1(&g_tl, 0, 3000, YTL_MARK, 0, 0.0f), 14);
     CHECK(is_pending_reset(ytl_find(&g_tl, 14)));
     check_sorted(&g_tl, __LINE__);
@@ -1190,7 +1195,7 @@ static void test_sample(void) {
         if (!(fabs(got - want) <= tol_of(want))) bad++;
     }
     if (bad) fail_i(__LINE__, "ytl_sample points off the model", bad, 0);
-    for (i = 0; i < 7; i++) CHECK(ksample(k, 7, k[i].time) == (double)k[i].value);
+    for (i = 0; i < 7; i++) CHECK(ksample(k, 7, k[i].time_ns) == (double)k[i].value);
     CHECK_F(ksample(k, 7, 50 * M), 2.0, 1e-6);
     CHECK_F(ksample(k, 7, 150 * M), 3.0, 1e-6);
     CHECK_F(ksample(k, 7, 199 * M), 3.0, 1e-6);
@@ -1231,7 +1236,7 @@ static void test_sample(void) {
             k[j] = mkkey(t, (float)(0.1 + (double)rnd_int(1000) / 100.0), rnd_int(6));
         }
         for (j = 0; j < 60 + n; j++) {
-            int64_t ts = j < n ? k[j].time : rnd_range(k[0].time - 10 * M, k[n - 1].time + 10 * M);
+            int64_t ts = j < n ? k[j].time_ns : rnd_range(k[0].time_ns - 10 * M, k[n - 1].time_ns + 10 * M);
             double want = ref_sample(k, n, ts), got = ksample(k, n, ts);
             if (!(fabs(got - want) <= tol_of(want))) {
                 if (!bad) fprintf(stderr, "  sample: n %d t %lld got %.9g want %.9g\n",
@@ -1328,7 +1333,7 @@ static void test_tracks(void) {
         if (ytl_value(&g_tl, 1) != (float)ksample(d, 12, t)) mism++;
     }
     for (k = 0; k < 300; k++) {
-        int64_t t = rnd_range(-100 * MS_NS, d[11].time + 100 * MS_NS);
+        int64_t t = rnd_range(-100 * MS_NS, d[11].time_ns + 100 * MS_NS);
         onset = prev + rnd_range(1, P60);
         prev = onset;
         CHECK_I(ytl_anchor(&g_tl, 2, onset, t), 0);
@@ -1455,7 +1460,7 @@ static void test_sampled(void) {
     /* 120, 7 and 999983 (prime) do not divide 1e9; 1e9 is a sample per ns. */
     static const int64_t rates[6] = { 120, 7, 999983, INT64_C(1000000000), 1, 60 };
     static const int ns[6] = { 600000, 3000, 200000, 200000, 100, 5000 };
-    static const int64_t t0s[3] = { 0, -5 * YTL_NS_PER_S + 3, 777777777 };
+    static const int64_t t0s[3] = { 0, -5 * YRT_S(1) + 3, 777777777 };
     int r, z, i;
     for (i = 0; i < 600000; i++) g_big[i] = (float)i;
     for (r = 0; r < 6; r++)
@@ -1593,7 +1598,7 @@ static void test_repeat(void) {
     k[2] = mkkey(ST + 150 * M, 4.0f, YTL_EASE_LINEAR);
     k[3] = mkkey(ST + 400 * M, 20.0f, YTL_EASE_LINEAR);
     tr = trk_keys(k, 4);
-    tr.period = 200 * M;
+    tr.period_ns = 200 * M;
     tr.repeats = 3;
     /* Before the start, no repeat: the first key's value. */
     CHECK(ytl_sample(&tr, ST - 1) == 0.0);
@@ -1643,7 +1648,7 @@ static void test_repeat(void) {
      * not a whole number of samples. The value at start + period is 5.5. */
     for (i = 0; i < 10; i++) sv[i] = (float)i;
     tr = trk_samples(sv, 10, T, 100, YTL_INTERP_LINEAR);
-    tr.period = 55 * M;
+    tr.period_ns = 55 * M;
     tr.repeats = 4;
     CHECK(ytl_sample(&tr, T - 1) == 0.0);
     CHECK_F(ytl_sample(&tr, T + 23 * M), 2.3, 1e-9);
@@ -1658,7 +1663,7 @@ static void test_repeat(void) {
     tr.repeats = 0;
     CHECK_F(ytl_sample(&tr, T + 1000 * 55 * M + 23 * M), 2.3, 1e-9);
     /* A period longer than the table: the last sample until the wrap. */
-    tr.period = 200 * M;
+    tr.period_ns = 200 * M;
     CHECK(ytl_sample(&tr, T + 150 * M) == 9.0);
     CHECK_F(ytl_sample(&tr, T + 200 * M + 45 * M), 4.5, 1e-9);
     tr.repeats = 2;
@@ -1669,7 +1674,7 @@ static void test_repeat(void) {
     bad = 0;
     for (rep = 0; rep < 4; rep++) {
         tr = trk_samples(sv, 10, T, 100, rep % 2 ? YTL_INTERP_CUBIC : YTL_INTERP_STEP);
-        tr.period = rep < 2 ? 37 * M + 1 : 333 * M;
+        tr.period_ns = rep < 2 ? 37 * M + 1 : 333 * M;
         tr.repeats = rep;
         for (i = 0; i < 5000; i++) {
             int64_t t = rnd_range(T - 50 * M, T + 3 * S_NS);
@@ -1700,7 +1705,7 @@ static int64_t flicker_run(int64_t hz, int lead_num, int lead_den, int64_t bt_fi
     sq[0] = mkkey(0, 1.0f, YTL_EASE_STEP);
     sq[1] = mkkey(HALF, 0.0f, YTL_EASE_STEP);
     tr = trk_keys(sq, 2);
-    tr.period = FP;
+    tr.period_ns = FP;
     tr.repeats = 4500;
     CHECK(open_h(&g_tl, g_store, 4, 1, NULL, (double)lead_num / (double)lead_den));
     CHECK_I(ytl_set_track(&g_tl, 0, 1, &tr), 0);
@@ -1755,7 +1760,7 @@ static void test_flicker(void) {
         sq[0] = mkkey(0, 1.0f, YTL_EASE_STEP);
         sq[1] = mkkey(HALF, 0.0f, YTL_EASE_STEP);
         tr = trk_keys(sq, 2);
-        tr.period = FP;
+        tr.period_ns = FP;
         CHECK(open_h(&g_tl, g_store, 4, 1, NULL, 0.0));
         CHECK_I(ytl_set_track(&g_tl, 0, 1, &tr), 0);
         CHECK_I(ytl_anchor(&g_tl, 1, S_NS, 0), 0);
@@ -1888,7 +1893,7 @@ static void test_set_track(void) {
     b = gk; b.curves = cv; b.n_curves = -1; REJ_TRACK(b);
     /* Keys: order, ease, value, LOG. */
     b = trk_keys(kb, 3);
-    memcpy(kb, k, sizeof kb); kb[2].time = 5; REJ_TRACK(b);
+    memcpy(kb, k, sizeof kb); kb[2].time_ns = 5; REJ_TRACK(b);
     memcpy(kb, k, sizeof kb); kb[0].ease = 7; REJ_TRACK(b);
     memcpy(kb, k, sizeof kb); kb[1].ease = 255; REJ_TRACK(b);
     memcpy(kb, k, sizeof kb); kb[2].ease = 7; REJ_TRACK(b);   /* the last key's too */
@@ -1945,31 +1950,31 @@ static void test_set_track(void) {
      * gs has 4 samples: at rate 1 the last is t0 + 3 s; at rate 3 it is
      * t0 + 1 s exactly; at rate 7 it is t0 + 3/7 s = t0 + 428571428.57 ns,
      * which rounds up to 428571429. */
-    b = gs; b.rate = 1; b.t0 = LIM62 - 3 * S_NS; REJ_TRACK(b);              /* last at 2^62         */
-    b = gs; b.rate = 1; b.t0 = LIM62 - 3 * S_NS - 1; ACC_TRACK(b);          /* last at 2^62 - 1 ns  */
-    b = gs; b.rate = 3; b.t0 = LIM62 - S_NS; REJ_TRACK(b);
-    b = gs; b.rate = 3; b.t0 = LIM62 - S_NS - 1; ACC_TRACK(b);
-    b = gs; b.rate = 7; b.t0 = LIM62 - 428571429; REJ_TRACK(b);             /* rounds up to 2^62    */
-    b = gs; b.rate = 7; b.t0 = LIM62 - 428571430; ACC_TRACK(b);
+    b = gs; b.rate = 1; b.t0_ns = LIM62 - 3 * S_NS; REJ_TRACK(b);              /* last at 2^62         */
+    b = gs; b.rate = 1; b.t0_ns = LIM62 - 3 * S_NS - 1; ACC_TRACK(b);          /* last at 2^62 - 1 ns  */
+    b = gs; b.rate = 3; b.t0_ns = LIM62 - S_NS; REJ_TRACK(b);
+    b = gs; b.rate = 3; b.t0_ns = LIM62 - S_NS - 1; ACC_TRACK(b);
+    b = gs; b.rate = 7; b.t0_ns = LIM62 - 428571429; REJ_TRACK(b);             /* rounds up to 2^62    */
+    b = gs; b.rate = 7; b.t0_ns = LIM62 - 428571430; ACC_TRACK(b);
     /* Interp. */
     b = gs; b.interp = 3; REJ_TRACK(b);
     b = gs; b.interp = -1; REJ_TRACK(b);
     b = gs; b.interp = YTL_INTERP_CUBIC; ACC_TRACK(b);
     /* Period and repeats. */
-    b = gk; b.period = -1; REJ_TRACK(b);
-    b = gs; b.period = -5; REJ_TRACK(b);
-    b = gk; b.period = LIM62; REJ_TRACK(b);
-    b = gk; b.period = LIM62 - 1; ACC_TRACK(b);
+    b = gk; b.period_ns = -1; REJ_TRACK(b);
+    b = gs; b.period_ns = -5; REJ_TRACK(b);
+    b = gk; b.period_ns = LIM62; REJ_TRACK(b);
+    b = gk; b.period_ns = LIM62 - 1; ACC_TRACK(b);
     b = gk; b.repeats = -1; REJ_TRACK(b);
-    b = gk; b.period = 10; b.repeats = -1; REJ_TRACK(b);
+    b = gk; b.period_ns = 10; b.repeats = -1; REJ_TRACK(b);
     b = gk; b.repeats = 2; REJ_TRACK(b);   /* repeats > 0 with period 0 */
-    b = gk; b.period = 10; b.repeats = 2; ACC_TRACK(b);
+    b = gk; b.period_ns = 10; b.repeats = 2; ACC_TRACK(b);
     /* Times beyond +-2^62. */
     b = trk_keys(kb, 3);
-    memcpy(kb, k, sizeof kb); kb[2].time = LIM62 + 1; REJ_TRACK(b);
-    memcpy(kb, k, sizeof kb); kb[0].time = -LIM62 - 1; REJ_TRACK(b);
-    b = gs; b.t0 = -LIM62 - 1; REJ_TRACK(b);
-    b = gs; b.t0 = LIM62 + 1; REJ_TRACK(b);
+    memcpy(kb, k, sizeof kb); kb[2].time_ns = LIM62 + 1; REJ_TRACK(b);
+    memcpy(kb, k, sizeof kb); kb[0].time_ns = -LIM62 - 1; REJ_TRACK(b);
+    b = gs; b.t0_ns = -LIM62 - 1; REJ_TRACK(b);
+    b = gs; b.t0_ns = LIM62 + 1; REJ_TRACK(b);
     /* Channel and base. */
     CHECK_I(ytl_set_track(&g_tl, 4, 1, &gk), YTL_ERR_ARG);
     CHECK_I(ytl_set_track(&g_tl, -1, 1, &gk), YTL_ERR_ARG);
@@ -2061,8 +2066,8 @@ static void tween_from_helper(int ch, int base, int64_t start, int64_t dur, floa
     vd->curve.x2 = 0.0f;
     vd->curve.y2 = -5.0f;
     vd->to = -7.0f;
-    vd->duration = 1;
-    vd->start = 0;
+    vd->duration_ns = 1;
+    vd->start_ns = 0;
 }
 
 static void stack_scribble(void) {
@@ -2230,11 +2235,11 @@ static void test_tween(void) {
     CHECK(ytl_value(&g_tl, 4) == 0.0f);   /* base 3 is stopped */
 }
 
-/* YTL_S and YTL_MS: rounded to nearest, both signs, constant
+/* YRT_S and YRT_MS: rounded to nearest, both signs, constant
  * expressions. */
 static void test_tween_macros(void) {
-    static const int64_t st[6] = { YTL_MS(200), YTL_S(0.2), YTL_S(-0.25), YTL_MS(-1.25),
-                                   YTL_S(1.5), YTL_MS(0) };
+    static const int64_t st[6] = { YRT_MS(200), YRT_S(0.2), YRT_S(-0.25), YRT_MS(-1.25),
+                                   YRT_S(1.5), YRT_MS(0) };
     int i, bad = 0;
     CHECK_I(st[0], 200000000);
     CHECK_I(st[1], 200000000);
@@ -2242,35 +2247,35 @@ static void test_tween_macros(void) {
     CHECK_I(st[3], -1250000);
     CHECK_I(st[4], 1500000000);
     CHECK_I(st[5], 0);
-    CHECK_I(YTL_S(2.0000000004), INT64_C(2000000000));
-    CHECK_I(YTL_S(2.0000000006), INT64_C(2000000001));
-    CHECK_I(YTL_S(-2.0000000004), -INT64_C(2000000000));
-    CHECK_I(YTL_S(-2.0000000006), -INT64_C(2000000001));
-    CHECK_I(YTL_S(-0.0000000014), -1);
-    CHECK_I(YTL_S(-0.0000000016), -2);
-    CHECK_I(YTL_S(0.999999999), 999999999);
-    CHECK_I(YTL_S(3600.0), 3600 * S_NS);
-    CHECK_I(YTL_S(-3), -3 * S_NS);
-    CHECK_I(YTL_MS(200), 200 * MS_NS);
-    CHECK_I(YTL_MS(0.0000004), 0);
-    CHECK_I(YTL_MS(0.0000006), 1);
-    CHECK_I(YTL_MS(-0.0000004), 0);
-    CHECK_I(YTL_MS(-0.0000006), -1);
-    CHECK_I(YTL_MS(16.6666667), 16666667);
-    CHECK_I(YTL_MS(-16.6666667), -16666667);
-    CHECK_I(YTL_MS(1.5), 1500000);
+    CHECK_I(YRT_S(2.0000000004), INT64_C(2000000000));
+    CHECK_I(YRT_S(2.0000000006), INT64_C(2000000001));
+    CHECK_I(YRT_S(-2.0000000004), -INT64_C(2000000000));
+    CHECK_I(YRT_S(-2.0000000006), -INT64_C(2000000001));
+    CHECK_I(YRT_S(-0.0000000014), -1);
+    CHECK_I(YRT_S(-0.0000000016), -2);
+    CHECK_I(YRT_S(0.999999999), 999999999);
+    CHECK_I(YRT_S(3600.0), 3600 * S_NS);
+    CHECK_I(YRT_S(-3), -3 * S_NS);
+    CHECK_I(YRT_MS(200), 200 * MS_NS);
+    CHECK_I(YRT_MS(0.0000004), 0);
+    CHECK_I(YRT_MS(0.0000006), 1);
+    CHECK_I(YRT_MS(-0.0000004), 0);
+    CHECK_I(YRT_MS(-0.0000006), -1);
+    CHECK_I(YRT_MS(16.6666667), 16666667);
+    CHECK_I(YRT_MS(-16.6666667), -16666667);
+    CHECK_I(YRT_MS(1.5), 1500000);
     CHECK_I(YTL_FOREVER, -1);
-    /* Away from ties, YTL_S agrees with ytl_ns. */
+    /* Away from ties, YRT_S agrees with ytl_ns. */
     g_rng = 5150;
     for (i = 0; i < 4000; i++) {
         double x = (double)rnd_range(-INT64_C(1000000000000000), INT64_C(1000000000000000)) * 1e-13;
-        if (YTL_S(x) != ytl_ns(x)) {
-            if (!bad) fprintf(stderr, "  YTL_S(%.17g) = %lld, ytl_ns %lld\n", x, (long long)YTL_S(x),
+        if (YRT_S(x) != ytl_ns(x)) {
+            if (!bad) fprintf(stderr, "  YRT_S(%.17g) = %lld, ytl_ns %lld\n", x, (long long)YRT_S(x),
                               (long long)ytl_ns(x));
             bad++;
         }
     }
-    if (bad) fail_i(__LINE__, "YTL_S differs from ytl_ns", bad, 0);
+    if (bad) fail_i(__LINE__, "YRT_S differs from ytl_ns", bad, 0);
 }
 
 /* Opens g_tl with 8 channels at 0.5 and lead 0.5. */
@@ -2303,19 +2308,19 @@ static void test_tween_now(void) {
     tw_open();
     CHECK_I(ytl_anchor(&g_tl, 2, R, 300 * M), 0);
     d = twd(9.0f, 0);
-    d.delay = 100 * M;
+    d.delay_ns = 100 * M;
     CHECK_I(ytl_tween(&g_tl, 0, 2, &d), 0);
     jump_probe(__LINE__, 0, R, 300 * M, 400 * M);
     /* The same with the anchor's RT time in the future. */
     tw_open();
     CHECK_I(ytl_anchor(&g_tl, 2, R + 50 * M, 300 * M), 0);
-    d.delay = 10 * M;
+    d.delay_ns = 10 * M;
     CHECK_I(ytl_tween(&g_tl, 0, 2, &d), 0);
     jump_probe(__LINE__, 0, R + 50 * M, 300 * M, 310 * M);
 
     /* Never anchored: 0. The tween waits on the stopped base. */
     tw_open();
-    d.delay = 50 * M;
+    d.delay_ns = 50 * M;
     CHECK_I(ytl_tween(&g_tl, 1, 3, &d), 0);
     eval_at(&g_tl, R, P60, g_tw_frame++, NULL, 0);
     CHECK(ytl_value(&g_tl, 1) == 0.5f);
@@ -2326,12 +2331,12 @@ static void test_tween_now(void) {
     tw_open();
     CHECK_I(ytl_anchor(&g_tl, 1, R, 0), 0);
     d = twd_at(9.0f, 0, 200 * M);
-    d.delay = 30 * M;
+    d.delay_ns = 30 * M;
     CHECK_I(ytl_tween(&g_tl, 0, 1, &d), 0);
-    d.delay = 0;
+    d.delay_ns = 0;
     CHECK_I(ytl_tween(&g_tl, 1, 1, &d), 0);
     d = twd_at(9.0f, 0, 500 * M);
-    d.delay = -100 * M;
+    d.delay_ns = -100 * M;
     CHECK_I(ytl_tween(&g_tl, 2, 1, &d), 0);
     jump_probe(__LINE__, 1, R, 0, 200 * M);
     jump_probe(__LINE__, 0, R, 0, 230 * M);
@@ -2342,7 +2347,7 @@ static void test_tween_now(void) {
     CHECK_I(ytl_anchor(&g_tl, 1, R, 0), 0);
     for (k = 0; k <= 6; k++) eval_at(&g_tl, R + k * P60, P60, g_tw_frame++, NULL, 0);
     d = twd(9.0f, 0);
-    d.delay = 20 * M;
+    d.delay_ns = 20 * M;
     CHECK_I(ytl_tween(&g_tl, 0, 1, &d), 0);
     jump_probe(__LINE__, 0, R, 0, 6 * P60 + 20 * M);
 
@@ -2353,7 +2358,7 @@ static void test_tween_now(void) {
     CHECK_I(ytl_pause(&g_tl, 1, R + 70 * M), 0);
     eval_at(&g_tl, R + 100 * M, P60, g_tw_frame++, NULL, 0);
     d = twd(9.0f, 0);
-    d.delay = 10 * M;
+    d.delay_ns = 10 * M;
     CHECK_I(ytl_tween(&g_tl, 0, 1, &d), 0);
     eval_at(&g_tl, R + 150 * M, P60, g_tw_frame++, NULL, 0);
     CHECK(ytl_value(&g_tl, 0) == 0.5f);
@@ -2364,10 +2369,10 @@ static void test_tween_now(void) {
      * the last onset. */
     tw_open();
     d = twd(9.0f, 0);
-    d.delay = R + 5 * M;
+    d.delay_ns = R + 5 * M;
     CHECK_I(ytl_tween(&g_tl, 0, 0, &d), 0);
     jump_probe(__LINE__, 0, 0, 0, R + 5 * M);
-    d.delay = 7 * M;
+    d.delay_ns = 7 * M;
     CHECK_I(ytl_tween(&g_tl, 1, 0, &d), 0);
     jump_probe(__LINE__, 1, 0, 0, R + 12 * M);
 
@@ -2380,7 +2385,7 @@ static void test_tween_now(void) {
     eval_at(&g_tl, R + 500 * M, P60, g_tw_frame++, NULL, 0);
     CHECK_I(ytl_anchor(&g_tl, 1, R + 510 * M, 0), 0);
     d = twd(9.0f, 0);
-    d.delay = 10 * M;
+    d.delay_ns = 10 * M;
     CHECK_I(ytl_tween(&g_tl, 0, 1, &d), 0);
     jump_probe(__LINE__, 0, R + 510 * M, 0, 10 * M);
     /* Literal reading: a pause at an RT time before the last onset moves
@@ -2392,7 +2397,7 @@ static void test_tween_now(void) {
     CHECK_I(ytl_pause(&g_tl, 1, R + 60 * M), 0);
     eval_at(&g_tl, R + 110 * M, P60, g_tw_frame++, NULL, 0);
     d = twd(9.0f, 0);
-    d.delay = 20 * M;
+    d.delay_ns = 20 * M;
     CHECK_I(ytl_tween(&g_tl, 0, 1, &d), 0);
     CHECK_I(ytl_resume(&g_tl, 1, R + 200 * M), 0);
     eval_at(&g_tl, R + 220 * M, P60, g_tw_frame++, NULL, 0);   /* base time 80 ms */
@@ -2404,7 +2409,7 @@ static void test_tween_now(void) {
     CHECK_I(ytl_anchor(&g_tl, 1, R, 0), 0);
     eval_at(&g_tl, R + 100 * M, P60, g_tw_frame++, NULL, 0);
     CHECK_I(ytl_anchor(&g_tl, 1, R + 100 * M, 300 * M), 0);
-    d.delay = 250 * M;
+    d.delay_ns = 250 * M;
     CHECK_I(ytl_tween(&g_tl, 0, 1, &d), 0);
     jump_probe(__LINE__, 0, R + 100 * M, 300 * M, 550 * M);
     /* A pause after the last evaluate: the frozen time. Evaluated at
@@ -2415,7 +2420,7 @@ static void test_tween_now(void) {
     eval_at(&g_tl, R + 100 * M, P60, g_tw_frame++, NULL, 0);
     CHECK_I(ytl_pause(&g_tl, 1, R + 140 * M), 0);
     d = twd(9.0f, 0);
-    d.delay = 20 * M;
+    d.delay_ns = 20 * M;
     CHECK_I(ytl_tween(&g_tl, 0, 1, &d), 0);
     CHECK_I(ytl_resume(&g_tl, 1, R + 300 * M), 0);
     jump_probe(__LINE__, 0, R + 300 * M, 140 * M, 160 * M);
@@ -2514,9 +2519,9 @@ static void test_tween_from(void) {
     trs[0] = trk_keys(k0, 4);                                          /* keyed            */
     trs[1] = trk_samples(s1, 40, -100 * M, 60, YTL_INTERP_CUBIC);    /* sampled          */
     trs[2] = trk_keys(k2, 3);                                          /* repeating keyed  */
-    trs[2].period = 75 * M;
+    trs[2].period_ns = 75 * M;
     trs[3] = trk_samples(s3, 30, 0, 120, YTL_INTERP_LINEAR);         /* repeating sampled */
-    trs[3].period = 47 * M;
+    trs[3].period_ns = 47 * M;
     trs[5] = trk_keys(k5, 2);                                          /* keyed, kv after  */
     trs[7] = trk_keys(k7, 2);                                          /* kv after kv      */
     /* First tweens, posted before the anchor: channel 4 and 6 have no
@@ -2534,7 +2539,7 @@ static void test_tween_from(void) {
     d2[0] = twd_at(7.0f, 250 * M, S);
     d2[0].ease = YTL_EASE_COSINE;
     d2[1] = twd(-1.0f, 300 * M);
-    d2[1].delay = S - TC;
+    d2[1].delay_ns = S - TC;
     d2[2] = twd_at(3.0f, 200 * M, S);
     d2[2].ease = YTL_EASE_QUAD_IN;
     d2[3] = twd_at(2.0f, 260 * M, S);
@@ -2951,7 +2956,7 @@ static void test_tween_retarget(void) {
     /* 0: start one frame on (now + P); 1: the same with keep_velocity;
      * 2: start now, the frame already shown. */
     d = twd(0.0f, 300 * M);
-    d.delay = P60;
+    d.delay_ns = P60;
     CHECK_I(ytl_tween(&g_tl, 0, 1, &d), 0);
     rdrv_tween(&r[0], &d, 11 * P60, &old, 0.0, (double)v10[0]);
     d.keep_velocity = true;
@@ -3008,14 +3013,14 @@ static void test_tween_reject(void) {
         CHECK_I(ytl_tween(&g_tl, 0, 1, &g), 0);
         g = twd_at(2.0f, 100 * M, 200 * M);
         CHECK_I(ytl_tween(&g_tl, ch, 1, NULL), YTL_ERR_ARG);
-        b = g; b.duration = -1; rej_tw(__LINE__, ch, 1, &b);
-        b = g; b.start = LIM62; rej_tw(__LINE__, ch, 1, &b);
-        b = g; b.start = -LIM62; rej_tw(__LINE__, ch, 1, &b);
-        b = g; b.delay = LIM62; rej_tw(__LINE__, ch, 1, &b);
-        b = g; b.delay = -LIM62; rej_tw(__LINE__, ch, 1, &b);
-        b = g; b.start_set = false; b.delay = LIM62; rej_tw(__LINE__, ch, 1, &b);
-        b = g; b.start = LIM62 - 100 * M; rej_tw(__LINE__, ch, 1, &b);   /* start + duration at 2^62 */
-        b = g; b.start = LIM62 - 200 * M; b.yoyo = true; rej_tw(__LINE__, ch, 1, &b);   /* x 2 */
+        b = g; b.duration_ns = -1; rej_tw(__LINE__, ch, 1, &b);
+        b = g; b.start_ns = LIM62; rej_tw(__LINE__, ch, 1, &b);
+        b = g; b.start_ns = -LIM62; rej_tw(__LINE__, ch, 1, &b);
+        b = g; b.delay_ns = LIM62; rej_tw(__LINE__, ch, 1, &b);
+        b = g; b.delay_ns = -LIM62; rej_tw(__LINE__, ch, 1, &b);
+        b = g; b.start_set = false; b.delay_ns = LIM62; rej_tw(__LINE__, ch, 1, &b);
+        b = g; b.start_ns = LIM62 - 100 * M; rej_tw(__LINE__, ch, 1, &b);   /* start + duration at 2^62 */
+        b = g; b.start_ns = LIM62 - 200 * M; b.yoyo = true; rej_tw(__LINE__, ch, 1, &b);   /* x 2 */
         b = g; b.to = (float)make_nan(); rej_tw(__LINE__, ch, 1, &b);
         b = g; b.to = (float)make_inf(); rej_tw(__LINE__, ch, 1, &b);
         b = g; b.to = (float)-make_inf(); rej_tw(__LINE__, ch, 1, &b);
@@ -3038,9 +3043,9 @@ static void test_tween_reject(void) {
         b = g; b.ease = YTL_EASE_LOG; b.from_set = true; b.from = -3.0f; b.to = 5.0f; rej_tw(__LINE__, ch, 1, &b);
         b = g; b.cycles = -2; rej_tw(__LINE__, ch, 1, &b);
         b = g; b.cycles = CYC_MIN; rej_tw(__LINE__, ch, 1, &b);
-        b = g; b.duration = 0; b.cycles = 2; rej_tw(__LINE__, ch, 1, &b);
-        b = g; b.duration = 0; b.cycles = YTL_FOREVER; rej_tw(__LINE__, ch, 1, &b);
-        b = g; b.duration = 0; b.yoyo = true; rej_tw(__LINE__, ch, 1, &b);
+        b = g; b.duration_ns = 0; b.cycles = 2; rej_tw(__LINE__, ch, 1, &b);
+        b = g; b.duration_ns = 0; b.cycles = YTL_FOREVER; rej_tw(__LINE__, ch, 1, &b);
+        b = g; b.duration_ns = 0; b.yoyo = true; rej_tw(__LINE__, ch, 1, &b);
         b = g; b.keep_velocity = true; b.ease = YTL_EASE_COSINE; rej_tw(__LINE__, ch, 1, &b);
         b = g; b.keep_velocity = true; b.ease = YTL_EASE_STEP; rej_tw(__LINE__, ch, 1, &b);
         b = g; b.keep_velocity = true; b.ease = YTL_EASE_BEZIER; b.curve = mkcurve(0.42f, 0.0f, 0.58f, 1.0f); rej_tw(__LINE__, ch, 1, &b);
@@ -3048,7 +3053,7 @@ static void test_tween_reject(void) {
         b = g; b.keep_velocity = true; b.yoyo = true; rej_tw(__LINE__, ch, 1, &b);
         b = g; b.keep_velocity = true; b.cycles = 2; rej_tw(__LINE__, ch, 1, &b);
         b = g; b.keep_velocity = true; b.cycles = YTL_FOREVER; rej_tw(__LINE__, ch, 1, &b);   /* literal: more than one */
-        b = g; b.keep_velocity = true; b.duration = 0; rej_tw(__LINE__, ch, 1, &b);
+        b = g; b.keep_velocity = true; b.duration_ns = 0; rej_tw(__LINE__, ch, 1, &b);
         /* Not TWEENS', but arguments. */
         rej_tw(__LINE__, -1, 1, &g);
         rej_tw(__LINE__, 8, 1, &g);
@@ -3071,17 +3076,17 @@ static void test_tween_reject(void) {
     /* Accepted edges, each on channel 7 (each replaces the last). */
     tw_open();
     g = twd_at(2.0f, 100 * M, 200 * M);
-    b = g; b.start = LIM62 - 100 * M - 1; acc_tw(__LINE__, 7, &b);
-    b = g; b.start = LIM62 - 200 * M - 1; b.yoyo = true; acc_tw(__LINE__, 7, &b);
-    b = g; b.start = -LIM62 + 1; acc_tw(__LINE__, 7, &b);
-    b = g; b.start = 0; b.delay = -LIM62 + 1; acc_tw(__LINE__, 7, &b);
-    b = g; b.delay = -150 * M; acc_tw(__LINE__, 7, &b);
-    b = g; b.duration = 0; acc_tw(__LINE__, 7, &b);
+    b = g; b.start_ns = LIM62 - 100 * M - 1; acc_tw(__LINE__, 7, &b);
+    b = g; b.start_ns = LIM62 - 200 * M - 1; b.yoyo = true; acc_tw(__LINE__, 7, &b);
+    b = g; b.start_ns = -LIM62 + 1; acc_tw(__LINE__, 7, &b);
+    b = g; b.start_ns = 0; b.delay_ns = -LIM62 + 1; acc_tw(__LINE__, 7, &b);
+    b = g; b.delay_ns = -150 * M; acc_tw(__LINE__, 7, &b);
+    b = g; b.duration_ns = 0; acc_tw(__LINE__, 7, &b);
     /* Literal: from is checked only with from_set, the curve only with
      * BEZIER, and cycles alone are not multiplied into the time limit. */
     b = g; b.from = (float)make_nan(); acc_tw(__LINE__, 7, &b);
     b = g; b.curve = mkcurve(2.0f, (float)make_nan(), -1.0f, 0.0f); acc_tw(__LINE__, 7, &b);
-    b = g; b.start = LIM62 - 200 * M - 1; b.cycles = 5; acc_tw(__LINE__, 7, &b);
+    b = g; b.start_ns = LIM62 - 200 * M - 1; b.cycles = 5; acc_tw(__LINE__, 7, &b);
     b = g; b.ease = YTL_EASE_BEZIER; acc_tw(__LINE__, 7, &b);   /* cubic-bezier(0, 0, 0, 0) is a curve */
     b = g; b.ease = YTL_EASE_LOG; b.from_set = true; b.from = 2.0f; b.to = 5.0f; acc_tw(__LINE__, 7, &b);
     b = g; b.keep_velocity = true; b.cycles = 1; acc_tw(__LINE__, 7, &b);
@@ -3307,16 +3312,16 @@ static void test_track_eval(void) {
     trs[0].n_curves = 2;
     trs[1] = trk_samples(s1, 400, -500 * M, 120, YTL_INTERP_CUBIC);
     trs[2] = trk_samples(s2, 30000, 1 * M, 999983, YTL_INTERP_LINEAR);
-    trs[2].period = 37 * M;
+    trs[2].period_ns = 37 * M;
     k3[0] = mkkey(200 * M, 0.0f, YTL_EASE_STEP);
     k3[1] = mkkey(300 * M, 1.0f, YTL_EASE_QUAD_IN);
     k3[2] = mkkey(400 * M, 3.0f, YTL_EASE_LINEAR);
     k3[3] = mkkey(450 * M, 2.0f, YTL_EASE_LINEAR);
     trs[3] = trk_keys(k3, 4);
-    trs[3].period = 250 * M;
+    trs[3].period_ns = 250 * M;
     trs[3].repeats = 7;
     trs[5] = trk_samples(s5, 50, -2 * S_NS, 7, YTL_INTERP_STEP);   /* a STEP track */
-    trs[5].period = 3 * S_NS + 1;
+    trs[5].period_ns = 3 * S_NS + 1;
     trs[5].repeats = 2;
 
     CHECK(open_h(&g_tl, g_store, 8, 6, init, 0.5));
@@ -3344,8 +3349,8 @@ static void test_track_eval(void) {
                 CHECK_I(ytl_anchor(&g_tl, 2, onset, bt - rnd_range(0, 20 * M)), 0);
             } else if (seq == 3) {   /* jumps, a quarter of them onto keys and samples */
                 int r = rnd_int(4);
-                if (r == 0) bt = k0[rnd_int(5)].time + rnd_range(-1, 1);
-                else if (r == 1) bt = k3[rnd_int(4)].time + rnd_range(-1, 1) + (int64_t)rnd_int(9) * 250 * M;
+                if (r == 0) bt = k0[rnd_int(5)].time_ns + rnd_range(-1, 1);
+                else if (r == 1) bt = k3[rnd_int(4)].time_ns + rnd_range(-1, 1) + (int64_t)rnd_int(9) * 250 * M;
                 else bt = rnd_range(-3 * S_NS, 10 * S_NS);
                 CHECK_I(ytl_anchor(&g_tl, 2, onset, bt), 0);
             } else if (seq == 5) {   /* small steps within segments, then a jump */
@@ -3821,7 +3826,7 @@ static void test_remove(void) {
     CHECK_I(ytl_remove(&g_tl, 9999), YTL_ERR_NOT_FOUND);
     CHECK_I(ytl_remove(&g_tl, -1), YTL_ERR_NOT_FOUND);
     e = ytl_find(&g_tl, D);
-    CHECK(e && e->base == 1 && e->time == 15 && e->kind == YTL_ONSET && e->target == 1 &&
+    CHECK(e && e->base == 1 && e->time_ns == 15 && e->kind == YTL_ONSET && e->target == 1 &&
           e->frame == 30 && e->onset == 30 && e->residual == 15);
     CHECK(ytl_find(&g_tl, 9999) == NULL);
     check_sorted(&g_tl, __LINE__);
@@ -4132,9 +4137,9 @@ static uint64_t replay_run(ytl_timeline* tl, ytl_event* store) {
             memset(&d, 0, sizeof d);
             d.ease = rnd_int(7);
             d.start_set = rnd_int(3) != 0;
-            d.start = base == 0 ? onset + rnd_range(-3 * P60, 10 * P60) : rnd_range(-3 * P60, 60 * P60);
-            d.delay = rnd_int(3) == 0 ? rnd_range(-P60, 5 * P60) : 0;
-            d.duration = rnd_int(4) == 0 ? 0 : rnd_range(1, 20 * P60);
+            d.start_ns = base == 0 ? onset + rnd_range(-3 * P60, 10 * P60) : rnd_range(-3 * P60, 60 * P60);
+            d.delay_ns = rnd_int(3) == 0 ? rnd_range(-P60, 5 * P60) : 0;
+            d.duration_ns = rnd_int(4) == 0 ? 0 : rnd_range(1, 20 * P60);
             d.to = (float)rnd_int(40) / 4.0f;
             d.from = (float)(1 + rnd_int(40)) / 4.0f;
             d.from_set = d.ease == YTL_EASE_LOG || rnd_int(3) == 0;
@@ -4147,7 +4152,7 @@ static uint64_t replay_run(ytl_timeline* tl, ytl_event* store) {
                 d.from_set = false;
                 d.yoyo = false;
                 d.cycles = rnd_int(2);
-                if (d.duration == 0) d.duration = P60;
+                if (d.duration_ns == 0) d.duration_ns = P60;
             }
             ret = ytl_tween(tl, ch, base, &d);
         }
@@ -4175,12 +4180,12 @@ static void test_replay(void) {
     g_rkb[1] = mkkey(40 * MS_NS, 3.0f, YTL_EASE_COSINE);
     g_rkb[2] = mkkey(90 * MS_NS, 0.5f, YTL_EASE_LINEAR);
     g_rtr[0] = trk_samples(g_rs, 64, 0, 120, YTL_INTERP_CUBIC);
-    g_rtr[0].period = 300 * MS_NS;
+    g_rtr[0].period_ns = 300 * MS_NS;
     g_rtr[0].repeats = 5;
     g_rtr[1] = trk_keys(g_rkb, 3);
     g_rtr[1].curves = g_rc;
     g_rtr[1].n_curves = 2;
-    g_rtr[1].period = 100 * MS_NS;
+    g_rtr[1].period_ns = 100 * MS_NS;
     g_rtr[2] = trk_samples(g_rs, 16, -S_NS, 7, YTL_INTERP_STEP);
     h1 = replay_run(&g_tl, g_store);
     h2 = replay_run(&g_tl2, g_store2);
@@ -4262,7 +4267,7 @@ static const ytl_event* find_at(const ytl_timeline* tl, int base, int64_t t, int
     int n = 0, i;
     const ytl_event* p = ytl_events(tl, base, &n);
     for (i = 0; i < n; i++)
-        if (p[i].time == t && p[i].kind == kind) return &p[i];
+        if (p[i].time_ns == t && p[i].kind == kind) return &p[i];
     return NULL;
 }
 
@@ -4310,7 +4315,7 @@ static void test_skip_seek(void) {
     n = eval_at(&g_ska, R2, P, 60, g_fired, 16);
     CHECK_I(n, 2);
     for (i = 0; i < n && i < 2; i++) {
-        CHECK_I(g_fired[i].time, B);
+        CHECK_I(g_fired[i].time_ns, B);
         CHECK_I(g_fired[i].residual, 0);
         CHECK_I(g_fired[i].flags, YTL_EV_FIRED);
     }
@@ -4346,7 +4351,7 @@ static void test_skip_seek(void) {
     n = eval_at(&g_ska, R3, P, 200, g_fired, 16);
     CHECK_I(n, 2);
     for (i = 0; i < n && i < 2; i++) {
-        CHECK_I(g_fired[i].time, 1000 * S_NS);
+        CHECK_I(g_fired[i].time_ns, 1000 * S_NS);
         CHECK_I(g_fired[i].flags, YTL_EV_FIRED);
     }
     CHECK(ytl_value(&g_ska, 0) == 1000.0f);
@@ -4449,7 +4454,8 @@ static void test_skip_misc(void) {
     CHECK_I(ytl_skip(&g_tl, -1, 0, 0), YTL_ERR_ARG);
     CHECK_I(ytl_skip(&g_tl, 2, 0, LIM62), YTL_ERR_ARG);
     CHECK_I(ytl_skip(&g_tl, 2, 0, -LIM62), YTL_ERR_ARG);
-    CHECK(memcmp(&snap, &g_tl, sizeof snap) == 0);
+    CHECK(memcmp(&snap, &g_tl, TL_STATE) == 0);
+    CHECK_S(ytl_error(&g_tl), "ysp_timeline: ytl_skip: invalid argument");
     CHECK(memcmp(g_snap, g_store, 32 * sizeof g_store[0]) == 0);
     CHECK_I(ytl_skip(&g_closed, 2, 0, 0), YTL_ERR_CLOSED);
     CHECK_I(ytl_skip(NULL, 2, 0, 0), YTL_ERR_CLOSED);
@@ -4535,7 +4541,8 @@ static int peek_pure(int line, int base, int64_t from, int64_t to, ytl_event* ou
     memcpy(g_snap, g_store, 32 * sizeof g_store[0]);
     for (i = 0; i < 16; i++) g_fired[i].id = -999;
     r = ytl_peek(&g_tl, base, from, to, out, cap);
-    if (memcmp(&g_pk_snap, &g_tl, sizeof g_tl) != 0) fail(line, "peek changed the handle");
+    if (memcmp(&g_pk_snap, &g_tl, TL_STATE) != 0) fail(line, "peek changed the handle");
+    if (r < 0 && !strstr(ytl_error(&g_tl), "ytl_peek")) fail(line, "a failed peek wrote no message");
     if (memcmp(g_snap, g_store, 32 * sizeof g_store[0]) != 0) fail(line, "peek changed the storage");
     if (out == g_fired && cap >= 0 && cap < 16 && g_fired[cap].id != -999) fail(line, "peek wrote past cap");
     return r;
@@ -4550,7 +4557,7 @@ static void peek_expect(int line, int n, const int* want, const int64_t* rt) {
         if (g_fired[i].onset != rt[i]) fail_i(line, "peek onset (RT time)", g_fired[i].onset, rt[i]);
         if (g_fired[i].residual != 0 || g_fired[i].frame != -1 || g_fired[i].flags != 0)
             fail(line, "peek copy: residual 0, frame -1, flags 0");
-        if (!s || s->time != g_fired[i].time || s->base != g_fired[i].base || s->kind != g_fired[i].kind
+        if (!s || s->time_ns != g_fired[i].time_ns || s->base != g_fired[i].base || s->kind != g_fired[i].kind
             || s->code != g_fired[i].code || s->user != g_fired[i].user)
             fail(line, "peek copy differs from the storage");
     }
@@ -4913,7 +4920,7 @@ static void test_rate_calls(void) {
     CHECK(add1(&g_tl, 1, 44 * M, YTL_MARK, 0, 0.0f) >= 0);
     for (k = 5; k <= 7; k++) CHECK_I(eval_at(&g_tl, T0 + k * P, P, k, NULL, 0), 0);
     CHECK_I(eval_at(&g_tl, T0 + 8 * P, P, 8, g_fired, 4), 1);
-    CHECK_I(g_fired[0].time, 44 * M);
+    CHECK_I(g_fired[0].time_ns, 44 * M);
     CHECK_I(g_fired[0].flags, YTL_EV_FIRED | YTL_EV_LATE);
     CHECK_I(g_fired[0].residual, 0);   /* base time at frame 8's onset is 44 ms */
     CHECK_I(find_at(&g_tl, 1, 45 * M, YTL_MARK)->frame, 4);
@@ -4978,8 +4985,8 @@ static void rate_grid(int64_t P, int lead_num, int lead_den, int64_t num, int64_
     for (k = 0; k < NF; k++) {
         int n = eval_at(&g_tl, T0 + k * P, P, 1000 + k, g_fired, STORE_CAP), j;
         for (j = 1; j < n && j < STORE_CAP; j++) {
-            int64_t a = ref_rt(art, abt, num, den, g_fired[j - 1].time);
-            int64_t b = ref_rt(art, abt, num, den, g_fired[j].time);
+            int64_t a = ref_rt(art, abt, num, den, g_fired[j - 1].time_ns);
+            int64_t b = ref_rt(art, abt, num, den, g_fired[j].time_ns);
             if (a > b || (a == b && g_fired[j - 1].id > g_fired[j].id)) bad_order++;
         }
     }
@@ -5190,7 +5197,7 @@ static void test_rate_peek(void) {
         for (i = 0; i < 50; i++) CHECK(add1(&g_tl, 2, 1000 + rnd_range(0, 3000), YTL_MARK, 0, 0.0f) >= 0);
         for (i = 0; i < 50; i++) {
             const ytl_event* e = ytl_find(&g_tl, i);
-            int64_t r = ref_rt(T0 + 5, 1000, rn[ri], rd[ri], e->time);
+            int64_t r = ref_rt(T0 + 5, 1000, rn[ri], rd[ri], e->time_ns);
             int j;
             if (r < mdue) mdue = r;
             for (j = -1; j <= 1; j++) {
@@ -5349,7 +5356,7 @@ static ytl_tween_desc sq_tw(float to, int64_t dur, int ease) {
     ytl_tween_desc d;
     memset(&d, 0, sizeof d);
     d.to = to;
-    d.duration = dur;
+    d.duration_ns = dur;
     d.ease = ease;
     return d;
 }
@@ -5357,15 +5364,15 @@ static ytl_tween_desc sq_tw(float to, int64_t dur, int ease) {
 /* The rig_spec 4.5.1 trial, with the builder. */
 static void seq_trial_builder(ytl_timeline* tl, ytl_seq* out) {
     ytl_seq q = ytl_seq_on(tl, 1);
-    ytl_tween_desc up = sq_tw(0.5f, YTL_MS(100), YTL_EASE_COSINE);
-    ytl_tween_desc down = sq_tw(0.0f, YTL_MS(100), YTL_EASE_COSINE);
+    ytl_tween_desc up = sq_tw(0.5f, YRT_MS(100), YTL_EASE_COSINE);
+    ytl_tween_desc down = sq_tw(0.0f, YRT_MS(100), YTL_EASE_COSINE);
     ytl_on(&q, SQ_FIX);
-    ytl_wait(&q, YTL_MS(500));
+    ytl_wait(&q, YRT_MS(500));
     ytl_off(&q, SQ_FIX);
     ytl_on(&q, SQ_GRATING);
     ytl_trigger(&q, 12);
     ytl_to(&q, SQ_CONTRAST, &up);
-    ytl_wait(&q, YTL_MS(600));
+    ytl_wait(&q, YRT_MS(600));
     ytl_then(&q, SQ_CONTRAST, &down);
     ytl_off(&q, SQ_GRATING);
     *out = q;
@@ -5376,13 +5383,13 @@ static void seq_trial_ops(ytl_op* ops, int* n) {
     int k = 0;
     memset(ops, 0, 9 * sizeof *ops);
     ops[k].op = YTL_OP_ON; ops[k++].ch = SQ_FIX;
-    ops[k].op = YTL_OP_WAIT; ops[k++].t = YTL_MS(500);
+    ops[k].op = YTL_OP_WAIT; ops[k++].t_ns = YRT_MS(500);
     ops[k].op = YTL_OP_OFF; ops[k++].ch = SQ_FIX;
     ops[k].op = YTL_OP_ON; ops[k++].ch = SQ_GRATING;
     ops[k].op = YTL_OP_TRIGGER; ops[k++].code = 12;
-    ops[k].op = YTL_OP_TO; ops[k].ch = SQ_CONTRAST; ops[k++].tween = sq_tw(0.5f, YTL_MS(100), YTL_EASE_COSINE);
-    ops[k].op = YTL_OP_WAIT; ops[k++].t = YTL_MS(600);
-    ops[k].op = YTL_OP_THEN; ops[k].ch = SQ_CONTRAST; ops[k++].tween = sq_tw(0.0f, YTL_MS(100), YTL_EASE_COSINE);
+    ops[k].op = YTL_OP_TO; ops[k].ch = SQ_CONTRAST; ops[k++].tween = sq_tw(0.5f, YRT_MS(100), YTL_EASE_COSINE);
+    ops[k].op = YTL_OP_WAIT; ops[k++].t_ns = YRT_MS(600);
+    ops[k].op = YTL_OP_THEN; ops[k].ch = SQ_CONTRAST; ops[k++].tween = sq_tw(0.0f, YRT_MS(100), YTL_EASE_COSINE);
     ops[k].op = YTL_OP_OFF; ops[k++].ch = SQ_GRATING;
     *n = k;
 }
@@ -5404,7 +5411,7 @@ static void test_seq_trial(void) {
     seq_trial_builder(&g_tl, &q);
     CHECK_I(q.err, 0);
     CHECK_I(q.n_calls, 9);
-    CHECK_I(q.t, YTL_MS(1200));
+    CHECK_I(q.t, YRT_MS(1200));
     CHECK_I(ytl_anchor(&g_tl, 1, T0, 0), 0);
     for (k = 0; k < 90; k++) {
         int64_t bt = k * P60;
@@ -5440,7 +5447,7 @@ static void test_seq_trial(void) {
         CHECK_I(bad, -1);
         CHECK_I(ytl_run(&r, ops, n_ops), 0);
         CHECK_I(r.err, 0);
-        CHECK_I(r.t, YTL_MS(1200));
+        CHECK_I(r.t, YRT_MS(1200));
         seq_trial_builder(&g_tl3, &b);
         CHECK_I(b.err, 0);
     }
@@ -5474,8 +5481,10 @@ static void seq_run_fail(int line, ytl_op* ops, int n, int want_rc, int want_bad
     rc = ytl_run(&q, ops, n);
     if (rc != want_rc || q.err != want_rc || q.err_call != want_bad)
         fail_i(line, "run code x 1000 + err_call", rc * 1000 + q.err_call, want_rc * 1000 + want_bad);
-    if (memcmp(&snap, &g_tl, sizeof snap) != 0 || memcmp(sst, g_store, sizeof sst) != 0 || memcmp(sk, g_ka, sizeof sk) != 0)
+    if (memcmp(&snap, &g_tl, TL_STATE) != 0 || memcmp(sst, g_store, sizeof sst) != 0 || memcmp(sk, g_ka, sizeof sk) != 0)
         fail(line, "a failed ytl_run changed the handle, the storage or the arena");
+    if (strncmp(ytl_error(&g_tl), "ysp_timeline: sequence call ", 28) != 0)
+        fail(line, "a failed ytl_run wrote no sequence message");
     /* sticky: nothing after it */
     ytl_on(&q, SQ_FIX);
     if (n_events(&g_tl, 1) != 0) fail(line, "a call after the error added an event");
@@ -5507,7 +5516,7 @@ static void test_seq_run(void) {
     seq_run_fail(__LINE__, ops, n, YTL_ERR_BOUND, 7, 64, 64);
     /* overlap: the second tween starts inside the first */
     seq_trial_ops(ops, &n);
-    ops[6].t = YTL_MS(50);
+    ops[6].t_ns = YRT_MS(50);
     seq_run_fail(__LINE__, ops, n, YTL_ERR_ARG, 7, 64, 64);
     /* a channel out of range */
     seq_trial_ops(ops, &n);
@@ -5537,7 +5546,7 @@ static void test_seq_run(void) {
         CHECK_I(q.err_call, 7);
         CHECK_I(n_events(&g_tl, 1), 4);   /* the call after the error added nothing */
         CHECK_I(ytl_anchor(&g_tl, 1, T0, 0), 0);
-        (void)eval_at(&g_tl, T0 + YTL_MS(700), 0, 0, NULL, 0);
+        (void)eval_at(&g_tl, T0 + YRT_MS(700), 0, 0, NULL, 0);
         CHECK_F(ytl_value(&g_tl, SQ_CONTRAST), 0.5, 0.0);
     }
     /* no arena at all */
@@ -5546,7 +5555,7 @@ static void test_seq_run(void) {
     /* builder refusals and the sticky error */
     {
         ytl_seq q;
-        ytl_tween_desc d = sq_tw(1.0f, YTL_MS(10), 0);
+        ytl_tween_desc d = sq_tw(1.0f, YRT_MS(10), 0);
         int64_t r;
         CHECK(seq_open(&g_tl, g_store, 64, g_ka, 64, SQ_NCH, NULL));
         q = ytl_seq_on(&g_closed, 1);
@@ -5568,13 +5577,13 @@ static void test_seq_run(void) {
         q = ytl_seq_on(&g_tl, 1);
         d.cycles = 3;
         d.yoyo = true;
-        CHECK_I(ytl_to(&q, SQ_CONTRAST, &d), 3 * 2 * YTL_MS(10));
+        CHECK_I(ytl_to(&q, SQ_CONTRAST, &d), 3 * 2 * YRT_MS(10));
         CHECK_I(q.t, 0);
         d.keep_velocity = true;
         d.cycles = 0;
         d.yoyo = false;
-        ytl_at(&q, YTL_MS(100));
-        CHECK_I(ytl_to(&q, SQ_CONTRAST, &d), YTL_MS(100));   /* keep_velocity after the first: refused */
+        ytl_at(&q, YRT_MS(100));
+        CHECK_I(ytl_to(&q, SQ_CONTRAST, &d), YRT_MS(100));   /* keep_velocity after the first: refused */
         CHECK_I(q.err, YTL_ERR_ARG);
         CHECK_I(q.err_call, 2);
     }
@@ -5585,7 +5594,7 @@ static void test_seq_run(void) {
 static void test_seq_cancel(void) {
     static ytl_key lin[2];
     ytl_seq q;
-    ytl_tween_desc d = sq_tw(2.0f, YTL_MS(100), 0);
+    ytl_tween_desc d = sq_tw(2.0f, YRT_MS(100), 0);
     float v3;
     int c;
     lin[0] = mkkey(0, 0.0f, 0);
@@ -5599,7 +5608,7 @@ static void test_seq_cancel(void) {
     q = ytl_seq_now(&g_tl, 1);
     ytl_on(&q, 1);
     ytl_to(&q, 2, &d);   /* starts at now: the next evaluate promotes it */
-    ytl_wait(&q, YTL_MS(50));
+    ytl_wait(&q, YRT_MS(50));
     ytl_to(&q, 3, &d);   /* takes over ch 3 at 50 ms: still waiting at the cancel */
     ytl_set_value(&q, 4, 7.0f);
     CHECK_I(q.err, 0);
@@ -5608,13 +5617,13 @@ static void test_seq_cancel(void) {
     CHECK_F(ytl_value(&g_tl, 1), 1.0, 0.0);
     c = ytl_seq_cancel(&q);
     CHECK_F(ytl_value(&g_tl, 1), 3.0, 0.0);           /* recomputed from the SET */
-    CHECK_F(ytl_value(&g_tl, 2), 2.0 * (double)P60 / (double)YTL_MS(100), 1e-6);   /* promoted: held */
+    CHECK_F(ytl_value(&g_tl, 2), 2.0 * (double)P60 / (double)YRT_MS(100), 1e-6);   /* promoted: held */
     CHECK_I(c, 2);
     CHECK_I(n_events(&g_tl, 1), 2);
     CHECK(ytl_find(&g_tl, 0) != NULL);
     /* ch 2 is free again, ch 3 still runs its keys */
     CHECK(add1(&g_tl, 1, 0, YTL_ONSET, 2, 0.0f) >= 0);
-    (void)eval_at(&g_tl, T0 + YTL_MS(500), P60, 2, NULL, 0);
+    (void)eval_at(&g_tl, T0 + YRT_MS(500), P60, 2, NULL, 0);
     v3 = ytl_value(&g_tl, 3);
     CHECK_F(v3, 0.5, 1e-6);
     /* the sequence does nothing more */
@@ -5631,16 +5640,16 @@ static void test_seq_vs_tween(void) {
     int trial, k, bad = 0, bad_n = 0;
     g_rng = 4711;
     mv[0] = mkkey(0, -1.0f, YTL_EASE_LINEAR);
-    mv[1] = mkkey(YTL_MS(700), 3.0f, YTL_EASE_QUAD_IN);
+    mv[1] = mkkey(YRT_MS(700), 3.0f, YTL_EASE_QUAD_IN);
     mv[2] = mkkey(S_NS, 2.0f, YTL_EASE_LINEAR);
     for (trial = 0; trial < 400; trial++) {
         ytl_tween_desc d;
         ytl_seq q;
-        int64_t c = rnd_range(0, YTL_MS(600)), end;
+        int64_t c = rnd_range(0, YRT_MS(600)), end;
         bool moving = rnd_int(3) != 0;
         memset(&d, 0, sizeof d);
         d.to = (float)rnd_int(64) / 8.0f - 2.0f;
-        d.duration = rnd_range(1, YTL_MS(300));
+        d.duration_ns = rnd_range(1, YRT_MS(300));
         d.ease = rnd_int(7);
         if (d.ease == YTL_EASE_LOG) d.ease = YTL_EASE_QUAD_OUT;
         if (d.ease == YTL_EASE_BEZIER) d.curve = mkcurve(0.42f, -0.2f, 0.58f, 1.3f);
@@ -5648,7 +5657,7 @@ static void test_seq_vs_tween(void) {
         d.from = (float)rnd_int(64) / 8.0f;
         d.cycles = rnd_int(4);
         d.yoyo = rnd_int(3) == 0;
-        d.delay = rnd_int(2) ? rnd_range(-YTL_MS(50), YTL_MS(50)) : 0;
+        d.delay_ns = rnd_int(2) ? rnd_range(-YRT_MS(50), YRT_MS(50)) : 0;
         if (rnd_int(3) == 0) {
             d.keep_velocity = true;
             d.ease = 0;
@@ -5666,11 +5675,11 @@ static void test_seq_vs_tween(void) {
         ytl_at(&q, c);
         end = ytl_to(&q, 1, &d);
         if (q.err != 0) { bad_n++; continue; }
-        d.start = c;
+        d.start_ns = c;
         d.start_set = true;
         CHECK_I(ytl_tween(&g_tl2, 1, 1, &d), 0);
         d.start_set = false;
-        CHECK_I(end, c + d.delay + (d.cycles > 1 ? d.cycles : 1) * d.duration * (d.yoyo ? 2 : 1));
+        CHECK_I(end, c + d.delay_ns + (d.cycles > 1 ? d.cycles : 1) * d.duration_ns * (d.yoyo ? 2 : 1));
         CHECK_I(ytl_anchor(&g_tl, 1, T0, 0), 0);
         CHECK_I(ytl_anchor(&g_tl2, 1, T0, 0), 0);
         for (k = 0; k < 90; k++) {
@@ -5694,7 +5703,7 @@ static void test_seq_vs_tween(void) {
 /* The arena under clears: a clear takes its blocks' room back, and the
  * blocks of other bases still sample right after they move. */
 static void test_seq_arena(void) {
-    ytl_tween_desc d = sq_tw(4.0f, YTL_MS(200), YTL_EASE_COSINE);
+    ytl_tween_desc d = sq_tw(4.0f, YRT_MS(200), YTL_EASE_COSINE);
     ytl_seq q;
     float want;
     int i;
@@ -5711,7 +5720,7 @@ static void test_seq_arena(void) {
     CHECK_I(q.err, YTL_ERR_FULL);
     CHECK_I(ytl_clear(&g_tl, 1), 0);
     q = ytl_seq_on(&g_tl, 2);
-    ytl_at(&q, YTL_MS(400));
+    ytl_at(&q, YRT_MS(400));
     ytl_then(&q, 1, &d);          /* a new block of this sequence: 3 */
     ytl_then(&q, 1, &d);          /* grows at the top: 2 more */
     CHECK_I(q.err, 0);
@@ -5720,9 +5729,9 @@ static void test_seq_arena(void) {
         int64_t bt = i * P60;
         (void)eval_at(&g_tl, T0 + bt, P60, i, NULL, 0);
         /* ch 2's tween runs from 200 to 400 ms (after ytl_then on ch 1) */
-        want = (float)(bt < YTL_MS(200) ? 0.0
-                       : bt < YTL_MS(400) ? 4.0 * (0.5 - 0.5 * cos(3.14159265358979323846 * (double)(bt - YTL_MS(200))
-                                                                      / (double)YTL_MS(200)))
+        want = (float)(bt < YRT_MS(200) ? 0.0
+                       : bt < YRT_MS(400) ? 4.0 * (0.5 - 0.5 * cos(3.14159265358979323846 * (double)(bt - YRT_MS(200))
+                                                                      / (double)YRT_MS(200)))
                                             : 4.0);
         CHECK_F(ytl_value(&g_tl, 2), want, 1e-5);
     }
@@ -5740,23 +5749,23 @@ static void test_seq_on_n(void) {
     CHECK(seq_open(&g_tl, g_store, 8, g_ka, 16, 6, NULL));
     CHECK_I(ytl_set_keys(&g_tl, 5, 1, k1, 1), 0);
     q = ytl_seq_on(&g_tl, 1);
-    ytl_at(&q, YTL_MS(100));
-    ytl_on_n(&q, with_bound, 4, YTL_MS(20));
+    ytl_at(&q, YRT_MS(100));
+    ytl_on_n(&q, with_bound, 4, YRT_MS(20));
     CHECK_I(q.err, YTL_ERR_BOUND);
     CHECK_I(n_events(&g_tl, 1), 0);                 /* none of the four */
     q = ytl_seq_on(&g_tl, 1);
-    ytl_at(&q, YTL_MS(100));
-    ytl_on_n(&q, dots, 4, YTL_MS(20));
+    ytl_at(&q, YRT_MS(100));
+    ytl_on_n(&q, dots, 4, YRT_MS(20));
     CHECK_I(q.err, 0);
-    CHECK_I(q.t, YTL_MS(100));                    /* the cursor stays */
+    CHECK_I(q.t, YRT_MS(100));                    /* the cursor stays */
     e = ytl_events(&g_tl, 1, &n);
     CHECK_I(n, 4);
     for (i = 0; i < n && i < 4; i++) {
-        CHECK_I(e[i].time, YTL_MS(100) + i * YTL_MS(20));
+        CHECK_I(e[i].time_ns, YRT_MS(100) + i * YRT_MS(20));
         CHECK_I(e[i].target, dots[i]);
         CHECK_I(e[i].kind, YTL_ONSET);
     }
-    ytl_on_n(&q, dots, 4, YTL_MS(20));          /* 4 more do not fit in 8 - 4 = 4? they do */
+    ytl_on_n(&q, dots, 4, YRT_MS(20));          /* 4 more do not fit in 8 - 4 = 4? they do */
     CHECK_I(q.err, 0);
     ytl_on_n(&q, dots, 1, 0);                     /* the ninth does not */
     CHECK_I(q.err, YTL_ERR_FULL);
@@ -5767,7 +5776,7 @@ static void test_seq_on_n(void) {
  * at its value, as ytl_tween() does, and takes over from that value. */
 static void test_seq_cross_base(void) {
     static ytl_key mv[2];
-    ytl_tween_desc d = sq_tw(5.0f, YTL_MS(100), 0);
+    ytl_tween_desc d = sq_tw(5.0f, YRT_MS(100), 0);
     ytl_seq q;
     int k, bad = 0;
     mv[0] = mkkey(0, 0.0f, 0);
@@ -5778,17 +5787,17 @@ static void test_seq_cross_base(void) {
         ytl_timeline* t = k ? &g_tl2 : &g_tl;
         CHECK_I(ytl_set_keys(t, 0, 2, mv, 2), 0);
         CHECK_I(ytl_anchor(t, 2, T0, 0), 0);
-        CHECK_I(ytl_anchor(t, 1, T0, -YTL_MS(300)), 0);
-        (void)eval_at(t, T0 + YTL_MS(200), P60, 0, NULL, 0);   /* base 2 at 200 ms: 2.0 */
+        CHECK_I(ytl_anchor(t, 1, T0, -YRT_MS(300)), 0);
+        (void)eval_at(t, T0 + YRT_MS(200), P60, 0, NULL, 0);   /* base 2 at 200 ms: 2.0 */
     }
     CHECK_F(ytl_value(&g_tl, 0), 2.0, 1e-6);
     q = ytl_seq_on(&g_tl, 1);
     ytl_to(&q, 0, &d);                            /* base 1 time 0, 100 ms of RT later */
-    d.start = 0;
+    d.start_ns = 0;
     d.start_set = true;
     CHECK_I(ytl_tween(&g_tl2, 0, 1, &d), 0);
     for (k = 1; k < 40; k++) {
-        int64_t on = T0 + YTL_MS(200) + k * P60;
+        int64_t on = T0 + YRT_MS(200) + k * P60;
         (void)eval_at(&g_tl, on, P60, k, NULL, 0);
         (void)eval_at(&g_tl2, on, P60, k, NULL, 0);
         if (ytl_value(&g_tl, 0) != ytl_value(&g_tl2, 0)) bad++;
@@ -5832,13 +5841,13 @@ static void sm_gen(int n) {
         o->value = (float)rnd_int(32) / 4.0f;
         o->code = (int32_t)rnd_range(-1000, 1000);
         o->user = sm64();
-        if (o->op == YTL_OP_WAIT) o->t = rnd_range(0, YTL_MS(200));
-        if (o->op == YTL_OP_AT) o->t = rnd_range(0, YTL_MS(1500));
+        if (o->op == YTL_OP_WAIT) o->t_ns = rnd_range(0, YRT_MS(200));
+        if (o->op == YTL_OP_AT) o->t_ns = rnd_range(0, YRT_MS(1500));
         if (tw) {
             static const int eases[6] = { 0, 1, 2, 3, 4, 6 };
             ytl_tween_desc* d = &o->tween;
             d->to = (float)rnd_int(64) / 8.0f - 3.0f;
-            d->duration = rnd_int(6) == 0 ? 0 : rnd_range(1, YTL_MS(300));
+            d->duration_ns = rnd_int(6) == 0 ? 0 : rnd_range(1, YRT_MS(300));
             d->ease = eases[rnd_int(6)];
             if (d->ease == YTL_EASE_BEZIER)
                 d->curve = rnd_int(2) ? mkcurve(0.42f, 0.0f, 0.58f, 1.0f) : mkcurve(0.7f, -0.5f, 0.3f, 1.5f);
@@ -5846,11 +5855,11 @@ static void sm_gen(int n) {
             d->from = (float)rnd_int(64) / 8.0f;
             d->cycles = rnd_int(4);
             d->yoyo = rnd_int(4) == 0;
-            if (d->duration == 0 && rnd_int(4) != 0) {
+            if (d->duration_ns == 0 && rnd_int(4) != 0) {
                 d->cycles = 0;
                 d->yoyo = false;
             }
-            d->delay = rnd_int(3) == 0 ? rnd_range(-YTL_MS(50), YTL_MS(100)) : 0;
+            d->delay_ns = rnd_int(3) == 0 ? rnd_range(-YRT_MS(50), YRT_MS(100)) : 0;
         }
         /* errors */
         r = rnd_int(100);
@@ -5896,8 +5905,8 @@ static int sm_model_op(ytl_timeline* h, const float* init, const ytl_op* o, int*
     int64_t t = *tp;
     int ch;
     switch (o->op) {
-    case YTL_OP_WAIT: t += o->t; break;
-    case YTL_OP_AT: t = o->t; break;
+    case YTL_OP_WAIT: t += o->t_ns; break;
+    case YTL_OP_AT: t = o->t_ns; break;
     case YTL_OP_ON: case YTL_OP_OFF: case YTL_OP_SET_VALUE:
     case YTL_OP_TRIGGER: case YTL_OP_MARK: {
         ytl_event e;
@@ -5905,7 +5914,7 @@ static int sm_model_op(ytl_timeline* h, const float* init, const ytl_op* o, int*
         if (drives && (o->ch < 0 || o->ch >= SM_NCH)) return YTL_ERR_ARG;
         if (drives && kind[o->ch] == 2) return YTL_ERR_BOUND;
         memset(&e, 0, sizeof e);
-        e.time = t;
+        e.time_ns = t;
         e.base = 1;
         e.kind = (uint8_t)(o->op == YTL_OP_ON ? YTL_ONSET : o->op == YTL_OP_OFF ? YTL_OFFSET
                            : o->op == YTL_OP_SET_VALUE ? YTL_SET
@@ -5929,8 +5938,8 @@ static int sm_model_op(ytl_timeline* h, const float* init, const ytl_op* o, int*
         ch = o->ch;
         if (kind[ch] == 1) return YTL_ERR_BOUND;
         if (d->start_set || d->cycles == YTL_FOREVER) return YTL_ERR_ARG;
-        if ((d->cycles > 1 || d->yoyo) && d->duration == 0) return YTL_ERR_ARG;
-        s = t + d->delay;
+        if ((d->cycles > 1 || d->yoyo) && d->duration_ns == 0) return YTL_ERR_ARG;
+        s = t + d->delay_ns;
         if (kind[ch] == 2 && s < end[ch]) return YTL_ERR_ARG;
         k = sm_keys[ch];
         if (kind[ch] != 2) {
@@ -5947,15 +5956,15 @@ static int sm_model_op(ytl_timeline* h, const float* init, const ytl_op* o, int*
             ci = nc[ch]++;
         }
         cn = d->cycles > 1 ? d->cycles : 1;
-        cyc = d->duration * (d->yoyo ? 2 : 1);
+        cyc = d->duration_ns * (d->yoyo ? 2 : 1);
         per = d->yoyo ? 3 : 2;
         for (j = 0; j < cn; j++) {
             ytl_key* a = &k[nk[ch]];
             a[0] = mkkey(s + j * cyc, from, d->ease);
-            a[1] = mkkey(s + j * cyc + d->duration, d->to, d->ease);
+            a[1] = mkkey(s + j * cyc + d->duration_ns, d->to, d->ease);
             a[0].curve = a[1].curve = (uint16_t)ci;
             if (d->yoyo) {
-                a[2] = mkkey(s + j * cyc + 2 * d->duration, from, d->ease);
+                a[2] = mkkey(s + j * cyc + 2 * d->duration_ns, from, d->ease);
                 a[2].curve = (uint16_t)ci;
             }
             nk[ch] += per;
@@ -5983,8 +5992,8 @@ static void sm_builder(ytl_seq* q, int n) {
         case YTL_OP_SET_VALUE: ytl_set_value(q, o->ch, o->value); break;
         case YTL_OP_TRIGGER: ytl_trigger(q, o->code); break;
         case YTL_OP_MARK: ytl_mark(q, o->code, o->user); break;
-        case YTL_OP_WAIT: ytl_wait(q, o->t); break;
-        case YTL_OP_AT: ytl_at(q, o->t); break;
+        case YTL_OP_WAIT: ytl_wait(q, o->t_ns); break;
+        case YTL_OP_AT: ytl_at(q, o->t_ns); break;
         case YTL_OP_TO: (void)ytl_to(q, o->ch, &o->tween); break;
         case YTL_OP_THEN: ytl_then(q, o->ch, &o->tween); break;
         default:
@@ -6024,7 +6033,7 @@ static void test_seq_model(void) {
         qr = ytl_seq_on(&g_tl2, 1);
         memcpy(&snap, &g_tl2, sizeof snap);
         rc = ytl_run(&qr, sm_ops, n);
-        if (rc != want || (want != 0 && (qr.err_call != wbad || memcmp(&snap, &g_tl2, sizeof snap) != 0))) bad_run++;
+        if (rc != want || (want != 0 && (qr.err_call != wbad || memcmp(&snap, &g_tl2, TL_STATE) != 0))) bad_run++;
         qb = ytl_seq_on(&g_tl, 1);
         sm_builder(&qb, n);
         if (qb.err != want || (want != 0 && sm_ops[wbad].op != 0 && qb.err_call != wbad)) {
@@ -6141,7 +6150,7 @@ static int m_fail(const char* what, long long got, long long want) {
 
 static void print_ev(const char* tag, const ytl_event* e) {
     fprintf(stderr, "  %s: id %d base %d time %lld kind %d target %d value %g flags %u "
-            "frame %lld onset %lld residual %lld\n", tag, e->id, e->base, (long long)e->time,
+            "frame %lld onset %lld residual %lld\n", tag, e->id, e->base, (long long)e->time_ns,
             e->kind, e->target, (double)e->value, (unsigned)e->flags, (long long)e->frame,
             (long long)e->onset, (long long)e->residual);
 }
@@ -6205,8 +6214,8 @@ static float m_chan_value(int ch) {
     for (i = 0; i < m_n; i++) {
         const ytl_event* e = &m_ev[i].e;
         if (!is_chan_kind(e->kind) || e->target != ch || !(e->flags & ((g_mut & MUT_SKIP_NOCHAN) ? YTL_EV_FIRED : M_DONE))) continue;
-        if (best < 0 || e->time > m_ev[best].e.time ||
-            (e->time == m_ev[best].e.time && e->id > m_ev[best].e.id)) best = i;
+        if (best < 0 || e->time_ns > m_ev[best].e.time_ns ||
+            (e->time_ns == m_ev[best].e.time_ns && e->id > m_ev[best].e.id)) best = i;
     }
     if (best < 0) return m_init[ch];
     if (m_ev[best].e.kind == YTL_ONSET) return 1.0f;
@@ -6231,7 +6240,7 @@ static void m_rewind(int b, int64_t bt) {
     int i;
     for (i = 0; i < m_n; i++) {
         mev* m = &m_ev[i];
-        if (m->e.base != b || m->e.time < bt) continue;
+        if (m->e.base != b || m->e.time_ns < bt) continue;
         if (m->e.flags & ((g_mut & MUT_SKIP_UNREW) ? YTL_EV_FIRED : M_DONE)) { m_unfire(m); m_stat_unfired++; }
         else if (m->late) m->ambig = 1;
     }
@@ -6268,13 +6277,13 @@ static void m_evaluate(int64_t onset, int64_t index) {
         m_b[b].chg = 0;
         for (i = 0; i < m_n; i++) {
             mev* m = &m_ev[i];
-            if (m->e.base != b || (m->e.flags & M_DONE) || m->e.time > hi) continue;
+            if (m->e.base != b || (m->e.flags & M_DONE) || m->e.time_ns > hi) continue;
             m->e.flags = (uint16_t)(YTL_EV_FIRED | (m->late ? YTL_EV_LATE : 0u));
             m->e.frame = index;
             m->e.onset = onset;
-            m->e.residual = bt_on - m->e.time;
+            m->e.residual = bt_on - m->e.time_ns;
             m->key = m_scaled(b) && m_b[b].state == 1 && !(g_mut & MUT_RATE_ORDER)
-                     ? m_rt(b, m->e.time) : onset - m->e.residual;
+                     ? m_rt(b, m->e.time_ns) : onset - m->e.residual;
             m_fired[m_nf++] = *m;
             m_stat_fired++;
             if (m_scaled(b)) m_stat_rate_fired++;
@@ -6320,7 +6329,7 @@ static const char* ev_diff(const ytl_event* g, const mev* m) {
     const ytl_event* w = &m->e;
     unsigned mask;
     if (g->id != w->id) return "id";
-    if (g->time != w->time) return "time";
+    if (g->time_ns != w->time_ns) return "time";
     if (g->base != w->base) return "base";
     if (g->kind != w->kind) return "kind";
     if (g->target != w->target) return "target";
@@ -6396,7 +6405,7 @@ static ytl_event m_rand_event(void) {
     int r = rnd_int(100), b = rnd_int(4);
     memset(&e, 0, sizeof e);
     e.base = (uint8_t)b;
-    e.time = m_rand_time(b);
+    e.time_ns = m_rand_time(b);
     e.code = (int32_t)rnd_range(-100000, 100000);
     e.user = sm64();
     e.value = (float)rnd_int(400) / 8.0f - 10.0f;
@@ -6421,7 +6430,7 @@ static ytl_event m_rand_event(void) {
     if (is_chan_kind(e.kind) && e.target >= 0 && e.target < M_EVCH && e.base < YTL_MAX_BASES &&
         m_bind(e.target) >= 0 && rnd_int(5) != 0) {
         e.base = (uint8_t)m_bind(e.target);
-        e.time = m_rand_time(e.base);
+        e.time_ns = m_rand_time(e.base);
     }
     return e;
 }
@@ -6471,9 +6480,9 @@ static void m_append(const ytl_event* es, int n) {
         m->e.frame = -1;
         m->e.onset = 0;
         m->e.residual = 0;
-        m->late = bb->evaluated && es[i].time <= bb->last_hi;
+        m->late = bb->evaluated && es[i].time_ns <= bb->last_hi;
         m->ambig = 0;
-        m_trace("added", es[i].base, m->e.id, es[i].time, m->late);
+        m_trace("added", es[i].base, m->e.id, es[i].time_ns, m->late);
     }
 }
 
@@ -6506,7 +6515,7 @@ static int m_op_skip(int64_t now) {
         bt = m_bt(b, rt) + rnd_range(-10 * m_pe, 30 * m_pe);            /* mostly forward */
     } else if (q == 3 && ok && m_n > 0) {
         const mev* m = &m_ev[rnd_int(m_n)];                             /* on an event's time */
-        bt = (m->e.base == b ? m->e.time : rnd_range(0, 40 * m_pe)) + rnd_range(-1, 1);
+        bt = (m->e.base == b ? m->e.time_ns : rnd_range(0, 40 * m_pe)) + rnd_range(-1, 1);
     } else {
         bt = rnd_range(-5 * m_pe, 60 * m_pe);
     }
@@ -6535,13 +6544,13 @@ static int m_op_skip(int64_t now) {
         for (i = 0; i < m_n; i++) {
             mev* m = &m_ev[i];
             if (m->e.base != b || (m->e.flags & M_DONE)) continue;
-            if (m->e.time > bt || (m->e.time == bt && !(g_mut & MUT_SKIP_AT))) continue;
+            if (m->e.time_ns > bt || (m->e.time_ns == bt && !(g_mut & MUT_SKIP_AT))) continue;
             if (rewound && m->late && (g_mut & MUT_SKIP_LATEW)) continue;
             if (m->late) m_stat_skiplate++;
             m->e.flags = YTL_EV_SKIPPED;
             m->e.frame = -1;
             m->e.onset = rt;
-            m->e.residual = bt - m->e.time;
+            m->e.residual = bt - m->e.time_ns;
             m->late = 0;
             m->ambig = 0;
             want++;
@@ -6576,7 +6585,7 @@ static int m_op_peek(int64_t now) {
         const mev* m = &m_ev[rnd_int(m_n)];
         int eb = m->e.base;
         if (eb == 0 || m_b[eb].state == 1) {
-            int64_t rte = m_rt(eb, m->e.time);
+            int64_t rte = m_rt(eb, m->e.time_ns);
             if (rnd_int(2)) from = rte + rnd_range(-1, 1);
             else to = rte + rnd_range(-1, 1);
             if (to < from && rnd_int(4) != 0) { int64_t x = to; to = from; from = x; }
@@ -6588,7 +6597,7 @@ static int m_op_peek(int64_t now) {
     memcpy(&snap_tl, &g_tl, sizeof g_tl);
     memcpy(snap_store, g_store, sizeof snap_store);
     ret = ytl_peek(&g_tl, b, from, to, outp, cap);
-    if (memcmp(&snap_tl, &g_tl, sizeof g_tl) != 0) return m_fail("peek changed the handle", 1, 0);
+    if (memcmp(&snap_tl, &g_tl, TL_STATE) != 0) return m_fail("peek changed the handle", 1, 0);
     if (memcmp(snap_store, g_store, sizeof snap_store) != 0) return m_fail("peek changed the storage", 1, 0);
     m_trace("peek", b, from, to, ret);
     if (b < YTL_ALL_BASES || b >= YTL_MAX_BASES || to < from) {
@@ -6602,10 +6611,10 @@ static int m_op_peek(int64_t now) {
         if (b != YTL_ALL_BASES && eb != b) continue;
         if (eb != 0 && m_b[eb].state != 1) continue;
         if (m->e.flags & ((g_mut & MUT_PEEK_FIRED) ? YTL_EV_SKIPPED : M_DONE)) continue;
-        rte = m_rt(eb, m->e.time);
+        rte = m_rt(eb, m->e.time_ns);
         if (rte < from || rte > to || (rte == to && !(g_mut & MUT_PEEK_END))) continue;
         want[nw] = *m;
-        want[nw].e.onset = (g_mut & MUT_PEEK_ONSET) ? m->e.time : rte;
+        want[nw].e.onset = (g_mut & MUT_PEEK_ONSET) ? m->e.time_ns : rte;
         want[nw].e.residual = 0;
         want[nw].key = want[nw].e.onset;
         want[nw].ambig = 0;
@@ -6704,7 +6713,7 @@ static int m_op_rt_time(int64_t now) {
     int64_t bt, x = -77;
     bool ok, wok;
     m_op = "rt_time";
-    if (b < YTL_MAX_BASES && m_n > 0 && rnd_int(2)) bt = m_ev[rnd_int(m_n)].e.time + rnd_range(-1, 1);
+    if (b < YTL_MAX_BASES && m_n > 0 && rnd_int(2)) bt = m_ev[rnd_int(m_n)].e.time_ns + rnd_range(-1, 1);
     else bt = (b < YTL_MAX_BASES && (b == 0 || m_b[b].state != 0) ? m_bt(b, now) : 0) + rnd_range(-5 * m_pe, 10 * m_pe);
     ok = ytl_rt_time(&g_tl, b, bt, &x);
     wok = b < YTL_MAX_BASES && (b == 0 || m_b[b].state == 1);
@@ -6866,16 +6875,16 @@ static int model_run(uint64_t seed, int lead_num, int lead_den, int64_t period, 
             } else if (q == 1) {
                 static const int64_t mrates[4] = { 120, 7, 60, 999983 };
                 tr = trk_samples(m_samp, 64, bnow + rnd_range(-20 * m_pe, 5 * m_pe), mrates[rnd_int(4)], rnd_int(3));
-                if (rnd_int(2)) { tr.period = rnd_range(m_pe / 2, 30 * m_pe); tr.repeats = rnd_int(4); }
+                if (rnd_int(2)) { tr.period_ns = rnd_range(m_pe / 2, 30 * m_pe); tr.repeats = rnd_int(4); }
             } else if (q == 2) {
                 int64_t st = bnow + rnd_range(-10 * m_pe, 5 * m_pe);
                 m_krk[tch][0] = mkbez(st, 1.0f, rnd_int(2));
                 m_krk[tch][1] = mkkey(st + rnd_range(1, 4 * m_pe), 6.0f, rnd_int(5));
-                m_krk[tch][2] = mkkey(m_krk[tch][1].time + rnd_range(0, 4 * m_pe), -2.0f, YTL_EASE_LINEAR);
+                m_krk[tch][2] = mkkey(m_krk[tch][1].time_ns + rnd_range(0, 4 * m_pe), -2.0f, YTL_EASE_LINEAR);
                 tr = trk_keys(m_krk[tch], 3);
                 tr.curves = m_curv;
                 tr.n_curves = 2;
-                tr.period = rnd_range(m_pe, 10 * m_pe);
+                tr.period_ns = rnd_range(m_pe, 10 * m_pe);
                 tr.repeats = rnd_int(5);
             }
             if (q < 3) {
@@ -6893,7 +6902,7 @@ static int model_run(uint64_t seed, int lead_num, int lead_den, int64_t period, 
                 int64_t bn = m_now(b, &okn);
                 memset(&d, 0, sizeof d);
                 d.to = (float)rnd_int(64) / 8.0f - 2.0f;
-                d.duration = rnd_int(4) == 0 ? 0 : rnd_range(1, 15 * m_pe);
+                d.duration_ns = rnd_int(4) == 0 ? 0 : rnd_range(1, 15 * m_pe);
                 d.ease = rnd_int(7);
                 if (d.ease == YTL_EASE_BEZIER) {
                     d.curve = m_curv[rnd_int(2)];
@@ -6915,12 +6924,12 @@ static int model_run(uint64_t seed, int lead_num, int lead_den, int64_t period, 
                         d.from_set = false;
                         d.yoyo = false;
                         d.cycles = rnd_int(2);
-                        if (d.duration == 0) d.duration = rnd_range(1, 15 * m_pe);
+                        if (d.duration_ns == 0) d.duration_ns = rnd_range(1, 15 * m_pe);
                     }
                 }
                 d.start_set = !okn || rnd_int(2) == 0;
-                d.start = bnow + rnd_range(-3 * m_pe, 6 * m_pe);
-                if (rnd_int(3) == 0) d.delay = rnd_range(-2 * m_pe, 3 * m_pe);
+                d.start_ns = bnow + rnd_range(-3 * m_pe, 6 * m_pe);
+                if (rnd_int(3) == 0) d.delay_ns = rnd_range(-2 * m_pe, 3 * m_pe);
                 want = tw_valid(&d) ? 0 : YTL_ERR_ARG;
                 m_op = "tween";
                 ret = ytl_tween(&g_tl, tch, b, &d);
@@ -6932,7 +6941,7 @@ static int model_run(uint64_t seed, int lead_num, int lead_den, int64_t period, 
                     }
                     m_pend[tch] = 1;
                     m_pd[tch] = d;
-                    m_ps[tch] = (d.start_set ? d.start : bn) + d.delay;
+                    m_ps[tch] = (d.start_set ? d.start_ns : bn) + d.delay_ns;
                     m_pcall[tch] = m_trackv[tch];
                     m_pstep[tch] = d.ease == YTL_EASE_STEP && !(g_mut & MUT_STEP_ONSET);
                     m_tb[tch] = b;
@@ -6940,8 +6949,8 @@ static int model_run(uint64_t seed, int lead_num, int lead_den, int64_t period, 
                     if (m_trace_seed == m_seed)
                         fprintf(stderr, "  [%d] tween ch%d b%d start %lld (set %d, now %lld, delay %lld) dur %lld "
                                 "to %g from %g (set %d) ease %d cycles %d yoyo %d kv %d; value %g\n", m_step, tch, b,
-                                (long long)m_ps[tch], (int)d.start_set, (long long)bn, (long long)d.delay,
-                                (long long)d.duration, (double)d.to, (double)d.from, (int)d.from_set, d.ease,
+                                (long long)m_ps[tch], (int)d.start_set, (long long)bn, (long long)d.delay_ns,
+                                (long long)d.duration_ns, (double)d.to, (double)d.from, (int)d.from_set, d.ease,
                                 d.cycles, (int)d.yoyo, (int)d.keep_velocity, (double)m_trackv[tch]);
                     if (d.keep_velocity) m_stat_kv++;
                     if (!d.start_set) m_stat_twnow++;
@@ -7005,7 +7014,7 @@ static int model_run(uint64_t seed, int lead_num, int lead_den, int64_t period, 
                 int64_t t;
                 if (e->flags & M_DONE) continue;
                 if (e->base != 0 && m_b[e->base].state != 1) continue;
-                t = m_rt(e->base, e->time);
+                t = m_rt(e->base, e->time_ns);
                 if (!mhas || t < mdue) { mdue = t; mhas = 1; }
             }
             if (has != (mhas != 0)) return m_fail("next_due found", has, mhas);
@@ -7102,6 +7111,78 @@ static void test_lead_default(void) {
     }
 }
 
+/* -------------------------------------------- v0.5.0: close and messages */
+
+static void test_close_messages(void) {
+    static ytl_timeline z;
+    ytl_frame f;
+    ytl_event e;
+    ytl_desc d;
+    ytl_seq q;
+    int bad = -2;
+    ytl_op op;
+
+    /* close: on a zeroed handle, twice, after a failed open, NULL. */
+    memset(&z, 0, sizeof z);
+    ytl_close(&z);
+    ytl_close(&z);
+    CHECK(!ytl_is_open(&z));
+    memset(&d, 0, sizeof d);
+    d.n_channels = -1;
+    CHECK(!ytl_open(&z, &d));
+    ytl_close(&z);
+    ytl_close(&z);
+    CHECK(ytl_error(&z)[0] != '\0');
+    ytl_close(NULL);
+
+    /* After a close every call is YTL_ERR_CLOSED and says so. */
+    CHECK(open_h(&g_tl, g_store, 8, 4, NULL, 0.0));
+    ytl_close(&g_tl);
+    CHECK(!ytl_is_open(&g_tl));
+    ytl_close(&g_tl);
+    CHECK_I(ytl_anchor(&g_tl, 1, 0, 0), YTL_ERR_CLOSED);
+    CHECK_S(ytl_error(&g_tl), "ysp_timeline: ytl_anchor: timeline is not open");
+    CHECK(ytl_values(&g_tl) == NULL);
+
+    /* open clears the message; each failing int call writes its own. */
+    CHECK(open_h(&g_tl, g_store, 1, 4, NULL, 0.0));
+    CHECK_S(ytl_error(&g_tl), "");
+    e = ev(1, 0, YTL_MARK, 0, 0.0f);
+    CHECK(ytl_add(&g_tl, &e) >= 0);
+    CHECK_S(ytl_error(&g_tl), "");
+    CHECK_I(ytl_add(&g_tl, &e), YTL_ERR_FULL);
+    CHECK_S(ytl_error(&g_tl), "ysp_timeline: ytl_add: event storage is full");
+    CHECK_I(ytl_remove(&g_tl, 77), YTL_ERR_NOT_FOUND);
+    CHECK_S(ytl_error(&g_tl), "ysp_timeline: ytl_remove: no event with that id");
+    CHECK_I(ytl_pause(&g_tl, 2, 0), YTL_ERR_ORDER);
+    CHECK_S(ytl_error(&g_tl), "ysp_timeline: ytl_pause: call out of order");
+    CHECK_I(ytl_clamped(&g_tl, 9), YTL_ERR_ARG);
+    CHECK_S(ytl_error(&g_tl), "ysp_timeline: ytl_clamped: invalid argument");
+    CHECK_I(ytl_tween(&g_tl, 0, 1, NULL), YTL_ERR_ARG);
+    CHECK_S(ytl_error(&g_tl), "ysp_timeline: ytl_tween: invalid argument");
+    f.onset = 100; f.period = 10; f.index = 0;
+    CHECK_I(ytl_evaluate(&g_tl, &f, NULL, 0), 0);
+    f.onset = 50;
+    CHECK_I(ytl_evaluate(&g_tl, &f, NULL, 0), YTL_ERR_ORDER);
+    CHECK_S(ytl_error(&g_tl), "ysp_timeline: ytl_evaluate: call out of order");
+    /* A bool query that answers false writes nothing. */
+    CHECK(!ytl_rt_time(&g_tl, 9, 0, &f.onset));
+    CHECK_S(ytl_error(&g_tl), "ysp_timeline: ytl_evaluate: call out of order");
+
+    /* A sequence's sticky error names the call; check_ops names the op. */
+    q = ytl_seq_on(&g_tl, 1);
+    ytl_wait(&q, LIM62);
+    CHECK_I(q.err, YTL_ERR_ARG);
+    CHECK_S(ytl_error(&g_tl), "ysp_timeline: sequence call 0: invalid argument");
+    q = ytl_seq_on(&g_tl, YTL_MAX_BASES);
+    CHECK_S(ytl_error(&g_tl), "ysp_timeline: sequence on base 8: invalid argument");
+    memset(&op, 0, sizeof op);
+    CHECK_I(ytl_check_ops(&g_tl, 1, &op, 1, &bad), YTL_ERR_ARG);
+    CHECK_I(bad, 0);
+    CHECK_S(ytl_error(&g_tl), "ysp_timeline: ytl_check_ops: op 0: invalid argument");
+    ytl_close(&g_tl);
+}
+
 /* ------------------------------------------------------------------- main */
 
 int main(void) {
@@ -7110,6 +7191,7 @@ int main(void) {
     g_v030_model = v3 != NULL;
     g_mut = mu ? (unsigned)strtoul(mu, NULL, 10) : 0u;
     test_open();
+    test_close_messages();
     test_lead_default();
     test_misc();
     {

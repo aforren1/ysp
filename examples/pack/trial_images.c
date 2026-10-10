@@ -339,11 +339,11 @@ int main(int argc, char** argv) {
                 printf("%s\n", task);   /* SDL and printf may allocate: only here, between blocks */
                 if (yscr_window(&scr)) SDL_SetWindowTitle(yscr_window(&scr), task);
                 ytl_on(&q, CUE_ON);
-                ytl_wait(&q, YTL_S(CUE_S));
+                ytl_wait(&q, YRT_S(CUE_S));
                 ytl_off(&q, CUE_ON);
             }
             ytl_on(&q, FIX_ON);
-            ytl_wait(&q, YTL_S(FIXATION_S));
+            ytl_wait(&q, YRT_S(FIXATION_S));
             ytl_off(&q, FIX_ON);
             ytl_on(&q, IMAGE_ON);
             if (q.err) { fprintf(stderr, "trial_images: timeline error %d\n", q.err); failed = 1; break; }
@@ -361,7 +361,7 @@ int main(int argc, char** argv) {
             ytl_base_time(&tl, TRIAL, f.onset, &bt);
             ytl_at(&q, bt);
             ytl_off(&q, IMAGE_ON);
-            ytl_wait(&q, YTL_S(ITI_S));
+            ytl_wait(&q, YRT_S(ITI_S));
             ytl_mark(&q, END_OF_TRIAL, 0);
             if (q.err) { fprintf(stderr, "trial_images: timeline error %d\n", q.err); failed = 1; break; }
             responding = 0;
@@ -375,7 +375,7 @@ int main(int argc, char** argv) {
                 image_frame = fired[i].frame;
                 if (sim && ti.index != 7) {   /* the participant answers from the image's onset */
                     memset(sim_ev, 0, sizeof sim_ev);
-                    sim_ev[0].t = o.t + YTL_S(sim_rt(rotation, ori, odd));
+                    sim_ev[0].t = o.t + YRT_S(sim_rt(rotation, ori, odd));
                     sim_ev[0].type = YRSP_PRESS;
                     sim_ev[0].control = (uint32_t)yrsp_scancode(ti.index == 2 ? (!strcmp(answer, "f") ? "j" : "f") : answer);
                     sim_ev[0].stamp = YRSP_TIER_SIM;
@@ -383,7 +383,7 @@ int main(int argc, char** argv) {
                     sim_ev[1] = sim_ev[0];
                     sim_ev[1].type = YRSP_RELEASE;
                     sim_ev[1].value = 0;
-                    sim_ev[1].t = sim_ev[0].t + YTL_MS(80);
+                    sim_ev[1].t = sim_ev[0].t + YRT_MS(80);
                     n_sim_ev = 2;
                 }
             }

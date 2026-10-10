@@ -65,7 +65,7 @@
 #define SIM_FRAMES 30
 #define MAX_DOTS 300
 #define MAX_STEPS 1024  /* a trial is 2 s: 120 updates at 60 Hz, 480 at 240 */
-#define S_NS YTL_NS_PER_S
+#define S_NS YRT_S(1)
 
 static yscr_screen scr;
 static ygfx_gfx gfx;
@@ -227,13 +227,13 @@ static int setup(void) {
     q = ytl_seq_on(&tl, TRIAL);
     ytl_set_value(&q, COH, 0.256f);
     ytl_on(&q, DOTS_ON);
-    ytl_wait(&q, YTL_MS(700));
+    ytl_wait(&q, YRT_MS(700));
     memset(&turn, 0, sizeof turn);
-    turn.from = 0; turn.from_set = true; turn.to = 90; turn.duration = YTL_MS(300); turn.ease = YTL_EASE_COSINE;
+    turn.from = 0; turn.from_set = true; turn.to = 90; turn.duration_ns = YRT_MS(300); turn.ease = YTL_EASE_COSINE;
     ytl_then(&q, DIR, &turn);
     ytl_off(&q, DOTS_ON);
     ytl_on(&q, MASK_ON);
-    ytl_wait(&q, YTL_MS(300));
+    ytl_wait(&q, YRT_MS(300));
     ytl_off(&q, MASK_ON);
     if (q.err < 0) { fprintf(stderr, "gfx_rdk: the trial's sequence: %s at call %d\n", ytl_strerror(q.err), q.err_call); return -1; }
 

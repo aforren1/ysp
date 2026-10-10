@@ -163,7 +163,7 @@ static void pointer(const yrsp_input* ev, int from_bridge) {
 static yrsp_input sim_ev[SIM_N];
 static int sim_path(int64_t t0, int trial, float sx, float sy, float bx, float by, float ox) {
     int n = 0, k, px = (int)lroundf(cursor.x), py = (int)lroundf(cursor.y);
-    int64_t tc = t0 + YTL_MS(300);
+    int64_t tc = t0 + YRT_MS(300);
     yrsp_input e;
     memset(&e, 0, sizeof e);
     e.kind = YRSP_KIND_MOUSE;
@@ -176,11 +176,11 @@ static int sim_path(int64_t t0, int trial, float sx, float sy, float bx, float b
         if (k == 1) {   /* the start click, between the first two samples */
             e.type = YRSP_PRESS; e.control = 1; e.value = 1; e.x = sx; e.y = sy; e.t = tc;
             sim_ev[n++] = e;
-            e.type = YRSP_RELEASE; e.value = 0; e.t = tc + YTL_MS(80);
+            e.type = YRSP_RELEASE; e.value = 0; e.t = tc + YRT_MS(80);
             sim_ev[n++] = e;
         }
         e.type = YRSP_SAMPLE;
-        e.t = k == 0 ? t0 + YTL_MS(100) : tc + YTL_MS(300) + (k - 1) * YTL_MS(8);
+        e.t = k == 0 ? t0 + YRT_MS(100) : tc + YRT_MS(300) + (k - 1) * YRT_MS(8);
         e.control = raw ? YRSP_AXIS_DELTA : YRSP_AXIS_POSITION;
         e.value = 0;
         if (raw) {
@@ -194,9 +194,9 @@ static int sim_path(int64_t t0, int trial, float sx, float sy, float bx, float b
         }
         sim_ev[n++] = e;
     }
-    e.type = YRSP_PRESS; e.control = 1; e.value = 1; e.x = bx; e.y = by; e.t = sim_ev[n - 1].t + YTL_MS(100);
+    e.type = YRSP_PRESS; e.control = 1; e.value = 1; e.x = bx; e.y = by; e.t = sim_ev[n - 1].t + YRT_MS(100);
     sim_ev[n++] = e;
-    e.type = YRSP_RELEASE; e.value = 0; e.t += YTL_MS(80);
+    e.type = YRSP_RELEASE; e.value = 0; e.t += YRT_MS(80);
     sim_ev[n++] = e;
     return n;
 }
@@ -384,7 +384,7 @@ int main(int argc, char** argv) {
             ytl_base_time(&tl, TRIAL, f.onset, &bt);
             ytl_at(&q, bt);
             ytl_off(&q, STIM_ON);
-            ytl_wait(&q, YTL_S(ITI_S));
+            ytl_wait(&q, YRT_S(ITI_S));
             ytl_mark(&q, END_OF_TRIAL, 0);
             if (q.err) { fprintf(stderr, "trial_mouse_tracking: timeline error %d\n", q.err); failed = 1; break; }
             ended_seen = 1;

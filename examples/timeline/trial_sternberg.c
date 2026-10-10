@@ -376,13 +376,13 @@ int main(int argc, char** argv) {
             /* The whole trial as one table, checked before anything goes in. */
             n_ops = 0;
             ops[n_ops++] = (ytl_op)YTL_ON(FIX_ON);
-            ops[n_ops++] = (ytl_op)YTL_WAIT(YTL_S(FIX_S));
+            ops[n_ops++] = (ytl_op)YTL_WAIT(YRT_S(FIX_S));
             ops[n_ops++] = (ytl_op)YTL_OFF(FIX_ON);
             for (i = 0; i < k; i++) {
                 ops[n_ops++] = (ytl_op)YTL_ON(ITEM0 + i);
-                ops[n_ops++] = (ytl_op)YTL_WAIT(YTL_S(ITEM_S));
+                ops[n_ops++] = (ytl_op)YTL_WAIT(YRT_S(ITEM_S));
                 ops[n_ops++] = (ytl_op)YTL_OFF(ITEM0 + i);
-                ops[n_ops++] = (ytl_op)YTL_WAIT(i + 1 < k ? YTL_S(GAP_S) : YTL_S(RETENTION_S));
+                ops[n_ops++] = (ytl_op)YTL_WAIT(i + 1 < k ? YRT_S(GAP_S) : YRT_S(RETENTION_S));
             }
             ops[n_ops++] = (ytl_op)YTL_ON(PROBE_ON);
             ytl_clear(&tl, TRIAL);
@@ -402,7 +402,7 @@ int main(int argc, char** argv) {
                 yrsp_input* e = &sim_ev[n_sim_ev];
                 if (p->trial != ti.index || p->early <= 0 || n_sim_ev + 2 > 8) continue;
                 memset(e, 0, sizeof *e);
-                e->t = t_start + YTL_S(p->early);
+                e->t = t_start + YRT_S(p->early);
                 e->type = YRSP_PRESS;
                 e->control = (uint32_t)yrsp_scancode(answer);
                 e->stamp = YRSP_TIER_SIM;
@@ -410,7 +410,7 @@ int main(int argc, char** argv) {
                 sim_ev[n_sim_ev + 1] = *e;
                 sim_ev[n_sim_ev + 1].type = YRSP_RELEASE;
                 sim_ev[n_sim_ev + 1].value = 0;
-                sim_ev[n_sim_ev + 1].t = e->t + YTL_MS(80);
+                sim_ev[n_sim_ev + 1].t = e->t + YRT_MS(80);
                 n_sim_ev += 2;
             }
         }
@@ -424,7 +424,7 @@ int main(int argc, char** argv) {
             ytl_base_time(&tl, TRIAL, f.onset, &bt);
             ytl_at(&q, bt);
             ytl_off(&q, PROBE_ON);
-            ytl_wait(&q, YTL_S(ITI_S));
+            ytl_wait(&q, YRT_S(ITI_S));
             ytl_mark(&q, END_OF_TRIAL, 0);
             if (q.err) { fprintf(stderr, "trial_sternberg: timeline error %d\n", q.err); failed = 1; break; }
             responding = 0;
@@ -445,7 +445,7 @@ int main(int argc, char** argv) {
                         yrsp_input* e = &sim_ev[n_sim_ev];
                         if (p->trial != ti.index || p->early > 0 || n_sim_ev + 2 > 8) continue;
                         memset(e, 0, sizeof *e);
-                        e->t = o.t + YTL_S(sim_rt(k, present));
+                        e->t = o.t + YRT_S(sim_rt(k, present));
                         e->type = YRSP_PRESS;
                         e->control = (uint32_t)yrsp_scancode(p->which == 1 ? answer : !strcmp(answer, "f") ? "j" : "f");
                         e->stamp = YRSP_TIER_SIM;
@@ -453,7 +453,7 @@ int main(int argc, char** argv) {
                         sim_ev[n_sim_ev + 1] = *e;
                         sim_ev[n_sim_ev + 1].type = YRSP_RELEASE;
                         sim_ev[n_sim_ev + 1].value = 0;
-                        sim_ev[n_sim_ev + 1].t = e->t + YTL_MS(80);
+                        sim_ev[n_sim_ev + 1].t = e->t + YRT_MS(80);
                         n_sim_ev += 2;
                     }
                 }
