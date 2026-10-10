@@ -751,18 +751,6 @@ static int cal_setup(void) {
     return 0;
 }
 
-static int write_ppm(const char* path, uint8_t* rgba, int w, int h) {
-    FILE* fp = fopen(path, "wb");
-    int i, ok;
-    if (!fp) return -1;
-    for (i = 0; i < w * h; i++) {   /* RGBA to RGB in place: each write is behind its read */
-        rgba[3 * i] = rgba[4 * i]; rgba[3 * i + 1] = rgba[4 * i + 1]; rgba[3 * i + 2] = rgba[4 * i + 2];
-    }
-    fprintf(fp, "P6\n%d %d\n255\n", w, h);
-    ok = fwrite(rgba, 3, (size_t)w * (size_t)h, fp) == (size_t)w * (size_t)h;
-    return fclose(fp) == 0 && ok ? 0 : -1;
-}
-
 static void show_page(int p, int prev) {
     char title[160];
     /* SDL and printf may allocate: only here, on a page change */
@@ -966,7 +954,7 @@ int main(int argc, char** argv) {
         if (shot_px && on_page == SHOT_FRAMES) {   /* the back buffer, before the flip */
             char path[512];
             snprintf(path, sizeof path, "%s-p%d.ppm", shots, cur + 1);
-            if (ygfx_read_output(&gfx, 0, 0, WIN_W, WIN_H, shot_px) < 0 || write_ppm(path, shot_px, WIN_W, WIN_H) < 0)
+            if (ygfx_read_output(&gfx, 0, 0, WIN_W, WIN_H, shot_px) < 0 || ygfx_image_write(path, YGFX_IMAGE_PPM, shot_px, WIN_W, WIN_H, 0, NULL) < 0)
                 fprintf(stderr, "gfx_layout: could not write %s\n", path);
             else
                 printf("wrote %s\n", path);

@@ -633,6 +633,355 @@ static void test_null_and_ring(void) {
     CHECK(!ygfx_open(&g, &gd));
 }
 
+/* ------------------------------------------------- v0.12 capture, CPU half */
+
+/* The test's own CRC-32 and Adler-32, bit by bit and byte by byte, against
+ * the writer's sliced CRC and deferred sums. */
+static uint32_t t_crc(const unsigned char* p, size_t n) {
+    uint32_t c = 0xFFFFFFFFu;
+    int k;
+    while (n--) { c ^= *p++; for (k = 0; k < 8; k++) c = (c & 1u) ? 0xEDB88320u ^ (c >> 1) : c >> 1; }
+    return c ^ 0xFFFFFFFFu;
+}
+static uint32_t t_adler(const unsigned char* p, size_t n) {
+    uint32_t a = 1, b = 0;
+    while (n--) { a = (a + *p++) % 65521u; b = (b + a) % 65521u; }
+    return (b << 16) | a;
+}
+static uint32_t t_be32(const unsigned char* p) {
+    return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | (uint32_t)p[3];
+}
+
+static unsigned char* t_slurp(const char* path, size_t* n) {
+    FILE* f = fopen(path, "rb");
+    unsigned char* b;
+    long k;
+    *n = 0;
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    k = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    b = (unsigned char*)malloc(k > 0 ? (size_t)k : 1);
+    if (b && k > 0 && fread(b, 1, (size_t)k, f) != (size_t)k) { free(b); b = NULL; }
+    fclose(f);
+    if (b) *n = (size_t)k;
+    return b;
+}
+
+/* A PPM's pixels (RGB) and its first comment, or 0. */
+static int t_read_ppm(const char* path, int* w, int* h, unsigned char* rgb, size_t cap, char* note, size_t ncap) {
+    size_t n, i = 3;
+    unsigned char* b = t_slurp(path, &n);
+    int ok = 0;
+    if (note) note[0] = '\0';
+    if (!b || n < 3 || memcmp(b, "P6\n", 3) != 0) { free(b); return 0; }
+    while (i < n && b[i] == '#') {
+        size_t j = i;
+        while (j < n && b[j] != '\n') j++;
+        if (note && !note[0] && j - i - 2 < ncap) { memcpy(note, b + i + 2, j - i - 2); note[j - i - 2] = '\0'; }
+        i = j + 1;
+    }
+    if (sscanf((const char*)b + i, "%d %d", w, h) == 2) {
+        int lines = 0;
+        while (i < n && lines < 2) if (b[i++] == '\n') lines++;
+        if ((size_t)(*w) * (size_t)(*h) * 3 == n - i && n - i <= cap) { memcpy(rgb, b + i, n - i); ok = 1; }
+    }
+    free(b);
+    return ok;
+}
+
+/* A PNG's pixels (RGB, unfiltered), its chunks' CRCs, its zlib stream's
+ * stored blocks and Adler-32 checked; its tEXt Comment, or 0. */
+static int t_read_png(const char* path, int* w, int* h, unsigned char* rgb, size_t cap, char* note, size_t ncap) {
+    static const unsigned char sig[8] = { 137, 80, 78, 71, 13, 10, 26, 10 };
+    size_t n, i = 8, zn = 0, raw_n = 0, k;
+    unsigned char *b = t_slurp(path, &n), *z = NULL, *raw = NULL;
+    int ok = 0, y;
+    if (note) note[0] = '\0';
+    if (!b || n < 8 || memcmp(b, sig, 8) != 0) goto done;
+    z = (unsigned char*)malloc(n);
+    raw = (unsigned char*)malloc(n);
+    if (!z || !raw) goto done;
+    while (i + 12 <= n) {
+        uint32_t len = t_be32(b + i);
+        if (i + 12 + len > n || t_crc(b + i + 4, 4 + len) != t_be32(b + i + 8 + len)) goto done;
+        if (memcmp(b + i + 4, "IHDR", 4) == 0) {
+            *w = (int)t_be32(b + i + 8); *h = (int)t_be32(b + i + 12);
+            if (b[i + 16] != 8 || b[i + 17] != 2) goto done;
+        } else if (memcmp(b + i + 4, "tEXt", 4) == 0 && note && len > 8 && memcmp(b + i + 8, "Comment", 8) == 0 && len - 8 < ncap) {
+            memcpy(note, b + i + 16, len - 8); note[len - 8] = '\0';
+        } else if (memcmp(b + i + 4, "IDAT", 4) == 0) {
+            memcpy(z + zn, b + i + 8, len); zn += len;
+        } else if (memcmp(b + i + 4, "IEND", 4) == 0) {
+            break;
+        }
+        i += 12 + len;
+    }
+    if (zn < 6 || z[0] != 0x78 || (z[0] * 256 + z[1]) % 31 != 0) goto done;
+    for (k = 2;;) {   /* stored blocks only */
+        unsigned len, nlen, fin = z[k] & 1u;
+        if ((z[k] & 6u) != 0 || k + 5 > zn) goto done;
+        len = z[k + 1] | (unsigned)z[k + 2] << 8;
+        nlen = z[k + 3] | (unsigned)z[k + 4] << 8;
+        if ((len ^ 0xFFFFu) != nlen || k + 5 + len > zn) goto done;
+        memcpy(raw + raw_n, z + k + 5, len);
+        raw_n += len;
+        k += 5 + len;
+        if (fin) break;
+    }
+    if (k + 4 != zn || t_adler(raw, raw_n) != t_be32(z + k)) goto done;
+    if (raw_n != (size_t)(*h) * (1 + 3 * (size_t)(*w)) || (size_t)(*w) * (size_t)(*h) * 3 > cap) goto done;
+    for (y = 0; y < *h; y++) {
+        const unsigned char* r = raw + (size_t)y * (1 + 3 * (size_t)(*w));
+        if (r[0] != 0) goto done;
+        memcpy(rgb + (size_t)y * 3 * (size_t)(*w), r + 1, 3 * (size_t)(*w));
+    }
+    ok = 1;
+done:
+    free(b); free(z); free(raw);
+    return ok;
+}
+
+typedef struct cap_seen {
+    int     n, bad_order, rec_mismatch, with_record, stride_bad;
+    int64_t idx[64];
+    int     byte0[64];
+    int64_t last;
+} cap_seen;
+static void cap_on_frame(void* ctx, const ygfx_capture_frame* fr) {
+    cap_seen* s = (cap_seen*)ctx;
+    if (s->n > 0 && fr->index <= s->last) s->bad_order++;
+    s->last = fr->index;
+    if (fr->has_record) { s->with_record++; if (fr->record.index != fr->index) s->rec_mismatch++; }
+    if (fr->stride != (ptrdiff_t)fr->w * 4 && fr->stride != -(ptrdiff_t)fr->w * 4) s->stride_bad++;
+    if (s->n < 64) { s->idx[s->n] = fr->index; s->byte0[s->n] = fr->rgba[0]; }
+    s->n++;
+}
+
+static void test_v12_capture_cpu(void) {
+    static unsigned char px[1500 * 20 * 4], back[1500 * 20 * 3];
+    static yscr_screen scr;
+    static ygfx_gfx g;
+    static unsigned char mem[64 * 128];
+    char dir[64], path[160], note[512];
+    yrt_ring ring;
+    yrt_ring_desc rd;
+    yrt_event ev[128];
+    yscr_desc d;
+    ygfx_desc gd;
+    yscr_frame f;
+    ygfx_capture_desc cd;
+    ygfx_capture_stats st;
+    cap_seen seen;
+    int i, k, w, h, bad, fmt, drops;
+    const char* const ext[] = { "", "ppm", "png" };
+    g_where = "cpu v0.12 capture";
+    snprintf(dir, sizeof dir, "ygfx_test_cap_%u", (unsigned)(yrt_now_ns() & 0xFFFFFF));
+
+    /* the writer: both formats, top first and bottom first, a row wider than
+     * the conversion chunk (1024 px), a PNG of two stored blocks */
+    for (i = 0; i < 1500 * 20 * 4; i++) px[i] = (unsigned char)((i * 7 + (i >> 9)) & 0xFF);
+    CHECK(ygfx_image_write(NULL, YGFX_IMAGE_PPM, px, 4, 4, 0, NULL) == YGFX_ERR_ARG);
+    CHECK(ygfx_image_write("x.ppm", 3, px, 4, 4, 0, NULL) == YGFX_ERR_ARG);
+    CHECK(ygfx_image_write("no_such_dir_ygfx/x.ppm", YGFX_IMAGE_PPM, px, 4, 4, 0, NULL) == YGFX_ERR_IO);
+    for (fmt = YGFX_IMAGE_PPM; fmt <= YGFX_IMAGE_PNG; fmt++) {
+        int flip;
+        for (flip = 0; flip < 2; flip++) {
+            const int W0 = 1500, H0 = 20;
+            const unsigned char* top = flip ? px + (size_t)(H0 - 1) * W0 * 4 : px;
+            ptrdiff_t stride = flip ? -(ptrdiff_t)W0 * 4 : 0;
+            int ok;
+            snprintf(path, sizeof path, "ygfx_test_img_%d.%s", flip, ext[fmt]);
+            CHECK(ygfx_image_write(path, fmt, top, W0, H0, stride, "line one\nline two") == YGFX_OK);
+            w = h = 0;
+            ok = fmt == YGFX_IMAGE_PPM ? t_read_ppm(path, &w, &h, back, sizeof back, note, sizeof note)
+                                       : t_read_png(path, &w, &h, back, sizeof back, note, sizeof note);
+            CHECK(ok && w == W0 && h == H0);
+            CHECK(strcmp(note, fmt == YGFX_IMAGE_PPM ? "line one" : "line one\nline two") == 0);
+            for (bad = 0, k = 0; ok && k < W0 * H0; k++) {
+                int y = k / W0, x = k % W0, sy = flip ? H0 - 1 - y : y;
+                const unsigned char* s = px + ((size_t)sy * W0 + (size_t)x) * 4;
+                bad += back[3 * k] != s[0] || back[3 * k + 1] != s[1] || back[3 * k + 2] != s[2];
+            }
+            CHECK(bad == 0);
+            remove(path);
+        }
+    }
+
+    /* the core on SIM, through the null backend's buffers */
+    memset(&ring, 0, sizeof ring);
+    memset(&rd, 0, sizeof rd);
+    rd.memory = mem;
+    rd.bytes = sizeof mem;
+    CHECK(yrt_ring_open(&ring, &rd));
+    memset(&d, 0, sizeof d);
+    d.backend = YSCR_BACKEND_SIM;
+    d.sim_period_ns = 1000000;
+    CHECK(yscr_open(&scr, &d));
+    memset(&gd, 0, sizeof gd);
+    gd.screen = &scr;
+    gd.ring = &ring;
+    CHECK(ygfx_open(&g, &gd));
+    memset(&cd, 0, sizeof cd);
+    CHECK(ygfx_capture_mark(&g) == YGFX_ERR_ORDER);   /* not started */
+    CHECK(ygfx_capture_pump(&g, 0) == YGFX_ERR_ORDER);
+    CHECK(ygfx_capture_stop(&g, &st) == YGFX_ERR_ORDER);
+    cd.every = -1;
+    CHECK(ygfx_capture_start(&g, &cd) == YGFX_ERR_ARG);
+    {
+        float sw, sh;
+        ygfx_size(&g, &sw, &sh);
+        CHECK(sw >= 64 && sh >= 32);
+        cd.every = 0; cd.x = (int)sw - 4; cd.w = 8; cd.h = 8;   /* past the right edge */
+    }
+    CHECK(ygfx_capture_start(&g, &cd) == YGFX_ERR_ARG);
+    cd.x = 0; cd.slots = YGFX_CAPTURE_MAX_SLOTS + 1;
+    CHECK(ygfx_capture_start(&g, &cd) == YGFX_ERR_ARG);
+    cd.slots = 0; cd.format = 7;
+    CHECK(ygfx_capture_start(&g, &cd) == YGFX_ERR_ARG);
+
+    /* manual: every 3rd frame and a mark, 4 slots, files with their records */
+    ygfx__test_cap_fill = 1;
+    memset(&seen, 0, sizeof seen);
+    memset(&cd, 0, sizeof cd);
+    snprintf(path, sizeof path, "%s/sub/f", dir);
+    cd.every = 3; cd.slots = 4; cd.manual = true; cd.path = path; cd.format = YGFX_IMAGE_PNG;
+    cd.x = 8; cd.y = 4; cd.w = 16; cd.h = 8;
+    cd.on_frame = cap_on_frame; cd.ctx = &seen;
+    CHECK(ygfx_capture_start(&g, &cd) == YGFX_OK);
+    CHECK(ygfx_capture_start(&g, &cd) == YGFX_ERR_ORDER);
+    /* frames 0..13: chosen 0, 3, 6, 9 (4 slots full), mark 10, 12: dropped */
+    for (i = 0; i < 14; i++) {
+        CHECK(yscr_begin(&scr, &f) == YSCR_OK);
+        CHECK(f.index == i);
+        CHECK(ygfx_begin(&g, &f) == YGFX_OK);
+        if (i == 10) CHECK(ygfx_capture_mark(&g) == YGFX_OK);
+        CHECK(ygfx_capture_pump(&g, 0) == YGFX_ERR_ORDER);   /* inside a frame */
+        CHECK(ygfx_end(&g) == YGFX_OK);
+        CHECK(yscr_flip(&scr) == YSCR_OK);
+    }
+    CHECK(ygfx_capture_mark(&g) == YGFX_ERR_ORDER);   /* outside a frame */
+    ygfx_capture_get_stats(&g, &st);
+    CHECK(st.chosen == 6 && st.read == 4 && st.dropped == 2 && st.written == 0 && st.busy == 4 && st.busy_max == 4);
+    CHECK(st.manual == 1 && st.slots == 4);
+    CHECK(seen.n == 0);   /* manual: nothing is written in a frame */
+    CHECK(ygfx_capture_pump(&g, 1) == 1);   /* the oldest only */
+    CHECK(seen.n == 1 && seen.idx[0] == 0);
+    CHECK(ygfx_capture_pump(&g, 0) == 3);
+    CHECK(seen.n == 4 && seen.bad_order == 0 && seen.rec_mismatch == 0 && seen.with_record == 4);
+    for (k = 0; k < 4 && k < seen.n; k++) CHECK(seen.idx[k] == 3 * k && seen.byte0[k] == k + 1);   /* read k + 1's fill */
+    CHECK(seen.stride_bad == 0);
+    /* frame 15: a mark; its record comes at the next begin */
+    CHECK(yscr_begin(&scr, &f) == YSCR_OK);
+    CHECK(ygfx_begin(&g, &f) == YGFX_OK);
+    CHECK(ygfx_capture_mark(&g) == YGFX_OK);   /* index 14: also not every 3rd */
+    CHECK(ygfx_end(&g) == YGFX_OK);
+    CHECK(yscr_flip(&scr) == YSCR_OK);
+    CHECK(ygfx_capture_pump(&g, 0) == 0);   /* no record yet */
+    {   /* another frame's record does not attach to it */
+        yscr_frame hf;
+        yscr_record other;
+        memset(&hf, 0, sizeof hf);
+        memset(&other, 0, sizeof other);
+        other.index = 9999;
+        hf.index = 98; hf.done = &other; hf.n_done = 1;   /* not a multiple of 3 */
+        CHECK(ygfx_begin(&g, &hf) == YGFX_OK);
+        CHECK(ygfx_end(&g) == YGFX_OK);
+        CHECK(ygfx_capture_pump(&g, 0) == 0);
+    }
+    {   /* a frame filled by hand (done NULL) gets no record: written at once */
+        yscr_frame hf;
+        memset(&hf, 0, sizeof hf);
+        hf.index = 100;
+        CHECK(ygfx_begin(&g, &hf) == YGFX_OK);
+        CHECK(ygfx_capture_mark(&g) == YGFX_OK);
+        CHECK(ygfx_end(&g) == YGFX_OK);
+        CHECK(ygfx_capture_pump(&g, 0) == 1);
+        CHECK(seen.n == 5 && seen.idx[4] == 100);
+    }
+    CHECK(ygfx_capture_stop(&g, &st) == 6);   /* frame 14 written without its record */
+    CHECK(st.written == 6 && st.no_record == 2 && st.dropped == 2 && st.failed == 0 && st.busy == 0);
+    CHECK(seen.n == 6 && seen.idx[5] == 14);
+    ygfx_capture_get_stats(&g, &st);
+    CHECK(st.slots == 0);
+    {   /* the files: the fill, and the record in the comment */
+        static const int idx[6] = { 0, 3, 6, 9, 14, 100 };
+        for (k = 0; k < 6; k++) {
+            snprintf(note, sizeof note, "%s%08d.png", path, idx[k]);
+            w = h = 0;
+            CHECK(t_read_png(note, &w, &h, back, sizeof back, note + 200, 300) && w == 16 && h == 8 && back[0] == k + 1);
+            CHECK(strstr(note + 200, k < 4 ? "record: onset" : "record: none") != NULL);
+            snprintf(note, sizeof note, "%s%08d.png", path, idx[k]);
+            remove(note);
+        }
+    }
+    snprintf(note, sizeof note, "%s/sub", dir);
+    TEST_RMDIR(note);
+    TEST_RMDIR(dir);
+    drops = 0;
+    k = yrt_ring_drain(&ring, ev, 128);
+    for (i = 0; i < k; i++)
+        if (ev[i].source == YRT_SRC_GFX && ev[i].kind == YGFX_EV_CAPTURE_DROP) {
+            drops++;
+            CHECK(ev[i].u.i64[0] == (drops == 1 ? 10 : 12) && ev[i].aux == (uint32_t)drops);
+        }
+    CHECK(drops == 2);
+
+#if !defined(YRT_NO_THREADS) && (!defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__))
+    /* the writer thread: every frame, 3 slots, each copy done after 2 polls;
+     * no files. Every chosen frame is written or counted as dropped. */
+    ygfx__test_cap_delay = 2;
+    memset(&seen, 0, sizeof seen);
+    memset(&cd, 0, sizeof cd);
+    cd.every = 1; cd.slots = 3;
+    cd.on_frame = cap_on_frame; cd.ctx = &seen;
+    CHECK(ygfx_capture_start(&g, &cd) == YGFX_OK);
+    for (i = 0; i < 40; i++) {
+        CHECK(yscr_begin(&scr, &f) == YSCR_OK);
+        CHECK(ygfx_begin(&g, &f) == YGFX_OK);
+        CHECK(ygfx_end(&g) == YGFX_OK);
+        CHECK(yscr_flip(&scr) == YSCR_OK);
+    }
+    k = ygfx_capture_stop(&g, &st);
+    CHECK(k == (int)st.written);
+    CHECK(st.manual == 0 && st.chosen == 40 && st.written + st.dropped == 40 && st.failed == 0);
+    CHECK(st.written >= 10 && st.dropped >= 1 && st.busy_max == 3);
+    CHECK(seen.n == (int)st.written && seen.bad_order == 0 && seen.rec_mismatch == 0);
+    CHECK(st.no_record <= 3 && seen.with_record == seen.n - (int)st.no_record);
+    printf("v0.12 capture on SIM, every frame, 3 slots, copies done after 2 polls: %llu written, %llu dropped, %llu without a record; "
+           "the capture's state %u bytes\n",
+           (unsigned long long)st.written, (unsigned long long)st.dropped, (unsigned long long)st.no_record, (unsigned)sizeof(ygfx__cap));
+#endif
+    ygfx__test_cap_delay = 0;
+    ygfx__test_cap_fill = 0;
+    ygfx_close(&g);
+    yscr_close(&scr);
+
+    /* a version 3 backend has no capture calls */
+    {
+        static ygfx_backend v3;
+        static ygfx__null v3ctx;
+        v3 = ygfx__null_backend;
+        v3.version = 3;
+        memset(&d, 0, sizeof d);
+        d.backend = YSCR_BACKEND_SIM;
+        d.sim_period_ns = 1000000;
+        CHECK(yscr_open(&scr, &d));
+        memset(&gd, 0, sizeof gd);
+        gd.screen = &scr;
+        gd.backend = &v3;
+        gd.backend_ctx = &v3ctx;
+        CHECK(ygfx_open(&g, &gd));
+        memset(&cd, 0, sizeof cd);
+        cd.every = 1;
+        CHECK(ygfx_capture_start(&g, &cd) == YGFX_ERR_NOT_IMPLEMENTED);
+        ygfx_close(&g);
+        v3.version = 2;
+        CHECK(!ygfx_open(&g, &gd));
+        yscr_close(&scr);
+    }
+}
+
 /* ---------------------------------------------------------------- GL tests */
 
 #define W 320
@@ -5410,6 +5759,7 @@ static void gl_v10_simplex(stats* st);
 static void gl_v10_user_tex(stats* st);
 static void gl_v11_prime(stats* st);
 static void gl_v11_start(stats* st);
+static void gl_v12_capture(stats* st);
 static void s11_report(void);
 static void test_v10_simplex_cpu(void);
 typedef struct stats9 {
@@ -5611,13 +5961,13 @@ static int gl_suite(const char* name, ygfx_hl_device dev) {
                                                  gl_alpha_passes, gl_edge_truth, gl_v03_kinds, gl_v03_truth, gl_v03_fx, gl_v03_paint, gl_v03_msdf,
                                                  gl_v04_cache, gl_v04_fixes, gl_v04_video, gl_v04_inst, gl_v04_order, gl_v05_color,
                                                  gl_v06_text, gl_v06_blur, gl_v05_kinds, gl_v08, gl_v10_simplex, gl_v10_user_tex,
-                                                 gl_v11_prime, gl_v11_start };
+                                                 gl_v11_prime, gl_v11_start, gl_v12_capture };
         static const char* const names[] = { "shapes", "gratings", "gabors", "dots", "images", "noise",
                                              "output", "user+batch+rows", "strokes", "masks", "sprites", "tint",
                                              "groups", "targets", "alpha+passes", "edge truth", "v0.3 kinds", "v0.3 truth", "v0.3 fx", "v0.3 paint", "v0.3 msdf",
                                              "v0.4 cache", "v0.4 fixes", "v0.4 video", "v0.4 inst", "v0.4 order", "v0.5 color",
                                              "v0.6 text", "v0.6 blur", "vspec", "v0.8", "v0.10 simplex", "v0.10 user tex",
-                                             "v0.11 prime", "v0.11.1 start" };
+                                             "v0.11 prime", "v0.11.1 start", "v0.12 capture" };
         int k;
         memset(&S2, 0, sizeof S2);
         memset(&S3, 0, sizeof S3);
@@ -8004,6 +8354,96 @@ static void gl_v06_blur(stats* st) {
     ygfx_close(&R->g);
 }
 
+/* v0.12 (CAPTURE): what the writer gets is ygfx_read_output()'s bytes of the
+ * same frame, bit for bit, rows top first, whole and as a rectangle; each
+ * frame tagged with its index and its flip record. */
+#define CAP_N 6
+typedef struct gl_cap_store {
+    int     n, rec_bad, with_record;
+    int64_t idx[CAP_N];
+    int     rect[CAP_N][4];
+    unsigned char px[CAP_N][W * H * 4];
+} gl_cap_store;
+static void gl_cap_on_frame(void* ctx, const ygfx_capture_frame* fr) {
+    gl_cap_store* s = (gl_cap_store*)ctx;
+    int y;
+    if (fr->has_record) { s->with_record++; if (fr->record.index != fr->index) s->rec_bad++; }
+    if (s->n >= CAP_N) { s->n++; return; }
+    s->idx[s->n] = fr->index;
+    s->rect[s->n][0] = fr->x; s->rect[s->n][1] = fr->y; s->rect[s->n][2] = fr->w; s->rect[s->n][3] = fr->h;
+    for (y = 0; y < fr->h; y++) memcpy(s->px[s->n] + (size_t)y * fr->w * 4, fr->rgba + (ptrdiff_t)y * fr->stride, (size_t)fr->w * 4);
+    s->n++;
+}
+
+static void gl_v12_capture(stats* st) {
+    static unsigned char want[CAP_N][W * H * 4];
+    static gl_cap_store cs;
+    ygfx_shape_desc sd;
+    ygfx_capture_desc cd;
+    ygfx_capture_stats cst;
+    ygfx_stim s[2];
+    long bad = 0, rect_bad = 0;
+    int k, i, y, rc;
+    (void)st;
+    if (!gl_open(1, YGFX_RGBA16F, YGFX_DITHER_NONE)) return;
+    memset(&sd, 0, sizeof sd);
+    sd.place = YGFX_TOP_LEFT; sd.anchor = YGFX_TOP_LEFT;   /* top-left: a turned row order shows */
+    sd.shape = YGFX_RECT; sd.w = 40; sd.h = 20; sd.y = 12; sd.color[0] = 0.9f; sd.color[1] = 0.2f;
+    s[0] = ygfx_shape(&sd);
+    sd.place = YGFX_BOTTOM_RIGHT; sd.anchor = YGFX_BOTTOM_RIGHT;
+    sd.shape = YGFX_CIRCLE; sd.w = 30; sd.x = -8; sd.y = -6; sd.color[0] = 0.1f; sd.color[2] = 0.7f;
+    s[1] = ygfx_shape(&sd);
+    memset(&cs, 0, sizeof cs);
+    memset(&cd, 0, sizeof cd);
+    cd.every = 1; cd.slots = CAP_N;
+    cd.on_frame = gl_cap_on_frame; cd.ctx = &cs;
+    rc = ygfx_capture_start(&R->g, &cd);
+    CHECK(rc == YGFX_OK);
+    if (rc != YGFX_OK) { fprintf(stderr, "  capture: %s\n", ygfx_error(&R->g)); ygfx_close(&R->g); return; }
+    for (k = 0; k < CAP_N; k++) {
+        s[0].x = 10.0f + 7.0f * (float)k;   /* each frame differs */
+        CHECK(yscr_begin(&R->scr, &R->f) == YSCR_OK);
+        CHECK(ygfx_begin(&R->g, &R->f) == YGFX_OK);
+        CHECK(ygfx_draw_n(&R->g, s, 2) == YGFX_OK);
+        CHECK(ygfx_end(&R->g) == YGFX_OK);
+        /* also checks that the copy left no pack buffer bound */
+        CHECK(ygfx_read_output(&R->g, 0, 0, W, H, want[k]) == YGFX_OK);
+        CHECK(yscr_flip(&R->scr) == YSCR_OK);
+    }
+    CHECK(ygfx_capture_stop(&R->g, &cst) == CAP_N);
+    CHECK(cst.dropped == 0 && cst.failed == 0 && cs.n == CAP_N && cs.rec_bad == 0 && cs.with_record >= CAP_N - 3);
+    for (k = 0; k < CAP_N && k < cs.n; k++) {
+        CHECK(cs.idx[k] == R->f.index - (CAP_N - 1) + k);
+        bad += memcmp(cs.px[k], want[k], sizeof want[k]) != 0;
+    }
+    CHECK(bad == 0);
+    /* a rectangle, marked frames only, no writer thread */
+    memset(&cs, 0, sizeof cs);
+    memset(&cd, 0, sizeof cd);
+    cd.x = 7; cd.y = 11; cd.w = 45; cd.h = 17; cd.manual = true;
+    cd.on_frame = gl_cap_on_frame; cd.ctx = &cs;
+    CHECK(ygfx_capture_start(&R->g, &cd) == YGFX_OK);
+    for (k = 0; k < 4; k++) {
+        s[0].x = 3.0f + 5.0f * (float)k;
+        CHECK(yscr_begin(&R->scr, &R->f) == YSCR_OK);
+        CHECK(ygfx_begin(&R->g, &R->f) == YGFX_OK);
+        CHECK(ygfx_draw_n(&R->g, s, 2) == YGFX_OK);
+        if (k == 1) CHECK(ygfx_capture_mark(&R->g) == YGFX_OK);
+        CHECK(ygfx_end(&R->g) == YGFX_OK);
+        if (k == 1) CHECK(ygfx_read_output(&R->g, 0, 0, W, H, want[0]) == YGFX_OK);
+        CHECK(yscr_flip(&R->scr) == YSCR_OK);
+    }
+    CHECK(ygfx_capture_pump(&R->g, 0) == 1);   /* its record came with a later begin */
+    CHECK(ygfx_capture_stop(&R->g, &cst) == 1 && cst.no_record == 0 && cst.chosen == 1);
+    CHECK(cs.n == 1 && cs.rect[0][0] == 7 && cs.rect[0][1] == 11 && cs.rect[0][2] == 45 && cs.rect[0][3] == 17);
+    for (y = 0; y < 17; y++)
+        for (i = 0; i < 45 * 4; i++) rect_bad += cs.px[0][(size_t)y * 45 * 4 + (size_t)i] != want[0][((size_t)(11 + y) * W + 7) * 4 + (size_t)i];
+    CHECK(rect_bad == 0);
+    printf("  measured: capture: %d whole frames and a %dx%d rectangle against ygfx_read_output: %ld frames and %ld bytes differ\n",
+           CAP_N, 45, 17, bad, rect_bad);
+    ygfx_close(&R->g);
+}
+
 #if defined(__SANITIZE_ADDRESS__)
     #define SANITIZED 1
 #elif defined(__has_feature)
@@ -8039,6 +8479,7 @@ int main(void) {
     test_tables();
     test_coordinates();
     test_null_and_ring();
+    test_v12_capture_cpu();
     test_v03_cpu();
     test_v04_cache_cpu();
     test_v11_start_cpu();

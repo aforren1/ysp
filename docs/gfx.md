@@ -2965,15 +2965,12 @@ pinned digests equal; emcc 6.0.10, the CPU half 1.1 s. All pass.
    `ygfx_end_setup()`).
 10. Done for v0.10.0: gradient noise (NOISE SIMPLEX), integer, with an
    exact CPU twin. Left: its cost (1.6 ms per octave full screen).
-11. **Stimulus capture during a trial** (requested 2026-10-08), opt-in: the
-   presented output of chosen frames (every Nth, or marked ones) copied
-   asynchronously with pixel buffer objects and fences (GL ES 3.0), collected
-   a few frames later without a stall, and written to files off the frame
-   thread, each tagged with its frame index and flip record. Measure first:
-   the GPU cost per captured frame at 1920 x 1200, and that no flip moves
-   (flip records with and without capture). Today's ygfx_read_output()
-   blocks and is for checks only. Shared with it: one small image-file
-   writer, replacing the examples' own PPM writers.
+11. Done for v0.12.0: stimulus capture during a trial (see "v0.12:
+   stimulus capture"). Left: the map's 2.6 ms on the frame thread. A
+   D3D11 staging texture of our own, copied by the immediate context and
+   mapped on the writer thread (the device has multithread protection with
+   `desc.d3d11_video`), would take it off the frame thread on Windows;
+   neither built nor measured.
 12. **Lower input-to-photon latency for closed-loop trials** (requested
    2026-10-09; cursor feedback, mouse tracking), opt-in per trial, with
    ysp/screen.h:
@@ -3015,6 +3012,211 @@ the CPU half: under ASan, Mesa leaves 112 bytes in 2 allocations from a
 module it unloads, which a suppression cannot name, so the test runs GL
 under a sanitizer only when `YGFX_TEST_DEVICES` asks for it. Locally,
 with GL on, everything passed under ASan and UBSan apart from that leak.
+
+## v0.12: stimulus capture
+
+"Next" item 11. A trial can keep the frames it showed: every Nth frame, or
+the frames the caller marks, as files or through a callback, each with its
+frame index and flip record. The manual's CAPTURE section is the
+reference; this section says why it has this form and what it costs.
+
+### Design
+
+- **The copy is the output stage's codes.** `ygfx_end()` reads the
+  rectangle of framebuffer 0 after the output stage and before the
+  present, so the copy is what the CLUT and dither made, and the same
+  bytes as `ygfx_read_output()` (tested bit for bit). The screen's patch
+  and codes, which `yscr_flip()` draws later, are not in it.
+- **No wait on the frame thread.** `glReadPixels` into a bound pixel pack
+  buffer returns before the copy, and a fence (`glFenceSync`) marks its
+  end. A later `ygfx_end()` polls the fence with a zero timeout and no
+  flush (the present flushes), then maps the buffer
+  (`glMapBufferRange`). Both are GL ES 3.0 core; WebGL 2 has the fence but
+  not the map, so the five calls load apart from the required table and
+  capture answers `YGFX_ERR_NOT_IMPLEMENTED` without them.
+- **The map is the cost.** On ANGLE's D3D11 backend the map is where the
+  pixels come to the CPU: 2.6 ms mean, 5.1 ms p99 for 1920 x 1200 on the
+  frame thread (below). The copy's call and the fence cost nothing
+  measurable. So `ygfx_end()` maps at most one buffer per frame, the
+  oldest; after a stall the backlog spreads over the next frames instead
+  of one frame paying for all. `desc.manual` maps nothing in a frame:
+  the copies wait in their buffers until `ygfx_capture_pump()` between
+  trials.
+- **The writer reads the mapped buffer.** The buffer stays mapped until
+  the writer is done with it, so the frame thread copies no pixels
+  itself. The writer is ysp/rt.h's pump at below normal priority: it
+  must never take a core from the frame loop, and a pump already gives a
+  ring that copies nothing, a lock-free done counter for the frame thread
+  to poll, and a drain at stop. Its ring holds every slot, so a submit
+  cannot fail.
+- **Drop, never block.** A buffer is busy from its copy until the writer
+  is done. A chosen frame with no free buffer is not copied: it counts in
+  `stats.dropped` and pushes `YGFX_EV_CAPTURE_DROP` (the frame index), so
+  the data file says which frames are missing.
+- **The flip record.** A record comes with the `yscr_begin()` after its
+  flip, in `yscr_frame.done`; `ygfx_begin()` matches it to a buffer by
+  frame index. A copy waits for its record up to 30 frames before it goes
+  to the writer, so the file's comment carries the onset. A frame filled
+  by hand (`done` is NULL) and a headless gfx get no record and do not
+  wait; `ygfx_capture_stop()` writes what is left without one
+  (`stats.no_record`).
+- **Rows.** GL reads bottom first unless the swap path turned the rows
+  (DXGI_FLIP and COMPOSITION, "The row order of the back buffer"). The
+  writer and the callback get the top row and a signed stride, so nothing
+  turns the rows in memory.
+- **No allocation in the frame.** `ygfx_capture_start()` allocates the
+  state and makes the buffers; the frame work moves pointers and calls GL.
+  The writer opens files on its own thread.
+- **Threads.** With `YRT_NO_THREADS` there is no pump, so capture is
+  always manual there, as ysp/device.h's manual mode is its threadless
+  form. A wasm build without `-pthread` has the pump's code but cannot
+  start it: start then fails and says so, and `desc.manual` works.
+- **The backend.** Version 4 adds `capture_make`, `_read`, `_poll`,
+  `_unmap` and `_free`. `ygfx_open()` takes version 3 tables too and
+  reads no capture call from them. The null backend keeps its buffers in
+  memory (black frames), so capture runs on SIM, in CI and in the tests.
+
+### The file format
+
+One writer, `ygfx_image_write()`, for capture and for the examples'
+screenshots (gfx_gallery, gfx_text, gfx_rdk, gfx_layout had four copies
+of one PPM writer). No compression: include/ysp takes no new dependency,
+and a deflate of its own was not built or timed. Two formats were built
+and timed, 10 writes of 1920 x 1200
+from memory into C:\tmp on the laptop's NVMe SSD (Samsung
+MZVL21T0HDLU), three guard sessions on AC:
+
+| Format | ms per frame | MB/s of pixels |
+|---|---|---|
+| PPM (P6) | 7.95 to 11.43 | 605 to 870 |
+| PNG, stored blocks | 14.71 to 18.47 | 374 to 470 |
+
+The PNG's extra time is its two checksums (CRC-32 by slicing by 4, and
+Adler-32) over 6.9 MB. PPM keeps up with every frame at 60 Hz on one
+writer; PNG holds every second frame. PPM is the default. PNG is kept,
+although slower, because a viewer, a browser and Python read it without
+help and its tEXt chunk carries the record; the user may delete it. The
+comment is the frame index, the predicted onset, the rectangle and the
+record (onset, planned, target, residual, dropped, flags, path, tier).
+
+### Measured: the cost of a captured frame
+
+examples/gfx/bench.c, `--only "v0.12 capture"`, headless at 1920 x 1200
+on the Iris Xe (ANGLE 2.1.23876), the guard held, AC, 2026-10-10. Paced
+as a 60 Hz loop: after each frame `glFlush` (the present's) and
+`glFinish`, so the GPU is idle when the next frame starts. cpu: begin to
+end; gpu: end's return to glFinish's. Medians of 25 rounds of 12 frames,
+the rows interleaved; the "- off" columns are the median of the
+per-round differences:
+
+| Workload | gpu ms | ms - off | cpu us | us - off | cpu p99 us |
+|---|---|---|---|---|---|
+| empty frame | 1.133 | 0 | 78 | 0 | 169 |
+| empty frame, capture every frame | 1.883 | 0.773 | 2375 | 2245 | 5157 |
+| 100 gabors | 3.510 | 0 | 388 | 0 | 4077 |
+| 100 gabors, capture every frame | 4.074 | 0.564 | 2530 | 2123 | 5170 |
+| 100 gabors, every 4th frame | 3.498 | 0.129 | 972 | 611 | 4708 |
+| 100 gabors, every frame, the map in `ygfx_capture_pump()` | 4.195 | 0.736 | 207 | -126 | 370 |
+
+`ygfx_capture_pump()` after each frame of the last row (the previous
+copy's fence, map and hand-off): 2593 us mean, 5060 us p99. So the copy
+costs the GPU 0.56 to 0.77 ms and the frame thread nothing measurable,
+and the map costs the frame thread about 2.6 ms. Every 4th frame costs
+0.6 ms a frame on average, the map's 2.6 ms in one frame of four.
+
+Two runs before this one timed frames back to back (GPU bound, no flush
+per frame). There ANGLE blocked in `ygfx_end()` on a full queue, and the
+fence polls, which flush, fed the GPU earlier, so frames with capture
+measured cheaper than frames without (-571 us). That method was dropped.
+
+### Measured: no flip moved
+
+examples/gfx/capture.c: 100 drifting gabors and a moving bar on gray,
+ysp/screen.h's AUTO path (COMPOSITION), the guard held, AC, 2026-10-10,
+one session, the rows in this order. Fullscreen is the panel's 1920 x 1200;
+the window is 800 x 600. Files went to the NVMe SSD and were deleted
+between rows. "Dropped" counts records with `dropped` > 0; "long" counts
+onset intervals over 1.5 periods; end() is `ygfx_end()`'s CPU time.
+
+| Path | Capture | Frames | Late targets | Dropped | Early | Interval max ms | Long | end() p50 / p99 / max us | Captured | Capture drops |
+|---|---|---|---|---|---|---|---|---|---|---|
+| fullscreen | off | 1800 | 0 | 0 | 0 | 16.672 | 0 | 129 / 305 / 642 | | |
+| fullscreen | every frame, no files | 1800 | 0 | 1 | 0 | 16.675 | 0 | 1277 / 3918 / 5609 | 1802 | 0 |
+| fullscreen | every 4th, no files | 1800 | 0 | 0 | 0 | 16.673 | 0 | 223 / 2773 / 4414 | 451 | 0 |
+| fullscreen | off | 1800 | 0 | 0 | 0 | 16.675 | 0 | 139 / 452 / 842 | | |
+| fullscreen | every frame, PPM | 600 | 0 | 0 | 0 | 16.675 | 0 | 1583 / 4189 / 5431 | 602 | 0 |
+| fullscreen | every 4th, PPM | 1800 | 0 | 1 | 0 | 16.688 | 0 | 227 / 2675 / 4126 | 451 | 0 |
+| fullscreen | every 2nd, PNG | 600 | 0 | 0 | 0 | 16.672 | 0 | 982 / 2640 / 3842 | 301 | 0 |
+| fullscreen | 1 in 60 marked, manual, 32 slots | 1800 | 0 | 1 | 0 | 16.674 | 0 | 148 / 494 / 1082 | 30 | 0 |
+| window | off | 1800 | 0 | 1 | 0 | 33.331 | 1 | 203 / 518 / 1106 | | |
+| window | every frame, no files | 1800 | 0 | 0 | 0 | 16.670 | 0 | 598 / 1482 / 2782 | 1802 | 0 |
+| window | every 4th, no files | 1800 | 0 | 0 | 0 | 16.669 | 0 | 240 / 1000 / 1631 | 451 | 0 |
+| window | off | 1800 | 0 | 2 | 0 | 33.331 | 2 | 207 / 557 / 8906 | | |
+| window | every frame, PPM | 600 | 0 | 0 | 0 | 16.669 | 0 | 635 / 1356 / 1853 | 602 | 0 |
+| window | every 4th, PPM | 1800 | 0 | 0 | 0 | 16.672 | 0 | 243 / 1119 / 1962 | 451 | 0 |
+| window | every 2nd, PNG | 600 | 0 | 0 | 0 | 16.669 | 0 | 425 / 1435 / 1823 | 301 | 0 |
+| window | 1 in 60 marked, manual, 32 slots | 1800 | 0 | 1 | 0 | 16.669 | 0 | 203 / 538 / 1230 | 30 | 0 |
+
+No row with capture had a late target, an early flip or an onset interval
+over 16.69 ms. The four records with `dropped` set in capture rows have no
+long interval next to them: the drop is not a gap between consecutive
+frames (not looked into further). The control rows in the window had the
+only real gaps (33.3 ms), so nothing here ties a gap to capture. Every
+chosen frame was written; the writer kept up with every frame at 1920 x
+1200 in PPM (at most 5 of 6 buffers busy) and with every 2nd in PNG.
+
+So every frame at 1920 x 1200 holds the 16.7 ms budget on this machine
+with this load: `ygfx_end()` took 3.9 to 4.2 ms at p99 and 5.6 ms at most
+with capture, against 0.3 to 0.5 ms without. A frame loop with more than
+about 10 ms of its own CPU work leaves no room for the map: then capture
+every 4th frame (the map in one frame of four), a smaller rectangle
+(`desc.x`, `y`, `w`, `h`), or `desc.manual` (no map in a trial; size
+`desc.slots` for the trial's frames). The knobs are `desc.every`, the
+rectangle and `desc.manual`.
+
+One session only; the AMD Linux rig and other GPUs are not measured.
+
+### Tests
+
+`test_v12_capture_cpu` (the null backend on SIM, and the writer): PPM
+and PNG of a 1500 x 20 image, top first and bottom first (a row wider than
+the 1024-pixel conversion chunk, a PNG of two stored blocks), read back by
+the test's own readers with a bitwise CRC-32 and a bytewise Adler-32, the
+comment in each; refusals; manual mode with every 3rd frame, a mark and 4
+slots: chosen, read, dropped (2) and written counts, the drop records,
+oldest first, the pump's max, the flip record matched by index in each
+callback and file, the last frame written without its record at stop, a
+frame filled by hand written at once; the writer thread at every frame
+with copies done after 2 polls: written + dropped = chosen, order, records;
+a version 3 backend refused with `YGFX_ERR_NOT_IMPLEMENTED`. GL part
+`v0.12 capture`: 6 whole frames through the writer thread and a 45 x 17
+rectangle in manual mode, each equal to `ygfx_read_output()` of the same
+frame, bit for bit (which also shows the pack buffer is unbound). The
+compile check captures 3 frames on SIM (every 2nd and a mark). CI runs
+`gfx_capture --sim` with files, threaded and manual.
+
+### Mutations
+
+`cp-01` to `cp-14` in tests/mutate/gfx.toml, 14 of 14 caught (MSVC, the
+Iris Xe for the two GL ones). `cp-04` (a record attached without its
+index) survived the first run: SIM's records came before a newer copy
+waited, so no record could go astray. A frame with another frame's record
+in its `done` list now checks it.
+
+### Builds
+
+MSVC 19.44 (msvc-full: the test, the compile checks as C11 and C++17, the
+examples), MinGW-w64 gcc 16.1 (the compile check as C99, C11, C++17 and
+C++17 with `YRT_NO_THREADS`; the test with and without `YRT_NO_THREADS`).
+The test passed on ANGLE D3D11 hardware, WARP and SwiftShader. Not built
+here: Linux, emcc, the sanitizers (CI runs them).
+
+### Decisions
+
+- PNG is kept beside PPM although it measured slower (see "The file
+  format"); delete it if a viewer for PPM is acceptable.
+- examples/outline/font.c keeps its own PGM writer: it includes only
+  ysp/outline.h, and `ygfx_image_write()` would pull in ysp/gfx.h and SDL.
 
 ## v0.11.1: the open in two calls
 

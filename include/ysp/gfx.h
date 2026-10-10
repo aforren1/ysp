@@ -1,4 +1,4 @@
-/* ysp/gfx.h - v0.11.1 - public domain single-header stimulus graphics library
+/* ysp/gfx.h - v0.12.0 - public domain single-header stimulus graphics library
  *   (with MIT-licensed parts: see below)
  *
  *   Stimuli on GL ES 3.0, on top of ysp/screen.h: signed-distance shapes
@@ -37,6 +37,29 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.12.0 - CAPTURE: the output of chosen frames (every Nth, or marked
+ *          with ygfx_capture_mark()) copied in ygfx_end() into pixel
+ *          buffers with a fence, collected a frame or more later without a
+ *          wait, tagged with the frame index and its flip record, and
+ *          written off the frame thread (ysp/rt.h's pump at below normal
+ *          priority) as PPM or stored PNG files, or handed to a callback. A
+ *          full ring drops the frame and counts it (YGFX_EV_CAPTURE_DROP).
+ *          desc.manual, and YRT_NO_THREADS, leave the maps and the writes
+ *          to ygfx_capture_pump() between trials. ygfx_image_write(), the
+ *          image writer the examples now share. Backend version 4 (five
+ *          capture calls; open() still takes version 3, without capture).
+ *          YGFX_ERR_IO. Measured on the Iris Xe at 1920 x 1200 (docs/gfx.md,
+ *          "v0.12"): a captured frame costs 0.56 to 0.77 ms of GPU and the
+ *          frame thread 2.1 to 2.2 ms of CPU, almost all in ANGLE's map
+ *          (2.6 ms mean, 5.1 ms p99); without the map in the frame
+ *          (manual) the copy's call costs nothing measurable. A PPM file
+ *          takes the writer 8.0 to 11.4 ms, a stored PNG 14.7 to 18.5 ms.
+ *          In 600 to 1800-frame runs fullscreen (1920 x 1200) and in a
+ *          window, capture of every frame, every 4th, to PPM, to PNG and
+ *          manual moved no flip: no late target, no early flip, no onset
+ *          interval over 16.69 ms; ygfx_end() p99 3.9 to 4.2 ms with every
+ *          frame captured fullscreen, 0.3 to 0.5 ms without.
+ *          Fixed: ygfx_strerror() named YGFX_ERR_LOST "unknown error".
  *   v0.11.1 - ygfx_open_start() (OPEN START): the open in two calls, so
  *          the programs compile while ysp/screen.h v0.5.2's open()
  *          settles. Called from desc.on_context, it submits every built-in
@@ -594,9 +617,11 @@
  *   NOTHING READS A CLOCK
  *     What a frame shows is a function of the yscr_frame given to begin():
  *     f.onset, f.index, f.vblank. No call in the frame waits for the GPU
- *     (no glFinish, no glGet, no readback), so drawing cannot move a flip;
- *     a GPU that cannot keep up shows as SWAP time and drops in the flip
- *     record. The reads (ygfx_read_scene, _output) block, for tests.
+ *     (no glFinish, no glGet, no readback that waits), so drawing cannot
+ *     move a flip; a GPU that cannot keep up shows as SWAP time and drops in
+ *     the flip record. The reads (ygfx_read_scene, _output) block, for
+ *     tests. CAPTURE's copies are polled, never waited for; its map costs
+ *     CPU time in end() (2.6 ms at 1920 x 1200 here) unless desc.manual.
  *   COST
  *     draw() packs the stimulus into a 256-byte uniform block and queues
  *     it. end() uploads the frame's blocks in one call, then draws each run
@@ -1437,6 +1462,51 @@
  *            declared and refused in v0.1 (STATUS).
  *
  *   ---------------------------------------------------------------------
+ *   CAPTURE
+ *   ---------------------------------------------------------------------
+ *   Opt-in (v0.12): the output of chosen frames, to files or to a
+ *   callback, during a trial. ygfx_capture_start() at setup chooses the
+ *   frames: every Nth (desc.every, by frame index, frame 0 first), and each
+ *   frame that ygfx_capture_mark() marks between begin() and end(). It
+ *   makes desc.slots pixel buffers of the rectangle (w x h x 4 bytes each,
+ *   9.2 MB at 1920 x 1200) and starts the writer thread:
+ *       ygfx_capture_desc cd = { .every = 4, .path = "data/s01/t" };
+ *       ygfx_capture_start(&gfx, &cd);
+ *       ... the trial's frames ...
+ *       ygfx_capture_stop(&gfx, &stats);   // waits, writes the rest
+ *   A chosen frame: end() copies the rectangle of the output stage's codes
+ *   into a free buffer (glReadPixels into a pixel buffer object) and sets a
+ *   fence, before the present. The screen's patch and codes, which flip()
+ *   draws, are not in the copy. Nothing waits. A later end() (or
+ *   ygfx_capture_pump()) sees that the fence passed and maps the buffer;
+ *   begin() takes the frame's flip record from yscr_frame.done. Then the
+ *   writer writes <path><frame index, 8 digits>.ppm (or .png) with the
+ *   index, the predicted onset and the record in the file's comment, and
+ *   calls desc.on_frame. A frame waits up to 30 frames for its record; a
+ *   frame you fill yourself (done NULL) and a headless gfx do not wait;
+ *   stop() writes what is left without records (stats.no_record).
+ *   DROPS    a chosen frame with no free buffer is not copied: it counts in
+ *            stats.dropped and pushes a YGFX_EV_CAPTURE_DROP record. The
+ *            frame thread never waits for a buffer, the GPU or the disk. A
+ *            buffer is busy from its copy until the writer is done: about 3
+ *            frames plus the file's write.
+ *   COST     docs/gfx.md, "v0.12": the frame thread pays the copy's call and,
+ *            a frame later, the map (ANGLE copies the pixels there), and the
+ *            writer the file. The knobs are desc.every, the rectangle and
+ *            desc.format.
+ *   ROWS     top first, in the files and for on_frame (fr.stride < 0 when
+ *            the copy lies bottom first in memory). The bytes are
+ *            ygfx_read_output()'s for the same frame (tested bit for bit).
+ *   THREADS  the writer is ysp/rt.h's pump at below normal priority. With
+ *            YRT_NO_THREADS or desc.manual there is no writer:
+ *            ygfx_capture_pump() writes on the calling thread, outside a
+ *            frame (between trials). In a trial the buffers then fill and
+ *            later chosen frames drop: size desc.slots for the frames a
+ *            trial captures.
+ *   ygfx_image_write() is the file writer, for any RGBA8 rows: PPM (P6) or
+ *   PNG with stored (not compressed) blocks, 8-bit RGB, no allocation.
+ *
+ *   ---------------------------------------------------------------------
  *   CALIBRATION
  *   ---------------------------------------------------------------------
  *   The calibration is ysp/color.h's ycol_cal (the .yspcal file, the same
@@ -1505,9 +1575,10 @@
  *   ---------------------------------------------------------------------
  *   BACKENDS
  *   ---------------------------------------------------------------------
- *   ygfx_backend (version 3) is a table of 19 calls (pipelines from
+ *   ygfx_backend (version 4) is a table of 24 calls (pipelines from
  *   shader text, textures, buffers, passes, apply, draw, present, read,
- *   reset, pipeline_finish, pipeline_binary): the gfx backend of the rig's
+ *   reset, pipeline_finish, pipeline_binary, and five capture calls): the
+ *   gfx backend of the rig's
  *   extensions. Version 3 (v0.4) asks an out-of-tree backend for: the caps
  *   strings vendor, version and glsl and binary_format (0: no binaries);
  *   pipeline_src.binary (try it, compile vs and fs when the driver refuses
@@ -1518,7 +1589,10 @@
  *   display's transfer table); bindings.instances_off (the first record);
  *   and caps.features (YGFX_FEAT_IMPORT_*). A backend that copies the
  *   built-in table and changes some calls, as the tests do, needs none of
- *   this.
+ *   this. Version 4 (v0.12) adds capture_make, _read, _poll, _unmap and
+ *   _free (CAPTURE), each NULL when the backend has no reads that do not
+ *   wait; open() still takes a version 3 table, and capture then returns
+ *   YGFX_ERR_NOT_IMPLEMENTED.
  *   open() starts every built-in program with pipeline_src.deferred set,
  *   then calls pipeline_finish on each: a driver that compiles in parallel
  *   (ANGLE does) then overlaps them. caps.parallel_compile (v0.11.1) says
@@ -1558,6 +1632,9 @@
  *                        context's id, [1] the calibration's CRC, [2] the
  *                        lum record's CRC (0 = the standard luminance),
  *                        [3] cones, [4] the context's YCOL_CAN_* levels
+ *     YGFX_EV_CAPTURE_DROP  a chosen frame with no free capture buffer
+ *                        (v0.12): t_ns its predicted onset, aux the drops so
+ *                        far, u.i64[0] the frame index
  *
  *   ---------------------------------------------------------------------
  *   MEMORY AND THREADS
@@ -1582,6 +1659,11 @@
  *   KB) from a static table of the same size, built once per process with
  *   256 KB of static scratch; a run made with .rays compiles the rays
  *   program once.
+ *   v0.12: ygfx_capture_start() allocates its state (about 10 KB with the
+ *   writer's pump) and makes desc.slots pixel buffers on the GPU (w x h x
+ *   4 bytes each). The capture's frame work allocates nothing in this
+ *   header (what the driver does at a map is the driver's); the
+ *   writer opens files (the C runtime allocates a FILE) on its own thread.
  *   The handle is about 23 KB on 64-bit targets. A target pass takes no memory of its own;
  *   ygfx_target() makes its texture and framebuffer at setup. One thread
  *   calls everything, the thread that owns the screen's context. Textures,
@@ -1598,7 +1680,7 @@
  *   ANGLE's D3D11, WARP or SwiftShader on Windows, Mesa on Linux). Link
  *   libm on Linux. Define YGFX_API to change the linkage.
  *   Zones: ygfx.begin, ygfx.draw, ygfx.end, ygfx.output,
- *   ygfx.upload.
+ *   ygfx.capture, ygfx.upload.
  *
  *   LICENSE: public domain / MIT-0, with the MIT-licensed parts named at
  *   the top; all notices are at the end of the file.
@@ -1607,9 +1689,9 @@
 #define YSP_GFX_H_INCLUDED
 
 #define YGFX_VERSION_MAJOR 0
-#define YGFX_VERSION_MINOR 11
-#define YGFX_VERSION_PATCH 1
-#define YGFX_VERSION_STRING "0.11.1"
+#define YGFX_VERSION_MINOR 12
+#define YGFX_VERSION_PATCH 0
+#define YGFX_VERSION_STRING "0.12.0"
 
 #include "ysp/screen.h"
 #include "ysp/color.h"
@@ -1642,12 +1724,14 @@ extern "C" {
 #define YGFX_ERR_LOST            (-10) /* the GL context is new: every GL
                                           * object is gone; the handle is now
                                           * closed (ygfx_close, then open) */
+#define YGFX_ERR_IO              (-11) /* a file could not be written     */
 
 /* Ring record kinds under YRT_SRC_GFX. */
 #define YGFX_EV_OPEN    1u
 #define YGFX_EV_LUT     2u
 #define YGFX_EV_CLIPPED 3u
 #define YGFX_EV_COLOR   4u
+#define YGFX_EV_CAPTURE_DROP 5u   /* v0.12: a chosen frame with no free slot */
 
 /* ygfx_features() */
 #define YGFX_FEAT_PROGRAM_CACHE 0x01u  /* the renderer gives program binaries      */
@@ -2464,8 +2548,10 @@ typedef struct ygfx_param {
 
 /* --- backend (the gfx backend interface) ------------------------------------ */
 
-#define YGFX_BACKEND_VERSION 3   /* 3: v0.4, program binaries (caps strings,
-                                    * pipeline_src.binary, pipeline_binary) */
+#define YGFX_BACKEND_VERSION 4   /* 3: v0.4, program binaries (caps strings,
+                                    * pipeline_src.binary, pipeline_binary);
+                                    * 4: v0.12, the capture calls. open()
+                                    * takes 3 and 4 */
 
 typedef struct ygfx_backend_open {
     yscr_proc (*gl_proc)(void* ctx, const char* name);
@@ -2573,6 +2659,18 @@ typedef struct ygfx_backend {
      * into out when it fits in cap and returns its size (< 0: none); NULL =
      * the backend has no binaries */
     int  (*pipeline_binary)(void* c, uint32_t id, void* out, size_t cap, uint32_t* format);
+    /* version 4 (CAPTURE): reads of framebuffer 0 that do not wait. NULL =
+     * no capture. capture_make makes n buffers of bytes each; capture_read
+     * copies a rectangle (GL's rows) into buffer slot and returns at once;
+     * capture_poll returns 1 with *data the bytes when that copy is done
+     * (the buffer stays readable, from any thread, until capture_unmap), 0
+     * when it is not yet, < 0 on an error; wait_ns > 0 lets it wait that
+     * long. capture_free unmaps and frees them all. */
+    int  (*capture_make)(void* c, int n, size_t bytes);
+    int  (*capture_read)(void* c, int slot, int x, int y, int w, int h);
+    int  (*capture_poll)(void* c, int slot, int64_t wait_ns, const void** data);
+    void (*capture_unmap)(void* c, int slot);
+    void (*capture_free)(void* c);
 } ygfx_backend;
 
 /* --- the handle ------------------------------------------------------------ */
@@ -2733,6 +2831,7 @@ typedef struct ygfx_gfx {
     int32_t                start_mode;              /* what the start did, for describe */
     ygfx_desc            sdesc;                   /* the start's desc         */
     ygfx__prec           prec[YGFX__N_BUILTIN + 1], vprec[YGFX__N_VSPEC];
+    struct ygfx__cap*      cap;                     /* v0.12: CAPTURE, from start */
     char                   error[512];
     uint64_t               backend_mem[YGFX__BACKEND_WORDS];
 } ygfx_gfx;
@@ -2938,6 +3037,90 @@ YGFX_API int ygfx_set_lut(ygfx_gfx* g, const float* lut, int n);
 YGFX_API int ygfx_read_scene(ygfx_gfx* g, int x, int y, int w, int h, float* rgba);
 YGFX_API int ygfx_read_output(ygfx_gfx* g, int x, int y, int w, int h, uint8_t* rgba);
 
+/* v0.12, CAPTURE: the output of chosen frames, copied without a stall and
+ * written off the frame thread. */
+#define YGFX_IMAGE_PPM 1         /* binary PPM (P6), 8-bit RGB                   */
+#define YGFX_IMAGE_PNG 2         /* PNG, 8-bit RGB, stored (not compressed)      */
+
+/* One captured frame, as on_frame gets it on the writer thread. rgba is the
+ * top row of the rectangle; row r is at rgba + r * stride (stride < 0 when
+ * the rows lie bottom first in memory). Valid until on_frame returns. */
+typedef struct ygfx_capture_frame {
+    int64_t        index;          /* yscr_frame.index of the frame            */
+    int64_t        predicted;      /* yscr_frame.onset: the predicted onset    */
+    int32_t        has_record;     /* 0: no flip record came (see CAPTURE)     */
+    int32_t        x, y, w, h;     /* screen px from the top-left              */
+    int32_t        reserved_;
+    ptrdiff_t      stride;         /* bytes from one row to the one below      */
+    const uint8_t* rgba;
+    const char*    path;           /* the file written, or NULL                */
+    int32_t        file_rc;        /* YGFX_OK, or why the file failed          */
+    int32_t        reserved2_;
+    yscr_record    record;         /* the frame's flip record, when has_record */
+} ygfx_capture_frame;
+
+typedef void (*ygfx_capture_fn)(void* ctx, const ygfx_capture_frame* fr);
+
+/* Zero fields take defaults. */
+typedef struct ygfx_capture_desc {
+    int32_t         every;         /* frames whose index % every == 0; 0 = only
+                                    * the frames ygfx_capture_mark() marks     */
+    int32_t         x, y, w, h;    /* the rectangle, screen px from the top-left;
+                                    * w or h 0 = the whole output             */
+    int32_t         slots;         /* pixel buffers: frames being copied, waiting
+                                    * for their flip record or being written;
+                                    * 0 = 6, at most YGFX_CAPTURE_MAX_SLOTS   */
+    const char*     path;          /* files <path><index, 8 digits>.ppm (or .png);
+                                    * NULL = no files (on_frame only). Its folder
+                                    * is made when missing. UTF-8.            */
+    int32_t         format;        /* YGFX_IMAGE_PPM (0 = it) or _PNG         */
+    bool            manual;        /* no writer thread, and no map in a frame:
+                                    * ygfx_capture_pump() maps and writes.
+                                    * Always so with YRT_NO_THREADS          */
+    ygfx_capture_fn on_frame;      /* after the file, on the writer; may be NULL */
+    void*           ctx;
+} ygfx_capture_desc;
+
+typedef struct ygfx_capture_stats {
+    uint64_t chosen;               /* frames chosen (every Nth, marked)         */
+    uint64_t dropped;              /* chosen while every slot was busy: not read */
+    uint64_t read;                 /* copies started                            */
+    uint64_t written;              /* frames finished (file and on_frame)       */
+    uint64_t failed;               /* copies or files that failed               */
+    uint64_t no_record;            /* finished without a flip record            */
+    int32_t  busy, busy_max;       /* slots in use now, and the most at once    */
+    int32_t  slots;
+    int32_t  manual;               /* 1: no writer thread                       */
+} ygfx_capture_stats;
+
+#ifndef YGFX_CAPTURE_MAX_SLOTS
+#define YGFX_CAPTURE_MAX_SLOTS 32
+#endif
+
+/* Setup, outside a frame: makes the pixel buffers (w x h x 4 bytes each) and
+ * starts the writer. YGFX_ERR_NOT_IMPLEMENTED when the backend cannot read
+ * back without a stall; YGFX_ERR_ORDER when capture is on already. */
+YGFX_API int  ygfx_capture_start(ygfx_gfx* g, const ygfx_capture_desc* d);
+/* Between begin() and end(): capture this frame too. */
+YGFX_API int  ygfx_capture_mark(ygfx_gfx* g);
+/* Outside a frame, on the frame thread: collects finished copies and, in
+ * manual mode, writes up to max of them here (max <= 0: all that are ready).
+ * Returns the frames written by this call, or < 0. */
+YGFX_API int  ygfx_capture_pump(ygfx_gfx* g, int max);
+/* Waits for every copy, writes every frame, stops the writer and frees the
+ * buffers. Frames whose flip record has not come are written without one.
+ * *out (may be NULL) gets the final counts. Returns the frames written since
+ * start, or < 0. ygfx_close() calls it. */
+YGFX_API int  ygfx_capture_stop(ygfx_gfx* g, ygfx_capture_stats* out);
+YGFX_API void ygfx_capture_get_stats(const ygfx_gfx* g, ygfx_capture_stats* out);
+
+/* Writes 8-bit RGBA rows as an RGB image file (alpha is dropped): rgba is
+ * the top row, row r at rgba + r * stride. comment (may be NULL) goes in the
+ * file: a PPM comment line, a PNG tEXt chunk with the keyword "Comment".
+ * No allocation. YGFX_OK, YGFX_ERR_ARG, or YGFX_ERR_IO. */
+YGFX_API int ygfx_image_write(const char* path, int format, const uint8_t* rgba, int w, int h,
+                              ptrdiff_t stride, const char* comment);
+
 /* Screen pixels: from the top-left corner, x right, y down, pixel centers at
  * + 0.5; the space of ygfx_read_output()'s rows and of SDL's mouse events
  * at pixel density 1 (COORDINATES). The screen's center and size; a
@@ -3071,6 +3254,8 @@ YGFX_API const char* ygfx_strerror(int code) {
     case YGFX_ERR_REFUSED:         return "refused";
     case YGFX_ERR_FORMAT:          return "not the canonical form";
     case YGFX_ERR_RANGE:           return "out of range";
+    case YGFX_ERR_LOST:            return "the GL context is new";
+    case YGFX_ERR_IO:              return "a file could not be written";
     default:                         return code > 0 ? "ok" : "unknown error";
     }
 }
@@ -3272,6 +3457,20 @@ typedef unsigned (YGFX__APIENTRY *ygfx__egl_rmimg_fn)(void*, void*);
 typedef void* (YGFX__APIENTRY *ygfx__egl_dpy_fn)(void);
 typedef const char* (YGFX__APIENTRY *ygfx__egl_qs_fn)(void*, int32_t);
 typedef void (YGFX__APIENTRY *ygfx__gl_imgtgt_fn)(ygfx__GLenum, void*);
+/* CAPTURE: fences and mapped pack buffers, ES 3.0 but not WebGL 2, also
+ * optional. */
+typedef void* (YGFX__APIENTRY *ygfx__gl_fence_fn)(ygfx__GLenum, unsigned int);
+typedef ygfx__GLenum (YGFX__APIENTRY *ygfx__gl_cwait_fn)(void*, unsigned int, uint64_t);
+typedef void (YGFX__APIENTRY *ygfx__gl_dsync_fn)(void*);
+typedef void* (YGFX__APIENTRY *ygfx__gl_map_fn)(ygfx__GLenum, ygfx__GLintptr, ygfx__GLsizeiptr, unsigned int);
+typedef ygfx__GLboolean (YGFX__APIENTRY *ygfx__gl_unmap_fn)(ygfx__GLenum);
+#define YGFX__GL_PIXEL_PACK_BUFFER    0x88EB
+#define YGFX__GL_STREAM_READ          0x88E1
+#define YGFX__GL_SYNC_GPU_COMMANDS_COMPLETE 0x9117
+#define YGFX__GL_TIMEOUT_EXPIRED      0x911B
+#define YGFX__GL_WAIT_FAILED          0x911D
+#define YGFX__GL_SYNC_FLUSH_COMMANDS_BIT 0x00000001u
+#define YGFX__GL_MAP_READ_BIT         0x0001u
 
 typedef struct ygfx__gl {
     ygfx__glf    f;
@@ -3282,6 +3481,17 @@ typedef struct ygfx__gl {
     ygfx__egl_rmimg_fn  DestroyImage;
     ygfx__gl_imgtgt_fn  ImageTarget;
     void*                 dpy;     /* the EGL display of the context            */
+    ygfx__gl_fence_fn   FenceSync;
+    ygfx__gl_cwait_fn   ClientWaitSync;
+    ygfx__gl_dsync_fn   DeleteSync;
+    ygfx__gl_map_fn     MapBufferRange;
+    ygfx__gl_unmap_fn   UnmapBuffer;
+    int32_t        cap_n;          /* CAPTURE's pack buffers                    */
+    size_t         cap_bytes;
+    ygfx__GLuint   cap_buf[YGFX_CAPTURE_MAX_SLOTS];
+    void*          cap_sync[YGFX_CAPTURE_MAX_SLOTS];
+    const void*    cap_map[YGFX_CAPTURE_MAX_SLOTS];
+    size_t         cap_len[YGFX_CAPTURE_MAX_SLOTS];   /* the bytes read */
     int32_t        w, h;
     ygfx__gltex  tex[YGFX__GL_TEX];
     ygfx__glbuf  buf[YGFX__GL_BUF];
@@ -3359,6 +3569,11 @@ static int ygfx__gl_open(void* c, const ygfx_backend_open* in, ygfx_backend_caps
             caps->binary_format = (uint32_t)fmts[0];
         }
     }
+    gl->FenceSync = (ygfx__gl_fence_fn)in->gl_proc(in->gl_ctx, "glFenceSync");
+    gl->ClientWaitSync = (ygfx__gl_cwait_fn)in->gl_proc(in->gl_ctx, "glClientWaitSync");
+    gl->DeleteSync = (ygfx__gl_dsync_fn)in->gl_proc(in->gl_ctx, "glDeleteSync");
+    gl->MapBufferRange = (ygfx__gl_map_fn)in->gl_proc(in->gl_ctx, "glMapBufferRange");
+    gl->UnmapBuffer = (ygfx__gl_unmap_fn)in->gl_proc(in->gl_ctx, "glUnmapBuffer");
     caps->features = YGFX_FEAT_IMPORT_GL;
 #if defined(_WIN32)
     {
@@ -3382,10 +3597,13 @@ static int ygfx__gl_open(void* c, const ygfx_backend_open* in, ygfx_backend_caps
     return YGFX_OK;
 }
 
+static void ygfx__gl_capture_free(void* c);
+
 static void ygfx__gl_close(void* c) {
     ygfx__gl* gl = (ygfx__gl*)c;
     int i;
     if (!gl->f.DeleteTextures) return;
+    ygfx__gl_capture_free(gl);
     for (i = 0; i < YGFX__GL_TEX; i++) {
         if (gl->tex[i].fbo) gl->f.DeleteFramebuffers(1, &gl->tex[i].fbo);
         if (gl->tex[i].tex && !gl->tex[i].borrowed) gl->f.DeleteTextures(1, &gl->tex[i].tex);
@@ -3819,6 +4037,89 @@ static int ygfx__gl_read(void* c, uint32_t target, int x, int y, int w, int h, i
     return gl->f.GetError() == YGFX__GL_NO_ERROR ? YGFX_OK : YGFX_ERR_GL;
 }
 
+/* CAPTURE. glReadPixels into a bound pack buffer returns before the copy
+ * is done; the fence says when it is. The buffer stays mapped while the
+ * writer reads it, so the frame thread copies nothing itself. */
+static int ygfx__gl_capture_make(void* c, int n, size_t bytes) {
+    ygfx__gl* gl = (ygfx__gl*)c;
+    int i;
+    if (!gl->FenceSync || !gl->ClientWaitSync || !gl->DeleteSync || !gl->MapBufferRange || !gl->UnmapBuffer)
+        return YGFX_ERR_NOT_IMPLEMENTED;
+    if (n < 1 || n > YGFX_CAPTURE_MAX_SLOTS || gl->cap_n) return YGFX_ERR_ARG;
+    while (gl->f.GetError() != YGFX__GL_NO_ERROR) {}
+    gl->f.GenBuffers(n, gl->cap_buf);
+    for (i = 0; i < n; i++) {
+        gl->f.BindBuffer(YGFX__GL_PIXEL_PACK_BUFFER, gl->cap_buf[i]);
+        gl->f.BufferData(YGFX__GL_PIXEL_PACK_BUFFER, (ygfx__GLsizeiptr)bytes, NULL, YGFX__GL_STREAM_READ);
+    }
+    gl->f.BindBuffer(YGFX__GL_PIXEL_PACK_BUFFER, 0);
+    gl->cap_n = n;
+    gl->cap_bytes = bytes;
+    if (gl->f.GetError() != YGFX__GL_NO_ERROR) { ygfx__gl_capture_free(gl); return YGFX_ERR_GL; }
+    return YGFX_OK;
+}
+
+static int ygfx__gl_capture_read(void* c, int slot, int x, int y, int w, int h) {
+    ygfx__gl* gl = (ygfx__gl*)c;
+    size_t len = (size_t)w * (size_t)h * 4;
+    if (slot < 0 || slot >= gl->cap_n || gl->cap_sync[slot] || gl->cap_map[slot] || len > gl->cap_bytes) return YGFX_ERR_ARG;
+    if (gl->c_fbo != 0) { gl->f.BindFramebuffer(YGFX__GL_FRAMEBUFFER, 0); gl->c_fbo = 0; }
+    gl->f.BindBuffer(YGFX__GL_PIXEL_PACK_BUFFER, gl->cap_buf[slot]);
+    gl->f.PixelStorei(YGFX__GL_PACK_ALIGNMENT, 4);
+    gl->f.ReadPixels(x, y, w, h, YGFX__GL_RGBA, YGFX__GL_UNSIGNED_BYTE, NULL);
+    /* unbound at once: a later ygfx_read_output() reads into client memory */
+    gl->f.BindBuffer(YGFX__GL_PIXEL_PACK_BUFFER, 0);
+    gl->cap_sync[slot] = gl->FenceSync(YGFX__GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    gl->cap_len[slot] = len;
+    return gl->cap_sync[slot] ? YGFX_OK : YGFX_ERR_GL;
+}
+
+static int ygfx__gl_capture_poll(void* c, int slot, int64_t wait_ns, const void** data) {
+    ygfx__gl* gl = (ygfx__gl*)c;
+    ygfx__GLenum r;
+    const void* p;
+    if (slot < 0 || slot >= gl->cap_n) return YGFX_ERR_ARG;
+    if (gl->cap_map[slot]) { *data = gl->cap_map[slot]; return 1; }
+    if (!gl->cap_sync[slot]) return YGFX_ERR_ARG;
+    /* a wait flushes first, or the fence may never reach the GPU; a poll
+     * does not, so a frame pays no flush (the present flushes) */
+    r = gl->ClientWaitSync(gl->cap_sync[slot], wait_ns > 0 ? YGFX__GL_SYNC_FLUSH_COMMANDS_BIT : 0u,
+                           wait_ns > 0 ? (uint64_t)wait_ns : 0u);
+    if (r == YGFX__GL_TIMEOUT_EXPIRED) return 0;
+    gl->DeleteSync(gl->cap_sync[slot]);
+    gl->cap_sync[slot] = NULL;
+    if (r == YGFX__GL_WAIT_FAILED) return YGFX_ERR_GL;
+    gl->f.BindBuffer(YGFX__GL_PIXEL_PACK_BUFFER, gl->cap_buf[slot]);
+    p = gl->MapBufferRange(YGFX__GL_PIXEL_PACK_BUFFER, 0, (ygfx__GLsizeiptr)gl->cap_len[slot], YGFX__GL_MAP_READ_BIT);
+    gl->f.BindBuffer(YGFX__GL_PIXEL_PACK_BUFFER, 0);
+    if (!p) return YGFX_ERR_GL;
+    gl->cap_map[slot] = p;
+    *data = p;
+    return 1;
+}
+
+static void ygfx__gl_capture_unmap(void* c, int slot) {
+    ygfx__gl* gl = (ygfx__gl*)c;
+    if (slot < 0 || slot >= gl->cap_n || !gl->cap_map[slot]) return;
+    gl->f.BindBuffer(YGFX__GL_PIXEL_PACK_BUFFER, gl->cap_buf[slot]);
+    gl->UnmapBuffer(YGFX__GL_PIXEL_PACK_BUFFER);
+    gl->f.BindBuffer(YGFX__GL_PIXEL_PACK_BUFFER, 0);
+    gl->cap_map[slot] = NULL;
+}
+
+static void ygfx__gl_capture_free(void* c) {
+    ygfx__gl* gl = (ygfx__gl*)c;
+    int i;
+    for (i = 0; i < gl->cap_n; i++) {
+        ygfx__gl_capture_unmap(gl, i);
+        if (gl->cap_sync[i]) { gl->DeleteSync(gl->cap_sync[i]); gl->cap_sync[i] = NULL; }
+    }
+    if (gl->cap_n) gl->f.DeleteBuffers(gl->cap_n, gl->cap_buf);
+    memset(gl->cap_buf, 0, sizeof gl->cap_buf);
+    gl->cap_n = 0;
+    gl->cap_bytes = 0;
+}
+
 static const ygfx_backend ygfx__gl_backend = {
     YGFX_BACKEND_VERSION, "gles3",
     ygfx__gl_open, ygfx__gl_close, ygfx__gl_pipeline_make, ygfx__gl_pipeline_free,
@@ -3826,13 +4127,29 @@ static const ygfx_backend ygfx__gl_backend = {
     ygfx__gl_buffer_make, ygfx__gl_buffer_update, ygfx__gl_buffer_free,
     ygfx__gl_pass_begin, ygfx__gl_apply, ygfx__gl_draw, ygfx__gl_pass_end,
     ygfx__gl_present, ygfx__gl_read, ygfx__gl_reset, ygfx__gl_pipeline_finish,
-    ygfx__gl_pipeline_binary
+    ygfx__gl_pipeline_binary,
+    ygfx__gl_capture_make, ygfx__gl_capture_read, ygfx__gl_capture_poll,
+    ygfx__gl_capture_unmap, ygfx__gl_capture_free
 };
 
 /* --- null backend: a screen without GL (SIM), and the interface's second
  *     implementation ---------------------------------------------------------- */
 
-typedef struct ygfx__null { uint32_t next; } ygfx__null;
+typedef struct ygfx__null {
+    uint32_t       next;
+    /* CAPTURE: buffers in memory, so the core's capture runs on SIM */
+    int32_t        cap_n;
+    size_t         cap_bytes;
+    unsigned char* cap_mem;
+    int32_t        cap_wait[YGFX_CAPTURE_MAX_SLOTS];   /* polls left; -1 = no copy */
+    int32_t        cap_mapped[YGFX_CAPTURE_MAX_SLOTS];
+    uint32_t       cap_reads;
+} ygfx__null;
+
+/* Test seams: polls before a copy is done, and a fill (the read's count in
+ * every byte) in place of black. */
+static int ygfx__test_cap_delay = 0;
+static int ygfx__test_cap_fill = 0;
 
 static int ygfx__null_open(void* c, const ygfx_backend_open* in, ygfx_backend_caps* caps, char* err, size_t cap) {
     (void)in; (void)err; (void)cap;
@@ -3871,13 +4188,63 @@ static int ygfx__null_read(void* c, uint32_t t, int x, int y, int w, int h, int 
     (void)c; (void)t; (void)x; (void)y; (void)w; (void)h; (void)f; (void)out; return YGFX_ERR_NOT_IMPLEMENTED;
 }
 
+/* Nothing is drawn, so a copy is black (or the test's fill). */
+static void ygfx__null_capture_free(void* c) {
+    ygfx__null* n = (ygfx__null*)c;
+    free(n->cap_mem);
+    n->cap_mem = NULL;
+    n->cap_n = 0;
+}
+static int ygfx__null_capture_make(void* c, int k, size_t bytes) {
+    ygfx__null* n = (ygfx__null*)c;
+    int i;
+    if (k < 1 || k > YGFX_CAPTURE_MAX_SLOTS || n->cap_n) return YGFX_ERR_ARG;
+    n->cap_mem = (unsigned char*)calloc((size_t)k, bytes);
+    if (!n->cap_mem) return YGFX_ERR_FULL;
+    n->cap_n = k;
+    n->cap_bytes = bytes;
+    for (i = 0; i < k; i++) { n->cap_wait[i] = -1; n->cap_mapped[i] = 0; }
+    return YGFX_OK;
+}
+static int ygfx__null_capture_read(void* c, int slot, int x, int y, int w, int h) {
+    ygfx__null* n = (ygfx__null*)c;
+    size_t len = (size_t)w * (size_t)h * 4;
+    (void)x; (void)y;
+    if (slot < 0 || slot >= n->cap_n || n->cap_wait[slot] >= 0 || n->cap_mapped[slot] || len > n->cap_bytes)
+        return YGFX_ERR_ARG;
+    n->cap_reads++;
+    /* calloc's zeros are the black; a memset per copy cost the frame thread
+     * 0.1 to 0.5 ms at 800 x 600 on SIM */
+    if (ygfx__test_cap_fill) memset(n->cap_mem + (size_t)slot * n->cap_bytes, (int)(n->cap_reads & 0xFFu), len);
+    n->cap_wait[slot] = ygfx__test_cap_delay;
+    return YGFX_OK;
+}
+static int ygfx__null_capture_poll(void* c, int slot, int64_t wait_ns, const void** data) {
+    ygfx__null* n = (ygfx__null*)c;
+    if (slot < 0 || slot >= n->cap_n) return YGFX_ERR_ARG;
+    if (!n->cap_mapped[slot]) {
+        if (n->cap_wait[slot] < 0) return YGFX_ERR_ARG;
+        if (n->cap_wait[slot] > 0 && wait_ns <= 0) { n->cap_wait[slot]--; return 0; }
+        n->cap_wait[slot] = -1;
+        n->cap_mapped[slot] = 1;
+    }
+    *data = n->cap_mem + (size_t)slot * n->cap_bytes;
+    return 1;
+}
+static void ygfx__null_capture_unmap(void* c, int slot) {
+    ygfx__null* n = (ygfx__null*)c;
+    if (slot >= 0 && slot < n->cap_n) n->cap_mapped[slot] = 0;
+}
+
 static const ygfx_backend ygfx__null_backend = {
     YGFX_BACKEND_VERSION, "null",
     ygfx__null_open, ygfx__null_close, ygfx__null_pipeline_make, ygfx__null_free,
     ygfx__null_texture_make, ygfx__null_texture_update, ygfx__null_free,
     ygfx__null_buffer_make, ygfx__null_buffer_update, ygfx__null_free,
     ygfx__null_pass_begin, ygfx__null_apply, ygfx__null_draw, ygfx__null_void,
-    ygfx__null_void, ygfx__null_read, ygfx__null_void, NULL, NULL
+    ygfx__null_void, ygfx__null_read, ygfx__null_void, NULL, NULL,
+    ygfx__null_capture_make, ygfx__null_capture_read, ygfx__null_capture_poll,
+    ygfx__null_capture_unmap, ygfx__null_capture_free
 };
 
 typedef char ygfx__gl_fits[sizeof(ygfx__gl) <= sizeof(((ygfx_gfx*)0)->backend_mem) ? 1 : -1];
@@ -5751,8 +6118,9 @@ static bool ygfx__open_a(ygfx_gfx* g, const ygfx_desc* d) {
     if (d->backend) { g->be = d->backend; g->bctx = d->backend_ctx; }
     else if (in.gl_proc) { g->be = &ygfx__gl_backend; g->bctx = g->backend_mem; }
     else { g->be = &ygfx__null_backend; g->bctx = g->backend_mem; }
-    if (g->be->version != YGFX_BACKEND_VERSION) {
-        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: backend version %u, want %u", g->be->version, YGFX_BACKEND_VERSION);
+    /* a version 3 table ends before the capture calls: CAPTURE checks */
+    if (g->be->version != YGFX_BACKEND_VERSION && g->be->version != 3) {
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: backend version %u, want 3 or %u", g->be->version, YGFX_BACKEND_VERSION);
         return false;
     }
     rc = g->be->open(g->bctx, &in, &g->caps, g->error, sizeof g->error);
@@ -6002,6 +6370,10 @@ YGFX_API bool ygfx_open_start(ygfx_gfx* g, const ygfx_desc* d) {
     return true;
 }
 
+static void ygfx__cap_stop(ygfx_gfx* g, int gl_ok, ygfx_capture_stats* out);
+static void ygfx__cap_records(struct ygfx__cap* c, const yscr_frame* f);
+static void ygfx__cap_frame(ygfx_gfx* g);
+
 YGFX_API void ygfx_close(ygfx_gfx* g) {
     if (!g) return;
     if ((g->open || g->started) && g->be) {
@@ -6011,11 +6383,13 @@ YGFX_API void ygfx_close(ygfx_gfx* g) {
          * the context and every object with it */
         gone = g->screen && (!yscr_is_open(g->screen) || yscr_gl_generation(g->screen) != g->generation);
 #endif
+        if (g->cap) ygfx__cap_stop(g, !gone && g->open, NULL);
         if (!gone) {
             if (g->screen) yscr_bind(g->screen);
             g->be->close(g->bctx);
         }
     }
+    if (g->cap) ygfx__cap_stop(g, 0, NULL);   /* a lost context closed the handle */
     free(g->staging);
     free(g->cmds);
     free(g->staging2);
@@ -6522,6 +6896,7 @@ YGFX_API int ygfx_begin(ygfx_gfx* g, const yscr_frame* f) {
     memset(&g->segs[0], 0, sizeof g->segs[0]);
     g->segs[0].w = g->w; g->segs[0].h = g->h;
     ygfx__frame_block(g, 0, g->w, g->h, 0);
+    if (g->cap) ygfx__cap_records(g->cap, f);
     (void)fb; (void)fu; (void)fi;
     YRT_ZONE_END(z);
     return YGFX_OK;
@@ -7864,9 +8239,14 @@ static int ygfx__end(ygfx_gfx* g, int setup) {
         g->be->apply(g->bctx, &bd);
         g->be->draw(g->bctx, 3, 1);
         g->be->pass_end(g->bctx);
-        g->be->present(g->bctx);
         YRT_ZONE_END(zo);
     }
+    if (g->cap) {   /* before the present: the screen's patch and codes are not in it */
+        YRT_ZONE(zc, "ygfx.capture");
+        ygfx__cap_frame(g);
+        YRT_ZONE_END(zc);
+    }
+    g->be->present(g->bctx);
     g->frames++;
     if (g->clipped) {
         g->clipped_total += g->clipped;
@@ -8436,6 +8816,575 @@ YGFX_API int ygfx_read_target(ygfx_gfx* g, ygfx_tex t, int x, int y, int w, int 
     }
     g->be->reset(g->bctx);
     return rc;
+}
+
+/* --- image files (CAPTURE) ---------------------------------------------------- */
+
+/* PNG's CRC-32, four bytes a step (slicing by 4): the tables are made per
+ * file on the stack, about 10 us, so nothing is shared between threads. */
+static void ygfx__crc_tables(uint32_t t[4][256]) {
+    uint32_t i, c;
+    int k;
+    for (i = 0; i < 256; i++) {
+        c = i;
+        for (k = 0; k < 8; k++) c = (c & 1u) ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+        t[0][i] = c;
+    }
+    for (i = 0; i < 256; i++) {
+        c = t[0][i];
+        for (k = 1; k < 4; k++) { c = t[0][c & 0xFFu] ^ (c >> 8); t[k][i] = c; }
+    }
+}
+
+static uint32_t ygfx__crc_run(const uint32_t t[4][256], uint32_t c, const unsigned char* p, size_t n) {
+    while (n >= 4) {
+        c ^= (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+        c = t[3][c & 0xFFu] ^ t[2][(c >> 8) & 0xFFu] ^ t[1][(c >> 16) & 0xFFu] ^ t[0][c >> 24];
+        p += 4;
+        n -= 4;
+    }
+    while (n--) c = t[0][(c ^ *p++) & 0xFFu] ^ (c >> 8);
+    return c;
+}
+
+typedef struct ygfx__isink {
+    FILE*    f;
+    int      png, ok;
+    uint32_t crc, a1, a2;          /* the chunk's CRC; zlib's Adler-32 sums     */
+    size_t   block_left, raw_left; /* PNG: bytes left in the stored block, and
+                                    * in the image                              */
+    uint32_t t[4][256];
+} ygfx__isink;
+
+static void ygfx__img_put(ygfx__isink* s, const void* p, size_t n) {
+    if (s->ok && fwrite(p, 1, n, s->f) != n) s->ok = 0;
+}
+
+static void ygfx__img_out(ygfx__isink* s, const void* p, size_t n) {
+    if (s->png) s->crc = ygfx__crc_run((const uint32_t(*)[256])s->t, s->crc, (const unsigned char*)p, n);
+    ygfx__img_put(s, p, n);
+}
+
+static void ygfx__img_be32(unsigned char* b, uint32_t v) {
+    b[0] = (unsigned char)(v >> 24); b[1] = (unsigned char)(v >> 16);
+    b[2] = (unsigned char)(v >> 8);  b[3] = (unsigned char)v;
+}
+
+/* A chunk's length goes outside its CRC; its type and data inside. */
+static void ygfx__img_chunk(ygfx__isink* s, uint32_t len, const char* type) {
+    unsigned char b[4];
+    ygfx__img_be32(b, len);
+    ygfx__img_put(s, b, 4);
+    s->crc = 0xFFFFFFFFu;
+    ygfx__img_out(s, type, 4);
+}
+
+static void ygfx__img_chunk_end(ygfx__isink* s) {
+    unsigned char b[4];
+    ygfx__img_be32(b, s->crc ^ 0xFFFFFFFFu);
+    ygfx__img_put(s, b, 4);
+}
+
+/* The image's bytes. A PNG gets them as zlib's stored blocks (at most 65535
+ * bytes each, a 5-byte head) under one Adler-32: no compression, so the
+ * writer's time is the disk's and two checksums. */
+static void ygfx__img_raw(ygfx__isink* s, const unsigned char* p, size_t n) {
+    uint32_t a = s->a1, b = s->a2;
+    size_t m = n;
+    const unsigned char* q = p;
+    if (!s->png) { ygfx__img_put(s, p, n); return; }
+    while (m) {   /* 5552 bytes is the most the sums take before a modulo */
+        size_t k = m < 5552 ? m : 5552;
+        m -= k;
+        while (k--) { a += *q++; b += a; }
+        a %= 65521u;
+        b %= 65521u;
+    }
+    s->a1 = a; s->a2 = b;
+    while (n) {
+        size_t k;
+        if (!s->block_left) {
+            size_t len = s->raw_left < 65535 ? s->raw_left : 65535;
+            unsigned char hd[5];
+            hd[0] = (unsigned char)(len == s->raw_left);   /* BFINAL, BTYPE 00 */
+            hd[1] = (unsigned char)(len & 0xFFu);
+            hd[2] = (unsigned char)(len >> 8);
+            hd[3] = (unsigned char)(~len & 0xFFu);
+            hd[4] = (unsigned char)((~len >> 8) & 0xFFu);
+            ygfx__img_out(s, hd, 5);
+            s->block_left = len;
+        }
+        k = n < s->block_left ? n : s->block_left;
+        ygfx__img_out(s, p, k);
+        p += k;
+        n -= k;
+        s->block_left -= k;
+        s->raw_left -= k;
+    }
+}
+
+YGFX_API int ygfx_image_write(const char* path, int format, const uint8_t* rgba, int w, int h,
+                              ptrdiff_t stride, const char* comment) {
+    static const unsigned char sig[8] = { 137, 80, 78, 71, 13, 10, 26, 10 };
+    char iobuf[32768];             /* stdio's buffer: no allocation in fopen's */
+    unsigned char row[3 * 1024];
+    ygfx__isink s;
+    FILE* f;
+    int y, x0, i;
+    if (!path || !path[0] || !rgba || w <= 0 || h <= 0 || (format != YGFX_IMAGE_PPM && format != YGFX_IMAGE_PNG))
+        return YGFX_ERR_ARG;
+    if (stride == 0) stride = (ptrdiff_t)w * 4;
+    /* PNG keeps one IDAT chunk, whose length is 31 bits */
+    if (format == YGFX_IMAGE_PNG && (double)h * (1.0 + 3.0 * w) * (1.0 + 5.0 / 65535.0) + 64.0 > 2147483647.0)
+        return YGFX_ERR_ARG;
+#if defined(_WIN32)
+    f = ygfx__wopen(path, L"wb");
+#else
+    f = fopen(path, "wb");
+#endif
+    if (!f) return YGFX_ERR_IO;
+    setvbuf(f, iobuf, _IOFBF, sizeof iobuf);
+    memset(&s, 0, offsetof(ygfx__isink, t));
+    s.f = f;
+    s.ok = 1;
+    s.png = format == YGFX_IMAGE_PNG;
+    if (!s.png) {
+        char head[64];
+        int n;
+        ygfx__img_put(&s, "P6\n", 3);
+        if (comment && comment[0]) {
+            const char* c = comment;
+            ygfx__img_put(&s, "# ", 2);
+            for (; *c; c++) {   /* each line of the comment is a comment line */
+                if (*c == '\n') { ygfx__img_put(&s, "\n# ", 3); continue; }
+                ygfx__img_put(&s, c, 1);
+            }
+            ygfx__img_put(&s, "\n", 1);
+        }
+        n = snprintf(head, sizeof head, "%d %d\n255\n", w, h);
+        ygfx__img_put(&s, head, (size_t)n);
+    } else {
+        unsigned char b[13];
+        size_t raw = (size_t)h * (1 + 3 * (size_t)w), blocks = (raw + 65534) / 65535;
+        ygfx__crc_tables(s.t);
+        ygfx__img_put(&s, sig, 8);
+        ygfx__img_chunk(&s, 13, "IHDR");
+        ygfx__img_be32(b, (uint32_t)w);
+        ygfx__img_be32(b + 4, (uint32_t)h);
+        b[8] = 8; b[9] = 2; b[10] = 0; b[11] = 0; b[12] = 0;   /* 8 bits, RGB, no interlace */
+        ygfx__img_out(&s, b, 13);
+        ygfx__img_chunk_end(&s);
+        if (comment && comment[0]) {
+            size_t n = strlen(comment);
+            ygfx__img_chunk(&s, (uint32_t)(8 + n), "tEXt");
+            ygfx__img_out(&s, "Comment", 8);   /* with its NUL separator */
+            ygfx__img_out(&s, comment, n);
+            ygfx__img_chunk_end(&s);
+        }
+        ygfx__img_chunk(&s, (uint32_t)(2 + raw + 5 * blocks + 4), "IDAT");
+        b[0] = 0x78; b[1] = 0x01;   /* deflate, 32 KB window, no dictionary */
+        ygfx__img_out(&s, b, 2);
+        s.a1 = 1; s.a2 = 0;
+        s.raw_left = raw;
+    }
+    for (y = 0; y < h && s.ok; y++) {
+        const uint8_t* src = rgba + (ptrdiff_t)y * stride;
+        if (s.png) { unsigned char none = 0; ygfx__img_raw(&s, &none, 1); }   /* filter type 0 */
+        for (x0 = 0; x0 < w; x0 += 1024) {
+            int n = w - x0 < 1024 ? w - x0 : 1024;
+            const uint8_t* p = src + 4 * (size_t)x0;
+            for (i = 0; i < n; i++) { row[3 * i] = p[4 * i]; row[3 * i + 1] = p[4 * i + 1]; row[3 * i + 2] = p[4 * i + 2]; }
+            ygfx__img_raw(&s, row, 3 * (size_t)n);
+        }
+    }
+    if (s.png) {
+        unsigned char b[4];
+        ygfx__img_be32(b, (s.a2 << 16) | s.a1);
+        ygfx__img_out(&s, b, 4);
+        ygfx__img_chunk_end(&s);
+        ygfx__img_chunk(&s, 0, "IEND");
+        ygfx__img_chunk_end(&s);
+    }
+    if (fclose(f) != 0) s.ok = 0;
+    if (!s.ok) { remove(path); return YGFX_ERR_IO; }
+    return YGFX_OK;
+}
+
+/* --- capture (CAPTURE) ---------------------------------------------------------- */
+
+#define YGFX__CS_FREE    0
+#define YGFX__CS_READING 1         /* the copy is on the GPU                    */
+#define YGFX__CS_MAPPED  2         /* readable; waits for its flip record       */
+#define YGFX__CS_QUEUED  3         /* the writer has it                         */
+/* Frames a copy waits for its flip record. A record comes with the begin()
+ * after its flip, 2 to 3 frames after the copy at a depth of 2. */
+#define YGFX__CAP_RECORD_FRAMES 30
+
+typedef struct ygfx__cslot {
+    int32_t        state, has_record;
+    int32_t        no_wait;            /* a frame not from yscr_begin(): no record */
+    int64_t        index, predicted;
+    uint64_t       frame_no;           /* g->frames at the copy: its age          */
+    const uint8_t* data;
+    uint32_t       seq;                /* the writer's message                    */
+    int32_t        result;             /* the writer's: YGFX_OK or < 0            */
+    yscr_record    record;
+} ygfx__cslot;
+
+typedef struct ygfx__cap {
+    int32_t         x, y, w, h, gl_y, top_first, format, n, manual, every, mark, has_screen;
+    volatile int    abandon;           /* the context is gone: the writer skips   */
+    char            path[512];         /* the prefix; "" = no files               */
+    ygfx_capture_fn on_frame;
+    void*           ctx;
+    ygfx_capture_stats st;
+    ygfx__cslot     slot[YGFX_CAPTURE_MAX_SLOTS];
+#ifndef YRT_NO_THREADS
+    int32_t         ring[YGFX_CAPTURE_MAX_SLOTS];
+    yrt_pump        pump;
+#endif
+} ygfx__cap;
+
+/* On the writer (or the pump's caller): the file, then on_frame. */
+static int ygfx__cap_write(ygfx__cap* c, int i) {
+    const ygfx__cslot* s = &c->slot[i];
+    ygfx_capture_frame fr;
+    char path[560], note[400];
+    memset(&fr, 0, sizeof fr);
+    fr.index = s->index;
+    fr.predicted = s->predicted;
+    fr.has_record = s->has_record;
+    fr.x = c->x; fr.y = c->y; fr.w = c->w; fr.h = c->h;
+    /* GL's rows are bottom first unless the swap path turned them */
+    fr.stride = (ptrdiff_t)c->w * 4;
+    fr.rgba = s->data;
+    if (!c->top_first) { fr.rgba = s->data + (size_t)(c->h - 1) * (size_t)c->w * 4; fr.stride = -fr.stride; }
+    if (s->has_record) fr.record = s->record;
+    fr.file_rc = YGFX_OK;
+    if (c->abandon) return YGFX_ERR_LOST;
+    if (c->path[0]) {
+        snprintf(path, sizeof path, "%s%08lld.%s", c->path, (long long)s->index,
+                 c->format == YGFX_IMAGE_PNG ? "png" : "ppm");
+        if (s->has_record)
+            snprintf(note, sizeof note,
+                     "ysp_gfx capture: frame %lld, predicted %lld ns, rect %d %d %d %d; "
+                     "record: onset %lld ns, planned %lld, target %lld, residual %lld, dropped %u, flags 0x%04x, path %u, tier %u",
+                     (long long)s->index, (long long)s->predicted, c->x, c->y, c->w, c->h,
+                     (long long)s->record.onset, (long long)s->record.planned, (long long)s->record.target,
+                     (long long)s->record.residual, (unsigned)s->record.dropped, (unsigned)s->record.flags,
+                     (unsigned)s->record.path, (unsigned)s->record.tier);
+        else
+            snprintf(note, sizeof note, "ysp_gfx capture: frame %lld, predicted %lld ns, rect %d %d %d %d; record: none",
+                     (long long)s->index, (long long)s->predicted, c->x, c->y, c->w, c->h);
+        fr.file_rc = ygfx_image_write(path, c->format, fr.rgba, c->w, c->h, fr.stride, note);
+        fr.path = path;
+    }
+    if (c->on_frame) c->on_frame(c->ctx, &fr);
+    return fr.file_rc;
+}
+
+#ifndef YRT_NO_THREADS
+static void ygfx__cap_msg(void* ctx, const void* msg, uint32_t seq) {
+    ygfx__cap* c = (ygfx__cap*)ctx;
+    int32_t i;
+    (void)seq;
+    memcpy(&i, msg, sizeof i);
+    c->slot[i].result = ygfx__cap_write(c, (int)i);
+}
+#endif
+
+static void ygfx__cap_retire(ygfx_gfx* g, ygfx__cap* c, int i, int rc, int gl_ok) {
+    ygfx__cslot* s = &c->slot[i];
+    if (gl_ok) g->be->capture_unmap(g->bctx, i);
+    if (rc >= 0) {
+        c->st.written++;
+        if (!s->has_record) c->st.no_record++;
+    } else {
+        c->st.failed++;
+    }
+    s->state = YGFX__CS_FREE;
+    s->data = NULL;
+    c->st.busy--;
+}
+
+/* Frees what the writer has finished. */
+static void ygfx__cap_reclaim(ygfx_gfx* g, ygfx__cap* c, int gl_ok) {
+#ifndef YRT_NO_THREADS
+    uint32_t done;
+    int i;
+    if (c->manual) return;
+    done = yrt_pump_done_seq(&c->pump);
+    for (i = 0; i < c->n; i++) {
+        ygfx__cslot* s = &c->slot[i];
+        if (s->state == YGFX__CS_QUEUED && done >= s->seq) ygfx__cap_retire(g, c, i, s->result, gl_ok);
+    }
+#else
+    (void)g; (void)c; (void)gl_ok;
+#endif
+}
+
+/* Copies the GPU has finished become readable, oldest first, at most max of
+ * them (<= 0: all); wait_ns > 0 waits for each. A map costs the frame
+ * thread 2.6 ms mean at 1920 x 1200 on ANGLE (docs/gfx.md, "v0.12"), so a
+ * frame maps one: after a stall the backlog spreads over the next frames.
+ * The GPU finishes copies in order, so the first one not done ends it. */
+static void ygfx__cap_poll(ygfx_gfx* g, ygfx__cap* c, int64_t wait_ns, int max) {
+    int n = 0;
+    while (max <= 0 || n < max) {
+        int i, best = -1, rc;
+        const void* p = NULL;
+        for (i = 0; i < c->n; i++)
+            if (c->slot[i].state == YGFX__CS_READING && (best < 0 || c->slot[i].index < c->slot[best].index)) best = i;
+        if (best < 0) break;
+        rc = g->be->capture_poll(g->bctx, best, wait_ns, &p);
+        if (rc == 0 && wait_ns <= 0) break;
+        if (rc == 1) {
+            c->slot[best].state = YGFX__CS_MAPPED;
+            c->slot[best].data = (const uint8_t*)p;
+            n++;
+        } else {   /* failed, or not done in the wait */
+            c->slot[best].state = YGFX__CS_FREE;
+            c->st.failed++;
+            c->st.busy--;
+        }
+    }
+}
+
+/* The oldest readable copy whose record is in (or will not come). */
+static int ygfx__cap_next(const ygfx_gfx* g, const ygfx__cap* c, int final) {
+    int i, best = -1;
+    for (i = 0; i < c->n; i++) {
+        const ygfx__cslot* s = &c->slot[i];
+        if (s->state != YGFX__CS_MAPPED) continue;
+        if (!(s->has_record || s->no_wait || final || g->frames - s->frame_no > YGFX__CAP_RECORD_FRAMES)) continue;
+        if (best < 0 || s->index < c->slot[best].index) best = i;
+    }
+    return best;
+}
+
+/* Threads: to the writer, in frame order. Manual: written here, up to max. */
+static int ygfx__cap_hand(ygfx_gfx* g, ygfx__cap* c, int final, int max) {
+    int i, n = 0;
+    while ((i = ygfx__cap_next(g, c, final)) >= 0) {
+        if (c->manual) {
+            if (max <= 0 && !final) break;
+            ygfx__cap_retire(g, c, i, ygfx__cap_write(c, i), 1);
+            n++;
+            if (max > 0 && n >= max) break;
+        } else {
+#ifndef YRT_NO_THREADS
+            int32_t m = (int32_t)i;
+            int seq = yrt_pump_submit(&c->pump, &m);
+            if (seq < 0) break;   /* the ring holds every slot: not reached */
+            c->slot[i].seq = (uint32_t)seq;
+            c->slot[i].state = YGFX__CS_QUEUED;
+#endif
+        }
+    }
+    return n;
+}
+
+/* begin(): the flip records that came with this frame. */
+static void ygfx__cap_records(ygfx__cap* c, const yscr_frame* f) {
+    int k, i;
+    if (!f->done) return;
+    for (k = 0; k < f->n_done; k++) {
+        const yscr_record* r = &f->done[k];
+        for (i = 0; i < c->n; i++) {
+            ygfx__cslot* s = &c->slot[i];
+            if ((s->state == YGFX__CS_READING || s->state == YGFX__CS_MAPPED) && !s->has_record && s->index == r->index) {
+                s->record = *r;
+                s->has_record = 1;
+                break;
+            }
+        }
+    }
+}
+
+/* end(), after the output stage and before the present: collect, hand on,
+ * and copy this frame when it is chosen. No wait, no allocation. */
+static void ygfx__cap_frame(ygfx_gfx* g) {
+    ygfx__cap* c = g->cap;
+    int chosen = c->mark || (c->every > 0 && g->frame.index % c->every == 0);
+    int i, rc;
+    c->mark = 0;
+    ygfx__cap_reclaim(g, c, 1);
+    if (!c->manual) ygfx__cap_poll(g, c, 0, 1);   /* manual: the maps wait for the pump */
+    ygfx__cap_hand(g, c, 0, 0);
+    if (!chosen) return;
+    c->st.chosen++;
+    for (i = 0; i < c->n && c->slot[i].state != YGFX__CS_FREE; i++) {}
+    if (i == c->n) {
+        c->st.dropped++;
+        ygfx__push(g, (uint16_t)YGFX_EV_CAPTURE_DROP, (uint64_t)g->frame.onset, (uint32_t)c->st.dropped, NULL, 0, g->frame.index);
+        return;
+    }
+    rc = g->be->capture_read(g->bctx, i, c->x, c->gl_y, c->w, c->h);
+    if (rc < 0) { c->st.failed++; return; }
+    c->slot[i].state = YGFX__CS_READING;
+    c->slot[i].has_record = 0;
+    /* yscr_begin() always sets done; a frame filled by hand gets no record */
+    c->slot[i].no_wait = !c->has_screen || !g->frame.done;
+    c->slot[i].index = g->frame.index;
+    c->slot[i].predicted = g->frame.onset;
+    c->slot[i].frame_no = g->frames;
+    c->st.read++;
+    if (++c->st.busy > c->st.busy_max) c->st.busy_max = c->st.busy;
+}
+
+static void ygfx__cap_stats(const ygfx__cap* c, ygfx_capture_stats* out) {
+    *out = c->st;
+    out->slots = c->n;
+    out->manual = c->manual;
+}
+
+/* Every copy waited for and written, the writer stopped, the buffers freed.
+ * gl_ok 0: the context is gone, so nothing is read or unmapped. */
+static void ygfx__cap_stop(ygfx_gfx* g, int gl_ok, ygfx_capture_stats* out) {
+    ygfx__cap* c = g->cap;
+    int i;
+    if (!c) return;
+    if (gl_ok) {
+        if (g->screen) yscr_bind(g->screen);
+        ygfx__cap_reclaim(g, c, 1);
+        ygfx__cap_poll(g, c, INT64_C(1000000000), 0);
+        ygfx__cap_hand(g, c, 1, 0);
+    } else {
+        c->abandon = 1;
+    }
+#ifndef YRT_NO_THREADS
+    if (!c->manual) {
+        yrt_pump_stop(&c->pump);   /* drains: every queued frame is written */
+        ygfx__cap_reclaim(g, c, gl_ok);
+    }
+#endif
+    for (i = 0; i < c->n; i++) if (c->slot[i].state != YGFX__CS_FREE) ygfx__cap_retire(g, c, i, YGFX_ERR_LOST, gl_ok);
+    if (gl_ok) g->be->capture_free(g->bctx);
+    if (out) ygfx__cap_stats(c, out);
+    free(c);
+    g->cap = NULL;
+}
+
+YGFX_API int ygfx_capture_start(ygfx_gfx* g, const ygfx_capture_desc* d) {
+    ygfx__cap* c;
+    int x, y, w, h, n, rc;
+    if (!g || !g->open) return YGFX_ERR_CLOSED;
+    if (g->in_frame || g->cap) {
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: capture starts outside a frame, once");
+        return YGFX_ERR_ORDER;
+    }
+    if (!d) return YGFX_ERR_ARG;
+    x = d->x; y = d->y; w = d->w; h = d->h;
+    if (w <= 0 || h <= 0) { x = 0; y = 0; w = g->w; h = g->h; }
+    n = d->slots ? d->slots : 6;
+    if (d->every < 0 || x < 0 || y < 0 || x + w > g->w || y + h > g->h || n < 1 || n > YGFX_CAPTURE_MAX_SLOTS ||
+        (d->format != 0 && d->format != YGFX_IMAGE_PPM && d->format != YGFX_IMAGE_PNG) ||
+        (d->path && strlen(d->path) >= sizeof(((ygfx__cap*)0)->path))) {
+        ygfx__set_error(g->error, sizeof g->error,
+                          "ysp_gfx: capture: every >= 0, a rectangle inside the output, 1 to %d slots, a format, a path under 512 bytes",
+                          YGFX_CAPTURE_MAX_SLOTS);
+        return YGFX_ERR_ARG;
+    }
+    if (g->be->version < 4 || !g->be->capture_make) {
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: capture: the backend has no reads that do not wait");
+        return YGFX_ERR_NOT_IMPLEMENTED;
+    }
+    c = (ygfx__cap*)calloc(1, sizeof *c);
+    if (!c) return YGFX_ERR_FULL;
+    c->x = x; c->y = y; c->w = w; c->h = h;
+    c->top_first = g->origin_top;
+    c->gl_y = g->origin_top ? y : g->h - y - h;
+    c->format = d->format ? d->format : YGFX_IMAGE_PPM;
+    c->n = n;
+    c->every = d->every;
+    c->has_screen = g->screen != NULL;
+    c->on_frame = d->on_frame;
+    c->ctx = d->ctx;
+    c->manual = d->manual;
+#if defined(YRT_NO_THREADS)
+    c->manual = 1;
+#endif
+    if (d->path) {
+        size_t k = strlen(d->path);
+        memcpy(c->path, d->path, k + 1);
+        while (k > 0 && c->path[k - 1] != '/' && c->path[k - 1] != '\\') k--;
+        if (k > 1) {   /* the folder of the prefix */
+            char dir[512];
+            memcpy(dir, c->path, k - 1);
+            dir[k - 1] = '\0';
+            ygfx__fc_mkdirs(dir);
+        }
+    }
+    if (g->screen) yscr_bind(g->screen);
+    if (ygfx__sync(g) < 0) { free(c); return YGFX_ERR_LOST; }
+    rc = g->be->capture_make(g->bctx, n, (size_t)w * (size_t)h * 4);
+    if (rc < 0) {
+        free(c);
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: capture: %d buffers of %dx%d: %s", n, w, h, ygfx_strerror(rc));
+        return rc;
+    }
+    g->be->reset(g->bctx);
+#ifndef YRT_NO_THREADS
+    if (!c->manual) {
+        yrt_pump_desc pd;
+        memset(&pd, 0, sizeof pd);
+        pd.msg_size = sizeof(int32_t);
+        pd.capacity = (uint32_t)n;
+        pd.ring = c->ring;
+        pd.on_msg = ygfx__cap_msg;
+        pd.ctx = c;
+        pd.below_normal = true;   /* it must never take a core from the frame loop */
+        if (!yrt_pump_start(&c->pump, &pd)) {
+            ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: capture: the writer did not start: %s (desc.manual works without it)",
+                              yrt_pump_error(&c->pump));
+            g->be->capture_free(g->bctx);
+            free(c);
+            return YGFX_ERR_REFUSED;
+        }
+    }
+#endif
+    g->cap = c;
+    return YGFX_OK;
+}
+
+YGFX_API int ygfx_capture_mark(ygfx_gfx* g) {
+    if (!g || !g->open) return YGFX_ERR_CLOSED;
+    if (!g->cap || !g->in_frame || g->in_setup) return YGFX_ERR_ORDER;
+    g->cap->mark = 1;
+    return YGFX_OK;
+}
+
+YGFX_API int ygfx_capture_pump(ygfx_gfx* g, int max) {
+    ygfx__cap* c;
+    if (!g || !g->open) return YGFX_ERR_CLOSED;
+    c = g->cap;
+    if (!c || g->in_frame) return YGFX_ERR_ORDER;
+    if (g->screen) yscr_bind(g->screen);
+    if (ygfx__sync(g) < 0) return YGFX_ERR_LOST;
+    ygfx__cap_reclaim(g, c, 1);
+    ygfx__cap_poll(g, c, 0, 0);
+    return ygfx__cap_hand(g, c, 0, max <= 0 ? c->n : max);
+}
+
+YGFX_API int ygfx_capture_stop(ygfx_gfx* g, ygfx_capture_stats* out) {
+    int gl_ok;
+    if (out) memset(out, 0, sizeof *out);
+    if (!g) return YGFX_ERR_ARG;
+    if (!g->cap) return YGFX_ERR_ORDER;
+    if (g->in_frame) return YGFX_ERR_ORDER;
+    gl_ok = g->open && ygfx__sync(g) >= 0;
+    {
+        ygfx_capture_stats st;
+        ygfx__cap_stop(g, gl_ok, &st);
+        if (out) *out = st;
+        return gl_ok ? (int)st.written : YGFX_ERR_LOST;
+    }
+}
+
+YGFX_API void ygfx_capture_get_stats(const ygfx_gfx* g, ygfx_capture_stats* out) {
+    if (!out) return;
+    if (g && g->cap) ygfx__cap_stats(g->cap, out);
+    else memset(out, 0, sizeof *out);
 }
 
 /* --- curve sets: the format (CURVE SETS) ------------------------------------- */

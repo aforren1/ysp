@@ -5,7 +5,9 @@
  * so it passes on a machine with no display and no GPU. The frames hold a
  * group member and a target pass, so v0.2's calls link and run too, and
  * a user shader that samples the target (v0.10.4), refused inside its pass,
- * and an sRGB-coded gray texture as a pack stores one (v0.10.5). */
+ * and an sRGB-coded gray texture as a pack stores one (v0.10.5), and a
+ * capture of every other frame and a marked one, written by the pump on
+ * this thread (v0.12). */
 #define YSP_GFX_IMPLEMENTATION
 #include "ysp/gfx.h"
 
@@ -15,6 +17,11 @@ static void start_gfx(void* ctx, yscr_screen* s) {
     start_ctx* c = (start_ctx*)ctx;
     c->d->screen = s;
     c->ok = ygfx_open_start(c->g, c->d);
+}
+
+/* v0.12: the writer hands each captured frame here */
+static void on_frame(void* ctx, const ygfx_capture_frame* fr) {
+    if (fr->rgba && fr->w == 64) (*(int*)ctx)++;
 }
 
 int main(void) {
@@ -39,7 +46,9 @@ int main(void) {
     float sdf[16];
     start_ctx sc;
     char line[700];
-    int i, n = 0, m = 0, k = 0;
+    int i, n = 0, m = 0, k = 0, got = 0;
+    ygfx_capture_desc cd;
+    ygfx_capture_stats cs;
     memset(&s, 0, sizeof s);
     memset(&d, 0, sizeof d);
     memset(&g, 0, sizeof g);
@@ -82,6 +91,10 @@ int main(void) {
     if (gray.id == 0) return 16;
     if (ygfx_prime(&g) < 1) return 17;   /* v0.11: every program, once */
     ygfx_texture_free(&g, gray);
+    memset(&cd, 0, sizeof cd);
+    cd.every = 2; cd.w = 64; cd.h = 32; cd.manual = true;
+    cd.on_frame = on_frame; cd.ctx = &got;
+    if (ygfx_capture_start(&g, &cd) != YGFX_OK) return 20;
     for (i = 0; i < 3; i++) {
         if (yscr_begin(&s, &f) != YSCR_OK) return 3;
         if (ygfx_begin(&g, &f) != YGFX_OK) return 4;
@@ -91,9 +104,13 @@ int main(void) {
         if (ygfx_end_target(&g) != YGFX_OK) return 11;
         if (ygfx_draw(&g, &us) != YGFX_OK) return 15;
         if (ygfx_draw(&g, &st) != YGFX_OK) return 5;
+        if (i == 1 && ygfx_capture_mark(&g) != YGFX_OK) return 21;
         if (ygfx_end(&g) != YGFX_OK) return 6;
         if (yscr_flip(&s) != YSCR_OK) return 7;
     }
+    ygfx_capture_pump(&g, 0);
+    if (ygfx_capture_stop(&g, &cs) != 3 || got != 3 || cs.chosen != 3) return 22;   /* frames 0, 1 (marked), 2 */
+    if (ygfx_image_write(NULL, YGFX_IMAGE_PNG, mask, 1, 1, 0, NULL) != YGFX_ERR_ARG) return 23;
     ygfx_texture_free(&g, t);
     ygfx_close(&g);
     yscr_close(&s);
