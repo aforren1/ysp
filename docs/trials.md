@@ -1,6 +1,12 @@
 # ysp/trials.h design
 
-Status: **v0.2.1, implemented, 2026-10-07.** v0.2.1 adds jitter: a
+Status: **v0.3.0, implemented, 2026-10-10.** v0.3.0 adds the data writer:
+one CSV row per trial with the session's columns and the caller's, read
+back as written by ysp/table.h (see "Save one row per trial", "Data file
+reference", "v0.3: the data writer" and "Verification and cost (v0.3)").
+The rest of this status is v0.2.1's.
+
+Status of v0.2.1: **implemented, 2026-10-07.** v0.2.1 adds jitter: a
 duration drawn per trial, logged and replayed (see "v0.2.1: jitter in the
 trial handler" and "Verification and cost (v0.2.1)"). v0.2 adds conditions files
 and trial lists as tables (ysp/table.h, docs/table.md), order lists,
@@ -42,8 +48,10 @@ what the implementation changed; the header says what it does.
 
 ## Non-goals
 
-- Timing, stimuli, I/O. The header never touches a clock, a file or a
-  device; `ytr_format_row` formats a line the caller writes.
+- Timing, stimuli, I/O. The header never touches a clock or a device.
+  `ytr_format_row` formats a line the caller writes. From v0.3 the data
+  writer opens, writes and closes one file (or hands its bytes to a
+  function of the caller's); nothing else in the header touches a file.
 - Fitting. Per-condition proportions are the estimate; the fit is offline.
 - (v0.1) Counterbalancing across sessions or subjects, and transition
   balancing within a session. v0.2 reversed both at the user's request:
@@ -64,10 +72,114 @@ what the implementation changed; the header says what it does.
 | Catch trials | a condition with its own weight; spacing by hand | a condition placed by `ytr_min_gap` or `ytr_max_in_window` |
 | Re-running missed trials | none built in (users append to `trialList`) | `ytr_requeue` with an optional gap |
 | Practice | a separate handler | `n_practice`, flagged, untallied |
-| Data | `addData`, `saveAsWideText` | a fixed-size caller record per trial, `ytr_format_row`, the history array |
+| Data | `addData`, `nextEntry`, `saveAsWideText` | a fixed-size caller record per trial, `ytr_format_row`, the history array; from v0.3 `ytr_data_set_*` and `ytr_data_write` (columns declared at open, a row written per trial) |
 | Resume | `saveAsPickle` | `ytr_save` / `ytr_load` byte snapshot, or `ytr_restore` from the outcomes plus the seed (a re-queue is its own outcome value so replay can tell it from an invalid response) |
 
 Psychtoolbox has no equivalent; labs write their own. Palamedes has none.
+
+## Save one row per trial
+
+This procedure writes a CSV data file with one row per trial: the trial
+handler's columns, then your own. `examples/trials/save_rows.c` is a
+complete program that does it.
+
+1. Put the values that you record per trial in a struct. Keep times as
+   `int64_t` nanoseconds. Use `YTR_MISSING_NS` for a time that does not
+   exist, for example the RT of a missed response:
+
+   ```c
+   typedef struct row {
+       const char* response;   /* NULL: no response */
+       bool        correct;
+       int64_t     rt_ns;      /* YTR_MISSING_NS: no response */
+   } row;
+   ```
+
+2. Declare the columns. `YTR_COL` reads a field of the struct, and the
+   column gets the field's name. `YTR_COL_TEXT` writes the same text in
+   each row. `YTR_COL_SET` is a column that you set by index for some rows
+   only:
+
+   ```c
+   const ytr_col cols[] = {
+       YTR_COL(row, response, YTR_COL_STRING),
+       YTR_COL(row, correct, YTR_COL_BOOL),
+       YTR_COL_D(row, rt_ns, YTR_COL_TIME_NS, 6),   /* seconds, 6 decimals */
+       YTR_COL_TEXT("participant", participant),
+       YTR_COL_SET("note", YTR_COL_STRING),
+   };
+   ```
+
+3. Open the writer after `ytr_open()` and before the first trial. Give the
+   session, the columns and a path. A sidecar file (`meta_path`) is
+   optional; it records the settings that are the same for the whole
+   session, for example the seed and the rig:
+
+   ```c
+   static ytr_data w;
+   ytr_data_desc dd;
+   memset(&dd, 0, sizeof dd);
+   dd.path = "P07.csv";
+   dd.trials = &t;
+   dd.cols = cols;
+   dd.n_cols = 5;
+   dd.meta_path = "P07.csv.meta";
+   dd.meta = "participant=P07\nseed=20261010\n";
+   if (!ytr_data_open(&w, &dd)) { fprintf(stderr, "%s\n", ytr_data_error(&w)); return 1; }
+   ```
+
+   If the open fails, the message names the column or the file.
+
+4. In the trial loop, call `ytr_data_write()` after `ytr_update()` and
+   before the next `ytr_next()`. Do not call it during the frame loop of a
+   trial:
+
+   ```c
+   while (ytr_next(&t, &ti) >= 0) {
+       row r = run_trial(&ti);
+       if (!r.response) ytr_data_set_string(&w, note_col, "no response");
+       ytr_update(&t, r.response ? r.correct : YTR_INVALID, NULL);
+       if (ytr_data_write(&w, &r) != 0) { fprintf(stderr, "%s\n", ytr_data_error(&w)); break; }
+   }
+   ```
+
+5. Close the writer. Close returns false if a write failed at any time:
+
+   ```c
+   if (!ytr_data_close(&w)) fprintf(stderr, "%s\n", ytr_data_error(&w));
+   ```
+
+6. Read the file back to check it. ysp/table.h reads it as written. Set
+   `allow_empty`, because a missing value is an empty field:
+
+   ```c
+   cd.allow_empty = true;
+   ytb_csv_file(&back, "P07.csv", &cd);   /* needs YTB_STDIO */
+   ```
+
+   pandas (`pd.read_csv`) and R (`read.csv`) read the file with their
+   defaults.
+
+For an experiment without `ytr_trials` (a staircase alone, for example),
+set `dd.trials` to NULL. The file then has your columns only.
+
+## Data file reference
+
+The header's DATA FILE section is the full reference. A summary:
+
+| Item | Rule |
+|---|---|
+| Columns | The session's (`ytr_format_header()`'s names), then `desc.cols` in order. At most 64 in all. A name is `[A-Za-z_][A-Za-z0-9_]*`, at most 63 bytes, unique. |
+| `YTR_COL_INT`, `YTR_COL_INT64` | Decimal. `YTR_MISSING_INT` (`INT_MIN`) or `YTR_MISSING_I64` (`INT64_MIN`) gives an empty field. |
+| `YTR_COL_DOUBLE` | `decimals` 0: the fewest of 15 to 17 significant digits that read back as the same double. 1 to 17: that many fixed decimals. NaN and the infinities give an empty field. |
+| `YTR_COL_BOOL` | `1` or `0`. |
+| `YTR_COL_STRING`, `YTR_COL_CHARS` | UTF-8 text, quoted when it holds a comma, a quote, a CR or an LF. A byte that is not valid UTF-8 becomes U+FFFD. NULL gives an empty field. |
+| `YTR_COL_TIME_NS` | `int64_t` nanoseconds written as seconds with 1 to 9 decimals (0 means 9, the exact value). Rounded half away from zero. `YTR_MISSING_NS` gives an empty field. |
+| `YTR_COL_CONST` | The same text in each row. |
+| Line endings, encoding | LF; UTF-8 without a BOM; no comment lines. The decimal point is `.` in every locale. |
+| When a row is on disk | `YTR_FLUSH_ROW` (default): in the OS when `ytr_data_write()` returns, so a crash of the program keeps it. `YTR_FLUSH_SYNC`: on the disk, so a power cut keeps it. |
+| When to write | After `ytr_update()` or `ytr_requeue()` and before the next `ytr_next()`. Else `YTR_ERR_ORDER`. |
+| Sidecar | `meta_path`: `ysp_trials=<version> data=<path>`, the caller's `meta` lines, `ytr_format_meta()`'s line, and at close `rows=N closed=1`. |
 
 ## What v0.2 adds
 
@@ -535,6 +647,102 @@ deviation is the truncation's, as for the continuous distribution, and
 it is under 6 % until 3 scales before hi.
 
 
+### v0.3: the data writer
+
+Two usability reviews (2026-10-10) found no data-file path:
+`ytr_format_row()` cannot write the caller's columns (the RT, the
+level), so every example wrote its CSV by hand, each with its own NaN
+handling and quoting. The user approved a shared row writer in this
+header, a record schema, and PsychoPy's `addData` without a heap.
+
+Decisions, each with its reason:
+
+- **In trials.h, with stdio.** The session's columns are this header's,
+  so the writer that joins them to the caller's belongs here. The file is
+  opened with the C library (on Windows `_wfsopen` for a UTF-8 path), so
+  the header still makes no OS call of its own but `_commit()` or
+  `fsync()` for `YTR_FLUSH_SYNC`. A write function (`desc.write`) replaces
+  the file for a caller with its own I/O (a pack, a socket, the tests'
+  memory buffer).
+- **Columns declared at open, not added per row.** PsychoPy adds a column
+  the first time `addData` names it and writes the file at the end. Here
+  the header line is written at open and every row as it happens, so the
+  set of columns must be known first; a fixed list also means no
+  allocation and a check of every name, type and field size before the
+  session starts. `YTR_COL_SET` covers the values that exist on some rows
+  only.
+- **Bound by offset, with the field's size checked.** `YTR_COL(T, field,
+  type)` stores `offsetof` and `sizeof` of the field, so `open()` refuses
+  an `int` field declared `DOUBLE`, the commonest way to write garbage. The
+  macros are constant expressions, so a column list can be a static array
+  in C and C++.
+- **A file that ysp/table.h reads.** Names follow its header rule, a
+  file has at most its 64 columns, text is valid UTF-8, numbers use its
+  syntax. The writer refuses a session whose factor name the reader would
+  refuse, at open, by name, rather than write a file that fails later.
+  Bad UTF-8 in a value becomes U+FFFD instead of an error: one response
+  string from a misconfigured keyboard layout must not cost the session's
+  data.
+- **Missing values are empty fields.** That is what pandas, R and
+  ysp/table.h (with `allow_empty`) read as NA or NaN. The sentinels are
+  the values a measurement cannot take: NaN for a double, `INT64_MIN` for
+  a time, `INT_MIN` for an int, NULL for a string. Infinities are written
+  empty too, because ysp/table.h takes no `inf`.
+- **Times as int64 nanoseconds in C, seconds in the file.** The units rule
+  (2026-10-07): data files are in seconds, C APIs in int64 ns. The
+  conversion is integer arithmetic with a chosen number of decimals, so
+  the text is the exact decimal of the nanoseconds at 9 decimals, and no
+  double rounds it.
+- **Doubles in the fewest digits that read back.** 15 to 17 significant
+  digits, checked through ysp/table.h's own parser, so `0.1` stays `0.1`
+  and every double reads back bit for bit. The decimal point is put back
+  to `.` after `snprintf`, so a German locale cannot write `0,1`.
+- **A row reaches the OS per write.** The file has no stdio buffer
+  (`_IONBF`), and the row goes out in one write call from the handle's
+  buffer. A crash, `abort()` or the screen header's panic exit
+  (`TerminateProcess`) then keeps every finished row; a normal Shift+Esc
+  abort would keep them anyway, because `exit()` flushes stdio. Measured
+  cost: 15 us per row (median) with gcc, against 4 us to format it
+  (Verification and cost (v0.3)). A buffered mode that waits for the end
+  of the session was not added: it saves about 11 us per trial, which no
+  inter-trial interval needs, and loses the rows of a crashed session.
+- **`YTR_FLUSH_SYNC` is opt-in.** Waiting for the disk took 1.5 to 1.7 ms
+  per row (median), up to 8 ms in the first probe. That fits between
+  trials but is more than half a 60 Hz frame, so it is not the default.
+  It is the choice for a session where a power cut is likely.
+- **One row per write, after update().** `ytr_data_write()` writes the
+  last completed trial and refuses (`YTR_ERR_ORDER`) while a trial is
+  pending. The first version wrote the last completed trial at any time;
+  the test showed that a write before `update()` paired the pending
+  trial's values with the previous trial's columns, an off-by-one that
+  only the first trial of a session would flag. A second write for one
+  trial is refused too. A trial without a write has no row: practice
+  rows may be left out on purpose, and the index column shows the gap.
+- **A sidecar, not comment lines.** The examples wrote `#` lines with the
+  describe line and the seed at the top of their CSV. ysp/table.h refuses
+  them, pandas needs `comment='#'` and R's `read.csv` needs
+  `comment.char`. The sidecar (`meta_path`) holds those lines as
+  key=value, plus `ytr_format_meta()`'s line, and ends with `rows=N
+  closed=1` at close, so a session that did not close is visible. The
+  rig plan (rig_spec 6 and 14.1; devices_spec 11.4) gives the data file
+  to the player, with a header of device rows, event rows and stream
+  tables. That format is not designed yet; this writer gives its trial
+  table, and the sidecar can carry the device summary and the rig
+  profile's hash (`yrig_hash`) until the player defines the rest.
+- **Constant columns repeat per row.** `YTR_COL_TEXT` writes the
+  participant or session in every row, as PsychoPy writes its session
+  fields. It costs bytes and makes files from many sessions concatenate
+  into one table with no join.
+
+Not done:
+
+| Item | Why |
+|---|---|
+| Append to an existing file on resume | A resumed session (`ytr_load()`) opens a new file; the writer starts at the first trial completed after it opens, and the two files share the header. Checking an old file's header before appending needs a reader in the writer. |
+| The Python and MEX bindings | Python has `csv` and pandas, MATLAB `writetable`; the bindings keep the sequencer only. |
+| A fuzz target | The writer parses no input; the round-trip test writes 400 random strings with every special byte and reads them back. |
+| Migrating the examples | A separate change; `examples/trials/mocs.c` is converted as the demonstration. |
+
 ## Verification (v0.2)
 
 All on Windows 11 with MinGW-w64 gcc 16.1 (C11, C99, C++17, warnings as
@@ -631,6 +839,66 @@ the subset's check of the remaining counts went from O(n k) to a
 histogram (30 ms to 0.2 ms for 5,000 of 10,000), and draws with
 replacement from a linear scan to bisection (39 ms to 1 to 2 ms).
 
+
+## Verification and cost (v0.3)
+
+All on Windows 11 with MinGW-w64 gcc 16.1 (C11 and C++17 under
+`-Wall -Wextra -Wpedantic -Wshadow -Werror`) and MSVC 19.44 (/W4 /WX, C and
+C++17), 2026-10-10.
+
+- `tests/adapt/trials_test_data.h`, part of `trials_test.c`:
+  - Every column type and missing value against a fixed expected text,
+    then read back by `ytb_csv()`: the numbers equal, the texts as given.
+  - `TIME_NS` at each of 1 to 9 decimals for 16 values around the
+    rounding points (0, +-1, 5, 499999999, 500000000, 1499999999,
+    INT64_MAX, INT64_MIN + 1) against a reference made from the digits.
+  - 2000 doubles (random bit patterns, the least subnormal, the largest
+    double) written shortest and read back by ysp/table.h bit for bit; at
+    most 17 significant digits. Under the German locale (on Windows) the
+    decimal point stays `.`, shortest and fixed.
+  - 400 random strings from commas, quotes, CR, LF, CRLF, spaces, `#`,
+    tabs, 2-, 3- and 4-byte UTF-8, and four invalid sequences (a lone
+    0xFF, a cut 2-byte sequence, a surrogate, an overlong form), read back
+    with every invalid byte as U+FFFD and every other byte equal.
+  - A session (a table with a quoted cell, practice, a re-queue, a trial
+    without a row, a jitter): each row's session part equals
+    `ytr_format_row()` and the caller's part the values given; the write
+    refused before any trial, with a trial pending, and twice for one
+    trial; a writer opened mid-session writes nothing old.
+  - 33 refusals (22 at open, 11 by the setters and write), each by its
+    message or code; a write function that fails once:
+    the row refused, every later row refused, nothing written after the
+    failure, close() false; a 24 KB field written whole in pieces; a file
+    with a UTF-8 name and its sidecar, in both flush modes, read after
+    each row while the writer holds it open (the row is in the file), and
+    the sidecar's first and last lines.
+- `examples/trials/save_rows.c --sim` reads its own file back with
+  `ytb_csv_file()` and checks every row; CI runs it. `trials_mocs` prints
+  its CSV through the writer.
+- Mutations: 22 data-writer mutants in `tests/mutate/trials.toml`
+  all 22 killed. Four survived the first run: d-01, d-03, d-04 and d-09
+  broke the read-back itself, and the test skipped its checks when
+  ytb_csv() refused the file; a refused read-back is now a failed check.
+  d-18 removed one of the two guards that stop writing after a failure
+  and was equivalent; it now removes both.
+
+Cost, `examples/trials/bench.c`, the measurement lock held, the Iris Xe
+laptop on AC. A 26-column row (the session's 18: ten integers, four table
+texts, four jitters; the caller's 8: an int, a bool, two times, a shortest
+double, a fixed double, a string, a constant), written after each trial of
+a FULL_RANDOM session; per row, median (p99, max):
+
+| Path | Rows | gcc 16.1 -O2 | MSVC 19.44 /O2 |
+|---|---|---|---|
+| Format only (a write function that copies to memory) | 10000 | 4.2 us (6.0, 18.3) | 1.9 us (2.6, 13.7) |
+| File, `YTR_FLUSH_ROW` | 10000 | 15.2 us (26.5, 221) | 14.3 us (38.8, 570) |
+| File, `YTR_FLUSH_SYNC` | 1000 | 1671 us (2456, 3160) | 1706 us (2798, 8377) |
+
+An earlier probe of the bare calls (a 151-byte row, 3000 rows, gcc,
+under the lock): `fwrite` into a stdio buffer 0.1 us, `fwrite` and
+`fflush` 9.5 us (p99 36, max 154), and with `_commit` 1488 us (p99 2010,
+max 8094). So the per-row flush costs about 10 us, the formatting about
+4 us, and the sync to disk 1.5 to 8 ms. All of it is between trials.
 
 ## Verification and cost (v0.2.1)
 

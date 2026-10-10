@@ -141,6 +141,7 @@ jobs:
           # The trial sequencer's examples simulate their observer.
           expect 0 "$bin/trials_mocs"
           expect 0 "$bin/trials_interleave"
+          expect 0 "$bin/trials_save_rows" --sim   # writes its data file and reads it back
           # The timeline's examples simulate their display.
           expect 0 "$bin/timeline_trial"
           expect 0 "$bin/timeline_tracking"    # checks its own errors
@@ -266,6 +267,7 @@ jobs:
           expect 0 build/quest_async 20 1
           expect 0 build/trials_mocs
           expect 0 build/trials_interleave
+          expect 0 build/trials_save_rows --sim
           expect 0 build/timeline_trial
           expect 0 build/timeline_tracking
           expect 0 build/color_convert

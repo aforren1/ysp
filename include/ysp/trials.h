@@ -1,4 +1,4 @@
-/* ysp/trials.h - v0.2.1 - public domain single-header trial sequencing library
+/* ysp/trials.h - v0.3.0 - public domain single-header trial sequencing library
  *
  *   The layer above the adaptive methods: which trial comes next, and what
  *   happened on it. Conditions and repetitions (the method of constant
@@ -13,12 +13,17 @@
  *   blocked and alternating groups in Latin-square order, units that run
  *   back to back ("b always follows a"), first-order transition balance,
  *   and a rules text that sets all of it by column and level names.
+ *   From v0.3: a data writer, one CSV row per trial with the session's
+ *   columns and the caller's (PsychoPy's addData without a heap).
  *
  *   Written in the single-header style of the stb / sokol libraries. Pure
- *   computation: no OS calls, no threads, no heap, no I/O. REQUIRES
+ *   computation: no threads, no heap, and no I/O but the data writer's
+ *   (DATA FILE), which opens, writes and closes its file with the C
+ *   library, or hands its bytes to a function of the caller's. REQUIRES
  *   ysp/table.h beside it (v0.2; its implementation is compiled with this
  *   one's, as ysp/gfx.h does ysp/color.h's), and otherwise only the C
- *   standard library (snprintf for the format functions). It does not
+ *   standard library (snprintf for the format functions; stdio, and
+ *   _commit() or fsync() for YTR_FLUSH_SYNC, for the writer). It does not
  *   include the method headers: a track is an opaque pointer and an
  *   is-done callback, so this header interleaves anything and knows nothing
  *   about stimuli or levels.
@@ -29,6 +34,26 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.3.0 - the data writer (DATA FILE): ytr_data_open() with a column
+ *          list declared once (int, int64, double, bool, string, char
+ *          array, a time in int64 nanoseconds written as seconds, and
+ *          constant text such as the participant), each bound to a field
+ *          of the caller's row struct (YTR_COL) or set per row by index
+ *          (YTR_COL_SET, ytr_data_set_*()); ytr_data_write() writes the
+ *          session's columns (ytr_format_row()'s) and then the caller's,
+ *          one CSV row per trial; ytr_data_close(). RFC 4180 quoting, LF
+ *          line endings, an empty field for a missing value, bad UTF-8
+ *          replaced by U+FFFD, doubles in the fewest digits that read back
+ *          exactly, '.' whatever the locale: a file that ysp/table.h reads
+ *          back as written. Each row reaches the OS before write()
+ *          returns (YTR_FLUSH_ROW), or the disk (YTR_FLUSH_SYNC). An
+ *          optional sidecar of key=value lines (meta_path) with a closing
+ *          line. Works without a session. No allocation: the column
+ *          list and an 8 KB row buffer live in the handle.
+ *          - YTR_ERR_IO; ytr_strerror() names it.
+ *          - The session's schedule, draws, history, records, tallies,
+ *            format lines (but the version token) and snapshot bytes are
+ *            v0.2.1's: the 600 v0.1.1 and 320 v0.2.0 pins still match.
  *   v0.2.1 - jitter: a random duration per trial (a foreperiod, an ITI,
  *          an SOA), drawn from the session's generator in a fixed order, so
  *          restore() and load() reproduce it, and logged in the data line
@@ -135,7 +160,27 @@
  *          - ytr_condition_at() indexes the practice slots too.
  *   v0.0 - specification. Declarations and the manual, no implementation.
  *
- *   STATUS: v0.2.1, 2026-10-07. The jitter release, built and run as
+ *   STATUS: v0.3.0, 2026-10-10. The data writer, built and run on Windows
+ *   11 with MinGW-w64 gcc 16.1 (C11, C++17, warnings as errors) and MSVC
+ *   19.44 (/W4 /WX, C and C++17); not yet run on Linux or macOS (CI's
+ *   verdict). The v0.1.1 and v0.2.0 pins still match. tests/adapt/
+ *   trials_test_data.h: every type and missing value against fixed text
+ *   and read back by ysp/table.h; times at 1 to 9 decimals around the
+ *   rounding points; 2000 random doubles read back bit for bit, the
+ *   decimal point '.' under a German locale; 400 random strings (commas,
+ *   quotes, CR, LF, UTF-8, four kinds of invalid UTF-8) read back with
+ *   U+FFFD for each bad byte; a session's rows equal to format_row(),
+ *   writes refused before update(); 33 refusals; a write function that
+ *   fails once; a UTF-8 file name read after each row while open, and its
+ *   sidecar. examples/trials/save_rows.c --sim reads its file back.
+ *   Mutations: 22 data-writer mutants in tests/mutate/trials.toml, all
+ *   killed (69 in the file). Cost per 26-column row (Iris Xe laptop, AC,
+ *   measurement lock, examples/trials/bench.c, median, gcc 16.1 -O2 /
+ *   MSVC 19.44 /O2): formatting 4.2 / 1.9 us, with the write to the OS
+ *   (YTR_FLUSH_ROW) 15.2 / 14.3 us, with the sync to disk
+ *   (YTR_FLUSH_SYNC) 1.67 / 1.71 ms. docs/trials.md has the p99 and
+ *   maxima.
+ *   v0.2.1 STATUS, kept as written: the jitter release, built and run as
  *   v0.2.0 below (gcc 16.1 C11, C99, C++17; MSVC 19.44 C and C++17; WSL2
  *   gcc 11.4 C11 and C++17 under ASan and UBSan; YTR_MAX_TRIALS 256) and
  *   at YTR_MAX_JITTERS 1. The 600 v0.1.1 pins and 320 new v0.2.0 pins
@@ -369,6 +414,31 @@
  *
  *   The schedule there is 24 identical catch trials, so no order of it
  *   keeps them apart; the track trials do. See CONSTRAINTS, AT RUN TIME.
+ *
+ *   One data row per trial, the session's columns and the caller's
+ *   (examples/trials/save_rows.c runs this; DATA FILE has the rules):
+ *
+ *       typedef struct row {
+ *           const char* response;                  // NULL: missed
+ *           bool        correct;
+ *           int64_t     rt_ns;                     // YTR_MISSING_NS: missed
+ *       } row;
+ *       const ytr_col cols[] = {
+ *           YTR_COL(row, response, YTR_COL_STRING),
+ *           YTR_COL(row, correct, YTR_COL_BOOL),
+ *           YTR_COL_D(row, rt_ns, YTR_COL_TIME_NS, 6),  // seconds, 6 decimals
+ *           YTR_COL_TEXT("participant", "P07"),
+ *       };
+ *       ytr_data_desc dd = { .path = "P07.csv", .trials = &t,
+ *                            .cols = cols, .n_cols = 4 };
+ *       static ytr_data w;                        // about 18 KB
+ *       if (!ytr_data_open(&w, &dd)) { fputs(ytr_data_error(&w), stderr); return 1; }
+ *       while (ytr_next(&t, &ti) >= 0) {
+ *           row r = run_trial(&ti);
+ *           ytr_update(&t, r.correct, NULL);
+ *           ytr_data_write(&w, &r);               // between trials
+ *       }
+ *       if (!ytr_data_close(&w)) fputs(ytr_data_error(&w), stderr);
  *
  *   ---------------------------------------------------------------------
  *   MODEL
@@ -936,6 +1006,8 @@
  *       ytr_save / ytr_load                  a versioned byte snapshot
  *                                                of the whole state, for
  *                                                resuming after a crash
+ *     The data writer (DATA FILE, v0.3) puts the first two in a file with
+ *     the caller's columns.
  *     ytr_save() writes ytr_save_size(t) bytes; ytr_load() rebuilds a
  *     handle from them plus a desc that re-supplies what a snapshot cannot
  *     carry (the pointers: rng and its state, records, cond_reps, the
@@ -1013,6 +1085,97 @@
  *     container under the trial index, and the fixed record holds a
  *     reference to it if one is needed. The sequencer's table stays narrow
  *     and joins on trial index.
+ *
+ *   DATA FILE (v0.3)
+ *     ytr_data writes one CSV row per trial: the session's columns
+ *     (desc.trials; the columns of ytr_format_row()) and then the
+ *     caller's (desc.cols). Without a session it writes the caller's
+ *     columns alone, for a staircase-only experiment or any other table.
+ *     COLUMNS. Declared once, at open; open() copies them, so the array may
+ *     go away. A name is [A-Za-z_][A-Za-z0-9_]*, at most 63 bytes, unique
+ *     among all the file's columns (a session's included), and the file
+ *     has at most YTR_DATA_MAX_COLS (64): ysp/table.h's header rules, so
+ *     the file reads back. A column gets its value one of three ways:
+ *       YTR_COL(T, field, type)     from the field of the struct of type T
+ *                                     that ytr_data_write() is given; the
+ *                                     name is the field's. open() checks
+ *                                     the field's size against the type.
+ *       YTR_COL_SET(name, type)     from ytr_data_set_<type>(w, col, v)
+ *                                     before the row (PsychoPy's addData;
+ *                                     col is the index in desc.cols, or
+ *                                     ytr_data_col(w, name)); empty in a
+ *                                     row where it was not set. A string
+ *                                     set this way must stay valid until
+ *                                     the row is written.
+ *       YTR_COL_TEXT(name, text)    the same text in every row (participant,
+ *                                     session, condition file), copied at
+ *                                     open; at most YTR_DATA_POOL / 3 bytes
+ *                                     in all.
+ *     YTR_COL_D(T, field, type, decimals) is YTR_COL with decimals.
+ *     TYPES AND TEXT. Every field is written without a locale ('.' for the
+ *     decimal point):
+ *       INT, INT64  decimal; YTR_MISSING_INT (INT_MIN) or YTR_MISSING_I64
+ *                   (INT64_MIN) is missing
+ *       DOUBLE      decimals 0: the fewest of 15 to 17 significant digits
+ *                   that ysp/table.h reads back as the same double (%g
+ *                   form, so 1e-07); 1..17: that many fixed decimals (%f).
+ *                   NaN and the infinities are missing: ysp/table.h reads
+ *                   no inf or nan.
+ *       BOOL        1 or 0
+ *       STRING      const char*, UTF-8; NULL is missing
+ *       CHARS       char[size], to the first NUL or all size bytes
+ *       TIME_NS     int64_t nanoseconds as seconds with decimals 1..9 (0 =
+ *                   9, the exact value): 1184516667 is 1.184516667, and at
+ *                   3 decimals 1.185. Integer arithmetic, rounded half away
+ *                   from zero; a value that rounds to zero has no sign.
+ *                   YTR_MISSING_NS (INT64_MIN) is missing. Data files are in
+ *                   seconds; the C side stays int64 ns.
+ *     A missing value is an empty field. ysp/table.h then needs
+ *     allow_empty for a numeric column (the cell reads as NaN). An empty
+ *     string and a missing one are the same empty field, and a row whose
+ *     every field is empty is skipped by ysp/table.h's reader.
+ *     A text field is quoted when it holds a comma, a quote, a CR or an LF,
+ *     with quotes doubled (RFC 4180). A byte that is not part of valid
+ *     UTF-8 (ysp/table.h's rules: no overlong forms, no surrogates) is
+ *     written as U+FFFD, so one bad byte cannot make the file unreadable.
+ *     Lines end in LF; there is no BOM and no comment line. ysp/table.h
+ *     refuses a field over YTB_MAX_FIELD (4096) bytes; the writer writes it
+ *     whole anyway.
+ *     THE SESSION'S COLUMNS. With desc.trials (open at ytr_data_open()),
+ *     each row starts with ytr_format_row()'s fields for the trial, and
+ *     the header with ytr_format_header()'s names, which must follow the
+ *     name rule: a factor named "spatial freq" is refused at open, by name.
+ *     ytr_data_write() writes the last completed trial. Call it after
+ *     ytr_update() or ytr_requeue() and before the next ytr_next(): with a
+ *     trial pending it returns YTR_ERR_ORDER, because the caller's values
+ *     belong to the pending trial and the session's to the one before; a
+ *     second write for the same trial is YTR_ERR_ORDER too. A trial with no
+ *     write has no row (the index column shows the gap). A writer opened
+ *     mid-session writes the trials completed after it opens, so after a
+ *     ytr_load() resume a new file continues where the snapshot left off.
+ *     WHEN BYTES MOVE. A row is built in the handle's buffer (YTR_DATA_BUF,
+ *     8192; a longer row goes out in pieces) and handed to the OS in one
+ *     write before ytr_data_write() returns: the file has no stdio buffer,
+ *     so a crash, an abort() or the screen header's panic exit keeps every
+ *     row written. YTR_FLUSH_SYNC also waits for the disk (_commit() on
+ *     Windows, fsync() elsewhere), so a power cut keeps them too. Write
+ *     between trials: a row costs microseconds with YTR_FLUSH_ROW and
+ *     milliseconds with YTR_FLUSH_SYNC (STATUS has the numbers). With a
+ *     write function (desc.write instead of desc.path) each row is one
+ *     call, and the function decides when bytes are safe.
+ *     THE FILE. desc.path is UTF-8 (on Windows converted for _wfsopen),
+ *     created or truncated. On Windows other programs may read it while it
+ *     is open (a monitor), not write it. A failed write sets ytr_data_error(),
+ *     returns YTR_ERR_IO, and every later write returns YTR_ERR_IO without
+ *     writing, so the file never has a row after a hole. close() returns
+ *     false when any write failed.
+ *     THE SIDECAR (desc.meta_path). Lines of key=value written at open:
+ *     "ysp_trials=<version> data=<path>", the caller's desc.meta text
+ *     as given (participant, rig, seed, the rig profile's hash), and
+ *     ytr_format_meta()'s line when there is a session. close() appends
+ *     "rows=N closed=1"; a sidecar without it belongs to a session that
+ *     did not close. A sidecar, not comment lines in the CSV, because
+ *     ysp/table.h, pandas' defaults and R's read.csv take no comments.
  *
  *   RANDOMNESS
  *     desc.rng(ctx) returns a uniform variate in [0, 1). Required for every
@@ -1113,6 +1276,21 @@
  *     YTR_ERR_FULL    next() with YTR_MAX_TRIALS trials in the history
  *                       and something left to run; a re-queue that will not
  *                       fit (refused, the outcome recorded as YTR_INVALID)
+ *     YTR_ERR_IO      (v0.3) a data file write failed, now or before
+ *
+ *   The data writer: ytr_data_open() and ytr_data_close() return bool and
+ *   fill ytr_data_error(); ytr_data_write() fills it on YTR_ERR_IO. The
+ *   setters and write return 0 or a code: YTR_ERR_ARG for a null handle,
+ *   a column out of range, not a SET column or of another type, or a NULL
+ *   row with a bound column; YTR_ERR_CLOSED; YTR_ERR_ORDER as DATA FILE
+ *   says. ytr_data_open() rejects, with a message naming the column: a
+ *   null desc; no path and no write function; no columns; more than
+ *   YTR_DATA_MAX_COLS; a name that breaks the rule or repeats one; a
+ *   type out of range; decimals out of range or on a type without them; a
+ *   field whose size is not the type's, or a CHARS field without a size;
+ *   CONST without text or with too much; a flush out of range; a session
+ *   that is not open, or whose line could pass YTR_DATA_BUF; a meta_path
+ *   over 1023 bytes; a file or sidecar that cannot be created or written.
  *
  *   On a closed or null handle the counts (n_conditions, n_factors,
  *   n_scheduled, n_run, n_done, n_valid) are 0, the lookups (level,
@@ -1137,6 +1315,12 @@
  *   YTR_MAX_CONDITIONS before the include to resize; both must stay
  *   below 32768, since trial and condition numbers are stored in 16 bits.
  *   A handle is not thread-safe; one thread runs one session.
+ *   The data writer's handle (v0.3) holds the column list, the CONST
+ *   texts and the row buffer: 18,856 bytes on a 64-bit ABI at the
+ *   defaults (YTR_DATA_BUF 8192). ytr_data_write() allocates nothing and
+ *   makes one write call per row; the C library allocates the FILE at
+ *   open, and the file has no stdio buffer to allocate. One thread writes
+ *   one file.
  *   Costs: open() is O(trials) plus, per repair swap, up to 128 slot
  *   checks for the partner and a rescan from the lower slot, each check
  *   O(constraints x rule span), so an impossible
@@ -1175,9 +1359,17 @@
 /* The version of this header, for a log line or a compile-time check. The
  * string is the three numbers, and the test asserts that it stays so. */
 #define YTR_VERSION_MAJOR 0
-#define YTR_VERSION_MINOR 2
-#define YTR_VERSION_PATCH 1
-#define YTR_VERSION_STRING "0.2.1"
+#define YTR_VERSION_MINOR 3
+#define YTR_VERSION_PATCH 0
+#define YTR_VERSION_STRING "0.3.0"
+
+/* fsync() and fileno() for YTR_FLUSH_SYNC under -std=c11: the feature-test
+ * macro of ysp/rt.h and ysp/pack.h, set before the first system header
+ * (Linux and Emscripten only). */
+#if (defined(__linux__) || defined(__EMSCRIPTEN__)) && !defined(_DEFAULT_SOURCE) && \
+    !defined(_GNU_SOURCE) && !defined(_POSIX_C_SOURCE) && !defined(_XOPEN_SOURCE)
+    #define _DEFAULT_SOURCE 1
+#endif
 
 /* Tables (conditions files, trial lists) are ysp/table.h's. */
 #include "ysp/table.h"
@@ -1185,6 +1377,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <limits.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -1231,6 +1424,7 @@ extern "C" {
 #define YTR_ERR_CLOSED  (-3)
 #define YTR_ERR_ORDER   (-4)
 #define YTR_ERR_FULL    (-5)
+#define YTR_ERR_IO      (-6)  /* the data file could not be written (v0.3) */
 
 #define YTR_INVALID     (-1)  /* an outcome that is no response           */
 #define YTR_REQUEUE     (-2)  /* the outcome ytr_requeue() records, and
@@ -1718,6 +1912,144 @@ YTR_API ytr_jitter_value ytr_jitter(const ytr_trials* t, int i, int j);
 /* The index of the jitter named `name`, or -1. */
 YTR_API int ytr_jitter_index(const ytr_trials* t, const char* name);
 
+/* --- data file (v0.3.0) ------------------------------------------------ */
+
+/* A column's type: the C type it reads and how it is written (DATA FILE). */
+typedef enum ytr_col_type {
+    YTR_COL_INT = 1,   /* int; YTR_MISSING_INT is missing                 */
+    YTR_COL_INT64,     /* int64_t; YTR_MISSING_I64 is missing             */
+    YTR_COL_DOUBLE,    /* double; NaN and infinities are missing          */
+    YTR_COL_BOOL,      /* bool, written 1 or 0                            */
+    YTR_COL_STRING,    /* const char*, UTF-8; NULL is missing             */
+    YTR_COL_CHARS,     /* char[size], UTF-8, to the first NUL or the end  */
+    YTR_COL_TIME_NS,   /* int64_t nanoseconds, written as seconds;
+                        * YTR_MISSING_NS is missing                       */
+    YTR_COL_CONST      /* the same text on every row (participant, session) */
+} ytr_col_type;
+
+#define YTR_MISSING_INT INT_MIN
+#define YTR_MISSING_I64 INT64_MIN
+#define YTR_MISSING_NS  INT64_MIN
+#define YTR_UNBOUND     ((size_t)-1)  /* a column set per row by index      */
+
+/* One column of the caller's. Build it with the macros below. */
+typedef struct ytr_col {
+    const char*    name;      /* [A-Za-z_][A-Za-z0-9_]*, at most 63 bytes   */
+    ytr_col_type type;
+    size_t         offset;    /* in the row struct, or YTR_UNBOUND          */
+    size_t         size;      /* the field's bytes; 0 = the type's size     */
+    int            decimals;  /* DOUBLE: 0 = shortest exact, 1..17 fixed;
+                               * TIME_NS: 0 = 9 (exact), 1..9               */
+    const char*    text;      /* CONST: the value, copied at open           */
+} ytr_col;
+
+/* A field of struct T, named as the field. Constant expressions, so a
+ * column list can be a static array in C and C++. */
+#define YTR_COL(T, field, type) \
+    { #field, (type), offsetof(T, field), sizeof(((T*)0)->field), 0, NULL }
+/* The same with `decimals` (DOUBLE: fixed decimals; TIME_NS: 1..9). */
+#define YTR_COL_D(T, field, type, decimals) \
+    { #field, (type), offsetof(T, field), sizeof(((T*)0)->field), (decimals), NULL }
+/* A column set per row with ytr_data_set_*(); empty in a row that did not. */
+#define YTR_COL_SET(name, type) { (name), (type), YTR_UNBOUND, 0, 0, NULL }
+/* A column with the same text in every row. */
+#define YTR_COL_TEXT(name, text) { (name), YTR_COL_CONST, YTR_UNBOUND, 0, 0, (text) }
+
+/* When a row reaches the file (DATA FILE: FLUSH). */
+typedef enum ytr_flush {
+    YTR_FLUSH_ROW = 0,  /* each row handed to the OS: survives a crash or a
+                         * killed process, not a power cut                 */
+    YTR_FLUSH_SYNC      /* ROW, then the OS writes it to the disk          */
+} ytr_flush;
+
+/* Bytes out, for a writer with no path: return false on a failure. */
+typedef bool (*ytr_write_fn)(void* ctx, const void* bytes, size_t n);
+
+/* Zero-initialize and set what you need. Required: a path or a write
+ * function, and at least one column (the session's or cols[]). */
+typedef struct ytr_data_desc {
+    const char*        path;      /* UTF-8; created or truncated             */
+    ytr_write_fn     write;     /* used when path is NULL                  */
+    void*              write_ctx;
+    const ytr_trials* trials;   /* the session's columns first; NULL: none */
+    const ytr_col*   cols;      /* the caller's columns, copied at open    */
+    int                n_cols;
+    ytr_flush        flush;
+    const char*        meta_path; /* a sidecar of key=value lines, or NULL  */
+    const char*        meta;      /* the caller's lines for it, or NULL     */
+} ytr_data_desc;
+
+#ifndef YTR_DATA_BUF
+#define YTR_DATA_BUF 8192         /* the row buffer: rows longer are split  */
+#endif
+#define YTR_DATA_MAX_COLS 64      /* all columns: ysp/table.h reads 64       */
+#define YTR_DATA_POOL     2048    /* bytes of the CONST columns' text        */
+
+/* A column as the writer keeps it. Internal. */
+typedef struct ytr__dcol {
+    char     name[64];
+    int      type, decimals;
+    size_t   offset, size;
+    int      text_off, text_len;  /* CONST: its CSV text in the pool         */
+    bool     set;                  /* a value is set for this row            */
+    union { int64_t i; double d; const char* s; } v;
+} ytr__dcol;
+
+/* The data writer. The caller allocates it (about 18 KB: static or on
+ * the heap) and treats every field as opaque. */
+typedef struct ytr_data {
+    bool               open;
+    bool               io_failed;
+    ytr_flush        flush;
+    void*              file;       /* FILE*, or NULL with a write function  */
+    ytr_write_fn     write;
+    void*              write_ctx;
+    const ytr_trials* trials;
+    int                next_trial; /* the first trial not yet written        */
+    int                n_cols;
+    int64_t            rows;
+    size_t             len;        /* bytes in buf                           */
+    size_t             pool_len;
+    char               meta_path[1024];
+    ytr__dcol        col[YTR_DATA_MAX_COLS];
+    char               pool[YTR_DATA_POOL];
+    char               buf[YTR_DATA_BUF];
+    char               error[256];
+} ytr_data;
+
+/* Check the columns, open the file (or take the write function), write the
+ * header line and, with meta_path, the sidecar. Returns false with
+ * ytr_data_error() set. */
+YTR_API bool ytr_data_open(ytr_data* w, const ytr_data_desc* desc);
+/* The last failure's message ("" when there is none). */
+YTR_API const char* ytr_data_error(const ytr_data* w);
+/* The index of the caller column named `name` in desc.cols, or -1. */
+YTR_API int ytr_data_col(const ytr_data* w, const char* name);
+
+/* Set column `col` (an index into desc.cols, of a YTR_COL_SET column of
+ * that type) for the next row. A string must stay valid until the row is
+ * written. Return 0 or YTR_ERR_ARG / YTR_ERR_CLOSED. */
+YTR_API int ytr_data_set_int(ytr_data* w, int col, int v);
+YTR_API int ytr_data_set_int64(ytr_data* w, int col, int64_t v);
+YTR_API int ytr_data_set_double(ytr_data* w, int col, double v);
+YTR_API int ytr_data_set_bool(ytr_data* w, int col, bool v);
+YTR_API int ytr_data_set_string(ytr_data* w, int col, const char* v);
+YTR_API int ytr_data_set_time_ns(ytr_data* w, int col, int64_t ns);
+
+/* Write one row: the session's columns of its last completed trial (when
+ * desc.trials is set), then the caller's columns from `row` (a struct the
+ * bound columns point into; NULL only when no column is bound) and from the
+ * values set since the last row. With a session, call it after
+ * ytr_update() or ytr_requeue() and before the next ytr_next(). Returns 0,
+ * or YTR_ERR_ORDER (a trial is pending, or its row is written already),
+ * YTR_ERR_ARG, YTR_ERR_CLOSED, or YTR_ERR_IO with ytr_data_error() set. */
+YTR_API int ytr_data_write(ytr_data* w, const void* row);
+/* Rows written. */
+YTR_API int64_t ytr_data_rows(const ytr_data* w);
+/* Flush and close the file, and end the sidecar. Returns false when a
+ * write failed at any time, with ytr_data_error() set. */
+YTR_API bool ytr_data_close(ytr_data* w);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
@@ -1736,10 +2068,18 @@ YTR_API int ytr_jitter_index(const ytr_trials* t, const char* name);
     #include "ysp/table.h"
 #endif
 
+#include <errno.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#ifdef _WIN32
+#include <io.h>       /* _commit, for YTR_FLUSH_SYNC */
+#include <share.h>    /* _SH_DENYWR */
+#include <wchar.h>
+#else
+#include <unistd.h>   /* fsync */
+#endif
 
 #ifdef NAN
     #define YTR__NAN ((double)NAN)
@@ -1776,6 +2116,7 @@ YTR_API const char* ytr_strerror(int code) {
     case YTR_ERR_CLOSED: return "session is not open";
     case YTR_ERR_ORDER:  return "call out of order";
     case YTR_ERR_FULL:   return "trial history is full";
+    case YTR_ERR_IO:     return "data file write failed";
     default:               return code >= 0 ? "ok" : "unknown error";
     }
 }
@@ -6255,6 +6596,635 @@ YTR_API int ytr_restore(ytr_trials* t, const int* outcomes, const void* records,
         }
     }
     return 0;
+}
+
+/* --- data file (v0.3.0) ------------------------------------------------ */
+
+static bool ytr__dfail(ytr_data* w, const char* fmt, ...) {
+    va_list ap;
+    int n = snprintf(w->error, sizeof(w->error), "ysp_trials: ");
+    if (n < 0) n = 0;
+    va_start(ap, fmt);
+    vsnprintf(w->error + n, sizeof(w->error) - (size_t)n, fmt, ap);
+    va_end(ap);
+    return false;
+}
+
+/* The length of the valid UTF-8 sequence at p, or 0: ysp/table.h's rules
+ * (no overlong forms, no surrogates, nothing above U+10FFFF), so every
+ * text written reads back. */
+static size_t ytr__u8(const unsigned char* p, size_t n) {
+    unsigned c = p[0];
+    if (c < 0x80) return 1;
+    if (c >= 0xC2 && c <= 0xDF) return (n >= 2 && (p[1] & 0xC0u) == 0x80u) ? 2 : 0;
+    if (c >= 0xE0 && c <= 0xEF) {
+        if (n < 3 || (p[1] & 0xC0u) != 0x80u || (p[2] & 0xC0u) != 0x80u) return 0;
+        if ((c == 0xE0 && p[1] < 0xA0) || (c == 0xED && p[1] > 0x9F)) return 0;
+        return 3;
+    }
+    if (c >= 0xF0 && c <= 0xF4) {
+        if (n < 4 || (p[1] & 0xC0u) != 0x80u || (p[2] & 0xC0u) != 0x80u ||
+            (p[3] & 0xC0u) != 0x80u)
+            return 0;
+        if ((c == 0xF0 && p[1] < 0x90) || (c == 0xF4 && p[1] > 0x8F)) return 0;
+        return 4;
+    }
+    return 0;
+}
+
+/* The buffer to the file or the write function. After a failure nothing
+ * more is written: a row with a hole in it would misalign the columns. */
+static void ytr__dspill(ytr_data* w) {
+    if (w->len == 0) return;
+    if (!w->io_failed) {
+        bool ok;
+        if (w->file) ok = fwrite(w->buf, 1, w->len, (FILE*)w->file) == w->len;
+        else ok = w->write(w->write_ctx, w->buf, w->len);
+        if (!ok) {
+            w->io_failed = true;
+            ytr__dfail(w, "ytr_data_write: the write failed after %lld rows (errno %d)",
+                         (long long)w->rows, errno);
+        }
+    }
+    w->len = 0;
+}
+
+static void ytr__dput(ytr_data* w, const char* s, size_t n) {
+    while (n > 0) {
+        size_t room = sizeof(w->buf) - w->len, k = n < room ? n : room;
+        memcpy(w->buf + w->len, s, k);
+        w->len += k;
+        s += k;
+        n -= k;
+        if (w->len == sizeof(w->buf)) ytr__dspill(w);
+    }
+}
+
+static void ytr__dputc(ytr_data* w, char c) {
+    if (w->len == sizeof(w->buf)) ytr__dspill(w);
+    w->buf[w->len++] = c;
+}
+
+static size_t ytr__u64_text(char* out, uint64_t v) {
+    char tmp[20];
+    size_t n = 0, i;
+    do {
+        tmp[n++] = (char)('0' + (int)(v % 10u));
+        v /= 10u;
+    } while (v);
+    for (i = 0; i < n; i++) out[i] = tmp[n - 1 - i];
+    return n;
+}
+
+static void ytr__dput_i64(ytr_data* w, int64_t v) {
+    char b[24];
+    size_t n = 0;
+    uint64_t u = (uint64_t)v;
+    if (v < 0) {
+        b[n++] = '-';
+        u = (uint64_t)0 - u;
+    }
+    n += ytr__u64_text(b + n, u);
+    ytr__dput(w, b, n);
+}
+
+/* ns as seconds with `dec` decimals (1..9), rounded half away from zero in
+ * integers, so 9 decimals is the exact value and no double is involved. */
+static void ytr__dput_time(ytr_data* w, int64_t ns, int dec) {
+    char b[40];
+    size_t n = 0, k;
+    uint64_t u = (uint64_t)ns, scale = 1, p10 = 1, frac;
+    int i;
+    bool neg = ns < 0;
+    if (neg) u = (uint64_t)0 - u;
+    for (i = dec; i < 9; i++) scale *= 10u;
+    for (i = 0; i < dec; i++) p10 *= 10u;
+    u = u / scale + (u % scale >= (scale + 1u) / 2u && scale > 1u ? 1u : 0u);
+    if (neg && u != 0) b[n++] = '-';
+    n += ytr__u64_text(b + n, u / p10);
+    b[n++] = '.';
+    frac = u % p10;
+    for (k = (size_t)dec; k > 0; k--) {
+        b[n + k - 1] = (char)('0' + (int)(frac % 10u));
+        frac /= 10u;
+    }
+    n += (size_t)dec;
+    ytr__dput(w, b, n);
+}
+
+/* A finite double: `dec` fixed decimals, or (0) the fewest of 15 to 17
+ * significant digits that read back as x through ysp/table.h. '.' for the
+ * decimal point whatever LC_NUMERIC says. NaN and infinities are missing:
+ * ysp/table.h refuses inf and nan. */
+static void ytr__dput_double(ytr_data* w, double x, int dec) {
+    char b[400];
+    double y;
+    int prec, n = 0, i;
+    if (x != x || x - x != 0.0) return;
+    if (dec > 0) {
+        n = snprintf(b, sizeof(b), "%.*f", dec, x);
+    } else {
+        for (prec = 15; prec <= 17; prec++) {
+            n = snprintf(b, sizeof(b), "%.*g", prec, x);
+            for (i = 0; i < n; i++)
+                if (!((b[i] >= '0' && b[i] <= '9') || b[i] == 'e' || b[i] == '-' || b[i] == '+'))
+                    b[i] = '.';
+            if (ytb_parse_number(b, (size_t)n, &y) == YTB_NUM_OK && y == x) break;
+        }
+    }
+    if (n <= 0 || n >= (int)sizeof(b)) return;
+    for (i = 0; i < n; i++)
+        if (!((b[i] >= '0' && b[i] <= '9') || b[i] == 'e' || b[i] == '-' || b[i] == '+')) b[i] = '.';
+    ytr__dput(w, b, (size_t)n);
+}
+
+/* A text field: quoted when it holds a comma, a quote or a line break
+ * (RFC 4180, quotes doubled); a byte that is not valid UTF-8 becomes
+ * U+FFFD, so the file stays readable. */
+static void ytr__dput_text(ytr_data* w, const char* s, size_t n) {
+    const unsigned char* p = (const unsigned char*)s;
+    size_t i = 0, run = 0, k;
+    bool quote = false;
+    for (k = 0; k < n; k++)
+        if (p[k] == ',' || p[k] == '"' || p[k] == '\n' || p[k] == '\r') { quote = true; break; }
+    if (quote) ytr__dputc(w, '"');
+    while (i < n) {
+        k = ytr__u8(p + i, n - i);
+        if (k == 0 || p[i] == '"') {
+            ytr__dput(w, s + run, i - run);
+            if (k == 0) {
+                ytr__dput(w, "\xEF\xBF\xBD", 3);
+                i++;
+            } else {
+                ytr__dput(w, "\"\"", 2);
+                i += k;
+            }
+            run = i;
+        } else {
+            i += k;
+        }
+    }
+    ytr__dput(w, s + run, n - run);
+    if (quote) ytr__dputc(w, '"');
+}
+
+/* ysp/table.h's column-name rule, so the header reads back. */
+static bool ytr__dname_ok(const char* s, size_t n) {
+    size_t i;
+    if (n == 0 || n > YTB_MAX_NAME) return false;
+    for (i = 0; i < n; i++) {
+        char c = s[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' ||
+              (i > 0 && c >= '0' && c <= '9')))
+            return false;
+    }
+    return true;
+}
+
+/* The longest line ytr_format_row() can give this session: ten integers,
+ * a lead-in flag, the factors (a table cell quoted, every byte a quote at
+ * worst) and the jitters' seconds. */
+static size_t ytr__row_bound(const ytr_trials* t) {
+    size_t n = 12u * 12u, longest;
+    int f, l, nl;
+    for (f = 0; f < ytr__nfe(t); f++) {
+        if (t->desc.table) {
+            longest = 0;
+            nl = ytb_n_levels(t->desc.table, f);
+            for (l = 0; l < nl; l++) {
+                const char* s = ytb_level_text(t->desc.table, f, l);
+                size_t k = s ? strlen(s) : 0;
+                if (k > longest) longest = k;
+            }
+            n += 2u * longest + 3u;
+        } else {
+            n += 12u;
+        }
+    }
+    return n + 24u * (size_t)(t->n_jit > 0 ? t->n_jit : 0) + 2u;
+}
+
+static FILE* ytr__fopen(const char* path, bool append) {
+    FILE* f = NULL;
+#ifdef _WIN32
+    /* UTF-8 to UTF-16 for _wfopen, so a path with accents works. */
+    wchar_t wp[1024];
+    const unsigned char* p = (const unsigned char*)path;
+    size_t n = strlen(path), i = 0, k = 0;
+    while (i < n) {
+        size_t m = ytr__u8(p + i, n - i);
+        uint32_t cp;
+        if (m == 0 || k + 3 > sizeof(wp) / sizeof(wp[0])) return NULL;
+        if (m == 1) cp = p[i];
+        else if (m == 2) cp = (p[i] & 0x1Fu) << 6 | (p[i + 1] & 0x3Fu);
+        else if (m == 3) cp = (p[i] & 0x0Fu) << 12 | (p[i + 1] & 0x3Fu) << 6 | (p[i + 2] & 0x3Fu);
+        else cp = (p[i] & 0x07u) << 18 | (p[i + 1] & 0x3Fu) << 12 | (p[i + 2] & 0x3Fu) << 6 |
+                  (p[i + 3] & 0x3Fu);
+        i += m;
+        if (cp >= 0x10000u) {
+            cp -= 0x10000u;
+            wp[k++] = (wchar_t)(0xD800u + (cp >> 10));
+            wp[k++] = (wchar_t)(0xDC00u + (cp & 0x3FFu));
+        } else {
+            wp[k++] = (wchar_t)cp;
+        }
+    }
+    wp[k] = 0;
+    /* Others may read the file while the session writes it (a monitor, a
+     * copy); _wfopen_s would deny them. */
+    f = _wfsopen(wp, append ? L"ab" : L"wb", _SH_DENYWR);
+#else
+    f = fopen(path, append ? "ab" : "wb");
+#endif
+    return f;
+}
+
+/* Hand the file's bytes to the disk (YTR_FLUSH_SYNC). */
+static bool ytr__fsync(FILE* f) {
+#ifdef _WIN32
+    return _commit(_fileno(f)) == 0;
+#else
+    return fsync(fileno(f)) == 0;
+#endif
+}
+
+static int ytr__dtype_size(int type) {
+    switch (type) {
+    case YTR_COL_INT:     return (int)sizeof(int);
+    case YTR_COL_INT64:   return 8;
+    case YTR_COL_DOUBLE:  return (int)sizeof(double);
+    case YTR_COL_BOOL:    return (int)sizeof(bool);
+    case YTR_COL_STRING:  return (int)sizeof(const char*);
+    case YTR_COL_TIME_NS: return 8;
+    default:              return 0;
+    }
+}
+
+YTR_API bool ytr_data_open(ytr_data* w, const ytr_data_desc* desc) {
+    static const char* const tnames[] = { "?", "INT", "INT64", "DOUBLE", "BOOL", "STRING",
+                                          "CHARS", "TIME_NS", "CONST" };
+    char names[YTR_DATA_MAX_COLS][YTB_MAX_NAME + 1];
+    int n_names = 0, i, j;
+    if (!w) return false;
+    memset(w, 0, sizeof(*w));
+    if (!desc) return ytr__dfail(w, "ytr_data_open: null desc");
+    if (!desc->path && !desc->write) return ytr__dfail(w, "ytr_data_open: no path and no write function");
+    if (desc->n_cols < 0 || desc->n_cols > YTR_DATA_MAX_COLS || (desc->n_cols > 0 && !desc->cols))
+        return ytr__dfail(w, "ytr_data_open: n_cols %d without cols, or above %d", desc->n_cols,
+                            YTR_DATA_MAX_COLS);
+    if ((int)desc->flush < (int)YTR_FLUSH_ROW || (int)desc->flush > (int)YTR_FLUSH_SYNC)
+        return ytr__dfail(w, "ytr_data_open: flush %d is not a ytr_flush", (int)desc->flush);
+    if (desc->meta_path && strlen(desc->meta_path) >= sizeof(w->meta_path))
+        return ytr__dfail(w, "ytr_data_open: meta_path is longer than %d bytes",
+                            (int)sizeof(w->meta_path) - 1);
+
+    /* The session's names, from its header line. */
+    if (desc->trials) {
+        int len;
+        char* p;
+        if (!ytr_is_open(desc->trials)) return ytr__dfail(w, "ytr_data_open: the session is not open");
+        if (ytr__row_bound(desc->trials) >= sizeof(w->buf))
+            return ytr__dfail(w, "ytr_data_open: a trial's columns can take %lu bytes, more than "
+                                   "YTR_DATA_BUF (%d); define it larger",
+                                (unsigned long)ytr__row_bound(desc->trials), YTR_DATA_BUF);
+        len = ytr_format_header(desc->trials, w->buf, sizeof(w->buf));
+        if (len <= 0 || (size_t)len >= sizeof(w->buf))
+            return ytr__dfail(w, "ytr_data_open: the session's header does not fit YTR_DATA_BUF");
+        p = w->buf;
+        while (*p && *p != '\n') {
+            size_t k = strcspn(p, ",\n");
+            if (n_names >= YTR_DATA_MAX_COLS)
+                return ytr__dfail(w, "ytr_data_open: more than %d columns", YTR_DATA_MAX_COLS);
+            if (!ytr__dname_ok(p, k))
+                return ytr__dfail(w, "ytr_data_open: the session's column '%.*s' is not a name "
+                                       "ysp/table.h reads ([A-Za-z_][A-Za-z0-9_]*, at most %d bytes)",
+                                    (int)(k > 80 ? 80 : k), p, YTB_MAX_NAME);
+            memcpy(names[n_names], p, k);
+            names[n_names++][k] = '\0';
+            p += k;
+            if (*p == ',') p++;
+        }
+        w->len = (size_t)len - 1u;  /* the header line, without its newline */
+        w->trials = desc->trials;
+        w->next_trial = ytr_n_done(desc->trials);
+    }
+
+    for (i = 0; i < desc->n_cols; i++) {
+        const ytr_col* c = &desc->cols[i];
+        ytr__dcol* d = &w->col[i];
+        int tsz;
+        size_t k = c->name ? strlen(c->name) : 0;
+        if (!c->name || !ytr__dname_ok(c->name, k))
+            return ytr__dfail(w, "ytr_data_open: cols[%d]: '%s' is not a name ysp/table.h reads "
+                                   "([A-Za-z_][A-Za-z0-9_]*, at most %d bytes)",
+                                i, c->name ? c->name : "(null)", YTB_MAX_NAME);
+        if ((int)c->type < (int)YTR_COL_INT || (int)c->type > (int)YTR_COL_CONST)
+            return ytr__dfail(w, "ytr_data_open: column '%s': type %d is not a ytr_col_type", c->name,
+                                (int)c->type);
+        if (n_names >= YTR_DATA_MAX_COLS)
+            return ytr__dfail(w, "ytr_data_open: more than %d columns", YTR_DATA_MAX_COLS);
+        memcpy(names[n_names], c->name, k + 1u);
+        n_names++;
+        memcpy(d->name, c->name, k + 1u);
+        d->type = (int)c->type;
+        d->offset = c->offset;
+        d->size = c->size;
+        d->decimals = c->decimals;
+        tsz = ytr__dtype_size(d->type);
+        if (c->type == YTR_COL_CONST) {
+            size_t tl;
+            if (!c->text) return ytr__dfail(w, "ytr_data_open: column '%s': CONST without text", c->name);
+            tl = strlen(c->text);
+            /* 3 bytes per input byte at worst (U+FFFD), plus the quotes; it
+             * must not spill, since no file is open yet. */
+            if (tl > (sizeof(w->pool) - w->pool_len - 2u) / 3u ||
+                w->len + 3u * tl + 2u >= sizeof(w->buf))
+                return ytr__dfail(w, "ytr_data_open: column '%s': the CONST texts exceed %d bytes",
+                                    c->name, YTR_DATA_POOL / 3);
+            /* Quoted and checked once, here, through the row buffer's
+             * tail, which holds nothing yet. */
+            {
+                size_t keep = w->len;
+                ytr__dput_text(w, c->text, tl);
+                d->text_off = (int)w->pool_len;
+                d->text_len = (int)(w->len - keep);
+                memcpy(w->pool + w->pool_len, w->buf + keep, w->len - keep);
+                w->pool_len += w->len - keep;
+                w->len = keep;
+            }
+            d->offset = YTR_UNBOUND;
+            continue;
+        }
+        if (c->type == YTR_COL_DOUBLE ? (c->decimals < 0 || c->decimals > 17)
+            : c->type == YTR_COL_TIME_NS ? (c->decimals < 0 || c->decimals > 9) : c->decimals != 0)
+            return ytr__dfail(w, "ytr_data_open: column '%s': decimals %d (DOUBLE 0..17, TIME_NS 0..9, "
+                                   "else 0)", c->name, c->decimals);
+        if (c->type == YTR_COL_TIME_NS && d->decimals == 0) d->decimals = 9;
+        if (c->offset == YTR_UNBOUND) continue;
+        if (c->type == YTR_COL_CHARS ? c->size == 0 : (c->size != 0 && c->size != (size_t)tsz))
+            return ytr__dfail(w, "ytr_data_open: column '%s' is %s but its field is %lu bytes%s",
+                                c->name, tnames[d->type], (unsigned long)c->size,
+                                c->type == YTR_COL_CHARS ? " (CHARS needs the array's size)" : "");
+        if (d->size == 0) d->size = (size_t)tsz;
+    }
+    w->n_cols = desc->n_cols;
+    if (n_names == 0) return ytr__dfail(w, "ytr_data_open: no columns (no session and no cols)");
+    for (i = 0; i < n_names; i++)
+        for (j = 0; j < i; j++)
+            if (strcmp(names[i], names[j]) == 0)
+                return ytr__dfail(w, "ytr_data_open: two columns are named '%s'", names[i]);
+
+    if (desc->path) {
+        FILE* f = ytr__fopen(desc->path, false);
+        if (!f) {
+            w->len = 0;
+            return ytr__dfail(w, "ytr_data_open: cannot create '%s' (errno %d)", desc->path, errno);
+        }
+        /* No stdio buffer: a row goes from the row buffer to the OS in one
+         * write, and nothing waits in a second buffer for a crash to lose. */
+        setvbuf(f, NULL, _IONBF, 0);
+        w->file = f;
+    } else {
+        w->write = desc->write;
+        w->write_ctx = desc->write_ctx;
+    }
+    w->flush = desc->flush;
+    /* The header line; a session's columns are in the buffer already. */
+    for (i = 0; i < w->n_cols; i++) {
+        if (i > 0 || w->trials) ytr__dputc(w, ',');
+        ytr__dput(w, w->col[i].name, strlen(w->col[i].name));
+    }
+    ytr__dputc(w, '\n');
+    ytr__dspill(w);
+    if (w->io_failed) {
+        if (w->file) fclose((FILE*)w->file);
+        w->file = NULL;
+        return ytr__dfail(w, "ytr_data_open: cannot write the header (errno %d)", errno);
+    }
+
+    if (desc->meta_path) {
+        FILE* m = ytr__fopen(desc->meta_path, false);
+        bool ok;
+        size_t ml;
+        if (!m) {
+            if (w->file) fclose((FILE*)w->file);
+            w->file = NULL;
+            return ytr__dfail(w, "ytr_data_open: cannot create '%s' (errno %d)", desc->meta_path, errno);
+        }
+        ok = fprintf(m, "ysp_trials=%s data=%s\n", YTR_VERSION_STRING,
+                     desc->path ? desc->path : "-") > 0;
+        if (desc->meta && (ml = strlen(desc->meta)) > 0) {
+            ok = fwrite(desc->meta, 1, ml, m) == ml && ok;
+            if (desc->meta[ml - 1] != '\n') ok = fputc('\n', m) != EOF && ok;
+        }
+        if (desc->trials) {
+            int len = ytr_format_meta(desc->trials, w->buf, sizeof(w->buf));
+            if (len > 0 && (size_t)len < sizeof(w->buf))
+                ok = fwrite(w->buf, 1, (size_t)len, m) == (size_t)len && ok;
+            else  /* say so, rather than leave the reader to guess */
+                ok = fprintf(m, "ysp_trials_meta=omitted (%d bytes, over YTR_DATA_BUF)\n", len) > 0 && ok;
+        }
+        ok = fclose(m) == 0 && ok;
+        if (!ok) {
+            if (w->file) fclose((FILE*)w->file);
+            w->file = NULL;
+            return ytr__dfail(w, "ytr_data_open: cannot write '%s'", desc->meta_path);
+        }
+        memcpy(w->meta_path, desc->meta_path, strlen(desc->meta_path) + 1u);
+    }
+    w->error[0] = '\0';
+    w->open = true;
+    return true;
+}
+
+YTR_API const char* ytr_data_error(const ytr_data* w) { return w ? w->error : ""; }
+
+YTR_API int ytr_data_col(const ytr_data* w, const char* name) {
+    int i;
+    if (!w || !w->open || !name) return -1;
+    for (i = 0; i < w->n_cols && i < YTR_DATA_MAX_COLS; i++)
+        if (strcmp(w->col[i].name, name) == 0) return i;
+    return -1;
+}
+
+/* The column to set, when it is a set-per-row column of one of the types. */
+static ytr__dcol* ytr__dset(ytr_data* w, int col, int type_a, int type_b, int* rc) {
+    ytr__dcol* d;
+    *rc = 0;
+    if (!w) { *rc = YTR_ERR_ARG; return NULL; }
+    if (!w->open) { *rc = YTR_ERR_CLOSED; return NULL; }
+    if (col < 0 || col >= w->n_cols || col >= YTR_DATA_MAX_COLS) { *rc = YTR_ERR_ARG; return NULL; }
+    d = &w->col[col];
+    if (d->offset != YTR_UNBOUND || (d->type != type_a && d->type != type_b)) {
+        *rc = YTR_ERR_ARG;
+        return NULL;
+    }
+    d->set = true;
+    return d;
+}
+
+YTR_API int ytr_data_set_int(ytr_data* w, int col, int v) {
+    int rc;
+    ytr__dcol* d = ytr__dset(w, col, YTR_COL_INT, YTR_COL_INT, &rc);
+    if (d) d->v.i = v;
+    return rc;
+}
+
+YTR_API int ytr_data_set_int64(ytr_data* w, int col, int64_t v) {
+    int rc;
+    ytr__dcol* d = ytr__dset(w, col, YTR_COL_INT64, YTR_COL_INT64, &rc);
+    if (d) d->v.i = v;
+    return rc;
+}
+
+YTR_API int ytr_data_set_double(ytr_data* w, int col, double v) {
+    int rc;
+    ytr__dcol* d = ytr__dset(w, col, YTR_COL_DOUBLE, YTR_COL_DOUBLE, &rc);
+    if (d) d->v.d = v;
+    return rc;
+}
+
+YTR_API int ytr_data_set_bool(ytr_data* w, int col, bool v) {
+    int rc;
+    ytr__dcol* d = ytr__dset(w, col, YTR_COL_BOOL, YTR_COL_BOOL, &rc);
+    if (d) d->v.i = v ? 1 : 0;
+    return rc;
+}
+
+YTR_API int ytr_data_set_string(ytr_data* w, int col, const char* v) {
+    int rc;
+    ytr__dcol* d = ytr__dset(w, col, YTR_COL_STRING, YTR_COL_CHARS, &rc);
+    if (d) d->v.s = v;
+    return rc;
+}
+
+YTR_API int ytr_data_set_time_ns(ytr_data* w, int col, int64_t ns) {
+    int rc;
+    ytr__dcol* d = ytr__dset(w, col, YTR_COL_TIME_NS, YTR_COL_TIME_NS, &rc);
+    if (d) d->v.i = ns;
+    return rc;
+}
+
+/* One caller field from the row struct or the value set. */
+static void ytr__dfield(ytr_data* w, const ytr__dcol* d, const unsigned char* row) {
+    int64_t i64 = 0;
+    double x = 0.0;
+    const char* s = NULL;
+    size_t sl = 0;
+    bool have = true;
+    if (d->type == YTR_COL_CONST) {
+        ytr__dput(w, w->pool + d->text_off, (size_t)d->text_len);
+        return;
+    }
+    if (d->offset != YTR_UNBOUND) {
+        const unsigned char* p = row + d->offset;
+        switch (d->type) {
+        case YTR_COL_INT: { int v; memcpy(&v, p, sizeof(v)); i64 = v; have = v != YTR_MISSING_INT; break; }
+        case YTR_COL_BOOL: { bool v; memcpy(&v, p, sizeof(v)); i64 = v ? 1 : 0; break; }
+        case YTR_COL_DOUBLE: memcpy(&x, p, sizeof(x)); break;
+        case YTR_COL_STRING: memcpy(&s, p, sizeof(s)); have = s != NULL; break;
+        case YTR_COL_CHARS: {
+            const void* z = memchr(p, 0, d->size);
+            s = (const char*)p;
+            sl = z ? (size_t)((const unsigned char*)z - p) : d->size;
+            break;
+        }
+        default: memcpy(&i64, p, sizeof(i64)); break;  /* INT64, TIME_NS */
+        }
+    } else if (d->set) {
+        i64 = d->v.i;
+        x = d->v.d;
+        s = d->v.s;
+        if (d->type == YTR_COL_INT && i64 == YTR_MISSING_INT) have = false;
+        if ((d->type == YTR_COL_STRING || d->type == YTR_COL_CHARS) && !s) have = false;
+    } else {
+        have = false;
+    }
+    if (!have) return;
+    switch (d->type) {
+    case YTR_COL_INT:
+    case YTR_COL_BOOL: ytr__dput_i64(w, i64); break;
+    case YTR_COL_INT64: if (i64 != YTR_MISSING_I64) ytr__dput_i64(w, i64); break;
+    case YTR_COL_TIME_NS: if (i64 != YTR_MISSING_NS) ytr__dput_time(w, i64, d->decimals); break;
+    case YTR_COL_DOUBLE: ytr__dput_double(w, x, d->decimals); break;
+    default:
+        if (d->offset == YTR_UNBOUND || d->type == YTR_COL_STRING) sl = strlen(s);
+        ytr__dput_text(w, s, sl);
+        break;
+    }
+}
+
+YTR_API int ytr_data_write(ytr_data* w, const void* row) {
+    int i, last = -1;
+    if (!w) return YTR_ERR_ARG;
+    if (!w->open) return YTR_ERR_CLOSED;
+    if (w->io_failed) return YTR_ERR_IO;
+    if (!row)
+        for (i = 0; i < w->n_cols && i < YTR_DATA_MAX_COLS; i++)
+            if (w->col[i].offset != YTR_UNBOUND) return YTR_ERR_ARG;
+    if (w->trials) {
+        int n, room;
+        if (!ytr_is_open(w->trials)) return YTR_ERR_CLOSED;
+        /* Between update() and the next next() only: a write before
+         * update() would pair this trial's values with the trial before. */
+        last = ytr_n_done(w->trials) - 1;
+        if (ytr_n_run(w->trials) != last + 1 || last < w->next_trial) return YTR_ERR_ORDER;
+        /* The bound checked at open fits an empty buffer. */
+        room = (int)(sizeof(w->buf) - w->len);
+        n = ytr_format_row(w->trials, last, w->buf + w->len, (size_t)room);
+        if (n >= room) {
+            ytr__dspill(w);
+            n = ytr_format_row(w->trials, last, w->buf, sizeof(w->buf));
+        }
+        if (n <= 0 || n >= (int)sizeof(w->buf)) return YTR_ERR_ARG;
+        w->len += (size_t)n - 1u;  /* without its newline */
+    }
+    for (i = 0; i < w->n_cols && i < YTR_DATA_MAX_COLS; i++) {
+        if (i > 0 || w->trials) ytr__dputc(w, ',');
+        ytr__dfield(w, &w->col[i], (const unsigned char*)row);
+        w->col[i].set = false;
+    }
+    ytr__dputc(w, '\n');
+    ytr__dspill(w);
+    if (w->file && w->flush == YTR_FLUSH_SYNC && !w->io_failed && !ytr__fsync((FILE*)w->file)) {
+        w->io_failed = true;
+        ytr__dfail(w, "ytr_data_write: the sync to disk failed after %lld rows (errno %d)",
+                     (long long)w->rows, errno);
+    }
+    if (w->io_failed) return YTR_ERR_IO;
+    if (last >= 0) w->next_trial = last + 1;
+    w->rows++;
+    return 0;
+}
+
+YTR_API int64_t ytr_data_rows(const ytr_data* w) { return w && w->open ? w->rows : 0; }
+
+YTR_API bool ytr_data_close(ytr_data* w) {
+    bool ok;
+    if (!w) return false;
+    if (!w->open) return ytr__dfail(w, "ytr_data_close: the writer is not open");
+    ytr__dspill(w);
+    ok = !w->io_failed;
+    if (w->file) {
+        if (fclose((FILE*)w->file) != 0 && ok) {
+            ok = false;
+            ytr__dfail(w, "ytr_data_close: closing the file failed (errno %d)", errno);
+        }
+        w->file = NULL;
+    }
+    if (w->meta_path[0]) {
+        /* The sidecar's last line says the session closed: one without it
+         * was cut short. */
+        FILE* m = ytr__fopen(w->meta_path, true);
+        bool mok = m && fprintf(m, "rows=%lld closed=1\n", (long long)w->rows) > 0;
+        if (m) mok = fclose(m) == 0 && mok;
+        if (!mok && ok) {
+            ok = false;
+            ytr__dfail(w, "ytr_data_close: cannot append to '%s'", w->meta_path);
+        }
+    }
+    w->open = false;
+    return ok;
 }
 
 #endif /* YSP_TRIALS_IMPLEMENTATION_GUARD */

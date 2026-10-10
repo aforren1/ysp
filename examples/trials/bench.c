@@ -1,7 +1,7 @@
-/* trials_bench.c - timings for ysp/table.h and ysp/trials.h v0.2: CSV parse
- * rate, the view of a block, open() of 10,000-trial designs, and the worst
- * next() + update() of a run. Not run by CI; the numbers go into
- * docs/table.md and docs/trials.md.
+/* trials_bench.c - timings for ysp/table.h and ysp/trials.h: CSV parse
+ * rate, the view of a block, open() of 10,000-trial designs, the worst
+ * next() + update() of a run, and the data writer's cost per row (v0.3).
+ * Not run by CI; the numbers go into docs/table.md and docs/trials.md.
  *
  *     trials_bench [rounds]       (default 21; min, median and max)
  *
@@ -338,6 +338,98 @@ static void bench_draw(void) {
     if (sink == 42.0) printf("\n");
 }
 
+/* The data writer (v0.3): a row of 26 columns (the session's 18: ten
+ * integers, 4 table texts, 4 jitters; then 8 of the caller's: an int, a
+ * bool, two times, a shortest double, a fixed double, a string and a CONST)
+ * written after each trial of a FULL_RANDOM session. Per row: formatting
+ * only (a write function that copies to memory), to a file with
+ * YTR_FLUSH_ROW, and to a file with YTR_FLUSH_SYNC (fewer rows: each one
+ * waits for the disk). The file is in the working directory. */
+typedef struct bench_row {
+    int key;
+    bool correct;
+    int64_t rt_ns, onset_ns;
+    double level, contrast;
+    const char* response;
+} bench_row;
+
+static char g_mem[1 << 16];
+static bool mem_write(void* ctx, const void* bytes, size_t n) {
+    (void)ctx;
+    if (n > sizeof(g_mem)) return false;
+    memcpy(g_mem, bytes, n);
+    return true;
+}
+
+static ytr_data g_w;
+static double g_row_us[16384];
+
+static void bench_data(void) {
+    static const ytr_col cols[] = {
+        YTR_COL(bench_row, key, YTR_COL_INT),
+        YTR_COL(bench_row, correct, YTR_COL_BOOL),
+        YTR_COL(bench_row, rt_ns, YTR_COL_TIME_NS),
+        YTR_COL_D(bench_row, onset_ns, YTR_COL_TIME_NS, 6),
+        YTR_COL(bench_row, level, YTR_COL_DOUBLE),
+        YTR_COL_D(bench_row, contrast, YTR_COL_DOUBLE, 3),
+        YTR_COL(bench_row, response, YTR_COL_STRING),
+        YTR_COL_TEXT("participant", "P07"),
+    };
+    static const char* const modes[] = { "format only (memory)", "file, YTR_FLUSH_ROW",
+                                         "file, YTR_FLUSH_SYNC" };
+    static const char* const path = "trials_bench_data.csv";
+    int mode;
+    printf("ytr_data_write(), 26 columns, per row:\n");
+    for (mode = 0; mode < 3; mode++) {
+        ytr_desc d;
+        ytr_data_desc dd;
+        ytr_trial_info ti;
+        bench_row r;
+        int n = 0, limit = mode == 2 ? 1000 : 10000;
+        uint64_t rs = 3;
+        stat3 s;
+        double p99, total = 0;
+        memset(&d, 0, sizeof(d));
+        g_seed = 5u;
+        d.rng = ytr_splitmix;
+        d.rng_ctx = &g_seed;
+        d_full(&d);
+        add_jitters(&d);
+        if (!ytr_open(&g_t, &d)) { printf("  open: %s\n", ytr_error(&g_t)); return; }
+        memset(&dd, 0, sizeof(dd));
+        if (mode == 0) dd.write = mem_write;
+        else dd.path = path;
+        dd.flush = mode == 2 ? YTR_FLUSH_SYNC : YTR_FLUSH_ROW;
+        dd.trials = &g_t;
+        dd.cols = cols;
+        dd.n_cols = (int)(sizeof(cols) / sizeof(cols[0]));
+        if (!ytr_data_open(&g_w, &dd)) { printf("  %s\n", ytr_data_error(&g_w)); return; }
+        while (n < limit && ytr_next(&g_t, &ti) >= 0) {
+            double t0;
+            ytr_update(&g_t, 1, NULL);
+            r.key = 40 + (int)(rnd64() % 4);
+            r.correct = (rnd64() & 1) != 0;
+            r.rt_ns = 250000000 + (int64_t)(rnd64() % 500000000);
+            r.onset_ns = (int64_t)(rnd64() % 4000000000000ULL);
+            r.level = (double)(rnd64() >> 11) * (1.0 / 9007199254740992.0);
+            r.contrast = 0.01 * (double)(1 + rnd64() % 64);
+            r.response = (rs++ & 1) ? "left" : "right, late";
+            t0 = now_ms();
+            if (ytr_data_write(&g_w, &r) != 0) { printf("  write: %s\n", ytr_data_error(&g_w)); break; }
+            g_row_us[n] = (now_ms() - t0) * 1e3;
+            total += g_row_us[n];
+            n++;
+        }
+        if (!ytr_data_close(&g_w)) printf("  close: %s\n", ytr_data_error(&g_w));
+        if (mode) remove(path);
+        if (n < 2) return;
+        s = stats(g_row_us, n);
+        p99 = g_row_us[(n * 99) / 100];
+        printf("  %-22s %5d rows: median %8.2f us, mean %8.2f us, p99 %8.2f us, max %8.2f us\n",
+               modes[mode], n, s.med, total / n, p99, s.max);
+    }
+}
+
 int main(int argc, char** argv) {
     if (argc > 1) g_rounds = atoi(argv[1]);
     if (g_rounds < 1 || g_rounds > MAX_ROUNDS) g_rounds = 21;
@@ -352,5 +444,6 @@ int main(int argc, char** argv) {
     bench_loop(0);
     bench_loop(1);
     bench_draw();
+    bench_data();
     return 0;
 }
