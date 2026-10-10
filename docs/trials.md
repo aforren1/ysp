@@ -727,6 +727,49 @@ twice under the lock, gave open() medians within 0.01 ms for the cheap
 designs and within 0.2 ms (3 %, inside the run-to-run spread) for the
 units design.
 
+## Nanosecond jitters, open and close (v0.3.0)
+
+v0.3.0 applies the repository conventions (README.md, Conventions):
+
+- **Jitters are `int64_t` nanoseconds in C.** `ytr_jitter_desc` has
+  `lo_ns`, `hi_ns`, `scale_ns` and `values_ns`, and `ytr_uniform()`,
+  `ytr_choice()` and `ytr_exponential()` take nanoseconds
+  (`YRT_MS(800)`). The names changed so that a v0.2.1 caller who writes
+  `j.lo = 0.8` gets a compile error, not a duration truncated to 0. A
+  bare `0.8` passed to a helper converts to 0, which MSVC (C4244) and gcc
+  (`-Wfloat-conversion`, on in the CMake build) warn about.
+  `ytr_jitter_value` lost `.s`: a person reads `YRT_TO_S(v.ns)`.
+- **Seconds stay where people write them.** The rules text (`jitter iti
+  uniform 0.8 1.2`), the table columns and the Python and MATLAB bindings
+  keep seconds. They convert with the function v0.2.1 used for every
+  duration (to the nearest nanosecond from the double's bits, ties up),
+  so a v0.2.1 desc and its v0.3.0 translation draw the same nanoseconds.
+  The draw itself was already integer arithmetic on nanoseconds; only the
+  boundary moved.
+- **Snapshot format 4.** The desc section of a session with jitters
+  stores the durations as i64 nanoseconds where format 3 stored f64
+  seconds. A format 3 snapshot is refused by its number.
+- **`format_rules()`** writes a duration as the exact decimal of its
+  nanoseconds with trailing zeros dropped (`0.8`, `2`), where v0.2.1 wrote
+  the shortest decimal of the double. A value with more than nine decimals
+  (`0.333333333333`) now prints as the nanoseconds it is
+  (`0.333333333`); both read back to the same session.
+- **Open and close.** `ytr_load()` is `ytr_open_saved()`, and
+  `ytr_close()` zeroes the handle (it owns no memory). The loop calls
+  (`ytr_next()`, `ytr_update()`, `ytr_mark_break()`, `ytr_requeue()`,
+  `ytr_restore()`) write `ytr_error()` when they fail; `YTR_DONE` is not a
+  failure. `ytr_jitter_check()` returns 0 or `YTR_ERR_ARG`.
+
+What was checked, on 2026-10-10 (Windows 11, MSVC 19.44 /W4 /WX as C and
+C++17, and MinGW-w64 gcc 16.1 -Werror): the six golden digests of 200,000
+draws each (`tests/adapt/trials_jitter_golden.h`) are unchanged, and so are
+the 600 v0.1 pins and the 320 v0.2 pins. The jitter tests keep their
+v0.2.1 numbers in seconds and convert them with the header's own
+function, so every expected draw is the one v0.2.1 checked. The Python
+binding's 157 tests pass unchanged (its `.s` is the correctly rounded
+`ns / 1e9`, as the header's was), and so does `bindings/mex/test_mex.m`
+under Octave 10.1 (MATLAB not run).
+
 ## Verification (v0.1)
 
 The header's STATUS block has the numbers. In summary:

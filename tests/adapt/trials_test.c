@@ -250,7 +250,7 @@ static void test_version(void) {
              YTR_VERSION_MAJOR, YTR_VERSION_MINOR, YTR_VERSION_PATCH);
     CHECK(strcmp(YTR_VERSION_STRING, want) == 0);
     CHECK(strcmp(ytr_version(), YTR_VERSION_STRING) == 0);
-    CHECK(strcmp(ytr_version(), "0.2.1") == 0);
+    CHECK(strcmp(ytr_version(), "0.3.0") == 0);
 }
 
 /* splitmix64 from seed 0: the reference's first two outputs are
@@ -1510,6 +1510,8 @@ static void test_loop_errors(void) {
     CHECK(!ytr_done(&g_t));
     CHECK_I(ytr_update(&g_t, -2, NULL), YTR_ERR_ARG);
     CHECK_I(ytr_update(&g_t, -7, NULL), YTR_ERR_ARG);
+    CHECK_HAS(ytr_error(&g_t), "ytr_update: invalid argument");   /* v0.3: messages */
+    CHECK(ytr_is_open(&g_t));
     CHECK_I(ytr_update(&g_t, 12345, NULL), 0);
     CHECK_I(ytr_n_done(&g_t), 1);
     CHECK_I(g_t.history[0].outcome, 12345);
@@ -1517,8 +1519,10 @@ static void test_loop_errors(void) {
     ytr_next(&g_t, NULL);
     CHECK_I(ytr_update(&g_t, 0, &idx), 0);
     CHECK(ytr_record(&g_t, 0) == NULL);
+    g_t.error[0] = 0;
     CHECK_I(ytr_next(&g_t, NULL), YTR_DONE);
     CHECK_I(ytr_next(&g_t, NULL), YTR_DONE);
+    CHECK_S(ytr_error(&g_t), "");          /* YTR_DONE is not a failure */
     CHECK(ytr_done(&g_t));
     CHECK_I(ytr_mark_break(&g_t), 0);
 
@@ -1583,6 +1587,33 @@ static void test_closed(void) {
     CHECK_S(ytr_strerror(YTR_ERR_FULL), "trial history is full");
     CHECK_S(ytr_strerror(3), "ok");
     CHECK_S(ytr_strerror(-99), "unknown error");
+
+    /* v0.3: a failed loop call leaves a message; close is safe on a zeroed
+     * handle, after a failed open and twice, and leaves a closed handle. */
+    memset(&z, 0, sizeof(z));
+    CHECK_I(ytr_requeue(&z), YTR_ERR_CLOSED);
+    CHECK_HAS(ytr_error(&z), "ytr_requeue: session is not open");
+    CHECK_I(ytr_restore(&z, NULL, NULL, 0), YTR_ERR_CLOSED);
+    CHECK_HAS(ytr_error(&z), "ytr_restore");
+    ytr_close(&z);
+    ytr_close(&z);
+    ytr_close(NULL);
+    CHECK(!ytr_open(&z, NULL));
+    ytr_close(&z);
+    CHECK(!ytr_is_open(&z));
+    {
+        ytr_desc d;
+        zero_desc(&d);
+        d.n_conditions = 2;
+        d.reps = 1;
+        CHECK(ytr_open(&z, &d));
+        CHECK_S(ytr_error(&z), "");
+        ytr_close(&z);
+        ytr_close(&z);
+        CHECK(!ytr_is_open(&z));
+        CHECK_I(ytr_n_conditions(&z), 0);
+        CHECK_I(ytr_next(&z, &ti), YTR_ERR_CLOSED);
+    }
 }
 
 /* ------------------------------------------------------------ bad descs */
@@ -1767,7 +1798,7 @@ static void test_format(void) {
     CHECK_I(ytr_format_row(&g_t, 3, NULL, 0), n);
 
     n = ytr_format_meta(&g_t, buf, sizeof(buf));
-    CHECK_S(buf, "ysp_trials=0.2.1 conditions=6 factors=3 levels=2x3x1 reps=1 "
+    CHECK_S(buf, "ysp_trials=0.3.0 conditions=6 factors=3 levels=2x3x1 reps=1 "
                  "order=sequential constraints= max_swaps=100000 swaps=0 span_blocks=0 "
                  "tracks=1 interleave=random weights=1 track_rate=1 block_size=0 "
                  "practice=1 warmup=0 warmup_conditions= requeue_gap=0 record_size=8 "

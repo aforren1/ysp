@@ -174,7 +174,7 @@ int main(int argc, char** argv) {
     rd.order = YTR_ORDER_RANDOM;
     rd.rng = ytr_splitmix;
     rd.rng_ctx = &seed;
-    rd.jitters[0] = ytr_uniform("foreperiod", 0.6, 1.0);   /* any time: a sound is not on the frame grid */
+    rd.jitters[0] = ytr_uniform("foreperiod", YRT_MS(600), YRT_MS(1000));   /* any time: a sound is not on the frame grid */
     rd.n_jitters = 1;
     if (!ytr_open(&trials, &rd)) { fprintf(stderr, "trial_audio_keyboard: %s\n", ytr_error(&trials)); return 1; }
 
@@ -275,7 +275,7 @@ int main(int argc, char** argv) {
             else rt[0] = 0;
             fprintf(out, "%d,%s,%s,%s,%s,%d,%.9f,%u,%u,%.9f,%u,%u,%u,%d,%d\n", ti.index,
                     ytb_text(&tab, ti.condition, stim_col), key_answer, res.response_name ? res.response_name : "", rt,
-                    correct, ytr_jitter(&trials, ti.index, 0).s, (unsigned)res.onset_tier, (unsigned)res.onset_src,
+                    correct, YRT_TO_S(ytr_jitter(&trials, ti.index, 0).ns), (unsigned)res.onset_tier, (unsigned)res.onset_src,
                     (double)res.onset_residual / 1e9, (unsigned)rec.flags, (unsigned)res.stamp_tier, (unsigned)res.flags,
                     res.n_early, res.n_anticipations);
             fflush(out);

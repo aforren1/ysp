@@ -1,5 +1,12 @@
 #include "trials_jitter_golden.h"
 
+/* v0.3.0 takes jitter durations in nanoseconds. These tests keep v0.2.1's
+ * numbers in seconds and convert them the way v0.2.1 did (the header's own
+ * ytr__s_ns(), which the rules text and the table columns use), so every
+ * expected draw below is the one v0.2.1 checked. JV() is v0.2.1's .s. */
+#define JS(x) ytr__s_ns(x)
+#define JV(v) ((double)(v).ns / 1e9)
+
 /* trials_test_jitter.h - the v0.2.1 part of trials_test.c (included
  * after trials_test_v02.h, whose helpers it uses): jitter. Each
  * distribution against its CDF by chi-square, the truncation and the frame
@@ -50,70 +57,70 @@ static double jt_chi(const double* obs, const double* expv, int n, int* df) {
 /* --------------------------------------------------- call level: values */
 
 static void test_jitter_call(void) {
-    static const double vals[4] = { 0.3, 0.5, 0.7, 0.5 };
+    static const int64_t vals[4] = { 300000000, 500000000, 700000000, 500000000 };
     ytr_jitter_desc j;
     ytr_jitter_value v;
     char err[256];
     uint64_t st = 99;
 
     /* Refusals, each by name. */
-    j = ytr_uniform("x", 1.2, 0.8);
-    CHECK(!ytr_jitter_check(&j, err, sizeof(err)));
+    j = ytr_uniform("x", JS(1.2), JS(0.8));
+    CHECK(ytr_jitter_check(&j, err, sizeof(err)) < 0);
     CHECK_HAS(err, "lo <= hi");
-    j = ytr_uniform("x", -0.1, 0.8);
-    CHECK(!ytr_jitter_check(&j, err, sizeof(err)));
-    j = ytr_uniform("x", 0.1, 2e6);
-    CHECK(!ytr_jitter_check(&j, err, sizeof(err)));
-    j = ytr_exponential("x", 0.5, 2.0, 0.0);
-    CHECK(!ytr_jitter_check(&j, err, sizeof(err)));
+    j = ytr_uniform("x", JS(-0.1), JS(0.8));
+    CHECK(ytr_jitter_check(&j, err, sizeof(err)) < 0);
+    j = ytr_uniform("x", JS(0.1), JS(2e6));
+    CHECK(ytr_jitter_check(&j, err, sizeof(err)) < 0);
+    j = ytr_exponential("x", JS(0.5), JS(2.0), JS(0.0));
+    CHECK(ytr_jitter_check(&j, err, sizeof(err)) < 0);
     CHECK_HAS(err, "scale");
     j = ytr_choice("x", NULL, 2);
-    CHECK(!ytr_jitter_check(&j, err, sizeof(err)));
+    CHECK(ytr_jitter_check(&j, err, sizeof(err)) < 0);
     CHECK_HAS(err, "CHOICE needs 1 to 32 values");
     j = ytr_choice("x", vals, 0);
-    CHECK(!ytr_jitter_check(&j, err, sizeof(err)));
-    j = ytr_uniform("x", 0.8, 1.2);
+    CHECK(ytr_jitter_check(&j, err, sizeof(err)) < 0);
+    j = ytr_uniform("x", JS(0.8), JS(1.2));
     j.rate_den = 1;
-    CHECK(!ytr_jitter_check(&j, err, sizeof(err)));
+    CHECK(ytr_jitter_check(&j, err, sizeof(err)) < 0);
     CHECK_HAS(err, "rate_den needs rate_num");
-    j = ytr_frames(ytr_uniform("x", 0.801, 0.81), 60, 1);
-    CHECK(!ytr_jitter_check(&j, err, sizeof(err)));
+    j = ytr_frames(ytr_uniform("x", JS(0.801), JS(0.81)), 60, 1);
+    CHECK(ytr_jitter_check(&j, err, sizeof(err)) < 0);
     CHECK_HAS(err, "no whole frame of 60/1 Hz lies in [0.801, 0.81] s");
-    j = ytr_uniform("x", 0.8, 1.2);
+    j = ytr_uniform("x", JS(0.8), JS(1.2));
     j.dist = (ytr_jitter_dist)2;
-    j.scale = 0.1;
-    CHECK(ytr_jitter_check(&j, err, sizeof(err)));
+    j.scale_ns = JS(0.1);
+    CHECK(ytr_jitter_check(&j, err, sizeof(err)) == 0);
     j.lo_column = "lo";
-    CHECK(!ytr_jitter_check(&j, err, sizeof(err)));
+    CHECK(ytr_jitter_check(&j, err, sizeof(err)) < 0);
     CHECK_HAS(err, "columns need a session");
     v = ytr_jitter_map(&j, 0.5);
-    CHECK(v.s != v.s && v.ns == -1 && v.frames == -1);
-    CHECK(!ytr_jitter_check(NULL, err, sizeof(err)));
+    CHECK(v.ns == -1 && v.frames == -1);
+    CHECK(ytr_jitter_check(NULL, err, sizeof(err)) < 0);
 
     /* Values at fixed variates. */
-    j = ytr_uniform("x", 0.8, 1.2);
+    j = ytr_uniform("x", JS(0.8), JS(1.2));
     v = ytr_jitter_map(&j, 0.0);
-    CHECK(v.s == 0.8 && v.ns == 800000000 && v.frames == -1);
+    CHECK(JV(v) == 0.8 && v.ns == 800000000 && v.frames == -1);
     v = ytr_jitter_map(&j, 0.5);
     CHECK_I(v.ns, 1000000000);
     v = ytr_jitter_map(&j, 1.5);              /* clamped */
-    CHECK(v.s == 1.2);
+    CHECK(JV(v) == 1.2);
     v = ytr_jitter_map(&j, -3.0);
-    CHECK(v.s == 0.8);
+    CHECK(JV(v) == 0.8);
     j = ytr_choice("x", vals, 4);
-    CHECK(ytr_jitter_map(&j, 0.0).s == 0.3 && ytr_jitter_map(&j, 0.26).s == 0.5 &&
-          ytr_jitter_map(&j, 0.74).s == 0.7 && ytr_jitter_map(&j, 0.9999).s == 0.5 &&
-          ytr_jitter_map(&j, 0.5).s == 0.7);
-    j = ytr_exponential("x", 0.5, 2.0, 0.4);
-    CHECK(ytr_jitter_map(&j, 0.0).s == 0.5);
+    CHECK(JV(ytr_jitter_map(&j, 0.0)) == 0.3 && JV(ytr_jitter_map(&j, 0.26)) == 0.5 &&
+          JV(ytr_jitter_map(&j, 0.74)) == 0.7 && JV(ytr_jitter_map(&j, 0.9999)) == 0.5 &&
+          JV(ytr_jitter_map(&j, 0.5)) == 0.7);
+    j = ytr_exponential("x", JS(0.5), JS(2.0), JS(0.4));
+    CHECK(JV(ytr_jitter_map(&j, 0.0)) == 0.5);
     v = ytr_jitter_map(&j, 0.999999999);       /* folded into [lo, hi) */
-    CHECK(v.s >= 0.5 && v.s < 2.0);
+    CHECK(JV(v) >= 0.5 && JV(v) < 2.0);
     /* E = 0.4 (-ln(1 - u)) for u = 0.9 is 0.921034037 s: lo + E. */
     v = ytr_jitter_map(&j, 0.9);
     CHECK(v.ns >= 1421034036 && v.ns <= 1421034038);
     /* 60000/1001 Hz: frame k lasts 1001/60000 s; 0.8 s is frame 47.95 so
      * the first frame inside is 48 (0.8008 s), the last 71 (1.184517 s). */
-    j = ytr_frames(ytr_uniform("x", 0.8, 1.2), 60000, 1001);
+    j = ytr_frames(ytr_uniform("x", JS(0.8), JS(1.2)), 60000, 1001);
     v = ytr_jitter_map(&j, 0.0);
     CHECK_I(v.frames, 48);
     CHECK_I(v.ns, 800800000);
@@ -122,23 +129,23 @@ static void test_jitter_call(void) {
     CHECK_I(v.ns, 1184516667);                  /* 71 x 1001 / 60000 s, rounded */
     /* An end that is itself a frame counts as inside, though in binary
      * 0.07 x 100 is 7.000000000000001 and 0.29 x 100 is 28.999999999999996. */
-    j = ytr_frames(ytr_uniform("x", 0.8, 1.2), 60, 0);
+    j = ytr_frames(ytr_uniform("x", JS(0.8), JS(1.2)), 60, 0);
     CHECK_I(ytr_jitter_map(&j, 0.0).frames, 48);
     CHECK_I(ytr_jitter_map(&j, 0.9999).frames, 72);
-    j = ytr_frames(ytr_uniform("x", 0.07, 0.29), 100, 1);
+    j = ytr_frames(ytr_uniform("x", JS(0.07), JS(0.29)), 100, 1);
     CHECK_I(ytr_jitter_map(&j, 0.0).frames, 7);
     CHECK_I(ytr_jitter_map(&j, 0.99999).frames, 29);
     j = ytr_frames(ytr_choice("x", vals, 4), 60, 1);
     CHECK_I(ytr_jitter_map(&j, 0.0).frames, 18);
     CHECK_I(ytr_jitter_map(&j, 0.5).frames, 42);
     /* draw = one rng call, then map. */
-    j = ytr_uniform("x", 0.8, 1.2);
+    j = ytr_uniform("x", JS(0.8), JS(1.2));
     st = 7;
     v = ytr_jitter_draw(&j, ytr_splitmix, &st);
     {
         uint64_t s2 = 7;
         double u = ytr_splitmix(&s2);
-        CHECK(v.s == ytr_jitter_map(&j, u).s);
+        CHECK(JV(v) == JV(ytr_jitter_map(&j, u)));
         CHECK(st == s2);
     }
     CHECK(ytr_jitter_draw(&j, NULL, &st).ns == -1);
@@ -337,12 +344,12 @@ static void test_jitter_dist(void) {
     int64_t klo, khi;
 
     /* Continuous uniform: 20 equal bins. */
-    j = ytr_uniform("u", 0.8, 1.2);
+    j = ytr_uniform("u", JS(0.8), JS(1.2));
     memset(obs, 0, sizeof(obs));
     for (i = 0; i < N; i++) {
         v = ytr_jitter_draw(&j, ytr_splitmix, &st);
-        CHECK(v.s >= 0.8 && v.s <= 1.2);
-        k = (int)((v.s - 0.8) / 0.4 * B);
+        CHECK(JV(v) >= 0.8 && JV(v) <= 1.2);
+        k = (int)((JV(v) - 0.8) / 0.4 * B);
         if (k > B - 1) k = B - 1;
         obs[k]++;
     }
@@ -354,14 +361,14 @@ static void test_jitter_dist(void) {
     /* Truncated exponential: 20 equal-width bins against the CDF
      * F(x) = (1 - e^-(x-lo)/s) / (1 - e^-(hi-lo)/s); the mean against
      * lo + s - (hi-lo) e^-(hi-lo)/s / (1 - e^-(hi-lo)/s). */
-    j = ytr_exponential("e", lo, hi, sc);
+    j = ytr_exponential("e", JS(lo), JS(hi), JS(sc));
     memset(obs, 0, sizeof(obs));
     mean = 0.0;
     for (i = 0; i < N; i++) {
         v = ytr_jitter_draw(&j, ytr_splitmix, &st);
-        CHECK(v.s >= lo && v.s <= hi);
-        mean += v.s;
-        k = (int)((v.s - lo) / (hi - lo) * B);
+        CHECK(JV(v) >= lo && JV(v) <= hi);
+        mean += JV(v);
+        k = (int)((JV(v) - lo) / (hi - lo) * B);
         if (k > B - 1) k = B - 1;
         obs[k]++;
     }
@@ -382,12 +389,12 @@ static void test_jitter_dist(void) {
 
     /* Choice with a repeated value: 0.5 is twice as likely. */
     {
-        static const double vals[4] = { 0.3, 0.5, 0.7, 0.5 };
+        static const int64_t vals[4] = { 300000000, 500000000, 700000000, 500000000 };
         j = ytr_choice("c", vals, 4);
         memset(obs, 0, sizeof(obs));
         for (i = 0; i < N; i++) {
             v = ytr_jitter_draw(&j, ytr_splitmix, &st);
-            obs[v.s == 0.3 ? 0 : v.s == 0.5 ? 1 : 2]++;
+            obs[JV(v) == 0.3 ? 0 : JV(v) == 0.5 ? 1 : 2]++;
         }
         ex[0] = N * 0.25;
         ex[1] = N * 0.5;
@@ -399,7 +406,7 @@ static void test_jitter_dist(void) {
 
     /* Snapped uniform at 60000/1001 Hz: every frame from 48 to 71 equally
      * likely, and ns exactly k x 1001e9 / 60000 rounded. */
-    j = ytr_frames(ytr_uniform("f", 0.8, 1.2), 60000, 1001);
+    j = ytr_frames(ytr_uniform("f", JS(0.8), JS(1.2)), 60000, 1001);
     memset(obs, 0, sizeof(obs));
     for (i = 0; i < N; i++) {
         v = ytr_jitter_draw(&j, ytr_splitmix, &st);
@@ -418,7 +425,7 @@ static void test_jitter_dist(void) {
 
     /* Snapped exponential at 60 Hz, 0.5 to 2.0 s, scale 0.4: frames 30 to
      * 120, a truncated geometric with q = e^-(1/60)/0.4. */
-    j = ytr_frames(ytr_exponential("g", lo, hi, sc), 60, 1);
+    j = ytr_frames(ytr_exponential("g", JS(lo), JS(hi), JS(sc)), 60, 1);
     klo = 30;
     khi = 120;
     nk = (int)(khi - klo + 1);
@@ -464,23 +471,23 @@ static void test_jitter_dist(void) {
         int num = 1 + (int)(ytr_splitmix(&st) * 240000.0), den = 1 + (int)(ytr_splitmix(&st) * 1001.0);
         double a = ytr_splitmix(&st) * 3.0, b = a + ytr_splitmix(&st) * 2.0;
         char e2[160];
-        j = ytr_frames(ytr_uniform("r", a, b), num, den);
+        j = ytr_frames(ytr_uniform("r", JS(a), JS(b)), num, den);
         if (i % 2) {
             j.dist = YTR_JITTER_EXPONENTIAL;
-            j.scale = 0.05 + ytr_splitmix(&st);
+            j.scale_ns = JS(0.05 + ytr_splitmix(&st));
         }
-        if (!ytr_jitter_check(&j, e2, sizeof(e2))) {
+        if (ytr_jitter_check(&j, e2, sizeof(e2)) < 0) {
             CHECK_HAS(e2, "no whole frame");
             continue;
         }
         v = ytr_jitter_draw(&j, ytr_splitmix, &st);
         /* Within a nanosecond of the interval, the tolerance of 1e-9 frames. */
-        CHECK(v.s >= a - 1e-9 && v.s <= b + 1e-9);
+        CHECK(JV(v) >= a - 1e-9 && JV(v) <= b + 1e-9);
         CHECK(v.ns >= (int64_t)floor(a * 1e9) - 1 && v.ns <= (int64_t)ceil(b * 1e9) + 1);
         v = ytr_jitter_map(&j, 0.0);
-        CHECK(v.s >= a - 1e-9);
+        CHECK(JV(v) >= a - 1e-9);
         v = ytr_jitter_map(&j, 0.99999999);
-        CHECK(v.s <= b + 1e-9);
+        CHECK(JV(v) <= b + 1e-9);
     }
     printf("  jitter distributions: uniform, truncated exponential, choice, snapped uniform and "
            "exponential against their CDFs (worst chi2 at %.2f of its bound); 20000 random snaps "
@@ -500,7 +507,7 @@ static const char jt_csv[] =
     "target,fp_lo,fp_hi\na,0.5,0.7\nb,1.0,1.5\nc,2.0,2.0\n";
 
 static void jt_desc(ytr_desc* d, bool with) {
-    static const double vals[3] = { 0.1, 0.2, 0.4 };
+    static const int64_t vals[3] = { 100000000, 200000000, 400000000 };
     zero_desc(d);
     d->n_conditions = 4;
     d->reps = 5;
@@ -510,8 +517,8 @@ static void jt_desc(ytr_desc* d, bool with) {
     d->rng = jt_rng;
     d->rng_ctx = &g_jl;
     if (with) {
-        d->jitters[0] = ytr_frames(ytr_uniform("iti", 0.8, 1.2), 60000, 1001);
-        d->jitters[1] = ytr_exponential("fp", 0.5, 2.0, 0.4);
+        d->jitters[0] = ytr_frames(ytr_uniform("iti", JS(0.8), JS(1.2)), 60000, 1001);
+        d->jitters[1] = ytr_exponential("fp", JS(0.5), JS(2.0), JS(0.4));
         d->jitters[2] = ytr_choice("soa", vals, 3);
         d->n_jitters = 3;
     }
@@ -554,7 +561,7 @@ static void test_jitter_session(void) {
             ytr_jitter_value w = ytr_jitter_map(&d.jitters[k], g_jl.u[g_jl.n - 3 + k]);
             v = ytr_jitter(&g_t, ti.index, k);
             CHECK(v.ns == w.ns && v.frames == w.frames);
-            raw[i][k] = v.s;
+            raw[i][k] = JV(v);
         }
         before = g_jl.n;
         CHECK_I(ytr_next(&g_t, &ti), rc);
@@ -585,9 +592,9 @@ static void test_jitter_session(void) {
         v = ytr_jitter(&g_t, i, 0);
         CHECK(v.frames >= 48 && v.frames <= 71);
         v = ytr_jitter(&g_t, i, 1);
-        CHECK(v.s >= 0.5 && v.s <= 2.0 && v.frames == -1);
+        CHECK(JV(v) >= 0.5 && JV(v) <= 2.0 && v.frames == -1);
         v = ytr_jitter(&g_t, i, 2);
-        CHECK(v.s == 0.1 || v.s == 0.2 || v.s == 0.4);
+        CHECK(JV(v) == 0.1 || JV(v) == 0.2 || JV(v) == 0.4);
     }
     CHECK(ytr_jitter(&g_t, nrun, 0).ns == -1);
     CHECK(ytr_jitter(&g_t, 0, 3).ns == -1);
@@ -619,14 +626,14 @@ static void test_jitter_session(void) {
     CHECK(ytr_open(&g_u, &d));
     CHECK_I(ytr_restore(&g_u, outc, NULL, nrun), 0);
     for (i = 0; i < nrun; i++)
-        for (k = 0; k < 3; k++) CHECK(ytr_jitter(&g_u, i, k).s == raw[i][k]);
+        for (k = 0; k < 3; k++) CHECK(JV(ytr_jitter(&g_u, i, k)) == raw[i][k]);
     for (i = 0; i < nrun; i++) {
         ytr_format_row(&g_t, i, line, sizeof(line));
         ytr_format_row(&g_u, i, line2, sizeof(line2));
         CHECK_S(line2, line);
     }
 
-    /* Save and load at cut points: format 3, and the loaded session goes
+    /* Save and load at cut points: format 4, and the loaded session goes
      * on drawing what the uninterrupted one draws. */
     for (k = 3; k < nrun; k += 9) {
         uint64_t st_at;
@@ -638,7 +645,7 @@ static void test_jitter_session(void) {
         n = ytr_save(&g_u, snap, sizeof(snap));
         CHECK(n > 8);
         if (n <= 8) break;
-        CHECK_I(snap[4], 3);
+        CHECK_I(snap[4], 4);
         st_at = g_jl.state;
         jt_desc(&d, true);
         memset(&g_u, 0x5A, sizeof(g_u));
@@ -652,7 +659,7 @@ static void test_jitter_session(void) {
         }
         for (i = 0; i < nrun; i++) {
             int jj;
-            for (jj = 0; jj < 3; jj++) CHECK(ytr_jitter(&g_u, i, jj).s == raw[i][jj]);
+            for (jj = 0; jj < 3; jj++) CHECK(JV(ytr_jitter(&g_u, i, jj)) == raw[i][jj]);
         }
     }
     /* A changed jitter refuses the snapshot by name. */
@@ -660,17 +667,17 @@ static void test_jitter_session(void) {
     g_jl.state = 4242;
     CHECK(ytr_open(&g_u, &d));
     n = ytr_save(&g_u, snap, sizeof(snap));
-    d.jitters[1].scale = 0.5;
+    d.jitters[1].scale_ns = JS(0.5);
     CHECK(!ytr_open_saved(&g_u, &d, snap, (size_t)n));
-    CHECK_HAS(ytr_error(&g_u), "desc.jitters[].scale does not match");
-    d.jitters[1].scale = 0.4;
+    CHECK_HAS(ytr_error(&g_u), "desc.jitters[].scale_ns does not match");
+    d.jitters[1].scale_ns = JS(0.4);
     d.n_jitters = 2;
     CHECK(!ytr_open_saved(&g_u, &d, snap, (size_t)n));
     d.n_jitters = 0;
     CHECK(!ytr_open_saved(&g_u, &d, snap, (size_t)n));
     CHECK_HAS(ytr_error(&g_u), "snapshot format is not 1");
     printf("  jitter session: open draws unchanged, %d trials each +3 variates after their own, "
-           "restore and %d save/load cut points identical, format 3\n", nrun, (nrun - 3 + 8) / 9);
+           "restore and %d save/load cut points identical, format 4\n", nrun, (nrun - 3 + 8) / 9);
 }
 
 static void test_jitter_columns(void) {
@@ -686,17 +693,17 @@ static void test_jitter_columns(void) {
     d.rng = ytr_splitmix;
     g_rng_state = 5;
     d.rng_ctx = &g_rng_state;
-    d.jitters[0] = ytr_uniform("fp", 0.0, 0.0);
+    d.jitters[0] = ytr_uniform("fp", JS(0.0), JS(0.0));
     d.jitters[0].lo_column = "fp_lo";
     d.jitters[0].hi_column = "fp_hi";
     d.n_jitters = 1;
     CHECK(ytr_open(&g_t, &d));
     for (i = 0; (rc = ytr_next(&g_t, &ti)) >= 0; i++) {
         v = ytr_jitter(&g_t, ti.index, 0);
-        CHECK(v.s >= ytb_num(&g_tab, ti.condition, 1) && v.s <= ytb_num(&g_tab, ti.condition, 2));
+        CHECK(JV(v) >= ytb_num(&g_tab, ti.condition, 1) && JV(v) <= ytb_num(&g_tab, ti.condition, 2));
         if (ti.condition == 2) {
             static char ln[256];
-            CHECK(v.s == 2.0);
+            CHECK(JV(v) == 2.0);
             /* The nanoseconds zero-padded: 2 s is 2.000000000, not 2.0. */
             CHECK(ytr_format_row(&g_t, ti.index, ln, sizeof(ln)) > 0);
             CHECK_HAS(ln, ",2.000000000\n");
@@ -736,16 +743,16 @@ static void test_jitter_columns(void) {
     zero_desc(&d);
     d.n_conditions = 2;
     d.reps = 2;
-    d.jitters[0] = ytr_uniform("a b", 0.1, 0.2);
+    d.jitters[0] = ytr_uniform("a b", JS(0.1), JS(0.2));
     d.n_jitters = 1;
     CHECK(!ytr_open(&g_t, &d));
     CHECK_HAS(ytr_error(&g_t), "desc.jitters[0].name must be");
-    d.jitters[0] = ytr_uniform("ab", 0.1, 0.2);
+    d.jitters[0] = ytr_uniform("ab", JS(0.1), JS(0.2));
     CHECK(!ytr_open(&g_t, &d));
     CHECK_HAS(ytr_error(&g_t), "desc.rng is required for jitter draws");
     d.rng = ytr_splitmix;
     d.rng_ctx = &g_rng_state;
-    d.jitters[1] = ytr_uniform("ab", 0.1, 0.2);
+    d.jitters[1] = ytr_uniform("ab", JS(0.1), JS(0.2));
     d.n_jitters = 2;
     CHECK(!ytr_open(&g_t, &d));
     CHECK_HAS(ytr_error(&g_t), "desc.jitters[0] and [1] are both named 'ab'");
@@ -754,7 +761,7 @@ static void test_jitter_columns(void) {
     d.n_jitters = -1;
     CHECK(!ytr_open(&g_t, &d));
     d.n_jitters = 1;
-    d.jitters[0] = ytr_frames(ytr_uniform("ab", 0.801, 0.81), 60, 1);
+    d.jitters[0] = ytr_frames(ytr_uniform("ab", JS(0.801), JS(0.81)), 60, 1);
     CHECK(!ytr_open(&g_t, &d));
     CHECK_HAS(ytr_error(&g_t), "desc.jitters[0] (ab): no whole frame of 60/1 Hz");
     printf("  jitter columns: per-row intervals from the table, 9 refusals by name\n");
@@ -792,12 +799,12 @@ static void test_jitter_rules(void) {
     CHECK_I(ytr_rules(&d, &rd, err, sizeof(err)), 0);
     CHECK_I(d.n_jitters, 3);
     CHECK_S(d.jitters[0].name, "iti");
-    CHECK(d.jitters[0].lo == 0.8 && d.jitters[0].hi == 1.2 && d.jitters[0].rate_num == 60000 &&
+    CHECK(d.jitters[0].lo_ns == JS(0.8) && d.jitters[0].hi_ns == JS(1.2) && d.jitters[0].rate_num == 60000 &&
           d.jitters[0].rate_den == 1001);
     CHECK_S(d.jitters[1].lo_column, "fp_lo");
-    CHECK(d.jitters[1].dist == YTR_JITTER_EXPONENTIAL && d.jitters[1].scale == 0.4 &&
+    CHECK(d.jitters[1].dist == YTR_JITTER_EXPONENTIAL && d.jitters[1].scale_ns == JS(0.4) &&
           d.jitters[1].rate_num == 60 && d.jitters[1].rate_den == 1);
-    CHECK(d.jitters[2].n_values == 3 && d.jitters[2].values[2] == 0.25);
+    CHECK(d.jitters[2].n_values == 3 && d.jitters[2].values_ns[2] == JS(0.25));
     d.rng = ytr_splitmix;
     g_rng_state = 77;
     d.rng_ctx = &g_rng_state;

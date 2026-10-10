@@ -1,4 +1,4 @@
-/* ysp/trials.h - v0.2.1 - public domain single-header trial sequencing library
+/* ysp/trials.h - v0.3.0 - public domain single-header trial sequencing library
  *
  *   The layer above the adaptive methods: which trial comes next, and what
  *   happened on it. Conditions and repetitions (the method of constant
@@ -44,51 +44,50 @@
  *       #include "ysp/trials.h"
  *
  *       uint64_t seed = 20260923u;                  // the caller owns it
- *       ytr_desc d = {                            // unset fields are 0
- *           .factors = { ytr_factor("orientation", 2),
- *                        ytr_factor("contrast", 5) },
- *           .n_factors     = 2,                     // 10 conditions
- *           .reps          = 20,                    // 200 trials
- *           .order         = YTR_ORDER_CONSTRAINED,
- *           .constraints   = { ytr_max_run(0, YTR_ANY_LEVEL, 3) },
- *           .n_constraints = 1,
- *           .rng = ytr_splitmix, .rng_ctx = &seed,
- *       };
+ *       static ytr_desc d;                          // zeroed: unset is 0
+ *       d.factors[0]     = ytr_factor("orientation", 2);
+ *       d.factors[1]     = ytr_factor("contrast", 5);
+ *       d.n_factors      = 2;                       // 10 conditions
+ *       d.reps           = 20;                      // 200 trials
+ *       d.order          = YTR_ORDER_CONSTRAINED;
+ *       d.constraints[0] = ytr_max_run(0, YTR_ANY_LEVEL, 3);
+ *       d.n_constraints  = 1;
+ *       d.rng = ytr_splitmix; d.rng_ctx = &seed;
  *
  *       static ytr_trials t;                      // 108 KB; not the stack
  *       if (!ytr_open(&t, &d)) { fputs(ytr_error(&t), stderr); return 1; }
  *
  *       ytr_trial_info ti;
- *       while (ytr_next(&t, &ti) >= 0) {
+ *       int rc;
+ *       while ((rc = ytr_next(&t, &ti)) >= 0) {
  *           int ori = ytr_level(&t, ti.condition, 0);
  *           int con = ytr_level(&t, ti.condition, 1);
  *           int correct = run_trial(ori, con);      // the caller's business
  *           ytr_update(&t, correct, NULL);
  *       }
+ *       if (rc != YTR_DONE) fputs(ytr_error(&t), stderr);
  *       for (int c = 0; c < ytr_n_conditions(&t); c++)
  *           printf("%d %.2f\n", c, ytr_proportion(&t, c, 1));
+ *       ytr_close(&t);
  *
  *   Three interleaved staircases with a catch condition on about one trial
  *   in ten, never two catch trials in a row (examples/trials/interleave.c
  *   runs this):
  *
  *       static double levels[YTR_MAX_TRIALS];     // one record per trial
- *       yst_stair s[3];                           // opened by the caller
- *       ytr_desc d = {
- *           .n_conditions  = 1,                     // the catch trial
- *           .reps          = 24,
- *           .order         = YTR_ORDER_CONSTRAINED,
- *           .constraints   = { ytr_min_gap(YTR_CONDITION, 0, 1) },
- *           .n_constraints = 1,
- *           .tracks = { ytr_track(&s[0], ytr_stair_done),
- *                       ytr_track(&s[1], ytr_stair_done),
- *                       ytr_track(&s[2], ytr_stair_done) },
- *           .n_tracks      = 3,
- *           .track_rate    = 0.9,                   // 9 in 10 while any runs
- *           .rng = ytr_splitmix, .rng_ctx = &seed,
- *           .records       = levels,
- *           .record_size   = sizeof(double),
- *       };
+ *       static yst_stair s[3];                    // opened by the caller
+ *       static ytr_desc d;
+ *       d.n_conditions   = 1;                       // the catch trial
+ *       d.reps           = 24;
+ *       d.order          = YTR_ORDER_CONSTRAINED;
+ *       d.constraints[0] = ytr_min_gap(YTR_CONDITION, 0, 1);
+ *       d.n_constraints  = 1;
+ *       for (int k = 0; k < 3; k++) d.tracks[k] = ytr_track(&s[k], ytr_stair_done);
+ *       d.n_tracks       = 3;
+ *       d.track_rate     = 0.9;                     // 9 in 10 while any runs
+ *       d.rng = ytr_splitmix; d.rng_ctx = &seed;
+ *       d.records        = levels;
+ *       d.record_size    = sizeof(double);
  *       ...
  *       while (ytr_next(&t, &ti) >= 0) {
  *           if (ti.track >= 0) {
@@ -476,10 +475,11 @@
  *     A jitter is a duration drawn for every trial: a foreperiod, an
  *     inter-trial interval, an SOA. The header draws and logs it; the
  *     caller waits it. The drawn duration is a whole number of
- *     nanoseconds, .ns (int64), for a clock; .s is the same duration in
- *     seconds, the correctly rounded .ns / 1e9; .frames is the whole frame
+ *     nanoseconds, .ns (int64), for a clock; .frames is the whole frame
  *     count when the jitter snaps, else -1. lo, hi, s and the values are
- *     given in seconds and taken to the nearest nanosecond.
+ *     int64_t nanoseconds in the desc (YRT_MS(800)); the rules text, the
+ *     table columns and the bindings give seconds, taken to the nearest
+ *     nanosecond (ties up).
  *       ytr_uniform(name, lo, hi)          uniform over the nanoseconds
  *                                            of [lo, hi]
  *       ytr_choice(name, values, n)        one of n values (at most
@@ -491,7 +491,7 @@
  *       ytr_frames(j, num, den)            j snapped to whole frames of
  *                                            num/den Hz (ysp/timeline.h's
  *                                            rates; den 0 means 1)
- *     0 <= lo <= hi <= YTR_JITTER_MAX_S (1e6 s), 1 ns <= s <= 1e6 s,
+ *     0 <= lo <= hi <= YTR_JITTER_MAX_NS (1e6 s), 1 ns <= s <= 1e6 s,
  *     values in [0, 1e6] s. The name heads the jitter's data-line column:
  *     1 to 31 of [A-Za-z0-9_], not starting with a digit, unique in the
  *     session.
@@ -510,8 +510,7 @@
  *     FRAMES. A snapped jitter is a whole number of frames k, its
  *     duration k den / num s, which .ns rounds to the nearest nanosecond
  *     (ties up). The frames inside [lo, hi] are those whose .ns lies in
- *     [lo, hi], all in integers, so 0.07 s at 100 Hz is frame 7 though 0.07
- *     x 100 is 7.000000000000001 in binary. UNIFORM: each of those frames
+ *     [lo, hi], all in integers, so 70 ms at 100 Hz is frame 7. UNIFORM: each of those frames
  *     equally likely. CHOICE: each value moved to its nearest frame (ties
  *     up). EXPONENTIAL: a geometric over those frames, P(k) proportional
  *     to q^(k - first),
@@ -524,9 +523,9 @@
  *     open() and ytr_jitter_check() refuse and name the rate and the
  *     interval.
  *     PER CONDITION. With desc.table, lo_column, hi_column and (for
- *     EXPONENTIAL) scale_column name numeric columns whose cells replace
- *     lo, hi and s for a trial of that row; open() checks every row and
- *     names the first bad one. A track trial has no row and uses the
+ *     EXPONENTIAL) scale_column name numeric columns whose cells (seconds,
+ *     as data are) replace lo, hi and s for a trial of that row; open()
+ *     checks every row and names the first bad one. A track trial has no row and uses the
  *     jitter's own numbers, which open() then checks too.
  *     THE DRAW. Each jitter takes one raw draw u per new trial
  *     (RANDOMNESS gives the order), so the generator's position after a
@@ -558,8 +557,8 @@
  *     the jitters' settings.
  *     CALL LEVEL. ytr_jitter_draw(&j, rng, ctx) calls rng once and maps
  *     the variate; ytr_jitter_map(&j, u) maps a variate the caller has;
- *     ytr_jitter_check() says why a desc is refused (columns need a
- *     session). They touch no session: a draw made with the session's
+ *     ytr_jitter_check() returns YTR_ERR_ARG and says why a desc is
+ *     refused (columns need a session). They touch no session: a draw made with the session's
  *     generator between next() and update() moves every later draw, and
  *     restore() would not repeat it. Use desc.jitters (replayed and
  *     logged), or a generator of the caller's own that the caller logs.
@@ -720,14 +719,15 @@
  *     end of the state section i32 blk, i32 blk_next, u8 units, u8
  *     has_leadin. schedule_flags then also carry the unit, block-start and
  *     lead-in marks of each slot.
- *     SNAPSHOT LAYOUT, format 3 (v0.2.1), for a desc with jitters: format
+ *     SNAPSHOT LAYOUT, format 4 (v0.3.0), for a desc with jitters: format
  *     2 (its desc and state sections whether or not a v0.2 field is used)
  *     with, at the end of the desc section, i32 n_jitters and per jitter u8
- *     name length and the name's bytes, i32 dist, f64 lo, hi, scale, i32
- *     n_values and f64 per value, i32 rate_num, rate_den, i32 lo, hi and
- *     scale column (-1 for none); and after the records, n_run x n_jitters
- *     i64 draws in trial order (nanoseconds, or the frame count of a
- *     snapped jitter).
+ *     name length and the name's bytes, i32 dist, i64 lo, hi, scale (ns),
+ *     i32 n_values and i64 per value (ns), i32 rate_num, rate_den, i32 lo,
+ *     hi and scale column (-1 for none); and after the records, n_run x
+ *     n_jitters i64 draws in trial order (nanoseconds, or the frame count
+ *     of a snapped jitter). Format 3 (v0.2.1) was the same with f64
+ *     seconds; this header refuses it by its format number.
  *     ytr_open_saved() compares the desc section with the desc it is given and
  *     names the first field that differs, then range-checks every number
  *     it reads, so a wrong, truncated or corrupt snapshot fails the load
@@ -837,10 +837,15 @@
  *   ---------------------------------------------------------------------
  *   RETURN VALUES AND ERRORS
  *   ---------------------------------------------------------------------
- *   ytr_open() and ytr_open_saved() return bool and fill ytr_error().
- *   Everything else returns a value or a code and never touches the
- *   message. ytr_next() returns the trial index (>= 0) or YTR_DONE
- *   (-1) or an error below -1; ytr_strerror() names a code.
+ *   ytr_open() and ytr_open_saved() return bool and fill ytr_error();
+ *   they clear it on entry. The loop calls that change the handle
+ *   (ytr_next(), ytr_update(), ytr_mark_break(), ytr_requeue(),
+ *   ytr_restore()) also write ytr_error() when they fail. The queries
+ *   return a value or a code and never touch the message. ytr_next()
+ *   returns the trial index (>= 0) or YTR_DONE (-1), which is not a
+ *   failure, or an error below -1; ytr_strerror() names a code.
+ *   ytr_jitter_check() and ytr_rules() have no session and write their
+ *   message into the caller's buffer.
  *
  *     YTR_ERR_ARG     null handle, condition or factor or trial out of
  *                       range, an outcome below YTR_INVALID, a requeue of
@@ -910,6 +915,24 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.3.0 - the repository conventions (README.md, Conventions). Breaks
+ *          the API: jitter durations are int64_t nanoseconds in C.
+ *          ytr_jitter_desc's lo, hi, scale and values are lo_ns, hi_ns,
+ *          scale_ns and values_ns (const int64_t*), so seconds code fails to
+ *          compile instead of truncating; ytr_uniform(), ytr_choice() and
+ *          ytr_exponential() take ns; ytr_jitter_value lost .s (.ns and
+ *          .frames stay); YTR_JITTER_MAX_S is YTR_JITTER_MAX_NS. The rules
+ *          text, the table columns and the bindings keep seconds, converted
+ *          at the boundary with v0.2.1's rounding, so every pinned draw is
+ *          the same nanosecond. ytr_jitter_check() returns 0 or YTR_ERR_ARG.
+ *          ytr_load() is ytr_open_saved(); ytr_close() is new. The loop
+ *          calls (next, update, mark_break, requeue, restore) write
+ *          ytr_error() when they fail. Snapshot format 4 stores the
+ *          jitters in ns; format 3 is refused by its number. The YRT_*
+ *          unit macros of ysp/rt.h are defined here under the same guard.
+ *          The USAGE examples zero the desc and set fields (C99 and C++17).
+ *          format_rules() writes a jitter's seconds as the exact decimal of
+ *          its nanoseconds.
  *   v0.2.1 - jitter: a random duration per trial (a foreperiod, an ITI,
  *          an SOA), drawn from the session's generator in a fixed order, so
  *          restore() and load() reproduce it, and logged in the data line
@@ -1175,9 +1198,9 @@
 /* The version of this header, for a log line or a compile-time check. The
  * string is the three numbers, and the test asserts that it stays so. */
 #define YTR_VERSION_MAJOR 0
-#define YTR_VERSION_MINOR 2
-#define YTR_VERSION_PATCH 1
-#define YTR_VERSION_STRING "0.2.1"
+#define YTR_VERSION_MINOR 3
+#define YTR_VERSION_PATCH 0
+#define YTR_VERSION_STRING "0.3.0"
 
 /* Tables (conditions files, trial lists) are ysp/table.h's. */
 #include "ysp/table.h"
@@ -1185,6 +1208,18 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+
+/* The unit macros of ysp/rt.h, which this header does not include, under its
+ * guard so either header may come first: YRT_MS(500) is 500 ms in int64_t
+ * nanoseconds, YRT_TO_S(ns) is seconds again for a person to read. */
+#ifndef YRT_S
+#define YRT_NS(x)    ((int64_t)(x))
+#define YRT_US(x)    ((int64_t)((x) * 1e3 + ((x) < 0 ? -0.5 : 0.5)))
+#define YRT_MS(x)    ((int64_t)((x) * 1e6 + ((x) < 0 ? -0.5 : 0.5)))
+#define YRT_S(x)     ((int64_t)((x) * 1e9 + ((x) < 0 ? -0.5 : 0.5)))
+#define YRT_TO_MS(ns) ((double)(ns) / 1e6)
+#define YRT_TO_S(ns)  ((double)(ns) / 1e9)
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -1210,7 +1245,7 @@ extern "C" {
 #endif
 #define YTR_MAX_JITTER_VALUES 32   /* values of one CHOICE jitter        */
 #define YTR_MAX_JITTER_NAME   31   /* bytes of a jitter's name           */
-#define YTR_JITTER_MAX_S   1.0e6   /* the longest duration, seconds      */
+#define YTR_JITTER_MAX_NS ((int64_t)1000000000000000)  /* 1e6 s, the longest duration */
 
 /* The history and the schedule store trial and condition numbers in 16
  * bits to keep the handle small. */
@@ -1357,38 +1392,40 @@ typedef enum ytr_jitter_dist {
                                     * truncated at hi                         */
 } ytr_jitter_dist;
 
-/* A random duration, in seconds (JITTER). Zero-initialize, or use the
- * helpers below. */
+/* A random duration, in int64_t nanoseconds (JITTER). Zero-initialize, or
+ * use the helpers below. */
 typedef struct ytr_jitter_desc {
     const char*       name;        /* data-line column; [A-Za-z_][A-Za-z0-9_]* */
     ytr_jitter_dist dist;
-    double            lo, hi;      /* UNIFORM, EXPONENTIAL: the interval      */
-    double            scale;       /* EXPONENTIAL: 1 / hazard, seconds        */
-    const double*     values;      /* CHOICE                                  */
+    int64_t           lo_ns, hi_ns; /* UNIFORM, EXPONENTIAL: the interval     */
+    int64_t           scale_ns;    /* EXPONENTIAL: 1 / hazard                 */
+    const int64_t*    values_ns;   /* CHOICE                                  */
     int               n_values;
     int               rate_num;    /* > 0: whole frames of rate_num / rate_den */
     int               rate_den;    /* Hz (0 = 1); 0 / 0 = continuous          */
     const char*       lo_column;   /* desc level: per-condition lo, hi, scale */
-    const char*       hi_column;   /* from these table columns; NULL = the    */
-    const char*       scale_column;/* field above                             */
+    const char*       hi_column;   /* from these table columns (seconds, as   */
+    const char*       scale_column;/* data are); NULL = the field above       */
 } ytr_jitter_desc;
 
-/* One drawn duration. frames is -1 unless the jitter snaps to frames; an
- * invalid desc gives s = NaN, ns = -1, frames = -1. */
+/* One drawn duration in nanoseconds. frames is -1 unless the jitter snaps to
+ * frames; an invalid desc gives ns = -1, frames = -1. */
 typedef struct ytr_jitter_value {
-    double  s;
     int64_t ns;
     int64_t frames;
 } ytr_jitter_value;
 
-YTR_API ytr_jitter_desc ytr_uniform(const char* name, double lo, double hi);
-YTR_API ytr_jitter_desc ytr_choice(const char* name, const double* values, int n);
-YTR_API ytr_jitter_desc ytr_exponential(const char* name, double lo, double hi, double scale);
+/* Durations in ns: ytr_uniform("iti", YRT_MS(800), YRT_MS(1200)). */
+YTR_API ytr_jitter_desc ytr_uniform(const char* name, int64_t lo_ns, int64_t hi_ns);
+YTR_API ytr_jitter_desc ytr_choice(const char* name, const int64_t* values_ns, int n);
+YTR_API ytr_jitter_desc ytr_exponential(const char* name, int64_t lo_ns, int64_t hi_ns,
+                                        int64_t scale_ns);
 /* j with its draws snapped to whole frames of rate_num / rate_den Hz. */
 YTR_API ytr_jitter_desc ytr_frames(ytr_jitter_desc j, int rate_num, int rate_den);
 
-/* Call level, no session: is j valid (the message says why not)? */
-YTR_API bool ytr_jitter_check(const ytr_jitter_desc* j, char* err, size_t cap);
+/* Call level, no session: 0 when j is valid, else YTR_ERR_ARG with the
+ * reason in `err` (cap bytes; err may be NULL). */
+YTR_API int ytr_jitter_check(const ytr_jitter_desc* j, char* err, size_t cap);
 /* The duration for variate u in [0, 1) (clamped into it). */
 YTR_API ytr_jitter_value ytr_jitter_map(const ytr_jitter_desc* j, double u);
 /* One call of rng(ctx), then ytr_jitter_map(). */
@@ -1506,8 +1543,8 @@ typedef struct ytr__jit {
     char    name[YTR_MAX_JITTER_NAME + 1];
     int     dist, n_values, rate_num, rate_den;
     int     col[3];                       /* lo, hi, scale column           */
-    double  lo, hi, scale;
-    double  values[YTR_MAX_JITTER_VALUES];
+    int64_t lo, hi, scale;                /* ns                             */
+    int64_t values[YTR_MAX_JITTER_VALUES];
 } ytr__jit;
 
 /* Handle. The caller allocates it and treats every field as opaque.
@@ -1575,11 +1612,16 @@ typedef struct ytr_trials {
 /* Validate `desc`, build the condition table, draw the practice trials,
  * order the schedule and repair it to the constraints. Returns false with
  * ytr_error() set on any failure, including (without tracks) an
- * unsatisfiable constraint set. It and ytr_open_saved() are the only functions
- * that write the message buffer. */
+ * unsatisfiable constraint set. Clears the message on entry. */
 YTR_API bool ytr_open(ytr_trials* t, const ytr_desc* desc);
 
-/* The last open() or load() message ("" after a success). */
+/* Zero the handle. It owns no memory (tables, records and rules arenas are
+ * the caller's), so this releases nothing; every open has a close. Safe on a
+ * zeroed handle, after a failed open and twice. */
+YTR_API void ytr_close(ytr_trials* t);
+
+/* The message of the last failed open or loop call ("" after a successful
+ * open). See RETURN VALUES AND ERRORS. */
 YTR_API const char* ytr_error(const ytr_trials* t);
 YTR_API bool        ytr_is_open(const ytr_trials* t);
 
@@ -1712,8 +1754,8 @@ YTR_API int ytr_restore(ytr_trials* t, const int* outcomes, const void* records,
 
 /* --- jitter values (v0.2.1) ------------------------------------------- */
 
-/* Jitter j of trial i (ytr_trial_info.index): seconds, nanoseconds and,
- * for a jitter that snaps, whole frames. Invalid i or j: s NaN, ns -1. */
+/* Jitter j of trial i (ytr_trial_info.index): nanoseconds and, for a
+ * jitter that snaps, whole frames. Invalid i or j: ns -1, frames -1. */
 YTR_API ytr_jitter_value ytr_jitter(const ytr_trials* t, int i, int j);
 /* The index of the jitter named `name`, or -1. */
 YTR_API int ytr_jitter_index(const ytr_trials* t, const char* name);
@@ -1752,8 +1794,9 @@ YTR_API int ytr_jitter_index(const ytr_trials* t, const char* name);
 #define YTR__DEFAULT_SWAPS 100000
 #define YTR__SNAP_FORMAT   1u   /* a v0.1 desc            */
 #define YTR__SNAP_FORMAT2  2u   /* a desc with v0.2 fields */
-#define YTR__SNAP_FORMAT3  3u   /* a desc with jitters (v0.2.1): format 2
-                                   * plus the jitters and their draws */
+#define YTR__SNAP_FORMAT4  4u   /* a desc with jitters (v0.3.0): format 2
+                                   * plus the jitters (ns) and their draws.
+                                   * Format 3 was v0.2.1's, in f64 seconds. */
 
 /* break_pending bits: the flag goes on the next trial of any kind, the
  * segment starts at the next MAIN trial, and those can differ when the next
@@ -1867,30 +1910,31 @@ YTR_API ytr_track_desc ytr_track(void* ctx, ytr_done_fn is_done) {
 
 /* --- jitter ------------------------------------------------------------- */
 
-YTR_API ytr_jitter_desc ytr_uniform(const char* name, double lo, double hi) {
+YTR_API ytr_jitter_desc ytr_uniform(const char* name, int64_t lo_ns, int64_t hi_ns) {
     ytr_jitter_desc j;
     memset(&j, 0, sizeof(j));
     j.name = name;
     j.dist = YTR_JITTER_UNIFORM;
-    j.lo = lo;
-    j.hi = hi;
+    j.lo_ns = lo_ns;
+    j.hi_ns = hi_ns;
     return j;
 }
 
-YTR_API ytr_jitter_desc ytr_choice(const char* name, const double* values, int n) {
+YTR_API ytr_jitter_desc ytr_choice(const char* name, const int64_t* values_ns, int n) {
     ytr_jitter_desc j;
     memset(&j, 0, sizeof(j));
     j.name = name;
     j.dist = YTR_JITTER_CHOICE;
-    j.values = values;
+    j.values_ns = values_ns;
     j.n_values = n;
     return j;
 }
 
-YTR_API ytr_jitter_desc ytr_exponential(const char* name, double lo, double hi, double scale) {
-    ytr_jitter_desc j = ytr_uniform(name, lo, hi);
+YTR_API ytr_jitter_desc ytr_exponential(const char* name, int64_t lo_ns, int64_t hi_ns,
+                                        int64_t scale_ns) {
+    ytr_jitter_desc j = ytr_uniform(name, lo_ns, hi_ns);
     j.dist = YTR_JITTER_EXPONENTIAL;
-    j.scale = scale;
+    j.scale_ns = scale_ns;
     return j;
 }
 
@@ -1902,9 +1946,9 @@ YTR_API ytr_jitter_desc ytr_frames(ytr_jitter_desc j, int rate_num, int rate_den
 
 /* The numbers one draw needs: a jitter's own, or with a row's columns. */
 typedef struct ytr__jp {
-    int           dist, n_values, num, den;     /* num 0: continuous       */
-    double        lo, hi, scale;
-    const double* values;
+    int            dist, n_values, num, den;    /* num 0: continuous       */
+    int64_t        lo, hi, scale;               /* ns; -1 for a bad cell   */
+    const int64_t* values;
 } ytr__jp;
 
 /* --- exact integer arithmetic for the draws ------------------------------
@@ -2011,7 +2055,7 @@ static int ytr__bitlen(uint64_t v) {
 }
 
 /* Seconds to the nearest nanosecond, ties up, from the double's bits.
- * x is finite and in [0, YTR_JITTER_MAX_S] (or -0). */
+ * x is finite and in [0, 1e6] s (or -0). */
 static int64_t ytr__s_to_ns(double x) {
     uint64_t b, m;
     int e;
@@ -2024,6 +2068,15 @@ static int64_t ytr__s_to_ns(double x) {
     if (m == 0) return 0;
     /* x = m 2^(e - 1075); x < 2^52 s, so the shift is positive. */
     return (int64_t)ytr__shr_round(ytr__mul64(m, 1000000000u), 1075 - e);
+}
+
+/* Seconds from a file, a table cell or a binding to nanoseconds, the way
+ * v0.2.1 read every duration, so the draws did not move when the desc went
+ * to nanoseconds. -1 (which every check refuses) for a value that is not
+ * finite or not in [0, YTR_JITTER_MAX_NS]. */
+static int64_t ytr__s_ns(double x) {
+    if (!ytr__finite(x) || x < 0.0 || x > 1.0e6) return -1;
+    return ytr__s_to_ns(x);
 }
 
 /* The variate's 53 bits: floor(u 2^53), u clamped to [0, 1). A product
@@ -2170,7 +2223,8 @@ static void ytr__frames_in(int64_t lo, int64_t hi, int num, int den, int64_t* kl
 static bool ytr__jit_valid(const ytr__jp* p, const char* who, char* err, size_t cap) {
     int i;
     int64_t klo, khi;
-    const double mx = YTR_JITTER_MAX_S;
+    const int64_t mx = YTR_JITTER_MAX_NS;
+    const double ms = (double)mx / 1e9;
 #define YTR__JERR(...) do { if (err && cap) { int n_ = snprintf(err, cap, "%s: ", who); \
         if (n_ >= 0 && (size_t)n_ < cap) snprintf(err + n_, cap - (size_t)n_, __VA_ARGS__); } return false; } while (0)
     if (p->dist < (int)YTR_JITTER_UNIFORM || p->dist > (int)YTR_JITTER_EXPONENTIAL)
@@ -2181,19 +2235,19 @@ static bool ytr__jit_valid(const ytr__jp* p, const char* who, char* err, size_t 
         if (!p->values || p->n_values < 1 || p->n_values > YTR_MAX_JITTER_VALUES)
             YTR__JERR("CHOICE needs 1 to %d values", YTR_MAX_JITTER_VALUES);
         for (i = 0; i < p->n_values; i++)
-            if (!ytr__finite(p->values[i]) || p->values[i] < 0.0 || p->values[i] > mx)
-                YTR__JERR("values[%d] must be in [0, %g] s", i, mx);
+            if (p->values[i] < 0 || p->values[i] > mx)
+                YTR__JERR("values[%d] must be in [0, %g] s", i, ms);
         return true;
     }
-    if (!ytr__finite(p->lo) || !ytr__finite(p->hi) || p->lo < 0.0 || p->hi < p->lo || p->hi > mx)
-        YTR__JERR("needs 0 <= lo <= hi <= %g s (lo %g, hi %g)", mx, p->lo, p->hi);
-    if (p->dist == (int)YTR_JITTER_EXPONENTIAL &&
-        (!ytr__finite(p->scale) || !(p->scale > 0.0) || p->scale > mx || ytr__s_to_ns(p->scale) < 1))
-        YTR__JERR("EXPONENTIAL needs a scale in [1 ns, %g s] (scale %g)", mx, p->scale);
+    if (p->lo < 0 || p->hi < p->lo || p->hi > mx)
+        YTR__JERR("needs 0 <= lo <= hi <= %g s (lo %g, hi %g)", ms, YRT_TO_S(p->lo), YRT_TO_S(p->hi));
+    if (p->dist == (int)YTR_JITTER_EXPONENTIAL && (p->scale < 1 || p->scale > mx))
+        YTR__JERR("EXPONENTIAL needs a scale in [1 ns, %g s] (scale %g)", ms, YRT_TO_S(p->scale));
     if (p->num > 0) {
-        ytr__frames_in(ytr__s_to_ns(p->lo), ytr__s_to_ns(p->hi), p->num, p->den, &klo, &khi);
+        ytr__frames_in(p->lo, p->hi, p->num, p->den, &klo, &khi);
         if (klo > khi)
-            YTR__JERR("no whole frame of %d/%d Hz lies in [%.9g, %.9g] s", p->num, p->den, p->lo, p->hi);
+            YTR__JERR("no whole frame of %d/%d Hz lies in [%.9g, %.9g] s", p->num, p->den,
+                      YRT_TO_S(p->lo), YRT_TO_S(p->hi));
     }
     return true;
 #undef YTR__JERR
@@ -2213,14 +2267,14 @@ static int64_t ytr__jit_raw(const ytr__jp* p, double u) {
     if (p->dist == (int)YTR_JITTER_CHOICE) {
         i = (int)ytr__shr(ytr__mul64(u53, (uint64_t)p->n_values), 53);
         if (i > p->n_values - 1) i = p->n_values - 1;
-        lo = ytr__s_to_ns(p->values[i]);
+        lo = p->values[i];
         if (p->num <= 0) return lo;
         /* the nearest frame: floor((2 v num + den 1e9) / (2 den 1e9)) */
         d = (uint64_t)p->den * 1000000000u;
         return (int64_t)ytr__div(ytr__add64(ytr__mul64(2u * (uint64_t)lo, (uint64_t)p->num), d), 2u * d);
     }
-    lo = ytr__s_to_ns(p->lo);
-    hi = ytr__s_to_ns(p->hi);
+    lo = p->lo;
+    hi = p->hi;
     if (p->num > 0) {
         ytr__frames_in(lo, hi, p->num, p->den, &klo, &khi);
         n = (uint64_t)(khi - klo) + 1u;
@@ -2229,7 +2283,7 @@ static int64_t ytr__jit_raw(const ytr__jp* p, double u) {
          * [2^62, 2^64); then G = floor(-ln(1 - u) x scale in frames). The
          * numerator s num is below 2^81 and den 1e9 at least 2^30, so sh
          * is positive and the shifted numerator fits 128 bits. */
-        sc = ytr__s_to_ns(p->scale);
+        sc = p->scale;
         d = (uint64_t)p->den * 1000000000u;
         {
             ytr__u128 a = ytr__mul64((uint64_t)sc, (uint64_t)p->num);
@@ -2243,17 +2297,14 @@ static int64_t ytr__jit_raw(const ytr__jp* p, double u) {
     }
     if (p->dist == (int)YTR_JITTER_UNIFORM)
         return lo + (int64_t)ytr__shr(ytr__mul64(u53, (uint64_t)(hi - lo) + 1u), 53);
-    sc = ytr__s_to_ns(p->scale);
+    sc = p->scale;
     f = ytr__neglog(((uint64_t)1 << 53) - u53);
     g = ytr__shr_round(ytr__mul64(f, (uint64_t)sc), 58);   /* E in ns */
     return hi > lo ? lo + (int64_t)(g % (uint64_t)(hi - lo)) : lo;
 }
 
-/* Seconds, ns and frames from a stored draw. The seconds are the
- * correctly rounded ns / 1e9: a division (the divisor is volatile so no
- * -freciprocal-math turns it into a product). */
+/* Nanoseconds and frames from a stored draw. */
 static ytr_jitter_value ytr__jit_value(int64_t raw, int num, int den) {
-    static volatile double billion = 1e9;
     ytr_jitter_value v;
     if (num > 0) {
         v.frames = raw;
@@ -2262,13 +2313,11 @@ static ytr_jitter_value ytr__jit_value(int64_t raw, int num, int den) {
         v.ns = raw;
         v.frames = -1;
     }
-    v.s = (double)v.ns / billion;
     return v;
 }
 
 static ytr_jitter_value ytr__jit_bad(void) {
     ytr_jitter_value v;
-    v.s = YTR__NAN;
     v.ns = -1;
     v.frames = -1;
     return v;
@@ -2278,38 +2327,38 @@ static ytr_jitter_value ytr__jit_bad(void) {
 static void ytr__jit_from_desc(const ytr_jitter_desc* j, ytr__jp* p) {
     p->dist = (int)j->dist;
     p->n_values = j->n_values;
-    p->values = j->values;
+    p->values = j->values_ns;
     p->num = j->rate_num;
     p->den = (j->rate_num > 0 && j->rate_den == 0) ? 1 : j->rate_den;
-    p->lo = j->lo;
-    p->hi = j->hi;
-    p->scale = j->scale;
+    p->lo = j->lo_ns;
+    p->hi = j->hi_ns;
+    p->scale = j->scale_ns;
 }
 
-YTR_API bool ytr_jitter_check(const ytr_jitter_desc* j, char* err, size_t cap) {
+YTR_API int ytr_jitter_check(const ytr_jitter_desc* j, char* err, size_t cap) {
     ytr__jp p;
     if (err && cap) err[0] = '\0';
     if (!j) {
         if (err && cap) snprintf(err, cap, "ysp_trials: jitter: null desc");
-        return false;
+        return YTR_ERR_ARG;
     }
     if (j->lo_column || j->hi_column || j->scale_column) {
         if (err && cap) snprintf(err, cap, "ysp_trials: jitter: columns need a session with a table (desc.jitters)");
-        return false;
+        return YTR_ERR_ARG;
     }
     ytr__jit_from_desc(j, &p);
-    return ytr__jit_valid(&p, "ysp_trials: jitter", err, cap);
+    return ytr__jit_valid(&p, "ysp_trials: jitter", err, cap) ? 0 : YTR_ERR_ARG;
 }
 
 YTR_API ytr_jitter_value ytr_jitter_map(const ytr_jitter_desc* j, double u) {
     ytr__jp p;
-    if (!ytr_jitter_check(j, NULL, 0)) return ytr__jit_bad();
+    if (ytr_jitter_check(j, NULL, 0) < 0) return ytr__jit_bad();
     ytr__jit_from_desc(j, &p);
     return ytr__jit_value(ytr__jit_raw(&p, u), p.num, p.den);
 }
 
 YTR_API ytr_jitter_value ytr_jitter_draw(const ytr_jitter_desc* j, ytr_rng_fn rng, void* ctx) {
-    if (!rng || !ytr_jitter_check(j, NULL, 0)) return ytr__jit_bad();
+    if (!rng || ytr_jitter_check(j, NULL, 0) < 0) return ytr__jit_bad();
     {
         ytr__jp p;
         ytr__jit_from_desc(j, &p);
@@ -3543,9 +3592,9 @@ static void ytr__jit_params(const ytr_trials* t, int j, int cond, ytr__jp* p) {
     p->hi = q->hi;
     p->scale = q->scale;
     if (cond >= 0 && tb) {
-        if (q->col[0] >= 0) p->lo = ytb_num(tb, cond, q->col[0]);
-        if (q->col[1] >= 0) p->hi = ytb_num(tb, cond, q->col[1]);
-        if (q->col[2] >= 0) p->scale = ytb_num(tb, cond, q->col[2]);
+        if (q->col[0] >= 0) p->lo = ytr__s_ns(ytb_num(tb, cond, q->col[0]));
+        if (q->col[1] >= 0) p->hi = ytr__s_ns(ytb_num(tb, cond, q->col[1]));
+        if (q->col[2] >= 0) p->scale = ytr__s_ns(ytb_num(tb, cond, q->col[2]));
     }
 }
 
@@ -4050,6 +4099,10 @@ YTR_API bool ytr_open(ytr_trials* t, const ytr_desc* desc) {
     return true;
 }
 
+YTR_API void ytr_close(ytr_trials* t) {
+    if (t) memset(t, 0, sizeof(*t));
+}
+
 YTR_API const char* ytr_error(const ytr_trials* t) {
     return t ? t->error : "ysp_trials: null handle";
 }
@@ -4363,7 +4416,7 @@ static int ytr__next2(ytr_trials* t, ytr_trial_info* info) {
 }
 
 
-YTR_API int ytr_next(ytr_trials* t, ytr_trial_info* info) {
+static int ytr__next(ytr_trials* t, ytr_trial_info* info) {
     const ytr_desc* d;
     uint32_t live = 0, bit;
     int i, q, bs, block, flags, cond, track, rep, seg;
@@ -4484,7 +4537,7 @@ static void ytr__finish(ytr_trials* t, int outcome) {
     t->current = -1;
 }
 
-YTR_API int ytr_update(ytr_trials* t, int outcome, const void* rec) {
+static int ytr__update(ytr_trials* t, int outcome, const void* rec) {
     unsigned char* slot;
     if (!t) return YTR_ERR_ARG;
     if (!t->open) return YTR_ERR_CLOSED;
@@ -4499,7 +4552,7 @@ YTR_API int ytr_update(ytr_trials* t, int outcome, const void* rec) {
     return 0;
 }
 
-YTR_API int ytr_mark_break(ytr_trials* t) {
+static int ytr__mark_break(ytr_trials* t) {
     ytr_trial* h;
     if (!t) return YTR_ERR_ARG;
     if (!t->open) return YTR_ERR_CLOSED;
@@ -4572,7 +4625,7 @@ static int ytr__requeue2(ytr_trials* t, ytr_trial* h) {
     return 0;
 }
 
-YTR_API int ytr_requeue(ytr_trials* t) {
+static int ytr__requeue(ytr_trials* t) {
     const ytr_desc* d;
     ytr_trial* h;
     unsigned char* slot;
@@ -4783,35 +4836,30 @@ YTR_API int ytr_format_row(const ytr_trials* t, int i, char* buf, size_t cap) {
 
 static void ytr__fr_factor(ytr__str* s, const ytr_trials* t, int f);
 
-/* x in the fewest digits that read back as x (15 to 17), with '.' for
- * the decimal point whatever LC_NUMERIC says, so the text parses back. */
-static void ytr__cat_num(ytr__str* s, double x) {
-    char b[40];
-    double y;
-    int prec;
-    size_t i, n = 0;
-    for (prec = 15; prec <= 17; prec++) {
-        snprintf(b, sizeof(b), "%.*g", prec, x);
-        for (i = 0; b[i]; i++)
-            if (!((b[i] >= '0' && b[i] <= '9') || b[i] == 'e' || b[i] == 'E' || b[i] == '-' || b[i] == '+'))
-                b[i] = '.';
-        n = i;
-        if (ytb_parse_number(b, n, &y) == YTB_NUM_OK && y == x) break;
-    }
-    ytr__cat(s, "%s", b);
+/* Nanoseconds as seconds in the fewest digits that read back as the same
+ * nanoseconds: the exact decimal, trailing zeros dropped. */
+static void ytr__cat_ns(ytr__str* s, int64_t ns) {
+    char b[16];
+    int64_t f = ns % 1000000000;
+    int n;
+    if (f == 0) { ytr__cat(s, "%lld", (long long)(ns / 1000000000)); return; }
+    snprintf(b, sizeof(b), "%09lld", (long long)f);
+    for (n = 9; n > 1 && b[n - 1] == '0'; n--) {}
+    b[n] = '\0';
+    ytr__cat(s, "%lld.%s", (long long)(ns / 1000000000), b);
 }
 
 /* Jitter j as the arguments of its rules statement, `sep` between them. */
 static void ytr__fr_jitter(ytr__str* s, const ytr_trials* t, int j, char sep) {
     static const char* const dn[] = { "uniform", "choice", "exponential" };
     const ytr__jit* q = &t->jit[j];
-    double num[3];
+    int64_t num[3];
     int k, np;
     ytr__cat(s, "%s%c%s", q->name, sep, dn[q->dist]);
     if (q->dist == (int)YTR_JITTER_CHOICE) {
         for (k = 0; k < q->n_values; k++) {
             ytr__cat(s, "%c", sep);
-            ytr__cat_num(s, q->values[k]);
+            ytr__cat_ns(s, q->values[k]);
         }
     } else {
         num[0] = q->lo;
@@ -4821,7 +4869,7 @@ static void ytr__fr_jitter(ytr__str* s, const ytr_trials* t, int j, char sep) {
         for (k = 0; k < np; k++) {
             ytr__cat(s, "%c", sep);
             if (q->col[k] >= 0) ytr__fr_factor(s, t, q->col[k]);
-            else ytr__cat_num(s, num[k]);
+            else ytr__cat_ns(s, num[k]);
         }
     }
     if (q->rate_num > 0) ytr__cat(s, "%crate=%d/%d", sep, q->rate_num, q->rate_den);
@@ -5703,10 +5751,10 @@ static bool ytr__rl_stmt(ytr__rl* rl, ytr__arg* a, int na) {
         ytr_jitter_desc* jd;
         char* nm;
         char tok[64];
-        double* vals = NULL;
+        int64_t* vals = NULL;
         double num;
         const char* cols[3] = { NULL, NULL, NULL };
-        double nums[3] = { 0.0, 0.0, 0.0 };
+        int64_t nums[3] = { 0, 0, 0 };
         int kind, np, last = na, rn = 0, rd = 0;
         if (na < 4) return ytr__rl_fail(rl, 0, "expected: %s", form), false;
         if (d->n_jitters < 0 || d->n_jitters >= YTR_MAX_JITTERS)
@@ -5732,7 +5780,7 @@ static bool ytr__rl_stmt(ytr__rl* rl, ytr__arg* a, int na) {
         if (kind == YTR_JITTER_CHOICE && (np < 1 || np > YTR_MAX_JITTER_VALUES))
             return ytr__rl_fail(rl, 0, "expected: jitter NAME choice V V ... (1 to %d values) [rate=NUM[/DEN]]", YTR_MAX_JITTER_VALUES), false;
         if (kind == YTR_JITTER_CHOICE) {
-            vals = (double*)ytr__rl_alloc(rl, sizeof(double) * (size_t)np);
+            vals = (int64_t*)ytr__rl_alloc(rl, sizeof(int64_t) * (size_t)np);
             if (!vals) return false;
         }
         for (k = 0; k < np; k++) {
@@ -5742,8 +5790,10 @@ static bool ytr__rl_stmt(ytr__rl* rl, ytr__arg* a, int na) {
                 memcpy(tok, g->k, g->kn);
                 tok[g->kn] = '\0';
                 if (ytb_parse_number(tok, g->kn, &num) == YTB_NUM_OK) {
-                    if (vals) vals[k] = num;
-                    else nums[k] = num;
+                    /* Seconds in the text; out of range becomes -1 ns,
+                     * which open() refuses with the jitter's name. */
+                    if (vals) vals[k] = ytr__s_ns(num);
+                    else nums[k] = ytr__s_ns(num);
                     continue;
                 }
             }
@@ -5762,13 +5812,13 @@ static bool ytr__rl_stmt(ytr__rl* rl, ytr__arg* a, int na) {
         memset(jd, 0, sizeof(*jd));
         jd->name = nm;
         jd->dist = (ytr_jitter_dist)kind;
-        jd->lo = nums[0];
-        jd->hi = nums[1];
-        jd->scale = nums[2];
+        jd->lo_ns = nums[0];
+        jd->hi_ns = nums[1];
+        jd->scale_ns = nums[2];
         jd->lo_column = cols[0];
         jd->hi_column = cols[1];
         jd->scale_column = cols[2];
-        jd->values = vals;
+        jd->values_ns = vals;
         jd->n_values = vals ? np : 0;
         jd->rate_num = rn;
         jd->rate_den = rd;
@@ -5912,7 +5962,7 @@ static void ytr__put_f64(ytr__w* w, double v, const char* name) {
 
 /* The snapshot format a session saves and loads. */
 static uint32_t ytr__snap_format(const ytr_trials* t) {
-    return t->n_jit > 0 ? YTR__SNAP_FORMAT3 : t->v2 ? YTR__SNAP_FORMAT2 : YTR__SNAP_FORMAT;
+    return t->n_jit > 0 ? YTR__SNAP_FORMAT4 : t->v2 ? YTR__SNAP_FORMAT2 : YTR__SNAP_FORMAT;
 }
 
 static void ytr__put_desc(ytr__w* w, const ytr_trials* t) {
@@ -5975,12 +6025,12 @@ static void ytr__put_desc(ytr__w* w, const ytr_trials* t) {
             ytr__put(w, (uint64_t)n, 1, "jitters[].name");
             for (k = 0; k < n; k++) ytr__put(w, (unsigned char)q->name[k], 1, "jitters[].name");
             ytr__put_i32(w, q->dist, "jitters[].dist");
-            ytr__put_f64(w, q->lo, "jitters[].lo");
-            ytr__put_f64(w, q->hi, "jitters[].hi");
-            ytr__put_f64(w, q->scale, "jitters[].scale");
+            ytr__put(w, (uint64_t)q->lo, 8, "jitters[].lo_ns");
+            ytr__put(w, (uint64_t)q->hi, 8, "jitters[].hi_ns");
+            ytr__put(w, (uint64_t)q->scale, 8, "jitters[].scale_ns");
             ytr__put_i32(w, q->n_values, "jitters[].n_values");
             for (k = 0; k < (size_t)q->n_values && k < YTR_MAX_JITTER_VALUES; k++)
-                ytr__put_f64(w, q->values[k], "jitters[].values");
+                ytr__put(w, (uint64_t)q->values[k], 8, "jitters[].values_ns");
             ytr__put_i32(w, q->rate_num, "jitters[].rate_num");
             ytr__put_i32(w, q->rate_den, "jitters[].rate_den");
             ytr__put_i32(w, q->col[0], "jitters[].lo_column");
@@ -6214,8 +6264,8 @@ YTR_API bool ytr_open_saved(ytr_trials* t, const ytr_desc* desc, const void* buf
              * frame count no larger than that duration's; anything else is
              * corruption. */
             int64_t x = (int64_t)ytr__get(&r, 8);
-            double lim = YTR_JITTER_MAX_S * 1e9;
-            if (t->jit[j].rate_num > 0) lim = YTR_JITTER_MAX_S * t->jit[j].rate_num / t->jit[j].rate_den + 1.0;
+            double lim = (double)YTR_JITTER_MAX_NS;
+            if (t->jit[j].rate_num > 0) lim = 1.0e6 * t->jit[j].rate_num / t->jit[j].rate_den + 1.0;
             if (x < 0 || (double)x > lim) r.bad = true;
             else t->jit_raw[i][j] = x;
         }
@@ -6232,7 +6282,7 @@ YTR_API bool ytr_open_saved(ytr_trials* t, const ytr_desc* desc, const void* buf
     return true;
 }
 
-YTR_API int ytr_restore(ytr_trials* t, const int* outcomes, const void* records, int n) {
+static int ytr__restore(ytr_trials* t, const int* outcomes, const void* records, int n) {
     const unsigned char* rec = (const unsigned char*)records;
     int i, rc;
     if (!t) return YTR_ERR_ARG;
@@ -6240,21 +6290,47 @@ YTR_API int ytr_restore(ytr_trials* t, const int* outcomes, const void* records,
     if (n < 0 || (n > 0 && !outcomes)) return YTR_ERR_ARG;
     if (t->n_run != 0) return YTR_ERR_ORDER;
     for (i = 0; i < n; i++) {
-        rc = ytr_next(t, NULL);
+        rc = ytr__next(t, NULL);
         if (rc == YTR_DONE) return YTR_ERR_ARG;
         if (rc < 0) return rc;
         if (outcomes[i] == YTR_REQUEUE) {
             /* A refused re-queue recorded YTR_INVALID in the original run
              * too, so FULL here is the same state, not a failure. */
-            rc = ytr_requeue(t);
+            rc = ytr__requeue(t);
             if (rc < 0 && rc != YTR_ERR_FULL) return rc;
         } else {
-            rc = ytr_update(t, outcomes[i],
+            rc = ytr__update(t, outcomes[i],
                               rec ? rec + (size_t)i * t->desc.record_size : NULL);
             if (rc < 0) return rc;
         }
     }
     return 0;
+}
+
+/* The loop calls leave a message on failure (README.md, Conventions); the
+ * work is in the ytr__ bodies so each return path does not repeat the
+ * snprintf. `floor` is -1 for ytr_next(), whose YTR_DONE (-1) is not a
+ * failure. Unlike ytr__fail() this leaves the session open. */
+static int ytr__note(ytr_trials* t, int rc, int floor, const char* what) {
+    if (t && rc < floor)
+        snprintf(t->error, sizeof(t->error), "ysp_trials: %s: %s", what, ytr_strerror(rc));
+    return rc;
+}
+
+YTR_API int ytr_next(ytr_trials* t, ytr_trial_info* info) {
+    return ytr__note(t, ytr__next(t, info), YTR_DONE, "ytr_next");
+}
+YTR_API int ytr_update(ytr_trials* t, int outcome, const void* rec) {
+    return ytr__note(t, ytr__update(t, outcome, rec), 0, "ytr_update");
+}
+YTR_API int ytr_mark_break(ytr_trials* t) {
+    return ytr__note(t, ytr__mark_break(t), 0, "ytr_mark_break");
+}
+YTR_API int ytr_requeue(ytr_trials* t) {
+    return ytr__note(t, ytr__requeue(t), 0, "ytr_requeue");
+}
+YTR_API int ytr_restore(ytr_trials* t, const int* outcomes, const void* records, int n) {
+    return ytr__note(t, ytr__restore(t, outcomes, records, n), 0, "ytr_restore");
 }
 
 #endif /* YSP_TRIALS_IMPLEMENTATION_GUARD */

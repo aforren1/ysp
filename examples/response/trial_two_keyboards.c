@@ -227,7 +227,7 @@ int main(int argc, char** argv) {
     rd.order = YTR_ORDER_RANDOM;
     rd.rng = ytr_splitmix;
     rd.rng_ctx = &seed;
-    rd.jitters[0] = ytr_frames(ytr_uniform("foreperiod", 0.6, 1.2), rate_num, rate_den);
+    rd.jitters[0] = ytr_frames(ytr_uniform("foreperiod", YRT_MS(600), YRT_MS(1200)), rate_num, rate_den);
     rd.n_jitters = 1;
     if (!ytr_open(&trials, &rd)) { fprintf(stderr, "trial_two_keyboards: %s\n", ytr_error(&trials)); return 1; }
 
@@ -356,7 +356,7 @@ int main(int argc, char** argv) {
             sec(diff, sizeof diff, (winner == 3 || (res[0].flags & res[1].flags & YRSP_R_RESPONDED))
                                        ? (double)(res[1].t_response - res[0].t_response) / 1e9 : NAN);
             fprintf(out, "%d,%s,%.9f,%u,%s,%s,%s,%s,%u,%u,%u,%u,%d,%d,%d,%d,%d,%d,%d,%d\n", ti.index,
-                    ytb_text(&tab, ti.condition, 0), ytr_jitter(&trials, ti.index, 0).s, (unsigned)res[0].onset_tier,
+                    ytb_text(&tab, ti.condition, 0), YRT_TO_S(ytr_jitter(&trials, ti.index, 0).ns), (unsigned)res[0].onset_tier,
                     names[winner], rt1, rt2, diff, (unsigned)dev[0], (unsigned)dev[1], (unsigned)res[0].stamp_tier,
                     (unsigned)res[1].stamp_tier, res[0].n_early, res[1].n_early, res[0].n_anticipations,
                     res[1].n_anticipations, n_other, n_dev0, dbl, dbu);

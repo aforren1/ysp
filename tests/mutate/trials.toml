@@ -361,16 +361,16 @@ id = "j-11"
 name = "the hi column not read"
 test = "trials"
 why = "The row's hi replaces the jitter's own; without it the rows' intervals are refused or wrong."
-find = 'if (q->col[1] >= 0) p->hi = ytb_num(tb, cond, q->col[1]);'
+find = 'if (q->col[1] >= 0) p->hi = ytr__s_ns(ytb_num(tb, cond, q->col[1]));'
 replace = ''
 
 [[mutant]]
 id = "j-12"
 name = "jitter snapshot of a v0.1 desc saved as format 1"
 test = "trials"
-why = "Format 3 marks the jitter sections; a v0.1 desc with jitters must not claim format 1."
-find = 'return t->n_jit > 0 ? YTR__SNAP_FORMAT3 : t->v2 ? YTR__SNAP_FORMAT2 : YTR__SNAP_FORMAT;'
-replace = 'return (t->n_jit > 0 && t->v2) ? YTR__SNAP_FORMAT3 : t->v2 ? YTR__SNAP_FORMAT2 : YTR__SNAP_FORMAT;'
+why = "Format 4 marks the jitter sections; a v0.1 desc with jitters must not claim format 1."
+find = 'return t->n_jit > 0 ? YTR__SNAP_FORMAT4 : t->v2 ? YTR__SNAP_FORMAT2 : YTR__SNAP_FORMAT;'
+replace = 'return (t->n_jit > 0 && t->v2) ? YTR__SNAP_FORMAT4 : t->v2 ? YTR__SNAP_FORMAT2 : YTR__SNAP_FORMAT;'
 
 [[mutant]]
 id = "j-13"
@@ -416,10 +416,30 @@ why = "The exponent counts from 2^53; one ln 2 short shifts every exponential dr
 find = 'acc = ytr__mul64((uint64_t)(53 - e), YTR__LN2_Q63);'
 replace = 'acc = ytr__mul64((uint64_t)(52 - e), YTR__LN2_Q63);'
 
+# --- conventions (v0.3.0) -------------------------------------------------
+# j-18 (seconds by a product with 1e-9) went with ytr_jitter_value.s: the
+# seconds are the bindings' now.
+
 [[mutant]]
-id = "j-18"
-name = "seconds by a product with 1e-9"
+id = "conv-01"
+name = "close keeps the session"
 test = "trials"
-why = "The seconds are the correctly rounded ns / 1e9: 1200000000 x 1e-9 is 1.2000000000000002, not 1.2."
-find = 'v.s = (double)v.ns / billion;'
-replace = 'v.s = (double)v.ns * 1e-9;'
+why = "A closed handle must answer like a zeroed one; every open has a close."
+find = 'if (t) memset(t, 0, sizeof(*t));'
+replace = 'if (t) t->error[0] = 0;'
+
+[[mutant]]
+id = "conv-02"
+name = "YTR_DONE written as a failure"
+test = "trials"
+why = "ytr_next() returns YTR_DONE (-1) at the end of every session; a message there would bury the real last failure."
+find = 'return ytr__note(t, ytr__next(t, info), YTR_DONE, "ytr_next");'
+replace = 'return ytr__note(t, ytr__next(t, info), 0, "ytr_next");'
+
+[[mutant]]
+id = "conv-03"
+name = "a zero nanosecond scale accepted"
+test = "trials"
+why = "An EXPONENTIAL of mean 0 ns is no distribution; the scale check moved from seconds to ns."
+find = 'if (p->dist == (int)YTR_JITTER_EXPONENTIAL && (p->scale < 1 || p->scale > mx))'
+replace = 'if (p->dist == (int)YTR_JITTER_EXPONENTIAL && (p->scale < 0 || p->scale > mx))'

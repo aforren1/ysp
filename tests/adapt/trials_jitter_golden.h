@@ -23,16 +23,18 @@ static const uint64_t jg_want[JG_N] = {
 /* FNV-1a of 200000 draws' ns and frames per distribution, splitmix seeded
  * 2026; returns the number that differ from jg_want and prints each. */
 static int jg_check(int verbose) {
-    static const double vals[4] = { 0.1, 0.25, 0.333333333333, 0.5 };
+    /* v0.2.1 gave these in seconds (0.1, 0.25, 0.333333333333, 0.5 and the
+     * intervals below); the digests are of the same nanoseconds. */
+    static const int64_t vals[4] = { 100000000, 250000000, 333333333, 500000000 };
     ytr_jitter_desc j[JG_N];
     uint64_t st, h;
     int k, i, bad = 0;
-    j[0] = ytr_uniform("a", 0.8, 1.2);
-    j[1] = ytr_frames(ytr_uniform("b", 0.8, 1.2), 60000, 1001);
+    j[0] = ytr_uniform("a", YRT_MS(800), YRT_MS(1200));
+    j[1] = ytr_frames(ytr_uniform("b", YRT_MS(800), YRT_MS(1200)), 60000, 1001);
     j[2] = ytr_choice("c", vals, 4);
     j[3] = ytr_frames(ytr_choice("d", vals, 4), 60, 1);
-    j[4] = ytr_exponential("e", 0.5, 2.0, 0.4);
-    j[5] = ytr_frames(ytr_exponential("f", 0.5, 2.0, 0.4), 60000, 1001);
+    j[4] = ytr_exponential("e", YRT_MS(500), YRT_MS(2000), YRT_MS(400));
+    j[5] = ytr_frames(ytr_exponential("f", YRT_MS(500), YRT_MS(2000), YRT_MS(400)), 60000, 1001);
     for (k = 0; k < JG_N; k++) {
         st = 2026;
         h = 0xCBF29CE484222325ULL;

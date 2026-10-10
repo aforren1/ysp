@@ -64,7 +64,7 @@ typedef struct tn {
     int*         group_list;
     uint64_t*    rules_arena; /* ytr_rules() output, read at open            */
     char*        jit_str[YTR_MAX_JITTERS][4];   /* name and column names     */
-    double       jit_vals[YTR_MAX_JITTERS][YTR_MAX_JITTER_VALUES];
+    int64_t      jit_vals[YTR_MAX_JITTERS][YTR_MAX_JITTER_VALUES];
     tn_track     tracks[YTR_MAX_TRACKS];
     int          n_tracks;
     mxArray*     done_str;    /* persistent 'done', the command a track gets  */
@@ -240,11 +240,14 @@ static char* t_dup(const mxArray* a, const char* what) {
 }
 
 /* Element e of a jitter struct array into j. Strings go to str[4] (name,
- * lo, hi, scale column; malloc'd, the caller frees), values to vals. */
-static void t_jitter_desc(const mxArray* s, size_t e, ytr_jitter_desc* j, char** str, double* vals) {
+ * lo, hi, scale column; malloc'd, the caller frees), values to vals. The
+ * struct holds seconds; the header takes nanoseconds since v0.3.0, and
+ * ytr__s_ns() converts the way v0.2.1 read seconds (-1 ns, which the header
+ * refuses by name, for a value outside [0, 1e6] s). */
+static void t_jitter_desc(const mxArray* s, size_t e, ytr_jitter_desc* j, char** str, int64_t* vals) {
     const mxArray* f;
     int k;
-    double* num[3];
+    int64_t* num[3];
     const char** col[3];
     static const char* const keys[3] = { "lo", "hi", "scale" };
     memset(j, 0, sizeof(*j));
@@ -252,19 +255,24 @@ static void t_jitter_desc(const mxArray* s, size_t e, ytr_jitter_desc* j, char**
     if ((f = mxGetField(s, e, "name")) && !mxIsEmpty(f)) { str[0] = t_dup(f, "jitter name"); j->name = str[0]; }
     if (!(f = mxGetField(s, e, "dist"))) pm_err("arg", "a jitter needs a dist");
     j->dist = (ytr_jitter_dist)pm_enum(f, "jitter dist", t_jit_dists, 3);
-    num[0] = &j->lo; num[1] = &j->hi; num[2] = &j->scale;
+    num[0] = &j->lo_ns; num[1] = &j->hi_ns; num[2] = &j->scale_ns;
     col[0] = &j->lo_column; col[1] = &j->hi_column; col[2] = &j->scale_column;
     for (k = 0; k < 3; k++) {
         f = mxGetField(s, e, keys[k]);
         if (!f || mxIsEmpty(f)) continue;
         if (mxIsChar(f)) { str[1 + k] = t_dup(f, keys[k]); *col[k] = str[1 + k]; }
-        else *num[k] = pm_scalar(f, keys[k]);
+        else *num[k] = ytr__s_ns(pm_scalar(f, keys[k]));
     }
     if ((f = mxGetField(s, e, "values")) && !mxIsEmpty(f)) {
         int m = (int)mxGetNumberOfElements(f);
         if (m > YTR_MAX_JITTER_VALUES) pm_err("arg", "a choice takes at most %d values", YTR_MAX_JITTER_VALUES);
-        pm_vector(f, "values", vals, m);
-        j->values = vals;
+        {
+            double sv[YTR_MAX_JITTER_VALUES];
+            int i;
+            pm_vector(f, "values", sv, m);
+            for (i = 0; i < m; i++) vals[i] = ytr__s_ns(sv[i]);
+        }
+        j->values_ns = vals;
         j->n_values = m;
     }
     if ((f = mxGetField(s, e, "rate")) && !mxIsEmpty(f)) {
@@ -283,8 +291,9 @@ static mxArray* t_jitter_out(ytr_jitter_value v) {
     static const char* fields[] = { "s", "ns", "frames" };
     mxArray* s = mxCreateStructMatrix(1, 1, 3, fields);
     mxArray* ns = mxCreateNumericMatrix(1, 1, mxINT64_CLASS, mxREAL);
+    static volatile double billion = 1e9;   /* .s as the header's v0.2.1 .s */
     *(int64_t*)mxGetData(ns) = v.ns;
-    mxSetField(s, 0, "s", mxCreateDoubleScalar(v.s));
+    mxSetField(s, 0, "s", mxCreateDoubleScalar(v.ns < 0 ? mxGetNaN() : (double)v.ns / billion));
     mxSetField(s, 0, "ns", ns);
     mxSetField(s, 0, "frames", mxCreateDoubleScalar((double)v.frames));
     return s;
@@ -891,7 +900,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     if (strcmp(cmd, "jitter_map") == 0) {
         ytr_jitter_desc j;
         char* str[4] = { NULL, NULL, NULL, NULL };
-        double vals[YTR_MAX_JITTER_VALUES];
+        int64_t vals[YTR_MAX_JITTER_VALUES];
         char err[256];
         int k;
         bool ok;
@@ -899,7 +908,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         pm_nargs(nrhs, 3, "v = ysp_trials('jitter_map', j, u)");
         u = pm_scalar(prhs[2], "u");
         t_jitter_desc(prhs[1], 0, &j, str, vals);
-        ok = ytr_jitter_check(&j, err, sizeof(err));
+        ok = ytr_jitter_check(&j, err, sizeof(err)) == 0;
         if (ok) plhs[0] = t_jitter_out(ytr_jitter_map(&j, u));
         for (k = 0; k < 4; k++) free(str[k]);
         if (!ok) pm_err("arg", "%s", err);
