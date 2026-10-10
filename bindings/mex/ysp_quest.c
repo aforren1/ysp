@@ -48,7 +48,7 @@ typedef struct qn {
 
 static void qn_destroy(void* obj) {
     qn* n = (qn*)obj;
-    if (n->async_running) { yqst_async_stop(&n->a); n->async_running = 0; }
+    if (n->async_running) { yqst_async_close(&n->a); n->async_running = 0; }
     yqst_close(&n->q);
     if (n->pf) mxDestroyArray(n->pf);
     if (n->pmat) mxDestroyArray(n->pmat);
@@ -316,7 +316,7 @@ static qn* q_make(const mxArray* s, const uint8_t* bytes, size_t len) {
         d.rng_ctx = &n->rng;
     }
     n->busy = 1;
-    ok = bytes ? yqst_load(&n->q, &d, bytes, len) : yqst_open(&n->q, &d);
+    ok = bytes ? yqst_open_saved(&n->q, &d, bytes, len) : yqst_open(&n->q, &d);
     n->busy = 0;
     if (!ok || pm_pending || n->cb_msg[0]) {
         char msg[300];
@@ -472,7 +472,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         pm_nargs(nrhs, 4, "w = ysp_quest('prior_normal', axis, mean, sd)");
         q_axis(prhs[1], "axis", &ax);
         out = mxCreateDoubleMatrix(1, (size_t)(ax.n > 0 ? ax.n : 0), mxREAL);
-        if (ax.n < 1 || !yqst_prior_normal(&ax, pm_scalar(prhs[2], "mean"), pm_scalar(prhs[3], "sd"), mxGetPr(out)))
+        if (ax.n < 1 || yqst_prior_normal(&ax, pm_scalar(prhs[2], "mean"), pm_scalar(prhs[3], "sd"), mxGetPr(out)) < 0)
             pm_err("arg", "prior_normal: invalid axis or sd");
         plhs[0] = out;
         return;
@@ -720,13 +720,13 @@ static void q_async_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, co
         }
         ad.quest = &n->q;
         memset(&n->a, 0, sizeof(n->a));
-        if (!yqst_async_start(&n->a, &ad))
+        if (!yqst_async_open(&n->a, &ad))
             pm_err("async", "%s", yqst_async_error(&n->a));
         n->async_running = 1;
         return;
     }
     if (strcmp(cmd, "async_stop") == 0) {
-        if (n->async_running) { yqst_async_stop(&n->a); n->async_running = 0; }
+        if (n->async_running) { yqst_async_close(&n->a); n->async_running = 0; }
         return;
     }
     if (strcmp(cmd, "async_policy") == 0) {
@@ -764,7 +764,7 @@ static void q_async_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, co
             int seq = pm_int(prhs[2], "seq");
             if (seq < 0) pm_err("arg", "seq must be >= 0");
             t = q_timeout(nrhs, prhs, 3);
-            rc = yqst_async_wait(&n->a, (uint32_t)seq, (uint64_t)(t * 1e9), &snap);
+            rc = yqst_async_wait(&n->a, (uint32_t)seq, (int64_t)(t * 1e9), &snap);
         }
         q_check(rc);
         plhs[0] = q_snapshot(&snap, n->n_stim, n->n_param);

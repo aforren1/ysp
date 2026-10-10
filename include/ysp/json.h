@@ -1,4 +1,4 @@
-/* ysp/json.h - v0.1.0 - public domain single-header strict JSON reader and canonical writer
+/* ysp/json.h - v0.1.1 - public domain single-header strict JSON reader and canonical writer
  *
  *   One JSON reader for every ysp program that reads JSON at run time or in
  *   a tool: the rig profile (ysp/rigfile.h), the pack tool's source
@@ -17,16 +17,6 @@
  *   stated limit. Needs only the C standard library (memcpy, malloc,
  *   qsort, snprintf, ldexp). C99 is the floor: it builds as C99, C11 and
  *   C++17.
- *
- *   ---------------------------------------------------------------------
- *   CHANGELOG
- *   ---------------------------------------------------------------------
- *   v0.1.0 - first version: the reader and the writer of the pack tool
- *          (docs/pack.md 3) made a header, with numbers as text, the
- *          arena, sorted objects, the builder and the accessors.
- *
- *   STATUS: v0.1.0, 2026-10-09. docs/json.md has the measurements and the
- *   test counts.
  *
  *   ---------------------------------------------------------------------
  *   USAGE
@@ -139,6 +129,23 @@
  *   nothing writes.
  *
  *   ---------------------------------------------------------------------
+ *   CHANGELOG
+ *   ---------------------------------------------------------------------
+ *   v0.1.1 - documentation only: checked against the repository
+ *          conventions (README.md, Conventions), which it already met (the
+ *          arena is init and _free, a parse writes its message into the
+ *          caller's yjs_error, every failure is a negative YJS_ERR_*, the
+ *          USAGE block builds as C99 and C++17). The CHANGELOG moved to the
+ *          end of this comment. No code changed.
+ *   v0.1.0 - first version: the reader and the writer of the pack tool
+ *          (docs/pack.md 3) made a header, with numbers as text, the
+ *          arena, sorted objects, the builder and the accessors.
+ *
+ *   STATUS: v0.1.1 (2026-10-10, MSVC 19.44 and MinGW-w64 gcc: the test
+ *   passes unchanged); v0.1.0, 2026-10-09. docs/json.md has the measurements and the
+ *   test counts.
+ *
+ *   ---------------------------------------------------------------------
  *   LICENSE: public domain / MIT-0, see end of file.
  */
 #ifndef YSP_JSON_H_INCLUDED
@@ -146,8 +153,8 @@
 
 #define YJS_VERSION_MAJOR 0
 #define YJS_VERSION_MINOR 1
-#define YJS_VERSION_PATCH 0
-#define YJS_VERSION_STRING "0.1.0"
+#define YJS_VERSION_PATCH 1
+#define YJS_VERSION_STRING "0.1.1"
 
 #include <stddef.h>
 #include <stdint.h>

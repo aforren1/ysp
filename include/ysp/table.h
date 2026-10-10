@@ -1,4 +1,4 @@
-/* ysp/table.h - v0.1.0 - public domain single-header typed tables
+/* ysp/table.h - v0.2.0 - public domain single-header typed tables
  *
  *   A table of rows and named, typed columns, as one read-only block of
  *   bytes: conditions files, trial lists, event lists. A CSV parser with
@@ -14,43 +14,6 @@
  *   ldexp). Targets every platform the compiler does; C99 is the floor: it
  *   builds as C99, C11 and C++17, and in the C dialect MSVC compiles by
  *   default.
- *
- *   ---------------------------------------------------------------------
- *   CHANGELOG
- *   ---------------------------------------------------------------------
- *   v0.1.0 - first version, split out of the ysp/trials.h v0.2 design so
- *          the pack tool and ysp/timeline.h can read the same tables: the
- *          CSV parser, the block format (1), the view and its checks, the
- *          number parser, the lookups, the opt-in file loader.
- *
- *   STATUS: v0.1.0, 2026-10-07. Built and run on Windows 11 with MinGW-w64
- *   gcc 16.1 as C11, C99 and C++17 under -Wall -Wextra -Wpedantic -Wshadow
- *   -Werror and with MSVC 19.44 under /W4 /WX, in its default C dialect
- *   and as /std:c++17; on Linux (WSL2) with gcc 11.4 as C11 and C++17
- *   under -fsanitize=address,undefined -fno-sanitize-recover=all with no
- *   diagnostic. tests/adapt/table_test.c checks ytb_parse_number()
- *   against strtod() in the C locale bit for bit: 10,000,084 strings
- *   (exact halfway points and their neighbors, round trips of random
- *   doubles and subnormals, the range ends, the 19-digit limit) with 0
- *   disagreements on gcc (mingw-w64 strtod) and on MSVC (UCRT), 200,084 on
- *   Linux (glibc); again after switching to a decimal-comma locale
- *   (Windows). Every dialect rule and bound of CSV with its line, row and
- *   column; the block's hash pinned across compilers; every single-bit
- *   flip and truncation of a block refused; structural faults behind a
- *   valid hash refused by name. The Python binding of ysp/trials.h
- *   compares the parser with Python's csv module (40 random files) and
- *   float() (5000 values): all equal. Fuzzed (tests/fuzz/table_fuzz.c)
- *   under MSVC libFuzzer with ASan: 5,906,077 inputs in 1351 s, no crash;
- *   the 958 corpus files replayed on Linux under ASan and UBSan with no
- *   report. Mutations: 25 in tests/mutate/table.toml, 24 killed, 1
- *   equivalent. Costs measured (Iris Xe laptop, AC, measurement lock,
- *   examples/trials/bench.c, 21 rounds, medians, gcc 16.1 -O2 / MSVC 19.44
- *   /O2) on 10,000 rows x 8 columns: parse 181 / 188 MB/s for words,
- *   170 / 97 MB/s for %.17g numbers, 200 / 218 MB/s with 30 % quoted
- *   fields; ytb_view() of the 2 to 3 MB blocks 0.26 to 0.38 / 0.21 to
- *   0.31 ms. docs/table.md has the tables.
- *   What is NOT done: no run on macOS or a big-endian host (parse and view
- *   refuse there); the hash detects corruption, not forgery.
  *
  *   ---------------------------------------------------------------------
  *   USAGE
@@ -74,22 +37,26 @@
  *
  *       static uint64_t arena[1 << 17];          // 1 MB, 8-byte aligned
  *       ytb_table tab;
- *       ytb_csv_desc cd = { .text = csv, .len = csv_len,
- *                             .arena = arena, .arena_size = sizeof arena };
- *       if (!ytb_csv(&tab, &cd)) { fputs(ytb_error(&tab), stderr); return 1; }
+ *       ytb_csv_desc cd = { 0 };
+ *       cd.text = csv;
+ *       cd.len = csv_len;
+ *       cd.arena = arena;
+ *       cd.arena_size = sizeof arena;
+ *       if (!ytb_open_csv(&tab, &cd)) { fputs(ytb_error(&tab), stderr); return 1; }
  *       // "ysp_table: line 13, row 12, column 'contrast' (2): '0,5' is not
  *       //  a number; the decimal separator is '.'"
  *
  *       int contrast = ytb_col(&tab, "contrast");    // once, not per trial
  *       double c = ytb_num(&tab, row, contrast);      // 0.25
  *       const char* w = ytb_text(&tab, row, ytb_col(&tab, "word"));
+ *       ytb_close(&tab);                   // forgets the view; the arena is yours
  *
  *   The block is position-independent, so it can be saved and mapped back:
  *
  *       fwrite(tab.base, 1, tab.size, f);              // the pack tool
  *       ...
  *       ytb_table t2;
- *       if (!ytb_view(&t2, bytes, len)) fputs(ytb_error(&t2), stderr);
+ *       if (!ytb_open_view(&t2, bytes, len)) fputs(ytb_error(&t2), stderr);
  *
  *   ---------------------------------------------------------------------
  *   MODEL
@@ -204,7 +171,7 @@
  *   The parse writes the columns, then every column's rows, then every
  *   column's levels, then the pool, in that order, so the same input gives
  *   the same bytes on every compiler and platform.
- *   ytb_view() refuses a block (with a message) unless: the magic,
+ *   ytb_open_view() refuses a block (with a message) unless: the magic,
  *   format and flags are right; size fits the bytes given and the hash
  *   matches; the counts are in bounds; every offset and length is inside
  *   the block and aligned; the pool is valid UTF-8 (NULs between texts);
@@ -219,17 +186,21 @@
  *   ---------------------------------------------------------------------
  *   ERRORS
  *   ---------------------------------------------------------------------
- *   ytb_csv() and ytb_view() return false and fill ytb_error(), and
+ *   ytb_open_csv() and ytb_open_view() clear ytb_error() on entry, and
+ *   return false and fill it on a failure, and
  *   for a parse err_line, err_row and err_col (1-based; 0 when not
  *   applicable, row 0 being the header): "ysp_table: line L, row R, column
  *   'name' (C): what". The line is the one the record starts on, which a
  *   quoted line break makes differ from row + 1. On a failure the view is
- *   empty (base NULL, no rows).
+ *   empty (base NULL, no rows). The lookups return -1, NULL, NaN or
+ *   INT32_MIN on a bad argument and never write the message.
+ *   ytb_parse_number() and ytb_parse_int() return YTB_NUM_OK (0) or a
+ *   negative YTB_NUM_* reason.
  *
  *   ---------------------------------------------------------------------
  *   MEMORY AND COST
  *   ---------------------------------------------------------------------
- *   Nothing allocates. ytb_csv() writes the block at the start of
+ *   Nothing allocates. ytb_open_csv() writes the block at the start of
  *   desc.arena (8-byte aligned) and uses the space after it as scratch: an
  *   8-byte entry per cell (at the arena's top, written while scanning), the
  *   unquoted text, and a hash table per column in turn. tab.need is set
@@ -242,7 +213,7 @@
  *   ---------------------------------------------------------------------
  *   FILE LOADER (YTB_STDIO)
  *   ---------------------------------------------------------------------
- *   With YTB_STDIO defined before the implementation, ytb_csv_file()
+ *   With YTB_STDIO defined before the implementation, ytb_open_csv_file()
  *   reads a file into the top of desc.arena and parses it with the rest.
  *   The path is UTF-8 on every platform (on Windows it is converted to
  *   UTF-16 for _wfopen, so a path with accents works). Off by default: the
@@ -255,15 +226,63 @@
  *   default `extern` linkage.
  *
  *   ---------------------------------------------------------------------
+ *   CHANGELOG
+ *   ---------------------------------------------------------------------
+ *   v0.2.0 - the repository conventions (README.md, Conventions). Breaks
+ *          the API: ytb_csv() is ytb_open_csv(), ytb_csv_file() is
+ *          ytb_open_csv_file(), ytb_view() is ytb_open_view(), and
+ *          ytb_close() is new (it zeroes the handle; the block is the
+ *          caller's). The YTB_NUM_* reasons are negative (-1, -2, -3), so
+ *          every call that can fail returns 0 or a negative code. The USAGE
+ *          block zeroes the desc and sets fields, so it builds as C99 and
+ *          C++17. The parser and the block format are v0.1.0's.
+ *   v0.1.0 - first version, split out of the ysp/trials.h v0.2 design so
+ *          the pack tool and ysp/timeline.h can read the same tables: the
+ *          CSV parser, the block format (1), the view and its checks, the
+ *          number parser, the lookups, the opt-in file loader.
+ *
+ *   STATUS: v0.2.0 on 2026-10-10: built and tested with MSVC 19.44 /W4 /WX
+ *   (C and C++17) and MinGW-w64 gcc -Werror; the test adds ytb_close() on a
+ *   zeroed handle, after a failed open and twice. The rest is v0.1.0's:
+ *   v0.1.0, 2026-10-07. Built and run on Windows 11 with MinGW-w64
+ *   gcc 16.1 as C11, C99 and C++17 under -Wall -Wextra -Wpedantic -Wshadow
+ *   -Werror and with MSVC 19.44 under /W4 /WX, in its default C dialect
+ *   and as /std:c++17; on Linux (WSL2) with gcc 11.4 as C11 and C++17
+ *   under -fsanitize=address,undefined -fno-sanitize-recover=all with no
+ *   diagnostic. tests/adapt/table_test.c checks ytb_parse_number()
+ *   against strtod() in the C locale bit for bit: 10,000,084 strings
+ *   (exact halfway points and their neighbors, round trips of random
+ *   doubles and subnormals, the range ends, the 19-digit limit) with 0
+ *   disagreements on gcc (mingw-w64 strtod) and on MSVC (UCRT), 200,084 on
+ *   Linux (glibc); again after switching to a decimal-comma locale
+ *   (Windows). Every dialect rule and bound of CSV with its line, row and
+ *   column; the block's hash pinned across compilers; every single-bit
+ *   flip and truncation of a block refused; structural faults behind a
+ *   valid hash refused by name. The Python binding of ysp/trials.h
+ *   compares the parser with Python's csv module (40 random files) and
+ *   float() (5000 values): all equal. Fuzzed (tests/fuzz/table_fuzz.c)
+ *   under MSVC libFuzzer with ASan: 5,906,077 inputs in 1351 s, no crash;
+ *   the 958 corpus files replayed on Linux under ASan and UBSan with no
+ *   report. Mutations: 25 in tests/mutate/table.toml, 24 killed, 1
+ *   equivalent. Costs measured (Iris Xe laptop, AC, measurement lock,
+ *   examples/trials/bench.c, 21 rounds, medians, gcc 16.1 -O2 / MSVC 19.44
+ *   /O2) on 10,000 rows x 8 columns: parse 181 / 188 MB/s for words,
+ *   170 / 97 MB/s for %.17g numbers, 200 / 218 MB/s with 30 % quoted
+ *   fields; ytb_view() of the 2 to 3 MB blocks 0.26 to 0.38 / 0.21 to
+ *   0.31 ms. docs/table.md has the tables.
+ *   What is NOT done: no run on macOS or a big-endian host (parse and view
+ *   refuse there); the hash detects corruption, not forgery.
+ *
+ *   ---------------------------------------------------------------------
  *   LICENSE: public domain / MIT-0, see end of file.
  */
 #ifndef YSP_TABLE_H_INCLUDED
 #define YSP_TABLE_H_INCLUDED
 
 #define YTB_VERSION_MAJOR 0
-#define YTB_VERSION_MINOR 1
+#define YTB_VERSION_MINOR 2
 #define YTB_VERSION_PATCH 0
-#define YTB_VERSION_STRING "0.1.0"
+#define YTB_VERSION_STRING "0.2.0"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -317,7 +336,7 @@ typedef struct ytb_table {
     int         n_rows;
     int         n_cols;
     int         n_skipped;      /* CSV records with every field empty       */
-    size_t      need;           /* arena bytes ytb_csv() needs            */
+    size_t      need;           /* arena bytes ytb_open_csv() needs            */
     int         err_line;       /* where a parse failed, 1-based; 0 = n/a   */
     int         err_row;        /* data row, 1-based; 0 = the header or n/a */
     int         err_col;        /* column, 1-based; 0 = n/a                 */
@@ -328,10 +347,15 @@ typedef struct ytb_table {
  * false with ytb_error() set; `need` is set either way once the input has
  * been scanned. With desc->arena NULL it only sets `need` (and returns
  * false with the message "ysp_table: no arena (need N bytes)"). */
-YTB_API bool ytb_csv(ytb_table* tab, const ytb_csv_desc* desc);
+YTB_API bool ytb_open_csv(ytb_table* tab, const ytb_csv_desc* desc);
 
 /* Check a block (from a pack, or saved from a parse) and view it in place. */
-YTB_API bool ytb_view(ytb_table* tab, const void* bytes, size_t len);
+YTB_API bool ytb_open_view(ytb_table* tab, const void* bytes, size_t len);
+
+/* Forget the view: zero the handle. The block belongs to the caller (an arena
+ * or a pack), so nothing is released; every open has a close. Safe on a
+ * zeroed handle, after a failed open and twice. */
+YTB_API void ytb_close(ytb_table* tab);
 
 YTB_API const char* ytb_error(const ytb_table* tab);
 YTB_API const char* ytb_version(void);
@@ -358,11 +382,11 @@ YTB_API uint64_t    ytb_hash(const ytb_table* tab);                        /* 0 
 YTB_API const unsigned char* ytb_level_bytes(const ytb_table* tab, int col);
 
 /* The number syntax (NUMBERS), on its own. Return YTB_NUM_OK and the value
- * in *out, or the reason. */
+ * in *out, or the reason, which is negative. */
 #define YTB_NUM_OK     0
-#define YTB_NUM_SYNTAX 1   /* not the syntax                              */
-#define YTB_NUM_DIGITS 2   /* more than YTB_MAX_DIGITS significant digits */
-#define YTB_NUM_RANGE  3   /* overflows a double (int32 for an integer),
+#define YTB_NUM_SYNTAX (-1)  /* not the syntax                            */
+#define YTB_NUM_DIGITS (-2)  /* more than YTB_MAX_DIGITS significant digits */
+#define YTB_NUM_RANGE  (-3)  /* overflows a double (int32 for an integer),
                               * or a nonzero value rounds to 0              */
 YTB_API int ytb_parse_number(const char* s, size_t n, double* out);
 YTB_API int ytb_parse_int(const char* s, size_t n, int32_t* out);
@@ -371,7 +395,7 @@ YTB_API int ytb_parse_int(const char* s, size_t n, int32_t* out);
 /* Read the file at `path` (UTF-8, also on Windows) into the top of
  * desc->arena and parse it with the rest of the arena; desc->text and
  * desc->len are ignored. */
-YTB_API bool ytb_csv_file(ytb_table* tab, const char* path, const ytb_csv_desc* desc);
+YTB_API bool ytb_open_csv_file(ytb_table* tab, const char* path, const ytb_csv_desc* desc);
 #endif
 
 #ifdef __cplusplus
@@ -1160,6 +1184,10 @@ static bool ytb__ok(const ytb_table* tab, int col) {
     return tab && tab->base && col >= 0 && col < tab->n_cols;
 }
 
+YTB_API void ytb_close(ytb_table* tab) {
+    if (tab) memset(tab, 0, sizeof(*tab));
+}
+
 YTB_API const char* ytb_error(const ytb_table* tab) {
     return tab ? tab->error : "ysp_table: null table";
 }
@@ -1263,7 +1291,7 @@ YTB_API int ytb_find(const ytb_table* tab, int col, const char* value) {
 
 /* --- view -------------------------------------------------------------- */
 
-YTB_API bool ytb_view(ytb_table* tab, const void* bytes, size_t len) {
+YTB_API bool ytb_open_view(ytb_table* tab, const void* bytes, size_t len) {
     const unsigned char* b = (const unsigned char*)bytes;
     uint32_t nr, nc, c, r, nlev, nlen, k;
     uint64_t size, roff, loff, toff, tlen, pool;
@@ -1426,7 +1454,7 @@ static int ytb__row_line(const unsigned char* in, size_t n, char delim, int row)
     return 0;
 }
 
-YTB_API bool ytb_csv(ytb_table* tab, const ytb_csv_desc* d) {
+YTB_API bool ytb_open_csv(ytb_table* tab, const ytb_csv_desc* d) {
     const unsigned char* in;
     size_t n, cells = 0, idx_cap = 0, pool_bound = 0, ulen, need, top;
     ytb__scan sc;
@@ -1791,7 +1819,7 @@ static bool ytb__wide(const char* s, wchar_t* w, size_t cap) {
 }
 #endif
 
-YTB_API bool ytb_csv_file(ytb_table* tab, const char* path, const ytb_csv_desc* desc) {
+YTB_API bool ytb_open_csv_file(ytb_table* tab, const char* path, const ytb_csv_desc* desc) {
     FILE* f = NULL;
     long sz;
     size_t got, at;
@@ -1833,7 +1861,7 @@ YTB_API bool ytb_csv_file(ytb_table* tab, const char* path, const ytb_csv_desc* 
     d.text = arena + at;
     d.len = (size_t)sz;
     d.arena_size = at;
-    if (!ytb_csv(tab, &d)) {
+    if (!ytb_open_csv(tab, &d)) {
         tab->need += (size_t)sz + 8u;
         return false;
     }

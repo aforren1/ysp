@@ -45,7 +45,7 @@ typedef struct gn {
 
 static void gn_destroy(void* obj) {
     gn* n = (gn*)obj;
-    if (n->async_running) { yaep_async_stop(&n->a); n->async_running = 0; }
+    if (n->async_running) { yaep_async_close(&n->a); n->async_running = 0; }
     yaep_close(&n->g);
     pm_rng_free(&n->rng);
     free(n->cand);
@@ -261,7 +261,7 @@ static gn* g_make(const mxArray* s, const uint8_t* bytes, size_t len) {
         d.rng_ctx = &n->rng;
     }
     n->busy = 1;
-    ok = bytes ? yaep_load(&n->g, &d, bytes, len) : yaep_open(&n->g, &d);
+    ok = bytes ? yaep_open_saved(&n->g, &d, bytes, len) : yaep_open(&n->g, &d);
     n->busy = 0;
     if (!ok || pm_pending) {
         char msg[300];
@@ -754,13 +754,13 @@ static void g_async_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, co
         }
         ad.gp = &n->g;
         memset(&n->a, 0, sizeof(n->a));
-        if (!yaep_async_start(&n->a, &ad))
+        if (!yaep_async_open(&n->a, &ad))
             pm_err("async", "%s", yaep_async_error(&n->a));
         n->async_running = 1;
         return;
     }
     if (strcmp(cmd, "async_stop") == 0) {
-        if (n->async_running) { yaep_async_stop(&n->a); n->async_running = 0; }
+        if (n->async_running) { yaep_async_close(&n->a); n->async_running = 0; }
         return;
     }
     if (strcmp(cmd, "async_policy") == 0) {
@@ -792,7 +792,7 @@ static void g_async_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, co
         if (seq < 0) pm_err("arg", "seq must be >= 0");
         t = nrhs > 3 ? pm_scalar(prhs[3], "timeout_s") : 1.0;
         if (!(t >= 0) || t > 1e6) pm_err("arg", "timeout_s must be in [0, 1e6] seconds");
-        rc = yaep_async_wait(&n->a, (uint32_t)seq, (uint64_t)(t * 1e9), &snap);
+        rc = yaep_async_wait(&n->a, (uint32_t)seq, (int64_t)(t * 1e9), &snap);
         g_check(rc);
         plhs[0] = g_snapshot(&snap, &n->g, n->nd);
     } else if (strcmp(cmd, "async_pending") == 0) {

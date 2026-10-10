@@ -103,7 +103,7 @@ typedef struct TrialsObject {
     double*   weights;
     int*      group_list;
     uint64_t* rules_arena;                /* ytr_rules() output, until open */
-    double    jit_vals[YTR_MAX_JITTERS][YTR_MAX_JITTER_VALUES]; /* CHOICE values,
+    int64_t   jit_vals[YTR_MAX_JITTERS][YTR_MAX_JITTER_VALUES]; /* CHOICE values,
                                            * until open copies them    */
     int       busy;
     PyObject *cb_type, *cb_value, *cb_tb;
@@ -258,7 +258,7 @@ static int tb_adopt(TableObject* o, const void* block, size_t size) {
     ytb_table v;
     if (!mem) { PyErr_NoMemory(); return -1; }
     memcpy(mem, block, size);
-    if (!ytb_view(&v, mem, size)) {
+    if (!ytb_open_view(&v, mem, size)) {
         PyErr_SetString(TArgumentError, ytb_error(&v));
         PyMem_Free(mem);
         return -1;
@@ -330,7 +330,7 @@ static int Table_init(PyObject* self, PyObject* args, PyObject* kwds) {
     d.text = PyBytes_AsString(bytes);
     d.len = (size_t)PyBytes_Size(bytes);
     /* A sizing pass, then the parse into an arena of that size. */
-    ytb_csv(&t, &d);
+    ytb_open_csv(&t, &d);
     if (t.need == 0) {
         Py_XDECREF(keys);
         Py_DECREF(bytes);
@@ -342,7 +342,7 @@ static int Table_init(PyObject* self, PyObject* args, PyObject* kwds) {
     d.arena = arena;
     d.arena_size = t.need;
     Py_BEGIN_ALLOW_THREADS
-    ok = ytb_csv(&t, &d);
+    ok = ytb_open_csv(&t, &d);
     Py_END_ALLOW_THREADS
     Py_XDECREF(keys);
     Py_DECREF(bytes);
@@ -687,8 +687,12 @@ static int t_parse_constraint(PyObject* c, const ytr_desc* d, ytr_constraint* ou
     return 0;
 }
 
-/* A number of seconds, or a column name (kept as bytes in `names`). */
-static int t_jit_num(PyObject* dict, const char* key, double* out, const char** col, PyObject* names) {
+/* A number of seconds, or a column name (kept as bytes in `names`). The
+ * header takes nanoseconds since v0.3.0; ytr__s_ns() converts the way
+ * v0.2.1 read seconds, so a draw is the nanosecond it was, and turns a
+ * value out of [0, 1e6] s into -1 ns, which the header refuses by name. */
+static int t_jit_num(PyObject* dict, const char* key, int64_t* out, const char** col, PyObject* names) {
+    double x;
     PyObject* v = PyDict_GetItemString(dict, key);
     if (!v || v == Py_None) return 0;
     if (PyUnicode_Check(v)) {
@@ -699,14 +703,15 @@ static int t_jit_num(PyObject* dict, const char* key, double* out, const char** 
         Py_DECREF(b);   /* the list holds it */
         return 0;
     }
-    *out = PyFloat_AsDouble(v);
-    if (*out == -1.0 && PyErr_Occurred()) return -1;
+    x = PyFloat_AsDouble(v);
+    if (x == -1.0 && PyErr_Occurred()) return -1;
+    *out = ytr__s_ns(x);
     return 0;
 }
 
 /* {"name", "dist", "lo", "hi", "scale", "values", "rate"} from uniform(),
  * choice() or exponential() into j. Strings in `names`, values in vals. */
-static int t_jitter_desc(PyObject* dict, ytr_jitter_desc* j, double* vals, PyObject* names) {
+static int t_jitter_desc(PyObject* dict, ytr_jitter_desc* j, int64_t* vals, PyObject* names) {
     static const char* const dists[] = { "uniform", "choice", "exponential" };
     PyObject *v, *b;
     Py_ssize_t n, i;
@@ -733,9 +738,9 @@ static int t_jitter_desc(PyObject* dict, ytr_jitter_desc* j, double* vals, PyObj
         if (k == 3) { PyErr_SetString(TArgumentError, "dist is 'uniform', 'choice' or 'exponential'"); return -1; }
         j->dist = (ytr_jitter_dist)k;
     }
-    if (t_jit_num(dict, "lo", &j->lo, &j->lo_column, names) < 0) return -1;
-    if (t_jit_num(dict, "hi", &j->hi, &j->hi_column, names) < 0) return -1;
-    if (t_jit_num(dict, "scale", &j->scale, &j->scale_column, names) < 0) return -1;
+    if (t_jit_num(dict, "lo", &j->lo_ns, &j->lo_column, names) < 0) return -1;
+    if (t_jit_num(dict, "hi", &j->hi_ns, &j->hi_column, names) < 0) return -1;
+    if (t_jit_num(dict, "scale", &j->scale_ns, &j->scale_column, names) < 0) return -1;
     v = PyDict_GetItemString(dict, "values");
     if (v && v != Py_None) {
         n = PySequence_Size(v);
@@ -746,12 +751,14 @@ static int t_jitter_desc(PyObject* dict, ytr_jitter_desc* j, double* vals, PyObj
         }
         for (i = 0; i < n; i++) {
             PyObject* it = PySequence_GetItem(v, i);
+            double x;
             if (!it) return -1;
-            vals[i] = PyFloat_AsDouble(it);
+            x = PyFloat_AsDouble(it);
             Py_DECREF(it);
-            if (vals[i] == -1.0 && PyErr_Occurred()) return -1;
+            if (x == -1.0 && PyErr_Occurred()) return -1;
+            vals[i] = ytr__s_ns(x);
         }
-        j->values = vals;
+        j->values_ns = vals;
         j->n_values = (int)n;
     }
     v = PyDict_GetItemString(dict, "rate");
@@ -774,8 +781,13 @@ static int t_jitter_desc(PyObject* dict, ytr_jitter_desc* j, double* vals, PyObj
     return 0;
 }
 
+/* .s is the correctly rounded ns / 1e9, as the header's own .s was before
+ * v0.3.0 (the divisor is volatile so no reciprocal math replaces the
+ * division), and NaN for an invalid desc. */
 static PyObject* t_jitter_value(ytr_jitter_value v) {
-    return PyObject_CallFunction(TJitterType, "dLL", v.s, (long long)v.ns, (long long)v.frames);
+    static volatile double billion = 1e9;
+    double s = v.ns < 0 ? Py_NAN : (double)v.ns / billion;
+    return PyObject_CallFunction(TJitterType, "dLL", s, (long long)v.ns, (long long)v.frames);
 }
 
 static int t_build(TrialsObject* o, PyObject* args, PyObject* kwds, ytr_desc* d) {
@@ -1565,7 +1577,7 @@ static PyObject* Trials_load(PyObject* cls, PyObject* args, PyObject* kwds) {
         const char* p = PyBytes_AsString(bytes);
         size_t len = (size_t)PyBytes_Size(bytes);
         Py_BEGIN_ALLOW_THREADS
-        ok = ytr_load(&o->t, &d, p, len);
+        ok = ytr_open_saved(&o->t, &d, p, len);
         Py_END_ALLOW_THREADS
     }
     o->busy = 0;
@@ -1967,14 +1979,15 @@ static PyObject* mod_exponential(PyObject* Py_UNUSED(m), PyObject* args, PyObjec
 static PyObject* mod_jitter_map(PyObject* Py_UNUSED(m), PyObject* args) {
     PyObject *spec, *names;
     ytr_jitter_desc j;
-    double vals[YTR_MAX_JITTER_VALUES], u;
+    int64_t vals[YTR_MAX_JITTER_VALUES];
+    double u;
     char err[256];
     PyObject* r = NULL;
     if (!PyArg_ParseTuple(args, "Od", &spec, &u)) return NULL;
     names = PyList_New(0);
     if (!names) return NULL;
     if (t_jitter_desc(spec, &j, vals, names) == 0) {
-        if (!ytr_jitter_check(&j, err, sizeof(err))) PyErr_SetString(TArgumentError, err);
+        if (ytr_jitter_check(&j, err, sizeof(err)) < 0) PyErr_SetString(TArgumentError, err);
         else r = t_jitter_value(ytr_jitter_map(&j, u));
     }
     Py_DECREF(names);

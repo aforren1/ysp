@@ -196,7 +196,7 @@ int main(int argc, char** argv) {
     cd.len = sizeof conditions_csv - 1;
     cd.arena = table_arena;
     cd.arena_size = sizeof table_arena;
-    if (!ytb_csv(&tab, &cd)) { fprintf(stderr, "trial_keyboard: %s\n", ytb_error(&tab)); return 1; }
+    if (!ytb_open_csv(&tab, &cd)) { fprintf(stderr, "trial_keyboard: %s\n", ytb_error(&tab)); return 1; }
     stim_col = ytb_col(&tab, "stimulus");
     key_col = ytb_col(&tab, "key_answer");
     memset(&rd, 0, sizeof rd);
@@ -205,7 +205,7 @@ int main(int argc, char** argv) {
     rd.order = YTR_ORDER_RANDOM;
     rd.rng = ytr_splitmix;
     rd.rng_ctx = &seed;
-    rd.jitters[0] = ytr_frames(ytr_uniform("iti", 0.8, 1.2), rate_num, rate_den);
+    rd.jitters[0] = ytr_frames(ytr_uniform("iti", YRT_MS(800), YRT_MS(1200)), rate_num, rate_den);
     rd.n_jitters = 1;
     if (!ytr_open(&trials, &rd)) { fprintf(stderr, "trial_keyboard: %s\n", ytr_error(&trials)); return 1; }
 

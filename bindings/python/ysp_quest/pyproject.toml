@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ysp-quest"
-version = "0.5.2"  # must equal ysp/quest.h's YQST_VERSION_STRING; tests/test_quest.py checks it
+version = "0.6.0"  # must equal ysp/quest.h's YQST_VERSION_STRING; tests/test_quest.py checks it
 description = "QUEST+ Bayesian adaptive psychophysics on a grid, with a background inference thread"
 readme = "README.md"
 requires-python = ">=3.8"

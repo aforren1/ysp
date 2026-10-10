@@ -119,7 +119,7 @@ static bool parse(ytb_table* tb) {
     d.len = g_len;
     d.arena = g_arena;
     d.arena_size = g_arena_size;
-    return ytb_csv(tb, &d);
+    return ytb_open_csv(tb, &d);
 }
 
 static void bench_parse(void) {
@@ -147,7 +147,7 @@ static void bench_parse(void) {
         memcpy(g_arena2, tb.base, tb.size);
         for (i = 0; i < g_rounds; i++) {
             double t0 = now_ms();
-            bool ok = ytb_view(&tv, g_arena2, tb.size);
+            bool ok = ytb_open_view(&tv, g_arena2, tb.size);
             v[i] = now_ms() - t0;
             if (!ok) { printf("view failed: %s\n", ytb_error(&tv)); return; }
         }
@@ -236,7 +236,7 @@ static void bench_open(void) {
         cd.len = sizeof(csv8) - 1;
         cd.arena = g_arena2;
         cd.arena_size = 1 << 16;
-        if (!ytb_csv(&g_bt, &cd)) { printf("table: %s\n", ytb_error(&g_bt)); return; }
+        if (!ytb_open_csv(&g_bt, &cd)) { printf("table: %s\n", ytb_error(&g_bt)); return; }
     }
     printf("open(), %d rounds (sizeof(ytr_trials) = %lu at 16384 trials):\n", g_rounds,
            (unsigned long)sizeof(ytr_trials));
@@ -264,13 +264,13 @@ static void bench_open(void) {
     }
 }
 
-static const double g_soa[4] = { 0.1, 0.2, 0.3, 0.4 };
+static const int64_t g_soa[4] = { YRT_MS(100), YRT_MS(200), YRT_MS(300), YRT_MS(400) };
 
 /* Four jitters, one of each kind, two snapped to 60000/1001 Hz frames. */
 static void add_jitters(ytr_desc* d) {
-    d->jitters[0] = ytr_frames(ytr_uniform("iti", 0.8, 1.2), 60000, 1001);
-    d->jitters[1] = ytr_frames(ytr_exponential("fp", 0.5, 2.0, 0.4), 60000, 1001);
-    d->jitters[2] = ytr_exponential("fp2", 0.5, 2.0, 0.4);
+    d->jitters[0] = ytr_frames(ytr_uniform("iti", YRT_MS(800), YRT_MS(1200)), 60000, 1001);
+    d->jitters[1] = ytr_frames(ytr_exponential("fp", YRT_MS(500), YRT_MS(2000), YRT_MS(400)), 60000, 1001);
+    d->jitters[2] = ytr_exponential("fp2", YRT_MS(500), YRT_MS(2000), YRT_MS(400));
     d->jitters[3] = ytr_choice("soa", g_soa, 4);
     d->n_jitters = 4;
 }
@@ -326,7 +326,7 @@ static void bench_draw(void) {
         stat3 st;
         for (r = 0; r < g_rounds; r++) {
             t0 = now_ms();
-            for (i = 0; i < 100000; i++) sink += ytr_jitter_draw(&d.jitters[k], ytr_splitmix, &g_seed).s;
+            for (i = 0; i < 100000; i++) sink += YRT_TO_S(ytr_jitter_draw(&d.jitters[k], ytr_splitmix, &g_seed).ns);
             v[r] = (now_ms() - t0) * 1e6 / 100000.0;
         }
         st = stats(v, g_rounds);

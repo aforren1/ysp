@@ -102,8 +102,8 @@ int main(int argc, char** argv) {
     double truth[4], est[4] = {0};
     int trials = (argc > 1) ? (int)strtol(argv[1], NULL, 0) : 60;
     int per_trial = (argc > 2) ? (int)strtol(argv[2], NULL, 0) : 30;
-    uint64_t period_ns = 16000000ull;
-    uint64_t t, worst_wait_ns = 0, sum_wait_ns = 0;
+    int64_t period_ns = YRT_MS(16);
+    int64_t t, worst_wait_ns = 0, sum_wait_ns = 0;
     int trial, ready_next_frame = 0, ready_by_interval = 0, busy = 0;
     int worst_frames = 0, frame = 0, done_trials = 0;
 
@@ -137,7 +137,7 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    /* From here to yqst_async_stop() the thread owns the handle: no yqst_*
+    /* From here to yqst_async_close() the thread owns the handle: no yqst_*
      * call on it, not even a read. Everything the loop needs is in the
      * snapshot. */
     memset(&g_async, 0, sizeof(g_async));
@@ -145,7 +145,7 @@ int main(int argc, char** argv) {
     ad.quest = &g_q;
     ad.estimator = YQST_EST_MEAN;
     ad.below_normal = true;   /* never compete with the frame loop */
-    if (!yqst_async_start(&g_async, &ad)) {
+    if (!yqst_async_open(&g_async, &ad)) {
         fprintf(stderr, "quest_async: %s\n", yqst_async_error(&g_async));
         yqst_close(&g_q);
         return 0;
@@ -159,11 +159,11 @@ int main(int argc, char** argv) {
     printf("             truth: threshold %.3f, slope %.2f\n\n", truth[0], truth[1]);
     printf("trial      x   k   seq  ready after  threshold     sd  entropy\n");
 
-    /* The proposal for trial 1 was computed by yqst_async_start(), so it is
+    /* The proposal for trial 1 was computed by yqst_async_open(), so it is
      * already in the snapshot that a poll returning 0 hands back. */
     if (yqst_async_poll(&g_async, &snap) < 0) {
         fprintf(stderr, "quest_async: nothing published\n");
-        yqst_async_stop(&g_async);
+        yqst_async_close(&g_async);
         yqst_close(&g_q);
         return 0;
     }
@@ -172,7 +172,7 @@ int main(int argc, char** argv) {
     for (trial = 0; trial < trials; trial++) {
         int s = snap.proposed;
         int k, seq, f, waited_frames = -1;
-        uint64_t t_submit;
+        int64_t t_submit;
 
         if (s < 0) { printf("selection failed: %s\n", yqst_strerror(s)); break; }
 
@@ -190,7 +190,7 @@ int main(int argc, char** argv) {
              * waits for the thread to catch up, because it has nothing else to
              * do with the trial. */
             busy++;
-            yqst_async_wait(&g_async, (uint32_t)snap.seq + 1, 2000000000ull, &snap);
+            yqst_async_wait(&g_async, (uint32_t)snap.seq + 1, YRT_S(2), &snap);
             seq = yqst_async_submit(&g_async, s, k);
         }
         if (seq < 0) { printf("submit failed: %s\n", yqst_strerror(seq)); break; }
@@ -215,7 +215,7 @@ int main(int argc, char** argv) {
         if (waited_frames < 0) {
             /* Still not ready at the end of the interval: this is the call for
              * the end of an interval, and the loop pays for the rest of it. */
-            int got = yqst_async_wait(&g_async, (uint32_t)seq, 1000000000ull, &snap);
+            int got = yqst_async_wait(&g_async, (uint32_t)seq, YRT_S(1), &snap);
             sum_wait_ns += yrt_now_ns() - t_submit;
             if (yrt_now_ns() - t_submit > worst_wait_ns)
                 worst_wait_ns = yrt_now_ns() - t_submit;
@@ -237,7 +237,7 @@ int main(int argc, char** argv) {
     }
 
     /* Hand the handle back. Every yqst_* call is legal again after this. */
-    yqst_async_stop(&g_async);
+    yqst_async_close(&g_async);
 
     printf("\n%d trials, %d frames drawn; the proposal for the next trial was ready\n"
            "on the FIRST frame after the response %d times, and somewhere inside the\n"

@@ -712,10 +712,10 @@ static int q_setup(PyObject* self, PyObject* args, PyObject* kwds, const char* d
     may_cb = o->pf_obj != NULL;
     o->busy = 1;
     if (may_cb) {
-        ok = data ? yqst_load(&o->q, &b.d, data, len) : yqst_open(&o->q, &b.d);
+        ok = data ? yqst_open_saved(&o->q, &b.d, data, len) : yqst_open(&o->q, &b.d);
     } else {
         Py_BEGIN_ALLOW_THREADS
-        ok = data ? yqst_load(&o->q, &b.d, data, len) : yqst_open(&o->q, &b.d);
+        ok = data ? yqst_open_saved(&o->q, &b.d, data, len) : yqst_open(&o->q, &b.d);
         Py_END_ALLOW_THREADS
     }
     q_build_free(&b);
@@ -1451,7 +1451,7 @@ static void a_stop(AsyncObject* ao) {
      * were refused at start, so it never needs the GIL: release it for the
      * drain and the join. */
     Py_BEGIN_ALLOW_THREADS
-    yqst_async_stop(&ao->a);
+    yqst_async_close(&ao->a);
     Py_END_ALLOW_THREADS
     ao->stopping = 0;
     if (ao->quest) QO(ao->quest)->owned = 0;
@@ -1548,7 +1548,7 @@ static PyObject* Async_start(PyObject* self, PyObject* Py_UNUSED(ignored)) {
     d.queue_depth = ao->queue_depth;
     qo->owned = 1;
     /* start() runs one yqst_next() here; nothing in it can call Python. */
-    if (!yqst_async_start(&ao->a, &d)) {
+    if (!yqst_async_open(&ao->a, &d)) {
         qo->owned = 0;
         PyErr_SetString(QError, yqst_async_error(&ao->a));
         return NULL;
@@ -1648,7 +1648,7 @@ static PyObject* Async_wait(PyObject* self, PyObject* args, PyObject* kwds) {
     AsyncObject* ao = AO(self);
     unsigned long seq_l;
     PyObject* timeout_o = Py_None;
-    uint64_t timeout_ns = UINT64_MAX;
+    int64_t timeout_ns = INT64_MAX;
     int rc;
     yqst_snapshot s;
     PyObject* snap;
@@ -1659,7 +1659,7 @@ static PyObject* Async_wait(PyObject* self, PyObject* args, PyObject* kwds) {
         double t = PyFloat_AsDouble(timeout_o);
         if (t == -1.0 && PyErr_Occurred()) return NULL;
         if (!(t >= 0.0)) { PyErr_SetString(QArgumentError, "timeout_s must be >= 0 or None"); return NULL; }
-        if (t < 1.8e10) timeout_ns = (uint64_t)(t * 1e9);
+        if (t < 9.2e9) timeout_ns = (int64_t)(t * 1e9);   /* else INT64_MAX: forever */
     }
     /* One blocking call with the GIL released. A stop() on another thread
      * while it blocks is safe (ysp/rt.h 0.3.1): a seq already queued is
@@ -1823,7 +1823,7 @@ static PyObject* mod_prior_normal(PyObject* Py_UNUSED(m), PyObject* args, PyObje
     if (ax.n < 1) { q_build_free(&b); PyErr_SetString(QArgumentError, "the axis has no points"); return NULL; }
     out = (double*)PyMem_Malloc((size_t)ax.n * sizeof(double));
     if (!out) { q_build_free(&b); return PyErr_NoMemory(); }
-    if (!yqst_prior_normal(&ax, mean, sd, out)) {
+    if (yqst_prior_normal(&ax, mean, sd, out) < 0) {
         PyMem_Free(out);
         q_build_free(&b);
         PyErr_SetString(QArgumentError, "yqst_prior_normal refused the axis or the sd");

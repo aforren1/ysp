@@ -86,6 +86,21 @@ once per session, so its cost is not a frame-budget question; the numbers
 say a profile check costs less than one display frame by three orders of
 magnitude.
 
+## Conventions check (v0.1.1)
+
+v0.1.1 checks this header against the repository conventions (README.md,
+Conventions) and changes no code. The arena is a plain struct that grows
+into heap memory, so it has `yjs_arena_init()` and `yjs_arena_free()`, not
+open and close. `yjs_parse()` has no handle: it writes its message into the
+caller's `yjs_error`, which is the caller-buffer rule with a line and a
+column added. Every call that can fail returns 0 or a negative
+`YJS_ERR_*`; `yjs_number_ok()` and `yjs_utf8_ok()` are predicates and
+return `bool`. The one time-shaped call, `yjs_fixed(v, 9, &ns)`, already
+reads seconds as `int64_t` nanoseconds. The USAGE block has no designated
+initializers. Only the CHANGELOG moved, to the end of the top comment.
+Checked on 2026-10-10 with MSVC 19.44 /W4 /WX and MinGW-w64 gcc -Werror:
+`tests/adapt/json_test.c` passes unchanged.
+
 ## Not done
 
 - No run on macOS or a big-endian host.

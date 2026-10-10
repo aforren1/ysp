@@ -231,8 +231,8 @@ int main(int argc, char** argv) {
     /* The pack: mapped, each entry verified when first used. */
     memset(&kd, 0, sizeof kd);
     kd.path = pack_path;
-    if (ypak_open(&pk, &kd) != 0) { fprintf(stderr, "trial_images: %s: %s\n", pack_path, ypak_error(&pk)); return 1; }
-    if (ypak_find(&pk, "conditions.pstb", &e) != 0 || !(p = ypak_data(&pk, &e)) || !ytb_view(&tab, p, (size_t)e.size)) {
+    if (!ypak_open(&pk, &kd)) { fprintf(stderr, "trial_images: %s: %s\n", pack_path, ypak_error(&pk)); return 1; }
+    if (ypak_find(&pk, "conditions.pstb", &e) != 0 || !(p = ypak_data(&pk, &e)) || !ytb_open_view(&tab, p, (size_t)e.size)) {
         fprintf(stderr, "trial_images: conditions.pstb: %s%s\n", ypak_error(&pk), ytb_error(&tab));
         return 1;
     }

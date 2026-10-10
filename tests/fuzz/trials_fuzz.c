@@ -57,7 +57,7 @@ int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
         cd.len = sizeof(g_csv) - 1;
         cd.arena = g_table_arena;
         cd.arena_size = sizeof(g_table_arena);
-        if (!ytb_csv(&g_fixed, &cd)) abort();
+        if (!ytb_open_csv(&g_fixed, &cd)) abort();
     }
     if (size < 1) return 0;
     memset(&d, 0, sizeof(d));
@@ -83,7 +83,7 @@ int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
             len = ytr_save(&g_t, g_snap, sizeof(g_snap));
             seed2 = seed;
             d.rng_ctx = &seed2;
-            if (len > 0 && ytr_load(&g_u, &d, g_snap, (size_t)len))
+            if (len > 0 && ytr_open_saved(&g_u, &d, g_snap, (size_t)len))
                 g_sink += (unsigned)ytr_next(&g_u, NULL);
             d.rng_ctx = &seed;
         }

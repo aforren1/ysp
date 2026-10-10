@@ -226,3 +226,13 @@ test = "table"
 why = "A block's text must be UTF-8 like a parse's."
 find = 'if (ytb__utf8_ex(b + pool, (size_t)(size - pool), true) != size - pool)'
 replace = 'if (0)'
+
+# --- conventions (v0.2.0) --------------------------------------------------------
+
+[[mutant]]
+id = "conv-01"
+name = "close keeps the view"
+test = "table"
+why = "A closed handle must answer like a zeroed one, not keep reading the block."
+find = 'if (tab) memset(tab, 0, sizeof(*tab));'
+replace = 'if (tab) tab->error[0] = 0;'

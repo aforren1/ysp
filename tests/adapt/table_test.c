@@ -62,7 +62,7 @@ static bool parse(ytb_table* t, const char* text, const ytb_csv_desc* base) {
     d.len = strlen(text);
     d.arena = g_arena;
     d.arena_size = sizeof(g_arena64);
-    return ytb_csv(t, &d);
+    return ytb_open_csv(t, &d);
 }
 
 /* -------------------------------------------------------------- numbers */
@@ -253,6 +253,7 @@ static void check_locale(void) {
     CHECK_I(ytb_parse_number("0.5", 3, &v), YTB_NUM_OK);
     CHECK(v == 0.5);
     CHECK_I(ytb_parse_number("0,5", 3, &v), YTB_NUM_SYNTAX);
+    CHECK(ytb_parse_number("0,5", 3, &v) < 0);   /* v0.2: reasons are negative */
     CHECK_I(ytb_parse_number("1234.5678e-3", 12, &v), YTB_NUM_OK);
     CHECK(v == 1.2345678);
     {
@@ -355,18 +356,18 @@ static void check_basic(void) {
         memset(&d, 0, sizeof(d));
         d.text = csv;
         d.len = strlen(csv);
-        CHECK(!ytb_csv(&u, &d));
+        CHECK(!ytb_open_csv(&u, &d));
         CHECK_I(u.need, need);
         CHECK_HAS(ytb_error(&u), "no arena");
         d.arena = g_arena2;
         d.arena_size = need;
-        CHECK(ytb_csv(&u, &d));
+        CHECK(ytb_open_csv(&u, &d));
         d.arena_size = need - 8;
-        CHECK(!ytb_csv(&u, &d));
+        CHECK(!ytb_open_csv(&u, &d));
         CHECK_HAS(ytb_error(&u), "the parse needs");
         d.arena = g_arena2 + 4;
         d.arena_size = need;
-        CHECK(!ytb_csv(&u, &d));
+        CHECK(!ytb_open_csv(&u, &d));
         CHECK_HAS(ytb_error(&u), "aligned");
     }
 }
@@ -526,7 +527,7 @@ static void check_errors(void) {
         d.len = sizeof(nul) - 1;
         d.arena = g_arena;
         d.arena_size = sizeof(g_arena64);
-        CHECK(!ytb_csv(&t, &d));
+        CHECK(!ytb_open_csv(&t, &d));
         CHECK_HAS(ytb_error(&t), "a NUL byte");
     }
     /* 64 columns fit, 65 do not; names are full length. */
@@ -610,7 +611,7 @@ static void check_view(void) {
         return;
     }
     memcpy(copy, t.base, n);
-    CHECK(ytb_view(&v, copy, n));
+    CHECK(ytb_open_view(&v, copy, n));
     CHECK_I(v.n_rows, t.n_rows);
     CHECK_I(v.n_cols, t.n_cols);
     CHECK_I(ytb_hash(&v), ytb_hash(&t));
@@ -620,6 +621,25 @@ static void check_view(void) {
             CHECK_I(ytb_level(&v, r, c), ytb_level(&t, r, c));
         }
     CHECK_S(ytb_text(&v, 3, 0), "\xC3\xA9t\xC3\xA9");
+    /* v0.2: close forgets the view and is safe zeroed, after a failed open
+     * and twice; a closed view answers like an empty one. */
+    {
+        ytb_table z;
+        memset(&z, 0, sizeof(z));
+        ytb_close(&z);
+        ytb_close(NULL);
+        CHECK(!ytb_open_view(&z, copy, 7));
+        CHECK(ytb_error(&z)[0] != '\0');
+        ytb_close(&z);
+        ytb_close(&z);
+        CHECK(z.base == NULL);
+        CHECK_I(ytb_col(&z, "w"), -1);
+        CHECK(ytb_text(&z, 0, 0) == NULL);
+        CHECK(ytb_open_view(&z, copy, n));
+        CHECK(ytb_error(&z)[0] == '\0');
+        ytb_close(&z);
+        CHECK_I(z.n_rows, 0);
+    }
     /* The block's bytes are a function of the input alone: the same parse
      * gives the same hash on every compiler (this constant was printed by
      * the first gcc and MSVC runs, which agreed). */
@@ -629,24 +649,24 @@ static void check_view(void) {
     for (i = 0; i < n; i++) {
         for (bit = 0; bit < 8; bit++) {
             copy[i] ^= (unsigned char)(1u << bit);
-            if (!ytb_view(&v, copy, n)) refused++;
+            if (!ytb_open_view(&v, copy, n)) refused++;
             copy[i] ^= (unsigned char)(1u << bit);
         }
     }
     CHECK_I(refused, (long long)n * 8);
-    for (i = 0; i < n; i++) CHECK(!ytb_view(&v, copy, i));
-    CHECK(ytb_view(&v, copy, n + 8));   /* trailing bytes beyond size are fine */
+    for (i = 0; i < n; i++) CHECK(!ytb_open_view(&v, copy, i));
+    CHECK(ytb_open_view(&v, copy, n + 8));   /* trailing bytes beyond size are fine */
     /* Structural checks behind a valid hash. */
     {
         unsigned char* cd = copy + YTB_HEADER_SIZE;
         uint64_t roff = ytb__rd64(cd + 16), loff = ytb__rd64(cd + 24);
         copy[roff] = 9;               /* row 0's level of column w: 9 of 3 */
         rehash(copy);
-        CHECK(!ytb_view(&v, copy, n));
+        CHECK(!ytb_open_view(&v, copy, n));
         CHECK_HAS(ytb_error(&v), "has level 9 of 3");
         copy[roff] = 3;               /* the first level out of range */
         rehash(copy);
-        CHECK(!ytb_view(&v, copy, n));
+        CHECK(!ytb_open_view(&v, copy, n));
         CHECK_HAS(ytb_error(&v), "has level 3 of 3");
         memcpy(copy, t.base, n);
         {
@@ -654,33 +674,33 @@ static void check_view(void) {
             unsigned char* l = copy + loff;
             copy[ytb__rd32(l)] = 0xFF;
             rehash(copy);
-            CHECK(!ytb_view(&v, copy, n));
+            CHECK(!ytb_open_view(&v, copy, n));
             CHECK_HAS(ytb_error(&v), "not valid UTF-8");
         }
         memcpy(copy, t.base, n);
         copy[ytb__rd32(cd)] = '9';  /* the name "w" becomes "9" */
         rehash(copy);
-        CHECK(!ytb_view(&v, copy, n));
+        CHECK(!ytb_open_view(&v, copy, n));
         CHECK_HAS(ytb_error(&v), "has no valid name");
         memcpy(copy, t.base, n);
         ytb__wr32(cd + 8, 7);       /* type 7 */
         rehash(copy);
-        CHECK(!ytb_view(&v, copy, n));
+        CHECK(!ytb_open_view(&v, copy, n));
         memcpy(copy, t.base, n);
         ytb__wr64(cd + 24, loff + 4);   /* misaligned levels */
         rehash(copy);
-        CHECK(!ytb_view(&v, copy, n));
+        CHECK(!ytb_open_view(&v, copy, n));
         memcpy(copy, t.base, n);
         ytb__wr32(copy + YTB_HEADER_SIZE + 32 + 12, 99);   /* x: 99 levels for 4 rows */
         rehash(copy);
-        CHECK(!ytb_view(&v, copy, n));
+        CHECK(!ytb_open_view(&v, copy, n));
         memcpy(copy, t.base, n);
         {
             /* An INTEGER level that is not an int32. */
             unsigned char* xd = copy + YTB_HEADER_SIZE + 32;
             ytb__wrf64(copy + ytb__rd64(xd + 24) + 8, 1.5);
             rehash(copy);
-            CHECK(!ytb_view(&v, copy, n));
+            CHECK(!ytb_open_view(&v, copy, n));
             CHECK_HAS(ytb_error(&v), "is not an int32");
         }
         memcpy(copy, t.base, n);
@@ -689,15 +709,15 @@ static void check_view(void) {
             unsigned char* l = copy + loff;
             copy[ytb__rd32(l) + ytb__rd32(l + 4)] = 'z';
             rehash(copy);
-            CHECK(!ytb_view(&v, copy, n));
+            CHECK(!ytb_open_view(&v, copy, n));
         }
         memcpy(copy, t.base, n);
         ytb__wr32(copy + 4, 2);
-        CHECK(!ytb_view(&v, copy, n));
+        CHECK(!ytb_open_view(&v, copy, n));
         CHECK_HAS(ytb_error(&v), "block format 2 is not 1");
     }
-    CHECK(!ytb_view(&v, NULL, 64));
-    CHECK(!ytb_view(&v, "PSTX", 4));
+    CHECK(!ytb_open_view(&v, NULL, 64));
+    CHECK(!ytb_open_view(&v, "PSTX", 4));
 }
 
 static void check_file(void) {
@@ -723,12 +743,12 @@ static void check_file(void) {
     memset(&d, 0, sizeof(d));
     d.arena = g_arena;
     d.arena_size = sizeof(g_arena64);
-    CHECK(ytb_csv_file(&t, name, &d));
+    CHECK(ytb_open_csv_file(&t, name, &d));
     CHECK_I(t.n_rows, 2);
     CHECK_S(ytb_text(&t, 1, 1), "y");
     d.arena_size = 64;
-    CHECK(!ytb_csv_file(&t, name, &d));
-    CHECK(!ytb_csv_file(&t, "no_such_file.csv", &d));
+    CHECK(!ytb_open_csv_file(&t, name, &d));
+    CHECK(!ytb_open_csv_file(&t, "no_such_file.csv", &d));
     CHECK_HAS(ytb_error(&t), "cannot open");
 #ifdef _WIN32
     _wremove(wname);

@@ -39,7 +39,7 @@ static bool pin2_csv(const char* csv) {
     cd.len = strlen(csv);
     cd.arena = pin2_arena;
     cd.arena_size = sizeof(pin2_arena);
-    return ytb_csv(&pin2_tab, &cd);
+    return ytb_open_csv(&pin2_tab, &cd);
 }
 
 /* Fill `d` for v0.2 design k (participant number k mod 4 where one is

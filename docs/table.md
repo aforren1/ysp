@@ -109,7 +109,7 @@ by name.
 
 `tests/fuzz/table_fuzz.c` is a libFuzzer target. Its first byte picks
 CSV (with a delimiter, `allow_empty` and one declared type from the next
-byte) or a raw block for `ytb_view()`. Every table it gets is read back
+byte) or a raw block for `ytb_open_view()`. Every table it gets is read back
 through every lookup, and a parsed block is viewed again from a copy. The
 target writes its own seeds (`-DYSP_FUZZ_SEEDS`: 72 CSV inputs and 8
 blocks); no corpus is committed.
@@ -172,6 +172,26 @@ Earlier versions of the code were slower in indicative runs, not under
 the lock, and the changes were kept because of that: the number parser converted twice (17 MB/s);
 the view hashed with FNV-1a and checked every text with `memchr` (2.5 ms
 for the strings block).
+
+## Open, close and negative reasons (v0.2.0)
+
+v0.2.0 applies the repository conventions (README.md, Conventions):
+
+- **The parse and the view are opens.** They fill a handle and check what
+  they read, so they take the open verb: `ytb_open_csv()`,
+  `ytb_open_csv_file()` and `ytb_open_view()`. `ytb_close()` zeroes the
+  handle. It releases nothing, because the block is in the caller's arena
+  or in a pack, but every open has a close.
+- **The number reasons are negative.** `YTB_NUM_SYNTAX`, `YTB_NUM_DIGITS`
+  and `YTB_NUM_RANGE` are -1, -2 and -3, so `rc < 0` is a failure here as
+  in every other header. Every caller compared with the names, so no caller
+  changed.
+
+The parser, the block format and the hash are v0.1.0's: the pinned block
+hash in `tests/adapt/table_test.c` did not change. Checked on 2026-10-10
+(Windows 11, MSVC 19.44 /W4 /WX as C and C++17, MinGW-w64 gcc -Werror),
+with new checks for `ytb_close()` on a zeroed handle, after a failed open
+and twice. The fuzz target builds against the new names.
 
 ## Not done
 

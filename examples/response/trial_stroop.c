@@ -237,7 +237,7 @@ int main(int argc, char** argv) {
     cd.len = sizeof conditions_csv - 1;
     cd.arena = table_arena;
     cd.arena_size = sizeof table_arena;
-    if (!(cond_path ? ytb_csv_file(&tab, cond_path, &cd) : ytb_csv(&tab, &cd))) {
+    if (!(cond_path ? ytb_open_csv_file(&tab, cond_path, &cd) : ytb_open_csv(&tab, &cd))) {
         fprintf(stderr, "trial_stroop: %s\n", ytb_error(&tab));
         return 1;
     }

@@ -265,7 +265,7 @@ hostile:
   consistency check does the first part).
 - Every kind's header (section 4) is bounds-checked by its view function
   before a pointer leaves the reader. The deep checks of a form stay with
-  its owner (`ytb_view()`, `ygfx_cset_check()`, `ycol_cal` checks,
+  its owner (`ytb_open_view()`, `ygfx_cset_check()`, `ycol_cal` checks,
   ysp/audio.h's WAV parser, `yvid` index checks).
 - `tests/fuzz/pack_fuzz.c` (libFuzzer, as `table_fuzz.c`): its input is a
   pack in memory; it opens it, looks up every name and random ones, reads
@@ -309,7 +309,7 @@ allocated after open. The header's manual is the reference; in short:
 
 | Call | What it does |
 |---|---|
-| `ypak_open(&pk, &desc)` | Opens from `desc.path` (mapped whole), `desc.data` (memory, 8-byte aligned), `desc.reader` (bytes by range) or `desc.tail` (incremental). Returns 0, `YPAK_NEED`, or a negative `YPAK_ERR_*` with the message in `ypak_error()` |
+| `ypak_open(&pk, &desc)` | Opens from `desc.path` (mapped whole), `desc.data` (memory, 8-byte aligned), `desc.reader` (bytes by range) or `desc.tail` (incremental). Returns `bool` (v0.2.0): true when open, or for `desc.tail` when it wants bytes (`pk.need_len > 0`); false with the message in `ypak_error()` and the code in `pk.error_code` |
 | `ypak_feed(&pk, bytes, n)` | Incremental open: exactly the range `pk.need_off`, `pk.need_len` asked for; `YPAK_NEED` again or 0 |
 | `ypak_find`, `ypak_find_n`, `ypak_at`, `ypak_first_of` | Lookup by name (binary search), by index, by kind (the EXPERIMENT) |
 | `ypak_data(&pk, &e)` | The entry's bytes, zero-copy, checked and verified by the policy; NULL without a mapping or memory |
@@ -460,8 +460,8 @@ the deep checks stay with each form's owner.
 
 ### 4.1 TABLE
 
-The PSTB block (docs/table.md, format 1), unchanged; `ytb_view()` reads
-it in place. Source: CSV or TSV through `ytb_csv()`. Parameters:
+The PSTB block (docs/table.md, format 1), unchanged; `ytb_open_view()` reads
+it in place. Source: CSV or TSV through `ytb_open_csv()`. Parameters:
 `delimiter` (`","`, `";"` or `"\t"`; default `","`), `types` (column name
 to `"integer"`, `"number"` or `"string"`), `allow_empty` (default false).
 
@@ -759,7 +759,7 @@ the tool and requires the same bytes (open question 2).
 
 | Kind | Player call | Copy at load |
 |---|---|---|
-| TABLE | `ytb_view(data, size)` | none |
+| TABLE | `ytb_open_view(data, size)` | none |
 | CALIBRATION | `memcpy` into a `ycol_cal`, then its check | 62528 bytes |
 | FONT | `ylay_add_font(data, size, ...)`, `yol` | none |
 | CURVESET, ARTWORK | view, `ygfx_cset_check()`, `ygfx_cset_make()` | GPU upload only |
@@ -1133,11 +1133,11 @@ one function in the tool.
 
 | File | Version | What |
 |---|---|---|
-| `include/ysp/pack.h` | 0.1.0 | The reader (2.12) |
+| `include/ysp/pack.h` | 0.2.0 | The reader (2.12) |
 | `include/ysp/audio.h` | 0.2.1 | `yau_wav_probe()` (docs/audio.md, "The WAV probe") |
 | `include/ysp/gfx.h` | 0.10.5 | `YGFX_SHADER_CONTRACT` (docs/gfx.md, "v0.10.3"; 2 from v0.10.5); encoded R8 and RG8 textures, so a TEXTURE entry loads as stored (docs/gfx.md, "v0.10.5") |
 | `pack/ysp/pack_tool.h`, `pack/pack_tool.c`, `pack/pack_impl.c` | 0.2.0 | The tool library. 0.1.1 (2026-10-09): the JSON reader and writer moved to `include/ysp/json.h`; every corpus pack is byte-identical to 0.1.0's but for the manifest, which now names ysp/json.h. 0.2.0 (2026-10-09): TEXTURE encoding bytes as `ygfx_texture()` takes them, `primaries` (4.9); the shader contract 2 in SHADER entries |
-| `include/ysp/json.h` | 0.1.0 | The strict JSON reader and canonical writer (docs/json.md) |
+| `include/ysp/json.h` | 0.1.1 | The strict JSON reader and canonical writer (docs/json.md) |
 | `pack/ypak.c` | 0.2.0 | The CLI (it prints the tool library's version) |
 | `tools/vendor_pack.py` | | Fetches and verifies lodepng |
 | `tests/adapt/pack_test.c` | | The reader's test, with its own writer: 29 faults, every bit flip and truncation of a small pack, the four sources, cursors, the arena, a virtual 4.3 GB entry and 65,537 entries (zip64 by size, offset and count), the views |
@@ -1162,3 +1162,37 @@ compile checks and `test_pack` build with every configuration; the tool,
 - The bench's cold-SSD number: the phase 1 probe measured it (9.1); the
   bench measures the mapped first touch.
 - macOS: nothing was run there.
+
+## 12. A bool open and the message claim (ysp/pack.h v0.2.0)
+
+v0.2.0 applies the repository conventions (README.md, Conventions) to the
+reader. The format, the tool and every pack are unchanged.
+
+- **`ypak_open()` returns `bool`.** Open fills a handle from a desc, so it
+  returns true or false like every other open. The incremental source
+  needs a third answer, "fetch these bytes"; it is true with
+  `pk.need_len > 0`, because the handle is valid and waiting, not failed.
+  `ypak_feed()` keeps its int: `YPAK_NEED`, 0 or a negative code.
+- **`pk.error_code`.** A bool loses the code that the tool's exit status and
+  `ypt_verify()` report (`YPAK_ERR_CORRUPT` for a damaged entry at a
+  verifying open). The pack keeps the code of its last failure beside the
+  message, and `ypak_strerror()` names it.
+- **The message claim.** Lookups, `ypak_data()`, `ypak_check()` and
+  cursors may run on several threads at once, and each failure writes the
+  pack's message. v0.1.0 let two such writes interleave. Now a failure
+  takes an atomic claim before it writes (GCC and Clang builtins,
+  `_InterlockedExchange` on MSVC) and releases it after; a failure that
+  finds the claim taken returns its code and leaves the other text whole.
+  No lock is held on the success path, and a failure costs one atomic
+  exchange more. README.md names this as the one exception to "the
+  message belongs to the last failure": here it is the last failure of
+  some thread.
+
+Checked on 2026-10-10 (Windows 11, MSVC 19.44 /W4 /WX as C and C++17,
+MinGW-w64 gcc -Werror): `tests/adapt/pack_test.c` adds two threads that
+each fail 20,000 lookups with names that share no byte past their
+prefix; the message after them is one whole text, the code is
+`YPAK_ERR_NOT_FOUND` and the claim is released. Mutants `conv-01` (a
+failure that leaves no code) and `conv-02` (a claim never released) are
+killed. The tool's test and the fuzz target build against the new open;
+`pack/` changed in one line (`open_pack()` reads `pk.error_code`).

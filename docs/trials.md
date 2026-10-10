@@ -65,7 +65,7 @@ what the implementation changed; the header says what it does.
 | Re-running missed trials | none built in (users append to `trialList`) | `ytr_requeue` with an optional gap |
 | Practice | a separate handler | `n_practice`, flagged, untallied |
 | Data | `addData`, `saveAsWideText` | a fixed-size caller record per trial, `ytr_format_row`, the history array |
-| Resume | `saveAsPickle` | `ytr_save` / `ytr_load` byte snapshot, or `ytr_restore` from the outcomes plus the seed (a re-queue is its own outcome value so replay can tell it from an invalid response) |
+| Resume | `saveAsPickle` | `ytr_save` / `ytr_open_saved` byte snapshot, or `ytr_restore` from the outcomes plus the seed (a re-queue is its own outcome value so replay can tell it from an invalid response) |
 
 Psychtoolbox has no equivalent; labs write their own. Palamedes has none.
 
@@ -179,7 +179,7 @@ what it likes, and chooses whether the track hears about it.
 
 The sequencer's state is small and scalar, so it saves three ways: CSV
 rows for analysis, a key=value metadata line to head a data file, and a
-versioned byte snapshot (`ytr_save`, `ytr_load`) that resumes a
+versioned byte snapshot (`ytr_save`, `ytr_open_saved`) that resumes a
 crashed session without replaying the seed. No JSON parser: a header that
 parses text is the wrong header. The caller's per-trial data is
 deliberately bounded to `record_size` bytes. Anything large or variable
@@ -436,7 +436,7 @@ A foreperiod, an inter-trial interval or an SOA that varies from trial
 to trial is a random draw like the order, so it belongs to the same
 generator and the same contract (rig_spec 14.7 rank 9). In the session
 it gets three things a caller's own draw does not: `ytr_restore()` and
-`ytr_load()` reproduce it, the data line logs it, and a table column
+`ytr_open_saved()` reproduce it, the data line logs it, and a table column
 can set its interval per condition. The header draws and logs; the
 caller waits.
 
@@ -727,6 +727,49 @@ twice under the lock, gave open() medians within 0.01 ms for the cheap
 designs and within 0.2 ms (3 %, inside the run-to-run spread) for the
 units design.
 
+## Nanosecond jitters, open and close (v0.3.0)
+
+v0.3.0 applies the repository conventions (README.md, Conventions):
+
+- **Jitters are `int64_t` nanoseconds in C.** `ytr_jitter_desc` has
+  `lo_ns`, `hi_ns`, `scale_ns` and `values_ns`, and `ytr_uniform()`,
+  `ytr_choice()` and `ytr_exponential()` take nanoseconds
+  (`YRT_MS(800)`). The names changed so that a v0.2.1 caller who writes
+  `j.lo = 0.8` gets a compile error, not a duration truncated to 0. A
+  bare `0.8` passed to a helper converts to 0, which MSVC (C4244) and gcc
+  (`-Wfloat-conversion`, on in the CMake build) warn about.
+  `ytr_jitter_value` lost `.s`: a person reads `YRT_TO_S(v.ns)`.
+- **Seconds stay where people write them.** The rules text (`jitter iti
+  uniform 0.8 1.2`), the table columns and the Python and MATLAB bindings
+  keep seconds. They convert with the function v0.2.1 used for every
+  duration (to the nearest nanosecond from the double's bits, ties up),
+  so a v0.2.1 desc and its v0.3.0 translation draw the same nanoseconds.
+  The draw itself was already integer arithmetic on nanoseconds; only the
+  boundary moved.
+- **Snapshot format 4.** The desc section of a session with jitters
+  stores the durations as i64 nanoseconds where format 3 stored f64
+  seconds. A format 3 snapshot is refused by its number.
+- **`format_rules()`** writes a duration as the exact decimal of its
+  nanoseconds with trailing zeros dropped (`0.8`, `2`), where v0.2.1 wrote
+  the shortest decimal of the double. A value with more than nine decimals
+  (`0.333333333333`) now prints as the nanoseconds it is
+  (`0.333333333`); both read back to the same session.
+- **Open and close.** `ytr_load()` is `ytr_open_saved()`, and
+  `ytr_close()` zeroes the handle (it owns no memory). The loop calls
+  (`ytr_next()`, `ytr_update()`, `ytr_mark_break()`, `ytr_requeue()`,
+  `ytr_restore()`) write `ytr_error()` when they fail; `YTR_DONE` is not a
+  failure. `ytr_jitter_check()` returns 0 or `YTR_ERR_ARG`.
+
+What was checked, on 2026-10-10 (Windows 11, MSVC 19.44 /W4 /WX as C and
+C++17, and MinGW-w64 gcc 16.1 -Werror): the six golden digests of 200,000
+draws each (`tests/adapt/trials_jitter_golden.h`) are unchanged, and so are
+the 600 v0.1 pins and the 320 v0.2 pins. The jitter tests keep their
+v0.2.1 numbers in seconds and convert them with the header's own
+function, so every expected draw is the one v0.2.1 checked. The Python
+binding's 157 tests pass unchanged (its `.s` is the correctly rounded
+`ns / 1e9`, as the header's was), and so does `bindings/mex/test_mex.m`
+under Octave 10.1 (MATLAB not run).
+
 ## Verification (v0.1)
 
 The header's STATUS block has the numbers. In summary:
@@ -744,7 +787,7 @@ The header's STATUS block has the numbers. In summary:
   760 random re-queues under a no-repeat rule with no unflagged violation;
   `ytr_mark_break` ending a run; tallies against a hand count;
   `ytr_restore` reproducing a run bit for bit, with and without tracks;
-  `ytr_save` at 42 cut points then `ytr_load` into a garbage-filled
+  `ytr_save` at 42 cut points then `ytr_open_saved` into a garbage-filled
   handle, identical to the uninterrupted run, snapshot bytes included;
   every load refusal and every rejected desc; the format functions against
   fixed strings.

@@ -1071,6 +1071,31 @@ static void test_rejections(void) {
     CHECK(strcmp(yqst_strerror(0), "ok") == 0, "strerror(0)");
     CHECK(yqst_strerror(-99)[0] != '\0', "strerror of an unknown code");
     yqst_close(&g_q2);
+
+    /* v0.6: a failing handle-changing call writes the message; close is safe
+     * on a zeroed handle, after a failed open and twice. */
+    memset(&g_q2, 0, sizeof(g_q2));
+    CHECK(yqst_next(&g_q2) == YQST_ERR_CLOSED, "next on a zeroed handle");
+    CHECK(strstr(yqst_error(&g_q2), "yqst_next") != NULL, "next message: %s", yqst_error(&g_q2));
+    yqst_close(&g_q2);
+    yqst_close(&g_q2);
+    yqst_close(NULL);
+    ref_desc(&d, false); d.n_stim = 0;
+    CHECK(!yqst_open(&g_q2, &d), "open accepted n_stim = 0");
+    yqst_close(&g_q2);
+    yqst_close(&g_q2);
+    ref_desc(&d, false);
+    CHECK(yqst_open(&g_q2, &d), "open: %s", yqst_error(&g_q2));
+    CHECK(yqst_error(&g_q2)[0] == '\0', "open left a message: %s", yqst_error(&g_q2));
+    CHECK(yqst_update(&g_q2, 0, 7) == YQST_ERR_ARG, "update with outcome 7");
+    CHECK(strstr(yqst_error(&g_q2), "yqst_update") != NULL, "update message: %s", yqst_error(&g_q2));
+    CHECK(yqst_update_values(&g_q2, NULL, 0) == YQST_ERR_ARG, "update_values(NULL)");
+    CHECK(strstr(yqst_error(&g_q2), "yqst_update_values") != NULL, "update_values message");
+    CHECK(yqst_next_subset(&g_q2, NULL, 1) == YQST_ERR_ARG, "next_subset(NULL)");
+    CHECK(strstr(yqst_error(&g_q2), "yqst_next_subset") != NULL, "next_subset message");
+    yqst_close(&g_q2);
+    yqst_close(&g_q2);
+    CHECK(!yqst_is_open(&g_q2), "open after close");
 }
 
 /* ======================================================================= *
@@ -1139,13 +1164,13 @@ static void test_grids(void) {
         yqst_axis ax = yqst_values(ref_alpha, RA);
         double w[RA] = {0}, sum = 0.0;
         yqst_desc pd;
-        CHECK(yqst_prior_normal(&ax, -1.0, 0.5, w), "prior_normal failed");
+        CHECK(yqst_prior_normal(&ax, -1.0, 0.5, w) == 0, "prior_normal failed");
         for (i = 0; i < RA; i++) {
             double z = (ref_alpha[i] + 1.0) / 0.5;
             CLOSE(w[i], exp(-0.5 * z * z), 1e-15, "prior weight %d", i);
         }
-        CHECK(!yqst_prior_normal(&ax, 0.0, 0.0, w), "prior_normal accepted sd = 0");
-        CHECK(!yqst_prior_normal(NULL, 0.0, 1.0, w), "prior_normal accepted a null axis");
+        CHECK(yqst_prior_normal(&ax, 0.0, 0.0, w) == YQST_ERR_ARG, "prior_normal accepted sd = 0");
+        CHECK(yqst_prior_normal(NULL, 0.0, 1.0, w) == YQST_ERR_ARG, "prior_normal accepted a null axis");
         ref_desc(&pd, false);
         pd.param[0].prior = w;
         CHECK(yqst_open(&g_q, &pd), "open with a prior: %s", yqst_error(&g_q));
@@ -1933,7 +1958,7 @@ static void test_async_matches(void) {
     memset(&ad, 0, sizeof(ad));
     ad.quest = &g_q;
     ad.estimator = YQST_EST_MEAN;
-    CHECK(yqst_async_start(&g_async, &ad), "async start: %s", yqst_async_error(&g_async));
+    CHECK(yqst_async_open(&g_async, &ad), "async start: %s", yqst_async_error(&g_async));
     CHECK(yqst_async_is_running(&g_async), "async is not running after start");
 
     /* The proposal made at start: poll returns 0 and the snapshot is valid. */
@@ -1951,7 +1976,7 @@ static void test_async_matches(void) {
         outcomes[i] = (i * 5 + 1) % 3 ? 1 : 0;
         seq = yqst_async_submit(&g_async, proposals[i], outcomes[i]);
         CHECK(seq == i + 1, "submit %d returned %d", i, seq);
-        rc = yqst_async_wait(&g_async, (uint32_t)seq, 30000000000ull, &snap);
+        rc = yqst_async_wait(&g_async, (uint32_t)seq, YRT_S(30), &snap);
         CHECK(rc >= seq, "wait for seq %d returned %d", seq, rc);
         CHECK(snap.seq == (uint32_t)seq, "snapshot seq %u after waiting for %d",
               snap.seq, seq);
@@ -1960,7 +1985,7 @@ static void test_async_matches(void) {
         CHECK(snap.proposed >= 0, "proposal %d at trial %d", snap.proposed, i);
         CHECK(yqst_async_pending(&g_async) == 0, "pending after a wait");
     }
-    yqst_async_stop(&g_async);
+    yqst_async_close(&g_async);
     CHECK(!yqst_async_is_running(&g_async), "still running after stop");
 
     /* The handle is the caller's again. */
@@ -2011,7 +2036,7 @@ static void test_async_queue(void) {
     memset(&ad, 0, sizeof(ad));
     ad.quest = &g_q;
     ad.below_normal = true;      /* exercise the priority path too */
-    CHECK(yqst_async_start(&g_async, &ad), "async start: %s", yqst_async_error(&g_async));
+    CHECK(yqst_async_open(&g_async, &ad), "async start: %s", yqst_async_error(&g_async));
     prev = yqst_async_poll(&g_async, &snap);
     CHECK(prev == 0, "initial poll on the big grid returned %d", prev);
 
@@ -2030,7 +2055,7 @@ static void test_async_queue(void) {
              * ThreadSanitizer with the thread below normal priority a drain of
              * the whole queue has been measured past two seconds. A hang would
              * still show as a timeout. */
-            rc = yqst_async_wait(&g_async, (uint32_t)(last_seq), 30000000000ull, &snap);
+            rc = yqst_async_wait(&g_async, (uint32_t)(last_seq), YRT_S(30), &snap);
             CHECK(rc >= 0, "wait after a full queue returned %d", rc);
             i--;
             continue;
@@ -2057,7 +2082,7 @@ static void test_async_queue(void) {
     CHECK(n_acc > YQST_ASYNC_QUEUE, "only %d submits were accepted", n_acc);
 
     /* Stop drains: every accepted response must have been applied. */
-    yqst_async_stop(&g_async);
+    yqst_async_close(&g_async);
     CHECK(yqst_n_trials(&g_q) == n_acc,
           "stop did not drain: %d trials applied of %d accepted",
           yqst_n_trials(&g_q), n_acc);
@@ -2089,16 +2114,16 @@ static void test_async_edges(void) {
     CHECK(yqst_async_poll(&g_async, NULL) == YQST_ERR_CLOSED, "poll on a zeroed handle");
     CHECK(yqst_async_wait(&g_async, 1, 0, NULL) == YQST_ERR_CLOSED, "wait on a zeroed handle");
     CHECK(yqst_async_error(&g_async)[0] == '\0', "a zeroed handle has a message");
-    yqst_async_stop(&g_async);   /* must be safe */
+    yqst_async_close(&g_async);   /* must be safe */
 
     /* Descs start() refuses. */
-    CHECK(!yqst_async_start(&g_async, NULL), "start accepted a null desc");
+    CHECK(!yqst_async_open(&g_async, NULL), "start accepted a null desc");
     CHECK(yqst_async_error(&g_async)[0] != '\0', "no message for a null desc");
     memset(&ad, 0, sizeof(ad));
-    CHECK(!yqst_async_start(&g_async, &ad), "start accepted a desc without a quest");
+    CHECK(!yqst_async_open(&g_async, &ad), "start accepted a desc without a quest");
     memset(&g_q, 0, sizeof(g_q));
     ad.quest = &g_q;
-    CHECK(!yqst_async_start(&g_async, &ad), "start accepted a closed quest");
+    CHECK(!yqst_async_open(&g_async, &ad), "start accepted a closed quest");
     CHECK(strstr(yqst_async_error(&g_async), "not open") != NULL,
           "message: %s", yqst_async_error(&g_async));
 
@@ -2106,9 +2131,9 @@ static void test_async_edges(void) {
     CHECK(yqst_open(&g_q, &d), "open: %s", yqst_error(&g_q));
     ad.quest = &g_q;
     ad.estimator = (yqst_estimator)99;
-    CHECK(!yqst_async_start(&g_async, &ad), "start accepted a bad estimator");
+    CHECK(!yqst_async_open(&g_async, &ad), "start accepted a bad estimator");
     ad.estimator = YQST_EST_MODE;
-    CHECK(yqst_async_start(&g_async, &ad), "start: %s", yqst_async_error(&g_async));
+    CHECK(yqst_async_open(&g_async, &ad), "start: %s", yqst_async_error(&g_async));
 
     /* Arguments the submit path rejects without troubling the thread. */
     CHECK(yqst_async_submit(&g_async, RS, 0) == YQST_ERR_ARG, "a stimulus index past the grid");
@@ -2122,16 +2147,16 @@ static void test_async_edges(void) {
     sv[0] = 0.5 * (ref_x[1] + ref_x[2]);
     seq = yqst_async_submit_values(&g_async, sv, 1);
     CHECK(seq > 0, "submit_values returned %d", seq);
-    rc = yqst_async_wait(&g_async, (uint32_t)seq, 30000000000ull, &snap);
+    rc = yqst_async_wait(&g_async, (uint32_t)seq, YRT_S(30), &snap);
     CHECK(rc == seq, "wait returned %d for seq %d", rc, seq);
     CHECK(snap.n_trials == 1, "n_trials after an off-grid submit = %d", snap.n_trials);
     /* YQST_EST_MODE was asked for, so the snapshot carries grid points. */
     CHECK(snap.estimate[0] == ref_alpha[0] || snap.estimate[0] == ref_alpha[1] ||
           snap.estimate[0] == ref_alpha[2] || snap.estimate[0] == ref_alpha[3],
           "the mode estimate %g is not a grid point", snap.estimate[0]);
-    CHECK(yqst_async_wait(&g_async, (uint32_t)seq + 5, 1000000ull, NULL) == YQST_ERR_TIMEOUT,
+    CHECK(yqst_async_wait(&g_async, (uint32_t)seq + 5, YRT_MS(1), NULL) == YQST_ERR_TIMEOUT,
           "a wait for a seq nobody submitted did not time out");
-    yqst_async_stop(&g_async);
+    yqst_async_close(&g_async);
     CHECK(yqst_async_submit(&g_async, 0, 1) == YQST_ERR_CLOSED, "submit after stop");
     CHECK(yqst_async_poll(&g_async, &snap) >= 0,
           "poll after stop should still hand back the last snapshot");
@@ -2143,8 +2168,8 @@ static void test_async_edges(void) {
         CLOSE(h[0].stim[0], sv[0], 0.0, "the off-grid stimulus value");
     }
     yqst_close(&g_q);
-    yqst_async_stop(&g_async);   /* twice must be safe */
-    for (i = 0; i < 2; i++) yqst_async_stop(&g_async);
+    yqst_async_close(&g_async);   /* twice must be safe */
+    for (i = 0; i < 2; i++) yqst_async_close(&g_async);
     CHECK(strcmp(yqst_strerror(YQST_ERR_BUSY), "queue is full") == 0, "strerror BUSY");
     CHECK(strcmp(yqst_strerror(YQST_ERR_TIMEOUT), "timed out") == 0, "strerror TIMEOUT");
 }
@@ -2163,16 +2188,16 @@ static void test_async_depth(void) {
     memset(&ad, 0, sizeof(ad));
     ad.quest = &g_q;
     ad.queue_depth = YQST_ASYNC_QUEUE + 1;
-    CHECK(!yqst_async_start(&g_async, &ad), "start accepted a depth past the capacity");
+    CHECK(!yqst_async_open(&g_async, &ad), "start accepted a depth past the capacity");
     CHECK(strstr(yqst_async_error(&g_async), "queue_depth") != NULL,
           "message: %s", yqst_async_error(&g_async));
     ad.queue_depth = -1;
-    CHECK(!yqst_async_start(&g_async, &ad), "start accepted a negative depth");
+    CHECK(!yqst_async_open(&g_async, &ad), "start accepted a negative depth");
 
     /* Depth 1: lockstep. On a grid that takes about a millisecond per trial, a
      * second submit right behind the first finds the only slot taken. */
     ad.queue_depth = 1;
-    CHECK(yqst_async_start(&g_async, &ad), "start: %s", yqst_async_error(&g_async));
+    CHECK(yqst_async_open(&g_async, &ad), "start: %s", yqst_async_error(&g_async));
     for (i = 0; i < 6; i++) {
         rc = yqst_async_submit(&g_async, (i * 5) % 31, i % 2);
         if (rc == YQST_ERR_BUSY) { busy++; continue; }
@@ -2182,9 +2207,9 @@ static void test_async_depth(void) {
               yqst_async_pending(&g_async));
     }
     CHECK(busy > 0, "depth 1 never pushed back in 6 back-to-back submits");
-    rc = yqst_async_wait(&g_async, (uint32_t)last, 30000000000ull, &snap);
+    rc = yqst_async_wait(&g_async, (uint32_t)last, YRT_S(30), &snap);
     CHECK(rc == last, "wait returned %d, want %d", rc, last);
-    yqst_async_stop(&g_async);
+    yqst_async_close(&g_async);
     CHECK(yqst_n_trials(&g_q) == accepted, "applied %d of %d accepted",
           yqst_n_trials(&g_q), accepted);
     yqst_close(&g_q);
@@ -2338,7 +2363,7 @@ static void test_snapshot_resume(void) {
                 rng_resumed = rng_saved;
                 snap_desc(&d, config, &rng_resumed);
                 memset(&g_q, 0, sizeof(g_q));
-                CHECK(yqst_load(&g_q, &d, buf, n), "%s cut %d phase %d: load: %s",
+                CHECK(yqst_open_saved(&g_q, &d, buf, n), "%s cut %d phase %d: load: %s",
                       snap_name(config), c, phase, yqst_error(&g_q));
                 CHECK(yqst_n_trials(&g_q) == (pending ? c - 1 : c),
                       "%s cut %d: n_trials %d after load", snap_name(config), c,
@@ -2394,7 +2419,7 @@ static void test_snapshot_stopped(void) {
     n = yqst_save(&g_q, buf, sizeof(buf));
     CHECK(n > 0, "save returned %d", n);
     yqst_close(&g_q);
-    CHECK(yqst_load(&g_q, &d, buf, (size_t)n), "load: %s", yqst_error(&g_q));
+    CHECK(yqst_open_saved(&g_q, &d, buf, (size_t)n), "load: %s", yqst_error(&g_q));
     CHECK(yqst_done(&g_q), "a stopped session resumed as running");
     CHECK(yqst_stop_reason(&g_q) == YQST_STOP_TRIALS, "stop reason %d",
           (int)yqst_stop_reason(&g_q));
@@ -2405,7 +2430,7 @@ static void snap_reject(const yqst_desc* d, const unsigned char* buf, size_t len
                         const char* want, const char* what) {
     bool ok;
     memset(&g_q, 0, sizeof(g_q));
-    ok = yqst_load(&g_q, d, buf, len);
+    ok = yqst_open_saved(&g_q, d, buf, len);
     CHECK(!ok, "load accepted %s", what);
     CHECK(!yqst_is_open(&g_q), "a failed load (%s) left the handle open", what);
     CHECK(strstr(yqst_error(&g_q), want) != NULL, "%s: message \"%s\" lacks \"%s\"",
@@ -2447,7 +2472,7 @@ static void test_snapshot_rejects(void) {
             e = d;
             e.memory = mem;
             e.memory_size = need;
-            CHECK(yqst_load(&g_q, &e, buf, (size_t)n), "load into desc.memory: %s",
+            CHECK(yqst_open_saved(&g_q, &e, buf, (size_t)n), "load into desc.memory: %s",
                   yqst_error(&g_q));
             CHECK(!g_q.mem_owned, "the load took its own memory");
             yqst_close(&g_q);
@@ -2532,7 +2557,7 @@ static void test_version_and_axis_n(void) {
           "yqst_version() %s, macro %s", yqst_version(), YQST_VERSION_STRING);
     /* Pinned, and compared at run time: a constant condition is MSVC's C4127,
      * and the string from the implementation is the thing worth pinning. */
-    CHECK(strcmp(yqst_version(), "0.5.2") == 0, "version %s, want 0.5.2", yqst_version());
+    CHECK(strcmp(yqst_version(), "0.6.0") == 0, "version %s, want 0.6.0", yqst_version());
 
     memset(&d, 0, sizeof(d));
     d.pf = YQST_PF_GUMBEL;

@@ -367,14 +367,14 @@ static void check_entries(const char* path) {
     memset(&d, 0, sizeof d);
     d.path = path;
     d.verify = YPAK_VERIFY_OPEN;
-    rc = ypak_open(&p, &d);
+    rc = ypak_open(&p, &d) ? 0 : p.error_code;
     CHECK(rc == 0, "open %s: %s", path, ypak_error(&p));
     if (rc) return;
     CHECK(p.n == 22, "entries %u", p.n);
     CHECK(ypak_first_of(&p, YPAK_KIND_EXPERIMENT, &e) == 0 && e.name_len == 20 && !memcmp(e.name, "experiment/main.json", 20), "experiment");
     if ((x = entry(&p, "conditions.pstb", &e)) != NULL) {
         ytb_table t;
-        CHECK(ytb_view(&t, x, (size_t)e.size) && t.n_rows == 4 && strcmp(ytb_text(&t, 1, ytb_col(&t, "word")), "dog, big") == 0 &&
+        CHECK(ytb_open_view(&t, x, (size_t)e.size) && t.n_rows == 4 && strcmp(ytb_text(&t, 1, ytb_col(&t, "word")), "dog, big") == 0 &&
               ytb_num(&t, 3, ytb_col(&t, "contrast")) == 0.0625, "table: %s", ytb_error(&t));
     }
     if ((x = entry(&p, "display.yspcal", &e)) != NULL) {
@@ -520,7 +520,7 @@ static void gfx_round_trip(const char* path) {
     sd.backend = YSCR_BACKEND_SIM;
     sd.sim_period_ns = 1000000;
     CHECK(ycol_cal_nominal(&cal, xy, 80.0f, 2.2) == 0, "nominal calibration");
-    if (ypak_open(&p, &d) != 0 || !yscr_open(&scr, &sd)) { CHECK(0, "round trip: open"); return; }
+    if (!ypak_open(&p, &d) || !yscr_open(&scr, &sd)) { CHECK(0, "round trip: open"); return; }
     for (cal_on = 0; cal_on < 2; cal_on++) {
         memset(&gd, 0, sizeof gd);
         gd.screen = &scr;
@@ -625,7 +625,7 @@ static void test_refusals(void) {
         CHECK(rc == 0, "used glyphs: %s", err);
         memset(&d, 0, sizeof d);
         d.path = W "/used.ysppak";
-        if (rc == 0 && ypak_open(&p, &d) == 0) {
+        if (rc == 0 && ypak_open(&p, &d)) {
             const void* x = ypak_find(&p, "fonts/box.yspcset", &e) == 0 ? ypak_data(&p, &e) : NULL;
             if (x && ypak_cset_view(x, e.size, &s, err, sizeof err) == 0) {
                 for (g = 0; g < s.n_glyphs; g++) if (s.words[8 + g]) present++;
@@ -692,12 +692,12 @@ int main(void) {
             memset(&d, 0, sizeof d);
             d.path = W "/player_with_pack.bin";
             d.verify = YPAK_VERIFY_OPEN;
-            rc = ypak_open(&p, &d);
+            rc = ypak_open(&p, &d) ? 0 : p.error_code;
             CHECK(rc == 0 && p.zip_start == 12288 && p.base == 0, "appended pack opens: %s", ypak_error(&p));
             if (rc == 0) {
                 ypak_pack q;
                 d.path = W "/corpus.ysppak";
-                CHECK(ypak_open(&q, &d) == 0 && memcmp(q.id, p.id, 32) == 0, "appended pack ID is the same");
+                CHECK(ypak_open(&q, &d) && memcmp(q.id, p.id, 32) == 0, "appended pack ID is the same");
                 ypak_close(&q);
                 ypak_close(&p);
             }
@@ -719,7 +719,7 @@ int main(void) {
             memset(&d, 0, sizeof d);
             d.path = W "/corpus.ysppak";
             x = read_all(W "/out/img/gray.ysptex", &n);
-            if (ypak_open(&p, &d) == 0) {
+            if (ypak_open(&p, &d)) {
                 const void* y = ypak_find(&p, "img/gray.ysptex", &e) == 0 ? ypak_data(&p, &e) : NULL;
                 CHECK(x && y && n == (size_t)e.size && memcmp(x, y, n) == 0, "extracted bytes");
                 ypak_close(&p);
@@ -741,7 +741,7 @@ int main(void) {
             long at = 0;
             memset(&d, 0, sizeof d);
             d.path = W "/corpus.ysppak";
-            if (ypak_open(&p, &d) == 0) {
+            if (ypak_open(&p, &d)) {
                 if (ypak_find(&p, "readme.txt", &e) == 0) at = (long)e.data_off + 3;
                 ypak_close(&p);
             }
@@ -761,7 +761,7 @@ int main(void) {
             char id[72];
             memset(&d, 0, sizeof d);
             d.path = W "/corpus.ysppak";
-            if (f && ypak_open(&p, &d) == 0) {
+            if (f && ypak_open(&p, &d)) {
                 ypak_id(&p, id);
                 fprintf(f, "pack %s\n", id);
                 for (i = 0; i < p.n; i++) {

@@ -541,13 +541,13 @@ static int build_table(B* b, E* e) {
         d.n_types = jn(types);
     }
     memset(&t, 0, sizeof t);
-    (void)ytb_csv(&t, &d);
+    (void)ytb_open_csv(&t, &d);
     if (!t.need) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s", e->name, ytb_error(&t));
     arena = calloc_c(b->c, t.need + 16);
     if (!arena) return cfail(b->c, YPAK_ERR_NOMEM, "'%s': out of memory", e->name);
     d.arena = arena;
     d.arena_size = t.need;
-    if (!ytb_csv(&t, &d)) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s", e->name, ytb_error(&t));
+    if (!ytb_open_csv(&t, &d)) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s", e->name, ytb_error(&t));
     e->data = t.base;
     e->size = (int64_t)t.size;
     snprintf(ver, sizeof ver, "ysp/table.h %s", YTB_VERSION_STRING);
@@ -1826,12 +1826,10 @@ int ypt_build(const char* desc_path, const char* out_path, const ypt_options* o,
 
 static int open_pack(C* c, ypak_pack* p, const char* path, ypak_verify v) {
     ypak_desc d;
-    int rc;
     memset(&d, 0, sizeof d);
     d.path = path;
     d.verify = v;
-    rc = ypak_open(p, &d);
-    if (rc) return cfail(c, rc, "%s: %s", path, ypak_error(p));
+    if (!ypak_open(p, &d)) return cfail(c, p->error_code, "%s: %s", path, ypak_error(p));
     return 0;
 }
 

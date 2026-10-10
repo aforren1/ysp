@@ -137,8 +137,8 @@ static void test_version(void) {
     char buf[32];
     snprintf(buf, sizeof(buf), "%d.%d.%d", YAEP_VERSION_MAJOR,
              YAEP_VERSION_MINOR, YAEP_VERSION_PATCH);
-    CHECK(strcmp(yaep_version(), "0.14.1") == 0,
-          "yaep_version() is %s, expected 0.14.1", yaep_version());
+    CHECK(strcmp(yaep_version(), "0.15.0") == 0,
+          "yaep_version() is %s, expected 0.15.0", yaep_version());
     CHECK(strcmp(yaep_version(), YAEP_VERSION_STRING) == 0,
           "yaep_version() %s disagrees with YAEP_VERSION_STRING %s",
           yaep_version(), YAEP_VERSION_STRING);
@@ -675,6 +675,23 @@ static void test_open_reject(void) {
     CHECK(!yaep_open(&g, NULL), "open accepted a null desc");
     CHECK(yaep_n_trials(&g) == YAEP_ERR_CLOSED, "n_trials on a closed handle");
     CHECK(yaep_update(&g, ok.lo, 1) == YAEP_ERR_CLOSED, "update when closed");
+    /* v0.15: a failing handle-changing call writes the message; close is
+     * safe on a zeroed handle, after a failed open and twice. */
+    CHECK(strstr(yaep_error(&g), "yaep_update") != NULL, "update message: %s", yaep_error(&g));
+    yaep_close(&g);
+    yaep_close(&g);
+    yaep_close(NULL);
+    CHECK(yaep_open(&g, &ok), "reopen: %s", yaep_error(&g));
+    CHECK(yaep_error(&g)[0] == '\0', "open left a message: %s", yaep_error(&g));
+    CHECK(yaep_update(&g, ok.lo, 7) == YAEP_ERR_ARG, "update with outcome 7");
+    CHECK(strstr(yaep_error(&g), "yaep_update") != NULL, "update message: %s", yaep_error(&g));
+    CHECK(yaep_next(&g, NULL) == YAEP_ERR_CLOSED, "next with a null x");
+    CHECK(strstr(yaep_error(&g), "yaep_next") != NULL, "next message: %s", yaep_error(&g));
+    CHECK(yaep_update_real(&g, ok.lo, 0.5) == YAEP_ERR_ARG, "update_real under BERNOULLI");
+    CHECK(strstr(yaep_error(&g), "yaep_update_real") != NULL, "update_real message");
+    yaep_close(&g);
+    yaep_close(&g);
+    CHECK(!yaep_is_open(&g), "open after close");
 }
 
 /* --- 11: a simulated 1-D probit observer -------------------------------- */
@@ -3225,7 +3242,7 @@ static void test_async(void) {
         yaep_async_desc ad;
         memset(&ad, 0, sizeof(ad));
         ad.gp = &g;
-        CHECK(yaep_async_start(&a, &ad), "async start: %s", yaep_async_error(&a));
+        CHECK(yaep_async_open(&a, &ad), "async start: %s", yaep_async_error(&a));
         CHECK(yaep_async_is_running(&a), "the thread is not running");
     }
     rng_state = 0x243F6A8885A308D3ull + 0xee00ull;
@@ -3237,7 +3254,7 @@ static void test_async(void) {
         CHECK(y == async_y[i], "async response %d differs", i);
         seq = yaep_async_submit(&a, s.x, y);
         CHECK(seq > 0, "submit %d: %s", i, yaep_strerror(seq));
-        rc = yaep_async_wait(&a, (uint32_t)seq, 20000000000ull, &s);
+        rc = yaep_async_wait(&a, (uint32_t)seq, YRT_S(20), &s);
         CHECK(rc >= seq, "wait %d returned %d (%s)", i, rc, yaep_strerror(rc));
         CHECK(s.update_rc == YAEP_OK, "update_rc %d on trial %d",
               s.update_rc, i);
@@ -3245,7 +3262,7 @@ static void test_async(void) {
     }
     CHECK(s.done, "the async run did not reach its stop criterion");
     CHECK(s.numeric == 0, "%d numeric failures on the thread", s.numeric);
-    yaep_async_stop(&a);
+    yaep_async_close(&a);
     CHECK(!yaep_async_is_running(&a), "still running after stop");
 
     /* Bit for bit: the history, the posterior mode and the log marginal. */
@@ -3302,7 +3319,7 @@ static void test_async_fit_in_idle(void) {
     ad.gp = &g;
     ad.fit_in_idle = true;
     ad.below_normal = true;
-    CHECK(yaep_async_start(&a, &ad), "fit_in_idle start: %s",
+    CHECK(yaep_async_open(&a, &ad), "fit_in_idle start: %s",
           yaep_async_error(&a));
     CHECK(g.desc.fit_every == 0, "fit_every was not parked");
     yaep_async_poll(&a, &s);
@@ -3312,7 +3329,7 @@ static void test_async_fit_in_idle(void) {
         int y = observe(s.x[0]);
         seq = yaep_async_submit(&a, s.x, y);
         CHECK(seq > 0, "fit_in_idle submit: %s", yaep_strerror(seq));
-        rc = yaep_async_wait(&a, (uint32_t)seq, 20000000000ull, &s);
+        rc = yaep_async_wait(&a, (uint32_t)seq, YRT_S(20), &s);
         CHECK(rc >= seq, "fit_in_idle wait: %s", yaep_strerror(rc));
         lm_before = s.log_marginal;
         if (i == 5) lm_first = lm_before;
@@ -3326,7 +3343,7 @@ static void test_async_fit_in_idle(void) {
     printf("  fit_in_idle: the log marginal improved in an idle gap on %d of "
            "60 trials, %.3f to %.3f\n", idle_gain, lm_first, lm_last);
     CHECK(idle_gain > 0, "the idle fit never improved the log marginal");
-    yaep_async_stop(&a);
+    yaep_async_close(&a);
     CHECK(g.desc.fit_every == 10, "fit_every was not restored");
     {
         double thr = 0.0;
@@ -3362,7 +3379,7 @@ static void test_async_queue(void) {
     CHECK(yaep_open(&g, &d), "open queue test: %s", yaep_error(&g));
     memset(&ad, 0, sizeof(ad));
     ad.gp = &g;
-    CHECK(yaep_async_start(&a, &ad), "queue start: %s", yaep_async_error(&a));
+    CHECK(yaep_async_open(&a, &ad), "queue start: %s", yaep_async_error(&a));
     for (int i = 0; i < 200 && busy < 3; i++) {
         double x[1] = { 0.0 };
         int rc;
@@ -3383,7 +3400,7 @@ static void test_async_queue(void) {
         CHECK(yaep_async_submit_real(&a, ok, 0.5) == YAEP_ERR_ARG,
               "submit_real under a discrete likelihood");
     }
-    yaep_async_stop(&a);          /* drains */
+    yaep_async_close(&a);          /* drains */
     CHECK(yaep_n_trials(&g) == accepted,
           "stop dropped responses: %d trials of %d accepted",
           yaep_n_trials(&g), accepted);
@@ -3397,10 +3414,10 @@ static void test_async_queue(void) {
         yaep_async_desc bd;
         memset(&b, 0, sizeof(b));
         memset(&bd, 0, sizeof(bd));
-        CHECK(!yaep_async_start(&b, &bd), "start with no gp");
+        CHECK(!yaep_async_open(&b, &bd), "start with no gp");
         CHECK(yaep_async_error(&b)[0] != 0, "start left no message");
         CHECK(!yaep_async_is_running(&b), "a failed start left a thread");
-        yaep_async_stop(&b);   /* safe on a handle that never started */
+        yaep_async_close(&b);   /* safe on a handle that never started */
     }
 }
 #endif /* YAEP_ASYNC */
@@ -4016,7 +4033,7 @@ static int snap_session(const snap_cfg* c, int cut, bool pending, double* xs,
                       (unsigned long)len);
                 yaep_close(&g);
                 memset(&g, 0xA5, sizeof(g));
-                loaded = yaep_load(&g, &d, buf, len);
+                loaded = yaep_open_saved(&g, &d, buf, len);
                 CHECK(loaded, "%s: load at %d: %s", c->name, cut, yaep_error(&g));
                 free(buf);
                 if (!loaded) return 0;
@@ -4126,14 +4143,14 @@ static void test_snapshot(void) {
         yaep_save(&g, buf, len);
         yaep_close(&g);
         d.target_p = 0.7;
-        CHECK(!yaep_load(&g, &d, buf, len) && strstr(yaep_error(&g), "target_p") &&
+        CHECK(!yaep_open_saved(&g, &d, buf, len) && strstr(yaep_error(&g), "target_p") &&
               !yaep_is_open(&g), "a desc that differs is named: %s", yaep_error(&g));
         d.target_p = 0.6;
-        CHECK(!yaep_load(&g, &d, buf, len - 3), "a truncated snapshot is refused");
+        CHECK(!yaep_open_saved(&g, &d, buf, len - 3), "a truncated snapshot is refused");
         buf[2] = 'T';
-        CHECK(!yaep_load(&g, &d, buf, len), "a foreign snapshot is refused");
+        CHECK(!yaep_open_saved(&g, &d, buf, len), "a foreign snapshot is refused");
         buf[2] = 'G';
-        CHECK(yaep_load(&g, &d, buf, len), "the snapshot itself loads: %s", yaep_error(&g));
+        CHECK(yaep_open_saved(&g, &d, buf, len), "the snapshot itself loads: %s", yaep_error(&g));
         yaep_close(&g);
         free(buf);
     }
