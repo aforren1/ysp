@@ -33,9 +33,9 @@ id = "w-03"
 name = "early against arm"
 test = "response"
 why = "EARLY is before the stimulus onset, not before the window opened at the fixation."
-find = '''    rt = t - c->onset.t;
+find = '''    rt = t - c->onset.t_ns;
     if (rt < 0) return YRSP_E_EARLY;'''
-replace = '''    rt = t - c->onset.t;
+replace = '''    rt = t - c->onset.t_ns;
     if (t < c->t_arm) return YRSP_E_EARLY;'''
 
 [[mutant]]
@@ -43,24 +43,24 @@ id = "w-04"
 name = "deadline from arm"
 test = "response"
 why = "duration runs from the onset; from arm() the window would close a fixation early."
-find = 'if (c->have_onset && c->duration_ns > 0 && now >= c->onset.t + c->duration_ns) {'
-replace = 'if (c->have_onset && c->duration_ns > 0 && now >= c->t_arm + c->duration_ns) {'
+find = 'if (c->have_onset && c->duration_ns > 0 && now_ns >= c->onset.t_ns + c->duration_ns) {'
+replace = 'if (c->have_onset && c->duration_ns > 0 && now_ns >= c->t_arm + c->duration_ns) {'
 
 [[mutant]]
 id = "w-06"
-name = "seconds truncated"
+name = "negative duration accepted"
 test = "response"
-why = "0.1 s in double is 0.1000000000000000055; truncation still gives 100 ms, but 0.29 s gives 289999999 ns: durations round to nearest."
-find = '*out = (int64_t)llround(s * YRSP__NS_PER_S);'
-replace = '*out = (int64_t)(s * YRSP__NS_PER_S);'
+why = "v0.3.0: desc durations are int64_t ns from the caller; a negative one must be refused at open (the seconds rounding moved to the script layer)."
+find = '    if (ns < 0 || ns > YRT_S(1e6))'
+replace = '    if (ns > YRT_S(1e6))'
 
 [[mutant]]
 id = "w-07"
 name = "rt sign"
 test = "response"
 why = "RT is response minus onset."
-find = 'r->rt = (double)(e->t - c->onset.t) / YRSP__NS_PER_S;'
-replace = 'r->rt = (double)(c->onset.t - e->t) / YRSP__NS_PER_S;'
+find = 'r->rt_ns = e->t - c->onset.t_ns;'
+replace = 'r->rt_ns = c->onset.t_ns - e->t;'
 
 [[mutant]]
 id = "w-08"
@@ -147,13 +147,13 @@ find = '''    c->have_onset = 1;
 replace = '    c->have_onset = 1;'
 [[mutant.also]]
 find = '''    memset(r, 0, sizeof *r);
-    r->rt = r->rt_key_duration = YRSP__NAN;
+    r->rt_ns = r->rt_key_duration_ns = YRSP_NO_TIME;
     r->response = -1;
     r->entry = -1;
     r->onset_frame = -1;
     yrsp__reclassify(c);'''
 replace = '''    memset(r, 0, sizeof *r);
-    r->rt = r->rt_key_duration = YRSP__NAN;
+    r->rt_ns = r->rt_key_duration_ns = YRSP_NO_TIME;
     r->response = -1;
     r->entry = -1;
     r->onset_frame = -1;'''
@@ -286,7 +286,7 @@ id = "r-03"
 name = "max_hold default 0"
 test = "response"
 why = "max_hold 0 means 2 s; 0 ns would end every waiting trial at once."
-find = 'if (c->max_hold_ns == 0) c->max_hold_ns = 2000000000;'
+find = 'if (c->max_hold_ns == 0) c->max_hold_ns = YRT_S(2);'
 replace = ''
 
 # --- crossings, trace, log ---------------------------------------------------
@@ -410,3 +410,21 @@ test = "response"
 why = "A scanner pulse or a photodiode edge in an ALL_KEYS trial must not end it."
 find = '    if (c->d.kinds == YRSP_KINDS_ALL) c->d.kinds = (uint16_t)(c->d.kinds & ~YRSP_KIND_BIT(YRSP_KIND_SYNC));'
 replace = '    (void)0;'
+
+# v0.3.0 conventions: messages and close.
+
+[[mutant]]
+id = "conv-01"
+name = "a failing call writes no message"
+test = "response"
+why = "Every failing call writes yrsp_error() (README Conventions, Errors)."
+find = '    if (c) snprintf(c->error, sizeof c->error, "ysp_response: %s: %s", what, yrsp_strerror(rc));'
+replace = '    (void)what;'
+
+[[mutant]]
+id = "conv-02"
+name = "close leaves the collector open"
+test = "response"
+why = "After yrsp_close() every call must be YRSP_ERR_STATE."
+find = '    if (c) c->ok = 0;'
+replace = '    (void)c;'

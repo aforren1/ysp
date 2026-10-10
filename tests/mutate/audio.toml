@@ -197,3 +197,35 @@ test = "audio"
 why = "Measured at queue 2: the report before a halt can be early by most of a period, which has its own XRUN record; the halt that follows is the same underrun and must not count again."
 find = '''    if (!again) au->xruns++;'''
 replace = '''    au->xruns++;'''
+
+# v0.4.0 conventions: messages and a close that never fails.
+
+[[mutant]]
+id = "conv-01"
+name = "a failing frame-thread call writes no message"
+test = "audio"
+why = "Every failing call of the frame thread writes yau_error() (README Conventions, Errors)."
+find = '    if (rc < 0 && au && au->err_n == n0) yau__err(au, "ysp_audio: %s: %s", what, yau_strerror((int)rc));'
+replace = '    (void)n0; (void)what;'
+
+[[mutant]]
+id = "conv-02"
+name = "close does not cancel a playing stream"
+test = "audio"
+why = "A close that only waits leaves the play running: the device would read the stream after the caller frees it."
+find = '        if (id > 0) (void)yau__cancel_rc(au, id);'
+replace = '        (void)id;'
+
+[[mutant]]
+id = "conv-03"
+name = "a timed-out close frees the arena hold"
+test = "audio"
+why = "The device may still read a detached stream: an arena ring must stay held until yau_close()."
+find = '''
+                st->au_ = NULL;   /* detached: memory and hold stay (above) */
+                return;'''
+replace = '''
+                if (st->in_arena_) au->arena_streams--;
+                st->in_arena_ = 0;
+                st->au_ = NULL;
+                return;'''

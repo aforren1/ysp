@@ -27,6 +27,7 @@
 #define YSP_RDK_IMPLEMENTATION
 #include "ysp/rdk.h"
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -151,11 +152,26 @@ static int Field_init(PyObject* self, PyObject* args, PyObject* kw) {
      * as a C float literal does, so the same numbers give the same field. */
     d.w = (float)w; d.h = (float)h; d.count = count; d.density = (float)density;
     d.coherence = (float)coherence; d.direction = (float)direction; d.speed = (float)speed;
-    d.sets = sets; d.lifetime = (float)lifetime; d.lifetime_frames = lifetime_frames;
+    d.sets = sets; d.lifetime_frames = lifetime_frames;
+    /* lifetime stays seconds here. ysp/rdk.h v0.2 takes ns; the float32
+     * rounding and llround of v0.1 keep every field (and the digests that
+     * tests/compare/rdk_ref.py reproduces) as they were. */
+    {
+        float life = (float)lifetime;
+        if (!(life >= 0.0f && life <= 1e9f)) {
+            PyErr_SetString(RdkArgumentError, "lifetime: seconds, > 0");
+            return -1;
+        }
+        d.lifetime_ns = (int64_t)llround((double)life * 1e9);
+        if (life > 0.0f && d.lifetime_ns < 1) {
+            PyErr_SetString(RdkArgumentError, "lifetime: shorter than 1 ns");
+            return -1;
+        }
+    }
     d.frame_ns = (int64_t)frame_ns; d.seed = (uint64_t)seed; d.stream = (uint32_t)stream;
     if (o->open) yrdk_close(&o->f);
     o->open = 0;
-    rc = yrdk_open(&o->f, &d);
+    rc = yrdk_open(&o->f, &d) ? YRDK_OK : strstr(yrdk_error(&o->f), "allocation") ? YRDK_ERR_MEM : YRDK_ERR_ARG;
     if (rc < 0) { rdk_fail(rc, yrdk_error(&o->f)); return -1; }
     o->d = d;
     o->open = 1;
@@ -274,7 +290,7 @@ static PyObject* Field_out(FieldObject* o, int which) {
     p = PyByteArray_AsString(ba);
     if (which == 0) out.xy = (float*)(void*)p;
     else if (which == 1) out.dir = (float*)(void*)p;
-    else if (which == 2) out.age = (float*)(void*)p;
+    else if (which == 2) out.age_s = (float*)(void*)p;
     else if (which == 3) out.signal = (uint8_t*)p;
     else out.event = (uint8_t*)p;
     yrdk_write(&o->f, &out);

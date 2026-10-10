@@ -847,13 +847,13 @@ static void check_binding(void) {
     yrig_find(&g_p, "resp")->bounds.check = YRIG_CHECK_OK;
     s = yrig_source(&g_p, &dev);
     CHECK_I(s.tier, YIN_TIER_1);
-    CHECK_I(s.lo_us, -300);
-    CHECK_I(s.hi_us, 1100);
+    CHECK_I(s.lo_ns, -300000);
+    CHECK_I(s.hi_ns, 1100000);
     CHECK_I(s.device, (int)dev.d.device);
     CHECK_HAS(s.note, "checked by SHA-256");
     yrig_find(&g_p, "resp")->bounds.check = YRIG_CHECK_CHANGED;
     s = yrig_source(&g_p, &dev);
-    CHECK(s.tier == YIN_TIER_UNKNOWN && s.lo_us == 0 && s.hi_us == 0);
+    CHECK(s.tier == YIN_TIER_UNKNOWN && s.lo_ns == 0 && s.hi_ns == 0);
     yrig_find(&g_p, "resp")->bounds.check = YRIG_CHECK_OK;
     CHECK_I(yrig_source(&g_q, &dev).tier, YIN_TIER_UNKNOWN);   /* another profile without the role */
     ydev_close(&dev);
@@ -983,7 +983,7 @@ static void check_lsl(void) {
     CHECK_I(yrig_source_role(&g_q, "ref", s).tier, YIN_TIER_UNKNOWN);   /* NOT_RUN */
     yrig_find(&g_q, "ref")->bounds.check = YRIG_CHECK_OK;
     s = yrig_source_role(&g_q, "ref", s);
-    CHECK(s.tier == YIN_TIER_1 && s.lo_us == -100 && s.hi_us == 200 && s.kind == YIN_KIND_SYNC);
+    CHECK(s.tier == YIN_TIER_1 && s.lo_ns == -100000 && s.hi_ns == 200000 && s.kind == YIN_KIND_SYNC);
     CHECK_I(yrig_source_role(&g_q, "lat", s).tier, YIN_TIER_UNKNOWN);   /* no bounds */
     CHECK_I(yrig_source_role(&g_q, "nobody", s).tier, YIN_TIER_UNKNOWN);
     CHECK_I(yrig_source_role(NULL, "ref", s).tier, YIN_TIER_UNKNOWN);

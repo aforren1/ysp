@@ -54,22 +54,22 @@ int main(int argc, char** argv) {
     puts(line);
     memset(&td, 0, sizeof td);
     td.hz = 1000;
-    td.dur = YAU_MS(50);
+    td.dur_ns = YRT_MS(50);
     td.peak = yau_db((float)db);
-    td.ramp = YAU_MS(5);
+    td.ramp_ns = YRT_MS(5);
     tone = yau_tone(&au, &td);
     if (!tone.frames) { fprintf(stderr, "%s\n", yau_error(&au)); yau_close(&au); return 1; }
     if (silent) memset(tone.frames, 0, (size_t)tone.n * sizeof(float));
     for (i = 0; i < count; i++) {
-        int64_t t = yrt_now_ns() + YAU_MS(200);
+        int64_t t = yrt_now_ns() + YRT_MS(200);
         ids[i] = yau_play_at(&au, tone, t);
-        yrt_sleep_until((int64_t)(t + YAU_MS(100)), YRT_DEFAULT_SPIN_NS);
+        yrt_sleep_until((int64_t)(t + YRT_MS(100)), YRT_DEFAULT_SPIN_NS);
     }
     for (i = 0; i < count; i++) {
         yau_onset r;
         int rc;
         memset(&r, 0, sizeof r);
-        rc = ids[i] > 0 ? yau_wait(&au, ids[i], YAU_S(1), &r) : (int)ids[i];
+        rc = ids[i] > 0 ? yau_wait(&au, ids[i], YRT_S(1), &r) : (int)ids[i];
         if (rc != YAU_OK) { printf("tone %d: %s\n", i, yau_strerror(rc)); missing++; continue; }
         printf("tone %d: residual %+8.1f us  frame %lld  lead %.2f ms  tier %d  flags 0x%03x\n", i,
                (double)r.residual / 1e3, (long long)r.start_frame,

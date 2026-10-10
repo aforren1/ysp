@@ -279,9 +279,9 @@ int main(int argc, char** argv) {
     memset(&pd, 0, sizeof pd);
     pd.choices = keys;
     pd.n_choices = 2;
-    pd.duration = RESPONSE_S;
-    pd.minimum_valid_rt = MIN_RT_S;
-    if (!yrsp_init(&rsp, &pd)) { fprintf(stderr, "trial_images: %s\n", yrsp_error(&rsp)); return 1; }
+    pd.duration_ns = YRT_S(RESPONSE_S);
+    pd.min_rt_ns = YRT_S(MIN_RT_S);
+    if (!yrsp_open(&rsp, &pd)) { fprintf(stderr, "trial_images: %s\n", yrsp_error(&rsp)); return 1; }
 
     out = fopen(out_path, "w");
     if (!out) { fprintf(stderr, "trial_images: cannot write %s\n", out_path); return 1; }
@@ -339,11 +339,11 @@ int main(int argc, char** argv) {
                 printf("%s\n", task);   /* SDL and printf may allocate: only here, between blocks */
                 if (yscr_window(&scr)) SDL_SetWindowTitle(yscr_window(&scr), task);
                 ytl_on(&q, CUE_ON);
-                ytl_wait(&q, YTL_S(CUE_S));
+                ytl_wait(&q, YRT_S(CUE_S));
                 ytl_off(&q, CUE_ON);
             }
             ytl_on(&q, FIX_ON);
-            ytl_wait(&q, YTL_S(FIXATION_S));
+            ytl_wait(&q, YRT_S(FIXATION_S));
             ytl_off(&q, FIX_ON);
             ytl_on(&q, IMAGE_ON);
             if (q.err) { fprintf(stderr, "trial_images: timeline error %d\n", q.err); failed = 1; break; }
@@ -361,7 +361,7 @@ int main(int argc, char** argv) {
             ytl_base_time(&tl, TRIAL, f.onset, &bt);
             ytl_at(&q, bt);
             ytl_off(&q, IMAGE_ON);
-            ytl_wait(&q, YTL_S(ITI_S));
+            ytl_wait(&q, YRT_S(ITI_S));
             ytl_mark(&q, END_OF_TRIAL, 0);
             if (q.err) { fprintf(stderr, "trial_images: timeline error %d\n", q.err); failed = 1; break; }
             responding = 0;
@@ -375,7 +375,7 @@ int main(int argc, char** argv) {
                 image_frame = fired[i].frame;
                 if (sim && ti.index != 7) {   /* the participant answers from the image's onset */
                     memset(sim_ev, 0, sizeof sim_ev);
-                    sim_ev[0].t = o.t + YTL_S(sim_rt(rotation, ori, odd));
+                    sim_ev[0].t = o.t_ns + YRT_S(sim_rt(rotation, ori, odd));
                     sim_ev[0].type = YRSP_PRESS;
                     sim_ev[0].control = (uint32_t)yrsp_scancode(ti.index == 2 ? (!strcmp(answer, "f") ? "j" : "f") : answer);
                     sim_ev[0].stamp = YRSP_TIER_SIM;
@@ -383,7 +383,7 @@ int main(int argc, char** argv) {
                     sim_ev[1] = sim_ev[0];
                     sim_ev[1].type = YRSP_RELEASE;
                     sim_ev[1].value = 0;
-                    sim_ev[1].t = sim_ev[0].t + YTL_MS(80);
+                    sim_ev[1].t = sim_ev[0].t + YRT_MS(80);
                     n_sim_ev = 2;
                 }
             }
@@ -392,7 +392,7 @@ int main(int argc, char** argv) {
                 int correct;
                 yrsp_finish(&rsp, &res);
                 correct = (res.flags & YRSP_R_RESPONDED) && !strcmp(keys[res.response].key, answer);
-                sec(rt, sizeof rt, res.rt);
+                sec(rt, sizeof rt, res.rt_ns == YRSP_NO_TIME ? NAN : YRT_TO_S(res.rt_ns));
                 fprintf(out, "%d,%s,%s,%g,%s,%s,%s,%s,%d,%u,%u,%u,%u,%d\n", ti.index, ytb_text(&tab, ti.condition, block_col),
                         ytb_text(&tab, ti.condition, image_col), ori, ytb_text(&tab, ti.condition, kind_col), answer,
                         res.response_name ? res.response_name : "", rt, correct, (unsigned)res.onset_tier,
@@ -437,11 +437,11 @@ int main(int argc, char** argv) {
             int ok = 1;
             if (i > 0 && sim_block[i] != sim_block[i - 1]) changes++;
             if (i == 7) ok = !(r->flags & YRSP_R_RESPONDED) && (r->flags & YRSP_R_TIMEOUT);
-            else ok = (r->flags & YRSP_R_RESPONDED) && fabs(r->rt - sim_want[i]) < 1e-6;
+            else ok = (r->flags & YRSP_R_RESPONDED) && fabs(YRT_TO_S(r->rt_ns) - sim_want[i]) < 1e-6;
             ok = ok && sim_correct[i] == (i != 2 && i != 7);
             ok = ok && r->onset_tier == YSCR_TIER_SIM && r->onset_src == YRSP_ONSET_FLIP;
             if (!ok) {
-                fprintf(stderr, "trial_images: --sim: trial %d: rt %.9f (want %.9f) flags 0x%x correct %d\n", i, r->rt,
+                fprintf(stderr, "trial_images: --sim: trial %d: rt %.9f (want %.9f) flags 0x%x correct %d\n", i, YRT_TO_S(r->rt_ns),
                         sim_want[i], (unsigned)r->flags, sim_correct[i]);
                 bad = 1;
             }

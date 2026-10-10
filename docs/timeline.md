@@ -96,7 +96,7 @@ The first version stored the step in whole nanoseconds. At 120 samples/s
 the step is 8,333,333.33 ns, so each sample was a third of a nanosecond
 early, and after 10 minutes the table was 24 us early. On a moving target
 that offset is an error. The example program found it. Sample i is now at
-exactly t0 + i * 1e9 / rate, and the lookup splits the time into seconds
+exactly t0_ns + i * 1e9 / rate, and the lookup splits the time into seconds
 and nanoseconds, so every product stays below 2^63 for any rate up to 1e9.
 
 Measured on the 5 Hz sum of sines below, CUBIC at 120 samples/s, worst
@@ -371,7 +371,7 @@ The JS animation libraries have the same call:
 | GSAP `movie.timeScale()` | `ytl_get_rate(&tl, MOVIE, &n, &d)` |
 | GSAP `movie.time()`; Motion `controls.time` | `ytl_base_time(&tl, MOVIE, onset, &bt)` |
 | none (computed by hand from `startTime()`) | `ytl_rt_time(&tl, MOVIE, bt, &rt)` |
-| GSAP `movie.seek(12.5)`, which suppresses events by default | `ytl_skip(&tl, MOVIE, onset, YTL_MS(12500))` |
+| GSAP `movie.seek(12.5)`, which suppresses events by default | `ytl_skip(&tl, MOVIE, onset, YRT_MS(12500))` |
 | GSAP `timeScale(0)` | refused; `ytl_pause()` |
 | GSAP `reverse()`, `timeScale(-1)` | refused |
 
@@ -623,13 +623,13 @@ with the timeline's timing unchanged.
 |---|---|
 | `const tl = gsap.timeline()` | `ytl_seq q = ytl_seq_on(&tl, TRIAL);` |
 | `.set(fix, {visible: 1})` | `ytl_on(&q, FIX);` |
-| `"+=0.5"` | `ytl_wait(&q, YTL_MS(500));` |
+| `"+=0.5"` | `ytl_wait(&q, YRT_MS(500));` |
 | `"<"` (with the previous) | the default: `ytl_to` does not move the cursor |
 | `.to(g, {...}, "<")` | `ytl_to(&q, CONTRAST, &(ytl_tween_desc){...});` |
 | `.to(g, {...})` (after the previous) | `ytl_then(&q, CONTRAST, &(ytl_tween_desc){...});` |
 | `.call(fn, args)` | `ytl_mark(&q, code, (uint64_t)(uintptr_t)fn);` |
-| `.addLabel("x")`, `"x+=0.2"` | `int64_t x = q.t;`, then `ytl_at(&q, x + YTL_MS(200));` |
-| `stagger: 0.02` | `ytl_on_n(&q, dots, 50, YTL_MS(20));` |
+| `.addLabel("x")`, `"x+=0.2"` | `int64_t x = q.t;`, then `ytl_at(&q, x + YRT_MS(200));` |
+| `stagger: 0.02` | `ytl_on_n(&q, dots, 50, YRT_MS(20));` |
 | `keyframes: [...]` | `ytl_keyframes(&q, ch, values, offsets, n, ease);` |
 | `tl.restart()` | `ytl_anchor(&tl, TRIAL, onset, 0);`, which replays the tweens |
 | `tl.kill()` | `ytl_seq_cancel(&q);` |
@@ -777,6 +777,42 @@ v0.3.0 with its channel record padded by the 16 bytes that the sequence
 fields add, could not be told apart from v0.3.0 either. Four BEZIER
 channels measured the same in all builds within that spread. At 32
 channels and 500 Hz, 24 ns is 0.001% of the 2 ms frame.
+
+## Unit names, messages and close (v0.5.0)
+
+v0.5.0 applies the repository conventions (README.md, Conventions). The
+arithmetic does not change. Three decisions:
+
+- **A time field that the caller writes ends in `_ns`.** These are
+  `ytl_event.time_ns`, `ytl_key.time_ns`, `ytl_track.t0_ns` and
+  `period_ns`, `ytl_tween_desc.duration_ns`, `start_ns` and `delay_ns`,
+  and `ytl_op.t_ns`. Old code that wrote `.duration = 0.2` now fails to
+  compile, and it does not truncate to 0 ns. The fields of `ytl_frame`
+  keep their names, because a frame is a copy of a flip record (`onset`,
+  `period`, `index`), and those names are the screen's. Also unchanged
+  are the landing fields that only the header writes (`onset`,
+  `residual`). `YTL_S()` and `YTL_MS()` are gone, and the header defines
+  the `YRT_*` macros of ysp/rt.h under the same guard.
+- **Each failing call writes the message.** Before, only `ytl_open()`
+  wrote it. Now each call that returns a `YTL_ERR_*` code writes it, and
+  so does a sequence call that sets `q.err`. The message names the call,
+  or the sequence call's index. The write is an `snprintf` on the failure
+  path only, so a call that succeeds does one more compare. This cost was
+  not measured. `ytl_peek()`, `ytl_clamped()` and `ytl_check_ops()` now
+  take a non-const handle, because a failure writes into it. A query that
+  returns `bool` writes nothing, because false is an answer there.
+- **`ytl_close()`.** The handle owns nothing, so close only marks it
+  closed. Every open has a close. After a close, a call returns
+  `YTL_ERR_CLOSED`.
+
+The tests that compared the whole handle with `memcmp` after a refused
+call (`ytl_run`, `ytl_skip`, `ytl_peek`) now compare the bytes before the
+message, and they check the message. Checked on 2026-10-10 (Windows 11,
+MinGW-w64 gcc 16.1 -O2 and MSVC 19.44): `tests/adapt/timeline_test.c`
+passes, with a new test for close and messages. The USAGE blocks build
+and run as C99 (`-Wall -Wextra -Wpedantic -Werror`) and C++17. Mutants
+`conv-01` (no message), `conv-02` (close keeps the handle open) and
+`conv-03` (no sequence message) are caught.
 
 ## Storage
 

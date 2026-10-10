@@ -64,7 +64,7 @@
 
 enum { CPH, ENV, ROT, POL, DRIFT, N_CHANNELS };
 enum { BASE = 1 };
-#define S_NS    YTL_NS_PER_S
+#define S_NS    YRT_S(1)
 #define TILE    240.0f
 #define TGT     256
 #define MASK    128
@@ -145,7 +145,7 @@ static ygfx_stim user(const char* body, const char* name, float x, float y, cons
 static int track(int ch, const ytl_key* keys, int n, int64_t period) {
     ytl_track t;
     memset(&t, 0, sizeof t);
-    t.keys = keys; t.n_keys = n; t.period = period;
+    t.keys = keys; t.n_keys = n; t.period_ns = period;
     return ytl_set_track(&tl, ch, BASE, &t);
 }
 
@@ -239,14 +239,14 @@ int main(int argc, char** argv) {
         td.n_channels = N_CHANNELS;
         if (!ytl_open(&tl, &td)) { fprintf(stderr, "gfx_gratings: %s\n", ytl_error(&tl)); return 1; }
         /* a cosine ease from +0.5 to -0.5 over half a period is 0.5 cos(2 pi f t) */
-        cph_keys[0].time = 0;     cph_keys[0].value = 0.5f;  cph_keys[0].ease = YTL_EASE_COSINE;
-        cph_keys[1].time = T / 2; cph_keys[1].value = -0.5f; cph_keys[1].ease = YTL_EASE_COSINE;
-        cph_keys[2].time = T;     cph_keys[2].value = 0.5f;
-        env_keys[1].time = 2 * S_NS;  env_keys[1].value = 1;      /* 0.5 Hz sawtooth */
-        rot_keys[1].time = 10 * S_NS; rot_keys[1].value = 360;    /* 0.1 rev/s */
+        cph_keys[0].time_ns = 0;     cph_keys[0].value = 0.5f;  cph_keys[0].ease = YTL_EASE_COSINE;
+        cph_keys[1].time_ns = T / 2; cph_keys[1].value = -0.5f; cph_keys[1].ease = YTL_EASE_COSINE;
+        cph_keys[2].time_ns = T;     cph_keys[2].value = 0.5f;
+        env_keys[1].time_ns = 2 * S_NS;  env_keys[1].value = 1;      /* 0.5 Hz sawtooth */
+        rot_keys[1].time_ns = 10 * S_NS; rot_keys[1].value = 360;    /* 0.1 rev/s */
         pol_keys[0].value = 1;  pol_keys[0].ease = YTL_EASE_STEP; /* reversals at 4 Hz */
-        pol_keys[1].time = S_NS / 8; pol_keys[1].value = -1; pol_keys[1].ease = YTL_EASE_STEP;
-        drift_keys[1].time = S_NS; drift_keys[1].value = 1;       /* 1 Hz drift */
+        pol_keys[1].time_ns = S_NS / 8; pol_keys[1].value = -1; pol_keys[1].ease = YTL_EASE_STEP;
+        drift_keys[1].time_ns = S_NS; drift_keys[1].value = 1;       /* 1 Hz drift */
         if (track(CPH, cph_keys, 3, T) < 0 || track(ENV, env_keys, 2, 2 * S_NS) < 0 ||
             track(ROT, rot_keys, 2, 10 * S_NS) < 0 || track(POL, pol_keys, 2, S_NS / 4) < 0 ||
             track(DRIFT, drift_keys, 2, S_NS) < 0) {

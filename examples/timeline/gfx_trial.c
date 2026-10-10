@@ -25,7 +25,7 @@
 
 enum { FIX_ON, GRATING_ON, CONTRAST, N_CHANNELS };
 enum { TRIAL = 1 };
-#define S YTL_NS_PER_S
+#define S YRT_S(1)
 
 static const ytl_key ramp[] = {
     { S / 2,          0.0f, YTL_EASE_COSINE, 0, 0 },
@@ -59,7 +59,7 @@ static void start_gfx(void* ctx, yscr_screen* s) {
 static ytl_event ev(int64_t t, int kind, int target, int code) {
     ytl_event e;
     memset(&e, 0, sizeof e);
-    e.time = t; e.base = TRIAL; e.kind = (uint8_t)kind; e.target = target; e.code = code;
+    e.time_ns = t; e.base = TRIAL; e.kind = (uint8_t)kind; e.target = target; e.code = code;
     return e;
 }
 

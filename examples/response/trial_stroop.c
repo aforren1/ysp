@@ -318,9 +318,9 @@ int main(int argc, char** argv) {
     memset(&pd, 0, sizeof pd);
     pd.choices = keys;
     pd.n_choices = 3;
-    pd.duration = RESPONSE_S;
-    pd.minimum_valid_rt = MIN_RT_S;
-    if (!yrsp_init(&rsp, &pd)) { fprintf(stderr, "trial_stroop: %s\n", yrsp_error(&rsp)); return 1; }
+    pd.duration_ns = YRT_S(RESPONSE_S);
+    pd.min_rt_ns = YRT_S(MIN_RT_S);
+    if (!yrsp_open(&rsp, &pd)) { fprintf(stderr, "trial_stroop: %s\n", yrsp_error(&rsp)); return 1; }
 
     out = fopen(out_path, "w");
     if (!out) { fprintf(stderr, "trial_stroop: cannot write %s\n", out_path); return 1; }
@@ -369,11 +369,11 @@ int main(int argc, char** argv) {
             q = ytl_seq_on(&tl, TRIAL);
             if (ti.first_in_block) {
                 ytl_on(&q, ti.practice ? BANNER_PRACTICE : BANNER_TEST);
-                ytl_wait(&q, YTL_S(BANNER_S));
+                ytl_wait(&q, YRT_S(BANNER_S));
                 ytl_off(&q, ti.practice ? BANNER_PRACTICE : BANNER_TEST);
             }
             ytl_on(&q, FIX_ON);
-            ytl_wait(&q, YTL_S(FIXATION_S));
+            ytl_wait(&q, YRT_S(FIXATION_S));
             ytl_off(&q, FIX_ON);
             ytl_on(&q, WORD_ON);
             if (q.err) { fprintf(stderr, "trial_stroop: timeline error %d\n", q.err); failed = 1; break; }
@@ -396,10 +396,10 @@ int main(int argc, char** argv) {
             if (ti.practice) {
                 feedback = !(now.flags & YRSP_R_RESPONDED) ? 2 : strcmp(keys[now.response].key, answer) ? 1 : 0;
                 ytl_on(&q, FB_CORRECT + feedback);
-                ytl_wait(&q, YTL_S(FEEDBACK_S));
+                ytl_wait(&q, YRT_S(FEEDBACK_S));
                 ytl_off(&q, FB_CORRECT + feedback);
             }
-            ytl_wait(&q, YTL_S(ITI_S));
+            ytl_wait(&q, YRT_S(ITI_S));
             ytl_mark(&q, END_OF_TRIAL, 0);
             if (q.err) { fprintf(stderr, "trial_stroop: timeline error %d\n", q.err); failed = 1; break; }
             responding = 0;
@@ -414,7 +414,7 @@ int main(int argc, char** argv) {
                 if (sim && !sim_silent(ti.index)) {   /* the participant answers from the word's onset */
                     int k = sim_wrong(ti.index) ? (congruent ? (ink + 1) % N_INKS : word) : ink;
                     memset(sim_ev, 0, sizeof sim_ev);
-                    sim_ev[0].t = o.t + YTL_S(sim_rt(congruent));
+                    sim_ev[0].t = o.t_ns + YRT_S(sim_rt(congruent));
                     sim_ev[0].type = YRSP_PRESS;
                     sim_ev[0].control = (uint32_t)yrsp_scancode(keys[k].key);
                     sim_ev[0].stamp = YRSP_TIER_SIM;
@@ -422,7 +422,7 @@ int main(int argc, char** argv) {
                     sim_ev[1] = sim_ev[0];
                     sim_ev[1].type = YRSP_RELEASE;
                     sim_ev[1].value = 0;
-                    sim_ev[1].t = sim_ev[0].t + YTL_MS(80);
+                    sim_ev[1].t = sim_ev[0].t + YRT_MS(80);
                     n_sim_ev = 2;
                 }
             }
@@ -432,7 +432,7 @@ int main(int argc, char** argv) {
                 int correct;
                 yrsp_finish(&rsp, &res);
                 correct = (res.flags & YRSP_R_RESPONDED) && !strcmp(keys[res.response].key, answer);
-                sec(rt, sizeof rt, res.rt);
+                sec(rt, sizeof rt, res.rt_ns == YRSP_NO_TIME ? NAN : YRT_TO_S(res.rt_ns));
                 fprintf(out, "%d,%s,%s,%s,%d,%s,%s,%s,%d,%s,%u,%u,%u,%u,%d\n", ti.index, ti.practice ? "practice" : "test",
                         ytb_text(&tab, ti.condition, word_col), ink_names[ink], congruent, answer,
                         res.response_name ? res.response_name : "", rt, correct, feedback >= 0 ? fb_name[feedback] : "",
@@ -483,17 +483,17 @@ int main(int argc, char** argv) {
             const yrsp_result* r = &sim_res[i];
             int cong = sim_cong[i] >> 1, ok = (sim_cong[i] & 1) == cong && sim_prac[i] == (i < N_PRACTICE);
             if (sim_silent(i)) ok = ok && !(r->flags & YRSP_R_RESPONDED) && (r->flags & YRSP_R_TIMEOUT) && !sim_correct[i];
-            else ok = ok && (r->flags & YRSP_R_RESPONDED) && fabs(r->rt - sim_rt(cong)) < 1e-6 && sim_correct[i] == !sim_wrong(i);
+            else ok = ok && (r->flags & YRSP_R_RESPONDED) && fabs(YRT_TO_S(r->rt_ns) - sim_rt(cong)) < 1e-6 && sim_correct[i] == !sim_wrong(i);
             ok = ok && sim_fb[i] == (i >= N_PRACTICE ? -1 : sim_silent(i) ? 2 : sim_wrong(i) ? 1 : 0);
             ok = ok && r->onset_tier == YSCR_TIER_SIM && r->onset_src == YRSP_ONSET_FLIP;
             if (i >= N_PRACTICE) {   /* the rule: at most 3 congruent test trials in a row */
                 run = cong ? run + 1 : 0;
                 ok = ok && run <= 3;
-                if (sim_correct[i]) { sum_rt[cong] += r->rt; n_rt[cong]++; }
+                if (sim_correct[i]) { sum_rt[cong] += YRT_TO_S(r->rt_ns); n_rt[cong]++; }
             }
             if (!ok) {
                 fprintf(stderr, "trial_stroop: --sim: trial %d: congruent %d rt %.9f flags 0x%x correct %d feedback %d\n", i,
-                        cong, r->rt, (unsigned)r->flags, sim_correct[i], sim_fb[i]);
+                        cong, YRT_TO_S(r->rt_ns), (unsigned)r->flags, sim_correct[i], sim_fb[i]);
                 bad = 1;
             }
         }

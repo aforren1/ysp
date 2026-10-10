@@ -80,8 +80,8 @@ static int row(const cfg* c, int rect, int n, char round) {
     d.w = 10; d.h = rect ? 8.0f : 0.0f;
     d.count = n;
     d.coherence = 0.5f; d.direction = 30; d.speed = 5;   /* deg/s on a 10 deg field */
-    d.lifetime = c->life;
-    if (yrdk_open(&f, &d) < 0) { fprintf(stderr, "rdk_bench: %s: %s\n", name, yrdk_error(&f)); return -1; }
+    d.lifetime_ns = YRT_S(c->life);
+    if (!yrdk_open(&f, &d)) { fprintf(stderr, "rdk_bench: %s: %s\n", name, yrdk_error(&f)); return -1; }
     yrdk_start(&f, 1234, 0);
     for (k = 0; k < updates; k++) {
         uint64_t t0 = yrt_now_ns();

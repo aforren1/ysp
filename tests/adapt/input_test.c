@@ -48,6 +48,12 @@ static void check_layout(void) {
     CHECK_I(sizeof(((yin_event*)0)->unc_us), 2);
     CHECK_I(offsetof(yin_event, ticks), 44);
     CHECK_I(sizeof(((yin_event*)0)->ticks), 4);
+    /* v0.4.0: the source's bounds are int64_t ns */
+    CHECK_I(sizeof(((yin_source*)0)->lo_ns), 8);
+    CHECK_I(offsetof(yin_source, lo_ns), 8);
+    CHECK_I(offsetof(yin_source, hi_ns), 16);
+    CHECK_I(offsetof(yin_source, note), 24);
+    CHECK_I(sizeof(yin_source), 32);
 }
 
 static void check_constants(void) {

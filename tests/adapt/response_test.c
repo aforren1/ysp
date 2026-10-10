@@ -94,12 +94,12 @@ static int sample(int kind, int64_t t, uint32_t control, float v, float x, float
 static int onset(int64_t t, int final) {
     yrsp_onset o;
     memset(&o, 0, sizeof o);
-    o.t = t;
+    o.t_ns = t;
     o.final = (uint8_t)final;
     o.tier = (uint8_t)(final ? 1 : 0);
     o.src = (uint8_t)(final ? YRSP_ONSET_FLIP : YRSP_ONSET_PLAN);
     o.frame = 42;
-    o.residual = 1234;
+    o.residual_ns = 1234;
     return yrsp_set_onset(&g_c, &o);
 }
 
@@ -111,8 +111,8 @@ static yrsp_desc fj_desc(double duration, double min_rt) {
     memset(&d, 0, sizeof d);
     d.choices = g_fj;
     d.n_choices = 2;
-    d.duration = duration;
-    d.minimum_valid_rt = min_rt;
+    d.duration_ns = YRT_S(duration);
+    d.min_rt_ns = YRT_S(min_rt);
     return d;
 }
 
@@ -157,110 +157,115 @@ static void check_validation(void) {
     yrsp_input trace[4];
     memset(bad, 0, sizeof bad);
     d = fj_desc(1.5, 0.1);
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     CHECK_S(yrsp_error(&g_c), "");
     d = fj_desc(1.5, 0.1);
     d.n_choices = YRSP_MAX_CHOICES + 1;
-    CHECK(!yrsp_init(&g_c, &d));
+    CHECK(!yrsp_open(&g_c, &d));
     CHECK_HAS(yrsp_error(&g_c), "n_choices");
     d = fj_desc(1.5, 0.1);
     d.choices = NULL;
-    CHECK(!yrsp_init(&g_c, &d));
+    CHECK(!yrsp_open(&g_c, &d));
     d = fj_desc(-1, 0);
-    CHECK(!yrsp_init(&g_c, &d));
+    CHECK(!yrsp_open(&g_c, &d));
     CHECK_HAS(yrsp_error(&g_c), "duration");
     d = fj_desc(1.5, 0.1);
-    d.minimum_valid_rt = (double)NAN;
-    CHECK(!yrsp_init(&g_c, &d));
+    d.min_rt_ns = -1;
+    CHECK(!yrsp_open(&g_c, &d));
+    CHECK_HAS(yrsp_error(&g_c), "min_rt_ns");
+    d = fj_desc(1.5, 0.1);
+    d.max_hold_ns = YRT_S(1e6) + 1;
+    CHECK(!yrsp_open(&g_c, &d));
+    CHECK_HAS(yrsp_error(&g_c), "max_hold_ns");
     d = fj_desc(0.5, 0.5);
-    CHECK(!yrsp_init(&g_c, &d));
-    CHECK_HAS(yrsp_error(&g_c), "minimum_valid_rt");
+    CHECK(!yrsp_open(&g_c, &d));
+    CHECK_HAS(yrsp_error(&g_c), "min_rt_ns");
     d = fj_desc(0, 0.5);                       /* no deadline: any minimum */
-    CHECK(yrsp_init(&g_c, &d));
-    d = fj_desc(1.001, 0);                     /* 1.001 x 1e9 is 1000999999.99... */
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
+    d = fj_desc(1.001, 0);                     /* YRT_S rounds 1000999999.99... */
+    CHECK(yrsp_open(&g_c, &d));
     CHECK_I(g_c.duration_ns, 1001000000);
     d = fj_desc(1, 0);
     d.mode = YRSP_CHOICES_NONE;
-    CHECK(!yrsp_init(&g_c, &d));
+    CHECK(!yrsp_open(&g_c, &d));
     CHECK_HAS(yrsp_error(&g_c), "NONE");
     d = fj_desc(1, 0);
     d.mode = 7;
-    CHECK(!yrsp_init(&g_c, &d));
+    CHECK(!yrsp_open(&g_c, &d));
     memset(&d, 0, sizeof d);
     d.mode = YRSP_CHOICES_LIST;
-    CHECK(!yrsp_init(&g_c, &d));
+    CHECK(!yrsp_open(&g_c, &d));
     /* key names */
     memset(&d, 0, sizeof d);
     bad[0].key = "ff";
     d.choices = bad;
     d.n_choices = 1;
-    CHECK(!yrsp_init(&g_c, &d));
+    CHECK(!yrsp_open(&g_c, &d));
     CHECK_HAS(yrsp_error(&g_c), "'ff'");
     bad[0].key = "f";
     bad[0].control = 13;
-    CHECK(!yrsp_init(&g_c, &d));
+    CHECK(!yrsp_open(&g_c, &d));
     CHECK_HAS(yrsp_error(&g_c), "scancode 9");
     bad[0].control = 9;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     bad[0].key = NULL;
     bad[0].control = 0;
-    CHECK(!yrsp_init(&g_c, &d));
+    CHECK(!yrsp_open(&g_c, &d));
     CHECK_HAS(yrsp_error(&g_c), "no key");
     bad[0].match = YRSP_MATCH_KEYCODE;
-    CHECK(!yrsp_init(&g_c, &d));
+    CHECK(!yrsp_open(&g_c, &d));
     bad[0].key = "f";
     bad[0].code = 'g';
-    CHECK(!yrsp_init(&g_c, &d));
+    CHECK(!yrsp_open(&g_c, &d));
     bad[0].code = 0;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     CHECK_I(g_c.ch[0].code, 'f');
     bad[0].kind = YRSP_KIND_BOX;
-    CHECK(!yrsp_init(&g_c, &d));            /* a key name on a box */
+    CHECK(!yrsp_open(&g_c, &d));            /* a key name on a box */
     /* crossings */
     memset(bad, 0, sizeof bad);
     bad[0].kind = YRSP_KIND_GAMEPAD;
     bad[0].cross = YRSP_CROSS_RISING;
     bad[0].level = (float)NAN;
-    CHECK(!yrsp_init(&g_c, &d));
+    CHECK(!yrsp_open(&g_c, &d));
     bad[0].level = 0.5f;
     bad[0].hysteresis = -0.1f;
-    CHECK(!yrsp_init(&g_c, &d));
+    CHECK(!yrsp_open(&g_c, &d));
     bad[0].hysteresis = 0.1f;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     bad[0].kind = YRSP_KIND_KEYBOARD;
-    CHECK(!yrsp_init(&g_c, &d));
+    CHECK(!yrsp_open(&g_c, &d));
     bad[0].kind = YRSP_KIND_MOUSE;
     bad[0].cross = YRSP_CROSS_DISTANCE;
     bad[0].level = 0;
-    CHECK(!yrsp_init(&g_c, &d));
+    CHECK(!yrsp_open(&g_c, &d));
     bad[0].cross = 9;
-    CHECK(!yrsp_init(&g_c, &d));
+    CHECK(!yrsp_open(&g_c, &d));
     bad[0].cross = 0;
     bad[0].kind = 16;
-    CHECK(!yrsp_init(&g_c, &d));
+    CHECK(!yrsp_open(&g_c, &d));
     /* sources, trace, counts */
     d = fj_desc(1, 0);
     memset(&src, 0, sizeof src);
-    src.lo_us = 5;
-    src.hi_us = 1;
+    src.lo_ns = 5000;
+    src.hi_ns = 1000;
     d.sources = &src;
     d.n_sources = 1;
-    CHECK(!yrsp_init(&g_c, &d));
+    CHECK(!yrsp_open(&g_c, &d));
     d.n_sources = YRSP_MAX_SOURCES + 1;
-    CHECK(!yrsp_init(&g_c, &d));
+    CHECK(!yrsp_open(&g_c, &d));
     d = fj_desc(1, 0);
     d.trace_cap = 4;
-    CHECK(!yrsp_init(&g_c, &d));
+    CHECK(!yrsp_open(&g_c, &d));
     d.trace = trace;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     d.trace_cap = -1;
-    CHECK(!yrsp_init(&g_c, &d));
+    CHECK(!yrsp_open(&g_c, &d));
     d = fj_desc(1, 0);
     d.max_responses = -1;
-    CHECK(!yrsp_init(&g_c, &d));
-    CHECK(!yrsp_init(&g_c, NULL));
-    CHECK(!yrsp_init(NULL, &d));
+    CHECK(!yrsp_open(&g_c, &d));
+    CHECK(!yrsp_open(&g_c, NULL));
+    CHECK(!yrsp_open(NULL, &d));
     /* a collector that failed init refuses calls */
     CHECK_I(yrsp_feed(&g_c, NULL), YRSP_ERR_STATE);
     {
@@ -270,7 +275,7 @@ static void check_validation(void) {
         CHECK_I(yrsp_update(&g_c, 0), YRSP_ERR_STATE);
         CHECK_I(yrsp_finish(&g_c, &r), YRSP_ERR_STATE);
         d = fj_desc(1, 0);
-        CHECK(yrsp_init(&g_c, &d));
+        CHECK(yrsp_open(&g_c, &d));
         in.type = 0;
         CHECK_I(yrsp_feed(&g_c, &in), YRSP_ERR_ARG);
         in.type = 9;
@@ -289,7 +294,7 @@ static void check_basic(void) {
     yrsp_result r;
     const yrsp_entry* e;
     int n;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     CHECK_I(key(MS(1), SC_F, 1), YRSP_IDLE);          /* before arm: held state only */
     CHECK_I(key(MS(50), SC_F, 0), YRSP_IDLE);
     yrsp_arm(&g_c, MS(100));
@@ -299,8 +304,8 @@ static void check_basic(void) {
     CHECK_I(key(MS(1001), SC_J, 1), YRSP_ENDED);
     CHECK_I(key(MS(1101), SC_J, 0), YRSP_ENDED);
     r = finish();
-    CHECK_D(r.rt, 0.4);
-    CHECK_D(r.rt_key_duration, 0.1);
+    CHECK_D(YRT_TO_S(r.rt_ns), 0.4);
+    CHECK_D(YRT_TO_S(r.rt_key_duration_ns), 0.1);
     CHECK_I(r.response, 1);
     CHECK_S(r.response_name, "right");
     CHECK_I(r.control, SC_J);
@@ -330,9 +335,9 @@ static void check_bounds(void) {
     yrsp_result r;
     const yrsp_entry* e;
     int n;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     d.persist = true;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     tap(MS(500), SC_F);                                  /* before the onset arrives: EARLY */
     onset(MS(1000), 1);
@@ -354,24 +359,24 @@ static void check_bounds(void) {
     CHECK_I(r.n_anticipations, 1);
     CHECK_I(r.n_early, 2);
     CHECK_I(r.n_late, 1);
-    CHECK_D(r.rt, 0.3);
+    CHECK_D(YRT_TO_S(r.rt_ns), 0.3);
     /* exactly at the minimum is valid; and a negative rt is EARLY */
     d = fj_desc(1.5, 0.1);
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(1000), 1);
     CHECK_I(key(MS(1100), SC_F, 1), YRSP_ENDED);
     r = finish();
-    CHECK_D(r.rt, 0.1);
+    CHECK_D(YRT_TO_S(r.rt_ns), 0.1);
     /* duration 0: no deadline */
     d = fj_desc(0, 0);
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(10), 1);
     CHECK_I(yrsp_update(&g_c, MS(100000)), YRSP_OPEN);
     CHECK_I(key(MS(90000), SC_F, 1), YRSP_ENDED);
     r = finish();
-    CHECK_D(r.rt, 89.99);
+    CHECK_D(YRT_TO_S(r.rt_ns), 89.99);
     CHECK(!(r.flags & YRSP_R_TIMEOUT));
     /* no deadline and no response: no timeout either */
     key(MS(90100), SC_F, 0);
@@ -384,7 +389,7 @@ static void check_bounds(void) {
 static void check_deadline(void) {
     yrsp_desc d = fj_desc(1.0, 0);
     yrsp_result r;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     CHECK_I(yrsp_update(&g_c, MS(3000)), YRSP_OPEN);   /* no onset yet */
     onset(MS(500), 1);
@@ -394,17 +399,17 @@ static void check_deadline(void) {
     CHECK_I(key(MS(1499), SC_F, 1), YRSP_ENDED);
     key(MS(1550), SC_J, 1);                                 /* late */
     r = finish();
-    CHECK_D(r.rt, 0.999);
+    CHECK_D(YRT_TO_S(r.rt_ns), 0.999);
     CHECK_I(r.n_late, 1);
     CHECK(r.flags & YRSP_R_RESPONDED);
     /* no response: timeout, NaN */
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(500), 1);
     CHECK_I(yrsp_update(&g_c, MS(1600)), YRSP_ENDED);
     r = finish();
-    CHECK(r.rt != r.rt);
-    CHECK(r.rt_key_duration != r.rt_key_duration);
+    CHECK(r.rt_ns == YRSP_NO_TIME);
+    CHECK(r.rt_key_duration_ns == YRSP_NO_TIME);
     CHECK_I(r.response, -1);
     CHECK(r.response_name == NULL);
     CHECK_I(r.flags, YRSP_R_TIMEOUT);
@@ -416,7 +421,7 @@ static void check_deadline(void) {
     CHECK_I(r.n_late, 1);
     CHECK_I(r.n_responses, 0);
     /* finish() before any end: every later press is AFTER_END */
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(500), 1);
     r = finish();
@@ -425,7 +430,7 @@ static void check_deadline(void) {
     CHECK_I(r.n_after_end, 1);
     CHECK_I(r.n_responses, 0);
     /* a report delivered after finish(), stamped before the deadline */
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(500), 1);
     yrsp_update(&g_c, MS(1600));
@@ -433,7 +438,7 @@ static void check_deadline(void) {
     CHECK(r.flags & YRSP_R_TIMEOUT);
     key(MS(1400), SC_J, 1);
     r = finish();
-    CHECK_D(r.rt, 0.9);
+    CHECK_D(YRT_TO_S(r.rt_ns), 0.9);
 }
 
 static void check_ending(void) {
@@ -441,7 +446,7 @@ static void check_ending(void) {
     yrsp_result r;
     const yrsp_entry* e;
     int n;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     CHECK_I(key(MS(150), SC_F, 1), YRSP_OPEN);           /* anticipation: does not end */
@@ -460,7 +465,7 @@ static void check_ending(void) {
     CHECK_I(r.response, 1);
     /* persist: three responses, the first is reported */
     d.persist = true;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     CHECK_I(tap(MS(400), SC_F), YRSP_OPEN);
@@ -468,11 +473,11 @@ static void check_ending(void) {
     CHECK_I(tap(MS(1200), SC_F), YRSP_OPEN);
     r = finish();
     CHECK_I(r.n_responses, 3);
-    CHECK_D(r.rt, 0.3);
+    CHECK_D(YRT_TO_S(r.rt_ns), 0.3);
     CHECK_I(r.response, 0);
     /* persist with max_responses 2: ends at the second */
     d.max_responses = 2;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     CHECK_I(tap(MS(400), SC_F), YRSP_OPEN);
@@ -485,7 +490,7 @@ static void check_ending(void) {
     CHECK(e[1].flags & YRSP_E_ENDED);
     /* max_responses 1 with persist is the default trial */
     d.max_responses = 1;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     CHECK_I(key(MS(400), SC_F, 1), YRSP_ENDED);
@@ -502,7 +507,7 @@ static void check_modes(void) {
                                            { NULL, "right", YRSP_KIND_BOX, 0, 0, 0, 0, 2, 0, 0, 0 } };
     /* ALL with kinds 0: the keyboard only, a click is no response */
     memset(&d, 0, sizeof d);
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     in = ev(YRSP_KIND_MOUSE, YRSP_PRESS, MS(200), 1);
@@ -512,17 +517,17 @@ static void check_modes(void) {
     CHECK_I(r.n_not_choice, 1);
     CHECK_I(r.response, -1);
     CHECK_I(r.control, 77);
-    CHECK_D(r.rt, 0.2);
+    CHECK_D(YRT_TO_S(r.rt_ns), 0.2);
     /* ALL with every kind */
     d.kinds = YRSP_KINDS_ALL;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     CHECK_I(yrsp_feed(&g_c, &in), YRSP_ENDED);
     r = finish();
     CHECK_I(r.kind, YRSP_KIND_MOUSE);
     /* every kind but SYNC: a scanner pulse is logged, not a response */
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     in = ev(YRSP_KIND_SYNC, YRSP_PRESS, MS(150), 1);
@@ -534,7 +539,7 @@ static void check_modes(void) {
     CHECK_I(r.n_not_choice, 1);
     /* the SYNC bit named: the pulse is the response (wait for the scanner) */
     d.kinds = YRSP_KIND_BIT(YRSP_KIND_SYNC);
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     CHECK_I(key(MS(120), SC_F, 1), YRSP_OPEN);
@@ -544,14 +549,14 @@ static void check_modes(void) {
     CHECK_I(r.kind, YRSP_KIND_SYNC);
     /* every bit but one named by hand is a mask, not "every kind" */
     d.kinds = (uint16_t)(YRSP_KINDS_ALL & ~YRSP_KIND_BIT(YRSP_KIND_PEN));
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     CHECK_I(yrsp_feed(&g_c, &in), YRSP_ENDED);
     in = ev(YRSP_KIND_MOUSE, YRSP_PRESS, MS(200), 1);
     /* one kind bit */
     d.kinds = YRSP_KIND_BIT(YRSP_KIND_MOUSE);
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     CHECK_I(key(MS(150), SC_F, 1), YRSP_OPEN);
@@ -559,8 +564,8 @@ static void check_modes(void) {
     /* NONE: logged, never a response, runs to the deadline */
     memset(&d, 0, sizeof d);
     d.mode = YRSP_CHOICES_NONE;
-    d.duration = 1;
-    CHECK(yrsp_init(&g_c, &d));
+    d.duration_ns = YRT_S(1);
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     CHECK_I(tap(MS(300), SC_F), YRSP_OPEN);
@@ -572,7 +577,7 @@ static void check_modes(void) {
     memset(&d, 0, sizeof d);
     d.choices = kc;
     d.n_choices = 1;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     in = ev(YRSP_KIND_KEYBOARD, YRSP_PRESS, MS(200), 29);   /* US z key, types y */
@@ -587,7 +592,7 @@ static void check_modes(void) {
     CHECK_S(r.response_name, "z");
     /* scancode (default): the US f key whatever it types */
     d = fj_desc(1, 0);
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     in = ev(YRSP_KIND_KEYBOARD, YRSP_PRESS, MS(200), SC_F);
@@ -602,7 +607,7 @@ static void check_modes(void) {
     memset(&d, 0, sizeof d);
     d.choices = boxes;
     d.n_choices = 2;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     in = ev(YRSP_KIND_BOX, YRSP_PRESS, MS(200), 1);
@@ -622,7 +627,7 @@ static void check_held(void) {
     yrsp_result r;
     const yrsp_entry* e;
     int n;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     key(MS(10), SC_F, 1);                                  /* down before the window */
     yrsp_arm(&g_c, MS(100));
     onset(MS(200), 1);
@@ -634,10 +639,10 @@ static void check_held(void) {
     r = finish();
     CHECK(r.flags & YRSP_R_HELD_AT_OPEN);
     CHECK_I(r.n_held, 3);
-    CHECK_D(r.rt, 0.7);
+    CHECK_D(YRT_TO_S(r.rt_ns), 0.7);
     /* a repeat whose press was never seen (the window got the focus while
      * the key was down) is held too */
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, MS(100));
     onset(MS(200), 1);
     CHECK_I(key_repeat(MS(600), SC_F), YRSP_OPEN);
@@ -648,7 +653,7 @@ static void check_held(void) {
      * press, and the release closes them all */
     d.allow_held_key = true;
     d.persist = true;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, MS(100));
     onset(MS(200), 1);
     key(MS(500), SC_F, 1);
@@ -656,15 +661,15 @@ static void check_held(void) {
     key_repeat(MS(1033), SC_F);
     key(MS(1200), SC_F, 0);
     r = finish();
-    CHECK_D(r.rt, 0.3);
-    CHECK_D(r.rt_key_duration, 0.7);
+    CHECK_D(YRT_TO_S(r.rt_ns), 0.3);
+    CHECK_D(YRT_TO_S(r.rt_key_duration_ns), 0.7);
     e = yrsp_entries(&g_c, &n);
     CHECK_I(n, 3);
     CHECK_I(e[2].t_release, MS(1200));
     d.persist = false;
     /* allow_held_key: the first repeat is the response, flagged HELD */
     d.allow_held_key = true;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     key(MS(10), SC_F, 1);
     yrsp_arm(&g_c, MS(100));
     onset(MS(200), 1);
@@ -672,11 +677,11 @@ static void check_held(void) {
     r = finish();
     e = yrsp_entries(&g_c, &n);
     CHECK(e[0].flags & YRSP_E_HELD);
-    CHECK_D(r.rt, 0.4);
+    CHECK_D(YRT_TO_S(r.rt_ns), 0.4);
     CHECK(r.flags & YRSP_R_HELD_AT_OPEN);
     /* a held key that is no choice: not logged without allow_held_key */
     d.allow_held_key = false;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     key(MS(10), SC_K, 1);
     yrsp_arm(&g_c, MS(100));
     onset(MS(200), 1);
@@ -685,7 +690,7 @@ static void check_held(void) {
     CHECK_I(r.n_entries, 0);
     CHECK(!(r.flags & YRSP_R_HELD_AT_OPEN));
     /* the held state survives arm(): released before the next window */
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     key(MS(10), SC_J, 1);
     key(MS(50), SC_J, 0);
     yrsp_arm(&g_c, MS(100));
@@ -700,7 +705,7 @@ static void check_held(void) {
         memset(&d, 0, sizeof d);
         d.choices = b1;
         d.n_choices = 1;
-        CHECK(yrsp_init(&g_c, &d));
+        CHECK(yrsp_open(&g_c, &d));
         in.device = 7;
         yrsp_feed(&g_c, &in);
         yrsp_arm(&g_c, MS(100));
@@ -726,7 +731,7 @@ static void check_double(void) {
     int n;
     /* a virtual-key tap, down up (raw), down up (message) 9 ms later: two
      * presses; the second is AFTER_END, as the first ended the window */
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     key(MS(500), SC_F, 1);
@@ -738,12 +743,12 @@ static void check_double(void) {
     CHECK_I(n, 2);
     CHECK_I(r.n_responses, 1);
     CHECK_I(r.n_after_end, 1);
-    CHECK_D(r.rt, 0.4);
-    CHECK_D(r.rt_key_duration, 0.00003);
+    CHECK_D(YRT_TO_S(r.rt_ns), 0.4);
+    CHECK_D(YRT_TO_S(r.rt_key_duration_ns), 0.00003);
     CHECK(e[1].flags & YRSP_E_RELEASED);
     /* with persist, two responses: the filter belongs before yrsp_feed() */
     d.persist = true;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     key(MS(500), SC_F, 1);
@@ -753,7 +758,7 @@ static void check_double(void) {
     r = finish();
     CHECK_I(r.n_responses, 2);
     /* down, down, up, up: the second down is held (R2), one up closes */
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     key(MS(500), SC_F, 1);
@@ -763,11 +768,11 @@ static void check_double(void) {
     r = finish();
     CHECK_I(r.n_responses, 1);
     CHECK_I(r.n_held, 1);
-    CHECK_D(r.rt, 0.4);
-    CHECK_D(r.rt_key_duration, 0.1);
+    CHECK_D(YRT_TO_S(r.rt_ns), 0.4);
+    CHECK_D(YRT_TO_S(r.rt_key_duration_ns), 0.1);
     CHECK_I(g_c.n_stray, 1);
     /* a 100 ms hold: SDL marks the second report a repeat */
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     key(MS(500), SC_F, 1);
@@ -777,7 +782,7 @@ static void check_double(void) {
     CHECK_I(r.n_responses, 1);
     CHECK_I(r.n_held, 1);
     /* two different keys 2 ms apart both count */
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     key(MS(500), SC_F, 1);
@@ -803,7 +808,7 @@ static void check_devices(void) {
     static const yrsp_choice only22[] = { { "f", NULL, 0, 0, 0, 0, 22, 0, 0, 0, 0 } };
     d.persist = true;
     /* two keyboards press F 5 ms apart: two responses */
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     dkey(MS(500), SC_F, 11, YRSP_PRESS, 0);
@@ -811,7 +816,7 @@ static void check_devices(void) {
     r = finish();
     CHECK_I(r.n_responses, 2);
     /* as SDL gives it: B's press comes as a repeat while A holds F */
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     dkey(MS(1000), SC_F, 11, YRSP_PRESS, 0);
@@ -825,7 +830,7 @@ static void check_devices(void) {
     CHECK_I(e[1].t_release, MS(1100));
     CHECK_I(e[1].device, 22);
     /* A's own OS repeat while A holds: held */
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     dkey(MS(3000), SC_F, 11, YRSP_PRESS, 0);
@@ -835,7 +840,7 @@ static void check_devices(void) {
     CHECK_I(r.n_held, 1);
     /* a raw report (the keyboard's id) and its message report (0) while
      * the first is down: device 0 matches it, so held (R2) */
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     dkey(MS(2000), SC_F, 11, YRSP_PRESS, 0);
@@ -845,9 +850,9 @@ static void check_devices(void) {
     CHECK_I(r.n_responses, 1);
     CHECK_I(r.n_held, 1);
     CHECK_I(r.device, 11);
-    CHECK_D(r.rt_key_duration, 0.05);
+    CHECK_D(YRT_TO_S(r.rt_key_duration_ns), 0.05);
     /* releases per device */
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     dkey(MS(4000), SC_J, 11, YRSP_PRESS, 0);
@@ -863,7 +868,7 @@ static void check_devices(void) {
     memset(&d, 0, sizeof d);
     d.choices = only22;
     d.n_choices = 1;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     dkey(MS(10), SC_F, 11, YRSP_PRESS, 0);
     yrsp_arm(&g_c, MS(100));
     onset(MS(200), 1);
@@ -872,7 +877,7 @@ static void check_devices(void) {
     r = finish();
     CHECK(!(r.flags & YRSP_R_HELD_AT_OPEN));
     CHECK_I(r.device, 22);
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     dkey(MS(10), SC_F, 22, YRSP_PRESS, 0);
     yrsp_arm(&g_c, MS(100));
     r = finish();
@@ -937,7 +942,7 @@ static void check_raw_mice(void) {
     memset(&d, 0, sizeof d);
     d.choices = left77;
     d.n_choices = 1;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     memset(&m, 0, sizeof m);
@@ -953,7 +958,7 @@ static void check_raw_mice(void) {
     r = finish();
     CHECK_I(r.device, 0x77);
     CHECK_I(r.n_not_choice, 1);
-    CHECK_D(r.rt, 0.25);
+    CHECK_D(YRT_TO_S(r.rt_ns), 0.25);
     /* the cursor: a gain, clamped, one device */
     memset(&cur, 0, sizeof cur);
     cur.device = 0x77;
@@ -997,18 +1002,18 @@ static void check_onset_refine(void) {
     yrsp_result r;
     const yrsp_entry* e;
     int n;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     /* the plan, then the final onset a frame later */
     yrsp_arm(&g_c, 0);
     onset(MS(1000), 0);
     CHECK_I(key(MS(1400), SC_F, 1), YRSP_ENDED);
     onset(MS(1017), 1);
     r = finish();
-    CHECK_D(r.rt, 0.383);
+    CHECK_D(YRT_TO_S(r.rt_ns), 0.383);
     CHECK(!(r.flags & YRSP_R_ONSET_PLAN));
     CHECK(!(r.flags & YRSP_R_RECLASSIFIED));
     /* a plan does not replace the final onset */
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(1017), 1);
     onset(MS(1000), 0);
@@ -1016,7 +1021,7 @@ static void check_onset_refine(void) {
     r = finish();
     CHECK_I(r.t_onset, MS(1017));
     /* the press that ended the window becomes an anticipation */
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(1000), 0);
     CHECK_I(key(MS(1105), SC_F, 1), YRSP_ENDED);
@@ -1030,18 +1035,18 @@ static void check_onset_refine(void) {
     CHECK(r.flags & YRSP_R_ENDED_EARLY);
     CHECK(r.flags & YRSP_R_RECLASSIFIED);
     CHECK(!(r.flags & YRSP_R_RESPONDED));
-    CHECK(r.rt != r.rt);
+    CHECK(r.rt_ns == YRSP_NO_TIME);
     /* only a plan: flagged */
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(1000), 0);
     key(MS(1400), SC_F, 1);
     r = finish();
     CHECK(r.flags & YRSP_R_ONSET_PLAN);
     CHECK_I(r.onset_src, YRSP_ONSET_PLAN);
-    CHECK_D(r.rt, 0.4);
+    CHECK_D(YRT_TO_S(r.rt_ns), 0.4);
     /* no onset at all */
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     key(MS(1400), SC_J, 1);
     r = finish();
@@ -1049,15 +1054,15 @@ static void check_onset_refine(void) {
     CHECK(!(r.flags & YRSP_R_RESPONDED));
     CHECK_I(r.n_early, 1);
     /* an onset given after a press that falls in its window: ends then */
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     key(MS(1400), SC_J, 1);
     CHECK_I(onset(MS(1000), 1), YRSP_ENDED);
     r = finish();
-    CHECK_D(r.rt, 0.4);
+    CHECK_D(YRT_TO_S(r.rt_ns), 0.4);
     CHECK(r.flags & YRSP_R_RECLASSIFIED);
     /* set_onset before arm is ignored */
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     CHECK_I(onset(MS(1), 1), YRSP_IDLE);
 }
 
@@ -1070,8 +1075,8 @@ static void check_out_of_order(void) {
     memset(&d, 0, sizeof d);
     d.choices = ch;
     d.n_choices = 2;
-    d.duration = 2;
-    CHECK(yrsp_init(&g_c, &d));
+    d.duration_ns = YRT_S(2);
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     CHECK_I(key(MS(500), SC_F, 1), YRSP_ENDED);
@@ -1079,13 +1084,13 @@ static void check_out_of_order(void) {
     yrsp_feed(&g_c, &in);
     r = finish();
     CHECK_S(r.response_name, "box");
-    CHECK_D(r.rt, 0.35);
+    CHECK_D(YRT_TO_S(r.rt_ns), 0.35);
     CHECK_I(r.n_responses, 2);
     CHECK_I(r.n_after_end, 0);
     /* persist with max 1 arriving out of order before the end: the earliest ends */
     d.persist = true;
     d.max_responses = 2;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     key(MS(600), SC_F, 1);                                 /* before the onset is known */
     key(MS(700), SC_F, 0);
@@ -1101,8 +1106,8 @@ static void check_release(void) {
     yrsp_desc d = fj_desc(2.0, 0);
     yrsp_result r;
     d.wait_for_key_release = true;
-    d.max_hold = 0.5;
-    CHECK(yrsp_init(&g_c, &d));
+    d.max_hold_ns = YRT_MS(500);
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     CHECK_I(key(MS(400), SC_F, 1), YRSP_OPEN);           /* waits for the release */
@@ -1110,12 +1115,12 @@ static void check_release(void) {
     CHECK_I(yrsp_update(&g_c, MS(600)), YRSP_OPEN);     /* not yet max_hold */
     CHECK_I(key(MS(650), SC_F, 0), YRSP_ENDED);
     r = finish();
-    CHECK_D(r.rt, 0.3);
-    CHECK_D(r.rt_key_duration, 0.25);
+    CHECK_D(YRT_TO_S(r.rt_ns), 0.3);
+    CHECK_D(YRT_TO_S(r.rt_key_duration_ns), 0.25);
     CHECK_I(r.n_after_end, 1);
     CHECK(!(r.flags & YRSP_R_HOLD_TIMEOUT));
     /* max_hold gives up */
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     CHECK_I(key(MS(400), SC_F, 1), YRSP_OPEN);
@@ -1123,19 +1128,19 @@ static void check_release(void) {
     CHECK_I(yrsp_update(&g_c, MS(900)), YRSP_ENDED);
     r = finish();
     CHECK(r.flags & YRSP_R_HOLD_TIMEOUT);
-    CHECK(r.rt_key_duration != r.rt_key_duration);
+    CHECK(r.rt_key_duration_ns == YRSP_NO_TIME);
     /* a release after finish() pairs; finish() again reports it */
     key(MS(1000), SC_F, 0);
     r = finish();
-    CHECK_D(r.rt_key_duration, 0.6);
+    CHECK_D(YRT_TO_S(r.rt_key_duration_ns), 0.6);
     /* the default max_hold is 2 s */
-    d.max_hold = 0;
-    CHECK(yrsp_init(&g_c, &d));
+    d.max_hold_ns = 0;
+    CHECK(yrsp_open(&g_c, &d));
     CHECK_I(g_c.max_hold_ns, MS(2000));
     /* the release pairs with the newest press of that key */
     d = fj_desc(2.0, 0);
     d.persist = true;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     tap(MS(300), SC_F);
@@ -1175,9 +1180,9 @@ static void check_crossings(void) {
     memset(&d, 0, sizeof d);
     d.choices = trig;
     d.n_choices = 1;
-    d.duration = 2;
+    d.duration_ns = YRT_S(2);
     d.persist = true;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     sample(G, MS(200), RT, 0.1f, 0, 0);
@@ -1195,12 +1200,12 @@ static void check_crossings(void) {
     CHECK(e[0].flags & YRSP_E_CROSSING);
     CHECK_I(e[0].t, MS(400));
     CHECK_I(e[1].t, MS(600));
-    CHECK_D(r.rt, 0.3);
+    CHECK_D(YRT_TO_S(r.rt_ns), 0.3);
     CHECK_S(r.response_name, "trigger");
-    CHECK(r.rt_key_duration != r.rt_key_duration);
+    CHECK(r.rt_key_duration_ns == YRSP_NO_TIME);
     /* past the level at arm: held, until it re-arms */
     d.persist = false;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     sample(G, MS(10), RT, 0.8f, 0, 0);
     yrsp_arm(&g_c, MS(50));
     onset(MS(100), 1);
@@ -1209,10 +1214,10 @@ static void check_crossings(void) {
     CHECK_I(sample(G, MS(400), RT, 0.7f, 0, 0), YRSP_ENDED);
     r = finish();
     CHECK(r.flags & YRSP_R_HELD_AT_OPEN);
-    CHECK_D(r.rt, 0.3);
+    CHECK_D(YRT_TO_S(r.rt_ns), 0.3);
     /* the end needs a crossing, not a release, with wait_for_key_release */
     d.wait_for_key_release = true;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     CHECK_I(sample(G, MS(400), RT, 1.0f, 0, 0), YRSP_ENDED);
@@ -1220,7 +1225,7 @@ static void check_crossings(void) {
     memset(&d, 0, sizeof d);
     d.choices = fall;
     d.n_choices = 1;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     CHECK_I(sample(G, MS(200), YRSP_AXIS_GAMEPAD + 1, -0.4f, 0, 0), YRSP_OPEN);
@@ -1229,18 +1234,18 @@ static void check_crossings(void) {
     memset(&d, 0, sizeof d);
     d.choices = move;
     d.n_choices = 1;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     sample(YRSP_KIND_MOUSE, MS(10), 0, 0, 100, 100);
     yrsp_arm(&g_c, MS(50));
     onset(MS(100), 1);
     CHECK_I(sample(YRSP_KIND_MOUSE, MS(200), 0, 0, 106, 107.9f), YRSP_OPEN);
     CHECK_I(sample(YRSP_KIND_MOUSE, MS(300), 0, 0, 106, 108), YRSP_ENDED);
     r = finish();
-    CHECK_D(r.rt, 0.2);
+    CHECK_D(YRT_TO_S(r.rt_ns), 0.2);
     e = yrsp_entries(&g_c, &n);
     CHECK(fabs(e[0].value - 10.0f) < 1e-4);
     /* no position before arm: the first sample after it is the reference */
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, MS(50));
     onset(MS(100), 1);
     CHECK_I(sample(YRSP_KIND_MOUSE, MS(150), 0, 0, 500, 500), YRSP_OPEN);
@@ -1250,14 +1255,14 @@ static void check_crossings(void) {
     memset(&d, 0, sizeof d);
     d.choices = pen;
     d.n_choices = 1;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     CHECK_I(sample(YRSP_KIND_PEN, MS(350), YRSP_AXIS_PEN_PRESSURE, 0.3f, 10, 10), YRSP_ENDED);
     /* crossings in ALL mode do not exist */
     memset(&d, 0, sizeof d);
     d.kinds = YRSP_KINDS_ALL;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     CHECK_I(sample(G, MS(400), RT, 1.0f, 0, 0), YRSP_OPEN);
@@ -1271,7 +1276,7 @@ static void check_trace(void) {
     d.trace = tr;
     d.trace_cap = 5;
     d.trace_kinds = YRSP_KIND_BIT(YRSP_KIND_MOUSE);
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     sample(YRSP_KIND_MOUSE, MS(1), 0, 0, 1, 1);           /* before arm: not traced */
     yrsp_arm(&g_c, MS(10));
     for (i = 0; i < 4; i++) sample(YRSP_KIND_MOUSE, MS(20 + i), 0, 0, (float)i, 0);
@@ -1292,7 +1297,7 @@ static void check_trace(void) {
     CHECK_I(r.n_trace, 5);
     /* trace_kinds 0: every kind, keys too */
     d.trace_kinds = 0;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     key(MS(40), SC_K, 1);
     sample(YRSP_KIND_PEN, MS(30), 0, 0, 0, 0);
@@ -1304,7 +1309,7 @@ static void check_capacity(void) {
     yrsp_desc d = fj_desc(5.0, 0);
     yrsp_result r;
     int i;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     for (i = 0; i < 100; i++) tap(MS(200) + (int64_t)i * MS(10), 50 + (uint32_t)(i % 40));  /* no choices */
@@ -1313,10 +1318,10 @@ static void check_capacity(void) {
     CHECK(r.flags & YRSP_R_LOG_FULL);
     CHECK_I(r.n_entries, YRSP_LOG_CAP - YRSP_LOG_RESERVE + 1);
     CHECK_I(r.n_lost, 100 - (YRSP_LOG_CAP - YRSP_LOG_RESERVE));
-    CHECK_D(r.rt, 2.9);
+    CHECK_D(YRT_TO_S(r.rt_ns), 2.9);
     /* choices use every slot */
     d.persist = true;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     for (i = 0; i < 70; i++) tap(MS(200) + (int64_t)i * MS(60), i % 2 ? SC_F : SC_J);
@@ -1336,31 +1341,31 @@ static void check_quality(void) {
     src[0].kind = YRSP_KIND_KEYBOARD;
     src[0].tier = YRSP_TIER_UNKNOWN;
     src[0].partial = 1;
-    src[0].lo_us = 160;
-    src[0].hi_us = 670;
+    src[0].lo_ns = 160000;
+    src[0].hi_ns = 670000;
     src[1].kind = YRSP_KIND_BOX;
     src[1].tier = YRSP_TIER_3;
-    src[1].lo_us = 1000;
-    src[1].hi_us = 16000;
+    src[1].lo_ns = 1000000;
+    src[1].hi_ns = 16000000;
     src[2].kind = YRSP_KIND_BOX;
     src[2].device = 5;
     src[2].tier = YRSP_TIER_1;
-    src[2].lo_us = -50;
-    src[2].hi_us = 50;
+    src[2].lo_ns = -50000;
+    src[2].hi_ns = 50000;
     memset(&d, 0, sizeof d);
     d.choices = b1;
     d.n_choices = 2;
     d.sources = src;
     d.n_sources = 3;
-    CHECK(yrsp_init(&g_c, &d));
+    CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
     key(MS(300), SC_F, 1);
     r = finish();
     CHECK_I(r.stamp_tier, YRSP_TIER_UNKNOWN);
     CHECK_I(r.stamp_partial, 1);
-    CHECK_I(r.stamp_lo_us, 160);
-    CHECK_I(r.stamp_hi_us, 670);
+    CHECK_I(r.stamp_lo_ns, 160000);
+    CHECK_I(r.stamp_hi_ns, 670000);
     key(MS(400), SC_F, 0);
     /* the device's own entry wins over the kind's */
     yrsp_arm(&g_c, 0);
@@ -1370,7 +1375,7 @@ static void check_quality(void) {
     yrsp_feed(&g_c, &in);
     r = finish();
     CHECK_I(r.stamp_tier, YRSP_TIER_1);
-    CHECK_I(r.stamp_lo_us, -50);
+    CHECK_I(r.stamp_lo_ns, -50000);
     /* another box: the kind's */
     yrsp_arm(&g_c, 0);
     onset(MS(100), 1);
@@ -1379,7 +1384,7 @@ static void check_quality(void) {
     yrsp_feed(&g_c, &in);
     r = finish();
     CHECK_I(r.stamp_tier, YRSP_TIER_3);
-    CHECK_I(r.stamp_hi_us, 16000);
+    CHECK_I(r.stamp_hi_ns, 16000000);
     in.type = YRSP_RELEASE;                               /* box 6 lets go */
     in.t = MS(1400);
     yrsp_feed(&g_c, &in);
@@ -1393,8 +1398,8 @@ static void check_quality(void) {
     yrsp_feed(&g_c, &in);
     r = finish();
     CHECK_I(r.stamp_tier, YRSP_TIER_SIM);
-    CHECK_I(r.stamp_lo_us, 0);
-    CHECK_I(r.stamp_hi_us, 0);
+    CHECK_I(r.stamp_lo_ns, 0);
+    CHECK_I(r.stamp_hi_ns, 0);
 }
 
 static void check_strerror(void) {
@@ -1414,18 +1419,18 @@ static void check_helpers(void) {
     fr.residual = 250;
     fr.tier = 2;
     o = yrsp_onset_flip(&fr);
-    CHECK_I(o.t, MS(500));
+    CHECK_I(o.t_ns, MS(500));
     CHECK_I(o.frame, 7);
     CHECK_I(o.tier, 2);
     CHECK_I(o.final, 1);
     CHECK_I(o.src, YRSP_ONSET_FLIP);
-    CHECK_I(o.residual, 250);
+    CHECK_I(o.residual_ns, 250);
     fr.flags = YSCR_FLIP_PENDING;
     CHECK_I(yrsp_onset_flip(&fr).final, 0);
     fr.flags = 0;
     fr.onset = 0;                       /* never shown */
     o = yrsp_onset_flip(&fr);
-    CHECK_I(o.t, MS(483));
+    CHECK_I(o.t_ns, MS(483));
     CHECK_I(o.final, 0);
     CHECK_I(o.src, YRSP_ONSET_PLAN);
     memset(&au, 0, sizeof au);
@@ -1439,14 +1444,14 @@ static void check_helpers(void) {
     au.flags = 0;
     o = yrsp_onset_audio(&au);
     CHECK_I(o.final, 1);
-    CHECK_I(o.t, MS(900));
+    CHECK_I(o.t_ns, MS(900));
     CHECK_I(o.frame, -1);
     memset(&le, 0, sizeof le);
     le.onset = MS(1000);
     le.residual = 5;
     le.frame = 60;
     o = yrsp_onset_landing(&le);
-    CHECK_I(o.t, MS(1000));
+    CHECK_I(o.t_ns, MS(1000));
     CHECK_I(o.final, 0);
     CHECK_I(o.frame, 60);
     CHECK_I(o.src, YRSP_ONSET_PLAN);
@@ -1607,7 +1612,7 @@ static void check_sdl(void) {
     CHECK_I(s.kind, YRSP_KIND_KEYBOARD);
 #if defined(_WIN32)
     CHECK_I(s.partial, 1);
-    CHECK_I(s.hi_us, 670);
+    CHECK_I(s.hi_ns, 670000);
     ctx.raw_keyboard = false;
     s = yrsp_sdl_source(&ctx, YRSP_KIND_KEYBOARD);
     CHECK_I(s.tier, YRSP_TIER_3);
@@ -1635,12 +1640,12 @@ static void check_property(void) {
         const yrsp_entry* e;
         int n, n_valid = 0, n_cls = 0, best = -1;
         int64_t on = MS(200 + rnd(400));
-        if (d.duration > 0 && d.minimum_valid_rt >= d.duration) d.minimum_valid_rt = 0;
+        if (d.duration_ns > 0 && d.min_rt_ns >= d.duration_ns) d.min_rt_ns = 0;
         d.persist = rnd(2) != 0;
         d.max_responses = (int)rnd(3);
         d.allow_held_key = rnd(2) != 0;
         d.wait_for_key_release = rnd(3) == 0;
-        if (!yrsp_init(&g_c, &d)) { bad++; CHECK(0); continue; }
+        if (!yrsp_open(&g_c, &d)) { bad++; CHECK(0); continue; }
         yrsp_arm(&g_c, 0);
         if (rnd(4)) onset(on - MS(rnd(30)), 0);
         for (i = 0; i < 40; i++) {
@@ -1659,7 +1664,7 @@ static void check_property(void) {
         e = yrsp_entries(&g_c, &n);
         for (i = 0; i < n; i++) {
             uint16_t k = (uint16_t)(e[i].flags & YRSP_E_CLASS_MASK);
-            int64_t rt = e[i].t - g_c.onset.t;
+            int64_t rt = e[i].t - g_c.onset.t_ns;
             /* one class at most, and only one that its rt allows */
             if ((k & (k - 1)) != 0) n_cls++;
             if (k == YRSP_E_VALID) {
@@ -1670,7 +1675,7 @@ static void check_property(void) {
             }
         }
         if (n_cls || n_valid != r.n_responses || best != r.entry ||
-            (best >= 0 && r.rt != (double)(e[best].t - g_c.onset.t) / 1e9) ||
+            (best >= 0 && r.rt_ns != e[best].t - g_c.onset.t_ns) ||
             r.n_entries != n || n > YRSP_LOG_CAP) {
             bad++;
             fprintf(stderr, "response_test: property round %d: classes %d valid %d/%d best %d/%d\n", round,
@@ -1681,9 +1686,45 @@ static void check_property(void) {
     if (bad) g_failures++;
 }
 
+/* v0.3.0: close, the messages of failing calls, YRSP_NO_TIME. */
+static void check_close_messages(void) {
+    static yrsp_collector z;
+    yrsp_desc d = fj_desc(1.5, 0.1);
+    yrsp_input in;
+    yrsp_result r;
+    memset(&z, 0, sizeof z);
+    yrsp_close(&z);                            /* zeroed, twice */
+    yrsp_close(&z);
+    yrsp_close(NULL);
+    CHECK_I(yrsp_feed(&z, NULL), YRSP_ERR_STATE);
+    CHECK_S(yrsp_error(&z), "ysp_response: yrsp_feed: the collector is not open");
+    d.n_choices = -1;
+    CHECK(!yrsp_open(&z, &d));
+    yrsp_close(&z);                            /* after a failed open */
+    CHECK_HAS(yrsp_error(&z), "n_choices");
+    d = fj_desc(1.5, 0.1);
+    CHECK(yrsp_open(&g_c, &d));
+    CHECK_S(yrsp_error(&g_c), "");
+    memset(&in, 0, sizeof in);                 /* type NONE: refused */
+    CHECK_I(yrsp_feed(&g_c, &in), YRSP_ERR_ARG);
+    CHECK_S(yrsp_error(&g_c), "ysp_response: yrsp_feed: bad argument");
+    CHECK_I(yrsp_set_onset(&g_c, NULL), YRSP_ERR_ARG);
+    CHECK_S(yrsp_error(&g_c), "ysp_response: yrsp_set_onset: bad argument");
+    CHECK_I(yrsp_finish(&g_c, NULL), YRSP_ERR_ARG);
+    CHECK_S(yrsp_error(&g_c), "ysp_response: yrsp_finish: bad argument");
+    yrsp_arm(&g_c, 0);
+    CHECK_I(yrsp_finish(&g_c, &r), YRSP_ENDED);
+    CHECK(r.rt_ns == YRSP_NO_TIME && r.rt_key_duration_ns == YRSP_NO_TIME);
+    yrsp_close(&g_c);
+    yrsp_close(&g_c);
+    CHECK_I(yrsp_update(&g_c, 0), YRSP_ERR_STATE);
+    CHECK_S(yrsp_error(&g_c), "ysp_response: yrsp_update: the collector is not open");
+}
+
 int main(void) {
     printf("ysp_response %s\n", yrsp_version());
     check_names();
+    check_close_messages();
     check_validation();
     check_basic();
     check_bounds();

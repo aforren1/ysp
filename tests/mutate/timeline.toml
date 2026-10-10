@@ -111,16 +111,16 @@ id = "rate-08"
 name = "next_due at rate 1"
 test = "timeline"
 why = "ytl_next_due() must map event times through the rate."
-find = '            t = ytl__rt_s(b, e->time, &sat);'
-replace = '            t = b->anchor_rt + (e->time - b->anchor_bt);'
+find = '            t = ytl__rt_s(b, e->time_ns, &sat);'
+replace = '            t = b->anchor_rt + (e->time_ns - b->anchor_bt);'
 
 [[mutant]]
 id = "rate-09"
 name = "peek copy at rate 1"
 test = "timeline"
 why = "A peeked copy's onset must be mapped through the rate."
-find = '            c.onset = ytl__rt_s(b, e->time, &sat);'
-replace = '            c.onset = b->anchor_rt + (e->time - b->anchor_bt);'
+find = '            c.onset = ytl__rt_s(b, e->time_ns, &sat);'
+replace = '            c.onset = b->anchor_rt + (e->time_ns - b->anchor_bt);'
 
 [[mutant]]
 id = "rate-10"
@@ -256,13 +256,13 @@ find = '''
     return true;
 }
 
-YTL_API int ytl_rate'''
+static int ytl__rate'''
 replace = '''
     *out = x;
     return true;
 }
 
-YTL_API int ytl_rate'''
+static int ytl__rate'''
 
 [[mutant]]
 id = "rate-23"
@@ -371,7 +371,7 @@ id = "seq-09"
 name = "overlap allowed"
 test = "timeline"
 why = "Overlapping blocks on one channel must be refused."
-find = '    if (has_prev && (r.start < prev_end || d->keep_velocity)) return YTL_ERR_ARG;'
+find = '    if (has_prev && (r.start_ns < prev_end || d->keep_velocity)) return YTL_ERR_ARG;'
 replace = '    if (has_prev && d->keep_velocity) return YTL_ERR_ARG;'
 
 [[mutant]]
@@ -460,3 +460,36 @@ test = "timeline"
 why = "Arena curves follow the keys; reading them at the keys' start reads keys as curves."
 find = '    return ytl__ease(a, curves, keys + n, a->value, b->value,'
 replace = '    return ytl__ease(a, curves, keys, a->value, b->value,'
+
+# v0.5.0 conventions: messages and close.
+
+[[mutant]]
+id = "conv-01"
+name = "a failing int call writes no message"
+test = "timeline"
+why = "Every failing int call writes ytl_error() (README Conventions, Errors)."
+find = '    if (rc < 0 && tl) snprintf(tl->error, sizeof(tl->error), "ysp_timeline: %s: %s", what, ytl_strerror(rc));'
+replace = '    (void)what;'
+
+[[mutant]]
+id = "conv-02"
+name = "close leaves the handle open"
+test = "timeline"
+why = "After ytl_close() every call must be YTL_ERR_CLOSED."
+find = '    if (tl) tl->open = false;'
+replace = '    (void)tl;'
+
+[[mutant]]
+id = "conv-03"
+name = "a sequence error writes no message"
+test = "timeline"
+why = "A sequence call that sets q.err writes the timeline message too."
+find = '''
+        q->err_call = q->n_calls - 1;
+        ytl__seq_msg(q);
+    }
+    return rc;'''
+replace = '''
+        q->err_call = q->n_calls - 1;
+    }
+    return rc;'''

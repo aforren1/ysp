@@ -214,9 +214,9 @@ int main(int argc, char** argv) {
     memset(&pd, 0, sizeof pd);
     pd.choices = keys;
     pd.n_choices = 2;
-    pd.duration = RESPONSE_S;
-    pd.minimum_valid_rt = MIN_RT_S;
-    if (!yrsp_init(&rsp, &pd)) { fprintf(stderr, "trial_same_different: %s\n", yrsp_error(&rsp)); return 1; }
+    pd.duration_ns = YRT_S(RESPONSE_S);
+    pd.min_rt_ns = YRT_S(MIN_RT_S);
+    if (!yrsp_open(&rsp, &pd)) { fprintf(stderr, "trial_same_different: %s\n", yrsp_error(&rsp)); return 1; }
 
     out = fopen(out_path, "w");
     if (!out) { fprintf(stderr, "trial_same_different: cannot write %s\n", out_path); return 1; }
@@ -259,14 +259,14 @@ int main(int argc, char** argv) {
             ytl_anchor(&tl, TRIAL, f.onset, 0);
             q = ytl_seq_on(&tl, TRIAL);
             ytl_on(&q, FIX_ON);
-            ytl_wait(&q, YTL_S(FIXATION_S));
+            ytl_wait(&q, YRT_S(FIXATION_S));
             ytl_off(&q, FIX_ON);
             ytl_on(&q, FIRST_ON);
-            ytl_wait(&q, YTL_S(FIRST_S));
+            ytl_wait(&q, YRT_S(FIRST_S));
             ytl_off(&q, FIRST_ON);
-            ytl_wait(&q, YTL_S(GAP_S));
+            ytl_wait(&q, YRT_S(GAP_S));
             ytl_on(&q, SECOND_ON);
-            ytl_wait(&q, YTL_S(SECOND_S));
+            ytl_wait(&q, YRT_S(SECOND_S));
             ytl_off(&q, SECOND_ON);
             if (q.err) { fprintf(stderr, "trial_same_different: timeline error %d\n", q.err); failed = 1; break; }
             yrsp_arm(&rsp, f.onset);
@@ -276,7 +276,7 @@ int main(int argc, char** argv) {
             in_trial = responding = 1;
             n_sim_ev = sim_next = 0;
             if (sim) {   /* the participant's presses, from the second bar's planned onset */
-                int64_t t2 = f.onset + YTL_S(FIXATION_S + FIRST_S + GAP_S);
+                int64_t t2 = f.onset + YRT_S(FIXATION_S + FIRST_S + GAP_S);
                 int k;
                 for (k = 0; k < (int)(sizeof sim_script / sizeof sim_script[0]); k++) {
                     const sim_press* p = &sim_script[k];
@@ -284,7 +284,7 @@ int main(int argc, char** argv) {
                     yrsp_input* e = &sim_ev[n_sim_ev];
                     if (p->trial != ti.index || n_sim_ev + 2 > 8) continue;
                     memset(e, 0, sizeof *e);
-                    e->t = t2 + YTL_S(p->at);
+                    e->t = t2 + YRT_S(p->at);
                     e->type = YRSP_PRESS;
                     e->control = (uint32_t)yrsp_scancode(key);
                     e->stamp = YRSP_TIER_SIM;
@@ -292,7 +292,7 @@ int main(int argc, char** argv) {
                     sim_ev[n_sim_ev + 1] = *e;
                     sim_ev[n_sim_ev + 1].type = YRSP_RELEASE;
                     sim_ev[n_sim_ev + 1].value = 0;
-                    sim_ev[n_sim_ev + 1].t = e->t + YTL_MS(80);
+                    sim_ev[n_sim_ev + 1].t = e->t + YRT_MS(80);
                     n_sim_ev += 2;
                 }
             }
@@ -307,7 +307,7 @@ int main(int argc, char** argv) {
             ytl_base_time(&tl, TRIAL, f.onset, &bt);
             ytl_at(&q, bt);
             ytl_off(&q, SECOND_ON);
-            ytl_wait(&q, YTL_S(ITI_S));
+            ytl_wait(&q, YRT_S(ITI_S));
             ytl_mark(&q, END_OF_TRIAL, 0);
             if (q.err) { fprintf(stderr, "trial_same_different: timeline error %d\n", q.err); failed = 1; break; }
             responding = 0;
@@ -329,8 +329,8 @@ int main(int argc, char** argv) {
                 int correct;
                 yrsp_finish(&rsp, &res);
                 correct = (res.flags & YRSP_R_RESPONDED) && !strcmp(keys[res.response].key, answer);
-                sec(rt, sizeof rt, res.rt);
-                sec(soa, sizeof soa, res.t_onset && first_onset.t ? (double)(res.t_onset - first_onset.t) / 1e9 : NAN);
+                sec(rt, sizeof rt, res.rt_ns == YRSP_NO_TIME ? NAN : YRT_TO_S(res.rt_ns));
+                sec(soa, sizeof soa, res.t_onset && first_onset.t_ns ? (double)(res.t_onset - first_onset.t_ns) / 1e9 : NAN);
                 fprintf(out, "%d,%s,%s,%s,%s,%s,%d,%u,%s,%u,%u,%u,%u,%d,%d,%d\n", ti.index,
                         ytb_text(&tab, ti.condition, first_col), ytb_text(&tab, ti.condition, second_col), answer,
                         res.response_name ? res.response_name : "", rt, correct, (unsigned)first_onset.tier, soa,
@@ -379,12 +379,12 @@ int main(int argc, char** argv) {
              * a whole number of periods. A logic error does not. */
             int ok = whole_frames(sim_soa[i], FIRST_S + GAP_S, f.period);
             if (i == 2) ok = ok && !(r->flags & YRSP_R_RESPONDED) && (r->flags & YRSP_R_TIMEOUT);
-            else ok = ok && (r->flags & YRSP_R_RESPONDED) && whole_frames(r->rt, want_rt[i], f.period);
+            else ok = ok && (r->flags & YRSP_R_RESPONDED) && whole_frames(YRT_TO_S(r->rt_ns), want_rt[i], f.period);
             if (i == 1) ok = ok && r->n_early == 1;
             ok = ok && sim_correct[i] == (i < 2);
             ok = ok && r->onset_tier == YSCR_TIER_SIM && r->onset_src == YRSP_ONSET_FLIP;
             if (!ok) {
-                fprintf(stderr, "trial_same_different: --sim: trial %d: rt %.9f soa %.9f flags 0x%x n_early %d\n", i, r->rt,
+                fprintf(stderr, "trial_same_different: --sim: trial %d: rt %.9f soa %.9f flags 0x%x n_early %d\n", i, YRT_TO_S(r->rt_ns),
                         sim_soa[i], (unsigned)r->flags, r->n_early);
                 bad = 1;
             }

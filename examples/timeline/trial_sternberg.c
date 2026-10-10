@@ -303,9 +303,9 @@ int main(int argc, char** argv) {
     memset(&pd, 0, sizeof pd);
     pd.choices = keys;
     pd.n_choices = 2;
-    pd.duration = RESPONSE_S;
-    pd.minimum_valid_rt = MIN_RT_S;
-    if (!yrsp_init(&rsp, &pd)) { fprintf(stderr, "trial_sternberg: %s\n", yrsp_error(&rsp)); return 1; }
+    pd.duration_ns = YRT_S(RESPONSE_S);
+    pd.min_rt_ns = YRT_S(MIN_RT_S);
+    if (!yrsp_open(&rsp, &pd)) { fprintf(stderr, "trial_sternberg: %s\n", yrsp_error(&rsp)); return 1; }
 
     out = fopen(out_path, "w");
     if (!out) { fprintf(stderr, "trial_sternberg: cannot write %s\n", out_path); return 1; }
@@ -335,7 +335,7 @@ int main(int argc, char** argv) {
             for (j = 0; j < k; j++)
                 if (f.done[i].index == item_frame[j]) {
                     yrsp_onset o = yrsp_onset_flip(&f.done[i]);
-                    item_t[j] = o.t;
+                    item_t[j] = o.t_ns;
                     item_tier[j] = o.tier;
                 }
             if (f.done[i].index == probe_frame) {
@@ -376,13 +376,13 @@ int main(int argc, char** argv) {
             /* The whole trial as one table, checked before anything goes in. */
             n_ops = 0;
             ops[n_ops++] = (ytl_op)YTL_ON(FIX_ON);
-            ops[n_ops++] = (ytl_op)YTL_WAIT(YTL_S(FIX_S));
+            ops[n_ops++] = (ytl_op)YTL_WAIT(YRT_S(FIX_S));
             ops[n_ops++] = (ytl_op)YTL_OFF(FIX_ON);
             for (i = 0; i < k; i++) {
                 ops[n_ops++] = (ytl_op)YTL_ON(ITEM0 + i);
-                ops[n_ops++] = (ytl_op)YTL_WAIT(YTL_S(ITEM_S));
+                ops[n_ops++] = (ytl_op)YTL_WAIT(YRT_S(ITEM_S));
                 ops[n_ops++] = (ytl_op)YTL_OFF(ITEM0 + i);
-                ops[n_ops++] = (ytl_op)YTL_WAIT(i + 1 < k ? YTL_S(GAP_S) : YTL_S(RETENTION_S));
+                ops[n_ops++] = (ytl_op)YTL_WAIT(i + 1 < k ? YRT_S(GAP_S) : YRT_S(RETENTION_S));
             }
             ops[n_ops++] = (ytl_op)YTL_ON(PROBE_ON);
             ytl_clear(&tl, TRIAL);
@@ -402,7 +402,7 @@ int main(int argc, char** argv) {
                 yrsp_input* e = &sim_ev[n_sim_ev];
                 if (p->trial != ti.index || p->early <= 0 || n_sim_ev + 2 > 8) continue;
                 memset(e, 0, sizeof *e);
-                e->t = t_start + YTL_S(p->early);
+                e->t = t_start + YRT_S(p->early);
                 e->type = YRSP_PRESS;
                 e->control = (uint32_t)yrsp_scancode(answer);
                 e->stamp = YRSP_TIER_SIM;
@@ -410,7 +410,7 @@ int main(int argc, char** argv) {
                 sim_ev[n_sim_ev + 1] = *e;
                 sim_ev[n_sim_ev + 1].type = YRSP_RELEASE;
                 sim_ev[n_sim_ev + 1].value = 0;
-                sim_ev[n_sim_ev + 1].t = e->t + YTL_MS(80);
+                sim_ev[n_sim_ev + 1].t = e->t + YRT_MS(80);
                 n_sim_ev += 2;
             }
         }
@@ -424,7 +424,7 @@ int main(int argc, char** argv) {
             ytl_base_time(&tl, TRIAL, f.onset, &bt);
             ytl_at(&q, bt);
             ytl_off(&q, PROBE_ON);
-            ytl_wait(&q, YTL_S(ITI_S));
+            ytl_wait(&q, YRT_S(ITI_S));
             ytl_mark(&q, END_OF_TRIAL, 0);
             if (q.err) { fprintf(stderr, "trial_sternberg: timeline error %d\n", q.err); failed = 1; break; }
             responding = 0;
@@ -445,7 +445,7 @@ int main(int argc, char** argv) {
                         yrsp_input* e = &sim_ev[n_sim_ev];
                         if (p->trial != ti.index || p->early > 0 || n_sim_ev + 2 > 8) continue;
                         memset(e, 0, sizeof *e);
-                        e->t = o.t + YTL_S(sim_rt(k, present));
+                        e->t = o.t_ns + YRT_S(sim_rt(k, present));
                         e->type = YRSP_PRESS;
                         e->control = (uint32_t)yrsp_scancode(p->which == 1 ? answer : !strcmp(answer, "f") ? "j" : "f");
                         e->stamp = YRSP_TIER_SIM;
@@ -453,7 +453,7 @@ int main(int argc, char** argv) {
                         sim_ev[n_sim_ev + 1] = *e;
                         sim_ev[n_sim_ev + 1].type = YRSP_RELEASE;
                         sim_ev[n_sim_ev + 1].value = 0;
-                        sim_ev[n_sim_ev + 1].t = e->t + YTL_MS(80);
+                        sim_ev[n_sim_ev + 1].t = e->t + YRT_MS(80);
                         n_sim_ev += 2;
                     }
                 }
@@ -463,7 +463,7 @@ int main(int argc, char** argv) {
                 int correct, j, worst = 0;
                 yrsp_finish(&rsp, &res);
                 correct = (res.flags & YRSP_R_RESPONDED) && !strcmp(keys[res.response].key, answer);
-                sec(rt, sizeof rt, res.rt);
+                sec(rt, sizeof rt, res.rt_ns == YRSP_NO_TIME ? NAN : YRT_TO_S(res.rt_ns));
                 /* k was checked against MAX_SET when the trial began; the
                  * clamp lets gcc see that mem cannot overflow */
                 int nk = k < 0 ? 0 : k > MAX_SET ? MAX_SET : k;
@@ -485,7 +485,7 @@ int main(int argc, char** argv) {
                        probe_digit, rt[0] ? rt : "-", res.response_name ? res.response_name : "-",
                        !(res.flags & YRSP_R_RESPONDED) ? "(too slow)" : correct ? "correct" : "wrong", soa[1], soa[2],
                        soa[3], soa[4], soa[5], soa[0]);
-                if (correct) { sum_k += k; sum_rt += res.rt; sum_kk += (double)k * k; sum_krt += k * res.rt; n_fit++; }
+                if (correct) { sum_k += k; sum_rt += YRT_TO_S(res.rt_ns); sum_kk += (double)k * k; sum_krt += k * res.rt_ns; n_fit++; }
                 ytr_update(&trials, (res.flags & YRSP_R_RESPONDED) ? correct : YTR_INVALID, NULL);
                 if (ti.index < SIM_TRIALS) {
                     sim_res[ti.index] = res;
@@ -533,13 +533,13 @@ int main(int argc, char** argv) {
                 else ok = ok && (d < 1e-6 || fabs(d - period) < 1e-6);
             }
             if (i == 4) ok = ok && !(r->flags & YRSP_R_RESPONDED) && (r->flags & YRSP_R_TIMEOUT);
-            else ok = ok && (r->flags & YRSP_R_RESPONDED) && fabs(r->rt - sim_rt(sim_k[i], sim_present[i])) < 1e-6;
+            else ok = ok && (r->flags & YRSP_R_RESPONDED) && fabs(YRT_TO_S(r->rt_ns) - sim_rt(sim_k[i], sim_present[i])) < 1e-6;
             ok = ok && r->n_early == (i == 1);
             ok = ok && sim_correct[i] == (i != 2 && i != 4);
             ok = ok && r->onset_tier == YSCR_TIER_SIM && r->onset_src == YRSP_ONSET_FLIP;
             if (!ok) {
                 fprintf(stderr, "trial_sternberg: --sim: trial %d: set %d rt %.9f flags 0x%x n_early %d soa %.9f %.9f\n", i,
-                        sim_k[i], r->rt, (unsigned)r->flags, r->n_early, sim_soa[i][1], sim_soa[i][0]);
+                        sim_k[i], YRT_TO_S(r->rt_ns), (unsigned)r->flags, r->n_early, sim_soa[i][1], sim_soa[i][0]);
                 bad = 1;
             }
         }

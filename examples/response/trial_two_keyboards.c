@@ -270,7 +270,7 @@ int main(int argc, char** argv) {
         if (state == WAIT && f.index == target_frame) {
             yrsp_onset o;
             memset(&o, 0, sizeof o);   /* the plan until the record comes */
-            o.t = f.onset;
+            o.t_ns = f.onset;
             o.frame = f.index;
             o.src = YRSP_ONSET_PLAN;
             for (p = 0; p < 2; p++) yrsp_set_onset(&rsp[p], &o);
@@ -316,11 +316,11 @@ int main(int argc, char** argv) {
             ch[1].key = one ? "j" : "space"; ch[1].name = "p2"; ch[1].device = one ? 0 : dev[1];
             memset(&pd, 0, sizeof pd);
             pd.n_choices = 1;
-            pd.duration = RESPONSE_S;
-            pd.minimum_valid_rt = MIN_RT_S;
+            pd.duration_ns = YRT_S(RESPONSE_S);
+            pd.min_rt_ns = YRT_S(MIN_RT_S);
             for (p = 0; p < 2; p++) {
                 pd.choices = &ch[p];
-                if (!yrsp_init(&rsp[p], &pd)) { fprintf(stderr, "trial_two_keyboards: %s\n", yrsp_error(&rsp[p])); failed = 1; }
+                if (!yrsp_open(&rsp[p], &pd)) { fprintf(stderr, "trial_two_keyboards: %s\n", yrsp_error(&rsp[p])); failed = 1; }
             }
             if (failed) break;
             ytr_format_meta(&trials, meta, sizeof meta);
@@ -351,8 +351,8 @@ int main(int argc, char** argv) {
             static const char* names[] = { "none", "p1", "p2", "tie" };
             int dbl = (int)(stat_of(0) - doubles0), dbu = (int)(stat_of(1) - ups0);
             for (p = 0; p < 2; p++) yrsp_finish(&rsp[p], &res[p]);   /* final: the onset is the record's */
-            sec(rt1, sizeof rt1, res[0].rt);
-            sec(rt2, sizeof rt2, res[1].rt);
+            sec(rt1, sizeof rt1, res[0].rt_ns == YRSP_NO_TIME ? NAN : YRT_TO_S(res[0].rt_ns));
+            sec(rt2, sizeof rt2, res[1].rt_ns == YRSP_NO_TIME ? NAN : YRT_TO_S(res[1].rt_ns));
             sec(diff, sizeof diff, (winner == 3 || (res[0].flags & res[1].flags & YRSP_R_RESPONDED))
                                        ? (double)(res[1].t_response - res[0].t_response) / 1e9 : NAN);
             fprintf(out, "%d,%s,%.9f,%u,%s,%s,%s,%s,%u,%u,%u,%u,%d,%d,%d,%d,%d,%d,%d,%d\n", ti.index,
@@ -367,7 +367,7 @@ int main(int argc, char** argv) {
             if (ti.index < SIM_TRIALS) {
                 sim_w[ti.index] = winner;
                 sim_d[ti.index] = diff[0] ? atof(diff) * 1e3 : NO_DIFF;
-                sim_rt1[ti.index] = res[0].rt;
+                sim_rt1[ti.index] = res[0].rt_ns == YRSP_NO_TIME ? NAN : YRT_TO_S(res[0].rt_ns);
                 sim_early[ti.index] = res[0].n_early + res[1].n_early;
                 sim_doubles[ti.index] = dbl;
                 sim_ups[ti.index] = dbu;

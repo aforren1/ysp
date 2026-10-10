@@ -62,15 +62,22 @@ The example has five parts.
 2. **The response rules.** One call:
 
    ```c
-   static const yrsp_choice keys[] = { { .key = "f" }, { .key = "j" } };
-   yrsp_desc d = { .choices = keys, .n_choices = 2,
-                     .duration = 1.5, .minimum_valid_rt = 0.1 };
-   yrsp_init(&rsp, &d);
+   yrsp_choice keys[2];
+   yrsp_desc d = { 0 };
+   memset(keys, 0, sizeof keys);
+   keys[0].key = "f";
+   keys[1].key = "j";
+   d.choices = keys;
+   d.n_choices = 2;
+   d.duration_ns = YRT_S(RESPONSE_S);
+   d.min_rt_ns = YRT_S(MIN_RT_S);
+   yrsp_open(&rsp, &d);
    ```
 
    `"f"` is the physical key at the US-layout F position. On an AZERTY
-   keyboard it is also F; on Dvorak it types "u". Durations are in
-   seconds.
+   keyboard it is also F; on Dvorak it types "u". Durations are
+   `int64_t` ns; the program's constants are seconds (`RESPONSE_S`,
+   `MIN_RT_S`), as jsPsych's, and `YRT_S()` converts them.
 3. **The trial.** At the fixation, `yrsp_arm(&rsp, f.onset)` opens the
    window. Presses before the stimulus are logged as EARLY. A
    `ytl_seq` turns the fixation off and the stimulus on 0.5 s later.
@@ -309,11 +316,12 @@ The header's comment block lists every field and flag. In short:
 
 | Call | Does |
 |---|---|
-| `yrsp_init(&c, &desc)` | Validates and copies the rules. No allocation after it. |
+| `yrsp_open(&c, &desc)` | Validates and copies the rules. No allocation after it. |
+| `yrsp_close(&c)` | Ends the use; safe on a zeroed collector and twice. |
 | `yrsp_arm(&c, t)` | Opens a window; keeps which keys are down. |
 | `yrsp_set_onset(&c, &o)` | Sets or refines the onset; classifies again. |
 | `yrsp_feed(&c, &in)` | One input event, armed or not. |
-| `yrsp_update(&c, now)` | The deadline, and `max_hold` while waiting for a release. |
+| `yrsp_update(&c, now_ns)` | The deadline, and `max_hold_ns` while waiting for a release. |
 | `yrsp_finish(&c, &r)` | The result. Call it again after a late release or onset. |
 | `yrsp_entries(&c, &n)` | Every press of the window. |
 | `yrsp_from_sdl`, `yrsp_sdl_source` | SDL3 events and their source entries (inline, with SDL3). Without the bridge's filter: see "The double report". |
@@ -326,13 +334,13 @@ jsPsych option to ysp field:
 | `choices` | `desc.choices` (`key`, `control`, `code`) | Physical key by default; keycode match on request |
 | `"ALL_KEYS"` | `mode = YRSP_CHOICES_ALL` (the zero default) | `kinds` 0 is the keyboard only |
 | `"NO_KEYS"` | `mode = YRSP_CHOICES_NONE` | Presses are logged |
-| `trial_duration` | `desc.duration`, from the onset | Seconds; from the stimulus, not the trial start |
+| `trial_duration` | `desc.duration_ns`, from the onset | ns; from the stimulus, not the trial start |
 | `response_ends_trial: false`, `persist` | `desc.persist`, `desc.max_responses` | |
-| `minimum_valid_rt` | `desc.minimum_valid_rt` | Earlier presses are logged as anticipations, not dropped |
+| `minimum_valid_rt` | `desc.min_rt_ns` | Earlier presses are logged as anticipations, not dropped |
 | `allow_held_key` | `desc.allow_held_key` | Same rule; held responses are flagged |
-| `wait_for_key_release` | `desc.wait_for_key_release`, `desc.max_hold` | Gives up after `max_hold` |
-| `rt` | `result.rt` | From the flip onset, with its tier |
-| `rt_key_duration` | `result.rt_key_duration` | From the response's press |
+| `wait_for_key_release` | `desc.wait_for_key_release`, `desc.max_hold_ns` | Gives up after `max_hold_ns` |
+| `rt` | `result.rt_ns` | ns; from the flip onset, with its tier; `YRSP_NO_TIME` for null |
+| `rt_key_duration` | `result.rt_key_duration_ns` | ns; from the response's press |
 
 ## Decisions
 
@@ -355,7 +363,7 @@ example, re-queue the trial).
 
 The coordinator chose scancode matching on 2026-10-07: "the F and J keys"
 means positions, and positions do not move with the layout. Key names
-resolve to US-layout scancodes at `yrsp_init()`. Keycode matching is an
+resolve to US-layout scancodes at `yrsp_open()`. Keycode matching is an
 option. Every entry logs both.
 
 ### `kinds` 0 is the keyboard only
@@ -614,6 +622,41 @@ mouse input with SendInput, only while the program's window was in front.
 | `trial_mouse_tracking` | 2 trials as scripted, SDL's pointer and `--raw-mice` | SDL's pointer: 34 and 37 samples of 40 injected moves 10 ms apart, movement onset tier 3. `--raw-mice`: 40 and 40 samples, tier 0. The first two of eight `--raw-mice` runs lost the focus after the first click and got no more input (one before and one after the example confined the cursor); the cause was not found. The example confines the hidden system cursor to its window (`SDL_SetWindowMouseGrab()`), since a click goes to the window under that cursor |
 | `trial_audio_keyboard` | 4 trials as scripted; tone tier 4 (null device) | 4 trials; WASAPI shared, tone tier 2, residuals within 6 us, every onset confirmed |
 | `trial_stop_signal` | 8 trials as scripted; SSD 0.25 then 0.30 s | 8 trials; SSD as shown within 2 us of the plan (0.249998 and 0.199999 s); go onset tiers 1 and 2, tone tier 2 |
+
+## Times in ns, open and close (v0.3.0)
+
+v0.3.0 applies the repository conventions (README.md, Conventions).
+Three decisions:
+
+- **Every time is `int64_t` ns.** The desc had seconds as doubles
+  (`duration`, `minimum_valid_rt`, `max_hold`), and the result had RT and
+  the hold duration as doubles with NaN for none. Now they are
+  `duration_ns`, `min_rt_ns`, `max_hold_ns`, `rt_ns` and
+  `rt_key_duration_ns`. Old code that wrote `.duration = 1.5` now fails
+  to compile, and it does not truncate. The collector already worked in
+  ns inside, so no rule changes. The seconds-to-ns rounding moved to the
+  caller (`YRT_S()` rounds to the nearest ns, as `llround` did). The
+  source bounds are `stamp_lo_ns` and `stamp_hi_ns`, from `ysp/input.h`
+  v0.4.0. `yrsp_onset`'s fields are `t_ns`, `residual_ns` and
+  `uncertainty_ns`, because a caller can fill one.
+- **"None" is `YRSP_NO_TIME` (`INT64_MIN`), not -1.** A response's RT is
+  never negative, but a hold duration can be: a release on a path that
+  stamps earlier than its press's path. `INT64_MIN` cannot be a real
+  difference of two clock times, and `YRT_TO_S()` of it prints as an
+  obvious error. The examples write an empty CSV cell for it, as they
+  did for NaN, and their columns stay in seconds.
+- **`yrsp_open()` and `yrsp_close()`.** `yrsp_init()` took a desc and
+  checked it, which is what open means. Close marks the collector closed;
+  it owns nothing. Every failing call writes `yrsp_error()`.
+
+Checked on 2026-10-10 (Windows 11, MinGW-w64 gcc 16.1 and MSVC 19.44):
+`tests/adapt/response_test.c` passes 20,595 checks (20,660 with
+`YRSP_TEST_SDL`), with a new test for close and the messages. The USAGE
+block compiles as C99 and C++17 against `ysp/screen.h` and
+`ysp/timeline.h`. The six mutants whose anchors moved and `conv-01`
+(no message) and `conv-02` (close keeps the collector open) are caught;
+`w-06` now checks the range of a desc duration, because the rounding it
+checked moved to the caller.
 
 ## Verification
 

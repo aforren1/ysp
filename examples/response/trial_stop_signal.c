@@ -184,9 +184,9 @@ int main(int argc, char** argv) {
     if (!yau_open(&au, &ad)) { fprintf(stderr, "trial_stop_signal: %s\n", yau_error(&au)); return 1; }
     memset(&tdesc, 0, sizeof tdesc);
     tdesc.hz = 750;
-    tdesc.dur = YAU_S(TONE_S);
+    tdesc.dur_ns = YRT_S(TONE_S);
     tdesc.peak = yau_db(-30);
-    tdesc.ramp = YAU_MS(5);
+    tdesc.ramp_ns = YRT_MS(5);
     tone = yau_tone(&au, &tdesc);
     if (!tone.frames) { fprintf(stderr, "trial_stop_signal: %s\n", yau_error(&au)); return 1; }
 
@@ -229,8 +229,8 @@ int main(int argc, char** argv) {
     memset(&pd, 0, sizeof pd);
     pd.choices = keys;
     pd.n_choices = 2;
-    pd.duration = RESPONSE_S;
-    if (!yrsp_init(&rsp, &pd)) { fprintf(stderr, "trial_stop_signal: %s\n", yrsp_error(&rsp)); return 1; }
+    pd.duration_ns = YRT_S(RESPONSE_S);
+    if (!yrsp_open(&rsp, &pd)) { fprintf(stderr, "trial_stop_signal: %s\n", yrsp_error(&rsp)); return 1; }
 
     out = fopen(out_path, "w");
     if (!out) { fprintf(stderr, "trial_stop_signal: cannot write %s\n", out_path); return 1; }
@@ -275,7 +275,7 @@ int main(int argc, char** argv) {
             ytl_anchor(&tl, TRIAL, f.onset, 0);
             q = ytl_seq_on(&tl, TRIAL);
             ytl_on(&q, FIX_ON);
-            ytl_wait(&q, YTL_S(FIXATION_S));
+            ytl_wait(&q, YRT_S(FIXATION_S));
             ytl_off(&q, FIX_ON);
             go_bt = q.t;
             ytl_on(&q, stim_ch);
@@ -285,7 +285,7 @@ int main(int argc, char** argv) {
             ssd = NAN;
             if (stop) {
                 ssd = yst_next(&stair);
-                id = yau_play_at(&au, tone, t_go + YAU_S(ssd));
+                id = yau_play_at(&au, tone, t_go + YRT_S(ssd));
                 if (id <= 0) { fprintf(stderr, "trial_stop_signal: play: %s\n", yau_strerror((int)id)); failed = 1; break; }
             }
             yrsp_arm(&rsp, f.onset);
@@ -297,7 +297,7 @@ int main(int argc, char** argv) {
             if (sim && (!stop || n_stop == 1)) {
                 yrsp_input* e = &sim_ev[0];
                 memset(e, 0, sizeof *e);
-                e->t = t_go + YAU_S(stop ? SIM_FAIL_RT : SIM_GO_RT);
+                e->t = t_go + YRT_S(stop ? SIM_FAIL_RT : SIM_GO_RT);
                 e->type = YRSP_PRESS;
                 e->control = (uint32_t)yrsp_scancode(key_answer);
                 e->stamp = YRSP_TIER_SIM;
@@ -305,7 +305,7 @@ int main(int argc, char** argv) {
                 sim_ev[1] = *e;
                 sim_ev[1].type = YRSP_RELEASE;
                 sim_ev[1].value = 0;
-                sim_ev[1].t = e->t + YAU_MS(80);
+                sim_ev[1].t = e->t + YRT_MS(80);
                 n_sim_ev = 2;
             }
         }
@@ -320,7 +320,7 @@ int main(int argc, char** argv) {
             ytl_base_time(&tl, TRIAL, f.onset, &bt);
             ytl_at(&q, bt);
             ytl_off(&q, stim_ch);
-            ytl_wait(&q, YTL_S(ITI_S));
+            ytl_wait(&q, YRT_S(ITI_S));
             ytl_mark(&q, END_OF_TRIAL, 0);
             if (q.err) { fprintf(stderr, "trial_stop_signal: timeline error %d\n", q.err); failed = 1; break; }
             responding = 0;
@@ -360,14 +360,14 @@ int main(int argc, char** argv) {
                     n_respond += responded;
                     sum_ssd += actual;
                 } else if (correct) {
-                    sum_go_rt += res.rt;
+                    sum_go_rt += YRT_TO_S(res.rt_ns);
                     n_go_rt++;
-                    sim_go_rt = res.rt;
+                    sim_go_rt = res.rt_ns == YRSP_NO_TIME ? NAN : YRT_TO_S(res.rt_ns);
                 }
                 if (stop) snprintf(tone_tier, sizeof tone_tier, "%u", (unsigned)rec.tier);
                 sec(s_ssd, sizeof s_ssd, ssd);
                 sec(s_act, sizeof s_act, actual);
-                sec(rt, sizeof rt, res.rt);
+                sec(rt, sizeof rt, res.rt_ns == YRSP_NO_TIME ? NAN : YRT_TO_S(res.rt_ns));
                 fprintf(out, "%d,%s,%s,%s,%s,%s,%s,%s,%d,%s,%u,%s,%u,%u\n", ti.index,
                         ytb_text(&tab, ti.condition, stim_col), key_answer, stop ? "stop" : "go", s_ssd, s_act,
                         res.response_name ? res.response_name : "", rt, correct, stopped < 0 ? "" : stopped ? "1" : "0",

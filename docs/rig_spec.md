@@ -425,15 +425,15 @@ The same trial with the builder (C99):
 ```c
 ytl_seq q = ytl_seq_on(&tl, TRIAL);          /* cursor at base time 0 */
 ytl_on(&q, FIX);
-ytl_wait(&q, YTL_MS(500));
+ytl_wait(&q, YRT_MS(500));
 ytl_off(&q, FIX);
 ytl_on(&q, GRATING);
 ytl_trigger(&q, 12);
 ytl_to(&q, CONTRAST, &(ytl_tween_desc){
-    .to = 0.5f, .duration = YTL_MS(100), .ease = YTL_EASE_COSINE });
-ytl_wait(&q, YTL_MS(600));
+    .to = 0.5f, .duration_ns = YRT_MS(100), .ease = YTL_EASE_COSINE });
+ytl_wait(&q, YRT_MS(600));
 ytl_then(&q, CONTRAST, &(ytl_tween_desc){
-    .to = 0.0f, .duration = YTL_MS(100), .ease = YTL_EASE_COSINE });
+    .to = 0.0f, .duration_ns = YRT_MS(100), .ease = YTL_EASE_COSINE });
 ytl_off(&q, GRATING);
 if (q.err < 0) report(ytl_strerror(q.err), q.err_call);
 ```
@@ -493,11 +493,11 @@ gives each op to the same builder calls, in order, with a sticky error:
 ```c
 static const ytl_op trial[] = {
     YTL_ON(FIX),
-    YTL_WAIT(YTL_MS(500)),
+    YTL_WAIT(YRT_MS(500)),
     YTL_OFF(FIX), YTL_ON(GRATING), YTL_TRIGGER(12),
-    YTL_TO(CONTRAST, .to = 0.5f, .duration = YTL_MS(100), .ease = YTL_EASE_COSINE),
-    YTL_WAIT(YTL_MS(600)),
-    YTL_THEN(CONTRAST, .to = 0.0f, .duration = YTL_MS(100), .ease = YTL_EASE_COSINE),
+    YTL_TO(CONTRAST, .to = 0.5f, .duration_ns = YRT_MS(100), .ease = YTL_EASE_COSINE),
+    YTL_WAIT(YRT_MS(600)),
+    YTL_THEN(CONTRAST, .to = 0.0f, .duration_ns = YRT_MS(100), .ease = YTL_EASE_COSINE),
     YTL_OFF(GRATING),
 };
 
@@ -555,7 +555,7 @@ The costs:
   message than the same mistake in a plain call. One thin macro for
   each op and no logic in the macros keep the message short.
 - In C++20, designated initializers must follow declaration order:
-  `.to` before `.duration` before `.ease`, the order of
+  `.to` before `.duration_ns` before `.ease`, the order of
   `ytl_tween_desc`. C does not require this.
 - C++17 users use the builder.
 

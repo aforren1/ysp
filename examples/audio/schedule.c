@@ -111,7 +111,7 @@ static item* add(const char* part, const char* name, double at) {
     return it;
 }
 
-static int64_t at_ns(double s) { return t0 + YAU_S(s); }
+static int64_t at_ns(double s) { return t0 + YRT_S(s); }
 
 static void wait_until(double s) { yrt_sleep_until((int64_t)at_ns(s), YRT_DEFAULT_SPIN_NS); }
 
@@ -119,7 +119,7 @@ static void wait_until(double s) { yrt_sleep_until((int64_t)at_ns(s), YRT_DEFAUL
 static void collect(item* it, int need_end) {
     int k;
     if (it->id <= 0) { it->rc = (int)it->id; return; }
-    it->rc = yau_wait(&au, it->id, YAU_S(1), &it->r);
+    it->rc = yau_wait(&au, it->id, YRT_S(1), &it->r);
     for (k = 0; need_end && it->rc == YAU_OK && it->r.end_frame == 0 && k < 200; k++) {
         yrt_sleep_ns(10000000);
         it->rc = yau_result(&au, it->id, &it->r);
@@ -185,16 +185,16 @@ int main(int argc, char** argv) {
         yau_tone_desc td;
         yau_click_desc cd;
         memset(&td, 0, sizeof td);
-        td.dur = YAU_MS(100);
+        td.dur_ns = YRT_MS(100);
         td.peak = yau_db((float)db);
-        td.ramp = YAU_MS(5);
+        td.ramp_ns = YRT_MS(5);
         for (i = 0; i < 4; i++) { td.hz = hz[i]; tones[i] = yau_tone(&au, &td); }
-        td.hz = 1200; td.dur = YAU_MS(60);
+        td.hz = 1200; td.dur_ns = YRT_MS(60);
         rep = yau_tone(&au, &td);
-        td.hz = 400; td.dur = YAU_S(2);
+        td.hz = 400; td.dur_ns = YRT_S(2);
         longtone = yau_tone(&au, &td);
         memset(&cd, 0, sizeof cd);
-        cd.dur = YAU_MS(1);
+        cd.dur_ns = YRT_MS(1);
         cd.peak = yau_db((float)db);
         click = yau_click(&au, &cd);
         silent = yau_alloc(&au, (int64_t)caps.rate / 100, 1);   /* 10 ms of zeros */
@@ -206,7 +206,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    t0 = yrt_now_ns() + YAU_S(T0_LEAD_S);
+    t0 = yrt_now_ns() + YRT_S(T0_LEAD_S);
     printf("schedule from T0 (the trigger) = %.6f s on the ysp_rt clock; a frame is %.1f us\n", (double)t0 / 1e9, frame_us);
 
     /* schedule: each sound handed over HANDOVER_S before its time */
@@ -216,7 +216,7 @@ int main(int argc, char** argv) {
         wait_until(e->at - HANDOVER_S);
         memset(&pd, 0, sizeof pd);
         pd.buf = e->kind == CLICK ? click : tones[e->hz == 500 ? 0 : e->hz == 750 ? 1 : e->hz == 1000 ? 2 : 3];
-        pd.at = at_ns(e->at);
+        pd.at_ns = at_ns(e->at);
         pd.channels = e->mask;
         it->id = yau_play(&au, &pd);
     }
@@ -225,7 +225,7 @@ int main(int argc, char** argv) {
     loop_it = add("repeat", "60 ms tone, 4 passes", REPEAT_LOOP_S);
     memset(&pd, 0, sizeof pd);
     pd.buf = rep;
-    pd.at = at_ns(REPEAT_LOOP_S);
+    pd.at_ns = at_ns(REPEAT_LOOP_S);
     pd.loops = 3;
     loop_it->id = yau_play(&au, &pd);
     for (k = 0; k < 4; k++) {
@@ -241,8 +241,8 @@ int main(int argc, char** argv) {
     stop_it = add("stop", "2 s tone, stopped at 1 s", STOP_START_S);
     stop_it->id = yau_play_at(&au, longtone, at_ns(STOP_START_S));
     if (stop_it->id > 0) {
-        if (yau_gain_at(&au, stop_it->id, at_ns(STOP_START_S + STOP_GAIN_S), -12.0f, YAU_MS(100)) < 0 ||
-            yau_stop_at(&au, stop_it->id, at_ns(STOP_START_S + STOP_AT_S), YAU_MS(20)) < 0)
+        if (yau_gain_at(&au, stop_it->id, at_ns(STOP_START_S + STOP_GAIN_S), -12.0f, YRT_MS(100)) < 0 ||
+            yau_stop_at(&au, stop_it->id, at_ns(STOP_START_S + STOP_AT_S), YRT_MS(20)) < 0)
         {
             fprintf(stderr, "audio_schedule: gain or stop refused\n");
             bad = 1;
@@ -259,13 +259,13 @@ int main(int argc, char** argv) {
         late_at[k] = 0;
         for (i = 0; i < probe_n; i++) {
             char nm[32];
-            int64_t now = yrt_now_ns(), t = now + YAU_MS(leads_ms[k]);
+            int64_t now = yrt_now_ns(), t = now + YRT_MS(leads_ms[k]);
             item* it;
             snprintf(nm, sizeof nm, "lead %.0f ms", leads_ms[k]);
             it = add("probe", nm, (double)(t - t0) / 1e9);
             it->lead_now = yau_lead_ns(&au);
             it->id = yau_play_at(&au, silent, t);
-            yrt_sleep_until((int64_t)(t + YAU_MS(23) + (int64_t)i * 1700000), YRT_DEFAULT_SPIN_NS);
+            yrt_sleep_until((int64_t)(t + YRT_MS(23) + (int64_t)i * 1700000), YRT_DEFAULT_SPIN_NS);
         }
         for (i = first; i < n_items; i++) {
             collect(&items[i], 0);
@@ -295,7 +295,7 @@ int main(int argc, char** argv) {
             const item *a = &items[i - 1], *b = &items[i];
             int64_t iv;
             if (a->rc != YAU_OK || b->rc != YAU_OK) continue;
-            iv = (b->r.onset - a->r.onset) - (YAU_S(b->at) - YAU_S(a->at));
+            iv = (b->r.onset - a->r.onset) - (YRT_S(b->at) - YRT_S(a->at));
             if (llabs(iv) > llabs(worst_iv)) worst_iv = iv;
         }
         printf("residual (fit onset - plan), %d sounds: min %+.1f us, max %+.1f us, spread %.1f us, mean |r| %.1f us "
@@ -349,7 +349,7 @@ int main(int argc, char** argv) {
     if (sim) {
         /* The null device's fit is of callback times only, so a plan can
          * move with a refit; the bars are what that allows, not tier 2's */
-        const int64_t res_bar = YAU_MS(1);
+        const int64_t res_bar = YRT_MS(1);
         for (i = 0; i < n_items; i++) {
             const item* it = &items[i];
             int ok = it->rc == YAU_OK && it->r.tier == YAU_TIER_SIM;

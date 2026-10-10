@@ -1,4 +1,4 @@
-/* ysp/rdk.h - v0.1.0 - public domain single-header random dot kinematograms
+/* ysp/rdk.h - v0.2.0 - public domain single-header random dot kinematograms
  *
  *   The motion of a random dot kinematogram (RDK) on the CPU: coherence,
  *   direction, speed, density, dot lifetime, the noise rule and the signal
@@ -21,46 +21,6 @@
  *   C99, C11 and C++17, and in the C dialect MSVC compiles by default.
  *
  *   ---------------------------------------------------------------------
- *   CHANGELOG
- *   ---------------------------------------------------------------------
- *   v0.1.0 - first version.
- *
- *   STATUS: v0.1.0. See docs/rdk.md for the tables.
- *   Built with MSVC 19.44 (/W4 /WX: the default C dialect, C11, C++17),
- *   MinGW-w64 gcc 16.1 (C99, C11, C++17) and gcc 11.4 on WSL2 (C99, C11,
- *   C++17; the test under ASan and UBSan, at -O3 -march=native and at
- *   -Ofast -march=native). tests/adapt/rdk_test.c checks statistics,
- *   not pixels: the realized coherence counted from the dots'
- *   displacements (EXACT: round(c n) on every update; BERNOULLI: the
- *   binomial mean and variance), density against uniform by chi-square in
- *   equal-area cells and in the band along the edge for 36 configurations
- *   (0.42 to 0.79 of the p = 1e-7 critical value; REPLOT 18.6 to 21.2
- *   times it), lifetimes (exact under the frame clock, the mean within
- *   1.4e-5 under the onset clock, no pulse), the displacement of signal
- *   dots against speed x elapsed time under jittered and dropped onsets
- *   (4.7e-7 units on a 5-unit radius, the float output's resolution), the
- *   noise rules' direction and position distributions, frozen noise
- *   across coherence levels, dropped frames under both clocks, interleaved
- *   sets, LEAST_RECENT's rule, the edge invariant under stalls of up to
- *   1000 s; and the exact pieces: Philox against Random123's known
- *   answers, the angle conversion against exact rationals, sincos within
- *   2.6e-9 of libm, and 8 golden digests that tests/compare/rdk_ref.py, an
- *   independent Python model written from REPRODUCIBILITY, reproduces.
- *   26 of 26 non-equivalent mutations of the header caught (one by the
- *   digests only), 2 equivalent (tests/mutate/rdk.toml).
- *   Cost on the Iris Xe laptop (AC, the lock held; examples/rdk/bench.c,
- *   MSVC 19.44 and gcc 16.1; docs/rdk.md has the tables):
- *   yrdk_update() for 1000 dots 8.9 to 16 us (SAME with DIRECTION
- *   noise, which draws nothing) and 18 to 43 us (the rules that draw for
- *   every dot), for 10,000 dots 102 to 172 us and 183 to 443 us. The bars
- *   set in the design, 10 and 100 us, are missed by every rule that draws
- *   and, at 10,000 dots, by every rule. With ysp/gfx.h
- *   (examples/rdk/gfx_rdk_bench.c, 1920 x 1200): 10,000 dots updated and
- *   drawn in 0.30 ms of CPU and 0.32 to 0.38 ms of GPU over the empty
- *   frame; 10,000 gabors riding the dots 0.41 ms of CPU and 1.36 to 1.48
- *   ms of GPU. No number is a measurement of light.
- *
- *   ---------------------------------------------------------------------
  *   USAGE
  *   ---------------------------------------------------------------------
  *   Do this:
@@ -73,13 +33,18 @@
  *   A classic RDK drawn with ysp/gfx.h (examples/rdk/gfx_rdk.c runs it):
  *
  *       static yrdk_field rdk;
- *       if (yrdk_open(&rdk, &(yrdk_desc){ .w = 400, .count = 200,
- *               .coherence = 0.25f, .direction = 0, .speed = 120 }) < 0)
- *           fail(yrdk_error(&rdk));
+ *       yrdk_desc rd;
+ *       memset(&rd, 0, sizeof rd);              // a zeroed desc: the defaults
+ *       rd.w = 400; rd.count = 200;
+ *       rd.coherence = 0.25f; rd.direction = 0; rd.speed = 120;
+ *       if (!yrdk_open(&rdk, &rd)) fail(yrdk_error(&rdk));
  *       ygfx_buf buf = ygfx_buffer(&gfx, (size_t)rdk.n * 8);
- *       ygfx_stim dots = ygfx_dots(&(ygfx_dots_desc){ .buf = buf,
- *           .count = (uint32_t)rdk.n, .dot_size = 4,
- *           .aperture = YGFX_CIRCLE, .w = 400, .color = { 1, 1, 1 } });
+ *       ygfx_dots_desc dd;
+ *       memset(&dd, 0, sizeof dd);
+ *       dd.buf = buf; dd.count = (uint32_t)rdk.n; dd.dot_size = 4;
+ *       dd.aperture = YGFX_CIRCLE; dd.w = 400;
+ *       dd.color[0] = dd.color[1] = dd.color[2] = 1;
+ *       ygfx_stim dots = ygfx_dots(&dd);
  *       static float xy[2 * 200];
  *
  *       yscr_frame f;
@@ -94,25 +59,29 @@
  *           ygfx_end(&gfx);
  *           yscr_flip(&scr);
  *       } while (yscr_begin(&scr, &f) == YSCR_OK);
+ *       yrdk_close(&rdk);
  *
  *   coherence, direction and speed are plain floats of the field, read at
  *   each update, so a ysp/timeline.h channel drives them through
  *   ygfx_bind.field, as a GSAP timeline drives a property:
  *
- *       static const ygfx_bind binds[] = {
- *           { .stim = &dots, .param = YGFX_P_VISIBLE, .channel = DOTS_ON },
- *           { .field = &rdk.coherence, .channel = COH },
- *           { .field = &rdk.direction, .channel = DIR },
- *       };
+ *       ygfx_bind binds[3];
+ *       memset(binds, 0, sizeof binds);
+ *       binds[0].stim = &dots; binds[0].param = YGFX_P_VISIBLE; binds[0].channel = DOTS_ON;
+ *       binds[1].field = &rdk.coherence; binds[1].channel = COH;
+ *       binds[2].field = &rdk.direction; binds[2].channel = DIR;
+ *       ytl_tween_desc turn = { 0 };               // DIR is a track: a tween
+ *       turn.from = 0; turn.from_set = true; turn.to = 90;
+ *       turn.duration_ns = YRT_MS(300);
  *       ytl_seq q = ytl_seq_on(&tl, TRIAL);        // the trial, in order
  *       ytl_set_value(&q, COH, 0.256f);
  *       ytl_on(&q, DOTS_ON);
- *       ytl_wait(&q, YTL_MS(700));                 // DIR is a track: a tween
- *       ytl_then(&q, DIR, &(ytl_tween_desc){ .from = 0, .from_set = true,
- *                                                 .to = 90, .duration = YTL_MS(300) });
+ *       ytl_wait(&q, YRT_MS(700));
+ *       ytl_then(&q, DIR, &turn);
  *       ytl_off(&q, DOTS_ON);
  *       ...
- *       ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, fired, 8);
+ *       ytl_frame tf = { f.onset, f.period, f.index };
+ *       ytl_evaluate(&tl, &tf, fired, 8);
  *       ygfx_apply(binds, 3, ytl_values(&tl));
  *       yrdk_update(&rdk, f.onset);
  *       log_step(&rdk.last);                           // 24 bytes: what a replay needs
@@ -120,9 +89,11 @@
  *   A global-motion gabor array: the elements are written straight into
  *   ysp/gfx.h's instance records, with no copy:
  *
- *       yrdk_write(&rdk, &(yrdk_out){
- *           .xy  = &items[0].x,   .xy_stride  = sizeof items[0],
- *           .dir = &items[0].ori, .dir_stride = sizeof items[0] });
+ *       yrdk_out o;
+ *       memset(&o, 0, sizeof o);
+ *       o.xy  = &items[0].x;   o.xy_stride  = sizeof items[0];
+ *       o.dir = &items[0].ori; o.dir_stride = sizeof items[0];
+ *       if (yrdk_write(&rdk, &o) < 0) fail(yrdk_error(&rdk));
  *
  *   Transparent motion is two fields (two streams, two directions) drawn
  *   as two DOTS stimuli.
@@ -209,7 +180,7 @@
  *     that set's own last update, and shows only that set. With 3 sets
  *     (MN) a dot is shown every third frame and a signal dot jumps three
  *     frames' distance at the same speed (Pilly and Seitz 2009).
- *   LIFETIME (desc.lifetime in s, or desc.lifetime_frames x frame_ns)
+ *   LIFETIME (desc.lifetime_ns, or desc.lifetime_frames x frame_ns)
  *     A fixed lifetime L: a dot dies at a scheduled time, and the first
  *     update at or after it places the dot at random (and draws its
  *     direction under NOISE_DIRECTION); it does not move on that update.
@@ -312,7 +283,9 @@
  *   COUNTS    count = desc.count, or llround(density x area) in double,
  *             area = 3.141592653589793 x r x r (CIRCLE, r = w / 2, left to
  *             right) or w x h. Lifetime L = lifetime_frames x frame_ns, or
- *             llround(lifetime x 1e9) in double. EXACT: m = rnd(c count);
+ *             lifetime_ns (v0.1: llround(lifetime x 1e9) of a float in
+ *             seconds, which the Python binding and tests/compare/rdk_ref.py
+ *             keep for a lifetime in seconds). EXACT: m = rnd(c count);
  *             BERNOULLI: threshold floor(c 2^32), c clamped to 0..1.
  *   WORDS     W(dot, u, slot) = Philox4x32-10 (Salmon, Moraes, Dror and
  *             Shaw 2011) with key (seed low 32 bits, seed high 32 bits) and
@@ -372,8 +345,10 @@
  *   ---------------------------------------------------------------------
  *   yrdk_xy() writes the shown set as x, y float pairs (ygfx_dots's
  *   buffer). yrdk_write() writes any of x, y; direction (deg, the way the
- *   dot moved on its last update, or its own direction); age (s since its
- *   last birth by lifetime, or since start); signal (0 or 1); event
+ *   dot moved on its last update, or its own direction); age_s (seconds
+ *   since its last birth by lifetime, or since start, a float: a GPU
+ *   attribute, the one time of this header that is not int64_t ns);
+ *   signal (0 or 1); event
  *   (YRDK_EV_WRAPPED, YRDK_EV_PLACED: the dot jumped on its last
  *   update, so an element riding it restarts its carrier), each with a
  *   byte stride (0 = packed). x = (float)(x_lattice x Rmax 2^-30) in
@@ -401,15 +376,72 @@
  *   the bits).
  *
  *   LICENSE: public domain / MIT-0; the notice is at the end of the file.
+ *
+ *   ---------------------------------------------------------------------
+ *   CHANGELOG
+ *   ---------------------------------------------------------------------
+ *   v0.2.0 - the repository conventions (README.md). Breaks the API:
+ *          yrdk_open() returns bool (the message was already in
+ *          yrdk_error()); desc.lifetime (float seconds) is int64_t
+ *          lifetime_ns; yrdk_out.age is age_s (still float seconds: a
+ *          per-dot GPU attribute, OUTPUT); every call that returns a code
+ *          writes yrdk_error() when it fails, so yrdk_xy(), yrdk_write()
+ *          and yrdk_snapshot() take a non-const field. The header defines
+ *          ysp/rt.h's YRT_* macros under the same guard. The rules and
+ *          the digests do not change for the same L. USAGE builds as C99
+ *          and C++17; the CHANGELOG moved to the end of this comment.
+ *   v0.1.0 - first version.
+ *
+ *   STATUS: v0.2.0, 2026-10-10: the test passes with its golden digests and
+ *   new checks of close and the messages (MinGW-w64 gcc 16.1, MSVC 19.44);
+ *   the Python binding's C trial is the same bytes; the USAGE blocks
+ *   compile as C99 and C++17; 2 of 2 new mutants caught (docs/rdk.md,
+ *   "Lifetime in ns").
+ *   v0.1.0. See docs/rdk.md for the tables.
+ *   Built with MSVC 19.44 (/W4 /WX: the default C dialect, C11, C++17),
+ *   MinGW-w64 gcc 16.1 (C99, C11, C++17) and gcc 11.4 on WSL2 (C99, C11,
+ *   C++17; the test under ASan and UBSan, at -O3 -march=native and at
+ *   -Ofast -march=native). tests/adapt/rdk_test.c checks statistics,
+ *   not pixels: the realized coherence counted from the dots'
+ *   displacements (EXACT: round(c n) on every update; BERNOULLI: the
+ *   binomial mean and variance), density against uniform by chi-square in
+ *   equal-area cells and in the band along the edge for 36 configurations
+ *   (0.42 to 0.79 of the p = 1e-7 critical value; REPLOT 18.6 to 21.2
+ *   times it), lifetimes (exact under the frame clock, the mean within
+ *   1.4e-5 under the onset clock, no pulse), the displacement of signal
+ *   dots against speed x elapsed time under jittered and dropped onsets
+ *   (4.7e-7 units on a 5-unit radius, the float output's resolution), the
+ *   noise rules' direction and position distributions, frozen noise
+ *   across coherence levels, dropped frames under both clocks, interleaved
+ *   sets, LEAST_RECENT's rule, the edge invariant under stalls of up to
+ *   1000 s; and the exact pieces: Philox against Random123's known
+ *   answers, the angle conversion against exact rationals, sincos within
+ *   2.6e-9 of libm, and 8 golden digests that tests/compare/rdk_ref.py, an
+ *   independent Python model written from REPRODUCIBILITY, reproduces.
+ *   26 of 26 non-equivalent mutations of the header caught (one by the
+ *   digests only), 2 equivalent (tests/mutate/rdk.toml).
+ *   Cost on the Iris Xe laptop (AC, the lock held; examples/rdk/bench.c,
+ *   MSVC 19.44 and gcc 16.1; docs/rdk.md has the tables):
+ *   yrdk_update() for 1000 dots 8.9 to 16 us (SAME with DIRECTION
+ *   noise, which draws nothing) and 18 to 43 us (the rules that draw for
+ *   every dot), for 10,000 dots 102 to 172 us and 183 to 443 us. The bars
+ *   set in the design, 10 and 100 us, are missed by every rule that draws
+ *   and, at 10,000 dots, by every rule. With ysp/gfx.h
+ *   (examples/rdk/gfx_rdk_bench.c, 1920 x 1200): 10,000 dots updated and
+ *   drawn in 0.30 ms of CPU and 0.32 to 0.38 ms of GPU over the empty
+ *   frame; 10,000 gabors riding the dots 0.41 ms of CPU and 1.36 to 1.48
+ *   ms of GPU. No number is a measurement of light.
+ *
  */
 #ifndef YSP_RDK_H_INCLUDED
 #define YSP_RDK_H_INCLUDED
 
 #define YRDK_VERSION_MAJOR 0
-#define YRDK_VERSION_MINOR 1
+#define YRDK_VERSION_MINOR 2
 #define YRDK_VERSION_PATCH 0
-#define YRDK_VERSION_STRING "0.1.0"
+#define YRDK_VERSION_STRING "0.2.0"
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -427,6 +459,17 @@ extern "C" {
 #define YRDK_ERR_MEM   (-3)   /* mem_bytes too small, or the allocation failed    */
 
 #define YRDK_MAX_SETS 8
+
+/* Units, the same block as ysp/rt.h's under the same guard, so one
+ * spelling works with or without it: d.lifetime_ns = YRT_MS(300). */
+#ifndef YRT_S
+#define YRT_NS(x)    ((int64_t)(x))
+#define YRT_US(x)    ((int64_t)((x) * 1e3 + ((x) < 0 ? -0.5 : 0.5)))
+#define YRT_MS(x)    ((int64_t)((x) * 1e6 + ((x) < 0 ? -0.5 : 0.5)))
+#define YRT_S(x)     ((int64_t)((x) * 1e9 + ((x) < 0 ? -0.5 : 0.5)))
+#define YRT_TO_MS(ns) ((double)(ns) / 1e6)
+#define YRT_TO_S(ns)  ((double)(ns) / 1e9)
+#endif
 #define YRDK_MAX_DOTS (1 << 24)   /* sets x count */
 
 /* yrdk_write()'s event bits; also the low bits of a dot's flags. */
@@ -458,7 +501,7 @@ typedef struct yrdk_desc {
     yrdk_noise     noise;
     yrdk_edge      edge;
     int              sets;               /* interleaved sets; 0 = 1            */
-    float            lifetime;           /* s; 0 = unlimited                   */
+    int64_t          lifetime_ns;        /* 0 = unlimited; at most 1e18        */
     int              lifetime_frames;    /* or this many frame_ns              */
     yrdk_clock     clock;
     int64_t          frame_ns;           /* CLOCK_FRAMES, lifetime_frames      */
@@ -537,7 +580,8 @@ typedef struct yrdk_field {
 typedef struct yrdk_out {
     float*   xy;     size_t xy_stride;     /* x, y units from the center       */
     float*   dir;    size_t dir_stride;    /* deg                              */
-    float*   age;    size_t age_stride;    /* s                                */
+    float*   age_s;  size_t age_stride;    /* seconds: a per-dot GPU attribute,
+                                            * not a time of the API (OUTPUT)   */
     uint8_t* signal; size_t signal_stride; /* 0 or 1                           */
     uint8_t* event;  size_t event_stride;  /* YRDK_EV_* bits                 */
 } yrdk_out;
@@ -554,28 +598,33 @@ YRDK_API const char* yrdk_version(void);
 YRDK_API const char* yrdk_strerror(int code);
 /* Bytes open() needs for desc (0 when the desc is refused). */
 YRDK_API size_t      yrdk_bytes(const yrdk_desc* d);
-/* Checks the desc and lays the field out; 0 or a code, yrdk_error() says
- * why. Not started: call yrdk_start(). */
-YRDK_API int         yrdk_open(yrdk_field* f, const yrdk_desc* d);
+/* Checks the desc and lays the field out; false with yrdk_error() set.
+ * Not started: call yrdk_start(). */
+YRDK_API bool        yrdk_open(yrdk_field* f, const yrdk_desc* d);
+/* Frees what open allocated and zeroes the field. Safe on a zeroed field,
+ * after a failed open, and twice. */
 YRDK_API void        yrdk_close(yrdk_field* f);
+/* The message of the last failure; every call below that returns a code
+ * writes it when it fails. */
 YRDK_API const char* yrdk_error(const yrdk_field* f);
-/* A trial: every dot placed at random from seed, the clock at t. */
-YRDK_API int         yrdk_start(yrdk_field* f, uint64_t seed, int64_t t);
-/* The next set at time t (ns, on any clock). Returns the dots shown (n) or
- * a code. */
-YRDK_API int         yrdk_update(yrdk_field* f, int64_t t);
-/* The shown set as x, y pairs (2 n floats). Returns n or a code. */
-YRDK_API int         yrdk_xy(const yrdk_field* f, float* xy);
-YRDK_API int         yrdk_write(const yrdk_field* f, const yrdk_out* o);
+/* A trial: every dot placed at random from seed, the clock at t_ns. */
+YRDK_API int         yrdk_start(yrdk_field* f, uint64_t seed, int64_t t_ns);
+/* The next set at time t_ns (on any int64 ns clock). Returns the dots
+ * shown (n) or a code. */
+YRDK_API int         yrdk_update(yrdk_field* f, int64_t t_ns);
+/* The shown set as x, y pairs (2 n floats). Returns n or a code. Not
+ * const: a failure writes the message. */
+YRDK_API int         yrdk_xy(yrdk_field* f, float* xy);
+YRDK_API int         yrdk_write(yrdk_field* f, const yrdk_out* o);
 /* FNV-1a 64 of the state (REPRODUCIBILITY, DIGEST). */
 YRDK_API uint64_t    yrdk_digest(const yrdk_field* f);
 /* start(seed, t0), then for each step: its coherence, direction and speed
  * into the field, update(step.t). Returns 0 or the first code. */
-YRDK_API int         yrdk_replay(yrdk_field* f, uint64_t seed, int64_t t0, const yrdk_step* steps, int n);
+YRDK_API int         yrdk_replay(yrdk_field* f, uint64_t seed, int64_t t0_ns, const yrdk_step* steps, int n);
 /* The state after an update, and back into a field opened with the same
  * desc. Bytes in, bytes out; refused for another desc. */
 YRDK_API size_t      yrdk_snapshot_bytes(const yrdk_field* f);
-YRDK_API int         yrdk_snapshot(const yrdk_field* f, void* out, size_t cap);
+YRDK_API int         yrdk_snapshot(yrdk_field* f, void* out, size_t cap);
 YRDK_API int         yrdk_restore(yrdk_field* f, const void* in, size_t n);
 /* coherence, direction, speed; *n gets 3. */
 YRDK_API const yrdk_param* yrdk_params(int* n);
@@ -1038,16 +1087,17 @@ static int yrdk__plan_desc(const yrdk_desc* d, yrdk__plan* p, char* why, size_t 
     if (d->frame_ns < 0) YRDK__NO("frame_ns: must be >= 0");
     p->frame_ns = d->frame_ns;
     if (p->clock == YRDK_CLOCK_FRAMES && d->frame_ns <= 0) YRDK__NO("frame_ns: CLOCK_FRAMES needs the time per update");
-    if (d->lifetime != 0 && d->lifetime_frames != 0) YRDK__NO("lifetime or lifetime_frames: set at most one");
+    if (d->lifetime_ns != 0 && d->lifetime_frames != 0) YRDK__NO("lifetime_ns or lifetime_frames: set at most one");
     if (d->lifetime_frames) {
         if (d->lifetime_frames < 0) YRDK__NO("lifetime_frames: must be > 0");
         if (d->frame_ns <= 0) YRDK__NO("lifetime_frames: needs frame_ns");
         if (d->frame_ns > ((int64_t)1 << 62) / d->lifetime_frames) YRDK__NO("lifetime_frames x frame_ns: too long");
         p->life_ns = (int64_t)d->lifetime_frames * d->frame_ns;
-    } else if (d->lifetime != 0) {
-        if (!yrdk__finite(d->lifetime) || d->lifetime < 0 || d->lifetime > 1e9f) YRDK__NO("lifetime: seconds, > 0");
-        p->life_ns = (int64_t)llround((double)d->lifetime * 1e9);
-        if (p->life_ns < 1) YRDK__NO("lifetime: shorter than 1 ns");
+    } else if (d->lifetime_ns != 0) {
+        /* 1e18 ns (31.7 years) keeps death + lifetime below 2^62 */
+        if (d->lifetime_ns < 0 || d->lifetime_ns > (int64_t)1000000000 * 1000000000)
+            YRDK__NO("lifetime_ns: > 0 and at most 1e18");
+        p->life_ns = d->lifetime_ns;
     }
     /* SoA, each array on its own 64-byte line. */
     o = 0;
@@ -1071,22 +1121,22 @@ YRDK_API size_t yrdk_bytes(const yrdk_desc* d) {
     return yrdk__plan_desc(d, &p, why, sizeof why) < 0 ? 0 : p.bytes;
 }
 
-YRDK_API int yrdk_open(yrdk_field* f, const yrdk_desc* d) {
+YRDK_API bool yrdk_open(yrdk_field* f, const yrdk_desc* d) {
     yrdk__plan p;
     char why[160];
     unsigned char* base;
     int rc;
-    if (!f) return YRDK_ERR_ARG;
+    if (!f) return false;
     memset(f, 0, sizeof *f);
     rc = yrdk__plan_desc(d, &p, why, sizeof why);
-    if (rc < 0) return yrdk__fail(f, rc, why);
+    if (rc < 0) return yrdk__fail(f, rc, why) == YRDK_OK;
     if (d->mem) {
-        if (d->mem_bytes < p.bytes) return yrdk__fail(f, YRDK_ERR_MEM, "mem_bytes: less than yrdk_bytes(desc)");
+        if (d->mem_bytes < p.bytes) return yrdk__fail(f, YRDK_ERR_MEM, "mem_bytes: less than yrdk_bytes(desc)") == YRDK_OK;
         f->mem_ = d->mem;
         f->owns_ = 0;
     } else {
         f->mem_ = YRDK_MALLOC(p.bytes);
-        if (!f->mem_) return yrdk__fail(f, YRDK_ERR_MEM, "the allocation failed");
+        if (!f->mem_) return yrdk__fail(f, YRDK_ERR_MEM, "the allocation failed") == YRDK_OK;
         f->owns_ = 1;
     }
     f->bytes_ = p.bytes;
@@ -1114,7 +1164,7 @@ YRDK_API int yrdk_open(yrdk_field* f, const yrdk_desc* d) {
     f->n = p.n; f->total = p.total;
     f->coherence = d->coherence; f->direction = d->direction; f->speed = d->speed;
     f->magic_ = YRDK__MAGIC;
-    return YRDK_OK;
+    return true;
 }
 
 YRDK_API void yrdk_close(yrdk_field* f) {
@@ -1353,7 +1403,7 @@ static void yrdk__bernoulli(yrdk_field* f, uint32_t lo, uint64_t thr) {
 YRDK_API int yrdk_start(yrdk_field* f, uint64_t seed, int64_t t) {
     int s;
     uint32_t i;
-    if (!f || f->magic_ != YRDK__MAGIC) return YRDK_ERR_ARG;
+    if (!f || f->magic_ != YRDK__MAGIC) return yrdk__fail(f, YRDK_ERR_ARG, "yrdk_start: the field is not open");
     f->seed_ = seed;
     memset(&f->stats, 0, sizeof f->stats);
     for (i = 0; i < (uint32_t)f->total; i++) {
@@ -1394,7 +1444,7 @@ YRDK_API int yrdk_update(yrdk_field* f, int64_t t) {
     float c, v;
     uint64_t thr = 0;
     uint32_t* words;
-    if (!f || f->magic_ != YRDK__MAGIC) return YRDK_ERR_ARG;
+    if (!f || f->magic_ != YRDK__MAGIC) return yrdk__fail(f, YRDK_ERR_ARG, "yrdk_update: the field is not open");
     if (!f->started_) return yrdk__fail(f, YRDK_ERR_ORDER, "update before yrdk_start()");
     if (f->u_ >= 0xffffffffu) return yrdk__fail(f, YRDK_ERR_ORDER, "2^32 - 1 updates since start: start again");
     if (t < f->last.t) return yrdk__fail(f, YRDK_ERR_ORDER, "t is before the last update: start and replay to go back");
@@ -1503,13 +1553,14 @@ YRDK_API int yrdk_update(yrdk_field* f, int64_t t) {
 
 /* --- output ----------------------------------------------------------------- */
 
-YRDK_API int yrdk_write(const yrdk_field* f, const yrdk_out* o) {
+YRDK_API int yrdk_write(yrdk_field* f, const yrdk_out* o) {
     int i, n;
     uint32_t lo;
     double scale;
     uint32_t sig_angle;
-    if (!f || f->magic_ != YRDK__MAGIC || !o) return YRDK_ERR_ARG;
-    if (!f->started_) return YRDK_ERR_ORDER;
+    if (!f || f->magic_ != YRDK__MAGIC) return yrdk__fail(f, YRDK_ERR_ARG, "yrdk_write: the field is not open");
+    if (!o) return yrdk__fail(f, YRDK_ERR_ARG, "yrdk_write: out is NULL");
+    if (!f->started_) return yrdk__fail(f, YRDK_ERR_ORDER, "yrdk_write: before yrdk_start()");
     n = f->n;
     lo = (uint32_t)f->shown_ * (uint32_t)n;
     scale = (double)f->rmax_ * (1.0 / 1073741824.0);
@@ -1533,9 +1584,9 @@ YRDK_API int yrdk_write(const yrdk_field* f, const yrdk_out* o) {
             *(float*)(void*)(b + st * (size_t)i) = (float)((double)a * (360.0 / 4294967296.0));
         }
     }
-    if (o->age) {
+    if (o->age_s) {
         size_t st = o->age_stride ? o->age_stride : sizeof(float);
-        unsigned char* b = (unsigned char*)o->age;
+        unsigned char* b = (unsigned char*)o->age_s;
         for (i = 0; i < n; i++) {
             uint32_t j = lo + (uint32_t)i;
             int64_t born = f->death_ ? f->death_[j] - f->life_ns_ : f->t_start_;
@@ -1554,7 +1605,7 @@ YRDK_API int yrdk_write(const yrdk_field* f, const yrdk_out* o) {
     return n;
 }
 
-YRDK_API int yrdk_xy(const yrdk_field* f, float* xy) {
+YRDK_API int yrdk_xy(yrdk_field* f, float* xy) {
     yrdk_out o;
     memset(&o, 0, sizeof o);
     o.xy = xy;
@@ -1592,7 +1643,7 @@ YRDK_API uint64_t yrdk_digest(const yrdk_field* f) {
 YRDK_API int yrdk_replay(yrdk_field* f, uint64_t seed, int64_t t0, const yrdk_step* steps, int n) {
     int k, rc = yrdk_start(f, seed, t0);
     if (rc < 0) return rc;
-    if (n > 0 && !steps) return YRDK_ERR_ARG;
+    if (n > 0 && !steps) return yrdk__fail(f, YRDK_ERR_ARG, "yrdk_replay: steps is NULL");
     for (k = 0; k < n; k++) {
         f->coherence = steps[k].coherence;
         f->direction = steps[k].direction;
@@ -1629,12 +1680,13 @@ YRDK_API size_t yrdk_snapshot_bytes(const yrdk_field* f) {
     return sizeof(yrdk__snap) + yrdk__arrays(f);
 }
 
-YRDK_API int yrdk_snapshot(const yrdk_field* f, void* out, size_t cap) {
+YRDK_API int yrdk_snapshot(yrdk_field* f, void* out, size_t cap) {
     yrdk__snap h;
     unsigned char* b = (unsigned char*)out;
     size_t t;
-    if (!f || f->magic_ != YRDK__MAGIC || !out) return YRDK_ERR_ARG;
-    if (cap < yrdk_snapshot_bytes(f)) return YRDK_ERR_MEM;
+    if (!f || f->magic_ != YRDK__MAGIC) return yrdk__fail(f, YRDK_ERR_ARG, "yrdk_snapshot: the field is not open");
+    if (!out) return yrdk__fail(f, YRDK_ERR_ARG, "yrdk_snapshot: out is NULL");
+    if (cap < yrdk_snapshot_bytes(f)) return yrdk__fail(f, YRDK_ERR_MEM, "yrdk_snapshot: cap is less than yrdk_snapshot_bytes()");
     t = (size_t)f->total;
     memset(&h, 0, sizeof h);
     h.magic = YRDK__MAGIC; h.total = (uint32_t)f->total; h.n = (uint32_t)f->n;
@@ -1659,7 +1711,8 @@ YRDK_API int yrdk_restore(yrdk_field* f, const void* in, size_t len) {
     yrdk__snap h;
     const unsigned char* b = (const unsigned char*)in;
     size_t t;
-    if (!f || f->magic_ != YRDK__MAGIC || !in) return YRDK_ERR_ARG;
+    if (!f || f->magic_ != YRDK__MAGIC) return yrdk__fail(f, YRDK_ERR_ARG, "yrdk_restore: the field is not open");
+    if (!in) return yrdk__fail(f, YRDK_ERR_ARG, "yrdk_restore: in is NULL");
     if (len != yrdk_snapshot_bytes(f)) return yrdk__fail(f, YRDK_ERR_ARG, "snapshot: another size: not this field's desc");
     memcpy(&h, b, sizeof h); b += sizeof h;
     if (h.magic != YRDK__MAGIC || h.total != (uint32_t)f->total || h.n != (uint32_t)f->n ||

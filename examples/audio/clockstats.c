@@ -305,7 +305,7 @@ int main(int argc, char** argv) {
             yau_wav_desc wd;
             memset(&wd, 0, sizeof wd);
             wd.path = g_wav_path; wd.loops = YAU_FOREVER; wd.ring = frames; wd.memory = g_ringmem[i];
-            if (yau_wav_open(&au, &g_wav[i], &wd) < 0) { fprintf(stderr, "%s\n", yau_wav_error(&g_wav[i])); return 1; }
+            if (!yau_wav_open(&au, &g_wav[i], &wd)) { fprintf(stderr, "%s\n", yau_wav_error(&g_wav[i])); return 1; }
             (void)yau_wav_feed(&g_wav[i], 0);
         } else {
             yau_stream_desc sd;
@@ -313,7 +313,7 @@ int main(int argc, char** argv) {
             float* f;
             memset(&sd, 0, sizeof sd);
             sd.memory = g_ringmem[i]; sd.frames = frames;
-            if (yau_stream_init(&au, &g_st[i], &sd) < 0) { fprintf(stderr, "%s\n", yau_error(&au)); return 1; }
+            if (!yau_stream_open(&au, &g_st[i], &sd)) { fprintf(stderr, "%s\n", yau_error(&au)); return 1; }
             while ((f = yau_stream_acquire(&g_st[i], &nf)) != NULL) yau_stream_commit(&g_st[i], nf);
         }
         if (yau_play_stream(&au, cs_stream(i), 0) <= 0) fprintf(stderr, "stream %d refused\n", i);
@@ -368,7 +368,7 @@ int main(int argc, char** argv) {
                 yau_buf sb;
                 memset(&sb, 0, sizeof sb);
                 sb.frames = g_silence; sb.n = 480; sb.channels = 2;
-                (void)yau_play_at(&au, sb, a + yau_lead_ns(&au) + YAU_MS(20));
+                (void)yau_play_at(&au, sb, a + yau_lead_ns(&au) + YRT_MS(20));
                 (void)yau_update(&au);
                 cs_streams_frame();
                 b = yrt_now_ns();

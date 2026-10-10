@@ -66,7 +66,37 @@ ticks".
 | Key names (`yrsp_scancode`, `yrsp_key_name`) | Stay in `ysp/response.h` | They resolve choices; a producer does not need them. |
 | The cursor (`yrsp_cursor`) | Stays in `ysp/response.h` | A consumer's integration of events, with the design's gain. |
 
+## Bounds in ns, and why `unc_us` stays (v0.4.0)
+
+v0.4.0 applies the repository conventions (README.md, Conventions): every
+time in a C API is an `int64_t` count of nanoseconds, and a name says its
+unit.
+
+- **`yin_source`'s bounds are `int64_t lo_ns` and `hi_ns`.** They were
+  `int32_t lo_us` and `hi_us`. The entry grows from 24 to 32 bytes. It is
+  written once per source, so the size does not matter.
+  `ysp/response.h`'s result copies them as `stamp_lo_ns` and
+  `stamp_hi_ns`. `ysp/rigfile.h` now copies its bounds in ns, with no
+  rounding to us.
+- **`yin_event.unc_us` stays a `uint16_t` in us.** This is the one time
+  in ysp that is not `int64_t` ns. The event is 48 bytes, and the only
+  free bytes were the 2 bytes at offset 26 where `unc_us` sits. An
+  `int64_t unc_ns` must go at the end. Measured with MinGW-w64 gcc 16.1
+  (x64): the event becomes 56 bytes, and `ysp/screen.h`'s input slot (16
+  bytes of state and the event) becomes 72 bytes, where it is 64 now,
+  one cache line. The field's name says its unit, so code that reads it
+  cannot take it for ns. The coordinator decides whether this exception
+  stays.
+
+The event's `t` keeps its name: it is `int64_t` ns already, and every
+producer header writes it.
+
 ## Verification
+
+v0.4.0, on 2026-10-10: the test pins `yin_source`'s new offsets (`lo_ns`
+at 8, `hi_ns` at 16, `note` at 24) and its size (32), and the event's
+size (48) and offsets as before. The USAGE block builds and runs as C99
+(gcc `-Wall -Wextra -Wpedantic -Werror`) and C++17.
 
 v0.3.0, on 2026-10-08, with the same compilers and flags as below: the
 test pins the new offsets and sizes (`unc_us` at 26, 2 bytes; `ticks` at

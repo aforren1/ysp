@@ -36,7 +36,7 @@
 enum { FIX_ON, GRATING_ON, CONTRAST, N_CHANNELS };
 enum { TRIAL = 1 };
 
-#define S YTL_NS_PER_S
+#define S YRT_S(1)
 
 /* The keys stay valid while the channel uses them, so they are static. */
 static const ytl_key ramp[] = {
@@ -52,7 +52,7 @@ static ytl_timeline tl;
 static ytl_event ev(int64_t t, int kind, int target, int code) {
     ytl_event e;
     memset(&e, 0, sizeof(e));
-    e.time = t;
+    e.time_ns = t;
     e.base = TRIAL;
     e.kind = (uint8_t)kind;
     e.target = target;

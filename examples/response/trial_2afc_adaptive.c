@@ -230,8 +230,8 @@ int main(int argc, char** argv) {
     }
     if (n_trials == 0) n_trials = sim ? 40 : 60;
     if (n_trials < 5 || n_trials > MAX_TRIALS / 2) { fprintf(stderr, "trial_2afc_adaptive: --trials takes 5..512\n"); return 2; }
-    fix_ns = YTL_S(sim ? 0.1 : 0.5);
-    iti_ns = YTL_S(sim ? 0.05 : 0.5);
+    fix_ns = YRT_S(sim ? 0.1 : 0.5);
+    iti_ns = YRT_S(sim ? 0.05 : 0.5);
     rng_side = seed ^ 0x5157u;
     rng_obs = seed ^ 0x0b5u;
 
@@ -324,10 +324,10 @@ int main(int argc, char** argv) {
     memset(&pd, 0, sizeof pd);
     pd.choices = keys;
     pd.n_choices = 2;
-    pd.duration = RESPONSE_S;
+    pd.duration_ns = YRT_S(RESPONSE_S);
     pd.sources = sources;
     pd.n_sources = 1;
-    if (!yrsp_init(&rsp, &pd)) { fprintf(stderr, "trial_2afc_adaptive: %s\n", yrsp_error(&rsp)); return 1; }
+    if (!yrsp_open(&rsp, &pd)) { fprintf(stderr, "trial_2afc_adaptive: %s\n", yrsp_error(&rsp)); return 1; }
 
     out = fopen(out_path, "w");
     if (!out) { fprintf(stderr, "trial_2afc_adaptive: cannot write %s\n", out_path); return 1; }
@@ -377,7 +377,7 @@ int main(int argc, char** argv) {
             ytl_on(&q, FIX_ON);
             ytl_wait(&q, fix_ns);
             ytl_on(&q, GABOR_ON);
-            ytl_wait(&q, YTL_S(STIM_S));
+            ytl_wait(&q, YRT_S(STIM_S));
             ytl_off(&q, GABOR_ON);
             if (q.err) { fprintf(stderr, "trial_2afc_adaptive: timeline error %d\n", q.err); failed = 1; break; }
             yrsp_arm(&rsp, f.onset);
@@ -393,7 +393,7 @@ int main(int argc, char** argv) {
         /* the response, or the deadline: a blank after the gabor's end */
         if (responding && yrsp_update(&rsp, f.onset) == YRSP_ENDED) {
             ytl_seq q = ytl_seq_on(&tl, TRIAL);
-            int64_t stim_end = fix_ns + YTL_S(STIM_S);
+            int64_t stim_end = fix_ns + YRT_S(STIM_S);
             ytl_base_time(&tl, TRIAL, f.onset, &bt);
             ytl_at(&q, bt > stim_end ? bt : stim_end);
             ytl_off(&q, FIX_ON);
@@ -419,7 +419,7 @@ int main(int argc, char** argv) {
                     sim_key[ti.index] = correct ? side : 1 - side;
                     sc = (uint32_t)yrsp_scancode(side_name[sim_key[ti.index]]);
                     memset(sim_ev, 0, sizeof sim_ev);
-                    sim_ev[0].t = f.onset + YTL_S(sim_rt[ti.index]);
+                    sim_ev[0].t = f.onset + YRT_S(sim_rt[ti.index]);
                     sim_ev[0].kind = YRSP_KIND_KEYBOARD;
                     sim_ev[0].type = YRSP_PRESS;
                     sim_ev[0].control = sc;
@@ -428,7 +428,7 @@ int main(int argc, char** argv) {
                     sim_ev[1] = sim_ev[0];
                     sim_ev[1].type = YRSP_RELEASE;
                     sim_ev[1].value = 0;
-                    sim_ev[1].t += YTL_MS(80);
+                    sim_ev[1].t += YRT_MS(80);
                     n_sim_ev = 2;
                     sim_next = 0;
                 }
@@ -446,7 +446,7 @@ int main(int argc, char** argv) {
                     else { x = log10(x); yqst_update_values(&quest, &x, correct); }
                 }
                 ytr_update(&trials, responded ? correct : YTR_INVALID, NULL);
-                sec(rt, sizeof rt, res.rt);
+                sec(rt, sizeof rt, res.rt_ns == YRSP_NO_TIME ? NAN : YRT_TO_S(res.rt_ns));
                 sec(lres, sizeof lres, (double)landing_residual / 1e9);
                 sec(est, sizeof est, estimate(track));
                 fprintf(out, "%d,%s,%s,%s,%s,%d,%s,%.6f,%.6f,%.6f,%u,%u,%s,%u,%u,%s,%lld,%u,%d\n", ti.index,
@@ -484,10 +484,10 @@ int main(int argc, char** argv) {
         want[QUEST] = OBS_ALPHA;
         for (i = 0; i < rows && i < MAX_TRIALS; i++) {
             const yrsp_result* r = &sim_res[i];
-            if (!(r->flags & YRSP_R_RESPONDED) || r->response != sim_key[i] || fabs(r->rt - sim_rt[i]) > 1e-6 ||
+            if (!(r->flags & YRSP_R_RESPONDED) || r->response != sim_key[i] || fabs(YRT_TO_S(r->rt_ns) - sim_rt[i]) > 1e-6 ||
                 r->onset_tier != YSCR_TIER_SIM || r->onset_src != YRSP_ONSET_FLIP) {
                 fprintf(stderr, "trial_2afc_adaptive: --sim: trial %d: rt %.9f (want %.9f) response %d (want %d) "
-                                "onset tier %d src %d\n", i, r->rt, sim_rt[i], r->response, sim_key[i],
+                                "onset tier %d src %d\n", i, YRT_TO_S(r->rt_ns), sim_rt[i], r->response, sim_key[i],
                         r->onset_tier, r->onset_src);
                 sim_bad = 1;
             }

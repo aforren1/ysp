@@ -481,7 +481,7 @@ static void test_controls(void) {
     id = yau_play_at(&g_au, b, g_vt + 100000000);
     {
         int64_t stop_t = g_vt + 150000000, sf;
-        CHECK(yau_stop_at(&g_au, id, stop_t, YAU_MS(5)) == 0);
+        CHECK(yau_stop_at(&g_au, id, stop_t, YRT_MS(5)) == 0);
         sd_run_s(s, 0.4);
         CHECK_I(yau_result(&g_au, id, &r), YAU_OK);
         CHECK(r.flags & YAU_ONSET_STOPPED);
@@ -515,7 +515,7 @@ static void test_controls(void) {
 
     /* loops: three passes; routing: right channel only */
     memset(&pd, 0, sizeof pd);
-    pd.buf = b; pd.buf.n = 100; pd.loops = 2; pd.channels = 2; pd.at = g_vt + 100000000;
+    pd.buf = b; pd.buf.n = 100; pd.loops = 2; pd.channels = 2; pd.at_ns = g_vt + 100000000;
     id = yau_play(&g_au, &pd);
     sd_run_s(s, 0.3);
     CHECK_I(yau_result(&g_au, id, &r), YAU_OK);
@@ -524,7 +524,7 @@ static void test_controls(void) {
     CHECK(g_tape[(r.start_frame + 299) * 2 + 1] == 0.5f && g_tape[(r.start_frame + 300) * 2 + 1] == 0.0f);
 
     /* forever, until stopped */
-    pd.loops = YAU_FOREVER; pd.channels = 0; pd.at = g_vt + 100000000;
+    pd.loops = YAU_FOREVER; pd.channels = 0; pd.at_ns = g_vt + 100000000;
     id = yau_play(&g_au, &pd);
     sd_run_s(s, 0.5);
     CHECK_I(yau_result(&g_au, id, &r), YAU_OK);
@@ -1059,7 +1059,7 @@ static void test_synthesis(void) {
     sd_run_s(s, 1.0);
     CHECK(fabs(yau_db(-20.0f) - 0.1f) < 1e-6f);
     memset(&td, 0, sizeof td);
-    td.hz = 1000; td.dur = YAU_MS(100); td.peak = 0.5f; td.ramp = YAU_MS(10);
+    td.hz = 1000; td.dur_ns = YRT_MS(100); td.peak = 0.5f; td.ramp_ns = YRT_MS(10);
     t = yau_tone(&g_au, &td);
     CHECK(t.frames && t.n == 4800 && t.channels == 1);
     if (t.frames) {
@@ -1074,7 +1074,7 @@ static void test_synthesis(void) {
     td.hz = 1000; td.peak = 0;
     CHECK(yau_tone(&g_au, &td).frames == NULL);
     memset(&nd, 0, sizeof nd);
-    nd.dur = YAU_S(1); nd.rms = 0.1f; nd.seed = 99;
+    nd.dur_ns = YRT_S(1); nd.rms = 0.1f; nd.seed = 99;
     n1 = yau_noise(&g_au, &nd);
     n2 = yau_noise(&g_au, &nd);
     CHECK(n1.frames && n2.frames);
@@ -1224,17 +1224,17 @@ static uint64_t tape_regression(const char* path) {
         t0 = g_vt + 80000000;
         (void)yau_play_at(&g_au, mono, t0);
         memset(&pd, 0, sizeof pd);
-        pd.buf = mono; pd.at = t0 + 3000000; pd.channels = 2; pd.db = -3.0f;
+        pd.buf = mono; pd.at_ns = t0 + 3000000; pd.channels = 2; pd.db = -3.0f;
         id = yau_play(&g_au, &pd);
-        (void)yau_gain_at(&g_au, id, t0 + 50000000, -12.0f, YAU_MS(3));
-        pd.buf = st2; pd.at = t0 + 7777; pd.channels = 0; pd.db = 0;
+        (void)yau_gain_at(&g_au, id, t0 + 50000000, -12.0f, YRT_MS(3));
+        pd.buf = st2; pd.at_ns = t0 + 7777; pd.channels = 0; pd.db = 0;
         id = yau_play(&g_au, &pd);
-        (void)yau_stop_at(&g_au, id, t0 + 120000000, YAU_MS(5));
-        pd.buf = st2; pd.at = t0 + 20000000; pd.channels = 1; pd.db = 2.0f;
+        (void)yau_stop_at(&g_au, id, t0 + 120000000, YRT_MS(5));
+        pd.buf = st2; pd.at_ns = t0 + 20000000; pd.channels = 1; pd.db = 2.0f;
         (void)yau_play(&g_au, &pd);
-        pd.buf = mono; pd.buf.n = 333; pd.loops = 4; pd.at = t0 + 40000000; pd.channels = 0; pd.db = 6.0f;
+        pd.buf = mono; pd.buf.n = 333; pd.loops = 4; pd.at_ns = t0 + 40000000; pd.channels = 0; pd.db = 6.0f;
         (void)yau_play(&g_au, &pd);
-        pd.loops = 0; pd.buf = mono; pd.at = 0;
+        pd.loops = 0; pd.buf = mono; pd.at_ns = 0;
         (void)yau_play(&g_au, &pd);
         sd_run_s(s, 1.0);
         n = s->W < TAPE_FRAMES ? s->W : TAPE_FRAMES;
@@ -1356,7 +1356,7 @@ static void test_stream_placement(void) {
         s->drift_ppm = drifts[j];
         CHECK(open_dev(s, NULL));
         sd_run_s(s, 8.0);
-        CHECK_I(yau_stream_init(&g_au, &g_st, &(yau_stream_desc){ .memory = g_ring_a, .frames = 1000, .id = 31, .first = 5 }), 0);
+        CHECK(yau_stream_open(&g_au, &g_st, &(yau_stream_desc){ .memory = g_ring_a, .frames = 1000, .id = 31, .first = 5 }));
         next = 5;
         (void)feed(&g_st, &next, INT64_MAX, 2);
         chk_start(&g_st, 2);
@@ -1408,7 +1408,7 @@ static void test_stream_placement(void) {
         printf("stream: drift %+.0f ppm, %d of %d starts exact\n", drifts[j], exact, plays);
         CHECK_I(exact, plays);
         s->on_block = NULL;
-        CHECK_I(yau_stream_release(&g_au, &g_st), 0);
+        yau_stream_close(&g_au, &g_st);
         yau_close(&g_au);
     }
 }
@@ -1424,7 +1424,7 @@ static void test_stream_ring(void) {
     sd_default(s);
     CHECK(open_dev(s, NULL));
     sd_run_s(s, 1.0);
-    CHECK_I(yau_stream_init(&g_au, &g_st, &(yau_stream_desc){ .memory = g_ring_a, .frames = 1000 }), 0);
+    CHECK(yau_stream_open(&g_au, &g_st, &(yau_stream_desc){ .memory = g_ring_a, .frames = 1000 }));
     p = yau_stream_acquire(&g_st, &n);
     CHECK(p == g_ring_a && n == 1000);
     CHECK_I(yau_stream_commit(&g_st, 1001), YAU_ERR_ARG);
@@ -1456,7 +1456,6 @@ static void test_stream_ring(void) {
     (void)feed(&g_st, &next, 100, 2);
     p = yau_stream_acquire(&g_st, &n2);
     CHECK(p != NULL && n2 == 380);
-    CHECK_I(yau_stream_release(&g_au, &g_st), YAU_ERR_BUSY);
     CHECK_I(yau_stream_end(&g_st), 0);
     CHECK(yau_stream_acquire(&g_st, &n) == NULL);
     CHECK_I(yau_stream_commit(&g_st, 0), YAU_ERR_ARG);
@@ -1478,16 +1477,17 @@ static void test_stream_ring(void) {
         pd.offset = 0; pd.buf.frames = g_buf; pd.buf.n = 10;
         CHECK_I(yau_play(&g_au, &pd), YAU_ERR_ARG);
     }
-    CHECK_I(yau_stream_init(&g_au, &g_st2, &(yau_stream_desc){ .memory = g_ring_b, .frames = 959 }), YAU_ERR_ARG);
-    CHECK_I(yau_stream_init(&g_au, &g_st2, &(yau_stream_desc){ .memory = g_ring_b, .channels = 3 }), YAU_ERR_FORMAT);
-    CHECK_I(yau_stream_init(&g_au, &g_st2, &(yau_stream_desc){ .memory = g_ring_b, .first = -1 }), YAU_ERR_ARG);
-    CHECK_I(yau_stream_init(&g_au, &g_st2, &(yau_stream_desc){ .memory = g_ring_b, .frames = 1000, .preroll = 1001 }), YAU_ERR_ARG);
+    CHECK(!yau_stream_open(&g_au, &g_st2, &(yau_stream_desc){ .memory = g_ring_b, .frames = 959 }));
+    CHECK(!yau_stream_open(&g_au, &g_st2, &(yau_stream_desc){ .memory = g_ring_b, .channels = 3 }));
+    CHECK(strstr(yau_error(&g_au), "yau_stream_open") != NULL);
+    CHECK(!yau_stream_open(&g_au, &g_st2, &(yau_stream_desc){ .memory = g_ring_b, .first = -1 }));
+    CHECK(!yau_stream_open(&g_au, &g_st2, &(yau_stream_desc){ .memory = g_ring_b, .frames = 1000, .preroll = 1001 }));
     /* the arena: a stream holds it until released */
-    CHECK_I(yau_stream_init(&g_au, &g_st2, &(yau_stream_desc){ .frames = 48000 }), 0);
+    CHECK(yau_stream_open(&g_au, &g_st2, &(yau_stream_desc){ .frames = 48000 }));
     CHECK_I(yau_arena_reset(&g_au), YAU_ERR_BUSY);
-    CHECK_I(yau_stream_release(&g_au, &g_st2), 0);
+    yau_stream_close(&g_au, &g_st2);
     CHECK_I(yau_arena_reset(&g_au), 0);
-    CHECK_I(yau_stream_init(&g_au, &g_st2, &(yau_stream_desc){ .frames = (int64_t)sizeof g_arena }), YAU_ERR_FULL);
+    CHECK(!yau_stream_open(&g_au, &g_st2, &(yau_stream_desc){ .frames = (int64_t)sizeof g_arena }));
     CHECK(strstr(yau_error(&g_au), "arena") != NULL);
     /* the stream of another handle */
     {
@@ -1500,8 +1500,55 @@ static void test_stream_ring(void) {
         CHECK_I(yau_play(&other, &pd), YAU_ERR_ARG);
         other.open = 0;
     }
-    CHECK_I(yau_stream_release(&g_au, &g_st), 0);
+    yau_stream_close(&g_au, &g_st);
     yau_close(&g_au);
+}
+
+/* v0.4.0: close never fails. A stream the device has let go of closes at
+ * once; a playing one is canceled, and close waits for the device. Here the
+ * device's blocks run on this thread, so nothing renders during the wait:
+ * close gives up after the bound (virtual time), leaves the stream detached
+ * with its memory and the arena hold in place, and the next block ends the
+ * play. The frame thread's failures write yau_error(). */
+static void test_stream_close(void) {
+    sdev* s = &g_sd;
+    int64_t next = 0, t0;
+    yau_stream_info in;
+    yau_stream z;
+    sd_default(s);
+    CHECK(open_dev(s, NULL));
+    sd_run_s(s, 1.0);
+    memset(&z, 0, sizeof z);
+    yau_stream_close(&g_au, &z);                 /* zeroed, twice */
+    yau_stream_close(&g_au, &z);
+    CHECK(!yau_stream_open(&g_au, &g_st2, &(yau_stream_desc){ .memory = g_ring_b, .frames = 959 }));
+    CHECK(strstr(yau_error(&g_au), "2 periods") != NULL);
+    yau_stream_close(&g_au, &g_st2);             /* after a failed open */
+    CHECK(yau_stream_open(&g_au, &g_st2, &(yau_stream_desc){ .frames = 48000 }));
+    (void)feed(&g_st2, &next, 4000, 2);
+    CHECK(yau_play_stream(&g_au, &g_st2, 0) > 0);
+    sd_block(s);
+    yau_stream_get_info(&g_st2, &in);
+    CHECK(in.state == YAU_STREAM_WAITING || in.state == YAU_STREAM_PLAYING);   /* the device holds it */
+    t0 = g_vt;
+    yau_stream_close(&g_au, &g_st2);
+    CHECK(g_vt - t0 >= 20000000 && g_vt - t0 <= 1001000000);   /* the bound */
+    CHECK_I(yau_arena_reset(&g_au), YAU_ERR_BUSY);              /* hold kept */
+    CHECK(strstr(yau_error(&g_au), "yau_arena_reset") != NULL);
+    sd_block(s);                                                /* the cancel */
+    yau_stream_get_info(&g_st2, &in);
+    CHECK_I(in.state, YAU_STREAM_ENDED);
+    yau_stream_close(&g_au, &g_st2);             /* detached: nothing more */
+    /* frame-thread failures name the call */
+    CHECK_I(yau_cancel(&g_au, -3), YAU_ERR_ARG);
+    CHECK(strstr(yau_error(&g_au), "yau_cancel") != NULL);
+    CHECK_I(yau_result(&g_au, 999999, NULL), YAU_ERR_NOT_FOUND);
+    CHECK(strstr(yau_error(&g_au), "yau_result") != NULL);
+    CHECK(yau_play_at(&g_au, yau_click(&g_au, &(yau_click_desc){ .peak = 0.5f }), -1) < 0);
+    CHECK(strstr(yau_error(&g_au), "yau_play_at") != NULL);
+    yau_close(&g_au);
+    CHECK_I(yau_update(&g_au), YAU_ERR_CLOSED);
+    CHECK(strstr(yau_error(&g_au), "yau_update") != NULL);
 }
 
 /* Underruns of the ring: silence exactly on the frames whose samples were
@@ -1520,7 +1567,7 @@ static void test_stream_gaps(void) {
     CHECK(open_dev(s, NULL));
     sd_run_s(s, 6.0);
     while (yrt_ring_drain(&g_ring, ev, 512) > 0) {}
-    CHECK_I(yau_stream_init(&g_au, &g_st, &(yau_stream_desc){ .memory = g_ring_b, .frames = 4801, .id = 9 }), 0);
+    CHECK(yau_stream_open(&g_au, &g_st, &(yau_stream_desc){ .memory = g_ring_b, .frames = 4801, .id = 9 }));
     (void)feed(&g_st, &next, 4800, 2);
     chk_start(&g_st, 2);
     t = g_vt + 80000000;
@@ -1630,7 +1677,7 @@ static void test_stream_late_and_asap(void) {
     s->jitter_ns = 0;
     CHECK(open_dev(s, NULL));
     sd_run_s(s, 6.0);
-    CHECK_I(yau_stream_init(&g_au, &g_st, &(yau_stream_desc){ .memory = g_ring_b, .frames = 9600 }), 0);
+    CHECK(yau_stream_open(&g_au, &g_st, &(yau_stream_desc){ .memory = g_ring_b, .frames = 9600 }));
     (void)feed(&g_st, &next, INT64_MAX, 2);
     chk_start(&g_st, 2);
     t = g_vt - 30000000;
@@ -1714,7 +1761,7 @@ static void test_stream_late_and_asap(void) {
     CHECK_I(r.end_frame - r.start_frame, 300);
 
     /* YAU_PREROLL_NONE: at once, a gap when empty */
-    CHECK_I(yau_stream_init(&g_au, &g_st, &(yau_stream_desc){ .memory = g_ring_b, .frames = 9600, .preroll = YAU_PREROLL_NONE }), 0);
+    CHECK(yau_stream_open(&g_au, &g_st, &(yau_stream_desc){ .memory = g_ring_b, .frames = 9600, .preroll = YAU_PREROLL_NONE }));
     id = yau_play_stream(&g_au, &g_st, 0);
     sd_run(s, 2);
     yau_stream_get_info(&g_st, &in);
@@ -1722,7 +1769,7 @@ static void test_stream_late_and_asap(void) {
     CHECK(yau_stop_at(&g_au, id, 0, 0) == 0);
     sd_run_s(s, 0.1);
     /* a cancel of an at-0 stream still waiting for data: CANCELED */
-    CHECK_I(yau_stream_init(&g_au, &g_st, &(yau_stream_desc){ .memory = g_ring_b, .frames = 9600 }), 0);
+    CHECK(yau_stream_open(&g_au, &g_st, &(yau_stream_desc){ .memory = g_ring_b, .frames = 9600 }));
     id = yau_play_stream(&g_au, &g_st, 0);
     sd_run(s, 2);
     CHECK(yau_cancel(&g_au, id) == 0);
@@ -1751,18 +1798,18 @@ static void test_stream_mix(void) {
     sd_run_s(s, 1.0);
     /* buffer samples are multiples of 2^-13 too, so every sum is exact */
     for (i = 0; i < 48000; i++) g_buf[i] = (float)((i % 511) + 1) / 8192.0f;
-    CHECK_I(yau_stream_init(&g_au, &g_st, &(yau_stream_desc){ .memory = g_ring_b, .frames = 9600, .channels = 1 }), 0);
-    CHECK_I(yau_stream_init(&g_au, &g_st2, &(yau_stream_desc){ .frames = 9600 }), 0);
+    CHECK(yau_stream_open(&g_au, &g_st, &(yau_stream_desc){ .memory = g_ring_b, .frames = 9600, .channels = 1 }));
+    CHECK(yau_stream_open(&g_au, &g_st2, &(yau_stream_desc){ .frames = 9600 }));
     (void)feed(&g_st, &next, INT64_MAX, 1);
     (void)feed(&g_st2, &n2, INT64_MAX, 2);
     t = g_vt + 100000000;
     memset(&pd, 0, sizeof pd);
-    pd.stream = &g_st; pd.at = t; pd.channels = 2;              /* mono stream, right only */
+    pd.stream = &g_st; pd.at_ns = t; pd.channels = 2;              /* mono stream, right only */
     ida = yau_play(&g_au, &pd);
-    pd.stream = &g_st2; pd.at = t + 1000000; pd.channels = 0;   /* stereo stream */
+    pd.stream = &g_st2; pd.at_ns = t + 1000000; pd.channels = 0;   /* stereo stream */
     idb = yau_play(&g_au, &pd);
     memset(&pd, 0, sizeof pd);
-    pd.buf.frames = g_buf; pd.buf.n = 3000; pd.buf.channels = 1; pd.at = t + 2000000; pd.channels = 1;
+    pd.buf.frames = g_buf; pd.buf.n = 3000; pd.buf.channels = 1; pd.at_ns = t + 2000000; pd.channels = 1;
     idv1 = yau_play(&g_au, &pd);
     sd_run_s(s, 0.25);
     CHECK_I(yau_result(&g_au, ida, &r), YAU_OK);
@@ -1785,15 +1832,15 @@ static void test_stream_mix(void) {
     CHECK_I(yau_stream_write(&g_st, g_buf, 9600), 9600);
     t = g_vt + 100000000;
     memset(&pd, 0, sizeof pd);
-    pd.buf.frames = g_buf; pd.buf.n = 9600; pd.buf.channels = 1; pd.at = t; pd.channels = 1; pd.db = -2.0f;
+    pd.buf.frames = g_buf; pd.buf.n = 9600; pd.buf.channels = 1; pd.at_ns = t; pd.channels = 1; pd.db = -2.0f;
     idv1 = yau_play(&g_au, &pd);
     memset(&pd, 0, sizeof pd);
-    pd.stream = &g_st; pd.at = t; pd.channels = 2; pd.db = -2.0f;
+    pd.stream = &g_st; pd.at_ns = t; pd.channels = 2; pd.db = -2.0f;
     ids = yau_play(&g_au, &pd);
-    CHECK(yau_gain_at(&g_au, idv1, t + 30000000, -9.0f, YAU_MS(4)) == 0);
-    CHECK(yau_gain_at(&g_au, ids, t + 30000000, -9.0f, YAU_MS(4)) == 0);
-    CHECK(yau_stop_at(&g_au, idv1, t + 120000000, YAU_MS(5)) == 0);
-    CHECK(yau_stop_at(&g_au, ids, t + 120000000, YAU_MS(5)) == 0);
+    CHECK(yau_gain_at(&g_au, idv1, t + 30000000, -9.0f, YRT_MS(4)) == 0);
+    CHECK(yau_gain_at(&g_au, ids, t + 30000000, -9.0f, YRT_MS(4)) == 0);
+    CHECK(yau_stop_at(&g_au, idv1, t + 120000000, YRT_MS(5)) == 0);
+    CHECK(yau_stop_at(&g_au, ids, t + 120000000, YRT_MS(5)) == 0);
     sd_run_s(s, 0.4);
     CHECK_I(yau_result(&g_au, idv1, &rb), YAU_OK);
     CHECK_I(yau_result(&g_au, ids, &rs), YAU_OK);
@@ -1814,12 +1861,12 @@ static void test_stream_mix(void) {
     t = g_vt + 100000000;
     ids = yau_play_stream(&g_au, &g_st, t);
     memset(&pd, 0, sizeof pd);
-    pd.buf.frames = g_buf; pd.buf.n = 4800; pd.buf.channels = 1; pd.at = t;
+    pd.buf.frames = g_buf; pd.buf.n = 4800; pd.buf.channels = 1; pd.at_ns = t;
     idv1 = yau_play(&g_au, &pd);
     sd_run_s(s, 0.3);
     CHECK_I(yau_result(&g_au, ids, &rs), YAU_OK);
     CHECK(rs.flags & YAU_ONSET_CLIPPED);
-    CHECK_I(yau_stream_release(&g_au, &g_st2), 0);
+    yau_stream_close(&g_au, &g_st2);
     yau_close(&g_au);
 }
 
@@ -1838,7 +1885,7 @@ static void test_stream_device(void) {
         s->stall_halts = halts;
         CHECK(open_dev(s, NULL));
         sd_run_s(s, 6.0);
-        CHECK_I(yau_stream_init(&g_au, &g_st, &(yau_stream_desc){ .memory = g_ring_b, .frames = 48000 }), 0);
+        CHECK(yau_stream_open(&g_au, &g_st, &(yau_stream_desc){ .memory = g_ring_b, .frames = 48000 }));
         next = 0;
         (void)feed(&g_st, &next, INT64_MAX, 2);
         chk_start(&g_st, 2);
@@ -1863,7 +1910,7 @@ static void test_stream_device(void) {
     s->tier = 0;
     CHECK(open_dev(s, NULL));
     sd_run_s(s, 3.0);
-    CHECK_I(yau_stream_init(&g_au, &g_st, &(yau_stream_desc){ .memory = g_ring_b, .frames = 48000 }), 0);
+    CHECK(yau_stream_open(&g_au, &g_st, &(yau_stream_desc){ .memory = g_ring_b, .frames = 48000 }));
     next = 0;
     (void)feed(&g_st, &next, 4800, 2);
     yau_stream_end(&g_st);
@@ -1897,7 +1944,7 @@ static void test_stream_gap_storm(void) {
     s->tape = NULL;
     CHECK(open_dev(s, NULL));
     sd_run_s(s, 2.0);
-    CHECK_I(yau_stream_init(&g_au, &g_st, &(yau_stream_desc){ .memory = g_ring_b, .frames = 960, .preroll = YAU_PREROLL_NONE }), 0);
+    CHECK(yau_stream_open(&g_au, &g_st, &(yau_stream_desc){ .memory = g_ring_b, .frames = 960, .preroll = YAU_PREROLL_NONE }));
     id = yau_play_stream(&g_au, &g_st, 0);
     /* every third block the producer writes nothing, then twice a block:
      * one gap of one block each time, and its samples come late */
@@ -1965,7 +2012,7 @@ static void test_stream_threads(void) {
     s->L = 96;
     g_virtual = 0;
     CHECK(open_dev(s, NULL));
-    CHECK_I(yau_stream_init(&g_au, &g_st, &(yau_stream_desc){ .memory = g_ring_b, .frames = 960, .preroll = 480 }), 0);
+    CHECK(yau_stream_open(&g_au, &g_st, &(yau_stream_desc){ .memory = g_ring_b, .frames = 960, .preroll = 480 }));
     yau__st32(&g_thr_stop, 0);
     yau__st32(&g_prod_stop, 0);
     yau__st32(&g_prod_reset, 0);
@@ -2143,7 +2190,7 @@ static void test_wav(void) {
     for (k = 0; k < WK_N; k++) {
         int ch = k == WK_S24 ? 1 : 2;
         n = make_wav(k, ch, 3000, 48000, -1);
-        CHECK_I(yau_wav_open(&g_au, &g_wav, &(yau_wav_desc){ .data = g_wavmem, .size = n, .ring = 1000, .memory = g_ring_c, .id = 70 + (uint32_t)k }), 0);
+        CHECK(yau_wav_open(&g_au, &g_wav, &(yau_wav_desc){ .data = g_wavmem, .size = n, .ring = 1000, .memory = g_ring_c, .id = 70 + (uint32_t)k }));
         if (!g_wav.open_) { fail(__LINE__, yau_wav_error(&g_wav)); continue; }
         CHECK_I(g_wav.info.frames, 3000);
         CHECK_I(g_wav.info.channels, ch);
@@ -2174,14 +2221,14 @@ static void test_wav(void) {
             CHECK_I(wrong, 0);
             CHECK_I(yau_arena_reset(&g_au), 0);
         }
-        CHECK_I(yau_wav_close(&g_au, &g_wav), 0);
+        yau_wav_close(&g_au, &g_wav);
     }
     s->on_block = NULL;
 
     /* loops over a ring smaller than the file; seek after the end; a seek
      * through on_msg while playing waits for the end */
     n = make_wav(WK_S16, 2, 3000, 48000, -1);
-    CHECK_I(yau_wav_open(&g_au, &g_wav, &(yau_wav_desc){ .data = g_wavmem, .size = n, .loops = 2, .ring = 1000, .memory = g_ring_c }), 0);
+    CHECK(yau_wav_open(&g_au, &g_wav, &(yau_wav_desc){ .data = g_wavmem, .size = n, .loops = 2, .ring = 1000, .memory = g_ring_c }));
     (void)yau_wav_feed(&g_wav, 0);
     chk_start(&g_wav.stream, 2);
     chk_val(wv_loop);
@@ -2209,7 +2256,7 @@ static void test_wav(void) {
         CHECK(yau_wav_wants(&g_wav));
         CHECK_I(yau_wav_feed(&g_wav, 0), 0);   /* the play has not ended */
     }
-    CHECK(yau_stop_at(&g_au, id, 0, YAU_MS(2)) == 0);
+    CHECK(yau_stop_at(&g_au, id, 0, YRT_MS(2)) == 0);
     sd_run(s, 10);
     CHECK_I(yau_result(&g_au, id, &r), YAU_OK);
     CHECK_I(r.sample, 4567);
@@ -2230,7 +2277,7 @@ static void test_wav(void) {
     CHECK_I(g_chk.bad, 0);
     CHECK(yau_stop_at(&g_au, id, 0, 0) == 0);
     sd_run(s, 3);
-    CHECK_I(yau_wav_close(&g_au, &g_wav), 0);
+    yau_wav_close(&g_au, &g_wav);
     s->on_block = NULL;
 
     /* a path and a reader give the same samples as memory */
@@ -2244,13 +2291,13 @@ static void test_wav(void) {
         CHECK(f != NULL);
         if (f) { fwrite(g_wavmem, 1, n, f); fclose(f); }
         rd.size = (int64_t)n;
-        CHECK_I(yau_wav_open(&g_au, &g_wav, &(yau_wav_desc){ .path = path, .ring = 4000, .memory = ring_a }), 0);
-        CHECK_I(yau_wav_open(&g_au, &g_wav2, &(yau_wav_desc){ .reader = &rd, .ring = 4000, .memory = ring_b }), 0);
+        CHECK(yau_wav_open(&g_au, &g_wav, &(yau_wav_desc){ .path = path, .ring = 4000, .memory = ring_a }));
+        CHECK(yau_wav_open(&g_au, &g_wav2, &(yau_wav_desc){ .reader = &rd, .ring = 4000, .memory = ring_b }));
         CHECK_I(yau_wav_feed(&g_wav, 0), 3000);
         CHECK_I(yau_wav_feed(&g_wav2, 0), 3000);
         CHECK(memcmp(ring_a, ring_b, sizeof(float) * 6000) == 0);
-        CHECK_I(yau_wav_close(&g_au, &g_wav2), 0);
-        CHECK_I(yau_wav_open(&g_au, &g_wav2, &(yau_wav_desc){ .data = g_wavmem, .size = n, .ring = 4000, .memory = ring_d }), 0);
+        yau_wav_close(&g_au, &g_wav2);
+        CHECK(yau_wav_open(&g_au, &g_wav2, &(yau_wav_desc){ .data = g_wavmem, .size = n, .ring = 4000, .memory = ring_d }));
         CHECK_I(yau_wav_feed(&g_wav2, 0), 3000);
         CHECK(memcmp(ring_a, ring_d, sizeof(float) * 6000) == 0);
         /* v0.2.1: the probe gives the open's info from a path, a reader
@@ -2267,22 +2314,23 @@ static void test_wav(void) {
             CHECK_I(yau_wav_probe(&(yau_wav_desc){ .path = "no_such_file.wav" }, &pi, pe, sizeof pe), YAU_ERR_IO);
             CHECK_I(yau_wav_probe(NULL, &pi, pe, sizeof pe), YAU_ERR_ARG);
         }
-        CHECK_I(yau_wav_close(&g_au, &g_wav), 0);
-        CHECK_I(yau_wav_close(&g_au, &g_wav2), 0);
+        yau_wav_close(&g_au, &g_wav);
+        yau_wav_close(&g_au, &g_wav2);
         CHECK(remove(path) == 0);   /* every reader closed the file (on Windows an open file cannot be removed) */
-        CHECK_I(yau_wav_open(&g_au, &g_wav, &(yau_wav_desc){ .path = "no_such_file.wav" }), YAU_ERR_IO);
+        CHECK(!yau_wav_open(&g_au, &g_wav, &(yau_wav_desc){ .path = "no_such_file.wav" }));
+        CHECK_I(g_wav.error_code, YAU_ERR_IO);
     }
 
     /* a float that is not a number ends the stream before it */
     n = make_wav(WK_F32, 2, 3000, 48000, 1234);
-    CHECK_I(yau_wav_open(&g_au, &g_wav, &(yau_wav_desc){ .data = g_wavmem, .size = n, .ring = 4000, .memory = g_ring_c }), 0);
+    CHECK(yau_wav_open(&g_au, &g_wav, &(yau_wav_desc){ .data = g_wavmem, .size = n, .ring = 4000, .memory = g_ring_c }));
     CHECK_I(yau_wav_feed(&g_wav, 0), YAU_ERR_FORMAT);
     yau_stream_get_info(&g_wav.stream, &in);
     CHECK_I(in.end, 1234);
     CHECK_I(in.written, 1234);
     CHECK(strstr(yau_wav_error(&g_wav), "1234") != NULL);
     CHECK(yau_wav_load(&g_au, &(yau_wav_desc){ .data = g_wavmem, .size = n }).frames == NULL);
-    CHECK_I(yau_wav_close(&g_au, &g_wav), 0);
+    yau_wav_close(&g_au, &g_wav);
 
     /* refusals, each with its message */
     {
@@ -2304,7 +2352,8 @@ static void test_wav(void) {
             if (cases[i].patch_at) put16(g_wavmem + g_fmt_off + cases[i].patch_at, cases[i].patch16);
             if (cases[i].cut > 0) len -= (size_t)cases[i].cut;
             if (cases[i].cut < 0) len = g_data_off - 8;
-            CHECK_I(yau_wav_open(&g_au, &g_wav, &(yau_wav_desc){ .data = g_wavmem, .size = len }), YAU_ERR_FORMAT);
+            CHECK(!yau_wav_open(&g_au, &g_wav, &(yau_wav_desc){ .data = g_wavmem, .size = len }));
+            CHECK_I(g_wav.error_code, YAU_ERR_FORMAT);
             if (!strstr(yau_wav_error(&g_wav), cases[i].says)) {
                 printf("wav refusal %d says: %s\n", (int)i, yau_wav_error(&g_wav));
                 fail(__LINE__, "a WAV refusal without its reason");
@@ -2324,8 +2373,10 @@ static void test_wav(void) {
             }
         }
         memcpy(g_wavmem, "RIFX", 4);
-        CHECK_I(yau_wav_open(&g_au, &g_wav, &(yau_wav_desc){ .data = g_wavmem, .size = 100 }), YAU_ERR_FORMAT);
-        CHECK_I(yau_wav_open(&g_au, &g_wav, &(yau_wav_desc){ .data = g_wavmem, .size = 100, .path = "x.wav" }), YAU_ERR_ARG);
+        CHECK(!yau_wav_open(&g_au, &g_wav, &(yau_wav_desc){ .data = g_wavmem, .size = 100 }));
+        CHECK_I(g_wav.error_code, YAU_ERR_FORMAT);
+        CHECK(!yau_wav_open(&g_au, &g_wav, &(yau_wav_desc){ .data = g_wavmem, .size = 100, .path = "x.wav" }));
+        CHECK_I(g_wav.error_code, YAU_ERR_ARG);
         printf("wav: refusal example: %s\n", yau_wav_error(&g_wav));
     }
     yau_close(&g_au);
@@ -2340,10 +2391,11 @@ static void test_wav(void) {
         d.format.map = lr;
         CHECK(open_dev(s, &d));
         n = make_wav(WK_S24_32, 2, 3000, 48000, -1);
-        CHECK_I(yau_wav_open(&g_au, &g_wav, &(yau_wav_desc){ .data = g_wavmem, .size = n, .ring = 4000, .memory = g_ring_c }), 0);
-        CHECK_I(yau_wav_close(&g_au, &g_wav), 0);
+        CHECK(yau_wav_open(&g_au, &g_wav, &(yau_wav_desc){ .data = g_wavmem, .size = n, .ring = 4000, .memory = g_ring_c }));
+        yau_wav_close(&g_au, &g_wav);
         put32(g_wavmem + g_fmt_off + 28, 6u);   /* FR, FC */
-        CHECK_I(yau_wav_open(&g_au, &g_wav, &(yau_wav_desc){ .data = g_wavmem, .size = n }), YAU_ERR_FORMAT);
+        CHECK(!yau_wav_open(&g_au, &g_wav, &(yau_wav_desc){ .data = g_wavmem, .size = n }));
+        CHECK_I(g_wav.error_code, YAU_ERR_FORMAT);
         CHECK(strstr(yau_wav_error(&g_wav), "speaker") != NULL);
         yau_close(&g_au);
     }
@@ -2367,7 +2419,7 @@ static void test_wav_pump(void) {
     CHECK(open_dev(s, NULL));
     n = make_wav(WK_S16, 2, 5000, 48000, -1);
     g_wav_A = 5000;
-    CHECK_I(yau_wav_open(&g_au, &g_wav, &(yau_wav_desc){ .data = g_wavmem, .size = n, .loops = YAU_FOREVER, .ring = 1920, .memory = g_ring_c }), 0);
+    CHECK(yau_wav_open(&g_au, &g_wav, &(yau_wav_desc){ .data = g_wavmem, .size = n, .loops = YAU_FOREVER, .ring = 1920, .memory = g_ring_c }));
     memset(&pump, 0, sizeof pump);
     CHECK(yrt_pump_open(&pump, &(yrt_pump_desc){ .msg_size = sizeof(yau_wav_msg), .capacity = 8,
                                                       .on_msg = yau_wav_on_msg, .on_idle = yau_wav_step, .ctx = &g_wav }));
@@ -2437,7 +2489,7 @@ static void test_wav_pump(void) {
     printf("wav pump: %d plays, %lld frames, %lld wrong\n", done, (long long)frames, (long long)bad);
     CHECK_I(done, nplay);
     CHECK_I(bad, 0);
-    CHECK_I(yau_wav_close(&g_au, &g_wav), 0);
+    yau_wav_close(&g_au, &g_wav);
     yau_close(&g_au);
     g_virtual = 1;
 }
@@ -2527,6 +2579,7 @@ int main(int argc, char** argv) {
     (void)tape_regression(NULL);
 #if YAU_VERSION_MINOR >= 2
     test_stream_ring();
+    test_stream_close();
     test_stream_placement();
     test_stream_gaps();
     test_stream_late_and_asap();

@@ -209,7 +209,7 @@ int main(int argc, char** argv) {
     rdesc.w = 400;
     rdesc.count = N_DOTS;
     rdesc.speed = 200;
-    if (yrdk_open(&rdk, &rdesc) < 0 || yrdk_open(&replay, &rdesc) < 0) {
+    if (!yrdk_open(&rdk, &rdesc) || !yrdk_open(&replay, &rdesc)) {
         fprintf(stderr, "trial_rdk: %s\n", yrdk_error(&rdk));
         return 1;
     }
@@ -260,11 +260,11 @@ int main(int argc, char** argv) {
     memset(&pd, 0, sizeof pd);
     pd.choices = keys;
     pd.n_choices = 2;
-    pd.duration = RESPONSE_S;
-    pd.minimum_valid_rt = MIN_RT_S;
+    pd.duration_ns = YRT_S(RESPONSE_S);
+    pd.min_rt_ns = YRT_S(MIN_RT_S);
     pd.sources = sources;
     pd.n_sources = 1;
-    if (!yrsp_init(&rsp, &pd)) { fprintf(stderr, "trial_rdk: %s\n", yrsp_error(&rsp)); return 1; }
+    if (!yrsp_open(&rsp, &pd)) { fprintf(stderr, "trial_rdk: %s\n", yrsp_error(&rsp)); return 1; }
 
     out = fopen(out_path, "w");
     sout = fopen(steps_path, "w");
@@ -313,7 +313,7 @@ int main(int argc, char** argv) {
             ytl_anchor(&tl, TRIAL, f.onset, 0);
             q = ytl_seq_on(&tl, TRIAL);
             ytl_on(&q, FIX_ON);
-            ytl_wait(&q, YTL_S(FIXATION_S));
+            ytl_wait(&q, YRT_S(FIXATION_S));
             ytl_on(&q, DOTS_ON);
             if (q.err) { fprintf(stderr, "trial_rdk: timeline error %d\n", q.err); failed = 1; break; }
             yrsp_arm(&rsp, f.onset);
@@ -334,7 +334,7 @@ int main(int argc, char** argv) {
             ytl_at(&q, bt);
             ytl_off(&q, DOTS_ON);
             ytl_off(&q, FIX_ON);
-            ytl_wait(&q, YTL_S(ITI_S));
+            ytl_wait(&q, YRT_S(ITI_S));
             ytl_mark(&q, END_OF_TRIAL, 0);
             if (q.err) { fprintf(stderr, "trial_rdk: timeline error %d\n", q.err); failed = 1; break; }
             responding = 0;
@@ -355,7 +355,7 @@ int main(int argc, char** argv) {
                     sim_key[ti.index] = wrong ? !answer : answer;
                     sc = (uint32_t)yrsp_scancode(sim_key[ti.index] ? "right" : "left");
                     memset(sim_ev, 0, sizeof sim_ev);
-                    sim_ev[0].t = f.onset + YTL_S(sim_rt[ti.index]);
+                    sim_ev[0].t = f.onset + YRT_S(sim_rt[ti.index]);
                     sim_ev[0].kind = YRSP_KIND_KEYBOARD;
                     sim_ev[0].type = YRSP_PRESS;
                     sim_ev[0].control = sc;
@@ -364,7 +364,7 @@ int main(int argc, char** argv) {
                     sim_ev[1] = sim_ev[0];
                     sim_ev[1].type = YRSP_RELEASE;
                     sim_ev[1].value = 0;
-                    sim_ev[1].t += YTL_MS(60);
+                    sim_ev[1].t += YRT_MS(60);
                     n_sim_ev = 2;
                     sim_next = 0;
                 }
@@ -374,7 +374,7 @@ int main(int argc, char** argv) {
                 int correct;
                 yrsp_finish(&rsp, &res);
                 correct = (res.flags & YRSP_R_RESPONDED) && res.response == answer;
-                sec(rt, sizeof rt, res.rt);
+                sec(rt, sizeof rt, res.rt_ns == YRSP_NO_TIME ? NAN : YRT_TO_S(res.rt_ns));
                 sec(lres, sizeof lres, (double)landing_residual / 1e9);
                 row_seed[ti.index] = trial_seed;
                 row_digest[ti.index] = yrdk_digest(&rdk);
@@ -430,10 +430,10 @@ int main(int argc, char** argv) {
     if (sim && !failed && !aborted) {
         for (i = 0; i < rows; i++) {
             const yrsp_result* r = &sim_res[i];
-            if (!(r->flags & YRSP_R_RESPONDED) || r->response != sim_key[i] || fabs(r->rt - sim_rt[i]) > 1e-6 ||
+            if (!(r->flags & YRSP_R_RESPONDED) || r->response != sim_key[i] || fabs(YRT_TO_S(r->rt_ns) - sim_rt[i]) > 1e-6 ||
                 r->onset_tier != YSCR_TIER_SIM || r->onset_src != YRSP_ONSET_FLIP) {
                 fprintf(stderr, "trial_rdk: --sim: trial %d: rt %.9f (want %.9f) response %d (want %d) onset tier %d "
-                                "src %d\n", i, r->rt, sim_rt[i], r->response, sim_key[i], r->onset_tier, r->onset_src);
+                                "src %d\n", i, YRT_TO_S(r->rt_ns), sim_rt[i], r->response, sim_key[i], r->onset_tier, r->onset_src);
                 sim_bad = 1;
             }
         }

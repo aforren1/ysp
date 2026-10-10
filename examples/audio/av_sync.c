@@ -204,7 +204,7 @@ int main(int argc, char** argv) {
     ad.arena_bytes = 1 << 20;
     if (!yau_open(&au, &ad)) { fprintf(stderr, "audio_av_sync: %s\n", yau_error(&au)); yscr_close(&scr); return 1; }
     memset(&cd, 0, sizeof cd);
-    cd.dur = YAU_MS(1);
+    cd.dur_ns = YRT_MS(1);
     cd.peak = yau_db((float)db);
     click = yau_click(&au, &cd);
     if (!click.frames) { fprintf(stderr, "audio_av_sync: %s\n", yau_error(&au)); failed = 1; goto done; }
@@ -226,7 +226,7 @@ int main(int argc, char** argv) {
     (void)yrt_thread_elevate(NULL);
 
     /* black while the boards open and their fits get a slope */
-    warm_end = yrt_now_ns() + (board ? YAU_S(3) : YAU_S(1));
+    warm_end = yrt_now_ns() + (board ? YRT_S(3) : YRT_S(1));
     for (;;) {
         SDL_Event ev;
         yin_event in;
@@ -234,8 +234,8 @@ int main(int argc, char** argv) {
         if (rc == YSCR_QUIT) { aborted = 1; break; }
         if (rc != YSCR_OK) { fprintf(stderr, "audio_av_sync: %s\n", yscr_error(&scr)); failed = 1; break; }
         if (!K) {
-            period = f.period > 0 ? f.period : YAU_S(1.0 / 60);
-            K = (int)((YAU_S(lead_s) + period - 1) / period);
+            period = f.period > 0 ? f.period : YRT_S(1.0 / 60);
+            K = (int)((YRT_S(lead_s) + period - 1) / period);
         }
 
         /* the flip records of the flash frames */
@@ -263,7 +263,7 @@ int main(int argc, char** argv) {
             t->a_rc = t->id > 0 ? YAU_PENDING : (int)t->id;
             rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
             next_plan = t->frame + FLASH_FRAMES + 30 + (int64_t)(rng % 15);   /* 0.53 to 0.78 s apart at 60 Hz */
-            if (planned == n) end_frame = t->frame + FLASH_FRAMES + YAU_MS(400) / period;
+            if (planned == n) end_frame = t->frame + FLASH_FRAMES + YRT_MS(400) / period;
         }
         for (i = 0, lit = 0; i < planned; i++)
             if (f.index >= trials[i].frame && f.index < trials[i].frame + FLASH_FRAMES) lit = 1;
@@ -303,10 +303,10 @@ int main(int argc, char** argv) {
     for (i = 0; i < planned; i++) {
         trial* t = &trials[i];
         char hw[96] = "";
-        if (t->a_rc == YAU_PENDING) t->a_rc = yau_wait(&au, t->id, YAU_S(1), &t->a);
+        if (t->a_rc == YAU_PENDING) t->a_rc = yau_wait(&au, t->id, YRT_S(1), &t->a);
         t->light = t->sound = 0;
         if (t->have_flip && t->flip.onset) {
-            int64_t from = t->plan - YAU_MS(20), to = t->plan + YAU_MS(150);
+            int64_t from = t->plan - YRT_MS(20), to = t->plan + YRT_MS(150);
             t->light = first_edge(light_dev, light_ch, from, to, &t->light_unc);
             t->sound = first_edge(sound_dev, sound_ch, from, to, &t->sound_unc);
         }
@@ -345,7 +345,7 @@ int main(int argc, char** argv) {
             /* the null device's fit is of callback times, so its onsets
              * wander by up to a few ms (audio_schedule --null) */
             int ok = t->flip.tier == YSCR_TIER_SIM && t->a.tier == YAU_TIER_SIM &&
-                     !(t->a.flags & (YAU_ONSET_LATE | YAU_ONSET_XRUN)) && llabs(t->a.onset - t->flip.onset) <= YAU_MS(2) &&
+                     !(t->a.flags & (YAU_ONSET_LATE | YAU_ONSET_XRUN)) && llabs(t->a.onset - t->flip.onset) <= YRT_MS(2) &&
                      t->light == t->flip.onset + SIM_LIGHT_NS && t->sound == t->a.onset + SIM_SOUND_NS;
             if (!ok) { fprintf(stderr, "audio_av_sync: --sim: trial %d is off\n", i); bad = 1; }
         }

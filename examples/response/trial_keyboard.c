@@ -223,11 +223,11 @@ int main(int argc, char** argv) {
     memset(&pd, 0, sizeof pd);
     pd.choices = keys;
     pd.n_choices = 2;
-    pd.duration = RESPONSE_S;
-    pd.minimum_valid_rt = MIN_RT_S;
+    pd.duration_ns = YRT_S(RESPONSE_S);
+    pd.min_rt_ns = YRT_S(MIN_RT_S);
     pd.sources = sources;
     pd.n_sources = 1;
-    if (!yrsp_init(&rsp, &pd)) { fprintf(stderr, "trial_keyboard: %s\n", yrsp_error(&rsp)); return 1; }
+    if (!yrsp_open(&rsp, &pd)) { fprintf(stderr, "trial_keyboard: %s\n", yrsp_error(&rsp)); return 1; }
 
     out = fopen(out_path, "w");
     if (!out) { fprintf(stderr, "trial_keyboard: cannot write %s\n", out_path); return 1; }
@@ -268,7 +268,7 @@ int main(int argc, char** argv) {
             ytl_anchor(&tl, TRIAL, f.onset, 0);
             q = ytl_seq_on(&tl, TRIAL);
             ytl_on(&q, FIX_ON);
-            ytl_wait(&q, YTL_S(FIXATION_S));
+            ytl_wait(&q, YRT_S(FIXATION_S));
             ytl_off(&q, FIX_ON);
             ytl_on(&q, stim_ch);
             if (q.err) { fprintf(stderr, "trial_keyboard: timeline error %d\n", q.err); failed = 1; break; }
@@ -299,7 +299,7 @@ int main(int argc, char** argv) {
             ytl_at(&q, bt);
             ytl_off(&q, stim_ch);
             ytl_on(&q, fb);
-            ytl_wait(&q, YTL_S(FEEDBACK_S));
+            ytl_wait(&q, YRT_S(FEEDBACK_S));
             ytl_off(&q, fb);
             ytl_wait(&q, iti_ns);
             ytl_mark(&q, END_OF_TRIAL, 0);
@@ -327,7 +327,7 @@ int main(int argc, char** argv) {
                         for (rep = 0; rep <= p->twice && n_sim_ev + 2 <= 16; rep++) {
                             yrsp_input* e = &sim_ev[n_sim_ev++];
                             memset(e, 0, sizeof *e);
-                            e->t = f.onset + YTL_S(p->at) + (int64_t)rep * YTL_MS(9);
+                            e->t = f.onset + YRT_S(p->at) + (int64_t)rep * YRT_MS(9);
                             e->kind = YRSP_KIND_KEYBOARD;
                             e->type = YRSP_PRESS;
                             e->control = sc;
@@ -337,7 +337,7 @@ int main(int argc, char** argv) {
                             sim_ev[n_sim_ev] = *e;
                             sim_ev[n_sim_ev].type = YRSP_RELEASE;
                             sim_ev[n_sim_ev].value = 0;
-                            sim_ev[n_sim_ev++].t = e->t + YTL_S(p->hold);
+                            sim_ev[n_sim_ev++].t = e->t + YRT_S(p->hold);
                         }
                     }
                 }
@@ -349,8 +349,8 @@ int main(int argc, char** argv) {
                 yrsp_finish(&rsp, &res);
                 correct = (res.flags & YRSP_R_RESPONDED) && res.response_name &&
                           !strcmp(res.response_name, key_answer);
-                sec(rt, sizeof rt, res.rt);
-                sec(dur, sizeof dur, res.rt_key_duration);
+                sec(rt, sizeof rt, res.rt_ns == YRSP_NO_TIME ? NAN : YRT_TO_S(res.rt_ns));
+                sec(dur, sizeof dur, res.rt_key_duration_ns == YRSP_NO_TIME ? NAN : YRT_TO_S(res.rt_key_duration_ns));
                 sec(lres, sizeof lres, (double)landing_residual / 1e9);
                 fprintf(out, "%d,%s,%s,%s,%s,%d,%s,%u,%u,%s,%lld,%u,%u,%d,%d,%.9f\n", ti.index,
                         ytb_text(&tab, ti.condition, stim_col), key_answer,
@@ -398,15 +398,15 @@ int main(int argc, char** argv) {
             double want_rt = i == 0 ? 0.45 : i == 1 ? 0.52 : i == 2 ? 0.40 : i == 4 ? 0.38 : i == 5 ? 0.61 : NAN;
             int ok = 1;
             if (i == 3) ok = !(r->flags & YRSP_R_RESPONDED) && (r->flags & YRSP_R_TIMEOUT);
-            else ok = (r->flags & YRSP_R_RESPONDED) && fabs(r->rt - want_rt) < 1e-6;
-            if (i == 0) ok = ok && fabs(r->rt_key_duration - 0.1) < 1e-6;
+            else ok = (r->flags & YRSP_R_RESPONDED) && fabs(YRT_TO_S(r->rt_ns) - want_rt) < 1e-6;
+            if (i == 0) ok = ok && fabs(YRT_TO_S(r->rt_key_duration_ns) - 0.1) < 1e-6;
             if (i == 1) ok = ok && r->n_anticipations == 1;
             if (i == 2) ok = ok && sim_doubles[i] == 1 && r->n_responses == 1;
             if (i != 3) ok = ok && r->onset_tier == YSCR_TIER_SIM && r->onset_src == YRSP_ONSET_FLIP &&
                              r->stamp_tier == YRSP_TIER_SIM;
             if (!ok) {
                 fprintf(stderr, "trial_keyboard: --sim: trial %d: rt %.9f flags 0x%x n_anticipations %d "
-                                "n_duplicates %d onset tier %d src %d\n", i, r->rt, (unsigned)r->flags,
+                                "n_duplicates %d onset tier %d src %d\n", i, YRT_TO_S(r->rt_ns), (unsigned)r->flags,
                         r->n_anticipations, sim_doubles[i], r->onset_tier, r->onset_src);
                 bad = 1;
             }

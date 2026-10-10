@@ -22,6 +22,7 @@
 #define YSP_RDK_IMPLEMENTATION
 #include "ysp/rdk.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -47,8 +48,10 @@ int main(int argc, char** argv) {
     if (argc != 2) { fprintf(stderr, "usage: make_c_trial OUT.bin\n"); return 2; }
     memset(&d, 0, sizeof d);
     d.algorithm = YRDK_LL; d.aperture = YRDK_RECT; d.w = 8; d.h = 6; d.count = N;
-    d.lifetime = 0.3f; d.coherence = 0.5f; d.direction = 0; d.speed = 4;
-    if (yrdk_open(&f, &d) < 0) { fprintf(stderr, "%s\n", yrdk_error(&f)); return 1; }
+    /* 0.3 s as v0.1 rounded the float 0.3f, so c_trial.bin is unchanged */
+    d.lifetime_ns = (int64_t)llround((double)0.3f * 1e9);
+    d.coherence = 0.5f; d.direction = 0; d.speed = 4;
+    if (!yrdk_open(&f, &d)) { fprintf(stderr, "%s\n", yrdk_error(&f)); return 1; }
     yrdk_start(&f, seed, t0);
     for (k = 0; k < STEPS; k++) {
         yrdk_out o;

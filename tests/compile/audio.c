@@ -21,6 +21,17 @@ static int touch_fields(ma_device* d) {
 }
 #endif
 
+/* The lifecycle calls v0.4.0 changed, by type. */
+typedef struct au_api {
+    bool (*stream_open)(yau_audio*, yau_stream*, const yau_stream_desc*);
+    void (*stream_close)(yau_audio*, yau_stream*);
+    bool (*wav_open)(yau_audio*, yau_wav*, const yau_wav_desc*);
+    void (*wav_close)(yau_audio*, yau_wav*);
+    int (*sample_at)(yau_audio*, const yau_stream*, int64_t, int64_t*);
+} au_api;
+
+static const au_api g_api = { yau_stream_open, yau_stream_close, yau_wav_open, yau_wav_close, yau_stream_sample_at };
+
 int main(void) {
     yau_audio* au = (yau_audio*)calloc(1, sizeof(yau_audio));
     yau_desc d;
@@ -30,6 +41,7 @@ int main(void) {
 #if defined(YAU_NO_MINIAUDIO)
     rc = yau_open(au, &d) ? 1 : 0;   /* must refuse: no backend */
     free(au);
+    if (!g_api.stream_open || !g_api.wav_close || !g_api.sample_at || !g_api.wav_open) return 11;
     return rc == 0 && yau_params(&n) && n > 0 ? 0 : 2;
 #else
     yau_tone_desc td;
@@ -45,7 +57,7 @@ int main(void) {
     d.arena_bytes = 1 << 20;
     if (!yau_open(au, &d)) { fprintf(stderr, "%s\n", yau_error(au)); free(au); return 3; }
     memset(&td, 0, sizeof td);
-    td.hz = 1000; td.dur = YAU_MS(20); td.peak = 0.01f;
+    td.hz = 1000; td.dur_ns = YRT_MS(20); td.peak = 0.01f; td.ramp_ns = 0;
     b = yau_tone(au, &td);
     if (!b.frames) { yau_close(au); free(au); return 4; }
     id = yau_play_at(au, b, 0);
@@ -59,13 +71,15 @@ int main(void) {
         yau_stream_info in;
         memset(&sd, 0, sizeof sd);
         sd.channels = 1;
-        if (yau_stream_init(au, &st, &sd) != 0) { yau_close(au); free(au); return 8; }
+        if (!yau_stream_open(au, &st, &sd)) { yau_close(au); free(au); return 8; }
         if (yau_stream_write(&st, b.frames, b.n) != b.n || yau_stream_end(&st) != 0) { yau_close(au); free(au); return 9; }
         id = yau_play_stream(au, &st, 0);
         rc = id > 0 ? yau_wait(au, id, 2000000000LL, &r) : (int)id;
         if (rc != YAU_OK || r.sample != 0 || yau_stream_get_info(&st, &in) != 0 || !in.started) {
             yau_close(au); free(au); return 10;
         }
+        g_api.stream_close(au, &st);
+        g_api.stream_close(au, &st);
     }
     yau_close(au);
     free(au);
