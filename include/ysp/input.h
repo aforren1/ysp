@@ -20,8 +20,7 @@
  *   ---------------------------------------------------------------------
  *   Include it; there is no implementation to define. A producer:
  *
- *       yin_event e;
- *       memset(&e, 0, sizeof e);
+ *       yin_event e = { 0 };
  *       e.t = yrt_now_ns();
  *       e.kind = YIN_KIND_BOX;
  *       e.device = port;

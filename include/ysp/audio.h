@@ -41,11 +41,9 @@
  *       #include "ysp/audio.h"
  *
  *       static yau_audio au;                          // zeroed
- *       yau_desc d;
- *       memset(&d, 0, sizeof d);                      // 48 kHz, 2 channels
+ *       yau_desc d = { 0 };                           // 48 kHz, 2 channels
  *       if (!yau_open(&au, &d)) die(yau_error(&au));
- *       yau_tone_desc td;
- *       memset(&td, 0, sizeof td);
+ *       yau_tone_desc td = { 0 };
  *       td.hz = 1000; td.dur_ns = YRT_MS(100); td.peak = 0.03f;
  *       td.ramp_ns = YRT_MS(5);
  *       yau_buf beep = yau_tone(&au, &td);
@@ -72,8 +70,7 @@
  *   A long WAV file, streamed, at t, with a fade 30 s later:
  *
  *       static yau_wav story;                         // zeroed; owns its ring
- *       yau_wav_desc wd;
- *       memset(&wd, 0, sizeof wd);
+ *       yau_wav_desc wd = { 0 };
  *       wd.path = "story.wav";
  *       if (!yau_wav_open(&au, &story, &wd)) die(yau_wav_error(&story));
  *       yau_wav_feed(&story, 0);                      // fill the ring (1 s)
@@ -370,8 +367,7 @@
  *   samples come from differs.
  *
  *       static yau_stream st;                         // yours; 256 bytes
- *       yau_stream_desc sd;
- *       memset(&sd, 0, sizeof sd);
+ *       yau_stream_desc sd = { 0 };
  *       sd.channels = 1;
  *       if (!yau_stream_open(&au, &st, &sd)) die(yau_error(&au));
  *       ...                                             // the producer thread:

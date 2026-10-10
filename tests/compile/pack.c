@@ -22,9 +22,13 @@ static const pack_api g_pack_api = {
 
 int main(void) {
     static ypak_pack pk;
-    ypak_desc d;
     uint8_t h[32];
-    memset(&d, 0, sizeof(d));   /* g++ -Wextra flags = { 0 } in C++ */
+    /* The zero-init rule (README, Conventions): { 0 } in C, {} in C++. */
+#ifdef __cplusplus
+    ypak_desc d = {};
+#else
+    ypak_desc d = { 0 };
+#endif
     ypak_sha256("abc", 3, h);
     if (h[0] != 0xBA || h[31] != 0xAD) return 1;
     if (ypak_xxh64("", 0, 0) != 0xEF46DB3751D8E999ULL) return 2;

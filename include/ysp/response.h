@@ -36,8 +36,7 @@
  *   anticipations (examples/response/trial_keyboard.c is the whole program):
  *
  *       static yrsp_collector rsp;
- *       yrsp_choice keys[2];                          // copied at open
- *       memset(keys, 0, sizeof keys);
+ *       yrsp_choice keys[2] = { 0 };                  // copied at open
  *       keys[0].key = "f";
  *       keys[1].key = "j";
  *       yrsp_desc d = { 0 };

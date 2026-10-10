@@ -172,10 +172,18 @@ CMakeLists.txt            builds examples, compile checks and tests; registers l
 - **Handles.** The caller allocates the handle struct and zeroes it. Large
   handles (a timeline, a trial list, a device) belong in static storage. A
   zero field in a desc means "default"; some headers have a required field
-  (`yser_desc.device`), and the header says so. Each USAGE block builds as
-  C99 and as C++17, so it zeroes a desc and then sets fields
-  (`yser_desc d = { 0 }; d.device = "COM3";`). In C and C++20,
-  designated initializers do the same.
+  (`yser_desc.device`), and the header says so. Zero a struct with
+  `= { 0 }` in C and `= {}` in C++, then set fields:
+  `yser_desc d = { 0 }; d.device = "COM3";`. In C, `{ 0 }` zeroes every
+  struct, also one whose first member is an enum, and gcc does not warn
+  about the fields it leaves out. In C++, `{ 0 }` does not compile when the
+  first member is an enum (`ypar_desc`, `ygfx_gabor_desc`), and g++
+  `-Wextra` warns about the missing fields; `{}` has neither problem. The
+  USAGE blocks are C, so they use `{ 0 }`, and they build as C99 without
+  designated initializers, which C++17 does not have. A compile check that
+  builds one source as C and as C++ writes both forms under
+  `#ifdef __cplusplus`. In C and C++20, designated initializers also zero
+  every field they do not name.
 - **Lifecycle verbs.** One set of verbs, with one meaning each:
 
   | Verb | Meaning | Returns |
@@ -206,10 +214,12 @@ CMakeLists.txt            builds examples, compile checks and tests; registers l
   - A call without a handle (`init`, `load`, `view`, a parser of the
     caller's bytes) writes its message into a caller buffer (`char* err,
     size_t cap`). The buffer may be NULL.
-  - `ysp/pack.h`: lookups and reads may run on several threads at once.
-    Each failure writes the pack's message under an atomic claim, so two
-    failures do not mix, and the message is the last failure of any
-    thread.
+  - `ysp/pack.h`: lookups and reads may run on several threads at once. A
+    failure writes the pack's message only if it gets an atomic claim; a
+    failure that finds the claim taken returns its code and leaves the
+    message alone, so two failures never mix. The message is therefore the
+    last failure of some thread, not always the newest, and
+    `pk.error_code` carries that failure's code.
 - **Units.** Every time in a C API is an `int64_t` count of nanoseconds on
   the `yrt_now_ns()` clock, unless the name says another clock (`_ticks`
   for a device's own counter, `lsl_` for an LSL stamp). A field or a
@@ -219,10 +229,22 @@ CMakeLists.txt            builds examples, compile checks and tests; registers l
   `ysp/rt.h` defines these macros, and a header that does not include it
   defines the same ones under the same guard. A bare `0.5` where
   nanoseconds go converts to 0: MSVC warns at its default level (C4244 at
-  /W3), and gcc warns with `-Wfloat-conversion`, which the CMake build
-  turns on. Seconds stay in files, experiment definitions, scripts, data
-  and the Python, MATLAB and Octave bindings. Text for a person (describe
-  lines, CSV columns) keeps its units.
+  /W3), clang warns about a literal by default (`-Wliteral-conversion`;
+  measured with clang 11), and gcc warns with `-Wfloat-conversion`, which
+  the CMake build and CI turn on. Seconds stay in files, experiment
+  definitions, scripts, data and the Python, MATLAB and Octave bindings.
+  Text for a person (describe lines, CSV columns) keeps its units.
+  Exceptions, each stated in its header:
+  - `yin_event.unc_us` (`ysp/input.h`) stays a `uint16_t` in
+    microseconds: the 48-byte event has no room for an `int64_t`.
+  - `yrdk_out.age_s` (`ysp/rdk.h`) is a per-dot `float` in seconds, an
+    attribute a GPU reads.
+  - LSL values in `ysp/net.h` keep liblsl's units: the `lsl_` stamps
+    (`double` seconds on liblsl's clock), `desc.lsl_max_buflen` (liblsl's
+    `max_buflen`), and `ynet_stats.lsl_offset_s` and `lsl_rtt_s` (`double`
+    seconds). Open: whether the last two become `int64_t` ns is not
+    decided.
+  - Calendar dates (`ycol_cal.date`) are Unix seconds.
 - **Threads.** Headers that spawn a worker thread honor `Y<X>_NO_THREADS`
   to drop it, and link `-pthread` on POSIX otherwise.
 - **Platforms.** A header `#error`s on platforms it does not support, so an

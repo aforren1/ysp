@@ -20,8 +20,12 @@ static const stair_api g_stair_api = { yst_open, yst_close, yst_error, yst_updat
 
 int main(void) {
     static yst_stair s;
-    yst_desc d;
-    memset(&d, 0, sizeof(d));   /* g++ -Wextra flags = { 0 } in C++ */
+    /* The zero-init rule (README, Conventions): { 0 } in C, {} in C++. */
+#ifdef __cplusplus
+    yst_desc d = {};
+#else
+    yst_desc d = { 0 };
+#endif
     d.start = 0.5;
     d.steps[0] = 0.1;
     d.n_steps = 1;

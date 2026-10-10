@@ -33,14 +33,12 @@
  *   A classic RDK drawn with ysp/gfx.h (examples/rdk/gfx_rdk.c runs it):
  *
  *       static yrdk_field rdk;
- *       yrdk_desc rd;
- *       memset(&rd, 0, sizeof rd);              // a zeroed desc: the defaults
+ *       yrdk_desc rd = { 0 };                         // a zeroed desc: the defaults
  *       rd.w = 400; rd.count = 200;
  *       rd.coherence = 0.25f; rd.direction = 0; rd.speed = 120;
  *       if (!yrdk_open(&rdk, &rd)) fail(yrdk_error(&rdk));
  *       ygfx_buf buf = ygfx_buffer(&gfx, (size_t)rdk.n * 8);
- *       ygfx_dots_desc dd;
- *       memset(&dd, 0, sizeof dd);
+ *       ygfx_dots_desc dd = { 0 };
  *       dd.buf = buf; dd.count = (uint32_t)rdk.n; dd.dot_size = 4;
  *       dd.aperture = YGFX_CIRCLE; dd.w = 400;
  *       dd.color[0] = dd.color[1] = dd.color[2] = 1;
@@ -65,8 +63,7 @@
  *   each update, so a ysp/timeline.h channel drives them through
  *   ygfx_bind.field, as a GSAP timeline drives a property:
  *
- *       ygfx_bind binds[3];
- *       memset(binds, 0, sizeof binds);
+ *       ygfx_bind binds[3] = { 0 };
  *       binds[0].stim = &dots; binds[0].param = YGFX_P_VISIBLE; binds[0].channel = DOTS_ON;
  *       binds[1].field = &rdk.coherence; binds[1].channel = COH;
  *       binds[2].field = &rdk.direction; binds[2].channel = DIR;
@@ -89,8 +86,7 @@
  *   A global-motion gabor array: the elements are written straight into
  *   ysp/gfx.h's instance records, with no copy:
  *
- *       yrdk_out o;
- *       memset(&o, 0, sizeof o);
+ *       yrdk_out o = { 0 };
  *       o.xy  = &items[0].x;   o.xy_stride  = sizeof items[0];
  *       o.dir = &items[0].ori; o.dir_stride = sizeof items[0];
  *       if (yrdk_write(&rdk, &o) < 0) fail(yrdk_error(&rdk));

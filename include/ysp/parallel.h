@@ -39,10 +39,8 @@
  *       #define YSP_PARALLEL_IMPLEMENTATION
  *       #include "ysp/parallel.h"
  *
- *       ypar_port pp;                                 // zeroed, or closed
- *       ypar_desc desc;                               // zeroed: sensible defaults
- *       memset(&pp, 0, sizeof pp);     // not { 0 }: an enum comes first, and
- *       memset(&desc, 0, sizeof desc); // C++ does not convert 0 to it
+ *       ypar_port pp = { 0 };                         // zeroed, or closed
+ *       ypar_desc desc = { 0 };                       // zeroed: sensible defaults
  *       if (!ypar_open(&pp, &desc)) {
  *           fprintf(stderr, "open failed: %s\n", ypar_error(&pp));
  *           return 1;

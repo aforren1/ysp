@@ -748,7 +748,10 @@ v0.3.0 applies the repository conventions (README.md, Conventions):
   boundary moved.
 - **Snapshot format 4.** The desc section of a session with jitters
   stores the durations as i64 nanoseconds where format 3 stored f64
-  seconds. A format 3 snapshot is refused by its number.
+  seconds. A format 3 snapshot is refused by its number. This breaks
+  resume across the upgrade: a session saved by v0.2.x cannot be resumed
+  by v0.3.0. Finish or restart a running study before you upgrade, or
+  rebuild the session from its outcomes and seed with `ytr_restore`.
 - **`format_rules()`** writes a duration as the exact decimal of its
   nanoseconds with trailing zeros dropped (`0.8`, `2`), where v0.2.1 wrote
   the shortest decimal of the double. A value with more than nine decimals

@@ -45,8 +45,7 @@
  *       yvid_desc vd = { 0 };
  *       vd.path = "clip.yspseq";
  *       if (!yvid_open(&mv, &gfx, &vd)) die(yvid_error(&mv));
- *       yvid_stim_desc st;                  // an enum first: memset, not { 0 }
- *       memset(&st, 0, sizeof st);
+ *       yvid_stim_desc st = { 0 };
  *       ygfx_stim film = yvid_stim(&mv, &st);
  *       if (yvid_play_at(&mv, YVID_ASAP) < 0) die(yvid_error(&mv));
  *       yscr_frame f;

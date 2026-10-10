@@ -68,8 +68,7 @@
  *           sd.on_context_ctx = &gd;
  *           if (!yscr_open(&scr, &sd)) return fail(yscr_error(&scr));
  *           if (!ygfx_open(&gfx, &gd)) return fail(ygfx_error(&gfx));
- *           ygfx_gabor_desc ga;                 // an enum first: memset, not { 0 }
- *           memset(&ga, 0, sizeof ga);
+ *           ygfx_gabor_desc ga = { 0 };
  *           ga.sf = 1 / 32.0f; ga.sigma = 32; ga.contrast = 0.5f;
  *           ygfx_stim g = ygfx_gabor(&ga);
  *           yscr_frame f;

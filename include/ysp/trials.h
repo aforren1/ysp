@@ -928,7 +928,8 @@
  *          ytr_load() is ytr_open_saved(); ytr_close() is new. The loop
  *          calls (next, update, mark_break, requeue, restore) write
  *          ytr_error() when they fail. Snapshot format 4 stores the
- *          jitters in ns; format 3 is refused by its number. The YRT_*
+ *          jitters in ns; format 3 is refused by its number. BREAKING:
+ *          a session saved by v0.2.x cannot be resumed with this header. The YRT_*
  *          unit macros of ysp/rt.h are defined here under the same guard.
  *          The USAGE examples zero the desc and set fields (C99 and C++17).
  *          format_rules() writes a jitter's seconds as the exact decimal of
