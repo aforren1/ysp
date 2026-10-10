@@ -140,8 +140,13 @@ int main(int argc, char** argv) {
         if (!yrt_ring_open(&g_ring, &rd)) return 2;
         d.ring = &g_ring;
     }
-    if (!ydev_start(&g_dev, &d)) { fprintf(stderr, "%s\n", ydev_error(&g_dev)); return 2; }
-    (void)yrt_sleep_ns(6000000000ull);
+    if (!ydev_open(&g_dev, &d)) { fprintf(stderr, "%s\n", ydev_error(&g_dev)); return 2; }
+    if (ydev_wait_running(&g_dev, YRT_S(3)) < 0) {
+        fprintf(stderr, "%s\n", ydev_error(&g_dev));
+        ydev_close(&g_dev);
+        return 2;
+    }
+    (void)yrt_sleep_ns(YRT_S(6));   /* the fit's span before the outputs */
     {
         /* outputs over the serial transport: 20 codes, each reported back */
         int64_t before[20];
@@ -186,7 +191,7 @@ int main(int argc, char** argv) {
 #endif
     }
     g_board_stop = 1;
-    ydev_stop(&g_dev);
+    ydev_close(&g_dev);
 #if defined(_WIN32)
     WaitForSingleObject(th, INFINITE);
 #else

@@ -1,6 +1,6 @@
 # ysp/device.h
 
-Status: v0.2.0, 2026-10-08; the rig profile, `ysp/rigfile.h` v0.2.0,
+Status: v0.3.0, 2026-10-10 (v0.2.0, 2026-10-08, for the outputs); the rig profile, `ysp/rigfile.h` v0.2.0,
 2026-10-09 (v0.2.0 adds roles bound to LSL streams, docs/net.md). The headers' manuals are the reference (OUTPUTS, AT THE FLIP
 and ROLES of `ysp/device.h`; THE FILE, CHECKS AT LOAD and BINDING of
 `ysp/rigfile.h`). This page records the decisions the plan
@@ -31,7 +31,9 @@ open, the results, and what needs the user's hardware.
 ## How-to: send a trigger code
 
 1. Find the output's key: `device_out_latency --list`.
-2. Start an instance of its family. The device need not be there yet:
+2. Open an instance of its family, and wait until it runs. `ydev_open()`
+   returns while the instance is still OPENING; an output before
+   `YDEV_RUNNING` fails with `YDEV_ERR_STATE`, and its trigger is lost:
 
    ```c
    static ydev_device trig;
@@ -41,13 +43,20 @@ open, the results, and what needs the user's hardware.
    d.key = "serial:0403:6001:TB0123:";
    d.device = 2;                        /* or d.roles = &roles */
    d.ring = &log_ring;
-   ydev_start(&trig, &d);
+   if (!ydev_open(&trig, &d)) die(ydev_error(&trig));
+   if (ydev_wait_running(&trig, YRT_S(3)) < 0) die(ydev_error(&trig));
    ```
-3. When `ydev_state(&trig)` is `YDEV_RUNNING`, call
-   `ydev_out_pulse(&trig, 12, 2000000)` (12 for 2 ms, then 0) or
-   `ydev_out_set(&trig, 12)` (hold 12). Each call returns `YDEV_OK` or a
-   `YDEV_ERR_*` and puts one `YDEV_REC_OUT` record in the ring.
-4. `ydev_stop(&trig)` ends a pending pulse, writes 0 if a code is held,
+3. Call `ydev_out_pulse(&trig, 12, YRT_MS(2))` (12 for 2 ms, then 0) or
+   `ydev_out_set(&trig, 12)` (hold 12), and check the result. Each call
+   returns `YDEV_OK` or a `YDEV_ERR_*` (`ydev_strerror()` names it; the call
+   does not write `ydev_error()`, because other threads may call it at the
+   same time) and puts one `YDEV_REC_OUT` record in the ring:
+
+   ```c
+   int rc = ydev_out_pulse(&trig, 12, YRT_MS(2));
+   if (rc < 0) fprintf(stderr, "trigger 12: %s\n", ydev_strerror(rc));
+   ```
+4. `ydev_close(&trig)` ends a pending pulse, writes 0 if a code is held,
    writes the family's close bytes (0xFF for the TriggerBox) and closes.
 
 For the parallel port, include `ysp/parallel.h` before `ysp/device.h` and
@@ -205,6 +214,34 @@ checked.
 | The folder | `yrt_user_dir(YRT_DIR_CONFIG, "rig")` only; refused means `YRIG_ERR_FOLDER`, no other folder | A folder another user can write may hold a planted profile (POSIX; on Windows `yrt_user_dir` reads no ACL) |
 | Limits | 1 MiB of text, 32 roles (`ydev_roles`), 16 buttons, nesting 8 | A profile is a few KB; bounds keep a hostile file cheap |
 | LSL streams (v0.2.0) | Family `lsl` (`YRIG_FAMILY_LSL`, 64: no `ysp/box.h` number), key `lsl:<name>:<type>:<source_id>:<hostname>` without a quote; no `baud`, `ftdi_latency_s`, `latched` or `pulse_s`; `yrig_desc()` and `yrig_start()` refuse it and name `ysp/net.h`; `yrig_source_role()` gives the tier rule by role name, and counts `lsl` as a device clock | A rig profile names a stream as it names a port. The file format does not change, so v0.1.0 profiles load unchanged. `ysp/rigfile.h` does not include `ysp/net.h`: the player passes the role's key to the inlet |
+
+### Open, close and the wait for RUNNING (v0.3.0)
+
+v0.3.0 applies the repository conventions (README.md, Conventions). It
+breaks the API.
+
+| Question | Decision | Why |
+|---|---|---|
+| Names | `ydev_open()` and `ydev_close()` replace `ydev_start()` and `ydev_stop()` | The call takes a desc and fills a handle with a thread, a lock and a connection: that is an open in every header. start and stop are for an activity on an open handle |
+| The first output | `ydev_wait_running(dev, timeout_ns)`: `YDEV_RUNNING`, `YDEV_ERR_TIMEOUT` (new), or `YDEV_ERR_STATE` when the instance ends FAILED or CLOSED; the reason in `ydev_error()` | The v0.2 USAGE and this page sent a pulse right after the start, while the device was OPENING. The pulse returned `YDEV_ERR_STATE`, nobody checked it, and the first EEG trigger of a session was lost. Each example had its own wait loop; one call replaces them |
+| The wait in manual mode | It calls `ydev_poll()` itself and sleeps 1 ms between steps; with `desc.now` it gives up when a poll does not move that clock | A manual instance has no thread to advance it. The caller owns a virtual clock, so a wait that cannot move it must not spin |
+| The wait's message | Written under the instance's lock; a FAILED instance keeps the reader thread's reason ("did not answer as a line device") | The reader thread writes that message, so both writers take one lock, and the more specific reason wins |
+| Key and role | Copied into the handle: `key_buf[YDEV_KEY_MAX]` (128) and `role_buf[YDEV_ROLE_MAX]` (32, a role table's name); longer fails `ydev_open()` with a message | The reader thread read `desc.key` again at every reconnect, through the caller's pointer. A key built in a stack buffer was gone by the first replug. No allocation: the handle grows by 160 bytes |
+| Times | `ydev_poll(dev, timeout_ns)`, `desc.read_timeout_ns`, `ydev_transport.read(conn, buf, cap, timeout_ns)` | Every C time is `int64_t` ns. A transport written for v0.2 fails to compile instead of reading 20 ns as 20 ms |
+| `xid_width_ms` | Kept, in the handle | It is the XID protocol's own unit (`mp` takes whole ms), state the encoder compares with, not a time the caller writes |
+| The output calls | Return a code only; `ydev_strerror()` (new) names it | Several threads call them at once (README.md, Conventions, Errors) |
+
+Checked on 2026-10-10 on Windows 11, MSVC 19.44 (/W4 /WX) and MinGW-w64
+gcc 16.1 (-Werror): `tests/adapt/device_test.c` 878 checks pass, with new
+ones for the wait (a pulse before RUNNING refused, the wait reaching
+RUNNING in manual and thread mode, at once on FAILED with the reason kept,
+on a closed instance, and a timeout when the virtual clock stands still),
+the copied key surviving its buffer and a reconnect, and the key and role
+limits. `tests/compile/device.c` names every entry point by type and runs
+the wait, a failed open, and a close twice. Mutants `dev-26` (the caller's
+key kept), `dev-27` (a FAILED wait waits out its timeout) and `dev-28` (the
+wait overwrites the reason) are new; all three were caught, and so was the
+moved anchor of `dev-25`.
 
 ## Results
 

@@ -123,14 +123,14 @@ static int monitor(ydev_desc* d, double secs) {
     t0 = yrt_now_ns();
     d->sink = to_console;
     d->sink_ctx = &t0;
-    if (!ydev_start(&g_dev, d)) { fprintf(stderr, "%s\n", ydev_error(&g_dev)); return 2; }
+    if (!ydev_open(&g_dev, d)) { fprintf(stderr, "%s\n", ydev_error(&g_dev)); return 2; }
     end = t0 + (int64_t)(secs * 1e9);
     while (yrt_now_ns() < end) {
         int s = ydev_state(&g_dev);
         if (s != last) { printf("state %s at %+.3f s\n", ydev_state_name(s), (double)(yrt_now_ns() - t0) / 1e9); last = s; }
         (void)yrt_sleep_ns(10000000);
     }
-    ydev_stop(&g_dev);
+    ydev_close(&g_dev);
     print_stats();
     return g_dev.snap.opens > 0 ? 0 : 1;
 }
@@ -205,7 +205,7 @@ int main(int argc, char** argv) {
     yscr_describe(&scr, line, sizeof line);
     printf("%s\n", line);
     dd.sink = to_bridge;
-    if (!ydev_start(&g_dev, &dd)) { fprintf(stderr, "%s\n", ydev_error(&g_dev)); yscr_close(&scr); return 2; }
+    if (!ydev_open(&g_dev, &dd)) { fprintf(stderr, "%s\n", ydev_error(&g_dev)); yscr_close(&scr); return 2; }
     (void)yrt_thread_elevate(NULL);
 
     /* 3 s of gray while the device opens and its fit gets a slope */
@@ -219,9 +219,9 @@ int main(int argc, char** argv) {
             yscr_flip(&scr);
             while (yscr_poll(&scr, &ev, &t)) { }
         }
-        if (ydev_state(&g_dev) != YDEV_RUNNING) {
-            fprintf(stderr, "the device at %s is %s after 3 s\n", key, ydev_state_name(ydev_state(&g_dev)));
-            ydev_stop(&g_dev);
+        if (ydev_wait_running(&g_dev, 0) < 0) {
+            fprintf(stderr, "the device at %s after 3 s: %s\n", key, ydev_error(&g_dev));
+            ydev_close(&g_dev);
             print_stats();
             yscr_close(&scr);
             return 2;
@@ -284,7 +284,7 @@ int main(int argc, char** argv) {
                 }
             (void)yrt_sleep_ns(5000000);
         }
-        ydev_stop(&g_dev);
+        ydev_close(&g_dev);
         yscr_close(&scr);
         while ((n = yrt_ring_drain(&ring, evs, 4096)) > 0)
             for (k = 0; k < n; k++) {

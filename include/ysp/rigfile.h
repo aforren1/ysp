@@ -1337,7 +1337,7 @@ YRIG_API bool yrig_start(ydev_device* dev, const yrig_profile* p, const char* ro
     if (base) d = *base;
     else memset(&d, 0, sizeof d);
     if (yrig_desc(p, role, &d, err, cap) != YRIG_OK) return false;
-    if (!ydev_start(dev, &d)) {
+    if (!ydev_open(dev, &d)) {
         yrig__err(err, cap, YRIG_ERR_ARG, "roles.%s: %s", role, ydev_error(dev));
         return false;
     }

@@ -50,9 +50,9 @@ static void* fb_open(void* user, const char* key, char* found, size_t cap) {
     snprintf(found, cap, "in-process box");
     return user;
 }
-static int fb_read(void* conn, uint8_t* buf, int cap, int timeout_ms) {
+static int fb_read(void* conn, uint8_t* buf, int cap, int64_t timeout_ns) {
     (void)conn; (void)buf; (void)cap;
-    (void)yrt_sleep_ns((int64_t)timeout_ms * 1000000);
+    (void)yrt_sleep_ns(timeout_ns);
     return 0;
 }
 static int fb_write(void* conn, const uint8_t* buf, int n) {
@@ -144,11 +144,10 @@ int main(int argc, char** argv) {
         od.transport.close = fb_close;
         od.transport.user = &g_box;
     }
-    if (!ydev_start(&g_out, &od)) { fprintf(stderr, "%s\n", ydev_error(&g_out)); return 2; }
-    for (i = 0; i < 100 && ydev_state(&g_out) != YDEV_RUNNING; i++) (void)yrt_sleep_ns(20000000);
-    if (ydev_state(&g_out) != YDEV_RUNNING) {
-        fprintf(stderr, "the output at %s is %s after 2 s\n", od.key, ydev_state_name(ydev_state(&g_out)));
-        ydev_stop(&g_out);
+    if (!ydev_open(&g_out, &od)) { fprintf(stderr, "%s\n", ydev_error(&g_out)); return 2; }
+    if (ydev_wait_running(&g_out, YRT_S(2)) < 0) {
+        fprintf(stderr, "the output at %s: %s\n", od.key, ydev_error(&g_out));
+        ydev_close(&g_out);
         return 2;
     }
 
@@ -159,7 +158,7 @@ int main(int argc, char** argv) {
     sd.ring = &ring;
     sd.triggers = &ch;
     sd.n_triggers = 1;
-    if (!yscr_open(&g_scr, &sd)) { fprintf(stderr, "screen: %s\n", yscr_error(&g_scr)); ydev_stop(&g_out); return 2; }
+    if (!yscr_open(&g_scr, &sd)) { fprintf(stderr, "screen: %s\n", yscr_error(&g_scr)); ydev_close(&g_out); return 2; }
     {
         char line[512];
         yscr_describe(&g_scr, line, sizeof line);
@@ -176,7 +175,7 @@ int main(int argc, char** argv) {
     (void)yscr_wait_flip(&g_scr, NULL);
     (void)yrt_sleep_ns(50000000);       /* the last pulse's end */
     yscr_close(&g_scr);
-    ydev_stop(&g_out);
+    ydev_close(&g_out);
 
     /* the device's records of the writes the screen's worker made */
     n = yrt_ring_drain(&ring, g_rec, 16384);

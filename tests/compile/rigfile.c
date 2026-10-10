@@ -26,6 +26,6 @@ int main(void) {
     d.manual = true;
     if (!yrig_start(&dev, &g_prof, "resp", &d, err, sizeof err)) return 3;
     ok = ydev_poll(&dev, 0) == YDEV_OPENING && yrig_source(&g_prof, &dev).tier == YIN_TIER_UNKNOWN;
-    ydev_stop(&dev);
+    ydev_close(&dev);
     return ok ? 0 : 4;
 }

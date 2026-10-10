@@ -758,9 +758,9 @@ static void* f_open(void* user, const char* key, char* found, size_t cap) {
     snprintf(found, cap, "fake");
     return f;
 }
-static int f_read(void* conn, uint8_t* buf, int cap, int timeout_ms) {
+static int f_read(void* conn, uint8_t* buf, int cap, int64_t timeout_ns) {
     (void)conn; (void)buf; (void)cap;
-    g_now += (int64_t)timeout_ms * 1000000;
+    g_now += timeout_ns;
     return 0;
 }
 static int f_write(void* conn, const uint8_t* buf, int n) {
@@ -815,7 +815,7 @@ static void check_binding(void) {
     g_p.role[yrig_find(&g_p, "trig") - g_p.role].pulse_ns = 2000000;
     memset(&g_fb, 0, sizeof g_fb);
     CHECK(yrig_start(&dev, &g_p, "trig", &base, g_err, sizeof g_err));
-    CHECK_I(ydev_poll(&dev, 1), YDEV_RUNNING);
+    CHECK_I(ydev_poll(&dev, YRT_MS(1)), YDEV_RUNNING);
     CHECK_S(g_fb.key, "serial:0403:6001:TB0123:");
     CHECK_I(ydev_role_index(&roles, "trig"), 1);
     CHECK(ydev_role_device(&roles, 1) == &dev);
@@ -824,7 +824,7 @@ static void check_binding(void) {
     CHECK_I(ydev_out_mark(&dev, 7, "m"), YDEV_OK);      /* desc.pulse_ns from the profile: 2 ms */
     {
         int64_t t0 = g_now;
-        while (g_now < t0 + 3000000) (void)ydev_poll(&dev, 1);
+        while (g_now < t0 + 3000000) (void)ydev_poll(&dev, YRT_MS(1));
     }
     CHECK(g_fb.n == 4 && g_fb.bytes[0] == 0 && g_fb.bytes[1] == 5 && g_fb.bytes[2] == 7 && g_fb.bytes[3] == 0);
     s = yrig_source(&g_p, &dev);
@@ -839,7 +839,7 @@ static void check_binding(void) {
         tr->bounds.set = false;
         tr->bounds.check = YRIG_CHECK_NONE;
     }
-    ydev_stop(&dev);
+    ydev_close(&dev);
     /* an input role whose bounds were checked: tier 1 with its bounds */
     CHECK(yrig_start(&dev, &g_p, "resp", &base, g_err, sizeof g_err));
     s = yrig_source(&g_p, &dev);
@@ -856,7 +856,7 @@ static void check_binding(void) {
     CHECK(s.tier == YIN_TIER_UNKNOWN && s.lo_us == 0 && s.hi_us == 0);
     yrig_find(&g_p, "resp")->bounds.check = YRIG_CHECK_OK;
     CHECK_I(yrig_source(&g_q, &dev).tier, YIN_TIER_UNKNOWN);   /* another profile without the role */
-    ydev_stop(&dev);
+    ydev_close(&dev);
     /* a start that the device layer refuses names the role */
     d = base;
     d.device = 0;

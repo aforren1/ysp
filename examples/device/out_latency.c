@@ -174,9 +174,9 @@ static void* sim_open(void* user, const char* key, char* found, size_t cap) {
     return user;
 }
 
-static int sim_read(void* conn, uint8_t* buf, int cap, int timeout_ms) {
+static int sim_read(void* conn, uint8_t* buf, int cap, int64_t timeout_ns) {
     simboard* b = (simboard*)conn;
-    int64_t end = yrt_now_ns() + (int64_t)timeout_ms * 1000000;
+    int64_t end = yrt_now_ns() + timeout_ns;
     for (;;) {
         int n = 0;
         int64_t t = yrt_now_ns();
@@ -469,7 +469,7 @@ int main(int argc, char** argv) {
 #if !defined(__APPLE__)
     if (fam == YBOX_PARALLEL) od.transport = ydev_parallel_transport(&g_par);
 #endif
-    if (!ydev_start(&g_out, &od)) { fprintf(stderr, "out_latency: %s\n", ydev_error(&g_out)); return 2; }
+    if (!ydev_open(&g_out, &od)) { fprintf(stderr, "out_latency: %s\n", ydev_error(&g_out)); return 2; }
     if (!self) {
         memset(&id, 0, sizeof id);
         id.role = "in";
@@ -486,18 +486,14 @@ int main(int argc, char** argv) {
             id.transport.close = sim_close;
             id.transport.user = &g_sim;
         }
-        if (!ydev_start(&g_in, &id)) { fprintf(stderr, "out_latency: %s\n", ydev_error(&g_in)); ydev_stop(&g_out); return 2; }
+        if (!ydev_open(&g_in, &id)) { fprintf(stderr, "out_latency: %s\n", ydev_error(&g_in)); ydev_close(&g_out); return 2; }
     }
     /* both running, then the warm-up: the input's fit needs its span */
-    for (i = 0; i < 100; i++) {
-        if (ydev_state(&g_out) == YDEV_RUNNING && (self || ydev_state(&g_in) == YDEV_RUNNING)) break;
-        (void)yrt_sleep_ns(100000000);
-    }
-    if (ydev_state(&g_out) != YDEV_RUNNING || (!self && ydev_state(&g_in) != YDEV_RUNNING)) {
-        fprintf(stderr, "out_latency: not running after 10 s: out %s%s%s\n", ydev_state_name(ydev_state(&g_out)),
-                self ? "" : ", in ", self ? "" : ydev_state_name(ydev_state(&g_in)));
-        ydev_stop(&g_out);
-        if (!self) ydev_stop(&g_in);
+    if (ydev_wait_running(&g_out, YRT_S(10)) < 0 || (!self && ydev_wait_running(&g_in, YRT_S(10)) < 0)) {
+        fprintf(stderr, "out_latency: out: %s%s%s\n", ydev_error(&g_out),
+                self ? "" : "; in: ", self ? "" : ydev_error(&g_in));
+        ydev_close(&g_out);
+        if (!self) ydev_close(&g_in);
         return 2;
     }
     ydev_get_stats(&g_out, &ost);
@@ -541,8 +537,8 @@ int main(int argc, char** argv) {
     }
     ydev_get_stats(&g_out, &ost);
     if (!self) ydev_get_stats(&g_in, &ist); else ist = ost;
-    ydev_stop(&g_out);
-    if (!self) ydev_stop(&g_in);
+    ydev_close(&g_out);
+    if (!self) ydev_close(&g_in);
 
     /* the board's own reports of its pin changes ("O"), against the write */
     {

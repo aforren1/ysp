@@ -225,5 +225,29 @@ id = "dev-25"
 name = "a role gets a new index after a restart"
 test = "device"
 why = "The data file joins events and records by role index; it must not change in a session."
-find = '''        int i = ydev_role_index(r, desc->role);'''
+find = '''        int i = ydev_role_index(r, dev->d.role);'''
 replace = '''        int i = 0;'''
+
+[[mutant]]
+id = "dev-26"
+name = "the caller's key kept, not copied (v0.3.0)"
+test = "device"
+why = "The reader thread reads the key again at every reconnect; a caller's buffer that is gone by then makes the device unfindable."
+find = '''    dev->d.key = dev->key_buf;'''
+replace = ''
+
+[[mutant]]
+id = "dev-27"
+name = "a wait on a FAILED instance waits out its timeout (v0.3.0)"
+test = "device"
+why = "A wrong device never runs: the wait must end at once with the reason, not hang the session start for the whole timeout."
+find = '''        if (s == YDEV_FAILED || s == YDEV_CLOSED) return ydev__wait_fail(dev, YDEV_ERR_STATE, s);'''
+replace = '''        if (s == YDEV_CLOSED) return ydev__wait_fail(dev, YDEV_ERR_STATE, s);'''
+
+[[mutant]]
+id = "dev-28"
+name = "the wait's message overwrites the wrong-device reason (v0.3.0)"
+test = "device"
+why = "ydev_error() after a failed wait must say why the device failed, which the reader thread wrote."
+find = '''    if (state != YDEV_FAILED || !dev->err[0])'''
+replace = '''    if (1)'''
