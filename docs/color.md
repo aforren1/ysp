@@ -233,6 +233,41 @@ For DKL with a weight on S, the S row of ComputeDKL_M becomes
 (-wL, -wM, V_bg / S_bg - wS). With wS = 0 every operation gives the same
 bits as the raw `ycol_cal_dkl_matrix()`, which the test checks.
 
+## Open, close and the context's message (v0.2.0)
+
+v0.2.0 applies the repository conventions (README.md, Conventions) to this
+header. Three decisions:
+
+- **The context opens.** `ycol_ctx_open(cx, d)` replaces
+  `ycol_ctx_init(cx, d, err, cap)`: it takes a desc and checks it, which
+  is what open means in every header. It returns `bool`. The message is in
+  the context (`ycol_ctx_error()`), and the code in `cx->status`, because
+  the Python and MATLAB bindings map the code to an exception class
+  (`FormatError`, `RefusedError`) and their tests check the class.
+  `ycol_ctx_close()` zeroes the context; there is nothing to release, but
+  every open has a close. A closed context refuses every conversion.
+- **Readers keep their reports.** The calls that take a `const ycol_ctx*`
+  (the conversions, the gamut calls, `ycol_ctx_describe()`) do not write
+  the message: several threads can share one context, and a write would
+  race. A conversion reports in its `ycol_gamut` (`status`, `why`) or its
+  status argument, as in v0.1. `ycol_ctx_set_background()` writes the
+  context, so it also writes the message when it fails.
+- **Records stay records.** `ycol_cal` and `ycol_lum` are plain structs
+  with a file form, so they keep init, load, save, derive and check with a
+  caller buffer for the message.
+
+The context grew by 260 bytes (the code and a 256-byte message). The
+matrices keep their offsets. USAGE now builds as C99 and C++17: it uses
+`ycol_make()`, and the value macros are shown as the C99 and C++20 form.
+
+Checked on 2026-10-10 (Windows 11, MSVC 19.44 /W4 /WX, and MinGW-w64 gcc
+-std=c99 and -std=c++17 -pedantic for USAGE): `tests/adapt/color_test.c`
+passes with every v0.1 check unchanged, plus the close (zeroed, after a
+failed open, twice), the message and code of a failed open and of a
+refused background. `tests/compile/color.c` names the context's calls by
+type. Mutants 33 (a refused background without a message) and 34 (a close
+that keeps the matrices) are caught.
+
 ## Float and double
 
 The math is double. The calibration stores float readings, spectra and

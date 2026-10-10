@@ -74,7 +74,6 @@ static double median(double* v) {
 int main(int argc, char** argv) {
     ycol_ctx cx;
     ycol_ctx_desc d;
-    char err[200];
     double t[ROUNDS], scale = 1;
     long n_one;
     int s, r, i, fail = 0;
@@ -91,13 +90,13 @@ int main(int argc, char** argv) {
         d.cones = s;
         for (r = 0; r < ROUNDS; r++) {
             uint64_t t0 = yrt_now_ns();
-            if (ycol_ctx_init(&cx, &d, err, sizeof err) < 0) fail = 1;
+            if (!ycol_ctx_open(&cx, &d)) fail = 1;
             t[r] = (double)(yrt_now_ns() - t0);
         }
-        printf("ctx init, %s cones: %.1f us\n", s ? "SS10" : "SS2", median(t) / 1000.0);
+        printf("ctx open, %s cones: %.1f us\n", s ? "SS10" : "SS2", median(t) / 1000.0);
     }
     d.cones = 0;
-    if (ycol_ctx_init(&cx, &d, err, sizeof err) < 0) { fprintf(stderr, "color_bench: %s\n", err); return 1; }
+    if (!ycol_ctx_open(&cx, &d)) { fprintf(stderr, "color_bench: %s\n", ycol_ctx_error(&cx)); return 1; }
 
     for (r = 0; r < ROUNDS; r++) {   /* the per-element case */
         uint64_t t0 = yrt_now_ns();

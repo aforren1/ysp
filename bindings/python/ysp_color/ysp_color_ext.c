@@ -559,8 +559,6 @@ static int Ctx_init(PyObject* self, PyObject* args, PyObject* kwds) {
     CtxObject* o = (CtxObject*)self;
     PyObject *cal, *bg = NULL, *cones_o = NULL, *lum = Py_None, *white = Py_None, *adapt_o = NULL;
     ycol_ctx_desc d;
-    char err[256];
-    int rc;
     memset(&d, 0, sizeof d);
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|O$OOOdO", kw, &cal, &bg, &cones_o, &lum, &white, &d.src_white_Y, &adapt_o))
         return -1;
@@ -572,8 +570,7 @@ static int Ctx_init(PyObject* self, PyObject* args, PyObject* kwds) {
     if (adapt_o && (d.adapt = col_named(adapt_o, col_adapt_names, 2, "adapt (\"none\", \"bradford\")")) < 0) return -1;
     d.cal = AS_CAL(cal);
     d.lum = lum != Py_None ? AS_LUM(lum) : NULL;
-    rc = ycol_ctx_init(&o->cx, &d, err, sizeof err);
-    if (rc < 0) { col_fail(rc, err); return -1; }
+    if (!ycol_ctx_open(&o->cx, &d)) { col_fail(o->cx.status, ycol_ctx_error(&o->cx)); return -1; }
     {
         PyObject *oc = o->cal, *ol = o->lum;
         Py_INCREF(cal); o->cal = cal;

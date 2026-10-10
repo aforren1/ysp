@@ -1,4 +1,4 @@
-/* ysp/color.h - v0.1.0 - public domain single-header color library for
+/* ysp/color.h - v0.2.0 - public domain single-header color library for
  *   calibrated displays
  *
  *   Color for psychophysics on a measured display: the display calibration
@@ -25,62 +25,6 @@
  *   designated initializers: C99, or C++20.
  *
  *   ---------------------------------------------------------------------
- *   CHANGELOG
- *   ---------------------------------------------------------------------
- *   v0.1.0 - first version. The calibration (ycol_cal, the .yspcal
- *          file) is ysp/gfx.h v0.4's ygfx_cal, field for field and byte
- *          for byte, with its code; ysp/gfx.h v0.5 uses this header
- *          (docs/color.md). The gamut tolerance is 2^-20, the
- *          precision of the calibration's float storage (GAMUT). New: the
- *          context, the color
- *          values, the conversions, the gamut calls, the 10 degree cone
- *          fundamentals, the participant luminance record (ycol_lum,
- *          the .ysplum file) and nominal spectra.
- *
- *   STATUS: v0.1.0. Built and run with MSVC 19.44 (/W4 /WX, the default
- *   C dialect and C++17), MinGW-w64 gcc 14.3 (C99, C11, C++17) and gcc
- *   11.4 on Linux under ASan and UBSan; the value macros as C++20 on MSVC
- *   and g++. tests/adapt/color_test.c checks:
- *   - the calibration against published values, as ysp/gfx.h v0.3 did:
- *     IEC 61966-2-1's sRGB matrix within 3.9e-5, the CLUT of an sRGB
- *     transfer within 1.3e-3 (17 levels) and 3.6e-5 (64), RGB to LMS, the
- *     DKL matrix and its axes within 7e-8 (relative) of Psychtoolbox's
- *     ComputeDKL_M in MATLAB R2023a; the 10 degree table against CVRL's
- *     rows through colour-science;
- *   - the conversions against colour-science 0.4.7
- *     (tests/compare/color_refs.py): XYZ, xyY, Oklab, Display P3 and Rec.
- *     2020 within 4e-16, CIELAB and CIELUV within 9e-14, the polar forms
- *     within 1.4e-12 (3.3e-10 for the hue of a near-gray), Bradford 1e-16;
- *   - round trips through every space on three contexts, 20000 colors
- *     each: within 1.4e-13 (DKL spherical) and 8.4e-15 for the rest;
- *   - gamut edges, max_scale against a bisection (1.1e-15), the rings,
- *     every map method on 2000 colors (results in gamut, L and h kept
- *     within 3.3e-16 and 2.3e-12 degrees), device codes through the CLUT
- *     and back (0 of 3840 differ), rounding at 0.002 of a code;
- *   - the luminance fit on a synthetic observer (the weights' direction
- *     within 1e-15), every refusal, the parameter tables.
- *   Before ysp/gfx.h v0.5 took its calibration from this header, a build
- *   of the test with ysp/gfx.h v0.4 beside it compared the two codes bit
- *   for bit: 52 calibrations (struct, file bytes, check), 2100 raw calls,
- *   PAINT's matrices and forward conversions, the video primaries; equal.
- *   After the move, ysp_gfx's test gives the same readback hashes.
- *   A calibration from float literals hashes to the same bits on all three
- *   compilers. 32 deliberate faults in the header, 32 caught.
- *   Against Psychtoolbox in MATLAB R2023a (tests/compare/color_ptb.m,
- *   through the MEX binding): ComputeDKL_M within 6.2e-16 with the
- *   standard and a participant's luminance; LMSToMacBoyn within 1.2e-7
- *   (its fitted luminance weights against the published ones);
- *   SensorToPrimary within 1.5e-8 and SensorToSettings's out-of-gamut
- *   flags equal on 500 colors; MaximizeGamutContrast within 7.3e-16.
- *   Cost (examples/color/bench.c, MSVC 19.44 /O2, the Iris Xe laptop,
- *   power source not recorded): a
- *   DKL direction 22 to 27 ns a call, CIELAB and Oklab from RGB 40 to 44
- *   ns, an OkLCh gamut ring of 360 hues 0.8 to 1.0 ms, a context 0.6 to
- *   0.8 ms; MinGW's pow and cbrt are 2 to 5 times slower.
- *   What is NOT done here: no number is a measurement of light.
- *   docs/color.md has the tables.
- *
- *   ---------------------------------------------------------------------
  *   USAGE
  *   ---------------------------------------------------------------------
  *   Do this:
@@ -97,25 +41,28 @@
  *       char err[200];
  *       if (ycol_cal_load(&cal, bytes, n, err, sizeof err) < 0) fail(err);
  *
- *       ycol_ctx cx;                  // about 2 KB, read-only after init
- *       if (ycol_ctx_init(&cx, &(ycol_ctx_desc){
- *               .cal = &cal, .background = { 0.5, 0.5, 0.5 } }, err, sizeof err) < 0)
- *           fail(err);
+ *       static ycol_ctx cx;           // about 2 KB, read-only after open
+ *       ycol_ctx_desc d = { 0 };
+ *       d.cal = &cal;
+ *       d.background[0] = d.background[1] = d.background[2] = 0.5;
+ *       if (!ycol_ctx_open(&cx, &d)) fail(ycol_ctx_error(&cx));
  *
  *       ycol_gamut g;
- *       ycol_rgb d = ycol_to_dir(&cx, YCOL_DKL(.azim = 90, .contrast = 0.05), &g);
+ *       ycol_rgb dir = ycol_to_dir(&cx, ycol_make(YCOL_SPACE_DKL, 0, 90, 0.05), &g);
  *       if (!g.in) printf("out by %.3g; %.3g of it fits\n", g.distance, g.scale);
- *       double kmax = ycol_max_scale(&cx, YCOL_DKL(.azim = 0, .contrast = 1),
- *                                      YCOL_SYMMETRIC);
+ *       double kmax = ycol_max_scale(&cx, ycol_make(YCOL_SPACE_DKL, 0, 0, 1),
+ *                                    YCOL_SYMMETRIC);
  *       ycol_rgb orange = ycol_to_rgb(&cx, ycol_hex("#ff8800"), &g);
- *       ycol_rgb soft   = ycol_map(&cx, YCOL_OKLCH(.L = 0.75, .C = 0.2, .h = 30),
- *                                      YCOL_MAP_CHROMA_OKLCH, &g);
+ *       ycol_rgb soft   = ycol_map(&cx, ycol_make(YCOL_SPACE_OKLCH, 0.75, 0.2, 30),
+ *                                  YCOL_MAP_CHROMA_OKLCH, &g);
  *       ycol_color lab  = ycol_from_rgb(&cx, orange, YCOL_SPACE_CIELAB, NULL);
- *       ycol_store3f(stim.dir, d);    // ysp/gfx.h takes float[3]
+ *       ycol_store3f(stim.dir, dir);  // ysp/gfx.h takes float[3]
+ *       ycol_ctx_close(&cx);
  *
- *   A value macro needs at least one field: YCOL_DKL() expands to empty
- *   braces, which C99 refuses. In C++17, which has no designated
- *   initializers, use ycol_make(YCOL_SPACE_DKL, elev, azim, contrast).
+ *   In C99 and C++20 the value macros name the fields:
+ *   YCOL_DKL(.azim = 90, .contrast = 0.05) is ycol_make(YCOL_SPACE_DKL, 0,
+ *   90, 0.05). A value macro needs at least one field: YCOL_DKL() expands
+ *   to empty braces, which C99 refuses.
  *
  *   ---------------------------------------------------------------------
  *   MODEL
@@ -141,7 +88,18 @@
  *     question (it needs a background and a luminance) or a CIELAB one (it
  *     needs a white). The context is the unit to log:
  *     ycol_ctx_describe() gives one line, ctx.id a 32-bit CRC of all of
- *     it. Read-only after init, so threads can share one.
+ *     it. ycol_ctx_open() fills it, ycol_ctx_close() empties it (there is
+ *     nothing to release).
+ *   ERRORS AND THREADS
+ *     ycol_ctx_open() and ycol_ctx_set_background() write the context:
+ *     on failure, the message (ycol_ctx_error()) and the code
+ *     (cx->status). Every call that takes a const ycol_ctx* only reads
+ *     it, so several threads can share one context while nothing calls
+ *     those two. The readers do not write the message: a conversion
+ *     reports in its ycol_gamut (status, why) or its status argument, and
+ *     the others return the code (ycol_strerror()). The calibration and
+ *     lum calls that take char* err, size_t cap write a caller buffer,
+ *     which may be NULL.
  *   ABSOLUTE AND RELATIVE
  *     XYZ, xyY and LMS are absolute: the light at the eye, the display's
  *     black included (measure the black in the room light of the
@@ -349,7 +307,7 @@
  *   ---------------------------------------------------------------------
  *   COST
  *   ---------------------------------------------------------------------
- *   ycol_ctx_init() checks the calibration's CRC (62 KB) and, for SS10,
+ *   ycol_ctx_open() checks the calibration's CRC (62 KB) and, for SS10,
  *   integrates 441 nm of spectra: a setup call. A conversion is a few
  *   3 x 3 products and, for the uniform spaces, cube roots or
  *   trigonometry: 5 to 75 ns a call (STATUS; examples/color/bench.c
@@ -372,10 +330,79 @@
  *   Link libm on Linux. Define YCOL_API to override the default `extern`
  *   linkage; -DYCOL_API=static needs a translation unit that calls
  *   every function, or -Wno-unused-function.
+ *
+ *   ---------------------------------------------------------------------
+ *   CHANGELOG
+ *   ---------------------------------------------------------------------
+ *   v0.2.0 - The ysp conventions (README.md, Conventions); breaks the API.
+ *          ycol_ctx_init(cx, d, err, cap) is bool ycol_ctx_open(cx, d):
+ *          the message is in the context (ycol_ctx_error()) and the code
+ *          in cx->status. ycol_ctx_close() is new; it has nothing to
+ *          release. ycol_ctx_set_background() writes the message and
+ *          cx->status when it fails. The calls that take a const context
+ *          (the conversions, the gamut calls, ycol_ctx_describe()) read
+ *          it only and keep their error reports, so threads can share a
+ *          context. The calibration and lum records keep init, load,
+ *          save, derive and check with a caller buffer. USAGE builds as
+ *          C99 and C++17. No conversion changed.
+ *   v0.1.0 - first version. The calibration (ycol_cal, the .yspcal
+ *          file) is ysp/gfx.h v0.4's ygfx_cal, field for field and byte
+ *          for byte, with its code; ysp/gfx.h v0.5 uses this header
+ *          (docs/color.md). The gamut tolerance is 2^-20, the
+ *          precision of the calibration's float storage (GAMUT). New: the
+ *          context, the color
+ *          values, the conversions, the gamut calls, the 10 degree cone
+ *          fundamentals, the participant luminance record (ycol_lum,
+ *          the .ysplum file) and nominal spectra.
+ *
+ *   STATUS: v0.2.0: the v0.1.0 checks below pass unchanged, and the test
+ *   checks the context's message, code and close. v0.1.0: built and run with MSVC 19.44 (/W4 /WX, the default
+ *   C dialect and C++17), MinGW-w64 gcc 14.3 (C99, C11, C++17) and gcc
+ *   11.4 on Linux under ASan and UBSan; the value macros as C++20 on MSVC
+ *   and g++. tests/adapt/color_test.c checks:
+ *   - the calibration against published values, as ysp/gfx.h v0.3 did:
+ *     IEC 61966-2-1's sRGB matrix within 3.9e-5, the CLUT of an sRGB
+ *     transfer within 1.3e-3 (17 levels) and 3.6e-5 (64), RGB to LMS, the
+ *     DKL matrix and its axes within 7e-8 (relative) of Psychtoolbox's
+ *     ComputeDKL_M in MATLAB R2023a; the 10 degree table against CVRL's
+ *     rows through colour-science;
+ *   - the conversions against colour-science 0.4.7
+ *     (tests/compare/color_refs.py): XYZ, xyY, Oklab, Display P3 and Rec.
+ *     2020 within 4e-16, CIELAB and CIELUV within 9e-14, the polar forms
+ *     within 1.4e-12 (3.3e-10 for the hue of a near-gray), Bradford 1e-16;
+ *   - round trips through every space on three contexts, 20000 colors
+ *     each: within 1.4e-13 (DKL spherical) and 8.4e-15 for the rest;
+ *   - gamut edges, max_scale against a bisection (1.1e-15), the rings,
+ *     every map method on 2000 colors (results in gamut, L and h kept
+ *     within 3.3e-16 and 2.3e-12 degrees), device codes through the CLUT
+ *     and back (0 of 3840 differ), rounding at 0.002 of a code;
+ *   - the luminance fit on a synthetic observer (the weights' direction
+ *     within 1e-15), every refusal, the parameter tables.
+ *   Before ysp/gfx.h v0.5 took its calibration from this header, a build
+ *   of the test with ysp/gfx.h v0.4 beside it compared the two codes bit
+ *   for bit: 52 calibrations (struct, file bytes, check), 2100 raw calls,
+ *   PAINT's matrices and forward conversions, the video primaries; equal.
+ *   After the move, ysp_gfx's test gives the same readback hashes.
+ *   A calibration from float literals hashes to the same bits on all three
+ *   compilers. 32 deliberate faults in the header, 32 caught.
+ *   Against Psychtoolbox in MATLAB R2023a (tests/compare/color_ptb.m,
+ *   through the MEX binding): ComputeDKL_M within 6.2e-16 with the
+ *   standard and a participant's luminance; LMSToMacBoyn within 1.2e-7
+ *   (its fitted luminance weights against the published ones);
+ *   SensorToPrimary within 1.5e-8 and SensorToSettings's out-of-gamut
+ *   flags equal on 500 colors; MaximizeGamutContrast within 7.3e-16.
+ *   Cost (examples/color/bench.c, MSVC 19.44 /O2, the Iris Xe laptop,
+ *   power source not recorded): a
+ *   DKL direction 22 to 27 ns a call, CIELAB and Oklab from RGB 40 to 44
+ *   ns, an OkLCh gamut ring of 360 hues 0.8 to 1.0 ms, a context 0.6 to
+ *   0.8 ms; MinGW's pow and cbrt are 2 to 5 times slower.
+ *   What is NOT done here: no number is a measurement of light.
+ *   docs/color.md has the tables.
  */
 #ifndef YSP_COLOR_H_INCLUDED
 #define YSP_COLOR_H_INCLUDED
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -388,9 +415,9 @@ extern "C" {
 #endif
 
 #define YCOL_VERSION_MAJOR  0
-#define YCOL_VERSION_MINOR  1
+#define YCOL_VERSION_MINOR  2
 #define YCOL_VERSION_PATCH  0
-#define YCOL_VERSION_STRING "0.1.0"
+#define YCOL_VERSION_STRING "0.2.0"
 
 /* YCOL_VERSION_STRING, as compiled into the implementation. */
 YCOL_API const char* ycol_version(void);
@@ -595,7 +622,7 @@ typedef struct ycol_ctx_desc {
 #define YCOL_CAN_LMS 0x4u      /* the calibration has spectra                   */
 #define YCOL_CAN_BG  0x8u      /* the background's cone excitations are > 0     */
 
-/* Public, read-only after init. ysp/gfx.h reads the matrices for its
+/* Public, read-only after open. ysp/gfx.h reads the matrices for its
  * shaders; every matrix is row-major. */
 typedef struct ycol_ctx {
     uint32_t can;                /* YCOL_CAN_*                                  */
@@ -617,19 +644,30 @@ typedef struct ycol_ctx {
     const char* why_no_xyz;      /* why a level is missing, for the refusals      */
     const char* why_no_lms;
     const char* why_no_bg;
+    int32_t status;              /* YCOL_OK, or the code of the last failure of
+                                  * ycol_ctx_open() or _set_background()         */
+    char err[256];               /* the message: ycol_ctx_error()                 */
 } ycol_ctx;
 
-/* Fills cx from d. < 0 only for a bad desc (no calibration, a calibration
+/* Fills cx from d. False only for a bad desc (no calibration, a calibration
  * that is not sealed or fails its CRC, a lum record that fails its CRC or
  * has other cones, a value that is not finite or a background outside
- * 0..1), with the reason in err. A calibration without chromaticities or
- * spectra gives a context without those levels (cx->can); the conversions
- * that need them refuse, each call, with the reason. */
-YCOL_API int ycol_ctx_init(ycol_ctx* cx, const ycol_ctx_desc* d, char* err, size_t cap);
-/* A new background: the contrast spaces and the id follow. */
+ * 0..1), with the reason in ycol_ctx_error(cx) and the code in cx->status.
+ * A calibration without chromaticities or spectra gives a context without
+ * those levels (cx->can); the conversions that need them refuse, each call,
+ * with the reason. */
+YCOL_API bool ycol_ctx_open(ycol_ctx* cx, const ycol_ctx_desc* d);
+/* Empties cx. Nothing to release; safe on a zeroed context, after a failed
+ * open and twice. */
+YCOL_API void ycol_ctx_close(ycol_ctx* cx);
+/* The message of the last failure of ycol_ctx_open() or
+ * ycol_ctx_set_background(); "" if none. */
+YCOL_API const char* ycol_ctx_error(const ycol_ctx* cx);
+/* A new background: the contrast spaces and the id follow. Not while
+ * another thread reads cx. */
 YCOL_API int ycol_ctx_set_background(ycol_ctx* cx, const double bg[3]);
 /* One line for the log: calibration, cones, luminance, background, white,
- * D65 sources, levels, id. */
+ * D65 sources, levels, id. A reader: returns the code only. */
 YCOL_API int ycol_ctx_describe(const ycol_ctx* cx, char* buf, size_t cap);
 
 /* --- color values ----------------------------------------------------------- */
@@ -1942,51 +1980,43 @@ static void ycol__ctx_id(ycol_ctx* cx) {
     cx->id = ycol__crc32(buf, o);
 }
 
-YCOL_API int ycol_ctx_init(ycol_ctx* cx, const ycol_ctx_desc* d, char* err, size_t cap) {
+/* The ctx's code and message; the message first, so a NULL-safe caller can
+ * return the result. */
+#define YCOL__CTX_FAIL(cx, rc, ...) \
+    do { ycol__set_error((cx)->err, sizeof (cx)->err, __VA_ARGS__); (cx)->status = (rc); return false; } while (0)
+
+YCOL_API bool ycol_ctx_open(ycol_ctx* cx, const ycol_ctx_desc* d) {
     static const double m1[9] = { 0.8189330101, 0.3618667424, -0.1288597137, 0.0329845436, 0.9293118715, 0.0361456387,
                                   0.0482003018, 0.2643662691, 0.6338517070 };
     const ycol_cal* c;
     int k, s;
-    if (err && cap) err[0] = '\0';
-    if (!cx || !d) { ycol__set_error(err, cap, "ysp_color: NULL context or desc"); return YCOL_ERR_ARG; }
+    if (!cx) return false;
     memset(cx, 0, sizeof *cx);
+    if (!d) YCOL__CTX_FAIL(cx, YCOL_ERR_ARG, "ysp_color: NULL desc");
     c = d->cal;
-    if (!c) { ycol__set_error(err, cap, "ysp_color: desc.cal is required (ycol_cal_nominal() states a nominal one)"); return YCOL_ERR_ARG; }
-    if (memcmp(c->magic, ycol__cal_magic, 8) != 0 || c->version != 1 || c->bytes != (uint32_t)sizeof *c) {
-        ycol__set_error(err, cap, "ysp_color: not a canonical calibration (magic, version 1, %u bytes)", (unsigned)sizeof *c);
-        return YCOL_ERR_FORMAT;
-    }
-    if (c->crc == 0 || c->crc != ycol__crc32(c, offsetof(ycol_cal, crc))) {
-        ycol__set_error(err, cap, "ysp_color: the calibration is not sealed or its CRC fails: seal it with ycol_cal_derive() "
-                                    "or ycol_cal_save() after the last change, or load it again");
-        return YCOL_ERR_FORMAT;
-    }
+    if (!c) YCOL__CTX_FAIL(cx, YCOL_ERR_ARG, "ysp_color: desc.cal is required (ycol_cal_nominal() states a nominal one)");
+    if (memcmp(c->magic, ycol__cal_magic, 8) != 0 || c->version != 1 || c->bytes != (uint32_t)sizeof *c)
+        YCOL__CTX_FAIL(cx, YCOL_ERR_FORMAT, "ysp_color: not a canonical calibration (magic, version 1, %u bytes)",
+                       (unsigned)sizeof *c);
+    if (c->crc == 0 || c->crc != ycol__crc32(c, offsetof(ycol_cal, crc)))
+        YCOL__CTX_FAIL(cx, YCOL_ERR_FORMAT, "ysp_color: the calibration is not sealed or its CRC fails: seal it with "
+                       "ycol_cal_derive() or ycol_cal_save() after the last change, or load it again");
     if (!(d->cones == YCOL_CONES_SS2 || d->cones == YCOL_CONES_SS10) ||
-        !(d->adapt == YCOL_ADAPT_NONE || d->adapt == YCOL_ADAPT_BRADFORD)) {
-        ycol__set_error(err, cap, "ysp_color: desc.cones or desc.adapt is not a known value");
-        return YCOL_ERR_ARG;
-    }
-    if (!ycol__finite3(d->background) || !ycol__finite3(d->white) || !ycol__finite(d->src_white_Y) || d->src_white_Y < 0.0) {
-        ycol__set_error(err, cap, "ysp_color: a desc value is not finite, or src_white_Y is below 0");
-        return YCOL_ERR_ARG;
-    }
+        !(d->adapt == YCOL_ADAPT_NONE || d->adapt == YCOL_ADAPT_BRADFORD))
+        YCOL__CTX_FAIL(cx, YCOL_ERR_ARG, "ysp_color: desc.cones or desc.adapt is not a known value");
+    if (!ycol__finite3(d->background) || !ycol__finite3(d->white) || !ycol__finite(d->src_white_Y) || d->src_white_Y < 0.0)
+        YCOL__CTX_FAIL(cx, YCOL_ERR_ARG, "ysp_color: a desc value is not finite, or src_white_Y is below 0");
     for (k = 0; k < 3; k++)
-        if (!(d->background[k] >= 0.0 && d->background[k] <= 1.0)) {
-            ycol__set_error(err, cap, "ysp_color: desc.background[%d] = %g is outside 0..1", k, d->background[k]);
-            return YCOL_ERR_RANGE;
-        }
-    if ((d->white[0] != 0.0 || d->white[1] != 0.0 || d->white[2] != 0.0) && !(d->white[1] > 0.0)) {
-        ycol__set_error(err, cap, "ysp_color: desc.white needs Y above 0 (or all 0 for the display's white)");
-        return YCOL_ERR_RANGE;
-    }
+        if (!(d->background[k] >= 0.0 && d->background[k] <= 1.0))
+            YCOL__CTX_FAIL(cx, YCOL_ERR_RANGE, "ysp_color: desc.background[%d] = %g is outside 0..1", k, d->background[k]);
+    if ((d->white[0] != 0.0 || d->white[1] != 0.0 || d->white[2] != 0.0) && !(d->white[1] > 0.0))
+        YCOL__CTX_FAIL(cx, YCOL_ERR_RANGE, "ysp_color: desc.white needs Y above 0 (or all 0 for the display's white)");
     if (d->lum) {
         int rc = ycol__lum_header(d->lum);
-        if (rc < 0) { ycol__set_error(err, cap, "ysp_color: desc.lum is not a sealed participant luminance record"); return rc; }
-        if (d->lum->cones != d->cones) {
-            ycol__set_error(err, cap, "ysp_color: desc.lum is in %s cone units, the context in %s",
-                              d->lum->cones == YCOL_CONES_SS10 ? "SS10" : "SS2", d->cones == YCOL_CONES_SS10 ? "SS10" : "SS2");
-            return YCOL_ERR_REFUSED;
-        }
+        if (rc < 0) YCOL__CTX_FAIL(cx, rc, "ysp_color: desc.lum is not a sealed participant luminance record");
+        if (d->lum->cones != d->cones)
+            YCOL__CTX_FAIL(cx, YCOL_ERR_REFUSED, "ysp_color: desc.lum is in %s cone units, the context in %s",
+                           d->lum->cones == YCOL_CONES_SS10 ? "SS10" : "SS2", d->cones == YCOL_CONES_SS10 ? "SS10" : "SS2");
     }
     cx->desc = *d;
     cx->can = YCOL_CAN_RGB;
@@ -2063,13 +2093,31 @@ YCOL_API int ycol_ctx_init(ycol_ctx* cx, const ycol_ctx_desc* d, char* err, size
     }
     ycol__ctx_bg(cx);
     ycol__ctx_id(cx);
-    return YCOL_OK;
+    return true;
+}
+
+YCOL_API void ycol_ctx_close(ycol_ctx* cx) {
+    if (cx) memset(cx, 0, sizeof *cx);
+}
+
+YCOL_API const char* ycol_ctx_error(const ycol_ctx* cx) {
+    return cx ? cx->err : "";
+}
+
+/* The message, then the code; returns the code. */
+static int ycol__ctx_set_fail(ycol_ctx* cx, int rc, const char* what) {
+    ycol__set_error(cx->err, sizeof cx->err, "ysp_color: %s: %s", what, ycol_strerror(rc));
+    cx->status = rc;
+    return rc;
 }
 
 YCOL_API int ycol_ctx_set_background(ycol_ctx* cx, const double bg[3]) {
     int k;
-    if (!cx || !bg || !ycol__finite3(bg)) return YCOL_ERR_ARG;
-    for (k = 0; k < 3; k++) if (!(bg[k] >= 0.0 && bg[k] <= 1.0)) return YCOL_ERR_RANGE;
+    if (!cx) return YCOL_ERR_ARG;
+    if (!cx->desc.cal) return ycol__ctx_set_fail(cx, YCOL_ERR_ARG, "set_background on a context that is not open");
+    if (!bg || !ycol__finite3(bg)) return ycol__ctx_set_fail(cx, YCOL_ERR_ARG, "set_background: NULL or not finite");
+    for (k = 0; k < 3; k++)
+        if (!(bg[k] >= 0.0 && bg[k] <= 1.0)) return ycol__ctx_set_fail(cx, YCOL_ERR_RANGE, "set_background: outside 0..1");
     for (k = 0; k < 3; k++) cx->bg[k] = cx->desc.background[k] = bg[k];
     ycol__ctx_bg(cx);
     ycol__ctx_id(cx);

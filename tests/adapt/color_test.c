@@ -173,6 +173,15 @@ static void make_cals(void) {
     CHECK(ycol_cal_derive(&cal_lumo, err, sizeof err) == YCOL_OK);
 }
 
+/* ycol_ctx_open() as a code and a message, as v0.1's ycol_ctx_init() gave
+ * them, so the checks below compare codes. */
+static int ctx_rc(ycol_ctx* cx, const ycol_ctx_desc* d, char* err, size_t cap) {
+    bool ok = ycol_ctx_open(cx, d);
+    if (err && cap) snprintf(err, cap, "%s", ycol_ctx_error(cx));
+    if (ok != (cx->status == YCOL_OK) || ok != (ycol_ctx_error(cx)[0] == '\0')) return -100;   /* inconsistent */
+    return ok ? YCOL_OK : cx->status;
+}
+
 static int ctx_on(ycol_ctx* cx, const ycol_cal* c, double bg) {
     ycol_ctx_desc d;
     char err[200];
@@ -180,7 +189,7 @@ static int ctx_on(ycol_ctx* cx, const ycol_cal* c, double bg) {
     memset(&d, 0, sizeof d);
     d.cal = c;
     d.background[0] = d.background[1] = d.background[2] = bg;
-    rc = ycol_ctx_init(cx, &d, err, sizeof err);
+    rc = ctx_rc(cx, &d, err, sizeof err);
     if (rc < 0) fprintf(stderr, "ctx: %s\n", err);
     return rc;
 }
@@ -348,22 +357,22 @@ static void test_ctx(void) {
     char err[300], line[1024];
     g_where = "context";
     memset(&d, 0, sizeof d);
-    CHECK(ycol_ctx_init(&cx, &d, err, sizeof err) == YCOL_ERR_ARG && strstr(err, "desc.cal") != NULL);
+    CHECK(ctx_rc(&cx, &d, err, sizeof err) == YCOL_ERR_ARG && strstr(err, "desc.cal") != NULL);
     memcpy(&bad, &cal_srgb, sizeof bad);
     bad.lut[0][5] += 1e-3f;   /* changed after it was sealed */
     d.cal = &bad;
-    CHECK(ycol_ctx_init(&cx, &d, err, sizeof err) == YCOL_ERR_FORMAT && strstr(err, "CRC") != NULL);
+    CHECK(ctx_rc(&cx, &d, err, sizeof err) == YCOL_ERR_FORMAT && strstr(err, "CRC") != NULL);
     d.cal = &cal_srgb;
     d.background[1] = 1.5;
-    CHECK(ycol_ctx_init(&cx, &d, err, sizeof err) == YCOL_ERR_RANGE && strstr(err, "background[1]") != NULL);
+    CHECK(ctx_rc(&cx, &d, err, sizeof err) == YCOL_ERR_RANGE && strstr(err, "background[1]") != NULL);
     d.background[1] = 0.5;
     d.cones = 7;
-    CHECK(ycol_ctx_init(&cx, &d, err, sizeof err) == YCOL_ERR_ARG);
+    CHECK(ctx_rc(&cx, &d, err, sizeof err) == YCOL_ERR_ARG);
     d.cones = 0;
     d.white[0] = 1.0;
-    CHECK(ycol_ctx_init(&cx, &d, err, sizeof err) == YCOL_ERR_RANGE);
+    CHECK(ctx_rc(&cx, &d, err, sizeof err) == YCOL_ERR_RANGE);
     d.white[0] = 0.0;
-    CHECK(ycol_ctx_init(&cx, &d, err, sizeof err) == YCOL_OK);
+    CHECK(ctx_rc(&cx, &d, err, sizeof err) == YCOL_OK);
     CHECK(cx.can == (YCOL_CAN_RGB | YCOL_CAN_XYZ));
     CHECK(ycol_ctx_describe(&cx, line, sizeof line) > 0);
     printf("%s\n", line);
@@ -385,6 +394,9 @@ static void test_ctx(void) {
         CHECK(ycol_ctx_set_background(&cx, bg) == YCOL_OK && cx.id == id0);
         bg[2] = -0.1;
         CHECK(ycol_ctx_set_background(&cx, bg) == YCOL_ERR_RANGE);
+        CHECK(cx.status == YCOL_ERR_RANGE && strstr(ycol_ctx_error(&cx), "outside 0..1") != NULL);
+        CHECK(cx.id == id0);   /* a refused background changes nothing */
+        bg[2] = 0.5;
         {   /* the contrast spaces follow the background */
             ycol_ctx fresh;
             CHECK(ctx_on(&fresh, &cal_full, 0.25) == YCOL_OK);
@@ -394,11 +406,30 @@ static void test_ctx(void) {
             CHECK(cx.id == fresh.id);
         }
     }
+    {   /* v0.2 open and close: close on a zeroed context, after a failed open, twice */
+        ycol_ctx z;
+        double bg2[3] = { 0.5, 0.5, 0.5 };
+        memset(&z, 0, sizeof z);
+        ycol_ctx_close(&z);
+        ycol_ctx_close(NULL);
+        CHECK(ycol_ctx_error(&z)[0] == '\0' && ycol_ctx_error(NULL)[0] == '\0');
+        CHECK(ycol_ctx_set_background(&z, bg2) == YCOL_ERR_ARG && z.status == YCOL_ERR_ARG &&
+              strstr(ycol_ctx_error(&z), "not open") != NULL);
+        CHECK(!ycol_ctx_open(&z, NULL) && z.status == YCOL_ERR_ARG && strstr(ycol_ctx_error(&z), "NULL desc") != NULL);
+        CHECK(!ycol_ctx_open(NULL, NULL));
+        ycol_ctx_close(&z);
+        ycol_ctx_close(&z);
+        CHECK(z.status == YCOL_OK && z.can == 0 && ycol_ctx_error(&z)[0] == '\0');
+        CHECK(ctx_on(&z, &cal_full, 0.5) == YCOL_OK && z.can != 0);
+        ycol_ctx_close(&z);
+        CHECK(z.can == 0 && z.desc.cal == NULL);
+        ycol_ctx_close(&z);
+    }
     {   /* MacLeod-Boynton's scale: colour-science's tables give 1 / 26.9108 and 1 / 18.0247 */
         ycol_ctx c10;
         d.cal = &cal_full;
         d.cones = YCOL_CONES_SS10;
-        CHECK(ycol_ctx_init(&c10, &d, err, sizeof err) == YCOL_OK);
+        CHECK(ctx_rc(&c10, &d, err, sizeof err) == YCOL_OK);
         CHECK(ctx_on(&cx, &cal_full, 0.5) == YCOL_OK);
         printf("MacLeod-Boynton s scale: SS2 %.7f, SS10 %.7f\n", cx.mb_k, c10.mb_k);
         CHECK(fabs(cx.mb_k / 0.037159819 - 1) < 1e-6 && fabs(c10.mb_k / 0.055479334 - 1) < 1e-6);
@@ -438,7 +469,7 @@ static void test_refs(void) {
     d.background[0] = d.background[1] = d.background[2] = 0.5;
     memcpy(d.white, d65, sizeof d65);
     d.src_white_Y = 1.0;
-    CHECK(ycol_ctx_init(&cx, &d, err, sizeof err) == YCOL_OK);
+    CHECK(ctx_rc(&cx, &d, err, sizeof err) == YCOL_OK);
     for (i = 0; i < sizeof ref_srgb / sizeof ref_srgb[0]; i++) {
         const struct ref_srgb* r = &ref_srgb[i];
         ycol_color c = ycol_hex(r->hex), o;
@@ -485,7 +516,7 @@ e_lab = maxd(e_lab, ref_one(&cx, c, YCOL_SPACE_CIELAB, r->lab, 0, r->xyz, &e_bac
         ycol_color o;
         memcpy(d.white, ref_white2, sizeof d.white);
         d.adapt = YCOL_ADAPT_BRADFORD;
-        CHECK(ycol_ctx_init(&cx, &d, err, sizeof err) == YCOL_OK);
+        CHECK(ctx_rc(&cx, &d, err, sizeof err) == YCOL_OK);
         CHECK(ycol_convert(&cx, ycol_hex("#3366cc"), YCOL_SPACE_XYZ, &o, NULL) == YCOL_OK);
         e = absd3(o.u.v, ref_bradford_3366cc);
         printf("Bradford against colour-science: %.1e\n", e);
@@ -530,9 +561,9 @@ static void test_roundtrip(void) {
         memset(&d, 0, sizeof d);
         d.cal = &cal_full; d.cones = YCOL_CONES_SS10; d.lum = &l; d.adapt = YCOL_ADAPT_BRADFORD; d.src_white_Y = 80;
         d.background[0] = 0.3; d.background[1] = 0.6; d.background[2] = 0.2;
-        CHECK(ycol_ctx_init(&cx[1], &d, err, sizeof err) == YCOL_OK);
+        CHECK(ctx_rc(&cx[1], &d, err, sizeof err) == YCOL_OK);
         d.white[0] = 70; d.white[1] = 75; d.white[2] = 90; d.adapt = 0; d.lum = NULL; d.cones = 0; d.src_white_Y = 0;
-        CHECK(ycol_ctx_init(&cx[2], &d, err, sizeof err) == YCOL_OK);
+        CHECK(ctx_rc(&cx[2], &d, err, sizeof err) == YCOL_OK);
     }
     for (s = 0; s < N_SPACES; s++) worst[s] = 0;
     for (j = 0; j < 3; j++)
@@ -868,7 +899,7 @@ static void test_lum(void) {
             ycol_ctx cl;
             ycol_rgb u;
             double mu[3], du[3];
-            CHECK(ycol_ctx_init(&cl, &d, err, sizeof err) == YCOL_OK);
+            CHECK(ctx_rc(&cl, &d, err, sizeof err) == YCOL_OK);
             u = ycol_to_dir(&cl, YCOL_DKL_CART(.lm = 0.1), NULL);
             du[0] = u.r; du[1] = u.g; du[2] = u.b;
             ycol__mul3(cal_full.rgb_to_lms, du, mu);
@@ -928,7 +959,7 @@ static void test_lum(void) {
         CHECK(ycol_lum_stated(&l2, YCOL_CONES_SS10, wtrue) == YCOL_OK);
         memset(&d, 0, sizeof d);
         d.cal = &cal_full; d.lum = &l2;
-        CHECK(ycol_ctx_init(&cx, &d, err, sizeof err) == YCOL_ERR_REFUSED && strstr(err, "SS10") != NULL);
+        CHECK(ctx_rc(&cx, &d, err, sizeof err) == YCOL_ERR_REFUSED && strstr(err, "SS10") != NULL);
     }
     {   /* the probe's two lights */
         double a[3], b[3];
@@ -952,7 +983,7 @@ static void test_raw_parity(void) {
     memset(&d, 0, sizeof d);
     d.cal = &cal_full;
     for (k = 0; k < 3; k++) d.background[k] = bgf[k];
-    CHECK(ycol_ctx_init(&cx, &d, err, sizeof err) == YCOL_OK);
+    CHECK(ctx_rc(&cx, &d, err, sizeof err) == YCOL_OK);
     CHECK(ycol_cal_dkl_matrix(&cal_full, bgf, m) == YCOL_OK);
     CHECK(memcmp(m, cx.dkl, sizeof m) == 0);
     for (i = 0; i < 200; i++) {

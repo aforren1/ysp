@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ysp-color"
-version = "0.1.0"  # must equal ysp/color.h's YCOL_VERSION_STRING; tests/test_color.py checks it
+version = "0.2.0"  # must equal ysp/color.h's YCOL_VERSION_STRING; tests/test_color.py checks it
 description = "Color on calibrated displays: calibration, conversions, gamut questions, participant luminance"
 readme = "README.md"
 requires-python = ">=3.8"

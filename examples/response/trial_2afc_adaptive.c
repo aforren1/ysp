@@ -197,7 +197,7 @@ int main(int argc, char** argv) {
     yrsp_result res;
     yrsp_input sim_ev[2];
     FILE* out;
-    char line[1024], meta[2048], err[200];
+    char line[1024], meta[2048];
     const char* out_path = "trial_2afc_adaptive.csv";
     const char* cal_path = NULL;
     const char* method = "both";
@@ -243,7 +243,7 @@ int main(int argc, char** argv) {
     memset(&cxd, 0, sizeof cxd);
     cxd.cal = &cal;
     cxd.background[0] = cxd.background[1] = cxd.background[2] = 0.5;
-    if (ycol_ctx_init(&cx, &cxd, err, sizeof err) < 0) { fprintf(stderr, "trial_2afc_adaptive: %s\n", err); return 1; }
+    if (!ycol_ctx_open(&cx, &cxd)) { fprintf(stderr, "trial_2afc_adaptive: %s\n", ycol_ctx_error(&cx)); return 1; }
     v.r = v.g = v.b = 0.5;
     y_bg = luminance(v);
     v.r = v.g = v.b = 0.0;

@@ -3309,7 +3309,7 @@ static void test_v03_cpu(void) {
             ycol_ctx_desc cd;
             memset(&cd, 0, sizeof cd);
             cd.cal = &cw;
-            CHECK(ycol_ctx_init(&gw.color, &cd, NULL, 0) == YCOL_OK);
+            CHECK(ycol_ctx_open(&gw.color, &cd));
             ygfx__paint_spaces(&gw);
         }
         CHECK(gw.has_oklab);
@@ -5321,7 +5321,7 @@ static void gl_v05_color(stats* st) {
         memset(&cd, 0, sizeof cd);
         cd.cal = &cal3;
         for (k = 0; k < 3; k++) cd.background[k] = gd.background[k];
-        S7.ctx_bad += !cx || ycol_ctx_init(&mine, &cd, err, sizeof err) < 0 || mine.id != cx->id ||
+        S7.ctx_bad += !cx || !ycol_ctx_open(&mine, &cd) || mine.id != cx->id ||
                       memcmp(mine.ok_rgb_to_lms, cx->ok_rgb_to_lms, sizeof mine.ok_rgb_to_lms) != 0;
     }
     memset(&pt, 0, sizeof pt);

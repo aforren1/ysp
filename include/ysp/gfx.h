@@ -5862,15 +5862,14 @@ static bool ygfx__open_b(ygfx_gfx* g, const ygfx_desc* d) {
     if (rc < 0) { ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: CLUT upload"); goto fail; }
     if (d->cal) {   /* PAINT's spaces and VIDEO's primaries: ysp/color.h's context */
         ycol_ctx_desc cd;
-        char cerr[200];
         int k;
         memset(&cd, 0, sizeof cd);
         cd.cal = d->cal;
         cd.cones = d->cones;
         cd.lum = d->lum;
         for (k = 0; k < 3; k++) cd.background[k] = g->bg[k];
-        if (ycol_ctx_init(&g->color, &cd, cerr, sizeof cerr) < 0) {
-            ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: %s", cerr);
+        if (!ycol_ctx_open(&g->color, &cd)) {
+            ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: %s", ycol_ctx_error(&g->color));
             goto fail;
         }
         g->has_color = 1;

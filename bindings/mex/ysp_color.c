@@ -363,8 +363,12 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
             d.lum = &h->lum;
         }
         {
-            int rc = ycol_ctx_init(&h->cx, &d, err, sizeof err);
-            if (rc < 0) { free(h); col_check(rc, err); }
+            if (!ycol_ctx_open(&h->cx, &d)) {
+                int rc = h->cx.status;
+                snprintf(err, sizeof err, "%s", ycol_ctx_error(&h->cx));
+                free(h);
+                col_check(rc, err);
+            }
         }
         plhs[0] = pm_handle_out(pm_register(h));
         return;

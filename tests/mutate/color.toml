@@ -282,3 +282,19 @@ test = "color"
 why = "The relative white must include the display's black light."
 find = 'else for (k = 0; k < 3; k++) cx->white_xyz[k] = m[k * 3] + m[k * 3 + 1] + m[k * 3 + 2] + cx->black_xyz[k];'
 replace = 'else for (k = 0; k < 3; k++) cx->white_xyz[k] = m[k * 3] + m[k * 3 + 1] + m[k * 3 + 2];'
+
+[[mutant]]
+id = "33"
+name = "set_background failure leaves no message"
+test = "color"
+why = "v0.2: every failing call on a context writes ycol_ctx_error(); a refused background must say why."
+find = '    ycol__set_error(cx->err, sizeof cx->err, "ysp_color: %s: %s", what, ycol_strerror(rc));'
+replace = '    (void)what;'
+
+[[mutant]]
+id = "34"
+name = "close empties nothing"
+test = "color"
+why = "v0.2: ycol_ctx_close() empties the context, so a closed context refuses conversions instead of using stale matrices."
+find = '    if (cx) memset(cx, 0, sizeof *cx);'
+replace = '    (void)cx;'
