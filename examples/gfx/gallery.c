@@ -1788,10 +1788,10 @@ static int font_cset_setup(void) {
     int g, r, c, rc = 0;
     if (done) return font_set.id ? 0 : -1;
     done = 1;
-    if (yol_init(&ol_cx, NULL) != YOL_OK) return -1;
+    if (!yol_open(&ol_cx, NULL)) return -1;
     memset(&od, 0, sizeof od);
     od.n_glyphs = FONT_N; od.backward = true;   /* backward lists: the rays are faster */
-    if (yol_cset_init(&s, &ol_cx, &od) != YOL_OK) return -1;
+    if (!yol_cset_open(&s, &ol_cx, &od)) return -1;
     yol_path_init(&p, &ol_cx);
     for (g = 1; g < FONT_N && rc == 0; g++) {
         yol_path_clear(&p);
@@ -1806,7 +1806,7 @@ static int font_cset_setup(void) {
         d.texels = s.texels; d.n_texels = s.n_texels; d.words = s.words; d.n_words = s.n_words;
         font_set = ygfx_cset_make(&gfx, &d);
     }
-    yol_cset_free(&s);
+    yol_cset_close(&s);
     return font_set.id ? 0 : -1;
 }
 
@@ -1948,7 +1948,7 @@ static void t_artwork(float x, float y, const yscr_frame* f) {
         if (font_cset_setup() < 0) { refused++; return; }   /* makes ol_cx */
         memset(&od, 0, sizeof od);
         od.n_glyphs = 3;
-        if (yol_cset_init(s, &ol_cx, &od) != YOL_OK) { refused++; return; }
+        if (!yol_cset_open(s, &ol_cx, &od)) { refused++; return; }
         yol_path_init(&p, &ol_cx);
         yol_ellipse(&p, 0, 0, 78, 50);                         /* layer 0: a body */
         yol_path_end(&p);
@@ -1958,7 +1958,7 @@ static void t_artwork(float x, float y, const yscr_frame* f) {
             double a = 3.14159265358979 * k / 7.0, r = k % 2 ? 18 : 42;
             if (k == 0) yol_move(&p, r * sin(a), -r * cos(a)); else yol_line(&p, r * sin(a), -r * cos(a));
         }
-        yol_close(&p);
+        yol_close_path(&p);
         yol_path_end(&p);
         yol_cset_add(s, 1, &p);
         yol_path_clear(&p);
@@ -2683,8 +2683,8 @@ int main(int argc, char** argv) {
     if (ygfx_clipped(&gfx)) printf("%llu draws may have left the gamut\n", (unsigned long long)ygfx_clipped(&gfx));
     free(shot_px);
     ygfx_close(&gfx);
-    if (art_src.words) yol_cset_free(&art_src);
-    yol_free(&ol_cx);
+    if (art_src.words) yol_cset_close(&art_src);
+    yol_close(&ol_cx);
     yscr_close(&scr);
     if (refused) { fprintf(stderr, "gfx_gallery: %ld refused draws or setup errors\n", refused); return 1; }
     return 0;

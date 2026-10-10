@@ -324,7 +324,7 @@ int main(int argc, char** argv) {
     double seconds = 3, xy_shift = 0;
     int i, k, path, sim = 0, fullscreen = 0, failed = 0, quit = 0, levels_grid = 0, kp, read_done[N_PATHS];
     long mismatch = 0, ties = 0, checked = 0;
-    char err[200], line[600];
+    char line[600];
 
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--sim")) sim = 1;
@@ -338,8 +338,8 @@ int main(int argc, char** argv) {
     memset(&xd, 0, sizeof xd);
     xd.cal = &cal;
     xd.background[0] = xd.background[1] = xd.background[2] = VP;
-    if (ycol_ctx_init(&cx, &xd, err, sizeof err) < 0 || !(cx.can & YCOL_CAN_XYZ)) {
-        fprintf(stderr, "gfx_luminance_bits: the calibration needs chromaticities: %s\n", cx.why_no_xyz ? cx.why_no_xyz : err);
+    if (!ycol_ctx_open(&cx, &xd) || !(cx.can & YCOL_CAN_XYZ)) {
+        fprintf(stderr, "gfx_luminance_bits: the calibration needs chromaticities: %s\n", cx.why_no_xyz ? cx.why_no_xyz : ycol_ctx_error(&cx));
         return 1;
     }
     if (!pseudo_table()) { fprintf(stderr, "gfx_luminance_bits: a DEVICE to XYZ conversion was refused\n"); return 1; }

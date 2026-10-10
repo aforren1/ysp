@@ -241,3 +241,21 @@ test = "video"
 why = "An outage that begins while the decoder discards frames on the way to the due frame must be retried as one that begins on a kept frame."
 find = '''            if (rc == YVID_PENDING) return yvid__pending(mv);'''
 replace = '''            if (rc == YVID_PENDING) return false;'''
+
+# v0.3.0: the conventions: messages, the writer's close.
+
+[[mutant]]
+id = "v030-00"
+name = "a failure that wrote nothing stays silent"
+test = "video"
+why = "v0.3.0: every call on a movie or a writer that fails writes its message; seq_write returned YVID_ERR_FULL with none."
+find = '        if (!e[0]) yvid__fmt(e, 256, "ysp_video: %s: %s", what, yvid_strerror((int)rc));'
+replace = '        (void)what;'
+
+[[mutant]]
+id = "v030-01"
+name = "close does not finish"
+test = "video"
+why = "v0.3.0: yvid_seq_close() on a writer not finished must finish it, or the frames written are lost (the file has no header)."
+find = '    if (w && w->open) (void)yvid_seq_finish(w);'
+replace = '    (void)w;'

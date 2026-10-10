@@ -629,7 +629,7 @@ static int build_font(B* b, E* e) {
     for (f = 0; f < faces; f++) {
         yol_font yf;
         int t;
-        if (yol_font_open(&yf, e->data, (size_t)e->size, f, msg, sizeof msg) < 0)
+        if (yol_font_view(&yf, e->data, (size_t)e->size, f, msg, sizeof msg) < 0)
             return cfail(b->c, YPAK_ERR_FORMAT, "'%s' face %d: %s", e->name, f, msg);
         e->n_glyphs[f] = (uint32_t)yf.n_glyphs;
         t = font_fstype(e->data, e->size, f);
@@ -697,7 +697,7 @@ static int build_curveset(B* b, E* e) {
     if (face < 0 || face >= font->faces) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': face %d; the font has %d", e->name, face, font->faces);
     if (strcmp(glyphs, "all") && strcmp(glyphs, "used"))
         return cfail(b->c, YPAK_ERR_FORMAT, "'%s': glyphs must be \"all\" or \"used\"", e->name);
-    if (yol_font_open(&yf, font->data, (size_t)font->size, face, msg, sizeof msg) < 0)
+    if (yol_font_view(&yf, font->data, (size_t)font->size, face, msg, sizeof msg) < 0)
         return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s", e->name, msg);
     if (!strcmp(glyphs, "used")) {
         list = (uint32_t*)calloc_c(b->c, sizeof(uint32_t) * ((size_t)yf.n_glyphs + 1));
@@ -710,11 +710,13 @@ static int build_curveset(B* b, E* e) {
     memset(&sd, 0, sizeof sd);
     sd.n_glyphs = (uint32_t)yf.n_glyphs;
     sd.backward = true;
-    rc = yol_cset_init(&set, &b->ol, &sd);
-    if (rc < 0) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s", e->name, yol_error(&b->ol));
+    if (!yol_cset_open(&set, &b->ol, &sd)) {
+        yol_cset_close(&set);
+        return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s", e->name, yol_error(&b->ol));
+    }
     rc = yol_cset_add_font(&set, &yf, list, list ? nl : 0, tol);
     if (rc < 0) {
-        yol_cset_free(&set);
+        yol_cset_close(&set);
         return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s", e->name, yol_error(&b->ol));
     }
     rc = check_cset(b, e, &set);
@@ -722,7 +724,7 @@ static int build_curveset(B* b, E* e) {
         e->data = cset_bytes(b, &set, YPAK_CSET_UNITS_EM, list ? 0u : YPAK_CSET_ALL, (uint32_t)face, &e->size);
         if (!e->data) rc = cfail(b->c, YPAK_ERR_NOMEM, "out of memory");
     }
-    yol_cset_free(&set);
+    yol_cset_close(&set);
     if (rc) return rc;
     e->from = jnew(b->c, J_ARR);
     jpush(b->c, e->from, jstrz(b->c, from));
@@ -769,12 +771,12 @@ static int build_artwork(B* b, E* e) {
     memset(&cd, 0, sizeof cd);
     cd.n_glyphs = (uint32_t)(nl ? nl : 1);
     cd.backward = true;
-    rc = yol_cset_init(&set, &b->ol, &cd);
+    rc = yol_cset_open(&set, &b->ol, &cd) ? 0 : -1;
     for (i = 0; rc >= 0 && i < nl; i++) rc = yol_cset_add(&set, (uint32_t)i, &layers[i].path);
     if (rc < 0) rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s", e->name, yol_error(&b->ol));
     else rc = check_cset(b, e, &set);
     setb = rc ? NULL : cset_bytes(b, &set, YPAK_CSET_UNITS_USER, 0, 0, &setn);
-    yol_cset_free(&set);
+    yol_cset_close(&set);
     if (rc) { for (i = 0; i < nl; i++) yol_path_free(&layers[i].path); return rc; }
     {
         int64_t lo = 80, co = 80 + 16 * (int64_t)nl;
@@ -1617,7 +1619,7 @@ static int build_desc(C* c, jv* desc, const char* base_dir, sink* out) {
         b.channels = (int)ch->i;
         b.audio = au;
     }
-    if (yol_init(&b.ol, NULL) < 0) return cfail(c, YPAK_ERR_NOMEM, "yol_init failed");
+    if (!yol_open(&b.ol, NULL)) return cfail(c, YPAK_ERR_NOMEM, "yol_open failed");
     b.ol_ok = 1;
     ex = jget(desc, "experiment");
     if (ex) {
@@ -1756,7 +1758,7 @@ static int build_desc(C* c, jv* desc, const char* base_dir, sink* out) {
     man->chunk = YPAK_NO_CHUNK;
     if (rc == 0) rc = write_pack(c, out, all, b.n + 2, 0, 0);
 done:
-    if (b.ol_ok) yol_free(&b.ol);
+    if (b.ol_ok) yol_close(&b.ol);
     return rc;
 }
 

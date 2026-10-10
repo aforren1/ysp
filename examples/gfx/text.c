@@ -239,7 +239,7 @@ static int tf_open(tfont* t, const char* path, const char* name) {
         return 0;
     }
     fclose(fp);
-    if (yol_font_open(&t->f, t->bytes, (size_t)n, 0, err, sizeof err) < 0) {
+    if (yol_font_view(&t->f, t->bytes, (size_t)n, 0, err, sizeof err) < 0) {
         free(t->bytes); t->bytes = NULL;
         snprintf(t->why, sizeof t->why, "%s: %s", path, err);
         return 0;
@@ -292,7 +292,7 @@ static int tf_build(tfont* t, const uint32_t* gids, int n) {
     int rc = 0, i;
     memset(&od, 0, sizeof od);
     od.n_glyphs = t->G; od.backward = true;
-    if (yol_cset_init(&s, &ol, &od) != YOL_OK) return -1;
+    if (!yol_cset_open(&s, &ol, &od)) return -1;
     if (t->real) {
         rc = yol_cset_add_font(&s, &t->f, gids, (uint32_t)n, 0);
         t->n_built = n ? (uint32_t)n : t->G;
@@ -306,7 +306,7 @@ static int tf_build(tfont* t, const uint32_t* gids, int n) {
         yol_path_free(&p);
         t->n_built = BM_N - 1;
     }
-    if (rc < 0) { fprintf(stderr, "gfx_text: %s: %s\n", t->name, yol_error(&ol)); yol_cset_free(&s); return -1; }
+    if (rc < 0) { fprintf(stderr, "gfx_text: %s: %s\n", t->name, yol_error(&ol)); yol_cset_close(&s); return -1; }
     memset(&d, 0, sizeof d);
     d.texels = s.texels; d.n_texels = s.n_texels; d.words = s.words; d.n_words = s.n_words;
     t->set = ygfx_cset_make(&gfx, &d);
@@ -314,7 +314,7 @@ static int tf_build(tfont* t, const uint32_t* gids, int n) {
     t->n_texels = s.n_texels; t->n_words = s.n_words;
     printf("%s: %u glyphs into a curve set in %.0f ms (%u texels, %u words)\n", t->real ? t->name : "the bitmap font",
            t->n_built, t->build_ms, s.n_texels, s.n_words);
-    yol_cset_free(&s);
+    yol_cset_close(&s);
     return t->set.id ? 0 : -1;
 }
 
@@ -832,7 +832,7 @@ static int fx_setup(void) {
     int64_t t0 = yrt_now_ns();
     memset(&od, 0, sizeof od);
     od.n_glyphs = 2 * ui.G; od.backward = true;
-    if (ui.G > 32768 || yol_cset_init(&s, &ol, &od) != YOL_OK) return -1;
+    if (ui.G > 32768 || !yol_cset_open(&s, &ol, &od)) return -1;
     yol_path_init(&g, &ol); yol_path_init(&o, &ol);
     for (w = 0; w < 2 && rc == 0; w++) {
         const char* c;
@@ -853,13 +853,13 @@ static int fx_setup(void) {
         }
     }
     yol_path_free(&g); yol_path_free(&o);
-    if (rc < 0) { fprintf(stderr, "gfx_text: page 3 strokes: %s\n", yol_error(&ol)); yol_cset_free(&s); return -1; }
+    if (rc < 0) { fprintf(stderr, "gfx_text: page 3 strokes: %s\n", yol_error(&ol)); yol_cset_close(&s); return -1; }
     memset(&d, 0, sizeof d);
     d.texels = s.texels; d.n_texels = s.n_texels; d.words = s.words; d.n_words = s.n_words;
     fx_set = ygfx_cset_make(&gfx, &d);
     printf("page 3: strokes and bolds of %d glyphs in %.0f ms\n", (int)(strlen(W_OUT) + strlen(W_BOLD)),
            (double)(yrt_now_ns() - t0) * 1e-6);
-    yol_cset_free(&s);
+    yol_cset_close(&s);
     return fx_set.id ? 0 : -1;
 }
 
@@ -1234,7 +1234,7 @@ static void page_svg(int mode, const yscr_frame* f) {
          * highlight) at n .. 2n - 1 */
         memset(&od, 0, sizeof od);
         od.n_glyphs = (uint32_t)(2 * art_n); od.backward = true;
-        if (yol_cset_init(&art_src, &ol, &od) != YOL_OK) { fail("page 6: set"); return; }
+        if (!yol_cset_open(&art_src, &ol, &od)) { fail("page 6: set"); return; }
         yol_path_init(&o, &ol);
         for (k = 0; k < art_n; k++) {
             yol_stroke_desc st;
@@ -1492,7 +1492,7 @@ int main(int argc, char** argv) {
 
     /* Setup: every curve set, target, blur and stimulus of every page,
      * before the first frame; nothing in the frame loop allocates. */
-    if (yol_init(&ol, NULL) != YOL_OK || timeline_setup() < 0 || fonts_setup(font_path, cjk_path) < 0 || labels_setup() < 0) {
+    if (!yol_open(&ol, NULL) || timeline_setup() < 0 || fonts_setup(font_path, cjk_path) < 0 || labels_setup() < 0) {
         fprintf(stderr, "gfx_text: setup: %s\n", ygfx_error(&gfx));
         ygfx_close(&gfx);
         yscr_close(&scr);
@@ -1589,8 +1589,8 @@ int main(int argc, char** argv) {
     if (ygfx_clipped(&gfx)) printf("%llu draws may have left the gamut\n", (unsigned long long)ygfx_clipped(&gfx));
     free(shot_px);
     ygfx_close(&gfx);
-    if (art_src.words) yol_cset_free(&art_src);
-    yol_free(&ol);
+    if (art_src.words) yol_cset_close(&art_src);
+    yol_close(&ol);
     free(ui.bytes); free(cjk.bytes);
     yscr_close(&scr);
     if (refused) { fprintf(stderr, "gfx_text: %ld refused draws or setup errors\n", refused); return 1; }

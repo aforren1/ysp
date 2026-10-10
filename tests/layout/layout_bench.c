@@ -100,7 +100,7 @@ int main(int argc, char** argv) {
     snprintf(path, sizeof path, "%s/msyh.ttc", dir);
     yahei = read_file(path, &n_yahei);
     if (!segoe || !yahei) { printf("layout_bench: needs segoeui.ttf and msyh.ttc in %s\n", dir); return 0; }
-    yol_init(&ol, NULL);
+    yol_open(&ol, NULL);
     memset(&b, 0, sizeof b);
 
     /* adding a font, and the first build of glyphs */
@@ -190,7 +190,7 @@ int main(int argc, char** argv) {
     }
     ylay_block_free(&b);
     ylay_destroy(L);
-    yol_free(&ol);
+    yol_close(&ol);
     free(segoe); free(yahei); free(en500); free(ar500);
     return 0;
 }

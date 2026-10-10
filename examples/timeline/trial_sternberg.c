@@ -167,11 +167,11 @@ static int make_digits(const char* path, char* why, size_t cap) {
         if (bytes && fread(bytes, 1, (size_t)n, fp) != (size_t)n) { free(bytes); bytes = NULL; }
         fclose(fp);
     }
-    if (bytes && yol_font_open(&font, bytes, (size_t)n, 0, why, cap) == YOL_OK) real = 1;
+    if (bytes && yol_font_view(&font, bytes, (size_t)n, 0, why, cap) == YOL_OK) real = 1;
     else if (!why[0]) snprintf(why, cap, "%s could not be read", path);
     memset(&od, 0, sizeof od);
     od.n_glyphs = 10;
-    if (yol_cset_init(&s, &ol, &od) != YOL_OK) { free(bytes); return -1; }
+    if (!yol_cset_open(&s, &ol, &od)) { free(bytes); return -1; }
     yol_path_init(&p, &ol);
     for (i = 0; i < 10 && rc == YOL_OK; i++) {
         yol_path_clear(&p);
@@ -191,7 +191,7 @@ static int make_digits(const char* path, char* why, size_t cap) {
     d.texels = s.texels; d.n_texels = s.n_texels; d.words = s.words; d.n_words = s.n_words;
     if (rc == YOL_OK) digits = ygfx_cset_make(&gfx, &d);
     yol_path_free(&p);
-    yol_cset_free(&s);
+    yol_cset_close(&s);
     free(bytes);   /* the set holds the curves; the font is not read again */
     return rc == YOL_OK && digits.id ? real : -1;
 }
@@ -267,7 +267,7 @@ int main(int argc, char** argv) {
     gd.screen = &scr;
     gd.background[0] = gd.background[1] = gd.background[2] = 0.2f;
     if (!ygfx_open(&gfx, &gd)) { fprintf(stderr, "trial_sternberg: %s\n", ygfx_error(&gfx)); return 1; }
-    if (yol_init(&ol, NULL) != YOL_OK) { fprintf(stderr, "trial_sternberg: outline context\n"); return 1; }
+    if (!yol_open(&ol, NULL)) { fprintf(stderr, "trial_sternberg: outline context\n"); return 1; }
     font_real = make_digits(font_path, why, sizeof why);
     if (font_real < 0) { fprintf(stderr, "trial_sternberg: digits: %s %s\n", yol_error(&ol), ygfx_error(&gfx)); return 1; }
     if (!font_real) printf("%s: the 5 x 7 bitmap digits instead\n", why);
@@ -510,7 +510,7 @@ int main(int argc, char** argv) {
     fclose(out);
     ygfx_close(&gfx);
     yscr_close(&scr);
-    yol_free(&ol);
+    yol_close(&ol);
     printf("%d trials written to %s%s\n", rows, out_path, aborted ? " (stopped with Shift+Esc)" : "");
     if (n_fit > 1 && sum_kk * n_fit != sum_k * sum_k)
         printf("RT over set size, correct trials, present and absent pooled: slope %.1f ms per digit (%d trials)\n",

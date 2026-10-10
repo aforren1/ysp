@@ -1,4 +1,4 @@
-/* ysp/outline.h - v0.2.1 - public domain single-header outline builder:
+/* ysp/outline.h - v0.3.0 - public domain single-header outline builder:
  *   paths, font outlines, overlap removal, strokes, exact alpha and curve
  *   sets for ysp/gfx.h
  *
@@ -18,62 +18,6 @@
  *   C++17, and in the C dialect MSVC compiles by default.
  *
  *   ---------------------------------------------------------------------
- *   CHANGELOG
- *   ---------------------------------------------------------------------
- *   v0.2.1 - TrueType glyphs sit where HarfBuzz puts them: an outline whose
- *          glyf xMin differs from its hmtx left side bearing moves by the
- *          difference (FONTS, "Placement"). Output changes for such glyphs
- *          only: one in Arial, one in Times New Roman.
- *   v0.2.0 - the SVG subset reader (yol_svg, SVG). Strokes: a round join or
- *          cap is the sector of its disk that no band covers, not the whole
- *          disk, and the bands' end lines pass through the segment's ends so
- *          they cancel against the joins' spokes: 2.8 to 4.6 times fewer
- *          positions and crossings in the sweep (docs/outline.md). Tried
- *          and deleted, by measurement: a persistent strip order in the
- *          sweep, and a fitted cubic conversion.
- *   v0.1.0 - first version. Paths, transforms, cubics and arcs; a bounded
- *          TrueType (glyf) and CFF (Type 2, CID-keyed included) reader;
- *          overlap removal; strokes with Nehab's (2020) evolute elements;
- *          exact alpha; curve sets with the RESOLVED flag (docs/outline.md).
- *
- *   STATUS: v0.2.1. Built and run with MSVC 19.44 (/W4 /WX, C11 and C++17),
- *   MinGW-w64 gcc 16.1 (C99, C11, C++17) and gcc 11.4 on Linux under ASan
- *   and UBSan; the desc literals as C++20. tests/adapt/outline_test.c
- *   writes its own TrueType, CFF and CID-keyed CFF fonts and SVG files and
- *   checks, against references that do not share the header's code:
- *   - curve sets: the format's test vector word for word, ygfx_cset_check()
- *     on every set, band membership and order recomputed from the texels,
- *     the winding equal to ygfx_cset_winding() at every sampled point;
- *   - the reader: every point, implied midpoints, composites, every CFF
- *     operator, cmap 4 and 12, hmtx, collections, every bound and refusal,
- *     the placement shift of a simple glyph, a composite and a
- *     USE_MY_METRICS composite, and no shift for CFF;
- *     30000 mutated fonts without a crash;
- *   - cubics within 0.998 of the tolerance (900 random), ellipses within
- *     1.05e-5 at tol 1e-5;
- *   - resolve: 300 random shapes, area within 2e-13 of an adaptive
- *     Gauss-Kronrod reference, winding 0 or 1 and equal to the input's fill;
- *   - exact alpha within 1.8e-13 of that reference (10698 pixels);
- *   - strokes: 400 random quadratics, 0 wrong of 1254027 pixel centers
- *     against the exact band (the probe's half bands: 186 wrong on 30 of
- *     400); joins, caps, bold and inset by area within 1e-8;
- *   - SVG: shapes, path grammar, transforms, styles and colors against
- *     built paths and exact-alpha images; 33 refusals by name; 20000
- *     mutated files without a crash;
- *   - no allocator call after warm-up.
- *   On the Windows fonts (Segoe UI, Bahnschrift, Arial, Nirmala UI,
- *   Microsoft YaHei, Source Han Sans JP) every glyph tried builds a valid
- *   set. Against HarfBuzz 14.6.0 (uharfbuzz 0.56.3), every glyph of Arial
- *   (4651) and Times New Roman (4731) gives the same segments bit for bit,
- *   and the curve sets from yol_cset_add_font() and from HarfBuzz's
- *   outlines are the same word for word. tests/mutate/outline.toml: 67
- *   deliberate faults, 64 caught, the 3
- *   that survive change no result (docs/outline.md). Missed bars: a
- *   Latin stroke (289 to 303 us a glyph against 200) and the sets of the
- *   two heaviest fonts (Nirmala UI 77 to 85, Source Han Sans 94 to 103 us
- *   a glyph against 66). COST has the rest.
-
- *   ---------------------------------------------------------------------
  *   USAGE
  *   ---------------------------------------------------------------------
  *   Do this:
@@ -84,14 +28,16 @@
  *   implementation. Every other file just includes the header normally.
  *
  *       yol_ctx cx;                       // one per thread
- *       yol_init(&cx, NULL);
+ *       if (!yol_open(&cx, NULL)) fail(yol_error(&cx));
  *       yol_font font;                    // a view of the bytes, shareable
  *       char err[200];
- *       if (yol_font_open(&font, bytes, n, 0, err, sizeof err) < 0) fail(err);
+ *       if (yol_font_view(&font, bytes, n, 0, err, sizeof err) < 0) fail(err);
  *
  *       // a whole font into a curve set: em units, y down, resolved
  *       yol_cset set;
- *       yol_cset_init(&set, &cx, &(yol_cset_desc){ .n_glyphs = font.n_glyphs });
+ *       yol_cset_desc cd = { 0 };
+ *       cd.n_glyphs = (uint32_t)font.n_glyphs;
+ *       if (!yol_cset_open(&set, &cx, &cd)) fail(yol_error(&cx));
  *       if (yol_cset_add_font(&set, &font, NULL, 0, 0) < 0) fail(yol_error(&cx));
  *       // set.texels, set.n_texels, set.words, set.n_words: ygfx_cset_make()
  *
@@ -99,14 +45,18 @@
  *       yol_path g, o;
  *       yol_path_init(&g, &cx); yol_path_init(&o, &cx);
  *       yol_font_glyph(&cx, &font, gid, &g, NULL);
- *       yol_stroke(&cx, &g, &o, &(yol_stroke_desc){ .width = 0.08 });
- *       // faux bold: .mode = YOL_BOLD; thinning: YOL_INSET
+ *       yol_stroke_desc sd = { 0 };
+ *       sd.width = 0.08;                  // faux bold: sd.mode = YOL_BOLD;
+ *       yol_stroke(&cx, &g, &o, &sd);     // thinning: YOL_INSET
  *
  *       // value-exact alpha at 24 px (canvas fillText, but exact)
  *       yol_box b;
- *       yol_raster(&cx, &g, &(yol_raster_desc){ .scale = 24 }, &b);
- *       yol_raster(&cx, &g, &(yol_raster_desc){ .scale = 24, .x = -b.x0, .y = -b.y0,
- *                    .out = img, .w = b.x1 - b.x0, .h = b.y1 - b.y0, .stride = b.x1 - b.x0 }, NULL);
+ *       yol_raster_desc rd = { 0 };
+ *       rd.scale = 24;
+ *       yol_raster(&cx, &g, &rd, &b);     // the box only
+ *       rd.x = -b.x0; rd.y = -b.y0;
+ *       rd.out = img; rd.w = rd.stride = b.x1 - b.x0; rd.h = b.y1 - b.y0;
+ *       yol_raster(&cx, &g, &rd, NULL);
  *
  *       // artwork by hand (ctx.rect(); ctx.ellipse(); ctx.fill('evenodd'))
  *       yol_path a;
@@ -114,11 +64,25 @@
  *       a.rule = YOL_EVENODD;
  *       yol_rect(&a, 0, 0, 100, 60, 8, 8);
  *       yol_ellipse(&a, 50, 30, 20, 20);
- *       yol_path_end(&a);
+ *       if (yol_path_end(&a) < 0) fail(yol_error(&cx));
  *
- *   The desc literals are C99 compound literals with designated
- *   initializers; in C++ before C++20, declare the desc and set its fields.
- *   A zero field means its default.
+ *       yol_path_free(&a); yol_path_free(&o); yol_path_free(&g);
+ *       yol_cset_close(&set);
+ *       yol_close(&cx);
+ *
+ *   A zero desc field means its default. In C99 and C++20 a compound
+ *   literal with designated initializers does the same:
+ *   yol_stroke(&cx, &g, &o, &(yol_stroke_desc){ .width = 0.08 }).
+ *
+ *   ERRORS
+ *     yol_open() and yol_cset_open() return false on failure; every other
+ *     call that can fail returns a negative YOL_ERR_* code. A call on a
+ *     context (or on a path or a curve set made on one) writes
+ *     yol_error() before it returns a code. A path or a set in the
+ *     caller's storage (context NULL) has nowhere to write: it returns the
+ *     code only. yol_font_view() and yol_svg() also write the caller's
+ *     buffer (err, cap; may be NULL). A context is for one thread, so no
+ *     call races on its message.
  *
  *   ---------------------------------------------------------------------
  *   MODEL
@@ -127,8 +91,8 @@
  *     A path is contours of quadratic Bezier segments in double. A line is
  *     a segment whose control point equals its start, bit for bit (the
  *     curve-set convention). The builder (yol_move, _line, _quad, _cubic,
- *     _arc_to, _close, _rect, _ellipse) puts every point through the path's
- *     transform. A contour without yol_close() stays open: fills close it
+ *     _arc_to, _close_path, _rect, _ellipse) puts every point through the path's
+ *     transform. A contour without yol_close_path() stays open: fills close it
  *     with a line (SVG), strokes give it caps. The first builder error
  *     sticks in p->status; yol_path_end() returns it.
  *   COORDINATES
@@ -156,7 +120,7 @@
  *   ---------------------------------------------------------------------
  *   FONTS
  *   ---------------------------------------------------------------------
- *   yol_font_open() reads a TrueType or OpenType font or one face of a
+ *   yol_font_view() reads a TrueType or OpenType font or one face of a
  *   collection (.ttc): head, maxp, hhea, hmtx, cmap (format 4 and 12), and
  *   glyf with loca, or CFF (Type 2 charstrings, local and global
  *   subroutines, CID-keyed fonts with FDArray and FDSelect format 0 or 3).
@@ -281,7 +245,7 @@
  *   ---------------------------------------------------------------------
  *   CURVE SETS
  *   ---------------------------------------------------------------------
- *   yol_cset_init() writes the header and an empty glyph table of
+ *   yol_cset_open() writes the header and an empty glyph table of
  *   desc.n_glyphs entries; yol_cset_add() appends one glyph: each vertex
  *   rounded to f32 once (so curves share their ends bit for bit and a
  *   contour closes on its first texel), lines with p1 = p0, the bbox from
@@ -339,6 +303,74 @@
  *   function, or -Wno-unused-function. YOL_SWEEP_WORK and
  *   YOL_GLYPH_POINTS may be defined before the implementation to change
  *   those bounds.
+ *
+ *   ---------------------------------------------------------------------
+ *   CHANGELOG
+ *   ---------------------------------------------------------------------
+ *   v0.3.0 - The ysp conventions (README.md, Conventions); breaks the API.
+ *          The context opens and closes: yol_init() is bool yol_open(),
+ *          yol_free() is yol_close(). The path builder's yol_close() (SVG's
+ *          Z) is yol_close_path(). yol_font_open() is yol_font_view(): it
+ *          keeps pointers into the caller's bytes and has no close.
+ *          yol_cset_init() is bool yol_cset_open(), yol_cset_free() is
+ *          yol_cset_close(); the message is in yol_error() of the set's
+ *          context. Every call on a context that fails leaves a message,
+ *          also where v0.2 returned a bare code (a NULL argument, a full
+ *          fixed store). USAGE builds as C99 and C++17. No output
+ *          changed.
+ *   v0.2.1 - TrueType glyphs sit where HarfBuzz puts them: an outline whose
+ *          glyf xMin differs from its hmtx left side bearing moves by the
+ *          difference (FONTS, "Placement"). Output changes for such glyphs
+ *          only: one in Arial, one in Times New Roman.
+ *   v0.2.0 - the SVG subset reader (yol_svg, SVG). Strokes: a round join or
+ *          cap is the sector of its disk that no band covers, not the whole
+ *          disk, and the bands' end lines pass through the segment's ends so
+ *          they cancel against the joins' spokes: 2.8 to 4.6 times fewer
+ *          positions and crossings in the sweep (docs/outline.md). Tried
+ *          and deleted, by measurement: a persistent strip order in the
+ *          sweep, and a fitted cubic conversion.
+ *   v0.1.0 - first version. Paths, transforms, cubics and arcs; a bounded
+ *          TrueType (glyf) and CFF (Type 2, CID-keyed included) reader;
+ *          overlap removal; strokes with Nehab's (2020) evolute elements;
+ *          exact alpha; curve sets with the RESOLVED flag (docs/outline.md).
+ *
+ *   STATUS: v0.3.0: the v0.2.1 checks below pass unchanged, and the test
+ *   checks open, close and the messages of v0.3. v0.2.1: built and run with MSVC 19.44 (/W4 /WX, C11 and C++17),
+ *   MinGW-w64 gcc 16.1 (C99, C11, C++17) and gcc 11.4 on Linux under ASan
+ *   and UBSan; the desc literals as C++20. tests/adapt/outline_test.c
+ *   writes its own TrueType, CFF and CID-keyed CFF fonts and SVG files and
+ *   checks, against references that do not share the header's code:
+ *   - curve sets: the format's test vector word for word, ygfx_cset_check()
+ *     on every set, band membership and order recomputed from the texels,
+ *     the winding equal to ygfx_cset_winding() at every sampled point;
+ *   - the reader: every point, implied midpoints, composites, every CFF
+ *     operator, cmap 4 and 12, hmtx, collections, every bound and refusal,
+ *     the placement shift of a simple glyph, a composite and a
+ *     USE_MY_METRICS composite, and no shift for CFF;
+ *     30000 mutated fonts without a crash;
+ *   - cubics within 0.998 of the tolerance (900 random), ellipses within
+ *     1.05e-5 at tol 1e-5;
+ *   - resolve: 300 random shapes, area within 2e-13 of an adaptive
+ *     Gauss-Kronrod reference, winding 0 or 1 and equal to the input's fill;
+ *   - exact alpha within 1.8e-13 of that reference (10698 pixels);
+ *   - strokes: 400 random quadratics, 0 wrong of 1254027 pixel centers
+ *     against the exact band (the probe's half bands: 186 wrong on 30 of
+ *     400); joins, caps, bold and inset by area within 1e-8;
+ *   - SVG: shapes, path grammar, transforms, styles and colors against
+ *     built paths and exact-alpha images; 33 refusals by name; 20000
+ *     mutated files without a crash;
+ *   - no allocator call after warm-up.
+ *   On the Windows fonts (Segoe UI, Bahnschrift, Arial, Nirmala UI,
+ *   Microsoft YaHei, Source Han Sans JP) every glyph tried builds a valid
+ *   set. Against HarfBuzz 14.6.0 (uharfbuzz 0.56.3), every glyph of Arial
+ *   (4651) and Times New Roman (4731) gives the same segments bit for bit,
+ *   and the curve sets from yol_cset_add_font() and from HarfBuzz's
+ *   outlines are the same word for word. tests/mutate/outline.toml: 67
+ *   deliberate faults, 64 caught, the 3
+ *   that survive change no result (docs/outline.md). Missed bars: a
+ *   Latin stroke (289 to 303 us a glyph against 200) and the sets of the
+ *   two heaviest fonts (Nirmala UI 77 to 85, Source Han Sans 94 to 103 us
+ *   a glyph against 66). COST has the rest.
  */
 #ifndef YSP_OUTLINE_H_INCLUDED
 #define YSP_OUTLINE_H_INCLUDED
@@ -356,9 +388,9 @@ extern "C" {
 #endif
 
 #define YOL_VERSION_MAJOR  0
-#define YOL_VERSION_MINOR  2
-#define YOL_VERSION_PATCH  1
-#define YOL_VERSION_STRING "0.2.1"
+#define YOL_VERSION_MINOR  3
+#define YOL_VERSION_PATCH  0
+#define YOL_VERSION_STRING "0.3.0"
 
 /* YOL_VERSION_STRING, as compiled into the implementation. */
 YOL_API const char* yol_version(void);
@@ -394,7 +426,8 @@ typedef struct yol_ctx_desc {
 #define YOL__NSCRATCH 28
 
 /* One per thread: the allocator, the last error message and the scratch
- * buffers every call reuses. Zero it or call yol_init(). */
+ * buffers every call reuses. yol_open() fills it; a zeroed context works
+ * as yol_open(c, NULL) leaves it. */
 typedef struct yol_ctx {
     yol_realloc_fn realloc_fn;
     void*            user;
@@ -405,10 +438,17 @@ typedef struct yol_ctx {
     size_t           scratch_cap[YOL__NSCRATCH];
     char             err[256];
     int32_t          inited;
+    uint32_t         n_err;                /* messages written (a call checks it
+                                            * to keep a more specific one)    */
 } yol_ctx;
 
-YOL_API int  yol_init(yol_ctx* c, const yol_ctx_desc* d);   /* d NULL: defaults */
-YOL_API void yol_free(yol_ctx* c);
+/* d NULL: the C library's allocator. False, with the reason in
+ * yol_error(c), for realloc and an arena both given or an arena that is
+ * not 16-byte aligned. */
+YOL_API bool yol_open(yol_ctx* c, const yol_ctx_desc* d);
+/* Frees the scratch buffers. Safe on a zeroed context, after a failed open
+ * and twice. Paths and sets made on c must be freed first. */
+YOL_API void yol_close(yol_ctx* c);
 /* The message of the last call that failed on this context ("" if none). */
 YOL_API const char* yol_error(const yol_ctx* c);
 
@@ -471,7 +511,8 @@ YOL_API void yol_quad (yol_path* p, double cx, double cy, double x, double y);
 /* Converted to quadratics within p->tol after the transform (CUBICS). */
 YOL_API void yol_cubic(yol_path* p, double c1x, double c1y, double c2x, double c2y,
                            double x, double y);
-YOL_API void yol_close(yol_path* p);
+/* Closes the contour (SVG's Z). */
+YOL_API void yol_close_path(yol_path* p);
 /* SVG's elliptical arc command 'A' from the current point; quadratics
  * within p->tol. */
 YOL_API void yol_arc_to(yol_path* p, double rx, double ry, double rot_deg,
@@ -484,7 +525,8 @@ YOL_API void yol_ellipse(yol_path* p, double cx, double cy, double rx, double ry
 YOL_API void yol_set_xform(yol_path* p, yol_xform t);
 YOL_API void yol_set_tol(yol_path* p, double tol);
 /* Ends the open contour (left open) and returns the sticky status, then
- * clears it. */
+ * clears it. The builder wrote the message into yol_error(p->ctx), if the
+ * path has a context, when the error happened. */
 YOL_API int  yol_path_end(yol_path* p);
 /* Green's theorem: the signed area, open contours closed by a line;
  * positive for clockwise on screen. */
@@ -511,9 +553,11 @@ typedef struct yol_font {
     uint32_t cff_, cff_len_, cs_, gsubr_, lsubr_, fdarray_, fdselect_;
 } yol_font;
 
-/* index: the face in a collection (.ttc), else 0. Refuses CFF2 outlines and
- * a font without outlines, by name. err may be NULL. */
-YOL_API int yol_font_open(yol_font* f, const void* data, size_t size, int index,
+/* A view: f keeps pointers into data, so the bytes must outlive it, and
+ * there is nothing to close. index: the face in a collection (.ttc), else
+ * 0. Refuses CFF2 outlines and a font without outlines, by name, in err
+ * (may be NULL). */
+YOL_API int yol_font_view(yol_font* f, const void* data, size_t size, int index,
                               char* err, size_t cap);
 /* 1 for a single font, the face count for a collection, or a code. */
 YOL_API int yol_font_faces(const void* data, size_t size);
@@ -615,8 +659,14 @@ typedef struct yol_cset {
     yol_ctx*      ctx;
 } yol_cset;
 
-YOL_API int  yol_cset_init(yol_cset* s, yol_ctx* c, const yol_cset_desc* d);
-YOL_API void yol_cset_free(yol_cset* s);
+/* The header and an empty glyph table of d->n_glyphs entries. On c's
+ * allocator, or (c NULL) in the caller's texels, words and caps, which
+ * open keeps. False, with the reason in yol_error(c) when c is not NULL,
+ * for a bad desc or no room. */
+YOL_API bool yol_cset_open(yol_cset* s, yol_ctx* c, const yol_cset_desc* d);
+/* Frees what open and add grew on the context; the caller's storage is the
+ * caller's. Safe on a zeroed set, after a failed open and twice. */
+YOL_API void yol_cset_close(yol_cset* s);
 /* Adds glyph `glyph`, absent before, from p: vertices rounded to f32 once,
  * contours, the record, the bands and their lists, then the table entry
  * last. An empty or zero-area p gives an empty record. */
@@ -721,7 +771,15 @@ static int yol__err(yol_ctx* c, int code, const char* fmt, ...) {
     va_start(ap, fmt);
     vsnprintf(c->err, sizeof c->err, fmt, ap);
     va_end(ap);
+    c->n_err++;
     return code;
+}
+
+/* A public call's last word: a failure that wrote no message since n0 gets
+ * a generic one, so yol_error() always belongs to the last failure. */
+static int yol__done(yol_ctx* c, uint32_t n0, int rc, const char* what) {
+    if (c && rc < 0 && c->n_err == n0) yol__err(c, rc, "%s: %s", what, yol_strerror(rc));
+    return rc;
 }
 
 static int yol__finite(double v) { return v == v && v - v == 0.0; }
@@ -805,12 +863,12 @@ enum {
     YOL__S_STROKE, YOL__S_STROKE2
 };
 
-YOL_API int yol_init(yol_ctx* c, const yol_ctx_desc* d) {
-    if (!c) return YOL_ERR_ARG;
+YOL_API bool yol_open(yol_ctx* c, const yol_ctx_desc* d) {
+    if (!c) return false;
     memset(c, 0, sizeof *c);
     if (d) {
-        if (d->mem && d->realloc) return yol__err(c, YOL_ERR_ARG, "give realloc or a fixed arena, not both");
-        if (d->mem && (((uintptr_t)d->mem) & 15u)) return yol__err(c, YOL_ERR_ARG, "the arena must be 16-byte aligned");
+        if (d->mem && d->realloc) { yol__err(c, YOL_ERR_ARG, "give realloc or a fixed arena, not both"); return false; }
+        if (d->mem && (((uintptr_t)d->mem) & 15u)) { yol__err(c, YOL_ERR_ARG, "the arena must be 16-byte aligned"); return false; }
         c->realloc_fn = d->realloc;
         c->user = d->user;
         c->arena = (uint8_t*)d->mem;
@@ -818,10 +876,10 @@ YOL_API int yol_init(yol_ctx* c, const yol_ctx_desc* d) {
     }
     c->arena_last = (size_t)-1;
     c->inited = 1;
-    return YOL_OK;
+    return true;
 }
 
-YOL_API void yol_free(yol_ctx* c) {
+YOL_API void yol_close(yol_ctx* c) {
     int k;
     if (!c) return;
     if (!c->arena) for (k = 0; k < YOL__NSCRATCH; k++) if (c->scratch[k]) yol__realloc(c, c->scratch[k], 0);
@@ -1057,7 +1115,7 @@ YOL_API void yol_cubic(yol_path* p, double c1x, double c1y, double c2x, double c
     p->ux = x; p->uy = y;
 }
 
-YOL_API void yol_close(yol_path* p) {
+YOL_API void yol_close_path(yol_path* p) {
     int32_t f;
     if (!p || p->status || !p->in_contour) return;
     f = yol__cfirst(p, p->n_contours - 1);
@@ -1178,7 +1236,7 @@ YOL_API void yol_ellipse(yol_path* p, double cx, double cy, double rx, double ry
     yol_move(p, cx + rx, cy);
     yol__ell_arc(p, cx, cy, rx, ry, 0, 0, 2 * YOL__PI);
     if (p->status) return;
-    yol_close(p);
+    yol_close_path(p);
 }
 
 YOL_API void yol_rect(yol_path* p, double x, double y, double w, double h, double rx, double ry) {
@@ -1190,7 +1248,7 @@ YOL_API void yol_rect(yol_path* p, double x, double y, double w, double h, doubl
     if (rx > 0.5 * w) rx = 0.5 * w;
     if (ry > 0.5 * h) ry = 0.5 * h;
     if (rx == 0 || ry == 0) {
-        yol_move(p, x, y); yol_line(p, x + w, y); yol_line(p, x + w, y + h); yol_line(p, x, y + h); yol_close(p);
+        yol_move(p, x, y); yol_line(p, x + w, y); yol_line(p, x + w, y + h); yol_line(p, x, y + h); yol_close_path(p);
         return;
     }
     yol_move(p, x + rx, y);
@@ -1202,7 +1260,7 @@ YOL_API void yol_rect(yol_path* p, double x, double y, double w, double h, doubl
     yol__ell_arc(p, x + rx, y + h - ry, rx, ry, 0, 0.5 * YOL__PI, 0.5 * YOL__PI);
     yol_line(p, x, y + ry);
     yol__ell_arc(p, x + rx, y + ry, rx, ry, 0, YOL__PI, 0.5 * YOL__PI);
-    yol_close(p);
+    yol_close_path(p);
 }
 
 /* integral of x dy along a quadratic */
@@ -1469,7 +1527,7 @@ static void yol__open_cmap(yol_font* f, uint32_t off, uint32_t len) {
     f->cmap_ = best; f->cmap_fmt_ = best_fmt;
 }
 
-YOL_API int yol_font_open(yol_font* f, const void* data, size_t size, int index, char* err, size_t cap) {
+YOL_API int yol_font_view(yol_font* f, const void* data, size_t size, int index, char* err, size_t cap) {
     const uint8_t* d = (const uint8_t*)data;
     uint32_t base = 0, nt, i, head = 0, head_n = 0, maxp = 0, maxp_n = 0, hhea = 0, hhea_n = 0, cff2 = 0, cmap = 0, cmap_n = 0;
     int faces;
@@ -1713,7 +1771,7 @@ static int yol__glyf(yol_ctx* c, const yol_font* f, uint32_t gid, const double m
                 }
             }
             if (have) yol_quad(p, yol__mx(g, m, cx, cy), yol__my(g, m, cx, cy), yol__mx(g, m, sx, sy), yol__my(g, m, sx, sy));
-            yol_close(p);
+            yol_close_path(p);
             if (p->status) return p->status;
             s = e + 1;
         }
@@ -1768,7 +1826,7 @@ typedef struct yol__cs {
 static const double yol__id6[6] = { 1, 0, 0, 1, 0, 0 };
 
 static void yol__cs_move(yol__cs* s, double dx, double dy) {
-    if (s->open) yol_close(s->p);
+    if (s->open) yol_close_path(s->p);
     s->x += dx; s->y += dy;
     yol_move(s->p, yol__mx(s->g, yol__id6, s->x, s->y), yol__my(s->g, yol__id6, s->x, s->y));
     s->open = 1;
@@ -1914,7 +1972,7 @@ static int yol__cs_run(yol__cs* s, uint32_t lsubr) {
         case 14:
             if (!s->width_done && (s->n == 1 || s->n == 5)) yol__cs_width(s, 1);
             if (s->n >= 4) return yol__err(c, YOL_ERR_REFUSED, "glyph %u: a seac accent (endchar with 4 arguments)", s->gid);
-            if (s->open) yol_close(s->p);
+            if (s->open) yol_close_path(s->p);
             s->open = 0;
             return s->p->status;
         case 12: {
@@ -1992,7 +2050,7 @@ static int yol__cff_glyph(yol_ctx* c, const yol_font* f, uint32_t gid, yol_path*
     return yol__cs_run(&s, lsubr);
 }
 
-YOL_API int yol_font_glyph(yol_ctx* c, const yol_font* f, uint32_t glyph, yol_path* p, const yol_glyph_desc* d) {
+static int yol__font_glyph(yol_ctx* c, const yol_font* f, uint32_t glyph, yol_path* p, const yol_glyph_desc* d) {
     yol_glyph_desc dd;
     yol__gmap g;
     double tol0;
@@ -2789,7 +2847,7 @@ static int yol__sweep(yol_ctx* c, const yol_path* A, int rule, const yol_path* B
     return yol__chain(&w, &o, out);
 }
 
-YOL_API int yol_resolve(yol_ctx* c, const yol_path* in, yol_path* out) {
+static int yol__resolve(yol_ctx* c, const yol_path* in, yol_path* out) {
     int rc;
     if (!c || !in || !out) return YOL_ERR_ARG;
     if (in->status) return yol__err(c, in->status, "resolve: the path has a builder error");
@@ -2891,7 +2949,7 @@ static void yol__acc_quad(double* acc, int w, int h, const double s[6]) {
     }
 }
 
-YOL_API int yol_raster(yol_ctx* c, const yol_path* in, const yol_raster_desc* d, yol_box* box) {
+static int yol__raster(yol_ctx* c, const yol_path* in, const yol_raster_desc* d, yol_box* box) {
     yol_path tmp;
     const yol_path* r = in;
     double sc, ox, oy, minx = HUGE_VAL, miny = HUGE_VAL, maxx = -HUGE_VAL, maxy = -HUGE_VAL;
@@ -3012,7 +3070,7 @@ static double yol__contour_area(const yol_path* p, int32_t k) {
 /* Ends the element contour just built and makes it positive. */
 static int yol__elem_end(yol__sk* s) {
     yol_path* e = s->e;
-    yol_close(e);
+    yol_close_path(e);
     if (e->status) return e->status;
     if (e->n_contours > 0 && yol__contour_area(e, e->n_contours - 1) < 0) yol__contour_reverse(e, e->n_contours - 1);
     return YOL_OK;
@@ -3489,7 +3547,7 @@ static int yol__cancel(yol_ctx* c, yol_path* e) {
     return YOL_OK;
 }
 
-YOL_API int yol_stroke(yol_ctx* c, const yol_path* in, yol_path* out, const yol_stroke_desc* d) {
+static int yol__stroke(yol_ctx* c, const yol_path* in, yol_path* out, const yol_stroke_desc* d) {
     yol__sk s;
     yol_path e;
     int32_t k;
@@ -3557,25 +3615,29 @@ static int yol__cset_texels(yol_cset* s, uint32_t n) {
     return YOL_OK;
 }
 
-YOL_API int yol_cset_init(yol_cset* s, yol_ctx* c, const yol_cset_desc* d) {
-    uint32_t i;
-    int rc;
-    if (!s || !d) return YOL_ERR_ARG;
+YOL_API bool yol_cset_open(yol_cset* s, yol_ctx* c, const yol_cset_desc* d) {
+    uint32_t i, n0 = c ? c->n_err : 0;
+    if (!s || !d) { yol__err(c, YOL_ERR_ARG, "curve set: no set or no desc"); return false; }
     if (c) { memset(s, 0, sizeof *s); s->ctx = c; }
     else { s->n_texels = 0; s->n_words = 0; s->ctx = NULL; }
     s->desc = *d;
-    if (d->n_glyphs >= (1u << 24)) return yol__err(c, YOL_ERR_RANGE, "curve set: %u glyphs; the format allows below 2^24", d->n_glyphs);
-    if (d->nh < 0 || d->nh > 65535 || d->nv < 0 || d->nv > 65535) return yol__err(c, YOL_ERR_RANGE, "curve set: band counts 0..65535");
-    rc = yol__cset_words(s, 8 + d->n_glyphs + 4);
-    if (rc < 0) return rc;
+    if (d->n_glyphs >= (1u << 24)) {
+        yol__err(c, YOL_ERR_RANGE, "curve set: %u glyphs; the format allows below 2^24", d->n_glyphs);
+        return false;
+    }
+    if (d->nh < 0 || d->nh > 65535 || d->nv < 0 || d->nv > 65535) {
+        yol__err(c, YOL_ERR_RANGE, "curve set: band counts 0..65535");
+        return false;
+    }
+    if (yol__done(c, n0, yol__cset_words(s, 8 + d->n_glyphs + 4), "curve set") < 0) return false;
     s->words[0] = YOL__CSET_MAGIC; s->words[1] = 1; s->words[2] = d->n_glyphs;
     for (i = 3; i < 8 + d->n_glyphs; i++) s->words[i] = 0;
     s->n_words = 8 + d->n_glyphs;
     while (s->n_words % 4) s->words[s->n_words++] = 0;
-    return YOL_OK;
+    return true;
 }
 
-YOL_API void yol_cset_free(yol_cset* s) {
+YOL_API void yol_cset_close(yol_cset* s) {
     if (!s) return;
     if (s->ctx) {
         if (s->texels) yol__realloc(s->ctx, s->texels, 0);
@@ -3594,7 +3656,7 @@ static int yol__bands_auto(uint32_t n) {
     return b < 1 ? 1 : (b > 16 ? 16 : b);
 }
 
-YOL_API int yol_cset_add(yol_cset* s, uint32_t glyph, const yol_path* p) {
+static int yol__cset_add(yol_cset* s, uint32_t glyph, const yol_path* p) {
     yol_ctx* c;
     yol_path tmp;
     const yol_path* src = p;
@@ -4070,7 +4132,7 @@ static int yol__spathd(yol__sv* v, const yol__sa* a, yol_path* p) {
             if (!yol__snum(s, n, &i, &q[k])) return yol__sverr(v, YOL_ERR_FORMAT, "path data: '%c' without its numbers", cmd);
         }
         switch (up) {
-        case 'Z': yol_close(p); cx = sx; cy = sy; cmd = 0; break;
+        case 'Z': yol_close_path(p); cx = sx; cy = sy; cmd = 0; break;
         case 'M':
             if (rel) { q[0] += cx; q[1] += cy; }
             yol_move(p, q[0], q[1]); cx = sx = q[0]; cy = sy = q[1];
@@ -4125,7 +4187,7 @@ static int yol__spoints(yol__sv* v, const yol__sa* a, yol_path* p, int close) {
         if (!yol__snum(s, n, &i, &y)) return yol__sverr(v, YOL_ERR_FORMAT, "points: an odd count");
         if (k++ == 0) yol_move(p, x, y); else yol_line(p, x, y);
     }
-    if (close) yol_close(p);
+    if (close) yol_close_path(p);
     return YOL_OK;
 }
 
@@ -4282,7 +4344,7 @@ static int yol__scontent(yol__sv* v, const yol__ss* st, int depth, int kind) {
     return yol__sverr(v, YOL_ERR_FORMAT, "an unclosed element");
 }
 
-YOL_API int yol_svg(yol_ctx* c, const char* text, size_t n, const yol_svg_desc* d, double viewbox[4], char* err, size_t cap) {
+static int yol__svg(yol_ctx* c, const char* text, size_t n, const yol_svg_desc* d, double viewbox[4], char* err, size_t cap) {
     yol__sv v;
     yol__ss st;
     int rc, k;
@@ -4342,7 +4404,7 @@ fail:
     return rc;
 }
 
-YOL_API int yol_cset_add_font(yol_cset* s, const yol_font* f, const uint32_t* glyphs, uint32_t n, double tol) {
+static int yol__cset_add_font(yol_cset* s, const yol_font* f, const uint32_t* glyphs, uint32_t n, double tol) {
     yol_ctx* c;
     yol_path g;
     yol_glyph_desc gd;
@@ -4401,6 +4463,45 @@ YOL__TABLE(yol_raster_params, yol__raster_params)
 YOL__TABLE(yol_cset_params, yol__cset_params)
 YOL__TABLE(yol_glyph_params, yol__glyph_params)
 #undef YOL__TABLE
+
+/* --- the calls on a context: a failure always leaves a message ------------ */
+
+YOL_API int yol_font_glyph(yol_ctx* c, const yol_font* f, uint32_t glyph, yol_path* p, const yol_glyph_desc* d) {
+    uint32_t n0 = c ? c->n_err : 0;
+    return yol__done(c, n0, yol__font_glyph(c, f, glyph, p, d), "glyph");
+}
+
+YOL_API int yol_resolve(yol_ctx* c, const yol_path* in, yol_path* out) {
+    uint32_t n0 = c ? c->n_err : 0;
+    return yol__done(c, n0, yol__resolve(c, in, out), "resolve");
+}
+
+YOL_API int yol_raster(yol_ctx* c, const yol_path* in, const yol_raster_desc* d, yol_box* box) {
+    uint32_t n0 = c ? c->n_err : 0;
+    return yol__done(c, n0, yol__raster(c, in, d, box), "raster");
+}
+
+YOL_API int yol_stroke(yol_ctx* c, const yol_path* in, yol_path* out, const yol_stroke_desc* d) {
+    uint32_t n0 = c ? c->n_err : 0;
+    return yol__done(c, n0, yol__stroke(c, in, out, d), "stroke");
+}
+
+YOL_API int yol_cset_add(yol_cset* s, uint32_t glyph, const yol_path* p) {
+    yol_ctx* c = s ? s->ctx : NULL;
+    uint32_t n0 = c ? c->n_err : 0;
+    return yol__done(c, n0, yol__cset_add(s, glyph, p), "curve set");
+}
+
+YOL_API int yol_cset_add_font(yol_cset* s, const yol_font* f, const uint32_t* glyphs, uint32_t n, double tol) {
+    yol_ctx* c = s ? s->ctx : NULL;
+    uint32_t n0 = c ? c->n_err : 0;
+    return yol__done(c, n0, yol__cset_add_font(s, f, glyphs, n, tol), "curve set");
+}
+
+YOL_API int yol_svg(yol_ctx* c, const char* text, size_t n, const yol_svg_desc* d, double viewbox[4], char* err, size_t cap) {
+    uint32_t n0 = c ? c->n_err : 0;
+    return yol__done(c, n0, yol__svg(c, text, n, d, viewbox, err, cap), "SVG");
+}
 
 #if defined(_MSC_VER)
 #pragma warning(pop)

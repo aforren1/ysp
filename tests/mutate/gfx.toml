@@ -1,6 +1,7 @@
 
 # ysp/gfx.h mutants: the v0.4 list (docs/gfx.md, "v0.4 mutations"), then
-# later lists by prefix (pr-: v0.11 prime; os-: v0.11.1 open start).
+# later lists by prefix (pr-: v0.11 prime; os-: v0.11.1 open start; cv-:
+# v0.12.0 messages).
 # The v0.3 list (mutate03.py) was lost; docs/gfx.md keeps its table.
 # YGFX_TEST_PARTS limits a run to the parts that can see the fault, and
 # "none" runs the CPU half alone. YGFX_TEST_DEVICES=hardware is the GPU
@@ -1067,3 +1068,21 @@ env = { YGFX_TEST_PARTS = "none" }
 why = "v0.11.1: a data file's header must say whether the compiles overlapped settling."
 find = '''                    : g->start_mode == YGFX__START_SERIAL ? ", open_start=serial(no GL_KHR_parallel_shader_compile)" : "");'''
 replace = '''                    : "");'''
+
+[[mutant]]
+id = "cv-01"
+name = "a failure that wrote nothing stays silent"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none" }
+why = "v0.12.0: every call on a gfx that fails writes ygfx_error(); a draw outside begin..end returned its code with an older message."
+find = '        if (!g->error[0]) ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: %s: %s", what, ygfx_strerror(rc));'
+replace = '        (void)what;'
+
+[[mutant]]
+id = "cv-02"
+name = "a success drops the last failure's message"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none" }
+why = "v0.12.0: the message belongs to the last failure; a successful call must put it back."
+find = '        g->error[0] = c0;'
+replace = '        (void)c0;'

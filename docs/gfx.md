@@ -3016,6 +3016,45 @@ module it unloads, which a suppression cannot name, so the test runs GL
 under a sanitizer only when `YGFX_TEST_DEVICES` asks for it. Locally,
 with GL on, everything passed under ASan and UBSan apart from that leak.
 
+## v0.12.0: a message for every failure
+
+v0.12.0 applies the repository conventions (README.md, Conventions) to
+this header. The sweep found two things to do and one not to do:
+
+- **Every failing call on a gfx writes `ygfx_error()`.** About half of
+  the frame and upload calls returned a bare code: `ygfx_draw()` outside
+  `begin..end`, a full draw queue, `ygfx_begin_target()` out of turn, a
+  bad texture id in an update. The message then belonged to an older
+  failure, and a caller that printed it after a failed call read the
+  wrong reason. Each public call now runs inside a wrapper, as in
+  ysp/screen.h v0.6.0: it hides the first byte of the message, runs the
+  call, and keeps the message the call wrote, or writes "ysp_gfx:
+  <call>: <code's text>", or puts the byte back after a success. The
+  makers of textures, targets, buffers, pipelines and curve sets do the
+  same when they return a 0 id. The cost is one more call and two byte
+  writes per call, also per `ygfx_draw()`; `snprintf()` runs only on
+  failure. Not measured: the spec for this change asked for no timing
+  runs, so `examples/gfx/bench.c` is the check if a frame's CPU time is
+  in doubt.
+- **The const calls keep their codes.** `ygfx_describe()`,
+  `ygfx_hit_index()` and `ygfx_simplex_value()` take a const gfx: they
+  read it and return the code.
+- **No time field changed.** The desc and the stimuli hold no time, by
+  design (NOTHING READS A CLOCK): a frame gets its time from
+  `yscr_frame`, already `int64_t` ns. `ygfx_programs.open_ns` and
+  `store_ns` are already `int64_t` ns. Rates (`sf`, the drift `tf_hz` in
+  USAGE) are not times.
+
+`ygfx_open_start()` stays: it is an open variant (README, Lifecycle
+verbs).
+
+Checked on 2026-10-10 (Windows 11, MSVC 19.44 /W4 /WX, and MinGW-w64 gcc
+-std=c99 and -std=c++17 -pedantic for USAGE): `tests/adapt/gfx_test.c`
+checks the message after a failing end, draw, begin, texture and
+texture_update, and that a success keeps it. Mutants cv-01 (a failure
+that writes nothing) and cv-02 (a success that drops the message) are
+caught.
+
 ## v0.11.1: the open in two calls
 
 `ygfx_open_start()` does the first half of `ygfx_open()`: the desc's

@@ -88,7 +88,7 @@ static int write_seq(const char* path, int w, int h, int n, int fps, int qoi, in
         d.primaries = YVID_PRIM_BT709; d.siting = YVID_SITING_LEFT;
     }
     d.max_frames = n;
-    if (!yvid_seq_create(&sq, &d)) { fprintf(stderr, "video_play: %s\n", yvid_seq_error(&sq)); free(rgba); free(yp); return 1; }
+    if (!yvid_seq_open(&sq, &d)) { fprintf(stderr, "video_play: %s\n", yvid_seq_error(&sq)); free(rgba); free(yp); return 1; }
     for (i = 0; i < n && rc == 0; i++) {
         const void* planes[3];
         int32_t strides[3];
@@ -107,7 +107,8 @@ static int write_seq(const char* path, int w, int h, int n, int fps, int qoi, in
         }
         if (yvid_seq_write(&sq, planes, strides, NULL) != YVID_OK) rc = 1;
     }
-    if (yvid_seq_close(&sq) != YVID_OK) rc = 1;
+    if (yvid_seq_finish(&sq) != YVID_OK) { fprintf(stderr, "video_play: %s\n", yvid_seq_error(&sq)); rc = 1; }
+    yvid_seq_close(&sq);
     free(rgba);
     free(yp);
     return rc;

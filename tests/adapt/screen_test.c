@@ -2847,6 +2847,7 @@ static void test_group(void) {
     CHECK_I(per[1], 30);
     CHECK_I(yscr_begin_group(NULL, 2, f), YSCR_ERR_ARG);
     CHECK_I(yscr_begin_group(sp, 2, f), YSCR_ERR_CLOSED);
+    CHECK(strstr(yscr_error(sp[0]), "begin_group: screen 0 of the group: screen not open") != NULL);
 }
 
 static void test_errors(void) {
@@ -2880,7 +2881,9 @@ static void test_errors(void) {
     d.presenter = &bad;
     CHECK(!yscr_open(&s, &d));
     CHECK_I(yscr_begin(&s, &f), YSCR_ERR_CLOSED);
+    CHECK(strcmp(yscr_error(&s), "ysp_screen: begin: screen not open") == 0);   /* v0.6 */
     CHECK_I(yscr_flip(&s), YSCR_ERR_CLOSED);
+    CHECK(strcmp(yscr_error(&s), "ysp_screen: flip: screen not open") == 0);
     CHECK_I(yscr_begin(NULL, &f), YSCR_ERR_ARG);
     memset(&c, 0, sizeof c);
     c.depth = 1;
@@ -2889,10 +2892,19 @@ static void test_errors(void) {
     CHECK(!yscr_open(&s, &d));                       /* already open */
     CHECK(yscr_is_open(&s));
     CHECK_I(yscr_flip(&s), YSCR_ERR_ORDER);        /* flip before begin */
+    CHECK(strstr(yscr_error(&s), "flip: begin and flip out of turn") != NULL);
     CHECK_I(yscr_begin(&s, &f), YSCR_OK);
+    CHECK(strstr(yscr_error(&s), "flip: begin and flip out of turn") != NULL);   /* a success keeps it */
     CHECK_I(yscr_begin(&s, &f), YSCR_ERR_ORDER);   /* begin twice */
+    CHECK(strstr(yscr_error(&s), "begin: begin and flip out of turn") != NULL);
     CHECK_I(yscr_wait_flip(&s, NULL), YSCR_ERR_ORDER);
+    CHECK(strstr(yscr_error(&s), "wait_flip:") != NULL);
+    CHECK_I(yscr_code(&s, 5, 1), YSCR_ERR_ARG);
+    CHECK(strstr(yscr_error(&s), "code: bad argument") != NULL);
+    CHECK_I(yscr_trigger_at(&s, 9, 1, 0), YSCR_ERR_ARG);
+    CHECK(strstr(yscr_error(&s), "trigger_at: bad argument") != NULL);
     CHECK_I(yscr_flip(&s), YSCR_OK);
+    CHECK(strstr(yscr_error(&s), "trigger_at: bad argument") != NULL);
     CHECK(yscr_gl_proc(&s, "glClear") == NULL);
     CHECK(yscr_window(&s) == NULL);
     CHECK_I(yscr_restamp(&s, 123), 0);
@@ -3457,7 +3469,7 @@ static void test_panic_rule(void) {
     c.depth = 1;
     ring_reset();
     CHECK(open_scripted(&s, &c, 0, 1));
-    yscr__panic_config(3, 2000, 10000);
+    yscr__panic_config(3, YRT_S(2), YRT_S(10));
     vlose(20000000000LL);                          /* any earlier report is old */
     /* a hung loop: nothing reports */
     t = vnow();
@@ -3520,6 +3532,10 @@ static void test_panic_rule(void) {
     d.panic_presses = -1;
     CHECK(!yscr_open(&s, &d));
     d.panic_presses = 0;
+    d.panic_grace_ns = -1;                         /* v0.6: ns, int64 */
+    CHECK(!yscr_open(&s, &d) && strstr(yscr_error(&s), "panic_grace_ns") != NULL);
+    d.panic_grace_ns = YRT_S(10);
+    d.panic_window_ns = YRT_S(2);
     CHECK(yscr_open(&s, &d));                    /* SIM: nothing to arm */
     {
         char line[512];

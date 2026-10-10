@@ -537,7 +537,7 @@ static int tt_open(tt_font* f, const char* path) {
     f->d = (unsigned char*)malloc(f->n);
     if (!f->d || fread(f->d, 1, f->n, fp) != f->n) { fclose(fp); free(f->d); f->d = NULL; return 0; }
     fclose(fp);
-    if (yol_font_open(&f->f, f->d, f->n, 0, err, sizeof err) < 0) { printf("v0.6 text: %s: %s\n", path, err); return 0; }
+    if (yol_font_view(&f->f, f->d, f->n, 0, err, sizeof err) < 0) { printf("v0.6 text: %s: %s\n", path, err); return 0; }
     return 1;
 }
 
@@ -560,7 +560,7 @@ static int tt_build(const tt_font* f, yol_cset* s, const int* gids, int n, int b
     for (i = 0; i < n; i++) if (gids[i] > 0 && gids[i] < 65536 && !seen[gids[i]]) { seen[gids[i]] = 1; list[m++] = (uint32_t)gids[i]; }
     memset(&d, 0, sizeof d);
     d.n_glyphs = (uint32_t)f->f.n_glyphs; d.nh = d.nv = bands; d.backward = backward != 0; d.keep_overlaps = keep != 0;
-    if (yol_cset_init(s, &tt_cx, &d) != YOL_OK) return 0;
+    if (!yol_cset_open(s, &tt_cx, &d)) return 0;
     if (yol_cset_add_font(s, &f->f, list, m, 0) < 0) { printf("v0.6 text: %s\n", yol_error(&tt_cx)); return 0; }
     return 1;
 }
@@ -616,7 +616,7 @@ static void bench_v06_text(void) {
     for (i = 33; i < 127; i++) { int g = tt_gid(&fl, i); if (g) lat[nl++] = g; }
     for (i = 0; i < 7000; i++) cjk[i] = tt_gid(&fc, 0x4E00 + i);
     t0 = yrt_now_ns();
-    if (yol_init(&tt_cx, NULL) != YOL_OK) return;
+    if (!yol_open(&tt_cx, NULL)) return;
     if (!tt_build(&fl, &sl, lat, nl, bands, bwd, keep) || !tt_build(&fc, &sc, cjk, 7000, bands, bwd, keep)) { printf("v0.6 text: build failed\n"); return; }
     printf("v0.6 text: ysp/outline.h built %d Latin and 7000 CJK glyphs in %.0f ms (bands %d, backward %d, %s): %u + %u texels, "
            "%u + %u words\n", nl, (double)(yrt_now_ns() - t0) * 1e-6, bands, bwd, keep ? "overlaps kept" : "resolved",
@@ -703,8 +703,8 @@ static void bench_v06_text(void) {
     for (i = 0; i < 4; i++) ygfx_buffer_free(&gfx, buf[i]);
     ygfx_texture_free(&gfx, page);
     ygfx_cset_free(&gfx, setl); ygfx_cset_free(&gfx, setc);
-    yol_cset_free(&sl); yol_cset_free(&sc);
-    yol_free(&tt_cx);
+    yol_cset_close(&sl); yol_cset_close(&sc);
+    yol_close(&tt_cx);
     free(fl.d); free(fc.d);
 }
 

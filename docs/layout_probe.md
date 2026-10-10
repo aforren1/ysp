@@ -649,7 +649,7 @@ to 33.0 us a CJK glyph; the curve set (resolved) 17.9 to 18.1 and 31.0 us
 
 HarfBuzz as an outline source for the pack tool, with no header depending
 on it: `hb_font_draw_glyph()` with variations set, fed to `yol_move`,
-`yol_line`, `yol_quad`, `yol_cubic` and `yol_close` (em units, y
+`yol_line`, `yol_quad`, `yol_cubic` and `yol_close_path` (em units, y
 down, tolerance 1e-4 em), then `yol_cset_add()`. On static fonts this
 path gives the outlines of 4.1, and the same curve set word for word as
 `yol_cset_add_font()` over the first 3000 glyphs of Segoe UI, Microsoft

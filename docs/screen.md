@@ -2619,6 +2619,45 @@ meanwhile.
   on an unsettled display; ysp/timeline.h anchors must not use settle
   frames; the abort path and the panic watchdog run in a new state.
 
+## A message for every failure, ns in the desc (v0.6.0)
+
+v0.6.0 applies the repository conventions (README.md, Conventions) to this
+header. Three decisions:
+
+- **Every failing call on a screen writes `yscr_error()`.** Before,
+  only `yscr_open()` and `yscr_text_input()` wrote it. `yscr_begin()`
+  returned `YSCR_ERR_TIMEOUT` or `YSCR_ERR_LOST` from the swap path with
+  an empty message, and about 10 examples print `yscr_error()` after a
+  failed begin. Each public call now runs inside a wrapper: it hides the
+  first byte of the message, runs the call, and then either keeps the
+  message the call wrote, writes "ysp_screen: <call>: <code's text>", or
+  puts the byte back after a success. The cost is two byte writes per
+  call, also in the frame loop; `snprintf()` runs only on failure. The
+  group calls write into the screen at fault, or into the first screen
+  when no screen is at fault. `yscr_native()` now takes a non-const
+  screen so that it can write. No call on a screen is for another
+  thread (MEMORY AND THREADS), so no call is an exception to the rule.
+- **The panic times are `int64_t` ns.** `desc.panic_window_ms` and
+  `panic_grace_ms` were `int32_t` ms. They are now `panic_window_ns` and
+  `panic_grace_ns`, so old code that sets the ms names fails to compile
+  and does not wait a million times shorter. `desc.trigger_spin_ns` was
+  `uint32_t`; it is `int64_t`, as `yrt_worker_desc.spin_ns` is.
+- **Kept.** `yscr_restamp()`'s `sdl_ticks_ns` is SDL's clock, not the
+  ysp_rt clock, and keeps its `uint64_t`. `yscr_record.phase_ns` is a
+  `uint32_t` that the caller only reads (a phase of one frame, with
+  `YSCR_PHASE_UNKNOWN` as its sentinel): changing it would change the
+  record's size and the ring's layout for no caller benefit.
+  `desc.lead` is a fraction of a period, not a time.
+
+Checked on 2026-10-10 (Windows 11, MSVC 19.44 /W4 /WX, and MinGW-w64 gcc
+-std=c99 and -std=c++17 -pedantic for USAGE): `tests/adapt/screen_test.c`
+checks the message after each failing begin, flip, wait_flip, code,
+trigger_at and begin_group, that a success keeps the last failure's
+message, and the refusal of a negative `panic_grace_ns`.
+`tests/compile/screen.c` names the calls that write the message by type.
+Mutants cv-01 (a failure that writes nothing) and cv-02 (a success that
+drops the message) are caught.
+
 ## SIM on a virtual clock (design note; not built)
 
 `--sim` self-checks flaked on slow CI hosts (macOS, twice): the SIM

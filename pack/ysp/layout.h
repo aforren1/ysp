@@ -13,7 +13,7 @@
  *   the curve sets (ygfx_cset_make, ygfx_cset_add) is the caller's.
  *
  *   Usage:
- *       yol_ctx ol; yol_init(&ol, NULL);
+ *       yol_ctx ol; yol_open(&ol, NULL);
  *       ylay_lib* L;
  *       ylay_create(&L, &(ylay_desc){ .ol = &ol });
  *       int ui = ylay_add_font(L, bytes, n, 0, "segoeui.ttf");     // fallback order

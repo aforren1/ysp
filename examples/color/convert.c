@@ -77,7 +77,7 @@ int main(int argc, char** argv) {
     memset(&d, 0, sizeof d);
     d.cal = &cal;
     d.background[0] = d.background[1] = d.background[2] = 0.5;
-    if (ycol_ctx_init(&cx, &d, err, sizeof err) < 0) { fprintf(stderr, "color_convert: %s\n", err); return 1; }
+    if (!ycol_ctx_open(&cx, &d)) { fprintf(stderr, "color_convert: %s\n", ycol_ctx_error(&cx)); return 1; }
     ycol_cal_describe(&cal, line, sizeof line);
     printf("%s\n", line);
     ycol_ctx_describe(&cx, line, sizeof line);

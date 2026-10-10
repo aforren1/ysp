@@ -5,7 +5,7 @@
 # v0.3.5's 5 (raw mice; the 2 on its queue went with the queue),
 # v0.4.0's 6 (the input bridge), v0.4.1's 15 (the key filter, kd-) and
 # v0.4.2's 3 (kd-16 to kd-18, the key-up fix) and 13 (the sync guard,
-# sg-), v0.4.3's 9 (eg-, held frames), v0.4.4's 20 (dp-, the depth policy, the guessed grid, early flips), v0.5.0's 20 (st-, settling at open), v0.5.1's 7 (fg-, the foreground and the slot held after settling), v0.5.2's 7 (ch-, the context hook; ch-06 runs the gfx test). The 29 earlier mutants (docs/screen.md,
+# sg-), v0.4.3's 9 (eg-, held frames), v0.4.4's 20 (dp-, the depth policy, the guessed grid, early flips), v0.5.0's 20 (st-, settling at open), v0.5.1's 7 (fg-, the foreground and the slot held after settling), v0.5.2's 7 (ch-, the context hook; ch-06 runs the gfx test), v0.6.0's 2 (cv-, the messages). The 29 earlier mutants (docs/screen.md,
 # "Mutations") were run from scripts that were not kept.
 header = "ysp/screen.h"
 
@@ -1087,3 +1087,19 @@ test = "screen"
 why = "v0.5.2: before the warm-up the compiles got 0.2 s more (measured, docs/screen.md); after it they start later."
 find = "    yscr__context_hook(s, desc);\n    yscr__warmup(s);"
 replace = "    yscr__warmup(s);\n    yscr__context_hook(s, desc);"
+
+[[mutant]]
+id = "cv-01"
+name = "a failure that wrote nothing stays silent"
+test = "screen"
+why = "v0.6.0: every call on a screen that fails writes yscr_error(); begin() used to return a timeout with an empty message."
+find = '        if (!s->error[0]) yscr__set_error(s->error, sizeof s->error, "ysp_screen: %s: %s", what, yscr_strerror(rc));'
+replace = '        (void)what;'
+
+[[mutant]]
+id = "cv-02"
+name = "a success drops the last failure's message"
+test = "screen"
+why = "v0.6.0: the message belongs to the last failure; a successful call must put it back."
+find = '        s->error[0] = c0;'
+replace = '        (void)c0;'

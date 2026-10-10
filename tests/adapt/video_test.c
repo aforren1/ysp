@@ -1131,6 +1131,7 @@ static void test_loop_end(void) {
     CHECK_I(count_other((uint16_t)YVID_EV_END), 1);
     CHECK_I(g_up_frame, 9);
     CHECK_I(yvid_play_at(&g_mv, YVID_ASAP), YVID_ERR_ORDER);
+    CHECK(strstr(yvid_error(&g_mv), "play_at") != NULL);   /* v0.3: a message for each failure */
     yvid_close(&g_mv);
 }
 
@@ -1657,7 +1658,7 @@ static void test_seq(void) {
         sd.path = path; sd.w = W; sd.h = H; sd.format = fmt; sd.compression = qoi ? YVID_SEQ_QOI : YVID_SEQ_RAW;
         sd.fps_num = 25; sd.fps_den = 1;
         if (yvid__is_yuv(fmt)) { sd.matrix = YVID_MATRIX_BT709; sd.range = YVID_RANGE_LIMITED; sd.transfer = YVID_TRC_BT1886; sd.primaries = YVID_PRIM_BT709; sd.siting = YVID_SITING_LEFT; }
-        if (!yvid_seq_create(&w, &sd)) { fail(__LINE__, yvid_seq_error(&w)); continue; }
+        if (!yvid_seq_open(&w, &sd)) { fail(__LINE__, yvid_seq_error(&w)); continue; }
         for (k = 0; k < 12; k++) {
             const void* planes[3];
             int32_t strides[3];
@@ -1679,7 +1680,8 @@ static void test_seq(void) {
             }
             CHECK_I(yvid_seq_write(&w, planes, strides, NULL), YVID_OK);
         }
-        CHECK_I(yvid_seq_close(&w), YVID_OK);
+        CHECK_I(yvid_seq_finish(&w), YVID_OK);
+        yvid_seq_close(&w);
         /* from the file and from memory (test_reader covers a reader) */
         for (src = 0; src < 2; src++) {
             static uint8_t filebuf[1 << 20];
@@ -1766,7 +1768,7 @@ static void test_seq(void) {
             yvid_info info;
             char e[200];
             vd.size = n;
-            CHECK(yvid_probe(&vd, &info, e, sizeof e));
+            CHECK_I(yvid_probe(&vd, &info, e, sizeof e), YVID_OK);
             CHECK_I(info.frames, 12);
             CHECK_I(info.w, 21);
             CHECK_I(info.fps_num, 25);
@@ -1802,10 +1804,45 @@ static void test_reader(void) {
     memset(&sd, 0, sizeof sd);
     sd.path = path; sd.w = 9; sd.h = 7; sd.format = YVID_FMT_RGBA8; sd.fps_num = 30;
     sd.max_frames = 5;
-    CHECK(yvid_seq_create(&w, &sd));
+    CHECK(yvid_seq_open(&w, &sd));
     for (k = 0; k < 5; k++) { memset(px, k + 1, sizeof px); CHECK_I(yvid_seq_write(&w, planes, strides, NULL), YVID_OK); }
     CHECK_I(yvid_seq_write(&w, planes, strides, NULL), YVID_ERR_FULL);   /* max_frames */
-    CHECK_I(yvid_seq_close(&w), YVID_OK);
+    CHECK(strcmp(yvid_seq_error(&w), "ysp_video: seq_write: full") == 0);   /* v0.3 */
+    CHECK_I(yvid_seq_finish(&w), YVID_OK);
+    CHECK(strcmp(yvid_seq_error(&w), "ysp_video: seq_write: full") == 0);   /* a success keeps it */
+    CHECK_I(yvid_seq_finish(&w), YVID_ERR_CLOSED);
+    CHECK(strstr(yvid_seq_error(&w), "seq_finish: not open") != NULL);
+    yvid_seq_close(&w);
+    yvid_seq_close(&w);
+    {   /* v0.3: close is safe on a zeroed writer and after a failed open, and
+         * finishes a writer that was not finished */
+        yvid_seq z;
+        yvid_seq_desc zd;
+        memset(&z, 0, sizeof z);
+        yvid_seq_close(&z);
+        yvid_seq_close(NULL);
+        memset(&zd, 0, sizeof zd);
+        CHECK(!yvid_seq_open(&z, &zd) && strstr(yvid_seq_error(&z), "desc.path") != NULL);
+        yvid_seq_close(&z);
+        zd = sd;
+        zd.path = "ysp_video_test_close.yspseq";
+        CHECK(yvid_seq_open(&z, &zd));
+        CHECK_I(yvid_seq_write(&z, planes, strides, NULL), YVID_OK);
+        yvid_seq_close(&z);   /* not finished: close finishes it */
+        {
+            yvid_desc pd;
+            yvid_info pi;
+            char pe[200];
+            memset(&pd, 0, sizeof pd);
+            pd.path = zd.path;
+            CHECK_I(yvid_probe(&pd, &pi, pe, sizeof pe), YVID_OK);
+            CHECK_I(pi.frames, 1);
+            pd.path = "ysp_video_test_no_such_file.yspseq";
+            CHECK(yvid_probe(&pd, &pi, pe, sizeof pe) < 0 && pe[0] != '\0');
+            CHECK_I(yvid_probe(NULL, &pi, pe, sizeof pe), YVID_ERR_ARG);
+        }
+        remove(zd.path);
+    }
     fh = fopen(path, "rb");
     n = fh ? fread(g_rd_buf, 1, sizeof g_rd_buf, fh) : 0;
     if (fh) fclose(fh);

@@ -600,14 +600,20 @@ static void test_null_and_ring(void) {
     gab.sigma = 10; gab.sf = 0.1f; gab.contrast = 1.5f;   /* leaves 0..1 */
     s = ygfx_gabor(&gab);
     CHECK(ygfx_end(&g) == YGFX_ERR_ORDER);
+    CHECK(strstr(ygfx_error(&g), "ysp_gfx: end: ") != NULL);   /* v0.12: a message for each failure */
     CHECK(ygfx_draw(&g, &s) == YGFX_ERR_ORDER);
+    CHECK(strstr(ygfx_error(&g), "ysp_gfx: draw: ") != NULL);
+    CHECK(ygfx_texture(&g, NULL).id == 0 && strstr(ygfx_error(&g), "ysp_gfx: texture: ") != NULL);
     for (i = 0; i < 2; i++) {
         CHECK(yscr_begin(&scr, &f) == YSCR_OK);
         CHECK(ygfx_begin(&g, &f) == YGFX_OK);
         CHECK(ygfx_begin(&g, &f) == YGFX_ERR_ORDER);
+        CHECK(strstr(ygfx_error(&g), "ysp_gfx: begin: ") != NULL);
         CHECK(ygfx_texture_update(&g, ygfx_texture(&g, NULL), 0, 0, 1, 1, px, 0) == YGFX_ERR_ORDER);
+        CHECK(strstr(ygfx_error(&g), "ysp_gfx: texture_update: ") != NULL);
         if (i == 0) CHECK(ygfx_draw(&g, &s) == YGFX_OK);
         CHECK(ygfx_end(&g) == YGFX_OK);
+        CHECK(strstr(ygfx_error(&g), "ysp_gfx: texture_update: ") != NULL);   /* a success keeps it */
         CHECK(yscr_flip(&scr) == YSCR_OK);
     }
     CHECK(ygfx_clipped(&g) == 1);
@@ -1917,8 +1923,10 @@ static void gl_targets(stats* st) {
         CHECK(ygfx_draw_n(&R->g, shapes, 3) == YGFX_OK);
         S2.lost_ok += ygfx_end(&R->g) == YGFX_ERR_LOST;
         S2.lost_ok += !ygfx_is_open(&R->g);
-        S2.lost_ok += ygfx_read_output(&R->g, 0, 0, W, H, R->out) == YGFX_ERR_CLOSED;
         S2.lost_ok += strstr(ygfx_error(&R->g), "context is new") != NULL;
+        /* v0.12: the message is the last failure's, this read's */
+        S2.lost_ok += ygfx_read_output(&R->g, 0, 0, W, H, R->out) == YGFX_ERR_CLOSED &&
+                      strstr(ygfx_error(&R->g), "read_output") != NULL;
         CHECK(yscr_flip(&R->scr) == YSCR_OK);
         R->scr.gl_generation = keep;
         ygfx_close(&R->g);
@@ -3309,7 +3317,7 @@ static void test_v03_cpu(void) {
             ycol_ctx_desc cd;
             memset(&cd, 0, sizeof cd);
             cd.cal = &cw;
-            CHECK(ycol_ctx_init(&gw.color, &cd, NULL, 0) == YCOL_OK);
+            CHECK(ycol_ctx_open(&gw.color, &cd));
             ygfx__paint_spaces(&gw);
         }
         CHECK(gw.has_oklab);
@@ -5321,7 +5329,7 @@ static void gl_v05_color(stats* st) {
         memset(&cd, 0, sizeof cd);
         cd.cal = &cal3;
         for (k = 0; k < 3; k++) cd.background[k] = gd.background[k];
-        S7.ctx_bad += !cx || ycol_ctx_init(&mine, &cd, err, sizeof err) < 0 || mine.id != cx->id ||
+        S7.ctx_bad += !cx || !ycol_ctx_open(&mine, &cd) || mine.id != cx->id ||
                       memcmp(mine.ok_rgb_to_lms, cx->ok_rgb_to_lms, sizeof mine.ok_rgb_to_lms) != 0;
     }
     memset(&pt, 0, sizeof pt);
@@ -6138,10 +6146,10 @@ static void cs_ol_build(void) {
     if (cs_ol_ok >= 0) return;
     cs_glyphs();
     cs_ol_ok = 0;
-    if (yol_init(&cs_ol_cx, NULL) != YOL_OK) return;
+    if (!yol_open(&cs_ol_cx, NULL)) return;
     memset(&od, 0, sizeof od);
     od.n_glyphs = CS_N;
-    if (yol_cset_init(&cs_ol, &cs_ol_cx, &od) != YOL_OK) return;
+    if (!yol_cset_open(&cs_ol, &cs_ol_cx, &od)) return;
     yol_path_init(&pa, &cs_ol_cx);
     for (g = 0; g < CS_N; g++) {
         yol_path_clear(&pa);
@@ -6157,7 +6165,7 @@ static void cs_ol_build(void) {
                 if (cx == x0 && cy == y0) yol_line(&pa, x1, y1);
                 else yol_quad(&pa, cx, cy, x1, y1);
             }
-            yol_close(&pa);
+            yol_close_path(&pa);
         }
         if (yol_path_end(&pa) != YOL_OK || yol_cset_add(&cs_ol, (uint32_t)g, &pa) != YOL_OK) { yol_path_free(&pa); return; }
     }
@@ -8058,8 +8066,8 @@ int main(void) {
     if (wanted("mesa", ran)) ran += gl_suite("Mesa llvmpipe", YGFX_HL_MESA_SOFTWARE);
 #endif
     free(R);
-    if (cs_ol_ok == 1) yol_cset_free(&cs_ol);
-    if (cs_ol_ok >= 0) yol_free(&cs_ol_cx);
+    if (cs_ol_ok == 1) yol_cset_close(&cs_ol);
+    if (cs_ol_ok >= 0) yol_close(&cs_ol_cx);
     if (!ran) {
         printf("no GL ES 3.0 renderer opened%s: the GL checks did not run\n",
                sanitized() ? " (a sanitizer build runs GL only with YGFX_TEST_DEVICES)" : "");

@@ -697,12 +697,12 @@ static void t1_vector(void) {
     int i, same = 1;
     g_where = "T1 vector";
     yol_path_init(&p, &g_cx);
-    yol_move(&p, 0, 0); yol_line(&p, 1, 0); yol_line(&p, 1, 1); yol_line(&p, 0, 1); yol_close(&p);
-    yol_move(&p, 0.25, 0.25); yol_line(&p, 0.25, 0.75); yol_line(&p, 0.75, 0.75); yol_line(&p, 0.75, 0.25); yol_close(&p);
+    yol_move(&p, 0, 0); yol_line(&p, 1, 0); yol_line(&p, 1, 1); yol_line(&p, 0, 1); yol_close_path(&p);
+    yol_move(&p, 0.25, 0.25); yol_line(&p, 0.25, 0.75); yol_line(&p, 0.75, 0.75); yol_line(&p, 0.75, 0.25); yol_close_path(&p);
     CHECK(yol_path_end(&p) == YOL_OK);
     memset(&d, 0, sizeof d);
     d.n_glyphs = 1; d.nh = 2; d.nv = 2; d.keep_overlaps = true;
-    CHECK(yol_cset_init(&s, &g_cx, &d) == YOL_OK);
+    CHECK(yol_cset_open(&s, &g_cx, &d));
     CHECK(yol_cset_add(&s, 0, &p) == YOL_OK);
     CHECK(s.n_texels == 10 && s.n_words == 60);
     if (s.n_texels == 10) for (i = 0; i < 40; i++) if (memcmp(&s.texels[i], &tex[i], 4) != 0) same = 0;
@@ -716,16 +716,16 @@ static void t1_vector(void) {
         yol_cset_desc dr;
         memset(&dr, 0, sizeof dr);
         dr.n_glyphs = 2;
-        CHECK(yol_cset_init(&r, &g_cx, &dr) == YOL_OK);
+        CHECK(yol_cset_open(&r, &g_cx, &dr));
         CHECK(yol_cset_add(&r, 1, &p) == YOL_OK);
         CHECK(r.words[8] == 0 && (r.words[r.words[9] + 5] & 0x4u) == 0x4u);
         CHECK((s.words[s.words[8] + 5] & 0x4u) == 0);
         CHECK(yol_cset_add(&r, 1, &p) == YOL_ERR_ARG);     /* already in the set */
         CHECK(yol_cset_add(&r, 2, &p) == YOL_ERR_RANGE);
         CHECK(cset_ok(&r));
-        yol_cset_free(&r);
+        yol_cset_close(&r);
     }
-    yol_cset_free(&s);
+    yol_cset_close(&s);
     yol_path_free(&p);
 }
 
@@ -829,7 +829,7 @@ static void t4_fonts(void) {
     make_tt(&tt, 0, 0); make_cff(&cf, 0, 0); make_cff(&cid, 1, 0); make_cff(&c2, 0, 1); make_tt(&ttc, 0, 1); make_tt(&var, 1, 0);
     yol_path_init(&p, &g_cx);
     /* TrueType */
-    CHECK(yol_font_open(&f, tt.d, tt.n, 0, err, sizeof err) == YOL_OK);
+    CHECK(yol_font_view(&f, tt.d, tt.n, 0, err, sizeof err) == YOL_OK);
     CHECK(f.units_per_em == 1000 && f.n_glyphs == TT_NG && (f.flags & YOL_FONT_GLYF) && f.ascender == 800 && f.descender == -200 && f.line_gap == 90);
     CHECK(yol_font_glyph_index(&f, 'A') == 1 && yol_font_glyph_index(&f, 'B') == 2 && yol_font_glyph_index(&f, 'C') == 3 &&
           yol_font_glyph_index(&f, 'D') == 4 && yol_font_glyph_index(&f, 'E') == 0 && yol_font_glyph_index(&f, 0x1f600) == 0);
@@ -855,10 +855,10 @@ static void t4_fonts(void) {
             static const uint32_t g12 = 12;
             memset(&cd, 0, sizeof cd);
             cd.n_glyphs = TT_NG;
-            CHECK(yol_cset_init(&s, &g_cx, &cd) == YOL_OK && yol_cset_add_font(&s, &f, &g12, 1, 0) == YOL_OK);
+            CHECK(yol_cset_open(&s, &g_cx, &cd) && yol_cset_add_font(&s, &f, &g12, 1, 0) == YOL_OK);
             memcpy(&bx, &s.words[s.words[8 + 12]], 4);
             CHECK(bx == 0.07f);
-            yol_cset_free(&s);
+            yol_cset_close(&s);
         }
         {
             yol_raster_desc rd;
@@ -941,18 +941,18 @@ static void t4_fonts(void) {
     }
     /* collections, variable flag, refusals */
     CHECK(yol_font_faces(ttc.d, ttc.n) == 2 && yol_font_faces(tt.d, tt.n) == 1);
-    CHECK(yol_font_open(&f, ttc.d, ttc.n, 1, err, sizeof err) == YOL_OK);
+    CHECK(yol_font_view(&f, ttc.d, ttc.n, 1, err, sizeof err) == YOL_OK);
     yol_path_clear(&p);
     CHECK(yol_font_glyph(&g_cx, &f, 1, &p, NULL) == YOL_OK && yol_path_area(&p) == -0.75);
-    CHECK(yol_font_open(&f, ttc.d, ttc.n, 2, err, sizeof err) == YOL_ERR_RANGE);
-    CHECK(yol_font_open(&f, var.d, var.n, 0, err, sizeof err) == YOL_OK && (f.flags & YOL_FONT_VARIABLE));
-    CHECK(yol_font_open(&f, c2.d, c2.n, 0, err, sizeof err) == YOL_ERR_REFUSED && strstr(err, "CFF2"));
-    CHECK(yol_font_open(&f, tt.d, 11, 0, err, sizeof err) == YOL_ERR_FORMAT);
+    CHECK(yol_font_view(&f, ttc.d, ttc.n, 2, err, sizeof err) == YOL_ERR_RANGE);
+    CHECK(yol_font_view(&f, var.d, var.n, 0, err, sizeof err) == YOL_OK && (f.flags & YOL_FONT_VARIABLE));
+    CHECK(yol_font_view(&f, c2.d, c2.n, 0, err, sizeof err) == YOL_ERR_REFUSED && strstr(err, "CFF2"));
+    CHECK(yol_font_view(&f, tt.d, 11, 0, err, sizeof err) == YOL_ERR_FORMAT);
     /* CFF and CID-keyed CFF: the same charstrings, the same outlines */
     for (k = 0; k < 2; k++) {
         bb* fb = k ? &cid : &cf;
         int g;
-        CHECK(yol_font_open(&f, fb->d, fb->n, 0, err, sizeof err) == YOL_OK);
+        CHECK(yol_font_view(&f, fb->d, fb->n, 0, err, sizeof err) == YOL_OK);
         CHECK((f.flags & YOL_FONT_CFF) && ((f.flags & YOL_FONT_CID) != 0) == k && f.n_glyphs == CFF_NG);
         CHECK(yol_font_glyph_index(&f, 0x41) == 1 && yol_font_glyph_index(&f, 0x1f600) == 3 && yol_font_glyph_index(&f, 0x42) == 0);
         yol_path_clear(&p);
@@ -1027,14 +1027,14 @@ static void t5_fuzz(void) {
             else if (kind == 1) { for (m = 0; m < 1 + (int)rndu(3); m++) { size_t at = rndu((uint32_t)n0 - 4); static const uint32_t v[5] = { 0xffffffffu, 0x7fffffffu, 0x80000000u, 0, 0x0000ffffu }; uint32_t x = v[rndu(5)]; buf[at] = (uint8_t)(x >> 24); buf[at + 1] = (uint8_t)(x >> 16); buf[at + 2] = (uint8_t)(x >> 8); buf[at + 3] = (uint8_t)x; } }
             else if (kind == 2) n = rndu((uint32_t)n0);
             else { for (m = 0; m < 1 + (int)rndu(16); m++) buf[rndu((uint32_t)n0)] = (uint8_t)rndu(256); }
-            rc = yol_font_open(&f, buf, n, 0, NULL, 0);
+            rc = yol_font_view(&f, buf, n, 0, NULL, 0);
             outcomes[-rc & 15]++;
             if (rc < 0) continue;
             opened++;
             memset(&d, 0, sizeof d);
             d.n_glyphs = (uint32_t)(f.n_glyphs < 16 ? f.n_glyphs : 16);
             d.keep_overlaps = (i & 1) != 0;
-            CHECK(yol_cset_init(&s, &g_cx, &d) == YOL_OK);
+            CHECK(yol_cset_open(&s, &g_cx, &d));
             for (g = 0; g < (int)d.n_glyphs; g++) {
                 if (k == 0 && (g == 8 || g == 10 || g == 11)) continue;   /* slow on purpose */
                 if (k > 0 && (g == 9 || g == 12)) continue;
@@ -1050,7 +1050,7 @@ static void t5_fuzz(void) {
                 CHECK(rc == YOL_OK || rc == YOL_ERR_NUMERIC || rc == YOL_ERR_REFUSED);
             }
             if (d.n_glyphs) CHECK(cset_ok(&s));
-            yol_cset_free(&s);
+            yol_cset_close(&s);
         }
         free(buf);
     }
@@ -1067,7 +1067,7 @@ static void random_contour(yol_path* p) {
         n = 3 + (int)rndu(6);
         yol_move(p, rnd(), rnd());
         for (i = 1; i < n; i++) yol_line(p, rnd(), rnd());
-        yol_close(p);
+        yol_close_path(p);
     } else if (kind == 1) {
         double cx = rnd(), cy = rnd();
         yol_xform keep = p->xf;
@@ -1078,7 +1078,7 @@ static void random_contour(yol_path* p) {
         n = 2 + (int)rndu(5);
         yol_move(p, rnd(), rnd());
         for (i = 1; i < n; i++) yol_quad(p, rnd(), rnd(), rnd(), rnd());
-        yol_close(p);
+        yol_close_path(p);
     } else {
         double x = rnd() * 0.6, y = rnd() * 0.6;
         yol_rect(p, x, y, 0.1 + 0.4 * rnd(), 0.1 + 0.4 * rnd(), rnd() < 0.5 ? 0 : 0.05, 0.05);
@@ -1136,8 +1136,8 @@ static void t7_resolve(void) {
     yol_rect(&p, 0, 0, 1, 1, 0, 0); yol_rect(&p, 1, 0, 1, 1, 0, 0);
     CHECK(yol_resolve(&g_cx, &p, &r) == YOL_OK && r.n_contours == 1 && path_segments(&r) == 4 && yol_path_area(&r) == 2);
     yol_path_clear(&p);
-    yol_move(&p, 0, 0); yol_line(&p, 1, 0); yol_line(&p, 1, 1); yol_close(&p);
-    yol_move(&p, 0, 0); yol_line(&p, 1, 1); yol_line(&p, 1, 0); yol_close(&p);
+    yol_move(&p, 0, 0); yol_line(&p, 1, 0); yol_line(&p, 1, 1); yol_close_path(&p);
+    yol_move(&p, 0, 0); yol_line(&p, 1, 1); yol_line(&p, 1, 0); yol_close_path(&p);
     CHECK(yol_resolve(&g_cx, &p, &r) == YOL_OK && r.n_contours == 0);
     /* even-odd: nested squares turning the same way make a ring */
     yol_path_clear(&p);
@@ -1152,7 +1152,7 @@ static void t7_resolve(void) {
     yol_path_clear(&p);
     yol_move(&p, 0, 0);
     for (k = 0; k < 600; k++) yol_line(&p, (k & 1) ? 1 + rnd() : -rnd(), rnd());
-    yol_close(&p);
+    yol_close_path(&p);
     k = yol_resolve(&g_cx, &p, &r);
     CHECK(k == YOL_ERR_REFUSED && strstr(yol_error(&g_cx), "complex"));
     free(bi.q); free(bo.q);
@@ -1232,13 +1232,13 @@ static void t8_raster(void) {
     g_where = "T8 raster";
     make_tt(&tt, 0, 0); make_cff(&cf, 0, 0);
     yol_path_init(&p, &g_cx);
-    CHECK(yol_font_open(&f, tt.d, tt.n, 0, NULL, 0) == YOL_OK);
+    CHECK(yol_font_view(&f, tt.d, tt.n, 0, NULL, 0) == YOL_OK);
     for (i = 0; i < 5; i++) for (s = g_long ? 0 : 1; s < 3; s += g_long ? 1 : 2) {
         yol_path_clear(&p);
         CHECK(yol_font_glyph(&g_cx, &f, (uint32_t)ttg[i], &p, NULL) == YOL_OK);
         raster_check(&p, sizes[s], rnd(), rnd(), "TrueType glyph");
     }
-    CHECK(yol_font_open(&f, cf.d, cf.n, 0, NULL, 0) == YOL_OK);
+    CHECK(yol_font_view(&f, cf.d, cf.n, 0, NULL, 0) == YOL_OK);
     for (i = 1; i <= 3; i++) for (s = g_long ? 0 : 1; s < (g_long ? 3 : 2); s++) {
         yol_path_clear(&p);
         CHECK(yol_font_glyph(&g_cx, &f, (uint32_t)i, &p, NULL) == YOL_OK);
@@ -1336,13 +1336,13 @@ static void t2_csets(void) {
     g_where = "T2 curve sets";
     make_tt(&tt, 0, 0); make_cff(&cf, 1, 0);
     yol_path_init(&p, &g_cx); yol_path_init(&r, &g_cx);
-    CHECK(yol_font_open(&f, tt.d, tt.n, 0, NULL, 0) == YOL_OK);
+    CHECK(yol_font_view(&f, tt.d, tt.n, 0, NULL, 0) == YOL_OK);
     for (keep = 0; keep < 2; keep++) {
         yol_cset s;
         yol_cset_desc d;
         memset(&d, 0, sizeof d);
         d.n_glyphs = TT_NG; d.keep_overlaps = keep != 0; d.backward = keep != 0;
-        CHECK(yol_cset_init(&s, &g_cx, &d) == YOL_OK);
+        CHECK(yol_cset_open(&s, &g_cx, &d));
         for (i = 0; i < 6; i++) {
             yol_path_clear(&p);
             CHECK(yol_font_glyph(&g_cx, &f, gl[i], &p, NULL) == YOL_OK);
@@ -1358,7 +1358,7 @@ static void t2_csets(void) {
             CHECK(((s.words[o + 5] & 0x4u) != 0) == !keep && ((s.words[o + 5] & 0x2u) != 0) == (keep != 0));
             check_bands(&s, gl[i]);
         }
-        yol_cset_free(&s);
+        yol_cset_close(&s);
     }
     /* band counts: explicit and the default formula on a glyph of 9 curves */
     {
@@ -1366,25 +1366,25 @@ static void t2_csets(void) {
         yol_cset_desc d;
         memset(&d, 0, sizeof d);
         d.n_glyphs = 3; d.keep_overlaps = true;
-        CHECK(yol_cset_init(&s, &g_cx, &d) == YOL_OK);
+        CHECK(yol_cset_open(&s, &g_cx, &d));
         yol_path_clear(&p);
         yol_move(&p, 0, 0);
         for (i = 1; i < 7; i++) yol_line(&p, cos(i * 0.8975979), sin(i * 0.8975979));
-        yol_close(&p);
+        yol_close_path(&p);
         yol_path_end(&p);
         CHECK(yol_cset_add(&s, 0, &p) == YOL_OK);
         CHECK(s.words[s.words[8] + 4] == (3u | 3u << 16));       /* round(sqrt(7)), not floor */
         yol_path_clear(&p);                                        /* empty glyph */
         CHECK(yol_cset_add(&s, 1, &p) == YOL_OK && s.words[s.words[9] + 4] == 0);
         CHECK(cset_ok(&s));
-        yol_cset_free(&s);
+        yol_cset_close(&s);
         d.nh = 5; d.nv = 7;
-        CHECK(yol_cset_init(&s, &g_cx, &d) == YOL_OK);
+        CHECK(yol_cset_open(&s, &g_cx, &d));
         yol_path_clear(&p);
         yol_rect(&p, 0, 0, 1, 1, 0.2, 0.2);
         CHECK(yol_cset_add(&s, 2, &p) == YOL_OK && s.words[s.words[10] + 4] == (5u | 7u << 16) && cset_ok(&s));
         cset_winding_check(&s, 2, &p, 0);
-        yol_cset_free(&s);
+        yol_cset_close(&s);
     }
     /* whole fonts through yol_cset_add_font, CFF CID included */
     {
@@ -1392,12 +1392,12 @@ static void t2_csets(void) {
         yol_cset_desc d;
         static const uint32_t cg[4] = { 0, 1, 2, 3 };
         memset(&d, 0, sizeof d);
-        CHECK(yol_font_open(&f, cf.d, cf.n, 0, NULL, 0) == YOL_OK);
+        CHECK(yol_font_view(&f, cf.d, cf.n, 0, NULL, 0) == YOL_OK);
         d.n_glyphs = (uint32_t)f.n_glyphs;
-        CHECK(yol_cset_init(&s, &g_cx, &d) == YOL_OK);
+        CHECK(yol_cset_open(&s, &g_cx, &d));
         CHECK(yol_cset_add_font(&s, &f, cg, 4, 0) == YOL_OK && cset_ok(&s));
         CHECK(yol_cset_add_font(&s, &f, cg + 3, 1, 0) == YOL_ERR_ARG);     /* twice */
-        yol_cset_free(&s);
+        yol_cset_close(&s);
     }
     printf("T2 curve sets: checked by ygfx_cset_check, winding equal to ygfx_cset_winding\n");
     yol_path_free(&p); yol_path_free(&r);
@@ -1717,7 +1717,7 @@ static void t9_strokes(void) {
         int gi, x, y, bad = 0, n = 0;
         tqs g = { 0, 0, 0 };
         make_tt(&tt, 0, 0);
-        CHECK(yol_font_open(&f, tt.d, tt.n, 0, NULL, 0) == YOL_OK);
+        CHECK(yol_font_view(&f, tt.d, tt.n, 0, NULL, 0) == YOL_OK);
         for (gi = 0; gi < 3; gi++) {
             yol_stroke_desc d = sd(0.08, YOL_JOIN_ROUND, YOL_CAP_BUTT, YOL_STROKE, 1e-5);
             yol_path_clear(&p);
@@ -1794,8 +1794,8 @@ static void t11_allocs(void) {
     make_tt(&tt, 0, 0);
     memset(&cd, 0, sizeof cd);
     cd.realloc = count_realloc;
-    CHECK(yol_init(&c, &cd) == YOL_OK);
-    CHECK(yol_font_open(&f, tt.d, tt.n, 0, NULL, 0) == YOL_OK);
+    CHECK(yol_open(&c, &cd));
+    CHECK(yol_font_view(&f, tt.d, tt.n, 0, NULL, 0) == YOL_OK);
     yol_path_init(&p, &c);
     for (pass = 0; pass < 3; pass++) {
         yol_cset s;
@@ -1808,7 +1808,7 @@ static void t11_allocs(void) {
         s.texels = tex; s.cap_texels = (1 << 20) / 4; s.words = words; s.cap_words = 1 << 18;
         memset(&d, 0, sizeof d);
         d.n_glyphs = TT_NG;
-        CHECK(yol_cset_init(&s, NULL, &d) == YOL_OK);
+        CHECK(yol_cset_open(&s, NULL, &d));
         yol_path_init(&o, &c);
         if (pass == 2) before = g_allocs;
         for (i = 0; i < 6; i++) {
@@ -1824,7 +1824,7 @@ static void t11_allocs(void) {
         (void)sdd;
     }
     yol_path_free(&p);
-    yol_free(&c);
+    yol_close(&c);
     /* a fixed arena: no heap; too small is YOL_ERR_FULL, with the size */
     {
         static double arena[1 << 16];
@@ -1832,19 +1832,70 @@ static void t11_allocs(void) {
         int rc;
         memset(&cd, 0, sizeof cd);
         cd.mem = arena; cd.mem_size = sizeof arena;
-        CHECK(yol_init(&c, &cd) == YOL_OK);
+        CHECK(yol_open(&c, &cd));
         yol_path_init(&q, &c);
         CHECK(yol_font_glyph(&c, &f, 2, &q, NULL) == YOL_OK);
         CHECK(yol_resolve(&c, &q, &q) == YOL_OK && fabs(yol_path_area(&q)) > 0.4);
-        yol_free(&c);
+        yol_close(&c);
         cd.mem_size = 512;
-        CHECK(yol_init(&c, &cd) == YOL_OK);
+        CHECK(yol_open(&c, &cd));
         yol_path_init(&q, &c);
         rc = yol_font_glyph(&c, &f, 10, &q, NULL);
         CHECK(rc == YOL_ERR_FULL && strstr(yol_error(&c), "needed"));
-        yol_free(&c);
+        yol_close(&c);
         cd.realloc = count_realloc;
-        CHECK(yol_init(&c, &cd) == YOL_ERR_ARG);
+        CHECK(!yol_open(&c, &cd) && strstr(yol_error(&c), "not both") != NULL);
+        yol_close(&c);   /* after a failed open */
+        yol_close(&c);   /* twice */
+    }
+    {   /* v0.3: close is safe on zeroed handles; every failure on a context leaves a message */
+        yol_ctx z;
+        yol_cset s, sz;
+        yol_cset_desc sd;
+        yol_path q, e;
+        yol_box b;
+        yol_raster_desc rd;
+        volatile double zero = 0.0;
+        memset(&z, 0, sizeof z);
+        memset(&sz, 0, sizeof sz);
+        yol_close(&z);
+        yol_close(NULL);
+        yol_cset_close(&sz);
+        yol_cset_close(NULL);
+        CHECK(yol_open(&z, NULL) && yol_error(&z)[0] == '\0');
+        memset(&sd, 0, sizeof sd);
+        sd.n_glyphs = 1u << 24;
+        CHECK(!yol_cset_open(&s, &z, &sd) && strstr(yol_error(&z), "2^24") != NULL);
+        yol_cset_close(&s);   /* after a failed open */
+        yol_cset_close(&s);
+        CHECK(!yol_cset_open(&s, &z, NULL) && strstr(yol_error(&z), "no desc") != NULL);
+        sd.n_glyphs = 2;
+        CHECK(yol_cset_open(&s, &z, &sd) && s.words != NULL);
+        yol_cset_close(&s);
+        CHECK(s.words == NULL && s.ctx == NULL);
+        yol_cset_close(&s);   /* twice */
+        /* bare codes of v0.2 now leave a generic message */
+        yol_path_init(&q, &z);
+        yol_path_init(&e, &z);
+        z.err[0] = '\0';
+        CHECK(yol_resolve(&z, NULL, &q) == YOL_ERR_ARG && strstr(yol_error(&z), "resolve: bad argument") != NULL);
+        z.err[0] = '\0';
+        CHECK(yol_stroke(&z, &q, &e, NULL) == YOL_ERR_ARG && strstr(yol_error(&z), "stroke") != NULL);
+        z.err[0] = '\0';
+        memset(&rd, 0, sizeof rd);
+        CHECK(yol_raster(&z, NULL, &rd, &b) == YOL_ERR_ARG && strstr(yol_error(&z), "raster") != NULL);
+        z.err[0] = '\0';
+        CHECK(yol_font_glyph(&z, NULL, 0, &q, NULL) == YOL_ERR_ARG && strstr(yol_error(&z), "glyph") != NULL);
+        z.err[0] = '\0';
+        CHECK(yol_cset_add(&sz, 0, &q) == YOL_ERR_ARG);   /* no context: the code only */
+        /* a specific message is kept, not replaced by the generic one */
+        yol_move(&q, 0, 0); yol_line(&q, zero / zero, 0);
+        CHECK(yol_path_end(&q) == YOL_ERR_ARG && strstr(yol_error(&z), "not finite") != NULL);
+        yol_path_free(&q);
+        yol_path_free(&e);
+        yol_close(&z);
+        yol_close(&z);
+        CHECK(yol_error(&z)[0] == '\0');
     }
     printf("T11 allocations: none after warm-up; a fixed arena works and refuses when full\n");
     free(tt.d);
@@ -1903,10 +1954,10 @@ static void system_fonts(void) {
         double worst = 0;
         if (!d) continue;
         any = 1;
-        CHECKF(yol_font_open(&f, d, n, 0, err, sizeof err) == YOL_OK, "%s: %s", fonts[k].path, err);
+        CHECKF(yol_font_view(&f, d, n, 0, err, sizeof err) == YOL_OK, "%s: %s", fonts[k].path, err);
         memset(&cd, 0, sizeof cd);
         cd.n_glyphs = (uint32_t)f.n_glyphs;
-        CHECK(yol_cset_init(&s, &g_cx, &cd) == YOL_OK);
+        CHECK(yol_cset_open(&s, &g_cx, &cd));
         for (g = 0; g < f.n_glyphs; g += fonts[k].step) {
             int rc;
             yol_path_clear(&p);
@@ -1943,7 +1994,7 @@ static void system_fonts(void) {
         CHECKF(worst <= 1e-12, "%s: coverage sum off by %.3g", fonts[k].path, worst);
         printf("system font %s: %d glyphs into a set (every %d), %d failed, %d rasters, %u texels, %u words\n",
                fonts[k].path, built, fonts[k].step, failed, rasters, s.n_texels, s.n_words);
-        yol_cset_free(&s);
+        yol_cset_close(&s);
         free(d);
     }
     if (!any) printf("system fonts: skipped (none of the Windows fonts is present)\n");
@@ -2174,10 +2225,10 @@ static void t10_svg(void) {
         CHECK(n == 4 && g_layers[3].element == 1);
         memset(&cd, 0, sizeof cd);
         cd.n_glyphs = 4;
-        CHECK(yol_cset_init(&s, &g_cx, &cd) == YOL_OK);
+        CHECK(yol_cset_open(&s, &g_cx, &cd));
         for (k = 0; k < n; k++) CHECK(yol_cset_add(&s, (uint32_t)k, &g_layers[k].path) == YOL_OK);
         CHECK(cset_ok(&s));
-        yol_cset_free(&s);
+        yol_cset_close(&s);
         if (n > 0) svg_free(n);
     }
     printf("T10 svg: shapes, path grammar, transforms, styles, colors, refusals by name\n");
@@ -2224,14 +2275,14 @@ int main(int argc, char** argv) {
     g_long = argc > 1 && strcmp(argv[1], "--long") == 0;
     static void (*const tests[])(void) = { t1_vector, t12_params, t6_cubics, t4_fonts, t2_csets, t7_resolve, t8_raster, t9_strokes, t10_svg, t11_allocs, t5_fuzz, t13_svg_fuzz, system_fonts };
     size_t k;
-    yol_init(&g_cx, NULL);
+    yol_open(&g_cx, NULL);
     for (k = 0; k < sizeof tests / sizeof tests[0]; k++) {
         clock_t t0 = clock();
         if (quick && tests[k] == system_fonts) continue;
         tests[k]();
         if (getenv("YOL_TEST_TIMES")) printf("  (%.1f s)\n", (double)(clock() - t0) / CLOCKS_PER_SEC);
     }
-    yol_free(&g_cx);
+    yol_close(&g_cx);
     free(g_xc);
     printf("outline_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;

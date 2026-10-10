@@ -1,4 +1,4 @@
-/* ysp/screen.h - v0.5.2 - public domain single-header display library
+/* ysp/screen.h - v0.6.0 - public domain single-header display library
  *
  *   The window, the GL ES 3.0 context, the display mode and the swap path
  *   of a stimulus display, with flip at a time: each frame learns the
@@ -20,394 +20,6 @@
  *   compiles by default.
  *
  *   ---------------------------------------------------------------------
- *   CHANGELOG
- *   ---------------------------------------------------------------------
- *   v0.5.2 - desc.on_context (CONTEXT HOOK; decided 2026-10-10): open()
- *          calls it once when the GL context exists, before the warm-up
- *          and settling, so the caller's work on other threads overlaps
- *          them; ysp/gfx.h v0.11.1's ygfx_open_start() submits its
- *          programs there. Its time is added to the settle cap; the
- *          describe line (settle=...,hook=0.015s) and
- *          yscr_settle_info.hook_ns report it. Measured on the Iris Xe
- *          (docs/screen.md, "Compiles during settling"), cold program
- *          cache, on AC: gfx ready 2.57 s after the open() call in a
- *          window (4.79 to 4.83 s without), 2.46 to 2.47 s fullscreen
- *          (2.87 to 2.91 s); on battery 3.41 s (5.37 to 5.40) and 3.46
- *          to 3.47 s (3.85 to 3.89); a warm cache 24 to 51 ms earlier.
- *          Settling took the same time and presents with the compiles
- *          running; every one of 260 opens settled.
- *   v0.5.1 - The foreground (FOREGROUND; decided 2026-10-10): desc.foreground
- *          AUTO forces the raise fullscreen (SDL_HINT_FORCE_RAISEWINDOW)
- *          and honors the OS policy in a window; HONOR and FORCE. The
- *          describe line (foreground=granted, forced or refused, and
- *          WARNING=not-foreground), YSCR_EV_SETTLE's u.u32[8] and
- *          yscr_settle_info.foreground say how the window got it. A
- *          forced raise gives the foreground back at close to the window
- *          that had it. Measured from a background launch (docs/screen.md,
- *          "The foreground"): the OS refused 20 of 21, open() still
- *          settled, and the keys went to the other program; forced,
- *          25 of 25 got it. Fixed
- *          (IDLE WAKE): on COMPOSITION the first frame after 67 ms or
- *          more without a present showed one vblank late (72 of 72 after
- *          a gap); a thread now waits on the display's vblank event
- *          while the screen is open: 0 of 36. DXGI_FLIP was not
- *          affected (0 of 54). Fixed: open() returned with the back
- *          buffer it had just presented bound, so a draw before the
- *          first begin() (ygfx_prime) waited forever on COMPOSITION;
- *          open() now holds a free slot, as the warm-up did.
- *   v0.5.0 - open() settles the start of the run (SETTLE; decided
- *          2026-10-09): black frames until an OS time, 6 clean flips on
- *          one path and depth, the spread of the last 20 vblank intervals
- *          and, in a window, 2.5 s; capped at 3 s (4 s in a window). At
- *          the cap AUTO fails open() fullscreen and warns in a window;
- *          desc.settle, settle_flips, settle_min_ns, settle_max_ns and the
- *          YSP_SETTLE variable change it. Every outcome is in the describe
- *          line, a YSCR_EV_SETTLE ring record and yscr_settle_check().
- *          Measured before (docs/screen.md, "Settling at open"): every bad
- *          record, path and depth change of 120 opens came in the first
- *          0.66 s. Fixed: COMPOSITION in a window reported each flip a
- *          second time as an overlay frame, and the path and depth flapped
- *          on frames 0 to 5 (9 to 13 depth changes per open); a statistic
- *          for a completed present now changes no path.
- *   v0.4.4 -The depth comes from the path, never from misses (DEPTH;
- *          decided 2026-10-09): measured at open on DXGI_FLIP (never above
- *          the smallest depth 2 of open's flips showed), the path's on
- *          COMPOSITION (independent flip 1, composed and overlay 2), the
- *          new path's at each path change. A miss is a drop and nothing
- *          more. On DXGI_FLIP a flip that was not held and showed early
- *          lowers it to what it showed, since only that proves it too high.
- *          desc.depth pins it; desc.depth_learn keeps v0.4.3's rule
- *          (opt-in: with steady GPU work near a period it dropped 1 to 6
- *          frames in 600 where the default dropped 3 to 57). Each change
- *          writes a YSCR_EV_DEPTH ring record and the describe line counts
- *          them. Measured on v0.4.3's stress runs: no early flip after
- *          heavy frames (3 per run before); every early flip and depth
- *          change left is in a run's first 6 frames.
- *          AUTO picks COMPOSITION where it opens with independent flip,
- *          else DXGI_FLIP (BACKENDS; decided 2026-10-09 on 10-minute runs:
- *          equal prediction p99, drops and tiers, no early flip); the
- *          describe line and YSCR_EV_MODE's u.i32[5] say what AUTO did.
- *          Fixed: when open() got no OS time (a window covered at open;
- *          COMPOSITION after a session unlock), the guessed grid stayed:
- *          every record tier 3 and the sync guard fired on on-time flips.
- *          The first OS time now replaces the guess.
- *   v0.4.3 - Fixed: held frames shown a vblank early on DXGI_FLIP (THE
- *          GRID; docs/screen.md, "Held frames a vblank early"). While
- *          frames were held, DXGI's refresh count lost about 1 vblank in
- *          25 and 15% of its vblank times were up to half a period off
- *          the vblanks, which D3DKMTGetScanLine showed steady. The grid
- *          moved to those times, so the next hold woke before the real
- *          vblank: 26 to 72 of 1200 held frames were shown a vblank
- *          early in fullscreen, idle, in every version since v0.2.0, and
- *          the lost counts flagged about 145 more EARLY that were on time.
- *          Now a flip's vblank is the grid's nearest to the OS's time;
- *          only times on the grid move it, or 16 in a row that agree on a
- *          new phase; when 48 of 64 times are off it, it follows them as
- *          before. A record whose OS time is off the grid has the grid's
- *          vblank time as onset (GRID_UNSTABLE, tier 2). Measured: 0 early
- *          in 1200 held frames fullscreen; with load, misses and holds,
- *          3 of 3600 (from the depth rule, not the grid).
- *   v0.4.2 - The sync guard (SYNC GUARD): a driver setting that forces
- *          vsync off is detected from the flips. When 32 of the last 64
- *          flips with an OS time came two in one refresh, flipped with no
- *          vblank after their present, or tore, or a block of 64 or more
- *          refreshes saw more presents complete than its refreshes plus
- *          8, the screen is untimed: from that flip
- *          on every record is tier 3 with the new flag YSCR_FLIP_UNSYNCED,
- *          a YSCR_EV_UNSYNCED ring record marks the flip, the describe
- *          line warns, and yscr_sync_check() gives the evidence and a
- *          message that names the AMD, NVIDIA, Intel and Mesa settings.
- *          Fixed (INPUT, "Second key reports"): a device-0 key-up of a
- *          dropped report could take another keyboard's held key, so
- *          key_double_ups missed it and that keyboard's own key-up passed
- *          too; a device-0 key-up now goes first to a press kept with a
- *          keyboard's id that has a dropped report pending, and a key-up
- *          pairs with its own device's press before one with device 0.
- *   v0.4.1 - yscr_event_input() drops SDL 3.4's second key reports (INPUT,
- *          "Second key reports"): a key-down of the same key within 50 ms
- *          of the last one kept, from the same keyboard or with either
- *          device 0, and that report's key-up. It was ysp/response.h's
- *          rule R3, which only its collector got. Counted in
- *          yscr_input_stats (key_doubles, key_double_ups) and logged as a
- *          YSCR_EV_KEY_DOUBLE ring record each; desc.key_dedup_ns sets
- *          the window or turns the filter off; yscr_key_filter() applies
- *          it to events from elsewhere.
- *   v0.4.0 - The input bridge (INPUT, "The input bridge"): any thread hands
- *          ysp/input.h events to yscr_push_input(); each one is stored
- *          and announced by an SDL event (a doorbell) in SDL's queue, so
- *          yscr_poll() returns keyboard, mouse, raw mice, response boxes
- *          and eye trackers in one stream, and yscr_event_input() turns
- *          any input event of that stream (a doorbell or SDL's own) into a
- *          yin_event. Raw mice go over the bridge; yscr_poll_mouse()
- *          is deprecated and reads them back for one more version.
- *          Breaking: ysp/screen.h requires ysp/input.h beside it (types and
- *          inline adapters only); yscr_mouse_event is ysp/input.h's
- *          yin_mouse_report. Defaults unchanged: no producer, no doorbell.
- *   v0.3.5 - Raw mice (INPUT, "Raw mice"): desc.raw_mice reads every
- *          mouse's Raw Input on a thread of its own, per device and
- *          stamped when read, and yscr_poll_mouse() hands the reports
- *          out (buttons, wheel, unaccelerated deltas). A guard registers
- *          again after SDL's relative mode took the mice, and logs it.
- *          Off by default: mice come through SDL as before.
- *   v0.3.4 - The input devices in the ring (INPUT, "Devices"): a
- *          YSCR_EV_DEVICE record for each keyboard, mouse, touch device
- *          and (with desc.gamepads) gamepad SDL lists at open, and for each
- *          one added or removed later (seen in yscr_poll()), and for a
- *          pen or touch device the first time it is used: kind, id and
- *          name, so a data file's device column maps to a device.
- *   v0.3.3 - Input for ysp/response.h (INPUT): desc.gamepads starts SDL's
- *          gamepad subsystem and opens each gamepad, so its events come
- *          through yscr_poll() (off by default, as before);
- *          caps.raw_keyboard says whether keys come on SDL's raw path. The
- *          Text input is observed, not only commanded: flip_at() reads
- *          SDL_TextInputActive(), so text input that another library
- *          started (Dear ImGui's SDL3 backend) gets the ring record (with
- *          u.u32[5] 1, external) and the flip flag too. The
- *          INPUT text on SDL 3.4's double key report is narrowed to what
- *          was measured: it comes from keys whose window message has no
- *          scan code (virtual-key injection), not from every key. Reports
- *          of one abort press within 50 ms (was 30) are one press: the
- *          second report came up to 34.2 ms later, and a tool that injects
- *          by virtual key could otherwise turn two presses into a panic.
- *   v0.3.2 - yscr_text_input() (INPUT, "Text input"): starts or stops SDL
- *          text input on a screen's window and sets the IME area, for a
- *          text box. Each change writes a YSCR_EV_TEXT_INPUT ring record,
- *          and every flip planned while it is on carries
- *          YSCR_FLIP_TEXT_INPUT, so analysis sees when keys were off the
- *          raw timed path. Off at open, as before.
- *   v0.3.1 - Aborts (ABORT): Shift+Esc, a close request, Alt+F4, SDL's
- *          quit event and yscr_request_abort() each make one begin()
- *          return YSCR_QUIT with f.abort, f.abort_presses and f.abort_ns,
- *          and a YSCR_EV_ABORT ring record; the header sees them through
- *          an SDL event watch, also when the caller reads the events first.
- *          The panic watchdog (PANIC, desc.panic, off by default): Shift+Esc
- *          3 times in 2 s while the frame loop reports no abort puts back
- *          the gamma ramps and ends the process (exit code 99); Windows
- *          puts back a switched mode as it ends. The window icon
- *          (WINDOW ICON): Escher's impossible cube at 16, 32 and 48
- *          pixels; desc.icon_rgba, desc.icon_sdl.
- *          desc.d3d11_video (NATIVE HANDLES): a D3D11 device with video
- *          support and multithread protection; yscr_native_info gains
- *          video and mt_protected. yscr_begin_group() reports an abort on
- *          every member and begins none. close(), exit and the watchdog
- *          claim a gamma entry atomically, so one of them puts it back.
- *          Breaking: Esc alone no longer
- *          ends the loop; desc.no_esc_quit is gone (desc.abort_keys);
- *          yscr_frame gains abort, abort_presses and abort_ns;
- *          yscr_presenter_open gains d3d11_video (the presenter version
- *          stays 2).
- *   v0.3.0 - Flip hooks for triggers. Codes (CODES): exact device values in
- *          the frame, per flip or held, as rectangles or rows, drawn last,
- *          with presets for VPixx Pixel Mode and pixel sync, a self test at
- *          open, an optional read-back, record.code_risk and a CODE ring
- *          record. Triggers (TRIGGERS): callbacks on a deadline worker at
- *          a flip's planned vblank, armed when the present returns, moved
- *          when the header learns the flip will be late, a TRIGGER ring
- *          record, and an optional GPU fence check; the worker runs on the
- *          E-cores of a hybrid CPU on Windows and arms itself for the next
- *          vblank after a flip trigger. After flip (AFTER
- *          FLIP): yscr_on_flip(); yscr_frame.done lists every
- *          record completed since the last begin(). yscr_native()
- *          (NATIVE HANDLES). Fixed: after a flip shown early when the
- *          depth fell, begin() planned the next frame for the same vblank
- *          (DEPTH). Before present (GL STATE):
- *          yscr_on_present(), yscr_gl_epoch(), yscr_gl_generation().
- *          OS GAMMA: a fullscreen screen on Windows takes the OS gamma ramp
- *          to identity and gives it back at close and at exit. Breaking:
- *          yscr_record gains code_risk; yscr_frame gains done, n_done
- *          and done_lost; yscr_present_req, the presenter
- *          and its open struct gain fields (YSCR_PRESENTER_VERSION 2).
- *   v0.2.0 - The Windows 11 composition swapchain (YSCR_BACKEND_COMPOSITION)
- *          with present at a target time. Tiers: each flip record carries
- *          yscr_tier, caps.worst_tier and the describe line report the
- *          worst since open, and desc.min_tier flags flips below it. New
- *          flags SKIPPED, CANCELED, ONSET_PLANNED and BELOW_TIER. Breaking:
- *          yscr_record.path and yscr_vblank.path are uint8_t and a tier
- *          byte follows each; the ring's mode word is path in bits 0..2,
- *          flags in bits 3..12 and the tier in bits 13..15 (read it with
- *          YSCR_EV_PATH_OF, _FLAGS_OF and _TIER_OF). On Windows the raw
- *          keyboard path is on (SDL_HINT_WINDOWS_RAW_KEYBOARD, at default
- *          priority) and SDL text input is stopped. AUTO stays DXGI_FLIP.
- *          The depth on a backend that holds frames to their target is
- *          raised by misses and lowered only on slack evidence, per path,
- *          never by a try (DEPTH); begin() never predicts a vblank a flip
- *          in flight already has. Fixed: on DXGI_FLIP a flip_at() call
- *          within the margin before a vblank presented at once, and the
- *          frame showed a vblank before the one planned (EARLY set); it now
- *          waits for that vblank.
- *   v0.1.0 - first release: the DXGI flip swap path (Windows 10 and 11)
- *          through ANGLE, the simulated display, the presenter interface,
- *          prediction, the snap, the per-flip record, phases, the patch,
- *          groups, input restamping, mode lists and the parameter table.
- *          The other swap paths are stubs that refuse to open.
- *
- *   STATUS: v0.4.4 (the depth from the path, AUTO = COMPOSITION;
- *   docs/screen.md, "Depth from the path" and "AUTO, decided"). Two swap paths run, DXGI_FLIP and COMPOSITION, on one
- *   machine: a Windows 11 25H2 laptop whose Intel Iris Xe drives a 1920 x
- *   1200 panel at 60.0008 Hz (60 Hz is its only rate), with the ANGLE that
- *   ships in Docker Desktop's Electron front end (2.1.23876, git
- *   fffbc739779a; not a pinned build) and SDL3 3.4.0. Built with MSVC 19.4
- *   under /W4 /WX as C11 and C++17 and with MinGW-w64 gcc 16.1 under
- *   -Werror, and run from the MSVC build. No photodiode has been attached:
- *   tests/loopback/screen_loopback.c is built and has never run, so the
- *   delay from a reported vblank to light is UNMEASURED, and
- *   desc.onset_offset_ns stays 0 until it is.
- *   DXGI_FLIP (v0.1.0, unchanged; docs/screen.md has the tables):
- *   fullscreen on the overlay path, the onset was within 2.3 us of the
- *   prediction at p99 over 7200 frames, no frame dropped or late; in a
- *   plain window (composed) for 10 minutes, 5.7 us p99, no drop. In v0.2
- *   runs a window kept on top moved between the overlay and the composed
- *   path every 5 to 11 s; per minute that gave 27 to 67 drops, 9 to 15
- *   flips a vblank early (each flagged EARLY) and 13 to 96 flips with no
- *   statistic, and twice the waitable object freed no slot for 333 ms
- *   (begin() returned YSCR_ERR_TIMEOUT). The cause was not found.
- *   COMPOSITION (new; Windows 11, x64): in a window kept on top every flip
- *   but 2 to 9 per run was an independent flip, tier 1 (the rest were
- *   overlay frames, tier 3). For 10 minutes (36000 frames): 2.3 us
- *   p99 and 8.1 us max from the prediction, 12 drops, no flip without a
- *   statistic. Six 1-minute runs that alternated with DXGI_FLIP: 0 to 24
- *   drops for COMPOSITION against 27 to 67, 0 to 15 flips without a
- *   statistic against 13 to 96, no early flip against 9 to 15, 2.1 to 2.5
- *   us p99 against 4.5 to 5.4 us (the two DXGI_FLIP runs without a
- *   timeout). These window runs, and the 10-minute run, came before the
- *   depth rule that lowers only on evidence and before the fix for a flip
- *   called inside the margin before a vblank, which showed one vblank
- *   early on DXGI_FLIP. That fault may explain some of DXGI_FLIP's early
- *   flips above. None of them was run again.
- *   Fullscreen on AC, 1 minute each on the quiet machine: v0.2
- *   DXGI_FLIP 2.33 us p99, COMPOSITION 2.36 us, a v0.1 control 2.32 us, no
- *   drop. (While another program ran load threads on the machine, both
- *   backends gave 75 to 110 us p99 and 21 to 29 drops in fullscreen.) From
- *   the present call's return to the reported onset (scanout start, not
- *   light): 15.96 ms p50 on DXGI_FLIP overlay, 15.63 ms on COMPOSITION
- *   independent flip, every frame on the next vblank; a composed DXGI_FLIP
- *   frame took a vblank more (32.6 ms). Holds 0 to 4 vblanks ahead: 1800
- *   of 1800 fullscreen and 2979 of 2998 in a window on the vblank asked for,
- *   19 late, 0 early. Overruns of 17 and 20 ms: 84 of 84 flagged
- *   LATE_TARGET with the draw phase charged, no miss without a flag. The
- *   header's CPU time per frame in the 10-minute window run: begin() 21.8
- *   us mean (SDL_PumpEvents() 11.0 us, statistics 7.9 us), flip_at() 1.8
- *   us; that misses the 20 us bar, on the OS calls. The present call costs
- *   more than on DXGI_FLIP: 530 to 1230 us mean against 380 to 730 us
- *   in the alternating runs. No C runtime heap call per frame in a debug
- *   build (2 once per run, made by the runtime for an OS component's C++
- *   exception on the frame thread). With one frame in flight, the next
- *   frame waits for the last one's statistic, and the loop used about 99%
- *   of vblanks
- *   in a window (16.85 ms mean frame time).
- *   AUTO (v0.4.4) picks COMPOSITION where it opens with independent
- *   flip. 10 minutes each, idle, AC: fullscreen 1.92 us p99 against
- *   DXGI_FLIP's 1.88, in a window 1.82 against 1.78; 0 and 1 drops on
- *   both; no early flip against 4 (DXGI_FLIP's window, at the start).
- *   Against it: its present call costs about twice as much (463 against
- *   222 us mean), it needs Windows 11 x64, its composed onset is tier 3
- *   where DXGI_FLIP's is tier 2, and a covered window gets no statistic.
- *   What the onset is (measured against the scanout's own vblank entry,
- *   polled with D3DKMTGetScanLine): an independent flip's DisplayedTime
- *   was 13 us after it at p50 and 77 us at p99, came 0.3 ms later, and
- *   moved with a late frame: an observation, tier 1. A composed frame's
- *   time from DComp's target statistics also sat on the vblank (26 us p50)
- *   and moved with a late frame, but came about 15 ms BEFORE that vblank:
- *   it is DWM's plan, so it carries YSCR_FLIP_ONSET_PLANNED and tier 3.
- *   A second window loading the GPU did not make DWM miss a frame (its own
- *   counters stayed 0), so whether a DWM miss shows in the record is
- *   UNMEASURED: on COMPOSITION, a composed onset is DWM's claim. Present
- *   targets and displayed times are QPC time in 100 ns units here (QPC
- *   runs at 10 MHz); interrupt time is 20.03 ms away and was wrong. On a
- *   machine whose QPC runs at another rate this is unverified.
- *   Tiers, from these runs: DXGI_FLIP overlay and COMPOSITION independent
- *   flip are tier 1; DXGI_FLIP composed is tier 2 (DWM's vblank, measured
- *   against nothing else); a flip whose OS time is off the grid (up to
- *   half a period; the scanout's vblanks stayed on it) is tier 2, with the
- *   grid's vblank time as onset; COMPOSITION composed or
- *   overlay frames and every ESTIMATED flip are tier 3.
- *   Input: SDL's tick clock correlates to the ysp_rt clock within 0.1 us.
- *   Keys sent with SendInput(): on the raw path, stamped 0.18 to 0.67 ms
- *   after the call (mean 0.39 ms, 199 keys); through the message loop,
- *   from 6.2 ms before to 12.1 ms after it.
- *   The core (prediction, snap, drops, depth, estimated, skipped and
- *   canceled records, tiers, the ring record, phases, groups, errors, the
- *   mode picker, preemption, codes, triggers and their moves, the
- *   after-flip and present callbacks, aborts, the panic rule, the icon
- *   data) is checked without SDL or a display by
- *   tests/adapt/screen_test.c against a scripted swap path on a
- *   virtual clock, so the host's load cannot change a result, on MSVC,
- *   MinGW gcc 16.1, gcc 11.4 (WSL2; also as C99 at -O3, as C++17, and
- *   under ASan and UBSan, and 8 of 8 runs with a busy loop on its CPU) and
- *   clang (emcc, run in node); 43 deliberate mutations of the header
- *   each make it fail (v0.3.1's 12 and v0.3.2's 2 checked with MinGW
- *   only), and the 9 of v0.4.3 (eg- in tests/mutate/screen.toml). v0.3.2's text input: its records and flag on the scripted path
- *   (MSVC, MinGW); its SDL calls by hand in examples/layout/gfx_layout.c.
- *   CODES and TRIGGERS (v0.3.0, measured on battery, Balanced plan; the
- *   tables are in docs/screen.md): the open-time self test passed on
- *   DXGI_FLIP and COMPOSITION, and 1800 code read-backs in fullscreen
- *   differed 0 times. Drawing a 1-pixel and an 8-pixel code cost 3.8 us
- *   mean on the GPU context with one ClearView per pixel, 5.3 us with
- *   UpdateSubresource, so rows of up to 8 pixels use ClearView. This
- *   laptop runs auto color management (color=wcg in the describe line),
- *   so every code here is at risk (CODE_RISK_ADVANCED_COLOR); no device
- *   has read one. A trigger fired p50 1.0 to 2.1 us, p99 59 to 300 us and
- *   at most 0.6 to 7.9 ms after its deadline (TIME_CRITICAL worker; the
- *   larger numbers in a window), on the P-cores where ysp/rt.h puts the
- *   worker. The cause, measured: the display's vblank DPC, 50 to 400 us
- *   from about 75 us before the vblank, ran on the P-core the worker spun
- *   on; the trigger lock and the spin window were not the cause. The
- *   worker now runs on the E-cores of a hybrid CPU: this machine's way
- *   to keep it off the vblank DPC's CPU, not a rule (TRIGGERS). On AC, 1
- *   minute each: fullscreen p99 1.6 to 2.6 us on both backends (31 and 29
- *   us before); in a window 1.0 to 3.2 us (32 to 169 us before). The
- *   tail is the OS's and stays: 1 to 15 triggers a minute fired over 200
- *   us late (1 to 22 before), the largest 0.35 to 43 ms (0.37 to 12.6 ms
- *   before), so the 200 us bar for the largest is missed. Without a
- *   display, examples/rt/jitter.c on the same cores woke up to 2.6 and
- *   32.6 ms late with the same 1.2 ms spin window (on the P-cores, 3.0
- *   ms and 20 us). With 3 frames of 25 ms GPU work every
- *   300 frames: without the GPU check 72 of 72 triggers fired a frame
- *   early; with desc.trigger_fence 140 of 142 moved in time and 0 moved
- *   in error, and no move in 10800 idle frames. The fence stays off by
- *   default until it runs on more than one GPU. Arming a trigger cost the
- *   frame thread about 8 us on battery and 3.8 us on AC in flip_at(), most
- *   of it the worker's wake-up; the worker now arms itself for the next
- *   vblank after each flip trigger, so a trigger every frame arms with no
- *   wake-up: 0.6 to 0.9 us mean on AC, flip_at() 1.7 to 2.6 us in all.
- *   The OS gamma ramp: this laptop's is the identity, so
- *   open() set nothing; setting the same ramp again and reading it back
- *   was exact; one GetDeviceGammaRamp costs 0.8 ms, so it is read at open
- *   only. Whether the ramp acts on independent-flip and overlay frames,
- *   and under Night Light, was not measured.
- *   ABORT, PANIC, ICON and d3d11_video (v0.3.1, AC, keys sent with
- *   SendInput; docs/screen.md has the tables): Shift+Esc gave one
- *   abort per press, stamped 0.12 to 0.70 ms after the call, also when the
- *   loop read its events before begin(); Esc alone gave none; a held
- *   Shift+Esc gave one. SDL 3.4 reports a key injected by virtual-key code
- *   twice on the raw path (INPUT); the header counts one. A hung program ended 28 to 85 ms after
- *   the third press, after its panic_fn ran and a gamma entry was put
- *   back; after a 7 s hang, with Windows' ghost window in front, too; a
- *   held Shift+Esc did not panic; a responsive loop got 5 aborts for 5
- *   presses and no panic. Fullscreen at 1680 x 1050 on the 1920 x 1200
- *   desktop, hung: the desktop mode was back 1.2 s after press 3, as the
- *   process ended. With the watchdog's hook armed, keys on the raw path
- *   were stamped no later (p50 0.30 to
- *   0.31 ms against 0.35 to 0.46 ms, 3 interleaved runs of 199 keys). The
- *   header's CPU time per frame, begin() without its wait, 3 interleaved
- *   rounds of 1800 frames in a window on top: 22.5 to 25.2 us mean with
- *   d3d11_video off, 19.6 to 26.3 us with it on, 20.0 to 29.5 us for the
- *   v0.3.0 header; flip_at() 1.5 to 2.2 us in all. No difference shows
- *   beyond the spread between rounds. Alt+F4 was not sent (if the focus
- *   moved, it would close another program); the core test checks it
- *   through the feed. The icons reach the window at 16 and 32 pixels as
- *   drawn (read back, 96 dpi).
- *   tests/compile/screen_com.cpp checks every COM slot and struct the
- *   header declares against the Windows SDK (MSVC; MinGW for DComp only).
- *   NOT done: any rate but 60 Hz, any other GPU, Windows 10 (COMPOSITION
- *   needs 11), ARM64 (COMPOSITION refuses it: the hidden-pointer returns
- *   are checked only on x64), two physical displays, variable refresh
- *   (refused), macOS, X11 and Wayland swap paths (stubs). Linux runs the
- *   core and the simulated display only.
- *   Outside this STATUS block and docs/screen.md, a number in this
- *   header is a measurement only where the text says "measured".
- *
- *   ---------------------------------------------------------------------
  *   USAGE
  *   ---------------------------------------------------------------------
  *   Do this:
@@ -426,23 +38,27 @@
  *       #include "ysp/screen.h"
  *
  *       static yscr_screen scr;                 // zeroed
- *       if (!yscr_open(&scr, &(yscr_desc){ .ring = &ring }))
- *           die(yscr_error(&scr));              // fullscreen, primary display
+ *       yscr_desc d = { 0 };                    // fullscreen, primary display
+ *       d.ring = &ring;
+ *       if (!yscr_open(&scr, &d)) die(yscr_error(&scr));
  *       yscr_frame f;
- *       while (yscr_begin(&scr, &f) == YSCR_OK) {   // Shift+Esc ends it
+ *       int rc;
+ *       while ((rc = yscr_begin(&scr, &f)) == YSCR_OK) {   // Shift+Esc ends it
  *           if (f.index == 0) ytl_anchor(&tl, TRIAL, f.onset, 0);
- *           int n = ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index },
- *                                  fired, 8);
- *           draw(ytl_values(&tl));
- *           yscr_flip(&scr);                    // at f.onset
+ *           ytl_frame tf = { f.onset, f.period, f.index };
+ *           int n = ytl_evaluate(&tl, &tf, fired, 8);
+ *           draw(ytl_values(&tl), n);
+ *           if (yscr_flip(&scr) < 0) die(yscr_error(&scr));   // at f.onset
  *       }
+ *       if (rc < 0) die(yscr_error(&scr));      // else YSCR_QUIT: an abort
  *       yscr_close(&scr);
  *
  *   The timeline evaluates at f.onset, the predicted onset of the flip the
  *   frame draws for, so what a frame shows is a function of when it
  *   appears. The measured record of each flip arrives one frame later, in
- *   f.last and in the ring. Compound literals and designated initializers
- *   are C99; in C++17 zero a yscr_desc and set its fields.
+ *   f.last and in the ring. Every call that fails writes yscr_error()
+ *   before it returns its code. In C99 and C++20 a compound literal does
+ *   the desc in one line: yscr_open(&scr, &(yscr_desc){ .ring = &ring }).
  *
  *   Psychtoolbox and PsychoPy, for comparison:
  *
@@ -1407,10 +1023,10 @@
  *   hook passes every key on, so SDL still sees the same keys, and press 1
  *   is an abort either way.
  *   The rule: desc.panic_presses (0 = 3) presses within
- *   desc.panic_window_ms (0 = 2000), with a window of this process in
+ *   desc.panic_window_ns (0 = 2 s), with a window of this process in
  *   front (or the "Ghost" window Windows puts in front of a hung one after
  *   about 5 s, measured), and no abort reported by a begin() for
- *   desc.panic_grace_ms (0 = 10000). A responsive loop reports press 1
+ *   desc.panic_grace_ns (0 = 10 s). A responsive loop reports press 1
  *   within a frame, so presses 2 and 3 are more aborts, and a program that
  *   saves after press 1 is not killed. A program outside its frame loop
  *   (loading, saving) for longer than the grace time looks hung.
@@ -1574,7 +1190,9 @@
  *   the frame loop makes no allocation of its own (measured: 0 C runtime
  *   heap calls from the header in a debug build). The handle is about 22
  *   KB, most of it the code rows and the depth evidence. One thread calls
- *   begin, flip and the rest for a screen. open() and close() of different
+ *   begin, flip and the rest for a screen, so every call on a screen that
+ *   fails writes yscr_error() before it returns its code. The calls for
+ *   any thread take no screen (yscr_push_input(), yscr_request_abort()). open() and close() of different
  *   screens must not run at the same time, because ANGLE's libEGL is
  *   loaded once per process and never unloaded. open() starts a thread
  *   only when desc.n_triggers > 0: the trigger worker (TRIGGERS), which
@@ -1606,14 +1224,420 @@
  *   completes; plots of the residual and the depth.
  *
  *   LICENSE: public domain / MIT-0, see end of file.
+ *
+ *   ---------------------------------------------------------------------
+ *   CHANGELOG
+ *   ---------------------------------------------------------------------
+ *   v0.6.0 - The ysp conventions (README.md, Conventions); breaks the API.
+ *          Every call on a screen that returns a negative code writes
+ *          yscr_error() first: yscr_begin(), yscr_flip_at(), yscr_flip(),
+ *          yscr_wait_flip(), the code and trigger calls, yscr_native(),
+ *          yscr_text_input(), and yscr_begin_group() and
+ *          yscr_flip_group_at() into the screen at fault (the first when
+ *          none). A specific message stays; a call that wrote none gets
+ *          "ysp_screen: <call>: <code's text>". Before, a timeout or a
+ *          lost device in begin() left the message empty. yscr_native()
+ *          takes a non-const screen, so it can write the message.
+ *          desc.panic_window_ms and panic_grace_ms are int64_t
+ *          panic_window_ns and panic_grace_ns; desc.trigger_spin_ns is
+ *          int64_t. yscr_params() names the new fields. The time
+ *          parameters of flip_at, trigger_at and flip_group_at are t_ns
+ *          (a name only: they were int64_t ns). USAGE builds as
+ *          C99 and C++17. Nothing else changed.
+ *   v0.5.2 - desc.on_context (CONTEXT HOOK; decided 2026-10-10): open()
+ *          calls it once when the GL context exists, before the warm-up
+ *          and settling, so the caller's work on other threads overlaps
+ *          them; ysp/gfx.h v0.11.1's ygfx_open_start() submits its
+ *          programs there. Its time is added to the settle cap; the
+ *          describe line (settle=...,hook=0.015s) and
+ *          yscr_settle_info.hook_ns report it. Measured on the Iris Xe
+ *          (docs/screen.md, "Compiles during settling"), cold program
+ *          cache, on AC: gfx ready 2.57 s after the open() call in a
+ *          window (4.79 to 4.83 s without), 2.46 to 2.47 s fullscreen
+ *          (2.87 to 2.91 s); on battery 3.41 s (5.37 to 5.40) and 3.46
+ *          to 3.47 s (3.85 to 3.89); a warm cache 24 to 51 ms earlier.
+ *          Settling took the same time and presents with the compiles
+ *          running; every one of 260 opens settled.
+ *   v0.5.1 - The foreground (FOREGROUND; decided 2026-10-10): desc.foreground
+ *          AUTO forces the raise fullscreen (SDL_HINT_FORCE_RAISEWINDOW)
+ *          and honors the OS policy in a window; HONOR and FORCE. The
+ *          describe line (foreground=granted, forced or refused, and
+ *          WARNING=not-foreground), YSCR_EV_SETTLE's u.u32[8] and
+ *          yscr_settle_info.foreground say how the window got it. A
+ *          forced raise gives the foreground back at close to the window
+ *          that had it. Measured from a background launch (docs/screen.md,
+ *          "The foreground"): the OS refused 20 of 21, open() still
+ *          settled, and the keys went to the other program; forced,
+ *          25 of 25 got it. Fixed
+ *          (IDLE WAKE): on COMPOSITION the first frame after 67 ms or
+ *          more without a present showed one vblank late (72 of 72 after
+ *          a gap); a thread now waits on the display's vblank event
+ *          while the screen is open: 0 of 36. DXGI_FLIP was not
+ *          affected (0 of 54). Fixed: open() returned with the back
+ *          buffer it had just presented bound, so a draw before the
+ *          first begin() (ygfx_prime) waited forever on COMPOSITION;
+ *          open() now holds a free slot, as the warm-up did.
+ *   v0.5.0 - open() settles the start of the run (SETTLE; decided
+ *          2026-10-09): black frames until an OS time, 6 clean flips on
+ *          one path and depth, the spread of the last 20 vblank intervals
+ *          and, in a window, 2.5 s; capped at 3 s (4 s in a window). At
+ *          the cap AUTO fails open() fullscreen and warns in a window;
+ *          desc.settle, settle_flips, settle_min_ns, settle_max_ns and the
+ *          YSP_SETTLE variable change it. Every outcome is in the describe
+ *          line, a YSCR_EV_SETTLE ring record and yscr_settle_check().
+ *          Measured before (docs/screen.md, "Settling at open"): every bad
+ *          record, path and depth change of 120 opens came in the first
+ *          0.66 s. Fixed: COMPOSITION in a window reported each flip a
+ *          second time as an overlay frame, and the path and depth flapped
+ *          on frames 0 to 5 (9 to 13 depth changes per open); a statistic
+ *          for a completed present now changes no path.
+ *   v0.4.4 -The depth comes from the path, never from misses (DEPTH;
+ *          decided 2026-10-09): measured at open on DXGI_FLIP (never above
+ *          the smallest depth 2 of open's flips showed), the path's on
+ *          COMPOSITION (independent flip 1, composed and overlay 2), the
+ *          new path's at each path change. A miss is a drop and nothing
+ *          more. On DXGI_FLIP a flip that was not held and showed early
+ *          lowers it to what it showed, since only that proves it too high.
+ *          desc.depth pins it; desc.depth_learn keeps v0.4.3's rule
+ *          (opt-in: with steady GPU work near a period it dropped 1 to 6
+ *          frames in 600 where the default dropped 3 to 57). Each change
+ *          writes a YSCR_EV_DEPTH ring record and the describe line counts
+ *          them. Measured on v0.4.3's stress runs: no early flip after
+ *          heavy frames (3 per run before); every early flip and depth
+ *          change left is in a run's first 6 frames.
+ *          AUTO picks COMPOSITION where it opens with independent flip,
+ *          else DXGI_FLIP (BACKENDS; decided 2026-10-09 on 10-minute runs:
+ *          equal prediction p99, drops and tiers, no early flip); the
+ *          describe line and YSCR_EV_MODE's u.i32[5] say what AUTO did.
+ *          Fixed: when open() got no OS time (a window covered at open;
+ *          COMPOSITION after a session unlock), the guessed grid stayed:
+ *          every record tier 3 and the sync guard fired on on-time flips.
+ *          The first OS time now replaces the guess.
+ *   v0.4.3 - Fixed: held frames shown a vblank early on DXGI_FLIP (THE
+ *          GRID; docs/screen.md, "Held frames a vblank early"). While
+ *          frames were held, DXGI's refresh count lost about 1 vblank in
+ *          25 and 15% of its vblank times were up to half a period off
+ *          the vblanks, which D3DKMTGetScanLine showed steady. The grid
+ *          moved to those times, so the next hold woke before the real
+ *          vblank: 26 to 72 of 1200 held frames were shown a vblank
+ *          early in fullscreen, idle, in every version since v0.2.0, and
+ *          the lost counts flagged about 145 more EARLY that were on time.
+ *          Now a flip's vblank is the grid's nearest to the OS's time;
+ *          only times on the grid move it, or 16 in a row that agree on a
+ *          new phase; when 48 of 64 times are off it, it follows them as
+ *          before. A record whose OS time is off the grid has the grid's
+ *          vblank time as onset (GRID_UNSTABLE, tier 2). Measured: 0 early
+ *          in 1200 held frames fullscreen; with load, misses and holds,
+ *          3 of 3600 (from the depth rule, not the grid).
+ *   v0.4.2 - The sync guard (SYNC GUARD): a driver setting that forces
+ *          vsync off is detected from the flips. When 32 of the last 64
+ *          flips with an OS time came two in one refresh, flipped with no
+ *          vblank after their present, or tore, or a block of 64 or more
+ *          refreshes saw more presents complete than its refreshes plus
+ *          8, the screen is untimed: from that flip
+ *          on every record is tier 3 with the new flag YSCR_FLIP_UNSYNCED,
+ *          a YSCR_EV_UNSYNCED ring record marks the flip, the describe
+ *          line warns, and yscr_sync_check() gives the evidence and a
+ *          message that names the AMD, NVIDIA, Intel and Mesa settings.
+ *          Fixed (INPUT, "Second key reports"): a device-0 key-up of a
+ *          dropped report could take another keyboard's held key, so
+ *          key_double_ups missed it and that keyboard's own key-up passed
+ *          too; a device-0 key-up now goes first to a press kept with a
+ *          keyboard's id that has a dropped report pending, and a key-up
+ *          pairs with its own device's press before one with device 0.
+ *   v0.4.1 - yscr_event_input() drops SDL 3.4's second key reports (INPUT,
+ *          "Second key reports"): a key-down of the same key within 50 ms
+ *          of the last one kept, from the same keyboard or with either
+ *          device 0, and that report's key-up. It was ysp/response.h's
+ *          rule R3, which only its collector got. Counted in
+ *          yscr_input_stats (key_doubles, key_double_ups) and logged as a
+ *          YSCR_EV_KEY_DOUBLE ring record each; desc.key_dedup_ns sets
+ *          the window or turns the filter off; yscr_key_filter() applies
+ *          it to events from elsewhere.
+ *   v0.4.0 - The input bridge (INPUT, "The input bridge"): any thread hands
+ *          ysp/input.h events to yscr_push_input(); each one is stored
+ *          and announced by an SDL event (a doorbell) in SDL's queue, so
+ *          yscr_poll() returns keyboard, mouse, raw mice, response boxes
+ *          and eye trackers in one stream, and yscr_event_input() turns
+ *          any input event of that stream (a doorbell or SDL's own) into a
+ *          yin_event. Raw mice go over the bridge; yscr_poll_mouse()
+ *          is deprecated and reads them back for one more version.
+ *          Breaking: ysp/screen.h requires ysp/input.h beside it (types and
+ *          inline adapters only); yscr_mouse_event is ysp/input.h's
+ *          yin_mouse_report. Defaults unchanged: no producer, no doorbell.
+ *   v0.3.5 - Raw mice (INPUT, "Raw mice"): desc.raw_mice reads every
+ *          mouse's Raw Input on a thread of its own, per device and
+ *          stamped when read, and yscr_poll_mouse() hands the reports
+ *          out (buttons, wheel, unaccelerated deltas). A guard registers
+ *          again after SDL's relative mode took the mice, and logs it.
+ *          Off by default: mice come through SDL as before.
+ *   v0.3.4 - The input devices in the ring (INPUT, "Devices"): a
+ *          YSCR_EV_DEVICE record for each keyboard, mouse, touch device
+ *          and (with desc.gamepads) gamepad SDL lists at open, and for each
+ *          one added or removed later (seen in yscr_poll()), and for a
+ *          pen or touch device the first time it is used: kind, id and
+ *          name, so a data file's device column maps to a device.
+ *   v0.3.3 - Input for ysp/response.h (INPUT): desc.gamepads starts SDL's
+ *          gamepad subsystem and opens each gamepad, so its events come
+ *          through yscr_poll() (off by default, as before);
+ *          caps.raw_keyboard says whether keys come on SDL's raw path. The
+ *          Text input is observed, not only commanded: flip_at() reads
+ *          SDL_TextInputActive(), so text input that another library
+ *          started (Dear ImGui's SDL3 backend) gets the ring record (with
+ *          u.u32[5] 1, external) and the flip flag too. The
+ *          INPUT text on SDL 3.4's double key report is narrowed to what
+ *          was measured: it comes from keys whose window message has no
+ *          scan code (virtual-key injection), not from every key. Reports
+ *          of one abort press within 50 ms (was 30) are one press: the
+ *          second report came up to 34.2 ms later, and a tool that injects
+ *          by virtual key could otherwise turn two presses into a panic.
+ *   v0.3.2 - yscr_text_input() (INPUT, "Text input"): starts or stops SDL
+ *          text input on a screen's window and sets the IME area, for a
+ *          text box. Each change writes a YSCR_EV_TEXT_INPUT ring record,
+ *          and every flip planned while it is on carries
+ *          YSCR_FLIP_TEXT_INPUT, so analysis sees when keys were off the
+ *          raw timed path. Off at open, as before.
+ *   v0.3.1 - Aborts (ABORT): Shift+Esc, a close request, Alt+F4, SDL's
+ *          quit event and yscr_request_abort() each make one begin()
+ *          return YSCR_QUIT with f.abort, f.abort_presses and f.abort_ns,
+ *          and a YSCR_EV_ABORT ring record; the header sees them through
+ *          an SDL event watch, also when the caller reads the events first.
+ *          The panic watchdog (PANIC, desc.panic, off by default): Shift+Esc
+ *          3 times in 2 s while the frame loop reports no abort puts back
+ *          the gamma ramps and ends the process (exit code 99); Windows
+ *          puts back a switched mode as it ends. The window icon
+ *          (WINDOW ICON): Escher's impossible cube at 16, 32 and 48
+ *          pixels; desc.icon_rgba, desc.icon_sdl.
+ *          desc.d3d11_video (NATIVE HANDLES): a D3D11 device with video
+ *          support and multithread protection; yscr_native_info gains
+ *          video and mt_protected. yscr_begin_group() reports an abort on
+ *          every member and begins none. close(), exit and the watchdog
+ *          claim a gamma entry atomically, so one of them puts it back.
+ *          Breaking: Esc alone no longer
+ *          ends the loop; desc.no_esc_quit is gone (desc.abort_keys);
+ *          yscr_frame gains abort, abort_presses and abort_ns;
+ *          yscr_presenter_open gains d3d11_video (the presenter version
+ *          stays 2).
+ *   v0.3.0 - Flip hooks for triggers. Codes (CODES): exact device values in
+ *          the frame, per flip or held, as rectangles or rows, drawn last,
+ *          with presets for VPixx Pixel Mode and pixel sync, a self test at
+ *          open, an optional read-back, record.code_risk and a CODE ring
+ *          record. Triggers (TRIGGERS): callbacks on a deadline worker at
+ *          a flip's planned vblank, armed when the present returns, moved
+ *          when the header learns the flip will be late, a TRIGGER ring
+ *          record, and an optional GPU fence check; the worker runs on the
+ *          E-cores of a hybrid CPU on Windows and arms itself for the next
+ *          vblank after a flip trigger. After flip (AFTER
+ *          FLIP): yscr_on_flip(); yscr_frame.done lists every
+ *          record completed since the last begin(). yscr_native()
+ *          (NATIVE HANDLES). Fixed: after a flip shown early when the
+ *          depth fell, begin() planned the next frame for the same vblank
+ *          (DEPTH). Before present (GL STATE):
+ *          yscr_on_present(), yscr_gl_epoch(), yscr_gl_generation().
+ *          OS GAMMA: a fullscreen screen on Windows takes the OS gamma ramp
+ *          to identity and gives it back at close and at exit. Breaking:
+ *          yscr_record gains code_risk; yscr_frame gains done, n_done
+ *          and done_lost; yscr_present_req, the presenter
+ *          and its open struct gain fields (YSCR_PRESENTER_VERSION 2).
+ *   v0.2.0 - The Windows 11 composition swapchain (YSCR_BACKEND_COMPOSITION)
+ *          with present at a target time. Tiers: each flip record carries
+ *          yscr_tier, caps.worst_tier and the describe line report the
+ *          worst since open, and desc.min_tier flags flips below it. New
+ *          flags SKIPPED, CANCELED, ONSET_PLANNED and BELOW_TIER. Breaking:
+ *          yscr_record.path and yscr_vblank.path are uint8_t and a tier
+ *          byte follows each; the ring's mode word is path in bits 0..2,
+ *          flags in bits 3..12 and the tier in bits 13..15 (read it with
+ *          YSCR_EV_PATH_OF, _FLAGS_OF and _TIER_OF). On Windows the raw
+ *          keyboard path is on (SDL_HINT_WINDOWS_RAW_KEYBOARD, at default
+ *          priority) and SDL text input is stopped. AUTO stays DXGI_FLIP.
+ *          The depth on a backend that holds frames to their target is
+ *          raised by misses and lowered only on slack evidence, per path,
+ *          never by a try (DEPTH); begin() never predicts a vblank a flip
+ *          in flight already has. Fixed: on DXGI_FLIP a flip_at() call
+ *          within the margin before a vblank presented at once, and the
+ *          frame showed a vblank before the one planned (EARLY set); it now
+ *          waits for that vblank.
+ *   v0.1.0 - first release: the DXGI flip swap path (Windows 10 and 11)
+ *          through ANGLE, the simulated display, the presenter interface,
+ *          prediction, the snap, the per-flip record, phases, the patch,
+ *          groups, input restamping, mode lists and the parameter table.
+ *          The other swap paths are stubs that refuse to open.
+ *
+ *   STATUS: v0.6.0: tests/adapt/screen_test.c checks a message after each
+ *   failing call on a screen and the ns panic fields; the rest below is
+ *   v0.4.4's and the later versions' as stated. v0.4.4 (the depth from the path, AUTO = COMPOSITION;
+ *   docs/screen.md, "Depth from the path" and "AUTO, decided"). Two swap paths run, DXGI_FLIP and COMPOSITION, on one
+ *   machine: a Windows 11 25H2 laptop whose Intel Iris Xe drives a 1920 x
+ *   1200 panel at 60.0008 Hz (60 Hz is its only rate), with the ANGLE that
+ *   ships in Docker Desktop's Electron front end (2.1.23876, git
+ *   fffbc739779a; not a pinned build) and SDL3 3.4.0. Built with MSVC 19.4
+ *   under /W4 /WX as C11 and C++17 and with MinGW-w64 gcc 16.1 under
+ *   -Werror, and run from the MSVC build. No photodiode has been attached:
+ *   tests/loopback/screen_loopback.c is built and has never run, so the
+ *   delay from a reported vblank to light is UNMEASURED, and
+ *   desc.onset_offset_ns stays 0 until it is.
+ *   DXGI_FLIP (v0.1.0, unchanged; docs/screen.md has the tables):
+ *   fullscreen on the overlay path, the onset was within 2.3 us of the
+ *   prediction at p99 over 7200 frames, no frame dropped or late; in a
+ *   plain window (composed) for 10 minutes, 5.7 us p99, no drop. In v0.2
+ *   runs a window kept on top moved between the overlay and the composed
+ *   path every 5 to 11 s; per minute that gave 27 to 67 drops, 9 to 15
+ *   flips a vblank early (each flagged EARLY) and 13 to 96 flips with no
+ *   statistic, and twice the waitable object freed no slot for 333 ms
+ *   (begin() returned YSCR_ERR_TIMEOUT). The cause was not found.
+ *   COMPOSITION (new; Windows 11, x64): in a window kept on top every flip
+ *   but 2 to 9 per run was an independent flip, tier 1 (the rest were
+ *   overlay frames, tier 3). For 10 minutes (36000 frames): 2.3 us
+ *   p99 and 8.1 us max from the prediction, 12 drops, no flip without a
+ *   statistic. Six 1-minute runs that alternated with DXGI_FLIP: 0 to 24
+ *   drops for COMPOSITION against 27 to 67, 0 to 15 flips without a
+ *   statistic against 13 to 96, no early flip against 9 to 15, 2.1 to 2.5
+ *   us p99 against 4.5 to 5.4 us (the two DXGI_FLIP runs without a
+ *   timeout). These window runs, and the 10-minute run, came before the
+ *   depth rule that lowers only on evidence and before the fix for a flip
+ *   called inside the margin before a vblank, which showed one vblank
+ *   early on DXGI_FLIP. That fault may explain some of DXGI_FLIP's early
+ *   flips above. None of them was run again.
+ *   Fullscreen on AC, 1 minute each on the quiet machine: v0.2
+ *   DXGI_FLIP 2.33 us p99, COMPOSITION 2.36 us, a v0.1 control 2.32 us, no
+ *   drop. (While another program ran load threads on the machine, both
+ *   backends gave 75 to 110 us p99 and 21 to 29 drops in fullscreen.) From
+ *   the present call's return to the reported onset (scanout start, not
+ *   light): 15.96 ms p50 on DXGI_FLIP overlay, 15.63 ms on COMPOSITION
+ *   independent flip, every frame on the next vblank; a composed DXGI_FLIP
+ *   frame took a vblank more (32.6 ms). Holds 0 to 4 vblanks ahead: 1800
+ *   of 1800 fullscreen and 2979 of 2998 in a window on the vblank asked for,
+ *   19 late, 0 early. Overruns of 17 and 20 ms: 84 of 84 flagged
+ *   LATE_TARGET with the draw phase charged, no miss without a flag. The
+ *   header's CPU time per frame in the 10-minute window run: begin() 21.8
+ *   us mean (SDL_PumpEvents() 11.0 us, statistics 7.9 us), flip_at() 1.8
+ *   us; that misses the 20 us bar, on the OS calls. The present call costs
+ *   more than on DXGI_FLIP: 530 to 1230 us mean against 380 to 730 us
+ *   in the alternating runs. No C runtime heap call per frame in a debug
+ *   build (2 once per run, made by the runtime for an OS component's C++
+ *   exception on the frame thread). With one frame in flight, the next
+ *   frame waits for the last one's statistic, and the loop used about 99%
+ *   of vblanks
+ *   in a window (16.85 ms mean frame time).
+ *   AUTO (v0.4.4) picks COMPOSITION where it opens with independent
+ *   flip. 10 minutes each, idle, AC: fullscreen 1.92 us p99 against
+ *   DXGI_FLIP's 1.88, in a window 1.82 against 1.78; 0 and 1 drops on
+ *   both; no early flip against 4 (DXGI_FLIP's window, at the start).
+ *   Against it: its present call costs about twice as much (463 against
+ *   222 us mean), it needs Windows 11 x64, its composed onset is tier 3
+ *   where DXGI_FLIP's is tier 2, and a covered window gets no statistic.
+ *   What the onset is (measured against the scanout's own vblank entry,
+ *   polled with D3DKMTGetScanLine): an independent flip's DisplayedTime
+ *   was 13 us after it at p50 and 77 us at p99, came 0.3 ms later, and
+ *   moved with a late frame: an observation, tier 1. A composed frame's
+ *   time from DComp's target statistics also sat on the vblank (26 us p50)
+ *   and moved with a late frame, but came about 15 ms BEFORE that vblank:
+ *   it is DWM's plan, so it carries YSCR_FLIP_ONSET_PLANNED and tier 3.
+ *   A second window loading the GPU did not make DWM miss a frame (its own
+ *   counters stayed 0), so whether a DWM miss shows in the record is
+ *   UNMEASURED: on COMPOSITION, a composed onset is DWM's claim. Present
+ *   targets and displayed times are QPC time in 100 ns units here (QPC
+ *   runs at 10 MHz); interrupt time is 20.03 ms away and was wrong. On a
+ *   machine whose QPC runs at another rate this is unverified.
+ *   Tiers, from these runs: DXGI_FLIP overlay and COMPOSITION independent
+ *   flip are tier 1; DXGI_FLIP composed is tier 2 (DWM's vblank, measured
+ *   against nothing else); a flip whose OS time is off the grid (up to
+ *   half a period; the scanout's vblanks stayed on it) is tier 2, with the
+ *   grid's vblank time as onset; COMPOSITION composed or
+ *   overlay frames and every ESTIMATED flip are tier 3.
+ *   Input: SDL's tick clock correlates to the ysp_rt clock within 0.1 us.
+ *   Keys sent with SendInput(): on the raw path, stamped 0.18 to 0.67 ms
+ *   after the call (mean 0.39 ms, 199 keys); through the message loop,
+ *   from 6.2 ms before to 12.1 ms after it.
+ *   The core (prediction, snap, drops, depth, estimated, skipped and
+ *   canceled records, tiers, the ring record, phases, groups, errors, the
+ *   mode picker, preemption, codes, triggers and their moves, the
+ *   after-flip and present callbacks, aborts, the panic rule, the icon
+ *   data) is checked without SDL or a display by
+ *   tests/adapt/screen_test.c against a scripted swap path on a
+ *   virtual clock, so the host's load cannot change a result, on MSVC,
+ *   MinGW gcc 16.1, gcc 11.4 (WSL2; also as C99 at -O3, as C++17, and
+ *   under ASan and UBSan, and 8 of 8 runs with a busy loop on its CPU) and
+ *   clang (emcc, run in node); 43 deliberate mutations of the header
+ *   each make it fail (v0.3.1's 12 and v0.3.2's 2 checked with MinGW
+ *   only), and the 9 of v0.4.3 (eg- in tests/mutate/screen.toml). v0.3.2's text input: its records and flag on the scripted path
+ *   (MSVC, MinGW); its SDL calls by hand in examples/layout/gfx_layout.c.
+ *   CODES and TRIGGERS (v0.3.0, measured on battery, Balanced plan; the
+ *   tables are in docs/screen.md): the open-time self test passed on
+ *   DXGI_FLIP and COMPOSITION, and 1800 code read-backs in fullscreen
+ *   differed 0 times. Drawing a 1-pixel and an 8-pixel code cost 3.8 us
+ *   mean on the GPU context with one ClearView per pixel, 5.3 us with
+ *   UpdateSubresource, so rows of up to 8 pixels use ClearView. This
+ *   laptop runs auto color management (color=wcg in the describe line),
+ *   so every code here is at risk (CODE_RISK_ADVANCED_COLOR); no device
+ *   has read one. A trigger fired p50 1.0 to 2.1 us, p99 59 to 300 us and
+ *   at most 0.6 to 7.9 ms after its deadline (TIME_CRITICAL worker; the
+ *   larger numbers in a window), on the P-cores where ysp/rt.h puts the
+ *   worker. The cause, measured: the display's vblank DPC, 50 to 400 us
+ *   from about 75 us before the vblank, ran on the P-core the worker spun
+ *   on; the trigger lock and the spin window were not the cause. The
+ *   worker now runs on the E-cores of a hybrid CPU: this machine's way
+ *   to keep it off the vblank DPC's CPU, not a rule (TRIGGERS). On AC, 1
+ *   minute each: fullscreen p99 1.6 to 2.6 us on both backends (31 and 29
+ *   us before); in a window 1.0 to 3.2 us (32 to 169 us before). The
+ *   tail is the OS's and stays: 1 to 15 triggers a minute fired over 200
+ *   us late (1 to 22 before), the largest 0.35 to 43 ms (0.37 to 12.6 ms
+ *   before), so the 200 us bar for the largest is missed. Without a
+ *   display, examples/rt/jitter.c on the same cores woke up to 2.6 and
+ *   32.6 ms late with the same 1.2 ms spin window (on the P-cores, 3.0
+ *   ms and 20 us). With 3 frames of 25 ms GPU work every
+ *   300 frames: without the GPU check 72 of 72 triggers fired a frame
+ *   early; with desc.trigger_fence 140 of 142 moved in time and 0 moved
+ *   in error, and no move in 10800 idle frames. The fence stays off by
+ *   default until it runs on more than one GPU. Arming a trigger cost the
+ *   frame thread about 8 us on battery and 3.8 us on AC in flip_at(), most
+ *   of it the worker's wake-up; the worker now arms itself for the next
+ *   vblank after each flip trigger, so a trigger every frame arms with no
+ *   wake-up: 0.6 to 0.9 us mean on AC, flip_at() 1.7 to 2.6 us in all.
+ *   The OS gamma ramp: this laptop's is the identity, so
+ *   open() set nothing; setting the same ramp again and reading it back
+ *   was exact; one GetDeviceGammaRamp costs 0.8 ms, so it is read at open
+ *   only. Whether the ramp acts on independent-flip and overlay frames,
+ *   and under Night Light, was not measured.
+ *   ABORT, PANIC, ICON and d3d11_video (v0.3.1, AC, keys sent with
+ *   SendInput; docs/screen.md has the tables): Shift+Esc gave one
+ *   abort per press, stamped 0.12 to 0.70 ms after the call, also when the
+ *   loop read its events before begin(); Esc alone gave none; a held
+ *   Shift+Esc gave one. SDL 3.4 reports a key injected by virtual-key code
+ *   twice on the raw path (INPUT); the header counts one. A hung program ended 28 to 85 ms after
+ *   the third press, after its panic_fn ran and a gamma entry was put
+ *   back; after a 7 s hang, with Windows' ghost window in front, too; a
+ *   held Shift+Esc did not panic; a responsive loop got 5 aborts for 5
+ *   presses and no panic. Fullscreen at 1680 x 1050 on the 1920 x 1200
+ *   desktop, hung: the desktop mode was back 1.2 s after press 3, as the
+ *   process ended. With the watchdog's hook armed, keys on the raw path
+ *   were stamped no later (p50 0.30 to
+ *   0.31 ms against 0.35 to 0.46 ms, 3 interleaved runs of 199 keys). The
+ *   header's CPU time per frame, begin() without its wait, 3 interleaved
+ *   rounds of 1800 frames in a window on top: 22.5 to 25.2 us mean with
+ *   d3d11_video off, 19.6 to 26.3 us with it on, 20.0 to 29.5 us for the
+ *   v0.3.0 header; flip_at() 1.5 to 2.2 us in all. No difference shows
+ *   beyond the spread between rounds. Alt+F4 was not sent (if the focus
+ *   moved, it would close another program); the core test checks it
+ *   through the feed. The icons reach the window at 16 and 32 pixels as
+ *   drawn (read back, 96 dpi).
+ *   tests/compile/screen_com.cpp checks every COM slot and struct the
+ *   header declares against the Windows SDK (MSVC; MinGW for DComp only).
+ *   NOT done: any rate but 60 Hz, any other GPU, Windows 10 (COMPOSITION
+ *   needs 11), ARM64 (COMPOSITION refuses it: the hidden-pointer returns
+ *   are checked only on x64), two physical displays, variable refresh
+ *   (refused), macOS, X11 and Wayland swap paths (stubs). Linux runs the
+ *   core and the simulated display only.
+ *   Outside this STATUS block and docs/screen.md, a number in this
+ *   header is a measurement only where the text says "measured".
  */
 #ifndef YSP_SCREEN_H_INCLUDED
 #define YSP_SCREEN_H_INCLUDED
 
 #define YSCR_VERSION_MAJOR 0
-#define YSCR_VERSION_MINOR 5
-#define YSCR_VERSION_PATCH 2
-#define YSCR_VERSION_STRING "0.5.2"
+#define YSCR_VERSION_MINOR 6
+#define YSCR_VERSION_PATCH 0
+#define YSCR_VERSION_STRING "0.6.0"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -2247,15 +2271,15 @@ typedef struct yscr_desc {
     bool           trigger_fence;    /* move a trigger when the GPU is late   */
     int32_t        trigger_cpu;      /* 0 = default: E-cores on a hybrid CPU (TRIGGERS);
                                       * k > 0 = logical CPU k - 1; -1 = ysp/rt.h's */
-    uint32_t       trigger_spin_ns;  /* the worker's spin window; 0 = ysp_rt's default */
+    int64_t        trigger_spin_ns;  /* the worker's spin window, ns; 0 = ysp_rt's default */
     const yscr_trigger_desc* triggers;  /* copied at open                   */
     int32_t        n_triggers;
     /* the panic watchdog (PANIC); Windows, fullscreen */
     bool           panic;            /* arm it; off by default                 */
     int32_t        panic_presses;    /* abort presses that panic; 0 = 3        */
-    int32_t        panic_window_ms;  /* ... within this time; 0 = 2000         */
-    int32_t        panic_grace_ms;   /* no panic this long after begin()
-                                      * reported an abort; 0 = 10000          */
+    int64_t        panic_window_ns;  /* ... within this time; 0 = 2 s          */
+    int64_t        panic_grace_ns;   /* no panic this long after begin()
+                                      * reported an abort; 0 = 10 s           */
     yscr_panic_fn panic_fn;        /* last words, on another thread; NULL = none */
     void*          panic_ctx;
     /* the window icon (WINDOW ICON) */
@@ -2468,7 +2492,7 @@ typedef struct yscr_screen {
     int32_t                 n_trig, trig_on, trig_fence, worker_on, trig_cpu;
     char                    trig_cores;   /* 'E' E-cores, 'N' pinned, 0 ysp/rt.h's choice */
     uint64_t                trig_mask;    /* the worker's CPUs when trig_cores is set */
-    uint32_t                trig_spin;
+    int64_t                 trig_spin;
     yscr_trigger_desc     trig[YSCR_MAX_TRIGGERS];
     yscr__job             job[YSCR_MAX_JOBS];
     int32_t                 n_req;
@@ -2552,7 +2576,9 @@ YSCR_API bool        yscr_open(yscr_screen* s, const yscr_desc* desc);
  * everything open() opened. Safe on a closed or zeroed handle. */
 YSCR_API void        yscr_close(yscr_screen* s);
 
-/* The last open() message; "" after a successful open. */
+/* The message of the last call on s that failed (open() clears it):
+ * every call that returns a negative code writes it first. "" after a
+ * successful open. */
 YSCR_API const char* yscr_error(const yscr_screen* s);
 YSCR_API bool        yscr_is_open(const yscr_screen* s);
 
@@ -2593,14 +2619,14 @@ YSCR_API int  yscr_begin(yscr_screen* s, yscr_frame* f);
  * outside a frame. */
 YSCR_API void yscr_mark(yscr_screen* s, int phase);
 
-/* Ends the frame: draws the patch, and presents the frame for the vblank t
- * snaps to (see FLIP AT A TIME), never before the first one it can make.
- * Waits on the ysp_rt clock first when that vblank is later. Does not wait
+/* Ends the frame: draws the patch, and presents the frame for the vblank
+ * t_ns (the ysp_rt clock) snaps to (see FLIP AT A TIME), never before the
+ * first one it can make. Waits on the ysp_rt clock first when that vblank is later. Does not wait
  * for the flip: *out (may be NULL) gets index, target, planned, phases and
  * YSCR_FLIP_PENDING, and the complete record arrives with a later
  * begin() (f.last), with yscr_wait_flip(), and in desc.ring. Returns
  * YSCR_OK, YSCR_ERR_ORDER without a begin, or the swap path's error. */
-YSCR_API int  yscr_flip_at(yscr_screen* s, int64_t t, yscr_record* out);
+YSCR_API int  yscr_flip_at(yscr_screen* s, int64_t t_ns, yscr_record* out);
 
 /* yscr_flip_at() at the onset begin() predicted for this frame. */
 YSCR_API int  yscr_flip(yscr_screen* s);
@@ -2641,8 +2667,8 @@ YSCR_API void yscr_code_verify(const yscr_screen* s, uint32_t* checked, uint32_t
  * worker. Call between begin() and flip_at(). YSCR_ERR_REFUSED when the
  * frame already has YSCR_MAX_JOBS triggers or the queue is full. */
 YSCR_API int yscr_trigger(yscr_screen* s, int channel, uint32_t code);
-/* The same at time t on the ysp_rt clock, not tied to a flip. */
-YSCR_API int yscr_trigger_at(yscr_screen* s, int channel, uint32_t code, int64_t t);
+/* The same at time t_ns on the ysp_rt clock, not tied to a flip. */
+YSCR_API int yscr_trigger_at(yscr_screen* s, int channel, uint32_t code, int64_t t_ns);
 
 /* --- hooks -----------------------------------------------------------------
  * After flip: fn gets each completed record, oldest first, with the results
@@ -2665,15 +2691,15 @@ YSCR_API uint32_t yscr_gl_generation(const yscr_screen* s);
  * adapter LUID of a DXGI_FLIP or COMPOSITION screen (NATIVE HANDLES).
  * YSCR_OK; YSCR_ERR_NOT_IMPLEMENTED on any other backend and platform,
  * YSCR_ERR_CLOSED on a closed screen; out is zeroed then. */
-YSCR_API int yscr_native(const yscr_screen* s, yscr_native_info* out);
+YSCR_API int yscr_native(yscr_screen* s, yscr_native_info* out);
 
 /* begin() and flip_at() on n screens. Each screen keeps its own grid, so
  * f[i].onset differ unless the displays are genlocked; flip_group_at snaps
- * t on each grid. YSCR_ERR_NOT_IMPLEMENTED for a swap path whose wait
+ * t_ns (the ysp_rt clock) on each grid. YSCR_ERR_NOT_IMPLEMENTED for a swap path whose wait
  * blocks a thread (none in v0.1). An abort pending is reported in every
  * f[i] with YSCR_QUIT, and no member begins a frame. */
 YSCR_API int  yscr_begin_group(yscr_screen* const* s, int n, yscr_frame* f);
-YSCR_API int  yscr_flip_group_at(yscr_screen* const* s, int n, int64_t t);
+YSCR_API int  yscr_flip_group_at(yscr_screen* const* s, int n, int64_t t_ns);
 
 /* A GL ES 3.0 or EGL entry point of this screen's context; NULL on SIM.
  * Cast it to the function's type. */
@@ -3439,10 +3465,10 @@ static int yscr__abort_key(uint32_t key, uint32_t mods, int64_t t, uint32_t flag
 }
 
 /* The panic rule's numbers (desc.panic_*); presses 0 turns it off. */
-static void yscr__panic_config(int32_t presses, int32_t window_ms, int32_t grace_ms) {
+static void yscr__panic_config(int32_t presses, int64_t window_ns, int64_t grace_ns) {
     yscr__ab.presses = presses;
-    yscr__ab.window_ns = (int64_t)window_ms * 1000000;
-    yscr__ab.grace_ns = (int64_t)grace_ms * 1000000;
+    yscr__ab.window_ns = window_ns;
+    yscr__ab.grace_ns = grace_ns;
     memset(yscr__ab.press, 0, sizeof yscr__ab.press);
 }
 
@@ -6002,8 +6028,8 @@ static const char* yscr__wd_arm(yscr_screen* s, const yscr_desc* d) {
         /* it sleeps in GetMessage; raised so a busy frame thread cannot hold
          * up the session's keys behind it */
         SetThreadPriority(yscr__wd.thread, THREAD_PRIORITY_HIGHEST);
-        yscr__panic_config(d->panic_presses ? d->panic_presses : 3, d->panic_window_ms ? d->panic_window_ms : 2000,
-                             d->panic_grace_ms ? d->panic_grace_ms : 10000);
+        yscr__panic_config(d->panic_presses ? d->panic_presses : 3, d->panic_window_ns ? d->panic_window_ns : YRT_S(2),
+                             d->panic_grace_ns ? d->panic_grace_ns : YRT_S(10));
     }
     yscr__wd.armed++;
     s->panic_armed = 1;
@@ -7813,8 +7839,8 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
         yscr__copy(s->error, sizeof s->error, "ysp_screen: desc.icon_w and icon_h must be 1 to 256 with desc.icon_rgba");
         return false;
     }
-    if (desc->panic && (desc->panic_presses < 0 || desc->panic_window_ms < 0 || desc->panic_grace_ms < 0)) {
-        yscr__copy(s->error, sizeof s->error, "ysp_screen: a negative desc.panic_presses, panic_window_ms or panic_grace_ms");
+    if (desc->panic && (desc->panic_presses < 0 || desc->panic_window_ns < 0 || desc->panic_grace_ns < 0)) {
+        yscr__copy(s->error, sizeof s->error, "ysp_screen: a negative desc.panic_presses, panic_window_ns or panic_grace_ns");
         return false;
     }
     if (desc->key_dedup_ns > 1000000000) {
@@ -8443,7 +8469,7 @@ static void yscr__pump(yscr_screen* s) {
     s->polled = 0;
 }
 
-YSCR_API int yscr_begin(yscr_screen* s, yscr_frame* f) {
+static int yscr__begin(yscr_screen* s, yscr_frame* f) {
     int64_t t0, now, wait;
     int rc;
     YRT_ZONE(z_begin, "yscr.begin");
@@ -8529,7 +8555,7 @@ YSCR_API void yscr_mark(yscr_screen* s, int phase) {
     s->mark_t = now;
 }
 
-YSCR_API int yscr_flip_at(yscr_screen* s, int64_t t, yscr_record* out) {
+static int yscr__flip_at(yscr_screen* s, int64_t t, yscr_record* out) {
     int64_t now, tg, count_t, earliest, planned, t_call;
     yscr__pend* p = NULL;
     yscr_present_req req;
@@ -8681,14 +8707,14 @@ YSCR_API int yscr_flip_at(yscr_screen* s, int64_t t, yscr_record* out) {
     return YSCR_OK;
 }
 
-YSCR_API int yscr_flip(yscr_screen* s) {
+static int yscr__flip(yscr_screen* s) {
     if (!s) return YSCR_ERR_ARG;
     if (!s->open) return YSCR_ERR_CLOSED;
     if (!s->begun) return YSCR_ERR_ORDER;
     return yscr_flip_at(s, yscr__time_of(s, s->pred_count) + s->offset, NULL);
 }
 
-YSCR_API int yscr_wait_flip(yscr_screen* s, yscr_record* out) {
+static int yscr__wait_flip(yscr_screen* s, yscr_record* out) {
     int64_t end;
     if (!s) return YSCR_ERR_ARG;
     if (!s->open) return YSCR_ERR_CLOSED;
@@ -8726,7 +8752,7 @@ YSCR_API void yscr_set_patch(yscr_screen* s, float v) {
 
 /* --- codes, triggers and hooks: the API -------------------------------------- */
 
-YSCR_API int yscr_code_frames(yscr_screen* s, int slot, uint32_t rgb, int frames) {
+static int yscr__code_frames(yscr_screen* s, int slot, uint32_t rgb, int frames) {
     if (!s || !s->open || slot < 0 || slot >= s->n_codes || frames < YSCR_CODE_HOLD) return YSCR_ERR_ARG;
     if (s->code_slot[slot].kind == YSCR_CODE_ROW) {
         int k, off = s->code_off[slot];
@@ -8737,11 +8763,11 @@ YSCR_API int yscr_code_frames(yscr_screen* s, int slot, uint32_t rgb, int frames
     return YSCR_OK;
 }
 
-YSCR_API int yscr_code(yscr_screen* s, int slot, uint32_t rgb) {
+static int yscr__code(yscr_screen* s, int slot, uint32_t rgb) {
     return yscr_code_frames(s, slot, rgb, 1);
 }
 
-YSCR_API int yscr_code_row(yscr_screen* s, int slot, const uint32_t* px, int n, int frames) {
+static int yscr__code_row(yscr_screen* s, int slot, const uint32_t* px, int n, int frames) {
     int k, off;
     const yscr_code_slot* c;
     if (!s || !s->open || slot < 0 || slot >= s->n_codes || !px || n < 0 || frames < YSCR_CODE_HOLD) return YSCR_ERR_ARG;
@@ -8795,7 +8821,7 @@ YSCR_API void yscr_code_verify(const yscr_screen* s, uint32_t* checked, uint32_t
     if (failed) *failed = s ? s->code_failed : 0;
 }
 
-YSCR_API int yscr_trigger(yscr_screen* s, int channel, uint32_t code) {
+static int yscr__trigger(yscr_screen* s, int channel, uint32_t code) {
     if (!s || !s->open || channel < 0 || channel >= s->n_trig) return YSCR_ERR_ARG;
     if (!s->begun) return YSCR_ERR_ORDER;
     if (s->n_req >= YSCR_MAX_JOBS) return YSCR_ERR_REFUSED;
@@ -8805,7 +8831,7 @@ YSCR_API int yscr_trigger(yscr_screen* s, int channel, uint32_t code) {
     return YSCR_OK;
 }
 
-YSCR_API int yscr_trigger_at(yscr_screen* s, int channel, uint32_t code, int64_t t) {
+static int yscr__trigger_at(yscr_screen* s, int channel, uint32_t code, int64_t t) {
     yscr__job* j = NULL;
     int i;
     if (!s || !s->open || channel < 0 || channel >= s->n_trig) return YSCR_ERR_ARG;
@@ -8840,7 +8866,7 @@ YSCR_API void yscr_on_present(yscr_screen* s, yscr_present_fn fn, void* ctx) {
 YSCR_API uint32_t yscr_gl_epoch(const yscr_screen* s) { return s ? s->gl_epoch : 0; }
 YSCR_API uint32_t yscr_gl_generation(const yscr_screen* s) { return s && s->open ? s->gl_generation : 0; }
 
-YSCR_API int yscr_native(const yscr_screen* s, yscr_native_info* out) {
+static int yscr__native(const yscr_screen* s, yscr_native_info* out) {
     if (!out) return YSCR_ERR_ARG;
     memset(out, 0, sizeof *out);
     if (!s || !s->open) return YSCR_ERR_CLOSED;
@@ -8890,13 +8916,21 @@ YSCR_API int yscr_native(const yscr_screen* s, yscr_native_info* out) {
     return YSCR_ERR_NOT_IMPLEMENTED;
 }
 
+/* A group's failure, in the screen it names (the first when none). */
+static int yscr__group_fail(yscr_screen* const* s, int n, int i, int rc, const char* what) {
+    if (s && i < n && s[i]) yscr__set_error(s[i]->error, sizeof s[i]->error, "ysp_screen: %s: screen %d of the group: %s",
+                                            what, i, yscr_strerror(rc));
+    return rc;
+}
+
 YSCR_API int yscr_begin_group(yscr_screen* const* s, int n, yscr_frame* f) {
     int i, rc;
-    if (!s || !f || n < 1) return YSCR_ERR_ARG;
+    if (!s || !f || n < 1) return yscr__group_fail(s, n, 0, YSCR_ERR_ARG, "begin_group");
     for (i = 0; i < n; i++) {
-        if (!s[i] || !s[i]->open) return YSCR_ERR_CLOSED;
-        if (s[i]->pr->waits_block) return YSCR_ERR_NOT_IMPLEMENTED;
-        if (s[i]->begun) return YSCR_ERR_ORDER;
+        if (!s[i]) return yscr__group_fail(s, n, 0, YSCR_ERR_ARG, "begin_group");
+        if (!s[i]->open) return yscr__group_fail(s, n, i, YSCR_ERR_CLOSED, "begin_group");
+        if (s[i]->pr->waits_block) return yscr__group_fail(s, n, i, YSCR_ERR_NOT_IMPLEMENTED, "begin_group");
+        if (s[i]->begun) return yscr__group_fail(s, n, i, YSCR_ERR_ORDER, "begin_group");
     }
     /* SDL's pump is the process's: once for the group, then every member
      * sees the same aborts before any of them begins a frame. */
@@ -8919,9 +8953,9 @@ YSCR_API int yscr_begin_group(yscr_screen* const* s, int n, yscr_frame* f) {
 
 YSCR_API int yscr_flip_group_at(yscr_screen* const* s, int n, int64_t t) {
     int i, rc, first = YSCR_OK;
-    if (!s || n < 1) return YSCR_ERR_ARG;
+    if (!s || n < 1) return yscr__group_fail(s, n, 0, YSCR_ERR_ARG, "flip_group_at");
     for (i = 0; i < n; i++) {
-        if (!s[i]) return YSCR_ERR_ARG;
+        if (!s[i]) return yscr__group_fail(s, n, 0, YSCR_ERR_ARG, "flip_group_at");
         if (s[i]->pr && s[i]->pr->bind) s[i]->pr->bind(s[i]->pr_ctx);
         rc = yscr_flip_at(s[i], t, NULL);
         if (rc < 0 && first == YSCR_OK) first = rc;
@@ -9158,7 +9192,7 @@ YSCR_API bool yscr_event_input(yscr_screen* s, const union SDL_Event* ev, yin_ev
 #endif
 }
 
-YSCR_API int yscr_text_input(yscr_screen* s, bool on, int x, int y, int w, int h) {
+static int yscr__text_input(yscr_screen* s, bool on, int x, int y, int w, int h) {
     if (!s) return YSCR_ERR_ARG;
     if (!s->open) return YSCR_ERR_CLOSED;
     if (w < 0 || h < 0) return YSCR_ERR_ARG;
@@ -9179,6 +9213,83 @@ YSCR_API int yscr_text_input(yscr_screen* s, bool on, int x, int y, int w, int h
 #endif
     yscr__text_input_set(s, on ? 1 : 0, 0, x, y, w, h);
     return YSCR_OK;
+}
+
+/* --- the calls on a screen: a failure always leaves a message --------------- */
+
+/* Hides the message during a call, so yscr__done() can tell whether the
+ * call wrote one; one byte each way, in the frame loop too. */
+static char yscr__hold(yscr_screen* s) {
+    char c0 = 0;
+    if (s) { c0 = s->error[0]; s->error[0] = '\0'; }
+    return c0;
+}
+
+/* A failure that wrote nothing gets the call's name and the code's text;
+ * a success leaves the message of the last failure as it was. */
+static int yscr__done(yscr_screen* s, char c0, int rc, const char* what) {
+    if (!s) return rc;
+    if (rc < 0) {
+        if (!s->error[0]) yscr__set_error(s->error, sizeof s->error, "ysp_screen: %s: %s", what, yscr_strerror(rc));
+    } else if (!s->error[0]) {
+        s->error[0] = c0;
+    }
+    return rc;
+}
+
+YSCR_API int yscr_begin(yscr_screen* s, yscr_frame* f) {
+    char c0 = yscr__hold(s);
+    return yscr__done(s, c0, yscr__begin(s, f), "begin");
+}
+
+YSCR_API int yscr_flip_at(yscr_screen* s, int64_t t, yscr_record* out) {
+    char c0 = yscr__hold(s);
+    return yscr__done(s, c0, yscr__flip_at(s, t, out), "flip_at");
+}
+
+YSCR_API int yscr_flip(yscr_screen* s) {
+    char c0 = yscr__hold(s);
+    return yscr__done(s, c0, yscr__flip(s), "flip");
+}
+
+YSCR_API int yscr_wait_flip(yscr_screen* s, yscr_record* out) {
+    char c0 = yscr__hold(s);
+    return yscr__done(s, c0, yscr__wait_flip(s, out), "wait_flip");
+}
+
+YSCR_API int yscr_code_frames(yscr_screen* s, int slot, uint32_t rgb, int frames) {
+    char c0 = yscr__hold(s);
+    return yscr__done(s, c0, yscr__code_frames(s, slot, rgb, frames), "code");
+}
+
+YSCR_API int yscr_code(yscr_screen* s, int slot, uint32_t rgb) {
+    char c0 = yscr__hold(s);
+    return yscr__done(s, c0, yscr__code(s, slot, rgb), "code");
+}
+
+YSCR_API int yscr_code_row(yscr_screen* s, int slot, const uint32_t* px, int n, int frames) {
+    char c0 = yscr__hold(s);
+    return yscr__done(s, c0, yscr__code_row(s, slot, px, n, frames), "code_row");
+}
+
+YSCR_API int yscr_trigger(yscr_screen* s, int channel, uint32_t code) {
+    char c0 = yscr__hold(s);
+    return yscr__done(s, c0, yscr__trigger(s, channel, code), "trigger");
+}
+
+YSCR_API int yscr_trigger_at(yscr_screen* s, int channel, uint32_t code, int64_t t) {
+    char c0 = yscr__hold(s);
+    return yscr__done(s, c0, yscr__trigger_at(s, channel, code, t), "trigger_at");
+}
+
+YSCR_API int yscr_native(yscr_screen* s, yscr_native_info* out) {
+    char c0 = yscr__hold(s);
+    return yscr__done(s, c0, yscr__native(s, out), "native");
+}
+
+YSCR_API int yscr_text_input(yscr_screen* s, bool on, int x, int y, int w, int h) {
+    char c0 = yscr__hold(s);
+    return yscr__done(s, c0, yscr__text_input(s, on, x, y, w, h), "text_input");
 }
 
 YSCR_API const yscr_param* yscr_params(int* n) {
@@ -9203,8 +9314,8 @@ YSCR_API const yscr_param* yscr_params(int* n) {
         { "abort_keys.mods", "u32",  0, 255, 1, "",               "modifiers held: 1 shift, 2 ctrl, 4 alt, 8 gui, 128 none; 0 = shift" },
         { "panic",           "bool", 0, 1, 0, "",                 "arm the panic watchdog in fullscreen (Windows)" },
         { "panic_presses",   "i32",  0, 16, 3, "",                "abort presses that end a hung program" },
-        { "panic_window_ms", "i32",  0, 60000, 2000, "ms",        "the time those presses must fall in" },
-        { "panic_grace_ms",  "i32",  0, 600000, 10000, "ms",      "no panic this long after the frame loop reported an abort" },
+        { "panic_window_ns", "i64",  0, 6e10, 2e9, "ns",          "the time those presses must fall in" },
+        { "panic_grace_ns",  "i64",  0, 6e11, 1e10, "ns",         "no panic this long after the frame loop reported an abort" },
         { "icon_sdl",        "bool", 0, 1, 0, "",                 "keep SDL's window icon instead of the header's" },
         { "d3d11_video",     "bool", 0, 1, 0, "",                 "D3D11 device with video support and multithread protection" },
         { "gamepads",        "bool", 0, 1, 0, "",                 "start SDL's gamepad subsystem and open every gamepad" },

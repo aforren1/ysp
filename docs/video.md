@@ -942,6 +942,48 @@ v0.2.1 builds: MSVC 19.44 C11 (`/W4 /WX`) and C++ (the compile checks),
 MinGW gcc C11 (warnings as errors); WSL gcc 11.4 at -O2 and under
 ThreadSanitizer (no report). The core test passes on all of them.
 
+## Open, finish and close; messages (v0.3.0)
+
+v0.3.0 applies the repository conventions (README.md, Conventions) to this
+header. Four decisions:
+
+- **The writer opens, finishes and closes.** `yvid_seq_create()` is
+  `yvid_seq_open()`: it takes a desc and opens a file. The old
+  `yvid_seq_close()` returned an `int`, because writing the index and the
+  header can fail on a full disk; a close must return `void` and be safe
+  twice. So the writing moved to `yvid_seq_finish()`, which returns 0 or
+  a negative code, and `yvid_seq_close()` only releases. A writer not
+  finished is finished by close, so a program that forgets finish does
+  not lose its frames; its outcome is in `yvid_seq_error()`. The file is
+  complete only after a finish that returned 0.
+- **`yvid_probe()` returns an `int`.** It is a call without a handle
+  that can fail for several reasons (`YVID_ERR_IO`, `YVID_ERR_FORMAT`,
+  `YVID_ERR_REFUSED`), and `bool` is for open and predicates. The message
+  stays in the caller's buffer.
+- **Every failing call on a movie or a writer writes its message.** The
+  controls, `yvid_update()`, `yvid_follow()`, `yvid_soundtrack()`,
+  `yvid_follow_audio()`, `yvid_seq_write()` and `yvid_seq_finish()` run
+  inside a wrapper, as in ysp/screen.h v0.6.0: a specific message stays,
+  a call that wrote none gets "ysp_video: <call>: <code's text>", and a
+  success puts the last failure's message back. The decode thread keeps
+  its own message (`dt_error`), which `yvid_update()` copies on the frame
+  thread, so no call races on `yvid_error()`.
+- **Times.** Every time was already `int64_t` ns. The parameters that
+  did not say so are renamed (`t_ns`, `movie_ns`, `resume_at_ns`,
+  `m_ns`, `period_ns`); the rename is in the declarations only.
+  `YVID_NS_PER_S` is gone: `YRT_S(1)` is the same value. The read-only
+  fields (`yvid_info.duration`, the record's times) keep their names.
+  `yvid_out.pts` is in the stream's own units (`timescale`), not ns.
+
+Checked on 2026-10-10 (Windows 11, MSVC 19.44 /W4 /WX, and MinGW-w64 gcc
+-std=c99 and -std=c++17 -pedantic for USAGE): `tests/adapt/video_test.c`
+checks the writer's message after a full write, that a success keeps
+it, finish twice, close on a zeroed writer, after a failed open and
+twice, a close that finishes, and `yvid_probe()`'s codes.
+`tests/compile/video.c` names the writer's calls and the probe by type.
+Mutants v030-00 (a failure that writes nothing) and v030-01 (a close
+that does not finish) are caught.
+
 ## Needed from the other headers
 
 | Header | Request | Why |

@@ -476,7 +476,7 @@ tool (`calibration_role()`) decides this.
 ### 4.3 FONT (license rule decided 2026-10-09: open question 7)
 
 The font file, unchanged: TrueType, CFF OpenType, or a collection of up
-to 16 faces. Every face is opened with `yol_font_open()`. The tool reads
+to 16 faces. Every face is opened with `yol_font_view()`. The tool reads
 each face's OS/2 `fsType` and refuses a face marked restricted license
 embedding (bits 0 to 3 equal 2) unless the source description sets
 `"private": true`. One function in the tool (`font_license_ok()`) decides
