@@ -743,10 +743,6 @@ static void ypar__set_error(ypar_port* p, const char* fmt, ...) {
     va_end(ap);
 }
 
-static void ypar__clear_error(ypar_port* p) {
-    if (p) p->error[0] = '\0';
-}
-
 /* Every failing call writes the message before it returns its code. */
 #define YPAR__FAIL(p, rc, ...) (ypar__set_error((p), __VA_ARGS__), (rc))
 #define YPAR__CLOSED(p) YPAR__FAIL((p), YPAR_ERR_CLOSED, "port not open")
@@ -815,7 +811,7 @@ static bool ypar__open_done(ypar_port* p) {
         /* Every other backend writes through a process-wide descriptor or
          * DLL, so the blocking calls work and ypar_pulse_async() retries the
          * start; a failure here is not the caller's problem yet. */
-        ypar__clear_error(p);
+        p->error[0] = '\0';
     }
 #endif
     return true;
