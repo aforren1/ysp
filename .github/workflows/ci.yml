@@ -329,7 +329,7 @@ jobs:
           # give wasm a real stack, and an initial memory that holds it;
           # growth covers the arenas. With -pthread emcc turns its growth
           # advisory into an error under -Werror, hence the -Wno.
-          W="-O2 -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Werror -Iinclude -sSTACK_SIZE=16MB -sINITIAL_MEMORY=64MB -sALLOW_MEMORY_GROWTH=1 -Wno-pthreads-mem-growth"
+          W="-O2 -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wfloat-conversion -Werror -Iinclude -sSTACK_SIZE=16MB -sINITIAL_MEMORY=64MB -sALLOW_MEMORY_GROWTH=1 -Wno-pthreads-mem-growth"
           T="-pthread -sPROXY_TO_PTHREAD=1 -sEXIT_RUNTIME=1"
           # ysp/rt.h: with threads (the pump and the worker run under node),
           # without (they refuse to start, and say so), and compiled out.
@@ -352,7 +352,7 @@ jobs:
           emcc $W $T -o test_audio.js tests/adapt/audio_test.c && node test_audio.js
           curl -sL -o miniaudio.h https://raw.githubusercontent.com/mackron/miniaudio/0.11.25/miniaudio.h
           echo "ac7af4de748b7e26b777f37e01cee313a308a7296a3eb080e2906b320cc55c89  miniaudio.h" | sha256sum -c -
-          emcc -O2 -std=gnu11 -Wall -Wextra -Wpedantic -Wshadow -Werror -Iinclude -I. -c -o compile_audio.o tests/compile/audio.c
+          emcc -O2 -std=gnu11 -Wall -Wextra -Wpedantic -Wshadow -Wfloat-conversion -Werror -Iinclude -I. -c -o compile_audio.o tests/compile/audio.c
           # ysp/gfx.h without SDL: the compile check on the simulated display
           # and the test's CPU half run; node has no GL, so its GL half says so.
           emcc $W -DYSCR_NO_SDL -o compile_gfx.js tests/compile/gfx.c && node compile_gfx.js
@@ -364,7 +364,7 @@ jobs:
           emcc $W $T -o test_video.js tests/adapt/video_test.c && node test_video.js
           curl -sL -o pl_mpeg.h https://raw.githubusercontent.com/phoboslab/pl_mpeg/c871f2be022ece7ef4f64230b4fb8e1fb9eb6023/pl_mpeg.h
           echo "3a8cb30c83c2a1147719c30fe0c8b93da2987aa43140077c575b39aaa75fc2c9  pl_mpeg.h" | sha256sum -c -
-          emcc -O2 -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Werror -Iinclude -I. -DYSCR_NO_SDL -c -o compile_video_plm.o tests/compile/video.c
+          emcc -O2 -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wfloat-conversion -Werror -Iinclude -I. -DYSCR_NO_SDL -c -o compile_video_plm.o tests/compile/video.c
 
       # pack/layout and its test (docs/layout.md), as the player's
       # WebAssembly build will compile them: the vendored libraries with
@@ -389,7 +389,7 @@ jobs:
           emcc() { command emcc "$@" || exit $?; }
           em++() { command em++ "$@" || exit $?; }
           T=third_party
-          W="-O2 -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Werror -Iinclude"
+          W="-O2 -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wfloat-conversion -Werror -Iinclude"
           mkdir -p lo
           em++ -O2 -std=c++17 -fno-exceptions -fno-rtti -w -c $T/harfbuzz/src/harfbuzz.cc -o lo/hb.o
           emcc -O2 -w -DSB_CONFIG_UNITY -I$T/sheenbidi/Headers -I$T/sheenbidi/Source -c $T/sheenbidi/Source/SheenBidi.c -o lo/sb.o
@@ -915,7 +915,7 @@ jobs:
         run: |
           set -eu
           export PATH="/c/mingw64/bin:$PATH"
-          W="-Wall -Wextra -Wpedantic -Wshadow -Werror -O2 -Iinclude -I$SDL3_MINGW/include"
+          W="-Wall -Wextra -Wpedantic -Wshadow -Wfloat-conversion -Werror -O2 -Iinclude -I$SDL3_MINGW/include"
           gcc -std=c11 $W -o mingw_c.exe tests/compile/screen.c -L"$SDL3_MINGW/lib" -lSDL3
           g++ -std=c++17 $W -o mingw_cxx.exe tests/compile/screen.cpp -L"$SDL3_MINGW/lib" -lSDL3
           gcc -std=c11 $W -o mingw_test.exe tests/adapt/screen_test.c
