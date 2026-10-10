@@ -1420,7 +1420,7 @@ static void ynet__local_pair(ynet_inlet* in) {
     double l = 0;
     int64_t end = 0, w = 0;
     ynet__bracket(in->d.lib, in->d.now, in->d.now_ctx, 8, &l, &end, &w);
-    if (!in->origin_s) in->origin_s = l != 0.0 ? l : 1e-9;
+    if (in->origin_s == 0.0) in->origin_s = l != 0.0 ? l : 1e-9;
     (void)yrt_fit_add(&in->local, ynet__ticks(l, in->origin_s), end, w);
     ynet__refresh(in);
 }

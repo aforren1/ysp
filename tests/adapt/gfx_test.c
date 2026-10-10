@@ -7475,8 +7475,8 @@ static void s10_report(void) {
     printf("  v0.8 setup passes: a page at setup against in a frame: target %s, composite %s; the next frame against one "
            "without a setup pass: scene %.2e, output %s; a blur at setup against in a frame: %s; frames counted by setup "
            "passes %ld; refusals %ld of %ld\n",
-           S10.setup_target ? "differs" : "equal", S10.setup_comp ? "differs" : "equal", S10.next_scene,
-           S10.next_out ? "differs" : "equal", S10.blur_same ? "differs" : "equal", S10.frames_moved, S10.refused_ok, S10.refused_n);
+           S10.setup_target != 0.0 ? "differs" : "equal", S10.setup_comp != 0.0 ? "differs" : "equal", S10.next_scene,
+           S10.next_out != 0.0 ? "differs" : "equal", S10.blur_same != 0.0 ? "differs" : "equal", S10.frames_moved, S10.refused_ok, S10.refused_n);
     printf("  v0.8 automatic rays: against the exact-area program, run turned %.2e, items turned %.2e, one item on a quarter "
            "turn %.2e, aliased %.2e, buffer %.2e; wrong program %ld\n", S10.auto_diff[0], S10.auto_diff[1], S10.auto_diff[2],
            S10.auto_diff[3], S10.auto_diff[4], S10.auto_pick_bad);

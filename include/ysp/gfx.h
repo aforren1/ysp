@@ -6263,7 +6263,7 @@ YGFX_API ygfx_stim ygfx_shape(const ygfx_shape_desc* d) {
     if (!d) return s;
     ygfx__align(&s, d->place, d->anchor);
     s.shape = (uint16_t)d->shape; s.edge = (uint16_t)d->edge; s.edge_width = d->edge_width;
-    s.x = d->x; s.y = d->y; s.w = d->w; s.h = d->h ? d->h : d->w; s.ori = d->ori;
+    s.x = d->x; s.y = d->y; s.w = d->w; s.h = d->h != 0.0f ? d->h : d->w; s.ori = d->ori;
     ygfx__copy3(s.color, d->color);
     if (d->opacity != 0.0f) s.opacity = d->opacity;
     for (i = 0; i < 4; i++) s.shape_p[i] = d->shape_p[i];
@@ -6299,7 +6299,7 @@ YGFX_API ygfx_stim ygfx_compound(const ygfx_compound_desc* d) {
     if (!d) return s;
     ygfx__align(&s, d->place, d->anchor);
     s.prims = d->prims; s.n_prims = d->n > 0 ? (uint32_t)d->n : 0u;
-    s.x = d->x; s.y = d->y; s.w = d->w; s.h = d->h ? d->h : d->w; s.ori = d->ori;
+    s.x = d->x; s.y = d->y; s.w = d->w; s.h = d->h != 0.0f ? d->h : d->w; s.ori = d->ori;
     s.shape_p[3] = d->onion;   /* a compound's onion on the result */
     s.edge = (uint16_t)d->edge; s.edge_width = d->edge_width;
     ygfx__copy3(s.color, d->color);
@@ -6331,7 +6331,7 @@ YGFX_API ygfx_stim ygfx_grating(const ygfx_grating_desc* d) {
     ygfx__stim_defaults(&s, YGFX_GRATING);
     if (!d) return s;
     ygfx__align(&s, d->place, d->anchor);
-    s.x = d->x; s.y = d->y; s.w = d->w; s.h = d->h ? d->h : d->w; s.ori = d->ori;
+    s.x = d->x; s.y = d->y; s.w = d->w; s.h = d->h != 0.0f ? d->h : d->w; s.ori = d->ori;
     s.sf = d->sf; s.phase = d->phase;
     if (d->contrast != 0.0f) s.contrast = d->contrast;
     s.wave = (uint16_t)(d->square ? 1 : 0);
@@ -6372,7 +6372,7 @@ YGFX_API ygfx_stim ygfx_dots(const ygfx_dots_desc* d) {
     /* RECT is aperture 0: with no box it is the zero default, no aperture
      * (v0.3 and before drew nothing then) */
     s.shape = (uint16_t)((d->aperture == YGFX_RECT && d->w > 0.0f) || d->aperture == YGFX_CIRCLE ? d->aperture : YGFX_NO_APERTURE);
-    s.w = d->w; s.h = d->h ? d->h : d->w;
+    s.w = d->w; s.h = d->h != 0.0f ? d->h : d->w;
     s.stroke = d->stroke; s.stroke_align = (uint8_t)d->stroke_align; s.group = d->group;
     return s;
 }
@@ -6414,7 +6414,7 @@ YGFX_API ygfx_stim ygfx_noise(const ygfx_noise_desc* d) {
     ygfx__stim_defaults(&s, YGFX_NOISE);
     if (!d) return s;
     ygfx__align(&s, d->place, d->anchor);
-    s.x = d->x; s.y = d->y; s.w = d->w; s.h = d->h ? d->h : d->w; s.ori = d->ori;
+    s.x = d->x; s.y = d->y; s.w = d->w; s.h = d->h != 0.0f ? d->h : d->w; s.ori = d->ori;
     s.check = d->check > 0 ? d->check : 1.0f;
     s.seed = (float)(d->seed & 0xFFFFFFu);
     s.wave = (uint16_t)d->dist;
@@ -6436,7 +6436,7 @@ YGFX_API ygfx_stim ygfx_user(const ygfx_user_desc* d) {
     ygfx__stim_defaults(&s, YGFX_USER);
     if (!d) return s;
     ygfx__align(&s, d->place, d->anchor);
-    s.pipe = d->pipe; s.x = d->x; s.y = d->y; s.w = d->w; s.h = d->h ? d->h : d->w; s.ori = d->ori;
+    s.pipe = d->pipe; s.x = d->x; s.y = d->y; s.w = d->w; s.h = d->h != 0.0f ? d->h : d->w; s.ori = d->ori;
     if (d->contrast != 0.0f) s.contrast = d->contrast;
     if (d->opacity != 0.0f) s.opacity = d->opacity;
     s.shape = (uint16_t)d->aperture; s.edge = (uint16_t)d->edge; s.edge_width = d->edge_width;
