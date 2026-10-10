@@ -1240,7 +1240,9 @@
  *          takes a non-const screen, so it can write the message.
  *          desc.panic_window_ms and panic_grace_ms are int64_t
  *          panic_window_ns and panic_grace_ns; desc.trigger_spin_ns is
- *          int64_t. yscr_params() names the new fields. USAGE builds as
+ *          int64_t. yscr_params() names the new fields. The time
+ *          parameters of flip_at, trigger_at and flip_group_at are t_ns
+ *          (a name only: they were int64_t ns). USAGE builds as
  *          C99 and C++17. Nothing else changed.
  *   v0.5.2 - desc.on_context (CONTEXT HOOK; decided 2026-10-10): open()
  *          calls it once when the GL context exists, before the warm-up
@@ -2617,14 +2619,14 @@ YSCR_API int  yscr_begin(yscr_screen* s, yscr_frame* f);
  * outside a frame. */
 YSCR_API void yscr_mark(yscr_screen* s, int phase);
 
-/* Ends the frame: draws the patch, and presents the frame for the vblank t
- * snaps to (see FLIP AT A TIME), never before the first one it can make.
- * Waits on the ysp_rt clock first when that vblank is later. Does not wait
+/* Ends the frame: draws the patch, and presents the frame for the vblank
+ * t_ns (the ysp_rt clock) snaps to (see FLIP AT A TIME), never before the
+ * first one it can make. Waits on the ysp_rt clock first when that vblank is later. Does not wait
  * for the flip: *out (may be NULL) gets index, target, planned, phases and
  * YSCR_FLIP_PENDING, and the complete record arrives with a later
  * begin() (f.last), with yscr_wait_flip(), and in desc.ring. Returns
  * YSCR_OK, YSCR_ERR_ORDER without a begin, or the swap path's error. */
-YSCR_API int  yscr_flip_at(yscr_screen* s, int64_t t, yscr_record* out);
+YSCR_API int  yscr_flip_at(yscr_screen* s, int64_t t_ns, yscr_record* out);
 
 /* yscr_flip_at() at the onset begin() predicted for this frame. */
 YSCR_API int  yscr_flip(yscr_screen* s);
@@ -2665,8 +2667,8 @@ YSCR_API void yscr_code_verify(const yscr_screen* s, uint32_t* checked, uint32_t
  * worker. Call between begin() and flip_at(). YSCR_ERR_REFUSED when the
  * frame already has YSCR_MAX_JOBS triggers or the queue is full. */
 YSCR_API int yscr_trigger(yscr_screen* s, int channel, uint32_t code);
-/* The same at time t on the ysp_rt clock, not tied to a flip. */
-YSCR_API int yscr_trigger_at(yscr_screen* s, int channel, uint32_t code, int64_t t);
+/* The same at time t_ns on the ysp_rt clock, not tied to a flip. */
+YSCR_API int yscr_trigger_at(yscr_screen* s, int channel, uint32_t code, int64_t t_ns);
 
 /* --- hooks -----------------------------------------------------------------
  * After flip: fn gets each completed record, oldest first, with the results
@@ -2693,11 +2695,11 @@ YSCR_API int yscr_native(yscr_screen* s, yscr_native_info* out);
 
 /* begin() and flip_at() on n screens. Each screen keeps its own grid, so
  * f[i].onset differ unless the displays are genlocked; flip_group_at snaps
- * t on each grid. YSCR_ERR_NOT_IMPLEMENTED for a swap path whose wait
+ * t_ns (the ysp_rt clock) on each grid. YSCR_ERR_NOT_IMPLEMENTED for a swap path whose wait
  * blocks a thread (none in v0.1). An abort pending is reported in every
  * f[i] with YSCR_QUIT, and no member begins a frame. */
 YSCR_API int  yscr_begin_group(yscr_screen* const* s, int n, yscr_frame* f);
-YSCR_API int  yscr_flip_group_at(yscr_screen* const* s, int n, int64_t t);
+YSCR_API int  yscr_flip_group_at(yscr_screen* const* s, int n, int64_t t_ns);
 
 /* A GL ES 3.0 or EGL entry point of this screen's context; NULL on SIM.
  * Cast it to the function's type. */
