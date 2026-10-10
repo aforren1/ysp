@@ -701,7 +701,7 @@ static void* ydev__ser_open(void* user, const char* key, char* found, size_t fou
     sd.device = name;
     sd.baud = dev->d.baud ? dev->d.baud : ybox_default_baud(dev->d.family);
     sd.low_latency = true;
-    sd.write_timeout_ms = 100;
+    sd.write_timeout_ns = YRT_MS(100);
     /* DTR and RTS as outputs start idle; yser_open() raises both otherwise */
     sd.dtr_low_on_open = sd.rts_low_on_open = dev->d.family == YBOX_LINES;
     if (!yser_open(&dev->port, &sd)) return NULL;
@@ -710,7 +710,7 @@ static void* ydev__ser_open(void* user, const char* key, char* found, size_t fou
 }
 
 static int ydev__ser_read(void* conn, uint8_t* buf, int cap, int timeout_ms) {
-    int n = yser_read((yser_port*)conn, buf, cap, (uint32_t)timeout_ms, YSER_READ_ANY);
+    int n = yser_read((yser_port*)conn, buf, cap, (int64_t)timeout_ms * 1000000, YSER_READ_ANY);
     if (n == YSER_ERR_INTERRUPTED) return 0;
     return n;
 }

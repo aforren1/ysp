@@ -32,7 +32,7 @@
  * NOTE: a MEX call owns the interpreter thread for its whole duration. MATLAB
  * timer callbacks and Octave's event loop are dispatched on that same thread,
  * so nothing in the interpreter can run, let alone call 'interrupt', while a
- * 'read' is blocked here. Never pass YSER_TIMEOUT_INFINITE from MATLAB or
+ * 'read' is blocked here. Never pass 4294967295 (forever) from MATLAB or
  * Octave: poll in short slices instead (see README.md). 'interrupt' latches a
  * wake that the NEXT read consumes, so from one thread it only makes that
  * read return immediately; it exists for symmetry with the C API.
@@ -274,11 +274,19 @@ static void ps_read_filter(const mxArray* s, yser_port_filter* f, char** owned, 
 
 /* ---- 'open' ------------------------------------------------------------- */
 
+/* MATLAB and Octave keep their units (timeouts in ms, widths in us, and
+ * 4294967295 ms for forever, as before); the C API takes int64 ns and
+ * YSER_TIMEOUT_INFINITE (-1). */
+#define PS_TIMEOUT_INFINITE_MS 0xFFFFFFFFu
+static int64_t ps_ms_to_ns(uint32_t ms) {
+    return ms == PS_TIMEOUT_INFINITE_MS ? YSER_TIMEOUT_INFINITE : (int64_t)ms * 1000000;
+}
+
 static void ps_read_desc(const mxArray* s, yser_desc* d) {
     const mxArray* f;
     if ((f = mxGetField(s, 0, "baud")))             d->baud = ps_u32(f, "baud");
     if ((f = mxGetField(s, 0, "data_bits")))        d->data_bits = (uint8_t)ps_u32(f, "data_bits");
-    if ((f = mxGetField(s, 0, "write_timeout_ms"))) d->write_timeout_ms = ps_u32(f, "write_timeout_ms");
+    if ((f = mxGetField(s, 0, "write_timeout_ms"))) d->write_timeout_ns = ps_ms_to_ns(ps_u32(f, "write_timeout_ms"));
     if ((f = mxGetField(s, 0, "stop_bits"))) {
         uint32_t sb = ps_u32(f, "stop_bits");
         if (sb != 1 && sb != 2) mexErrMsgIdAndTxt("ysp_serial:arg", "stop_bits must be 1 or 2");
@@ -390,7 +398,7 @@ static void cmd_read(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[],
      * itself, and it reaches here from the natural
      * n = available(); read(n, 0) pattern. */
     uint8_t* buf = cap ? (uint8_t*)mxMalloc(cap) : NULL;
-    int got = cap ? ps_check(yser_read(port, buf, (int)cap, timeout_ms, flags)) : 0;
+    int got = cap ? ps_check(yser_read(port, buf, (int)cap, ps_ms_to_ns(timeout_ms), flags)) : 0;
     mxArray* out = mxCreateNumericMatrix(1, (size_t)got, mxUINT8_CLASS, mxREAL);
     if (got > 0) memcpy(mxGetData(out), buf, (size_t)got);
     if (buf) mxFree(buf);
@@ -416,7 +424,10 @@ static mxArray* ps_info(const yser_port* p) {
     mxSetField(s, 0, "stop_bits",
                mxCreateDoubleScalar(p->stop_bits == YSER_STOP_BITS_2 ? 2.0 : 1.0));
     mxSetField(s, 0, "flow",              mxCreateString(ps_flow_names[flow]));
-    mxSetField(s, 0, "write_timeout_ms",  mxCreateDoubleScalar((double)p->write_timeout_ms));
+    mxSetField(s, 0, "write_timeout_ms",
+               mxCreateDoubleScalar(p->write_timeout_ns == YSER_TIMEOUT_INFINITE
+                                        ? (double)PS_TIMEOUT_INFINITE_MS
+                                        : (double)(p->write_timeout_ns / 1000000)));
     mxSetField(s, 0, "low_latency",       mxCreateLogicalScalar(p->low_latency));
     mxSetField(s, 0, "keep_dtr_on_close", mxCreateLogicalScalar(p->keep_dtr_on_close));
     mxSetField(s, 0, "async_policy",      ps_policy_string(p->async_policy));
@@ -451,7 +462,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
          * write with it so your timestamps and the library's share one base
          * (see TIMING in ysp/serial.h). A double holds whole microseconds
          * exactly up to 2^53, which is 285 years of uptime. */
-        plhs[0] = mxCreateDoubleScalar((double)yser_now_us());
+        plhs[0] = mxCreateDoubleScalar((double)(yrt_now_ns() / 1000));
         mxFree(cmd);
         return;
     }
@@ -519,13 +530,13 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         if (nrhs < 5) mexErrMsgIdAndTxt("ysp_serial:usage", "pulse needs on, off, usec");
         ps_return_count(nlhs, plhs,
             ps_check(yser_pulse(port, ps_byte(prhs[2], "on"), ps_byte(prhs[3], "off"),
-                                ps_u32(prhs[4], "usec"))));
+                                (int64_t)ps_u32(prhs[4], "usec") * 1000)));
 
     } else if (strcmp(cmd, "pulseasync") == 0) {
         if (nrhs < 5) mexErrMsgIdAndTxt("ysp_serial:usage", "pulseasync needs on, off, usec");
         ps_return_count(nlhs, plhs,
             ps_check(yser_pulse_async(port, ps_byte(prhs[2], "on"), ps_byte(prhs[3], "off"),
-                                      ps_u32(prhs[4], "usec"))));
+                                      (int64_t)ps_u32(prhs[4], "usec") * 1000)));
 
     } else if (strcmp(cmd, "setdtr") == 0) {
         if (nrhs < 3) mexErrMsgIdAndTxt("ysp_serial:usage", "setdtr needs on");
@@ -548,7 +559,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
 
     } else if (strcmp(cmd, "break") == 0) {
         if (nrhs < 3) mexErrMsgIdAndTxt("ysp_serial:usage", "break needs ms");
-        ps_check(yser_send_break(port, ps_u32(prhs[2], "ms")));
+        ps_check(yser_send_break(port, (int64_t)ps_u32(prhs[2], "ms") * 1000000));
 
     } else if (strcmp(cmd, "info") == 0) {
         plhs[0] = ps_info(port);

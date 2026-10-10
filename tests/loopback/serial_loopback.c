@@ -42,6 +42,9 @@
 #define LB_SLACK_LO    95
 #define LB_SLACK_HI   160
 
+/* The checks below are written in microseconds on the library's clock. */
+static uint64_t lb_now_us(void) { return (uint64_t)yrt_now_ns() / 1000u; }
+
 /* --- platform glue (threads, a stop flag, a coarse sleep) ---------------- */
 
 #if defined(_WIN32)
@@ -128,7 +131,7 @@ static long       lb_hammer_pulsed;
 static void lb_body_blocked_read(void) {
     uint8_t buf[8];
     lb_read_rc      = yser_read(lb_r, buf, 1, YSER_TIMEOUT_INFINITE, YSER_READ_ANY);
-    lb_read_done_us = yser_now_us();
+    lb_read_done_us = lb_now_us();
 }
 
 /* The threading contract under test: these two run at the same time on ONE
@@ -136,7 +139,7 @@ static void lb_body_blocked_read(void) {
 static void lb_body_hammer_read(void) {
     uint8_t buf[64];
     while (!lb_stop_get()) {
-        int n = yser_read(lb_w, buf, (int)sizeof(buf), 20, YSER_READ_ANY);
+        int n = yser_read(lb_w, buf, (int)sizeof(buf), YRT_MS(20), YSER_READ_ANY);
         if (n > 0) lb_hammer_read += n;
         else if (n < 0 && n != YSER_ERR_INTERRUPTED) { lb_hammer_err++; break; }
     }
@@ -149,7 +152,7 @@ static void lb_body_hammer_write(void) {
          * writing its trailing byte into the same stream while this thread
          * keeps writing and the reader keeps reading: three threads, one
          * handle, which is the arrangement the lock exists for. */
-        int n = (++i % 8 == 0) ? yser_pulse_async(lb_w, 0xA5, 0x00, 300)
+        int n = (++i % 8 == 0) ? yser_pulse_async(lb_w, 0xA5, 0x00, YRT_US(300))
                                : yser_write_byte(lb_w, 0xA5);
         if (n == 1) { lb_hammer_written++; if (i % 8 == 0) lb_hammer_pulsed++; }
         else if (n == 0) lb_hammer_short++;   /* write timeout: the peer is not draining */
@@ -166,9 +169,9 @@ static void lb_body_hammer_write(void) {
  * data. */
 static void lb_quiesce(bool same) {
     uint8_t sink[1024];
-    uint64_t deadline = yser_now_us() + 5000000ull;
-    uint64_t last_byte_us = yser_now_us();
-    while (yser_now_us() < deadline) {
+    uint64_t deadline = lb_now_us() + 5000000ull;
+    uint64_t last_byte_us = lb_now_us();
+    while (lb_now_us() < deadline) {
         int got = 0, k;
         k = yser_read(lb_w, sink, (int)sizeof(sink), 0, YSER_READ_ANY);
         if (k > 0) got += k;
@@ -176,8 +179,8 @@ static void lb_quiesce(bool same) {
             k = yser_read(lb_r, sink, (int)sizeof(sink), 0, YSER_READ_ANY);
             if (k > 0) got += k;
         }
-        if (got > 0) { last_byte_us = yser_now_us(); continue; }
-        if (yser_now_us() - last_byte_us > 200000ull) break;
+        if (got > 0) { last_byte_us = lb_now_us(); continue; }
+        if (lb_now_us() - last_byte_us > 200000ull) break;
         lb_sleep_ms(5);
     }
     yser_purge(lb_w, YSER_PURGE_RX | YSER_PURGE_TX);
@@ -187,11 +190,11 @@ static void lb_quiesce(bool same) {
 /* Wait until the driver reports at least `want` bytes, or give up. Returns
  * what yser_available() last said. */
 static int lb_wait_available(yser_port* p, int want, unsigned limit_ms) {
-    uint64_t end = yser_now_us() + (uint64_t)limit_ms * 1000ull;
+    uint64_t end = lb_now_us() + (uint64_t)limit_ms * 1000ull;
     int n = 0;
     for (;;) {
         n = yser_available(p);
-        if (n < 0 || n >= want || yser_now_us() >= end) return n;
+        if (n < 0 || n >= want || lb_now_us() >= end) return n;
         lb_sleep_ms(2);
     }
 }
@@ -214,7 +217,7 @@ int main(int argc, char** argv) {
     /* A short write timeout on the handle under test, so the "peer stops
      * draining" check below does not sit for the 1 s default. Writes into an
      * empty transmit buffer never reach it. */
-    yser_desc da = { .device = argv[1], .baud = 115200, .write_timeout_ms = LB_TIMEOUT_MS };
+    yser_desc da = { .device = argv[1], .baud = 115200, .write_timeout_ns = YRT_MS(LB_TIMEOUT_MS) };
     yser_desc db = { .device = argv[2], .baud = 115200 };
     if (!yser_open(&a, &da)) { fprintf(stderr, "open %s: %s\n", argv[1], yser_error(&a)); return 2; }
     if (!same && !yser_open(&b, &db)) {
@@ -245,23 +248,23 @@ int main(int argc, char** argv) {
     for (int i = 0; i < (int)sizeof(out); i++) out[i] = (uint8_t)(i * 7 + 1);
     int n = yser_write(lb_w, out, (int)sizeof(out));
     lb_check(n == (int)sizeof(out), "write 64 bytes", "accepted %d", n);
-    n = yser_read(lb_r, in, (int)sizeof(out), 1000, YSER_READ_ALL);
+    n = yser_read(lb_r, in, (int)sizeof(out), YRT_MS(1000), YSER_READ_ALL);
     lb_check(n == (int)sizeof(out), "READ_ALL 64 within 1000 ms", "got %d (%s)",
              n, n < 0 ? yser_strerror(n) : "ok");
     lb_check(n == (int)sizeof(out) && memcmp(in, out, sizeof(out)) == 0,
              "payload matches", "%s", "memcmp");
 
     /* 2. An idle port polls to 0, at once, and not to an error. */
-    uint64_t t0 = yser_now_us();
+    uint64_t t0 = lb_now_us();
     n = yser_read(lb_r, in, (int)sizeof(in), 0, YSER_READ_ANY);
-    uint64_t poll_us = yser_now_us() - t0;
+    uint64_t poll_us = lb_now_us() - t0;
     lb_check(n == 0 && poll_us < 2000, "READ_ANY timeout 0 when idle",
              "got %d in %llu us (want 0 in < 2000)", n, (unsigned long long)poll_us);
 
     /* 3. And waits out a finite timeout instead of returning early or never. */
-    t0 = yser_now_us();
-    n = yser_read(lb_r, in, (int)sizeof(in), LB_TIMEOUT_MS, YSER_READ_ANY);
-    uint64_t idle_ms = (yser_now_us() - t0) / 1000ull;
+    t0 = lb_now_us();
+    n = yser_read(lb_r, in, (int)sizeof(in), YRT_MS(LB_TIMEOUT_MS), YSER_READ_ANY);
+    uint64_t idle_ms = (lb_now_us() - t0) / 1000ull;
     lb_check(n == 0 && idle_ms >= LB_SLACK_LO && idle_ms <= LB_SLACK_HI,
              "READ_ANY timeout 100 when idle", "got %d after %llu ms (want 0 in %d..%d)",
              n, (unsigned long long)idle_ms, LB_SLACK_LO, LB_SLACK_HI);
@@ -271,7 +274,7 @@ int main(int argc, char** argv) {
     yser_drain(lb_w);
     int avail = lb_wait_available(lb_r, 16, 500);
     lb_check(avail == 16, "yser_available after 16 bytes", "reports %d", avail);
-    n = yser_read(lb_r, in, 16, 500, YSER_READ_ALL);
+    n = yser_read(lb_r, in, 16, YRT_MS(500), YSER_READ_ALL);
     lb_check(n == 16, "drain those 16", "got %d", n);
 
     /* 5. Purge empties the receive buffer. */
@@ -288,15 +291,15 @@ int main(int argc, char** argv) {
     yser_write(lb_w, out, 8);
     yser_drain(lb_w);
     lb_wait_available(lb_r, 8, 500);
-    t0 = yser_now_us();
-    n = yser_read(lb_r, in, 32, 200, YSER_READ_ALL);
-    uint64_t elapsed_ms = (yser_now_us() - t0) / 1000ull;
+    t0 = lb_now_us();
+    n = yser_read(lb_r, in, 32, YRT_MS(200), YSER_READ_ALL);
+    uint64_t elapsed_ms = (lb_now_us() - t0) / 1000ull;
     lb_check(n == 8 && elapsed_ms >= 195 && elapsed_ms <= 260,
              "READ_ALL short count at deadline", "got %d after %llu ms (want 8 in 195..260)",
              n, (unsigned long long)elapsed_ms);
 
     /* 7. A write whose peer stops draining returns a short count when
-     *    write_timeout_ms expires, and is not an error. Filling the transmit
+     *    write_timeout_ns expires, and is not an error. Filling the transmit
      *    path means filling the peer's receive buffer too, so give up if the
      *    transport swallows more than a few megabytes. */
     {
@@ -306,9 +309,9 @@ int main(int argc, char** argv) {
         int short_count = -1;
         uint64_t write_ms = 0;
         for (long i = 0; i < 16384; i++) {   /* 4 MiB budget */
-            uint64_t w0 = yser_now_us();
+            uint64_t w0 = lb_now_us();
             int k = yser_write(lb_w, block, (int)sizeof(block));
-            uint64_t w_ms = (yser_now_us() - w0) / 1000ull;
+            uint64_t w_ms = (lb_now_us() - w0) / 1000ull;
             if (k < 0) { short_count = k; write_ms = w_ms; break; }
             sent += k;
             if (k < (int)sizeof(block)) { short_count = k; write_ms = w_ms; break; }
@@ -330,7 +333,7 @@ int main(int argc, char** argv) {
     lb_read_rc = 0x7FFF;
     lb_thread th = LB_START(blocked_read);
     lb_sleep_ms(100);                    /* let it reach the blocking wait */
-    t0 = yser_now_us();
+    t0 = lb_now_us();
     int irq = yser_interrupt(lb_r);
     lb_join(th);
     /* The read can only finish after t0 when it really blocked; a read that
@@ -353,11 +356,11 @@ int main(int argc, char** argv) {
      *     end, which is what a device would see. */
     {
         uint8_t pa[2] = { 0, 0 };
-        int rc = yser_pulse_async(lb_w, 0xA1, 0xA2, 2000);
-        int n1 = yser_read(lb_r, pa, 1, 500, YSER_READ_ANY);
-        uint64_t t_on = yser_now_us();
-        int n2 = yser_read(lb_r, pa + 1, 1, 500, YSER_READ_ANY);
-        uint64_t t_off = yser_now_us();
+        int rc = yser_pulse_async(lb_w, 0xA1, 0xA2, YRT_US(2000));
+        int n1 = yser_read(lb_r, pa, 1, YRT_MS(500), YSER_READ_ANY);
+        uint64_t t_on = lb_now_us();
+        int n2 = yser_read(lb_r, pa + 1, 1, YRT_MS(500), YSER_READ_ANY);
+        uint64_t t_off = lb_now_us();
         uint64_t gap_us = t_off > t_on ? t_off - t_on : 0;
         lb_check(rc == 1 && n1 == 1 && n2 == 1 && pa[0] == 0xA1 && pa[1] == 0xA2,
                  "pulse_async: on then off", "rc=%d, bytes %02X %02X", rc, pa[0], pa[1]);
@@ -370,11 +373,11 @@ int main(int argc, char** argv) {
      *     write means "hold this". */
     {
         uint8_t pb[8];
-        int rc = yser_pulse_async(lb_w, 0xB1, 0xB2, 20000);
+        int rc = yser_pulse_async(lb_w, 0xB1, 0xB2, YRT_US(20000));
         int wr = yser_write_byte(lb_w, 0x42);
         /* Asks for four bytes so a surviving 0xB2 would be counted, and waits
          * past the 20 ms width. */
-        int got = yser_read(lb_r, pb, 4, 50, YSER_READ_ALL);
+        int got = yser_read(lb_r, pb, 4, YRT_MS(50), YSER_READ_ALL);
         lb_check(rc == 1 && wr == 1 && got == 2 && pb[0] == 0xB1 && pb[1] == 0x42,
                  "write cancels a pending off",
                  "rc=%d wr=%d, %d bytes: %02X %02X", rc, wr, got,
@@ -397,9 +400,9 @@ int main(int argc, char** argv) {
              * different ones: a zero width is due the moment it is submitted,
              * so the worker is already running the callback, while 200 us
              * usually lets the cancel land first. */
-            int rc = yser_pulse_async(lb_w, 0xB1, 0xB2, (i % 2) ? 200u : 0u);
+            int rc = yser_pulse_async(lb_w, 0xB1, 0xB2, (i % 2) ? YRT_US(200) : 0);
             int wr = yser_write_byte(lb_w, 0x42);
-            int got = yser_read(lb_r, px, 4, 20, YSER_READ_ALL);
+            int got = yser_read(lb_r, px, 4, YRT_MS(20), YSER_READ_ALL);
             if (rc != 1 || wr != 1 || got < 2 || px[0] != 0xB1) { odd++; continue; }
             if (px[got - 1] != 0x42) undone++;       /* the write was undone */
             else if (got == 3 && px[1] == 0xB2) raced++;  /* off won, legally */
@@ -414,10 +417,10 @@ int main(int argc, char** argv) {
      *     off, and it is the newer off byte. */
     {
         uint8_t pc[8];
-        int r1 = yser_pulse_async(lb_w, 0xC1, 0xC2, 30000);
+        int r1 = yser_pulse_async(lb_w, 0xC1, 0xC2, YRT_US(30000));
         lb_sleep_ms(1);
-        int r2 = yser_pulse_async(lb_w, 0xC3, 0xC4, 30000);
-        int got = yser_read(lb_r, pc, 5, 200, YSER_READ_ALL);
+        int r2 = yser_pulse_async(lb_w, 0xC3, 0xC4, YRT_US(30000));
+        int got = yser_read(lb_r, pc, 5, YRT_MS(200), YSER_READ_ALL);
         lb_check(r1 == 1 && r2 == 1 && got == 3 &&
                  pc[0] == 0xC1 && pc[1] == 0xC3 && pc[2] == 0xC4,
                  "second pulse replaces the first",
@@ -440,12 +443,12 @@ int main(int argc, char** argv) {
             yser_close(&c);
         } else {
             uint8_t pd[4];
-            int rc = yser_pulse_async(&c, 0xD1, 0xD2, 1000000);  /* 1 s width */
+            int rc = yser_pulse_async(&c, 0xD1, 0xD2, YRT_US(1000000));  /* 1 s width */
             lb_sleep_ms(20);
-            uint64_t t_close = yser_now_us();
+            uint64_t t_close = lb_now_us();
             yser_close(&c);
-            int got = yser_read(lb_r, pd, 2, 500, YSER_READ_ALL);
-            uint64_t after_us = yser_now_us() - t_close;
+            int got = yser_read(lb_r, pd, 2, YRT_MS(500), YSER_READ_ALL);
+            uint64_t after_us = lb_now_us() - t_close;
             lb_check(rc == 1 && got == 2 && pd[0] == 0xD1 && pd[1] == 0xD2 &&
                      after_us < 5000, "close flushes a pending off",
                      "rc=%d, %d bytes %02X %02X, %llu us after close (want < 5000)",
@@ -460,9 +463,9 @@ int main(int argc, char** argv) {
     if (!same) yser_purge(lb_r, YSER_PURGE_RX | YSER_PURGE_TX);
     lb_thread tw = LB_START(hammer_write);
     lb_thread tr = LB_START(hammer_read);
-    uint64_t hammer_end = yser_now_us() + 500000ull;
+    uint64_t hammer_end = lb_now_us() + 500000ull;
     long fed = 0;
-    while (yser_now_us() < hammer_end) {
+    while (lb_now_us() < hammer_end) {
         if (!same) {
             /* Feed the handle under test from the far end, and keep the far
              * end's own receive buffer from filling up. */
@@ -503,7 +506,7 @@ int main(int argc, char** argv) {
     if (!same) {
         yser_close(lb_r);
         lb_sleep_ms(200);
-        n = yser_read(lb_w, in, (int)sizeof(in), 500, YSER_READ_ANY);
+        n = yser_read(lb_w, in, (int)sizeof(in), YRT_MS(500), YSER_READ_ANY);
         if (n == YSER_ERR_DISCONNECTED)
             lb_check(1, "read after the peer closed", "%s", "YSER_ERR_DISCONNECTED");
         else if (n == 0)

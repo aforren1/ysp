@@ -62,7 +62,7 @@ static void* board_thread(void* arg)
     (void)arg;
     while (!g_board_stop) {
         uint8_t b[64];
-        int n = yser_read(&g_board, b, (int)sizeof b, 2, YSER_READ_ANY), i;
+        int n = yser_read(&g_board, b, (int)sizeof b, YRT_MS(2), YSER_READ_ANY), i;
         int64_t now = yrt_now_ns();
         for (i = 0; i < n; i++) {
             uint32_t t = board_us();
