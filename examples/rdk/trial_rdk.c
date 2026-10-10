@@ -209,7 +209,7 @@ int main(int argc, char** argv) {
     rdesc.w = 400;
     rdesc.count = N_DOTS;
     rdesc.speed = 200;
-    if (yrdk_open(&rdk, &rdesc) < 0 || yrdk_open(&replay, &rdesc) < 0) {
+    if (!yrdk_open(&rdk, &rdesc) || !yrdk_open(&replay, &rdesc)) {
         fprintf(stderr, "trial_rdk: %s\n", yrdk_error(&rdk));
         return 1;
     }

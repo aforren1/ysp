@@ -296,3 +296,23 @@ env = { YRDK_TEST_NO_GOLDEN = "1" }
 why = "The count below the boundary bucket, off by one: the exact count."
 find = '        need -= below;'
 replace = '        need -= below + (digit == 5);'
+
+# v0.2.0 conventions: messages on the calls that return a code.
+
+[[mutant]]
+id = "conv-01"
+name = "a failing write writes no message"
+test = "rdk"
+env = { YRDK_TEST_NO_GOLDEN = "1" }
+why = "Every call that returns a code writes yrdk_error() when it fails (README Conventions, Errors)."
+find = '    if (!o) return yrdk__fail(f, YRDK_ERR_ARG, "yrdk_write: out is NULL");'
+replace = '    if (!o) return YRDK_ERR_ARG;'
+
+[[mutant]]
+id = "conv-02"
+name = "lifetime_ns below 0 accepted"
+test = "rdk"
+env = { YRDK_TEST_NO_GOLDEN = "1" }
+why = "lifetime_ns is checked at open: a negative one is refused with a message."
+find = '        if (d->lifetime_ns < 0 || d->lifetime_ns > (int64_t)1000000000 * 1000000000)'
+replace = '        if (d->lifetime_ns > (int64_t)1000000000 * 1000000000)'

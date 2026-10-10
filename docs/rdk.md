@@ -357,6 +357,39 @@ over; two fields of 10,000 (transparent motion) cost about twice one.
 No row was measured in a window with the swap path, so nothing here
 says how often a frame is late.
 
+## Lifetime in ns, open and messages (v0.2.0)
+
+v0.2.0 applies the repository conventions (README.md, Conventions).
+
+- **`desc.lifetime_ns`.** The desc had the lifetime as float seconds, and
+  open turned it into ns with `llround((double)lifetime * 1e9)`. A float
+  0.3 is 0.30000001192..., so it gave L = 300,000,012 ns; a C caller now
+  writes `YRT_MS(300)`, which is 300,000,000 ns. The rules do not change
+  for the same L, and neither do the golden digests: the test gives the
+  old L values (`life_s()`, the v0.1 rounding). Seconds stay at the
+  script layer. The Python binding keeps `lifetime=` in seconds and
+  converts it as v0.1 did (float32, then `llround(x 1e9)`), so its fields,
+  its test and `tests/c_trial.bin` are unchanged, and so is
+  `tests/compare/rdk_ref.py`, which models seconds. A Python field and a C
+  field are the same when the C caller passes that L.
+- **`yrdk_out.age_s` stays float seconds.** It is a per-dot attribute
+  that goes to the GPU next to x, y and the direction (a gabor's phase
+  restarts with it). An `int64_t` per dot would double that stream, and a
+  shader has no 64-bit integers. It is the one time of this header that
+  is not `int64_t` ns, and its name says the unit.
+- **`yrdk_open()` returns `bool`.** The message was already in
+  `yrdk_error()`. Every other call that returns a code writes the
+  message when it fails, so `yrdk_xy()`, `yrdk_write()` and
+  `yrdk_snapshot()` take a non-const field. `yrdk_close()` was already
+  safe on a zeroed field and twice.
+
+Checked on 2026-10-10 (Windows 11, MinGW-w64 gcc 16.1 and MSVC 19.44):
+`tests/adapt/rdk_test.c` passes with its golden digests, with a new test
+of close and the messages. `tests/make_c_trial.c` writes the same bytes
+as the committed `tests/c_trial.bin`. The USAGE blocks compile as C99 and
+C++17. Mutants `conv-01` (no message from a failing write) and `conv-02`
+(a negative `lifetime_ns` accepted) are caught; control `00` survives.
+
 ## Bindings
 
 The API is made for a binding: plain structs, no callbacks, caller memory

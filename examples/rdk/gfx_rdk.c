@@ -122,7 +122,7 @@ static int reopen(yrdk_field* f, yrdk_desc* d, int64_t t) {
     float c = f->coherence, dir = f->direction, sp = f->speed;
     int had = f->n > 0;
     yrdk_close(f);
-    if (yrdk_open(f, d) < 0) { fprintf(stderr, "gfx_rdk: %s\n", yrdk_error(f)); failures++; return -1; }
+    if (!yrdk_open(f, d)) { fprintf(stderr, "gfx_rdk: %s\n", yrdk_error(f)); failures++; return -1; }
     if (had) { f->coherence = c; f->direction = dir; f->speed = sp; }
     yrdk_start(f, trial_seed, t);
     return 0;
@@ -132,7 +132,7 @@ static void apply_page1_desc(void) {
     static const yrdk_algorithm algs[5] = { YRDK_CUSTOM, YRDK_WN, YRDK_MN, YRDK_LL, YRDK_BM };
     rdesc.algorithm = algs[preset];
     if (preset) { rdesc.signal = YRDK_SIGNAL_SAME; rdesc.select = YRDK_EXACT; rdesc.noise = YRDK_NOISE_DIRECTION; rdesc.sets = 0; }
-    rdesc.lifetime = life_choice == 0 ? 0.0f : life_choice == 1 ? 0.2f : 0.5f;
+    rdesc.lifetime_ns = life_choice == 0 ? 0 : life_choice == 1 ? YRT_MS(200) : YRT_MS(500);
     /* MN and LL show a third of the dots on each frame: 100 shown */
     rdesc.count = (preset == 2 || preset == 3) ? MAX_DOTS / 3 : MAX_DOTS;
 }
@@ -144,7 +144,7 @@ static void start_page(int p, const yscr_frame* f) {
     memset(&rdesc, 0, sizeof rdesc);
     rdesc.w = 400; rdesc.coherence = 0.5f; rdesc.direction = 0; rdesc.speed = 80; rdesc.count = MAX_DOTS;
     preset = 0; life_choice = 0;
-    if (p == 1) { rdesc.lifetime = 0.4f; rdesc.w = 500; }
+    if (p == 1) { rdesc.lifetime_ns = YRT_MS(400); rdesc.w = 500; }
     if (p == 2) { rdesc.count = MAX_DOTS / 2; rdesc.coherence = 1; rdesc.signal = YRDK_SIGNAL_SAME; }
     if (p == 3) { rdesc.coherence = 0.256f; rdesc.signal = YRDK_SIGNAL_DIFFERENT; rdesc.noise = YRDK_NOISE_POSITION; }
     rdk.n = 0;
@@ -158,7 +158,7 @@ static void start_page(int p, const yscr_frame* f) {
     }
     yrdk_close(&replay);
     if (p == 3) {
-        if (yrdk_open(&replay, &rdesc) < 0) { fprintf(stderr, "gfx_rdk: %s\n", yrdk_error(&replay)); failures++; }
+        if (!yrdk_open(&replay, &rdesc)) { fprintf(stderr, "gfx_rdk: %s\n", yrdk_error(&replay)); failures++; }
         trial_t0 = f->onset;
         ytl_anchor(&tl, TRIAL, f->onset, 0);
         n_steps = 0;
@@ -239,7 +239,7 @@ static int setup(void) {
 
     memset(&rdesc, 0, sizeof rdesc);
     rdesc.w = 400; rdesc.count = MAX_DOTS; rdesc.coherence = 0.5f; rdesc.speed = 80;
-    if (yrdk_open(&rdk, &rdesc) < 0) { fprintf(stderr, "gfx_rdk: %s\n", yrdk_error(&rdk)); return -1; }
+    if (!yrdk_open(&rdk, &rdesc)) { fprintf(stderr, "gfx_rdk: %s\n", yrdk_error(&rdk)); return -1; }
     buf = ygfx_buffer(&gfx, sizeof xy);
     buf2 = ygfx_buffer(&gfx, sizeof xy2);
     if (!buf.id || !buf2.id) { fprintf(stderr, "gfx_rdk: %s\n", ygfx_error(&gfx)); return -1; }
@@ -285,7 +285,7 @@ static int write_ppm(const char* path, uint8_t* rgba, int w, int h) {
     return fclose(fp) == 0 && ok ? 0 : -1;
 }
 
-static int upload(ygfx_buf b, const yrdk_field* f, float* out) {
+static int upload(ygfx_buf b, yrdk_field* f, float* out) {
     if (yrdk_xy(f, out) < 0) return -1;
     return ygfx_buffer_update(&gfx, b, 0, out, (size_t)f->n * 2 * sizeof(float));
 }
@@ -332,7 +332,7 @@ static int frame(const yscr_frame* f) {
         memset(&o, 0, sizeof o);
         o.xy = &items[0].x; o.xy_stride = sizeof items[0];
         o.dir = &items[0].ori; o.dir_stride = sizeof items[0];
-        o.event = ev; o.age = age;
+        o.event = ev; o.age_s = age;
         if (yrdk_write(&rdk, &o) < 0) return -1;
         for (i = 0; i < rdk.n; i++) {
             carrier[i] = (ev[i] & YRDK_EV_PLACED) ? 0.0f : (float)fmod(carrier[i] - 4.0 * dt, 1.0);

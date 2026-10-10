@@ -71,8 +71,12 @@ static yrdk_desc base_desc(void) {
     return d;
 }
 
+/* v0.1's float seconds as v0.2's lifetime_ns, rounded as v0.1 did, so the
+ * golden digests and tests/compare/rdk_ref.py (which keeps seconds) agree. */
+static int64_t life_s(float s) { return (int64_t)llround((double)s * 1e9); }
+
 static int open_ok(yrdk_field* f, const yrdk_desc* d) {
-    int rc = yrdk_open(f, d);
+    int rc = yrdk_open(f, d) ? YRDK_OK : YRDK_ERR_ARG;
     if (rc < 0) { fprintf(stderr, "rdk_test [%s]: open: %s\n", g_where, yrdk_error(f)); g_failures++; }
     return rc;
 }
@@ -285,14 +289,14 @@ static void test_golden(void) {
     g[4].d.count = 150; g[4].d.coherence = 0.4375f; g[4].d.direction = 100; g[4].d.speed = 9; g[4].d.stream = 7;
     g[4].seed = 5; g[4].stall = 120; g[4].updates = 240;
     g[5].name = "replot_life"; g[5].d.signal = YRDK_SIGNAL_DIFFERENT; g[5].d.noise = YRDK_NOISE_POSITION;
-    g[5].d.edge = YRDK_REPLOT; g[5].d.w = 10; g[5].d.count = 120; g[5].d.lifetime = 0.25f; g[5].d.coherence = 0.5f;
+    g[5].d.edge = YRDK_REPLOT; g[5].d.w = 10; g[5].d.count = 120; g[5].d.lifetime_ns = life_s(0.25f); g[5].d.coherence = 0.5f;
     g[5].d.speed = 12; g[5].seed = 6; g[5].vary = VARY_C; g[5].updates = 240;
     g[6].name = "walk_rect_life"; g[6].d.select = YRDK_BERNOULLI; g[6].d.noise = YRDK_NOISE_WALK;
     g[6].d.aperture = YRDK_RECT; g[6].d.w = 7; g[6].d.h = 11; g[6].d.edge = YRDK_REPLOT; g[6].d.lifetime_frames = 5;
     g[6].d.frame_ns = P_NS; g[6].d.count = 80; g[6].d.coherence = 0.375f; g[6].d.speed = 5; g[6].seed = 7;
     g[6].vary = VARY_DIR | VARY_SPEED; g[6].updates = 300;
     g[7].name = "stall_circle"; g[7].d.signal = YRDK_SIGNAL_DIFFERENT; g[7].d.w = 6; g[7].d.count = 64;
-    g[7].d.lifetime = 1.3f; g[7].d.coherence = 0.5f; g[7].d.direction = 77.25f; g[7].d.speed = 3.25f;
+    g[7].d.lifetime_ns = life_s(1.3f); g[7].d.coherence = 0.5f; g[7].d.direction = 77.25f; g[7].d.speed = 3.25f;
     g[7].seed = 0xDEADBEEFCAFEF00Dull; g[7].drop = 40; g[7].stall = 60; g[7].updates = 200;
     /* From tests/compare/rdk_ref.py (uv run --with mpmath python tests/compare/rdk_ref.py --c). */
     g[0].digest = 0x46c7add13bea5555ull;
@@ -329,8 +333,7 @@ static void test_golden(void) {
 
 static void refuse(const yrdk_desc* d, const char* word) {
     static yrdk_field f;
-    int rc = yrdk_open(&f, d);
-    if (rc != YRDK_ERR_ARG && rc != YRDK_ERR_MEM) {
+    if (yrdk_open(&f, d)) {
         fprintf(stderr, "rdk_test [refusals]: FAIL: a desc (%s) was accepted\n", word);
         g_failures++;
         yrdk_close(&f);
@@ -340,7 +343,7 @@ static void refuse(const yrdk_desc* d, const char* word) {
         fprintf(stderr, "rdk_test [refusals]: FAIL: message \"%s\" does not name %s\n", yrdk_error(&f), word);
         g_failures++;
     }
-    CHECK(yrdk_bytes(d) == 0 || rc == YRDK_ERR_MEM);
+    CHECK(yrdk_bytes(d) == 0 || (d->mem && d->mem_bytes < yrdk_bytes(d)));
 }
 
 static void test_refusals(void) {
@@ -361,10 +364,10 @@ static void test_refusals(void) {
     d = base_desc(); d.w = 10; d.count = 5; d.algorithm = YRDK_WN; d.sets = 2; refuse(&d, "preset");
     d = base_desc(); d.w = 10; d.count = 5; d.sets = 9; refuse(&d, "sets");
     d = base_desc(); d.w = 10; d.count = 5; d.signal = YRDK_SIGNAL_LEAST_RECENT; d.select = YRDK_BERNOULLI; refuse(&d, "EXACT");
-    d = base_desc(); d.w = 10; d.count = 5; d.lifetime = 1; d.lifetime_frames = 3; d.frame_ns = 1; refuse(&d, "lifetime");
+    d = base_desc(); d.w = 10; d.count = 5; d.lifetime_ns = 1; d.lifetime_frames = 3; d.frame_ns = 1; refuse(&d, "lifetime");
     d = base_desc(); d.w = 10; d.count = 5; d.lifetime_frames = 3; refuse(&d, "frame_ns");
     d = base_desc(); d.w = 10; d.count = 5; d.clock = YRDK_CLOCK_FRAMES; refuse(&d, "frame_ns");
-    d = base_desc(); d.w = 10; d.count = 5; d.lifetime = -1; refuse(&d, "lifetime");
+    d = base_desc(); d.w = 10; d.count = 5; d.lifetime_ns = -1; refuse(&d, "lifetime_ns");
     d = base_desc(); d.w = 10; d.count = 5; d.noise = (yrdk_noise)7; refuse(&d, "noise");
     d = base_desc(); d.w = 10; d.count = 1 << 23; d.sets = 3; refuse(&d, "YRDK_MAX_DOTS");
     d = base_desc(); d.aperture = YRDK_RECT; d.w = 1e-20f; d.h = 1e20f; d.count = 5; refuse(&d, "w");
@@ -566,7 +569,7 @@ static void test_density(void) {
                     d.aperture = (yrdk_shape)sh; d.w = 10; d.h = sh ? 6.0f : 0.0f;
                     d.count = 500; d.signal = (yrdk_signal)sg; d.noise = (yrdk_noise)no;
                     d.coherence = 0.5f; d.direction = 20; d.speed = 30;   /* 0.1 of the radius per frame */
-                    if (life) d.lifetime = 0.2f;
+                    if (life) d.lifetime_ns = life_s(0.2f);
                     snprintf(where, sizeof where, "density %s signal %d noise %d life %d", sh ? "rect" : "circle", sg, no, life);
                     g_where = where;
                     r = density_stat(&d, 100, 2.0, 0);
@@ -633,7 +636,7 @@ static void test_lifetime(void) {
      * frames, mean 5.5 frames of time. */
     g_where = "lifetime onset";
     d = base_desc();
-    d.w = 10; d.count = 1000; d.lifetime = (float)(5.5 * 16.666667e-3); d.coherence = 0.5f; d.speed = 3;
+    d.w = 10; d.count = 1000; d.lifetime_ns = life_s((float)(5.5 * 16.666667e-3)); d.coherence = 0.5f; d.speed = 3;
     if (open_ok(&f, &d) < 0) return;
     yrdk_start(&f, 10, T0);
     for (i = 0; i < 1000; i++) born[i] = -1;
@@ -1132,7 +1135,7 @@ static void test_repro(void) {
     uint64_t da, db;
     long before;
     g_where = "repro";
-    d.algorithm = YRDK_LL; d.w = 8; d.count = 100; d.coherence = 0.6f; d.speed = 5; d.lifetime = 0.3f;
+    d.algorithm = YRDK_LL; d.w = 8; d.count = 100; d.coherence = 0.6f; d.speed = 5; d.lifetime_ns = life_s(0.3f);
     if (open_ok(&A, &d) < 0 || open_ok(&B, &d) < 0) return;
     before = g_allocs;
     yrdk_start(&A, 71, T0);
@@ -1219,18 +1222,18 @@ static void test_outputs(void) {
     int i, k, n;
     const yrdk_param* p;
     g_where = "outputs";
-    d.w = 10; d.count = 50; d.coherence = 0.5f; d.speed = 2; d.direction = -45; d.lifetime = 0.5f;
+    d.w = 10; d.count = 50; d.coherence = 0.5f; d.speed = 2; d.direction = -45; d.lifetime_ns = life_s(0.5f);
     if (open_ok(&f, &d) < 0) return;
     yrdk_start(&f, 90, T0);
     for (k = 1; k <= 20; k++) yrdk_update(&f, T0 + k * P_NS);
     memset(&o, 0, sizeof o);
-    o.xy = xy; o.dir = dir; o.age = age; o.signal = sig; o.event = ev;
+    o.xy = xy; o.dir = dir; o.age_s = age; o.signal = sig; o.event = ev;
     CHECK(yrdk_write(&f, &o) == 50);
     memset(items, 0, sizeof items);
     memset(&o, 0, sizeof o);
     o.xy = &items[0].x; o.xy_stride = sizeof items[0];
     o.dir = &items[0].ori; o.dir_stride = sizeof items[0];
-    o.age = &items[0].phase; o.age_stride = sizeof items[0];
+    o.age_s = &items[0].phase; o.age_stride = sizeof items[0];
     CHECK(yrdk_write(&f, &o) == 50);
     for (i = 0; i < 50; i++) {
         CHECK(items[i].x == xy[2 * i] && items[i].y == xy[2 * i + 1]);
@@ -1252,9 +1255,50 @@ static void test_outputs(void) {
     yrdk_close(&f);
 }
 
+/* v0.2.0: open returns bool, close is safe, failing calls write the message. */
+static void test_conventions(void) {
+    static yrdk_field z, f;
+    yrdk_desc d = base_desc();
+    yrdk_out o;
+    float xy[2 * 8];
+    g_where = "conventions";
+    memset(&z, 0, sizeof z);
+    yrdk_close(&z);                      /* zeroed, twice, NULL */
+    yrdk_close(&z);
+    yrdk_close(NULL);
+    CHECK(yrdk_update(&z, 0) == YRDK_ERR_ARG);
+    CHECK(strstr(yrdk_error(&z), "yrdk_update") != NULL);
+    d.w = 10;                            /* no count or density: refused */
+    CHECK(!yrdk_open(&f, &d));
+    CHECK(strstr(yrdk_error(&f), "count") != NULL);
+    yrdk_close(&f);                      /* after a failed open */
+    d.count = 8;
+    d.lifetime_ns = YRT_MS(300);
+    CHECK(yrdk_open(&f, &d));
+    CHECK(yrdk_error(&f)[0] == 0);
+    CHECK(yrdk_xy(&f, xy) == YRDK_ERR_ORDER);
+    CHECK(strstr(yrdk_error(&f), "before yrdk_start") != NULL);
+    CHECK(yrdk_write(&f, NULL) == YRDK_ERR_ARG);
+    CHECK(strstr(yrdk_error(&f), "out is NULL") != NULL);
+    CHECK(yrdk_start(&f, 1, 1000) == YRDK_OK);
+    CHECK(yrdk_update(&f, 999) == YRDK_ERR_ORDER);
+    CHECK(strstr(yrdk_error(&f), "before the last update") != NULL);
+    CHECK(yrdk_snapshot(&f, NULL, 0) == YRDK_ERR_ARG);
+    CHECK(strstr(yrdk_error(&f), "yrdk_snapshot") != NULL);
+    CHECK(yrdk_replay(&f, 1, 0, NULL, 3) == YRDK_ERR_ARG);
+    CHECK(strstr(yrdk_error(&f), "steps is NULL") != NULL);
+    memset(&o, 0, sizeof o);
+    o.xy = xy;
+    CHECK(yrdk_write(&f, &o) == 8);
+    yrdk_close(&f);
+    yrdk_close(&f);
+    CHECK(yrdk_update(&f, 2000) == YRDK_ERR_ARG);
+}
+
 int main(void) {
     const char* v = getenv("YRDK_TEST_VERBOSE");
     g_verbose = v && *v && *v != '0';
+    test_conventions();
     test_exact();
     /* The mutation runner sets this to see which property check catches a
      * fault that the digests would catch anyway. */

@@ -89,7 +89,7 @@ static int open_field(yrdk_field* f, yrdk_algorithm alg, int n, float dir, uint3
     memset(&d, 0, sizeof d);
     d.algorithm = alg;
     d.w = 1000; d.count = n; d.coherence = 0.5f; d.direction = dir; d.speed = 300; d.stream = stream;
-    if (yrdk_open(f, &d) < 0) { fprintf(stderr, "gfx_rdk_bench: %s\n", yrdk_error(f)); failures++; return -1; }
+    if (!yrdk_open(f, &d)) { fprintf(stderr, "gfx_rdk_bench: %s\n", yrdk_error(f)); failures++; return -1; }
     return yrdk_start(f, 7, 0);
 }
 
