@@ -214,7 +214,7 @@ int main(int argc, char** argv) {
     uint64_t seed = 20261009, rng_side, rng_obs;
     int i, n, sim = 0, n_trials = 0, fullscreen = 0, aborted = 0, failed = 0, rows = 0, sim_bad = 0;
     int in_trial = 0, responding = 0, n_sim_ev = 0, sim_next = 0, side = 0, track = 0;
-    int64_t fix_ns, iti_ns;
+    int64_t fix_ns, iti_ns, sim_frame = -1;   /* --sim: the gabor's landing frame, until its record */
     double ppd, level = 0, shown = 0, scene = 0, level_max, y_bg, y_black;
     uint32_t codes[2] = { 0, 0 };
     ycol_rgb v;
@@ -375,6 +375,17 @@ int main(int argc, char** argv) {
             in_trial = responding = 1;
         }
 
+        /* --sim: the observer's key from the gabor's flip record, which RT
+         * is measured from; the landing frame's predicted onset is a plan
+         * that a frame loop behind on a loaded host can miss */
+        for (i = 0; sim_frame >= 0 && i < f.n_done; i++)
+            if (f.done[i].index == sim_frame && yrsp_onset_flip(&f.done[i]).final) {
+                sim_ev[0].t = f.done[i].onset + YRT_S(sim_rt[ti.index]);
+                sim_ev[1].t = sim_ev[0].t + YRT_MS(80);
+                n_sim_ev = 2;
+                sim_frame = -1;
+            }
+
         yrsp_feed_screen(&scr, &rsp, 1);
         for (; sim && sim_next < n_sim_ev && sim_ev[sim_next].t <= f.onset; sim_next++)
             yrsp_feed(&rsp, &sim_ev[sim_next]);
@@ -405,8 +416,7 @@ int main(int argc, char** argv) {
                     sim_rt[ti.index] = 0.15 + 0.1 * ytr_splitmix(&rng_obs);
                     sim_key[ti.index] = correct ? side : 1 - side;
                     sc = (uint32_t)yrsp_scancode(side_name[sim_key[ti.index]]);
-                    memset(sim_ev, 0, sizeof sim_ev);
-                    sim_ev[0].t = f.onset + YRT_S(sim_rt[ti.index]);
+                    memset(sim_ev, 0, sizeof sim_ev);   /* times from the flip record, above */
                     sim_ev[0].kind = YRSP_KIND_KEYBOARD;
                     sim_ev[0].type = YRSP_PRESS;
                     sim_ev[0].control = sc;
@@ -415,9 +425,8 @@ int main(int argc, char** argv) {
                     sim_ev[1] = sim_ev[0];
                     sim_ev[1].type = YRSP_RELEASE;
                     sim_ev[1].value = 0;
-                    sim_ev[1].t += YRT_MS(80);
-                    n_sim_ev = 2;
-                    sim_next = 0;
+                    n_sim_ev = sim_next = 0;
+                    sim_frame = fired[i].frame;
                 }
             }
             if (fired[i].kind == YTL_MARK && fired[i].code == END_OF_TRIAL) {

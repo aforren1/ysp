@@ -777,14 +777,19 @@ helpers where they fit:
 | `trial_adjustment` | 428 to 396 | 248 to 217 | 86 to 78 | open, update, landing | no |
 | `trial_mouse_tracking` | 496 to 482 | 315 to 300 | 119 to 110 | open, update, landing | no |
 | `trial_audio_keyboard` | 333 to 312 | 196 to 169 | 63 to 53 | open, feed | yes |
-| `trial_stop_signal` | 422 to 393 | 297 to 261 | 116 to 100 | open, feed, update, landing | yes |
-| `trial_2afc_adaptive` | 512 to 501 | 345 to 327 | 90 to 81 | open, feed, update, landing | yes |
+| `trial_stop_signal` | 422 to 420 | 297 to 277 | 116 to 115 | open, feed, update, landing | yes |
+| `trial_2afc_adaptive` | 512 to 510 | 345 to 327 | 90 to 82 | open, feed, update, landing | yes |
 | `trial_stroop` | 510 to 492 | 353 to 333 | 103 to 90 | open, feed, update, landing | no |
 
 The counts: `total` is `wc -l`; `code` is the non-blank, non-comment
 lines without the `--sim` participant (a line that names a `sim` variable
 goes, with the block it opens); `loop` is the same inside the frame loop.
-Part of `code` is the setup's descs, now compound literals.
+Part of `code` is the setup's descs, now compound literals. The
+`trial_stop_signal` and `trial_2afc_adaptive` rows count the later
+version that times the stop tone and the `--sim` keys from the flip
+record (2026-10-11): `trial_stop_signal` grew by 16 code lines, because
+it plans the tone when the go stimulus lands and moves it when the record
+differs.
 
 The data writer is in `trial_keyboard`, `trial_same_different`,
 `trial_audio_keyboard`, `trial_stop_signal` and `trial_2afc_adaptive`.
