@@ -814,9 +814,136 @@ and run as C99 (`-Wall -Wextra -Wpedantic -Werror`) and C++17. Mutants
 `conv-01` (no message), `conv-02` (close keeps the handle open) and
 `conv-03` (no sequence message) are caught.
 
-## Storage
+## Targets (v0.6.0)
 
-Events go in a sorted array that the caller supplies, and the caller sets
+Before v0.6.0, a tween writes into the value array, and the caller copies
+each value into a stimulus field on every frame with a binding table
+(`ygfx_apply(binds, n, ytl_values(&tl))`). GSAP, anime.js and Motion
+write into the target object itself. v0.6.0 adds targets: a tween that
+writes into a field of the caller, a `float`, `float[2..4]` or `int32_t`.
+
+| GSAP | C |
+|---|---|
+| `gsap.to(dot, {x: 300, duration: 0.5, ease: "power2.out"})` | `ytl_tween_to(&q, &dot.x, 300.0f, YRT_MS(500), YTL_EASE_CUBIC_OUT);` |
+| `gsap.from(dot, {opacity: 0, duration: 0.2})` | `ytl_tween_from(&q, &dot.opacity, 0.0f, YRT_MS(200), 0);` |
+| `gsap.fromTo(dot, {x: 0}, {x: 300})` | `ytl_tween_from_to(&q, &dot.x, 0.0f, 300.0f, dur, ease);` |
+| `tl.set(fix, {visible: 0}, 0.5)` | `ytl_at(&q, YRT_MS(500)); ytl_tween_set(&q, &fix.visible, 0.0f);` |
+| `gsap.to(g, {color: ..., repeat: 3, yoyo: true, delay: 0.1, onComplete: f})` | `ytl_anim a = { 0 };` fields, then `ytl_animate(&q, &a);` |
+| `gsap.to(dots, {y: 40, stagger: 0.05})` | `a.stagger_ns = YRT_MS(50); ytl_animate_n(&q, &a, sizeof dots[0], n);` |
+| `"<"`, `">"`, `"+=0.2"` | `ytl_at(&q, q.prev_start)`, `ytl_at(&q, q.prev_end)`, `ytl_wait(&q, YRT_MS(200))` |
+| `.addLabel("x")`, `"x+=0.2"` | `int64_t x = q.t;`, `ytl_at(&q, x + YRT_MS(200))` |
+| `gsap.killTweensOf(dot)` | `ytl_kill(&tl, &dot.x);` |
+| `overwrite: true` | `a.overwrite = YTL_OVERWRITE_ALL;` |
+
+### The model
+
+- **A target is a field.** It has an address, a type (`YTL_F32` or
+  `YTL_I32`) and 1 to 4 components. One target per address. A target is
+  bound to one base, as a channel is.
+- **The latest start drives the field.** A target's tweens are sorted by
+  (start, id). At base time t, the tween with the latest (start, id) of
+  those that have started drives the field. This is the rule of an
+  event-driven channel ("the latest (time, id) wins"). So the field is a
+  function of base time and of the set of tweens, and a rewind, a skip or
+  a seek gives the same values as continuous play.
+- **The start value is the takeover's.** When a tween has no `from`, its
+  `from` is the value the field has at its start: the earlier tween's
+  value at that base time, or, for the first tween, the field's own value
+  before the timeline wrote it (the rest value, read once). This is the
+  takeover rule of `ytl_tween()`. The value is computed at the first
+  evaluate that reaches the start, and kept. GSAP also records the start
+  values at the first render.
+- **Writes.** Before the first tween starts, the evaluate does not write
+  the field, so the caller can set it. Two exceptions: a first tween with
+  `immediate` (the default of `from` and `fromTo`, GSAP's immediateRender)
+  shows its `from`; and after a rewind to a time before the first start,
+  the field shows its rest value again. From the first write on, every
+  evaluate writes the field until its tweens are killed or their base is
+  cleared.
+- **Frame placement is the core's.** A STEP tween (a set included) is read
+  at the end of the frame's lead window, so it lands on the frame where
+  an event at the same time lands. Other tweens are read at the predicted
+  onset. All writes are in one pass at the end of `ytl_evaluate()`.
+- **Callbacks are events.** `on_start` and `on_complete` add an event of
+  kind `YTL_CALL_START` or `YTL_CALL_COMPLETE` at the start and at the end.
+  The evaluate calls the functions after it writes every field, in the
+  order in which the events fired.
+- **Pools sized at open.** `desc.targets` and `desc.tweens` are arrays of
+  the caller, as `desc.events` is. A call that does not fit returns
+  `YTL_ERR_FULL`, writes the message and adds nothing.
+
+### Decisions
+
+- **The calls take a sequence, not the timeline.** A tween needs a base
+  and a start. The sequence holds both, and also the labels, the
+  positions, the sticky error and the cancel. GSAP's `gsap.to()` is a
+  tween on the global timeline at "now": `ytl_seq_now(&tl, base)`.
+  Rejected: a base argument on every call, which adds an argument and has
+  no positions. Rejected: a default base in the handle, which is hidden
+  state.
+- **New names.** `ytl_to()` is the sequence's channel tween since v0.4.0,
+  and C has no overloads. The target calls are `ytl_tween_to()`,
+  `ytl_tween_from()`, `ytl_tween_from_to()`, `ytl_tween_set()`, and
+  `ytl_animate()` with a desc. Rejected: renaming the v0.4.0 calls.
+- **Overwrite: the latest start wins, and the earlier tween stays.** This
+  is a GSAP timeline with `overwrite: false`, where the child that starts
+  later renders last. The earlier tween still drives the field before the
+  later start, so a re-anchored trial replays both. Rejected: GSAP's
+  `"auto"`, which kills the overlapping earlier tween at the first render.
+  A rewind could not bring it back. `YTL_OVERWRITE_ALL` kills the other
+  tweens of the field at the call (GSAP's `overwrite: true`). It is for a
+  script that retargets a field on a base that is never cleared: without
+  it, the overwritten tweens fill the pool. Then the new tween starts from
+  the field's value at its start, which is the last value written.
+- **The timeline owns a field until a kill.** GSAP stops writing a field
+  when its tween completes. Here the evaluate writes it until the
+  target's tweens are killed or their base is cleared. The reason: the
+  start value of a later tween comes from the earlier tween, not from the
+  field. A write by the caller between the two would show on the screen
+  and then be lost at the next start, with no sign. With ownership the
+  next frame overwrites the caller's write, which a test or a look at the
+  screen shows at once. The cost is one write per target per frame
+  (measured below).
+- **The rest value is read once.** It is the field's value before the
+  first write of the target. A target whose tweens are all killed is
+  freed, and the next tween on the field reads the field again. So a
+  trial that clears its base starts from the values the caller set.
+- **Callbacks are events, called after the pass.** As events, they land on
+  the frame nearest to their time, a skip passes over them, a rewind
+  makes them due again, and the storage records where they landed. They
+  are called after every field is written, so a callback sees the frame's
+  values. It can post or kill tweens; these take effect at the next
+  evaluate. `ytl_evaluate()` from a callback is `YTL_ERR_ORDER`.
+  Rejected: calls inside the pass, where a callback that posts or kills a
+  tween changes the lists the pass walks. Rejected: a scan of the tweens
+  on every frame to find due callbacks, which costs per tween per frame
+  and repeats the event rules. The cost of the choice: each callback uses
+  an event of the storage.
+- **Keep the value array and `ygfx_apply()`.** Channels have users that
+  targets do not serve: event-driven channels with the (time, id)
+  recompute, sampled and repeating tracks (a 10-minute tracking target, a
+  flicker), and the contiguous array for a uniform upload, a log and a
+  designer's preview. 19 example programs use them. Targets serve what a
+  channel does badly: a channel needs a number, a binding row and a copy
+  per frame, and it holds one waiting tween. So neither subsumes the
+  other. Rejected: a field pointer on a channel (`ytl_bind`), which is
+  `ygfx_bind.field` again. Do not drive one field both ways: the binding
+  runs after the evaluate and wins.
+- **The same arithmetic as `ytl_tween()`.** A target tween and a channel
+  tween with the same desc give the same bits. So the yoyo rule (the
+  return leg applies the same ease again; it is not GSAP's mirrored
+  playback) stays one rule in the header, and the test can compare the two
+  paths.
+- **Four more eases**: `QUAD_IN_OUT`, `CUBIC_IN`, `CUBIC_OUT` and
+  `CUBIC_IN_OUT` (GSAP's `power1.inOut` and `power2.*`). They are +, -
+  and *, so replay stays exact. Keys and channel tweens take them too.
+- **No op-table form.** An op table is data for a pack, and a pack
+  cannot hold a pointer.
+- **Layout.** A target is 40 bytes and a tween 128 bytes, the fields that
+  the evaluate reads in the first 64. Targets stay dense (a freed one
+  takes the last one's place), so the pass reads one contiguous array.
+
+
 its size. At movie scale, the array holds thousands of annotations, so a
 compile-time maximum would make every handle large. Each base has a range
 in the array, a fired prefix and a lowest late index. With these, an

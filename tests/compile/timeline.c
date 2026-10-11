@@ -3,7 +3,8 @@
  * errors; timeline.cpp builds the same source as C++17. The header has
  * no threads, so there is no YTL_NO_THREADS variant. It runs and returns 0
  * to prove it links, and that a sequence built by calls and one built from
- * an op table both apply. */
+ * an op table both apply. v0.6.0: target tweens on a stimulus's fields,
+ * written as a caller writes them, with no cast in C++. */
 #define YSP_TIMELINE_IMPLEMENTATION
 #include "ysp/timeline.h"
 
@@ -53,6 +54,9 @@ static int names(void) {
            + tw.delay_ns + op.t_ns == YRT_MS(36) ? 0 : 1;
 }
 
+static ytl_target_slot g_targets[16];
+static ytl_tween_slot g_tweens[16];
+
 static int open_tl(ytl_timeline* tl, ytl_event* ev, ytl_key* keys) {
     ytl_desc d;
     memset(&d, 0, sizeof d);
@@ -61,7 +65,75 @@ static int open_tl(ytl_timeline* tl, ytl_event* ev, ytl_key* keys) {
     d.n_channels = 3;
     d.keys = keys;
     d.key_capacity = 32;
+    d.targets = g_targets;
+    d.target_capacity = 16;
+    d.tweens = g_tweens;
+    d.tween_capacity = 16;
     return ytl_open(tl, &d) ? 0 : 1;
+}
+
+/* A stimulus as ysp/gfx.h lays one out: plain fields. */
+typedef struct stim {
+    float   x, y, contrast, visible;
+    float   color[3];
+    int32_t seed;
+} stim;
+
+static int g_done;
+static void on_done(ytl_timeline* tl, int id, void* user) {
+    (void)tl;
+    (void)id;
+    *(int*)user += 1;
+}
+
+static int targets(ytl_timeline* tl) {
+    static stim s, dots[4];
+    ytl_seq q = ytl_seq_on(tl, 1);
+    ytl_anim a;
+    int64_t label;
+    ytl_frame f;
+    int i;
+    ytl_tween_set(&q, &s.visible, 1.0f);
+    ytl_tween_to(&q, &s.x, 300.0f, YRT_MS(500), YTL_EASE_CUBIC_OUT);
+    ytl_tween_from(&q, &s.contrast, 0.0f, YRT_MS(200), YTL_EASE_QUAD_IN_OUT);
+    ytl_at(&q, q.prev_end);                  /* ">" */
+    label = q.t;
+    ytl_tween_from_to(&q, &s.y, 0.0f, 50.0f, YRT_MS(100), YTL_EASE_CUBIC_IN);
+    memset(&a, 0, sizeof a);
+    a.target = s.color;
+    a.n = 3;
+    a.to[0] = 1.0f;
+    a.duration_ns = YRT_MS(200);
+    a.cycles = 2;
+    a.yoyo = true;
+    a.on_complete = on_done;
+    a.user = &g_done;
+    ytl_animate(&q, &a);
+    memset(&a, 0, sizeof a);
+    a.target = &s.seed;
+    a.type = YTL_I32;
+    a.to[0] = 9.0f;
+    a.duration_ns = YRT_MS(90);
+    ytl_animate(&q, &a);
+    ytl_at(&q, label + YRT_MS(200));
+    memset(&a, 0, sizeof a);
+    a.target = &dots[0].y;
+    a.to[0] = 40.0f;
+    a.duration_ns = YRT_MS(100);
+    a.stagger_ns = YRT_MS(50);
+    if (ytl_animate_n(&q, &a, sizeof dots[0], 4) < 0 || q.err != 0) return 1;
+    if (ytl_anchor(tl, 1, 0, 0) != 0) return 1;
+    for (i = 0; i < 120; i++) {
+        f.onset = i * YRT_US(16667);
+        f.period = YRT_US(16667);
+        f.index = i;
+        if (ytl_evaluate(tl, &f, NULL, 0) < 0) return 1;
+    }
+    if (s.x != 300.0f || s.visible != 1.0f || s.y != 50.0f || s.seed != 9 || dots[3].y != 40.0f
+        || g_done != 1)
+        return 1;
+    if (ytl_kill(tl, &s.x) != 1 || ytl_tween_count(tl, NULL) != 9) return 1;
+    return 0;
 }
 
 int main(void) {
@@ -93,6 +165,7 @@ int main(void) {
     up.to = 0.0f;
     ytl_then(&q, 2, &up);
     if (q.err != 0) return 1;
+    if (open_tl(&tl, ev, keys) || targets(&tl)) return 1;
 #ifndef __cplusplus
     /* The op table: designated initializers, C99 (C++20 in
      * timeline_ops.cpp). */
