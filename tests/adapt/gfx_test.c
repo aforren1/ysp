@@ -8242,14 +8242,18 @@ static void gl_v15_first(stats* st) {
     gl_frame(&s, 1);
     gl_frame(&s, 1);                /* the loop's last record is in */
     yscr_on_flip(&R->scr, NULL, NULL);
-    {   /* the loop's frames: the last is the first planned 5 ms or more after its first */
+    {   /* the loop's frames: the last is the first predicted 5 ms or more
+         * after its first. The record's target is the onset predicted at
+         * begin, which the loop compares; its planned vblank is later when
+         * the frame came late (LATE_TARGET: 9 of 20 runs on Mesa llvmpipe
+         * under WSL failed on planned). */
         int64_t first = 0, last = 0, before = 0;
         int nf = 0;
         for (k = 0; k < v15_n; k++)
             if (v15_recs[k].index > i0 && v15_recs[k].index < R->f.index - 1) {
-                if (!nf) first = v15_recs[k].planned;
+                if (!nf) first = v15_recs[k].target;
                 before = last;
-                last = v15_recs[k].planned;
+                last = v15_recs[k].target;
                 nf++;
             }
         CHECK(nf >= 2 && last - first >= YRT_MS(5) && before - first < YRT_MS(5));
