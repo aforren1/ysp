@@ -26,8 +26,11 @@ it requires. The four adaptive-method sources also include
 `ysp_mex_util.h`, a binding-internal header with the handle table and the
 argument helpers; a copy of one of those sources needs that file beside it.
 
-[test_mex.m](test_mex.m) runs the key checks of the four adaptive modules in
-MATLAB or Octave and prints `PASS`. [test_mex_color.m](test_mex_color.m) does
+[test_mex.m](test_mex.m) runs the key checks of the four adaptive modules and
+of `ysp_serial` in MATLAB or Octave and prints `PASS`. Without a port it
+checks `ysp_serial`'s arguments and handles only; with the environment
+variable `YSP_TEST_ECHO_PORT` set to the port of an echo board
+(`firmware/ysp_echo`) it also runs the async reader on a 2000-line stream. [test_mex_color.m](test_mex_color.m) does
 the same for `ysp_color` (compiles nothing but ysp/color.h and
 `ysp_mex_util.h`); `tests/compare/color_ptb.m` compares it with
 Psychtoolbox's colorimetric code.
@@ -151,6 +154,9 @@ data = ysp_serial('read',      h, 64, 0);           % poll: [] if nothing
 ysp_serial('pulse',      h, 85, 0, 2000);      % blocking: 85, 2 ms, then 0
 ysp_serial('pulseasync', h, 85, 0, 2000);      % non-blocking (RT worker)
 info = ysp_serial('info', h);                  % effective settings
+ysp_serial('async_start', h, 10);              % reader thread, lines end in LF
+[lines, t_us] = ysp_serial('async_read', h);   % lines since the last call
+st = ysp_serial('async_stop', h);              % counts: dropped, overlong, ...
 ysp_serial('close', h);
 ```
 
@@ -208,7 +214,11 @@ policy the worker actually obtained, which is not always the one requested.
 | `'lines', h` | struct | `mask` plus `cts`, `dsr`, `ri`, `dcd` logicals |
 | `'break', h, ms` | none | hold TX in the break state |
 | `'info', h` | struct | effective settings, `async_policy` as a string, and `rd_oserr` / `wr_oserr` / `misc_oserr` |
-| `'close', h` | none | release the port |
+| `'async_start', h [, terminator [, lines [, max_len]]]` | none | start the reader thread; defaults `10` (LF), `8192` lines, `256` bytes per line; see below |
+| `'async_read', h [, max_lines]` | `lines` [, `t_us`, `t_first_us`] | the complete lines since the last call: a cell column of `uint8` rows (terminator included) and two `double` columns of stamps |
+| `'async_stop', h` | struct (optional) | stop the reader thread; fields `pending` (lines not read, discarded), `dropped`, `overlong`, `bytes`, `reads`, `error` |
+| `'version'` | string | the version of ysp/serial.h in this build; opens nothing |
+| `'close', h` | none | release the port; stops a running reader first |
 
 `write`, `writebyte`, `pulse` and `pulseasync` return their count only when
 you ask for it (`n = ysp_serial('write', ...)`), so a bare call prints
@@ -224,6 +234,7 @@ code, so a script can branch on it:
 | `ysp_serial:disconnected` | the device went away (USB unplug); close the handle |
 | `ysp_serial:closed` | the port is not open |
 | `ysp_serial:interrupted` | `interrupt` woke a blocked `read` |
+| `ysp_serial:async` | an async call with no reader running, a second `async_start`, or a reader-role call (`read`, `available`, `interrupt`, `purge` of `'rx'` or `'both'`) while the reader runs |
 | `ysp_serial:arg` | bad argument |
 | `ysp_serial:open`, `ysp_serial:handle`, `ysp_serial:usage` | open failure, bad handle, bad call |
 
@@ -258,8 +269,53 @@ end
 
 `interrupt` latches a wake that the *next* `read` consumes, so on one thread it
 only makes that read return immediately with `ysp_serial:interrupted`. It
-exists for symmetry with the C API; a real cross-thread wake needs the C API,
-not MEX.
+exists for symmetry with the C API. To receive while the script does other
+work, use the async reader below.
+
+### Asynchronous read: lines stamped when they arrive
+
+A `read` can stamp its bytes only when the script gets round to calling it.
+`async_start` starts a C thread that does what ysp/device.h's reader does: it
+blocks in `yser_read`, takes `now_us` when each read returns, cuts the bytes
+into lines at the terminator and keeps the lines in a ring. The script
+collects them with `async_read` whenever it likes, for example once per frame:
+
+```matlab
+ysp_serial('async_start', h, 10);             % LF ends a line
+ysp_serial('write', h, uint8(sprintf('s 1000 500\n')));   % writes stay allowed
+for frame = 1:60
+    % ... draw, flip ...
+    [lines, t_us, t_first_us] = ysp_serial('async_read', h);
+    for i = 1:numel(lines)
+        fprintf('%s arrived at %.0f us\n', char(lines{i}(1:end-1)), t_us(i));
+    end
+end
+st = ysp_serial('async_stop', h);             % st.dropped == 0: nothing lost
+```
+
+- `t_us` is `now_us` when the read that brought the line's terminator
+  returned; `t_first_us` is the same for the line's first byte. They are
+  microseconds on the `now_us` clock, with a fraction.
+- The thread owns the reader role of the header's THREADING rule while it
+  runs. `read`, `available`, `interrupt` and an RX purge raise
+  `ysp_serial:async`; `write`, `writebyte`, the pulses, the modem lines and
+  a TX purge stay allowed.
+- The ring and the line buffer are allocated by `async_start` (`lines` times
+  `max_len` bytes); the thread allocates nothing after that. A full ring
+  drops the newest complete line and counts it in `dropped`; it never
+  overwrites a line that `async_read` has not returned. A line longer than
+  `max_len` is cut and counted in `overlong`.
+- The thread raises its own priority with `yrt_thread_elevate`, as
+  ysp/device.h does. If the port fails (an unplug), the thread stops;
+  `async_read` returns the lines it has, then raises the error.
+- `async_stop` wakes the thread with `interrupt` and joins it; `close` and
+  `clear ysp_serial` do the same. After `async_stop` a plain `read` works
+  again.
+
+What it measured on a Teensy 4.0 against MATLAB's callback and IOPort's
+background reader is in
+[docs/serial.md](../../docs/serial.md#results-with-the-teensy-40-echo-board).
+The Python binding has no async reader yet.
 
 Device naming, USB latency, DTR-driven board resets and what a serial trigger
 is worth in timing terms are documented in the header:
