@@ -21,6 +21,9 @@
  * Exit code: 0; 1 when the screen did not open; 2 for a bad argument.
  * Shift+Esc (or the page's Stop button) ends the run early.
  */
+#if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_WARNINGS)
+#define _CRT_SECURE_NO_WARNINGS
+#endif
 #define YSP_SCREEN_IMPLEMENTATION
 #include "ysp/screen.h"
 
@@ -84,7 +87,7 @@ int main(int argc, char** argv) {
     yrt_clock_info ci;
     char line[1536], json[8192];
     int i, n = 0, n_iv = 0, n_res = 0, frames = 600, w = 640, h = 360, sim = 0, aborted = 0;
-    double load_ms = 0, prev_raf = 0;
+    double load_ms = 0;
     int64_t prev_onset = 0, prev_index = -1, dropped = 0, early = 0, keys = 0;
     clear_color_fn clear_color;
     clear_fn clear;
@@ -97,6 +100,7 @@ int main(int argc, char** argv) {
     yrt_corr_desc cd;
     yrt_corr corr;
     int64_t perf_off = 0;   /* ysp_rt ns minus performance.now() ns */
+    double prev_raf = 0;
 #endif
 
     for (i = 1; i < argc; i++) {

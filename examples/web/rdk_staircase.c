@@ -12,7 +12,8 @@
  * 1971), from 0.5, steps 0.3, 0.15 and 0.1 log10 units, coherence 0.01 to
  * 1, 1-down 1-up until the first reversal. It stops after 8 reversals or
  * 40 trials; the estimate is the geometric mean of the last 6 reversals. A
- * trial with no response is not given to the staircase.
+ * trial with no response is not given to the staircase; 60 trials with
+ * those end the run.
  *
  * Columns: trial, coherence, direction, response, rt_s, correct,
  * reversal, onset_tier, frames_dropped, then the constant columns coi,
@@ -73,6 +74,7 @@ enum { END_OF_TRIAL = 1 };
 #define N_DOTS     150
 #define FIELD_PX   360
 #define SIM_THRESHOLD 0.15
+#define MAX_TRIALS 60       /* with misses: a participant who left ends the run */
 
 static const yrsp_choice keys[] = { { .key = "left" }, { .key = "right" } };
 
@@ -272,7 +274,7 @@ int main(int argc, char** argv) {
 
         if (!in_trial) {
             ytl_seq q;
-            if (yst_done(&stair)) break;
+            if (yst_done(&stair) || trial >= MAX_TRIALS) break;   /* misses are not the staircase's */
             coherence = yst_next(&stair);
             answer = uniform(&rng) < 0.5;   /* 1: rightward (0 deg) */
             rdk.coherence = (float)coherence;
@@ -389,7 +391,7 @@ int main(int argc, char** argv) {
         ygfx_end(&gfx);
         yscr_flip(&scr);
     }
-    if (yst_estimate_count(&stair, YST_EST_REVERSALS) > 0) threshold = pow(10.0, yst_estimate(&stair, YST_EST_REVERSALS));
+    if (yst_estimate_count(&stair, YST_EST_REVERSALS) > 0) threshold = yst_estimate(&stair, YST_EST_REVERSALS);   /* LOG steps: the geometric mean */
     if (ytr_data_finish(&data) < 0) { fprintf(stderr, "web_rdk_staircase: %s\n", ytr_data_error(&data)); failed = 1; }
     ytr_data_close(&data);
     yscr_wait_flip(&scr, NULL);

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ysp demo: stimulus gallery</title>
+<script src="coi-serviceworker.js"></script>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:,">
+</head>
+<body>
+<p><a href="index.html">ysp web demos</a></p>
+<h1>Stimulus gallery</h1>
+<div class="notice"><strong>Browser timing is not rig timing, and browser color is not calibrated
+color.</strong> The browser composites this canvas and may convert its colors for the display. The
+gallery shows what <code>ysp/gfx.h</code> draws, not luminance on this screen.
+<a href="https://github.com/aforren1/ysp/blob/main/docs/web.md">How the web backend works</a>.</div>
+<div id="status" class="status"></div>
+
+<div id="intro" class="panel">
+  <p>Eight pages of tiles, one feature per tile: gratings, Gabors, noise and dots; shapes and strokes;
+     paint and color spaces; images, masks and render targets; instances; curve text; the output stage.
+     Some tiles move on a <code>ysp/timeline.h</code> time base.</p>
+  <p>The program is <code>examples/gfx/gallery.c</code>, compiled for the browser without a change.
+     The 1200 x 760 canvas needs a wide window.</p>
+  <p>Right arrow, Down arrow or Space: next page. Left arrow or Up arrow: previous page. 1 to 8: that page.
+     Shift+Esc or Stop: end.</p>
+  <p><label><input type="checkbox" id="fs"> Fullscreen</label></p>
+  <button id="start" data-ready="Start" disabled>Loading...</button>
+</div>
+
+<div id="stage"><canvas id="canvas" tabindex="-1"></canvas></div>
+<p><button id="stop" class="secondary" disabled>Stop</button></p>
+
+<h2>Log</h2>
+<div id="log"></div>
+
+<script>
+window.yspPage = { name: 'gallery', args: () => [] };
+</script>
+<script src="ysp-web.js"></script>
+<script>
+document.getElementById('start').onclick = () => ysp.start({ fullscreen: document.getElementById('fs').checked });
+// gallery.c ends its loop at the next frame after an abort and returns.
+document.getElementById('stop').onclick = () => { ysp.stop(); setTimeout(ysp.finish, 500); };
+</script>
+<script src="gallery.js" async></script>
+</body>
+</html>

@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ysp demo: dot motion threshold</title>
+<script src="coi-serviceworker.js"></script>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:,">
+</head>
+<body>
+<p><a href="index.html">ysp web demos</a></p>
+<h1>Dot motion: a coherence threshold with a staircase</h1>
+<div class="notice"><strong>Browser timing is not rig timing.</strong> The times on this page are what the
+browser reports. The browser does not report when the display showed a frame, so the onsets are
+estimates. The threshold does not depend on them, but the dot speed and size are in pixels of this
+screen, not in degrees. <a href="https://github.com/aforren1/ysp/blob/main/docs/web.md">How the web backend works</a>.</div>
+<div id="status" class="status"></div>
+
+<div id="intro" class="panel">
+  <h2>Instructions</h2>
+  <p>Each trial shows a cross, then a cloud of moving dots. Some of the dots move together to the
+     left or to the right; the rest move at random.</p>
+  <p>Press the <strong>Left arrow</strong> or the <strong>Right arrow</strong> for the direction of
+     the dots that move together. Keep your eyes on the cross. The cross turns green when you are
+     correct and red when you are not.</p>
+  <p>The task gets harder after correct answers and easier after errors (a 2-down 1-up staircase).
+     It ends after 8 reversals or 40 answered trials (60 in all), about 2 minutes. Shift+Esc or the Stop button ends the
+     run early.</p>
+  <p><label><input type="checkbox" id="fs"> Fullscreen</label></p>
+  <button id="start" data-ready="Start" disabled>Loading...</button>
+</div>
+
+<div id="stage"><canvas id="canvas" tabindex="-1"></canvas></div>
+<p><button id="stop" class="secondary" disabled>Stop</button></p>
+
+<div id="results" class="panel hidden">
+  <h2>Results</h2>
+  <p id="summary"></p>
+  <div id="rows"></div>
+  <p><button id="csv">Download the data (CSV)</button>
+     <button id="session" class="secondary">Download the session log</button></p>
+</div>
+
+<h2>Log</h2>
+<div id="log"></div>
+
+<script>
+window.yspPage = { name: 'rdk_staircase', args: () => [] };
+</script>
+<script src="ysp-web.js"></script>
+<script>
+document.getElementById('start').onclick = () => ysp.start({ fullscreen: document.getElementById('fs').checked });
+document.getElementById('stop').onclick = () => ysp.stop();
+document.getElementById('csv').onclick = () => ysp.download('ysp_rdk_staircase.csv', Module.yspCsv, 'text/csv');
+document.getElementById('session').onclick = () => ysp.download('ysp_rdk_session.txt', ysp.sessionText());
+Module.onYspDone = () => {
+  ysp.finish();
+  const t = Module.yspThreshold, n = Module.yspReversals;
+  document.getElementById('summary').textContent = (isFinite(t) && n > 0)
+    ? 'Threshold (70.7 % correct): coherence ' + t.toFixed(3) + ', the geometric mean of the last ' + n + ' reversals.'
+    : 'No threshold: the staircase had no reversals yet.';
+  ysp.table(document.getElementById('rows'), ysp.parseCsv(Module.yspCsv),
+    ['trial', 'coherence', 'direction', 'response', 'rt_s', 'correct', 'reversal', 'frames_dropped']);
+};
+</script>
+<script src="rdk_staircase.js" async></script>
+</body>
+</html>

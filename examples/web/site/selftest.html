@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ysp demo: browser timing self-test</title>
+<script src="coi-serviceworker.js"></script>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:,">
+</head>
+<body>
+<p><a href="index.html">ysp web demos</a></p>
+<h1>Browser timing self-test</h1>
+<div class="notice"><strong>Browser timing is not rig timing.</strong> This page measures what a browser
+lets a page see: when the browser began each frame, how fine its clock is, whether the page is
+isolated, and when the page was hidden. It cannot see when the display showed a frame. A photodiode
+on a lab rig measures that; a browser never does.
+<a href="https://github.com/aforren1/ysp/blob/main/docs/web.md">What a browser can and cannot claim</a>.</div>
+<div id="status" class="status"></div>
+
+<div id="intro" class="panel">
+  <p>The test draws a gray field with a bar that moves one step per frame, for the number of frames
+     below. A skipped frame shows as a jump of the bar and as an interval near twice the period.
+     Press a few keys during the run to measure how late the program sees a key after the browser
+     stamped it.</p>
+  <p><label>Frames <input type="number" id="frames" value="600" min="2" max="36000"></label>
+     <label>Busy time per frame (ms) <input type="number" id="load" value="0" min="0" max="100" step="1"></label></p>
+  <p><label><input type="checkbox" id="fs"> Fullscreen</label></p>
+  <button id="start" data-ready="Start" disabled>Loading...</button>
+</div>
+
+<div id="stage"><canvas id="canvas" tabindex="-1"></canvas></div>
+<p><button id="stop" class="secondary" disabled>Stop</button></p>
+
+<div id="results" class="panel hidden">
+  <h2>Intervals between frame callbacks</h2>
+  <div id="hist" class="chart"></div>
+  <div id="tip" class="tip"></div>
+  <h2>Summary</h2>
+  <div id="summary"></div>
+  <p><button id="json">Download the results (JSON)</button>
+     <button id="session" class="secondary">Download the session log</button></p>
+</div>
+
+<h2>Log</h2>
+<div id="log"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+window.yspPage = { name: 'selftest', args: () => ['--frames', String($('frames').value | 0), '--load-ms', String(+$('load').value || 0)] };
+// The DOM's own times of each key, to compare with the stamps the program got.
+const domKeys = [];
+window.addEventListener('keydown', (e) => { if (!e.repeat) domKeys.push([1, e.timeStamp]); }, true);
+window.addEventListener('keyup', (e) => domKeys.push([0, e.timeStamp]), true);
+</script>
+<script src="ysp-web.js"></script>
+<script>
+$('start').onclick = () => ysp.start({ fullscreen: $('fs').checked });
+$('stop').onclick = () => ysp.stop();
+$('json').onclick = () => ysp.download('ysp_selftest.json', JSON.stringify(Object.assign({ page: ysp.status, keys: keyStats() }, Module.yspResult), null, 1), 'application/json');
+$('session').onclick = () => ysp.download('ysp_selftest_session.txt', ysp.sessionText());
+
+// The program's stamp minus the DOM's timeStamp, per key event, paired in
+// order by type. Both are performance.now() times.
+function keyStats() {
+  const sdl = (Module.yspKeys || []), d = [];
+  for (const type of [1, 0]) {
+    const a = sdl.filter((k) => k[0] === type), b = domKeys.filter((k) => k[0] === type);
+    for (let i = 0; i < Math.min(a.length, b.length); i++) d.push(a[i][1] - b[i][1]);
+  }
+  d.sort((x, y) => x - y);
+  return { n: d.length, p50_ms: d.length ? d[Math.floor((d.length - 1) / 2)] : null, max_ms: d.length ? d[d.length - 1] : null };
+}
+
+function histogram(el, r) {
+  const bin = r.bin_ms, h = r.hist;
+  let lo = h.findIndex((x) => x > 0), hi = h.length - 1 - [...h].reverse().findIndex((x) => x > 0);
+  if (lo < 0) { el.textContent = 'No intervals.'; return; }
+  lo = Math.max(0, lo - 4); hi = Math.min(h.length - 1, hi + 4);
+  const W = 720, H = 220, L = 48, R = 24, B = 34, T = 10, n = hi - lo + 1, bw = (W - L - R) / n;
+  const max = Math.max(...h.slice(lo, hi + 1));
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  svg.setAttribute('width', '100%');
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', 'Histogram of the intervals between frame callbacks');
+  const add = (tag, attrs, text) => { const e = document.createElementNS(ns, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; svg.appendChild(e); return e; };
+  add('line', { x1: L, x2: W - R, y1: H - B, y2: H - B, class: 'axis' });
+  const tip = $('tip');
+  for (let i = lo; i <= hi; i++) {
+    if (!h[i]) continue;
+    const bh = Math.max(1, (H - B - T) * h[i] / max), x = L + (i - lo) * bw;
+    const label = (i * bin).toFixed(2) + (i === h.length - 1 ? '+ ms: ' : '–' + ((i + 1) * bin).toFixed(2) + ' ms: ') + h[i];
+    // the hit target is the full column, larger than the bar
+    const hit = add('rect', { x: x, y: T, width: bw, height: H - B - T, fill: 'transparent' });
+    add('rect', { x: x + 1, y: H - B - bh, width: Math.max(1, bw - 2), height: bh, rx: Math.min(4, bw / 3), class: 'bar' });
+    hit.addEventListener('mousemove', (e) => { tip.style.display = 'block'; tip.style.left = (e.clientX + 12) + 'px'; tip.style.top = (e.clientY - 28) + 'px'; tip.textContent = label; });
+    hit.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+  }
+  const step = Math.max(1, Math.round(n / 8));
+  for (let i = lo; i <= hi + 1; i += step)
+    add('text', { x: L + (i - lo) * bw, y: H - B + 16, 'text-anchor': 'middle' }, (i * bin).toFixed(2));
+  add('text', { x: (L + W) / 2, y: H - 4, 'text-anchor': 'middle' }, 'interval between callbacks (ms)');
+  add('text', { x: L - 6, y: T + 10, 'text-anchor': 'end' }, String(max));
+  add('text', { x: L - 6, y: H - B, 'text-anchor': 'end' }, '0');
+  add('text', { x: 12, y: (H - B) / 2, 'text-anchor': 'middle', transform: 'rotate(-90 12 ' + (H - B) / 2 + ')' }, 'callbacks');
+  el.innerHTML = '';
+  el.appendChild(svg);
+}
+
+Module.onYspResult = (r) => {
+  ysp.finish();
+  histogram($('hist'), r);
+  const k = keyStats(), f = (x, d) => (x == null ? '-' : x.toFixed(d));
+  const rows = [
+    ['frames', r.frames], ['intervals', r.intervals],
+    ['mean interval (ms)', f(r.mean_ms, 4)], ['SD (ms)', f(r.sd_ms, 4)],
+    ['min, p1, p50, p99, max (ms)', [r.min_ms, r.p1_ms, r.p50_ms, r.p99_ms, r.max_ms].map((x) => f(x, 3)).join(', ')],
+    ['frames dropped (records)', r.dropped], ['frames early (records)', r.early],
+    ['program time per frame, p50 and p99 (ms)', f(r.cost_p50_ms, 3) + ', ' + f(r.cost_p99_ms, 3)],
+    ['callback to program, p50 and p99 (ms)', f(r.resume_p50_ms, 3) + ', ' + f(r.resume_p99_ms, 3)],
+    ['clock step (program, ns)', r.clock_step_ns], ['clock step (page, µs)', ysp.status.clock_step_us],
+    ['cross-origin isolated', ysp.status.coi ? 'yes' : 'no'],
+    ['keys paired', k.n], ['key: program stamp minus DOM time, p50 and max (ms)', f(k.p50_ms, 3) + ', ' + f(k.max_ms, 3)],
+    ['screen', r.describe],
+  ];
+  const t = document.createElement('table');
+  for (const [a, b] of rows) { const tr = t.insertRow(); const th = document.createElement('th'); th.textContent = a; tr.appendChild(th); const td = tr.insertCell(); td.textContent = b; td.style.textAlign = 'left'; }
+  $('summary').innerHTML = '';
+  $('summary').appendChild(t);
+  Module.yspScreen = r.describe;
+};
+</script>
+<script src="selftest.js" async></script>
+</body>
+</html>
