@@ -27,7 +27,8 @@ function R = serial_bench(varargin)
 %     port         COM port, '' for none ['']
 %     device       'none' | 'loopback' | 'echo' ['none']
 %     baud         [115200]
-%     apis         {'serialport', 'ioport', 'ysp'} [all three]
+%     apis         {'serialport', 'ioport', 'ioport_tuned', 'ysp'} [all four];
+%                  ioport_tuned is IOPort with its latency options (sb_ioport.m)
 %     parts        cell of part names [all]
 %     ioport_dir   folder put first on the path for IOPort and GetSecs ['']
 %     ysp_dir      folder with ysp_serial.<mexext> [bindings/mex of this repo]
@@ -45,7 +46,7 @@ function R = serial_bench(varargin)
     here = fileparts(mfilename('fullpath'));
     cfg = struct( ...
         'port', '', 'device', 'none', 'baud', 115200, ...
-        'apis', {{'serialport', 'ioport', 'ysp'}}, ...
+        'apis', {{'serialport', 'ioport', 'ioport_tuned', 'ysp'}}, ...
         'parts', {{'clock', 'noport', 'calls', 'rt', 'stream'}}, ...
         'ioport_dir', '', ...
         'ysp_dir', fullfile(here, '..', '..', '..', 'bindings', 'mex'), ...
@@ -97,7 +98,8 @@ function R = serial_bench(varargin)
         try
             switch api
                 case 'serialport', R = sb_serialport(cfg, R);
-                case 'ioport',     R = sb_ioport(cfg, R);
+                case 'ioport',     R = sb_ioport(cfg, R, false);
+                case 'ioport_tuned', R = sb_ioport(cfg, R, true);
                 case 'ysp',        R = sb_ysp(cfg, R);
             end
         catch e
@@ -120,7 +122,7 @@ function [ok, why] = sb_probe_api(cfg, api)
                 return;
             end
             why = sprintf('MATLAB %s', version);
-        case 'ioport'
+        case {'ioport', 'ioport_tuned'}
             if ~isempty(cfg.ioport_dir), addpath(cfg.ioport_dir, '-begin'); end
             if isempty(which('IOPort'))
                 why = 'IOPort is not on the path (install Psychtoolbox or pass ioport_dir)';
@@ -168,7 +170,7 @@ end
 function c = sb_clock_name(api)
     switch api
         case 'serialport', c = 'tic/toc';
-        case 'ioport',     c = 'GetSecs';
+        case {'ioport', 'ioport_tuned'}, c = 'GetSecs';
         case 'ysp',        c = 'ysp_serial now_us';
         otherwise,         c = '';
     end
@@ -190,14 +192,14 @@ function sb_write_summary(cfg, R)
     fid = fopen(fullfile(cfg.out, 'summary.csv'), 'w');
     c1 = onCleanup(@() fclose(fid));
     fprintf(fid, 'api,part,metric,clock,n,median,p99,max,min,mean,note\n');
-    lines = {sprintf('%-10s %-7s %-34s %6s %10s %10s %10s %10s  %s', ...
+    lines = {sprintf('%-12s %-7s %-34s %6s %10s %10s %10s %10s  %s', ...
                      'api', 'part', 'metric', 'n', 'median', 'p99', 'max', 'mean', 'note')};
     for i = 1:numel(R)
         s = sb_stats(R(i).values);
         note = strrep(R(i).note, '"', '''');
         fprintf(fid, '%s,%s,%s,%s,%d,%.6g,%.6g,%.6g,%.6g,%.6g,"%s"\n', R(i).api, R(i).part, ...
                 R(i).metric, sb_clock_name(R(i).api), s.n, s.median, s.p99, s.max, s.min, s.mean, note);
-        lines{end + 1} = sprintf('%-10s %-7s %-34s %6d %10.4g %10.4g %10.4g %10.4g  %s', ...
+        lines{end + 1} = sprintf('%-12s %-7s %-34s %6d %10.4g %10.4g %10.4g %10.4g  %s', ...
                                  R(i).api, R(i).part, R(i).metric, s.n, s.median, s.p99, s.max, s.mean, note); %#ok<AGROW>
     end
     txt = strjoin(lines, newline);
@@ -232,7 +234,7 @@ function sb_write_conditions(cfg, avail)
     for i = 1:numel(names)
         fprintf(fid, 'api %s: %s\n', names{i}, mat2str(avail.(names{i})));
     end
-    if isfield(avail, 'ioport') && avail.ioport
+    if (isfield(avail, 'ioport') && avail.ioport) || (isfield(avail, 'ioport_tuned') && avail.ioport_tuned)
         fprintf(fid, 'IOPort: %s at %s\n', sb_ptb_version(IOPort('Version')), which('IOPort'));
     end
     if isfield(avail, 'ysp') && avail.ysp

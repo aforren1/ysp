@@ -1,10 +1,11 @@
 function R = sb_ysp(cfg, R)
 %SB_YSP  serial_bench parts for the ysp_serial MEX binding (ysp/serial.h).
 %   Clock: ysp_serial('now_us'), which is yrt_now_us(): QueryPerformanceCounter
-%   on Windows, CLOCK_MONOTONIC elsewhere, in whole microseconds. The binding
+%   on Windows, CLOCK_MONOTONIC elsewhere, in whole microseconds. 'read'
 %   gives no receive stamp of its own; the stamp is now_us after the read
-%   returns. It has no asynchronous read (a C program runs a reader thread,
-%   as ysp/device.h does), so the stream part has no 'async' mode.
+%   returns. The stream part's 'async' mode uses the binding's reader thread
+%   ('async_start'), which stamps each line on the same clock when the read
+%   that brought its newline returns.
     A = 'ysp';
     clk = @() ysp_serial('now_us');
 
@@ -145,12 +146,50 @@ function R = sb_ysp(cfg, R)
         L = 26;
         nlines = round(cfg.stream_hz * cfg.stream_s);
         for mode = {'line', 'poll', 'async'}
+            P1 = sb_ysp_rt(h, cfg, cfg.n_probe, 1e6, 'block', clk);
             if strcmp(mode{1}, 'async')
-                R = sb_add(R, A, 'stream', 'async_unavailable', NaN, ...
-                           'the MEX binding has no asynchronous read; C code uses a reader thread (ysp/device.h)');
+                % The binding's reader thread stamps each line with the
+                % library clock when the read that brought its newline
+                % returns; the main thread empties the ring every 0.1 s.
+                ysp_serial('async_start', h, 10, nlines + 1000, 64);
+                pause(0.05);
+                dw = zeros(20, 1);
+                for j = 1:20
+                    a = ysp_serial('now_us');
+                    while ysp_serial('now_us') - a < 1000, end
+                    a = ysp_serial('now_us');
+                    ysp_serial('write', h, uint8(10));
+                    dw(j) = ysp_serial('now_us') - a;
+                end
+                R = sb_add(R, A, 'stream', 'async_write_call', dw, ...
+                           'write(h, newline) while the reader thread waits for a byte');
+                a = ysp_serial('now_us');
+                ysp_serial('write', h, uint8(sprintf('s %d %d\n', cfg.stream_hz, nlines)));
+                c0 = cputime; w0 = ysp_serial('now_us');
+                R = sb_add(R, A, 'stream', 'async_cmd_write_call', w0 - a, ...
+                           'write(h, stream command) with the reader thread running');
+                deadline = w0 + (cfg.stream_s + 2) * 1e6;
+                L_ = {}; T_ = []; F_ = [];
+                while numel(L_) < nlines && ysp_serial('now_us') < deadline
+                    pause(0.1);
+                    [l, te, tf] = ysp_serial('async_read', h);
+                    L_ = [L_; l]; T_ = [T_; te]; F_ = [F_; tf]; %#ok<AGROW>
+                end
+                w1 = ysp_serial('now_us'); c1 = cputime;
+                st = ysp_serial('async_stop', h);
+                ysp_serial('write', h, uint8(sprintf('x\n')));
+                pause(0.05);
+                ysp_serial('purge', h, 'rx');
+                P2 = sb_ysp_rt(h, cfg, cfg.n_probe, 2e6, 'block', clk);
+                S.reads = L_; S.host = nan(numel(L_), 1); S.stamp = T_;
+                S.probe = sb_cat_probes(P1, P2);
+                S.nlines = nlines; S.cpu_s = c1 - c0; S.wall_s = (w1 - w0) / 1e6;
+                S.note = sprintf(['async_start reader thread, stamp when the read with the newline returned ' ...
+                    '(first-byte stamp differs on %d lines); main thread in pause(0.1), then async_read; ' ...
+                    '%d dropped'], sum(F_ ~= T_), st.dropped);
+                R = sb_stream_rows(R, A, mode{1}, S, cfg);
                 continue;
             end
-            P1 = sb_ysp_rt(h, cfg, cfg.n_probe, 1e6, 'block', clk);
             reads = cell(nlines + 100, 1); host = nan(nlines + 100, 1); nr = 0; got = 0;
             c0 = cputime; w0 = ysp_serial('now_us');
             ysp_serial('write', h, uint8(sprintf('s %d %d\n', cfg.stream_hz, nlines)));

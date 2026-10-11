@@ -19,6 +19,9 @@
  *     t    = ysp_serial('now_us')                       % library clock (us),
  *                                                       % same clock as
  *                                                       % ysp_parallel('now_us')
+ *     ysp_serial('async_start', h, 10)                  % reader thread, lines
+ *     [lines, t_us, t_first_us] = ysp_serial('async_read', h)
+ *     st   = ysp_serial('async_stop', h)
  *     ysp_serial('close',      h)
  *
  * Build with build.m (MATLAB or Octave). See README.md.
@@ -53,6 +56,167 @@
 #define YSP_SERIAL_IMPLEMENTATION
 #include "ysp/serial.h"
 
+#if defined(_WIN32)
+    #ifndef WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN
+    #endif
+    #include <windows.h>
+#else
+    #include <pthread.h>
+#endif
+
+/* ---- async reader ------------------------------------------------------- */
+/* MATLAB runs every MEX call on its one interpreter thread, so a blocking
+ * 'read' cannot stamp a line when it arrives, only when the script gets round
+ * to the read. The async reader is the C pattern of ysp/device.h moved into
+ * the binding: a thread of its own (elevated as device.h elevates its reader)
+ * blocks in yser_read, stamps each chunk with yrt_now_ns() the moment the
+ * read returns, cuts lines at the terminator and keeps them in a bounded ring
+ * that 'async_read' empties. The ring and the line buffer are allocated at
+ * 'async_start', so the reader loop allocates nothing. The thread owns the
+ * reader role of serial.h's THREADING while it runs; the MATLAB thread keeps
+ * the writer role. */
+
+#if defined(_WIN32)
+typedef CRITICAL_SECTION ps_mutex;
+static void ps_lock_init(ps_mutex* m) { InitializeCriticalSection(m); }
+static void ps_lock_free(ps_mutex* m) { DeleteCriticalSection(m); }
+static void ps_lock(ps_mutex* m)      { EnterCriticalSection(m); }
+static void ps_unlock(ps_mutex* m)    { LeaveCriticalSection(m); }
+#else
+typedef pthread_mutex_t ps_mutex;
+static void ps_lock_init(ps_mutex* m) { pthread_mutex_init(m, NULL); }
+static void ps_lock_free(ps_mutex* m) { pthread_mutex_destroy(m); }
+static void ps_lock(ps_mutex* m)      { pthread_mutex_lock(m); }
+static void ps_unlock(ps_mutex* m)    { pthread_mutex_unlock(m); }
+#endif
+
+typedef struct ps_async {
+    yser_port* port;
+    ps_mutex   lock;
+#if defined(_WIN32)
+    HANDLE     thread;
+#else
+    pthread_t  thread;
+#endif
+    /* Ring of line slots, filled by the reader, emptied by async_read. head
+     * and tail only grow; head - tail is the fill. Guarded by lock. */
+    uint8_t*   data;          /* nslots * maxlen */
+    uint16_t*  len;
+    int64_t*   t_first;       /* stamp of the read that brought the first byte */
+    int64_t*   t_end;         /* stamp of the read that brought the terminator */
+    uint32_t   nslots, maxlen;
+    uint64_t   head, tail;
+    uint64_t   dropped;       /* complete lines lost to a full ring */
+    uint64_t   overlong;      /* lines cut at maxlen */
+    uint64_t   bytes, reads;
+    int        stop;          /* set by async_stop before its interrupt */
+    int        exited;        /* the reader left its loop */
+    int        err;           /* the yser_read code that ended the loop, or 0 */
+    /* Reader-only state: the line being assembled. */
+    uint8_t*   cur;
+    uint32_t   cur_len;
+    int        cur_cut;
+    int64_t    cur_first;
+    uint8_t    term;
+    uint8_t    chunk[4096];
+} ps_async;
+
+static void ps_async_push(ps_async* a, int64_t t_end) {
+    ps_lock(&a->lock);
+    if (a->head - a->tail < a->nslots) {
+        uint32_t s = (uint32_t)(a->head % a->nslots);
+        memcpy(a->data + (size_t)s * a->maxlen, a->cur, a->cur_len);
+        a->len[s] = (uint16_t)a->cur_len;
+        a->t_first[s] = a->cur_first;
+        a->t_end[s] = t_end;
+        a->head++;
+    } else {
+        a->dropped++;
+    }
+    if (a->cur_cut) a->overlong++;
+    ps_unlock(&a->lock);
+    a->cur_len = 0;
+    a->cur_cut = 0;
+}
+
+static void ps_async_loop(ps_async* a) {
+    (void)yrt_thread_elevate(NULL);
+    for (;;) {
+        /* Finite slices only so a wedged driver cannot hold the thread past
+         * async_stop forever; the interrupt from async_stop is what normally
+         * ends the wait. */
+        int n = yser_read(a->port, a->chunk, (int)sizeof a->chunk, YRT_MS(200), YSER_READ_ANY);
+        int64_t t = yrt_now_ns();
+        if (n == YSER_ERR_INTERRUPTED) {
+            /* The loop leaves only on the interrupt that async_stop sends after
+             * it sets stop, so the latched wake is always consumed here and no
+             * later 'read' on the MATLAB thread sees a stale one. */
+            int s;
+            ps_lock(&a->lock);
+            s = a->stop;
+            ps_unlock(&a->lock);
+            if (s) break;
+            continue;
+        }
+        if (n < 0) {
+            ps_lock(&a->lock);
+            a->err = n;
+            ps_unlock(&a->lock);
+            break;
+        }
+        if (n == 0) continue;
+        a->bytes += (uint64_t)n;
+        a->reads++;
+        for (int i = 0; i < n; i++) {
+            uint8_t c = a->chunk[i];
+            if (a->cur_len == 0 && !a->cur_cut) a->cur_first = t;
+            if (a->cur_len < a->maxlen) a->cur[a->cur_len++] = c;
+            else a->cur_cut = 1;
+            if (c == a->term) ps_async_push(a, t);
+        }
+    }
+    ps_lock(&a->lock);
+    a->exited = 1;
+    ps_unlock(&a->lock);
+    yrt_thread_cleanup();
+}
+
+#if defined(_WIN32)
+static DWORD WINAPI ps_async_main(LPVOID arg) { ps_async_loop((ps_async*)arg); return 0; }
+#else
+static void* ps_async_main(void* arg) { ps_async_loop((ps_async*)arg); return NULL; }
+#endif
+
+static void ps_async_free(ps_async* a) {
+    if (!a) return;
+    free(a->data); free(a->len); free(a->t_first); free(a->t_end); free(a->cur);
+    free(a);
+}
+
+/* Stop and join. Returns the reader's error code (0 if it stopped cleanly). */
+static int ps_async_join(ps_async* a) {
+    int exited, err;
+    ps_lock(&a->lock);
+    a->stop = 1;
+    exited = a->exited;
+    ps_unlock(&a->lock);
+    /* A reader that already left on an error is not reading, and a wake sent
+     * now would stay latched for the next 'read' on the MATLAB thread. */
+    if (!exited) (void)yser_interrupt(a->port);
+#if defined(_WIN32)
+    WaitForSingleObject(a->thread, INFINITE);
+    CloseHandle(a->thread);
+#else
+    pthread_join(a->thread, NULL);
+#endif
+    ps_lock(&a->lock);
+    err = a->err;
+    ps_unlock(&a->lock);
+    ps_lock_free(&a->lock);
+    return err;
+}
+
 /* ---- handle table: tracks every open port for cleanup ------------------ */
 /* The handle is `id`, not the port address. malloc happily hands a new port
  * the address a closed one just released, so a pointer handle held in a stale
@@ -61,6 +225,7 @@
 typedef struct ps_node {
     uint64_t        id;
     yser_port*      port;
+    ps_async*       async;   /* NULL unless 'async_start' is running */
     struct ps_node* next;
 } ps_node;
 
@@ -72,6 +237,7 @@ static void ps_cleanup(void) {
     ps_node* n = g_ports;
     while (n) {
         ps_node* next = n->next;
+        if (n->async) { (void)ps_async_join(n->async); ps_async_free(n->async); }
         if (n->port) { yser_close(n->port); free(n->port); }
         free(n);
         n = next;
@@ -91,6 +257,7 @@ static uint64_t ps_register(yser_port* port) {
     }
     n->id = g_next_id++;
     n->port = port;
+    n->async = NULL;
     n->next = g_ports;
     g_ports = n;
     if (!g_atexit_registered) { mexAtExit(ps_cleanup); g_atexit_registered = 1; }
@@ -105,8 +272,8 @@ static void ps_unregister(yser_port* port) {
     }
 }
 
-/* Resolve a handle arg to a registered port pointer; error if unknown. */
-static yser_port* ps_handle(const mxArray* a) {
+/* Resolve a handle arg to its registered node; error if unknown. */
+static ps_node* ps_handle(const mxArray* a) {
     uint64_t id;
     if (mxIsUint64(a))
         id = *(const uint64_t*)mxGetData(a);
@@ -117,7 +284,7 @@ static yser_port* ps_handle(const mxArray* a) {
         return NULL;
     }
     for (ps_node* n = g_ports; n; n = n->next)
-        if (n->id == id) return n->port;
+        if (n->id == id) return n;
     mexErrMsgIdAndTxt("ysp_serial:handle", "invalid or closed port handle");
     return NULL;
 }
@@ -437,6 +604,122 @@ static mxArray* ps_info(const yser_port* p) {
     return s;
 }
 
+/* ---- 'async_start', 'async_read', 'async_stop' ------------------------- */
+
+static void cmd_async_start(ps_node* node, int nrhs, const mxArray* prhs[]) {
+    if (node->async)
+        mexErrMsgIdAndTxt("ysp_serial:async", "async_start: the async reader is already running");
+    uint32_t term = 10, nslots = 8192, maxlen = 256;
+    if (nrhs >= 3) term = ps_byte(prhs[2], "terminator");
+    if (nrhs >= 4) nslots = ps_u32(prhs[3], "lines");
+    if (nrhs >= 5) maxlen = ps_u32(prhs[4], "max_len");
+    if (nslots < 1 || nslots > (1u << 24))
+        mexErrMsgIdAndTxt("ysp_serial:arg", "lines must be 1..16777216");
+    if (maxlen < 1 || maxlen > 65535)
+        mexErrMsgIdAndTxt("ysp_serial:arg", "max_len must be 1..65535");
+    ps_async* a = (ps_async*)calloc(1, sizeof(*a));
+    if (!a) mexErrMsgIdAndTxt("ysp_serial:mem", "out of memory");
+    a->data = (uint8_t*)malloc((size_t)nslots * maxlen);
+    a->len = (uint16_t*)calloc(nslots, sizeof(uint16_t));
+    a->t_first = (int64_t*)calloc(nslots, sizeof(int64_t));
+    a->t_end = (int64_t*)calloc(nslots, sizeof(int64_t));
+    a->cur = (uint8_t*)malloc(maxlen);
+    if (!a->data || !a->len || !a->t_first || !a->t_end || !a->cur) {
+        ps_async_free(a);
+        mexErrMsgIdAndTxt("ysp_serial:mem", "out of memory for %u lines of %u bytes",
+                          (unsigned)nslots, (unsigned)maxlen);
+    }
+    a->port = node->port;
+    a->nslots = nslots;
+    a->maxlen = maxlen;
+    a->term = (uint8_t)term;
+    ps_lock_init(&a->lock);
+#if defined(_WIN32)
+    a->thread = CreateThread(NULL, 0, ps_async_main, a, 0, NULL);
+    int ok = a->thread != NULL;
+#else
+    int ok = pthread_create(&a->thread, NULL, ps_async_main, a) == 0;
+#endif
+    if (!ok) {
+        ps_lock_free(&a->lock);
+        ps_async_free(a);
+        mexErrMsgIdAndTxt("ysp_serial:async", "async_start: could not start the reader thread");
+    }
+    node->async = a;
+}
+
+static ps_async* ps_async_of(ps_node* node, const char* cmd) {
+    if (!node->async)
+        mexErrMsgIdAndTxt("ysp_serial:async", "%s: the async reader is not running (call async_start)", cmd);
+    return node->async;
+}
+
+static void cmd_async_read(ps_node* node, int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
+    ps_async* a = ps_async_of(node, "async_read");
+    uint32_t want = 0xFFFFFFFFu;
+    if (nrhs >= 3) want = ps_u32(prhs[2], "max_lines");
+    uint64_t tail, head;
+    int err;
+    ps_lock(&a->lock);
+    tail = a->tail;
+    head = a->head;
+    err = a->err;
+    ps_unlock(&a->lock);
+    /* Slots in [tail, head) are complete and the reader does not touch them
+     * until tail moves, so they are copied without the lock: the reader is
+     * never held up while MATLAB builds its arrays. */
+    uint64_t n = head - tail;
+    if (n > want) n = want;
+    mxArray* lines = mxCreateCellMatrix((size_t)n, 1);
+    mxArray* tend = mxCreateDoubleMatrix((size_t)n, 1, mxREAL);
+    mxArray* tfirst = mxCreateDoubleMatrix((size_t)n, 1, mxREAL);
+    double* pe = mxGetPr(tend);
+    double* pf = mxGetPr(tfirst);
+    for (uint64_t i = 0; i < n; i++) {
+        uint32_t s = (uint32_t)((tail + i) % a->nslots);
+        mxArray* r = mxCreateNumericMatrix(1, a->len[s], mxUINT8_CLASS, mxREAL);
+        if (a->len[s]) memcpy(mxGetData(r), a->data + (size_t)s * a->maxlen, a->len[s]);
+        mxSetCell(lines, (size_t)i, r);
+        pe[i] = (double)a->t_end[s] / 1000.0;
+        pf[i] = (double)a->t_first[s] / 1000.0;
+    }
+    ps_lock(&a->lock);
+    a->tail = tail + n;
+    ps_unlock(&a->lock);
+    /* A reader that died (unplug, I/O error) says so once its lines are out,
+     * so nothing it collected is lost to the error. */
+    if (n == 0 && err < 0)
+        mexErrMsgIdAndTxt(ps_errid(err), "async reader stopped: %s", yser_strerror(err));
+    plhs[0] = lines;
+    if (nlhs >= 2) plhs[1] = tend; else mxDestroyArray(tend);
+    if (nlhs >= 3) plhs[2] = tfirst; else mxDestroyArray(tfirst);
+}
+
+static mxArray* ps_async_stop(ps_node* node) {
+    ps_async* a = node->async;
+    int err = ps_async_join(a);
+    const char* fields[] = { "pending", "dropped", "overlong", "bytes", "reads", "error" };
+    mxArray* s = mxCreateStructMatrix(1, 1, 6, fields);
+    mxSetField(s, 0, "pending",  mxCreateDoubleScalar((double)(a->head - a->tail)));
+    mxSetField(s, 0, "dropped",  mxCreateDoubleScalar((double)a->dropped));
+    mxSetField(s, 0, "overlong", mxCreateDoubleScalar((double)a->overlong));
+    mxSetField(s, 0, "bytes",    mxCreateDoubleScalar((double)a->bytes));
+    mxSetField(s, 0, "reads",    mxCreateDoubleScalar((double)a->reads));
+    mxSetField(s, 0, "error",    mxCreateString(err < 0 ? yser_strerror(err) : ""));
+    ps_async_free(a);
+    node->async = NULL;
+    return s;
+}
+
+/* A TX purge is writer role and stays allowed while the reader runs. */
+static int ps_is_tx_purge(int nrhs, const mxArray* prhs[]) {
+    if (nrhs < 3 || !mxIsChar(prhs[2])) return 0;
+    char* w = mxArrayToString(prhs[2]);
+    int tx = w && strcmp(w, "tx") == 0;
+    mxFree(w);
+    return tx;
+}
+
 /* ---- dispatch ----------------------------------------------------------- */
 
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
@@ -484,11 +767,41 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         return;
     }
 
+    if (strcmp(cmd, "version") == 0) {
+        plhs[0] = mxCreateString(YSER_VERSION_STRING);
+        mxFree(cmd);
+        return;
+    }
+
     /* all other commands take a handle as the 2nd argument */
     if (nrhs < 2) mexErrMsgIdAndTxt("ysp_serial:usage", "'%s' needs a port handle", cmd);
-    yser_port* port = ps_handle(prhs[1]);
+    ps_node* node = ps_handle(prhs[1]);
+    yser_port* port = node->port;
 
-    if (strcmp(cmd, "write") == 0) {
+    /* The async reader owns the reader role; a second reader would race it
+     * for bytes and for the interrupt latch. */
+    if (node->async &&
+        (strcmp(cmd, "read") == 0 || strcmp(cmd, "available") == 0 ||
+         strcmp(cmd, "interrupt") == 0 ||
+         (strcmp(cmd, "purge") == 0 && !ps_is_tx_purge(nrhs, prhs)))) {
+        char msg[128];
+        snprintf(msg, sizeof(msg), "%s: the async reader owns the input; call async_stop first", cmd);
+        mxFree(cmd);
+        mexErrMsgIdAndTxt("ysp_serial:async", "%s", msg);
+    }
+
+    if (strcmp(cmd, "async_start") == 0) {
+        cmd_async_start(node, nrhs, prhs);
+
+    } else if (strcmp(cmd, "async_read") == 0) {
+        cmd_async_read(node, nlhs, plhs, nrhs, prhs);
+
+    } else if (strcmp(cmd, "async_stop") == 0) {
+        (void)ps_async_of(node, "async_stop");
+        mxArray* s = ps_async_stop(node);
+        if (nlhs >= 1) plhs[0] = s; else mxDestroyArray(s);
+
+    } else if (strcmp(cmd, "write") == 0) {
         if (nrhs < 3) mexErrMsgIdAndTxt("ysp_serial:usage", "write needs data");
         int len = 0;
         const uint8_t* data = ps_write_bytes(prhs[2], &len);
@@ -565,6 +878,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         plhs[0] = ps_info(port);
 
     } else if (strcmp(cmd, "close") == 0) {
+        if (node->async) mxDestroyArray(ps_async_stop(node));
         yser_close(port);
         ps_unregister(port);
         free(port);
