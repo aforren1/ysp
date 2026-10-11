@@ -718,9 +718,13 @@ jobs:
       - uses: actions/checkout@v7
 
       # ysp/gfx.h's test loads EGL at run time: Mesa's, with llvmpipe.
-      - name: Mesa EGL (Linux)
+      # DejaVu Sans is the system font ygfx_text_make() looks for on Linux:
+      # without it trial_keyboard's instruction screen is blank. macOS
+      # installs nothing: ygfx_text_make() takes the Arial or Helvetica
+      # that macOS ships.
+      - name: Mesa EGL and a font (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libegl-mesa0 libgl1-mesa-dri
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libegl-mesa0 libgl1-mesa-dri fonts-dejavu-core
 
       - name: ANGLE cache (Windows)
         if: runner.os == 'Windows'
