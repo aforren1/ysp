@@ -1373,6 +1373,18 @@ extension implements one of these kinds, each a versioned C vtable:
   firmware, then rerun both programs. Public reports agree that Realtek
   drivers offer 480 frames only (miniaudio discussion 1084, issue 949;
   JUCE issue 560); none found measures SST in exclusive mode.
+- The first sound after a long silence (added 2026-10-10). `yau_open()`
+  runs the stream silent until the fit is ready and keeps it running
+  until `yau_close()`, so the OS, driver and DMA path stays awake between
+  sounds (PsychPortAudio does this only in run mode 1). Zeros do not keep
+  awake a sink that gates on digital silence: HDMI and DisplayPort
+  monitors, some USB DACs, and speakers or amplifiers with auto-standby.
+  Such a sink can clip or delay the first sound after a gap. To do, once
+  audio capture exists: on each output path, record the first sound after
+  1, 10 and 60 s of silence against a repeat, by line-in at the jack or a
+  microphone at the speaker, and compare onset time and level. If a path
+  gates, add an opt-in noise floor (dither near -90 dBFS) so that the sink
+  never gets pure zeros; off by default, because it changes the signal.
 
 ## 14. Coverage of jsPsych
 

@@ -476,11 +476,12 @@ int main(int argc, char** argv) {
     else if (sim && !failed) {
         /* 64 samples after the start click; the movement onset 0.30 s
          * after the click, less the wait for the disc's frame, plus a
-         * sample or two to pass 10 px */
+         * sample or two to pass 10 px. The low bound allows 3 frames of
+         * wait: a slow CI runner (macOS) shows 2 */
         int bad = rows != 2;
         if (bad) fprintf(stderr, "trial_mouse_tracking: --sim: %d rows, not 2\n", rows);
         for (i = 0; i < rows && i < 2; i++) {
-            int ok = sim_correct[i] && sim_samples[i] == 64 && sim_init[i] > 0.28 && sim_init[i] < 0.34;
+            int ok = sim_correct[i] && sim_samples[i] == 64 && sim_init[i] > 0.24 && sim_init[i] < 0.34;
             if (i == 1) ok = ok && sim_dev[1] > sim_dev[0] + 50;
             if (!ok) {
                 fprintf(stderr, "trial_mouse_tracking: --sim: trial %d: correct %d, %d samples, init %.9f, deviation %.1f\n",

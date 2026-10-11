@@ -361,10 +361,12 @@ int main(int argc, char** argv) {
             if (!ok) { fprintf(stderr, "audio_schedule: --null: %s %s: rc %d flags 0x%03x residual %lld ns\n", it->part,
                                it->name, it->rc, (unsigned)it->r.flags, (long long)it->r.residual); bad = 1; }
         }
+        /* Each start can move by res_bar with its own refit, so their
+         * distance can move by twice that (CI, Ubuntu: 63 frames) */
         for (k = 1; k < 4; k++)
             if (starts[k]->rc == YAU_OK && starts[k - 1]->rc == YAU_OK &&
                 llabs((starts[k]->r.start_frame - starts[k - 1]->r.start_frame) - (int64_t)(0.2 * caps.rate)) >
-                    (int64_t)caps.rate / 1000) {   /* res_bar in frames */
+                    2 * (int64_t)caps.rate / 1000) {
                 fprintf(stderr, "audio_schedule: --null: start %d is off its planned distance\n", k + 1);
                 bad = 1;
             }
