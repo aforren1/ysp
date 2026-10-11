@@ -102,10 +102,10 @@ follows.
   - `yrdk_out.age_s` (`ysp/rdk.h`) is a per-dot `float` in seconds, an
     attribute a GPU reads.
   - LSL values in `ysp/net.h` keep liblsl's units: the `lsl_` stamps
-    (`double` seconds on liblsl's clock), `desc.lsl_max_buflen` (liblsl's
-    `max_buflen`), and `ynet_stats.lsl_offset_s` and `lsl_rtt_s` (`double`
-    seconds). Open: whether the last two become `int64_t` ns is not
-    decided.
+    (`double` seconds on liblsl's clock) and `desc.lsl_max_buflen`
+    (liblsl's `max_buflen`). liblsl's time correction is `int64_t` ns
+    (`ynet_stats.lsl_offset_ns`, `lsl_rtt_ns`, v0.3.0), rounded at the
+    liblsl call.
   - Calendar dates (`ycol_cal.date`) are Unix seconds.
 - **Threads.** Headers that spawn a worker thread honor `Y<X>_NO_THREADS`
   to drop it, and link `-pthread` on POSIX otherwise. `ysp/device.h` and

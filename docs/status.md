@@ -314,6 +314,7 @@ Purpose: Lab Streaming Layer on the ysp_rt clock, with liblsl (MIT) loaded at ru
 
 Status:
 
+- v0.3.0: `ynet_stats.lsl_offset_ns` and `lsl_rtt_ns` (`int64_t`, rounded to the nearest ns at the liblsl call) replace `lsl_offset_s` and `lsl_rtt_s`; the conventions' open exception for them is closed.
 - v0.2.0 (the [Conventions](conventions.md): `ynet_lsl_open()`/`_close()`/`_error()`, outlet and inlet open/close, `ynet_inlet_wait_running()`, key and role copied, `int64_t` ns timeouts, liblsl's own values named `lsl_`; 2 mutants added, both caught).
 - v0.1.0. 340 checks on MSVC and MinGW against a fake liblsl, also under ASan, UBSan and ThreadSanitizer on WSL2; 16 of 16 mutations caught (one control). Against the real liblsl 1.17.5 on WSL2: marker call to sink p50 140 to 194 us, p99 0.4 to 0.8 ms; mapped time within -31 to +52 us of the push; 10 kHz x 4 channels with no drops and no gaps at 44 to 94 ns of reader time a sample. The same on Windows with liblsl 1.17.7 (`tools/vendor_lsl.py`, hash-checked; CI runs the loopback on Windows and Linux): marker p50 89 to 121 us, mapping within -39 to +68 us, 16 to 51 ns a sample. No LabStreamer was attached. [Design notes](net.md).
 

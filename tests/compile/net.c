@@ -9,8 +9,8 @@
 #include <string.h>
 
 /* One field per entry point, spelled out, so a changed signature is a compile
- * error here rather than a surprise in a caller. Times are int64_t ns; the
- * lsl_ values are liblsl's seconds. */
+ * error here rather than a surprise in a caller. Times are int64_t ns, also
+ * liblsl's time correction (v0.3.0); the lsl_ stamps are liblsl's seconds. */
 typedef struct net_api {
     const char* (*version)(void);
     bool (*lsl_open)(ynet_lsl*, const char*);
@@ -81,6 +81,12 @@ int main(void) {
     d.read_timeout_ns = YRT_MS(10);
     d.lsl_max_buflen = 30;
     ok = ok && !g_api.inlet_open(&in, &d) && g_api.inlet_wait_running(&in, 0) == YNET_ERR_STATE;
+    {   /* a double here would be an incompatible pointer: an error in C++ and with -Werror */
+        ynet_stats st;
+        const int64_t* off = &st.lsl_offset_ns;
+        const int64_t* rtt = &st.lsl_rtt_ns;
+        (void)off; (void)rtt;
+    }
     g_api.inlet_close(&in);
     g_api.lsl_close(&lib);
     g_api.lsl_close(&lib);

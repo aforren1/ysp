@@ -129,7 +129,7 @@ int main(int argc, char** argv) {
                "rtt %.1f us; fit %+.2f ppm, %u points, spread %.1f us%s; events %u\n",
                sec + 1, (unsigned long long)(st.samples - prev.samples), st.measured_hz, (unsigned long long)st.gaps,
                (unsigned long long)st.missing, (unsigned long long)st.dropped, (unsigned long long)st.clamped,
-               st.lsl_offset_s, st.lsl_rtt_s * 1e6, st.remote.ppm, (unsigned)st.remote.points,
+               (double)st.lsl_offset_ns / 1e9, (double)st.lsl_rtt_ns / 1e3, st.remote.ppm, (unsigned)st.remote.points,
                (double)st.remote.spread_ns / 1e3, st.remote.slope ? "" : " (nominal)", (unsigned)g_events);
         if (st.format == YNET_FLOAT32 && ynet_stream_newest(&ring, &t_new, &l_new, x)) {
             int c;

@@ -706,6 +706,11 @@ static void test_markers(void) {
     CHECK_I(st.clamped, 0);
     CHECK_I(st.refused, 0);
     CHECK(st.corrections >= 1 && st.local.ready);
+    {   /* v0.3.0: liblsl's correction in ns, rounded to nearest */
+        const fk_inlet* f = (const fk_inlet*)in.inlet;
+        CHECK(st.lsl_offset_ns == (int64_t)llround(f->est_off * 1e9));
+        CHECK(st.lsl_rtt_ns == (int64_t)llround(f->est_unc * 1e9) && st.lsl_rtt_ns >= 50000 && st.lsl_rtt_ns <= 150000);
+    }
     CHECK(!strcmp(st.found.name, "ysp-markers") && !strcmp(st.found.type, "Markers") && !strcmp(st.uid, "uid-0"));
     CHECK(llabs(ynet_inlet_map(&in, local_of(g_now)) - g_now) < 100000);
     /* a mark stamped 50 ms ahead arrives before its time: clamped to its read */

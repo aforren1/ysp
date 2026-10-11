@@ -261,7 +261,7 @@ static void recv_stream(const char* key, double secs, int local_sender, int life
            (unsigned long long)st.samples, (long long)got, st.measured_hz, (unsigned long long)st.dropped,
            (unsigned long long)st.gaps, (unsigned long long)st.missing, (unsigned long long)st.clamped,
            st.samples ? (double)st.busy_ns / (double)st.samples : 0.0,
-           st.chunks ? (double)st.samples / (double)st.chunks : 0.0, (double)lag / 1e6, st.lsl_offset_s * 1e6, st.lsl_rtt_s * 1e6);
+           st.chunks ? (double)st.samples / (double)st.chunks : 0.0, (double)lag / 1e6, (double)st.lsl_offset_ns / 1e3, (double)st.lsl_rtt_ns / 1e3);
     printf("  local fit: %+.3f ppm, widest bracket %.2f us; remote fit: %+.3f ppm, %u points, spread %.1f us\n",
            st.local.ppm, (double)st.local.width_ns / 1e3, st.remote.ppm, (unsigned)st.remote.points,
            (double)st.remote.spread_ns / 1e3);
