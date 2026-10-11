@@ -14,7 +14,13 @@ Run a program from the build folder (`build/<preset>/Release/` with MSVC,
 `build/<preset>/` otherwise). "Needs" says what a run needs beyond the
 build: SDL3 (a window), ANGLE (GL ES on Windows), a font, a device, or
 nothing. `--sim` runs a windowed example on the simulated display, which
-needs nothing; CI runs the commands marked "CI".
+needs nothing; CI runs the commands marked "CI". The simulated display
+runs on the host's clock: while a loaded host's frame loop is behind,
+`yscr_begin()` plans later vblanks, as on a real display. So a `--sim`
+script times its synthetic input from the stimulus's flip record, not
+from a frame count, and checks onsets to whole periods (measured
+2026-10-10 under 12 CPU-bound processes: a target up to 550 ms after its
+frame count's time).
 
 ## aep
 
