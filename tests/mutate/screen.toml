@@ -1103,3 +1103,35 @@ test = "screen"
 why = "v0.6.0: the message belongs to the last failure; a successful call must put it back."
 find = '        s->error[0] = c0;'
 replace = '        (void)c0;'
+
+[[mutant]]
+id = "wb-01"
+name = "a late present shows on the callback's vblank"
+test = "screen"
+why = "v0.7.0: a task that ran past a vsync is composited after it; the record said the frame showed on the vsync it missed, and every later frame was planned a vblank ahead (measured in headless Chrome)."
+find = "    return c_pres + 1 > c_cb ? c_pres + 1 : c_cb;"
+replace = "    (void)c_pres;\n    return c_cb;"
+
+[[mutant]]
+id = "wb-02"
+name = "a skipped callback settles"
+test = "screen"
+why = "v0.7.0: an interval of two periods is a callback the browser skipped; settling on it takes a period too long."
+find = "    if (sorted[YSCR__WEB_N - 1] * 2 > med * 3) {"
+replace = "    if (0) {"
+
+[[mutant]]
+id = "wb-03"
+name = "no spread limit"
+test = "screen"
+why = "v0.7.0: callbacks whose intervals spread over 0.5 ms are not settled; the run warns."
+find = "    return v <= YSCR__WEB_SD_NS;"
+replace = "    return 1;"
+
+[[mutant]]
+id = "wb-04"
+name = "the median as the period"
+test = "screen"
+why = "v0.7.0: the mean of 20 intervals is the period; the median of coarse callback times is off by a clock step."
+find = "    w->period = (int64_t)llround(m);"
+replace = "    w->period = med;"

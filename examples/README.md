@@ -207,4 +207,16 @@ The X11 display-timing probe for the GLX backend is in `tests/probe/screen_x11/`
 | `video_bench` | The decode thread's cost per frame | video | `video_bench --size 64x48 --reps 3` (CI); `video_bench --mpg clip.mpg` | SDL3 to build; a clip for MPEG-1 |
 | `video_check` | The GPU paths against the upload path, frame by frame | video | `video_check --file clip.mp4` | SDL3, ANGLE; Windows (Media Foundation); the test clips |
 
+## web
+
+The browser demos ([docs/web.md](../docs/web.md)). `examples/web/build.sh`
+compiles them and `examples/gfx/gallery.c` with emcc into a static site
+(`examples/web/site/`); CMake builds them natively as `web_<name>`.
+
+| Program | Shows | Headers | Run | Needs |
+|---|---|---|---|---|
+| `web_tutorial` | A Gabor tilted left or right, F or J, RT from the flip record, one row per trial from `ytr_data` to memory for a CSV download | gfx, timeline, trials, response | `web_tutorial --sim` (CI); `tutorial.html` in a browser | SDL3, ANGLE; emsdk for the page |
+| `web_rdk_staircase` | Dot motion left or right with a 2-down 1-up staircase on coherence; the threshold at the end | gfx, timeline, trials, response, rdk, stair | `web_rdk_staircase --sim` (CI); `rdk.html` | SDL3, ANGLE; emsdk for the page |
+| `web_selftest` | The measured period, a histogram of frame intervals, the clock step, isolation, drops and key latency | screen | `web_selftest --sim` (CI); `selftest.html`; natively against the OS's flip times | SDL3, ANGLE; emsdk for the page |
+
 Probes that are not examples live in `tests/probe/`: the beam-racing probe for Windows is `tests/probe/beam_race/` (docs/beam_race_probe.md).

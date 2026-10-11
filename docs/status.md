@@ -22,7 +22,7 @@ renderers, in tests and CI.
 
 | Header | Ran on real hardware | Only in sim or CI | Source |
 |---|---|---|---|
-| screen | Windows 11, Iris Xe, internal panel, 60 Hz: flip records from software timestamps (both swap paths) | Light (no photodiode); another GPU, rate or display; Linux and macOS (simulated display only) | screen.h STATUS; docs/screen.md |
+| screen | Windows 11, Iris Xe, internal panel, 60 Hz: flip records from software timestamps (both swap paths); the web backend's callback times in Chrome, Edge and Firefox | Light (no photodiode); another GPU, rate or display; Linux and macOS (simulated display only); light in a browser | screen.h STATUS; docs/screen.md; docs/web.md |
 | gfx | Windows 11, Iris Xe through ANGLE (D3D11) | Light (no photometer or photodiode); WARP, SwiftShader and Mesa llvmpipe are software | gfx.h STATUS; docs/gfx.md |
 | video | Windows 11, Iris Xe, Media Foundation with DXVA, a 640x360 window; soundtrack on the real WASAPI device | Light and sound; fullscreen | video.h STATUS |
 | audio | Windows 11, WASAPI on the Realtek speakers (shared 48 kHz, exclusive), placement checked by WASAPI loopback capture | Sound at the speaker (no loopback cable: the delay to sound is not measured); CoreAudio, ALSA, PulseAudio, Web Audio | audio.h STATUS; docs/audio.md |
@@ -363,13 +363,14 @@ Status:
 
 - Header: [ysp/screen.h](../include/ysp/screen.h)
 - Prefix: `yscr_`, `YSCR_`
-- Platforms: Windows 10 and 11 (DXGI flip through ANGLE), Windows 11 x64 (the composition swapchain, present at a target time); Linux and macOS: the simulated display only
-- Needs: ysp/rt.h, ysp/input.h, SDL3; ANGLE at run time on Windows
+- Platforms: Windows 10 and 11 (DXGI flip through ANGLE), Windows 11 x64 (the composition swapchain, present at a target time); browsers through Emscripten (WebGL2, requestAnimationFrame; the lowest tier); Linux and macOS: the simulated display only
+- Needs: ysp/rt.h, ysp/input.h, SDL3; ANGLE at run time on Windows; SDL3's Emscripten port and ASYNCIFY or JSPI in a browser
 
 Purpose: The stimulus display: window, GL ES 3.0 context, display modes and the swap path, with flip at a time. Each frame gets the predicted onset of its flip for the timeline, presents for a target time on the ysp/rt.h clock, and gets a record of the vblank it was shown on, the drops, the composition path and where its time went, in ysp/rt.h's event ring. Also the mode whose refresh is a multiple of a video's rate, a photodiode patch, input restamping and several displays.
 
 Status:
 
+- v0.7.0: `YSCR_BACKEND_WEB` ([web.md](web.md)): under Emscripten, SDL3's canvas and the header's WebGL2 context, frames paced by awaited `requestAnimationFrame` callbacks (ASYNCIFY or JSPI), records from the callback times as estimates (`YSCR_TIER_WEB`, `YSCR_PATH_BROWSER`), the period measured at open, settling that warns and never fails, `YSCR_EV_VISIBILITY` records. Run in Chrome 154, Edge 155 and Firefox 154 to 157; no light measured. 4 mutants added.
 - v0.6.0 (the [Conventions](conventions.md): every failing call on a screen writes `yscr_error()`; `desc.panic_window_ns`, `panic_grace_ns` and `trigger_spin_ns` int64 ns; 2 mutants added).
 - v0.5.2: `desc.on_context`, a hook that `yscr_open()` calls once when the GL context exists, before the warm-up and settling, so work on other threads overlaps them (ysp/gfx.h's `ygfx_open_start()`); its time is added to the settle cap and shown in the describe line. On the Iris Xe with a cold program cache, gfx was ready 2.57 s after the `yscr_open()` call in a window (4.79 to 4.83 s before) and 2.46 to 2.47 s fullscreen (2.87 to 2.91 s) on AC, 3.41 s (5.37 to 5.40 s) and 3.46 to 3.47 s (3.85 to 3.89 s) on battery; settling took the same time and presents with and without the compiles, and all 260 opens settled. 7 of 7 new mutations caught.
 - v0.5.1: `desc.foreground`: AUTO forces the raise fullscreen (SDL's force hint) and honors the OS policy in a window, or HONOR or FORCE; the describe line, the settle record and `yscr_settle_check()` say granted, forced or refused. Started from the background, the OS refused 20 of 21 opens: settling passed, but the keys went to another program; forced, 25 of 25 got it, and close() gave it back to the window that had it in 15 of 15 (without that, a third program got it in 9 of 9). Fixed: on the composition swapchain the first frame after 67 ms or more without a present showed a vblank late (72 of 72; DXGI flip 0 of 54); a thread now waits on the display's vblank event: 0 of 36. With it and the next fix, the first frame after a 2.2 s program compile dropped in 0 of 8 runs (21 of 22 before). Fixed: `yscr_open()` returned with the just-presented back buffer bound, so `ygfx_prime()` before the first frame hung (gfx_hello, gfx_trial). 7 of 7 new mutations caught.

@@ -2692,12 +2692,48 @@ and three examples need a virtual audio device. Until then, the
 examples tolerate whole-frame drops (`trial_same_different`,
 `trial_sternberg`).
 
+## The web backend (v0.7.0)
+
+`YSCR_BACKEND_WEB` is the presenter for a browser: SDL3's Emscripten
+canvas, a WebGL2 context the header makes, frames paced by awaited
+`requestAnimationFrame` callbacks. [web.md](web.md) has the how-to guides,
+the measurements and what a browser can claim; this section has the
+design decisions that touch the core.
+
+- **Tier and path.** A browser observes no flip, so every web record is
+  `YSCR_TIER_WEB` (5), below the simulated display, with
+  `YSCR_PATH_BROWSER` and `ONSET_PLANNED`. Two new enum values; nothing
+  else in the record changes.
+- **The onset.** The first callback time after both the callback that
+  drew the frame and the present call (`yscr__web_shown()`). The callback
+  time alone was 1.3 ms before the present call after a task that ran past
+  a vsync (headless Chrome 154).
+- **No sleeps.** The presenter sets `native_target`, so `flip_at()` never
+  waits; a wait on the browser's main thread is a busy loop that stops
+  rendering. It cannot hold a drawn frame either (the drawing buffer is not
+  preserved), so a later target is recorded `EARLY`.
+- **Planning.** On the web the next frame is planned from `yscr_begin()`'s
+  own prediction, not a vblank after the last plan: a frame planned late
+  shows at the next browser frame all the same, and the rule "never the
+  vblank the last frame was planned for" then kept every later frame a
+  vblank ahead (598 of 600 records `EARLY` in one headless run).
+- **Stale callbacks.** `acquire()` and `bind()` skip a callback that ran
+  more than half a period ago: a frame drawn there was replaced by the next
+  callback's draw before it was composited.
+- **Settling.** The presenter's own rule on the callback intervals, warn
+  only; the core's rule needs OS vblank statistics, which a browser has
+  none of.
+- **Tests.** `yscr__web_shown()` and `yscr__web_steady()` compile on every
+  platform, so `tests/adapt/screen_test.c` checks them; mutants wb-01 to
+  wb-04. The presenter itself runs only in a page: the demos ran in Chrome
+  154 (headless and headed), Edge 155 and Firefox 154 to 157 (headless).
+
 ## Not measured
 
 - Light. No photodiode was attached. `tests/loopback/screen_loopback.c`
   is built, not run. Every onset here is DXGI's vblank time.
 - Any refresh other than 60 Hz; any GPU other than the Iris Xe; Windows 10.
-- X11, Wayland, macOS and the web: stubs.
+- X11, Wayland and macOS: stubs. The web: no light measured (web.md).
 - A DWM miss on the composed path of COMPOSITION: a second window loading
   the GPU did not cause one, so whether the record shows it is unknown.
 - COMPOSITION on a machine whose QPC does not run at 10 MHz, on ARM64

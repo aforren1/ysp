@@ -1,0 +1,50 @@
+# The web demos on GitHub Pages (docs/web.md). Builds examples/web with a
+# pinned emsdk and deploys the site. Pages must be set to "GitHub Actions"
+# as its source (Settings > Pages > Source) before the deploy job can run.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time; a newer push does not cancel a deploy in progress.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build the web demos
+    runs-on: ubuntu-latest
+    # The same emsdk version examples/web/build.sh names: the demos were
+    # measured with it, and SDL3's port (3.4.2) comes with it.
+    container: emscripten/emsdk:6.0.12
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the site
+        shell: bash
+        run: |
+          set -eu
+          sh examples/web/build.sh _site
+          ls -l _site
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

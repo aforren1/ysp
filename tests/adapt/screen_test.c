@@ -4093,8 +4093,38 @@ static void test_stale_statistics(void) {
     g_env = "off";
 }
 
+/* v0.7.0: the web backend's two pure rules, without a browser (BACKENDS,
+ * WEB). The presenter itself needs Emscripten and a page. */
+static void test_web_rules(void) {
+    static yscr__web w;
+    const int64_t P = 16666667, T = 1000000000;
+    int i;
+    /* the shown vblank: c_cb and T are the callback that completed it */
+    CHECK_I(yscr__web_shown(10, T, T - 14000000, P), 10);   /* presented in the frame before */
+    CHECK_I(yscr__web_shown(10, T, T - 1, P), 10);
+    CHECK_I(yscr__web_shown(10, T, T + 1300000, P), 11);    /* the task ran past the vsync */
+    CHECK_I(yscr__web_shown(10, T, T + 20000000, P), 12);
+    /* settling: 20 steady intervals settle, with the mean as the period */
+    memset(&w, 0, sizeof w);
+    for (i = 0; i < YSCR__WEB_N; i++) w.iv[i] = P + (i % 2 ? 50000 : -50000);
+    w.n_iv = YSCR__WEB_N - 1;
+    CHECK(!yscr__web_steady(&w));                           /* too few */
+    w.n_iv = YSCR__WEB_N;
+    CHECK(yscr__web_steady(&w));
+    CHECK(w.period > P - 1000 && w.period < P + 1000);
+    CHECK(w.sd_ns > 45000 && w.sd_ns < 55000);
+    /* a skipped callback: not settled, and the median is the period */
+    w.iv[7] = 2 * P;
+    CHECK(!yscr__web_steady(&w));
+    CHECK(w.period > P - 60000 && w.period < P + 60000);
+    /* spread over the limit (0.5 ms) */
+    for (i = 0; i < YSCR__WEB_N; i++) w.iv[i] = P + (i % 2 ? 1000000 : -1000000);
+    CHECK(!yscr__web_steady(&w));
+}
+
 int main(void) {
     yrt_thread_elevate(NULL);
+    test_web_rules();
     test_errors();
     test_mode_multiple();
     test_params();

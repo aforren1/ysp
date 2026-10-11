@@ -29,7 +29,7 @@ C11 or C++17, and its top comment is its manual.
 | [color](docs/color.md) | `ycol_` | Display calibration and color space conversions | 0.2.0 | tested |
 | [rdk](docs/rdk.md) | `yrdk_` | Random dot kinematograms, reproducible bit for bit | 0.2.0 | tested |
 | [outline](docs/outline.md) | `yol_` | Paths, font glyphs and SVG into curve sets | 0.3.0 | tested |
-| [screen](docs/screen.md) | `yscr_` | Stimulus window, flip at a time, flip records | 0.6.0 | 1 machine |
+| [screen](docs/screen.md) | `yscr_` | Stimulus window, flip at a time, flip records; a web backend | 0.7.0 | 1 machine |
 | [audio](docs/audio.md) | `yau_` | Sound at a time on the rig clock | 0.4.0 | 1 machine |
 | [gfx](docs/gfx.md) | `ygfx_` | GL ES 3.0 stimuli: shapes, gratings, gabors, text, frame capture | 0.13.0 | 1 machine |
 | [video](docs/video.md) | `yvid_` | Movies as stimuli, frame by predicted onset | 0.3.0 | 1 machine |
@@ -111,6 +111,8 @@ return values, errors, units, threads) are in
 - [docs/contributing.md](docs/contributing.md): repository layout, how to
   add a library, how to change a header.
 - [examples/README.md](examples/README.md): the example index.
+- [docs/web.md](docs/web.md): the demos in a browser (WebAssembly, GitHub
+  Pages) and what browser timing can claim.
 
 ## License
 
