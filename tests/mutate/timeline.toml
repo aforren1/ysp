@@ -1,7 +1,8 @@
 
-# ysp/timeline.h mutants: RATE (v0.4.0) and the sequence code (ytl_seq).
-# docs/timeline.md: 24 RATE mutants, 21 caught and 3 equivalent; 19
-# sequence mutants, all caught. The v0.3.0 list (23) was not kept.
+# ysp/timeline.h mutants: RATE (v0.4.0), the sequence code (ytl_seq) and
+# TARGETS (v0.6.0). docs/timeline.md: 24 RATE mutants, 21 caught and 3
+# equivalent; 19 sequence mutants, all caught; 20 target mutants (tgt-*),
+# all caught. The v0.3.0 list (23) was not kept.
 header = "ysp/timeline.h"
 
 [test.timeline]
@@ -493,3 +494,176 @@ replace = '''
         q->err_call = q->n_calls - 1;
     }
     return rc;'''
+
+# --- TARGETS (v0.6.0) -------------------------------------------------------
+
+[[mutant]]
+id = "tgt-00"
+name = "the first started tween drives, not the latest"
+test = "timeline"
+why = "A later tween takes the field over from its start (the overwrite rule)."
+find = '        while (nx >= 0 && tw[nx].start_ns <= now) {'
+replace = '        while (nx >= 0 && c < 0 && tw[nx].start_ns <= now) {'
+
+[[mutant]]
+id = "tgt-01"
+name = "the cursor survives a rewind"
+test = "timeline"
+why = "After the base goes back, an earlier tween drives the field again."
+find = '        if (c >= 0 && tw[c].start_ns > now) c = -1;   /* the base went back */'
+replace = ''
+
+[[mutant]]
+id = "tgt-02"
+name = "no look-ahead for STEP tweens"
+test = "timeline"
+why = "A set lands on the frame where an event at its time lands, up to the window end."
+find = '            if (tw[w].flags & YTL__TW_STEPPED) e = w;'
+replace = '            if (tw[w].flags & YTL__TW_STEPPED && 0) e = w;'
+
+[[mutant]]
+id = "tgt-03"
+name = "a STEP tween read at the onset"
+test = "timeline"
+why = "A STEP tween is read at the window end, as a STEP track is."
+find = '            ytl__tw_at(&tw[e], g->n, tw[e].flags & YTL__TW_STEPPED ? hi : now, v);'
+replace = '            ytl__tw_at(&tw[e], g->n, now, v);'
+
+[[mutant]]
+id = "tgt-04"
+name = "every start value is the rest value"
+test = "timeline"
+why = "A tween starts from the tween before it at its start (the takeover)."
+find = '''
+    if (prev >= 0) {
+        ytl__tw_at(&tl->tw[prev], g->n, w->start_ns, bv);'''
+replace = '''
+    if (prev >= 0 && 0) {
+        ytl__tw_at(&tl->tw[prev], g->n, w->start_ns, bv);'''
+
+[[mutant]]
+id = "tgt-05"
+name = "the rest value read at every write"
+test = "timeline"
+why = "The rest value is the field before the first write; a rewind before the first start shows it."
+find = '''
+    if (g->flags & YTL__TG_REST) return;
+    for (c = 0; c < g->n; c++)'''
+replace = '''
+    for (c = 0; c < g->n; c++)'''
+
+[[mutant]]
+id = "tgt-06"
+name = "immediate ignored"
+test = "timeline"
+why = "from() and fromTo() show `from` before the start (GSAP immediateRender)."
+find = '        } else if (tw[g->head].flags & YTL__TW_IMMEDIATE) {'
+replace = '        } else if (tw[g->head].flags & YTL__TW_IMMEDIATE && 0) {'
+
+[[mutant]]
+id = "tgt-07"
+name = "a tween added before the cursor's is not walked"
+test = "timeline"
+why = "A tween that starts before the cursor's tween must make the next evaluate walk from the head."
+find = '        if (g->cur >= 0 && w->start_ns < tl->tw[g->cur].start_ns) g->cur = -1;'
+replace = ''
+
+[[mutant]]
+id = "tgt-08"
+name = "a kill keeps the callback events"
+test = "timeline"
+why = "A killed tween's callback events go with it."
+find = '    if (drop_events) ytl__tw_drop_events(tl, k);'
+replace = '    (void)drop_events;'
+
+[[mutant]]
+id = "tgt-09"
+name = "the room check ignores what an overwrite frees"
+test = "timeline"
+why = "A retarget with YTL_OVERWRITE_ALL in a full pool must fit."
+find = '        else if (n - freed_tw > tl->tw_cap - tl->n_tw || n > INT32_MAX - tl->tw_next_id)'
+replace = '        else if (n > tl->tw_cap - tl->n_tw || n > INT32_MAX - tl->tw_next_id)'
+
+[[mutant]]
+id = "tgt-10"
+name = "int32_t truncated, not rounded"
+test = "timeline"
+why = "YTL_I32 rounds to nearest."
+find = '            double r = floor(v[c] + 0.5);'
+replace = '            double r = (double)(int64_t)v[c];'
+
+[[mutant]]
+id = "tgt-11"
+name = "stagger ignored"
+test = "timeline"
+why = "Field i starts i x stagger_ns later."
+find = '        w->start_ns = r.start_ns + (int64_t)i * a->stagger_ns;'
+replace = '        w->start_ns = r.start_ns;'
+
+[[mutant]]
+id = "tgt-12"
+name = "a moved target keeps its tweens' old index"
+test = "timeline"
+why = "A freed target takes the last one's place; that target's tweens must follow it."
+find = '            for (j = tl->tg[gi].head; j >= 0; j = tl->tw[j].next) tl->tw[j].target = gi;'
+replace = '            (void)j;'
+
+[[mutant]]
+id = "tgt-13"
+name = "ytl_evaluate() accepted from a callback"
+test = "timeline"
+why = "A callback runs inside an evaluate; a nested one is YTL_ERR_ORDER."
+find = "    if (tl->in_calls) return YTL_ERR_ORDER;   /* from a target's callback */"
+replace = ''
+
+[[mutant]]
+id = "tgt-14"
+name = "on_complete after a kill in on_start"
+test = "timeline"
+why = "A tween killed by its own start callback does not complete."
+find = '        if ((bits & YTL__DUE_COMPLETE) && fc && (w->flags & YTL__TW_LIVE) && w->id == id)'
+replace = '        if ((bits & YTL__DUE_COMPLETE) && fc)'
+
+[[mutant]]
+id = "tgt-15"
+name = "keep_velocity with a zero slope"
+test = "timeline"
+why = "keep_velocity starts at the slope of the tween before it, as ytl_tween() does."
+find = '        if (w->flags & YTL__TW_KV) ytl__tw_at(&tl->tw[prev], g->n, w->start_ns - 1000, b1);'
+replace = '        if (w->flags & YTL__TW_KV) ytl__tw_at(&tl->tw[prev], g->n, w->start_ns, b1);'
+
+[[mutant]]
+id = "tgt-16"
+name = "a yoyo's hold after its last cycle missing"
+test = "timeline"
+why = "After a yoyo the field holds `from`, as ytl_tween() gives it."
+find = '    if (t < s || (yoyo && t >= s + 2 * d)) {'
+replace = '    if (t < s) {'
+
+[[mutant]]
+id = "tgt-17"
+name = "CUBIC_OUT as QUAD_OUT"
+test = "timeline"
+why = "Each ease against its own formula."
+find = '''
+        r = 1.0 - u;
+        return 1.0 - r * r * r;'''
+replace = '''
+        r = 1.0 - u;
+        return 1.0 - r * r;'''
+
+[[mutant]]
+id = "tgt-18"
+name = "from(): the end value is not the value at start"
+test = "timeline"
+why = "to_current is gsap.from()'s end value, the field's value at the start."
+find = '        if (w->flags & YTL__TW_TO_CUR) w->to[c] = (float)bv[c];'
+replace = ''
+
+[[mutant]]
+id = "tgt-19"
+name = "callbacks not queued"
+test = "timeline"
+why = "A fired YTL_CALL_* event calls its tween's function after the pass."
+find = '            else if (e->kind == YTL_CALL_START || e->kind == YTL_CALL_COMPLETE) ytl__due(tl, e);'
+replace = ''

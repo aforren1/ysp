@@ -1,4 +1,4 @@
-/* ysp/timeline.h - v0.5.0 - public domain single-header timeline library
+/* ysp/timeline.h - v0.6.0 - public domain single-header timeline library
  *
  *   What a frame shows, as a function of when the frame appears. Events
  *   (onsets, offsets, value changes, triggers, annotations) at times on a
@@ -6,7 +6,9 @@
  *   (position, contrast, opacity, spatial frequency), and one call per frame
  *   that takes the PREDICTED ONSET of the frame being drawn, fills the
  *   channel values for it and reports which events landed on it, with the
- *   frame and the residual. It never reads a clock.
+ *   frame and the residual. It never reads a clock. Tweens can also write
+ *   the caller's own fields (a stimulus's x, contrast or color), as GSAP's
+ *   gsap.to(target, vars) does (TARGETS).
  *
  *   Written in the single-header style of the stb / sokol libraries. Pure
  *   computation: no OS calls, no threads, no heap, no I/O. Needs nothing
@@ -139,6 +141,24 @@
  *       move.to = 4.0f; move.duration_ns = YRT_MS(300); move.keep_velocity = true;
  *       ytl_tween(&tl, DOT_X, TRIAL, &move);
  *
+ *   The trial's stimuli animated in place, with no channel numbers and no
+ *   copy per frame (TARGETS): GSAP's gsap.to(dot, {x: 300, duration: 0.5,
+ *   ease: "power2.out"}), a fade-in with gsap.from(), and a set at 0.5 s.
+ *   The pools are the caller's (desc.targets, desc.tweens):
+ *
+ *       static ytl_target_slot targets[64];
+ *       static ytl_tween_slot tweens[128];
+ *       d.targets = targets; d.target_capacity = 64;   // before ytl_open()
+ *       d.tweens = tweens;   d.tween_capacity = 128;
+ *       ...
+ *       ytl_seq s = ytl_seq_on(&tl, TRIAL);
+ *       ytl_tween_to(&s, &dot.x, 300.0f, YRT_MS(500), YTL_EASE_CUBIC_OUT);
+ *       ytl_tween_from(&s, &dot.contrast, 0.0f, YRT_MS(200), YTL_EASE_COSINE);
+ *       ytl_at(&s, YRT_MS(500));
+ *       ytl_tween_set(&s, &fix.visible, 0.0f);
+ *       if (s.err < 0) fputs(ytl_error(&tl), stderr);
+ *       // each ytl_evaluate() then writes dot.x, dot.contrast, fix.visible
+ *
  *   These blocks build as C99 and as C++17. The op-table macros
  *   (SEQUENCES) are designated initializers: C99, or C++20.
  *
@@ -198,10 +218,13 @@
  *       YTL_ONSET    channel `target` becomes 1 when it fires
  *       YTL_OFFSET   channel `target` becomes 0
  *       YTL_SET      channel `target` becomes `value`
+ *       YTL_CALL_START, YTL_CALL_COMPLETE (5, 6)  reported; the header adds
+ *                    them for a target tween's callbacks (TARGETS)
  *       YTL_KIND_USER (16) to 255: reported only, the caller's meaning
  *     A zeroed event is a MARK at time 0 on the RT base. `code`, `user` and
  *     (for the reported-only kinds) `target` are the caller's and come back
- *     unchanged in the report. Kinds 5 to 15 are reserved and rejected.
+ *     unchanged in the report. Kinds 5 to 15 are the header's, and an add
+ *     rejects them.
  *     ytl_add() copies the event into the storage the desc gave, pending
  *     (flags 0, frame -1, onset 0, residual 0), assigns it an id (0, 1, 2, ... in add order; ytl_open() restarts it) and
  *     returns the id. ytl_add_n() adds n events, all or none, and returns
@@ -249,6 +272,10 @@
  *       YTL_EASE_COSINE        e = (1 - cos(pi u)) / 2, a raised cosine
  *       YTL_EASE_QUAD_IN       e = u^2, starts slow
  *       YTL_EASE_QUAD_OUT      e = 1 - (1 - u)^2, ends slow
+ *       YTL_EASE_QUAD_IN_OUT   e = 2u^2 below u = 1/2, 1 - 2(1 - u)^2 from it
+ *       YTL_EASE_CUBIC_IN      e = u^3                 (GSAP power2.in)
+ *       YTL_EASE_CUBIC_OUT     e = 1 - (1 - u)^3       (GSAP power2.out)
+ *       YTL_EASE_CUBIC_IN_OUT  e = 4u^3 below u = 1/2, 1 - 4(1 - u)^3 from it
  *       YTL_EASE_BEZIER        e = y where x = u on the cubic Bezier
  *                                curve from (0, 0) to (1, 1) with control
  *                                points (x1, y1) and (x2, y2), CSS's
@@ -725,6 +752,111 @@
  *     that passes cannot run out of room part way. What it cannot know is
  *     the run-time takeover value.
  *
+ *   TARGETS (ytl_anim, ytl_animate, ytl_tween_to, ytl_kill, desc.targets)
+ *     A target tween writes a field of the caller: n floats (YTL_F32) or n
+ *     int32_t (YTL_I32, rounded to nearest), n from 1 to 4, at an address
+ *     the caller keeps valid while the tween lives. It is a call on a
+ *     sequence (SEQUENCES), so the sequence's base, cursor, labels and
+ *     sticky error apply, and it starts at the cursor + delay_ns; the
+ *     cursor stays. Against GSAP:
+ *       ytl_tween_to(q, &f, to, dur, ease)          gsap.to(): from the
+ *                                                     field's value at start
+ *       ytl_tween_from(q, &f, from, dur, ease)      gsap.from(): to the
+ *                                                     value at start, showing
+ *                                                     `from` until then
+ *       ytl_tween_from_to(q, &f, from, to, dur, ease) gsap.fromTo()
+ *       ytl_tween_set(q, &f, value)                 .set(): a STEP jump
+ *       ytl_animate(q, &a)                          any of these by a desc:
+ *                                                     n components, int32_t,
+ *                                                     delay, cycles, yoyo,
+ *                                                     keep_velocity,
+ *                                                     immediate, overwrite,
+ *                                                     callbacks
+ *       ytl_animate_n(q, &a, stride, n)             stagger: field i at
+ *                                                     a.target + i x stride
+ *                                                     bytes starts i x
+ *                                                     a.stagger_ns later
+ *       q.prev_start, q.prev_end                    "<" and ">": the start
+ *                                                     and end of what the
+ *                                                     last call added
+ *       ytl_kill(tl, &f), ytl_kill_tween(tl, id)    killTweensOf(), kill()
+ *     The fields of ytl_anim mean what ytl_tween_desc's mean (TWEENS), with
+ *     the same arithmetic, so a target and a channel tween given the same
+ *     desc have the same values bit for bit; to_current is gsap.from()'s
+ *     end value, the value at the start.
+ *     THE MODEL. A target is an address; one target per address, bound to
+ *     one base as a channel is (another base is YTL_ERR_BOUND, a different
+ *     type or n YTL_ERR_ARG). Its tweens are kept in (start, id) order, and
+ *     at base time t the tween with the latest (start, id) that has started
+ *     drives the field: a later tween takes the field over from its start,
+ *     and the earlier one drives it again if the base goes back before that
+ *     start. So the field is a function of base time, and a rewind, a skip
+ *     or a seek (REWIND, SKIP) gives the values of continuous play. A tween
+ *     without from_set starts from the field's value at its start: the
+ *     value of the tween before it there, or for the first the field's own
+ *     value before the timeline wrote it (the rest value, read once). These
+ *     start values are computed at the first evaluate that reaches the
+ *     start, kept, and replayed by a rewind, as a channel tween's takeover
+ *     is. A tween added later with an earlier start does not change the
+ *     kept values of the tweens after it.
+ *     WRITES. Each evaluate, after the events and channels, writes every
+ *     target of a base that is not stopped, in one pass: the driving
+ *     tween's value at the frame's onset, or, for a STEP tween (a set
+ *     included), at the window end, so its change lands on the frame where
+ *     an event at the same time lands (QUANTIZATION). Before the first
+ *     tween starts the field is not written and stays the caller's, unless
+ *     that tween has `immediate` (from and fromTo set it, GSAP's
+ *     immediateRender), which shows its `from`. After the first write the
+ *     timeline owns the field until its tweens are killed: every evaluate
+ *     writes it, also after the last tween ends, and a rewind before the
+ *     first start writes the rest value. A caller's write in between is
+ *     overwritten at the next evaluate, not read.
+ *     OVERWRITE. a.overwrite = YTL_OVERWRITE_NONE (0) keeps the field's
+ *     other tweens, as above (a GSAP timeline with overwrite: false).
+ *     YTL_OVERWRITE_ALL kills them at the call (GSAP's overwrite: true),
+ *     on any base, so the target can change base; the new tween then
+ *     starts from the field's value at its start, which is the last value
+ *     written. It is for a script that retargets a field on a base that is
+ *     never cleared, where kept tweens would fill the pool.
+ *     KILL. ytl_kill(tl, &f) kills the field's tweens, ytl_kill_tween(tl,
+ *     id) one tween. Their callback events go, the field keeps its value,
+ *     and a target left with no tween is freed: the timeline stops writing
+ *     the field, and the next tween on it reads its rest value again.
+ *     ytl_clear() of a base and ytl_seq_cancel() kill the tweens of the
+ *     base or the sequence. So clear the trial base between trials, and
+ *     each trial starts from the values the caller set.
+ *     CALLBACKS. on_start and on_complete (not with YTL_FOREVER) each add an
+ *     event to the storage, YTL_CALL_START at the start or
+ *     YTL_CALL_COMPLETE at the end, with code = the tween's id and user =
+ *     a.user. The events land, skip and rewind as events do, and they are
+ *     in the report. ytl_evaluate() calls the functions after it has
+ *     written every field, in the order in which their events fired, as
+ *     fn(tl, id, user). A callback may post and kill tweens and add
+ *     events; what it posts runs from the next evaluate. ytl_evaluate()
+ *     from a callback is YTL_ERR_ORDER. A kill in on_start skips the same
+ *     frame's on_complete.
+ *     REJECTED with YTL_ERR_ARG, besides ytl_tween()'s checks on component
+ *     0 (TWEENS): a NULL target, n outside 0 to 4, a type that is not
+ *     YTL_F32 or YTL_I32, an overwrite that is neither, a non-finite
+ *     component of to (or from with from_set), LOG with a component <= 0 or
+ *     with to_current, n < 1 for ytl_animate_n(), and a start, an end or a
+ *     staggered start at or past +-2^62. YTL_FOREVER and cycles are allowed
+ *     (a target tween is not a segment of a block). Op tables have no
+ *     target form: a pack's table cannot hold an address.
+ *     POOLS. desc.targets and desc.tweens are arrays of the caller, used
+ *     while the handle is: a target is 40 bytes, a tween 128 (64-bit). A
+ *     call that needs more targets, tweens or events (for its callbacks)
+ *     than are free, counting what its overwrite frees, is YTL_ERR_FULL,
+ *     adds nothing, and its message names the pool ("the tween pool is
+ *     full (128)"). ytl_tween_count() gives the live tweens and targets.
+ *     A target's tweens are found by a scan of the targets, at the call,
+ *     not in the frame.
+ *     COST. The pass reads each target and its driving tween: O(1) per
+ *     target while time moves forward, a walk of the target's tweens after
+ *     a rewind. Nothing is allocated. examples/timeline/bench_targets.c
+ *     measures it against the value array and a binding copy
+ *     (docs/timeline.md, "Targets").
+ *
  *   REMOVING (ytl_remove, ytl_prune, ytl_clear)
  *     ytl_remove(tl, id) deletes one event; when it had fired and its
  *     channel showed its value, the channel is recomputed.
@@ -767,7 +899,8 @@
  *   almost all of it 248 bytes per channel: a copy of its track, a
  *   tween's three keys and curve, and a waiting tween's desc. An evaluate
  *   reads a byte per channel to
- *   find the tracked ones and touches only their records. Define
+ *   find the tracked ones and touches only their records. Targets and
+ *   their tweens live in the pools the desc gives (TARGETS). Define
  *   YTL_MAX_CHANNELS (1 to 65535) before the implementation and every
  *   include to change it. Events live in the storage the desc gives
  *   (desc.events, desc.event_capacity entries of 64 bytes), owned by the
@@ -816,6 +949,22 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.6.0 - targets (TARGETS): tweens that write the caller's fields (a
+ *          float, float[2..4] or int32_t), as GSAP's to(), from(),
+ *          fromTo() and set(): ytl_tween_to(), ytl_tween_from(),
+ *          ytl_tween_from_to(), ytl_tween_set(), ytl_animate() with a
+ *          ytl_anim desc (delay, cycles, yoyo, keep_velocity, immediate,
+ *          overwrite, on_start and on_complete), ytl_animate_n() for a
+ *          stagger, ytl_kill(), ytl_kill_tween(), ytl_tween_count(), and
+ *          the caller's pools desc.targets and desc.tweens. The latest
+ *          started (start, id) drives a field, so a rewind or a seek
+ *          replays it. Callbacks are events of the new kinds
+ *          YTL_CALL_START and YTL_CALL_COMPLETE, called after every field
+ *          is written. ytl_seq.prev_start and prev_end ("<" and ">").
+ *          Four eases: YTL_EASE_QUAD_IN_OUT, CUBIC_IN, CUBIC_OUT and
+ *          CUBIC_IN_OUT, for keys and channel tweens too, so 11 is now the
+ *          first number that is not a ytl_ease. Nothing else changes: a
+ *          timeline with no target gives the same values and bytes.
  *   v0.5.0 - the repository conventions (README.md). Breaks the API. Time
  *          fields the caller writes end in _ns: ytl_event.time_ns,
  *          ytl_key.time_ns, ytl_track.t0_ns and period_ns,
@@ -889,7 +1038,23 @@
  *          prune, remove and clear; the record of where every event
  *          landed.
  *
- *   STATUS: v0.4.0. Rates and the window, tested by the writer of the
+ *   STATUS: v0.6.0. Targets, tested by the writer of the implementation
+ *   (tests/adapt/timeline_test_targets.h): a target tween against
+ *   ytl_tween() on a channel over 400 random descs, the second taking over
+ *   from the first, the same bits on all 28,000 frames; every ease against
+ *   pow()-based formulas, keys too; to, from, fromTo, set, n = 3, int32_t,
+ *   stagger both ways, the overwrite rules, kill, clear, cancel, ownership;
+ *   callbacks (landing, order, a post and a kill from one, skip, rewind,
+ *   ytl_evaluate() refused); every pool refusal with its message, all or
+ *   none; sets landing with events at three leads (900 cases); a trial
+ *   replayed after a rewind and sought into from 11 places, the same bits,
+ *   and two handles the same bytes; and a model of TARGETS over 12 random
+ *   runs of 500 calls with rewinds, skips, pauses and kills. 3 model
+ *   mutations of TARGETS are caught. The earlier tests pass unchanged
+ *   apart from the first number that is not an ease (11, was 7), with the
+ *   same model statistics. MinGW gcc 16.1 (C11, C99 and C++17 compile
+ *   checks) and MSVC 19.44 (C, C++17).
+ *   v0.4.0. Rates and the window, tested by the writer of the
  *   implementation against an exact reference written apart from the
  *   header's arithmetic (32-bit limbs, itself checked against __int128):
  *   200,000 random cases of the mapping and its inverse to +-2^62; rate
@@ -992,9 +1157,9 @@
 
 /* The version of this header, for a log line or a compile-time check. */
 #define YTL_VERSION_MAJOR 0
-#define YTL_VERSION_MINOR 5
+#define YTL_VERSION_MINOR 6
 #define YTL_VERSION_PATCH 0
-#define YTL_VERSION_STRING "0.5.0"
+#define YTL_VERSION_STRING "0.6.0"
 
 #include <stdint.h>
 #include <stdbool.h>
