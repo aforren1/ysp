@@ -63,6 +63,16 @@ def main():
         stop.set()
         port.interrupt()
         reader.join()
+
+        # The async reader: a C thread reads and stamps each line when it
+        # arrives, without the GIL. Writes stay allowed while it runs.
+        port.async_start(terminator=b"\n", capacity=4096)
+        t0 = ps.now()
+        port.write_byte(code)
+        if port.async_wait(0.5):
+            for line, t in port.async_read():
+                print(f"line {line!r} {1e3 * (t - t0):.3f} ms after the write")
+        print(f"async reader: {port.async_stop()}")
     return 0
 
 

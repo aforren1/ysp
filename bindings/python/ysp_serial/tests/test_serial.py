@@ -136,3 +136,73 @@ def test_properties_in_seconds():
     assert p.write_timeout == 0.0
     assert p.sched == {"runtime": 0.0, "deadline": 0.0, "period": 0.0}
     assert not hasattr(p, "write_timeout_ms")
+
+
+# --- async reader, without a port ------------------------------------------
+
+def test_async_on_a_never_opened_port_raises_closed():
+    p = unopened()
+    assert p.async_stats is None
+    with pytest.raises(ps.Closed):
+        p.async_start()
+    with pytest.raises(ps.Closed):
+        p.async_read()
+    with pytest.raises(ps.Closed):
+        p.async_wait(0)
+    assert p.async_stats is None            # the failed start left nothing
+
+
+def test_async_stop_is_idempotent():
+    p = unopened()
+    assert p.async_stop() is None
+    assert p.async_stop() is None
+    p.close()
+    assert p.async_stop() is None
+
+
+def test_async_on_a_closed_port_raises_closed():
+    p = unopened()
+    p.close()
+    with pytest.raises(ps.Closed):
+        p.async_start(terminator=b"\n")
+    with pytest.raises(ps.Closed):
+        p.async_wait(math.inf)
+
+
+@pytest.mark.parametrize("kw, exc", [
+    ({"capacity": 0}, ValueError),
+    ({"capacity": 1 << 25}, ValueError),
+    ({"max_len": 0}, ValueError),
+    ({"max_len": 65536}, ValueError),
+    ({"record_size": -1}, ValueError),
+    ({"terminator": b"\r\n"}, TypeError),          # one byte only
+    ({"terminator": 256}, ValueError),
+    ({"terminator": "\n"}, TypeError),             # str is not a byte
+    ({"terminator": b"\n", "record_size": 8}, ValueError),  # ambiguous
+])
+def test_async_start_refuses_bad_arguments_before_the_port(kw, exc):
+    with pytest.raises(exc):
+        unopened().async_start(**kw)
+
+
+@pytest.mark.parametrize("kw", [
+    {}, {"terminator": 10}, {"terminator": b"\r"}, {"terminator": None},
+    {"record_size": 26}, {"terminator": None, "record_size": 26},
+    {"capacity": 1, "max_len": 1},
+])
+def test_async_start_accepts_good_arguments(kw):
+    with pytest.raises(ps.Closed):
+        unopened().async_start(**kw)
+
+
+@pytest.mark.parametrize("timeout, exc", [
+    (-1, ValueError), (math.nan, ValueError), (None, TypeError), (1e10, OverflowError),
+])
+def test_async_wait_refuses_bad_timeouts(timeout, exc):
+    with pytest.raises(exc):
+        unopened().async_wait(timeout)
+
+
+def test_async_read_refuses_a_negative_max():
+    with pytest.raises(ValueError):
+        unopened().async_read(max=-1)
