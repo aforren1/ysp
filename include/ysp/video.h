@@ -1,4 +1,4 @@
-/* ysp/video.h - v0.3.0 - public domain single-header video playback library
+/* ysp/video.h - v0.3.1 - public domain single-header video playback library
  *
  *   A movie as a stimulus. On each display frame the header takes the
  *   frame's PREDICTED ONSET, asks the movie clock for the movie time at
@@ -430,6 +430,10 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.3.1 - pl_mpeg.h builds under -Wfloat-conversion (gcc and clang): its
+ *          double-to-integer and double-to-float conversions are its own,
+ *          so the include silences that warning as it already did
+ *          -Wshorten-64-to-32. No change to ysp code.
  *   v0.3.0 - The ysp conventions (README.md, Conventions); breaks the API.
  *          The frame sequence writer opens, finishes and closes:
  *          yvid_seq_create() is yvid_seq_open(); yvid_seq_finish() (new)
@@ -523,8 +527,8 @@
 
 #define YVID_VERSION_MAJOR 0
 #define YVID_VERSION_MINOR 3
-#define YVID_VERSION_PATCH 0
-#define YVID_VERSION_STRING "0.3.0"
+#define YVID_VERSION_PATCH 1
+#define YVID_VERSION_STRING "0.3.1"
 
 #include "ysp/gfx.h"
 #include "ysp/timeline.h"
@@ -1253,7 +1257,11 @@ YVID_API uint64_t yvid_heap_calls(void) { return (uint64_t)yvid__ld64((const int
     #elif defined(__clang__)
         #pragma clang diagnostic push
         #pragma clang diagnostic ignored "-Wshorten-64-to-32"
+        #pragma clang diagnostic ignored "-Wfloat-conversion"
         #pragma clang diagnostic ignored "-Wunknown-warning-option"
+    #elif defined(__GNUC__)
+        #pragma GCC diagnostic push
+        #pragma GCC diagnostic ignored "-Wfloat-conversion"
     #endif
     #if !defined(YVID_PL_MPEG_EXTERNAL)
         #define PL_MPEG_IMPLEMENTATION
@@ -1263,6 +1271,8 @@ YVID_API uint64_t yvid_heap_calls(void) { return (uint64_t)yvid__ld64((const int
         #pragma warning(pop)
     #elif defined(__clang__)
         #pragma clang diagnostic pop
+    #elif defined(__GNUC__)
+        #pragma GCC diagnostic pop
     #endif
 #endif
 

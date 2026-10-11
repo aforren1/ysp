@@ -454,6 +454,7 @@ Purpose: A movie as a stimulus: on each display frame the frame due at the predi
 
 Status:
 
+- v0.3.1: pl_mpeg.h builds under `-Wfloat-conversion` (gcc and clang); no change to ysp code.
 - v0.3.0 (the [Conventions](conventions.md): `yvid_seq_open()`/`_finish()`/`_close()`, `yvid_probe()` returns a code, every failing call writes its message; 2 mutants added).
 - v0.2.2: XXH64 twice as fast on MSVC (11.9 to 14.1 GB/s), the same hashes.
 - v0.2.1: a custom decoder that returned not-ready was never woken again (a lost wake-up on the decode thread); now it is retried each display frame, and after an outage the due frame shows on time (docs/video.md).

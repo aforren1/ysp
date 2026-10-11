@@ -454,6 +454,26 @@ slice-0 share at N = 4), its miss p50 +1 p99 +4 lines against -20, and
 options do not change the path: every present still went to an overlay
 plane.
 
+Lead test by eye (2026-10-10, guard 8, before the guard wrapped, magenta):
+
+| Lead | Top stripe (slice-0 seam) | Other edges |
+|---|---|---|
+| 600 us | Thin, always on | Flicker, off more than on |
+| 800 us | Flickers in and out | Always on, width changes |
+| 1000 us | Mostly gone | Always on |
+
+The scanline read put the 800 us presents 54 to 58 lines before their
+target rows (p50 -57 lines). Interpretation, not measured: on this panel
+the light lags the scanline read by about 600 us (about 44 lines) at
+the middle edges, with a spread of roughly 8 rows either way, since at
+600 us those stripes come and go at guard 8 and at 800 us they show all
+the time at changing widths (the tear now lands early). The seam needs
+about 400 us more lead than the middle edges, which is what
+`--seam-lines` gives slice 0 alone. Next: a sweep of 400 to 700 us in
+steps of 50 with `--ruler` to read the offset in rows; then the best
+lead with the wrapped guard and `--seam-lines 30`; then the same on an
+external monitor to tell PSR2 from a pipeline delay.
+
 ## 5. What this decides for ysp/screen.h
 
 An opt-in beam-racing present mode, `DXGI_FLIP` only:
