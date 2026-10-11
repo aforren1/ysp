@@ -14,9 +14,10 @@ library (SDL3, miniaudio, liblsl).
 Only one machine has run these headers on real devices: a Windows 11
 laptop (i7-1360P, Intel Iris Xe driving its internal 1920x1200 60 Hz
 panel, Realtek speakers). No photodiode, photometer, loopback cable,
-external monitor, serial or parallel port, response box, trigger box,
-microcontroller board or LabStreamer was attached (docs/screen.md,
-docs/audio.md, docs/device.md). "Sim" below means simulated displays,
+external monitor, parallel port, response box, trigger box or
+LabStreamer was attached (docs/screen.md, docs/audio.md,
+docs/device.md). The one serial device was a Teensy 4.0 echo board on
+native USB (the serial row). "Sim" below means simulated displays,
 fake transports, virtual serial pairs, null audio devices or software
 renderers, in tests and CI.
 
@@ -29,7 +30,7 @@ renderers, in tests and CI.
 | rt | Windows 11: clock, waits, worker, event ring | The device clock fit: no real device has fed it; macOS | rt.h STATUS; docs/rt.md |
 | input, response | Windows 11: keys sent with SendInput through SDL 3.4 | A key pressed by hand; mouse, touch, pen, gamepad timing; response boxes | input.h; docs/response.md |
 | net | Windows 11 and WSL2: the real liblsl (1.17.5, 1.17.7) over local loopback | No LabStreamer or other LSL device; macOS | net.h STATUS; docs/net.md |
-| serial | Windows 11, i7-1360P: a Teensy 4.0 echo board over native USB, through the MATLAB MEX binding (2026-10-11) | Linux virtual port pairs; macOS never ran on a device; no USB-serial bridge (FTDI) or RS-232 port yet | docs/serial.md, "Results with the Teensy 4.0 echo board" |
+| serial | Windows 11, i7-1360P, 2026-10-11: the Windows backend on a Teensy 4.0 echo board over native USB CDC (usbser), through the MATLAB MEX binding. Round trip 172 to 288 us median, 279 to 424 us p99, against a raw Win32 floor of 167 to 229 us; IOPort with BlockingBackgroundRead=1 PollLatency=0 matches it | Linux virtual port pairs only; macOS, USB-serial bridges (FTDI) and RS-232 never ran | docs/serial.md, "Results with the Teensy 4.0 echo board" |
 | parallel | none on Windows; the "Linux tested" note does not say whether a real port was used | The Windows backend never reached hardware | parallel.h STATUS |
 | box | none | Pure protocol code; no byte from or to a vendor device; the firmware never ran on a board | box.h STATUS; docs/box.md |
 | device | none | Fake transports, the simulated display and socat pairs; no box, board or trigger interface opened | device.h STATUS; docs/device.md |
@@ -100,6 +101,7 @@ Purpose: Parallel port (LPT) trigger output and line input, blocking and async p
 
 Status:
 
+- Bindings: `ysp-parallel` 0.4.0.1 (Python) and the MEX `ysp_parallel` take and return every time in seconds. [Bindings](bindings.md#versions).
 - v0.4.0 (the [Conventions](conventions.md): pulse widths in `int64_t` ns, every call but open returns 0, a byte or a `YPAR_ERR_*` code, `ypar_strerror()`, version macros).
 - v0.3, on ysp/rt.h. Linux tested; Windows backend compiled but not run on hardware. [Design notes](parallel.md).
 
@@ -114,8 +116,10 @@ Purpose: Serial port (RS-232, USB-serial, USB-CDC) byte I/O for trigger and resp
 
 Status:
 
+- Hardware: the Windows backend ran on a Teensy 4.0 over native USB CDC (usbser), 2026-10-11, through the MATLAB MEX: round trip 172 to 288 us median, 279 to 424 us p99, against a raw Win32 floor of 167 to 229 us; IOPort with BlockingBackgroundRead=1 PollLatency=0 matches it. macOS and USB-serial bridges (FTDI) and RS-232 never ran. [Results](serial.md#results-with-the-teensy-40-echo-board).
+- Bindings: `ysp-serial` 0.5.0.1 (Python) and the MEX `ysp_serial` 2.0.0 take and return every time in seconds; the MEX has an async line reader. [Bindings](bindings.md#versions).
 - v0.5.0 (the [Conventions](conventions.md): widths, timeouts and the break in `int64_t` ns, `YSER_TIMEOUT_INFINITE` is -1, `yser_now_us()` removed, version macros).
-- v0.4, on ysp/rt.h. Linux tested against a virtual port pair; the Windows and macOS backends compile in CI but have never run on a device. [Design notes](serial.md).
+- v0.4, on ysp/rt.h. Linux tested against a virtual port pair; the Windows and macOS backends compiled in CI but had not run on a device. [Design notes](serial.md).
 
 ### ysp/trials.h
 
