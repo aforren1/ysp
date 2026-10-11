@@ -348,6 +348,7 @@ int main(int argc, char** argv) {
     fprintf(out, "trial_index,stimulus,key_answer,response,rt,correct,track,intensity,contrast_shown,scene_contrast,"
                  "code_peak,code_trough,estimate,onset_tier,onset_src,landing_residual,onset_frame,rsp_tier,n_early\n");
 
+    ygfx_prime(&gfx);   /* each kind's first draw now, not on a trial's first frames (docs/gfx.md) */
     for (;;) {
         SDL_Event ev;
         int64_t bt = 0;

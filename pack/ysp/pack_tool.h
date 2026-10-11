@@ -1,4 +1,4 @@
-/* ysp/pack_tool.h - v0.2.0 - the pack tool as a library (prefix ypt_)
+/* ysp/pack_tool.h - v0.3.0 - the pack tool as a library (prefix ypt_)
  *
  *   Builds, verifies, lists, extracts, rebuilds and appends ysp packs
  *   (docs/pack.md). The CLI `ypak` (pack/ypak.c) is a thin layer over these
@@ -6,8 +6,11 @@
  *   header: a C11 library in the pack tool's tree that links ysp/pack.h,
  *   ysp/json.h (every description and manifest), ysp/table.h,
  *   ysp/outline.h, ysp/gfx.h (CPU parts: the shader wrapper and the curve
- *   set check), ysp/color.h, ysp/audio.h (the WAV probe), pack/layout
- *   (Skribidi, for glyph runs) and lodepng (PNG). The library compiles
+ *   set check), ysp/color.h, ysp/audio.h (the WAV probe), lodepng (PNG)
+ *   and, for glyph runs only, pack/layout (Skribidi and HarfBuzz). Built
+ *   with YPT_NO_LAYOUT (CMake: YSP_BUILD_PACK=ON without YSP_BUILD_LAYOUT),
+ *   the library has no pack/layout and refuses a GLYPHRUNS resource by
+ *   name; every other kind gives the same bytes. The library compiles
  *   those headers' implementations itself (pack/pack_impl.c): a program
  *   that links it does not define YSP_PACK_IMPLEMENTATION,
  *   YSP_JSON_IMPLEMENTATION, YSP_TABLE_IMPLEMENTATION,
@@ -26,6 +29,13 @@
  *   "device" in the description (refused without); r16ui is linear only.
  *   Texture entries and the chunk list differ from v0.1.1's; so does a
  *   SHADER entry, which records YGFX_SHADER_CONTRACT 2.
+ *
+ *   v0.3.0 (2026-10-10): the core tool. pack/layout is optional
+ *   (YPT_NO_LAYOUT), and the manifest's tool.libraries names "layout"
+ *   only when the pack has a GLYPHRUNS entry. So a pack without glyph runs
+ *   has the same bytes and pack ID from the core and the full tool; its
+ *   manifest differs from v0.2.0's by that line, and every other entry is
+ *   byte-identical to v0.2.0's.
  *
  *   Every call returns 0 or a negative code (ysp/pack.h's YPAK_ERR_*
  *   values) and writes one line into err: what failed, where, and what to
@@ -48,7 +58,7 @@
 extern "C" {
 #endif
 
-#define YPT_VERSION_STRING "0.2.0"
+#define YPT_VERSION_STRING "0.3.0"
 
 typedef struct ypt_options {
     const char* sources;   /* the sources' folder; NULL: the description's folder */

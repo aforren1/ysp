@@ -239,6 +239,7 @@ int main(int argc, char** argv) {
     else printf("player 1: press a key on your keyboard\n");
     t_state = 0;
 
+    ygfx_prime(&gfx);   /* each kind's first draw now, not on a trial's first frames (docs/gfx.md) */
     for (;;) {
         SDL_Event ev;
         yin_event in;

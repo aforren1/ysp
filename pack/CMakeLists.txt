@@ -1,38 +1,41 @@
-# The pack tool's text layout (docs/layout.md): the glue library, its
-# test, and examples/layout/gfx_layout.c. Added by the top-level CMakeLists.txt when
-# YSP_BUILD_LAYOUT is ON, after third_party/.
+# The pack tool's text layout (docs/layout.md) and the pack tool
+# (docs/pack.md). Added by the top-level CMakeLists.txt when YSP_BUILD_LAYOUT
+# or YSP_BUILD_PACK is ON; the layout parts need YSP_BUILD_LAYOUT (and
+# third_party/, added before this).
 
-add_library(ysp_layout STATIC layout.c ysp/layout.h)
-target_include_directories(ysp_layout PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(ysp_layout PUBLIC ysp::rig ysp_skribidi)
-target_compile_options(ysp_layout PRIVATE ${YSP_WARNINGS})
-set_target_properties(ysp_layout PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
-target_compile_definitions(ysp_layout PRIVATE YLAY_PATCHES="${YSP_SKRIBIDI_PATCHES}")
-if(UNIX)
-    target_link_libraries(ysp_layout PUBLIC m)
-endif()
+if(YSP_BUILD_LAYOUT)
+    add_library(ysp_layout STATIC layout.c ysp/layout.h)
+    target_include_directories(ysp_layout PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(ysp_layout PUBLIC ysp::rig ysp_skribidi)
+    target_compile_options(ysp_layout PRIVATE ${YSP_WARNINGS})
+    set_target_properties(ysp_layout PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_definitions(ysp_layout PRIVATE YLAY_PATCHES="${YSP_SKRIBIDI_PATCHES}")
+    if(UNIX)
+        target_link_libraries(ysp_layout PUBLIC m)
+    endif()
 
-if(YSP_BUILD_TESTS)
-    # ysp/gfx.h is compiled without SDL for ygfx_cset_check(), as in
-    # tests/adapt/outline_test.c. Without the corpus fonts it says that
-    # it skipped them and still runs its order checks on a font it writes.
-    ysp_add_program(test_layout ${PROJECT_SOURCE_DIR}/tests/layout/layout_test.c rig)
-    target_link_libraries(test_layout PRIVATE ysp_layout)
-    set(YSP_LAYOUT_TEST_FONTS "C:/Windows/Fonts" CACHE PATH "Font folder of the corpus check (YSP_FONTS_DIR overrides it at run time)")
-    target_compile_definitions(test_layout PRIVATE YSCR_NO_SDL
-        YLAY_TEST_DIR="${PROJECT_SOURCE_DIR}/tests/layout" YLAY_TEST_FONTS="${YSP_LAYOUT_TEST_FONTS}")
-    add_test(NAME test_layout COMMAND test_layout)
-    # The costs of docs/layout.md; not a test (run it under the lock).
-    ysp_add_program(layout_bench ${PROJECT_SOURCE_DIR}/tests/layout/layout_bench.c rig)
-    target_link_libraries(layout_bench PRIVATE ysp_layout)
-endif()
+    if(YSP_BUILD_TESTS)
+        # ysp/gfx.h is compiled without SDL for ygfx_cset_check(), as in
+        # tests/adapt/outline_test.c. Without the corpus fonts it says that
+        # it skipped them and still runs its order checks on a font it writes.
+        ysp_add_program(test_layout ${PROJECT_SOURCE_DIR}/tests/layout/layout_test.c rig)
+        target_link_libraries(test_layout PRIVATE ysp_layout)
+        set(YSP_LAYOUT_TEST_FONTS "C:/Windows/Fonts" CACHE PATH "Font folder of the corpus check (YSP_FONTS_DIR overrides it at run time)")
+        target_compile_definitions(test_layout PRIVATE YSCR_NO_SDL
+            YLAY_TEST_DIR="${PROJECT_SOURCE_DIR}/tests/layout" YLAY_TEST_FONTS="${YSP_LAYOUT_TEST_FONTS}")
+        add_test(NAME test_layout COMMAND test_layout)
+        # The costs of docs/layout.md; not a test (run it under the lock).
+        ysp_add_program(layout_bench ${PROJECT_SOURCE_DIR}/tests/layout/layout_bench.c rig)
+        target_link_libraries(layout_bench PRIVATE ysp_layout)
+    endif()
 
-if(YSP_BUILD_EXAMPLES AND TARGET SDL3::SDL3)
-    ysp_add_program(gfx_layout ${PROJECT_SOURCE_DIR}/examples/layout/gfx_layout.c rig)
-    target_link_libraries(gfx_layout PRIVATE ysp_layout)
-    # PsychoPy's Stroop demos (docs/rig_spec.md 15.5): words laid out here.
-    ysp_add_program(trial_stroop ${PROJECT_SOURCE_DIR}/examples/response/trial_stroop.c rig methods)
-    target_link_libraries(trial_stroop PRIVATE ysp_layout)
+    if(YSP_BUILD_EXAMPLES AND TARGET SDL3::SDL3)
+        ysp_add_program(gfx_layout ${PROJECT_SOURCE_DIR}/examples/layout/gfx_layout.c rig)
+        target_link_libraries(gfx_layout PRIVATE ysp_layout)
+        # PsychoPy's Stroop demos (docs/rig_spec.md 15.5): words laid out here.
+        ysp_add_program(trial_stroop ${PROJECT_SOURCE_DIR}/examples/response/trial_stroop.c rig methods)
+        target_link_libraries(trial_stroop PRIVATE ysp_layout)
+    endif()
 endif()
 
 # The pack tool (docs/pack.md): the library, the ypak CLI and its test. The
@@ -60,7 +63,16 @@ if(YSP_BUILD_PACK)
 
     add_library(ysp_pack_tool STATIC pack_tool.c pack_impl.c ysp/pack_tool.h)
     target_include_directories(ysp_pack_tool PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-    target_link_libraries(ysp_pack_tool PUBLIC ysp_layout ysp_lodepng ysp::rig)
+    # The headers' implementations need ysp::core's threads and libm, and dl
+    # for ysp/gfx.h's headless presenter; not ysp::rig, which would link SDL3
+    # into a tool that never opens a window.
+    target_link_libraries(ysp_pack_tool PUBLIC ysp_lodepng ysp::core ${CMAKE_DL_LIBS})
+    if(YSP_BUILD_LAYOUT)
+        target_link_libraries(ysp_pack_tool PUBLIC ysp_layout)
+    else()
+        # PUBLIC: ypak and the tool test see which kinds this build has.
+        target_compile_definitions(ysp_pack_tool PUBLIC YPT_NO_LAYOUT)
+    endif()
     target_compile_options(ysp_pack_tool PRIVATE ${YSP_WARNINGS})
     target_compile_definitions(ysp_pack_tool PRIVATE YPT_LODEPNG="${_lp_pin}")
     set_target_properties(ysp_pack_tool PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)

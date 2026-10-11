@@ -134,7 +134,8 @@ checkout with `core.autocrlf=true` keeps the files as upstream has them.
 `e584a8490db1b76b81bf298c11c09d3b55d9c270` (2026-10-06): `lodepng.cpp`,
 `lodepng.h` and `LICENSE`, unchanged. The pack tool (CMake option
 `YSP_BUILD_PACK`, docs/pack.md) decodes PNG textures with it; the layout
-library does not need it. Like the trees above, it is fetched, not
+library does not need it. The core pack tool (`YSP_BUILD_PACK=ON` without
+`YSP_BUILD_LAYOUT`) needs only this file set, not the layout trees above. Like the trees above, it is fetched, not
 committed:
 
 ```sh

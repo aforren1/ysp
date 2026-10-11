@@ -3,9 +3,9 @@ project(ysp LANGUAGES C CXX)
 
 # Consumers: add_subdirectory(ysp), then link the group whose headers the
 # program includes:
-#   ysp::core     rt, timeline, table
+#   ysp::core     rt, timeline, table, json, pack
 #   ysp::methods  stair, quest, aep, trials
-#   ysp::devices  serial, parallel, input, response
+#   ysp::devices  serial, parallel, input, response, box, device, rigfile, net
 #   ysp::rig      screen, gfx, color, outline, rdk, video, audio
 # or ysp::ysp, all four. Each group carries the include path, the groups its
 # headers include, and what an IMPLEMENTATION translation unit needs to link,
@@ -95,10 +95,12 @@ option(YSP_TRACY_CHECK "Fetch Tracy and build the YRT_TRACY compile check" OFF)
 # tests/layout/). About 8 MB of sources that no header needs.
 option(YSP_BUILD_LAYOUT "Build the layout library (pack/, third_party/), its test and gfx_layout" OFF)
 # Off by default: the pack tool (pack/pack_tool.c, the ypak CLI, tests/pack/).
-# It needs the layout library (glyph runs) and lodepng in third_party/lodepng/
-# (tools/vendor_pack.py fetches it). ysp/pack.h itself is a header in the
-# list below and needs neither.
-option(YSP_BUILD_PACK "Build the pack tool library, ypak and its tests (needs YSP_BUILD_LAYOUT)" OFF)
+# It needs lodepng in third_party/lodepng/ (tools/vendor_pack.py fetches it).
+# With YSP_BUILD_LAYOUT also ON it builds glyph runs; without, it is the core
+# tool, which refuses them and builds every other kind to the same bytes, so
+# a pack of tables, sounds and images does not need HarfBuzz. ysp/pack.h
+# itself is a header in the list below and needs neither.
+option(YSP_BUILD_PACK "Build the pack tool library, ypak and its tests (glyph runs need YSP_BUILD_LAYOUT)" OFF)
 
 # ysp/screen.h needs SDL3 (3.2 or later). Without it only its SDL-free test is
 # built; point SDL3_DIR at an SDL3 CMake package to build the rest. ANGLE is
@@ -643,16 +645,16 @@ if(YSP_BUILD_LAYOUT)
                 "(or python3 tools/vendor_layout.py --write; it needs git for the patches)")
         endif()
     endforeach()
-    if(YSP_BUILD_PACK AND NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lodepng/lodepng.cpp)
-        message(FATAL_ERROR "YSP_BUILD_PACK: third_party/lodepng is missing. Fetch and verify it once, from the "
-            "repository root:\n"
-            "    uv run --no-project python tools/vendor_pack.py --write\n"
-            "(or python3 tools/vendor_pack.py --write)")
-    endif()
     add_subdirectory(third_party)
+endif()
+if(YSP_BUILD_PACK AND NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lodepng/lodepng.cpp)
+    message(FATAL_ERROR "YSP_BUILD_PACK: third_party/lodepng is missing. Fetch and verify it once, from the "
+        "repository root:\n"
+        "    uv run --no-project python tools/vendor_pack.py --write\n"
+        "(or python3 tools/vendor_pack.py --write)")
+endif()
+if(YSP_BUILD_LAYOUT OR YSP_BUILD_PACK)
     add_subdirectory(pack)
-elseif(YSP_BUILD_PACK)
-    message(FATAL_ERROR "YSP_BUILD_PACK needs YSP_BUILD_LAYOUT=ON (glyph runs are laid out with Skribidi)")
 endif()
 
 if(YSP_TRACY_CHECK AND YSP_BUILD_TESTS)

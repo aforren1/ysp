@@ -21,7 +21,9 @@
 #include "ysp/gfx.h"
 #include "ysp/color.h"
 #include "ysp/audio.h"
+#ifndef YPT_NO_LAYOUT
 #include "ysp/layout.h"
+#endif
 #include "lodepng.h"
 
 #include <stdarg.h>
@@ -117,7 +119,9 @@ static void sb_put(sb* b, const void* s, size_t n) {
     b->n += n;
     b->p[b->n] = 0;
 }
+#ifndef YPT_NO_LAYOUT   /* only the glyph runs write strings */
 static void sb_puts(sb* b, const char* s) { sb_put(b, s, strlen(s)); }
+#endif
 
 /* --- files --------------------------------------------------------------------- */
 
@@ -1143,6 +1147,15 @@ static int build_texture(B* b, E* e) {
     return 0;
 }
 
+#ifdef YPT_NO_LAYOUT
+/* The core tool: glyph runs need the layout stack (HarfBuzz and Skribidi,
+ * about 8 MB of sources), which a pack of tables, sounds and images should
+ * not have to build. Refused by name, so a rebuild says what to install. */
+static int build_glyphruns(B* b, E* e) {
+    return cfail(b->c, YPAK_ERR_FORMAT, "'%s': glyph runs need the layout library; this ypak was built without it "
+                 "(configure with -DYSP_BUILD_LAYOUT=ON)", e->name);
+}
+#else
 typedef struct blk { const char* key; jv* v; } blk;
 static int blk_cmp(const void* a, const void* b2) {
     const blk* x = (const blk*)a;
@@ -1346,6 +1359,7 @@ static int build_glyphruns(B* b, E* e) {
     }
     return 0;
 }
+#endif /* YPT_NO_LAYOUT */
 
 /* --- the container ------------------------------------------------------------ */
 
@@ -1538,10 +1552,10 @@ static int write_pack(C* c, sink* s, E** ents, int n, int64_t prefix, int absolu
 
 /* --- build ------------------------------------------------------------------- */
 
-static void lib_versions(C* c, jv* tool) {
+/* The layout line only when an entry was laid out: then the core and the
+ * full tool give one pack, and one pack ID, for the packs both can build. */
+static void lib_versions(C* c, jv* tool, int laid_out) {
     jv* l = jnew(c, J_OBJ);
-    const ylay_versions* v = ylay_get_versions();
-    char line[1024];
     jset(c, tool, "name", jstrz(c, "ypak"));
     jset(c, tool, "version", jstrz(c, YPT_VERSION_STRING));
     jset(c, l, "ysp/pack.h", jstrz(c, YPAK_VERSION_STRING));
@@ -1551,9 +1565,17 @@ static void lib_versions(C* c, jv* tool) {
     jset(c, l, "ysp/gfx.h", jstrz(c, YGFX_VERSION_STRING));
     jset(c, l, "ysp/color.h", jstrz(c, YCOL_VERSION_STRING));
     jset(c, l, "ysp/audio.h", jstrz(c, YAU_VERSION_STRING));
-    snprintf(line, sizeof line, "ylay %s skribidi %s %s harfbuzz %s sheenbidi %s libunibreak %s budouxc %s", v->ylay, v->skribidi,
-             v->skribidi_patch, v->harfbuzz, v->sheenbidi, v->libunibreak, v->budouxc);
-    jset(c, l, "layout", jstrz(c, line));
+#ifndef YPT_NO_LAYOUT
+    if (laid_out) {
+        const ylay_versions* v = ylay_get_versions();
+        char line[1024];
+        snprintf(line, sizeof line, "ylay %s skribidi %s %s harfbuzz %s sheenbidi %s libunibreak %s budouxc %s", v->ylay, v->skribidi,
+                 v->skribidi_patch, v->harfbuzz, v->sheenbidi, v->libunibreak, v->budouxc);
+        jset(c, l, "layout", jstrz(c, line));
+    }
+#else
+    (void)laid_out;   /* a glyph run entry fails the build before this */
+#endif
     jset(c, l, "lodepng", jstrz(c, YPT_LODEPNG));
     jset(c, tool, "libraries", l);
 }
@@ -1730,7 +1752,9 @@ static int build_desc(C* c, jv* desc, const char* base_dir, sink* out) {
     jset(c, manifest, "version", jint(c, YPAK_FORMAT));
     {
         jv* tool = jnew(c, J_OBJ);
-        lib_versions(c, tool);
+        int laid_out = 0;
+        for (i = 0; i < b.n; i++) laid_out |= b.e[i]->kind == YPAK_KIND_GLYPHRUNS;
+        lib_versions(c, tool, laid_out);
         jset(c, manifest, "tool", tool);
     }
     if (b.audio) jset(c, manifest, "audio", jcopy(c, b.audio));

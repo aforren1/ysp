@@ -246,6 +246,7 @@ int main(int argc, char** argv) {
     memset(&go_onset, 0, sizeof go_onset);
     memset(&rec, 0, sizeof rec);
 
+    ygfx_prime(&gfx);   /* each kind's first draw now, not on a trial's first frames (docs/gfx.md) */
     for (;;) {
         SDL_Event ev;
         int64_t bt = 0;

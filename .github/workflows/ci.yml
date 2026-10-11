@@ -306,6 +306,48 @@ jobs:
         run: ctest --test-dir build --output-on-failure
 
   # --------------------------------------------------------------------- #
+  # The core pack tool (docs/pack.md 5.1): YSP_BUILD_PACK without the     #
+  # layout stack, with only lodepng fetched. Its test builds every kind   #
+  # but glyph runs, checks the refusal of glyph runs, and verifies; then  #
+  # the CLI on the test's packs. The Screen job compares its core pack    #
+  # with the full tool's byte for byte.                                    #
+  # --------------------------------------------------------------------- #
+  pack-core:
+    name: Pack tool, core (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: lodepng cache
+        uses: actions/cache@v6
+        with:
+          path: ~/ysp-pack-files
+          key: lodepng-${{ hashFiles('tools/vendor_pack.py') }}
+
+      - name: lodepng (fetched, verified)
+        shell: bash
+        run: |
+          PY=$(command -v python3 || command -v python)
+          "$PY" tools/vendor_pack.py --write --cache ~/ysp-pack-files
+
+      - name: Configure, build, test and verify
+        shell: bash
+        run: |
+          set -eu
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DYSP_BUILD_PACK=ON -DYSP_BUILD_EXAMPLES=OFF
+          cmake --build build --config Release --target ypak test_pack_tool
+          ctest --test-dir build -C Release -R pack_tool --output-on-failure
+          if [ "$RUNNER_OS" = Windows ]; then bin=build/pack/Release; else bin=build/pack; fi
+          "$bin/ypak" verify build/pack/pack_tool_work/corpus.ysppak
+          "$bin/ypak" verify build/pack/pack_tool_work/core.ysppak
+          "$bin/ypak" list build/pack/pack_tool_work/core.ysppak > /dev/null
+          if "$bin/ypak" bogus x; then echo "::error::ypak bogus exited 0"; exit 1; fi
+
+  # --------------------------------------------------------------------- #
   # WebAssembly: the computation headers (stair, quest, aep, trials,       #
   # timeline, color, pack, json)                                           #
   # claim to need nothing but libm, and ysp/rt.h claims a platform branch  #
@@ -914,6 +956,27 @@ jobs:
           # built from PNGs made in code, on the simulated display.
           "$bin/ypak" verify build/pack/trial_images.ysppak
           "$bin/trial_images" --sim --out "$RUNNER_TEMP/trial_images.csv"
+
+      # The core tool beside the full one (docs/pack.md 5.1): the same
+      # description gives the same bytes, each tool verifies the other's
+      # packs, and the core tool refuses to rebuild a pack with glyph runs.
+      - name: Pack tool, core against full (Windows, Linux)
+        if: runner.os != 'macOS'
+        shell: bash
+        run: |
+          set -eu
+          cmake -B build-core -DCMAKE_BUILD_TYPE=Release -DYSP_BUILD_PACK=ON -DYSP_BUILD_EXAMPLES=OFF
+          cmake --build build-core --config Release --target ypak test_pack_tool
+          ctest --test-dir build-core -C Release -R pack_tool --output-on-failure
+          if [ "$RUNNER_OS" = Windows ]; then full=build/pack/Release core=build-core/pack/Release; else full=build/pack core=build-core/pack; fi
+          cmp build/pack/pack_tool_work/core.ysppak build-core/pack/pack_tool_work/core.ysppak
+          "$full/ypak" verify build-core/pack/pack_tool_work/corpus.ysppak
+          "$core/ypak" verify build/pack/pack_tool_work/corpus.ysppak
+          "$core/ypak" verify build/pack/trial_images.ysppak
+          "$core/ypak" rebuild build/pack/pack_tool_work/core.ysppak --sources build/pack/pack_tool_work
+          if "$core/ypak" rebuild build/pack/pack_tool_work/corpus.ysppak --sources build/pack/pack_tool_work; then
+            echo "::error::the core ypak rebuilt a pack with glyph runs"; exit 1
+          fi
 
       # The runner's MinGW-w64 gcc, warnings as errors, on the same sources.
       - name: MinGW compile checks (Windows)
