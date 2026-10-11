@@ -3,10 +3,11 @@
  * A fixation cross from 0 to 0.5 s, then a grating in a circular aperture
  * with a raised-cosine edge, whose contrast ramps up over 100 ms with a
  * raised cosine, holds at 0.3, and ramps down to end at 1.2 s; a trigger
- * at the grating's onset. The timeline drives the stimuli through
- * bindings: the fixation's and the grating's `visible` from onset and
- * offset events, the grating's contrast from a keyed track. Each fired
- * event is printed with its frame and residual.
+ * at the grating's onset. The timeline writes the stimuli's fields itself
+ * (ysp/timeline.h TARGETS), as GSAP's timeline.set() and .to() do: sets of
+ * `visible` that land where events at the same times land, and tweens of
+ * the grating's contrast. Each fired event (the trigger) is printed with
+ * its frame and residual.
  *
  * Usage: gfx_trial [--sim] [--cache DIR] [--no-cache]
  *   --cache DIR keep compiled programs in DIR; the default is the per-user
@@ -23,27 +24,16 @@
 #include <stdio.h>
 #include <string.h>
 
-enum { FIX_ON, GRATING_ON, CONTRAST, N_CHANNELS };
 enum { TRIAL = 1 };
 #define S YRT_S(1)
 
-static const ytl_key ramp[] = {
-    { S / 2,          0.0f, YTL_EASE_COSINE, 0, 0 },
-    { S / 2 + S / 10, 0.3f, YTL_EASE_LINEAR, 0, 0 },
-    { 11 * S / 10,    0.3f, YTL_EASE_COSINE, 0, 0 },
-    { 6 * S / 5,      0.0f, YTL_EASE_LINEAR, 0, 0 },
-};
-
 static ytl_event storage[64];
+static ytl_target_slot targets[8];
+static ytl_tween_slot tweens[16];
 static ytl_timeline tl;
 static yscr_screen scr;
 static ygfx_gfx gfx;
 static ygfx_stim fix, grating;
-static const ygfx_bind binds[] = {
-    { .stim = &fix,     .param = YGFX_P_VISIBLE,  .channel = FIX_ON     },
-    { .stim = &grating, .param = YGFX_P_VISIBLE,  .channel = GRATING_ON },
-    { .stim = &grating, .param = YGFX_P_CONTRAST, .channel = CONTRAST   },
-};
 
 /* yscr_open() calls this once its GL context exists, before it settles
  * the display (0.5 to 2.5 s). The gfx submits its programs and returns; the
@@ -56,13 +46,6 @@ static void start_gfx(void* ctx, yscr_screen* s) {
     ygfx_open_start(&gfx, gd);
 }
 
-static ytl_event ev(int64_t t, int kind, int target, int code) {
-    ytl_event e;
-    memset(&e, 0, sizeof e);
-    e.time_ns = t; e.base = TRIAL; e.kind = (uint8_t)kind; e.target = target; e.code = code;
-    return e;
-}
-
 int main(int argc, char** argv) {
     yscr_desc sd;
     ygfx_desc gd;
@@ -70,7 +53,8 @@ int main(int argc, char** argv) {
     ygfx_shape_desc fd;
     ygfx_grating_desc grd;
     yscr_frame f;
-    ytl_event fired[8], e[5];
+    ytl_event fired[8];
+    ytl_seq q;
     static ygfx_file_cache pcache;
     static char cache_dir[512];
     const ygfx_cache* cache = NULL;
@@ -92,15 +76,23 @@ int main(int argc, char** argv) {
     else if (!cache && ygfx_default_cache_dir(cache_dir, sizeof cache_dir) == YGFX_OK)
         cache = ygfx_file_cache_init(&pcache, cache_dir);
     memset(&td, 0, sizeof td);
-    td.events = storage; td.event_capacity = 64; td.n_channels = N_CHANNELS;
+    td.events = storage; td.event_capacity = 64;
+    td.targets = targets; td.target_capacity = 8; td.tweens = tweens; td.tween_capacity = 16;
     if (!ytl_open(&tl, &td)) { fprintf(stderr, "%s\n", ytl_error(&tl)); return 1; }
-    e[0] = ev(0,         YTL_ONSET,   FIX_ON, 0);
-    e[1] = ev(S / 2,     YTL_OFFSET,  FIX_ON, 0);
-    e[2] = ev(S / 2,     YTL_ONSET,   GRATING_ON, 0);
-    e[3] = ev(S / 2,     YTL_TRIGGER, 0, 12);
-    e[4] = ev(6 * S / 5, YTL_OFFSET,  GRATING_ON, 0);
-    ytl_add_n(&tl, e, 5);
-    ytl_set_keys(&tl, CONTRAST, TRIAL, ramp, 4);
+    /* The trial, in the order it plays. A field is the caller's until its
+     * first tween starts, so the stimuli below start hidden. */
+    q = ytl_seq_on(&tl, TRIAL);
+    ytl_tween_set(&q, &fix.visible, 1.0f);
+    ytl_wait(&q, S / 2);
+    ytl_tween_set(&q, &fix.visible, 0.0f);
+    ytl_tween_set(&q, &grating.visible, 1.0f);
+    ytl_trigger(&q, 12);
+    ytl_tween_from_to(&q, &grating.contrast, 0.0f, 0.3f, S / 10, YTL_EASE_COSINE);
+    ytl_wait(&q, 6 * S / 10);
+    ytl_tween_to(&q, &grating.contrast, 0.0f, S / 10, YTL_EASE_COSINE);
+    ytl_wait(&q, S / 10);
+    ytl_tween_set(&q, &grating.visible, 0.0f);
+    if (q.err < 0) { fprintf(stderr, "%s\n", ytl_error(&tl)); return 1; }
 
     memset(&gd, 0, sizeof gd);
     gd.background[0] = gd.background[1] = gd.background[2] = 0.5f;
@@ -128,7 +120,6 @@ int main(int argc, char** argv) {
     while (yscr_begin(&scr, &f) == YSCR_OK) {
         if (f.index == 0) { ytl_anchor(&tl, TRIAL, f.onset, 0); t0 = f.onset; }
         n = ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, fired, 8);
-        ygfx_apply(binds, 3, ytl_values(&tl));
         yscr_mark(&scr, YSCR_PHASE_EVALUATE);
         ygfx_begin(&gfx, &f);
         ygfx_draw(&gfx, &fix);

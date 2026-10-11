@@ -1,4 +1,4 @@
-/* ysp/timeline.h - v0.5.0 - public domain single-header timeline library
+/* ysp/timeline.h - v0.6.0 - public domain single-header timeline library
  *
  *   What a frame shows, as a function of when the frame appears. Events
  *   (onsets, offsets, value changes, triggers, annotations) at times on a
@@ -6,7 +6,9 @@
  *   (position, contrast, opacity, spatial frequency), and one call per frame
  *   that takes the PREDICTED ONSET of the frame being drawn, fills the
  *   channel values for it and reports which events landed on it, with the
- *   frame and the residual. It never reads a clock.
+ *   frame and the residual. It never reads a clock. Tweens can also write
+ *   the caller's own fields (a stimulus's x, contrast or color), as GSAP's
+ *   gsap.to(target, vars) does (TARGETS).
  *
  *   Written in the single-header style of the stb / sokol libraries. Pure
  *   computation: no OS calls, no threads, no heap, no I/O. Needs nothing
@@ -139,6 +141,24 @@
  *       move.to = 4.0f; move.duration_ns = YRT_MS(300); move.keep_velocity = true;
  *       ytl_tween(&tl, DOT_X, TRIAL, &move);
  *
+ *   The trial's stimuli animated in place, with no channel numbers and no
+ *   copy per frame (TARGETS): GSAP's gsap.to(dot, {x: 300, duration: 0.5,
+ *   ease: "power2.out"}), a fade-in with gsap.from(), and a set at 0.5 s.
+ *   The pools are the caller's (desc.targets, desc.tweens):
+ *
+ *       static ytl_target_slot targets[64];
+ *       static ytl_tween_slot tweens[128];
+ *       d.targets = targets; d.target_capacity = 64;   // before ytl_open()
+ *       d.tweens = tweens;   d.tween_capacity = 128;
+ *       ...
+ *       ytl_seq s = ytl_seq_on(&tl, TRIAL);
+ *       ytl_tween_to(&s, &dot.x, 300.0f, YRT_MS(500), YTL_EASE_CUBIC_OUT);
+ *       ytl_tween_from(&s, &dot.contrast, 0.0f, YRT_MS(200), YTL_EASE_COSINE);
+ *       ytl_at(&s, YRT_MS(500));
+ *       ytl_tween_set(&s, &fix.visible, 0.0f);
+ *       if (s.err < 0) fputs(ytl_error(&tl), stderr);
+ *       // each ytl_evaluate() then writes dot.x, dot.contrast, fix.visible
+ *
  *   These blocks build as C99 and as C++17. The op-table macros
  *   (SEQUENCES) are designated initializers: C99, or C++20.
  *
@@ -198,10 +218,13 @@
  *       YTL_ONSET    channel `target` becomes 1 when it fires
  *       YTL_OFFSET   channel `target` becomes 0
  *       YTL_SET      channel `target` becomes `value`
+ *       YTL_CALL_START, YTL_CALL_COMPLETE (5, 6)  reported; the header adds
+ *                    them for a target tween's callbacks (TARGETS)
  *       YTL_KIND_USER (16) to 255: reported only, the caller's meaning
  *     A zeroed event is a MARK at time 0 on the RT base. `code`, `user` and
  *     (for the reported-only kinds) `target` are the caller's and come back
- *     unchanged in the report. Kinds 5 to 15 are reserved and rejected.
+ *     unchanged in the report. Kinds 5 to 15 are the header's, and an add
+ *     rejects them.
  *     ytl_add() copies the event into the storage the desc gave, pending
  *     (flags 0, frame -1, onset 0, residual 0), assigns it an id (0, 1, 2, ... in add order; ytl_open() restarts it) and
  *     returns the id. ytl_add_n() adds n events, all or none, and returns
@@ -249,6 +272,10 @@
  *       YTL_EASE_COSINE        e = (1 - cos(pi u)) / 2, a raised cosine
  *       YTL_EASE_QUAD_IN       e = u^2, starts slow
  *       YTL_EASE_QUAD_OUT      e = 1 - (1 - u)^2, ends slow
+ *       YTL_EASE_QUAD_IN_OUT   e = 2u^2 below u = 1/2, 1 - 2(1 - u)^2 from it
+ *       YTL_EASE_CUBIC_IN      e = u^3                 (GSAP power2.in)
+ *       YTL_EASE_CUBIC_OUT     e = 1 - (1 - u)^3       (GSAP power2.out)
+ *       YTL_EASE_CUBIC_IN_OUT  e = 4u^3 below u = 1/2, 1 - 4(1 - u)^3 from it
  *       YTL_EASE_BEZIER        e = y where x = u on the cubic Bezier
  *                                curve from (0, 0) to (1, 1) with control
  *                                points (x1, y1) and (x2, y2), CSS's
@@ -725,6 +752,111 @@
  *     that passes cannot run out of room part way. What it cannot know is
  *     the run-time takeover value.
  *
+ *   TARGETS (ytl_anim, ytl_animate, ytl_tween_to, ytl_kill, desc.targets)
+ *     A target tween writes a field of the caller: n floats (YTL_F32) or n
+ *     int32_t (YTL_I32, rounded to nearest), n from 1 to 4, at an address
+ *     the caller keeps valid while the tween lives. It is a call on a
+ *     sequence (SEQUENCES), so the sequence's base, cursor, labels and
+ *     sticky error apply, and it starts at the cursor + delay_ns; the
+ *     cursor stays. Against GSAP:
+ *       ytl_tween_to(q, &f, to, dur, ease)          gsap.to(): from the
+ *                                                     field's value at start
+ *       ytl_tween_from(q, &f, from, dur, ease)      gsap.from(): to the
+ *                                                     value at start, showing
+ *                                                     `from` until then
+ *       ytl_tween_from_to(q, &f, from, to, dur, ease) gsap.fromTo()
+ *       ytl_tween_set(q, &f, value)                 .set(): a STEP jump
+ *       ytl_animate(q, &a)                          any of these by a desc:
+ *                                                     n components, int32_t,
+ *                                                     delay, cycles, yoyo,
+ *                                                     keep_velocity,
+ *                                                     immediate, overwrite,
+ *                                                     callbacks
+ *       ytl_animate_n(q, &a, stride, n)             stagger: field i at
+ *                                                     a.target + i x stride
+ *                                                     bytes starts i x
+ *                                                     a.stagger_ns later
+ *       q.prev_start, q.prev_end                    "<" and ">": the start
+ *                                                     and end of what the
+ *                                                     last call added
+ *       ytl_kill(tl, &f), ytl_kill_tween(tl, id)    killTweensOf(), kill()
+ *     The fields of ytl_anim mean what ytl_tween_desc's mean (TWEENS), with
+ *     the same arithmetic, so a target and a channel tween given the same
+ *     desc have the same values bit for bit; to_current is gsap.from()'s
+ *     end value, the value at the start.
+ *     THE MODEL. A target is an address; one target per address, bound to
+ *     one base as a channel is (another base is YTL_ERR_BOUND, a different
+ *     type or n YTL_ERR_ARG). Its tweens are kept in (start, id) order, and
+ *     at base time t the tween with the latest (start, id) that has started
+ *     drives the field: a later tween takes the field over from its start,
+ *     and the earlier one drives it again if the base goes back before that
+ *     start. So the field is a function of base time, and a rewind, a skip
+ *     or a seek (REWIND, SKIP) gives the values of continuous play. A tween
+ *     without from_set starts from the field's value at its start: the
+ *     value of the tween before it there, or for the first the field's own
+ *     value before the timeline wrote it (the rest value, read once). These
+ *     start values are computed at the first evaluate that reaches the
+ *     start, kept, and replayed by a rewind, as a channel tween's takeover
+ *     is. A tween added later with an earlier start does not change the
+ *     kept values of the tweens after it.
+ *     WRITES. Each evaluate, after the events and channels, writes every
+ *     target of a base that is not stopped, in one pass: the driving
+ *     tween's value at the frame's onset, or, for a STEP tween (a set
+ *     included), at the window end, so its change lands on the frame where
+ *     an event at the same time lands (QUANTIZATION). Before the first
+ *     tween starts the field is not written and stays the caller's, unless
+ *     that tween has `immediate` (from and fromTo set it, GSAP's
+ *     immediateRender), which shows its `from`. After the first write the
+ *     timeline owns the field until its tweens are killed: every evaluate
+ *     writes it, also after the last tween ends, and a rewind before the
+ *     first start writes the rest value. A caller's write in between is
+ *     overwritten at the next evaluate, not read.
+ *     OVERWRITE. a.overwrite = YTL_OVERWRITE_NONE (0) keeps the field's
+ *     other tweens, as above (a GSAP timeline with overwrite: false).
+ *     YTL_OVERWRITE_ALL kills them at the call (GSAP's overwrite: true),
+ *     on any base, so the target can change base; the new tween then
+ *     starts from the field's value at its start, which is the last value
+ *     written. It is for a script that retargets a field on a base that is
+ *     never cleared, where kept tweens would fill the pool.
+ *     KILL. ytl_kill(tl, &f) kills the field's tweens, ytl_kill_tween(tl,
+ *     id) one tween. Their callback events go, the field keeps its value,
+ *     and a target left with no tween is freed: the timeline stops writing
+ *     the field, and the next tween on it reads its rest value again.
+ *     ytl_clear() of a base and ytl_seq_cancel() kill the tweens of the
+ *     base or the sequence. So clear the trial base between trials, and
+ *     each trial starts from the values the caller set.
+ *     CALLBACKS. on_start and on_complete (not with YTL_FOREVER) each add an
+ *     event to the storage, YTL_CALL_START at the start or
+ *     YTL_CALL_COMPLETE at the end, with code = the tween's id and user =
+ *     a.user. The events land, skip and rewind as events do, and they are
+ *     in the report. ytl_evaluate() calls the functions after it has
+ *     written every field, in the order in which their events fired, as
+ *     fn(tl, id, user). A callback may post and kill tweens and add
+ *     events; what it posts runs from the next evaluate. ytl_evaluate()
+ *     from a callback is YTL_ERR_ORDER. A kill in on_start skips the same
+ *     frame's on_complete.
+ *     REJECTED with YTL_ERR_ARG, besides ytl_tween()'s checks on component
+ *     0 (TWEENS): a NULL target, n outside 0 to 4, a type that is not
+ *     YTL_F32 or YTL_I32, an overwrite that is neither, a non-finite
+ *     component of to (or from with from_set), LOG with a component <= 0 or
+ *     with to_current, n < 1 for ytl_animate_n(), and a start, an end or a
+ *     staggered start at or past +-2^62. YTL_FOREVER and cycles are allowed
+ *     (a target tween is not a segment of a block). Op tables have no
+ *     target form: a pack's table cannot hold an address.
+ *     POOLS. desc.targets and desc.tweens are arrays of the caller, used
+ *     while the handle is: a target is 40 bytes, a tween 128 (64-bit). A
+ *     call that needs more targets, tweens or events (for its callbacks)
+ *     than are free, counting what its overwrite frees, is YTL_ERR_FULL,
+ *     adds nothing, and its message names the pool ("the tween pool is
+ *     full (128)"). ytl_tween_count() gives the live tweens and targets.
+ *     A target's tweens are found by a scan of the targets, at the call,
+ *     not in the frame.
+ *     COST. The pass reads each target and its driving tween: O(1) per
+ *     target while time moves forward, a walk of the target's tweens after
+ *     a rewind. Nothing is allocated. examples/timeline/bench_targets.c
+ *     measures it against the value array and a binding copy
+ *     (docs/timeline.md, "Targets").
+ *
  *   REMOVING (ytl_remove, ytl_prune, ytl_clear)
  *     ytl_remove(tl, id) deletes one event; when it had fired and its
  *     channel showed its value, the channel is recomputed.
@@ -767,7 +899,8 @@
  *   almost all of it 248 bytes per channel: a copy of its track, a
  *   tween's three keys and curve, and a waiting tween's desc. An evaluate
  *   reads a byte per channel to
- *   find the tracked ones and touches only their records. Define
+ *   find the tracked ones and touches only their records. Targets and
+ *   their tweens live in the pools the desc gives (TARGETS). Define
  *   YTL_MAX_CHANNELS (1 to 65535) before the implementation and every
  *   include to change it. Events live in the storage the desc gives
  *   (desc.events, desc.event_capacity entries of 64 bytes), owned by the
@@ -816,6 +949,22 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.6.0 - targets (TARGETS): tweens that write the caller's fields (a
+ *          float, float[2..4] or int32_t), as GSAP's to(), from(),
+ *          fromTo() and set(): ytl_tween_to(), ytl_tween_from(),
+ *          ytl_tween_from_to(), ytl_tween_set(), ytl_animate() with a
+ *          ytl_anim desc (delay, cycles, yoyo, keep_velocity, immediate,
+ *          overwrite, on_start and on_complete), ytl_animate_n() for a
+ *          stagger, ytl_kill(), ytl_kill_tween(), ytl_tween_count(), and
+ *          the caller's pools desc.targets and desc.tweens. The latest
+ *          started (start, id) drives a field, so a rewind or a seek
+ *          replays it. Callbacks are events of the new kinds
+ *          YTL_CALL_START and YTL_CALL_COMPLETE, called after every field
+ *          is written. ytl_seq.prev_start and prev_end ("<" and ">").
+ *          Four eases: YTL_EASE_QUAD_IN_OUT, CUBIC_IN, CUBIC_OUT and
+ *          CUBIC_IN_OUT, for keys and channel tweens too, so 11 is now the
+ *          first number that is not a ytl_ease. Nothing else changes: a
+ *          timeline with no target gives the same values and bytes.
  *   v0.5.0 - the repository conventions (README.md). Breaks the API. Time
  *          fields the caller writes end in _ns: ytl_event.time_ns,
  *          ytl_key.time_ns, ytl_track.t0_ns and period_ns,
@@ -889,7 +1038,23 @@
  *          prune, remove and clear; the record of where every event
  *          landed.
  *
- *   STATUS: v0.4.0. Rates and the window, tested by the writer of the
+ *   STATUS: v0.6.0. Targets, tested by the writer of the implementation
+ *   (tests/adapt/timeline_test_targets.h): a target tween against
+ *   ytl_tween() on a channel over 400 random descs, the second taking over
+ *   from the first, the same bits on all 28,000 frames; every ease against
+ *   pow()-based formulas, keys too; to, from, fromTo, set, n = 3, int32_t,
+ *   stagger both ways, the overwrite rules, kill, clear, cancel, ownership;
+ *   callbacks (landing, order, a post and a kill from one, skip, rewind,
+ *   ytl_evaluate() refused); every pool refusal with its message, all or
+ *   none; sets landing with events at three leads (900 cases); a trial
+ *   replayed after a rewind and sought into from 11 places, the same bits,
+ *   and two handles the same bytes; and a model of TARGETS over 12 random
+ *   runs of 500 calls with rewinds, skips, pauses and kills. 3 model
+ *   mutations of TARGETS are caught. The earlier tests pass unchanged
+ *   apart from the first number that is not an ease (11, was 7), with the
+ *   same model statistics. MinGW gcc 16.1 (C11, C99 and C++17 compile
+ *   checks) and MSVC 19.44 (C, C++17).
+ *   v0.4.0. Rates and the window, tested by the writer of the
  *   implementation against an exact reference written apart from the
  *   header's arithmetic (32-bit limbs, itself checked against __int128):
  *   200,000 random cases of the mapping and its inverse to +-2^62; rate
@@ -992,9 +1157,9 @@
 
 /* The version of this header, for a log line or a compile-time check. */
 #define YTL_VERSION_MAJOR 0
-#define YTL_VERSION_MINOR 5
+#define YTL_VERSION_MINOR 6
 #define YTL_VERSION_PATCH 0
-#define YTL_VERSION_STRING "0.5.0"
+#define YTL_VERSION_STRING "0.6.0"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -1067,6 +1232,9 @@ typedef enum ytl_kind {
     YTL_ONSET     = 2,   /* channel target := 1                          */
     YTL_OFFSET    = 3,   /* channel target := 0                          */
     YTL_SET       = 4,   /* channel target := value                      */
+    YTL_CALL_START    = 5, /* reported; a target tween's on_start (TARGETS):
+                            * code is the tween id, user its user         */
+    YTL_CALL_COMPLETE = 6, /* reported; a target tween's on_complete      */
     YTL_KIND_USER = 16   /* 16..255: reported only, the caller's meaning */
 } ytl_kind;
 
@@ -1105,7 +1273,11 @@ typedef enum ytl_ease {
     YTL_EASE_QUAD_IN  = 3,
     YTL_EASE_QUAD_OUT = 4,
     YTL_EASE_LOG      = 5,
-    YTL_EASE_BEZIER   = 6    /* key.curve indexes the track's curves[]   */
+    YTL_EASE_BEZIER   = 6,   /* key.curve indexes the track's curves[]   */
+    YTL_EASE_QUAD_IN_OUT  = 7,   /* v0.6.0; GSAP power1.inOut              */
+    YTL_EASE_CUBIC_IN     = 8,   /* GSAP power2.in                         */
+    YTL_EASE_CUBIC_OUT    = 9,   /* GSAP power2.out                        */
+    YTL_EASE_CUBIC_IN_OUT = 10   /* GSAP power2.inOut                      */
 } ytl_ease;
 
 /* One key: the value at a time on the track's base, and the easing of the
@@ -1174,6 +1346,82 @@ typedef struct ytl_tween_desc {
     bool        keep_velocity;  /* start at the track's velocity, end at rest */
 } ytl_tween_desc;
 
+/* --- targets (TARGETS) ------------------------------------------------- */
+
+#define YTL_F32 0               /* ytl_anim.type: float components         */
+#define YTL_I32 1               /* int32_t components, rounded to nearest  */
+#define YTL_OVERWRITE_NONE 0    /* the latest start drives the field       */
+#define YTL_OVERWRITE_ALL  1    /* kill the field's other tweens at the call */
+
+struct ytl_timeline;
+
+/* A target tween's callback: the timeline, the tween's id and anim.user.
+ * ytl_evaluate() calls it after it writes every field (TARGETS). */
+typedef void (*ytl_anim_fn)(struct ytl_timeline* tl, int id, void* user);
+
+/* A tween of a field of the caller (TARGETS), GSAP's vars. Every field but
+ * target may be zero: a zeroed desc with a target is a linear jump of one
+ * float to 0 at the cursor. */
+typedef struct ytl_anim {
+    void*       target;         /* the field: n floats, or n int32_t        */
+    int         type;           /* YTL_F32 (0) or YTL_I32                   */
+    int         n;              /* components, 1 to 4; 0 is 1               */
+    float       to[4];          /* the end value; unless to_current         */
+    float       from[4];        /* with from_set; else the value at start   */
+    int64_t     duration_ns;    /* >= 0; 0 jumps at the start               */
+    int64_t     delay_ns;       /* after the sequence's cursor              */
+    int64_t     stagger_ns;     /* ytl_animate_n(): target i starts i x this
+                                 * later                                    */
+    ytl_curve   curve;          /* YTL_EASE_BEZIER only                     */
+    int         ease;           /* a ytl_ease; 0 = LINEAR                   */
+    int         cycles;         /* 0 or 1: once; n; YTL_FOREVER             */
+    int         overwrite;      /* YTL_OVERWRITE_NONE (0) or _ALL           */
+    bool        from_set;
+    bool        to_current;     /* GSAP from(): `to` is the value at start  */
+    bool        yoyo;           /* a cycle goes to `to` and back            */
+    bool        keep_velocity;  /* start at the field's velocity, end at rest */
+    bool        immediate;      /* the target's first tween: show `from`
+                                 * before the start (GSAP immediateRender) */
+    ytl_anim_fn on_start;       /* each uses an event of the storage        */
+    ytl_anim_fn on_complete;    /* not with YTL_FOREVER                     */
+    void*       user;
+} ytl_anim;
+
+/* Private, 40 bytes: one target, a field the timeline writes. The caller
+ * gives an array of them (desc.targets) and treats it as opaque. */
+typedef struct ytl_target_slot {
+    void*    ptr;
+    float    rest[4];      /* the field before the first write              */
+    int32_t  head;         /* its first tween in (start, id) order          */
+    int32_t  cur;          /* the last tween started by the last evaluate's
+                            * onset, or -1                                  */
+    int32_t  n_tw;
+    uint8_t  type, n, base, flags;
+} ytl_target_slot;
+
+/* Private, 128 bytes on 64-bit: one target tween (desc.tweens). The fields
+ * an evaluate reads come first, in one cache line. */
+typedef struct ytl_tween_slot {
+    int64_t     start_ns;
+    int64_t     duration_ns;
+    float       from[4];
+    float       to[4];
+    int32_t     next;      /* the target's next tween, or the free list     */
+    int32_t     cycles;
+    uint8_t     ease;
+    uint8_t     flags;
+    uint8_t     due;       /* callbacks fired by this evaluate              */
+    uint8_t     reserved_;
+    int32_t     target;
+    ytl_curve   curve;     /* BEZIER's curve, or keep_velocity's tangents   */
+    int32_t     id;
+    uint32_t    seq_id;
+    int32_t     due_next;
+    void*       user;
+    ytl_anim_fn on_start;
+    ytl_anim_fn on_complete;
+} ytl_tween_slot;
+
 /* --- description and handle ------------------------------------------- */
 
 typedef struct ytl_desc {
@@ -1192,6 +1440,12 @@ typedef struct ytl_desc {
                                    * tweens (SEQUENCES); the caller's, used
                                    * while the handle is. NULL: none        */
     int          key_capacity;    /* >= 0                                   */
+    ytl_target_slot* targets;     /* v0.6.0: the target pool, target_capacity
+                                   * entries (TARGETS); the caller's, used
+                                   * while the handle is. NULL: none        */
+    int          target_capacity; /* >= 0                                   */
+    ytl_tween_slot* tweens;       /* the target tween pool                  */
+    int          tween_capacity;  /* >= 0                                   */
 } ytl_desc;
 
 /* The frame being drawn. */
@@ -1281,6 +1535,17 @@ typedef struct ytl_timeline {
     int32_t      arena_cap;
     int32_t      arena_top;      /* slots in use, garbage included            */
     uint32_t     seq_next;       /* the last sequence id handed out           */
+    ytl_target_slot* tg;         /* desc.targets (TARGETS), dense: n_tg used  */
+    int32_t      tg_cap;
+    int32_t      n_tg;
+    ytl_tween_slot* tw;          /* desc.tweens                               */
+    int32_t      tw_cap;
+    int32_t      n_tw;
+    int32_t      tw_free;        /* the free list, through next               */
+    int32_t      tw_next_id;
+    int32_t      due_head;       /* tweens whose callbacks this evaluate fired */
+    int32_t      due_tail;
+    bool         in_calls;       /* ytl_evaluate() is calling the callbacks   */
     char         error[192];
 } ytl_timeline;
 
@@ -1301,6 +1566,9 @@ typedef struct ytl_seq {
     int      n_calls;
     int32_t  id0;        /* the first event id the sequence can have added   */
     uint32_t id;
+    int64_t  prev_start; /* v0.6.0: the start and end of what the last call
+                          * added (GSAP "<" and ">"); the cursor before any */
+    int64_t  prev_end;
 } ytl_seq;
 
 /* An op of a sequence table, for ytl_run(). Zero is no op: a zeroed
@@ -1524,6 +1792,43 @@ YTL_API int ytl_check_ops(ytl_timeline* tl, int base, const ytl_op* ops,
  * Returns the number of events deleted. The sequence does nothing more. */
 YTL_API int ytl_seq_cancel(ytl_seq* q);
 
+/* --- targets (TARGETS) ------------------------------------------------- */
+
+/* A tween of a field of the caller, at the sequence's cursor plus
+ * a->delay_ns; the cursor stays. Returns the tween's id (>= 0), or the
+ * error, which is also the sequence's sticky error: YTL_ERR_ARG (TARGETS
+ * lists what is checked), YTL_ERR_BOUND (the field is a target on another
+ * base), YTL_ERR_FULL (the target or tween pool, or the event storage for
+ * the callbacks; the message names it). */
+YTL_API int ytl_animate(ytl_seq* q, const ytl_anim* a);
+
+/* The same tween on n fields, field i at (char*)a->target + i x stride,
+ * starting i x a->stagger_ns later. All or none. Returns the first id; the
+ * others follow in order. */
+YTL_API int ytl_animate_n(ytl_seq* q, const ytl_anim* a, size_t stride, int n);
+
+/* One float, GSAP's to(), from() and fromTo(): ytl_animate() with to,
+ * from or both set; from and from_to also set `immediate`. */
+YTL_API int ytl_tween_to(ytl_seq* q, float* field, float to, int64_t duration_ns, int ease);
+YTL_API int ytl_tween_from(ytl_seq* q, float* field, float from, int64_t duration_ns, int ease);
+YTL_API int ytl_tween_from_to(ytl_seq* q, float* field, float from, float to,
+                              int64_t duration_ns, int ease);
+
+/* GSAP's set(): `field` becomes `value` at the cursor, on the frame where
+ * an event at that time lands (a STEP tween of duration 0). */
+YTL_API int ytl_tween_set(ytl_seq* q, float* field, float value);
+
+/* Kill every tween of the target at `field` (GSAP's killTweensOf), or the
+ * tween `id`: their callback events go, the field keeps its value, and a
+ * target with no tween left is freed, so the timeline no longer writes the
+ * field. ytl_kill() returns the number killed (0 when the field is not a
+ * target); ytl_kill_tween() returns 0 or YTL_ERR_NOT_FOUND. */
+YTL_API int ytl_kill(ytl_timeline* tl, const void* field);
+YTL_API int ytl_kill_tween(ytl_timeline* tl, int id);
+
+/* Live target tweens, and the targets in *n_targets when it is not NULL. */
+YTL_API int ytl_tween_count(const ytl_timeline* tl, int* n_targets);
+
 /* --- the frame --------------------------------------------------------- */
 
 /* Evaluate the frame (EVALUATE). Returns the number of events that fired,
@@ -1610,6 +1915,9 @@ YTL_API const ytl_event* ytl_find(const ytl_timeline* tl, int id);
  * is curves[0].x1 and whose end tangent is 0. Never accepted from a
  * caller's keys, which stop at YTL_EASE_BEZIER. */
 #define YTL__EASE_HERMITE 255
+
+/* The last public ytl_ease: every check of an ease reads this. */
+#define YTL__EASE_LAST YTL_EASE_CUBIC_IN_OUT
 
 /* isfinite() is C99 and MSVC's default C dialect does not declare it, so the
  * test is written in comparisons a NaN loses on its own. */
@@ -1705,8 +2013,33 @@ static ytl_curve ytl__curve(const ytl_curve* curves, const ytl_key* cslots, int 
     return c;
 }
 
+/* e(u) of the eases whose value is v0 + (v1 - v0) e(u). One function for
+ * the keys and the target tweens, so the two give the same bits. */
+static double ytl__shape(int ease, double u) {
+    double r;
+    switch (ease) {
+    case YTL_EASE_COSINE:       return 0.5 - 0.5 * cos(3.14159265358979323846 * u);
+    case YTL_EASE_QUAD_IN:      return u * u;
+    case YTL_EASE_QUAD_OUT:     return 1.0 - (1.0 - u) * (1.0 - u);
+    case YTL_EASE_QUAD_IN_OUT:
+        r = 1.0 - u;
+        return u < 0.5 ? 2.0 * u * u : 1.0 - 2.0 * r * r;
+    case YTL_EASE_CUBIC_IN:     return u * u * u;
+    case YTL_EASE_CUBIC_OUT:
+        r = 1.0 - u;
+        return 1.0 - r * r * r;
+    case YTL_EASE_CUBIC_IN_OUT:
+        r = 1.0 - u;
+        return u < 0.5 ? 4.0 * u * u * u : 1.0 - 4.0 * r * r * r;
+    default:                    return u;
+    }
+}
+
 /* For HERMITE the curve's x1 is the start tangent. cslots is the end of
- * the keys, read only with curves NULL. */
+ * the keys, read only with curves NULL. The v0.5.0 eases keep their own
+ * cases (the same expressions as ytl__shape, so the same bits): sending
+ * every ease through ytl__shape's switch measured 6% (gcc) and 8% (MSVC)
+ * slower on 256 LINEAR keyed channels (docs/timeline.md, "Targets"). */
 static double ytl__ease(const ytl_key* a, const ytl_curve* curves, const ytl_key* cslots,
                           double v0, double v1, double u) {
     ytl_curve c;
@@ -1715,6 +2048,11 @@ static double ytl__ease(const ytl_key* a, const ytl_curve* curves, const ytl_key
     case YTL_EASE_COSINE:   return v0 + (v1 - v0) * (0.5 - 0.5 * cos(3.14159265358979323846 * u));
     case YTL_EASE_QUAD_IN:  return v0 + (v1 - v0) * (u * u);
     case YTL_EASE_QUAD_OUT: return v0 + (v1 - v0) * (1.0 - (1.0 - u) * (1.0 - u));
+    case YTL_EASE_QUAD_IN_OUT:
+    case YTL_EASE_CUBIC_IN:
+    case YTL_EASE_CUBIC_OUT:
+    case YTL_EASE_CUBIC_IN_OUT:
+        return v0 + (v1 - v0) * ytl__shape(a->ease, u);
     case YTL_EASE_LOG:      return v0 * exp(u * log(v1 / v0));
     case YTL_EASE_BEZIER:
         c = ytl__curve(curves, cslots, a->curve);
@@ -1861,6 +2199,10 @@ YTL_API bool ytl_open(ytl_timeline* tl, const ytl_desc* d) {
         return ytl__open_fail(tl, "desc.keys is NULL with key_capacity %d", d->key_capacity);
     if (d->n_channels < 0 || d->n_channels > YTL_MAX_CHANNELS)
         return ytl__open_fail(tl, "desc.n_channels must be in [0, %d]", YTL_MAX_CHANNELS);
+    if (d->target_capacity < 0 || (d->target_capacity > 0 && !d->targets))
+        return ytl__open_fail(tl, "desc.targets is NULL or target_capacity is negative");
+    if (d->tween_capacity < 0 || (d->tween_capacity > 0 && !d->tweens))
+        return ytl__open_fail(tl, "desc.tweens is NULL or tween_capacity is negative");
     if (!(d->lead == YTL_LEAD_NONE || (d->lead >= 0.0 && d->lead < 1.0)))
         return ytl__open_fail(tl, "desc.lead must be in [0, 1) or YTL_LEAD_NONE");
     if (d->initial) {
@@ -1888,6 +2230,20 @@ YTL_API bool ytl_open(ytl_timeline* tl, const ytl_desc* d) {
         tl->bases[i].lim_d = YTL__QMAX;
     }
     tl->bases[YTL_BASE_RT].state = YTL__RUNNING;
+    /* The pools are the caller's and may hold anything: every tween slot is
+     * marked free, so a stale callback event can never name a live one. */
+    tl->tg = d->targets;
+    tl->tg_cap = d->target_capacity;
+    tl->tw = d->tweens;
+    tl->tw_cap = d->tween_capacity;
+    tl->tw_free = d->tween_capacity > 0 ? 0 : -1;
+    for (i = 0; i < d->tween_capacity; i++) {
+        tl->tw[i].flags = 0;
+        tl->tw[i].due = 0;
+        tl->tw[i].next = i + 1 < d->tween_capacity ? i + 1 : -1;
+    }
+    tl->due_head = -1;
+    tl->due_tail = -1;
     tl->open = true;
     return true;
 }
@@ -2437,6 +2793,9 @@ static int ytl__prune(ytl_timeline* tl, int base) {
     return ytl__compact(tl, base, true, false, 0);
 }
 
+static void ytl__tg_clear(ytl_timeline* tl, int base);
+static void ytl__tg_cancel(ytl_timeline* tl, uint32_t id);
+
 static int ytl__clear(ytl_timeline* tl, int base) {
     int removed, i;
     if (!tl || !tl->open) return YTL_ERR_CLOSED;
@@ -2447,6 +2806,7 @@ static int ytl__clear(ytl_timeline* tl, int base) {
         if (tl->track_base[i] && (base == YTL_ALL_BASES || c->base == base))
             ytl__free_chan(tl, i, true);
     }
+    ytl__tg_clear(tl, base);
     /* The base's arena blocks are garbage now. A call that needs their room
      * compacts the arena then; doing it here too changed nothing that a
      * test could see (docs/timeline.md). */
@@ -2482,7 +2842,7 @@ static int ytl__check_track(const ytl_track* tr) {
         for (i = 0; i < n; i++) {
             const ytl_key* k = &tr->keys[i];
             if (!ytl__finite(k->value)) return YTL_ERR_ARG;
-            if (k->ease > YTL_EASE_BEZIER) return YTL_ERR_ARG;
+            if (k->ease > YTL__EASE_LAST) return YTL_ERR_ARG;
             if (!ytl__time_ok(k->time_ns)) return YTL_ERR_ARG;
             if (i > 0 && k->time_ns < tr->keys[i - 1].time_ns) return YTL_ERR_ARG;
             if (i + 1 < n && k->ease == YTL_EASE_LOG
@@ -2590,7 +2950,7 @@ static int ytl__tween_check(const ytl_timeline* tl, int base,
         return YTL_ERR_ARG;
     if (!ytl__time_ok(start + (d->yoyo ? 2 : 1) * d->duration_ns)) return YTL_ERR_ARG;
     if (!ytl__finite(d->to) || (d->from_set && !ytl__finite(d->from))) return YTL_ERR_ARG;
-    if (d->ease < 0 || d->ease > YTL_EASE_BEZIER) return YTL_ERR_ARG;
+    if (d->ease < 0 || d->ease > YTL__EASE_LAST) return YTL_ERR_ARG;
     if (d->ease == YTL_EASE_BEZIER && !ytl__curve_ok(&d->curve)) return YTL_ERR_ARG;
     if (d->ease == YTL_EASE_LOG
         && !(d->from_set && d->from > 0.0f && d->to > 0.0f))
@@ -2879,6 +3239,8 @@ static ytl_seq ytl__seq_make(ytl_timeline* tl, int base, bool at_now) {
         q.id = tl->seq_next;
         q.id0 = tl->next_id;
         if (at_now) q.t = base == YTL_BASE_RT ? (tl->has_onset ? tl->last_onset : 0) : tl->bases[base].now_bt;
+        q.prev_start = q.t;
+        q.prev_end = q.t;
     }
     return q;
 }
@@ -3086,6 +3448,8 @@ static int ytl__seq_tween(ytl_seq* q, int ch, const ytl_tween_desc* d, int64_t* 
         memcpy(&k[nk0 + nk + nc0], &cv, sizeof cv);
     }
     ytl__seq_fin(q, ch, off, nk0 + nk, nc0 + nc);
+    q->prev_start = s;
+    q->prev_end = *end;
     return 0;
 }
 
@@ -3097,7 +3461,9 @@ static int ytl__seq_keys(ytl_seq* q, int ch, const float* v, const int64_t* dt, 
     int32_t nk0, nc0, off;
     int i, rc = ytl__chan_arg(tl, ch, q->base);
     if (rc < 0) return rc;
-    if (n < 1 || !v || !dt || ease < YTL_EASE_LINEAR || ease > YTL_EASE_LOG) return YTL_ERR_ARG;
+    if (n < 1 || !v || !dt || ease < YTL_EASE_LINEAR || ease > YTL__EASE_LAST
+        || ease == YTL_EASE_BEZIER)
+        return YTL_ERR_ARG;
     for (i = 0; i < n; i++) {
         if (dt[i] < 0 || dt[i] >= YTL__LIMIT || !ytl__time_ok(q->t + dt[i])) return YTL_ERR_ARG;
         if (i > 0 && dt[i] < dt[i - 1]) return YTL_ERR_ARG;
@@ -3120,6 +3486,8 @@ static int ytl__seq_keys(ytl_seq* q, int ch, const float* v, const int64_t* dt, 
     }
     ytl__seq_fin(q, ch, off, nk0 + n, nc0);
     *end = q->t + dt[n - 1];
+    q->prev_start = q->t + dt[0];
+    q->prev_end = *end;
     return 0;
 }
 
@@ -3135,7 +3503,10 @@ static int ytl__seq_ev(ytl_seq* q, int kind, int ch, float value, int32_t code, 
     e.code = code;
     e.user = user;
     rc = ytl_add(q->tl, &e);
-    return rc < 0 ? rc : 0;
+    if (rc < 0) return rc;
+    q->prev_start = q->t;
+    q->prev_end = q->t;
+    return 0;
 }
 
 static int ytl__seq_wait(ytl_seq* q, int64_t dt) {
@@ -3171,6 +3542,8 @@ static int ytl__seq_on_n(ytl_seq* q, const int* chans, int n, int64_t stagger) {
         (void)ytl__seq_ev(q, YTL_ONSET, chans[i], 0.0f, 0, 0);
         q->t = t0;
     }
+    q->prev_start = stagger < 0 ? q->t + (int64_t)(n - 1) * stagger : q->t;
+    q->prev_end = stagger < 0 ? q->t : q->t + (int64_t)(n - 1) * stagger;
     return 0;
 }
 
@@ -3437,7 +3810,565 @@ YTL_API int ytl_seq_cancel(ytl_seq* q) {
         }
         c->seq_id = 0;
     }
+    if (tl->tw) ytl__tg_cancel(tl, q->id);
     return removed;
+}
+
+/* --- targets (TARGETS) ------------------------------------------------- */
+
+#define YTL__TW_LIVE      0x01u
+#define YTL__TW_YOYO      0x02u
+#define YTL__TW_STEPPED   0x04u  /* read at the window end, as events land  */
+#define YTL__TW_RESOLVED  0x08u  /* from (and to) hold the takeover's values */
+#define YTL__TW_FROM_SET  0x10u
+#define YTL__TW_TO_CUR    0x20u
+#define YTL__TW_KV        0x40u  /* keep_velocity: Hermite, curve = tangents */
+#define YTL__TW_IMMEDIATE 0x80u
+
+#define YTL__TG_REST 1u          /* rest[] holds the field before any write */
+#define YTL__TG_MARK 2u          /* scratch: overwritten by the call checking */
+
+#define YTL__DUE_START    1u
+#define YTL__DUE_COMPLETE 2u
+
+/* keep_velocity's tangent of component i: a Hermite tween has no BEZIER
+ * curve, so its curve holds the four tangents. */
+static float ytl__tan(const ytl_curve* m, int i) {
+    return i == 0 ? m->x1 : i == 1 ? m->y1 : i == 2 ? m->x2 : m->y2;
+}
+
+static void ytl__tan_set(ytl_curve* m, int i, float x) {
+    if (i == 0) m->x1 = x;
+    else if (i == 1) m->y1 = x;
+    else if (i == 2) m->x2 = x;
+    else m->y2 = x;
+}
+
+/* The tween's value at base time t, into v[0..n): the keys ytl_tween()
+ * builds (from at s, to at s + d, from again at s + 2d with yoyo) and its
+ * repeat, read as ytl__track_at() reads keys. Same expressions, so a target
+ * and a channel tween with the same desc give the same bits; the eased
+ * fraction is computed once for all components. */
+static void ytl__tw_at(const ytl_tween_slot* w, int n, int64_t t, double* v) {
+    int64_t s = w->start_ns, d = w->duration_ns, a;
+    const float* v0;
+    const float* v1;
+    bool once = w->cycles == 0 || w->cycles == 1;
+    bool yoyo = (w->flags & YTL__TW_YOYO) != 0;
+    double u, f;
+    int c;
+    if (!once && t > s) {
+        int64_t per = yoyo ? 2 * d : d, q = (t - s) / per;
+        if (w->cycles > 0 && q >= w->cycles) t = s + per;
+        else t = s + (t - s) % per;
+    }
+    if (t < s || (yoyo && t >= s + 2 * d)) {
+        for (c = 0; c < n; c++) v[c] = w->from[c];
+        return;
+    }
+    if (!yoyo && t >= s + d) {
+        for (c = 0; c < n; c++) v[c] = w->to[c];
+        return;
+    }
+    if (yoyo && t >= s + d) {
+        v0 = w->to;
+        v1 = w->from;
+        a = s + d;
+    } else {
+        v0 = w->from;
+        v1 = w->to;
+        a = s;
+    }
+    u = (double)(t - a) / (double)d;
+    switch (w->flags & YTL__TW_KV ? YTL__EASE_HERMITE : w->ease) {
+    case YTL_EASE_STEP:
+        for (c = 0; c < n; c++) v[c] = v0[c];
+        return;
+    case YTL_EASE_LOG:
+        for (c = 0; c < n; c++) v[c] = (double)v0[c] * exp(u * log((double)v1[c] / (double)v0[c]));
+        return;
+    case YTL__EASE_HERMITE: {
+        double u2 = u * u, u3 = u2 * u;
+        for (c = 0; c < n; c++)
+            v[c] = (2.0 * u3 - 3.0 * u2 + 1.0) * v0[c] + (u3 - 2.0 * u2 + u) * ytl__tan(&w->curve, c)
+                   + (3.0 * u2 - 2.0 * u3) * v1[c];
+        return;
+    }
+    case YTL_EASE_BEZIER: f = ytl__bezier(&w->curve, u); break;
+    default:              f = ytl__shape(w->ease, u); break;
+    }
+    for (c = 0; c < n; c++) v[c] = (double)v0[c] + ((double)v1[c] - (double)v0[c]) * f;
+}
+
+/* The field's value before the timeline's first write, read once. */
+static void ytl__tg_rest(ytl_target_slot* g) {
+    int c;
+    if (g->flags & YTL__TG_REST) return;
+    for (c = 0; c < g->n; c++)
+        g->rest[c] = g->type == YTL_I32 ? (float)((const int32_t*)g->ptr)[c]
+                                        : ((const float*)g->ptr)[c];
+    g->flags |= YTL__TG_REST;
+}
+
+static void ytl__tg_write(const ytl_target_slot* g, const double* v) {
+    int c;
+    if (g->type == YTL_I32) {
+        for (c = 0; c < g->n; c++) {
+            double r = floor(v[c] + 0.5);
+            ((int32_t*)g->ptr)[c] = r <= -2147483648.0 ? INT32_MIN
+                                    : r >= 2147483647.0 ? INT32_MAX : (int32_t)r;
+        }
+    } else {
+        for (c = 0; c < g->n; c++) ((float*)g->ptr)[c] = (float)v[c];
+    }
+}
+
+/* The takeover: tween wi's start value (and its end value with to_current)
+ * is the field's value at its start under the tween before it in the
+ * target's list, prev, or the rest value for the first. Computed once and
+ * kept, so a rewind replays it, as a channel tween's takeover is kept. The
+ * slope for keep_velocity is ytl__take()'s: over the last microsecond. */
+static void ytl__tw_resolve(ytl_timeline* tl, ytl_target_slot* g, int32_t wi, int32_t prev) {
+    ytl_tween_slot* w = &tl->tw[wi];
+    double bv[4], b1[4];
+    int c;
+    if (w->flags & YTL__TW_RESOLVED) return;
+    if (prev >= 0) {
+        ytl__tw_at(&tl->tw[prev], g->n, w->start_ns, bv);
+        if (w->flags & YTL__TW_KV) ytl__tw_at(&tl->tw[prev], g->n, w->start_ns - 1000, b1);
+    } else {
+        ytl__tg_rest(g);
+        for (c = 0; c < g->n; c++) bv[c] = b1[c] = g->rest[c];
+    }
+    for (c = 0; c < g->n; c++) {
+        if (!(w->flags & YTL__TW_FROM_SET)) w->from[c] = (float)bv[c];
+        if (w->flags & YTL__TW_TO_CUR) w->to[c] = (float)bv[c];
+        if (w->flags & YTL__TW_KV)
+            ytl__tan_set(&w->curve, c, (float)((bv[c] - b1[c]) / 1000.0 * (double)w->duration_ns));
+    }
+    w->flags |= YTL__TW_RESOLVED;
+}
+
+/* One pass over the targets, after the events and channels: a target's
+ * value is a function of its base's time and its tweens (the latest started
+ * (start, id) drives it), so the pass needs nothing from the frame before
+ * but the cursor, which only saves the walk. A STEP tween counts as started
+ * when the window end reaches it, as an event lands. */
+static void ytl__targets(ytl_timeline* tl, const int64_t* bnow, const int64_t* bhi) {
+    ytl_tween_slot* tw = tl->tw;
+    int32_t k;
+    for (k = 0; k < tl->n_tg; k++) {
+        ytl_target_slot* g = &tl->tg[k];
+        int32_t c, nx, e, w, p;
+        int64_t now, hi;
+        double v[4];
+        int i;
+        if (tl->bases[g->base].state == YTL__STOPPED) continue;
+        now = bnow[g->base];
+        hi = bhi[g->base];
+        c = g->cur;
+        if (c >= 0 && tw[c].start_ns > now) c = -1;   /* the base went back */
+        nx = c >= 0 ? tw[c].next : g->head;
+        while (nx >= 0 && tw[nx].start_ns <= now) {
+            ytl__tw_resolve(tl, g, nx, c);
+            c = nx;
+            nx = tw[c].next;
+        }
+        g->cur = c;
+        e = c;
+        for (w = nx; w >= 0 && tw[w].start_ns <= hi; w = tw[w].next)
+            if (tw[w].flags & YTL__TW_STEPPED) e = w;
+        if (e != c) {
+            for (p = c, w = nx;; p = w, w = tw[w].next) {
+                ytl__tw_resolve(tl, g, w, p);
+                if (w == e) break;
+            }
+        }
+        if (e >= 0) {
+            ytl__tw_at(&tw[e], g->n, tw[e].flags & YTL__TW_STEPPED ? hi : now, v);
+        } else if (tw[g->head].flags & YTL__TW_IMMEDIATE) {
+            ytl__tw_resolve(tl, g, g->head, -1);
+            for (i = 0; i < g->n; i++) v[i] = tw[g->head].from[i];
+        } else if (g->flags & YTL__TG_REST) {
+            for (i = 0; i < g->n; i++) v[i] = g->rest[i];
+        } else {
+            continue;   /* before the first start: the field is the caller's */
+        }
+        ytl__tg_rest(g);
+        ytl__tg_write(g, v);
+    }
+}
+
+/* A fired callback event: queue its tween, in firing order, for the calls
+ * after the pass. A tween fires at most once per kind per evaluate. */
+static void ytl__due(ytl_timeline* tl, const ytl_event* e) {
+    ytl_tween_slot* w;
+    if (e->target < 0 || e->target >= tl->tw_cap) return;
+    w = &tl->tw[e->target];
+    if (!(w->flags & YTL__TW_LIVE) || w->id != e->code) return;
+    if (!w->due) {
+        w->due_next = -1;
+        if (tl->due_tail >= 0) tl->tw[tl->due_tail].due_next = e->target;
+        else tl->due_head = e->target;
+        tl->due_tail = e->target;
+    }
+    w->due |= (uint8_t)(e->kind == YTL_CALL_START ? YTL__DUE_START : YTL__DUE_COMPLETE);
+}
+
+/* After every field is written. A callback may post or kill tweens: a kill
+ * unlinks its tween from this queue, and the head is popped before each
+ * call, so the queue stays whole. */
+static void ytl__calls(ytl_timeline* tl) {
+    tl->in_calls = true;
+    while (tl->due_head >= 0) {
+        int32_t k = tl->due_head;
+        ytl_tween_slot* w = &tl->tw[k];
+        uint8_t bits = w->due;
+        int id = w->id;
+        void* user = w->user;
+        ytl_anim_fn fc = w->on_complete;
+        tl->due_head = w->due_next;
+        if (tl->due_head < 0) tl->due_tail = -1;
+        w->due = 0;
+        if ((bits & YTL__DUE_START) && w->on_start) w->on_start(tl, id, user);
+        /* The start callback may have killed it. */
+        if ((bits & YTL__DUE_COMPLETE) && fc && (w->flags & YTL__TW_LIVE) && w->id == id)
+            fc(tl, id, user);
+    }
+    tl->in_calls = false;
+}
+
+static int32_t ytl__tg_find(const ytl_timeline* tl, const void* p) {
+    int32_t k;
+    for (k = 0; k < tl->n_tg; k++)
+        if (tl->tg[k].ptr == p) return k;
+    return -1;
+}
+
+/* Delete tween k's callback events, one scan of its base's events each. */
+static void ytl__tw_drop_events(ytl_timeline* tl, int32_t k) {
+    const ytl_tween_slot* w = &tl->tw[k];
+    const ytl__base* b = &tl->bases[tl->tg[w->target].base];
+    int i;
+    if (!w->on_start && !w->on_complete) return;
+    for (i = b->begin + b->count - 1; i >= b->begin; i--) {
+        const ytl_event* e = &tl->events[i];
+        if ((e->kind == YTL_CALL_START || e->kind == YTL_CALL_COMPLETE) && e->target == k
+            && e->code == w->id)
+            ytl__delete(tl, i, false);
+    }
+}
+
+/* Free tween k: out of its target's list and the callback queue, onto the
+ * free list. A target with no tween left is freed, and the last target
+ * takes its place, so the evaluate's pass reads a dense array. */
+static void ytl__tw_free(ytl_timeline* tl, int32_t k, bool drop_events) {
+    ytl_tween_slot* w = &tl->tw[k];
+    int32_t gi = w->target, *pp;
+    ytl_target_slot* g = &tl->tg[gi];
+    if (drop_events) ytl__tw_drop_events(tl, k);
+    for (pp = &g->head; *pp != k; pp = &tl->tw[*pp].next) {}
+    *pp = w->next;
+    if (g->cur == k) g->cur = -1;
+    if (w->due) {
+        int32_t prev = -1, j = tl->due_head;
+        while (j != k) {
+            prev = j;
+            j = tl->tw[j].due_next;
+        }
+        if (prev < 0) tl->due_head = w->due_next;
+        else tl->tw[prev].due_next = w->due_next;
+        if (tl->due_tail == k) tl->due_tail = prev;
+        w->due = 0;
+    }
+    w->flags = 0;
+    w->next = tl->tw_free;
+    tl->tw_free = k;
+    tl->n_tw--;
+    if (--g->n_tw == 0) {
+        int32_t last = --tl->n_tg, j;
+        if (gi != last) {
+            tl->tg[gi] = tl->tg[last];
+            for (j = tl->tg[gi].head; j >= 0; j = tl->tw[j].next) tl->tw[j].target = gi;
+        }
+    }
+}
+
+/* Kill every tween of target gi; the target goes with the last. */
+static int ytl__tg_kill(ytl_timeline* tl, int32_t gi, bool drop_events) {
+    int n = tl->tg[gi].n_tw, i;
+    for (i = 0; i < n; i++) ytl__tw_free(tl, tl->tg[gi].head, drop_events);
+    return n;
+}
+
+/* ytl_clear(): the base's events are gone already. Downward, so the target
+ * that a free moves into gi has been seen. */
+static void ytl__tg_clear(ytl_timeline* tl, int base) {
+    int32_t gi;
+    if (!tl->tw) return;
+    for (gi = tl->n_tg - 1; gi >= 0; gi--)
+        if (gi < tl->n_tg && (base == YTL_ALL_BASES || tl->tg[gi].base == base))
+            ytl__tg_kill(tl, gi, false);
+}
+
+/* ytl_seq_cancel(): the sequence's events are gone already. */
+static void ytl__tg_cancel(ytl_timeline* tl, uint32_t id) {
+    int32_t k;
+    for (k = 0; k < tl->tw_cap; k++)
+        if ((tl->tw[k].flags & YTL__TW_LIVE) && tl->tw[k].seq_id == id) ytl__tw_free(tl, k, false);
+}
+
+/* The sequence's error with a message that names what ran out. */
+static int ytl__seq_full(ytl_seq* q, const char* what, int have) {
+    if (q->err >= 0) {
+        q->err = YTL_ERR_FULL;
+        q->err_call = q->n_calls - 1;
+        snprintf(q->tl->error, sizeof(q->tl->error),
+                 "ysp_timeline: sequence call %d: the %s is full (%d)", q->err_call, what, have);
+    }
+    return YTL_ERR_FULL;
+}
+
+static int ytl__anim(ytl_seq* q, const ytl_anim* a, size_t stride, int n) {
+    ytl_timeline* tl = q->tl;
+    ytl_tween_desc d, r;
+    int64_t cyc, total, last_start, first = 0;
+    int ncomp, i, c, rc, n_cb, new_tg = 0, freed_tg = 0, freed_tw = 0, freed_ev = 0, freed_cb = 0;
+    int32_t id0;
+    bool once;
+    if (!a || n < 1 || !a->target) return YTL_ERR_ARG;
+    ncomp = a->n == 0 ? 1 : a->n;
+    if (ncomp < 1 || ncomp > 4 || (a->type != YTL_F32 && a->type != YTL_I32)) return YTL_ERR_ARG;
+    if (a->overwrite != YTL_OVERWRITE_NONE && a->overwrite != YTL_OVERWRITE_ALL) return YTL_ERR_ARG;
+    /* The scalar checks are ytl_tween()'s, on component 0; the start is the
+     * cursor, as for every tween of a sequence. */
+    memset(&d, 0, sizeof d);
+    d.to = a->to[0];
+    d.from = a->from[0];
+    d.from_set = a->from_set;
+    d.duration_ns = a->duration_ns;
+    d.start_ns = q->t;
+    d.start_set = true;
+    d.delay_ns = a->delay_ns;
+    d.curve = a->curve;
+    d.ease = a->ease;
+    d.cycles = a->cycles;
+    d.yoyo = a->yoyo;
+    d.keep_velocity = a->keep_velocity;
+    rc = ytl__tween_check(tl, q->base, &d, &r);
+    if (rc < 0) return rc;
+    for (c = 1; c < ncomp; c++) {
+        if (!ytl__finite(a->to[c]) || (a->from_set && !ytl__finite(a->from[c]))) return YTL_ERR_ARG;
+        if (a->ease == YTL_EASE_LOG && !(a->from[c] > 0.0f && a->to[c] > 0.0f)) return YTL_ERR_ARG;
+    }
+    if (a->ease == YTL_EASE_LOG && a->to_current) return YTL_ERR_ARG;
+    once = a->cycles == 0 || a->cycles == 1;
+    cyc = a->duration_ns * (a->yoyo ? 2 : 1);
+    if (a->cycles > 1 && cyc > 0 && a->cycles > (YTL__LIMIT - 1 - r.start_ns) / cyc) return YTL_ERR_ARG;
+    total = (once ? 1 : a->cycles > 1 ? a->cycles : 1) * cyc;
+    /* Every start and end in range, the last tween's included. */
+    if (!ytl__time_ok(a->stagger_ns)) return YTL_ERR_ARG;
+    if (n > 1 && a->stagger_ns > 0 && a->stagger_ns > (YTL__LIMIT - 1 - r.start_ns - total) / (n - 1))
+        return YTL_ERR_ARG;
+    if (n > 1 && a->stagger_ns < 0 && -a->stagger_ns > (r.start_ns + YTL__LIMIT - 1) / (n - 1))
+        return YTL_ERR_ARG;
+    last_start = r.start_ns + (int64_t)(n - 1) * a->stagger_ns;
+    /* Each field: the same shape as its target, and on this base unless the
+     * call overwrites it. Overwritten targets are marked, so the room below
+     * counts what their kill frees. */
+    for (i = 0; i < n; i++) {
+        const void* p = (const char*)a->target + (size_t)i * stride;
+        int32_t gi = ytl__tg_find(tl, p);
+        if (gi < 0) {
+            if (i == 0 || stride != 0) new_tg++;
+            continue;
+        }
+        if (tl->tg[gi].type != a->type || tl->tg[gi].n != ncomp) rc = YTL_ERR_ARG;
+        else if (a->overwrite == YTL_OVERWRITE_NONE && tl->tg[gi].base != q->base) rc = YTL_ERR_BOUND;
+        else if (a->overwrite == YTL_OVERWRITE_ALL && !(tl->tg[gi].flags & YTL__TG_MARK)) {
+            int32_t j;
+            tl->tg[gi].flags |= YTL__TG_MARK;
+            freed_tg++;
+            freed_tw += tl->tg[gi].n_tw;
+            new_tg++;
+            for (j = tl->tg[gi].head; j >= 0; j = tl->tw[j].next)
+                if (tl->tw[j].on_start || tl->tw[j].on_complete) freed_cb++;
+        }
+        if (rc < 0) break;
+    }
+    /* What the kills free in the event storage: a scan of it, only when a
+     * killed tween has callbacks, so a retarget every frame stays cheap. */
+    if (rc == 0 && freed_cb > 0) {
+        for (i = 0; i < tl->n_events; i++) {
+            const ytl_event* e = &tl->events[i];
+            if ((e->kind == YTL_CALL_START || e->kind == YTL_CALL_COMPLETE) && e->target >= 0
+                && e->target < tl->tw_cap && (tl->tw[e->target].flags & YTL__TW_LIVE)
+                && tl->tw[e->target].id == e->code
+                && (tl->tg[tl->tw[e->target].target].flags & YTL__TG_MARK))
+                freed_ev++;
+        }
+    }
+    n_cb = (a->on_start ? 1 : 0) + (a->on_complete && a->cycles != YTL_FOREVER ? 1 : 0);
+    if (rc == 0) {
+        if (new_tg - freed_tg > tl->tg_cap - tl->n_tg) rc = ytl__seq_full(q, "target pool", tl->tg_cap);
+        else if (n - freed_tw > tl->tw_cap - tl->n_tw || n > INT32_MAX - tl->tw_next_id)
+            rc = ytl__seq_full(q, "tween pool", tl->tw_cap);
+        else if ((int64_t)n * n_cb - freed_ev > tl->capacity - tl->n_events
+                 || (int64_t)n * n_cb > INT32_MAX - tl->next_id)
+            rc = ytl__seq_full(q, "event storage", tl->capacity);
+    }
+    if (rc < 0) {
+        for (i = 0; i < tl->n_tg; i++) tl->tg[i].flags = (uint8_t)(tl->tg[i].flags & ~YTL__TG_MARK);
+        return rc;
+    }
+    /* Checked: from here on nothing fails. */
+    for (i = tl->n_tg - 1; i >= 0; i--)
+        if (i < tl->n_tg && (tl->tg[i].flags & YTL__TG_MARK)) ytl__tg_kill(tl, i, true);
+    id0 = tl->tw_next_id;
+    for (i = 0; i < n; i++) {
+        void* p = (char*)a->target + (size_t)i * stride;
+        int32_t gi = ytl__tg_find(tl, p), k, *pp;
+        ytl_target_slot* g;
+        ytl_tween_slot* w;
+        if (gi < 0) {
+            gi = tl->n_tg++;
+            g = &tl->tg[gi];
+            memset(g, 0, sizeof *g);
+            g->ptr = p;
+            g->type = (uint8_t)a->type;
+            g->n = (uint8_t)ncomp;
+            g->base = (uint8_t)q->base;
+            g->head = -1;
+            g->cur = -1;
+        }
+        g = &tl->tg[gi];
+        k = tl->tw_free;
+        w = &tl->tw[k];
+        tl->tw_free = w->next;
+        tl->n_tw++;
+        g->n_tw++;
+        memset(w, 0, sizeof *w);
+        w->start_ns = r.start_ns + (int64_t)i * a->stagger_ns;
+        w->duration_ns = a->duration_ns;
+        for (c = 0; c < ncomp; c++) {
+            w->to[c] = a->to_current ? 0.0f : a->to[c];
+            w->from[c] = a->from_set ? a->from[c] : 0.0f;
+        }
+        w->cycles = a->cycles;
+        w->ease = (uint8_t)a->ease;
+        w->flags = (uint8_t)(YTL__TW_LIVE | (a->yoyo ? YTL__TW_YOYO : 0u)
+                             | (a->ease == YTL_EASE_STEP ? YTL__TW_STEPPED : 0u)
+                             | (a->from_set ? YTL__TW_FROM_SET : 0u)
+                             | (a->to_current ? YTL__TW_TO_CUR : 0u)
+                             | (a->keep_velocity ? YTL__TW_KV : 0u)
+                             | (a->immediate ? YTL__TW_IMMEDIATE : 0u));
+        if (a->ease == YTL_EASE_BEZIER) w->curve = a->curve;
+        w->target = gi;
+        w->id = tl->tw_next_id++;
+        w->seq_id = q->id;
+        w->due_next = -1;
+        w->user = a->user;
+        w->on_start = a->on_start;
+        w->on_complete = a->on_complete;
+        /* In (start, id) order: the new id is the largest, so it goes after
+         * every tween that starts at or before it. One that starts before
+         * the cursor's tween makes the next evaluate walk from the head. */
+        for (pp = &g->head; *pp >= 0 && tl->tw[*pp].start_ns <= w->start_ns; pp = &tl->tw[*pp].next) {}
+        w->next = *pp;
+        *pp = k;
+        if (g->cur >= 0 && w->start_ns < tl->tw[g->cur].start_ns) g->cur = -1;
+        if (n_cb) {
+            ytl_event e;
+            memset(&e, 0, sizeof e);
+            e.base = (uint8_t)q->base;
+            e.target = k;
+            e.code = w->id;
+            e.user = (uint64_t)(uintptr_t)a->user;
+            if (a->on_start) {
+                e.time_ns = w->start_ns;
+                e.kind = YTL_CALL_START;
+                ytl__insert(tl, &e);
+            }
+            if (a->on_complete && a->cycles != YTL_FOREVER) {
+                e.time_ns = w->start_ns + total;
+                e.kind = YTL_CALL_COMPLETE;
+                ytl__insert(tl, &e);
+            }
+        }
+        if (i == 0) first = w->start_ns;
+    }
+    /* GSAP's "<" and ">": a staggered call is one child, from its first
+     * start to its last end; an endless one ends after a cycle. */
+    q->prev_start = a->stagger_ns < 0 ? last_start : first;
+    q->prev_end = (a->stagger_ns < 0 ? first : last_start)
+                  + (a->cycles == YTL_FOREVER ? cyc : total);
+    return id0;
+}
+
+YTL_API int ytl_animate_n(ytl_seq* q, const ytl_anim* a, size_t stride, int n) {
+    if (!ytl__seq_go(q)) return q ? q->err : YTL_ERR_ARG;
+    return ytl__seq_fail(q, ytl__anim(q, a, stride, n));
+}
+
+YTL_API int ytl_animate(ytl_seq* q, const ytl_anim* a) {
+    return ytl_animate_n(q, a, 0, 1);
+}
+
+static int ytl__tween1(ytl_seq* q, float* field, float from, float to, int64_t dur, int ease,
+                       bool from_set, bool to_current) {
+    ytl_anim a;
+    memset(&a, 0, sizeof a);
+    a.target = field;
+    a.to[0] = to;
+    a.from[0] = from;
+    a.from_set = from_set;
+    a.to_current = to_current;
+    a.immediate = from_set;
+    a.duration_ns = dur;
+    a.ease = ease;
+    return ytl_animate(q, &a);
+}
+
+YTL_API int ytl_tween_to(ytl_seq* q, float* field, float to, int64_t duration_ns, int ease) {
+    return ytl__tween1(q, field, 0.0f, to, duration_ns, ease, false, false);
+}
+
+YTL_API int ytl_tween_from(ytl_seq* q, float* field, float from, int64_t duration_ns, int ease) {
+    return ytl__tween1(q, field, from, 0.0f, duration_ns, ease, true, true);
+}
+
+YTL_API int ytl_tween_from_to(ytl_seq* q, float* field, float from, float to,
+                              int64_t duration_ns, int ease) {
+    return ytl__tween1(q, field, from, to, duration_ns, ease, true, false);
+}
+
+YTL_API int ytl_tween_set(ytl_seq* q, float* field, float value) {
+    return ytl__tween1(q, field, 0.0f, value, 0, YTL_EASE_STEP, false, false);
+}
+
+static int ytl__kill(ytl_timeline* tl, const void* field) {
+    int32_t gi;
+    if (!tl || !tl->open) return YTL_ERR_CLOSED;
+    if (!field) return YTL_ERR_ARG;
+    gi = ytl__tg_find(tl, field);
+    return gi < 0 ? 0 : ytl__tg_kill(tl, gi, true);
+}
+
+static int ytl__kill_tween(ytl_timeline* tl, int id) {
+    int32_t k;
+    if (!tl || !tl->open) return YTL_ERR_CLOSED;
+    for (k = 0; k < tl->tw_cap; k++) {
+        if ((tl->tw[k].flags & YTL__TW_LIVE) && tl->tw[k].id == id) {
+            ytl__tw_free(tl, k, true);
+            return 0;
+        }
+    }
+    return YTL_ERR_NOT_FOUND;
+}
+
+YTL_API int ytl_tween_count(const ytl_timeline* tl, int* n_targets) {
+    if (n_targets) *n_targets = tl && tl->open ? tl->n_tg : 0;
+    return tl && tl->open ? tl->n_tw : 0;
 }
 
 /* --- the frame --------------------------------------------------------- */
@@ -3480,10 +4411,11 @@ static void ytl__report(const ytl_timeline* tl, ytl_event* out, int cap, int n_o
 
 static int ytl__evaluate(ytl_timeline* tl, const ytl_frame* f,
                              ytl_event* fired, int cap) {
-    int64_t lead_ns;
+    int64_t lead_ns, bnow[YTL_MAX_BASES], bhi[YTL_MAX_BASES];
     int bi, i, n_fired = 0;
     if (!tl || !tl->open) return YTL_ERR_CLOSED;
     if (!f || f->period < 0 || cap < 0 || (cap > 0 && !fired)) return YTL_ERR_ARG;
+    if (tl->in_calls) return YTL_ERR_ORDER;   /* from a target's callback */
     if (tl->has_onset && f->onset < tl->last_onset) return YTL_ERR_ORDER;
     tl->has_onset = true;
     tl->last_onset = f->onset;
@@ -3518,6 +4450,7 @@ static int ytl__evaluate(ytl_timeline* tl, const ytl_frame* f,
             e->onset = f->onset;
             e->residual = now - e->time_ns;
             if (ytl__drives(e->kind)) ytl__apply(tl, e);
+            else if (e->kind == YTL_CALL_START || e->kind == YTL_CALL_COMPLETE) ytl__due(tl, e);
             ytl__report(tl, fired, cap, n_fired, e);
             n_fired++;
         }
@@ -3536,6 +4469,8 @@ static int ytl__evaluate(ytl_timeline* tl, const ytl_frame* f,
         if (!b->evaluated || now > b->last_now) b->last_now = now;
         b->now_bt = now;
         b->evaluated = 1;
+        bnow[bi] = now;
+        bhi[bi] = hi_t;
 
         for (i = 0; i < tl->n_channels; i++) {
             ytl__chan* c = &tl->chans[i];
@@ -3546,6 +4481,8 @@ static int ytl__evaluate(ytl_timeline* tl, const ytl_frame* f,
                 tl->values[i] = ytl__sample_chan(tl, c, c->stepped ? hi_t : now);
         }
     }
+    if (tl->n_tg > 0) ytl__targets(tl, bnow, bhi);
+    if (tl->due_head >= 0) ytl__calls(tl);
     return n_fired;
 }
 
@@ -3697,6 +4634,12 @@ YTL_API int ytl_set_track(ytl_timeline* tl, int channel, int base, const ytl_tra
 }
 YTL_API int ytl_tween(ytl_timeline* tl, int channel, int base, const ytl_tween_desc* d) {
     return ytl__err(tl, ytl__tween(tl, channel, base, d), "ytl_tween");
+}
+YTL_API int ytl_kill(ytl_timeline* tl, const void* field) {
+    return ytl__err(tl, ytl__kill(tl, field), "ytl_kill");
+}
+YTL_API int ytl_kill_tween(ytl_timeline* tl, int id) {
+    return ytl__err(tl, ytl__kill_tween(tl, id), "ytl_kill_tween");
 }
 YTL_API int ytl_evaluate(ytl_timeline* tl, const ytl_frame* f, ytl_event* fired, int cap) {
     return ytl__err(tl, ytl__evaluate(tl, f, fired, cap), "ytl_evaluate");

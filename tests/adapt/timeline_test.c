@@ -86,6 +86,8 @@ static double make_inf(void) { return 1.0 / g_zero; }
 #define P60   INT64_C(16666667)
 #define T0    YRT_S(1)
 #define LIM62 INT64_C(4611686018427387904)
+/* The first number that is not a ytl_ease: 7 until v0.6.0 added four. */
+#define NOT_EASE 11
 
 /* Handles are about 12 KB each, so not on the stack. */
 #define STORE_CAP 1024
@@ -1259,7 +1261,7 @@ static void test_tracks(void) {
     /* Rejections. */
     bad[0] = mkkey(10, 1.0f, YTL_EASE_LINEAR); bad[1] = mkkey(5, 2.0f, YTL_EASE_LINEAR);
     CHECK_I(ytl_set_keys(&g_tl, 0, 1, bad, 2), YTL_ERR_ARG);
-    bad[0] = mkkey(0, 1.0f, 7); bad[1] = mkkey(10, 2.0f, YTL_EASE_LINEAR);
+    bad[0] = mkkey(0, 1.0f, NOT_EASE); bad[1] = mkkey(10, 2.0f, YTL_EASE_LINEAR);
     CHECK_I(ytl_set_keys(&g_tl, 0, 1, bad, 2), YTL_ERR_ARG);
     bad[0] = mkkey(0, (float)make_nan(), YTL_EASE_LINEAR);
     CHECK_I(ytl_set_keys(&g_tl, 0, 1, bad, 2), YTL_ERR_ARG);
@@ -1894,9 +1896,9 @@ static void test_set_track(void) {
     /* Keys: order, ease, value, LOG. */
     b = trk_keys(kb, 3);
     memcpy(kb, k, sizeof kb); kb[2].time_ns = 5; REJ_TRACK(b);
-    memcpy(kb, k, sizeof kb); kb[0].ease = 7; REJ_TRACK(b);
+    memcpy(kb, k, sizeof kb); kb[0].ease = NOT_EASE; REJ_TRACK(b);
     memcpy(kb, k, sizeof kb); kb[1].ease = 255; REJ_TRACK(b);
-    memcpy(kb, k, sizeof kb); kb[2].ease = 7; REJ_TRACK(b);   /* the last key's too */
+    memcpy(kb, k, sizeof kb); kb[2].ease = NOT_EASE; REJ_TRACK(b);   /* the last key's too */
     memcpy(kb, k, sizeof kb); kb[0].value = (float)make_nan(); REJ_TRACK(b);
     memcpy(kb, k, sizeof kb); kb[1].value = (float)-make_inf(); REJ_TRACK(b);
     memcpy(kb, k, sizeof kb); kb[2].value = (float)make_inf(); REJ_TRACK(b);
@@ -2189,7 +2191,7 @@ static void test_tween(void) {
     tr = tween_track(tk, &tc, 1600 * M, 300 * M, 0.0f, 2.0f, YTL_EASE_BEZIER, &d.curve);
     /* Other rejections leave the waiting tween in place. */
     d = twd_at(2.0f, 300 * M, 1600 * M);
-    d.ease = 7;
+    d.ease = NOT_EASE;
     CHECK_I(ytl_tween(&g_tl, 4, 1, &d), YTL_ERR_ARG);
     d = twd_at((float)make_nan(), 300 * M, 1600 * M);
     CHECK_I(ytl_tween(&g_tl, 4, 1, &d), YTL_ERR_ARG);
@@ -3027,7 +3029,7 @@ static void test_tween_reject(void) {
         b = g; b.from_set = true; b.from = (float)make_nan(); rej_tw(__LINE__, ch, 1, &b);
         b = g; b.from_set = true; b.from = (float)make_inf(); rej_tw(__LINE__, ch, 1, &b);
         b = g; b.from_set = true; b.from = (float)-make_inf(); rej_tw(__LINE__, ch, 1, &b);
-        b = g; b.ease = 7; rej_tw(__LINE__, ch, 1, &b);
+        b = g; b.ease = NOT_EASE; rej_tw(__LINE__, ch, 1, &b);
         b = g; b.ease = -1; rej_tw(__LINE__, ch, 1, &b);
         b = g; b.ease = 255; rej_tw(__LINE__, ch, 1, &b);
         b = g; b.ease = YTL_EASE_BEZIER; b.curve = mkcurve(1.5f, 0.0f, 0.5f, 1.0f); rej_tw(__LINE__, ch, 1, &b);
@@ -3975,9 +3977,10 @@ static void test_settled(void) {
     CHECK_I(ytl_anchor(&g_tl, 0, 0, 0), YTL_ERR_ARG);
 
     /* The last key's ease must be a ytl_ease, though it is not used.
-     * (6 is YTL_EASE_BEZIER since v0.2.0, so 7 is the first that is not.) */
+     * (10 is YTL_EASE_CUBIC_IN_OUT since v0.6.0, so 11 is the first that
+     * is not.) */
     kk[0] = mkkey(0, 1.0f, YTL_EASE_LINEAR);
-    kk[1] = mkkey(10, 2.0f, 7);
+    kk[1] = mkkey(10, 2.0f, NOT_EASE);
     CHECK_I(ytl_set_keys(&g_tl, 0, 1, kk, 2), YTL_ERR_ARG);
     kk[1] = mkkey(10, 2.0f, 255);
     CHECK_I(ytl_set_keys(&g_tl, 0, 1, kk, 2), YTL_ERR_ARG);
@@ -7183,6 +7186,8 @@ static void test_close_messages(void) {
     ytl_close(&g_tl);
 }
 
+#include "timeline_test_targets.h"
+
 /* ------------------------------------------------------------------- main */
 
 int main(void) {
@@ -7266,6 +7271,7 @@ int main(void) {
     test_seq_on_n();
     test_seq_cross_base();
     test_seq_model();
+    test_targets();
     test_model();
     if (m_stat_promo < 100 || m_stat_kv < 20 || m_stat_xbase < 20 || m_stat_twnow < 50 || m_stat_twrej < 20)
         fail(__LINE__, "model: too few tween takeovers, keep_velocity, cross-base, now or rejected tweens (vacuous)");

@@ -814,6 +814,326 @@ and run as C99 (`-Wall -Wextra -Wpedantic -Werror`) and C++17. Mutants
 `conv-01` (no message), `conv-02` (close keeps the handle open) and
 `conv-03` (no sequence message) are caught.
 
+## Targets (v0.6.0)
+
+Before v0.6.0, a tween writes into the value array, and the caller copies
+each value into a stimulus field on every frame with a binding table
+(`ygfx_apply(binds, n, ytl_values(&tl))`). GSAP, anime.js and Motion
+write into the target object itself. v0.6.0 adds targets: a tween that
+writes into a field of the caller, a `float`, `float[2..4]` or `int32_t`.
+
+| GSAP | C |
+|---|---|
+| `gsap.to(dot, {x: 300, duration: 0.5, ease: "power2.out"})` | `ytl_tween_to(&q, &dot.x, 300.0f, YRT_MS(500), YTL_EASE_CUBIC_OUT);` |
+| `gsap.from(dot, {opacity: 0, duration: 0.2})` | `ytl_tween_from(&q, &dot.opacity, 0.0f, YRT_MS(200), 0);` |
+| `gsap.fromTo(dot, {x: 0}, {x: 300})` | `ytl_tween_from_to(&q, &dot.x, 0.0f, 300.0f, dur, ease);` |
+| `tl.set(fix, {visible: 0}, 0.5)` | `ytl_at(&q, YRT_MS(500)); ytl_tween_set(&q, &fix.visible, 0.0f);` |
+| `gsap.to(g, {color: ..., repeat: 3, yoyo: true, delay: 0.1, onComplete: f})` | `ytl_anim a = { 0 };` fields, then `ytl_animate(&q, &a);` |
+| `gsap.to(dots, {y: 40, stagger: 0.05})` | `a.stagger_ns = YRT_MS(50); ytl_animate_n(&q, &a, sizeof dots[0], n);` |
+| `"<"`, `">"`, `"+=0.2"` | `ytl_at(&q, q.prev_start)`, `ytl_at(&q, q.prev_end)`, `ytl_wait(&q, YRT_MS(200))` |
+| `.addLabel("x")`, `"x+=0.2"` | `int64_t x = q.t;`, `ytl_at(&q, x + YRT_MS(200))` |
+| `gsap.killTweensOf(dot)` | `ytl_kill(&tl, &dot.x);` |
+| `overwrite: true` | `a.overwrite = YTL_OVERWRITE_ALL;` |
+
+### The model
+
+- **A target is a field.** It has an address, a type (`YTL_F32` or
+  `YTL_I32`) and 1 to 4 components. One target per address. A target is
+  bound to one base, as a channel is.
+- **The latest start drives the field.** A target's tweens are sorted by
+  (start, id). At base time t, the tween with the latest (start, id) of
+  those that have started drives the field. This is the rule of an
+  event-driven channel ("the latest (time, id) wins"). So the field is a
+  function of base time and of the set of tweens, and a rewind, a skip or
+  a seek gives the same values as continuous play.
+- **The start value is the takeover's.** When a tween has no `from`, its
+  `from` is the value the field has at its start: the earlier tween's
+  value at that base time, or, for the first tween, the field's own value
+  before the timeline wrote it (the rest value, read once). This is the
+  takeover rule of `ytl_tween()`. The value is computed at the first
+  evaluate that reaches the start, and kept. GSAP also records the start
+  values at the first render.
+- **Writes.** Before the first tween starts, the evaluate does not write
+  the field, so the caller can set it. Two exceptions: a first tween with
+  `immediate` (the default of `from` and `fromTo`, GSAP's immediateRender)
+  shows its `from`; and after a rewind to a time before the first start,
+  the field shows its rest value again. From the first write on, every
+  evaluate writes the field until its tweens are killed or their base is
+  cleared.
+- **Frame placement is the core's.** A STEP tween (a set included) is read
+  at the end of the frame's lead window, so it lands on the frame where
+  an event at the same time lands. Other tweens are read at the predicted
+  onset. All writes are in one pass at the end of `ytl_evaluate()`.
+- **Callbacks are events.** `on_start` and `on_complete` add an event of
+  kind `YTL_CALL_START` or `YTL_CALL_COMPLETE` at the start and at the end.
+  The evaluate calls the functions after it writes every field, in the
+  order in which the events fired.
+- **Pools sized at open.** `desc.targets` and `desc.tweens` are arrays of
+  the caller, as `desc.events` is. A call that does not fit returns
+  `YTL_ERR_FULL`, writes the message and adds nothing.
+
+### Decisions
+
+- **The calls take a sequence, not the timeline.** A tween needs a base
+  and a start. The sequence holds both, and also the labels, the
+  positions, the sticky error and the cancel. GSAP's `gsap.to()` is a
+  tween on the global timeline at "now": `ytl_seq_now(&tl, base)`.
+  Rejected: a base argument on every call, which adds an argument and has
+  no positions. Rejected: a default base in the handle, which is hidden
+  state.
+- **New names.** `ytl_to()` is the sequence's channel tween since v0.4.0,
+  and C has no overloads. The target calls are `ytl_tween_to()`,
+  `ytl_tween_from()`, `ytl_tween_from_to()`, `ytl_tween_set()`, and
+  `ytl_animate()` with a desc. Rejected: renaming the v0.4.0 calls.
+- **Overwrite: the latest start wins, and the earlier tween stays.** This
+  is a GSAP timeline with `overwrite: false`, where the child that starts
+  later renders last. The earlier tween still drives the field before the
+  later start, so a re-anchored trial replays both. Rejected: GSAP's
+  `"auto"`, which kills the overlapping earlier tween at the first render.
+  A rewind could not bring it back. `YTL_OVERWRITE_ALL` kills the other
+  tweens of the field at the call (GSAP's `overwrite: true`). It is for a
+  script that retargets a field on a base that is never cleared: without
+  it, the overwritten tweens fill the pool. Then the new tween starts from
+  the field's value at its start, which is the last value written.
+- **The timeline owns a field until a kill.** GSAP stops writing a field
+  when its tween completes. Here the evaluate writes it until the
+  target's tweens are killed or their base is cleared. The reason: the
+  start value of a later tween comes from the earlier tween, not from the
+  field. A write by the caller between the two would show on the screen
+  and then be lost at the next start, with no sign. With ownership the
+  next frame overwrites the caller's write, which a test or a look at the
+  screen shows at once. The cost is one write per target per frame
+  (measured below).
+- **The rest value is read once.** It is the field's value before the
+  first write of the target. A target whose tweens are all killed is
+  freed, and the next tween on the field reads the field again. So a
+  trial that clears its base starts from the values the caller set.
+- **Callbacks are events, called after the pass.** As events, they land on
+  the frame nearest to their time, a skip passes over them, a rewind
+  makes them due again, and the storage records where they landed. They
+  are called after every field is written, so a callback sees the frame's
+  values. It can post or kill tweens; these take effect at the next
+  evaluate. `ytl_evaluate()` from a callback is `YTL_ERR_ORDER`.
+  Rejected: calls inside the pass, where a callback that posts or kills a
+  tween changes the lists the pass walks. Rejected: a scan of the tweens
+  on every frame to find due callbacks, which costs per tween per frame
+  and repeats the event rules. The cost of the choice: each callback uses
+  an event of the storage.
+- **Keep the value array and `ygfx_apply()`.** Channels have users that
+  targets do not serve: event-driven channels with the (time, id)
+  recompute, sampled and repeating tracks (a 10-minute tracking target, a
+  flicker), and the contiguous array for a uniform upload, a log and a
+  designer's preview. 18 example programs use them. Targets serve what a
+  channel does badly: a channel needs a number, a binding row and a copy
+  per frame, and it holds one waiting tween. So neither subsumes the
+  other. Rejected: a field pointer on a channel (`ytl_bind`), which is
+  `ygfx_bind.field` again. Do not drive one field both ways: the binding
+  runs after the evaluate and wins.
+- **The same arithmetic as `ytl_tween()`.** A target tween and a channel
+  tween with the same desc give the same bits. So the yoyo rule (the
+  return leg applies the same ease again; it is not GSAP's mirrored
+  playback) stays one rule in the header, and the test can compare the two
+  paths.
+- **Four more eases**: `QUAD_IN_OUT`, `CUBIC_IN`, `CUBIC_OUT` and
+  `CUBIC_IN_OUT` (GSAP's `power1.inOut` and `power2.*`). They are +, -
+  and *, so replay stays exact. Keys and channel tweens take them too.
+- **No op-table form.** An op table is data for a pack, and a pack
+  cannot hold a pointer.
+- **Layout.** A target is 40 bytes and a tween 128 bytes, the fields that
+  the evaluate reads in the first 64. Targets stay dense (a freed one
+  takes the last one's place), so the pass reads one contiguous array.
+
+### Measured cost
+
+`examples/timeline/bench_targets.c` times three paths for 0, 1, 100 and
+1000 animated fields, each a float in its own 256-byte stimulus:
+
+- **targets**: one target tween per field (`ytl_tween_to()`).
+- **channels**: one channel tween per field (`ytl_tween()`), then the
+  binding copy, the loop of `ygfx_apply()` for `.field` bindings with its
+  check pass.
+- **held**: the targets after their tweens ended. The evaluate still owns
+  and writes the fields.
+
+Every tween is CUBIC_OUT over 1000 s, so it is in progress on each frame.
+A sample is 64 evaluates between two clock reads. Each cell is the median
+of 400 samples, the smaller of two runs of 5 interleaved rounds, in ns
+per frame. Machine: Intel i7-1360P, Windows 11, on AC power, through the
+measurement lock at 17% load. MSVC 19.44 /O2 (the msvc-full Release
+build) and MinGW-w64 gcc 16.1 -O2:
+
+| Fields | targets MSVC | channels MSVC | held MSVC | targets gcc | channels gcc | held gcc |
+|---|---|---|---|---|---|---|
+| 0 | 18.8 | 20.3 | 18.8 | 14.1 | 15.6 | 14.1 |
+| 1 | 29.7 | 25.0 | 25.0 | 21.9 | 23.4 | 18.8 |
+| 100 | 777 | 781 | 494 | 769 | 689 | 480 |
+| 1000 | 7967 | 8314 | 4873 | 7553 | 7392 | 4609 |
+| Per field, at 1000 | 7.95 | 8.29 | 4.85 | 7.54 | 7.38 | 4.59 |
+
+The second run of each was within 8% of the first, except MSVC held
+(5.8 ns per field). What the table shows:
+
+- **A target costs about 8 ns per frame**, the same as a channel tween plus
+  its binding copy (7.4 to 8.5 ns). Neither path wins on both compilers.
+  So targets replace the copy at no cost; they do not make the frame
+  faster.
+- **0.5 ms holds about 60,000 animated fields** (62,000 to 66,000 from the
+  1000-field rows). 1000 fields cost 8 us, 0.05% of a 16.7 ms frame and
+  0.4% of a 2 ms frame at 500 Hz.
+- **A held field costs about 5 ns**: the pass reads the target and its
+  tween and writes the field. Ownership (see "Decisions") costs this much;
+  a release after the end would save it.
+- **One target costs 8 to 11 ns more than an empty frame**, against 5 to
+  8 ns for one channel: the pass's fixed cost.
+
+The channel path itself did not slow down. The first build sent every ease
+of a key through the new eases' function (`ytl__shape`), one more switch
+per key. A scratch program timed 256 LINEAR keyed channels against
+v0.5.0, 5 interleaved rounds through the measurement lock, the minimum of
+the medians in ns per evaluate:
+
+| Build | MinGW gcc 16.1 -O2 | MSVC cl /O2 (Visual Studio 18) |
+|---|---|---|
+| v0.5.0 | 3105 | 3461 |
+| Every ease through `ytl__shape` | 3291 (+6%) | 3754 (+8%) |
+| Kept: v0.5.0's cases inline, the new eases through `ytl__shape` | 2695 | 3448 |
+
+An earlier session at 0% load gave 1467 against 1344 (gcc) and 1636
+against 1664 (MSVC) for v0.5.0 against the kept build, and COSINE keys
+within 4% both ways. The machine's speed differed between the sessions,
+so only the rows of one session compare.
+
+### Verification
+
+`tests/adapt/timeline_test_targets.h`, which `timeline_test.c` includes,
+was written by the writer of the implementation. So a misreading can be
+in the header, the manual and the checks alike. Two things limit that:
+the eases and the repeat fold in the checks are written apart from the
+header (pow() and floor division), and a target tween is compared bit for
+bit with `ytl_tween()` on a channel, the path that the earlier blind
+tests cover. The checks:
+
+- Against `ytl_tween()`: 400 random descs (every ease, BEZIER curves,
+  cycles, YTL_FOREVER, yoyo, from, keep_velocity), a second tween taking
+  over from the first, 70 frames each: the same bits on all 28,000
+  frames.
+- Each of the 11 eases against the reference at 60 Hz onsets, as a target
+  and as keys.
+- to, from, fromTo and set; the field not written before the first start
+  and owned after it; n = 3; int32_t rounding; stagger in both
+  directions, with "<" and ">".
+- The overwrite rules: the latest start, equal starts, a rewind that
+  brings back the earlier tween, kill_tween of the driver, BOUND and a
+  different shape, YTL_OVERWRITE_ALL with a change of base, clear and
+  cancel.
+- Callbacks: the frame each lands on (the frame of a MARK at the same
+  time), the order, the field already written, a tween posted from one, a
+  rewind that calls them again, a skip that calls neither, a nested
+  `ytl_evaluate()` refused, a kill in on_start that skips on_complete, and
+  the events a kill deletes.
+- Every pool refusal and its message, all or none, and an overwrite that
+  fits only by what it frees (tweens, and events).
+- A set against a SET event at the same time, behind a ramp that starts in
+  the same window: 900 cases at three leads, the same frame in all.
+- A trial with every kind of call: a rewind replays 90 frames bit for bit;
+  a fresh handle that seeks to 11 places with `ytl_skip()` shows the
+  values of continuous play from there; two handles given the same calls
+  have the same pools, storage and fields.
+- A model of the rules in "The model", 12 runs of 500 random calls,
+  frames, rewinds, skips, pauses and kills (1184 tweens, 451 of them STEP,
+  221 immediate): every written field within 1e-4 of the model. Three
+  model mutations are each caught: the first started tween drives, every
+  start value is the rest value, STEP tweens read at the onset.
+
+The test found two errors before the first run passed, both in the
+checks: the model read the rest value after the header had written the
+field, and two MARK events had the same code. It found none in the
+header. The earlier checks pass unchanged, with the same model
+statistics, except that the first number that is not an ease is now 11.
+
+Mutations of the target code, one at a time: 20, all caught (`tgt-00`
+to `tgt-19` in [tests/mutate/timeline.toml](../tests/mutate/timeline.toml)).
+They include the first start driving, the cursor kept over a rewind, no
+look-ahead for a set, a set read at the onset, every start value from the
+rest value, the rest value read at every write, immediate ignored, a
+moved target's tweens left behind (a crash), a nested evaluate accepted,
+on_complete after a kill, and callbacks not queued.
+
+The compile check `tests/compile/timeline.c` animates a stimulus struct
+with each call, as C99 and as C++17 (`timeline.cpp`) with no cast. Clean
+with MinGW gcc 16.1 (`-Wall -Wextra -Wpedantic -Werror`), MSVC 19.44 and
+gcc 11.4 under WSL2. The test is clean under ASan and UBSan (gcc 11.4,
+WSL2).
+
+## Animate a stimulus field
+
+This how-to animates the fields of ysp/gfx.h stimuli with targets. The
+complete program is `examples/timeline/gfx_trial.c`. "Targets" above
+gives the rules.
+
+1. Give the timeline its pools. Make them as large as the fields and the
+   tweens that are alive at one time.
+
+   ```c
+   static ytl_target_slot targets[8];
+   static ytl_tween_slot tweens[16];
+   td.targets = targets; td.target_capacity = 8;
+   td.tweens = tweens;   td.tween_capacity = 16;
+   ```
+
+2. Set each field to the value it must show before its first tween. The
+   timeline does not write a field before its first tween starts.
+
+   ```c
+   fix.visible = grating.visible = 0.0f;
+   ```
+
+3. Write the trial on a sequence, in the order that it plays. Check the
+   sequence's error once, at the end.
+
+   ```c
+   ytl_seq q = ytl_seq_on(&tl, TRIAL);
+   ytl_tween_set(&q, &fix.visible, 1.0f);
+   ytl_wait(&q, YRT_MS(500));
+   ytl_tween_set(&q, &fix.visible, 0.0f);
+   ytl_tween_set(&q, &grating.visible, 1.0f);
+   ytl_trigger(&q, 12);
+   ytl_tween_from_to(&q, &grating.contrast, 0.0f, 0.3f, YRT_MS(100), YTL_EASE_COSINE);
+   ytl_wait(&q, YRT_MS(600));
+   ytl_tween_to(&q, &grating.contrast, 0.0f, YRT_MS(100), YTL_EASE_COSINE);
+   ytl_wait(&q, YRT_MS(100));
+   ytl_tween_set(&q, &grating.visible, 0.0f);
+   if (q.err < 0) fprintf(stderr, "%s\n", ytl_error(&tl));
+   ```
+
+4. Anchor the trial base at the first frame, and call `ytl_evaluate()`
+   with each frame's predicted onset before you draw. Do not copy these
+   fields with `ygfx_apply()`: the evaluate wrote them.
+
+5. Between trials, call `ytl_clear(&tl, TRIAL)`, set the fields again, and
+   build the next trial. The clear frees the targets, so the next trial
+   reads the fields again.
+
+Variations:
+
+- **A color or a position pair.** Use `ytl_animate()` with `a.n = 3` and
+  `a.target = g.color`, or `a.n = 2` on two adjacent floats.
+- **A stagger.** Set `a.stagger_ns` and call `ytl_animate_n(&q, &a,
+  sizeof dots[0], n)` with `a.target = &dots[0].y`.
+- **A record of a set.** A set changes a field, not the event record. Add
+  `ytl_mark(&q, code, 0)` at the same cursor when the analysis needs the
+  frame that showed it, or add a trigger, as step 3 does.
+- **A script that retargets.** Use `ytl_seq_now(&tl, base)` and
+  `a.overwrite = YTL_OVERWRITE_ALL`, so the old tweens do not fill the
+  pool.
+
+The conversion of `gfx_trial.c` from channels to targets took the file
+from 147 to 138 lines. It removed the channel enum, the key table, the
+binding table, an event helper and the per-frame `ygfx_apply()` call. A
+scratch program ran both versions on the same frames at 60, 144 and
+500 Hz: every frame showed the same `visible` values and the same contrast
+bits.
+
 ## Storage
 
 Events go in a sorted array that the caller supplies, and the caller sets
@@ -1141,3 +1461,13 @@ clean on MinGW gcc 16.1, MSVC 19.44 (C++20) and gcc 11.4.
 - The cost of a skip is not timed. It is one write per skipped event.
 - A base rate's change is exact to under 1 ns per change, not exactly
   rational (see "Arithmetic").
+- Targets (v0.6.0):
+  - `ytl_prune()` does not free target tweens. On a base that is never
+    cleared, the tweens that a later start overrides stay in the pool
+    until a kill; `YTL_OVERWRITE_ALL` is the way to retarget there.
+  - A set changes a field and leaves no landing record. A mark or a
+    trigger at the same time gives one.
+  - No target form of the op tables, and no binding from Python, MATLAB
+    or a script layer.
+  - Not run on clang or emscripten. This round ran MinGW gcc 16.1, MSVC
+    19.44 and gcc 11.4 under WSL2 (ASan and UBSan).
