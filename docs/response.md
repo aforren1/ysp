@@ -18,7 +18,7 @@ jsPsych's `html-keyboard-response`, and explains each part of it.
 
 ### 1. Run the example on the simulated display
 
-Build the examples with SDL3 (see the README), then run:
+Build the examples with SDL3 (the `msvc-full` preset, [build.md](build.md)), then run:
 
 ```sh
 trial_keyboard --sim
