@@ -152,6 +152,7 @@ int main(int argc, char** argv) {
     static double sim_rt[MAX_ROWS];
     static int sim_key[MAX_ROWS];
     static yrsp_result sim_res[MAX_ROWS];
+    static int64_t sim_plan[MAX_ROWS];   /* where the script's times start */
     yscr_desc sd;
     ygfx_desc gd;
     ygfx_dots_desc dd;
@@ -356,6 +357,7 @@ int main(int argc, char** argv) {
                     sim_key[ti.index] = wrong ? !answer : answer;
                     sc = (uint32_t)yrsp_scancode(sim_key[ti.index] ? "right" : "left");
                     memset(sim_ev, 0, sizeof sim_ev);
+                    sim_plan[ti.index] = f.onset;
                     sim_ev[0].t = f.onset + YRT_S(sim_rt[ti.index]);
                     sim_ev[0].kind = YRSP_KIND_KEYBOARD;
                     sim_ev[0].type = YRSP_PRESS;
@@ -431,7 +433,8 @@ int main(int argc, char** argv) {
     if (sim && !failed && !aborted) {
         for (i = 0; i < rows; i++) {
             const yrsp_result* r = &sim_res[i];
-            if (!(r->flags & YRSP_R_RESPONDED) || r->response != sim_key[i] || fabs(YRT_TO_S(r->rt_ns) - sim_rt[i]) > 1e-6 ||
+            if (!(r->flags & YRSP_R_RESPONDED) || r->response != sim_key[i] || /* script from the plan, RT from the flip record */
+                llabs(r->rt_ns + (r->t_onset - sim_plan[i]) - YRT_S(sim_rt[i])) > 1000 ||
                 r->onset_tier != YSCR_TIER_SIM || r->onset_src != YRSP_ONSET_FLIP) {
                 fprintf(stderr, "trial_rdk: --sim: trial %d: rt %.9f (want %.9f) response %d (want %d) onset tier %d "
                                 "src %d\n", i, YRT_TO_S(r->rt_ns), sim_rt[i], r->response, sim_key[i], r->onset_tier, r->onset_src);

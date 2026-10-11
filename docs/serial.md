@@ -815,6 +815,67 @@ Not run, because each part needs a serial port or a board:
 Option (b) gives every result of option (a) except the FTDI latency timer,
 so (b) is the better choice. Option (a) is only for the latency timer.
 
+### Results with the Teensy 4.0 echo board
+
+Conditions: 2026-10-11, the machine and MATLAB of the run above, AC power.
+A Teensy 4.0 with `firmware/ysp_echo` (native USB, no bridge chip, so no
+latency timer) on COM3 at 115200 baud. `ysp_serial.mexw64` rebuilt from
+this tree (ysp/serial.h v0.5.0) with `bindings/mex/build.m`. One run of
+every part. Times in microseconds. The board's stamps are mapped to the
+host clock by a fit; a one-way time is good to the fit's bound (the "+-"
+column). The run's `summary.txt` and `conditions.txt` are in
+`tests/compare/serial_bench/results/2026-10-11-teensy40/`.
+
+Round trip `e <seq>` to its 35-byte answer, 1000 exchanges, no failures:
+
+| API | Read | RTT median | RTT p99 | Host to board | Board to host, median / p99 | +- |
+|---|---|---|---|---|---|---|
+| ysp | blocking | 186.5 | 371 | 83.5 | 104.5 / 246.5 | 56 |
+| ysp | poll | 182 | 437 | 94.8 | 87.3 / 278 | 48 |
+| IOPort | blocking | 395 | 2050 | 159 | 235 / 1863 | 110 |
+| IOPort | poll | 342 | 621 | 115 | 231 / 457 | 97 |
+| serialport | blocking | 3965 | 14830 | 514 | 3432 / 14270 | 331 |
+| serialport | poll | 4387 | 14960 | 644 | 3604 / 14430 | 373 |
+
+Stream, 1000 lines per second for 10 s (10000 lines of 26 bytes); latency
+is the host time after the read returned minus the board's send stamp:
+
+| API | Mode | Missed | Latency median / p99 | CPU, % of one core |
+|---|---|---|---|---|
+| ysp | blocking read per line | 0 | 181 / 393 | 7.7 |
+| ysp | poll loop | 0 | 117.5 / 316.5 | 101 |
+| IOPort | blocking read per line | 0 | 1043 / 2151 | 19.8 |
+| IOPort | poll loop | 0 | 141 / 361 | 102 |
+| serialport | blocking read per line | 0 | 4358 / 14410 | 105 |
+| serialport | poll loop | 0 | 3451 / 14420 | 103 |
+| serialport | callback | 0 | 1563 / 7189 | 81 |
+
+Call costs, median (p99): write of 1 to 512 bytes, ysp 149 to 205 (321 to
+378), IOPort non-blocking 225 to 375 (375 to 647), serialport 555 to 684
+(1619 to 1739). Read with nothing waiting: ysp 4 (8), IOPort 36 (98).
+Bytes-available query: ysp 5 (9), IOPort 19.5 (50.5), serialport 14.3
+(20.4). Open: ysp 3637, IOPort 2277, serialport 161400.
+
+What the tables show:
+
+- ysp_serial has the shortest round trip and the shortest tails: half of
+  IOPort's median and a sixth of its blocking p99. serialport is 20 times
+  slower at the median and has a tail near 15 ms.
+- The write call is most of the round trip for every API: it returns after
+  the board has read the command (write return to board read is negative,
+  -45 to -186 us), so a write on this port waits for the USB transfer.
+- A blocking read per line costs ysp 7.7 % of a core at 1000 lines per
+  second, with a p99 latency under 0.4 ms. A poll loop is a little faster
+  for ysp and IOPort but uses a whole core.
+- ysp's open is 1.4 ms slower than IOPort's. Not investigated: an open is
+  not on a trial's path.
+- IOPort's asynchronous mode (background reader, `BlockingBackgroundRead=1`)
+  received none of the 10000 lines. This is most likely the bench's set-up
+  of that mode, not IOPort; it is not investigated, and this run gives no
+  IOPort async result.
+- The MEX binding has no asynchronous read. C code reads on a thread
+  (ysp/device.h); that path is not in this bench.
+
 ### Psychtoolbox on this machine
 
 The Psychtoolbox on the MATLAB path is a git checkout from January 2026

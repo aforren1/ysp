@@ -1,4 +1,4 @@
-/* ysp/trials.h - v0.4.0 - public domain single-header trial sequencing library
+/* ysp/trials.h - v0.4.1 - public domain single-header trial sequencing library
  *
  *   The layer above the adaptive methods: which trial comes next, and what
  *   happened on it. Conditions and repetitions (the method of constant
@@ -1073,6 +1073,10 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.4.1 - fileno() for YTR_FLUSH_SYNC under -std=c11 when the caller
+ *          included a system header first: glibc had already fixed its
+ *          feature set, so fileno() was undeclared and the build failed;
+ *          the header now declares it there. No other change.
  *   v0.4.0 - the data writer (DATA FILE): ytr_data_open() with a column
  *          list declared once (int, int64, double, bool, string, char
  *          array, a time in int64 nanoseconds written as seconds, and
@@ -1403,8 +1407,8 @@
  * string is the three numbers, and the test asserts that it stays so. */
 #define YTR_VERSION_MAJOR 0
 #define YTR_VERSION_MINOR 4
-#define YTR_VERSION_PATCH 0
-#define YTR_VERSION_STRING "0.4.0"
+#define YTR_VERSION_PATCH 1
+#define YTR_VERSION_STRING "0.4.1"
 
 /* fsync() and fileno() for YTR_FLUSH_SYNC under -std=c11: the feature-test
  * macro of ysp/rt.h and ysp/pack.h, set before the first system header
@@ -2148,6 +2152,16 @@ YTR_API void ytr_data_close(ytr_data* w);
 #include <wchar.h>
 #else
 #include <unistd.h>   /* fsync */
+/* glibc fixes its feature set at the first system header, so a caller who
+ * includes one before this header under -std=c11 hides fileno() (guarded by
+ * __USE_POSIX) whatever the macro above asks. The C library still has it. */
+#if defined(__GLIBC__) && !defined(__USE_POSIX)
+#ifdef __cplusplus
+extern "C" int fileno(FILE* f);
+#else
+extern int fileno(FILE* f);
+#endif
+#endif
 #endif
 
 #ifdef NAN

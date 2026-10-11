@@ -29,7 +29,7 @@ renderers, in tests and CI.
 | rt | Windows 11: clock, waits, worker, event ring | The device clock fit: no real device has fed it; macOS | rt.h STATUS; docs/rt.md |
 | input, response | Windows 11: keys sent with SendInput through SDL 3.4 | A key pressed by hand; mouse, touch, pen, gamepad timing; response boxes | input.h; docs/response.md |
 | net | Windows 11 and WSL2: the real liblsl (1.17.5, 1.17.7) over local loopback | No LabStreamer or other LSL device; macOS | net.h STATUS; docs/net.md |
-| serial | none | Linux virtual port pairs; the Windows and macOS backends never ran on a device | serial.h STATUS; docs/serial.md |
+| serial | Windows 11, i7-1360P: a Teensy 4.0 echo board over native USB, through the MATLAB MEX binding (2026-10-11) | Linux virtual port pairs; macOS never ran on a device; no USB-serial bridge (FTDI) or RS-232 port yet | docs/serial.md, "Results with the Teensy 4.0 echo board" |
 | parallel | none on Windows; the "Linux tested" note does not say whether a real port was used | The Windows backend never reached hardware | parallel.h STATUS |
 | box | none | Pure protocol code; no byte from or to a vendor device; the firmware never ran on a board | box.h STATUS; docs/box.md |
 | device | none | Fake transports, the simulated display and socat pairs; no box, board or trigger interface opened | device.h STATUS; docs/device.md |
@@ -128,6 +128,7 @@ Purpose: Trial sequencing above the adaptive methods: conditions and repetitions
 
 Status:
 
+- v0.4.1: builds under -std=c11 when a system header comes before it (fileno() for YTR_FLUSH_SYNC on glibc).
 - v0.4.0 (the data writer, on the [Conventions](conventions.md): `ytr_data_finish()` and a void `ytr_data_close()`, a `TIME_NS` column `x_ns` written `x_s`; every type, missing value and 400 random strings with commas, quotes, line breaks and bad UTF-8 read back by ysp/table.h, 2000 random doubles bit for bit; 25 of 25 mutations caught; a 26-column row costs 4.2 / 1.9 us to format, 15 / 14 us with the write to the OS, 1.7 ms with a sync to disk, gcc / MSVC).
 - v0.3.0 (the [Conventions](conventions.md): jitters in `int64_t` ns with `_ns` desc fields, seconds kept in rules, tables and bindings with every pinned draw unchanged; `ytr_open_saved()`, `ytr_close()`, messages from the loop calls).
 - v0.2.1. The hashes of 600 v0.1.1 and 320 v0.2.0 sessions match on gcc, MSVC and Linux; jitter distributions checked against their CDFs, the draws integer-only with golden digests that match under every compiler and flag set tried (-Ofast and /fp:fast included), and the snapped exponential's hazard measured; each v0.2 order checked by chi-square against its stated distribution, units and balance uniform over every valid order of small designs; 22.9 million fuzz inputs and 47 of 47 mutations caught; gcc and MSVC, sanitizer clean. Sequential order identical to PsychoPy's TrialHandler and the random orders' block properties matched over 100 seeds ([tests/compare/](../tests/compare/)). open() of a 10,000-trial design 0.02 to 7 ms. [Design notes](trials.md).

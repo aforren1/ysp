@@ -144,6 +144,7 @@ int main(int argc, char** argv) {
     ytl_event fired[64];                   /* the timeline's capacity: all that can fire */
     ytr_trial_info ti = { 0 };
     yrsp_result res, sim_res[SIM_TRIALS];
+    int64_t sim_plan[SIM_TRIALS] = { 0 };   /* where the script's times start */
     uint32_t doubles_at_arm = 0;
     yrsp_input sim_ev[8];
     FILE* out;
@@ -261,6 +262,7 @@ int main(int argc, char** argv) {
             int wrong = blocks[block] == 'R' && odd;
             double at = wrong ? SIM_WRONG_RT : blocks[block] == 'S' ? SIM_RT_S : SIM_RT_R;
             int p;
+            if (trial_index < SIM_TRIALS) sim_plan[trial_index] = fired[landed].onset;
             for (p = 0; p < 1 + (blocks[block] == 'S' && odd); p++) {
                 yrsp_input* e = &sim_ev[n_sim_ev];
                 memset(e, 0, sizeof *e);
@@ -322,7 +324,10 @@ int main(int argc, char** argv) {
             const yrsp_result* r = &sim_res[i];
             int s = i < SEQ_LEN, k = i % SEQ_LEN;
             double want = s ? SIM_RT_S : k == 2 ? SIM_WRONG_RT : SIM_RT_R;
-            int ok = (r->flags & YRSP_R_RESPONDED) && fabs(YRT_TO_S(r->rt_ns) - want) < 1e-6 &&
+            int ok = (r->flags & YRSP_R_RESPONDED) &&
+                     /* the script runs from the planned onset; RT from the flip
+                      * record's, which a loaded host shows whole frames later */
+                     llabs(r->rt_ns + (r->t_onset - sim_plan[i]) - YRT_S(want)) <= 1000 &&
                      sim_correct[i] == (s || k != 2) && r->n_after_end == (s && k == 4) &&
                      r->onset_tier == YSCR_TIER_SIM && r->onset_src == YRSP_ONSET_FLIP;
             if (!ok) {

@@ -154,6 +154,7 @@ int main(int argc, char** argv) {
     int in_trial = 0, responding = 0, bars_up = 0, n_sim_ev = 0, sim_next = 0, ref_col;
     int sim_steps[SIM_TRIALS];
     double start_value = 0, sim_start[SIM_TRIALS], sim_final[SIM_TRIALS];
+    int64_t sim_plan_onset[SIM_TRIALS] = { 0 };   /* where the script's times start */
 
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--sim")) sim = 1;
@@ -301,6 +302,7 @@ int main(int argc, char** argv) {
                             }
                         }
                     }
+                    if (ti.index < SIM_TRIALS) sim_plan_onset[ti.index] = fired[i].onset;
                     if (ti.index < SIM_TRIALS && n_sim_ev + 2 <= 64) {
                         /* without its release, space stays down and the next
                          * trial's press is a held key, not a response */
@@ -381,7 +383,10 @@ int main(int argc, char** argv) {
         for (i = 0; i < rows && i < SIM_TRIALS; i++) {
             const yrsp_result* r = &sim_res[i];
             int ok = sim_steps[i] == want_steps[i] && fabs(sim_final[i] - sim_start[i] - want_net[i] * STEP) < 1e-9 &&
-                     (r->flags & YRSP_R_RESPONDED) && fabs(YRT_TO_S(r->rt_ns) - sim_confirm_at[i]) < 1e-6 &&
+                     (r->flags & YRSP_R_RESPONDED) &&
+                     /* the script runs from the planned onset; RT from the flip
+                      * record's, which a loaded host shows whole frames later */
+                     llabs(r->rt_ns + (r->t_onset - sim_plan_onset[i]) - YRT_S(sim_confirm_at[i])) <= 1000 &&
                      r->onset_tier == YSCR_TIER_SIM && r->onset_src == YRSP_ONSET_FLIP;
             if (!ok) {
                 fprintf(stderr, "trial_adjustment: --sim: trial %d: %d steps, %.2f -> %.2f, rt %.9f flags 0x%x\n", i,

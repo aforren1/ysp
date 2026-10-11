@@ -196,6 +196,7 @@ int main(int argc, char** argv) {
     ytl_event fired[64];                   /* the timeline's capacity: all that can fire */
     ytr_trial_info ti = { 0 };
     yrsp_result res, sim_res[SIM_TRIALS];
+    int64_t sim_plan[SIM_TRIALS] = { 0 };   /* where the script's times start */
     yrsp_input sim_ev[4];
     int sim_cong[SIM_TRIALS], sim_correct[SIM_TRIALS], sim_fb[SIM_TRIALS], sim_prac[SIM_TRIALS], cond_reps[64];
     FILE* out;
@@ -397,6 +398,7 @@ int main(int argc, char** argv) {
         if (landed >= 0 && sim && !sim_silent(ti.index)) {   /* the participant answers from the word's onset */
             int k = sim_wrong(ti.index) ? (congruent ? (ink + 1) % N_INKS : word) : ink;
             memset(sim_ev, 0, sizeof sim_ev);
+            if (ti.index < SIM_TRIALS) sim_plan[ti.index] = fired[landed].onset;
             sim_ev[0].t = fired[landed].onset + YRT_S(sim_rt(congruent));
             sim_ev[0].type = YRSP_PRESS;
             sim_ev[0].control = (uint32_t)yrsp_scancode(keys[k].key);
@@ -466,7 +468,8 @@ int main(int argc, char** argv) {
             const yrsp_result* r = &sim_res[i];
             int cong = sim_cong[i] >> 1, ok = (sim_cong[i] & 1) == cong && sim_prac[i] == (i < N_PRACTICE);
             if (sim_silent(i)) ok = ok && !(r->flags & YRSP_R_RESPONDED) && (r->flags & YRSP_R_TIMEOUT) && !sim_correct[i];
-            else ok = ok && (r->flags & YRSP_R_RESPONDED) && fabs(YRT_TO_S(r->rt_ns) - sim_rt(cong)) < 1e-6 && sim_correct[i] == !sim_wrong(i);
+            else ok = ok && (r->flags & YRSP_R_RESPONDED) && /* script from the plan, RT from the flip record */
+                      llabs(r->rt_ns + (r->t_onset - sim_plan[i]) - YRT_S(sim_rt(cong))) <= 1000 && sim_correct[i] == !sim_wrong(i);
             ok = ok && sim_fb[i] == (i >= N_PRACTICE ? -1 : sim_silent(i) ? 2 : sim_wrong(i) ? 1 : 0);
             ok = ok && r->onset_tier == YSCR_TIER_SIM && r->onset_src == YRSP_ONSET_FLIP;
             if (i >= N_PRACTICE) {   /* the rule: at most 3 congruent test trials in a row */
