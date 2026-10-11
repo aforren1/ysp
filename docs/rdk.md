@@ -23,7 +23,7 @@ coordinator on 2026-10-06; "Decisions" records the answers.
 | CI | Not run yet: the Linux and macOS arm64 runs of the golden digests are the first on those platforms. |
 | `examples/rdk/gfx_rdk.c` | Done: 4 pages; `--sim` in CI replays two trials from their logs. |
 | `examples/rdk/bench.c`, `examples/rdk/gfx_rdk_bench.c` | Done: see "Cost". |
-| Python binding (`bindings/python/ysp_rdk`, `ysp.rdk`) | Done 2026-10-07: see "Bindings". 25 tests pass on Windows (CPython 3.14 and 3.9, MSVC) and on Linux (WSL2, CPython 3.10, gcc 11.4, an isolated build with the header staged as CI does). CI builds and tests it on Linux, macOS arm64 and Windows. |
+| Python binding (`bindings/python/ysp_rdk`, `ysp.rdk`) | Done 2026-10-07: see "Bindings". 25 tests pass on Windows (CPython 3.14 and 3.9, MSVC) and on Linux (WSL2, CPython 3.10, gcc 11.4, an isolated build with the header staged as CI does). CI builds and tests it on Linux, macOS arm64 and Windows. 0.2.0.1 (2026-10-11): times in seconds, see "Bindings"; 28 tests pass on Windows (CPython 3.14.3, MSVC). |
 
 ## Decisions
 
@@ -422,6 +422,34 @@ records or rows of a NumPy structured array. The binding also has start,
 update, replay, the outputs of the last update, snapshots and the exact
 pieces (`philox`, `angle`, `sincos`).
 
+Since 0.2.0.1 (2026-10-11) every time in the binding is seconds, as in
+every binding (docs/bindings.md): `start()`, `update()`, `t0` and the
+step rows, `Field.last.t`, `lifetime` and `frame_period` (the desc's
+`frame_ns`). Until then it took and returned integer ns, because a
+replay is exact only if each ns is. The seconds keep that:
+
+- **The conversion rounds the exact product.** The binding turns a time
+  t into the nearest ns of the real product t x 1e9; `fma()` gives the
+  rounding error of the floating-point product. For t = ns / 1e9 (the
+  nearest double) the result is ns for every ns below 2^23 s (8,388,608
+  s, about 97 days of a clock's count), where the double is within 0.47
+  ns of the true value. A double holds every integer ns to 2^53 ns
+  (about 104 days), but its seconds lose that earlier. A plain
+  `llround(t * 1e9)` missed by 1 ns on 626 of 20,000 random ns between
+  2^51 and 2^52 (26 to 52 days) and on none between 10^14 and 10^15; the
+  test has 2,000 values in that range, and a mutant without the `fma()`
+  term fails it.
+- **The bound is refused, not rounded.** A time at or above 2^23 s, a
+  negative time and NaN raise `ArgumentError`, as does an old ns integer
+  passed as seconds (10^9 s is 31 years).
+- **The step rows carry the exact ns.** `Field.last` is `Step(t,
+  coherence, direction, speed, set, ns)`, with `t == ns / 1e9`, as a
+  `ysp.trials` jitter gives `ns` beside `s`. A row with `ns` replays from
+  it at any magnitude, and a row whose `t` is not `ns / 1e9` is refused.
+- **Nothing else changed.** The golden digests, the replay of
+  `tests/c_trial.bin` and every earlier test give the same results with
+  their inputs as seconds.
+
 Its test (`bindings/python/ysp_rdk/tests/test_rdk.py`) checks:
 
 | Check | Result (Windows, Linux) |
@@ -429,6 +457,7 @@ Its test (`bindings/python/ysp_rdk/tests/test_rdk.py`) checks:
 | the 8 golden digests, by updates in Python and by `replay()` and `trajectory()` | equal to the C test's and `rdk_ref.py`'s |
 | a trial logged by the C header (`tests/c_trial.bin`, written by `tests/make_c_trial.c`; LL, a rect, a lifetime, changing coherence, direction and negative speed, jittered onsets and a drop; MSVC and MinGW write the same bytes) replayed by `trajectory()` | x, y, direction and signal equal bit for bit on all 150 updates; the digest equal |
 | a live run's `Field.last` log replayed | the same digest |
+| seconds in, ns out (0.2.0.1): 6,584 ns values from 0 to 2^23 s, near 10^14 ns among them, given as `ns / 1e9`; a live run logged and replayed at 10^9 and 10^14 ns | every ns exact; the same digest and positions; `Field.last.ns` equal to the time given |
 | frozen noise, coherence 0.2 and 0.55, three noise rules | the signal sets nested; a dot that is noise in both lands on the same point (POSITION) or takes the same direction (WALK, DIRECTION) |
 | snapshot and restore, outputs, the names of the enums, the refusals | as the header |
 

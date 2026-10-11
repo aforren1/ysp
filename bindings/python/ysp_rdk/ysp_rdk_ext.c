@@ -10,9 +10,14 @@
  *
  *     import ysp.rdk as rdk
  *     f = rdk.Field(algorithm="MN", w=10, count=100, coherence=0.256, speed=5)
- *     f.start(seed, t0)
+ *     f.start(seed, t0)                             # t0 in seconds
  *     for t in onsets: f.update(t); xy = f.xy()     # (n, 2) float32
  *     xy, sig = f.trajectory(seed, t0, steps)       # the whole trial
+ *
+ * TIMES: seconds (double), as every binding (docs/bindings.md). The header
+ * counts int64 ns, and a replay is exact only if the ns are, so each time
+ * converts once at the boundary, to the nearest ns (rdk_s_to_ns). Step rows
+ * carry the exact ns beside the seconds.
  *
  * THREADING: none. A Field is used under the GIL; trajectory() and
  * replay() release it while the C loop runs, as the field is the object's
@@ -31,10 +36,26 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* The distribution's version is the header's, plus a fourth number that
+ * counts changes to this binding alone (0.2.0.1: times in seconds). When the
+ * header's version moves, drop the suffix here and in pyproject.toml;
+ * tests/test_rdk.py checks that the two agree. */
+#define RDK_VERSION YRDK_VERSION_STRING ".1"
+
+/* The largest time in seconds that converts back to its ns exactly. With
+ * s the double nearest n / 1e9, |s 1e9 - n| <= 1e9 ulp(s) / 2, which is
+ * below 0.5 while ulp(s) <= 2^-30, that is s < 2^23 s (about 97 days of a
+ * clock's count; 2^53 ns, where a double stops holding every ns, is about
+ * 104 days). rdk_s_to_ns() rounds the exact product, so that bound is the
+ * only one. A time at or above it is refused, not rounded: a replay off by
+ * one ns is not the trial. It also refuses an old ns integer passed as
+ * seconds (1e9 "s" is 31 years). */
+#define RDK_S_MAX 8388608.0
+
 static PyObject* RdkError;
 static PyObject* RdkArgumentError;
 static PyObject* RdkOrderError;
-static PyObject* StepType;   /* namedtuple Step(t, coherence, direction, speed, set) */
+static PyObject* StepType;   /* namedtuple Step(t, coherence, direction, speed, set, ns) */
 static PyObject* numpy_mod;  /* imported on the first output */
 
 static PyObject* rdk_fail(int code, const char* msg) {
@@ -45,6 +66,38 @@ static PyObject* rdk_fail(int code, const char* msg) {
     PyErr_SetString(exc, msg && msg[0] ? msg : yrdk_strerror(code));
     return NULL;
 }
+
+/* Seconds to the nearest ns. s * 1e9 rounds once; fma() gives that
+ * rounding's error exactly, so the result is the nearest ns to the real
+ * product, and n / 1e9 -> s -> n holds for every n below RDK_S_MAX s.
+ * Refuses NaN, a negative time and a time at or above RDK_S_MAX. */
+static int rdk_s_to_ns(double s, const char* what, int64_t* out) {
+    volatile double p;   /* stored as a double: x87 (i686) would keep 80 bits */
+    double e, n, r;
+    if (!(s >= 0.0 && s < RDK_S_MAX)) {
+        PyErr_Format(RdkArgumentError, "%s: seconds, >= 0 and < 8388608 (2^23 s, about 97 days)", what);
+        return -1;
+    }
+    p = s * 1e9;
+    e = fma(s, 1e9, -p);
+    n = floor(p + 0.5);   /* within 1 of p; the step below corrects either side */
+    r = (p - n) + e;      /* p - n is exact (Sterbenz) */
+    if (r > 0.5) n += 1.0;
+    else if (r < -0.5) n -= 1.0;
+    *out = (int64_t)n;
+    return 0;
+}
+
+/* A Python number of seconds to ns. */
+static int rdk_obj_to_ns(PyObject* o, const char* what, int64_t* out) {
+    double s = PyFloat_AsDouble(o);
+    if (s == -1.0 && PyErr_Occurred()) return -1;
+    return rdk_s_to_ns(s, what, out);
+}
+
+/* ns to the double nearest ns / 1e9: the division is correctly rounded,
+ * and (double)ns is exact below 2^53. */
+static double rdk_ns_to_s(int64_t ns) { return (double)ns / 1e9; }
 
 /* --- names ------------------------------------------------------------------ */
 
@@ -120,18 +173,17 @@ static void Field_dealloc(PyObject* self) {
 static int Field_init(PyObject* self, PyObject* args, PyObject* kw) {
     static char* kwlist[] = { "algorithm", "aperture", "w", "h", "count", "density", "coherence", "direction", "speed",
                               "signal", "select", "noise", "edge", "sets", "lifetime", "lifetime_frames", "clock",
-                              "frame_ns", "seed", "stream", NULL };
+                              "frame_period", "seed", "stream", NULL };
     FieldObject* o = (FieldObject*)self;
-    PyObject *alg = NULL, *ap = NULL, *sig = NULL, *sel = NULL, *noi = NULL, *edg = NULL, *clk = NULL;
+    PyObject *alg = NULL, *ap = NULL, *sig = NULL, *sel = NULL, *noi = NULL, *edg = NULL, *clk = NULL, *fp = NULL;
     double w = 0, h = 0, density = 0, coherence = 0, direction = 0, speed = 0, lifetime = 0;
     int count = 0, sets = 0, lifetime_frames = 0, v, rc;
-    long long frame_ns = 0;
     unsigned long long seed = 0;
     unsigned long stream = 0;
     yrdk_desc d;
-    if (!PyArg_ParseTupleAndKeywords(args, kw, "|$OOddiddddOOOOidiOLKk", kwlist, &alg, &ap, &w, &h, &count, &density,
+    if (!PyArg_ParseTupleAndKeywords(args, kw, "|$OOddiddddOOOOidiOOKk", kwlist, &alg, &ap, &w, &h, &count, &density,
                                      &coherence, &direction, &speed, &sig, &sel, &noi, &edg, &sets, &lifetime,
-                                     &lifetime_frames, &clk, &frame_ns, &seed, &stream))
+                                     &lifetime_frames, &clk, &fp, &seed, &stream))
         return -1;
     memset(&d, 0, sizeof d);
     if (rdk_enum(alg, ALGORITHMS, "algorithm", &v) < 0) return -1;
@@ -168,7 +220,8 @@ static int Field_init(PyObject* self, PyObject* args, PyObject* kw) {
             return -1;
         }
     }
-    d.frame_ns = (int64_t)frame_ns; d.seed = (uint64_t)seed; d.stream = (uint32_t)stream;
+    if (fp && fp != Py_None && rdk_obj_to_ns(fp, "frame_period", &d.frame_ns) < 0) return -1;
+    d.seed = (uint64_t)seed; d.stream = (uint32_t)stream;
     if (o->open) yrdk_close(&o->f);
     o->open = 0;
     rc = yrdk_open(&o->f, &d) ? YRDK_OK : strstr(yrdk_error(&o->f), "allocation") ? YRDK_ERR_MEM : YRDK_ERR_ARG;
@@ -186,26 +239,31 @@ static int Field_ready(FieldObject* o) {
 static PyObject* Field_start(PyObject* self, PyObject* args) {
     FieldObject* o = (FieldObject*)self;
     unsigned long long seed;
-    long long t;
+    double s;
+    int64_t t;
     int rc;
-    if (!PyArg_ParseTuple(args, "KL", &seed, &t) || !Field_ready(o)) return NULL;
-    rc = yrdk_start(&o->f, (uint64_t)seed, (int64_t)t);
+    if (!PyArg_ParseTuple(args, "Kd", &seed, &s) || !Field_ready(o)) return NULL;
+    if (rdk_s_to_ns(s, "t", &t) < 0) return NULL;
+    rc = yrdk_start(&o->f, (uint64_t)seed, t);
     if (rc < 0) return rdk_fail(rc, yrdk_error(&o->f));
     Py_RETURN_NONE;
 }
 
 static PyObject* Field_update(PyObject* self, PyObject* arg) {
     FieldObject* o = (FieldObject*)self;
-    long long t = PyLong_AsLongLong(arg);
+    int64_t t;
     int rc;
-    if ((t == -1 && PyErr_Occurred()) || !Field_ready(o)) return NULL;
-    rc = yrdk_update(&o->f, (int64_t)t);
+    if (!Field_ready(o) || rdk_obj_to_ns(arg, "t", &t) < 0) return NULL;
+    rc = yrdk_update(&o->f, t);
     if (rc < 0) return rdk_fail(rc, yrdk_error(&o->f));
     return PyLong_FromLong(rc);
 }
 
-/* steps: an iterable of rows (t, coherence, direction, speed[, set]), such
- * as Field.last records, into a C array the caller frees. */
+/* steps: an iterable of rows (t, coherence, direction, speed[, set[, ns]]),
+ * such as Field.last records, into a C array the caller frees. t is
+ * seconds. A row with ns (not None) uses it, so a log replays exactly at any
+ * magnitude, and its t must be the double nearest ns / 1e9, as Field.last
+ * gives it: a row whose two times disagree is refused, not resolved. */
 static yrdk_step* rdk_steps(PyObject* seq, Py_ssize_t* n_out) {
     PyObject* list = PySequence_List(seq);
     yrdk_step* s;
@@ -222,7 +280,19 @@ static yrdk_step* rdk_steps(PyObject* seq, Py_ssize_t* n_out) {
             PyErr_Format(RdkArgumentError, "step %zd: needs t, coherence, direction, speed", i);
             goto fail;
         }
-        s[i].t = (int64_t)PyLong_AsLongLong(PyTuple_GetItem(row, 0));
+        if (PyTuple_Size(row) >= 6 && PyTuple_GetItem(row, 5) != Py_None) {
+            double ts = PyFloat_AsDouble(PyTuple_GetItem(row, 0));
+            s[i].t = (int64_t)PyLong_AsLongLong(PyTuple_GetItem(row, 5));
+            if (!PyErr_Occurred() && (s[i].t < 0 || ts != rdk_ns_to_s(s[i].t))) {
+                Py_DECREF(row);
+                PyErr_Format(RdkArgumentError, "step %zd: t is not ns / 1e9 (or ns < 0)", i);
+                goto fail;
+            }
+        } else {
+            char what[32];
+            PyOS_snprintf(what, sizeof what, "step %d: t", (int)i);
+            if (rdk_obj_to_ns(PyTuple_GetItem(row, 0), what, &s[i].t) < 0) { Py_DECREF(row); goto fail; }
+        }
         s[i].coherence = (float)PyFloat_AsDouble(PyTuple_GetItem(row, 1));
         s[i].direction = (float)PyFloat_AsDouble(PyTuple_GetItem(row, 2));
         s[i].speed = (float)PyFloat_AsDouble(PyTuple_GetItem(row, 3));
@@ -242,15 +312,16 @@ fail:
 static PyObject* Field_replay(PyObject* self, PyObject* args) {
     FieldObject* o = (FieldObject*)self;
     unsigned long long seed;
-    long long t0;
+    double t0s;
+    int64_t t0;
     PyObject* seq;
     yrdk_step* s;
     Py_ssize_t n;
     int rc;
-    if (!PyArg_ParseTuple(args, "KLO", &seed, &t0, &seq) || !Field_ready(o)) return NULL;
-    if (!(s = rdk_steps(seq, &n))) return NULL;
+    if (!PyArg_ParseTuple(args, "KdO", &seed, &t0s, &seq) || !Field_ready(o)) return NULL;
+    if (rdk_s_to_ns(t0s, "t0", &t0) < 0 || !(s = rdk_steps(seq, &n))) return NULL;
     Py_BEGIN_ALLOW_THREADS
-    rc = yrdk_replay(&o->f, (uint64_t)seed, (int64_t)t0, s, (int)n);
+    rc = yrdk_replay(&o->f, (uint64_t)seed, t0, s, (int)n);
     Py_END_ALLOW_THREADS
     free(s);
     if (rc < 0) return rdk_fail(rc, yrdk_error(&o->f));
@@ -310,13 +381,14 @@ static PyObject* Field_event(PyObject* self, PyObject* unused) { (void)unused; r
 static PyObject* Field_trajectory(PyObject* self, PyObject* args) {
     FieldObject* o = (FieldObject*)self;
     unsigned long long seed;
-    long long t0;
+    double t0s;
+    int64_t t0;
     PyObject *seq, *bxy = NULL, *bdir = NULL, *bsig = NULL, *axy, *adir, *asig;
     yrdk_step* s;
     Py_ssize_t n, k, nd;
     int rc = 0;
-    if (!PyArg_ParseTuple(args, "KLO", &seed, &t0, &seq) || !Field_ready(o)) return NULL;
-    if (!(s = rdk_steps(seq, &n))) return NULL;
+    if (!PyArg_ParseTuple(args, "KdO", &seed, &t0s, &seq) || !Field_ready(o)) return NULL;
+    if (rdk_s_to_ns(t0s, "t0", &t0) < 0 || !(s = rdk_steps(seq, &n))) return NULL;
     nd = o->f.n;
     bxy = PyByteArray_FromStringAndSize(NULL, n * nd * 8);
     bdir = PyByteArray_FromStringAndSize(NULL, n * nd * 4);
@@ -325,7 +397,7 @@ static PyObject* Field_trajectory(PyObject* self, PyObject* args) {
     {
         char *pxy = PyByteArray_AsString(bxy), *pdir = PyByteArray_AsString(bdir), *psig = PyByteArray_AsString(bsig);
         Py_BEGIN_ALLOW_THREADS
-        rc = yrdk_start(&o->f, (uint64_t)seed, (int64_t)t0);
+        rc = yrdk_start(&o->f, (uint64_t)seed, t0);
         for (k = 0; k < n && rc >= 0; k++) {
             yrdk_out out;
             o->f.coherence = s[k].coherence;
@@ -419,8 +491,8 @@ static PyObject* Field_get_last(PyObject* s, void* c) {
     const yrdk_step* l = &o->f.last;
     (void)c;
     if (!Field_ready(o)) return NULL;
-    return PyObject_CallFunction(StepType, "Lfffi", (long long)l->t, (double)l->coherence, (double)l->direction,
-                                 (double)l->speed, (int)l->set);
+    return PyObject_CallFunction(StepType, "dfffiL", rdk_ns_to_s(l->t), (double)l->coherence, (double)l->direction,
+                                 (double)l->speed, (int)l->set, (long long)l->t);
 }
 
 static PyObject* Field_get_stats(PyObject* s, void* c) {
@@ -436,11 +508,11 @@ static PyObject* Field_get_stats(PyObject* s, void* c) {
 }
 
 static PyMethodDef Field_methods[] = {
-    { "start", Field_start, METH_VARARGS, "start(seed, t): a trial; every dot placed from seed, the clock at t (ns)." },
-    { "update", Field_update, METH_O, "update(t) -> n: the next set at time t (ns), with the field's coherence, "
+    { "start", Field_start, METH_VARARGS, "start(seed, t): a trial; every dot placed from seed, the clock at t (seconds)." },
+    { "update", Field_update, METH_O, "update(t) -> n: the next set at time t (seconds), with the field's coherence, "
                                       "direction and speed." },
     { "replay", Field_replay, METH_VARARGS, "replay(seed, t0, steps): start(seed, t0), then each step's coherence, "
-                                            "direction and speed and update(t). steps: rows such as Field.last." },
+                                            "direction and speed and update(t). t0 in seconds; steps: rows such as Field.last." },
     { "trajectory", Field_trajectory, METH_VARARGS, "trajectory(seed, t0, steps) -> (xy, direction, signal): replay, "
                                                     "with the shown set after each step: (k, n, 2) float32, (k, n) "
                                                     "float32, (k, n) uint8." },
@@ -461,7 +533,7 @@ static PyGetSetDef Field_getset[] = {
     { "speed", Field_get_speed, Field_set_speed, "units per second (float32)", NULL },
     { "n", Field_get_n, NULL, "dots shown per update", NULL },
     { "total", Field_get_total, NULL, "dots in the field (n x sets)", NULL },
-    { "last", Field_get_last, NULL, "Step(t, coherence, direction, speed, set): the last update's inputs", NULL },
+    { "last", Field_get_last, NULL, "Step(t, coherence, direction, speed, set, ns): the last update's inputs; t in seconds, ns its exact integer", NULL },
     { "stats", Field_get_stats, NULL, "counts since start", NULL },
     { NULL }
 };
@@ -470,7 +542,8 @@ static PyType_Slot Field_slots[] = {
     { Py_tp_init, (void*)Field_init }, { Py_tp_dealloc, (void*)Field_dealloc }, { Py_tp_methods, Field_methods },
     { Py_tp_getset, Field_getset }, { Py_tp_new, (void*)PyType_GenericNew },
     { Py_tp_doc, (void*)"Field(**desc): one random dot kinematogram (yrdk_field). The keyword arguments are "
-                        "yrdk_desc's fields; enums take their names (\"MN\", \"walk\", \"rect\") or values." },
+                        "yrdk_desc's fields; enums take their names (\"MN\", \"walk\", \"rect\") or values. Times are "
+                        "seconds: lifetime, frame_period (desc.frame_ns)." },
     { 0, NULL }
 };
 
@@ -559,7 +632,7 @@ PyMODINIT_FUNC PyInit_rdk(void) {
     coll = PyImport_ImportModule("collections");
     if (!coll) goto fail;
     nt = PyObject_GetAttrString(coll, "namedtuple");
-    a = Py_BuildValue("(ss)", "Step", "t coherence direction speed set");
+    a = Py_BuildValue("(ss)", "Step", "t coherence direction speed set ns");
     k = Py_BuildValue("{s:s}", "module", "ysp.rdk");
     StepType = (nt && a && k) ? PyObject_Call(nt, a, k) : NULL;
     Py_XDECREF(nt); Py_XDECREF(a); Py_XDECREF(k); Py_DECREF(coll);
@@ -568,7 +641,7 @@ PyMODINIT_FUNC PyInit_rdk(void) {
     if (PyModule_AddObject(m, "Step", StepType) < 0) { Py_DECREF(StepType); goto fail; }
     for (i = 0; i < (int)(sizeof consts / sizeof consts[0]); i++)
         if (PyModule_AddIntConstant(m, consts[i].name, consts[i].v) < 0) goto fail;
-    if (PyModule_AddStringConstant(m, "__version__", yrdk_version()) < 0) goto fail;
+    if (PyModule_AddStringConstant(m, "__version__", RDK_VERSION) < 0) goto fail;
     return m;
 fail:
     Py_DECREF(m);

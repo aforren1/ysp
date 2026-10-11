@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ysp-rdk"
-version = "0.2.0"  # must equal ysp/rdk.h's YRDK_VERSION_STRING; tests/test_rdk.py checks it
+version = "0.2.0.1"  # ysp/rdk.h v0.2.0 plus binding revision 1 (times in seconds); tests/test_rdk.py checks it against __version__
 description = "Random dot kinematograms that regenerate bit for bit: the analysis side of ysp/rdk.h"
 readme = "README.md"
 requires-python = ">=3.8"

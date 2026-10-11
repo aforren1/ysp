@@ -51,6 +51,7 @@ call can poll. [Conventions](conventions.md) lists the exceptions.
 | `ysp_parallel` (MEX) | `'now'`, `'pulse'` and `'pulseasync'` widths, the RT struct and `'sched'` (`runtime`, `deadline`, `period`) |
 | `ysp.quest`, `ysp.aep` and their MEX | `Async.wait(seq, timeout_s)` |
 | `ysp.trials` and its MEX | the jitter bounds; a drawn jitter gives `s`, and its exact `ns` beside it |
+| `ysp.rdk` | `start(seed, t)`, `update(t)`, the `t0` and step rows of `replay()` and `trajectory()`, `Field.last` (`t`, and its exact `ns` beside it), `Field(lifetime=, frame_period=)`, `ages()`; exact to the ns below 2^23 s (about 97 days) |
 
 ## Versions
 
@@ -58,7 +59,8 @@ A Python distribution's version is its header's version. A change to the
 binding alone adds a fourth number, which counts such changes and goes away
 when the header's version moves: `ysp-serial` 0.5.0.1 is `ysp/serial.h`
 v0.5.0 with the change to seconds, and `ysp-parallel` 0.4.0.1 is
-`ysp/parallel.h` v0.4.0 with the same change. PEP 440 accepts the fourth
+`ysp/parallel.h` v0.4.0 with the same change, and so is `ysp-rdk`
+0.2.0.1 for `ysp/rdk.h` v0.2.0. PEP 440 accepts the fourth
 number as a release segment, and 0.5.0.1 sorts after 0.5.0 and before
 0.5.1. A post-release (0.5.0.post1) was not used: it means "no code
 changed", and this change breaks the API. Each package's tests check that
