@@ -9,7 +9,8 @@
  * SDL3's headers on the include path, the SDL adapter is checked too, on
  * SDL_Event structs filled by hand (it calls no SDL function, so nothing is
  * linked). ysp/screen.h, ysp/audio.h and ysp/timeline.h are included for
- * their structs only, for the onset helpers.
+ * their structs only, for the onset helpers and the frame-loop helpers
+ * (v0.4); ysp/trials.h for its data writer, which YRSP_DATA_COLS feeds.
  */
 #if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_WARNINGS)
 #define _CRT_SECURE_NO_WARNINGS
@@ -20,6 +21,8 @@
 #include "ysp/screen.h"
 #include "ysp/audio.h"
 #include "ysp/timeline.h"
+#define YSP_TRIALS_IMPLEMENTATION         /* the data writer, for YRSP_DATA_COLS */
+#include "ysp/trials.h"
 #define YSP_RESPONSE_IMPLEMENTATION
 #include "ysp/response.h"
 
@@ -1457,6 +1460,159 @@ static void check_helpers(void) {
     CHECK_I(o.src, YRSP_ONSET_PLAN);
 }
 
+/* v0.4: the plan kept beside the final onset, yrsp_plan_frame(), and the
+ * frame-loop helpers on filled structs: a frame's done records, the fired
+ * events of a timeline evaluate, and the data writer's columns. */
+typedef struct mem_out { char buf[4096]; size_t n; } mem_out;
+static bool mem_write(void* ctx, const void* bytes, size_t n) {
+    mem_out* m = (mem_out*)ctx;
+    if (m->n + n >= sizeof m->buf) return false;
+    memcpy(m->buf + m->n, bytes, n);
+    m->n += n;
+    m->buf[m->n] = 0;
+    return true;
+}
+
+static void check_frame_loop(void) {
+    static ytr_data w;
+    static mem_out mo;
+    yrsp_desc d = fj_desc(1.5, 0.1);
+    yscr_record rec[3];
+    yscr_frame fr;
+    ytl_event fired[3];
+    yrsp_result r;
+    yrsp_onset o;
+    ytr_data_desc dd;
+    const ytr_col cols[] = { YTR_COL_SET("trial", YTR_COL_INT), YRSP_DATA_COLS };
+    CHECK(yrsp_open(&g_c, &d));
+    CHECK_I(yrsp_plan_frame(&g_c), -1);           /* not armed */
+    yrsp_arm(&g_c, 0);
+    CHECK_I(yrsp_plan_frame(&g_c), -1);           /* no onset */
+
+    /* the landing: ONSET of channel 2 at fired[1]; a MARK and another channel around it */
+    memset(fired, 0, sizeof fired);
+    fired[0].kind = YTL_ONSET; fired[0].target = 1; fired[0].frame = 30; fired[0].onset = MS(400);
+    fired[1].kind = YTL_ONSET; fired[1].target = 2; fired[1].frame = 31; fired[1].onset = MS(500);
+    fired[1].residual = 7;
+    fired[2].kind = YTL_MARK; fired[2].target = 2; fired[2].frame = 31;
+    CHECK_I(yrsp_set_landing(&g_c, fired, 3, 5), -1);
+    CHECK_I(yrsp_plan_frame(&g_c), -1);
+    CHECK_I(yrsp_set_landing(&g_c, NULL, 3, 2), -1);
+    CHECK_I(yrsp_set_landing(&g_c, fired, 1, 2), -1);   /* n bounds the search */
+    fired[0].kind = YTL_OFFSET; fired[0].target = 2;    /* an OFFSET of the channel is not its onset */
+    CHECK_I(yrsp_set_landing(&g_c, fired, 3, 2), 1);
+    CHECK_I(yrsp_plan_frame(&g_c), 31);
+
+    /* a press 0.45 s after the plan; the record of frame 31 comes later */
+    key(MS(950), SC_F, 1);
+    memset(rec, 0, sizeof rec);
+    rec[0].index = 30; rec[0].onset = MS(400); rec[0].tier = 1;
+    rec[1].index = 31; rec[1].onset = MS(517); rec[1].residual = 16666667; rec[1].dropped = 1; rec[1].tier = 2;
+    rec[2].index = 32; rec[2].onset = MS(534); rec[2].tier = 1;
+    memset(&fr, 0, sizeof fr);
+    fr.onset = MS(960);
+    fr.done = rec;
+    fr.n_done = 1;                                    /* frame 30 only: still the plan */
+    CHECK_I(yrsp_update_frame(&g_c, &fr), YRSP_ENDED);
+    CHECK_I(yrsp_plan_frame(&g_c), 31);
+    fr.done = rec + 1;
+    fr.n_done = 2;                                    /* frame 31's record, a frame late */
+    yrsp_update_frame(&g_c, &fr);
+    CHECK_I(yrsp_plan_frame(&g_c), -1);               /* final now */
+    r = finish();
+    CHECK_I(r.t_onset, MS(517));
+    CHECK_I(r.rt_ns, MS(433));
+    CHECK_I(r.onset_src, YRSP_ONSET_FLIP);
+    CHECK_I(r.onset_tier, 2);
+    CHECK_I(r.onset_residual, 16666667);
+    CHECK_I(r.plan_residual, 7);                      /* the landing's, kept */
+    CHECK_I(r.onset_frame, 31);
+    CHECK(!(r.flags & YRSP_R_ONSET_PLAN));
+
+    /* the deadline runs from the final onset, through f->onset */
+    yrsp_arm(&g_c, 0);
+    yrsp_set_landing(&g_c, fired, 3, 2);
+    fr.done = rec + 1;
+    fr.n_done = 1;
+    fr.onset = MS(517) + YRT_S(1.5) - 1;
+    CHECK_I(yrsp_update_frame(&g_c, &fr), YRSP_OPEN);
+    fr.n_done = 0;
+    fr.onset = MS(517) + YRT_S(1.5);
+    CHECK_I(yrsp_update_frame(&g_c, &fr), YRSP_ENDED);
+    r = finish();
+    CHECK(r.flags & YRSP_R_TIMEOUT);
+
+    /* a never-shown frame's record is a plan: it does not replace the
+     * landing's residual, and the frame stays the one awaited */
+    yrsp_arm(&g_c, 0);
+    yrsp_set_landing(&g_c, fired, 3, 2);
+    rec[1].onset = 0;
+    rec[1].planned = MS(500);
+    rec[1].flags = YSCR_FLIP_SKIPPED;
+    fr.done = rec + 1;
+    fr.n_done = 1;
+    fr.onset = MS(600);
+    yrsp_update_frame(&g_c, &fr);
+    r = finish();
+    CHECK_I(r.plan_residual, 7);
+    CHECK(r.flags & YRSP_R_ONSET_PLAN);
+    CHECK_I(yrsp_plan_frame(&g_c), 31);
+
+    /* a sound's plan has no frame; a plan set before arm() is not kept */
+    yrsp_arm(&g_c, 0);
+    memset(&o, 0, sizeof o);
+    o.t_ns = MS(100);
+    o.frame = -1;
+    o.src = YRSP_ONSET_AUDIO;
+    yrsp_set_onset(&g_c, &o);
+    CHECK_I(yrsp_plan_frame(&g_c), -1);
+    r = finish();
+    CHECK_I(r.plan_residual, 0);
+    yrsp_close(&g_c);
+    CHECK_I(yrsp_plan_frame(&g_c), -1);
+    yrsp_arm(&g_c, 0);
+    CHECK(yrsp_open(&g_c, &d));
+    r = finish();
+    CHECK_I(r.plan_residual, YRSP_NO_TIME);           /* no plan came */
+    CHECK_I(yrsp_update_frame(&g_c, NULL), YRSP_ERR_ARG);
+
+    /* the data columns: the result's fields, an empty field where there is none */
+    memset(&dd, 0, sizeof dd);
+    dd.write = mem_write;
+    dd.write_ctx = &mo;
+    dd.cols = cols;
+    dd.n_cols = (int)(sizeof cols / sizeof cols[0]);
+    CHECK(ytr_data_open(&w, &dd));
+    CHECK_S(mo.buf, "trial,response,rt,rt_key_duration,onset_src,onset_tier,onset_residual,landing_residual,"
+                    "onset_frame,rsp_tier,rsp_flags,n_anticipations,n_early\n");
+    yrsp_arm(&g_c, 0);
+    yrsp_set_landing(&g_c, fired, 3, 2);
+    key(MS(500) + MS(50), SC_J, 1);                   /* an anticipation */
+    key(MS(500) + MS(60), SC_J, 0);
+    key(MS(500) + MS(250), SC_J, 1);
+    key(MS(500) + MS(330), SC_J, 0);
+    rec[1].onset = MS(500);
+    rec[1].residual = 1000;
+    rec[1].flags = 0;
+    fr.done = rec + 1;
+    fr.n_done = 1;
+    yrsp_update_frame(&g_c, &fr);
+    r = finish();
+    CHECK_I(yrsp_data_set(&w, &r), YRSP_N_DATA_COLS);
+    CHECK_I(ytr_data_set_int(&w, 0, 1), 0);
+    CHECK_I(ytr_data_write(&w, NULL), 0);
+    CHECK_HAS(mo.buf, "\n1,right,0.250000000,0.080000000,1,2,0.000001000,0.000000007,31,0,1,1,0\n");
+    mo.n = 0;
+    yrsp_arm(&g_c, 0);                                /* no onset, no response */
+    r = finish();
+    CHECK_I(yrsp_data_set(&w, &r), YRSP_N_DATA_COLS);
+    CHECK_I(ytr_data_write(&w, NULL), 0);
+    CHECK_S(mo.buf, ",,,,,,,,,," "18,0,0\n");      /* NO_ONSET | TIMEOUT */
+    CHECK_I(yrsp_data_set(&w, NULL), YTR_ERR_ARG);
+    ytr_data_close(&w);
+    yrsp_close(&g_c);
+}
+
 #if defined(YRSP_TEST_SDL)
 static void check_sdl(void) {
     SDL_Event e;
@@ -1744,6 +1900,7 @@ int main(void) {
     check_quality();
     check_strerror();
     check_helpers();
+    check_frame_loop();
 #if defined(YRSP_TEST_SDL)
     check_sdl();
 #endif

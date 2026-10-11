@@ -60,11 +60,13 @@ unless your file already did.
 | net | rt.h, input.h | net.h, rt.h, input.h | liblsl, loaded at run time |
 | screen | rt.h, input.h | screen.h, rt.h, input.h | SDL3; ANGLE's DLLs at run time on Windows |
 | audio | rt.h | audio.h, rt.h | miniaudio 0.11.25 (`YAU_NO_MINIAUDIO`: none) |
-| gfx | screen.h, color.h | gfx.h, screen.h, color.h, rt.h, input.h | as screen |
+| gfx | screen.h, color.h | gfx.h, screen.h, color.h, rt.h, input.h (+ outline.h for `ygfx_text_make()`) | as screen |
 | video | gfx.h, timeline.h | video.h, gfx.h, timeline.h, screen.h, color.h, rt.h, input.h | as screen; pl_mpeg for MPEG-1 (optional) |
 
-ysp/response.h also has adapters for ysp/screen.h, ysp/audio.h and
-ysp/timeline.h; they exist when you include those headers before it.
+ysp/response.h also has adapters for ysp/screen.h, ysp/audio.h,
+ysp/timeline.h and ysp/trials.h; they exist when you include those headers
+before it. ysp/gfx.h has `ygfx_text_make()` when you include ysp/outline.h
+before it.
 
 ## Headers
 

@@ -31,12 +31,13 @@
 #ifndef YSCR_NO_SDL
 #define YSCR_NO_SDL
 #endif
+#define YSP_OUTLINE_IMPLEMENTATION
+#include "ysp/outline.h"   /* the outline builder's sets against the test builder's (v0.7); before
+                             * ysp/gfx.h: ygfx_text_make() (v0.14) */
 #define YSP_GFX_IMPLEMENTATION
 #include "ysp/gfx.h"
 #include "gfx_headless.h"
 #include "gfx_cset_build.h"
-#define YSP_OUTLINE_IMPLEMENTATION
-#include "ysp/outline.h"   /* the outline builder's sets against the test builder's (v0.7) */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -5776,6 +5777,7 @@ static void gl_v10_user_tex(stats* st);
 static void gl_v11_prime(stats* st);
 static void gl_v11_start(stats* st);
 static void gl_v12_capture(stats* st);
+static void gl_v14_first(stats* st);
 static void s11_report(void);
 static void test_v10_simplex_cpu(void);
 typedef struct stats9 {
@@ -5977,13 +5979,13 @@ static int gl_suite(const char* name, ygfx_hl_device dev) {
                                                  gl_alpha_passes, gl_edge_truth, gl_v03_kinds, gl_v03_truth, gl_v03_fx, gl_v03_paint, gl_v03_msdf,
                                                  gl_v04_cache, gl_v04_fixes, gl_v04_video, gl_v04_inst, gl_v04_order, gl_v05_color,
                                                  gl_v06_text, gl_v06_blur, gl_v05_kinds, gl_v08, gl_v10_simplex, gl_v10_user_tex,
-                                                 gl_v11_prime, gl_v11_start, gl_v12_capture };
+                                                 gl_v11_prime, gl_v11_start, gl_v12_capture, gl_v14_first };
         static const char* const names[] = { "shapes", "gratings", "gabors", "dots", "images", "noise",
                                              "output", "user+batch+rows", "strokes", "masks", "sprites", "tint",
                                              "groups", "targets", "alpha+passes", "edge truth", "v0.3 kinds", "v0.3 truth", "v0.3 fx", "v0.3 paint", "v0.3 msdf",
                                              "v0.4 cache", "v0.4 fixes", "v0.4 video", "v0.4 inst", "v0.4 order", "v0.5 color",
                                              "v0.6 text", "v0.6 blur", "vspec", "v0.8", "v0.10 simplex", "v0.10 user tex",
-                                             "v0.11 prime", "v0.11.1 start", "v0.12 capture" };
+                                             "v0.11 prime", "v0.11.1 start", "v0.12 capture", "v0.14 first" };
         int k;
         memset(&S2, 0, sizeof S2);
         memset(&S3, 0, sizeof S3);
@@ -8241,6 +8243,146 @@ static void gl_v11_start(stats* st) {
     printf("  measured: open_start %s; values that differ from a blocking open: %ld, serial %ld, in the hook %ld; "
            "framebuffer after the hook's open %d\n", parallel ? "parallel" : "serial (no KHR_parallel_shader_compile)",
            bad[0], bad[1], bad[2], fb);
+}
+
+/* v0.14 (FIRST TRIAL): ygfx_open_screen() opens the screen and the gfx
+ * and primes; it refuses a hook that is taken. ygfx_show_until_key()
+ * draws until max_ns without input (no SDL here: no key can come).
+ * ygfx_text_make() with the system's font: the items, the lines, the
+ * wrap, ink inside its bounds and none outside, the text program primed
+ * by the first text only; a font that does not open is named. The part
+ * reopens R->scr and leaves it open for gl_suite. */
+static yscr_record v14_recs[64];
+static int v14_n;
+static void v14_rec(void* ctx, const yscr_record* r, const yscr_trigger_result* t, int n) {
+    (void)ctx; (void)t; (void)n;
+    if (v14_n < 64) v14_recs[v14_n++] = *r;
+}
+
+static void gl_v14_first(stats* st) {
+    static ygfx_text t, t2, t3;
+    yscr_desc sd;
+    ygfx_desc d;
+    ygfx_shape_desc shd;
+    ygfx_stim s;
+    int64_t i0;
+    int rc, i, j, k, ink_in = 0, ink_out = 0;
+    float x0, y0, x1, y1;
+    (void)st;
+    memset(&sd, 0, sizeof sd);
+    sd.backend = YSCR_BACKEND_CUSTOM;
+    sd.presenter = &ygfx_headless_presenter;
+    sd.presenter_ctx = &R->hl;
+    sd.sim_period_ns = 1000000;
+    memset(&d, 0, sizeof d);
+    d.background[0] = d.background[1] = d.background[2] = 0.5f;
+    d.cache = test_cache();
+    yscr_close(&R->scr);
+    sd.on_context = v111_start;   /* taken: refused before anything opens */
+    CHECK(!ygfx_open_screen(&R->g, &R->scr, &sd, &d));
+    CHECK(strstr(ygfx_error(&R->g), "on_context") != NULL);
+    CHECK(!yscr_is_open(&R->scr));
+    CHECK(!ygfx_open_screen(&R->g, NULL, &sd, &d));
+    sd.on_context = NULL;
+    if (!ygfx_open_screen(&R->g, &R->scr, &sd, &d)) {
+        fprintf(stderr, "gfx_test [%s]: open_screen: %s\n", g_where, ygfx_error(&R->g));
+        g_failures++;
+        if (!yscr_is_open(&R->scr)) yscr_open(&R->scr, &sd);
+        return;
+    }
+    CHECK(ygfx_is_open(&R->g) && yscr_is_open(&R->scr) && ygfx_screen(&R->g) == &R->scr);
+
+    /* the loop: arguments, then 5 ms of 1 ms frames with nothing to end it */
+    memset(&shd, 0, sizeof shd);
+    shd.shape = YGFX_CIRCLE; shd.w = 20; shd.color[0] = 0.8f;
+    s = ygfx_shape(&shd);
+    CHECK(ygfx_show_until_key(NULL, &s, 1, NULL, 0, 0, NULL) == YGFX_ERR_ARG);
+    CHECK(ygfx_show_until_key(&R->g, &s, -1, NULL, 0, 0, NULL) == YGFX_ERR_ARG);
+    CHECK(ygfx_show_until_key(&R->g, NULL, 1, NULL, 0, 0, NULL) == YGFX_ERR_ARG);
+    CHECK(ygfx_show_until_key(&R->g, &s, 1, NULL, 1, 0, NULL) == YGFX_ERR_ARG);
+    CHECK(ygfx_show_until_key(&R->g, &s, 1, NULL, 0, -1, NULL) == YGFX_ERR_ARG);
+    CHECK(yscr_begin(&R->scr, &R->f) == YSCR_OK);
+    i0 = R->f.index;
+    CHECK(yscr_flip(&R->scr) == YSCR_OK);
+    v14_n = 0;
+    yscr_on_flip(&R->scr, v14_rec, NULL);
+    rc = ygfx_show_until_key(&R->g, &s, 1, NULL, 0, YRT_MS(5), NULL);
+    CHECK(rc == YGFX_SHOW_TIME);
+    gl_frame(&s, 1);
+    gl_frame(&s, 1);                /* the loop's last record is in */
+    yscr_on_flip(&R->scr, NULL, NULL);
+    {   /* the loop's frames: the last is the first planned 5 ms or more after its first */
+        int64_t first = 0, last = 0, before = 0;
+        int nf = 0;
+        for (k = 0; k < v14_n; k++)
+            if (v14_recs[k].index > i0 && v14_recs[k].index < R->f.index - 1) {
+                if (!nf) first = v14_recs[k].planned;
+                before = last;
+                last = v14_recs[k].planned;
+                nf++;
+            }
+        CHECK(nf >= 2 && last - first >= YRT_MS(5) && before - first < YRT_MS(5));
+    }
+
+    /* text */
+    {
+        ygfx_text_desc td;
+        memset(&td, 0, sizeof td);
+        td.text = "Ab Cd\nEf";
+        td.font = "no/such/font.ttf";
+        CHECK(ygfx_text_make(&R->g, &t, &td) == YGFX_ERR_IO);
+        CHECK(strstr(ygfx_error(&R->g), "no/such/font.ttf") != NULL);
+        CHECK(t.items == NULL && t.n == 0);
+        td.text = NULL;
+        td.font = NULL;
+        CHECK(ygfx_text_make(&R->g, &t, &td) == YGFX_ERR_ARG);
+        td.text = "Ab Cd\nEf";
+        td.size = 20;
+        td.color[0] = td.color[1] = td.color[2] = 1.0f;
+        rc = ygfx_text_make(&R->g, &t, &td);
+        if (rc == YGFX_ERR_IO) {
+            printf("  v0.14 text: no system font (%s): the text checks did not run\n", ygfx_error(&R->g));
+        } else {
+            CHECK(rc == YGFX_OK);
+            CHECK(t.n == 6 && t.lines == 2);
+            CHECK(t.primed > 0);                       /* a new gfx: the text program is new */
+            CHECK(t.w > 0 && t.w <= 0.8f * W && t.h > 20);
+            CHECK(t.items[4].y > t.items[0].y + 20);   /* "Ef" on the second line, 1.25 em down */
+            CHECK(fabsf(t.items[4].y - t.items[0].y - 25.0f) < 1e-3f);
+            CHECK(t.items[0].x == 0.0f && t.items[4].x > 0.0f);   /* the wider line at 0, the other centered */
+            gl_frame(&t.stim, 1);
+            ygfx_bounds(&R->g, &t.stim, &x0, &y0, &x1, &y1);
+            for (j = 0; j < H; j++)
+                for (i = 0; i < W; i++) {
+                    const uint8_t* p = &R->out[((size_t)j * W + (size_t)i) * 4];   /* top row first */
+                    int ink = p[0] != R->out[0] || p[1] != R->out[1] || p[2] != R->out[2];
+                    int in = i >= (int)floorf(x0) - 1 && i <= (int)ceilf(x1) + 1 && j >= (int)floorf(y0) - 1 &&
+                             j <= (int)ceilf(y1) + 1;
+                    if (ink && in) ink_in++;
+                    if (ink && !in) ink_out++;
+                }
+            CHECK(ink_in > 50 && ink_out == 0);
+            /* a second text: the program is there, no prime; a wrap at
+             * spaces, one word a line */
+            td.text = "aaa aaa aaa";
+            td.max_w = 50;
+            CHECK(ygfx_text_make(&R->g, &t2, &td) == YGFX_OK);
+            CHECK(t2.primed == 0 && t2.lines == 3 && t2.n == 9);
+            for (k = 0; k < 9; k += 3) CHECK(t2.items[k].x == t2.items[0].x);   /* centered, equal widths */
+            td.max_w = 0;
+            td.text = "";
+            CHECK(ygfx_text_make(&R->g, &t3, &td) == YGFX_OK && t3.n == 0 && t3.lines == 1);
+            printf("  v0.14 text: %d items on %d lines, %.0f x %.0f px, %d programs primed, %.1f ms to build; "
+                   "%d ink pixels inside the bounds, %d outside\n", t.n, t.lines, t.w, t.h, t.primed,
+                   (double)t.build_ns / 1e6, ink_in, ink_out);
+        }
+        ygfx_text_free(&R->g, &t);
+        ygfx_text_free(&R->g, &t);   /* twice: safe */
+        ygfx_text_free(&R->g, &t2);
+        ygfx_text_free(&R->g, &t3);
+        CHECK(t.items == NULL && t.set.id == 0);
+    }
+    ygfx_close(&R->g);
 }
 
 static void s11_report(void) {

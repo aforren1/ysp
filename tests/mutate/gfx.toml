@@ -1,7 +1,7 @@
 
 # ysp/gfx.h mutants: the v0.4 list (docs/gfx.md, "v0.4 mutations"), then
 # later lists by prefix (pr-: v0.11 prime; os-: v0.11.1 open start; cv-:
-# v0.12.0 messages; cp-: v0.13.0 capture).
+# v0.12.0 messages; cp-: v0.13.0 capture; ft-: v0.14.0 first trial).
 # The v0.3 list (mutate03.py) was lost; docs/gfx.md keeps its table.
 # YGFX_TEST_PARTS limits a run to the parts that can see the fault, and
 # "none" runs the CPU half alone. YGFX_TEST_DEVICES=hardware is the GPU
@@ -1236,3 +1236,51 @@ env = { YGFX_TEST_PARTS = "none" }
 why = "v0.13: a call without a handle writes its message into the caller's buffer (README.md, Conventions)."
 find = '''        ygfx__set_error(err, cap, "ysp_gfx: image_write: cannot create '%s' (errno %d)", path, errno);'''
 replace = ''
+
+# v0.14.0 the first trial's calls (ft-). ygfx_show_until_key()'s key test
+# needs SDL input, which the headless test has not: no mutant.
+
+[[mutant]]
+id = "ft-01"
+name = "a taken hook overwritten"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "v0.14 first", YGFX_TEST_DEVICES = "hardware" }
+why = "ygfx_open_screen() owns desc.on_context; a caller's hook must be refused, not dropped without a word."
+find = '    if (d.on_context) {'
+replace = '    if (0) {'
+
+[[mutant]]
+id = "ft-02"
+name = "the loop a frame long"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "v0.14 first", YGFX_TEST_DEVICES = "hardware" }
+why = "max_ns runs from the first frame's onset: the frame at max_ns is the last."
+find = '        if (max_ns > 0 && f.onset - t0 >= max_ns) return YGFX_SHOW_TIME;'
+replace = '        if (max_ns > 0 && f.onset - t0 > max_ns) return YGFX_SHOW_TIME;'
+
+[[mutant]]
+id = "ft-03"
+name = "the text program not primed"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "v0.14 first", YGFX_TEST_DEVICES = "hardware" }
+why = "A text that made the text program primes it, so the first frame that shows the text does not pay its first draw."
+find = '        if (p1.loaded + p1.compiled != p0.loaded + p0.compiled) {'
+replace = '        if (0) {'
+
+[[mutant]]
+id = "ft-04"
+name = "no wrap"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "v0.14 first", YGFX_TEST_DEVICES = "hardware" }
+why = "A line wider than max_w breaks at its last space."
+find = '            else if (pen + gl[e].adv > max_w && brk != (size_t)-1) { e = brk; break; }'
+replace = '            else if (0) { e = brk; break; }'
+
+[[mutant]]
+id = "ft-05"
+name = "lines not centered"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "v0.14 first", YGFX_TEST_DEVICES = "hardware" }
+why = "Each line is centered in the block, as an instruction screen's lines are."
+find = '        float pen = 0.5f * (block_w - line_w[k]);'
+replace = '        float pen = 0;'

@@ -1,4 +1,4 @@
-/* ysp/gfx.h - v0.13.0 - public domain single-header stimulus graphics library
+/* ysp/gfx.h - v0.14.0 - public domain single-header stimulus graphics library
  *   (with MIT-licensed parts: see below)
  *
  *   Stimuli on GL ES 3.0, on top of ysp/screen.h: signed-distance shapes
@@ -81,6 +81,10 @@
  *           ygfx_close(&gfx);
  *           yscr_close(&scr);
  *       }
+ *
+ *   The hook, the open and ygfx_prime() in one call (v0.14, FIRST TRIAL):
+ *
+ *       if (!ygfx_open_screen(&gfx, &scr, &sd, &gd)) return fail(ygfx_error(&gfx));
  *
  *   Every call on a gfx that fails writes ygfx_error() before it returns
  *   its code (or its 0 id). In C99 and C++20 compound literals do a desc
@@ -910,6 +914,45 @@
  *   the compiles running.
  *
  *   ---------------------------------------------------------------------
+ *   FIRST TRIAL (v0.14)
+ *   ---------------------------------------------------------------------
+ *   Three calls for the parts every trial program had written out.
+ *   ygfx_open_screen(&gfx, &scr, &sd, &gd) is OPEN START's hook, the
+ *   finish and ygfx_prime() in one call: the screen opens with the hook
+ *   (sd->on_context must be NULL), the gfx finishes on it, the built-in
+ *   kinds are primed. On a failure both handles are closed and
+ *   ygfx_error() has the reason, the screen's too.
+ *   ygfx_show_until_key(&gfx, stims, n, keys, n_keys, max_ns, &key) is a
+ *   frame loop for an instruction or a break screen: it draws the stimuli
+ *   each frame until a press of one of the keys (SDL scancodes; none: any
+ *   key) or max_ns. A press counts from the first frame's predicted onset
+ *   on and not an OS repeat, so a key held from before does not skip the
+ *   screen. Shift+Esc returns YGFX_SHOW_QUIT. It drops the screen's other
+ *   events, so a collector (ysp/response.h) does not see the key; it is
+ *   not a timed trial. Without SDL (YSCR_NO_SDL) only max_ns ends it.
+ *   TEXT (with ysp/outline.h first) makes the text of such a screen.
+ *
+ *   ---------------------------------------------------------------------
+ *   TEXT (v0.14)
+ *   ---------------------------------------------------------------------
+ *   With ysp/outline.h included before this header, in the file that
+ *   compiles the implementation too: ygfx_text_make(&gfx, &t, &d) lays out
+ *   UTF-8 text with the font's advances (cmap and hmtx: no kerning, no
+ *   shaping, no bidi; enough for Latin, Greek and Cyrillic instructions,
+ *   wrong for scripts that need shaping, which go through pack/layout),
+ *   breaks lines at spaces to fit d.max_w and at newlines, centers each
+ *   line, and makes a curve set of the glyphs it uses (CURVE RUNS) and a
+ *   run, t.stim, placed as every stimulus (place, anchor, x, y; 0 is the
+ *   screen's center). d.font NULL is the system's sans font: Segoe UI or
+ *   Arial on Windows, Arial or Helvetica on macOS, DejaVu Sans or
+ *   Liberation Sans on Linux; a machine without them passes a file. A
+ *   text that made the text program calls ygfx_prime(), so the first
+ *   frame that draws it does not pay the program's first draw (PRIME).
+ *   Setup work: it reads the font file and allocates the items (32 bytes
+ *   a glyph), freed by ygfx_text_free(). Keep t while t.stim is drawn.
+ *   COST_TEXT
+ *
+ *   ---------------------------------------------------------------------
  *   VIDEO (v0.4)
  *   ---------------------------------------------------------------------
  *   YGFX_NV12 and YGFX_I420 textures hold 8-bit 4:2:0 video as planes
@@ -1251,6 +1294,13 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.14.0 - FIRST TRIAL and TEXT: ygfx_open_screen() (the screen and
+ *          the gfx opened with OPEN START's overlap, then primed, in one
+ *          call), ygfx_show_until_key() (an instruction or break screen:
+ *          a frame loop until a key or a time), and, with ysp/outline.h
+ *          included first, ygfx_text_make() and ygfx_text_free() (a
+ *          block of text from a font file by advances, wrapped and
+ *          centered, its text program primed). Nothing else changed.
  *   v0.13.0 - CAPTURE: the output of chosen frames (every Nth, or marked
  *          with ygfx_capture_mark()) copied in ygfx_end() into pixel
  *          buffers with a fence, collected a frame or more later without a
@@ -1721,9 +1771,9 @@
 #define YSP_GFX_H_INCLUDED
 
 #define YGFX_VERSION_MAJOR 0
-#define YGFX_VERSION_MINOR 13
+#define YGFX_VERSION_MINOR 14
 #define YGFX_VERSION_PATCH 0
-#define YGFX_VERSION_STRING "0.13.0"
+#define YGFX_VERSION_STRING "0.14.0"
 
 #include "ysp/screen.h"
 #include "ysp/color.h"
@@ -3257,8 +3307,7 @@ extern "C" {
 
 /* A block of text. A zero field is the default. */
 typedef struct ygfx_text_desc {
-    const char* text;          /* UTF-8; '
-' ends a line; required        */
+    const char* text;          /* UTF-8; a newline ends a line; required */
     const char* font;          /* a TrueType or CFF font file (face 0);
                                 * NULL: the system's sans font (TEXT)      */
     float       size;          /* px per em; 0 = 32                        */
@@ -12096,6 +12145,8 @@ static int ygfx__show_until_key(ygfx_gfx* g, const ygfx_stim* stims, int n, cons
                     }
                 }
         }
+#else
+        (void)keys; (void)key;   /* no input without SDL: only max_ns ends it */
 #endif
         rc = ygfx_begin(g, &f);
         for (i = 0; rc >= 0 && i < n; i++) rc = ygfx_draw(g, &stims[i]);
@@ -12136,7 +12187,11 @@ static const char* const ygfx__text_fonts[] = {
 };
 
 static uint8_t* ygfx__read_file(const char* path, size_t* n) {
+#if defined(_WIN32)
+    FILE* fp = ygfx__wopen(path, L"rb");   /* a UTF-8 path */
+#else
     FILE* fp = fopen(path, "rb");
+#endif
     uint8_t* b = NULL;
     long len;
     *n = 0;
@@ -12199,8 +12254,12 @@ static int ygfx__text_make(ygfx_gfx* g, ygfx_text* t, const ygfx_text_desc* d) {
     for (k = 0; !bytes && (d->font ? k < 1 : ygfx__text_fonts[k] != NULL); k++) {
         const char* f = d->font ? d->font : ygfx__text_fonts[k];
         if (!strncmp(f, "%WINDIR%", 8)) {
-            const char* w = getenv("WINDIR");
-            snprintf(path, sizeof path, "%s%s", w ? w : "C:/Windows", f + 8);
+            char w[260] = "C:/Windows";
+#if defined(_WIN32)
+            DWORD wn = GetEnvironmentVariableA("WINDIR", w, (DWORD)sizeof w);
+            if (wn == 0 || wn >= sizeof w) snprintf(w, sizeof w, "C:/Windows");
+#endif
+            snprintf(path, sizeof path, "%s%s", w, f + 8);
         } else {
             snprintf(path, sizeof path, "%s", f);
         }

@@ -7,7 +7,11 @@
  * a user shader that samples the target (v0.10.4), refused inside its pass,
  * and an sRGB-coded gray texture as a pack stores one (v0.10.5), and a
  * capture of every other frame and a marked one, written by the pump on
- * this thread (v0.12). */
+ * this thread (v0.12). v0.14: an instruction loop until its time, a
+ * text whose font does not open, and the screen and the gfx opened again
+ * in one call. */
+#define YSP_OUTLINE_IMPLEMENTATION
+#include "ysp/outline.h"         /* first: ygfx_text_make() (v0.14) */
 #define YSP_GFX_IMPLEMENTATION
 #include "ysp/gfx.h"
 
@@ -112,6 +116,22 @@ int main(void) {
     if (ygfx_capture_stop(&g, &cs) != 3 || got != 3 || cs.chosen != 3) return 22;   /* frames 0, 1 (marked), 2 */
     if (ygfx_image_write(NULL, YGFX_IMAGE_PNG, mask, 1, 1, 0, NULL, NULL, 0) != YGFX_ERR_ARG) return 23;
     ygfx_texture_free(&g, t);
+    if (ygfx_show_until_key(&g, &st, 1, NULL, 0, 3 * d.sim_period_ns, NULL) != YGFX_SHOW_TIME) return 24;
+    {
+        ygfx_text tx;
+        ygfx_text_desc xtd;
+        memset(&xtd, 0, sizeof xtd);
+        xtd.text = "Press space";
+        xtd.font = "no/such/font.ttf";
+        if (ygfx_text_make(&g, &tx, &xtd) != YGFX_ERR_IO || !strstr(ygfx_error(&g), "no/such/font.ttf")) return 25;
+        ygfx_text_free(&g, &tx);
+    }
+    ygfx_close(&g);
+    yscr_close(&s);
+    d.on_context = NULL;
+    memset(&g, 0, sizeof g);
+    memset(&s, 0, sizeof s);
+    if (!ygfx_open_screen(&g, &s, &d, &gd) || !yscr_is_open(&s)) return 26;
     ygfx_close(&g);
     yscr_close(&s);
     if (ygfx_sdf_from_mask(sdf, mask, 2, 2, 1) != YGFX_OK) return 12;
