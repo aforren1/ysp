@@ -571,6 +571,20 @@ over its 200 us bar before. With both uncertainties for every pair, the
 strokes were 12 to 21 percent slower (Segoe UI 336, 351; YaHei 928, 962
 against 301, 302 and 791, 793 in the same session).
 
+## v0.3.2: the feature-test macro
+
+ysp/gfx.h v0.15.0 makes text from a font (`ygfx_text_make()`) when
+ysp/outline.h comes first. On Linux, glibc reads a feature-test macro only
+before the first system header. ysp/outline.h included `<stddef.h>` before
+ysp/rt.h could set `_DEFAULT_SOURCE`, so under `-std=c11` ysp/rt.h had no
+`clock_gettime()`, `CLOCK_MONOTONIC` or `pthread_condattr_setclock()`:
+`test_gfx` did not compile with gcc 11.4 or clang 11 (WSL, Ubuntu 22.04).
+ysp/outline.h now sets the same macro as ysp/rt.h, ysp/trials.h and
+ysp/pack.h, under the same conditions. It needs none of it itself. The
+compile checks and `test_gfx` on Linux are the test. It has no mutant:
+on Windows, where the mutants of this list run, the macro changes
+nothing.
+
 ## Next
 
 1. The Latin stroke bar (Cost): the sweep's per-strip positions are what

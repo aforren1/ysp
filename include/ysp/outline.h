@@ -1,4 +1,4 @@
-/* ysp/outline.h - v0.3.1 - public domain single-header outline builder:
+/* ysp/outline.h - v0.3.2 - public domain single-header outline builder:
  *   paths, font outlines, overlap removal, strokes, exact alpha and curve
  *   sets for ysp/gfx.h
  *
@@ -307,6 +307,12 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.3.2 - Fixed on Linux: this header sets ysp/rt.h's feature-test
+ *          macro (_DEFAULT_SOURCE, unless a feature macro is set) before
+ *          its system headers. Included before ysp/gfx.h, as gfx's TEXT
+ *          asks, it made ysp/rt.h lose clock_gettime() and
+ *          pthread_condattr_setclock() under -std=c11 (gcc 11.4 and clang
+ *          11: gfx_test did not compile). No change elsewhere.
  *   v0.3.1 - Fixed: yol_resolve() failed "the boundary does not close" on
  *          strokes that cross an edge a few float ulps from horizontal (a
  *          rectangle whose start is rounded to float and whose other
@@ -317,7 +323,7 @@
  *          x of the piece that moves less. Found by gfx_test under gcc
  *          11.4 -O3 (Ubuntu 22.04), which drops the caller's (float) casts
  *          before the inlined yol_line() (docs/outline.md, "v0.3.1").
- *   v0.3.0 -The ysp conventions (README.md, Conventions); breaks the API.
+ *   v0.3.0 - The ysp conventions (README.md, Conventions); breaks the API.
  *          The context opens and closes: yol_init() is bool yol_open(),
  *          yol_free() is yol_close(). The path builder's yol_close() (SVG's
  *          Z) is yol_close_path(). yol_font_open() is yol_font_view(): it
@@ -385,6 +391,16 @@
 #ifndef YSP_OUTLINE_H_INCLUDED
 #define YSP_OUTLINE_H_INCLUDED
 
+/* ysp/rt.h's feature-test macro, set before the first system header
+ * (Linux and Emscripten only). This header needs none, but ysp/gfx.h's
+ * TEXT wants it included first, and glibc reads the macro only before
+ * the first system header: without it ysp/rt.h, included later, has no
+ * clock_gettime() under -std=c11. */
+#if (defined(__linux__) || defined(__EMSCRIPTEN__)) && !defined(_DEFAULT_SOURCE) && \
+    !defined(_GNU_SOURCE) && !defined(_POSIX_C_SOURCE) && !defined(_XOPEN_SOURCE)
+    #define _DEFAULT_SOURCE 1
+#endif
+
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -399,8 +415,8 @@ extern "C" {
 
 #define YOL_VERSION_MAJOR  0
 #define YOL_VERSION_MINOR  3
-#define YOL_VERSION_PATCH  1
-#define YOL_VERSION_STRING "0.3.1"
+#define YOL_VERSION_PATCH  2
+#define YOL_VERSION_STRING "0.3.2"
 
 /* YOL_VERSION_STRING, as compiled into the implementation. */
 YOL_API const char* yol_version(void);

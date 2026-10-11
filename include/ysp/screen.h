@@ -1371,7 +1371,7 @@
  *          second time as an overlay frame, and the path and depth flapped
  *          on frames 0 to 5 (9 to 13 depth changes per open); a statistic
  *          for a completed present now changes no path.
- *   v0.4.4 -The depth comes from the path, never from misses (DEPTH;
+ *   v0.4.4 - The depth comes from the path, never from misses (DEPTH;
  *          decided 2026-10-09): measured at open on DXGI_FLIP (never above
  *          the smallest depth 2 of open's flips showed), the path's on
  *          COMPOSITION (independent flip 1, composed and overlay 2), the

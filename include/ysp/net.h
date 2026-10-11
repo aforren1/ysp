@@ -238,7 +238,7 @@
  *          (README.md, Conventions). The YNET_REC_OFFSET record's offset
  *          is the same rounded value (it was truncated). Breaks the API;
  *          the struct's size and layout do not change.
- *   v0.2.0 -The ysp conventions (README.md, Conventions); breaks the API.
+ *   v0.2.0 - The ysp conventions (README.md, Conventions); breaks the API.
  *          ynet_lsl_load() and ynet_lsl_unload() are bool ynet_lsl_open()
  *          and void ynet_lsl_close(), with ynet_lsl_error() (do not read
  *          lib.error). ynet_outlet_start/stop() and ynet_inlet_start/stop()
