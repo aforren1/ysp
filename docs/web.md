@@ -283,10 +283,19 @@ Limits:
 All on the laptop of [status](status.md) (Windows 11, Intel Iris Xe,
 internal panel at 60 Hz), on AC.
 
-- Chrome 154, headed, isolated, the self-test, 3 runs of 600 frames:
-  callback intervals mean 16.666 ms, SD 47 to 66 us, p1 16.51 to 16.55 ms,
-  p99 16.78 to 16.82 ms; no dropped frame; period measured at open
-  16.668 to 16.673 ms.
+- Chrome 154, headed, isolated, the self-test, 5 runs of 600 frames in two
+  sessions: callback intervals mean 16.666 ms, SD 47 to 99 us, p1 16.51
+  to 16.55 ms, p99 16.78 to 16.84 ms, max 16.83 to 17.58 ms; no dropped
+  frame; period measured at open 16.668 to 16.673 ms.
+- Chrome 154, headed, not isolated, 2 runs of 600 frames interleaved with
+  2 isolated ones: SD 90 to 100 us, p1 16.4 to 16.5 ms, p99 16.8 to 16.9 ms
+  (the 100 us clock step shows in every number); no dropped frame. The
+  isolated runs between them: SD 64 to 99 us.
+- Chrome 154, headed, isolated, 20 ms of busy time per frame (more than a
+  period): the callbacks came 16.7 or 33.4 ms apart (mean 23.2 ms, p50
+  16.72, p99 33.44). The records show it as the program's lateness
+  (`LATE_TARGET`: 202 of 600 in a headless run), not as frames the browser
+  dropped (0). The self-test reports both.
 - Headless Chrome 154 (no panel: its frame source is a timer), 600 frames:
   mean 16.667 ms, SD 63 to 70 us; settling took 0.36 to 0.92 s.
 

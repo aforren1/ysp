@@ -1547,8 +1547,8 @@
  *   port 3.4.2, ASYNCIFY, YRT_NO_THREADS; the demos of examples/web ran in
  *   Chrome 154 (headless and headed), Edge 155 (headless) and Firefox 154
  *   to 157 (headless) on the laptop below. Chrome headed on its 60 Hz
- *   panel, isolated, 3 runs of 600 frames: callback intervals SD 47 to 66
- *   us, p1 16.51 to 16.55 ms, p99 16.78 to 16.82 ms, no frame dropped, the
+ *   panel, isolated, 5 runs of 600 frames: callback intervals SD 47 to 99
+ *   us, p1 16.51 to 16.55 ms, p99 16.78 to 16.84 ms, no frame dropped, the
  *   program's time per frame 35 us p50. The browser's clock step: 100 us
  *   (Chrome) and 1 ms (Firefox) not isolated, 5 us and 20 us isolated, also
  *   when a service worker isolated the page. JSPI against ASYNCIFY: 27 %

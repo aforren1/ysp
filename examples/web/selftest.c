@@ -88,7 +88,7 @@ int main(int argc, char** argv) {
     char line[1536], json[8192];
     int i, n = 0, n_iv = 0, n_res = 0, frames = 600, w = 640, h = 360, sim = 0, aborted = 0;
     double load_ms = 0;
-    int64_t prev_onset = 0, prev_index = -1, dropped = 0, early = 0, keys = 0;
+    int64_t prev_onset = 0, prev_index = -1, dropped = 0, early = 0, late = 0, keys = 0;
     clear_color_fn clear_color;
     clear_fn clear;
     scissor_fn scissor;
@@ -164,6 +164,7 @@ int main(int argc, char** argv) {
             if (r->flags & (YSCR_FLIP_SKIPPED | YSCR_FLIP_CANCELED)) continue;
             dropped += r->dropped;
             if (r->flags & YSCR_FLIP_EARLY) early++;
+            if (r->flags & YSCR_FLIP_LATE_TARGET) late++;   /* the program was late, not the browser */
             if (on_grid && prev_onset && r->onset && r->index == prev_index + 1 && n_iv < MAX_FRAMES)
                 add_interval(r->onset - prev_onset, &n_iv);
             if (r->onset) { prev_onset = r->onset; prev_index = r->index; }
@@ -214,19 +215,19 @@ int main(int argc, char** argv) {
         printf("frames %d, intervals %d: mean %.4f ms, sd %.4f ms, min %.4f, p1 %.4f, p50 %.4f, p99 %.4f, max %.4f ms\n",
                n, n_iv, m * 1e-6, v * 1e-6, n_iv ? (double)iv[0] * 1e-6 : 0, pct(iv, n_iv, 0.01) * 1e-6,
                pct(iv, n_iv, 0.5) * 1e-6, pct(iv, n_iv, 0.99) * 1e-6, n_iv ? (double)iv[n_iv - 1] * 1e-6 : 0);
-        printf("dropped %lld, early %lld; frame cost p50 %.3f ms p99 %.3f ms; resume p50 %.3f ms p99 %.3f ms; "
-               "clock step %lld ns; keys %lld%s\n", (long long)dropped, (long long)early, pct(cost, nc, 0.5) * 1e-6,
+        printf("dropped %lld, late %lld, early %lld; frame cost p50 %.3f ms p99 %.3f ms; resume p50 %.3f ms p99 %.3f ms; "
+               "clock step %lld ns; keys %lld%s\n", (long long)dropped, (long long)late, (long long)early, pct(cost, nc, 0.5) * 1e-6,
                pct(cost, nc, 0.99) * 1e-6, pct(resume, n_res, 0.5) * 1e-6, pct(resume, n_res, 0.99) * 1e-6,
                (long long)ci.resolution_ns, (long long)keys, aborted ? " (stopped)" : "");
         printf("%s\n", line);
         k = (size_t)snprintf(json, sizeof json,
                              "{\"frames\":%d,\"intervals\":%d,\"mean_ms\":%.5f,\"sd_ms\":%.5f,\"min_ms\":%.4f,\"p1_ms\":%.4f,"
-                             "\"p50_ms\":%.4f,\"p99_ms\":%.4f,\"max_ms\":%.4f,\"dropped\":%lld,\"early\":%lld,"
+                             "\"p50_ms\":%.4f,\"p99_ms\":%.4f,\"max_ms\":%.4f,\"dropped\":%lld,\"late\":%lld,\"early\":%lld,"
                              "\"cost_p50_ms\":%.4f,\"cost_p99_ms\":%.4f,\"resume_p50_ms\":%.4f,\"resume_p99_ms\":%.4f,"
                              "\"clock_step_ns\":%lld,\"load_ms\":%.3f,\"stopped\":%d,\"bin_ms\":0.25,\"hist\":[",
                              n, n_iv, m * 1e-6, v * 1e-6, n_iv ? (double)iv[0] * 1e-6 : 0, pct(iv, n_iv, 0.01) * 1e-6,
                              pct(iv, n_iv, 0.5) * 1e-6, pct(iv, n_iv, 0.99) * 1e-6,
-                             n_iv ? (double)iv[n_iv - 1] * 1e-6 : 0, (long long)dropped, (long long)early,
+                             n_iv ? (double)iv[n_iv - 1] * 1e-6 : 0, (long long)dropped, (long long)late, (long long)early,
                              pct(cost, nc, 0.5) * 1e-6, pct(cost, nc, 0.99) * 1e-6, pct(resume, n_res, 0.5) * 1e-6,
                              pct(resume, n_res, 0.99) * 1e-6, (long long)ci.resolution_ns, load_ms, aborted);
         for (b = 0; b <= BINS && k < sizeof json - 16; b++)
