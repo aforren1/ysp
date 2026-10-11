@@ -186,8 +186,6 @@ static void sec(char* out, size_t cap, double s) {
 }
 
 int main(int argc, char** argv) {
-    yscr_desc sd;
-    ygfx_desc gd;
     ygfx_shape_desc fd;
     ytl_desc td;
     ytb_csv_desc cd;
@@ -195,7 +193,7 @@ int main(int argc, char** argv) {
     ytr_rules_desc rr;
     yrsp_desc pd;
     yscr_frame f;
-    ytl_event fired[16];
+    ytl_event fired[64];                   /* the timeline's capacity: all that can fire */
     ytr_trial_info ti = { 0 };
     yrsp_result res, sim_res[SIM_TRIALS];
     yrsp_input sim_ev[4];
@@ -208,13 +206,11 @@ int main(int argc, char** argv) {
     uint8_t* font = NULL;
     size_t font_n = 0;
     uint64_t seed = 20261009;
-    int64_t word_frame = -1;
-    int i, n, sim = 0, reps = 0, fullscreen = 0, aborted = 0, failed = 0, rows = 0, have_font = 0;
+    int i, n, landed, sim = 0, reps = 0, fullscreen = 0, aborted = 0, failed = 0, rows = 0, have_font = 0;
     int in_trial = 0, responding = 0, n_sim_ev = 0, sim_next = 0, word_col, ink_col, cong_col, answer_col, weight_col;
     int ink = 0, word = 0, congruent = 0, feedback = -1;
     char answer[8] = "";
 
-    memset(&sd, 0, sizeof sd);
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--sim")) sim = 1;
         else if (!strcmp(argv[i], "--fullscreen")) fullscreen = 1;
@@ -259,13 +255,12 @@ int main(int argc, char** argv) {
     rd.cond_reps = cond_reps;
     if (!ytr_open(&trials, &rd)) { fprintf(stderr, "trial_stroop: %s\n", ytr_error(&trials)); return 1; }
 
-    if (sim) sd.backend = YSCR_BACKEND_SIM;
-    sd.windowed = !fullscreen;
-    if (!yscr_open(&scr, &sd)) { fprintf(stderr, "trial_stroop: %s\n", yscr_error(&scr)); return 1; }
-    memset(&gd, 0, sizeof gd);
-    gd.screen = &scr;
-    gd.background[0] = gd.background[1] = gd.background[2] = 0.05f;
-    if (!ygfx_open(&gfx, &gd)) { fprintf(stderr, "trial_stroop: %s\n", ygfx_error(&gfx)); return 1; }
+    /* the display and the graphics, opened together and primed */
+    if (!ygfx_open_screen(&gfx, &scr, &(yscr_desc){ .backend = sim ? YSCR_BACKEND_SIM : 0, .windowed = !fullscreen },
+                          &(ygfx_desc){ .background = { 0.05f, 0.05f, 0.05f } })) {
+        fprintf(stderr, "trial_stroop: %s\n", ygfx_error(&gfx));
+        return 1;
+    }
 
     /* Every text is laid out here, then each font's set goes up once. */
     if (!yol_open(&ol, NULL) || ylay_create(&L, &(ylay_desc){ .ol = &ol }) != YLAY_OK) {
@@ -335,21 +330,13 @@ int main(int argc, char** argv) {
     fprintf(out, "trial_index,block,stimulus,ink,congruent,answer,response,rt,correct,feedback,"
                  "onset_tier,onset_src,rsp_tier,rsp_flags,n_anticipations\n");
 
-    ygfx_prime(&gfx);   /* each kind's first draw now, not on a trial's first frames (docs/gfx.md) */
+    ygfx_prime(&gfx);   /* the text program's first draw now (ygfx_open_screen() primed the rest; docs/gfx.md) */
     for (;;) {
-        SDL_Event ev;
         int64_t bt = 0;
-        yrsp_input in;
         const float* v;
         int rc = yscr_begin(&scr, &f);
         if (rc == YSCR_QUIT) { aborted = 1; break; }
         if (rc != YSCR_OK) { fprintf(stderr, "trial_stroop: %s\n", yscr_error(&scr)); failed = 1; break; }
-
-        for (i = 0; i < f.n_done; i++)   /* the word's flip record: its onset, final */
-            if (f.done[i].index == word_frame) {
-                yrsp_onset o = yrsp_onset_flip(&f.done[i]);
-                yrsp_set_onset(&rsp, &o);
-            }
 
         if (!in_trial) {
             ytl_seq q;
@@ -364,7 +351,6 @@ int main(int argc, char** argv) {
             cur = word_txt[word];   /* the word's runs, in this trial's ink */
             for (i = 0; i < cur.n; i++) memcpy(cur.st[i].color, ink_rgb[ink], sizeof ink_rgb[ink]);
             feedback = -1;
-            word_frame = -1;
             ytl_clear(&tl, TRIAL);
             ytl_anchor(&tl, TRIAL, f.onset, 0);
             q = ytl_seq_on(&tl, TRIAL);
@@ -383,11 +369,11 @@ int main(int argc, char** argv) {
             n_sim_ev = sim_next = 0;
         }
 
-        while (yscr_poll(&scr, &ev, NULL))
-            if (yscr_event_input(&scr, &ev, &in)) yrsp_feed(&rsp, &in);
+        yrsp_feed_screen(&scr, &rsp, 1);
         while (sim && sim_next < n_sim_ev && sim_ev[sim_next].t <= f.onset) yrsp_feed(&rsp, &sim_ev[sim_next++]);
 
-        if (responding && yrsp_update(&rsp, f.onset) == YRSP_ENDED) {
+        /* the word's flip record when it arrives; a key or the deadline */
+        if (yrsp_update_frame(&rsp, &f) == YRSP_ENDED && responding) {
             ytl_seq q = ytl_seq_on(&tl, TRIAL);
             yrsp_result now;
             yrsp_finish(&rsp, &now);   /* the live result picks the feedback; the row takes the final one */
@@ -406,27 +392,23 @@ int main(int argc, char** argv) {
             responding = 0;
         }
 
-        n = ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, fired, 16);
-        for (i = 0; i < n && i < 16; i++) {
-            if (fired[i].kind == YTL_ONSET && fired[i].target == WORD_ON) {
-                yrsp_onset o = yrsp_onset_landing(&fired[i]);
-                yrsp_set_onset(&rsp, &o);
-                word_frame = fired[i].frame;
-                if (sim && !sim_silent(ti.index)) {   /* the participant answers from the word's onset */
-                    int k = sim_wrong(ti.index) ? (congruent ? (ink + 1) % N_INKS : word) : ink;
-                    memset(sim_ev, 0, sizeof sim_ev);
-                    sim_ev[0].t = o.t_ns + YRT_S(sim_rt(congruent));
-                    sim_ev[0].type = YRSP_PRESS;
-                    sim_ev[0].control = (uint32_t)yrsp_scancode(keys[k].key);
-                    sim_ev[0].stamp = YRSP_TIER_SIM;
-                    sim_ev[0].value = 1;
-                    sim_ev[1] = sim_ev[0];
-                    sim_ev[1].type = YRSP_RELEASE;
-                    sim_ev[1].value = 0;
-                    sim_ev[1].t = sim_ev[0].t + YRT_MS(80);
-                    n_sim_ev = 2;
-                }
-            }
+        n = ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, fired, 64);
+        landed = yrsp_set_landing(&rsp, fired, n, WORD_ON);   /* the word landed: its planned onset */
+        if (landed >= 0 && sim && !sim_silent(ti.index)) {   /* the participant answers from the word's onset */
+            int k = sim_wrong(ti.index) ? (congruent ? (ink + 1) % N_INKS : word) : ink;
+            memset(sim_ev, 0, sizeof sim_ev);
+            sim_ev[0].t = fired[landed].onset + YRT_S(sim_rt(congruent));
+            sim_ev[0].type = YRSP_PRESS;
+            sim_ev[0].control = (uint32_t)yrsp_scancode(keys[k].key);
+            sim_ev[0].stamp = YRSP_TIER_SIM;
+            sim_ev[0].value = 1;
+            sim_ev[1] = sim_ev[0];
+            sim_ev[1].type = YRSP_RELEASE;
+            sim_ev[1].value = 0;
+            sim_ev[1].t = sim_ev[0].t + YRT_MS(80);
+            n_sim_ev = 2;
+        }
+        for (i = 0; i < n; i++) {
             if (fired[i].kind == YTL_MARK && fired[i].code == END_OF_TRIAL) {
                 static const char* const fb_name[3] = { "correct", "wrong", "too_slow" };
                 char rt[32];

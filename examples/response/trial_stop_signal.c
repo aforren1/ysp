@@ -17,9 +17,12 @@
  * stimulus's flip onset), and the staircase records that value. RT runs
  * from the go stimulus's flip onset.
  *
- * The data file has one row per trial: trial_index, stimulus, key_answer,
- * signal (go or stop), ssd, ssd_actual, response, rt, correct, stopped;
- * then go_tier, tone_tier, rsp_tier, rsp_flags. Times in seconds. The run
+ * The data file has one row per trial (ysp/trials.h's data writer): the
+ * session's columns (index, ..., stimulus, key_answer, signal: go or
+ * stop), then trial_index, correct, ssd, ssd_actual, stopped, tone_tier,
+ * then the response's (YRSP_DATA_COLS: response, rt, onset_tier and the
+ * rest for the go stimulus). Times in seconds; the settings go to
+ * FILE.meta. The run
  * ends with p(respond | signal), the mean SSD, the mean go RT and the
  * SSRT by the mean method (go RT minus SSD: rough; use the integration
  * method on the data file). Shift+Esc stops the session; the rows so far
@@ -90,6 +93,7 @@ static yau_audio au;
 static ytl_timeline tl;
 static ytl_event storage[64];
 static ytr_trials trials;
+static ytr_data data;
 static yst_stair stair;
 static yrsp_collector rsp;
 static uint64_t table_arena[2048];
@@ -114,43 +118,39 @@ static ygfx_stim shape(ygfx_shape_kind kind, float w, float p0, float c) {
     return ygfx_shape(&d);
 }
 
-static void sec(char* out, size_t cap, double s) {
-    if (s != s) out[0] = 0;
-    else snprintf(out, cap, "%.9f", s);
-}
+/* The program's columns, after the session's; then YRSP_DATA_COLS. The
+ * SSDs are the staircase's seconds; NaN and YTR_MISSING_INT are empty on a
+ * go trial. */
+typedef struct row { int trial_index, stopped, tone_tier; bool correct; double ssd, ssd_actual; } row;
+static const ytr_col cols[] = {
+    YTR_COL(row, trial_index, YTR_COL_INT), YTR_COL(row, correct, YTR_COL_BOOL),
+    YTR_COL_D(row, ssd, YTR_COL_DOUBLE, 9), YTR_COL_D(row, ssd_actual, YTR_COL_DOUBLE, 9),
+    YTR_COL(row, stopped, YTR_COL_INT), YTR_COL(row, tone_tier, YTR_COL_INT), YRSP_DATA_COLS,
+};
 
 int main(int argc, char** argv) {
-    yscr_desc sd;
-    ygfx_desc gd;
     yau_desc ad;
-    yau_tone_desc tdesc;
-    ytl_desc td;
-    ytb_csv_desc cd;
-    ytr_desc rd;
     yst_desc stdesc;
-    yrsp_desc pd;
     yscr_frame f;
-    ytl_event fired[16];
+    ytl_event fired[64];                   /* the timeline's capacity: all that can fire */
     ytr_trial_info ti = { 0 };
     yrsp_result res;
-    yrsp_onset go_onset;
     yrsp_input sim_ev[4];
     yau_onset rec;
     yau_buf tone;
-    FILE* out;
-    char line[1024], meta[2048], aline[512];
+    row r = { 0 };
+    char line[1024], meta[2048], aline[512], meta_path[1100];
     const char* out_path = "trial_stop_signal.csv";
+    const char* key_answer = "";
     uint64_t seed = 20261008;
     int i, n, sim = 0, reps = 0, fullscreen = 0, aborted = 0, failed = 0, rows = 0;
     int in_trial = 0, responding = 0, row_due = 0, stop = 0, stim_ch = 0, n_sim_ev = 0, sim_next = 0;
     int stim_col, key_col, signal_col, n_stop = 0, n_respond = 0, n_go_rt = 0, sim_stopped[2] = { -1, -1 };
-    int64_t go_frame = -1, go_bt = 0;
+    int64_t go_bt = 0;
     yau_id id = 0;
     double ssd = 0, sum_go_rt = 0, sum_ssd = 0, sim_ssd[2] = { 0, 0 }, sim_ssd_actual[2] = { 0, 0 };
     double sim_go_rt = 0;
-    char key_answer[8] = "";
 
-    memset(&sd, 0, sizeof sd);
     memset(&ad, 0, sizeof ad);
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--sim")) sim = 1;
@@ -165,47 +165,36 @@ int main(int argc, char** argv) {
     }
     if (reps == 0) reps = sim ? 1 : 8;
     if (reps < 1 || reps > 100) { fprintf(stderr, "trial_stop_signal: --reps takes 1..100\n"); return 2; }
-    if (sim) {
-        sd.backend = YSCR_BACKEND_SIM;
-        ad.backend = YAU_BACKEND_NULL;
-    }
-    sd.windowed = !fullscreen;
+    if (sim) ad.backend = YAU_BACKEND_NULL;
 
-    if (!yscr_open(&scr, &sd)) { fprintf(stderr, "trial_stop_signal: %s\n", yscr_error(&scr)); return 1; }
-    memset(&gd, 0, sizeof gd);
-    gd.screen = &scr;
-    gd.background[0] = gd.background[1] = gd.background[2] = 0.5f;
-    if (!ygfx_open(&gfx, &gd)) { fprintf(stderr, "trial_stop_signal: %s\n", ygfx_error(&gfx)); return 1; }
+    /* the display and the graphics, opened together and primed */
+    if (!ygfx_open_screen(&gfx, &scr, &(yscr_desc){ .backend = sim ? YSCR_BACKEND_SIM : 0, .windowed = !fullscreen },
+                          &(ygfx_desc){ .background = { 0.5f, 0.5f, 0.5f } })) {
+        fprintf(stderr, "trial_stop_signal: %s\n", ygfx_error(&gfx));
+        return 1;
+    }
     fix = shape(YGFX_CROSS, 16, 3, 0.2f);
     circle = shape(YGFX_CIRCLE, 120, 0, 0.9f);
     square = shape(YGFX_RECT, 106, 0, 0.9f);
 
     ad.arena_bytes = 1 << 20;
     if (!yau_open(&au, &ad)) { fprintf(stderr, "trial_stop_signal: %s\n", yau_error(&au)); return 1; }
-    memset(&tdesc, 0, sizeof tdesc);
-    tdesc.hz = 750;
-    tdesc.dur_ns = YRT_S(TONE_S);
-    tdesc.peak = yau_db(-30);
-    tdesc.ramp_ns = YRT_MS(5);
-    tone = yau_tone(&au, &tdesc);
+    tone = yau_tone(&au, &(yau_tone_desc){ .hz = 750, .dur_ns = YRT_S(TONE_S), .peak = yau_db(-30), .ramp_ns = YRT_MS(5) });
     if (!tone.frames) { fprintf(stderr, "trial_stop_signal: %s\n", yau_error(&au)); return 1; }
 
-    memset(&cd, 0, sizeof cd);
-    cd.text = conditions_csv;
-    cd.len = sizeof conditions_csv - 1;
-    cd.arena = table_arena;
-    cd.arena_size = sizeof table_arena;
-    if (!ytb_open_csv(&tab, &cd)) { fprintf(stderr, "trial_stop_signal: %s\n", ytb_error(&tab)); return 1; }
+    if (!ytb_open_csv(&tab, &(ytb_csv_desc){ .text = conditions_csv, .len = sizeof conditions_csv - 1,
+                                             .arena = table_arena, .arena_size = sizeof table_arena })) {
+        fprintf(stderr, "trial_stop_signal: %s\n", ytb_error(&tab));
+        return 1;
+    }
     stim_col = ytb_col(&tab, "stimulus");
     key_col = ytb_col(&tab, "key_answer");
     signal_col = ytb_col(&tab, "signal");
-    memset(&rd, 0, sizeof rd);
-    rd.table = &tab;
-    rd.reps = reps;
-    rd.order = YTR_ORDER_RANDOM;
-    rd.rng = ytr_splitmix;
-    rd.rng_ctx = &seed;
-    if (!ytr_open(&trials, &rd)) { fprintf(stderr, "trial_stop_signal: %s\n", ytr_error(&trials)); return 1; }
+    if (!ytr_open(&trials, &(ytr_desc){ .table = &tab, .reps = reps, .order = YTR_ORDER_RANDOM,
+                                        .rng = ytr_splitmix, .rng_ctx = &seed })) {
+        fprintf(stderr, "trial_stop_signal: %s\n", ytr_error(&trials));
+        return 1;
+    }
 
     /* the SSD: a stop (response 1) makes it longer, harder */
     memset(&stdesc, 0, sizeof stdesc);
@@ -219,57 +208,45 @@ int main(int argc, char** argv) {
     stdesc.stop_trials = 2 * reps;
     if (!yst_open(&stair, &stdesc)) { fprintf(stderr, "trial_stop_signal: %s\n", yst_error(&stair)); return 1; }
 
-    memset(&td, 0, sizeof td);
-    td.events = storage;
-    td.event_capacity = 64;
-    td.n_channels = N_CHANNELS;
-    if (!ytl_open(&tl, &td)) { fprintf(stderr, "trial_stop_signal: %s\n", ytl_error(&tl)); return 1; }
+    if (!ytl_open(&tl, &(ytl_desc){ .events = storage, .event_capacity = 64, .n_channels = N_CHANNELS })) {
+        fprintf(stderr, "trial_stop_signal: %s\n", ytl_error(&tl));
+        return 1;
+    }
 
     /* f or j within 1.25 s of the go stimulus; on a signal trial a key is a failed stop */
-    memset(&pd, 0, sizeof pd);
-    pd.choices = keys;
-    pd.n_choices = 2;
-    pd.duration_ns = YRT_S(RESPONSE_S);
-    if (!yrsp_open(&rsp, &pd)) { fprintf(stderr, "trial_stop_signal: %s\n", yrsp_error(&rsp)); return 1; }
+    if (!yrsp_open(&rsp, &(yrsp_desc){ .choices = keys, .n_choices = 2, .duration_ns = YRT_S(RESPONSE_S) })) {
+        fprintf(stderr, "trial_stop_signal: %s\n", yrsp_error(&rsp));
+        return 1;
+    }
 
-    out = fopen(out_path, "w");
-    if (!out) { fprintf(stderr, "trial_stop_signal: cannot write %s\n", out_path); return 1; }
-    ytr_format_meta(&trials, meta, sizeof meta);
-    meta[strcspn(meta, "\r\n")] = 0;
+    /* the data file, and the settings beside it */
     yscr_describe(&scr, line, sizeof line);
     yau_describe(&au, aline, sizeof aline);
-    fprintf(out, "# %s\n# %s\n# %s\n# ysp_stair %s, 1-up/1-down, step 0.05 s; ysp_response %s; keyboard: %s\n", meta,
-            line, aline, yst_version(), yrsp_version(), sim ? "synthetic (tier SIM)" : "SDL through yscr_event_input");
-    fprintf(out, "trial_index,stimulus,key_answer,signal,ssd,ssd_actual,response,rt,correct,stopped,go_tier,tone_tier,"
-                 "rsp_tier,rsp_flags\n");
+    snprintf(meta, sizeof meta, "screen=%s\naudio=%s\nysp_stair=%s, 1-up/1-down, step 0.05 s\nysp_response=%s\n"
+             "keyboard=%s\n", line, aline, yst_version(), yrsp_version(),
+             sim ? "synthetic (tier SIM)" : "SDL through yscr_event_input");
+    snprintf(meta_path, sizeof meta_path, "%s.meta", out_path);
+    if (!ytr_data_open(&data, &(ytr_data_desc){ .path = out_path, .trials = &trials, .cols = cols,
+            .n_cols = (int)(sizeof cols / sizeof cols[0]), .meta_path = meta_path, .meta = meta })) {
+        fprintf(stderr, "trial_stop_signal: %s\n", ytr_data_error(&data));
+        return 1;
+    }
     printf("%s\n%s\n", line, aline);
-    memset(&go_onset, 0, sizeof go_onset);
     memset(&rec, 0, sizeof rec);
 
-    ygfx_prime(&gfx);   /* each kind's first draw now, not on a trial's first frames (docs/gfx.md) */
     for (;;) {
-        SDL_Event ev;
         int64_t bt = 0;
-        yrsp_input in;
         int rc = yscr_begin(&scr, &f);
         if (rc == YSCR_QUIT) { aborted = 1; break; }
         if (rc != YSCR_OK) { fprintf(stderr, "trial_stop_signal: %s\n", yscr_error(&scr)); failed = 1; break; }
-
-        for (i = 0; i < f.n_done; i++)
-            if (f.done[i].index == go_frame) {
-                go_onset = yrsp_onset_flip(&f.done[i]);
-                yrsp_set_onset(&rsp, &go_onset);
-            }
 
         if (!in_trial) {
             /* the go stimulus after the fixation; on a signal trial the tone
              * at its planned onset plus the SSD */
             ytl_seq q;
-            const char* ka;
             int64_t t_go;
             if (ytr_next(&trials, &ti) < 0) break;
-            ka = ytb_text(&tab, ti.condition, key_col);
-            snprintf(key_answer, sizeof key_answer, "%s", ka ? ka : "");
+            key_answer = ytb_text(&tab, ti.condition, key_col);
             stim_ch = !strcmp(ytb_text(&tab, ti.condition, stim_col), "circle") ? CIRCLE_ON : SQUARE_ON;
             stop = !strcmp(ytb_text(&tab, ti.condition, signal_col), "stop");
             ytl_clear(&tl, TRIAL);
@@ -290,8 +267,6 @@ int main(int argc, char** argv) {
                 if (id <= 0) { fprintf(stderr, "trial_stop_signal: play: %s\n", yau_strerror((int)id)); failed = 1; break; }
             }
             yrsp_arm(&rsp, f.onset);
-            go_frame = -1;
-            memset(&go_onset, 0, sizeof go_onset);
             in_trial = responding = 1;
             row_due = 0;
             n_sim_ev = sim_next = 0;
@@ -311,12 +286,12 @@ int main(int argc, char** argv) {
             }
         }
 
-        while (yscr_poll(&scr, &ev, NULL))
-            if (yscr_event_input(&scr, &ev, &in)) yrsp_feed(&rsp, &in);
+        yrsp_feed_screen(&scr, &rsp, 1);
         while (sim && sim_next < n_sim_ev && sim_ev[sim_next].t <= f.onset) yrsp_feed(&rsp, &sim_ev[sim_next++]);
 
-        /* a key or the deadline: the go stimulus off on this frame */
-        if (responding && yrsp_update(&rsp, f.onset) == YRSP_ENDED) {
+        /* the go stimulus's flip record when it arrives; a key or the
+         * deadline: the go stimulus off on this frame */
+        if (yrsp_update_frame(&rsp, &f) == YRSP_ENDED && responding) {
             ytl_seq q = ytl_seq_on(&tl, TRIAL);
             ytl_base_time(&tl, TRIAL, f.onset, &bt);
             ytl_at(&q, bt);
@@ -327,15 +302,10 @@ int main(int argc, char** argv) {
             responding = 0;
         }
 
-        n = ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, fired, 16);
-        for (i = 0; i < n && i < 16; i++) {
-            if (fired[i].kind == YTL_ONSET && fired[i].target == stim_ch) {
-                go_onset = yrsp_onset_landing(&fired[i]);
-                yrsp_set_onset(&rsp, &go_onset);
-                go_frame = fired[i].frame;
-            }
+        n = ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, fired, 64);
+        yrsp_set_landing(&rsp, fired, n, stim_ch);   /* the go stimulus landed: its planned onset */
+        for (i = 0; i < n; i++)
             if (fired[i].kind == YTL_MARK && fired[i].code == END_OF_TRIAL) row_due = 1;
-        }
 
         /* the interval is over and, on a signal trial, the tone's record is in */
         if (row_due) {
@@ -346,38 +316,39 @@ int main(int argc, char** argv) {
                 break;
             }
             if (arc == YAU_OK) {
-                char s_ssd[32], s_act[32], rt[32], tone_tier[8] = "";
-                int responded, correct, stopped = -1;
-                double actual = NAN;
+                int responded;
                 yrsp_finish(&rsp, &res);
                 responded = (res.flags & YRSP_R_RESPONDED) != 0;
-                correct = stop ? !responded : responded && !strcmp(res.response_name, key_answer);
+                r.trial_index = ti.index;
+                r.correct = stop ? !responded : responded && !strcmp(res.response_name, key_answer);
+                r.ssd = ssd;
+                r.ssd_actual = NAN;
+                r.stopped = r.tone_tier = YTR_MISSING_INT;
                 if (stop) {
-                    actual = (double)(rec.onset - res.t_onset) / 1e9;
-                    stopped = !responded;
-                    yst_update(&stair, actual, stopped);
-                    if (n_stop < 2) { sim_stopped[n_stop] = stopped; sim_ssd[n_stop] = ssd; sim_ssd_actual[n_stop] = actual; }
+                    r.ssd_actual = (double)(rec.onset - res.t_onset) / 1e9;
+                    r.stopped = !responded;
+                    r.tone_tier = rec.tier;
+                    yst_update(&stair, r.ssd_actual, r.stopped);
+                    if (n_stop < 2) { sim_stopped[n_stop] = r.stopped; sim_ssd[n_stop] = ssd; sim_ssd_actual[n_stop] = r.ssd_actual; }
                     n_stop++;
                     n_respond += responded;
-                    sum_ssd += actual;
-                } else if (correct) {
+                    sum_ssd += r.ssd_actual;
+                } else if (r.correct) {
                     sum_go_rt += YRT_TO_S(res.rt_ns);
                     n_go_rt++;
                     sim_go_rt = res.rt_ns == YRSP_NO_TIME ? NAN : YRT_TO_S(res.rt_ns);
                 }
-                if (stop) snprintf(tone_tier, sizeof tone_tier, "%u", (unsigned)rec.tier);
-                sec(s_ssd, sizeof s_ssd, ssd);
-                sec(s_act, sizeof s_act, actual);
-                sec(rt, sizeof rt, res.rt_ns == YRSP_NO_TIME ? NAN : YRT_TO_S(res.rt_ns));
-                fprintf(out, "%d,%s,%s,%s,%s,%s,%s,%s,%d,%s,%u,%s,%u,%u\n", ti.index,
-                        ytb_text(&tab, ti.condition, stim_col), key_answer, stop ? "stop" : "go", s_ssd, s_act,
-                        res.response_name ? res.response_name : "", rt, correct, stopped < 0 ? "" : stopped ? "1" : "0",
-                        (unsigned)res.onset_tier, tone_tier, (unsigned)res.stamp_tier, (unsigned)res.flags);
-                fflush(out);
-                printf("trial %2d %-6s %-4s ssd %s (shown %s) rt %s %s\n", ti.index, ytb_text(&tab, ti.condition, stim_col),
-                       stop ? "stop" : "go", s_ssd[0] ? s_ssd : "-", s_act[0] ? s_act : "-", rt[0] ? rt : "-",
-                       stop ? (stopped ? "stopped" : "failed stop") : correct ? "correct" : responded ? "wrong" : "miss");
-                ytr_update(&trials, correct, NULL);
+                ytr_update(&trials, r.correct, NULL);
+                if (yrsp_data_set(&data, &res) < 0 || ytr_data_write(&data, &r) < 0) {
+                    fprintf(stderr, "trial_stop_signal: %s\n", ytr_data_error(&data));
+                    failed = 1;
+                }
+                if (stop)
+                    printf("trial %2d %-6s stop ssd %.3f s (shown %.6f s), %s\n", ti.index,
+                           ytb_text(&tab, ti.condition, stim_col), ssd, r.ssd_actual, r.stopped ? "stopped" : "failed stop");
+                else
+                    printf("trial %2d %-6s go, %s\n", ti.index, ytb_text(&tab, ti.condition, stim_col),
+                           r.correct ? "correct" : responded ? "wrong" : "miss");
                 rows++;
                 in_trial = 0;
                 row_due = 0;
@@ -392,7 +363,7 @@ int main(int argc, char** argv) {
         ygfx_end(&gfx);
         yscr_flip(&scr);
     }
-    fclose(out);
+    if (ytr_data_finish(&data) < 0) { fprintf(stderr, "trial_stop_signal: %s\n", ytr_data_error(&data)); failed = 1; }
     yau_close(&au);
     ygfx_close(&gfx);
     yscr_close(&scr);
