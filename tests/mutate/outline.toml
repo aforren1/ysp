@@ -604,3 +604,27 @@ find = '''
         memset(s, 0, sizeof *s);'''
 replace = '''
         if (s->words) yol__realloc(s->ctx, s->words, 0);'''
+
+[[mutant]]
+id = "70"
+name = "strip-bottom xs not reconciled"
+test = "outline"
+why = "v0.3.1: a nearly horizontal edge's x at a crossing is off by |dx/dy| times y's rounding; unreconciled, the grids with float-rounded starts do not close."
+find = '        yol__order_xb(&w, act, nlive, yb);'
+replace = '        (void)yol__order_xb;'
+
+[[mutant]]
+id = "71"
+name = "close neighbors in order not met"
+test = "outline"
+why = "v0.3.1: two pieces that crossed within the noise but kept their order would cross again, unseen, inside the next strip."
+find = '            if (gap > fmax(ta, tb)) continue;'
+replace = '            if (gap > 0) continue;'
+
+[[mutant]]
+id = "72"
+name = "the piece that goes on moves"
+test = "outline"
+why = "v0.3.1: moving the piece that continues past the line, not the one that ends there, shifts its next run: a sliver of area along a whole stem."
+find = '        if (ea != eb) v = ea ? b->xb : a->xb;'
+replace = '        if (ea != eb) v = ea ? a->xb : b->xb;'
