@@ -925,33 +925,29 @@ static void bench_v12_capture(const ygfx_stim* gab) {
         printf("\nygfx_capture_pump() after each frame of row 6 (the previous copy's fence, map and hand-off): "
                "mean %.1f us, p99 %.1f us\n", m / (CMP_REPS * CMP_BLOCK), p99(pump_us, CMP_REPS * CMP_BLOCK));
     }
-    /* the writer's side: one file per format, from memory, as the writer
-     * thread writes it */
+    /* the writer's side: one PPM file, from memory, as the writer thread
+     * writes it */
     if (cap_dir) {
-        static const int fmts[2] = { YGFX_IMAGE_PPM, YGFX_IMAGE_PNG };
         unsigned char* px = (unsigned char*)malloc((size_t)W * H * 4);
         char path[600];
-        int fi;
+        double sum = 0, mx = 0;
+        int rc = YGFX_OK;
         if (!px) return;
         for (i = 0; i < W * H * 4; i++) px[i] = (unsigned char)(i * 31 + (i >> 11));
         printf("\n| %-48s | %8s | %8s | %8s |\n", "file (10 writes, from memory)", "ms mean", "ms max", "MB/s");
         printf("|--------------------------------------------------|----------|----------|----------|\n");
-        for (fi = 0; fi < 2; fi++) {
-            double sum = 0, mx = 0;
-            int rc = YGFX_OK;
-            for (i = 0; i < 10; i++) {
-                double ms;
-                snprintf(path, sizeof path, "%s/bench%02d.%s", cap_dir, i, fi ? "png" : "ppm");
-                a = yrt_now_ns();
-                if (ygfx_image_write(path, fmts[fi], px, W, H, 0, "gfx_bench", NULL, 0) != YGFX_OK) rc = YGFX_ERR_IO;
-                ms = (double)(yrt_now_ns() - a) * 1e-6;
-                sum += ms;
-                if (ms > mx) mx = ms;
-            }
-            for (i = 0; i < 10; i++) { snprintf(path, sizeof path, "%s/bench%02d.%s", cap_dir, i, fi ? "png" : "ppm"); remove(path); }
-            printf("| %-48s | %8.2f | %8.2f | %8.0f |%s\n", fi ? "PNG, stored" : "PPM", sum / 10, mx,
-                   (double)W * H * 3 / (sum / 10 * 1e-3) / 1e6, rc ? " (a write failed)" : "");
+        for (i = 0; i < 10; i++) {
+            double ms;
+            snprintf(path, sizeof path, "%s/bench%02d.ppm", cap_dir, i);
+            a = yrt_now_ns();
+            if (ygfx_image_write(path, px, W, H, 0, "gfx_bench", NULL, 0) != YGFX_OK) rc = YGFX_ERR_IO;
+            ms = (double)(yrt_now_ns() - a) * 1e-6;
+            sum += ms;
+            if (ms > mx) mx = ms;
         }
+        for (i = 0; i < 10; i++) { snprintf(path, sizeof path, "%s/bench%02d.ppm", cap_dir, i); remove(path); }
+        printf("| %-48s | %8.2f | %8.2f | %8.0f |%s\n", "PPM", sum / 10, mx,
+               (double)W * H * 3 / (sum / 10 * 1e-3) / 1e6, rc ? " (a write failed)" : "");
         free(px);
     }
     fflush(stdout);

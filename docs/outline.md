@@ -1,6 +1,6 @@
 # ysp/outline.h design notes
 
-Status: v0.2.1, 2026-10-07. v0.1.0 built the font reader, the sweep,
+Status: v0.3.1, 2026-10-10 (v0.2.1, 2026-10-07, for the measurements). v0.1.0 built the font reader, the sweep,
 exact alpha, strokes and curve sets; v0.2.0 adds the SVG subset reader and
 cheaper strokes; v0.2.1 places TrueType glyphs where HarfBuzz places them. The design was reviewed and approved by the coordinator
 on 2026-10-06; "Decisions" records the answers. The manual in the header
@@ -77,6 +77,11 @@ inside intervals just above and just below it. Points within 1e-9 on one
 line are one point, and the output is chained into contours by exact
 endpoint match. A boundary that does not close is `YOL_ERR_NUMERIC`
 with the point named, never a silent open contour.
+
+On each strip's bottom line, two neighbors that are out of order, or
+closer than either one's x moves when the line moves by 1e-13 of the
+extent, take one x: the x of the piece that moves less, and of the piece
+that goes on past the line before one that ends on it (v0.3.1, below).
 
 The sweep's work is bounded (`YOL_SWEEP_WORK`, 2^27 piece positions,
 about 2 s): 600 random chords, about 90,000 crossings, are refused.
@@ -158,6 +163,7 @@ and crossings found by subdivision (not the header's algebra).
 | Ellipse under a rotation and a scale | within 1.05e-5 of the exact ellipse at tol 1e-5 |
 | Font reader: points, implied midpoints, composites, every CFF operator, cmap 4 and 12, hmtx, collections | exact |
 | Placement: a simple glyph (xMin 100, lsb 70), a composite (xMin 40, lsb 45) and a USE_MY_METRICS composite, through the path, a curve set and exact alpha; CFF glyphs with lsb different from xMin | moved by lsb - xMin, or by the component's difference; CFF not moved |
+| Resolve, grids of 2 bars and 2 stems whose starts are rounded to float and other corners not (100; 400 with --long; v0.3.1) | every grid resolved, area within 2.8e-16 of the reference (1.3e-15 for the 400 of --long; gcc 11.4 and clang 11.1, -O2 and -O3); v0.3.0 refused 92 of 100 and had 5 of the other 8 off by up to 9.3e-9 |
 | Resolve, random shapes (60; 300 with --long) | area within 2e-13 of the reference (300 shapes); winding 0 or 1 and equal to the input's fill at every sampled point; a second resolve keeps area and curve count |
 | Exact alpha against the reference | worst 1.8e-13 (10,698 pixels with --long); the same image without a border; coverage sums to the area; U8, U16, F32 codes exact |
 | Strokes, 400 random quadratics, every pixel center at 20 px per unit, against the exact band (the roots of a cubic) | 0 wrong of 1,254,027 |
@@ -220,8 +226,9 @@ test compares every glyph, resolved or not, with the fixed function.
 
 `tests/mutate/outline.toml` holds the mutants for the repository's runner
 (`uv run tests/mutate/mutate.py outline.toml -j 4`; tests/mutate/README.md).
-67 mutants, run on v0.2.1: 64 killed, 3 survived as expected, 67 of 67 as
-expected, 574 s with 4 at a time. The 65 of v0.2.0 caught 62 and the 51 of
+72 mutants, run on v0.3.1 (2026-10-11): 69 killed, 3 survived as
+expected, 72 of 72 as expected, 6588 s with 4 at a time (paused while
+other timing ran). On v0.2.1: 67 mutants, 64 killed, 574 s. The 65 of v0.2.0 caught 62 and the 51 of
 v0.1 caught 48 the same way.
 
 The three that survive change no result, and the list marks them:
@@ -444,6 +451,125 @@ passes with every v0.2.1 check unchanged, plus close on zeroed handles,
 after a failed open and twice, and the generic and specific messages.
 `tests/compile/outline.c` names the lifecycle by type. Mutants 68 (no
 generic message) and 69 (a set close that keeps its pointers) are caught.
+
+## v0.3.1: edges a few ulps from horizontal
+
+### What failed
+
+On Ubuntu 22.04's gcc 11.4 (WSL2, the `linux` preset, Release, -O3),
+`test_gfx` failed: "outline.h set: resolve: the boundary does not close
+at (0.27, -0.64999998271465298)". clang 11.1 on the same machine, MSVC
+19.44, MinGW-w64 gcc 16.1 and CI's gcc passed.
+
+Measured, with the test's glyph set alone in a small program
+(`resolve` of the 12 test glyphs, as `cs_ol_build()` builds them):
+
+| gcc 11.4 flags | Result |
+|---|---|
+| -O0, -O1, -O2 | resolved |
+| -O3 | the error above |
+| -O3 -ffp-contract=off | the error |
+| -O3 -fno-strict-aliasing | the error |
+| -O3 -fno-tree-loop-vectorize | the error |
+| -O3 -fno-tree-slp-vectorize | resolved |
+| -O3 -fno-inline | resolved |
+| -O0 and -O3, -fsanitize=address,undefined | resolved, no report |
+| clang 11.1 -O0, -O3 | resolved |
+
+The difference is in the path, before the resolve. `cs_ol_build()`
+passes `(float)` casts of each point to `yol_move()` and `yol_line()`.
+At -O3, gcc 11.4 inlines `yol_line()` and, with the SLP vectorizer, loads
+the line's end as a vector of two doubles (`movapd`) and uses it without
+the `cvtsd2ss`/`cvtss2sd` pair that the cast needs; the start, through
+`yol_move()`, is rounded. A rectangle path from 4 corners then held 8 of
+11 points that are not floats, and every contour closed with an extra
+segment about 1e-8 long. The program did not reduce to a case without
+ysp/outline.h, so a fault in the caller is not excluded; the casts are in
+test code, and the header cannot keep a compiler from dropping them.
+
+The header's fault: that path is valid, and the resolve refused it on
+every compiler. Fed directly (start rounded to float, other corners
+not), the test glyph failed the same way under gcc 11.4 -O0 and -O2 and
+clang 11.1 -O3.
+
+### Why the boundary did not close
+
+A bar's top edge from (0.05f, -0.65f) to (0.85, -0.65) is 1.7e-8 tall and
+0.8 wide: |dx/dy| about 5e7. Where a stem at x = 0.27 crosses it, the
+strip line's y is the crossing's, rounded; the edge's x on that line is
+then off by |dx/dy| times that rounding, 8.6e-10 here, just past the
+eps_x merge (8.5e-10). Two faults follow, and both appeared in the
+random grids:
+
+1. The edge's x falls on the wrong side of the stem's. The xs on the line
+   are then out of the order the windings came from, and the runs and
+   the horizontal pieces on the line miss each other.
+2. The edge's x falls short of the stem's on the right side. The two
+   keep their order into the next strip, cross inside it, and the
+   crossing is never seen (each pair's crossings are found once).
+
+The test grids also showed a third case: a crossing within eps_y of a
+line (a stem against an edge 8e-11 tall) is not a strip of its own, so
+the pieces reach the line already crossed, by 4.8e-9, with both xs exact.
+
+### The fix
+
+`yol__order_xb()` runs on each strip's bottom line, in the strip's order.
+Two neighbors meet when they are out of order, or when their gap is
+within the larger of the two x uncertainties, each about the distance
+the piece's x moves when the line moves by eps_y: |dx/dy| at the
+piece's point on the line times eps_y, 0 for a vertical piece, at most
+its width; for a quadratic that ends on the line, where a horizontal
+tangent makes |dx/dy| infinite, its position at y - eps_y. Both take
+one x, and the next strip's top orders them by
+their bottoms, so the crossing swaps them. Which x:
+
+| Tried | Result on the 100 grids |
+|---|---|
+| Out-of-order pairs only, the x of the smaller \|dx/dy\| on the line (0 at a piece's end) | none refused; 92 with the wrong area, worst 0.19 (fault 2 left) |
+| Also pairs in order within \|dx/dy\| eps_y | none refused; 37 with the wrong area, worst 1.2e-9 (the third case: the stem moved to the edge's end) |
+| Only pairs within \|dx/dy\| eps_y, in either order; wider inversions kept | 54 refused (the third case: \|dx/dy\| is 0 at the edge's end) |
+| Kept: any inversion, and pairs within the x uncertainty (first from positions at y +- eps_y, then as above); the piece that goes on keeps its x, else the smaller uncertainty | none refused, area within 2.8e-16 |
+
+A piece that ends on the line moves only its end: a jog of no area along
+the line, which the horizontal boundary there absorbs. Moving the piece
+that goes on moves its next run's start, and in the third case left a
+sliver 4.8e-9 wide along a whole stem (area 1.2e-9). Earlier pairs that
+are now above the new x take it too, so the xs never decrease.
+
+`tests/adapt/outline_test.c` has the grids (T7): the test glyph itself
+and 99 random ones, 400 with --long, each resolved and its area checked
+against the reference. v0.3.0 fails it on every compiler. Mutants 70
+(no reconciling), 71 (pairs in order not met) and 72 (the piece that goes
+on moves) are caught.
+
+### Cost
+
+Work counts, stroking every Segoe UI glyph at 0.08 em: the same
+crossings (571,913), strips (784,550) and piece positions (11.5 million)
+with and without the fix; 312,746 pairs met. The first fix computed both
+uncertainties for every adjacent pair in order, 7.9 million pairs a font;
+a bound per piece, computed once (`yol__xt()`: a monotone quadratic's
+|dx/dy| is largest at an end), leaves 0.53 million.
+
+`examples/outline/bench.c`, MinGW-w64 gcc 16.1 -O2, the Windows 11 laptop
+on AC under the guard, 3 rounds a run, runs interleaved, us a glyph:
+
+| Row | v0.3.0 | v0.3.1 | v0.3.1 without the fix |
+|---|---|---|---|
+| Segoe UI set, resolved | 22.9, 22.9 | 24.1, 24.5 | 35.7, 22.9 |
+| Nirmala UI set, resolved | 84.8, 92.5 | 94.5, 103.4 | 90.9, 87.1 |
+| Microsoft YaHei set, resolved | 57.6, 60.9 | 62.0, 63.1 | 58.7, 60.3 |
+| Source Han Sans JP set, resolved | 89.5, 113.0 | 105.7, 97.1 | 88.3, 103.4 |
+| Segoe UI stroke, 0.08 em | 296, 291 | 332, 297 | 278, 291 |
+| Microsoft YaHei stroke, 0.08 em | 768, 776 | 845, 812 | 747, 752 |
+
+The set rows move by 10 percent between runs of one build (Segoe UI
+without the fix: 35.7, then 22.9). The strokes are 2 to 12 percent
+slower; the CJK stroke stays under its 1 ms bar, and the Latin stroke was
+over its 200 us bar before. With both uncertainties for every pair, the
+strokes were 12 to 21 percent slower (Segoe UI 336, 351; YaHei 928, 962
+against 301, 302 and 791, 793 in the same session).
 
 ## Next
 

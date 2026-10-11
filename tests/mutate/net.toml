@@ -154,7 +154,7 @@ name = "the remote stamp read as local"
 test = "net"
 why = "Without liblsl's offset a remote sender's stamps are on another clock: seconds off."
 find = '''    if (in->st.remote.ready && in->have_rorigin) return yrt_fit_map(&in->remote, ynet__ticks(s, in->rorigin_s));
-    if (in->have_offset) return yrt_fit_map(&in->local, ynet__ticks(s + in->st.lsl_offset_s, in->origin_s));'''
+    if (in->have_offset) return yrt_fit_map(&in->local, ynet__ticks(s + (double)in->st.lsl_offset_ns * 1e-9, in->origin_s));'''
 replace = '''    if (in->have_offset) return yrt_fit_map(&in->local, ynet__ticks(s, in->origin_s));'''
 
 [[mutant]]
@@ -184,3 +184,11 @@ test = "net"
 why = "A wrong stream never runs: the wait must end at once with the reason."
 find = '''        if (s == YNET_FAILED || s == YNET_CLOSED) return ynet__wait_fail(in, YNET_ERR_STATE, s);'''
 replace = '''        if (s == YNET_CLOSED) return ynet__wait_fail(in, YNET_ERR_STATE, s);'''
+
+[[mutant]]
+id = "net-20"
+name = "liblsl's correction truncated, not rounded"
+test = "net"
+why = "v0.3.0: the offset and the round trip are rounded to the nearest ns at the liblsl call; truncation moves a negative offset toward 0."
+find = 'static int64_t ynet__ns(double s) { return (int64_t)llround(s * 1e9); }'
+replace = 'static int64_t ynet__ns(double s) { return (int64_t)(s * 1e9); }'

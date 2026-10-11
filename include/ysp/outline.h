@@ -1,4 +1,4 @@
-/* ysp/outline.h - v0.3.0 - public domain single-header outline builder:
+/* ysp/outline.h - v0.3.1 - public domain single-header outline builder:
  *   paths, font outlines, overlap removal, strokes, exact alpha and curve
  *   sets for ysp/gfx.h
  *
@@ -307,7 +307,17 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
- *   v0.3.0 - The ysp conventions (README.md, Conventions); breaks the API.
+ *   v0.3.1 - Fixed: yol_resolve() failed "the boundary does not close" on
+ *          strokes that cross an edge a few float ulps from horizontal (a
+ *          rectangle whose start is rounded to float and whose other
+ *          corners are not). Such an edge's x on a strip line is off by
+ *          its |dx/dy| times the line's rounding, past the 1e-9 merge.
+ *          Neighbors on a strip's bottom line that are out of order, or
+ *          closer than either one's x moves in eps_y of y, now meet at the
+ *          x of the piece that moves less. Found by gfx_test under gcc
+ *          11.4 -O3 (Ubuntu 22.04), which drops the caller's (float) casts
+ *          before the inlined yol_line() (docs/outline.md, "v0.3.1").
+ *   v0.3.0 -The ysp conventions (README.md, Conventions); breaks the API.
  *          The context opens and closes: yol_init() is bool yol_open(),
  *          yol_free() is yol_close(). The path builder's yol_close() (SVG's
  *          Z) is yol_close_path(). yol_font_open() is yol_font_view(): it
@@ -389,8 +399,8 @@ extern "C" {
 
 #define YOL_VERSION_MAJOR  0
 #define YOL_VERSION_MINOR  3
-#define YOL_VERSION_PATCH  0
-#define YOL_VERSION_STRING "0.3.0"
+#define YOL_VERSION_PATCH  1
+#define YOL_VERSION_STRING "0.3.1"
 
 /* YOL_VERSION_STRING, as compiled into the implementation. */
 YOL_API const char* yol_version(void);
@@ -2112,7 +2122,8 @@ static void yol__kv_sort(yol__kv* a, size_t n) {
  * of a straight segment, so its sub-runs keep control == start. */
 typedef struct yol__pc {
     double x0, y0, x1, y1, x2, y2;
-    int8_t dir; uint8_t set, line, pad0; int32_t pad1;
+    int8_t dir; uint8_t set, line, pad0;
+    float xt;                   /* at most how far x moves for eps_y of y      */
 } yol__pc;
 
 /* Per piece sweep state: the position at the last strip line, and the open
@@ -2180,7 +2191,7 @@ static int yol__add_piece(yol__sw* w, const double* q, int8_t dir, int set, int 
     p = &w->pc[w->npc++];
     if (dir > 0) { p->x0 = q[0]; p->y0 = q[1]; p->x1 = q[2]; p->y1 = q[3]; p->x2 = q[4]; p->y2 = q[5]; }
     else { p->x0 = q[4]; p->y0 = q[5]; p->x1 = q[2]; p->y1 = q[3]; p->x2 = q[0]; p->y2 = q[1]; }
-    p->dir = dir; p->set = (uint8_t)set; p->line = (uint8_t)line; p->pad0 = 0; p->pad1 = 0;
+    p->dir = dir; p->set = (uint8_t)set; p->line = (uint8_t)line; p->pad0 = 0; p->xt = 0;
     return YOL_OK;
 }
 
@@ -2646,6 +2657,78 @@ static int yol__act_after(const yol__sw* w, yol__act* a, yol__act* b, double ym)
     return a->i > b->i;
 }
 
+/* How far a piece's x on the line yb moves when yb moves by eps_y: the
+ * sweep's uncertainty of that x. |dx/dy| eps_y, 0 for a vertical piece, at
+ * most the piece's width. A quadratic's |dx/dy| at its t on the line,
+ * except at its end, where a horizontal tangent makes it infinite: there
+ * one position at yb - eps_y. Two positions for every pair (the first
+ * version) made Segoe UI's resolve 30 to 60 percent slower. */
+static double yol__xtol(const yol__sw* w, const yol__act* a, double yb) {
+    const yol__pc* q = &w->pc[a->i];
+    double t = a->tb, dx, dy, width = fabs(q->x2 - q->x0);
+    if (q->line) { dx = q->x2 - q->x0; dy = q->y2 - q->y0; }
+    else if (t >= 1) {
+        double x;
+        yol__pos(q, yb - w->eps_y, &t, &x);
+        return fabs(x - a->xb);
+    } else {
+        dx = (1 - t) * (q->x1 - q->x0) + t * (q->x2 - q->x1);
+        dy = (1 - t) * (q->y1 - q->y0) + t * (q->y2 - q->y1);
+    }
+    return dy > 0 ? fmin(fabs(dx) / dy * w->eps_y, width) : width;
+}
+
+/* yol__xtol()'s bound for a whole piece, once: a monotone quadratic's
+ * |dx/dy| is largest at an end. order_xb() skips a pair farther apart than
+ * both bounds without the divisions: stroking every Segoe UI glyph, 7.9
+ * million pairs reached them (0.5 million with the bound); the stroke
+ * took 12 to 21 percent longer than v0.3.0 with them, 2 to 12 with the
+ * bound (docs/outline.md, "v0.3.1"). */
+static double yol__xt(const yol__sw* w, const yol__pc* q) {
+    double width = fabs(q->x2 - q->x0), d0, d1;
+    if (q->line) return fmin(width / (q->y2 - q->y0) * w->eps_y, width) * 1.0001;
+    d0 = q->y1 > q->y0 ? fabs(q->x1 - q->x0) / (q->y1 - q->y0) : HUGE_VAL;
+    d1 = q->y2 > q->y1 ? fabs(q->x2 - q->x1) / (q->y2 - q->y1) : HUGE_VAL;
+    return fmin(fmax(d0, d1) * w->eps_y, width) * 1.0001;
+}
+
+/* The xs on a strip's bottom line yb, in the strip's order. A nearly
+ * horizontal piece's x there is off by its |dx/dy| times the error of yb:
+ * at a crossing with a stem, 8.6e-10 for an edge 1.7e-8 tall and 0.8
+ * wide, past eps_x (8.5e-10 there). A crossing within eps_y of the line is not a strip of its own, so
+ * two pieces can also reach the line already crossed. Then the xs are out
+ * of the order that the windings came from, or the two pieces keep their
+ * order into the next strip and cross inside it unseen; either way their
+ * runs miss each other and the boundary does not close (v0.3.0). So two
+ * neighbors out of order, or closer than either one's x moves in eps_y of
+ * y, meet: both take the x of the one that moves less if moved. A piece
+ * that ends on the line moves only its end, a jog of no area along the
+ * line; a piece that goes on moves its next run's start. Then the xs never
+ * decrease in the strip's order. */
+static void yol__order_xb(const yol__sw* w, yol__act* act, size_t n, double yb) {
+    size_t i, k;
+    for (i = 1; i < n; i++) {
+        yol__act *a = &act[i - 1], *b = &act[i];
+        double gap = b->xb - a->xb, ta = -1, tb = -1, v;
+        int ea, eb;
+        if (gap == 0) continue;
+        if (gap > 0) {
+            if (gap > fmax((double)w->pc[a->i].xt, (double)w->pc[b->i].xt)) continue;
+            ta = yol__xtol(w, a, yb);
+            tb = yol__xtol(w, b, yb);
+            if (gap > fmax(ta, tb)) continue;
+        }
+        ea = a->tb >= 1; eb = b->tb >= 1;
+        if (ea != eb) v = ea ? b->xb : a->xb;
+        else {
+            if (ta < 0) { ta = yol__xtol(w, a, yb); tb = yol__xtol(w, b, yb); }
+            v = tb <= ta ? b->xb : a->xb;
+        }
+        a->xb = b->xb = v;
+        for (k = i - 1; k-- > 0 && act[k].xb > v;) act[k].xb = v;
+    }
+}
+
 /* The sweep: the region of A (rule) op B as closed contours in out. */
 static int yol__sweep(yol_ctx* c, const yol_path* A, int rule, const yol_path* B, int op, yol_path* out) {
     yol__sw w;
@@ -2708,6 +2791,7 @@ static int yol__sweep(yol_ctx* c, const yol_path* A, int rule, const yol_path* B
             if (q->y0 == q->y2) { q->dir = 0; continue; }
             if (q->y1 < q->y0) q->y1 = q->y0;
             if (q->y1 > q->y2) q->y1 = q->y2;
+            q->xt = (float)yol__xt(&w, q);
             m++;
         }
         if (m == 0) return yol__chain(&w, &o, out);
@@ -2798,6 +2882,7 @@ static int yol__sweep(yol_ctx* c, const yol_path* A, int rule, const yol_path* B
             }
             if (!shrunk || it > nlive + 2) break;
         }
+        yol__order_xb(&w, act, nlive, yb);
         /* coincident pieces act as one edge with their summed directions */
         for (i = 0; i < nlive;) {
             size_t g = i + 1, m;

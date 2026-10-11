@@ -368,7 +368,7 @@ int main(int argc, char** argv) {
 
     printf("Data stream: %s, %llu samples, %.1f Hz, gaps %llu (%llu missing), offset %+.6f s, rtt %.1f us, "
            "fit %+.2f ppm over %u points\n", ynet_state_name(st.state), (unsigned long long)st.samples, st.measured_hz,
-           (unsigned long long)st.gaps, (unsigned long long)st.missing, st.lsl_offset_s, st.lsl_rtt_s * 1e6, st.remote.ppm,
+           (unsigned long long)st.gaps, (unsigned long long)st.missing, (double)st.lsl_offset_ns / 1e9, (double)st.lsl_rtt_ns / 1e3, st.remote.ppm,
            (unsigned)st.remote.points);
 
     if (csv) fprintf(csv, "frame,level,onset_ns,stamp_ns,marker_lsl_s,edge_ns,edge_minus_onset_us,edge_minus_stamp_us,"

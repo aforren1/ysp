@@ -1148,6 +1148,51 @@ static void t7_resolve(void) {
     CHECK(yol_resolve(&g_cx, &p, &r) == YOL_OK && yol_path_area(&r) == 16 && r.n_contours == 1);
     /* in place */
     CHECK(yol_resolve(&g_cx, &p, &p) == YOL_OK && yol_path_area(&p) == 16 && (p.flags & YOL_PATH_RESOLVED));
+    /* v0.3.1: crossing strokes whose edges are a few ulps of float from
+     * horizontal or vertical (each start rounded to float, the other corners
+     * not: the path gcc 11.4 -O3 built from gfx_test's grid glyph). A nearly
+     * horizontal edge's x at a crossing is off by its |dx/dy| times y's
+     * rounding, past eps_x; v0.3.0 failed "the boundary does not close". */
+    {
+        int g, ng = g_long ? 400 : 100, bad = 0, nbad_area = 0;
+        double worst_g = 0;
+        for (g = 0; g < ng; g++) {
+            int i;
+            double ref, area, miny = 1e9, maxy = -1e9;
+            yol_path_clear(&p);
+            for (i = 0; i < 4; i++) {
+                /* g 0: the glyph itself; then random bars across random stems */
+                double x0, y0, x1, y1;
+                if (g == 0) {
+                    x0 = i < 2 ? 0.05 : 0.2 + (i - 2) * 0.4; x1 = i < 2 ? 0.85 : 0.27 + (i - 2) * 0.4;
+                    y0 = i < 2 ? -0.65 + i * 0.4 : -0.8; y1 = i < 2 ? -0.58 + i * 0.4 : 0.0;
+                } else if (i < 2) {
+                    x0 = 0.1 * rnd(); x1 = 0.8 + 0.2 * rnd(); y0 = rnd() * 0.8; y1 = y0 + 0.02 + 0.1 * rnd();
+                } else {
+                    y0 = 0.1 * rnd(); y1 = 0.8 + 0.2 * rnd(); x0 = rnd() * 0.8; x1 = x0 + 0.02 + 0.1 * rnd();
+                }
+                yol_move(&p, (float)x0, (float)y0);
+                yol_line(&p, x1, y0); yol_line(&p, x1, y1); yol_line(&p, x0, y1); yol_line(&p, x0, y0);
+                yol_close_path(&p);
+            }
+            yol_path_end(&p);
+            k = yol_resolve(&g_cx, &p, &r);
+            if (k != YOL_OK) {
+                if (bad++ < 3) fprintf(stderr, "T7 grid %d: %s\n", g, yol_error(&g_cx));
+                continue;
+            }
+            path_quads(&p, &bi, 1, 0, 0);
+            for (i = 0; i < p.n_pts; i++) { miny = fmin(miny, p.pts[2 * i + 1]); maxy = fmax(maxy, p.pts[2 * i + 1]); }
+            ref = ref_integral(&bi, -1e9, 1e9, miny - 0.01, maxy + 0.01, YOL_NONZERO, 1e-13);
+            area = yol_path_area(&r);
+            worst_g = fmax(worst_g, fabs(area - ref));
+            if (!(fabs(area - ref) <= 1e-12) || !path_closed(&r))
+                if (nbad_area++ < 3) fprintf(stderr, "T7 grid %d: area %.17g, reference %.17g\n", g, area, ref);
+        }
+        CHECKF(bad == 0, "%d of %d grids not resolved", bad, ng);
+        CHECKF(nbad_area == 0, "%d grids with the wrong area", nbad_area);
+        printf("T7 resolve: %d grids with float-rounded starts, %d refused, area within %.2g of the reference\n", ng, bad, worst_g);
+    }
     /* the work bound: 600 random chords cross about 90000 times */
     yol_path_clear(&p);
     yol_move(&p, 0, 0);

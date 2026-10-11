@@ -1,6 +1,6 @@
 # ysp/net.h
 
-Status: v0.2.0, 2026-10-10 (v0.1.0, 2026-10-09, for the measurements). Lab Streaming Layer (LSL) outlets and inlets on
+Status: v0.3.0, 2026-10-10 (v0.1.0, 2026-10-09, for the measurements). Lab Streaming Layer (LSL) outlets and inlets on
 the ysp_rt clock, with liblsl loaded at run time. This is step 4 of
 `docs/devices_spec.md` section 14.2 and the LSL part of `docs/rig_spec.md`
 4.7. The header's manual is the reference; this page has the decisions,
@@ -162,6 +162,32 @@ inlet, on a wrong stream at once with its reason, and a timeout with nobody
 sending). `tests/compile/net.c` names every entry point by type. Mutants
 `net-18` (the inlet keeps the caller's key) and `net-19` (a FAILED wait
 waits out its timeout) are new; both were caught.
+
+### liblsl's time correction in nanoseconds (v0.3.0)
+
+The user decided on 2026-10-10 that `ynet_stats.lsl_offset_s` and
+`lsl_rtt_s` become `int64_t` ns, as every other time in a C API
+(conventions.md, Units). It breaks the API; the struct keeps its size and
+layout (two 8-byte fields).
+
+| Question | Decision | Why |
+|---|---|---|
+| Names | `lsl_offset_ns`, `lsl_rtt_ns` | `lsl_` still says whose numbers they are: a difference between two LSL clocks and liblsl's round trip, not ysp_rt times. `_ns` says the unit |
+| Rounding | `llround(s * 1e9)` at the `lsl_time_correction_ex()` call, once | To nearest, and symmetric for a negative offset. The old record payload truncated (`(int64_t)(off * 1e9)`), so a negative offset was off by up to 1 ns toward 0; the YNET_REC_OFFSET record now carries the same rounded value as the stats |
+| The maps | The stamp plus `lsl_offset_ns * 1e-9` | The local map read the double before; the rounded value moves a mapped time by at most 0.5 ns, below the fit's own step (1 ns ticks) |
+| The stamps and `lsl_max_buflen` | Unchanged: double seconds, liblsl's units | They are values on liblsl's clock and liblsl's own parameter (conventions.md keeps them as the exception) |
+
+Checked on 2026-10-10: `tests/adapt/net_test.c` compares both fields with
+`llround()` of the fake liblsl's last estimate (362 checks); the compile
+check takes their addresses as `const int64_t*`, an error for a `double`.
+The readers (`examples/net/stream_view.c`, `labstreamer_flip.c`,
+`tests/loopback/net_loopback.c`) print them as before, from ns.
+`tests/loopback/net_loopback.c --two --seconds 10` against liblsl 1.17.7
+(Windows 11, MSVC 19.44 Release, on the guard) passed: offset -23.0 and
+-16.4 us, round trip 100.0 and 92.9 us (one and two processes), mapping
+error -35.1 to +6.9 us (v0.1.0: -39 to +68 us). Mutant `net-20`
+(truncation, not rounding) is caught, and `net-16`, whose anchor moved,
+still is.
 
 ## The LabStreamer
 

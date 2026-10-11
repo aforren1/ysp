@@ -70,7 +70,13 @@
 static const char conditions_csv[] = "target\ncircle\nsquare\n";
 
 /* --sim: three keyboards, and presses at `at` s from the target's onset
- * (setup presses: from the start of setup); dev 0 is the message path */
+ * (setup presses: from the start of setup); dev 0 is the message path.
+ * A press at or after the onset is queued when the target's flip record
+ * comes, from the record's onset: a loaded host plans later vblanks while
+ * the frame loop is behind (measured: the target up to 550 ms after the
+ * fixation's onset plus its frames), and presses timed from that sum came
+ * early. An early press is queued at the fixation, from that sum: the
+ * onset is never sooner, so the press stays early. */
 enum { P1 = 65601, P2 = 65659, OTHER = 65599 };
 typedef struct sim_press { int trial; double at; uint32_t dev; const char* key; } sim_press;
 #define SETUP (-1)
@@ -145,10 +151,12 @@ static void sim_add(int64_t t, uint32_t dev, const char* key) {
     }
 }
 
-static void sim_queue(int trial, int64_t t0) {
+/* the trial's presses before t0 (early) or from t0 on */
+static void sim_queue(int trial, int64_t t0, int early) {
     int k;
     for (k = 0; k < N_SIM; k++)
-        if (sim_script[k].trial == trial) sim_add(t0 + NS(sim_script[k].at), sim_script[k].dev, sim_script[k].key);
+        if (sim_script[k].trial == trial && (sim_script[k].at < 0) == (early != 0))
+            sim_add(t0 + NS(sim_script[k].at), sim_script[k].dev, sim_script[k].key);
 }
 
 static void sec(char* out, size_t cap, double s) {
@@ -246,7 +254,7 @@ int main(int argc, char** argv) {
         int rc = yscr_begin(&scr, &f), have;
         if (rc == YSCR_QUIT) { aborted = 1; break; }
         if (rc != YSCR_OK) { fprintf(stderr, "trial_two_keyboards: %s\n", yscr_error(&scr)); failed = 1; break; }
-        if (!t_state) { t_state = f.onset; if (sim) sim_queue(SETUP, f.onset); }
+        if (!t_state) { t_state = f.onset; if (sim) sim_queue(SETUP, f.onset, 0); }
 
         if (state == START && ready) {
             /* a new trial: fixation now, the target after the foreperiod */
@@ -257,7 +265,7 @@ int main(int argc, char** argv) {
             doubles0 = stat_of(0);
             ups0 = stat_of(1);
             n_other = n_dev0 = 0;
-            if (sim) sim_queue(ti.index, f.onset + n_frames * (f.period ? f.period : NS(1.0 / 60)));
+            if (sim) sim_queue(ti.index, f.onset + n_frames * (f.period ? f.period : NS(1.0 / 60)), 1);
             set_color(&bar[0], 0.35f, 0.35f, 0.35f);
             set_color(&bar[1], 0.35f, 0.35f, 0.35f);
             state = WAIT;
@@ -266,6 +274,7 @@ int main(int argc, char** argv) {
         for (i = 0; i < f.n_done; i++)
             if (state >= WAIT && f.done[i].index == target_frame) {
                 yrsp_onset o = yrsp_onset_flip(&f.done[i]);
+                if (sim && f.done[i].onset) sim_queue(ti.index, f.done[i].onset, 0);
                 for (p = 0; p < 2; p++) yrsp_set_onset(&rsp[p], &o);
             }
         if (state == WAIT && f.index == target_frame) {

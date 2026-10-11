@@ -110,7 +110,7 @@ int main(void) {
     }
     ygfx_capture_pump(&g, 0);
     if (ygfx_capture_stop(&g, &cs) != 3 || got != 3 || cs.chosen != 3) return 22;   /* frames 0, 1 (marked), 2 */
-    if (ygfx_image_write(NULL, YGFX_IMAGE_PNG, mask, 1, 1, 0, NULL, NULL, 0) != YGFX_ERR_ARG) return 23;
+    if (ygfx_image_write(NULL, mask, 1, 1, 0, NULL, NULL, 0) != YGFX_ERR_ARG) return 23;
     ygfx_texture_free(&g, t);
     ygfx_close(&g);
     yscr_close(&s);

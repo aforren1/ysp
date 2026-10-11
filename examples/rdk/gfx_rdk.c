@@ -408,7 +408,7 @@ int main(int argc, char** argv) {
             char path[512];
             snprintf(path, sizeof path, "%s-p%d.ppm", shots, page + 1);
             if (ygfx_read_output(&gfx, 0, 0, (int)scr_w, (int)scr_h, shot_px) < 0 ||
-                ygfx_image_write(path, YGFX_IMAGE_PPM, shot_px, (int)scr_w, (int)scr_h, 0, NULL, NULL, 0) < 0)
+                ygfx_image_write(path, shot_px, (int)scr_w, (int)scr_h, 0, NULL, NULL, 0) < 0)
                 fprintf(stderr, "gfx_rdk: could not write %s\n", path);
             else
                 printf("wrote %s\n", path);

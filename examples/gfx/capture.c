@@ -10,7 +10,7 @@
  *
  * Usage: gfx_capture [--sim] [--fullscreen] [--size W H] [--frames N]
  *                    [--off | --every N | --mark N] [--slots N]
- *                    [--out PREFIX] [--png] [--manual] [--gabors N]
+ *                    [--out PREFIX] [--manual] [--gabors N]
  *                    [--cache DIR] [--no-cache]
  *   --sim         no window and no GL: the simulated display and the null
  *                 backend (its frames are black), for CI
@@ -21,9 +21,8 @@
  *   --every N     capture frames whose index % N == 0 (default 1)
  *   --mark N      capture only the frames ygfx_capture_mark() marks: one in N
  *   --slots N     pixel buffers (default 6)
- *   --out PREFIX  write PREFIX<frame>.ppm (or .png); default: no files, the
- *                 writer only counts
- *   --png         PNG (stored) instead of PPM
+ *   --out PREFIX  write PREFIX<frame>.ppm; default: no files, the writer
+ *                 only counts
  *   --manual      no writer thread: ygfx_capture_pump() after the run
  *   --gabors N    gabors in the field (default 100)
  * Shift+Esc ends a run early. Exit code: 0; 1 when the screen or the gfx
@@ -79,7 +78,7 @@ int main(int argc, char** argv) {
     static char cache_dir[512];
     const ygfx_cache* cache = NULL;
     int64_t t0 = 0, period = 0;
-    int i, frames = 600, every = 1, mark = 0, off = 0, slots = 6, png = 0, manual = 0, n_gab = 100, no_cache = 0;
+    int i, frames = 600, every = 1, mark = 0, off = 0, slots = 6, manual = 0, n_gab = 100, no_cache = 0;
     int ran = 0, late = 0, dropped = 0, early = 0, estimated = 0, skipped = 0, long_iv = 0, n_iv = 0, bad = 0;
     const char* out = NULL;
     double iv_sum = 0, iv_sq = 0, iv_max = 0;
@@ -97,7 +96,6 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--mark") && i + 1 < argc) { mark = atoi(argv[++i]); every = 0; }
         else if (!strcmp(argv[i], "--slots") && i + 1 < argc) slots = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--out") && i + 1 < argc) out = argv[++i];
-        else if (!strcmp(argv[i], "--png")) png = 1;
         else if (!strcmp(argv[i], "--manual")) manual = 1;
         else if (!strcmp(argv[i], "--gabors") && i + 1 < argc) n_gab = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--cache") && i + 1 < argc && (cache = ygfx_file_cache_init(&pcache, argv[i + 1])) != NULL) i++;
@@ -107,7 +105,7 @@ int main(int argc, char** argv) {
     if (i < 0 || frames < 2 || frames > MAX_FRAMES || every < 0 || mark < 0 || (!every && !mark && !off) ||
         slots < 1 || slots > YGFX_CAPTURE_MAX_SLOTS || n_gab < 0 || n_gab > MAX_GABORS) {
         fprintf(stderr, "usage: gfx_capture [--sim] [--fullscreen] [--size W H] [--frames N] [--off | --every N | --mark N]\n"
-                        "                   [--slots N] [--out PREFIX] [--png] [--manual] [--gabors N] [--cache DIR] [--no-cache]\n");
+                        "                   [--slots N] [--out PREFIX] [--manual] [--gabors N] [--cache DIR] [--no-cache]\n");
         return 2;
     }
     if (no_cache) cache = NULL;
@@ -143,7 +141,6 @@ int main(int argc, char** argv) {
         cd.every = every;
         cd.slots = slots;
         cd.path = out;
-        cd.format = png ? YGFX_IMAGE_PNG : YGFX_IMAGE_PPM;
         cd.manual = manual != 0;
         if (ygfx_capture_start(&gfx, &cd) != YGFX_OK) {
             fprintf(stderr, "gfx_capture: %s\n", ygfx_error(&gfx));
@@ -223,7 +220,7 @@ int main(int argc, char** argv) {
                sd.backend == YSCR_BACKEND_SIM ? "sim" : sd.windowed ? "windowed" : "fullscreen", ran, n_recs, late, dropped,
                early, estimated, skipped, mean, sd2 > 0 ? sqrt(sd2) : 0.0, iv_max, long_iv,
                end_us[ran / 2], end_us[(int)(0.99 * (ran - 1))], end_us[ran - 1],
-               off ? "off" : out ? (png ? "png" : "ppm") : "no-files", every, mark, slots,
+               off ? "off" : out ? "ppm" : "no-files", every, mark, slots,
                (unsigned long long)st.chosen, (unsigned long long)st.read, (unsigned long long)st.dropped,
                (unsigned long long)st.written, (unsigned long long)st.failed, (unsigned long long)st.no_record, st.busy_max);
     }

@@ -39,9 +39,15 @@
  *
  * --sim: the simulated display and the null backend for 2 s. It checks
  * that no draw was refused, that tile 1's contrast on each frame was
- * 0.5 cos(2 pi f t) at the frame's planned onset (within 1e-6), and that
- * the achieved f equals --tf (the simulated display drops nothing). Exits
- * 1 on a mismatch.
+ * 0.5 cos(2 pi f t) at the frame's planned onset (within 1e-6), that no
+ * flip dropped a vblank (the simulated display drops nothing), and that
+ * the achieved f of the frames shown on time equals --tf. A frame whose
+ * flip came after its vblank (LATE_TARGET: a loaded host) shows a vblank
+ * later than begin() predicted, so it is counted, not fitted. Under 12
+ * CPU-bound processes 1 run in 10 missed --tf by 8e-4 with no drop
+ * (2026-10-10); with the late and off-plan counts printed, 0 of 60 runs
+ * failed or had a late frame, so that run's cause is not confirmed.
+ * Exits 1 on a mismatch.
  *
  * Usage: gfx_gratings [--sim] [--fullscreen] [--seconds S] [--tf HZ]
  *   --seconds S  run S seconds, then report (default: until Shift+Esc)
@@ -156,9 +162,13 @@ int main(int argc, char** argv) {
     yscr_frame f;
     ytl_event fired[8];
     double tf = 4.0, seconds = 0, worst = 0, tf_ach = NAN;
-    int i, sim = 0, fullscreen = 0, refused = 0, dropped = 0, frames = 0, rc, first = 1;
+    int i, sim = 0, fullscreen = 0, refused = 0, dropped = 0, late = 0, frames = 0, rc, first = 1;
     int64_t t0 = 0, x0 = 0, y0 = 0;
     double sx = 0, sy = 0, sxx = 0, sxy = 0, nfit = 0;   /* x a flip's measured onset, y its planned one */
+    double ox = 0, oy = 0, oxx = 0, oxy = 0, nok = 0, tf_ok = NAN;   /* the same, frames shown on time */
+    int off = 0;                      /* on time by the flags, yet not at the planned onset */
+    unsigned off_flags = 0;
+    int64_t off_ns = 0;
     ygfx_tex target, mask;
 
     memset(&sd, 0, sizeof sd);
@@ -271,6 +281,12 @@ int main(int argc, char** argv) {
             y = (double)(planned[r->index % RING] - y0) * 1e-9;
             sx += x; sy += y; sxx += x * x; sxy += x * y; nfit++;
             dropped += r->dropped ? 1 : 0;
+            if (r->flags & YSCR_FLIP_LATE_TARGET) late++;
+            else if (!r->dropped) { ox += x; oy += y; oxx += x * x; oxy += x * y; nok++; }
+            if (!(r->flags & YSCR_FLIP_LATE_TARGET) && !r->dropped && r->onset != planned[r->index % RING] && !off++) {
+                off_flags = r->flags;
+                off_ns = r->onset - planned[r->index % RING];
+            }
         }
         ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, fired, 8);
         ygfx_apply(binds, (int)(sizeof binds / sizeof binds[0]), ytl_values(&tl));
@@ -303,14 +319,16 @@ int main(int argc, char** argv) {
     /* the achieved frequency: the phase drawn against the time it was on the screen */
     if (nfit > 2 && nfit * sxx - sx * sx > 0) {
         tf_ach = tf * (nfit * sxy - sx * sy) / (nfit * sxx - sx * sx);
-        printf("counterphase: %.6f Hz achieved for %.6f Hz asked (%.0f flip records, %d with dropped vblanks); "
-               "the track's largest error %.2e\n", tf_ach, tf, nfit, dropped, worst);
+        printf("counterphase: %.6f Hz achieved for %.6f Hz asked (%.0f flip records, %d with dropped vblanks, %d late, %d off plan); "
+               "the track's largest error %.2e\n", tf_ach, tf, nfit, dropped, late, off, worst);
     } else printf("counterphase: too few flip records to measure\n");
     printf("%d frames, %d draws refused\n", frames, refused);
     if (refused) return 1;
-    if (sim && (!(fabs(tf_ach - tf) <= 1e-9 * tf) || worst > 1e-6 || dropped)) {
-        fprintf(stderr, "gfx_gratings: --sim: achieved %.9f Hz for %.9f, track error %.2e, %d drops\n", tf_ach, tf,
-                worst, dropped);
+    if (nok > 2 && nok * oxx - ox * ox > 0) tf_ok = tf * (nok * oxy - ox * oy) / (nok * oxx - ox * ox);
+    if (sim && (!(fabs(tf_ok - tf) <= 1e-9 * tf) || worst > 1e-6 || dropped)) {
+        fprintf(stderr, "gfx_gratings: --sim: achieved %.9f Hz on time (%.0f frames; %.9f with %d late) for %.9f, "
+                "track error %.2e, %d drops; %d off their plan (first: flags 0x%x, %+lld ns)\n", tf_ok, nok, tf_ach, late, tf,
+                worst, dropped, off, off_flags, (long long)off_ns);
         return 1;
     }
     if (sim) printf("--sim: the track and the achieved frequency as planned\n");

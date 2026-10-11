@@ -1,4 +1,4 @@
-/* ysp/net.h - v0.2.0 - public domain single-header Lab Streaming Layer glue
+/* ysp/net.h - v0.3.0 - public domain single-header Lab Streaming Layer glue
  *
  *   Lab Streaming Layer (LSL) on the ysp_rt clock: marker outlets for a
  *   rig's event codes and text, numeric outlets, and inlets that resolve a
@@ -214,9 +214,10 @@
  *   desc.lsl_max_buflen is liblsl's max_buflen, passed as given: seconds
  *   of data (or hundreds of samples for an irregular stream) that liblsl
  *   keeps for the inlet, 0 = 30. It is an LSL protocol value, like the
- *   lsl_ stamps (double seconds on liblsl's clock) and lsl_offset_s and
- *   lsl_rtt_s in ynet_stats (liblsl's newest time correction); every
- *   other time is int64_t ns on the ysp_rt clock.
+ *   lsl_ stamps (double seconds on liblsl's clock); every other time is
+ *   int64_t ns. ynet_stats.lsl_offset_ns and lsl_rtt_ns are liblsl's newest
+ *   time correction, rounded to the nearest ns: a difference between two
+ *   LSL clocks and a round trip, not ysp_rt times.
  *
  *   ---------------------------------------------------------------------
  *   GLUE
@@ -231,7 +232,13 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
- *   v0.2.0 - The ysp conventions (README.md, Conventions); breaks the API.
+ *   v0.3.0 - ynet_stats.lsl_offset_s and lsl_rtt_s (double seconds) are
+ *          lsl_offset_ns and lsl_rtt_ns (int64_t, rounded to the nearest
+ *          ns at the liblsl call): every time in the C API is int64_t ns
+ *          (README.md, Conventions). The YNET_REC_OFFSET record's offset
+ *          is the same rounded value (it was truncated). Breaks the API;
+ *          the struct's size and layout do not change.
+ *   v0.2.0 -The ysp conventions (README.md, Conventions); breaks the API.
  *          ynet_lsl_load() and ynet_lsl_unload() are bool ynet_lsl_open()
  *          and void ynet_lsl_close(), with ynet_lsl_error() (do not read
  *          lib.error). ynet_outlet_start/stop() and ynet_inlet_start/stop()
@@ -270,9 +277,9 @@
 #define YSP_NET_H_INCLUDED
 
 #define YNET_VERSION_MAJOR 0
-#define YNET_VERSION_MINOR 2
+#define YNET_VERSION_MINOR 3
 #define YNET_VERSION_PATCH 0
-#define YNET_VERSION_STRING "0.2.0"
+#define YNET_VERSION_STRING "0.3.0"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -571,7 +578,10 @@ typedef struct ynet_stats {
     uint64_t     resolves, ambiguous, corrections, refused;
     int64_t      last_rx_ns;         /* ysp_rt time of the last arrival        */
     int64_t      busy_ns;            /* time the reader spent on samples       */
-    double       lsl_offset_s, lsl_rtt_s; /* liblsl's newest time correction (s) */
+    int64_t      lsl_offset_ns;      /* liblsl's newest time correction: the
+                                      * sender's LSL clock to this machine's,
+                                      * rounded to the nearest ns             */
+    int64_t      lsl_rtt_ns;         /* its round trip (liblsl's uncertainty) */
     double       rate_hz;            /* nominal                                */
     double       measured_hz;        /* samples in the last whole second       */
     int          format, channels;
@@ -1075,6 +1085,10 @@ YNET_API bool ynet_stream_newest(ynet_stream* s, int64_t* t, double* lsl, float*
  * origin stay positive: 10^15 ns is 11.6 days. */
 #define YNET__BIAS 1000000000000000LL
 
+/* liblsl's double seconds to int64_t ns, to nearest (llround, so a
+ * negative offset rounds as a positive one does). */
+static int64_t ynet__ns(double s) { return (int64_t)llround(s * 1e9); }
+
 static uint64_t ynet__ticks(double s, double origin) {
     double v = (s - origin) * 1e9 + (double)YNET__BIAS;
     if (v < 0) v = 0;
@@ -1387,7 +1401,7 @@ static void ynet__refresh(ynet_inlet* in) {
     yrt_fit_get(&in->local, &in->st.local);
     yrt_fit_get(&in->remote, &in->st.remote);
     {
-        int64_t half = (int64_t)(in->st.lsl_rtt_s * 0.5e9);
+        int64_t half = in->st.lsl_rtt_ns / 2;
         int64_t r = in->st.remote.ready && in->st.remote.spread_ns > half ? in->st.remote.spread_ns : half;
         in->unc_ns = r + in->st.local.width_ns;
     }
@@ -1434,18 +1448,18 @@ static void ynet__correct(ynet_inlet* in, double timeout_s) {
     if (ec != 0 || remote == 0.0) return;
     if (in->have_offset && remote == in->last_remote) return;   /* liblsl's cached estimate */
     in->last_remote = remote;
-    in->st.lsl_offset_s = off;
-    in->st.lsl_rtt_s = unc;
+    in->st.lsl_offset_ns = ynet__ns(off);
+    in->st.lsl_rtt_ns = ynet__ns(unc);
     in->have_offset = 1;
     in->st.corrections++;
     if (!in->have_rorigin) { in->rorigin_s = remote; in->have_rorigin = 1; }
-    w = (int64_t)(unc * 1e9 + 0.5);
+    w = in->st.lsl_rtt_ns;
     host = yrt_fit_map(&in->local, ynet__ticks(remote + off, in->origin_s));
     if (w > in->d.max_unc_ns) in->st.refused++;
     else (void)yrt_fit_add(&in->remote, ynet__ticks(remote, in->rorigin_s), host, 0);
     memset(&u, 0, sizeof u);
     u.i64[0] = (int64_t)(remote * 1e9);
-    u.i64[1] = (int64_t)(off * 1e9);
+    u.i64[1] = in->st.lsl_offset_ns;
     u.i64[2] = w;
     u.i64[3] = host;
     ynet__irec(in, (uint16_t)YNET_REC_OFFSET, t, &u);
@@ -1455,7 +1469,7 @@ static void ynet__correct(ynet_inlet* in, double timeout_s) {
 /* A stamp of the stream on ysp_rt: 0 when nothing maps it yet. */
 static int64_t ynet__map(const ynet_inlet* in, double s) {
     if (in->st.remote.ready && in->have_rorigin) return yrt_fit_map(&in->remote, ynet__ticks(s, in->rorigin_s));
-    if (in->have_offset) return yrt_fit_map(&in->local, ynet__ticks(s + in->st.lsl_offset_s, in->origin_s));
+    if (in->have_offset) return yrt_fit_map(&in->local, ynet__ticks(s + (double)in->st.lsl_offset_ns * 1e-9, in->origin_s));
     return 0;
 }
 
@@ -1947,7 +1961,7 @@ YNET_API int64_t ynet_inlet_map(ynet_inlet* in, double lsl_s) {
     lo = in->snap_origin;
     ynet__unlock(ynet__imx(in));
     if (s.remote.ready) r = ynet__info_map(&s.remote, ynet__ticks(lsl_s, ro));
-    else if (s.corrections && s.local.ready) r = ynet__info_map(&s.local, ynet__ticks(lsl_s + s.lsl_offset_s, lo));
+    else if (s.corrections && s.local.ready) r = ynet__info_map(&s.local, ynet__ticks(lsl_s + (double)s.lsl_offset_ns * 1e-9, lo));
     return r;
 }
 

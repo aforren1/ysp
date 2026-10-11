@@ -14,7 +14,13 @@ Run a program from the build folder (`build/<preset>/Release/` with MSVC,
 `build/<preset>/` otherwise). "Needs" says what a run needs beyond the
 build: SDL3 (a window), ANGLE (GL ES on Windows), a font, a device, or
 nothing. `--sim` runs a windowed example on the simulated display, which
-needs nothing; CI runs the commands marked "CI".
+needs nothing; CI runs the commands marked "CI". The simulated display
+runs on the host's clock: while a loaded host's frame loop is behind,
+`yscr_begin()` plans later vblanks, as on a real display. So a `--sim`
+script times its synthetic input from the stimulus's flip record, not
+from a frame count, and checks onsets to whole periods (measured
+2026-10-10 under 12 CPU-bound processes: a target up to 550 ms after its
+frame count's time).
 
 ## aep
 
@@ -67,7 +73,7 @@ needs nothing; CI runs the commands marked "CI".
 | `gfx_clut_sync` | Psychtoolbox's ClutAnimDemo and SyncedCLUTUpdateTest: a palette turned by `ygfx_set_lut()` each frame, a cancel test (image and table swapped on the same flip), both read back; then the OS gamma ramp set once a frame, timed against the vblank grid | gfx, screen | `gfx_clut_sync --sim` (CI); `gfx_clut_sync`; `gfx_clut_sync --fullscreen --os-ramp` (watch for flicker) | SDL3, ANGLE; Windows for the ramp phase |
 | `gfx_filtered_noise` | Psychtoolbox's FastFilteredNoiseDemo on the CPU: band-pass oriented and 1/f noise by FFT each trial, uploaded as R32F images, beside NOISE GAUSSIAN and SIMPLEX; the power in the band for each, and the make and upload cost per trial against the frame | gfx | `gfx_filtered_noise --sim` (CI); `gfx_filtered_noise --every-frame` | SDL3, ANGLE |
 | `gfx_gaze_contingent` | Psychtoolbox's GazeContingentDemo with the mouse as the gaze: a sharp Gaussian window on a blurred image; per frame the sample's stamp, the read and the flip onset (input to photon in software); `--inject` moves the pointer by SendInput | gfx, screen, input | `gfx_gaze_contingent --sim` (CI); `gfx_gaze_contingent`; `gfx_gaze_contingent --inject --out lat.csv` | SDL3, ANGLE; Windows for `--inject` and `--raw-mice` |
-| `gfx_capture` | Stimulus capture during a trial: every Nth or marked frame of 100 drifting gabors and a bar to PPM or PNG files, by the writer thread or by `ygfx_capture_pump()`; flip records and `end()` cost with capture on and off | gfx | `gfx_capture --sim --frames 60 --every 3 --out capture_sim/f` and `--mark 5 --manual --png` (CI); `gfx_capture --fullscreen --every 1 --out cap/f` | SDL3, ANGLE |
+| `gfx_capture` | Stimulus capture during a trial: every Nth or marked frame of 100 drifting gabors and a bar to PPM files, by the writer thread or by `ygfx_capture_pump()`; flip records and `end()` cost with capture on and off | gfx | `gfx_capture --sim --frames 60 --every 3 --out capture_sim/f` and `--mark 5 --manual` (CI); `gfx_capture --fullscreen --every 1 --out cap/f` | SDL3, ANGLE |
 
 ## layout
 
