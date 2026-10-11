@@ -31,7 +31,7 @@ C11 or C++17, and its top comment is its manual.
 | [outline](docs/outline.md) | `yol_` | Paths, font glyphs and SVG into curve sets | 0.3.0 | tested |
 | [screen](docs/screen.md) | `yscr_` | Stimulus window, flip at a time, flip records | 0.6.0 | 1 machine |
 | [audio](docs/audio.md) | `yau_` | Sound at a time on the rig clock | 0.4.0 | 1 machine |
-| [gfx](docs/gfx.md) | `ygfx_` | GL ES 3.0 stimuli: shapes, gratings, gabors, text, frame capture | 0.13.0 | 1 machine |
+| [gfx](docs/gfx.md) | `ygfx_` | GL ES 3.0 stimuli: shapes, gratings, gabors, text, frame capture | 0.14.0 | 1 machine |
 | [video](docs/video.md) | `yvid_` | Movies as stimuli, frame by predicted onset | 0.3.0 | 1 machine |
 
 Each header is `include/ysp/<name>.h`; macros use the uppercase prefix

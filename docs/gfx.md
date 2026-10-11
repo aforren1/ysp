@@ -3082,22 +3082,21 @@ One writer, `ygfx_image_write()`, for capture and for the examples'
 screenshots (gfx_gallery, gfx_text, gfx_rdk, gfx_layout had four copies
 of one PPM writer). No compression: include/ysp takes no new dependency,
 and a deflate of its own was not built or timed. Two formats were built
-and timed, 10 writes of 1920 x 1200
+and timed in v0.13, 10 writes of 1920 x 1200
 from memory into C:\tmp on the laptop's NVMe SSD (Samsung
 MZVL21T0HDLU), three guard sessions on AC:
 
 | Format | ms per frame | MB/s of pixels |
 |---|---|---|
 | PPM (P6) | 7.95 to 11.43 | 605 to 870 |
-| PNG, stored blocks | 14.71 to 18.47 | 374 to 470 |
+| PNG, stored blocks (removed v0.14.0: measured slower, PPM opens everywhere needed) | 14.71 to 18.47 | 374 to 470 |
 
-The PNG's extra time is its two checksums (CRC-32 by slicing by 4, and
+The PNG's extra time was its two checksums (CRC-32 by slicing by 4, and
 Adler-32) over 6.9 MB. PPM keeps up with every frame at 60 Hz on one
-writer; PNG holds every second frame. PPM is the default. PNG is kept,
-although slower, because a viewer, a browser and Python read it without
-help and its tEXt chunk carries the record; the user may delete it. The
-comment is the frame index, the predicted onset, the rectangle and the
-record (onset, planned, target, residual, dropped, flags, path, tier).
+writer; PNG held every second frame. v0.14.0 writes PPM only (see
+"v0.14.0: PPM only" below). The comment is the frame index, the predicted
+onset, the rectangle and the record (onset, planned, target, residual,
+dropped, flags, path, tier), one PPM comment line for each line of it.
 
 ### Measured: the cost of a captured frame
 
@@ -3157,7 +3156,8 @@ onset intervals over 1.5 periods; end() is `ygfx_end()`'s CPU time.
 | window | every 2nd, PNG | 600 | 0 | 0 | 0 | 16.669 | 0 | 425 / 1435 / 1823 | 301 | 0 |
 | window | 1 in 60 marked, manual, 32 slots | 1800 | 0 | 1 | 0 | 16.669 | 0 | 203 / 538 / 1230 | 30 | 0 |
 
-No row with capture had a late target, an early flip or an onset interval
+The PNG rows are v0.13's; v0.14.0 has no PNG. No row with capture had a
+late target, an early flip or an onset interval
 over 16.69 ms. The four records with `dropped` set in capture rows have no
 long interval next to them: the drop is not a gap between consecutive
 frames (not looked into further). The control rows in the window had the
@@ -3178,11 +3178,10 @@ One session only; the AMD Linux rig and other GPUs are not measured.
 
 ### Tests
 
-`test_v12_capture_cpu` (the null backend on SIM, and the writer): PPM
-and PNG of a 1500 x 20 image, top first and bottom first (a row wider than
-the 1024-pixel conversion chunk, a PNG of two stored blocks), read back by
-the test's own readers with a bitwise CRC-32 and a bytewise Adler-32, the
-comment in each; refusals; manual mode with every 3rd frame, a mark and 4
+`test_v12_capture_cpu` (the null backend on SIM, and the writer): a PPM
+of a 1500 x 20 image, top first and bottom first (a row wider than the
+1024-pixel conversion chunk), read back by the test's own reader, with a
+two-line comment (v0.14.0; v0.13 also wrote and read back PNG); refusals; manual mode with every 3rd frame, a mark and 4
 slots: chosen, read, dropped (2) and written counts, the drop records,
 oldest first, the pump's max, the flip record matched by index in each
 callback and file, the last frame written without its record at stop, a
@@ -3198,7 +3197,8 @@ compile check captures 3 frames on SIM (every 2nd and a mark). CI runs
 ### Mutations
 
 `cp-01` to `cp-16` in tests/mutate/gfx.toml, 16 of 16 caught (MSVC, the
-Iris Xe for the two GL ones); `cp-15` and `cp-16` came with the port to
+Iris Xe for the two GL ones; v0.14.0 removed the PNG writer's three,
+`cp-07` to `cp-09`, and added `cp-17`; on 2026-10-10 the 14 capture mutants of v0.14.0 ran: 14 of 14 caught, the list 125 mutants); `cp-15` and `cp-16` came with the port to
 the conventions (a capture call's message, `ygfx_image_write()`'s `err`).
 After the merge the whole list ran again on 2026-10-10: 127 of 127
 caught. `cp-04` (a record attached without its
@@ -3227,10 +3227,24 @@ here: Linux, emcc, the sanitizers (CI runs them).
   `ygfx_capture_frame.predicted_ns`. The writer thread is ysp/rt.h's
   pump, opened with `yrt_pump_open()` and closed (drained) with
   `yrt_pump_close()`.
-- PNG is kept beside PPM although it measured slower (see "The file
-  format"); delete it if a viewer for PPM is acceptable.
+- PNG was kept beside PPM in v0.13 although it measured slower (see
+  "The file format"). The user removed it on 2026-10-10 (v0.14.0).
 - examples/outline/font.c keeps its own PGM writer: it includes only
   ysp/outline.h, and `ygfx_image_write()` would pull in ysp/gfx.h and SDL.
+
+## v0.14.0: PPM only
+
+The user decided on 2026-10-10 that capture writes PPM only: the stored
+PNG measured slower (14.7 to 18.5 ms a 1920 x 1200 frame against 8.0 to
+11.4 ms), and every tool the files go to opens PPM. v0.14.0 removes
+`YGFX_IMAGE_PNG`, the PNG writer and its CRC-32 and Adler-32 (about 130
+lines of the header, 4 KB of tables on the writer's stack), and the PNG
+reader and checksums of the test.
+
+| Question | Decision | Why |
+|---|---|---|
+| `ygfx_capture_desc.format`, `YGFX_IMAGE_PPM` and the `format` argument of `ygfx_image_write()` | Removed; the version is 0.14.0, not 0.13.1 | With one value, the field is always 0 and the argument always `YGFX_IMAGE_PPM`: an argument every call passes for nothing. Capture shipped in v0.13.0 the same week; every caller in the repository is changed (6 examples, the test, the compile check). A caller that set the field or passed the argument now fails to compile, which says what changed; a field kept with one value would accept `YGFX_IMAGE_PNG`'s old value 2 and fail only at run time |
+| The comment | One `#` line for each line of the comment | As before; the test now writes a two-line comment and reads both lines back, and mutant `cp-17` (the second line without its `#`) checks it |
 
 ## v0.12.0: a message for every failure
 

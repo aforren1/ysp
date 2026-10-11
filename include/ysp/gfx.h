@@ -1,4 +1,4 @@
-/* ysp/gfx.h - v0.13.0 - public domain single-header stimulus graphics library
+/* ysp/gfx.h - v0.14.0 - public domain single-header stimulus graphics library
  *   (with MIT-licensed parts: see below)
  *
  *   Stimuli on GL ES 3.0, on top of ysp/screen.h: signed-distance shapes
@@ -1043,7 +1043,7 @@
  *   draws, are not in the copy. Nothing waits. A later end() (or
  *   ygfx_capture_pump()) sees that the fence passed and maps the buffer;
  *   begin() takes the frame's flip record from yscr_frame.done. Then the
- *   writer writes <path><frame index, 8 digits>.ppm (or .png) with the
+ *   writer writes <path><frame index, 8 digits>.ppm with the
  *   index, the predicted onset and the record in the file's comment, and
  *   calls desc.on_frame. A frame waits up to 30 frames for its record; a
  *   frame you fill yourself (done NULL) and a headless gfx do not wait;
@@ -1055,8 +1055,7 @@
  *            frames plus the file's write.
  *   COST     docs/gfx.md, "v0.13": the frame thread pays the copy's call and,
  *            a frame later, the map (ANGLE copies the pixels there), and the
- *            writer the file. The knobs are desc.every, the rectangle and
- *            desc.format.
+ *            writer the file. The knobs are desc.every and the rectangle.
  *   ROWS     top first, in the files and for on_frame (fr.stride < 0 when
  *            the copy lies bottom first in memory). The bytes are
  *            ygfx_read_output()'s for the same frame (tested bit for bit).
@@ -1066,8 +1065,9 @@
  *            frame (between trials). In a trial the buffers then fill and
  *            later chosen frames drop: size desc.slots for the frames a
  *            trial captures.
- *   ygfx_image_write() is the file writer, for any RGBA8 rows: PPM (P6) or
- *   PNG with stored (not compressed) blocks, 8-bit RGB, no allocation.
+ *   ygfx_image_write() is the file writer, for any RGBA8 rows: binary PPM
+ *   (P6), 8-bit RGB, no allocation. PPM only: a stored PNG measured slower
+ *   (docs/gfx.md, "v0.13"), and every tool the files go to opens PPM.
  *
  *   ---------------------------------------------------------------------
  *   CALIBRATION
@@ -1251,7 +1251,14 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
- *   v0.13.0 - CAPTURE: the output of chosen frames (every Nth, or marked
+ *   v0.14.0 - Capture writes PPM only. Removed: YGFX_IMAGE_PNG,
+ *          YGFX_IMAGE_PPM, ygfx_capture_desc.format and the format
+ *          argument of ygfx_image_write(), with the stored-PNG writer and
+ *          its CRC-32 and Adler-32. The PNG measured slower (14.7 to 18.5
+ *          ms a file against PPM's 8.0 to 11.4 ms) and every tool the files
+ *          go to opens PPM. A format with one value would be an argument
+ *          that every call passes for nothing, so the API drops it.
+ *   v0.13.0 -CAPTURE: the output of chosen frames (every Nth, or marked
  *          with ygfx_capture_mark()) copied in ygfx_end() into pixel
  *          buffers with a fence, collected a frame or more later without a
  *          wait, tagged with the frame index and its flip record, and
@@ -1721,9 +1728,9 @@
 #define YSP_GFX_H_INCLUDED
 
 #define YGFX_VERSION_MAJOR 0
-#define YGFX_VERSION_MINOR 13
+#define YGFX_VERSION_MINOR 14
 #define YGFX_VERSION_PATCH 0
-#define YGFX_VERSION_STRING "0.13.0"
+#define YGFX_VERSION_STRING "0.14.0"
 
 #include "ysp/screen.h"
 #include "ysp/color.h"
@@ -3074,9 +3081,6 @@ YGFX_API int ygfx_read_output(ygfx_gfx* g, int x, int y, int w, int h, uint8_t* 
 
 /* v0.13, CAPTURE: the output of chosen frames, copied without a stall and
  * written off the frame thread. */
-#define YGFX_IMAGE_PPM 1         /* binary PPM (P6), 8-bit RGB                   */
-#define YGFX_IMAGE_PNG 2         /* PNG, 8-bit RGB, stored (not compressed)      */
-
 /* One captured frame, as on_frame gets it on the writer thread. rgba is the
  * top row of the rectangle; row r is at rgba + r * stride (stride < 0 when
  * the rows lie bottom first in memory). Valid until on_frame returns. */
@@ -3105,10 +3109,10 @@ typedef struct ygfx_capture_desc {
     int32_t         slots;         /* pixel buffers: frames being copied, waiting
                                     * for their flip record or being written;
                                     * 0 = 6, at most YGFX_CAPTURE_MAX_SLOTS   */
-    const char*     path;          /* files <path><index, 8 digits>.ppm (or .png);
-                                    * NULL = no files (on_frame only). Its folder
-                                    * is made when missing. UTF-8.            */
-    int32_t         format;        /* YGFX_IMAGE_PPM (0 = it) or _PNG         */
+    const char*     path;          /* files <path><index, 8 digits>.ppm (binary
+                                    * PPM, P6, 8-bit RGB); NULL = no files
+                                    * (on_frame only). Its folder is made when
+                                    * missing. UTF-8.                         */
     bool            manual;        /* no writer thread, and no map in a frame:
                                     * ygfx_capture_pump() maps and writes.
                                     * Always so with YRT_NO_THREADS          */
@@ -3150,12 +3154,12 @@ YGFX_API int  ygfx_capture_pump(ygfx_gfx* g, int max);
 YGFX_API int  ygfx_capture_stop(ygfx_gfx* g, ygfx_capture_stats* out);
 YGFX_API void ygfx_capture_get_stats(const ygfx_gfx* g, ygfx_capture_stats* out);
 
-/* Writes 8-bit RGBA rows as an RGB image file (alpha is dropped): rgba is
- * the top row, row r at rgba + r * stride (0 = w * 4). comment (may be NULL)
- * goes in the file: a PPM comment line, a PNG tEXt chunk with the keyword
- * "Comment". No allocation. YGFX_OK, YGFX_ERR_ARG, or YGFX_ERR_IO with the
- * reason in err (cap bytes; err may be NULL): no gfx holds the message. */
-YGFX_API int ygfx_image_write(const char* path, int format, const uint8_t* rgba, int w, int h,
+/* Writes 8-bit RGBA rows as a binary PPM (P6, 8-bit RGB; alpha is dropped):
+ * rgba is the top row, row r at rgba + r * stride (0 = w * 4). comment (may
+ * be NULL) goes in the file as PPM comment lines, one per line of it. No
+ * allocation. YGFX_OK, YGFX_ERR_ARG, or YGFX_ERR_IO with the reason in err
+ * (cap bytes; err may be NULL): no gfx holds the message. */
+YGFX_API int ygfx_image_write(const char* path, const uint8_t* rgba, int w, int h,
                               ptrdiff_t stride, const char* comment, char* err, size_t cap);
 
 /* Screen pixels: from the top-left corner, x right, y down, pixel centers at
@@ -8857,128 +8861,29 @@ static int ygfx__read_target(ygfx_gfx* g, ygfx_tex t, int x, int y, int w, int h
 
 /* --- image files (CAPTURE) ---------------------------------------------------- */
 
-/* PNG's CRC-32, four bytes a step (slicing by 4): the tables are made per
- * file on the stack, about 10 us, so nothing is shared between threads. */
-static void ygfx__crc_tables(uint32_t t[4][256]) {
-    uint32_t i, c;
-    int k;
-    for (i = 0; i < 256; i++) {
-        c = i;
-        for (k = 0; k < 8; k++) c = (c & 1u) ? 0xEDB88320u ^ (c >> 1) : c >> 1;
-        t[0][i] = c;
-    }
-    for (i = 0; i < 256; i++) {
-        c = t[0][i];
-        for (k = 1; k < 4; k++) { c = t[0][c & 0xFFu] ^ (c >> 8); t[k][i] = c; }
-    }
-}
-
-static uint32_t ygfx__crc_run(const uint32_t t[4][256], uint32_t c, const unsigned char* p, size_t n) {
-    while (n >= 4) {
-        c ^= (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
-        c = t[3][c & 0xFFu] ^ t[2][(c >> 8) & 0xFFu] ^ t[1][(c >> 16) & 0xFFu] ^ t[0][c >> 24];
-        p += 4;
-        n -= 4;
-    }
-    while (n--) c = t[0][(c ^ *p++) & 0xFFu] ^ (c >> 8);
-    return c;
-}
-
 typedef struct ygfx__isink {
-    FILE*    f;
-    int      png, ok;
-    uint32_t crc, a1, a2;          /* the chunk's CRC; zlib's Adler-32 sums     */
-    size_t   block_left, raw_left; /* PNG: bytes left in the stored block, and
-                                    * in the image                              */
-    uint32_t t[4][256];
+    FILE* f;
+    int   ok;
 } ygfx__isink;
 
 static void ygfx__img_put(ygfx__isink* s, const void* p, size_t n) {
     if (s->ok && fwrite(p, 1, n, s->f) != n) s->ok = 0;
 }
 
-static void ygfx__img_out(ygfx__isink* s, const void* p, size_t n) {
-    if (s->png) s->crc = ygfx__crc_run((const uint32_t(*)[256])s->t, s->crc, (const unsigned char*)p, n);
-    ygfx__img_put(s, p, n);
-}
-
-static void ygfx__img_be32(unsigned char* b, uint32_t v) {
-    b[0] = (unsigned char)(v >> 24); b[1] = (unsigned char)(v >> 16);
-    b[2] = (unsigned char)(v >> 8);  b[3] = (unsigned char)v;
-}
-
-/* A chunk's length goes outside its CRC; its type and data inside. */
-static void ygfx__img_chunk(ygfx__isink* s, uint32_t len, const char* type) {
-    unsigned char b[4];
-    ygfx__img_be32(b, len);
-    ygfx__img_put(s, b, 4);
-    s->crc = 0xFFFFFFFFu;
-    ygfx__img_out(s, type, 4);
-}
-
-static void ygfx__img_chunk_end(ygfx__isink* s) {
-    unsigned char b[4];
-    ygfx__img_be32(b, s->crc ^ 0xFFFFFFFFu);
-    ygfx__img_put(s, b, 4);
-}
-
-/* The image's bytes. A PNG gets them as zlib's stored blocks (at most 65535
- * bytes each, a 5-byte head) under one Adler-32: no compression, so the
- * writer's time is the disk's and two checksums. */
-static void ygfx__img_raw(ygfx__isink* s, const unsigned char* p, size_t n) {
-    uint32_t a = s->a1, b = s->a2;
-    size_t m = n;
-    const unsigned char* q = p;
-    if (!s->png) { ygfx__img_put(s, p, n); return; }
-    while (m) {   /* 5552 bytes is the most the sums take before a modulo */
-        size_t k = m < 5552 ? m : 5552;
-        m -= k;
-        while (k--) { a += *q++; b += a; }
-        a %= 65521u;
-        b %= 65521u;
-    }
-    s->a1 = a; s->a2 = b;
-    while (n) {
-        size_t k;
-        if (!s->block_left) {
-            size_t len = s->raw_left < 65535 ? s->raw_left : 65535;
-            unsigned char hd[5];
-            hd[0] = (unsigned char)(len == s->raw_left);   /* BFINAL, BTYPE 00 */
-            hd[1] = (unsigned char)(len & 0xFFu);
-            hd[2] = (unsigned char)(len >> 8);
-            hd[3] = (unsigned char)(~len & 0xFFu);
-            hd[4] = (unsigned char)((~len >> 8) & 0xFFu);
-            ygfx__img_out(s, hd, 5);
-            s->block_left = len;
-        }
-        k = n < s->block_left ? n : s->block_left;
-        ygfx__img_out(s, p, k);
-        p += k;
-        n -= k;
-        s->block_left -= k;
-        s->raw_left -= k;
-    }
-}
-
-YGFX_API int ygfx_image_write(const char* path, int format, const uint8_t* rgba, int w, int h,
+YGFX_API int ygfx_image_write(const char* path, const uint8_t* rgba, int w, int h,
                               ptrdiff_t stride, const char* comment, char* err, size_t cap) {
-    static const unsigned char sig[8] = { 137, 80, 78, 71, 13, 10, 26, 10 };
     char iobuf[32768];             /* stdio's buffer: no allocation in fopen's */
     unsigned char row[3 * 1024];
     ygfx__isink s;
     FILE* f;
-    int y, x0, i;
+    int y, x0, i, n;
+    char head[64];
     if (err && cap) err[0] = '\0';
-    if (!path || !path[0] || !rgba || w <= 0 || h <= 0 || (format != YGFX_IMAGE_PPM && format != YGFX_IMAGE_PNG)) {
-        ygfx__set_error(err, cap, "ysp_gfx: image_write: a path, rows, w and h > 0 and YGFX_IMAGE_PPM or _PNG");
+    if (!path || !path[0] || !rgba || w <= 0 || h <= 0) {
+        ygfx__set_error(err, cap, "ysp_gfx: image_write: a path, rows, and w and h > 0");
         return YGFX_ERR_ARG;
     }
     if (stride == 0) stride = (ptrdiff_t)w * 4;
-    /* PNG keeps one IDAT chunk, whose length is 31 bits */
-    if (format == YGFX_IMAGE_PNG && (double)h * (1.0 + 3.0 * w) * (1.0 + 5.0 / 65535.0) + 64.0 > 2147483647.0) {
-        ygfx__set_error(err, cap, "ysp_gfx: image_write: %dx%d is too large for one PNG IDAT chunk", w, h);
-        return YGFX_ERR_ARG;
-    }
 #if defined(_WIN32)
     f = ygfx__wopen(path, L"wb");
 #else
@@ -8989,66 +8894,28 @@ YGFX_API int ygfx_image_write(const char* path, int format, const uint8_t* rgba,
         return YGFX_ERR_IO;
     }
     setvbuf(f, iobuf, _IOFBF, sizeof iobuf);
-    memset(&s, 0, offsetof(ygfx__isink, t));
     s.f = f;
     s.ok = 1;
-    s.png = format == YGFX_IMAGE_PNG;
-    if (!s.png) {
-        char head[64];
-        int n;
-        ygfx__img_put(&s, "P6\n", 3);
-        if (comment && comment[0]) {
-            const char* c = comment;
-            ygfx__img_put(&s, "# ", 2);
-            for (; *c; c++) {   /* each line of the comment is a comment line */
-                if (*c == '\n') { ygfx__img_put(&s, "\n# ", 3); continue; }
-                ygfx__img_put(&s, c, 1);
-            }
-            ygfx__img_put(&s, "\n", 1);
+    ygfx__img_put(&s, "P6\n", 3);
+    if (comment && comment[0]) {
+        const char* c = comment;
+        ygfx__img_put(&s, "# ", 2);
+        for (; *c; c++) {   /* each line of the comment is a comment line */
+            if (*c == '\n') { ygfx__img_put(&s, "\n# ", 3); continue; }
+            ygfx__img_put(&s, c, 1);
         }
-        n = snprintf(head, sizeof head, "%d %d\n255\n", w, h);
-        ygfx__img_put(&s, head, (size_t)n);
-    } else {
-        unsigned char b[13];
-        size_t raw = (size_t)h * (1 + 3 * (size_t)w), blocks = (raw + 65534) / 65535;
-        ygfx__crc_tables(s.t);
-        ygfx__img_put(&s, sig, 8);
-        ygfx__img_chunk(&s, 13, "IHDR");
-        ygfx__img_be32(b, (uint32_t)w);
-        ygfx__img_be32(b + 4, (uint32_t)h);
-        b[8] = 8; b[9] = 2; b[10] = 0; b[11] = 0; b[12] = 0;   /* 8 bits, RGB, no interlace */
-        ygfx__img_out(&s, b, 13);
-        ygfx__img_chunk_end(&s);
-        if (comment && comment[0]) {
-            size_t n = strlen(comment);
-            ygfx__img_chunk(&s, (uint32_t)(8 + n), "tEXt");
-            ygfx__img_out(&s, "Comment", 8);   /* with its NUL separator */
-            ygfx__img_out(&s, comment, n);
-            ygfx__img_chunk_end(&s);
-        }
-        ygfx__img_chunk(&s, (uint32_t)(2 + raw + 5 * blocks + 4), "IDAT");
-        b[0] = 0x78; b[1] = 0x01;   /* deflate, 32 KB window, no dictionary */
-        ygfx__img_out(&s, b, 2);
-        s.a1 = 1; s.a2 = 0;
-        s.raw_left = raw;
+        ygfx__img_put(&s, "\n", 1);
     }
+    n = snprintf(head, sizeof head, "%d %d\n255\n", w, h);
+    ygfx__img_put(&s, head, (size_t)n);
     for (y = 0; y < h && s.ok; y++) {
         const uint8_t* src = rgba + (ptrdiff_t)y * stride;
-        if (s.png) { unsigned char none = 0; ygfx__img_raw(&s, &none, 1); }   /* filter type 0 */
         for (x0 = 0; x0 < w; x0 += 1024) {
-            int n = w - x0 < 1024 ? w - x0 : 1024;
-            const uint8_t* p = src + 4 * (size_t)x0;
-            for (i = 0; i < n; i++) { row[3 * i] = p[4 * i]; row[3 * i + 1] = p[4 * i + 1]; row[3 * i + 2] = p[4 * i + 2]; }
-            ygfx__img_raw(&s, row, 3 * (size_t)n);
+            int k = w - x0 < 1024 ? w - x0 : 1024;
+            const uint8_t* q = src + 4 * (size_t)x0;
+            for (i = 0; i < k; i++) { row[3 * i] = q[4 * i]; row[3 * i + 1] = q[4 * i + 1]; row[3 * i + 2] = q[4 * i + 2]; }
+            ygfx__img_put(&s, row, 3 * (size_t)k);
         }
-    }
-    if (s.png) {
-        unsigned char b[4];
-        ygfx__img_be32(b, (s.a2 << 16) | s.a1);
-        ygfx__img_out(&s, b, 4);
-        ygfx__img_chunk_end(&s);
-        ygfx__img_chunk(&s, 0, "IEND");
-        ygfx__img_chunk_end(&s);
     }
     if (fclose(f) != 0) s.ok = 0;
     if (!s.ok) {
@@ -9081,7 +8948,7 @@ typedef struct ygfx__cslot {
 } ygfx__cslot;
 
 typedef struct ygfx__cap {
-    int32_t         x, y, w, h, gl_y, top_first, format, n, manual, every, mark, has_screen;
+    int32_t         x, y, w, h, gl_y, top_first, n, manual, every, mark, has_screen;
     volatile int    abandon;           /* the context is gone: the writer skips   */
     char            path[512];         /* the prefix; "" = no files               */
     ygfx_capture_fn on_frame;
@@ -9112,8 +8979,7 @@ static int ygfx__cap_write(ygfx__cap* c, int i) {
     fr.file_rc = YGFX_OK;
     if (c->abandon) return YGFX_ERR_LOST;
     if (c->path[0]) {
-        snprintf(path, sizeof path, "%s%08lld.%s", c->path, (long long)s->index,
-                 c->format == YGFX_IMAGE_PNG ? "png" : "ppm");
+        snprintf(path, sizeof path, "%s%08lld.ppm", c->path, (long long)s->index);
         if (s->has_record)
             snprintf(note, sizeof note,
                      "ysp_gfx capture: frame %lld, predicted %lld ns, rect %d %d %d %d; "
@@ -9125,7 +8991,7 @@ static int ygfx__cap_write(ygfx__cap* c, int i) {
         else
             snprintf(note, sizeof note, "ysp_gfx capture: frame %lld, predicted %lld ns, rect %d %d %d %d; record: none",
                      (long long)s->index, (long long)s->predicted, c->x, c->y, c->w, c->h);
-        fr.file_rc = ygfx_image_write(path, c->format, fr.rgba, c->w, c->h, fr.stride, note, NULL, 0);
+        fr.file_rc = ygfx_image_write(path, fr.rgba, c->w, c->h, fr.stride, note, NULL, 0);
         fr.path = path;
     }
     if (c->on_frame) c->on_frame(c->ctx, &fr);
@@ -9327,10 +9193,9 @@ static int ygfx__capture_start(ygfx_gfx* g, const ygfx_capture_desc* d) {
     if (w <= 0 || h <= 0) { x = 0; y = 0; w = g->w; h = g->h; }
     n = d->slots ? d->slots : 6;
     if (d->every < 0 || x < 0 || y < 0 || x + w > g->w || y + h > g->h || n < 1 || n > YGFX_CAPTURE_MAX_SLOTS ||
-        (d->format != 0 && d->format != YGFX_IMAGE_PPM && d->format != YGFX_IMAGE_PNG) ||
         (d->path && strlen(d->path) >= sizeof(((ygfx__cap*)0)->path))) {
         ygfx__set_error(g->error, sizeof g->error,
-                          "ysp_gfx: capture: every >= 0, a rectangle inside the output, 1 to %d slots, a format, a path under 512 bytes",
+                          "ysp_gfx: capture: every >= 0, a rectangle inside the output, 1 to %d slots, a path under 512 bytes",
                           YGFX_CAPTURE_MAX_SLOTS);
         return YGFX_ERR_ARG;
     }
@@ -9343,7 +9208,6 @@ static int ygfx__capture_start(ygfx_gfx* g, const ygfx_capture_desc* d) {
     c->x = x; c->y = y; c->w = w; c->h = h;
     c->top_first = g->origin_top;
     c->gl_y = g->origin_top ? y : g->h - y - h;
-    c->format = d->format ? d->format : YGFX_IMAGE_PPM;
     c->n = n;
     c->every = d->every;
     c->has_screen = g->screen != NULL;

@@ -641,23 +641,6 @@ static void test_null_and_ring(void) {
 
 /* ------------------------------------------------- v0.12 capture, CPU half */
 
-/* The test's own CRC-32 and Adler-32, bit by bit and byte by byte, against
- * the writer's sliced CRC and deferred sums. */
-static uint32_t t_crc(const unsigned char* p, size_t n) {
-    uint32_t c = 0xFFFFFFFFu;
-    int k;
-    while (n--) { c ^= *p++; for (k = 0; k < 8; k++) c = (c & 1u) ? 0xEDB88320u ^ (c >> 1) : c >> 1; }
-    return c ^ 0xFFFFFFFFu;
-}
-static uint32_t t_adler(const unsigned char* p, size_t n) {
-    uint32_t a = 1, b = 0;
-    while (n--) { a = (a + *p++) % 65521u; b = (b + a) % 65521u; }
-    return (b << 16) | a;
-}
-static uint32_t t_be32(const unsigned char* p) {
-    return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | (uint32_t)p[3];
-}
-
 static unsigned char* t_slurp(const char* path, size_t* n) {
     FILE* f = fopen(path, "rb");
     unsigned char* b;
@@ -674,7 +657,7 @@ static unsigned char* t_slurp(const char* path, size_t* n) {
     return b;
 }
 
-/* A PPM's pixels (RGB) and its first comment, or 0. */
+/* A PPM's pixels (RGB) and its comment lines, joined by '\n', or 0. */
 static int t_read_ppm(const char* path, int* w, int* h, unsigned char* rgb, size_t cap, char* note, size_t ncap) {
     size_t n, i = 3;
     unsigned char* b = t_slurp(path, &n);
@@ -684,7 +667,14 @@ static int t_read_ppm(const char* path, int* w, int* h, unsigned char* rgb, size
     while (i < n && b[i] == '#') {
         size_t j = i;
         while (j < n && b[j] != '\n') j++;
-        if (note && !note[0] && j - i - 2 < ncap) { memcpy(note, b + i + 2, j - i - 2); note[j - i - 2] = '\0'; }
+        if (note) {
+            size_t at = strlen(note), add = j - i - 2 + (at ? 1 : 0);
+            if (at + add < ncap) {
+                if (at) note[at++] = '\n';
+                memcpy(note + at, b + i + 2, j - i - 2);
+                note[at + j - i - 2] = '\0';
+            }
+        }
         i = j + 1;
     }
     if (sscanf((const char*)b + i, "%d %d", w, h) == 2) {
@@ -693,58 +683,6 @@ static int t_read_ppm(const char* path, int* w, int* h, unsigned char* rgb, size
         if ((size_t)(*w) * (size_t)(*h) * 3 == n - i && n - i <= cap) { memcpy(rgb, b + i, n - i); ok = 1; }
     }
     free(b);
-    return ok;
-}
-
-/* A PNG's pixels (RGB, unfiltered), its chunks' CRCs, its zlib stream's
- * stored blocks and Adler-32 checked; its tEXt Comment, or 0. */
-static int t_read_png(const char* path, int* w, int* h, unsigned char* rgb, size_t cap, char* note, size_t ncap) {
-    static const unsigned char sig[8] = { 137, 80, 78, 71, 13, 10, 26, 10 };
-    size_t n, i = 8, zn = 0, raw_n = 0, k;
-    unsigned char *b = t_slurp(path, &n), *z = NULL, *raw = NULL;
-    int ok = 0, y;
-    if (note) note[0] = '\0';
-    if (!b || n < 8 || memcmp(b, sig, 8) != 0) goto done;
-    z = (unsigned char*)malloc(n);
-    raw = (unsigned char*)malloc(n);
-    if (!z || !raw) goto done;
-    while (i + 12 <= n) {
-        uint32_t len = t_be32(b + i);
-        if (i + 12 + len > n || t_crc(b + i + 4, 4 + len) != t_be32(b + i + 8 + len)) goto done;
-        if (memcmp(b + i + 4, "IHDR", 4) == 0) {
-            *w = (int)t_be32(b + i + 8); *h = (int)t_be32(b + i + 12);
-            if (b[i + 16] != 8 || b[i + 17] != 2) goto done;
-        } else if (memcmp(b + i + 4, "tEXt", 4) == 0 && note && len > 8 && memcmp(b + i + 8, "Comment", 8) == 0 && len - 8 < ncap) {
-            memcpy(note, b + i + 16, len - 8); note[len - 8] = '\0';
-        } else if (memcmp(b + i + 4, "IDAT", 4) == 0) {
-            memcpy(z + zn, b + i + 8, len); zn += len;
-        } else if (memcmp(b + i + 4, "IEND", 4) == 0) {
-            break;
-        }
-        i += 12 + len;
-    }
-    if (zn < 6 || z[0] != 0x78 || (z[0] * 256 + z[1]) % 31 != 0) goto done;
-    for (k = 2;;) {   /* stored blocks only */
-        unsigned len, nlen, fin = z[k] & 1u;
-        if ((z[k] & 6u) != 0 || k + 5 > zn) goto done;
-        len = z[k + 1] | (unsigned)z[k + 2] << 8;
-        nlen = z[k + 3] | (unsigned)z[k + 4] << 8;
-        if ((len ^ 0xFFFFu) != nlen || k + 5 + len > zn) goto done;
-        memcpy(raw + raw_n, z + k + 5, len);
-        raw_n += len;
-        k += 5 + len;
-        if (fin) break;
-    }
-    if (k + 4 != zn || t_adler(raw, raw_n) != t_be32(z + k)) goto done;
-    if (raw_n != (size_t)(*h) * (1 + 3 * (size_t)(*w)) || (size_t)(*w) * (size_t)(*h) * 3 > cap) goto done;
-    for (y = 0; y < *h; y++) {
-        const unsigned char* r = raw + (size_t)y * (1 + 3 * (size_t)(*w));
-        if (r[0] != 0) goto done;
-        memcpy(rgb + (size_t)y * 3 * (size_t)(*w), r + 1, 3 * (size_t)(*w));
-    }
-    ok = 1;
-done:
-    free(b); free(z); free(raw);
     return ok;
 }
 
@@ -779,41 +717,36 @@ static void test_v12_capture_cpu(void) {
     ygfx_capture_desc cd;
     ygfx_capture_stats st;
     cap_seen seen;
-    int i, k, w, h, bad, fmt, drops;
-    const char* const ext[] = { "", "ppm", "png" };
+    int i, k, w, h, bad, drops, flip;
     g_where = "cpu v0.12 capture";
     snprintf(dir, sizeof dir, "ygfx_test_cap_%u", (unsigned)(yrt_now_ns() & 0xFFFFFF));
 
-    /* the writer: both formats, top first and bottom first, a row wider than
-     * the conversion chunk (1024 px), a PNG of two stored blocks */
+    /* the writer: top first and bottom first, a row wider than the
+     * conversion chunk (1024 px), a comment of two lines */
     for (i = 0; i < 1500 * 20 * 4; i++) px[i] = (unsigned char)((i * 7 + (i >> 9)) & 0xFF);
-    CHECK(ygfx_image_write(NULL, YGFX_IMAGE_PPM, px, 4, 4, 0, NULL, NULL, 0) == YGFX_ERR_ARG);
-    CHECK(ygfx_image_write("x.ppm", 3, px, 4, 4, 0, NULL, note, sizeof note) == YGFX_ERR_ARG);
+    CHECK(ygfx_image_write(NULL, px, 4, 4, 0, NULL, NULL, 0) == YGFX_ERR_ARG);
+    CHECK(ygfx_image_write("x.ppm", px, 0, 4, 0, NULL, note, sizeof note) == YGFX_ERR_ARG);
     CHECK(strstr(note, "image_write: a path") != NULL);
-    CHECK(ygfx_image_write("no_such_dir_ygfx/x.ppm", YGFX_IMAGE_PPM, px, 4, 4, 0, NULL, note, sizeof note) == YGFX_ERR_IO);
+    CHECK(ygfx_image_write("no_such_dir_ygfx/x.ppm", px, 4, 4, 0, NULL, note, sizeof note) == YGFX_ERR_IO);
     CHECK(strstr(note, "cannot create 'no_such_dir_ygfx/x.ppm'") != NULL);
-    for (fmt = YGFX_IMAGE_PPM; fmt <= YGFX_IMAGE_PNG; fmt++) {
-        int flip;
-        for (flip = 0; flip < 2; flip++) {
-            const int W0 = 1500, H0 = 20;
-            const unsigned char* top = flip ? px + (size_t)(H0 - 1) * W0 * 4 : px;
-            ptrdiff_t stride = flip ? -(ptrdiff_t)W0 * 4 : 0;
-            int ok;
-            snprintf(path, sizeof path, "ygfx_test_img_%d.%s", flip, ext[fmt]);
-            CHECK(ygfx_image_write(path, fmt, top, W0, H0, stride, "line one\nline two", NULL, 0) == YGFX_OK);
-            w = h = 0;
-            ok = fmt == YGFX_IMAGE_PPM ? t_read_ppm(path, &w, &h, back, sizeof back, note, sizeof note)
-                                       : t_read_png(path, &w, &h, back, sizeof back, note, sizeof note);
-            CHECK(ok && w == W0 && h == H0);
-            CHECK(strcmp(note, fmt == YGFX_IMAGE_PPM ? "line one" : "line one\nline two") == 0);
-            for (bad = 0, k = 0; ok && k < W0 * H0; k++) {
-                int y = k / W0, x = k % W0, sy = flip ? H0 - 1 - y : y;
-                const unsigned char* s = px + ((size_t)sy * W0 + (size_t)x) * 4;
-                bad += back[3 * k] != s[0] || back[3 * k + 1] != s[1] || back[3 * k + 2] != s[2];
-            }
-            CHECK(bad == 0);
-            remove(path);
+    for (flip = 0; flip < 2; flip++) {
+        const int W0 = 1500, H0 = 20;
+        const unsigned char* top = flip ? px + (size_t)(H0 - 1) * W0 * 4 : px;
+        ptrdiff_t stride = flip ? -(ptrdiff_t)W0 * 4 : 0;
+        int ok;
+        snprintf(path, sizeof path, "ygfx_test_img_%d.ppm", flip);
+        CHECK(ygfx_image_write(path, top, W0, H0, stride, "line one\nline two", NULL, 0) == YGFX_OK);
+        w = h = 0;
+        ok = t_read_ppm(path, &w, &h, back, sizeof back, note, sizeof note);
+        CHECK(ok && w == W0 && h == H0);
+        CHECK(strcmp(note, "line one\nline two") == 0);
+        for (bad = 0, k = 0; ok && k < W0 * H0; k++) {
+            int y = k / W0, x = k % W0, sy = flip ? H0 - 1 - y : y;
+            const unsigned char* s = px + ((size_t)sy * W0 + (size_t)x) * 4;
+            bad += back[3 * k] != s[0] || back[3 * k + 1] != s[1] || back[3 * k + 2] != s[2];
         }
+        CHECK(bad == 0);
+        remove(path);
     }
 
     /* the core on SIM, through the null backend's buffers */
@@ -851,15 +784,13 @@ static void test_v12_capture_cpu(void) {
     CHECK(ygfx_capture_start(&g, &cd) == YGFX_ERR_ARG);
     cd.x = 0; cd.slots = YGFX_CAPTURE_MAX_SLOTS + 1;
     CHECK(ygfx_capture_start(&g, &cd) == YGFX_ERR_ARG);
-    cd.slots = 0; cd.format = 7;
-    CHECK(ygfx_capture_start(&g, &cd) == YGFX_ERR_ARG);
 
     /* manual: every 3rd frame and a mark, 4 slots, files with their records */
     ygfx__test_cap_fill = 1;
     memset(&seen, 0, sizeof seen);
     memset(&cd, 0, sizeof cd);
     snprintf(path, sizeof path, "%s/sub/f", dir);
-    cd.every = 3; cd.slots = 4; cd.manual = true; cd.path = path; cd.format = YGFX_IMAGE_PNG;
+    cd.every = 3; cd.slots = 4; cd.manual = true; cd.path = path;
     cd.x = 8; cd.y = 4; cd.w = 16; cd.h = 8;
     cd.on_frame = cap_on_frame; cd.ctx = &seen;
     CHECK(ygfx_capture_start(&g, &cd) == YGFX_OK);
@@ -921,11 +852,11 @@ static void test_v12_capture_cpu(void) {
     {   /* the files: the fill, and the record in the comment */
         static const int idx[6] = { 0, 3, 6, 9, 14, 100 };
         for (k = 0; k < 6; k++) {
-            snprintf(note, sizeof note, "%s%08d.png", path, idx[k]);
+            snprintf(note, sizeof note, "%s%08d.ppm", path, idx[k]);
             w = h = 0;
-            CHECK(t_read_png(note, &w, &h, back, sizeof back, note + 200, 300) && w == 16 && h == 8 && back[0] == k + 1);
+            CHECK(t_read_ppm(note, &w, &h, back, sizeof back, note + 200, 300) && w == 16 && h == 8 && back[0] == k + 1);
             CHECK(strstr(note + 200, k < 4 ? "record: onset" : "record: none") != NULL);
-            snprintf(note, sizeof note, "%s%08d.png", path, idx[k]);
+            snprintf(note, sizeof note, "%s%08d.ppm", path, idx[k]);
             remove(note);
         }
     }

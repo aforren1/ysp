@@ -954,7 +954,7 @@ int main(int argc, char** argv) {
         if (shot_px && on_page == SHOT_FRAMES) {   /* the back buffer, before the flip */
             char path[512];
             snprintf(path, sizeof path, "%s-p%d.ppm", shots, cur + 1);
-            if (ygfx_read_output(&gfx, 0, 0, WIN_W, WIN_H, shot_px) < 0 || ygfx_image_write(path, YGFX_IMAGE_PPM, shot_px, WIN_W, WIN_H, 0, NULL, NULL, 0) < 0)
+            if (ygfx_read_output(&gfx, 0, 0, WIN_W, WIN_H, shot_px) < 0 || ygfx_image_write(path, shot_px, WIN_W, WIN_H, 0, NULL, NULL, 0) < 0)
                 fprintf(stderr, "gfx_layout: could not write %s\n", path);
             else
                 printf("wrote %s\n", path);

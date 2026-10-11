@@ -1147,33 +1147,6 @@ find = '    c->mark = 0;'
 replace = ''
 
 [[mutant]]
-id = "cp-07"
-name = "a stored block's NLEN is wrong"
-test = "gfx"
-env = { YGFX_TEST_PARTS = "none" }
-why = "v0.13: zlib checks NLEN as the complement of LEN; a PNG reader refuses the file."
-find = '            hd[3] = (unsigned char)(~len & 0xFFu);'
-replace = '            hd[3] = (unsigned char)(len & 0xFFu);'
-
-[[mutant]]
-id = "cp-08"
-name = "Adler-32 without its modulo"
-test = "gfx"
-env = { YGFX_TEST_PARTS = "none" }
-why = "v0.13: the sums are deferred, not dropped; a PNG reader refuses a wrong Adler-32."
-find = '        a %= 65521u;'
-replace = ''
-
-[[mutant]]
-id = "cp-09"
-name = "sliced CRC tables in the wrong order"
-test = "gfx"
-env = { YGFX_TEST_PARTS = "none" }
-why = "v0.13: the slicing-by-4 CRC must equal the bitwise CRC-32 that PNG defines."
-find = '        c = t[3][c & 0xFFu] ^ t[2][(c >> 8) & 0xFFu] ^ t[1][(c >> 16) & 0xFFu] ^ t[0][c >> 24];'
-replace = '        c = t[0][c & 0xFFu] ^ t[1][(c >> 8) & 0xFFu] ^ t[2][(c >> 16) & 0xFFu] ^ t[3][c >> 24];'
-
-[[mutant]]
 id = "cp-10"
 name = "stop leaves frames without records unwritten"
 test = "gfx"
@@ -1236,3 +1209,12 @@ env = { YGFX_TEST_PARTS = "none" }
 why = "v0.13: a call without a handle writes its message into the caller's buffer (README.md, Conventions)."
 find = '''        ygfx__set_error(err, cap, "ysp_gfx: image_write: cannot create '%s' (errno %d)", path, errno);'''
 replace = ''
+
+[[mutant]]
+id = "cp-17"
+name = "a comment's second line not a comment"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none" }
+why = "v0.14: each line of a PPM comment needs its '#'; a reader takes the second line of a two-line comment for the image size."
+find = """            if (*c == '\\n') { ygfx__img_put(&s, "\\n# ", 3); continue; }"""
+replace = """            if (*c == '\\n') { ygfx__img_put(&s, "\\n", 1); continue; }"""

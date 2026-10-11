@@ -907,7 +907,7 @@ jobs:
           # capture on the simulated display: the null backend's black frames, to files
           # through the writer thread, and by the pump without it (3 if a count is off)
           expect 0 "$bin/gfx_capture" --sim --frames 60 --every 3 --out capture_sim/f
-          expect 0 "$bin/gfx_capture" --sim --frames 60 --mark 5 --slots 12 --manual --png --out capture_sim/m
+          expect 0 "$bin/gfx_capture" --sim --frames 60 --mark 5 --slots 12 --manual --out capture_sim/m
           expect 2 "$bin/gfx_capture" --every -1
           expect 2 "$bin/gfx_clut_sync" --os-ramp    # needs --fullscreen
           # ysp/video.h: a generated frame sequence, plain, QOI and I420.
