@@ -59,3 +59,4 @@ CMakeUserPresets.json
 /beam_*/
 /ysp_beam_race_*/
 /ysp_x11_probe_*/
+/.claude/worktrees/
