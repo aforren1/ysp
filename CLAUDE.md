@@ -41,7 +41,8 @@ anything; some options were measured and reversed, and the specs say why.
 ## Changing a header
 
 Bump the version in the header's first line, its `*_VERSION` macro and
-its changelog; update `docs/<name>.md`, the README status row, the tests,
+its changelog; update `docs/<name>.md`, its row in the README Headers
+table (version, status word), its entry in `docs/status.md`, the tests,
 the compile checks, and its mutation list
 (`uv run tests/mutate/mutate.py tests/mutate/<name>.toml --check`, then
 run the mutants you add). Parsers of untrusted input get a fuzz target.
