@@ -12,7 +12,12 @@
  * 0.25 s, within 0.05 to 1.15 s.
  *
  * The display and the sound share one clock (ysp/rt.h). The tone is
- * planned at the go stimulus's planned onset plus the SSD; the data row
+ * planned when the go stimulus lands, at its frame's predicted onset plus
+ * the SSD, and moved to the flip record's onset plus the SSD when the
+ * record differs and the tone has not started. The timeline's time of the
+ * go stimulus is not used: a frame loop that falls behind plans a later
+ * vblank, and the tone came one period early (measured in --sim under
+ * load, 4 of 10 runs). The data row
  * has the SSD as shown (ssd_actual: the tone's onset record minus the go
  * stimulus's flip onset), and the staircase records that value. RT runs
  * from the go stimulus's flip onset.
@@ -83,7 +88,8 @@ static const yrsp_choice keys[] = { { .key = "f" }, { .key = "j" } };
 
 /* The synthetic participant of --sim: the correct key 0.50 s after each go
  * stimulus; on the first signal no key, on the second the correct key at
- * 0.45 s (after the SSD of 0.30 s: a failed stop). */
+ * 0.45 s (after the SSD of 0.30 s: a failed stop). The keys are queued
+ * from the go stimulus's flip record, as RT is measured from it. */
 #define SIM_GO_RT   0.50
 #define SIM_FAIL_RT 0.45
 
@@ -146,7 +152,8 @@ int main(int argc, char** argv) {
     int i, n, sim = 0, reps = 0, fullscreen = 0, aborted = 0, failed = 0, rows = 0;
     int in_trial = 0, responding = 0, row_due = 0, stop = 0, stim_ch = 0, n_sim_ev = 0, sim_next = 0;
     int stim_col, key_col, signal_col, n_stop = 0, n_respond = 0, n_go_rt = 0, sim_stopped[2] = { -1, -1 };
-    int64_t go_bt = 0;
+    int64_t go_frame = -1, tone_from = 0;   /* the go stimulus's landing frame; the tone's time base */
+    int go_seen = 0;                         /* its final flip record came */
     yau_id id = 0;
     double ssd = 0, sum_go_rt = 0, sum_ssd = 0, sim_ssd[2] = { 0, 0 }, sim_ssd_actual[2] = { 0, 0 };
     double sim_go_rt = 0;
@@ -241,10 +248,9 @@ int main(int argc, char** argv) {
         if (rc != YSCR_OK) { fprintf(stderr, "trial_stop_signal: %s\n", yscr_error(&scr)); failed = 1; break; }
 
         if (!in_trial) {
-            /* the go stimulus after the fixation; on a signal trial the tone
-             * at its planned onset plus the SSD */
+            /* the go stimulus after the fixation; on a signal trial the
+             * tone when it lands (below) */
             ytl_seq q;
-            int64_t t_go;
             if (ytr_next(&trials, &ti) < 0) break;
             key_answer = ytb_text(&tab, ti.condition, key_col);
             stim_ch = !strcmp(ytb_text(&tab, ti.condition, stim_col), "circle") ? CIRCLE_ON : SQUARE_ON;
@@ -255,36 +261,47 @@ int main(int argc, char** argv) {
             ytl_on(&q, FIX_ON);
             ytl_wait(&q, YRT_S(FIXATION_S));
             ytl_off(&q, FIX_ON);
-            go_bt = q.t;
             ytl_on(&q, stim_ch);
             if (q.err) { fprintf(stderr, "trial_stop_signal: timeline error %d\n", q.err); failed = 1; break; }
-            ytl_rt_time(&tl, TRIAL, go_bt, &t_go);
             id = 0;
-            ssd = NAN;
-            if (stop) {
-                ssd = yst_next(&stair);
-                id = yau_play_at(&au, tone, t_go + YRT_S(ssd));
-                if (id <= 0) { fprintf(stderr, "trial_stop_signal: play: %s\n", yau_strerror((int)id)); failed = 1; break; }
-            }
+            ssd = stop ? yst_next(&stair) : NAN;
+            go_frame = -1;
+            go_seen = 0;
             yrsp_arm(&rsp, f.onset);
             in_trial = responding = 1;
             row_due = 0;
             n_sim_ev = sim_next = 0;
-            if (sim && (!stop || n_stop == 1)) {
-                yrsp_input* e = &sim_ev[0];
-                memset(e, 0, sizeof *e);
-                e->t = t_go + YRT_S(stop ? SIM_FAIL_RT : SIM_GO_RT);
-                e->type = YRSP_PRESS;
-                e->control = (uint32_t)yrsp_scancode(key_answer);
-                e->stamp = YRSP_TIER_SIM;
-                e->value = 1;
-                sim_ev[1] = *e;
-                sim_ev[1].type = YRSP_RELEASE;
-                sim_ev[1].value = 0;
-                sim_ev[1].t = e->t + YRT_MS(80);
-                n_sim_ev = 2;
-            }
         }
+
+        /* the go stimulus's flip record: the tone moved to its onset if the
+         * frame was not shown on its predicted vblank, the --sim keys queued */
+        for (i = 0; go_frame >= 0 && !go_seen && i < f.n_done; i++)
+            if (f.done[i].index == go_frame && yrsp_onset_flip(&f.done[i]).final) {
+                int64_t t_on = f.done[i].onset;
+                go_seen = 1;
+                if (stop && t_on != tone_from && yrt_now_ns() < tone_from + YRT_S(ssd)) {
+                    int crc = yau_cancel(&au, id);
+                    if (crc < 0) { fprintf(stderr, "trial_stop_signal: cancel: %s\n", yau_strerror(crc)); failed = 1; break; }
+                    id = yau_play_at(&au, tone, t_on + YRT_S(ssd));
+                    if (id <= 0) { fprintf(stderr, "trial_stop_signal: play: %s\n", yau_strerror((int)id)); failed = 1; break; }
+                    tone_from = t_on;
+                }
+                if (sim && (!stop || n_stop == 1)) {
+                    yrsp_input* e = &sim_ev[0];
+                    memset(e, 0, sizeof *e);
+                    e->t = t_on + YRT_S(stop ? SIM_FAIL_RT : SIM_GO_RT);
+                    e->type = YRSP_PRESS;
+                    e->control = (uint32_t)yrsp_scancode(key_answer);
+                    e->stamp = YRSP_TIER_SIM;
+                    e->value = 1;
+                    sim_ev[1] = *e;
+                    sim_ev[1].type = YRSP_RELEASE;
+                    sim_ev[1].value = 0;
+                    sim_ev[1].t = e->t + YRT_MS(80);
+                    n_sim_ev = 2;
+                }
+            }
+        if (failed) break;
 
         yrsp_feed_screen(&scr, &rsp, 1);
         while (sim && sim_next < n_sim_ev && sim_ev[sim_next].t <= f.onset) yrsp_feed(&rsp, &sim_ev[sim_next++]);
@@ -303,7 +320,17 @@ int main(int argc, char** argv) {
         }
 
         n = ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, fired, 64);
-        yrsp_set_landing(&rsp, fired, n, stim_ch);   /* the go stimulus landed: its planned onset */
+        i = yrsp_set_landing(&rsp, fired, n, stim_ch);   /* the go stimulus landed: its planned onset */
+        if (i >= 0 && in_trial && go_frame < 0) {
+            /* the tone from the landing frame's predicted onset: at least
+             * the SSD ahead, so it is planned before it is due */
+            go_frame = fired[i].frame;
+            tone_from = fired[i].onset;
+            if (stop) {
+                id = yau_play_at(&au, tone, tone_from + YRT_S(ssd));
+                if (id <= 0) { fprintf(stderr, "trial_stop_signal: play: %s\n", yau_strerror((int)id)); failed = 1; break; }
+            }
+        }
         for (i = 0; i < n; i++)
             if (fired[i].kind == YTL_MARK && fired[i].code == END_OF_TRIAL) row_due = 1;
 
