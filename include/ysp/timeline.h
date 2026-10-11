@@ -2038,8 +2038,8 @@ static double ytl__shape(int ease, double u) {
 /* For HERMITE the curve's x1 is the start tangent. cslots is the end of
  * the keys, read only with curves NULL. The v0.5.0 eases keep their own
  * cases (the same expressions as ytl__shape, so the same bits): sending
- * LINEAR through ytl__shape's switch too measured up to 15% slower on 256
- * keyed channels with gcc (docs/timeline.md, "Targets"). */
+ * every ease through ytl__shape's switch measured 6% (gcc) and 8% (MSVC)
+ * slower on 256 LINEAR keyed channels (docs/timeline.md, "Targets"). */
 static double ytl__ease(const ytl_key* a, const ytl_curve* curves, const ytl_key* cslots,
                           double v0, double v1, double u) {
     ytl_curve c;

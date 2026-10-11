@@ -923,7 +923,7 @@ writes into a field of the caller, a `float`, `float[2..4]` or `int32_t`.
   targets do not serve: event-driven channels with the (time, id)
   recompute, sampled and repeating tracks (a 10-minute tracking target, a
   flicker), and the contiguous array for a uniform upload, a log and a
-  designer's preview. 19 example programs use them. Targets serve what a
+  designer's preview. 18 example programs use them. Targets serve what a
   channel does badly: a channel needs a number, a binding row and a copy
   per frame, and it holds one waiting tween. So neither subsumes the
   other. Rejected: a field pointer on a channel (`ytl_bind`), which is
@@ -985,6 +985,23 @@ The second run of each was within 8% of the first, except MSVC held
   a release after the end would save it.
 - **One target costs 8 to 11 ns more than an empty frame**, against 5 to
   8 ns for one channel: the pass's fixed cost.
+
+The channel path itself did not slow down. The first build sent every ease
+of a key through the new eases' function (`ytl__shape`), one more switch
+per key. A scratch program timed 256 LINEAR keyed channels against
+v0.5.0, 5 interleaved rounds through the measurement lock, the minimum of
+the medians in ns per evaluate:
+
+| Build | MinGW gcc 16.1 -O2 | MSVC cl /O2 (Visual Studio 18) |
+|---|---|---|
+| v0.5.0 | 3105 | 3461 |
+| Every ease through `ytl__shape` | 3291 (+6%) | 3754 (+8%) |
+| Kept: v0.5.0's cases inline, the new eases through `ytl__shape` | 2695 | 3448 |
+
+An earlier session at 0% load gave 1467 against 1344 (gcc) and 1636
+against 1664 (MSVC) for v0.5.0 against the kept build, and COSINE keys
+within 4% both ways. The machine's speed differed between the sessions,
+so only the rows of one session compare.
 
 ### Verification
 
