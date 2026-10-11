@@ -29,12 +29,52 @@
     user_agent: navigator.userAgent,
   };
 
-  const logLines = [];
+  // The page log. A print from the C frame loop must not touch layout:
+  // rewriting the whole log and reading scrollHeight forced a layout inside
+  // the frame, and each print took longer as the log grew. So lines wait in
+  // a buffer and reach the DOM at most every 300 ms, from an idle callback,
+  // as one appended text node; the box keeps the newest LOG_KEEP lines, its
+  // column-reverse layout shows the newest with no scroll position read or
+  // set, and style.css gives it `contain: strict`, so its layout cannot
+  // reach the canvas. The console gets the same batch.
+  const LOG_KEEP = 400;       // lines in the box; the session log keeps all
+  const LOG_EVERY_MS = 300;   // at most one flush this often
+  const logLines = [];        // every line, for sessionText()
+  let pending = [], flushTimer = 0, shown = 0;
+  const nodeLines = [];       // lines in each text node of the box, oldest first
+
+  function flush() {
+    flushTimer = 0;
+    if (!pending.length) return;
+    const text = pending.join('\n') + '\n';
+    const n = pending.length;
+    pending = [];
+    console.log(text.slice(0, -1));
+    const box = $('log-text');
+    if (!box) return;
+    box.appendChild(document.createTextNode(text));
+    nodeLines.push(n);
+    shown += n;
+    while (shown - nodeLines[0] >= LOG_KEEP && box.firstChild) {
+      shown -= nodeLines.shift();
+      box.removeChild(box.firstChild);
+    }
+  }
+
+  function scheduleFlush() {
+    if (flushTimer) return;
+    flushTimer = setTimeout(() => {
+      if (window.requestIdleCallback) requestIdleCallback(flush, { timeout: 500 });
+      else flush();
+    }, LOG_EVERY_MS);
+  }
+
   function log(text, isErr) {
-    logLines.push((isErr ? '! ' : '') + text);
-    const el = $('log');
-    if (el) { el.textContent = logLines.join('\n'); el.scrollTop = el.scrollHeight; }
-    if (isErr) console.error(text); else console.log(text);
+    const line = (isErr ? '! ' : '') + text;
+    if (logLines.length < 100000) logLines.push(line);
+    pending.push(line);
+    if (isErr) console.error(text);
+    scheduleFlush();
   }
 
   function showStatus() {
@@ -123,6 +163,8 @@
   }
 
   function finish() {
+    flush();   /* the run is over: the last lines now */
+    document.body.classList.remove('running');
     $('stage').classList.remove('running');
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     if ($('stop')) $('stop').disabled = true;

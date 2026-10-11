@@ -65,9 +65,15 @@ input[type=number] { width: 6em; font: inherit; }
 #stage.running { display: block; }
 #stage:fullscreen { display: flex; align-items: center; justify-content: center; }
 canvas { display: inline-block; outline: none; }
+/* Fixed size and contain: strict, so a new log line never lays out the rest
+ * of the page; column-reverse keeps the newest line in view without a
+ * script reading or setting the scroll position (ysp-web.js). */
 #log {
+  contain: strict;
+  height: 14em;
+  display: flex;
+  flex-direction: column-reverse;
   white-space: pre-wrap;
-  max-height: 14em;
   overflow: auto;
   background: var(--surface-2);
   border-radius: 6px;

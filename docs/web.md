@@ -278,6 +278,28 @@ Limits:
 - Every resource must come from the site's own origin or send CORP
   headers. The demos load nothing from elsewhere.
 
+### The page log stays off the frame path
+
+Each `printf` of a demo reaches the page through `Module.print`. The first
+log rewrote the whole box and read `scrollHeight` on every line: a forced
+layout inside the frame, longer as the log grew. Measured with the four
+demos in Chrome 154 (headless and headed, isolated, keys pressed by
+script, the page's own `requestAnimationFrame` times during the run):
+
+| | One print, max | All prints of a run | Intervals over 1.5 periods |
+|---|---|---|---|
+| Before | 3.4 to 7.6 ms | 5 to 390 ms (gallery: 167 lines) | 1 to 6 per run |
+| After | 0.04 to 0.19 ms | 0.06 to 1.2 ms | 1 to 3 per run |
+
+Now lines wait in a buffer and reach the box at most every 300 ms from
+an idle callback, as one appended text node; the box keeps the newest 400
+lines, shows the newest by `flex-direction: column-reverse` with no scroll
+position read, and has `contain: strict`. The intervals over 1.5 periods
+that remain come with the programs' own work (a trial's first frame, a
+gallery page's setup), not with the log. No demo prints once per frame:
+the gallery prints a page's tile list when the page changes, the trials
+one line per trial.
+
 ### Measurements
 
 All on the laptop of [status](status.md) (Windows 11, Intel Iris Xe,
