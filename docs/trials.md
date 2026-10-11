@@ -879,7 +879,7 @@ C++17), 2026-10-10.
     `ytr_format_row()` and the caller's part the values given; the write
     refused before any trial, with a trial pending, and twice for one
     trial; a writer opened mid-session writes nothing old.
-  - 33 refusals (22 at open, 11 by the setters and write), each by its
+  - 34 refusals (23 at open, 11 by the setters and write), each by its
     message or code; a write function that fails once:
     the row refused, every later row refused, nothing written after the
     failure, finish() YTR_ERR_IO; a 24 KB field written whole in pieces; a file
@@ -887,10 +887,12 @@ C++17), 2026-10-10.
     each row while the writer holds it open (the row is in the file), and
     the sidecar's first and last lines.
 - `examples/trials/save_rows.c --sim` reads its own file back with
-  `ytb_csv_file()` and checks every row; CI runs it. `trials_mocs` prints
+  `ytb_open_csv_file()` and checks every row; CI runs it. `trials_mocs` prints
   its CSV through the writer.
-- Mutations: 22 data-writer mutants in `tests/mutate/trials.toml`
-  all 22 killed. Four survived the first run: d-01, d-03, d-04 and d-09
+- Mutations: 25 data-writer mutants in `tests/mutate/trials.toml`,
+  all 25 killed (d-23 to d-25 came with the port to the conventions:
+  close finishes, the `_s` column name, a setter's message); 74 of 74
+  in the file, MinGW gcc 16.1, 2026-10-10. Four survived the first run: d-01, d-03, d-04 and d-09
   broke the read-back itself, and the test skipped its checks when
   ytb_open_csv() refused the file; a refused read-back is now a failed check.
   d-18 removed one of the two guards that stop writing after a failure

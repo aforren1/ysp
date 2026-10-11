@@ -1232,11 +1232,12 @@
  *   decimal point '.' under a German locale; 400 random strings (commas,
  *   quotes, CR, LF, UTF-8, four kinds of invalid UTF-8) read back with
  *   U+FFFD for each bad byte; a session's rows equal to format_row(),
- *   writes refused before update(); 33 refusals; a write function that
+ *   writes refused before update(); 34 refusals; a write function that
  *   fails once; a UTF-8 file name read after each row while open, and its
  *   sidecar. examples/trials/save_rows.c --sim reads its file back.
- *   Mutations: 22 data-writer mutants in tests/mutate/trials.toml, all
- *   killed (69 in the file). Cost per 26-column row (Iris Xe laptop, AC,
+ *   Mutations: 25 data-writer mutants in tests/mutate/trials.toml, all
+ *   killed (74 of 74 in the file, MinGW gcc 16.1, after the merge onto
+ *   v0.3.0). Cost per 26-column row (Iris Xe laptop, AC,
  *   measurement lock, examples/trials/bench.c, median, gcc 16.1 -O2 /
  *   MSVC 19.44 /O2): formatting 4.2 / 1.9 us, with the write to the OS
  *   (YTR_FLUSH_ROW) 15.2 / 14.3 us, with the sync to disk
