@@ -3197,8 +3197,11 @@ compile check captures 3 frames on SIM (every 2nd and a mark). CI runs
 
 ### Mutations
 
-`cp-01` to `cp-14` in tests/mutate/gfx.toml, 14 of 14 caught (MSVC, the
-Iris Xe for the two GL ones). `cp-04` (a record attached without its
+`cp-01` to `cp-16` in tests/mutate/gfx.toml, 16 of 16 caught (MSVC, the
+Iris Xe for the two GL ones); `cp-15` and `cp-16` came with the port to
+the conventions (a capture call's message, `ygfx_image_write()`'s `err`).
+After the merge the whole list ran again on 2026-10-10: 127 of 127
+caught. `cp-04` (a record attached without its
 index) survived the first run: SIM's records came before a newer copy
 waited, so no record could go astray. A frame with another frame's record
 in its `done` list now checks it.
