@@ -125,7 +125,7 @@ To check the board, send `i` and a newline. The board answers
 ```matlab
 h = ysp_serial('open', 'COM5');
 ysp_serial('write', h, uint8(sprintf('i\n')));
-char(ysp_serial('read', h, 64, 500))
+char(ysp_serial('read', h, 64, 0.5))      % 0.5 s timeout
 ysp_serial('close', h);
 ```
 
@@ -164,10 +164,11 @@ metric that is not a time. p99 is the sample at rank ceil(0.99 n), so for
 fewer than 100 samples it is the maximum.
 
 Each API is timed with its own clock: `tic`/`toc` for serialport, `GetSecs`
-for IOPort, `ysp_serial('now_us')` for ysp. The `clock` part gives the cost
-of each clock. Subtract it from a call cost if the call is near that size.
-`ysp_serial('now_us')` counts whole microseconds, so its median of a sub-
-microsecond call is 0 or 1; use the mean in that case.
+for IOPort, `ysp_serial('now')` for ysp. All three return seconds; the bench
+scales them to microseconds. The `clock` part gives the cost of each clock.
+Subtract it from a call cost if the call is near that size. The results of
+2026-10-11 used the binding's earlier `now_us`, which counted whole
+microseconds; the C path under it is the same.
 
 Metrics of the `rt` part, with `block` or `poll` before the name:
 
@@ -190,7 +191,11 @@ Metrics of the `stream` part, with `line`, `poll` or `async` before the name:
 `lat_stamp` (the API's own stamp minus the board send stamp). For IOPort,
 `lat_stamp` in `async` mode is the background reader's stamp of the first
 byte of each line. For serialport, `lat_stamp` in `async` mode is the
-callback's `evt.AbsTime`, converted to the `tic` clock.
+callback's `evt.AbsTime`, converted to the `tic` clock. For ysp, `lat_stamp`
+in `async` mode is the reader thread's stamp of the read that brought the
+line's newline. The `async` mode of IOPort and ysp also gives
+`async_write_call` and `async_cmd_write_call`: a write while the reader
+thread waits for input.
 
 ### How the one-way split works, and its limit
 
@@ -209,11 +214,34 @@ note. Only a shared physical signal, such as an oscilloscope on a pin that
 the board toggles when it reads a command, can remove it. The same limit
 applies to the stream latencies.
 
+## The tuned IOPort and the raw Win32 floor
+
+The API list has two IOPort entries. `ioport` uses IOPort's defaults.
+`ioport_tuned` adds `BlockingBackgroundRead=1 PollLatency=0
+HardwareBufferSizes=32768,32768`, so a blocking `Read` waits in the kernel
+instead of in a 1 ms sleep loop. `sb_ioport.m` says what each option does,
+with line references into Psychtoolbox's source.
+
+`raw_win32.c` is a small C program without ysp code and without MATLAB. It
+does the same round trip and the same stream with `CreateFile`, `WriteFile`
+and `ReadFile` in five ways (a non-overlapped handle; the same with IOPort's
+transmit mask; IOPort's driver calls without its sleep loop; overlapped;
+`WaitCommEvent`) and prints the same metrics. It shows the floor of this port
+and driver: what no API can beat. Build and run it on Windows:
+
+```
+gcc -O2 -Wall -o raw_win32.exe raw_win32.c
+raw_win32.exe COM5 C:\tmp\raw-out 1000
+```
+
+A fourth argument `rev` runs the modes in reverse order, `rt` skips the
+streams. Run it twice, once with `rev`: the first mode of a run measured
+40 to 80 us slower than the same calls later in the run.
+
 ## Limits
 
-- The script does not test the asynchronous read of the C library. The MEX
-  binding has no asynchronous read. A C program uses a reader thread, as
-  ysp/device.h does.
+- The API order is fixed in a run, and the machine state drifts. Run the
+  bench twice, the second time with the API order reversed (`'apis'`).
 - serialport has no non-blocking read. Its poll is a `NumBytesAvailable`
   query and then a read of that many bytes.
 - IOPort writes use `blocking = 0` in the round trips. The `calls` part also

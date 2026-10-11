@@ -1,4 +1,4 @@
-function R = sb_ioport(cfg, R)
+function R = sb_ioport(cfg, R, tuned)
 %SB_IOPORT  serial_bench parts for Psychtoolbox's IOPort.
 %   Clock: GetSecs (QueryPerformanceCounter on Windows), in seconds, scaled to
 %   us here. IOPort('Read') returns a receive stamp 'when' in the same clock:
@@ -7,7 +7,30 @@ function R = sb_ioport(cfg, R)
 %   first byte of the line. Writes use blocking = 0 in the round trips (the
 %   low-latency choice); the call-cost part also times the default blocking
 %   = 1, which waits until the driver reports the transmit queue empty.
-    A = 'ioport';
+%
+%   tuned = true (api 'ioport_tuned') adds IOPort's latency options. Line
+%   numbers are PsychSourceGL/Source/Windows/IOPort/PsychSerialWindowsGlue.c
+%   at tag 3.0.19.16; docs/serial.md has the whole audit.
+%     BlockingBackgroundRead=1  A blocking 'Read' then skips its wait for
+%                    the first byte (lines 1281-1303), which sleeps
+%                    PollLatency between ClearCommError polls, and waits in
+%                    ReadFile in the kernel instead. PTB's own demos set it.
+%     PollLatency=0  Where IOPort still polls (a blocking 'Read' on a
+%                    background reader, line 1253), Sleep(0) instead of
+%                    Sleep(1): PsychYieldIntervalSeconds clamps any positive
+%                    value to 1 ms on Windows (PsychTimeGlue.c:188), so
+%                    PsychRTBox's PollLatency=0.0001 is 1 ms there too.
+%     HardwareBufferSizes=32768,32768  CMUBox's setting; a hint to the
+%                    driver (SetupComm), as ysp/serial.h's 4096.
+%   The async mode is the same in both: it already blocks in the reader.
+    if nargin < 3, tuned = false; end
+    if tuned
+        A = 'ioport_tuned';
+        extra = ' BlockingBackgroundRead=1 PollLatency=0 HardwareBufferSizes=32768,32768';
+    else
+        A = 'ioport';
+        extra = '';
+    end
     clk = @() GetSecs * 1e6;
 
     if sb_want(cfg, 'clock')
@@ -50,7 +73,7 @@ function R = sb_ioport(cfg, R)
     end
 
     if isempty(cfg.port), return; end
-    conf = sprintf('BaudRate=%d DataBits=8 Parity=None StopBits=1 FlowControl=None DTR=1 RTS=1 ReceiveTimeout=1.0', cfg.baud);
+    conf = sprintf('BaudRate=%d DataBits=8 Parity=None StopBits=1 FlowControl=None DTR=1 RTS=1 ReceiveTimeout=1.0%s', cfg.baud, extra);
 
     if sb_want(cfg, 'calls')
         dop = zeros(cfg.n_open, 1); dcl = dop;
@@ -143,26 +166,64 @@ function R = sb_ioport(cfg, R)
             if strcmp(mode{1}, 'async')
                 % One line per quantum, stamped at its first byte by the
                 % reader thread; the buffer must hold a whole number of them.
+                % The reader thread never checks for a full ring: it wraps
+                % and overwrites, and the next 'Read' that finds more than
+                % InputBufferSize bytes pending flushes everything and fails
+                % (PsychSerialWindowsGlue.c:1322-1335). The first bench run
+                % sized it for 4096 of 10000 lines and waited for the end, so
+                % it got 0 lines. PTB's DatarecordingFromSerialPortDemo sizes
+                % it for an hour; here it holds the whole stream with room,
+                % and the main thread empties it every 0.1 s as an
+                % experiment loop would.
                 IOPort('ConfigureSerialPort', h, sprintf(['InputBufferSize=%d Terminator=10 ' ...
-                    'BlockingBackgroundRead=1 ReadFilterFlags=4 StartBackgroundRead=%d'], L * 4096, L));
-                c0 = cputime; w0 = GetSecs;
+                    'BlockingBackgroundRead=1 ReadFilterFlags=4 StartBackgroundRead=%d'], L * (nlines + 1000), L));
+                % A write while the reader thread waits in its ReadFile: the
+                % port is a non-overlapped handle, and Windows runs the I/O
+                % of such a handle one call at a time. The board ignores an
+                % empty line.
+                pause(0.05);
+                dw = zeros(5, 1);
+                for j = 1:5
+                    a = GetSecs;
+                    while GetSecs - a < 1e-3, end
+                    a = GetSecs;
+                    IOPort('Write', h, uint8(10), 0);
+                    dw(j) = (GetSecs - a) * 1e6;
+                end
+                R = sb_add(R, A, 'stream', 'async_write_call', dw, ...
+                           'Write(h, newline, 0) while the background reader waits for a byte');
+                % The stream command waits the same way, so the clock of
+                % the receive phase starts when it has been sent.
+                a = GetSecs;
                 IOPort('Write', h, cmd, 0);
-                while IOPort('BytesAvailable', h) < nlines * L && GetSecs - w0 < cfg.stream_s + 2
+                c0 = cputime; w0 = GetSecs;
+                R = sb_add(R, A, 'stream', 'async_cmd_write_call', (w0 - a) * 1e6, ...
+                           'Write(h, stream command, 0) with the background reader running');
+                nq = 0;
+                while got < nlines * L && GetSecs - w0 < cfg.stream_s + 2
                     pause(0.1);
+                    while true
+                        [r, when, err] = IOPort('Read', h, 0, L);
+                        if ~isempty(err)
+                            error('serial_bench:ioport', 'async Read: %s', err);
+                        end
+                        if isempty(r), break; end
+                        % A reader-thread read that timed out with no byte
+                        % stores a quantum of zeros; it is not data.
+                        if all(r == 0), nq = nq + 1; continue; end
+                        r = uint8(r(:)');
+                        r = r(1:find(r == 10, 1, 'last'));   % drop the zero padding
+                        nr = nr + 1;
+                        reads{nr} = r;
+                        stamp(nr) = when * 1e6;
+                        got = got + numel(r);
+                    end
                 end
                 w1 = GetSecs; c1 = cputime;
-                while true
-                    [r, when] = IOPort('Read', h, 0, L);
-                    if isempty(r), break; end
-                    % A reader-thread read that timed out with no byte stores a
-                    % quantum of zeros; it is not data.
-                    if all(r == 0), continue; end
-                    nr = nr + 1;
-                    reads{nr} = uint8(r(:)');
-                    stamp(nr) = when * 1e6;
-                end
                 IOPort('ConfigureSerialPort', h, 'StopBackgroundRead');
-                note = 'background reader thread, BlockingBackgroundRead=1, ReadFilterFlags=4; main thread in pause(0.1)';
+                note = sprintf(['background reader thread, BlockingBackgroundRead=1, ReadFilterFlags=4, ' ...
+                    'InputBufferSize for %d lines; main thread in pause(0.1), then Read(h, 0, %d) until empty; ' ...
+                    '%d empty quanta'], nlines + 1000, L, nq);
             else
                 c0 = cputime; w0 = GetSecs;
                 IOPort('Write', h, cmd, 0);

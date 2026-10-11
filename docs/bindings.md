@@ -26,4 +26,8 @@ This page is reference: the language bindings of the headers.
   beside mQUESTPlus and Palamedes' PAL_AMPM, and `ysp_stair` beside
   PAL_AMUD, on one response stream; the MEX README has the results.
   `tests/compare/color_ptb.m` runs `ysp_color` beside Psychtoolbox's
-  colorimetric code (docs/color.md).
+  colorimetric code (docs/color.md). `ysp_serial` has an async reader
+  (`async_start`, `async_read`, `async_stop`): a C thread that stamps each
+  line when it arrives. `tests/compare/serial_bench/` runs it beside MATLAB's
+  `serialport` and Psychtoolbox's `IOPort` (docs/serial.md). The Python
+  `ysp.serial` has no async reader yet.

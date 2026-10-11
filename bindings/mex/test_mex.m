@@ -1,9 +1,13 @@
 function test_mex()
-%TEST_MEX  Key checks of the ysp_stair, ysp_quest, ysp_aep and ysp_trials MEX
-%   functions. Runs in MATLAB and in Octave. Prints PASS, or stops with the
-%   error of the first check that failed.
+%TEST_MEX  Key checks of the ysp_stair, ysp_quest, ysp_aep, ysp_trials and
+%   ysp_serial MEX functions. Runs in MATLAB and in Octave. Prints PASS, or
+%   stops with the error of the first check that failed.
 %
 %   Build first (run build.m), then from this directory:  test_mex
+%
+%   ysp_serial needs no port for its argument and handle checks. With the
+%   environment variable YSP_TEST_ECHO_PORT set to the port of an echo board
+%   (firmware/ysp_echo), it also runs the async reader on a 2000-line stream.
 %
 %   Every random draw comes from ysp_trials('splitmix'), so both interpreters
 %   see the same stream and the same numbers.
@@ -22,6 +26,7 @@ function test_mex()
     test_trials();
     test_trials_v02();
     test_trials_jitter();
+    test_serial();
     fprintf('PASS\n');
 end
 
@@ -474,4 +479,89 @@ function test_trials_jitter()
     expect_error('ysp_trials:open', @() ysp_trials('open', struct('n_conditions', 1, 'reps', 1, ...
         'jitters', ysp_trials('uniform', 'x', 0.801, 0.81, 60))));
     fprintf('ysp_trials v0.2.1 jitter: ok\n');
+end
+
+% ---------------------------------------------------------------------------
+
+function test_serial()
+    [v, hv] = ysp_serial('version');
+    check(strcmp(v, '2.0.0') && ischar(hv) && ~isempty(hv), 'ysp_serial version');
+    % Seconds: 'now' advances by about the pause, not by 1e3 or 1e6 of it.
+    t1 = ysp_serial('now');
+    pause(0.05);
+    t2 = ysp_serial('now');
+    check(t2 - t1 > 0.04 && t2 - t1 < 1, 'now is not in seconds: %g for a 0.05 s pause', t2 - t1);
+    expect_error('ysp_serial:usage', @() ysp_serial('now_us'));
+    % v1 settings are refused, not dropped; NaN, negative and Inf where it
+    % is not allowed are refused before any port is touched.
+    expect_error('ysp_serial:arg', @() ysp_serial('open', 'COM250', struct('write_timeout_ms', 100)));
+    expect_error('ysp_serial:arg', @() ysp_serial('open', 'COM250', struct('write_timeout', NaN)));
+    expect_error('ysp_serial:arg', @() ysp_serial('open', 'COM250', struct('write_timeout', -1)));
+    expect_error('ysp_serial:arg', @() ysp_serial('open', 'COM250', struct('rt_runtime', Inf)));
+    % A handle that was never opened: every async call refuses.
+    bad = uint64(2^40);
+    expect_error('ysp_serial:handle', @() ysp_serial('async_start', bad));
+    expect_error('ysp_serial:handle', @() ysp_serial('async_read', bad));
+    expect_error('ysp_serial:handle', @() ysp_serial('async_stop', bad));
+    expect_error('ysp_serial:usage', @() ysp_serial('async_read'));
+    port = getenv('YSP_TEST_ECHO_PORT');
+    if isempty(port)
+        fprintf('ysp_serial %s: no port (set YSP_TEST_ECHO_PORT for the async stream check): ok\n', v);
+        return;
+    end
+    h = ysp_serial('open', port);
+    c = onCleanup(@() ysp_serial('close', h));
+    ysp_serial('write', h, uint8(sprintf('x\n')));
+    pause(0.05);
+    ysp_serial('purge', h, 'rx');
+    expect_error('ysp_serial:arg', @() ysp_serial('read', h, 1, NaN));
+    expect_error('ysp_serial:arg', @() ysp_serial('read', h, 1, -0.5));
+    tr = ysp_serial('now');
+    check(isempty(ysp_serial('read', h, 1, 0.05)), 'read with nothing sent');
+    tr = ysp_serial('now') - tr;
+    check(tr > 0.04 && tr < 0.5, 'read timeout of 0.05 s took %g s', tr);
+    expect_error('ysp_serial:async', @() ysp_serial('async_read', h));
+    expect_error('ysp_serial:async', @() ysp_serial('async_stop', h));
+    expect_error('ysp_serial:arg', @() ysp_serial('async_start', h, 10, 0));
+    ysp_serial('async_start', h, 10, 4096, 64);
+    expect_error('ysp_serial:async', @() ysp_serial('async_start', h));
+    expect_error('ysp_serial:async', @() ysp_serial('read', h, 1, 0));
+    expect_error('ysp_serial:arg', @() ysp_serial('pulse', h, 1, 0, NaN));
+    expect_error('ysp_serial:arg', @() ysp_serial('pulse', h, 1, 0, Inf));
+    expect_error('ysp_serial:async', @() ysp_serial('available', h));
+    expect_error('ysp_serial:async', @() ysp_serial('purge', h, 'rx'));
+    ysp_serial('purge', h, 'tx');                 % writer role: allowed
+    n = 2000;
+    t0 = ysp_serial('now');
+    ysp_serial('write', h, uint8(sprintf('s 1000 %d\n', n)));
+    lines = {}; te = []; tf = [];
+    while numel(lines) < n && ysp_serial('now') - t0 < 5
+        pause(0.05);
+        [L, a, b] = ysp_serial('async_read', h);
+        lines = [lines; L]; te = [te; a]; tf = [tf; b]; %#ok<AGROW>
+    end
+    st = ysp_serial('async_stop', h);
+    check(numel(lines) == n, 'async lines %d of %d', numel(lines), n);
+    check(all(cellfun(@numel, lines) == 26) && all(cellfun(@(r) r(1) == uint8('A') && r(end) == 10, lines)), ...
+          'async line contents');
+    k = cellfun(@(r) str2double(char(r(16:25))), lines);
+    check(isequal(k(:)', 1:n), 'async line order');
+    check(all(diff(te) >= 0) && all(tf <= te) && all(te > t0), 'async stamps');
+    check(st.dropped == 0 && st.overlong == 0 && st.pending == 0 && isempty(st.error), 'async_stop stats');
+    expect_error('ysp_serial:async', @() ysp_serial('async_read', h));
+    % After the stop the MATLAB thread is the reader again, with no latched
+    % wake left behind: a read times out quietly.
+    r = ysp_serial('read', h, 1, 0.02);
+    check(isempty(r), 'read after async_stop');
+    % Too small a ring: lines are dropped and counted, never overwritten.
+    ysp_serial('async_start', h, 10, 16, 64);
+    ysp_serial('write', h, uint8(sprintf('s 1000 200\n')));
+    pause(0.5);
+    L = ysp_serial('async_read', h);
+    st = ysp_serial('async_stop', h);
+    check(numel(L) == 16 && st.dropped == 184, 'ring overflow: %d kept, %d dropped', numel(L), st.dropped);
+    % close stops a running reader.
+    ysp_serial('async_start', h);
+    clear c;
+    fprintf('ysp_serial %s async on %s: ok\n', v, port);
 end

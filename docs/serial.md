@@ -725,7 +725,10 @@ read the output. This section records what ran and what did not.
    nothing waiting and with bytes waiting; the bytes-available query; the
    cheapest call into each API; port enumeration; open of a port that does
    not exist. Each API is timed with its own clock (`tic`/`toc`, `GetSecs`,
-   `ysp_serial('now_us')`), and the cost of each clock is measured too.
+   `ysp_serial('now')`), and the cost of each clock is measured too. The
+   runs recorded below used the binding's v1 clock call `now_us` (whole
+   microseconds); binding v2.0.0 returns seconds from `now` on the same C
+   path, so the numbers stand.
 2. Round trip: a 13-byte command `e <seq>\n` and its answer, with a blocking
    read and with a poll loop. With the echo board
    (`firmware/ysp_echo/ysp_echo.ino`), a clock fit splits the round trip into
@@ -736,15 +739,17 @@ read the output. This section records what ran and what did not.
    the best path time, which the bench reports as `fit_unc`.
 3. Receive stamps: IOPort gives one (`when`, from `Read`). serialport gives
    none from a read, and `evt.AbsTime` (a `datetime`) in a callback. ysp gives
-   none; the stamp is `now_us` after the read returns. Against the echo
-   board's send stamp, mapped with the fit, each API's stamp gets a latency
-   distribution.
+   none from `read`, and a stamp per line from its async reader. Against the
+   echo board's send stamp, mapped with the fit, each API's stamp gets a
+   latency distribution.
 4. Stream: the board sends 1000 lines per second for 10 s. The bench counts
    missed lines and lines that arrive in one read with another line, measures
    the latency of each line against its board stamp and the MATLAB process
    CPU use, for a blocking read per line, a poll loop, and the asynchronous
-   mode of each API (`configureCallback`, IOPort's background reader; the
-   ysp MEX binding has none).
+   mode of each API (`configureCallback`, IOPort's background reader, the
+   ysp_serial async reader).
+   IOPort runs twice: with its defaults (`ioport`) and with its latency
+   options (`ioport_tuned`).
 5. The FTDI latency timer: the loopback round trip at 16 ms and at 1 ms.
 
 ### Echo board firmware
@@ -856,11 +861,16 @@ Call costs, median (p99): write of 1 to 512 bytes, ysp 149 to 205 (321 to
 Bytes-available query: ysp 5 (9), IOPort 19.5 (50.5), serialport 14.3
 (20.4). Open: ysp 3637, IOPort 2277, serialport 161400.
 
-What the tables show:
+What this first run showed, corrected by the audit below:
 
-- ysp_serial has the shortest round trip and the shortest tails: half of
-  IOPort's median and a sixth of its blocking p99. serialport is 20 times
-  slower at the median and has a tail near 15 ms.
+- ysp_serial had the shortest round trip, but the lead over IOPort was not
+  an API property. The 2 ms blocking tail and the 1 ms per-line latency of
+  IOPort come from its default first-byte wait, a `Sleep(1)` loop; with
+  `BlockingBackgroundRead=1` they go away. The medians (186.5 against 395
+  us) were one run, one open per API and a fixed API order, and the audit
+  measured the median of the same calls to move by 100 to 150 us with the
+  open and with the position in the run. serialport is 20 times slower at
+  the median and has a tail near 15 ms; that holds in every run.
 - The write call is most of the round trip for every API: it returns after
   the board has read the command (write return to board read is negative,
   -45 to -186 us), so a write on this port waits for the USB transfer.
@@ -869,12 +879,175 @@ What the tables show:
   for ysp and IOPort but uses a whole core.
 - ysp's open is 1.4 ms slower than IOPort's. Not investigated: an open is
   not on a trial's path.
-- IOPort's asynchronous mode (background reader, `BlockingBackgroundRead=1`)
-  received none of the 10000 lines. This is most likely the bench's set-up
-  of that mode, not IOPort; it is not investigated, and this run gives no
-  IOPort async result.
-- The MEX binding has no asynchronous read. C code reads on a thread
-  (ysp/device.h); that path is not in this bench.
+- IOPort's asynchronous mode received none of the 10000 lines because the
+  bench set it up wrong (see the audit), not because of IOPort.
+- The MEX binding had no asynchronous read then. It has one now
+  (`async_start`); the audit measures it.
+
+### Audit: is the comparison fair?
+
+The run above put ysp at half of IOPort's round trip. This section checks
+that result against IOPort's source and against a bare Win32 program, then
+measures again. Source references are to Psychtoolbox-3 at tag 3.0.19.16, the
+release the bench loads: `glue` is
+`PsychSourceGL/Source/Windows/IOPort/PsychSerialWindowsGlue.c`, `IOPort.c` is
+`PsychSourceGL/Source/Common/IOPort/IOPort.c`, `time` is
+`PsychSourceGL/Source/Windows/Base/PsychTimeGlue.c`.
+
+How IOPort uses the port on Windows:
+
+| What | IOPort | ysp/serial.h |
+|---|---|---|
+| Open | `CreateFile` without `FILE_FLAG_OVERLAPPED` (glue:376) | overlapped (serial.h:1358) |
+| Defaults | `PollLatency=0.001 SendTimeout=1.0 ReceiveTimeout=1.0 InputBufferSize=4096` (IOPort.c:425); no `SetupComm` unless `HardwareBufferSizes` is given (glue:944-959) | `SetupComm(4096, 4096)` |
+| Comm mask | `EV_TXEMPTY` always (glue:453) | none |
+| `Write(h, d, 0)` | `WriteFile`, then `ClearCommError` (glue:1119, 1177) | overlapped `WriteFile`, wait |
+| `Write(h, d, 1)`, the default | adds `FlushFileBuffers` and `WaitCommEvent(EV_TXEMPTY)` (glue:1137-1169) | `yser_drain` is separate |
+| Blocking `Read(h, 1, n)` | `SetCommTimeouts` per call, per-byte (glue:1272-1279); for n > 1, a loop of `ClearCommError` and `PsychYieldIntervalSeconds(PollLatency)` until the first byte (glue:1281-1303); `ReadFile` of exactly n (glue:1306); `ClearCommError` (glue:1382) | one wait in the kernel for the first byte, timeouts set only when they change (serial.h:1338) |
+| Sleep in that loop | `Sleep(max(1 ms, PollLatency))`; zero gives `Sleep(0)` (time:171-190), at a 1 ms timer period (time:609) | none |
+| `BlockingBackgroundRead=1` | the first-byte loop is skipped, `ReadFile` waits in the kernel (glue:1282) | |
+| Non-blocking `Read` | `SetCommTimeouts`, `ReadFile`, `ClearCommError`: three driver calls (glue:1221-1235, 1382) | one `ReadFile` |
+| `BytesAvailable` | `ClearCommError` (glue:1431) | the same |
+| Background reader | a thread at raised priority (glue:71); with `ReadFilterFlags=4`, a 1-byte `ReadFile` per byte, the stamp at the first byte of a line (glue:155-171); the ring has no overflow check (glue:290); a `Read` that finds more than `InputBufferSize` bytes pending flushes all of them and fails (glue:1322-1335) | (the MEX async reader, below) |
+
+Differences, and the number each one explains:
+
+1. The `Sleep(1)` loop for the first byte. When the answer is not there at
+   the first `ClearCommError`, the read sleeps at least 1 ms. It explains
+   IOPort's blocking round-trip p99 of 2050 us and the 1043 us median of
+   its read per line in the stream, where the next line is never there yet.
+   PsychRTBox's `PollLatency=0.0001` does not help on Windows: the sleep is
+   clamped to 1 ms (time:188). `BlockingBackgroundRead=1` removes it; so
+   does `PollLatency=0`, at the cost of a spinning core.
+2. Three driver calls per non-blocking read. IOPort's empty read costs
+   17.8 to 36 us against 3 to 4.5 us for ysp (medians, four runs). In C
+   each extra call costs 2.3 to 9.3 us (`raw_win32`, below). It costs a poll
+   loop a few microseconds per iteration, not its latency: the poll-loop
+   stream latencies are equal.
+3. The bench's async set-up. `InputBufferSize` held 4096 lines and the main
+   thread waited for all 10000 before it read. The reader wrapped, and the
+   first `Read` flushed everything and failed. PTB's
+   `DatarecordingFromSerialPortDemo` sizes the buffer for an hour. Fixed in
+   the bench: the buffer holds the stream and the main thread empties it
+   every 0.1 s.
+4. A write while IOPort's background reader runs takes seconds. The port is
+   a non-overlapped handle, and Windows runs the I/O of such a handle one
+   call at a time, so `Write` waits until the reader's pending `ReadFile`
+   times out (1 s per byte at `ReceiveTimeout=1.0`) and sometimes for more
+   than one of them: 2.0 to 4.0 s median, up to 6.0 s, in four runs of 5
+   writes. ysp's async reader uses an overlapped handle; a write beside it
+   took 292 to 300 us median (814 us p99).
+5. Not a difference: IOPort's driver calls themselves. `raw_win32`'s
+   `sync_ptb` mode makes every driver call IOPort makes, with its timeouts
+   and mask, in C. Its round trip is 183 and 196 us median, within the
+   spread of the plain non-overlapped and overlapped modes (167 to 229 us).
+6. Bench-side differences. IOPort's `when` is taken inside the MEX before
+   it returns; ysp's `now_us` after the MEX returns, so ysp's host latency
+   includes the return (IOPort's own `lat_host` minus `lat_stamp`: 15 to 60
+   us). The read sizes, timeouts, poll strategy and clock placement are the
+   same for each API. The API order was fixed, and each API opened the
+   port once per part.
+7. The open and the position in the run. The median of one block of
+   identical calls depends on the open: in 9 alternating opens of IOPort
+   with identical settings (500 polled round trips each), the write-call
+   median fell in two clusters, 160 to 197 us and 254 to 349 us, whatever
+   the setting. ysp's write-call median was 114 us in one run and 243 us in
+   the other. In `raw_win32` the first mode of a run was 40 to 80 us slower
+   than the same calls later. A median from one open is good to about
+   100 to 150 us, not better. The tails (the 2 ms sleep) are not affected.
+8. Unexplained: in one MATLAB process, in 4 alternating blocks of 500, the
+   tuned IOPort's write call took 287 us median against ysp's 178 us, and
+   its `WriteFile` alone, between IOPort's own pre- and post-write stamps,
+   took 204 us. The same driver calls in C (difference 5) do not show it.
+   It is inside IOPort's MEX path in MATLAB or in the per-open state of
+   difference 7; finding out needs a kernel trace.
+
+### Audit runs: IOPort tuned, the raw Win32 floor, and three async readers
+
+Conditions: 2026-10-11 07:39 to 07:51, the machine of the runs above
+(Windows 11 10.0.26200, Intel Core i7-1360P, AC power, the shared guard
+waited for a quiet machine), MATLAB R2023a Update 6 in `-batch` mode,
+IOPort 3.0.19.16, `ysp_serial.mexw64` from this tree with the async reader,
+the Teensy 4.0 echo board on COM3. Two full bench runs, the second with the
+API order reversed (run 1: serialport, ioport, ioport_tuned, ysp; run 2:
+ysp, ioport_tuned, ioport, serialport), and two runs of `raw_win32.exe`
+(MinGW-w64 gcc -O2), the second with its mode order reversed. Each cell
+gives run 1, run 2. Times in microseconds. `ioport_tuned` adds
+`BlockingBackgroundRead=1 PollLatency=0 HardwareBufferSizes=32768,32768`.
+The summaries are in
+`tests/compare/serial_bench/results/2026-10-11-teensy40-audit/`. These runs
+used binding v1 calls (`now_us`, timeouts in ms). After the binding moved to
+seconds (v2.0.0), one ysp-only run on the same C path (`run3-ysp-v2`) gave
+round trip 172 / 393 us (blocking, median / p99), per-line 173 / 342 us and
+async stamp 170 / 319 us, inside the spread of the table; `now` costs 0.8 us
+for a back-to-back pair, median.
+
+Round trip, 1000 exchanges per cell, no failures. The one-way times are good
+to the fit bound, 51 to 120 us.
+
+| API | Read | RTT median | RTT p99 | Host to board | Board to host, median | Board to host, p99 |
+|---|---|---|---|---|---|---|
+| raw Win32, 5 modes | blocking | 167 to 229, 170 to 221 | 314 to 366, 303 to 399 | 78 to 104, 86 to 100 | 88 to 128, 71 to 122 | 220 to 258, 182 to 286 |
+| ysp | blocking | 176, 288 | 279, 424 | 85, 144 | 92, 137 | 173, 269 |
+| ysp | poll | 170, 292 | 339, 536 | 80, 131 | 92, 159 | 229, 362 |
+| IOPort tuned | blocking | 367, 203 | 591, 508 | 150, 97 | 209, 107 | 380, 380 |
+| IOPort tuned | poll | 242, 260 | 461, 550 | 107, 120 | 134, 139 | 356, 378 |
+| IOPort | blocking | 246, 292 | 2156, 2070 | 98, 115 | 146, 178 | 2064, 1958 |
+| IOPort | poll | 439, 446 | 601, 689 | 185, 198 | 252, 246 | 376, 480 |
+| serialport | blocking | 3846, 3879 | 15160, 14770 | 739, 607 | 3107, 3238 | 14450, 14060 |
+| serialport | poll | 4664, 4230 | 15140, 15150 | 575, 633 | 3986, 3509 | 14460, 14570 |
+
+Stream, 10000 lines at 1000 per second, no line missed in any cell. Latency
+is the time the API reports the line, minus the board's send stamp: the host
+time after the read returns, or for the async readers the reader's own
+stamp.
+
+| API | Mode | Latency median | Latency p99 | CPU, % of one core |
+|---|---|---|---|---|
+| raw Win32, 5 modes | blocking read, own loop | 126 to 153, 121 to 155 | 305 to 394, 269 to 324 | 2.2 to 3.3, 1.1 to 3.4 |
+| ysp | blocking read per line | 168, 176 | 331, 378 | 8.6, 7.0 |
+| ysp | poll loop | 126, 116 | 300, 294 | 99.5, 100.3 |
+| ysp | async reader, its stamp | 152.5, 153.2 | 350, 380 | 3.9, 2.6 |
+| IOPort tuned | blocking read per line | 171, 198 (`when`: 112, 142) | 337, 369 (305, 328) | 10.8, 12.5 |
+| IOPort tuned | poll loop | 147, 106 | 315, 251 | 100, 100 |
+| IOPort tuned | background reader, its stamp | 119, 113 | 283, 305 | 8.7, 11.6 |
+| IOPort | blocking read per line | 1082, 987 | 2196, 2111 | 10.6, 11.7 |
+| IOPort | poll loop | 120, 105 | 281, 264 | 100, 100 |
+| IOPort | background reader, its stamp | 125, 133 | 294, 324 | 8.9, 11.6 |
+| serialport | blocking read per line | 4985, 4781 | 14850, 14530 | 106, 105 |
+| serialport | poll loop | 3539, 3617 | 14150, 14660 | 103, 103 |
+| serialport | callback, `evt.AbsTime` | 1504, 1562 | 6512, 7106 | 82, 79 |
+
+The async CPU is the MATLAB process over the receive phase, with the main
+thread in `pause(0.1)`; it includes the reader thread. IOPort's background
+reader makes one `ReadFile` per byte.
+
+What the audit shows:
+
+- With its latency options, IOPort is as fast as ysp_serial for a blocking
+  read per line (171 and 198 us against 168 and 176 us median, p99 within
+  40 us) and within the open-to-open spread for the round trip. The 2 ms
+  tail of the first run was IOPort's default `Sleep(1)` loop, not its
+  driver use. ysp's lead in that run shrinks to its defaults: a blocking
+  read in ysp waits in the kernel without an option.
+- What remains in ysp's favor: no option to set; a non-blocking read 4 to 8
+  times cheaper (difference 2); and writes that stay at a few hundred
+  microseconds while an async reader runs, where IOPort's take seconds.
+- What favors IOPort: its background reader stamps a line 20 to 40 us
+  earlier than ysp's async reader (113 to 133 against 152.5 and 153.2 us
+  median), and its `Read` returns a stamp (`when`) taken before the MEX
+  returns. ysp's reader stamps when its overlapped read completes; the raw
+  overlapped floor is 128 and 131 us.
+- ysp and the tuned IOPort are within about 100 us of the raw floor at the
+  median and about 200 us at p99. The default IOPort's polled round trip
+  (439 and 446 us) fell in the slow cluster of difference 7 in both runs;
+  the alternating opens of difference 7 put the default settings in both
+  clusters, so this is not a property of the defaults.
+  The floor is the USB transfer: a write returns after the board has read
+  the command.
+- serialport's callback mode is the slowest async reader (1.5 ms median,
+  7 ms p99) and uses 80 % of a core.
+- The Python binding has no async reader yet.
 
 ### Psychtoolbox on this machine
 
@@ -961,7 +1134,14 @@ Done, both of them.
 - `bindings/mex/ysp_serial.c`: command dispatch (`list`, `find`, `open`,
   `write`, `writebyte`, `read`, `available`, `drain`, `purge`, `interrupt`,
   `pulse`, `pulseasync`, `setdtr`, `setrts`, `lines`, `break`, `info`,
-  `close`), uint64 handles in a table that `mexAtExit` drains, and negative
-  codes raised as `error()` with the identifier `ysp_serial:<code name>`.
-  Picked up by the existing `build.m`; no platform gate, because the header
-  supports all three.
+  `async_start`, `async_read`, `async_stop`, `version`, `close`), uint64
+  handles in a table that `mexAtExit` drains, and negative codes raised as
+  `error()` with the identifier `ysp_serial:<code name>`. Picked up by the
+  existing `build.m`; no platform gate, because the header supports all
+  three. The async reader (2026-10-11) is a thread in the binding, not in
+  the header: MATLAB has one interpreter thread, so a line can be stamped
+  on arrival only from a thread of the binding's own. It follows
+  ysp/device.h's reader (elevated thread, `yser_read`, `yser_interrupt` to
+  stop) and allocates its ring at start. The Python binding does not have
+  it yet: a Python thread can already block in `read`, so it is less
+  needed there; it is a follow-up.

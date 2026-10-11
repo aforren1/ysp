@@ -1,0 +1,68 @@
+Times in microseconds unless the note says count or percent.
+api          part    metric                                  n     median        p99        max       mean  note
+ysp          clock   clock_pair                         100000        0.8          4      207.2      1.237  two back-to-back now calls (seconds, reported in us)
+ysp          clock   clock_step                              1     0.5999     0.5999     0.5999     0.5999  smallest nonzero difference
+ysp          noport  floor_batch_mean                        1      1.068      1.068      1.068      1.068  mean of 100000 now calls: the cheapest call into the MEX
+ysp          noport  list_ports                            200      475.9        891      966.9      517.8  ysp_serial('list'), 1 ports found
+ysp          noport  open_absent                            50        233       3544       3544      380.4  open COM250, which does not exist: the error path, with try/catch
+ysp          noport  matlab_error_baseline                  50      178.9      563.2      563.2      215.6  try; error(...); catch; end, no port call
+ysp          calls   open                                   20       6671       7942       7942       6717  open with baud set, 8N1, DTR and RTS asserted
+ysp          calls   close                                  20       3040       3728       3728       3069  
+ysp          calls   write_1                              2000      254.1      365.2      800.9        245  gap 1000 us
+ysp          calls   write_8                              2000        228      354.8       2056      224.1  gap 1000 us
+ysp          calls   write_64                             2000      214.4      341.2       1163      208.1  gap 1000 us
+ysp          calls   write_512                            2000      278.1        400       1466      272.7  gap 1000 us
+ysp          calls   read_empty                           2000        3.3        5.7      123.4      3.435  read(h, 64, 0) with nothing waiting
+ysp          calls   available                            2000          4        7.1      112.2      4.127  available(h)
+ysp          calls   read_waiting                          500        4.6       15.2      119.3      5.322  read(h, 35, 0) with the bytes waiting
+ysp          rt      block_failed                            1          0          0          0          0  exchanges with a missing or wrong answer (count)
+ysp          rt      block_rtt                            1000      172.2      392.9      643.4      195.5  write call start to read call return
+ysp          rt      block_write_call                     1000      146.6      338.3      547.2      159.1  write call duration inside the exchange
+ysp          rt      block_write_ret_to_read_ret          1000      32.25      118.2      238.7      36.39  write call return to read call return
+ysp          rt      block_host_to_board                  1000      82.17      181.7      201.8      90.45  write call start to board read (+-55 us from the fit)
+ysp          rt      block_write_ret_to_board             1000     -66.12     -22.42     -18.52     -68.67  write call return to board read (+-55 us)
+ysp          rt      block_board_to_host                  1000      94.23      249.8      504.3      104.8  board send stamp to read call return (+-55 us)
+ysp          rt      block_board_turnaround               1000          0          1          1      0.263  board: command read to answer stamp
+ysp          rt      block_fit_unc                           1       54.8       54.8       54.8       54.8  half the best path time: bound of the one-way split
+ysp          rt      block_fit_spread                        1      8.325      8.325      8.325      8.325  p99 distance of the fit points from the line
+ysp          rt      block_fit_ppm                           1          0          0          0          0  board clock rate error, 4 points over 0.5 s
+ysp          rt      poll_failed                             1          0          0          0          0  exchanges with a missing or wrong answer (count)
+ysp          rt      poll_rtt                             1000      193.6        413       1018        220  write call start to read call return
+ysp          rt      poll_write_call                      1000      165.5      333.9      533.3      180.9  write call duration inside the exchange
+ysp          rt      poll_write_ret_to_read_ret           1000      30.15      112.2      612.2      39.12  write call return to read call return
+ysp          rt      poll_host_to_board                   1000      97.98      191.8      248.1      105.6  write call start to board read (+-56 us from the fit)
+ysp          rt      poll_write_ret_to_board              1000     -68.47     -17.78     -14.38     -75.31  write call return to board read (+-56 us)
+ysp          rt      poll_board_to_host                   1000      95.57      260.7      774.5      114.1  board send stamp to read call return (+-56 us)
+ysp          rt      poll_board_turnaround                1000          0          1          1      0.283  board: command read to answer stamp
+ysp          rt      poll_fit_unc                            1       55.7       55.7       55.7       55.7  half the best path time: bound of the one-way split
+ysp          rt      poll_fit_spread                         1      13.92      13.92      13.92      13.92  p99 distance of the fit points from the line
+ysp          rt      poll_fit_ppm                            1          0          0          0          0  board clock rate error, 4 points over 0.7 s
+ysp          stream  line_lines_missed                       1          0          0          0          0  of 10000 lines (count); read(h, 26, 0.2, 'all') per line
+ysp          stream  line_lines_duplicated                   1          0          0          0          0  count
+ysp          stream  line_bad_lines                          1          0          0          0          0  lines of the wrong length or kind (count)
+ysp          stream  line_lines_per_read                 10000          1          1          1          1  lines completed by one read (or callback)
+ysp          stream  line_coalesced_pct                      1          0          0          0          0  percent of lines that arrived in a read with another line
+ysp          stream  line_cpu_pct                            1      7.813      7.813      7.813      7.813  MATLAB process CPU time / wall time over 10.0 s, percent of one core
+ysp          stream  line_lat_host                       10000      173.3        342       1300      181.7  host time after the read returned minus mapped board send stamp (+-65 us)
+ysp          stream  line_fit_unc                            1       64.9       64.9       64.9       64.9  half the best probe path time
+ysp          stream  line_fit_ppm                            1      13.63      13.63      13.63      13.63  3 points over 10.3 s
+ysp          stream  poll_lines_missed                       1          0          0          0          0  of 10000 lines (count); tight loop of read(h, 4096, 0)
+ysp          stream  poll_lines_duplicated                   1          0          0          0          0  count
+ysp          stream  poll_bad_lines                          1          0          0          0          0  lines of the wrong length or kind (count)
+ysp          stream  poll_lines_per_read                  9955          1          1         12      1.005  lines completed by one read (or callback)
+ysp          stream  poll_coalesced_pct                      1       0.68       0.68       0.68       0.68  percent of lines that arrived in a read with another line
+ysp          stream  poll_cpu_pct                            1      97.82      97.82      97.82      97.82  MATLAB process CPU time / wall time over 10.0 s, percent of one core
+ysp          stream  poll_lat_host                       10000      144.5      683.5  1.201e+04      176.8  host time after the read returned minus mapped board send stamp (+-68 us)
+ysp          stream  poll_fit_unc                            1      67.95      67.95      67.95      67.95  half the best probe path time
+ysp          stream  poll_fit_ppm                            1      14.03      14.03      14.03      14.03  3 points over 10.4 s
+ysp          stream  async_write_call                       20      583.7       1130       1130      594.1  write(h, newline) while the reader thread waits for a byte
+ysp          stream  async_cmd_write_call                    1       1605       1605       1605       1605  write(h, stream command) with the reader thread running
+ysp          stream  async_lines_missed                      1          0          0          0          0  of 10000 lines (count); async_start reader thread, stamp when the read with the newline returned (first-byte stamp differs on 9991 lines); main thread in pause(0.1), then async_read; 0 dropped
+ysp          stream  async_lines_duplicated                  1          0          0          0          0  count
+ysp          stream  async_bad_lines                         1          0          0          0          0  lines of the wrong length or kind (count)
+ysp          stream  async_lines_per_read                10000          1          1          1          1  lines completed by one read (or callback)
+ysp          stream  async_coalesced_pct                     1          0          0          0          0  percent of lines that arrived in a read with another line
+ysp          stream  async_cpu_pct                           1      7.748      7.748      7.748      7.748  MATLAB process CPU time / wall time over 10.1 s, percent of one core
+ysp          stream  async_lat_stamp                     10000      169.9      318.6       2402      173.3  API receive stamp minus mapped board send stamp (+-144 us)
+ysp          stream  async_fit_unc                           1      143.9      143.9      143.9      143.9  half the best probe path time
+ysp          stream  async_fit_ppm                           1      14.45      14.45      14.45      14.45  5 points over 10.8 s

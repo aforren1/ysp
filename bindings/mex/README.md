@@ -26,8 +26,11 @@ it requires. The four adaptive-method sources also include
 `ysp_mex_util.h`, a binding-internal header with the handle table and the
 argument helpers; a copy of one of those sources needs that file beside it.
 
-[test_mex.m](test_mex.m) runs the key checks of the four adaptive modules in
-MATLAB or Octave and prints `PASS`. [test_mex_color.m](test_mex_color.m) does
+[test_mex.m](test_mex.m) runs the key checks of the four adaptive modules and
+of `ysp_serial` in MATLAB or Octave and prints `PASS`. Without a port it
+checks `ysp_serial`'s arguments and handles only; with the environment
+variable `YSP_TEST_ECHO_PORT` set to the port of an echo board
+(`firmware/ysp_echo`) it also runs the async reader on a 2000-line stream. [test_mex_color.m](test_mex_color.m) does
 the same for `ysp_color` (compiles nothing but ysp/color.h and
 `ysp_mex_util.h`); `tests/compare/color_ptb.m` compares it with
 Psychtoolbox's colorimetric code.
@@ -105,7 +108,7 @@ ysp_parallel('write', h, 85);
 t1 = ysp_parallel('now_us');     % the onset lies after t0; t1 - t0 bounds it
 ```
 
-`ysp_serial('now_us')` reads the same clock: both headers build on
+`ysp_serial('now')` reads the same clock, in seconds: both headers build on
 `ysp/rt.h`, so one time base covers the whole rig.
 
 ### Commands
@@ -122,7 +125,7 @@ t1 = ysp_parallel('now_us');     % the onset lies after t0; t1 - t0 bounds it
 | `'status', h` | `uint8` | status register (read-only) |
 | `'control', h [, value]` | `uint8` / none | read or write control register |
 | `'sched', h` | struct | effective RT params `runtime_ns`/`deadline_ns`/`period_ns` and `policy` (`deadline`, `fifo`, `time_critical`, `normal`, `none`), the policy the worker actually obtained |
-| `'now_us'` | `double` | monotonic microseconds from the library clock, the same clock as `ysp_serial('now_us')`; opens nothing |
+| `'now_us'` | `double` | monotonic microseconds from the library clock, the clock of `ysp_serial('now')`, which returns seconds; opens nothing |
 | `'close', h` | none | release the port |
 
 Errors are raised through `error()` with id `ysp_parallel:*`. Every open port
@@ -146,21 +149,34 @@ h = ysp_serial('open', '/dev/ttyUSB0');        % 115200 8N1 by default
 
 n    = ysp_serial('write',     h, uint8([1 2 3]));  % or [1 2 3]
 n    = ysp_serial('writebyte', h, 85);              % trigger workhorse
-data = ysp_serial('read',      h, 6, 500, 'all');   % 6-byte frame in 500 ms
+data = ysp_serial('read',      h, 6, 0.5, 'all');   % 6-byte frame in 0.5 s
 data = ysp_serial('read',      h, 64, 0);           % poll: [] if nothing
-ysp_serial('pulse',      h, 85, 0, 2000);      % blocking: 85, 2 ms, then 0
-ysp_serial('pulseasync', h, 85, 0, 2000);      % non-blocking (RT worker)
+ysp_serial('pulse',      h, 85, 0, 0.002);     % blocking: 85, 2 ms, then 0
+ysp_serial('pulseasync', h, 85, 0, 0.002);     % non-blocking (RT worker)
 info = ysp_serial('info', h);                  % effective settings
+ysp_serial('async_start', h, 10);              % reader thread, lines end in LF
+[lines, t] = ysp_serial('async_read', h);      % lines since the last call
+st = ysp_serial('async_stop', h);              % counts: dropped, overlong, ...
 ysp_serial('close', h);
 ```
+
+Every time that `ysp_serial` takes or returns is a `double` in seconds, as in
+the other bindings: timeouts, pulse widths, the break duration, the RT
+reservation, `now` and the async stamps. The C library under it counts
+`int64` nanoseconds; the binding converts at the call and rounds to the
+nearest nanosecond. A timeout is 0 (poll), a positive number, or `Inf`
+(forever). `NaN` and negative values raise `ysp_serial:arg`. Binding
+v2.0.0 made this change: v1 took milliseconds and microseconds and had
+`now_us`, which is gone. `open` refuses the v1 field names, so an old
+script fails at once instead of opening with a default.
 
 Bracket a trigger with the library's own clock so your timestamps and the
 library's deadlines share one base (see TIMING in the header):
 
 ```matlab
-t0 = ysp_serial('now_us');       % monotonic microseconds, no handle needed
+t0 = ysp_serial('now');          % monotonic seconds, no handle needed
 ysp_serial('writebyte', h, 85);
-t1 = ysp_serial('now_us');       % the onset lies after t0; t1 - t0 bounds it
+t1 = ysp_serial('now');          % the onset lies after t0; t1 - t0 bounds it
 ```
 
 `read` returns a `uint8` row vector, empty on timeout. A disconnect, an
@@ -169,7 +185,8 @@ cannot spin on a dead port.
 
 `open` takes an optional struct of settings. Any subset is accepted; a missing
 field is the library default (115200 baud, 8 data bits, no parity, 1 stop bit,
-no flow control, 1000 ms write timeout).
+no flow control, 1 s write timeout). A field that `open` does not know
+raises `ysp_serial:arg`.
 
 | Field | Values |
 |---|---|
@@ -178,10 +195,10 @@ no flow control, 1000 ms write timeout).
 | `parity` | `'none'`, `'odd'`, `'even'`, `'mark'`, `'space'` (the last two are rejected on macOS) |
 | `stop_bits` | `1` or `2` |
 | `flow` | `'none'`, `'rtscts'`, `'xonxoff'` |
-| `write_timeout_ms` | milliseconds; the minimum is 1 |
+| `write_timeout` | seconds, rounded up to whole milliseconds by the library; `0` is the default (1 s), `Inf` blocks |
 | `exclusive`, `low_latency` | logical |
 | `dtr_low_on_open`, `rts_low_on_open`, `keep_dtr_on_close` | logical; see DTR AND DEVICE RESET in the header |
-| `rt_runtime_ns`, `rt_deadline_ns`, `rt_period_ns` | async-worker RT reservation (Linux SCHED_DEADLINE), ns |
+| `rt_runtime`, `rt_deadline`, `rt_period` | async-worker RT reservation (Linux SCHED_DEADLINE), seconds |
 
 The RT rule is `0 < runtime <= deadline <= period`; a zero period means "same
 as deadline". Invalid combinations raise an error at `open`. `info` reports the
@@ -196,23 +213,27 @@ policy the worker actually obtained, which is not always the one requested.
 | `'open', device [, settingsStruct]` | `uint64` handle | `device` is required |
 | `'write', h, data` | count (optional) | `uint8` array, or a `double` array of integers 0..255 |
 | `'writebyte', h, value` | count (optional) | one byte, 0..255 |
-| `'read', h, n, timeout_ms [, 'all']` | `uint8` row vector | empty on timeout; `'all'` waits for the full `n` |
+| `'read', h, n, timeout [, 'all']` | `uint8` row vector | `timeout` in seconds, `0` polls; empty on timeout; `'all'` waits for the full `n` |
 | `'available', h` | count | bytes buffered by the driver |
 | `'drain', h` | none | wait until the transmit buffer is empty |
 | `'purge', h [, 'rx' \| 'tx' \| 'both']` | none | discard buffered bytes; default `'rx'` |
 | `'interrupt', h` | none | latch a wake that the next `read` consumes; it cannot reach a read already in flight (see below) |
-| `'now_us'` | `double` | monotonic microseconds from the library clock, the same clock as `ysp_parallel('now_us')`; opens nothing |
-| `'pulse', h, on, off, usec` | count (optional) | blocking; returns 2 |
-| `'pulseasync', h, on, off, usec` | count (optional) | non-blocking; returns 1 when the onset was accepted |
+| `'now'` | `double` | monotonic seconds from the library clock, the clock of `ysp_parallel` too; opens nothing |
+| `'pulse', h, on, off, width` | count (optional) | blocking; `width` in seconds; returns 2 |
+| `'pulseasync', h, on, off, width` | count (optional) | non-blocking; `width` in seconds; returns 1 when the onset was accepted |
 | `'setdtr', h, on` / `'setrts', h, on` | none | drive the output lines |
 | `'lines', h` | struct | `mask` plus `cts`, `dsr`, `ri`, `dcd` logicals |
-| `'break', h, ms` | none | hold TX in the break state |
+| `'break', h, duration` | none | hold TX in the break state for `duration` seconds |
 | `'info', h` | struct | effective settings, `async_policy` as a string, and `rd_oserr` / `wr_oserr` / `misc_oserr` |
-| `'close', h` | none | release the port |
+| `'async_start', h [, terminator [, lines [, max_len]]]` | none | start the reader thread; defaults `10` (LF), `8192` lines, `256` bytes per line; see below |
+| `'async_read', h [, max_lines]` | `lines` [, `t`, `t_first`] | the complete lines since the last call: a cell column of `uint8` rows (terminator included) and two `double` columns of stamps in seconds |
+| `'async_stop', h` | struct (optional) | stop the reader thread; fields `pending` (lines not read, discarded), `dropped`, `overlong`, `bytes`, `reads`, `error` |
+| `'version'` | string [, string] | the binding version (`2.0.0`), and as a second output the version of ysp/serial.h in this build; opens nothing |
+| `'close', h` | none | release the port; stops a running reader first |
 
 `write`, `writebyte`, `pulse` and `pulseasync` return their count only when
 you ask for it (`n = ysp_serial('write', ...)`), so a bare call prints
-nothing. The count matters: a write that hits `write_timeout_ms` returns fewer
+nothing. The count matters: a write that hits `write_timeout` returns fewer
 bytes than you passed and is not an error.
 
 Errors are raised through `error()` with an identifier that names the library
@@ -224,6 +245,7 @@ code, so a script can branch on it:
 | `ysp_serial:disconnected` | the device went away (USB unplug); close the handle |
 | `ysp_serial:closed` | the port is not open |
 | `ysp_serial:interrupted` | `interrupt` woke a blocked `read` |
+| `ysp_serial:async` | an async call with no reader running, a second `async_start`, or a reader-role call (`read`, `available`, `interrupt`, `purge` of `'rx'` or `'both'`) while the reader runs |
 | `ysp_serial:arg` | bad argument |
 | `ysp_serial:open`, `ysp_serial:handle`, `ysp_serial:usage` | open failure, bad handle, bad call |
 
@@ -241,16 +263,15 @@ Ctrl-C are all dispatched on that same thread, so **nothing can interrupt a
 blocked `read`**: a `timer` whose callback calls `interrupt` never runs while
 the read is in flight.
 
-Never pass `TIMEOUT_INFINITE` (forever,
-`4294967295`) from MATLAB or Octave. Poll in short slices instead, so the
-interpreter gets the thread back between them:
+Never pass `Inf` (forever) from MATLAB or Octave. Poll in short slices
+instead, so the interpreter gets the thread back between them:
 
 ```matlab
 % Wait up to 5 s for a 6-byte frame, staying responsive to Ctrl-C.
 frame = uint8([]);
 t0 = tic;
 while toc(t0) < 5
-    frame = [frame ysp_serial('read', h, 6 - numel(frame), 50)];  % 50 ms slice
+    frame = [frame ysp_serial('read', h, 6 - numel(frame), 0.05)];  % 50 ms slice
     if numel(frame) == 6, break; end
     drawnow limitrate;    % run timers, Ctrl-C and the GUI
 end
@@ -258,8 +279,53 @@ end
 
 `interrupt` latches a wake that the *next* `read` consumes, so on one thread it
 only makes that read return immediately with `ysp_serial:interrupted`. It
-exists for symmetry with the C API; a real cross-thread wake needs the C API,
-not MEX.
+exists for symmetry with the C API. To receive while the script does other
+work, use the async reader below.
+
+### Asynchronous read: lines stamped when they arrive
+
+A `read` can stamp its bytes only when the script gets round to calling it.
+`async_start` starts a C thread that does what ysp/device.h's reader does: it
+blocks in `yser_read`, takes `now` when each read returns, cuts the bytes
+into lines at the terminator and keeps the lines in a ring. The script
+collects them with `async_read` whenever it likes, for example once per frame:
+
+```matlab
+ysp_serial('async_start', h, 10);             % LF ends a line
+ysp_serial('write', h, uint8(sprintf('s 1000 500\n')));   % writes stay allowed
+for frame = 1:60
+    % ... draw, flip ...
+    [lines, t, t_first] = ysp_serial('async_read', h);
+    for i = 1:numel(lines)
+        fprintf('%s arrived at %.6f s\n', char(lines{i}(1:end-1)), t(i));
+    end
+end
+st = ysp_serial('async_stop', h);             % st.dropped == 0: nothing lost
+```
+
+- `t` is `now` when the read that brought the line's terminator
+  returned; `t_first` is the same for the line's first byte. Both are
+  seconds on the `now` clock.
+- The thread owns the reader role of the header's THREADING rule while it
+  runs. `read`, `available`, `interrupt` and an RX purge raise
+  `ysp_serial:async`; `write`, `writebyte`, the pulses, the modem lines and
+  a TX purge stay allowed.
+- The ring and the line buffer are allocated by `async_start` (`lines` times
+  `max_len` bytes); the thread allocates nothing after that. A full ring
+  drops the newest complete line and counts it in `dropped`; it never
+  overwrites a line that `async_read` has not returned. A line longer than
+  `max_len` is cut and counted in `overlong`.
+- The thread raises its own priority with `yrt_thread_elevate`, as
+  ysp/device.h does. If the port fails (an unplug), the thread stops;
+  `async_read` returns the lines it has, then raises the error.
+- `async_stop` wakes the thread with `interrupt` and joins it; `close` and
+  `clear ysp_serial` do the same. After `async_stop` a plain `read` works
+  again.
+
+What it measured on a Teensy 4.0 against MATLAB's callback and IOPort's
+background reader is in
+[docs/serial.md](../../docs/serial.md#results-with-the-teensy-40-echo-board).
+The Python binding has no async reader yet.
 
 Device naming, USB latency, DTR-driven board resets and what a serial trigger
 is worth in timing terms are documented in the header:

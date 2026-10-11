@@ -1,0 +1,98 @@
+Times in microseconds unless the note says count or percent.
+api        part    metric                                  n     median        p99        max       mean  note
+raw        clock   clock_pair                         100000          0        0.1        4.5     0.0322  two back-to-back QueryPerformanceCounter reads
+raw_sync   rt      block_failed                            1          0          0          0          0  exchanges with a missing or wrong answer (count)
+raw_sync   rt      block_rtt                            1000      167.2      314.1      704.6      177.4  write call start to read call return
+raw_sync   rt      block_write_call                     1000      128.5      246.9      558.8      130.2  write call duration inside the exchange
+raw_sync   rt      block_write_ret_to_read_ret          1000      46.35      138.9      193.6      47.16  write call return to read call return
+raw_sync   rt      block_host_to_board                  1000       78.4      132.3      452.5      80.68  write call start to board read (+-44 us from the fit)
+raw_sync   rt      block_write_ret_to_board             1000      -46.3      -14.8      -12.7     -49.56  write call return to board read (+-44 us)
+raw_sync   rt      block_board_to_host                  1000      88.15      219.7      403.9      96.48  board send stamp to read call return (+-44 us)
+raw_sync   rt      block_fit_unc                           1      43.95      43.95      43.95      43.95  half the best path time: bound of the one-way split
+raw_sync   calls   clear_comm_error                     1000        5.1       24.2       52.4      6.755  ClearCommError(), the call behind BytesAvailable
+raw_sync   calls   set_comm_timeouts                    1000        3.6       30.6       49.2      4.728  SetCommTimeouts(), unchanged values
+raw_sync   stream  line_lines_missed                       1          0          0          0          0  of 10000 lines (count); ReadFile on a non-overlapped handle, first byte waits in the kernel
+raw_sync   stream  line_lines_duplicated                   1          0          0          0          0  count
+raw_sync   stream  line_bad_lines                          1          0          0          0          0  lines of the wrong length or kind (count)
+raw_sync   stream  line_lines_per_read                  9997          1          1          2          1  lines completed by one read
+raw_sync   stream  line_coalesced_pct                      1       0.06       0.06       0.06       0.06  percent of lines that arrived in a read with another line
+raw_sync   stream  line_cpu_pct                            1      2.188      2.188      2.188      2.188  process CPU time / wall time over 10.0 s, percent of one core
+raw_sync   stream  line_lat_host                       10000      125.7      393.5       1928      139.5  host time after the read returned minus mapped board send stamp (+-52 us)
+raw_sync   stream  line_fit_unc                            1      51.65      51.65      51.65      51.65  half the best probe path time
+raw_sync   stream  line_fit_ppm                            1      14.23      14.23      14.23      14.23  3 points over 10.4 s
+raw_sync_txmask rt      block_failed                            1          0          0          0          0  exchanges with a missing or wrong answer (count)
+raw_sync_txmask rt      block_rtt                            1000      196.8      365.5       2037      208.1  write call start to read call return
+raw_sync_txmask rt      block_write_call                     1000      155.2      280.3      465.2      160.6  write call duration inside the exchange
+raw_sync_txmask rt      block_write_ret_to_read_ret          1000       41.1      132.4       1954      47.57  write call return to read call return
+raw_sync_txmask rt      block_host_to_board                  1000       89.2      150.4        180      91.68  write call start to board read (+-43 us from the fit)
+raw_sync_txmask rt      block_write_ret_to_board             1000     -63.05      -15.7      -13.6      -68.9  write call return to board read (+-43 us)
+raw_sync_txmask rt      block_board_to_host                  1000      104.5      257.9       1973      116.2  board send stamp to read call return (+-43 us)
+raw_sync_txmask rt      block_fit_unc                           1      43.45      43.45      43.45      43.45  half the best path time: bound of the one-way split
+raw_sync_txmask calls   clear_comm_error                     1000        7.4       24.6       46.1      8.116  ClearCommError(), the call behind BytesAvailable
+raw_sync_txmask calls   set_comm_timeouts                    1000       3.45       11.1       31.6      3.914  SetCommTimeouts(), unchanged values
+raw_sync_txmask stream  line_lines_missed                       1          0          0          0          0  of 10000 lines (count); ReadFile on a non-overlapped handle, first byte waits in the kernel
+raw_sync_txmask stream  line_lines_duplicated                   1          0          0          0          0  count
+raw_sync_txmask stream  line_bad_lines                          1          0          0          0          0  lines of the wrong length or kind (count)
+raw_sync_txmask stream  line_lines_per_read                  9999          1          1          2          1  lines completed by one read
+raw_sync_txmask stream  line_coalesced_pct                      1       0.02       0.02       0.02       0.02  percent of lines that arrived in a read with another line
+raw_sync_txmask stream  line_cpu_pct                            1      2.344      2.344      2.344      2.344  process CPU time / wall time over 10.0 s, percent of one core
+raw_sync_txmask stream  line_lat_host                       10000      128.4      308.5       1235      137.3  host time after the read returned minus mapped board send stamp (+-49 us)
+raw_sync_txmask stream  line_fit_unc                            1       49.1       49.1       49.1       49.1  half the best probe path time
+raw_sync_txmask stream  line_fit_ppm                            1      10.13      10.13      10.13      10.13  3 points over 10.3 s
+raw_sync_ptb rt      block_failed                            1          0          0          0          0  exchanges with a missing or wrong answer (count)
+raw_sync_ptb rt      block_rtt                            1000      196.1      351.2      413.5      206.4  write call start to read call return
+raw_sync_ptb rt      block_write_call                     1000      165.3        282      361.4      168.8  write call duration inside the exchange
+raw_sync_ptb rt      block_write_ret_to_read_ret          1000       33.7      112.5      162.1      37.67  write call return to read call return
+raw_sync_ptb rt      block_host_to_board                  1000      97.62      151.4      173.7      97.72  write call start to board read (+-48 us from the fit)
+raw_sync_ptb rt      block_write_ret_to_board             1000     -66.17     -22.27     -19.47     -71.05  write call return to board read (+-48 us)
+raw_sync_ptb rt      block_board_to_host                  1000      98.38      239.8      295.4      108.4  board send stamp to read call return (+-48 us)
+raw_sync_ptb rt      block_fit_unc                           1       47.7       47.7       47.7       47.7  half the best path time: bound of the one-way split
+raw_sync_ptb calls   clear_comm_error                     1000        2.7       11.5       52.4      3.221  ClearCommError(), the call behind BytesAvailable
+raw_sync_ptb calls   set_comm_timeouts                    1000        2.9        9.7       41.2      3.354  SetCommTimeouts(), unchanged values
+raw_sync_ptb stream  line_lines_missed                       1          0          0          0          0  of 10000 lines (count); ReadFile on a non-overlapped handle, first byte waits in the kernel
+raw_sync_ptb stream  line_lines_duplicated                   1          0          0          0          0  count
+raw_sync_ptb stream  line_bad_lines                          1          0          0          0          0  lines of the wrong length or kind (count)
+raw_sync_ptb stream  line_lines_per_read                 10000          1          1          1          1  lines completed by one read
+raw_sync_ptb stream  line_coalesced_pct                      1          0          0          0          0  percent of lines that arrived in a read with another line
+raw_sync_ptb stream  line_cpu_pct                            1      3.125      3.125      3.125      3.125  process CPU time / wall time over 10.0 s, percent of one core
+raw_sync_ptb stream  line_lat_host                       10000      145.3      305.1       1190      153.3  host time after the read returned minus mapped board send stamp (+-62 us)
+raw_sync_ptb stream  line_fit_unc                            1      61.95      61.95      61.95      61.95  half the best probe path time
+raw_sync_ptb stream  line_fit_ppm                            1      13.42      13.42      13.42      13.42  3 points over 10.3 s
+raw_ovl    rt      block_failed                            1          0          0          0          0  exchanges with a missing or wrong answer (count)
+raw_ovl    rt      block_rtt                            1000      202.2      351.7      402.8      211.1  write call start to read call return
+raw_ovl    rt      block_write_call                     1000      157.5      258.1      368.3      161.1  write call duration inside the exchange
+raw_ovl    rt      block_write_ret_to_read_ret          1000       47.3      126.2      178.7      49.92  write call return to read call return
+raw_ovl    rt      block_host_to_board                  1000      103.5        158      188.2      103.9  write call start to board read (+-52 us from the fit)
+raw_ovl    rt      block_write_ret_to_board             1000     -54.82     -11.97     -6.975     -57.28  write call return to board read (+-52 us)
+raw_ovl    rt      block_board_to_host                  1000      98.52      239.9      328.7      106.9  board send stamp to read call return (+-52 us)
+raw_ovl    rt      block_fit_unc                           1       51.5       51.5       51.5       51.5  half the best path time: bound of the one-way split
+raw_ovl    calls   clear_comm_error                     1000        8.2       29.2       49.8      8.875  ClearCommError(), the call behind BytesAvailable
+raw_ovl    calls   set_comm_timeouts                    1000        3.7       12.6       44.9      4.476  SetCommTimeouts(), unchanged values
+raw_ovl    stream  line_lines_missed                       1          0          0          0          0  of 10000 lines (count); overlapped ReadFile, GetOverlappedResult
+raw_ovl    stream  line_lines_duplicated                   1          0          0          0          0  count
+raw_ovl    stream  line_bad_lines                          1          0          0          0          0  lines of the wrong length or kind (count)
+raw_ovl    stream  line_lines_per_read                  9999          1          1          2          1  lines completed by one read
+raw_ovl    stream  line_coalesced_pct                      1       0.02       0.02       0.02       0.02  percent of lines that arrived in a read with another line
+raw_ovl    stream  line_cpu_pct                            1      2.344      2.344      2.344      2.344  process CPU time / wall time over 10.0 s, percent of one core
+raw_ovl    stream  line_lat_host                       10000      128.5      316.1       1764      144.2  host time after the read returned minus mapped board send stamp (+-52 us)
+raw_ovl    stream  line_fit_unc                            1      51.55      51.55      51.55      51.55  half the best probe path time
+raw_ovl    stream  line_fit_ppm                            1      11.08      11.08      11.08      11.08  3 points over 10.3 s
+raw_wce    rt      block_failed                            1          0          0          0          0  exchanges with a missing or wrong answer (count)
+raw_wce    rt      block_rtt                            1000        229      347.2      439.8      228.9  write call start to read call return
+raw_wce    rt      block_write_call                     1000      169.5      272.9      335.4      172.8  write call duration inside the exchange
+raw_wce    rt      block_write_ret_to_read_ret          1000       55.4      112.8      222.4      56.03  write call return to read call return
+raw_wce    rt      block_host_to_board                  1000      101.4      152.8      174.6      101.1  write call start to board read (+-58 us from the fit)
+raw_wce    rt      block_write_ret_to_board             1000     -68.47     -17.12     -14.22      -71.7  write call return to board read (+-58 us)
+raw_wce    rt      block_board_to_host                  1000      127.7      232.7      336.1      127.5  board send stamp to read call return (+-58 us)
+raw_wce    rt      block_fit_unc                           1      58.05      58.05      58.05      58.05  half the best path time: bound of the one-way split
+raw_wce    calls   clear_comm_error                     1000        3.3       11.6       42.9      4.224  ClearCommError(), the call behind BytesAvailable
+raw_wce    calls   set_comm_timeouts                    1000        3.9       10.7       47.3      4.863  SetCommTimeouts(), unchanged values
+raw_wce    stream  line_lines_missed                       1          0          0          0          0  of 10000 lines (count); WaitCommEvent(EV_RXCHAR), then ReadFile of what is buffered
+raw_wce    stream  line_lines_duplicated                   1          0          0          0          0  count
+raw_wce    stream  line_bad_lines                          1          0          0          0          0  lines of the wrong length or kind (count)
+raw_wce    stream  line_lines_per_read                  9999          1          1          2          1  lines completed by one read
+raw_wce    stream  line_coalesced_pct                      1       0.02       0.02       0.02       0.02  percent of lines that arrived in a read with another line
+raw_wce    stream  line_cpu_pct                            1      3.282      3.282      3.282      3.282  process CPU time / wall time over 10.0 s, percent of one core
+raw_wce    stream  line_lat_host                       10000      152.5      333.7       1480      165.3  host time after the read returned minus mapped board send stamp (+-54 us)
+raw_wce    stream  line_fit_unc                            1      53.75      53.75      53.75      53.75  half the best probe path time
+raw_wce    stream  line_fit_ppm                            1      13.18      13.18      13.18      13.18  3 points over 10.4 s

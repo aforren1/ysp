@@ -1,0 +1,40 @@
+date: 2026-10-11 07:44:29
+label: Teensy 4.0 echo, audit run 1, order serialport ioport ioport_tuned ysp
+MATLAB: 9.14.0.2489007 (R2023a) Update 6, PCWIN64
+OS: Microsoft Windows [Version 10.0.26200.9457]
+CPU: 13th Gen Intel(R) Core(TM) i7-1360P
+power: AC
+port: COM3
+device: echo
+baud: 115200
+FTDI latency timer: not an FTDI port, or not readable
+api serialport: true
+api ioport: true
+api ioport_tuned: true
+api ysp: true
+IOPort: 3.0.19.672439818 at C:\tmp\psy-work\serialbench\ptb-3.0.19.16\IOPort.mexw64
+ysp_serial: C:\Users\adf44\source\cpp\psy\.claude\worktrees\agent-a021fd73e42658c5c\bindings\mex\ysp_serial.mexw64
+cfg.port: COM3
+cfg.device: echo
+cfg.baud: 115200
+cfg.apis: serialport ioport ioport_tuned ysp
+cfg.parts: clock noport calls rt stream
+cfg.ioport_dir: C:/tmp/psy-work/serialbench/ptb-3.0.19.16
+cfg.ysp_dir: C:\Users\adf44\source\cpp\psy\.claude\worktrees\agent-a021fd73e42658c5c\tests\compare\serial_bench\..\..\..\bindings\mex
+cfg.out: C:/tmp/psy-work/serialaudit/run1
+cfg.label: Teensy 4.0 echo, audit run 1, order serialport ioport ioport_tuned ysp
+cfg.n_clock: 100000
+cfg.n_floor: 100000
+cfg.n_enum: 200
+cfg.n_open_absent: 50
+cfg.n_open: 20
+cfg.n_calls: 2000
+cfg.n_blocking: 200
+cfg.n_read_waiting: 500
+cfg.n_rt: 1000
+cfg.n_probe: 200
+cfg.stream_hz: 1000
+cfg.stream_s: 10
+cfg.max_block_s: 20
+cfg.write_sizes: [1 8 64 512]
+cfg.absent_port: COM250
