@@ -100,6 +100,13 @@ follows.
   measured with clang 11), and gcc warns with `-Wfloat-conversion`, which
   the CMake build and CI turn on. Seconds stay in files, experiment
   definitions, scripts, data and the Python, MATLAB and Octave bindings.
+  A binding never takes or returns milliseconds or microseconds: every
+  time in its public API is a `double` in seconds, the clock read included
+  (`ysp.serial.now()`, `ysp_parallel('now')`), and a name does not carry
+  the unit. The binding converts at the C call, rounded to the nearest
+  nanosecond, and refuses a negative or NaN time before the call. "Wait
+  forever" is `math.inf` in Python and `Inf` in MATLAB and Octave, never a
+  magic number; 0 polls where the C call can poll.
   Text for a person (describe lines, CSV columns) keeps its units.
   Exceptions, each stated in its header:
   - `yin_event.unc_us` (`ysp/input.h`) stays a `uint16_t` in
@@ -112,6 +119,11 @@ follows.
     (`ynet_stats.lsl_offset_ns`, `lsl_rtt_ns`, v0.3.0), rounded at the
     liblsl call.
   - Calendar dates (`ycol_cal.date`) are Unix seconds.
+  - `ysp.rdk` (Python) takes and returns its times as integer
+    nanoseconds (`start()`, `update()`, the step rows, `Field.last`,
+    `frame_ns`), because a logged trial replays bit for bit from those
+    integers. It is not converted yet; that needs a decision. A jitter of
+    `ysp.trials` gives its exact `ns` beside `s`.
 - **Threads.** Headers that spawn a worker thread honor `Y<X>_NO_THREADS`
   to drop it, and link `-pthread` on POSIX otherwise. `ysp/device.h` and
   `ysp/net.h` have no such macro: their manual mode (`ydev_poll()`,

@@ -615,9 +615,16 @@ Decisions:
   with a message, and a negative width or break duration returns
   `YSER_ERR_ARG` before any write.
 - **`yser_now_us()` is gone.** Callers bracket a write with `yrt_now_ns()`.
-  The Python and MATLAB bindings keep their `now_us()`, computed from
-  `yrt_now_ns()`, and keep their millisecond and microsecond arguments and
-  their `TIMEOUT_INFINITE` of 4294967295: the C glue converts.
+  The bindings first kept their `now_us()` and their millisecond and
+  microsecond arguments. On 2026-10-11 they moved to seconds, as the
+  Conventions require of every binding: `ysp-serial` 0.5.0.1 has `now()`,
+  `read(n, timeout)`, `write_timeout`, `pulse(on, off, width)`,
+  `send_break(duration)` and the `rt_*` reservation in seconds, and
+  `TIMEOUT_INFINITE` is `math.inf`. A negative time raises `ValueError`
+  instead of polling. The Python write timeout refuses 0, because the C
+  desc reads 0 as "1 s default" and a write cannot poll. The MEX
+  `ysp_serial` 2.0.0 made the same change (`now` replaces `now_us`, `Inf`
+  waits forever) and added the async reader.
 - **Return codes stay as they were.** Every call except `yser_open()` may run
   on a reader or a writer thread, so none of them writes the message (README,
   Conventions, Errors: the second-thread exception). They return a
@@ -1114,15 +1121,17 @@ Done, both of them.
   Limited API 0x03080000, one `ysp/serial.abi3.so`. A heap-type `Port` built
   with `PyType_FromSpec`, constructed with keywords that mirror `yser_desc`
   (`device` required; `baud`, `data_bits`, `parity`, `stop_bits`, `flow`,
-  `write_timeout_ms`, `exclusive`, `low_latency`, `dtr_low_on_open`,
-  `rts_low_on_open`, `keep_dtr_on_close`, `rt_runtime_ns`, `rt_deadline_ns`,
-  `rt_period_ns`). Methods: `read(n, timeout_ms, all=False) -> bytes`,
-  `write(data) -> int`, `write_byte(value) -> int`, `pulse(on, off, usec)`,
-  `pulse_async(on, off, usec)`, `available()`, `drain()`,
+  `write_timeout`, `exclusive`, `low_latency`, `dtr_low_on_open`,
+  `rts_low_on_open`, `keep_dtr_on_close`, `rt_runtime`, `rt_deadline`,
+  `rt_period`). Every time is seconds (since 0.5.0.1). Methods:
+  `read(n, timeout, all=False) -> bytes`, `write(data) -> int`,
+  `write_byte(value) -> int`, `pulse(on, off, width)`,
+  `pulse_async(on, off, width)`, `available()`, `drain()`,
   `purge(rx=True, tx=False)`, `interrupt()`, `set_dtr(on)`, `set_rts(on)`,
-  `get_lines()`, `send_break(ms)`, `close()`, and the context-manager pair.
-  Read-only properties for the effective settings, `async_policy` and the
-  three `*_oserr` slots. Module level: `list_ports()`, `find_ports(vid=0,
+  `get_lines()`, `send_break(duration)`, `close()`, and the context-manager
+  pair. Read-only properties for the effective settings, `sched`,
+  `async_policy` and the three `*_oserr` slots. Module level: `now()`,
+  `list_ports()`, `find_ports(vid=0,
   pid=0, serial_number=None, location=None, description=None, name=None)`,
   and a constant per `YSER_*` enum, flag and default. Errors are `Error` with
   `Disconnected`, `Interrupted` and `Closed` derived from it, carrying the

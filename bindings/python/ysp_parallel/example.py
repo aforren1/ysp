@@ -22,10 +22,10 @@ def main():
     with pp.Port() as port:
         print(f"port open (backend {port.backend}, base 0x{port.base_addr:X})")
 
-        port.pulse(code, usec=2000)            # blocking 2 ms trigger
+        port.pulse(code, width=0.002)          # blocking 2 ms trigger (seconds)
         print(f"sent trigger 0x{code:02X} (2 ms blocking pulse)")
 
-        port.pulse_async(code, usec=2000)      # non-blocking; worker drops it
+        port.pulse_async(code, width=0.002)    # non-blocking; worker drops it
         print(f"queued async trigger 0x{code:02X}")
 
         status = port.read_status()

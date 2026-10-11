@@ -1,7 +1,8 @@
 function test_mex()
 %TEST_MEX  Key checks of the ysp_stair, ysp_quest, ysp_aep, ysp_trials and
-%   ysp_serial MEX functions. Runs in MATLAB and in Octave. Prints PASS, or
-%   stops with the error of the first check that failed.
+%   ysp_serial MEX functions, and the time units of ysp_parallel (no port
+%   needed). Runs in MATLAB and in Octave. Prints PASS, or stops with the
+%   error of the first check that failed.
 %
 %   Build first (run build.m), then from this directory:  test_mex
 %
@@ -27,6 +28,7 @@ function test_mex()
     test_trials_v02();
     test_trials_jitter();
     test_serial();
+    test_parallel();
     fprintf('PASS\n');
 end
 
@@ -564,4 +566,43 @@ function test_serial()
     ysp_serial('async_start', h);
     clear c;
     fprintf('ysp_serial %s async on %s: ok\n', v, port);
+end
+
+% ---------------------------------------------------------------------------
+
+function test_parallel()
+    % Times are seconds. No port is needed: the times in the open struct are
+    % checked before the open, and without a port the open fails with
+    % ysp_parallel:open. With a port, the pulse widths are checked too.
+    if exist('ysp_parallel', 'file') ~= 3
+        fprintf('ysp_parallel: not built on this platform, skipped\n');
+        return;
+    end
+    t0 = ysp_parallel('now');
+    pause(0.05);
+    t1 = ysp_parallel('now');
+    check(t1 - t0 > 0.04 && t1 - t0 < 1, 'ysp_parallel(''now'') is not in seconds: %g', t1 - t0);
+    expect_error('ysp_parallel:usage', @() ysp_parallel('now_us'));
+    expect_error('ysp_parallel:arg', @() ysp_parallel('open', struct('runtime', -1e-3)));
+    expect_error('ysp_parallel:arg', @() ysp_parallel('open', struct('deadline', Inf)));
+    expect_error('ysp_parallel:arg', @() ysp_parallel('open', struct('period', NaN)));
+    expect_error('ysp_parallel:arg', @() ysp_parallel('open', struct('period', 1e10)));
+    expect_error('ysp_parallel:arg', @() ysp_parallel('open', struct('runtime_ns', 5e5)));
+    try
+        h = ysp_parallel('open', struct('runtime', 5e-4, 'deadline', 2e-3, 'period', 2e-3));
+    catch e
+        check(strcmp(e.identifier, 'ysp_parallel:open'), ...
+            'expected ysp_parallel:open without a port, got %s (%s)', e.identifier, e.message);
+        fprintf('ysp_parallel seconds: ok (no port)\n');
+        return;
+    end
+    closer = onCleanup(@() ysp_parallel('close', h));   %#ok<NASGU>
+    s = ysp_parallel('sched', h);
+    check(s.runtime > 0 && s.runtime <= s.deadline && s.deadline <= s.period && s.period < 1, ...
+        'sched is not in seconds: %g %g %g', s.runtime, s.deadline, s.period);
+    expect_error('ysp_parallel:arg', @() ysp_parallel('pulse', h, 0, -1e-3));
+    expect_error('ysp_parallel:arg', @() ysp_parallel('pulse', h, 0, Inf));
+    expect_error('ysp_parallel:arg', @() ysp_parallel('pulseasync', h, 0, NaN));
+    ysp_parallel('pulse', h, 0, 1e-4);
+    fprintf('ysp_parallel seconds: ok (port open)\n');
 end

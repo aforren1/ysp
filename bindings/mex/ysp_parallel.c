@@ -8,20 +8,23 @@
  *     h = ysp_parallel('open', '/dev/parport1')% ppdev device (Linux)
  *     h = ysp_parallel('open', 'direct', 888)  % raw x86 I/O @ base (root)
  *     h = ysp_parallel('open', 'inpout', 888)  % Windows inpout @ base
- *     % optional trailing struct tunes the async-worker RT reservation (ns):
- *     h = ysp_parallel('open', struct('runtime_ns',5e5,'deadline_ns',2e6))
+ *     % optional trailing struct tunes the async-worker RT reservation (s):
+ *     h = ysp_parallel('open', struct('runtime',5e-4,'deadline',2e-3))
  *
  *     ysp_parallel('write',      h, value)     % data register (0..255)
  *     d = ysp_parallel('read',   h)            % read data register
  *     ysp_parallel('setdir',     h, isInput)   % data direction
- *     ysp_parallel('pulse',      h, value, usec)       % blocking
- *     ysp_parallel('pulseasync', h, value, usec)       % non-blocking
+ *     ysp_parallel('pulse',      h, value, width)      % blocking, width in s
+ *     ysp_parallel('pulseasync', h, value, width)      % non-blocking
  *     s = ysp_parallel('status', h)            % status register
  *     c = ysp_parallel('control',h)            % read control register
  *     ysp_parallel('control',    h, value)     % write control register
- *     rt = ysp_parallel('sched', h)            % effective RT params struct
- *     t  = ysp_parallel('now_us')              % library clock (us), no handle
+ *     rt = ysp_parallel('sched', h)            % effective RT params struct (s)
+ *     t  = ysp_parallel('now')                 % library clock (s), no handle
  *     ysp_parallel('close',      h)
+ *
+ * Every time is seconds, as in every ysp binding; the C API takes int64 ns,
+ * and this file converts once, at the boundary.
  *
  * Build with build.m (MATLAB or Octave). See README.md.
  *
@@ -41,6 +44,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <math.h>
 
 #define YSP_PARALLEL_IMPLEMENTATION
 #include "ysp/parallel.h"
@@ -125,6 +129,27 @@ static uint8_t pp_byte(const mxArray* a, const char* what) {
     return (uint8_t)d;
 }
 
+/* Seconds to int64 ns, rounded to the nearest ns. The whole seconds convert
+ * exactly and only the fraction is scaled, so a large value does not lose
+ * nanoseconds to the product's rounding. `keep_positive`: a positive value
+ * never rounds to 0, which in a desc means "library default". A negative,
+ * NaN or infinite value is refused here, before the library sees it. */
+static int64_t pp_seconds(const mxArray* a, const char* what, int keep_positive) {
+    if (!mxIsNumeric(a) || mxIsComplex(a) || mxGetNumberOfElements(a) != 1)
+        mexErrMsgIdAndTxt("ysp_parallel:arg", "%s must be a real numeric scalar (seconds)", what);
+    double s = mxGetScalar(a);
+    /* Comparisons, not isnan()/isinf(): MinGW's macros convert through
+     * float and warn under -Wfloat-conversion. The test is false for NaN. */
+    if (!(s >= 0 && s < HUGE_VAL))
+        mexErrMsgIdAndTxt("ysp_parallel:arg", "%s must be finite seconds >= 0", what);
+    if (s >= 9223372036.0)   /* INT64_MAX ns is 9223372036.85 s */
+        mexErrMsgIdAndTxt("ysp_parallel:arg", "%s must be < 9223372036 seconds (int64 ns)", what);
+    double whole = floor(s);
+    int64_t ns = (int64_t)whole * 1000000000 + (int64_t)llround((s - whole) * 1e9);
+    if (ns == 0 && s > 0 && keep_positive) ns = 1;
+    return ns;
+}
+
 static uint32_t pp_u32(const mxArray* a, const char* what) {
     if (!mxIsNumeric(a) || mxGetNumberOfElements(a) != 1)
         mexErrMsgIdAndTxt("ysp_parallel:arg", "%s must be a numeric scalar", what);
@@ -158,14 +183,21 @@ static void check(ypar_port* port, int ok) {
     if (!ok) mexErrMsgIdAndTxt("ysp_parallel:io", "%s", ypar_error(port));
 }
 
-/* Read an async-worker RT reservation from a struct with fields runtime_ns /
- * deadline_ns / period_ns (any subset; missing fields stay 0, which ypar_open
- * resolves -- a 0 period means "same as deadline"). */
+/* Read an async-worker RT reservation from a struct with fields runtime /
+ * deadline / period in seconds (any subset; missing fields stay 0, which
+ * ypar_open resolves: a 0 period means "same as deadline"). A field from
+ * the old ns form is refused by name: read as seconds, 5e5 would be a
+ * reservation of six days. */
 static void pp_read_sched(const mxArray* s, ypar_desc* d) {
+    static const char* old[3] = { "runtime_ns", "deadline_ns", "period_ns" };
     const mxArray* f;
-    if ((f = mxGetField(s, 0, "runtime_ns")))  d->sched.runtime_ns  = (uint64_t)mxGetScalar(f);
-    if ((f = mxGetField(s, 0, "deadline_ns"))) d->sched.deadline_ns = (uint64_t)mxGetScalar(f);
-    if ((f = mxGetField(s, 0, "period_ns")))   d->sched.period_ns   = (uint64_t)mxGetScalar(f);
+    for (int i = 0; i < 3; i++)
+        if (mxGetFieldNumber(s, old[i]) >= 0)
+            mexErrMsgIdAndTxt("ysp_parallel:arg",
+                "open: field '%s' is gone; give runtime, deadline and period in seconds", old[i]);
+    if ((f = mxGetField(s, 0, "runtime")))  d->sched.runtime_ns  = pp_seconds(f, "runtime", 1);
+    if ((f = mxGetField(s, 0, "deadline"))) d->sched.deadline_ns = pp_seconds(f, "deadline", 1);
+    if ((f = mxGetField(s, 0, "period")))   d->sched.period_ns   = pp_seconds(f, "period", 1);
 }
 
 /* ---- 'open' ------------------------------------------------------------ */
@@ -175,8 +207,7 @@ static void cmd_open(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     char* devbuf = NULL;
 
     /* Optional trailing async-worker RT reservation as a struct with fields
-     * runtime_ns/deadline_ns/period_ns (matches the 'sched' query and the
-     * 'list' return shape). A struct is unambiguous against the device string
+     * runtime/deadline/period in seconds (matches the 'sched' query). A struct is unambiguous against the device string
      * and the scalar base address. ypar_open validates the values. */
     if (nrhs >= 2 && mxIsStruct(prhs[nrhs - 1])) {
         pp_read_sched(prhs[nrhs - 1], &desc);
@@ -254,13 +285,14 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         return;
     }
 
-    if (strcmp(cmd, "now_us") == 0) {
+    if (strcmp(cmd, "now") == 0) {
         /* The clock the library times its own deadlines against, from
-         * ysp/rt.h. Bracket a write with it so your timestamps and the
-         * library's share one base. ysp_serial('now_us') reads the same
-         * clock. A double holds whole microseconds exactly up to 2^53, which
-         * is 285 years of uptime. */
-        plhs[0] = mxCreateDoubleScalar((double)(yrt_now_ns() / 1000));
+         * ysp/rt.h, in seconds. Bracket a write with it so your timestamps
+         * and the library's share one base. ysp_serial('now') reads the same
+         * clock. Seconds in a double step by 1.9 ns between 97 and 194 days
+         * of uptime and by 3.7 ns up to 388 days: finer than
+         * QueryPerformanceCounter's 100 ns tick. */
+        plhs[0] = mxCreateDoubleScalar((double)yrt_now_ns() / 1e9);
         mxFree(cmd);
         return;
     }
@@ -284,13 +316,13 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         plhs[0] = pp_scalar_u8((uint8_t)v);
 
     } else if (strcmp(cmd, "sched") == 0) {
-        /* effective async-worker RT params (ns) plus the policy the worker
-         * actually obtained */
-        const char* fields[] = { "runtime_ns", "deadline_ns", "period_ns", "policy" };
+        /* effective async-worker RT params (seconds) plus the policy the
+         * worker actually obtained */
+        const char* fields[] = { "runtime", "deadline", "period", "policy" };
         mxArray* s = mxCreateStructMatrix(1, 1, 4, fields);
-        mxSetField(s, 0, "runtime_ns",  mxCreateDoubleScalar((double)port->sched.runtime_ns));
-        mxSetField(s, 0, "deadline_ns", mxCreateDoubleScalar((double)port->sched.deadline_ns));
-        mxSetField(s, 0, "period_ns",   mxCreateDoubleScalar((double)port->sched.period_ns));
+        mxSetField(s, 0, "runtime",  mxCreateDoubleScalar((double)port->sched.runtime_ns / 1e9));
+        mxSetField(s, 0, "deadline", mxCreateDoubleScalar((double)port->sched.deadline_ns / 1e9));
+        mxSetField(s, 0, "period",   mxCreateDoubleScalar((double)port->sched.period_ns / 1e9));
         mxSetField(s, 0, "policy", pp_policy_string(port->async_policy));
         plhs[0] = s;
 
@@ -309,15 +341,14 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         check(port, ypar_set_data_dir(port, mxGetScalar(prhs[2]) != 0) >= 0);
 
     } else if (strcmp(cmd, "pulse") == 0) {
-        if (nrhs < 4) mexErrMsgIdAndTxt("ysp_parallel:usage", "pulse needs value, usec");
-        /* MATLAB and Octave keep microseconds; the C API takes ns. */
-        check(port, ypar_pulse(port, pp_byte(prhs[2], "value"),
-                               (int64_t)pp_u32(prhs[3], "usec") * 1000) >= 0);
+        if (nrhs < 4) mexErrMsgIdAndTxt("ysp_parallel:usage", "pulse needs value, width (s)");
+        uint8_t v = pp_byte(prhs[2], "value");
+        check(port, ypar_pulse(port, v, pp_seconds(prhs[3], "width", 0)) >= 0);
 
     } else if (strcmp(cmd, "pulseasync") == 0) {
-        if (nrhs < 4) mexErrMsgIdAndTxt("ysp_parallel:usage", "pulseasync needs value, usec");
-        check(port, ypar_pulse_async(port, pp_byte(prhs[2], "value"),
-                                     (int64_t)pp_u32(prhs[3], "usec") * 1000) >= 0);
+        if (nrhs < 4) mexErrMsgIdAndTxt("ysp_parallel:usage", "pulseasync needs value, width (s)");
+        uint8_t v = pp_byte(prhs[2], "value");
+        check(port, ypar_pulse_async(port, v, pp_seconds(prhs[3], "width", 0)) >= 0);
 
     } else if (strcmp(cmd, "close") == 0) {
         ypar_close(port);

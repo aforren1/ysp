@@ -16,3 +16,4 @@ include include/ysp/rt.h
 # pick up on its own.
 include ysp_parallel_ext.c
 include example.py
+recursive-include tests *.py

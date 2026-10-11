@@ -14,9 +14,12 @@
  *         print(info)                    # {'name':..., 'backend':..., 'base_addr':...}
  *     with pp.Port() as port:            # defaults per platform
  *         port.write_data(0x55)
- *         port.pulse(0x55, usec=2000)    # blocking
- *         port.pulse_async(0x55, 2000)   # returns immediately
+ *         port.pulse(0x55, width=0.002)  # blocking, 2 ms
+ *         port.pulse_async(0x55, 0.002)  # returns immediately
  *         print(hex(port.read_status()))
+ *
+ * UNITS: every time is float seconds, as in every ysp binding; the C API
+ * takes int64 ns, and the conversion happens here, once, at the boundary.
  *
  * THREADING: ysp/parallel.h locks data writes against its own async worker,
  * but nothing else on the handle: every bool-returning call clears and then
@@ -35,6 +38,15 @@
 #include <Python.h>
 #define YSP_PARALLEL_IMPLEMENTATION
 #include "ysp/parallel.h"
+
+#include <math.h>
+
+/* The distribution's version is the header's, plus a fourth component that
+ * counts changes to this binding alone (0.4.0.1: times in seconds), so such
+ * a change gets a new version without naming a header that does not exist.
+ * When the header's version moves, drop the suffix here and in
+ * pyproject.toml; tests/test_parallel.py checks that the two agree. */
+#define PP_VERSION YPAR_VERSION_STRING ".1"
 
 /* An OS mutex, not PyThread_type_lock: the PyThread_* functions are listed
  * in the stable ABI, but python3.dll did not export them before CPython 3.10
@@ -89,6 +101,31 @@ static void pp_unlock(PyObject* self) {
 #endif
 }
 
+/* Python seconds to int64 ns, rounded to the nearest ns. The whole seconds
+ * convert exactly and only the fraction is scaled, so a large value does not
+ * lose nanoseconds to the product's rounding. `keep_positive`: a positive
+ * value never rounds to 0, which in a desc means "library default". A
+ * negative value is refused here, before the library sees it. */
+static int pp_seconds(PyObject* o, const char* what, int keep_positive, int64_t* out) {
+    double s = PyFloat_AsDouble(o);
+    if (s == -1.0 && PyErr_Occurred()) return -1;
+    /* Comparisons, not isnan()/isinf(): MinGW's macros convert through
+     * float and warn under -Wfloat-conversion. The test is false for NaN. */
+    if (!(s >= 0 && s < HUGE_VAL)) {
+        PyErr_Format(PyExc_ValueError, "%s: seconds, finite and >= 0", what);
+        return -1;
+    }
+    if (s >= 9223372036.0) {   /* INT64_MAX ns is 9223372036.85 s */
+        PyErr_Format(PyExc_OverflowError, "%s: seconds, < 9223372036 (int64 ns)", what);
+        return -1;
+    }
+    double whole = floor(s);
+    int64_t ns = (int64_t)whole * 1000000000 + (int64_t)llround((s - whole) * 1e9);
+    if (ns == 0 && s > 0 && keep_positive) ns = 1;
+    *out = ns;
+    return 0;
+}
+
 /* Raise ysp.parallel.Error carrying the library's last error string. */
 static PyObject* pp_raise(ypar_port* port) {
     PyErr_SetString(PpError, ypar_error(port));
@@ -97,21 +134,25 @@ static PyObject* pp_raise(ypar_port* port) {
 
 static int Port_init(PyObject* self, PyObject* args, PyObject* kwds) {
     static char* kw[] = { "device", "backend", "base_addr", "exclusive",
-                          "rt_runtime_ns", "rt_deadline_ns", "rt_period_ns", NULL };
+                          "rt_runtime", "rt_deadline", "rt_period", NULL };
+    static const char* rt_names[3] = { "rt_runtime", "rt_deadline", "rt_period" };
     const char* device = NULL;
     int backend = YPAR_BACKEND_DEFAULT;
     unsigned int base_addr = 0;
     int exclusive = 0;
-    unsigned long long rt_runtime = 0, rt_deadline = 0, rt_period = 0;
+    PyObject* rt_obj[3] = { NULL, NULL, NULL };
+    int64_t rt_ns[3] = { 0, 0, 0 };
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|ziIpKKK", kw,
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|ziIpOOO", kw,
                                      &device, &backend, &base_addr, &exclusive,
-                                     &rt_runtime, &rt_deadline, &rt_period))
+                                     &rt_obj[0], &rt_obj[1], &rt_obj[2]))
         return -1;
     if (base_addr > 0xFFFFu) {
         PyErr_SetString(PyExc_ValueError, "base_addr must fit in 16 bits");
         return -1;
     }
+    for (int i = 0; i < 3; i++)
+        if (rt_obj[i] && pp_seconds(rt_obj[i], rt_names[i], 1, &rt_ns[i]) < 0) return -1;
 
     ypar_desc desc;
     memset(&desc, 0, sizeof(desc));
@@ -121,9 +162,9 @@ static int Port_init(PyObject* self, PyObject* args, PyObject* kwds) {
     desc.exclusive = exclusive ? true : false;
     /* Async-worker SCHED_DEADLINE reservation (Linux); all-zero -> defaults.
      * ypar_open validates 0 < runtime <= deadline <= period and raises here. */
-    desc.sched.runtime_ns = rt_runtime;
-    desc.sched.deadline_ns = rt_deadline;
-    desc.sched.period_ns = rt_period;
+    desc.sched.runtime_ns = rt_ns[0];
+    desc.sched.deadline_ns = rt_ns[1];
+    desc.sched.period_ns = rt_ns[2];
 
     PortObject* p = (PortObject*)self;
     if (!p->mu_ready) {
@@ -207,18 +248,25 @@ static PyObject* Port_set_data_dir(PyObject* self, PyObject* args, PyObject* kwd
     Py_RETURN_NONE;
 }
 
+/* The arguments of pulse() and pulse_async(). */
+static int pp_pulse_args(PyObject* args, PyObject* kwds, unsigned int* value, int64_t* width_ns) {
+    static char* kw[] = { "value", "width", NULL };
+    PyObject* width_obj;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "IO", kw, value, &width_obj)) return -1;
+    if (*value > 0xFF) { PyErr_SetString(PyExc_ValueError, "value must be 0..255"); return -1; }
+    return pp_seconds(width_obj, "width", 0, width_ns);
+}
+
 static PyObject* Port_pulse(PyObject* self, PyObject* args, PyObject* kwds) {
-    static char* kw[] = { "value", "usec", NULL };
-    unsigned int value, usec;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "II", kw, &value, &usec)) return NULL;
-    if (value > 0xFF) { PyErr_SetString(PyExc_ValueError, "value must be 0..255"); return NULL; }
+    unsigned int value;
+    int64_t width_ns;
+    if (pp_pulse_args(args, kwds, &value, &width_ns) < 0) return NULL;
     bool ok;
-    /* Release the GIL: ypar_pulse blocks for `usec`. The per-Port lock is what
-     * keeps another thread out of the library while it does. */
+    /* Release the GIL: ypar_pulse blocks for the width. The per-Port lock is
+     * what keeps another thread out of the library while it does. */
     pp_lock(self);
     Py_BEGIN_ALLOW_THREADS
-    /* The module keeps microseconds; the C API takes ns. */
-    ok = ypar_pulse(AS_PORT(self), (uint8_t)value, (int64_t)usec * 1000) >= 0;
+    ok = ypar_pulse(AS_PORT(self), (uint8_t)value, width_ns) >= 0;
     Py_END_ALLOW_THREADS
     if (!ok) pp_raise(AS_PORT(self));
     pp_unlock(self);
@@ -227,16 +275,15 @@ static PyObject* Port_pulse(PyObject* self, PyObject* args, PyObject* kwds) {
 }
 
 static PyObject* Port_pulse_async(PyObject* self, PyObject* args, PyObject* kwds) {
-    static char* kw[] = { "value", "usec", NULL };
-    unsigned int value, usec;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "II", kw, &value, &usec)) return NULL;
-    if (value > 0xFF) { PyErr_SetString(PyExc_ValueError, "value must be 0..255"); return NULL; }
+    unsigned int value;
+    int64_t width_ns;
+    if (pp_pulse_args(args, kwds, &value, &width_ns) < 0) return NULL;
     bool ok;
     /* The call returns before the width elapses, but its onset write still
      * goes to the port and takes the worker's lock. */
     pp_lock(self);
     Py_BEGIN_ALLOW_THREADS
-    ok = ypar_pulse_async(AS_PORT(self), (uint8_t)value, (int64_t)usec * 1000) >= 0;
+    ok = ypar_pulse_async(AS_PORT(self), (uint8_t)value, width_ns) >= 0;
     Py_END_ALLOW_THREADS
     if (!ok) pp_raise(AS_PORT(self));
     pp_unlock(self);
@@ -344,10 +391,10 @@ static PyObject* Port_get_backend(PyObject* self, void* Py_UNUSED(closure)) {
 
 static PyObject* Port_get_sched(PyObject* self, void* Py_UNUSED(closure)) {
     ypar_port* p = AS_PORT(self);
-    return Py_BuildValue("{s:K,s:K,s:K}",
-                         "runtime_ns",  (unsigned long long)p->sched.runtime_ns,
-                         "deadline_ns", (unsigned long long)p->sched.deadline_ns,
-                         "period_ns",   (unsigned long long)p->sched.period_ns);
+    return Py_BuildValue("{s:d,s:d,s:d}",
+                         "runtime",  (double)p->sched.runtime_ns / 1e9,
+                         "deadline", (double)p->sched.deadline_ns / 1e9,
+                         "period",   (double)p->sched.period_ns / 1e9);
 }
 
 static PyObject* Port_get_async_policy(PyObject* self, void* Py_UNUSED(closure)) {
@@ -363,8 +410,8 @@ static PyGetSetDef Port_getset[] = {
       "with timing data: DEADLINE is refused without CAP_SYS_NICE or under "
       "CPU pinning, and the library falls back silently.", NULL },
     { "sched",     Port_get_sched,     NULL,
-      "Effective async-worker RT params (Linux SCHED_DEADLINE) as a dict "
-      "{runtime_ns, deadline_ns, period_ns}.", NULL },
+      "Effective async-worker RT params (Linux SCHED_DEADLINE) in seconds, as "
+      "a dict {runtime, deadline, period}.", NULL },
     { NULL }
 };
 
@@ -376,10 +423,11 @@ static PyMethodDef Port_methods[] = {
     { "set_data_dir",   (PyCFunction)Port_set_data_dir,   METH_VARARGS | METH_KEYWORDS,
       "set_data_dir(input): set data-line direction on a bidirectional port." },
     { "pulse",          (PyCFunction)Port_pulse,          METH_VARARGS | METH_KEYWORDS,
-      "pulse(value, usec): write value, block usec microseconds, then write 0." },
+      "pulse(value, width): write value, block width seconds, then write 0. "
+      "Releases the GIL." },
     { "pulse_async",    (PyCFunction)Port_pulse_async,    METH_VARARGS | METH_KEYWORDS,
-      "pulse_async(value, usec): write value now, return immediately; a worker "
-      "thread writes 0 after usec." },
+      "pulse_async(value, width): write value now, return immediately; a "
+      "worker thread writes 0 after width seconds." },
     { "read_status",    Port_read_status,    METH_NOARGS,
       "read_status() -> int: read the status register (STATUS_* bits)." },
     { "get_status_bit", Port_get_status_bit, METH_O,
@@ -399,7 +447,9 @@ static PyMethodDef Port_methods[] = {
 
 static PyType_Slot Port_slots[] = {
     { Py_tp_doc,     (void*)"Parallel port handle. Port(device=None, "
-                            "backend=BACKEND_DEFAULT, base_addr=0, exclusive=False)." },
+                            "backend=BACKEND_DEFAULT, base_addr=0, exclusive=False, "
+                            "rt_runtime=0, rt_deadline=0, rt_period=0). The rt_* "
+                            "times are seconds; 0 means the library default." },
     { Py_tp_new,     (void*)PyType_GenericNew },
     { Py_tp_init,    (void*)Port_init },
     { Py_tp_dealloc, (void*)Port_dealloc },
@@ -454,17 +504,20 @@ static PyObject* mod_list_ports(PyObject* Py_UNUSED(self), PyObject* Py_UNUSED(a
 /* The clock the library times its own deadlines against, from ysp/rt.h, which
  * ysp/parallel.h builds on. Exposed so a caller can bracket a write with the
  * same time base instead of mixing in time.monotonic(), which is a different
- * clock on Windows. ysp.serial.now_us() reads the same clock. */
-static PyObject* mod_now_us(PyObject* Py_UNUSED(self), PyObject* Py_UNUSED(args)) {
-    return PyLong_FromUnsignedLongLong((unsigned long long)yrt_now_ns() / 1000u);
+ * clock on Windows. ysp.serial.now() reads the same clock. Seconds in a
+ * double step by 1.9 ns between 97 and 194 days of uptime and by 3.7 ns up
+ * to 388 days: finer than QueryPerformanceCounter's 100 ns tick. */
+static PyObject* mod_now(PyObject* Py_UNUSED(self), PyObject* Py_UNUSED(args)) {
+    return PyFloat_FromDouble((double)yrt_now_ns() / 1e9);
 }
 
 static PyMethodDef module_methods[] = {
-    { "now_us", mod_now_us, METH_NOARGS,
-      "now_us() -> int: monotonic microseconds from the clock the library uses "
-      "for its own deadlines (CLOCK_MONOTONIC / QueryPerformanceCounter). "
-      "Bracket a write with it: the physical onset lies after the first "
-      "reading, and the difference bounds the syscall cost." },
+    { "now", mod_now, METH_NOARGS,
+      "now() -> float: monotonic seconds from the clock the library uses for "
+      "its own deadlines (yrt_now_ns: CLOCK_MONOTONIC / "
+      "QueryPerformanceCounter). Bracket a write with it: the physical onset "
+      "lies after the first reading, and the difference bounds the syscall "
+      "cost." },
     { "list_ports", mod_list_ports, METH_NOARGS,
       "list_ports() -> list[dict]: enumerate available parallel ports without "
       "opening them. Each dict has 'name', 'backend', 'base_addr'." },
@@ -478,6 +531,13 @@ static PyModuleDef ysp_parallel_module = {
     .m_size = -1,
     .m_methods = module_methods,
 };
+
+static int pp_add_float(PyObject* m, const char* name, double v) {
+    PyObject* o = PyFloat_FromDouble(v);
+    if (!o) return -1;
+    if (PyModule_AddObject(m, name, o) < 0) { Py_DECREF(o); return -1; }
+    return 0;
+}
 
 /* The init function is named after the last dotted component: the loader looks
  * for PyInit_parallel in ysp/parallel.abi3.so. */
@@ -518,10 +578,17 @@ PyMODINIT_FUNC PyInit_parallel(void) {
     PyModule_AddIntConstant(m, "ASYNC_FIFO",            YRT_POLICY_FIFO);
     PyModule_AddIntConstant(m, "ASYNC_TIME_CRITICAL",   YRT_POLICY_TIME_CRITICAL);
     PyModule_AddIntConstant(m, "ASYNC_NORMAL",          YRT_POLICY_NORMAL);
-    /* default async-worker SCHED_DEADLINE params (nanoseconds) */
-    PyModule_AddIntConstant(m, "DEFAULT_RT_RUNTIME_NS",  (long)YPAR_DEFAULT_RT_RUNTIME_NS);
-    PyModule_AddIntConstant(m, "DEFAULT_RT_DEADLINE_NS", (long)YPAR_DEFAULT_RT_DEADLINE_NS);
-    PyModule_AddIntConstant(m, "DEFAULT_RT_PERIOD_NS",   (long)YPAR_DEFAULT_RT_PERIOD_NS);
+    if (PyModule_AddStringConstant(m, "__version__", PP_VERSION) < 0) {
+        Py_DECREF(m);
+        return NULL;
+    }
+    /* default async-worker SCHED_DEADLINE params (seconds) */
+    if (pp_add_float(m, "DEFAULT_RT_RUNTIME",  (double)YPAR_DEFAULT_RT_RUNTIME_NS / 1e9) < 0 ||
+        pp_add_float(m, "DEFAULT_RT_DEADLINE", (double)YPAR_DEFAULT_RT_DEADLINE_NS / 1e9) < 0 ||
+        pp_add_float(m, "DEFAULT_RT_PERIOD",   (double)YPAR_DEFAULT_RT_PERIOD_NS / 1e9) < 0) {
+        Py_DECREF(m);
+        return NULL;
+    }
     /* status bits */
     PyModule_AddIntConstant(m, "STATUS_BUSY",   YPAR_STATUS_BUSY);
     PyModule_AddIntConstant(m, "STATUS_ACK",    YPAR_STATUS_ACK);

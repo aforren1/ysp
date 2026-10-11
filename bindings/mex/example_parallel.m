@@ -18,10 +18,10 @@ end
 h = ysp_parallel('open');
 cleanup = onCleanup(@() ysp_parallel('close', h));   %#ok<NASGU>
 
-ysp_parallel('pulse', h, code, 2000);      % blocking 2 ms trigger
+ysp_parallel('pulse', h, code, 0.002);     % blocking 2 ms trigger (seconds)
 fprintf('sent trigger %d (2 ms blocking pulse)\n', code);
 
-ysp_parallel('pulseasync', h, code, 2000); % non-blocking; worker drops it
+ysp_parallel('pulseasync', h, code, 0.002); % non-blocking; worker drops it
 fprintf('queued async trigger %d\n', code);
 
 s = ysp_parallel('status', h);

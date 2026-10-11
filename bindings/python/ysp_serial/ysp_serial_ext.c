@@ -14,8 +14,11 @@
  *         print(info)                       # {'name':..., 'vid':..., ...}
  *     with ps.Port("/dev/ttyUSB0", baud=115200) as port:
  *         port.write_byte(0x55)             # raise a trigger
- *         port.pulse(0x55, 0x00, 2000)      # 0x55, hold 2 ms, then 0x00
- *         data = port.read(6, 500, all=True)   # a 6-byte frame within 500 ms
+ *         port.pulse(0x55, 0x00, 0.002)     # 0x55, hold 2 ms, then 0x00
+ *         data = port.read(6, 0.5, all=True)   # a 6-byte frame within 0.5 s
+ *
+ * UNITS: every time is float seconds, as in every ysp binding; the C API
+ * takes int64 ns, and the conversion happens here, once, at the boundary.
  *
  * THREADING: the header's one-reader-one-writer rule applies to Python threads
  * exactly as it does to C ones. read/write/drain/pulse/send_break and
@@ -36,6 +39,7 @@
 #include "ysp/serial.h"
 
 #include <limits.h>
+#include <math.h>
 #include <string.h>
 
 typedef struct {
@@ -51,13 +55,52 @@ static PyObject* PsClosed;
 
 #define AS_PORT(self) (&((PortObject*)(self))->port)
 
-/* The module keeps its units (timeouts in ms, widths in us) and its
- * TIMEOUT_INFINITE of 0xFFFFFFFF, so Python code and its tests do not change;
- * the C API takes int64 ns and -1 for forever. */
-#define PS_TIMEOUT_INFINITE_MS 0xFFFFFFFFu
-#define PS_DEFAULT_WRITE_TIMEOUT_MS 1000u
-static int64_t ps_ms_to_ns(unsigned long long ms) {
-    return ms == PS_TIMEOUT_INFINITE_MS ? YSER_TIMEOUT_INFINITE : (int64_t)ms * 1000000;
+/* The distribution's version is the header's, plus a fourth component that
+ * counts changes to this binding alone (0.5.0.1: times in seconds), so such
+ * a change gets a new version without naming a header that does not exist.
+ * When the header's version moves, drop the suffix here and in
+ * pyproject.toml; tests/test_serial.py checks that the two agree. */
+#define PS_VERSION YSER_VERSION_STRING ".1"
+
+/* ps_seconds() flags. */
+#define PS_S_INF  1  /* math.inf means "forever" (YSER_TIMEOUT_INFINITE) */
+#define PS_S_POS  2  /* a positive value never rounds to 0: 0 means poll or
+                      * "library default" in C, which is not what was asked */
+
+/* Python seconds to int64 ns, rounded to the nearest ns. The whole seconds
+ * convert exactly and only the fraction is scaled, so a large value does not
+ * lose nanoseconds to the product's rounding. A negative value is refused
+ * rather than passed on: in C a negative read timeout polls and a negative
+ * width fails after the call, and neither is what a Python caller meant. */
+static int ps_seconds(PyObject* o, const char* what, int flags, int64_t* out) {
+    double s = PyFloat_AsDouble(o);
+    if (s == -1.0 && PyErr_Occurred()) return -1;
+    /* Comparisons, not isnan()/isinf(): MinGW's macros convert through
+     * float and warn under -Wfloat-conversion. !(s >= 0) is true for NaN. */
+    if (!(s >= 0)) {
+        PyErr_Format(PyExc_ValueError, "%s: seconds, >= 0 (not NaN)", what);
+        return -1;
+    }
+    if (s == HUGE_VAL) {
+        if (flags & PS_S_INF) { *out = YSER_TIMEOUT_INFINITE; return 0; }
+        PyErr_Format(PyExc_ValueError, "%s: seconds, finite", what);
+        return -1;
+    }
+    if (s >= 9223372036.0) {   /* INT64_MAX ns is 9223372036.85 s */
+        PyErr_Format(PyExc_OverflowError, "%s: seconds, < 9223372036 (int64 ns)%s", what,
+                     (flags & PS_S_INF) ? "; use math.inf to wait forever" : "");
+        return -1;
+    }
+    double whole = floor(s);
+    int64_t ns = (int64_t)whole * 1000000000 + (int64_t)llround((s - whole) * 1e9);
+    if (ns == 0 && s > 0 && (flags & PS_S_POS)) ns = 1;
+    *out = ns;
+    return 0;
+}
+
+static PyObject* ps_ns_to_seconds(int64_t ns) {
+    if (ns == YSER_TIMEOUT_INFINITE) return PyFloat_FromDouble(HUGE_VAL);
+    return PyFloat_FromDouble((double)ns / 1e9);
 }
 
 /* Raise the exception matching a negative YSER_ERR_* code. `oserr` is the
@@ -75,22 +118,43 @@ static PyObject* ps_fail(int code, int oserr) {
 
 static int Port_init(PyObject* self, PyObject* args, PyObject* kwds) {
     static char* kw[] = { "device", "baud", "data_bits", "parity", "stop_bits",
-                          "flow", "write_timeout_ms", "exclusive", "low_latency",
+                          "flow", "write_timeout", "exclusive", "low_latency",
                           "dtr_low_on_open", "rts_low_on_open", "keep_dtr_on_close",
-                          "rt_runtime_ns", "rt_deadline_ns", "rt_period_ns", NULL };
+                          "rt_runtime", "rt_deadline", "rt_period", NULL };
     const char* device = NULL;
-    unsigned int baud = 0, write_timeout_ms = 0;
+    unsigned int baud = 0;
     unsigned char data_bits = 0;
     int parity = YSER_PARITY_NONE, stop_bits = YSER_STOP_BITS_1, flow = YSER_FLOW_NONE;
     int exclusive = 0, low_latency = 0, dtr_low = 0, rts_low = 0, keep_dtr = 0;
-    unsigned long long rt_runtime = 0, rt_deadline = 0, rt_period = 0;
+    PyObject *wt_obj = NULL, *rt_obj[3] = { NULL, NULL, NULL };
+    int64_t write_timeout_ns = 0, rt_ns[3] = { 0, 0, 0 };
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|IbiiiIpppppKKK", kw,
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|IbiiiOpppppOOO", kw,
                                      &device, &baud, &data_bits, &parity, &stop_bits,
-                                     &flow, &write_timeout_ms, &exclusive, &low_latency,
+                                     &flow, &wt_obj, &exclusive, &low_latency,
                                      &dtr_low, &rts_low, &keep_dtr,
-                                     &rt_runtime, &rt_deadline, &rt_period))
+                                     &rt_obj[0], &rt_obj[1], &rt_obj[2]))
         return -1;
+    /* Checked before anything is closed or opened, so a bad argument leaves a
+     * live Port as it was. The C write timeout has no poll: 0 there means
+     * the 1 s default, so a Python 0 is refused instead of silently waiting
+     * a second. Omit the argument for the default. */
+    if (wt_obj) {
+        if (ps_seconds(wt_obj, "write_timeout", PS_S_INF | PS_S_POS, &write_timeout_ns) < 0)
+            return -1;
+        if (write_timeout_ns == 0) {
+            PyErr_SetString(PyExc_ValueError,
+                            "write_timeout: seconds, > 0 (a write cannot poll; "
+                            "omit it for DEFAULT_WRITE_TIMEOUT)");
+            return -1;
+        }
+    }
+    {
+        static const char* rt_names[3] = { "rt_runtime", "rt_deadline", "rt_period" };
+        for (int i = 0; i < 3; i++)
+            if (rt_obj[i] && ps_seconds(rt_obj[i], rt_names[i], PS_S_POS, &rt_ns[i]) < 0)
+                return -1;
+    }
 
     yser_desc desc;
     memset(&desc, 0, sizeof(desc));
@@ -100,7 +164,7 @@ static int Port_init(PyObject* self, PyObject* args, PyObject* kwds) {
     desc.parity = (yser_parity)parity;
     desc.stop_bits = (yser_stop_bits)stop_bits;
     desc.flow = (yser_flow)flow;
-    desc.write_timeout_ns = ps_ms_to_ns(write_timeout_ms);
+    desc.write_timeout_ns = write_timeout_ns;
     desc.exclusive = exclusive ? true : false;
     desc.low_latency = low_latency ? true : false;
     desc.dtr_low_on_open = dtr_low ? true : false;
@@ -108,9 +172,9 @@ static int Port_init(PyObject* self, PyObject* args, PyObject* kwds) {
     desc.keep_dtr_on_close = keep_dtr ? true : false;
     /* Async-worker SCHED_DEADLINE reservation (Linux); all-zero -> defaults.
      * yser_open validates 0 < runtime <= deadline <= period and raises here. */
-    desc.sched.runtime_ns = rt_runtime;
-    desc.sched.deadline_ns = rt_deadline;
-    desc.sched.period_ns = rt_period;
+    desc.sched.runtime_ns = rt_ns[0];
+    desc.sched.deadline_ns = rt_ns[1];
+    desc.sched.period_ns = rt_ns[2];
 
     /* Python can call __init__ on a live object; yser_open would memset over
      * the open descriptor and orphan the async worker. The object memory is
@@ -126,7 +190,7 @@ static int Port_init(PyObject* self, PyObject* args, PyObject* kwds) {
 
 static void Port_dealloc(PyObject* self) {
     /* Same reason as Port_close: yser_close joins the async worker and can
-     * block in the driver for up to write_timeout_ms on a wedged device.
+     * block in the driver for up to write_timeout on a wedged device.
      * Holding the GIL through that stalls every other Python thread, and a
      * dealloc can run on any thread the last reference happens to die on. */
     Py_BEGIN_ALLOW_THREADS
@@ -143,32 +207,26 @@ static void Port_dealloc(PyObject* self) {
 /* --- input (reader role) ------------------------------------------------ */
 
 static PyObject* Port_read(PyObject* self, PyObject* args, PyObject* kwds) {
-    static char* kw[] = { "n", "timeout_ms", "all", NULL };
+    static char* kw[] = { "n", "timeout", "all", NULL };
     int n;
     PyObject* timeout_obj;
     int all = 0;
+    int64_t timeout_ns;
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "iO|p", kw, &n, &timeout_obj, &all))
         return NULL;
     if (n < 0) { PyErr_SetString(PyExc_ValueError, "n must be >= 0"); return NULL; }
-    /* Not "I": PyArg_Parse does no range checking for it, so read(64, -1)
-     * would wrap to TIMEOUT_INFINITE and block the caller forever. */
-    unsigned long long t = PyLong_AsUnsignedLongLong(timeout_obj);
-    if (t == (unsigned long long)-1 && PyErr_Occurred()) return NULL;
-    if (t > 0xFFFFFFFFull) {
-        PyErr_SetString(PyExc_OverflowError,
-                        "timeout_ms must fit in 32 bits (TIMEOUT_INFINITE is the maximum)");
-        return NULL;
-    }
-    unsigned int timeout_ms = (unsigned int)t;
+    /* 0 polls; a short positive timeout stays a wait (the C side rounds it up
+     * to 1 ms), and a negative one is refused, not polled. */
+    if (ps_seconds(timeout_obj, "timeout", PS_S_INF | PS_S_POS, &timeout_ns) < 0) return NULL;
     if (n == 0) return PyBytes_FromStringAndSize("", 0);
 
     char* buf = (char*)PyMem_Malloc((size_t)n);
     if (!buf) return PyErr_NoMemory();
     int got;
-    /* Release the GIL: yser_read blocks for up to timeout_ms, and interrupt()
+    /* Release the GIL: yser_read blocks for up to the timeout, and interrupt()
      * has to reach it from another Python thread. */
     Py_BEGIN_ALLOW_THREADS
-    got = yser_read(AS_PORT(self), buf, n, ps_ms_to_ns(timeout_ms),
+    got = yser_read(AS_PORT(self), buf, n, timeout_ns,
                     all ? YSER_READ_ALL : YSER_READ_ANY);
     Py_END_ALLOW_THREADS
     if (got < 0) {
@@ -238,49 +296,57 @@ static PyObject* Port_drain(PyObject* self, PyObject* Py_UNUSED(ignored)) {
     Py_RETURN_NONE;
 }
 
-static PyObject* Port_pulse(PyObject* self, PyObject* args, PyObject* kwds) {
-    static char* kw[] = { "on", "off", "usec", NULL };
-    unsigned int on, off, usec;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "III", kw, &on, &off, &usec)) return NULL;
-    if (on > 0xFF || off > 0xFF) {
+/* The arguments of pulse() and pulse_async(). */
+static int ps_pulse_args(PyObject* args, PyObject* kwds, unsigned int* on, unsigned int* off,
+                         int64_t* width_ns) {
+    static char* kw[] = { "on", "off", "width", NULL };
+    PyObject* width_obj;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "IIO", kw, on, off, &width_obj)) return -1;
+    if (*on > 0xFF || *off > 0xFF) {
         PyErr_SetString(PyExc_ValueError, "on and off must be 0..255");
-        return NULL;
+        return -1;
     }
+    return ps_seconds(width_obj, "width", 0, width_ns);
+}
+
+static PyObject* Port_pulse(PyObject* self, PyObject* args, PyObject* kwds) {
+    unsigned int on, off;
+    int64_t width_ns;
+    if (ps_pulse_args(args, kwds, &on, &off, &width_ns) < 0) return NULL;
     int n;
-    /* Release the GIL: yser_pulse holds the line for `usec`. */
+    /* Release the GIL: yser_pulse holds the line for the width. */
     Py_BEGIN_ALLOW_THREADS
-    n = yser_pulse(AS_PORT(self), (uint8_t)on, (uint8_t)off, (int64_t)usec * 1000);
+    n = yser_pulse(AS_PORT(self), (uint8_t)on, (uint8_t)off, width_ns);
     Py_END_ALLOW_THREADS
     if (n < 0) return ps_fail(n, AS_PORT(self)->wr_oserr);
     return PyLong_FromLong(n);
 }
 
 static PyObject* Port_pulse_async(PyObject* self, PyObject* args, PyObject* kwds) {
-    static char* kw[] = { "on", "off", "usec", NULL };
-    unsigned int on, off, usec;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "III", kw, &on, &off, &usec)) return NULL;
-    if (on > 0xFF || off > 0xFF) {
-        PyErr_SetString(PyExc_ValueError, "on and off must be 0..255");
-        return NULL;
-    }
+    unsigned int on, off;
+    int64_t width_ns;
+    if (ps_pulse_args(args, kwds, &on, &off, &width_ns) < 0) return NULL;
     int n;
     /* The call returns before the width elapses, but its onset write still
-     * goes through the driver and can block up to write_timeout_ms. */
+     * goes through the driver and can block up to write_timeout. */
     Py_BEGIN_ALLOW_THREADS
-    n = yser_pulse_async(AS_PORT(self), (uint8_t)on, (uint8_t)off, (int64_t)usec * 1000);
+    n = yser_pulse_async(AS_PORT(self), (uint8_t)on, (uint8_t)off, width_ns);
     Py_END_ALLOW_THREADS
     if (n < 0) return ps_fail(n, AS_PORT(self)->wr_oserr);
     return PyLong_FromLong(n);
 }
 
 static PyObject* Port_send_break(PyObject* self, PyObject* args, PyObject* kwds) {
-    static char* kw[] = { "ms", NULL };
-    unsigned int ms;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "I", kw, &ms)) return NULL;
+    static char* kw[] = { "duration", NULL };
+    PyObject* dur_obj;
+    int64_t dur_ns;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O", kw, &dur_obj)) return NULL;
+    if (ps_seconds(dur_obj, "duration", 0, &dur_ns) < 0) return NULL;
     int rc;
-    /* Release the GIL: the break is held for `ms` on the calling thread. */
+    /* Release the GIL: the break is held for the duration on the calling
+     * thread. */
     Py_BEGIN_ALLOW_THREADS
-    rc = yser_send_break(AS_PORT(self), (int64_t)ms * 1000000);
+    rc = yser_send_break(AS_PORT(self), dur_ns);
     Py_END_ALLOW_THREADS
     if (rc < 0) return ps_fail(rc, AS_PORT(self)->wr_oserr);
     Py_RETURN_NONE;
@@ -379,10 +445,15 @@ static PyObject* Port_get_stop_bits(PyObject* self, void* Py_UNUSED(closure)) {
 static PyObject* Port_get_flow(PyObject* self, void* Py_UNUSED(closure)) {
     return PyLong_FromLong((long)AS_PORT(self)->flow);
 }
-static PyObject* Port_get_write_timeout_ms(PyObject* self, void* Py_UNUSED(closure)) {
-    int64_t ns = AS_PORT(self)->write_timeout_ns;
-    return PyLong_FromUnsignedLong(ns == YSER_TIMEOUT_INFINITE ? PS_TIMEOUT_INFINITE_MS
-                                                               : (unsigned long)(ns / 1000000));
+static PyObject* Port_get_write_timeout(PyObject* self, void* Py_UNUSED(closure)) {
+    return ps_ns_to_seconds(AS_PORT(self)->write_timeout_ns);
+}
+static PyObject* Port_get_sched(PyObject* self, void* Py_UNUSED(closure)) {
+    yser_port* p = AS_PORT(self);
+    return Py_BuildValue("{s:d,s:d,s:d}",
+                         "runtime",  (double)p->sched.runtime_ns / 1e9,
+                         "deadline", (double)p->sched.deadline_ns / 1e9,
+                         "period",   (double)p->sched.period_ns / 1e9);
 }
 static PyObject* Port_get_low_latency(PyObject* self, void* Py_UNUSED(closure)) {
     return PyBool_FromLong(AS_PORT(self)->low_latency);
@@ -411,8 +482,12 @@ static PyGetSetDef Port_getset[] = {
     { "parity",           Port_get_parity,           NULL, "Effective parity (PARITY_*).", NULL },
     { "stop_bits",        Port_get_stop_bits,        NULL, "Effective stop bits (STOP_BITS_*).", NULL },
     { "flow",             Port_get_flow,             NULL, "Effective flow control (FLOW_*).", NULL },
-    { "write_timeout_ms", Port_get_write_timeout_ms, NULL,
-      "Write timeout in ms; immutable while the port is open.", NULL },
+    { "write_timeout",    Port_get_write_timeout,    NULL,
+      "Write timeout in seconds (math.inf: none); immutable while the port is "
+      "open. The OS waits in whole ms, so it rounds up to the next ms.", NULL },
+    { "sched",            Port_get_sched,            NULL,
+      "Effective async-worker RT params (Linux SCHED_DEADLINE) in seconds, as "
+      "a dict {runtime, deadline, period}.", NULL },
     { "low_latency",      Port_get_low_latency,      NULL,
       "True if the driver accepted the low-latency request.", NULL },
     { "keep_dtr_on_close", Port_get_keep_dtr,        NULL,
@@ -432,10 +507,11 @@ static PyGetSetDef Port_getset[] = {
 
 static PyMethodDef Port_methods[] = {
     { "read",        (PyCFunction)Port_read,        METH_VARARGS | METH_KEYWORDS,
-      "read(n, timeout_ms, all=False) -> bytes: read up to n bytes. all=False "
+      "read(n, timeout, all=False) -> bytes: read up to n bytes. all=False "
       "returns on the first bytes available (b'' on timeout); all=True keeps "
-      "reading until n bytes or the timeout. timeout_ms=0 polls, "
-      "TIMEOUT_INFINITE blocks. Releases the GIL." },
+      "reading until n bytes or the timeout. timeout is in seconds: 0 polls, "
+      "TIMEOUT_INFINITE (math.inf) blocks, a negative value raises ValueError; "
+      "a wait rounds up to the next ms. Releases the GIL." },
     { "write",       (PyCFunction)Port_write,       METH_VARARGS | METH_KEYWORDS,
       "write(data) -> int: write a bytes-like object (or any iterable of ints "
       "0..255); returns the count the driver accepted (< len on write "
@@ -444,11 +520,12 @@ static PyMethodDef Port_methods[] = {
       "write_byte(value) -> int: write one byte (0..255); returns 1, or 0 on "
       "write timeout." },
     { "pulse",       (PyCFunction)Port_pulse,       METH_VARARGS | METH_KEYWORDS,
-      "pulse(on, off, usec) -> int: write on, block usec microseconds, write "
+      "pulse(on, off, width) -> int: write on, block width seconds, write "
       "off. Returns 2 on success. Releases the GIL." },
     { "pulse_async", (PyCFunction)Port_pulse_async, METH_VARARGS | METH_KEYWORDS,
-      "pulse_async(on, off, usec) -> int: write on now and return; the worker "
-      "thread writes off after usec. Returns 1 when the onset was accepted." },
+      "pulse_async(on, off, width) -> int: write on now and return; the worker "
+      "thread writes off after width seconds. Returns 1 when the onset was "
+      "accepted." },
     { "available",   Port_available,                METH_NOARGS,
       "available() -> int: bytes waiting in the driver's receive buffer." },
     { "drain",       Port_drain,                    METH_NOARGS,
@@ -465,7 +542,7 @@ static PyMethodDef Port_methods[] = {
     { "get_lines",   Port_get_lines,                METH_NOARGS,
       "get_lines() -> int: input lines as a LINE_* mask." },
     { "send_break",  (PyCFunction)Port_send_break,  METH_VARARGS | METH_KEYWORDS,
-      "send_break(ms): hold TX in the break state for ms milliseconds." },
+      "send_break(duration): hold TX in the break state for duration seconds." },
     { "close",       Port_close,                    METH_NOARGS,
       "close(): release the port (idempotent). Both roles must have returned." },
     { "__enter__",   Port_enter,                    METH_NOARGS, NULL },
@@ -476,11 +553,12 @@ static PyMethodDef Port_methods[] = {
 static PyType_Slot Port_slots[] = {
     { Py_tp_doc,     (void*)"Serial port handle. Port(device, baud=0, data_bits=0, "
                             "parity=PARITY_NONE, stop_bits=STOP_BITS_1, flow=FLOW_NONE, "
-                            "write_timeout_ms=0, exclusive=False, low_latency=False, "
-                            "dtr_low_on_open=False, rts_low_on_open=False, "
-                            "keep_dtr_on_close=False, rt_runtime_ns=0, "
-                            "rt_deadline_ns=0, rt_period_ns=0). A zero field means "
-                            "the library default." },
+                            "write_timeout=DEFAULT_WRITE_TIMEOUT, exclusive=False, "
+                            "low_latency=False, dtr_low_on_open=False, "
+                            "rts_low_on_open=False, keep_dtr_on_close=False, "
+                            "rt_runtime=0, rt_deadline=0, rt_period=0). Times are "
+                            "seconds; write_timeout=math.inf never times out. A zero "
+                            "field means the library default." },
     { Py_tp_new,     (void*)PyType_GenericNew },
     { Py_tp_init,    (void*)Port_init },
     { Py_tp_dealloc, (void*)Port_dealloc },
@@ -566,17 +644,20 @@ static PyObject* mod_find_ports(PyObject* Py_UNUSED(self), PyObject* args, PyObj
 
 /* The clock the library times its own deadlines against. Exposed so a caller
  * can bracket a write with the same time base instead of mixing in
- * time.monotonic(), which is a different clock on Windows. */
-static PyObject* mod_now_us(PyObject* Py_UNUSED(self), PyObject* Py_UNUSED(args)) {
-    return PyLong_FromUnsignedLongLong((unsigned long long)yrt_now_ns() / 1000u);
+ * time.monotonic(), which is a different clock on Windows. Seconds in a
+ * double step by 1.9 ns between 97 and 194 days of uptime and by 3.7 ns up
+ * to 388 days: finer than QueryPerformanceCounter's 100 ns tick. */
+static PyObject* mod_now(PyObject* Py_UNUSED(self), PyObject* Py_UNUSED(args)) {
+    return PyFloat_FromDouble((double)yrt_now_ns() / 1e9);
 }
 
 static PyMethodDef module_methods[] = {
-    { "now_us", mod_now_us, METH_NOARGS,
-      "now_us() -> int: monotonic microseconds from the clock the library uses "
-      "for its own deadlines (CLOCK_MONOTONIC / QueryPerformanceCounter). "
-      "Bracket a write with it: the physical onset lies after the first "
-      "reading, and the difference bounds the syscall cost." },
+    { "now", mod_now, METH_NOARGS,
+      "now() -> float: monotonic seconds from the clock the library uses for "
+      "its own deadlines (yrt_now_ns: CLOCK_MONOTONIC / "
+      "QueryPerformanceCounter). Bracket a write with it: the physical onset "
+      "lies after the first reading, and the difference bounds the syscall "
+      "cost." },
     { "list_ports", mod_list_ports, METH_NOARGS,
       "list_ports() -> list[dict]: enumerate serial ports without opening them. "
       "Each dict has 'name', 'description', 'serial_number', 'location', "
@@ -611,11 +692,16 @@ static PyObject* ps_add_exc(PyObject* m, const char* qualname, const char* attr,
 
 /* PyModule_AddIntConstant takes a long, which is 32-bit and signed on Windows;
  * the unsigned constants go in as objects instead. */
-static int ps_add_uint(PyObject* m, const char* name, unsigned long long v) {
-    PyObject* o = PyLong_FromUnsignedLongLong(v);
+static int ps_add_obj(PyObject* m, const char* name, PyObject* o) {
     if (!o) return -1;
     if (PyModule_AddObject(m, name, o) < 0) { Py_DECREF(o); return -1; }
     return 0;
+}
+static int ps_add_uint(PyObject* m, const char* name, unsigned long long v) {
+    return ps_add_obj(m, name, PyLong_FromUnsignedLongLong(v));
+}
+static int ps_add_seconds(PyObject* m, const char* name, int64_t ns) {
+    return ps_add_obj(m, name, ps_ns_to_seconds(ns));
 }
 
 /* The init function is named after the last dotted component: the loader looks
@@ -681,13 +767,17 @@ PyMODINIT_FUNC PyInit_serial(void) {
     PyModule_AddIntConstant(m, "ASYNC_FIFO",            YRT_POLICY_FIFO);
     PyModule_AddIntConstant(m, "ASYNC_TIME_CRITICAL",   YRT_POLICY_TIME_CRITICAL);
     PyModule_AddIntConstant(m, "ASYNC_NORMAL",          YRT_POLICY_NORMAL);
-    /* defaults */
-    if (ps_add_uint(m, "TIMEOUT_INFINITE", PS_TIMEOUT_INFINITE_MS) < 0 ||
+    if (PyModule_AddStringConstant(m, "__version__", PS_VERSION) < 0) {
+        Py_DECREF(m);
+        return NULL;
+    }
+    /* defaults; times in seconds, TIMEOUT_INFINITE is math.inf */
+    if (ps_add_seconds(m, "TIMEOUT_INFINITE", YSER_TIMEOUT_INFINITE) < 0 ||
         ps_add_uint(m, "DEFAULT_BAUD", YSER_DEFAULT_BAUD) < 0 ||
-        ps_add_uint(m, "DEFAULT_WRITE_TIMEOUT_MS", PS_DEFAULT_WRITE_TIMEOUT_MS) < 0 ||
-        ps_add_uint(m, "DEFAULT_RT_RUNTIME_NS", YSER_DEFAULT_RT_RUNTIME_NS) < 0 ||
-        ps_add_uint(m, "DEFAULT_RT_DEADLINE_NS", YSER_DEFAULT_RT_DEADLINE_NS) < 0 ||
-        ps_add_uint(m, "DEFAULT_RT_PERIOD_NS", YSER_DEFAULT_RT_PERIOD_NS) < 0) {
+        ps_add_seconds(m, "DEFAULT_WRITE_TIMEOUT", YSER_DEFAULT_WRITE_TIMEOUT_NS) < 0 ||
+        ps_add_seconds(m, "DEFAULT_RT_RUNTIME", YSER_DEFAULT_RT_RUNTIME_NS) < 0 ||
+        ps_add_seconds(m, "DEFAULT_RT_DEADLINE", YSER_DEFAULT_RT_DEADLINE_NS) < 0 ||
+        ps_add_seconds(m, "DEFAULT_RT_PERIOD", YSER_DEFAULT_RT_PERIOD_NS) < 0) {
         Py_DECREF(m);
         return NULL;
     }

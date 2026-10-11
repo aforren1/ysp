@@ -27,10 +27,12 @@ it requires. The four adaptive-method sources also include
 argument helpers; a copy of one of those sources needs that file beside it.
 
 [test_mex.m](test_mex.m) runs the key checks of the four adaptive modules and
-of `ysp_serial` in MATLAB or Octave and prints `PASS`. Without a port it
-checks `ysp_serial`'s arguments and handles only; with the environment
-variable `YSP_TEST_ECHO_PORT` set to the port of an echo board
-(`firmware/ysp_echo`) it also runs the async reader on a 2000-line stream. [test_mex_color.m](test_mex_color.m) does
+of `ysp_serial` and the time units of `ysp_parallel` (no port needed) in
+MATLAB or Octave and prints `PASS`. Without a port it checks `ysp_serial`'s
+arguments and handles only; with the environment variable
+`YSP_TEST_ECHO_PORT` set to the port of an echo board (`firmware/ysp_echo`)
+it also runs the async reader on a 2000-line stream.
+[test_mex_color.m](test_mex_color.m) does
 the same for `ysp_color` (compiles nothing but ysp/color.h and
 `ysp_mex_util.h`); `tests/compare/color_ptb.m` compares it with
 Psychtoolbox's colorimetric code.
@@ -75,8 +77,8 @@ h = ysp_parallel('open');                      % platform defaults
 ysp_parallel('write',      h, 85);             % data register (0..255)
 d = ysp_parallel('read',   h);                 % read data register (uint8)
 ysp_parallel('setdir',     h, true);           % data direction: input
-ysp_parallel('pulse',      h, 85, 2000);       % blocking 2 ms pulse
-ysp_parallel('pulseasync', h, 85, 2000);       % non-blocking pulse
+ysp_parallel('pulse',      h, 85, 0.002);      % blocking 2 ms pulse (seconds)
+ysp_parallel('pulseasync', h, 85, 0.002);      % non-blocking pulse
 s = ysp_parallel('status', h);                 % status register
 c = ysp_parallel('control', h);                % read control register
 ysp_parallel('control',    h, 4);              % write control register
@@ -85,47 +87,56 @@ ysp_parallel('close',      h);
 
 Tune the async-pulse worker's real-time reservation (Linux
 [SCHED_DEADLINE](https://www.kernel.org/doc/html/latest/scheduler/sched-deadline.html))
-by passing a trailing **struct** (fields in nanoseconds) to `open`:
+by passing a trailing **struct** (fields in seconds) to `open`:
 
 ```matlab
-rt = struct('runtime_ns', 5e5, 'deadline_ns', 2e6, 'period_ns', 2e6);
+rt = struct('runtime', 5e-4, 'deadline', 2e-3, 'period', 2e-3);
 h  = ysp_parallel('open', rt);                  % default device + RT params
 h  = ysp_parallel('open', '/dev/parport0', rt); % with an explicit device
 cur = ysp_parallel('sched', h);                 % struct of effective params
 ```
 
-Any subset of fields is accepted. Missing fields are 0, and a 0 `period_ns`
-means "same as `deadline_ns`". Leave the struct off for the library defaults.
+Any subset of fields is accepted. Missing fields are 0, and a 0 `period`
+means "same as `deadline`". Leave the struct off for the library defaults.
 Invalid combinations (the rule is `0 < runtime <= deadline <= period`) raise
-an error at `open`.
+an error at `open`. A field of the old nanosecond form (`runtime_ns`,
+`deadline_ns`, `period_ns`) raises `ysp_parallel:arg`: read as seconds, its
+value would be days.
 
 Bracket a trigger with the library's own clock so your timestamps and the
 library's deadlines share one base:
 
 ```matlab
-t0 = ysp_parallel('now_us');     % monotonic microseconds, no handle needed
+t0 = ysp_parallel('now');        % monotonic seconds, no handle needed
 ysp_parallel('write', h, 85);
-t1 = ysp_parallel('now_us');     % the onset lies after t0; t1 - t0 bounds it
+t1 = ysp_parallel('now');        % the onset lies after t0; t1 - t0 bounds it
 ```
 
-`ysp_serial('now')` reads the same clock, in seconds: both headers build on
+`ysp_serial('now')` reads the same clock: both headers build on
 `ysp/rt.h`, so one time base covers the whole rig.
+
+Every time is seconds: the pulse widths, the RT struct, `'sched'` and
+`'now'`. The MEX function converts each one to the `int64_t` nanoseconds of
+the C API, rounded to the nearest nanosecond. A width of 0 is allowed. A
+negative, NaN or infinite time raises `ysp_parallel:arg` before the library
+is called. Until 2026-10-11 the widths were microseconds, the RT struct
+nanoseconds and the clock command `'now_us'`.
 
 ### Commands
 
 | Command | Returns | Notes |
 |---|---|---|
 | `'list'` | struct array | `name`, `backend`, `base_addr`; opens nothing |
-| `'open' [, dev \| 'direct' \| 'inpout' [, base]] [, rtStruct]` | `uint64` handle | defaults per platform; optional trailing RT struct (ns) |
+| `'open' [, dev \| 'direct' \| 'inpout' [, base]] [, rtStruct]` | `uint64` handle | defaults per platform; optional trailing RT struct (seconds) |
 | `'write', h, value` | none | data register, 0..255 |
 | `'read', h` | `uint8` | data register |
 | `'setdir', h, isInput` | none | bidirectional-port direction |
-| `'pulse', h, value, usec` | none | blocking |
-| `'pulseasync', h, value, usec` | none | non-blocking (RT worker) |
+| `'pulse', h, value, width` | none | blocking; `width` in seconds |
+| `'pulseasync', h, value, width` | none | non-blocking (RT worker); `width` in seconds |
 | `'status', h` | `uint8` | status register (read-only) |
 | `'control', h [, value]` | `uint8` / none | read or write control register |
-| `'sched', h` | struct | effective RT params `runtime_ns`/`deadline_ns`/`period_ns` and `policy` (`deadline`, `fifo`, `time_critical`, `normal`, `none`), the policy the worker actually obtained |
-| `'now_us'` | `double` | monotonic microseconds from the library clock, the clock of `ysp_serial('now')`, which returns seconds; opens nothing |
+| `'sched', h` | struct | effective RT params `runtime`/`deadline`/`period` in seconds and `policy` (`deadline`, `fifo`, `time_critical`, `normal`, `none`), the policy the worker actually obtained |
+| `'now'` | `double` | monotonic seconds from the library clock, the same clock as `ysp_serial('now')`; opens nothing |
 | `'close', h` | none | release the port |
 
 Errors are raised through `error()` with id `ysp_parallel:*`. Every open port
