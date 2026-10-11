@@ -203,14 +203,12 @@ static int sim_path(int64_t t0, int trial, float sx, float sy, float bx, float b
 
 int main(int argc, char** argv) {
     yscr_desc sd;
-    ygfx_desc gd;
-    ytl_desc td;
     ytb_csv_desc cd;
     ytr_desc rd;
     yrsp_desc pd;
     yrsp_source sources[1];
     yscr_frame f;
-    ytl_event fired[16];
+    ytl_event fired[64];                   /* the timeline's capacity: all that can fire */
     ytr_trial_info ti = { 0 };
     FILE *out, *traj;
     char line[1024];
@@ -220,7 +218,6 @@ int main(int argc, char** argv) {
     int i, n, sim = 0, reps = 0, aborted = 0, failed = 0, rows = 0, in_trial = 0, armed_seen = 0, ended_seen = 0;
     int n_sim_ev = 0, sim_next = 0, color_col, answer_col;
     float W, H, cx, cy;
-    int64_t stim_frame = -1;
     double sim_init[2], sim_dev[2];
     int sim_correct[2], sim_samples[2];
 
@@ -246,11 +243,11 @@ int main(int argc, char** argv) {
     sd.window_h = 768;
     sd.raw_mice = raw && !sim;    /* the simulated display has no window: --sim feeds counts itself */
 
-    if (!yscr_open(&scr, &sd)) { fprintf(stderr, "trial_mouse_tracking: %s\n", yscr_error(&scr)); return 1; }
-    memset(&gd, 0, sizeof gd);
-    gd.screen = &scr;
-    gd.background[0] = gd.background[1] = gd.background[2] = 0.5f;
-    if (!ygfx_open(&gfx, &gd)) { fprintf(stderr, "trial_mouse_tracking: %s\n", ygfx_error(&gfx)); return 1; }
+    /* the display and the graphics, opened together and primed */
+    if (!ygfx_open_screen(&gfx, &scr, &sd, &(ygfx_desc){ .background = { 0.5f, 0.5f, 0.5f } })) {
+        fprintf(stderr, "trial_mouse_tracking: %s\n", ygfx_error(&gfx));
+        return 1;
+    }
     ygfx_size(&gfx, &W, &H);
     ygfx_center(&gfx, &cx, &cy);
     start = shape(YGFX_RECT, 0, H / 2 - 50, 120, 50, 0, 0.75f, 0.75f, 0.75f);
@@ -287,11 +284,10 @@ int main(int argc, char** argv) {
     rd.rng_ctx = &seed;
     if (!ytr_open(&trials, &rd)) { fprintf(stderr, "trial_mouse_tracking: %s\n", ytr_error(&trials)); return 1; }
 
-    memset(&td, 0, sizeof td);
-    td.events = storage;
-    td.event_capacity = 64;
-    td.n_channels = N_CHANNELS;
-    if (!ytl_open(&tl, &td)) { fprintf(stderr, "trial_mouse_tracking: %s\n", ytl_error(&tl)); return 1; }
+    if (!ytl_open(&tl, &(ytl_desc){ .events = storage, .event_capacity = 64, .n_channels = N_CHANNELS })) {
+        fprintf(stderr, "trial_mouse_tracking: %s\n", ytl_error(&tl));
+        return 1;
+    }
 
     /* the movement onset, then the window stays open for the trace until
      * the click in a box */
@@ -325,7 +321,6 @@ int main(int argc, char** argv) {
     fprintf(traj, "trial_index,t,x,y\n");
     printf("%s\n", line);
 
-    ygfx_prime(&gfx);   /* each kind's first draw now, not on a trial's first frames (docs/gfx.md) */
     for (;;) {
         SDL_Event ev;
         int64_t bt = 0;
@@ -334,11 +329,7 @@ int main(int argc, char** argv) {
         if (rc == YSCR_QUIT) { aborted = 1; break; }
         if (rc != YSCR_OK) { fprintf(stderr, "trial_mouse_tracking: %s\n", yscr_error(&scr)); failed = 1; break; }
 
-        for (i = 0; i < f.n_done; i++)
-            if (f.done[i].index == stim_frame) {
-                yrsp_onset o = yrsp_onset_flip(&f.done[i]);
-                yrsp_set_onset(&rsp, &o);
-            }
+        yrsp_update_frame(&rsp, &f);   /* the disc's flip record, when it arrives: the onset, final */
 
         if (!in_trial) {
             ytl_seq q;
@@ -354,7 +345,6 @@ int main(int argc, char** argv) {
             ytl_on(&q, START_ON);
             if (q.err) { fprintf(stderr, "trial_mouse_tracking: timeline error %d\n", q.err); failed = 1; break; }
             phase = WAIT_START;
-            stim_frame = -1;
             in_trial = 1;
             armed_seen = ended_seen = 0;
             if (sim) {
@@ -391,13 +381,9 @@ int main(int argc, char** argv) {
             ended_seen = 1;
         }
 
-        n = ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, fired, 16);
-        for (i = 0; i < n && i < 16; i++) {
-            if (fired[i].kind == YTL_ONSET && fired[i].target == STIM_ON) {
-                yrsp_onset o = yrsp_onset_landing(&fired[i]);
-                yrsp_set_onset(&rsp, &o);
-                stim_frame = fired[i].frame;
-            }
+        n = ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, fired, 64);
+        yrsp_set_landing(&rsp, fired, n, STIM_ON);   /* the disc landed: its planned onset */
+        for (i = 0; i < n; i++) {
             if (fired[i].kind == YTL_MARK && fired[i].code == END_OF_TRIAL) {
                 /* the trial is over: the onset is final; the trace stopped at the click */
                 char init[32], rt[32];

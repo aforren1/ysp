@@ -1,4 +1,4 @@
-/* ysp/gfx.h - v0.14.0 - public domain single-header stimulus graphics library
+/* ysp/gfx.h - v0.15.0 - public domain single-header stimulus graphics library
  *   (with MIT-licensed parts: see below)
  *
  *   Stimuli on GL ES 3.0, on top of ysp/screen.h: signed-distance shapes
@@ -81,6 +81,10 @@
  *           ygfx_close(&gfx);
  *           yscr_close(&scr);
  *       }
+ *
+ *   The hook, the open and ygfx_prime() in one call (v0.15, FIRST TRIAL):
+ *
+ *       if (!ygfx_open_screen(&gfx, &scr, &sd, &gd)) return fail(ygfx_error(&gfx));
  *
  *   Every call on a gfx that fails writes ygfx_error() before it returns
  *   its code (or its 0 id). In C99 and C++20 compound literals do a desc
@@ -910,6 +914,50 @@
  *   the compiles running.
  *
  *   ---------------------------------------------------------------------
+ *   FIRST TRIAL (v0.15)
+ *   ---------------------------------------------------------------------
+ *   Three calls for the parts every trial program had written out.
+ *   ygfx_open_screen(&gfx, &scr, &sd, &gd) is OPEN START's hook, the
+ *   finish and ygfx_prime() in one call: the screen opens with the hook
+ *   (sd->on_context must be NULL), the gfx finishes on it, the built-in
+ *   kinds are primed. On a failure both handles are closed and
+ *   ygfx_error() has the reason, the screen's too.
+ *   ygfx_show_until_key(&gfx, stims, n, keys, n_keys, max_ns, &key) is a
+ *   frame loop for an instruction or a break screen: it draws the stimuli
+ *   each frame until a press of one of the keys (SDL scancodes; none: any
+ *   key) or max_ns. A press counts from the first frame's predicted onset
+ *   on and not an OS repeat, so a key held from before does not skip the
+ *   screen. Shift+Esc returns YGFX_SHOW_QUIT. It drops the screen's other
+ *   events, so a collector (ysp/response.h) does not see the key; it is
+ *   not a timed trial. Without SDL (YSCR_NO_SDL) only max_ns ends it.
+ *   TEXT (with ysp/outline.h first) makes the text of such a screen.
+ *
+ *   ---------------------------------------------------------------------
+ *   TEXT (v0.15)
+ *   ---------------------------------------------------------------------
+ *   With ysp/outline.h included before this header, in the file that
+ *   compiles the implementation too: ygfx_text_make(&gfx, &t, &d) lays out
+ *   UTF-8 text with the font's advances (cmap and hmtx: no kerning, no
+ *   shaping, no bidi; enough for Latin, Greek and Cyrillic instructions,
+ *   wrong for scripts that need shaping, which go through pack/layout),
+ *   breaks lines at spaces to fit d.max_w and at newlines, centers each
+ *   line, and makes a curve set of the glyphs it uses (CURVE RUNS) and a
+ *   run, t.stim, placed as every stimulus (place, anchor, x, y; 0 is the
+ *   screen's center). d.font NULL is the system's sans font: Segoe UI or
+ *   Arial on Windows, Arial or Helvetica on macOS, DejaVu Sans or
+ *   Liberation Sans on Linux; a machine without them passes a file. A
+ *   text that made the text program calls ygfx_prime(), so the first
+ *   frame that draws it does not pay the program's first draw (PRIME).
+ *   Setup work: it reads the font file and allocates the items (32 bytes
+ *   a glyph), freed by ygfx_text_free(). Keep t while t.stim is drawn.
+ *   Measured on the Iris Xe in a window (docs/gfx.md, "v0.15"),
+ *   trial_keyboard.c's instructions in Segoe UI at 32 px, no program cache:
+ *   ygfx_text_make() took 1.5 to 2.2 s, nearly all of it the text
+ *   program's compile (17 to 43 ms with the test's warm cache); the first
+ *   frame that drew the text cost 0.8 to 1.3 ms of CPU, against 10.1 to
+ *   11.0 ms when the same set and run were made without the prime.
+ *
+ *   ---------------------------------------------------------------------
  *   VIDEO (v0.4)
  *   ---------------------------------------------------------------------
  *   YGFX_NV12 and YGFX_I420 textures hold 8-bit 4:2:0 video as planes
@@ -1251,6 +1299,13 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.15.0 - FIRST TRIAL and TEXT: ygfx_open_screen() (the screen and
+ *          the gfx opened with OPEN START's overlap, then primed, in one
+ *          call), ygfx_show_until_key() (an instruction or break screen:
+ *          a frame loop until a key or a time), and, with ysp/outline.h
+ *          included first, ygfx_text_make() and ygfx_text_free() (a
+ *          block of text from a font file by advances, wrapped and
+ *          centered, its text program primed). Nothing else changed.
  *   v0.14.0 - Capture writes PPM only. Removed: YGFX_IMAGE_PNG,
  *          YGFX_IMAGE_PPM, ygfx_capture_desc.format and the format
  *          argument of ygfx_image_write(), with the stored-PNG writer and
@@ -1521,6 +1576,18 @@
  *          source rectangle, not the sampler's.
  *   v0.1.0 - first release.
  *
+ *   STATUS: v0.15.0, 2026-10-11: tests/adapt/gfx_test.c's part "v0.15
+ *   first" (ANGLE on the Iris Xe; MSVC 19.44 and MinGW-w64 gcc 16.1): the
+ *   one-call open and its refusal of a taken hook, the loop until max_ns
+ *   (its last frame the first planned at max_ns or later), the text's
+ *   items, lines, wrap, centering and ink inside its bounds only, the
+ *   prime of the first text alone; 5 of 5 new mutants caught. The key
+ *   path, in a window with SDL key events pushed from a second thread (a
+ *   program started from the background got no foreground for OS input):
+ *   a J and a space pressed before the first frame were ignored, the
+ *   space 1.5 s later ended the loop with its press.
+ *   trial_keyboard with the calls moved no flip (docs/response.md, "The
+ *   first trial (v0.4.0)").
  *   STATUS: v0.12.0: tests/adapt/gfx_test.c checks the message of each
  *   failing call it makes on a gfx; the rest is as below. v0.10.0
  *   (docs/gfx.md "v0.10"): SIMPLEX on the GPU equals
@@ -1734,9 +1801,9 @@
 #define YSP_GFX_H_INCLUDED
 
 #define YGFX_VERSION_MAJOR 0
-#define YGFX_VERSION_MINOR 14
+#define YGFX_VERSION_MINOR 15
 #define YGFX_VERSION_PATCH 0
-#define YGFX_VERSION_STRING "0.14.0"
+#define YGFX_VERSION_STRING "0.15.0"
 
 #include "ysp/screen.h"
 #include "ysp/color.h"
@@ -3226,12 +3293,87 @@ YGFX_API float ygfx_simplex_value(const ygfx_gfx* g, const ygfx_stim* s, int32_t
 YGFX_API int ygfx_cset_check(const ygfx_cset_desc* d, char* msg, size_t cap);
 YGFX_API int ygfx_cset_winding(const ygfx_cset_desc* d, uint32_t glyph, double x, double y);
 
+/* v0.15, FIRST TRIAL. Opens the screen with sd (NULL: a zeroed desc) and
+ * this gfx on it with gd (NULL: zeroed; gd->screen is set here), the two
+ * overlapped as OPEN START describes, then ygfx_prime(). sd->on_context
+ * must be NULL: this call uses it. False with ygfx_error() set, the
+ * screen's message too; both handles are then closed. Close the gfx
+ * before the screen. */
+YGFX_API bool ygfx_open_screen(ygfx_gfx* g, yscr_screen* s, const yscr_desc* sd, const ygfx_desc* gd);
+
+/* ygfx_show_until_key()'s outcomes. */
+#define YGFX_SHOW_TIME 0   /* max_ns ran out                                */
+#define YGFX_SHOW_KEY  1   /* a key ended it; *key holds the press          */
+#define YGFX_SHOW_QUIT 2   /* yscr_begin() returned YSCR_QUIT (Shift+Esc)   */
+
+/* v0.15, FIRST TRIAL. A frame loop on the gfx's screen that draws
+ * stims[0 .. n - 1] each frame until a press of a key in keys[] (SDL
+ * scancodes; n_keys 0: any key), or until max_ns (0: none) from the first
+ * frame's onset. A press counts from the first frame's predicted onset
+ * on, and not an OS repeat. The screen's other events are dropped.
+ * Returns YGFX_SHOW_*, or a code with ygfx_error() set. Outside a frame;
+ * not timed: an instruction or a break screen. */
+YGFX_API int ygfx_show_until_key(ygfx_gfx* g, const ygfx_stim* stims, int n, const uint32_t* keys, int n_keys,
+                                 int64_t max_ns, yin_event* key);
+
 
 #ifdef __cplusplus
 }
 #endif
 
 #endif /* YSP_GFX_H_INCLUDED */
+
+/* v0.15, TEXT: with ysp/outline.h included before this header (in the
+ * file that compiles the implementation too). Outside the include guard,
+ * so the order of two includes does not hide it. */
+#if defined(YSP_OUTLINE_H_INCLUDED) && defined(YSP_GFX_H_INCLUDED) && !defined(YSP_GFX_TEXT_INCLUDED)
+#define YSP_GFX_TEXT_INCLUDED
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* A block of text. A zero field is the default. */
+typedef struct ygfx_text_desc {
+    const char* text;          /* UTF-8; a newline ends a line; required */
+    const char* font;          /* a TrueType or CFF font file (face 0);
+                                * NULL: the system's sans font (TEXT)      */
+    float       size;          /* px per em; 0 = 32                        */
+    float       max_w;         /* wrap width, px; 0 = 0.8 x screen width   */
+    float       line_height;   /* em; 0 = 1.25                             */
+    ygfx_align  place, anchor; /* 0 = CENTER, as every stimulus            */
+    float       x, y;          /* px from place                            */
+    float       color[3];      /* linear device RGB; 0, 0, 0 is black       */
+} ygfx_text_desc;
+
+/* The text's stimulus and what it owns. Caller-allocated; keep it while
+ * the stimulus is drawn (the run reads items at each draw). */
+typedef struct ygfx_text {
+    ygfx_stim   stim;          /* draw this                                */
+    ygfx_cset   set;           /* the glyphs the text uses                 */
+    ygfx_citem* items;         /* n items, heap                            */
+    int         n;
+    int         lines;
+    float       w, h;          /* the block, px                            */
+    int64_t     build_ns;      /* the font read, layout and set upload     */
+    int         primed;        /* programs ygfx_prime() drew; 0: no new one */
+} ygfx_text;
+
+/* Lays out d->text with the font's advances only (no kerning, no shaping,
+ * no bidi: Latin, Greek, Cyrillic labels; TEXT), breaks lines at spaces
+ * to fit max_w, centers each line, builds a curve set of its glyphs with
+ * ysp/outline.h, uploads it, and makes the run. When that made the text
+ * program, it calls ygfx_prime(), so the text's first frame does not pay
+ * for it. Setup work: it reads a file and allocates. YGFX_OK, or a code
+ * with ygfx_error() set: YGFX_ERR_IO when no font file opens (the message
+ * names the paths tried), YGFX_ERR_FORMAT when the font is refused. */
+YGFX_API int  ygfx_text_make(ygfx_gfx* g, ygfx_text* t, const ygfx_text_desc* d);
+/* Frees the set and the items. Safe on a zeroed text and twice. */
+YGFX_API void ygfx_text_free(ygfx_gfx* g, ygfx_text* t);
+
+#ifdef __cplusplus
+}
+#endif
+#endif /* YSP_GFX_TEXT_INCLUDED */
 
 /* ======================================================================= *
  *                            IMPLEMENTATION                               *
@@ -9255,7 +9397,8 @@ static int ygfx__capture_start(ygfx_gfx* g, const ygfx_capture_desc* d) {
     g->be->reset(g->bctx);
 #ifndef YRT_NO_THREADS
     if (!c->manual) {
-        yrt_pump_desc pd = { 0 };
+        yrt_pump_desc pd;
+        memset(&pd, 0, sizeof pd);   /* valid as C and C++; g++ -Wextra warns about { 0 } (conventions.md) */
         pd.msg_size = sizeof(int32_t);
         pd.capacity = (uint32_t)n;
         pd.ring = c->ring;
@@ -11816,6 +11959,362 @@ YGFX_API ygfx_pipe ygfx_pipeline(ygfx_gfx* g, const ygfx_pipeline_desc* d) {
     ygfx__done(g, c0, ygfx__made(g, r.id), "pipeline");
     return r;
 }
+
+/* --- v0.15, FIRST TRIAL ---------------------------------------------------- */
+
+typedef struct ygfx__os_ctx { ygfx_gfx* g; ygfx_desc d; } ygfx__os_ctx;
+
+/* The screen calls it once, inside yscr_open(), so the stack context of
+ * ygfx_open_screen() is alive. A failed start leaves the handle closed,
+ * and ygfx_open() then does the whole open and reports it. */
+static void ygfx__os_hook(void* ctx, yscr_screen* s) {
+    ygfx__os_ctx* c = (ygfx__os_ctx*)ctx;
+    c->d.screen = s;
+    (void)ygfx_open_start(c->g, &c->d);
+}
+
+YGFX_API bool ygfx_open_screen(ygfx_gfx* g, yscr_screen* s, const yscr_desc* sd, const ygfx_desc* gd) {
+    yscr_desc d;
+    ygfx__os_ctx c;
+    if (!g) return false;
+    g->error[0] = '\0';
+    if (!s) {
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: ygfx_open_screen: no screen");
+        return false;
+    }
+    if (sd) d = *sd; else memset(&d, 0, sizeof d);
+    if (gd) c.d = *gd; else memset(&c.d, 0, sizeof c.d);
+    if (d.on_context) {
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: ygfx_open_screen: sd->on_context is set; "
+                        "open with yscr_open() and call ygfx_open_start() from that hook");
+        return false;
+    }
+    c.g = g;
+    d.on_context = ygfx__os_hook;
+    d.on_context_ctx = &c;
+    if (!yscr_open(s, &d)) {
+        ygfx_close(g);
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: ygfx_open_screen: %s", yscr_error(s));
+        return false;
+    }
+    c.d.screen = s;
+    if (!ygfx_open(g, &c.d)) { yscr_close(s); return false; }
+    /* the built-in kinds' first draws now, not on a trial's frames */
+    if (ygfx_prime(g) < 0) {
+        char m[sizeof g->error];
+        memcpy(m, g->error, sizeof m);
+        ygfx_close(g);
+        yscr_close(s);
+        memcpy(g->error, m, sizeof m);
+        return false;
+    }
+    return true;
+}
+
+static int ygfx__show_until_key(ygfx_gfx* g, const ygfx_stim* stims, int n, const uint32_t* keys, int n_keys,
+                                int64_t max_ns, yin_event* key) {
+    yscr_screen* s;
+    int64_t t0 = 0;
+    int first = 1, got = 0, i, rc, out = YGFX_OK;
+    if (!g || n < 0 || (n > 0 && !stims) || n_keys < 0 || (n_keys > 0 && !keys) || max_ns < 0) return YGFX_ERR_ARG;
+    if (!g->open || !g->screen) return YGFX_ERR_CLOSED;
+    s = g->screen;
+    for (;;) {
+        yscr_frame f;
+        rc = yscr_begin(s, &f);
+        if (rc == YSCR_QUIT) return YGFX_SHOW_QUIT;
+        if (rc < 0) {
+            ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: show_until_key: %s", yscr_error(s));
+            return YGFX_ERR_GL;
+        }
+        if (first) { t0 = f.onset; first = 0; }
+#if !defined(YSCR_NO_SDL)
+        {
+            SDL_Event ev;
+            yin_event in;
+            /* a key down before the screen appeared is not the answer to it */
+            while (yscr_poll(s, &ev, NULL))
+                if (!got && yscr_event_input(s, &ev, &in) && in.kind == YIN_KIND_KEYBOARD && in.type == YIN_PRESS &&
+                    !(in.flags & YIN_REPEAT) && in.t >= t0) {
+                    for (i = 0; i < n_keys && keys[i] != in.control; i++) {}
+                    if (n_keys == 0 || i < n_keys) {
+                        got = 1;
+                        if (key) *key = in;
+                    }
+                }
+        }
+#else
+        (void)keys; (void)key;   /* no input without SDL: only max_ns ends it */
+#endif
+        rc = ygfx_begin(g, &f);
+        for (i = 0; rc >= 0 && i < n; i++) rc = ygfx_draw(g, &stims[i]);
+        if (rc >= 0) rc = ygfx_end(g);
+        if (rc < 0 && out == YGFX_OK) out = rc;
+        /* the frame is begun: flip it whatever the draws did */
+        if (yscr_flip(s) < 0 && out == YGFX_OK) {
+            ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: show_until_key: %s", yscr_error(s));
+            out = YGFX_ERR_GL;
+        }
+        if (out < 0) return out;
+        if (got) return YGFX_SHOW_KEY;
+        if (max_ns > 0 && f.onset - t0 >= max_ns) return YGFX_SHOW_TIME;
+    }
+}
+
+YGFX_API int ygfx_show_until_key(ygfx_gfx* g, const ygfx_stim* stims, int n, const uint32_t* keys, int n_keys,
+                                 int64_t max_ns, yin_event* key) {
+    char c0 = ygfx__hold(g);
+    return ygfx__done(g, c0, ygfx__show_until_key(g, stims, n, keys, n_keys, max_ns, key), "show_until_key");
+}
+
+#if defined(YSP_GFX_TEXT_INCLUDED)
+/* TEXT: the first file that opens. The lists are the fonts each system
+ * ships; a lab machine without them passes desc.font. */
+static const char* const ygfx__text_fonts[] = {
+#if defined(_WIN32)
+    "%WINDIR%/Fonts/segoeui.ttf", "%WINDIR%/Fonts/arial.ttf",
+#elif defined(__APPLE__)
+    "/System/Library/Fonts/Supplemental/Arial.ttf", "/Library/Fonts/Arial.ttf",
+    "/System/Library/Fonts/Helvetica.ttc",
+#else
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf",
+#endif
+    NULL
+};
+
+static uint8_t* ygfx__read_file(const char* path, size_t* n) {
+#if defined(_WIN32)
+    FILE* fp = ygfx__wopen(path, L"rb");   /* a UTF-8 path */
+#else
+    FILE* fp = fopen(path, "rb");
+#endif
+    uint8_t* b = NULL;
+    long len;
+    *n = 0;
+    if (!fp) return NULL;
+    if (fseek(fp, 0, SEEK_END) == 0 && (len = ftell(fp)) > 0 && fseek(fp, 0, SEEK_SET) == 0 &&
+        (b = (uint8_t*)malloc((size_t)len)) != NULL) {
+        if (fread(b, 1, (size_t)len, fp) == (size_t)len) *n = (size_t)len;
+        else { free(b); b = NULL; }
+    }
+    fclose(fp);
+    return b;
+}
+
+/* One code point; a malformed byte is U+FFFD, one byte at a time. */
+static uint32_t ygfx__utf8(const unsigned char** p) {
+    const unsigned char* s = *p;
+    uint32_t c = s[0], need = c >= 0xF0 ? 3u : c >= 0xE0 ? 2u : c >= 0xC0 ? 1u : 0u, k;
+    if (c < 0x80) { *p = s + 1; return c; }
+    if (c < 0xC2 || c > 0xF4) { *p = s + 1; return 0xFFFDu; }
+    c &= 0x3Fu >> need;
+    for (k = 1; k <= need; k++) {
+        if ((s[k] & 0xC0u) != 0x80u) { *p = s + 1; return 0xFFFDu; }
+        c = (c << 6) | (s[k] & 0x3Fu);
+    }
+    if ((need == 2 && c < 0x800u) || (need == 3 && (c < 0x10000u || c > 0x10FFFFu)) || (c >= 0xD800u && c <= 0xDFFFu)) {
+        *p = s + 1;
+        return 0xFFFDu;
+    }
+    *p = s + need + 1;
+    return c;
+}
+
+static int ygfx__u32_cmp(const void* a, const void* b) {
+    uint32_t x = *(const uint32_t*)a, y = *(const uint32_t*)b;
+    return x < y ? -1 : x > y;
+}
+
+typedef struct ygfx__tglyph { uint32_t cp, gid; float adv; } ygfx__tglyph;
+
+static int ygfx__text_make(ygfx_gfx* g, ygfx_text* t, const ygfx_text_desc* d) {
+    int64_t t_start = (int64_t)yrt_now_ns();
+    char path[512], tried[400], err[160];
+    uint8_t* bytes = NULL;
+    size_t nbytes = 0, len, i, a, n = 0, nl = 0, nu = 0, k;
+    yol_font font;
+    ygfx__tglyph* gl = NULL;
+    size_t* line_a = NULL;   /* each line's glyphs: [line_a, line_b) */
+    size_t* line_b = NULL;
+    float* line_w = NULL;
+    uint32_t* uniq = NULL;
+    const unsigned char* p;
+    float px, max_w, lh, sw = 0, sh = 0, block_w = 0;
+    double asc, dsc;
+    int rc = YGFX_OK;
+    if (!g || !t || !d || !d->text) return YGFX_ERR_ARG;
+    if (!g->open) return YGFX_ERR_CLOSED;
+    memset(t, 0, sizeof *t);
+    tried[0] = '\0';
+    path[0] = '\0';
+    for (k = 0; !bytes && (d->font ? k < 1 : ygfx__text_fonts[k] != NULL); k++) {
+        const char* f = d->font ? d->font : ygfx__text_fonts[k];
+        if (!strncmp(f, "%WINDIR%", 8)) {
+            char w[260] = "C:/Windows";
+#if defined(_WIN32)
+            DWORD wn = GetEnvironmentVariableA("WINDIR", w, (DWORD)sizeof w);
+            if (wn == 0 || wn >= sizeof w) snprintf(w, sizeof w, "C:/Windows");
+#endif
+            snprintf(path, sizeof path, "%s%s", w, f + 8);
+        } else {
+            snprintf(path, sizeof path, "%s", f);
+        }
+        bytes = ygfx__read_file(path, &nbytes);
+        if (!bytes) {
+            size_t u = strlen(tried);
+            snprintf(tried + u, sizeof tried - u, "%s%s", u ? ", " : "", path);
+        }
+    }
+    if (!bytes) {
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: text_make: no font file opened (%s)", tried);
+        return YGFX_ERR_IO;
+    }
+    if (yol_font_view(&font, bytes, nbytes, 0, err, sizeof err) < 0) {
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: text_make: %s: %s", path, err);
+        free(bytes);
+        return YGFX_ERR_FORMAT;
+    }
+    px = d->size > 0 ? d->size : 32.0f;
+    ygfx_size(g, &sw, &sh);
+    max_w = d->max_w > 0 ? d->max_w : 0.8f * sw;
+    lh = (d->line_height > 0 ? d->line_height : 1.25f) * px;
+    asc = (double)font.ascender / (double)font.units_per_em;
+    dsc = -(double)font.descender / (double)font.units_per_em;
+    len = strlen(d->text);
+    gl = (ygfx__tglyph*)malloc((len + 1) * sizeof *gl);
+    line_a = (size_t*)malloc((len + 1) * sizeof *line_a);
+    line_b = (size_t*)malloc((len + 1) * sizeof *line_b);
+    line_w = (float*)malloc((len + 1) * sizeof *line_w);
+    if (!gl || !line_a || !line_b || !line_w) { rc = YGFX_ERR_FULL; goto done; }
+    for (p = (const unsigned char*)d->text; *p; n++) {
+        double adv = 0, lsb = 0;
+        gl[n].cp = ygfx__utf8(&p);
+        gl[n].gid = gl[n].cp == '\n' ? 0u : yol_font_glyph_index(&font, gl[n].cp);
+        if (gl[n].cp != '\n' && yol_font_hmetrics(&font, gl[n].gid, &adv, &lsb) < 0) adv = 0;
+        gl[n].adv = gl[n].cp == '\n' ? 0.0f : (float)adv * px;
+    }
+    /* Greedy breaks at spaces; a word wider than max_w keeps a line of its
+     * own. A line's width leaves out its trailing spaces, so centering
+     * centers the ink's advances. */
+    a = 0;
+    for (;;) {
+        size_t brk = (size_t)-1, e = a, z;
+        float pen = 0, w = 0;
+        for (; e < n && gl[e].cp != '\n'; e++) {
+            if (gl[e].cp == ' ') brk = e;
+            else if (pen + gl[e].adv > max_w && brk != (size_t)-1) { e = brk; break; }
+            pen += gl[e].adv;
+        }
+        z = e;
+        while (z > a && gl[z - 1].cp == ' ') z--;
+        for (i = a; i < z; i++) w += gl[i].adv;
+        line_a[nl] = a;
+        line_b[nl] = z;
+        line_w[nl] = w;
+        if (w > block_w) block_w = w;
+        nl++;
+        if (e >= n) break;
+        a = e + 1;   /* past the '\n', or the space it broke at */
+    }
+    t->items = (ygfx_citem*)calloc(n ? n : 1, sizeof *t->items);
+    uniq = (uint32_t*)malloc((n ? n : 1) * sizeof *uniq);
+    if (!t->items || !uniq) { rc = YGFX_ERR_FULL; goto done; }
+    for (k = 0; k < nl; k++) {
+        float pen = 0.5f * (block_w - line_w[k]);
+        float y = (float)(asc * px) + (float)k * lh;
+        for (i = line_a[k]; i < line_b[k]; i++) {
+            if (gl[i].cp != ' ') {
+                ygfx_citem* it = &t->items[t->n++];
+                it->x = pen;
+                it->y = y;
+                it->glyph = (float)gl[i].gid;
+                uniq[nu++] = gl[i].gid;
+            }
+            pen += gl[i].adv;
+        }
+    }
+    qsort(uniq, nu, sizeof *uniq, ygfx__u32_cmp);
+    for (i = 0, a = 0; i < nu; i++) if (a == 0 || uniq[a - 1] != uniq[i]) uniq[a++] = uniq[i];
+    nu = a;
+    t->lines = (int)nl;
+    t->w = block_w;
+    t->h = (float)(nl - 1) * lh + (float)((asc + dsc) * px);
+    {
+        yol_ctx oc;
+        yol_cset cs;
+        yol_cset_desc od;
+        ygfx_cset_desc cd;
+        ygfx_crun_desc rd;
+        ygfx_programs p0, p1;
+        memset(&oc, 0, sizeof oc);
+        memset(&cs, 0, sizeof cs);
+        memset(&od, 0, sizeof od);
+        if (!yol_open(&oc, NULL)) {
+            ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: text_make: %s", yol_error(&oc));
+            rc = YGFX_ERR_FULL;
+            goto done;
+        }
+        od.n_glyphs = (uint32_t)font.n_glyphs;
+        od.backward = true;   /* the rays read them faster (CURVE SETS) */
+        if (!yol_cset_open(&cs, &oc, &od) || (nu && yol_cset_add_font(&cs, &font, uniq, (uint32_t)nu, 0) < 0)) {
+            ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: text_make: %s: %s", path, yol_error(&oc));
+            yol_cset_close(&cs);
+            yol_close(&oc);
+            rc = YGFX_ERR_FORMAT;
+            goto done;
+        }
+        memset(&cd, 0, sizeof cd);
+        cd.texels = cs.texels; cd.n_texels = cs.n_texels; cd.words = cs.words; cd.n_words = cs.n_words;
+        ygfx_program_stats(g, &p0);
+        t->set = ygfx_cset_make(g, &cd);
+        yol_cset_close(&cs);
+        yol_close(&oc);
+        if (!t->set.id) { rc = YGFX_ERR_GL; goto done; }   /* cset_make wrote the message */
+        memset(&rd, 0, sizeof rd);
+        rd.place = d->place;
+        rd.anchor = d->anchor;
+        rd.x = d->x;
+        rd.y = d->y;
+        rd.set = t->set;
+        rd.items = t->items;
+        rd.n = t->n;
+        rd.size = px;
+        rd.color[0] = d->color[0]; rd.color[1] = d->color[1]; rd.color[2] = d->color[2];
+        t->stim = ygfx_crun(g, &rd);
+        ygfx_program_stats(g, &p1);
+        /* a new program's first draw costs milliseconds (PRIME): pay it
+         * here, at setup, not on the text's first frame */
+        if (p1.loaded + p1.compiled != p0.loaded + p0.compiled) {
+            t->primed = ygfx_prime(g);
+            if (t->primed < 0) { rc = t->primed; t->primed = 0; goto done; }
+        }
+        t->build_ns = (int64_t)yrt_now_ns() - t_start;
+    }
+done:
+    free(bytes);
+    free(gl);
+    free(line_a);
+    free(line_b);
+    free(line_w);
+    free(uniq);
+    if (rc < 0) ygfx_text_free(g, t);
+    return rc;
+}
+
+YGFX_API int ygfx_text_make(ygfx_gfx* g, ygfx_text* t, const ygfx_text_desc* d) {
+    char c0 = ygfx__hold(g);
+    return ygfx__done(g, c0, ygfx__text_make(g, t, d), "text_make");
+}
+
+YGFX_API void ygfx_text_free(ygfx_gfx* g, ygfx_text* t) {
+    if (!t) return;
+    if (t->set.id && g && g->open) ygfx_cset_free(g, t->set);
+    free(t->items);
+    memset(t, 0, sizeof *t);
+}
+#endif /* YSP_GFX_TEXT_INCLUDED */
 
 #ifdef __cplusplus
 }

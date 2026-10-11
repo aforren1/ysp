@@ -28,7 +28,7 @@
  * The gamut check (ycol_max_scale()) sets the highest level.
  *
  * HARDWARE: without --cal the calibration is nominal (sRGB primaries,
- * gamma 2.2, 100 cd/m2, no black), flagged NOMINAL in the data file: no
+ * gamma 2.2, 100 cd/m2, no black), flagged NOMINAL in FILE.meta: no
  * contrast in the file is then a statement about light. A claim about
  * contrast needs a photometer and a .yspcal from it (docs/color.md). Sizes
  * in deg use PPD_DISTANCE_MM and PPD_MM_PER_PX below: measure both.
@@ -38,13 +38,15 @@
  * (QUEST+ with threshold and slope free, guess 0.5, lapse 0.02: the Psi
  * method), or both (the default), interleaved at random by ysp/trials.h.
  *
- * Columns, jsPsych's names first: trial_index, stimulus (left or right),
- * key_answer, response, rt, correct; then track, intensity (the level
- * the method proposed), contrast_shown, scene_contrast (ysp/gfx.h's),
- * code_peak, code_trough, estimate (the track's threshold after the
- * trial), onset_tier, onset_src, landing_residual, onset_frame, rsp_tier,
- * n_early. Times in seconds. '#' lines first: the session, the screen,
- * the calibration and the methods.
+ * Columns (ysp/trials.h's data writer): the session's (index, ..., track
+ * as a number), then trial_index, stimulus (left or right), key_answer,
+ * correct, method (stair or quest), intensity (the level the method
+ * proposed), contrast_shown, scene_contrast (ysp/gfx.h's), code_peak,
+ * code_trough, estimate (the track's threshold after the trial), then the
+ * response's (YRSP_DATA_COLS: response, rt, onset_src, onset_tier,
+ * landing_residual, onset_frame, rsp_tier, n_early and the rest). Times
+ * in seconds. FILE.meta has the session, the screen, the calibration and
+ * the methods.
  *
  * --sim: the simulated display and a simulated observer, a Weibull on the
  * contrast shown (threshold 0.03 at 81.6 % correct, slope 3.5, lapse
@@ -157,10 +159,23 @@ static double estimate(int track) {
     return yqst_estimate(&quest, YQST_EST_MEAN, est) < 0 ? NAN : pow(10.0, est[0]);
 }
 
-static void sec(char* out, size_t cap, double s) {
-    if (s != s) out[0] = 0;
-    else snprintf(out, cap, "%.9f", s);
-}
+/* The program's columns, after the session's; then YRSP_DATA_COLS.
+ * "method", not "track": the session has a track column (its number). */
+typedef struct row {
+    int trial_index, code_peak, code_trough;
+    bool correct;
+    const char *stimulus, *key_answer, *method;
+    double intensity, contrast_shown, scene_contrast, estimate;
+} row;
+static const ytr_col cols[] = {
+    YTR_COL(row, trial_index, YTR_COL_INT), YTR_COL(row, stimulus, YTR_COL_STRING),
+    YTR_COL(row, key_answer, YTR_COL_STRING), YTR_COL(row, correct, YTR_COL_BOOL),
+    YTR_COL(row, method, YTR_COL_STRING), YTR_COL_D(row, intensity, YTR_COL_DOUBLE, 6),
+    YTR_COL_D(row, contrast_shown, YTR_COL_DOUBLE, 6), YTR_COL_D(row, scene_contrast, YTR_COL_DOUBLE, 6),
+    YTR_COL(row, code_peak, YTR_COL_INT), YTR_COL(row, code_trough, YTR_COL_INT),
+    YTR_COL_D(row, estimate, YTR_COL_DOUBLE, 9), YRSP_DATA_COLS,
+};
+static ytr_data data;
 
 static int load_cal(const char* path) {
     static unsigned char bytes[sizeof(ycol_cal)];
@@ -179,37 +194,31 @@ int main(int argc, char** argv) {
     static double sim_rt[MAX_TRIALS];
     static int sim_key[MAX_TRIALS];
     static yrsp_result sim_res[MAX_TRIALS];
-    yscr_desc sd;
-    ygfx_desc gd;
     ygfx_gabor_desc gb;
-    ytl_desc td;
     ytr_desc rd;
-    yrsp_desc pd;
-    yrsp_sdl_ctx sdl;
-    yrsp_source sources[1];
+    yrsp_source source;
     ycol_ctx_desc cxd;
     yst_desc sdesc;
     yqst_desc qdesc;
     yscr_caps caps;
     yscr_frame f;
-    ytl_event fired[16];
+    ytl_event fired[64];                   /* the timeline's capacity: all that can fire */
     ytr_trial_info ti = { 0 };
     yrsp_result res;
     yrsp_input sim_ev[2];
-    FILE* out;
-    char line[1024], meta[2048];
+    row r = { 0 };
+    char line[1024], cline[1024], meta[3072], meta_path[1100];
     const char* out_path = "trial_2afc_adaptive.csv";
     const char* cal_path = NULL;
     const char* method = "both";
     uint64_t seed = 20261009, rng_side, rng_obs;
     int i, n, sim = 0, n_trials = 0, fullscreen = 0, aborted = 0, failed = 0, rows = 0, sim_bad = 0;
     int in_trial = 0, responding = 0, n_sim_ev = 0, sim_next = 0, side = 0, track = 0;
-    int64_t stim_frame = -1, landing_residual = 0, fix_ns, iti_ns;
+    int64_t fix_ns, iti_ns;
     double ppd, level = 0, shown = 0, scene = 0, level_max, y_bg, y_black;
     uint32_t codes[2] = { 0, 0 };
     ycol_rgb v;
 
-    memset(&sd, 0, sizeof sd);
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--sim")) sim = 1;
         else if (!strcmp(argv[i], "--fullscreen")) fullscreen = 1;
@@ -285,16 +294,13 @@ int main(int argc, char** argv) {
     rd.rng_ctx = &seed;
     if (!ytr_open(&trials, &rd)) { fprintf(stderr, "trial_2afc_adaptive: %s\n", ytr_error(&trials)); return 1; }
 
-    /* the display, then the stimuli in deg */
-    if (sim) sd.backend = YSCR_BACKEND_SIM;
-    sd.windowed = !fullscreen;
-    if (!yscr_open(&scr, &sd)) { fprintf(stderr, "trial_2afc_adaptive: %s\n", yscr_error(&scr)); return 1; }
+    /* the display and the graphics, opened together and primed; then the stimuli in deg */
+    if (!ygfx_open_screen(&gfx, &scr, &(yscr_desc){ .backend = sim ? YSCR_BACKEND_SIM : 0, .windowed = !fullscreen },
+                          &(ygfx_desc){ .background = { 0.5f, 0.5f, 0.5f }, .cal = &cal })) {
+        fprintf(stderr, "trial_2afc_adaptive: %s\n", ygfx_error(&gfx));
+        return 1;
+    }
     yscr_get_caps(&scr, &caps);
-    memset(&gd, 0, sizeof gd);
-    gd.screen = &scr;
-    gd.background[0] = gd.background[1] = gd.background[2] = 0.5f;
-    gd.cal = &cal;
-    if (!ygfx_open(&gfx, &gd)) { fprintf(stderr, "trial_2afc_adaptive: %s\n", ygfx_error(&gfx)); return 1; }
     ppd = PPD_DISTANCE_MM * tan(3.14159265358979323846 / 180.0) / PPD_MM_PER_PX;
     {
         ygfx_shape_desc s;
@@ -312,55 +318,39 @@ int main(int argc, char** argv) {
     gb.sigma = (float)(0.4 * ppd);
     gabor = ygfx_gabor(&gb);
 
-    memset(&td, 0, sizeof td);
-    td.events = storage;
-    td.event_capacity = 64;
-    td.n_channels = N_CHANNELS;
-    if (!ytl_open(&tl, &td)) { fprintf(stderr, "trial_2afc_adaptive: %s\n", ytl_error(&tl)); return 1; }
+    if (!ytl_open(&tl, &(ytl_desc){ .events = storage, .event_capacity = 64, .n_channels = N_CHANNELS })) {
+        fprintf(stderr, "trial_2afc_adaptive: %s\n", ytl_error(&tl));
+        return 1;
+    }
 
-    memset(&sdl, 0, sizeof sdl);
-    sdl.raw_keyboard = caps.raw_keyboard;
-    sources[0] = yrsp_sdl_source(&sdl, YRSP_KIND_KEYBOARD);
-    memset(&pd, 0, sizeof pd);
-    pd.choices = keys;
-    pd.n_choices = 2;
-    pd.duration_ns = YRT_S(RESPONSE_S);
-    pd.sources = sources;
-    pd.n_sources = 1;
-    if (!yrsp_open(&rsp, &pd)) { fprintf(stderr, "trial_2afc_adaptive: %s\n", yrsp_error(&rsp)); return 1; }
+    source = yrsp_sdl_source(&(yrsp_sdl_ctx){ .raw_keyboard = caps.raw_keyboard }, YRSP_KIND_KEYBOARD);
+    if (!yrsp_open(&rsp, &(yrsp_desc){ .choices = keys, .n_choices = 2, .duration_ns = YRT_S(RESPONSE_S),
+                                       .sources = &source, .n_sources = 1 })) {
+        fprintf(stderr, "trial_2afc_adaptive: %s\n", yrsp_error(&rsp));
+        return 1;
+    }
 
-    out = fopen(out_path, "w");
-    if (!out) { fprintf(stderr, "trial_2afc_adaptive: cannot write %s\n", out_path); return 1; }
-    ytr_format_meta(&trials, meta, sizeof meta);
-    meta[strcspn(meta, "\r\n")] = 0;
-    fprintf(out, "# %s\n", meta);
+    /* the data file, and the settings beside it */
     yscr_describe(&scr, line, sizeof line);
-    fprintf(out, "# %s\n", line);
-    printf("%s\n", line);
-    ycol_ctx_describe(&cx, line, sizeof line);
-    fprintf(out, "# %s\n", line);
-    printf("%s\n", line);
-    fprintf(out, "# method %s; stair 1-up-3-down log10 steps 0.2 0.1 0.05, initial rule; quest Gumbel, threshold "
-                 "and slope free, guess 0.5, lapse %.2f; %d trials a track; level_max %.4f; %.2f px/deg; "
-                 "ysp_stair %s, ysp_quest %s, ysp_response %s; keyboard: %s\n",
-            method, OBS_LAPSE, n_trials, level_max, ppd, yst_version(), yqst_version(), yrsp_version(),
-            sim ? "synthetic (tier SIM)" : sources[0].note);
-    fprintf(out, "trial_index,stimulus,key_answer,response,rt,correct,track,intensity,contrast_shown,scene_contrast,"
-                 "code_peak,code_trough,estimate,onset_tier,onset_src,landing_residual,onset_frame,rsp_tier,n_early\n");
+    ycol_ctx_describe(&cx, cline, sizeof cline);
+    printf("%s\n%s\n", line, cline);
+    snprintf(meta, sizeof meta, "screen=%s\ncolor=%s\nmethod=%s; stair 1-up-3-down log10 steps 0.2 0.1 0.05, initial "
+             "rule; quest Gumbel, threshold and slope free, guess 0.5, lapse %.2f; %d trials a track; level_max %.4f; "
+             "%.2f px/deg\nysp_stair=%s\nysp_quest=%s\nysp_response=%s\nkeyboard=%s\n", line, cline, method, OBS_LAPSE,
+             n_trials, level_max, ppd, yst_version(), yqst_version(), yrsp_version(),
+             sim ? "synthetic (tier SIM)" : source.note);
+    snprintf(meta_path, sizeof meta_path, "%s.meta", out_path);
+    if (!ytr_data_open(&data, &(ytr_data_desc){ .path = out_path, .trials = &trials, .cols = cols,
+            .n_cols = (int)(sizeof cols / sizeof cols[0]), .meta_path = meta_path, .meta = meta })) {
+        fprintf(stderr, "trial_2afc_adaptive: %s\n", ytr_data_error(&data));
+        return 1;
+    }
 
-    ygfx_prime(&gfx);   /* each kind's first draw now, not on a trial's first frames (docs/gfx.md) */
     for (;;) {
-        SDL_Event ev;
         int64_t bt = 0;
-        yrsp_input in;
         int rc = yscr_begin(&scr, &f);
         if (rc == YSCR_QUIT) { aborted = 1; break; }
         if (rc != YSCR_OK) { fprintf(stderr, "trial_2afc_adaptive: %s\n", yscr_error(&scr)); failed = 1; break; }
-        for (i = 0; i < f.n_done; i++)
-            if (stim_frame >= 0 && f.done[i].index == stim_frame) {
-                yrsp_onset o = yrsp_onset_flip(&f.done[i]);
-                yrsp_set_onset(&rsp, &o);
-            }
 
         if (!in_trial) {
             /* a new trial: the track's level, a side, the sequence */
@@ -382,17 +372,16 @@ int main(int argc, char** argv) {
             ytl_off(&q, GABOR_ON);
             if (q.err) { fprintf(stderr, "trial_2afc_adaptive: timeline error %d\n", q.err); failed = 1; break; }
             yrsp_arm(&rsp, f.onset);
-            stim_frame = -1;
             in_trial = responding = 1;
         }
 
-        while (yscr_poll(&scr, &ev, NULL))
-            if (yscr_event_input(&scr, &ev, &in)) yrsp_feed(&rsp, &in);
+        yrsp_feed_screen(&scr, &rsp, 1);
         for (; sim && sim_next < n_sim_ev && sim_ev[sim_next].t <= f.onset; sim_next++)
             yrsp_feed(&rsp, &sim_ev[sim_next]);
 
-        /* the response, or the deadline: a blank after the gabor's end */
-        if (responding && yrsp_update(&rsp, f.onset) == YRSP_ENDED) {
+        /* the gabor's flip record when it arrives; the response, or the
+         * deadline: a blank after the gabor's end */
+        if (yrsp_update_frame(&rsp, &f) == YRSP_ENDED && responding) {
             ytl_seq q = ytl_seq_on(&tl, TRIAL);
             int64_t stim_end = fix_ns + YRT_S(STIM_S);
             ytl_base_time(&tl, TRIAL, f.onset, &bt);
@@ -404,13 +393,10 @@ int main(int argc, char** argv) {
             responding = 0;
         }
 
-        n = ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, fired, 16);
-        for (i = 0; i < n && i < 16; i++) {
+        n = ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, fired, 64);
+        for (i = 0; i < n; i++) {
             if (fired[i].kind == YTL_ONSET && fired[i].target == GABOR_ON) {
-                yrsp_onset o = yrsp_onset_landing(&fired[i]);
-                yrsp_set_onset(&rsp, &o);
-                stim_frame = fired[i].frame;
-                landing_residual = fired[i].residual;
+                yrsp_set_landing(&rsp, &fired[i], 1, GABOR_ON);   /* the gabor landed: its planned onset */
                 if (sim && ti.index < MAX_TRIALS) {
                     /* the observer: correct with the Weibull's p at the contrast shown */
                     int correct = ytr_splitmix(&rng_obs) < obs_p(shown);
@@ -435,29 +421,32 @@ int main(int argc, char** argv) {
                 }
             }
             if (fired[i].kind == YTL_MARK && fired[i].code == END_OF_TRIAL) {
-                char rt[32], lres[32], est[32];
-                int responded, correct;
+                int responded;
                 yrsp_finish(&rsp, &res);
                 responded = (res.flags & YRSP_R_RESPONDED) && res.response >= 0;
-                correct = responded && res.response == side;
+                r.correct = responded && res.response == side;
                 if (responded) {
                     /* the method hears the contrast shown */
                     double x = shown > 1e-4 ? shown : 1e-4;
-                    if (track == STAIR) yst_update(&stair, x, correct);
-                    else { x = log10(x); yqst_update_values(&quest, &x, correct); }
+                    if (track == STAIR) yst_update(&stair, x, r.correct);
+                    else { x = log10(x); yqst_update_values(&quest, &x, r.correct); }
                 }
-                ytr_update(&trials, responded ? correct : YTR_INVALID, NULL);
-                sec(rt, sizeof rt, res.rt_ns == YRSP_NO_TIME ? NAN : YRT_TO_S(res.rt_ns));
-                sec(lres, sizeof lres, (double)landing_residual / 1e9);
-                sec(est, sizeof est, estimate(track));
-                fprintf(out, "%d,%s,%s,%s,%s,%d,%s,%.6f,%.6f,%.6f,%u,%u,%s,%u,%u,%s,%lld,%u,%d\n", ti.index,
-                        side_name[side], side_name[side], res.response_name ? res.response_name : "", rt, correct,
-                        track_name[track], level, shown, scene, (unsigned)codes[0], (unsigned)codes[1], est,
-                        (unsigned)res.onset_tier, (unsigned)res.onset_src, lres, (long long)res.onset_frame,
-                        (unsigned)res.stamp_tier, res.n_early);
-                fflush(out);
+                ytr_update(&trials, responded ? r.correct : YTR_INVALID, NULL);
+                r.trial_index = ti.index;
+                r.stimulus = r.key_answer = side_name[side];
+                r.method = track_name[track];
+                r.intensity = level;
+                r.contrast_shown = shown;
+                r.scene_contrast = scene;
+                r.code_peak = (int)codes[0];
+                r.code_trough = (int)codes[1];
+                r.estimate = estimate(track);
+                if (yrsp_data_set(&data, &res) < 0 || ytr_data_write(&data, &r) < 0) {
+                    fprintf(stderr, "trial_2afc_adaptive: %s\n", ytr_data_error(&data));
+                    failed = 1;
+                }
                 printf("trial %3d %-5s level %.4f shown %.4f %-5s %s\n", ti.index, track_name[track], level, shown,
-                       side_name[side], !responded ? "(no response)" : correct ? "correct" : "wrong");
+                       side_name[side], !responded ? "(no response)" : r.correct ? "correct" : "wrong");
                 if (ti.index < MAX_TRIALS) sim_res[ti.index] = res;
                 rows++;
                 in_trial = 0;
@@ -471,7 +460,7 @@ int main(int argc, char** argv) {
         ygfx_end(&gfx);
         yscr_flip(&scr);
     }
-    fclose(out);
+    if (ytr_data_finish(&data) < 0) { fprintf(stderr, "trial_2afc_adaptive: %s\n", ytr_data_error(&data)); failed = 1; }
     ygfx_close(&gfx);
     yscr_close(&scr);
     printf("%d trials written to %s%s\n", rows, out_path, aborted ? " (stopped with Shift+Esc)" : "");
@@ -484,12 +473,12 @@ int main(int argc, char** argv) {
         want[STAIR] = OBS_ALPHA * pow(-log(1.0 - (p794 - 0.5) / (0.5 - OBS_LAPSE)), 1.0 / OBS_BETA);
         want[QUEST] = OBS_ALPHA;
         for (i = 0; i < rows && i < MAX_TRIALS; i++) {
-            const yrsp_result* r = &sim_res[i];
-            if (!(r->flags & YRSP_R_RESPONDED) || r->response != sim_key[i] || fabs(YRT_TO_S(r->rt_ns) - sim_rt[i]) > 1e-6 ||
-                r->onset_tier != YSCR_TIER_SIM || r->onset_src != YRSP_ONSET_FLIP) {
+            const yrsp_result* sr = &sim_res[i];
+            if (!(sr->flags & YRSP_R_RESPONDED) || sr->response != sim_key[i] || fabs(YRT_TO_S(sr->rt_ns) - sim_rt[i]) > 1e-6 ||
+                sr->onset_tier != YSCR_TIER_SIM || sr->onset_src != YRSP_ONSET_FLIP) {
                 fprintf(stderr, "trial_2afc_adaptive: --sim: trial %d: rt %.9f (want %.9f) response %d (want %d) "
-                                "onset tier %d src %d\n", i, YRT_TO_S(r->rt_ns), sim_rt[i], r->response, sim_key[i],
-                        r->onset_tier, r->onset_src);
+                                "onset tier %d src %d\n", i, YRT_TO_S(sr->rt_ns), sim_rt[i], sr->response, sim_key[i],
+                        sr->onset_tier, sr->onset_src);
                 sim_bad = 1;
             }
         }

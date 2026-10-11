@@ -151,12 +151,14 @@ find = '''    memset(r, 0, sizeof *r);
     r->response = -1;
     r->entry = -1;
     r->onset_frame = -1;
+    r->plan_residual = c->have_plan ? c->plan.residual_ns : YRSP_NO_TIME;
     yrsp__reclassify(c);'''
 replace = '''    memset(r, 0, sizeof *r);
     r->rt_ns = r->rt_key_duration_ns = YRSP_NO_TIME;
     r->response = -1;
     r->entry = -1;
-    r->onset_frame = -1;'''
+    r->onset_frame = -1;
+    r->plan_residual = c->have_plan ? c->plan.residual_ns : YRSP_NO_TIME;'''
 
 [[mutant]]
 id = "o-02"
@@ -428,3 +430,69 @@ test = "response"
 why = "After yrsp_close() every call must be YRSP_ERR_STATE."
 find = '    if (c) c->ok = 0;'
 replace = '    (void)c;'
+
+# v0.4.0 the frame loop and the data columns (fl-).
+
+[[mutant]]
+id = "fl-01"
+name = "a later plan replaces the landing's"
+test = "response"
+why = "A never-shown frame's record is a plan too; the landing residual in the data must stay the first plan's."
+find = '    if (!o->final && !c->have_plan) {'
+replace = '    if (!o->final) {'
+
+[[mutant]]
+id = "fl-02"
+name = "the plan frame after the final onset"
+test = "response"
+why = "Once the record made the onset final, no other record may replace it: yrsp_plan_frame() is -1."
+find = '    if (!c || !c->ok || !c->armed || !c->have_onset || c->onset.final) return -1;'
+replace = '    if (!c || !c->ok || !c->armed || !c->have_onset) return -1;'
+
+[[mutant]]
+id = "fl-03"
+name = "the record of the wrong frame"
+test = "response"
+why = "Only the record of the frame the stimulus landed on is its onset; the frame before is not."
+find = '        if (f->done[i].index == k) {'
+replace = '        if (f->done[i].index + 1 == k) {'
+
+[[mutant]]
+id = "fl-04"
+name = "any event of the channel is its landing"
+test = "response"
+why = "An OFFSET (or SET) of the stimulus's channel is not its onset."
+find = '        if (fired[i].kind == YTL_ONSET && fired[i].target == channel) {'
+replace = '        if (fired[i].target == channel) {'
+
+[[mutant]]
+id = "fl-05"
+name = "the deadline a nanosecond late"
+test = "response"
+why = "yrsp_update_frame() is yrsp_update() at the frame's predicted onset, not another clock."
+find = '    return yrsp_update(c, f->onset);'
+replace = '    return yrsp_update(c, f->onset - 1);'
+
+[[mutant]]
+id = "fl-06"
+name = "onset columns without an onset"
+test = "response"
+why = "A row with no onset must leave its source, tier and residual empty, not write 0 (0 is a tier)."
+find = '    bool on = r && r->t_onset != 0;'
+replace = '    bool on = r != NULL;'
+
+[[mutant]]
+id = "fl-07"
+name = "a stamp tier without a response"
+test = "response"
+why = "rsp_tier describes the response's press; a row without one has none."
+find = '(r->flags & YRSP_R_RESPONDED) ? (int)r->stamp_tier : YTR_MISSING_INT'
+replace = '(int)r->stamp_tier'
+
+[[mutant]]
+id = "fl-08"
+name = "landing_residual from the final onset"
+test = "response"
+why = "landing_residual is the plan's residual; the final onset's is onset_residual."
+find = '    YRSP__DSET("landing_residual", ytr_data_set_time_ns(w, col, r->plan_residual))'
+replace = '    YRSP__DSET("landing_residual", ytr_data_set_time_ns(w, col, r->onset_residual))'

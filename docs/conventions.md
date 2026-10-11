@@ -18,6 +18,11 @@ follows.
   too (`ysp/box.h` on `ysp/input.h`, `ysp/device.h` on `ysp/serial.h` and
   `ysp/box.h`, `ysp/rigfile.h` on `ysp/device.h` and `ysp/json.h`), and
   `ysp/screen.h`, `ysp/net.h` and `ysp/response.h` include `ysp/input.h`.
+  A header can have helpers for another header without including it: they
+  appear when that header was included first. `ysp/response.h` has them
+  for `ysp/screen.h`, `ysp/audio.h`, `ysp/timeline.h` and `ysp/trials.h`;
+  `ysp/gfx.h` has its text for `ysp/outline.h`; `ysp/device.h` has its
+  parallel-port route for `ysp/parallel.h`. Each header says which.
   Two mechanics
   follow from this. First, the transport's implementation block also
   compiles the implementation of `ysp/rt.h`, unless the same translation unit

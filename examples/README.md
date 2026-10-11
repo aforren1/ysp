@@ -134,7 +134,7 @@ All three load liblsl at run time (docs/net.md, "How-to: get liblsl"); without i
 
 | Program | Shows | Headers | Run | Needs |
 |---|---|---|---|---|
-| `trial_keyboard` | jsPsych's html-keyboard-response as a small experiment: RT from the flip onset | gfx, timeline, trials, response | `trial_keyboard --sim --out trials.csv` (CI); `trial_keyboard` | SDL3, ANGLE |
+| `trial_keyboard` | jsPsych's html-keyboard-response as a small experiment: an instruction screen, RT from the flip onset, a data row per trial; the tutorial in docs/response.md | gfx, outline, timeline, trials, response | `trial_keyboard --sim --out trials.csv` (CI); `trial_keyboard` | SDL3, ANGLE |
 | `trial_same_different` | jsPsych's same-different-html: two bars, a gap, Q or P; the SOA from flip records | gfx, timeline, trials, response | `trial_same_different --sim` (CI); `trial_same_different` | SDL3, ANGLE |
 | `trial_srt` | jsPsych's serial-reaction-time: four positions, sequence and random blocks, an RSI | gfx, timeline, trials, response | `trial_srt --sim` (CI); `trial_srt` | SDL3, ANGLE |
 | `trial_adjustment` | jsPsych's reconstruction (method of adjustment): G and H change a bar, space confirms; the steps in a second file | gfx, timeline, trials, response | `trial_adjustment --sim` (CI); `trial_adjustment` | SDL3, ANGLE |

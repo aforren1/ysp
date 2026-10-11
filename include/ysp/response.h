@@ -1,4 +1,4 @@
-/* ysp/response.h - v0.3.0 - public domain single-header response collector
+/* ysp/response.h - v0.4.0 - public domain single-header response collector
  *
  *   Turns timestamped input events from any device into the response of a
  *   trial: which key or button, when, measured from the stimulus onset that
@@ -16,8 +16,8 @@
  *   are int64 ns on the ysp/rt.h clock, passed in. Needs only the C
  *   standard library. C99 is the floor: it builds as C99, C11 and C++17,
  *   and in the C dialect MSVC compiles by default. Small inline helpers
- *   appear when ysp/screen.h, ysp/audio.h, ysp/timeline.h or SDL3's
- *   SDL_events.h was included before it.
+ *   appear when ysp/screen.h, ysp/audio.h, ysp/timeline.h, ysp/trials.h or
+ *   SDL3's SDL_events.h was included before it (THE FRAME LOOP, DATA).
  *
  *   ---------------------------------------------------------------------
  *   USAGE
@@ -28,8 +28,8 @@
  *
  *   in *one* C or C++ file before including this header to create the
  *   implementation. Every other file just includes the header normally.
- *   Include ysp/screen.h first where you want yrsp_onset_flip() (or SDL3
- *   for yrsp_from_sdl()).
+ *   Include ysp/screen.h (or ysp/gfx.h), ysp/timeline.h and ysp/trials.h
+ *   first where you want the frame-loop and data helpers.
  *
  *   The jsPsych html-keyboard-response trial, choices f and j, a response
  *   window of 1.5 s from the stimulus onset, responses before 0.1 s are
@@ -47,24 +47,33 @@
  *       if (!yrsp_open(&rsp, &d)) { fputs(yrsp_error(&rsp), stderr); return 1; }
  *
  *       yrsp_arm(&rsp, f.onset);                      // at the fixation
- *       // every frame:
- *       while (yscr_poll(&scr, &ev, NULL))            // feed every event
- *           if (yscr_event_input(&scr, &ev, &in)) yrsp_feed(&rsp, &in);
- *       // the stimulus event landed: its planned onset
- *       yrsp_onset o = yrsp_onset_landing(&fired[i]);
- *       yrsp_set_onset(&rsp, &o);
- *       // its flip record completed (f.done[], a later begin()): the onset
- *       o = yrsp_onset_flip(&f.done[k]);
- *       yrsp_set_onset(&rsp, &o);
- *       if (yrsp_update(&rsp, f.onset) == YRSP_ENDED) { ... hide, feedback }
+ *       // every frame, after yscr_begin(&scr, &f):
+ *       yrsp_feed_screen(&scr, &rsp, 1);              // every input event
+ *       if (yrsp_update_frame(&rsp, &f) == YRSP_ENDED) { ... hide, feedback }
+ *       n = ytl_evaluate(&tl, &tf, fired, cap);
+ *       yrsp_set_landing(&rsp, fired, n, STIM_ON);    // the plan, when it lands
  *       // after the trial:
  *       yrsp_result r;
  *       if (yrsp_finish(&rsp, &r) < 0) fputs(yrsp_error(&rsp), stderr);
  *       if (r.rt_ns != YRSP_NO_TIME)                  // seconds in the data
  *           printf("rt %.3f s, key %s, onset tier %d\n", YRT_TO_S(r.rt_ns),
  *                  r.response_name, r.onset_tier);
+ *       yrsp_data_set(&data, &r);                     // YRSP_DATA_COLS
  *       // at the end of the session:
  *       yrsp_close(&rsp);
+ *
+ *   yrsp_update_frame() takes the stimulus frame's flip record from f.done
+ *   when it arrives, so RT is from the final onset; until then it is from
+ *   the plan, and the result says which (onset_src, ONSET_PLAN). Without
+ *   ysp/screen.h and ysp/timeline.h, the same in calls of this header:
+ *
+ *       // the stimulus event landed: its planned onset
+ *       yrsp_onset o = yrsp_onset_landing(&fired[i]);
+ *       yrsp_set_onset(&rsp, &o);
+ *       // its flip record completed (f.done[], a later begin()): the onset
+ *       o = yrsp_onset_flip(&f.done[k]);
+ *       yrsp_set_onset(&rsp, &o);
+ *       if (yrsp_update(&rsp, f.onset) == YRSP_ENDED) { ... }
  *
  *   ---------------------------------------------------------------------
  *   THE EVENT (yrsp_input)
@@ -164,6 +173,61 @@
  *   frame and an uncertainty the caller states (from a loopback; 0 = not
  *   stated: the producers give tiers, not bounds). ONSET_PLAN in the
  *   result: no final onset came, so RT is from a prediction.
+ *   The first plan since arm() is kept apart: result.plan_residual is its
+ *   residual (a timeline event's landing residual), after the final onset
+ *   replaced it. A later plan (a never-shown frame's record) does not
+ *   replace it.
+ *
+ *   ---------------------------------------------------------------------
+ *   THE FRAME LOOP (v0.4)
+ *   ---------------------------------------------------------------------
+ *   Inline helpers that do THE ONSET's steps, and the input's, for a frame
+ *   loop on ysp/screen.h and ysp/timeline.h. Each is a few calls of this
+ *   header, so the timing is the same as written out (USAGE has both):
+ *     yrsp_set_landing(c, fired, n, channel)    with ysp/timeline.h: the
+ *         plan from the ONSET event of `channel` among a frame's fired
+ *         events; returns its index or -1
+ *     yrsp_update_frame(c, &f)                  with ysp/screen.h: the
+ *         flip record of yrsp_plan_frame()'s frame, when f.done has it,
+ *         as the final onset; then yrsp_update(c, f.onset). Call it every
+ *         frame, also after the window ended, so a late record still
+ *         becomes the final onset before the last finish()
+ *     yrsp_feed_screen(s, c, n)                 with ysp/screen.h and
+ *         SDL_events.h: every input event on the screen's queue
+ *         (yscr_event_input(): second key reports dropped) to the n
+ *         collectors c[0 .. n - 1]; other events are dropped. A program
+ *         that reads the events too (an adjustment, a pointer) keeps its
+ *         own loop
+ *   yrsp_plan_frame(c) is the frame the collector waits for: the plan's
+ *   frame while the onset is a plan, -1 after the final onset, for a sound
+ *   and before any onset. A frame shown late keeps its index, so its
+ *   record is the stimulus's onset with the lateness in its residual
+ *   (onset_residual) and the drops in the record. A frame never shown
+ *   (SKIPPED) leaves the onset a plan: the row says ONSET_PLAN.
+ *
+ *   ---------------------------------------------------------------------
+ *   DATA (v0.4)
+ *   ---------------------------------------------------------------------
+ *   With ysp/trials.h included first: YRSP_DATA_COLS, YRSP_N_DATA_COLS
+ *   (12) columns for its data writer, and yrsp_data_set(w, &r), which
+ *   sets each one the file has from a result, for the next
+ *   ytr_data_write(). Columns (seconds; an empty field where the result
+ *   has none):
+ *     response          the choice's name
+ *     rt                rt_ns
+ *     rt_key_duration   rt_key_duration_ns
+ *     onset_src         yrsp_onset_src: 1 FLIP, 2 AUDIO, 3 PLAN
+ *     onset_tier        the onset's tier
+ *     onset_residual    the onset's residual: a flip record's onset minus
+ *                       its target, the frame's lateness
+ *     landing_residual  plan_residual
+ *     onset_frame       the onset's frame
+ *     rsp_tier          the response's stamp tier
+ *     rsp_flags         YRSP_R_*
+ *     n_anticipations, n_early
+ *   The onset's source, tier and residual are in every row, so a row whose
+ *   RT came from a plan says so. A file that wants fewer declares them by
+ *   name with YTR_COL_SET; yrsp_data_set() finds the columns by name.
  *
  *   ---------------------------------------------------------------------
  *   REPEATS, HELD KEYS AND DOUBLE REPORTS
@@ -290,10 +354,11 @@
  *   jsPsych's names, in ns: rt_ns, response, rt_key_duration_ns. Then the
  *   response's kind, scancode (control), keycode, device and stamp tier
  *   and bounds (stamp_lo_ns, stamp_hi_ns);
- *   the onset's time, tier, source, residual, uncertainty and frame;
- *   counts; flags (YRSP_R_*). The program writes the columns it wants
- *   (examples/response/ has seven programs that do). The entries
- *   (yrsp_entries()) hold every press of the window, in arrival order.
+ *   the onset's time, tier, source, residual, uncertainty and frame; the
+ *   first plan's residual (plan_residual, v0.4); counts; flags (YRSP_R_*).
+ *   The program writes the columns it wants, or YRSP_DATA_COLS (DATA).
+ *   The entries (yrsp_entries()) hold every press of the window, in
+ *   arrival order.
  *
  *   ---------------------------------------------------------------------
  *   SDL3 AND RAW MICE
@@ -335,6 +400,13 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.4.0 - THE FRAME LOOP and DATA: yrsp_update_frame(),
+ *          yrsp_feed_screen(), yrsp_set_landing(), YRSP_DATA_COLS and
+ *          yrsp_data_set(), inline where ysp/screen.h, ysp/timeline.h and
+ *          ysp/trials.h came first; yrsp_plan_frame(). The collector keeps
+ *          the first plan beside the final onset: result.plan_residual (a
+ *          new field; the result and the collector grew 8 and 56 bytes).
+ *          No rule changed.
  *   v0.3.0 - the repository conventions (README.md). Breaks the API:
  *          yrsp_init() is yrsp_open(), with yrsp_close(). Times are int64_t
  *          ns: desc.min_rt_ns (was minimum_valid_rt, seconds),
@@ -384,6 +456,14 @@
  *          releases, the trace, the result and its CSV row, the SDL3
  *          adapter.
  *
+ *   STATUS: v0.4.0, 2026-10-11: the test (20,644 checks; 20,709 with the
+ *   SDL adapter) and the compile checks pass with MinGW-w64 gcc 16.1 and
+ *   MSVC 19.44; the frame-loop and data helpers are checked on filled
+ *   structs (records, fired events, the data writer's bytes); 8 of 8 new
+ *   mutants caught. The nine converted examples' --sim runs pass on both
+ *   compilers; trial_keyboard moved no flip in a window or fullscreen
+ *   (docs/response.md, "The first trial (v0.4.0)"). yrsp_feed_screen()
+ *   runs in the examples only.
  *   STATUS: v0.3.0, 2026-10-10: the test (20,595 checks; 20,660 with the
  *   SDL adapter) and the compile checks pass with MinGW-w64 gcc 16.1 and
  *   MSVC 19.44, with new checks of close, the messages and YRSP_NO_TIME;
@@ -414,9 +494,9 @@
 #define YSP_RESPONSE_H_INCLUDED
 
 #define YRSP_VERSION_MAJOR 0
-#define YRSP_VERSION_MINOR 3
+#define YRSP_VERSION_MINOR 4
 #define YRSP_VERSION_PATCH 0
-#define YRSP_VERSION_STRING "0.3.0"
+#define YRSP_VERSION_STRING "0.4.0"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -676,6 +756,9 @@ typedef struct yrsp_result {
     int64_t     onset_residual;
     int64_t     onset_uncertainty;
     int64_t     onset_frame;
+    int64_t     plan_residual;      /* v0.4: the first plan's residual (a
+                                     * timeline event's landing residual);
+                                     * YRSP_NO_TIME = no plan came         */
     int32_t     n_responses, n_early, n_anticipations, n_late, n_after_end,
                 n_not_choice, n_held, n_entries, n_lost, n_trace;
 } yrsp_result;
@@ -691,6 +774,8 @@ typedef struct yrsp_collector {
     yrsp_source  src[YRSP_MAX_SOURCES];
     int64_t        min_rt_ns, duration_ns, max_hold_ns;
     yrsp_onset   onset;
+    yrsp_onset   plan;            /* the first plan (final 0) since arm() */
+    int32_t        have_plan;
     int64_t        t_arm, t_end;
     int32_t        ok, armed, finished, have_onset;
     int32_t        status;
@@ -749,6 +834,11 @@ YRSP_API int  yrsp_finish(yrsp_collector* c, yrsp_result* out);
 /* The window's entries in arrival order; valid until the next arm(). */
 YRSP_API const yrsp_entry* yrsp_entries(const yrsp_collector* c, int* n);
 
+/* v0.4: the frame of the onset while it is a plan: the frame whose flip
+ * record makes it final (yrsp_update_frame() takes it). -1 when the onset
+ * is final, is not tied to a frame (a sound, OTHER), or there is none. */
+YRSP_API int64_t yrsp_plan_frame(const yrsp_collector* c);
+
 /* Key names on the US layout (CHOICES): the scancode of a name, -1 when
  * unknown; the name of a scancode, NULL when it has none. */
 YRSP_API int         yrsp_scancode(const char* name);
@@ -770,6 +860,42 @@ static inline yrsp_onset yrsp_onset_flip(const yscr_record* r) {
     o.final = (uint8_t)(r->onset != 0 && !(r->flags & YSCR_FLIP_PENDING));
     o.reserved_[0] = o.reserved_[1] = o.reserved_[2] = o.reserved_[3] = o.reserved_[4] = 0;
     return o;
+}
+
+/* v0.4, THE FRAME LOOP: the flip record of yrsp_plan_frame()'s frame,
+ * when f->done[] has it, as the final onset (yrsp_onset_flip()); then
+ * yrsp_update(c, f->onset). Call it once a frame after yscr_begin().
+ * Returns the status, or a code (yrsp_error() set). */
+static inline int yrsp_update_frame(yrsp_collector* c, const yscr_frame* f) {
+    int64_t k = yrsp_plan_frame(c);
+    int i;
+    if (!f) return yrsp_set_onset(c, NULL);   /* YRSP_ERR_ARG, with the message */
+    for (i = 0; k >= 0 && i < f->n_done; i++)
+        if (f->done[i].index == k) {
+            yrsp_onset o = yrsp_onset_flip(&f->done[i]);
+            yrsp_set_onset(c, &o);
+        }
+    return yrsp_update(c, f->onset);
+}
+#endif
+
+#if defined(YSP_SCREEN_H_INCLUDED) && defined(SDL_events_h_)
+/* v0.4, THE FRAME LOOP: every event waiting on the screen's queue
+ * (yscr_poll()); each input (yscr_event_input(): the key path, second
+ * reports dropped) goes to the n collectors of c[], and other events are
+ * dropped. Returns the inputs fed. Needs SDL3's SDL_events.h before this
+ * header: a translation unit that compiles ysp/screen.h's implementation
+ * has it. */
+static inline int yrsp_feed_screen(yscr_screen* s, yrsp_collector* c, int n) {
+    SDL_Event ev;
+    yrsp_input in;
+    int k, fed = 0;
+    while (yscr_poll(s, &ev, NULL))
+        if (yscr_event_input(s, &ev, &in)) {
+            for (k = 0; k < n; k++) yrsp_feed(&c[k], &in);
+            fed++;
+        }
+    return fed;
 }
 #endif
 
@@ -804,6 +930,67 @@ static inline yrsp_onset yrsp_onset_landing(const ytl_event* e) {
     o.final = 0;
     o.reserved_[0] = o.reserved_[1] = o.reserved_[2] = o.reserved_[3] = o.reserved_[4] = 0;
     return o;
+}
+
+/* v0.4, THE FRAME LOOP: the plan from the ONSET event of `channel` among
+ * fired[0 .. n - 1] (ytl_evaluate()'s output; n at most the array's
+ * size), when one is there. Its landing frame is then yrsp_plan_frame().
+ * Returns the event's index in fired, or -1 when none of them is it. */
+static inline int yrsp_set_landing(yrsp_collector* c, const ytl_event* fired, int n, int channel) {
+    int i;
+    for (i = 0; fired && i < n; i++)
+        if (fired[i].kind == YTL_ONSET && fired[i].target == channel) {
+            yrsp_onset o = yrsp_onset_landing(&fired[i]);
+            yrsp_set_onset(c, &o);
+            return i;
+        }
+    return -1;
+}
+#endif
+
+#if defined(YSP_TRIALS_H_INCLUDED)
+/* v0.4, DATA: the result's columns for ysp/trials.h's data writer, in a
+ * ytr_col array: { YTR_COL(row, correct, YTR_COL_BOOL), YRSP_DATA_COLS }.
+ * Times in seconds; an empty field where the result has none. */
+#define YRSP_DATA_COLS \
+    YTR_COL_SET("response", YTR_COL_STRING), \
+    YTR_COL_SET("rt", YTR_COL_TIME_NS), \
+    YTR_COL_SET("rt_key_duration", YTR_COL_TIME_NS), \
+    YTR_COL_SET("onset_src", YTR_COL_INT), \
+    YTR_COL_SET("onset_tier", YTR_COL_INT), \
+    YTR_COL_SET("onset_residual", YTR_COL_TIME_NS), \
+    YTR_COL_SET("landing_residual", YTR_COL_TIME_NS), \
+    YTR_COL_SET("onset_frame", YTR_COL_INT64), \
+    YTR_COL_SET("rsp_tier", YTR_COL_INT), \
+    YTR_COL_SET("rsp_flags", YTR_COL_INT), \
+    YTR_COL_SET("n_anticipations", YTR_COL_INT), \
+    YTR_COL_SET("n_early", YTR_COL_INT)
+#define YRSP_N_DATA_COLS 12
+
+/* Sets, for the next ytr_data_write(), each YRSP_DATA_COLS column that
+ * the file has (found by name, so a file may declare some of them with
+ * YTR_COL_SET). Call it between trials. Returns the columns set, or the
+ * first negative code (ytr_data_error() set). */
+static inline int yrsp_data_set(ytr_data* w, const yrsp_result* r) {
+    int n = 0, rc = 0, col;
+    bool on = r && r->t_onset != 0;
+    if (!r) return YTR_ERR_ARG;
+#define YRSP__DSET(name, call) \
+    if (rc >= 0 && (col = ytr_data_col(w, name)) >= 0) { rc = call; if (rc >= 0) n++; }
+    YRSP__DSET("response", ytr_data_set_string(w, col, r->response_name))
+    YRSP__DSET("rt", ytr_data_set_time_ns(w, col, r->rt_ns))
+    YRSP__DSET("rt_key_duration", ytr_data_set_time_ns(w, col, r->rt_key_duration_ns))
+    YRSP__DSET("onset_src", ytr_data_set_int(w, col, on ? (int)r->onset_src : YTR_MISSING_INT))
+    YRSP__DSET("onset_tier", ytr_data_set_int(w, col, on ? (int)r->onset_tier : YTR_MISSING_INT))
+    YRSP__DSET("onset_residual", ytr_data_set_time_ns(w, col, on ? r->onset_residual : YTR_MISSING_NS))
+    YRSP__DSET("landing_residual", ytr_data_set_time_ns(w, col, r->plan_residual))
+    YRSP__DSET("onset_frame", ytr_data_set_int64(w, col, r->onset_frame >= 0 ? r->onset_frame : YTR_MISSING_I64))
+    YRSP__DSET("rsp_tier", ytr_data_set_int(w, col, (r->flags & YRSP_R_RESPONDED) ? (int)r->stamp_tier : YTR_MISSING_INT))
+    YRSP__DSET("rsp_flags", ytr_data_set_int(w, col, (int)r->flags))
+    YRSP__DSET("n_anticipations", ytr_data_set_int(w, col, r->n_anticipations))
+    YRSP__DSET("n_early", ytr_data_set_int(w, col, r->n_early))
+#undef YRSP__DSET
+    return rc < 0 ? rc : n;
 }
 #endif
 
@@ -1295,6 +1482,8 @@ YRSP_API void yrsp_arm(yrsp_collector* c, int64_t t_ns) {
     c->finished = 0;
     c->have_onset = 0;
     memset(&c->onset, 0, sizeof c->onset);
+    c->have_plan = 0;
+    memset(&c->plan, 0, sizeof c->plan);
     c->t_arm = t_ns;
     c->t_end = 0;
     c->status = YRSP_OPEN;
@@ -1329,6 +1518,15 @@ YRSP_API int yrsp_set_onset(yrsp_collector* c, const yrsp_onset* o) {
     if (!c || !c->ok) return yrsp__err(c, YRSP_ERR_STATE, "yrsp_set_onset");
     if (!o) return yrsp__err(c, YRSP_ERR_ARG, "yrsp_set_onset");
     if (!c->armed) return c->status;
+    if (!o->final && !c->have_plan) {   /* kept apart: the final onset
+                                         * replaces it, and the landing
+                                         * residual still belongs in the
+                                         * data; a never-shown frame's
+                                         * record (a later plan) must not
+                                         * overwrite it */
+        c->plan = *o;
+        c->have_plan = 1;
+    }
     if (c->have_onset && c->onset.final && !o->final) return c->status;
     c->onset = *o;
     c->have_onset = 1;
@@ -1382,6 +1580,7 @@ YRSP_API int yrsp_finish(yrsp_collector* c, yrsp_result* r) {
     r->response = -1;
     r->entry = -1;
     r->onset_frame = -1;
+    r->plan_residual = c->have_plan ? c->plan.residual_ns : YRSP_NO_TIME;
     yrsp__reclassify(c);
     c->finished = 1;
     if (c->status == YRSP_OPEN) c->status = YRSP_ENDED;
@@ -1453,6 +1652,11 @@ YRSP_API int yrsp_finish(yrsp_collector* c, yrsp_result* r) {
 YRSP_API const yrsp_entry* yrsp_entries(const yrsp_collector* c, int* n) {
     if (n) *n = c ? c->n_log : 0;
     return c ? c->log : NULL;
+}
+
+YRSP_API int64_t yrsp_plan_frame(const yrsp_collector* c) {
+    if (!c || !c->ok || !c->armed || !c->have_onset || c->onset.final) return -1;
+    return c->onset.frame >= 0 ? c->onset.frame : -1;
 }
 
 #endif /* YSP_RESPONSE_IMPLEMENTATION_GUARD */

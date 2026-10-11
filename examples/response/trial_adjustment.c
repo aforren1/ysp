@@ -141,14 +141,8 @@ static void adjust(const yrsp_input* in, int bars_up) {
 }
 
 int main(int argc, char** argv) {
-    yscr_desc sd;
-    ygfx_desc gd;
-    ytl_desc td;
-    ytb_csv_desc cd;
-    ytr_desc rd;
-    yrsp_desc pd;
     yscr_frame f;
-    ytl_event fired[16];
+    ytl_event fired[64];                   /* the timeline's capacity: all that can fire */
     ytr_trial_info ti = { 0 };
     yrsp_result res, sim_res[SIM_TRIALS];
     FILE *out, *traj;
@@ -160,9 +154,7 @@ int main(int argc, char** argv) {
     int in_trial = 0, responding = 0, bars_up = 0, n_sim_ev = 0, sim_next = 0, ref_col;
     int sim_steps[SIM_TRIALS];
     double start_value = 0, sim_start[SIM_TRIALS], sim_final[SIM_TRIALS];
-    int64_t bars_frame = -1;
 
-    memset(&sd, 0, sizeof sd);
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--sim")) sim = 1;
         else if (!strcmp(argv[i], "--fullscreen")) fullscreen = 1;
@@ -177,52 +169,37 @@ int main(int argc, char** argv) {
     }
     if (reps == 0) reps = sim ? 1 : 4;
     if (reps < 1 || reps > 100) { fprintf(stderr, "trial_adjustment: --reps takes 1..100\n"); return 2; }
-    if (sim) sd.backend = YSCR_BACKEND_SIM;
-    sd.windowed = !fullscreen;
-
-    if (!yscr_open(&scr, &sd)) { fprintf(stderr, "trial_adjustment: %s\n", yscr_error(&scr)); return 1; }
-    memset(&gd, 0, sizeof gd);
-    gd.screen = &scr;
-    gd.background[0] = gd.background[1] = gd.background[2] = 0.5f;
-    if (!ygfx_open(&gfx, &gd)) { fprintf(stderr, "trial_adjustment: %s\n", ygfx_error(&gfx)); return 1; }
-    {
-        ygfx_shape_desc d;
-        memset(&d, 0, sizeof d);
-        d.shape = YGFX_CROSS;
-        d.w = d.h = 16;
-        d.shape_p[0] = 3;
-        d.color[0] = d.color[1] = d.color[2] = 0.2f;
-        fix = ygfx_shape(&d);
+    /* the display and the graphics, opened together and primed */
+    if (!ygfx_open_screen(&gfx, &scr, &(yscr_desc){ .backend = sim ? YSCR_BACKEND_SIM : 0, .windowed = !fullscreen },
+                          &(ygfx_desc){ .background = { 0.5f, 0.5f, 0.5f } })) {
+        fprintf(stderr, "trial_adjustment: %s\n", ygfx_error(&gfx));
+        return 1;
     }
+    fix = ygfx_shape(&(ygfx_shape_desc){ .shape = YGFX_CROSS, .w = 16, .h = 16, .shape_p = { 3 },
+                                         .color = { 0.2f, 0.2f, 0.2f } });
     reference = bar(-200);
     comparison = bar(200);
 
-    memset(&cd, 0, sizeof cd);
-    cd.text = conditions_csv;
-    cd.len = sizeof conditions_csv - 1;
-    cd.arena = table_arena;
-    cd.arena_size = sizeof table_arena;
-    if (!ytb_open_csv(&tab, &cd)) { fprintf(stderr, "trial_adjustment: %s\n", ytb_error(&tab)); return 1; }
+    if (!ytb_open_csv(&tab, &(ytb_csv_desc){ .text = conditions_csv, .len = sizeof conditions_csv - 1,
+                                             .arena = table_arena, .arena_size = sizeof table_arena })) {
+        fprintf(stderr, "trial_adjustment: %s\n", ytb_error(&tab));
+        return 1;
+    }
     ref_col = ytb_col(&tab, "reference");
-    memset(&rd, 0, sizeof rd);
-    rd.table = &tab;
-    rd.reps = reps;
-    rd.order = YTR_ORDER_RANDOM;
-    rd.rng = ytr_splitmix;
-    rd.rng_ctx = &seed;
-    if (!ytr_open(&trials, &rd)) { fprintf(stderr, "trial_adjustment: %s\n", ytr_error(&trials)); return 1; }
-
-    memset(&td, 0, sizeof td);
-    td.events = storage;
-    td.event_capacity = 64;
-    td.n_channels = N_CHANNELS;
-    if (!ytl_open(&tl, &td)) { fprintf(stderr, "trial_adjustment: %s\n", ytl_error(&tl)); return 1; }
-
+    if (!ytr_open(&trials, &(ytr_desc){ .table = &tab, .reps = reps, .order = YTR_ORDER_RANDOM,
+                                        .rng = ytr_splitmix, .rng_ctx = &seed })) {
+        fprintf(stderr, "trial_adjustment: %s\n", ytr_error(&trials));
+        return 1;
+    }
+    if (!ytl_open(&tl, &(ytl_desc){ .events = storage, .event_capacity = 64, .n_channels = N_CHANNELS })) {
+        fprintf(stderr, "trial_adjustment: %s\n", ytl_error(&tl));
+        return 1;
+    }
     /* the confirm key, no deadline */
-    memset(&pd, 0, sizeof pd);
-    pd.choices = confirm;
-    pd.n_choices = 1;
-    if (!yrsp_open(&rsp, &pd)) { fprintf(stderr, "trial_adjustment: %s\n", yrsp_error(&rsp)); return 1; }
+    if (!yrsp_open(&rsp, &(yrsp_desc){ .choices = confirm, .n_choices = 1 })) {
+        fprintf(stderr, "trial_adjustment: %s\n", yrsp_error(&rsp));
+        return 1;
+    }
 
     out = fopen(out_path, "w");
     traj = fopen(traj_path, "w");
@@ -237,7 +214,6 @@ int main(int argc, char** argv) {
     fprintf(traj, "trial_index,t,key,repeat,value\n");
     printf("%s\n", line);
 
-    ygfx_prime(&gfx);   /* each kind's first draw now, not on a trial's first frames (docs/gfx.md) */
     for (;;) {
         SDL_Event ev;
         int64_t bt = 0;
@@ -245,12 +221,6 @@ int main(int argc, char** argv) {
         int rc = yscr_begin(&scr, &f);
         if (rc == YSCR_QUIT) { aborted = 1; break; }
         if (rc != YSCR_OK) { fprintf(stderr, "trial_adjustment: %s\n", yscr_error(&scr)); failed = 1; break; }
-
-        for (i = 0; i < f.n_done; i++)
-            if (f.done[i].index == bars_frame) {
-                yrsp_onset o = yrsp_onset_flip(&f.done[i]);
-                yrsp_set_onset(&rsp, &o);
-            }
 
         if (!in_trial) {
             ytl_seq q;
@@ -267,7 +237,6 @@ int main(int argc, char** argv) {
             ytl_on(&q, BARS_ON);
             if (q.err) { fprintf(stderr, "trial_adjustment: timeline error %d\n", q.err); failed = 1; break; }
             yrsp_arm(&rsp, f.onset);
-            bars_frame = -1;
             in_trial = responding = 1;
             n_sim_ev = sim_next = 0;
         }
@@ -283,8 +252,9 @@ int main(int argc, char** argv) {
             if (responding) adjust(&sim_ev[sim_next], bars_up);
         }
 
-        /* confirmed: the bars go off on this frame */
-        if (responding && yrsp_update(&rsp, f.onset) == YRSP_ENDED) {
+        /* the bars' flip record when it arrives; confirmed: the bars go
+         * off on this frame */
+        if (yrsp_update_frame(&rsp, &f) == YRSP_ENDED && responding) {
             ytl_seq q = ytl_seq_on(&tl, TRIAL);
             ytl_base_time(&tl, TRIAL, f.onset, &bt);
             ytl_at(&q, bt);
@@ -295,12 +265,10 @@ int main(int argc, char** argv) {
             responding = bars_up = 0;
         }
 
-        n = ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, fired, 16);
-        for (i = 0; i < n && i < 16; i++) {
+        n = ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, fired, 64);
+        yrsp_set_landing(&rsp, fired, n, BARS_ON);   /* the bars landed: their planned onset */
+        for (i = 0; i < n; i++) {
             if (fired[i].kind == YTL_ONSET && fired[i].target == BARS_ON) {
-                yrsp_onset o = yrsp_onset_landing(&fired[i]);
-                yrsp_set_onset(&rsp, &o);
-                bars_frame = fired[i].frame;
                 bars_up = 1;
                 if (sim) {   /* the participant's presses, from this onset */
                     int k, j;

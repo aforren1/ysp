@@ -140,13 +140,8 @@ static int open_block(char type, int reps, uint64_t* seed) {
 }
 
 int main(int argc, char** argv) {
-    yscr_desc sd;
-    ygfx_desc gd;
-    ytl_desc td;
-    ytb_csv_desc cd;
-    yrsp_desc pd;
     yscr_frame f;
-    ytl_event fired[16];
+    ytl_event fired[64];                   /* the timeline's capacity: all that can fire */
     ytr_trial_info ti = { 0 };
     yrsp_result res, sim_res[SIM_TRIALS];
     uint32_t doubles_at_arm = 0;
@@ -156,13 +151,11 @@ int main(int argc, char** argv) {
     const char* out_path = "trial_srt.csv";
     const char* blocks = NULL;
     uint64_t seed = 20261008;
-    int i, n, sim = 0, reps = 0, fullscreen = 0, aborted = 0, failed = 0, rows = 0;
+    int i, n, landed, sim = 0, reps = 0, fullscreen = 0, aborted = 0, failed = 0, rows = 0;
     int in_trial = 0, responding = 0, n_sim_ev = 0, sim_next = 0, block = -1, trial_index = 0, position = 0;
-    int64_t target_frame = -1;
     int pos_col, n_correct[8] = { 0 }, sim_correct[SIM_TRIALS];
     double sum_rt[8] = { 0 };
 
-    memset(&sd, 0, sizeof sd);
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--sim")) sim = 1;
         else if (!strcmp(argv[i], "--fullscreen")) fullscreen = 1;
@@ -182,36 +175,30 @@ int main(int argc, char** argv) {
         fprintf(stderr, "trial_srt: --blocks takes 1 to 8 of S and R\n");
         return 2;
     }
-    if (sim) sd.backend = YSCR_BACKEND_SIM;
-    sd.windowed = !fullscreen;
-
-    if (!yscr_open(&scr, &sd)) { fprintf(stderr, "trial_srt: %s\n", yscr_error(&scr)); return 1; }
-    memset(&gd, 0, sizeof gd);
-    gd.screen = &scr;
-    gd.background[0] = gd.background[1] = gd.background[2] = 0.5f;
-    if (!ygfx_open(&gfx, &gd)) { fprintf(stderr, "trial_srt: %s\n", ygfx_error(&gfx)); return 1; }
+    /* the display and the graphics, opened together and primed */
+    if (!ygfx_open_screen(&gfx, &scr, &(yscr_desc){ .backend = sim ? YSCR_BACKEND_SIM : 0, .windowed = !fullscreen },
+                          &(ygfx_desc){ .background = { 0.5f, 0.5f, 0.5f } })) {
+        fprintf(stderr, "trial_srt: %s\n", ygfx_error(&gfx));
+        return 1;
+    }
     for (i = 0; i < 4; i++) boxes[i] = square(((float)i - 1.5f) * SPACING, 4);
     target = square(0, 0);
 
-    memset(&cd, 0, sizeof cd);
-    cd.text = conditions_csv;
-    cd.len = sizeof conditions_csv - 1;
-    cd.arena = table_arena;
-    cd.arena_size = sizeof table_arena;
-    if (!ytb_open_csv(&tab, &cd)) { fprintf(stderr, "trial_srt: %s\n", ytb_error(&tab)); return 1; }
+    if (!ytb_open_csv(&tab, &(ytb_csv_desc){ .text = conditions_csv, .len = sizeof conditions_csv - 1,
+                                             .arena = table_arena, .arena_size = sizeof table_arena })) {
+        fprintf(stderr, "trial_srt: %s\n", ytb_error(&tab));
+        return 1;
+    }
     pos_col = ytb_col(&tab, "position");
-
-    memset(&td, 0, sizeof td);
-    td.events = storage;
-    td.event_capacity = 64;
-    td.n_channels = N_CHANNELS;
-    if (!ytl_open(&tl, &td)) { fprintf(stderr, "trial_srt: %s\n", ytl_error(&tl)); return 1; }
-
+    if (!ytl_open(&tl, &(ytl_desc){ .events = storage, .event_capacity = 64, .n_channels = N_CHANNELS })) {
+        fprintf(stderr, "trial_srt: %s\n", ytl_error(&tl));
+        return 1;
+    }
     /* one of four keys, no deadline, the first key ends it */
-    memset(&pd, 0, sizeof pd);
-    pd.choices = keys;
-    pd.n_choices = 4;
-    if (!yrsp_open(&rsp, &pd)) { fprintf(stderr, "trial_srt: %s\n", yrsp_error(&rsp)); return 1; }
+    if (!yrsp_open(&rsp, &(yrsp_desc){ .choices = keys, .n_choices = 4 })) {
+        fprintf(stderr, "trial_srt: %s\n", yrsp_error(&rsp));
+        return 1;
+    }
 
     out = fopen(out_path, "w");
     if (!out) { fprintf(stderr, "trial_srt: cannot write %s\n", out_path); return 1; }
@@ -222,21 +209,11 @@ int main(int argc, char** argv) {
                  "n_rsi_presses,n_duplicates\n");
     printf("%s\n", line);
 
-    ygfx_prime(&gfx);   /* each kind's first draw now, not on a trial's first frames (docs/gfx.md) */
     for (;;) {
-        SDL_Event ev;
         int64_t bt = 0;
-        yrsp_input in;
         int rc = yscr_begin(&scr, &f);
         if (rc == YSCR_QUIT) { aborted = 1; break; }
         if (rc != YSCR_OK) { fprintf(stderr, "trial_srt: %s\n", yscr_error(&scr)); failed = 1; break; }
-
-        /* the target's flip record: its onset, final */
-        for (i = 0; i < f.n_done; i++)
-            if (f.done[i].index == target_frame) {
-                yrsp_onset o = yrsp_onset_flip(&f.done[i]);
-                yrsp_set_onset(&rsp, &o);
-            }
 
         if (!in_trial) {
             /* the next target now, or after a rest at a block's start */
@@ -257,17 +234,16 @@ int main(int argc, char** argv) {
             if (q.err) { fprintf(stderr, "trial_srt: timeline error %d\n", q.err); failed = 1; break; }
             yrsp_arm(&rsp, f.onset);
             doubles_at_arm = key_doubles();
-            target_frame = -1;
             in_trial = responding = 1;
             n_sim_ev = sim_next = 0;
         }
 
-        while (yscr_poll(&scr, &ev, NULL))
-            if (yscr_event_input(&scr, &ev, &in)) yrsp_feed(&rsp, &in);
+        yrsp_feed_screen(&scr, &rsp, 1);
         while (sim && sim_next < n_sim_ev && sim_ev[sim_next].t <= f.onset) yrsp_feed(&rsp, &sim_ev[sim_next++]);
 
-        /* a key: the target goes off on this frame, the next comes after the RSI */
-        if (responding && yrsp_update(&rsp, f.onset) == YRSP_ENDED) {
+        /* the target's flip record when it arrives; a key: the target goes
+         * off on this frame, the next comes after the RSI */
+        if (yrsp_update_frame(&rsp, &f) == YRSP_ENDED && responding) {
             ytl_seq q = ytl_seq_on(&tl, TRIAL);
             ytl_base_time(&tl, TRIAL, f.onset, &bt);
             ytl_at(&q, bt);
@@ -278,33 +254,29 @@ int main(int argc, char** argv) {
             responding = 0;
         }
 
-        n = ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, fired, 16);
-        for (i = 0; i < n && i < 16; i++) {
-            if (fired[i].kind == YTL_ONSET && fired[i].target == TARGET_ON) {
-                yrsp_onset o = yrsp_onset_landing(&fired[i]);
-                yrsp_set_onset(&rsp, &o);
-                target_frame = fired[i].frame;
-                if (sim) {   /* the participant's presses, from this onset */
-                    int k = blocks[block] == 'S' ? ti.index == 4 : ti.index == 2;
-                    int wrong = blocks[block] == 'R' && k;
-                    double at = wrong ? SIM_WRONG_RT : blocks[block] == 'S' ? SIM_RT_S : SIM_RT_R;
-                    int p;
-                    for (p = 0; p < 1 + (blocks[block] == 'S' && k); p++) {
-                        yrsp_input* e = &sim_ev[n_sim_ev];
-                        memset(e, 0, sizeof *e);
-                        e->t = fired[i].onset + YRT_S(at + 0.1 * p);
-                        e->type = YRSP_PRESS;
-                        e->control = (uint32_t)yrsp_scancode(keys[(position + wrong) % 4].key);
-                        e->stamp = YRSP_TIER_SIM;
-                        e->value = 1;
-                        sim_ev[n_sim_ev + 1] = *e;
-                        sim_ev[n_sim_ev + 1].type = YRSP_RELEASE;
-                        sim_ev[n_sim_ev + 1].value = 0;
-                        sim_ev[n_sim_ev + 1].t = e->t + YRT_MS(60);
-                        n_sim_ev += 2;
-                    }
-                }
+        n = ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, fired, 64);
+        landed = yrsp_set_landing(&rsp, fired, n, TARGET_ON);   /* the target landed: its planned onset */
+        if (landed >= 0 && sim) {   /* the participant's presses, from this onset */
+            int odd = blocks[block] == 'S' ? ti.index == 4 : ti.index == 2;
+            int wrong = blocks[block] == 'R' && odd;
+            double at = wrong ? SIM_WRONG_RT : blocks[block] == 'S' ? SIM_RT_S : SIM_RT_R;
+            int p;
+            for (p = 0; p < 1 + (blocks[block] == 'S' && odd); p++) {
+                yrsp_input* e = &sim_ev[n_sim_ev];
+                memset(e, 0, sizeof *e);
+                e->t = fired[landed].onset + YRT_S(at + 0.1 * p);
+                e->type = YRSP_PRESS;
+                e->control = (uint32_t)yrsp_scancode(keys[(position + wrong) % 4].key);
+                e->stamp = YRSP_TIER_SIM;
+                e->value = 1;
+                sim_ev[n_sim_ev + 1] = *e;
+                sim_ev[n_sim_ev + 1].type = YRSP_RELEASE;
+                sim_ev[n_sim_ev + 1].value = 0;
+                sim_ev[n_sim_ev + 1].t = e->t + YRT_MS(60);
+                n_sim_ev += 2;
             }
+        }
+        for (i = 0; i < n; i++) {
             if (fired[i].kind == YTL_MARK && fired[i].code == END_OF_TRIAL) {
                 char rt[32];
                 int correct;

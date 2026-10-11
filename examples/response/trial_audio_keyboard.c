@@ -17,11 +17,13 @@
  * confirmed played, on a loopback-checked path), 3 when unconfirmed, 4
  * (SIM) on the null device. The display plays no part in the onset.
  *
- * The data file has one row per trial: trial_index, stimulus, key_answer,
- * response, rt, correct (jsPsych's names); then foreperiod, onset_tier,
- * onset_src, audio_residual (onset minus target), audio_flags
- * (YAU_ONSET_*), rsp_tier, rsp_flags, n_early, n_anticipations. Times in
- * seconds. Shift+Esc stops the session; the rows so far are kept.
+ * The data file has one row per trial (ysp/trials.h's data writer): the
+ * session's columns (index, ..., stimulus, hz, key_answer, foreperiod),
+ * then trial_index, correct, audio_flags (YAU_ONSET_*), then the
+ * response's (YRSP_DATA_COLS: response, rt, onset_src, onset_tier,
+ * onset_residual: the tone's onset minus its target, rsp_tier, rsp_flags,
+ * n_anticipations, n_early). Times in seconds; the settings go to
+ * FILE.meta. Shift+Esc stops the session; the rows so far are kept.
  *
  * --sim runs on the simulated display and miniaudio's null device with a
  * synthetic participant: a correct response, a press in the foreperiod
@@ -80,17 +82,20 @@ static yscr_screen scr;
 static ygfx_gfx gfx;
 static yau_audio au;
 static ytr_trials trials;
+static ytr_data data;
 static yrsp_collector rsp;
 static uint64_t table_arena[1024];
 static ytb_table tab;
 
+/* The program's columns, after the session's; then YRSP_DATA_COLS. */
+typedef struct row { int trial_index, audio_flags; bool correct; } row;
+static const ytr_col cols[] = {
+    YTR_COL(row, trial_index, YTR_COL_INT), YTR_COL(row, correct, YTR_COL_BOOL),
+    YTR_COL(row, audio_flags, YTR_COL_INT), YRSP_DATA_COLS,
+};
+
 int main(int argc, char** argv) {
-    yscr_desc sd;
-    ygfx_desc gd;
     yau_desc ad;
-    ytb_csv_desc cd;
-    ytr_desc rd;
-    yrsp_desc pd;
     yscr_frame f;
     ytr_trial_info ti = { 0 };
     yrsp_result res, sim_res[SIM_TRIALS];
@@ -98,18 +103,17 @@ int main(int argc, char** argv) {
     yau_onset rec;
     yau_buf tones[2];
     ygfx_stim fix;
-    FILE* out;
-    char line[1024], meta[2048], aline[512];
+    row r = { 0 };
+    char line[1024], meta[2048], aline[512], meta_path[1100];
     const char* out_path = "trial_audio_keyboard.csv";
+    const char* key_answer = "";
     uint64_t seed = 20261008;
     int i, sim = 0, reps = 0, fullscreen = 0, aborted = 0, failed = 0, rows = 0;
     int in_trial = 0, responding = 0, n_sim_ev = 0, sim_next = 0, rc = YAU_PENDING, stim_col, key_col;
     int sim_correct[SIM_TRIALS];
     int64_t t_tone = 0, t_end = 0, sim_t_press[SIM_TRIALS] = { 0 };
     yau_id id = 0;
-    char key_answer[8] = "";
 
-    memset(&sd, 0, sizeof sd);
     memset(&ad, 0, sizeof ad);
     memset(&rec, 0, sizeof rec);
     for (i = 1; i < argc; i++) {
@@ -125,37 +129,26 @@ int main(int argc, char** argv) {
     }
     if (reps == 0) reps = sim ? SIM_TRIALS / 2 : 10;
     if (reps < 1 || reps > 100) { fprintf(stderr, "trial_audio_keyboard: --reps takes 1..100\n"); return 2; }
-    if (sim) {
-        sd.backend = YSCR_BACKEND_SIM;
-        ad.backend = YAU_BACKEND_NULL;
-    }
-    sd.windowed = !fullscreen;
+    if (sim) ad.backend = YAU_BACKEND_NULL;
 
-    if (!yscr_open(&scr, &sd)) { fprintf(stderr, "trial_audio_keyboard: %s\n", yscr_error(&scr)); return 1; }
-    memset(&gd, 0, sizeof gd);
-    gd.screen = &scr;
-    gd.background[0] = gd.background[1] = gd.background[2] = 0.5f;
-    if (!ygfx_open(&gfx, &gd)) { fprintf(stderr, "trial_audio_keyboard: %s\n", ygfx_error(&gfx)); return 1; }
-    {
-        ygfx_shape_desc d;
-        memset(&d, 0, sizeof d);
-        d.shape = YGFX_CROSS;
-        d.w = d.h = 16;
-        d.shape_p[0] = 3;
-        d.color[0] = d.color[1] = d.color[2] = 0.2f;
-        fix = ygfx_shape(&d);
+    /* the display and the graphics, opened together and primed */
+    if (!ygfx_open_screen(&gfx, &scr, &(yscr_desc){ .backend = sim ? YSCR_BACKEND_SIM : 0, .windowed = !fullscreen },
+                          &(ygfx_desc){ .background = { 0.5f, 0.5f, 0.5f } })) {
+        fprintf(stderr, "trial_audio_keyboard: %s\n", ygfx_error(&gfx));
+        return 1;
     }
+    fix = ygfx_shape(&(ygfx_shape_desc){ .shape = YGFX_CROSS, .w = 16, .h = 16, .shape_p = { 3 },
+                                         .color = { 0.2f, 0.2f, 0.2f } });
 
     /* the sound: the default device in the project format (48 kHz stereo) */
     ad.arena_bytes = 1 << 20;
     if (!yau_open(&au, &ad)) { fprintf(stderr, "trial_audio_keyboard: %s\n", yau_error(&au)); return 1; }
 
-    memset(&cd, 0, sizeof cd);
-    cd.text = conditions_csv;
-    cd.len = sizeof conditions_csv - 1;
-    cd.arena = table_arena;
-    cd.arena_size = sizeof table_arena;
-    if (!ytb_open_csv(&tab, &cd)) { fprintf(stderr, "trial_audio_keyboard: %s\n", ytb_error(&tab)); return 1; }
+    if (!ytb_open_csv(&tab, &(ytb_csv_desc){ .text = conditions_csv, .len = sizeof conditions_csv - 1,
+                                             .arena = table_arena, .arena_size = sizeof table_arena })) {
+        fprintf(stderr, "trial_audio_keyboard: %s\n", ytb_error(&tab));
+        return 1;
+    }
     stim_col = ytb_col(&tab, "stimulus");
     key_col = ytb_col(&tab, "key_answer");
     for (i = 0; i < 2; i++) {
@@ -168,40 +161,34 @@ int main(int argc, char** argv) {
         tones[i] = yau_tone(&au, &t);
         if (!tones[i].frames) { fprintf(stderr, "trial_audio_keyboard: %s\n", yau_error(&au)); return 1; }
     }
-    memset(&rd, 0, sizeof rd);
-    rd.table = &tab;
-    rd.reps = reps;
-    rd.order = YTR_ORDER_RANDOM;
-    rd.rng = ytr_splitmix;
-    rd.rng_ctx = &seed;
-    rd.jitters[0] = ytr_uniform("foreperiod", YRT_MS(600), YRT_MS(1000));   /* any time: a sound is not on the frame grid */
-    rd.n_jitters = 1;
-    if (!ytr_open(&trials, &rd)) { fprintf(stderr, "trial_audio_keyboard: %s\n", ytr_error(&trials)); return 1; }
+    /* any time: a sound is not on the frame grid */
+    if (!ytr_open(&trials, &(ytr_desc){ .table = &tab, .reps = reps, .order = YTR_ORDER_RANDOM, .rng = ytr_splitmix,
+            .rng_ctx = &seed, .n_jitters = 1, .jitters = { ytr_uniform("foreperiod", YRT_MS(600), YRT_MS(1000)) } })) {
+        fprintf(stderr, "trial_audio_keyboard: %s\n", ytr_error(&trials));
+        return 1;
+    }
 
     /* f or j, within 2 s of the tone's onset, none before 0.1 s */
-    memset(&pd, 0, sizeof pd);
-    pd.choices = keys;
-    pd.n_choices = 2;
-    pd.duration_ns = YRT_S(RESPONSE_S);
-    pd.min_rt_ns = YRT_S(MIN_RT_S);
-    if (!yrsp_open(&rsp, &pd)) { fprintf(stderr, "trial_audio_keyboard: %s\n", yrsp_error(&rsp)); return 1; }
+    if (!yrsp_open(&rsp, &(yrsp_desc){ .choices = keys, .n_choices = 2, .duration_ns = YRT_S(RESPONSE_S),
+                                       .min_rt_ns = YRT_S(MIN_RT_S) })) {
+        fprintf(stderr, "trial_audio_keyboard: %s\n", yrsp_error(&rsp));
+        return 1;
+    }
 
-    out = fopen(out_path, "w");
-    if (!out) { fprintf(stderr, "trial_audio_keyboard: cannot write %s\n", out_path); return 1; }
-    ytr_format_meta(&trials, meta, sizeof meta);
-    meta[strcspn(meta, "\r\n")] = 0;
+    /* the data file, and the settings beside it */
     yscr_describe(&scr, line, sizeof line);
     yau_describe(&au, aline, sizeof aline);
-    fprintf(out, "# %s\n# %s\n# %s\n# ysp_response %s; keyboard: %s\n", meta, line, aline, yrsp_version(),
-            sim ? "synthetic (tier SIM)" : "SDL through yscr_event_input");
-    fprintf(out, "trial_index,stimulus,key_answer,response,rt,correct,foreperiod,onset_tier,onset_src,audio_residual,"
-                 "audio_flags,rsp_tier,rsp_flags,n_early,n_anticipations\n");
+    snprintf(meta, sizeof meta, "screen=%s\naudio=%s\nysp_response=%s\nkeyboard=%s\n", line, aline, yrsp_version(),
+             sim ? "synthetic (tier SIM)" : "SDL through yscr_event_input");
+    snprintf(meta_path, sizeof meta_path, "%s.meta", out_path);
+    if (!ytr_data_open(&data, &(ytr_data_desc){ .path = out_path, .trials = &trials, .cols = cols,
+            .n_cols = (int)(sizeof cols / sizeof cols[0]), .meta_path = meta_path, .meta = meta })) {
+        fprintf(stderr, "trial_audio_keyboard: %s\n", ytr_data_error(&data));
+        return 1;
+    }
     printf("%s\n%s\n", line, aline);
 
-    ygfx_prime(&gfx);   /* each kind's first draw now, not on a trial's first frames (docs/gfx.md) */
     for (;;) {
-        SDL_Event ev;
-        yrsp_input in;
         int fr = yscr_begin(&scr, &f);
         if (fr == YSCR_QUIT) { aborted = 1; break; }
         if (fr != YSCR_OK) { fprintf(stderr, "trial_audio_keyboard: %s\n", yscr_error(&scr)); failed = 1; break; }
@@ -209,11 +196,9 @@ int main(int argc, char** argv) {
         if (!in_trial) {
             /* a new trial: the tone after the foreperiod, the window open from now */
             int c;
-            const char* ka;
             if (ytr_next(&trials, &ti) < 0) break;
             c = ti.condition;
-            ka = ytb_text(&tab, c, key_col);
-            snprintf(key_answer, sizeof key_answer, "%s", ka ? ka : "");
+            key_answer = ytb_text(&tab, c, key_col);
             t_tone = f.onset + ytr_jitter(&trials, ti.index, 0).ns;
             id = yau_play_at(&au, tones[c], t_tone);
             if (id <= 0) { fprintf(stderr, "trial_audio_keyboard: play: %s\n", yau_strerror((int)id)); failed = 1; break; }
@@ -257,35 +242,29 @@ int main(int argc, char** argv) {
             yrsp_set_onset(&rsp, &o);
         }
 
-        while (yscr_poll(&scr, &ev, NULL))
-            if (yscr_event_input(&scr, &ev, &in)) yrsp_feed(&rsp, &in);
+        yrsp_feed_screen(&scr, &rsp, 1);
         while (sim && sim_next < n_sim_ev && sim_ev[sim_next].t <= f.onset) yrsp_feed(&rsp, &sim_ev[sim_next++]);
 
-        if (responding && yrsp_update(&rsp, f.onset) == YRSP_ENDED) {
+        if (yrsp_update(&rsp, f.onset) == YRSP_ENDED && responding) {
             responding = 0;
             t_end = f.onset;
         }
 
         /* the interval is over and the record is complete: the row */
         if (!responding && rc == YAU_OK && f.onset >= t_end + YRT_S(ITI_S)) {
-            char rt[32];
-            int correct;
             yrsp_finish(&rsp, &res);
-            correct = (res.flags & YRSP_R_RESPONDED) && res.response_name && !strcmp(res.response_name, key_answer);
-            if (res.rt_ns != YRSP_NO_TIME) snprintf(rt, sizeof rt, "%.9f", YRT_TO_S(res.rt_ns));
-            else rt[0] = 0;
-            fprintf(out, "%d,%s,%s,%s,%s,%d,%.9f,%u,%u,%.9f,%u,%u,%u,%d,%d\n", ti.index,
-                    ytb_text(&tab, ti.condition, stim_col), key_answer, res.response_name ? res.response_name : "", rt,
-                    correct, YRT_TO_S(ytr_jitter(&trials, ti.index, 0).ns), (unsigned)res.onset_tier, (unsigned)res.onset_src,
-                    (double)res.onset_residual / 1e9, (unsigned)rec.flags, (unsigned)res.stamp_tier, (unsigned)res.flags,
-                    res.n_early, res.n_anticipations);
-            fflush(out);
-            printf("trial %2d %-4s tone tier %u residual %+.3f ms rt %s response %s %s\n", ti.index,
-                   ytb_text(&tab, ti.condition, stim_col), (unsigned)res.onset_tier, (double)res.onset_residual / 1e6,
-                   rt[0] ? rt : "-", res.response_name ? res.response_name : "-",
-                   !(res.flags & YRSP_R_RESPONDED) ? "(too slow)" : correct ? "correct" : "wrong");
-            ytr_update(&trials, (res.flags & YRSP_R_RESPONDED) ? correct : YTR_INVALID, NULL);
-            if (ti.index < SIM_TRIALS) { sim_res[ti.index] = res; sim_correct[ti.index] = correct; }
+            r.trial_index = ti.index;
+            r.correct = (res.flags & YRSP_R_RESPONDED) && res.response_name && !strcmp(res.response_name, key_answer);
+            r.audio_flags = rec.flags;
+            ytr_update(&trials, (res.flags & YRSP_R_RESPONDED) ? r.correct : YTR_INVALID, NULL);
+            if (yrsp_data_set(&data, &res) < 0 || ytr_data_write(&data, &r) < 0) {
+                fprintf(stderr, "trial_audio_keyboard: %s\n", ytr_data_error(&data));
+                failed = 1;
+            }
+            printf("trial %2d %-4s tone tier %u residual %+.3f ms, %s\n", ti.index, ytb_text(&tab, ti.condition, stim_col),
+                   (unsigned)res.onset_tier, (double)res.onset_residual / 1e6,
+                   !(res.flags & YRSP_R_RESPONDED) ? "too slow" : r.correct ? "correct" : "wrong");
+            if (ti.index < SIM_TRIALS) { sim_res[ti.index] = res; sim_correct[ti.index] = r.correct; }
             rows++;
             in_trial = 0;
         }
@@ -296,7 +275,7 @@ int main(int argc, char** argv) {
         ygfx_end(&gfx);
         yscr_flip(&scr);
     }
-    fclose(out);
+    if (ytr_data_finish(&data) < 0) { fprintf(stderr, "trial_audio_keyboard: %s\n", ytr_data_error(&data)); failed = 1; }
     yau_describe(&au, aline, sizeof aline);
     printf("%s\n", aline);
     yau_close(&au);
@@ -311,18 +290,18 @@ int main(int argc, char** argv) {
         int bad = rows != SIM_TRIALS;
         if (bad) fprintf(stderr, "trial_audio_keyboard: --sim: %d rows, not %d\n", rows, SIM_TRIALS);
         for (i = 0; i < rows && i < SIM_TRIALS; i++) {
-            const yrsp_result* r = &sim_res[i];
-            int ok = r->onset_src == YRSP_ONSET_AUDIO && r->onset_tier == YAU_TIER_SIM &&
-                     !(r->flags & YRSP_R_ONSET_PLAN) && llabs(r->onset_residual) <= YRT_MS(10);
-            if (i == 3) ok = ok && !(r->flags & YRSP_R_RESPONDED) && (r->flags & YRSP_R_TIMEOUT);
-            else ok = ok && (r->flags & YRSP_R_RESPONDED) &&
-                      fabs(YRT_TO_S(r->rt_ns) - (double)(sim_t_press[i] - r->t_onset) / 1e9) < 1e-9 && sim_correct[i] == (i < 2);
-            if (i == 1) ok = ok && r->n_early == 1;
-            if (i == 2) ok = ok && r->n_anticipations == 1;
+            const yrsp_result* sr = &sim_res[i];
+            int ok = sr->onset_src == YRSP_ONSET_AUDIO && sr->onset_tier == YAU_TIER_SIM &&
+                     !(sr->flags & YRSP_R_ONSET_PLAN) && llabs(sr->onset_residual) <= YRT_MS(10);
+            if (i == 3) ok = ok && !(sr->flags & YRSP_R_RESPONDED) && (sr->flags & YRSP_R_TIMEOUT);
+            else ok = ok && (sr->flags & YRSP_R_RESPONDED) &&
+                      fabs(YRT_TO_S(sr->rt_ns) - (double)(sim_t_press[i] - sr->t_onset) / 1e9) < 1e-9 && sim_correct[i] == (i < 2);
+            if (i == 1) ok = ok && sr->n_early == 1;
+            if (i == 2) ok = ok && sr->n_anticipations == 1;
             if (!ok) {
                 fprintf(stderr, "trial_audio_keyboard: --sim: trial %d: rt %.9f flags 0x%x tier %u src %u residual %lld "
-                                "n_early %d n_anticipations %d\n", i, YRT_TO_S(r->rt_ns), (unsigned)r->flags, (unsigned)r->onset_tier,
-                        (unsigned)r->onset_src, (long long)r->onset_residual, r->n_early, r->n_anticipations);
+                                "n_early %d n_anticipations %d\n", i, YRT_TO_S(sr->rt_ns), (unsigned)sr->flags, (unsigned)sr->onset_tier,
+                        (unsigned)sr->onset_src, (long long)sr->onset_residual, sr->n_early, sr->n_anticipations);
                 bad = 1;
             }
         }

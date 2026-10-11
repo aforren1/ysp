@@ -3013,6 +3013,101 @@ module it unloads, which a suppression cannot name, so the test runs GL
 under a sanitizer only when `YGFX_TEST_DEVICES` asks for it. Locally,
 with GL on, everything passed under ASan and UBSan apart from that leak.
 
+## v0.15: the first trial's calls
+
+v0.15.0 adds three calls that every trial example had written out, for
+the first-trial work of 2026-10-10 (docs/response.md, "The first trial
+(v0.4.0)", has the decisions and the line counts):
+
+- `ygfx_open_screen()`: OPEN START's hook, `ygfx_open()` and
+  `ygfx_prime()` in one call. The trial examples in `examples/response/`
+  (not `trial_two_keyboards.c`) now open this way, so they get the
+  overlapped compile, which only `gfx_trial.c` had.
+- `ygfx_show_until_key()`: an instruction or break screen. It is a frame
+  loop in the header because an instruction screen is not timed and every
+  program wrote the same loop; a timed screen stays in the program's loop.
+- `ygfx_text_make()`, with `ysp/outline.h` included first: text from a
+  font file by its advances, wrapped at spaces and centered. Not shaping:
+  `pack/layout` (Skribidi) does that, and it is not a header. The call is
+  in this header, behind the include of `ysp/outline.h`, because
+  `ysp/outline.h` is pure computation and this header builds on
+  `ysp/screen.h` and `ysp/color.h` only.
+
+### What the text's first frame costs
+
+The text program is made at the first `ygfx_cset_make()`, and ANGLE makes
+its D3D shader objects at its first draw (see "v0.11: priming"). So
+`ygfx_text_make()` calls `ygfx_prime()` when its set made a program. It
+compares the program counts of `ygfx_program_stats()` before and after,
+so a second text, which makes no program, does not prime.
+
+Measured with a scratch program on 2026-10-11 (Windows 11, the Iris Xe,
+a 1920 x 1200 window in the foreground, AC, under the timing guard, three
+runs each): `trial_keyboard.c`'s instructions in Segoe UI at 32 px, made
+by `ygfx_text_make()` (prime) or by the same calls without the prime
+(no prime), then 180 frames that draw the text.
+
+| | Make the text | First frame's CPU | ygfx_end() of it | Frames 3 to 179, CPU p50 |
+|---|---|---|---|---|
+| no prime | 786 to 1695 ms | 10.1 to 11.0 ms | 10.1 to 10.9 ms | 0.18 to 0.21 ms |
+| prime | 1499 to 2193 ms | 0.76 to 1.30 ms | 0.74 to 1.25 ms | 0.16 to 0.29 ms |
+
+The make time is the text program's compile: no program cache was given
+(`desc.cache`). With the test's warm cache, the make took 17 ms (MSVC
+build) and 43 ms (MinGW build). The prime adds the draw of every program
+made so far (15 here). In these runs no first frame was late; the
+10 ms is a frame's budget at 100 Hz and two thirds of one at 60 Hz, on a
+frame that a program also uses for other work. The window runs had 0 to 6
+late frames among frames 3 to 179 in both modes, so a window in a
+desktop session is not a quiet display; the first frames were not among
+them.
+
+### Tests and mutations
+
+`tests/adapt/gfx_test.c`'s part "v0.15 first" (ANGLE on the Iris Xe,
+MSVC 19.44 and MinGW-w64 gcc 16.1): the open in one call and its refusal
+of a taken `on_context`; the loop's arguments and its end at `max_ns`
+(the last frame is the first planned at `max_ns` or later); a font that
+does not open, named in the message; a text's items, lines, line height,
+centering, wrap, and ink inside its bounds only (495 pixels inside, 0
+outside); the prime of the first text alone. Mutants `ft-01` to `ft-05`,
+5 of 5 caught. The key path needs SDL input, which the headless test does
+not have. A scratch program checked it in a window on 2026-10-11, with
+SDL key events pushed from a second thread: a space pushed before the
+first frame and a J (not in the list) did not end the loop; a space 1.5 s
+later did, and `*key` held its press (scancode 44, its time). OS input
+did not reach the window: the session gave no foreground to a program
+started from the background, so `SendInput()` went to another window.
+
+## v0.14.0: PPM only
+
+The user decided on 2026-10-10 that capture writes PPM only: the stored
+PNG measured slower (14.7 to 18.5 ms a 1920 x 1200 frame against 8.0 to
+11.4 ms), and every tool the files go to opens PPM. v0.14.0 removes
+`YGFX_IMAGE_PNG`, the PNG writer and its CRC-32 and Adler-32 (about 130
+lines of the header, 4 KB of tables on the writer's stack), and the PNG
+reader and checksums of the test.
+
+| Question | Decision | Why |
+|---|---|---|
+| `ygfx_capture_desc.format`, `YGFX_IMAGE_PPM` and the `format` argument of `ygfx_image_write()` | Removed; the version is 0.14.0, not 0.13.1 | With one value, the field is always 0 and the argument always `YGFX_IMAGE_PPM`: an argument every call passes for nothing. Capture shipped in v0.13.0 the same week; every caller in the repository is changed (6 examples, the test, the compile check). A caller that set the field or passed the argument now fails to compile, which says what changed; a field kept with one value would accept `YGFX_IMAGE_PNG`'s old value 2 and fail only at run time |
+| The comment | One `#` line for each line of the comment | As before; the test now writes a two-line comment and reads both lines back, and mutant `cp-17` (the second line without its `#`) checks it |
+
+## v0.13.1: render targets under WebGL
+
+The gallery compiled for the browser ([web.md](web.md)) drew page 1 with
+133 draws refused in Chrome 154: `GL_INVALID_OPERATION: Feedback loop
+formed between Framebuffer and active Texture`. The scene target's texture
+stayed bound to a texture unit after the output stage sampled it, and the
+next frame's draws into the scene had programs with a sampler on that
+unit. WebGL refuses such a draw whether or not the shader reads the
+sampler; GL ES calls it undefined only when the texture is sampled, so
+ANGLE and Mesa drew. A pass into a target now unbinds that target's
+texture from every unit first, through the cached bindings, so it costs
+nothing when none matches. After it: no refused draw on any of the 8
+pages. The native tests cannot see the fault (no GL ES driver refuses the
+draw), so it has no mutant.
+
 ## v0.13: stimulus capture
 
 "Next" item 11. A trial can keep the frames it showed: every Nth frame, or
@@ -3094,7 +3189,7 @@ MZVL21T0HDLU), three guard sessions on AC:
 The PNG's extra time was its two checksums (CRC-32 by slicing by 4, and
 Adler-32) over 6.9 MB. PPM keeps up with every frame at 60 Hz on one
 writer; PNG held every second frame. v0.14.0 writes PPM only (see
-"v0.14.0: PPM only" below). The comment is the frame index, the predicted
+"v0.14.0: PPM only" above). The comment is the frame index, the predicted
 onset, the rectangle and the record (onset, planned, target, residual,
 dropped, flags, path, tier), one PPM comment line for each line of it.
 
@@ -3231,35 +3326,6 @@ here: Linux, emcc, the sanitizers (CI runs them).
   "The file format"). The user removed it on 2026-10-10 (v0.14.0).
 - examples/outline/font.c keeps its own PGM writer: it includes only
   ysp/outline.h, and `ygfx_image_write()` would pull in ysp/gfx.h and SDL.
-
-## v0.14.0: PPM only
-
-The user decided on 2026-10-10 that capture writes PPM only: the stored
-PNG measured slower (14.7 to 18.5 ms a 1920 x 1200 frame against 8.0 to
-11.4 ms), and every tool the files go to opens PPM. v0.14.0 removes
-`YGFX_IMAGE_PNG`, the PNG writer and its CRC-32 and Adler-32 (about 130
-lines of the header, 4 KB of tables on the writer's stack), and the PNG
-reader and checksums of the test.
-
-| Question | Decision | Why |
-|---|---|---|
-| `ygfx_capture_desc.format`, `YGFX_IMAGE_PPM` and the `format` argument of `ygfx_image_write()` | Removed; the version is 0.14.0, not 0.13.1 | With one value, the field is always 0 and the argument always `YGFX_IMAGE_PPM`: an argument every call passes for nothing. Capture shipped in v0.13.0 the same week; every caller in the repository is changed (6 examples, the test, the compile check). A caller that set the field or passed the argument now fails to compile, which says what changed; a field kept with one value would accept `YGFX_IMAGE_PNG`'s old value 2 and fail only at run time |
-| The comment | One `#` line for each line of the comment | As before; the test now writes a two-line comment and reads both lines back, and mutant `cp-17` (the second line without its `#`) checks it |
-
-## v0.13.1: render targets under WebGL
-
-The gallery compiled for the browser ([web.md](web.md)) drew page 1 with
-133 draws refused in Chrome 154: `GL_INVALID_OPERATION: Feedback loop
-formed between Framebuffer and active Texture`. The scene target's texture
-stayed bound to a texture unit after the output stage sampled it, and the
-next frame's draws into the scene had programs with a sampler on that
-unit. WebGL refuses such a draw whether or not the shader reads the
-sampler; GL ES calls it undefined only when the texture is sampled, so
-ANGLE and Mesa drew. A pass into a target now unbinds that target's
-texture from every unit first, through the cached bindings, so it costs
-nothing when none matches. After it: no refused draw on any of the 8
-pages. The native tests cannot see the fault (no GL ES driver refuses the
-draw), so it has no mutant.
 
 ## v0.12.0: a message for every failure
 

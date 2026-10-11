@@ -21,7 +21,7 @@ C11 or C++17, and its top comment is its manual.
 | [aep](docs/adapt.md) | `yaep_` | Gaussian-process adaptive estimation (AEPsych features) | 0.15.0 | tested |
 | [timeline](docs/timeline.md) | `ytl_` | Events, tracks and keyframes on the clock | 0.6.0 | tested |
 | [input](docs/input.md) | `yin_` | The input event that every device shares | 0.4.0 | 1 machine |
-| [response](docs/response.md) | `yrsp_` | Trial responses and RT from any input device | 0.3.0 | 1 machine |
+| [response](docs/response.md) | `yrsp_` | Trial responses and RT from any input device | 0.4.0 | 1 machine |
 | [box](docs/box.md) | `ybox_` | Response and trigger box protocols, bytes to events | 0.3.0 | no device |
 | [device](docs/device.md) | `ydev_` | Boxes and boards on the rig clock, with outputs | 0.3.0 | no device |
 | [rigfile](docs/device.md#how-to-keep-a-rigs-devices-and-latencies-in-its-rig-profile) | `yrig_` | Rig profile: devices per role, loopback results | 0.3.0 | no device |
@@ -31,7 +31,7 @@ C11 or C++17, and its top comment is its manual.
 | [outline](docs/outline.md) | `yol_` | Paths, font glyphs and SVG into curve sets | 0.3.1 | tested |
 | [screen](docs/screen.md) | `yscr_` | Stimulus window, flip at a time, flip records; a web backend | 0.7.0 | 1 machine |
 | [audio](docs/audio.md) | `yau_` | Sound at a time on the rig clock | 0.4.0 | 1 machine |
-| [gfx](docs/gfx.md) | `ygfx_` | GL ES 3.0 stimuli: shapes, gratings, gabors, text, frame capture | 0.14.0 | 1 machine |
+| [gfx](docs/gfx.md) | `ygfx_` | GL ES 3.0 stimuli: shapes, gratings, gabors, text, frame capture | 0.15.0 | 1 machine |
 | [video](docs/video.md) | `yvid_` | Movies as stimuli, frame by predicted onset | 0.3.0 | 1 machine |
 
 Each header is `include/ysp/<name>.h`; macros use the uppercase prefix

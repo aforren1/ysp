@@ -60,11 +60,13 @@ unless your file already did.
 | net | rt.h, input.h | net.h, rt.h, input.h | liblsl, loaded at run time |
 | screen | rt.h, input.h | screen.h, rt.h, input.h | SDL3; ANGLE's DLLs at run time on Windows |
 | audio | rt.h | audio.h, rt.h | miniaudio 0.11.25 (`YAU_NO_MINIAUDIO`: none) |
-| gfx | screen.h, color.h | gfx.h, screen.h, color.h, rt.h, input.h | as screen |
+| gfx | screen.h, color.h | gfx.h, screen.h, color.h, rt.h, input.h (+ outline.h for `ygfx_text_make()`) | as screen |
 | video | gfx.h, timeline.h | video.h, gfx.h, timeline.h, screen.h, color.h, rt.h, input.h | as screen; pl_mpeg for MPEG-1 (optional) |
 
-ysp/response.h also has adapters for ysp/screen.h, ysp/audio.h and
-ysp/timeline.h; they exist when you include those headers before it.
+ysp/response.h also has adapters for ysp/screen.h, ysp/audio.h,
+ysp/timeline.h and ysp/trials.h; they exist when you include those headers
+before it. ysp/gfx.h has `ygfx_text_make()` when you include ysp/outline.h
+before it.
 
 ## Headers
 
@@ -255,6 +257,7 @@ Purpose: The response of a trial from any input device: a device-neutral event (
 
 Status:
 
+- v0.4.0: helpers for the frame loop (`yrsp_update_frame()`: the stimulus frame's flip record as the final onset, then the deadline; `yrsp_feed_screen()`; `yrsp_set_landing()`) and the data file (`YRSP_DATA_COLS`, `yrsp_data_set()`: the onset's source, tier, residual and the landing residual in every row), inline where ysp/screen.h, ysp/timeline.h and ysp/trials.h came first; `result.plan_residual`. `trial_keyboard.c` went from 256 to 184 lines of code without `--sim` and moved no flip in a window or fullscreen; 8 of 8 new mutants caught. [The first trial](response.md#the-first-trial-v040).
 - v0.3.0: times in `int64_t` ns (`duration_ns`, `min_rt_ns`, `max_hold_ns`, `rt_ns`, `rt_key_duration_ns` with `YRSP_NO_TIME` for none, `stamp_lo_ns`), `yrsp_open()` and `yrsp_close()`, every failing call writes `yrsp_error()`; 2 of 2 new mutants caught.
 - v0.2.0 (a trim: the second-report rule moved to ysp/screen.h v0.4.1's input bridge, so every consumer gets it; the CSV row and `settle` removed).
 - v0.1.4: ALL mode excludes SYNC events.
@@ -418,6 +421,7 @@ Purpose: Stimuli on GL ES 3.0 over ysp/screen.h: signed-distance shapes with a s
 
 Status:
 
+- v0.15.0: `ygfx_open_screen()` (the screen and the gfx with OPEN START's overlap, then primed, in one call), `ygfx_show_until_key()` (an instruction or break screen), and with ysp/outline.h first `ygfx_text_make()` (text by advances, wrapped and centered, its program primed: the text's first frame 0.8 to 1.3 ms of CPU against 10.1 to 11.0 ms unprimed on the Iris Xe); 5 of 5 new mutants caught.
 - v0.14.0: capture writes PPM only (the user, 2026-10-10): `YGFX_IMAGE_PNG`, `YGFX_IMAGE_PPM`, `ygfx_capture_desc.format` and the `format` argument of `ygfx_image_write()` removed, with the stored-PNG writer and its CRC-32 and Adler-32; the PPM writer's two-line comment tested; PNG's 3 mutants removed, 1 added.
 - v0.13.1: fixed under WebGL: a pass into a render target unbinds its texture from every unit first; WebGL refused every draw with it bound to a sampled unit (133 on the gallery's first page in Chrome 154). No change natively.
 - v0.13.0: stimulus capture during a trial, opt-in: every Nth frame or marked frames copied from the output stage into pixel buffers with fences, mapped a frame later without a wait, tagged with the frame index and flip record, and written by a writer thread at below normal priority (PPM or stored PNG, or a callback); a full ring drops and counts the frame; manual mode (and `YRT_NO_THREADS`) leaves maps and writes to `ygfx_capture_pump()` between trials; each capture call writes `ygfx_error()` when it fails, and `ygfx_image_write()` (which replaces the examples' four PPM writers) writes its message into the caller's buffer. At 1920 x 1200 on the Iris Xe a captured frame costs 0.56 to 0.77 ms of GPU and 2.6 ms of frame-thread CPU in ANGLE's map; capture of every frame moved no flip fullscreen or in a window (no late target, no early flip, no interval over 16.69 ms); the writer keeps up with every frame in PPM (8 to 11 ms a file) and every second in PNG (15 to 18 ms). Copies equal `ygfx_read_output()` bit for bit on three renderers; 16 of 16 capture mutants caught.

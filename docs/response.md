@@ -1,120 +1,174 @@
 # ysp/response.h
 
-Status: v0.2.0, 2026-10-09. v0.2.0 is a trim: the second-report rule
-moved to `ysp/screen.h` v0.4.1's input bridge, and `yrsp_format_header()`,
-`yrsp_format_row()` and `desc.settle` are gone ("The trim of v0.2.0").
-The input event lives in `ysp/input.h` from v0.1.3 (`docs/input.md`);
-this header keeps its names as aliases. v0.1.4: `YRSP_KINDS_ALL` takes
-every kind but SYNC. The header's manual (its comment block) is
-the reference for each rule. This page has a tutorial built on
-`examples/response/trial_keyboard.c`, how-to guides for other devices, the data
-columns, the decisions with their evidence, and what the seven example
-trials show about the header.
+Status: v0.4.0, 2026-10-10. v0.4.0 adds helpers for the frame loop
+(`yrsp_update_frame()`, `yrsp_feed_screen()`, `yrsp_set_landing()`) and
+the data file (`YRSP_DATA_COLS`, `yrsp_data_set()`); "The first trial
+(v0.4.0)" has the decisions and the measurements. v0.3.0 moved every time
+to `int64_t` ns. v0.2.0 is a trim: the second-report rule moved to
+`ysp/screen.h` v0.4.1's input bridge ("The trim of v0.2.0"). The input
+event lives in `ysp/input.h` (`docs/input.md`); this header keeps its
+names as aliases. The header's manual (its comment block) is the
+reference for each rule. This page has a tutorial built on
+`examples/response/trial_keyboard.c`, how-to guides for other devices,
+the decisions with their evidence, and what the example trials show
+about the header.
 
 ## Tutorial: a keyboard trial with RT from the flip onset
 
-This tutorial runs `examples/response/trial_keyboard.c`, the ysp version of
-jsPsych's `html-keyboard-response`, and explains each part of it.
+In this tutorial, you run `examples/response/trial_keyboard.c`, the ysp
+version of jsPsych's `html-keyboard-response`. Then you read its data
+file and its code. At the end, you know where each number in a data row
+comes from.
 
-### 1. Run the example on the simulated display
+You need the examples built with SDL3 (the `msvc-full` preset,
+[build.md](build.md)).
 
-Build the examples with SDL3 (the `msvc-full` preset, [build.md](build.md)), then run:
+### 1. Run the trial on the simulated display
+
+Run:
 
 ```sh
 trial_keyboard --sim
 ```
 
-The simulated display needs no window. A synthetic participant presses
-keys. The program writes `trial_keyboard.csv` and checks its own results:
+The simulated display needs no window, and a synthetic participant
+presses the keys. The program shows its instructions for 0.5 s, runs six
+trials, writes `trial_keyboard.csv` and `trial_keyboard.csv.meta`, and
+checks its own results:
 
 ```text
-trial  0 circle rt 0.450000000 response f correct
-trial  1 square rt 0.520000000 response j correct
-trial  2 circle rt 0.400000000 response j wrong
-trial  3 square rt - response - (too slow)
-...
+trial  0 square rt 0.450 s, correct
+trial  1 circle rt 0.520 s, correct
+trial  2 square rt 0.400 s, wrong
+trial  3 circle too slow
+trial  4 circle rt 0.380 s, correct
+trial  5 square rt 0.610 s, correct
+6 trials written to trial_keyboard.csv
 --sim: every trial came out as scripted
 ```
 
-The trial order comes from the seed, so the stimuli in your output can
-differ. Trial 1 has an anticipation at 0.05 s before its response. Trial 2
-has a key that SDL reported two times, 9 ms apart: the input bridge's
-filter drops the second report (`n_duplicates` 1). Each trial counts one
-response.
+The seed sets the order of the stimuli, so your order can be different.
 
-### 2. Run it with a keyboard
+### 2. Run the trial with a keyboard
+
+Run:
 
 ```sh
 trial_keyboard --reps 2
 ```
 
-A window opens. Press F for a circle and J for a square. Press Shift+Esc
-to stop. The rows that are complete stay in the file.
+A window opens with the instructions. Press space to start. Press F when
+you see a circle and J when you see a square. After four trials, the
+program stops. To stop earlier, press Shift+Esc; the rows of the
+complete trials stay in the file.
 
-### 3. Read the code
+### 3. Read the data
 
-The example has five parts.
-
-1. **The conditions.** A CSV string goes through `ysp/table.h` into
-   `ysp/trials.h` (`desc.table`). `ytr_frames(ytr_uniform("iti", 0.8,
-   1.2), num, den)` draws the inter-trial interval in whole frames of the
-   display's rate. The draw goes into the data as the `iti` column.
-2. **The response rules.** One call:
-
-   ```c
-   yrsp_choice keys[2];
-   yrsp_desc d = { 0 };
-   memset(keys, 0, sizeof keys);
-   keys[0].key = "f";
-   keys[1].key = "j";
-   d.choices = keys;
-   d.n_choices = 2;
-   d.duration_ns = YRT_S(RESPONSE_S);
-   d.min_rt_ns = YRT_S(MIN_RT_S);
-   yrsp_open(&rsp, &d);
-   ```
-
-   `"f"` is the physical key at the US-layout F position. On an AZERTY
-   keyboard it is also F; on Dvorak it types "u". Durations are
-   `int64_t` ns; the program's constants are seconds (`RESPONSE_S`,
-   `MIN_RT_S`), as jsPsych's, and `YRT_S()` converts them.
-3. **The trial.** At the fixation, `yrsp_arm(&rsp, f.onset)` opens the
-   window. Presses before the stimulus are logged as EARLY. A
-   `ytl_seq` turns the fixation off and the stimulus on 0.5 s later.
-4. **The onset.** When the stimulus event lands on a frame,
-   `yrsp_onset_landing()` gives its planned onset. When that frame's
-   flip record completes (in `f.done[]` of a later `begin()`),
-   `yrsp_onset_flip()` gives the final onset with its tier. RT is
-   measured from the final onset.
-5. **Every frame.** Each SDL event goes through `yscr_event_input()` into
-   `yrsp_feed()`. `yscr_event_input()` drops a key's second report
-   (`ysp/screen.h`, "Second key reports"). `yrsp_update(&rsp, f.onset)` returns
-   `YRSP_ENDED` at the first response or at the deadline. The example
-   then hides the stimulus on that frame and shows the feedback. At the
-   end of the inter-trial interval, `yrsp_finish()` fills the result,
-   and the example writes the row.
-
-### 4. Read the data
+Open `trial_keyboard.csv` in a spreadsheet, R or pandas. Each row is one
+trial. Times are in seconds. An empty field means "none": no response,
+or no onset.
 
 | Column | Meaning |
 |---|---|
-| `trial_index`, `stimulus`, `key_answer` | The trial and its condition |
-| `response` | The choice's name; empty when there is no response |
-| `rt` | Seconds from the stimulus's flip onset; empty when there is no response |
-| `correct` | 1 when `response` equals `key_answer` |
-| `rt_key_duration` | Seconds from press to release of the response key |
-| `onset_tier` | The flip record's tier: 1 is an OS-observed vblank, 3 is a plan, 4 is the simulated display |
-| `onset_src` | 1 a flip record, 2 a sound, 3 a plan only |
-| `landing_residual` | Where the stimulus landed, minus where it was planned, in seconds |
-| `onset_frame` | The frame the stimulus landed on |
-| `rsp_tier` | The response stamp's tier (0 not measured end to end) |
-| `rsp_flags` | `YRSP_R_*` |
-| `n_anticipations` | Anticipations in the window |
-| `n_duplicates` | Second key reports that the input bridge dropped during the trial (`yscr_get_input_stats()`) |
-| `iti` | The drawn inter-trial interval, seconds |
+| `index` to `outcome` | The session's columns from `ysp/trials.h`: the trial number, the block, the condition row, and the outcome |
+| `stimulus`, `key_answer` | The condition, from the conditions table |
+| `iti` | The inter-trial interval that `ysp/trials.h` drew |
+| `trial_index`, `correct` | The trial number again, and 1 when `response` is `key_answer` |
+| `n_duplicates` | Second key reports that the input bridge dropped during the trial |
+| `response` | The key's name |
+| `rt` | From the stimulus's onset to the press |
+| `rt_key_duration` | From the press to the release |
+| `onset_src` | Where the onset came from: 1 a flip record, 3 a plan only |
+| `onset_tier` | How good the onset is: 1 an OS-observed vblank, 2 a composed path, 4 the simulated display |
+| `onset_residual` | How late the stimulus's frame appeared: the flip record's onset minus its planned onset |
+| `landing_residual` | How far the stimulus's frame is from the time in the sequence |
+| `onset_frame` | The frame the stimulus appeared on |
+| `rsp_tier`, `rsp_flags` | The press's stamp tier, and the `YRSP_R_*` flags of the result |
+| `n_anticipations`, `n_early` | Presses before 0.1 s, and presses before the stimulus |
 
-A row with `onset_tier` 3, or `onset_src` 3, has an RT that is good for
-task development only. The data row says so.
+A row with `onset_src` 3 has an RT from a prediction, not from a flip
+record. Use such a row for task development only.
+
+Open `trial_keyboard.csv.meta`. It has the session's settings, the
+screen's describe line and the keyboard's timing note. The last line,
+`rows=6 closed=1`, says that the program closed the file normally.
+
+### 4. Read the setup
+
+Open `examples/response/trial_keyboard.c`. `main()` first opens each
+part:
+
+1. **The display and the graphics.** One call opens the window and the
+   graphics, and draws each kind of stimulus once, so that a trial's
+   frames do not compile anything:
+
+   ```c
+   ygfx_open_screen(&gfx, &scr, &(yscr_desc){ .windowed = !fullscreen },
+                    &(ygfx_desc){ .background = { 0.5f, 0.5f, 0.5f } });
+   ```
+
+2. **The stimuli.** Six shapes: the fixation cross, the circle, the
+   square and three feedback rings. Each one has a timeline channel that
+   makes it visible.
+3. **The instructions.** `ygfx_text_make()` lays out the text with the
+   system's font and prepares its first draw. Later,
+   `ygfx_show_until_key()` shows it until the participant presses space.
+4. **The conditions.** A CSV string goes through `ysp/table.h` into
+   `ysp/trials.h`, which also draws the inter-trial interval in whole
+   frames.
+5. **The response rules.** F or J, within 1.5 s of the onset, and no
+   response before 0.1 s:
+
+   ```c
+   yrsp_open(&rsp, &(yrsp_desc){ .choices = keys, .n_choices = 2,
+       .duration_ns = YRT_S(RESPONSE_S), .min_rt_ns = YRT_S(MIN_RT_S), ... });
+   ```
+
+   `"f"` is the physical key at the F position of a US keyboard. C times
+   are `int64_t` ns; `YRT_S()` converts the program's seconds.
+6. **The data file.** The column list names the program's own columns
+   and adds `YRSP_DATA_COLS`, the response's columns:
+
+   ```c
+   static const ytr_col cols[] = {
+       YTR_COL(row, trial_index, YTR_COL_INT), YTR_COL(row, correct, YTR_COL_BOOL),
+       YTR_COL(row, n_duplicates, YTR_COL_INT), YRSP_DATA_COLS,
+   };
+   ```
+
+### 5. Read the frame loop
+
+Each pass of the `while` loop is one frame:
+
+1. `yscr_begin()` gives the frame and its predicted onset, `f.onset`.
+2. At the start of a trial, a `ytl_seq` puts the fixation on now and the
+   stimulus on 0.5 s later. `yrsp_arm(&rsp, f.onset)` opens the response
+   window.
+3. `yrsp_feed_screen(&scr, &rsp, 1)` gives every key event to the
+   collector.
+4. `yrsp_update_frame(&rsp, &f)` does two things. When the flip record
+   of the stimulus's frame arrives, it makes that record's onset the
+   onset that RT runs from. Then it returns `YRSP_ENDED` at the first
+   response or at the deadline. The program then hides the stimulus and
+   shows the feedback.
+5. `ytl_evaluate()` gives the events that land on this frame.
+   `yrsp_set_landing(&rsp, fired, n, stim_ch)` takes the stimulus's
+   onset event, if it is there: its planned onset is the onset until the
+   flip record arrives.
+6. At the end of the inter-trial interval, `yrsp_finish()` fills the
+   result, and the program writes the row:
+
+   ```c
+   yrsp_data_set(&data, &res);   /* the response's columns */
+   ytr_data_write(&data, &r);    /* and the program's own */
+   ```
+
+7. `ygfx_apply()` sets each stimulus from its channel, the stimuli are
+   drawn, and `yscr_flip()` shows the frame.
+
+You ran a trial on the simulated display and with a keyboard, read its
+data file, and found the call that puts each timing column in the row.
+The how-to guides below change the input device.
 
 ## How-to guides
 
@@ -326,6 +380,11 @@ The header's comment block lists every field and flag. In short:
 | `yrsp_entries(&c, &n)` | Every press of the window. |
 | `yrsp_from_sdl`, `yrsp_sdl_source` | SDL3 events and their source entries (inline, with SDL3). Without the bridge's filter: see "The double report". |
 | `yrsp_onset_flip`, `_audio`, `_landing` | Onsets from ysp/screen.h, ysp/audio.h, ysp/timeline.h records (inline). |
+| `yrsp_plan_frame(&c)` | The frame whose flip record makes the onset final; -1 when there is none. |
+| `yrsp_update_frame(&c, &f)` | That frame's record from `f.done` as the final onset, then `yrsp_update()` (inline, with ysp/screen.h). |
+| `yrsp_feed_screen(&s, c, n)` | Every input event on the screen's queue to n collectors (inline, with ysp/screen.h and SDL3). |
+| `yrsp_set_landing(&c, fired, n, ch)` | The plan from the ONSET event of channel `ch` (inline, with ysp/timeline.h). |
+| `YRSP_DATA_COLS`, `yrsp_data_set(&w, &r)` | The result's columns for ysp/trials.h's data writer (inline, with ysp/trials.h). |
 
 jsPsych option to ysp field:
 
@@ -657,6 +716,146 @@ block compiles as C99 and C++17 against `ysp/screen.h` and
 (no message) and `conv-02` (close keeps the collector open) are caught;
 `w-06` now checks the range of a desc duration, because the rounding it
 checked moved to the caller.
+
+## The first trial (v0.4.0)
+
+On 2026-10-10 the user approved item D of the usability review: make the
+first trial short. The smallest trial with a fixation, a stimulus,
+keyboard RT and saved data (`trial_keyboard.c`) had 256 lines of code
+without its `--sim` participant, and 12 of 13 trial examples had a copy of
+the same plumbing: arm at the fixation, take the planned onset when the
+stimulus lands, replace it with the flip record's onset when the record
+arrives, feed every input event, write the row by hand.
+
+### The helpers and where they live
+
+| Helper | Header | Why there |
+|---|---|---|
+| `yrsp_set_landing()` | `ysp/response.h`, inline with `ysp/timeline.h` | It reads a `ytl_event` and calls `yrsp_set_onset()`. `ysp/response.h` must not include `ysp/timeline.h` (both are pure computation), so it appears when the timeline came first, as `yrsp_onset_landing()` does since v0.1. |
+| `yrsp_update_frame()` | `ysp/response.h`, inline with `ysp/screen.h` | It reads `yscr_frame.done` and calls `yrsp_onset_flip()`, `yrsp_set_onset()` and `yrsp_update()`. The same rule. |
+| `yrsp_feed_screen()` | `ysp/response.h`, inline with `ysp/screen.h` and SDL3 | `yscr_poll()` needs a complete `SDL_Event`. A file that compiles `ysp/screen.h`'s implementation has it. |
+| `yrsp_plan_frame()` | `ysp/response.h`, a function | The frame the collector waits for. A function, so the test reaches it without a screen, and a program with its own record source (`yscr_on_flip()`) can use it. |
+| `YRSP_DATA_COLS`, `yrsp_data_set()` | `ysp/response.h`, inline with `ysp/trials.h` | The result's fields are this header's. `ysp/trials.h` includes only `ysp/table.h` and must not know a collector. |
+| `ygfx_open_screen()`, `ygfx_show_until_key()` | `ysp/gfx.h` | They need the screen and the gfx, which `ysp/gfx.h` has. |
+| `ygfx_text_make()` | `ysp/gfx.h`, with `ysp/outline.h` first | The font reader and the curve sets are `ysp/outline.h`'s, which is pure computation; `ysp/gfx.h` builds on `ysp/screen.h` and `ysp/color.h` only, so the text appears when `ysp/outline.h` came first ([conventions.md](conventions.md), Dependencies). |
+
+Every helper fits an existing header under the dependency rules, so
+there is no new header. The inline helpers call this header's functions
+only: a frame loop with them makes the same calls as the loop written out
+(the USAGE block has both forms).
+
+Timing stays visible in the row. `YRSP_DATA_COLS` writes the onset's
+source, tier and residual and the landing residual in every row, so a row
+whose RT came from a plan says so. The collector now keeps its first plan
+beside the final onset (`result.plan_residual`), because the final onset
+replaced the landing residual that `trial_keyboard.c` wrote before.
+
+Not done, and why:
+
+- One call for the input, the record and the deadline. The screen's
+  queue has more than one reader: `trial_adjustment` steps a value per
+  key, `trial_mouse_tracking` routes the bridge's events and SDL's, and
+  `trial_two_keyboards` routes by device. Those keep their own loop and
+  use `yrsp_update_frame()` alone.
+- `YRSP_ENDED` once. The status stays `YRSP_ENDED` until the next
+  `yrsp_arm()`, as before; the examples keep their `responding` flag.
+- A new thin header for the first trial. Not needed: see the table.
+
+### The examples
+
+`trial_keyboard.c` uses every helper, `ysp/trials.h`'s data writer and an
+instruction screen. Its columns are a superset of v0.3.0's: the
+self-check of `--sim` reads the file back and finds each one. The other
+examples in `examples/response/` (not `trial_two_keyboards.c`) use the
+helpers where they fit:
+
+| Example | total | code | loop | Helpers used | Data writer |
+|---|---|---|---|---|---|
+| `trial_keyboard` | 419 to 371 | 256 to 184 | 96 to 61 | all, and the instruction screen | yes |
+| `trial_same_different` | 397 to 363 | 253 to 213 | 97 to 78 | open, feed, update, landing | yes |
+| `trial_srt` | 366 to 338 | 237 to 211 | 79 to 66 | open, feed, update, landing | no |
+| `trial_adjustment` | 428 to 396 | 248 to 217 | 86 to 78 | open, update, landing | no |
+| `trial_mouse_tracking` | 496 to 482 | 315 to 300 | 119 to 110 | open, update, landing | no |
+| `trial_audio_keyboard` | 333 to 312 | 196 to 169 | 63 to 53 | open, feed | yes |
+| `trial_stop_signal` | 422 to 393 | 297 to 261 | 116 to 100 | open, feed, update, landing | yes |
+| `trial_2afc_adaptive` | 512 to 501 | 345 to 327 | 90 to 81 | open, feed, update, landing | yes |
+| `trial_stroop` | 510 to 492 | 353 to 333 | 103 to 90 | open, feed, update, landing | no |
+
+The counts: `total` is `wc -l`; `code` is the non-blank, non-comment
+lines without the `--sim` participant (a line that names a `sim` variable
+goes, with the block it opens); `loop` is the same inside the frame loop.
+Part of `code` is the setup's descs, now compound literals.
+
+The data writer is in `trial_keyboard`, `trial_same_different`,
+`trial_audio_keyboard`, `trial_stop_signal` and `trial_2afc_adaptive`.
+Not in the others: `trial_srt` opens a new trial list for each block,
+which a writer bound to one session does not follow; `trial_adjustment`
+and `trial_mouse_tracking` write a trajectory file beside the trial file
+and their columns are mostly their own; `trial_stroop` writes its rules
+text and the layout's stamp, and its conditions file can change the
+session's columns. Their files keep v0.3.0's format.
+
+### Measured: no flip moved
+
+`trial_keyboard` before (v0.3.0 example and headers) and after, built
+the same way (MSVC 19.44 `/O2`, a wrapper that logs every flip record and
+the frame thread's time from `yscr_begin()` returning to `yscr_flip()`
+being called), 20 trials with no key (each trial times out), two runs of
+each, interleaved, under the timing guard. Windows 11, the Iris Xe laptop,
+1920 x 1200 at 60 Hz, AC, 2026-10-10. The first 120 frames of each run
+are left out (the wrapper takes the foreground there); they had no late
+frame either, but for one in a before run.
+
+| Run | Frames | Late | Late target | Early | Tier | Interval mean, sd, max (ms) | CPU p50, p99, max (ms) |
+|---|---|---|---|---|---|---|---|
+| window, before 1 | 4055 | 0 | 0 | 0 | 1 | 16.6664, 0.0008, 16.672 | 0.144, 0.418, 1.150 |
+| window, before 2 | 4056 | 0 | 0 | 0 | 1 | 16.6664, 0.0008, 16.669 | 0.118, 0.272, 1.882 |
+| window, after 1 | 4056 | 0 | 0 | 0 | 1 | 16.6664, 0.0008, 16.673 | 0.128, 0.261, 0.922 |
+| window, after 2 | 4055 | 0 | 0 | 0 | 1 | 16.6664, 0.0009, 16.675 | 0.119, 0.268, 2.023 |
+| fullscreen, before 1 | 4060 | 0 | 0 | 0 | 1 | 16.6664, 0.0008, 16.670 | 0.113, 0.211, 0.379 |
+| fullscreen, before 2 | 4060 | 0 | 0 | 0 | 1 | 16.6664, 0.0003, 16.672 | 0.138, 0.310, 2.130 |
+| fullscreen, after 1 | 4059 | 0 | 0 | 0 | 1 | 16.6664, 0.0009, 16.672 | 0.125, 0.387, 1.661 |
+| fullscreen, after 2 | 4060 | 0 | 0 | 0 | 1 | 16.6664, 0.0003, 16.674 | 0.131, 0.326, 0.956 |
+
+No flip moved: no late, early or skipped frame in any run, every record
+tier 1 on the independent-flip path, and the frame thread's median time
+within the spread of the before runs (0.113 to 0.144 ms before, 0.119 to
+0.131 ms after). A first try of the window runs ran with the window in
+the background: DWM showed it at 15 Hz and every record was ESTIMATED, in
+both builds. A window that does not get the foreground is not a timing
+run.
+
+### Tests and mutations
+
+Checked on 2026-10-11 with MSVC 19.44 (`msvc-full`) and MinGW-w64 gcc
+16.1 (the `mingw` preset with SDL3 and the examples):
+
+- `tests/adapt/response_test.c`: 20,644 checks pass (20,709 with
+  `YRSP_TEST_SDL`). New: the plan kept beside the final onset, a
+  never-shown frame's record, `yrsp_plan_frame()`, `yrsp_set_landing()`
+  on a filled `ytl_event` array, `yrsp_update_frame()` on filled
+  `yscr_frame` records (the record of another frame ignored, the deadline
+  from `f.onset`), and the bytes `yrsp_data_set()` gives the data writer,
+  with and without an onset.
+- `tests/compile/response.c` and `.cpp` run the helpers with
+  `ysp/screen.h` and `ysp/timeline.h` included for their structs;
+  `tests/compile/gfx.c` and `.cpp` include `ysp/outline.h` first and run
+  `ygfx_show_until_key()`, a text whose font does not open and
+  `ygfx_open_screen()` on the simulated display.
+- Mutations: `fl-01` to `fl-08` in `tests/mutate/response.toml`, 8 of 8
+  caught (and `o-01`, whose anchor moved); `ft-01` to `ft-05` in
+  `tests/mutate/gfx.toml`, 5 of 5 caught.
+- The `--sim` runs of the nine converted examples pass on both compilers.
+  `trial_2afc_adaptive --sim` failed once of four while other builds
+  loaded the machine: one onset a frame after its plan, which the RT
+  check does not allow for (as before this change).
+
+Not checked: `yrsp_feed_screen()` outside the examples (no test has SDL
+input; the key path of `ygfx_show_until_key()` was checked with pushed
+SDL events, docs/gfx.md "v0.15"), a
+key pressed by hand, Linux and macOS (CI runs the tests and the
+`--sim` runs there; without DejaVu Sans or Liberation Sans the
+instruction screen of `trial_keyboard` is blank and says so).
 
 ## Verification
 
