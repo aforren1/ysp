@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ysp-serial"
-version = "0.5.0"  # tracks the ysp/serial.h version; keep the two in step
+version = "0.5.0.1"  # ysp/serial.h v0.5.0 plus binding revision 1 (times in seconds); tests/test_serial.py checks it against __version__
 description = "Serial-port byte I/O for trigger and response boxes"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -23,8 +23,9 @@ license = "MIT-0"
 # cp38-abi3. One build per platform serves every supported CPython.
 build = "cp39-*"
 skip = "*-musllinux_*"
-# Smoke test: the module imports and enumeration works with no device attached.
-test-command = "python -c \"import ysp.serial as ps; assert ps.Port and ps.Error; print('ports:', ps.list_ports())\""
+# The tests need no port: the argument checks run before any device call.
+test-requires = ["pytest"]
+test-command = "pytest {package}/tests -q"
 
 [tool.cibuildwheel.macos]
 # One wheel for Intel and Apple silicon. cibuildwheel cross-compiles the

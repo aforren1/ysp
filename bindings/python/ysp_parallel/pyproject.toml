@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ysp-parallel"
-version = "0.4.0"  # tracks the ysp/parallel.h version; keep the two in step
+version = "0.4.0.1"  # ysp/parallel.h v0.4.0 plus binding revision 1 (times in seconds); tests/test_parallel.py checks it against __version__
 description = "Parallel-port access (data/status/control, blocking and async pulses)"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -24,8 +24,9 @@ license = "MIT-0"
 build = "cp39-*"
 # macOS has no parallel port and the library #errors there; CI runs Linux + Windows.
 skip = "*-musllinux_*"
-# Smoke test: the module imports and the no-hardware path works on the runner.
-test-command = "python -c \"import ysp.parallel as pp; assert pp.Port and pp.Error; print('ports:', pp.list_ports())\""
+# The tests need no port: the argument checks run before any device call.
+test-requires = ["pytest"]
+test-command = "pytest {package}/tests -q"
 
 [tool.cibuildwheel.linux]
 # Ensure the Linux UAPI headers (<linux/ppdev.h>) are present in the manylinux

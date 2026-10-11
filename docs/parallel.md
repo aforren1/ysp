@@ -45,9 +45,17 @@ enum. `= { 0 }` works for these structs in C only. The USAGE blocks of the
 device headers were each compiled as C99 (gcc -Wall -Wextra -Werror) and
 C++17 (g++) on 2026-10-10.
 
-The Python and MATLAB bindings keep their API: widths in microseconds and an
-exception (or a MATLAB error) on failure. Their C glue converts the units and
-tests `rc < 0` instead of the message.
+The Python and MATLAB bindings raise an exception (or a MATLAB error) on
+failure. Their C glue tests `rc < 0` instead of the message. They first kept
+widths in microseconds and the RT reservation in nanoseconds. On 2026-10-11
+they moved to seconds, as the Conventions require of every binding:
+`ysp-parallel` 0.4.0.1 has `now()`, `pulse(value, width)`,
+`pulse_async(value, width)` and `Port(rt_runtime=, rt_deadline=,
+rt_period=)`, and the MEX function has `'now'`, widths in seconds and an RT
+struct with `runtime`, `deadline` and `period` in seconds. A negative, NaN
+or infinite time is refused before the library is called. The MEX function
+refuses the old `*_ns` struct fields by name, because a nanosecond value
+read as seconds would be a reservation of days.
 
 Checked on 2026-10-10 on Windows 11: `tests/compile/parallel.c` (C11, C++17,
 `YPAR_NO_THREADS`) names every entry point by type and calls them on a zeroed

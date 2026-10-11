@@ -27,3 +27,34 @@ This page is reference: the language bindings of the headers.
   PAL_AMUD, on one response stream; the MEX README has the results.
   `tests/compare/color_ptb.m` runs `ysp_color` beside Psychtoolbox's
   colorimetric code (docs/color.md).
+
+## Units
+
+Every time in a binding is seconds, as a `double`: the arguments, the
+returned values, the constants and the clock read (`ysp.serial.now()`,
+`ysp.parallel.now()`, `ysp_parallel('now')`). No binding takes or returns
+milliseconds or microseconds, and a name does not carry the unit. The
+binding rounds each time to the nearest nanosecond for the C call and
+refuses a negative or NaN time before the call. "Wait forever" is
+`math.inf` in Python and `Inf` in MATLAB and Octave; 0 polls where the C
+call can poll. [Conventions](conventions.md) lists the exceptions.
+
+| Binding | Times in seconds |
+|---|---|
+| `ysp.serial` | `now()`, `read(n, timeout)`, `Port(write_timeout=, rt_runtime=, rt_deadline=, rt_period=)`, `pulse(on, off, width)`, `pulse_async(on, off, width)`, `send_break(duration)`, `write_timeout`, `sched`, `TIMEOUT_INFINITE` (`math.inf`), `DEFAULT_WRITE_TIMEOUT`, `DEFAULT_RT_*` |
+| `ysp.parallel` | `now()`, `Port(rt_runtime=, rt_deadline=, rt_period=)`, `pulse(value, width)`, `pulse_async(value, width)`, `sched`, `DEFAULT_RT_*` |
+| `ysp_parallel` (MEX) | `'now'`, `'pulse'` and `'pulseasync'` widths, the RT struct and `'sched'` (`runtime`, `deadline`, `period`) |
+| `ysp.quest`, `ysp.aep` and their MEX | `Async.wait(seq, timeout_s)` |
+| `ysp.trials` and its MEX | the jitter bounds; a drawn jitter gives `s`, and its exact `ns` beside it |
+
+## Versions
+
+A Python distribution's version is its header's version. A change to the
+binding alone adds a fourth number, which counts such changes and goes away
+when the header's version moves: `ysp-serial` 0.5.0.1 is `ysp/serial.h`
+v0.5.0 with the change to seconds, and `ysp-parallel` 0.4.0.1 is
+`ysp/parallel.h` v0.4.0 with the same change. PEP 440 accepts the fourth
+number as a release segment, and 0.5.0.1 sorts after 0.5.0 and before
+0.5.1. A post-release (0.5.0.post1) was not used: it means "no code
+changed", and this change breaks the API. Each package's tests check that
+`__version__` equals the version in `pyproject.toml`.

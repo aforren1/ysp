@@ -59,31 +59,48 @@ device = match[0]["name"] if match else "/dev/ttyUSB0"
 
 with ps.Port(device, baud=115200) as port:
     port.write_byte(0x55)                   # raise a trigger
-    port.pulse(0x55, 0x00, 2000)            # 0x55, hold 2 ms, then 0x00
-    port.pulse_async(0x55, 0x00, 2000)      # same, without blocking
-    frame = port.read(6, 500, all=True)     # a 6-byte frame within 500 ms
+    port.pulse(0x55, 0x00, 0.002)           # 0x55, hold 2 ms, then 0x00
+    port.pulse_async(0x55, 0x00, 0.002)     # same, without blocking
+    frame = port.read(6, 0.5, all=True)     # a 6-byte frame within 0.5 s
     pending = port.read(64, 0)              # poll: whatever is buffered now
 ```
 
 `read` returns `b""` on timeout. A disconnect, an `interrupt()` or a closed
 port raise instead, so a listener with a long timeout cannot spin on a dead
-port. `timeout_ms` must fit in 32 bits: a negative value raises
-`OverflowError` rather than becoming `TIMEOUT_INFINITE`.
+port.
+
+## Units
+
+Every time is a `float` (or `int`) in seconds, as in every ysp binding. The
+binding converts each one to the `int64_t` nanoseconds of the C API, rounded
+to the nearest nanosecond.
+
+| Value | Meaning |
+|---|---|
+| `0` | read: poll. `write_timeout`: refused (`ValueError`), because a write cannot poll; omit the argument for `DEFAULT_WRITE_TIMEOUT` (1 s). A width or a break of 0 is allowed. |
+| `math.inf` (`TIMEOUT_INFINITE`) | read and `write_timeout`: wait forever. Refused for a width, a break and the `rt_*` values. |
+| a negative value, NaN | refused (`ValueError`) before the library is called |
+| 9223372036 s or more | refused (`OverflowError`): it does not fit in `int64_t` nanoseconds |
+
+`None` is not a timeout: it raises `TypeError`. The OS waits in whole
+milliseconds, so a positive timeout rounds up to the next millisecond and
+never becomes a poll.
 
 Timestamp a trigger against the library's own clock, so your numbers and its
 deadlines share one base:
 
 ```python
-t0 = ps.now_us()                # monotonic microseconds
+t0 = ps.now()                   # monotonic seconds, a float
 port.write_byte(0x55)
-t1 = ps.now_us()
+t1 = ps.now()
 ```
 
 The physical onset lies after `t0` and, over USB, after the next frame
 boundary; `t1 - t0` is the syscall cost. Neither is the onset, they bound it.
-See TIMING in [ysp/serial.h](../../../include/ysp/serial.h). `ysp.parallel.now_us()`
+See TIMING in [ysp/serial.h](../../../include/ysp/serial.h). `ysp.parallel.now()`
 reads the same clock: both libraries build on `ysp/rt.h`, so one time base
-covers the whole rig.
+covers the whole rig. A `float` resolves this clock to 1.9 ns or better for
+the first 194 days of uptime.
 
 See [example.py](example.py).
 
@@ -132,27 +149,29 @@ port.close()            # now it is safe
 
 | | |
 |---|---|
-| `ps.now_us() -> int` | monotonic microseconds from the clock the library times its own deadlines against |
+| `ps.now() -> float` | monotonic seconds from the clock the library times its own deadlines against |
 | `ps.list_ports() -> list[dict]` | enumerate ports (`name`, `description`, `serial_number`, `location`, `vid`, `pid`) |
 | `ps.find_ports(vid=0, pid=0, serial_number=None, location=None, description=None, name=None) -> list[dict]` | the matching subset; zero/`None` matches anything |
-| `ps.Port(device, baud=0, data_bits=0, parity=PARITY_NONE, stop_bits=STOP_BITS_1, flow=FLOW_NONE, write_timeout_ms=0, exclusive=False, low_latency=False, dtr_low_on_open=False, rts_low_on_open=False, keep_dtr_on_close=False, rt_runtime_ns=0, rt_deadline_ns=0, rt_period_ns=0)` | open a port; `device` is required, a zero field means the library default |
-| `port.read(n, timeout_ms, all=False) -> bytes` | read; `all=True` waits for the full `n` |
+| `ps.Port(device, baud=0, data_bits=0, parity=PARITY_NONE, stop_bits=STOP_BITS_1, flow=FLOW_NONE, write_timeout=DEFAULT_WRITE_TIMEOUT, exclusive=False, low_latency=False, dtr_low_on_open=False, rts_low_on_open=False, keep_dtr_on_close=False, rt_runtime=0, rt_deadline=0, rt_period=0)` | open a port; `device` is required, times are seconds, a zero field means the library default |
+| `port.read(n, timeout, all=False) -> bytes` | read; `timeout` in seconds, 0 polls, `math.inf` waits forever; `all=True` waits for the full `n` |
 | `port.write(data) -> int` | write a bytes-like object, or any iterable of ints 0..255; returns the count accepted |
 | `port.write_byte(value) -> int` | write one byte; returns 1 |
-| `port.pulse(on, off, usec) -> int` | blocking pulse; returns 2 |
-| `port.pulse_async(on, off, usec) -> int` | non-blocking pulse via the RT worker thread; returns 1 |
+| `port.pulse(on, off, width) -> int` | blocking pulse, `width` in seconds; returns 2 |
+| `port.pulse_async(on, off, width) -> int` | non-blocking pulse via the RT worker thread; returns 1 |
 | `port.available() -> int` | bytes buffered by the driver |
 | `port.drain()` | wait until the transmit buffer is empty |
 | `port.purge(rx=True, tx=False)` | discard buffered bytes |
 | `port.interrupt()` | wake a `read()` blocked on another thread |
 | `port.set_dtr(on)` / `port.set_rts(on)` | drive the output lines |
 | `port.get_lines() -> int` | input lines as a `LINE_*` mask |
-| `port.send_break(ms)` | hold TX in the break state |
+| `port.send_break(duration)` | hold TX in the break state for `duration` seconds |
 | `port.close()`, `port.is_open` | lifecycle; `Port` is a context manager |
 
 Read-only properties: `is_open`, `device`, `baud`, `data_bits`, `parity`,
-`stop_bits`, `flow`, `write_timeout_ms`, `low_latency`, `keep_dtr_on_close`,
-`async_policy`, `rd_oserr`, `wr_oserr`, `misc_oserr`. The effective settings
+`stop_bits`, `flow`, `write_timeout` (seconds, `math.inf` for none),
+`low_latency`, `keep_dtr_on_close`, `sched` (the worker's effective
+`{runtime, deadline, period}` in seconds), `async_policy`, `rd_oserr`,
+`wr_oserr`, `misc_oserr`. The effective settings
 are what the driver accepted, not what you asked for. Log `async_policy`
 (`ASYNC_*`) next to timing data: `SCHED_DEADLINE` is refused without
 `CAP_SYS_NICE` or under CPU pinning, and the library falls back silently. The
@@ -160,11 +179,10 @@ are what the driver accepted, not what you asked for. Log `async_policy`
 `ysp.parallel`.
 
 Tune the async-pulse worker's real-time reservation (Linux
-[SCHED_DEADLINE](https://www.kernel.org/doc/html/latest/scheduler/sched-deadline.html); ns):
+[SCHED_DEADLINE](https://www.kernel.org/doc/html/latest/scheduler/sched-deadline.html); seconds):
 
 ```python
-port = ps.Port(device, rt_runtime_ns=1_000_000,
-               rt_deadline_ns=10_000_000, rt_period_ns=10_000_000)
+port = ps.Port(device, rt_runtime=0.001, rt_deadline=0.010, rt_period=0.010)
 ```
 
 The rule is `0 < runtime <= deadline <= period`; a zero period means "same as
@@ -183,8 +201,30 @@ The message is the library's `yser_strerror()` text plus the OS error number
 from the slot that belongs to the failing role (`rd_oserr`, `wr_oserr` or
 `misc_oserr`). Constants mirror the header: `PARITY_*`, `STOP_BITS_*`,
 `FLOW_*`, `LINE_*`, `PURGE_*`, `READ_*`, `ERR_*`, `ASYNC_*`,
-`TIMEOUT_INFINITE`, `DEFAULT_BAUD`, `DEFAULT_WRITE_TIMEOUT_MS`,
-`DEFAULT_RT_{RUNTIME,DEADLINE,PERIOD}_NS`.
+`TIMEOUT_INFINITE` (`math.inf`), `DEFAULT_BAUD`, and in seconds
+`DEFAULT_WRITE_TIMEOUT` and `DEFAULT_RT_{RUNTIME,DEADLINE,PERIOD}`.
+
+## Version
+
+`ysp-serial` 0.5.0.1 is `ysp/serial.h` v0.5.0 with binding revision 1, the
+change to seconds. The first three numbers are the header's version; a fourth
+counts changes to the binding alone and goes away when the header's version
+changes. `ps.__version__` gives the same string.
+
+0.5.0.1 breaks the API of 0.5.0. Replace `now_us()` with `now()` (seconds),
+`timeout_ms` with `timeout`, `write_timeout_ms` with `write_timeout`,
+`usec` with `width`, `send_break(ms)` with `send_break(duration)`, and the
+`rt_*_ns` arguments with `rt_*`, all in seconds. `TIMEOUT_INFINITE` is
+`math.inf`, not 4294967295.
+
+## Tests
+
+The tests need no port:
+
+```sh
+uv build --wheel -o dist
+uv run --no-project --with pytest --with dist/ysp_serial-0.5.0.1-cp38-abi3-<platform>.whl pytest tests
+```
 
 Device naming, USB latency, DTR-driven board resets and what a serial trigger
 is worth in timing terms are documented in the header:

@@ -538,11 +538,11 @@ jobs:
           octave-cli -q --eval "
             % Both MEX files build on ysp/rt.h, so both read one clock.
             % A gap of seconds would mean two clocks, not a slow runner.
-            ts = ysp_serial('now_us');
-            tp = ysp_parallel('now_us');
-            printf('library clock: %.0f us (serial), %.0f us (parallel)\n', ts, tp);
-            if abs(tp - ts) > 1e6
-              error('ysp:smoke', 'the two MEX clocks disagree by %.0f us', tp - ts);
+            ts = ysp_serial('now');
+            tp = ysp_parallel('now');
+            printf('library clock: %.6f s (serial), %.6f s (parallel)\n', ts, tp);
+            if abs(tp - ts) > 1
+              error('ysp:smoke', 'the two MEX clocks disagree by %.6f s', tp - ts);
             end
             ports = ysp_parallel('list');
             printf('detected %d parallel port(s)\n', numel(ports));
@@ -627,11 +627,11 @@ jobs:
             build;
             % Both MEX files build on ysp/rt.h, so both read one clock.
             % A gap of seconds would mean two clocks, not a slow runner.
-            ts = ysp_serial('now_us');
-            tp = ysp_parallel('now_us');
-            fprintf('library clock: %.0f us (serial), %.0f us (parallel)\n', ts, tp);
-            if abs(tp - ts) > 1e6
-              error('ysp:smoke', 'the two MEX clocks disagree by %.0f us', tp - ts);
+            ts = ysp_serial('now');
+            tp = ysp_parallel('now');
+            fprintf('library clock: %.6f s (serial), %.6f s (parallel)\n', ts, tp);
+            if abs(tp - ts) > 1
+              error('ysp:smoke', 'the two MEX clocks disagree by %.6f s', tp - ts);
             end
             ports = ysp_parallel('list');
             fprintf('detected %d parallel port(s)\n', numel(ports));

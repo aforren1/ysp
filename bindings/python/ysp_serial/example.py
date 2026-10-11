@@ -51,10 +51,10 @@ def main():
         reader = threading.Thread(target=listener, args=(port, stop))
         reader.start()
 
-        port.pulse(code, 0x00, 2000)            # blocking 2 ms trigger
+        port.pulse(code, 0x00, 0.002)           # blocking 2 ms trigger (seconds)
         print(f"sent trigger 0x{code:02X} (2 ms blocking pulse)")
 
-        port.pulse_async(code, 0x00, 2000)      # non-blocking; worker writes 0x00
+        port.pulse_async(code, 0x00, 0.002)     # non-blocking; worker writes 0x00
         print(f"queued async trigger 0x{code:02X}")
         port.drain()
 
