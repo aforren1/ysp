@@ -44,15 +44,15 @@ function example_serial(device)
     ysp_serial('writebyte', h, code);          % raise a trigger and leave it
     fprintf('sent trigger %d\n', code);
 
-    ysp_serial('pulse', h, code, 0, 2000);     % blocking 2 ms pulse
+    ysp_serial('pulse', h, code, 0, 0.002);    % blocking 2 ms pulse (seconds)
     fprintf('sent trigger %d (2 ms blocking pulse)\n', code);
 
-    ysp_serial('pulseasync', h, code, 0, 2000); % non-blocking; worker writes 0
+    ysp_serial('pulseasync', h, code, 0, 0.002); % non-blocking; worker writes 0
     fprintf('queued async trigger %d\n', code);
     ysp_serial('drain', h);
 
     % Wait up to 2 s for a response, then poll once without blocking.
-    data = ysp_serial('read', h, 64, 2000);
+    data = ysp_serial('read', h, 64, 2);       % timeout in seconds
     fprintf('response: %s\n', mat2str(data));
     fprintf('still buffered: %d byte(s)\n', ysp_serial('available', h));
 end

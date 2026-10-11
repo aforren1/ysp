@@ -125,7 +125,7 @@ To check the board, send `i` and a newline. The board answers
 ```matlab
 h = ysp_serial('open', 'COM5');
 ysp_serial('write', h, uint8(sprintf('i\n')));
-char(ysp_serial('read', h, 64, 500))
+char(ysp_serial('read', h, 64, 0.5))      % 0.5 s timeout
 ysp_serial('close', h);
 ```
 
@@ -164,10 +164,11 @@ metric that is not a time. p99 is the sample at rank ceil(0.99 n), so for
 fewer than 100 samples it is the maximum.
 
 Each API is timed with its own clock: `tic`/`toc` for serialport, `GetSecs`
-for IOPort, `ysp_serial('now_us')` for ysp. The `clock` part gives the cost
-of each clock. Subtract it from a call cost if the call is near that size.
-`ysp_serial('now_us')` counts whole microseconds, so its median of a sub-
-microsecond call is 0 or 1; use the mean in that case.
+for IOPort, `ysp_serial('now')` for ysp. All three return seconds; the bench
+scales them to microseconds. The `clock` part gives the cost of each clock.
+Subtract it from a call cost if the call is near that size. The results of
+2026-10-11 used the binding's earlier `now_us`, which counted whole
+microseconds; the C path under it is the same.
 
 Metrics of the `rt` part, with `block` or `poll` before the name:
 

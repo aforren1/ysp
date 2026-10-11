@@ -725,7 +725,10 @@ read the output. This section records what ran and what did not.
    nothing waiting and with bytes waiting; the bytes-available query; the
    cheapest call into each API; port enumeration; open of a port that does
    not exist. Each API is timed with its own clock (`tic`/`toc`, `GetSecs`,
-   `ysp_serial('now_us')`), and the cost of each clock is measured too.
+   `ysp_serial('now')`), and the cost of each clock is measured too. The
+   runs recorded below used the binding's v1 clock call `now_us` (whole
+   microseconds); binding v2.0.0 returns seconds from `now` on the same C
+   path, so the numbers stand.
 2. Round trip: a 13-byte command `e <seq>\n` and its answer, with a blocking
    read and with a poll loop. With the echo board
    (`firmware/ysp_echo/ysp_echo.ino`), a clock fit splits the round trip into
@@ -972,7 +975,12 @@ ysp, ioport_tuned, ioport, serialport), and two runs of `raw_win32.exe`
 gives run 1, run 2. Times in microseconds. `ioport_tuned` adds
 `BlockingBackgroundRead=1 PollLatency=0 HardwareBufferSizes=32768,32768`.
 The summaries are in
-`tests/compare/serial_bench/results/2026-10-11-teensy40-audit/`.
+`tests/compare/serial_bench/results/2026-10-11-teensy40-audit/`. These runs
+used binding v1 calls (`now_us`, timeouts in ms). After the binding moved to
+seconds (v2.0.0), one ysp-only run on the same C path (`run3-ysp-v2`) gave
+round trip 172 / 393 us (blocking, median / p99), per-line 173 / 342 us and
+async stamp 170 / 319 us, inside the spread of the table; `now` costs 0.8 us
+for a back-to-back pair, median.
 
 Round trip, 1000 exchanges per cell, no failures. The one-way times are good
 to the fit bound, 51 to 120 us.

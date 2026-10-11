@@ -144,7 +144,7 @@ function [ok, why] = sb_probe_api(cfg, api)
                 return;
             end
             try
-                ysp_serial('now_us');
+                ysp_serial('now');
                 why = sprintf('ysp_serial at %s', which('ysp_serial'));
             catch e
                 why = e.message;
@@ -171,7 +171,7 @@ function c = sb_clock_name(api)
     switch api
         case 'serialport', c = 'tic/toc';
         case {'ioport', 'ioport_tuned'}, c = 'GetSecs';
-        case 'ysp',        c = 'ysp_serial now_us';
+        case 'ysp',        c = 'ysp_serial now, in us';
         otherwise,         c = '';
     end
 end
