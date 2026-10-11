@@ -13,12 +13,13 @@
  *
  * Usage: gfx_bench [--device hardware|warp|swiftshader|mesa|llvmpipe]
  *                  [--size W H] [--frames N] [--only NAME] [--scene 16|32]
- *                  [--cache DIR] [--no-cache] [--open-only]
+ *                  [--cache DIR] [--no-cache] [--open-only] [--capture-dir DIR]
  *   --scene  the scene format of the workloads after the empty frames
  *   --cache  a program cache in DIR (ygfx_file_cache_init); :mem: one in memory;
  *            the default is the per-user folder of ygfx_default_cache_dir()
  *   --no-cache  compile every program; read and write no cache file
  *   --open-only  print ygfx_open()'s time and what the cache did, then exit
+ *   --capture-dir  the v0.12 capture rows also time image files written there
  * Exit code: 0, 1 when no GL ES 3.0 context opened, 2 for a bad argument.
  * On Windows set YSCR_ANGLE_DIR to ANGLE's directory.
  */
@@ -52,6 +53,7 @@ static char cache_dir[512];
 static const ygfx_cache* cache_desc = NULL;
 static int open_only = 0;
 static void (GLCALL *glFinish_)(void);
+static void (GLCALL *glFlush_)(void);
 
 #define MAXF 2000
 static double cpu_us[MAXF];
@@ -830,6 +832,131 @@ static void bench_v10_simplex(void) {
     bench_cmp("v0.10 simplex", w, 7);
 }
 
+/* --- v0.12: capture ------------------------------------------------------------- */
+
+static const char* cap_dir = NULL;   /* --capture-dir: where the file rows write */
+static uint64_t cap_frames_seen;
+static void cap_count(void* ctx, const ygfx_capture_frame* fr) { (void)ctx; (void)fr; cap_frames_seen++; }
+
+/* What a captured frame costs the frame thread (ygfx_begin to ygfx_end) and
+ * the GPU, against the same frame without one: capture runs throughout with
+ * marks only, and a workload marks every frame or every 4th, so the rows
+ * interleave as in bench_cmp. Paced as a 60 Hz loop is: after each frame,
+ * glFlush (the present's) and glFinish, so the GPU is idle when the next
+ * frame starts and a copy is done by the next end(). cpu: begin to end;
+ * gpu: end's return to glFinish's, the GPU's time on the frame. Back to back
+ * frames were tried first: ANGLE then blocks in end() on a full queue, and
+ * the fence polls flush, so a frame with capture measured cheaper than one
+ * without. The writer only counts (no files): the file rows below are its
+ * cost. */
+static void bench_v12_capture(const ygfx_stim* gab) {
+    enum { NW = 6 };
+    static const char* const names[NW] = {
+        "empty frame", "empty frame, capture every frame", "100 gabors", "100 gabors, capture every frame",
+        "100 gabors, capture every 4th frame", "100 gabors, every frame, collected by pump()" };
+    static const int n_draw[NW] = { 0, 0, 100, 100, 100, 100 };
+    static const int every[NW] = { 0, 1, 0, 1, 4, 1 };
+    ygfx_capture_desc cd;
+    ygfx_capture_stats st;
+    yscr_frame f;
+    double d[CMP_REPS];
+    static double pf[NW][CMP_REPS * CMP_BLOCK];   /* each frame's cpu, for the p99 */
+    static double pump_us[CMP_REPS * CMP_BLOCK];
+    uint64_t t0, a;
+    int r, k, i, frame = 0;
+    if (!run("v0.12 capture")) return;
+    if (!reopen(scene_fmt, YGFX_DITHER_NONE, 0)) return;
+    memset(&cd, 0, sizeof cd);
+    cd.slots = 6;
+    cd.on_frame = cap_count;
+    if (ygfx_capture_start(&gfx, &cd) != YGFX_OK) { printf("v0.12 capture: %s\n", ygfx_error(&gfx)); return; }
+    memset(&f, 0, sizeof f);
+    f.period = 16666667;
+    for (r = -1; r < CMP_REPS; r++) {   /* round -1 warms */
+        for (k = 0; k < NW; k++) {
+            double cpu = 0, gpu = 0;
+            glFinish_();
+            for (i = 0; i < CMP_BLOCK; i++) {
+                f.index = frame++;
+                f.onset = (int64_t)yrt_now_ns();
+                a = yrt_now_ns();
+                ygfx_begin(&gfx, &f);
+                if (every[k] && i % every[k] == 0) ygfx_capture_mark(&gfx);
+                if (n_draw[k]) ygfx_draw_n(&gfx, gab, n_draw[k]);
+                ygfx_end(&gfx);
+                t0 = yrt_now_ns();
+                glFlush_();
+                glFinish_();
+                cpu += (double)(t0 - a) * 1e-3;
+                if (r >= 0) pf[k][r * CMP_BLOCK + i] = (double)(t0 - a) * 1e-3;
+                gpu += (double)(yrt_now_ns() - t0) * 1e-6;
+                if (k == 5) {   /* the collection (fence, map, hand-off) outside the frame */
+                    a = yrt_now_ns();
+                    ygfx_capture_pump(&gfx, 0);
+                    if (r >= 0) pump_us[r * CMP_BLOCK + i] = (double)(yrt_now_ns() - a) * 1e-3;
+                }
+            }
+            if (r >= 0) {
+                cmp_gpu[k][r] = gpu / CMP_BLOCK;
+                cmp_cpu[k][r] = cpu / CMP_BLOCK;
+            }
+        }
+    }
+    ygfx_capture_stop(&gfx, &st);
+    printf("\nv0.12 capture, %dx%d: %d rounds of %d frames each, interleaved; %llu captured, %llu dropped, "
+           "%llu failed, %d of %d slots at most, %llu frames reached the writer\n\n",
+           W, H, CMP_REPS, CMP_BLOCK, (unsigned long long)st.read, (unsigned long long)st.dropped,
+           (unsigned long long)st.failed, st.busy_max, st.slots, (unsigned long long)cap_frames_seen);
+    printf("| %-48s | %8s | %8s | %8s | %8s | %8s |\n", "workload", "gpu ms", "ms - off", "cpu us", "us - off", "cpu p99");
+    printf("|--------------------------------------------------|----------|----------|----------|----------|----------|\n");
+    for (k = 0; k < NW; k++) {
+        int base = k < 2 ? 0 : 2;
+        double gm = median_of(cmp_gpu[k], CMP_REPS), cm = median_of(cmp_cpu[k], CMP_REPS), gd, cdd;
+        for (r = 0; r < CMP_REPS; r++) d[r] = cmp_gpu[k][r] - cmp_gpu[base][r];
+        gd = median_of(d, CMP_REPS);
+        for (r = 0; r < CMP_REPS; r++) d[r] = cmp_cpu[k][r] - cmp_cpu[base][r];
+        cdd = median_of(d, CMP_REPS);
+        printf("| %-48s | %8.3f | %8.3f | %8.1f | %8.1f | %8.1f |\n", names[k], gm, gd, cm, cdd,
+               p99(pf[k], CMP_REPS * CMP_BLOCK));
+    }
+    {
+        double m = 0;
+        for (i = 0; i < CMP_REPS * CMP_BLOCK; i++) m += pump_us[i];
+        printf("\nygfx_capture_pump() after each frame of row 6 (the previous copy's fence, map and hand-off): "
+               "mean %.1f us, p99 %.1f us\n", m / (CMP_REPS * CMP_BLOCK), p99(pump_us, CMP_REPS * CMP_BLOCK));
+    }
+    /* the writer's side: one file per format, from memory, as the writer
+     * thread writes it */
+    if (cap_dir) {
+        static const int fmts[2] = { YGFX_IMAGE_PPM, YGFX_IMAGE_PNG };
+        unsigned char* px = (unsigned char*)malloc((size_t)W * H * 4);
+        char path[600];
+        int fi;
+        if (!px) return;
+        for (i = 0; i < W * H * 4; i++) px[i] = (unsigned char)(i * 31 + (i >> 11));
+        printf("\n| %-48s | %8s | %8s | %8s |\n", "file (10 writes, from memory)", "ms mean", "ms max", "MB/s");
+        printf("|--------------------------------------------------|----------|----------|----------|\n");
+        for (fi = 0; fi < 2; fi++) {
+            double sum = 0, mx = 0;
+            int rc = YGFX_OK;
+            for (i = 0; i < 10; i++) {
+                double ms;
+                snprintf(path, sizeof path, "%s/bench%02d.%s", cap_dir, i, fi ? "png" : "ppm");
+                a = yrt_now_ns();
+                if (ygfx_image_write(path, fmts[fi], px, W, H, 0, "gfx_bench", NULL, 0) != YGFX_OK) rc = YGFX_ERR_IO;
+                ms = (double)(yrt_now_ns() - a) * 1e-6;
+                sum += ms;
+                if (ms > mx) mx = ms;
+            }
+            for (i = 0; i < 10; i++) { snprintf(path, sizeof path, "%s/bench%02d.%s", cap_dir, i, fi ? "png" : "ppm"); remove(path); }
+            printf("| %-48s | %8.2f | %8.2f | %8.0f |%s\n", fi ? "PNG, stored" : "PPM", sum / 10, mx,
+                   (double)W * H * 3 / (sum / 10 * 1e-3) / 1e6, rc ? " (a write failed)" : "");
+        }
+        free(px);
+    }
+    fflush(stdout);
+}
+
 /* --- v0.4: instances and interleaved kinds ------------------------------------- */
 
 static ygfx_inst bi_el[10000];
@@ -1339,6 +1466,8 @@ int main(int argc, char** argv) {
             cache_desc = strcmp(argv[i], ":mem:") ? ygfx_file_cache_init(&pcache, argv[i]) : &memc_cache;
         } else if (!strcmp(argv[i], "--no-cache")) {
             no_cache = 1;
+        } else if (!strcmp(argv[i], "--capture-dir") && i + 1 < argc) {
+            cap_dir = argv[++i];
         } else if (!strcmp(argv[i], "--open-only")) {
             open_only = 1;
         } else if (!strcmp(argv[i], "--scene") && i + 1 < argc) {
@@ -1346,7 +1475,8 @@ int main(int argc, char** argv) {
             scene_fmt = !strcmp(argv[i], "16") ? YGFX_RGBA16F : (!strcmp(argv[i], "32") ? YGFX_RGBA32F : YGFX_FORMAT_NONE);
         } else {
             fprintf(stderr, "usage: gfx_bench [--device hardware|warp|swiftshader|mesa|llvmpipe] [--size W H] "
-                            "[--frames N] [--only NAME] [--scene 16|32] [--cache DIR] [--no-cache] [--open-only]\n");
+                            "[--frames N] [--only NAME] [--scene 16|32] [--cache DIR] [--no-cache] [--open-only] "
+                            "[--capture-dir DIR]\n");
             return 2;
         }
     }
@@ -1364,6 +1494,7 @@ int main(int argc, char** argv) {
     d.sim_period_ns = 1000000;
     if (!yscr_open(&scr, &d)) { fprintf(stderr, "gfx_bench: %s\n", yscr_error(&scr)); return 1; }
     load_one(&glFinish_, "glFinish");
+    load_one(&glFlush_, "glFlush");
     load_raw();
     {
         uint64_t t0 = yrt_now_ns();
@@ -1505,6 +1636,7 @@ int main(int argc, char** argv) {
     if (run("v0.3")) bench_v03();
     bench_v04_video(); bench_v04_inst(); bench_v04_mixed();   /* each checks --only */
     bench_v06_text(); bench_v06_blur(); bench_v07_noise(); bench_v10_simplex();
+    bench_v12_capture(g);
     ygfx_close(&gfx);
     yscr_close(&scr);
     return 0;

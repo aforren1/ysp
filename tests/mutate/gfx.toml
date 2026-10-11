@@ -1,7 +1,7 @@
 
 # ysp/gfx.h mutants: the v0.4 list (docs/gfx.md, "v0.4 mutations"), then
 # later lists by prefix (pr-: v0.11 prime; os-: v0.11.1 open start; cv-:
-# v0.12.0 messages).
+# v0.12.0 messages; cp-: v0.13.0 capture).
 # The v0.3 list (mutate03.py) was lost; docs/gfx.md keeps its table.
 # YGFX_TEST_PARTS limits a run to the parts that can see the fault, and
 # "none" runs the CPU half alone. YGFX_TEST_DEVICES=hardware is the GPU
@@ -1086,3 +1086,153 @@ env = { YGFX_TEST_PARTS = "none" }
 why = "v0.12.0: the message belongs to the last failure; a successful call must put it back."
 find = '        g->error[0] = c0;'
 replace = '        (void)c0;'
+
+[[mutant]]
+id = "cp-01"
+name = "pack buffer left bound after a copy"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "v0.12 capture", YGFX_TEST_DEVICES = "hardware" }
+why = "v0.13: with the pack buffer still bound, a later ygfx_read_output() writes into it, not into the caller's memory."
+find = '''
+    /* unbound at once: a later ygfx_read_output() reads into client memory */
+    gl->f.BindBuffer(YGFX__GL_PIXEL_PACK_BUFFER, 0);
+'''
+replace = '''
+    /* unbound at once: a later ygfx_read_output() reads into client memory */
+'''
+
+[[mutant]]
+id = "cp-02"
+name = "GL's bottom-up rows handed on as top first"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "v0.12 capture", YGFX_TEST_DEVICES = "hardware" }
+why = "v0.13: a headless context keeps GL's row order; a captured frame must come out upright, as ygfx_read_output() gives it."
+find = '    if (!c->top_first) { fr.rgba = s->data + (size_t)(c->h - 1) * (size_t)c->w * 4; fr.stride = -fr.stride; }'
+replace = ''
+
+[[mutant]]
+id = "cp-03"
+name = "a drop is not counted"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none" }
+why = "v0.13: a chosen frame with every slot busy is not read; the count is the only trace of it."
+find = '        c->st.dropped++;'
+replace = ''
+
+[[mutant]]
+id = "cp-04"
+name = "a flip record goes to the wrong frame"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none" }
+why = "v0.13: each captured frame carries its own flip record, matched by frame index."
+find = '            if ((s->state == YGFX__CS_READING || s->state == YGFX__CS_MAPPED) && !s->has_record && s->index == r->index) {'
+replace = '            if ((s->state == YGFX__CS_READING || s->state == YGFX__CS_MAPPED) && !s->has_record) {'
+
+[[mutant]]
+id = "cp-05"
+name = "a frame is written before its record came"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none" }
+why = "v0.13: the writer must wait for the flip record (up to 30 frames) so the file carries it."
+find = '        if (!(s->has_record || s->no_wait || final || g->frames - s->frame_no > YGFX__CAP_RECORD_FRAMES)) continue;'
+replace = ''
+
+[[mutant]]
+id = "cp-06"
+name = "a mark is not cleared"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none" }
+why = "v0.13: a mark captures one frame, not every frame after it."
+find = '    c->mark = 0;'
+replace = ''
+
+[[mutant]]
+id = "cp-07"
+name = "a stored block's NLEN is wrong"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none" }
+why = "v0.13: zlib checks NLEN as the complement of LEN; a PNG reader refuses the file."
+find = '            hd[3] = (unsigned char)(~len & 0xFFu);'
+replace = '            hd[3] = (unsigned char)(len & 0xFFu);'
+
+[[mutant]]
+id = "cp-08"
+name = "Adler-32 without its modulo"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none" }
+why = "v0.13: the sums are deferred, not dropped; a PNG reader refuses a wrong Adler-32."
+find = '        a %= 65521u;'
+replace = ''
+
+[[mutant]]
+id = "cp-09"
+name = "sliced CRC tables in the wrong order"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none" }
+why = "v0.13: the slicing-by-4 CRC must equal the bitwise CRC-32 that PNG defines."
+find = '        c = t[3][c & 0xFFu] ^ t[2][(c >> 8) & 0xFFu] ^ t[1][(c >> 16) & 0xFFu] ^ t[0][c >> 24];'
+replace = '        c = t[0][c & 0xFFu] ^ t[1][(c >> 8) & 0xFFu] ^ t[2][(c >> 16) & 0xFFu] ^ t[3][c >> 24];'
+
+[[mutant]]
+id = "cp-10"
+name = "stop leaves frames without records unwritten"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none" }
+why = "v0.13: stop writes every copy, with or without its record; a trial's last frames are not lost."
+find = '        ygfx__cap_hand(g, c, 1, 0);'
+replace = '        ygfx__cap_hand(g, c, 0, 0);'
+
+[[mutant]]
+id = "cp-11"
+name = "a written buffer is not unmapped"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none" }
+why = "v0.13: a slot stays mapped, so its next copy fails and the ring shrinks."
+find = '    if (gl_ok) g->be->capture_unmap(g->bctx, i);'
+replace = ''
+
+[[mutant]]
+id = "cp-12"
+name = "a frame filled by hand waits for a record"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none" }
+why = "v0.13: a frame not from yscr_begin() gets no flip record; waiting for one holds its slot for 30 frames."
+find = '    c->slot[i].no_wait = !c->has_screen || !g->frame.done;'
+replace = '    c->slot[i].no_wait = !c->has_screen;'
+
+[[mutant]]
+id = "cp-13"
+name = "every Nth off by one"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none" }
+why = "v0.13: every = N captures the frames whose index is a multiple of N, frame 0 first."
+find = '    int chosen = c->mark || (c->every > 0 && g->frame.index % c->every == 0);'
+replace = '    int chosen = c->mark || (c->every > 0 && g->frame.index % c->every == 1);'
+
+[[mutant]]
+id = "cp-14"
+name = "begin() takes no records"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none" }
+why = "v0.13: the flip records come with yscr_begin()'s frame; without them every file says record: none."
+find = '    if (g->cap) ygfx__cap_records(g->cap, f);'
+replace = ''
+
+[[mutant]]
+id = "cp-15"
+name = "capture_mark's specific message lost"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none" }
+why = "v0.13: a capture call that fails says why (README.md, Conventions); the generic text does not say that no capture is on."
+find = '''        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: capture_mark: %s",
+                        !g->cap ? "no capture is on" : "only between begin() and end() of a frame");'''
+replace = ''
+
+[[mutant]]
+id = "cp-16"
+name = "image_write leaves err empty"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none" }
+why = "v0.13: a call without a handle writes its message into the caller's buffer (README.md, Conventions)."
+find = '''        ygfx__set_error(err, cap, "ysp_gfx: image_write: cannot create '%s' (errno %d)", path, errno);'''
+replace = ''
