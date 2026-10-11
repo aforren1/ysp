@@ -410,6 +410,14 @@ jobs:
           echo "3a8cb30c83c2a1147719c30fe0c8b93da2987aa43140077c575b39aaa75fc2c9  pl_mpeg.h" | sha256sum -c -
           emcc -O2 -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wfloat-conversion -Werror -Iinclude -I. -DYSCR_NO_SDL -c -o compile_video_plm.o tests/compile/video.c
 
+      # ysp/screen.h's WEB backend and the demos on it (docs/web.md): the
+      # site Pages deploys, built here with this job's emsdk so a header
+      # change that breaks them fails here. No browser runs here: the
+      # pages were checked in Chrome by hand and headless (docs/web.md).
+      - name: Web demos (examples/web/build.sh)
+        shell: bash
+        run: sh examples/web/build.sh web_site
+
       # pack/layout and its test (docs/layout.md), as the player's
       # WebAssembly build will compile them: the vendored libraries with
       # their warnings off, the glue and the test with ours. No fonts here:
@@ -824,7 +832,7 @@ jobs:
       # out of this list is compiled nowhere on CI. ctest below runs every
       # test that matches its pattern, built or not.
       - name: Build
-        run: cmake --build build --config Release --target compile_screen_c compile_screen_cxx compile_screen_com test_screen screen_hello screen_flipstats screen_input screen_abort screen_gamma screen_sync_check screen_loopback compile_gfx_c compile_gfx_cxx test_gfx gfx_hello gfx_trial gfx_load gfx_calib gfx_bench gfx_gallery gfx_text gfx_gratings gfx_luminance_bits gfx_clut_sync gfx_filtered_noise gfx_gaze_contingent gfx_capture gfx_rdk gfx_rdk_bench trial_rdk compile_video_c compile_video_cxx compile_video_com test_video video_play video_bench video_check test_response_sdl test_input_sdl trial_keyboard trial_same_different trial_srt trial_adjustment trial_mouse_tracking trial_audio_keyboard trial_stop_signal trial_sternberg trial_2afc_adaptive trial_two_keyboards audio_av_sync
+        run: cmake --build build --config Release --target compile_screen_c compile_screen_cxx compile_screen_com test_screen screen_hello screen_flipstats screen_input screen_abort screen_gamma screen_sync_check screen_loopback compile_gfx_c compile_gfx_cxx test_gfx gfx_hello gfx_trial gfx_load gfx_calib gfx_bench gfx_gallery gfx_text gfx_gratings gfx_luminance_bits gfx_clut_sync gfx_filtered_noise gfx_gaze_contingent gfx_capture gfx_rdk gfx_rdk_bench trial_rdk compile_video_c compile_video_cxx compile_video_com test_video video_play video_bench video_check test_response_sdl test_input_sdl trial_keyboard trial_same_different trial_srt trial_adjustment trial_mouse_tracking trial_audio_keyboard trial_stop_signal trial_sternberg trial_2afc_adaptive trial_two_keyboards audio_av_sync web_tutorial web_rdk_staircase web_selftest
 
       # ysp/gfx.h's pixel checks must run where software GL exists; macOS has
       # no EGL, so its test runs the CPU checks only.
@@ -881,6 +889,11 @@ jobs:
           expect 0 "$bin/trial_rdk" --sim --out "$RUNNER_TEMP/trial_rdk.csv" --steps "$RUNNER_TEMP/trial_rdk_steps.csv"
           # PsychoPy's Sternberg demo: digits from a font or the bitmap font, SOAs from flip records (about 27 s).
           expect 0 "$bin/trial_sternberg" --sim --out "$RUNNER_TEMP/trial_sternberg.csv"
+          # The web demos, natively (docs/web.md): scripted rows, a staircase against an observer, the loop.
+          expect 0 "$bin/web_tutorial" --sim --out "$RUNNER_TEMP/web_tutorial.csv"
+          expect 0 "$bin/web_rdk_staircase" --sim
+          expect 0 "$bin/web_selftest" --sim --frames 120
+          expect 2 "$bin/web_selftest" --frames 1
           expect 2 "$bin/trial_sternberg" --bogus
           expect 2 "$bin/trial_srt" --blocks SX
           expect 0 "$bin/gfx_load" --sim --gabors 10 --dots 100 --seconds 1

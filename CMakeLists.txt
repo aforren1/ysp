@@ -596,6 +596,11 @@ if(TARGET SDL3::SDL3 AND YSP_BUILD_EXAMPLES)
     # PsychoPy's dots.py as a trial (docs/rig_spec.md 15.5): RDK direction
     # discrimination, each row with the field's replay digest.
     ysp_add_program(trial_rdk examples/rdk/trial_rdk.c rig methods)
+    # The web demos (docs/web.md): examples/web/build.sh compiles them with
+    # emcc; here they build natively, so --sim checks them on CI.
+    ysp_add_program(web_tutorial examples/web/tutorial.c rig methods)
+    ysp_add_program(web_rdk_staircase examples/web/rdk_staircase.c rig methods)
+    ysp_add_program(web_selftest examples/web/selftest.c rig)
     if(TARGET ysp::miniaudio)
         foreach(_t audio_keyboard stop_signal)
             ysp_add_program(trial_${_t} examples/response/trial_${_t}.c rig methods)

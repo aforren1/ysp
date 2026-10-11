@@ -3246,6 +3246,21 @@ reader and checksums of the test.
 | `ygfx_capture_desc.format`, `YGFX_IMAGE_PPM` and the `format` argument of `ygfx_image_write()` | Removed; the version is 0.14.0, not 0.13.1 | With one value, the field is always 0 and the argument always `YGFX_IMAGE_PPM`: an argument every call passes for nothing. Capture shipped in v0.13.0 the same week; every caller in the repository is changed (6 examples, the test, the compile check). A caller that set the field or passed the argument now fails to compile, which says what changed; a field kept with one value would accept `YGFX_IMAGE_PNG`'s old value 2 and fail only at run time |
 | The comment | One `#` line for each line of the comment | As before; the test now writes a two-line comment and reads both lines back, and mutant `cp-17` (the second line without its `#`) checks it |
 
+## v0.13.1: render targets under WebGL
+
+The gallery compiled for the browser ([web.md](web.md)) drew page 1 with
+133 draws refused in Chrome 154: `GL_INVALID_OPERATION: Feedback loop
+formed between Framebuffer and active Texture`. The scene target's texture
+stayed bound to a texture unit after the output stage sampled it, and the
+next frame's draws into the scene had programs with a sampler on that
+unit. WebGL refuses such a draw whether or not the shader reads the
+sampler; GL ES calls it undefined only when the texture is sampled, so
+ANGLE and Mesa drew. A pass into a target now unbinds that target's
+texture from every unit first, through the cached bindings, so it costs
+nothing when none matches. After it: no refused draw on any of the 8
+pages. The native tests cannot see the fault (no GL ES driver refuses the
+draw), so it has no mutant.
+
 ## v0.12.0: a message for every failure
 
 v0.12.0 applies the repository conventions (README.md, Conventions) to

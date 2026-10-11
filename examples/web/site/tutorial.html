@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ysp demo: tilt discrimination</title>
+<script src="coi-serviceworker.js"></script>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:,">
+</head>
+<body>
+<p><a href="index.html">ysp web demos</a></p>
+<h1>Tilt discrimination: a keyboard reaction time</h1>
+<div class="notice"><strong>Browser timing is not rig timing.</strong> The times on this page are what the
+browser reports. The browser does not report when the display showed a frame, so the onsets are
+estimates and every reaction time includes an unknown delay. Use a lab rig for a timing claim.
+<a href="https://github.com/aforren1/ysp/blob/main/docs/web.md">How the web backend works</a>.</div>
+<div id="status" class="status"></div>
+
+<div id="intro" class="panel">
+  <h2>Instructions</h2>
+  <p>Each trial shows a cross, then a striped patch. The stripes lean to the left or to the right.</p>
+  <p>Press <strong>F</strong> when the stripes lean <strong>left</strong>.
+     Press <strong>J</strong> when they lean <strong>right</strong>.
+     Answer as fast as you can without mistakes. A green ring means correct, red means wrong,
+     gray means too slow.</p>
+  <p>There are 10 trials, about 30 seconds. Shift+Esc or the Stop button ends the run early.</p>
+  <p><label><input type="checkbox" id="fs"> Fullscreen</label></p>
+  <button id="start" data-ready="Start" disabled>Loading...</button>
+</div>
+
+<div id="stage"><canvas id="canvas" tabindex="-1"></canvas></div>
+<p><button id="stop" class="secondary" disabled>Stop</button></p>
+
+<div id="results" class="panel hidden">
+  <h2>Results</h2>
+  <p id="summary"></p>
+  <div id="rows"></div>
+  <p><button id="csv">Download the data (CSV)</button>
+     <button id="session" class="secondary">Download the session log</button></p>
+</div>
+
+<h2>Log</h2>
+<div id="log"></div>
+
+<script>
+window.yspPage = { name: 'tutorial', args: () => ['--reps', '5'] };
+</script>
+<script src="ysp-web.js"></script>
+<script>
+document.getElementById('start').onclick = () => ysp.start({ fullscreen: document.getElementById('fs').checked });
+document.getElementById('stop').onclick = () => ysp.stop();
+document.getElementById('csv').onclick = () => ysp.download('ysp_tutorial.csv', Module.yspCsv, 'text/csv');
+document.getElementById('session').onclick = () => ysp.download('ysp_tutorial_session.txt', ysp.sessionText());
+Module.onYspDone = () => {
+  ysp.finish();
+  const rows = ysp.parseCsv(Module.yspCsv);
+  const h = rows[0], ci = h.indexOf('correct'), ri = h.indexOf('rt_s');
+  const body = rows.slice(1).filter((r) => r.length > 1);
+  const right = body.filter((r) => r[ci] === '1');
+  const rts = right.map((r) => parseFloat(r[ri])).filter((x) => !isNaN(x)).sort((a, b) => a - b);
+  const med = rts.length ? rts[Math.floor((rts.length - 1) / 2)] : NaN;
+  document.getElementById('summary').textContent = right.length + ' of ' + body.length + ' correct; median RT of the correct trials '
+    + (isNaN(med) ? '-' : (med * 1000).toFixed(0) + ' ms') + ' (browser estimate).';
+  ysp.table(document.getElementById('rows'), rows, ['index', 'tilt', 'key_answer', 'response', 'rt_s', 'correct', 'onset_tier', 'frames_dropped']);
+};
+</script>
+<script src="tutorial.js" async></script>
+</body>
+</html>

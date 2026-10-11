@@ -1,4 +1,4 @@
-/* ysp/screen.h - v0.6.0 - public domain single-header display library
+/* ysp/screen.h - v0.7.0 - public domain single-header display library
  *
  *   The window, the GL ES 3.0 context, the display mode and the swap path
  *   of a stimulus display, with flip at a time: each frame learns the
@@ -13,7 +13,8 @@
  *   instrumentation macros), ysp/input.h (the input event, v0.4.0), and
  *   SDL3 (3.2 or later) to link. On Windows it
  *   also needs ANGLE's libEGL.dll and libGLESv2.dll at run time; nothing
- *   ANGLE or Khronos is needed to compile. Copy ysp/screen.h and ysp/rt.h.
+ *   ANGLE or Khronos is needed to compile. Under Emscripten, SDL3's port
+ *   and ASYNCIFY or JSPI (BACKENDS, WEB). Copy ysp/screen.h and ysp/rt.h.
  *
  *   Written in the single-header style of the stb / sokol libraries. C99 is
  *   the floor: it builds as C99, C11 and C++17, and in the C dialect MSVC
@@ -297,7 +298,8 @@
  *     residual  onset - target
  *     dropped   vblanks between planned and shown: the system's lateness,
  *               not the caller's (that is LATE_TARGET)
- *     path      YSCR_PATH_COMPOSED, _OVERLAY or _INDEPENDENT on Windows
+ *     path      YSCR_PATH_COMPOSED, _OVERLAY or _INDEPENDENT on Windows,
+ *               _BROWSER in a browser
  *     tier      how far the onset can be trusted (TIERS)
  *     flags     PENDING (not shown yet), ESTIMATED (no OS time for this
  *               present; onset is the planned vblank), LATE_TARGET,
@@ -353,6 +355,7 @@
  *     not always frame order. YSCR_EV_DEPTH at open and at each change of
  *     depth (DEPTH). YSCR_EV_TEXT_INPUT, YSCR_EV_DEVICE, YSCR_EV_RAW_MICE
  *     and YSCR_EV_INPUT_LOST: INPUT. YSCR_EV_UNSYNCED: SYNC GUARD.
+ *     YSCR_EV_VISIBILITY: a page hidden or shown (BACKENDS, WEB).
  *
  *   ONE FRAME IN FLIGHT
  *     begin() waits until the swap path takes a frame, so the frame drawn
@@ -405,6 +408,8 @@
  *          such as every composed or overlay frame of COMPOSITION, whose
  *          time is DWM's plan for a vblank about 15 ms ahead
  *       YSCR_TIER_SIM  the simulated display
+ *       YSCR_TIER_WEB  a browser (BACKENDS, WEB): the time a frame callback
+ *          began, not an observed flip; the lowest tier
  *     A custom presenter may set the tier in each yscr_vblank; 0 takes the
  *     path's default. caps.worst_tier and the describe line give the worst
  *     tier since open. desc.min_tier (1 to 3) sets BELOW_TIER on each flip
@@ -415,7 +420,7 @@
  *   BACKENDS
  *   ---------------------------------------------------------------------
  *   YSCR_BACKEND_AUTO (desc.backend 0)
- *     COMPOSITION where it opens and the presentation factory reports
+ *     Under Emscripten, WEB. On Windows, COMPOSITION where it opens and the presentation factory reports
  *     independent flip for the window's output (Windows 11 x64), else
  *     DXGI_FLIP. Decided 2026-10-09 on 10-minute runs that showed
  *     COMPOSITION no worse (docs/screen.md, "AUTO"). The describe line
@@ -480,11 +485,73 @@
  *     vblank it was planned for. For tests, CI and dry runs of a timeline.
  *   YSCR_BACKEND_CUSTOM
  *     desc.presenter and desc.presenter_ctx: your swap path (PRESENTER).
- *   Not implemented in v0.3; open() refuses them with a message:
+ *   YSCR_BACKEND_WEB (Emscripten, v0.7.0; docs/web.md)
+ *     SDL3's Emscripten port makes the window: a canvas, "#canvas" unless
+ *     SDL's hint or window property names another. The header makes the
+ *     WebGL2 context on it: no alpha, depth, stencil or multisampling, the
+ *     drawing buffer not preserved, the high-performance GPU. Setting
+ *     Module.yscrDesynchronized = true in the page asks for a
+ *     desynchronized context (not measured; off by default).
+ *     The frame loop stays a blocking loop. begin() awaits the next
+ *     requestAnimationFrame callback, so build with -sASYNCIFY or -sJSPI;
+ *     the frame is drawn in that callback's task and composited with that
+ *     browser frame. A callback that ran more than half a period ago (the
+ *     program set up after open(), or the browser ran it late) is not used:
+ *     begin() waits for the next (late= in the describe line), because a
+ *     draw there was replaced by the next callback's draw before it showed
+ *     (measured in headless Chrome after a 17 ms setup).
+ *     Timing. A browser reports when it began a frame, never when the
+ *     display showed it. A record's onset is the first callback time after
+ *     both the callback that drew the frame and the present call: the
+ *     earliest vsync the frame can show at. Its flags have ONSET_PLANNED,
+ *     its path is BROWSER and its tier YSCR_TIER_WEB. The compositor's delay
+ *     after that vsync is in every onset and is not known here (one to
+ *     three frames is usual; nothing here measured it). Callback times are
+ *     performance.now() times, correlated to the ysp_rt clock at open, and
+ *     the browser coarsens them: 100 us in Chrome and 1 ms in Firefox on a
+ *     page that is not cross-origin isolated, 5 us and 20 us on one that
+ *     is (measured, docs/web.md). They also jitter about the vsync grid, so
+ *     the onsets are the grid's (GRID_UNSTABLE), and the describe line
+ *     does not warn about off-grid times or about the period.
+ *     caps.kind is YSCR_CALLBACK, caps.period_ns and the mode's refresh are
+ *     the period measured at open, and caps.mode.w and h are the canvas's
+ *     drawing buffer in device pixels. caps.native_target is set, so the
+ *     core never sleeps: a wait on the browser's main thread is a busy
+ *     loop that stops rendering.
+ *     Settling. open() counts callbacks until the last 20 intervals are
+ *     steady (none over 1.5 times their median, which is a skipped
+ *     callback; SD at most 0.5 ms), for at least 0.25 s and at most 2 s,
+ *     and takes their mean as the period. It never fails, whatever
+ *     desc.settle says: a browser gives nothing to wait for. At the cap the
+ *     describe line says settle=FAILED(spread,...,warn) and
+ *     WARNING=not-settled. desc.settle OFF records SKIPPED; the period is
+ *     measured all the same.
+ *     Holds. flip_at() cannot hold a drawn frame, because the drawing
+ *     buffer is not preserved: a frame shows at the next frame the browser
+ *     composites, and a later target is recorded EARLY. Draw a frame in the
+ *     begin() whose f.onset is its time, as ysp/timeline.h does. After a
+ *     frame planned late shows on time all the same, the next frame is
+ *     planned from begin()'s own prediction, not a vblank after the late
+ *     plan.
+ *     Fullscreen. A page enters fullscreen only from a user gesture, so the
+ *     header never asks. desc.windowed false gives a canvas the size of the
+ *     page's viewport at open; the page may enter fullscreen before
+ *     (examples/web/site). desc.mode must stay zero.
+ *     A hidden page gets no callbacks. begin() waits until the page is
+ *     shown again (hidden= in the describe line); the frame in flight
+ *     completes OCCLUDED, with no time; each change writes a
+ *     YSCR_EV_VISIBILITY ring record at the next begin().
+ *     Input: SDL's Emscripten events, stamped when the page's handler ran
+ *     (SDL_GetTicksNS), not with the DOM event's own time, so a key pressed
+ *     while a frame is drawn is stamped when that task ends.
+ *     Not for a browser: triggers (they need -pthread and an isolated
+ *     page; not tested), codes (drawn through GL, always at risk:
+ *     CODE_RISK_COMPOSED), the gamma ramp, raw mice and the panic watchdog
+ *     (panic=n/a).
+ *   Not implemented; open() refuses them with a message:
  *     YSCR_BACKEND_GLX_OML (Linux X11),
  *     YSCR_BACKEND_WAYLAND (presentation-time), YSCR_BACKEND_METAL
- *     (macOS through ANGLE), YSCR_BACKEND_WEB (requestAnimationFrame).
- *     On Linux and macOS only SIM and CUSTOM open.
+ *     (macOS through ANGLE). On Linux and macOS only SIM and CUSTOM open.
  *
  *   ---------------------------------------------------------------------
  *   PRESENTER (the swap-path interface)
@@ -1214,6 +1281,11 @@
  *   Link libm on Linux, and include ysp/screen.h (or ysp/rt.h) before any
  *   system header in the implementation file: ysp/rt.h sets the
  *   feature-test macro that glibc reads at the first one.
+ *   Under Emscripten link SDL3's port and suspend the frame loop:
+ *       emcc -O2 -sUSE_SDL=3 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 \
+ *            -sASYNCIFY -sASYNCIFY_STACK_SIZE=65536 -DYRT_NO_THREADS ...
+ *   (-sJSPI in place of -sASYNCIFY where every target browser has JSPI;
+ *   examples/web/build.sh has the demos' flags and docs/web.md the sizes).
  *   Define YSCR_NO_SDL to build without SDL: the core, SIM and CUSTOM
  *   only, with no window, no input and no GL. tests/adapt/screen_test.c
  *   builds this way.
@@ -1228,6 +1300,14 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.7.0 - YSCR_BACKEND_WEB (BACKENDS, WEB; docs/web.md): under
+ *          Emscripten, SDL3's canvas and the header's WebGL2 context,
+ *          frames paced by requestAnimationFrame through an awaited
+ *          callback (ASYNCIFY or JSPI), records from the callback times as
+ *          estimates (YSCR_TIER_WEB, YSCR_PATH_BROWSER, ONSET_PLANNED),
+ *          the period measured at open, settling that warns and never
+ *          fails, YSCR_EV_VISIBILITY ring records. AUTO picks it there.
+ *          New enum values only; nothing changes on Windows.
  *   v0.6.0 - The ysp conventions (README.md, Conventions); breaks the API.
  *          Every call on a screen that returns a negative code writes
  *          yscr_error() first: yscr_begin(), yscr_flip_at(), yscr_flip(),
@@ -1463,7 +1543,20 @@
  *          groups, input restamping, mode lists and the parameter table.
  *          The other swap paths are stubs that refuse to open.
  *
- *   STATUS: v0.6.0: tests/adapt/screen_test.c checks a message after each
+ *   STATUS: v0.7.0 (WEB; docs/web.md): built with emsdk 6.0.12 and SDL3's
+ *   port 3.4.2, ASYNCIFY, YRT_NO_THREADS; the demos of examples/web ran in
+ *   Chrome 154 (headless and headed), Edge 155 (headless) and Firefox 154
+ *   to 157 (headless) on the laptop below. Chrome headed on its 60 Hz
+ *   panel, isolated, 5 runs of 600 frames: callback intervals SD 47 to 99
+ *   us, p1 16.51 to 16.55 ms, p99 16.78 to 16.84 ms, no frame dropped, the
+ *   program's time per frame 35 us p50. The browser's clock step: 100 us
+ *   (Chrome) and 1 ms (Firefox) not isolated, 5 us and 20 us isolated, also
+ *   when a service worker isolated the page. JSPI against ASYNCIFY: 27 %
+ *   less wasm and 15 to 20 us less per frame. No light was measured: the
+ *   compositor's delay after a web onset is unknown. tests/adapt/
+ *   screen_test.c checks the presenter's two pure rules (the onset after a
+ *   late task, settling); the presenter itself runs only in a page.
+ *   v0.6.0: tests/adapt/screen_test.c checks a message after each
  *   failing call on a screen and the ns panic fields; the rest below is
  *   v0.4.4's and the later versions' as stated. v0.4.4 (the depth from the path, AUTO = COMPOSITION;
  *   docs/screen.md, "Depth from the path" and "AUTO, decided"). Two swap paths run, DXGI_FLIP and COMPOSITION, on one
@@ -1635,9 +1728,9 @@
 #define YSP_SCREEN_H_INCLUDED
 
 #define YSCR_VERSION_MAJOR 0
-#define YSCR_VERSION_MINOR 6
+#define YSCR_VERSION_MINOR 7
 #define YSCR_VERSION_PATCH 0
-#define YSCR_VERSION_STRING "0.6.0"
+#define YSCR_VERSION_STRING "0.7.0"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -1715,7 +1808,9 @@ typedef enum yscr_tier {
     YSCR_TIER_1       = 1,  /* an OS vblank time for a flip it observed   */
     YSCR_TIER_2       = 2,  /* good under stated conditions only          */
     YSCR_TIER_3       = 3,  /* runs for development; onset not a measurement */
-    YSCR_TIER_SIM     = 4   /* the simulated display                      */
+    YSCR_TIER_SIM     = 4,  /* the simulated display                      */
+    YSCR_TIER_WEB     = 5   /* a browser's frame callback: an estimate with
+                             * the compositor's delay unknown; the lowest  */
 } yscr_tier;
 
 /* The ring record's mode word, u.u16[5]. */
@@ -1848,6 +1943,11 @@ typedef yin_mouse_report yscr_mouse_event;
  * FORCE; 0 without a window). */
 #define YSCR_EV_SETTLE 16u
 
+/* YSCR_EV_VISIBILITY: the page was hidden or shown (BACKENDS, WEB). t_ns
+ * the DOM event's time, aux desc.display_index, u.u32[0] 1 visible, 0
+ * hidden; written by the begin() after the change. */
+#define YSCR_EV_VISIBILITY 17u
+
 /* desc.foreground (FOREGROUND). */
 #define YSCR_FOREGROUND_AUTO  0   /* FORCE fullscreen, HONOR in a window */
 #define YSCR_FOREGROUND_HONOR 1   /* take what the OS policy gives       */
@@ -1962,7 +2062,7 @@ typedef enum yscr_backend {
     YSCR_BACKEND_GLX_OML,        /* Linux X11: stub                        */
     YSCR_BACKEND_WAYLAND,        /* stub                                   */
     YSCR_BACKEND_METAL,          /* macOS: stub                            */
-    YSCR_BACKEND_WEB,            /* stub                                   */
+    YSCR_BACKEND_WEB,            /* Emscripten: WebGL2, requestAnimationFrame */
     YSCR_BACKEND_SIM,            /* no window, a vblank grid on ysp_rt     */
     YSCR_BACKEND_CUSTOM          /* desc.presenter                         */
 } yscr_backend;
@@ -1978,7 +2078,8 @@ typedef enum yscr_path {
     YSCR_PATH_COMPOSED    = 1,
     YSCR_PATH_OVERLAY     = 2,
     YSCR_PATH_INDEPENDENT = 3,
-    YSCR_PATH_SIMULATED   = 4
+    YSCR_PATH_SIMULATED   = 4,
+    YSCR_PATH_BROWSER     = 5   /* the browser's compositor (BACKENDS, WEB) */
 } yscr_path;
 
 /* A display mode. The refresh is a rational in Hz. */
@@ -2818,6 +2919,12 @@ YSCR_API const yscr_param* yscr_params(int* n);
 #if !defined(YSCR_NO_SDL)
     #include <SDL3/SDL.h>
     #include "ysp/input.h"   /* again, now with SDL: yin_from_sdl */
+#endif
+
+#if defined(__EMSCRIPTEN__) && !defined(YSCR_NO_SDL)
+    #define YSCR__WEB 1
+    #include <emscripten.h>
+    #include <emscripten/html5.h>
 #endif
 
 #if defined(_WIN32) && !defined(YSCR_NO_SDL)
@@ -3906,6 +4013,335 @@ static const yscr_presenter yscr__sim_presenter = {
     yscr__sim_open, yscr__sim_close, yscr__sim_acquire, yscr__sim_present,
     yscr__sim_completions, NULL, NULL, yscr__sim_describe, NULL
 };
+
+/* --- web presenter (Emscripten: WebGL2, requestAnimationFrame) ------------ */
+
+/* The state and the two rules below compile everywhere, so the core test
+ * checks them without a browser; the presenter itself is Emscripten's. */
+
+/* Settling on the frame callbacks (BACKENDS, WEB): the last 20 intervals
+ * between callback times, none over 1.5 times their median (a skipped
+ * callback), SD at most 0.5 ms; at least 0.25 s, at most 2 s. Never a
+ * failure: a browser gives no control to wait for. */
+#define YSCR__WEB_N        20
+#define YSCR__WEB_SD_NS    500000.0
+#define YSCR__WEB_MIN_NS   250000000LL
+#define YSCR__WEB_MAX_NS   2000000000LL
+#define YSCR__WEB_WAIT_MS  250   /* a callback wait; a hidden page has none */
+
+typedef struct yscr__web {
+    int32_t     ctx;              /* EMSCRIPTEN_WEBGL_CONTEXT_HANDLE         */
+    int32_t     fresh;            /* in a frame callback, nothing presented  */
+    int32_t     has_pend, has_done, desync, coi, settled;
+    int32_t     n_iv, settle_frames;
+    uint64_t    pend_id;
+    int64_t     off_ns;           /* ysp_rt ns minus performance.now() in ns */
+    int64_t     corr_ns;          /* that correlation's width                */
+    int64_t     period;           /* measured, ns                            */
+    int64_t     t_last, c_last;   /* the newest frame callback               */
+    int64_t     settle_ns, sd_ns, t_open;
+    int64_t     hidden_ns;
+    int64_t     pend_t;           /* when the pending present was made      */
+    uint32_t    callbacks, hidden_waits, skipped, late;
+    int64_t     iv[YSCR__WEB_N];
+    yscr_vblank done;
+    char        canvas[64];
+} yscr__web;
+
+typedef char yscr__web_fits[sizeof(yscr__web) <= sizeof(((yscr_screen*)0)->backend_mem) ? 1 : -1];
+
+/* The vblank a present shows on: the first after both the frame callback
+ * that completed it and the present call. A task that ran past a vsync
+ * delays the next callback, whose time is then the vsync it missed, before
+ * the present (measured in headless Chrome: 1.3 ms before it after a 17 ms
+ * setup), so the frame cannot have shown there. c_cb and t_cb are that
+ * callback's count and time. */
+static int64_t yscr__web_shown(int64_t c_cb, int64_t t_cb, int64_t pend_t, int64_t period) {
+    int64_t c_pres = c_cb + (int64_t)floor((double)(pend_t - t_cb) / (double)period);
+    return c_pres + 1 > c_cb ? c_pres + 1 : c_cb;
+}
+
+/* The intervals of open's callbacks: 1 when the last YSCR__WEB_N are
+ * steady (SETTLE's rule for the web, above); sets the period and the SD. */
+static int yscr__web_steady(yscr__web* w) {
+    int64_t sorted[YSCR__WEB_N], med;
+    double m = 0, v = 0;
+    int i, j;
+    if (w->n_iv < YSCR__WEB_N) return 0;
+    memcpy(sorted, w->iv, sizeof sorted);
+    for (i = 1; i < YSCR__WEB_N; i++)
+        for (j = i; j > 0 && sorted[j - 1] > sorted[j]; j--) { int64_t x = sorted[j]; sorted[j] = sorted[j - 1]; sorted[j - 1] = x; }
+    med = sorted[YSCR__WEB_N / 2];
+    for (i = 0; i < YSCR__WEB_N; i++) m += (double)w->iv[i];
+    m /= YSCR__WEB_N;
+    for (i = 0; i < YSCR__WEB_N; i++) v += ((double)w->iv[i] - m) * ((double)w->iv[i] - m);
+    v = sqrt(v / YSCR__WEB_N);
+    w->sd_ns = (int64_t)llround(v);
+    if (sorted[YSCR__WEB_N - 1] * 2 > med * 3) {   /* a skipped callback: the median is the period */
+        w->period = med;
+        return 0;
+    }
+    w->period = (int64_t)llround(m);
+    return v <= YSCR__WEB_SD_NS;
+}
+
+#if defined(YSCR__WEB)
+
+EM_JS_DEPS(yscr__web_deps, "$UTF8ToString,$GL")
+
+/* The next frame callback's time (performance.now() ms), or -1 when none
+ * came in timeout_ms: the page is hidden. The await suspends the program
+ * (JSPI or ASYNCIFY), so the blocking frame loop runs in the callback's
+ * task: what it draws is composited with that frame. */
+EM_ASYNC_JS(double, yscr__web_raf, (int timeout_ms), {
+    return await new Promise(function(resolve) {
+        var done = false, to = 0, id = 0;
+        id = requestAnimationFrame(function(t) {
+            /* its time and when it ran, for a page's own statistics */
+            if (!done) { done = true; clearTimeout(to); Module['yscrRafRun'] = performance.now(); Module['yscrRafT'] = t; resolve(t); }
+        });
+        to = setTimeout(function() { if (!done) { done = true; cancelAnimationFrame(id); resolve(-1); } }, timeout_ms);
+    });
+})
+
+EM_JS(double, yscr__web_perf_ms, (void), { return performance.now(); })
+
+/* A WebGL2 context on the canvas. Created here, not through SDL, so the
+ * attributes are the header's: no alpha, depth, stencil or multisampling
+ * (gfx.h draws to its own targets), the drawing buffer not preserved (the
+ * compositor takes it at each frame), the high-performance GPU. desync is
+ * Module.yscrDesynchronized, off by default (BACKENDS, WEB). */
+EM_JS(int, yscr__web_gl_create, (const char* sel, int desync), {
+    var c = document.querySelector(UTF8ToString(sel));
+    if (!c) return 0;
+    var a = { alpha: false, depth: false, stencil: false, antialias: false, premultipliedAlpha: true,
+              preserveDrawingBuffer: false, powerPreference: 'high-performance',
+              failIfMajorPerformanceCaveat: false, majorVersion: 2, minorVersion: 0,
+              enableExtensionsByDefault: 1, desynchronized: !!desync };
+    var h = GL.createContext(c, a);
+    if (h) GL.makeContextCurrent(h);
+    return h;
+})
+
+/* 0 crossOriginIsolated, 1 visible now, 2 Module.yscrDesynchronized,
+ * 3 visibility changes so far (the listener counts from the first open),
+ * 4 and 5 the viewport's width and height in CSS pixels. */
+EM_JS(int, yscr__web_query, (int what), {
+    if (!Module['yscrVis']) {
+        Module['yscrVis'] = { changes: 0, log: [] };
+        document.addEventListener('visibilitychange', function(e) {
+            var v = Module['yscrVis'];
+            v.changes++;
+            if (v.log.length < 64) v.log.push([e.timeStamp, document.visibilityState === 'visible' ? 1 : 0]);
+        });
+    }
+    if (what === 0) return (typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated) ? 1 : 0;
+    if (what === 1) return document.visibilityState === 'visible' ? 1 : 0;
+    if (what === 2) return Module['yscrDesynchronized'] ? 1 : 0;
+    if (what === 4) return window.innerWidth;
+    if (what === 5) return window.innerHeight;
+    return Module['yscrVis'].changes;
+})
+
+/* The oldest visibility change not taken yet: its DOM time (ms) in *t and
+ * 1 visible or 0 hidden, or -1 when there is none. */
+EM_JS(int, yscr__web_vis_take, (double* t), {
+    var v = Module['yscrVis'];
+    if (!v || !v.log.length) return -1;
+    var e = v.log.shift();
+    HEAPF64[t >> 3] = e[0];
+    return e[1];
+})
+
+static uint64_t yscr__web_perf_ns(void) { return (uint64_t)(yscr__web_perf_ms() * 1e6); }
+
+static int64_t yscr__web_to_rt(const yscr__web* w, double ms) { return (int64_t)llround(ms * 1e6) + w->off_ns; }
+
+/* Waits for the next frame callback. While the page is hidden none come:
+ * the pending present completes with no time (OCCLUDED), and the wait goes
+ * on until the page is shown again, so a hidden page pauses the loop. */
+static void yscr__web_next(yscr__web* w) {
+    double ms;
+    int64_t t, k, t_hide = 0;
+    for (;;) {
+        ms = yscr__web_raf(YSCR__WEB_WAIT_MS);
+        if (ms >= 0) break;
+        if (!t_hide) t_hide = yscr__now();
+        w->hidden_waits++;
+        if (w->has_pend) {
+            memset(&w->done, 0, sizeof w->done);
+            w->done.present_id = w->pend_id;
+            w->done.path = YSCR_PATH_BROWSER;
+            w->done.flags = YSCR_FLIP_OCCLUDED;
+            w->has_done = 1;
+            w->has_pend = 0;
+        }
+    }
+    if (t_hide) w->hidden_ns += yscr__now() - t_hide;
+    t = yscr__web_to_rt(w, ms);
+    k = w->period > 0 && w->callbacks ? (int64_t)llround((double)(t - w->t_last) / (double)w->period) : 1;
+    if (k < 1) k = 1;
+    if (k > 1 && !t_hide) w->skipped += (uint32_t)(k - 1);
+    w->c_last += k;
+    w->t_last = t;
+    w->callbacks++;
+    w->fresh = 1;
+    if (w->has_pend) {
+        int64_t shown = yscr__web_shown(w->c_last, w->t_last, w->pend_t, w->period);
+        memset(&w->done, 0, sizeof w->done);
+        w->done.present_id = w->pend_id;
+        w->done.t_ns = t + (shown - w->c_last) * w->period;
+        w->done.count = shown;
+        w->done.path = YSCR_PATH_BROWSER;
+        w->done.tier = YSCR_TIER_WEB;
+        w->done.flags = YSCR_FLIP_ONSET_PLANNED;
+        w->has_done = 1;
+        w->has_pend = 0;
+    }
+}
+
+static int yscr__web_open(void* ctx, const yscr_presenter_open* in, yscr_caps* caps, char* err, size_t err_cap) {
+    yscr__web* w = (yscr__web*)ctx;
+    yrt_corr_desc cd;
+    yrt_corr c;
+    int cw = 0, ch = 0;
+    const char* sel;
+    memset(w, 0, sizeof *w);
+    w->t_open = yscr__now();
+    if (!in->window) { yscr__set_error(err, err_cap, "ysp_screen: web: no window"); return YSCR_ERR_ARG; }
+    sel = SDL_GetStringProperty(SDL_GetWindowProperties(in->window), SDL_PROP_WINDOW_EMSCRIPTEN_CANVAS_ID_STRING, "#canvas");
+    yscr__copy(w->canvas, sizeof w->canvas, sel);
+    w->coi = yscr__web_query(0);
+    w->desync = yscr__web_query(2);
+    w->ctx = yscr__web_gl_create(w->canvas, w->desync);
+    if (w->ctx <= 0) {
+        yscr__set_error(err, err_cap, "ysp_screen: web: no WebGL2 context on %s (the browser or its GPU has no WebGL2)", w->canvas);
+        return YSCR_ERR_LOST;
+    }
+    /* performance.now() is the frame callbacks' clock; yrt_now_ns() is
+     * Emscripten's clock_gettime, which may count from another origin */
+    memset(&cd, 0, sizeof cd);
+    cd.read = yscr__web_perf_ns;
+    if (yrt_correlate(&cd, &c) > 0) {
+        w->off_ns = c.rt_ns - (int64_t)c.other;
+        w->corr_ns = c.width_ns;
+    }
+    /* Settle: count callbacks until their intervals are steady. */
+    for (;;) {
+        int64_t prev = w->t_last, el;
+        yscr__web_next(w);
+        if (w->callbacks > 1) {
+            if (w->n_iv == YSCR__WEB_N) memmove(w->iv, w->iv + 1, sizeof(int64_t) * (YSCR__WEB_N - 1));
+            else w->n_iv++;
+            w->iv[w->n_iv - 1] = w->t_last - prev;
+        }
+        el = yscr__now() - w->t_open;
+        w->settled = yscr__web_steady(w);
+        if ((w->settled && el >= YSCR__WEB_MIN_NS) || el >= YSCR__WEB_MAX_NS) break;
+    }
+    w->settle_ns = yscr__now() - w->t_open;
+    w->settle_frames = (int32_t)w->callbacks;
+    if (w->period <= 0) w->period = 16666667;
+    w->skipped = 0;
+    w->c_last = 0;   /* the grid's count starts here */
+    emscripten_get_canvas_element_size(w->canvas, &cw, &ch);
+    caps->kind = YSCR_CALLBACK;
+    caps->period_ns = w->period;
+    caps->native_target = true;   /* the core never sleeps: the main thread must not block */
+    caps->hw_onset = false;
+    caps->max_in_flight = 1;
+    caps->mode.w = cw;
+    caps->mode.h = ch;
+    caps->mode.refresh_num = (int32_t)llround(1e12 / (double)w->period);
+    caps->mode.refresh_den = 1000;
+    caps->mode.period_ns = w->period;
+    return YSCR_OK;
+}
+
+static void yscr__web_close(void* ctx) {
+    yscr__web* w = (yscr__web*)ctx;
+    if (w->ctx > 0) emscripten_webgl_destroy_context((EMSCRIPTEN_WEBGL_CONTEXT_HANDLE)w->ctx);
+    w->ctx = 0;
+}
+
+/* A frame is drawn early in a frame callback's task, so it is composited
+ * with that frame. A callback that has run more than half a period ago
+ * (open() held it while the program set up, or the browser ran the
+ * callback late) is not used: a draw there was replaced before it showed,
+ * by the next frame's draw in the next callback (measured in headless
+ * Chrome after a 17 ms setup). So the wait goes on, at most 4 callbacks. */
+static void yscr__web_sync(yscr__web* w) {
+    int i;
+    if (w->fresh && yscr__now() - w->t_last <= w->period / 2) return;
+    for (i = 0; i < 4; i++) {
+        yscr__web_next(w);
+        if (yscr__now() - w->t_last <= w->period / 2) return;
+        w->late++;
+    }
+}
+
+static int yscr__web_acquire(void* ctx, int64_t deadline_ns, yscr_vblank* newest) {
+    yscr__web* w = (yscr__web*)ctx;
+    (void)deadline_ns;   /* a hidden page waits past it: see yscr__web_next */
+    yscr__web_sync(w);
+    emscripten_webgl_make_context_current((EMSCRIPTEN_WEBGL_CONTEXT_HANDLE)w->ctx);
+    memset(newest, 0, sizeof *newest);
+    newest->t_ns = w->t_last;
+    newest->count = w->c_last;
+    newest->path = YSCR_PATH_BROWSER;
+    return YSCR_OK;
+}
+
+/* The browser shows what was drawn at the next frame it composites, after
+ * the program yields. A target later than that cannot be held: the drawing
+ * buffer is not preserved, so the record says EARLY (BACKENDS, WEB). */
+static int yscr__web_present(void* ctx, const yscr_present_req* req) {
+    yscr__web* w = (yscr__web*)ctx;
+    w->pend_id = req->present_id;
+    w->pend_t = yscr__now();
+    w->has_pend = 1;
+    w->fresh = 0;
+    return YSCR_OK;
+}
+
+static int yscr__web_completions(void* ctx, yscr_vblank* out, int cap) {
+    yscr__web* w = (yscr__web*)ctx;
+    if (!w->has_done || cap < 1) return 0;
+    out[0] = w->done;
+    w->has_done = 0;
+    return 1;
+}
+
+static yscr_proc yscr__web_gl_proc(void* ctx, const char* name) {
+    (void)ctx;
+    return (yscr_proc)emscripten_webgl_get_proc_address(name);
+}
+
+static void yscr__web_bind(void* ctx) {
+    yscr__web* w = (yscr__web*)ctx;
+    yscr__web_sync(w);
+    emscripten_webgl_make_context_current((EMSCRIPTEN_WEBGL_CONTEXT_HANDLE)w->ctx);
+}
+
+static int yscr__web_describe(void* ctx, char* buf, size_t cap) {
+    yscr__web* w = (yscr__web*)ctx;
+    yrt_clock_info ci;
+    yrt_get_clock_info(&ci);
+    return snprintf(buf, cap, "raf_period=%.4fms raf_settle=%s%.2fs(%d callbacks,sd=%.0fus) coi=%d clock_step=%lldns "
+                    "corr=%lldns desync=%d skipped=%u late=%u hidden=%u(%.1fs) vis_changes=%d canvas=%s",
+                    (double)w->period * 1e-6, w->settled ? "" : "UNSTEADY,", (double)w->settle_ns * 1e-9,
+                    (int)w->settle_frames, (double)w->sd_ns * 1e-3, w->coi, (long long)ci.resolution_ns,
+                    (long long)w->corr_ns, w->desync, (unsigned)w->skipped, (unsigned)w->late, (unsigned)w->hidden_waits,
+                    (double)w->hidden_ns * 1e-9, yscr__web_query(3), w->canvas);
+}
+
+static const yscr_presenter yscr__web_presenter = {
+    YSCR_PRESENTER_VERSION, "web", true, true, false,
+    yscr__web_open, yscr__web_close, yscr__web_acquire, yscr__web_present,
+    yscr__web_completions, yscr__web_gl_proc, yscr__web_bind, yscr__web_describe, NULL
+};
+
+#endif /* YSCR__WEB */
 
 /* --- DXGI flip presenter (Windows 10 and 11) ------------------------------ */
 
@@ -6295,6 +6731,9 @@ static void yscr__settle_flip(yscr_screen* s, const yscr__pend* p, const yscr_re
 static uint8_t yscr__tier(const yscr_screen* s, const yscr_record* r) {
     int t = r->tier;
     if (s->backend == YSCR_BACKEND_SIM) return YSCR_TIER_SIM;
+    /* no flip in a browser is observed: the frame callback's time is not
+     * the scanout's, and the compositor's delay after it is unknown */
+    if (s->backend == YSCR_BACKEND_WEB) return YSCR_TIER_WEB;
     if (!t) {
         switch (r->path) {
         case YSCR_PATH_OVERLAY:
@@ -6344,7 +6783,7 @@ static void yscr__finish(yscr_screen* s, yscr__pend* p, int64_t shown) {
     }
     if (s->n_codes > 0) {
         r->code_risk = yscr_code_risk(s);
-        if (r->path == YSCR_PATH_COMPOSED) r->code_risk |= YSCR_CODE_RISK_COMPOSED;
+        if (r->path == YSCR_PATH_COMPOSED || r->path == YSCR_PATH_BROWSER) r->code_risk |= YSCR_CODE_RISK_COMPOSED;
         if (r->code_risk) r->flags |= YSCR_FLIP_CODE_AT_RISK;
     }
     yscr__push_flip(s, r);
@@ -7497,6 +7936,10 @@ static void yscr__settle_message(const yscr_screen* s, char* b, size_t cap) {
     yscr__settle_token(s, tok, sizeof tok);
     if (s->st_result != YSCR_SETTLE_FAILED) {
         snprintf(b, cap, "settle=%s", tok);
+    } else if (s->backend == YSCR_BACKEND_WEB) {
+        snprintf(b, cap, "the browser's frame callbacks did not settle in %.1f s (warn): the last %d intervals had an "
+                 "SD of %.1f us (limit 500), or a callback was skipped; the run goes on", (double)s->st_ns * 1e-9,
+                 YSCR__SETTLE_N, (double)s->st_sd * 1e-3);
     } else if (s->st_cond == YSCR_SETTLE_C_SPREAD) {
         snprintf(b, cap, "the display did not settle in %.1f s (%s, %s): spread: the last %d vblank intervals had an SD of "
                  "%.1f us (limit %.0f) and a mean %+.1f us from the mode's period (limit %.0f)",
@@ -7856,6 +8299,9 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
                      "as desc.abort_keys.key");
         return false;
     }
+#if !defined(YSCR__WEB)
+    (void)&yscr__web_shown; (void)&yscr__web_steady;   /* the core test calls them */
+#endif
     s->backend = desc->backend;
     s->auto_pick = YSCR_AUTO_NAMED;
     if (s->backend == YSCR_BACKEND_AUTO) {
@@ -7864,9 +8310,11 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
          * docs/screen.md "AUTO"); DXGI_FLIP where it does not open */
         s->backend = YSCR_BACKEND_COMPOSITION;
         s->auto_pick = YSCR_AUTO_COMPOSITION;
+#elif defined(YSCR__WEB)
+        s->backend = YSCR_BACKEND_WEB;
 #else
-        yscr__copy(s->error, sizeof s->error, "ysp_screen: no display backend on this platform in v0.1 "
-                     "(Linux X11, Wayland, macOS and the web are stubs); BACKEND_SIM runs without a display");
+        yscr__copy(s->error, sizeof s->error, "ysp_screen: no display backend on this platform "
+                     "(Linux X11, Wayland and macOS are stubs); BACKEND_SIM runs without a display");
         return false;
 #endif
     }
@@ -7885,6 +8333,12 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
         s->pr_ctx = s->backend_mem;
         break;
 #endif
+#if defined(YSCR__WEB)
+    case YSCR_BACKEND_WEB:
+        s->pr = &yscr__web_presenter;
+        s->pr_ctx = s->backend_mem;
+        break;
+#endif
     case YSCR_BACKEND_CUSTOM:
         if (!desc->presenter || desc->presenter->version != YSCR_PRESENTER_VERSION ||
             !desc->presenter->open || !desc->presenter->acquire || !desc->presenter->present ||
@@ -7897,8 +8351,8 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
         s->pr_ctx = desc->presenter_ctx;
         break;
     default:
-        yscr__set_error(s->error, sizeof s->error, "ysp_screen: backend %d is not implemented in v0.1 "
-                          "(DXGI_FLIP, SIM and CUSTOM are)", (int)s->backend);
+        yscr__set_error(s->error, sizeof s->error, "ysp_screen: backend %d is not implemented on this platform "
+                          "(DXGI_FLIP and COMPOSITION on Windows, WEB under Emscripten, SIM and CUSTOM are)", (int)s->backend);
         return false;
     }
 
@@ -7995,6 +8449,16 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
         yscr__win_load();   /* the window a forced raise gives the foreground back to */
         s->fg_prev = yscr__win.foreground ? (void*)yscr__win.foreground() : NULL;
 #endif
+#if defined(YSCR__WEB)
+        /* A page goes fullscreen only from a user gesture (a button), so
+         * the header never asks: a "fullscreen" screen is a canvas the size
+         * of the page's viewport at open, which the page may have made
+         * fullscreen before (BACKENDS, WEB). */
+        if (!desc->windowed) {
+            match.w = yscr__web_query(4);
+            match.h = yscr__web_query(5);
+        }
+#endif
         props = SDL_CreateProperties();
         SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, "ysp_screen");
         SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_X_NUMBER, (Sint64)SDL_WINDOWPOS_CENTERED_DISPLAY(id));
@@ -8003,7 +8467,11 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
                               desc->windowed ? (desc->window_w ? desc->window_w : 800) : match.w);
         SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER,
                               desc->windowed ? (desc->window_h ? desc->window_h : 600) : match.h);
+#if defined(YSCR__WEB)
+        SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN, false);
+#else
         SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN, !desc->windowed);
+#endif
         SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_HIGH_PIXEL_DENSITY_BOOLEAN, true);
         s->window = SDL_CreateWindowWithProperties(props);
         SDL_DestroyProperties(props);
@@ -8189,6 +8657,23 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
     yscr__warmup(s);
     /* Settling (SETTLE): skipped where it cannot run or was turned off,
      * and recorded either way. */
+#if defined(YSCR__WEB)
+    if (s->backend == YSCR_BACKEND_WEB && s->st_mode != YSCR_SETTLE_OFF) {
+        /* the presenter's own rule, on the frame callbacks at open: a
+         * browser gives nothing to wait for, so it warns, never fails */
+        const yscr__web* w = (const yscr__web*)(const void*)s->backend_mem;
+        s->st_result = w->settled ? YSCR_SETTLED : YSCR_SETTLE_FAILED;
+        s->st_mode = YSCR_SETTLE_WARN;
+        s->st_src = YSCR_SETTLE_SRC_BACKEND;
+        s->st_cond = w->settled ? YSCR_SETTLE_C_NONE : YSCR_SETTLE_C_SPREAD;
+        s->st_sd = w->sd_ns;
+        s->st_mean = 0;
+        s->st_ns = w->settle_ns;
+        s->st_flips = w->settle_frames;
+        s->st_run = w->settled ? YSCR__WEB_N : 0;
+        s->st_need = YSCR__WEB_N;
+    } else
+#endif
     if (s->backend == YSCR_BACKEND_SIM || !hw_onset) {
         s->st_result = YSCR_SETTLE_SKIPPED;
         s->st_src = YSCR_SETTLE_SRC_BACKEND;
@@ -8327,6 +8812,7 @@ static const char* yscr__path_name(uint16_t p) {
     case YSCR_PATH_OVERLAY: return "overlay";
     case YSCR_PATH_INDEPENDENT: return "independent";
     case YSCR_PATH_SIMULATED: return "simulated";
+    case YSCR_PATH_BROWSER: return "browser";
     default: return "unknown";
     }
 }
@@ -8431,8 +8917,10 @@ YSCR_API int yscr_describe(const yscr_screen* s, char* buf, size_t cap) {
                     s->lead < 0 ? -1.0 : s->lead, s->worst_tier, abort_s,
                     s->panic_armed == 1 ? "armed" : s->panic_armed == 2 ? "idle(windowed)" : s->panic_armed == 3 ? "n/a" : "off",
                     s->sync_off ? " WARNING=not-vsynced(driver-setting?)" : "",
-                    s->unstable ? " WARNING=off-grid-vblanks" : "",
-                    (ppm > 200 || ppm < -200) ? " WARNING=period-differs-from-mode" : "",
+                    /* a browser's callback times jitter about the grid, and its
+                     * "mode" is the period open() measured (BACKENDS, WEB) */
+                    s->unstable && s->backend != YSCR_BACKEND_WEB ? " WARNING=off-grid-vblanks" : "",
+                    (ppm > 200 || ppm < -200) && s->backend != YSCR_BACKEND_WEB ? " WARNING=period-differs-from-mode" : "",
                     s->st_result == YSCR_SETTLE_FAILED ? " WARNING=not-settled" : "",
                     s->fg == YSCR_FG_REFUSED ? " WARNING=not-foreground" : "");
 }
@@ -8470,13 +8958,29 @@ static void yscr__pump(yscr_screen* s) {
 }
 
 static int yscr__begin(yscr_screen* s, yscr_frame* f) {
-    int64_t t0, now, wait;
+    int64_t t0, now, wait, prev_pred;
     int rc;
     YRT_ZONE(z_begin, "yscr.begin");
     if (!s || !f) { YRT_ZONE_END(z_begin); return YSCR_ERR_ARG; }
     if (!s->open) { YRT_ZONE_END(z_begin); return YSCR_ERR_CLOSED; }
     if (s->begun) { YRT_ZONE_END(z_begin); return YSCR_ERR_ORDER; }
     yscr__pump(s);
+#if defined(YSCR__WEB)
+    if (s->backend == YSCR_BACKEND_WEB) {
+        double ms;
+        int vis;
+        while ((vis = yscr__web_vis_take(&ms)) >= 0) {
+            yrt_event ev;
+            memset(&ev, 0, sizeof ev);
+            ev.source = (uint16_t)YRT_SRC_SCREEN;
+            ev.kind = (uint16_t)YSCR_EV_VISIBILITY;
+            ev.t_ns = (uint64_t)yscr__web_to_rt((const yscr__web*)(const void*)s->backend_mem, ms);
+            ev.aux = s->display_index;
+            ev.u.u32[0] = (uint32_t)vis;
+            yscr__push(s, &ev);
+        }
+    }
+#endif
     if (s->raw_mice) yscr__rm_check(s);
     yscr__in_log(s);
     if (yscr__abort_take(s, f)) { YRT_ZONE_END(z_begin); return YSCR_QUIT; }
@@ -8515,13 +9019,22 @@ static int yscr__begin(yscr_screen* s, yscr_frame* f) {
     if (s->window && t0 - s->sdl_corr_t > 10000000000LL) yscr__restamp_correlate(s);
 #endif
     now = yscr__now();
+    prev_pred = s->pred_count;
     s->pred_count = yscr__count_at(s, now + s->margin_ns) + s->depth;
     if (s->pred_count <= s->prev_shown) s->pred_count = s->prev_shown + 1;
     /* Never the vblank the last frame was planned for, even when that
      * frame is done: one shown a vblank early (EARLY, when the composed
      * path's depth falls) has left its planned vblank, and the next frame
-     * planned there got the same onset (docs/screen.md). */
-    if (s->pred_count <= s->last_planned) s->pred_count = s->last_planned + 1;
+     * planned there got the same onset (docs/screen.md). In a browser a
+     * frame planned late shows at the next frame all the same, so that
+     * rule planned every later frame a vblank ahead of where it showed
+     * (measured, headless Chrome); there the onsets rise from begin to
+     * begin instead. */
+    if (s->backend == YSCR_BACKEND_WEB) {
+        if (s->pred_count <= prev_pred) s->pred_count = prev_pred + 1;
+    } else if (s->pred_count <= s->last_planned) {
+        s->pred_count = s->last_planned + 1;
+    }
     {   /* one frame per vblank, as flip_at() plans it */
         int i;
         for (i = 0; i < YSCR__MAX_PEND; i++)
@@ -8594,7 +9107,7 @@ static int yscr__flip_at(yscr_screen* s, int64_t t, yscr_record* out) {
     count_t = yscr__snap(s, tg);
     earliest = yscr__count_at(s, yscr__now() + s->margin_ns) + s->depth;
     if (earliest <= s->prev_shown) earliest = s->prev_shown + 1;
-    if (earliest <= s->last_planned) earliest = s->last_planned + 1;
+    if (earliest <= s->last_planned && s->backend != YSCR_BACKEND_WEB) earliest = s->last_planned + 1;
     for (i = 0; i < YSCR__MAX_PEND; i++)   /* one frame per vblank */
         if (s->pend[i].used && s->pend[i].planned_count >= earliest) earliest = s->pend[i].planned_count + 1;
     planned = count_t;

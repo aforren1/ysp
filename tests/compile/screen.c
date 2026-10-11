@@ -37,6 +37,11 @@ static const screen_api g_api = {
     yscr_flip_group_at, yscr_text_input, yscr_error
 };
 
+/* v0.7.0: the web tier is the lowest, and it and the browser path fit the
+ * ring's 3-bit fields; checked at compile time. */
+typedef char web_values_fit[(YSCR_TIER_WEB > YSCR_TIER_SIM && YSCR_TIER_WEB <= 7 && YSCR_PATH_BROWSER <= 7 &&
+                             YSCR_EV_VISIBILITY == 17u) ? 1 : -1];
+
 int main(void) {
     yscr_screen s;
     yscr_desc d;
@@ -75,5 +80,10 @@ int main(void) {
     if (g_api.begin(&s, &f) != YSCR_ERR_ORDER || !strstr(g_api.error(&s), "begin")) return 11;
     if (g_api.flip(&s) != YSCR_OK) return 12;
     yscr_close(&s);
+#if !defined(__EMSCRIPTEN__)
+    memset(&d, 0, sizeof d);
+    d.backend = YSCR_BACKEND_WEB;   /* Emscripten only: refused with a message */
+    if (yscr_open(&s, &d) || !strstr(yscr_error(&s), "not implemented")) return 14;
+#endif
     return yscr_params(&n) && n > 0 ? 0 : 4;
 }

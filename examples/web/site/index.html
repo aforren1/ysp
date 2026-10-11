@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ysp web demos</title>
+<script src="coi-serviceworker.js"></script>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:,">
+</head>
+<body>
+<h1>ysp web demos</h1>
+<p><a href="https://github.com/aforren1/ysp">ysp</a> is a set of single-header, public-domain C libraries
+for psychophysics rigs. These pages run small experiments built from those headers, compiled to
+WebAssembly with Emscripten. Each one is the same C a lab rig runs, with the browser in place of the
+operating system's display path.</p>
+<div class="notice"><strong>Browser timing is not rig timing.</strong> A browser does not report when
+the display showed a frame, gives no control over the display, and runs other work on the same thread.
+On these pages, timing is measured and reported, never controlled. Use a lab rig with a photodiode for a
+timing claim. <a href="https://github.com/aforren1/ysp/blob/main/docs/web.md">What the web backend does</a>.</div>
+<div id="status" class="status"></div>
+
+<ul class="demos">
+  <li><a href="tutorial.html">Tilt discrimination</a>: a fixation cross, a Gabor tilted left or right,
+      a keyboard reaction time, 10 trials, the results and a CSV download.</li>
+  <li><a href="rdk.html">Dot motion threshold</a>: random dot motion, left or right, with a staircase on
+      coherence; the threshold estimate at the end.</li>
+  <li><a href="gallery.html">Stimulus gallery</a>: gratings, Gabors, noise, dots, shapes, text and
+      animation, eight pages of <code>ysp/gfx.h</code>.</li>
+  <li><a href="selftest.html">Browser timing self-test</a>: the measured refresh, a histogram of the
+      intervals between frame callbacks, the clock's resolution, isolation and key latency.</li>
+</ul>
+
+<p class="status">Each page needs WebGL2 and a keyboard. The first visit can reload the page once: a
+service worker makes the site cross-origin isolated, which gives a finer clock. In a private window
+the service worker may be off, and the pages run without it.</p>
+
+<script src="ysp-web.js"></script>
+</body>
+</html>

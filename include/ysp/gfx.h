@@ -1258,7 +1258,13 @@
  *          ms a file against PPM's 8.0 to 11.4 ms) and every tool the files
  *          go to opens PPM. A format with one value would be an argument
  *          that every call passes for nothing, so the API drops it.
- *   v0.13.0 -CAPTURE: the output of chosen frames (every Nth, or marked
+ *   v0.13.1 - Fixed under WebGL (ysp/screen.h's web backend): a pass into
+ *          a render target unbinds that target's texture from every unit,
+ *          because WebGL refuses each draw while it is bound to a unit the
+ *          program has a sampler on, read or not (133 refused draws on
+ *          examples/gfx/gallery.c's first page in Chrome 154; 0 on all 8
+ *          pages after). GL ES drew them, so nothing changes natively.
+ *   v0.13.0 - CAPTURE: the output of chosen frames (every Nth, or marked
  *          with ygfx_capture_mark()) copied in ygfx_end() into pixel
  *          buffers with a fence, collected a frame or more later without a
  *          wait, tagged with the frame index and its flip record, and
@@ -3983,6 +3989,16 @@ static void ygfx__gl_pass_begin(void* c, uint32_t target, int w, int h, const fl
     if (gl->c_fbo != (int64_t)fbo) {
         gl->f.BindFramebuffer(YGFX__GL_FRAMEBUFFER, fbo);
         gl->c_fbo = (int64_t)fbo;
+    }
+    if (fbo) {
+        /* WebGL refuses every draw while the target's own texture is bound
+         * to a unit the program has a sampler on, read or not (a feedback
+         * loop, GL_INVALID_OPERATION; 133 refused draws on the gallery's
+         * first page in Chrome 154). GL ES leaves it undefined only when
+         * sampled, so ANGLE and Mesa drew. */
+        int i;
+        for (i = 0; i < 6; i++)
+            if (gl->c_tex[i] == (int64_t)gl->tex[target - 1].tex) ygfx__gl_bind_tex(gl, i, 0);
     }
     gl->f.Viewport(0, 0, w, h);
     if (clear) {
