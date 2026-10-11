@@ -717,6 +717,146 @@ block compiles as C99 and C++17 against `ysp/screen.h` and
 `w-06` now checks the range of a desc duration, because the rounding it
 checked moved to the caller.
 
+## The first trial (v0.4.0)
+
+On 2026-10-10 the user approved item D of the usability review: make the
+first trial short. The smallest trial with a fixation, a stimulus,
+keyboard RT and saved data (`trial_keyboard.c`) had 256 lines of code
+without its `--sim` participant, and 12 of 13 trial examples had a copy of
+the same plumbing: arm at the fixation, take the planned onset when the
+stimulus lands, replace it with the flip record's onset when the record
+arrives, feed every input event, write the row by hand.
+
+### The helpers and where they live
+
+| Helper | Header | Why there |
+|---|---|---|
+| `yrsp_set_landing()` | `ysp/response.h`, inline with `ysp/timeline.h` | It reads a `ytl_event` and calls `yrsp_set_onset()`. `ysp/response.h` must not include `ysp/timeline.h` (both are pure computation), so it appears when the timeline came first, as `yrsp_onset_landing()` does since v0.1. |
+| `yrsp_update_frame()` | `ysp/response.h`, inline with `ysp/screen.h` | It reads `yscr_frame.done` and calls `yrsp_onset_flip()`, `yrsp_set_onset()` and `yrsp_update()`. The same rule. |
+| `yrsp_feed_screen()` | `ysp/response.h`, inline with `ysp/screen.h` and SDL3 | `yscr_poll()` needs a complete `SDL_Event`. A file that compiles `ysp/screen.h`'s implementation has it. |
+| `yrsp_plan_frame()` | `ysp/response.h`, a function | The frame the collector waits for. A function, so the test reaches it without a screen, and a program with its own record source (`yscr_on_flip()`) can use it. |
+| `YRSP_DATA_COLS`, `yrsp_data_set()` | `ysp/response.h`, inline with `ysp/trials.h` | The result's fields are this header's. `ysp/trials.h` includes only `ysp/table.h` and must not know a collector. |
+| `ygfx_open_screen()`, `ygfx_show_until_key()` | `ysp/gfx.h` | They need the screen and the gfx, which `ysp/gfx.h` has. |
+| `ygfx_text_make()` | `ysp/gfx.h`, with `ysp/outline.h` first | The font reader and the curve sets are `ysp/outline.h`'s, which is pure computation; `ysp/gfx.h` builds on `ysp/screen.h` and `ysp/color.h` only, so the text appears when `ysp/outline.h` came first ([conventions.md](conventions.md), Dependencies). |
+
+Every helper fits an existing header under the dependency rules, so
+there is no new header. The inline helpers call this header's functions
+only: a frame loop with them makes the same calls as the loop written out
+(the USAGE block has both forms).
+
+Timing stays visible in the row. `YRSP_DATA_COLS` writes the onset's
+source, tier and residual and the landing residual in every row, so a row
+whose RT came from a plan says so. The collector now keeps its first plan
+beside the final onset (`result.plan_residual`), because the final onset
+replaced the landing residual that `trial_keyboard.c` wrote before.
+
+Not done, and why:
+
+- One call for the input, the record and the deadline. The screen's
+  queue has more than one reader: `trial_adjustment` steps a value per
+  key, `trial_mouse_tracking` routes the bridge's events and SDL's, and
+  `trial_two_keyboards` routes by device. Those keep their own loop and
+  use `yrsp_update_frame()` alone.
+- `YRSP_ENDED` once. The status stays `YRSP_ENDED` until the next
+  `yrsp_arm()`, as before; the examples keep their `responding` flag.
+- A new thin header for the first trial. Not needed: see the table.
+
+### The examples
+
+`trial_keyboard.c` uses every helper, `ysp/trials.h`'s data writer and an
+instruction screen. Its columns are a superset of v0.3.0's: the
+self-check of `--sim` reads the file back and finds each one. The other
+examples in `examples/response/` (not `trial_two_keyboards.c`) use the
+helpers where they fit:
+
+| Example | total | code | loop | Helpers used | Data writer |
+|---|---|---|---|---|---|
+| `trial_keyboard` | 419 to 371 | 256 to 184 | 96 to 61 | all, and the instruction screen | yes |
+| `trial_same_different` | 397 to 363 | 253 to 213 | 97 to 78 | open, feed, update, landing | yes |
+| `trial_srt` | 366 to 338 | 237 to 211 | 79 to 66 | open, feed, update, landing | no |
+| `trial_adjustment` | 428 to 396 | 248 to 217 | 86 to 78 | open, update, landing | no |
+| `trial_mouse_tracking` | 496 to 482 | 315 to 300 | 119 to 110 | open, update, landing | no |
+| `trial_audio_keyboard` | 333 to 312 | 196 to 169 | 63 to 53 | open, feed | yes |
+| `trial_stop_signal` | 422 to 393 | 297 to 261 | 116 to 100 | open, feed, update, landing | yes |
+| `trial_2afc_adaptive` | 512 to 501 | 345 to 327 | 90 to 81 | open, feed, update, landing | yes |
+| `trial_stroop` | 510 to 492 | 353 to 333 | 103 to 90 | open, feed, update, landing | no |
+
+The counts: `total` is `wc -l`; `code` is the non-blank, non-comment
+lines without the `--sim` participant (a line that names a `sim` variable
+goes, with the block it opens); `loop` is the same inside the frame loop.
+Part of `code` is the setup's descs, now compound literals.
+
+The data writer is in `trial_keyboard`, `trial_same_different`,
+`trial_audio_keyboard`, `trial_stop_signal` and `trial_2afc_adaptive`.
+Not in the others: `trial_srt` opens a new trial list for each block,
+which a writer bound to one session does not follow; `trial_adjustment`
+and `trial_mouse_tracking` write a trajectory file beside the trial file
+and their columns are mostly their own; `trial_stroop` writes its rules
+text and the layout's stamp, and its conditions file can change the
+session's columns. Their files keep v0.3.0's format.
+
+### Measured: no flip moved
+
+`trial_keyboard` before (v0.3.0 example and headers) and after, built
+the same way (MSVC 19.44 `/O2`, a wrapper that logs every flip record and
+the frame thread's time from `yscr_begin()` returning to `yscr_flip()`
+being called), 20 trials with no key (each trial times out), two runs of
+each, interleaved, under the timing guard. Windows 11, the Iris Xe laptop,
+1920 x 1200 at 60 Hz, AC, 2026-10-10. The first 120 frames of each run
+are left out (the wrapper takes the foreground there); they had no late
+frame either, but for one in a before run.
+
+| Run | Frames | Late | Late target | Early | Tier | Interval mean, sd, max (ms) | CPU p50, p99, max (ms) |
+|---|---|---|---|---|---|---|---|
+| window, before 1 | 4055 | 0 | 0 | 0 | 1 | 16.6664, 0.0008, 16.672 | 0.144, 0.418, 1.150 |
+| window, before 2 | 4056 | 0 | 0 | 0 | 1 | 16.6664, 0.0008, 16.669 | 0.118, 0.272, 1.882 |
+| window, after 1 | 4056 | 0 | 0 | 0 | 1 | 16.6664, 0.0008, 16.673 | 0.128, 0.261, 0.922 |
+| window, after 2 | 4055 | 0 | 0 | 0 | 1 | 16.6664, 0.0009, 16.675 | 0.119, 0.268, 2.023 |
+| fullscreen, before 1 | 4060 | 0 | 0 | 0 | 1 | 16.6664, 0.0008, 16.670 | 0.113, 0.211, 0.379 |
+| fullscreen, before 2 | 4060 | 0 | 0 | 0 | 1 | 16.6664, 0.0003, 16.672 | 0.138, 0.310, 2.130 |
+| fullscreen, after 1 | 4059 | 0 | 0 | 0 | 1 | 16.6664, 0.0009, 16.672 | 0.125, 0.387, 1.661 |
+| fullscreen, after 2 | 4060 | 0 | 0 | 0 | 1 | 16.6664, 0.0003, 16.674 | 0.131, 0.326, 0.956 |
+
+No flip moved: no late, early or skipped frame in any run, every record
+tier 1 on the independent-flip path, and the frame thread's median time
+within the spread of the before runs (0.113 to 0.144 ms before, 0.119 to
+0.131 ms after). A first try of the window runs ran with the window in
+the background: DWM showed it at 15 Hz and every record was ESTIMATED, in
+both builds. A window that does not get the foreground is not a timing
+run.
+
+### Tests and mutations
+
+Checked on 2026-10-11 with MSVC 19.44 (`msvc-full`) and MinGW-w64 gcc
+16.1 (the `mingw` preset with SDL3 and the examples):
+
+- `tests/adapt/response_test.c`: 20,644 checks pass (20,709 with
+  `YRSP_TEST_SDL`). New: the plan kept beside the final onset, a
+  never-shown frame's record, `yrsp_plan_frame()`, `yrsp_set_landing()`
+  on a filled `ytl_event` array, `yrsp_update_frame()` on filled
+  `yscr_frame` records (the record of another frame ignored, the deadline
+  from `f.onset`), and the bytes `yrsp_data_set()` gives the data writer,
+  with and without an onset.
+- `tests/compile/response.c` and `.cpp` run the helpers with
+  `ysp/screen.h` and `ysp/timeline.h` included for their structs;
+  `tests/compile/gfx.c` and `.cpp` include `ysp/outline.h` first and run
+  `ygfx_show_until_key()`, a text whose font does not open and
+  `ygfx_open_screen()` on the simulated display.
+- Mutations: `fl-01` to `fl-08` in `tests/mutate/response.toml`, 8 of 8
+  caught (and `o-01`, whose anchor moved); `ft-01` to `ft-05` in
+  `tests/mutate/gfx.toml`, 5 of 5 caught.
+- The `--sim` runs of the nine converted examples pass on both compilers.
+  `trial_2afc_adaptive --sim` failed once of four while other builds
+  loaded the machine: one onset a frame after its plan, which the RT
+  check does not allow for (as before this change).
+
+Not checked: `yrsp_feed_screen()` outside the examples (no test has SDL
+input; the key path of `ygfx_show_until_key()` was checked with pushed
+SDL events, docs/gfx.md "v0.14"), a
+key pressed by hand, Linux and macOS (CI runs the tests and the
+`--sim` runs there; without DejaVu Sans or Liberation Sans the
+instruction screen of `trial_keyboard` is blank and says so).
+
 ## Verification
 
 All on 2026-10-07, Windows 11, the Iris Xe laptop of `ysp/screen.h`'s

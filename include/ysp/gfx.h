@@ -950,7 +950,12 @@
  *   frame that draws it does not pay the program's first draw (PRIME).
  *   Setup work: it reads the font file and allocates the items (32 bytes
  *   a glyph), freed by ygfx_text_free(). Keep t while t.stim is drawn.
- *   COST_TEXT
+ *   Measured on the Iris Xe in a window (docs/gfx.md, "v0.14"),
+ *   trial_keyboard.c's instructions in Segoe UI at 32 px, no program cache:
+ *   ygfx_text_make() took 1.5 to 2.2 s, nearly all of it the text
+ *   program's compile (17 to 43 ms with the test's warm cache); the first
+ *   frame that drew the text cost 0.8 to 1.3 ms of CPU, against 10.1 to
+ *   11.0 ms when the same set and run were made without the prime.
  *
  *   ---------------------------------------------------------------------
  *   VIDEO (v0.4)
@@ -1558,6 +1563,18 @@
  *          source rectangle, not the sampler's.
  *   v0.1.0 - first release.
  *
+ *   STATUS: v0.14.0, 2026-10-11: tests/adapt/gfx_test.c's part "v0.14
+ *   first" (ANGLE on the Iris Xe; MSVC 19.44 and MinGW-w64 gcc 16.1): the
+ *   one-call open and its refusal of a taken hook, the loop until max_ns
+ *   (its last frame the first planned at max_ns or later), the text's
+ *   items, lines, wrap, centering and ink inside its bounds only, the
+ *   prime of the first text alone; 5 of 5 new mutants caught. The key
+ *   path, in a window with SDL key events pushed from a second thread (a
+ *   program started from the background got no foreground for OS input):
+ *   a J and a space pressed before the first frame were ignored, the
+ *   space 1.5 s later ended the loop with its press.
+ *   trial_keyboard with the calls moved no flip (docs/response.md, "The
+ *   first trial (v0.4.0)").
  *   STATUS: v0.12.0: tests/adapt/gfx_test.c checks the message of each
  *   failing call it makes on a gfx; the rest is as below. v0.10.0
  *   (docs/gfx.md "v0.10"): SIMPLEX on the GPU equals
@@ -9500,7 +9517,8 @@ static int ygfx__capture_start(ygfx_gfx* g, const ygfx_capture_desc* d) {
     g->be->reset(g->bctx);
 #ifndef YRT_NO_THREADS
     if (!c->manual) {
-        yrt_pump_desc pd = { 0 };
+        yrt_pump_desc pd;
+        memset(&pd, 0, sizeof pd);   /* g++ -Wextra refuses { 0 } here as C++ (conventions.md) */
         pd.msg_size = sizeof(int32_t);
         pd.capacity = (uint32_t)n;
         pd.ring = c->ring;

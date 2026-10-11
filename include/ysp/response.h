@@ -456,6 +456,14 @@
  *          releases, the trace, the result and its CSV row, the SDL3
  *          adapter.
  *
+ *   STATUS: v0.4.0, 2026-10-11: the test (20,644 checks; 20,709 with the
+ *   SDL adapter) and the compile checks pass with MinGW-w64 gcc 16.1 and
+ *   MSVC 19.44; the frame-loop and data helpers are checked on filled
+ *   structs (records, fired events, the data writer's bytes); 8 of 8 new
+ *   mutants caught. The nine converted examples' --sim runs pass on both
+ *   compilers; trial_keyboard moved no flip in a window or fullscreen
+ *   (docs/response.md, "The first trial (v0.4.0)"). yrsp_feed_screen()
+ *   runs in the examples only.
  *   STATUS: v0.3.0, 2026-10-10: the test (20,595 checks; 20,660 with the
  *   SDL adapter) and the compile checks pass with MinGW-w64 gcc 16.1 and
  *   MSVC 19.44, with new checks of close, the messages and YRSP_NO_TIME;

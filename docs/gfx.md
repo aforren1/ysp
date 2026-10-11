@@ -3013,6 +3013,72 @@ module it unloads, which a suppression cannot name, so the test runs GL
 under a sanitizer only when `YGFX_TEST_DEVICES` asks for it. Locally,
 with GL on, everything passed under ASan and UBSan apart from that leak.
 
+## v0.14: the first trial's calls
+
+v0.14.0 adds three calls that every trial example had written out, for
+the first-trial work of 2026-10-10 (docs/response.md, "The first trial
+(v0.4.0)", has the decisions and the line counts):
+
+- `ygfx_open_screen()`: OPEN START's hook, `ygfx_open()` and
+  `ygfx_prime()` in one call. The trial examples in `examples/response/`
+  (not `trial_two_keyboards.c`) now open this way, so they get the
+  overlapped compile, which only `gfx_trial.c` had.
+- `ygfx_show_until_key()`: an instruction or break screen. It is a frame
+  loop in the header because an instruction screen is not timed and every
+  program wrote the same loop; a timed screen stays in the program's loop.
+- `ygfx_text_make()`, with `ysp/outline.h` included first: text from a
+  font file by its advances, wrapped at spaces and centered. Not shaping:
+  `pack/layout` (Skribidi) does that, and it is not a header. The call is
+  in this header, behind the include of `ysp/outline.h`, because
+  `ysp/outline.h` is pure computation and this header builds on
+  `ysp/screen.h` and `ysp/color.h` only.
+
+### What the text's first frame costs
+
+The text program is made at the first `ygfx_cset_make()`, and ANGLE makes
+its D3D shader objects at its first draw (see "v0.11: priming"). So
+`ygfx_text_make()` calls `ygfx_prime()` when its set made a program. It
+compares the program counts of `ygfx_program_stats()` before and after,
+so a second text, which makes no program, does not prime.
+
+Measured with a scratch program on 2026-10-11 (Windows 11, the Iris Xe,
+a 1920 x 1200 window in the foreground, AC, under the timing guard, three
+runs each): `trial_keyboard.c`'s instructions in Segoe UI at 32 px, made
+by `ygfx_text_make()` (prime) or by the same calls without the prime
+(no prime), then 180 frames that draw the text.
+
+| | Make the text | First frame's CPU | ygfx_end() of it | Frames 3 to 179, CPU p50 |
+|---|---|---|---|---|
+| no prime | 786 to 1695 ms | 10.1 to 11.0 ms | 10.1 to 10.9 ms | 0.18 to 0.21 ms |
+| prime | 1499 to 2193 ms | 0.76 to 1.30 ms | 0.74 to 1.25 ms | 0.16 to 0.29 ms |
+
+The make time is the text program's compile: no program cache was given
+(`desc.cache`). With the test's warm cache, the make took 17 ms (MSVC
+build) and 43 ms (MinGW build). The prime adds the draw of every program
+made so far (15 here). In these runs no first frame was late; the
+10 ms is a frame's budget at 100 Hz and two thirds of one at 60 Hz, on a
+frame that a program also uses for other work. The window runs had 0 to 6
+late frames among frames 3 to 179 in both modes, so a window in a
+desktop session is not a quiet display; the first frames were not among
+them.
+
+### Tests and mutations
+
+`tests/adapt/gfx_test.c`'s part "v0.14 first" (ANGLE on the Iris Xe,
+MSVC 19.44 and MinGW-w64 gcc 16.1): the open in one call and its refusal
+of a taken `on_context`; the loop's arguments and its end at `max_ns`
+(the last frame is the first planned at `max_ns` or later); a font that
+does not open, named in the message; a text's items, lines, line height,
+centering, wrap, and ink inside its bounds only (495 pixels inside, 0
+outside); the prime of the first text alone. Mutants `ft-01` to `ft-05`,
+5 of 5 caught. The key path needs SDL input, which the headless test does
+not have. A scratch program checked it in a window on 2026-10-11, with
+SDL key events pushed from a second thread: a space pushed before the
+first frame and a J (not in the list) did not end the loop; a space 1.5 s
+later did, and `*key` held its press (scancode 44, its time). OS input
+did not reach the window: the session gave no foreground to a program
+started from the background, so `SendInput()` went to another window.
+
 ## v0.13: stimulus capture
 
 "Next" item 11. A trial can keep the frames it showed: every Nth frame, or
