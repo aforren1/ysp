@@ -943,7 +943,183 @@ writes into a field of the caller, a `float`, `float[2..4]` or `int32_t`.
   the evaluate reads in the first 64. Targets stay dense (a freed one
   takes the last one's place), so the pass reads one contiguous array.
 
+### Measured cost
 
+`examples/timeline/bench_targets.c` times three paths for 0, 1, 100 and
+1000 animated fields, each a float in its own 256-byte stimulus:
+
+- **targets**: one target tween per field (`ytl_tween_to()`).
+- **channels**: one channel tween per field (`ytl_tween()`), then the
+  binding copy, the loop of `ygfx_apply()` for `.field` bindings with its
+  check pass.
+- **held**: the targets after their tweens ended. The evaluate still owns
+  and writes the fields.
+
+Every tween is CUBIC_OUT over 1000 s, so it is in progress on each frame.
+A sample is 64 evaluates between two clock reads. Each cell is the median
+of 400 samples, the smaller of two runs of 5 interleaved rounds, in ns
+per frame. Machine: Intel i7-1360P, Windows 11, on AC power, through the
+measurement lock at 17% load. MSVC 19.44 /O2 (the msvc-full Release
+build) and MinGW-w64 gcc 16.1 -O2:
+
+| Fields | targets MSVC | channels MSVC | held MSVC | targets gcc | channels gcc | held gcc |
+|---|---|---|---|---|---|---|
+| 0 | 18.8 | 20.3 | 18.8 | 14.1 | 15.6 | 14.1 |
+| 1 | 29.7 | 25.0 | 25.0 | 21.9 | 23.4 | 18.8 |
+| 100 | 777 | 781 | 494 | 769 | 689 | 480 |
+| 1000 | 7967 | 8314 | 4873 | 7553 | 7392 | 4609 |
+| Per field, at 1000 | 7.95 | 8.29 | 4.85 | 7.54 | 7.38 | 4.59 |
+
+The second run of each was within 8% of the first, except MSVC held
+(5.8 ns per field). What the table shows:
+
+- **A target costs about 8 ns per frame**, the same as a channel tween plus
+  its binding copy (7.4 to 8.5 ns). Neither path wins on both compilers.
+  So targets replace the copy at no cost; they do not make the frame
+  faster.
+- **0.5 ms holds about 60,000 animated fields** (62,000 to 66,000 from the
+  1000-field rows). 1000 fields cost 8 us, 0.05% of a 16.7 ms frame and
+  0.4% of a 2 ms frame at 500 Hz.
+- **A held field costs about 5 ns**: the pass reads the target and its
+  tween and writes the field. Ownership (see "Decisions") costs this much;
+  a release after the end would save it.
+- **One target costs 8 to 11 ns more than an empty frame**, against 5 to
+  8 ns for one channel: the pass's fixed cost.
+
+### Verification
+
+`tests/adapt/timeline_test_targets.h`, which `timeline_test.c` includes,
+was written by the writer of the implementation. So a misreading can be
+in the header, the manual and the checks alike. Two things limit that:
+the eases and the repeat fold in the checks are written apart from the
+header (pow() and floor division), and a target tween is compared bit for
+bit with `ytl_tween()` on a channel, the path that the earlier blind
+tests cover. The checks:
+
+- Against `ytl_tween()`: 400 random descs (every ease, BEZIER curves,
+  cycles, YTL_FOREVER, yoyo, from, keep_velocity), a second tween taking
+  over from the first, 70 frames each: the same bits on all 28,000
+  frames.
+- Each of the 11 eases against the reference at 60 Hz onsets, as a target
+  and as keys.
+- to, from, fromTo and set; the field not written before the first start
+  and owned after it; n = 3; int32_t rounding; stagger in both
+  directions, with "<" and ">".
+- The overwrite rules: the latest start, equal starts, a rewind that
+  brings back the earlier tween, kill_tween of the driver, BOUND and a
+  different shape, YTL_OVERWRITE_ALL with a change of base, clear and
+  cancel.
+- Callbacks: the frame each lands on (the frame of a MARK at the same
+  time), the order, the field already written, a tween posted from one, a
+  rewind that calls them again, a skip that calls neither, a nested
+  `ytl_evaluate()` refused, a kill in on_start that skips on_complete, and
+  the events a kill deletes.
+- Every pool refusal and its message, all or none, and an overwrite that
+  fits only by what it frees (tweens, and events).
+- A set against a SET event at the same time, behind a ramp that starts in
+  the same window: 900 cases at three leads, the same frame in all.
+- A trial with every kind of call: a rewind replays 90 frames bit for bit;
+  a fresh handle that seeks to 11 places with `ytl_skip()` shows the
+  values of continuous play from there; two handles given the same calls
+  have the same pools, storage and fields.
+- A model of the rules in "The model", 12 runs of 500 random calls,
+  frames, rewinds, skips, pauses and kills (1184 tweens, 451 of them STEP,
+  221 immediate): every written field within 1e-4 of the model. Three
+  model mutations are each caught: the first started tween drives, every
+  start value is the rest value, STEP tweens read at the onset.
+
+The test found two errors before the first run passed, both in the
+checks: the model read the rest value after the header had written the
+field, and two MARK events had the same code. It found none in the
+header. The earlier checks pass unchanged, with the same model
+statistics, except that the first number that is not an ease is now 11.
+
+Mutations of the target code, one at a time: 20, all caught (`tgt-00`
+to `tgt-19` in [tests/mutate/timeline.toml](../tests/mutate/timeline.toml)).
+They include the first start driving, the cursor kept over a rewind, no
+look-ahead for a set, a set read at the onset, every start value from the
+rest value, the rest value read at every write, immediate ignored, a
+moved target's tweens left behind (a crash), a nested evaluate accepted,
+on_complete after a kill, and callbacks not queued.
+
+The compile check `tests/compile/timeline.c` animates a stimulus struct
+with each call, as C99 and as C++17 (`timeline.cpp`) with no cast. Clean
+with MinGW gcc 16.1 (`-Wall -Wextra -Wpedantic -Werror`), MSVC 19.44 and
+gcc 11.4 under WSL2. The test is clean under ASan and UBSan (gcc 11.4,
+WSL2).
+
+## Animate a stimulus field
+
+This how-to animates the fields of ysp/gfx.h stimuli with targets. The
+complete program is `examples/timeline/gfx_trial.c`. "Targets" above
+gives the rules.
+
+1. Give the timeline its pools. Make them as large as the fields and the
+   tweens that are alive at one time.
+
+   ```c
+   static ytl_target_slot targets[8];
+   static ytl_tween_slot tweens[16];
+   td.targets = targets; td.target_capacity = 8;
+   td.tweens = tweens;   td.tween_capacity = 16;
+   ```
+
+2. Set each field to the value it must show before its first tween. The
+   timeline does not write a field before its first tween starts.
+
+   ```c
+   fix.visible = grating.visible = 0.0f;
+   ```
+
+3. Write the trial on a sequence, in the order that it plays. Check the
+   sequence's error once, at the end.
+
+   ```c
+   ytl_seq q = ytl_seq_on(&tl, TRIAL);
+   ytl_tween_set(&q, &fix.visible, 1.0f);
+   ytl_wait(&q, YRT_MS(500));
+   ytl_tween_set(&q, &fix.visible, 0.0f);
+   ytl_tween_set(&q, &grating.visible, 1.0f);
+   ytl_trigger(&q, 12);
+   ytl_tween_from_to(&q, &grating.contrast, 0.0f, 0.3f, YRT_MS(100), YTL_EASE_COSINE);
+   ytl_wait(&q, YRT_MS(600));
+   ytl_tween_to(&q, &grating.contrast, 0.0f, YRT_MS(100), YTL_EASE_COSINE);
+   ytl_wait(&q, YRT_MS(100));
+   ytl_tween_set(&q, &grating.visible, 0.0f);
+   if (q.err < 0) fprintf(stderr, "%s\n", ytl_error(&tl));
+   ```
+
+4. Anchor the trial base at the first frame, and call `ytl_evaluate()`
+   with each frame's predicted onset before you draw. Do not copy these
+   fields with `ygfx_apply()`: the evaluate wrote them.
+
+5. Between trials, call `ytl_clear(&tl, TRIAL)`, set the fields again, and
+   build the next trial. The clear frees the targets, so the next trial
+   reads the fields again.
+
+Variations:
+
+- **A color or a position pair.** Use `ytl_animate()` with `a.n = 3` and
+  `a.target = g.color`, or `a.n = 2` on two adjacent floats.
+- **A stagger.** Set `a.stagger_ns` and call `ytl_animate_n(&q, &a,
+  sizeof dots[0], n)` with `a.target = &dots[0].y`.
+- **A record of a set.** A set changes a field, not the event record. Add
+  `ytl_mark(&q, code, 0)` at the same cursor when the analysis needs the
+  frame that showed it, or add a trigger, as step 3 does.
+- **A script that retargets.** Use `ytl_seq_now(&tl, base)` and
+  `a.overwrite = YTL_OVERWRITE_ALL`, so the old tweens do not fill the
+  pool.
+
+The conversion of `gfx_trial.c` from channels to targets took the file
+from 147 to 138 lines. It removed the channel enum, the key table, the
+binding table, an event helper and the per-frame `ygfx_apply()` call. A
+scratch program ran both versions on the same frames at 60, 144 and
+500 Hz: every frame showed the same `visible` values and the same contrast
+bits.
+
+## Storage
+
+Events go in a sorted array that the caller supplies, and the caller sets
 its size. At movie scale, the array holds thousands of annotations, so a
 compile-time maximum would make every handle large. Each base has a range
 in the array, a fired prefix and a lowest late index. With these, an
@@ -1268,3 +1444,13 @@ clean on MinGW gcc 16.1, MSVC 19.44 (C++20) and gcc 11.4.
 - The cost of a skip is not timed. It is one write per skipped event.
 - A base rate's change is exact to under 1 ns per change, not exactly
   rational (see "Arithmetic").
+- Targets (v0.6.0):
+  - `ytl_prune()` does not free target tweens. On a base that is never
+    cleared, the tweens that a later start overrides stay in the pool
+    until a kill; `YTL_OVERWRITE_ALL` is the way to retarget there.
+  - A set changes a field and leaves no landing record. A mark or a
+    trigger at the same time gives one.
+  - No target form of the op tables, and no binding from Python, MATLAB
+    or a script layer.
+  - Not run on clang or emscripten. This round ran MinGW gcc 16.1, MSVC
+    19.44 and gcc 11.4 under WSL2 (ASan and UBSan).

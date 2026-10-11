@@ -187,7 +187,8 @@ The X11 display-timing probe for the GLX backend is in `tests/probe/screen_x11/`
 | `timeline_trial` | One trial's timeline on a simulated 60 Hz display | timeline | `timeline_trial` (CI) | nothing |
 | `timeline_tracking` | A sum-of-sines target, a flicker and a tween at 500 Hz | timeline | `timeline_tracking` (CI) | nothing |
 | `timeline_bench` | The cost of `ytl_evaluate()` and the loads | rt, timeline | `timeline_bench 500` (CI) | nothing |
-| `gfx_trial` | The timeline trial with gfx stimuli | gfx, timeline | `gfx_trial --sim` (CI); `gfx_trial` | SDL3, ANGLE |
+| `timeline_bench_targets` | The cost of target tweens per field, against channel tweens and a binding copy | rt, timeline | `timeline_bench_targets` | nothing |
+| `gfx_trial` | The timeline trial with gfx stimuli, whose fields the timeline writes itself (targets: GSAP-style sets and tweens) | gfx, timeline | `gfx_trial --sim` (CI); `gfx_trial` | SDL3, ANGLE |
 | `trial_sternberg` | PsychoPy's Sternberg demo: 2, 4 or 6 digits at a 0.5 s SOA from one op table (`ytl_run()`), a probe after 1 s; each digit's SOA from its flip record | gfx, outline, timeline, trials, response | `trial_sternberg --sim` (CI); `trial_sternberg` | SDL3, ANGLE; a font (the 5 x 7 bitmap digits without one) |
 
 ## trials

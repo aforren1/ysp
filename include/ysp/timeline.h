@@ -2036,12 +2036,23 @@ static double ytl__shape(int ease, double u) {
 }
 
 /* For HERMITE the curve's x1 is the start tangent. cslots is the end of
- * the keys, read only with curves NULL. */
+ * the keys, read only with curves NULL. The v0.5.0 eases keep their own
+ * cases (the same expressions as ytl__shape, so the same bits): sending
+ * LINEAR through ytl__shape's switch too measured up to 15% slower on 256
+ * keyed channels with gcc (docs/timeline.md, "Targets"). */
 static double ytl__ease(const ytl_key* a, const ytl_curve* curves, const ytl_key* cslots,
                           double v0, double v1, double u) {
     ytl_curve c;
     switch (a->ease) {
     case YTL_EASE_STEP:     return v0;
+    case YTL_EASE_COSINE:   return v0 + (v1 - v0) * (0.5 - 0.5 * cos(3.14159265358979323846 * u));
+    case YTL_EASE_QUAD_IN:  return v0 + (v1 - v0) * (u * u);
+    case YTL_EASE_QUAD_OUT: return v0 + (v1 - v0) * (1.0 - (1.0 - u) * (1.0 - u));
+    case YTL_EASE_QUAD_IN_OUT:
+    case YTL_EASE_CUBIC_IN:
+    case YTL_EASE_CUBIC_OUT:
+    case YTL_EASE_CUBIC_IN_OUT:
+        return v0 + (v1 - v0) * ytl__shape(a->ease, u);
     case YTL_EASE_LOG:      return v0 * exp(u * log(v1 / v0));
     case YTL_EASE_BEZIER:
         c = ytl__curve(curves, cslots, a->curve);
@@ -2052,7 +2063,7 @@ static double ytl__ease(const ytl_key* a, const ytl_curve* curves, const ytl_key
         return (2.0 * u3 - 3.0 * u2 + 1.0) * v0 + (u3 - 2.0 * u2 + u) * c.x1
                + (3.0 * u2 - 2.0 * u3) * v1;
     }
-    default:                  return v0 + (v1 - v0) * ytl__shape(a->ease, u);
+    default:                  return v0 + (v1 - v0) * u;
     }
 }
 
@@ -4122,7 +4133,7 @@ static int ytl__anim(ytl_seq* q, const ytl_anim* a, size_t stride, int n) {
     ytl_timeline* tl = q->tl;
     ytl_tween_desc d, r;
     int64_t cyc, total, last_start, first = 0;
-    int ncomp, i, c, rc, n_cb, new_tg = 0, freed_tg = 0, freed_tw = 0, freed_ev = 0;
+    int ncomp, i, c, rc, n_cb, new_tg = 0, freed_tg = 0, freed_tw = 0, freed_ev = 0, freed_cb = 0;
     int32_t id0;
     bool once;
     if (!a || n < 1 || !a->target) return YTL_ERR_ARG;
@@ -4157,9 +4168,9 @@ static int ytl__anim(ytl_seq* q, const ytl_anim* a, size_t stride, int n) {
     total = (once ? 1 : a->cycles > 1 ? a->cycles : 1) * cyc;
     /* Every start and end in range, the last tween's included. */
     if (!ytl__time_ok(a->stagger_ns)) return YTL_ERR_ARG;
-    if (a->stagger_ns > 0 && a->stagger_ns > (YTL__LIMIT - 1 - r.start_ns - total) / (n > 1 ? n - 1 : 1))
+    if (n > 1 && a->stagger_ns > 0 && a->stagger_ns > (YTL__LIMIT - 1 - r.start_ns - total) / (n - 1))
         return YTL_ERR_ARG;
-    if (a->stagger_ns < 0 && -a->stagger_ns > (r.start_ns + YTL__LIMIT - 1) / (n > 1 ? n - 1 : 1))
+    if (n > 1 && a->stagger_ns < 0 && -a->stagger_ns > (r.start_ns + YTL__LIMIT - 1) / (n - 1))
         return YTL_ERR_ARG;
     last_start = r.start_ns + (int64_t)(n - 1) * a->stagger_ns;
     /* Each field: the same shape as its target, and on this base unless the
@@ -4175,14 +4186,19 @@ static int ytl__anim(ytl_seq* q, const ytl_anim* a, size_t stride, int n) {
         if (tl->tg[gi].type != a->type || tl->tg[gi].n != ncomp) rc = YTL_ERR_ARG;
         else if (a->overwrite == YTL_OVERWRITE_NONE && tl->tg[gi].base != q->base) rc = YTL_ERR_BOUND;
         else if (a->overwrite == YTL_OVERWRITE_ALL && !(tl->tg[gi].flags & YTL__TG_MARK)) {
+            int32_t j;
             tl->tg[gi].flags |= YTL__TG_MARK;
             freed_tg++;
             freed_tw += tl->tg[gi].n_tw;
             new_tg++;
+            for (j = tl->tg[gi].head; j >= 0; j = tl->tw[j].next)
+                if (tl->tw[j].on_start || tl->tw[j].on_complete) freed_cb++;
         }
         if (rc < 0) break;
     }
-    if (rc == 0 && freed_tg > 0) {
+    /* What the kills free in the event storage: a scan of it, only when a
+     * killed tween has callbacks, so a retarget every frame stays cheap. */
+    if (rc == 0 && freed_cb > 0) {
         for (i = 0; i < tl->n_events; i++) {
             const ytl_event* e = &tl->events[i];
             if ((e->kind == YTL_CALL_START || e->kind == YTL_CALL_COMPLETE) && e->target >= 0
