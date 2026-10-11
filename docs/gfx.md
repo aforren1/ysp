@@ -3825,3 +3825,18 @@ SEE", show the bands and the two dither patterns.
   programs' GPU time on renderers other than the Iris Xe.
 - Curve runs on real fonts against an exact reference: the pixel tests use
   the test builder's glyphs; the probe's font tables are not repeated.
+
+## v0.13.1: render targets under WebGL
+
+The gallery compiled for the browser ([web.md](web.md)) drew page 1 with
+133 draws refused in Chrome 154: `GL_INVALID_OPERATION: Feedback loop
+formed between Framebuffer and active Texture`. The scene target's texture
+stayed bound to a texture unit after the output stage sampled it, and the
+next frame's draws into the scene had programs with a sampler on that
+unit. WebGL refuses such a draw whether or not the shader reads the
+sampler; GL ES calls it undefined only when the texture is sampled, so
+ANGLE and Mesa drew. A pass into a target now unbinds that target's
+texture from every unit first, through the cached bindings, so it costs
+nothing when none matches. After it: no refused draw on any of the 8
+pages. The native tests cannot see the fault (no GL ES driver refuses the
+draw), so it has no mutant.
