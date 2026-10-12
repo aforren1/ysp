@@ -1014,6 +1014,27 @@
  *   for two physical mice): reports stamped 0.15 to 0.40 ms after
  *   SendInput (means of three runs), no report lost or doubled with SDL's
  *   raw keyboard running.
+ *   Raw mice on Linux X11 (GLX_OML, v0.8.0). One thread per process
+ *   (started SCHED_OTHER) reads every mouse's evdev node the user can read
+ *   (relative X and Y and a left button; tablets and touchpads are not
+ *   read), the uaccess rule's mouse line (tools/linux/70-ysp-input.rules),
+ *   and new ones by inotify. A report is what the kernel sends up to a
+ *   SYN_REPORT, stamped with the kernel's time of it, so the reader's own
+ *   scheduling is in no stamp: injected through uinput, 20 of 20 presses
+ *   came back inside the write(). Its device is SDL's mouse id, which on
+ *   X11 is the XInput 2 device id, matched by the device's "Device Node"
+ *   property (pipelined over ids 2 to 127 at a node's arrival); a node X
+ *   does not list gets 0x45560000 plus its node number and
+ *   YSCR_MOUSE_UNLISTED. Focus: evdev gives every mouse's input whatever
+ *   has the focus, so begin() passes the reader whether SDL's keyboard
+ *   focus is in one of this process's windows, and reports are dropped
+ *   while it is not (Windows' rule; 0 of 10 events got through with the
+ *   focus on the root window). The change takes effect at the next
+ *   begin(). SDL's relative mode does not touch evdev, so there is no
+ *   guard. Wheel notches are REL_WHEEL's (120 each; the _HI_RES events
+ *   repeat them); a SYN_DROPPED (the kernel's buffer overflowed) drops up
+ *   to the next report. open() refuses raw_mice when no mouse node is
+ *   readable, and with no window.
  *   The input bridge (v0.4.0). One loop for every input: a producer on any
  *   thread (desc.raw_mice's reader, a response-box reader, an eye tracker)
  *   calls yscr_push_input(&e) with a ysp/input.h event stamped on the
@@ -1444,7 +1465,8 @@
  *          exit() and by the panic watchdog (XInput 2 raw keys on its own
  *          connection), because X keeps both after the process ends.
  *          desc.x_display: the X screen of a process's screens (one per
- *          process: SDL 3 drives one X screen).
+ *          process: SDL 3 drives one X screen). desc.raw_mice on Linux
+ *          X11: evdev mice with kernel times and SDL's ids (INPUT).
  *          On GLX_OML the copy path (a window) is depth
  *          1: X11's Present copies on the next vblank (DEPTH's table gave
  *          it DWM's 2). New enum values only; nothing changes on Windows
@@ -1886,7 +1908,9 @@
  *   in us and equals Present's, a late frame moves it. vblank_mode=0 is
  *   refused at open. Keys injected through XTEST: SDL's stamp 8.6 to 16.6
  *   ms late, the X server's time 1.0 to 2.0 ms early (INPUT); through a
- *   uinput keyboard, the kernel's time, inside the write() (INPUT).
+ *   uinput keyboard, the kernel's time, inside the write() (INPUT); raw
+ *   mice through a uinput mouse, the kernel's time and SDL's id, none
+ *   without the focus (INPUT).
  *   tests/adapt/screen_glx_test.c checks these on a
  *   display (not in ctest); tests/compile/screen_glx.cpp checks the
  *   header's own X11, GLX and xcb declarations against the system's.
@@ -1895,9 +1919,9 @@
  *   are checked only on x64), two physical displays, variable refresh
  *   (refused), macOS and Wayland swap paths (stubs). On X11: a
  *   compositing manager other than Xfwm4's, two X screens in one process
- *   (SDL 3 cannot), XWayland, NVIDIA's driver, the delay from a key to
- *   its kernel time (the keyboard's scan and polling are in no host
- *   stamp), a panic or ramp on a second X screen, and a ramp the panic must
+ *   (SDL 3 cannot), XWayland, NVIDIA's driver, the delay from a key or a
+ *   click to its kernel time (the device's scan and polling are in no
+ *   host stamp), two physical mice by hand, a panic or ramp on a second X screen, and a ramp the panic must
  *   put back that light or a capture card can see (the checks read RandR).
  *   Outside this STATUS block and docs/screen.md, a number in this
  *   header is a measurement only where the text says "measured".
@@ -7608,6 +7632,8 @@ static struct {
     yscr__xcb_cookie (*xi_query_version)(void*, uint16_t, uint16_t);
     uint8_t* (*xi_query_version_reply)(void*, yscr__xcb_cookie, void**);
     yscr__xcb_cookie (*xi_select_events_checked)(void*, uint32_t, uint16_t, const void*);
+    yscr__xcb_cookie (*xi_get_property)(void*, uint16_t, uint8_t, uint32_t, uint32_t, uint32_t, uint32_t);
+    uint8_t* (*xi_get_property_reply)(void*, yscr__xcb_cookie, void**);
     char why[96];
 } yscr__xx;
 
@@ -7659,6 +7685,8 @@ static bool yscr__xx_load(void) {
     ok &= yscr__x_sym(yscr__xx.xinput, "xcb_input_xi_query_version", &yscr__xx.xi_query_version);
     ok &= yscr__x_sym(yscr__xx.xinput, "xcb_input_xi_query_version_reply", &yscr__xx.xi_query_version_reply);
     ok &= yscr__x_sym(yscr__xx.xinput, "xcb_input_xi_select_events_checked", &yscr__xx.xi_select_events_checked);
+    ok &= yscr__x_sym(yscr__xx.xinput, "xcb_input_xi_get_property", &yscr__xx.xi_get_property);
+    ok &= yscr__x_sym(yscr__xx.xinput, "xcb_input_xi_get_property_reply", &yscr__xx.xi_get_property_reply);
     if (!ok) { yscr__copy(yscr__xx.why, sizeof yscr__xx.why, "an entry point is missing from libxcb-randr or libxcb-xinput"); return false; }
     yscr__xx.ok = 1;
     return true;
@@ -8274,6 +8302,271 @@ static const char* yscr__xwd_arm(yscr_screen* s, const yscr_desc* d) {
     return "desc.panic needs threads (built with YRT_NO_THREADS)";
 }
 static void yscr__xwd_disarm(yscr_screen* s) { (void)s; }
+#endif
+
+/* --- the raw mouse reader on Linux (desc.raw_mice; INPUT, "Raw mice") -----
+ * evdev, as the kernel key times are: every mouse node the user can read
+ * (tools/linux/70-ysp-input.rules), each report stamped with the kernel's
+ * time of its SYN_REPORT, so the reader's own scheduling is in no stamp.
+ * One thread per process, started SCHED_OTHER: its priority moves when a
+ * report reaches the bridge, not its time. evdev hands over every mouse's
+ * input whichever window has the focus; begin() passes on whether one of
+ * this process's windows has the keyboard focus, and the reader drops
+ * reports while none has, as Windows' registration without
+ * RIDEV_INPUTSINK does. A report's device is SDL's mouse id on X11, the
+ * XInput 2 device id, found by the device's "Device Node" property; a node
+ * X does not list gets an id SDL cannot have, which the bridge flags
+ * YSCR_MOUSE_UNLISTED. */
+#if !defined(YRT_NO_THREADS)
+#define YSCR__LM_MAX      16
+#define YSCR__LM_UNLISTED 0x45560000u   /* "EV" and the node's number */
+static struct {
+    volatile int32_t users, focused;
+    pthread_t th;
+    int      stop[2], ino, n;
+    int      fd[YSCR__LM_MAX];
+    dev_t    dev[YSCR__LM_MAX];
+    uint32_t id[YSCR__LM_MAX];
+    yscr_mouse_event acc[YSCR__LM_MAX];
+    uint8_t  dirty[YSCR__LM_MAX], dropped[YSCR__LM_MAX];
+    void*    xc;                   /* the reader's own X connection         */
+    uint32_t node_atom;            /* "Device Node"                         */
+} yscr__lm;
+
+/* SDL's mouse id of the node at path: the XInput 2 device whose "Device
+ * Node" is path, asked of device ids 2 to 127 at once. */
+static uint32_t yscr__lm_xid(const char* path, dev_t rdev) {
+    yscr__xcb_cookie ck[126];
+    uint32_t found = 0;
+    int i;
+    if (yscr__lm.xc && yscr__lm.node_atom) {
+        /* AnyPropertyType (0); 64 four-byte units hold any node path */
+        for (i = 0; i < 126; i++)
+            ck[i] = yscr__xx.xi_get_property(yscr__lm.xc, (uint16_t)(i + 2), 0, yscr__lm.node_atom, 0, 0, 64);
+        for (i = 0; i < 126; i++) {
+            void* err = NULL;
+            uint8_t* r = yscr__xx.xi_get_property_reply(yscr__lm.xc, ck[i], &err);
+            uint32_t items;
+            free(err);   /* a device id with no device */
+            if (!r) continue;
+            /* xcb_input_xi_get_property_reply_t: num_items at 16, format
+             * at 20, the items at 32 (tests/compile/screen_glx.cpp) */
+            memcpy(&items, r + 16, 4);
+            if (!found && r[20] == 8 && items > 0 && items < 200 && strlen(path) == items &&
+                memcmp(r + 32, path, items) == 0)
+                found = (uint32_t)(i + 2);
+            free(r);
+        }
+    }
+    return found ? found : (YSCR__LM_UNLISTED | (uint32_t)(rdev & 0xffff));
+}
+
+/* A mouse: relative X and Y and a left button. Tablets and touchpads (EV_ABS)
+ * are not read. */
+static void yscr__lm_add(const char* path) {
+    unsigned long evb = 0, rel = 0, keys[(BTN_LEFT / (8 * sizeof(unsigned long))) + 1];
+    struct stat st;
+    int fd, i, clk = CLOCK_MONOTONIC;   /* the ysp_rt clock */
+    if (yscr__lm.n == YSCR__LM_MAX) return;
+    fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) return;
+    if (fstat(fd, &st) != 0) { close(fd); return; }
+    for (i = 0; i < yscr__lm.n; i++)
+        if (yscr__lm.dev[i] == st.st_rdev) { close(fd); return; }
+    memset(keys, 0, sizeof keys);
+    if (ioctl(fd, EVIOCGBIT(0, sizeof evb), &evb) < 0 || !(evb & (1ul << EV_REL)) || !(evb & (1ul << EV_KEY)) ||
+        ioctl(fd, EVIOCGBIT(EV_REL, sizeof rel), &rel) < 0 ||
+        (rel & ((1ul << REL_X) | (1ul << REL_Y))) != ((1ul << REL_X) | (1ul << REL_Y)) ||
+        ioctl(fd, EVIOCGBIT(EV_KEY, sizeof keys), keys) < 0 ||
+        !(keys[BTN_LEFT / (8 * sizeof(unsigned long))] & (1ul << (BTN_LEFT % (8 * sizeof(unsigned long))))) ||
+        ioctl(fd, EVIOCSCLOCKID, &clk) < 0) {
+        close(fd);
+        return;
+    }
+    i = yscr__lm.n++;
+    yscr__lm.fd[i] = fd;
+    yscr__lm.dev[i] = st.st_rdev;
+    yscr__lm.id[i] = yscr__lm_xid(path, st.st_rdev);
+    memset(&yscr__lm.acc[i], 0, sizeof yscr__lm.acc[i]);
+    yscr__lm.dirty[i] = yscr__lm.dropped[i] = 0;
+}
+
+static void yscr__lm_scan(void) {
+    DIR* d = opendir("/dev/input");
+    struct dirent* de;
+    char path[64];
+    if (!d) return;
+    while ((de = readdir(d)) != NULL)
+        if (strncmp(de->d_name, "event", 5) == 0) {
+            snprintf(path, sizeof path, "/dev/input/%.40s", de->d_name);
+            yscr__lm_add(path);
+        }
+    closedir(d);
+}
+
+/* inotify: nodes made since, and nodes whose ACL came after them */
+static void yscr__lm_hotplug(void) {
+    union { struct inotify_event e; char c[1024]; } u;
+    ssize_t r;
+    while ((r = read(yscr__lm.ino, &u, sizeof u)) > 0) {
+        const char* p = u.c;
+        while (p < u.c + r) {
+            const struct inotify_event* e = (const struct inotify_event*)(const void*)p;
+            if (e->len && strncmp(e->name, "event", 5) == 0) {
+                char path[64];
+                snprintf(path, sizeof path, "/dev/input/%.40s", e->name);
+                yscr__lm_add(path);
+            }
+            p += sizeof *e + e->len;
+        }
+    }
+}
+
+static uint8_t yscr__lm_button(uint16_t code) {
+    switch (code) {
+    case BTN_LEFT:   return YSCR_MOUSE_LEFT;
+    case BTN_RIGHT:  return YSCR_MOUSE_RIGHT;
+    case BTN_MIDDLE: return YSCR_MOUSE_MIDDLE;
+    case BTN_SIDE:   return YSCR_MOUSE_X1;
+    case BTN_EXTRA:  return YSCR_MOUSE_X2;
+    default:         return 0;
+    }
+}
+
+/* Device i's waiting events. Returns 0 when the device is gone. */
+static int yscr__lm_read(int i) {
+    struct input_event b[64];
+    ssize_t r;
+    int j;
+    yscr_mouse_event* a = &yscr__lm.acc[i];
+    while ((r = read(yscr__lm.fd[i], b, sizeof b)) > 0)
+        for (j = 0; j < (int)(r / (ssize_t)sizeof b[0]); j++) {
+            const struct input_event* e = &b[j];
+            if (e->type == EV_REL) {
+                if (e->code == REL_X) a->dx += e->value;
+                else if (e->code == REL_Y) a->dy += e->value;
+                else if (e->code == REL_WHEEL) a->wheel = (int16_t)(a->wheel + e->value * 120);
+                else if (e->code == REL_HWHEEL) a->hwheel = (int16_t)(a->hwheel + e->value * 120);
+                else continue;   /* the _HI_RES wheels repeat REL_WHEEL's notches */
+                yscr__lm.dirty[i] = 1;
+            } else if (e->type == EV_KEY) {
+                uint8_t bit = yscr__lm_button(e->code);
+                if (!bit || e->value == 2) continue;
+                if (e->value) a->down |= bit; else a->up |= bit;
+                yscr__lm.dirty[i] = 1;
+            } else if (e->type == EV_SYN && e->code == SYN_DROPPED) {
+                /* the kernel's buffer overflowed: drop up to the next report */
+                yscr__lm.dropped[i] = 1;
+            } else if (e->type == EV_SYN && e->code == SYN_REPORT) {
+                if (yscr__lm.dirty[i] && !yscr__lm.dropped[i] && yscr__a_load(&yscr__lm.focused)) {
+                    yin_event ev[12];
+                    int k, n;
+                    a->t = (int64_t)e->input_event_sec * 1000000000 + (int64_t)e->input_event_usec * 1000;
+                    a->device = yscr__lm.id[i];
+                    n = yin_from_mouse(a, ev, 12);
+                    for (k = 0; k < n; k++) yscr__in_push(&ev[k], 1);
+                }
+                memset(a, 0, sizeof *a);
+                yscr__lm.dirty[i] = yscr__lm.dropped[i] = 0;
+            }
+        }
+    return !(r < 0 && errno == ENODEV);
+}
+
+static void* yscr__lm_main(void* arg) {
+    struct pollfd pf[YSCR__LM_MAX + 2];
+    (void)arg;
+    for (;;) {
+        int i, n = yscr__lm.n, np = 0, base;
+        pf[np].fd = yscr__lm.stop[0]; pf[np].events = POLLIN; pf[np++].revents = 0;
+        if (yscr__lm.ino >= 0) { pf[np].fd = yscr__lm.ino; pf[np].events = POLLIN; pf[np++].revents = 0; }
+        base = np;
+        for (i = 0; i < n; i++) { pf[np].fd = yscr__lm.fd[i]; pf[np].events = POLLIN; pf[np++].revents = 0; }
+        if (poll(pf, (nfds_t)np, -1) < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (pf[0].revents) break;
+        for (i = n - 1; i >= 0; i--)
+            if (pf[base + i].revents && !yscr__lm_read(i)) {   /* unplugged */
+                close(yscr__lm.fd[i]);
+                yscr__lm.n--;
+                yscr__lm.fd[i] = yscr__lm.fd[yscr__lm.n];
+                yscr__lm.dev[i] = yscr__lm.dev[yscr__lm.n];
+                yscr__lm.id[i] = yscr__lm.id[yscr__lm.n];
+                yscr__lm.acc[i] = yscr__lm.acc[yscr__lm.n];
+                yscr__lm.dirty[i] = yscr__lm.dirty[yscr__lm.n];
+                yscr__lm.dropped[i] = yscr__lm.dropped[yscr__lm.n];
+            }
+        if (yscr__lm.ino >= 0 && pf[1].revents) yscr__lm_hotplug();
+    }
+    return NULL;
+}
+
+static void yscr__lm_free(void) {
+    int i;
+    for (i = 0; i < yscr__lm.n; i++) close(yscr__lm.fd[i]);
+    yscr__lm.n = 0;
+    if (yscr__lm.ino >= 0) close(yscr__lm.ino);
+    yscr__lm.ino = -1;
+    if (yscr__lm.stop[0] >= 0) { close(yscr__lm.stop[0]); close(yscr__lm.stop[1]); }
+    yscr__lm.stop[0] = yscr__lm.stop[1] = -1;
+    if (yscr__lm.xc) { yscr__x.disconnect(yscr__lm.xc); yscr__lm.xc = NULL; }
+}
+
+static const char* yscr__lm_start(void) {
+    pthread_attr_t at;
+    struct sched_param sp;
+    int ok;
+    if (yscr__a_inc(&yscr__lm.users) > 1) return NULL;
+    yscr__lm.n = 0;
+    yscr__lm.stop[0] = yscr__lm.stop[1] = -1;
+    yscr__a_store(&yscr__lm.focused, 0);
+    yscr__lm.ino = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    if (yscr__lm.ino >= 0 && inotify_add_watch(yscr__lm.ino, "/dev/input", IN_CREATE | IN_ATTRIB) < 0) {
+        close(yscr__lm.ino);
+        yscr__lm.ino = -1;
+    }
+    /* $DISPLAY, which open() set from desc.x_display before SDL's video */
+    yscr__lm.xc = yscr__xx_load() ? yscr__x.connect(NULL, NULL) : NULL;
+    if (yscr__lm.xc && yscr__x.has_error(yscr__lm.xc)) { yscr__x.disconnect(yscr__lm.xc); yscr__lm.xc = NULL; }
+    yscr__lm.node_atom = 0;
+    if (yscr__lm.xc) {
+        uint8_t* r = yscr__x.intern_atom_reply(yscr__lm.xc, yscr__x.intern_atom(yscr__lm.xc, 1, 11, "Device Node"), NULL);
+        if (r) { memcpy(&yscr__lm.node_atom, r + 8, 4); free(r); }
+    }
+    yscr__lm_scan();
+    if (yscr__lm.n == 0 || pipe(yscr__lm.stop) != 0) {
+        yscr__lm_free();
+        yscr__a_store(&yscr__lm.users, 0);
+        return "desc.raw_mice: no mouse's evdev node is readable (tools/linux/70-ysp-input.rules)";
+    }
+    pthread_attr_init(&at);
+    memset(&sp, 0, sizeof sp);
+    ok = pthread_attr_setinheritsched(&at, PTHREAD_EXPLICIT_SCHED) == 0 &&
+         pthread_attr_setschedpolicy(&at, SCHED_OTHER) == 0 && pthread_attr_setschedparam(&at, &sp) == 0 &&
+         pthread_create(&yscr__lm.th, &at, yscr__lm_main, NULL) == 0;
+    pthread_attr_destroy(&at);
+    if (!ok) {
+        yscr__lm_free();
+        yscr__a_store(&yscr__lm.users, 0);
+        return "desc.raw_mice: the reader thread did not start";
+    }
+    return NULL;
+}
+
+static void yscr__lm_stop(void) {
+    char b = 0;
+    if (yscr__a_load(&yscr__lm.users) <= 0) return;
+    yscr__a_dec(&yscr__lm.users);
+    if (yscr__a_load(&yscr__lm.users) > 0) return;
+    if (write(yscr__lm.stop[1], &b, 1) != 1) { }
+    pthread_join(yscr__lm.th, NULL);
+    yscr__lm_free();
+}
+#else
+static const char* yscr__lm_start(void) { return "desc.raw_mice needs threads (built with YRT_NO_THREADS)"; }
+static void yscr__lm_stop(void) { }
 #endif
 
 #endif /* YSCR__GLX */
@@ -9999,12 +10292,23 @@ static const char* yscr__rm_open(yscr_screen* s) {
     s->rm_state = 0;
     yscr__rm_log(s, YSCR_RAW_MICE_ON);
     return NULL;
+#elif defined(YSCR__GLX)
+    /* evdev, not X: SDL's relative mode takes nothing from it, so there is
+     * no registration to guard */
+    const char* why;
+    if (!s->window || s->backend != YSCR_BACKEND_GLX_OML) return "desc.raw_mice needs a window (Windows, or Linux X11 on GLX_OML)";
+    why = yscr__lm_start();
+    if (why) return why;
+    s->raw_mice = 1;
+    s->rm_state = 0;
+    yscr__rm_log(s, YSCR_RAW_MICE_ON);
+    return NULL;
 #else
 #if defined(YSCR__DXGI)
     (void)&yscr__rm_start; (void)&yscr__rm_check_registered; (void)&yscr__rm_request;
 #endif
     (void)s;
-    return "desc.raw_mice is Windows only, with a window";
+    return "desc.raw_mice needs a window (Windows, or Linux X11 on GLX_OML)";
 #endif
 }
 
@@ -10022,6 +10326,13 @@ static void yscr__rm_check(yscr_screen* s) {
     act = yscr__rm_guard(&s->rm_state, rel, rel ? 1 : yscr__rm_check_registered());
     if (act == (int)YSCR_RAW_MICE_REGISTERED) yscr__rm_request();
     if (act) yscr__rm_log(s, (uint32_t)act);
+#elif defined(YSCR__GLX) && !defined(YRT_NO_THREADS)
+    /* the reader drops reports while no window of this process has the
+     * keyboard focus (23 ns a frame on Windows' relative-mode read; this
+     * is SDL's own variable) */
+    yscr__a_store(&yscr__lm.focused, SDL_GetKeyboardFocus() != NULL);
+    (void)&yscr__rm_guard; (void)&yscr__mouse_decode;
+    (void)s;
 #else
     /* the reader and its guard run on Windows with SDL only; the core
      * test calls these directly */
@@ -10597,6 +10908,8 @@ YSCR_API void yscr_close(yscr_screen* s) {
     if (s->raw_mice) {
 #if defined(YSCR__DXGI)
         yscr__rm_stop();
+#elif defined(YSCR__GLX)
+        yscr__lm_stop();
 #endif
         s->raw_mice = 0;
     }

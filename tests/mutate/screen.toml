@@ -254,8 +254,16 @@ id = "rm-06"
 name = "raw mice accepted on the simulated display"
 test = "screen"
 why = "No reader runs without a window on Windows; open() must say so instead of delivering nothing (v0.3.5)."
-find = '    return "desc.raw_mice is Windows only, with a window";'
+find = '    return "desc.raw_mice needs a window (Windows, or Linux X11 on GLX_OML)";'
 replace = '    return NULL;'
+
+[[mutant]]
+id = "rm-07"
+name = "raw mice accepted on the simulated display (Linux)"
+test = "screen_glx"
+why = "On Linux the reader is evdev, which needs no window, but SDL's mouse ids and the focus gate do; open() must refuse a screen with no window (v0.8.0)."
+find = '    if (!s->window || s->backend != YSCR_BACKEND_GLX_OML) return "desc.raw_mice needs a window (Windows, or Linux X11 on GLX_OML)";'
+replace = '    if (0) return "";'
 
 [[mutant]]
 id = "br-00"
@@ -1357,3 +1365,52 @@ test = "screen_glx"
 why = "The capability check must accept a device with keys below BTN_MISC."
 find = "        for (i = 0; i < (int)(sizeof bits / sizeof bits[0]); i++) keys |= bits[i] != 0;"
 replace = "        for (i = 0; i < (int)(sizeof bits / sizeof bits[0]); i++) keys |= 0;"
+
+[[mutant]]
+id = "glx-25"
+name = "raw mice without the focus gate"
+test = "screen_glx"
+why = "evdev gives every mouse's input whatever window has the focus; without the gate a participant's clicks on another program reach the experiment."
+find = "                if (yscr__lm.dirty[i] && !yscr__lm.dropped[i] && yscr__a_load(&yscr__lm.focused)) {"
+replace = "                if (yscr__lm.dirty[i] && !yscr__lm.dropped[i]) {"
+
+[[mutant]]
+id = "glx-26"
+name = "raw mice not matched to SDL's ids"
+test = "screen_glx"
+why = "A report's device must be SDL's mouse id (the XInput 2 device id), so ysp/response.h and the device records name one mouse one way."
+find = "    return found ? found : (YSCR__LM_UNLISTED | (uint32_t)(rdev & 0xffff));"
+replace = "    return (YSCR__LM_UNLISTED | (uint32_t)(rdev & 0xffff));"
+
+[[mutant]]
+id = "glx-27"
+name = "raw mice stamped when read"
+test = "screen_glx"
+why = "The kernel's time is the report's; the reader's read is later by its own scheduling."
+find = "                    a->t = (int64_t)e->input_event_sec * 1000000000 + (int64_t)e->input_event_usec * 1000;"
+replace = "                    a->t = YSCR__NOW();"
+
+[[mutant]]
+id = "glx-28"
+name = "raw mice on the evdev default clock"
+test = "screen_glx"
+why = "evdev stamps with CLOCK_REALTIME unless asked; the ysp_rt clock is CLOCK_MONOTONIC."
+find = """        !(keys[BTN_LEFT / (8 * sizeof(unsigned long))] & (1ul << (BTN_LEFT % (8 * sizeof(unsigned long))))) ||
+        ioctl(fd, EVIOCSCLOCKID, &clk) < 0) {"""
+replace = """        !(keys[BTN_LEFT / (8 * sizeof(unsigned long))] & (1ul << (BTN_LEFT % (8 * sizeof(unsigned long)))))) {"""
+
+[[mutant]]
+id = "glx-29"
+name = "the left button read as the right"
+test = "screen_glx"
+why = "Buttons are numbered as SDL's (left 1, middle 2, right 3)."
+find = "    case BTN_LEFT:   return YSCR_MOUSE_LEFT;"
+replace = "    case BTN_LEFT:   return YSCR_MOUSE_RIGHT;"
+
+[[mutant]]
+id = "glx-30"
+name = "the focus never passed to the reader"
+test = "screen_glx"
+why = "begin() tells the reader whether a window of this process has the keyboard focus; without it every report is dropped."
+find = "    yscr__a_store(&yscr__lm.focused, SDL_GetKeyboardFocus() != NULL);"
+replace = "    (void)0;"

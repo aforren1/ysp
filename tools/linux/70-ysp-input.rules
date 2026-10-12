@@ -1,5 +1,6 @@
-# ysp: the logged-in user reads keyboards' evdev events (kernel-timestamped
-# key times) and may create uinput devices (the key-injection tests).
+# ysp: the logged-in user reads keyboards' and mice's evdev events
+# (kernel-timestamped key times, ysp/screen.h's desc.raw_mice) and may
+# create uinput devices (the injection tests).
 # Before 73-seat-late.rules, which turns the uaccess tag into an ACL.
 # Install (docs/screen.md, "Kernel key times"):
 #   sudo cp tools/linux/70-ysp-input.rules /etc/udev/rules.d/
@@ -7,4 +8,5 @@
 # The uinput line is for the tests only; they also need the module loaded
 # (sudo modprobe uinput).
 SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_KEYBOARD}=="1", TAG+="uaccess"
+SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_MOUSE}=="1", TAG+="uaccess"
 KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"

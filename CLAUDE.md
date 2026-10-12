@@ -74,8 +74,8 @@ end the process on an X error). `test_screen_glx` checks the backend on
 a display (not in ctest); the `glx-` mutants need `YSP_SDL3` set to an
 SDL3 prefix. The display test changes the CRTC's mode and ramp on X
 screen 0 and puts them back; if a run dies, `xrandr --output <out> --mode
-1920x1080 --rate 60 --gamma 1:1:1` restores them. Key times come from
-the keyboards' evdev nodes when the user can read them
+1920x1080 --rate 60 --gamma 1:1:1` restores them. Key times, and
+`desc.raw_mice` on Linux, come from evdev nodes the user can read
 (`tools/linux/70-ysp-input.rules`); `test_screen_glx` part 11 needs that
 rule and the `uinput` module, else it skips. No socat on the Linux
 desktop: `tests/loopback/pty_pair.py` gives the pty pair. GCC 12's

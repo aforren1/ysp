@@ -3116,6 +3116,48 @@ open() refused with a message that names the variable. This answers the
 X11 part of the open question in [rig_spec.md](rig_spec.md) section 13
 for the environment variable. A driconf file setting was not tried.
 
+### Raw mice on Linux
+
+`desc.raw_mice` was Windows only (Raw Input). On Linux X11 the reader is
+evdev, as the kernel key times are: one thread per process, started
+SCHED_OTHER, reading every mouse node the user can read (the uaccess
+rule's mouse line, `tools/linux/70-ysp-input.rules`) and new ones by
+inotify. A report is everything the kernel sent up to a `SYN_REPORT`,
+stamped with the kernel's time of it. The reports go over the input
+bridge as on Windows (`yin_from_mouse()`), so `yscr_poll()` and
+`yscr_event_input()` deliver them.
+
+Three things differ from Raw Input:
+
+- The device id. SDL 3's mouse ids on X11 are XInput 2 device ids (SDL
+  3.4.18 listed ids 2, 4, 9, 10, 12 and 13 here, as `xinput list` does).
+  The reader asks X for each device's "Device Node" property and gives a
+  report the id of the device whose node it read, so a raw report and
+  SDL's event name a mouse the same way; a node X does not list gets
+  `0x45560000` plus its node number and `YSCR_MOUSE_UNLISTED`.
+- The focus. Raw Input without RIDEV_INPUTSINK gives a process its mice
+  only while it is in front; evdev gives everything. `begin()` passes the
+  reader whether SDL's keyboard focus is in a window of this process, and
+  the reader drops reports while it is not. A focus change takes effect at
+  the next `begin()`.
+- No guard: SDL's relative mode does not take evdev.
+
+`test_screen_glx` part 12: a uinput mouse, made before open so X has
+added it, sends 20 clicks with a move of (3, -2) while the window has the
+focus: 20 presses, each with a time inside the `write()` (the kernel's),
+SDL's id of that mouse (21) and the move, none flagged unlisted. With the
+X focus moved to the root window and one frame later, 5 more clicks gave
+0 events. Injected in the same frame as the focus change, before a
+`begin()` had passed it on, 10 events got through: the gate lags the
+focus by up to a frame.
+A screen with no window is refused. Mutants `glx-25` to `glx-30` and
+`rm-07`, killed: no focus gate, no id match, the read time, the default
+clock, the left button as the right, the focus never passed.
+
+Not measured: two physical mice by hand (`examples/screen/input.c
+--mice`), the delay from a click to the kernel, tablets and touchpads
+(absolute devices are not read).
+
 ### Compared with Psychtoolbox
 
 On this machine, Psychtoolbox 3.0.19.14 under Octave beside

@@ -48,6 +48,12 @@
  *      server's time is 0.3 to 2 ms before it). Skipped when /dev/uinput
  *      cannot be opened or this process cannot read the new keyboard's
  *      node (no uaccess rule; docs/screen.md, "Kernel key times").
+ *  12. desc.raw_mice on Linux: a uinput mouse (made before open, so X has
+ *      added it) sends 20 clicks with a move while the window has the
+ *      focus: each press comes from yscr_event_input() with the kernel's
+ *      time (inside the write()), SDL's id of that mouse (not UNLISTED),
+ *      the left button, and the move. With the focus moved to the root
+ *      window, 5 more clicks give nothing. Skipped like part 11.
  *
  * Exit 0 on pass, 1 on a failed check; 0 with "SKIP" when there is no X
  * display or the backend does not open (no SDL X11 driver, no DRI3). With
@@ -261,6 +267,183 @@ static void part11(void) {
            strstr(line, "key_time=") ? strstr(line, "key_time=") : "?");
     CHECK(got_a == 10 && ok_a == 10);
     CHECK(got_b == 10 && ok_b == 10);
+}
+
+/* Part 12: a mouse made through uinput, or -1; *readable as uinput_kbd. */
+static int uinput_mouse(int* readable) {
+    struct uinput_setup us;
+    char sys[64] = {0}, path[160];
+    int t, e, fd = open("/dev/uinput", O_WRONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) return -1;
+    ioctl(fd, UI_SET_EVBIT, EV_KEY);
+    ioctl(fd, UI_SET_EVBIT, EV_REL);
+    ioctl(fd, UI_SET_KEYBIT, BTN_LEFT);
+    ioctl(fd, UI_SET_KEYBIT, BTN_RIGHT);
+    ioctl(fd, UI_SET_KEYBIT, BTN_MIDDLE);
+    ioctl(fd, UI_SET_RELBIT, REL_X);
+    ioctl(fd, UI_SET_RELBIT, REL_Y);
+    ioctl(fd, UI_SET_RELBIT, REL_WHEEL);
+    memset(&us, 0, sizeof us);
+    us.id.bustype = BUS_USB;
+    us.id.vendor = 0x1209;
+    us.id.product = 0x0002;
+    snprintf(us.name, sizeof us.name, "ysp screen_glx_test mouse");
+    if (ioctl(fd, UI_DEV_SETUP, &us) < 0 || ioctl(fd, UI_DEV_CREATE) < 0) { close(fd); return -1; }
+    *readable = 0;
+    ioctl(fd, UI_GET_SYSNAME(sizeof sys), sys);
+    for (t = 0; t < 100 && !*readable; t++) {
+        for (e = 0; e < 256 && !*readable; e++) {
+            snprintf(path, sizeof path, "/sys/devices/virtual/input/%s/event%d", sys, e);
+            if (access(path, F_OK) == 0) {
+                snprintf(path, sizeof path, "/dev/input/event%d", e);
+                *readable = access(path, R_OK) == 0;
+            }
+        }
+        if (!*readable) yrt_sleep_ns(YRT_MS(10));
+    }
+    return fd;
+}
+
+static void uinput_ev(int fd, int type, int code, int value) {
+    struct input_event e;
+    memset(&e, 0, sizeof e);
+    e.type = (unsigned short)type;
+    e.code = (unsigned short)code;
+    e.value = value;
+    if (write(fd, &e, sizeof e) != (ssize_t)sizeof e) perror("uinput");
+}
+
+/* The X input focus to the window (or PointerRoot with win 0). */
+static void x_focus(unsigned long win) {
+    void* x11 = dlopen("libX11.so.6", RTLD_NOW | RTLD_GLOBAL), *p, *dpy;
+    void* (*open_display)(const char*) = NULL;
+    int (*close_display)(void*) = NULL;
+    int (*set_focus)(void*, unsigned long, int, unsigned long) = NULL;
+    int (*sync)(void*, int) = NULL;
+    if (!x11) return;
+    p = dlsym(x11, "XOpenDisplay");   memcpy(&open_display, &p, sizeof p);
+    p = dlsym(x11, "XCloseDisplay");  memcpy(&close_display, &p, sizeof p);
+    p = dlsym(x11, "XSetInputFocus"); memcpy(&set_focus, &p, sizeof p);
+    p = dlsym(x11, "XSync");          memcpy(&sync, &p, sizeof p);
+    if (!open_display || !close_display || !set_focus || !sync || !(dpy = open_display(NULL))) return;
+    set_focus(dpy, win ? win : 1ul /* PointerRoot */, 2 /* RevertToParent */, 0);
+    sync(dpy, 0);
+    close_display(dpy);
+}
+
+static void part12(void) {
+    static yscr_screen scr;
+    yscr_desc d;
+    SDL_MouseID want = 0;
+    int readable = 0, m = uinput_mouse(&readable), i, injected = 0, got = 0, ok_t = 0, ok_id = 0, ok_move = 0;
+    int unlisted = 0, phase = 0, stray = 0, n_ids = 0;
+    int64_t w0 = 0, w1 = 0, end;
+    SDL_MouseID* ids;
+    {   /* refused with no window: SDL's mouse ids and the focus gate need one */
+        static yscr_screen sim;
+        memset(&d, 0, sizeof d);
+        d.backend = YSCR_BACKEND_SIM;
+        d.raw_mice = true;
+        CHECK(!yscr_open(&sim, &d));
+        CHECK(strstr(yscr_error(&sim), "raw_mice") != NULL);
+    }
+    if (m < 0) { printf("raw mice: skipped (/dev/uinput: %s)\n", strerror(errno)); return; }
+    if (!readable) {
+        printf("raw mice: skipped (the mouse's node is not readable; the uaccess rule's mouse line)\n");
+        close(m);
+        return;
+    }
+    yrt_sleep_ns(YRT_MS(1500));   /* Xorg adds the device (and SDL lists it) */
+    memset(&d, 0, sizeof d);
+    d.backend = YSCR_BACKEND_GLX_OML;
+    d.raw_mice = true;
+    if (!yscr_open(&scr, &d)) {
+        printf("raw mice: open: %s\n", yscr_error(&scr));
+        CHECK(0);
+        ioctl(m, UI_DEV_DESTROY);
+        close(m);
+        return;
+    }
+    ids = SDL_GetMice(&n_ids);
+    for (i = 0; ids && i < n_ids; i++)
+        if (SDL_GetMouseNameForID(ids[i]) && !strcmp(SDL_GetMouseNameForID(ids[i]), "ysp screen_glx_test mouse")) want = ids[i];
+    SDL_free(ids);
+    end = (int64_t)yrt_now_ns() + 15000000000LL;
+    while ((int64_t)yrt_now_ns() < end && (phase < 3 || phase == 15)) {
+        yscr_frame f;
+        SDL_Event ev;
+        int64_t t_ev;
+        if (yscr_begin(&scr, &f) != YSCR_OK) break;
+        while (yscr_poll(&scr, &ev, &t_ev)) {
+            yin_event in;
+            if (!yscr_event_input(&scr, &ev, &in) || in.kind != YIN_KIND_MOUSE) continue;
+            if (in.device != (uint32_t)want && !(in.flags & YIN_UNLISTED)) continue;   /* another mouse */
+            if (phase == 2) {
+                stray++;
+                if (getenv("GLX_TEST_DEBUG"))
+                    printf("  stray: sdl type 0x%x (doorbell 0x%x) device %u flags 0x%x type %d control %u\n", (unsigned)ev.type,
+                           (unsigned)yscr_input_event_type(), (unsigned)in.device, (unsigned)in.flags, (int)in.type, (unsigned)in.control);
+                continue;
+            }
+            if (in.type == YIN_PRESS && in.control == 1) {
+                got++;
+                if (in.t >= w0 - 2000 && in.t <= w1 + 2000) ok_t++;
+                else printf("  click %d: stamp %+.3f ms from the write\n", got, (double)(in.t - w0) / 1e6);
+                if (in.device == (uint32_t)want && want) ok_id++;
+                if (in.flags & YIN_UNLISTED) unlisted++;
+            } else if (in.type == YIN_SAMPLE && in.control == YIN_AXIS_DELTA && in.x == 3.0f && in.y == -2.0f) {
+                ok_move++;
+            }
+        }
+        if (phase == 0 && SDL_GetKeyboardFocus() == yscr_window(&scr)) {
+            if (injected < 20) {
+                yrt_sleep_until(yrt_now_ns() + 2000000u * (uint64_t)(injected % 4), 0);
+                w0 = (int64_t)yrt_now_ns();
+                uinput_ev(m, EV_REL, REL_X, 3);
+                uinput_ev(m, EV_REL, REL_Y, -2);
+                uinput_ev(m, EV_KEY, BTN_LEFT, 1);
+                uinput_ev(m, EV_SYN, SYN_REPORT, 0);
+                w1 = (int64_t)yrt_now_ns();
+                uinput_ev(m, EV_KEY, BTN_LEFT, 0);
+                uinput_ev(m, EV_SYN, SYN_REPORT, 0);
+                injected++;
+            } else if (got >= 20 || (int64_t)yrt_now_ns() > end - 8000000000LL) {
+                phase = 1;
+                x_focus(0);
+            }
+        } else if (phase == 1 && SDL_GetKeyboardFocus() == NULL) {
+            phase = 15;   /* the next frame's begin() tells the reader */
+        } else if (phase == 15) {
+            int k;
+            for (k = 0; k < 5; k++) {
+                uinput_ev(m, EV_KEY, BTN_LEFT, 1);
+                uinput_ev(m, EV_SYN, SYN_REPORT, 0);
+                uinput_ev(m, EV_KEY, BTN_LEFT, 0);
+                uinput_ev(m, EV_SYN, SYN_REPORT, 0);
+                yrt_sleep_ns(YRT_MS(10));
+            }
+            phase = 2;
+            end = (int64_t)yrt_now_ns() + 300000000LL;   /* time for strays to arrive */
+        }
+        clear(&scr);
+        yscr_flip(&scr);
+    }
+    {
+        unsigned long win = (unsigned long)SDL_GetNumberProperty(SDL_GetWindowProperties(yscr_window(&scr)),
+                                                                SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
+        if (win) x_focus(win);
+    }
+    yscr_close(&scr);
+    ioctl(m, UI_DEV_DESTROY);
+    close(m);
+    printf("raw mice: %d clicks injected, %d presses, %d with the kernel's time, %d with SDL's id %u, %d moves, "
+           "%d unlisted; %d strays without the focus\n", injected, got, ok_t, ok_id, (unsigned)want, ok_move, unlisted, stray);
+    CHECK(want != 0);
+    CHECK(injected == 20 && got == 20);
+    CHECK(ok_t == 20);
+    CHECK(ok_id == 20);
+    CHECK(ok_move == 20);
+    CHECK(stray == 0);
 }
 
 /* Part 10's child: exit 0 when every check holds. */
@@ -653,6 +836,7 @@ int main(int argc, char** argv) {
     part9();
     part10(argv[0]);
     part11();
+    part12();
 
     /* Mesa reads vblank_mode when a display's driver screen is made, and
      * open() makes its own display connection. */
