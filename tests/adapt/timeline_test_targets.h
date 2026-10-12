@@ -92,11 +92,14 @@ static double tg_mval(const tg_mtw* w, int c, int64_t t) {
     } else if (ph >= L) {
         return w->yoyo ? w->from[c] : w->to[c];
     }
-    if (w->yoyo && ph >= w->d) {
+    if (w->yoyo && ph >= w->d && w->ease == YTL_EASE_STEP) {
+        /* STEP keeps its square wave: `to` until the end of the return leg */
         v0 = w->to[c];
         v1 = w->from[c];
         ph -= w->d;
     } else {
+        /* v0.7.0: the return leg is the forward leg at the mirrored time */
+        if (w->yoyo && ph > w->d) ph = 2 * w->d - ph;
         v0 = w->from[c];
         v1 = w->to[c];
     }
@@ -597,7 +600,7 @@ typedef struct tg_log {
     int id[16], kind[16];
     int64_t frame[16];
     float seen[16];
-    int post, kill, nested;
+    int post, kill, nested, prune;
 } tg_log;
 
 static tg_log g_log;
@@ -621,6 +624,7 @@ static void tg_cb(ytl_timeline* tl, int id, void* user, int kind) {
         lg->nested = ytl_evaluate(tl, &f, NULL, 0);
     }
     if (lg->kill) ytl_kill_tween(tl, id);
+    if (lg->prune) ytl_prune(tl, 1);
     if (lg->post && kind == 1) {
         ytl_seq q = ytl_seq_now(tl, 1);
         ytl_tween_to(&q, &g_cby, 5.0f, 0, 0);
@@ -881,6 +885,17 @@ static void test_tg_step_quant(void) {
                 if (ktg < 0 && x == 7.0f) ktg = k;
             }
             if (kev != ktg || kev < 0) bad++;
+            /* v0.7.0: the set's record names the frame that showed it. */
+            {
+                const ytl_event* es = ytl_events(&g_tl, 1, &k);
+                int i, nrec = 0;
+                for (i = 0; i < k; i++) {
+                    if (es[i].kind != YTL_TARGET_SET) continue;
+                    nrec++;
+                    if (es[i].frame != ktg || es[i].time_ns != ts || !(es[i].flags & YTL_EV_FIRED)) bad++;
+                }
+                if (nrec != 1) bad++;
+            }
         }
     }
     CHECK_I(bad, 0);
@@ -1157,6 +1172,469 @@ static void test_tg_model(void) {
            g_tg_stat_add, g_tg_stat_step, g_tg_stat_imm, g_tg_stat_rew, g_tg_stat_kill);
 }
 
+/* ---------------------------------------------------------------- v0.7.0 */
+
+/* Float distance in ulps, with -0 and +0 the same. */
+static int64_t tg_ulps(float a, float b) {
+    int32_t ia, ib;
+    memcpy(&ia, &a, sizeof ia);
+    memcpy(&ib, &b, sizeof ib);
+    if (ia < 0) ia = INT32_MIN - ia;
+    if (ib < 0) ib = INT32_MIN - ib;
+    return ia > ib ? (int64_t)ia - ib : (int64_t)ib - ia;
+}
+
+/* Yoyo: the return leg is the forward leg backward in time (GSAP), STEP
+ * excepted (test_tween_step). Every other ease, BEZIER on an asymmetric
+ * curve, as a channel tween, a sequence tween and a target tween with 2
+ * cycles at 1 ms onsets: the three give the same bits, each is within 2e-6
+ * of tg_shape() read at the mirrored time, and v(s + d + x) is measured
+ * against v(s + d - x) in float ulps. */
+static ytl_key g_yk[64];
+
+static void test_tg_yoyo(void) {
+    static float x, v[201];
+    const int64_t M = MS_NS, S = 10 * MS_NS, D = 100 * MS_NS;
+    int ease, k, bad_ref = 0, bad_paths = 0, max_ease = -1;
+    int64_t max_ulps = 0;
+    for (ease = 0; ease <= YTL_EASE_CUBIC_IN_OUT; ease++) {
+        ytl_desc d;
+        ytl_tween_desc td;
+        ytl_seq q;
+        ytl_anim a;
+        const double fr = 0.5, to = 4.0;
+        if (ease == YTL_EASE_STEP) continue;
+        memset(&d, 0, sizeof d);
+        d.events = g_store;
+        d.event_capacity = 8;
+        d.n_channels = 2;
+        d.keys = g_yk;
+        d.key_capacity = 64;
+        d.targets = g_tgs;
+        d.target_capacity = 2;
+        d.tweens = g_tws;
+        d.tween_capacity = 4;
+        CHECK(ytl_open(&g_tl, &d));
+        memset(&td, 0, sizeof td);
+        td.from = (float)fr;
+        td.from_set = true;
+        td.to = (float)to;
+        td.duration_ns = D;
+        td.ease = ease;
+        td.curve = mkcurve(0.05f, 0.7f, 0.1f, 1.0f);   /* a strong ease-out */
+        td.yoyo = true;
+        td.cycles = 2;
+        td.start_ns = S;
+        td.start_set = true;
+        CHECK_I(ytl_tween(&g_tl, 0, 1, &td), 0);
+        td.start_set = false;
+        td.start_ns = 0;
+        q = ytl_seq_on(&g_tl, 1);
+        ytl_at(&q, S);
+        CHECK_I(ytl_to(&q, 1, &td), S + 4 * D);
+        x = (float)fr;
+        a = tg_from_desc(&x, &td);
+        CHECK(ytl_animate(&q, &a) >= 0);
+        CHECK_I(q.err, 0);
+        CHECK_I(ytl_anchor(&g_tl, 1, T0, 0), 0);
+        for (k = 0; k <= 450; k++) {
+            int64_t bt = k * M, ph = bt - S;
+            float vc, vs;
+            double want, u;
+            eval_at(&g_tl, T0 + bt, M, k, NULL, 0);
+            if (bt < S) continue;   /* the channels hold 0 before the start */
+            vc = ytl_value(&g_tl, 0);
+            vs = ytl_value(&g_tl, 1);
+            if (memcmp(&vc, &vs, sizeof vc) != 0 || memcmp(&vc, &x, sizeof vc) != 0) {
+                if (bad_paths++ < 3)
+                    fprintf(stderr, "  yoyo ease %d at %d ms: channel %.9g sequence %.9g target %.9g\n", ease, k,
+                            (double)vc, (double)vs, (double)x);
+            }
+            /* The rule read literally: fold the cycle, mirror the return
+             * leg, read the forward leg. */
+            if (ph >= 4 * D) {
+                ph = 0;
+            } else {
+                ph %= 2 * D;
+                if (ph > D) ph = 2 * D - ph;
+            }
+            u = (double)ph / (double)D;
+            want = ease == YTL_EASE_LOG ? fr * pow(to / fr, u) : fr + (to - fr) * tg_shape(ease, &td.curve, u);
+            if (!(fabs((double)vc - want) <= 2e-6 * (1.0 + fabs(want)))) {
+                if (bad_ref++ < 3)
+                    fprintf(stderr, "  yoyo ease %d at %d ms: got %.9g, the forward leg mirrored %.9g\n", ease, k,
+                            (double)vc, want);
+            }
+            if (bt <= S + 2 * D) v[(bt - S) / M] = vc;
+        }
+        for (k = 1; k < 100; k++) {
+            int64_t e = tg_ulps(v[100 + k], v[100 - k]);
+            if (e > max_ulps) {
+                max_ulps = e;
+                max_ease = ease;
+            }
+        }
+        /* CUBIC_OUT's return leg starts slow and ends fast; v0.6.0's started
+         * fast. */
+        if (ease == YTL_EASE_CUBIC_OUT) CHECK(fabs(v[110] - v[100]) * 100.0 < fabs(v[200] - v[190]));
+        ytl_close(&g_tl);
+    }
+    CHECK_I(bad_paths, 0);
+    CHECK_I(bad_ref, 0);
+    CHECK(max_ulps <= 4);
+    printf("timeline_test: yoyo: the return leg within %lld float ulp of the forward leg mirrored (ease %d)\n",
+           (long long)max_ulps, max_ease);
+}
+
+/* A set leaves a YTL_TARGET_SET record, which lands, rewinds, skips and goes
+ * with its tween as a callback's event does. */
+static void test_tg_records(void) {
+    static float x, y, rgb[3];
+    ytl_seq q;
+    ytl_anim a;
+    ytl_event fired[8];
+    const ytl_event* es;
+    int id, id2, k, n, i, krec, kx = -1;
+    CHECK(tg_open(&g_tl, g_store, 64, 8, 16, 0.0, 0));
+    x = 0.0f;
+    q = ytl_seq_on(&g_tl, 1);
+    ytl_at(&q, YRT_MS(100));
+    id = ytl_tween_set(&q, &x, 3.0f);
+    CHECK(id >= 0);
+    es = ytl_events(&g_tl, 1, &n);
+    CHECK_I(n, 1);
+    CHECK_I(es[0].kind, YTL_TARGET_SET);
+    CHECK_I(es[0].code, id);
+    CHECK(es[0].value == 3.0f);
+    CHECK(es[0].user == (uint64_t)(uintptr_t)&x);
+    CHECK_I(es[0].time_ns, YRT_MS(100));
+    CHECK_I(es[0].frame, -1);
+    /* Only a set: not a jump with another ease, a STEP with a duration, or a
+     * STEP to the value at its start. A set of 3 records to[0]. */
+    CHECK(ytl_tween_to(&q, &y, 1.0f, 0, YTL_EASE_LINEAR) >= 0);
+    CHECK(ytl_tween_to(&q, &y, 1.0f, YRT_MS(10), YTL_EASE_STEP) >= 0);
+    a = tg_anim(&y, 0.0f, 0, YTL_EASE_STEP);
+    a.to_current = true;
+    CHECK(ytl_animate(&q, &a) >= 0);
+    CHECK_I(n_events(&g_tl, 1), 1);
+    a = tg_anim(rgb, 0.25f, 0, YTL_EASE_STEP);
+    a.n = 3;
+    a.to[1] = 0.5f;
+    a.to[2] = 0.75f;
+    id2 = ytl_animate(&q, &a);
+    CHECK(id2 >= 0);
+    CHECK_I(q.err, 0);
+    es = ytl_events(&g_tl, 1, &n);
+    CHECK_I(n, 2);
+    CHECK(n == 2 && es[1].code == id2 && es[1].value == 0.25f && es[1].user == (uint64_t)(uintptr_t)rgb);
+    /* It lands on the frame that shows the set, and is in the report. */
+    ytl_anchor(&g_tl, 1, T0, 0);
+    krec = -1;
+    for (k = 0; k < 12; k++) {
+        n = tg_frame(&g_tl, k, fired, 8);
+        for (i = 0; i < n && i < 8; i++) {
+            if (fired[i].kind != YTL_TARGET_SET || fired[i].code != id) continue;
+            krec = k;
+            CHECK_I(fired[i].frame, k);
+        }
+        if (kx < 0 && x == 3.0f) kx = k;
+    }
+    CHECK(kx > 0);
+    CHECK_I(krec, kx);
+    /* A rewind fires it again; a skip over it does not. */
+    ytl_anchor(&g_tl, 1, T0 + 12 * P60, 0);
+    krec = -1;
+    for (k = 12; k < 24; k++) {
+        n = tg_frame(&g_tl, k, fired, 8);
+        for (i = 0; i < n && i < 8; i++)
+            if (fired[i].kind == YTL_TARGET_SET && fired[i].code == id) krec = k;
+    }
+    CHECK_I(krec, 12 + kx);
+    CHECK(ytl_skip(&g_tl, 1, T0 + 24 * P60, 0) >= 0);
+    CHECK(ytl_skip(&g_tl, 1, T0 + 24 * P60, YRT_MS(400)) >= 0);
+    es = ytl_events(&g_tl, 1, &n);
+    for (i = 0; i < n; i++)
+        if (es[i].code == id) CHECK(es[i].flags == YTL_EV_SKIPPED && es[i].frame == -1);
+    /* A kill deletes it, fired or not. */
+    CHECK_I(ytl_kill_tween(&g_tl, id), 0);
+    es = ytl_events(&g_tl, 1, &n);
+    CHECK_I(n, 1);
+    CHECK(n == 1 && es[0].code == id2);
+
+    /* A set needs an event of the storage, all or none; an overwrite that
+     * kills a set frees its record; a cancel deletes it. */
+    CHECK(tg_open(&g_tl, g_store, 1, 4, 8, 0.0, 0));
+    q = ytl_seq_on(&g_tl, 1);
+    CHECK(ytl_tween_set(&q, &x, 1.0f) >= 0);
+    CHECK_I(ytl_tween_set(&q, &y, 1.0f), YTL_ERR_FULL);
+    CHECK(strstr(ytl_error(&g_tl), "event storage is full") != NULL);
+    CHECK_I(ytl_tween_count(&g_tl, NULL), 1);
+    q = ytl_seq_on(&g_tl, 1);
+    a = tg_anim(&x, 2.0f, 0, YTL_EASE_STEP);
+    a.overwrite = YTL_OVERWRITE_ALL;
+    CHECK(ytl_animate(&q, &a) >= 0);
+    CHECK_I(n_events(&g_tl, 1), 1);
+    CHECK_I(ytl_tween_count(&g_tl, NULL), 1);
+    CHECK_I(ytl_seq_cancel(&q), 1);
+    CHECK_I(n_events(&g_tl, 1), 0);
+    ytl_close(&g_tl);
+}
+
+/* A trial whose fields are retargeted all the time, for test_tg_prune(). */
+static void tgp_build(ytl_timeline* tl, float* f) {
+    ytl_seq q = ytl_seq_on(tl, 1);
+    ytl_anim a;
+    int i;
+    static const int eases[3] = { YTL_EASE_LINEAR, YTL_EASE_CUBIC_OUT, YTL_EASE_QUAD_IN };
+    for (i = 0; i < 31; i++) {
+        ytl_at(&q, i * YRT_MS(40));
+        ytl_tween_to(&q, &f[0], (float)(i % 5), YRT_MS(70), eases[i % 3]);
+    }
+    for (i = 0; i < 40; i++) {
+        ytl_at(&q, i * YRT_MS(30) + YRT_MS(5));
+        ytl_tween_set(&q, &f[1], (float)(i % 4));
+    }
+    ytl_at(&q, 0);
+    a = tg_anim(&f[2], 3.0f, YRT_MS(120), YTL_EASE_CUBIC_OUT);
+    a.yoyo = true;
+    a.cycles = 3;
+    ytl_animate(&q, &a);
+    ytl_at(&q, YRT_MS(500));
+    ytl_tween_to(&q, &f[2], -1.0f, YRT_MS(200), YTL_EASE_COSINE);
+    ytl_at(&q, YRT_MS(900));
+    ytl_tween_from_to(&q, &f[2], 5.0f, 6.0f, YRT_MS(300), YTL_EASE_QUAD_OUT);
+    /* f[3]: a long tween with an on_complete, overridden at 100 ms. */
+    ytl_at(&q, 0);
+    a = tg_anim(&f[3], 9.0f, YRT_S(10), YTL_EASE_LINEAR);
+    a.on_complete = tg_on_complete;
+    a.user = &g_log;
+    ytl_animate(&q, &a);
+    ytl_at(&q, YRT_MS(100));
+    ytl_tween_to(&q, &f[3], 1.0f, YRT_MS(50), YTL_EASE_LINEAR);
+    if (q.err < 0) fail(__LINE__, "tgp_build: a call failed");
+}
+
+/* ytl_prune() frees the tweens a later tween has overridden for good, and
+ * sets the horizon: from there on a rewind or a seek replays the fields bit
+ * for bit; before it, the fields show what remains. */
+static void test_tg_prune(void) {
+    static float fa[4], fb[4], x, y;
+    ytl_seq q;
+    ytl_frame f;
+    int k, n_a, n_b, j, bad = 0, differ = 0, id, maxc = 0, full = -1;
+    int64_t h = -1, end = -2, seeks[3];
+    CHECK(tg_open(&g_tl, g_store, 128, 4, 2 * TG_CAP, 0.0, 0));
+    CHECK(tg_open(&g_tl2, g_store2, 128, 4, 2 * TG_CAP, 0.0, 1));
+    memset(&g_log, 0, sizeof g_log);
+    memset(fa, 0, sizeof fa);
+    memset(fb, 0, sizeof fb);
+    tgp_build(&g_tl, fa);
+    tgp_build(&g_tl2, fb);
+    CHECK(!ytl_horizon(&g_tl, 1, &h));
+    ytl_anchor(&g_tl, 1, T0, 0);
+    ytl_anchor(&g_tl2, 1, T0, 0);
+    for (k = 0; k < 60; k++) {
+        tg_frame(&g_tl, k, NULL, 0);
+        tg_frame(&g_tl2, k, NULL, 0);
+        if (memcmp(fa, fb, sizeof fa) != 0) bad++;
+    }
+    f.onset = T0 + 59 * P60;
+    f.period = P60;
+    f.index = 59;
+    CHECK(ytl_window(&g_tl, 1, &f, &end));
+    n_b = ytl_tween_count(&g_tl, NULL);
+    CHECK(ytl_prune(&g_tl, 1) > 0);
+    n_a = ytl_tween_count(&g_tl, NULL);
+    /* At 983 ms: f[0]: 25 started, 24 freed; f[1]: 33 sets, 32 freed;
+     * f[2]: 3 started, 2 freed; f[3]: none, the long tween waits for its
+     * on_complete. */
+    CHECK_I(n_b - n_a, 24 + 32 + 2);
+    CHECK(ytl_horizon(&g_tl, 1, &h));
+    CHECK_I(h, end + 1);
+    /* Continuous play, then rewinds and seeks inside the window. */
+    for (k = 60; k < 90; k++) {
+        tg_frame(&g_tl, k, NULL, 0);
+        tg_frame(&g_tl2, k, NULL, 0);
+        if (memcmp(fa, fb, sizeof fa) != 0) bad++;
+    }
+    seeks[0] = h;
+    seeks[1] = h + 123456789;
+    seeks[2] = h + YRT_MS(50);
+    for (j = 0; j < 3; j++) {
+        int64_t k0 = 90 + j * 30;
+        if (j < 2) {
+            CHECK_I(ytl_anchor(&g_tl, 1, T0 + k0 * P60, seeks[j]), 0);
+            CHECK_I(ytl_anchor(&g_tl2, 1, T0 + k0 * P60, seeks[j]), 0);
+        } else {
+            CHECK(ytl_skip(&g_tl, 1, T0 + k0 * P60, seeks[j]) >= 0);
+            CHECK(ytl_skip(&g_tl2, 1, T0 + k0 * P60, seeks[j]) >= 0);
+        }
+        for (k = (int)k0; k < k0 + 30; k++) {
+            tg_frame(&g_tl, k, NULL, 0);
+            tg_frame(&g_tl2, k, NULL, 0);
+            if (memcmp(fa, fb, sizeof fa) != 0) {
+                if (bad++ < 3) fprintf(stderr, "  prune: seek %d frame %d differs\n", j, k);
+            }
+        }
+    }
+    CHECK_I(bad, 0);
+    /* Before the horizon the freed tweens are gone: f[0] and f[1] show their
+     * rest values before their first remaining tween. */
+    CHECK_I(ytl_anchor(&g_tl, 1, T0 + 180 * P60, 0), 0);
+    CHECK_I(ytl_anchor(&g_tl2, 1, T0 + 180 * P60, 0), 0);
+    for (k = 180; k < 200; k++) {
+        tg_frame(&g_tl, k, NULL, 0);
+        tg_frame(&g_tl2, k, NULL, 0);
+        if (memcmp(fa, fb, sizeof fa) != 0) differ++;
+        if (fa[0] != 0.0f || fa[1] != 0.0f) bad++;
+    }
+    CHECK(differ > 0);
+    CHECK_I(bad, 0);
+    /* A prune after that rewind keeps the horizon: what the first deleted
+     * is still gone. */
+    {
+        int64_t h2 = -1;
+        CHECK(ytl_prune(&g_tl, 1) >= 0);
+        CHECK(ytl_horizon(&g_tl, 1, &h2));
+        CHECK_I(h2, h);
+    }
+    /* A clear ends the horizon; bad arguments are false. */
+    CHECK_I(ytl_horizon(&g_tl, 0, &h), 0);
+    CHECK(!ytl_horizon(&g_tl, 8, &h));
+    CHECK(!ytl_horizon(&g_tl, 1, NULL));
+    CHECK(ytl_clear(&g_tl, 1) >= 0);
+    CHECK(!ytl_horizon(&g_tl, 1, &h));
+    ytl_close(&g_tl);
+    ytl_close(&g_tl2);
+    CHECK(!ytl_horizon(&g_tl, 1, &h));
+
+    /* An event still to fire keeps its tween: a long tween's on_complete,
+     * and a late on_start. */
+    CHECK(tg_open(&g_tl, g_store, 16, 2, 8, 0.0, 0));
+    memset(&g_log, 0, sizeof g_log);
+    x = 0.0f;
+    q = ytl_seq_on(&g_tl, 1);
+    {
+        ytl_anim a = tg_anim(&x, 1.0f, YRT_S(2), YTL_EASE_LINEAR);
+        a.on_complete = tg_on_complete;
+        a.user = &g_log;
+        CHECK(ytl_animate(&q, &a) >= 0);
+        ytl_at(&q, YRT_MS(100));
+        CHECK(ytl_tween_to(&q, &x, 5.0f, YRT_MS(50), 0) >= 0);
+        ytl_anchor(&g_tl, 1, T0, 0);
+        for (k = 0; k < 30; k++) tg_frame(&g_tl, k, NULL, 0);
+        CHECK(ytl_prune(&g_tl, 1) >= 0);
+        CHECK_I(ytl_tween_count(&g_tl, NULL), 2);
+        for (k = 30; k < 130; k++) tg_frame(&g_tl, k, NULL, 0);
+        CHECK_I(g_log.n, 1);
+        CHECK(ytl_prune(&g_tl, 1) >= 0);
+        CHECK_I(ytl_tween_count(&g_tl, NULL), 1);
+        /* A tween added in the past, before the driver's start, with an
+         * on_start that fires late at the next evaluate. */
+        a = tg_anim(&x, 7.0f, YRT_MS(10), YTL_EASE_LINEAR);
+        a.on_start = tg_on_start;
+        a.user = &g_log;
+        ytl_at(&q, YRT_MS(50));
+        CHECK(ytl_animate(&q, &a) >= 0);
+        CHECK(ytl_prune(&g_tl, 1) >= 0);
+        CHECK_I(ytl_tween_count(&g_tl, NULL), 2);
+        tg_frame(&g_tl, 130, NULL, 0);
+        CHECK_I(g_log.n, 2);
+        CHECK(x == 5.0f);
+        CHECK(ytl_prune(&g_tl, 1) >= 0);
+        CHECK_I(ytl_tween_count(&g_tl, NULL), 1);
+    }
+
+    /* A prune from a callback keeps the tweens whose calls are queued or
+     * running. A, A2 and B start at 0, B last; A's on_start prunes, and A's
+     * on_complete and A2's on_start of the same frame still run. */
+    CHECK(tg_open(&g_tl, g_store, 16, 2, 8, 0.0, 0));
+    memset(&g_log, 0, sizeof g_log);
+    q = ytl_seq_on(&g_tl, 1);
+    {
+        ytl_anim a = tg_anim(&x, 1.0f, 0, YTL_EASE_LINEAR);
+        a.on_start = tg_on_start;
+        a.on_complete = tg_on_complete;
+        a.user = &g_log;
+        id = ytl_animate(&q, &a);
+        a.on_complete = NULL;
+        CHECK(ytl_animate(&q, &a) >= 0);
+        CHECK(ytl_tween_to(&q, &x, 2.0f, 0, 0) >= 0);
+        g_log.prune = 1;
+        ytl_anchor(&g_tl, 1, T0, 0);
+        g_cb_frame = 0;
+        tg_frame(&g_tl, 0, NULL, 0);
+        CHECK_I(g_log.n, 3);
+        CHECK(g_log.n == 3 && g_log.id[1] == id && g_log.kind[1] == 1 && g_log.id[2] == id + 1);
+        /* A2's own call freed A, whose calls had run. */
+        CHECK_I(ytl_tween_count(&g_tl, NULL), 2);
+        g_log.prune = 0;
+        CHECK(ytl_prune(&g_tl, 1) >= 0);
+        CHECK_I(ytl_tween_count(&g_tl, NULL), 1);
+        CHECK(x == 2.0f);
+    }
+
+    /* A script on the RT base that retargets a field every frame and sets
+     * another every 5th, with a prune every 8th, for 100,000 frames (28
+     * minutes at 60 Hz) in a pool of 16 tweens and 64 events. A second
+     * handle plays the same calls with YTL_OVERWRITE_ALL, whose new tween
+     * starts from the value written last, which is the takeover's here: the
+     * same bits on every frame. Without the prune the pool is full within 16
+     * frames. */
+    for (j = 0; j < 2; j++) {
+        static float x2, y2;
+        CHECK(tg_open(&g_tl, g_store, 64, 2, 16, 0.0, 0));
+        CHECK(tg_open(&g_tl2, g_store2, 64, 2, 4, 0.0, 1));
+        x = y = x2 = y2 = 0.0f;
+        bad = 0;
+        for (k = 0; k < 100000; k++) {
+            int rc;
+            ytl_anim a;
+            q = ytl_seq_now(&g_tl, YTL_BASE_RT);
+            rc = ytl_tween_to(&q, &x, (float)(k % 7), YRT_MS(100), YTL_EASE_CUBIC_OUT);
+            if (rc >= 0 && k % 5 == 0) rc = ytl_tween_set(&q, &y, (float)(k % 3));
+            if (rc < 0) {
+                full = k;
+                break;
+            }
+            q = ytl_seq_now(&g_tl2, YTL_BASE_RT);
+            a = tg_anim(&x2, (float)(k % 7), YRT_MS(100), YTL_EASE_CUBIC_OUT);
+            a.overwrite = YTL_OVERWRITE_ALL;
+            ytl_animate(&q, &a);
+            if (k % 5 == 0) {
+                a = tg_anim(&y2, (float)(k % 3), 0, YTL_EASE_STEP);
+                a.overwrite = YTL_OVERWRITE_ALL;
+                ytl_animate(&q, &a);
+            }
+            CHECK_I(q.err, 0);
+            /* Between the posts and the frame, so the newest tween has
+             * started (at the last onset) but has no start value yet. */
+            if (j == 0 && k % 8 == 7) {
+                ytl_prune(&g_tl, YTL_BASE_RT);
+                ytl_prune(&g_tl2, YTL_BASE_RT);
+            }
+            eval_at(&g_tl, T0 + k * P60, P60, k, NULL, 0);
+            eval_at(&g_tl2, T0 + k * P60, P60, k, NULL, 0);
+            if (memcmp(&x, &x2, sizeof x) != 0 || memcmp(&y, &y2, sizeof y) != 0) {
+                if (bad++ < 3) fprintf(stderr, "  prune: long run frame %d: %.9g %.9g against %.9g %.9g\n", k,
+                                       (double)x, (double)y, (double)x2, (double)y2);
+            }
+            if (ytl_tween_count(&g_tl, NULL) > maxc) maxc = ytl_tween_count(&g_tl, NULL);
+        }
+        CHECK_I(bad, 0);
+        if (j == 0) {
+            CHECK_I(full, -1);
+            CHECK(maxc <= 12);
+            CHECK(n_events(&g_tl, YTL_BASE_RT) <= 3);
+            printf("timeline_test: prune: 100000 frames of retargets in a pool of 16, at most %d tweens live\n", maxc);
+        } else {
+            CHECK(full > 0 && full <= 16);
+        }
+        ytl_close(&g_tl);
+        ytl_close(&g_tl2);
+    }
+}
+
 static void test_targets(void) {
     test_tg_basic();
     test_tg_eases();
@@ -1167,4 +1645,7 @@ static void test_targets(void) {
     test_tg_step_quant();
     test_tg_replay();
     test_tg_model();
+    test_tg_yoyo();
+    test_tg_records();
+    test_tg_prune();
 }

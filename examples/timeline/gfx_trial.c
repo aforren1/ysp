@@ -6,8 +6,9 @@
  * at the grating's onset. The timeline writes the stimuli's fields itself
  * (ysp/timeline.h TARGETS), as GSAP's timeline.set() and .to() do: sets of
  * `visible` that land where events at the same times land, and tweens of
- * the grating's contrast. Each fired event (the trigger) is printed with
- * its frame and residual.
+ * the grating's contrast. Each fired event is printed with its frame and
+ * residual: the trigger, and since ysp/timeline.h v0.7.0 the record of
+ * each set, which names the frame that showed it.
  *
  * Usage: gfx_trial [--sim] [--cache DIR] [--no-cache]
  *   --cache DIR keep compiled programs in DIR; the default is the per-user
@@ -125,10 +126,16 @@ int main(int argc, char** argv) {
         ygfx_draw(&gfx, &fix);
         ygfx_draw(&gfx, &grating);
         ygfx_end(&gfx);
-        for (i = 0; i < n && i < 8; i++)
-            printf("frame %3lld  kind %d ch %d code %2d  at %+8.3f ms, residual %+.3f ms\n",
-                   (long long)fired[i].frame, fired[i].kind, fired[i].target, fired[i].code,
-                   (double)(fired[i].onset - t0) / 1e6, (double)fired[i].residual / 1e6);
+        for (i = 0; i < n && i < 8; i++) {
+            const ytl_event* e = &fired[i];
+            if (e->kind == YTL_TARGET_SET)   /* a set's record: user is the field */
+                printf("frame %3lld  set %s.visible = %g  at %+8.3f ms, residual %+.3f ms\n", (long long)e->frame,
+                       e->user == (uint64_t)(uintptr_t)&fix.visible ? "fix" : "grating", (double)e->value,
+                       (double)(e->onset - t0) / 1e6, (double)e->residual / 1e6);
+            else
+                printf("frame %3lld  kind %d code %2d  at %+8.3f ms, residual %+.3f ms\n", (long long)e->frame,
+                       e->kind, e->code, (double)(e->onset - t0) / 1e6, (double)e->residual / 1e6);
+        }
         yscr_flip(&scr);
         if (f.onset - t0 > 13 * S / 10 || f.index > 400) break;
     }

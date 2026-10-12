@@ -4,7 +4,8 @@
  * no threads, so there is no YTL_NO_THREADS variant. It runs and returns 0
  * to prove it links, and that a sequence built by calls and one built from
  * an op table both apply. v0.6.0: target tweens on a stimulus's fields,
- * written as a caller writes them, with no cast in C++. */
+ * written as a caller writes them, with no cast in C++. v0.7.0: a set's
+ * record, a prune and the horizon. */
 #define YSP_TIMELINE_IMPLEMENTATION
 #include "ysp/timeline.h"
 
@@ -21,10 +22,11 @@ typedef struct tl_api {
     int (*check_ops)(ytl_timeline*, int, const ytl_op*, int, int*);
     void (*wait)(ytl_seq*, int64_t);
     int64_t (*ns)(double);
+    bool (*horizon)(const ytl_timeline*, int, int64_t*);   /* v0.7.0 */
 } tl_api;
 
 static const tl_api g_api = {
-    ytl_open, ytl_close, ytl_error, ytl_peek, ytl_clamped, ytl_check_ops, ytl_wait, ytl_ns
+    ytl_open, ytl_close, ytl_error, ytl_peek, ytl_clamped, ytl_check_ops, ytl_wait, ytl_ns, ytl_horizon
 };
 
 /* The unit macros are constant expressions: a static initializer. */
@@ -133,6 +135,16 @@ static int targets(ytl_timeline* tl) {
         || g_done != 1)
         return 1;
     if (ytl_kill(tl, &s.x) != 1 || ytl_tween_count(tl, NULL) != 9) return 1;
+    {
+        /* The set left a record of the frame that showed it. */
+        int n = 0, k, rec = 0;
+        int64_t h = 0;
+        const ytl_event* e = ytl_events(tl, 1, &n);
+        for (k = 0; k < n; k++)
+            if (e[k].kind == YTL_TARGET_SET && e[k].user == (uint64_t)(uintptr_t)&s.visible && e[k].frame == 0) rec++;
+        if (rec != 1 || g_api.horizon(tl, 1, &h)) return 1;
+        if (ytl_prune(tl, 1) < 1 || !g_api.horizon(tl, 1, &h) || h <= 0 || ytl_tween_count(tl, NULL) != 9) return 1;
+    }
     return 0;
 }
 
