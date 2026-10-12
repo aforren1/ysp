@@ -117,7 +117,7 @@ Purpose: Serial port (RS-232, USB-serial, USB-CDC) byte I/O for trigger and resp
 Status:
 
 - Hardware: the Windows backend ran on a Teensy 4.0 over native USB CDC (usbser), 2026-10-11, through the MATLAB MEX: round trip 172 to 288 us median, 279 to 424 us p99, against a raw Win32 floor of 167 to 229 us; IOPort with BlockingBackgroundRead=1 PollLatency=0 matches it. macOS and USB-serial bridges (FTDI) and RS-232 never ran. [Results](serial.md#results-with-the-teensy-40-echo-board).
-- Bindings: `ysp-serial` 0.5.0.1 (Python) and the MEX `ysp_serial` 2.0.0 take and return every time in seconds; the MEX has an async line reader. [Bindings](bindings.md#versions).
+- Bindings: `ysp-serial` 0.5.0.2 (Python) and the MEX `ysp_serial` 2.0.0 take and return every time in seconds; both have an async line reader (the Python one since 0.5.0.2). [Bindings](bindings.md#versions).
 - v0.5.0 (the [Conventions](conventions.md): widths, timeouts and the break in `int64_t` ns, `YSER_TIMEOUT_INFINITE` is -1, `yser_now_us()` removed, version macros).
 - v0.4, on ysp/rt.h. Linux tested against a virtual port pair; the Windows and macOS backends compiled in CI but had not run on a device. [Design notes](serial.md).
 
