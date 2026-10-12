@@ -23,6 +23,17 @@
  *   7. desc.x11_override_redirect: the fullscreen window is
  *      override-redirect, its flips are Present flips, and it has the
  *      keyboard focus (20 of 20 XTEST keys; no window manager gives it).
+ *   8. The panic (PANIC), in a child that runs this program again: the
+ *      parent sets a ramp that is not identity on X screen 0's CRTC; the
+ *      child opens fullscreen with desc.panic and, if the display lists
+ *      one, a 59.94 Hz mode (which resets the ramp), and stops calling begin();
+ *      the parent sends Shift+Esc three times through XTEST. The child
+ *      must end with YSCR_PANIC_EXIT_CODE and leave the parent's ramp and
+ *      the CRTC's mode as they were. The parent puts the identity back.
+ *   9. A clean close with a ramp that is not identity: fullscreen in the
+ *      desktop mode says os_gamma=set and puts the ramp back at close; in
+ *      a 59.94 Hz mode (the switch resets the ramp), close puts back the
+ *      mode and then the ramp.
  *
  * Exit 0 on pass, 1 on a failed check; 0 with "SKIP" when there is no X
  * display or the backend does not open (no SDL X11 driver, no DRI3). With
@@ -37,6 +48,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <dlfcn.h>
+#include <sys/wait.h>
 
 static int g_failures = 0;
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "screen_glx_test: FAIL line %d: %s\n", __LINE__, #c); g_failures++; } } while (0)
@@ -100,6 +112,8 @@ static int xtest_keys(yscr_screen* s, int* received) {
             if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.raw == 192 && waiting) {
                 (*received)++;
                 if (t_ev >= t_inj - 3000000 && t_ev <= t_inj + 1000000) ok++;
+                else printf("  key %d: stamp %+.3f ms from the injection, outside -3 to +1\n", *received,
+                            (double)(t_ev - t_inj) / 1e6);
                 waiting = 0;
             }
         if (waiting && (int64_t)yrt_now_ns() > give_up) waiting = 0;
@@ -120,13 +134,237 @@ static int xtest_keys(yscr_screen* s, int* received) {
     return injected == 0 ? -1 : ok;
 }
 
-int main(void) {
+
+/* Part 8's child: open, report, hang. */
+static int panic_child(int fd) {
+    static yscr_screen sc;
+    yscr_desc d;
+    yscr_frame f;
+    yscr_mode m[64];
+    char line[1024], ok;
+    int i, n;
+    memset(&d, 0, sizeof d);
+    d.backend = YSCR_BACKEND_GLX_OML;
+    d.panic = true;
+    n = yscr_modes(0, m, 64);
+    for (i = 0; i < n; i++)
+        if (m[i].w == 1920 && m[i].h == 1080 && m[i].period_ns > 16683000 && m[i].period_ns < 16684500) { d.mode = m[i]; break; }
+    if (!yscr_open(&sc, &d)) { fprintf(stderr, "panic child: %s\n", yscr_error(&sc)); return 3; }
+    for (i = 0; i < 30; i++) { if (yscr_begin(&sc, &f) != YSCR_OK) break; clear(&sc); yscr_flip(&sc); }
+    yscr_describe(&sc, line, sizeof line);
+    /* the mode switch put the ramp back to identity, so os_gamma is
+     * identity here; the mode snapshot holds the parent's ramp */
+    ok = (char)(strstr(line, "panic=armed") ? 'y' : 'n');
+    if (write(fd, &ok, 1) != 1) return 4;
+    printf("panic child: %s\n", strstr(line, "os_gamma="));
+    fflush(stdout);
+    for (;;) yrt_sleep_ns(YRT_S(1));   /* hung: no more begin() */
+}
+
+/* The ramp and mode of X screen 0's first active CRTC. */
+static int crtc0(void* xc, uint32_t* crtc, uint32_t* mode, uint16_t* n) {
+    uint32_t root = yscr__xx_root(xc, 0);
+    uint8_t* res = root ? yscr__xx.res_current_reply(xc, yscr__xx.res_current(xc, root), NULL) : NULL;
+    int k, nc, found = 0;
+    if (!res) return 0;
+    nc = yscr__xx.res_current_crtcs_length(res);
+    for (k = 0; k < nc && !found; k++) {
+        uint32_t c = yscr__xx.res_current_crtcs(res)[k], md = 0;
+        uint8_t* ci = yscr__xx.crtc_info_reply(xc, yscr__xx.crtc_info(xc, c, 0), NULL);
+        if (ci) { memcpy(&md, ci + 20, 4); free(ci); }
+        if (md) {
+            uint8_t* g = yscr__xx.crtc_gamma_reply(xc, yscr__xx.crtc_gamma(xc, c), NULL);
+            if (g) { memcpy(n, g + 8, 2); free(g); }
+            *crtc = c; *mode = md; found = 1;
+        }
+    }
+    free(res);
+    return found;
+}
+
+/* The CRTC as it was, to put back after a part whatever happened in it, so
+ * a failed run (a mutant's) does not leave the next run in another mode. */
+typedef struct crtc_cfg { uint32_t crtc, mode; int16_t x, y; uint16_t rot, n_out; uint32_t out[4]; } crtc_cfg;
+
+static void cfg_take(void* xc, uint32_t crtc, crtc_cfg* c) {
+    uint8_t* ci = yscr__xx.crtc_info_reply(xc, yscr__xx.crtc_info(xc, crtc, 0), NULL);
+    int j, no;
+    memset(c, 0, sizeof *c);
+    c->crtc = crtc;
+    if (!ci) return;
+    memcpy(&c->x, ci + 12, 2); memcpy(&c->y, ci + 14, 2); memcpy(&c->mode, ci + 20, 4); memcpy(&c->rot, ci + 24, 2);
+    no = yscr__xx.crtc_info_outputs_length(ci);
+    if (no > 4) no = 4;
+    for (j = 0; j < no; j++) c->out[j] = yscr__xx.crtc_info_outputs(ci)[j];
+    c->n_out = (uint16_t)no;
+    free(ci);
+}
+
+static void cfg_put_back(void* xc, const crtc_cfg* c, const uint16_t* id, uint16_t n) {
+    uint32_t root = yscr__xx_root(xc, 0), cts = 0, mode = 0;
+    uint8_t* res = root ? yscr__xx.res_current_reply(xc, yscr__xx.res_current(xc, root), NULL) : NULL;
+    uint8_t* ci;
+    if (res) { memcpy(&cts, res + 12, 4); free(res); }
+    ci = yscr__xx.crtc_info_reply(xc, yscr__xx.crtc_info(xc, c->crtc, cts), NULL);
+    if (ci) { memcpy(&mode, ci + 20, 4); free(ci); }
+    if (mode != c->mode && c->mode) {
+        free(yscr__xx.set_crtc_config_reply(xc, yscr__xx.set_crtc_config(xc, c->crtc, 0, cts, c->x, c->y, c->mode, c->rot,
+                                                                          c->n_out, c->out), NULL));
+        yrt_sleep_ns(YRT_MS(150));
+    }
+    yscr__xg_set(xc, c->crtc, n, id, id, id);
+}
+
+static int ramp_is(void* xc, uint32_t crtc, const uint16_t* want, uint16_t n) {
+    uint8_t* g = yscr__xx.crtc_gamma_reply(xc, yscr__xx.crtc_gamma(xc, crtc), NULL);
+    int same = 0;
+    if (g) {
+        same = !memcmp(yscr__xx.crtc_gamma_red(g), want, n * 2u) && !memcmp(yscr__xx.crtc_gamma_green(g), want, n * 2u) &&
+               !memcmp(yscr__xx.crtc_gamma_blue(g), want, n * 2u);
+        free(g);
+    }
+    return same;
+}
+
+static void part8_run(const char* self, void* xc, void* dpy, void* (*open_display)(const char*), int (*flush)(void*),
+                      int (*fake_key)(void*, unsigned int, int, unsigned long), unsigned char (*kc_of)(void*, unsigned long),
+                      uint32_t crtc, uint32_t mode, uint16_t n, const uint16_t* dim);
+
+static void part8(const char* self) {
+    static uint16_t dim[4096], id[4096];
+    void *xc, *x11 = dlopen("libX11.so.6", RTLD_NOW | RTLD_GLOBAL), *xtst = dlopen("libXtst.so.6", RTLD_NOW), *p, *dpy;
+    void* (*open_display)(const char*) = NULL;
+    int (*flush)(void*) = NULL, (*fake_key)(void*, unsigned int, int, unsigned long) = NULL;
+    unsigned char (*kc_of)(void*, unsigned long) = NULL;
+    uint32_t crtc = 0, mode = 0;
+    uint16_t n = 0;
+    int i;
+    if (!yscr__xx_load() || !x11 || !xtst) { printf("panic: skipped (%s)\n", yscr__xx.why); return; }
+    p = dlsym(x11, "XOpenDisplay"); memcpy(&open_display, &p, sizeof p);
+    p = dlsym(x11, "XFlush"); memcpy(&flush, &p, sizeof p);
+    p = dlsym(x11, "XKeysymToKeycode"); memcpy(&kc_of, &p, sizeof p);
+    p = dlsym(xtst, "XTestFakeKeyEvent"); memcpy(&fake_key, &p, sizeof p);
+    xc = yscr__x.connect(NULL, NULL);
+    dpy = open_display ? open_display(NULL) : NULL;
+    if (!xc || !dpy || !fake_key || !kc_of || !crtc0(xc, &crtc, &mode, &n) || n < 2 || n > 4096) {
+        printf("panic: skipped (no X connection, XTEST or CRTC)\n");
+        return;
+    }
+    for (i = 0; i < n; i++) { id[i] = (uint16_t)((uint64_t)i * 65535u / (n - 1u)); dim[i] = (uint16_t)(id[i] * 9u / 10u); }
+    {
+        crtc_cfg cfg;
+        cfg_take(xc, crtc, &cfg);
+        part8_run(self, xc, dpy, open_display, flush, fake_key, kc_of, crtc, mode, n, dim);
+        cfg_put_back(xc, &cfg, id, n);
+    }
+    yscr__x.disconnect(xc);
+}
+
+static void part8_run(const char* self, void* xc, void* dpy, void* (*open_display)(const char*), int (*flush)(void*),
+                      int (*fake_key)(void*, unsigned int, int, unsigned long), unsigned char (*kc_of)(void*, unsigned long),
+                      uint32_t crtc, uint32_t mode, uint16_t n, const uint16_t* dim) {
+    uint32_t mode_after = 0;
+    uint16_t n2 = 0;
+    int fds[2], status = 0, i, code = -1;
+    pid_t pid;
+    char ok = 0;
+    int64_t t3 = 0, t_end = 0;
+    (void)open_display;
+    yscr__xg_set(xc, crtc, n, dim, dim, dim);
+    CHECK(pipe(fds) == 0);
+    pid = fork();
+    if (pid == 0) {
+        char fdarg[16];
+        snprintf(fdarg, sizeof fdarg, "%d", fds[1]);
+        execl(self, self, "--panic-child", fdarg, (char*)NULL);
+        _exit(5);
+    }
+    close(fds[1]);
+    CHECK(read(fds[0], &ok, 1) == 1 && ok == 'y');
+    if (ok == 'y') {
+        unsigned int shift = kc_of(dpy, 0xffe1u), esc = kc_of(dpy, 0xff1bu);
+        fake_key(dpy, shift, 1, 0);
+        for (i = 0; i < 3; i++) {
+            fake_key(dpy, esc, 1, 0);
+            fake_key(dpy, esc, 0, 0);
+            flush(dpy);
+            t3 = (int64_t)yrt_now_ns();
+            yrt_sleep_ns(YRT_MS(150));
+        }
+        fake_key(dpy, shift, 0, 0);
+        flush(dpy);
+    }
+    for (i = 0; i < 500 && waitpid(pid, &status, WNOHANG) == 0; i++) yrt_sleep_ns(YRT_MS(10));
+    t_end = (int64_t)yrt_now_ns();
+    if (i == 500) { kill(pid, SIGKILL); waitpid(pid, &status, 0); }
+    code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    yrt_sleep_ns(YRT_MS(500));   /* a mode set settles */
+    crtc0(xc, &crtc, &mode_after, &n2);
+    printf("panic: child exit %d, %.0f ms after the third press; ramp %s; mode %s\n", code, (double)(t_end - t3) / 1e6,
+           ramp_is(xc, crtc, dim, n) ? "the parent's" : "NOT the parent's", mode_after == mode ? "as before" : "CHANGED");
+    CHECK(code == YSCR_PANIC_EXIT_CODE);
+    CHECK(ramp_is(xc, crtc, dim, n));
+    CHECK(mode_after == mode);
+}
+
+static void part9(void) {
+    static uint16_t dim[4096], id[4096];
+    static yscr_screen sc;
+    crtc_cfg cfg;
+    void* xc;
+    uint32_t crtc = 0, mode = 0, mode_after = 0;
+    uint16_t n = 0, n2 = 0;
+    int i, pass;
+    char line[1024];
+    if (!yscr__xx_load() || !(xc = yscr__x.connect(NULL, NULL)) || !crtc0(xc, &crtc, &mode, &n) || n < 2 || n > 4096) {
+        printf("close: skipped\n");
+        return;
+    }
+    for (i = 0; i < n; i++) { id[i] = (uint16_t)((uint64_t)i * 65535u / (n - 1u)); dim[i] = (uint16_t)(id[i] * 9u / 10u); }
+    cfg_take(xc, crtc, &cfg);
+    for (pass = 0; pass < 2; pass++) {
+        yscr_desc d;
+        yscr_frame f;
+        yscr_mode m[64];
+        int k, nm = yscr_modes(0, m, 64), switched = 0;
+        memset(&d, 0, sizeof d);
+        d.backend = YSCR_BACKEND_GLX_OML;
+        if (pass == 1)
+            for (k = 0; k < nm; k++)
+                if (m[k].w == 1920 && m[k].h == 1080 && m[k].period_ns > 16683000 && m[k].period_ns < 16684500) {
+                    d.mode = m[k];
+                    switched = 1;
+                    break;
+                }
+        if (pass == 1 && !switched) { printf("close: no 59.94 Hz mode, pass 2 skipped\n"); break; }
+        yscr__xg_set(xc, crtc, n, dim, dim, dim);
+        memset(&sc, 0, sizeof sc);
+        CHECK(yscr_open(&sc, &d));
+        if (!yscr_is_open(&sc)) continue;
+        for (k = 0; k < 30; k++) { if (yscr_begin(&sc, &f) != YSCR_OK) break; clear(&sc); yscr_flip(&sc); }
+        yscr_describe(&sc, line, sizeof line);
+        yscr_close(&sc);
+        yrt_sleep_ns(YRT_MS(300));
+        crtc0(xc, &crtc, &mode_after, &n2);
+        printf("close %s: %s; after close ramp %s, mode %s\n", pass ? "after a mode switch" : "in the desktop mode",
+               strstr(line, "os_gamma=") ? strstr(line, "os_gamma=") : "?", ramp_is(xc, crtc, dim, n) ? "the user's" : "NOT the user's",
+               mode_after == mode ? "as before" : "CHANGED");
+        if (pass == 0) CHECK(strstr(line, "os_gamma=set") != NULL);
+        CHECK(ramp_is(xc, crtc, dim, n));
+        CHECK(mode_after == mode);
+    }
+    cfg_put_back(xc, &cfg, id, n);
+    yscr__x.disconnect(xc);
+}
+
+int main(int argc, char** argv) {
     static yscr_screen scr;
     yscr_frame f;
     seen run1, run2;
     char line[1024];
     int i;
     const char* dsp = getenv("DISPLAY");
+    if (argc == 3 && !strcmp(argv[1], "--panic-child")) return panic_child(atoi(argv[2]));
     if (!dsp || !dsp[0]) { printf("screen_glx_test: SKIP (no DISPLAY)\n"); return 0; }
     if (!open_glx(&scr)) {
         const char* req = getenv("YSCR_GLX_TEST_REQUIRE");
@@ -231,6 +469,9 @@ int main(void) {
             CHECK(ok == 20);
         }
     }
+
+    part8(argv[0]);
+    part9();
 
     /* Mesa reads vblank_mode when a display's driver screen is made, and
      * open() makes its own display connection. */

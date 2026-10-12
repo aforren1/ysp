@@ -24,6 +24,11 @@
 #include <GL/glxext.h>
 #include <xcb/xcb.h>
 #include <xcb/present.h>
+#if __has_include(<xcb/randr.h>) && __has_include(<xcb/xinput.h>)
+#include <xcb/randr.h>
+#include <xcb/xinput.h>
+#define HAVE_RANDR_XINPUT 1
+#endif
 
 static int g_failures = 0;
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "screen_glx: FAIL line %d: %s\n", __LINE__, #c); g_failures++; } } while (0)
@@ -84,6 +89,26 @@ int main() {
     CHECK(offsetof(XKeyEvent, type) == 0);
     CHECK(offsetof(XKeyEvent, time) == 56 && sizeof(Time) == sizeof(unsigned long));
     CHECK(offsetof(XKeyEvent, keycode) == 84 && sizeof(((XKeyEvent*)0)->keycode) == sizeof(unsigned int));
+
+    // the replies and events the gamma, mode and panic code reads by offset
+    CHECK(offsetof(xcb_setup_t, min_keycode) == 34 && offsetof(xcb_setup_t, max_keycode) == 35);
+    CHECK(offsetof(xcb_get_input_focus_reply_t, focus) == 8);
+    CHECK(offsetof(xcb_get_keyboard_mapping_reply_t, keysyms_per_keycode) == 1);
+    CHECK(offsetof(xcb_screen_t, root) == 0);
+    CHECK(sizeof(yscr__xcb_screen_it) == sizeof(xcb_screen_iterator_t));
+    CHECK(offsetof(yscr__xcb_screen_it, rem) == offsetof(xcb_screen_iterator_t, rem));
+#if defined(HAVE_RANDR_XINPUT)
+    CHECK(offsetof(xcb_randr_get_screen_resources_current_reply_t, config_timestamp) == 12);
+    CHECK(offsetof(xcb_randr_get_crtc_info_reply_t, x) == 12 && offsetof(xcb_randr_get_crtc_info_reply_t, y) == 14);
+    CHECK(offsetof(xcb_randr_get_crtc_info_reply_t, width) == 16 && offsetof(xcb_randr_get_crtc_info_reply_t, height) == 18);
+    CHECK(offsetof(xcb_randr_get_crtc_info_reply_t, mode) == 20 && offsetof(xcb_randr_get_crtc_info_reply_t, rotation) == 24);
+    CHECK(offsetof(xcb_randr_get_crtc_gamma_reply_t, size) == 8);
+    CHECK(offsetof(xcb_input_raw_key_press_event_t, event_type) == 8);
+    CHECK(offsetof(xcb_input_raw_key_press_event_t, detail) == 16);
+    CHECK(YSCR__XI_RAW_KEY_PRESS == XCB_INPUT_RAW_KEY_PRESS && YSCR__XI_RAW_KEY_RELEASE == XCB_INPUT_RAW_KEY_RELEASE);
+    CHECK((1u << YSCR__XI_RAW_KEY_PRESS) == XCB_INPUT_XI_EVENT_MASK_RAW_KEY_PRESS);
+    CHECK(XCB_INPUT_DEVICE_ALL_MASTER == 1);
+#endif
 
     if (g_failures) return 1;
     printf("screen_glx: all GLX, Present and xcb declarations match the system headers\n");

@@ -2934,6 +2934,46 @@ notification that asks for input) takes the keys, the abort keys too.
 `test_screen_glx` part 7 checks the window and the 20 keys; mutants
 `glx-09` (no focus) and `glx-10` (no hint), killed.
 
+### X11: gamma, mode and panic
+
+Measured on the Linux rig, both X screens, with `xrandr` and scratch
+xcb programs:
+
+- Both CRTCs' ramps (1024 entries) were exactly i * 65535 / (n - 1),
+  which `xrandr --gamma 1:1:1` also sets: that is the identity.
+- A ramp `xrandr` set stayed after `xrandr` exited (5369 counts from
+  identity).
+- A RandR mode an SDL program switched to (59.94 Hz) stayed after the
+  program was killed with SIGKILL. On Windows the system puts a mode back
+  when the process ends (PANIC); X does not.
+- A mode set resets the CRTC's ramp to identity, but after it returns: a
+  ramp set at once read back right, and was identity 50 ms later. Set 10
+  ms after the mode set, it was lost; set 20, 34, 50 or 100 ms after, it
+  stayed. SDL's fullscreen window in the desktop mode did not reset it.
+
+So on GLX_OML (v0.8.0) the header does what OS GAMMA does on Windows,
+through RandR on a short-lived connection of its own, and more: before a
+`desc.mode` switch it keeps every active CRTC's mode and ramp; close,
+`exit()` and the panic put the modes back, wait 150 ms, put the ramps
+back and read them back 60 ms after each set. The panic watchdog reads
+XInput 2's raw key events on X screen 0's root window on its own
+connection, keeps its own modifier state, and counts a press while one of
+the armed screens' windows has the input focus.
+
+`test_screen_glx`:
+
+| Part | What | Result |
+|---|---|---|
+| 8 | A child opens fullscreen with `desc.panic` and a 59.94 Hz mode over a dimmed ramp, then stops calling `begin()`; Shift+Esc x 3 through XTEST | exit 99, 0.34 to 0.95 s after the third press (5 runs); the dimmed ramp and 60 Hz back |
+| 9 | A clean close over a dimmed ramp, in the desktop mode and after a 59.94 Hz switch | `os_gamma=set`, then identity after the switch; the dimmed ramp and the mode back after both closes |
+
+The first version set each ramp right after its mode set and checked it
+at once: it read back right and was then reset, so the user's ramp was
+lost. The read-back now waits. Mutants `glx-11` to `glx-15` (the raw
+keycode's offset, the wait and read-back, the snapshot's ramps, the ramp
+to identity, the focus check), all killed. A test leaves the CRTC as it
+found it, so that a failed run does not change the next one's start.
+
 ### vblank_mode=0
 
 Under `vblank_mode=0`, Mesa makes the swap interval 0, and Present then
@@ -2950,8 +2990,9 @@ for the environment variable. A driconf file setting was not tried.
 - Any refresh other than 60 Hz; any GPU other than the Iris Xe; Windows 10.
 - Wayland and macOS: stubs. The web: no light measured (web.md).
 - On X11: a compositing manager other than Xfwm4's, one window per
-  output, separate X screens, XWayland, NVIDIA's driver, the panic
-  watchdog, the CRTC gamma ramp, and a real keyboard's key times.
+  output, separate X screens, XWayland, NVIDIA's driver, a real
+  keyboard's key times, and whether a ramp RandR reads back is the one
+  the panel shows (no light or capture card).
 - A DWM miss on the composed path of COMPOSITION: a second window loading
   the GPU did not cause one, so whether the record shows it is unknown.
 - COMPOSITION on a machine whose QPC does not run at 10 MHz, on ARM64

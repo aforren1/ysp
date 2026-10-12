@@ -728,7 +728,7 @@ jobs:
       # declarations against them; the header itself needs none of them.
       - name: Mesa EGL, a font, X11 and GL headers (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libegl-mesa0 libgl1-mesa-dri fonts-dejavu-core libx11-dev libgl-dev libxcb1-dev libxcb-present-dev
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libegl-mesa0 libgl1-mesa-dri fonts-dejavu-core libx11-dev libgl-dev libxcb1-dev libxcb-present-dev libxcb-randr0-dev libxcb-xinput-dev
 
       - name: ANGLE cache (Windows)
         if: runner.os == 'Windows'

@@ -72,8 +72,10 @@ repo root, in the X session) and add its column to section 5; do not
 assume what the driver does. Use SDL 3.4.18 or later on X11 (3.4.0 can
 end the process on an X error). `test_screen_glx` checks the backend on
 a display (not in ctest); the `glx-` mutants need `YSP_SDL3` set to an
-SDL3 prefix. Open: separate X screens (`desc.x_display`), the panic
-watchdog, the CRTC gamma ramp, a raw evdev reader.
+SDL3 prefix. The display test changes the CRTC's mode and ramp on X
+screen 0 and puts them back; if a run dies, `xrandr --output <out> --mode
+1920x1080 --rate 60 --gamma 1:1:1` restores them. Open: separate X
+screens (`desc.x_display`), a raw evdev reader.
 
 ## Linux real-time priority
 

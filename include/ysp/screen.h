@@ -736,9 +736,21 @@
  *   whether Night Light replaces it, was not measured (it needs light or
  *   a capture card); do not rely on it there. Out of reach of this header:
  *   the MHC calibration pipeline, Night Light, HDR and auto color
- *   management. Later work: CGSetDisplayTransferByTable (macOS), the RandR
- *   CRTC gamma (X11), and wlr-gamma-control on wlroots compositors
- *   (Wayland has no general protocol).
+ *   management.
+ *   X11 (GLX_OML): the same rule on the RandR CRTC under most of the
+ *   window, through libxcb-randr (loaded at run time): identity is
+ *   i * 65535 / (n - 1), what xrandr --gamma 1:1:1 sets. Measured on X11:
+ *   a ramp a client sets stays after it exits, and so does a RandR mode,
+ *   even after SIGKILL, and a mode set resets the CRTC's ramp to identity
+ *   about a frame after it returns. So before a desc.mode switch the
+ *   header takes a snapshot of every active CRTC's mode and ramp; close,
+ *   exit(), SDL's quit event (ramps only) and the panic put the modes back
+ *   and then, after the reset has landed, the ramps, and read them back.
+ *   After a switch, os_gamma says identity: the switch reset the ramp, and
+ *   close puts the user's back. The describe line says
+ *   display=<RandR output> os_gamma=... Later work:
+ *   CGSetDisplayTransferByTable (macOS) and wlr-gamma-control on wlroots
+ *   compositors (Wayland has no general protocol).
  *
  *   ---------------------------------------------------------------------
  *   TRIGGERS (desc.triggers, yscr_trigger, yscr_trigger_at)
@@ -1192,7 +1204,7 @@
  *   what it holds, so it must take no lock the frame loop uses); hardware
  *   a trigger left set (panic_fn may reset it).
  *   When it is armed: DXGI_FLIP and COMPOSITION in fullscreen, on
- *   Windows. A window has no ramp or mode to put back and its user has the
+ *   Windows, and GLX_OML in fullscreen on X11. A window has no ramp or mode to put back and its user has the
  *   desktop: the describe line says panic=idle(windowed); on SIM, CUSTOM
  *   and other platforms, panic=n/a. open() refuses desc.panic with
  *   abort_keys.off and with a key the hook cannot name (it takes Esc, F1
@@ -1207,14 +1219,21 @@
  *   stamped later with the hook armed (STATUS).
  *   Measured (examples/screen/abort.c; a window armed through a test
  *   seam, and fullscreen in a switched mode): see STATUS.
- *   Later, X11: the watchdog opens its own display connection and selects
- *   XI_RawKeyPress and XI_RawKeyRelease on the root window (XInput 2.1),
- *   which arrive whatever has the focus and are not consumed. It checks
- *   _NET_ACTIVE_WINDOW, puts back the CRTC gamma through RandR on its own
- *   connection (and the mode, unless the X server does as the process
- *   ends, to be measured), and ends with _exit(). Wayland has no global key
- *   events: no panic there; the compositor undoes a dead client's
- *   fullscreen.
+ *   X11 (GLX_OML, v0.8.0): the watchdog is a thread with its own X
+ *   connection that selects XInput 2's raw key events (libxcb-xinput,
+ *   loaded at run time) on X screen 0's root: they come whatever window
+ *   has the focus, are not taken from it, and come while the frame thread
+ *   hangs. They carry no modifier state, so the thread keeps its own from
+ *   the modifier keys' presses and releases. A press counts while the
+ *   input focus is one of the armed screens' windows (X has no ghost
+ *   window). The panic writes the same ring records, puts back each ramp
+ *   and mode the header changed (OS GAMMA: X keeps both after the process
+ *   ends), calls panic_fn for at most 1 s, and ends with
+ *   _exit(YSCR_PANIC_EXIT_CODE). Measured: 0.34 to 0.95 s from the third
+ *   press to the end of the process with a mode to put back. Same rule,
+ *   numbers and refusals as on Windows; with YRT_NO_THREADS open() refuses
+ *   desc.panic. Wayland has no global key events: no panic there; the
+ *   compositor undoes a dead client's fullscreen.
  *
  *   ---------------------------------------------------------------------
  *   WINDOW ICON (desc.icon_rgba, desc.icon_sdl)
@@ -1355,8 +1374,11 @@
  *   the Windows SDK or MinGW-w64. It links nothing else: d3d11.dll,
  *   dxgi.dll, user32.dll and libEGL.dll are loaded at run time, and on
  *   Linux libX11.so.6, libGL.so.1, libxcb.so.1 and libxcb-present.so.0
- *   (dlopen; link -ldl on glibc before 2.34). No X11, GL or xcb header is
- *   needed to compile. It does not include SDL_main.h, so your main() is
+ *   (dlopen; link -ldl on glibc before 2.34), and when a fullscreen screen
+ *   takes the ramp or arms the panic, libxcb-randr.so.0 and
+ *   libxcb-xinput.so.0 (without them the describe line says
+ *   os_gamma=unreadable(...) and open() refuses desc.panic). No X11, GL
+ *   or xcb header is needed to compile. It does not include SDL_main.h, so your main() is
  *   yours. Put libEGL.dll and libGLESv2.dll from an ANGLE build beside the
  *   program, or name their directory in desc.angle_dir or YSCR_ANGLE_DIR.
  *   Link libm on Linux, and include ysp/screen.h (or ysp/rt.h) before any
@@ -1395,6 +1417,10 @@
  *          than 3.4.18 (an X error race in SDL that ends the process,
  *          docs/screen.md). desc.x11_override_redirect (opt-in): a
  *          fullscreen window a compositor leaves alone, with the focus.
+ *          OS GAMMA and PANIC on X11: the CRTC ramp to identity at open,
+ *          the user's ramp and a desc.mode switch put back at close, at
+ *          exit() and by the panic watchdog (XInput 2 raw keys on its own
+ *          connection), because X keeps both after the process ends.
  *          On GLX_OML the copy path (a window) is depth
  *          1: X11's Present copies on the next vblank (DEPTH's table gave
  *          it DWM's 2). New enum values only; nothing changes on Windows
@@ -1844,8 +1870,9 @@
  *   are checked only on x64), two physical displays, variable refresh
  *   (refused), macOS and Wayland swap paths (stubs). On X11: a
  *   compositing manager other than Xfwm4's, separate X screens (desc has
- *   no x_display yet), XWayland, NVIDIA's driver, the panic watchdog, the
- *   CRTC gamma ramp and a real keyboard's key times.
+ *   no x_display yet), XWayland, NVIDIA's driver, a real keyboard's key
+ *   times, a panic or ramp on a second X screen, and a ramp the panic must
+ *   put back that light or a capture card can see (the checks read RandR).
  *   Outside this STATUS block and docs/screen.md, a number in this
  *   header is a measurement only where the text says "measured".
  */
@@ -2719,6 +2746,7 @@ typedef struct yscr_screen {
     uint16_t                code_risk;    /* display-wide part                  */
     char                    os_color[160]; /* for the describe line             */
     int32_t                 gamma_owned;
+    int32_t                 x11_mode_taken;  /* a RandR snapshot before a mode switch */
     /* triggers */
     int32_t                 n_trig, trig_on, trig_fence, worker_on, trig_cpu;
     char                    trig_cores;   /* 'E' E-cores, 'N' pinned, 0 ysp/rt.h's choice */
@@ -3074,6 +3102,10 @@ YSCR_API const yscr_param* yscr_params(int* n);
     #define YSCR__GLX 1
     #include <dlfcn.h>
     #include <poll.h>
+    #include <unistd.h>
+    #if !defined(YRT_NO_THREADS)
+        #include <pthread.h>
+    #endif
 #endif
 
 #ifdef __cplusplus
@@ -7336,6 +7368,725 @@ static const yscr_presenter yscr__glx_presenter = {
     yscr__glx_completions, yscr__glx_gl_proc, yscr__glx_bind, yscr__glx_describe, NULL
 };
 
+
+/* --- X11: the gamma ramp, the mode and the panic watchdog -------------------
+ * Measured on the Linux rig (docs/screen.md, "X11: gamma, mode and panic"):
+ * a CRTC gamma ramp a client sets stays after the client exits, and so
+ * does a RandR mode, even after SIGKILL. So the header puts back what it
+ * changed at close, at exit() and in a panic, on a connection of its own:
+ * the frame thread's may be the one that hangs. RandR and XInput2 come
+ * from libxcb-randr and libxcb-xinput, loaded when first needed; without
+ * them the presenter works and these features say why they are off. */
+
+typedef struct yscr__xcb_screen_it { void* data; int rem; int index; } yscr__xcb_screen_it;
+
+static struct {
+    int  tried, ok;
+    void *randr, *xinput;
+    void* randr_id;
+    void* input_id;
+    const uint8_t* (*get_setup)(void*);
+    yscr__xcb_screen_it (*roots)(const uint8_t*);
+    void (*screen_next)(yscr__xcb_screen_it*);
+    yscr__xcb_cookie (*get_input_focus)(void*);
+    uint8_t* (*get_input_focus_reply)(void*, yscr__xcb_cookie, void**);
+    yscr__xcb_cookie (*get_keyboard_mapping)(void*, uint8_t, uint8_t);
+    uint8_t* (*get_keyboard_mapping_reply)(void*, yscr__xcb_cookie, void**);
+    uint32_t* (*get_keyboard_mapping_keysyms)(const void*);
+    int (*get_keyboard_mapping_keysyms_length)(const void*);
+    void* (*poll_event)(void*);
+    yscr__xcb_cookie (*res_current)(void*, uint32_t);
+    uint8_t* (*res_current_reply)(void*, yscr__xcb_cookie, void**);
+    uint32_t* (*res_current_crtcs)(const void*);
+    int (*res_current_crtcs_length)(const void*);
+    yscr__xcb_cookie (*crtc_info)(void*, uint32_t, uint32_t);
+    uint8_t* (*crtc_info_reply)(void*, yscr__xcb_cookie, void**);
+    uint32_t* (*crtc_info_outputs)(const void*);
+    int (*crtc_info_outputs_length)(const void*);
+    yscr__xcb_cookie (*crtc_gamma)(void*, uint32_t);
+    uint8_t* (*crtc_gamma_reply)(void*, yscr__xcb_cookie, void**);
+    uint16_t* (*crtc_gamma_red)(const void*);
+    uint16_t* (*crtc_gamma_green)(const void*);
+    uint16_t* (*crtc_gamma_blue)(const void*);
+    yscr__xcb_cookie (*set_crtc_gamma_checked)(void*, uint32_t, uint16_t, const uint16_t*, const uint16_t*, const uint16_t*);
+    yscr__xcb_cookie (*set_crtc_config)(void*, uint32_t, uint32_t, uint32_t, int16_t, int16_t, uint32_t, uint16_t,
+                                        uint32_t, const uint32_t*);
+    uint8_t* (*set_crtc_config_reply)(void*, yscr__xcb_cookie, void**);
+    yscr__xcb_cookie (*output_info)(void*, uint32_t, uint32_t);
+    uint8_t* (*output_info_reply)(void*, yscr__xcb_cookie, void**);
+    uint8_t* (*output_info_name)(const void*);
+    int (*output_info_name_length)(const void*);
+    yscr__xcb_cookie (*xi_query_version)(void*, uint16_t, uint16_t);
+    uint8_t* (*xi_query_version_reply)(void*, yscr__xcb_cookie, void**);
+    yscr__xcb_cookie (*xi_select_events_checked)(void*, uint32_t, uint16_t, const void*);
+    char why[96];
+} yscr__xx;
+
+static bool yscr__xx_load(void) {
+    int ok = 1;
+    if (yscr__xx.tried) return yscr__xx.ok != 0;
+    yscr__xx.tried = 1;
+    if (!yscr__x_load()) { yscr__copy(yscr__xx.why, sizeof yscr__xx.why, "no libX11, libGL or libxcb"); return false; }
+    yscr__xx.randr = dlopen("libxcb-randr.so.0", RTLD_NOW | RTLD_GLOBAL);
+    yscr__xx.xinput = dlopen("libxcb-xinput.so.0", RTLD_NOW | RTLD_GLOBAL);
+    if (!yscr__xx.randr || !yscr__xx.xinput) {
+        yscr__copy(yscr__xx.why, sizeof yscr__xx.why, !yscr__xx.randr ? "no libxcb-randr.so.0" : "no libxcb-xinput.so.0");
+        return false;
+    }
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_get_setup", &yscr__xx.get_setup);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_setup_roots_iterator", &yscr__xx.roots);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_screen_next", &yscr__xx.screen_next);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_get_input_focus", &yscr__xx.get_input_focus);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_get_input_focus_reply", &yscr__xx.get_input_focus_reply);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_get_keyboard_mapping", &yscr__xx.get_keyboard_mapping);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_get_keyboard_mapping_reply", &yscr__xx.get_keyboard_mapping_reply);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_get_keyboard_mapping_keysyms", &yscr__xx.get_keyboard_mapping_keysyms);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_get_keyboard_mapping_keysyms_length", &yscr__xx.get_keyboard_mapping_keysyms_length);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_poll_for_event", &yscr__xx.poll_event);
+    yscr__xx.randr_id = dlsym(yscr__xx.randr, "xcb_randr_id");
+    ok &= yscr__xx.randr_id != NULL;
+    ok &= yscr__x_sym(yscr__xx.randr, "xcb_randr_get_screen_resources_current", &yscr__xx.res_current);
+    ok &= yscr__x_sym(yscr__xx.randr, "xcb_randr_get_screen_resources_current_reply", &yscr__xx.res_current_reply);
+    ok &= yscr__x_sym(yscr__xx.randr, "xcb_randr_get_screen_resources_current_crtcs", &yscr__xx.res_current_crtcs);
+    ok &= yscr__x_sym(yscr__xx.randr, "xcb_randr_get_screen_resources_current_crtcs_length", &yscr__xx.res_current_crtcs_length);
+    ok &= yscr__x_sym(yscr__xx.randr, "xcb_randr_get_crtc_info", &yscr__xx.crtc_info);
+    ok &= yscr__x_sym(yscr__xx.randr, "xcb_randr_get_crtc_info_reply", &yscr__xx.crtc_info_reply);
+    ok &= yscr__x_sym(yscr__xx.randr, "xcb_randr_get_crtc_info_outputs", &yscr__xx.crtc_info_outputs);
+    ok &= yscr__x_sym(yscr__xx.randr, "xcb_randr_get_crtc_info_outputs_length", &yscr__xx.crtc_info_outputs_length);
+    ok &= yscr__x_sym(yscr__xx.randr, "xcb_randr_get_crtc_gamma", &yscr__xx.crtc_gamma);
+    ok &= yscr__x_sym(yscr__xx.randr, "xcb_randr_get_crtc_gamma_reply", &yscr__xx.crtc_gamma_reply);
+    ok &= yscr__x_sym(yscr__xx.randr, "xcb_randr_get_crtc_gamma_red", &yscr__xx.crtc_gamma_red);
+    ok &= yscr__x_sym(yscr__xx.randr, "xcb_randr_get_crtc_gamma_green", &yscr__xx.crtc_gamma_green);
+    ok &= yscr__x_sym(yscr__xx.randr, "xcb_randr_get_crtc_gamma_blue", &yscr__xx.crtc_gamma_blue);
+    ok &= yscr__x_sym(yscr__xx.randr, "xcb_randr_set_crtc_gamma_checked", &yscr__xx.set_crtc_gamma_checked);
+    ok &= yscr__x_sym(yscr__xx.randr, "xcb_randr_set_crtc_config", &yscr__xx.set_crtc_config);
+    ok &= yscr__x_sym(yscr__xx.randr, "xcb_randr_set_crtc_config_reply", &yscr__xx.set_crtc_config_reply);
+    ok &= yscr__x_sym(yscr__xx.randr, "xcb_randr_get_output_info", &yscr__xx.output_info);
+    ok &= yscr__x_sym(yscr__xx.randr, "xcb_randr_get_output_info_reply", &yscr__xx.output_info_reply);
+    ok &= yscr__x_sym(yscr__xx.randr, "xcb_randr_get_output_info_name", &yscr__xx.output_info_name);
+    ok &= yscr__x_sym(yscr__xx.randr, "xcb_randr_get_output_info_name_length", &yscr__xx.output_info_name_length);
+    yscr__xx.input_id = dlsym(yscr__xx.xinput, "xcb_input_id");
+    ok &= yscr__xx.input_id != NULL;
+    ok &= yscr__x_sym(yscr__xx.xinput, "xcb_input_xi_query_version", &yscr__xx.xi_query_version);
+    ok &= yscr__x_sym(yscr__xx.xinput, "xcb_input_xi_query_version_reply", &yscr__xx.xi_query_version_reply);
+    ok &= yscr__x_sym(yscr__xx.xinput, "xcb_input_xi_select_events_checked", &yscr__xx.xi_select_events_checked);
+    if (!ok) { yscr__copy(yscr__xx.why, sizeof yscr__xx.why, "an entry point is missing from libxcb-randr or libxcb-xinput"); return false; }
+    yscr__xx.ok = 1;
+    return true;
+}
+
+/* The root window of X screen n, or 0. */
+static uint32_t yscr__xx_root(void* xc, int n) {
+    /* xcb's iterator index is a byte offset, not the screen's number */
+    yscr__xcb_screen_it it = yscr__xx.roots(yscr__xx.get_setup(xc));
+    int k;
+    for (k = 0; it.rem > 0; yscr__xx.screen_next(&it), k++)
+        if (k == n) { uint32_t r; memcpy(&r, it.data, 4); return r; }
+    return 0;
+}
+
+/* Ramps the header set (3 x n entries each), and the display to restore them on. */
+#define YSCR__XG_MAX 4
+#define YSCR__XG_N   4096
+static struct {
+    volatile int32_t used;
+    uint32_t crtc, n;
+    uint16_t saved[3][YSCR__XG_N];
+} yscr__xg[YSCR__XG_MAX];
+static char yscr__xg_dpy[128];
+static int yscr__xg_atexit, yscr__xg_watch;
+
+/* CRTC configurations, and their ramps, before the header switched a mode
+ * (desc.mode): a RandR mode set also put the CRTC's ramp back to identity
+ * (measured: a ramp set before the switch read identity after it), so the
+ * ramps go back after the modes. */
+#define YSCR__XM_MAX 4
+static struct {
+    volatile int32_t users;   /* screens that switched a mode */
+    int32_t n;
+    struct {
+        uint32_t crtc, mode; int16_t x, y; uint16_t rot, n_out; uint32_t out[4];
+        uint32_t n_ramp; uint16_t ramp[3][YSCR__XG_N];
+    } c[YSCR__XM_MAX];
+} yscr__xm;
+
+/* The identity a RandR ramp of n entries has: xrandr --gamma 1:1:1 gives
+ * exactly i * 65535 / (n - 1) (measured, both CRTCs of the rig). */
+static int yscr__xg_is_identity(const uint16_t* r, const uint16_t* g, const uint16_t* b, uint32_t n) {
+    uint32_t i;
+    for (i = 0; i < n; i++) {
+        uint32_t id = (uint32_t)((uint64_t)i * 65535u / (n - 1));
+        if (r[i] != id || g[i] != id || b[i] != id) return 0;
+    }
+    return 1;
+}
+
+static void yscr__xg_set(void* xc, uint32_t crtc, uint32_t n, const uint16_t* r, const uint16_t* g, const uint16_t* b) {
+    void* e = yscr__x.request_check(xc, yscr__xx.set_crtc_gamma_checked(xc, crtc, (uint16_t)n, r, g, b));
+    free(e);
+}
+
+/* Each RandR mode the header switched, back as it was (a CRTC already
+ * there, as SDL leaves it at close, is left alone), then each CRTC's ramp
+ * as it was before. A mode set resets the ramp to identity a frame after
+ * it returns (measured: a ramp set 10 ms after the set was gone 50 ms
+ * later; one set 20 ms or more after stayed), so the ramps wait 150 ms
+ * after a mode changed, are read back, and are set again if lost. */
+static int yscr__xm_ramp_is(void* xc, int i) {
+    uint8_t* g = yscr__xx.crtc_gamma_reply(xc, yscr__xx.crtc_gamma(xc, yscr__xm.c[i].crtc), NULL);
+    uint32_t n = yscr__xm.c[i].n_ramp;
+    int same = 0;
+    if (g) {
+        same = !memcmp(yscr__xx.crtc_gamma_red(g), yscr__xm.c[i].ramp[0], n * 2u) &&
+               !memcmp(yscr__xx.crtc_gamma_green(g), yscr__xm.c[i].ramp[1], n * 2u) &&
+               !memcmp(yscr__xx.crtc_gamma_blue(g), yscr__xm.c[i].ramp[2], n * 2u);
+        free(g);
+    }
+    return same;
+}
+
+/* set_elsewhere: a mode set the header did not make has just happened
+ * (SDL's own at close), so its ramp reset is still to come. */
+static void yscr__xm_restore(void* xc, int set_elsewhere) {
+    int i, sn, changed = set_elsewhere, tries;
+    if (yscr__xm.users <= 0 && yscr__xm.n == 0) return;
+    for (sn = 0; sn < 8; sn++) {
+        uint32_t root = yscr__xx_root(xc, sn), cts = 0;
+        uint8_t* res;
+        if (!root) break;
+        res = yscr__xx.res_current_reply(xc, yscr__xx.res_current(xc, root), NULL);
+        if (!res) continue;
+        memcpy(&cts, res + 12, 4);
+        for (i = 0; i < yscr__xm.n; i++) {
+            uint32_t* crtcs = yscr__xx.res_current_crtcs(res);
+            int k, nc = yscr__xx.res_current_crtcs_length(res), here = 0;
+            for (k = 0; k < nc; k++) here |= crtcs[k] == yscr__xm.c[i].crtc;
+            if (!here) continue;
+            {
+                uint8_t* ci = yscr__xx.crtc_info_reply(xc, yscr__xx.crtc_info(xc, yscr__xm.c[i].crtc, cts), NULL);
+                uint32_t mode = 0;
+                if (ci) { memcpy(&mode, ci + 20, 4); free(ci); }
+                if (mode != yscr__xm.c[i].mode) {
+                    uint8_t* r = yscr__xx.set_crtc_config_reply(xc, yscr__xx.set_crtc_config(xc, yscr__xm.c[i].crtc, 0, cts,
+                        yscr__xm.c[i].x, yscr__xm.c[i].y, yscr__xm.c[i].mode, yscr__xm.c[i].rot, yscr__xm.c[i].n_out,
+                        yscr__xm.c[i].out), NULL);
+                    free(r);
+                    changed = 1;
+                }
+            }
+        }
+        free(res);
+    }
+    if (changed) YSCR__SLEEP_UNTIL(yscr__now() + YRT_MS(150), 0);
+    /* a ramp reads back right at once and is reset later, so each check
+     * comes 60 ms after the sets */
+    for (tries = 0; tries < 3; tries++) {
+        int set = 0;
+        for (i = 0; i < yscr__xm.n; i++)
+            if (yscr__xm.c[i].n_ramp && !yscr__xm_ramp_is(xc, i)) {
+                yscr__xg_set(xc, yscr__xm.c[i].crtc, yscr__xm.c[i].n_ramp, yscr__xm.c[i].ramp[0], yscr__xm.c[i].ramp[1],
+                             yscr__xm.c[i].ramp[2]);
+                set = 1;
+            }
+        if (!set) break;
+        YSCR__SLEEP_UNTIL(yscr__now() + YRT_MS(60), 0);
+    }
+}
+
+/* close(), exit(), SDL's quit event and the panic watchdog can each get
+ * here: the exchange lets one of them restore an entry. A connection of
+ * its own, so a hung frame thread holding SDL's or Mesa's lock cannot stop
+ * it. xc NULL: connect here. */
+static void yscr__xg_restore(void* xc, int k) {
+    int own = 0;
+    if (k < 0 || k >= YSCR__XG_MAX) return;
+    if (!yscr__a_cas(&yscr__xg[k].used, 1, 0)) return;
+    if (!xc) { xc = yscr__x.connect(yscr__xg_dpy, NULL); own = 1; }
+    if (xc && !yscr__x.has_error(xc))
+        yscr__xg_set(xc, yscr__xg[k].crtc, yscr__xg[k].n, yscr__xg[k].saved[0], yscr__xg[k].saved[1], yscr__xg[k].saved[2]);
+    if (own && xc) yscr__x.disconnect(xc);
+}
+
+static void yscr__x11_restore_all(void* xc) {
+    int k, own = 0;
+    int any = yscr__xm.n > 0;
+    for (k = 0; k < YSCR__XG_MAX; k++) any |= yscr__xg[k].used;
+    if (!any || !yscr__xx.ok) return;
+    if (!xc) { xc = yscr__x.connect(yscr__xg_dpy, NULL); own = 1; }
+    if (!xc || yscr__x.has_error(xc)) { if (own && xc) yscr__x.disconnect(xc); return; }
+    for (k = 0; k < YSCR__XG_MAX; k++) yscr__xg_restore(xc, k);
+    yscr__xm_restore(xc, 0);
+    if (own) yscr__x.disconnect(xc);
+}
+
+static void yscr__x11_atexit(void) { yscr__x11_restore_all(NULL); }
+
+static bool SDLCALL yscr__xg_quit_watch(void* ud, SDL_Event* e) {
+    int k;
+    (void)ud;
+    if (e && e->type == SDL_EVENT_QUIT)
+        for (k = 0; k < YSCR__XG_MAX; k++) yscr__xg_restore(NULL, k);
+    return true;
+}
+
+/* Every active CRTC of every X screen, before SDL switches a mode: which
+ * CRTC SDL's display is cannot be told from SDL with Zaphod screens (both
+ * at 0,0), and a restore leaves a CRTC alone that is already as it was. */
+static void yscr__xm_take(yscr_screen* s, const char* dpy_name) {
+    void* xc;
+    int sn;
+    if (!yscr__xx_load()) return;
+    if (yscr__xm.users++ > 0) { s->x11_mode_taken = 1; return; }
+    yscr__copy(yscr__xg_dpy, sizeof yscr__xg_dpy, dpy_name ? dpy_name : "");
+    xc = yscr__x.connect(yscr__xg_dpy, NULL);
+    yscr__xm.n = 0;
+    if (xc && !yscr__x.has_error(xc)) {
+        for (sn = 0; sn < 8; sn++) {
+            uint32_t root = yscr__xx_root(xc, sn), cts = 0;
+            uint8_t* res;
+            int k, nc;
+            uint32_t* crtcs;
+            if (!root) break;
+            res = yscr__xx.res_current_reply(xc, yscr__xx.res_current(xc, root), NULL);
+            if (!res) continue;
+            memcpy(&cts, res + 12, 4);
+            crtcs = yscr__xx.res_current_crtcs(res);
+            nc = yscr__xx.res_current_crtcs_length(res);
+            for (k = 0; k < nc && yscr__xm.n < YSCR__XM_MAX; k++) {
+                uint8_t* ci = yscr__xx.crtc_info_reply(xc, yscr__xx.crtc_info(xc, crtcs[k], cts), NULL);
+                uint32_t mode = 0;
+                if (ci) {
+                    memcpy(&mode, ci + 20, 4);
+                    if (mode) {
+                        int no = yscr__xx.crtc_info_outputs_length(ci), j;
+                        uint32_t* out = yscr__xx.crtc_info_outputs(ci);
+                        yscr__xm.c[yscr__xm.n].crtc = crtcs[k];
+                        yscr__xm.c[yscr__xm.n].mode = mode;
+                        memcpy(&yscr__xm.c[yscr__xm.n].x, ci + 12, 2);
+                        memcpy(&yscr__xm.c[yscr__xm.n].y, ci + 14, 2);
+                        memcpy(&yscr__xm.c[yscr__xm.n].rot, ci + 24, 2);
+                        if (no > 4) no = 4;
+                        for (j = 0; j < no; j++) yscr__xm.c[yscr__xm.n].out[j] = out[j];
+                        yscr__xm.c[yscr__xm.n].n_out = (uint16_t)no;
+                        yscr__xm.c[yscr__xm.n].n_ramp = 0;
+                        {
+                            uint8_t* gr = yscr__xx.crtc_gamma_reply(xc, yscr__xx.crtc_gamma(xc, crtcs[k]), NULL);
+                            uint16_t gn = 0;
+                            if (gr) memcpy(&gn, gr + 8, 2);
+                            if (gr && gn >= 2 && gn <= YSCR__XG_N) {
+                                memcpy(yscr__xm.c[yscr__xm.n].ramp[0], yscr__xx.crtc_gamma_red(gr), gn * 2u);
+                                memcpy(yscr__xm.c[yscr__xm.n].ramp[1], yscr__xx.crtc_gamma_green(gr), gn * 2u);
+                                memcpy(yscr__xm.c[yscr__xm.n].ramp[2], yscr__xx.crtc_gamma_blue(gr), gn * 2u);
+                                yscr__xm.c[yscr__xm.n].n_ramp = gn;
+                            }
+                            free(gr);
+                        }
+                        yscr__xm.n++;
+                    }
+                    free(ci);
+                }
+            }
+            free(res);
+        }
+        yscr__x.disconnect(xc);
+    }
+    if (!yscr__xg_atexit) { yscr__xg_atexit = 1; atexit(yscr__x11_atexit); }
+    s->x11_mode_taken = 1;
+}
+
+/* After SDL_DestroyWindow, which puts the desktop mode back itself, and so
+ * resets the ramp a frame later: make sure of the mode, put the ramps back
+ * after that reset, then forget the snapshot when no screen holds one. */
+static void yscr__xm_release(yscr_screen* s) {
+    if (!s->x11_mode_taken) return;
+    s->x11_mode_taken = 0;
+    if (--yscr__xm.users > 0) return;
+    {
+        void* xc = yscr__x.connect(yscr__xg_dpy, NULL);
+        if (xc && !yscr__x.has_error(xc)) yscr__xm_restore(xc, 1);
+        if (xc) yscr__x.disconnect(xc);
+    }
+    yscr__xm.n = 0;
+}
+
+/* The fullscreen window's CRTC ramp, as on Windows (OS GAMMA): identity
+ * kept, else set to identity and read back, unless desc.keep_os_gamma. */
+static void yscr__x11_display_state(yscr_screen* s, const yscr_desc* desc) {
+    const yscr__glx* g = (const yscr__glx*)(const void*)s->backend_mem;
+    void* xc;
+    uint32_t root, cts = 0, best = 0, out0 = 0;
+    long best_area = 0;
+    int wx = 0, wy = 0, ww = 0, wh = 0;
+    const char* gamma = "kept";
+    char name[40] = "unknown";
+    s->code_risk = 0;
+    if (!yscr__xx_load()) {
+        s->code_risk |= YSCR_CODE_RISK_STATE_UNKNOWN | YSCR_CODE_RISK_GAMMA;
+        snprintf(s->os_color, sizeof s->os_color, "os_gamma=unreadable(%s)", yscr__xx.why);
+        return;
+    }
+    if (!yscr__xg_dpy[0]) yscr__copy(yscr__xg_dpy, sizeof yscr__xg_dpy, yscr__x.DisplayString(g->dpy));
+    xc = yscr__x.connect(yscr__xg_dpy, NULL);
+    if (!xc || yscr__x.has_error(xc)) {
+        if (xc) yscr__x.disconnect(xc);
+        s->code_risk |= YSCR_CODE_RISK_STATE_UNKNOWN | YSCR_CODE_RISK_GAMMA;
+        yscr__copy(s->os_color, sizeof s->os_color, "os_gamma=unreadable(no connection)");
+        return;
+    }
+    SDL_GetWindowPosition(s->window, &wx, &wy);
+    SDL_GetWindowSizeInPixels(s->window, &ww, &wh);
+    root = yscr__xx_root(xc, g->screen);
+    {   /* the CRTC that holds most of the window */
+        uint8_t* res = root ? yscr__xx.res_current_reply(xc, yscr__xx.res_current(xc, root), NULL) : NULL;
+        if (res) {
+            uint32_t* crtcs = yscr__xx.res_current_crtcs(res);
+            int k, nc = yscr__xx.res_current_crtcs_length(res);
+            memcpy(&cts, res + 12, 4);
+            for (k = 0; k < nc; k++) {
+                uint8_t* ci = yscr__xx.crtc_info_reply(xc, yscr__xx.crtc_info(xc, crtcs[k], cts), NULL);
+                int16_t x, y;
+                uint16_t w, h;
+                uint32_t mode;
+                if (!ci) continue;
+                memcpy(&x, ci + 12, 2); memcpy(&y, ci + 14, 2); memcpy(&w, ci + 16, 2); memcpy(&h, ci + 18, 2);
+                memcpy(&mode, ci + 20, 4);
+                if (mode) {
+                    long ix = (long)(wx + ww < x + w ? wx + ww : x + w) - (wx > x ? wx : x);
+                    long iy = (long)(wy + wh < y + h ? wy + wh : y + h) - (wy > y ? wy : y);
+                    if (ix > 0 && iy > 0 && ix * iy > best_area) {
+                        best_area = ix * iy;
+                        best = crtcs[k];
+                        out0 = yscr__xx.crtc_info_outputs_length(ci) > 0 ? yscr__xx.crtc_info_outputs(ci)[0] : 0;
+                    }
+                }
+                free(ci);
+            }
+            free(res);
+        }
+    }
+    if (out0) {
+        uint8_t* oi = yscr__xx.output_info_reply(xc, yscr__xx.output_info(xc, out0, cts), NULL);
+        if (oi) {
+            int n = yscr__xx.output_info_name_length(oi);
+            if (n > (int)sizeof name - 1) n = (int)sizeof name - 1;
+            if (n > 0) { memcpy(name, yscr__xx.output_info_name(oi), (size_t)n); name[n] = '\0'; }
+            free(oi);
+        }
+    }
+    if (!best) {
+        gamma = "unreadable";
+        s->code_risk |= YSCR_CODE_RISK_STATE_UNKNOWN | YSCR_CODE_RISK_GAMMA;
+    } else {
+        uint8_t* gr = yscr__xx.crtc_gamma_reply(xc, yscr__xx.crtc_gamma(xc, best), NULL);
+        uint16_t n = 0;
+        if (gr) memcpy(&n, gr + 8, 2);
+        if (!gr || n < 2 || n > YSCR__XG_N) {
+            gamma = desc->windowed || desc->keep_os_gamma ? "unreadable(kept)" : "unreadable";
+            s->code_risk |= YSCR_CODE_RISK_GAMMA;
+        } else {
+            const uint16_t *r = yscr__xx.crtc_gamma_red(gr), *gg = yscr__xx.crtc_gamma_green(gr), *b = yscr__xx.crtc_gamma_blue(gr);
+            int ident = yscr__xg_is_identity(r, gg, b, n);
+            if (desc->windowed || desc->keep_os_gamma) {
+                /* a window shares the display; not ours to change */
+                gamma = ident ? "identity(kept)" : "not-identity(kept)";
+                if (!ident) s->code_risk |= YSCR_CODE_RISK_GAMMA;
+            } else if (ident) {
+                gamma = "identity";
+            } else {
+                int k;
+                gamma = "refused";
+                for (k = 0; k < YSCR__XG_MAX && yscr__xg[k].used; k++) { }
+                if (k < YSCR__XG_MAX) {
+                    static uint16_t id[YSCR__XG_N];
+                    uint32_t i;
+                    /* registered before the set, so an exit at any point
+                     * puts the user's ramp back */
+                    memcpy(yscr__xg[k].saved[0], r, sizeof(uint16_t) * n);
+                    memcpy(yscr__xg[k].saved[1], gg, sizeof(uint16_t) * n);
+                    memcpy(yscr__xg[k].saved[2], b, sizeof(uint16_t) * n);
+                    yscr__xg[k].crtc = best;
+                    yscr__xg[k].n = n;
+                    yscr__a_store(&yscr__xg[k].used, 1);
+                    if (!yscr__xg_atexit) { yscr__xg_atexit = 1; atexit(yscr__x11_atexit); }
+                    if (!yscr__xg_watch) yscr__xg_watch = SDL_AddEventWatch(yscr__xg_quit_watch, NULL) ? 1 : 0;
+                    for (i = 0; i < n; i++) id[i] = (uint16_t)((uint64_t)i * 65535u / (n - 1u));
+                    yscr__xg_set(xc, best, n, id, id, id);
+                    {
+                        uint8_t* back = yscr__xx.crtc_gamma_reply(xc, yscr__xx.crtc_gamma(xc, best), NULL);
+                        if (back && yscr__xg_is_identity(yscr__xx.crtc_gamma_red(back), yscr__xx.crtc_gamma_green(back),
+                                                          yscr__xx.crtc_gamma_blue(back), n)) {
+                            s->gamma_owned = k + 1;
+                            gamma = "set";
+                        } else {
+                            yscr__xg_restore(xc, k);
+                        }
+                        free(back);
+                    }
+                }
+                if (strcmp(gamma, "set") != 0) s->code_risk |= YSCR_CODE_RISK_GAMMA;
+            }
+        }
+        free(gr);
+    }
+    yscr__x.disconnect(xc);
+    snprintf(s->os_color, sizeof s->os_color, "display=%s os_gamma=%s", name, gamma);
+}
+
+static void yscr__x11_gamma_release(yscr_screen* s) {
+    int k, any = 0;
+    if (s->gamma_owned) yscr__xg_restore(NULL, s->gamma_owned - 1);
+    s->gamma_owned = 0;
+    for (k = 0; k < YSCR__XG_MAX; k++) any |= yscr__xg[k].used;
+    if (!any && yscr__xg_watch) { SDL_RemoveEventWatch(yscr__xg_quit_watch, NULL); yscr__xg_watch = 0; }
+}
+
+#if !defined(YRT_NO_THREADS)
+/* The panic watchdog on X11 (PANIC): a thread with its own connection that
+ * selects XInput2's raw key events on every root window. Raw events come
+ * whatever window has the focus and are not taken from it, so SDL still
+ * sees the same keys, and they come while the frame thread hangs. They
+ * carry no modifier state, so the thread keeps its own. */
+#define YSCR__XI_RAW_KEY_PRESS   13
+#define YSCR__XI_RAW_KEY_RELEASE 14
+static struct {
+    pthread_t th;
+    int  running;
+    int  pipe_fd[2];
+    int  armed;
+    volatile int32_t panicking;
+    void* xc;
+    uint8_t xi_op;
+    uint8_t key[256];        /* 1: the abort key; 2..5: shift, ctrl, alt, gui */
+    uint8_t down[256];
+    int32_t key_down;
+    pthread_mutex_t mu;
+    uint32_t win[YSCR__SLOTS];  /* the armed screens' X windows */
+    yscr_panic_fn fn;
+    void* ctx;
+    volatile int32_t words_done;
+    volatile int64_t t_panic;
+} yscr__xwd = { 0, 0, { -1, -1 }, 0, 0, NULL, 0, { 0 }, { 0 }, 0, PTHREAD_MUTEX_INITIALIZER, { 0 }, NULL, NULL, 0, 0 };
+
+/* The X keysym of the abort key (yscr__vk_known: Esc, F1 to F12, a letter,
+ * a digit), and the modifiers' keysyms. */
+static uint32_t yscr__xks_of(uint32_t key) {
+    if (key == YSCR_KEY_ESCAPE) return 0xff1bu;
+    if (key >= 0x4000003Au && key <= 0x40000045u) return 0xffbeu + (key - 0x4000003Au);
+    if ((key >= 'a' && key <= 'z') || (key >= '0' && key <= '9')) return key;
+    return 0;
+}
+
+static void yscr__xwd_keymap(void* xc) {
+    const uint8_t* setup = yscr__xx.get_setup(xc);
+    uint8_t lo = setup[34], hi = setup[35];
+    uint8_t* r = yscr__xx.get_keyboard_mapping_reply(xc, yscr__xx.get_keyboard_mapping(xc, lo, (uint8_t)(hi - lo + 1)), NULL);
+    uint32_t want = yscr__xks_of(yscr__ab.key);
+    memset(yscr__xwd.key, 0, sizeof yscr__xwd.key);
+    if (r) {
+        int per = r[1], n = yscr__xx.get_keyboard_mapping_keysyms_length(r), i;
+        const uint32_t* ks = yscr__xx.get_keyboard_mapping_keysyms(r);
+        for (i = 0; per > 0 && i < n; i++) {
+            uint32_t k = ks[i];
+            int code = lo + i / per;
+            if (code > 255) break;
+            if (want && (k == want || (want >= 'a' && want <= 'z' && k == want - 32u))) yscr__xwd.key[code] = 1;
+            else if (k == 0xffe1u || k == 0xffe2u) yscr__xwd.key[code] = 2;               /* Shift */
+            else if (k == 0xffe3u || k == 0xffe4u) yscr__xwd.key[code] = 3;               /* Control */
+            else if (k == 0xffe9u || k == 0xffeau || k == 0xffe7u || k == 0xffe8u) yscr__xwd.key[code] = 4;   /* Alt, Meta */
+            else if (k == 0xffebu || k == 0xffecu) yscr__xwd.key[code] = 5;               /* Super */
+        }
+        free(r);
+    }
+}
+
+/* Is the window with the input focus one of the armed screens'? */
+static int yscr__xwd_ours(void* xc) {
+    uint8_t* r = yscr__xx.get_input_focus_reply(xc, yscr__xx.get_input_focus(xc), NULL);
+    uint32_t f = 0;
+    int i, ours = 0;
+    if (r) { memcpy(&f, r + 8, 4); free(r); }
+    pthread_mutex_lock(&yscr__xwd.mu);
+    for (i = 0; i < YSCR__SLOTS; i++) ours |= f && yscr__xwd.win[i] == f;
+    pthread_mutex_unlock(&yscr__xwd.mu);
+    return ours;
+}
+
+static void* yscr__xwd_last_words(void* arg) {
+    (void)arg;
+    if (yscr__xwd.fn) yscr__xwd.fn(yscr__xwd.ctx);
+    yscr__a_store(&yscr__xwd.words_done, 1);
+    return NULL;
+}
+
+/* The frame loop looks hung: ring records, the ramps and modes back, the
+ * caller's last words for at most 1 s, then _exit(): exit() runs atexit
+ * handlers, which can wait on locks the hung thread holds. */
+static void yscr__xwd_panic(void) {
+    int i;
+    int64_t now = yscr__now(), end;
+    if (!yscr__a_cas(&yscr__xwd.panicking, 0, 1)) return;
+    yscr__xwd.t_panic = now;
+    for (i = 0; i < YSCR__SLOTS; i++) {
+        yscr_screen* s = yscr__slot[i].s;
+        if (s && s->panic_armed == 1 && s->ring) {
+            yrt_event ev;
+            memset(&ev, 0, sizeof ev);
+            ev.source = (uint16_t)YRT_SRC_SCREEN;
+            ev.kind = (uint16_t)YSCR_EV_PANIC;
+            ev.t_ns = (uint64_t)now;
+            ev.aux = s->display_index;
+            ev.u.u32[0] = (uint32_t)yscr__ab.presses;
+            ev.u.i64[1] = yscr__a_load64(&yscr__ab.ack);
+            yrt_ring_push(s->ring, &ev);
+        }
+    }
+    yscr__x11_restore_all(yscr__xwd.xc);
+    if (yscr__xwd.fn) {
+        pthread_t t;
+        if (pthread_create(&t, NULL, yscr__xwd_last_words, NULL) == 0) {
+            pthread_detach(t);
+            end = yscr__now() + YRT_S(1);
+            while (!yscr__a_load(&yscr__xwd.words_done) && yscr__now() < end) YSCR__SLEEP_UNTIL(yscr__now() + YRT_MS(1), 0);
+        }
+    }
+    _exit(YSCR_PANIC_EXIT_CODE);
+}
+
+static void yscr__xwd_take(const uint8_t* ev) {
+    uint16_t type;
+    uint32_t code;
+    int down;
+    memcpy(&type, ev + 8, 2);
+    if (type != YSCR__XI_RAW_KEY_PRESS && type != YSCR__XI_RAW_KEY_RELEASE) return;
+    memcpy(&code, ev + 16, 4);   /* detail; the server time is at 12 */
+    if (code > 255 || !yscr__xwd.key[code]) return;
+    down = type == YSCR__XI_RAW_KEY_PRESS;
+    yscr__xwd.down[code] = (uint8_t)down;
+    if (yscr__xwd.key[code] == 1 && yscr__abort_edge(&yscr__xwd.key_down, down) && yscr__xwd_ours(yscr__xwd.xc)) {
+        uint32_t m = 0;
+        int c;
+        for (c = 0; c < 256; c++) {
+            if (!yscr__xwd.down[c]) continue;
+            if (yscr__xwd.key[c] == 2) m |= YSCR_MOD_SHIFT;
+            if (yscr__xwd.key[c] == 3) m |= YSCR_MOD_CTRL;
+            if (yscr__xwd.key[c] == 4) m |= YSCR_MOD_ALT;
+            if (yscr__xwd.key[c] == 5) m |= YSCR_MOD_GUI;
+        }
+        if (yscr__abort_key(yscr__ab.key, m, yscr__now(), YSCR__AB_HOOK)) yscr__xwd_panic();
+    }
+}
+
+static void* yscr__xwd_main(void* arg) {
+    (void)arg;
+    for (;;) {
+        struct pollfd pf[2];
+        void* ev;
+        pf[0].fd = yscr__x.get_fd(yscr__xwd.xc); pf[0].events = POLLIN; pf[0].revents = 0;
+        pf[1].fd = yscr__xwd.pipe_fd[0];       pf[1].events = POLLIN; pf[1].revents = 0;
+        if (poll(pf, 2, -1) < 0) continue;
+        if (pf[1].revents) break;
+        while ((ev = yscr__xx.poll_event(yscr__xwd.xc)) != NULL) {
+            const uint8_t* e = (const uint8_t*)ev;
+            if ((e[0] & 0x7f) == 35 && e[1] == yscr__xwd.xi_op) yscr__xwd_take(e);
+            free(ev);
+        }
+        if (yscr__x.has_error(yscr__xwd.xc)) break;
+    }
+    return NULL;
+}
+
+/* The first armed screen starts the watchdog, with its desc's numbers. */
+static const char* yscr__xwd_arm(yscr_screen* s, const yscr_desc* d) {
+    const yscr__glx* g = (const yscr__glx*)(const void*)s->backend_mem;
+    int i;
+    if (yscr__xwd.armed == 0) {
+        const uint8_t* ext;
+        uint8_t* v;
+        int sn;
+        if (!yscr__xx_load()) return yscr__xx.why[0] ? "desc.panic: libxcb-randr or libxcb-xinput is missing" : "desc.panic: X11 libraries";
+        if (!yscr__xg_dpy[0]) yscr__copy(yscr__xg_dpy, sizeof yscr__xg_dpy, yscr__x.DisplayString(g->dpy));
+        yscr__xwd.xc = yscr__x.connect(yscr__xg_dpy, NULL);
+        if (!yscr__xwd.xc || yscr__x.has_error(yscr__xwd.xc)) return "desc.panic: no X connection for the watchdog";
+        ext = yscr__x.get_extension_data(yscr__xwd.xc, yscr__xx.input_id);
+        v = ext && ext[8] ? yscr__xx.xi_query_version_reply(yscr__xwd.xc, yscr__xx.xi_query_version(yscr__xwd.xc, 2, 0), NULL) : NULL;
+        if (!v) {
+            yscr__x.disconnect(yscr__xwd.xc);
+            yscr__xwd.xc = NULL;
+            return "desc.panic: the X server has no XInput 2";
+        }
+        free(v);
+        yscr__xwd.xi_op = ext[9];
+        {   /* raw events are not per screen: one root gets each key once
+             * (on every root, each came once per screen) */
+            uint32_t root = yscr__xx_root(yscr__xwd.xc, 0);
+            struct { uint16_t dev, len; uint32_t mask; } m;
+            m.dev = 1;   /* XIAllMasterDevices: each key once */
+            m.len = 1;
+            m.mask = (1u << YSCR__XI_RAW_KEY_PRESS) | (1u << YSCR__XI_RAW_KEY_RELEASE);
+            if (root) free(yscr__x.request_check(yscr__xwd.xc, yscr__xx.xi_select_events_checked(yscr__xwd.xc, root, 1, &m)));
+            (void)sn;
+        }
+        yscr__xwd_keymap(yscr__xwd.xc);
+        memset(yscr__xwd.down, 0, sizeof yscr__xwd.down);
+        yscr__xwd.key_down = 0;
+        yscr__xwd.fn = d->panic_fn;
+        yscr__xwd.ctx = d->panic_ctx;
+        yscr__xwd.panicking = 0;
+        yscr__xwd.words_done = 0;
+        if (pipe(yscr__xwd.pipe_fd) != 0) {
+            yscr__x.disconnect(yscr__xwd.xc);
+            yscr__xwd.xc = NULL;
+            return "desc.panic: pipe";
+        }
+        /* inherits the frame thread's policy on purpose: it sleeps in
+         * poll(), and a FIFO frame thread must not hold up its wake */
+        if (pthread_create(&yscr__xwd.th, NULL, yscr__xwd_main, NULL) != 0) {
+            close(yscr__xwd.pipe_fd[0]); close(yscr__xwd.pipe_fd[1]);
+            yscr__x.disconnect(yscr__xwd.xc);
+            yscr__xwd.xc = NULL;
+            return "desc.panic: the watchdog thread did not start";
+        }
+        yscr__xwd.running = 1;
+        yscr__panic_config(d->panic_presses ? d->panic_presses : 3, d->panic_window_ns ? d->panic_window_ns : YRT_S(2),
+                             d->panic_grace_ns ? d->panic_grace_ns : YRT_S(10));
+    }
+    pthread_mutex_lock(&yscr__xwd.mu);
+    for (i = 0; i < YSCR__SLOTS && yscr__xwd.win[i]; i++) { }
+    if (i < YSCR__SLOTS) yscr__xwd.win[i] = g->win;
+    pthread_mutex_unlock(&yscr__xwd.mu);
+    yscr__xwd.armed++;
+    s->panic_armed = 1;
+    return NULL;
+}
+
+static void yscr__xwd_disarm(yscr_screen* s) {
+    const yscr__glx* g = (const yscr__glx*)(const void*)s->backend_mem;
+    int i;
+    char b = 0;
+    if (s->panic_armed != 1) return;
+    s->panic_armed = 0;
+    pthread_mutex_lock(&yscr__xwd.mu);
+    for (i = 0; i < YSCR__SLOTS; i++) if (yscr__xwd.win[i] == g->win) { yscr__xwd.win[i] = 0; break; }
+    pthread_mutex_unlock(&yscr__xwd.mu);
+    if (--yscr__xwd.armed > 0) return;
+    yscr__panic_config(0, 0, 0);
+    if (yscr__xwd.running) {
+        if (write(yscr__xwd.pipe_fd[1], &b, 1) != 1) { }
+        pthread_join(yscr__xwd.th, NULL);
+        yscr__xwd.running = 0;
+    }
+    close(yscr__xwd.pipe_fd[0]); close(yscr__xwd.pipe_fd[1]);
+    yscr__xwd.pipe_fd[0] = yscr__xwd.pipe_fd[1] = -1;
+    if (yscr__xwd.xc) { yscr__x.disconnect(yscr__xwd.xc); yscr__xwd.xc = NULL; }
+}
+#else
+static const char* yscr__xwd_arm(yscr_screen* s, const yscr_desc* d) {
+    (void)s; (void)d;
+    return "desc.panic needs threads (built with YRT_NO_THREADS)";
+}
+static void yscr__xwd_disarm(yscr_screen* s) { (void)s; }
+#endif
+
 #endif /* YSCR__GLX */
 
 /* --- the core -------------------------------------------------------------- */
@@ -9392,6 +10143,14 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
         }
         if (!desc->windowed && explicit_mode &&
             (match.w != dm->w || match.h != dm->h || match.refresh_rate_numerator != dm->refresh_rate_numerator)) {
+#if defined(YSCR__GLX)
+            /* the X server keeps a switched mode after the process dies
+             * (measured): a snapshot for exit() and the panic */
+            if (s->backend == YSCR_BACKEND_GLX_OML && yscr__x_load()) {
+                void* xd = SDL_GetPointerProperty(SDL_GetWindowProperties(s->window), SDL_PROP_WINDOW_X11_DISPLAY_POINTER, NULL);
+                yscr__xm_take(s, xd ? yscr__x.DisplayString(xd) : NULL);
+            }
+#endif
             if (!SDL_SetWindowFullscreenMode(s->window, &match)) {
                 yscr__set_error(s->error, sizeof s->error, "ysp_screen: mode switch: %s", SDL_GetError());
                 yscr_close(s);
@@ -9542,6 +10301,19 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
             else s->panic_armed = 2;
         }
 #endif
+#if defined(YSCR__GLX)
+        if (!e && s->backend == YSCR_BACKEND_GLX_OML) {
+            yscr__x11_display_state(s, desc);
+            if (desc->codes_strict && s->n_codes &&
+                (yscr_code_risk(s) & ~(uint16_t)YSCR_CODE_RISK_COMPOSED))
+                e = "desc.codes_strict: the display may change code pixels (see the describe line)";
+        }
+        /* armed after the ramp is taken, so a panic finds it */
+        if (!e && desc->panic && s->backend == YSCR_BACKEND_GLX_OML) {
+            if (!desc->windowed || YSCR__PANIC_WINDOWED) e = yscr__xwd_arm(s, desc);
+            else s->panic_armed = 2;
+        }
+#endif
         if (!e && desc->panic && !s->panic_armed) s->panic_armed = 3;
         if (e) {
             yscr__set_error(s->error, sizeof s->error, "ysp_screen: %s", e);
@@ -9656,6 +10428,12 @@ YSCR_API void yscr_close(yscr_screen* s) {
         yscr__win.set_foreground && yscr__win.foreground() == (HWND)s->hwnd && yscr__win.is_window((HWND)s->fg_prev))
         yscr__win.set_foreground((HWND)s->fg_prev);
 #endif
+#if defined(YSCR__GLX)
+    if (s->backend == YSCR_BACKEND_GLX_OML && s->pr_open) {
+        yscr__xwd_disarm(s);
+        yscr__x11_gamma_release(s);
+    }
+#endif
     s->fg = 0;
     s->fg_prev = NULL;
     s->panic_armed = 0;
@@ -9671,6 +10449,9 @@ YSCR_API void yscr_close(yscr_screen* s) {
 #if !defined(YSCR_NO_SDL)
     if (s->cursor_hidden) SDL_ShowCursor();
     if (s->window) SDL_DestroyWindow(s->window);
+#if defined(YSCR__GLX)
+    yscr__xm_release(s);   /* after SDL put the desktop mode back */
+#endif
 #if defined(YSCR__DXGI)
     {   /* after the window that showed them */
         int k;

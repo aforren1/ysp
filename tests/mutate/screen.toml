@@ -1235,3 +1235,51 @@ test = "screen_glx"
 why = "desc.x11_override_redirect must reach SDL's window creation, or the compositor keeps the window and every frame is a copy."
 find = "            int or_set = s->backend == YSCR_BACKEND_GLX_OML && desc->x11_override_redirect, had = 0;"
 replace = "            int or_set = 0, had = 0;"
+
+[[mutant]]
+id = "glx-11"
+name = "raw key's time read as its keycode"
+test = "screen_glx"
+why = "XInput2's raw key event has the server time at 12 and the keycode at 16; reading 12, the watchdog never sees the abort key and a hung program is not ended."
+find = "    memcpy(&code, ev + 16, 4);   /* detail; the server time is at 12 */"
+replace = "    memcpy(&code, ev + 12, 4);"
+
+[[mutant]]
+id = "glx-12"
+name = "ramps set once, at once"
+test = "screen_glx"
+why = "A RandR mode set resets the ramp a frame after it returns; a ramp set at once and not read back later is lost. (Either the wait or the later read-back alone puts it back.)"
+find = "    if (changed) YSCR__SLEEP_UNTIL(yscr__now() + YRT_MS(150), 0);"
+replace = "    (void)changed;"
+
+[[mutant.also]]
+find = "    for (tries = 0; tries < 3; tries++) {\n        int set = 0;"
+replace = "    for (tries = 0; tries < 1; tries++) {\n        int set = 0;"
+
+[[mutant.also]]
+find = "        if (!set) break;\n        YSCR__SLEEP_UNTIL(yscr__now() + YRT_MS(60), 0);"
+replace = "        if (!set) break;"
+
+[[mutant]]
+id = "glx-13"
+name = "the mode snapshot without ramps"
+test = "screen_glx"
+why = "A mode switch resets the user's ramp; without the ramp in the snapshot, close and the panic leave it at identity."
+find = "                                yscr__xm.c[yscr__xm.n].n_ramp = gn;"
+replace = "                                yscr__xm.c[yscr__xm.n].n_ramp = 0;"
+
+[[mutant]]
+id = "glx-14"
+name = "a ramp that is not identity kept"
+test = "screen_glx"
+why = "A fullscreen screen takes the CRTC ramp to identity, or code values and calibrated levels are not exact."
+find = "            int ident = yscr__xg_is_identity(r, gg, b, n);"
+replace = "            int ident = 1;"
+
+[[mutant]]
+id = "glx-15"
+name = "focus never ours"
+test = "screen_glx"
+why = "The watchdog counts presses only while one of the screens' windows has the focus; a check that never matches never ends a hung program."
+find = "    for (i = 0; i < YSCR__SLOTS; i++) ours |= f && yscr__xwd.win[i] == f;"
+replace = "    for (i = 0; i < YSCR__SLOTS; i++) ours |= 0;"
