@@ -2862,36 +2862,40 @@ needs read access to `/dev/input/event*` (the `input` group), which this
 user has not got. `test_screen_glx` checks 20 keys; mutants `glx-06` and
 `glx-07`, killed.
 
-### GPU-late frames raise the depth for good
+### GPU-late frames and the depth
 
 `examples/gfx/stress.c --kind noise` on this machine: full-screen layers
-of gradient noise, 120 frames a level, doubled from 16.
+of gradient noise, 120 frames a level, doubled from 16, then bisected.
 
-| Layers | Dropped | Slow frames (2+ vblanks after the one before) | Depth after |
+Before the merge under v0.4.4's rule ("Depth from the path"), the core
+raised the depth after three misses in a row and lowered it only on
+slack evidence. At 64 layers the GPU missed, the depth went to 2, and it
+never came down: 16 layers, which had run at one frame per vblank, then
+ran at half the rate for the rest of the run, with no frame counted as
+dropped. Slack measures when the present call returns, not when the GPU
+finishes, so at depth 2 the evidence for depth 1 never came.
+
+With the depth from the path (v0.8.0 on GLX_OML):
+
+| Layers | Dropped | Slow frames (2+ vblanks after the one before) | Depth |
 |---|---|---|---|
-| 16 | 0 | 0 | 1 |
-| 32 | 0 | 0 | 1 |
-| 64 | 4 | 119 | 2 |
-| 48, 40, 36, 34, 33 | 0 each | 119 each | 2 |
-| 16 again, 600 frames | 0 | 599 | 2 |
+| 16, 32 | 0 | 0 | 1 |
+| 64 | 120 | 119 | 1 |
+| 48 | 120 | 119 | 1 |
+| 40 | 97 | 96 | 1 |
+| 36, 38, 39 | 0 | 0 | 1 |
+| 16 again, 600 frames | 0 | 0 | 1 |
 
-The GPU was late at 64 layers with each present on time. Three misses
-in a row raised the depth to 2, as designed. It never came down: 16
-layers, which ran at one frame per vblank before, then ran at half the
-rate, with no frame counted as dropped.
+A GPU-late frame is a drop and nothing more, the screen is back to one
+frame per vblank as soon as the load is, and the knee is real: 39 layers
+in 120 frames dropped nothing, 40 dropped 97.
 
-The rule that lowers the depth on a native-target backend needs on-time
-flips at the slack one depth less would have had ("Depth on a backend
-that holds frames"). The slack is the planned vblank's time minus the
-present call's return. At depth 2 with one frame in flight every present
-returns about two periods before its vblank, so the slack of depth 1 is
-never seen again, and a miss within 4 flips of a lowering has cleared
-the old evidence. The rule cannot recover from GPU lateness, because
-slack measures the CPU's return, not the GPU's finish. Proposed, not
-built: a GL fence after each frame's drawing, checked when the flip
-before it completes; a frame whose GPU work was done by then would have
-made the earlier vblank, which is direct evidence for the lower depth.
-The presenter interface has the slot (`gpu_done`).
+A window is the copy path, which the depth table gave 2, from DWM's
+composed path on Windows: a GLX window then ran 33.7 ms from present to
+onset with no drop. X11's copy shows on the next vblank (the probe's
+window runs), so GLX_OML's copy path is depth 1: 17.0 ms, 600 of 600 on
+time. `test_screen_glx` checks the window's depth; mutant `glx-08`,
+killed.
 
 ### A compositing manager
 
@@ -2937,8 +2941,7 @@ for the environment variable. A driconf file setting was not tried.
   is built, not run. Every onset here is DXGI's vblank time.
 - Any refresh other than 60 Hz; any GPU other than the Iris Xe; Windows 10.
 - Wayland and macOS: stubs. The web: no light measured (web.md).
-- On X11: a frame the GPU makes late raises the depth for good (Linux
-  X11: GLX_OML), a compositing manager other than Xfwm4's, one window per
+- On X11: a compositing manager other than Xfwm4's, one window per
   output, separate X screens, XWayland, NVIDIA's driver, the panic
   watchdog, the CRTC gamma ramp, and a real keyboard's key times.
 - A DWM miss on the composed path of COMPOSITION: a second window loading

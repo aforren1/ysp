@@ -728,8 +728,8 @@ id = "dp-10"
 name = "composed at depth 1"
 test = "screen"
 why = "The compositor copies the frame: a vblank more (measured 2 on DXGI_FLIP and COMPOSITION)."
-find = '    case YSCR_PATH_COMPOSED:    return 2;'
-replace = '    case YSCR_PATH_COMPOSED:    return 1;'
+find = '    case YSCR_PATH_COMPOSED:    return s->backend == YSCR_BACKEND_GLX_OML ? 1 : 2;'
+replace = '    case YSCR_PATH_COMPOSED:    return s->backend == YSCR_BACKEND_GLX_OML ? 1 : 1;'
 
 [[mutant]]
 id = "dp-11"
@@ -1211,3 +1211,11 @@ test = "screen_glx"
 why = "The X server's time is in ms of CLOCK_MONOTONIC; read in another unit it is off the clock, and the key falls back to SDL's late stamp."
 find = "            return t * 1000000;"
 replace = "            return t * 1000;"
+
+[[mutant]]
+id = "glx-08"
+name = "an X copy at the composed depth"
+test = "screen_glx"
+why = "An X11 Present copy shows on the next vblank; at DWM's composed depth of 2 a GLX window waits a vblank more on every frame."
+find = "    case YSCR_PATH_COMPOSED:    return s->backend == YSCR_BACKEND_GLX_OML ? 1 : 2;"
+replace = "    case YSCR_PATH_COMPOSED:    return 2;"

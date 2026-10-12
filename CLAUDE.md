@@ -73,8 +73,7 @@ assume what the driver does. Use SDL 3.4.18 or later on X11 (3.4.0 can
 end the process on an X error). `test_screen_glx` checks the backend on
 a display (not in ctest); the `glx-` mutants need `YSP_SDL3` set to an
 SDL3 prefix. Open: separate X screens (`desc.x_display`), the panic
-watchdog, the CRTC gamma ramp, GPU-late frames that raise the depth for
-good (docs/screen.md), a raw evdev reader.
+watchdog, the CRTC gamma ramp, a raw evdev reader.
 
 ## Linux real-time priority
 

@@ -1384,8 +1384,10 @@
  *          libX11, libGL and libxcb are loaded at run time; nothing X11 or
  *          GL is needed to compile. The describe line warns on SDL older
  *          than 3.4.18 (an X error race in SDL that ends the process,
- *          docs/screen.md). New enum values only; nothing changes on
- *          Windows or the web.
+ *          docs/screen.md). On GLX_OML the copy path (a window) is depth
+ *          1: X11's Present copies on the next vblank (DEPTH's table gave
+ *          it DWM's 2). New enum values only; nothing changes on Windows
+ *          or the web.
  *   v0.7.0 - YSCR_BACKEND_WEB (BACKENDS, WEB; docs/web.md): under
  *          Emscripten, SDL3's canvas and the header's WebGL2 context,
  *          frames paced by requestAnimationFrame through an awaited
@@ -1829,8 +1831,7 @@
  *   NOT done: any rate but 60 Hz, any other GPU, Windows 10 (COMPOSITION
  *   needs 11), ARM64 (COMPOSITION refuses it: the hidden-pointer returns
  *   are checked only on x64), two physical displays, variable refresh
- *   (refused), macOS and Wayland swap paths (stubs). On X11: a frame the
- *   GPU makes late raises the depth for good (docs/screen.md), a
+ *   (refused), macOS and Wayland swap paths (stubs). On X11: a
  *   compositing manager other than Xfwm4's, separate X screens (desc has
  *   no x_display yet), XWayland, NVIDIA's driver, the panic watchdog, the
  *   CRTC gamma ramp and a real keyboard's key times.
@@ -7680,7 +7681,11 @@ static int yscr__slack_bin(const yscr_screen* s, int64_t slack) {
  * where one too small drops every frame. Unknown: no change. */
 static int32_t yscr__path_table(const yscr_screen* s, int path) {
     switch (path) {
-    case YSCR_PATH_COMPOSED:    return 2;
+    /* X11's Present copies a window's frame at the vblank it was queued
+     * for, with no compositor in between: the copy showed on the next
+     * vblank (the X11 probe's window runs, MSC step 1 on 600 of 600). At
+     * 2 a GLX window ran 33.7 ms from present to onset for nothing. */
+    case YSCR_PATH_COMPOSED:    return s->backend == YSCR_BACKEND_GLX_OML ? 1 : 2;
     case YSCR_PATH_OVERLAY:     return s->caps.native_target ? 2 : 1;
     case YSCR_PATH_INDEPENDENT:
     case YSCR_PATH_SIMULATED:   return 1;

@@ -18,6 +18,8 @@
  *      before to 1 ms after the injection (SDL's own stamp is the next
  *      frame's pump, 8 to 17 ms later). Skipped without libXtst or focus.
  *   5. With vblank_mode=0 in the environment, open() refuses.
+ *   6. In an 800 x 600 window (the Present copy path): depth 1, so 60
+ *      frames each show on the next vblank, tier 2.
  *
  * Exit 0 on pass, 1 on a failed check; 0 with "SKIP" when there is no X
  * display or the backend does not open (no SDL X11 driver, no DRI3). With
@@ -179,6 +181,34 @@ int main(void) {
     CHECK(run2.on_plan == run2.n);
     CHECK(run2.early == 0);
     CHECK(strstr(line, " vrr_prop=0") != NULL);
+
+    {   /* part 6: a window */
+        yscr_desc d;
+        seen run3;
+        memset(&d, 0, sizeof d);
+        d.backend = YSCR_BACKEND_GLX_OML;
+        d.windowed = true;
+        memset(&scr, 0, sizeof scr);
+        CHECK(yscr_open(&scr, &d));
+        if (yscr_is_open(&scr)) {
+            memset(&run3, 0, sizeof run3);
+            yscr_on_flip(&scr, on_flip, &run3);
+            for (i = 0; i < 60; i++) {
+                CHECK(yscr_begin(&scr, &f) == YSCR_OK);
+                clear(&scr);
+                CHECK(yscr_flip(&scr) == YSCR_OK);
+            }
+            CHECK(yscr_wait_flip(&scr, NULL) == YSCR_OK);
+            yscr_describe(&scr, line, sizeof line);
+            yscr_close(&scr);
+            printf("run 3 (window): %d records, on plan %d, tier 1 %d; %s\n", run3.n, run3.on_plan, run3.tier1,
+                   strstr(line, " depth=1") ? "depth 1" : "depth not 1");
+            CHECK(run3.n == 60);
+            CHECK(run3.on_plan == 60);
+            CHECK(strstr(line, " depth=1") != NULL);
+            CHECK(strstr(line, " path=composed") != NULL);
+        }
+    }
 
     /* Mesa reads vblank_mode when a display's driver screen is made, and
      * open() makes its own display connection. */
