@@ -10,9 +10,9 @@
  *      refused where the sink runs s16, docs/audio.md "Linux: first runs").
  *   2. The position source is the device (PulseAudio's stream timing info),
  *      and the OS claim names it.
- *   3. Over 10 s: no underrun or halt, the fit's spread under 50 us (2 to
- *      6 us measured; callback times gave 450 to 620 us), the drift within
- *      100 ppm.
+ *   3. Over 10 s: no underrun or halt, the fit's spread under 20 us (2.7
+ *      to 4.9 us measured; without the sink's latency subtracted 58 to 70
+ *      us; callback times 450 to 620 us), the drift within 100 ppm.
  *   4. The fit is on the ysp_rt clock and not ahead of the frames written:
  *      the frame written last plays after now, and within 1 s.
  *
@@ -62,7 +62,7 @@ int main(void) {
     CHECK(c.pos_source == YAU_POS_DEVICE);
     CHECK(strstr(line, "pulse:timing-info") != NULL);
     CHECK(c.xruns == 0);
-    CHECK(c.fit_spread_ns > 0 && c.fit_spread_ns < 50000);
+    CHECK(c.fit_spread_ns > 0 && c.fit_spread_ns < 20000);
     CHECK(fabs(c.drift_ppm) < 100);
     /* the last frame written is still ahead of the output, and on the
      * ysp_rt clock: within the buffer and the sink's latency of now */

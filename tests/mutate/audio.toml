@@ -9,6 +9,14 @@ flags = ["-std=c11", "-O2", "-w"]
 libs = ["-lm"]
 timeout = 300
 
+[test.audio_alsa]
+source = "tests/adapt/audio_alsa_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O2", "-w", "-I$YSP_MINIAUDIO"]
+libs = ["-ldl", "-lpthread", "-lm"]
+timeout = 90
+env = { YAU_ALSA_TEST_REQUIRE = "1" }
+
 [test.audio_pulse]
 source = "tests/adapt/audio_pulse_test.c"
 compiler = "gcc"
@@ -285,7 +293,61 @@ replace = '''            caps->os_latency_ns = 0;
 id = "pulse-04"
 name = "the sink's latency not subtracted"
 test = "audio_pulse"
-why = "The read index is what the server took from the stream; the sink plays it about 3 ms later. The sink's latency varies (2.7 to 3.5 ms measured), so without it the fit's spread passes 50 us (the probe: 139 us sd for the read index alone)."
+why = "The read index is what the server took from the stream; the sink plays it about 3 ms later. The sink's latency varies (2.7 to 3.5 ms measured), so without it the fit's spread was 58 to 70 us in three runs, against 4.4 to 4.9 us; the test's bound is 20 us (at 50 us the mutant survived one run)."
 find = '''        int64_t pos = ti->read_index / m->pa_bpf -
                       (int64_t)((double)ti->sink_usec * (double)d->playback.internalSampleRate / 1e6 + 0.5);'''
 replace = '''        int64_t pos = ti->read_index / m->pa_bpf;'''
+
+# ALSA exclusive and device choice (v0.5.0): test_audio_alsa on hw:0,0,
+# which runs itself under pasuspender when PulseAudio is up.
+
+[[mutant]]
+id = "alsa-00"
+name = "ALSA status timestamps left off"
+test = "audio_alsa"
+why = "A PCM's status timestamps are 0 until its timestamp mode is on; then no report has a time and the fit has nothing."
+find = "sw_cur(pcm, sw) != 0 || set_mode(pcm, sw, 1) != 0"
+replace = "sw_cur(pcm, sw) != 0 || set_mode(pcm, sw, 0) != 0"
+
+[[mutant]]
+id = "alsa-01"
+name = "frames handed to ALSA not counted"
+test = "audio_alsa"
+why = "The position is the frames written less the delay; without the count it is negative and no report is made."
+find = """    if (m->render) m->render(m->host, out, (int32_t)n, &tk);
+#if defined(MA_SUPPORT_ALSA)
+    m->al_written += n;
+#endif"""
+replace = """    if (m->render) m->render(m->host, out, (int32_t)n, &tk);"""
+
+[[mutant]]
+id = "alsa-02"
+name = "two periods in ALSA exclusive"
+test = "audio_alsa"
+why = "At 64-frame periods two periods made 25 false halts in 20 s; three made none."
+find = "    dc.periods = in->exclusive && m->backend != ma_backend_alsa ? 1 : 0;"
+replace = "    dc.periods = in->exclusive ? 1 : 0;"
+
+[[mutant]]
+id = "alsa-03"
+name = "ALSA exclusive on the default device"
+test = "audio_alsa"
+why = "miniaudio would open 'default', the sound server's plugin: exclusive in name only."
+find = "        if (id[0] != ':') {"
+replace = "        if (0) {"
+
+[[mutant]]
+id = "alsa-04"
+name = "the first of several name matches taken"
+test = "audio_alsa"
+why = "Two devices share 'HDA Intel PCH, HDMI 1' on this machine; taking the first silently picks one the user may not have meant."
+find = "    if (hits == 1) return &hit->id;"
+replace = "    if (hits >= 1) return &hit->id;"
+
+[[mutant]]
+id = "alsa-05"
+name = "hw:card,device not read as an id"
+test = "audio_alsa"
+why = "Users write hw:0,0; miniaudio's id is :0,0."
+find = "    if (b == ma_backend_alsa && strncmp(want, \"hw:\", 3) == 0) {   /* hw:0,0 is \":0,0\" */"
+replace = "    if (0) {"

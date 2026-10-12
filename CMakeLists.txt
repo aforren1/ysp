@@ -597,6 +597,9 @@ endif()
 # of silence, so by hand (and by the pulse- mutants), not ctest.
 if(TARGET ysp::miniaudio AND YSP_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     ysp_add_program(test_audio_pulse tests/adapt/audio_pulse_test.c rig)
+    # ALSA exclusive on hw:0,0 (YAU_ALSA_TEST_DEVICE), under pasuspender when
+    # PulseAudio runs: by hand and by the alsa- mutants
+    ysp_add_program(test_audio_alsa tests/adapt/audio_alsa_test.c rig)
 endif()
 if(TARGET SDL3::SDL3 AND YSP_BUILD_EXAMPLES)
     # The jsPsych-style trials of examples/response/ (docs/response.md,

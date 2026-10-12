@@ -82,7 +82,9 @@ desktop: `tests/loopback/pty_pair.py` gives the pty pair. GCC 12's
 ThreadSanitizer needs `setarch -R` on this kernel. `ysp/audio.h` reads
 PulseAudio's stream timing info as its position (docs/audio.md); the
 `pulse-` mutants and `test_audio_pulse` need a running PulseAudio and
-`YSP_MINIAUDIO` set to the folder holding miniaudio.h. Open: separate X screens in
+`YSP_MINIAUDIO` set to the folder holding miniaudio.h; the `alsa-` ones
+and `test_audio_alsa` need `hw:0,0` (it reruns itself under
+`pasuspender`). Open: separate X screens in
 one process (SDL 3 drives one; `desc.x_display` picks it per process).
 
 ## Linux real-time priority

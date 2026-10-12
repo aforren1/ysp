@@ -1099,6 +1099,105 @@ callback feed, the clock left on CLOCK_REALTIME, bytes taken as frames,
 the source not declared, and the sink's latency not subtracted (the
 spread passes 50 us, as the probe's `read_index` row says).
 
+## Linux: ALSA exclusive (v0.5.0)
+
+For the shortest periods, ALSA can open the card's own PCM (`hw:`), past
+the sound server: the Linux counterpart of WASAPI exclusive mode. Two
+things stood in the way. miniaudio's ALSA backend, asked for exclusive
+mode with no device, tries `"default"` first, which on this machine is
+PulseAudio's plugin. And PulseAudio holds the card while it runs, so `hw:`
+opens only under `pasuspender` (or with the sink suspended, or on a rig
+without a sound server).
+
+The position. `snd_pcm_status()` gives the delay (frames from the one
+playing to the last one written) and a timestamp; the frames handed to
+ALSA less the delay is the frame at the output at that time. Status
+timestamps are 0 until the PCM's timestamp mode is on, and CLOCK_REALTIME
+unless the type is set to monotonic. `tests/probe/audio_alsa/alsa_status_probe.c`,
+`hw:0,0` (the Intel HDA codec's analog output), 16-bit, 48 kHz, 240-frame
+periods, three periods, under `pasuspender`, 30 s, a line fitted to each
+candidate:
+
+| Position | sd / p99 / max of the residual, us | Rate |
+|---|---|---|
+| frames written less the delay, at the status timestamp | 6.1 / 12.5 / 14.0 | +3.8 ppm |
+| the same, at the callback's entry | 6.0 / 12.3 / 22.9 | +3.8 ppm |
+| frames written, at the callback (the callback source) | 52.1 / 200 / 3427 | +4.3 ppm |
+
+The same +3.8 ppm as PulseAudio's timing info: the same codec clock seen
+through both. At 64-frame periods with three periods (10 s), the status
+stayed RUNNING, the line's sd was 19 us and its largest residual 107 us,
+with no jump.
+
+From v0.5.0, on ALSA in exclusive mode:
+
+- `desc.device` must name a card's device, an id like `:0,0` or
+  `hw:0,0`; `open()` refuses otherwise ("ALSA exclusive mode needs a
+  card's device ...").
+- The PCM's timestamps are switched on (mode enable, type monotonic) and
+  each callback reports the position above (`os_claim=alsa:status`).
+- Three periods per buffer, miniaudio's default. The WASAPI rule (one
+  period) became two on ALSA, and at 64 frames the reports then read as
+  halts 25 times in 20 s; with three, none. Why two periods confused the
+  halt rule was not worked out.
+- A failed open names `pasuspender`.
+
+On Linux the device thread also takes ysp/rt.h's ladder at its first
+callback (SCHED_FIFO 1 under the rtprio grant of 50): miniaudio's
+"highest" priority keeps the creating thread's policy on Linux. At 64
+frames with 20 spinning threads, two 30 s runs each: SCHED_FIFO 0 and 0
+underruns, the longest callback gap 2.9 and 3.2 ms; SCHED_OTHER 1 and 0,
+4.1 and 5.0 ms (and 1 in an earlier run).
+
+`audio_clockstats --backend alsa --exclusive --device hw:0,0 --s16`,
+under `pasuspender`:
+
+| Period, frames | Load | Seconds | Underruns | Fit spread | Shortest safe lead |
+|---|---|---|---|---|---|
+| 480 (the default, two periods) | idle | 20 | 0 | 0.6 us | 39.86 ms |
+| 240 (two periods) | idle, 20 threads | 20, 30 | 0, 0 | 0.4, 27 us | 19.64, 18.67 ms |
+| 128 (two periods) | idle, 20 threads | 20, 30 | 0, 0 | 0.2, 2.6 us | 10.75, 9.45 ms |
+| 128 (three) | idle | 20 | 0 | 21 us | 12.61 ms |
+| 64 (three) | idle | 20, 30 | 0, 0 | 6.6, 23 us | 4.60, 4.92 ms |
+| 64 (three, FIFO thread) | 20 threads | 30, 30 | 0, 0 | | |
+| 32 (three) | idle | 20 | 1 | 42 us | 3.45 ms |
+
+The two-period rows predate the three-period rule. The safe lead is the
+header's (LEAD): how far ahead `yau_play_at()` must ask. So on this codec
+a program that wants the least latency asks for 64-frame periods
+(1.3 ms) and plays 5 ms ahead; 128 frames leaves more room under load.
+WASAPI exclusive on the Windows laptop's codec was slower than its shared
+mode ("Exclusive mode" above); here exclusive is the fastest path.
+
+`tests/adapt/audio_alsa_test.c` (`test_audio_alsa`, not in ctest; it
+runs itself again under `pasuspender` when PulseAudio answers) checks the
+list, the refusals, both spellings of the id, and 10 s at 64 frames: the
+device position, no underrun, a spread under 50 us (5.1 us here).
+Mutants `alsa-00` to `alsa-05`, all killed. Tier 3: no loopback can
+capture an exclusive stream, as on WASAPI.
+
+## Choosing a device (v0.5.0)
+
+`desc.device` was a part of the device's name, and the first device whose
+name had it was taken. Names repeat: on this machine ALSA lists 26
+playback devices, among them "HDA Intel PCH, HDMI 1" twice (`:0,7`,
+`:0,1`) and "HDA ATI HDMI, HDMI 0" twice; a rig with an interface, a
+headphone amplifier and HDMI has several plausible outputs. From v0.5.0:
+
+- `desc.device` is first compared with each device's id: the WASAPI
+  endpoint id, ALSA's `:card,device` (or `hw:card,device`), the
+  PulseAudio sink name, the CoreAudio UID.
+- Else it is a part of the name, and it must name one device: a part two
+  devices share is refused, and the message lists them: "'HDMI 1' names
+  4 playback devices; give one's id in desc.device: ':0,7' (HDA Intel
+  PCH, HDMI 1) ':0,1' (HDA Intel PCH, HDMI 1) ...".
+- `yau_list_devices(backend, out, cap)` gives each playback device's
+  name, id and whether it is the default; `clockstats` and a rig's setup
+  screen can show it.
+- AUTO on Linux is PulseAudio when its server answers, else ALSA.
+
+There is still no input: the header plays only.
+
 ## Not measured
 
 - Latency to sound. No loopback cable; `--line` is built, not run. It
