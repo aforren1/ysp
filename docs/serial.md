@@ -1205,6 +1205,9 @@ order. Then `raw_win32.exe` of the audit, twice, the second time with its
 modes reversed. Each cell gives run 1, run 2. Times in microseconds. The
 summaries are in `tests/compare/serial_bench_py/results/2026-10-12-teensy40/`.
 
+The raw stream rows rest on fits of 2 or 3 points; see [Stream fits of the
+raw floors](#stream-fits-of-the-raw-floors).
+
 The floor of the port was higher on this day than on the day of the audit:
 the raw stream latency was 227 to 251 and 130 to 243 us median, against 121
 to 155 us then. Compare each row with the raw row of the same table, not
@@ -1414,11 +1417,9 @@ What the Linux runs show:
 
 - The port's floor is half of Windows': a round trip of 81 to 85 us
   against 158 to 244 us on the Windows laptop. Different machines too, so
-  this is the pair, not the OS alone. (The stream latencies are not
-  compared: `raw_win32.c` spaces its stream probes 0 to 1 ms apart, which
-  on Linux left `raw_posix.c`'s fit with 2 points and no slope until its
-  probes were spaced 2 to 3 ms apart, as the Python bench's are. Whether
-  the Windows raw stream rows had the same fault was not checked.)
+  this is the pair, not the OS alone. The stream latencies are not
+  compared across machines; see [Stream fits of the raw
+  floors](#stream-fits-of-the-raw-floors).
 - A write returns before the bytes reach the board on Linux (8 to 11 us;
   the board reads them 48 to 56 us after the call starts). On Windows the
   write returned after the board had read the command. See TIMING in the
@@ -1436,6 +1437,36 @@ What the Linux runs show:
 - pyserial's write takes 38 to 60 us, 4 to 6 times ysp's and the raw
   `write`, and returns 5.7 to 8.3 us before the board reads the bytes
   (ysp's and IOPort's return 40 to 45 us before). Not investigated.
+
+### Stream fits of the raw floors
+
+`raw_win32.c` sends the 200 echo probes before and after each stream 0 to
+1 ms apart. The fit keeps the best exchange of each 200 ms, so a block of
+probes that fits in one 200 ms bucket gives one point, and with fewer
+than 3 points the fit has no slope: it maps board stamps with the median
+offset alone, and the board's rate error (10 to 18 ppm on these
+machines) moves the stamps by up to about 90 us over the 10 s stream.
+The Python bench spaces its probes 2 to 3 ms apart for this reason.
+
+On Linux the exchanges are short (82 us), each block fell in one bucket,
+and every `raw_posix.c` stream fit had 2 points and 0 ppm; its stream p99
+was 111 to 120 us. With the probes 2 to 3 ms apart the fits had a slope
+(-17.8 to -18.2 ppm, as every Python cell's) and the p99 was 44 to 48 us.
+Only the second runs are in [Results on Linux](#results-on-linux).
+
+On Windows the exchanges took 0.08 to 0.16 ms more, and most blocks crossed
+a bucket boundary. Of the 20 committed `raw_win32.c` stream cells
+(`tests/compare/serial_bench/results/2026-10-11-teensy40-audit/raw*` and
+`tests/compare/serial_bench_py/results/2026-10-12-teensy40/raw*`), 18 had
+3 points and a slope of 10.0 to 14.7 ppm, inside the 10.8 to 16.5 ppm of
+the Python cells of the same session. Two had 2 points and no slope:
+`raw_sync_txmask` in the 2026-10-12 run 2 (median 129.8 us, p99 302) and
+`raw_ovl` in the audit's run 2 (131.2, 274). Neither stands out from the
+other modes of its run (175.2 and 453; 127.8 and 269). So the Windows raw
+stream rows stand, but each rests on 2 or 3 points, two of them from one
+block: read their p99 as good to a few tens of microseconds.
+`raw_win32.c` was not changed; space its probes 2 to 3 ms apart, as
+`raw_posix.c` does, before it is run again.
 
 ## Pulses: onset and width
 
