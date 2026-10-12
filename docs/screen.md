@@ -2939,12 +2939,27 @@ made it (`udevadm monitor`), and the hook reads inotify only on X events,
 which for a new keyboard come about a second later. IN_ATTRIB matters only
 when some other X event falls in those 4 ms, which a test cannot place.
 
-Not measured: a keyboard pressed by hand. Its kernel time is when the USB
-host controller's interrupt delivered the report, after the keyboard's
-own scan, debounce and polling interval (1 to 8 ms for full-speed USB
-keyboards), which no host stamp sees. `keys_probe --keyboard
-/dev/input/eventN --hand` compares the kernel's and the server's time for
-keys pressed on a real keyboard.
+A keyboard pressed by hand: a Dell wireless keyboard on its USB receiver
+(`usbhid`, full speed), 300 presses, `keys_probe --keyboard
+/dev/input/by-id/usb-Dell_Computer_Corp_Dell_Universal_Receiver-event-kbd
+--hand --n 300`, same machine, idle:
+
+| Interval, ms: min / mean / p50 / p99 / max | Dell receiver, by hand |
+|---|---|
+| evdev `read()` returned, minus the kernel's time | 0.007 / 0.023 / 0.022 / 0.042 / 0.046 |
+| X server's time minus the kernel's time | -1.976 / -1.537 / -1.931 / -0.963 / -0.956 |
+| Xlib returned the event, minus the kernel's time | 0.039 / 0.108 / 0.103 / 0.205 / 0.222 |
+
+The same 1 to 2 ms early stamp as the uinput keyboard, so the kernel's
+time corrects a real keyboard's keys too. The median sits near the -2 ms
+end, unlike the uinput run's: most likely the receiver's 1 ms polling held
+a phase against the kernel's tick (not checked).
+
+Not measured: the delay from the key to the kernel's time, which is when
+the USB host controller's interrupt delivered the report: the keyboard's
+scan and debounce, the receiver's radio link and its polling interval. No
+host stamp sees it; a photodiode, a microphone on the key or a solenoid
+does.
 
 ### GPU-late frames and the depth
 

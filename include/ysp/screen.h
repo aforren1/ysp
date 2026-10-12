@@ -914,9 +914,11 @@
  *   reads them (no thread: the kernel keeps each event's time until it is
  *   read) and gives the key the kernel's microsecond time of the newest
  *   press or release of that key from 100 ms before to 3 ms after the
- *   server's stamp. Measured: inside the write() to uinput, 20 of 20. Nodes
- *   are opened read-only, not grabbed, at the first GLX_OML open, and by
- *   inotify when plugged in later. Without access (the default: root and
+ *   server's stamp. Measured: inside the write() to uinput, 20 of 20; a
+ *   wireless keyboard pressed by hand (300 keys): the server's time 0.96 to
+ *   1.98 ms before the kernel's, as with uinput. Nodes are opened
+ *   read-only, not grabbed, at the first GLX_OML open, and by inotify when
+ *   plugged in later. Without access (the default: root and
  *   the input group) keys keep the server's time; tools/linux/
  *   70-ysp-input.rules gives the user at the seat an ACL on keyboards
  *   only (docs/screen.md, "Kernel key times"). The describe line counts
@@ -1893,8 +1895,8 @@
  *   are checked only on x64), two physical displays, variable refresh
  *   (refused), macOS and Wayland swap paths (stubs). On X11: a
  *   compositing manager other than Xfwm4's, two X screens in one process
- *   (SDL 3 cannot), XWayland, NVIDIA's driver, a keyboard pressed by hand
- *   (its kernel time; the keyboard's own scan and polling are in no host
+ *   (SDL 3 cannot), XWayland, NVIDIA's driver, the delay from a key to
+ *   its kernel time (the keyboard's scan and polling are in no host
  *   stamp), a panic or ramp on a second X screen, and a ramp the panic must
  *   put back that light or a capture card can see (the checks read RandR).
  *   Outside this STATUS block and docs/screen.md, a number in this
