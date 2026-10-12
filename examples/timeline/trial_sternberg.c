@@ -27,18 +27,21 @@
  * bitmap font made into curves when the file does not open, as on a CI
  * runner. One curve set of 10 glyphs, made at setup.
  *
- * The data file has one row per trial: trial_index, set_size, memory_set,
- * probe, probe_present, answer, response, rt, correct (jsPsych-style names
- * first); then soa_2 .. soa_6, probe_soa, items_tier (the worst tier of
- * the digits' onsets), onset_tier, onset_src, rsp_tier, rsp_flags,
- * n_early, n_anticipations. Times in seconds. Shift+Esc stops the session;
- * the rows so far are kept.
+ * The data file has one row per trial (ysp/trials.h's data writer): the
+ * session's columns (index, block, ..., set_size, probe_type, answer),
+ * then trial_index, memory_set, probe (the digit), probe_present, correct,
+ * items_tier (the worst tier of the digits' onsets), probe_soa, soa_2 ..
+ * soa_6, then the response's (YRSP_DATA_COLS: response, rt, onset_src,
+ * onset_tier, the residuals, onset_frame, rsp_tier, rsp_flags,
+ * n_anticipations, n_early). Times in seconds; the settings go to
+ * FILE.meta. Shift+Esc stops the session; the rows so far are kept.
  *
  * --sim runs the 6 conditions once on the simulated display with a
  * synthetic participant whose RT grows by 38 ms per digit, 50 ms more for
  * an absent probe: a press during the memory set and then a response, a
  * wrong key, and a timeout among correct responses. It checks its own
- * results and exits 1 on a mismatch. About 27 s.
+ * results (the script runs from the probe's planned onset, the RT from its
+ * flip record) and exits 1 on a mismatch. About 27 s.
  *
  * Usage: trial_sternberg [--sim] [--fullscreen] [--reps N] [--seed N] [--out FILE] [--font PATH]
  *   --reps N   repetitions of each of the 6 conditions (default 4; --sim: 1)
@@ -85,7 +88,7 @@ enum { END_OF_TRIAL = 1 };
 #endif
 
 static const char conditions_csv[] =
-    "set_size,probe,answer\n"
+    "set_size,probe_type,answer\n"
     "2,present,f\n"
     "2,absent,j\n"
     "4,present,f\n"
@@ -110,6 +113,20 @@ static const sim_press sim_script[] = {
 };
 #define SIM_TRIALS 6
 static double sim_rt(int set_size, int present) { return 0.40 + 0.038 * set_size + (present ? 0.0 : 0.05); }
+static yrsp_input sim_ev[8];
+static int n_sim_ev, sim_next;
+
+/* The program's columns; ysp/trials.h writes the session's before them,
+ * the soa columns are set per row, and yrsp_data_set() fills
+ * YRSP_DATA_COLS. */
+typedef struct row { int trial_index, probe, items_tier; bool probe_present, correct; char memory_set[2 * MAX_SET + 1]; } row;
+static const ytr_col cols[] = {
+    YTR_COL(row, trial_index, YTR_COL_INT), YTR_COL(row, memory_set, YTR_COL_CHARS), YTR_COL(row, probe, YTR_COL_INT),
+    YTR_COL(row, probe_present, YTR_COL_BOOL), YTR_COL(row, correct, YTR_COL_BOOL), YTR_COL(row, items_tier, YTR_COL_INT),
+    YTR_COL_SET("probe_soa", YTR_COL_TIME_NS), YTR_COL_SET("soa_2", YTR_COL_TIME_NS), YTR_COL_SET("soa_3", YTR_COL_TIME_NS),
+    YTR_COL_SET("soa_4", YTR_COL_TIME_NS), YTR_COL_SET("soa_5", YTR_COL_TIME_NS), YTR_COL_SET("soa_6", YTR_COL_TIME_NS),
+    YRSP_DATA_COLS,
+};
 
 /* The 5 x 7 digits of gfx_gallery.c's bitmap font, rows top first, bit 4
  * the left column. */
@@ -130,6 +147,7 @@ static ygfx_cset digits;
 static ytl_timeline tl;
 static ytl_event storage[128];
 static ytr_trials trials;
+static ytr_data data;
 static yrsp_collector rsp;
 static uint64_t table_arena[2048];
 static ytb_table tab;
@@ -208,42 +226,44 @@ static ygfx_stim digit_run(ygfx_citem* it, int digit, const float* color) {
     return ygfx_crun(&gfx, &d);
 }
 
-static void sec(char* out, size_t cap, double s) {
-    if (s != s) out[0] = 0;
-    else snprintf(out, cap, "%.9f", s);
+static int fail(const char* why) {
+    fprintf(stderr, "trial_sternberg: %s\n", why);
+    return 1;
+}
+
+/* --sim: a press of `key` at t, held 0.08 s. */
+static void sim_add(int64_t t, const char* key) {
+    if (n_sim_ev + 2 > 8) return;
+    sim_ev[n_sim_ev] = (yrsp_input){ .t = t, .type = YRSP_PRESS, .control = (uint32_t)yrsp_scancode(key),
+                                     .stamp = YRSP_TIER_SIM, .value = 1 };
+    sim_ev[n_sim_ev + 1] = sim_ev[n_sim_ev];
+    sim_ev[n_sim_ev + 1].type = YRSP_RELEASE;
+    sim_ev[n_sim_ev + 1].value = 0;
+    sim_ev[n_sim_ev + 1].t = t + YRT_MS(80);
+    n_sim_ev += 2;
 }
 
 int main(int argc, char** argv) {
-    yscr_desc sd;
-    ygfx_desc gd;
-    ygfx_shape_desc fd;
-    ytl_desc td;
-    ytb_csv_desc cd;
-    ytr_desc rd;
-    yrsp_desc pd;
-    yscr_frame f;
-    ytl_event fired[16];
+    yscr_frame f = { 0 };   /* its period is read after the loop */
+    ytl_event fired[128];                  /* the timeline's capacity: all that can fire */
     ytl_op ops[3 + 4 * MAX_SET + 1];
     ytr_trial_info ti = { 0 };
     yrsp_result res, sim_res[SIM_TRIALS];
-    yrsp_input sim_ev[8];
-    double sim_soa[SIM_TRIALS][MAX_SET + 1];
+    row r = { 0 };
+    double sim_soa[SIM_TRIALS][MAX_SET];
+    int64_t sim_plan[SIM_TRIALS] = { 0 };   /* where the script's times start */
     int sim_k[SIM_TRIALS], sim_present[SIM_TRIALS], sim_correct[SIM_TRIALS];
-    int64_t item_frame[MAX_SET], item_t[MAX_SET], probe_frame = -1, t_start = 0;
+    int64_t item_frame[MAX_SET], item_t[MAX_SET], soa[MAX_SET];
     uint8_t item_tier[MAX_SET];
-    int set[10], k = 0, present = 0, probe_digit = 0, n_ops;
-    FILE* out;
-    char line[1024], meta[2048], why[300];
-    const char* out_path = "trial_sternberg.csv";
-    const char* font_path = DEFAULT_FONT;
-    uint64_t seed = 20261009, digit_rng;
-    int i, n, sim = 0, reps = 0, fullscreen = 0, aborted = 0, failed = 0, rows = 0, font_real;
-    int in_trial = 0, responding = 0, n_sim_ev = 0, sim_next = 0, size_col, probe_col, answer_col;
+    int set[10], k = 0, present = 0, n_ops;
+    char line[1024], meta[2048], meta_path[1100], why[300];
+    const char *out_path = "trial_sternberg.csv", *font_path = DEFAULT_FONT, *answer = "";
+    uint64_t seed = 20261009, digit_rng, order_rng;
+    int i, j, n, landed, sim = 0, reps = 0, fullscreen = 0, aborted = 0, failed = 0, rows = 0, font_real;
+    int in_trial = 0, responding = 0, size_col, probe_col, answer_col, soa_col;
     double sum_k = 0, sum_rt = 0, sum_kk = 0, sum_krt = 0;
     int n_fit = 0;
-    char answer[8] = "";
 
-    memset(&sd, 0, sizeof sd);
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--sim")) sim = 1;
         else if (!strcmp(argv[i], "--fullscreen")) fullscreen = 1;
@@ -259,120 +279,85 @@ int main(int argc, char** argv) {
     if (reps == 0) reps = sim ? 1 : 4;
     if (reps < 1 || reps > 100) { fprintf(stderr, "trial_sternberg: --reps takes 1..100\n"); return 2; }
     digit_rng = seed ^ 0x9E3779B97F4A7C15ull;   /* the digits' own stream: the order's draws stay ytr's */
-    if (sim) sd.backend = YSCR_BACKEND_SIM;
-    sd.windowed = !fullscreen;
+    order_rng = seed;                           /* the order's; seed stays the argument, for the meta */
 
-    if (!yscr_open(&scr, &sd)) { fprintf(stderr, "trial_sternberg: %s\n", yscr_error(&scr)); return 1; }
-    memset(&gd, 0, sizeof gd);
-    gd.screen = &scr;
-    gd.background[0] = gd.background[1] = gd.background[2] = 0.2f;
-    if (!ygfx_open(&gfx, &gd)) { fprintf(stderr, "trial_sternberg: %s\n", ygfx_error(&gfx)); return 1; }
-    if (!yol_open(&ol, NULL)) { fprintf(stderr, "trial_sternberg: outline context\n"); return 1; }
+    /* the display and the graphics, opened together and primed */
+    if (!ygfx_open_screen(&gfx, &scr, &(yscr_desc){ .backend = sim ? YSCR_BACKEND_SIM : 0, .windowed = !fullscreen },
+                          &(ygfx_desc){ .background = { 0.2f, 0.2f, 0.2f } }))
+        return fail(ygfx_error(&gfx));
+    if (!yol_open(&ol, NULL)) return fail("outline context");
     font_real = make_digits(font_path, why, sizeof why);
     if (font_real < 0) { fprintf(stderr, "trial_sternberg: digits: %s %s\n", yol_error(&ol), ygfx_error(&gfx)); return 1; }
     if (!font_real) printf("%s: the 5 x 7 bitmap digits instead\n", why);
-    memset(&fd, 0, sizeof fd);
-    fd.shape = YGFX_CROSS; fd.w = fd.h = 24; fd.shape_p[0] = 3;
-    fd.edge = YGFX_EDGE_COSINE; fd.edge_width = 1;
-    fd.color[0] = fd.color[1] = fd.color[2] = 0.6f;
-    fix = ygfx_shape(&fd);
-
-    memset(&cd, 0, sizeof cd);
-    cd.text = conditions_csv;
-    cd.len = sizeof conditions_csv - 1;
-    cd.arena = table_arena;
-    cd.arena_size = sizeof table_arena;
-    if (!ytb_open_csv(&tab, &cd)) { fprintf(stderr, "trial_sternberg: %s\n", ytb_error(&tab)); return 1; }
-    size_col = ytb_col(&tab, "set_size");
-    probe_col = ytb_col(&tab, "probe");
-    answer_col = ytb_col(&tab, "answer");
-    memset(&rd, 0, sizeof rd);
-    rd.table = &tab;
-    rd.reps = reps;
-    rd.order = YTR_ORDER_RANDOM;
-    rd.rng = ytr_splitmix;
-    rd.rng_ctx = &seed;
-    if (!ytr_open(&trials, &rd)) { fprintf(stderr, "trial_sternberg: %s\n", ytr_error(&trials)); return 1; }
-
-    memset(&td, 0, sizeof td);
-    td.events = storage;
-    td.event_capacity = 128;
-    td.n_channels = N_CHANNELS;
-    if (!ytl_open(&tl, &td)) { fprintf(stderr, "trial_sternberg: %s\n", ytl_error(&tl)); return 1; }
-
-    memset(&pd, 0, sizeof pd);
-    pd.choices = keys;
-    pd.n_choices = 2;
-    pd.duration_ns = YRT_S(RESPONSE_S);
-    pd.min_rt_ns = YRT_S(MIN_RT_S);
-    if (!yrsp_open(&rsp, &pd)) { fprintf(stderr, "trial_sternberg: %s\n", yrsp_error(&rsp)); return 1; }
-
-    out = fopen(out_path, "w");
-    if (!out) { fprintf(stderr, "trial_sternberg: cannot write %s\n", out_path); return 1; }
-    ytr_format_meta(&trials, meta, sizeof meta);
-    meta[strcspn(meta, "\r\n")] = 0;
-    yscr_describe(&scr, line, sizeof line);
-    fprintf(out, "# %s\n# %s\n# ysp_response %s; keyboard: %s; digits: %s; seed %llu\n", meta, line, yrsp_version(),
-            sim ? "synthetic (tier SIM)" : "SDL through yscr_event_input", font_real ? font_path : "5 x 7 bitmap",
-            (unsigned long long)seed);
-    fprintf(out, "trial_index,set_size,memory_set,probe,probe_present,answer,response,rt,correct,"
-                 "soa_2,soa_3,soa_4,soa_5,soa_6,probe_soa,items_tier,onset_tier,onset_src,rsp_tier,rsp_flags,"
-                 "n_early,n_anticipations\n");
-    printf("%s\n", line);
+    fix = ygfx_shape(&(ygfx_shape_desc){ .shape = YGFX_CROSS, .w = 24, .h = 24, .shape_p = { 3 },
+                                         .edge = YGFX_EDGE_COSINE, .edge_width = 1, .color = { 0.6f, 0.6f, 0.6f } });
     probe = digit_run(&probe_glyph, 0, AMBER);
+    ygfx_prime(&gfx);   /* the digits' set made the curve program after the open's prime (docs/gfx.md) */
 
-    ygfx_prime(&gfx);   /* each kind's first draw now, not on a trial's first frames (docs/gfx.md) */
-    for (;;) {
-        SDL_Event ev;
-        int64_t bt = 0;
-        yrsp_input in;
+    /* the conditions, in a random order */
+    if (!ytb_open_csv(&tab, &(ytb_csv_desc){ .text = conditions_csv, .len = sizeof conditions_csv - 1,
+                                             .arena = table_arena, .arena_size = sizeof table_arena }))
+        return fail(ytb_error(&tab));
+    size_col = ytb_col(&tab, "set_size");
+    probe_col = ytb_col(&tab, "probe_type");
+    answer_col = ytb_col(&tab, "answer");
+    if (!ytr_open(&trials, &(ytr_desc){ .table = &tab, .reps = reps, .order = YTR_ORDER_RANDOM, .rng = ytr_splitmix,
+                                        .rng_ctx = &order_rng }))
+        return fail(ytr_error(&trials));
+    if (!ytl_open(&tl, &(ytl_desc){ .events = storage, .event_capacity = 128, .n_channels = N_CHANNELS }))
+        return fail(ytl_error(&tl));
+    if (!yrsp_open(&rsp, &(yrsp_desc){ .choices = keys, .n_choices = 2, .duration_ns = YRT_S(RESPONSE_S),
+                                       .min_rt_ns = YRT_S(MIN_RT_S) }))
+        return fail(yrsp_error(&rsp));
+
+    /* the data file, and the settings beside it */
+    yscr_describe(&scr, line, sizeof line);
+    snprintf(meta, sizeof meta, "screen=%s\nysp_response=%s\nkeyboard=%s\ndigits=%s\nseed=%llu\n", line, yrsp_version(),
+             sim ? "synthetic (tier SIM)" : "SDL through yscr_event_input", font_real ? font_path : "5 x 7 bitmap",
+             (unsigned long long)seed);
+    snprintf(meta_path, sizeof meta_path, "%s.meta", out_path);
+    if (!ytr_data_open(&data, &(ytr_data_desc){ .path = out_path, .trials = &trials, .cols = cols,
+            .n_cols = (int)(sizeof cols / sizeof cols[0]), .meta_path = meta_path, .meta = meta }))
+        return fail(ytr_data_error(&data));
+    soa_col = ytr_data_col(&data, "probe_soa");   /* then soa_2 .. soa_6 */
+    printf("%s\n", line);
+
+    while (!aborted) {
         int rc = yscr_begin(&scr, &f);
         if (rc == YSCR_QUIT) { aborted = 1; break; }
-        if (rc != YSCR_OK) { fprintf(stderr, "trial_sternberg: %s\n", yscr_error(&scr)); failed = 1; break; }
-
-        /* the digits' and the probe's flip records: their onsets, final */
-        for (i = 0; i < f.n_done; i++) {
-            int j;
+        if (rc != YSCR_OK) { failed = fail(yscr_error(&scr)); break; }
+        for (i = 0; i < f.n_done; i++)   /* the digits' flip records: their onsets, final */
             for (j = 0; j < k; j++)
                 if (f.done[i].index == item_frame[j]) {
                     yrsp_onset o = yrsp_onset_flip(&f.done[i]);
                     item_t[j] = o.t_ns;
                     item_tier[j] = o.tier;
                 }
-            if (f.done[i].index == probe_frame) {
-                yrsp_onset o = yrsp_onset_flip(&f.done[i]);
-                yrsp_set_onset(&rsp, &o);
-            }
-        }
 
         if (!in_trial) {
             ytl_seq q;
-            const char* a;
             int pool[10];
             if (ytr_next(&trials, &ti) < 0) break;
             k = (int)ytb_num(&tab, ti.condition, size_col);
             present = !strcmp(ytb_text(&tab, ti.condition, probe_col), "present");
-            a = ytb_text(&tab, ti.condition, answer_col);
-            snprintf(answer, sizeof answer, "%s", a ? a : "");
+            answer = ytb_text(&tab, ti.condition, answer_col);
             if (k < 1 || k > MAX_SET) { fprintf(stderr, "trial_sternberg: set_size %d is not 1..%d\n", k, MAX_SET); failed = 1; break; }
             /* k digits without replacement (a partial shuffle); an absent
              * probe from the 10 - k left */
             for (i = 0; i < 10; i++) pool[i] = i;
             for (i = 0; i < k; i++) {
-                int j = i + (int)(ytr_splitmix(&digit_rng) * (10 - i)), tmp = pool[i];
-                pool[i] = pool[j]; pool[j] = tmp;
+                int m = i + (int)(ytr_splitmix(&digit_rng) * (10 - i)), tmp = pool[i];
+                pool[i] = pool[m]; pool[m] = tmp;
                 set[i] = pool[i];
             }
-            probe_digit = present ? set[(int)(ytr_splitmix(&digit_rng) * k)]
-                                  : pool[k + (int)(ytr_splitmix(&digit_rng) * (10 - k))];
+            r.probe = present ? set[(int)(ytr_splitmix(&digit_rng) * k)] : pool[k + (int)(ytr_splitmix(&digit_rng) * (10 - k))];
             for (i = 0; i < MAX_SET; i++) {
                 item[i] = digit_run(&item_glyph[i], i < k ? set[i] : 0, INK);
                 item_frame[i] = -1;
                 item_t[i] = 0;
                 item_tier[i] = 0;
             }
-            probe = digit_run(&probe_glyph, probe_digit, AMBER);
-            probe_frame = -1;
+            probe = digit_run(&probe_glyph, r.probe, AMBER);
 
             /* The whole trial as one table, checked before anything goes in. */
             n_ops = 0;
@@ -394,111 +379,81 @@ int main(int argc, char** argv) {
                 failed = 1;
                 break;
             }
-            yrsp_arm(&rsp, f.onset);
-            t_start = f.onset;
+            yrsp_arm(&rsp, f.onset);   /* presses from the fixation on are logged (EARLY) */
             in_trial = responding = 1;
             n_sim_ev = sim_next = 0;
-            for (i = 0; sim && i < (int)(sizeof sim_script / sizeof sim_script[0]); i++) {
-                const sim_press* p = &sim_script[i];
-                yrsp_input* e = &sim_ev[n_sim_ev];
-                if (p->trial != ti.index || p->early <= 0 || n_sim_ev + 2 > 8) continue;
-                memset(e, 0, sizeof *e);
-                e->t = t_start + YRT_S(p->early);
-                e->type = YRSP_PRESS;
-                e->control = (uint32_t)yrsp_scancode(answer);
-                e->stamp = YRSP_TIER_SIM;
-                e->value = 1;
-                sim_ev[n_sim_ev + 1] = *e;
-                sim_ev[n_sim_ev + 1].type = YRSP_RELEASE;
-                sim_ev[n_sim_ev + 1].value = 0;
-                sim_ev[n_sim_ev + 1].t = e->t + YRT_MS(80);
-                n_sim_ev += 2;
-            }
+            for (i = 0; sim && i < (int)(sizeof sim_script / sizeof sim_script[0]); i++)
+                if (sim_script[i].trial == ti.index && sim_script[i].early > 0)
+                    sim_add(f.onset + YRT_S(sim_script[i].early), answer);
         }
 
-        while (yscr_poll(&scr, &ev, NULL))
-            if (yscr_event_input(&scr, &ev, &in)) yrsp_feed(&rsp, &in);
+        yrsp_feed_screen(&scr, &rsp, 1);
         while (sim && sim_next < n_sim_ev && sim_ev[sim_next].t <= f.onset) yrsp_feed(&rsp, &sim_ev[sim_next++]);
 
-        if (responding && yrsp_update(&rsp, f.onset) == YRSP_ENDED) {
+        /* the probe frame's flip record, when it arrives, is the final
+         * onset; a response or the deadline ends the window */
+        if (yrsp_update_frame(&rsp, &f) == YRSP_ENDED && responding) {
             ytl_seq q = ytl_seq_on(&tl, TRIAL);
+            int64_t bt = 0;
             ytl_base_time(&tl, TRIAL, f.onset, &bt);
             ytl_at(&q, bt);
             ytl_off(&q, PROBE_ON);
             ytl_wait(&q, YRT_S(ITI_S));
             ytl_mark(&q, END_OF_TRIAL, 0);
-            if (q.err) { fprintf(stderr, "trial_sternberg: timeline error %d\n", q.err); failed = 1; break; }
+            if (q.err) { failed = fail(ytl_strerror(q.err)); break; }
             responding = 0;
         }
 
-        n = ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, fired, 16);
-        for (i = 0; i < n && i < 16; i++) {
+        n = ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, fired, 128);
+        for (i = 0; i < n; i++)   /* a digit landed: its record comes later */
             if (fired[i].kind == YTL_ONSET && fired[i].target >= ITEM0 && fired[i].target < ITEM0 + MAX_SET)
                 item_frame[fired[i].target - ITEM0] = fired[i].frame;
-            if (fired[i].kind == YTL_ONSET && fired[i].target == PROBE_ON) {
-                yrsp_onset o = yrsp_onset_landing(&fired[i]);
-                yrsp_set_onset(&rsp, &o);
-                probe_frame = fired[i].frame;
-                if (sim) {   /* the participant answers from the probe's onset */
-                    int j;
-                    for (j = 0; j < (int)(sizeof sim_script / sizeof sim_script[0]); j++) {
-                        const sim_press* p = &sim_script[j];
-                        yrsp_input* e = &sim_ev[n_sim_ev];
-                        if (p->trial != ti.index || p->early > 0 || n_sim_ev + 2 > 8) continue;
-                        memset(e, 0, sizeof *e);
-                        e->t = o.t_ns + YRT_S(sim_rt(k, present));
-                        e->type = YRSP_PRESS;
-                        e->control = (uint32_t)yrsp_scancode(p->which == 1 ? answer : !strcmp(answer, "f") ? "j" : "f");
-                        e->stamp = YRSP_TIER_SIM;
-                        e->value = 1;
-                        sim_ev[n_sim_ev + 1] = *e;
-                        sim_ev[n_sim_ev + 1].type = YRSP_RELEASE;
-                        sim_ev[n_sim_ev + 1].value = 0;
-                        sim_ev[n_sim_ev + 1].t = e->t + YRT_MS(80);
-                        n_sim_ev += 2;
-                    }
-                }
-            }
+        /* the probe landed on this frame: its planned onset, for now */
+        landed = yrsp_set_landing(&rsp, fired, n, PROBE_ON);
+        if (landed >= 0 && sim && ti.index < SIM_TRIALS) {   /* the participant answers from the plan */
+            sim_plan[ti.index] = fired[landed].onset;
+            for (j = 0; j < (int)(sizeof sim_script / sizeof sim_script[0]); j++)
+                if (sim_script[j].trial == ti.index && sim_script[j].early <= 0)
+                    sim_add(sim_plan[ti.index] + YRT_S(sim_rt(k, present)),
+                            sim_script[j].which == 1 ? answer : !strcmp(answer, "f") ? "j" : "f");
+        }
+        for (i = 0; i < n; i++)
             if (fired[i].kind == YTL_MARK && fired[i].code == END_OF_TRIAL) {
-                char rt[32], soa[MAX_SET + 1][32], mem[2 * MAX_SET + 1];
-                int correct, j, worst = 0;
+                /* the trial is over, and the records of its digits and its probe are in */
+                int worst = 0, nk = k < 0 ? 0 : k > MAX_SET ? MAX_SET : k;   /* the clamp lets gcc see the bounds */
                 yrsp_finish(&rsp, &res);
-                correct = (res.flags & YRSP_R_RESPONDED) && !strcmp(keys[res.response].key, answer);
-                sec(rt, sizeof rt, res.rt_ns == YRSP_NO_TIME ? NAN : YRT_TO_S(res.rt_ns));
-                /* k was checked against MAX_SET when the trial began; the
-                 * clamp lets gcc see that mem cannot overflow */
-                int nk = k < 0 ? 0 : k > MAX_SET ? MAX_SET : k;
+                r.trial_index = ti.index;
+                r.probe_present = present;
+                r.correct = (res.flags & YRSP_R_RESPONDED) && !strcmp(keys[res.response].key, answer);
                 for (j = 0; j < nk; j++) {
-                    mem[2 * j] = (char)('0' + set[j]);
-                    mem[2 * j + 1] = ' ';
+                    r.memory_set[2 * j] = (char)('0' + set[j]);
+                    r.memory_set[2 * j + 1] = ' ';
                     if (item_tier[j] > worst) worst = item_tier[j];
                 }
-                mem[nk ? 2 * nk - 1 : 0] = 0;
-                for (j = 1; j < MAX_SET; j++)   /* soa[j]: digit j's onset minus digit j-1's */
-                    sec(soa[j], sizeof soa[j], j < k && item_t[j] && item_t[j - 1] ? (double)(item_t[j] - item_t[j - 1]) / 1e9 : NAN);
-                sec(soa[0], sizeof soa[0], res.t_onset && item_t[k - 1] ? (double)(res.t_onset - item_t[k - 1]) / 1e9 : NAN);
-                fprintf(out, "%d,%d,%s,%d,%d,%s,%s,%s,%d,%s,%s,%s,%s,%s,%s,%d,%u,%u,%u,%u,%d,%d\n", ti.index, k, mem,
-                        probe_digit, present, answer, res.response_name ? res.response_name : "", rt, correct, soa[1],
-                        soa[2], soa[3], soa[4], soa[5], soa[0], worst, (unsigned)res.onset_tier, (unsigned)res.onset_src,
-                        (unsigned)res.stamp_tier, (unsigned)res.flags, res.n_early, res.n_anticipations);
-                fflush(out);
-                printf("trial %2d set %-11s probe %d rt %s response %s %s; soa %s %s %s %s %s probe %s\n", ti.index, mem,
-                       probe_digit, rt[0] ? rt : "-", res.response_name ? res.response_name : "-",
-                       !(res.flags & YRSP_R_RESPONDED) ? "(too slow)" : correct ? "correct" : "wrong", soa[1], soa[2],
-                       soa[3], soa[4], soa[5], soa[0]);
-                if (correct) { sum_k += k; sum_rt += YRT_TO_S(res.rt_ns); sum_kk += (double)k * k; sum_krt += k * res.rt_ns; n_fit++; }
-                ytr_update(&trials, (res.flags & YRSP_R_RESPONDED) ? correct : YTR_INVALID, NULL);
+                r.memory_set[nk ? 2 * nk - 1 : 0] = 0;
+                r.items_tier = worst;
+                /* soa[j]: digit j's onset minus digit j-1's; soa[0]: the probe's minus the last digit's */
+                soa[0] = res.t_onset && item_t[nk - 1] ? res.t_onset - item_t[nk - 1] : YTR_MISSING_NS;
+                for (j = 1; j < MAX_SET; j++)
+                    soa[j] = j < nk && item_t[j] && item_t[j - 1] ? item_t[j] - item_t[j - 1] : YTR_MISSING_NS;
+                ytr_update(&trials, (res.flags & YRSP_R_RESPONDED) ? r.correct : YTR_INVALID, NULL);
+                for (j = 0; j < MAX_SET; j++) ytr_data_set_time_ns(&data, soa_col + j, soa[j]);
+                if (yrsp_data_set(&data, &res) < 0 || ytr_data_write(&data, &r) < 0) failed = fail(ytr_data_error(&data));
+                if (!(res.flags & YRSP_R_RESPONDED)) printf("trial %2d set %-11s probe %d too slow", ti.index, r.memory_set, r.probe);
+                else printf("trial %2d set %-11s probe %d rt %.3f s, %s", ti.index, r.memory_set, r.probe,
+                            YRT_TO_S(res.rt_ns), r.correct ? "correct" : "wrong");
+                printf("; probe soa %.3f s\n", soa[0] == YTR_MISSING_NS ? NAN : YRT_TO_S(soa[0]));
+                if (r.correct) { sum_k += k; sum_rt += YRT_TO_S(res.rt_ns); sum_kk += (double)k * k; sum_krt += k * YRT_TO_S(res.rt_ns); n_fit++; }
                 if (ti.index < SIM_TRIALS) {
                     sim_res[ti.index] = res;
                     sim_k[ti.index] = k;
                     sim_present[ti.index] = present;
-                    sim_correct[ti.index] = correct;
-                    for (j = 0; j <= MAX_SET; j++) sim_soa[ti.index][j] = soa[j][0] ? atof(soa[j]) : NAN;
+                    sim_correct[ti.index] = r.correct;
+                    for (j = 0; j < MAX_SET; j++) sim_soa[ti.index][j] = soa[j] == YTR_MISSING_NS ? NAN : YRT_TO_S(soa[j]);
                 }
                 rows++;
                 in_trial = 0;
             }
-        }
         ygfx_apply(binds, (int)(sizeof binds / sizeof binds[0]), ytl_values(&tl));
         yscr_mark(&scr, YSCR_PHASE_EVALUATE);
         ygfx_begin(&gfx, &f);
@@ -508,7 +463,7 @@ int main(int argc, char** argv) {
         ygfx_end(&gfx);
         yscr_flip(&scr);
     }
-    fclose(out);
+    if (ytr_data_finish(&data) < 0) failed = fail(ytr_data_error(&data));
     ygfx_close(&gfx);
     yscr_close(&scr);
     yol_close(&ol);
@@ -523,27 +478,28 @@ int main(int argc, char** argv) {
         double period = (double)f.period / 1e9;
         if (bad) fprintf(stderr, "trial_sternberg: --sim: %d rows, not %d\n", rows, SIM_TRIALS);
         for (i = 0; i < rows && i < SIM_TRIALS; i++) {
-            const yrsp_result* r = &sim_res[i];
-            int ok = 1, j;
+            const yrsp_result* q = &sim_res[i];
+            int ok = 1;
             /* The simulated display runs on the host's clock: while a
              * loaded host's frame loop is behind, begin() plans later
              * vblanks, as on a real display, and a digit lands on a later
              * frame. An SOA then differs by whole periods: 2 and 3 under 12
              * CPU-bound processes (measured 2026-10-10; one period was
              * allowed before, and 2 runs in 10 failed). */
-            for (j = 0; j <= MAX_SET; j++) {
+            for (j = 0; j < MAX_SET; j++) {
                 double want = j == 0 ? ITEM_S + RETENTION_S : ITEM_S + GAP_S, d = fabs(sim_soa[i][j] - want);
                 if (j > 0 && j >= sim_k[i]) ok = ok && sim_soa[i][j] != sim_soa[i][j];   /* empty past the set */
                 else ok = ok && fabs(d - period * floor(d / period + 0.5)) < 1e-6;
             }
-            if (i == 4) ok = ok && !(r->flags & YRSP_R_RESPONDED) && (r->flags & YRSP_R_TIMEOUT);
-            else ok = ok && (r->flags & YRSP_R_RESPONDED) && fabs(YRT_TO_S(r->rt_ns) - sim_rt(sim_k[i], sim_present[i])) < 1e-6;
-            ok = ok && r->n_early == (i == 1);
+            if (i == 4) ok = ok && !(q->flags & YRSP_R_RESPONDED) && (q->flags & YRSP_R_TIMEOUT);
+            else ok = ok && (q->flags & YRSP_R_RESPONDED) && /* script from the plan, RT from the flip record */
+                      llabs(q->rt_ns + (q->t_onset - sim_plan[i]) - YRT_S(sim_rt(sim_k[i], sim_present[i]))) <= 1000;
+            ok = ok && q->n_early == (i == 1);
             ok = ok && sim_correct[i] == (i != 2 && i != 4);
-            ok = ok && r->onset_tier == YSCR_TIER_SIM && r->onset_src == YRSP_ONSET_FLIP;
+            ok = ok && q->onset_tier == YSCR_TIER_SIM && q->onset_src == YRSP_ONSET_FLIP;
             if (!ok) {
                 fprintf(stderr, "trial_sternberg: --sim: trial %d: set %d rt %.9f flags 0x%x n_early %d soa %.9f %.9f\n", i,
-                        sim_k[i], YRT_TO_S(r->rt_ns), (unsigned)r->flags, r->n_early, sim_soa[i][1], sim_soa[i][0]);
+                        sim_k[i], YRT_TO_S(q->rt_ns), (unsigned)q->flags, q->n_early, sim_soa[i][1], sim_soa[i][0]);
                 bad = 1;
             }
         }

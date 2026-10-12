@@ -780,6 +780,22 @@ helpers where they fit:
 | `trial_stop_signal` | 422 to 420 | 297 to 277 | 116 to 115 | open, feed, update, landing | yes |
 | `trial_2afc_adaptive` | 512 to 510 | 345 to 327 | 90 to 82 | open, feed, update, landing | yes |
 | `trial_stroop` | 510 to 492 | 353 to 333 | 103 to 90 | open, feed, update, landing | no |
+| `trial_rdk` (`examples/rdk/`) | 453 to 395 | 324 to 255 | 107 to 87 | open, feed, update, landing | yes |
+| `trial_images` (`examples/pack/`) | 455 to 419 | 311 to 258 | 98 to 76 | open, feed, update, landing | yes, without the session's columns |
+| `trial_sternberg` (`examples/timeline/`) | 554 to 510 | 362 to 319 | 130 to 109 | open, feed, update, landing | yes |
+
+The last three rows are the examples outside `examples/response/` that
+had the same plumbing, converted on 2026-10-11. Each `--sim` now times
+its keys from the stimulus's planned onset and checks the RT against the
+flip record's onset (`rt + (t_onset - plan)`), so a frame that lands late
+under load does not fail the check. `trial_images` writes no session
+columns: its pack's table has a `block` column (navon, rotation), the
+name of the session's block number, so the session's line goes to
+`FILE.meta` by hand. `trial_sternberg`'s conditions column `probe` (present
+or absent) is now `probe_type`, because the row's `probe` is the digit.
+The conversion found a bug in `trial_sternberg`'s set-size slope on
+stdout: since v0.3.0's nanosecond times it added `k * rt_ns` to a sum in
+seconds. The data file was not affected.
 
 The counts: `total` is `wc -l`; `code` is the non-blank, non-comment
 lines without the `--sim` participant (a line that names a `sim` variable
@@ -792,8 +808,11 @@ it plans the tone when the go stimulus lands and moves it when the record
 differs.
 
 The data writer is in `trial_keyboard`, `trial_same_different`,
-`trial_audio_keyboard`, `trial_stop_signal` and `trial_2afc_adaptive`.
-Not in the others: `trial_srt` opens a new trial list for each block,
+`trial_audio_keyboard`, `trial_stop_signal`, `trial_2afc_adaptive`,
+`trial_rdk`, `trial_images` and `trial_sternberg`. In the last three, the
+settings (the screen, the response header, the `ysp/rdk.h` desc, the
+pack's id) moved from `#` lines in the CSV to `FILE.meta`. Not in the
+others: `trial_srt` opens a new trial list for each block,
 which a writer bound to one session does not follow; `trial_adjustment`
 and `trial_mouse_tracking` write a trajectory file beside the trial file
 and their columns are mostly their own; `trial_stroop` writes its rules
@@ -829,6 +848,21 @@ within the spread of the before runs (0.113 to 0.144 ms before, 0.119 to
 the background: DWM showed it at 15 Hz and every record was ESTIMATED, in
 both builds. A window that does not get the foreground is not a timing
 run.
+
+`trial_rdk` before and after its conversion (2026-10-11 and 2026-10-12),
+the same wrapper and conditions, in a window: 16 trials with no key
+(`--reps 2 --seed 7`), five runs of each, interleaved. The first 120
+frames of each run are left out.
+
+| Runs | Frames each | Late | Late target | Early | Tier | Interval mean, sd, max (ms) | CPU p50 (ms) | CPU p99 (ms) |
+|---|---|---|---|---|---|---|---|---|
+| before, 5 | 2596 to 2599 | 0 | 0 | 0 | 1 | 16.6664, 0.0006 to 0.0010, 16.669 to 16.678 | 0.166 to 0.209 | 0.346 to 0.578 |
+| after, 5 | 2598 to 2599 | 0 | 0 | 0 | 1 | 16.6664, 0.0006 to 0.0009, 16.669 to 16.670 | 0.161 to 0.186 | 0.372 to 0.513 |
+
+No flip moved after frame 120. Among the first 120 frames, frame 0 of one
+after run was a frame late (24 ms, on the composed path while the window
+took the foreground); no other frame of the ten runs was late. Frame 0
+is the first trial's fixation, 0.5 s before the dots.
 
 ### Tests and mutations
 
