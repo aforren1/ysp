@@ -1,0 +1,27 @@
+Times in microseconds. Columns: median p5 p95 p99 max; werr also min.
+onset = board's first edge (mapped) - call start; werr = board width - requested;
+call = call return - call start; off_lat = board's trailing edge (mapped) - trailing call start.
+
+ cell mode                w ms    n miss  fit+-  gap | onset | werr | call | off_lat | host_werr
+ 3001 pyserial_rts           5   40   40  194.8    7 | nan nan nan nan nan | nan nan nan nan nan min nan | 62.4 29.1 95.0 119.2 119.2 | nan nan nan nan nan | 364.7 110.8 729.8 844.9 844.9
+ 1001 raw_rts                5   40   40  151.4    7 | nan nan nan nan nan | nan nan nan nan nan min nan | 31.6 18.2 49.9 63.5 63.5 | nan nan nan nan nan | 0.2 0.1 0.4 59.5 59.5
+ 3000 ysp_py_rts             5   40   40  118.2    7 | nan nan nan nan nan | nan nan nan nan nan min nan | 35.5 20.0 60.2 71.4 71.4 | nan nan nan nan nan | 368.8 143.1 695.3 785.4 785.4
+ 1000 ysp_rts                5   40   40  196.7    7 | nan nan nan nan nan | nan nan nan nan nan min nan | 33.1 17.7 42.6 47.8 47.8 | nan nan nan nan nan | 0.2 0.0 0.5 3.4 3.4
+
+Pooled over the cells given (runs), per mode and width: n, missed | werr median p5 p95 p99 max min
+pyserial_rts           5    40   40 | nan nan nan nan nan nan
+raw_rts                5    40   40 | nan nan nan nan nan nan
+ysp_py_rts             5    40   40 | nan nan nan nan nan nan
+ysp_rts                5    40   40 | nan nan nan nan nan nan
+
+Pooled over widths and runs, per mode: n | onset median p5 p95 p99 max | call median p99 max (ysp_pulse, ysp_py_pulse: minus the width) | per-cell onset medians | fit +- range
+pyserial_rts            0 | nan nan nan nan nan | 62.4 119.2 119.2 | nan to nan | 194.8 to 194.8
+raw_rts                 0 | nan nan nan nan nan | 31.6 63.5 63.5 | nan to nan | 151.4 to 151.4
+ysp_py_rts              0 | nan nan nan nan nan | 35.5 71.4 71.4 | nan to nan | 118.2 to 118.2
+ysp_rts                 0 | nan nan nan nan nan | 33.1 47.8 47.8 | nan to nan | 196.7 to 196.7
+
+Fits: cell, points, slope (ns per board us), bound min/max (us), largest residual (us), worker policy
+ 1000   3 1000.003819 95.6/196.7 17.9 TIME_CRITICAL
+ 1001   3 999.989452 123.0/151.4 10.4 none
+ 3000   3 999.998736 80.0/118.2 5.9 TIME_CRITICAL
+ 3001   3 999.992228 85.3/194.8 43.0 none

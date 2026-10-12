@@ -6,10 +6,12 @@ gives the data that the repository recorded for each. It does not replace
 the manuals: the header's top comment is the reference, and
 docs/device.md and docs/net.md have the step-by-step guides.
 
-**Important:** none of these paths has sent a code to real hardware yet.
-No parallel port, serial port, trigger box or LabStreamer was attached to
+**Important:** none of these paths has sent a code to a trigger box or a
+recorder yet. No parallel port, trigger box or LabStreamer was attached to
 the development machine (device.h STATUS, docs/device.md "What needs the
-user's hardware", docs/net.md "Not done"). Measure your path on your rig
+user's hardware", docs/net.md "Not done"). The serial path ran against a
+Teensy 4.0 that stamps what it receives (docs/serial.md, "Pulses: onset and
+width"); that gives the time to the device, not to an output pin. Measure your path on your rig
 before you use its numbers: `device_out_latency` (docs/device.md, "How-to:
 measure an output's write-to-edge latency") and a photodiode do this.
 
@@ -72,7 +74,7 @@ Windows 11 laptop (i7-1360P), from the doc named.
 | device.h | Cost of `ydev_out_pulse()` to the caller | the same | p50 5.3 to 8.7 us, p99 28 to 60 us | docs/device.md, Results |
 | net.h | The sink's receive minus the push, one process | real liblsl 1.17.7, Windows, local loopback, measurement lock | p50 89 to 121 us, p99 269 to 299 us | docs/net.md, "Real liblsl: Windows and WSL2" |
 | parallel.h | anything | | not measured: no LPT port | parallel.h, STATUS |
-| serial.h | anything | | not measured: no serial port | serial.h, STATUS; docs/serial.md |
+| serial.h | Call start to the device's receipt of a pulse; pulse width at the device minus requested | Teensy 4.0 echo board (USB CDC, `usbser.sys`), not a trigger box; 1 to 10 ms widths, 1600 pulses per API | Onset median 83 us (DTR) and 176 to 185 us (byte), p99 140 and 275 to 311 us; width +340 to +424 us median, +583 to +688 us p99; RTS pulses never arrive | docs/serial.md, "Pulses: onset and width" |
 
 Under other load, LSL markers once reached a p50 of 42 and 685 ms (not
 diagnosed; docs/net.md). A path through USB adds the USB frame: 1 ms at
