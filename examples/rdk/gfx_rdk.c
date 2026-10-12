@@ -90,7 +90,7 @@ static int64_t page_t0, trial_t0, last_t;
 static yrdk_step steps[MAX_STEPS];
 static int n_steps;
 
-enum { DOTS_ON, COH, DIR, MASK_ON, N_CH };
+enum { DOTS_ON, COH, DIRECTION, MASK_ON, N_CH };
 enum { TRIAL = 1 };
 
 static ygfx_bind binds[4];
@@ -230,7 +230,7 @@ static int setup(void) {
     ytl_wait(&q, YRT_MS(700));
     memset(&turn, 0, sizeof turn);
     turn.from = 0; turn.from_set = true; turn.to = 90; turn.duration_ns = YRT_MS(300); turn.ease = YTL_EASE_COSINE;
-    ytl_then(&q, DIR, &turn);
+    ytl_then(&q, DIRECTION, &turn);
     ytl_off(&q, DOTS_ON);
     ytl_on(&q, MASK_ON);
     ytl_wait(&q, YRT_MS(300));
@@ -268,7 +268,7 @@ static int setup(void) {
     memset(binds, 0, sizeof binds);
     binds[0].stim = &dots; binds[0].param = YGFX_P_VISIBLE; binds[0].channel = DOTS_ON;
     binds[1].field = &rdk.coherence; binds[1].channel = COH;
-    binds[2].field = &rdk.direction; binds[2].channel = DIR;
+    binds[2].field = &rdk.direction; binds[2].channel = DIRECTION;
     binds[3].stim = &mask; binds[3].param = YGFX_P_VISIBLE; binds[3].channel = MASK_ON;
     return 0;
 }

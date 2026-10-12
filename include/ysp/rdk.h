@@ -1,4 +1,4 @@
-/* ysp/rdk.h - v0.2.0 - public domain single-header random dot kinematograms
+/* ysp/rdk.h - v0.2.1 - public domain single-header random dot kinematograms
  *
  *   The motion of a random dot kinematogram (RDK) on the CPU: coherence,
  *   direction, speed, density, dot lifetime, the noise rule and the signal
@@ -376,6 +376,10 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.2.1 - builds under GCC 12 with -Werror again: it took a placement's
+ *          scratch words for maybe uninitialized (they are written on the
+ *          first odd try, before an even one reads them); they start at
+ *          0 now. No rule changed: every dot and digest is v0.2.0's.
  *   v0.2.0 - the repository conventions (README.md). Breaks the API:
  *          yrdk_open() returns bool (the message was already in
  *          yrdk_error()); desc.lifetime (float seconds) is int64_t
@@ -434,8 +438,8 @@
 
 #define YRDK_VERSION_MAJOR 0
 #define YRDK_VERSION_MINOR 2
-#define YRDK_VERSION_PATCH 0
-#define YRDK_VERSION_STRING "0.2.0"
+#define YRDK_VERSION_PATCH 1
+#define YRDK_VERSION_STRING "0.2.1"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -1188,7 +1192,9 @@ static void yrdk__words_n(const yrdk_field* f, uint32_t lo, int n, uint32_t u, u
 static void yrdk__place(yrdk_field* f, uint32_t dot, uint32_t u, const uint32_t w0[4]) {
     int64_t hx = f->hx_, hy = f->hy_;
     int32_t* p = f->xy_ + 2 * (size_t)dot;
-    uint32_t w[4];
+    /* zeroed for GCC 12's -Wmaybe-uninitialized: an odd try fills it
+     * before an even one reads it */
+    uint32_t w[4] = { 0, 0, 0, 0 };
     int k;
     f->stats.placed++;
     for (k = 0; k <= 32; k++) {

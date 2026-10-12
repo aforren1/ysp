@@ -27,7 +27,7 @@ C11 or C++17, and its top comment is its manual.
 | [rigfile](docs/device.md#how-to-keep-a-rigs-devices-and-latencies-in-its-rig-profile) | `yrig_` | Rig profile: devices per role, loopback results | 0.3.0 | no device |
 | [net](docs/net.md) | `ynet_` | Lab Streaming Layer markers and streams | 0.3.0 | no device |
 | [color](docs/color.md) | `ycol_` | Display calibration and color space conversions | 0.2.0 | tested |
-| [rdk](docs/rdk.md) | `yrdk_` | Random dot kinematograms, reproducible bit for bit | 0.2.0 | tested |
+| [rdk](docs/rdk.md) | `yrdk_` | Random dot kinematograms, reproducible bit for bit | 0.2.1 | tested |
 | [outline](docs/outline.md) | `yol_` | Paths, font glyphs and SVG into curve sets | 0.3.2 | tested |
 | [screen](docs/screen.md) | `yscr_` | Stimulus window, flip at a time, flip records; Linux X11 and web backends | 0.8.0 | 2 machines |
 | [audio](docs/audio.md) | `yau_` | Sound at a time on the rig clock | 0.5.0 | 2 machines |

@@ -33,8 +33,9 @@ def s(ns):
 def test_version_matches_pyproject():
     text = open(os.path.join(os.path.dirname(HERE), "pyproject.toml")).read()
     assert re.search(r'^version = "([^"]+)"', text, re.M).group(1) == rdk.__version__
-    # the fourth number counts changes to the binding alone
-    assert rdk.__version__.startswith(rdk.version() + ".")
+    # a fourth number counts changes to the binding alone; it goes away
+    # when the header's version moves (docs/bindings.md)
+    assert rdk.__version__ == rdk.version() or rdk.__version__.startswith(rdk.version() + ".")
 
 
 def test_exact_pieces():
