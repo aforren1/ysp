@@ -40,11 +40,17 @@ uv run --no-project python serial_bench.py --port COM3 --ysp <dir>/ysp_serial-0.
 uv run --no-project python serial_bench.py --port COM3 --ysp <dir>/ysp_serial-0.5.0.2-cp38-abi3-win_amd64.whl --apis ysp,ioport_tuned,ioport,pyserial --out run2 --label "Teensy 4.0 echo, run 2"
 ```
 
-One run takes about 6 minutes (estimated; IOPort's writes beside its
-background reader take seconds each). Without `--port`, only the `clock`
+One run of all four APIs took 297 and 315 s on the test laptop (2026-10-12).
+Most of the variation is IOPort: each of its writes beside its background
+reader takes seconds. Without `--port`, only the `clock`
 and `noport` parts run. `--parts rt,stream` runs fewer parts.
 `--set n_rt=100` changes a count (the names are those of `serial_bench.m`).
 `--python 3.13` selects the interpreter (the default).
+
+The median of a port changes from day to day. Run `raw_win32.exe`
+([../serial_bench/](../serial_bench/README.md#the-tuned-ioport-and-the-raw-win32-floor))
+in the same session, twice, the second time with `rev`, and compare each
+API with that floor, not with the floor of another day.
 
 ## Read the results
 
@@ -63,6 +69,7 @@ What differs from the MATLAB bench:
 |---|---|
 | Stream modes of pyserial | `line` (`read(26)`), `readline` (`readline()`, the common idiom), `poll` (`in_waiting`, then `read`), `async` (`serial.threaded.ReaderThread`) |
 | Echo probes around each stream | 2 to 3 ms apart instead of 0 to 1 ms: Python sends them faster, and 200 probes 0 to 1 ms apart fall in one 200 ms bucket of the fit |
+| Writes beside an async reader | Timed with a reader of their own, which stops before the stream's echo probes start. IOPort's writes take seconds, and in a trial run a fit that spanned them had no slope and put the stamps 1.3 ms early |
 | `noport` | adds `py_call_floor` (an empty Python call) and `py_error_baseline` (a raise and catch) |
 | `cpu_pct` | `time.process_time()` of the Python process, all its threads |
 | pyserial `read_empty` | `read(64)` with `timeout=0`. pyserial then calls `ClearCommError` and no `ReadFile`. Setting `timeout` reconfigures the port, so the part sets it once, outside the timed loop |

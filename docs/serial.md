@@ -1069,6 +1069,175 @@ No installation and no administrator rights were necessary. To use the
 installed Psychtoolbox instead, set up its license (`PsychLicenseHandling`)
 and omit `ioport_dir`.
 
+### Results in Python (pyserial, psychtoolbox, ysp.serial)
+
+`tests/compare/serial_bench_py/serial_bench.py` is the Python version of the
+MATLAB bench: the same parts, parameters, metrics and board-stamp fit. It
+compares pyserial, the `IOPort` of the Psychtoolbox wheel and `ysp.serial`.
+Its README tells how to run it and what differs from the MATLAB bench.
+
+The Psychtoolbox wheel. PyPI `psychtoolbox` 3.0.22.2 (2026-06-22) ships
+`IOPort`, `GetSecs`, `WaitSecs`, `PsychHID` and `PsychPortAudio` as Python
+extension modules. Its `IOPort.pyd` imports no `LexActivator.dll`, so it
+needs no license, unlike the MATLAB `IOPort.mexw64` of 3.0.20 and later. Its
+`IOPort.c` and `PsychSerialWindowsGlue.c` are identical to those of tag
+3.0.19.16 (diff of the sdist against the audit's source), so the audit's line
+references hold. The bench ran the wheel in its own isolated environment and
+only to measure.
+
+Conditions: 2026-10-12 07:38 to 07:48, the machine of the MATLAB runs
+(Windows 11 10.0.26200, Intel Core i7-1360P, AC power; the shared guard
+waited for a quiet machine, load 4 % and 8 % at the start). CPython 3.13.7
+(uv-managed), one process and one new uv environment per API. pyserial 3.5,
+psychtoolbox 3.0.22.2 (IOPort 3.0.22), `ysp-serial` 0.5.0.2 built with MSVC
+from branch `worktree-agent-a2d77dd216821ed1d`. The Teensy 4.0 echo board on
+COM3; its identity line was `I ysp-line 1 teensy echo` in every API. Two runs:
+run 1 in the order pyserial, ioport, ioport_tuned, ysp; run 2 in the reverse
+order. Then `raw_win32.exe` of the audit, twice, the second time with its
+modes reversed. Each cell gives run 1, run 2. Times in microseconds. The
+summaries are in `tests/compare/serial_bench_py/results/2026-10-12-teensy40/`.
+
+The floor of the port was higher on this day than on the day of the audit:
+the raw stream latency was 227 to 251 and 130 to 243 us median, against 121
+to 155 us then. Compare each row with the raw row of the same table, not
+with the MATLAB tables.
+
+Round trip, 1000 exchanges per cell, no failures. The one-way times are good
+to the fit bound, 36 to 66 us.
+
+| API | Read | RTT median | RTT p99 | Host to board | Board to host, median | Board to host, p99 |
+|---|---|---|---|---|---|---|
+| raw Win32, 5 modes | blocking | 158 to 195, 162 to 244 | 397 to 548, 273 to 524 | 66 to 76, 64 to 103 | 81 to 119, 85 to 135 | 318 to 472, 171 to 418 |
+| ysp | `read(35, 1, all=True)` | 159, 175 | 289, 318 | 74, 87 | 85, 82 | 194, 214 |
+| ysp | `read(n, 0)` loop | 157, 146 | 494, 326 | 68, 66 | 86, 82 | 404, 231 |
+| pyserial | `read(35)`, `timeout=1` | 166, 190 | 415, 416 | 73, 73 | 91, 114 | 319, 343 |
+| pyserial | `in_waiting` loop | 184, 216 | 515, 517 | 75, 73 | 110, 147 | 442, 433 |
+| IOPort tuned | blocking | 259, 176 | 544, 418 | 93, 81 | 174, 97 | 449, 294 |
+| IOPort tuned | poll | 247, 262 | 692, 943 | 87, 90 | 168, 175 | 610, 741 |
+| IOPort | blocking | 293, 289 | 1977, 2365 | 98, 110 | 196, 179 | 1884, 2254 |
+| IOPort | poll | 222, 248 | 536, 577 | 91, 95 | 134, 155 | 426, 452 |
+
+Stream, 10000 lines at 1000 per second, no line missed and no bad line in
+any cell. Latency is the time the API reports the line minus the board's
+send stamp: the host time after the read returned, or for the async readers
+the reader's own stamp. The async CPU includes the reader thread; the main
+thread is in `time.sleep(0.1)`.
+
+| API | Mode | Latency median | Latency p99 | CPU, % of one core |
+|---|---|---|---|---|
+| raw Win32, 5 modes | blocking read, own loop | 227 to 251, 130 to 243 | 449 to 466, 302 to 526 | 1.4 to 4.8, 1.7 to 3.6 |
+| ysp | `read(26, 0.2, all=True)` per line | 240, 186 | 503, 541 | 4.8, 5.6 |
+| ysp | `read(4096, 0)` loop | 164, 183 | 311, 370 | 99.1, 99.2 |
+| ysp | async reader, its stamp | 280, 137 | 525, 453 | 2.6, 2.3 |
+| pyserial | `read(26)` per line | 244, 240 | 493, 496 | 5.6, 5.9 |
+| pyserial | `readline()` | 570, 531 | 1191, 1127 | 35.9, 37.4 |
+| pyserial | `in_waiting` loop | 170, 174 | 337, 338 | 99.5, 99.7 |
+| pyserial | `ReaderThread`, stamp in `data_received` | 310, 223 | 583, 509 | 10.0, 10.7 |
+| IOPort tuned | blocking read per line (`when`) | 307, 266 (273, 234) | 544, 568 (479, 493) | 10.2, 10.0 |
+| IOPort tuned | poll loop | 162, 170 | 336, 348 | 98.9, 98.6 |
+| IOPort tuned | background reader, its stamp | 264, 227 | 490, 497 | 10.6, 10.0 |
+| IOPort | blocking read per line (`when`) | 1108, 1164 (1090, 1139) | 2266, 2299 (2241, 2267) | 8.8, 12.0 |
+| IOPort | poll loop | 165, 150 | 321, 275 | 99.2, 99.2 |
+| IOPort | background reader, its stamp | 238, 222 | 463, 448 | 9.5, 9.0 |
+
+A one-byte write while the API's async reader waits for a byte, median (max):
+ysp 336, 517 (553, 654); pyserial 460, 436 (649, 487); IOPort 3.0 s,
+7.0 s (12 s, 10 s); IOPort tuned 10.0 s, 3.0 s (10 s, 7.0 s). Five writes
+for IOPort, 20 for the others.
+
+Call costs, median, run 1, run 2:
+
+| Call | pyserial | IOPort (default, tuned) | ysp | MATLAB, audit (ysp, IOPort) |
+|---|---|---|---|---|
+| Clock pair | 0, 0 (`perf_counter`, mean 0.03 to 0.04) | 3.6 to 3.7 (`GetSecs`) | 0, 0 (`now`, mean 0.03) | 0.8, 4.4 |
+| Cheapest call | | 0.47 to 0.63 (`Verbosity`) | 0.037 to 0.039 (`now`) | 0.5, 0.8 |
+| Empty Python call | 0.018 to 0.026 | | | |
+| Read, nothing waiting | 16.3, 3.1 | 12.6 to 12.8 | 1.2, 1.2 | 3 to 4.5, 17.8 to 36 |
+| Bytes available | 12.6, 2.5 | 6.3 to 6.5 | 1.6, 1.7 | 5, 19.5 |
+| Read, 35 bytes waiting | 32.9, 8.1 | 15.1 to 15.8 | 2.5, 2.2 | |
+| Write, 1 to 512 bytes | 198 to 364 | 166 to 412 | 125 to 155, 211 to 347 | 149 to 205, 225 to 375 |
+| Open | 1647, 1631 | 2081 to 2234 | 1818, 2484 | 3637, 2277 |
+| Close | 394, 421 | 1524 to 1630 | 465, 687 | |
+| Port enumeration, 1 port | 2702, 3054 (`comports()`) | none | 233, 257 | |
+
+How pyserial uses the port on Windows (pyserial 3.5, `serial/serialwin32.py`,
+`serial/serialutil.py`, `serial/threaded/__init__.py`):
+
+| What | pyserial |
+|---|---|
+| Open | `CreateFile` with `FILE_FLAG_OVERLAPPED` (serialwin32.py:54-61), `SetupComm(4096, 4096)` (:74), `SetCommMask(EV_ERR)` (:128) |
+| Timeouts | Set when `timeout` is set, never per call. `None`: all zero, a read waits for all n bytes. `0`: `ReadIntervalTimeout = MAXDWORD`. `t > 0`: only `ReadTotalTimeoutConstant = t`, so a read returns when n bytes are in or at `t` (:110-126). Setting `timeout` also calls `SetCommState` (:221) |
+| `read(n)` | `ResetEvent`, `ClearCommError`, overlapped `ReadFile`, `GetOverlappedResult(wait=True)`: four calls through ctypes (:262-301). With `timeout=0` and nothing waiting, it stops after `ClearCommError` |
+| `in_waiting` | `ClearCommError` (:253-260) |
+| `write(d)` | overlapped `WriteFile`, then `GetOverlappedResult(wait=True)` (:303-326). With `write_timeout=0` it does not wait (:327-334), and the next write reuses the same `OVERLAPPED` while the last one may still be pending; not measured |
+| `readline()` | `read_until`: `read(1)` per byte (serialutil.py:654-674) |
+| `ReaderThread` | a Python thread in `read(in_waiting or 1)` (threaded/__init__.py:198); `data_received` runs on that thread with the GIL |
+| Sleeps | none on Windows: every wait is in the kernel. `flush()` polls `out_waiting` every 50 ms (:340-346) |
+
+What explains each difference:
+
+1. pyserial's blocking `read(n)` waits in the kernel, as ysp's does, so its
+   round trip and its per-line latency are at the floor of the day:
+   166 and 190 us against ysp's 159 and 175 us, 244 and 240 us per line
+   against ysp's 240 and 186 us. Its p99 is 100 to 130 us worse in the
+   round trip (415 and 416 against 289 and 318 us).
+2. Each pyserial read makes four calls through ctypes, `in_waiting` one.
+   That is 8.1 to 32.9 us for a read with the bytes waiting, against 2.2 to
+   2.5 us for ysp, and 2.5 to 12.6 us for the bytes-available query against
+   1.6 us. A poll loop pays it every iteration, but its latency stays at the
+   floor (170 and 174 us).
+3. `readline()` reads one byte per call, so a 26-byte line costs 26 reads.
+   The line is late by 290 to 330 us at the median and by 0.6 to 0.7 ms at
+   p99 against `read(26)`,
+   and the loop takes 36 to 37 % of a core at 1000 lines per second.
+   `read(26)` on the same port took 5.6 to 5.9 %.
+4. pyserial's `ReaderThread` is a Python thread. It stamps a line when the
+   interpreter runs it: 310 and 223 us, 10 to 11 % of a core. ysp's reader
+   is a C thread that does not take the GIL: 280 and 137 us at 2.3 to
+   2.6 %. ysp's reader received each line in two reads: its first-byte
+   stamp differs from its last-byte stamp on 9996 and 9999 of 10000 lines.
+5. IOPort in Python is IOPort in MATLAB. Its default blocking read still
+   sleeps 1 ms for the first byte (audit difference 1): 1.1 ms per line,
+   2 ms p99 in the round trip. The tuned options remove that; the tuned
+   read per line was still 50 to 80 us later than ysp's (307 and 266
+   against 240 and 186 us). A
+   non-blocking `Read` still makes three driver calls (audit difference 2):
+   12.6 us against ysp's 1.2 us.
+6. IOPort's writes beside its background reader take 3 to 10 s median, as in
+   MATLAB (audit difference 4: a non-overlapped handle). In Python this is
+   worse: the wheel's glue never releases the GIL (no
+   `Py_BEGIN_ALLOW_THREADS` in `PsychScriptingGluePython.c`), so a blocked
+   `IOPort` call stops every Python thread of the process. pyserial and ysp
+   open the port overlapped, and a write beside their readers takes 336 to
+   517 us.
+7. Python adds less per call than MATLAB. A ysp call costs 1.2 to 1.7 us in
+   Python against 3 to 5 us through the MEX; IOPort's empty read costs
+   12.7 us against 17.8 to 36 us. An empty Python call costs 0.02 us, a
+   `ysp.serial.now()` 0.04 us. The wheel's `IOPort` returns every output of
+   each call (`PsychScriptingGluePython.c:1133-1143`) and the data of `Read`
+   as a 1-by-n `float64` array (`IOPort.c:592-597`); `Write` takes a
+   `numpy.uint8` array or a `str` (`IOPort.c:659-676`). The bench converts
+   outside the timed calls.
+8. The position in the run again. The first API of a run was slower: pyserial
+   read 16.3 us with nothing waiting when it ran first and 3.1 us when it
+   ran last; ysp's writes took 211 to 347 us when it ran first and 125 to
+   155 us when it ran last.
+   The round-trip and stream medians moved by up to 140 us between runs
+   (ysp async 280 and 137 us). Audit difference 7 applies: a median from one
+   open is good to about 100 to 150 us.
+
+Conclusion. In Python, every API has a mode at the floor of the port: a
+blocking read of a known length in pyserial, ysp and the tuned IOPort, and
+a poll loop in all of them at the cost of a core. The differences are in
+the defaults and the idioms. pyserial's `readline()` and IOPort's default
+blocking read each add 0.3 to 1 ms per line, and IOPort's background reader
+holds up writes for seconds and, through the GIL, the whole interpreter.
+A pyserial read or bytes-available call costs 1.5 to 14 times what ysp's
+costs, which matters only in a poll loop. ysp's lead is that its defaults are its best settings, its
+async reader stamps lines without the interpreter at a quarter of the CPU
+of `ReaderThread`, and its reader and writes do not block each other.
+pyserial's blocking `read(n)` is a sound choice where none of that matters.
+
 ### Hand procedure for the hardware parts
 
 Use AC power and close other programs. Start MATLAB, then run

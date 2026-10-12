@@ -1,0 +1,298 @@
+api,part,metric,clock,n,median,p99,max,min,mean,note
+pyserial,clock,clock_pair,time.perf_counter,100000,0,0.100001,2.6,0,0.033188,two back-to-back time.perf_counter() calls
+pyserial,clock,clock_step,time.perf_counter,1,0.0999989,0.0999989,0.0999989,0.0999989,0.0999989,smallest nonzero difference
+pyserial,noport,floor_batch_mean,time.perf_counter,0,nan,nan,nan,nan,nan,pyserial has no call without a port object
+pyserial,noport,py_call_floor,time.perf_counter,1,0.019992,0.019992,0.019992,0.019992,0.019992,"mean of 100000 calls of an empty Python lambda, loop included"
+pyserial,noport,list_ports,time.perf_counter,200,2701.85,3516.4,4014.6,2382.3,2779.21,1 ports found
+pyserial,noport,open_absent,time.perf_counter,50,7.4,73,73,7.1,9.254,"open COM250, which does not exist: the error path, with try/except"
+pyserial,noport,py_error_baseline,time.perf_counter,50,0.100001,0.900001,0.900001,0.0999989,0.144,"try: raise; except: pass, no port call"
+pyserial,calls,open,time.perf_counter,20,1647.1,3354.8,3354.8,1588.4,1741.67,"serial.Serial(port, baud, timeout=1): overlapped handle, SetupComm(4096, 4096)"
+pyserial,calls,close,time.perf_counter,20,394.4,477.1,477.1,341.2,400.035,
+pyserial,calls,write_1,time.perf_counter,2000,214.8,569.1,1148.6,67.4,247.784,gap 1000 us
+pyserial,calls,write_8,time.perf_counter,2000,236.1,599.4,751.1,67.2,275.982,gap 1000 us
+pyserial,calls,write_64,time.perf_counter,2000,225,346.8,12561.7,99.1,233.515,gap 1000 us
+pyserial,calls,write_512,time.perf_counter,2000,236.45,402.9,509.8,106.6,241.205,gap 1000 us
+pyserial,calls,read_empty,time.perf_counter,2000,16.3,31.5,95.2,8.2,14.2953,"read(64) with timeout=0, nothing waiting"
+pyserial,calls,available,time.perf_counter,2000,12.6,24.9,99.8,6.3,11.1394,in_waiting
+pyserial,calls,read_waiting,time.perf_counter,500,32.9,73.8,141.6,21.8,35.2198,"read(35), timeout=1, with the bytes waiting"
+pyserial,rt,block_failed,time.perf_counter,1,0,0,0,0,0,exchanges with a missing or wrong answer (count)
+pyserial,rt,block_rtt,time.perf_counter,1000,166.35,415,644.4,92.2,195.257,write call start to read call return
+pyserial,rt,block_write_call,time.perf_counter,1000,141.35,360.6,621.9,40.9,160.306,write call duration inside the exchange
+pyserial,rt,block_write_ret_to_read_ret,time.perf_counter,1000,19.3,158.3,231.6,9.2,34.9513,write call return to read call return
+pyserial,rt,block_host_to_board,time.perf_counter,1000,73.225,140.625,219.525,22.025,74.2228,write call start to board read (+-46 us from the fit)
+pyserial,rt,block_write_ret_to_board,time.perf_counter,1000,-66.025,-11.775,-8.275,-566.575,-86.083,write call return to board read (+-46 us)
+pyserial,rt,block_board_to_host,time.perf_counter,1000,91.275,319.275,589.075,34.775,120.76,board send stamp to read call return (+-46 us)
+pyserial,rt,block_board_turnaround,time.perf_counter,1000,0,1,1,0,0.274,board: command read to answer stamp
+pyserial,rt,block_fit_unc,time.perf_counter,1,45.6,45.6,45.6,45.6,45.6,half the best path time: bound of the one-way split
+pyserial,rt,block_fit_spread,time.perf_counter,1,16.025,16.025,16.025,16.025,16.025,p99 distance of the fit points from the line
+pyserial,rt,block_fit_ppm,time.perf_counter,1,0,0,0,0,0,"board clock rate error, 4 points over 0.6 s"
+pyserial,rt,poll_failed,time.perf_counter,1,0,0,0,0,0,exchanges with a missing or wrong answer (count)
+pyserial,rt,poll_rtt,time.perf_counter,1000,184.45,514.9,1020.3,90.5,211.278,write call start to read call return
+pyserial,rt,poll_write_call,time.perf_counter,1000,151.9,485,994.6,53.5,175.349,write call duration inside the exchange
+pyserial,rt,poll_write_ret_to_read_ret,time.perf_counter,1000,20.8,169.4,202.9,12,35.9283,write call return to read call return
+pyserial,rt,poll_host_to_board,time.perf_counter,1000,75.025,126.625,160.725,25.925,73.7429,write call start to board read (+-45 us from the fit)
+pyserial,rt,poll_write_ret_to_board,time.perf_counter,1000,-76.525,-12.475,-10.075,-938.975,-101.606,write call return to board read (+-45 us)
+pyserial,rt,poll_board_to_host,time.perf_counter,1000,109.775,441.875,964.675,41.375,137.258,board send stamp to read call return (+-45 us)
+pyserial,rt,poll_board_turnaround,time.perf_counter,1000,0,1,1,0,0.277,board: command read to answer stamp
+pyserial,rt,poll_fit_unc,time.perf_counter,1,45.25,45.25,45.25,45.25,45.25,half the best path time: bound of the one-way split
+pyserial,rt,poll_fit_spread,time.perf_counter,1,13.325,13.325,13.325,13.325,13.325,p99 distance of the fit points from the line
+pyserial,rt,poll_fit_ppm,time.perf_counter,1,0,0,0,0,0,"board clock rate error, 4 points over 0.5 s"
+pyserial,stream,line_lines_missed,time.perf_counter,1,0,0,0,0,0,"of 10000 lines (count); read(26), timeout=1, per line (blocking)"
+pyserial,stream,line_lines_duplicated,time.perf_counter,1,0,0,0,0,0,count
+pyserial,stream,line_bad_lines,time.perf_counter,1,0,0,0,0,0,lines of the wrong length or kind (count)
+pyserial,stream,line_lines_per_read,time.perf_counter,10000,1,1,1,1,1,lines completed by one read (or callback)
+pyserial,stream,line_coalesced_pct,time.perf_counter,1,0,0,0,0,0,percent of lines that arrived in a read with another line
+pyserial,stream,line_cpu_pct,time.perf_counter,1,5.62537,5.62537,5.62537,5.62537,5.62537,"Python process CPU time / wall time over 10.0 s, percent of one core"
+pyserial,stream,line_lat_host,time.perf_counter,10000,243.667,492.619,974.341,33.9977,251.487,host time after the read returned minus mapped board send stamp (+-49 us)
+pyserial,stream,line_fit_unc,time.perf_counter,1,49.35,49.35,49.35,49.35,49.35,half the best probe path time
+pyserial,stream,line_fit_ppm,time.perf_counter,1,13.8949,13.8949,13.8949,13.8949,13.8949,7 points over 11.1 s
+pyserial,stream,readline_lines_missed,time.perf_counter,1,0,0,0,0,0,"of 10000 lines (count); readline(), timeout=1: read(1) per byte (serialutil.read_until)"
+pyserial,stream,readline_lines_duplicated,time.perf_counter,1,0,0,0,0,0,count
+pyserial,stream,readline_bad_lines,time.perf_counter,1,0,0,0,0,0,lines of the wrong length or kind (count)
+pyserial,stream,readline_lines_per_read,time.perf_counter,10000,1,1,1,1,1,lines completed by one read (or callback)
+pyserial,stream,readline_coalesced_pct,time.perf_counter,1,0,0,0,0,0,percent of lines that arrived in a read with another line
+pyserial,stream,readline_cpu_pct,time.perf_counter,1,35.939,35.939,35.939,35.939,35.939,"Python process CPU time / wall time over 10.0 s, percent of one core"
+pyserial,stream,readline_lat_host,time.perf_counter,10000,569.636,1191.24,2234.44,197.644,592.997,host time after the read returned minus mapped board send stamp (+-58 us)
+pyserial,stream,readline_fit_unc,time.perf_counter,1,58.4,58.4,58.4,58.4,58.4,half the best probe path time
+pyserial,stream,readline_fit_ppm,time.perf_counter,1,13.2279,13.2279,13.2279,13.2279,13.2279,7 points over 11.0 s
+pyserial,stream,poll_lines_missed,time.perf_counter,1,0,0,0,0,0,of 10000 lines (count); tight loop of in_waiting and read(in_waiting)
+pyserial,stream,poll_lines_duplicated,time.perf_counter,1,0,0,0,0,0,count
+pyserial,stream,poll_bad_lines,time.perf_counter,1,0,0,0,0,0,lines of the wrong length or kind (count)
+pyserial,stream,poll_lines_per_read,time.perf_counter,10000,1,1,1,1,1,lines completed by one read (or callback)
+pyserial,stream,poll_coalesced_pct,time.perf_counter,1,0,0,0,0,0,percent of lines that arrived in a read with another line
+pyserial,stream,poll_cpu_pct,time.perf_counter,1,99.5401,99.5401,99.5401,99.5401,99.5401,"Python process CPU time / wall time over 10.0 s, percent of one core"
+pyserial,stream,poll_lat_host,time.perf_counter,10000,170.396,337.337,998.325,13.9805,180.759,host time after the read returned minus mapped board send stamp (+-68 us)
+pyserial,stream,poll_fit_unc,time.perf_counter,1,67.85,67.85,67.85,67.85,67.85,half the best probe path time
+pyserial,stream,poll_fit_ppm,time.perf_counter,1,12.8277,12.8277,12.8277,12.8277,12.8277,7 points over 11.1 s
+pyserial,stream,async_write_call,time.perf_counter,20,459.6,648.7,648.7,182,417.02,ReaderThread.write(newline) while the reader thread waits for a byte
+pyserial,stream,async_cmd_write_call,time.perf_counter,1,244.8,244.8,244.8,244.8,244.8,ReaderThread.write(stream command) with the reader thread running
+pyserial,stream,async_lines_missed,time.perf_counter,1,0,0,0,0,0,"of 10000 lines (count); serial.threaded.ReaderThread, read(in_waiting or 1) with timeout=1, stamp in data_received; main thread in time.sleep(0.1), then drains a deque"
+pyserial,stream,async_lines_duplicated,time.perf_counter,1,0,0,0,0,0,count
+pyserial,stream,async_bad_lines,time.perf_counter,1,0,0,0,0,0,lines of the wrong length or kind (count)
+pyserial,stream,async_lines_per_read,time.perf_counter,10000,1,1,1,1,1,lines completed by one read (or callback)
+pyserial,stream,async_coalesced_pct,time.perf_counter,1,0,0,0,0,0,percent of lines that arrived in a read with another line
+pyserial,stream,async_cpu_pct,time.perf_counter,1,9.95856,9.95856,9.95856,9.95856,9.95856,"Python process CPU time / wall time over 10.0 s, percent of one core"
+pyserial,stream,async_lat_stamp,time.perf_counter,10000,310.413,582.94,4671.01,50.9578,329.211,API receive stamp minus mapped board send stamp (+-62 us)
+pyserial,stream,async_fit_unc,time.perf_counter,1,61.7,61.7,61.7,61.7,61.7,half the best probe path time
+pyserial,stream,async_fit_ppm,time.perf_counter,1,13.4955,13.4955,13.4955,13.4955,13.4955,7 points over 11.3 s
+ioport,clock,clock_pair,GetSecs,100000,3.6,6.6,5544,3.3,3.83426,two back-to-back GetSecs() calls
+ioport,clock,clock_step,GetSecs,1,3.3,3.3,3.3,3.3,3.3,smallest nonzero difference
+ioport,noport,floor_batch_mean,GetSecs,1,0.492148,0.492148,0.492148,0.492148,0.492148,mean of 100000 IOPort('Verbosity') calls: the cheapest call into the API
+ioport,noport,py_call_floor,GetSecs,1,0.018333,0.018333,0.018333,0.018333,0.018333,"mean of 100000 calls of an empty Python lambda, loop included"
+ioport,noport,list_ports,GetSecs,0,nan,nan,nan,nan,nan,IOPort has no port enumeration
+ioport,noport,open_absent,GetSecs,50,5.9,35.3,35.3,5.6,6.644,"open COM250, which does not exist: the error path, with try/except"
+ioport,noport,py_error_baseline,GetSecs,50,3.8,7.7,7.7,3.6,3.962,"try: raise; except: pass, no port call"
+ioport,calls,open,GetSecs,20,2106.45,2656.4,2656.4,1962.3,2124.01,OpenSerialPort 'BaudRate=115200 DataBits=8 Parity=None StopBits=1 FlowControl=None DTR=1 RTS=1 ReceiveTimeout=1.0'
+ioport,calls,close,GetSecs,20,1523.85,1797.7,1797.7,1433.8,1542.32,
+ioport,calls,write_1,GetSecs,2000,237.95,576,1067,75.7,269.863,gap 1000 us
+ioport,calls,write_8,GetSecs,2000,221.4,482.7,678.2,71.6,236.935,gap 1000 us
+ioport,calls,write_64,GetSecs,2000,252,622.1,876.1,83.4,292.388,gap 1000 us
+ioport,calls,write_512,GetSecs,2000,403.2,686.2,754.7,135.5,403.134,gap 1000 us
+ioport,calls,write_1_blocking,GetSecs,200,230.85,602.9,659.9,129.2,263.382,"Write(h, data, 1), the default; gap 1000 us"
+ioport,calls,write_8_blocking,GetSecs,200,508.3,819.6,840.3,129.8,503.178,"Write(h, data, 1), the default; gap 1000 us"
+ioport,calls,write_64_blocking,GetSecs,200,491.15,717.8,739.4,190.2,501.447,"Write(h, data, 1), the default; gap 1000 us"
+ioport,calls,write_512_blocking,GetSecs,200,524.55,699.7,782.4,172.1,506.696,"Write(h, data, 1), the default; gap 1000 us"
+ioport,calls,read_empty,GetSecs,2000,12.7,32,48.3,12.1,13.5235,"Read(h), non-blocking, with nothing waiting"
+ioport,calls,available,GetSecs,2000,6.5,16.4,57.3,6.1,6.9172,BytesAvailable(h)
+ioport,calls,read_waiting,GetSecs,500,15.1,21.1,66.7,13.8,15.684,"Read(h, 0, 35) with the bytes waiting"
+ioport,rt,block_failed,GetSecs,1,0,0,0,0,0,exchanges with a missing or wrong answer (count)
+ioport,rt,block_rtt,GetSecs,1000,292.9,1977,2491.6,124.4,365.214,write call start to read call return
+ioport,rt,block_write_call,GetSecs,1000,258.65,593.6,904.1,84.8,287.305,write call duration inside the exchange
+ioport,rt,block_write_ret_to_read_ret,GetSecs,1000,29.7,1859.7,2260.3,21.5,77.9082,write call return to read call return
+ioport,rt,block_stamp_minus_return,GetSecs,1000,-7.7,-6.1,-5.9,-46.7,-9.0071,API receive stamp minus host time after the read returned
+ioport,rt,block_host_to_board,GetSecs,1000,98.1,159.3,229,46.5,98.8828,write call start to board read (+-62 us from the fit)
+ioport,rt,block_write_ret_to_board,GetSecs,1000,-164.3,-14.5,-11,-836.2,-188.423,write call return to board read (+-62 us)
+ioport,rt,block_board_to_host,GetSecs,1000,195.8,1883.8,2413.2,54.5,266.064,board send stamp to read call return (+-62 us)
+ioport,rt,block_board_turnaround,GetSecs,1000,0,1,1,0,0.267,board: command read to answer stamp
+ioport,rt,block_stamp_minus_board_send,GetSecs,1000,188.3,1876,2393.6,47.7,257.057,API receive stamp minus mapped board send stamp (+-62 us)
+ioport,rt,block_fit_unc,GetSecs,1,62.2,62.2,62.2,62.2,62.2,half the best path time: bound of the one-way split
+ioport,rt,block_fit_spread,GetSecs,1,21.3,21.3,21.3,21.3,21.3,p99 distance of the fit points from the line
+ioport,rt,block_fit_ppm,GetSecs,1,0,0,0,0,0,"board clock rate error, 5 points over 0.6 s"
+ioport,rt,poll_failed,GetSecs,1,0,0,0,0,0,exchanges with a missing or wrong answer (count)
+ioport,rt,poll_rtt,GetSecs,1000,222.2,536,703.7,130.8,256.997,write call start to read call return
+ioport,rt,poll_write_call,GetSecs,1000,168.55,496.9,648.7,74.4,214.077,write call duration inside the exchange
+ioport,rt,poll_write_ret_to_read_ret,GetSecs,1000,29.25,159.4,192,16.8,42.9194,write call return to read call return
+ioport,rt,poll_stamp_minus_return,GetSecs,1000,-9.8,-6.8,-6.5,-79.4,-11.9044,API receive stamp minus host time after the read returned
+ioport,rt,poll_host_to_board,GetSecs,1000,90.8,145.7,205.6,50.9,90.0025,write call start to board read (+-65 us from the fit)
+ioport,rt,poll_write_ret_to_board,GetSecs,1000,-77.45,-13.7,-9.1,-500.1,-124.075,write call return to board read (+-65 us)
+ioport,rt,poll_board_to_host,GetSecs,1000,133.5,426.3,571.4,50,166.693,board send stamp to read call return (+-65 us)
+ioport,rt,poll_board_turnaround,GetSecs,1000,0,1,1,0,0.301,board: command read to answer stamp
+ioport,rt,poll_stamp_minus_board_send,GetSecs,1000,124.65,412.3,518.8,41,154.789,API receive stamp minus mapped board send stamp (+-65 us)
+ioport,rt,poll_fit_unc,GetSecs,1,64.9,64.9,64.9,64.9,64.9,half the best path time: bound of the one-way split
+ioport,rt,poll_fit_spread,GetSecs,1,8.15,8.15,8.15,8.15,8.15,p99 distance of the fit points from the line
+ioport,rt,poll_fit_ppm,GetSecs,1,0,0,0,0,0,"board clock rate error, 4 points over 0.5 s"
+ioport,stream,line_lines_missed,GetSecs,1,0,0,0,0,0,"of 10000 lines (count); Read(h, 1, 26) per line (blocking)"
+ioport,stream,line_lines_duplicated,GetSecs,1,0,0,0,0,0,count
+ioport,stream,line_bad_lines,GetSecs,1,0,0,0,0,0,lines of the wrong length or kind (count)
+ioport,stream,line_lines_per_read,GetSecs,10000,1,1,1,1,1,lines completed by one read (or callback)
+ioport,stream,line_coalesced_pct,GetSecs,1,0,0,0,0,0,percent of lines that arrived in a read with another line
+ioport,stream,line_cpu_pct,GetSecs,1,8.7504,8.7504,8.7504,8.7504,8.7504,"Python process CPU time / wall time over 10.0 s, percent of one core"
+ioport,stream,line_lat_host,GetSecs,10000,1108.43,2266.19,3228.9,41.0995,1081.34,host time after the read returned minus mapped board send stamp (+-77 us)
+ioport,stream,line_lat_stamp,GetSecs,10000,1090.44,2241.27,3194,34.0995,1061.55,API receive stamp minus mapped board send stamp (+-77 us)
+ioport,stream,line_fit_unc,GetSecs,1,76.85,76.85,76.85,76.85,76.85,half the best probe path time
+ioport,stream,line_fit_ppm,GetSecs,1,12.4672,12.4672,12.4672,12.4672,12.4672,7 points over 11.2 s
+ioport,stream,poll_lines_missed,GetSecs,1,0,0,0,0,0,of 10000 lines (count); tight loop of Read(h) (non-blocking)
+ioport,stream,poll_lines_duplicated,GetSecs,1,0,0,0,0,0,count
+ioport,stream,poll_bad_lines,GetSecs,1,0,0,0,0,0,lines of the wrong length or kind (count)
+ioport,stream,poll_lines_per_read,GetSecs,10000,1,1,1,1,1,lines completed by one read (or callback)
+ioport,stream,poll_coalesced_pct,GetSecs,1,0,0,0,0,0,percent of lines that arrived in a read with another line
+ioport,stream,poll_cpu_pct,GetSecs,1,99.2261,99.2261,99.2261,99.2261,99.2261,"Python process CPU time / wall time over 10.0 s, percent of one core"
+ioport,stream,poll_lat_host,GetSecs,10000,165.167,320.953,1197.1,-7.4269,171.326,host time after the read returned minus mapped board send stamp (+-92 us)
+ioport,stream,poll_lat_stamp,GetSecs,10000,157.744,306.332,1190.3,-13.3269,163.382,API receive stamp minus mapped board send stamp (+-92 us)
+ioport,stream,poll_fit_unc,GetSecs,1,92.2,92.2,92.2,92.2,92.2,half the best probe path time
+ioport,stream,poll_fit_ppm,GetSecs,1,11.1674,11.1674,11.1674,11.1674,11.1674,7 points over 11.1 s
+ioport,stream,async_write_call,GetSecs,5,3.00126e+06,1.20021e+07,1.20021e+07,2.94865e+06,5.591e+06,"Write(h, newline, 0) while the background reader waits for a byte"
+ioport,stream,async_cmd_write_call,GetSecs,1,146.2,146.2,146.2,146.2,146.2,"Write(h, stream command, 0) with the background reader running"
+ioport,stream,async_lines_missed,GetSecs,1,0,0,0,0,0,"of 10000 lines (count); background reader thread, BlockingBackgroundRead=1, ReadFilterFlags=4, InputBufferSize for 11000 lines; main thread in time.sleep(0.1), then Read(h, 0, 26) until empty; 0 empty quanta"
+ioport,stream,async_lines_duplicated,GetSecs,1,0,0,0,0,0,count
+ioport,stream,async_bad_lines,GetSecs,1,0,0,0,0,0,lines of the wrong length or kind (count)
+ioport,stream,async_lines_per_read,GetSecs,10000,1,1,1,1,1,lines completed by one read (or callback)
+ioport,stream,async_coalesced_pct,GetSecs,1,0,0,0,0,0,percent of lines that arrived in a read with another line
+ioport,stream,async_cpu_pct,GetSecs,1,9.48904,9.48904,9.48904,9.48904,9.48904,"Python process CPU time / wall time over 10.0 s, percent of one core"
+ioport,stream,async_lat_stamp,GetSecs,10000,238.26,462.588,1905.09,23.1205,238.42,API receive stamp minus mapped board send stamp (+-62 us)
+ioport,stream,async_fit_unc,GetSecs,1,62.35,62.35,62.35,62.35,62.35,half the best probe path time
+ioport,stream,async_fit_ppm,GetSecs,1,13.6531,13.6531,13.6531,13.6531,13.6531,7 points over 14.3 s
+ioport_tuned,clock,clock_pair,GetSecs,100000,3.7,6.7,105.7,3.3,3.90886,two back-to-back GetSecs() calls
+ioport_tuned,clock,clock_step,GetSecs,1,3.3,3.3,3.3,3.3,3.3,smallest nonzero difference
+ioport_tuned,noport,floor_batch_mean,GetSecs,1,0.634152,0.634152,0.634152,0.634152,0.634152,mean of 100000 IOPort('Verbosity') calls: the cheapest call into the API
+ioport_tuned,noport,py_call_floor,GetSecs,1,0.025824,0.025824,0.025824,0.025824,0.025824,"mean of 100000 calls of an empty Python lambda, loop included"
+ioport_tuned,noport,list_ports,GetSecs,0,nan,nan,nan,nan,nan,IOPort has no port enumeration
+ioport_tuned,noport,open_absent,GetSecs,50,8.7,39.4,39.4,8.5,9.472,"open COM250, which does not exist: the error path, with try/except"
+ioport_tuned,noport,py_error_baseline,GetSecs,50,5.7,13.6,13.6,5.3,5.81,"try: raise; except: pass, no port call"
+ioport_tuned,calls,open,GetSecs,20,2233.7,3008,3008,2042.3,2265.62,"OpenSerialPort 'BaudRate=115200 DataBits=8 Parity=None StopBits=1 FlowControl=None DTR=1 RTS=1 ReceiveTimeout=1.0 BlockingBackgroundRead=1 PollLatency=0 HardwareBufferSizes=32768,32768'"
+ioport_tuned,calls,close,GetSecs,20,1629.7,1774.4,1774.4,1470.5,1631.45,
+ioport_tuned,calls,write_1,GetSecs,2000,176.1,348.2,455.1,68.3,188.122,gap 1000 us
+ioport_tuned,calls,write_8,GetSecs,2000,221.55,541.5,854.6,77.4,227.203,gap 1000 us
+ioport_tuned,calls,write_64,GetSecs,2000,254.05,625.2,848.4,80.8,296.736,gap 1000 us
+ioport_tuned,calls,write_512,GetSecs,2000,360.75,650,889.2,105.5,367.213,gap 1000 us
+ioport_tuned,calls,write_1_blocking,GetSecs,200,479,676,738.6,170.1,467.451,"Write(h, data, 1), the default; gap 1000 us"
+ioport_tuned,calls,write_8_blocking,GetSecs,200,337.45,714.8,870.8,109.5,346.469,"Write(h, data, 1), the default; gap 1000 us"
+ioport_tuned,calls,write_64_blocking,GetSecs,200,351,608.5,647.6,109.4,364.552,"Write(h, data, 1), the default; gap 1000 us"
+ioport_tuned,calls,write_512_blocking,GetSecs,200,471.7,732.5,809.3,164.8,445.34,"Write(h, data, 1), the default; gap 1000 us"
+ioport_tuned,calls,read_empty,GetSecs,2000,12.6,22.1,40.7,12.1,13.1206,"Read(h), non-blocking, with nothing waiting"
+ioport_tuned,calls,available,GetSecs,2000,6.4,11.2,47.9,6.1,6.63955,BytesAvailable(h)
+ioport_tuned,calls,read_waiting,GetSecs,500,15.8,41.9,72.6,13.7,19.6932,"Read(h, 0, 35) with the bytes waiting"
+ioport_tuned,rt,block_failed,GetSecs,1,0,0,0,0,0,exchanges with a missing or wrong answer (count)
+ioport_tuned,rt,block_rtt,GetSecs,1000,258.9,543.9,709.7,118,263.064,write call start to read call return
+ioport_tuned,rt,block_write_call,GetSecs,1000,238.9,511.5,664.9,80.4,237.431,write call duration inside the exchange
+ioport_tuned,rt,block_write_ret_to_read_ret,GetSecs,1000,18,107.9,135.1,15.1,25.6331,write call return to read call return
+ioport_tuned,rt,block_stamp_minus_return,GetSecs,1000,-7.3,-6.3,-6,-52.2,-8.9079,API receive stamp minus host time after the read returned
+ioport_tuned,rt,block_host_to_board,GetSecs,1000,93.025,141.325,192.225,50.125,92.3184,write call start to board read (+-59 us from the fit)
+ioport_tuned,rt,block_write_ret_to_board,GetSecs,1000,-155.125,-15.775,-10.075,-563.875,-145.112,write call return to board read (+-59 us)
+ioport_tuned,rt,block_board_to_host,GetSecs,1000,173.575,448.575,608.675,43.775,170.458,board send stamp to read call return (+-59 us)
+ioport_tuned,rt,block_board_turnaround,GetSecs,1000,0,1,1,0,0.287,board: command read to answer stamp
+ioport_tuned,rt,block_stamp_minus_board_send,GetSecs,1000,166.275,435.975,592.975,36.275,161.551,API receive stamp minus mapped board send stamp (+-59 us)
+ioport_tuned,rt,block_fit_unc,GetSecs,1,59,59,59,59,59,half the best path time: bound of the one-way split
+ioport_tuned,rt,block_fit_spread,GetSecs,1,14.325,14.325,14.325,14.325,14.325,p99 distance of the fit points from the line
+ioport_tuned,rt,block_fit_ppm,GetSecs,1,0,0,0,0,0,"board clock rate error, 4 points over 0.6 s"
+ioport_tuned,rt,poll_failed,GetSecs,1,0,0,0,0,0,exchanges with a missing or wrong answer (count)
+ioport_tuned,rt,poll_rtt,GetSecs,1000,247.35,692.1,778.7,123,268.151,write call start to read call return
+ioport_tuned,rt,poll_write_call,GetSecs,1000,225.85,662.7,748.6,84.5,238.861,write call duration inside the exchange
+ioport_tuned,rt,poll_write_ret_to_read_ret,GetSecs,1000,21.1,115.3,157.8,17.2,29.2898,write call return to read call return
+ioport_tuned,rt,poll_stamp_minus_return,GetSecs,1000,-9.9,-7.4,-6.9,-56,-11.7151,API receive stamp minus host time after the read returned
+ioport_tuned,rt,poll_host_to_board,GetSecs,1000,86.95,123.55,164.35,54.75,85.4642,write call start to board read (+-62 us from the fit)
+ioport_tuned,rt,poll_write_ret_to_board,GetSecs,1000,-143.9,-24.95,-18.55,-668.05,-153.397,write call return to board read (+-62 us)
+ioport_tuned,rt,poll_board_to_host,GetSecs,1000,168.4,610.05,698.15,47.95,182.408,board send stamp to read call return (+-62 us)
+ioport_tuned,rt,poll_board_turnaround,GetSecs,1000,0,1,1,0,0.278,board: command read to answer stamp
+ioport_tuned,rt,poll_stamp_minus_board_send,GetSecs,1000,156.85,596.45,683.95,36.85,170.693,API receive stamp minus mapped board send stamp (+-62 us)
+ioport_tuned,rt,poll_fit_unc,GetSecs,1,61.5,61.5,61.5,61.5,61.5,half the best path time: bound of the one-way split
+ioport_tuned,rt,poll_fit_spread,GetSecs,1,12.25,12.25,12.25,12.25,12.25,p99 distance of the fit points from the line
+ioport_tuned,rt,poll_fit_ppm,GetSecs,1,0,0,0,0,0,"board clock rate error, 4 points over 0.6 s"
+ioport_tuned,stream,line_lines_missed,GetSecs,1,0,0,0,0,0,"of 10000 lines (count); Read(h, 1, 26) per line (blocking)"
+ioport_tuned,stream,line_lines_duplicated,GetSecs,1,0,0,0,0,0,count
+ioport_tuned,stream,line_bad_lines,GetSecs,1,0,0,0,0,0,lines of the wrong length or kind (count)
+ioport_tuned,stream,line_lines_per_read,GetSecs,10000,1,1,1,1,1,lines completed by one read (or callback)
+ioport_tuned,stream,line_coalesced_pct,GetSecs,1,0,0,0,0,0,percent of lines that arrived in a read with another line
+ioport_tuned,stream,line_cpu_pct,GetSecs,1,10.157,10.157,10.157,10.157,10.157,"Python process CPU time / wall time over 10.0 s, percent of one core"
+ioport_tuned,stream,line_lat_host,GetSecs,10000,306.94,543.872,1149.97,42.814,305.778,host time after the read returned minus mapped board send stamp (+-69 us)
+ioport_tuned,stream,line_lat_stamp,GetSecs,10000,273.222,479.339,1130.27,29.414,271.42,API receive stamp minus mapped board send stamp (+-69 us)
+ioport_tuned,stream,line_fit_unc,GetSecs,1,69.25,69.25,69.25,69.25,69.25,half the best probe path time
+ioport_tuned,stream,line_fit_ppm,GetSecs,1,10.8113,10.8113,10.8113,10.8113,10.8113,7 points over 11.1 s
+ioport_tuned,stream,poll_lines_missed,GetSecs,1,0,0,0,0,0,of 10000 lines (count); tight loop of Read(h) (non-blocking)
+ioport_tuned,stream,poll_lines_duplicated,GetSecs,1,0,0,0,0,0,count
+ioport_tuned,stream,poll_bad_lines,GetSecs,1,0,0,0,0,0,lines of the wrong length or kind (count)
+ioport_tuned,stream,poll_lines_per_read,GetSecs,9999,1,1,2,1,1.0001,lines completed by one read (or callback)
+ioport_tuned,stream,poll_coalesced_pct,GetSecs,1,0.02,0.02,0.02,0.02,0.02,percent of lines that arrived in a read with another line
+ioport_tuned,stream,poll_cpu_pct,GetSecs,1,98.9142,98.9142,98.9142,98.9142,98.9142,"Python process CPU time / wall time over 10.0 s, percent of one core"
+ioport_tuned,stream,poll_lat_host,GetSecs,10000,161.733,335.795,2114.42,-9.35375,168.004,host time after the read returned minus mapped board send stamp (+-85 us)
+ioport_tuned,stream,poll_lat_stamp,GetSecs,10000,153.577,310.128,2097.62,-15.5537,157.538,API receive stamp minus mapped board send stamp (+-85 us)
+ioport_tuned,stream,poll_fit_unc,GetSecs,1,84.7,84.7,84.7,84.7,84.7,half the best probe path time
+ioport_tuned,stream,poll_fit_ppm,GetSecs,1,15.5,15.5,15.5,15.5,15.5,8 points over 11.2 s
+ioport_tuned,stream,async_write_call,GetSecs,5,9.95279e+06,1.00036e+07,1.00036e+07,5.00187e+06,8.39278e+06,"Write(h, newline, 0) while the background reader waits for a byte"
+ioport_tuned,stream,async_cmd_write_call,GetSecs,1,150.8,150.8,150.8,150.8,150.8,"Write(h, stream command, 0) with the background reader running"
+ioport_tuned,stream,async_lines_missed,GetSecs,1,0,0,0,0,0,"of 10000 lines (count); background reader thread, BlockingBackgroundRead=1, ReadFilterFlags=4, InputBufferSize for 11000 lines; main thread in time.sleep(0.1), then Read(h, 0, 26) until empty; 0 empty quanta"
+ioport_tuned,stream,async_lines_duplicated,GetSecs,1,0,0,0,0,0,count
+ioport_tuned,stream,async_bad_lines,GetSecs,1,0,0,0,0,0,lines of the wrong length or kind (count)
+ioport_tuned,stream,async_lines_per_read,GetSecs,10000,1,1,1,1,1,lines completed by one read (or callback)
+ioport_tuned,stream,async_coalesced_pct,GetSecs,1,0,0,0,0,0,percent of lines that arrived in a read with another line
+ioport_tuned,stream,async_cpu_pct,GetSecs,1,10.5751,10.5751,10.5751,10.5751,10.5751,"Python process CPU time / wall time over 10.0 s, percent of one core"
+ioport_tuned,stream,async_lat_stamp,GetSecs,10000,264.098,489.952,1079.11,38.3358,268.063,API receive stamp minus mapped board send stamp (+-76 us)
+ioport_tuned,stream,async_fit_unc,GetSecs,1,76.35,76.35,76.35,76.35,76.35,half the best probe path time
+ioport_tuned,stream,async_fit_ppm,GetSecs,1,13.229,13.229,13.229,13.229,13.229,7 points over 21.2 s
+ysp,clock,clock_pair,ysp.serial.now,100000,0,0.100001,4.2,0,0.034936,two back-to-back ysp.serial.now() calls
+ysp,clock,clock_step,ysp.serial.now,1,0.0999989,0.0999989,0.0999989,0.0999989,0.0999989,smallest nonzero difference
+ysp,noport,floor_batch_mean,ysp.serial.now,1,0.0389,0.0389,0.0389,0.0389,0.0389,mean of 100000 ysp.serial.now() calls: the cheapest call into the API
+ysp,noport,py_call_floor,ysp.serial.now,1,0.019643,0.019643,0.019643,0.019643,0.019643,"mean of 100000 calls of an empty Python lambda, loop included"
+ysp,noport,list_ports,ysp.serial.now,200,233.15,327.6,486.4,211.5,240.148,1 ports found
+ysp,noport,open_absent,ysp.serial.now,50,2.2,42.2,42.2,2,3.192,"open COM250, which does not exist: the error path, with try/except"
+ysp,noport,py_error_baseline,ysp.serial.now,50,0.100001,5.3,5.3,0.0999989,0.264,"try: raise; except: pass, no port call"
+ysp,calls,open,ysp.serial.now,20,1818.15,3114.8,3114.8,1683.4,1924.66,"Port(port, baud=baud): 8N1, DTR and RTS asserted"
+ysp,calls,close,ysp.serial.now,20,464.85,612.6,612.6,381.5,479.91,
+ysp,calls,write_1,ysp.serial.now,2000,124.9,327.7,521.5,50.3,128.272,gap 1000 us
+ysp,calls,write_8,ysp.serial.now,2000,154.7,495.5,881.3,52,176.107,gap 1000 us
+ysp,calls,write_64,ysp.serial.now,2000,147.3,379.3,742.5,57.9,163.469,gap 1000 us
+ysp,calls,write_512,ysp.serial.now,2000,126,348.5,737.6,60.2,145.918,gap 1000 us
+ysp,calls,read_empty,ysp.serial.now,2000,1.2,3.5,14.7,1.1,1.73095,"read(64, 0) with nothing waiting"
+ysp,calls,available,ysp.serial.now,2000,1.6,5.5,75.8,1.5,2.3835,available()
+ysp,calls,read_waiting,ysp.serial.now,500,2.5,5,7.1,2.1,2.6128,"read(35, 0) with the bytes waiting"
+ysp,rt,block_failed,ysp.serial.now,1,0,0,0,0,0,exchanges with a missing or wrong answer (count)
+ysp,rt,block_rtt,ysp.serial.now,1000,159.05,289.2,470.8,101.6,170.418,write call start to read call return
+ysp,rt,block_write_call,ysp.serial.now,1000,103.65,249.8,457.1,53.2,117.8,write call duration inside the exchange
+ysp,rt,block_write_ret_to_read_ret,ysp.serial.now,1000,57.9,155.4,186.7,3,52.6176,write call return to read call return
+ysp,rt,block_host_to_board,ysp.serial.now,1000,73.95,128.95,204.35,28.15,74.5557,write call start to board read (+-51 us from the fit)
+ysp,rt,block_write_ret_to_board,ysp.serial.now,1000,-28.05,-12.65,-10.45,-356.45,-43.2443,write call return to board read (+-51 us)
+ysp,rt,block_board_to_host,ysp.serial.now,1000,85.35,193.75,370.15,38.45,95.5709,board send stamp to read call return (+-51 us)
+ysp,rt,block_board_turnaround,ysp.serial.now,1000,0,1,1,0,0.291,board: command read to answer stamp
+ysp,rt,block_fit_unc,ysp.serial.now,1,50.8,50.8,50.8,50.8,50.8,half the best path time: bound of the one-way split
+ysp,rt,block_fit_spread,ysp.serial.now,1,6.65,6.65,6.65,6.65,6.65,p99 distance of the fit points from the line
+ysp,rt,block_fit_ppm,ysp.serial.now,1,0,0,0,0,0,"board clock rate error, 4 points over 0.5 s"
+ysp,rt,poll_failed,ysp.serial.now,1,0,0,0,0,0,exchanges with a missing or wrong answer (count)
+ysp,rt,poll_rtt,ysp.serial.now,1000,156.7,493.8,706.3,71.8,177.987,write call start to read call return
+ysp,rt,poll_write_call,ysp.serial.now,1000,103.25,447.2,698.9,37.9,125.098,write call duration inside the exchange
+ysp,rt,poll_write_ret_to_read_ret,ysp.serial.now,1000,49.9,178.4,224.2,2.8,52.8891,write call return to read call return
+ysp,rt,poll_host_to_board,ysp.serial.now,1000,67.7,123.4,297.4,14.4,67.405,write call start to board read (+-36 us from the fit)
+ysp,rt,poll_write_ret_to_board,ysp.serial.now,1000,-33.95,-16.7,-15.3,-602.4,-57.6926,write call return to board read (+-36 us)
+ysp,rt,poll_board_to_host,ysp.serial.now,1000,86.3,403.7,608.8,40,110.272,board send stamp to read call return (+-36 us)
+ysp,rt,poll_board_turnaround,ysp.serial.now,1000,0,1,1,0,0.31,board: command read to answer stamp
+ysp,rt,poll_fit_unc,ysp.serial.now,1,35.9,35.9,35.9,35.9,35.9,half the best path time: bound of the one-way split
+ysp,rt,poll_fit_spread,ysp.serial.now,1,9.3,9.3,9.3,9.3,9.3,p99 distance of the fit points from the line
+ysp,rt,poll_fit_ppm,ysp.serial.now,1,0,0,0,0,0,"board clock rate error, 4 points over 0.4 s"
+ysp,stream,line_lines_missed,ysp.serial.now,1,0,0,0,0,0,"of 10000 lines (count); read(26, 0.2, all=True) per line"
+ysp,stream,line_lines_duplicated,ysp.serial.now,1,0,0,0,0,0,count
+ysp,stream,line_bad_lines,ysp.serial.now,1,0,0,0,0,0,lines of the wrong length or kind (count)
+ysp,stream,line_lines_per_read,ysp.serial.now,10000,1,1,1,1,1,lines completed by one read (or callback)
+ysp,stream,line_coalesced_pct,ysp.serial.now,1,0,0,0,0,0,percent of lines that arrived in a read with another line
+ysp,stream,line_cpu_pct,ysp.serial.now,1,4.84418,4.84418,4.84418,4.84418,4.84418,"Python process CPU time / wall time over 10.0 s, percent of one core"
+ysp,stream,line_lat_host,ysp.serial.now,10000,239.779,503.089,1575.38,33.6915,237.846,host time after the read returned minus mapped board send stamp (+-54 us)
+ysp,stream,line_fit_unc,ysp.serial.now,1,54,54,54,54,54,half the best probe path time
+ysp,stream,line_fit_ppm,ysp.serial.now,1,12.6633,12.6633,12.6633,12.6633,12.6633,6 points over 10.9 s
+ysp,stream,poll_lines_missed,ysp.serial.now,1,0,0,0,0,0,"of 10000 lines (count); tight loop of read(4096, 0)"
+ysp,stream,poll_lines_duplicated,ysp.serial.now,1,0,0,0,0,0,count
+ysp,stream,poll_bad_lines,ysp.serial.now,1,0,0,0,0,0,lines of the wrong length or kind (count)
+ysp,stream,poll_lines_per_read,ysp.serial.now,10000,1,1,1,1,1,lines completed by one read (or callback)
+ysp,stream,poll_coalesced_pct,ysp.serial.now,1,0,0,0,0,0,percent of lines that arrived in a read with another line
+ysp,stream,poll_cpu_pct,ysp.serial.now,1,99.0715,99.0715,99.0715,99.0715,99.0715,"Python process CPU time / wall time over 10.0 s, percent of one core"
+ysp,stream,poll_lat_host,ysp.serial.now,10000,163.86,311.163,1182.89,32.9155,168.252,host time after the read returned minus mapped board send stamp (+-52 us)
+ysp,stream,poll_fit_unc,ysp.serial.now,1,52,52,52,52,52,half the best probe path time
+ysp,stream,poll_fit_ppm,ysp.serial.now,1,12.6943,12.6943,12.6943,12.6943,12.6943,7 points over 11.0 s
+ysp,stream,async_write_call,ysp.serial.now,20,336.1,552.9,552.9,126.1,329.745,write(newline) while the reader thread waits for a byte
+ysp,stream,async_cmd_write_call,ysp.serial.now,1,170.3,170.3,170.3,170.3,170.3,write(stream command) with the reader thread running
+ysp,stream,async_lines_missed,ysp.serial.now,1,0,0,0,0,0,"of 10000 lines (count); async_start reader thread, stamp when the read with the newline returned (first-byte stamp differs on 9996 lines); main thread in time.sleep(0.1), then async_read; 0 overflows"
+ysp,stream,async_lines_duplicated,ysp.serial.now,1,0,0,0,0,0,count
+ysp,stream,async_bad_lines,ysp.serial.now,1,0,0,0,0,0,lines of the wrong length or kind (count)
+ysp,stream,async_lines_per_read,ysp.serial.now,10000,1,1,1,1,1,lines completed by one read (or callback)
+ysp,stream,async_coalesced_pct,ysp.serial.now,1,0,0,0,0,0,percent of lines that arrived in a read with another line
+ysp,stream,async_cpu_pct,ysp.serial.now,1,2.64072,2.64072,2.64072,2.64072,2.64072,"Python process CPU time / wall time over 10.1 s, percent of one core"
+ysp,stream,async_lat_stamp,ysp.serial.now,10000,280.312,524.511,1345.99,20.5638,278.701,API receive stamp minus mapped board send stamp (+-74 us)
+ysp,stream,async_fit_unc,ysp.serial.now,1,73.95,73.95,73.95,73.95,73.95,half the best probe path time
+ysp,stream,async_fit_ppm,ysp.serial.now,1,11.4284,11.4284,11.4284,11.4284,11.4284,7 points over 11.2 s
