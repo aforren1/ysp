@@ -111,10 +111,10 @@ thread** may use a `Port` at the same time, and nothing else.
 
 | Role | Calls |
 |---|---|
-| reader | `read`, `available`, `purge(rx=True)` |
+| reader | `read`, `available`, `purge(rx=True)`; the async reader's thread while it runs |
 | writer | `write`, `write_byte`, `drain`, `pulse`, `pulse_async`, `send_break`, `purge(tx=True)` |
 | any (one at a time) | `interrupt`, `get_lines`, `set_dtr`, `set_rts` |
-| neither | the constructor, `close` (only after both roles returned) |
+| neither | the constructor, `close` (only after both roles returned; it stops the async reader itself) |
 
 `read`, `write`, `drain`, `pulse`, `send_break` and `pulse_async`'s onset write
 release the GIL, so a listener thread does not stall the interpreter.
@@ -145,6 +145,56 @@ t.join()                # the reader has returned
 port.close()            # now it is safe
 ```
 
+## Async reader
+
+A Python thread blocked in `read()` gets its bytes only when the interpreter
+runs it, so `ps.now()` after the read is late by the GIL and by whatever
+else the program does. The async reader (0.5.0.2) is a C thread that reads
+the port, stamps each read with the `ps.now()` clock when the read returns,
+cuts the bytes into records and keeps them in a ring. It never takes the
+GIL. The MATLAB binding (`ysp_serial('async_start', ...)`) and
+`ysp/device.h` use the same design.
+
+```python
+port.async_start(terminator=b"\n", capacity=4096)   # one byte; or record_size=n
+port.write(b"go\n")                                  # writes stay allowed
+while running:
+    if port.async_wait(0.5):                         # releases the GIL
+        for line, t in port.async_read():            # oldest first
+            handle(line, t)                          # t: ps.now() seconds
+stats = port.async_stop()                            # close() also stops it
+```
+
+| Call | Does |
+|---|---|
+| `async_start(terminator=b"\n", capacity=4096, max_len=256, record_size=0)` | Start the thread. A record ends with `terminator` (one byte, as `bytes` or `int`); a longer record is cut at `max_len` bytes. `record_size > 0` gives records of that many bytes instead. `terminator=None` without `record_size` gives one record per read. The ring holds `capacity` records and is allocated here, so the thread allocates nothing. |
+| `async_read(max=0, first=False) -> list` | Take the records in the ring, at most `max` (0: all), without waiting. Each is `(data, t)`: the bytes and the time of the read that brought the last byte. `first=True` adds the time of the read that brought the first byte. |
+| `async_wait(timeout) -> int` | Wait up to `timeout` seconds (0 polls, `math.inf` waits forever) for a record. Returns the count in the ring, 0 on timeout. Ctrl+C reaches it within 50 ms. |
+| `async_stop() -> dict` | Stop and join the thread and free the ring. Records not read are lost. Returns `async_stats`, or `None` when no reader was running. |
+| `async_stats` | `running`, `capacity`, `max_len`, `pending`, `max_used` (the largest ring fill), `lines` (records cut), `overflows`, `overlong`, `bytes`, `reads`, `error` and `policy` (`ASYNC_*`, what the thread's elevation obtained). `None` before the first `async_start()`; kept after `async_stop()`. |
+
+Rules:
+
+- When the ring is full, the thread drops the new record and counts it in
+  `overflows`. It never waits for Python. Size `capacity` for the longest
+  time your program does not call `async_read()`.
+- The thread owns the reader role. `read`, `available`, `interrupt` and
+  `purge(rx=True)` raise `ps.Error` until `async_stop()`. The writer role
+  stays yours: `write`, `pulse` and the others work while the thread runs.
+- If the device goes away, the thread stops. `async_read()` returns the
+  records it collected, then raises the error (`ps.Disconnected`).
+- `async_stop()` or `close()` from another thread ends an `async_wait()` in
+  progress with `ps.Interrupted`. One thread at a time may call
+  `async_read()`; a second one at the same time raises `ps.Error`.
+- `async_start()` on a running reader raises `ps.Error`. `async_stop()` is
+  idempotent.
+
+What it measured on a Teensy 4.0 echo board at 1000 lines per second
+(Windows 11, two runs, docs/serial.md): the stamp was 146 to 214 us after
+the board sent the line (median), p99 338 to 406 us, no line lost, 3 to 6 %
+of one core. The MATLAB reader measured 153 us median, p99 350 to 380 us. A
+write beside the running reader cost within 34 us of a write without one.
+
 ## API
 
 | | |
@@ -165,11 +215,15 @@ port.close()            # now it is safe
 | `port.set_dtr(on)` / `port.set_rts(on)` | drive the output lines |
 | `port.get_lines() -> int` | input lines as a `LINE_*` mask |
 | `port.send_break(duration)` | hold TX in the break state for `duration` seconds |
+| `port.async_start(terminator=b"\n", capacity=4096, max_len=256, record_size=0)` | start the async reader (see [Async reader](#async-reader)) |
+| `port.async_read(max=0, first=False) -> list` | take `(data, t)` records from its ring without waiting |
+| `port.async_wait(timeout) -> int` | wait for a record; releases the GIL |
+| `port.async_stop() -> dict` | stop it; returns `async_stats` |
 | `port.close()`, `port.is_open` | lifecycle; `Port` is a context manager |
 
 Read-only properties: `is_open`, `device`, `baud`, `data_bits`, `parity`,
 `stop_bits`, `flow`, `write_timeout` (seconds, `math.inf` for none),
-`low_latency`, `keep_dtr_on_close`, `sched` (the worker's effective
+`low_latency`, `keep_dtr_on_close`, `async_stats`, `sched` (the worker's effective
 `{runtime, deadline, period}` in seconds), `async_policy`, `rd_oserr`,
 `wr_oserr`, `misc_oserr`. The effective settings
 are what the driver accepted, not what you asked for. Log `async_policy`
@@ -194,7 +248,7 @@ deadline". Invalid combinations raise `ps.Error` at construction.
 |---|---|
 | `ps.Error` | base class; also a failed open, a bad argument or an OS error |
 | `ps.Disconnected` | the device went away (USB unplug); close the port |
-| `ps.Interrupted` | `interrupt()` or `close()` woke a blocked `read()` |
+| `ps.Interrupted` | `interrupt()` or `close()` woke a blocked `read()`; `async_stop()` or `close()` ended an `async_wait()` |
 | `ps.Closed` | the port is not open |
 
 The message is the library's `yser_strerror()` text plus the OS error number
@@ -206,10 +260,12 @@ from the slot that belongs to the failing role (`rd_oserr`, `wr_oserr` or
 
 ## Version
 
-`ysp-serial` 0.5.0.1 is `ysp/serial.h` v0.5.0 with binding revision 1, the
-change to seconds. The first three numbers are the header's version; a fourth
-counts changes to the binding alone and goes away when the header's version
-changes. `ps.__version__` gives the same string.
+`ysp-serial` 0.5.0.2 is `ysp/serial.h` v0.5.0 with binding revision 2:
+revision 1 changed every time to seconds, revision 2 added the async reader.
+The first three numbers are the header's version; a fourth counts changes to
+the binding alone and goes away when the header's version changes.
+`ps.__version__` gives the same string. 0.5.0.2 adds calls and does not
+change the API of 0.5.0.1.
 
 0.5.0.1 breaks the API of 0.5.0. Replace `now_us()` with `now()` (seconds),
 `timeout_ms` with `timeout`, `write_timeout_ms` with `write_timeout`,
@@ -219,11 +275,24 @@ changes. `ps.__version__` gives the same string.
 
 ## Tests
 
-The tests need no port:
+Most tests need no port:
 
 ```sh
 uv build --wheel -o dist
-uv run --no-project --with pytest --with dist/ysp_serial-0.5.0.1-cp38-abi3-<platform>.whl pytest tests
+uv run --no-project --with pytest --with dist/ysp_serial-0.5.0.2-cp38-abi3-<platform>.whl pytest tests
+```
+
+On Linux, `tests/test_async_pty.py` runs the async reader on a
+pseudo-terminal pair. `tests/test_async_device.py` needs an echo board
+(`firmware/ysp_echo`, a Teensy 4.0 or a Pico) and runs only when
+`YSP_SERIAL_PORT` names its port. It checks echo round trips with the
+reader on, a stream of 1000 lines per second for 10 s with no line lost, the
+latency of the reader's stamps against the board's own stamps, and the cost
+of a write while the reader runs. Add `-s` to see the numbers;
+`YSP_SERIAL_RESULTS=<dir>` also writes them to `<dir>/async_device.json`.
+
+```sh
+YSP_SERIAL_PORT=COM3 uv run --no-project --with pytest --with dist/ysp_serial-0.5.0.2-cp38-abi3-<platform>.whl pytest tests -s
 ```
 
 Device naming, USB latency, DTR-driven board resets and what a serial trigger

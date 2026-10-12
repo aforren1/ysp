@@ -30,7 +30,9 @@ This page is reference: the language bindings of the headers.
   (`async_start`, `async_read`, `async_stop`): a C thread that stamps each
   line when it arrives. `tests/compare/serial_bench/` runs it beside MATLAB's
   `serialport` and Psychtoolbox's `IOPort` (docs/serial.md). The Python
-  `ysp.serial` has no async reader yet.
+  `ysp.serial` has the same reader since 0.5.0.2 (`async_start`,
+  `async_read`, `async_wait`, `async_stop`, `async_stats`): a C thread that
+  never takes the GIL.
 
 ## Units
 
@@ -45,7 +47,7 @@ call can poll. [Conventions](conventions.md) lists the exceptions.
 
 | Binding | Times in seconds |
 |---|---|
-| `ysp.serial` | `now()`, `read(n, timeout)`, `Port(write_timeout=, rt_runtime=, rt_deadline=, rt_period=)`, `pulse(on, off, width)`, `pulse_async(on, off, width)`, `send_break(duration)`, `write_timeout`, `sched`, `TIMEOUT_INFINITE` (`math.inf`), `DEFAULT_WRITE_TIMEOUT`, `DEFAULT_RT_*` |
+| `ysp.serial` | `now()`, `read(n, timeout)`, `Port(write_timeout=, rt_runtime=, rt_deadline=, rt_period=)`, `pulse(on, off, width)`, `pulse_async(on, off, width)`, `send_break(duration)`, `async_wait(timeout)`, the `async_read()` stamps, `write_timeout`, `sched`, `TIMEOUT_INFINITE` (`math.inf`), `DEFAULT_WRITE_TIMEOUT`, `DEFAULT_RT_*` |
 | `ysp.parallel` | `now()`, `Port(rt_runtime=, rt_deadline=, rt_period=)`, `pulse(value, width)`, `pulse_async(value, width)`, `sched`, `DEFAULT_RT_*` |
 | `ysp_serial` (MEX) | `'now'`, the `'read'` timeout, the `'pulse'` and `'pulseasync'` widths, the `'break'` duration, the `open` struct (`write_timeout`, `rt_runtime`, `rt_deadline`, `rt_period`) and the `'async_read'` stamps |
 | `ysp_parallel` (MEX) | `'now'`, `'pulse'` and `'pulseasync'` widths, the RT struct and `'sched'` (`runtime`, `deadline`, `period`) |
@@ -60,7 +62,8 @@ binding alone adds a fourth number, which counts such changes and goes away
 when the header's version moves: `ysp-serial` 0.5.0.1 is `ysp/serial.h`
 v0.5.0 with the change to seconds, and `ysp-parallel` 0.4.0.1 is
 `ysp/parallel.h` v0.4.0 with the same change, and so is `ysp-rdk`
-0.2.0.1 for `ysp/rdk.h` v0.2.0. PEP 440 accepts the fourth
+0.2.0.1 for `ysp/rdk.h` v0.2.0. `ysp-serial` 0.5.0.2 is the second
+binding-only change to `ysp/serial.h` v0.5.0: the async reader. PEP 440 accepts the fourth
 number as a release segment, and 0.5.0.1 sorts after 0.5.0 and before
 0.5.1. A post-release (0.5.0.post1) was not used: it means "no code
 changed", and this change breaks the API. Each package's tests check that
