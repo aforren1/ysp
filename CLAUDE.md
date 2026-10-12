@@ -83,8 +83,9 @@ ThreadSanitizer needs `setarch -R` on this kernel. `ysp/audio.h` reads
 PulseAudio's stream timing info as its position (docs/audio.md); the
 `pulse-` mutants and `test_audio_pulse` need a running PulseAudio and
 `YSP_MINIAUDIO` set to the folder holding miniaudio.h; the `alsa-` ones
-and `test_audio_alsa` need `hw:0,0` (it reruns itself under
-`pasuspender`). Open: separate X screens in
+and `test_audio_alsa` need `hw:0,0`. AUTO on Linux is ALSA exclusive
+and suspends PulseAudio while open; if a run dies, `pactl suspend-sink
+0` brings the desktop's sound back. Open: separate X screens in
 one process (SDL 3 drives one; `desc.x_display` picks it per process).
 
 ## Linux real-time priority

@@ -2,11 +2,17 @@
  * on real sound hardware.
  *
  * Needs a card ALSA can open as hw: (YAU_ALSA_TEST_DEVICE, default
- * "hw:0,0") and plays 10 s of silence, so ctest does not run it. When a
- * PulseAudio server holds the card, the program runs itself again under
- * pasuspender. CMake builds it as test_audio_alsa on Linux with miniaudio;
- * the mutation list (tests/mutate/audio.toml, alsa-*) runs it.
+ * "hw:0,0", which must be the default card's first playback device) and
+ * plays about 15 s of silence, so ctest does not run it. CMake builds it as
+ * test_audio_alsa on Linux with miniaudio; the mutation list
+ * (tests/mutate/audio.toml, alsa-*) runs it.
  *
+ *   0. AUTO with a float project: ALSA exclusive on the default card's
+ *      first playback device at 32 bits. Where a PulseAudio server runs
+ *      (pactl answers): open() suspended it (the describe line says so),
+ *      its sinks are SUSPENDED while the device is open and not after
+ *      close; with desc.keep_sound_server the open fails and names
+ *      YAU_BACKEND_PULSE.
  *   1. yau_list_devices(ALSA) lists the test device's id.
  *   2. Exclusive mode with no device is refused (miniaudio would take
  *      "default", the sound server's plugin), and so is a name part that
@@ -36,7 +42,7 @@ static int g_failures = 0;
 
 static yau_device_entry g_list[128];
 
-int main(int argc, char** argv) {
+int main(void) {
     static yau_audio au;
     yau_desc d;
     yau_caps c;
@@ -45,12 +51,54 @@ int main(int argc, char** argv) {
     const char* req = getenv("YAU_ALSA_TEST_REQUIRE");
     int n, i, j, found = 0, dup = -1;
     int64_t end, t_now, t_last;
-    (void)argc;
     if (!dev || !dev[0]) dev = "hw:0,0";
-    /* PulseAudio holds the card: run again with it suspended */
-    if (!getenv("YAU_ALSA_TEST_CHILD") && access("/usr/bin/pactl", X_OK) == 0 && system("pactl info > /dev/null 2>&1") == 0) {
-        setenv("YAU_ALSA_TEST_CHILD", "1", 1);
-        execlp("pasuspender", "pasuspender", "--", argv[0], (char*)NULL);
+    /* 0 */
+    {
+        int server = access("/usr/bin/pactl", X_OK) == 0 && system("pactl info > /dev/null 2>&1") == 0;
+        memset(&d, 0, sizeof d);
+        if (!yau_open(&au, &d)) {
+            if (req && req[0] == '1') { fprintf(stderr, "audio_alsa_test: FAIL AUTO open: %s\n", yau_error(&au)); return 1; }
+            printf("audio_alsa_test: SKIP (AUTO: %s)\n", yau_error(&au));
+            return 0;
+        }
+        yrt_sleep_ns(YRT_MS(1000));
+        (void)yau_update(&au);
+        yau_describe(&au, line, sizeof line);
+        printf("AUTO: %s\n", line);
+        CHECK(strstr(line, "backend=ALSA") != NULL);
+        CHECK(strstr(line, "share=exclusive") != NULL);
+        CHECK(strstr(line, "out=s32") != NULL);
+        CHECK(strstr(line, "pos=device") != NULL);
+        {   /* the default card's first device is the one running */
+            int cc = 0, dd = 0;
+            char path[96];
+            FILE* f;
+            if (sscanf(dev, "hw:%d,%d", &cc, &dd) == 2) {
+                snprintf(path, sizeof path, "/proc/asound/card%d/pcm%dp/sub0/status", cc, dd);
+                f = fopen(path, "r");
+                CHECK(f != NULL);
+                if (f) {
+                    char st[64] = { 0 };
+                    CHECK(fgets(st, sizeof st, f) != NULL && strstr(st, "RUNNING") != NULL);
+                    fclose(f);
+                }
+            }
+        }
+        if (server) {
+            CHECK(strstr(line, "sound-server-suspended") != NULL);
+            CHECK(system("pactl list short sinks | grep -q SUSPENDED") == 0);
+        }
+        yau_close(&au);
+        if (server) {
+            yrt_sleep_ns(YRT_MS(300));
+            CHECK(system("pactl list short sinks | grep -q SUSPENDED") != 0);   /* resumed */
+            memset(&d, 0, sizeof d);
+            d.keep_sound_server = true;
+            CHECK(!yau_open(&au, &d));
+            printf("keep_sound_server: %s\n", yau_error(&au));
+            CHECK(strstr(yau_error(&au), "YAU_BACKEND_PULSE") != NULL);
+            if (yau_is_open(&au)) yau_close(&au);
+        }
     }
     /* 1 */
     n = yau_list_devices(YAU_BACKEND_ALSA, g_list, 128);

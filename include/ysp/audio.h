@@ -547,19 +547,26 @@
  *     and no automatic rerouting: a default-device change makes the device
  *     LOST. Exclusive mode: one buffer of one period, event-driven.
  *     Positions: IAudioClock, called in each callback.
- *   YAU_BACKEND_PULSE (Linux; AUTO there when a server answers, v0.5.0)
- *     Shared through the sound server. Positions: the stream's timing info
- *     (THE STREAM), asked for at most every 50 ms. Tier 3: no loopback.
- *   YAU_BACKEND_ALSA (Linux; AUTO there without a PulseAudio server)
- *     Shared: the device desc.device names, "default" without one (often
- *     a sound server's plugin); callback times only. Exclusive
+ *   YAU_BACKEND_ALSA (Linux; AUTO there, exclusive, v0.5.0)
+ *     AUTO on Linux is ALSA exclusive on the default card's first playback
+ *     device (ALSA_CARD, as alsa-lib reads it, else card 0) unless
+ *     desc.device names one, at 32 bits for a project of 24 bits or more:
+ *     the fastest path measured here. A program that wants the sound
+ *     server says YAU_BACKEND_PULSE. Shared (YAU_BACKEND_ALSA without
+ *     desc.exclusive): the device desc.device names, "default" without
+ *     one (often a sound server's plugin); callback times only. Exclusive
  *     (desc.exclusive, v0.5.0): the card's own device (hw:), past any
  *     sound server, with the shortest periods and a device position (the
  *     frames handed over less snd_pcm_status()'s delay, at its timestamp).
  *     desc.device must name it (an id like ":0,0" or "hw:0,0"); open()
- *     refuses without one, because miniaudio would take "default". A
- *     server that holds the card makes open() fail: run the program under
- *     pasuspender, or suspend the server's sink. Three periods per buffer
+ *     refuses without one (AUTO excepted), because miniaudio would take
+ *     "default". A sound server holds the card on a desktop: open()
+ *     suspends PulseAudio's sinks and sources (every one, as
+ *     Psychtoolbox's PsychPortAudio does by default) and resumes them at
+ *     the last close and at exit(); the describe line's backend field
+ *     says ALSA,sound-server-suspended. A program that dies without exit()
+ *     leaves them suspended: `pactl suspend-sink 0` resumes them.
+ *     desc.keep_sound_server makes open() fail instead. Three periods per buffer
  *     (with two, 64-frame periods read as halts). Measured on an Intel HDA
  *     codec (docs/audio.md, "Linux: ALSA exclusive"): 64-frame periods
  *     (1.3 ms) with no underrun idle; under 20 spinning threads one
@@ -571,6 +578,12 @@
  *     callback (SCHED_FIFO under an rtprio grant): miniaudio's "highest"
  *     keeps the creator's policy there, and this kept 64-frame periods
  *     whole under load (above).
+ *   YAU_BACKEND_PULSE (Linux, v0.5.0)
+ *     Shared through the sound server, which keeps the desktop's sound:
+ *     the choice for an operator's machine. Positions: the stream's timing
+ *     info (THE STREAM), asked for at most every 50 ms; a fit spread of 3
+ *     to 4 us, the shortest safe lead 15 to 17 ms here. Tier 3: no
+ *     loopback.
  *   YAU_BACKEND_COREAUDIO, _WEB
  *     Compiled through miniaudio; no position, so every onset is
  *     unconfirmed (tier 3) and the fit uses callback times. They have not
@@ -688,7 +701,10 @@
  *          describe line's os_claim says pulse:timing-info. Tier 3 still.
  *          ALSA exclusive (BACKENDS): the card's hw: device with a device
  *          position (alsa:status), three periods, desc.device required.
- *          AUTO on Linux tries PulseAudio before ALSA. The Linux device
+ *          AUTO on Linux is ALSA exclusive on the default card, at 32
+ *          bits for a float project; open() suspends PulseAudio to free
+ *          the card and resumes it at close and exit()
+ *          (desc.keep_sound_server: fail instead). The Linux device
  *          thread takes ysp/rt.h's ladder. DEVICES: yau_list_devices(), and
  *          desc.device takes an exact id; a name part that two devices
  *          share is refused (it took the first). Breaks a program that
@@ -1150,6 +1166,9 @@ typedef struct yau_desc {
     int32_t              queue;         /* WASAPI shared: periods queued
                                          * ahead of the engine, 1 or 2;
                                          * 0 = 2 (QUEUE)                    */
+    bool                 keep_sound_server; /* ALSA exclusive: fail rather
+                                         * than suspend a sound server that
+                                         * holds the card (BACKENDS)        */
 } yau_desc;
 
 typedef struct yau_caps {
@@ -1527,8 +1546,7 @@ typedef struct yau_device_entry {
     bool is_default;
 } yau_device_entry;
 
-/* The playback devices of a backend (AUTO: the one open() would try
- * first). Returns how many there are, which may be more than cap (cap
+/* The playback devices of a backend (AUTO: the backend open() takes). Returns how many there are, which may be more than cap (cap
  * entries are filled), or YAU_ERR_LOST when the backend does not start,
  * YAU_ERR_ARG for CUSTOM or a build with YAU_NO_MINIAUDIO. */
 YAU_API int         yau_list_devices(yau_backend backend, yau_device_entry* out, int cap);
@@ -2881,6 +2899,8 @@ typedef struct yau__ma {
     ma_device  dev;
     int        ctx_up, dev_up, closing;
     int        auto_pick;   /* desc.backend was AUTO                        */
+    int        keep_server; /* desc.keep_sound_server                       */
+    int        suspended;   /* this handle suspended the sound server       */
     int        elevated;    /* Linux: the device thread took ysp/rt.h's ladder */
     yau_audio* au;
     yau_render_fn render;
@@ -3064,6 +3084,96 @@ static int yau__ma_out(ma_format f) {
 static void yau__coreaudio_claims(yau__ma* m, yau_device_caps* caps);
 #endif
 
+#if defined(__linux__) && !defined(__ANDROID__)
+/* A sound server holds the card while it runs. For ALSA exclusive the
+ * header suspends PulseAudio's sinks and sources (every one, as
+ * Psychtoolbox's PsychPortAudio does by default through pactl,
+ * 'audioserver_autosuspend') and resumes them at the last close and at
+ * exit(). A suspension outlives the client that asked (measured: a sink
+ * suspended by pactl stayed suspended after pactl exited), so a program
+ * that dies without exit() leaves the desktop silent until
+ * `pactl suspend-sink 0`. Through libpulse in this process, not a shell;
+ * opens and closes on one thread, as the rest of open(). */
+static struct { int refs, at_exit; } yau__pas;
+
+static int yau__pulse_suspend(int on) {
+    typedef void* (*v_fn)(void);
+    typedef void* (*vp_fn)(void*);
+    typedef void* (*ctx_new_fn)(void*, const char*);
+    typedef int   (*connect_fn)(void*, const char*, int, const void*);
+    typedef int   (*state_fn)(const void*);
+    typedef int   (*iterate_fn)(void*, int, int*);
+    typedef void  (*free_fn)(void*);
+    typedef void* (*susp_fn)(void*, uint32_t, int, void*, void*);
+    ma_handle lib = ma_dlopen(NULL, "libpulse.so.0");
+    v_fn ml_new; vp_fn ml_api; iterate_fn ml_iter; free_fn ml_free, c_disc, c_unref, op_unref;
+    ctx_new_fn c_new; connect_fn c_conn; state_fn c_state, op_state; susp_fn s_sink, s_src;
+    void *ml = NULL, *c = NULL, *o1 = NULL, *o2 = NULL;
+    int ok = 0, st;
+    int64_t end = yrt_now_ns() + 2000000000LL;
+    if (!lib) return 0;
+    ml_new = (v_fn)ma_dlsym(NULL, lib, "pa_mainloop_new");
+    ml_api = (vp_fn)ma_dlsym(NULL, lib, "pa_mainloop_get_api");
+    ml_iter = (iterate_fn)ma_dlsym(NULL, lib, "pa_mainloop_iterate");
+    ml_free = (free_fn)ma_dlsym(NULL, lib, "pa_mainloop_free");
+    c_new = (ctx_new_fn)ma_dlsym(NULL, lib, "pa_context_new");
+    c_conn = (connect_fn)ma_dlsym(NULL, lib, "pa_context_connect");
+    c_state = (state_fn)ma_dlsym(NULL, lib, "pa_context_get_state");
+    c_disc = (free_fn)ma_dlsym(NULL, lib, "pa_context_disconnect");
+    c_unref = (free_fn)ma_dlsym(NULL, lib, "pa_context_unref");
+    s_sink = (susp_fn)ma_dlsym(NULL, lib, "pa_context_suspend_sink_by_index");
+    s_src = (susp_fn)ma_dlsym(NULL, lib, "pa_context_suspend_source_by_index");
+    op_state = (state_fn)ma_dlsym(NULL, lib, "pa_operation_get_state");
+    op_unref = (free_fn)ma_dlsym(NULL, lib, "pa_operation_unref");
+    if (!ml_new || !ml_api || !ml_iter || !ml_free || !c_new || !c_conn || !c_state || !c_disc || !c_unref ||
+        !s_sink || !s_src || !op_state || !op_unref || !(ml = ml_new())) {
+        ma_dlclose(NULL, lib);
+        return 0;
+    }
+    c = c_new(ml_api(ml), "ysp_audio");
+    /* PA_CONTEXT_NOAUTOSPAWN (1): suspend a running server, never start one */
+    if (c && c_conn(c, NULL, 1, NULL) >= 0) {
+        while ((st = c_state(c)) != 4 /* READY */ && st != 5 /* FAILED */ && st != 6 && yrt_now_ns() < end) {
+            ml_iter(ml, 0, NULL);
+            yrt_sleep_ns(YRT_MS(1));
+        }
+        if (st == 4) {
+            /* PA_INVALID_INDEX: every sink, every source */
+            o1 = s_sink(c, 0xFFFFFFFFu, on, NULL, NULL);
+            o2 = s_src(c, 0xFFFFFFFFu, on, NULL, NULL);
+            while (o1 && o2 && (op_state(o1) == 0 || op_state(o2) == 0) && yrt_now_ns() < end) {   /* RUNNING */
+                ml_iter(ml, 0, NULL);
+                yrt_sleep_ns(YRT_MS(1));
+            }
+            ok = o1 && o2 && op_state(o1) == 1 && op_state(o2) == 1;   /* DONE */
+            if (o1) op_unref(o1);
+            if (o2) op_unref(o2);
+        }
+        c_disc(c);
+    }
+    if (c) c_unref(c);
+    ml_free(ml);
+    ma_dlclose(NULL, lib);
+    return ok;
+}
+
+static void yau__pulse_at_exit(void) {
+    if (yau__pas.refs > 0) { yau__pas.refs = 0; (void)yau__pulse_suspend(0); }
+}
+
+static int yau__pulse_take(void) {
+    if (yau__pas.refs > 0) { yau__pas.refs++; return 1; }
+    if (!yau__pulse_suspend(1)) return 0;
+    yau__pas.refs = 1;
+    if (!yau__pas.at_exit) { yau__pas.at_exit = 1; atexit(yau__pulse_at_exit); }
+    return 1;
+}
+
+static void yau__pulse_give(void) {
+    if (yau__pas.refs > 0 && --yau__pas.refs == 0) (void)yau__pulse_suspend(0);
+}
+#endif
+
 /* A device id as desc.device takes it. ALSA's ":0,0" is miniaudio's: hw:0,0
  * in exclusive mode, dmix or plughw on that card and device in shared. */
 static void yau__ma_id_str(ma_backend b, const ma_device_id* id, char* out, size_t cap) {
@@ -3124,24 +3234,17 @@ static int yau__ma_open(void* ctx, const yau_device_open* in, yau_device_caps* c
     ma_device_id* pick = NULL;
     ma_result r;
     int is_null = m->backend == ma_backend_null;
+    int excl = in->exclusive;
     cc.allocationCallbacks.pUserData = m;
     cc.allocationCallbacks.onMalloc = yau__ma_malloc;
     cc.allocationCallbacks.onRealloc = yau__ma_realloc;
     cc.allocationCallbacks.onFree = yau__ma_free;
     cc.threadPriority = ma_thread_priority_highest;
 #if defined(__linux__) && !defined(__ANDROID__)
-    /* AUTO on Linux: PulseAudio when a server answers (its timing info is a
-     * position, 3 us of fit spread), else ALSA, whose default device is
-     * often PulseAudio's plugin with callback times only (0.5 ms) */
-    if (m->auto_pick && !in->exclusive) {
-        ma_backend pa = ma_backend_pulseaudio;
-        if (ma_context_init(&pa, 1, &cc, &m->ctx) == MA_SUCCESS) {
-            m->backend = pa;
-            r = MA_SUCCESS;
-        } else {
-            r = ma_context_init(&m->backend, 1, &cc, &m->ctx);
-        }
-    } else
+    /* AUTO on Linux: ALSA exclusive on the default card (BACKENDS), the
+     * shortest periods with a device position; a program that wants the
+     * sound server says YAU_BACKEND_PULSE */
+    if (m->auto_pick) excl = 1;
 #endif
     r = ma_context_init(&m->backend, 1, &cc, &m->ctx);
     if (r != MA_SUCCESS) {
@@ -3157,7 +3260,31 @@ static int yau__ma_open(void* ctx, const yau_device_open* in, yau_device_caps* c
             snprintf(err, err_cap, "ysp_audio: %s did not list its devices", ma_get_backend_name(m->backend));
         if (!pick) return YAU_ERR_ARG;
     }
-    if (m->backend == ma_backend_alsa && in->exclusive) {
+#if defined(__linux__) && !defined(__ANDROID__)
+    if (m->auto_pick && !pick && m->backend == ma_backend_alsa) {
+        /* the default card (ALSA_CARD, as alsa-lib reads it, else card 0)
+         * and its first playback device */
+        typedef int (*card_index_fn)(const char*);
+        const char* env = getenv("ALSA_CARD");
+        card_index_fn card_index = (card_index_fn)ma_dlsym(NULL, m->ctx.alsa.asoundSO, "snd_card_get_index");
+        int card = env && env[0] && card_index ? card_index(env) : 0, best = -1, c, dv;
+        char id[256];
+        if (ma_context_get_devices(&m->ctx, &infos, &ninfo, NULL, NULL) == MA_SUCCESS)
+            for (i = 0; i < ninfo; i++) {
+                yau__ma_id_str(m->backend, &infos[i].id, id, sizeof id);
+                if (sscanf(id, ":%d,%d", &c, &dv) == 2 && c == card && (best < 0 || dv < best)) {
+                    best = dv;
+                    pick = &infos[i].id;
+                }
+            }
+        if (!pick) {
+            snprintf(err, err_cap, "ysp_audio: AUTO found no playback device on ALSA card %d (ALSA_CARD picks "
+                     "another; desc.device names one; YAU_BACKEND_PULSE plays through the sound server)", card);
+            return YAU_ERR_LOST;
+        }
+    }
+#endif
+    if (m->backend == ma_backend_alsa && excl) {
         /* miniaudio would try "default" first, which here is PulseAudio's
          * plugin: exclusive in name only */
         char id[256];
@@ -3176,10 +3303,14 @@ static int yau__ma_open(void* ctx, const yau_device_open* in, yau_device_caps* c
      * format of its own and takes the project's. */
     dc.playback.format = is_null ? (in->format->sample == YAU_S16 ? ma_format_s16 : ma_format_f32)
                                  : ma_format_unknown;
+    /* A card's hw: device offers several formats of its own, and left to
+     * choose miniaudio took 16 bits on this codec (which also does 32): a
+     * project of 24 bits or more asks for 32, still the device's own */
+    if (m->backend == ma_backend_alsa && excl && in->format->sample != YAU_S16) dc.playback.format = ma_format_s32;
     dc.playback.channels = is_null ? in->format->channels : 0;
     dc.sampleRate = is_null ? in->format->rate : 0;
     dc.playback.pChannelMap = NULL;
-    dc.playback.shareMode = in->exclusive ? ma_share_mode_exclusive : ma_share_mode_shared;
+    dc.playback.shareMode = excl ? ma_share_mode_exclusive : ma_share_mode_shared;
     dc.periodSizeInFrames = (ma_uint32)in->period;
     /* Exclusive mode: miniaudio's default of 3 makes one buffer of three
      * periods, filled by three callbacks in a burst per event; measured, it
@@ -3187,7 +3318,7 @@ static int yau__ma_open(void* ctx, const yau_device_open* in, yau_device_caps* c
      * (docs/audio.md). Shared mode ignores it (IAudioClient3). */
     /* ALSA exclusive keeps miniaudio's 3: with 2 (what 1 becomes) the
      * reports at 64 frames read as halts 25 times in 20 s; with 3, none */
-    dc.periods = in->exclusive && m->backend != ma_backend_alsa ? 1 : 0;
+    dc.periods = excl && m->backend != ma_backend_alsa ? 1 : 0;
     dc.performanceProfile = ma_performance_profile_low_latency;
     dc.noFixedSizedCallback = MA_TRUE;
     dc.noClip = MA_TRUE;
@@ -3205,12 +3336,23 @@ static int yau__ma_open(void* ctx, const yau_device_open* in, yau_device_caps* c
      * (docs/audio.md) */
     dc.wasapi.usage = ma_wasapi_usage_pro_audio;
     r = ma_device_init(&m->ctx, &dc, &m->dev);
+#if defined(__linux__) && !defined(__ANDROID__)
+    /* the card is busy: a sound server holds it (the usual case on a
+     * desktop); suspend it and try once more */
+    if (r != MA_SUCCESS && m->backend == ma_backend_alsa && excl && !m->keep_server && yau__pulse_take()) {
+        r = ma_device_init(&m->ctx, &dc, &m->dev);
+        if (r == MA_SUCCESS) m->suspended = 1;
+        else yau__pulse_give();
+    }
+#endif
     if (r != MA_SUCCESS) {
         snprintf(err, err_cap, "ysp_audio: %s did not open the device%s (%s)%s",
-                 ma_get_backend_name(m->backend), in->exclusive ? " in exclusive mode" : "",
+                 ma_get_backend_name(m->backend), excl ? " in exclusive mode" : "",
                  ma_result_description(r),
-                 m->backend == ma_backend_alsa && in->exclusive
-                     ? "; a sound server may hold the card: run under pasuspender, or suspend its sink" : "");
+                 m->backend != ma_backend_alsa || !excl ? ""
+                 : m->keep_server ? "; a sound server may hold the card: leave desc.keep_sound_server off to "
+                                    "suspend it, or play through it with YAU_BACKEND_PULSE"
+                                  : "; no sound server could be suspended to free it");
         return r == MA_BUSY || r == MA_ACCESS_DENIED ? YAU_ERR_LOST : YAU_ERR_FORMAT;
     }
     m->dev_up = 1;
@@ -3382,11 +3524,15 @@ static void yau__ma_close(void* ctx) {
 #endif
     if (m->dev_up) { ma_device_uninit(&m->dev); m->dev_up = 0; }
     if (m->ctx_up) { ma_context_uninit(&m->ctx); m->ctx_up = 0; }
+#if defined(__linux__) && !defined(__ANDROID__)
+    if (m->suspended) { m->suspended = 0; yau__pulse_give(); }
+#endif
 }
 
 static int yau__ma_describe(void* ctx, char* buf, size_t cap) {
     yau__ma* m = (yau__ma*)ctx;
-    return snprintf(buf, cap, "%s", ma_get_backend_name(m->backend));
+    /* the describe line's backend= field: one token */
+    return snprintf(buf, cap, "%s%s", ma_get_backend_name(m->backend), m->suspended ? ",sound-server-suspended" : "");
 }
 
 static const yau_device yau__ma_device = {
@@ -3423,13 +3569,6 @@ YAU_API int yau_list_devices(yau_backend backend, yau_device_entry* out, int cap
     ma_device_info* infos = NULL;
     ma_uint32 n = 0, i;
     if (!yau__ma_backend(backend, &b) || cap < 0 || (cap > 0 && !out)) return YAU_ERR_ARG;
-#if defined(__linux__) && !defined(__ANDROID__)
-    if (backend == YAU_BACKEND_AUTO) {   /* as open(): PulseAudio first */
-        ma_backend pa = ma_backend_pulseaudio;
-        if (ma_context_init(&pa, 1, NULL, &c) == MA_SUCCESS) b = pa;
-        else if (ma_context_init(&b, 1, NULL, &c) != MA_SUCCESS) return YAU_ERR_LOST;
-    } else
-#endif
     if (ma_context_init(&b, 1, NULL, &c) != MA_SUCCESS) return YAU_ERR_LOST;
     if (ma_context_get_devices(&c, &infos, &n, NULL, NULL) != MA_SUCCESS) { ma_context_uninit(&c); return YAU_ERR_LOST; }
     for (i = 0; i < n && (int)i < cap; i++) {
@@ -4001,6 +4140,7 @@ YAU_API bool yau_open(yau_audio* au, const yau_desc* desc) {
         yau__ma* m = (yau__ma*)(void*)au->backend_mem;
         if (!yau__ma_backend(d.backend, &m->backend)) { yau__err(au, "ysp_audio: unknown backend %d", (int)d.backend); return false; }
         m->auto_pick = d.backend == YAU_BACKEND_AUTO;
+        m->keep_server = d.keep_sound_server;
         m->au = au;
         au->dev = &yau__ma_device;
         au->dev_ctx = m;
@@ -4755,6 +4895,7 @@ YAU_API const yau_param* yau_params(int* n) {
         { "exclusive",       "bool", 0, 1, 0, "",                  "WASAPI exclusive mode; silences every other program" },
         { "period",          "i32",  0, 65536, 480, "frame",       "frames per callback; 0 = 10 ms" },
         { "queue",           "i32",  0, 2, 2, "period",            "WASAPI shared: periods queued ahead of the engine; 1 saves a period of lead and a period of stall margin" },
+        { "keep_sound_server", "bool", 0, 1, 0, "",                "ALSA exclusive: fail rather than suspend a sound server that holds the card" },
         { "voices",          "i32",  1, YAU_MAX_VOICES, 32, "",  "sounds playing or waiting at once" },
         { "device_index",    "u32",  0, 7, 0, "",                  "device number in the records" },
         { "min_tier",        "i32",  0, 3, 0, "",                  "flag onsets whose tier is worse; 0 = off" },

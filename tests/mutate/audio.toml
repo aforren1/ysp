@@ -325,8 +325,8 @@ id = "alsa-02"
 name = "two periods in ALSA exclusive"
 test = "audio_alsa"
 why = "At 64-frame periods two periods made 25 false halts in 20 s; three made none."
-find = "    dc.periods = in->exclusive && m->backend != ma_backend_alsa ? 1 : 0;"
-replace = "    dc.periods = in->exclusive ? 1 : 0;"
+find = "    dc.periods = excl && m->backend != ma_backend_alsa ? 1 : 0;"
+replace = "    dc.periods = excl ? 1 : 0;"
 
 [[mutant]]
 id = "alsa-03"
@@ -351,3 +351,46 @@ test = "audio_alsa"
 why = "Users write hw:0,0; miniaudio's id is :0,0."
 find = "    if (b == ma_backend_alsa && strncmp(want, \"hw:\", 3) == 0) {   /* hw:0,0 is \":0,0\" */"
 replace = "    if (0) {"
+
+# v0.5.0, AUTO on Linux: ALSA exclusive on the default card, the sound
+# server suspended and resumed (BACKENDS).
+
+[[mutant]]
+id = "alsa-06"
+name = "AUTO on Linux not exclusive"
+test = "audio_alsa"
+why = "AUTO would open ALSA's default, the sound server's plugin: callback times and the server's latency, the worse path no one asked for."
+find = "    if (m->auto_pick) excl = 1;"
+replace = "    (void)0;"
+
+[[mutant]]
+id = "alsa-07"
+name = "the sound server not suspended"
+test = "audio_alsa"
+why = "On a desktop the server holds the card, and AUTO would fail on every run."
+find = "    if (r != MA_SUCCESS && m->backend == ma_backend_alsa && excl && !m->keep_server && yau__pulse_take()) {"
+replace = "    if (0) {"
+
+[[mutant]]
+id = "alsa-08"
+name = "the sound server not resumed at close"
+test = "audio_alsa"
+why = "A suspension outlives its client: the desktop would stay silent after the experiment."
+find = "    if (m->suspended) { m->suspended = 0; yau__pulse_give(); }"
+replace = "    (void)0;"
+
+[[mutant]]
+id = "alsa-09"
+name = "no 32-bit request on hw:"
+test = "audio_alsa"
+why = "Left to choose, miniaudio took 16 bits on this codec, and a float project was refused."
+find = "    if (m->backend == ma_backend_alsa && excl && in->format->sample != YAU_S16) dc.playback.format = ma_format_s32;"
+replace = "    (void)0;"
+
+[[mutant]]
+id = "alsa-10"
+name = "the default card's last device"
+test = "audio_alsa"
+why = "AUTO takes the default card's first playback device (here the analog output; the later ones are HDMI)."
+find = "                if (sscanf(id, \":%d,%d\", &c, &dv) == 2 && c == card && (best < 0 || dv < best)) {"
+replace = "                if (sscanf(id, \":%d,%d\", &c, &dv) == 2 && c == card && (best < 0 || dv > best)) {"

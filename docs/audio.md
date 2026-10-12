@@ -1169,9 +1169,9 @@ a program that wants the least latency asks for 64-frame periods
 WASAPI exclusive on the Windows laptop's codec was slower than its shared
 mode ("Exclusive mode" above); here exclusive is the fastest path.
 
-`tests/adapt/audio_alsa_test.c` (`test_audio_alsa`, not in ctest; it
-runs itself again under `pasuspender` when PulseAudio answers) checks the
-list, the refusals, both spellings of the id, and 10 s at 64 frames: the
+`tests/adapt/audio_alsa_test.c` (`test_audio_alsa`, not in ctest) checks
+AUTO (next section), the list, the refusals, both spellings of the id,
+and 10 s at 64 frames: the
 device position, no underrun, a spread under 50 us (5.1 us here).
 Mutants `alsa-00` to `alsa-05`, all killed. Tier 3: no loopback can
 capture an exclusive stream, as on WASAPI.
@@ -1194,9 +1194,58 @@ headphone amplifier and HDMI has several plausible outputs. From v0.5.0:
 - `yau_list_devices(backend, out, cap)` gives each playback device's
   name, id and whether it is the default; `clockstats` and a rig's setup
   screen can show it.
-- AUTO on Linux is PulseAudio when its server answers, else ALSA.
+- AUTO on Linux: next section.
 
 There is still no input: the header plays only.
+
+## AUTO on Linux (v0.5.0)
+
+Of the three Linux paths measured here (ALSA exclusive, PulseAudio, and
+ALSA's `"default"`, which on a desktop is PulseAudio's plugin), ALSA
+exclusive has the shortest safe lead (4 to 6 ms at 64-frame periods,
+against 15 to 17 ms through PulseAudio) and a device position as good as
+PulseAudio's; `"default"` has neither a position nor a short lead. AUTO
+until v0.5.0 was ALSA's `"default"`, the worst of the three. So AUTO on
+Linux is ALSA exclusive, and a program that wants the sound server (an
+operator's machine, a demo beside a browser) says `YAU_BACKEND_PULSE`.
+This is the strict choice elsewhere in ysp (STRICT OPEN; ysp/screen.h's
+strict settle): the better path by default, the worse one by name. On
+Windows AUTO stays WASAPI shared, because there shared measured faster
+than exclusive and has the loopback check for tier 2.
+
+- The device: `desc.device` if given; else the default card's first
+  playback device, the card from `ALSA_CARD` as alsa-lib reads it, else
+  card 0 (`hw:0,0` here, the codec's analog output; the card's later
+  devices are HDMI). A card with none fails with a message naming
+  `ALSA_CARD`, `desc.device` and `YAU_BACKEND_PULSE`.
+- The format: with nothing asked, miniaudio took 16 bits on this codec,
+  which also does 32, and a float project was refused (STRICT OPEN). On a
+  `hw:` device a project of 24 bits or more asks for 32, the device's own.
+- The sound server: PulseAudio holds the card while it runs, so the open
+  fails with "Device or resource busy". Psychtoolbox's PsychPortAudio
+  (3.0.19, its `audioserver_autosuspend`, on by default) runs
+  `pactl suspend-sink 1` and `pactl suspend-source 1` while it is active.
+  The header does the same through libpulse in-process: on a busy card it
+  suspends every sink and source, opens again, and resumes them at the
+  last close and in an `atexit()` handler. A suspension outlives the
+  client that asked (a sink suspended by `pactl` stayed SUSPENDED after
+  `pactl` exited), so a program that dies without `exit()` leaves the
+  desktop silent: `pactl suspend-sink 0` resumes it. The describe line's
+  backend field says `ALSA,sound-server-suspended`.
+  `desc.keep_sound_server` makes the open fail instead, naming
+  `YAU_BACKEND_PULSE`.
+
+Measured (`audio_clockstats` with no backend, PulseAudio running): the
+sink went IDLE, SUSPENDED while open, IDLE after close; a float project
+at 32 bits, 0 underruns, a 3.4 us fit spread and a 6.0 ms safe lead at
+64-frame periods, 48.7 ms at the default 10 ms period.
+`test_audio_alsa` checks AUTO: ALSA, exclusive, 32 bits, a device
+position, the server suspended while open (its sinks SUSPENDED) and
+resumed after, `/proc/asound/card0/pcm0p/sub0/status` RUNNING (the
+default card's first device), and the refusal under
+`desc.keep_sound_server`. Mutants `alsa-06` to `alsa-10`, killed: AUTO
+not exclusive, no suspension, no resume, no 32-bit request, the card's
+last device.
 
 ## Not measured
 
