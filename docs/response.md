@@ -780,6 +780,22 @@ helpers where they fit:
 | `trial_stop_signal` | 422 to 420 | 297 to 277 | 116 to 115 | open, feed, update, landing | yes |
 | `trial_2afc_adaptive` | 512 to 510 | 345 to 327 | 90 to 82 | open, feed, update, landing | yes |
 | `trial_stroop` | 510 to 492 | 353 to 333 | 103 to 90 | open, feed, update, landing | no |
+| `trial_rdk` (`examples/rdk/`) | 453 to 395 | 324 to 255 | 107 to 87 | open, feed, update, landing | yes |
+| `trial_images` (`examples/pack/`) | 455 to 419 | 311 to 258 | 98 to 76 | open, feed, update, landing | yes, without the session's columns |
+| `trial_sternberg` (`examples/timeline/`) | 554 to 510 | 362 to 319 | 130 to 109 | open, feed, update, landing | yes |
+
+The last three rows are the examples outside `examples/response/` that
+had the same plumbing, converted on 2026-10-11. Each `--sim` now times
+its keys from the stimulus's planned onset and checks the RT against the
+flip record's onset (`rt + (t_onset - plan)`), so a frame that lands late
+under load does not fail the check. `trial_images` writes no session
+columns: its pack's table has a `block` column (navon, rotation), the
+name of the session's block number, so the session's line goes to
+`FILE.meta` by hand. `trial_sternberg`'s conditions column `probe` (present
+or absent) is now `probe_type`, because the row's `probe` is the digit.
+The conversion found a bug in `trial_sternberg`'s set-size slope on
+stdout: since v0.3.0's nanosecond times it added `k * rt_ns` to a sum in
+seconds. The data file was not affected.
 
 The counts: `total` is `wc -l`; `code` is the non-blank, non-comment
 lines without the `--sim` participant (a line that names a `sim` variable
@@ -792,8 +808,11 @@ it plans the tone when the go stimulus lands and moves it when the record
 differs.
 
 The data writer is in `trial_keyboard`, `trial_same_different`,
-`trial_audio_keyboard`, `trial_stop_signal` and `trial_2afc_adaptive`.
-Not in the others: `trial_srt` opens a new trial list for each block,
+`trial_audio_keyboard`, `trial_stop_signal`, `trial_2afc_adaptive`,
+`trial_rdk`, `trial_images` and `trial_sternberg`. In the last three, the
+settings (the screen, the response header, the `ysp/rdk.h` desc, the
+pack's id) moved from `#` lines in the CSV to `FILE.meta`. Not in the
+others: `trial_srt` opens a new trial list for each block,
 which a writer bound to one session does not follow; `trial_adjustment`
 and `trial_mouse_tracking` write a trajectory file beside the trial file
 and their columns are mostly their own; `trial_stroop` writes its rules

@@ -23,16 +23,18 @@
  * yrdk_digest() of the final state. ysp/rdk.h's REPRODUCIBILITY section
  * defines every rule in integers, so yrdk_replay() of a trial's steps
  * from its seed gives the same digest on any machine: a reviewer can
- * regenerate every dot of every frame from the two files and the desc on
- * the data file's '#' line.
+ * regenerate every dot of every frame from the two files and the desc in
+ * FILE.meta (its rdk= line).
  *
- * Columns, jsPsych's names first: trial_index, coherence,
- * coherent_direction, key_answer, response, rt, correct; then onset_tier,
- * onset_src, landing_residual, onset_frame, rsp_tier, n_anticipations,
- * rdk_seed, rdk_updates, rdk_digest, frames_dropped (flip records of the
- * motion frames with a dropped vblank). Times in seconds. Steps file:
- * trial_index, update, t (s from the motion onset), coherence, direction,
- * speed.
+ * The data file has one row per trial (ysp/trials.h's data writer): the
+ * session's columns (index, block, ..., coherence, coherent_direction,
+ * key_answer: jsPsych's names), then trial_index, correct, rdk_seed,
+ * rdk_updates, rdk_digest, frames_dropped (flip records of the motion
+ * frames with a dropped vblank), then the response's (YRSP_DATA_COLS:
+ * response, rt, onset_src, onset_tier, the residuals, onset_frame,
+ * rsp_tier, rsp_flags, n_anticipations, n_early). Times in seconds; the
+ * settings go to FILE.meta. Steps file: trial_index, update, t (s from the
+ * motion onset), coherence, direction, speed.
  *
  * At the end of every run the program reads the steps file back and
  * replays each trial: every digest must match the row's, or it exits 1.
@@ -87,16 +89,26 @@ static const char conditions_csv[] =
 
 static const yrsp_choice keys[] = { { .key = "left" }, { .key = "right" } };
 
+/* The program's own columns; ysp/trials.h writes the session's before
+ * them and yrsp_data_set() fills YRSP_DATA_COLS. The seed and the digest
+ * are text: a uint64_t, the digest in hex. */
+typedef struct row { int trial_index, rdk_updates, frames_dropped; bool correct; char rdk_seed[24], rdk_digest[17]; } row;
+static const ytr_col cols[] = {
+    YTR_COL(row, trial_index, YTR_COL_INT), YTR_COL(row, correct, YTR_COL_BOOL),
+    YTR_COL(row, rdk_seed, YTR_COL_CHARS), YTR_COL(row, rdk_updates, YTR_COL_INT),
+    YTR_COL(row, rdk_digest, YTR_COL_CHARS), YTR_COL(row, frames_dropped, YTR_COL_INT), YRSP_DATA_COLS,
+};
+
 static yscr_screen scr;
 static ygfx_gfx gfx;
 static ytl_timeline tl;
 static ytl_event storage[64];
 static ytr_trials trials;
+static ytr_data data;
 static yrsp_collector rsp;
 static uint64_t table_arena[2048];
 static ytb_table tab;
 static yrdk_field rdk, replay;
-static yrdk_desc rdesc;
 static ygfx_buf buf;
 static ygfx_stim fix, dots;
 static float xy[2 * N_DOTS];
@@ -105,10 +117,24 @@ static const ygfx_bind binds[] = {
     { .stim = &fix,  .param = YGFX_P_VISIBLE, .channel = FIX_ON  },
     { .stim = &dots, .param = YGFX_P_VISIBLE, .channel = DOTS_ON },
 };
+static yrsp_input sim_ev[2];
+static int n_sim_ev, sim_next;
 
-static void sec(char* out, size_t cap, double s) {
-    if (s != s) out[0] = 0;
-    else snprintf(out, cap, "%.9f", s);
+static int fail(const char* why) {
+    fprintf(stderr, "trial_rdk: %s\n", why);
+    return 1;
+}
+
+/* --sim: a press of `key` at t, held 0.06 s. */
+static void sim_press(int64_t t, const char* key) {
+    sim_ev[0] = (yrsp_input){ .t = t, .kind = YRSP_KIND_KEYBOARD, .type = YRSP_PRESS,
+                              .control = (uint32_t)yrsp_scancode(key), .stamp = YRSP_TIER_SIM, .value = 1 };
+    sim_ev[1] = sim_ev[0];
+    sim_ev[1].type = YRSP_RELEASE;
+    sim_ev[1].value = 0;
+    sim_ev[1].t += YRT_MS(60);
+    n_sim_ev = 2;
+    sim_next = 0;
 }
 
 /* Read the steps file back, replay each trial, compare digests. */
@@ -153,35 +179,23 @@ int main(int argc, char** argv) {
     static int sim_key[MAX_ROWS];
     static yrsp_result sim_res[MAX_ROWS];
     static int64_t sim_plan[MAX_ROWS];   /* where the script's times start */
-    yscr_desc sd;
-    ygfx_desc gd;
-    ygfx_dots_desc dd;
-    ygfx_shape_desc shd;
-    ytl_desc td;
-    ytb_csv_desc cd;
-    ytr_desc rd;
-    yrsp_desc pd;
-    yrsp_sdl_ctx sdl;
-    yrsp_source sources[1];
+    const yrdk_desc rdesc = { .w = 400, .count = N_DOTS, .speed = 200 };   /* DotStim's SAME signal, DIRECTION noise */
     yscr_caps caps;
     yscr_frame f;
-    ytl_event fired[16];
+    yrsp_source source;
+    ytl_event fired[64];                   /* the timeline's capacity: all that can fire */
     ytr_trial_info ti = { 0 };
     yrsp_result res;
-    yrsp_input sim_ev[2];
-    FILE *out, *sout;
-    char line[1024], meta[2048];
-    const char* out_path = "trial_rdk.csv";
-    const char* steps_path = "trial_rdk_steps.csv";
+    row r = { 0 };
+    FILE* sout;
+    char line[1024], meta[2048], meta_path[1100];
+    const char *out_path = "trial_rdk.csv", *steps_path = "trial_rdk_steps.csv";
     uint64_t seed = 20261009, trial_seed = 0;
-    int i, n, sim = 0, reps = 0, fullscreen = 0, aborted = 0, failed = 0, rows = 0, sim_bad = 0;
-    int in_trial = 0, responding = 0, moving = 0, n_steps = 0, n_sim_ev = 0, sim_next = 0, dropped = 0;
-    int coh_col, dir_col, key_col, answer = 0;
-    int64_t stim_frame = -1, landing_residual = 0, motion_t0 = 0, first_motion_frame = -1, last_motion_frame = -1;
+    int i, n, landed, sim = 0, reps = 0, fullscreen = 0, aborted = 0, failed = 0, rows = 0, sim_bad = 0;
+    int in_trial = 0, responding = 0, moving = 0, n_steps = 0, dropped = 0, coh_col, dir_col, key_col, answer = 0;
+    int64_t motion_t0 = 0, first_motion_frame = -1, last_motion_frame = -1;
     double coherence = 0;
-    float direction = 0;
 
-    memset(&sd, 0, sizeof sd);
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--sim")) sim = 1;
         else if (!strcmp(argv[i], "--fullscreen")) fullscreen = 1;
@@ -196,211 +210,139 @@ int main(int argc, char** argv) {
     }
     if (reps == 0) reps = sim ? 1 : 5;
     if (reps < 1 || reps > 50) { fprintf(stderr, "trial_rdk: --reps takes 1..50\n"); return 2; }
-    if (sim) sd.backend = YSCR_BACKEND_SIM;
-    sd.windowed = !fullscreen;
-    if (!yscr_open(&scr, &sd)) { fprintf(stderr, "trial_rdk: %s\n", yscr_error(&scr)); return 1; }
+
+    /* the display and the graphics, opened together and primed */
+    if (!ygfx_open_screen(&gfx, &scr, &(yscr_desc){ .backend = sim ? YSCR_BACKEND_SIM : 0, .windowed = !fullscreen },
+                          &(ygfx_desc){ .background = { 0.5f, 0.5f, 0.5f } }))
+        return fail(ygfx_error(&gfx));
     yscr_get_caps(&scr, &caps);
-    memset(&gd, 0, sizeof gd);
-    gd.screen = &scr;
-    gd.background[0] = gd.background[1] = gd.background[2] = 0.5f;
-    if (!ygfx_open(&gfx, &gd)) { fprintf(stderr, "trial_rdk: %s\n", ygfx_error(&gfx)); return 1; }
 
-    /* the field (PsychoPy's DotStim defaults: SAME signal, DIRECTION noise) */
-    memset(&rdesc, 0, sizeof rdesc);
-    rdesc.w = 400;
-    rdesc.count = N_DOTS;
-    rdesc.speed = 200;
-    if (!yrdk_open(&rdk, &rdesc) || !yrdk_open(&replay, &rdesc)) {
-        fprintf(stderr, "trial_rdk: %s\n", yrdk_error(&rdk));
-        return 1;
-    }
+    /* the field, a second one for the replays, and the stimuli */
+    if (!yrdk_open(&rdk, &rdesc) || !yrdk_open(&replay, &rdesc)) return fail(yrdk_error(&rdk));
     buf = ygfx_buffer(&gfx, sizeof xy);
-    memset(&dd, 0, sizeof dd);
-    dd.buf = buf;
-    dd.count = N_DOTS;
-    dd.dot_size = 4;
-    dd.aperture = YGFX_CIRCLE;
-    dd.w = 400;
-    dd.color[0] = dd.color[1] = dd.color[2] = 1.0f;
-    dots = ygfx_dots(&dd);
-    memset(&shd, 0, sizeof shd);
-    shd.shape = YGFX_CROSS;
-    shd.w = shd.h = 16;
-    shd.shape_p[0] = 3;
-    shd.edge = YGFX_EDGE_COSINE;
-    shd.edge_width = 1;
-    shd.color[0] = shd.color[1] = shd.color[2] = 0.2f;
-    fix = ygfx_shape(&shd);
+    dots = ygfx_dots(&(ygfx_dots_desc){ .buf = buf, .count = N_DOTS, .dot_size = 4, .aperture = YGFX_CIRCLE, .w = 400,
+                                        .color = { 1, 1, 1 } });
+    fix = ygfx_shape(&(ygfx_shape_desc){ .shape = YGFX_CROSS, .w = 16, .h = 16, .shape_p = { 3 },
+                                         .edge = YGFX_EDGE_COSINE, .edge_width = 1, .color = { 0.2f, 0.2f, 0.2f } });
 
-    memset(&cd, 0, sizeof cd);
-    cd.text = conditions_csv;
-    cd.len = sizeof conditions_csv - 1;
-    cd.arena = table_arena;
-    cd.arena_size = sizeof table_arena;
-    if (!ytb_open_csv(&tab, &cd)) { fprintf(stderr, "trial_rdk: %s\n", ytb_error(&tab)); return 1; }
+    /* the conditions, in a random order */
+    if (!ytb_open_csv(&tab, &(ytb_csv_desc){ .text = conditions_csv, .len = sizeof conditions_csv - 1,
+                                             .arena = table_arena, .arena_size = sizeof table_arena }))
+        return fail(ytb_error(&tab));
     coh_col = ytb_col(&tab, "coherence");
     dir_col = ytb_col(&tab, "coherent_direction");
     key_col = ytb_col(&tab, "key_answer");
-    memset(&rd, 0, sizeof rd);
-    rd.table = &tab;
-    rd.reps = reps;
-    rd.order = YTR_ORDER_RANDOM;
-    rd.rng = ytr_splitmix;
-    rd.rng_ctx = &seed;
-    if (!ytr_open(&trials, &rd)) { fprintf(stderr, "trial_rdk: %s\n", ytr_error(&trials)); return 1; }
+    if (!ytr_open(&trials, &(ytr_desc){ .table = &tab, .reps = reps, .order = YTR_ORDER_RANDOM, .rng = ytr_splitmix,
+                                        .rng_ctx = &seed }))
+        return fail(ytr_error(&trials));
+    if (!ytl_open(&tl, &(ytl_desc){ .events = storage, .event_capacity = 64, .n_channels = N_CHANNELS }))
+        return fail(ytl_error(&tl));
 
-    memset(&td, 0, sizeof td);
-    td.events = storage;
-    td.event_capacity = 64;
-    td.n_channels = N_CHANNELS;
-    if (!ytl_open(&tl, &td)) { fprintf(stderr, "trial_rdk: %s\n", ytl_error(&tl)); return 1; }
+    /* the response: an arrow key, within 1.5 s of the motion onset, none before 0.1 s */
+    source = yrsp_sdl_source(&(yrsp_sdl_ctx){ .raw_keyboard = caps.raw_keyboard }, YRSP_KIND_KEYBOARD);
+    if (!yrsp_open(&rsp, &(yrsp_desc){ .choices = keys, .n_choices = 2, .duration_ns = YRT_S(RESPONSE_S),
+                                       .min_rt_ns = YRT_S(MIN_RT_S), .sources = &source, .n_sources = 1 }))
+        return fail(yrsp_error(&rsp));
 
-    memset(&sdl, 0, sizeof sdl);
-    sdl.raw_keyboard = caps.raw_keyboard;
-    sources[0] = yrsp_sdl_source(&sdl, YRSP_KIND_KEYBOARD);
-    memset(&pd, 0, sizeof pd);
-    pd.choices = keys;
-    pd.n_choices = 2;
-    pd.duration_ns = YRT_S(RESPONSE_S);
-    pd.min_rt_ns = YRT_S(MIN_RT_S);
-    pd.sources = sources;
-    pd.n_sources = 1;
-    if (!yrsp_open(&rsp, &pd)) { fprintf(stderr, "trial_rdk: %s\n", yrsp_error(&rsp)); return 1; }
-
-    out = fopen(out_path, "w");
-    sout = fopen(steps_path, "w");
-    if (!out || !sout) { fprintf(stderr, "trial_rdk: cannot write %s or %s\n", out_path, steps_path); return 1; }
-    ytr_format_meta(&trials, meta, sizeof meta);
-    meta[strcspn(meta, "\r\n")] = 0;
+    /* the data file, the settings beside it, and the steps file */
     yscr_describe(&scr, line, sizeof line);
-    fprintf(out, "# %s\n# %s\n", meta, line);
-    fprintf(out, "# ysp_rdk %s: w=400 count=%d speed=200 aperture=circle signal=same select=exact noise=direction "
-                 "edge=wrap sets=1 lifetime=0 clock=onset stream=0; the steps in %s\n",
-            yrdk_version(), N_DOTS, steps_path);
-    fprintf(out, "# ysp_response %s; keyboard: %s\n", yrsp_version(), sim ? "synthetic (tier SIM)" : sources[0].note);
-    fprintf(out, "trial_index,coherence,coherent_direction,key_answer,response,rt,correct,onset_tier,onset_src,"
-                 "landing_residual,onset_frame,rsp_tier,n_anticipations,rdk_seed,rdk_updates,rdk_digest,frames_dropped\n");
+    snprintf(meta, sizeof meta, "screen=%s\nysp_response=%s\nkeyboard=%s\nrdk=ysp_rdk %s: w=400 count=%d speed=200 "
+             "aperture=circle signal=same select=exact noise=direction edge=wrap sets=1 lifetime=0 clock=onset "
+             "stream=0\nsteps=%s\n", line, yrsp_version(), sim ? "synthetic (tier SIM)" : source.note, yrdk_version(),
+             N_DOTS, steps_path);
+    snprintf(meta_path, sizeof meta_path, "%s.meta", out_path);
+    if (!ytr_data_open(&data, &(ytr_data_desc){ .path = out_path, .trials = &trials, .cols = cols,
+            .n_cols = (int)(sizeof cols / sizeof cols[0]), .meta_path = meta_path, .meta = meta }))
+        return fail(ytr_data_error(&data));
+    if (!(sout = fopen(steps_path, "w"))) return fail("cannot write the steps file");
     fprintf(sout, "trial_index,update,t,coherence,direction,speed\n");
     printf("%s\n", line);
 
-    ygfx_prime(&gfx);   /* each kind's first draw now, not on a trial's first frames (docs/gfx.md) */
-    for (;;) {
-        SDL_Event ev;
-        int64_t bt = 0;
-        yrsp_input in;
-        const float* val;
+    while (!aborted) {
         int rc = yscr_begin(&scr, &f);
         if (rc == YSCR_QUIT) { aborted = 1; break; }
-        if (rc != YSCR_OK) { fprintf(stderr, "trial_rdk: %s\n", yscr_error(&scr)); failed = 1; break; }
-        for (i = 0; i < f.n_done; i++) {
-            if (stim_frame >= 0 && f.done[i].index == stim_frame) {
-                yrsp_onset o = yrsp_onset_flip(&f.done[i]);
-                yrsp_set_onset(&rsp, &o);
-            }
+        if (rc != YSCR_OK) { failed = fail(yscr_error(&scr)); break; }
+        for (i = 0; i < f.n_done; i++)   /* the motion frames' records: dropped vblanks */
             if (first_motion_frame >= 0 && f.done[i].index >= first_motion_frame &&
                 (last_motion_frame < 0 || f.done[i].index <= last_motion_frame) && f.done[i].dropped)
                 dropped++;
-        }
 
         if (!in_trial) {
+            /* a new trial: fixation now, the dots 0.5 s later */
             ytl_seq q;
             if (ytr_next(&trials, &ti) < 0 || ti.index >= MAX_ROWS) break;
             coherence = ytb_num(&tab, ti.condition, coh_col);
-            direction = (float)ytb_num(&tab, ti.condition, dir_col);
             answer = !strcmp(ytb_text(&tab, ti.condition, key_col), "right");
             trial_seed = seed * 1000003u + (uint64_t)ti.index;   /* one field per trial, from the session's seed */
             rdk.coherence = (float)coherence;
-            rdk.direction = direction;
+            rdk.direction = (float)ytb_num(&tab, ti.condition, dir_col);
             ytl_clear(&tl, TRIAL);
             ytl_anchor(&tl, TRIAL, f.onset, 0);
             q = ytl_seq_on(&tl, TRIAL);
             ytl_on(&q, FIX_ON);
             ytl_wait(&q, YRT_S(FIXATION_S));
             ytl_on(&q, DOTS_ON);
-            if (q.err) { fprintf(stderr, "trial_rdk: timeline error %d\n", q.err); failed = 1; break; }
+            if (q.err) { failed = fail(ytl_strerror(q.err)); break; }
             yrsp_arm(&rsp, f.onset);
-            stim_frame = first_motion_frame = last_motion_frame = -1;
+            first_motion_frame = last_motion_frame = -1;
             in_trial = responding = 1;
             moving = n_steps = dropped = 0;
         }
 
-        while (yscr_poll(&scr, &ev, NULL))
-            if (yscr_event_input(&scr, &ev, &in)) yrsp_feed(&rsp, &in);
-        for (; sim && sim_next < n_sim_ev && sim_ev[sim_next].t <= f.onset; sim_next++)
-            yrsp_feed(&rsp, &sim_ev[sim_next]);
+        yrsp_feed_screen(&scr, &rsp, 1);
+        for (; sim && sim_next < n_sim_ev && sim_ev[sim_next].t <= f.onset; sim_next++) yrsp_feed(&rsp, &sim_ev[sim_next]);
 
-        /* the response or the deadline ends the motion on this frame */
-        if (responding && yrsp_update(&rsp, f.onset) == YRSP_ENDED) {
+        /* the motion frame's flip record, when it arrives, is the final
+         * onset; the response or the deadline ends the motion on this frame */
+        if (yrsp_update_frame(&rsp, &f) == YRSP_ENDED && responding) {
             ytl_seq q = ytl_seq_on(&tl, TRIAL);
+            int64_t bt = 0;
             ytl_base_time(&tl, TRIAL, f.onset, &bt);
             ytl_at(&q, bt);
             ytl_off(&q, DOTS_ON);
             ytl_off(&q, FIX_ON);
             ytl_wait(&q, YRT_S(ITI_S));
             ytl_mark(&q, END_OF_TRIAL, 0);
-            if (q.err) { fprintf(stderr, "trial_rdk: timeline error %d\n", q.err); failed = 1; break; }
+            if (q.err) { failed = fail(ytl_strerror(q.err)); break; }
             responding = 0;
         }
 
-        n = ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, fired, 16);
-        for (i = 0; i < n && i < 16; i++) {
-            if (fired[i].kind == YTL_ONSET && fired[i].target == DOTS_ON) {
-                yrsp_onset o = yrsp_onset_landing(&fired[i]);
-                yrsp_set_onset(&rsp, &o);
-                stim_frame = fired[i].frame;
-                landing_residual = fired[i].residual;
-                if (sim) {   /* faster at higher coherence; one wrong key */
-                    int wrong = coherence < 0.05 && !answer;
-                    uint32_t sc;
-                    for (; sim_next < n_sim_ev; sim_next++) yrsp_feed(&rsp, &sim_ev[sim_next]);
-                    sim_rt[ti.index] = 0.65 - 0.8 * coherence;
-                    sim_key[ti.index] = wrong ? !answer : answer;
-                    sc = (uint32_t)yrsp_scancode(sim_key[ti.index] ? "right" : "left");
-                    memset(sim_ev, 0, sizeof sim_ev);
-                    sim_plan[ti.index] = f.onset;
-                    sim_ev[0].t = f.onset + YRT_S(sim_rt[ti.index]);
-                    sim_ev[0].kind = YRSP_KIND_KEYBOARD;
-                    sim_ev[0].type = YRSP_PRESS;
-                    sim_ev[0].control = sc;
-                    sim_ev[0].stamp = YRSP_TIER_SIM;
-                    sim_ev[0].value = 1;
-                    sim_ev[1] = sim_ev[0];
-                    sim_ev[1].type = YRSP_RELEASE;
-                    sim_ev[1].value = 0;
-                    sim_ev[1].t += YRT_MS(60);
-                    n_sim_ev = 2;
-                    sim_next = 0;
-                }
-            }
+        n = ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, fired, 64);
+        /* the dots landed on this frame: their planned onset, for now */
+        landed = yrsp_set_landing(&rsp, fired, n, DOTS_ON);
+        if (landed >= 0 && sim) {   /* faster at higher coherence; one wrong key */
+            for (; sim_next < n_sim_ev; sim_next++) yrsp_feed(&rsp, &sim_ev[sim_next]);
+            sim_rt[ti.index] = 0.65 - 0.8 * coherence;
+            sim_key[ti.index] = coherence < 0.05 && !answer ? !answer : answer;
+            sim_plan[ti.index] = fired[landed].onset;
+            sim_press(sim_plan[ti.index] + YRT_S(sim_rt[ti.index]), sim_key[ti.index] ? "right" : "left");
+        }
+        for (i = 0; i < n; i++)
             if (fired[i].kind == YTL_MARK && fired[i].code == END_OF_TRIAL) {
-                char rt[32], lres[32];
-                int correct;
+                /* the trial is over, and the record of its motion onset is in */
                 yrsp_finish(&rsp, &res);
-                correct = (res.flags & YRSP_R_RESPONDED) && res.response == answer;
-                sec(rt, sizeof rt, res.rt_ns == YRSP_NO_TIME ? NAN : YRT_TO_S(res.rt_ns));
-                sec(lres, sizeof lres, (double)landing_residual / 1e9);
+                r.trial_index = ti.index;
+                r.correct = (res.flags & YRSP_R_RESPONDED) && res.response == answer;
+                r.rdk_updates = n_steps;
+                r.frames_dropped = dropped;
                 row_seed[ti.index] = trial_seed;
                 row_digest[ti.index] = yrdk_digest(&rdk);
-                fprintf(out, "%d,%g,%g,%s,%s,%s,%d,%u,%u,%s,%lld,%u,%d,%llu,%d,%016llx,%d\n", ti.index, coherence,
-                        (double)direction, keys[answer].key, res.response_name ? res.response_name : "", rt, correct,
-                        (unsigned)res.onset_tier, (unsigned)res.onset_src, lres, (long long)res.onset_frame,
-                        (unsigned)res.stamp_tier, res.n_anticipations, (unsigned long long)trial_seed, n_steps,
-                        (unsigned long long)row_digest[ti.index], dropped);
-                fflush(out);
-                printf("trial %2d coherence %.3f %-5s rt %s %s; %d updates, digest %016llx\n", ti.index, coherence,
-                       keys[answer].key, rt[0] ? rt : "-", !(res.flags & YRSP_R_RESPONDED) ? "(too slow)"
-                       : correct ? "correct" : "wrong", n_steps, (unsigned long long)row_digest[ti.index]);
-                ytr_update(&trials, (res.flags & YRSP_R_RESPONDED) ? correct : YTR_INVALID, NULL);
+                snprintf(r.rdk_seed, sizeof r.rdk_seed, "%llu", (unsigned long long)trial_seed);
+                snprintf(r.rdk_digest, sizeof r.rdk_digest, "%016llx", (unsigned long long)row_digest[ti.index]);
+                ytr_update(&trials, (res.flags & YRSP_R_RESPONDED) ? r.correct : YTR_INVALID, NULL);
+                if (yrsp_data_set(&data, &res) < 0 || ytr_data_write(&data, &r) < 0) failed = fail(ytr_data_error(&data));
+                if (!(res.flags & YRSP_R_RESPONDED)) printf("trial %2d coherence %.3f too slow", ti.index, coherence);
+                else printf("trial %2d coherence %.3f rt %.3f s, %s", ti.index, coherence, YRT_TO_S(res.rt_ns),
+                            r.correct ? "correct" : "wrong");
+                printf("; %d updates, digest %s\n", n_steps, r.rdk_digest);
                 sim_res[ti.index] = res;
                 rows++;
                 in_trial = 0;
             }
-        }
         ygfx_apply(binds, (int)(sizeof binds / sizeof binds[0]), ytl_values(&tl));
 
         /* the dots at this frame's onset, on the trial's motion clock */
-        val = ytl_values(&tl);
-        if (val[DOTS_ON] > 0.5f) {
+        if (ytl_values(&tl)[DOTS_ON] > 0.5f) {
             if (!moving) {
                 motion_t0 = f.onset;
                 first_motion_frame = f.index;
@@ -423,7 +365,7 @@ int main(int argc, char** argv) {
         ygfx_end(&gfx);
         yscr_flip(&scr);
     }
-    fclose(out);
+    if (ytr_data_finish(&data) < 0) failed = fail(ytr_data_error(&data));
     fclose(sout);
     ygfx_close(&gfx);
     yscr_close(&scr);
@@ -432,12 +374,12 @@ int main(int argc, char** argv) {
 
     if (sim && !failed && !aborted) {
         for (i = 0; i < rows; i++) {
-            const yrsp_result* r = &sim_res[i];
-            if (!(r->flags & YRSP_R_RESPONDED) || r->response != sim_key[i] || /* script from the plan, RT from the flip record */
-                llabs(r->rt_ns + (r->t_onset - sim_plan[i]) - YRT_S(sim_rt[i])) > 1000 ||
-                r->onset_tier != YSCR_TIER_SIM || r->onset_src != YRSP_ONSET_FLIP) {
+            const yrsp_result* q = &sim_res[i];
+            if (!(q->flags & YRSP_R_RESPONDED) || q->response != sim_key[i] || /* script from the plan, RT from the flip record */
+                llabs(q->rt_ns + (q->t_onset - sim_plan[i]) - YRT_S(sim_rt[i])) > 1000 ||
+                q->onset_tier != YSCR_TIER_SIM || q->onset_src != YRSP_ONSET_FLIP) {
                 fprintf(stderr, "trial_rdk: --sim: trial %d: rt %.9f (want %.9f) response %d (want %d) onset tier %d "
-                                "src %d\n", i, YRT_TO_S(r->rt_ns), sim_rt[i], r->response, sim_key[i], r->onset_tier, r->onset_src);
+                                "src %d\n", i, YRT_TO_S(q->rt_ns), sim_rt[i], q->response, sim_key[i], q->onset_tier, q->onset_src);
                 sim_bad = 1;
             }
         }

@@ -34,16 +34,21 @@
  * and prints the largest |masked - grating x mask| over the largest
  * |grating|. Not on the simulated display: its null backend draws nothing.
  *
- * The data file has one row per trial: trial_index, block, stimulus, ori,
- * kind, answer, response, rt, correct (jsPsych-style names first); then
- * onset_tier, onset_src, rsp_tier, rsp_flags, n_anticipations. Times in
- * seconds. Shift+Esc stops the session; the rows so far are kept.
+ * The data file has one row per trial (ysp/trials.h's data writer):
+ * trial_index, block, stimulus, ori, kind, answer, correct (jsPsych-style
+ * names first), then the response's (YRSP_DATA_COLS: response, rt,
+ * onset_src, onset_tier, the residuals, onset_frame, rsp_tier, rsp_flags,
+ * n_anticipations, n_early). No session columns: the table's block column
+ * (navon, rotation) has the name of the session's block number. Times in
+ * seconds; the settings and the pack's id go to FILE.meta. Shift+Esc
+ * stops the session; the rows so far are kept.
  *
  * --sim runs the 12 conditions once on the simulated display with a
  * synthetic participant: 60 ms slower on incongruent Navon figures, 2 ms
  * per degree of turn and 0.1 s more for a mirror image, one wrong key and
- * one timeout. It checks the rows, that each block ran whole, and the RTs,
- * and exits 1 on a mismatch. About 22 s.
+ * one timeout. It checks the rows, that each block ran whole, and the RTs
+ * (the script runs from the image's planned onset, the RT from its flip
+ * record), and exits 1 on a mismatch. About 22 s.
  *
  * Usage: trial_images [--sim] [--fullscreen] [--reps N] [--seed N] [--out FILE] [--pack PATH]
  *   --reps N    repetitions of each row (default 2; --sim: 1)
@@ -88,11 +93,21 @@ enum { END_OF_TRIAL = 1 };
 
 static const yrsp_choice keys[] = { { .key = "f", .name = "f" }, { .key = "j", .name = "j" } };
 
+/* The program's columns; yrsp_data_set() fills YRSP_DATA_COLS. */
+typedef struct row { int trial_index; const char *block, *stimulus, *kind, *answer; double ori; bool correct; } row;
+static const ytr_col cols[] = {
+    YTR_COL(row, trial_index, YTR_COL_INT), YTR_COL(row, block, YTR_COL_STRING),
+    YTR_COL(row, stimulus, YTR_COL_STRING), YTR_COL(row, ori, YTR_COL_DOUBLE), YTR_COL(row, kind, YTR_COL_STRING),
+    YTR_COL(row, answer, YTR_COL_STRING), YTR_COL(row, correct, YTR_COL_BOOL), YRSP_DATA_COLS,
+};
+
 /* The --sim participant; trial 2 presses the other key, trial 7 none. */
 #define SIM_TRIALS 12
 static double sim_rt(int rotation, double ori, int odd) {
     return rotation ? 0.50 + 0.002 * ori + (odd ? 0.10 : 0.0) : 0.50 + (odd ? 0.06 : 0.0);
 }
+static yrsp_input sim_ev[2];
+static int n_sim_ev, sim_next;
 
 static yscr_screen scr;
 static ygfx_gfx gfx;
@@ -100,11 +115,17 @@ static ypak_pack pk;
 static ytl_timeline tl;
 static ytl_event storage[64];
 static ytr_trials trials;
+static ytr_data data;
 static yrsp_collector rsp;
 static ytb_table tab;
 static ygfx_stim fix, cur, cue;
 static int have_cue;
 static float rd_u[MASK_W * MASK_W * 4], rd_m[MASK_W * MASK_W * 4];
+
+static int fail(const char* why) {
+    fprintf(stderr, "trial_images: %s\n", why);
+    return 1;
+}
 
 /* The pack's textures, each made once. */
 typedef struct img { const char* name; ygfx_tex tex; int w, h, format; const uint8_t* data; } img;
@@ -178,41 +199,23 @@ static int mask_setup(const img* m) {
     return 0;
 }
 
-static void sec(char* out, size_t cap, double s) {
-    if (s != s) out[0] = 0;
-    else snprintf(out, cap, "%.9f", s);
-}
-
 int main(int argc, char** argv) {
-    yscr_desc sd;
-    ygfx_desc gd;
-    ygfx_shape_desc fd;
-    ytl_desc td;
-    ytr_desc rd;
-    yrsp_desc pd;
-    ypak_desc kd;
     ypak_entry e;
     yscr_frame f;
-    ytl_event fired[16];
+    ytl_event fired[64];                   /* the timeline's capacity: all that can fire */
     ytr_trial_info ti = { 0 };
     yrsp_result res, sim_res[SIM_TRIALS];
-    yrsp_input sim_ev[2];
+    row r = { 0 };
     double sim_want[SIM_TRIALS];
+    int64_t sim_plan[SIM_TRIALS] = { 0 };   /* where the script's times start */
     int sim_block[SIM_TRIALS], sim_correct[SIM_TRIALS], row_img[YTR_MAX_CONDITIONS];
-    FILE* out;
-    char line[1024], meta[2048], id[72];
-    const char* out_path = "trial_images.csv";
-    const char* pack_path = TRIAL_IMAGES_PACK;
+    char line[1024], tmeta[1024], meta[3072], meta_path[1100], id[72];
+    const char *out_path = "trial_images.csv", *pack_path = TRIAL_IMAGES_PACK;
     const void* p;
     uint64_t seed = 20261009;
-    int64_t image_frame = -1;
-    int i, n, sim = 0, reps = 0, fullscreen = 0, aborted = 0, failed = 0, rows = 0;
-    int in_trial = 0, responding = 0, n_sim_ev = 0, sim_next = 0, block_col, image_col, ori_col, kind_col, answer_col;
-    int rotation = 0, odd = 0;
-    double ori = 0;
-    char answer[8] = "";
+    int i, n, landed, sim = 0, reps = 0, fullscreen = 0, aborted = 0, failed = 0, rows = 0;
+    int in_trial = 0, responding = 0, block_col, image_col, ori_col, kind_col, answer_col, rotation = 0, odd = 0;
 
-    memset(&sd, 0, sizeof sd);
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--sim")) sim = 1;
         else if (!strcmp(argv[i], "--fullscreen")) fullscreen = 1;
@@ -229,108 +232,77 @@ int main(int argc, char** argv) {
     if (reps < 1 || reps > 50) { fprintf(stderr, "trial_images: --reps takes 1..50\n"); return 2; }
 
     /* The pack: mapped, each entry verified when first used. */
-    memset(&kd, 0, sizeof kd);
-    kd.path = pack_path;
-    if (!ypak_open(&pk, &kd)) { fprintf(stderr, "trial_images: %s: %s\n", pack_path, ypak_error(&pk)); return 1; }
+    if (!ypak_open(&pk, &(ypak_desc){ .path = pack_path })) { fprintf(stderr, "trial_images: %s: %s\n", pack_path, ypak_error(&pk)); return 1; }
     if (ypak_find(&pk, "conditions.pstb", &e) != 0 || !(p = ypak_data(&pk, &e)) || !ytb_open_view(&tab, p, (size_t)e.size)) {
         fprintf(stderr, "trial_images: conditions.pstb: %s%s\n", ypak_error(&pk), ytb_error(&tab));
         return 1;
     }
     block_col = ytb_col(&tab, "block"); image_col = ytb_col(&tab, "image"); ori_col = ytb_col(&tab, "ori");
     kind_col = ytb_col(&tab, "kind"); answer_col = ytb_col(&tab, "answer");
-    if (block_col < 0 || image_col < 0 || ori_col < 0 || kind_col < 0 || answer_col < 0) {
-        fprintf(stderr, "trial_images: the table needs block, image, ori, kind and answer\n");
-        return 1;
-    }
-    memset(&rd, 0, sizeof rd);
-    rd.table = &tab;
-    rd.reps = reps;
-    rd.order = YTR_ORDER_FULL_RANDOM;       /* inside a block */
-    rd.groups.mode = YTR_GROUPS_BLOCKED;    /* a block column level per block */
-    rd.groups.factor = block_col;
-    rd.groups.order = YTR_GROUP_ORDER_RANDOM;
-    rd.rng = ytr_splitmix;
-    rd.rng_ctx = &seed;
-    if (!ytr_open(&trials, &rd)) { fprintf(stderr, "trial_images: %s\n", ytr_error(&trials)); return 1; }
+    if (block_col < 0 || image_col < 0 || ori_col < 0 || kind_col < 0 || answer_col < 0)
+        return fail("the table needs block, image, ori, kind and answer");
+    /* images random inside a block, a block column level per block, the blocks in random order */
+    if (!ytr_open(&trials, &(ytr_desc){ .table = &tab, .reps = reps, .order = YTR_ORDER_FULL_RANDOM,
+            .groups = { .mode = YTR_GROUPS_BLOCKED, .factor = block_col, .order = YTR_GROUP_ORDER_RANDOM },
+            .rng = ytr_splitmix, .rng_ctx = &seed }))
+        return fail(ytr_error(&trials));
 
-    if (sim) sd.backend = YSCR_BACKEND_SIM;
-    sd.windowed = !fullscreen;
-    if (!yscr_open(&scr, &sd)) { fprintf(stderr, "trial_images: %s\n", yscr_error(&scr)); return 1; }
-    memset(&gd, 0, sizeof gd);
-    gd.screen = &scr;
-    gd.background[0] = gd.background[1] = gd.background[2] = 0.3f;
-    if (!ygfx_open(&gfx, &gd)) { fprintf(stderr, "trial_images: %s\n", ygfx_error(&gfx)); return 1; }
+    /* the display and the graphics, opened together and primed */
+    if (!ygfx_open_screen(&gfx, &scr, &(yscr_desc){ .backend = sim ? YSCR_BACKEND_SIM : 0, .windowed = !fullscreen },
+                          &(ygfx_desc){ .background = { 0.3f, 0.3f, 0.3f } }))
+        return fail(ygfx_error(&gfx));
     /* Every texture is made before the first frame. */
     for (i = 0; i < tab.n_rows && i < YTR_MAX_CONDITIONS; i++)
         if ((row_img[i] = load_image(ytb_text(&tab, i, image_col))) < 0) return 1;
     if ((i = load_image(MASK_NAME)) < 0) return 1;
     if (sim) printf("graded mask: not checked on the simulated display (its null backend draws nothing)\n");
     else if (mask_setup(&imgs[i]) < 0) return 1;
-    memset(&fd, 0, sizeof fd);
-    fd.shape = YGFX_CROSS; fd.w = fd.h = 24; fd.shape_p[0] = 3;
-    fd.edge = YGFX_EDGE_COSINE; fd.edge_width = 1;
-    fix = ygfx_shape(&fd);
+    fix = ygfx_shape(&(ygfx_shape_desc){ .shape = YGFX_CROSS, .w = 24, .h = 24, .shape_p = { 3 },
+                                         .edge = YGFX_EDGE_COSINE, .edge_width = 1 });
 
-    memset(&td, 0, sizeof td);
-    td.events = storage;
-    td.event_capacity = 64;
-    td.n_channels = N_CHANNELS;
-    if (!ytl_open(&tl, &td)) { fprintf(stderr, "trial_images: %s\n", ytl_error(&tl)); return 1; }
-    memset(&pd, 0, sizeof pd);
-    pd.choices = keys;
-    pd.n_choices = 2;
-    pd.duration_ns = YRT_S(RESPONSE_S);
-    pd.min_rt_ns = YRT_S(MIN_RT_S);
-    if (!yrsp_open(&rsp, &pd)) { fprintf(stderr, "trial_images: %s\n", yrsp_error(&rsp)); return 1; }
+    if (!ytl_open(&tl, &(ytl_desc){ .events = storage, .event_capacity = 64, .n_channels = N_CHANNELS }))
+        return fail(ytl_error(&tl));
+    if (!yrsp_open(&rsp, &(yrsp_desc){ .choices = keys, .n_choices = 2, .duration_ns = YRT_S(RESPONSE_S),
+                                       .min_rt_ns = YRT_S(MIN_RT_S) }))
+        return fail(yrsp_error(&rsp));
 
-    out = fopen(out_path, "w");
-    if (!out) { fprintf(stderr, "trial_images: cannot write %s\n", out_path); return 1; }
-    ytr_format_meta(&trials, meta, sizeof meta);
-    meta[strcspn(meta, "\r\n")] = 0;
+    /* the data file, and the settings beside it: the session's line too,
+     * which the writer adds only with the session's columns */
     ypak_id(&pk, id);
-    fprintf(out, "# %s\n# pack %s (%s)\n", meta, id, pack_path);
     yscr_describe(&scr, line, sizeof line);
-    fprintf(out, "# %s\n# ysp_response %s; keyboard: %s\n", line, yrsp_version(),
-            sim ? "synthetic (tier SIM)" : "SDL through yscr_event_input");
-    fprintf(out, "trial_index,block,stimulus,ori,kind,answer,response,rt,correct,onset_tier,onset_src,rsp_tier,rsp_flags,"
-                 "n_anticipations\n");
+    ytr_format_meta(&trials, tmeta, sizeof tmeta);
+    snprintf(meta, sizeof meta, "%spack=%s (%s)\nscreen=%s\nysp_response=%s\nkeyboard=%s\n", tmeta, id, pack_path, line,
+             yrsp_version(), sim ? "synthetic (tier SIM)" : "SDL through yscr_event_input");
+    snprintf(meta_path, sizeof meta_path, "%s.meta", out_path);
+    if (!ytr_data_open(&data, &(ytr_data_desc){ .path = out_path, .cols = cols, .n_cols = (int)(sizeof cols / sizeof cols[0]),
+                                                .meta_path = meta_path, .meta = meta }))
+        return fail(ytr_data_error(&data));
     printf("pack %s\n", id);
 
-    ygfx_prime(&gfx);   /* each kind's first draw now, not on a trial's first frames (docs/gfx.md) */
-    for (;;) {
-        SDL_Event ev;
-        int64_t bt = 0;
-        yrsp_input in;
+    while (!aborted) {
         const float* v;
         int rc = yscr_begin(&scr, &f);
         if (rc == YSCR_QUIT) { aborted = 1; break; }
-        if (rc != YSCR_OK) { fprintf(stderr, "trial_images: %s\n", yscr_error(&scr)); failed = 1; break; }
-
-        for (i = 0; i < f.n_done; i++)   /* the image's flip record: its onset, final */
-            if (f.done[i].index == image_frame) {
-                yrsp_onset o = yrsp_onset_flip(&f.done[i]);
-                yrsp_set_onset(&rsp, &o);
-            }
+        if (rc != YSCR_OK) { failed = fail(yscr_error(&scr)); break; }
 
         if (!in_trial) {
+            /* a new trial: the block's cue first, then fixation, then the image */
             ytl_seq q;
-            ygfx_image_desc id_ = { 0 };
             const img* im;
-            const char* a;
             if (ytr_next(&trials, &ti) < 0) break;
-            rotation = !strcmp(ytb_text(&tab, ti.condition, block_col), "rotation");
-            ori = ytb_num(&tab, ti.condition, ori_col);
-            odd = !strcmp(ytb_text(&tab, ti.condition, kind_col), rotation ? "mirror" : "incongruent");
-            a = ytb_text(&tab, ti.condition, answer_col);
-            snprintf(answer, sizeof answer, "%s", a ? a : "");
-            im = &imgs[row_img[ti.condition]];
+            r.block = ytb_text(&tab, ti.condition, block_col);
+            r.stimulus = ytb_text(&tab, ti.condition, image_col);
+            r.kind = ytb_text(&tab, ti.condition, kind_col);
+            r.answer = ytb_text(&tab, ti.condition, answer_col);
+            r.ori = ytb_num(&tab, ti.condition, ori_col);
+            rotation = !strcmp(r.block, "rotation");
+            odd = !strcmp(r.kind, rotation ? "mirror" : "incongruent");
             /* a 1-channel image is coverage: light letters on the gray;
              * turned images are read with linear filtering */
-            id_.tex = im->tex; id_.w = (float)(im->w * (rotation ? 2 : 3)); id_.h = (float)(im->h * (rotation ? 2 : 3));
-            id_.ori = (float)ori; id_.linear = ori != 0; id_.coverage = im->format == YPAK_TEX_R8;
-            id_.tint[0] = id_.tint[1] = id_.tint[2] = 0.9f; id_.tint[3] = 1;
-            cur = ygfx_image(&gfx, &id_);
-            image_frame = -1;
+            im = &imgs[row_img[ti.condition]];
+            cur = ygfx_image(&gfx, &(ygfx_image_desc){ .tex = im->tex, .w = (float)(im->w * (rotation ? 2 : 3)),
+                .h = (float)(im->h * (rotation ? 2 : 3)), .ori = (float)r.ori, .linear = r.ori != 0,
+                .coverage = im->format == YPAK_TEX_R8, .tint = { 0.9f, 0.9f, 0.9f, 1 } });
             ytl_clear(&tl, TRIAL);
             ytl_anchor(&tl, TRIAL, f.onset, 0);
             q = ytl_seq_on(&tl, TRIAL);
@@ -347,73 +319,64 @@ int main(int argc, char** argv) {
             ytl_wait(&q, YRT_S(FIXATION_S));
             ytl_off(&q, FIX_ON);
             ytl_on(&q, IMAGE_ON);
-            if (q.err) { fprintf(stderr, "trial_images: timeline error %d\n", q.err); failed = 1; break; }
+            if (q.err) { failed = fail(ytl_strerror(q.err)); break; }
             yrsp_arm(&rsp, f.onset);
             in_trial = responding = 1;
             n_sim_ev = sim_next = 0;
         }
 
-        while (yscr_poll(&scr, &ev, NULL))
-            if (yscr_event_input(&scr, &ev, &in)) yrsp_feed(&rsp, &in);
+        yrsp_feed_screen(&scr, &rsp, 1);
         while (sim && sim_next < n_sim_ev && sim_ev[sim_next].t <= f.onset) yrsp_feed(&rsp, &sim_ev[sim_next++]);
 
-        if (responding && yrsp_update(&rsp, f.onset) == YRSP_ENDED) {
+        /* the image frame's flip record, when it arrives, is the final
+         * onset; a response or the deadline ends the window: hide the
+         * image on this frame */
+        if (yrsp_update_frame(&rsp, &f) == YRSP_ENDED && responding) {
             ytl_seq q = ytl_seq_on(&tl, TRIAL);
+            int64_t bt = 0;
             ytl_base_time(&tl, TRIAL, f.onset, &bt);
             ytl_at(&q, bt);
             ytl_off(&q, IMAGE_ON);
             ytl_wait(&q, YRT_S(ITI_S));
             ytl_mark(&q, END_OF_TRIAL, 0);
-            if (q.err) { fprintf(stderr, "trial_images: timeline error %d\n", q.err); failed = 1; break; }
+            if (q.err) { failed = fail(ytl_strerror(q.err)); break; }
             responding = 0;
         }
 
-        n = ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, fired, 16);
-        for (i = 0; i < n && i < 16; i++) {
-            if (fired[i].kind == YTL_ONSET && fired[i].target == IMAGE_ON) {
-                yrsp_onset o = yrsp_onset_landing(&fired[i]);
-                yrsp_set_onset(&rsp, &o);
-                image_frame = fired[i].frame;
-                if (sim && ti.index != 7) {   /* the participant answers from the image's onset */
-                    memset(sim_ev, 0, sizeof sim_ev);
-                    sim_ev[0].t = o.t_ns + YRT_S(sim_rt(rotation, ori, odd));
-                    sim_ev[0].type = YRSP_PRESS;
-                    sim_ev[0].control = (uint32_t)yrsp_scancode(ti.index == 2 ? (!strcmp(answer, "f") ? "j" : "f") : answer);
-                    sim_ev[0].stamp = YRSP_TIER_SIM;
-                    sim_ev[0].value = 1;
-                    sim_ev[1] = sim_ev[0];
-                    sim_ev[1].type = YRSP_RELEASE;
-                    sim_ev[1].value = 0;
-                    sim_ev[1].t = sim_ev[0].t + YRT_MS(80);
-                    n_sim_ev = 2;
-                }
-            }
+        n = ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, fired, 64);
+        /* the image landed on this frame: its planned onset, for now */
+        landed = yrsp_set_landing(&rsp, fired, n, IMAGE_ON);
+        if (landed >= 0 && sim && ti.index != 7) {   /* the participant answers from the plan */
+            if (ti.index < SIM_TRIALS) sim_plan[ti.index] = fired[landed].onset;
+            sim_ev[0] = (yrsp_input){ .t = fired[landed].onset + YRT_S(sim_rt(rotation, r.ori, odd)), .type = YRSP_PRESS,
+                .control = (uint32_t)yrsp_scancode(ti.index == 2 ? (!strcmp(r.answer, "f") ? "j" : "f") : r.answer),
+                .stamp = YRSP_TIER_SIM, .value = 1 };
+            sim_ev[1] = sim_ev[0];
+            sim_ev[1].type = YRSP_RELEASE;
+            sim_ev[1].value = 0;
+            sim_ev[1].t = sim_ev[0].t + YRT_MS(80);
+            n_sim_ev = 2;
+        }
+        for (i = 0; i < n; i++)
             if (fired[i].kind == YTL_MARK && fired[i].code == END_OF_TRIAL) {
-                char rt[32];
-                int correct;
+                /* the trial is over, and the record of its image is in */
                 yrsp_finish(&rsp, &res);
-                correct = (res.flags & YRSP_R_RESPONDED) && !strcmp(keys[res.response].key, answer);
-                sec(rt, sizeof rt, res.rt_ns == YRSP_NO_TIME ? NAN : YRT_TO_S(res.rt_ns));
-                fprintf(out, "%d,%s,%s,%g,%s,%s,%s,%s,%d,%u,%u,%u,%u,%d\n", ti.index, ytb_text(&tab, ti.condition, block_col),
-                        ytb_text(&tab, ti.condition, image_col), ori, ytb_text(&tab, ti.condition, kind_col), answer,
-                        res.response_name ? res.response_name : "", rt, correct, (unsigned)res.onset_tier,
-                        (unsigned)res.onset_src, (unsigned)res.stamp_tier, (unsigned)res.flags, res.n_anticipations);
-                fflush(out);
-                printf("trial %2d %-8s %-28s %3g rt %s response %s %s\n", ti.index, ytb_text(&tab, ti.condition, block_col),
-                       ytb_text(&tab, ti.condition, image_col), ori, rt[0] ? rt : "-",
-                       res.response_name ? res.response_name : "-",
-                       !(res.flags & YRSP_R_RESPONDED) ? "(too slow)" : correct ? "correct" : "wrong");
-                ytr_update(&trials, (res.flags & YRSP_R_RESPONDED) ? correct : YTR_INVALID, NULL);
+                r.trial_index = ti.index;
+                r.correct = (res.flags & YRSP_R_RESPONDED) && !strcmp(keys[res.response].key, r.answer);
+                ytr_update(&trials, (res.flags & YRSP_R_RESPONDED) ? r.correct : YTR_INVALID, NULL);
+                if (yrsp_data_set(&data, &res) < 0 || ytr_data_write(&data, &r) < 0) failed = fail(ytr_data_error(&data));
+                if (!(res.flags & YRSP_R_RESPONDED)) printf("trial %2d %-8s %-28s %3g too slow\n", ti.index, r.block, r.stimulus, r.ori);
+                else printf("trial %2d %-8s %-28s %3g rt %.3f s, %s %s\n", ti.index, r.block, r.stimulus, r.ori,
+                            YRT_TO_S(res.rt_ns), res.response_name, r.correct ? "correct" : "wrong");
                 if (ti.index < SIM_TRIALS) {
                     sim_res[ti.index] = res;
-                    sim_want[ti.index] = sim_rt(rotation, ori, odd);
+                    sim_want[ti.index] = sim_rt(rotation, r.ori, odd);
                     sim_block[ti.index] = rotation;
-                    sim_correct[ti.index] = correct;
+                    sim_correct[ti.index] = r.correct;
                 }
                 rows++;
                 in_trial = 0;
             }
-        }
         v = ytl_values(&tl);
         yscr_mark(&scr, YSCR_PHASE_EVALUATE);
         ygfx_begin(&gfx, &f);
@@ -423,7 +386,7 @@ int main(int argc, char** argv) {
         ygfx_end(&gfx);
         yscr_flip(&scr);
     }
-    fclose(out);
+    if (ytr_data_finish(&data) < 0) failed = fail(ytr_data_error(&data));
     ygfx_close(&gfx);
     yscr_close(&scr);
     ypak_close(&pk);
@@ -434,16 +397,17 @@ int main(int argc, char** argv) {
         int bad = rows != SIM_TRIALS, changes = 0;
         if (bad) fprintf(stderr, "trial_images: --sim: %d rows, not %d\n", rows, SIM_TRIALS);
         for (i = 0; i < rows && i < SIM_TRIALS; i++) {
-            const yrsp_result* r = &sim_res[i];
+            const yrsp_result* q = &sim_res[i];
             int ok = 1;
             if (i > 0 && sim_block[i] != sim_block[i - 1]) changes++;
-            if (i == 7) ok = !(r->flags & YRSP_R_RESPONDED) && (r->flags & YRSP_R_TIMEOUT);
-            else ok = (r->flags & YRSP_R_RESPONDED) && fabs(YRT_TO_S(r->rt_ns) - sim_want[i]) < 1e-6;
+            if (i == 7) ok = !(q->flags & YRSP_R_RESPONDED) && (q->flags & YRSP_R_TIMEOUT);
+            else ok = (q->flags & YRSP_R_RESPONDED) && /* script from the plan, RT from the flip record */
+                      llabs(q->rt_ns + (q->t_onset - sim_plan[i]) - YRT_S(sim_want[i])) <= 1000;
             ok = ok && sim_correct[i] == (i != 2 && i != 7);
-            ok = ok && r->onset_tier == YSCR_TIER_SIM && r->onset_src == YRSP_ONSET_FLIP;
+            ok = ok && q->onset_tier == YSCR_TIER_SIM && q->onset_src == YRSP_ONSET_FLIP;
             if (!ok) {
-                fprintf(stderr, "trial_images: --sim: trial %d: rt %.9f (want %.9f) flags 0x%x correct %d\n", i, YRT_TO_S(r->rt_ns),
-                        sim_want[i], (unsigned)r->flags, sim_correct[i]);
+                fprintf(stderr, "trial_images: --sim: trial %d: rt %.9f (want %.9f) flags 0x%x correct %d\n", i, YRT_TO_S(q->rt_ns),
+                        sim_want[i], (unsigned)q->flags, sim_correct[i]);
                 bad = 1;
             }
         }
