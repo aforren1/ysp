@@ -3116,6 +3116,29 @@ open() refused with a message that names the variable. This answers the
 X11 part of the open question in [rig_spec.md](rig_spec.md) section 13
 for the environment variable. A driconf file setting was not tried.
 
+### Compared with Psychtoolbox
+
+On this machine, Psychtoolbox 3.0.19.14 under Octave beside
+`screen_flipstats`, both checked against every vblank the kernel reported
+for the output (`drmWaitVBlank` in a separate process).
+`tests/compare/ptb_linux/README.md` has the method, the tables and the
+commands.
+
+- Flips: 9600, 4800 each, for the next vblank and held 1 to 5 frames,
+  idle and with 20 spinning processes. Both landed every flip on the
+  vblank asked for, and both report the kernel's vblank time: ysp's
+  records exactly, PTB's within 2 us (its seconds are a double of
+  CLOCK_REALTIME). On this driver the two tie on flip timing.
+- The kernel's vblank time is the end of the vertical blank: PTB's Flip
+  returned 0.15 to 0.41 ms before the time it reported (the blank is 45
+  lines, 0.67 ms), so an onset stamp here is the start of the new frame's
+  scanout.
+- Open: PTB's OpenWindow 1.5 s with its default sync tests, 0.65 s
+  without; a whole `flipstats` process 0.55 s, its settle 0.48 s.
+- Keys, 200 uinput taps: PTB's KbQueue stamped them 0.03 to 0.40 ms after
+  the kernel's time idle, with a tail to 2.0 ms under load; ysp gives the
+  kernel's time ("Kernel key times").
+
 ## Not measured
 
 - Light. No photodiode was attached. `tests/loopback/screen_loopback.c`

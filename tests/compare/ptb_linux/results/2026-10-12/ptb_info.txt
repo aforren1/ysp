@@ -1,0 +1,4 @@
+PTB-INFO: This is Psychtoolbox-3 for GNU/Linux X11, under GNU/Octave 64-Bit (Version 3.0.19 - Build date: Jun 22 2024).
+PTB-INFO: OpenGL-Renderer is AMD :: AMD Radeon RX 6600 (navi23, LLVM 15.0.6, DRM 3.59, 6.11.5-1-liquorix-amd64) :: 4.6 (Compatibility Profile) Mesa 22.3.6
+PTB-INFO: Will try to use OS-Builtin OpenML sync control support for accurate Flip timestamping.
+PTB-INFO: Measured monitor refresh interval from VBLsync = 16.666842 ms [59.999371 Hz]. (50 valid samples taken, stddev=0.000514 ms.)
