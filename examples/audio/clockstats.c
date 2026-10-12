@@ -1,13 +1,17 @@
 /* audio_clockstats.c - record ysp/audio.h's device clock and callback on this
  * machine. Plays silence only.
  *
- *     audio_clockstats [--null] [--device NAME] [--exclusive [--long]]
+ *     audio_clockstats [--null | --backend B] [--device NAME] [--s16] [--exclusive [--long]]
  *                      [--period N] [--queue Q] [--seconds S] [--load N] [--frame-work MS]
  *                      [--voices N] [--streams N [--wav PATH] [--ring S]]
  *                      [--stall-at S --stall MS [--stall-every S]]
  *                      [--allocs | --allocs-control] [--csv PREFIX]
  *
+ *   --backend B    wasapi, coreaudio, alsa or pulse (default: AUTO); --null
+ *                  is miniaudio's null device
  *   --device NAME  the playback device whose name contains NAME
+ *   --s16          a 16-bit project (YAU_S16), for a device that runs 16-bit
+ *                  samples (PulseAudio's default sink format)
  *   --exclusive    WASAPI exclusive mode; at most 30 s, because every other
  *                  program is silent meanwhile, unless --long is given
  *   --period N     frames per callback asked for (default: the header's)
@@ -232,7 +236,16 @@ int main(int argc, char** argv) {
     memset(&d, 0, sizeof d);
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--null")) d.backend = YAU_BACKEND_NULL;
+        else if (!strcmp(argv[i], "--backend") && i + 1 < argc) {
+            const char* b = argv[++i];
+            if (!strcmp(b, "wasapi")) d.backend = YAU_BACKEND_WASAPI;
+            else if (!strcmp(b, "coreaudio")) d.backend = YAU_BACKEND_COREAUDIO;
+            else if (!strcmp(b, "alsa")) d.backend = YAU_BACKEND_ALSA;
+            else if (!strcmp(b, "pulse")) d.backend = YAU_BACKEND_PULSE;
+            else { fprintf(stderr, "--backend: wasapi, coreaudio, alsa or pulse\n"); return 2; }
+        }
         else if (!strcmp(argv[i], "--device") && i + 1 < argc) d.device = argv[++i];
+        else if (!strcmp(argv[i], "--s16")) d.format.sample = YAU_S16;
         else if (!strcmp(argv[i], "--exclusive")) d.exclusive = true;
         else if (!strcmp(argv[i], "--long")) long_excl = 1;
         else if (!strcmp(argv[i], "--queue") && i + 1 < argc) d.queue = atoi(argv[++i]);

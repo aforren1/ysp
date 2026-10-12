@@ -1,4 +1,4 @@
-/* ysp/audio.h - v0.4.0 - public domain single-header audio library
+/* ysp/audio.h - v0.4.1 - public domain single-header audio library
  *
  *   Sound at a time on the ysp/rt.h clock. A buffer is played with
  *   yau_play_at(buf, t); the header plans its first sample on the device
@@ -636,6 +636,8 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.4.1 - STATUS only: ALSA and PulseAudio ran on Linux (docs/audio.md,
+ *          "Linux: first runs"). No code changed.
  *   v0.4.0 - the repository conventions (README.md). Breaks the API:
  *          yau_stream_init()/yau_stream_release() are bool
  *          yau_stream_open() and void yau_stream_close(), which never
@@ -789,8 +791,14 @@
  *   a scripted device on a virtual clock (no miniaudio, no sound hardware)
  *   on MSVC, MinGW gcc 16.1, gcc 11.4 (C99 -O3, ASan and UBSan,
  *   ThreadSanitizer) and emcc (node); fourteen mutations of the header each
- *   make it fail. Compiled, never run: CoreAudio (with its latency claims),
- *   ALSA, PulseAudio, Web Audio (emcc as gnu11).
+ *   make it fail. ALSA and PulseAudio (2026-10-12, Debian 12, PulseAudio
+ *   16 on an Intel HDA codec, docs/audio.md "Linux: first runs"): both
+ *   refuse PulseAudio's default sink format (s16) for a float project, as
+ *   STRICT OPEN says; with a 16-bit project both ran 10 s idle and 30 s
+ *   beside 20 spinning threads with 0 xruns and 0 gaps. They read no
+ *   position, so the fit uses callback times (spread 0.45 to 0.61 ms) and
+ *   every onset is tier 3. Compiled, never run: CoreAudio (with its
+ *   latency claims), Web Audio (emcc as gnu11).
  *   Outside this STATUS block and docs/audio.md, a number in this header
  *   is a measurement only where the text says "measured".
  *
@@ -800,8 +808,8 @@
 
 #define YAU_VERSION_MAJOR 0
 #define YAU_VERSION_MINOR 4
-#define YAU_VERSION_PATCH 0
-#define YAU_VERSION_STRING "0.4.0"
+#define YAU_VERSION_PATCH 1
+#define YAU_VERSION_STRING "0.4.1"
 
 #include "ysp/rt.h"
 

@@ -983,13 +983,55 @@ virtual time, the hold kept, the next block ending the play) and of the
 messages. The USAGE blocks compile as C99 and C++17. Mutants `conv-01`
 to `conv-03` are caught.
 
+## Linux: first runs (2026-10-12)
+
+The machine: Debian 12, kernel 6.11.5 liquorix, PulseAudio 16 (not
+PipeWire), the Intel HDA codec's analog output (ALC3246) as the default
+sink, miniaudio 0.11.25, gcc 12.2, ysp/audio.h v0.4.0.
+`examples/audio/clockstats.c` (silence only) with `--backend alsa` or
+`--backend pulse`, one run at a time.
+
+**Strict open refuses the default.** PulseAudio's sinks run its
+`default-sample-format`, `s16le` unless configured. A float project (the
+default) asks for 24 bits or more, so both backends refused to open:
+"device ... takes s16 samples, fewer bits than the project's". ALSA's
+`default` device here is PulseAudio's ALSA plugin, so it gives the same
+format. To run a float project, set `default-sample-format = float32le`
+(or `s32le`) in PulseAudio's `daemon.conf`; or run a 16-bit project
+(`desc.format.sample = YAU_S16`, `clockstats --s16`). The runs below are
+16-bit projects; the system configuration was not changed.
+
+| Backend, run | Device, period asked | Callbacks | Interval p1 / p50 / p99 / max, ms | xruns, gaps | Fit spread, us |
+|---|---|---|---|---|---|
+| ALSA, 10 s idle | PulseAudio's ALSA plugin, 480 | 1061 | 5.45 / 11.81 / 12.17 / 15.21 | 0, 0 | 615 |
+| ALSA, 30 s, 20 spinning threads | same | 3062 | 5.38 / 11.73 / 12.07 / 15.07 | 0, 0 | 589 |
+| PulseAudio, 10 s idle | Built-in Audio Analog Stereo, 360 | 3718 | 1.94 / 2.95 / 3.28 / 3.74 | 0, 0 | 551 |
+| PulseAudio, 30 s, 20 spinning threads | same | 11919 | 1.74 / 2.86 / 3.19 / 4.42 | 0, 0 | 448 |
+
+The same four runs on ysp/audio.h v0.2.1 gave the same pattern (0 xruns,
+spreads 0.36 to 0.61 ms).
+
+- Through PulseAudio's ALSA plugin the callbacks came irregularly: about
+  every 11.8 ms with some at 5.5 ms, 106 per second for a 10 ms period.
+- PulseAudio's own backend called back about every 3 ms, smaller than
+  the 360 frames asked for.
+- Neither backend reads a position (`pos=callback`), so the fit uses
+  callback times: spread 0.45 to 0.61 ms, against 0.11 ms p99 for
+  WASAPI's positions. Every onset is tier 3. The audio thread ran
+  SCHED_OTHER: miniaudio's "highest" priority keeps the creating
+  thread's policy on Linux.
+- Next: a position source. PulseAudio gives stream timing info (a
+  CLOCK_MONOTONIC timestamp with the sink's latency); ALSA gives status
+  timestamps, but only on a `hw:` device, which PulseAudio holds while it
+  runs. Neither is built. A line-in run then gives the tier.
+
 ## Not measured
 
 - Latency to sound. No loopback cable; `--line` is built, not run. It
   reports the measured latency minus the OS's claim when it does.
   `--line --stream` (stream placement and latency) is built, not run.
-- CoreAudio, ALSA, PulseAudio, Web Audio: compiled, never run. PulseAudio
-  under WSLg plays to the Windows speakers and was not run.
+- CoreAudio and Web Audio: compiled, never run. ALSA and PulseAudio: see
+  "Linux: first runs"; no position source, no loopback.
 - Exclusive mode beyond the 60 s runs of "Periods and buffers"; under
   load, never.
 - Whether the in-box Microsoft HD Audio driver offers shared periods under
