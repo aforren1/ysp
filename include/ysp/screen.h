@@ -1271,10 +1271,17 @@
  *   displays that flip together is a claim about hardware: only genlock
  *   on a workstation GPU makes it, and two photodiodes measure it. The
  *   group calls do not synchronize anything; each record has its own onset.
- *   On X11 (GLX_OML) each screen is a window on one output of the default
- *   X screen; one window per output was not measured (one output on the
- *   machine of STATUS), and separate X screens (rig_spec.md 4.2,
- *   desc.x_display) are not built.
+ *   On X11 (GLX_OML), separate X screens (Zaphod, one output each: the
+ *   setup rig_spec.md 4.2 recommends for a stimulus display beside an
+ *   operator display) take one process per X screen: SDL 3 opens $DISPLAY
+ *   and puts every window on that screen, even for a display it lists on
+ *   another (measured). desc.x_display (":0.1") sets DISPLAY before SDL's
+ *   video starts; a second screen in the process asking for another X
+ *   screen is refused. Measured with two processes, one per X screen: both
+ *   1200 of 1200 tier 1 at once; a GL program opening or closing on the
+ *   other X screen cost the running one a frame (open 1, close 2
+ *   vblanks), so start the operator program first. One window per output
+ *   of one X screen was not measured.
  *
  *   ---------------------------------------------------------------------
  *   VARIABLE REFRESH
@@ -1421,6 +1428,8 @@
  *          the user's ramp and a desc.mode switch put back at close, at
  *          exit() and by the panic watchdog (XInput 2 raw keys on its own
  *          connection), because X keeps both after the process ends.
+ *          desc.x_display: the X screen of a process's screens (one per
+ *          process: SDL 3 drives one X screen).
  *          On GLX_OML the copy path (a window) is depth
  *          1: X11's Present copies on the next vblank (DEPTH's table gave
  *          it DWM's 2). New enum values only; nothing changes on Windows
@@ -1869,8 +1878,8 @@
  *   needs 11), ARM64 (COMPOSITION refuses it: the hidden-pointer returns
  *   are checked only on x64), two physical displays, variable refresh
  *   (refused), macOS and Wayland swap paths (stubs). On X11: a
- *   compositing manager other than Xfwm4's, separate X screens (desc has
- *   no x_display yet), XWayland, NVIDIA's driver, a real keyboard's key
+ *   compositing manager other than Xfwm4's, two X screens in one process
+ *   (SDL 3 cannot), XWayland, NVIDIA's driver, a real keyboard's key
  *   times, a panic or ramp on a second X screen, and a ramp the panic must
  *   put back that light or a capture card can see (the checks read RandR).
  *   Outside this STATUS block and docs/screen.md, a number in this
@@ -2563,6 +2572,9 @@ typedef struct yscr_desc {
     /* the foreground (FOREGROUND) */
     int32_t        foreground;       /* YSCR_FOREGROUND_*; 0 = AUTO          */
     /* Linux X11 (BACKENDS, GLX_OML) */
+    const char*    x_display;        /* the X display and screen, ":0.1"; NULL
+                                      * = $DISPLAY. SDL 3 drives one X screen
+                                      * per process (BACKENDS)              */
     bool           x11_override_redirect; /* fullscreen: a window the window
                                       * manager does not manage, which a
                                       * compositor leaves unredirected; the
@@ -9992,6 +10004,11 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
         return false;
     }
 
+    if (desc->x_display && desc->x_display[0] && s->backend != YSCR_BACKEND_GLX_OML) {
+        yscr__copy(s->error, sizeof s->error, "ysp_screen: desc.x_display is for GLX_OML (Linux X11)");
+        s->pr = NULL;
+        return false;
+    }
     if (desc->x11_override_redirect && (s->backend != YSCR_BACKEND_GLX_OML || desc->windowed)) {
         yscr__copy(s->error, sizeof s->error, "ysp_screen: desc.x11_override_redirect is for a fullscreen "
                      "GLX_OML screen (Linux X11)");
@@ -10039,6 +10056,22 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
          * run. Default priority, so the caller's setting wins (and open()
          * then says which driver SDL took). */
         if (s->backend == YSCR_BACKEND_GLX_OML) SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, "x11", SDL_HINT_DEFAULT);
+#if defined(YSCR__GLX)
+        /* SDL 3 opens $DISPLAY and puts every window on its screen
+         * (measured: a display of the other X screen still got a window on
+         * the default one); naming ":0.1" there before SDL's video starts
+         * is what puts the window, its events and mode switches on screen 1 */
+        if (desc->x_display && desc->x_display[0]) {
+            const char* cur = getenv("DISPLAY");
+            if (SDL_WasInit(SDL_INIT_VIDEO) && !(cur && strcmp(cur, desc->x_display) == 0)) {
+                yscr__set_error(s->error, sizeof s->error, "ysp_screen: desc.x_display %s: SDL's video is already up on "
+                                "%s; SDL 3 drives one X screen per process", desc->x_display, cur ? cur : "(unset)");
+                yscr_close(s);
+                return false;
+            }
+            setenv("DISPLAY", desc->x_display, 1);
+        }
+#endif
         if (!yscr__video_up()) {
             yscr__set_error(s->error, sizeof s->error, "ysp_screen: SDL video: %s", SDL_GetError());
             yscr_close(s);

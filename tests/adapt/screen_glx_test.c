@@ -30,6 +30,11 @@
  *      the parent sends Shift+Esc three times through XTEST. The child
  *      must end with YSCR_PANIC_EXIT_CODE and leave the parent's ramp and
  *      the CRTC's mode as they were. The parent puts the identity back.
+ *  10. desc.x_display ":0.1", in a child (it sets DISPLAY before SDL's
+ *      video starts): SDL's window is on X screen 1 and its 120 flips are
+ *      tier 1; a second screen asking for ":0.0" in that process is
+ *      refused (SDL 3 drives one X screen per process). Skipped with one
+ *      X screen.
  *   9. A clean close with a ramp that is not identity: fullscreen in the
  *      desktop mode says os_gamma=set and puts the ramp back at close; in
  *      a 59.94 Hz mode (the switch resets the ramp), close puts back the
@@ -134,6 +139,54 @@ static int xtest_keys(yscr_screen* s, int* received) {
     return injected == 0 ? -1 : ok;
 }
 
+
+/* Part 10's child: exit 0 when every check holds. */
+static int screen1_child(void) {
+    static yscr_screen a, b;
+    yscr_desc d;
+    seen run;
+    yscr_frame f;
+    int i, scr_no, fail = 0;
+    memset(&d, 0, sizeof d);
+    d.backend = YSCR_BACKEND_GLX_OML;
+    d.x_display = ":0.1";
+    if (!yscr_open(&a, &d)) { fprintf(stderr, "screen 1 child: %s\n", yscr_error(&a)); return 2; }
+    scr_no = (int)SDL_GetNumberProperty(SDL_GetWindowProperties(yscr_window(&a)), SDL_PROP_WINDOW_X11_SCREEN_NUMBER, -1);
+    memset(&run, 0, sizeof run);
+    yscr_on_flip(&a, on_flip, &run);
+    for (i = 0; i < 120; i++) { if (yscr_begin(&a, &f) != YSCR_OK) break; clear(&a); yscr_flip(&a); }
+    yscr_wait_flip(&a, NULL);
+    memset(&d, 0, sizeof d);
+    d.backend = YSCR_BACKEND_GLX_OML;
+    d.windowed = true;
+    d.x_display = ":0.0";
+    fail |= yscr_open(&b, &d) ? 4 : 0;
+    fail |= strstr(yscr_error(&b), "one X screen per process") ? 0 : 8;
+    if (yscr_is_open(&b)) yscr_close(&b);
+    yscr_close(&a);
+    printf("screen 1 child: X screen %d, %d records, tier 1 %d; second display %s\n", scr_no, run.n, run.tier1,
+           (fail & 12) ? "NOT refused" : "refused");
+    fflush(stdout);
+    if (scr_no != 1) fail |= 16;
+    if (run.n != 120 || run.tier1 != 120) fail |= 32;
+    return fail;
+}
+
+static void part10(const char* self) {
+    void* xc = yscr__x_load() ? yscr__x.connect(":0", NULL) : NULL;
+    int screens = 0, status = 0;
+    pid_t pid;
+    if (xc && yscr__xx_load()) {
+        yscr__xcb_screen_it it = yscr__xx.roots(yscr__xx.get_setup(xc));
+        for (; it.rem > 0; yscr__xx.screen_next(&it)) screens++;
+    }
+    if (xc) yscr__x.disconnect(xc);
+    if (screens < 2) { printf("x_display: skipped (%d X screen)\n", screens); return; }
+    pid = fork();
+    if (pid == 0) { execl(self, self, "--screen1-child", (char*)NULL); _exit(5); }
+    waitpid(pid, &status, 0);
+    CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
 
 /* Part 8's child: open, report, hang. */
 static int panic_child(int fd) {
@@ -365,6 +418,7 @@ int main(int argc, char** argv) {
     int i;
     const char* dsp = getenv("DISPLAY");
     if (argc == 3 && !strcmp(argv[1], "--panic-child")) return panic_child(atoi(argv[2]));
+    if (argc == 2 && !strcmp(argv[1], "--screen1-child")) return screen1_child();
     if (!dsp || !dsp[0]) { printf("screen_glx_test: SKIP (no DISPLAY)\n"); return 0; }
     if (!open_glx(&scr)) {
         const char* req = getenv("YSCR_GLX_TEST_REQUIRE");
@@ -472,6 +526,7 @@ int main(int argc, char** argv) {
 
     part8(argv[0]);
     part9();
+    part10(argv[0]);
 
     /* Mesa reads vblank_mode when a display's driver screen is made, and
      * open() makes its own display connection. */

@@ -1310,7 +1310,11 @@ extension implements one of these kinds, each a versioned C vtable:
   (none late). The two-display run must count path changes and
   composed frames, not only drops.
 - Whether SDL3 opens a window and a GL context on an X screen other
-  than the default (`:0.1`).
+  than the default (`:0.1`). Answered 2026-10-12 (SDL 3.4.18, Xorg,
+  docs/screen.md "Two X screens"): with `DISPLAY=:0.1` yes; from a
+  process on `:0.0`, no, the window lands on screen 0. So
+  `ysp/screen.h` v0.8.0's `desc.x_display` picks the X screen per
+  process.
 - Whether the composition swapchain's present-at-time removes the need
   for the spin-wait under variable refresh.
 - miniaudio's exclusive-mode behavior per backend and the exact flag

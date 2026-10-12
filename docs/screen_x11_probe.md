@@ -432,7 +432,17 @@ Under load the event came up to 1.4 ms after the UST (p99), against
 
 ### 5.4 Two screens
 
-Not run: the rig has one X screen.
+Run 2 (2026-10-12, after a second monitor was added as X screen 1:
+ZaphodHeads, DisplayPort-4 on `:0.0`, an "MD-2402 24" monitor, and
+DisplayPort-5 on `:0.1`, the HP; both 1920 x 1080 at 60 Hz). The probe
+with `--skip-egl --skip-vk` and SDL 3.4.18 on the library path:
+
+| Phase | Screen 0 late / steps 2+ / grid p99 | Screen 1 late / steps 2+ / grid p99 | Notes |
+|---|---|---|---|
+| A | 0 / 0 / 0.7 us | | 600 of 600 on target |
+| B | | 0 / 0 / 0.7 us | 600 of 600 on target |
+| C | 0 / 0 / 0.9 us | 0 / 0 / 0.7 us | offset p50 0.0 us, min -50,000 us, drift -99.6 ppm: not explained |
+| D | 0 / 0 / 1.1 us (max 8.9) | 28,410 swaps a second; flip 131,201, skip 158,576 | screen 0 undisturbed |
 
 ### 5.5 EGL, ANGLE, Vulkan, SDL3
 
@@ -441,7 +451,7 @@ Not run: the rig has one X screen.
 | EGL: driver, CHROMIUM sync control, frame timestamps, Present path | radeonsi; EGL_CHROMIUM_sync_control yes (UST CLOCK_MONOTONIC us); EGL_ANDROID_get_frame_timestamps no; Present events yes, every fullscreen swap a flip |
 | ANGLE: back ends that initialized, GL_RENDERER, Present path | not run (no `--angle`) |
 | Vulkan: driver; present_id/wait (2); display_timing; present_timing; acquire_xlib_display | not measured: `vkCreateInstance` returned -9 (VK_ERROR_INCOMPATIBLE_DRIVER), no instance extension listed; no Vulkan driver installed |
-| SDL3 variants 1 to 6 (RESULT lines) | not run: no SDL3 on the rig (Debian 12 has no package) |
+| SDL3 variants 1 to 6 (RESULT lines) | run 1: no SDL3 on the rig (Debian 12 has no package). Run 2, SDL 3.4.18 built from source: SDL lists both X screens' displays; variants 1, 2 (default DISPLAY) on screen 0, GLX and EGL ES 3.0 ok; variants 3, 4 (`DISPLAY=:0.1`) on screen 1, both ok; variants 5, 6 (default DISPLAY, the display on screen 1 asked for) on screen 0: SDL puts every window on $DISPLAY's screen |
 
 ### 5.6 Decisions
 
@@ -466,7 +476,12 @@ Not run: the rig has one X screen.
    largest late slack -3.78 ms, so the deadline before a vblank is between
    them; the core's slack evidence (screen.md, "Depth on a backend that
    holds frames") learns it.
-6. **Two-screen design: not decided.** One X screen on this rig.
+6. **Two-screen design (run 2): one process per X screen.** Both screens
+   timed at once lost nothing, and an untimed screen swapping 28,410
+   times a second beside a timed one cost it nothing but grid residual
+   (8.9 us max). SDL 3 opens one X screen, $DISPLAY's (variants 5 and 6),
+   so `desc.x_display` sets DISPLAY before SDL starts, and an operator
+   UI runs in another process or the browser console.
 7. **10-bit output: not on this server.** 0 of 504 visuals are 30-bit
    (the server runs at depth 24), 0 FBConfigs or EGL configs have 10 bpc;
    `max bpc` is 16 and the gamma ramp has 1024 entries.

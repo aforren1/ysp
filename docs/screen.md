@@ -2974,6 +2974,40 @@ keycode's offset, the wait and read-back, the snapshot's ramps, the ramp
 to identity, the focus check), all killed. A test leaves the CRTC as it
 found it, so that a failed run does not change the next one's start.
 
+### Two X screens
+
+The rig's two monitors as two X screens (ZaphodHeads, `:0.0` and `:0.1`,
+one output each). The probe's two-screen phases (each screen's own
+connection and thread, `oml_k1`, 600 swaps a phase): each screen alone,
+both timed at once, and screen 0 timed beside screen 1 swapping as fast
+as it goes (28,410 swaps a second) all gave 600 of 600 on target with no
+late frame; beside the untimed screen, screen 0's grid residual rose to
+8.9 us max (1.9 alone). Its cross-screen offset line (p50 0.0 us, min
+-50,000 us, drift -99.6 ppm) is not explained.
+
+SDL 3.4.18 lists the displays of both X screens, but puts every window on
+$DISPLAY's screen: asked for the display on screen 1 from `:0.0`, the
+window was on screen 0 (GLX and EGL). With `DISPLAY=:0.1` the window and
+its context were on screen 1. So `desc.x_display` (":0.1") sets DISPLAY
+before SDL's video starts, and one process drives one X screen; a second
+screen asking for another X screen in that process is refused.
+
+Not taken, measured: a window the header makes on screen 1, wrapped by
+SDL on screen 0 (`SDL_PROP_WINDOW_CREATE_X11_WINDOW_NUMBER`). SDL
+delivered its keys, 19 of 20 (the first key after the wrap was lost, 3
+runs of 3), but reported the window on screen 0's display, and SDL's mode
+switching would act on the wrong output. It is the way to an operator
+window in the same process, if one is needed.
+
+`examples/screen/flipstats.c --x-display :0.1` from a process on `:0.0`:
+600 of 600 tier 1 on DisplayPort-5. Two processes, one per X screen,
+1200 frames each at once, three times: tier 1 on every frame; one frame
+dropped per run, on whichever process was running when the other opened.
+Timed: the running screen dropped a frame when a GL program opened on the
+other X screen (1 vblank) and when it closed (2 vblanks). Between those,
+no drop. So start the operator program before the run.
+`test_screen_glx` part 10; mutants `glx-16` and `glx-17`, killed.
+
 ### vblank_mode=0
 
 Under `vblank_mode=0`, Mesa makes the swap interval 0, and Present then
@@ -2990,7 +3024,7 @@ for the environment variable. A driconf file setting was not tried.
 - Any refresh other than 60 Hz; any GPU other than the Iris Xe; Windows 10.
 - Wayland and macOS: stubs. The web: no light measured (web.md).
 - On X11: a compositing manager other than Xfwm4's, one window per
-  output, separate X screens, XWayland, NVIDIA's driver, a real
+  output of one X screen, two X screens in one process, XWayland, NVIDIA's driver, a real
   keyboard's key times, and whether a ramp RandR reads back is the one
   the panel shows (no light or capture card).
 - A DWM miss on the composed path of COMPOSITION: a second window loading

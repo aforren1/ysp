@@ -75,7 +75,8 @@ a display (not in ctest); the `glx-` mutants need `YSP_SDL3` set to an
 SDL3 prefix. The display test changes the CRTC's mode and ramp on X
 screen 0 and puts them back; if a run dies, `xrandr --output <out> --mode
 1920x1080 --rate 60 --gamma 1:1:1` restores them. Open: separate X
-screens (`desc.x_display`), a raw evdev reader.
+screens in one process (SDL 3 drives one; `desc.x_display` picks it per
+process), a raw evdev reader.
 
 ## Linux real-time priority
 

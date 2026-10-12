@@ -1283,3 +1283,19 @@ test = "screen_glx"
 why = "The watchdog counts presses only while one of the screens' windows has the focus; a check that never matches never ends a hung program."
 find = "    for (i = 0; i < YSCR__SLOTS; i++) ours |= f && yscr__xwd.win[i] == f;"
 replace = "    for (i = 0; i < YSCR__SLOTS; i++) ours |= 0;"
+
+[[mutant]]
+id = "glx-16"
+name = "x_display ignored"
+test = "screen_glx"
+why = "SDL 3 puts every window on $DISPLAY's screen; without DISPLAY set from desc.x_display before SDL's video starts, the stimulus window is on the wrong X screen."
+find = "            setenv(\"DISPLAY\", desc->x_display, 1);"
+replace = "            (void)0;"
+
+[[mutant]]
+id = "glx-17"
+name = "a second X screen in one process allowed"
+test = "screen_glx"
+why = "With SDL's video up on one X screen, a screen asking for another must be refused: SDL would put its window on the first."
+find = "            if (SDL_WasInit(SDL_INIT_VIDEO) && !(cur && strcmp(cur, desc->x_display) == 0)) {"
+replace = "            if (0) {"
