@@ -2934,6 +2934,30 @@ v0.7's): gcc 11.4 -O2 and ASan + UBSan, the CPU half and llvmpipe (SIMPLEX
 bit for bit there as well), default 41 s, full 86 s, sanitized 46 s; the
 pinned digests equal; emcc 6.0.10, the CPU half 1.1 s. All pass.
 
+## Headroom: gfx_stress (2026-10-12)
+
+`examples/gfx/stress.c` ramps one kind of load in the manual's frame
+loop on the stimulus display, as bgfx's drawstress does: each level runs
+120 frames, the load doubles while a level passes, and the first failing
+level starts a bisection. A level fails on a dropped frame, a late
+target, or a slow frame (shown two or more vblanks after the one before).
+After the ramp the start load runs 600 frames, to show whether the screen
+comes back to one frame per vblank. `--hold N` runs one load.
+
+On the Linux desktop of [screen.md](screen.md) (AMD RX 6600, GLX_OML,
+1920 x 1080 at 60 Hz, fullscreen, the program cache warm):
+
+| Kind | Result |
+|---|---|
+| gabors (sigma 6 px, each its own draw) | no knee up to 16384: draw phase 1.33 ms p50, 1.63 ms p99 at 16384, no drop |
+| noise (full-screen layers of 4-octave gradient noise) | knee 39 layers: 39 dropped nothing in 120 frames, 40 dropped 97; back to one frame per vblank at 16 |
+
+The draw phase is CPU time only; noise layers cost GPU time, which the
+phases do not show (no timer query, docs/screen.md). Before the depth
+came from the path (screen.md v0.4.4), the first GPU-late level raised
+the depth for the rest of the run and the bisection measured nothing
+(screen.md, "GPU-late frames and the depth").
+
 ## Next
 
 1. Done 2026-10-06 for v0.7.0: kind-specialized vector programs (three
