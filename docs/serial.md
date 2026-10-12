@@ -505,7 +505,11 @@ ampersand is path-derived (`5&2c7b7f6&0&2`) and is not a serial, and an
 `FTDIBUS` id carries the serial plus a trailing port letter, which becomes
 `location` because FT2232 and FT4232 channels differ only in that letter.
 Otherwise `location` is `SPDRP_LOCATION_INFORMATION`
-(`Port_#0003.Hub_#0001`).
+(`Port_#0003.Hub_#0001`). Since v0.6.1, `driver` is `SPDRP_SERVICE`, the
+name of the driver service that runs the port (`usbser`, `FTDIBUS`,
+`silabser`, `Serial`); `yser_open` reads the same property for its own port
+([Driver detection](#driver-detection-v061)). Linux and macOS leave it
+`""`.
 
 That leaves one gap on Windows: two FTDI cables with blank EEPROMs both report
 serial `""` and location `"A"`, because the port letter wins the field, and
@@ -626,8 +630,9 @@ because the definitions are still external.
 ### Handle layout
 
 Hot fields first (`is_open`, descriptor or handle, events, per-direction OS
-error, write timeout), effective settings next, the two string buffers last,
-so the read and write paths do not straddle 384 bytes of text. Platform
+error, write timeout), effective settings next, the string buffers last
+(`driver` since v0.6.1, `device`, `error`), so the read and write paths do
+not straddle 416 bytes of text. Platform
 fields are public, as in `ysp/parallel.h`, for inspection rather than for
 writing; the implementation needed no field the specification did not already
 declare. The `yrt_worker` handle is not one of them: it sits in the
@@ -1539,8 +1544,9 @@ Onset and call cost, 1600 pulses per mode. Microseconds.
   median).
 - **The DTR and RTS calls had a long tail in this session** (call p99 2.1
   to 2.4 ms, one DTR call 21.8 ms), and their bench-timed widths with it;
-  the 0.5.0 session had a p99 of 0.64 ms. The byte writes did not. This
-  bench does not show the cause.
+  the 0.5.0 session had a p99 of 0.64 ms. The byte writes did not.
+  [The DTR call tail](#the-dtr-call-tail) follows it up: it recurred, in
+  the raw Win32 call too, and grew with a load on the machine.
 
 min_hold, the stall check: widths below the onset write's duration, 100
 pulses per cell, the width at the board (requested plus error). Microseconds.
@@ -1562,6 +1568,108 @@ the right value depends on the receiver's sampling period (a 2048 Hz
 BioSemi samples every 488 us), so it stays a desc field with 0.25 ms as
 the default, which only acts when the width is shorter than the onset
 write plus the hold (about 0.65 ms here).
+
+### Results with v0.6.1
+
+ysp/serial.h 0.6.1 changes only which driver gets the second request of
+`yser_set_rts` ([Driver detection](#driver-detection-v061)); on this
+board's `usbser.sys` it sends the same requests as 0.6.0. One C run
+(forward order, 200 pulses per cell, 1, 2, 5 and 10 ms), 2026-10-12
+11:43 to 11:57, the same machine, board and port as
+[The DTR call tail](#the-dtr-call-tail); conditions and summaries in
+`tests/compare/serial_pulse/results/2026-10-12-teensy40-v061/`.
+
+Missed: 0 of 4800 (6 modes, 24 cells).
+
+| Mode | Width error median | p5 / p95 / p99 | Onset median (p99) | Call median / p99 |
+|---|---|---|---|---|
+| ysp_pulse | -57 to -4 us | -124 / +83 / +140 at worst | 235 us (347) | 396 / 643 us (minus w) |
+| ysp_pulse_async | -46 to 0 us | -106 / +93 / +123 at worst | 294 us (402) | 21 / 83 us |
+| raw_byte (from the return) | +375 to +394 us | +190 / +580 / +822 at worst | 216 us (401) | 419 / 719 us |
+| ysp_dtr (from the return) | +240 to +414 us | +154 / +1834 / +9254 at worst | 87 us (165) | 343 / 4221 us |
+| ysp_rts (from the return) | +320 to +448 us | +171 / +1504 / +5371 at worst | 104 us (232) | 412 / 3172 us |
+| raw_dtr (from the return) | +196 to +367 us | +144 / +961 / +5399 at worst | 83 us (173) | 289 / 2720 us |
+
+The pulse calls repeat the v0.6.0 numbers. The DTR and RTS rows carry
+the tail of the next section.
+
+Python, ysp-serial 0.6.1 built from the same tree (CPython 3.13.7,
+pyserial 3.5), `pulse_bench.py`, two runs in opposite orders, 12:06 to
+12:26, 200 pulses per cell. Missed: 0 of 11200.
+
+| Mode | Width error median | p99 | Onset median (p99) | Call median / p99 |
+|---|---|---|---|---|
+| ysp_py_pulse | -53 to -1 us | +254 to +1845 us | 236 us (384) | 392 / 1240 us (minus w) |
+| ysp_py_pulse_async | -46 to -1 us | +30 to +126 us | 326 us (504) | 34 / 84 us |
+| ysp_py_dtr (`time.sleep`) | +617 to +808 us | +3170 to +5452 us | 103 us (195) | 374 / 2614 us |
+| ysp_py_rts (`time.sleep`) | +655 to +767 us | +3657 to +6876 us | 127 us (231) | 394 / 3300 us |
+| pyserial_sleep | +647 to +749 us | +1513 to +4000 us | 273 us (443) | 452 / 1688 us |
+| pyserial_busy | +398 to +433 us | +936 to +5669 us | 279 us (455) | 448 / 2432 us |
+| pyserial_dtr | +672 to +731 us | +1780 to +5948 us | 156 us (272) | 376 / 2425 us |
+
+- `Port.pulse` and `Port.pulse_async` keep the C error (-53 to -1 us
+  median); `Port.set_rts` reaches the board (0 of 1600 missed).
+- The tails are longer than in the 0.5.0 Python session, for every
+  library: pyserial's byte writes took more than 1 ms in 1.4 to 2.3 % of
+  calls, against 0 to 0.06 % then, and `Port.pulse`, which times the
+  width on the caller's thread at normal priority, had a p99 of +1845 us
+  at 1 ms (+593 us then). `Port.pulse_async`, whose worker runs at
+  TIME_CRITICAL, stayed at +126 us p99. The machine carried the load of
+  the next section (two `find /` and one `python` at one core each).
+  Under a load like this, prefer `pulse_async`.
+- `call_tail.py`: DTR and RTS calls over 1 ms in 4.3 to 6.9 % (ysp) and
+  3.3 to 4.2 % (pyserial), against 0 to 0.12 % in the 0.5.0 Python
+  session.
+
+### The DTR call tail
+
+In the 0.6.0 session the DTR and RTS calls had a p99 of 2.1 to 2.4 ms,
+against 0.64 ms in the 0.5.0 session. Rerun and taken apart on
+2026-10-12, the same machine and board. Share of calls (onset and
+trailing) longer than 1 ms, from the raw CSV files:
+
+| Session (local time) | Load besides the bench | ysp_dtr | ysp_rts | raw_dtr | raw_byte |
+|---|---|---|---|---|---|
+| 0.5.0, runs 1 to 3 (07:56 to 08:31) | none found | 0.12 to 0.19 % | (not sent) | 0.00 to 0.12 % | 0.00 to 0.06 % |
+| 0.6.0, runs 1 and 2 (09:58 to 10:21) | one `find /` (from 09:37) | 4.19 to 4.75 % | 4.62 % | (not run) | 0.19 to 0.31 % |
+| 0.6.0 again (11:17 to 11:21) | two `find /` | 5.25 % | 2.12 % | 4.75 % | 0.50 % |
+| load a (11:25) | two `find /` | 2.50 % | | 5.50 % | 0.00 % |
+| load b (11:26) | a + two CPU spinners | 5.75 % | | 7.00 % | 0.50 % |
+| load c (11:28) | a + two more `find /` | 17.5 % | | 10.0 % | 0.25 % |
+| 0.6.1, the run above (11:43 to 11:57) | two `find /` | 6.25 % | 7.25 % | 3.00 % | 0.25 % |
+
+- **It recurs**, and it is not ysp/serial.h's: `raw_dtr`
+  (`EscapeCommFunction` on a handle of its own) has it as much as
+  `ysp_dtr`, and `ysp_dtr` makes one request, so the second request of
+  `yser_set_rts` is not the cause either. Byte writes on the same port in
+  the same sessions stay at 0 to 0.5 %.
+- **It came with a load.** Two `find /` processes, started by other
+  sessions' shells at 09:37 and 10:45 and orphaned (their parents had
+  exited), ran through every session after 09:37 at one core each: 94 %
+  of their CPU time in the kernel, and 1.27 million and 0.37 million open
+  handles at 11:35. The 0.5.0 session ended before the first one
+  started. From 11:24 a third process of another session (`python`,
+  reading stdin) also ran at one core. Two more `find /` of the bench's own raised the DTR share from
+  2.5 to 5.5 % to 10 to 17.5 % (load c); two user-mode CPU spinners
+  raised it less (load b). The board was also unplugged and plugged in
+  again between the 0.5.0 and the 0.6.0 sessions; the dose step of load c
+  is on one plug.
+- **Not shown:** which kernel path makes a DTR request wait on that load
+  while a bulk write does not. A guess would be the queue in which
+  `usbser.sys` handles the line-state request; no trace was taken.
+- **Not done:** the run with the two orphaned processes gone. Stopping
+  processes of other sessions was refused here; the user can end them
+  (`find.exe`, PIDs 19808 and 31020 on 2026-10-12) and rerun
+  `pulse_bench COM3 out 200 modes=ysp_dtr,raw_dtr,raw_byte widths=1`.
+- For a rig: a DTR or RTS trigger is as good as the machine is quiet. In
+  these sessions the guard admitted the run (CPU load at or below 20 %),
+  yet 3 to 7 % of the line calls took more than 1 ms. The request still
+  reached the board on time (DTR onset p99 165 us); the call returned
+  late. So a width timed from the call's return grows by the delay
+  (`ysp_dtr` p99 up to +9.3 ms), and a width timed from its start
+  (ysp/device.h 0.3.1, [docs/device.md](device.md#host-timed-width-v031))
+  only when the onset call returns after the width: p99 +664 us at 1 ms,
+  +18 us at 5 ms. A byte pulse was not affected.
 
 ### What explains the differences
 
@@ -1659,7 +1767,42 @@ v0.6 `yser_set_rts` on Windows sets RTS, then sets DTR again to the level
 missed, onset 118 us median ([Results with v0.6.0](#results-with-v060)).
 `yser_set_dtr` needs nothing: its request carries RTS too. On a driver
 that sends RTS by itself (FTDI, `serial.sys`), the second request repeats
-the state; that was not measured.
+the state; that was not measured. v0.6.1 sends it only on `usbser.sys`
+([Driver detection](#driver-detection-v061)).
+
+### Driver detection (v0.6.1)
+
+v0.6.0 set DTR again after every RTS change on every Windows driver. The
+fix is for one driver, so v0.6.1 applies it only there.
+
+| Question | Decision | Why |
+|---|---|---|
+| How to know the driver | `SPDRP_SERVICE` of the port's device node, found by its `PortName` in the same `GUID_DEVINTERFACE_COMPORT` walk that `yser_list_ports` does | Documented SetupAPI, no new library (`setupapi` is already linked), and the service name is the driver, not a product: every CDC device that Windows binds to its in-box class driver reports `usbser`, whatever its vid and pid. The DOS device name (`\Device\USBSER000` from `QueryDosDevice`) also names it, but its form is not documented |
+| When | Once, in `yser_open`, after `CreateFile` succeeded; the result is `yser_port.driver` and the flag `yser_port.rts_via_dtr` | `yser_set_rts` tests a flag: no enumeration, no allocation, no extra system call per call. The driver of an open handle cannot change |
+| Which drivers get the second request | `usbser` only (case-insensitive) | It is the one driver measured to drop an RTS change. On another driver the request is a second USB or UART transaction for nothing |
+| A port SetupAPI does not list | `driver` is `""`, no second request | com0com and other virtual pairs may not register the COM port interface; they are not `usbser.sys` |
+| Expose it | `yser_port.driver`, `yser_port.rts_via_dtr`, `yser_port_info.driver`; the bindings' `Port.driver`, `Port.rts_via_dtr` and `'info'` | A log of trigger timing must say which driver carried it; the flag says why an RTS call costs a DTR request |
+| Linux and macOS | `""` and false | Linux's `cdc_acm` sends SET_CONTROL_LINE_STATE with both bits for every modem-line ioctl (`acm_tty_tiocmset` in `drivers/usb/class/cdc-acm.c`); not measured here |
+
+Measured 2026-10-12 on the Teensy 4.0 (`tests/compare/serial_pulse/`,
+the conditions of [Results with v0.6.1](#results-with-v061)), 100 calls
+each, two passes in one session, 0.6.0 against 0.6.1:
+
+| | 0.6.0 | 0.6.1 |
+|---|---|---|
+| `yser_open` median (p99) | 4.90 and 4.77 ms (34.6, 9.4) | 3.92 and 4.04 ms (13.6, 12.0) |
+| `yser_set_rts` median (p99) | 445 and 384 us (1422, 14576) | 297 and 434 us (3645, 1484) |
+| RTS pulses missed | 0 of 400 | 0 of 800 |
+| RTS onset median (pulse bench) | 117 us | 104 us |
+
+The walk that v0.6.1 adds to the open is below the open's own spread:
+the open is the driver's `CreateFile` and `SetCommState` (4 to 5 ms
+median here). `yser_list_ports`, a superset of the walk, took
+0.96 ms median, 1.36 ms p90 and 7.7 ms at most (100 calls, one port
+listed). The RTS call does the same two requests in both versions on
+`usbser.sys`, so its cost is the same within the session's spread; on
+another driver 0.6.1 saves one request, which was not measured (no FTDI
+or other bridge here).
 
 To capture the requests themselves (administrator rights needed, not done
 here): install USBPcap with Wireshark, start a capture on the root hub
@@ -1697,7 +1840,8 @@ delay.
   stays under 0.24 ms, but the largest onset was 0.6 ms (C and ysp) and
   1.27 ms (pyserial DTR).
 - RTS works on a CDC device under `usbser.sys` from ysp/serial.h v0.6
-  on. Before v0.6, and from pyserial or any other library that calls
+  on; from v0.6.1, `yser_port.rts_via_dtr` says that the port got the
+  extra DTR request. Before v0.6, and from pyserial or any other library that calls
   `EscapeCommFunction(SETRTS)`, it does not; there, use DTR or bytes.
 - For the lowest onset latency, use DTR (83 to 102 us median in C) rather
   than a byte (176 to 185 us), if the device reads DTR.
@@ -1722,6 +1866,10 @@ pulse_bench COM3 stall 100 modes=ysp_pulse,ysp_pulse_async widths=0,0.1,0.2 hold
 python tests\compare\serial_pulse\pulse_bench.py COM3 out 200
 python tests\compare\serial_pulse\pulse_stats.py out
 ```
+
+`device_pulse.c` runs ysp/device.h's host-timed pulses the same way
+(docs/device.md), and `call_tail.py out` gives the share of DTR, RTS and
+byte calls over 1 and 2 ms ([The DTR call tail](#the-dtr-call-tail)).
 
 ## Python async reader (ysp-serial 0.5.0.2)
 

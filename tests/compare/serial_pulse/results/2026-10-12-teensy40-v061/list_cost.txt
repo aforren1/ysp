@@ -1,0 +1,2 @@
+COM3 driver "usbser" 16c0:0483
+list_ports n 100  p50 962.8  p90 1356.5  p99 7666.4  max 7666.4 us

@@ -1,0 +1,18 @@
+ysp/serial.h 0.6.0
+open         n  100  p50   4899.8  p90   7463.6  p99  34611.2  max  34611.2 us
+close        n  100  p50    672.7  p90   1545.2  p99   2578.3  max   2578.3 us
+set_rts      n  100  p50    444.9  p90    592.1  p99   1422.3  max   1422.3 us
+ysp/serial.h 0.6.1
+open         n  100  p50   3920.0  p90   6767.5  p99  13552.2  max  13552.2 us
+close        n  100  p50    774.5  p90   1272.2  p99   1848.3  max   1848.3 us
+driver "usbser", rts_via_dtr 1
+set_rts      n  100  p50    297.4  p90    506.1  p99   3645.1  max   3645.1 us
+ysp/serial.h 0.6.1
+open         n  100  p50   4042.8  p90   6280.5  p99  11966.4  max  11966.4 us
+close        n  100  p50    743.6  p90   1113.9  p99   1665.3  max   1665.3 us
+driver "usbser", rts_via_dtr 1
+set_rts      n  100  p50    434.3  p90    950.9  p99   1483.6  max   1483.6 us
+ysp/serial.h 0.6.0
+open         n  100  p50   4770.2  p90   7337.7  p99   9411.7  max   9411.7 us
+close        n  100  p50    746.4  p90   1367.1  p99   1651.2  max   1651.2 us
+set_rts      n  100  p50    383.5  p90   3657.0  p99  14576.1  max  14576.1 us

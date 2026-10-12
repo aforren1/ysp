@@ -17,7 +17,7 @@ panel, Realtek speakers). No photodiode, photometer, loopback cable,
 external monitor, parallel port, response box, trigger box or
 LabStreamer was attached (docs/screen.md, docs/audio.md,
 docs/device.md). The one serial device was a Teensy 4.0 echo board on
-native USB (the serial row). "Sim" below means simulated displays,
+native USB (the serial and device rows). "Sim" below means simulated displays,
 fake transports, virtual serial pairs, null audio devices or software
 renderers, in tests and CI.
 
@@ -33,7 +33,7 @@ renderers, in tests and CI.
 | serial | Windows 11, i7-1360P, 2026-10-11: the Windows backend on a Teensy 4.0 echo board over native USB CDC (usbser), through the MATLAB MEX binding. Round trip 172 to 288 us median, 279 to 424 us p99, against a raw Win32 floor of 167 to 229 us; IOPort with BlockingBackgroundRead=1 PollLatency=0 matches it | Linux virtual port pairs only; macOS, USB-serial bridges (FTDI) and RS-232 never ran | docs/serial.md, "Results with the Teensy 4.0 echo board" |
 | parallel | none on Windows; the "Linux tested" note does not say whether a real port was used | The Windows backend never reached hardware | parallel.h STATUS |
 | box | none | Pure protocol code; no byte from or to a vendor device; the firmware never ran on a board | box.h STATUS; docs/box.md |
-| device | none | Fake transports, the simulated display and socat pairs; no box, board or trigger interface opened | device.h STATUS; docs/device.md |
+| device | Windows 11, i7-1360P, 2026-10-12: host-timed outputs (the TriggerBox byte path, DTR, RTS) into a Teensy 4.0 echo board over native USB CDC (usbser); width error -65 to -16 us median | Inputs from a real board; every vendor box, the line board, the parallel port; FTDI bridges; Linux and macOS | docs/device.md, "Host-timed pulses on a Teensy 4.0" |
 | rigfile | none | Binds through a fake transport | docs/device.md |
 | color | not applicable (pure computation) | No number is a measurement of light | color.h; docs/color.md |
 | stair, quest, aep, trials, table, json, pack, timeline, rdk, outline | not applicable (pure computation) | | |
@@ -117,7 +117,8 @@ Purpose: Serial port (RS-232, USB-serial, USB-CDC) byte I/O for trigger and resp
 Status:
 
 - Hardware: the Windows backend ran on a Teensy 4.0 over native USB CDC (usbser), 2026-10-11, through the MATLAB MEX: round trip 172 to 288 us median, 279 to 424 us p99, against a raw Win32 floor of 167 to 229 us; IOPort with BlockingBackgroundRead=1 PollLatency=0 matches it. macOS and USB-serial bridges (FTDI) and RS-232 never ran. [Results](serial.md#results-with-the-teensy-40-echo-board).
-- Bindings: `ysp-serial` 0.6.0 (Python) and the MEX `ysp_serial` 2.1.0 take and return every time in seconds; both have an async line reader (the Python one since 0.5.0.2). [Bindings](bindings.md#versions).
+- Bindings: `ysp-serial` 0.6.1 (Python) and the MEX `ysp_serial` 2.2.0 take and return every time in seconds; both have an async line reader (the Python one since 0.5.0.2). [Bindings](bindings.md#versions).
+- v0.6.1: `yser_open()` reads the port's driver on Windows (SetupAPI `SPDRP_SERVICE`; new `yser_port.driver`, `yser_port_info.driver`), and `yser_set_rts()` sends the extra DTR request only on `usbser.sys` (new `yser_port.rts_via_dtr`). New `yser_pulse_off_at_ns()`, the trailing-edge rule that ysp/device.h 0.3.1 uses. On the Teensy 4.0: 0 of 1200 RTS pulses missed, the open 3.9 to 4.0 ms median against 4.8 to 4.9 ms with 0.6.0 (the walk is inside the open's spread). The path without the extra request (FTDI and other drivers) did not run: no such device here. A DTR and RTS call tail (3 to 7 % of calls over 1 ms, also in raw `EscapeCommFunction`) came with a load of orphaned `find /` processes on the machine. [Driver detection](serial.md#driver-detection-v061), [The DTR call tail](serial.md#the-dtr-call-tail).
 - v0.6.0: `yser_pulse_async()` only queues (20 us median, was 462 us) and the worker writes both bytes, in call order with every other write; both pulse calls time the width from the onset write's start, at least `desc.min_hold_ns` (0.25 ms) after its return (width error -57 to -22 us median, was +0.34 to +0.42 ms); `yser_set_rts()` reaches a USB CDC device under `usbser.sys` (0 of 1600 missed, was 160 of 160). Measured on the Teensy 4.0; the async onset is 49 us later (median) than the synchronous one. [Results with v0.6.0](serial.md#results-with-v060), [RTS on usbser.sys](serial.md#rts-on-usbsersys).
 - v0.5.1: the TIMING comment gives the pulse onset and width measured on a Teensy 4.0 over `usbser.sys` (onset 176 to 185 us median, DTR 83 us; width +0.34 to +0.42 ms median, p99 up to +0.69 ms; 0 of 19200 missed; RTS alone never sent) and names what is not measured (FTDI, RS-232, Linux, macOS). No code change. [Pulses](serial.md#pulses-onset-and-width).
 - v0.5.0 (the [Conventions](conventions.md): widths, timeouts and the break in `int64_t` ns, `YSER_TIMEOUT_INFINITE` is -1, `yser_now_us()` removed, version macros).
@@ -296,6 +297,7 @@ Purpose: A response box, a trigger interface or a microcontroller board on the y
 
 Status:
 
+- v0.3.1: a host-timed pulse's width runs from the start of the leading write, at least the new `desc.min_hold_ns` (0.25 ms; none on the parallel port) after its return (`yser_pulse_off_at_ns()`, ysp/serial.h 0.6.1). On a Teensy 4.0 echo board over `usbser.sys` (TriggerBox byte path, DTR, RTS; 1 and 5 ms; 0 of 2400 missed): width error -65 to -16 us median, against +350 to +401 us with v0.3.0. 7 mutants added (6 new, 1 moved), all caught. No vendor box, parallel port or FTDI bridge. [Host-timed width](device.md#host-timed-width-v031), [results](device.md#host-timed-pulses-on-a-teensy-40-v031).
 - v0.3.0 (the [Conventions](conventions.md): `ydev_open()`/`ydev_close()`, `ydev_wait_running()` before the first output, key and role copied into the handle, `int64_t` ns timeouts; 3 mutants added, all caught).
 - v0.2.1 (builds with YRT_NO_THREADS again; host-timed pulses end in ydev_poll() there).
 - v0.2.0 (outputs, the trigger channel, roles). On a fake transport, Windows, MSVC, under the timing guard: a 2 ms host-timed pulse +0.7 to +1.3 us wide at p50, +3.3 to +13.4 us at p99, max +16 to +454 us (3 runs of 300); a pulse call 5.3 to 8.7 us at p50. The serial transport's outputs over a socat pty pair (20 of 20 reported back). The loopback tool on a simulated adapter and board agrees with the model's truth within the input's own uncertainty.

@@ -1,0 +1,46 @@
+Trigger pulses with ysp/serial.h 0.6.1 and ysp/device.h 0.3.1, timed by the
+echo board, and the DTR call tail. 2026-10-12.
+
+Machine: Windows 11 Enterprise 10.0.26200, Intel Core i7-1360P, AC power,
+power plan Balanced, USB selective suspend enabled (AC index 1). Each
+session ran under the shared timing guard (C:\tmp\psy-guard.sh time),
+which waited for CPU load of 20 % or less and no compiler or test process.
+Board: Teensy 4.0, firmware/ysp_echo version 2, Teensyduino core 1.62.0,
+native USB high speed, Windows in-box usbser.sys (service "usbser" under
+usbccgp), COM3, on USB\ROOT_HUB30 port 1 of the Intel USB 3.10 xHCI
+controller (PCI 8086:51ED). teensy.exe (Teensyduino 1.62.0) ran from 07:04.
+
+Load on the machine (Get-Process CPU time over 5 s, conditions scripts):
+  find.exe PID 19808 ("find / -name nb_func.cpp", from 09:37) and
+  find.exe PID 31020 ("find / -maxdepth 6 -name PostProcessManager.cpp",
+  from 10:45), both orphaned (parent shells gone), one core each, about
+  94 % kernel time, 1.27 M and 0.37 M handles at 11:35;
+  python.exe PID 33284 (another session's, from 11:24), one core.
+Stopping them was refused to this session.
+
+Host side: MSVC 2022 (cl /O2 /W4). pulse_bench.c and device_pulse.c of
+this tree; builds against ysp/serial.h 0.6.0 and ysp/device.h 0.3.0 come
+from commit 7fe9ec4. Python: CPython 3.13.7, pyserial 3.5, ysp-serial
+0.6.1 built from this tree. Normal process priority; worker threads
+TIME_CRITICAL.
+
+Sessions (local time):
+  11:17-11:21  pulse_bench 0.6.0, ysp_dtr, ysp_rts, raw_dtr, raw_byte,
+               ysp_pulse at 1 and 5 ms (summary_tail_v060_again.txt)
+  11:25-11:31  load a, b, c: pulse_bench 0.6.0, ysp_dtr, raw_dtr,
+               raw_byte at 1 ms; b with two CPU spinners (sh busy loops),
+               c with two more `find /` (summary_tail_load_*.txt)
+  11:43-11:57  open_cost (0.6.0, 0.6.1, twice each: open_cost.txt),
+               pulse_bench 0.6.1 forward (summary_c.txt), pulse_bench
+               0.6.0 ysp_rts reverse (summary_rts_v060.txt), device_pulse
+               0.3.0 and 0.3.1 (summary_device.txt)
+  12:06-12:26  list_cost (list_cost.txt), pulse_bench.py run 1 forward,
+               run 2 reverse (summary_py_*.txt), then the ysp-serial
+               device tests (72 passed)
+  then         MATLAB R2023a test_mex with YSP_TEST_ECHO_PORT=COM3: PASS
+
+call_tail.txt and call_tail_py.txt: call_tail.py over these sessions and
+the earlier ones (pulse/run1-3: the 0.5.0 sessions 07:56-08:31; pulse2:
+the 0.6.0 sessions 09:58-10:21).
+
+Raw CSV files are in C:\tmp\psy-work\serial3 on the development machine.

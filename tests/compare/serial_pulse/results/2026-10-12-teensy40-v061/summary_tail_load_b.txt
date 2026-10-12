@@ -1,0 +1,23 @@
+Times in microseconds. Columns: median p5 p95 p99 max; werr also min.
+onset = board's first edge (mapped) - call start; werr = board width - requested;
+call = call return - call start; off_lat = board's trailing edge (mapped) - trailing call start.
+
+ cell mode                w ms    n miss  fit+-  gap | onset | werr | call | off_lat | host_werr
+ 1001 raw_byte               1  200    0  274.6    7 | 291.9 234.0 338.9 356.1 370.4 | 500.0 249.0 570.0 693.0 971.0 min 194.0 | 549.5 290.1 631.6 744.5 961.6 | 244.4 184.9 288.4 303.3 330.9 | 0.2 0.1 0.3 0.5 1.2
+ 1002 raw_dtr                1  200    0  251.3    7 | 135.0 100.2 165.1 248.1 561.9 | 435.0 183.0 1004.0 2184.0 4810.9 min 138.0 | 467.9 215.7 1029.2 2211.4 5230.0 | 104.3 74.4 132.5 142.4 143.4 | 0.2 0.1 0.5 103.3 207.3
+ 1000 ysp_dtr                1  200    0  286.6    7 | 123.6 97.6 145.8 172.8 348.8 | 439.0 175.0 1152.0 2302.9 3915.9 min 126.0 | 464.9 198.9 1173.5 2319.9 3944.2 | 93.0 71.6 117.8 136.4 158.1 | 0.2 0.0 0.4 112.8 223.9
+
+Pooled over the cells given (runs), per mode and width: n, missed | werr median p5 p95 p99 max min
+raw_byte               1   200    0 | 500.0 249.0 570.0 693.0 971.0 194.0
+raw_dtr                1   200    0 | 435.0 183.0 1004.0 2184.0 4810.9 138.0
+ysp_dtr                1   200    0 | 439.0 175.0 1152.0 2302.9 3915.9 126.0
+
+Pooled over widths and runs, per mode: n | onset median p5 p95 p99 max | call median p99 max (ysp_pulse, ysp_py_pulse: minus the width) | per-cell onset medians | fit +- range
+raw_byte              200 | 291.9 234.0 338.9 356.1 370.4 | 549.5 744.5 961.6 | 291.9 to 291.9 | 274.6 to 274.6
+raw_dtr               200 | 135.0 100.2 165.1 248.1 561.9 | 467.9 2211.4 5230.0 | 135.0 to 135.0 | 251.3 to 251.3
+ysp_dtr               200 | 123.6 97.6 145.8 172.8 348.8 | 464.9 2319.9 3944.2 | 123.6 to 123.6 | 286.6 to 286.6
+
+Fits: cell, points, slope (ns per board us), bound min/max (us), largest residual (us), worker policy
+ 1000  11 999.984309 88.7/286.6 101.2 TIME_CRITICAL
+ 1001  11 999.980861 89.2/274.6 92.0 none
+ 1002  11 999.987260 91.7/251.3 60.7 none

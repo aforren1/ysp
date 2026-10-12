@@ -187,7 +187,7 @@ checked.
 |---|---|---|
 | Who ends a pulse | The device when it can: XID (`mp` then `mh`), line boards (`p <code> <us>`); BioSemi and the MMBT-S at switch P end every code after 8 ms by themselves. Otherwise the instance's own ysp/rt.h worker writes 0 at the deadline | A device-timed pulse is one write and has no host jitter on its end. The fixed-width boxes cannot give another width, so a request for one is refused (`YDEV_ERR_ARG`), and so is a `desc.pulse_ns` other than 8 ms at start: the binding fails before the session, not in the data |
 | `yser_pulse_async()`, `ypar_pulse_async()` | Not used | They give no time for the trailing write, so the TRAILING record could not have its times, and they know no modem lines and no custom transport. The worker here is the same ysp/rt.h worker with the same rules: one pending edge, a set cancels it, a stop flushes it |
-| The deadline | The end of the leading write plus the width | As `yser_pulse_async()`: the width does not include the leading write's own cost |
+| The deadline | v0.2.0 to v0.3.0: the end of the leading write plus the width. Since v0.3.1: the start of the leading write plus the width, at least `desc.min_hold_ns` after its end ([Host-timed width](#host-timed-width-v031)) | The v0.2.0 reason, "the width does not include the leading write's own cost", was wrong over USB: the code arrives during that write |
 | XID writes | Output commands in one write; queries still 1 ms per byte | Cedrus's command page: "XID 2 devices ... eliminates the need for an inter-byte delay". Per byte, `mp` and `mh` would delay the edge by 9 ms. Queries keep pyxid2's gap, as in v0.1.0, until a box shows it is not needed |
 | XID width | `mp` is sent only when the width changes; unknown after each open | The box keeps its width, so a set after a pulse must send `mp 0` first (Cedrus: with 0, `mh` holds) |
 | Writes and queries | One output lock serializes them | Two writers on one byte stream: an `_e5` between `mh` and its bytes would corrupt both. The cost: an output on an XID instance with queries can wait up to 2 ms (`desc.probe_ns < 0` turns queries off) |
@@ -255,6 +255,16 @@ key kept), `dev-27` (a FAILED wait waits out its timeout) and `dev-28` (the
 wait overwrites the reason) are new; all three were caught, and so was the
 moved anchor of `dev-25`.
 
+### Host-timed width (v0.3.1)
+
+| Question | Decision | Why |
+|---|---|---|
+| Where the width starts | Just before the leading write (`t0` of its record), as ysp/serial.h v0.6 does for `yser_pulse()` | Over USB the code reaches the device during the leading write: a byte write on the Teensy 4.0 took 423 us median and its byte arrived at 179 us; a DTR call took 385 us and DTR arrived at 83 us (docs/serial.md, Pulses). From the write's return, every host-timed pulse was long by the rest of the write, with the write's return jitter in it |
+| The rule | `yser_pulse_off_at_ns(t0, t1, width, desc.min_hold_ns)`: the later of `t0 + width` and `t1 + min_hold` | One rule for both headers, in one function that ysp/serial.h v0.6.1 exports, so they cannot drift apart. device.h writes through its transport (TRAILING records, modem lines, the parallel port), so it cannot call `yser_pulse()` itself |
+| `desc.min_hold_ns` | 0 is 0.25 ms (`YSER_DEFAULT_MIN_HOLD_NS`) for every family but `YBOX_PARALLEL`, where 0 is none; the serial transport passes it to `yser_desc.min_hold_ns` | The hold keeps a width shorter than a stalled leading write from becoming no pulse at the device. An `outb` does not wait in a USB queue, so the parallel port keeps its width unless the caller asks for a hold |
+| A trigger channel | Its start is taken on the screen's trigger worker, right before that worker's write | The worker's wake delays the pulse and does not shorten it |
+| Device-timed families | Unchanged: XID (`mp`, `mh`), the line board (`p <code> <us>`), BioSemi and the MMBT-S at P | The device times the end; no host deadline |
+
 ## Results
 
 On 2026-10-08, MSVC 19.44 and MinGW-w64 gcc 16.1 on Windows 11, gcc 11.4
@@ -299,6 +309,57 @@ on WSL2 for the checks.
 
 The simulated latencies check the procedure, not a device: measured minus
 truth is +21 to +46 us, inside the input's stated uncertainty (142 to 202 us).
+
+### Host-timed pulses on a Teensy 4.0 (v0.3.1)
+
+The first real device on this layer's outputs: the echo board of
+docs/serial.md (Teensy 4.0, `firmware/ysp_echo` version 2, Windows'
+`usbser.sys`, COM3), which stamps each byte it receives and each change
+of DTR and RTS. It is not a trigger box: the edge is the board's receive
+time. `tests/compare/serial_pulse/device_pulse.c` opens an output
+instance on a transport over a `yser_port` it owns, so it can read the
+board's reports on the same port, and calls `ydev_out_pulse()`; the
+instance's own worker (TIME_CRITICAL) writes the trailing edge.
+`pulse_stats.py` computes the numbers. 2026-10-12, 11:43 to 11:57,
+Windows 11, i7-1360P, AC power, under the timing guard, in the session
+of docs/serial.md "Results with v0.6.1" (with the load of "The DTR call
+tail" on the machine). MSVC 2022 /O2; v0.3.0 (with ysp/serial.h 0.6.0)
+and v0.3.1 built from the same bench source. 200 pulses per cell, 50 to
+150 ms apart.
+
+Missed: 0 of 2400.
+
+Width error (board width minus requested), microseconds:
+
+| Family | Width | v0.3.0 median (p5 / p95 / p99) | v0.3.1 median (p5 / p95 / p99) |
+|---|---|---|---|
+| TriggerBox (a byte; the MMBT-S at S is the same path) | 1 ms | +352 (+181 / +537 / +628) | -65 (-137 / -6 / +87) |
+| | 5 ms | +401 (+205 / +582 / +625) | -47 (-149 / +18 / +60) |
+| LINES, DTR | 1 ms | +350 (+165 / +1474 / +2694) | -29 (-55 / +65 / +664) |
+| | 5 ms | +354 (+177 / +1366 / +4168) | -16 (-45 / +7 / +18) |
+| LINES, RTS | 1 ms | +363 (+182 / +1195 / +3030) | -34 (-72 / +503 / +4163) |
+| | 5 ms | +379 (+190 / +970 / +2948) | -27 (-71 / +11 / +33) |
+
+Onset (the board's edge minus the time before `ydev_out_pulse()`),
+median (p99): byte 212 us (342) in v0.3.1 against 242 us (362); DTR
+88 us (153) against 115 us (160); RTS 116 us (187) against 140 us (205).
+The rule does not touch the onset; the difference is within the spread
+between cells. `ydev_out_pulse()` returned in 368 to 421 us median: the
+call makes the leading write itself.
+
+- The median error went from +0.35 to +0.40 ms to -65 to -16 us, as
+  `yser_pulse()` did in ysp/serial.h 0.6.0 (-57 to -4 us in the same
+  session). The p5 to p95 spread of a byte pulse went from about 0.36 ms
+  to 0.13 to 0.17 ms.
+- The 1 ms DTR and RTS p99 (+664 and +4163 us) are the DTR call tail of
+  docs/serial.md: in this session 2 to 4 % of the line calls returned
+  more than 1 ms late, and a trailing write waits for the leading call's
+  return plus the hold. At 5 ms the p99 is +18 and +33 us.
+- Not measured: a real TriggerBox, BioSemi, MMBT-S, XID box or line board
+  (`p`), whose edge is an output pin, not a receive time; the parallel
+  port (none here); an FTDI or other bridge; Linux and macOS. The
+  device-timed families (XID, line board, BioSemi, MMBT-S at P) do not
+  use the rule.
 
 ### The rig profile (v0.1.0)
 
@@ -357,5 +418,6 @@ Costs (`examples/rigfile/bench.c`, Iris Xe laptop on AC, under the measurement l
 - Every vendor output: no TriggerBox, BioSemi, MMBT-S, c-pod or
   StimTracker was attached; their bytes come from documentation and
   open-source code (docs/box.md).
-- A device on this layer under a real load; any timing claim about a
-  device.
+- A vendor device on this layer; inputs from a real board. The only
+  timing numbers on a device are the host-timed outputs into the Teensy
+  4.0 echo board ([v0.3.1](#host-timed-pulses-on-a-teensy-40-v031)).
