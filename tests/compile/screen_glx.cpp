@@ -68,6 +68,7 @@ int main() {
     CHECK(offsetof(xcb_intern_atom_reply_t, atom) == 8);
     CHECK(offsetof(xcb_get_selection_owner_reply_t, owner) == 8);
     CHECK(offsetof(xcb_get_window_attributes_reply_t, visual) == 8);
+    CHECK(offsetof(xcb_get_window_attributes_reply_t, override_redirect) == 27);
     CHECK(offsetof(xcb_query_extension_reply_t, present) == 8);
     CHECK(offsetof(xcb_get_property_reply_t, value_len) == 16);
     CHECK(sizeof(xcb_get_property_reply_t) == 32);   // the value follows the reply

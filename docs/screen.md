@@ -2919,12 +2919,20 @@ records were right; the timing claim was not available.
 An override-redirect window gets no keyboard focus from the window
 manager: in `test_screen_glx` no injected key reached it. With an
 explicit `XSetInputFocus()` on the window after open, all 20 keys
-arrived with the X server's time and every check passed. So "override-
-redirect plus focus" keeps tier 1 under this compositor. It is not the
-default: the window manager no longer stacks or focuses the window, so a
-notification or another program can take the keys, and SDL's hint is
-process-wide, so it would also hit an operator window. Without a
-compositor both kinds of window flip.
+arrived with the X server's time.
+
+On v0.8.0, settling (v0.5.0, SETTLE) is strict in fullscreen and needs
+tier 1, so the default fullscreen window under Xfwm4's compositor does
+not open: "the display did not settle in 3.0 s (fullscreen, strict):
+tier ...". `desc.x11_override_redirect` (opt-in) asks SDL for an
+override-redirect window for this screen only (SDL's hint is set around
+the window's creation and put back) and gives it the keyboard focus. With
+the compositor on: 300 of 300 frames Present flips, tier 1, settled in
+0.61 s. The cost is the window manager's help: it neither stacks nor
+focuses the window, so another program that takes the focus (a dialog, a
+notification that asks for input) takes the keys, the abort keys too.
+`test_screen_glx` part 7 checks the window and the 20 keys; mutants
+`glx-09` (no focus) and `glx-10` (no hint), killed.
 
 ### vblank_mode=0
 

@@ -590,7 +590,16 @@
  *     to 0 after that swap, and the describe line reads it back
  *     (vrr_prop=). The describe line also counts the Present modes
  *     (present=flip:...,copy:...,skip:...,none:...), names the renderer and
- *     says whether a compositing manager ran. libxcb allocates each event
+ *     says whether a compositing manager ran. A compositing manager can
+ *     keep SDL's fullscreen window redirected (Xfwm4 did), so every frame
+ *     is a copy, tier 3, and strict settling refuses the screen.
+ *     desc.x11_override_redirect (opt-in, fullscreen only) makes this
+ *     screen's window override-redirect, which Xfwm4 leaves unredirected
+ *     (measured: flips, tier 1, with the compositor on), and gives it the
+ *     keyboard focus with XSetInputFocus, because no window manager does:
+ *     a program that takes the focus later takes the keys, the abort keys
+ *     too. The describe line says window=override-redirect or managed.
+ *     libxcb allocates each event
  *     it returns; the header frees it at once: one malloc and free per
  *     flip that are not the header's own.
  *   Not implemented; open() refuses them with a message:
@@ -1384,7 +1393,9 @@
  *          libX11, libGL and libxcb are loaded at run time; nothing X11 or
  *          GL is needed to compile. The describe line warns on SDL older
  *          than 3.4.18 (an X error race in SDL that ends the process,
- *          docs/screen.md). On GLX_OML the copy path (a window) is depth
+ *          docs/screen.md). desc.x11_override_redirect (opt-in): a
+ *          fullscreen window a compositor leaves alone, with the focus.
+ *          On GLX_OML the copy path (a window) is depth
  *          1: X11's Present copies on the next vblank (DEPTH's table gave
  *          it DWM's 2). New enum values only; nothing changes on Windows
  *          or the web.
@@ -2524,6 +2535,11 @@ typedef struct yscr_desc {
                                       * fullscreen, 4 s in a window; <= 60 s  */
     /* the foreground (FOREGROUND) */
     int32_t        foreground;       /* YSCR_FOREGROUND_*; 0 = AUTO          */
+    /* Linux X11 (BACKENDS, GLX_OML) */
+    bool           x11_override_redirect; /* fullscreen: a window the window
+                                      * manager does not manage, which a
+                                      * compositor leaves unredirected; the
+                                      * header gives it the keyboard focus */
     /* work that overlaps settling (CONTEXT HOOK) */
     yscr_context_fn on_context;     /* once, before the warm-up; NULL = none */
     void*          on_context_ctx;
@@ -6665,6 +6681,7 @@ static struct {
     char* (*DisplayString)(void*);
     int   (*Sync)(void*, int);
     int   (*Free)(void*);
+    int   (*SetInputFocus)(void*, yscr__XID, int, yscr__XID);
     yscr__XErrorHandler (*SetErrorHandler)(yscr__XErrorHandler);
     /* libGL */
     yscr_proc (*GetProcAddress)(const unsigned char*);
@@ -6738,6 +6755,7 @@ static bool yscr__x_load(void) {
     ok &= yscr__x_sym(yscr__x.x11, "XSync", &yscr__x.Sync);
     ok &= yscr__x_sym(yscr__x.x11, "XFree", &yscr__x.Free);
     ok &= yscr__x_sym(yscr__x.x11, "XSetErrorHandler", &yscr__x.SetErrorHandler);
+    ok &= yscr__x_sym(yscr__x.x11, "XSetInputFocus", &yscr__x.SetInputFocus);
     ok &= yscr__x_sym(yscr__x.gl, "glXGetProcAddressARB", &yscr__x.GetProcAddress);
     ok &= yscr__x_sym(yscr__x.gl, "glXQueryExtensionsString", &yscr__x.QueryExtensionsString);
     ok &= yscr__x_sym(yscr__x.gl, "glXGetFBConfigs", &yscr__x.GetFBConfigs);
@@ -6806,6 +6824,7 @@ typedef struct yscr__glx {
     int         xwayland;
     int         lost;
     int         hooked;       /* holds SDL's X11 event hook (key times)    */
+    int         override;     /* the window is override-redirect           */
     int64_t     period_ns;
     int64_t     sent_sbc;     /* the newest swap made                    */
     int64_t     done_sbc;     /* the newest swap with a completion       */
@@ -7019,9 +7038,10 @@ static int yscr__glx_open(void* vctx, const yscr_presenter_open* in, yscr_caps* 
             return YSCR_ERR_NOT_IMPLEMENTED;
         }
     }
-    {   /* The window's visual, which the FBConfig must share */
+    {   /* The window's visual, which the FBConfig must share, and whether
+         * it is override-redirect (desc.x11_override_redirect) */
         uint8_t* r = yscr__x.get_window_attributes_reply(g->xc, yscr__x.get_window_attributes(g->xc, g->win), NULL);
-        if (r) { memcpy(&visual, r + 8, 4); free(r); }
+        if (r) { memcpy(&visual, r + 8, 4); g->override = r[27] != 0; free(r); }
     }
     /* RGBA8, double-buffered, no depth, stencil or samples, on the window's
      * visual: the back buffer DXGI_FLIP has. */
@@ -7167,6 +7187,13 @@ static int yscr__glx_open(void* vctx, const yscr_presenter_open* in, yscr_caps* 
         if (g->vrr_atom) yscr__x.change_property(g->xc, 0, g->win, g->vrr_atom, YSCR__XCB_ATOM_CARDINAL, 32, 1, &zero);
         yscr__x.flush(g->xc);
     }
+    if (g->override) {
+        /* No window manager gives an override-redirect window the focus
+         * (measured: no injected key reached it); RevertToParent (2), now
+         * (CurrentTime, 0). Taken again by any program that sets focus. */
+        yscr__x.SetInputFocus(g->dpy, (yscr__XID)g->win, 2, 0);
+        yscr__x.Sync(g->dpy, 0);
+    }
     caps->kind = YSCR_FIXED_GRID;
     caps->native_target = true;
     caps->hw_onset = true;
@@ -7288,10 +7315,11 @@ static int yscr__glx_describe(void* vctx, char* buf, size_t cap) {
      * frame between its two calls, Xlib ends the process (measured on Xfwm4
      * with SDL 3.4.0: 2 of 10 runs of a bare SDL fullscreen window). */
     return snprintf(buf, cap, "renderer=\"%s\" present=flip:%u,copy:%u,suboptimal:%u,skip:%u,none:%u "
-                    "compositor=%s%s vrr_prop=%s key_time=x-server(%u,unmatched:%u,off-clock:%u)%s%s",
+                    "compositor=%s%s window=%s vrr_prop=%s key_time=x-server(%u,unmatched:%u,off-clock:%u)%s%s",
                     g->renderer, (unsigned)g->n_mode[YSCR__PRESENT_MODE_FLIP], (unsigned)g->n_mode[YSCR__PRESENT_MODE_COPY],
                     (unsigned)g->n_mode[3], (unsigned)g->n_mode[YSCR__PRESENT_MODE_SKIP], (unsigned)g->n_timeout,
-                    g->composited ? "yes" : "none", g->xwayland ? " xwayland=yes" : "", vrr,
+                    g->composited ? "yes" : "none", g->xwayland ? " xwayland=yes" : "",
+                    g->override ? "override-redirect" : "managed", vrr,
                     (unsigned)yscr__xk.used, (unsigned)yscr__xk.unmatched, (unsigned)yscr__xk.off_clock,
                     strcmp(vrr, "1") == 0 ? " WARNING=variable-refresh-requested" : "",
                     SDL_GetVersion() < SDL_VERSIONNUM(3, 4, 18) ? " WARNING=sdl-before-3.4.18-x11-race" : "");
@@ -8784,6 +8812,17 @@ static void yscr__settle_message(const yscr_screen* s, char* b, size_t cap) {
                  /* COMPOSITION gives a covered window no statistic */
                  s->st_cond == YSCR_SETTLE_C_STATS || s->st_cond == YSCR_SETTLE_C_ANCHOR
                      ? " (is the window covered, or the program in the background?)" : "");
+#if defined(YSCR__GLX)
+        /* Xfwm4 kept SDL's fullscreen window composited: every frame a copy,
+         * tier 3 (docs/screen.md, "A compositing manager") */
+        if (s->backend == YSCR_BACKEND_GLX_OML && ((const yscr__glx*)(const void*)s->backend_mem)->composited &&
+            !((const yscr__glx*)(const void*)s->backend_mem)->override) {
+            size_t n = strlen(b);
+            if (n < cap)
+                snprintf(b + n, cap - n, " A compositing manager composites this window; "
+                         "desc.x11_override_redirect asks it to leave the window alone.");
+        }
+#endif
     }
 }
 
@@ -9202,6 +9241,12 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
         return false;
     }
 
+    if (desc->x11_override_redirect && (s->backend != YSCR_BACKEND_GLX_OML || desc->windowed)) {
+        yscr__copy(s->error, sizeof s->error, "ysp_screen: desc.x11_override_redirect is for a fullscreen "
+                     "GLX_OML screen (Linux X11)");
+        s->pr = NULL;
+        return false;
+    }
     {
         const char* e = yscr__abort_open(s, desc);
         if (e) {
@@ -9323,7 +9368,22 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
         SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN, !desc->windowed);
 #endif
         SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_HIGH_PIXEL_DENSITY_BOOLEAN, true);
-        s->window = SDL_CreateWindowWithProperties(props);
+        {   /* SDL's hint is process-wide: set for this window only, then
+             * put back, so an operator window made later is managed */
+            char or_prev[16] = "";
+            const char* h;
+            int or_set = s->backend == YSCR_BACKEND_GLX_OML && desc->x11_override_redirect, had = 0;
+            if (or_set) {
+                h = SDL_GetHint(SDL_HINT_X11_FORCE_OVERRIDE_REDIRECT);
+                if (h) { yscr__copy(or_prev, sizeof or_prev, h); had = 1; }
+                SDL_SetHint(SDL_HINT_X11_FORCE_OVERRIDE_REDIRECT, "1");
+            }
+            s->window = SDL_CreateWindowWithProperties(props);
+            if (or_set) {
+                if (had) SDL_SetHint(SDL_HINT_X11_FORCE_OVERRIDE_REDIRECT, or_prev);
+                else SDL_ResetHint(SDL_HINT_X11_FORCE_OVERRIDE_REDIRECT);
+            }
+        }
         SDL_DestroyProperties(props);
         if (!s->window) {
             yscr__set_error(s->error, sizeof s->error, "ysp_screen: window: %s", SDL_GetError());
@@ -10701,6 +10761,7 @@ YSCR_API const yscr_param* yscr_params(int* n) {
         { "settle_flips",    "i32",  0, 64, 6, "frame",           "clean flips in a row that settle the start" },
         { "settle_min_ns",   "i64", -1, 6e10, 0, "ns",            "settle no sooner; 0 = 2.5 s in a window, none fullscreen; -1 = none" },
         { "settle_max_ns",   "i64",  0, 6e10, 3000000000.0, "ns", "the settle cap from the open() call; 0 = 3 s fullscreen, 4 s window" },
+        { "x11_override_redirect", "bool", 0, 1, 0, "",           "Linux X11 fullscreen: an override-redirect window with the keyboard focus (flips under a compositor)" },
         { "sim_period_ns",   "i64",  0, 1e10, 16666667, "ns",     "frame period of the simulated display" }
     };
     if (n) *n = (int)(sizeof table / sizeof table[0]);

@@ -1219,3 +1219,19 @@ test = "screen_glx"
 why = "An X11 Present copy shows on the next vblank; at DWM's composed depth of 2 a GLX window waits a vblank more on every frame."
 find = "    case YSCR_PATH_COMPOSED:    return s->backend == YSCR_BACKEND_GLX_OML ? 1 : 2;"
 replace = "    case YSCR_PATH_COMPOSED:    return 2;"
+
+[[mutant]]
+id = "glx-09"
+name = "override-redirect without the focus"
+test = "screen_glx"
+why = "No window manager focuses an override-redirect window; without XSetInputFocus every key, the abort keys too, goes to another window."
+find = "        yscr__x.SetInputFocus(g->dpy, (yscr__XID)g->win, 2, 0);"
+replace = "        (void)yscr__x.SetInputFocus;"
+
+[[mutant]]
+id = "glx-10"
+name = "the hint left out"
+test = "screen_glx"
+why = "desc.x11_override_redirect must reach SDL's window creation, or the compositor keeps the window and every frame is a copy."
+find = "            int or_set = s->backend == YSCR_BACKEND_GLX_OML && desc->x11_override_redirect, had = 0;"
+replace = "            int or_set = 0, had = 0;"

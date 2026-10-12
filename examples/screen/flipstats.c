@@ -17,6 +17,8 @@
  *                (Windows), which forces the composed path; takes the
  *                foreground but does not keep the window on top
  *   --windowed   an 800 x 600 window instead of borderless fullscreen
+ *   --override-redirect  GLX_OML fullscreen as an override-redirect window
+ *                (desc.x11_override_redirect)
  *   --frames N   frames to run (default 600). Fullscreen runs stop at 7200
  *                (2 minutes at 60 Hz), because the display is somebody's
  *   --load N     N threads spin at normal priority beside the frame loop
@@ -345,7 +347,7 @@ static int quit_requested(void) {
 }
 
 int main(int argc, char** argv) {
-    int sim = 0, windowed = 0, frames = 600, load = 0, hold = 0, patch = 0;
+    int sim = 0, windowed = 0, frames = 600, load = 0, hold = 0, patch = 0, override_redirect = 0;
     int group = 0, allocs = 0, i, n_screens = 1, quit = 0, ran = 0, topmost = 0, cover = 0;
     yscr_backend backend = YSCR_BACKEND_AUTO;
 #if defined(_WIN32)
@@ -371,6 +373,7 @@ int main(int argc, char** argv) {
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--sim")) sim = 1;
         else if (!strcmp(argv[i], "--windowed")) windowed = 1;
+        else if (!strcmp(argv[i], "--override-redirect")) override_redirect = 1;
         else if (!strcmp(argv[i], "--topmost")) topmost = 1;
         else if (!strcmp(argv[i], "--cover") && i + 1 < argc) cover = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--backend") && i + 1 < argc) {
@@ -438,6 +441,7 @@ int main(int argc, char** argv) {
         memset(&d, 0, sizeof d);
         d.backend = sim ? YSCR_BACKEND_SIM : backend;
         d.windowed = windowed != 0;
+        d.x11_override_redirect = override_redirect != 0;
         d.window_w = group ? 480 : 800;
         d.window_h = group ? 360 : 600;
         d.ring = &g_ring;

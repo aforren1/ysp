@@ -20,6 +20,9 @@
  *   5. With vblank_mode=0 in the environment, open() refuses.
  *   6. In an 800 x 600 window (the Present copy path): depth 1, so 60
  *      frames each show on the next vblank, tier 2.
+ *   7. desc.x11_override_redirect: the fullscreen window is
+ *      override-redirect, its flips are Present flips, and it has the
+ *      keyboard focus (20 of 20 XTEST keys; no window manager gives it).
  *
  * Exit 0 on pass, 1 on a failed check; 0 with "SKIP" when there is no X
  * display or the backend does not open (no SDL X11 driver, no DRI3). With
@@ -207,6 +210,25 @@ int main(void) {
             CHECK(run3.on_plan == 60);
             CHECK(strstr(line, " depth=1") != NULL);
             CHECK(strstr(line, " path=composed") != NULL);
+        }
+    }
+
+    {   /* part 7: override-redirect fullscreen */
+        yscr_desc d;
+        memset(&d, 0, sizeof d);
+        d.backend = YSCR_BACKEND_GLX_OML;
+        d.x11_override_redirect = true;
+        memset(&scr, 0, sizeof scr);
+        CHECK(yscr_open(&scr, &d));
+        if (yscr_is_open(&scr)) {
+            int got = 0, ok = xtest_keys(&scr, &got);
+            yscr_describe(&scr, line, sizeof line);
+            yscr_close(&scr);
+            printf("override-redirect: %s, keys %d received, %d with the X server's time\n",
+                   strstr(line, " window=override-redirect") ? "yes" : "no", got, ok < 0 ? 0 : ok);
+            CHECK(strstr(line, " window=override-redirect") != NULL);
+            CHECK(strstr(line, " path=independent") != NULL);
+            CHECK(ok == 20);
         }
     }
 
