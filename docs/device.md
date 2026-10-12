@@ -358,9 +358,54 @@ call makes the leading write itself.
   return plus the hold. At 5 ms the p99 is +18 and +33 us.
 - Not measured: a real TriggerBox, BioSemi, MMBT-S, XID box or line board
   (`p`), whose edge is an output pin, not a receive time; the parallel
-  port (none here); an FTDI or other bridge; Linux and macOS. The
-  device-timed families (XID, line board, BioSemi, MMBT-S at P) do not
+  port (none here); an FTDI or other bridge; macOS (Linux: next
+  section). The device-timed families (XID, line board, BioSemi, MMBT-S at P) do not
   use the rule.
+
+### Host-timed pulses on Linux (v0.3.2)
+
+The same bench (`device_pulse.c`, which now builds on POSIX), the same
+board on Linux's `cdc_acm`, 2026-10-12 15:02 to 15:06: Debian 12, kernel
+6.11 liquorix, Intel Core i5-14500, idle desktop, ysp/serial.h 0.6.2. The
+instance's worker ran SCHED_FIFO 1 under the `rtprio` grant of 50. Two
+runs in opposite orders, 200 pulses per cell; 0 of 2400 missed. Summary
+and conditions: `tests/compare/serial_pulse/results/2026-10-12-teensy40-linux/`.
+
+Width error, 400 pulses per cell, microseconds, median (p5 / p95 / p99):
+
+| Family | Width | Linux, v0.3.2 | Windows, v0.3.1 (above) |
+|---|---|---|---|
+| TriggerBox (a byte) | 1 ms | 0.0 (-30 / +13 / +31) | -65 (-137 / -6 / +87) |
+| | 5 ms | +0.1 (-26 / +22 / +39) | -47 (-149 / +18 / +60) |
+| LINES, DTR | 1 ms | -1.0 (-6 / +3 / +7) | -29 (-55 / +65 / +664) |
+| | 5 ms | -0.9 (-6 / +3 / +6) | -16 (-45 / +7 / +18) |
+| LINES, RTS | 1 ms | -1.0 (-4 / +3 / +6) | -34 (-72 / +503 / +4163) |
+| | 5 ms | -0.9 (-5 / +3 / +6) | -27 (-71 / +11 / +33) |
+
+Onset, median (p99): byte 52 us (69), DTR 25 us (34), RTS 26 us (33).
+`ydev_out_pulse()` returned in 14 us median for a byte and 54 us for a
+line (the call makes the leading write or line change itself).
+
+- On Linux a byte write returns before the byte reaches the board, and a
+  DTR or RTS call returns after its edge (docs/serial.md, "Results on
+  Linux (v0.6.1)"). The rule times the width from the leading call's
+  start, so both families come out within 1 us of the request at the
+  median, and the line pulses within 7 us at p99.
+- The Windows DTR and RTS call tail is not here: the longest pulse error
+  was +40 us (a byte), +20 us (DTR), +8 us (RTS).
+- Two machines and two drivers: the Windows numbers carried a load on the
+  machine (see above), and the Linux machine is a desktop. Compare each
+  OS's rows with its own `ysp/serial.h` rows, not across.
+
+`tests/loopback/device_loopback.c` passes on Linux on a pty pair from
+`tests/loopback/pty_pair.py` (socat was not installed): identify, 130 of
+131 edges arrived and the 110 after the first second mapped within
+20.5 us of their board stamps, 20 outputs reported, LOST 0.03 s after
+the hang-up. Under ThreadSanitizer (GCC 12;
+run with `setarch -R`, because its ThreadSanitizer cannot map memory with
+this kernel's address randomization) it reported a race on the test's
+own stop flag, a `volatile int` between two threads; the flag is now
+atomic and the run is clean.
 
 ### The rig profile (v0.1.0)
 

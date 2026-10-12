@@ -269,7 +269,7 @@
  *   v0.3.2 - POSIX: the reader thread starts SCHED_OTHER, not with its
  *          creator's policy, so a no_elevate reader opened by an elevated
  *          frame thread is not SCHED_FIFO (ysp/rt.h v0.8.1, the same
- *          change). Nothing else changed.
+ *          change). STATUS: the first Linux runs. No other change.
  *   v0.3.1 - A host-timed pulse's width runs from the START of the leading
  *          write, not from its return: the trailing 0 is written at
  *          yser_pulse_off_at_ns() (ysp/serial.h v0.6.1), at least the new
@@ -318,9 +318,14 @@
  *   adapter and board. v0.3.1, 2026-10-12: the host-timed outputs (the
  *   TriggerBox byte path, DTR, RTS) into a Teensy 4.0 echo board on
  *   Windows' usbser.sys (tests/compare/serial_pulse/device_pulse.c), width
- *   error -65 to -16 us median, 0 of 2400 missed. No vendor box, line
- *   board, parallel port or FTDI bridge has been opened. docs/device.md
- *   has the numbers.
+ *   error -65 to -16 us median, 0 of 2400 missed. v0.3.2, 2026-10-12, Linux
+ *   (Debian 12, kernel 6.11 liquorix, i5-14500): the same outputs into the
+ *   same board on cdc_acm, width error -1.0 to +0.1 us median, p99 within
+ *   +39 us, 0 of 2400 missed, the worker on SCHED_FIFO 1; and
+ *   tests/loopback/device_loopback.c on a pty pair (pty_pair.py, as
+ *   socat), plain and under ThreadSanitizer. No vendor box, line board,
+ *   parallel port or FTDI bridge has been opened. docs/device.md has the
+ *   numbers.
  *
  *   ---------------------------------------------------------------------
  *   LICENSE: public domain / MIT-0, see end of file.
@@ -331,7 +336,7 @@
 #define YDEV_VERSION_MAJOR 0
 #define YDEV_VERSION_MINOR 3
 #define YDEV_VERSION_PATCH 2
-#define YDEV_VERSION_STRING "0.3.1"
+#define YDEV_VERSION_STRING "0.3.2"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"

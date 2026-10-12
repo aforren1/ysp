@@ -7,7 +7,8 @@
  *
  * A virtual pair works: on Linux
  *     socat -d -d pty,raw,echo=0 pty,raw,echo=0 &
- * prints two /dev/pts/N names (com0com gives a pair on Windows). A thread
+ * or, without socat, tests/loopback/pty_pair.py (it prints its pid first:
+ * pass that as socat_pid) prints two /dev/pts/N names (com0com gives a pair on Windows). A thread
  * plays a ysp line protocol board on <board_port>: its clock is the host's
  * microseconds plus an offset, it sends a sync every 100 ms and an edge
  * every 50 ms, and it answers "i" and "q <seq>". ysp/device.h opens
@@ -31,12 +32,23 @@
 #include <string.h>
 #if !defined(_WIN32)
 #include <signal.h>
+#include <stdatomic.h>
 #include <sys/types.h>
 #endif
 
 static yser_port   g_board;
 static ydev_device g_dev;
-static volatile int g_board_stop;
+/* The stop flag crosses threads: an atomic, not volatile (ThreadSanitizer
+ * reported the volatile one as a race on Linux). */
+#if defined(_WIN32)
+static volatile LONG g_board_stop;
+static void board_stop_set(void) { InterlockedExchange(&g_board_stop, 1); }
+static int  board_stop_get(void) { return (int)InterlockedCompareExchange(&g_board_stop, 0, 0); }
+#else
+static atomic_int g_board_stop;
+static void board_stop_set(void) { atomic_store(&g_board_stop, 1); }
+static int  board_stop_get(void) { return atomic_load(&g_board_stop); }
+#endif
 static int64_t     g_offset_us = 123456789;   /* the board's clock minus ours */
 static int64_t     g_edges[4096];               /* host ns of each edge sent */
 static volatile int g_n_edges;
@@ -60,7 +72,7 @@ static void* board_thread(void* arg)
     int nline = 0, level = 0;
     int64_t next_sync = yrt_now_ns(), next_edge = next_sync + 30000000;
     (void)arg;
-    while (!g_board_stop) {
+    while (!board_stop_get()) {
         uint8_t b[64];
         int n = yser_read(&g_board, b, (int)sizeof b, YRT_MS(2), YSER_READ_ANY), i;
         int64_t now = yrt_now_ns();
@@ -190,7 +202,7 @@ int main(int argc, char** argv) {
         if (ydev_state(&g_dev) != YDEV_LOST || yrt_now_ns() - t_kill > 2000000000LL) { puts("FAIL: not lost"); fails++; }
 #endif
     }
-    g_board_stop = 1;
+    board_stop_set();
     ydev_close(&g_dev);
 #if defined(_WIN32)
     WaitForSingleObject(th, INFINITE);

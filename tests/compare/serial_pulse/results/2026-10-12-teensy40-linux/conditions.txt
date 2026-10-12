@@ -20,3 +20,10 @@ Command:
   uv run --no-project python pulse_stats.py out > summary_c.txt
 200 pulses per cell, widths 1, 2, 5 and 10 ms, 9 modes, min_hold the
 default (0.25 ms). Raw CSVs (2.8 MB) not kept.
+
+summary_device.txt: tests/compare/serial_pulse/device_pulse.c (ysp/device.h
+0.3.2 with ysp/serial.h 0.6.2, its POSIX build), 2026-10-12 15:02 to 15:06,
+same machine and board, forward then "rev", 200 pulses per cell, 1 and
+5 ms, the instance worker on SCHED_FIFO 1.
+  device_pulse /dev/ttyACM0 out 200
+  device_pulse /dev/ttyACM0 out 200 rev

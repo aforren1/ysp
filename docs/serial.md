@@ -715,8 +715,13 @@ through the Windows backend.
   when `ysp/serial.h` is compiled afterwards.
 - Loopback: `tests/loopback/serial_loopback.c`, built with
   `-DYSP_BUILD_LOOPBACK=ON` and run by hand with two device names, either a
-  virtual pair (`socat -d -d pty,raw,echo=0 pty,raw,echo=0`; com0com on
-  Windows) or one port name twice with TX tied to RX. It checks write N then
+  virtual pair (`socat -d -d pty,raw,echo=0 pty,raw,echo=0`, or
+  `tests/loopback/pty_pair.py` where socat is not installed; com0com on
+  Windows) or one port name twice with TX tied to RX. `pty_pair.py` keeps
+  both slave sides open: a pty master whose slave has no opener reads EIO,
+  and a first version that closed them lost the first writes and failed
+  13 checks; with them open, 3 of 3 runs passed on the Linux desktop
+  (2026-10-12), and one under ThreadSanitizer (GCC 12, `setarch -R`). It checks write N then
   `YSER_READ_ALL` N and the payload, `YSER_READ_ANY` with timeout 0 on an idle
   port (0 bytes, under 2 ms, so a poll cannot quietly become a wait),
   `YSER_READ_ANY` with a 100 ms timeout on an idle port (0 bytes after 95 to

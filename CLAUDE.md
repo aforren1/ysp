@@ -77,7 +77,9 @@ screen 0 and puts them back; if a run dies, `xrandr --output <out> --mode
 1920x1080 --rate 60 --gamma 1:1:1` restores them. Key times come from
 the keyboards' evdev nodes when the user can read them
 (`tools/linux/70-ysp-input.rules`); `test_screen_glx` part 11 needs that
-rule and the `uinput` module, else it skips. Open: separate X screens in
+rule and the `uinput` module, else it skips. No socat on the Linux
+desktop: `tests/loopback/pty_pair.py` gives the pty pair. GCC 12's
+ThreadSanitizer needs `setarch -R` on this kernel. Open: separate X screens in
 one process (SDL 3 drives one; `desc.x_display` picks it per process).
 
 ## Linux real-time priority

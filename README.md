@@ -23,7 +23,7 @@ C11 or C++17, and its top comment is its manual.
 | [input](docs/input.md) | `yin_` | The input event that every device shares | 0.4.0 | 1 machine |
 | [response](docs/response.md) | `yrsp_` | Trial responses and RT from any input device | 0.4.0 | 1 machine |
 | [box](docs/box.md) | `ybox_` | Response and trigger box protocols, bytes to events | 0.3.0 | no device |
-| [device](docs/device.md) | `ydev_` | Boxes and boards on the rig clock, with outputs | 0.3.2 | 1 machine |
+| [device](docs/device.md) | `ydev_` | Boxes and boards on the rig clock, with outputs | 0.3.2 | 2 machines |
 | [rigfile](docs/device.md#how-to-keep-a-rigs-devices-and-latencies-in-its-rig-profile) | `yrig_` | Rig profile: devices per role, loopback results | 0.3.0 | no device |
 | [net](docs/net.md) | `ynet_` | Lab Streaming Layer markers and streams | 0.3.0 | no device |
 | [color](docs/color.md) | `ycol_` | Display calibration and color space conversions | 0.2.0 | tested |
