@@ -4309,7 +4309,7 @@ static void ytl__tg_prune(ytl_timeline* tl, int bi) {
             int32_t k;
             if (tl->events[i].flags & YTL__DONE) continue;
             k = ytl__ev_tween(tl, &tl->events[i]);
-            if (k >= 0) tl->tw[k].xflags &= (uint8_t)~YTL__TWX_DROP;
+            if (k >= 0) tl->tw[k].xflags = (uint8_t)(tl->tw[k].xflags & ~YTL__TWX_DROP);
         }
     }
     /* No target loses its last tween (L stays), so none moves. */
@@ -4319,7 +4319,7 @@ static void ytl__tg_prune(ytl_timeline* tl, int bi) {
             ytl_tween_slot* w = &tl->tw[j];
             nx = w->next;
             if (!(w->xflags & YTL__TWX_DROP)) continue;
-            w->xflags &= (uint8_t)~YTL__TWX_DROP;
+            w->xflags = (uint8_t)(w->xflags & ~YTL__TWX_DROP);
             if (!w->due && !(tl->in_calls && tl->call_tw == j)) ytl__tw_free(tl, j, false);
         }
     }
