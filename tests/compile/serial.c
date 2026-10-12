@@ -44,8 +44,9 @@ static const serial_api g_api = {
 /* The desc's time field by name and type, written the way the USAGE block
  * writes a desc (zeroed, then set: C99 and C++17 both). */
 static int64_t g_forever = YSER_TIMEOUT_INFINITE;
-typedef char yser_version_is_0_5[YSER_VERSION_MAJOR == 0 && YSER_VERSION_MINOR == 5 ? 1 : -1];
-typedef char yser_units_are_ns[YSER_DEFAULT_WRITE_TIMEOUT_NS == 1000000000 && YSER_TIMEOUT_INFINITE == -1 ? 1 : -1];
+typedef char yser_version_is_0_6[YSER_VERSION_MAJOR == 0 && YSER_VERSION_MINOR == 6 ? 1 : -1];
+typedef char yser_units_are_ns[YSER_DEFAULT_WRITE_TIMEOUT_NS == 1000000000 && YSER_TIMEOUT_INFINITE == -1 &&
+                               YSER_DEFAULT_MIN_HOLD_NS == 250000 ? 1 : -1];
 
 int main(void) {
     yser_desc d;
@@ -54,14 +55,19 @@ int main(void) {
     memset(&p, 0, sizeof p);
     d.device = "ysp-compile-check-no-such-port";
     d.write_timeout_ns = YRT_MS(100);
-    (void)sizeof(yser_version_is_0_5);
+    (void)sizeof(yser_version_is_0_6);
     (void)sizeof(yser_units_are_ns);
     /* Calls on a closed handle: no device is needed, and the codes are the
      * documented ones. */
     if (g_api.pulse(&p, 1, 0, YRT_MS(2)) != YSER_ERR_CLOSED) return 1;
     if (g_api.read(&p, &d, 1, g_forever, YSER_READ_ANY) != YSER_ERR_CLOSED) return 2;
     if (g_api.send_break(&p, YRT_MS(1)) != YSER_ERR_CLOSED) return 3;
+    if (g_api.pulse_async(&p, 1, 0, YRT_MS(2)) != YSER_ERR_CLOSED) return 4;
     if (!g_api.error(&p) || g_api.is_open(&p)) return 5;
+    /* A negative min_hold_ns fails the open before any OS call. */
+    d.min_hold_ns = -1;
+    if (g_api.open(&p, &d) || !strstr(g_api.error(&p), "min_hold_ns")) return 7;
+    d.min_hold_ns = 0;
     g_api.close(&p);
     return d.write_timeout_ns == 100000000 ? 0 : 6;
 }

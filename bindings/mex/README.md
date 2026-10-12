@@ -207,6 +207,7 @@ raises `ysp_serial:arg`.
 | `stop_bits` | `1` or `2` |
 | `flow` | `'none'`, `'rtscts'`, `'xonxoff'` |
 | `write_timeout` | seconds, rounded up to whole milliseconds by the library; `0` is the default (1 s), `Inf` blocks |
+| `min_hold` | seconds; the least time between a pulse's onset write returning and its trailing write; `0` is the default (0.25 ms) |
 | `exclusive`, `low_latency` | logical |
 | `dtr_low_on_open`, `rts_low_on_open`, `keep_dtr_on_close` | logical; see DTR AND DEVICE RESET in the header |
 | `rt_runtime`, `rt_deadline`, `rt_period` | async-worker RT reservation (Linux SCHED_DEADLINE), seconds |
@@ -230,8 +231,8 @@ policy the worker actually obtained, which is not always the one requested.
 | `'purge', h [, 'rx' \| 'tx' \| 'both']` | none | discard buffered bytes; default `'rx'` |
 | `'interrupt', h` | none | latch a wake that the next `read` consumes; it cannot reach a read already in flight (see below) |
 | `'now'` | `double` | monotonic seconds from the library clock, the clock of `ysp_parallel` too; opens nothing |
-| `'pulse', h, on, off, width` | count (optional) | blocking; `width` in seconds; returns 2 |
-| `'pulseasync', h, on, off, width` | count (optional) | non-blocking; `width` in seconds; returns 1 when the onset was accepted |
+| `'pulse', h, on, off, width` | count (optional) | blocking; `width` in seconds from the start of the onset write; returns 2 |
+| `'pulseasync', h, on, off, width` | count (optional) | non-blocking: queues the pulse for the RT worker, which writes both bytes; `width` in seconds; returns 1 when queued, 0 when the queue is full or an earlier async write timed out |
 | `'setdtr', h, on` / `'setrts', h, on` | none | drive the output lines |
 | `'lines', h` | struct | `mask` plus `cts`, `dsr`, `ri`, `dcd` logicals |
 | `'break', h, duration` | none | hold TX in the break state for `duration` seconds |
@@ -239,7 +240,7 @@ policy the worker actually obtained, which is not always the one requested.
 | `'async_start', h [, terminator [, lines [, max_len]]]` | none | start the reader thread; defaults `10` (LF), `8192` lines, `256` bytes per line; see below |
 | `'async_read', h [, max_lines]` | `lines` [, `t`, `t_first`] | the complete lines since the last call: a cell column of `uint8` rows (terminator included) and two `double` columns of stamps in seconds |
 | `'async_stop', h` | struct (optional) | stop the reader thread; fields `pending` (lines not read, discarded), `dropped`, `overlong`, `bytes`, `reads`, `error` |
-| `'version'` | string [, string] | the binding version (`2.0.0`), and as a second output the version of ysp/serial.h in this build; opens nothing |
+| `'version'` | string [, string] | the binding version (`2.1.0`), and as a second output the version of ysp/serial.h in this build; opens nothing |
 | `'close', h` | none | release the port; stops a running reader first |
 
 `write`, `writebyte`, `pulse` and `pulseasync` return their count only when

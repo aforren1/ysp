@@ -487,7 +487,7 @@ end
 
 function test_serial()
     [v, hv] = ysp_serial('version');
-    check(strcmp(v, '2.0.0') && ischar(hv) && ~isempty(hv), 'ysp_serial version');
+    check(strcmp(v, '2.1.0') && ischar(hv) && ~isempty(hv), 'ysp_serial version');
     % Seconds: 'now' advances by about the pause, not by 1e3 or 1e6 of it.
     t1 = ysp_serial('now');
     pause(0.05);

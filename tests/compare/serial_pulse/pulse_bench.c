@@ -8,8 +8,11 @@
  * pulse_stats.py turns the CSV files into onset latency, width error, missed
  * pulses and call cost.
  *
- *   pulse_bench COM3 out_dir [n] [rev] [modes=a,b,...] [widths=1,2,5,10]
+ *   pulse_bench COM3 out_dir [n] [rev] [modes=a,b,...] [widths=1,2,5,10] [hold=us]
  *
+ * widths are in ms and may be fractional (widths=0,0.1,0.2 for the stall
+ * check). hold sets yser_desc.min_hold_ns in microseconds for the ysp
+ * modes (default 0: the header's default; 0.001 is practically none).
  * n is the pulse count per cell (default 200). "rev" runs the cells in the
  * reverse order: a median depends on the open and on the position in the
  * run (docs/serial.md, Audit), so two runs in opposite orders bound that.
@@ -31,8 +34,10 @@
  * The raw modes stamp with QueryPerformanceCounter, converted with
  * yrt_ticks_to_ns (bit-identical to yrt_now_ns). Every wait is
  * yrt_sleep_until with YRT_DEFAULT_SPIN_NS, the wait yser_pulse uses, so the
- * modes differ in the transport calls only. The width starts after the onset
- * call returns, as in yser_pulse, except in the two _t0 modes.
+ * modes differ in the transport calls only. In the bench's own modes the
+ * width starts after the onset call returns (the rule yser_pulse had until
+ * ysp/serial.h v0.6), except in the two _t0 modes. yser_pulse and
+ * yser_pulse_async time it as their header says.
  *
  * Pulses come in blocks of 20, 50 to 150 ms apart (uniform), with 10 "e"
  * probes before each block and after the last. Byte cells keep DTR and RTS
@@ -45,7 +50,7 @@
  *               (t_off_* only where the bench makes the trailing call; -1 else)
  *   board.csv   cell,mode,width_us,block,kind,t_us,v
  *               (kind B: byte v; L: v = dtr + 2 rts; D: count; G: loop gap us)
- *   cells.csv   cell,mode,width_us,run,async_policy,open_ms
+ *   cells.csv   cell,mode,width_us,run,async_policy,open_ms,min_hold_us
  *
  * Build (Visual C++, from a Developer Command Prompt):
  *   cl /O2 /W3 /I..\..\..\include pulse_bench.c
@@ -87,6 +92,8 @@ typedef struct {
     HANDLE h;
 } port;
 
+static int64_t g_hold_ns = 0;  /* desc.min_hold_ns for the ysp modes */
+
 static void die(const char* what, int code) {
     fprintf(stderr, "pulse_bench: %s failed (%d, os error %lu)\n", what, code,
             (unsigned long)GetLastError());
@@ -107,6 +114,7 @@ static void port_open(port* p, const char* dev, int raw) {
     if (!raw) {
         yser_desc d = { 0 };
         d.device = dev;
+        d.min_hold_ns = g_hold_ns;
         if (!yser_open(&p->sp, &d)) {
             fprintf(stderr, "pulse_bench: open %s: %s\n", dev, yser_error(&p->sp));
             exit(1);
@@ -293,8 +301,9 @@ static void run_cell(const char* dev, int mode, int64_t width_ns, int n, int cel
     int64_t t_open = qpc_ns();
     port_open(&p, dev, is_raw(mode));
     double open_ms = (double)(qpc_ns() - t_open) / 1e6;
-    fprintf(o->cells, "%d,%s,%ld,%d,%s,%.3f\n", cell, mode_name[mode], wus, run,
-            is_raw(mode) ? "none" : yrt_policy_name(p.sp.async_policy), open_ms);
+    fprintf(o->cells, "%d,%s,%ld,%d,%s,%.3f,%.3f\n", cell, mode_name[mode], wus, run,
+            is_raw(mode) ? "none" : yrt_policy_name(p.sp.async_policy), open_ms,
+            is_raw(mode) ? 0.0 : (double)p.sp.min_hold_ns / 1e3);
 
     /* a known state: no stream, no line reports, no byte mode left over */
     cmd(&p, "x\nl 0\n");
@@ -395,11 +404,12 @@ int main(int argc, char** argv) {
     const char* dir = argv[2];
     int n = 200, rev = 0, run = 1;
     int use[M_COUNT];
-    long widths[8] = { 1, 2, 5, 10 };
+    double widths[8] = { 1, 2, 5, 10 };
     int nw = 4;
     for (int m = 0; m < M_COUNT; m++) use[m] = 1;
     for (int a = 3; a < argc; a++) {
         if (strcmp(argv[a], "rev") == 0) { rev = 1; run = 2; }
+        else if (strncmp(argv[a], "hold=", 5) == 0) g_hold_ns = (int64_t)(atof(argv[a] + 5) * 1e3 + 0.5);
         else if (strncmp(argv[a], "modes=", 6) == 0) {
             for (int m = 0; m < M_COUNT; m++) use[m] = 0;
             char tmp[256];
@@ -413,7 +423,7 @@ int main(int argc, char** argv) {
             char tmp[256];
             nw = 0;
             snprintf(tmp, sizeof tmp, "%s", argv[a] + 7);
-            for (char* t = strtok(tmp, ","); t && nw < 8; t = strtok(NULL, ",")) widths[nw++] = atol(t);
+            for (char* t = strtok(tmp, ","); t && nw < 8; t = strtok(NULL, ",")) widths[nw++] = atof(t);
         } else n = atoi(argv[a]);
     }
     CreateDirectoryA(dir, NULL);
@@ -421,7 +431,7 @@ int main(int argc, char** argv) {
     o.probes = open_csv(dir, "probes.csv", "cell,mode,width_us,t0_ns,t2_ns,rx_us,tx_us");
     o.pulses = open_csv(dir, "pulses.csv", "cell,mode,width_us,block,i,t_start_ns,t_ret_ns,t_off_ns,t_off_ret_ns,rc");
     o.board = open_csv(dir, "board.csv", "cell,mode,width_us,block,kind,t_us,v");
-    o.cells = open_csv(dir, "cells.csv", "cell,mode,width_us,run,async_policy,open_ms");
+    o.cells = open_csv(dir, "cells.csv", "cell,mode,width_us,run,async_policy,open_ms,min_hold_us");
     srand(rev ? 2 : 1);
 
     /* the cells in order: for each width, each mode */
@@ -433,8 +443,8 @@ int main(int argc, char** argv) {
     for (int k = 0; k < nc; k++) {
         int c = rev ? nc - 1 - k : k;
         int m = list[c][0];
-        int64_t w = YRT_MS(widths[list[c][1]]);
-        fprintf(stderr, "pulse_bench: cell %d/%d %s %ld ms\n", k + 1, nc, mode_name[m], widths[list[c][1]]);
+        int64_t w = (int64_t)(widths[list[c][1]] * 1e6 + 0.5);
+        fprintf(stderr, "pulse_bench: cell %d/%d %s %g ms\n", k + 1, nc, mode_name[m], widths[list[c][1]]);
         run_cell(dev, m, w, n, base + c, run, &o);
     }
     fclose(o.probes); fclose(o.pulses); fclose(o.board); fclose(o.cells);

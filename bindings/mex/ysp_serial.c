@@ -63,8 +63,9 @@
 #include "ysp/serial.h"
 
 /* The binding's own version, apart from ysp/serial.h's: 2.0.0 moved every
- * time to seconds (v1 took ms and us) and added the async reader. */
-#define PS_BINDING_VERSION "2.0.0"
+ * time to seconds (v1 took ms and us) and added the async reader; 2.1.0
+ * adds the min_hold setting of ysp/serial.h v0.6.0. */
+#define PS_BINDING_VERSION "2.1.0"
 
 #if defined(_WIN32)
     #ifndef WIN32_LEAN_AND_MEAN
@@ -480,7 +481,7 @@ static double ps_ns_to_s(int64_t ns) { return (double)ns * 1e-9; }
 static const char* const ps_desc_fields[] = {
     "baud", "data_bits", "write_timeout", "stop_bits", "parity", "flow",
     "exclusive", "low_latency", "dtr_low_on_open", "rts_low_on_open",
-    "keep_dtr_on_close", "rt_runtime", "rt_deadline", "rt_period" };
+    "keep_dtr_on_close", "rt_runtime", "rt_deadline", "rt_period", "min_hold" };
 
 static void ps_read_desc(const mxArray* s, yser_desc* d) {
     const mxArray* f;
@@ -493,7 +494,7 @@ static void ps_read_desc(const mxArray* s, yser_desc* d) {
         if (!known)
             mexErrMsgIdAndTxt("ysp_serial:arg",
                 "open: unknown setting '%s' (times are seconds since binding v2: "
-                "write_timeout, rt_runtime, rt_deadline, rt_period)", name);
+                "write_timeout, rt_runtime, rt_deadline, rt_period, min_hold)", name);
     }
     if ((f = mxGetField(s, 0, "baud")))             d->baud = ps_u32(f, "baud");
     if ((f = mxGetField(s, 0, "data_bits")))        d->data_bits = (uint8_t)ps_u32(f, "data_bits");
@@ -516,6 +517,7 @@ static void ps_read_desc(const mxArray* s, yser_desc* d) {
     if ((f = mxGetField(s, 0, "keep_dtr_on_close"))) d->keep_dtr_on_close = ps_bool(f, "keep_dtr_on_close");
     /* Async-worker RT reservation (s); missing fields stay 0, which yser_open
      * resolves: a 0 period means "same as deadline". */
+    if ((f = mxGetField(s, 0, "min_hold")))   d->min_hold_ns = ps_s_to_ns(f, "min_hold", 0);
     if ((f = mxGetField(s, 0, "rt_runtime")))  d->sched.runtime_ns  = (uint64_t)ps_s_to_ns(f, "rt_runtime", 0);
     if ((f = mxGetField(s, 0, "rt_deadline"))) d->sched.deadline_ns = (uint64_t)ps_s_to_ns(f, "rt_deadline", 0);
     if ((f = mxGetField(s, 0, "rt_period")))   d->sched.period_ns   = (uint64_t)ps_s_to_ns(f, "rt_period", 0);
@@ -621,10 +623,10 @@ static void cmd_read(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[],
 
 static mxArray* ps_info(const yser_port* p) {
     const char* fields[] = { "device", "baud", "data_bits", "parity", "stop_bits",
-                             "flow", "write_timeout", "low_latency",
+                             "flow", "write_timeout", "min_hold", "low_latency",
                              "keep_dtr_on_close", "async_policy",
                              "rd_oserr", "wr_oserr", "misc_oserr" };
-    mxArray* s = mxCreateStructMatrix(1, 1, 13, fields);
+    mxArray* s = mxCreateStructMatrix(1, 1, 14, fields);
     int parity = (int)p->parity, flow = (int)p->flow;
     if (parity < 0 || parity > 4) parity = 0;
     if (flow < 0 || flow > 2) flow = 0;
@@ -639,6 +641,7 @@ static mxArray* ps_info(const yser_port* p) {
                mxCreateDoubleScalar(p->write_timeout_ns == YSER_TIMEOUT_INFINITE
                                         ? mxGetInf()
                                         : ps_ns_to_s(p->write_timeout_ns)));
+    mxSetField(s, 0, "min_hold",          mxCreateDoubleScalar(ps_ns_to_s(p->min_hold_ns)));
     mxSetField(s, 0, "low_latency",       mxCreateLogicalScalar(p->low_latency));
     mxSetField(s, 0, "keep_dtr_on_close", mxCreateLogicalScalar(p->keep_dtr_on_close));
     mxSetField(s, 0, "async_policy",      ps_policy_string(p->async_policy));

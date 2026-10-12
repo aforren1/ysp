@@ -1,4 +1,4 @@
-/* ysp/serial.h - v0.5.1 - public domain single-header serial-port library
+/* ysp/serial.h - v0.6.0 - public domain single-header serial-port library
  *
  *   REQUIRES ysp/rt.h, its sibling in this collection, on the include path.
  *   This header includes it for the clock, the waits, the scheduling ladder
@@ -140,18 +140,23 @@
  *     Measured on one setup only: a Teensy 4.0 (native USB high speed,
  *     Windows' usbser.sys), Windows 11, Intel Core i7-1360P, 2026-10-12; the
  *     edge is the board's receive time (docs/serial.md, "Pulses: onset and
- *     width"):
- *       - Onset from just before the call: yser_pulse() and
- *         yser_pulse_async() 176 to 185 us median, p99 under 0.32 ms;
- *         yser_set_dtr() 83 us median.
- *       - Width at 1 and 5 ms, byte and DTR pulses: longer than requested
- *         by +0.34 to +0.42 ms median, p99 up to +0.69 ms. Most of it is the
- *         onset call, which returned 200 to 300 us after the board had the
- *         edge; the width starts when that call returns.
- *       - Missed: 0 of 19200 byte and DTR pulses.
- *       - An RTS change alone never reached the device: usbser.sys sends
- *         the RTS state only with the next DTR change. Pulse with DTR or
- *         bytes there.
+ *     width", "Results with v0.6.0"; 1600 pulses per call, 1 to 10 ms):
+ *       - Onset from just before the call: yser_pulse() 218 us median, p99
+ *         365 us; yser_pulse_async() 267 us median, p99 408 us (the
+ *         worker's wake); yser_set_dtr() 86 us, yser_set_rts() 118 us.
+ *       - Width, yser_pulse() and yser_pulse_async(): -57 to -22 us median
+ *         off the request, p5 -114 us, p99 up to +104 us. The width runs
+ *         from the start of the onset write; until v0.5.1 it ran from the
+ *         write's return and was +0.34 to +0.42 ms long (median), because
+ *         the byte reaches the device during that write. A pulse you time
+ *         yourself from a call's return has that error too.
+ *       - yser_pulse_async() returns in 20 us median, 48 us p99.
+ *       - Missed: 0 of 9800 (bytes, DTR, RTS and the min_hold check).
+ *       - RTS: Windows' usbser.sys sends the line state to a USB CDC device
+ *         only with a DTR request, so yser_set_rts() sets DTR again to its
+ *         present level (docs/serial.md, "RTS on usbser.sys"). Other
+ *         libraries' RTS calls (pyserial, EscapeCommFunction) do not reach
+ *         such a device.
  *     Not measured: FTDI and other bridges, RS-232, Linux, macOS. Do not
  *     carry these numbers to them.
  *     To timestamp a trigger, bracket the call:
@@ -169,21 +174,28 @@
  *     c-pod), prefer that and send one command instead of two.
  *
  *     PULSE WIDTH: WHO TIMES THE TRAILING EDGE
+ *     Both calls write the trailing byte at max(start of the onset write +
+ *     width, return of the onset write + min_hold_ns). min_hold_ns
+ *     (desc.min_hold_ns, default 0.25 ms) is a floor for a width shorter than
+ *     the onset write, or a stalled write: on the setup above the shortest
+ *     pulse at the device was the hold plus 80 to 160 us, and 56 us with
+ *     practically no hold. Set it to your receiver's sampling period if a
+ *     shorter pulse could fall between two samples.
  *     yser_pulse() blocks the calling thread for the whole width and times the
  *     trailing edge on whatever thread the caller has, at whatever priority it
  *     has. It waits with yrt_sleep_until() and YRT_DEFAULT_SPIN_NS, so the
  *     OS gets the bulk of the width and only the tail is spun.
- *     yser_pulse_async() returns after the onset write and has a yrt_worker
- *     the library owns write the trailing byte at an absolute deadline taken
- *     right after that onset. That worker elevates itself up ysp/rt.h's ladder
+ *     yser_pulse_async() only queues the pulse; a yrt_worker the library owns
+ *     writes both bytes. That worker elevates itself up ysp/rt.h's ladder
  *     (SCHED_DEADLINE, else the macOS time-constraint policy, else SCHED_FIFO,
  *     else normal; THREAD_PRIORITY_TIME_CRITICAL on Windows) and waits the
  *     same way, so its trailing edge is no less precise than yser_pulse's
- *     (on the setup above the two width errors matched: +0.36 to +0.42 ms
- *     median), and the caller is free during the width. It is not free
- *     during the onset write (0.46 ms median there). yser_port.async_policy
- *     says which rung it got; log it with your numbers, because they mean
- *     different things under different policies.
+ *     (on the setup above the width errors matched within 13 us median), and
+ *     the caller is free during the write and the width. The width starts
+ *     at the worker's write, so the wake does not shorten it; it only delays
+ *     the onset. yser_port.async_policy says which rung the worker got; log
+ *     it with your numbers, because they mean different things under
+ *     different policies.
  *     What the wait itself is worth on your machine is ysp/rt.h's WAITS
  *     section, and examples/rt/jitter.c measures it there: it sweeps spin
  *     windows and prints the wake-latency distribution of each, which is the
@@ -192,8 +204,8 @@
  *     What neither call can do is beat the transport. Over USB-serial the
  *     jitter of an edge is bounded below by the frame period (1 ms full-speed,
  *     125 us high-speed) and above by OS scheduling plus the driver's own
- *     batching; on the setup above the width's p5 to p95 spread was about
- *     0.4 ms. Frame quantization is the floor, not the budget. Put a
+ *     batching; on the setup above the width's p5 to p95 spread was 91 to
+ *     137 us. Frame quantization is the floor, not the budget. Put a
  *     scope on the line, record the distribution together with async_policy,
  *     and do not assume a number from this header.
  *
@@ -206,28 +218,31 @@
  *       any:     yser_interrupt, yser_get_lines, yser_set_dtr, yser_set_rts
  *                (one call at a time, from any thread; they share misc_oserr)
  *       neither: yser_open, yser_close (only after both roles have returned)
- *     The async-pulse worker is a SECOND WRITER on the handle, so every
- *     writer-role write (yser_write, yser_write_byte, yser_pulse,
- *     yser_pulse_async's onset, and the worker's own trailing byte) is
- *     serialized under one writer mutex this header owns, and the worker
- *     reports through wr_oserr like any writer. That mutex is here rather than
- *     in ysp/rt.h because yrt_worker runs its callback with its OWN lock
- *     released, which is what lets the callback block on a stream write;
- *     serializing the stream is this header's job. Next to the mutex sits the
- *     pending trailing byte, armed with its deadline: yser_pulse_async() takes
- *     the mutex, writes the onset and arms, every user write takes the mutex
- *     and DISARMS before it writes, and the worker's callback takes the mutex
- *     and writes only what is still armed and due. So a trailing byte the
- *     worker had already dispatched when a user write got in first finds
- *     nothing armed and writes nothing, and a stale `off` can never undo a
- *     write that means "hold this". The price, which the parallel port does not
- *     pay because outb cannot block: if the worker's trailing write is stuck
- *     in the driver (a wedged device, a peer that stopped draining), a user
- *     write waits behind it for up to write_timeout_ns, and the other way
- *     round. One byte stream, one writer at a time.
+ *     The async-pulse worker is a SECOND WRITER on the handle: it writes
+ *     both edges of every yser_pulse_async(). Every writer-role write (yser_write,
+ *     yser_write_byte, yser_pulse, and the worker's own writes) is serialized
+ *     under one writer mutex this header owns, and the worker reports through
+ *     wr_oserr like any writer. That mutex is here rather than in ysp/rt.h
+ *     because yrt_worker runs its callback with its OWN lock released, which
+ *     is what lets the callback block on a stream write; serializing the
+ *     stream is this header's job. yser_pulse_async() does not take that
+ *     mutex: it puts the onset in a queue under a second, short lock that
+ *     nobody holds across I/O, so it does not wait for a write in progress.
+ *     Every other writer-role call takes the mutex and writes the queued
+ *     onsets first, so nothing overtakes a queued pulse. Next to the queue
+ *     sits the pending trailing byte, armed with its deadline: a user write
+ *     DISARMS it before it writes, and the worker writes only what is still
+ *     armed and due. So a trailing byte the worker had already dispatched
+ *     when a user write got in first finds nothing armed and writes nothing,
+ *     and a stale `off` can never undo a write that means "hold this". The
+ *     price, which the parallel port does not pay because outb cannot block:
+ *     if a worker write is stuck in the driver (a wedged device, a peer that
+ *     stopped draining), a user write waits behind it for up to
+ *     write_timeout_ns, and the other way round. One byte stream, one writer
+ *     at a time.
  *     yser_close() stops the worker before it closes anything and has it write
- *     any pending trailing byte immediately instead of waiting out the rest of
- *     the width, so a latching box is never left holding a trigger code
+ *     any queued onset and any pending trailing byte immediately instead of
+ *     waiting out the rest of the width, so a latching box is never left holding a trigger code
  *     (yrt_worker_close() runs a pending job at once, with a flush flag the
  *     callback reads). That one write happens with the writer mutex held, and
  *     yser_close() joins the worker thread behind it, so "at once" is about the
@@ -362,6 +377,18 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.6.0 - yser_pulse_async() only queues the pulse (no I/O, no
+ *          allocation; 20 us median against 462 us), and the worker writes
+ *          both bytes. Output keeps the order of the calls: every other
+ *          writer-role call writes queued onsets first. It returns 0 when
+ *          16 onsets wait, and reports a failed worker write on the next
+ *          call. yser_pulse() and yser_pulse_async() time the width from the
+ *          start of the onset write, at least the new desc.min_hold_ns
+ *          (default 0.25 ms) after its return: the width error went from
+ *          +0.34 to +0.42 ms median to -57 to -22 us on a Teensy 4.0.
+ *          yser_set_rts() on Windows sets DTR again to its level, which
+ *          makes usbser.sys send the RTS change; before, none arrived.
+ *          New yser_port.min_hold_ns and YSER_DEFAULT_MIN_HOLD_NS.
  *   v0.5.1 - TIMING gives the onset and width measured on a Teensy 4.0 over
  *          usbser.sys, and names what was not measured; it no longer says
  *          "about 1 ms onset" or that widths below a few ms are unreliable.
@@ -451,9 +478,9 @@
 /* The version of this header, for a binding's __version__ and for a log line.
  * The string always matches the three numbers. */
 #define YSER_VERSION_MAJOR  0
-#define YSER_VERSION_MINOR  5
-#define YSER_VERSION_PATCH  1
-#define YSER_VERSION_STRING "0.5.1"
+#define YSER_VERSION_MINOR  6
+#define YSER_VERSION_PATCH  0
+#define YSER_VERSION_STRING "0.6.0"
 
 /* CancelIoEx (Vista) is what lets yser_interrupt() end a pending overlapped
  * read. The MSVC SDK targets a recent Windows by default, but MinGW headers
@@ -516,6 +543,9 @@ extern "C" {
 
 #define YSER_DEFAULT_BAUD             115200u
 #define YSER_DEFAULT_WRITE_TIMEOUT_NS ((int64_t)1000000000)  /* 1 s */
+/* The least time between the return of a pulse's onset write and the start
+ * of its trailing write; desc.min_hold_ns sets it per port. See TIMING. */
+#define YSER_DEFAULT_MIN_HOLD_NS      ((int64_t)250000)      /* 0.25 ms */
 /* A timeout that never ends: yser_read() and desc.write_timeout_ns. */
 #define YSER_TIMEOUT_INFINITE         ((int64_t)-1)
 
@@ -635,6 +665,11 @@ typedef struct yser_desc {
     bool           keep_dtr_on_close;
     yser_sched_deadline sched;        /* async-pulse worker RT params;
                                        * all-zero = defaults                   */
+    int64_t        min_hold_ns;       /* ns; 0 = YSER_DEFAULT_MIN_HOLD_NS (0.25 ms).
+                                       * A pulse's trailing write starts no
+                                       * sooner than this after its onset write
+                                       * returned; see TIMING. Negative fails
+                                       * yser_open()                             */
 } yser_desc;
 
 /* Port handle. Allocate it (stack/heap) zeroed or closed, pass to yser_open(),
@@ -677,6 +712,7 @@ typedef struct yser_port {
     int      misc_oserr;            /* same for the any-role calls (interrupt, get_lines,
                                      * set_dtr, set_rts), which have no direction             */
     int64_t  write_timeout_ns;      /* immutable while open; see the comment above            */
+    int64_t  min_hold_ns;           /* effective desc.min_hold_ns; immutable while open      */
 
     /* Effective settings, filled by yser_open() after defaults are applied. */
     uint32_t       baud;
@@ -833,33 +869,42 @@ YSER_API int yser_purge(yser_port* p, int which);
 /* Write `on`, hold for width_ns nanoseconds, then write `off`. The two-byte
  * trigger pulse for boxes that latch the last byte received (TriggerBox,
  * BioSemi, DIY): on = code, off = 0x00. Do not use it with a command
- * protocol such as XID, where 0x00 is a protocol byte. Blocking; the hold
- * starts when the first write is accepted by the driver (see TIMING). The
- * wait is yrt_sleep_until() with the platform's default spin window, so the
- * calling thread sleeps for most of the width and spins only the tail.
+ * protocol such as XID, where 0x00 is a protocol byte. Blocking. The width
+ * runs from the START of the onset write, and the trailing write starts no
+ * sooner than yser_port.min_hold_ns after the onset write returned, so a
+ * width shorter than the onset write (or a stalled one) gives a pulse of
+ * about min_hold_ns, never none (see TIMING). The wait is yrt_sleep_until()
+ * with the platform's default spin window, so the calling thread sleeps for
+ * most of the width and spins only the tail.
  * Returns 2 on success, the count of bytes accepted on timeout, or a
  * YSER_ERR_* code (YSER_ERR_ARG for a negative width, before any write). */
 YSER_API int yser_pulse(yser_port* p, uint8_t on, uint8_t off, int64_t width_ns);
 
-/* Non-blocking pulse. Writes `on` on the calling thread and returns at once;
- * the async-pulse worker writes `off` at an absolute deadline taken right
- * after the onset write, so the width does not include this call's own cost
- * and the caller does not wait it out. Use it when the experiment has
- * something better to do than hold still for a trigger width, and read
- * TIMING for what the trailing edge is worth on each platform.
+/* Non-blocking pulse. Queues the pulse and returns at once, without I/O and
+ * without allocating: the async-pulse worker writes `on`, then writes `off`
+ * when yser_pulse() would (width_ns from the start of the onset write, and
+ * at least min_hold_ns after it returned). The onset leaves one worker wake
+ * later than a write on the calling thread would; TIMING gives both numbers.
+ * Use it when the experiment has something better to do than wait for a
+ * trigger write or hold still for its width.
  *
- * Returns 1 (the onset byte was accepted), 0 if the onset write timed out, or
- * a YSER_ERR_* code; YSER_ERR_IO with wr_oserr == 0 means there is no worker
- * (YSER_NO_THREADS, or yser_open() could not start one), YSER_ERR_ARG a
- * negative width_ns (nothing written). A timed-out or failed onset schedules
- * no trailing byte.
+ * Returns 1 when the pulse is queued. Returns 0, with nothing queued, when
+ * 16 onsets are already waiting or when an earlier async write timed out:
+ * either way the device is not keeping up. Returns a YSER_ERR_* code, with
+ * nothing queued, for an earlier async write that failed (each failure is
+ * reported once, by the next call), YSER_ERR_ARG for a negative width_ns,
+ * and YSER_ERR_IO with wr_oserr == 0 when there is no worker
+ * (YSER_NO_THREADS, or yser_open() could not start one). A failed or
+ * timed-out onset write schedules no trailing byte.
  *
- * Writer role, like yser_write. The worker keeps ONE pending trailing byte per
- * handle: a second yser_pulse_async() while one is pending moves that single
- * edge to the new time and the new `off`, and any plain yser_write /
+ * Writer role, like yser_write. Output keeps the order of the calls: every
+ * other writer-role call writes the queued onsets before its own bytes. The
+ * worker keeps ONE pending trailing byte per handle: a newer pulse's onset
+ * replaces it with the newer `off` and deadline, and a plain yser_write /
  * yser_write_byte / yser_pulse cancels it, because a write means "hold this"
- * and a stale `off` must not undo it. See THREADING for the shared-lock cost
- * and yser_close()'s flush. */
+ * and a stale `off` must not undo it. yser_drain() and yser_send_break()
+ * keep it; yser_purge(YSER_PURGE_TX) discards the onsets still queued. See
+ * THREADING for the shared lock and yser_close()'s flush. */
 YSER_API int yser_pulse_async(yser_port* p, uint8_t on, uint8_t off, int64_t width_ns);
 
 /* --- input (reader role) ----------------------------------------------- */
@@ -887,7 +932,9 @@ YSER_API int yser_available(yser_port* p);
 
 /* Drive the DTR / RTS output lines. RTS is ignored while YSER_FLOW_RTSCTS is
  * active (the driver owns it). Return 0 or a YSER_ERR_* code, with the OS
- * error in misc_oserr. */
+ * error in misc_oserr. On Windows yser_set_rts() also sets DTR again to its
+ * present level, because usbser.sys (USB CDC) sends the line state to the
+ * device only with a DTR request; see TIMING. */
 YSER_API int yser_set_dtr(yser_port* p, bool on);
 YSER_API int yser_set_rts(yser_port* p, bool on);
 
@@ -1045,12 +1092,29 @@ static int yser__write_nolock(yser_port* p, const void* buf, int len) {
     return yser__write_timed(p, buf, len, yser__ms(p->write_timeout_ns));
 }
 
+/* When a pulse's trailing write is due: the width from the onset write's
+ * start (t0), but never sooner than min_hold_ns after that write returned
+ * (t1). yser_pulse() says why. */
+static int64_t yser__off_at(const yser_port* p, int64_t t0, int64_t t1, int64_t width_ns) {
+    int64_t a = t0 + width_ns, b = t1 + p->min_hold_ns;
+    return a > b ? a : b;
+}
+
+/* What a writer-role call other than a pulse does to the async pulses still
+ * queued or armed; see the ASYNC PULSE WORKER section. */
+#define YSER__PA_HOLD 0  /* write the queued onsets, disarm the trailing byte */
+#define YSER__PA_KEEP 1  /* write the queued onsets, keep the trailing byte   */
+#define YSER__PA_DROP 2  /* discard the queued onsets                         */
+
 #ifndef YSER_NO_THREADS
 /* Defined in the ASYNC PULSE WORKER section below. */
 static bool yser__async_start(yser_port* p);
 static void yser__async_stop(yser_port* p);
+static void yser__async_settle(yser_port* p, int how);
 static int  yser__write_cancel(yser_port* p, const void* buf, int len);
 static int  yser__async_submit(yser_port* p, uint8_t on, uint8_t off, int64_t width_ns);
+#else
+#define yser__async_settle(p, how) ((void)(p), (void)(how))
 #endif
 
 /* One clock for the library, the caller and ysp/rt.h, in the microseconds the
@@ -1542,6 +1606,9 @@ static int yser__write_timed(yser_port* p, const void* buf, int len, uint32_t ti
 
 YSER_API int yser_drain(yser_port* p) {
     if (!yser_is_open(p)) return YSER_ERR_CLOSED;
+    /* Queued async onsets first: "empty" has to include bytes the
+     * worker has not handed to the driver yet. */
+    yser__async_settle(p, YSER__PA_KEEP);
     if (!FlushFileBuffers((HANDLE)p->handle)) {
         DWORD e = GetLastError();
         p->wr_oserr = (int)e;
@@ -1553,6 +1620,9 @@ YSER_API int yser_drain(yser_port* p) {
 YSER_API int yser_purge(yser_port* p, int which) {
     if (!yser_is_open(p)) return YSER_ERR_CLOSED;
     if (!(which & (YSER_PURGE_RX | YSER_PURGE_TX))) return YSER_ERR_ARG;
+    /* Async onsets still queued never reached the driver; a TX purge
+     * discards them too. */
+    if (which & YSER_PURGE_TX) yser__async_settle(p, YSER__PA_DROP);
     DWORD flags = 0;
     /* The ABORT bits also end an overlapped transfer in the same direction,
      * which is why RX purge belongs to the reader role. */
@@ -1696,10 +1766,31 @@ YSER_API int yser_set_dtr(yser_port* p, bool on) {
     return yser__escape(p, on ? SETDTR : CLRDTR);
 }
 
+/* IOCTL_SERIAL_GET_DTRRTS from ntddser.h, which a user-mode build does not
+ * have: CTL_CODE(FILE_DEVICE_SERIAL_PORT, 30, METHOD_BUFFERED,
+ * FILE_ANY_ACCESS). */
+#define YSER__IOCTL_GET_DTRRTS 0x001B0078u
+
 YSER_API int yser_set_rts(yser_port* p, bool on) {
     if (!yser_is_open(p)) return YSER_ERR_CLOSED;
     if (p->flow == YSER_FLOW_RTSCTS) return 0; /* the driver owns RTS */
-    return yser__escape(p, on ? SETRTS : CLRRTS);
+    int rc = yser__escape(p, on ? SETRTS : CLRRTS);
+    if (rc < 0) return rc;
+    /* Windows' usbser.sys (USB CDC: Arduino, Teensy, Pico) records an RTS
+     * change but sends no SET_CONTROL_LINE_STATE for it; it sends the line
+     * state, RTS included, on every SETDTR or CLRDTR, also one that does not
+     * change DTR. So DTR is set again to the level the driver has, which
+     * sends the RTS change at once. Measured on a Teensy 4.0 (docs/serial.md,
+     * Pulses: RTS): before this, 0 of 160 RTS pulses reached the board. On a
+     * driver that sends RTS itself (FTDI, serial.sys) the second request
+     * repeats the state; its cost there is not measured. A driver that cannot
+     * report DTR keeps the RTS change it already has. */
+    ULONG st = 0;
+    DWORD n = 0;
+    if (!DeviceIoControl((HANDLE)p->handle, YSER__IOCTL_GET_DTRRTS, NULL, 0, &st, sizeof st,
+                         &n, NULL) || n < sizeof st)
+        return 0;
+    return yser__escape(p, (st & 1u) ? SETDTR : CLRDTR);
 }
 
 YSER_API int yser_get_lines(yser_port* p) {
@@ -1723,6 +1814,8 @@ YSER_API int yser_get_lines(yser_port* p) {
 YSER_API int yser_send_break(yser_port* p, int64_t duration_ns) {
     if (!yser_is_open(p)) return YSER_ERR_CLOSED;
     if (duration_ns < 0) return YSER_ERR_ARG;
+    /* Queued async onsets first, so the break cannot overtake them. */
+    yser__async_settle(p, YSER__PA_KEEP);
     if (!SetCommBreak((HANDLE)p->handle)) {
         DWORD e = GetLastError();
         p->wr_oserr = (int)e;
@@ -2278,6 +2371,9 @@ static int yser__write_timed(yser_port* p, const void* buf, int len, uint32_t ti
 
 YSER_API int yser_drain(yser_port* p) {
     if (!yser_is_open(p)) return YSER_ERR_CLOSED;
+    /* Queued async onsets first: "empty" has to include bytes the
+     * worker has not handed to the driver yet. */
+    yser__async_settle(p, YSER__PA_KEEP);
     while (tcdrain(p->fd) != 0) {
         if (errno == EINTR) continue;
         p->wr_oserr = errno;
@@ -2289,6 +2385,9 @@ YSER_API int yser_drain(yser_port* p) {
 YSER_API int yser_purge(yser_port* p, int which) {
     if (!yser_is_open(p)) return YSER_ERR_CLOSED;
     if (!(which & (YSER_PURGE_RX | YSER_PURGE_TX))) return YSER_ERR_ARG;
+    /* Async onsets still queued never reached the driver; a TX purge
+     * discards them too. */
+    if (which & YSER_PURGE_TX) yser__async_settle(p, YSER__PA_DROP);
     int sel = ((which & YSER_PURGE_RX) && (which & YSER_PURGE_TX)) ? TCIOFLUSH
               : (which & YSER_PURGE_RX) ? TCIFLUSH : TCOFLUSH;
     if (tcflush(p->fd, sel) != 0) {
@@ -2405,6 +2504,8 @@ YSER_API int yser_get_lines(yser_port* p) {
 YSER_API int yser_send_break(yser_port* p, int64_t duration_ns) {
     if (!yser_is_open(p)) return YSER_ERR_CLOSED;
     if (duration_ns < 0) return YSER_ERR_ARG;
+    /* Queued async onsets first, so the break cannot overtake them. */
+    yser__async_settle(p, YSER__PA_KEEP);
     /* TIOCSBRK rather than tcsendbreak(), whose duration is 0.25 to 0.5 s and
      * not under the caller's control. */
     if (ioctl(p->fd, TIOCSBRK) != 0) {
@@ -2430,26 +2531,48 @@ YSER_API int yser_send_break(yser_port* p, int64_t duration_ns) {
  *  stays here is the part that is about the byte stream rather than about
  *  time.
  *
- *  yrt_worker runs its callback with its OWN lock released, which is what
- *  lets that callback block in a driver write without deadlocking a submit
- *  from another thread. The price is that ysp/rt.h serializes nothing for us,
- *  and this library's threading promise is that exactly one thread writes the
- *  port at a time. Hence the writer mutex below: every writer-role write, the
- *  worker's trailing byte included, holds it.
+ *  Since v0.6 the worker writes both edges. yser_pulse_async() only puts
+ *  the onset byte in a small queue and wakes the worker, so the caller pays
+ *  for a lock and a wake, not for a driver write (0.46 ms median on the
+ *  Teensy 4.0 under usbser.sys, docs/serial.md). The price is the wake: the
+ *  onset leaves one worker wake later than a write on the calling thread
+ *  would.
  *
- *  Next to the mutex sits the pending trailing byte, armed together with the
- *  deadline it is due at. That pair is the token the callback checks: it
- *  writes only what is still armed and due, so a byte the worker had already
- *  dispatched when a user write, a replacement pulse or a close got the mutex
- *  first is dropped instead of undoing that write. yrt_worker_cancel()
- *  handles the ordinary case, where the job has not been dispatched yet; the
- *  token covers the window between ysp/rt.h releasing its lock and the
- *  callback taking ours, which no cancel can reach.
+ *  Two locks, because the caller must never wait behind I/O:
+ *    - the writer mutex (mtx): one writer on the byte stream at a time. Held
+ *      across every writer-role write, the worker's included. yrt_worker
+ *      runs its callback with its OWN lock released, which is what lets that
+ *      callback block in a driver write; ysp/rt.h therefore serializes
+ *      nothing for us, and this mutex is what keeps the threading promise
+ *      that exactly one thread writes the port at a time.
+ *    - the state lock (st): the onset queue, the armed trailing byte and the
+ *      deferred failure. Never held across I/O, so yser_pulse_async(), which
+ *      takes only this one, returns in microseconds even while the worker is
+ *      inside a write.
+ *  Lock order: mtx, then st, then ysp/rt.h's lock (a submit or a cancel).
+ *  The callback takes mtx and st with nothing of ysp/rt.h's held, so the
+ *  cycle does not close.
  *
- *  Lock order is writer mutex, then ysp/rt.h's lock (yser__async_submit and
- *  yser__write_cancel take both). The callback runs the other way round, but
- *  it holds nothing of ysp/rt.h's when it takes ours, so the cycle does not
- *  close.
+ *  Order on the stream is the order of the calls. Queued onsets go out
+ *  oldest first, in one write. Every other writer-role output takes mtx and
+ *  then writes the queued onsets itself before its own bytes, so it cannot
+ *  overtake them: yser_write() and yser_pulse() also disarm the trailing
+ *  byte, because a write means "hold this"; yser_drain() and
+ *  yser_send_break() keep it armed; yser_purge(YSER_PURGE_TX) drops the
+ *  queued onsets, which never reached the driver.
+ *
+ *  The armed trailing byte is the token the callback checks: it writes only
+ *  what is still armed and due, so a byte a user write, a newer pulse or a
+ *  close disarmed first is not written. Writing queued onsets supersedes
+ *  the armed byte of an older pulse: the newer pulse's `off` is armed at its
+ *  own deadline, which follows yser_pulse()'s rule: the width from the
+ *  onset write's start, and at least min_hold_ns after its return.
+ *
+ *  The callback is the one place that submits the trailing deadline, always
+ *  under st, and yser_pulse_async() submits "now" under st when the queue
+ *  goes from empty to one. The last submit therefore always matches the
+ *  state it was computed from, and a replacement never strands a queued
+ *  onset or an armed byte.
  * ======================================================================= */
 #ifndef YSER_NO_THREADS
 
@@ -2460,19 +2583,31 @@ typedef pthread_mutex_t yser__mutex;
 typedef CRITICAL_SECTION yser__mutex;
 #endif
 
+/* Onsets the worker has not written yet. A caller gets 0 from
+ * yser_pulse_async() when this many are waiting; on a device that keeps up,
+ * the worker empties the queue within one write. */
+#define YSER__PA_QUEUE 16
+
 typedef struct yser__async {
-    yrt_worker rt;         /* ysp/rt.h's thread; the handle is ours to hold */
+    yrt_worker   rt;         /* ysp/rt.h's thread; the handle is ours to hold */
     yser__mutex  mtx;        /* one writer at a time on the byte stream       */
+    yser__mutex  st;         /* the fields below; never held across I/O      */
+    int          nq;         /* queued onsets, oldest first in q[]            */
+    uint8_t      q[YSER__PA_QUEUE];
+    uint8_t      q_off;      /* trailing byte and width of the newest one     */
+    int64_t      q_width_ns;
     uint64_t     off_at_ns;  /* when the armed trailing byte is due           */
     uint8_t      off_byte;
-    int          armed;      /* 0 = nothing pending; written under mtx only   */
+    int          armed;      /* 0 = nothing pending                          */
+    int          failed;     /* a worker write failed; fail_code says how    */
+    int          fail_code;  /* <0 a YSER_ERR_* code, 0 a timed-out write     */
     yser_port*   port;
 } yser__async;
 
 #if defined(YSER__POSIX)
-/* Priority inheritance: a normal-priority submitter holds this mutex across
- * the onset write, and without PI the real-time worker would wait behind
- * whatever preempted that submitter. */
+/* Priority inheritance: a normal-priority writer holds mtx across its own
+ * write, and the state lock is shared with the real-time worker; without PI
+ * that worker would wait behind whatever preempted the holder. */
 static bool yser__mutex_init(yser_port* p, yser__mutex* m) {
     pthread_mutexattr_t ma;
     pthread_mutexattr_init(&ma);
@@ -2483,15 +2618,15 @@ static bool yser__mutex_init(yser_port* p, yser__mutex* m) {
     return rc == 0;
 }
 static void yser__mutex_destroy(yser__mutex* m) { (void)pthread_mutex_destroy(m); }
-static void yser__lock(yser__async* a)   { (void)pthread_mutex_lock(&a->mtx); }
-static void yser__unlock(yser__async* a) { (void)pthread_mutex_unlock(&a->mtx); }
+static void yser__mlock(yser__mutex* m)   { (void)pthread_mutex_lock(m); }
+static void yser__munlock(yser__mutex* m) { (void)pthread_mutex_unlock(m); }
 
-/* The trailing-edge write. On POSIX a write touches nothing but the
- * descriptor, so this is the same code the user's writer thread runs; the
- * mutex is what keeps the two apart. Failures land in wr_oserr, which is safe
- * for the same reason. */
-static int yser__write_worker(yser_port* p, uint8_t value, uint32_t timeout_ms) {
-    return yser__write_timed(p, &value, 1, timeout_ms);
+/* The worker's write. On POSIX a write touches nothing but the descriptor,
+ * so this is the same code the user's writer thread runs; mtx is what keeps
+ * the two apart. Failures land in wr_oserr, which is safe for the same
+ * reason. */
+static int yser__write_worker(yser_port* p, const uint8_t* buf, int len, uint32_t timeout_ms) {
+    return yser__write_timed(p, buf, len, timeout_ms);
 }
 #else
 static bool yser__mutex_init(yser_port* p, yser__mutex* m) {
@@ -2503,43 +2638,129 @@ static bool yser__mutex_init(yser_port* p, yser__mutex* m) {
     return true;
 }
 static void yser__mutex_destroy(yser__mutex* m) { DeleteCriticalSection(m); }
-static void yser__lock(yser__async* a)   { EnterCriticalSection(&a->mtx); }
-static void yser__unlock(yser__async* a) { LeaveCriticalSection(&a->mtx); }
+static void yser__mlock(yser__mutex* m)   { EnterCriticalSection(m); }
+static void yser__munlock(yser__mutex* m) { LeaveCriticalSection(m); }
 
-/* The trailing-edge write, on the worker's own OVERLAPPED and event: a
- * transfer is reaped by the thread that started it, and the callback below
- * runs on ysp/rt.h's worker thread, so it must never borrow the user writer's
- * wr_ovl/wr_event. Failures land in wr_oserr, which is safe because this runs
- * under the same mutex as yser_write. */
-static int yser__write_worker(yser_port* p, uint8_t value, uint32_t timeout_ms) {
-    return yser__write_ovl(p, &value, 1, timeout_ms,
+/* The worker's write, on its own OVERLAPPED and event: a transfer is reaped
+ * by the thread that started it, and the callback below runs on ysp/rt.h's
+ * worker thread, so it must never borrow the user writer's wr_ovl/wr_event.
+ * yser_close() also uses it after the worker has been joined, when no other
+ * thread can hold pa_ovl. Failures land in wr_oserr, which is safe because
+ * this runs under the same mutex as yser_write. */
+static int yser__write_worker(yser_port* p, const uint8_t* buf, int len, uint32_t timeout_ms) {
+    return yser__write_ovl(p, buf, len, timeout_ms,
                            YSER__OVL(p->pa_ovl), (HANDLE)p->pa_event);
 }
 #endif
 
-/* The trailing edge, on ysp/rt.h's worker thread at ysp/rt.h's policy.
- *
- * It asks what is armed NOW instead of carrying a decision from submit time,
- * because between the worker choosing this job and this callback taking the
- * mutex another thread may have disarmed it, or armed a different byte at a
- * later deadline. Writing "whatever is armed and due" settles both: a
- * canceled byte is not written at all, and a replacement is left to its own
- * deadline unless it is already due, in which case writing it here is what
- * its own callback would do a moment later anyway.
- *
- * A flush (yrt_worker_close, which is yser_close) writes whatever is armed
- * at once, bounded by YSER__CLOSE_FLUSH_MS rather than write_timeout_ns,
- * because yser_close() is joining this thread behind the write. */
-static void yser__off_job(void* ctx, const yrt_job_info* info) {
-    yser__async* a = (yser__async*)ctx;
-    yser__lock(a);
-    if (a->armed && (info->flushed || (uint64_t)yrt_now_ns() >= a->off_at_ns)) {
-        a->armed = 0;
-        (void)yser__write_worker(a->port, a->off_byte,
-                                 info->flushed ? YSER__CLOSE_FLUSH_MS
-                                               : yser__ms(a->port->write_timeout_ns));
+/* Keeps the first failure until yser_pulse_async() reports it. Called with
+ * st held. */
+static void yser__pa_fail(yser__async* a, int r) {
+    if (a->failed) return;
+    a->failed = 1;
+    a->fail_code = r < 0 ? r : 0;
+}
+
+/* Writes the queued onsets, then arms the newest pulse's trailing byte at
+ * yser__off_at() of that write. Called with mtx held and st NOT
+ * held; `wr` is the write of the calling thread (the worker's or the user
+ * writer's). Returns false when nothing was queued. */
+static bool yser__pa_write_onsets(yser__async* a, uint32_t timeout_ms, int keep_off,
+                                  int (*wr)(yser_port*, const uint8_t*, int, uint32_t)) {
+    uint8_t buf[YSER__PA_QUEUE];
+    yser__mlock(&a->st);
+    int n = a->nq;
+    if (n == 0) { yser__munlock(&a->st); return false; }
+    memcpy(buf, a->q, (size_t)n);
+    uint8_t off = a->q_off;
+    int64_t width_ns = a->q_width_ns;
+    a->nq = 0;
+    /* A newer onset supersedes the older pulse's trailing byte, as a second
+     * yser_pulse_async() always did. */
+    a->armed = 0;
+    yser__munlock(&a->st);
+
+    /* The width runs from this write's start, the rule yser_pulse() states,
+     * and not from the yser_pulse_async() call: the worker's wake comes
+     * before the onset reaches the device, so counting it would shorten the
+     * pulse the device sees by the wake latency. */
+    int64_t t0 = yrt_now_ns();
+    int r = wr(a->port, buf, n, timeout_ms);
+    int64_t at = yser__off_at(a->port, t0, yrt_now_ns(), width_ns);
+
+    yser__mlock(&a->st);
+    if (r != n) {
+        /* No complete onset, no trailing edge: a stale `off` is worse than
+         * none, because the caller learns that this pulse failed. */
+        yser__pa_fail(a, r);
+    } else if (keep_off) {
+        a->off_byte  = off;
+        a->off_at_ns = (uint64_t)at;
+        a->armed     = 1;
     }
-    yser__unlock(a);
+    yser__munlock(&a->st);
+    return true;
+}
+
+static int yser__pa_write_user(yser_port* p, const uint8_t* buf, int len, uint32_t timeout_ms) {
+    return yser__write_timed(p, buf, len, timeout_ms);
+}
+
+static void yser__pa_job(void* ctx, const yrt_job_info* info);
+
+/* Everything the worker does, at every deadline: the queued onsets, then
+ * the armed trailing byte if it is due (or at once on a flush), then the
+ * next deadline. It asks what is queued and armed NOW instead of carrying a
+ * decision from submit time, because another thread may have changed both
+ * between the dispatch and this callback taking mtx.
+ *
+ * A flush (yrt_worker_close, which is yser_close) writes everything at
+ * once, bounded by YSER__CLOSE_FLUSH_MS rather than write_timeout_ns,
+ * because yser_close() is joining this thread behind the write. */
+static void yser__pa_run(yser__async* a, int flush) {
+    yser_port* p = a->port;
+    yser__mlock(&a->mtx);
+    for (;;) {
+        uint32_t tmo = flush ? YSER__CLOSE_FLUSH_MS : yser__ms(p->write_timeout_ns);
+        yser__mlock(&a->st);
+        if (a->nq > 0) {
+            yser__munlock(&a->st);
+            (void)yser__pa_write_onsets(a, tmo, 1, yser__write_worker);
+            continue;
+        }
+        if (a->armed && (flush || (uint64_t)yrt_now_ns() >= a->off_at_ns)) {
+            uint8_t off = a->off_byte;
+            a->armed = 0;
+            yser__munlock(&a->st);
+            int r = yser__write_worker(p, &off, 1, tmo);
+            if (r != 1) {
+                yser__mlock(&a->st);
+                yser__pa_fail(a, r);
+                yser__munlock(&a->st);
+            }
+            continue;
+        }
+        /* Nothing queued, checked under the st this still holds, so a push
+         * cannot slip in before this submit and be replaced by it. The
+         * armed byte is all that is left to wait for. */
+        if (a->armed && !flush &&
+            yrt_worker_submit(&a->rt, (int64_t)a->off_at_ns, yser__pa_job, a) < 0) {
+            /* Refused only while yser_close() stops the worker. The onset is
+             * on the wire, so the trailing byte goes out now rather than
+             * never: a latching box holding a trigger code is the worse
+             * failure. */
+            flush = 1;
+            yser__munlock(&a->st);
+            continue;
+        }
+        yser__munlock(&a->st);
+        break;
+    }
+    yser__munlock(&a->mtx);
+}
+
+static void yser__pa_job(void* ctx, const yrt_job_info* info) {
+    yser__pa_run((yser__async*)ctx, info->flushed ? 1 : 0);
 }
 
 static bool yser__async_start(yser_port* p) {
@@ -2553,12 +2774,18 @@ static bool yser__async_start(yser_port* p) {
     if (!a) { yser__set_error(p, "async pulse: out of memory"); return false; }
     a->port = p;
     if (!yser__mutex_init(p, &a->mtx)) { free(a); return false; }
+    if (!yser__mutex_init(p, &a->st)) {
+        yser__mutex_destroy(&a->mtx);
+        free(a);
+        return false;
+    }
 
     yrt_worker_desc wd;
     memset(&wd, 0, sizeof(wd));
     wd.sched = p->sched;   /* already normalized by yser_open() */
     if (!yrt_worker_open(&a->rt, &wd)) {
         yser__set_error(p, "async pulse: %s", yrt_worker_error(&a->rt));
+        yser__mutex_destroy(&a->st);
         yser__mutex_destroy(&a->mtx);
         free(a);
         return false;
@@ -2574,70 +2801,104 @@ static void yser__async_stop(yser_port* p) {
     yser__async* a = (yser__async*)p->async;
     if (!a) return;
     /* Clearing p->async before the stop is bookkeeping, not synchronization:
-     * a yser_write() racing this teardown may already have read p->async and
-     * be inside yser__write_cancel, so the order protects nothing. What makes
-     * the teardown safe is the role contract yser_close() states, that both
-     * the reader and the writer have returned before it is called. */
+     * a yser_write() racing this teardown may already have read p->async, so
+     * the order protects nothing. What makes the teardown safe is the role
+     * contract yser_close() states, that both the reader and the writer have
+     * returned before it is called. */
     p->async = NULL;
-    /* Runs a pending job immediately through yser__off_job with info->flushed
-     * set, then joins. Called without the mutex, because that callback takes
-     * it. */
+    /* Runs a pending job immediately through yser__pa_job with
+     * info->flushed set, then joins. Called without either lock, because
+     * that callback takes them. */
     yrt_worker_close(&a->rt);
+    /* With the thread joined, one more flush on this thread writes whatever
+     * no pending job covered, so nothing queued or armed outlives the
+     * handle. Normally nothing is left, and this only takes the locks. */
+    yser__pa_run(a, 1);
+    yser__mutex_destroy(&a->st);
     yser__mutex_destroy(&a->mtx);
     free(a);
     p->async_policy = YSER_ASYNC_NONE;
 }
 
+/* Before the user writer's own output: the queued onsets go out first, on
+ * the writer's thread and OVERLAPPED, so that output cannot overtake them.
+ * `how` is YSER__PA_HOLD for a write ("hold this": the trailing byte is
+ * disarmed), YSER__PA_KEEP to keep it armed (drain, break) and
+ * YSER__PA_DROP to discard the queued onsets (TX purge). Called with mtx
+ * held. */
+static void yser__pa_settle(yser__async* a, int how) {
+    if (how == YSER__PA_DROP) {
+        yser__mlock(&a->st);
+        a->nq = 0;
+        yser__munlock(&a->st);
+        return;
+    }
+    (void)yser__pa_write_onsets(a, yser__ms(a->port->write_timeout_ns),
+                                how == YSER__PA_KEEP, yser__pa_write_user);
+    yser__mlock(&a->st);
+    if (how == YSER__PA_KEEP) {
+        /* Onsets written here armed their trailing byte on this thread, so
+         * the worker has to learn the deadline. */
+        if (a->armed)
+            (void)yrt_worker_submit(&a->rt, (int64_t)a->off_at_ns, yser__pa_job, a);
+        yser__munlock(&a->st);
+        return;
+    }
+    a->armed = 0;
+    yser__munlock(&a->st);
+    /* Only saves the worker a pointless wake: a job it has already
+     * dispatched waits for mtx and then finds nothing armed. */
+    (void)yrt_worker_cancel(&a->rt);
+}
+
+static void yser__async_settle(yser_port* p, int how) {
+    yser__async* a = (yser__async*)p->async;
+    if (!a) return;
+    yser__mlock(&a->mtx);
+    yser__pa_settle(a, how);
+    yser__munlock(&a->mtx);
+}
+
 static int yser__write_cancel(yser_port* p, const void* buf, int len) {
     yser__async* a = (yser__async*)p->async;
-    yser__lock(a);
-    /* A plain write means "hold this"; a pending trailing byte would silently
-     * undo it. Disarming is what stops it. The cancel only saves the worker a
-     * pointless wake, because a job it has already dispatched cannot be
-     * canceled and the callback waits behind this mutex either way. */
-    a->armed = 0;
-    (void)yrt_worker_cancel(&a->rt);
+    yser__mlock(&a->mtx);
+    yser__pa_settle(a, YSER__PA_HOLD);
     int r = yser__write_nolock(p, buf, len);
-    yser__unlock(a);
+    yser__munlock(&a->mtx);
     return r;
 }
 
 static int yser__async_submit(yser_port* p, uint8_t on, uint8_t off, int64_t width_ns) {
     yser__async* a = (yser__async*)p->async;
-    yser__lock(a);
-    /* Onset under the mutex, so the trailing byte of an in-flight pulse cannot
-     * land between this write and the new deadline. */
-    int r = yser__write_nolock(p, &on, 1);
-    if (r == 1) {
-        /* The width runs from the onset write, not from entry, so the syscall
-         * is not subtracted from it. */
-        int64_t at = yrt_now_ns() + width_ns;
-        a->off_byte  = off;
-        a->off_at_ns = (uint64_t)at;
-        a->armed     = 1;
-        /* A positive return is this job's seq; only a negative one is an
-         * error. The armed/deadline pair is what this header identifies the
-         * pending byte by, so the seq is not kept. */
-        if (yrt_worker_submit(&a->rt, at, yser__off_job, a) < 0) {
-            /* The worker refuses a submit only when it is not running, which
-             * the role contract forbids while a write is in flight. The onset
-             * is already on the wire, so the trailing byte goes out here
-             * rather than never: a latching box holding a trigger code is the
-             * worse failure. */
-            a->armed = 0;
-            (void)yser__write_nolock(p, &off, 1);
-        }
+    int r = 1;
+    yser__mlock(&a->st);
+    if (a->failed) {
+        /* The pulse that failed has already returned, so the next one says
+         * so, once, and is not queued: the caller decides whether to go on. */
+        a->failed = 0;
+        r = a->fail_code;
+    } else if (a->nq == YSER__PA_QUEUE) {
+        r = 0;  /* the device is not keeping up; nothing queued */
     } else {
-        /* No onset, no trailing edge. A stale `off` from an earlier pulse is
-         * worse than none, because the caller will report this one as failed. */
-        a->armed = 0;
-        (void)yrt_worker_cancel(&a->rt);
+        a->q[a->nq++] = on;
+        a->q_off = off;
+        a->q_width_ns = width_ns;
+        /* One wake per batch: with onsets already queued, a job is pending
+         * or the worker is inside its callback and loops back for them. */
+        if (a->nq == 1 && yrt_worker_submit(&a->rt, yrt_now_ns(), yser__pa_job, a) < 0) {
+            /* Refused only when the worker is not running, which the role
+             * contract forbids while a call is in flight. */
+            a->nq = 0;
+            p->wr_oserr = 0;
+            r = YSER_ERR_IO;
+        }
     }
-    yser__unlock(a);
+    yser__munlock(&a->st);
     return r;
 }
 
 #endif /* YSER_NO_THREADS */
+
 
 /* ======================================================================= *
  *  PLATFORM-INDEPENDENT ENTRY POINTS
@@ -2771,6 +3032,12 @@ YSER_API bool yser_open(yser_port* p, const yser_desc* desc) {
         return false;
     }
     p->write_timeout_ns = d.write_timeout_ns ? d.write_timeout_ns : YSER_DEFAULT_WRITE_TIMEOUT_NS;
+    if (d.min_hold_ns < 0) {
+        yser__set_error(p, "invalid desc.min_hold_ns %lld: require >= 0, 0 for the default",
+                        (long long)d.min_hold_ns);
+        return false;
+    }
+    p->min_hold_ns = d.min_hold_ns ? d.min_hold_ns : YSER_DEFAULT_MIN_HOLD_NS;
     p->keep_dtr_on_close = d.keep_dtr_on_close;
 
     /* Resolve the worker's RT reservation with ysp/rt.h's own rules, so the
@@ -2834,15 +3101,25 @@ YSER_API int yser_pulse_async(yser_port* p, uint8_t on, uint8_t off, int64_t wid
 YSER_API int yser_pulse(yser_port* p, uint8_t on, uint8_t off, int64_t width_ns) {
     if (!yser_is_open(p)) return YSER_ERR_CLOSED;
     if (width_ns < 0) return YSER_ERR_ARG;
+    int64_t t0 = yrt_now_ns();
     int r = yser_write_byte(p, on);
     if (r != 1) return r;
-    /* The deadline is taken after the onset write, so the width does not
-     * include that write's own cost. The spin window is ysp/rt.h's platform
-     * default; a caller who has measured its rig with examples/rt/jitter.c and
-     * wants a different one can call yrt_sleep_until() around two
+    /* The width runs from the onset write's START. Until v0.6 it ran from
+     * the write's return, so the write's own cost was not subtracted from it;
+     * but over USB the byte reaches the device during that write, not after
+     * it (on a Teensy 4.0 under usbser.sys a byte write took 423 us median
+     * and its byte arrived at 179 us), so the device saw every pulse
+     * +0.34 to +0.42 ms long (median), with a p5 to p95 spread of about
+     * 0.4 ms that was the write's own return jitter. From the start, the
+     * error is the trailing edge's latency minus the leading edge's:
+     * -50 to -18 us median, p5 to p95 spread 43 to 136 us (docs/serial.md,
+     * Pulses). min_hold_ns keeps a stalled onset write from collapsing the
+     * pulse: the trailing write never starts sooner than that after the
+     * onset write returned. The spin window is ysp/rt.h's platform default;
+     * a caller who has measured its rig with examples/rt/jitter.c and wants
+     * a different one can call yrt_sleep_until() around two
      * yser_write_byte() calls, which is all this function is. */
-    if (width_ns) (void)yrt_sleep_until(yrt_now_ns() + width_ns,
-                                      YRT_DEFAULT_SPIN_NS);
+    (void)yrt_sleep_until(yser__off_at(p, t0, yrt_now_ns(), width_ns), YRT_DEFAULT_SPIN_NS);
     r = yser_write_byte(p, off);
     return r < 0 ? r : 1 + r;
 }

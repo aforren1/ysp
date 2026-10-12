@@ -428,6 +428,32 @@ int main(int argc, char** argv) {
                  got > 0 ? pc[0] : 0, got > 1 ? pc[1] : 0, got > 2 ? pc[2] : 0);
     }
 
+    /* 12b. Back to back, the second onset is usually still queued when it is
+     *      asked for (v0.6: the worker writes onsets). Both onsets arrive, in
+     *      order, before the one off; a write right after them waits for the
+     *      queue and cancels that off. The calls themselves do no I/O. */
+    {
+        uint8_t pc[8];
+        uint64_t t_call = lb_now_us();
+        int r1 = yser_pulse_async(lb_w, 0xC5, 0xC6, YRT_US(30000));
+        int r2 = yser_pulse_async(lb_w, 0xC7, 0xC8, YRT_US(30000));
+        uint64_t call_us = lb_now_us() - t_call;
+        int got = yser_read(lb_r, pc, 5, YRT_MS(200), YSER_READ_ALL);
+        lb_check(r1 == 1 && r2 == 1 && got == 3 &&
+                 pc[0] == 0xC5 && pc[1] == 0xC7 && pc[2] == 0xC8,
+                 "queued pulses keep their order",
+                 "%d bytes: %02X %02X %02X, two calls in %llu us", got,
+                 got > 0 ? pc[0] : 0, got > 1 ? pc[1] : 0, got > 2 ? pc[2] : 0,
+                 (unsigned long long)call_us);
+        int r3 = yser_pulse_async(lb_w, 0xC9, 0xCA, YRT_US(30000));
+        int wr = yser_write_byte(lb_w, 0x43);
+        got = yser_read(lb_r, pc, 4, YRT_MS(60), YSER_READ_ALL);
+        lb_check(r3 == 1 && wr == 1 && got == 2 && pc[0] == 0xC9 && pc[1] == 0x43,
+                 "a write does not overtake a queued onset",
+                 "r3=%d wr=%d, %d bytes: %02X %02X", r3, wr, got,
+                 got > 0 ? pc[0] : 0, got > 1 ? pc[1] : 0);
+    }
+
     /* 13. yser_close with a pulse pending writes the trailing byte at once
      *     instead of waiting out the width, so a device is never left holding
      *     a trigger code. Needs a third handle on the write device, which a

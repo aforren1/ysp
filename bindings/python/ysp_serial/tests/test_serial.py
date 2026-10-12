@@ -121,6 +121,17 @@ def test_pulse_width_in_seconds(call):
         getattr(p, call)(256, 0x00, 0.002)
 
 
+def test_min_hold_in_seconds():
+    assert ps.DEFAULT_MIN_HOLD == 0.00025
+    assert unopened().min_hold == 0.0
+    # Checked before the open, so the bad value is what raises.
+    for bad, exc in ((-0.001, ValueError), (math.nan, ValueError), (math.inf, ValueError)):
+        with pytest.raises(exc):
+            ps.Port("ysp-test-no-such-port", min_hold=bad)
+    with pytest.raises(ps.Error):
+        ps.Port("ysp-test-no-such-port", min_hold=0.001)
+
+
 def test_send_break_in_seconds():
     p = unopened()
     with pytest.raises(ps.Closed):

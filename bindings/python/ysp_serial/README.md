@@ -116,7 +116,7 @@ thread** may use a `Port` at the same time, and nothing else.
 | any (one at a time) | `interrupt`, `get_lines`, `set_dtr`, `set_rts` |
 | neither | the constructor, `close` (only after both roles returned; it stops the async reader itself) |
 
-`read`, `write`, `drain`, `pulse`, `send_break` and `pulse_async`'s onset write
+`read`, `write`, `drain`, `pulse`, `send_break` and `pulse_async`
 release the GIL, so a listener thread does not stall the interpreter.
 
 Shut a listener down with interrupt, join, close. Do **not** call `close()`
@@ -202,12 +202,12 @@ write beside the running reader cost within 34 us of a write without one.
 | `ps.now() -> float` | monotonic seconds from the clock the library times its own deadlines against |
 | `ps.list_ports() -> list[dict]` | enumerate ports (`name`, `description`, `serial_number`, `location`, `vid`, `pid`) |
 | `ps.find_ports(vid=0, pid=0, serial_number=None, location=None, description=None, name=None) -> list[dict]` | the matching subset; zero/`None` matches anything |
-| `ps.Port(device, baud=0, data_bits=0, parity=PARITY_NONE, stop_bits=STOP_BITS_1, flow=FLOW_NONE, write_timeout=DEFAULT_WRITE_TIMEOUT, exclusive=False, low_latency=False, dtr_low_on_open=False, rts_low_on_open=False, keep_dtr_on_close=False, rt_runtime=0, rt_deadline=0, rt_period=0)` | open a port; `device` is required, times are seconds, a zero field means the library default |
+| `ps.Port(device, baud=0, data_bits=0, parity=PARITY_NONE, stop_bits=STOP_BITS_1, flow=FLOW_NONE, write_timeout=DEFAULT_WRITE_TIMEOUT, exclusive=False, low_latency=False, dtr_low_on_open=False, rts_low_on_open=False, keep_dtr_on_close=False, rt_runtime=0, rt_deadline=0, rt_period=0, min_hold=0)` | open a port; `device` is required, times are seconds, a zero field means the library default |
 | `port.read(n, timeout, all=False) -> bytes` | read; `timeout` in seconds, 0 polls, `math.inf` waits forever; `all=True` waits for the full `n` |
 | `port.write(data) -> int` | write a bytes-like object, or any iterable of ints 0..255; returns the count accepted |
 | `port.write_byte(value) -> int` | write one byte; returns 1 |
-| `port.pulse(on, off, width) -> int` | blocking pulse, `width` in seconds; returns 2 |
-| `port.pulse_async(on, off, width) -> int` | non-blocking pulse via the RT worker thread; returns 1 |
+| `port.pulse(on, off, width) -> int` | blocking pulse, `width` in seconds from the start of the onset write; returns 2 |
+| `port.pulse_async(on, off, width) -> int` | queues the pulse for the RT worker thread, which writes both bytes; returns 1, or 0 when the queue is full or an earlier async write timed out |
 | `port.available() -> int` | bytes buffered by the driver |
 | `port.drain()` | wait until the transmit buffer is empty |
 | `port.purge(rx=True, tx=False)` | discard buffered bytes |
@@ -256,12 +256,19 @@ from the slot that belongs to the failing role (`rd_oserr`, `wr_oserr` or
 `misc_oserr`). Constants mirror the header: `PARITY_*`, `STOP_BITS_*`,
 `FLOW_*`, `LINE_*`, `PURGE_*`, `READ_*`, `ERR_*`, `ASYNC_*`,
 `TIMEOUT_INFINITE` (`math.inf`), `DEFAULT_BAUD`, and in seconds
-`DEFAULT_WRITE_TIMEOUT` and `DEFAULT_RT_{RUNTIME,DEADLINE,PERIOD}`.
+`DEFAULT_WRITE_TIMEOUT`, `DEFAULT_MIN_HOLD` and
+`DEFAULT_RT_{RUNTIME,DEADLINE,PERIOD}`.
 
 ## Version
 
-`ysp-serial` 0.5.1 is `ysp/serial.h` v0.5.1. The header changed only its
-TIMING comment, so 0.5.1 has the API of 0.5.0.2. The first three numbers are
+`ysp-serial` 0.6.0 is `ysp/serial.h` v0.6.0. `pulse_async` queues the
+pulse and returns without I/O; the worker writes both bytes. `pulse` and
+`pulse_async` time the width from the start of the onset write, and
+the new `min_hold` argument (seconds, 0 for `DEFAULT_MIN_HOLD`, 0.25 ms)
+is the least time between the onset write's return and the trailing
+write. On Windows, `set_rts` now reaches a USB CDC device under
+`usbser.sys`. 0.5.1 changed only the header's TIMING comment and had the
+API of 0.5.0.2. The first three numbers are
 the header's version; a fourth counts changes to the binding alone and goes
 away when the header's version changes: 0.5.0.1 changed every time to
 seconds, 0.5.0.2 added the async reader. `ps.__version__` gives the same
@@ -279,7 +286,7 @@ Most tests need no port:
 
 ```sh
 uv build --wheel -o dist
-uv run --no-project --with pytest --with dist/ysp_serial-0.5.1-cp38-abi3-<platform>.whl pytest tests
+uv run --no-project --with pytest --with dist/ysp_serial-0.6.0-cp38-abi3-<platform>.whl pytest tests
 ```
 
 On Linux, `tests/test_async_pty.py` runs the async reader on a
@@ -292,7 +299,7 @@ of a write while the reader runs. Add `-s` to see the numbers;
 `YSP_SERIAL_RESULTS=<dir>` also writes them to `<dir>/async_device.json`.
 
 ```sh
-YSP_SERIAL_PORT=COM3 uv run --no-project --with pytest --with dist/ysp_serial-0.5.1-cp38-abi3-<platform>.whl pytest tests -s
+YSP_SERIAL_PORT=COM3 uv run --no-project --with pytest --with dist/ysp_serial-0.6.0-cp38-abi3-<platform>.whl pytest tests -s
 ```
 
 Device naming, USB latency, DTR-driven board resets and what a serial trigger
