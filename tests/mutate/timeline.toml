@@ -2,7 +2,8 @@
 # ysp/timeline.h mutants: RATE (v0.4.0), the sequence code (ytl_seq) and
 # TARGETS (v0.6.0). docs/timeline.md: 24 RATE mutants, 21 caught and 3
 # equivalent; 19 sequence mutants, all caught; 20 target mutants (tgt-*),
-# all caught. The v0.3.0 list (23) was not kept.
+# all caught; 26 v0.7.0 mutants (v07-*: yoyo, records, prune), all caught.
+# The v0.3.0 list (23) was not kept.
 header = "ysp/timeline.h"
 
 [test.timeline]

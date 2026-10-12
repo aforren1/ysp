@@ -1092,7 +1092,20 @@
  *          prune, remove and clear; the record of where every event
  *          landed.
  *
- *   STATUS: v0.6.0. Targets, tested by the writer of the implementation
+ *   STATUS: v0.7.0. Yoyo, records and prune, tested by the writer of the
+ *   implementation: every non-STEP ease as a channel, a sequence and a
+ *   target yoyo, the same bits on the three paths, each within 2e-6 of
+ *   the forward leg read at the mirrored time, the mirror within 1 float
+ *   ulp; the record of a set on the frame of a SET event in 900 cases at
+ *   three leads, and its rewind, skip, kill, overwrite, cancel and pool
+ *   check; a prune of 58 of 76 tweens with rewinds and a skip inside the
+ *   horizon replaying bit for bit, and a 100,000-frame retarget script in
+ *   a pool of 16 tweens matching YTL_OVERWRITE_ALL bit for bit. The earlier
+ *   models now read the return leg at the mirrored time. 26 of 26 new
+ *   mutants caught; the whole list of 92 as expected. MinGW gcc 16.1 and
+ *   MSVC (C, C++17); per-field cost unchanged within run-to-run spread
+ *   (docs/timeline.md).
+ *   v0.6.0. Targets, tested by the writer of the implementation
  *   (tests/adapt/timeline_test_targets.h): a target tween against
  *   ytl_tween() on a channel over 400 random descs, the second taking over
  *   from the first, the same bits on all 28,000 frames; every ease against
