@@ -52,8 +52,25 @@ static void vsleep_until(long long t) {
 #else
 #include <pthread.h>
 #endif
+#if defined(__linux__)
+#include <dirent.h>
+#endif
 
 /* ---------------------------------------------------------------- harness */
+
+/* The process's open descriptors on Linux (a leak check); 0 elsewhere. */
+static int open_fds(void) {
+#if defined(__linux__)
+    DIR* d = opendir("/proc/self/fd");
+    int n = 0;
+    if (!d) return 0;
+    while (readdir(d)) n++;
+    closedir(d);
+    return n;
+#else
+    return 0;
+#endif
+}
 
 static int g_failures = 0;
 static void fail(int line, const char* what) {
@@ -92,6 +109,8 @@ typedef struct sdev {
     int64_t  stale_ns;      /* the next stale_n reports read a position this
                                much older than their stamp                    */
     int      stale_n;
+    int      report_every;  /* > 1: a report every this many blocks only, as
+                             * PulseAudio's timing replies come            */
     int64_t  halt_ns;       /* the last halt, for the checks                  */
     int64_t  stood_ahead;   /* with halt_pipe: the report that reads the
                                position standing is this many frames ahead
@@ -244,6 +263,7 @@ static void sd_block(sdev* s) {
             tk.pos = fs - s->L;
             s->stale_n--;
         }
+        if (s->report_every > 1 && s->k % s->report_every != 0) { tk.pos = -1; tk.pos_t = 0; }
     } else {
         tk.pos = -1;
     }
@@ -440,6 +460,32 @@ static void test_fit_drift(void) {
         CHECK(llabs(err_env) < 5000);
         yau_close(&g_au);
     }
+}
+
+/* Reports every fifth block (PulseAudio's timing replies): the callbacks
+ * between them must not feed the fit. Before ysp/audio.h v0.5.0 they fed
+ * the frames written at callback entry, a queue ahead of the reports: the
+ * fit sat that far early and every report read as late, a false halt each
+ * 0.9 s on PulseAudio. */
+static void test_sparse_reports(void) {
+    sdev* s = &g_sd;
+    yau_caps c;
+    int64_t err;
+    sd_default(s);
+    s->tape = NULL;
+    s->report_every = 5;
+    CHECK(open_dev(s, NULL));
+    sd_run_s(s, 30.0);
+    yau_update(&g_au);
+    yau_get_caps(&g_au, &c);
+    err = yau_time_of(&g_au, g_au.w + 4800) - sd_truth(s, g_au.w + 4800);
+    printf("sparse reports (1 in 5): drift %+.3f ppm, offset error %+.1f us, xruns %u\n",
+           c.drift_ppm, (double)err / 1e3, (unsigned)g_au.xruns_ft);
+    CHECK(g_au.xruns_ft == 0);
+    CHECK(fabs(c.drift_ppm - s->drift_ppm) < 0.5);
+    /* a fifth of the points: 5.6 us here; the fault was about 8 ms */
+    CHECK(llabs(err) < 20000);
+    yau_close(&g_au);
 }
 
 /* LATE, cancel, stop with a ramp, gain, loops, routing, clipping. */
@@ -2305,7 +2351,11 @@ static void test_wav(void) {
         {
             yau_wav_info pi;
             char pe[256];
+            int fds0 = open_fds();
             CHECK_I(yau_wav_probe(&(yau_wav_desc){ .path = path }, &pi, pe, sizeof pe), 0);
+            /* the probe closed its file (remove() below sees a leak only on
+             * Windows; Linux removes an open file) */
+            CHECK(open_fds() == fds0);
             CHECK(memcmp(&pi, &g_wav.info, sizeof pi) == 0);
             CHECK_I(yau_wav_probe(&(yau_wav_desc){ .reader = &rd }, &pi, pe, sizeof pe), 0);
             CHECK(memcmp(&pi, &g_wav.info, sizeof pi) == 0);
@@ -2565,6 +2615,7 @@ int main(int argc, char** argv) {
     }
     test_plan_and_placement();
     test_fit_drift();
+    test_sparse_reports();
     test_controls();
     test_replan();
     test_xrun();

@@ -1021,9 +1021,83 @@ spreads 0.36 to 0.61 ms).
   SCHED_OTHER: miniaudio's "highest" priority keeps the creating
   thread's policy on Linux.
 - Next: a position source. PulseAudio gives stream timing info (a
-  CLOCK_MONOTONIC timestamp with the sink's latency); ALSA gives status
-  timestamps, but only on a `hw:` device, which PulseAudio holds while it
-  runs. Neither is built. A line-in run then gives the tier.
+  timestamp with the sink's latency); ALSA gives status timestamps, but
+  only on a `hw:` device, which PulseAudio holds while it runs. The
+  PulseAudio one is built in v0.5.0 (next section). A line-in run then
+  gives the tier.
+
+## Linux: a position from PulseAudio (v0.5.0)
+
+PulseAudio answers `pa_stream_update_timing_info()` with a
+`pa_timing_info`: the bytes the server has read from the stream
+(`read_index`), the sink's latency (`sink_usec`, from the server's read
+to the output), the transport delay, and a timestamp, in CLOCK_REALTIME.
+miniaudio keeps the stream (`pulse.pStreamPlayback`) but does not ask for
+timing updates, so the header asks from the audio callback; the reply
+arrives in miniaudio's next pass of the PulseAudio main loop, and
+`pa_stream_get_timing_info()` then returns it.
+
+`tests/probe/audio_pulse/pulse_timing_probe.c` asked in every callback of
+a miniaudio PulseAudio device (16-bit, 48 kHz, 480 frames) and logged
+every reply: 6000 replies a minute, one per callback, stamped a median
+27 to 31 us after the callback that asked. Each candidate position against its
+time, fitted with one straight line over 60 s (5979 points):
+
+| Position, at the reply's timestamp | Idle: sd / p99 / max of the residual, us | 20 spinning threads |
+|---|---|---|
+| `read_index` minus `sink_usec` | 2.1 / 7.9 / 14.8 | 0.9 / 2.8 / 20.0 |
+| the same plus `transport_usec` | 13.9 / 21.1 / 70.9 | 3.7 / 9.7 / 51.3 |
+| `read_index` alone | 139 / 286 / 389 | 105 / 234 / 425 |
+| frames written, at the callback (the callback source) | 457 / 1561 / 1807 | 401 / 1064 / 2192 |
+
+The device rate came out +3.8 ppm in both runs from the reports, and
+-9.2 and +4.8 ppm from the callbacks. `sink_usec` was 2.7 to 3.5 ms, and
+the transport delay 30 to 104 us.
+
+So from v0.5.0 a PulseAudio report is (`read_index` / bytes per frame
+minus `sink_usec` in frames, the reply's timestamp mapped from
+CLOCK_REALTIME to the ysp_rt clock). The header asks at most every 50 ms:
+each request costs libpulse an allocation and a round trip, and the fit
+keeps one report per 200 ms. The describe line's OS claim is
+`pulse:timing-info:0.000ms` (the sink's latency is inside the position).
+
+What it is: PulseAudio's estimate of the frame at the output, from its
+sink's latency query, which the server smooths. A line that straight is
+partly the smoother's. It is the same kind of number as WASAPI's
+position, the engine's estimate, and no API offers more; a loopback
+(line-in, or a capture of the sink's monitor source) has not checked it,
+so onsets stay tier 3.
+
+A fault the first build showed: with a report every fifth callback, the
+callbacks between them still fed the fit with their callback times (the
+frames written, about one queue, 8 ms, ahead of the position). The fit
+then sat 8 ms early, every report read as late, and the halt rule
+("Halts") made an XRUN record every 0.92 s. On WASAPI every callback
+carries a report, so this had never run. From v0.5.0 a device that
+reports positions feeds the fit only with reports.
+`tests/adapt/audio_test.c` checks it on the scripted device with a
+report every fifth block (offset 5.6 us, no XRUN; mutant `pulse-00`).
+
+`audio_clockstats --backend pulse --s16`, 30 s each:
+
+| Run | Callbacks | Interval p50 / p99, ms | xruns | Fit spread | Drift | Position read, us p50 / p99 / max |
+|---|---|---|---|---|---|---|
+| Idle | 11970 | 2.92 / 3.26 | 0 | 3.6 us | -3.81 ppm | 0.60 / 13.0 / 36.7 |
+| 20 spinning threads | 11277 | 3.02 / 3.21 | 0 | 3.9 us | -3.80 ppm | 0.13 / 3.2 / 16.6 |
+
+The drift's sign is the header's convention (the ysp_rt clock against the
+device's); the probe's +3.8 ppm is the other way round.
+
+`tests/adapt/audio_pulse_test.c` (`test_audio_pulse`, not in ctest; a
+running server; `YAU_PULSE_TEST_REQUIRE=1` makes a missing server a
+failure) plays 10 s of silence and checks the position source, the OS
+claim, no xrun, a spread under 50 us, a drift within 100 ppm, and that the
+frame written last plays after now and within 1 s (9.3 ms here).
+`tests/compile/audio_pulse.cpp` checks the header's `pa_timing_info`
+against `<pulse/def.h>`. Mutants `pulse-00` to `pulse-04`, all killed: the
+callback feed, the clock left on CLOCK_REALTIME, bytes taken as frames,
+the source not declared, and the sink's latency not subtracted (the
+spread passes 50 us, as the probe's `read_index` row says).
 
 ## Not measured
 
@@ -1031,7 +1105,9 @@ spreads 0.36 to 0.61 ms).
   reports the measured latency minus the OS's claim when it does.
   `--line --stream` (stream placement and latency) is built, not run.
 - CoreAudio and Web Audio: compiled, never run. ALSA and PulseAudio: see
-  "Linux: first runs"; no position source, no loopback.
+  "Linux: first runs" and "Linux: a position from PulseAudio"; ALSA has no
+  position source, and neither has a loopback. PipeWire's PulseAudio
+  service: not run.
 - Exclusive mode beyond the 60 s runs of "Periods and buffers"; under
   load, never.
 - Whether the in-box Microsoft HD Audio driver offers shared periods under

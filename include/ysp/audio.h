@@ -1,4 +1,4 @@
-/* ysp/audio.h - v0.4.1 - public domain single-header audio library
+/* ysp/audio.h - v0.5.0 - public domain single-header audio library
  *
  *   Sound at a time on the ysp/rt.h clock. A buffer is played with
  *   yau_play_at(buf, t); the header plans its first sample on the device
@@ -101,7 +101,12 @@
  *     device since open. Every plan and every record is in stream frames.
  *     A device position report (P, t) says that stream frame P was at the
  *     device's output at ysp_rt time t. On WASAPI it is
- *     IAudioClock::GetPosition(), read at every callback.
+ *     IAudioClock::GetPosition(), read at every callback. On PulseAudio
+ *     (v0.5.0) it is the stream's timing info: the bytes the server has
+ *     read from the stream, less the sink's latency, at the reply's
+ *     timestamp. The header asks for it at most every 50 ms; the reply
+ *     comes in a later callback, and the callbacks between replies carry
+ *     no report (they do not feed the fit).
  *
  *   THE FIT
  *     The header fits t = t0 + (W - W0) * k to the reports (or, with no
@@ -236,8 +241,8 @@
  *        20 us under load in one run (STATUS)
  *     3  unconfirmed (no report past the frame), or a path no loopback
  *        checked (WASAPI exclusive, which the loopback capture cannot see), or
- *        callback times only (CoreAudio, ALSA, PulseAudio, Web Audio in
- *        v0.1)
+ *        callback times only (CoreAudio, ALSA, Web Audio), or PulseAudio's
+ *        position, which no loopback has checked yet (v0.5.0)
  *     YAU_TIER_SIM  the null device, or a device that says so
  *     desc.min_tier (1 to 3) flags BELOW_TIER on each onset worse than it;
  *     the run goes on.
@@ -298,7 +303,9 @@
  *     IAudioClient::GetStreamLatency, "the maximum latency for the current
  *     stream". On CoreAudio (compiled, not run): kAudioDevicePropertyLatency
  *     plus kAudioDevicePropertySafetyOffset, and the buffer frame size on
- *     top for the stream figure. ALSA and PulseAudio: no claim in v0.1.
+ *     top for the stream figure. PulseAudio (v0.5.0): the position already
+ *     subtracts the sink's latency, so the claim is 0
+ *     ("pulse:timing-info"). ALSA: no claim.
  *     PortAudio's equivalents are Pa_GetStreamInfo()->outputLatency and a
  *     callback's outputBufferDacTime; PsychPortAudio reports the same
  *     figures in GetStatus as PredictedLatency. The loopback test's --line
@@ -636,6 +643,13 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.5.0 - PulseAudio: the stream's timing info is a device position
+ *          (THE STREAM), so the fit uses reports instead of callback times
+ *          (spread 3 us against 0.5 ms). A callback without a report no
+ *          longer feeds a device fit: PulseAudio reports every few
+ *          callbacks, and the callback times between put the fit a queue
+ *          early, which read as a halt each 0.9 s. New on Linux: the
+ *          describe line's os_claim says pulse:timing-info. Tier 3 still.
  *   v0.4.1 - STATUS only: ALSA and PulseAudio ran on Linux (docs/audio.md,
  *          "Linux: first runs"). No code changed.
  *   v0.4.0 - the repository conventions (README.md). Breaks the API:
@@ -795,9 +809,14 @@
  *   16 on an Intel HDA codec, docs/audio.md "Linux: first runs"): both
  *   refuse PulseAudio's default sink format (s16) for a float project, as
  *   STRICT OPEN says; with a 16-bit project both ran 10 s idle and 30 s
- *   beside 20 spinning threads with 0 xruns and 0 gaps. They read no
- *   position, so the fit uses callback times (spread 0.45 to 0.61 ms) and
- *   every onset is tier 3. Compiled, never run: CoreAudio (with its
+ *   beside 20 spinning threads with 0 xruns and 0 gaps. ALSA reads no
+ *   position, so its fit uses callback times (spread 0.45 to 0.61 ms).
+ *   PulseAudio from v0.5.0 reads its stream timing info: fit spread 2.7 to
+ *   3.9 us, 0 xruns, idle and with 20 spinning threads, 30 s each; the
+ *   reports lie within 2.1 us sd (0.9 us loaded) of a straight line over
+ *   60 s (tests/probe/audio_pulse). tests/adapt/audio_pulse_test.c checks
+ *   it on a running server (not in ctest). Every Linux onset is still
+ *   tier 3: no loopback has run there. Compiled, never run: CoreAudio (with its
  *   latency claims), Web Audio (emcc as gnu11).
  *   Outside this STATUS block and docs/audio.md, a number in this header
  *   is a measurement only where the text says "measured".
@@ -807,9 +826,9 @@
 #define YSP_AUDIO_H_INCLUDED
 
 #define YAU_VERSION_MAJOR 0
-#define YAU_VERSION_MINOR 4
-#define YAU_VERSION_PATCH 1
-#define YAU_VERSION_STRING "0.4.1"
+#define YAU_VERSION_MINOR 5
+#define YAU_VERSION_PATCH 0
+#define YAU_VERSION_STRING "0.5.0"
 
 #include "ysp/rt.h"
 
@@ -2581,9 +2600,14 @@ YAU_API void yau_render(void* host, void* out, int32_t frames, const yau_tick* t
             (void)yrt_ring_push(au->desc.ring, &ev);
             au->last_clock_t = tk->pos_t;
         }
-    } else {
+    } else if (au->dcaps.pos_source != YAU_POS_DEVICE) {
         yau__feed(au, W, now_t);
     }
+    /* A device with reports feeds only reports: PulseAudio's come every few
+     * callbacks, and a callback time between them (the frames written, a
+     * queue ahead of the position) put the fit about 8 ms early, so every
+     * later report looked late and made a false halt each 0.9 s (measured;
+     * docs/audio.md, "Linux: a position from PulseAudio"). */
     YRT_PLOT("yau queued frames", have_pos ? (double)(W - pw) : 0.0);
 
     /* 3. commands, at most 64 a block */
@@ -2758,6 +2782,31 @@ static const IID yau__IID_IAudioClock =
     { 0xcd63314f, 0x3fba, 0x4a1b, { 0x81, 0x2c, 0xef, 0x96, 0x35, 0x87, 0x28, 0xe7 } };
 #endif
 
+#if defined(MA_SUPPORT_PULSEAUDIO)
+#include <sys/time.h>
+/* libpulse's pa_timing_info, declared here so the header needs no
+ * PulseAudio header; tests/compile/audio_pulse.cpp checks it against
+ * <pulse/def.h> where that exists. */
+typedef struct yau__pa_timing_info {
+    struct timeval timestamp;
+    int      synchronized_clocks;
+    uint64_t sink_usec, source_usec, transport_usec;
+    int      playing;
+    int      write_index_corrupt;
+    int64_t  write_index;
+    int      read_index_corrupt;
+    int64_t  read_index;
+    uint64_t configured_sink_usec, configured_source_usec;
+    int64_t  since_underrun;
+} yau__pa_timing_info;
+typedef void* (*yau__pa_update_fn)(void* stream, void* cb, void* ud);
+typedef const yau__pa_timing_info* (*yau__pa_get_fn)(void* stream);
+typedef void (*yau__pa_unref_fn)(void* op);
+/* A timing request costs libpulse an allocation and a round trip, so not
+ * every callback asks: the fit keeps one report per 200 ms. */
+#define YAU__PA_EVERY_NS 50000000LL
+#endif
+
 typedef struct yau__ma {
     ma_context ctx;
     ma_device  dev;
@@ -2772,6 +2821,14 @@ typedef struct yau__ma {
     uint64_t   freq;
     int        gate;        /* the queue gate is on (QUEUE)                */
     uint32_t   gate_pad;    /* render when the WASAPI buffer holds at most this */
+#endif
+#if defined(MA_SUPPORT_PULSEAUDIO)
+    yau__pa_update_fn pa_update;
+    yau__pa_get_fn    pa_get;
+    yau__pa_unref_fn  pa_unref;
+    int64_t    pa_next;     /* the next timing request, ysp_rt ns          */
+    int64_t    pa_last;     /* the reply already reported (its stamp)      */
+    uint32_t   pa_bpf;      /* bytes per frame on the stream               */
 #endif
 } yau__ma;
 typedef char yau__ma_fits[sizeof(yau__ma) <= sizeof(((yau_audio*)0)->backend_mem) ? 1 : -1];
@@ -2800,6 +2857,42 @@ static void yau__ma_gate(yau__ma* m, ma_device* d) {
 }
 #endif
 
+#if defined(MA_SUPPORT_PULSEAUDIO)
+/* PulseAudio's stream timing info as a position report (docs/audio.md,
+ * "Linux: a position from PulseAudio"): the bytes the server has read from
+ * the stream, less the sink's latency, is the frame playing at the reply's
+ * timestamp. Measured: 2.1 us sd from a straight line over 60 s, 0.9 us
+ * with every core busy, against 457 us for callback times. The request is
+ * asynchronous; its reply arrives in miniaudio's next pass of the
+ * PulseAudio main loop, so a callback reports the reply to an earlier one.
+ * The timestamp is CLOCK_REALTIME; it is mapped to the ysp_rt clock here. */
+static void yau__ma_pulse_pos(yau__ma* m, ma_device* d, yau_tick* tk) {
+    void* s = d->pulse.pStreamPlayback;
+    const yau__pa_timing_info* ti;
+    if (!s) return;
+    if (tk->t_entry >= m->pa_next) {
+        void* op = m->pa_update(s, NULL, NULL);
+        if (op) m->pa_unref(op);
+        m->pa_next = tk->t_entry + YAU__PA_EVERY_NS;
+    }
+    ti = m->pa_get(s);
+    if (ti && ti->playing && !ti->read_index_corrupt && ti->read_index >= 0 && m->pa_bpf) {
+        int64_t ts = (int64_t)ti->timestamp.tv_sec * 1000000000 + (int64_t)ti->timestamp.tv_usec * 1000;
+        int64_t pos = ti->read_index / m->pa_bpf -
+                      (int64_t)((double)ti->sink_usec * (double)d->playback.internalSampleRate / 1e6 + 0.5);
+        if (ts != m->pa_last && pos >= 0) {
+            struct timespec r;
+            int64_t real_minus_rt;
+            clock_gettime(CLOCK_REALTIME, &r);
+            real_minus_rt = (int64_t)r.tv_sec * 1000000000 + r.tv_nsec - yrt_now_ns();
+            m->pa_last = ts;
+            tk->pos = pos;
+            tk->pos_t = ts - real_minus_rt;
+        }
+    }
+}
+#endif
+
 static void yau__ma_data(ma_device* d, void* out, const void* in, ma_uint32 n) {
     yau__ma* m = (yau__ma*)d->pUserData;
     yau_tick tk;
@@ -2822,6 +2915,9 @@ static void yau__ma_data(ma_device* d, void* out, const void* in, ma_uint32 n) {
             tk.pos_t = (int64_t)qpc * 100;
         }
     }
+#endif
+#if defined(MA_SUPPORT_PULSEAUDIO)
+    if (m->pa_get) yau__ma_pulse_pos(m, d, &tk);
 #endif
     if (m->render) m->render(m->host, out, (int32_t)n, &tk);
 }
@@ -2954,6 +3050,25 @@ static int yau__ma_open(void* ctx, const yau_device_open* in, yau_device_caps* c
     }
 #if defined(MA_SUPPORT_COREAUDIO) && defined(MA_APPLE_DESKTOP)
     if (m->backend == ma_backend_coreaudio) yau__coreaudio_claims(m, caps);
+#endif
+#if defined(MA_SUPPORT_PULSEAUDIO)
+    if (m->backend == ma_backend_pulseaudio && m->ctx.pulse.pulseSO && m->dev.pulse.pStreamPlayback) {
+        m->pa_update = (yau__pa_update_fn)ma_dlsym(NULL, m->ctx.pulse.pulseSO, "pa_stream_update_timing_info");
+        m->pa_get = (yau__pa_get_fn)ma_dlsym(NULL, m->ctx.pulse.pulseSO, "pa_stream_get_timing_info");
+        m->pa_unref = (yau__pa_unref_fn)ma_dlsym(NULL, m->ctx.pulse.pulseSO, "pa_operation_unref");
+        m->pa_bpf = ma_get_bytes_per_frame(m->dev.playback.internalFormat, m->dev.playback.internalChannels);
+        m->pa_next = 0;
+        m->pa_last = -1;
+        if (m->pa_update && m->pa_get && m->pa_unref && m->pa_bpf) {
+            /* tier 3 until a loopback through the sink's monitor checks it,
+             * as WASAPI's digital loopback did for its tier 2 */
+            caps->pos_source = YAU_POS_DEVICE;
+            caps->os_latency_ns = 0;
+            snprintf(caps->os_latency_src, sizeof caps->os_latency_src, "pulse:timing-info");
+        } else {
+            m->pa_get = NULL;
+        }
+    }
 #endif
 #if defined(MA_SUPPORT_WASAPI)
     if (m->backend == ma_backend_wasapi && m->dev.wasapi.pAudioClientPlayback) {

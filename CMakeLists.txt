@@ -593,6 +593,11 @@ endif()
 if(TARGET SDL3::SDL3 AND YSP_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     ysp_add_program(test_screen_glx tests/adapt/screen_glx_test.c rig)
 endif()
+# ysp/audio.h's PulseAudio position source on a running sound server: 10 s
+# of silence, so by hand (and by the pulse- mutants), not ctest.
+if(TARGET ysp::miniaudio AND YSP_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    ysp_add_program(test_audio_pulse tests/adapt/audio_pulse_test.c rig)
+endif()
 if(TARGET SDL3::SDL3 AND YSP_BUILD_EXAMPLES)
     # The jsPsych-style trials of examples/response/ (docs/response.md,
     # "What the examples show"); the two with a sound need miniaudio.

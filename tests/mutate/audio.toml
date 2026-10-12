@@ -9,6 +9,14 @@ flags = ["-std=c11", "-O2", "-w"]
 libs = ["-lm"]
 timeout = 300
 
+[test.audio_pulse]
+source = "tests/adapt/audio_pulse_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O2", "-w", "-I$YSP_MINIAUDIO"]
+libs = ["-ldl", "-lpthread", "-lm"]
+timeout = 60
+env = { YAU_PULSE_TEST_REQUIRE = "1" }
+
 [[mutant]]
 id = "p-01"
 name = "the probe checks the device rate"
@@ -229,3 +237,55 @@ replace = '''
                 st->in_arena_ = 0;
                 st->au_ = NULL;
                 return;'''
+
+# PulseAudio's position source (v0.5.0). pulse-00 runs on the scripted
+# device; the others need a running PulseAudio server, the test_audio_pulse
+# program, and YSP_MINIAUDIO set to the folder that holds miniaudio.h.
+
+[[mutant]]
+id = "pulse-00"
+name = "callback times feed a device fit"
+test = "audio"
+why = "PulseAudio reports every few callbacks; a callback time between them is a queue ahead of the reports, which put the fit 8 ms early and made a false halt each 0.9 s."
+find = '''    } else if (au->dcaps.pos_source != YAU_POS_DEVICE) {
+        yau__feed(au, W, now_t);
+    }'''
+replace = '''    } else {
+        yau__feed(au, W, now_t);
+    }'''
+
+[[mutant]]
+id = "pulse-01"
+name = "the reply's timestamp left on CLOCK_REALTIME"
+test = "audio_pulse"
+why = "pa_timing_info's timestamp is wall-clock time; on the ysp_rt clock it is decades off, and no onset could be timed."
+find = '''            tk->pos_t = ts - real_minus_rt;'''
+replace = '''            tk->pos_t = ts;'''
+
+[[mutant]]
+id = "pulse-02"
+name = "the read index taken as frames"
+test = "audio_pulse"
+why = "The read index counts bytes; as frames it runs four times too fast and reads as an underrun."
+find = '''        int64_t pos = ti->read_index / m->pa_bpf -'''
+replace = '''        int64_t pos = ti->read_index -'''
+
+[[mutant]]
+id = "pulse-03"
+name = "the device source not declared"
+test = "audio_pulse"
+why = "Without it the fit falls back to callback times, 450 to 620 us of spread against 2 to 6."
+find = '''            caps->pos_source = YAU_POS_DEVICE;
+            caps->os_latency_ns = 0;
+            snprintf(caps->os_latency_src, sizeof caps->os_latency_src, "pulse:timing-info");'''
+replace = '''            caps->os_latency_ns = 0;
+            snprintf(caps->os_latency_src, sizeof caps->os_latency_src, "pulse:timing-info");'''
+
+[[mutant]]
+id = "pulse-04"
+name = "the sink's latency not subtracted"
+test = "audio_pulse"
+why = "The read index is what the server took from the stream; the sink plays it about 3 ms later. The sink's latency varies (2.7 to 3.5 ms measured), so without it the fit's spread passes 50 us (the probe: 139 us sd for the read index alone)."
+find = '''        int64_t pos = ti->read_index / m->pa_bpf -
+                      (int64_t)((double)ti->sink_usec * (double)d->playback.internalSampleRate / 1e6 + 0.5);'''
+replace = '''        int64_t pos = ti->read_index / m->pa_bpf;'''
