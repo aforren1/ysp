@@ -2,7 +2,8 @@
 # ysp/timeline.h mutants: RATE (v0.4.0), the sequence code (ytl_seq) and
 # TARGETS (v0.6.0). docs/timeline.md: 24 RATE mutants, 21 caught and 3
 # equivalent; 19 sequence mutants, all caught; 20 target mutants (tgt-*),
-# all caught. The v0.3.0 list (23) was not kept.
+# all caught; 26 v0.7.0 mutants (v07-*: yoyo, records, prune), all caught.
+# The v0.3.0 list (23) was not kept.
 header = "ysp/timeline.h"
 
 [test.timeline]
@@ -666,4 +667,223 @@ name = "callbacks not queued"
 test = "timeline"
 why = "A fired YTL_CALL_* event calls its tween's function after the pass."
 find = '            else if (e->kind == YTL_CALL_START || e->kind == YTL_CALL_COMPLETE) ytl__due(tl, e);'
+replace = ''
+
+# v0.7.0: yoyo's reverse ease, set records, prune of overridden tweens.
+
+[[mutant]]
+id = "v07-00"
+name = "QUAD_IN's reverse is QUAD_IN"
+test = "timeline"
+why = "A yoyo's return leg is the forward leg backward in time: QUAD_IN returns with QUAD_OUT."
+find = '    case YTL_EASE_QUAD_IN:   return YTL_EASE_QUAD_OUT;'
+replace = '    case YTL_EASE_QUAD_IN:   return YTL_EASE_QUAD_IN;'
+
+[[mutant]]
+id = "v07-01"
+name = "CUBIC_OUT's reverse is CUBIC_OUT"
+test = "timeline"
+why = "CUBIC_OUT returns with CUBIC_IN: slow at the turn, fast at the end."
+find = '    case YTL_EASE_CUBIC_OUT: return YTL_EASE_CUBIC_IN;'
+replace = '    case YTL_EASE_CUBIC_OUT: return YTL_EASE_CUBIC_OUT;'
+
+[[mutant]]
+id = "v07-02"
+name = "BEZIER returns on the forward curve"
+test = "timeline"
+why = "BEZIER's reverse is the curve turned half a turn about (1/2, 1/2)."
+find = '''
+    r.x1 = 1.0f - c->x2;
+    r.y1 = 1.0f - c->y2;
+    r.x2 = 1.0f - c->x1;
+    r.y2 = 1.0f - c->y1;'''
+replace = '''
+    r = *c;'''
+
+[[mutant]]
+id = "v07-03"
+name = "a channel tween returns with the same ease"
+test = "timeline"
+why = "ytl_tween()'s return key carries the reverse ease (the v0.6.0 rule)."
+find = '        c->ik[1].ease = (uint8_t)ytl__ease_rev(p->ease);'
+replace = '        c->ik[1].ease = (uint8_t)p->ease;'
+
+[[mutant]]
+id = "v07-04"
+name = "a channel tween's BEZIER return on curve 0"
+test = "timeline"
+why = "The return key of a BEZIER yoyo names the reverse curve."
+find = '            c->ik[1].curve = 1;'
+replace = ''
+
+[[mutant]]
+id = "v07-05"
+name = "a sequence tween returns with the same ease"
+test = "timeline"
+why = "The arena's return key carries the reverse ease."
+find = '            a[1].ease = (uint8_t)ytl__ease_rev(d->ease);'
+replace = ''
+
+[[mutant]]
+id = "v07-06"
+name = "a sequence tween's BEZIER return on the forward curve"
+test = "timeline"
+why = "The arena's return key names the block's reverse curve slot."
+find = '            if (nc == 2) a[1].curve = (uint16_t)(nc0 + 1);'
+replace = ''
+
+[[mutant]]
+id = "v07-07"
+name = "no curve slot for BEZIER's reverse"
+test = "timeline"
+why = "A BEZIER yoyo needs two curve slots in the arena, and ytl_check_ops() counts them."
+find = '    if (d->ease == YTL_EASE_BEZIER) return d->yoyo ? 2 : 1;'
+replace = '    if (d->ease == YTL_EASE_BEZIER) return 1;'
+
+[[mutant]]
+id = "v07-08"
+name = "a target tween returns with the same ease"
+test = "timeline"
+why = "The target path gives the channel path's bits, the reverse ease included."
+find = '        ease = ytl__ease_rev(ease);'
+replace = ''
+
+[[mutant]]
+id = "v07-09"
+name = "a target tween's BEZIER return on the forward curve"
+test = "timeline"
+why = "The target path turns the curve as the channel path stores it."
+find = '''
+            rc = ytl__curve_rev(cv);
+            cv = &rc;'''
+replace = '''
+            rc = *cv;
+            cv = &rc;'''
+
+[[mutant]]
+id = "v07-10"
+name = "a set leaves no record"
+test = "timeline"
+why = "ytl_tween_set() adds a YTL_TARGET_SET event at its start."
+find = '    rec = a->ease == YTL_EASE_STEP && a->duration_ns == 0 && !a->to_current;'
+replace = '    rec = false;'
+
+[[mutant]]
+id = "v07-11"
+name = "every STEP tween leaves a record"
+test = "timeline"
+why = "Only a set (duration 0) records: a STEP with a duration changes at its end."
+find = '    rec = a->ease == YTL_EASE_STEP && a->duration_ns == 0 && !a->to_current;'
+replace = '    rec = a->ease == YTL_EASE_STEP && !a->to_current;'
+
+[[mutant]]
+id = "v07-12"
+name = "a STEP to the value at start records"
+test = "timeline"
+why = "A set with to_current changes nothing and leaves no record."
+find = '    rec = a->ease == YTL_EASE_STEP && a->duration_ns == 0 && !a->to_current;'
+replace = '    rec = a->ease == YTL_EASE_STEP && a->duration_ns == 0;'
+
+[[mutant]]
+id = "v07-13"
+name = "the room check ignores the record"
+test = "timeline"
+why = "A set needs an event of the storage, all or none."
+find = '    n_cb = (a->on_start ? 1 : 0) + (a->on_complete && a->cycles != YTL_FOREVER ? 1 : 0) + (rec ? 1 : 0);'
+replace = '    n_cb = (a->on_start ? 1 : 0) + (a->on_complete && a->cycles != YTL_FOREVER ? 1 : 0);'
+
+[[mutant]]
+id = "v07-14"
+name = "a record is not a tween's event"
+test = "timeline"
+why = "A kill, an overwrite and a prune treat the record as the tween's, as its callbacks."
+find = '    return kind == YTL_CALL_START || kind == YTL_CALL_COMPLETE || kind == YTL_TARGET_SET;'
+replace = '    return kind == YTL_CALL_START || kind == YTL_CALL_COMPLETE;'
+
+[[mutant]]
+id = "v07-15"
+name = "a set has no events to drop"
+test = "timeline"
+why = "A kill of a set deletes its record; an overwrite counts it as freed."
+find = '    return w->on_start || w->on_complete || (w->xflags & YTL__TWX_REC);'
+replace = '    return w->on_start || w->on_complete;'
+
+[[mutant]]
+id = "v07-16"
+name = "the record's value missing"
+test = "timeline"
+why = "The record carries the set's value."
+find = '                e.value = w->to[0];'
+replace = ''
+
+[[mutant]]
+id = "v07-17"
+name = "the record's field missing"
+test = "timeline"
+why = "The record's user is the field's address."
+find = '                e.user = (uint64_t)(uintptr_t)p;'
+replace = ''
+
+[[mutant]]
+id = "v07-18"
+name = "a prune frees no tween"
+test = "timeline"
+why = "ytl_prune() frees the overridden tweens, so a long script cannot fill the pool."
+find = '        if (tl->n_tw > 0) ytl__tg_prune(tl, bi);'
+replace = ''
+
+[[mutant]]
+id = "v07-19"
+name = "a prune keeps the driver past an unresolved tween"
+test = "timeline"
+why = "The last kept tween must have its start values; a later unresolved one still reads the tween before it."
+find = '            if (tl->tw[j].flags & YTL__TW_RESOLVED) last = j;'
+replace = '            last = j;'
+
+[[mutant]]
+id = "v07-20"
+name = "a prune frees tweens with events to fire"
+test = "timeline"
+why = "A long tween's on_complete and a late on_start keep their tween."
+find = '    if (scan) {'
+replace = '    if (0) {'
+
+[[mutant]]
+id = "v07-21"
+name = "a prune frees a queued tween"
+test = "timeline"
+why = "A prune from a callback keeps the tweens whose calls are queued."
+find = '            if (!w->due && !(tl->in_calls && tl->call_tw == j)) ytl__tw_free(tl, j, false);'
+replace = '            if (!(tl->in_calls && tl->call_tw == j)) ytl__tw_free(tl, j, false);'
+
+[[mutant]]
+id = "v07-22"
+name = "a prune frees the tween being called"
+test = "timeline"
+why = "A prune from a tween's on_start keeps it, so its on_complete of the same frame runs."
+find = '            if (!w->due && !(tl->in_calls && tl->call_tw == j)) ytl__tw_free(tl, j, false);'
+replace = '            if (!w->due) ytl__tw_free(tl, j, false);'
+
+[[mutant]]
+id = "v07-23"
+name = "the horizon moves back"
+test = "timeline"
+why = "What a prune deleted stays gone after a rewind, so the horizon only moves forward."
+find = '        if (!b->pruned || b->last_hi + 1 > b->horizon) b->horizon = b->last_hi + 1;'
+replace = '        b->horizon = b->last_hi + 1;'
+
+[[mutant]]
+id = "v07-24"
+name = "the horizon from the onset, not the reach"
+test = "timeline"
+why = "The prune deletes events up to the reach, the window end, so the horizon is just past it."
+find = '        if (!b->pruned || b->last_hi + 1 > b->horizon) b->horizon = b->last_hi + 1;'
+replace = '        if (!b->pruned || b->last_now + 1 > b->horizon) b->horizon = b->last_now + 1;'
+
+[[mutant]]
+id = "v07-25"
+name = "a clear keeps the horizon"
+test = "timeline"
+why = "After a clear nothing pruned remains, and every time replays."
+find = '        if (base == YTL_ALL_BASES || base == i) tl->bases[i].pruned = 0;'
 replace = ''

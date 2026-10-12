@@ -574,6 +574,9 @@ typedef struct rdrv {
     int         own, herm;
     double      hf, hm, ht;   /* Hermite: from, start slope x duration, to */
     int64_t     hs, hd;       /* Hermite: start and duration               */
+    int         yo;           /* v0.7.0 yoyo: the return leg is the forward
+                               * leg backward in time (not STEP)          */
+    int64_t     ys, yd;       /* yoyo: start and duration                  */
 } rdrv;
 
 static ytl_track rdrv_track(const rdrv* r) {
@@ -601,6 +604,17 @@ static double rdrv_value(const rdrv* r, int64_t t) {
         if (t >= r->hs + r->hd) return r->ht;
         return ref_hermite(r->hf, r->hm, r->ht, (double)(t - r->hs) / (double)r->hd);
     }
+    /* A yoyo's return leg: GSAP's rule read literally, the forward leg's
+     * value at the mirrored time, after the repeat's fold. */
+    if (r->yo && t > r->ys) {
+        int64_t ph = t - r->ys, per = 2 * r->yd;
+        if (r->tr.period_ns > 0) {
+            int64_t q = ph / per;
+            if (r->tr.repeats > 0 && q >= r->tr.repeats) ph = per;
+            else ph -= q * per;
+        }
+        if (ph > r->yd && ph < per) t = r->ys + (per - ph);
+    }
     tr = rdrv_track(r);
     return ref_track(&tr, t);
 }
@@ -625,7 +639,9 @@ static rdrv rdrv_plain(const ytl_track* tr) {
  * track's over the last microsecond before s. at_call is the channel's
  * value when the tween was posted, for MUT_TW_FROM_CALL only. Keys: from
  * at s with d's ease, `to` at s + duration (with d's ease under yoyo), and
- * under yoyo from again at s + 2 duration; cycles repeat the whole. */
+ * under yoyo from again at s + 2 duration; cycles repeat the whole. Since
+ * v0.7.0 a yoyo's return leg is read at the mirrored time (rdrv_value), but
+ * STEP's, which keeps its square wave. */
 static void rdrv_tween(rdrv* r, const ytl_tween_desc* d, int64_t s, const rdrv* old, double held,
                        double at_call) {
     double from;
@@ -652,6 +668,11 @@ static void rdrv_tween(rdrv* r, const ytl_tween_desc* d, int64_t s, const rdrv* 
     if (yoyo && !(g_mut & MUT_TW_YOYO)) {
         r->k[2] = mkkey(s + 2 * d->duration_ns, (float)from, YTL_EASE_LINEAR);
         n = 3;
+        if (d->ease != YTL_EASE_STEP) {
+            r->yo = 1;
+            r->ys = s;
+            r->yd = d->duration_ns;
+        }
     }
     if (d->ease == YTL_EASE_BEZIER) {
         r->c = d->curve;
@@ -2795,11 +2816,13 @@ static void test_tween_cycles(void) {
         if (bt == S + 80 * M) CHECK_F(v5, -1.0, 1e-6);
         if (bt == S + 239 * M) CHECK_F(v5, -0.95, 1e-6);
         if (bt == S + 240 * M || bt == S + 500 * M) CHECK(v5 == -1.0f);
-        /* Literal reading: the return leg has the same ease, so QUAD_IN
-         * back is 1 + (0 - 1) 0.5^2 = 0.75 half way; a mirrored (GSAP)
-         * return would give 0.25. */
-        if (bt == S + 150 * M && !(fabs((double)v6 - 0.75) <= 1e-6))
-            fail_f(__LINE__, "literal reading: yoyo's return leg eases to + (from - to) e(u)", (double)v6, 0.75);
+        /* v0.7.0: the return leg is the forward leg backward in time (GSAP),
+         * so QUAD_IN back is 0 + (1 - 0) 0.5^2 = 0.25 half way; the v0.6.0
+         * rule (the same ease again) gave 0.75. And it ends fast: 10 ms
+         * before the end, 0.1^2. */
+        if (bt == S + 150 * M && !(fabs((double)v6 - 0.25) <= 1e-6))
+            fail_f(__LINE__, "yoyo's return leg is not the forward leg mirrored in time", (double)v6, 0.25);
+        if (bt == S + 190 * M) CHECK_F(v6, 0.01, 1e-6);
     }
     if (bad) fail_i(__LINE__, "cycles and yoyo values off the model", bad, 0);
     if (bad23) fail_i(__LINE__, "cycles 0 and cycles 1 differ", bad23, 0);
@@ -5818,7 +5841,14 @@ static void test_seq_cross_base(void) {
 enum { SM_NCH = 6, SM_OPS = 16, SM_KEYS = 256 };
 static ytl_op sm_ops[SM_OPS];
 static ytl_key sm_keys[SM_NCH][SM_KEYS];
-static ytl_curve sm_curves[SM_NCH][SM_OPS];
+static ytl_curve sm_curves[SM_NCH][2 * SM_OPS];
+
+/* A yoyo's return leg by hand (v0.7.0): the reverse ease 1 - e(1 - u), and
+ * for BEZIER the curve turned half a turn about (1/2, 1/2), in float. */
+static int sm_rev_ease(int e) {
+    return e == YTL_EASE_QUAD_IN ? YTL_EASE_QUAD_OUT : e == YTL_EASE_QUAD_OUT ? YTL_EASE_QUAD_IN
+         : e == YTL_EASE_CUBIC_IN ? YTL_EASE_CUBIC_OUT : e == YTL_EASE_CUBIC_OUT ? YTL_EASE_CUBIC_IN : e;
+}
 static ytl_key g_kh[SQ_ARENA];
 static long sm_stat_err[8], sm_stat_ok, sm_stat_tw, sm_stat_ev;
 
@@ -5957,6 +5987,13 @@ static int sm_model_op(ytl_timeline* h, const float* init, const ytl_op* o, int*
         if (d->ease == YTL_EASE_BEZIER) {
             sm_curves[ch][nc[ch]] = d->curve;
             ci = nc[ch]++;
+            if (d->yoyo) {
+                ytl_curve* m = &sm_curves[ch][nc[ch]++];
+                m->x1 = 1.0f - d->curve.x2;
+                m->y1 = 1.0f - d->curve.y2;
+                m->x2 = 1.0f - d->curve.x1;
+                m->y2 = 1.0f - d->curve.y1;
+            }
         }
         cn = d->cycles > 1 ? d->cycles : 1;
         cyc = d->duration_ns * (d->yoyo ? 2 : 1);
@@ -5964,8 +6001,9 @@ static int sm_model_op(ytl_timeline* h, const float* init, const ytl_op* o, int*
         for (j = 0; j < cn; j++) {
             ytl_key* a = &k[nk[ch]];
             a[0] = mkkey(s + j * cyc, from, d->ease);
-            a[1] = mkkey(s + j * cyc + d->duration_ns, d->to, d->ease);
+            a[1] = mkkey(s + j * cyc + d->duration_ns, d->to, d->yoyo ? sm_rev_ease(d->ease) : d->ease);
             a[0].curve = a[1].curve = (uint16_t)ci;
+            if (d->yoyo && d->ease == YTL_EASE_BEZIER) a[1].curve = (uint16_t)(ci + 1);
             if (d->yoyo) {
                 a[2] = mkkey(s + j * cyc + 2 * d->duration_ns, from, d->ease);
                 a[2].curve = (uint16_t)ci;

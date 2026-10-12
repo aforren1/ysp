@@ -209,9 +209,10 @@ A script needs a fade that starts where the value is now, and it cannot
 keep an array alive for it. `ytl_tween()` stores its keys (three with
 yoyo), its Bezier curve and a waiting tween's desc in the channel record.
 With this storage, a channel record is 232 bytes and the handle is 60 KB
-(it was 12 KB in v0.1.0). An evaluate reads a byte per channel to find
-the tracked channels, so the size does not add to the frame cost. A rig
-that needs fewer channels sets `YTL_MAX_CHANNELS`.
+(it was 12 KB in v0.1.0; since v0.7.0 it is 264 bytes and 68 KB, with a
+second curve for a BEZIER yoyo's return leg). An evaluate reads a byte
+per channel to find the tracked channels, so the size does not add to the
+frame cost. A rig that needs fewer channels sets `YTL_MAX_CHANNELS`.
 
 The tween takes a desc (`ytl_tween_desc`), not eight arguments. The
 reasons: principle 8 of the spec (every parameter a designer can set is
@@ -894,7 +895,9 @@ writes into a field of the caller, a `float`, `float[2..4]` or `int32_t`.
   tweens of the field at the call (GSAP's `overwrite: true`). It is for a
   script that retargets a field on a base that is never cleared: without
   it, the overwritten tweens fill the pool. Then the new tween starts from
-  the field's value at its start, which is the last value written.
+  the field's value at its start, which is the last value written. Since
+  v0.7.0, `ytl_prune()` also frees the overwritten tweens, after the base
+  has passed them.
 - **The timeline owns a field until a kill.** GSAP stops writing a field
   when its tween completes. Here the evaluate writes it until the
   target's tweens are killed or their base is cleared. The reason: the
@@ -930,10 +933,10 @@ writes into a field of the caller, a `float`, `float[2..4]` or `int32_t`.
   `ygfx_bind.field` again. Do not drive one field both ways: the binding
   runs after the evaluate and wins.
 - **The same arithmetic as `ytl_tween()`.** A target tween and a channel
-  tween with the same desc give the same bits. So the yoyo rule (the
-  return leg applies the same ease again; it is not GSAP's mirrored
-  playback) stays one rule in the header, and the test can compare the two
-  paths.
+  tween with the same desc give the same bits. So the yoyo rule stays one
+  rule in the header, and the test can compare the two paths. (In v0.6.0
+  the return leg applied the same ease again; v0.7.0 changed it to GSAP's
+  mirrored playback on both paths. See "Yoyo, set records and prune".)
 - **Four more eases**: `QUAD_IN_OUT`, `CUBIC_IN`, `CUBIC_OUT` and
   `CUBIC_IN_OUT` (GSAP's `power1.inOut` and `power2.*`). They are +, -
   and *, so replay stays exact. Keys and channel tweens take them too.
@@ -1065,6 +1068,216 @@ with MinGW gcc 16.1 (`-Wall -Wextra -Wpedantic -Werror`), MSVC 19.44 and
 gcc 11.4 under WSL2. The test is clean under ASan and UBSan (gcc 11.4,
 WSL2).
 
+## Yoyo, set records and prune (v0.7.0)
+
+v0.7.0 changes three things about tweens. The user approved them on
+2026-10-11.
+
+### Yoyo plays the forward leg backward
+
+Until v0.6.0 the return leg of a yoyo applied the ease again, from `to`
+to `from`. GSAP plays the tween backward: the value at s + d + x is the
+value at s + d - x. The two agree for the symmetric eases only. With
+CUBIC_OUT, v0.6.0's return leg started fast; GSAP's starts slow and ends
+fast.
+
+Decisions:
+
+- **The return leg uses the reverse ease.** For every ease e, r(u) =
+  1 - e(1 - u) is also an ease of the table: QUAD_IN returns with
+  QUAD_OUT, CUBIC_IN with CUBIC_OUT and the reverse, BEZIER with its curve
+  turned half a turn about (1/2, 1/2) (control points 1 - x2, 1 - y2 and
+  1 - x1, 1 - y1, computed in float), and LINEAR, COSINE, the two IN_OUT
+  eases and LOG with themselves. So the return leg stays a key segment
+  that a caller can write with `ytl_set_keys()`, the keyed path has no new
+  branch, and the symmetric eases keep the bits of v0.6.0. Rejected:
+  private ease codes that read the forward segment at the mirrored time.
+  They give the mirror bit for bit, but they add a compare to every keyed
+  channel on every frame, and a caller's keys could not describe the
+  track.
+- **The reverse ease and the mirror agree to float rounding.** The test
+  reads every non-STEP ease at 1 ms steps over two cycles: the largest
+  difference between v(s + d + x) and v(s + d - x) is 1 float ulp, on
+  BEZIER.
+- **STEP keeps its square wave.** STEP jumps at the end of its leg. Its
+  reverse jumps back at the start of the return leg, so `to` would show
+  for no time at all, and a STEP yoyo would do nothing. The square wave
+  (from, then to, then from) is what a STEP yoyo is for (the flicker in
+  the manual).
+- **The v0.6.0 rule is deleted.** The repository's yoyo tweens
+  (`examples/gfx/gallery.c` and `text.c`) use COSINE and LOG, which give
+  the same bits under both rules. An option would cost a flag and its
+  tests for no user.
+- **A second curve per channel.** A BEZIER yoyo on a channel needs its
+  curve and the reverse. The channel record grows from 248 to 264 bytes,
+  and the handle from 65,792 to 70,016 bytes (MinGW-w64, 64-bit). A
+  sequence's block takes one more curve slot for it, and
+  `ytl_check_ops()` counts it. A target tween turns its curve when it
+  reads the return leg, with the same float expressions, so it gives the
+  channel's bits.
+
+### A set leaves a record
+
+A set changes a field on the frame where an event at the same time
+lands. Before v0.7.0 the storage had no trace of it, so "what changed on
+the screen, and when" needed a MARK beside each set. Now each set adds an
+event of kind `YTL_TARGET_SET` at its start: code is the tween's id, value
+is `to[0]`, user is the field's address. A STEP tween is read at the end
+of the lead window, where events land, so the record's frame is the frame
+that showed the set. The test checks this in the 900 cases of the set
+against a SET event, at three leads.
+
+A set is a STEP tween of duration 0 without `to_current`, so
+`ytl_animate()` with those fields records too. The record is a tween's
+event, like a callback's: a kill, a cancel and an overwrite delete it, a
+rewind fires it again, a skip skips it, and the pool check counts it.
+
+**Starts and ends of tweens do not log.** A tween with a duration is read
+at the onset. Its first frame is the first onset at or after its start,
+and the caller's flip log already has that onset. A record would land by
+the event rule, up to the lead (half a frame) early, and so could name the
+frame before the first frame that shows the tween. Also, a record at each
+start and end would put two events per tween in the storage, which a
+script that retargets every frame must then prune. `on_start` and
+`on_complete` give these events when a study needs them.
+
+### Prune frees overridden tweens
+
+The latest started tween drives a field, and the earlier tweens stay, so
+that a rewind can bring them back. On a base that is never cleared (a
+script on the RT base), they fill the pool. `YTL_OVERWRITE_ALL` was the
+only way out. Now `ytl_prune()` frees them too.
+
+The rule, per field: L is the last tween in (start, id) order that has
+started by the base's latest evaluated onset and has its start values. L
+or a later tween drives the field at every time from L's start on, and no
+later tween reads a tween before L for its start value. So the tweens
+before L are needed only by a rewind before L's start. The prune frees
+them, except:
+
+- a tween with a callback or record event that has not fired yet: a long
+  tween's `on_complete`, or a late `on_start`;
+- a tween whose callback is queued or running in this evaluate (a prune
+  called from a callback).
+
+Its fired events are deleted with the base's other fired events.
+
+**The horizon.** The prune already deleted every fired event up to the
+base's reach (the furthest window end evaluated). So a rewind before the
+reach cannot replay the events, and the prune declares that past closed.
+The horizon is reach + 1: from there on, a rewind or a seek replays the
+targets bit for bit. Before it, a target shows what its remaining tweens
+give, as a channel recomputes from the events that remain.
+`ytl_horizon()` gives the time, the latest over the base's prunes, so a
+player can keep its seeks inside the window. A clear ends it.
+
+Rejected:
+
+- **A refusal of a seek before the horizon.** `ytl_anchor()` and
+  `ytl_skip()` have always accepted any time, and a pruned base has always
+  recomputed from what remains. A refusal would break callers for a case
+  the query lets them avoid.
+- **A window argument on `ytl_prune()`.** The prune deletes every event up
+  to the reach already, so the reach is the window that the caller
+  declared. A second number could only disagree with it.
+- **L as the last started tween, resolved or not.** A tween posted after
+  the last evaluate at "now" has started but has no start value yet. It
+  reads the tween before it at the next evaluate, so that tween must stay.
+  Mutant `v07-19` checks this.
+
+### Measured cost
+
+The per-field cost of the evaluate, v0.6.0 against v0.7.0, with
+`examples/timeline/bench_targets.c` (1000 fields, CUBIC_OUT, ns per field
+per frame above the empty frame), and with a scratch copy of it whose
+tweens are yoyos with 1 s legs, so that half of the frames read a return
+leg. Each value is from one run of the bench (the minimum of 5
+interleaved rounds' medians); the cells give the median and the range
+of 5 runs in two sessions (the second at 8% load), old and new
+interleaved. Machine: Intel i7-1360P, Windows 11, on AC power, through
+the measurement lock. MinGW-w64 gcc 16.1 -O2 and MSVC cl /O2 (Visual
+Studio 18):
+
+| Workload | v0.6.0 gcc | v0.7.0 gcc | v0.6.0 MSVC | v0.7.0 MSVC |
+|---|---|---|---|---|
+| targets | 6.75 (5.73 to 7.80) | 6.98 (6.57 to 7.93) | 9.70 (8.51 to 10.40) | 8.30 (8.01 to 9.69) |
+| yoyo targets | 7.94 (7.01 to 8.24) | 7.95 (6.76 to 8.96) | 10.73 (10.56 to 11.78) | 10.71 (9.36 to 11.61) |
+
+One MSVC yoyo run of v0.7.0 measured 25.4 ns, with every other row of
+the same run 2 to 3 times slower too; it is left out as a disturbed run.
+The keyed path, 256 LINEAR channels (the scratch program of "Targets"),
+the smallest of 8 runs' minimum per evaluate: gcc 1238 ns (v0.6.0)
+against 1219 ns (v0.7.0), MSVC 1566 ns against 1578 ns.
+
+So no change is larger than the spread of one build between runs (about
+2 ns per field). The 8 ns per field of v0.6.0 stays, and the yoyo's
+reverse ease (a switch on the return leg) does not show.
+
+### Verification
+
+The writer of the implementation also wrote the checks, in
+`tests/adapt/timeline_test_targets.h` and `timeline_test.c`:
+
+- **Yoyo.** Every ease but STEP, BEZIER on an asymmetric curve, as a
+  channel tween, a sequence tween and a target tween with 2 cycles, read
+  at 1 ms steps: the three paths give the same bits, and each is within
+  2e-6 of the rule read literally (fold the cycle, mirror the return leg,
+  read the forward leg with the pow()-based eases). CUBIC_OUT's return
+  leg moves less in its first 10 ms than in its last 10 ms. The three
+  models of the earlier tests (the blind model's tween driver, the
+  sequence test's hand-built keys and the target model) now read the
+  return leg at the mirrored time, or, for the hand-built keys, with the
+  reverse ease and curve; the sequence test compares the builder with them
+  bit for bit. The blind test's QUAD_IN check at the middle of the return
+  leg now wants 0.25 (v0.6.0: 0.75). The STEP square wave and its 200
+  random cases pass unchanged.
+- **Records.** The fields of a record; no record for a jump with another
+  ease, a STEP with a duration, or a STEP with `to_current`; a 3-component
+  set; the report's frame equal to the first frame that shows the set; a
+  rewind that fires it again; a skip that skips it; a kill, an overwrite
+  and a cancel that delete it; a full storage that refuses a set. In the
+  900 cases of a set against a SET event at three leads, the record's frame
+  is the SET event's frame in all.
+- **Prune.** A trial with 76 tweens on 4 fields, played to 983 ms and
+  pruned: 58 tweens freed (the count per field is derived in the test),
+  the horizon equal to `ytl_window()`'s end + 1, then continuous play, two
+  rewinds and a skip inside the window, 120 frames, the same bits as a
+  handle that was not pruned. A rewind to 0, before the horizon: the
+  fields differ, and the fields whose first tweens were freed show their
+  rest values. A second prune after it keeps the horizon; a clear ends
+  it. A long tween's pending `on_complete` and a late `on_start` keep their
+  tweens until they fire. A prune from an `on_start` keeps the tween being
+  called and the tween queued after it, and both callbacks run.
+- **The long run.** A script on the RT base retargets a field every frame
+  and sets another every 5th frame, and prunes every 8th frame between its
+  posts and the evaluate, for 100,000 frames (28 minutes at 60 Hz) in a
+  pool of 16 tweens and 64 events: no call fails, at most 12 tweens are
+  live, and every frame shows the same bits as a second handle that uses
+  `YTL_OVERWRITE_ALL`. Without the prune the pool is full at frame 13.
+
+The earlier checks pass with the same model statistics.
+
+Mutations of the new code, one at a time: 26, all caught (`v07-00` to
+`v07-25` in [tests/mutate/timeline.toml](../tests/mutate/timeline.toml)).
+The first run left `v07-19` (L taken without its start values) alive: the
+long run pruned after the evaluate, when every started tween was
+resolved. It now prunes between the posts and the evaluate, as a script
+does, and the mutant is caught. The whole list ran again after the
+change: 92 mutants, 89 caught and the 3 known equivalents
+(`rate-01`, `rate-03`, `rate-15`) alive, as expected.
+
+Built and run on 2026-10-12: the `mingw` preset (MinGW-w64 gcc 16.1, 76
+of 76 tests pass, no warning) and `msvc-full` (MSVC, 88 of 88 pass, no
+warning; the first build failed on C4310, a cast that truncated a
+constant, which is fixed). The test also builds with gcc -std=c11 -Wall
+-Wextra -Wpedantic -Wshadow -Wfloat-conversion -Werror. A scratch
+program hashed every value of a yoyo per ease under v0.6.0 and v0.7.0:
+LINEAR, STEP, COSINE, LOG, QUAD_IN_OUT and CUBIC_IN_OUT give the same
+hash, the other five differ.
+
+The compile check `tests/compile/timeline.c` reads the set's record and
+calls `ytl_prune()` and `ytl_horizon()`, as C99 and as C++17.
+
 ## Animate a stimulus field
 
 This how-to animates the fields of ysp/gfx.h stimuli with targets. The
@@ -1120,12 +1333,15 @@ Variations:
   `a.target = g.color`, or `a.n = 2` on two adjacent floats.
 - **A stagger.** Set `a.stagger_ns` and call `ytl_animate_n(&q, &a,
   sizeof dots[0], n)` with `a.target = &dots[0].y`.
-- **A record of a set.** A set changes a field, not the event record. Add
-  `ytl_mark(&q, code, 0)` at the same cursor when the analysis needs the
-  frame that showed it, or add a trigger, as step 3 does.
-- **A script that retargets.** Use `ytl_seq_now(&tl, base)` and
-  `a.overwrite = YTL_OVERWRITE_ALL`, so the old tweens do not fill the
-  pool.
+- **A record of a set.** Since v0.7.0 each set adds a `YTL_TARGET_SET`
+  event, so the report of `ytl_evaluate()` and the storage give the frame
+  that showed it. Log `fired[i].frame` with `fired[i].user` (the field's
+  address) and `fired[i].value`. Give the storage one event per set. A
+  trigger for the port is still a trigger, as step 3 adds.
+- **A script that retargets.** Use `ytl_seq_now(&tl, base)`, and either
+  set `a.overwrite = YTL_OVERWRITE_ALL` or call `ytl_prune(&tl, base)`
+  from time to time, so the old tweens do not fill the pool. The prune
+  also deletes the fired events, so log the reports first.
 
 The conversion of `gfx_trial.c` from channels to targets took the file
 from 147 to 138 lines. It removed the channel enum, the key table, the
