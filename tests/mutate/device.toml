@@ -144,7 +144,7 @@ id = "dev-15"
 name = "the trailing edge at the leading write"
 test = "device"
 why = "The width starts at the leading write: a deadline without it gives no pulse."
-find = '''            dev->trail_at = t1 + width_ns;'''
+find = '''            dev->trail_at = yser_pulse_off_at_ns(t0, t1, width_ns, dev->d.min_hold_ns);'''
 replace = '''            dev->trail_at = t1;'''
 
 [[mutant]]
@@ -251,3 +251,57 @@ test = "device"
 why = "ydev_error() after a failed wait must say why the device failed, which the reader thread wrote."
 find = '''    if (state != YDEV_FAILED || !dev->err[0])'''
 replace = '''    if (1)'''
+
+[[mutant]]
+id = "dev-29"
+name = "a host-timed width from the leading write's return (v0.3.1)"
+test = "device"
+why = "Over USB the code arrives during the leading write: from its return, a pulse was 0.34 to 0.42 ms long at the device (docs/serial.md, Pulses)."
+find = '''            dev->trail_at = yser_pulse_off_at_ns(t0, t1, width_ns, dev->d.min_hold_ns);'''
+replace = '''            dev->trail_at = t1 + width_ns;'''
+
+[[mutant]]
+id = "dev-30"
+name = "no hold after the leading write (v0.3.1)"
+test = "device"
+why = "A width shorter than a stalled leading write would put both codes in one USB packet: a pulse of 0 us."
+find = '''            dev->trail_at = yser_pulse_off_at_ns(t0, t1, width_ns, dev->d.min_hold_ns);'''
+replace = '''            dev->trail_at = yser_pulse_off_at_ns(t0, t1, width_ns, 0);'''
+
+[[mutant]]
+id = "dev-31"
+name = "the parallel port gets the USB hold (v0.3.1)"
+test = "device"
+why = "An outb does not wait in a USB queue; a 0.1 ms parallel pulse must stay 0.1 ms."
+find = '''    if (dev->d.min_hold_ns == 0 && dev->d.family != YBOX_PARALLEL) dev->d.min_hold_ns = YSER_DEFAULT_MIN_HOLD_NS;'''
+replace = '''    if (dev->d.min_hold_ns == 0) dev->d.min_hold_ns = YSER_DEFAULT_MIN_HOLD_NS;'''
+
+[[mutant]]
+id = "dev-32"
+name = "a negative hold accepted (v0.3.1)"
+test = "device"
+why = "A negative hold moves the trailing write before the leading write's return."
+find = '''    if (desc->min_hold_ns < 0) YDEV__FAIL("desc.min_hold_ns must be >= 0");'''
+replace = ''
+
+# ysp/serial.h has no list of its own: its tests need a port. The rule of
+# yser_pulse_off_at_ns() is pure, and device_test reaches it through
+# ysp/device.h.
+
+[[mutant]]
+id = "dev-33"
+name = "yser_pulse_off_at_ns() from the return (serial.h v0.6.1)"
+test = "device"
+file = "ysp/serial.h"
+why = "The rule both pulse calls and ysp/device.h share: from the onset write's start."
+find = '''    int64_t a = start_ns + width_ns, b = return_ns + min_hold_ns;'''
+replace = '''    int64_t a = return_ns + width_ns, b = return_ns + min_hold_ns;'''
+
+[[mutant]]
+id = "dev-34"
+name = "yser_pulse_off_at_ns() takes the earlier time (serial.h v0.6.1)"
+test = "device"
+file = "ysp/serial.h"
+why = "The hold is a floor: the later of the two times."
+find = '''    return a > b ? a : b;'''
+replace = '''    return a < b ? a : b;'''

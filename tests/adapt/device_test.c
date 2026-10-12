@@ -735,6 +735,8 @@ typedef struct obox {
     int      nl;
     bool     open, fail;
     int      opens;
+    int64_t  wcost;           /* virtual clock: what a write or a line
+                               * change takes, as a USB write does         */
 } obox;
 
 static obox g_o;
@@ -761,12 +763,14 @@ static int o_write(void* conn, const uint8_t* buf, int n) {
     if (o->fail) return -1;
     if (o->nw < 16384) { o->wt[o->nw] = t; o->wfirst[o->nw] = o->nbytes; o->wn[o->nw++] = n; }
     if (o->nbytes + n <= (int)sizeof o->bytes) { memcpy(o->bytes + o->nbytes, buf, (size_t)n); o->nbytes += n; }
+    if (!g_real) g_now += o->wcost;
     return n;
 }
 
 static int o_lines(void* conn, uint32_t code, uint32_t changed) {
     obox* o = (obox*)conn;
     if (o->nl < 256) { o->lcode[o->nl] = code; o->lchanged[o->nl++] = changed; }
+    if (!g_real) g_now += o->wcost;
     return 0;
 }
 
@@ -997,7 +1001,10 @@ static void test_out_records(void) {
         r = &g_outrec[1];
         CHECK_I(r->u.u16[18], YDEV_OUT_TRAILING);
         CHECK(r->u.u16[19] == g_outrec[0].u.u16[19] && r->u.u32[8] == 0);
-        CHECK(r->u.i64[0] >= lead_t1 + 2000000 && r->u.i64[0] < lead_t1 + 3000000);
+        /* from the leading write's start (v0.3.1), at least 0.25 ms after
+         * its end */
+        CHECK(r->u.i64[0] >= g_outrec[0].u.i64[0] + 2000000 && r->u.i64[0] >= lead_t1 + 250000 &&
+              r->u.i64[0] < g_outrec[0].u.i64[0] + 3000000);
         CHECK(r->u.i64[2] == r->u.i64[0] - g_outrec[0].u.i64[0]);       /* the host width */
     }
     /* a pulse that moves a pending edge; a set that cancels one */
@@ -1072,6 +1079,73 @@ static void test_out_records(void) {
     ydev_close(&g_out);
     CHECK_I(ydev_out_set(&g_out, 1), YDEV_ERR_STATE);   /* after the stop */
     printf("  output records: pulse and trailing edge, replaced, canceled, failed, mark, trigger channel: ok\n");
+}
+
+/* Polls in 10 us steps until virtual time t. */
+static void orun_fine(int64_t t) {
+    while (g_now < t) {
+        int64_t before = g_now;
+        (void)ydev_poll(&g_out, 10000);
+        if (g_now == before) g_now += 10000;
+    }
+}
+
+/* One pulse of width w whose writes each take 0.4 ms of virtual time:
+ * true with the leading write's start and return and the trailing
+ * write's start. */
+static bool ohold_pulse(int64_t w, int64_t* t0, int64_t* t1, int64_t* off) {
+    g_o.wcost = 400000;
+    if (ydev_out_pulse(&g_out, 1, w) != YDEV_OK) return false;
+    orun_fine(g_now + w + 2000000);
+    g_o.wcost = 0;
+    odrain();
+    if (g_nout != 2 || g_outrec[1].u.u16[18] != YDEV_OUT_TRAILING) return false;
+    *t0 = g_outrec[0].u.i64[0];
+    *t1 = g_outrec[0].u.i64[1];
+    *off = g_outrec[1].u.i64[0];
+    return *t1 - *t0 == 400000;
+}
+
+/* Where a host-timed pulse ends (v0.3.1): at the later of the leading
+ * write's start + width and its return + desc.min_hold_ns, within one
+ * 10 us poll step. Until v0.3.0 it was the return + width. */
+static void test_out_hold(void) {
+    static const int fam[3] = { YBOX_TRIGGERBOX, YBOX_LINES, YBOX_PARALLEL };
+    int f;
+    int64_t t0, t1, off;
+    ydev_desc d;
+    for (f = 0; f < 3; f++) {
+        int64_t hold = fam[f] == YBOX_PARALLEL ? 0 : 250000;   /* the defaults */
+        d = odesc(fam[f]);
+        ostart(&d);
+        odrain();
+        /* a width longer than the write: from the start */
+        CHECK(ohold_pulse(1000000, &t0, &t1, &off));
+        CHECK(off >= t0 + 1000000 && off < t0 + 1000000 + 20000);
+        /* shorter: the hold after the return */
+        CHECK(ohold_pulse(100000, &t0, &t1, &off));
+        CHECK(off >= t1 + hold && off < t1 + hold + 20000);
+        ydev_close(&g_out);
+    }
+    /* practically no hold */
+    d = odesc(YBOX_TRIGGERBOX);
+    d.min_hold_ns = 1;
+    ostart(&d);
+    odrain();
+    CHECK(ohold_pulse(100000, &t0, &t1, &off));
+    CHECK(off >= t1 + 1 && off < t1 + 20000);
+    ydev_close(&g_out);
+    /* a hold on the parallel port, when asked for */
+    d = odesc(YBOX_PARALLEL);
+    d.min_hold_ns = 300000;
+    ostart(&d);
+    odrain();
+    CHECK(ohold_pulse(100000, &t0, &t1, &off));
+    CHECK(off >= t1 + 300000 && off < t1 + 300000 + 20000);
+    ydev_close(&g_out);
+    d.min_hold_ns = -1;
+    CHECK(!ydev_open(&g_out, &d) && strstr(ydev_error(&g_out), "min_hold_ns") != NULL);
+    printf("  host-timed pulse end: from the leading write's start, the hold after its return: ok\n");
 }
 
 /* A line-protocol board's O reports: mapped through the fit. */
@@ -1162,9 +1236,10 @@ static int64_t pct(const int64_t* v, int n, double p) {
 }
 
 /* Host-timed pulses on the real clock: the worker writes the trailing 0.
- * Width error = trailing write minus leading write minus the width; the
- * worker's lateness = trailing write minus its deadline (the leading
- * write's end plus the width). Run under the guard's time mode for the
+ * Width error = the start of the trailing write minus the start of the
+ * leading write minus the width (the records' times); the worker's
+ * lateness = trailing write minus its deadline (yser_pulse_off_at_ns() of
+ * the leading write). Run under the guard's time mode for the
  * numbers (docs/device.md). On a loaded machine the worker can be later
  * than the gap to the next pulse, which then moves the edge (REPLACED):
  * that is the contract, so the check is that every pulse has its
@@ -1199,28 +1274,29 @@ static void test_out_timing(void) {
     g_real = false;
     /* writes: the open's 0, then each code and, unless the next pulse moved
      * it, its 0; the close's 0xFF */
-    for (k = 1; k + 1 < g_o.nw && n < N; k++) {
-        int64_t w;
-        if (g_o.bytes[g_o.wfirst[k]] == 0 || g_o.bytes[g_o.wfirst[k + 1]] != 0) continue;
-        w = g_o.wt[k + 1] - g_o.wt[k];
-        werr[n++] = w - 2000000;
-        if (w < 2000000) short_++;
-    }
-    CHECK_I(short_, 0);
+    for (k = 1; k + 1 < g_o.nw && n < N; k++)
+        if (g_o.bytes[g_o.wfirst[k]] != 0 && g_o.bytes[g_o.wfirst[k + 1]] == 0) n++;
     odrain();
     for (k = 0; k < g_nout; k++) {
         uint32_t f = g_outrec[k].u.u16[18];
         if (f & YDEV_OUT_PULSE) npulse++;
         if (f & YDEV_OUT_REPLACED) nrepl++;
         if (f & YDEV_OUT_TRAILING) ntrail++;
-        if ((f & YDEV_OUT_PULSE) && k + 1 < g_nout && (g_outrec[k + 1].u.u16[18] & YDEV_OUT_TRAILING) && nl < N)
-            late[nl++] = g_outrec[k + 1].u.i64[0] - (g_outrec[k].u.i64[1] + 2000000);
+        if ((f & YDEV_OUT_PULSE) && k + 1 < g_nout && (g_outrec[k + 1].u.u16[18] & YDEV_OUT_TRAILING) && nl < N) {
+            /* the host width, start to start; the deadline as v0.3.1 sets it */
+            werr[nl] = g_outrec[k + 1].u.i64[2] - 2000000;
+            if (werr[nl] < 0) short_++;
+            late[nl++] = g_outrec[k + 1].u.i64[0] -
+                         yser_pulse_off_at_ns(g_outrec[k].u.i64[0], g_outrec[k].u.i64[1], 2000000, YSER_DEFAULT_MIN_HOLD_NS);
+        }
     }
+    CHECK_I(short_, 0);
     CHECK_I(npulse, N);
     CHECK_I(ntrail + nrepl, N);     /* every pulse ended, or moved by the next */
     CHECK_I(n, ntrail);
     CHECK(nl > 0 && n > 0);
     if (nl == 0 || n == 0) { g_real = false; return; }
+    n = nl;
     qsort(werr, (size_t)n, sizeof werr[0], cmp_i64);
     qsort(late, (size_t)nl, sizeof late[0], cmp_i64);
     qsort(call, N, sizeof call[0], cmp_i64);
@@ -1253,6 +1329,7 @@ int main(void) {
     test_thread();
     test_out_bytes();
     test_out_records();
+    test_out_hold();
     test_out_report();
     test_roles();
     test_out_timing();

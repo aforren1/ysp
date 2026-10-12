@@ -152,7 +152,7 @@ the header: [ysp/parallel.h](../../include/ysp/parallel.h).
 
 ```matlab
 ports = ysp_serial('list');                    % struct array, one per port
-% name / description / serial_number / location / vid / pid
+% name / description / serial_number / location / driver / vid / pid
 match = ysp_serial('find', struct('vid', 1027, 'pid', 24577));   % FTDI FT232R
 
 h = ysp_serial('open', '/dev/ttyUSB0');        % 115200 8N1 by default
@@ -220,7 +220,7 @@ policy the worker actually obtained, which is not always the one requested.
 
 | Command | Returns | Notes |
 |---|---|---|
-| `'list'` | struct array | `name`, `description`, `serial_number`, `location`, `vid`, `pid`; opens nothing |
+| `'list'` | struct array | `name`, `description`, `serial_number`, `location`, `driver` (Windows: the driver service, `'usbser'`, `'FTDIBUS'`, ...; `''` elsewhere), `vid`, `pid`; opens nothing |
 | `'find' [, filterStruct]` | struct array | filter fields `vid`, `pid`, `serial_number`, `location`, `description`, `name`; absent or 0/`''` matches anything |
 | `'open', device [, settingsStruct]` | `uint64` handle | `device` is required |
 | `'write', h, data` | count (optional) | `uint8` array, or a `double` array of integers 0..255 |
@@ -236,11 +236,11 @@ policy the worker actually obtained, which is not always the one requested.
 | `'setdtr', h, on` / `'setrts', h, on` | none | drive the output lines |
 | `'lines', h` | struct | `mask` plus `cts`, `dsr`, `ri`, `dcd` logicals |
 | `'break', h, duration` | none | hold TX in the break state for `duration` seconds |
-| `'info', h` | struct | effective settings, `async_policy` as a string, and `rd_oserr` / `wr_oserr` / `misc_oserr` |
+| `'info', h` | struct | effective settings, `async_policy` as a string, `rd_oserr` / `wr_oserr` / `misc_oserr`, `driver`, and `rts_via_dtr` (`setrts` also sends a DTR request, because Windows' `usbser.sys` sends an RTS change only with one) |
 | `'async_start', h [, terminator [, lines [, max_len]]]` | none | start the reader thread; defaults `10` (LF), `8192` lines, `256` bytes per line; see below |
 | `'async_read', h [, max_lines]` | `lines` [, `t`, `t_first`] | the complete lines since the last call: a cell column of `uint8` rows (terminator included) and two `double` columns of stamps in seconds |
 | `'async_stop', h` | struct (optional) | stop the reader thread; fields `pending` (lines not read, discarded), `dropped`, `overlong`, `bytes`, `reads`, `error` |
-| `'version'` | string [, string] | the binding version (`2.1.0`), and as a second output the version of ysp/serial.h in this build; opens nothing |
+| `'version'` | string [, string] | the binding version (`2.2.0`), and as a second output the version of ysp/serial.h in this build; opens nothing |
 | `'close', h` | none | release the port; stops a running reader first |
 
 `write`, `writebyte`, `pulse` and `pulseasync` return their count only when

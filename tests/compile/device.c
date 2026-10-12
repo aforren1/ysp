@@ -71,5 +71,8 @@ int main(void) {
     ok = ok && g_api.out_pulse(&dev, 1, YRT_MS(2)) == YDEV_ERR_STATE && rf != NULL;
     g_api.close(&dev);
     g_api.close(&dev);                 /* twice */
+    memcpy(key, "port:x", sizeof "port:x");
+    d.min_hold_ns = -1;                /* v0.3.1: ns, >= 0 */
+    ok = ok && !g_api.open(&dev, &d) && strstr(g_api.error(&dev), "min_hold_ns") != NULL;
     return ok && g_api.state(&dev) == YDEV_CLOSED && g_api.key_match("serial:16C0::", "serial:16c0:0483:1:A") ? 0 : 1;
 }

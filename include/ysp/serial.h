@@ -1,4 +1,4 @@
-/* ysp/serial.h - v0.6.0 - public domain single-header serial-port library
+/* ysp/serial.h - v0.6.1 - public domain single-header serial-port library
  *
  *   REQUIRES ysp/rt.h, its sibling in this collection, on the include path.
  *   This header includes it for the clock, the waits, the scheduling ladder
@@ -149,12 +149,14 @@
  *         from the start of the onset write; until v0.5.1 it ran from the
  *         write's return and was +0.34 to +0.42 ms long (median), because
  *         the byte reaches the device during that write. A pulse you time
- *         yourself from a call's return has that error too.
+ *         yourself from a call's return has that error too; time it with
+ *         yser_pulse_off_at_ns(), the rule of both calls.
  *       - yser_pulse_async() returns in 20 us median, 48 us p99.
  *       - Missed: 0 of 9800 (bytes, DTR, RTS and the min_hold check).
  *       - RTS: Windows' usbser.sys sends the line state to a USB CDC device
- *         only with a DTR request, so yser_set_rts() sets DTR again to its
- *         present level (docs/serial.md, "RTS on usbser.sys"). Other
+ *         only with a DTR request, so on a port that yser_open() finds on
+ *         usbser.sys (yser_port.rts_via_dtr) yser_set_rts() sets DTR again
+ *         to its present level (docs/serial.md, "RTS on usbser.sys"). Other
  *         libraries' RTS calls (pyserial, EscapeCommFunction) do not reach
  *         such a device.
  *     Not measured: FTDI and other bridges, RS-232, Linux, macOS. Do not
@@ -377,6 +379,13 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.6.1 - yser_open() reads the port's driver on Windows (SetupAPI,
+ *          SPDRP_SERVICE) into the new yser_port.driver, and
+ *          yser_set_rts() sets DTR again only where it is usbser.sys (the
+ *          new yser_port.rts_via_dtr); another driver gets the RTS request
+ *          alone, as before v0.6.0. New yser_port_info.driver. New
+ *          yser_pulse_off_at_ns(): the trailing-edge rule of both pulse
+ *          calls, for a pulse the caller times (ysp/device.h uses it).
  *   v0.6.0 - yser_pulse_async() only queues the pulse (no I/O, no
  *          allocation; 20 us median against 462 us), and the worker writes
  *          both bytes. Output keeps the order of the calls: every other
@@ -460,12 +469,11 @@
  *   STATUS: IMPLEMENTED on Windows (Win32 COM API, overlapped I/O) and POSIX
  *   (Linux and macOS termios). Tested against a virtual port pair on Linux,
  *   including one reader thread plus one writer thread on a single handle
- *   under ThreadSanitizer. Windows and macOS compile clean in CI but have
- *   never run on a device: on Windows the open-time validation and the
- *   enumeration entry point run, but no byte has moved through the backend,
- *   and on macOS (IOSSIOSPEED, /dev/cu.* enumeration, the select() waits)
- *   nothing but the compiler has seen the code. No timing number in this
- *   header has been measured on a rig yet. The timing code is ysp/rt.h's, so
+ *   under ThreadSanitizer. Windows has run on one device, a Teensy 4.0 on
+ *   usbser.sys (TIMING, docs/serial.md); no FTDI or other bridge driver,
+ *   so the path where rts_via_dtr is false has not run on a device. On
+ *   macOS (IOSSIOSPEED, /dev/cu.* enumeration, the select() waits) nothing
+ *   but the compiler has seen the code. The timing code is ysp/rt.h's, so
  *   its STATUS block applies too: the real-time rungs of the worker's ladder
  *   have never been granted on any machine here.
  *
@@ -479,8 +487,8 @@
  * The string always matches the three numbers. */
 #define YSER_VERSION_MAJOR  0
 #define YSER_VERSION_MINOR  6
-#define YSER_VERSION_PATCH  0
-#define YSER_VERSION_STRING "0.6.0"
+#define YSER_VERSION_PATCH  1
+#define YSER_VERSION_STRING "0.6.1"
 
 /* CancelIoEx (Vista) is what lets yser_interrupt() end a pending overlapped
  * read. The MSVC SDK targets a recent Windows by default, but MinGW headers
@@ -722,10 +730,16 @@ typedef struct yser_port {
     yser_flow      flow;
     bool           low_latency;     /* true if the driver accepted the request  */
     bool           keep_dtr_on_close;
+    bool           rts_via_dtr;     /* yser_set_rts() also sends a DTR request:
+                                     * true on Windows when `driver` is
+                                     * "usbser"; see yser_set_rts()           */
     yser_sched_deadline sched;      /* effective worker reservation            */
     yser_async_policy   async_policy; /* rung the worker got; final once
                                        * yser_open() returns                   */
 
+    char     driver[32];            /* Windows: the port's driver service, as in
+                                     * yser_port_info.driver; "" when SetupAPI
+                                     * does not list the port, and on POSIX     */
     char     device[128];           /* name as opened (with any \\.\ prefix)   */
     char     error[256];            /* yser_open() failure message; see RETURN VALUES */
 } yser_port;
@@ -742,6 +756,9 @@ typedef struct yser_port_info {
                                  * letter wins the field ("A"), so two EEPROM-blank FT232R cables
                                  * report the same location and can only be told apart by unplugging
                                  * one. Linux has no such gap.                                          */
+    char     driver[32];        /* Windows: the device's driver service: "usbser" (Windows' USB CDC
+                                 * driver), "FTDIBUS", "silabser", "Serial", ...; "" on Linux and
+                                 * macOS                                                                */
     uint16_t vid;               /* USB vendor id (0x0403 FTDI, 0x10C4 Silicon Labs, 0x2341 Arduino, ...) */
     uint16_t pid;               /* USB product id                                                       */
 } yser_port_info;
@@ -907,6 +924,16 @@ YSER_API int yser_pulse(yser_port* p, uint8_t on, uint8_t off, int64_t width_ns)
  * THREADING for the shared lock and yser_close()'s flush. */
 YSER_API int yser_pulse_async(yser_port* p, uint8_t on, uint8_t off, int64_t width_ns);
 
+/* When a pulse's trailing write is due, on the yrt_now_ns() clock: the
+ * later of start_ns + width_ns and return_ns + min_hold_ns, where start_ns
+ * and return_ns bracket the onset write. It is the rule of yser_pulse() and
+ * yser_pulse_async(), for a pulse the caller times itself (a DTR or RTS
+ * pulse, a byte on another thread): take start_ns just before the onset
+ * call, return_ns just after it, and yrt_sleep_until() the result. Pass
+ * p->min_hold_ns for the port's floor. Pure; no port needed. */
+YSER_API int64_t yser_pulse_off_at_ns(int64_t start_ns, int64_t return_ns, int64_t width_ns,
+                                      int64_t min_hold_ns);
+
 /* --- input (reader role) ----------------------------------------------- */
 
 /* Read up to `cap` bytes. With flags = YSER_READ_ANY (0): returns as soon as
@@ -932,9 +959,12 @@ YSER_API int yser_available(yser_port* p);
 
 /* Drive the DTR / RTS output lines. RTS is ignored while YSER_FLOW_RTSCTS is
  * active (the driver owns it). Return 0 or a YSER_ERR_* code, with the OS
- * error in misc_oserr. On Windows yser_set_rts() also sets DTR again to its
- * present level, because usbser.sys (USB CDC) sends the line state to the
- * device only with a DTR request; see TIMING. */
+ * error in misc_oserr. On a Windows port whose driver is usbser.sys (USB CDC;
+ * yser_port.rts_via_dtr), yser_set_rts() also sets DTR again to its present
+ * level, because that driver sends the line state to the device only with a
+ * DTR request; see TIMING. That costs a second request (on a Teensy 4.0 the
+ * call took about 0.4 ms instead of 30 to 60 us). Other drivers get the RTS
+ * request alone. */
 YSER_API int yser_set_dtr(yser_port* p, bool on);
 YSER_API int yser_set_rts(yser_port* p, bool on);
 
@@ -1092,12 +1122,16 @@ static int yser__write_nolock(yser_port* p, const void* buf, int len) {
     return yser__write_timed(p, buf, len, yser__ms(p->write_timeout_ns));
 }
 
-/* When a pulse's trailing write is due: the width from the onset write's
- * start (t0), but never sooner than min_hold_ns after that write returned
- * (t1). yser_pulse() says why. */
-static int64_t yser__off_at(const yser_port* p, int64_t t0, int64_t t1, int64_t width_ns) {
-    int64_t a = t0 + width_ns, b = t1 + p->min_hold_ns;
+/* The width from the onset write's start, but never sooner than min_hold_ns
+ * after that write returned. yser_pulse() says why. */
+YSER_API int64_t yser_pulse_off_at_ns(int64_t start_ns, int64_t return_ns, int64_t width_ns,
+                                      int64_t min_hold_ns) {
+    int64_t a = start_ns + width_ns, b = return_ns + min_hold_ns;
     return a > b ? a : b;
+}
+
+static int64_t yser__off_at(const yser_port* p, int64_t t0, int64_t t1, int64_t width_ns) {
+    return yser_pulse_off_at_ns(t0, t1, width_ns, p->min_hold_ns);
 }
 
 /* What a writer-role call other than a pulse does to the async pulses still
@@ -1316,8 +1350,10 @@ static bool yser__devprop(HDEVINFO set, SP_DEVINFO_DATA* dev, DWORD prop,
     DWORD type = 0, got = 0;
     out[0] = '\0';
     if (!SetupDiGetDeviceRegistryPropertyA(set, dev, prop, &type, (PBYTE)out,
-                                           (DWORD)(cap - 1), &got))
+                                           (DWORD)(cap - 1), &got)) {
+        out[0] = '\0';
         return false;
+    }
     if (got >= cap) got = (DWORD)cap - 1;
     out[got] = '\0';
     return out[0] != '\0';
@@ -1351,6 +1387,45 @@ static void yser__parse_instance_id(const char* id, yser_port_info* e) {
     }
 }
 
+/* The openable name ("COM3") of one device in the set: it lives in the
+ * device's own registry key, not in any SPDRP_* property. false for a
+ * device without one, and for an LPT port behind a COM interface. */
+static bool yser__dev_portname(HDEVINFO set, SP_DEVINFO_DATA* dev, char* out, DWORD cap) {
+    out[0] = '\0';
+    HKEY key = SetupDiOpenDevRegKey(set, dev, DICS_FLAG_GLOBAL, 0, DIREG_DEV, KEY_READ);
+    if (key == (HKEY)INVALID_HANDLE_VALUE || key == NULL) return false;
+    DWORD type = 0, cb = cap - 1;
+    LONG rc = RegQueryValueExA(key, "PortName", NULL, &type, (LPBYTE)out, &cb);
+    RegCloseKey(key);
+    if (rc != ERROR_SUCCESS || type != REG_SZ) { out[0] = '\0'; return false; }
+    out[cb < cap ? cb : cap - 1] = '\0';
+    return yser__iprefix(out, "COM");
+}
+
+/* The driver of the port named `name` ("COM3"): the service name of its
+ * device node, "" when SetupAPI does not list the port (com0com and other
+ * virtual pairs may not). The service name is how the driver's behavior is
+ * told apart without opening another handle: yser_set_rts() needs it, and
+ * it does not change while the port is open. */
+static void yser__port_driver(const char* name, char* out, size_t cap) {
+    out[0] = '\0';
+    HDEVINFO set = SetupDiGetClassDevsA(&yser__guid_comport, NULL, NULL,
+                                        DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
+    if (set == INVALID_HANDLE_VALUE) return;
+    SP_DEVINFO_DATA dev;
+    memset(&dev, 0, sizeof(dev));
+    dev.cbSize = sizeof(dev);
+    for (DWORD i = 0; SetupDiEnumDeviceInfo(set, i, &dev); i++) {
+        char portname[64];
+        if (!yser__dev_portname(set, &dev, portname, (DWORD)sizeof(portname)) ||
+            !yser__ieq(portname, name))
+            continue;
+        (void)yser__devprop(set, &dev, SPDRP_SERVICE, out, cap);
+        break;
+    }
+    SetupDiDestroyDeviceInfoList(set);
+}
+
 YSER_API int yser_list_ports(yser_port_info* out, int max) {
     HDEVINFO set = SetupDiGetClassDevsA(&yser__guid_comport, NULL, NULL,
                                         DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
@@ -1362,23 +1437,15 @@ YSER_API int yser_list_ports(yser_port_info* out, int max) {
     memset(&dev, 0, sizeof(dev));
     dev.cbSize = sizeof(dev);
     for (DWORD i = 0; SetupDiEnumDeviceInfo(set, i, &dev); i++) {
-        /* The openable name lives in the device's own registry key, not in any
-         * SPDRP_* property. */
-        char portname[64] = "";
-        HKEY key = SetupDiOpenDevRegKey(set, &dev, DICS_FLAG_GLOBAL, 0, DIREG_DEV, KEY_READ);
-        if (key == (HKEY)INVALID_HANDLE_VALUE || key == NULL) continue;
-        DWORD type = 0, cb = (DWORD)sizeof(portname) - 1;
-        LONG rc = RegQueryValueExA(key, "PortName", NULL, &type, (LPBYTE)portname, &cb);
-        RegCloseKey(key);
-        if (rc != ERROR_SUCCESS || type != REG_SZ) continue;
-        portname[cb < sizeof(portname) ? cb : sizeof(portname) - 1] = '\0';
-        if (!yser__iprefix(portname, "COM")) continue; /* LPT via a COM interface: not ours */
+        char portname[64];
+        if (!yser__dev_portname(set, &dev, portname, (DWORD)sizeof(portname))) continue;
 
         yser_port_info* e = yser__list_add(&list);
         if (!e) break;
         yser__copy(e->name, sizeof(e->name), portname);
 
         char buf[512];
+        (void)yser__devprop(set, &dev, SPDRP_SERVICE, e->driver, sizeof(e->driver));
         if (yser__devprop(set, &dev, SPDRP_FRIENDLYNAME, buf, sizeof(buf)) ||
             yser__devprop(set, &dev, SPDRP_DEVICEDESC, buf, sizeof(buf)))
             yser__copy(e->description, sizeof(e->description), buf);
@@ -1521,6 +1588,14 @@ static bool yser__open_platform(yser_port* p, const yser_desc* d) {
         yser__set_error(p, "CreateEvent: error %lu", (unsigned long)GetLastError());
         return yser__open_fail(p);
     }
+    /* Once per open, so yser_set_rts() tests a flag and never enumerates.
+     * Only usbser.sys gets the extra DTR request: it is the driver measured
+     * to drop an RTS change without one (docs/serial.md, RTS on usbser.sys);
+     * on another driver the request would be a second, unmeasured USB or
+     * UART transaction for nothing. */
+    yser__port_driver(yser__iprefix(p->device, "\\\\.\\") ? p->device + 4 : p->device,
+                      p->driver, sizeof(p->driver));
+    p->rts_via_dtr = yser__ieq(p->driver, "usbser");
     /* Windows has no per-handle receive-latency control: the FTDI latency timer
      * is a registry value applied at plug time. See LOW LATENCY. */
     p->low_latency = false;
@@ -1775,16 +1850,16 @@ YSER_API int yser_set_rts(yser_port* p, bool on) {
     if (!yser_is_open(p)) return YSER_ERR_CLOSED;
     if (p->flow == YSER_FLOW_RTSCTS) return 0; /* the driver owns RTS */
     int rc = yser__escape(p, on ? SETRTS : CLRRTS);
-    if (rc < 0) return rc;
+    if (rc < 0 || !p->rts_via_dtr) return rc;
     /* Windows' usbser.sys (USB CDC: Arduino, Teensy, Pico) records an RTS
      * change but sends no SET_CONTROL_LINE_STATE for it; it sends the line
      * state, RTS included, on every SETDTR or CLRDTR, also one that does not
      * change DTR. So DTR is set again to the level the driver has, which
      * sends the RTS change at once. Measured on a Teensy 4.0 (docs/serial.md,
-     * Pulses: RTS): before this, 0 of 160 RTS pulses reached the board. On a
-     * driver that sends RTS itself (FTDI, serial.sys) the second request
-     * repeats the state; its cost there is not measured. A driver that cannot
-     * report DTR keeps the RTS change it already has. */
+     * Pulses: RTS): before this, 0 of 160 RTS pulses reached the board.
+     * yser_open() sets rts_via_dtr from the port's driver, so a driver that
+     * sends RTS itself (FTDI, serial.sys) gets one request, not two. A
+     * driver that cannot report DTR keeps the RTS change it already has. */
     ULONG st = 0;
     DWORD n = 0;
     if (!DeviceIoControl((HANDLE)p->handle, YSER__IOCTL_GET_DTRRTS, NULL, 0, &st, sizeof st,

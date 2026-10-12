@@ -206,6 +206,39 @@ def test_lifecycle(port):
         port.async_read()
 
 
+def read_line_report(p, timeout=0.5):
+    """The board's next "L <t> <dtr> <rts>" report as (dtr, rts), or None."""
+    buf = b""
+    t_end = ps.now() + timeout
+    while ps.now() < t_end:
+        buf += p.read(64, 0.05)
+        i = buf.find(b"L ")
+        if i >= 0 and len(buf) >= i + 17:
+            ln = buf[i:i + 17]
+            return int(ln[13:14]), int(ln[15:16])
+    return None
+
+
+def test_driver_and_rts_reach_the_board(port):
+    # 0.6.1: the extra DTR request goes only with usbser.sys, and an RTS
+    # change reaches the board either way.
+    if os.name == "nt":
+        assert port.driver != ""
+        assert port.rts_via_dtr == (port.driver.lower() == "usbser")
+    else:
+        assert port.driver == "" and port.rts_via_dtr is False
+    port.set_dtr(False)
+    port.set_rts(False)
+    time.sleep(0.02)
+    port.write(b"l 1\n")
+    assert read_line_report(port) == (0, 0)
+    for rts in (1, 0, 1):
+        port.set_rts(bool(rts))
+        assert read_line_report(port) == (0, rts)
+    port.write(b"l 0\n")
+    quiet(port)
+
+
 def test_wait_is_interrupted_by_stop_from_another_thread(port):
     import threading
     port.async_start()

@@ -200,7 +200,7 @@ write beside the running reader cost within 34 us of a write without one.
 | | |
 |---|---|
 | `ps.now() -> float` | monotonic seconds from the clock the library times its own deadlines against |
-| `ps.list_ports() -> list[dict]` | enumerate ports (`name`, `description`, `serial_number`, `location`, `vid`, `pid`) |
+| `ps.list_ports() -> list[dict]` | enumerate ports (`name`, `description`, `serial_number`, `location`, `driver`, `vid`, `pid`) |
 | `ps.find_ports(vid=0, pid=0, serial_number=None, location=None, description=None, name=None) -> list[dict]` | the matching subset; zero/`None` matches anything |
 | `ps.Port(device, baud=0, data_bits=0, parity=PARITY_NONE, stop_bits=STOP_BITS_1, flow=FLOW_NONE, write_timeout=DEFAULT_WRITE_TIMEOUT, exclusive=False, low_latency=False, dtr_low_on_open=False, rts_low_on_open=False, keep_dtr_on_close=False, rt_runtime=0, rt_deadline=0, rt_period=0, min_hold=0)` | open a port; `device` is required, times are seconds, a zero field means the library default |
 | `port.read(n, timeout, all=False) -> bytes` | read; `timeout` in seconds, 0 polls, `math.inf` waits forever; `all=True` waits for the full `n` |
@@ -225,7 +225,10 @@ Read-only properties: `is_open`, `device`, `baud`, `data_bits`, `parity`,
 `stop_bits`, `flow`, `write_timeout` (seconds, `math.inf` for none),
 `low_latency`, `keep_dtr_on_close`, `async_stats`, `sched` (the worker's effective
 `{runtime, deadline, period}` in seconds), `async_policy`, `rd_oserr`,
-`wr_oserr`, `misc_oserr`. The effective settings
+`wr_oserr`, `misc_oserr`, `driver` (Windows: the port's driver service,
+`'usbser'` for Windows' USB CDC driver, `'FTDIBUS'` for FTDI; `''` on Linux
+and macOS) and `rts_via_dtr` (`set_rts` also sends a DTR request, because
+`usbser.sys` sends an RTS change only with one). The effective settings
 are what the driver accepted, not what you asked for. Log `async_policy`
 (`ASYNC_*`) next to timing data: `SCHED_DEADLINE` is refused without
 `CAP_SYS_NICE` or under CPU pinning, and the library falls back silently. The
@@ -261,7 +264,10 @@ from the slot that belongs to the failing role (`rd_oserr`, `wr_oserr` or
 
 ## Version
 
-`ysp-serial` 0.6.0 is `ysp/serial.h` v0.6.0. `pulse_async` queues the
+`ysp-serial` 0.6.1 is `ysp/serial.h` v0.6.1: the port's `driver` and
+`rts_via_dtr`, the `driver` key of `list_ports`, and `set_rts` sends the
+extra DTR request only on `usbser.sys`.
+0.6.0 is `ysp/serial.h` v0.6.0. `pulse_async` queues the
 pulse and returns without I/O; the worker writes both bytes. `pulse` and
 `pulse_async` time the width from the start of the onset write, and
 the new `min_hold` argument (seconds, 0 for `DEFAULT_MIN_HOLD`, 0.25 ms)
@@ -286,7 +292,7 @@ Most tests need no port:
 
 ```sh
 uv build --wheel -o dist
-uv run --no-project --with pytest --with dist/ysp_serial-0.6.0-cp38-abi3-<platform>.whl pytest tests
+uv run --no-project --with pytest --with dist/ysp_serial-0.6.1-cp38-abi3-<platform>.whl pytest tests
 ```
 
 On Linux, `tests/test_async_pty.py` runs the async reader on a
@@ -299,7 +305,7 @@ of a write while the reader runs. Add `-s` to see the numbers;
 `YSP_SERIAL_RESULTS=<dir>` also writes them to `<dir>/async_device.json`.
 
 ```sh
-YSP_SERIAL_PORT=COM3 uv run --no-project --with pytest --with dist/ysp_serial-0.6.0-cp38-abi3-<platform>.whl pytest tests -s
+YSP_SERIAL_PORT=COM3 uv run --no-project --with pytest --with dist/ysp_serial-0.6.1-cp38-abi3-<platform>.whl pytest tests -s
 ```
 
 Device naming, USB latency, DTR-driven board resets and what a serial trigger

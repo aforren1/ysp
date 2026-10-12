@@ -149,6 +149,18 @@ def test_properties_in_seconds():
     assert not hasattr(p, "write_timeout_ms")
 
 
+def test_driver_of_an_unopened_port():
+    # 0.6.1: a handle that never opened has no driver and no extra DTR request.
+    p = unopened()
+    assert p.driver == ""
+    assert p.rts_via_dtr is False
+
+
+def test_list_ports_has_driver():
+    for info in ps.list_ports():
+        assert isinstance(info["driver"], str)
+
+
 # --- async reader, without a port ------------------------------------------
 
 def test_async_on_a_never_opened_port_raises_closed():

@@ -1,4 +1,4 @@
-/* ysp/device.h - v0.3.0 - public domain single-header device layer
+/* ysp/device.h - v0.3.1 - public domain single-header device layer
  *
  *   A response box, a trigger box or a microcontroller board as a producer
  *   of ysp/input.h events with times on the ysp_rt clock, and as a target
@@ -181,8 +181,26 @@
  *     the host       TriggerBox, MMBT-S at switch S (desc.latched), DTR and
  *                    RTS, the parallel port: the instance's own ysp/rt.h
  *                    worker (elevated unless desc.no_elevate) writes 0 at
- *                    the deadline taken after the leading write. Its
- *                    record (TRAILING) gives that write's own times
+ *                    the later of the leading write's start + width and
+ *                    its return + desc.min_hold_ns (yser_pulse_off_at_ns()
+ *                    of ysp/serial.h). Its record (TRAILING) gives that
+ *                    write's own times
+ *   Why from the start of the leading write: over USB the code reaches the
+ *   device during that write, not after it. On a Teensy 4.0 under Windows'
+ *   usbser.sys a byte write took 423 us median and its byte arrived 179 us
+ *   after the call started; a DTR call took 385 us and DTR arrived at
+ *   83 us (docs/serial.md, Pulses). Timed from the return, as until v0.3.0,
+ *   a pulse was +0.34 to +0.42 ms long at the device (median) and the
+ *   spread of the write's return (about 0.4 ms, p5 to p95) became the
+ *   width's; ysp/serial.h's pulses, timed from the start since its v0.6.0,
+ *   were -57 to -22 us off (median). docs/device.md has this header's own
+ *   numbers. desc.min_hold_ns (default 0.25 ms, YSER_DEFAULT_MIN_HOLD_NS;
+ *   none on the parallel port, whose write does not wait in a USB queue)
+ *   keeps a width shorter than the leading write, or a stalled write, from
+ *   becoming no pulse: set it to the receiver's sample period if a shorter
+ *   pulse could fall between two samples. A trigger channel's start is
+ *   taken on the screen's worker, right before its write, so the worker's
+ *   wake delays the pulse and does not shorten it.
  *   yser_pulse_async() and ypar_pulse_async() are not used: they give no
  *   time for the trailing write and know no modem lines. The worker keeps
  *   one trailing edge: a pulse while one is pending moves it (REPLACED); a
@@ -248,6 +266,11 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.3.1 - A host-timed pulse's width runs from the START of the leading
+ *          write, not from its return: the trailing 0 is written at
+ *          yser_pulse_off_at_ns() (ysp/serial.h v0.6.1), at least the new
+ *          desc.min_hold_ns after the leading write returned. OUTPUTS says
+ *          why. Needs ysp/serial.h v0.6.1.
  *   v0.3.0 - The ysp conventions (README.md, Conventions); breaks the API.
  *          ydev_start() and ydev_stop() are ydev_open() and ydev_close().
  *          Times are int64_t ns: ydev_poll(dev, timeout_ns),
@@ -288,8 +311,12 @@
  *   channel with a fake flip, roles. tests/loopback/device_loopback.c runs
  *   the serial transport against a socat pty pair on WSL2;
  *   examples/device/out_latency.c measures write to edge on a simulated
- *   adapter and board. NO REAL DEVICE has been opened: no box, board or
- *   trigger interface was attached. docs/device.md has the numbers.
+ *   adapter and board. v0.3.1, 2026-10-12: the host-timed outputs (the
+ *   TriggerBox byte path, DTR, RTS) into a Teensy 4.0 echo board on
+ *   Windows' usbser.sys (tests/compare/serial_pulse/device_pulse.c), width
+ *   error -65 to -16 us median, 0 of 2400 missed. No vendor box, line
+ *   board, parallel port or FTDI bridge has been opened. docs/device.md
+ *   has the numbers.
  *
  *   ---------------------------------------------------------------------
  *   LICENSE: public domain / MIT-0, see end of file.
@@ -299,13 +326,18 @@
 
 #define YDEV_VERSION_MAJOR 0
 #define YDEV_VERSION_MINOR 3
-#define YDEV_VERSION_PATCH 0
-#define YDEV_VERSION_STRING "0.3.0"
+#define YDEV_VERSION_PATCH 1
+#define YDEV_VERSION_STRING "0.3.1"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
 #include "ysp/box.h"
 #include "ysp/serial.h"
+
+/* yser_pulse_off_at_ns() came with v0.6.1 */
+#if YSER_VERSION_MAJOR == 0 && (YSER_VERSION_MINOR < 6 || (YSER_VERSION_MINOR == 6 && YSER_VERSION_PATCH < 1))
+#error "ysp/device.h v0.3.1 needs ysp/serial.h v0.6.1 or later"
+#endif
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -448,6 +480,11 @@ typedef struct ydev_desc {
                                      * > 0 a pulse this wide, 0 a set          */
     bool           latched;         /* MMBT-S with its switch at S: a byte holds
                                      * (default P: 8 ms pulses)                */
+    int64_t        min_hold_ns;     /* host-timed pulses: the trailing write
+                                     * starts no sooner than this after the
+                                     * leading write returned; 0 = 0.25 ms
+                                     * (YSER_DEFAULT_MIN_HOLD_NS), none for
+                                     * YBOX_PARALLEL; < 0 fails ydev_open()   */
 } ydev_desc;
 
 typedef struct ydev_stats {
@@ -779,6 +816,7 @@ static void* ydev__ser_open(void* user, const char* key, char* found, size_t fou
     sd.baud = dev->d.baud ? dev->d.baud : ybox_default_baud(dev->d.family);
     sd.low_latency = true;
     sd.write_timeout_ns = YRT_MS(100);
+    sd.min_hold_ns = dev->d.min_hold_ns;   /* port.min_hold_ns then agrees */
     /* DTR and RTS as outputs start idle; yser_open() raises both otherwise */
     sd.dtr_low_on_open = sd.rts_low_on_open = dev->d.family == YBOX_LINES;
     if (!yser_open(&dev->port, &sd)) return NULL;
@@ -1172,10 +1210,11 @@ static int ydev__out(ydev_device* dev, uint32_t code, int64_t width_ns, uint32_t
     } else {
         rc = ydev__put(dev, code, 0, &t0, &t1);
         if (rc == YDEV_OK && pulse) {
-            /* the deadline from the end of the leading write, as
-             * yser_pulse_async() takes it */
+            /* From the leading write's start: over USB the code arrives
+             * during that write, so a width from its return was long by
+             * the write's tail (OUTPUTS). */
             w = width_ns;
-            dev->trail_at = t1 + width_ns;
+            dev->trail_at = yser_pulse_off_at_ns(t0, t1, width_ns, dev->d.min_hold_ns);
             dev->trail_lead = t0;
             dev->trail_seq = seq;
 #ifndef YRT_NO_THREADS
@@ -1516,6 +1555,7 @@ YDEV_API bool ydev_open(ydev_device* dev, const ydev_desc* desc) {
     if (desc->device == 0 && !desc->roles) YDEV__FAIL("desc.device must be > 0 (0 means unknown in ysp/input.h), or set desc.roles");
     if (desc->device != 0 && desc->roles) YDEV__FAIL("desc.roles gives desc.device: leave it 0");
     if (desc->pulse_ns < 0) YDEV__FAIL("desc.pulse_ns must be >= 0");
+    if (desc->min_hold_ns < 0) YDEV__FAIL("desc.min_hold_ns must be >= 0");
     if (desc->pulse_ns > 0 && ybox_fixed_pulse_ns(desc->family) > 0 && !(desc->family == YBOX_MMBTS && desc->latched) &&
         (desc->pulse_ns < ybox_fixed_pulse_ns(desc->family) - 1000000 ||
          desc->pulse_ns > ybox_fixed_pulse_ns(desc->family) + 1000000))
@@ -1553,6 +1593,8 @@ YDEV_API bool ydev_open(ydev_device* dev, const ydev_desc* desc) {
     if (dev->d.silent_ns == 0) dev->d.silent_ns = 2000000000;
     if (dev->d.max_width_ns <= 0) dev->d.max_width_ns = dev->d.family == YBOX_XID ? 20000000 : 1300000;
     if (dev->d.read_timeout_ns <= 0) dev->d.read_timeout_ns = 20000000;
+    /* the hold guards a USB write that stalls; an outb does not queue */
+    if (dev->d.min_hold_ns == 0 && dev->d.family != YBOX_PARALLEL) dev->d.min_hold_ns = YSER_DEFAULT_MIN_HOLD_NS;
     if (dev->d.family == YBOX_PHOTO) dev->d.probe_ns = -1;   /* no queries */
     if (!(ybox_caps(dev->d.family) & YBOX_CAP_IN)) {
         /* an output-only device says nothing: silence is not a loss */

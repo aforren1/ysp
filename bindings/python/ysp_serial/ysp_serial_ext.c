@@ -1056,6 +1056,12 @@ static PyObject* Port_get_low_latency(PyObject* self, void* Py_UNUSED(closure)) 
 static PyObject* Port_get_keep_dtr(PyObject* self, void* Py_UNUSED(closure)) {
     return PyBool_FromLong(AS_PORT(self)->keep_dtr_on_close);
 }
+static PyObject* Port_get_driver(PyObject* self, void* Py_UNUSED(closure)) {
+    return PyUnicode_FromString(AS_PORT(self)->driver);
+}
+static PyObject* Port_get_rts_via_dtr(PyObject* self, void* Py_UNUSED(closure)) {
+    return PyBool_FromLong(AS_PORT(self)->rts_via_dtr);
+}
 static PyObject* Port_get_async_policy(PyObject* self, void* Py_UNUSED(closure)) {
     return PyLong_FromLong((long)AS_PORT(self)->async_policy);
 }
@@ -1090,6 +1096,12 @@ static PyGetSetDef Port_getset[] = {
       "True if the driver accepted the low-latency request.", NULL },
     { "keep_dtr_on_close", Port_get_keep_dtr,        NULL,
       "True if DTR stays asserted after close (POSIX only).", NULL },
+    { "driver",           Port_get_driver,           NULL,
+      "Windows: the port's driver service ('usbser', 'FTDIBUS', ...); '' "
+      "when the port is not listed, and on Linux and macOS.", NULL },
+    { "rts_via_dtr",      Port_get_rts_via_dtr,      NULL,
+      "True if set_rts() also sends a DTR request: Windows' usbser.sys sends "
+      "an RTS change to the device only with one.", NULL },
     { "async_policy",     Port_get_async_policy,     NULL,
       "Scheduling policy the async-pulse worker obtained (ASYNC_*). Log it "
       "with timing data: DEADLINE is refused without CAP_SYS_NICE or under "
@@ -1218,11 +1230,12 @@ static PyObject* ps_info_list(const yser_port_info* v, int n) {
     PyObject* list = PyList_New(n > 0 ? n : 0);
     if (!list) return NULL;
     for (int i = 0; i < n; i++) {
-        PyObject* d = Py_BuildValue("{s:s,s:s,s:s,s:s,s:i,s:i}",
+        PyObject* d = Py_BuildValue("{s:s,s:s,s:s,s:s,s:s,s:i,s:i}",
                                     "name",          v[i].name,
                                     "description",   v[i].description,
                                     "serial_number", v[i].serial_number,
                                     "location",      v[i].location,
+                                    "driver",        v[i].driver,
                                     "vid",           (int)v[i].vid,
                                     "pid",           (int)v[i].pid);
         if (!d) { Py_DECREF(list); return NULL; }
@@ -1297,7 +1310,7 @@ static PyMethodDef module_methods[] = {
     { "list_ports", mod_list_ports, METH_NOARGS,
       "list_ports() -> list[dict]: enumerate serial ports without opening them. "
       "Each dict has 'name', 'description', 'serial_number', 'location', "
-      "'vid', 'pid'; fields the platform cannot determine are '' or 0." },
+      "'driver', 'vid', 'pid'; fields the platform cannot determine are '' or 0." },
     { "find_ports", (PyCFunction)mod_find_ports, METH_VARARGS | METH_KEYWORDS,
       "find_ports(vid=0, pid=0, serial_number=None, location=None, "
       "description=None, name=None) -> list[dict]: the subset of list_ports() "

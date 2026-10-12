@@ -64,8 +64,9 @@
 
 /* The binding's own version, apart from ysp/serial.h's: 2.0.0 moved every
  * time to seconds (v1 took ms and us) and added the async reader; 2.1.0
- * adds the min_hold setting of ysp/serial.h v0.6.0. */
-#define PS_BINDING_VERSION "2.1.0"
+ * adds the min_hold setting of ysp/serial.h v0.6.0; 2.2.0 adds the port's
+ * driver and rts_via_dtr ('info', 'list', 'find') of v0.6.1. */
+#define PS_BINDING_VERSION "2.2.0"
 
 #if defined(_WIN32)
     #ifndef WIN32_LEAN_AND_MEAN
@@ -394,13 +395,14 @@ static void ps_return_count(int nlhs, mxArray* plhs[], int value) {
 
 static mxArray* ps_info_struct(const yser_port_info* v, int n) {
     const char* fields[] = { "name", "description", "serial_number",
-                             "location", "vid", "pid" };
-    mxArray* s = mxCreateStructMatrix(n ? 1 : 0, n ? (size_t)n : 0, 6, fields);
+                             "location", "driver", "vid", "pid" };
+    mxArray* s = mxCreateStructMatrix(n ? 1 : 0, n ? (size_t)n : 0, 7, fields);
     for (int i = 0; i < n; i++) {
         mxSetField(s, i, "name",          mxCreateString(v[i].name));
         mxSetField(s, i, "description",   mxCreateString(v[i].description));
         mxSetField(s, i, "serial_number", mxCreateString(v[i].serial_number));
         mxSetField(s, i, "location",      mxCreateString(v[i].location));
+        mxSetField(s, i, "driver",        mxCreateString(v[i].driver));
         mxSetField(s, i, "vid",           mxCreateDoubleScalar((double)v[i].vid));
         mxSetField(s, i, "pid",           mxCreateDoubleScalar((double)v[i].pid));
     }
@@ -625,8 +627,9 @@ static mxArray* ps_info(const yser_port* p) {
     const char* fields[] = { "device", "baud", "data_bits", "parity", "stop_bits",
                              "flow", "write_timeout", "min_hold", "low_latency",
                              "keep_dtr_on_close", "async_policy",
-                             "rd_oserr", "wr_oserr", "misc_oserr" };
-    mxArray* s = mxCreateStructMatrix(1, 1, 14, fields);
+                             "rd_oserr", "wr_oserr", "misc_oserr",
+                             "driver", "rts_via_dtr" };
+    mxArray* s = mxCreateStructMatrix(1, 1, 16, fields);
     int parity = (int)p->parity, flow = (int)p->flow;
     if (parity < 0 || parity > 4) parity = 0;
     if (flow < 0 || flow > 2) flow = 0;
@@ -648,6 +651,8 @@ static mxArray* ps_info(const yser_port* p) {
     mxSetField(s, 0, "rd_oserr",          mxCreateDoubleScalar((double)p->rd_oserr));
     mxSetField(s, 0, "wr_oserr",          mxCreateDoubleScalar((double)p->wr_oserr));
     mxSetField(s, 0, "misc_oserr",        mxCreateDoubleScalar((double)p->misc_oserr));
+    mxSetField(s, 0, "driver",            mxCreateString(p->driver));
+    mxSetField(s, 0, "rts_via_dtr",       mxCreateLogicalScalar(p->rts_via_dtr));
     return s;
 }
 

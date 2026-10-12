@@ -487,7 +487,9 @@ end
 
 function test_serial()
     [v, hv] = ysp_serial('version');
-    check(strcmp(v, '2.1.0') && ischar(hv) && ~isempty(hv), 'ysp_serial version');
+    check(strcmp(v, '2.2.0') && ischar(hv) && ~isempty(hv), 'ysp_serial version');
+    lst = ysp_serial('list');
+    check(isempty(lst) || isfield(lst, 'driver'), 'list has driver');
     % Seconds: 'now' advances by about the pause, not by 1e3 or 1e6 of it.
     t1 = ysp_serial('now');
     pause(0.05);
@@ -513,6 +515,14 @@ function test_serial()
     end
     h = ysp_serial('open', port);
     c = onCleanup(@() ysp_serial('close', h));
+    % 2.2.0: the driver, and the extra DTR request on usbser.sys only
+    inf0 = ysp_serial('info', h);
+    if ispc
+        check(~isempty(inf0.driver) && inf0.rts_via_dtr == strcmpi(inf0.driver, 'usbser'), ...
+              'driver %s, rts_via_dtr %d', inf0.driver, inf0.rts_via_dtr);
+    else
+        check(isempty(inf0.driver) && ~inf0.rts_via_dtr, 'driver on POSIX');
+    end
     ysp_serial('write', h, uint8(sprintf('x\n')));
     pause(0.05);
     ysp_serial('purge', h, 'rx');

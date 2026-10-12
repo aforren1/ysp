@@ -31,6 +31,7 @@ typedef struct serial_api {
     int  (*set_rts)(yser_port*, bool);
     int  (*get_lines)(yser_port*);
     int  (*send_break)(yser_port*, int64_t);
+    int64_t (*pulse_off_at_ns)(int64_t, int64_t, int64_t, int64_t);
 } serial_api;
 
 static const serial_api g_api = {
@@ -38,7 +39,7 @@ static const serial_api g_api = {
     yser_error, yser_strerror, yser_is_open, yser_write, yser_write_byte,
     yser_drain, yser_purge, yser_pulse, yser_pulse_async, yser_read,
     yser_available, yser_set_dtr, yser_set_rts, yser_get_lines,
-    yser_send_break
+    yser_send_break, yser_pulse_off_at_ns
 };
 
 /* The desc's time field by name and type, written the way the USAGE block
@@ -69,5 +70,11 @@ int main(void) {
     if (g_api.open(&p, &d) || !strstr(g_api.error(&p), "min_hold_ns")) return 7;
     d.min_hold_ns = 0;
     g_api.close(&p);
+    /* The trailing-edge rule (v0.6.1): from the onset write's start, at
+     * least the hold after its return. A failed open leaves no driver. */
+    if (g_api.pulse_off_at_ns(1000, 1400, 1000, 250) != 2000) return 8;
+    if (g_api.pulse_off_at_ns(1000, 1400, 100, 250) != 1650) return 9;
+    if (g_api.pulse_off_at_ns(1000, 1000, 0, 0) != 1000) return 10;
+    if (p.driver[0] != '\0' || p.rts_via_dtr) return 11;
     return d.write_timeout_ns == 100000000 ? 0 : 6;
 }
