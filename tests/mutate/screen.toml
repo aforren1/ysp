@@ -1209,8 +1209,8 @@ id = "glx-07"
 name = "server time read as us"
 test = "screen_glx"
 why = "The X server's time is in ms of CLOCK_MONOTONIC; read in another unit it is off the clock, and the key falls back to SDL's late stamp."
-find = "            return t * 1000000;"
-replace = "            return t * 1000;"
+find = "    t = t > now_ms + 1000 || t < now_ms - 1000 ? 0 : t * 1000000;"
+replace = "    t = t > now_ms + 1000 || t < now_ms - 1000 ? 0 : t * 1000;"
 
 [[mutant]]
 id = "glx-08"
@@ -1299,3 +1299,61 @@ test = "screen_glx"
 why = "With SDL's video up on one X screen, a screen asking for another must be refused: SDL would put its window on the first."
 find = "            if (SDL_WasInit(SDL_INIT_VIDEO) && !(cur && strcmp(cur, desc->x_display) == 0)) {"
 replace = "            if (0) {"
+
+[[mutant]]
+id = "glx-18"
+name = "kernel key time not used"
+test = "screen_glx"
+why = "Xorg stamps a key with its own coarse ms clock, 0.97 to 1.99 ms before the kernel's time; a key matched in evdev must carry the kernel's time."
+find = "    yscr__xk.t[i] = k ? k : t;"
+replace = "    yscr__xk.t[i] = t;"
+
+[[mutant]]
+id = "glx-19"
+name = "evdev on the realtime clock"
+test = "screen_glx"
+why = "evdev stamps with CLOCK_REALTIME unless asked; the ysp_rt clock is CLOCK_MONOTONIC, so no key would match."
+find = "    if (!keys || ioctl(fd, EVIOCSCLOCKID, &clk) < 0) { close(fd); return; }"
+replace = "    if (!keys) { close(fd); return; }"
+
+[[mutant]]
+id = "glx-20"
+name = "no hotplug"
+test = "screen_glx"
+why = "A keyboard plugged in while the screen is open must be read too; its keys would keep the X server's time."
+find = "    if (!e) return true;\n    yscr__xe_hotplug();"
+replace = "    if (!e) return true;"
+
+[[mutant]]
+id = "glx-21"
+name = "no IN_ATTRIB"
+test = "screen_glx"
+why = "udev's ACL comes after the node: a node opened at IN_CREATE alone may not be readable yet, and nothing tries again."
+expect = "survived"
+note = "The hook reads inotify only on X events, and udev finished the node about 4 ms after the kernel made it (udevadm monitor), long before Xorg adds the keyboard (about 1 s) and SDL gets its hierarchy events. IN_ATTRIB matters only when another X event falls in those 4 ms, which the test cannot place. Kept as a record of why the mask has it."
+find = "inotify_add_watch(yscr__xe.ino, \"/dev/input\", IN_CREATE | IN_ATTRIB)"
+replace = "inotify_add_watch(yscr__xe.ino, \"/dev/input\", IN_CREATE)"
+
+[[mutant]]
+id = "glx-22"
+name = "kernel time after the server's"
+test = "screen_glx"
+why = "The server's ms stamp is up to 2 ms before the kernel's; a window that ends at the server's stamp matches nothing."
+find = "yscr__xe.t[i] <= x + 3000000 &&"
+replace = "yscr__xe.t[i] <= x &&"
+
+[[mutant]]
+id = "glx-23"
+name = "evdev code as the X keycode"
+test = "screen_glx"
+why = "Xorg's keycode is the evdev code plus 8; without it no key matches its kernel event."
+find = "            yscr__xe.code[k] = (uint8_t)(b[j].code + 8);   /* Xorg's keycode */"
+replace = "            yscr__xe.code[k] = (uint8_t)b[j].code;"
+
+[[mutant]]
+id = "glx-24"
+name = "no keyboard has keys"
+test = "screen_glx"
+why = "The capability check must accept a device with keys below BTN_MISC."
+find = "        for (i = 0; i < (int)(sizeof bits / sizeof bits[0]); i++) keys |= bits[i] != 0;"
+replace = "        for (i = 0; i < (int)(sizeof bits / sizeof bits[0]); i++) keys |= 0;"

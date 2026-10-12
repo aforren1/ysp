@@ -2854,13 +2854,97 @@ queues each KeyPress and KeyRelease with its server time, and
 key's release and press, which SDL folds into one repeat, are skipped in
 the queue. A time more than 1 s from now is not used.
 
-What this does not show: a real keyboard. Its event reaches Xorg through
-libinput with the kernel's timestamp, truncated to ms; the delay from the
-key to the kernel (the keyboard's scan and USB polling) is in neither
-stamp. A raw evdev reader would give the kernel's microseconds, but it
-needs read access to `/dev/input/event*` (the `input` group), which this
-user has not got. `test_screen_glx` checks 20 keys; mutants `glx-06` and
-`glx-07`, killed.
+XTEST keys do not come from a device, so they keep the server's time.
+Keys from a keyboard get the kernel's time when the user can read the
+keyboard's evdev node (next section). `test_screen_glx` checks 20 XTEST
+keys; mutants `glx-06` and `glx-07`, killed.
+
+### Kernel key times
+
+The server's time is not the kernel's. `tests/probe/input_evdev/keys_probe.c`
+makes a keyboard through uinput, sends 300 presses of F24 at random gaps
+of 20 to 50 ms, and records for each press: the time before and after
+the `write()` to uinput, the kernel's evdev time (asked for on
+CLOCK_MONOTONIC), when a reader thread's `read()` returned it, and the
+X server's time of the XInput 2 raw event. Same machine, idle, then with
+20 spinning threads (one for each hardware thread) at normal priority:
+
+| Interval, ms: min / mean / p99 / max | Idle | 20 spinning threads |
+|---|---|---|
+| Kernel's time minus the start of `write()` | 0.001 / 0.009 / 0.023 / 0.029 | 0.000 / 0.002 / 0.006 / 0.007 |
+| evdev `read()` returned, minus the kernel's time | 0.006 / 0.021 / 0.038 / 0.042 | 0.005 / 0.021 / 0.039 / 0.058 |
+| X server's time minus the kernel's time | -1.979 / -1.453 / -0.980 / -0.973 | -1.989 / -1.491 / -1.005 / -1.000 |
+| Xlib returned the event, minus the kernel's time | 0.025 / 0.080 / 0.137 / 0.320 | 0.017 / 0.034 / 0.071 / 2.080 |
+
+Xorg read each key within 0.3 ms (2.1 ms once under load), but it
+stamps the key with its own millisecond clock, not with the kernel's time:
+0.97 to 1.99 ms before the kernel's time, so that clock runs about 1 ms
+behind CLOCK_MONOTONIC before the ms truncates (a coarse clock one tick
+behind would do that, and this kernel's tick is 1 ms; Xorg's source was
+not checked). A keyboard's key gets the same 1 to 2 ms early stamp as an
+XTEST key, and the kernel's microsecond time is lost. With the reader on SCHED_FIFO 1 under the same
+load the X column was -1.990 / -1.460 / -0.637 / -0.334.
+
+From v0.8.0 the X11 key hook reads the keyboards' evdev nodes itself.
+Every reader of a node gets every event with the kernel's time, buffered
+until it reads, and the kernel queues an event for all readers before
+Xorg can read it. So when SDL's X11 hook sees a KeyPress or KeyRelease,
+the header reads its nodes (non-blocking; nothing to wait for) and takes
+the newest kernel event of that key (keycode minus 8) and direction from
+3 ms after the server's stamp to 100 ms before it. Older events of the
+key are keys another window had and are dropped. No thread: the kernel's
+time does not change with when the header reads it. With no match (an
+XTEST key, a node the user cannot read, the server more than 100 ms
+late) the key keeps the server's time.
+
+The nodes are opened at the first GLX_OML open: every readable
+`/dev/input/event*` with keys below `BTN_MISC` (mice have buttons only),
+up to 16, read-only and not grabbed, so the desktop and other programs
+keep their keys. inotify on `/dev/input` (IN_CREATE, and IN_ATTRIB
+because udev sets the ACL after it makes the node) opens keyboards
+plugged in later, checked on every X event: Xorg adds a new keyboard
+about a second after its node appears, and SDL then gets the hierarchy
+events. The describe line counts what came from where:
+`key_time=kernel:n,x-server:n,unmatched:n,off-clock:n evdev_keyboards=n`.
+
+Access. By default only root and the `input` group read evdev nodes.
+Membership in `input` gives every program of that user every key, at all
+times, from any session. The rule in `tools/linux/70-ysp-input.rules`
+adds the `uaccess` tag to keyboards instead, so systemd-logind gives the
+user at the seat (the one logged in at the rig's screen, not over SSH) an
+ACL on keyboard nodes only, removed at logout:
+
+```sh
+sudo cp tools/linux/70-ysp-input.rules /etc/udev/rules.d/
+sudo udevadm control --reload && sudo udevadm trigger
+getfacl /dev/input/by-id/*-event-kbd   # user:<you>:rw- on each keyboard
+```
+
+Without it, nothing fails: keys keep the server's time, and the describe
+line says `evdev_keyboards=0`. The rule's second line lets the same user
+make uinput devices, which only `test_screen_glx` needs (with
+`sudo modprobe uinput`).
+
+`test_screen_glx` part 11: two uinput keyboards, one made before open and
+one while the screen is open, send keycode 192 (KEY_F14) 10 times each.
+Each press must come back from `yscr_poll()` with a time inside the
+`write()` to uinput, which the server's time never is. 10 of 10 and 10 of
+10, in 9 runs. Mutants `glx-18` to `glx-20` and `glx-22` to `glx-24`,
+killed: the kernel time not used, the evdev clock not set to
+CLOCK_MONOTONIC, no hotplug, a match window that ends at the server's
+stamp, the evdev code taken as the X keycode, and no device accepted as a
+keyboard. `glx-21` (no IN_ATTRIB)
+survives on purpose: udev finished the node about 4 ms after the kernel
+made it (`udevadm monitor`), and the hook reads inotify only on X events,
+which for a new keyboard come about a second later. IN_ATTRIB matters only
+when some other X event falls in those 4 ms, which a test cannot place.
+
+Not measured: a keyboard pressed by hand. Its kernel time is when the USB
+host controller's interrupt delivered the report, after the keyboard's
+own scan, debounce and polling interval (1 to 8 ms for full-speed USB
+keyboards), which no host stamp sees. `keys_probe --keyboard
+/dev/input/eventN --hand` compares the kernel's and the server's time for
+keys pressed on a real keyboard.
 
 ### GPU-late frames and the depth
 

@@ -74,9 +74,11 @@ end the process on an X error). `test_screen_glx` checks the backend on
 a display (not in ctest); the `glx-` mutants need `YSP_SDL3` set to an
 SDL3 prefix. The display test changes the CRTC's mode and ramp on X
 screen 0 and puts them back; if a run dies, `xrandr --output <out> --mode
-1920x1080 --rate 60 --gamma 1:1:1` restores them. Open: separate X
-screens in one process (SDL 3 drives one; `desc.x_display` picks it per
-process), a raw evdev reader.
+1920x1080 --rate 60 --gamma 1:1:1` restores them. Key times come from
+the keyboards' evdev nodes when the user can read them
+(`tools/linux/70-ysp-input.rules`); `test_screen_glx` part 11 needs that
+rule and the `uinput` module, else it skips. Open: separate X screens in
+one process (SDL 3 drives one; `desc.x_display` picks it per process).
 
 ## Linux real-time priority
 

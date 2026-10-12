@@ -902,14 +902,26 @@
  *   yscr_poll() gives each SDL key event the time of its X event (in
  *   ev.common.timestamp too, so yscr_event_input() and ysp/response.h get
  *   it). Measured: 0.99 to 1.96 ms before the XTEST call (mean 1.47, 200
- *   keys): the server's clock lags by a tick and the ms truncates. That
- *   offset is XTEST's; a keyboard's key gets the time libinput read from
- *   the kernel, truncated to ms, which was not measured. A server time more
- *   than 1 s from now (a server on another clock) is not used. SDL has one
- *   X11 hook per process: setting your own replaces this one, and keys then
- *   keep SDL's stamps. The describe line counts them:
- *   key_time=x-server(used,unmatched:n,off-clock:n). Mouse buttons keep
- *   SDL's stamps (not measured).
+ *   keys): the server's clock runs about 1 ms behind and the ms truncates.
+ *   A server time more than 1 s from now (a server on another clock) is not
+ *   used. SDL has one X11 hook per process: setting your own replaces this
+ *   one, and keys then keep SDL's stamps. Mouse buttons keep SDL's stamps
+ *   (not measured).
+ *   Kernel key times (v0.8.0). Xorg stamps a keyboard's key the same way,
+ *   with its own clock when it reads the key, not with the kernel's time:
+ *   measured with a uinput keyboard, 0.97 to 1.99 ms before the kernel's
+ *   time. When the user can read the keyboards' evdev nodes, the hook
+ *   reads them (no thread: the kernel keeps each event's time until it is
+ *   read) and gives the key the kernel's microsecond time of the newest
+ *   press or release of that key from 100 ms before to 3 ms after the
+ *   server's stamp. Measured: inside the write() to uinput, 20 of 20. Nodes
+ *   are opened read-only, not grabbed, at the first GLX_OML open, and by
+ *   inotify when plugged in later. Without access (the default: root and
+ *   the input group) keys keep the server's time; tools/linux/
+ *   70-ysp-input.rules gives the user at the seat an ACL on keyboards
+ *   only (docs/screen.md, "Kernel key times"). The describe line counts
+ *   them: key_time=kernel:n,x-server:n,unmatched:n,off-clock:n
+ *   evdev_keyboards=n (the nodes open now).
  *   With the raw path on, SDL 3.4 also sends a key from the window message
  *   when the message carries no scan code (read in SDL 3.4.0's source):
  *   keys injected by virtual-key code (SendInput with wVk only), keys with
@@ -1417,7 +1429,8 @@
  *          each flip's vblank, time and path from the Present extension's
  *          CompleteNotify events on a second connection. It clears Mesa's
  *          _VARIABLE_REFRESH and refuses a swap interval that is not 1
- *          (vblank_mode=0). Key events take the X server's time (INPUT,
+ *          (vblank_mode=0). Key events take the kernel's evdev time when
+ *          the keyboard's node is readable, else the X server's (INPUT,
  *          "X11 key times"), not SDL's, which is the next frame's pump.
  *          libX11, libGL and libxcb are loaded at run time; nothing X11 or
  *          GL is needed to compile. The describe line warns on SDL older
@@ -1870,7 +1883,8 @@
  *   basis: OML's target held 1100 of 1100 frames, UST is CLOCK_MONOTONIC
  *   in us and equals Present's, a late frame moves it. vblank_mode=0 is
  *   refused at open. Keys injected through XTEST: SDL's stamp 8.6 to 16.6
- *   ms late, the X server's time 1.0 to 2.0 ms early (INPUT).
+ *   ms late, the X server's time 1.0 to 2.0 ms early (INPUT); through a
+ *   uinput keyboard, the kernel's time, inside the write() (INPUT).
  *   tests/adapt/screen_glx_test.c checks these on a
  *   display (not in ctest); tests/compile/screen_glx.cpp checks the
  *   header's own X11, GLX and xcb declarations against the system's.
@@ -1879,8 +1893,9 @@
  *   are checked only on x64), two physical displays, variable refresh
  *   (refused), macOS and Wayland swap paths (stubs). On X11: a
  *   compositing manager other than Xfwm4's, two X screens in one process
- *   (SDL 3 cannot), XWayland, NVIDIA's driver, a real keyboard's key
- *   times, a panic or ramp on a second X screen, and a ramp the panic must
+ *   (SDL 3 cannot), XWayland, NVIDIA's driver, a keyboard pressed by hand
+ *   (its kernel time; the keyboard's own scan and polling are in no host
+ *   stamp), a panic or ramp on a second X screen, and a ramp the panic must
  *   put back that light or a capture card can see (the checks read RandR).
  *   Outside this STATUS block and docs/screen.md, a number in this
  *   header is a measurement only where the text says "measured".
@@ -3113,8 +3128,15 @@ YSCR_API const yscr_param* yscr_params(int* n);
 #if defined(__linux__) && !defined(YSCR_NO_SDL)
     #define YSCR__GLX 1
     #include <dlfcn.h>
+    #include <dirent.h>
+    #include <errno.h>
+    #include <fcntl.h>
     #include <poll.h>
     #include <unistd.h>
+    #include <sys/inotify.h>
+    #include <sys/ioctl.h>
+    #include <sys/stat.h>
+    #include <linux/input.h>
     #if !defined(YRT_NO_THREADS)
         #include <pthread.h>
     #endif
@@ -6984,12 +7006,148 @@ static int yscr__glx_pump(yscr__glx* g, int timeout_ms) {
  * one SDL event thread: no lock. */
 #define YSCR__XK_RING 64
 static struct {
-    uint32_t ms[YSCR__XK_RING];
-    uint8_t  code[YSCR__XK_RING], down[YSCR__XK_RING];
+    int64_t  t[YSCR__XK_RING];       /* ns on the ysp_rt clock; 0 = off clock */
+    uint8_t  code[YSCR__XK_RING], down[YSCR__XK_RING], kernel[YSCR__XK_RING];
     uint32_t head, tail;
     int      users;          /* open GLX screens: the hook's holders       */
-    uint32_t used, unmatched, off_clock;
+    uint32_t used, used_kernel, unmatched, off_clock;
 } yscr__xk;
+
+/* Kernel key times (INPUT, "X11 key times"). Xorg stamps a key with its own
+ * millisecond clock when it reads the key from evdev, not with the kernel's
+ * time: measured with a uinput keyboard, 0.97 to 1.99 ms before the kernel's
+ * stamp (its clock runs about 1 ms behind, and the ms truncates). Each
+ * reader of an evdev node gets every event with the kernel's microsecond
+ * time, buffered until it reads, and the kernel queues it for every reader before
+ * Xorg can read it. So the hook reads the keyboards' nodes when an X key
+ * comes and takes the newest kernel event of that key and direction. No
+ * thread: the time does not depend on when it is read. Nodes the user cannot
+ * read (no uaccess rule, docs/screen.md "Kernel key times") are skipped, and
+ * their keys keep the X server's time. */
+#define YSCR__XE_MAX  16
+#define YSCR__XE_RING 128
+static struct {
+    int      fd[YSCR__XE_MAX];
+    dev_t    dev[YSCR__XE_MAX];
+    int      n, ino;                 /* ino: inotify on /dev/input, or -1  */
+    int64_t  t[YSCR__XE_RING];       /* 0 = taken or empty                 */
+    uint8_t  code[YSCR__XE_RING], down[YSCR__XE_RING];   /* X keycode     */
+    uint32_t head;
+} yscr__xe;
+
+static void yscr__xe_add(const char* path) {
+    unsigned long bits[256 / (8 * sizeof(unsigned long))], evb = 0;
+    struct stat st;
+    int fd, i, keys = 0, clk = CLOCK_MONOTONIC;   /* the ysp_rt clock */
+    if (yscr__xe.n == YSCR__XE_MAX) return;
+    fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) return;
+    if (fstat(fd, &st) != 0) { close(fd); return; }
+    for (i = 0; i < yscr__xe.n; i++)
+        if (yscr__xe.dev[i] == st.st_rdev) { close(fd); return; }   /* IN_ATTRIB after IN_CREATE */
+    memset(bits, 0, sizeof bits);
+    /* keys below BTN_MISC (0x100); a mouse has buttons only */
+    if (ioctl(fd, EVIOCGBIT(0, sizeof evb), &evb) >= 0 && (evb & (1ul << EV_KEY)) &&
+        ioctl(fd, EVIOCGBIT(EV_KEY, sizeof bits), bits) >= 0)
+        for (i = 0; i < (int)(sizeof bits / sizeof bits[0]); i++) keys |= bits[i] != 0;
+    if (!keys || ioctl(fd, EVIOCSCLOCKID, &clk) < 0) { close(fd); return; }
+    yscr__xe.fd[yscr__xe.n] = fd;
+    yscr__xe.dev[yscr__xe.n++] = st.st_rdev;
+}
+
+static void yscr__xe_open(void) {
+    DIR* d;
+    struct dirent* de;
+    char path[64];
+    yscr__xe.n = 0;
+    yscr__xe.head = 0;
+    memset(yscr__xe.t, 0, sizeof yscr__xe.t);
+    /* IN_ATTRIB: udev's ACL comes after the node (the uaccess rule) */
+    yscr__xe.ino = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    if (yscr__xe.ino >= 0 && inotify_add_watch(yscr__xe.ino, "/dev/input", IN_CREATE | IN_ATTRIB) < 0) {
+        close(yscr__xe.ino);
+        yscr__xe.ino = -1;
+    }
+    if (!(d = opendir("/dev/input"))) return;
+    while ((de = readdir(d)) != NULL)
+        if (strncmp(de->d_name, "event", 5) == 0) {
+            snprintf(path, sizeof path, "/dev/input/%.40s", de->d_name);
+            yscr__xe_add(path);
+        }
+    closedir(d);
+}
+
+static void yscr__xe_close(void) {
+    int i;
+    for (i = 0; i < yscr__xe.n; i++) close(yscr__xe.fd[i]);
+    yscr__xe.n = 0;
+    if (yscr__xe.ino >= 0) close(yscr__xe.ino);
+    yscr__xe.ino = -1;
+}
+
+/* Opens keyboards added to /dev/input since. Called on every X event: Xorg
+ * adds a keyboard about a second after its node appears, and the hierarchy
+ * events SDL selects come then, so a new keyboard's first key is read. */
+static void yscr__xe_hotplug(void) {
+    if (yscr__xe.ino >= 0) {
+        union { struct inotify_event e; char c[1024]; } u;
+        ssize_t r;
+        while ((r = read(yscr__xe.ino, &u, sizeof u)) > 0) {
+            const char* p = u.c;
+            while (p < u.c + r) {
+                const struct inotify_event* e = (const struct inotify_event*)(const void*)p;
+                if (e->len && strncmp(e->name, "event", 5) == 0) {
+                    char path[64];
+                    snprintf(path, sizeof path, "/dev/input/%.40s", e->name);
+                    yscr__xe_add(path);
+                }
+                p += sizeof *e + e->len;
+            }
+        }
+    }
+}
+
+static void yscr__xe_drain(void) {
+    struct input_event b[32];
+    int i, j;
+    for (i = 0; i < yscr__xe.n; i++) {
+        ssize_t r;
+        while ((r = read(yscr__xe.fd[i], b, sizeof b)) > 0)
+            for (j = 0; j < (int)(r / (ssize_t)sizeof b[0]); j++) {
+                uint32_t k;
+                /* value 2 is the kernel's repeat; Xorg makes its own */
+                if (b[j].type != EV_KEY || b[j].value == 2 || b[j].code > 247) continue;
+                k = yscr__xe.head++ % YSCR__XE_RING;
+                yscr__xe.t[k] = (int64_t)b[j].input_event_sec * 1000000000 + (int64_t)b[j].input_event_usec * 1000;
+                yscr__xe.code[k] = (uint8_t)(b[j].code + 8);   /* Xorg's keycode */
+                yscr__xe.down[k] = (uint8_t)(b[j].value != 0);
+            }
+        if (r < 0 && errno == ENODEV) {   /* unplugged */
+            close(yscr__xe.fd[i]);
+            yscr__xe.fd[i] = yscr__xe.fd[--yscr__xe.n];
+            yscr__xe.dev[i--] = yscr__xe.dev[yscr__xe.n];
+        }
+    }
+}
+
+/* The kernel's time of the X key (code, down) the server stamped at x
+ * (ns), or 0. The newest such key up to 3 ms after the server's stamp
+ * (measured up to 1.99 ms after it); older ones of the same key are keys this window never got
+ * (another window had the focus) and are dropped. Keys more than 100 ms
+ * before the stamp are not used: the server was that late, or the key came
+ * from elsewhere (XTEST). */
+static int64_t yscr__xe_match(uint8_t code, uint8_t down, int64_t x) {
+    int64_t best = 0;
+    uint32_t i;
+    for (i = 0; i < YSCR__XE_RING; i++)
+        if (yscr__xe.t[i] && yscr__xe.code[i] == code && yscr__xe.down[i] == down &&
+            yscr__xe.t[i] <= x + 3000000 && yscr__xe.t[i] >= x - 100000000 && yscr__xe.t[i] > best)
+            best = yscr__xe.t[i];
+    if (best)
+        for (i = 0; i < YSCR__XE_RING; i++)
+            if (yscr__xe.code[i] == code && yscr__xe.down[i] == down && yscr__xe.t[i] <= best) yscr__xe.t[i] = 0;
+    return best;
+}
 
 static bool SDLCALL yscr__xk_hook(void* ud, XEvent* xev) {
     /* XKeyEvent on LP64: type at 0, time (ms, 32 bits) at 56, keycode at
@@ -6997,35 +7155,46 @@ static bool SDLCALL yscr__xk_hook(void* ud, XEvent* xev) {
     const unsigned char* e = (const unsigned char*)xev;
     int type;
     unsigned int code;
-    unsigned long t;
+    unsigned long ms;
+    int64_t now_ms, t, k = 0;
+    uint32_t i;
     (void)ud;
     if (!e) return true;
+    yscr__xe_hotplug();
     memcpy(&type, e, sizeof type);
     if (type != 2 && type != 3) return true;   /* KeyPress, KeyRelease */
     memcpy(&code, e + 84, sizeof code);
-    memcpy(&t, e + 56, sizeof t);
+    memcpy(&ms, e + 56, sizeof ms);
+    now_ms = yscr__now() / 1000000;
+    t = (now_ms & ~(int64_t)0xffffffff) | (uint32_t)ms;
+    if (t > now_ms + 0x80000000LL) t -= 0x100000000LL;
+    else if (t < now_ms - 0x80000000LL) t += 0x100000000LL;
+    /* a server on another clock: keep SDL's stamp */
+    t = t > now_ms + 1000 || t < now_ms - 1000 ? 0 : t * 1000000;
+    if (t && yscr__xe.n) {
+        yscr__xe_drain();
+        k = yscr__xe_match((uint8_t)code, (uint8_t)(type == 2), t);
+    }
     if (yscr__xk.head - yscr__xk.tail == YSCR__XK_RING) yscr__xk.tail++;   /* oldest goes */
-    yscr__xk.ms[yscr__xk.head % YSCR__XK_RING] = (uint32_t)t;
-    yscr__xk.code[yscr__xk.head % YSCR__XK_RING] = (uint8_t)code;
-    yscr__xk.down[yscr__xk.head % YSCR__XK_RING] = (uint8_t)(type == 2);
-    yscr__xk.head++;
+    i = yscr__xk.head++ % YSCR__XK_RING;
+    yscr__xk.t[i] = k ? k : t;
+    yscr__xk.kernel[i] = (uint8_t)(k != 0);
+    yscr__xk.code[i] = (uint8_t)code;
+    yscr__xk.down[i] = (uint8_t)(type == 2);
     return true;
 }
 
-/* The X time of an SDL key event, on the ysp_rt clock, or 0. Entries before
+/* The time of an SDL key event, on the ysp_rt clock, or 0. Entries before
  * the match are X events SDL folded or dropped (a held key's release and
  * press become one repeat). */
 static int64_t yscr__xk_take(uint16_t raw, int down) {
     while (yscr__xk.tail != yscr__xk.head) {
         uint32_t i = yscr__xk.tail++ % YSCR__XK_RING;
         if (yscr__xk.code[i] == (uint8_t)raw && yscr__xk.down[i] == (uint8_t)down) {
-            int64_t now_ms = yscr__now() / 1000000, t = (now_ms & ~(int64_t)0xffffffff) | yscr__xk.ms[i];
-            if (t > now_ms + 0x80000000LL) t -= 0x100000000LL;
-            else if (t < now_ms - 0x80000000LL) t += 0x100000000LL;
-            /* a server on another clock: keep SDL's stamp */
-            if (t > now_ms + 1000 || t < now_ms - 1000) { yscr__xk.off_clock++; return 0; }
-            yscr__xk.used++;
-            return t * 1000000;
+            if (!yscr__xk.t[i]) { yscr__xk.off_clock++; return 0; }
+            if (yscr__xk.kernel[i]) yscr__xk.used_kernel++;
+            else yscr__xk.used++;
+            return yscr__xk.t[i];
         }
     }
     yscr__xk.unmatched++;
@@ -7247,6 +7416,7 @@ static int yscr__glx_open(void* vctx, const yscr_presenter_open* in, yscr_caps* 
      * one, and its keys keep SDL's stamps (counted as unmatched) */
     if (yscr__xk.users++ == 0) {
         yscr__xk.head = yscr__xk.tail = 0;
+        yscr__xe_open();
         SDL_SetX11EventHook(yscr__xk_hook, NULL);
     }
     g->hooked = 1;
@@ -7255,7 +7425,10 @@ static int yscr__glx_open(void* vctx, const yscr_presenter_open* in, yscr_caps* 
 
 static void yscr__glx_close(void* vctx) {
     yscr__glx* g = (yscr__glx*)vctx;
-    if (g->hooked && --yscr__xk.users == 0) SDL_SetX11EventHook(NULL, NULL);
+    if (g->hooked && --yscr__xk.users == 0) {
+        SDL_SetX11EventHook(NULL, NULL);
+        yscr__xe_close();
+    }
     if (g->dpy) {
         if (g->ctx) yscr__x.MakeContextCurrent(g->dpy, 0, 0, NULL);
         if (g->gwin) yscr__x.DestroyWindow(g->dpy, g->gwin);
@@ -7359,12 +7532,14 @@ static int yscr__glx_describe(void* vctx, char* buf, size_t cap) {
      * frame between its two calls, Xlib ends the process (measured on Xfwm4
      * with SDL 3.4.0: 2 of 10 runs of a bare SDL fullscreen window). */
     return snprintf(buf, cap, "renderer=\"%s\" present=flip:%u,copy:%u,suboptimal:%u,skip:%u,none:%u "
-                    "compositor=%s%s window=%s vrr_prop=%s key_time=x-server(%u,unmatched:%u,off-clock:%u)%s%s",
+                    "compositor=%s%s window=%s vrr_prop=%s key_time=kernel:%u,x-server:%u,unmatched:%u,off-clock:%u "
+                    "evdev_keyboards=%d%s%s",
                     g->renderer, (unsigned)g->n_mode[YSCR__PRESENT_MODE_FLIP], (unsigned)g->n_mode[YSCR__PRESENT_MODE_COPY],
                     (unsigned)g->n_mode[3], (unsigned)g->n_mode[YSCR__PRESENT_MODE_SKIP], (unsigned)g->n_timeout,
                     g->composited ? "yes" : "none", g->xwayland ? " xwayland=yes" : "",
                     g->override ? "override-redirect" : "managed", vrr,
-                    (unsigned)yscr__xk.used, (unsigned)yscr__xk.unmatched, (unsigned)yscr__xk.off_clock,
+                    (unsigned)yscr__xk.used_kernel, (unsigned)yscr__xk.used, (unsigned)yscr__xk.unmatched,
+                    (unsigned)yscr__xk.off_clock, yscr__xe.n,
                     strcmp(vrr, "1") == 0 ? " WARNING=variable-refresh-requested" : "",
                     SDL_GetVersion() < SDL_VERSIONNUM(3, 4, 18) ? " WARNING=sdl-before-3.4.18-x11-race" : "");
 }
