@@ -1054,7 +1054,93 @@ What the audit shows:
   the command.
 - serialport's callback mode is the slowest async reader (1.5 ms median,
   7 ms p99) and uses 80 % of a core.
-- The Python binding has no async reader yet.
+- The Python binding had no async reader then. It has one now; see
+  [Python async reader](#python-async-reader-ysp-serial-0502).
+
+### Python async reader (ysp-serial 0.5.0.2)
+
+The Python binding has the reader of the MEX binding: a C thread that
+blocks in `yser_read` (200 ms slices; `async_stop()` ends the wait with
+`yser_interrupt`), stamps each read with `yrt_now_ns()` when it returns,
+cuts records at a terminator byte (or at a fixed size, or one per read) and
+copies them into a ring of `(bytes, stamp)` slots. The ring is allocated at
+`async_start()`, so the loop allocates nothing. A full ring drops the new
+record and counts it; the reader never waits for Python. The thread never
+takes the GIL: `async_read()` copies the finished slots out under the GIL,
+and `async_wait()` waits on a condition variable with the GIL released.
+
+Writes beside the reader. IOPort's writes stall beside its reader because
+its handle is not overlapped (audit difference 4). `ysp/serial.h` opens the
+port with `FILE_FLAG_OVERLAPPED` and keeps one `OVERLAPPED` and one event
+per direction (`rd_ovl`, `wr_ovl`), so the reader's pending `ReadFile` does
+not hold up a `WriteFile`. On POSIX a read and a write on one descriptor do
+not serialize.
+
+Conditions: 2026-10-11, the machine of the audit runs (Windows 11
+10.0.26200, Intel Core i7-1360P, AC power, the shared guard waited for a
+quiet machine), CPython 3.12.11, the `ysp-serial` 0.5.0.2 wheel built with
+MSVC 14.51, the Teensy 4.0 echo board on COM3.
+`bindings/python/ysp_serial/tests/test_async_device.py`, two runs; each
+cell gives run 1, run 2. Each test opens the port again. The latency method
+is the bench's: 200 echo exchanges before and after each stream, the best
+one in each 200 ms, a line through them. Python sends its probes faster than
+MATLAB, so the test spaces them 2 to 3 ms apart; closer, each set fell in
+one or two 200 ms buckets and the fit had too few points for a slope. The
+fit bound was 59 to 139 us. Times in microseconds. Run 2 fell in the slow
+cluster of audit difference 7: its blocking echo round trip was 341 us
+median against 170 us in run 1.
+
+Stream, 10000 lines at 1000 per second, no line missed and no overflow in
+any cell:
+
+| Mode | Latency median | Latency p99 | CPU, % of one core |
+|---|---|---|---|
+| blocking `read(26, 0.2, all=True)` per line, `now()` after it | 154.5, 247.3 | 437, 428 | 5.0, 7.5 |
+| async reader, its stamp; main thread in `time.sleep(0.1)`, then `async_read()` | 145.9, 213.5 | 364, 406 | 3.1, 5.0 |
+| async reader, its stamp; main thread in `async_wait()`, then `async_read()` | 151.2, 157.0 | 383, 338 | 5.8, 6.1 |
+| the same, `now()` after `async_read()` returned | 180.0, 185.8 | 420, 375 | |
+
+Every line came in two reads (20000 reads for 10000 lines); the stamp is
+the read with the newline. With `time.sleep(0.1)` the ring held at most
+103 and 120 lines.
+
+Echo round trip, 1000 exchanges per cell, median / p99, run 1; run 2:
+
+| Read | Run 1 | Run 2 |
+|---|---|---|
+| blocking `read(35, 1, all=True)`, no reader | 169.6 / 316 | 341.1 / 569 |
+| write to the reader's stamp | 168.3 / 337 | 374.0 / 627 |
+| write to the return of `async_read()` | 178.4 / 355 | 419.8 / 696 |
+
+A one-byte write, 200 per cell, median / p99:
+
+| Reader | Run 1 | Run 2 |
+|---|---|---|
+| none | 216.9 / 389 | 219.4 / 451 |
+| waiting for a byte | 243.2 / 828 | 230.0 / 457 |
+| receiving 1000 lines per second | 250.4 / 384 | 245.1 / 453 |
+
+What it shows:
+
+- The Python reader's stamp is as early as the MEX reader's (152.5 and
+  153.2 us median, p99 350 and 380 us, 3.9 and 2.6 % CPU) in run 1: 145.9
+  and 151.2 us median, p99 364 and 383 us, 3.1 % CPU with the same
+  `sleep(0.1)` consumer. It is the same thread on the same C path. Run 2
+  is 6 to 68 us later at the median, inside the 100 to 150 us that a median
+  moves from one open to the next (audit difference 7).
+- The stamp does not depend on how the program collects the lines. A
+  program that collects every 0.1 s gets lines 50 ms old on average, but
+  each line keeps the time it arrived.
+- With `async_wait()`, a line reaches Python 29 us after the reader's
+  stamp (median, both runs), and the process uses 1 to 3 % more of a core
+  than with `sleep(0.1)`.
+- In the same open, the reader's stamp is within 33 us of a blocking read's
+  `now()` at the median, and a blocking read per line uses 5 to 7.5 % of a
+  core. The reader gains nothing per line over a dedicated blocking read;
+  it gains a stamp that does not wait for the interpreter.
+- A write beside the running reader costs what it costs without one: the
+  medians differ by 11 to 34 us, the p99 by less than 10 us except one
+  cell (828 us, run 1, reader waiting). IOPort's took 2 to 4 s.
 
 ### Psychtoolbox on this machine
 
@@ -1128,8 +1214,9 @@ Done, both of them.
   `write_byte(value) -> int`, `pulse(on, off, width)`,
   `pulse_async(on, off, width)`, `available()`, `drain()`,
   `purge(rx=True, tx=False)`, `interrupt()`, `set_dtr(on)`, `set_rts(on)`,
-  `get_lines()`, `send_break(duration)`, `close()`, and the context-manager
-  pair. Read-only properties for the effective settings, `sched`,
+  `get_lines()`, `send_break(duration)`, `close()`, the async reader
+  (`async_start()`, `async_read()`, `async_wait()`, `async_stop()`,
+  `async_stats`, since 0.5.0.2) and the context-manager pair. Read-only properties for the effective settings, `sched`,
   `async_policy` and the three `*_oserr` slots. Module level: `now()`,
   `list_ports()`, `find_ports(vid=0,
   pid=0, serial_number=None, location=None, description=None, name=None)`,
@@ -1151,6 +1238,8 @@ Done, both of them.
   the header: MATLAB has one interpreter thread, so a line can be stamped
   on arrival only from a thread of the binding's own. It follows
   ysp/device.h's reader (elevated thread, `yser_read`, `yser_interrupt` to
-  stop) and allocates its ring at start. The Python binding does not have
-  it yet: a Python thread can already block in `read`, so it is less
-  needed there; it is a follow-up.
+  stop) and allocates its ring at start. The Python binding has the same
+  reader since 0.5.0.2 (see
+  [Python async reader](#python-async-reader-ysp-serial-0502)): a Python
+  thread can block in `read`, but it stamps a line only when it gets the
+  GIL.
