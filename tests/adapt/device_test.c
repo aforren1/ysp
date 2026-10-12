@@ -274,7 +274,19 @@ static ydev_transport fake(void) {
 
 static yin_event g_ev[8192];
 static int       g_nev;
-static void sink(void* ctx, const yin_event* e) { (void)ctx; if (g_nev < 8192) g_ev[g_nev++] = *e; }
+#if defined(__linux__)
+#include <sched.h>
+#include <sys/resource.h>
+#include <sys/wait.h>
+static volatile int g_sink_policy = -1;   /* the reader thread's, seen in the sink */
+#endif
+static void sink(void* ctx, const yin_event* e) {
+    (void)ctx;
+#if defined(__linux__)
+    g_sink_policy = sched_getscheduler(0);
+#endif
+    if (g_nev < 8192) g_ev[g_nev++] = *e;
+}
 
 static unsigned char g_ring_mem[YRT_RING_BYTES(16384)];
 static yrt_ring      g_ring;
@@ -607,6 +619,34 @@ static void test_thread(void) {
     CHECK_I(st.state, YDEV_CLOSED);
     g_real = false;
 }
+
+#if defined(__linux__)
+/* The reader of a no_elevate device started by a SCHED_FIFO thread must run
+ * SCHED_OTHER, not inherit FIFO. In a child, which takes FIFO 1 under its
+ * RLIMIT_RTPRIO; skipped without an rtprio grant. */
+static void test_thread_policy(void) {
+    pid_t pid = fork();
+    int status = 0, code;
+    if (pid == 0) {
+        struct sched_param sp;
+        struct rlimit rl;
+        if (getrlimit(RLIMIT_RTPRIO, &rl) != 0 || rl.rlim_cur == 0) _exit(5);
+        memset(&sp, 0, sizeof sp);
+        sp.sched_priority = 1;
+        if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp) != 0) _exit(5);
+        g_sink_policy = -1;
+        test_thread();
+        _exit(g_failures ? 1 : g_sink_policy == SCHED_OTHER ? 0 : 2);
+    }
+    CHECK(pid > 0);
+    if (pid <= 0) return;
+    waitpid(pid, &status, 0);
+    code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    CHECK(code == 0 || code == 5);
+    printf("  thread policy: %s\n", code == 0 ? "a no_elevate reader started by a FIFO thread runs SCHED_OTHER"
+                                    : code == 5 ? "skipped (no rtprio granted)" : "FAILED");
+}
+#endif
 
 static void test_keys(void) {
     yser_port_info p;
@@ -1327,6 +1367,9 @@ int main(void) {
     test_wrong_device();
     test_wait_running();
     test_thread();
+#if defined(__linux__)
+    test_thread_policy();
+#endif
     test_out_bytes();
     test_out_records();
     test_out_hold();

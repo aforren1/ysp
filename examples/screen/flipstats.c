@@ -118,8 +118,19 @@ static void start_load(int n) {
         HANDLE h = CreateThread(NULL, 0, load_main, NULL, 0, NULL);
         if (h) CloseHandle(h);
 #else
+        /* SCHED_OTHER, not the main thread's policy: after yrt_thread_elevate()
+         * they would inherit SCHED_FIFO, and N spinning FIFO threads on N CPUs
+         * froze a kernel without RT throttling (docs/rt.md). */
         pthread_t t;
-        if (pthread_create(&t, NULL, load_main, NULL) == 0) pthread_detach(t);
+        pthread_attr_t a;
+        struct sched_param sp;
+        memset(&sp, 0, sizeof sp);
+        if (pthread_attr_init(&a) != 0) continue;
+        if (pthread_attr_setinheritsched(&a, PTHREAD_EXPLICIT_SCHED) == 0 &&
+            pthread_attr_setschedpolicy(&a, SCHED_OTHER) == 0 && pthread_attr_setschedparam(&a, &sp) == 0 &&
+            pthread_create(&t, &a, load_main, NULL) == 0)
+            pthread_detach(t);
+        pthread_attr_destroy(&a);
 #endif
     }
 }

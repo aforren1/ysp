@@ -1,3 +1,8 @@
+# v0.8.1: the elev- mutants (the RLIMIT_RTPRIO ceiling of
+# yrt_thread_elevate() and the SCHED_OTHER start of the worker and pump
+# threads) run on Linux only, for a user with an rtprio grant in
+# limits.conf and without CAP_SYS_NICE; the check skips otherwise, and
+# they survive.
 # ysp/rt.h mutants: the device clock fit (DEVICE CLOCK FIT, v0.6.0) and the
 # per-user folders (PER-USER FOLDERS, v0.7.0). The test runs the fit's and
 # the folders' part of tests/adapt/rt_test.c only (YRT_TEST_FIT_ONLY),
@@ -257,3 +262,43 @@ test = "fit"
 why = "A closed handle must refuse pairs and report no map, as a zeroed one does."
 find = '''    if (f) memset(f, 0, sizeof *f);'''
 replace = '''    (void)f;'''
+
+[[mutant]]
+id = "elev-00"
+name = "no RLIMIT_RTPRIO fallback"
+test = "fit"
+why = "A user granted rtprio 50, not CAP_SYS_NICE, is refused FIFO 80; elevate must ask again at the ceiling, not drop to NORMAL."
+find = "            rl.rlim_cur > 0 && (long)rl.rlim_cur < (long)sp.sched_priority) {"
+replace = "            rl.rlim_cur > 0 && (long)rl.rlim_cur < (long)sp.sched_priority && 0) {"
+
+[[mutant]]
+id = "elev-01"
+name = "threads inherit the creator's policy"
+test = "fit"
+why = "A worker or pump started by a FIFO thread must not inherit FIFO: on a kernel without RT throttling inherited spinners froze the machine."
+find = "    if (pthread_attr_setinheritsched(&a, PTHREAD_EXPLICIT_SCHED) == 0 &&"
+replace = "    if (pthread_attr_setinheritsched(&a, PTHREAD_INHERIT_SCHED) == 0 &&"
+
+[[mutant]]
+id = "elev-02"
+name = "pump made with default attributes"
+test = "fit"
+why = "The pump runs inference between trials; at an inherited FIFO it owns its CPU while it reports NORMAL or BELOW_NORMAL."
+find = "    rc_thread = yrt__thread_create(&s->thread, yrt__pump_main, p);"
+replace = "    rc_thread = pthread_create(&s->thread, NULL, yrt__pump_main, p);"
+
+[[mutant]]
+id = "elev-03"
+name = "worker made with default attributes"
+test = "fit"
+why = "A no_elevate worker reports NORMAL; started by a FIFO thread it must also run SCHED_OTHER."
+find = "    int rc = yrt__thread_create(&s->thread, yrt__worker_main, w);"
+replace = "    int rc = pthread_create(&s->thread, NULL, yrt__worker_main, w);"
+
+[[mutant]]
+id = "elev-04"
+name = "the ceiling at 50 or below"
+test = "fit"
+why = "At or below the IRQ threads' 50, the ceiling measured no better than FIFO 1 and ties with them; elevate takes 1, as Psychtoolbox does."
+find = "            sp.sched_priority = rl.rlim_cur > 50 ? (int)rl.rlim_cur : 1;"
+replace = "            sp.sched_priority = (int)rl.rlim_cur;"

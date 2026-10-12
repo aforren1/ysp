@@ -11,9 +11,12 @@ library (SDL3, miniaudio, liblsl).
 
 ## Verified on hardware
 
-Only one machine has run these headers on real devices: a Windows 11
+Two machines have run these headers on real devices: a Windows 11
 laptop (i7-1360P, Intel Iris Xe driving its internal 1920x1200 60 Hz
-panel, Realtek speakers). No photodiode, photometer, loopback cable,
+panel, Realtek speakers), and from 2026-10-09 a Linux desktop (Debian 12,
+liquorix 6.11 kernel with the PDS scheduler, i5-14500, AMD RX 6600 on
+1920x1080 60 Hz monitors as two X screens, Mesa 22.3.6, PulseAudio 16
+on Intel HDA; the screen, rt, audio and device rows say what ran there). No photodiode, photometer, loopback cable,
 external monitor, parallel port, response box, trigger box or
 LabStreamer was attached (docs/screen.md, docs/audio.md,
 docs/device.md). The one serial device was a Teensy 4.0 echo board on
@@ -27,7 +30,7 @@ renderers, in tests and CI.
 | gfx | Windows 11, Iris Xe through ANGLE (D3D11) | Light (no photometer or photodiode); WARP, SwiftShader and Mesa llvmpipe are software | gfx.h STATUS; docs/gfx.md |
 | video | Windows 11, Iris Xe, Media Foundation with DXVA, a 640x360 window; soundtrack on the real WASAPI device | Light and sound; fullscreen | video.h STATUS |
 | audio | Windows 11, WASAPI on the Realtek speakers (shared 48 kHz, exclusive), placement checked by WASAPI loopback capture | Sound at the speaker (no loopback cable: the delay to sound is not measured); CoreAudio, ALSA, PulseAudio, Web Audio | audio.h STATUS; docs/audio.md |
-| rt | Windows 11: clock, waits, worker, event ring | The device clock fit: no real device has fed it; macOS | rt.h STATUS; docs/rt.md |
+| rt | Windows 11: clock, waits, worker, event ring. Linux desktop: SCHED_FIFO under an `rtprio` grant (FIFO 1), the frame loop under 20 spinning threads, and the inherited-policy fix (a freeze before it) | The device clock fit: no real device has fed it; macOS | rt.h STATUS; docs/rt.md |
 | input, response | Windows 11: keys sent with SendInput through SDL 3.4 | A key pressed by hand; mouse, touch, pen, gamepad timing; response boxes | input.h; docs/response.md |
 | net | Windows 11 and WSL2: the real liblsl (1.17.5, 1.17.7) over local loopback | No LabStreamer or other LSL device; macOS | net.h STATUS; docs/net.md |
 | serial | Windows 11, i7-1360P, 2026-10-11: the Windows backend on a Teensy 4.0 echo board over native USB CDC (usbser), through the MATLAB MEX binding. Round trip 172 to 288 us median, 279 to 424 us p99, against a raw Win32 floor of 167 to 229 us; IOPort with BlockingBackgroundRead=1 PollLatency=0 matches it | Linux virtual port pairs only; macOS, USB-serial bridges (FTDI) and RS-232 never ran | docs/serial.md, "Results with the Teensy 4.0 echo board" |
@@ -297,6 +300,7 @@ Purpose: A response box, a trigger interface or a microcontroller board on the y
 
 Status:
 
+- v0.3.2: on POSIX the reader thread starts SCHED_OTHER instead of with its creator's policy, so a `no_elevate` reader opened by an elevated frame thread is not SCHED_FIFO (inherited FIFO spin threads froze the Linux desktop's PDS kernel, which has no RT throttling). Checked on Linux in a child at FIFO 1 under an `rtprio` grant; mutant `dev-thr-00` caught. [The reader's policy](device.md).
 - v0.3.1: a host-timed pulse's width runs from the start of the leading write, at least the new `desc.min_hold_ns` (0.25 ms; none on the parallel port) after its return (`yser_pulse_off_at_ns()`, ysp/serial.h 0.6.1). On a Teensy 4.0 echo board over `usbser.sys` (TriggerBox byte path, DTR, RTS; 1 and 5 ms; 0 of 2400 missed): width error -65 to -16 us median, against +350 to +401 us with v0.3.0. 7 mutants added (6 new, 1 moved), all caught. No vendor box, parallel port or FTDI bridge. [Host-timed width](device.md#host-timed-width-v031), [results](device.md#host-timed-pulses-on-a-teensy-40-v031).
 - v0.3.0 (the [Conventions](conventions.md): `ydev_open()`/`ydev_close()`, `ydev_wait_running()` before the first output, key and role copied into the handle, `int64_t` ns timeouts; 3 mutants added, all caught).
 - v0.2.1 (builds with YRT_NO_THREADS again; host-timed pulses end in ydev_poll() there).

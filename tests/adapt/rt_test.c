@@ -1449,6 +1449,78 @@ static void test_platform(void) {
            (unsigned long long)ci.resolution_ns, line);
 }
 
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+#include <sys/wait.h>
+static int g_policy_seen = -1;
+static bool policy_probe(void* ctx, char* err, size_t cap) {
+    (void)ctx; (void)err; (void)cap;
+    g_policy_seen = sched_getscheduler(0);
+    return true;
+}
+static void policy_msg(void* ctx, const void* msg, uint32_t seq) { (void)ctx; (void)msg; (void)seq; }
+
+/* Elevation below the FIFO 80 it asks for first, and what elevated threads
+ * pass on. A user granted RLIMIT_RTPRIO 50 or less (limits.conf "rtprio")
+ * must get SCHED_FIFO 1, not NORMAL; and a no_elevate worker or the
+ * pump started by that FIFO thread must run SCHED_OTHER, not inherit FIFO.
+ * In a child, so the lowered limit and the FIFO threads end with it. Exit
+ * 0 pass, 1 to 4 a failed check, 5 skip (no grant), 6 skip (CAP_SYS_NICE). */
+static void test_rtprio(void) {
+    pid_t pid = fork();
+    int status = 0, code;
+    if (pid == 0) {
+        struct rlimit rl;
+        struct sched_param sp;
+        yrt_worker w;
+        yrt_worker_desc wd;
+        yrt_pump pm;
+        yrt_pump_desc pd;
+        if (getrlimit(RLIMIT_RTPRIO, &rl) != 0 || rl.rlim_cur == 0) _exit(5);
+        if (rl.rlim_cur == RLIM_INFINITY || rl.rlim_cur > 10) rl.rlim_cur = 10;
+        if (setrlimit(RLIMIT_RTPRIO, &rl) != 0) _exit(1);
+        if (yrt_thread_elevate(NULL) != YRT_POLICY_FIFO) _exit(1);
+        if (sched_getscheduler(0) != SCHED_FIFO || sched_getparam(0, &sp) != 0) _exit(1);
+        if (sp.sched_priority == 80) _exit(6);
+        if (sp.sched_priority != 1) _exit(1);
+        memset(&w, 0, sizeof(w));
+        memset(&wd, 0, sizeof(wd));
+        wd.no_elevate = true;
+        wd.on_start = policy_probe;
+        g_policy_seen = -1;
+        if (!yrt_worker_open(&w, &wd)) _exit(2);
+        yrt_worker_close(&w);
+        if (g_policy_seen != SCHED_OTHER) _exit(2);
+        memset(&w, 0, sizeof(w));
+        wd.no_elevate = false;
+        g_policy_seen = -1;
+        if (!yrt_worker_open(&w, &wd)) _exit(3);
+        yrt_worker_close(&w);
+        if (g_policy_seen != SCHED_FIFO) _exit(3);
+        memset(&pm, 0, sizeof(pm));
+        memset(&pd, 0, sizeof(pd));
+        pd.msg_size = 4;
+        pd.capacity = 1;
+        pd.on_msg = policy_msg;
+        pd.on_start = policy_probe;
+        g_policy_seen = -1;
+        if (!yrt_pump_open(&pm, &pd)) _exit(4);
+        yrt_pump_close(&pm);
+        _exit(g_policy_seen == SCHED_OTHER ? 0 : 4);
+    }
+    CHECK(pid > 0, "fork for the RLIMIT_RTPRIO checks");
+    if (pid <= 0) return;
+    waitpid(pid, &status, 0);
+    code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    CHECK(code != 1, "with RLIMIT_RTPRIO 10, elevate must give SCHED_FIFO 1");
+    CHECK(code != 2, "a no_elevate worker started by a FIFO thread must run SCHED_OTHER");
+    CHECK(code != 3, "an elevating worker started by a FIFO thread must run SCHED_FIFO");
+    CHECK(code != 4, "the pump started by a FIFO thread must run SCHED_OTHER");
+    CHECK(code >= 0, "the RLIMIT_RTPRIO child must exit");
+    printf("  rtprio: %s\n", code == 0 ? "FIFO 1 under RLIMIT_RTPRIO 10; workers and pump start SCHED_OTHER" :
+           code == 5 ? "skipped (no rtprio granted)" : code == 6 ? "skipped (CAP_SYS_NICE: FIFO 80)" : "FAILED");
+}
+#endif
+
 static void test_version(void) {
     char built[32];
     snprintf(built, sizeof(built), "%d.%d.%d", YRT_VERSION_MAJOR,
@@ -1471,10 +1543,13 @@ int main(void) {
 
     test_fit();
     test_user_dir();
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+    test_rtprio();
+#endif
 #ifdef YRT_TEST_FIT_ONLY
-    /* the mutation runs of tests/mutate/rt.toml: the fit and the per-user
-     * folders alone, in seconds */
-    printf("ysp_rt_pump_test: %s (%d failures, fit and folders only)\n",
+    /* the mutation runs of tests/mutate/rt.toml: the fit, the per-user
+     * folders and the rtprio checks alone, in seconds */
+    printf("ysp_rt_pump_test: %s (%d failures, fit, folders and rtprio only)\n",
            g_failures ? "FAILED" : "all checks passed", g_failures);
     (void)caller_ring;
     return g_failures ? 1 : 0;

@@ -330,6 +330,70 @@ waits and the fit calls by type and checks the macros' values in a static
 initializer. Mutants `conv-01` (an open that takes a zero tick) and
 `conv-02` (a close that keeps the map) are caught.
 
+## Linux real-time priority (v0.8.1)
+
+The machine: Debian 12, kernel 6.11.5 liquorix (PDS scheduler,
+`CONFIG_SCHED_ALT`), Intel Core i5-14500 (20 logical CPUs), AMD RX 6600,
+a user in the `psychtoolbox` group, which `limits.d` grants `rtprio 50`
+and `nice -20`. No CAP_SYS_NICE.
+
+### RLIMIT_RTPRIO
+
+Before v0.8.1, `yrt_thread_elevate()` asked for SCHED_FIFO 80 and fell
+to NORMAL when that was refused. An `rtprio` grant in `limits.conf` is
+the usual lab setup (Psychtoolbox's), and it allows FIFO up to the grant
+only; a request above it is refused outright. So on this machine every
+ysp thread ran NORMAL, and no test host had run the FIFO rung.
+
+v0.8.1 asks again under the grant. Which priority, measured with
+`examples/screen/flipstats.c --backend glx --patch --load 20`, 3600
+frames each, one run at a time, the frame thread at the priority the
+soft RLIMIT_RTPRIO allowed (`ulimit -Sr`), 20 spinning load threads at
+SCHED_OTHER:
+
+| Frame thread | Dropped | Prediction p99 / max, us | `yscr_begin()` cost p99 / max, us | Frames whose wake came after the vblank |
+|---|---|---|---|---|
+| NORMAL (`ulimit -Sr 0`) | 1 | 0.83 / 7.83 | 7.4 / 2159 | 30 of 3600 |
+| FIFO 1 | 0 | 0.83 / 1.17 | 6.4 / 81 | 1 of 3600 |
+| FIFO 49 | 0 | 0.83 / 0.84 | 5.6 / 67 | 1 of 3600 |
+| FIFO 50 | 0 | 0.83 / 0.83 | 7.6 / 85 | 1 of 3600 |
+
+FIFO took out the drop and the 2 ms preemption. FIFO 1, 49 and 50 gave
+the same. 80 was chosen to sit above the threaded IRQ handlers (50); a
+grant of 50 or less cannot do that, and at 50 the thread only ties with
+them. So the fallback takes the grant when it is above 50, else FIFO 1,
+which is also what Psychtoolbox asks for. Not measured: network or USB
+interrupt load, where the IRQ threads' priority would matter.
+
+### Inherited policy
+
+The first run with FIFO froze the machine: no log, a power cycle. A
+thread made with default attributes inherits its creator's policy.
+`flipstats` elevated its main thread, then started its 20 load threads
+from it: 20 threads at SCHED_FIFO 50 that never sleep, on 20 CPUs.
+Mainline Linux keeps 5% of each second for normal threads
+(`sched_rt_runtime_us`); the PDS scheduler has no RT throttling, so
+nothing else ran again. Shown safely afterwards with 2 load threads: both
+at FIFO 50 and 100% CPU (`ps -L -o cls,rtprio`). A second crash the same
+morning, after the rt test had finished, has no known cause.
+
+The same inheritance reached ysp's own threads: a `no_elevate` worker or
+the pump, started by an elevated thread, ran SCHED_FIFO while it reported
+NORMAL or BELOW_NORMAL, and so did ysp/device.h's reader. They now start
+with `PTHREAD_EXPLICIT_SCHED` and SCHED_OTHER, and the worker and the
+reader elevate themselves when asked. `tests/adapt/rt_test.c` checks it
+in a child that lowers its own RLIMIT_RTPRIO to 10 (FIFO 1, the worker
+and the pump SCHED_OTHER, an elevating worker FIFO); it skips without a
+grant. 5 mutants (`elev-`), all killed; ysp/device.h's `dev-thr-00`,
+killed.
+
+Other libraries' threads still inherit. `yscr_open()` after
+`yrt_thread_elevate()` left Mesa's command-submission (`cs0`), shader
+compiler (`sh0`) and driver (`gdrv0`) threads at the frame thread's FIFO
+priority. The runs above include that, with no drop. A shader compile at
+FIFO keeps its CPU until it ends; with fewer CPUs than compiler threads
+that would stall the desktop during open. Not measured.
+
 ## Windows 11 power throttling
 
 Windows 11 can throttle a process when all its windows are minimized,

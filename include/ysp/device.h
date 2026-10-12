@@ -1,4 +1,4 @@
-/* ysp/device.h - v0.3.1 - public domain single-header device layer
+/* ysp/device.h - v0.3.2 - public domain single-header device layer
  *
  *   A response box, a trigger box or a microcontroller board as a producer
  *   of ysp/input.h events with times on the ysp_rt clock, and as a target
@@ -266,6 +266,10 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.3.2 - POSIX: the reader thread starts SCHED_OTHER, not with its
+ *          creator's policy, so a no_elevate reader opened by an elevated
+ *          frame thread is not SCHED_FIFO (ysp/rt.h v0.8.1, the same
+ *          change). Nothing else changed.
  *   v0.3.1 - A host-timed pulse's width runs from the START of the leading
  *          write, not from its return: the trailing 0 is written at
  *          yser_pulse_off_at_ns() (ysp/serial.h v0.6.1), at least the new
@@ -326,7 +330,7 @@
 
 #define YDEV_VERSION_MAJOR 0
 #define YDEV_VERSION_MINOR 3
-#define YDEV_VERSION_PATCH 1
+#define YDEV_VERSION_PATCH 2
 #define YDEV_VERSION_STRING "0.3.1"
 
 #include "ysp/rt.h"
@@ -1637,7 +1641,20 @@ YDEV_API bool ydev_open(ydev_device* dev, const ydev_desc* desc) {
         pthread_t th;
         typedef char ydev__thread_fits[sizeof(pthread_t) <= sizeof dev->thread_mem ? 1 : -1];
         (void)sizeof(ydev__thread_fits);
-        if (pthread_create(&th, NULL, ydev__thread, dev) == 0) {
+        /* SCHED_OTHER, not the creator's policy: opened by an elevated
+         * frame thread, a no_elevate reader would otherwise run SCHED_FIFO
+         * (docs/rt.md, "Inherited policy"). It elevates itself if asked. */
+        pthread_attr_t a;
+        struct sched_param sp;
+        int made = 0;
+        memset(&sp, 0, sizeof sp);
+        if (pthread_attr_init(&a) == 0) {
+            if (pthread_attr_setinheritsched(&a, PTHREAD_EXPLICIT_SCHED) == 0 &&
+                pthread_attr_setschedpolicy(&a, SCHED_OTHER) == 0 && pthread_attr_setschedparam(&a, &sp) == 0)
+                made = pthread_create(&th, &a, ydev__thread, dev) == 0;
+            pthread_attr_destroy(&a);
+        }
+        if (made || pthread_create(&th, NULL, ydev__thread, dev) == 0) {
             memcpy(dev->thread_mem.b, &th, sizeof th);
             dev->have_thread = 1;
         }

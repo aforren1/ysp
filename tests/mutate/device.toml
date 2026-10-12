@@ -1,3 +1,6 @@
+# v0.3.2: dev-thr-00 runs the test on Linux (test device_linux) for a
+# user with an rtprio grant in limits.conf; without one the check skips
+# and the mutant survives.
 # ysp/device.h mutants: brackets, the map, the lifecycle, identify, keys;
 # since v0.2.0 the outputs, the trigger channel and roles.
 # The test runs simulated devices on a virtual clock (about 2 s with the
@@ -9,6 +12,13 @@ source = "tests/adapt/device_test.c"
 compiler = "gcc"
 flags = ["-std=c11", "-O2", "-w"]
 libs = ["-lsetupapi", "-lm"]
+timeout = 120
+
+[test.device_linux]
+source = "tests/adapt/device_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O2", "-w", "-pthread"]
+libs = ["-lm"]
 timeout = 120
 
 [[mutant]]
@@ -305,3 +315,11 @@ file = "ysp/serial.h"
 why = "The hold is a floor: the later of the two times."
 find = '''    return a > b ? a : b;'''
 replace = '''    return a < b ? a : b;'''
+
+[[mutant]]
+id = "dev-thr-00"
+name = "reader inherits the creator's policy"
+test = "device_linux"
+why = "A no_elevate reader started by an elevated frame thread must not run SCHED_FIFO; on a kernel without RT throttling inherited FIFO threads froze the machine."
+find = "            if (pthread_attr_setinheritsched(&a, PTHREAD_EXPLICIT_SCHED) == 0 &&"
+replace = "            if (pthread_attr_setinheritsched(&a, PTHREAD_INHERIT_SCHED) == 0 &&"

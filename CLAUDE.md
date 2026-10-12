@@ -70,3 +70,11 @@ from the repo root, in the X session): run it, read its results, then design
 the backend from them and from `docs/rig_spec.md` 4.2 (GLX sync control,
 separate X screens) and `docs/screen.md` (flip records, paths, depth,
 slack, flip_at). Do not assume what the driver does; the probe measures it.
+
+## Linux real-time priority
+
+ysp threads elevate to SCHED_FIFO under an `rtprio` grant (docs/rt.md,
+"Linux real-time priority"). A thread made by an elevated thread inherits
+SCHED_FIFO; on the Linux rig's PDS kernel (no RT throttling) inherited
+spin threads froze the machine. Start busy threads before elevating, or
+with explicit SCHED_OTHER attributes.
