@@ -770,7 +770,16 @@ lengths that the bench reads. The sketch answers `e <seq>` with
 `A <t> 1 <k>`. Every number is zero-padded to 10 digits, so each kind of
 line has one length. It compiles without warnings with arduino-cli 1.5.1
 for `teensy:avr:teensy40` (Teensy core 1.62.0), `teensy:avr:teensy41` and
-`rp2040:rp2040:rpipico` (arduino-pico 6.3.0). It has not run on a board.
+`rp2040:rp2040:rpipico` (arduino-pico 6.3.0). It runs on a Teensy 4.0
+since 2026-10-11.
+
+Version 2 (2026-10-12) adds opt-in reports for the pulse bench: `b <n> <ms>`
+stamps each received byte (`B <t> <v>`), `l 1` reports each change of DTR
+and RTS (`L <t> <dtr> <rts>`), `g` gives the longest pass of `loop()`, and
+`v` answers `V ysp-echo 2 <board> b l g`. They are off by default. Every
+version 1 command and answer is unchanged, `i` included, so the bench above
+runs on either version. The sketch's top comment gives the line formats and
+where each stamp sits.
 
 ### Results without hardware
 
@@ -1070,6 +1079,45 @@ No installation and no administrator rights were necessary. To use the
 installed Psychtoolbox instead, set up its license (`PsychLicenseHandling`)
 and omit `ioport_dir`.
 
+### Hand procedure for the hardware parts
+
+Use AC power and close other programs. Start MATLAB, then run
+`cd <repo>/tests/compare/serial_bench`.
+
+Option (a), the FTDI loopback, about 10 minutes in total (estimated):
+
+1. Take an FTDI FT232R adapter. On the TTL-232R cable, connect TXD (orange)
+   to RXD (yellow). On a DB9 RS-232 adapter, connect pin 2 to pin 3.
+2. Connect it. In Device Manager, under **Ports (COM & LPT)**, find
+   **USB Serial Port (COMn)**.
+3. Run
+   `serial_bench('port', 'COMn', 'device', 'loopback', 'ioport_dir', 'C:\tmp\psy-work\serialbench\ptb-3.0.19.16', 'label', 'FT232R 16 ms')`.
+4. In Device Manager, open the port, select **Port Settings > Advanced**,
+   set **Latency Timer (msec)** to 1 and select **OK**. Disconnect the
+   adapter and connect it again.
+5. Run step 3 again with the label `'FT232R 1 ms'`.
+
+Option (b), the echo board, about 10 minutes in total (estimated):
+
+1. Flash the board. Teensy 4.0: open `teensy.exe` from
+   `C:\tmp\psy-work\devices\arduino\data\packages\teensy\tools\teensy-tools\1.62.0\`,
+   open the HEX file
+   `C:\tmp\psy-work\serialbench\fw-teensy_avr_teensy40\ysp_echo.ino.hex`
+   (`fw-teensy_avr_teensy41` for a 4.1), connect the board and push its
+   button. A Teensy that runs `ysp_echo` already needs no button:
+   `arduino-cli upload --fqbn teensy:avr:teensy40 -p COMn --input-dir <fw-teensy_avr_teensy40>`
+   restarts it into the loader through the serial port (used on
+   2026-10-12; add the `--config-file` that
+   `tests/compare/serial_bench/README.md` gives). Pico: hold BOOTSEL, connect the board, and copy
+   `C:\tmp\psy-work\serialbench\fw-rp2040_rp2040_rpipico\ysp_echo.ino.uf2`
+   to the `RPI-RP2` drive.
+2. Find its COM port in Device Manager (**USB Serial Device (COMn)**).
+3. Run
+   `serial_bench('port', 'COMn', 'device', 'echo', 'ioport_dir', 'C:\tmp\psy-work\serialbench\ptb-3.0.19.16', 'label', 'Teensy 4.0 echo')`.
+
+Each run prints its result folder. Send the whole folder: `summary.txt` has
+the numbers, the other CSV files have every sample.
+
 ### Results in Python (pyserial, psychtoolbox, ysp.serial)
 
 `tests/compare/serial_bench_py/serial_bench.py` is the Python version of the
@@ -1239,7 +1287,224 @@ async reader stamps lines without the interpreter at a quarter of the CPU
 of `ReaderThread`, and its reader and writes do not block each other.
 pyserial's blocking `read(n)` is a sound choice where none of that matters.
 
-### Python async reader (ysp-serial 0.5.0.2)
+## Pulses: onset and width
+
+This section records when a trigger pulse arrives at a USB serial device
+and how wide it is there, for each API that can send one. The device is
+the echo board, not a trigger box, and the edge is the board's receive
+time, not an electrical edge. A trigger box adds its own delay from receipt
+to output.
+
+### How the bench measures
+
+`tests/compare/serial_pulse/pulse_bench.c` (C) and `pulse_bench.py`
+(Python) send pulses to `firmware/ysp_echo` version 2. A byte pulse is
+`0x55`, a wait, then `0x00`; the board stamps each byte (`b` mode). A line
+pulse is DTR low-high-low; the board stamps each change of DTR and RTS
+(`l` mode). Each stamp is `micros()` at the first pass of `loop()` that sees
+the byte or the line state. The longest pass (`g`) was 6 or 7 us in all
+1068 reports, so a stamp is at most 7 us after the board's USB interrupt.
+`pulse_stats.py` computes the numbers below.
+
+- **Onset latency:** the board's first edge, mapped to the host clock,
+  minus the host time before the call. The map is the clock fit of
+  [What the bench measures](#what-the-bench-measures): 10 `e` probes before
+  each block of 20 pulses, the shortest exchange of each 200 ms, a line
+  through those points, symmetric one-way delays assumed. A mapped time is
+  good to the largest half path of the points that the fit used: 108 to
+  331 us per cell, 39 to 104 us at the best point. All modes share this
+  bound, so a difference between two modes is better known than either
+  value.
+- **Width error:** the board's trailing stamp minus its leading stamp,
+  minus the requested width. It does not use the fit.
+- **Call cost:** the host time after the call minus the time before it.
+  For `yser_pulse` this includes the width; the tables give it minus the
+  width.
+- **Missed:** a pulse without both board edges.
+
+Conditions: 2026-10-12, Windows 11 Enterprise 10.0.26200, Intel Core
+i7-1360P, AC power, each session under the shared timing guard. Teensy 4.0
+on COM3 (native USB high speed, Windows' in-box `usbser.sys`), firmware
+version 2. C: MSVC 2022 `/O2`, ysp/serial.h 0.5.0, normal process priority,
+async worker at `TIME_CRITICAL`. Python: CPython 3.13.7, pyserial 3.5,
+ysp-serial 0.5.0.2. Each cell: its own open, 200 pulses 50 to 150 ms apart,
+at 1, 2, 5 and 10 ms. Two runs, the second in the reverse order, 16 minutes
+each. The summaries and conditions are in
+`tests/compare/serial_pulse/results/2026-10-12-teensy40/`.
+
+The modes:
+
+| Mode | Calls |
+|---|---|
+| ysp_pulse | `yser_pulse(p, 0x55, 0x00, w)` |
+| ysp_pulse_async | `yser_pulse_async(p, 0x55, 0x00, w)` |
+| ysp_dtr | `yser_set_dtr(1)`, `yrt_sleep_until(return + w)`, `yser_set_dtr(0)`. ysp/serial.h has no line pulse call |
+| raw_byte | `WriteFile` (non-overlapped handle), the same wait, `WriteFile` |
+| raw_dtr | `EscapeCommFunction(SETDTR)`, the same wait, `CLRDTR` |
+| ysp_py_pulse, ysp_py_pulse_async | `Port.pulse`, `Port.pulse_async` |
+| ysp_py_dtr | `Port.set_dtr(True)`, `time.sleep(w)`, `set_dtr(False)` |
+| pyserial_sleep | `Serial.write(b'\x55')`, `time.sleep(w)`, `write(b'\x00')` |
+| pyserial_busy | the same with a `perf_counter` busy wait |
+| pyserial_dtr | `Serial.dtr = True`, `time.sleep(w)`, `dtr = False` |
+
+### Results
+
+No byte or DTR pulse was missed: 0 of 19200 (runs 1 to 3).
+
+Onset latency and call cost, 1600 pulses per mode (4 widths, 2 runs).
+Times in microseconds.
+
+| Mode | Onset median | Onset p5 / p95 / p99 / max | Cell medians | Call median / p99 / max |
+|---|---|---|---|---|
+| ysp_dtr | 82.8 | 60.1 / 114 / 140 / 264 | 73 to 105 | 385 / 636 / 5206 |
+| raw_dtr | 101.8 | 71.7 / 136 / 157 / 299 | 82 to 110 | 395 / 647 / 1230 |
+| ysp_py_dtr | 102.4 | 75.3 / 135 / 161 / 216 | 92 to 114 | 422 / 645 / 804 |
+| pyserial_dtr | 148.7 | 108 / 199 / 231 / 1270 | 135 to 168 | 437 / 685 / 1663 |
+| ysp_pulse_async | 176.0 | 124 / 232 / 275 / 355 | 158 to 195 | 462 / 737 / 1240 |
+| raw_byte | 179.0 | 120 / 241 / 278 / 373 | 159 to 197 | 423 / 712 / 1068 |
+| ysp_pulse | 184.7 | 125 / 251 / 311 / 511 | 161 to 201 | 783 / 1354 / 1716 (minus w) |
+| ysp_py_pulse | 196.4 | 135 / 275 / 354 / 600 | 173 to 208 | 771 / 1348 / 1842 (minus w) |
+| ysp_py_pulse_async | 198.5 | 139 / 264 / 309 / 430 | 187 to 205 | 509 / 812 / 1034 |
+| pyserial_sleep | 244.3 | 175 / 328 / 407 / 570 | 215 to 271 | 480 / 830 / 963 |
+| pyserial_busy | 248.4 | 181 / 327 / 395 / 714 | 235 to 261 | 495 / 810 / 1115 |
+
+Width error (board width minus requested), 400 pulses per cell (2 runs).
+Microseconds.
+
+| Mode | Width | Median | p5 | p95 | p99 | Max | Min |
+|---|---|---|---|---|---|---|---|
+| ysp_pulse | 1 ms | +362 | +172 | +571 | +688 | +777 | +98 |
+| ysp_pulse | 5 ms | +424 | +214 | +600 | +661 | +1063 | +99 |
+| ysp_pulse_async | 1 ms | +374 | +192 | +561 | +622 | +1360 | +113 |
+| ysp_pulse_async | 5 ms | +377 | +197 | +602 | +676 | +730 | +123 |
+| ysp_dtr | 1 ms | +340 | +166 | +517 | +583 | +1677 | +103 |
+| ysp_dtr | 5 ms | +357 | +178 | +538 | +608 | +8274 | +121 |
+| raw_byte | 1 ms | +372 | +169 | +583 | +669 | +1495 | +117 |
+| raw_byte | 5 ms | +375 | +189 | +573 | +682 | +1037 | +121 |
+| raw_dtr | 1 ms | +366 | +189 | +545 | +614 | +886 | +110 |
+| raw_dtr | 5 ms | +369 | +186 | +527 | +618 | +756 | +103 |
+| ysp_py_pulse | 1 ms | +289 | +143 | +516 | +593 | +643 | +107 |
+| ysp_py_pulse | 5 ms | +395 | +189 | +592 | +666 | +924 | +109 |
+| ysp_py_pulse_async | 1 ms | +396 | +185 | +564 | +596 | +617 | +106 |
+| ysp_py_pulse_async | 5 ms | +438 | +208 | +609 | +701 | +754 | +104 |
+| ysp_py_dtr | 1 ms | +843 | +452 | +1317 | +1427 | +1804 | +138 |
+| ysp_py_dtr | 5 ms | +815 | +391 | +1219 | +1346 | +1426 | +243 |
+| pyserial_busy | 1 ms | +443 | +220 | +644 | +750 | +999 | +165 |
+| pyserial_busy | 5 ms | +409 | +209 | +620 | +707 | +895 | +146 |
+| pyserial_sleep | 1 ms | +875 | +435 | +1380 | +1463 | +1604 | +135 |
+| pyserial_sleep | 5 ms | +870 | +482 | +1292 | +1436 | +1743 | +197 |
+| pyserial_dtr | 1 ms | +852 | +438 | +1385 | +1458 | +1531 | +154 |
+| pyserial_dtr | 5 ms | +825 | +379 | +1230 | +1378 | +1489 | +216 |
+
+The 2 and 10 ms cells are in `summary_runs12_pooled.txt`. Their medians
+are +354 to +446 us for the modes without `time.sleep` and +766 to +885 us
+for the `time.sleep` modes, the same as at 1 and 5 ms.
+
+RTS: 40 pulses per API at 5 ms (`yser_set_rts`, `EscapeCommFunction(SETRTS)`,
+`Port.set_rts`, `Serial.rts`): 40 of 40 missed for each. The board saw no
+RTS change. A check with both libraries showed why: `usbser.sys` sends no
+SET_CONTROL_LINE_STATE request for an RTS change. The RTS state goes to
+the device with the next DTR change. The RTS calls cost 32 to 62 us median,
+which agrees: they make no USB transfer.
+
+Width timed from the call start (run 3, 200 pulses per cell, the same
+session as a `ysp_pulse` and `ysp_dtr` control). The `_t0` modes call
+`yser_write_byte()` or `yser_set_dtr()`, wait until the call start plus the
+width, then write the trailing edge.
+
+| Mode | Width | Median | p5 | p95 | p99 | Max | Min |
+|---|---|---|---|---|---|---|---|
+| ysp_pulse (control) | 1 ms | +356 | +164 | +563 | +628 | +687 | +110 |
+| ysp_bytes_t0 | 1 ms | -50 | -105 | -1 | +24 | +50 | -207 |
+| ysp_bytes_t0 | 5 ms | -41 | -106 | +30 | +99 | +651 | -186 |
+| ysp_dtr (control) | 1 ms | +399 | +209 | +543 | +602 | +620 | +136 |
+| ysp_dtr_t0 | 1 ms | -28 | -51 | -8 | +7 | +13 | -81 |
+| ysp_dtr_t0 | 5 ms | -18 | -50 | +4 | +21 | +87 | -87 |
+
+### What explains the differences
+
+- **The width is long by about 0.35 ms, for every API.** The onset call
+  returns 200 to 300 us after the board has the edge: a byte write takes
+  423 us median and its byte arrives at 179 us. `yser_pulse`,
+  `yser_pulse_async` and the bench's own modes start the width when that
+  call returns, as ysp/serial.h's comment says it should ("so the width
+  does not include that write's own cost"). The trailing edge then needs
+  its own 60 to 220 us (p5 to p95) to arrive. The two add to the +340 to +440 us
+  median. The p5 to p95 spread of about 400 us is mostly the spread of the
+  onset call's return (184 to 602 us for `raw_byte`), not of the edges.
+- **Timing the width from the call start removes most of it.** With the
+  deadline at the call start, the error is the trailing edge's latency
+  minus the leading edge's: -50 to -18 us median, a p5 to p95 spread of 43
+  to 136 us, against about 400 us. This contradicts the header's reason
+  for taking the deadline after the write. The cost: a width shorter than
+  the onset call (0.4 to 0.8 ms here) becomes 0 on the host side.
+- **DTR arrives 75 to 100 us before a byte.** DTR is a control request on
+  endpoint 0; a byte is a bulk OUT transfer. This bench does not separate
+  the reasons inside `usbser.sys` and the host controller.
+- **ysp/serial.h is at the Win32 floor.** `ysp_pulse_async` and
+  `ysp_pulse` match `raw_byte` within the cell-to-cell spread; `ysp_dtr`
+  matches `raw_dtr`. The Python binding adds 10 to 25 us to the onset.
+- **pyserial adds about 65 us to a byte onset and 45 us to a DTR onset**
+  over the Win32 floor. `pyserial_busy` has the floor's width error plus
+  35 to 70 us.
+- **`time.sleep()` adds about 0.45 ms.** In run 1 the host-side wait of the
+  `time.sleep` modes overslept by 347 to 475 us median, p95 669 to 891 us,
+  on CPython 3.13.7. That is the difference between `pyserial_sleep` and
+  `pyserial_busy`, and between `ysp_py_dtr` and `ysp_dtr`.
+- **`yser_pulse_async` does not return at once.** Its onset write is
+  synchronous: 462 us median, 737 us p99. The caller gets its thread back
+  for the width, not for the write.
+- **Rare stalls.** One `yser_set_dtr()` call took 5.2 ms (a 5 ms pulse
+  became 13.3 ms), and one 2 ms async pulse became 4.4 ms. The width
+  error p99 is under 0.78 ms for every mode without `time.sleep`; the
+  maximum is not.
+
+### Recommendations
+
+These hold for a USB CDC device on Windows `usbser.sys`; an FTDI or other
+bridge has its own driver and latency timer, and a trigger box adds its own
+delay.
+
+- Expect a host-timed serial pulse to be 0.1 to 0.78 ms wider than
+  requested (min to p99, the modes without `time.sleep`), never shorter. A
+  receiver that needs a minimum width gets it: a trigger input that is
+  sampled (BioSemi's Status channel, devices_spec.md 2.3) needs one sample
+  period, so request at least one sample period. A receiver that must see
+  the width within a tolerance smaller than 0.5 ms needs a device-timed
+  pulse. The BioSemi cable holds a byte for 8 ms by itself
+  ([devices_spec.md](devices_spec.md), 2.3), so its width does not depend
+  on the host.
+- The onset varies by 0.05 to 0.15 ms (p5 to p95) and up to 0.23 ms (p5
+  to p99), around a median of 0.08 to 0.25 ms after the call. The Brain
+  Products TriggerBox test that devices_spec.md 2.3 cites gives a maximum
+  deviation of 0.46 ms against an LPT port. Here the p5 to p99 spread
+  stays under 0.24 ms, but the largest onset was 0.6 ms (C and ysp) and
+  1.27 ms (pyserial DTR).
+- Do not use RTS for a pulse on a CDC device under `usbser.sys`. Use DTR,
+  or bytes.
+- For the lowest onset latency, use DTR (83 to 102 us median in C) rather
+  than a byte (176 to 185 us), if the device reads DTR.
+- In Python, do not time a width with `time.sleep()`; use `Port.pulse` or
+  `Port.pulse_async`.
+- Open item for the header: take the `yser_pulse` and `yser_pulse_async`
+  deadline before the onset write, not after it, with the width floored at
+  the onset call. Run 3 measured the effect of that change on this board;
+  the header's TIMING text ("about 1 ms onset", "widths below a few
+  milliseconds are unreliable") is for full-speed bridges and is not
+  measured here.
+
+Not run: MATLAB (the `ysp_serial` MEX pulse, IOPort `Write` with
+`WaitSecs`), an FTDI bridge, Linux and macOS. To run the bench (the
+Python half needs pyserial and ysp-serial 0.5.0.2 or later):
+
+```
+cl /O2 /I<repo>\include tests\compare\serial_pulse\pulse_bench.c
+pulse_bench COM3 out 200
+python tests\compare\serial_pulse\pulse_bench.py COM3 out 200
+python tests\compare\serial_pulse\pulse_stats.py out
+```
+
+## Python async reader (ysp-serial 0.5.0.2)
 
 The Python binding has the reader of the MEX binding: a C thread that
 blocks in `yser_read` (200 ms slices; `async_stop()` ends the wait with
@@ -1323,41 +1588,6 @@ What it shows:
 - A write beside the running reader costs what it costs without one: the
   medians differ by 11 to 34 us, the p99 by less than 10 us except one
   cell (828 us, run 1, reader waiting). IOPort's took 2 to 4 s.
-
-### Hand procedure for the hardware parts
-
-Use AC power and close other programs. Start MATLAB, then run
-`cd <repo>/tests/compare/serial_bench`.
-
-Option (a), the FTDI loopback, about 10 minutes in total (estimated):
-
-1. Take an FTDI FT232R adapter. On the TTL-232R cable, connect TXD (orange)
-   to RXD (yellow). On a DB9 RS-232 adapter, connect pin 2 to pin 3.
-2. Connect it. In Device Manager, under **Ports (COM & LPT)**, find
-   **USB Serial Port (COMn)**.
-3. Run
-   `serial_bench('port', 'COMn', 'device', 'loopback', 'ioport_dir', 'C:\tmp\psy-work\serialbench\ptb-3.0.19.16', 'label', 'FT232R 16 ms')`.
-4. In Device Manager, open the port, select **Port Settings > Advanced**,
-   set **Latency Timer (msec)** to 1 and select **OK**. Disconnect the
-   adapter and connect it again.
-5. Run step 3 again with the label `'FT232R 1 ms'`.
-
-Option (b), the echo board, about 10 minutes in total (estimated):
-
-1. Flash the board. Teensy 4.0: open `teensy.exe` from
-   `C:\tmp\psy-work\devices\arduino\data\packages\teensy\tools\teensy-tools\1.62.0\`,
-   open the HEX file
-   `C:\tmp\psy-work\serialbench\fw-teensy_avr_teensy40\ysp_echo.ino.hex`
-   (`fw-teensy_avr_teensy41` for a 4.1), connect the board and push its
-   button. Pico: hold BOOTSEL, connect the board, and copy
-   `C:\tmp\psy-work\serialbench\fw-rp2040_rp2040_rpipico\ysp_echo.ino.uf2`
-   to the `RPI-RP2` drive.
-2. Find its COM port in Device Manager (**USB Serial Device (COMn)**).
-3. Run
-   `serial_bench('port', 'COMn', 'device', 'echo', 'ioport_dir', 'C:\tmp\psy-work\serialbench\ptb-3.0.19.16', 'label', 'Teensy 4.0 echo')`.
-
-Each run prints its result folder. Send the whole folder: `summary.txt` has
-the numbers, the other CSV files have every sample.
 
 ## Deferred
 

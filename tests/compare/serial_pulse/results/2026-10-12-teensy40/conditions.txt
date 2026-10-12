@@ -1,0 +1,31 @@
+Trigger pulses on the serial path, timed by the echo board. 2026-10-12.
+
+Machine: Windows 11 Enterprise 10.0.26200, Intel Core i7-1360P, AC power.
+Each session ran under the shared timing guard (C:\tmp\psy-guard.sh time),
+which waited for CPU load of 20 % or less and no compiler or test process.
+Board: Teensy 4.0, firmware/ysp_echo version 2 ("V ysp-echo 2 teensy b l g"),
+Teensyduino core 1.62.0, native USB high speed, Windows in-box usbser.sys,
+COM3. Flashed with arduino-cli upload (teensy_post_compile -reboot, soft
+reboot, no button).
+
+Host side:
+  pulse_bench.c: MSVC 2022 (cl /O2 /W4), ysp/serial.h 0.5.0, ysp/rt.h of
+    the same tree; normal process priority; async worker TIME_CRITICAL.
+  pulse_bench.py: CPython 3.13.7, pyserial 3.5, ysp-serial 0.5.0.2 built
+    from branch worktree-agent-a2d77dd216821ed1d (commit dbcf35c).
+
+Sessions (local time):
+  run1  07:56 to 08:12  C cells then Python cells, forward order (cells 1000+,
+                        3000+), then rts: RTS pulses, 40 per API at 5 ms
+  run2  08:12 to 08:28  Python cells then C cells, reverse order (cells 4000+, 2000+)
+  run3  08:28 to 08:31  ysp_pulse, ysp_dtr and the two _t0 modes, 1 and 5 ms
+
+Per cell: one open, 200 pulses (on 0x55, off 0x00, or a DTR low-high-low)
+in blocks of 20, 50 to 150 ms apart; 10 "e" probes before each block and
+after the last; widths 1, 2, 5, 10 ms (run3: 1, 5).
+
+Board loop gap ("g", the longest pass of loop() per block): 6 or 7 us in
+all 1068 blocks, so a B or L stamp is at most 7 us after the USB interrupt.
+
+Raw CSV files (probes, pulses, board, cells) are in
+C:\tmp\psy-work\pulse\run1, run2, run3, rts on the development machine.
