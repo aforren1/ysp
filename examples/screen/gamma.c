@@ -64,13 +64,18 @@ int main(int argc, char** argv) {
     if (!yscr__win.set_ramp(dc, before)) { printf("SetDeviceGammaRamp(same ramp): refused\n"); ok = 0; }
     us_set = (double)(yrt_now_ns() - t0) / 1e3;
     yscr__win.delete_dc(dc);
-    read_ramp(mi.szDevice, back, NULL);
-    printf("SetDeviceGammaRamp(same ramp) %.1f us; read back %s\n", us_set,
-           memcmp(before, back, sizeof before) == 0 ? "equal" : "DIFFERENT");
-    if (memcmp(before, back, sizeof before) != 0) ok = 0;
+    if (!read_ramp(mi.szDevice, back, NULL)) {
+        printf("SetDeviceGammaRamp(same ramp) %.1f us; read back FAILED\n", us_set);
+        ok = 0;
+    } else {
+        printf("SetDeviceGammaRamp(same ramp) %.1f us; read back %s\n", us_set,
+               memcmp(before, back, sizeof before) == 0 ? "equal" : "DIFFERENT");
+        if (memcmp(before, back, sizeof before) != 0) ok = 0;
+    }
     for (t0 = 0; t0 < 5; t0++) {   /* the per-second check's cost */
-        double us;
-        read_ramp(mi.szDevice, back, &us);
+        /* read_ramp() sets neither the ramp nor the time when it fails. */
+        double us = 0;
+        if (!read_ramp(mi.szDevice, back, &us)) { printf("  GetDeviceGammaRamp again: FAILED\n"); ok = 0; continue; }
         printf("  GetDeviceGammaRamp again: %.1f us\n", us);
     }
     if (identity_run) {
@@ -87,13 +92,15 @@ int main(int argc, char** argv) {
             if (!yscr_open(&s, &d)) { fprintf(stderr, "screen_gamma: %s\n", yscr_error(&s)); return 1; }
             yscr_describe(&s, line, sizeof line);
             printf("%s\n", line);
-            read_ramp(mi.szDevice, during, NULL);
-            printf("during the run: ramp is %s\n", yscr__ramp_identity(&during[0][0]) ? "the identity" : "NOT the identity");
+            if (!read_ramp(mi.szDevice, during, NULL)) { printf("during the run: GetDeviceGammaRamp FAILED\n"); ok = 0; }
+            else printf("during the run: ramp is %s\n", yscr__ramp_identity(&during[0][0]) ? "the identity" : "NOT the identity");
             for (i = 0; i < 120 && yscr_begin(&s, &f) == YSCR_OK; i++) yscr_flip(&s);
             yscr_close(&s);
-            read_ramp(mi.szDevice, after, NULL);
-            printf("after close: ramp %s the one before\n", memcmp(before, after, sizeof before) == 0 ? "equals" : "DIFFERS FROM");
-            if (memcmp(before, after, sizeof before) != 0) ok = 0;
+            if (!read_ramp(mi.szDevice, after, NULL)) { printf("after close: GetDeviceGammaRamp FAILED\n"); ok = 0; }
+            else {
+                printf("after close: ramp %s the one before\n", memcmp(before, after, sizeof before) == 0 ? "equals" : "DIFFERS FROM");
+                if (memcmp(before, after, sizeof before) != 0) ok = 0;
+            }
         }
     }
     printf("%s\n", ok ? "all gamma checks passed" : "a gamma check FAILED");
