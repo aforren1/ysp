@@ -26,7 +26,7 @@ renderers, in tests and CI.
 
 | Header | Ran on real hardware | Only in sim or CI | Source |
 |---|---|---|---|
-| screen | Windows 11, Iris Xe, internal panel, 60 Hz: flip records from software timestamps (both swap paths); the web backend's callback times in Chrome, Edge and Firefox | Light (no photodiode); another GPU, rate or display; Linux and macOS (simulated display only); light in a browser | screen.h STATUS; docs/screen.md; docs/web.md |
+| screen | Windows 11, Iris Xe, internal panel, 60 Hz: flip records from software timestamps (both swap paths); the web backend's callback times in Chrome, Edge and Firefox. Linux desktop, RX 6600, Mesa 22.3.6, Xorg with Xfwm4, 60 Hz: GLX_OML flip records (Present's times; flips fullscreen, copies in a window), X11 key times through XTEST | Light (no photodiode); another rate; a GPU-late frame (raises the depth for good); separate X screens; Wayland and macOS (simulated display only); light in a browser | screen.h STATUS; docs/screen.md; docs/screen_x11_probe.md; docs/web.md |
 | gfx | Windows 11, Iris Xe through ANGLE (D3D11) | Light (no photometer or photodiode); WARP, SwiftShader and Mesa llvmpipe are software | gfx.h STATUS; docs/gfx.md |
 | video | Windows 11, Iris Xe, Media Foundation with DXVA, a 640x360 window; soundtrack on the real WASAPI device | Light and sound; fullscreen | video.h STATUS |
 | audio | Windows 11, WASAPI on the Realtek speakers (shared 48 kHz, exclusive), placement checked by WASAPI loopback capture | Sound at the speaker (no loopback cable: the delay to sound is not measured); CoreAudio, ALSA, PulseAudio, Web Audio | audio.h STATUS; docs/audio.md |
@@ -62,7 +62,7 @@ unless your file already did.
 | device | rt.h, input.h, box.h, serial.h | device.h, rt.h, input.h, box.h, serial.h (+ parallel.h for `YBOX_PARALLEL`) | none |
 | rigfile | device.h, json.h | rigfile.h, json.h, device.h, rt.h, input.h, box.h, serial.h | none |
 | net | rt.h, input.h | net.h, rt.h, input.h | liblsl, loaded at run time |
-| screen | rt.h, input.h | screen.h, rt.h, input.h | SDL3; ANGLE's DLLs at run time on Windows |
+| screen | rt.h, input.h | screen.h, rt.h, input.h | SDL3 (3.4.18 or later on X11); ANGLE's DLLs at run time on Windows; libX11, libGL and libxcb at run time on Linux |
 | audio | rt.h | audio.h, rt.h | miniaudio 0.11.25 (`YAU_NO_MINIAUDIO`: none) |
 | gfx | screen.h, color.h | gfx.h, screen.h, color.h, rt.h, input.h (+ outline.h for `ygfx_text_make()`) | as screen |
 | video | gfx.h, timeline.h | video.h, gfx.h, timeline.h, screen.h, color.h, rt.h, input.h | as screen; pl_mpeg for MPEG-1 (optional) |

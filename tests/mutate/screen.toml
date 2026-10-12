@@ -1,3 +1,7 @@
+# v0.8.0: the glx- mutants run tests/adapt/screen_glx_test.c, which needs
+# an X session with Mesa and takes the screen for about 7 s per mutant.
+# Set YSP_SDL3 to an SDL3 install prefix (3.4.18 or later on Xfwm4: 3.4.0
+# can end the process on an X error, docs/screen.md). Run them with -j 1.
 
 # ysp/screen.h mutants: the v0.3.1 list (aborts, panic, icon), the 12 of the
 # 41 that ysp/screen.h's header comment counts, v0.3.2's 2 (text input,
@@ -23,6 +27,14 @@ compiler = "msvc"
 flags = ["/O1", "/W3", "/D_CRT_SECURE_NO_WARNINGS"]
 timeout = 600
 env_default = { YSCR_ANGLE_DIR = "C:/Program Files/Docker/Docker/frontend" }
+
+[test.screen_glx]
+source = "tests/adapt/screen_glx_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O1", "-w", "-I$YSP_SDL3/include"]
+libs = ["-L$YSP_SDL3/lib", "-Wl,-rpath,$YSP_SDL3/lib", "-lSDL3", "-lm", "-lpthread", "-ldl"]
+timeout = 120
+env = { YSCR_GLX_TEST_REQUIRE = "1" }
 
 [[mutant]]
 id = "abort-00"
@@ -1135,3 +1147,67 @@ test = "screen"
 why = "v0.7.0: the mean of 20 intervals is the period; the median of coarse callback times is off by a clock step."
 find = "    w->period = (int64_t)llround(m);"
 replace = "    w->period = med;"
+
+[[mutant]]
+id = "glx-00"
+name = "every Present mode is a copy"
+test = "screen_glx"
+why = "A Present flip is the independent path and tier 1; reporting every flip as composed hides the path change a copy means."
+find = 'v.path = ev[YSCR__PEV_MODE] == YSCR__PRESENT_MODE_FLIP ? YSCR_PATH_INDEPENDENT : YSCR_PATH_COMPOSED;'
+replace = 'v.path = YSCR_PATH_COMPOSED;'
+
+[[mutant]]
+id = "glx-01"
+name = "serial off by one"
+test = "screen_glx"
+why = "Each Present event must complete the swap whose SBC is its serial; matching the wrong swap leaves every record without an observed onset."
+find = 'if (g->map_sbc[k] && (uint32_t)g->map_sbc[k] == serial) {'
+replace = 'if (g->map_sbc[k] && (uint32_t)g->map_sbc[k] == serial + 1u) {'
+
+[[mutant]]
+id = "glx-02"
+name = "target vblank not passed"
+test = "screen_glx"
+why = "GLX_OML holds a frame by passing the planned vblank to glXSwapBuffersMscOML; without it a held frame shows early."
+find = 'sbc = yscr__x.SwapBuffersMsc(g->dpy, g->gwin, req->target_count > 0 ? req->target_count : 0, 0, 0);'
+replace = 'sbc = yscr__x.SwapBuffersMsc(g->dpy, g->gwin, 0, 0, 0);'
+
+[[mutant]]
+id = "glx-03"
+name = "variable refresh left on"
+test = "screen_glx"
+why = "Mesa sets _VARIABLE_REFRESH = 1 at the first swap; the header must clear it after that swap."
+find = 'if (g->vrr_atom) yscr__x.change_property(g->xc, 0, g->win, g->vrr_atom, YSCR__XCB_ATOM_CARDINAL, 32, 1, &zero);'
+replace = '(void)zero;'
+
+[[mutant]]
+id = "glx-04"
+name = "UST taken as nanoseconds"
+test = "screen_glx"
+why = "Present's UST is CLOCK_MONOTONIC in microseconds; read as nanoseconds, every onset is off the ysp_rt clock, and open() must refuse."
+find = '    v.t_ns = (int64_t)ust * 1000;'
+replace = '    v.t_ns = (int64_t)ust;'
+
+[[mutant]]
+id = "glx-05"
+name = "swap interval not checked"
+test = "screen_glx"
+why = "vblank_mode=0 turns swap interval 1 into 0, and Present then flips without the vblank; open() must refuse it."
+find = '        if (iv != 1) {'
+replace = '        if (0) {'
+
+[[mutant]]
+id = "glx-06"
+name = "keys keep SDL's stamp"
+test = "screen_glx"
+why = "On X11 SDL stamps a key at the next frame's pump, 8 to 17 ms late; yscr_poll() must give it the X server's time."
+find = "        if (t) ev->common.timestamp = (Uint64)(t - s->sdl_rt + s->sdl_ticks);"
+replace = "        (void)t;"
+
+[[mutant]]
+id = "glx-07"
+name = "server time read as us"
+test = "screen_glx"
+why = "The X server's time is in ms of CLOCK_MONOTONIC; read in another unit it is off the clock, and the key falls back to SDL's late stamp."
+find = "            return t * 1000000;"
+replace = "            return t * 1000;"

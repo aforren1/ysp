@@ -1,16 +1,17 @@
 # X11 display-timing probe, 2026-10-09
 
 This note describes a probe that measures display timing on a Linux X11
-rig. Its results decide how the GLX backend of `ysp/screen.h`
-(`YSCR_BACKEND_GLX_OML`, a stub today) is built. The plan that asks for
+rig. Its results decided how the GLX backend of `ysp/screen.h`
+(`YSCR_BACKEND_GLX_OML`, v0.5.0) is built. The plan that asks for
 the backend is [rig_spec.md](rig_spec.md) section 4.2 ("Linux X11: GLX
 sync control", separate X screens) and section 8 (timing model, tiers).
 The Windows measurements that the probe mirrors are in
 [screen.md](screen.md): depth, holding a frame, the onset as an
 observation, path reports, slack.
 
-The probe has not run on the rig yet. The results section at the end is
-an empty template. Fill it from the archive that `run.sh` makes.
+The probe ran on one rig on 2026-10-09 (section 5). The backend and its
+own measurements are in [screen.md](screen.md), "Linux X11: GLX_OML".
+To add a rig, run the probe there and add its column to section 5.
 
 Code: `tests/probe/screen_x11/`
 
@@ -355,64 +356,123 @@ heavy shader. Compare its late frames and grid residuals with pass 1.
    Xorg log. The backend must keep variable refresh off by default
    (rig_spec 4.2).
 
-## 5. Results (template)
+## 5. Results
 
-Fill from `summary.txt` of each pass. Leave a cell empty when the
-probe did not report it.
+One rig: `run.sh` on 2026-10-09, archive
+`ysp_x11_probe_20261009_081033.tar.gz` (not in the repository). Pass 1
+idle, pass 2 with 20 busy threads and the heavy shader. Section 5.2's
+NotifyMSC rows come from the fixed probe (section 6, "Defects found on
+the rig"), run again the same day.
 
 ### 5.1 Conditions
 
 | Item | Value |
 |---|---|
-| Date, kernel, distribution | |
-| X server, DDX (provider name) | |
-| GPU, Mesa (GL_RENDERER, GL_VERSION) | |
-| X screens; per screen: outputs, mode, refresh (dot clock) | |
-| Compositing manager per screen | |
-| DRI3, Present version | |
-| `TearFree`, `VariableRefresh`, `vrr_capable`, `_VARIABLE_REFRESH` | |
-| `SCHED_FIFO` granted | |
-| Power (AC), amdgpu power level | |
+| Date, kernel, distribution | 2026-10-09, Linux 6.11.5-1-liquorix-amd64, Debian 12 |
+| X server, DDX (provider name) | X.Org 1.21.1 (release 12101007); amdgpu ("AMD Radeon RX 6600 @ pci:0000:03:00.0"). A second provider, "modesetting", is the Intel iGPU with no output connected |
+| GPU, Mesa (GL_RENDERER, GL_VERSION) | AMD Radeon RX 6600 (navi23, LLVM 15.0.6, DRM 3.59); OpenGL ES 3.2 Mesa 22.3.6 |
+| X screens; per screen: outputs, mode, refresh (dot clock) | 1 screen; DisplayPort-5 (HP E23 G4, HDMI subconnector), 1920 x 1080, 148.5 MHz / (2200 x 1125) = 60.000000 Hz |
+| Compositing manager per screen | none (Xfwm4, compositor off) |
+| DRI3, Present version | yes, Present 1.2 |
+| `TearFree`, `VariableRefresh`, `vrr_capable`, `_VARIABLE_REFRESH` | auto; not set in any X config file; 0; 1 on every fullscreen window (Mesa), not set on the 640 x 480 window |
+| `SCHED_FIFO` granted | yes, priority 10 |
+| Power (AC), amdgpu power level | desktop on AC; `auto`, profile 3D_FULL_SCREEN |
 
-### 5.2 Sync control and clocks, per screen
+### 5.2 Sync control and clocks, screen 0
 
-| Item | Screen 0 | Screen 1 |
-|---|---|---|
-| GLX_OML_sync_control, INTEL_swap_event | | |
-| GLX GL ES 3.0 context | | |
-| UST clock and unit (OML) | | |
-| UST clock and unit (Present) | | |
-| Mode refresh; UST fit; difference ppm | | |
-| NotifyMSC grid residual p99 / max, us | | |
-| NotifyMSC arrival after UST p50 / p99, us | | |
+| Item | Screen 0 |
+|---|---|
+| GLX_OML_sync_control, INTEL_swap_event | yes, yes |
+| GLX GL ES 3.0 context | yes, direct (GLX_EXT_create_context_es2_profile) |
+| UST clock and unit (OML) | CLOCK_MONOTONIC, us (195 of 200 reads in range) |
+| UST clock and unit (Present) | the same: OML minus Present UST 0 us at most, in every run |
+| Mode refresh; UST fit; difference ppm | 60.000000 Hz; 59.999302 Hz; 11.6 ppm |
+| NotifyMSC grid residual p99 / max, us | 0.67 / 1.02 |
+| NotifyMSC arrival after UST p50 / p99, us | -427 / -292: the event comes before its UST, which is the end of the vblank |
+| glXGetSyncValuesOML call | 54.6 us p50, 91.5 us p99, 7.5 to 94.1 us (200 reads, clock.csv) |
 
-### 5.3 Swap runs, per screen and API
+### 5.3 Swap runs, screen 0
 
-Copy the table rows of `summary.txt` here, pass 1 then pass 2. Add one
-line per run for anything the notes lines say (serial check, OML minus
-Present UST).
+Pass 1, idle, GLX:
+
+| run | swaps | shown | Present mode flip/copy/subopt/skip/none | on target | late | early | MSC step 0/1/2/3+ | swap call us p50/p99/max | onset minus return ms p50/p99/max | known after onset us, sync p50/p99; Present p50/p99 | grid residual us p99/max | slack ms: min on time; max late |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| oml_k1 | 600 | 600 | 600/0/0/0/0 | 600 | 0 | 0 | 0/599/0/0 | 44/94/122 | 17.00/17.09/17.09 | -396/-242; -393/-238 | 0.7/1.9 | 16.78; - |
+| oml_k2 | 300 | 300 | 300/0/0/0/0 | 300 | 0 | 0 | 0/0/299/0 | 45/99/109 | 33.66/33.74/33.76 | -396/-231; -393/-223 | 1.1/2.2 | 33.42; - |
+| oml_k3 | 200 | 200 | 200/0/0/0/0 | 200 | 0 | 0 | 0/0/0/199 | 36/84/111 | 50.35/50.41/50.42 | -410/-261; -408/-258 | 0.7/1.0 | 50.15; - |
+| swap_wait | 600 | 600 | 600/0/0/0/0 | 600 | 0 | 0 | 0/599/0/0 | 36/112/234 | 17.01/17.07/17.09 | -406/-250; -402/-245 | 1.1/2.5 | 16.62; - |
+| swap_pipe | 600 | 600 | 600/0/0/0/0 | - | - | - | 0/599/0/0 | 53/94/114 | 33.68/33.74/33.77 | -; -350/-197 | 0.7/1.2 | - |
+| sleep_k2 | 300 | 300 | 300/0/0/0/0 | 300 | 0 | 0 | 0/0/299/0 | 77/162/206 | 15.58/15.65/15.65 | -403/-237; -400/-233 | 0.7/0.7 | 15.45; - |
+| vblwait_k2 | 300 | 300 | 300/0/0/0/0 | 300 | 0 | 0 | 0/0/299/0 | 62/104/114 | 17.03/17.08/17.09 | -400/-258; -397/-254 | 0.7/2.4 | 16.85; - |
+| oml_k1_late | 600 | 600 | 600/0/0/0/0 | 580 | 20 (20 of 20 injected) | 0 | 0/579/20/0 | 50/71/108 | 17.01/17.05/17.08 | -407/-383; -404/-379 | 0.7/2.5 | 16.91; -3.78 |
+| window_swap_wait (640 x 480) | 300 | 300 | 0/300/0/0/0 | 300 | 0 | 0 | 0/299/0/0 | 31/63/67 | 16.94/17.08/17.09 | -330/415; -328/420 | 2.2/2.7 | 16.13; - |
+| window_oml_k1 (640 x 480) | 300 | 300 | 0/300/0/0/0 | 300 | 0 | 0 | 0/299/0/0 | 46/67/76 | 16.89/17.05/17.08 | -274/419; -270/422 | 2.2/2.5 | 15.76; - |
+
+In every GLX run the Present serial equaled the swap count on every
+swap, and INTEL_swap_event agreed with Present's mode (flip fullscreen,
+copy in the window).
+
+Pass 1, EGL (`libEGL.so.1`, radeonsi): `swap_wait`, `swap_pipe`,
+`sleep_k2`, `vblwait_k2` and `swap_wait_late` gave the same results as
+GLX, every swap a flip. EGL has no target MSC, so it holds a frame only by
+`sleep` or `vblwait`.
+
+Pass 2, 20 busy threads and the heavy shader, GLX:
+
+| run | swaps | shown | Present mode flip/copy/subopt/skip/none | on target | late | early | MSC step 0/1/2/3+ | swap call us p50/p99/max | onset minus return ms p50/p99/max | known after onset us, sync p50/p99; Present p50/p99 | grid residual us p99/max | slack ms: min on time; max late |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| oml_k1 | 600 | 600 | 600/0/0/0/0 | 600 | 0 | 0 | 0/599/0/0 | 24/35/47 | 17.02/17.09/17.09 | -383/1224; -383/1225 | 1.0/5.7 | 14.72; - |
+| swap_wait | 600 | 600 | 600/0/0/0/0 | 600 | 0 | 0 | 0/599/0/0 | 22/38/79 | 16.94/17.09/17.09 | -302/1408; -301/1409 | 1.0/1.5 | 12.79; - |
+| swap_pipe | 600 | 600 | 600/0/0/0/0 | - | - | - | 0/599/0/0 | 22/36/2566 | 33.57/33.76/33.77 | -; -229/1449 | 1.0/8.9 | - |
+| window_swap_wait | 300 | 300 | 0/300/0/0/0 | 300 | 0 | 0 | 0/299/0/0 | 22/40/45 | 16.85/17.09/17.09 | -220/1689; -219/1690 | 0.8/0.8 | 14.07; - |
+| window_oml_k1 | 300 | 300 | 0/300/0/0/0 | 300 | 0 | 0 | 0/299/0/0 | 21/35/42 | 16.91/17.09/17.10 | -269/1280; -268/1281 | 0.8/9.1 | 13.65; - |
+
+Under load the event came up to 1.4 ms after the UST (p99), against
+0.24 ms before it idle. No frame was late.
 
 ### 5.4 Two screens
 
-| Phase | Screen 0 late / steps 2+ / grid p99 | Screen 1 late / steps 2+ / grid p99 | Notes |
-|---|---|---|---|
-| A | | | |
-| B | | | |
-| C | | | offset p50, drift |
-| D | | untimed swaps per second, modes | |
+Not run: the rig has one X screen.
 
 ### 5.5 EGL, ANGLE, Vulkan, SDL3
 
 | Item | Result |
 |---|---|
-| EGL: driver, CHROMIUM sync control, frame timestamps, Present path | |
-| ANGLE: back ends that initialized, GL_RENDERER, Present path | |
-| Vulkan: driver; present_id/wait (2); display_timing; present_timing; acquire_xlib_display | |
-| SDL3 variants 1 to 6 (RESULT lines) | |
+| EGL: driver, CHROMIUM sync control, frame timestamps, Present path | radeonsi; EGL_CHROMIUM_sync_control yes (UST CLOCK_MONOTONIC us); EGL_ANDROID_get_frame_timestamps no; Present events yes, every fullscreen swap a flip |
+| ANGLE: back ends that initialized, GL_RENDERER, Present path | not run (no `--angle`) |
+| Vulkan: driver; present_id/wait (2); display_timing; present_timing; acquire_xlib_display | not measured: `vkCreateInstance` returned -9 (VK_ERROR_INCOMPATIBLE_DRIVER), no instance extension listed; no Vulkan driver installed |
+| SDL3 variants 1 to 6 (RESULT lines) | not run: no SDL3 on the rig (Debian 12 has no package) |
 
 ### 5.6 Decisions
 
-One line per item of section 4, with the numbers it rests on.
+1. **Scheduling primitive: the OML target.** `oml_k1`, `oml_k2` and
+   `oml_k3` showed 1100 of 1100 frames on their target, 0 early, idle and
+   under load. `yscr_flip_at()` passes the planned vblank to
+   `glXSwapBuffersMscOML` and does not wait (`native_target`). `sleep_k2`
+   and `vblwait_k2` were exact too, but cost a wait on the frame thread.
+2. **Context API: GLX, GL ES 3.0.** GLX gave an ES 3.0 context, and only
+   GLX has the target MSC.
+3. **Onset source and tier: Present's UST, tier 1 on a flip.** The UST is
+   CLOCK_MONOTONIC in us (no correlation), equal to OML's, within 0.67 us
+   p99 of the NotifyMSC grid, and it moved with each of the 20 injected
+   late frames. Idle, the event arrives 0.40 ms before the UST at p50 and
+   at least 0.24 ms before it at p99, so a record completes at about its
+   onset.
+4. **Path detection: Present's mode.** Fullscreen was a flip on all 5300
+   GLX swaps of both passes, the 640 x 480 window a copy on all 1200. A
+   copy is tier 2. INTEL_swap_event agreed, and is not used.
+5. **Depth and slack.** `swap_wait` showed MSC step 1 on 599 of 599:
+   depth 1. The smallest on-time slack was 15.45 ms (`sleep_k2`), the
+   largest late slack -3.78 ms, so the deadline before a vblank is between
+   them; the core's slack evidence (screen.md, "Depth on a backend that
+   holds frames") learns it.
+6. **Two-screen design: not decided.** One X screen on this rig.
+7. **10-bit output: not on this server.** 0 of 504 visuals are 30-bit
+   (the server runs at depth 24), 0 FBConfigs or EGL configs have 10 bpc;
+   `max bpc` is 16 and the gamma ramp has 1024 entries.
+8. **VRR safety.** `vrr_capable` is 0 on this monitor, but Mesa set
+   `_VARIABLE_REFRESH = 1` on every fullscreen window. The backend sets it
+   to 0 after the first swap (screen.md).
 
 ## 6. Checked, and not verified
 
@@ -437,16 +497,30 @@ simulated 60 Hz vblank and no display.
   crashed is abandoned, not closed: after a crash, the driver's and
   Xlib's locks can still be held, and closing deadlocked.
 
+Verified on the rig (section 5): DRI3 and Present events for GL swaps,
+the serial check, the mode counts, a second client's Present selection
+on Mesa's window, OML, INTEL_swap_event and swap interval control.
+
 Not verified:
 
-- Neither Xvfb nor WSLg has DRI3, so GL swaps made no Present events.
-  The PresentCompleteNotify path for swaps (event to swap matching, the
-  serial check, the mode counts) has not run.
-- OML, INTEL_swap_event, swap interval control, SDL3 and ANGLE were
-  absent in WSL, so their paths have not run.
-- Whether Present delivers a second client's selection on Mesa's window
-  on the rig's server. Section 3.4 reads the Present protocol; the run
-  will show it.
-- The two-screen phases with real vblanks, and `--wm` with a real
-  window manager.
-- That `XResetScreenSaver` also holds off DPMS on the rig's server.
+- SDL3 and ANGLE (neither was on the rig), the two-screen phases with
+  real vblanks, and `--wm` with a real window manager. `ysp/screen.h`'s
+  GLX backend does run fullscreen through SDL's window and the window
+  manager (screen.md).
+- That `XResetScreenSaver` also holds off DPMS: the rig's server has no
+  DPMS extension.
+
+### Defects found on the rig, fixed the same day
+
+- **The NotifyMSC test.** The probe queued all 300 PresentNotifyMSC
+  requests at once. The server held 128 and completed the other 172 at
+  once with the current MSC (on targets 130 to 301 vblanks ahead). The
+  summary then said "128 on the MSC asked for", gave an arrival of
+  2.5 ms after the UST, and found no clock for the UST. The limit looks
+  like the DRM file's 4096-byte event space (32 bytes per vblank event);
+  this was not checked. The probe now queues 64 at a time: 300 of 300 on
+  target.
+- **The clock window.** A read or event counted as "in range" from
+  -50 us after the UST. A UST is the start of scanout, the end of the
+  vblank, and the events come from its start: 0.43 ms before the UST at
+  p50 here. The window now starts at -2 ms.

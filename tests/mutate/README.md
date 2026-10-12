@@ -146,7 +146,7 @@ newline directly after the opening quotes is not part of the text.
 |---|---|
 | `source` | The test source, relative to the repository root. |
 | `compiler` | `gcc` or `msvc`. |
-| `flags`, `libs` | Compiler arguments before the source, and libraries after it. |
+| `flags`, `libs` | Compiler arguments before the source, and libraries after it. The runner expands `$NAME` and `${NAME}` from the environment, for example `$YSP_SDL3` in the `screen_glx` test. An unset name stays as it is, the baseline does not compile, and the mutants of that test are `skipped`. |
 | `timeout` | Seconds for one test run. Default 600. |
 | `env` | Environment variables for each run. |
 | `env_default` | Environment variables that the runner sets only when they are not set already. `{repo}` is the repository root. |

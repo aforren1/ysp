@@ -2,8 +2,13 @@
  *
  *   1. The restamp's clock correlation: yrt_correlate() of SDL_GetTicksNS
  *      against the ysp_rt clock, 1000 times: width and cost.
- *   2. Windows only: key events injected with SendInput() at known ysp_rt
- *      times, read back with yscr_poll(), with SDL's message-loop keyboard
+ *   2. Key events injected at known ysp_rt times and read back with
+ *      yscr_poll(). Linux X11: through XTEST on a connection of its own,
+ *      keycode 192 (XF86Launch5 in Xfce's keymap; nothing binds it), which
+ *      enters the X server above the kernel, as SendInput enters Windows.
+ *      ysp/screen.h stamps X11 keys with the X server's time (ms), so the
+ *      SDL timestamp's sub-ms part is the restamp's, not SDL's.
+ *      Windows: SendInput(), with SDL's message-loop keyboard
  *      and then with SDL_HINT_WINDOWS_RAW_KEYBOARD. When the window cannot
  *      take the keyboard focus (a program started in the background does
  *      not get it), WM_KEYDOWN is posted to the window instead, which tests
@@ -48,6 +53,8 @@
 
 #if defined(_WIN32)
     #include <windows.h>
+#elif defined(__linux__)
+    #include <dlfcn.h>
 #endif
 
 static int cmp_d(const void* a, const void* b) {
@@ -131,6 +138,7 @@ static int run_path(yscr_screen* s, int mode, int count) {
     row("SDL timestamp mod 1 ms, us", subms, nd);
     return quit;
 }
+
 
 /* --reports: how many key reports SDL gives per injected press on the raw
  * path, for virtual-key injection (wVk, scan code 0) and scan-code
@@ -376,6 +384,70 @@ static void mice_mode(yscr_screen* s, int seconds) {
         printf("  device 0 is every pointer Windows makes itself: a precision touchpad's, injected input's\n");
 }
 
+#if defined(__linux__)
+/* XTEST from a second X connection: the server routes the key to the window
+ * with the focus, as it would a keyboard's. libX11 and libXtst are loaded
+ * here, so the example links nothing more. Returns 1 when Esc or close ended
+ * the run, -1 when XTEST is not there. */
+#define XT_KEYCODE 192u
+static int run_xtest(yscr_screen* s, int count) {
+    static double delta[4096], subms[4096];
+    void* (*open_display)(const char*) = NULL;
+    int (*close_display)(void*) = NULL;
+    int (*flush)(void*) = NULL;
+    int (*fake_key)(void*, unsigned int, int, unsigned long) = NULL;
+    void *x11 = dlopen("libX11.so.6", RTLD_NOW | RTLD_GLOBAL), *xtst = dlopen("libXtst.so.6", RTLD_NOW);
+    void *p, *dpy;
+    int nd = 0, injected = 0, waiting = 0, quit = 0;
+    int64_t t_inj = 0, give_up = 0, end;
+    uint32_t rng = 777u;
+    if (!x11 || !xtst) { printf("XTEST: libX11.so.6 or libXtst.so.6 not found\n"); return -1; }
+    p = dlsym(x11, "XOpenDisplay");  memcpy(&open_display, &p, sizeof p);
+    p = dlsym(x11, "XCloseDisplay"); memcpy(&close_display, &p, sizeof p);
+    p = dlsym(x11, "XFlush");        memcpy(&flush, &p, sizeof p);
+    p = dlsym(xtst, "XTestFakeKeyEvent"); memcpy(&fake_key, &p, sizeof p);
+    if (!open_display || !close_display || !flush || !fake_key) { printf("XTEST: an entry point is missing\n"); return -1; }
+    dpy = open_display(NULL);
+    if (!dpy) { printf("XTEST: cannot open the display\n"); return -1; }
+    end = (int64_t)yrt_now_ns() + (int64_t)count * 60000000 + 5000000000LL;
+    while ((injected < count || waiting) && !quit && (int64_t)yrt_now_ns() < end) {
+        yscr_frame f;
+        SDL_Event ev;
+        int64_t t_ev;
+        if (yscr_begin(s, &f) != YSCR_OK) { quit = 1; break; }
+        while (yscr_poll(s, &ev, &t_ev)) {
+            if (ev.type == SDL_EVENT_QUIT || ev.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED ||
+                (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_ESCAPE)) quit = 1;
+            if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.raw == XT_KEYCODE && waiting && nd < 4096) {
+                delta[nd] = (double)(t_ev - t_inj) / 1e6;
+                subms[nd] = (double)(ev.common.timestamp % 1000000u) / 1e3;
+                nd++;
+                waiting = 0;
+            }
+        }
+        if (waiting && yrt_now_ns() > give_up) waiting = 0;   /* lost: not counted */
+        if (!waiting && !quit && injected < count && SDL_GetKeyboardFocus() == yscr_window(s)) {
+            /* a random phase inside the frame, so the frame loop is no clock */
+            rng = rng * 1664525u + 1013904223u;
+            yrt_sleep_until(yrt_now_ns() + (rng >> 8) % 8000000u, 0);
+            t_inj = (int64_t)yrt_now_ns();
+            fake_key(dpy, XT_KEYCODE, 1, 0);
+            fake_key(dpy, XT_KEYCODE, 0, 0);
+            flush(dpy);
+            give_up = t_inj + 500000000;
+            waiting = 1;
+            injected++;
+        }
+        yscr_flip(s);
+    }
+    close_display(dpy);
+    printf("XTEST, keycode %u: %d injected, %d received\n", XT_KEYCODE, injected, nd);
+    row("restamped event - injection, ms", delta, nd);
+    row("SDL timestamp mod 1 ms, us", subms, nd);
+    return quit;
+}
+#endif
+
 int main(int argc, char** argv) {
     yscr_screen s;
     yscr_desc d;
@@ -484,9 +556,21 @@ int main(int argc, char** argv) {
             run_path(&s, 2, count);
         }
     }
+#elif defined(__linux__)
+    (void)reports;   /* the report count is about Windows' two key paths */
+    {
+        int64_t until = (int64_t)yrt_now_ns() + 2000000000LL;
+        while (SDL_GetKeyboardFocus() != yscr_window(&s) && (int64_t)yrt_now_ns() < until) {
+            yscr_frame f;
+            if (yscr_begin(&s, &f) != YSCR_OK) break;
+            yscr_flip(&s);
+        }
+        if (SDL_GetKeyboardFocus() == yscr_window(&s)) run_xtest(&s, count);
+        else printf("the window has no keyboard focus: no key is injected\n");
+    }
 #else
     (void)reports;   /* the report count injects keys: Windows only */
-    printf("key injection is Windows only here\n");
+    printf("key injection is Windows and Linux X11 only here\n");
 #endif
     yscr_close(&s);
     if (timer_res) yrt_timer_resolution_end();

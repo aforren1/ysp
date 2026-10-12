@@ -64,12 +64,17 @@ other machines, run nothing else while measuring.
 
 ## Linux X11 work
 
-`ysp/screen.h`'s X11 and Wayland backends are stubs. Start with the
-probe (`docs/screen_x11_probe.md`; `sh tests/probe/screen_x11/run.sh`
-from the repo root, in the X session): run it, read its results, then design
-the backend from them and from `docs/rig_spec.md` 4.2 (GLX sync control,
-separate X screens) and `docs/screen.md` (flip records, paths, depth,
-slack, flip_at). Do not assume what the driver does; the probe measures it.
+`ysp/screen.h` v0.8.0 has the GLX backend (`YSCR_BACKEND_GLX_OML`;
+design and numbers in `docs/screen.md`, "Linux X11: GLX_OML"; its basis
+in `docs/screen_x11_probe.md` section 5). Wayland is a stub. On a new
+rig, run the probe first (`sh tests/probe/screen_x11/run.sh` from the
+repo root, in the X session) and add its column to section 5; do not
+assume what the driver does. Use SDL 3.4.18 or later on X11 (3.4.0 can
+end the process on an X error). `test_screen_glx` checks the backend on
+a display (not in ctest); the `glx-` mutants need `YSP_SDL3` set to an
+SDL3 prefix. Open: separate X screens (`desc.x_display`), the panic
+watchdog, the CRTC gamma ramp, GPU-late frames that raise the depth for
+good (docs/screen.md), a raw evdev reader.
 
 ## Linux real-time priority
 

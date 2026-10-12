@@ -693,9 +693,9 @@ jobs:
 
   # --------------------------------------------------------------------- #
   # ysp/screen.h: the one header with an external dependency, SDL3. The   #
-  # headers job builds only its SDL-free test; this job gets SDL3 3.4.0   #
+  # headers job builds only its SDL-free test; this job gets SDL3 3.4.18  #
   # pinned (Windows: the release zips, checked by SHA-256; Linux and      #
-  # macOS: the release-3.4.0 tag, built once and cached) and builds the   #
+  # macOS: the release tag, built once and cached) and builds the         #
   # compile checks, the test and the examples, and on Windows the MinGW   #
   # compile checks too. No runner has a display worth timing, so the      #
   # examples run on the simulated display. ysp/gfx.h, on ysp/screen.h,    #
@@ -712,7 +712,9 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     env:
-      SDL_VERSION: 3.4.0
+      # 3.4.18: before it, SDL's X11 ConfigureNotify handler had no X error
+      # handler, and a window manager's race ended the process (docs/screen.md).
+      SDL_VERSION: 3.4.18
       ELECTRON_VERSION: v38.8.6   # ANGLE 2.1.25848 (git 85cc0e0b9cc3)
     steps:
       - uses: actions/checkout@v7
@@ -721,10 +723,12 @@ jobs:
       # DejaVu Sans is the system font ygfx_text_make() looks for on Linux:
       # without it trial_keyboard's instruction screen is blank. macOS
       # installs nothing: ygfx_text_make() takes the Arial or Helvetica
-      # that macOS ships.
-      - name: Mesa EGL and a font (Linux)
+      # that macOS ships. The X11, GL and xcb headers are only for
+      # tests/compile/screen_glx.cpp, which checks ysp/screen.h's own
+      # declarations against them; the header itself needs none of them.
+      - name: Mesa EGL, a font, X11 and GL headers (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libegl-mesa0 libgl1-mesa-dri fonts-dejavu-core
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libegl-mesa0 libgl1-mesa-dri fonts-dejavu-core libx11-dev libgl-dev libxcb1-dev libxcb-present-dev
 
       - name: ANGLE cache (Windows)
         if: runner.os == 'Windows'
@@ -759,8 +763,8 @@ jobs:
           base=https://github.com/libsdl-org/SDL/releases/download/release-$SDL_VERSION
           curl -sfLo sdl-vc.zip "$base/SDL3-devel-$SDL_VERSION-VC.zip"
           curl -sfLo sdl-mingw.zip "$base/SDL3-devel-$SDL_VERSION-mingw.zip"
-          echo "4489ba0070b8ce047b8717e4b71fa7e35ac71362e7a6bb2a90a7a27f624b3d5d  sdl-vc.zip" | sha256sum -c -
-          echo "ac22b9b0556e2f59059c9219245cd0bf73fdef4c5c4b35a601d9dc85c72661ea  sdl-mingw.zip" | sha256sum -c -
+          echo "78d84602ae616cfe26b33a73b7d3b9b6b56e8a6650e53d92c9c6ca938f747acd  sdl-vc.zip" | sha256sum -c -
+          echo "cd98158c8d025a816f430a600b4e9526524e6219ee884ec72bd498b80fd3bf58  sdl-mingw.zip" | sha256sum -c -
           unzip -q sdl-vc.zip -d "$RUNNER_TEMP/vc"
           unzip -q sdl-mingw.zip -d "$RUNNER_TEMP/mingw"
           echo "SDL3_DIR=$RUNNER_TEMP/vc/SDL3-$SDL_VERSION/cmake" >> "$GITHUB_ENV"
@@ -776,7 +780,7 @@ jobs:
 
       # A console build on Linux: the checks and the simulated display need no
       # X11 or Wayland, and the runner has neither's development packages.
-      - name: SDL3 (Linux, macOS, tag release-3.4.0)
+      - name: SDL3 (Linux, macOS, the release tag)
         if: runner.os != 'Windows' && steps.sdlcache.outputs.cache-hit != 'true'
         run: |
           set -eu

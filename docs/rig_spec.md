@@ -1175,7 +1175,7 @@ the one development machine, and Windows 10 became best effort
 |---|---|
 | 1. `ysp/rt.h`: event ring, clock correlation | Done, v0.5.0, with the instrumentation macros. |
 | 2. `ysp/timeline.h` | v0.4.0: events, tracks, tweens, `ytl_skip`, `ytl_lead`, `ytl_peek`, exact rational base rates (`ytl_rate`), `ytl_window`, `ytl_rt_time`, the `ytl_seq` builder with op tables, `ytl_run`, `ytl_check_ops` and the key arena (4.5.1). |
-| 3. `ysp/screen.h` | v0.3.2 on Windows: DXGI_FLIP and COMPOSITION, flip hooks (codes, triggers, after-flip callbacks), the OS gamma ramp, the Shift+Esc abort and the triple-press panic, the window icon, text input for a text box with a ring record and a flip flag while keys are off the raw path, D3D11 video support on the device. X11, Wayland and macOS are stubs. v0.7.0: the web backend (WebGL2, requestAnimationFrame, the lowest tier; docs/web.md) and the demos on GitHub Pages. No photodiode run. |
+| 3. `ysp/screen.h` | v0.3.2 on Windows: DXGI_FLIP and COMPOSITION, flip hooks (codes, triggers, after-flip callbacks), the OS gamma ramp, the Shift+Esc abort and the triple-press panic, the window icon, text input for a text box with a ring record and a flip flag while keys are off the raw path, D3D11 video support on the device. Wayland and macOS are stubs. v0.7.0: the web backend (WebGL2, requestAnimationFrame, the lowest tier; docs/web.md) and the demos on GitHub Pages. v0.8.0 (2026-10-12): Linux X11, GLX with OML target vblanks and Present's per-flip events, X11 key times from the X server (docs/screen.md). No photodiode run. |
 | 4. `ysp/audio.h` | v0.2.0 on WASAPI shared mode: onsets from a fit of device positions, tier 2. Streams (ring-fed voices, the soundtrack path) and WAV streaming. The other backends compile and have never run. No line-in run. |
 | 5. `ysp/gfx.h` | v0.10.0: stimuli, the signed-distance vector program and kind-specialized programs, strokes, sprites, groups, render targets and setup passes, curve runs from Slug-form curve sets (exact area on resolved unturned glyphs, rays elsewhere and chosen automatically for turned runs), the blur pass, NOISE (uniform, Gaussian, integer simplex fBm, each with a bit-exact CPU twin; v0.9 replaced the nested noise hash, which repeated rows), the output stage; a program binary cache, NV12 and I420 video in linear light, texture import (GL, D3D11 through ANGLE), instanced stimuli, and draws reordered where they do not overlap. It requires `ysp/color.h` (v0.1.0). Text layout (Skribidi) belongs to the pack tool and the player (5.2), not to the header. Missed bars: full text pages (docs/gfx.md; a page drawn once into a target costs 0.5 ms a frame), the text program's cold compile, and some of v0.3's GPU bars. |
 | 6. `ysp/video.h` | v0.2.0: scheduler, frame sequence, pl_mpeg, decode-ahead; Media Foundation (DXVA by default), planar upload to the gfx shader by default, the shared D3D11 GPU path as an option, the soundtrack on `ysp/audio.h` streams, base rates. Not built: AVFoundation, capture. |
@@ -1211,9 +1211,10 @@ the one development machine, and Windows 10 became best effort
 4. **`ysp/timeline.h`**: done for now (v0.4.0: base rates,
    `ytl_window()`, sequences). `ysp/video.h` applies the rates for any
    rate other than 1.
-5. **Other platforms.** `ysp/screen.h` on Linux X11 (GLX sync control)
-   and Wayland (presentation-time), then macOS through ANGLE's Metal
-   backend. `ysp/audio.h` on ALSA, PulseAudio and CoreAudio. A platform
+5. **Other platforms.** `ysp/screen.h` on Linux X11 (GLX sync control;
+   v0.8.0 on one X screen; separate X screens, the panic watchdog and
+   the CRTC gamma ramp are next) and Wayland (presentation-time), then
+   macOS through ANGLE's Metal backend. `ysp/audio.h` on ALSA, PulseAudio and CoreAudio. A platform
    gets its tier from a photodiode or line-in run on that platform, not
    from CI.
 6. The pack tool as a library, and its CLI, with Skribidi, the outline
@@ -1349,7 +1350,11 @@ extension implements one of these kinds, each a versioned C vtable:
   COMPOSITION). Still open: whether any panel overrides `Present(1)`. No
   panel setting was changed on 2026-10-09; the Intel setting is a hand
   test with `screen_sync_check` (docs/screen.md, "Hand test: the Intel
-  setting"). AMD, NVIDIA, Mesa and the X11 backend: not run.
+  setting"). AMD, NVIDIA: not run. Mesa on X11, `vblank_mode=0` in the
+  environment (2026-10-12, Mesa 22.3.6): the swap interval reads back 0
+  after asking for 1, and the GLX backend (screen.h v0.8.0) refuses to
+  open, so the guard never sees that case; a driconf file setting was
+  not tried.
 - Exclusive-mode audio on hardware other than the development laptop
   (added 2026-10-09). There, the Realtek codec sits behind Intel Smart
   Sound Technology (the SST bus and its offload engine driver): shared

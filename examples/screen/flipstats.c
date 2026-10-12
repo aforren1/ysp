@@ -1,6 +1,6 @@
 /* screen_flipstats.c - measure ysp/screen.h's swap path on this machine.
  *
- *     screen_flipstats [--sim | --backend dxgi|composition] [--windowed] [--topmost]
+ *     screen_flipstats [--sim | --backend dxgi|composition|glx] [--windowed] [--topmost]
  *                      [--cover N] [--frames N] [--load N]
  *                      [--overrun MS] [--miss N] [--gpu N] [--hold] [--patch]
  *                      [--depth N | --depth-learn] [--long]
@@ -9,7 +9,8 @@
  *                      [--group] [--allocs | --allocs-control] [--csv FILE]
  *
  *   --sim        the simulated display: no window, no GPU (CI runs this)
- *   --backend B  dxgi (DXGI_FLIP) or composition (COMPOSITION); default AUTO
+ *   --backend B  dxgi (DXGI_FLIP), composition (COMPOSITION) or glx
+ *                (GLX_OML, Linux X11); default AUTO
  *   --topmost    keep the window on top and take the foreground (Windows): a
  *                covered window gets no flip statistics on COMPOSITION
  *   --cover N    from frame N on, put a small window over a corner of ours
@@ -376,7 +377,8 @@ int main(int argc, char** argv) {
             i++;
             if (!strcmp(argv[i], "dxgi")) backend = YSCR_BACKEND_DXGI_FLIP;
             else if (!strcmp(argv[i], "composition")) backend = YSCR_BACKEND_COMPOSITION;
-            else { fprintf(stderr, "--backend: dxgi or composition\n"); return 2; }
+            else if (!strcmp(argv[i], "glx")) backend = YSCR_BACKEND_GLX_OML;
+            else { fprintf(stderr, "--backend: dxgi, composition or glx\n"); return 2; }
         }
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc) frames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--load") && i + 1 < argc) load = atoi(argv[++i]);

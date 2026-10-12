@@ -5,7 +5,7 @@ what was measured. The manual in the header tells you how to use it. The
 plan that asked for the header is section 4.2 of
 [rig_spec.md](rig_spec.md).
 
-All numbers come from one machine: a Windows 11 25H2 laptop (build 26200)
+The Windows numbers come from one machine: a Windows 11 25H2 laptop (build 26200)
 with an Intel Iris Xe that drives the internal 1920 x 1200 panel and an
 NVIDIA RTX A500 with no outputs. The panel has only 60 Hz modes; SDL3
 reports the refresh as 15413000/256880 Hz, 60.0008 Hz, and the vblank
@@ -14,7 +14,8 @@ Desktop's Electron front end, `2.1.23876 git hash: fffbc739779a`, not a
 pinned build. SDL3 is 3.4.0. The frame thread ran at
 `THREAD_PRIORITY_TIME_CRITICAL`. No photodiode was attached, so every
 onset below is a software timestamp: the vblank time DXGI reports, not
-light on the panel.
+light on the panel. The Linux X11 numbers come from a second machine,
+described in [Linux X11: GLX_OML](#linux-x11-glx_oml-v080).
 
 ## Windows: the header owns the swapchain
 
@@ -2728,12 +2729,218 @@ design decisions that touch the core.
   wb-04. The presenter itself runs only in a page: the demos ran in Chrome
   154 (headless and headed), Edge 155 and Firefox 154 to 157 (headless).
 
+## Linux X11: GLX_OML (v0.8.0)
+
+The design comes from the X11 probe ([screen_x11_probe.md](screen_x11_probe.md),
+section 5.6). This section records what the backend itself does and
+what was measured with it. The measurements ran on the backend's code
+before screen.h's v0.5 to v0.7 changes (settling, the foreground, the
+messages, the web backend) were merged under it; after the merge its
+display test and its eight mutants passed again.
+
+The machine: Debian 12, kernel 6.11.5-liquorix, Xorg 21.1 with the
+amdgpu DDX, Mesa 22.3.6 (radeonsi) on an AMD RX 6600, one 1920 x 1080
+output at 60.000000 Hz (dot clock), Xfwm4 with its compositor off,
+SDL 3.4.18, gcc 12.2. The frame thread ran at normal priority
+(`yrt_thread_elevate()` was not granted). No photodiode was attached.
+
+### SDL makes the window, the header makes the context
+
+As on Windows, SDL3 owns the window, and the header owns the swap path.
+SDL's own GL context would work, but the header needs GL ES 3.0, a
+GLXWindow and the OML entry points on a display connection that SDL's
+event pump does not read. So the header opens a second Xlib connection
+to the same display, makes the context there on a GLXWindow over SDL's
+window, and opens a third connection, through xcb, that selects the
+window's PresentCompleteNotify events. The X server sends a copy of each
+event to every client that selects it, so Mesa's own queue is not
+touched. The probe had verified this with its own window; the backend
+does it on SDL's.
+
+The window is SDL's fullscreen window, which the window manager makes
+fullscreen (`_NET_WM_STATE_FULLSCREEN`). The probe measured only an
+override-redirect window. With Xfwm4, every frame of the SDL window was
+a Present flip.
+
+### Measurements
+
+`examples/screen/flipstats.c --backend glx`, one run at a time, nothing
+else on the machine:
+
+| Run | Frames | Path | Late target | Dropped | Early | Estimated | Prediction p50 / p99 / max, us |
+|---|---|---|---|---|---|---|---|
+| fullscreen, patch, idle | 3600 | flip 3600 | 0 | 0 | 0 | 0 | 0.15 / 2.15 / 17.15 |
+| fullscreen, patch, 20 spinning threads | 3600 | flip 3600 | 0 | 0 | 0 | 0 | 0.15 / 1.16 / 16.15 |
+| fullscreen, patch, `--miss 300` | 3600 | flip 3600 | 0 | 0 | 0 | 0 | 0.15 / 1.85 / 17.15 |
+| fullscreen, `--hold` (0 to 4 vblanks ahead) | 600 | flip 600 | 0 | 0 | 0 | 0 | 600 of 600 on the vblank asked for |
+| fullscreen, `--overrun 20` | 600 | flip 600 | 17 | 0 | 0 | 0 | 0.15 / 2.15 / 2.86 |
+| 800 x 600 window | 600 | copy 600 | 0 | 0 | 0 | 0 | 0.15 / 2.86 / 3.15 |
+
+- Every flip of the fullscreen runs is tier 1; every copy of the window
+  run is tier 2.
+- The 17 overruns of 20 ms were all flagged LATE_TARGET and charged to
+  the draw phase; no other frame was late.
+- `--miss 300` adds 1500 clears to 3 frames in 300. That was not enough
+  to make this GPU miss a vblank, so no frame dropped, and the path that
+  raises the depth after misses did not run.
+- The header's own CPU time per frame (idle run): `yscr_begin()` without
+  its wait 4.5 us p50, 14.8 us p99; `yscr_flip_at()` without the swap
+  call 5.5 us p50, 17.0 us p99. The swap call itself
+  (`glXSwapBuffersMscOML`) took 36 us p50.
+- The present return to onset was 17.0 ms p50: one frame in flight, the
+  record of a flip completes as its vblank begins, and the next frame is
+  planned for the vblank after. flipstats' "on the first vblank after
+  the return" counted 1 of 3600 idle: the event of the flip that just
+  completed comes about 0.4 ms before that flip's UST, the next present
+  returns within that time, so the UST of the flip already on the screen
+  counts as the first vblank after the return. Under load the frame
+  thread woke later, after that UST, in 21.9% of frames.
+
+`tests/adapt/screen_glx_test.c` checks the same on a display in about
+6 s: 120 frames on time, 120 held frames on the vblank asked for, every
+record observed, independent and tier 1, the onset on the ysp_rt clock,
+`_VARIABLE_REFRESH` 0, and a refusal under `vblank_mode=0`. ctest does
+not run it. Its six mutants (`tests/mutate/screen.toml`, `glx-`) were all
+killed.
+
+### SDL before 3.4.18 ends the process on an X error
+
+With SDL 3.4.0, CI's version, 7 of 14 short GLX runs ended at open with
+an X error: `BadWindow` on `X_TranslateCoords`, for a window of another
+client. A bare SDL program with no ysp code, a fullscreen window open for
+0.6 s, ended the same way in 2 of 10 runs. SDL's ConfigureNotify handler
+asks the server for the window's parent (`XQueryTree`) and then
+translates coordinates against it (`XTranslateCoordinates`), with no X
+error handler. When the window manager destroys its frame window between
+the two calls, Xlib's default handler ends the process. SDL 3.4.18 puts
+a handler around the calls (3.4.16 does not): 0 of 20 bare runs and 0 of
+20 GLX runs failed. The describe line warns when SDL is older than
+3.4.18. CI pins 3.4.18 since v0.8.0.
+
+### Mesa sets _VARIABLE_REFRESH at the first swap
+
+The probe found `_VARIABLE_REFRESH = 1` on each fullscreen window. Mesa
+sets it when its driconf option `adaptive_sync` is on, which is the
+default. The first backend set the property to 0 after making the
+context current, and the describe line read 1 at the end of the run:
+Mesa sets it at the first swap, not at drawable creation. The backend
+now sets it to 0 after open's test swap; it read 0 at the end of every
+run since. On this monitor (`vrr_capable` 0) the property changes
+nothing; on a variable-refresh monitor with the DDX's `VariableRefresh`
+option on, it would let the refresh vary.
+
+### X11 key times
+
+SDL 3 stamps an X11 key event when it reads the event from the X
+socket, inside `SDL_PumpEvents()`. A frame loop pumps once per frame,
+in `yscr_begin()`, so a key's stamp is the next pump, not the key.
+`examples/screen/input.c` on Linux injects keycode 192 through XTEST
+(the X server's test extension, the analog of SendInput) at a random
+point in each frame, in a 400 x 300 window with the focus, and compares
+the stamp with the injection time:
+
+| Stamp | Keys | Stamp minus injection, ms: min / mean / max |
+|---|---|---|
+| SDL's (`SDL_GetTicksNS()` at the pump) | 199 | 8.59 / 12.67 / 16.63 |
+| The X event's server time, as ms of CLOCK_MONOTONIC | 199 | -1.97 / -1.40 / -0.97 |
+| `yscr_poll()` from v0.8.0 (the server time) | 200 | -1.96 / -1.47 / -0.99 |
+
+The server time sits 1 to 2 ms before the injection, always: Xorg's
+millisecond clock lags by up to a tick (HZ=1000 here) and the
+milliseconds truncate. If the server counted another clock, the second
+row would be off by years. So the header takes SDL's X11 event hook,
+queues each KeyPress and KeyRelease with its server time, and
+`yscr_poll()` writes that time into the SDL key event it returns. A held
+key's release and press, which SDL folds into one repeat, are skipped in
+the queue. A time more than 1 s from now is not used.
+
+What this does not show: a real keyboard. Its event reaches Xorg through
+libinput with the kernel's timestamp, truncated to ms; the delay from the
+key to the kernel (the keyboard's scan and USB polling) is in neither
+stamp. A raw evdev reader would give the kernel's microseconds, but it
+needs read access to `/dev/input/event*` (the `input` group), which this
+user has not got. `test_screen_glx` checks 20 keys; mutants `glx-06` and
+`glx-07`, killed.
+
+### GPU-late frames raise the depth for good
+
+`examples/gfx/stress.c --kind noise` on this machine: full-screen layers
+of gradient noise, 120 frames a level, doubled from 16.
+
+| Layers | Dropped | Slow frames (2+ vblanks after the one before) | Depth after |
+|---|---|---|---|
+| 16 | 0 | 0 | 1 |
+| 32 | 0 | 0 | 1 |
+| 64 | 4 | 119 | 2 |
+| 48, 40, 36, 34, 33 | 0 each | 119 each | 2 |
+| 16 again, 600 frames | 0 | 599 | 2 |
+
+The GPU was late at 64 layers with each present on time. Three misses
+in a row raised the depth to 2, as designed. It never came down: 16
+layers, which ran at one frame per vblank before, then ran at half the
+rate, with no frame counted as dropped.
+
+The rule that lowers the depth on a native-target backend needs on-time
+flips at the slack one depth less would have had ("Depth on a backend
+that holds frames"). The slack is the planned vblank's time minus the
+present call's return. At depth 2 with one frame in flight every present
+returns about two periods before its vblank, so the slack of depth 1 is
+never seen again, and a miss within 4 flips of a lowering has cleared
+the old evidence. The rule cannot recover from GPU lateness, because
+slack measures the CPU's return, not the GPU's finish. Proposed, not
+built: a GL fence after each frame's drawing, checked when the flip
+before it completes; a frame whose GPU work was done by then would have
+made the earlier vblank, which is direct evidence for the lower depth.
+The presenter interface has the slot (`gpu_done`).
+
+### A compositing manager
+
+Xfwm4's compositor switched on (`use_compositing`, with
+`unredirect_overlays` on, its default), 600 frames each, then switched
+off again:
+
+| Window | Present path | Tier | Dropped |
+|---|---|---|---|
+| SDL fullscreen (the window manager's fullscreen) | copy 600 | 3 on all 600 | 0 |
+| 800 x 600 window | copy 600 | 3 on all 600 | 0 |
+| SDL fullscreen as an override-redirect window (`SDL_X11_FORCE_OVERRIDE_REDIRECT=1`) | flip 600 | 1 on all 600 | 0 |
+
+Xfwm4 kept SDL's fullscreen window redirected, although SDL sets
+`_NET_WM_BYPASS_COMPOSITOR`: it unredirects override-redirect windows
+only. A copy into a redirected window completes when the server copies,
+not when the compositor shows the frame, so the backend gives every
+frame tier 3 when a compositing manager owned the screen at open. The
+records were right; the timing claim was not available.
+
+An override-redirect window gets no keyboard focus from the window
+manager: in `test_screen_glx` no injected key reached it. With an
+explicit `XSetInputFocus()` on the window after open, all 20 keys
+arrived with the X server's time and every check passed. So "override-
+redirect plus focus" keeps tier 1 under this compositor. It is not the
+default: the window manager no longer stacks or focuses the window, so a
+notification or another program can take the keys, and SDL's hint is
+process-wide, so it would also hit an operator window. Without a
+compositor both kinds of window flip.
+
+### vblank_mode=0
+
+Under `vblank_mode=0`, Mesa makes the swap interval 0, and Present then
+flips without waiting for the vblank. The backend asks for interval 1 and
+reads it back: with `vblank_mode=0` in the environment it read 0, and
+open() refused with a message that names the variable. This answers the
+X11 part of the open question in [rig_spec.md](rig_spec.md) section 13
+for the environment variable. A driconf file setting was not tried.
+
 ## Not measured
 
 - Light. No photodiode was attached. `tests/loopback/screen_loopback.c`
   is built, not run. Every onset here is DXGI's vblank time.
 - Any refresh other than 60 Hz; any GPU other than the Iris Xe; Windows 10.
-- X11, Wayland and macOS: stubs. The web: no light measured (web.md).
+- Wayland and macOS: stubs. The web: no light measured (web.md).
+- On X11: a frame the GPU makes late raises the depth for good (Linux
+  X11: GLX_OML), a compositing manager other than Xfwm4's, one window per
+  output, separate X screens, XWayland, NVIDIA's driver, the panic
+  watchdog, the CRTC gamma ramp, and a real keyboard's key times.
 - A DWM miss on the composed path of COMPOSITION: a second window loading
   the GPU did not cause one, so whether the record shows it is unknown.
 - COMPOSITION on a machine whose QPC does not run at 10 MHz, on ARM64

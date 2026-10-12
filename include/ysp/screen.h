@@ -1,4 +1,4 @@
-/* ysp/screen.h - v0.7.0 - public domain single-header display library
+/* ysp/screen.h - v0.8.0 - public domain single-header display library
  *
  *   The window, the GL ES 3.0 context, the display mode and the swap path
  *   of a stimulus display, with flip at a time: each frame learns the
@@ -97,7 +97,9 @@
  *     (yrt_now_ns()), the unit ysp/timeline.h takes. A backend that
  *     stamps on another clock converts at the boundary: DXGI's vblank times
  *     are QueryPerformanceCounter values, the counter yrt_now_ns() reads,
- *     and yrt_ticks_to_ns() converts them with no correlation.
+ *     and yrt_ticks_to_ns() converts them with no correlation. X11's
+ *     Present UST is CLOCK_MONOTONIC in microseconds, the clock
+ *     yrt_now_ns() reads on Linux: times 1000, no correlation.
  *
  *   THE GRID
  *     A fixed-refresh display flips on a grid of vblanks. The header keeps
@@ -396,13 +398,16 @@
  *
  *   TIERS (yscr_tier, record.tier, caps.worst_tier, desc.min_tier)
  *     Each flip gets a tier from its backend, its path and the source of its
- *     onset, as measured on the one machine of STATUS:
+ *     onset, as measured on the machines of STATUS:
  *       1  the OS observed the flip: DXGI_FLIP on the overlay or
  *          independent-flip path, COMPOSITION on independent flip
  *          (IndependentFlipFrame's displayed time sat within 0.1 ms of the
- *          scanout's own vblank, and moved with a late frame)
+ *          scanout's own vblank, and moved with a late frame), GLX_OML on
+ *          a Present flip (the UST, the same as OML's, sat within 0.7 us
+ *          p99 of the vblank grid and moved with a late frame)
  *       2  good under conditions: DXGI_FLIP composed (DWM's vblank, one
- *          display), and any flip whose OS time was off the vblank grid
+ *          display), GLX_OML on a Present copy with no compositing manager,
+ *          and any flip whose OS time was off the vblank grid
  *          (GRID_UNSTABLE: its onset is the grid's vblank)
  *       3  for task development only: an ESTIMATED or ONSET_PLANNED onset,
  *          such as every composed or overlay frame of COMPOSITION, whose
@@ -548,10 +553,49 @@
  *     page; not tested), codes (drawn through GL, always at risk:
  *     CODE_RISK_COMPOSED), the gamma ramp, raw mice and the panic watchdog
  *     (panic=n/a).
+ *   YSCR_BACKEND_GLX_OML (Linux X11; AUTO picks it when DISPLAY is set and
+ *   XDG_SESSION_TYPE is not wayland)
+ *     SDL3 makes the window, on its x11 video driver (the header sets
+ *     SDL_HINT_VIDEO_DRIVER to x11 at default priority; open() fails when
+ *     SDL took another). The header opens its own connection to the same
+ *     X display and makes a GL ES 3.0 context there
+ *     (GLX_EXT_create_context_es2_profile) on a GLXWindow over SDL's
+ *     window, with an RGBA8 double-buffered FBConfig of the window's visual
+ *     and no depth buffer. framebuffer 0's row 0 is the bottom row, as in
+ *     GL (yscr_present_info.rows_top_down is 0). Each present is
+ *     glXSwapBuffersMscOML with the planned vblank as its target MSC, so
+ *     flip_at() never waits (native_target): measured, the target held
+ *     every frame 1, 2 and 3 vblanks ahead. Each flip completes from the
+ *     Present extension's CompleteNotify event for that swap (Mesa's serial
+ *     is the swap count), read on a second X connection that selects the
+ *     window's events: the vblank count is the event's MSC, the onset its
+ *     UST, which is CLOCK_MONOTONIC in microseconds, the ysp_rt clock with
+ *     no correlation (open() checks it on one swap and refuses otherwise).
+ *     The UST is the start of scanout of the frame, about the vblank
+ *     interval after the vblank begins (0.4 ms here); the event arrives
+ *     about then, so a record completes at about its onset. The path is the
+ *     event's mode: a flip is YSCR_PATH_INDEPENDENT (tier 1), a copy or a
+ *     suboptimal copy YSCR_PATH_COMPOSED (tier 2; tier 3 when a compositing
+ *     manager owned the screen at open, and on XWayland), a skip SKIPPED.
+ *     Fullscreen measured flip on every frame, a window copy. A swap with
+ *     no event 4 periods past its target completes OCCLUDED (an unmapped
+ *     window gets none). open() refuses: a driver without
+ *     GLX_OML_sync_control, GLX_ARB_create_context,
+ *     GLX_EXT_create_context_es2_profile or GLX_EXT_swap_control; an X
+ *     server without Present; a swap with no Present event (DRI2,
+ *     LIBGL_DRI3_DISABLE); a swap interval that reads back other than 1
+ *     (vblank_mode=0 in the environment or driconf, under which Present
+ *     flips without the vblank). Mesa sets _VARIABLE_REFRESH = 1 on the
+ *     window at its first swap (its adaptive_sync default); open() sets it
+ *     to 0 after that swap, and the describe line reads it back
+ *     (vrr_prop=). The describe line also counts the Present modes
+ *     (present=flip:...,copy:...,skip:...,none:...), names the renderer and
+ *     says whether a compositing manager ran. libxcb allocates each event
+ *     it returns; the header frees it at once: one malloc and free per
+ *     flip that are not the header's own.
  *   Not implemented; open() refuses them with a message:
- *     YSCR_BACKEND_GLX_OML (Linux X11),
  *     YSCR_BACKEND_WAYLAND (presentation-time), YSCR_BACKEND_METAL
- *     (macOS through ANGLE). On Linux and macOS only SIM and CUSTOM open.
+ *     (macOS through ANGLE). On macOS only SIM and CUSTOM open.
  *
  *   ---------------------------------------------------------------------
  *   PRESENTER (the swap-path interface)
@@ -824,9 +868,27 @@
  *   (1 to 8 ms on common keyboards) or the HID stack, which were not
  *   measured. With the raw path off, SDL uses the message time, which
  *   counts in the system tick: measured, keys came out stamped from 6.2 ms
- *   before to 12.1 ms after the call. On X11 the server's 1 ms
- *   time, on Wayland the compositor's. Keyboards are not response boxes;
- *   use ysp/serial.h for reaction times.
+ *   before to 12.1 ms after the call. On Wayland the compositor's time
+ *   (not built). Keyboards are not response boxes; use ysp/serial.h for
+ *   reaction times.
+ *   X11 key times (GLX_OML, v0.8.0). SDL stamps an X11 key when it reads
+ *   the X socket, which is in begin()'s pump, once per frame: measured,
+ *   keys injected through XTEST at a random point in the frame were
+ *   stamped 8.6 to 16.6 ms after the injection (mean 12.7, 199 keys). The
+ *   X event carries the X server's own time, in ms of CLOCK_MONOTONIC on
+ *   Xorg. The header sets SDL's X11 event hook while a GLX_OML screen is
+ *   open, queues each KeyPress and KeyRelease with its server time, and
+ *   yscr_poll() gives each SDL key event the time of its X event (in
+ *   ev.common.timestamp too, so yscr_event_input() and ysp/response.h get
+ *   it). Measured: 0.99 to 1.96 ms before the XTEST call (mean 1.47, 200
+ *   keys): the server's clock lags by a tick and the ms truncates. That
+ *   offset is XTEST's; a keyboard's key gets the time libinput read from
+ *   the kernel, truncated to ms, which was not measured. A server time more
+ *   than 1 s from now (a server on another clock) is not used. SDL has one
+ *   X11 hook per process: setting your own replaces this one, and keys then
+ *   keep SDL's stamps. The describe line counts them:
+ *   key_time=x-server(used,unmatched:n,off-clock:n). Mouse buttons keep
+ *   SDL's stamps (not measured).
  *   With the raw path on, SDL 3.4 also sends a key from the window message
  *   when the message carries no scan code (read in SDL 3.4.0's source):
  *   keys injected by virtual-key code (SendInput with wVk only), keys with
@@ -1181,6 +1243,10 @@
  *   displays that flip together is a claim about hardware: only genlock
  *   on a workstation GPU makes it, and two photodiodes measure it. The
  *   group calls do not synchronize anything; each record has its own onset.
+ *   On X11 (GLX_OML) each screen is a window on one output of the default
+ *   X screen; one window per output was not measured (one output on the
+ *   machine of STATUS), and separate X screens (rig_spec.md 4.2,
+ *   desc.x_display) are not built.
  *
  *   ---------------------------------------------------------------------
  *   VARIABLE REFRESH
@@ -1266,16 +1332,22 @@
  *   close() stops; and, once per process, the panic watchdog when an armed
  *   screen opens (PANIC), which the last armed screen's close() stops. The
  *   abort state is one per process (ABORT). Raise the frame thread with
- *   yrt_thread_elevate() before open.
+ *   yrt_thread_elevate() before open. On Linux the threads the GL driver
+ *   makes in open() then inherit its SCHED_FIFO (measured: Mesa's
+ *   command-submission, shader compiler and driver threads; ysp/rt.h,
+ *   INHERITED POLICY), which cost no frame in the runs of STATUS.
  *
  *   ---------------------------------------------------------------------
  *   BUILDING
  *   ---------------------------------------------------------------------
- *   Link SDL3 (3.2 or later); with CMake, find_package(SDL3) and link
- *   SDL3::SDL3. The implementation includes <SDL3/SDL.h>, and on Windows
- *   <d3d11_1.h> and <dxgi1_5.h> from the Windows SDK or MinGW-w64. It
- *   links nothing else: d3d11.dll, dxgi.dll, user32.dll and libEGL.dll are
- *   loaded at run time. It does not include SDL_main.h, so your main() is
+ *   Link SDL3 (3.2 or later; on X11, 3.4.18 or later, BACKENDS); with
+ *   CMake, find_package(SDL3) and link SDL3::SDL3. The implementation
+ *   includes <SDL3/SDL.h>, and on Windows <d3d11_1.h> and <dxgi1_5.h> from
+ *   the Windows SDK or MinGW-w64. It links nothing else: d3d11.dll,
+ *   dxgi.dll, user32.dll and libEGL.dll are loaded at run time, and on
+ *   Linux libX11.so.6, libGL.so.1, libxcb.so.1 and libxcb-present.so.0
+ *   (dlopen; link -ldl on glibc before 2.34). No X11, GL or xcb header is
+ *   needed to compile. It does not include SDL_main.h, so your main() is
  *   yours. Put libEGL.dll and libGLESv2.dll from an ANGLE build beside the
  *   program, or name their directory in desc.angle_dir or YSCR_ANGLE_DIR.
  *   Link libm on Linux, and include ysp/screen.h (or ysp/rt.h) before any
@@ -1300,6 +1372,20 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.8.0 - Linux X11: YSCR_BACKEND_GLX_OML (BACKENDS), and AUTO picks it
+ *          in an X session. SDL3 makes the window; the header makes a GL ES
+ *          3.0 GLX context on its own X connection, holds each frame with
+ *          glXSwapBuffersMscOML's target vblank (native_target), and takes
+ *          each flip's vblank, time and path from the Present extension's
+ *          CompleteNotify events on a second connection. It clears Mesa's
+ *          _VARIABLE_REFRESH and refuses a swap interval that is not 1
+ *          (vblank_mode=0). Key events take the X server's time (INPUT,
+ *          "X11 key times"), not SDL's, which is the next frame's pump.
+ *          libX11, libGL and libxcb are loaded at run time; nothing X11 or
+ *          GL is needed to compile. The describe line warns on SDL older
+ *          than 3.4.18 (an X error race in SDL that ends the process,
+ *          docs/screen.md). New enum values only; nothing changes on
+ *          Windows or the web.
  *   v0.7.0 - YSCR_BACKEND_WEB (BACKENDS, WEB; docs/web.md): under
  *          Emscripten, SDL3's canvas and the header's WebGL2 context,
  *          frames paced by requestAnimationFrame through an awaited
@@ -1543,7 +1629,7 @@
  *          groups, input restamping, mode lists and the parameter table.
  *          The other swap paths are stubs that refuse to open.
  *
- *   STATUS: v0.7.0 (WEB; docs/web.md): built with emsdk 6.0.12 and SDL3's
+ *   STATUS: v0.8.0 (GLX_OML, at the end of this block). v0.7.0 (WEB; docs/web.md): built with emsdk 6.0.12 and SDL3's
  *   port 3.4.2, ASYNCIFY, YRT_NO_THREADS; the demos of examples/web ran in
  *   Chrome 154 (headless and headed), Edge 155 (headless) and Firefox 154
  *   to 157 (headless) on the laptop below. Chrome headed on its 60 Hz
@@ -1716,11 +1802,38 @@
  *   drawn (read back, 96 dpi).
  *   tests/compile/screen_com.cpp checks every COM slot and struct the
  *   header declares against the Windows SDK (MSVC; MinGW for DComp only).
+ *   GLX_OML (v0.8.0; measured on the same code before the v0.6 and v0.7
+ *   changes came in, and its display test passed again after): one machine, Debian 12, kernel 6.11.5-liquorix,
+ *   Xorg 21.1 with the amdgpu DDX, Mesa 22.3.6 radeonsi on an AMD RX 6600,
+ *   one 1920 x 1080 output at 60.000000 Hz (dot clock), Xfwm4 with its
+ *   compositor off, SDL 3.4.18 (with 3.4.0 an X error race in SDL ended
+ *   7 of 14 short runs, docs/screen.md), gcc 12.2, frame thread
+ *   at normal priority, no photodiode. Fullscreen through SDL's window
+ *   (the window manager's fullscreen): every flip a Present flip, tier 1.
+ *   1 minute idle, 3600 frames: no drop, late or early flip, every onset
+ *   observed, 0.15 us p50, 2.15 us p99 and 17.15 us max from the
+ *   prediction; the same with 20 spinning threads, 1.16 us p99. Held 0 to
+ *   4 vblanks (600 frames): all on the vblank asked for. 17 caller
+ *   overruns of 20 ms: all flagged LATE_TARGET, nothing else late. A
+ *   window is the Present copy path, tier 2: 600 of 600 on time, 2.86 us
+ *   p99. The header's own time: begin() without its wait 4.5 us p50 and
+ *   14.8 us p99, flip_at() without the swap call 5.5 and 17.0 us; the
+ *   swap call 36 us p50. The probe (docs/screen_x11_probe.md) gave the
+ *   basis: OML's target held 1100 of 1100 frames, UST is CLOCK_MONOTONIC
+ *   in us and equals Present's, a late frame moves it. vblank_mode=0 is
+ *   refused at open. Keys injected through XTEST: SDL's stamp 8.6 to 16.6
+ *   ms late, the X server's time 1.0 to 2.0 ms early (INPUT).
+ *   tests/adapt/screen_glx_test.c checks these on a
+ *   display (not in ctest); tests/compile/screen_glx.cpp checks the
+ *   header's own X11, GLX and xcb declarations against the system's.
  *   NOT done: any rate but 60 Hz, any other GPU, Windows 10 (COMPOSITION
  *   needs 11), ARM64 (COMPOSITION refuses it: the hidden-pointer returns
  *   are checked only on x64), two physical displays, variable refresh
- *   (refused), macOS, X11 and Wayland swap paths (stubs). Linux runs the
- *   core and the simulated display only.
+ *   (refused), macOS and Wayland swap paths (stubs). On X11: a frame the
+ *   GPU makes late raises the depth for good (docs/screen.md), a
+ *   compositing manager other than Xfwm4's, separate X screens (desc has
+ *   no x_display yet), XWayland, NVIDIA's driver, the panic watchdog, the
+ *   CRTC gamma ramp and a real keyboard's key times.
  *   Outside this STATUS block and docs/screen.md, a number in this
  *   header is a measurement only where the text says "measured".
  */
@@ -1728,9 +1841,9 @@
 #define YSP_SCREEN_H_INCLUDED
 
 #define YSCR_VERSION_MAJOR 0
-#define YSCR_VERSION_MINOR 7
+#define YSCR_VERSION_MINOR 8
 #define YSCR_VERSION_PATCH 0
-#define YSCR_VERSION_STRING "0.7.0"
+#define YSCR_VERSION_STRING "0.8.0"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -2059,7 +2172,7 @@ typedef enum yscr_backend {
     YSCR_BACKEND_AUTO = 0,       /* COMPOSITION where it runs, else DXGI_FLIP */
     YSCR_BACKEND_DXGI_FLIP,      /* Windows 10 and 11                      */
     YSCR_BACKEND_COMPOSITION,    /* Windows 11 composition swapchain       */
-    YSCR_BACKEND_GLX_OML,        /* Linux X11: stub                        */
+    YSCR_BACKEND_GLX_OML,        /* Linux X11                              */
     YSCR_BACKEND_WAYLAND,        /* stub                                   */
     YSCR_BACKEND_METAL,          /* macOS: stub                            */
     YSCR_BACKEND_WEB,            /* Emscripten: WebGL2, requestAnimationFrame */
@@ -2935,6 +3048,15 @@ YSCR_API const yscr_param* yscr_params(int* n);
     #include <windows.h>
     #include <d3d11_4.h>
     #include <dxgi1_5.h>
+#endif
+
+/* Linux X11: libX11, libGL and libxcb are loaded at run time and declared
+ * below, so no X11 or GL development package is needed to compile, and a
+ * machine without them still runs SIM and Wayland. */
+#if defined(__linux__) && !defined(YSCR_NO_SDL)
+    #define YSCR__GLX 1
+    #include <dlfcn.h>
+    #include <poll.h>
 #endif
 
 #ifdef __cplusplus
@@ -6485,6 +6607,708 @@ static void yscr__wd_disarm(yscr_screen* s) {
 
 #endif /* YSCR__DXGI */
 
+/* --- GLX presenter (Linux X11) ---------------------------------------------- */
+
+#if defined(YSCR__GLX)
+
+/* The few Xlib, GLX and xcb types the presenter touches. Handles are
+ * opaque; the cookie is xcb's one-member struct, so it returns the same
+ * way. tests/compile/screen_glx.c checks the constants and the event
+ * offsets against the system headers where they exist. */
+typedef unsigned long yscr__XID;
+typedef struct yscr__xcb_cookie { unsigned int sequence; } yscr__xcb_cookie;
+typedef int (*yscr__XErrorHandler)(void* dpy, void* ev);
+
+#define YSCR__GLX_DOUBLEBUFFER          5
+#define YSCR__GLX_RED_SIZE              8
+#define YSCR__GLX_GREEN_SIZE            9
+#define YSCR__GLX_BLUE_SIZE             10
+#define YSCR__GLX_DEPTH_SIZE            12
+#define YSCR__GLX_STENCIL_SIZE          13
+#define YSCR__GLX_SAMPLES               100001
+#define YSCR__GLX_VISUAL_ID             0x800B
+#define YSCR__GLX_DRAWABLE_TYPE         0x8010
+#define YSCR__GLX_RENDER_TYPE           0x8011
+#define YSCR__GLX_WINDOW_BIT            0x1
+#define YSCR__GLX_RGBA_BIT              0x1
+#define YSCR__GLX_CONTEXT_MAJOR_VERSION 0x2091
+#define YSCR__GLX_CONTEXT_MINOR_VERSION 0x2092
+#define YSCR__GLX_CONTEXT_PROFILE_MASK  0x9126
+#define YSCR__GLX_CONTEXT_ES2_PROFILE   0x4
+#define YSCR__GLX_SWAP_INTERVAL         0x20F1
+#define YSCR__GL_RENDERER               0x1F01u
+
+#define YSCR__PRESENT_MASK_COMPLETE     2u
+#define YSCR__PRESENT_COMPLETE_NOTIFY   1
+#define YSCR__PRESENT_KIND_PIXMAP       0
+#define YSCR__PRESENT_MODE_COPY         0
+#define YSCR__PRESENT_MODE_FLIP         1
+#define YSCR__PRESENT_MODE_SKIP         2
+#define YSCR__XCB_ATOM_CARDINAL         6u
+/* xcb_present_complete_notify_event_t is packed, and xcb puts its
+ * full_sequence before msc, so the fields are read by offset. */
+#define YSCR__PEV_TYPE   8
+#define YSCR__PEV_KIND   10
+#define YSCR__PEV_MODE   11
+#define YSCR__PEV_SERIAL 20
+#define YSCR__PEV_UST    24
+#define YSCR__PEV_MSC    36
+
+static struct {
+    int   tried, ok;
+    char  why[160];
+    void *x11, *gl, *xcb, *xcbp;
+    /* libX11 */
+    void* (*OpenDisplay)(const char*);
+    int   (*CloseDisplay)(void*);
+    char* (*DisplayString)(void*);
+    int   (*Sync)(void*, int);
+    int   (*Free)(void*);
+    yscr__XErrorHandler (*SetErrorHandler)(yscr__XErrorHandler);
+    /* libGL */
+    yscr_proc (*GetProcAddress)(const unsigned char*);
+    const char* (*QueryExtensionsString)(void*, int);
+    void** (*GetFBConfigs)(void*, int, int*);
+    int   (*GetFBConfigAttrib)(void*, void*, int, int*);
+    yscr__XID (*CreateWindow)(void*, void*, yscr__XID, const int*);
+    void  (*DestroyWindow)(void*, yscr__XID);
+    int   (*MakeContextCurrent)(void*, yscr__XID, yscr__XID, void*);
+    void* (*GetCurrentContext)(void);
+    void  (*DestroyContext)(void*, void*);
+    void  (*QueryDrawable)(void*, yscr__XID, int, unsigned int*);
+    void* (*CreateContextAttribs)(void*, void*, void*, int, const int*);
+    int64_t (*SwapBuffersMsc)(void*, yscr__XID, int64_t, int64_t, int64_t);
+    int   (*GetSyncValues)(void*, yscr__XID, int64_t*, int64_t*, int64_t*);
+    void  (*SwapInterval)(void*, yscr__XID, int);
+    /* libxcb, libxcb-present */
+    void* (*connect)(const char*, int*);
+    void  (*disconnect)(void*);
+    int   (*has_error)(void*);
+    const uint8_t* (*get_extension_data)(void*, void*);
+    uint32_t (*generate_id)(void*);
+    void* (*register_xge)(void*, void*, uint32_t, uint32_t*);
+    void  (*unregister_xge)(void*, void*);
+    void* (*poll_special)(void*, void*);
+    void* (*poll_event)(void*);
+    void* (*request_check)(void*, yscr__xcb_cookie);
+    int   (*get_fd)(void*);
+    int   (*flush)(void*);
+    yscr__xcb_cookie (*intern_atom)(void*, uint8_t, uint16_t, const char*);
+    uint8_t* (*intern_atom_reply)(void*, yscr__xcb_cookie, void**);
+    yscr__xcb_cookie (*change_property)(void*, uint8_t, uint32_t, uint32_t, uint32_t, uint8_t, uint32_t, const void*);
+    yscr__xcb_cookie (*get_property)(void*, uint8_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+    uint8_t* (*get_property_reply)(void*, yscr__xcb_cookie, void**);
+    yscr__xcb_cookie (*get_selection_owner)(void*, uint32_t);
+    uint8_t* (*get_selection_owner_reply)(void*, yscr__xcb_cookie, void**);
+    yscr__xcb_cookie (*get_window_attributes)(void*, uint32_t);
+    uint8_t* (*get_window_attributes_reply)(void*, yscr__xcb_cookie, void**);
+    yscr__xcb_cookie (*query_extension)(void*, uint16_t, const char*);
+    uint8_t* (*query_extension_reply)(void*, yscr__xcb_cookie, void**);
+    void* present_id;   /* xcb_extension_t xcb_present_id */
+    yscr__xcb_cookie (*present_select_input_checked)(void*, uint32_t, uint32_t, uint32_t);
+} yscr__x;
+
+/* dlsym gives a void*; ISO C converts only between function pointer types,
+ * so the copy goes through memcpy. */
+static int yscr__x_sym(void* lib, const char* name, void* slot) {
+    void* p = lib ? dlsym(lib, name) : NULL;
+    memcpy(slot, &p, sizeof p);
+    return p != NULL;
+}
+
+/* Once per process; never unloaded, as libEGL on Windows: Mesa keeps
+ * per-display state that outlives a screen. */
+static bool yscr__x_load(void) {
+    int ok = 1;
+    if (yscr__x.tried) return yscr__x.ok != 0;
+    yscr__x.tried = 1;
+    yscr__x.x11 = dlopen("libX11.so.6", RTLD_NOW | RTLD_GLOBAL);
+    yscr__x.gl = dlopen("libGL.so.1", RTLD_NOW | RTLD_GLOBAL);
+    yscr__x.xcb = dlopen("libxcb.so.1", RTLD_NOW | RTLD_GLOBAL);
+    yscr__x.xcbp = dlopen("libxcb-present.so.0", RTLD_NOW | RTLD_GLOBAL);
+    if (!yscr__x.x11 || !yscr__x.gl || !yscr__x.xcb || !yscr__x.xcbp) {
+        snprintf(yscr__x.why, sizeof yscr__x.why, "cannot load %s",
+                 !yscr__x.x11 ? "libX11.so.6" : !yscr__x.gl ? "libGL.so.1" : !yscr__x.xcb ? "libxcb.so.1" : "libxcb-present.so.0");
+        return false;
+    }
+    ok &= yscr__x_sym(yscr__x.x11, "XOpenDisplay", &yscr__x.OpenDisplay);
+    ok &= yscr__x_sym(yscr__x.x11, "XCloseDisplay", &yscr__x.CloseDisplay);
+    ok &= yscr__x_sym(yscr__x.x11, "XDisplayString", &yscr__x.DisplayString);
+    ok &= yscr__x_sym(yscr__x.x11, "XSync", &yscr__x.Sync);
+    ok &= yscr__x_sym(yscr__x.x11, "XFree", &yscr__x.Free);
+    ok &= yscr__x_sym(yscr__x.x11, "XSetErrorHandler", &yscr__x.SetErrorHandler);
+    ok &= yscr__x_sym(yscr__x.gl, "glXGetProcAddressARB", &yscr__x.GetProcAddress);
+    ok &= yscr__x_sym(yscr__x.gl, "glXQueryExtensionsString", &yscr__x.QueryExtensionsString);
+    ok &= yscr__x_sym(yscr__x.gl, "glXGetFBConfigs", &yscr__x.GetFBConfigs);
+    ok &= yscr__x_sym(yscr__x.gl, "glXGetFBConfigAttrib", &yscr__x.GetFBConfigAttrib);
+    ok &= yscr__x_sym(yscr__x.gl, "glXCreateWindow", &yscr__x.CreateWindow);
+    ok &= yscr__x_sym(yscr__x.gl, "glXDestroyWindow", &yscr__x.DestroyWindow);
+    ok &= yscr__x_sym(yscr__x.gl, "glXMakeContextCurrent", &yscr__x.MakeContextCurrent);
+    ok &= yscr__x_sym(yscr__x.gl, "glXGetCurrentContext", &yscr__x.GetCurrentContext);
+    ok &= yscr__x_sym(yscr__x.gl, "glXDestroyContext", &yscr__x.DestroyContext);
+    ok &= yscr__x_sym(yscr__x.gl, "glXQueryDrawable", &yscr__x.QueryDrawable);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_connect", &yscr__x.connect);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_disconnect", &yscr__x.disconnect);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_connection_has_error", &yscr__x.has_error);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_get_extension_data", &yscr__x.get_extension_data);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_generate_id", &yscr__x.generate_id);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_register_for_special_xge", &yscr__x.register_xge);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_unregister_for_special_event", &yscr__x.unregister_xge);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_poll_for_special_event", &yscr__x.poll_special);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_poll_for_event", &yscr__x.poll_event);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_request_check", &yscr__x.request_check);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_get_file_descriptor", &yscr__x.get_fd);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_flush", &yscr__x.flush);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_intern_atom", &yscr__x.intern_atom);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_intern_atom_reply", &yscr__x.intern_atom_reply);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_change_property", &yscr__x.change_property);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_get_property", &yscr__x.get_property);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_get_property_reply", &yscr__x.get_property_reply);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_get_selection_owner", &yscr__x.get_selection_owner);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_get_selection_owner_reply", &yscr__x.get_selection_owner_reply);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_get_window_attributes", &yscr__x.get_window_attributes);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_get_window_attributes_reply", &yscr__x.get_window_attributes_reply);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_query_extension", &yscr__x.query_extension);
+    ok &= yscr__x_sym(yscr__x.xcb, "xcb_query_extension_reply", &yscr__x.query_extension_reply);
+    yscr__x.present_id = dlsym(yscr__x.xcbp, "xcb_present_id");
+    ok &= yscr__x.present_id != NULL;
+    ok &= yscr__x_sym(yscr__x.xcbp, "xcb_present_select_input_checked", &yscr__x.present_select_input_checked);
+    if (!ok) {
+        snprintf(yscr__x.why, sizeof yscr__x.why, "an entry point is missing from libX11, libGL or libxcb");
+        return false;
+    }
+    /* Extension entry points come through glXGetProcAddressARB; they are
+     * checked against the extension string at open. */
+    {
+        yscr_proc p;
+        p = yscr__x.GetProcAddress((const unsigned char*)"glXCreateContextAttribsARB"); memcpy(&yscr__x.CreateContextAttribs, &p, sizeof p);
+        p = yscr__x.GetProcAddress((const unsigned char*)"glXSwapBuffersMscOML"); memcpy(&yscr__x.SwapBuffersMsc, &p, sizeof p);
+        p = yscr__x.GetProcAddress((const unsigned char*)"glXGetSyncValuesOML"); memcpy(&yscr__x.GetSyncValues, &p, sizeof p);
+        p = yscr__x.GetProcAddress((const unsigned char*)"glXSwapIntervalEXT"); memcpy(&yscr__x.SwapInterval, &p, sizeof p);
+    }
+    yscr__x.ok = 1;
+    return true;
+}
+
+#define YSCR__GLX_DONE 8
+
+typedef struct yscr__glx {
+    void*       dpy;          /* our own Display: SDL's stays SDL's      */
+    void*       xc;           /* the Present observer's connection       */
+    void*       se;           /* its special event queue                 */
+    void*       ctx;          /* GLXContext                              */
+    yscr__XID   gwin;         /* GLXWindow on SDL's window               */
+    uint32_t    win;          /* SDL's X window                          */
+    uint32_t    vrr_atom;
+    int         screen;
+    int         composited;   /* a compositing manager owned the screen at open */
+    int         xwayland;
+    int         lost;
+    int         hooked;       /* holds SDL's X11 event hook (key times)    */
+    int64_t     period_ns;
+    int64_t     sent_sbc;     /* the newest swap made                    */
+    int64_t     done_sbc;     /* the newest swap with a completion       */
+    int64_t     last_target_ns;
+    int64_t     map_sbc[8];
+    uint64_t    map_id[8];
+    uint32_t    map_next;
+    yscr_vblank done[YSCR__GLX_DONE];
+    int         n_done;
+    uint32_t    n_mode[4];    /* copy, flip, skip, suboptimal copy       */
+    uint32_t    n_timeout;    /* swaps that got no event in time         */
+    uint32_t    n_lost_done;  /* completions dropped from a full queue   */
+    char        renderer[96];
+} yscr__glx;
+
+typedef char yscr__glx_fits[sizeof(yscr__glx) <= sizeof(((yscr_screen*)0)->backend_mem) ? 1 : -1];
+
+/* A whole word of a space-separated extension list. */
+static int yscr__has_ext(const char* list, const char* name) {
+    size_t n = strlen(name);
+    const char* p = list;
+    while ((p = strstr(p, name)) != NULL) {
+        if ((p == list || p[-1] == ' ') && (p[n] == ' ' || p[n] == '\0')) return 1;
+        p += n;
+    }
+    return 0;
+}
+
+static volatile int yscr__glx_xerr;
+static int yscr__glx_on_xerr(void* dpy, void* ev) { (void)dpy; (void)ev; yscr__glx_xerr = 1; return 0; }
+
+static uint32_t yscr__glx_atom(void* xc, const char* name, int only_if_exists) {
+    yscr__xcb_cookie ck = yscr__x.intern_atom(xc, (uint8_t)only_if_exists, (uint16_t)strlen(name), name);
+    uint8_t* r = yscr__x.intern_atom_reply(xc, ck, NULL);
+    uint32_t a = 0;
+    if (r) { memcpy(&a, r + 8, 4); free(r); }
+    return a;
+}
+
+static void yscr__glx_push(yscr__glx* g, const yscr_vblank* v) {
+    if (g->n_done == YSCR__GLX_DONE) {   /* the core estimates the one lost */
+        memmove(g->done, g->done + 1, sizeof g->done[0] * (YSCR__GLX_DONE - 1));
+        g->n_done--;
+        g->n_lost_done++;
+    }
+    g->done[g->n_done++] = *v;
+}
+
+/* One PresentCompleteNotify. Mesa's serial is the swap's SBC (low 32 bits;
+ * the probe matched 600 of 600). Mesa's own NotifyMSC completions arrive on
+ * this selection too and are ignored. */
+static void yscr__glx_take(yscr__glx* g, const uint8_t* ev) {
+    uint16_t type;
+    uint32_t serial;
+    uint64_t ust, msc;
+    yscr_vblank v;
+    int k;
+    memcpy(&type, ev + YSCR__PEV_TYPE, 2);
+    if (type != YSCR__PRESENT_COMPLETE_NOTIFY || ev[YSCR__PEV_KIND] != YSCR__PRESENT_KIND_PIXMAP) return;
+    memcpy(&serial, ev + YSCR__PEV_SERIAL, 4);
+    memcpy(&ust, ev + YSCR__PEV_UST, 8);
+    memcpy(&msc, ev + YSCR__PEV_MSC, 8);
+    memset(&v, 0, sizeof v);
+    for (k = 0; k < 8; k++)
+        if (g->map_sbc[k] && (uint32_t)g->map_sbc[k] == serial) {
+            v.present_id = g->map_id[k];
+            if (g->map_sbc[k] > g->done_sbc) g->done_sbc = g->map_sbc[k];
+            break;
+        }
+    if (ev[YSCR__PEV_MODE] < 4) g->n_mode[ev[YSCR__PEV_MODE]]++;
+    /* UST is CLOCK_MONOTONIC in microseconds, the ysp_rt clock (open()
+     * checks it): no correlation. */
+    v.t_ns = (int64_t)ust * 1000;
+    v.count = (int64_t)msc;
+    v.path = ev[YSCR__PEV_MODE] == YSCR__PRESENT_MODE_FLIP ? YSCR_PATH_INDEPENDENT : YSCR_PATH_COMPOSED;
+    if (ev[YSCR__PEV_MODE] == YSCR__PRESENT_MODE_SKIP) { v.flags = YSCR_FLIP_SKIPPED; v.t_ns = 0; }
+    /* A copy under a compositing manager lands in a redirected pixmap; the
+     * screen shows it when the compositor composes, at a time no event
+     * gives. XWayland was not measured. */
+    if (g->xwayland || (g->composited && v.path == YSCR_PATH_COMPOSED)) v.tier = YSCR_TIER_3;
+    yscr__glx_push(g, &v);
+}
+
+/* Takes the events that have arrived; with timeout_ms > 0, waits up to that
+ * long for the first. */
+static int yscr__glx_pump(yscr__glx* g, int timeout_ms) {
+    int n = 0;
+    void* ev;
+    while ((ev = yscr__x.poll_special(g->xc, g->se)) != NULL) { yscr__glx_take(g, (const uint8_t*)ev); free(ev); n++; }
+    if (n || timeout_ms <= 0) return n;
+    {
+        struct pollfd pf;
+        pf.fd = yscr__x.get_fd(g->xc);
+        pf.events = POLLIN;
+        pf.revents = 0;
+        if (poll(&pf, 1, timeout_ms) <= 0) return 0;
+    }
+    /* Makes libxcb read the socket; this connection selects no ordinary
+     * events, so the queue is only Present's. */
+    free(yscr__x.poll_event(g->xc));
+    while ((ev = yscr__x.poll_special(g->xc, g->se)) != NULL) { yscr__glx_take(g, (const uint8_t*)ev); free(ev); n++; }
+    if (yscr__x.has_error(g->xc)) g->lost = 1;
+    return n;
+}
+
+/* Key times from the X server (INPUT, "X11 key times"). SDL stamps a key
+ * when it reads the X socket, which is once per frame in begin(): measured,
+ * 8.6 to 16.6 ms after an XTEST key reached the server. The X event carries
+ * the server's own time, in ms of CLOCK_MONOTONIC on Xorg (measured: 1.0 to
+ * 2.0 ms before the XTEST call). SDL's X11 hook sees each event just before
+ * SDL turns it into its own, so the hook queues (keycode, press, time) and
+ * yscr_poll() gives each SDL key event the time of its X event. One process,
+ * one SDL event thread: no lock. */
+#define YSCR__XK_RING 64
+static struct {
+    uint32_t ms[YSCR__XK_RING];
+    uint8_t  code[YSCR__XK_RING], down[YSCR__XK_RING];
+    uint32_t head, tail;
+    int      users;          /* open GLX screens: the hook's holders       */
+    uint32_t used, unmatched, off_clock;
+} yscr__xk;
+
+static bool SDLCALL yscr__xk_hook(void* ud, XEvent* xev) {
+    /* XKeyEvent on LP64: type at 0, time (ms, 32 bits) at 56, keycode at
+     * 84; tests/compile/screen_glx.cpp checks them against <X11/Xlib.h> */
+    const unsigned char* e = (const unsigned char*)xev;
+    int type;
+    unsigned int code;
+    unsigned long t;
+    (void)ud;
+    if (!e) return true;
+    memcpy(&type, e, sizeof type);
+    if (type != 2 && type != 3) return true;   /* KeyPress, KeyRelease */
+    memcpy(&code, e + 84, sizeof code);
+    memcpy(&t, e + 56, sizeof t);
+    if (yscr__xk.head - yscr__xk.tail == YSCR__XK_RING) yscr__xk.tail++;   /* oldest goes */
+    yscr__xk.ms[yscr__xk.head % YSCR__XK_RING] = (uint32_t)t;
+    yscr__xk.code[yscr__xk.head % YSCR__XK_RING] = (uint8_t)code;
+    yscr__xk.down[yscr__xk.head % YSCR__XK_RING] = (uint8_t)(type == 2);
+    yscr__xk.head++;
+    return true;
+}
+
+/* The X time of an SDL key event, on the ysp_rt clock, or 0. Entries before
+ * the match are X events SDL folded or dropped (a held key's release and
+ * press become one repeat). */
+static int64_t yscr__xk_take(uint16_t raw, int down) {
+    while (yscr__xk.tail != yscr__xk.head) {
+        uint32_t i = yscr__xk.tail++ % YSCR__XK_RING;
+        if (yscr__xk.code[i] == (uint8_t)raw && yscr__xk.down[i] == (uint8_t)down) {
+            int64_t now_ms = yscr__now() / 1000000, t = (now_ms & ~(int64_t)0xffffffff) | yscr__xk.ms[i];
+            if (t > now_ms + 0x80000000LL) t -= 0x100000000LL;
+            else if (t < now_ms - 0x80000000LL) t += 0x100000000LL;
+            /* a server on another clock: keep SDL's stamp */
+            if (t > now_ms + 1000 || t < now_ms - 1000) { yscr__xk.off_clock++; return 0; }
+            yscr__xk.used++;
+            return t * 1000000;
+        }
+    }
+    yscr__xk.unmatched++;
+    return 0;
+}
+
+static void yscr__glx_close(void* vctx);
+
+static int yscr__glx_open(void* vctx, const yscr_presenter_open* in, yscr_caps* caps, char* err, size_t err_cap) {
+    yscr__glx* g = (yscr__glx*)vctx;
+    SDL_PropertiesID props;
+    void* sdl_dpy;
+    const char* name;
+    const char* exts;
+    uint32_t visual = 0;
+    void** cfgs;
+    void* fbc = NULL;
+    int i, n = 0, best = 1 << 30;
+    memset(g, 0, sizeof *g);
+    if (!yscr__x_load()) { yscr__set_error(err, err_cap, "ysp_screen: GLX_OML: %s", yscr__x.why); return YSCR_ERR_NOT_IMPLEMENTED; }
+    props = SDL_GetWindowProperties(in->window);
+    sdl_dpy = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, NULL);
+    g->win = (uint32_t)SDL_GetNumberProperty(props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
+    g->screen = (int)SDL_GetNumberProperty(props, SDL_PROP_WINDOW_X11_SCREEN_NUMBER, 0);
+    if (!sdl_dpy || !g->win) {
+        yscr__set_error(err, err_cap, "ysp_screen: GLX_OML: SDL's video driver is \"%s\", not x11",
+                        SDL_GetCurrentVideoDriver() ? SDL_GetCurrentVideoDriver() : "none");
+        return YSCR_ERR_NOT_IMPLEMENTED;
+    }
+    g->period_ns = in->mode && in->mode->period_ns > 0 ? in->mode->period_ns : 16666667;
+    /* Our own connections: SDL pumps its Display on its own terms, and the
+     * Present observer must not share Mesa's queue. */
+    name = yscr__x.DisplayString(sdl_dpy);
+    g->dpy = yscr__x.OpenDisplay(name);
+    g->xc = yscr__x.connect(name, NULL);
+    if (!g->dpy || !g->xc || yscr__x.has_error(g->xc)) {
+        yscr__set_error(err, err_cap, "ysp_screen: GLX_OML: cannot connect to X display %s", name ? name : "(null)");
+        yscr__glx_close(g);
+        return YSCR_ERR_LOST;
+    }
+    exts = yscr__x.QueryExtensionsString(g->dpy, g->screen);
+    {
+        static const char* const need[] = { "GLX_OML_sync_control", "GLX_ARB_create_context",
+                                            "GLX_EXT_create_context_es2_profile", "GLX_EXT_swap_control" };
+        for (i = 0; i < 4; i++)
+            if (!exts || !yscr__has_ext(exts, need[i])) {
+                yscr__set_error(err, err_cap, "ysp_screen: GLX_OML: the GL driver lacks %s (Mesa has it)", need[i]);
+                yscr__glx_close(g);
+                return YSCR_ERR_NOT_IMPLEMENTED;
+            }
+        if (!yscr__x.CreateContextAttribs || !yscr__x.SwapBuffersMsc || !yscr__x.GetSyncValues || !yscr__x.SwapInterval) {
+            yscr__set_error(err, err_cap, "ysp_screen: GLX_OML: an advertised GLX entry point is missing");
+            yscr__glx_close(g);
+            return YSCR_ERR_NOT_IMPLEMENTED;
+        }
+    }
+    {   /* The window's visual, which the FBConfig must share */
+        uint8_t* r = yscr__x.get_window_attributes_reply(g->xc, yscr__x.get_window_attributes(g->xc, g->win), NULL);
+        if (r) { memcpy(&visual, r + 8, 4); free(r); }
+    }
+    /* RGBA8, double-buffered, no depth, stencil or samples, on the window's
+     * visual: the back buffer DXGI_FLIP has. */
+    cfgs = yscr__x.GetFBConfigs(g->dpy, g->screen, &n);
+    for (i = 0; cfgs && i < n; i++) {
+        int vid = 0, db = 0, rt = 0, dt = 0, r = 0, gr = 0, b = 0, d = 0, st = 0, ms = 0, cost;
+        yscr__x.GetFBConfigAttrib(g->dpy, cfgs[i], YSCR__GLX_VISUAL_ID, &vid);
+        if ((uint32_t)vid != visual) continue;
+        yscr__x.GetFBConfigAttrib(g->dpy, cfgs[i], YSCR__GLX_DOUBLEBUFFER, &db);
+        yscr__x.GetFBConfigAttrib(g->dpy, cfgs[i], YSCR__GLX_RENDER_TYPE, &rt);
+        yscr__x.GetFBConfigAttrib(g->dpy, cfgs[i], YSCR__GLX_DRAWABLE_TYPE, &dt);
+        yscr__x.GetFBConfigAttrib(g->dpy, cfgs[i], YSCR__GLX_RED_SIZE, &r);
+        yscr__x.GetFBConfigAttrib(g->dpy, cfgs[i], YSCR__GLX_GREEN_SIZE, &gr);
+        yscr__x.GetFBConfigAttrib(g->dpy, cfgs[i], YSCR__GLX_BLUE_SIZE, &b);
+        if (!db || !(rt & YSCR__GLX_RGBA_BIT) || !(dt & YSCR__GLX_WINDOW_BIT) || r != 8 || gr != 8 || b != 8) continue;
+        yscr__x.GetFBConfigAttrib(g->dpy, cfgs[i], YSCR__GLX_DEPTH_SIZE, &d);
+        yscr__x.GetFBConfigAttrib(g->dpy, cfgs[i], YSCR__GLX_STENCIL_SIZE, &st);
+        yscr__x.GetFBConfigAttrib(g->dpy, cfgs[i], YSCR__GLX_SAMPLES, &ms);
+        cost = d + st + 64 * ms;
+        if (cost < best) { best = cost; fbc = cfgs[i]; }
+    }
+    if (cfgs) yscr__x.Free(cfgs);
+    if (!fbc) {
+        yscr__set_error(err, err_cap, "ysp_screen: GLX_OML: no double-buffered RGBA8 FBConfig on the window's visual 0x%x",
+                        (unsigned)visual);
+        yscr__glx_close(g);
+        return YSCR_ERR_NOT_IMPLEMENTED;
+    }
+    {   /* GL ES 3.0. Xlib's default handler would end the process on the
+         * BadMatch a driver without ES gives. */
+        static const int attr[] = { YSCR__GLX_CONTEXT_MAJOR_VERSION, 3, YSCR__GLX_CONTEXT_MINOR_VERSION, 0,
+                                    YSCR__GLX_CONTEXT_PROFILE_MASK, YSCR__GLX_CONTEXT_ES2_PROFILE, 0 };
+        yscr__XErrorHandler old = yscr__x.SetErrorHandler(yscr__glx_on_xerr);
+        yscr__glx_xerr = 0;
+        g->ctx = yscr__x.CreateContextAttribs(g->dpy, fbc, NULL, 1, attr);
+        yscr__x.Sync(g->dpy, 0);
+        if (g->ctx) g->gwin = yscr__x.CreateWindow(g->dpy, fbc, g->win, NULL);
+        yscr__x.Sync(g->dpy, 0);
+        yscr__x.SetErrorHandler(old);
+        if (!g->ctx || !g->gwin || yscr__glx_xerr) {
+            yscr__set_error(err, err_cap, "ysp_screen: GLX_OML: no GL ES 3.0 context on the window");
+            yscr__glx_close(g);
+            return YSCR_ERR_NOT_IMPLEMENTED;
+        }
+    }
+    if (!yscr__x.MakeContextCurrent(g->dpy, g->gwin, g->gwin, g->ctx)) {
+        yscr__set_error(err, err_cap, "ysp_screen: GLX_OML: glXMakeContextCurrent failed");
+        yscr__glx_close(g);
+        return YSCR_ERR_LOST;
+    }
+    {   /* vblank_mode=0 in the environment or driconf turns swap interval 1
+         * into 0, and Present then flips without waiting for the vblank. */
+        unsigned int iv = 0;
+        yscr__x.SwapInterval(g->dpy, g->gwin, 1);
+        yscr__x.QueryDrawable(g->dpy, g->gwin, YSCR__GLX_SWAP_INTERVAL, &iv);
+        if (iv != 1) {
+            yscr__set_error(err, err_cap, "ysp_screen: GLX_OML: swap interval is %u after asking for 1; vblank_mode "
+                            "in the environment or a driconf file overrides it", iv);
+            yscr__glx_close(g);
+            return YSCR_ERR_REFUSED;
+        }
+    }
+    {
+        yscr_proc p = yscr__x.GetProcAddress((const unsigned char*)"glGetString");
+        yscr__glGetString_fn gs;
+        const unsigned char* s;
+        memcpy(&gs, &p, sizeof p);
+        s = gs ? gs(YSCR__GL_RENDERER) : NULL;
+        yscr__copy(g->renderer, sizeof g->renderer, s ? (const char*)s : "?");
+    }
+    {
+        char cm[32];
+        uint32_t a, owner = 0;
+        snprintf(cm, sizeof cm, "_NET_WM_CM_S%d", g->screen);
+        a = yscr__glx_atom(g->xc, cm, 0);
+        if (a) {
+            uint8_t* r = yscr__x.get_selection_owner_reply(g->xc, yscr__x.get_selection_owner(g->xc, a), NULL);
+            if (r) { memcpy(&owner, r + 8, 4); free(r); }
+        }
+        g->composited = owner != 0;
+    }
+    {
+        uint8_t* r = yscr__x.query_extension_reply(g->xc, yscr__x.query_extension(g->xc, 8, "XWAYLAND"), NULL);
+        if (r) { g->xwayland = r[8] != 0; free(r); }
+    }
+    {   /* The per-swap report: PresentCompleteNotify on a second client's
+         * selection; the server sends each selecting client its copy. */
+        const uint8_t* ext = yscr__x.get_extension_data(g->xc, yscr__x.present_id);
+        void* e;
+        uint32_t eid;
+        if (!ext || !ext[8]) {
+            yscr__set_error(err, err_cap, "ysp_screen: GLX_OML: the X server has no Present extension");
+            yscr__glx_close(g);
+            return YSCR_ERR_NOT_IMPLEMENTED;
+        }
+        eid = yscr__x.generate_id(g->xc);
+        g->se = yscr__x.register_xge(g->xc, yscr__x.present_id, eid, NULL);
+        e = yscr__x.request_check(g->xc, yscr__x.present_select_input_checked(g->xc, eid, g->win, YSCR__PRESENT_MASK_COMPLETE));
+        if (e || !g->se) {
+            free(e);
+            yscr__set_error(err, err_cap, "ysp_screen: GLX_OML: cannot select Present events on the window");
+            yscr__glx_close(g);
+            return YSCR_ERR_NOT_IMPLEMENTED;
+        }
+    }
+    {   /* One swap, to see that Mesa presents through Present (DRI3; DRI2
+         * gives no event) and that its UST is CLOCK_MONOTONIC in us. */
+        int64_t ust = 0, msc = 0, sbc = 0, end, now;
+        yscr__x.GetSyncValues(g->dpy, g->gwin, &ust, &msc, &sbc);
+        g->sent_sbc = g->done_sbc = sbc;
+        g->sent_sbc = yscr__x.SwapBuffersMsc(g->dpy, g->gwin, 0, 0, 0);
+        g->map_sbc[0] = g->sent_sbc;
+        g->map_id[0] = 0;
+        g->map_next = 1;
+        end = yscr__now() + 4 * g->period_ns + 100000000;
+        while (g->done_sbc < g->sent_sbc && (now = yscr__now()) < end && !g->lost)
+            yscr__glx_pump(g, (int)((end - now) / 1000000) + 1);
+        now = yscr__now();
+        if (g->done_sbc < g->sent_sbc || g->n_done == 0) {
+            yscr__set_error(err, err_cap, "ysp_screen: GLX_OML: no Present event for a swap; the driver presents "
+                            "without DRI3 (LIBGL_DRI3_DISABLE?)");
+            yscr__glx_close(g);
+            return YSCR_ERR_NOT_IMPLEMENTED;
+        }
+        {
+            int64_t d = now - g->done[g->n_done - 1].t_ns;
+            if (d < -2 * g->period_ns || d > 4 * g->period_ns + 100000000) {
+                yscr__set_error(err, err_cap, "ysp_screen: GLX_OML: the Present UST is %lld ms from CLOCK_MONOTONIC "
+                                "(not that clock in microseconds)", (long long)(d / 1000000));
+                yscr__glx_close(g);
+                return YSCR_ERR_NOT_IMPLEMENTED;
+            }
+        }
+        g->n_done = 0;
+        memset(g->n_mode, 0, sizeof g->n_mode);
+    }
+    {   /* Mesa sets _VARIABLE_REFRESH = 1 on the window at its first swap
+         * when its driconf adaptive_sync is on, the default, and not again
+         * (measured: set before that swap, it was 1 again after). The
+         * header never runs variable refresh. */
+        uint32_t zero = 0;
+        g->vrr_atom = yscr__glx_atom(g->xc, "_VARIABLE_REFRESH", 0);
+        if (g->vrr_atom) yscr__x.change_property(g->xc, 0, g->win, g->vrr_atom, YSCR__XCB_ATOM_CARDINAL, 32, 1, &zero);
+        yscr__x.flush(g->xc);
+    }
+    caps->kind = YSCR_FIXED_GRID;
+    caps->native_target = true;
+    caps->hw_onset = true;
+    caps->max_in_flight = 1;
+    caps->vrr_capable = false;
+    /* SDL has one X11 hook per process: an application's own replaces this
+     * one, and its keys keep SDL's stamps (counted as unmatched) */
+    if (yscr__xk.users++ == 0) {
+        yscr__xk.head = yscr__xk.tail = 0;
+        SDL_SetX11EventHook(yscr__xk_hook, NULL);
+    }
+    g->hooked = 1;
+    return YSCR_OK;
+}
+
+static void yscr__glx_close(void* vctx) {
+    yscr__glx* g = (yscr__glx*)vctx;
+    if (g->hooked && --yscr__xk.users == 0) SDL_SetX11EventHook(NULL, NULL);
+    if (g->dpy) {
+        if (g->ctx) yscr__x.MakeContextCurrent(g->dpy, 0, 0, NULL);
+        if (g->gwin) yscr__x.DestroyWindow(g->dpy, g->gwin);
+        if (g->ctx) yscr__x.DestroyContext(g->dpy, g->ctx);
+        yscr__x.CloseDisplay(g->dpy);
+    }
+    if (g->xc) {
+        if (g->se) yscr__x.unregister_xge(g->xc, g->se);
+        yscr__x.disconnect(g->xc);
+    }
+    memset(g, 0, sizeof *g);
+}
+
+static void yscr__glx_bind(void* vctx) {
+    yscr__glx* g = (yscr__glx*)vctx;
+    if (yscr__x.GetCurrentContext() != g->ctx) yscr__x.MakeContextCurrent(g->dpy, g->gwin, g->gwin, g->ctx);
+}
+
+/* One frame in flight: wait for the newest swap's event. One that gets
+ * none in 4 periods past its target completes with no time (OCCLUDED: an
+ * unmapped window gets none), and the frame loop goes on. */
+static int yscr__glx_acquire(void* vctx, int64_t deadline_ns, yscr_vblank* newest) {
+    yscr__glx* g = (yscr__glx*)vctx;
+    int idle;
+    newest->t_ns = 0;
+    yscr__glx_pump(g, 0);
+    idle = g->done_sbc >= g->sent_sbc;
+    if (!idle) {
+        int64_t give_up = (g->last_target_ns ? g->last_target_ns : yscr__now()) + 4 * g->period_ns;
+        if (give_up > deadline_ns) give_up = deadline_ns;
+        while (g->done_sbc < g->sent_sbc && !g->lost) {
+            int64_t left = give_up - yscr__now();
+            if (left <= 0) {
+                yscr_vblank v;
+                memset(&v, 0, sizeof v);
+                v.present_id = g->map_id[(g->map_next - 1) & 7];
+                v.flags = YSCR_FLIP_OCCLUDED;
+                yscr__glx_push(g, &v);
+                g->done_sbc = g->sent_sbc;
+                g->n_timeout++;
+                break;
+            }
+            yscr__glx_pump(g, (int)(left / 1000000) + 1);
+        }
+        if (g->lost) return YSCR_ERR_LOST;
+    } else {
+        /* Nothing in flight (open, after wait_flip): the server's newest
+         * vblank for the anchor, one round trip (55 us p50, 92 us p99 in
+         * the probe). */
+        int64_t ust = 0, msc = 0, sbc = 0;
+        if (yscr__x.GetSyncValues(g->dpy, g->gwin, &ust, &msc, &sbc) && ust > 0) {
+            newest->t_ns = ust * 1000;
+            newest->count = msc;
+        }
+    }
+    yscr__glx_bind(g);
+    return YSCR_OK;
+}
+
+static int yscr__glx_present(void* vctx, const yscr_present_req* req) {
+    yscr__glx* g = (yscr__glx*)vctx;
+    int64_t sbc;
+    if (g->lost) return YSCR_ERR_LOST;
+    /* target 0 is "the next vblank" in OML too (swap interval 1) */
+    sbc = yscr__x.SwapBuffersMsc(g->dpy, g->gwin, req->target_count > 0 ? req->target_count : 0, 0, 0);
+    if (sbc <= 0) return YSCR_ERR_LOST;
+    g->sent_sbc = sbc;
+    g->map_sbc[g->map_next & 7] = sbc;
+    g->map_id[g->map_next & 7] = req->present_id;
+    g->map_next++;
+    g->last_target_ns = req->target_count > 0 ? req->target_ns : yscr__now() + g->period_ns;
+    return YSCR_OK;
+}
+
+static int yscr__glx_completions(void* vctx, yscr_vblank* out, int cap) {
+    yscr__glx* g = (yscr__glx*)vctx;
+    int n;
+    yscr__glx_pump(g, 0);
+    n = g->n_done < cap ? g->n_done : cap;
+    memcpy(out, g->done, sizeof out[0] * (size_t)n);
+    memmove(g->done, g->done + n, sizeof g->done[0] * (size_t)(g->n_done - n));
+    g->n_done -= n;
+    return n;
+}
+
+static int yscr__glx_describe(void* vctx, char* buf, size_t cap) {
+    yscr__glx* g = (yscr__glx*)vctx;
+    char vrr[16] = "unset";
+    if (g->vrr_atom) {   /* read back: whether Mesa set it again */
+        uint8_t* r = yscr__x.get_property_reply(g->xc, yscr__x.get_property(g->xc, 0, g->win, g->vrr_atom,
+                                                                             YSCR__XCB_ATOM_CARDINAL, 0, 1), NULL);
+        uint32_t len = 0, v = 0;
+        if (r) {
+            memcpy(&len, r + 16, 4);
+            if (len >= 1) { memcpy(&v, r + 32, 4); snprintf(vrr, sizeof vrr, "%u", (unsigned)v); }
+            free(r);
+        }
+    }
+    /* SDL before 3.4.18 translates a ConfigureNotify against the window's
+     * parent with no error handler; when the window manager destroys the
+     * frame between its two calls, Xlib ends the process (measured on Xfwm4
+     * with SDL 3.4.0: 2 of 10 runs of a bare SDL fullscreen window). */
+    return snprintf(buf, cap, "renderer=\"%s\" present=flip:%u,copy:%u,suboptimal:%u,skip:%u,none:%u "
+                    "compositor=%s%s vrr_prop=%s key_time=x-server(%u,unmatched:%u,off-clock:%u)%s%s",
+                    g->renderer, (unsigned)g->n_mode[YSCR__PRESENT_MODE_FLIP], (unsigned)g->n_mode[YSCR__PRESENT_MODE_COPY],
+                    (unsigned)g->n_mode[3], (unsigned)g->n_mode[YSCR__PRESENT_MODE_SKIP], (unsigned)g->n_timeout,
+                    g->composited ? "yes" : "none", g->xwayland ? " xwayland=yes" : "", vrr,
+                    (unsigned)yscr__xk.used, (unsigned)yscr__xk.unmatched, (unsigned)yscr__xk.off_clock,
+                    strcmp(vrr, "1") == 0 ? " WARNING=variable-refresh-requested" : "",
+                    SDL_GetVersion() < SDL_VERSIONNUM(3, 4, 18) ? " WARNING=sdl-before-3.4.18-x11-race" : "");
+}
+
+static yscr_proc yscr__glx_gl_proc(void* vctx, const char* name) {
+    (void)vctx;
+    return yscr__x.GetProcAddress((const unsigned char*)name);
+}
+
+static const yscr_presenter yscr__glx_presenter = {
+    YSCR_PRESENTER_VERSION, "glx_oml", true, false, false,
+    yscr__glx_open, yscr__glx_close, yscr__glx_acquire, yscr__glx_present,
+    yscr__glx_completions, yscr__glx_gl_proc, yscr__glx_bind, yscr__glx_describe, NULL
+};
+
+#endif /* YSCR__GLX */
+
 /* --- the core -------------------------------------------------------------- */
 
 static int64_t yscr__time_of(const yscr_screen* s, int64_t c) {
@@ -8312,9 +9136,20 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
         s->auto_pick = YSCR_AUTO_COMPOSITION;
 #elif defined(YSCR__WEB)
         s->backend = YSCR_BACKEND_WEB;
+#elif defined(YSCR__GLX)
+        {   /* an X session; XWayland under a Wayland session was not measured */
+            const char* dsp = getenv("DISPLAY");
+            const char* st = getenv("XDG_SESSION_TYPE");
+            if (dsp && dsp[0] && !(st && strcmp(st, "wayland") == 0)) s->backend = YSCR_BACKEND_GLX_OML;
+        }
+        if (s->backend == YSCR_BACKEND_AUTO) {
+            yscr__copy(s->error, sizeof s->error, "ysp_screen: no display backend for this session (Wayland is a "
+                         "stub; GLX_OML needs an X session); BACKEND_SIM runs without a display");
+            return false;
+        }
 #else
         yscr__copy(s->error, sizeof s->error, "ysp_screen: no display backend on this platform "
-                     "(Linux X11, Wayland and macOS are stubs); BACKEND_SIM runs without a display");
+                     "(Wayland and macOS are stubs); BACKEND_SIM runs without a display");
         return false;
 #endif
     }
@@ -8339,6 +9174,12 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
         s->pr_ctx = s->backend_mem;
         break;
 #endif
+#if defined(YSCR__GLX)
+    case YSCR_BACKEND_GLX_OML:
+        s->pr = &yscr__glx_presenter;
+        s->pr_ctx = s->backend_mem;
+        break;
+#endif
     case YSCR_BACKEND_CUSTOM:
         if (!desc->presenter || desc->presenter->version != YSCR_PRESENTER_VERSION ||
             !desc->presenter->open || !desc->presenter->acquire || !desc->presenter->present ||
@@ -8352,7 +9193,7 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
         break;
     default:
         yscr__set_error(s->error, sizeof s->error, "ysp_screen: backend %d is not implemented on this platform "
-                          "(DXGI_FLIP and COMPOSITION on Windows, WEB under Emscripten, SIM and CUSTOM are)", (int)s->backend);
+                          "(DXGI_FLIP and COMPOSITION on Windows, GLX_OML on Linux X11, WEB under Emscripten, SIM and CUSTOM are)", (int)s->backend);
         return false;
     }
 
@@ -8393,6 +9234,10 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
         /* SDL would turn Alt+F4 into a close request; the header reports it
          * as its own reason (ABORT). */
         SDL_SetHintWithPriority(SDL_HINT_WINDOWS_CLOSE_ON_ALT_F4, "0", SDL_HINT_DEFAULT);
+        /* GLX draws into SDL's X window; SDL 3 may pick Wayland when both
+         * run. Default priority, so the caller's setting wins (and open()
+         * then says which driver SDL took). */
+        if (s->backend == YSCR_BACKEND_GLX_OML) SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, "x11", SDL_HINT_DEFAULT);
         if (!yscr__video_up()) {
             yscr__set_error(s->error, sizeof s->error, "ysp_screen: SDL video: %s", SDL_GetError());
             yscr_close(s);
@@ -9585,6 +10430,15 @@ YSCR_API bool yscr_poll(yscr_screen* s, union SDL_Event* ev, int64_t* t_rt) {
     if (s) s->polled = 1;
     /* doorbells SDL refused go in again once its queue is empty */
     if (!SDL_PollEvent(ev) && (!yscr__in_rebell() || !SDL_PollEvent(ev))) return false;
+#if defined(YSCR__GLX)
+    /* the X server's time of a key, in SDL's units, so every consumer of
+     * the event (yscr_event_input(), ysp/response.h) gets it */
+    if (yscr__xk.users > 0 && s && s->sdl_width &&
+        (ev->type == SDL_EVENT_KEY_DOWN || ev->type == SDL_EVENT_KEY_UP)) {
+        int64_t t = yscr__xk_take(ev->key.raw, ev->type == SDL_EVENT_KEY_DOWN);
+        if (t) ev->common.timestamp = (Uint64)(t - s->sdl_rt + s->sdl_ticks);
+    }
+#endif
     if (t_rt) *t_rt = yscr_restamp(s, ev->common.timestamp);
     if (s && s->sdl_gamepad) {
         if (ev->type == SDL_EVENT_GAMEPAD_ADDED) yscr__pad_open(s, ev->gdevice.which);

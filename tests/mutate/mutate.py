@@ -127,7 +127,11 @@ def build(test, inc, src_dir, out_dir, tag):
         cmd[0] = shutil.which("cl", path=path) or "cl"
     else:
         gcc = find_gcc()
-        cmd = [gcc] + test.get("flags", []) + ["-I" + inc, "-o", exe, src] + test.get("libs", [])
+        # $VARS in flags and libs: a test that links a library outside the
+        # system paths (SDL3 for screen_glx) names its prefix this way.
+        flags = [os.path.expandvars(f) for f in test.get("flags", [])]
+        libs = [os.path.expandvars(f) for f in test.get("libs", [])]
+        cmd = [gcc] + flags + ["-I" + inc, "-o", exe, src] + libs
         env = dict(os.environ)
         env["PATH"] = os.path.dirname(gcc) + os.pathsep + env.get("PATH", "")
     r = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=out_dir)

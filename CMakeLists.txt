@@ -587,6 +587,12 @@ if(TARGET SDL3::Headers AND YSP_BUILD_TESTS)
     target_link_libraries(test_input_sdl PRIVATE SDL3::Headers)
     add_test(NAME test_input_sdl COMMAND test_input_sdl)
 endif()
+# ysp/screen.h's GLX_OML backend on an X display: self-checking, but it needs
+# an X session with Mesa and takes the screen for about 6 s, so it is built
+# and run by hand (and by the glx- mutants), never registered with ctest.
+if(TARGET SDL3::SDL3 AND YSP_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    ysp_add_program(test_screen_glx tests/adapt/screen_glx_test.c rig)
+endif()
 if(TARGET SDL3::SDL3 AND YSP_BUILD_EXAMPLES)
     # The jsPsych-style trials of examples/response/ (docs/response.md,
     # "What the examples show"); the two with a sound need miniaudio.
