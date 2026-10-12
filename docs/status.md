@@ -117,7 +117,8 @@ Purpose: Serial port (RS-232, USB-serial, USB-CDC) byte I/O for trigger and resp
 Status:
 
 - Hardware: the Windows backend ran on a Teensy 4.0 over native USB CDC (usbser), 2026-10-11, through the MATLAB MEX: round trip 172 to 288 us median, 279 to 424 us p99, against a raw Win32 floor of 167 to 229 us; IOPort with BlockingBackgroundRead=1 PollLatency=0 matches it. macOS and USB-serial bridges (FTDI) and RS-232 never ran. [Results](serial.md#results-with-the-teensy-40-echo-board).
-- Bindings: `ysp-serial` 0.5.0.2 (Python) and the MEX `ysp_serial` 2.0.0 take and return every time in seconds; both have an async line reader (the Python one since 0.5.0.2). [Bindings](bindings.md#versions).
+- Bindings: `ysp-serial` 0.5.1 (Python) and the MEX `ysp_serial` 2.0.0 take and return every time in seconds; both have an async line reader (the Python one since 0.5.0.2). [Bindings](bindings.md#versions).
+- v0.5.1: the TIMING comment gives the pulse onset and width measured on a Teensy 4.0 over `usbser.sys` (onset 176 to 185 us median, DTR 83 us; width +0.34 to +0.42 ms median, p99 up to +0.69 ms; 0 of 19200 missed; RTS alone never sent) and names what is not measured (FTDI, RS-232, Linux, macOS). No code change. [Pulses](serial.md#pulses-onset-and-width).
 - v0.5.0 (the [Conventions](conventions.md): widths, timeouts and the break in `int64_t` ns, `YSER_TIMEOUT_INFINITE` is -1, `yser_now_us()` removed, version macros).
 - v0.4, on ysp/rt.h. Linux tested against a virtual port pair; the Windows and macOS backends compiled in CI but had not run on a device. [Design notes](serial.md).
 

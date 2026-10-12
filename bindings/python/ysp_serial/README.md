@@ -260,12 +260,12 @@ from the slot that belongs to the failing role (`rd_oserr`, `wr_oserr` or
 
 ## Version
 
-`ysp-serial` 0.5.0.2 is `ysp/serial.h` v0.5.0 with binding revision 2:
-revision 1 changed every time to seconds, revision 2 added the async reader.
-The first three numbers are the header's version; a fourth counts changes to
-the binding alone and goes away when the header's version changes.
-`ps.__version__` gives the same string. 0.5.0.2 adds calls and does not
-change the API of 0.5.0.1.
+`ysp-serial` 0.5.1 is `ysp/serial.h` v0.5.1. The header changed only its
+TIMING comment, so 0.5.1 has the API of 0.5.0.2. The first three numbers are
+the header's version; a fourth counts changes to the binding alone and goes
+away when the header's version changes: 0.5.0.1 changed every time to
+seconds, 0.5.0.2 added the async reader. `ps.__version__` gives the same
+string. 0.5.0.2 adds calls and does not change the API of 0.5.0.1.
 
 0.5.0.1 breaks the API of 0.5.0. Replace `now_us()` with `now()` (seconds),
 `timeout_ms` with `timeout`, `write_timeout_ms` with `write_timeout`,
@@ -279,7 +279,7 @@ Most tests need no port:
 
 ```sh
 uv build --wheel -o dist
-uv run --no-project --with pytest --with dist/ysp_serial-0.5.0.2-cp38-abi3-<platform>.whl pytest tests
+uv run --no-project --with pytest --with dist/ysp_serial-0.5.1-cp38-abi3-<platform>.whl pytest tests
 ```
 
 On Linux, `tests/test_async_pty.py` runs the async reader on a
@@ -292,7 +292,7 @@ of a write while the reader runs. Add `-s` to see the numbers;
 `YSP_SERIAL_RESULTS=<dir>` also writes them to `<dir>/async_device.json`.
 
 ```sh
-YSP_SERIAL_PORT=COM3 uv run --no-project --with pytest --with dist/ysp_serial-0.5.0.2-cp38-abi3-<platform>.whl pytest tests -s
+YSP_SERIAL_PORT=COM3 uv run --no-project --with pytest --with dist/ysp_serial-0.5.1-cp38-abi3-<platform>.whl pytest tests -s
 ```
 
 Device naming, USB latency, DTR-driven board resets and what a serial trigger

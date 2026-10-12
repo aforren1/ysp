@@ -1,4 +1,4 @@
-/* ysp/serial.h - v0.5.0 - public domain single-header serial-port library
+/* ysp/serial.h - v0.5.1 - public domain single-header serial-port library
  *
  *   REQUIRES ysp/rt.h, its sibling in this collection, on the include path.
  *   This header includes it for the clock, the waits, the scheduling ladder
@@ -130,25 +130,41 @@
  *
  *   TIMING (read this before you trust a serial trigger)
  *     USB-serial adds latency that the parallel port does not have.
- *       - Host to device: a USB bulk write is scheduled into the next 1 ms
- *         (full-speed) or 125 us (high-speed) frame. Expect about 1 ms onset
- *         latency with sub-millisecond jitter for a single-byte write.
+ *       - Host to device: a byte is a USB bulk transfer in a later 1 ms
+ *         (full-speed) or 125 us (high-speed) frame; a DTR or RTS change is
+ *         a control request.
  *       - Device to host (responses): the bridge chip holds received bytes
  *         until its buffer fills or a latency timer expires. FTDI parts
  *         default to 16 ms. Set desc.low_latency = true to request 1 ms; the
  *         LOW LATENCY section says what each platform can actually do.
+ *     Measured on one setup only: a Teensy 4.0 (native USB high speed,
+ *     Windows' usbser.sys), Windows 11, Intel Core i7-1360P, 2026-10-12; the
+ *     edge is the board's receive time (docs/serial.md, "Pulses: onset and
+ *     width"):
+ *       - Onset from just before the call: yser_pulse() and
+ *         yser_pulse_async() 176 to 185 us median, p99 under 0.32 ms;
+ *         yser_set_dtr() 83 us median.
+ *       - Width at 1 and 5 ms, byte and DTR pulses: longer than requested
+ *         by +0.34 to +0.42 ms median, p99 up to +0.69 ms. Most of it is the
+ *         onset call, which returned 200 to 300 us after the board had the
+ *         edge; the width starts when that call returns.
+ *       - Missed: 0 of 19200 byte and DTR pulses.
+ *       - An RTS change alone never reached the device: usbser.sys sends
+ *         the RTS state only with the next DTR change. Pulse with DTR or
+ *         bytes there.
+ *     Not measured: FTDI and other bridges, RS-232, Linux, macOS. Do not
+ *     carry these numbers to them.
  *     To timestamp a trigger, bracket the call:
  *         int64_t t0 = yrt_now_ns();
  *         yser_write_byte(&sp, code);
  *         int64_t t1 = yrt_now_ns();
- *     and record both. The physical edge lies after t0 and, on USB, after
- *     the next frame boundary following the driver's acceptance; t1 - t0 is
- *     the syscall cost (10 to 100 us). Neither is the onset; they bound it.
+ *     and record both. The edge lies after t0; on the setup above it
+ *     arrived before t1 (a byte write took 0.42 ms median). Neither time is
+ *     the onset; they bound it.
  *     yrt_now_ns() is the clock this header times its own deadlines with,
  *     so these timestamps, ysp/rt.h's deadlines and anything ysp/rt.h
  *     reports are all differences of one counter.
- *     Measure the offset once with a scope and apply it.
- *     yser_pulse() widths below a few milliseconds are unreliable over USB.
+ *     Measure the offset once on your setup and apply it.
  *     If the device can time the pulse itself (StimTracker, TriggerBox Plus,
  *     c-pod), prefer that and send one command instead of two.
  *
@@ -162,8 +178,10 @@
  *     right after that onset. That worker elevates itself up ysp/rt.h's ladder
  *     (SCHED_DEADLINE, else the macOS time-constraint policy, else SCHED_FIFO,
  *     else normal; THREAD_PRIORITY_TIME_CRITICAL on Windows) and waits the
- *     same way, so its trailing edge is MORE precise than yser_pulse's, not
- *     less, and the caller is free during the width. yser_port.async_policy
+ *     same way, so its trailing edge is no less precise than yser_pulse's
+ *     (on the setup above the two width errors matched: +0.36 to +0.42 ms
+ *     median), and the caller is free during the width. It is not free
+ *     during the onset write (0.46 ms median there). yser_port.async_policy
  *     says which rung it got; log it with your numbers, because they mean
  *     different things under different policies.
  *     What the wait itself is worth on your machine is ysp/rt.h's WAITS
@@ -174,8 +192,8 @@
  *     What neither call can do is beat the transport. Over USB-serial the
  *     jitter of an edge is bounded below by the frame period (1 ms full-speed,
  *     125 us high-speed) and above by OS scheduling plus the driver's own
- *     batching, and on Windows that upper bound is reported to be far worse
- *     than a frame. Frame quantization is the floor, not the budget. Put a
+ *     batching; on the setup above the width's p5 to p95 spread was about
+ *     0.4 ms. Frame quantization is the floor, not the budget. Put a
  *     scope on the line, record the distribution together with async_policy,
  *     and do not assume a number from this header.
  *
@@ -344,7 +362,11 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
- *   v0.5.0 - The ysp conventions (README.md, Conventions); breaks the API.
+ *   v0.5.1 - TIMING gives the onset and width measured on a Teensy 4.0 over
+ *          usbser.sys, and names what was not measured; it no longer says
+ *          "about 1 ms onset" or that widths below a few ms are unreliable.
+ *          No code change.
+ *   v0.5.0 -The ysp conventions (README.md, Conventions); breaks the API.
  *          Every time is int64_t ns on the yrt_now_ns() clock:
  *          yser_pulse() and yser_pulse_async() take width_ns,
  *          yser_read() takes timeout_ns, yser_send_break() takes
@@ -430,8 +452,8 @@
  * The string always matches the three numbers. */
 #define YSER_VERSION_MAJOR  0
 #define YSER_VERSION_MINOR  5
-#define YSER_VERSION_PATCH  0
-#define YSER_VERSION_STRING "0.5.0"
+#define YSER_VERSION_PATCH  1
+#define YSER_VERSION_STRING "0.5.1"
 
 /* CancelIoEx (Vista) is what lets yser_interrupt() end a pending overlapped
  * read. The MSVC SDK targets a recent Windows by default, but MinGW headers

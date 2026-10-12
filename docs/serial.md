@@ -1,16 +1,17 @@
 # ysp/serial.h design
 
-Status: **v0.5.0, implemented.** Windows uses the Win32 COM API with overlapped
+Status: **v0.5.1, implemented.** Windows uses the Win32 COM API with overlapped
 I/O; Linux and macOS share a termios backend. Since v0.4 the header depends on
 `ysp/rt.h` for the clock, the waits, the scheduling ladder and the deadline
 worker; see [Depends on ysp/rt.h](#depends-on-ysprth). Verified on Linux against a
 socat pty pair, including a reader thread and a writer thread on one handle
 under ThreadSanitizer and under AddressSanitizer plus UndefinedBehaviorSanitizer.
-The Windows backend compiles clean under MSVC but has not run on a port: its
-open-time validation and enumeration entry point run, but no byte has moved
-through it, for lack of a COM device. The macOS paths compile on macOS in CI
-but have never run on a device, for lack of a machine. No timing claim in the
-header has been measured yet, and the async worker has only ever run at
+The Windows backend ran on a Teensy 4.0 over `usbser.sys`
+([Results with the Teensy 4.0 echo board](#results-with-the-teensy-40-echo-board),
+[Pulses: onset and width](#pulses-onset-and-width)). The macOS paths compile on macOS in CI
+but have never run on a device, for lack of a machine. The timing numbers in
+the header (v0.5.1) are from that one Windows setup; FTDI and other bridges,
+RS-232, Linux and macOS are not measured. On Linux the async worker has only ever run at
 `YSER_ASYNC_NORMAL`: the test machine grants no `CAP_SYS_NICE`, so the
 `SCHED_DEADLINE` and `SCHED_FIFO` rungs of its ladder are written but
 unexercised. The header's top comment is the user-facing documentation
@@ -381,9 +382,13 @@ Windows (about 1.2 ms) than on Linux and macOS (200 us), for the reasons
 
 ### Timing statement
 
-The header states the USB latency budget up front (about 1 ms host-to-device,
-16 ms device-to-host on FTDI defaults) so users do not treat a serial pulse as
-a parallel-port pulse. "Take your timestamp after the write" was a guess; the
+The header states the USB latency budget up front so users do not treat a
+serial pulse as a parallel-port pulse. Until v0.5.1 it said "about 1 ms"
+host to device and called widths below a few milliseconds unreliable; neither
+was measured. v0.5.1 gives the onset and width measured on one setup (a
+Teensy 4.0 over `usbser.sys`, [Pulses: onset and width](#pulses-onset-and-width)),
+says which setups are not measured, and keeps the FTDI latency timer
+(16 ms by default) for device to host. "Take your timestamp after the write" was a guess; the
 header now says to bracket the call with `yrt_now_ns()` and record both
 sides, and to measure the offset to the physical edge once with a scope.
 Until v0.5.0 the header had its own `yser_now_us()`, a wrapper of the
@@ -1488,10 +1493,10 @@ delay.
   `Port.pulse_async`.
 - Open item for the header: take the `yser_pulse` and `yser_pulse_async`
   deadline before the onset write, not after it, with the width floored at
-  the onset call. Run 3 measured the effect of that change on this board;
-  the header's TIMING text ("about 1 ms onset", "widths below a few
-  milliseconds are unreliable") is for full-speed bridges and is not
-  measured here.
+  the onset call. Run 3 measured the effect of that change on this board.
+  v0.5.1 replaced the header's TIMING text ("about 1 ms onset", "widths
+  below a few milliseconds are unreliable"), which was not measured, with
+  the numbers of this section.
 
 Not run: MATLAB (the `ysp_serial` MEX pulse, IOPort `Write` with
 `WaitSecs`), an FTDI bridge, Linux and macOS. To run the bench (the

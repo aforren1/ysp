@@ -63,7 +63,9 @@ when the header's version moves: `ysp-serial` 0.5.0.1 is `ysp/serial.h`
 v0.5.0 with the change to seconds, and `ysp-parallel` 0.4.0.1 is
 `ysp/parallel.h` v0.4.0 with the same change, and so is `ysp-rdk`
 0.2.0.1 for `ysp/rdk.h` v0.2.0. `ysp-serial` 0.5.0.2 is the second
-binding-only change to `ysp/serial.h` v0.5.0: the async reader. PEP 440 accepts the fourth
+binding-only change to `ysp/serial.h` v0.5.0: the async reader. `ysp-serial`
+0.5.1 is `ysp/serial.h` v0.5.1 (a comment change) without a fourth number,
+and has the API of 0.5.0.2. PEP 440 accepts the fourth
 number as a release segment, and 0.5.0.1 sorts after 0.5.0 and before
 0.5.1. A post-release (0.5.0.post1) was not used: it means "no code
 changed", and this change breaks the API. Each package's tests check that

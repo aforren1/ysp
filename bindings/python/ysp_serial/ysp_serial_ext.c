@@ -79,13 +79,13 @@ static PyObject* PsClosed;
 
 #define AS_PORT(self) (&((PortObject*)(self))->port)
 
-/* The distribution's version is the header's, plus a fourth component that
- * counts changes to this binding alone (.1: times in seconds, .2: the async
- * reader), so such a change gets a new version without naming a header that
- * does not exist.
- * When the header's version moves, drop the suffix here and in
- * pyproject.toml; tests/test_serial.py checks that the two agree. */
-#define PS_VERSION YSER_VERSION_STRING ".2"
+/* The distribution's version is the header's. A change to this binding
+ * alone adds a fourth component (0.5.0.1: times in seconds, 0.5.0.2: the
+ * async reader), so such a change gets a new version without naming a
+ * header that does not exist. When the header's version moves, the suffix
+ * goes, here and in pyproject.toml (0.5.1 has none);
+ * tests/test_serial.py checks that the two agree. */
+#define PS_VERSION YSER_VERSION_STRING
 
 /* ps_seconds() flags. */
 #define PS_S_INF  1  /* math.inf means "forever" (YSER_TIMEOUT_INFINITE) */
