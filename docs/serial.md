@@ -306,14 +306,32 @@ round trip to the bridge chip per trigger.
 
 `yser_pulse(p, on, off, width_ns)` takes both bytes because `0x00` is the idle
 byte for latching boxes (TriggerBox, BioSemi, DIY) and a protocol byte for
-XID. It is blocking and spins on Windows; the header says to prefer
-device-timed pulses.
+XID. It is blocking and sleeps the width, spinning only the tail; the
+header says to prefer device-timed pulses.
+
+Since v0.6 the width runs from the START of the onset write, and the
+trailing write waits for `max(t_start + width, t_return + min_hold)`.
+Until v0.5.1 it ran from the onset write's return, "so the width does not
+include that write's own cost". That reason was wrong over USB: the byte
+reaches the device during the write, not after it (on the Teensy 4.0, a
+byte write took 423 us median and its byte arrived 179 us after the call
+started), so every pulse was +0.34 to +0.42 ms long at the device, and the
+spread of the write's return (about 0.4 ms, p5 to p95) became the spread of
+the width. [Pulses: onset and width](#pulses-onset-and-width) has the
+numbers before and after. `min_hold` (`desc.min_hold_ns`, default 0.25 ms)
+is the floor for a width shorter than the onset write, or for an onset
+write that stalls: without it, a stalled write could put both bytes into
+one USB packet, and the device would see a pulse of 0 us. It is a desc
+field and not a constant because the right value depends on the receiver's
+sampling period, which only the caller knows.
 
 ### Async pulse
 
-`yser_pulse_async(p, on, off, width_ns)` writes `on` on the calling thread and
-returns; a worker thread the library owns writes `off` at an absolute deadline
-taken right after the onset write. Since v0.4 that thread is a `yrt_worker`,
+`yser_pulse_async(p, on, off, width_ns)` queues the pulse and returns; a
+worker thread the library owns writes `on`, then `off` at the deadline
+`yser_pulse` would use. Until v0.6 the call wrote `on` itself and handed
+only `off` to the worker, so it cost a driver write (462 us median on the
+Teensy 4.0). Since v0.4 that thread is a `yrt_worker`,
 so the ladder, the ready handshake that makes `yser_port.async_policy` final
 when `yser_open` returns, the one-pending-job rule, the deadline wait with its
 spin tail and the flush on stop are all `ysp/rt.h`'s, and `yser_open` validates
@@ -322,6 +340,35 @@ is the writer mutex and the armed trailing byte; see
 [Depends on ysp/rt.h](#depends-on-ysprth). The shape still mirrors
 `ypar_pulse_async`: the worker starts in `yser_open`, so the policy is final
 before the first trial and no trial pays for thread creation.
+
+The v0.6 design, and why:
+
+- **The call only queues.** It takes a short state lock that no thread
+  holds across I/O, puts `on` in a 16-byte queue, and submits a job due now
+  when the queue goes from empty to one. No write, no allocation. A full
+  queue returns 0 and queues nothing, as a timed-out write did.
+- **Two locks.** The writer mutex still serializes every write on the
+  stream and is held across I/O. If the call took it, it would wait for any
+  worker write in progress (up to a write's 0.4 to 0.8 ms on the Teensy),
+  which is the cost the change removes.
+- **Order is the order of the calls.** The worker writes queued onsets
+  oldest first, in one write. Every other writer-role call takes the writer
+  mutex and writes the queued onsets before its own bytes: `yser_write` and
+  `yser_pulse` then disarm the trailing byte as before, `yser_drain` and
+  `yser_send_break` keep it, and `yser_purge(YSER_PURGE_TX)` discards the
+  queued onsets, which never reached the driver.
+- **The deadline is the worker's, not the caller's.** The width runs from
+  the start of the worker's onset write, not from the call. The wake comes
+  before the onset reaches the device, so counting it would shorten the
+  pulse at the device by the wake latency and add the wake's jitter to the
+  width. The onset is later than a synchronous write's by that wake; the
+  width is not.
+- **Failures are reported late.** The call that queued a pulse has already
+  returned when the worker's write fails. The next `yser_pulse_async`
+  returns the failure, once, and queues nothing: a negative code, or 0 for
+  a timed-out write. `ysp/parallel.h` sets a sticky flag instead
+  (`async_write_failed`); a return code fits this header's rule that a
+  second thread's call reports through its return, not through the handle.
 
 This was left out of v0.1, on two arguments that were both wrong. "A worker
 buys nothing measurable over USB" confused a floor with a budget: frame
@@ -388,7 +435,8 @@ host to device and called widths below a few milliseconds unreliable; neither
 was measured. v0.5.1 gives the onset and width measured on one setup (a
 Teensy 4.0 over `usbser.sys`, [Pulses: onset and width](#pulses-onset-and-width)),
 says which setups are not measured, and keeps the FTDI latency timer
-(16 ms by default) for device to host. "Take your timestamp after the write" was a guess; the
+(16 ms by default) for device to host. v0.6.0 gives the numbers of the new
+width rule, the queued async pulse and the RTS fix. "Take your timestamp after the write" was a guess; the
 header now says to bracket the call with `yrt_now_ns()` and record both
 sides, and to measure the offset to the physical edge once with a scope.
 Until v0.5.0 the header had its own `yser_now_us()`, a wrapper of the
@@ -1300,6 +1348,10 @@ the echo board, not a trigger box, and the edge is the board's receive
 time, not an electrical edge. A trigger box adds its own delay from receipt
 to output.
 
+The tables under Results were measured with ysp/serial.h 0.5.0. v0.6.0
+changed both pulse calls on these numbers; [Results with
+v0.6.0](#results-with-v060) has theirs.
+
 ### How the bench measures
 
 `tests/compare/serial_pulse/pulse_bench.c` (C) and `pulse_bench.py`
@@ -1405,12 +1457,12 @@ The 2 and 10 ms cells are in `summary_runs12_pooled.txt`. Their medians
 are +354 to +446 us for the modes without `time.sleep` and +766 to +885 us
 for the `time.sleep` modes, the same as at 1 and 5 ms.
 
-RTS: 40 pulses per API at 5 ms (`yser_set_rts`, `EscapeCommFunction(SETRTS)`,
-`Port.set_rts`, `Serial.rts`): 40 of 40 missed for each. The board saw no
-RTS change. A check with both libraries showed why: `usbser.sys` sends no
-SET_CONTROL_LINE_STATE request for an RTS change. The RTS state goes to
-the device with the next DTR change. The RTS calls cost 32 to 62 us median,
-which agrees: they make no USB transfer.
+RTS: 40 pulses per API at 5 ms (`yser_set_rts` of v0.5,
+`EscapeCommFunction(SETRTS)`, `Port.set_rts`, `Serial.rts`): 40 of 40
+missed for each. The board saw no RTS change. The RTS calls cost 32 to
+62 us median, which agrees: they make no USB transfer.
+[RTS on usbser.sys](#rts-on-usbsersys) finds where the change is lost;
+v0.6 sends it.
 
 Width timed from the call start (run 3, 200 pulses per cell, the same
 session as a `ysp_pulse` and `ysp_dtr` control). The `_t0` modes call
@@ -1425,6 +1477,91 @@ width, then write the trailing edge.
 | ysp_dtr (control) | 1 ms | +399 | +209 | +543 | +602 | +620 | +136 |
 | ysp_dtr_t0 | 1 ms | -28 | -51 | -8 | +7 | +13 | -81 |
 | ysp_dtr_t0 | 5 ms | -18 | -50 | +4 | +21 | +87 | -87 |
+
+### Results with v0.6.0
+
+ysp/serial.h 0.6.0 times the width of `yser_pulse` and `yser_pulse_async`
+from the start of the onset write, at least `min_hold_ns` (0.25 ms) after
+that write returned; `yser_pulse_async` only queues, and the worker writes
+both bytes; `yser_set_rts` sends RTS on `usbser.sys`. Two runs in opposite
+orders, 200 pulses per cell, the same board after a replug (it may sit on
+another USB port), so compare modes within this table, not with the
+0.5.0 tables. Summaries and conditions:
+`tests/compare/serial_pulse/results/2026-10-12-teensy40-v060/`.
+
+Missed: 0 of 8000 (runs 1 and 2, `ysp_rts` included) and 0 of 1800 in the
+stall check below.
+
+Width error, 400 pulses per cell. Microseconds.
+
+| Mode | Width | Median | p5 | p95 | p99 | Max | Min |
+|---|---|---|---|---|---|---|---|
+| ysp_pulse | 1 ms | -57 | -114 | +12 | +84 | +643 | -169 |
+| ysp_pulse | 2 ms | -39 | -103 | +26 | +98 | +408 | -216 |
+| ysp_pulse | 5 ms | -24 | -92 | +45 | +85 | +238 | -193 |
+| ysp_pulse | 10 ms | -22 | -91 | +46 | +104 | +546 | -172 |
+| ysp_pulse_async | 1 ms | -44 | -91 | +8 | +46 | +79 | -130 |
+| ysp_pulse_async | 2 ms | -26 | -79 | +12 | +34 | +69 | -173 |
+| ysp_pulse_async | 5 ms | -23 | -80 | +43 | +73 | +416 | -147 |
+| ysp_pulse_async | 10 ms | -22 | -70 | +35 | +79 | +159 | -183 |
+| raw_byte (width from the return) | 1 to 10 ms | +352 to +456 | +202 to +265 | +529 to +590 | +630 to +940 | +1708 | +113 |
+
+Onset and call cost, 1600 pulses per mode. Microseconds.
+
+| Mode | Onset median | Onset p5 / p95 / p99 / max | Cell medians | Call median / p99 / max |
+|---|---|---|---|---|
+| ysp_dtr | 86 | 50 / 124 / 142 / 671 | 57 to 113 | 383 / 2118 / 21849 |
+| ysp_rts | 118 | 74 / 172 / 221 / 439 | 102 to 141 | 395 / 2436 / 5370 |
+| raw_byte | 211 | 154 / 282 / 353 / 1022 | 187 to 250 | 447 / 723 / 1702 |
+| ysp_pulse | 218 | 142 / 300 / 365 / 469 | 162 to 278 | 392 / 778 / 1341 (minus w) |
+| ysp_pulse_async | 267 | 136 / 376 / 408 / 529 | 163 to 332 | 20 / 48 / 1988 |
+
+- **The width error is now about the difference of the two edges'
+  latencies:** -57 to -22 us median, p5 to p95 spread 91 to 137 us, p99 at
+  most +104 us. With 0.5.0 it was +362 to +438 us median with a spread of
+  about 400 us, and `raw_byte`, which still times from the return, keeps
+  that error here (+352 to +456 us). The medians are below 0 because the
+  trailing byte arrives sooner after its write starts than the onset byte
+  does: for `raw_byte`, 20 to 42 us sooner (cell medians, `off_lat`
+  against `onset`).
+- **`yser_pulse_async` returns in 20 us median, 48 us p99**, against 462 us
+  median with 0.5.0. One call in 1600 took 1988 us; the bench does not
+  show why (the caller runs at normal priority, so a preemption is the
+  likely cause, not a lock: the state lock is never held across I/O).
+- **The worker's wake makes the async onset later.** Pooled, the async
+  onset median is 49 us after the synchronous one (267 against 218 us),
+  p99 408 against 365 us. Per width and run, the difference of the cell
+  medians is -53 to +116 us, so the wake cost is within the cell-to-cell
+  spread of either mode. The width is not affected: it starts at the
+  worker's write, not at the call.
+- **`yser_set_rts` reaches the board:** 0 of 1600 RTS pulses missed, onset
+  118 us median, 32 us after DTR's. The call costs a DTR request (395 us
+  median).
+- **The DTR and RTS calls had a long tail in this session** (call p99 2.1
+  to 2.4 ms, one DTR call 21.8 ms), and their bench-timed widths with it;
+  the 0.5.0 session had a p99 of 0.64 ms. The byte writes did not. This
+  bench does not show the cause.
+
+min_hold, the stall check: widths below the onset write's duration, 100
+pulses per cell, the width at the board (requested plus error). Microseconds.
+
+| min_hold | Mode | 0 ms: median / min | 0.1 ms: median / min | 0.2 ms: median / min |
+|---|---|---|---|---|
+| 1 ns | ysp_pulse | 430 / 140 | 373 / 151 | 335 / 136 |
+| 1 ns | ysp_pulse_async | 376 / 56 | 387 / 130 | 246 / 67 |
+| 0.25 ms | ysp_pulse | 515 / 351 | 599 / 411 | 477 / 348 |
+| 0.25 ms | ysp_pulse_async | 457 / 341 | 419 / 344 | 422 / 341 |
+| 0.5 ms | ysp_pulse | 755 / 602 | 799 / 656 | 808 / 637 |
+| 0.5 ms | ysp_pulse_async | 754 / 579 | 738 / 599 | 694 / 602 |
+
+No pulse was missed at any setting, and none collapsed to 0 on this
+board: with practically no hold the shortest was 56 us, because the
+trailing write itself takes time. `min_hold` sets the floor: the shortest
+pulse was the hold plus 80 to 160 us. No value is better on this board;
+the right value depends on the receiver's sampling period (a 2048 Hz
+BioSemi samples every 488 us), so it stays a desc field with 0.25 ms as
+the default, which only acts when the width is shorter than the onset
+write plus the hold (about 0.65 ms here).
 
 ### What explains the differences
 
@@ -1442,7 +1579,8 @@ width, then write the trailing edge.
   minus the leading edge's: -50 to -18 us median, a p5 to p95 spread of 43
   to 136 us, against about 400 us. This contradicts the header's reason
   for taking the deadline after the write. The cost: a width shorter than
-  the onset call (0.4 to 0.8 ms here) becomes 0 on the host side.
+  the onset call (0.4 to 0.8 ms here) becomes 0 on the host side. v0.6.0
+  made this change, with `min_hold_ns` as the floor.
 - **DTR arrives 75 to 100 us before a byte.** DTR is a control request on
   endpoint 0; a byte is a bulk OUT transfer. This bench does not separate
   the reasons inside `usbser.sys` and the host controller.
@@ -1456,13 +1594,84 @@ width, then write the trailing edge.
   `time.sleep` modes overslept by 347 to 475 us median, p95 669 to 891 us,
   on CPython 3.13.7. That is the difference between `pyserial_sleep` and
   `pyserial_busy`, and between `ysp_py_dtr` and `ysp_dtr`.
-- **`yser_pulse_async` does not return at once.** Its onset write is
-  synchronous: 462 us median, 737 us p99. The caller gets its thread back
-  for the width, not for the write.
+- **`yser_pulse_async` did not return at once (0.5.0).** Its onset write
+  was synchronous: 462 us median, 737 us p99. The caller got its thread
+  back for the width, not for the write. v0.6.0 queues instead.
 - **Rare stalls.** One `yser_set_dtr()` call took 5.2 ms (a 5 ms pulse
   became 13.3 ms), and one 2 ms async pulse became 4.4 ms. The width
   error p99 is under 0.78 ms for every mode without `time.sleep`; the
   maximum is not.
+
+### RTS on usbser.sys
+
+Where an RTS change was lost, 2026-10-12, the same machine and board
+(Teensyduino 1.62.0, `usbser.sys` of Windows 11 10.0.26200).
+
+The device side keeps both bits. The core's control-request handler
+(`cores/teensy4/usb.c`, `case 0x2221: // CDC_SET_CONTROL_LINE_STATE`)
+stores `setup.wValue` in `usb_cdc_line_rtsdtr` for the CDC interface, and
+`usb_serial.h` reads bit 0x01 for `Serial.dtr()` and bit 0x02 for
+`Serial.rts()`. `firmware/ysp_echo` packs both (`read_lines()`) and reports
+both (`report_lines()`). So every request that arrives is reported with its
+RTS bit, and the RTS changes below that did arrive were all reported.
+
+The host side: `tests/compare/serial_pulse/rts_probe.c` sets RTS through
+each Win32 path with DTR held low and held high, reads the driver's own
+state back (`IOCTL_SERIAL_GET_DTRRTS`), and records the board's reports
+for 60 ms after each call. Four runs:
+
+| Path | Driver's RTS state | Board sees the change | Call |
+|---|---|---|---|
+| `EscapeCommFunction(SETRTS / CLRRTS)` | changes | never | 7 to 32 us |
+| `IOCTL_SERIAL_SET_RTS / CLR_RTS` | changes | never | 2 to 22 us |
+| `IOCTL_SERIAL_SET_HANDFLOW`, RTS bits of FlowReplace | does not change | never | 5 to 23 us |
+| SET_RTS, then the baud rate, line control or handflow set again | changes | never | 0.02 to 2.6 ms |
+| `SetCommState`, `fRtsControl` | changes | every change | 2.4 to 6.6 ms |
+| `EscapeCommFunction(SETRTS / CLRRTS)`, then `SETDTR` or `CLRDTR` at the DTR level the driver has | changes | every change, 8 of 8 | 0.20 to 0.53 ms |
+
+`SetCommState` has a side effect: it also sets DTR from the DCB's
+`fDtrControl`, and `GetCommState` does not report a DTR that
+`EscapeCommFunction(CLRDTR)` lowered, so a get-modify-set raised DTR in
+two of four sequences.
+
+To find which request carries the line state, a hook on
+`NtDeviceIoControlFile` (`tests/compare/serial_pulse/ioctl_trace.c`, an
+import patch in its own process) logged what `SetCommState` sends:
+GET_BAUD_RATE, GET_LINE_CONTROL, GET_CHARS, GET_HANDFLOW, SET_BAUD_RATE,
+CLR_RTS, SET_DTR, SET_LINE_CONTROL, SET_CHARS, SET_HANDFLOW. Replayed one at
+a time after a SET_RTS, only SET_DTR made the board report the RTS change,
+with DTR already at that level.
+
+Conclusion: `usbser.sys` records `IOCTL_SERIAL_SET_RTS` and `CLR_RTS`
+without a USB request. It sends SET_CONTROL_LINE_STATE, with both bits, on
+`IOCTL_SERIAL_SET_DTR` and `CLR_DTR`, also when DTR does not change. The
+core and the firmware are not the cause. This is inferred from the board's
+reports; no USB capture was made (USBPcap needs administrator rights).
+Microsoft's page on the driver ("USB serial driver (Usbser.sys)") does not
+describe its serial IOCTLs. A 2022 Cygwin change reports the same:
+`EscapeCommFunction` does not set RTS or DTR on `usbser.sys` from
+Windows 2000 to Windows 11, and Cygwin switched to `SetCommState`
+(sourceware.org, cygwin-cvs 2022q4, "fix TIOCMBIS/TIOCMBIC not working when
+using usbser.sys"). DTR did work here with `EscapeCommFunction`.
+
+v0.6 `yser_set_rts` on Windows sets RTS, then sets DTR again to the level
+`IOCTL_SERIAL_GET_DTRRTS` reports. With it, 0 of 1600 RTS pulses were
+missed, onset 118 us median ([Results with v0.6.0](#results-with-v060)).
+`yser_set_dtr` needs nothing: its request carries RTS too. On a driver
+that sends RTS by itself (FTDI, `serial.sys`), the second request repeats
+the state; that was not measured.
+
+To capture the requests themselves (administrator rights needed, not done
+here): install USBPcap with Wireshark, start a capture on the root hub
+that the Teensy is on, filter on `usb.setup.bRequest == 0x22`, and toggle
+RTS with pyserial, which calls `EscapeCommFunction`:
+
+```
+python -c "import serial,time; s=serial.Serial('COM3'); [setattr(s,'rts',k%2==0) or time.sleep(0.2) for k in range(10)]"
+```
+
+With the behavior above, the capture shows the request when the port
+opens and none for the ten RTS changes.
 
 ### Recommendations
 
@@ -1470,13 +1679,15 @@ These hold for a USB CDC device on Windows `usbser.sys`; an FTDI or other
 bridge has its own driver and latency timer, and a trigger box adds its own
 delay.
 
-- Expect a host-timed serial pulse to be 0.1 to 0.78 ms wider than
-  requested (min to p99, the modes without `time.sleep`), never shorter. A
-  receiver that needs a minimum width gets it: a trigger input that is
-  sampled (BioSemi's Status channel, devices_spec.md 2.3) needs one sample
-  period, so request at least one sample period. A receiver that must see
-  the width within a tolerance smaller than 0.5 ms needs a device-timed
-  pulse. The BioSemi cable holds a byte for 8 ms by itself
+- With ysp/serial.h 0.6.0, expect `yser_pulse` and `yser_pulse_async` to
+  be within -0.22 to +0.10 ms of the requested width (min to p99), median
+  -0.06 to -0.02 ms. Other host-timed pulses (the 0.5 calls, the bench's
+  own DTR, RTS and byte modes, pyserial) are 0.1 to 0.78 ms wider than
+  requested (min to p99, without `time.sleep`), never shorter. A trigger
+  input that is sampled (BioSemi's Status channel, devices_spec.md 2.3)
+  needs one sample period: request at least that plus 0.25 ms, or set
+  `min_hold_ns` to the sample period. A receiver that must see the width
+  within a tolerance smaller than 0.2 ms needs a device-timed pulse. The BioSemi cable holds a byte for 8 ms by itself
   ([devices_spec.md](devices_spec.md), 2.3), so its width does not depend
   on the host.
 - The onset varies by 0.05 to 0.15 ms (p5 to p95) and up to 0.23 ms (p5
@@ -1485,18 +1696,20 @@ delay.
   deviation of 0.46 ms against an LPT port. Here the p5 to p99 spread
   stays under 0.24 ms, but the largest onset was 0.6 ms (C and ysp) and
   1.27 ms (pyserial DTR).
-- Do not use RTS for a pulse on a CDC device under `usbser.sys`. Use DTR,
-  or bytes.
+- RTS works on a CDC device under `usbser.sys` from ysp/serial.h v0.6
+  on. Before v0.6, and from pyserial or any other library that calls
+  `EscapeCommFunction(SETRTS)`, it does not; there, use DTR or bytes.
 - For the lowest onset latency, use DTR (83 to 102 us median in C) rather
   than a byte (176 to 185 us), if the device reads DTR.
 - In Python, do not time a width with `time.sleep()`; use `Port.pulse` or
   `Port.pulse_async`.
-- Open item for the header: take the `yser_pulse` and `yser_pulse_async`
-  deadline before the onset write, not after it, with the width floored at
-  the onset call. Run 3 measured the effect of that change on this board.
-  v0.5.1 replaced the header's TIMING text ("about 1 ms onset", "widths
+- `yser_pulse_async` costs the caller 20 us and its onset about 50 us
+  (median) more than `yser_pulse`'s. Use it when the caller has a frame to
+  draw; use `yser_pulse` when the onset matters more than the thread.
+- v0.5.1 replaced the header's TIMING text ("about 1 ms onset", "widths
   below a few milliseconds are unreliable"), which was not measured, with
-  the numbers of this section.
+  the numbers of this section; v0.6.0 replaced the pulse numbers with
+  those of [Results with v0.6.0](#results-with-v060).
 
 Not run: MATLAB (the `ysp_serial` MEX pulse, IOPort `Write` with
 `WaitSecs`), an FTDI bridge, Linux and macOS. To run the bench (the
@@ -1505,6 +1718,7 @@ Python half needs pyserial and ysp-serial 0.5.0.2 or later):
 ```
 cl /O2 /I<repo>\include tests\compare\serial_pulse\pulse_bench.c
 pulse_bench COM3 out 200
+pulse_bench COM3 stall 100 modes=ysp_pulse,ysp_pulse_async widths=0,0.1,0.2 hold=250
 python tests\compare\serial_pulse\pulse_bench.py COM3 out 200
 python tests\compare\serial_pulse\pulse_stats.py out
 ```

@@ -1,0 +1,222 @@
+board: V ysp-echo 2 teensy b l g
+start: DTR=1 RTS=1 set by SetCommState | driver d r: 1 1 | board: [1 1]
+--- path esc, DTR held at 0
+DTR to held level                  esc   DTR=0 rc=0 call=0.254 ms | driver d r: 0 1 | board: [0 1]
+RTS low                            esc   RTS=0 rc=0 call=0.014 ms | driver d r: 0 0 | board: none
+RTS high                           esc   RTS=1 rc=0 call=0.012 ms | driver d r: 0 1 | board: none
+RTS low                            esc   RTS=0 rc=0 call=0.017 ms | driver d r: 0 0 | board: none
+RTS low again                      esc   RTS=0 rc=0 call=0.029 ms | driver d r: 0 0 | board: none
+RTS high                           esc   RTS=1 rc=0 call=0.017 ms | driver d r: 0 1 | board: none
+RTS low, left there                esc   RTS=0 rc=0 call=0.008 ms | driver d r: 0 0 | board: none
+DTR set to the same level          esc   DTR=0 rc=0 call=0.259 ms | driver d r: 0 0 | board: [0 0]
+DTR changed                        esc   DTR=1 rc=0 call=0.530 ms | driver d r: 1 0 | board: [1 0]
+DTR back                           esc   DTR=0 rc=0 call=0.319 ms | driver d r: 0 0 | board: [0 0]
+--- path ioctl, DTR held at 0
+DTR to held level                  esc   DTR=0 rc=0 call=0.312 ms | driver d r: 0 0 | board: none
+RTS low                            ioctl RTS=0 rc=0 call=0.028 ms | driver d r: 0 0 | board: none
+RTS high                           ioctl RTS=1 rc=0 call=0.008 ms | driver d r: 0 1 | board: none
+RTS low                            ioctl RTS=0 rc=0 call=0.004 ms | driver d r: 0 0 | board: none
+RTS low again                      ioctl RTS=0 rc=0 call=0.003 ms | driver d r: 0 0 | board: none
+RTS high                           ioctl RTS=1 rc=0 call=0.004 ms | driver d r: 0 1 | board: none
+RTS low, left there                ioctl RTS=0 rc=0 call=0.003 ms | driver d r: 0 0 | board: none
+DTR set to the same level          esc   DTR=0 rc=0 call=0.197 ms | driver d r: 0 0 | board: none
+DTR changed                        esc   DTR=1 rc=0 call=0.260 ms | driver d r: 1 0 | board: [1 0]
+DTR back                           esc   DTR=0 rc=0 call=0.162 ms | driver d r: 0 0 | board: [0 0]
+--- path dcb, DTR held at 0
+DTR to held level                  esc   DTR=0 rc=0 call=0.139 ms | driver d r: 0 0 | board: none
+RTS low                            dcb   RTS=0 rc=0 call=1.948 ms | driver d r: 0 0 | board: none
+RTS high                           dcb   RTS=1 rc=0 call=2.069 ms | driver d r: 1 1 | board: [1 1]
+RTS low                            dcb   RTS=0 rc=0 call=3.545 ms | driver d r: 0 0 | board: [0 0]
+RTS low again                      dcb   RTS=0 rc=0 call=3.201 ms | driver d r: 0 0 | board: none
+RTS high                           dcb   RTS=1 rc=0 call=3.040 ms | driver d r: 1 1 | board: [1 1]
+RTS low, left there                dcb   RTS=0 rc=0 call=4.107 ms | driver d r: 0 0 | board: [0 0]
+DTR set to the same level          esc   DTR=0 rc=0 call=0.163 ms | driver d r: 0 0 | board: none
+DTR changed                        esc   DTR=1 rc=0 call=0.201 ms | driver d r: 1 0 | board: [1 0]
+DTR back                           esc   DTR=0 rc=0 call=0.134 ms | driver d r: 0 0 | board: [0 0]
+--- path dcbd, DTR held at 0
+DTR to held level                  esc   DTR=0 rc=0 call=0.264 ms | driver d r: 0 0 | board: none
+RTS low                            dcbd  RTS=0 rc=0 call=1.873 ms | driver d r: 0 0 | board: none
+RTS high                           dcbd  RTS=1 rc=0 call=2.945 ms | driver d r: 0 1 | board: [0 1]
+RTS low                            dcbd  RTS=0 rc=0 call=2.822 ms | driver d r: 0 0 | board: [0 0]
+RTS low again                      dcbd  RTS=0 rc=0 call=2.200 ms | driver d r: 0 0 | board: none
+RTS high                           dcbd  RTS=1 rc=0 call=2.019 ms | driver d r: 0 1 | board: [0 1]
+RTS low, left there                dcbd  RTS=0 rc=0 call=2.691 ms | driver d r: 0 0 | board: [0 0]
+DTR set to the same level          esc   DTR=0 rc=0 call=0.234 ms | driver d r: 0 0 | board: none
+DTR changed                        esc   DTR=1 rc=0 call=0.266 ms | driver d r: 1 0 | board: [1 0]
+DTR back                           esc   DTR=0 rc=0 call=0.295 ms | driver d r: 0 0 | board: [0 0]
+--- path hflow, DTR held at 0
+DTR to held level                  esc   DTR=0 rc=0 call=0.229 ms | driver d r: 0 0 | board: none
+RTS low                            hflow RTS=0 rc=0 call=0.016 ms | driver d r: 0 0 | board: none
+RTS high                           hflow RTS=1 rc=0 call=0.014 ms | driver d r: 0 0 | board: none
+RTS low                            hflow RTS=0 rc=0 call=0.014 ms | driver d r: 0 0 | board: none
+RTS low again                      hflow RTS=0 rc=0 call=0.015 ms | driver d r: 0 0 | board: none
+RTS high                           hflow RTS=1 rc=0 call=0.016 ms | driver d r: 0 0 | board: none
+RTS low, left there                hflow RTS=0 rc=0 call=0.021 ms | driver d r: 0 0 | board: none
+DTR set to the same level          esc   DTR=0 rc=0 call=0.274 ms | driver d r: 0 0 | board: none
+DTR changed                        esc   DTR=1 rc=0 call=0.252 ms | driver d r: 1 0 | board: [1 0]
+DTR back                           esc   DTR=0 rc=0 call=0.172 ms | driver d r: 0 0 | board: [0 0]
+--- path k_baud, DTR held at 0
+DTR to held level                  esc   DTR=0 rc=0 call=0.264 ms | driver d r: 0 0 | board: none
+RTS low                            k_baud RTS=0 rc=0 call=1.228 ms | driver d r: 0 0 | board: none
+RTS high                           k_baud RTS=1 rc=0 call=1.303 ms | driver d r: 0 1 | board: none
+RTS low                            k_baud RTS=0 rc=0 call=1.368 ms | driver d r: 0 0 | board: none
+RTS low again                      k_baud RTS=0 rc=0 call=1.401 ms | driver d r: 0 0 | board: none
+RTS high                           k_baud RTS=1 rc=0 call=1.633 ms | driver d r: 0 1 | board: none
+RTS low, left there                k_baud RTS=0 rc=0 call=1.743 ms | driver d r: 0 0 | board: none
+DTR set to the same level          esc   DTR=0 rc=0 call=0.215 ms | driver d r: 0 0 | board: none
+DTR changed                        esc   DTR=1 rc=0 call=0.266 ms | driver d r: 1 0 | board: [1 0]
+DTR back                           esc   DTR=0 rc=0 call=0.231 ms | driver d r: 0 0 | board: [0 0]
+--- path k_lc, DTR held at 0
+DTR to held level                  esc   DTR=0 rc=0 call=0.272 ms | driver d r: 0 0 | board: none
+RTS low                            k_lc  RTS=0 rc=0 call=1.460 ms | driver d r: 0 0 | board: none
+RTS high                           k_lc  RTS=1 rc=0 call=1.576 ms | driver d r: 0 1 | board: none
+RTS low                            k_lc  RTS=0 rc=0 call=1.349 ms | driver d r: 0 0 | board: none
+RTS low again                      k_lc  RTS=0 rc=0 call=1.386 ms | driver d r: 0 0 | board: none
+RTS high                           k_lc  RTS=1 rc=0 call=1.588 ms | driver d r: 0 1 | board: none
+RTS low, left there                k_lc  RTS=0 rc=0 call=1.352 ms | driver d r: 0 0 | board: none
+DTR set to the same level          esc   DTR=0 rc=0 call=0.229 ms | driver d r: 0 0 | board: none
+DTR changed                        esc   DTR=1 rc=0 call=0.285 ms | driver d r: 1 0 | board: [1 0]
+DTR back                           esc   DTR=0 rc=0 call=0.335 ms | driver d r: 0 0 | board: [0 0]
+--- path k_chars, DTR held at 0
+DTR to held level                  esc   DTR=0 rc=0 call=0.191 ms | driver d r: 0 0 | board: none
+RTS low                            k_chars RTS=0 rc=-3 call=0.028 ms | driver d r: 0 0 | board: none
+RTS high                           k_chars RTS=1 rc=-3 call=0.026 ms | driver d r: 0 1 | board: none
+RTS low                            k_chars RTS=0 rc=-3 call=0.025 ms | driver d r: 0 0 | board: none
+RTS low again                      k_chars RTS=0 rc=-3 call=0.023 ms | driver d r: 0 0 | board: none
+RTS high                           k_chars RTS=1 rc=-3 call=0.013 ms | driver d r: 0 1 | board: none
+RTS low, left there                k_chars RTS=0 rc=-3 call=0.027 ms | driver d r: 0 0 | board: none
+DTR set to the same level          esc   DTR=0 rc=0 call=0.231 ms | driver d r: 0 0 | board: none
+DTR changed                        esc   DTR=1 rc=0 call=0.221 ms | driver d r: 1 0 | board: [1 0]
+DTR back                           esc   DTR=0 rc=0 call=0.158 ms | driver d r: 0 0 | board: [0 0]
+--- path k_hf, DTR held at 0
+DTR to held level                  esc   DTR=0 rc=0 call=0.282 ms | driver d r: 0 0 | board: none
+RTS low                            k_hf  RTS=0 rc=0 call=0.036 ms | driver d r: 0 0 | board: none
+RTS high                           k_hf  RTS=1 rc=0 call=0.034 ms | driver d r: 0 1 | board: none
+RTS low                            k_hf  RTS=0 rc=0 call=0.033 ms | driver d r: 0 0 | board: none
+RTS low again                      k_hf  RTS=0 rc=0 call=0.016 ms | driver d r: 0 0 | board: none
+RTS high                           k_hf  RTS=1 rc=0 call=0.019 ms | driver d r: 0 1 | board: none
+RTS low, left there                k_hf  RTS=0 rc=0 call=0.018 ms | driver d r: 0 0 | board: none
+DTR set to the same level          esc   DTR=0 rc=0 call=0.174 ms | driver d r: 0 0 | board: none
+DTR changed                        esc   DTR=1 rc=0 call=0.684 ms | driver d r: 1 0 | board: [1 0]
+DTR back                           esc   DTR=0 rc=0 call=0.136 ms | driver d r: 0 0 | board: [0 0]
+--- path escd, DTR held at 0
+DTR to held level                  esc   DTR=0 rc=0 call=0.207 ms | driver d r: 0 0 | board: none
+RTS low                            escd  RTS=0 rc=0 call=0.228 ms | driver d r: 0 0 | board: none
+RTS high                           escd  RTS=1 rc=0 call=0.303 ms | driver d r: 0 1 | board: [0 1]
+RTS low                            escd  RTS=0 rc=0 call=0.198 ms | driver d r: 0 0 | board: [0 0]
+RTS low again                      escd  RTS=0 rc=0 call=0.396 ms | driver d r: 0 0 | board: none
+RTS high                           escd  RTS=1 rc=0 call=0.334 ms | driver d r: 0 1 | board: [0 1]
+RTS low, left there                escd  RTS=0 rc=0 call=0.407 ms | driver d r: 0 0 | board: [0 0]
+DTR set to the same level          esc   DTR=0 rc=0 call=0.300 ms | driver d r: 0 0 | board: none
+DTR changed                        esc   DTR=1 rc=0 call=0.329 ms | driver d r: 1 0 | board: [1 0]
+DTR back                           esc   DTR=0 rc=0 call=0.211 ms | driver d r: 0 0 | board: [0 0]
+--- path esc, DTR held at 1
+DTR to held level                  esc   DTR=1 rc=0 call=0.324 ms | driver d r: 1 0 | board: [1 0]
+RTS low                            esc   RTS=0 rc=0 call=0.014 ms | driver d r: 1 0 | board: none
+RTS high                           esc   RTS=1 rc=0 call=0.012 ms | driver d r: 1 1 | board: none
+RTS low                            esc   RTS=0 rc=0 call=0.013 ms | driver d r: 1 0 | board: none
+RTS low again                      esc   RTS=0 rc=0 call=0.022 ms | driver d r: 1 0 | board: none
+RTS high                           esc   RTS=1 rc=0 call=0.023 ms | driver d r: 1 1 | board: none
+RTS low, left there                esc   RTS=0 rc=0 call=0.032 ms | driver d r: 1 0 | board: none
+DTR set to the same level          esc   DTR=1 rc=0 call=0.416 ms | driver d r: 1 0 | board: none
+DTR changed                        esc   DTR=0 rc=0 call=0.334 ms | driver d r: 0 0 | board: [0 0]
+DTR back                           esc   DTR=1 rc=0 call=0.455 ms | driver d r: 1 0 | board: [1 0]
+--- path ioctl, DTR held at 1
+DTR to held level                  esc   DTR=1 rc=0 call=0.305 ms | driver d r: 1 0 | board: none
+RTS low                            ioctl RTS=0 rc=0 call=0.011 ms | driver d r: 1 0 | board: none
+RTS high                           ioctl RTS=1 rc=0 call=0.012 ms | driver d r: 1 1 | board: none
+RTS low                            ioctl RTS=0 rc=0 call=0.016 ms | driver d r: 1 0 | board: none
+RTS low again                      ioctl RTS=0 rc=0 call=0.006 ms | driver d r: 1 0 | board: none
+RTS high                           ioctl RTS=1 rc=0 call=0.007 ms | driver d r: 1 1 | board: none
+RTS low, left there                ioctl RTS=0 rc=0 call=0.012 ms | driver d r: 1 0 | board: none
+DTR set to the same level          esc   DTR=1 rc=0 call=0.364 ms | driver d r: 1 0 | board: none
+DTR changed                        esc   DTR=0 rc=0 call=0.181 ms | driver d r: 0 0 | board: [0 0]
+DTR back                           esc   DTR=1 rc=0 call=0.319 ms | driver d r: 1 0 | board: [1 0]
+--- path dcb, DTR held at 1
+DTR to held level                  esc   DTR=1 rc=0 call=0.414 ms | driver d r: 1 0 | board: none
+RTS low                            dcb   RTS=0 rc=0 call=5.795 ms | driver d r: 0 0 | board: [0 0]
+RTS high                           dcb   RTS=1 rc=0 call=6.445 ms | driver d r: 1 1 | board: [1 1]
+RTS low                            dcb   RTS=0 rc=0 call=5.953 ms | driver d r: 0 0 | board: [0 0]
+RTS low again                      dcb   RTS=0 rc=0 call=4.668 ms | driver d r: 0 0 | board: none
+RTS high                           dcb   RTS=1 rc=0 call=4.511 ms | driver d r: 1 1 | board: [1 1]
+RTS low, left there                dcb   RTS=0 rc=0 call=5.228 ms | driver d r: 0 0 | board: [0 0]
+DTR set to the same level          esc   DTR=1 rc=0 call=0.236 ms | driver d r: 1 0 | board: [1 0]
+DTR changed                        esc   DTR=0 rc=0 call=0.295 ms | driver d r: 0 0 | board: [0 0]
+DTR back                           esc   DTR=1 rc=0 call=0.335 ms | driver d r: 1 0 | board: [1 0]
+--- path dcbd, DTR held at 1
+DTR to held level                  esc   DTR=1 rc=0 call=0.346 ms | driver d r: 1 0 | board: none
+RTS low                            dcbd  RTS=0 rc=0 call=2.907 ms | driver d r: 1 0 | board: none
+RTS high                           dcbd  RTS=1 rc=0 call=4.827 ms | driver d r: 1 1 | board: [1 1]
+RTS low                            dcbd  RTS=0 rc=0 call=3.296 ms | driver d r: 1 0 | board: [1 0]
+RTS low again                      dcbd  RTS=0 rc=0 call=5.227 ms | driver d r: 1 0 | board: none
+RTS high                           dcbd  RTS=1 rc=0 call=4.535 ms | driver d r: 1 1 | board: [1 1]
+RTS low, left there                dcbd  RTS=0 rc=0 call=6.125 ms | driver d r: 1 0 | board: [1 0]
+DTR set to the same level          esc   DTR=1 rc=0 call=0.387 ms | driver d r: 1 0 | board: none
+DTR changed                        esc   DTR=0 rc=0 call=0.325 ms | driver d r: 0 0 | board: [0 0]
+DTR back                           esc   DTR=1 rc=0 call=0.335 ms | driver d r: 1 0 | board: [1 0]
+--- path hflow, DTR held at 1
+DTR to held level                  esc   DTR=1 rc=0 call=0.258 ms | driver d r: 1 0 | board: none
+RTS low                            hflow RTS=0 rc=0 call=0.024 ms | driver d r: 1 0 | board: none
+RTS high                           hflow RTS=1 rc=0 call=0.023 ms | driver d r: 1 0 | board: none
+RTS low                            hflow RTS=0 rc=0 call=0.022 ms | driver d r: 1 0 | board: none
+RTS low again                      hflow RTS=0 rc=0 call=0.023 ms | driver d r: 1 0 | board: none
+RTS high                           hflow RTS=1 rc=0 call=0.025 ms | driver d r: 1 0 | board: none
+RTS low, left there                hflow RTS=0 rc=0 call=0.023 ms | driver d r: 1 0 | board: none
+DTR set to the same level          esc   DTR=1 rc=0 call=0.492 ms | driver d r: 1 0 | board: none
+DTR changed                        esc   DTR=0 rc=0 call=0.267 ms | driver d r: 0 0 | board: [0 0]
+DTR back                           esc   DTR=1 rc=0 call=0.358 ms | driver d r: 1 0 | board: [1 0]
+--- path k_baud, DTR held at 1
+DTR to held level                  esc   DTR=1 rc=0 call=0.262 ms | driver d r: 1 0 | board: none
+RTS low                            k_baud RTS=0 rc=0 call=1.981 ms | driver d r: 1 0 | board: none
+RTS high                           k_baud RTS=1 rc=0 call=2.064 ms | driver d r: 1 1 | board: none
+RTS low                            k_baud RTS=0 rc=0 call=2.043 ms | driver d r: 1 0 | board: none
+RTS low again                      k_baud RTS=0 rc=0 call=1.946 ms | driver d r: 1 0 | board: none
+RTS high                           k_baud RTS=1 rc=0 call=1.301 ms | driver d r: 1 1 | board: none
+RTS low, left there                k_baud RTS=0 rc=0 call=1.956 ms | driver d r: 1 0 | board: none
+DTR set to the same level          esc   DTR=1 rc=0 call=0.415 ms | driver d r: 1 0 | board: none
+DTR changed                        esc   DTR=0 rc=0 call=0.268 ms | driver d r: 0 0 | board: [0 0]
+DTR back                           esc   DTR=1 rc=0 call=0.447 ms | driver d r: 1 0 | board: [1 0]
+--- path k_lc, DTR held at 1
+DTR to held level                  esc   DTR=1 rc=0 call=0.362 ms | driver d r: 1 0 | board: none
+RTS low                            k_lc  RTS=0 rc=0 call=1.126 ms | driver d r: 1 0 | board: none
+RTS high                           k_lc  RTS=1 rc=0 call=1.440 ms | driver d r: 1 1 | board: none
+RTS low                            k_lc  RTS=0 rc=0 call=1.271 ms | driver d r: 1 0 | board: none
+RTS low again                      k_lc  RTS=0 rc=0 call=1.538 ms | driver d r: 1 0 | board: none
+RTS high                           k_lc  RTS=1 rc=0 call=1.093 ms | driver d r: 1 1 | board: none
+RTS low, left there                k_lc  RTS=0 rc=0 call=1.251 ms | driver d r: 1 0 | board: none
+DTR set to the same level          esc   DTR=1 rc=0 call=0.199 ms | driver d r: 1 0 | board: none
+DTR changed                        esc   DTR=0 rc=0 call=0.163 ms | driver d r: 0 0 | board: [0 0]
+DTR back                           esc   DTR=1 rc=0 call=0.238 ms | driver d r: 1 0 | board: [1 0]
+--- path k_chars, DTR held at 1
+DTR to held level                  esc   DTR=1 rc=0 call=0.181 ms | driver d r: 1 0 | board: none
+RTS low                            k_chars RTS=0 rc=-3 call=0.029 ms | driver d r: 1 0 | board: none
+RTS high                           k_chars RTS=1 rc=-3 call=0.015 ms | driver d r: 1 1 | board: none
+RTS low                            k_chars RTS=0 rc=-3 call=0.017 ms | driver d r: 1 0 | board: none
+RTS low again                      k_chars RTS=0 rc=-3 call=0.013 ms | driver d r: 1 0 | board: none
+RTS high                           k_chars RTS=1 rc=-3 call=0.014 ms | driver d r: 1 1 | board: none
+RTS low, left there                k_chars RTS=0 rc=-3 call=0.033 ms | driver d r: 1 0 | board: none
+DTR set to the same level          esc   DTR=1 rc=0 call=0.212 ms | driver d r: 1 0 | board: none
+DTR changed                        esc   DTR=0 rc=0 call=0.187 ms | driver d r: 0 0 | board: [0 0]
+DTR back                           esc   DTR=1 rc=0 call=0.228 ms | driver d r: 1 0 | board: [1 0]
+--- path k_hf, DTR held at 1
+DTR to held level                  esc   DTR=1 rc=0 call=0.150 ms | driver d r: 1 0 | board: none
+RTS low                            k_hf  RTS=0 rc=0 call=0.114 ms | driver d r: 1 0 | board: none
+RTS high                           k_hf  RTS=1 rc=0 call=0.017 ms | driver d r: 1 1 | board: none
+RTS low                            k_hf  RTS=0 rc=0 call=0.024 ms | driver d r: 1 0 | board: none
+RTS low again                      k_hf  RTS=0 rc=0 call=0.028 ms | driver d r: 1 0 | board: none
+RTS high                           k_hf  RTS=1 rc=0 call=0.015 ms | driver d r: 1 1 | board: none
+RTS low, left there                k_hf  RTS=0 rc=0 call=0.013 ms | driver d r: 1 0 | board: none
+DTR set to the same level          esc   DTR=1 rc=0 call=0.524 ms | driver d r: 1 0 | board: none
+DTR changed                        esc   DTR=0 rc=0 call=0.409 ms | driver d r: 0 0 | board: [0 0]
+DTR back                           esc   DTR=1 rc=0 call=0.293 ms | driver d r: 1 0 | board: [1 0]
+--- path escd, DTR held at 1
+DTR to held level                  esc   DTR=1 rc=0 call=0.484 ms | driver d r: 1 0 | board: none
+RTS low                            escd  RTS=0 rc=0 call=0.534 ms | driver d r: 1 0 | board: none
+RTS high                           escd  RTS=1 rc=0 call=0.288 ms | driver d r: 1 1 | board: [1 1]
+RTS low                            escd  RTS=0 rc=0 call=0.351 ms | driver d r: 1 0 | board: [1 0]
+RTS low again                      escd  RTS=0 rc=0 call=0.370 ms | driver d r: 1 0 | board: none
+RTS high                           escd  RTS=1 rc=0 call=0.326 ms | driver d r: 1 1 | board: [1 1]
+RTS low, left there                escd  RTS=0 rc=0 call=0.423 ms | driver d r: 1 0 | board: [1 0]
+DTR set to the same level          esc   DTR=1 rc=0 call=0.452 ms | driver d r: 1 0 | board: none
+DTR changed                        esc   DTR=0 rc=0 call=0.385 ms | driver d r: 0 0 | board: [0 0]
+DTR back                           esc   DTR=1 rc=0 call=0.298 ms | driver d r: 1 0 | board: [1 0]

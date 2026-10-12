@@ -1,0 +1,34 @@
+  start                                    board: L 0270043500 1 1|
+patched 1 import(s)
+SetCommState(RTS off) ok=1, 10 IOCTLs:
+   0: function 20 (code 0x001b0050), in 0 bytes
+   1: function 21 (code 0x001b0054), in 0 bytes
+   2: function 22 (code 0x001b0058), in 0 bytes
+   3: function 24 (code 0x001b0060), in 0 bytes
+   4: function 1 (code 0x001b0004), in 4 bytes
+   5: function 13 (code 0x001b0034), in 0 bytes
+   6: function 9 (code 0x001b0024), in 0 bytes
+   7: function 3 (code 0x001b000c), in 3 bytes
+   8: function 23 (code 0x001b005c), in 6 bytes
+   9: function 25 (code 0x001b0064), in 16 bytes
+  after SetCommState(RTS off)              board: L 0270107004 1 0|
+  SET_RTS alone                            board: none
+  then function 20 again (rc 1)            board: none
+  CLR_RTS alone                            board: none
+  then function 21 again (rc 1)            board: none
+  SET_RTS alone                            board: none
+  then function 22 again (rc 1)            board: none
+  CLR_RTS alone                            board: none
+  then function 24 again (rc 1)            board: none
+  SET_RTS alone                            board: none
+  then function 1 again (rc 1)             board: none
+  CLR_RTS alone                            board: none
+  then function 13 again (rc 1)            board: none
+  SET_RTS alone                            board: none
+  then function 9 again (rc 1)             board: L 0270996415 1 1|
+  CLR_RTS alone                            board: none
+  then function 3 again (rc 1)             board: none
+  SET_RTS alone                            board: none
+  then function 23 again (rc 1)            board: none
+  CLR_RTS alone                            board: none
+  then function 25 again (rc 1)            board: none

@@ -1,0 +1,31 @@
+Times in microseconds. Columns: median p5 p95 p99 max; werr also min.
+onset = board's first edge (mapped) - call start; werr = board width - requested;
+call = call return - call start; off_lat = board's trailing edge (mapped) - trailing call start.
+
+ cell mode                w ms    n miss  fit+-  gap | onset | werr | call | off_lat | host_werr
+ 1000 ysp_pulse              0  100    0  115.0    7 | 155.5 89.6 221.2 270.4 291.2 | 755.0 639.0 918.0 985.0 1022.0 min 602.0 | 1081.3 792.4 1349.8 1461.1 1611.3 | nan nan nan nan nan | nan nan nan nan nan
+ 1002 ysp_pulse            0.1  100    0  140.3    7 | 175.9 111.5 301.3 320.3 320.6 | 698.5 574.0 908.0 1024.0 1094.0 min 556.0 | 1106.5 921.4 1598.4 1796.8 1888.6 | nan nan nan nan nan | nan nan nan nan nan
+ 1004 ysp_pulse            0.2  100    0  152.1    7 | 188.6 118.0 313.0 449.3 480.6 | 608.0 470.0 921.0 1072.0 1115.0 min 437.0 | 1176.4 905.6 1885.6 2077.1 2271.0 | nan nan nan nan nan | nan nan nan nan nan
+ 1001 ysp_pulse_async        0  100    0  142.8    7 | 204.8 119.9 344.7 378.5 396.3 | 753.5 624.0 934.0 1103.0 1159.0 min 579.0 | 18.9 11.7 30.7 36.1 36.4 | nan nan nan nan nan | nan nan nan nan nan
+ 1003 ysp_pulse_async      0.1  100    0  192.6    7 | 189.6 108.7 332.0 362.7 433.1 | 637.5 524.0 986.0 1126.0 2575.0 min 499.0 | 20.1 10.9 28.0 43.0 57.2 | nan nan nan nan nan | nan nan nan nan nan
+ 1005 ysp_pulse_async      0.2  100    0  160.7    7 | 186.6 134.6 328.4 348.0 438.8 | 494.0 418.0 720.0 802.0 890.0 min 402.0 | 16.9 7.0 38.4 76.1 116.6 | nan nan nan nan nan | nan nan nan nan nan
+
+Pooled over the cells given (runs), per mode and width: n, missed | werr median p5 p95 p99 max min
+ysp_pulse              0   100    0 | 755.0 639.0 918.0 985.0 1022.0 602.0
+ysp_pulse            0.1   100    0 | 698.5 574.0 908.0 1024.0 1094.0 556.0
+ysp_pulse            0.2   100    0 | 608.0 470.0 921.0 1072.0 1115.0 437.0
+ysp_pulse_async        0   100    0 | 753.5 624.0 934.0 1103.0 1159.0 579.0
+ysp_pulse_async      0.1   100    0 | 637.5 524.0 986.0 1126.0 2575.0 499.0
+ysp_pulse_async      0.2   100    0 | 494.0 418.0 720.0 802.0 890.0 402.0
+
+Pooled over widths and runs, per mode: n | onset median p5 p95 p99 max | call median p99 max (ysp_pulse, ysp_py_pulse: minus the width) | per-cell onset medians | fit +- range
+ysp_pulse             300 | 173.6 111.2 298.6 361.0 480.6 | 1025.7 1749.6 2071.0 | 155.5 to 188.6 | 115.0 to 152.1
+ysp_pulse_async       300 | 195.7 117.7 332.0 378.5 438.8 | 19.1 48.8 116.6 | 186.6 to 204.8 | 142.8 to 192.6
+
+Fits: cell, points, slope (ns per board us), bound min/max (us), largest residual (us), worker policy
+ 1000   6 999.981707 75.0/115.0 22.2 TIME_CRITICAL
+ 1001   6 999.987227 80.3/142.8 31.0 TIME_CRITICAL
+ 1002   6 999.980804 81.3/140.3 52.8 TIME_CRITICAL
+ 1003   6 999.984171 95.8/192.6 24.1 TIME_CRITICAL
+ 1004   6 999.984121 85.3/152.1 48.1 TIME_CRITICAL
+ 1005   7 999.985894 74.6/160.7 21.5 TIME_CRITICAL

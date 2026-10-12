@@ -49,7 +49,7 @@ call can poll. [Conventions](conventions.md) lists the exceptions.
 |---|---|
 | `ysp.serial` | `now()`, `read(n, timeout)`, `Port(write_timeout=, rt_runtime=, rt_deadline=, rt_period=)`, `pulse(on, off, width)`, `pulse_async(on, off, width)`, `send_break(duration)`, `async_wait(timeout)`, the `async_read()` stamps, `write_timeout`, `sched`, `TIMEOUT_INFINITE` (`math.inf`), `DEFAULT_WRITE_TIMEOUT`, `DEFAULT_RT_*` |
 | `ysp.parallel` | `now()`, `Port(rt_runtime=, rt_deadline=, rt_period=)`, `pulse(value, width)`, `pulse_async(value, width)`, `sched`, `DEFAULT_RT_*` |
-| `ysp_serial` (MEX) | `'now'`, the `'read'` timeout, the `'pulse'` and `'pulseasync'` widths, the `'break'` duration, the `open` struct (`write_timeout`, `rt_runtime`, `rt_deadline`, `rt_period`) and the `'async_read'` stamps |
+| `ysp_serial` (MEX) | `'now'`, the `'read'` timeout, the `'pulse'` and `'pulseasync'` widths, the `'break'` duration, the `open` struct (`write_timeout`, `min_hold`, `rt_runtime`, `rt_deadline`, `rt_period`) and the `'async_read'` stamps |
 | `ysp_parallel` (MEX) | `'now'`, `'pulse'` and `'pulseasync'` widths, the RT struct and `'sched'` (`runtime`, `deadline`, `period`) |
 | `ysp.quest`, `ysp.aep` and their MEX | `Async.wait(seq, timeout_s)` |
 | `ysp.trials` and its MEX | the jitter bounds; a drawn jitter gives `s`, and its exact `ns` beside it |
@@ -65,14 +65,15 @@ v0.5.0 with the change to seconds, and `ysp-parallel` 0.4.0.1 is
 0.2.0.1 for `ysp/rdk.h` v0.2.0. `ysp-serial` 0.5.0.2 is the second
 binding-only change to `ysp/serial.h` v0.5.0: the async reader. `ysp-serial`
 0.5.1 is `ysp/serial.h` v0.5.1 (a comment change) without a fourth number,
-and has the API of 0.5.0.2. PEP 440 accepts the fourth
+and has the API of 0.5.0.2; 0.6.0 is `ysp/serial.h` v0.6.0 (`pulse_async`
+without I/O, the width from the onset write's start, `min_hold`). PEP 440 accepts the fourth
 number as a release segment, and 0.5.0.1 sorts after 0.5.0 and before
 0.5.1. A post-release (0.5.0.post1) was not used: it means "no code
 changed", and this change breaks the API. Each package's tests check that
 `__version__` equals the version in `pyproject.toml`.
 
 A MEX function that reports a version has its own number, apart from
-its header's. `ysp_serial('version')` returns 2.0.0 (seconds and the
-async reader, 2026-10-11; v1 took milliseconds and microseconds and had
-`now_us`), and its second output is the version of `ysp/serial.h` in the
+its header's. `ysp_serial('version')` returns 2.1.0 (2.0.0, 2026-10-11:
+seconds and the async reader; v1 took milliseconds and microseconds and had
+`now_us`; 2.1.0, 2026-10-12: the `min_hold` setting), and its second output is the version of `ysp/serial.h` in the
 build.

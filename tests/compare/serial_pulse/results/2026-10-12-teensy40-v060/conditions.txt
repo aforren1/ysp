@@ -1,0 +1,31 @@
+Trigger pulses with ysp/serial.h 0.6.0, timed by the echo board. 2026-10-12.
+
+Machine: Windows 11 Enterprise 10.0.26200, Intel Core i7-1360P, AC power.
+Each session ran under the shared timing guard (C:\tmp\psy-guard.sh time),
+which waited for CPU load of 20 % or less and no compiler or test process.
+Board: Teensy 4.0, firmware/ysp_echo version 2 ("V ysp-echo 2 teensy b l g"),
+Teensyduino core 1.62.0, native USB high speed, Windows in-box usbser.sys,
+COM3. The board was unplugged and plugged in again before 09:58, before
+these sessions, so it may sit on a different USB port than in the
+2026-10-12-teensy40 sessions; compare modes within one session.
+
+Host side: pulse_bench.c of this tree, MSVC 2022 (cl /O2 /W4), ysp/serial.h
+0.6.0 and ysp/rt.h of the same tree; normal process priority; async worker
+TIME_CRITICAL. ysp_pulse and ysp_pulse_async time the width from the start
+of the onset write (the worker's write for the async call), at least
+min_hold_ns after it returned. ysp_rts uses the 0.6.0 yser_set_rts (SETRTS or
+CLRRTS, then SETDTR or CLRDTR at the present DTR level). ysp_dtr, ysp_rts and
+raw_byte time the width from the onset call's return, as before.
+
+Sessions (end times from the files):
+  run1        ended 10:13     forward order (cells 1000+), widths 1, 2, 5, 10 ms,
+                              200 pulses per cell, desc.min_hold_ns 0 (0.25 ms)
+  run2        ended 10:21     reverse order (cells 2000+), the same cells
+  stall_h*    ended 10:24, in run2's guard session: ysp_pulse and
+              ysp_pulse_async at widths 0, 0.1 and 0.2 ms, 100 pulses per
+              cell, min_hold 1 ns (practically none; hold=0.001), 250 us and 500 us
+  rts_probe   rts_probe.c, 4 runs from 09:58 (rts_probe.txt is the fourth)
+  ioctl_trace ioctl_trace.c, one run
+
+Raw CSV files are in C:\tmp\psy-work\pulse2\run1, run2, stall_h0.001,
+stall_h250, stall_h500 on the development machine.

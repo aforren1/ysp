@@ -74,7 +74,7 @@ Windows 11 laptop (i7-1360P), from the doc named.
 | device.h | Cost of `ydev_out_pulse()` to the caller | the same | p50 5.3 to 8.7 us, p99 28 to 60 us | docs/device.md, Results |
 | net.h | The sink's receive minus the push, one process | real liblsl 1.17.7, Windows, local loopback, measurement lock | p50 89 to 121 us, p99 269 to 299 us | docs/net.md, "Real liblsl: Windows and WSL2" |
 | parallel.h | anything | | not measured: no LPT port | parallel.h, STATUS |
-| serial.h | Call start to the device's receipt of a pulse; pulse width at the device minus requested | Teensy 4.0 echo board (USB CDC, `usbser.sys`), not a trigger box; 1 to 10 ms widths, 1600 pulses per API | Onset median 83 us (DTR) and 176 to 185 us (byte), p99 140 and 275 to 311 us; width +340 to +424 us median, +583 to +688 us p99; RTS pulses never arrive | docs/serial.md, "Pulses: onset and width" |
+| serial.h | Call start to the device's receipt of a pulse; pulse width at the device minus requested | Teensy 4.0 echo board (USB CDC, `usbser.sys`), not a trigger box; 1 to 10 ms widths, 1600 pulses per API | v0.6.0: onset median 86 us (DTR), 118 us (RTS), 218 us (`yser_pulse`), 267 us (`yser_pulse_async`, which returns in 20 us); `yser_pulse` and `yser_pulse_async` width -57 to -22 us median, p99 at most +104 us; 0 of 9800 missed. v0.5: width +340 to +424 us median, RTS pulses never arrived | docs/serial.md, "Pulses: onset and width" |
 
 Under other load, LSL markers once reached a p50 of 42 and 685 ms (not
 diagnosed; docs/net.md). A path through USB adds the USB frame: 1 ms at
