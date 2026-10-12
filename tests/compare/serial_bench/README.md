@@ -238,6 +238,18 @@ A fourth argument `rev` runs the modes in reverse order, `rt` skips the
 streams. Run it twice, once with `rev`: the first mode of a run measured
 40 to 80 us slower than the same calls later in the run.
 
+`raw_posix.c` is the same floor on Linux (and other POSIX systems): `open`,
+termios, `read`, `write` and `poll`, in two ways (a blocking descriptor with
+VMIN 1; O_NONBLOCK with `poll`, as ysp/serial.h waits). Its stream probes
+are 2 to 3 ms apart, as the Python bench's are: 0 to 1 ms apart, all 200
+fell in one 200 ms bucket of the fit, which then had no slope.
+`raw_win32.c` still spaces them 0 to 1 ms apart.
+
+```
+cc -O2 -Wall -o raw_posix raw_posix.c -lm
+./raw_posix /dev/ttyACM0 /tmp/raw-out 1000
+```
+
 ## Limits
 
 - The API order is fixed in a run, and the machine state drifts. Run the

@@ -264,7 +264,8 @@ from the slot that belongs to the failing role (`rd_oserr`, `wr_oserr` or
 
 ## Version
 
-`ysp-serial` 0.6.1 is `ysp/serial.h` v0.6.1: the port's `driver` and
+`ysp-serial` 0.6.2 is `ysp/serial.h` v0.6.2, which changes only its
+documentation (the first Linux timing). 0.6.1 is `ysp/serial.h` v0.6.1: the port's `driver` and
 `rts_via_dtr`, the `driver` key of `list_ports`, and `set_rts` sends the
 extra DTR request only on `usbser.sys`.
 0.6.0 is `ysp/serial.h` v0.6.0. `pulse_async` queues the
@@ -292,7 +293,7 @@ Most tests need no port:
 
 ```sh
 uv build --wheel -o dist
-uv run --no-project --with pytest --with dist/ysp_serial-0.6.1-cp38-abi3-<platform>.whl pytest tests
+uv run --no-project --with pytest --with dist/ysp_serial-0.6.2-cp38-abi3-<platform>.whl pytest tests
 ```
 
 On Linux, `tests/test_async_pty.py` runs the async reader on a
@@ -305,7 +306,7 @@ of a write while the reader runs. Add `-s` to see the numbers;
 `YSP_SERIAL_RESULTS=<dir>` also writes them to `<dir>/async_device.json`.
 
 ```sh
-YSP_SERIAL_PORT=COM3 uv run --no-project --with pytest --with dist/ysp_serial-0.6.1-cp38-abi3-<platform>.whl pytest tests -s
+YSP_SERIAL_PORT=COM3 uv run --no-project --with pytest --with dist/ysp_serial-0.6.2-cp38-abi3-<platform>.whl pytest tests -s
 ```
 
 Device naming, USB latency, DTR-driven board resets and what a serial trigger

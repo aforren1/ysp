@@ -11,7 +11,7 @@ C11 or C++17, and its top comment is its manual.
 |---|---|---|---|---|
 | [rt](docs/rt.md) | `yrt_` | Clock, deadline waits, worker, pump, event ring, clock fit | 0.8.1 | 2 machines |
 | [parallel](docs/parallel.md) | `ypar_` | Parallel port trigger output and line input | 0.4.0 | no device |
-| [serial](docs/serial.md) | `yser_` | Serial port byte I/O for trigger and response boxes | 0.6.1 | 1 machine |
+| [serial](docs/serial.md) | `yser_` | Serial port byte I/O for trigger and response boxes | 0.6.2 | 2 machines |
 | [trials](docs/trials.md) | `ytr_` | Trial orders, blocks, adaptive tracks, jitter, replay, a CSV row per trial | 0.4.1 | tested |
 | [table](docs/table.md) | `ytb_` | Typed tables and a bounded CSV parser | 0.2.0 | tested |
 | [pack](docs/pack.md) | `ypak_` | Read and verify ysp packs (store-only zip) | 0.2.0 | tested |

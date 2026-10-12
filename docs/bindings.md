@@ -68,7 +68,8 @@ binding-only change to `ysp/serial.h` v0.5.0: the async reader. `ysp-serial`
 and has the API of 0.5.0.2; 0.6.0 is `ysp/serial.h` v0.6.0 (`pulse_async`
 without I/O, the width from the onset write's start, `min_hold`), and
 0.6.1 is `ysp/serial.h` v0.6.1 (`Port.driver`, `Port.rts_via_dtr`, the
-`driver` key of `list_ports`). PEP 440 accepts the fourth
+`driver` key of `list_ports`); 0.6.2 is `ysp/serial.h` v0.6.2 (its
+documentation only). PEP 440 accepts the fourth
 number as a release segment, and 0.5.0.1 sorts after 0.5.0 and before
 0.5.1. A post-release (0.5.0.post1) was not used: it means "no code
 changed", and this change breaks the API. Each package's tests check that

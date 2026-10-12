@@ -1,4 +1,4 @@
-/* ysp/serial.h - v0.6.1 - public domain single-header serial-port library
+/* ysp/serial.h - v0.6.2 - public domain single-header serial-port library
  *
  *   REQUIRES ysp/rt.h, its sibling in this collection, on the include path.
  *   This header includes it for the clock, the waits, the scheduling ladder
@@ -159,15 +159,31 @@
  *         to its present level (docs/serial.md, "RTS on usbser.sys"). Other
  *         libraries' RTS calls (pyserial, EscapeCommFunction) do not reach
  *         such a device.
- *     Not measured: FTDI and other bridges, RS-232, Linux, macOS. Do not
- *     carry these numbers to them.
+ *     Linux, the same board on cdc_acm, Debian 12, kernel 6.11 (liquorix,
+ *     PDS), Intel Core i5-14500, 2026-10-12 (docs/serial.md, "Results on
+ *     Linux"; 1600 pulses per call, 1 to 10 ms, the worker on SCHED_FIFO 1
+ *     under an rtprio grant of 50):
+ *       - Onset (the clock fit's bound is 35 to 56 us): yser_pulse() 48 us
+ *         median, p99 67 us; yser_pulse_async() 55 us, p99 85 us;
+ *         yser_set_dtr() and yser_set_rts() 25 us.
+ *       - Width, both pulse calls: 0.0 to 0.2 us median off the request,
+ *         p5 -31 us, p99 +31 us, max +39 us.
+ *       - A byte write returns in 10 us median, before the byte reaches
+ *         the device (47 us after the call starts). yser_set_dtr() and
+ *         yser_set_rts() return after about 50 us, with the edge inside.
+ *       - yser_pulse_async() returns in 1.2 us median, 3 us p99.
+ *       - Missed: 0 of 14400.
+ *     Not measured: FTDI and other bridges, RS-232, macOS, another Linux
+ *     machine or driver. Do not carry these numbers to them.
  *     To timestamp a trigger, bracket the call:
  *         int64_t t0 = yrt_now_ns();
  *         yser_write_byte(&sp, code);
  *         int64_t t1 = yrt_now_ns();
- *     and record both. The edge lies after t0; on the setup above it
- *     arrived before t1 (a byte write took 0.42 ms median). Neither time is
- *     the onset; they bound it.
+ *     and record both. The edge lies after t0. On Windows above it arrived
+ *     before t1 (a byte write took 0.42 ms median); on Linux above it
+ *     arrived after t1 (the write returned in 10 us, the byte reached the
+ *     device 47 us after t0). So t1 bounds the onset only where the write
+ *     waits for the transfer; t0 plus the measured delay is the estimate.
  *     yrt_now_ns() is the clock this header times its own deadlines with,
  *     so these timestamps, ysp/rt.h's deadlines and anything ysp/rt.h
  *     reports are all differences of one counter.
@@ -179,8 +195,8 @@
  *     Both calls write the trailing byte at max(start of the onset write +
  *     width, return of the onset write + min_hold_ns). min_hold_ns
  *     (desc.min_hold_ns, default 0.25 ms) is a floor for a width shorter than
- *     the onset write, or a stalled write: on the setup above the shortest
- *     pulse at the device was the hold plus 80 to 160 us, and 56 us with
+ *     the onset write, or a stalled write: on the Windows setup above the
+ *     shortest pulse at the device was the hold plus 80 to 160 us, and 56 us with
  *     practically no hold. Set it to your receiver's sampling period if a
  *     shorter pulse could fall between two samples.
  *     yser_pulse() blocks the calling thread for the whole width and times the
@@ -192,7 +208,8 @@
  *     (SCHED_DEADLINE, else the macOS time-constraint policy, else SCHED_FIFO,
  *     else normal; THREAD_PRIORITY_TIME_CRITICAL on Windows) and waits the
  *     same way, so its trailing edge is no less precise than yser_pulse's
- *     (on the setup above the width errors matched within 13 us median), and
+ *     (the width errors matched within 13 us median on Windows above, and
+ *     within 0.2 us on Linux, where the worker ran SCHED_FIFO 1), and
  *     the caller is free during the write and the width. The width starts
  *     at the worker's write, so the wake does not shorten it; it only delays
  *     the onset. yser_port.async_policy says which rung the worker got; log
@@ -203,11 +220,12 @@
  *     windows and prints the wake-latency distribution of each, which is the
  *     only honest number available for the trailing edge before the transport
  *     gets involved.
- *     What neither call can do is beat the transport. Over USB-serial the
- *     jitter of an edge is bounded below by the frame period (1 ms full-speed,
- *     125 us high-speed) and above by OS scheduling plus the driver's own
- *     batching; on the setup above the width's p5 to p95 spread was 91 to
- *     137 us. Frame quantization is the floor, not the budget. Put a
+ *     What neither call can do is beat the transport: the host controller,
+ *     the driver's batching and OS scheduling all add to an edge. The
+ *     width's p5 to p95 spread was 91 to 137 us on Windows above and 26 to
+ *     51 us on Linux above, the same board at USB high speed (125 us
+ *     microframes): the spread is the machine's and the driver's, not a
+ *     frame period: one board, two machines, a factor of 3. Put a
  *     scope on the line, record the distribution together with async_policy,
  *     and do not assume a number from this header.
  *
@@ -379,6 +397,11 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.6.2 - Documentation only: TIMING and STATUS give the first Linux
+ *          run (a Teensy 4.0 on cdc_acm), where a byte write returns
+ *          before the byte reaches the device, so a bracket does not bound
+ *          the onset there. YSER_ASYNC_FIFO's priority is ysp/rt.h's (1
+ *          under a limits.conf grant of 50 or less), not always 80.
  *   v0.6.1 - yser_open() reads the port's driver on Windows (SetupAPI,
  *          SPDRP_SERVICE) into the new yser_port.driver, and
  *          yser_set_rts() sets DTR again only where it is usbser.sys (the
@@ -461,9 +484,8 @@
  *   yser_purge, yser_send_break, yser_set_dtr and yser_set_rts return int
  *   (0 or a YSER_ERR_* code), not bool, because they can be called from a
  *   thread that does not own the message buffer. See RETURN VALUES. It also
- *   added yser_pulse_async() and its worker thread; that worker has so far
- *   only been observed at YSER_ASYNC_NORMAL, because the test machine grants
- *   no CAP_SYS_NICE, so the real-time rungs of its ladder are unexercised.
+ *   added yser_pulse_async() and its worker thread. (Since v0.6.2 STATUS
+ *   says which rungs of its ladder have run.)
  *   docs/serial.md holds the design rationale.
  *
  *   STATUS: IMPLEMENTED on Windows (Win32 COM API, overlapped I/O) and POSIX
@@ -471,11 +493,12 @@
  *   including one reader thread plus one writer thread on a single handle
  *   under ThreadSanitizer. Windows has run on one device, a Teensy 4.0 on
  *   usbser.sys (TIMING, docs/serial.md); no FTDI or other bridge driver,
- *   so the path where rts_via_dtr is false has not run on a device. On
- *   macOS (IOSSIOSPEED, /dev/cu.* enumeration, the select() waits) nothing
- *   but the compiler has seen the code. The timing code is ysp/rt.h's, so
- *   its STATUS block applies too: the real-time rungs of the worker's ladder
- *   have never been granted on any machine here.
+ *   so the path where rts_via_dtr is false has not run on a device. Linux
+ *   has run on the same board over cdc_acm (TIMING), with the worker on
+ *   SCHED_FIFO 1 under an rtprio grant; SCHED_DEADLINE has not been
+ *   granted on any machine here. On macOS (IOSSIOSPEED, /dev/cu.*
+ *   enumeration, the select() waits) nothing but the compiler has seen the
+ *   code. The timing code is ysp/rt.h's, so its STATUS block applies too.
  *
  *   ---------------------------------------------------------------------
  *   LICENSE: public domain / MIT-0, see end of file.
@@ -487,8 +510,8 @@
  * The string always matches the three numbers. */
 #define YSER_VERSION_MAJOR  0
 #define YSER_VERSION_MINOR  6
-#define YSER_VERSION_PATCH  1
-#define YSER_VERSION_STRING "0.6.1"
+#define YSER_VERSION_PATCH  2
+#define YSER_VERSION_STRING "0.6.2"
 
 /* CancelIoEx (Vista) is what lets yser_interrupt() end a pending overlapped
  * read. The MSVC SDK targets a recent Windows by default, but MinGW headers
@@ -638,7 +661,7 @@ typedef yrt_policy yser_async_policy;
 
 #define YSER_ASYNC_NONE          YRT_POLICY_NONE          /* no worker      */
 #define YSER_ASYNC_DEADLINE      YRT_POLICY_DEADLINE      /* SCHED_DEADLINE */
-#define YSER_ASYNC_FIFO          YRT_POLICY_FIFO          /* SCHED_FIFO 80  */
+#define YSER_ASYNC_FIFO          YRT_POLICY_FIFO          /* SCHED_FIFO, ysp/rt.h's priority */
 #define YSER_ASYNC_TIME_CRITICAL YRT_POLICY_TIME_CRITICAL /* Windows        */
 #define YSER_ASYNC_NORMAL        YRT_POLICY_NORMAL        /* nothing granted */
 

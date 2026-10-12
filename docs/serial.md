@@ -1,21 +1,22 @@
 # ysp/serial.h design
 
-Status: **v0.5.1, implemented.** Windows uses the Win32 COM API with overlapped
+Status: **v0.6.2, implemented.** Windows uses the Win32 COM API with overlapped
 I/O; Linux and macOS share a termios backend. Since v0.4 the header depends on
 `ysp/rt.h` for the clock, the waits, the scheduling ladder and the deadline
 worker; see [Depends on ysp/rt.h](#depends-on-ysprth). Verified on Linux against a
 socat pty pair, including a reader thread and a writer thread on one handle
 under ThreadSanitizer and under AddressSanitizer plus UndefinedBehaviorSanitizer.
-The Windows backend ran on a Teensy 4.0 over `usbser.sys`
+One board, a Teensy 4.0, ran on two machines: on Windows over `usbser.sys`
 ([Results with the Teensy 4.0 echo board](#results-with-the-teensy-40-echo-board),
-[Pulses: onset and width](#pulses-onset-and-width)). The macOS paths compile on macOS in CI
-but have never run on a device, for lack of a machine. The timing numbers in
-the header (v0.5.1) are from that one Windows setup; FTDI and other bridges,
-RS-232, Linux and macOS are not measured. On Linux the async worker has only ever run at
-`YSER_ASYNC_NORMAL`: the test machine grants no `CAP_SYS_NICE`, so the
-`SCHED_DEADLINE` and `SCHED_FIFO` rungs of its ladder are written but
-unexercised. The header's top comment is the user-facing documentation
-(sokol-style); this page records why the API looks the way it does.
+[Pulses: onset and width](#pulses-onset-and-width)) and on Linux over
+`cdc_acm` ([Results on Linux](#results-on-linux),
+[Results on Linux (v0.6.1)](#results-on-linux-v061)), where the async
+worker ran on SCHED_FIFO 1 under an `rtprio` grant. SCHED_DEADLINE has not
+been granted on any machine here. The macOS paths compile on macOS in CI but
+have never run on a device, for lack of a machine. FTDI and other bridges and
+RS-232 are not measured. The header's top comment is the user-facing
+documentation (sokol-style); this page records why the API looks the way it
+does.
 
 ## Goals
 
@@ -1345,6 +1346,97 @@ async reader stamps lines without the interpreter at a quarter of the CPU
 of `ReaderThread`, and its reader and writes do not block each other.
 pyserial's blocking `read(n)` is a sound choice where none of that matters.
 
+### Results on Linux
+
+The same board on Linux, with the Linux build of each library and a C
+floor, `tests/compare/serial_bench/raw_posix.c` (the counterpart of
+`raw_win32.c`: open, termios, `read`, `write` and `poll` only). Its modes:
+`block`, a blocking descriptor with VMIN 1 and a `poll()` for the timeout;
+`poll`, O_NONBLOCK, `poll()`, then `read()` of what is there, as
+ysp/serial.h waits.
+
+Conditions: 2026-10-12, Debian 12, kernel 6.11.5-liquorix (PDS
+scheduler, HZ=1000), Intel Core i5-14500, governor `performance`, idle
+desktop (load average 0.2 to 0.8). The Teensy 4.0 echo board (firmware
+version 2) on `cdc_acm` at USB high speed, `/dev/ttyACM0`. CPython 3.13.15,
+pyserial 3.5, psychtoolbox 3.0.22.2 (its Linux `IOPort`), `ysp-serial`
+0.6.1 built from this tree. Two runs of `serial_bench.py` in opposite API
+orders, then `raw_posix` twice in opposite mode orders. Each cell gives
+run 1, run 2. Times in microseconds. Summaries:
+`tests/compare/serial_bench_py/results/2026-10-12-teensy40-linux/`.
+
+Round trip, 1000 exchanges per cell, no failures. The one-way times are
+good to the fit bound, 20 to 35 us (261 us for IOPort's default blocking
+read; see below).
+
+| API | Read | RTT median | RTT p99 | Host to board | Board to host, median | Board to host, p99 |
+|---|---|---|---|---|---|---|
+| raw `block` | blocking `read`, VMIN 1 | 84.7, 80.8 | 109, 107 | 56, 50 | 29, 31 | 41, 41 |
+| raw `poll` | `poll`, then `read` | 82.3, 82.4 | 107, 106 | 48, 49 | 35, 32 | 45, 46 |
+| ysp | `read(35, 1, all=True)` | 86.1, 87.8 | 113, 113 | 49, 56 | 37, 33 | 50, 45 |
+| ysp | `read(n, 0)` loop | 85.0, 87.8 | 110, 116 | 54, 52 | 31, 36 | 43, 46 |
+| pyserial | `read(35)`, `timeout=1` | 86.2, 89.4 | 113, 115 | 54, 52 | 33, 38 | 48, 51 |
+| pyserial | `in_waiting` loop | 89.7, 87.6 | 115, 115 | 52, 51 | 37, 37 | 50, 48 |
+| IOPort tuned | blocking | 86.0, 91.0 | 111, 119 | 51, 53 | 36, 38 | 49, 49 |
+| IOPort tuned | poll | 86.5, 96.8 | 114, 122 | 54, 61 | 34, 38 | 48, 49 |
+| IOPort | blocking | 529, 529 | 545, 535 | 270, 279 | 259, 250 | 284, 274 |
+| IOPort | poll | 96.5, 91.0 | 124, 115 | 57, 53 | 41, 37 | 52, 49 |
+
+Stream, 10000 lines at 1000 per second, no line missed and none coalesced
+in any cell:
+
+| API | Mode | Latency median | Latency p99 | CPU, % of one core |
+|---|---|---|---|---|
+| raw `block` | blocking read, own loop | 26.6, 30.7 | 44.3, 45.7 | 0.6, 0.8 |
+| raw `poll` | `poll`, then `read` | 32.6, 28.2 | 48.0, 44.4 | 0.9, 0.8 |
+| ysp | `read(26, 0.2, all=True)` per line | 32.4, 29.0 | 53.8, 47.1 | 1.3, 1.1 |
+| ysp | `read(4096, 0)` loop | 21.6, 22.1 | 37.2, 34.9 | 99.5, 99.5 |
+| ysp | async reader, its stamp | 25.1, 34.3 | 43.9, 49.4 | 0.8, 1.1 |
+| pyserial | `read(26)` per line | 38.6, 32.6 | 74.5, 49.1 | 2.1, 1.7 |
+| pyserial | `readline()` | 110, 132 | 221, 228 | 9.9, 11.8 |
+| pyserial | `in_waiting` loop | 20.0, 23.8 | 33.9, 36.7 | 99.9, 99.9 |
+| pyserial | `ReaderThread`, stamp in `data_received` | 51.7, 49.0 | 89.2, 79.1 | 4.6, 3.6 |
+| IOPort tuned | blocking read per line | 39.5, 42.3 | 58.5, 75.3 | 3.9, 4.8 |
+| IOPort tuned | poll loop | 23.0, 23.8 | 41.8, 38.3 | 99.6, 99.5 |
+| IOPort tuned | background reader, its stamp | 25.0, 30.8 | 43.5, 50.8 | 3.9, 4.9 |
+| IOPort | blocking read per line | 64.0, 59.8 | 312, 307 | 50.7, 50.6 |
+| IOPort | background reader, its stamp | 30.5, 30.5 | 50.8, 47.8 | 5.7, 5.7 |
+
+Call costs, median, both runs: a write of 1 to 512 bytes, ysp 9.2 to 11.1
+(raw `write` 8.0), IOPort non-blocking 10.7 to 15.7 and blocking 52.5 to
+67.4, pyserial 38 to 60; a read with nothing waiting, ysp 0.54 to 0.56,
+pyserial 0.83 and 2.0, IOPort 2.1 to 5.2; with 35 bytes waiting, ysp 1.5
+to 1.8, pyserial 2.1 and 4.6, IOPort 3.1 to 7.2. Open: 69 to 86 us for
+every API. A one-byte write beside the API's waiting async reader: ysp
+9.8, 9.7 (max 16); IOPort 11 to 16 (max 30); pyserial 54, 51.
+
+What the Linux runs show:
+
+- The port's floor is half of Windows': a round trip of 81 to 85 us
+  against 158 to 244 us on the Windows laptop. Different machines too, so
+  this is the pair, not the OS alone. (The stream latencies are not
+  compared: `raw_win32.c` spaces its stream probes 0 to 1 ms apart, which
+  on Linux left `raw_posix.c`'s fit with 2 points and no slope until its
+  probes were spaced 2 to 3 ms apart, as the Python bench's are. Whether
+  the Windows raw stream rows had the same fault was not checked.)
+- A write returns before the bytes reach the board on Linux (8 to 11 us;
+  the board reads them 48 to 56 us after the call starts). On Windows the
+  write returned after the board had read the command. See TIMING in the
+  header: a bracket around a write bounds the onset only on Windows.
+- Every API is within 10 us of the floor at the median in the round trip
+  and the per-line stream, except IOPort's defaults and pyserial's
+  `readline()`. IOPort's default blocking read waits in steps of about
+  0.5 ms: its round trip is 529 us in both runs, and the fit, which takes
+  the two one-way delays as equal, cannot split it (bound 261 us), so its
+  poll-loop stream latency came out negative and is left out of the table.
+  Its blocking read per line also costs half a core. The tuned options
+  remove both, as on Windows.
+- IOPort's writes beside its background reader take 11 to 16 us here,
+  against seconds on Windows.
+- pyserial's write takes 38 to 60 us, 4 to 6 times ysp's and the raw
+  `write`, and returns 5.7 to 8.3 us before the board reads the bytes
+  (ysp's and IOPort's return 40 to 45 us before). Not investigated.
+
 ## Pulses: onset and width
 
 This section records when a trigger pulse arrives at a USB serial device
@@ -1670,6 +1762,58 @@ trailing) longer than 1 ms, from the raw CSV files:
   (ysp/device.h 0.3.1, [docs/device.md](device.md#host-timed-width-v031))
   only when the onset call returns after the width: p99 +664 us at 1 ms,
   +18 us at 5 ms. A byte pulse was not affected.
+
+### Results on Linux (v0.6.1)
+
+`pulse_bench.c` has a POSIX raw layer since this run: `raw_byte` writes
+to a blocking descriptor in raw termios, `raw_dtr` and `raw_rts` use
+`ioctl(TIOCMBIS)` and `TIOCMBIC`. The ysp modes are unchanged. Two runs
+in opposite orders, 200 pulses per cell, 1, 2, 5 and 10 ms, 2026-10-12
+13:26 to 13:49, on the machine and board of [Results on
+Linux](#results-on-linux) (`cdc_acm`, idle desktop). RLIMIT_RTPRIO 50 from
+`limits.conf`, so the async worker ran SCHED_FIFO 1 (ysp/rt.h's rule): the
+first run of a real-time rung of that ladder on any machine here.
+Conditions and summary:
+`tests/compare/serial_pulse/results/2026-10-12-teensy40-linux/`.
+
+Missed: 0 of 14400 (9 modes, 72 cells).
+
+| Mode | Width error median | p5 / p95 / p99 at worst | Onset median (p99) | Call median / p99 |
+|---|---|---|---|---|
+| ysp_pulse | 0.0 to +0.2 us | -30 / +18 / +30 | 48 us (67) | 9.9 / 14.9 us (minus w) |
+| ysp_pulse_async | 0.0 to +0.2 us | -31 / +20 / +31 | 55 us (85) | 1.2 / 3.0 us |
+| ysp_bytes_t0 | 0.0 to +0.2 us | -22 / +19 / +24 | 47 us (66) | 10.5 / 17.6 us |
+| raw_byte (from the return) | +1.0 to +3.2 us | -14 / +39 / +39 | 48 us (65) | 9.3 / 15.2 us |
+| ysp_dtr (from the return) | +49 to +50 us | +41 / +58 / +68 | 25 us (32) | 50.4 / 66.7 us |
+| ysp_rts (from the return) | +49 us | +38 / +57 / +63 | 25 us (31) | 50.3 / 63.9 us |
+| ysp_dtr_t0 | -1.0 to -0.8 us | -6 / +3 / +6 | 24 us (31) | 50.2 / 62.9 us |
+| raw_dtr (from the return) | +49 to +50 us | +42 / +61 / +67 | 24 us (31) | 50.3 / 66.8 us |
+| raw_rts (from the return) | +49 to +50 us | +41 / +58 / +65 | 25 us (31) | 50.3 / 66.2 us |
+
+Onsets are good to the fit bound, 35 to 56 us; widths are not, because
+the board stamps both edges.
+
+- A byte write returns in 9 to 10 us, and the byte reaches the board 47
+  to 48 us after the call starts. A width from the write's return or
+  from its start is the same here (raw_byte +1 to +3 us), because both
+  writes wait the same; on Windows the write returned after the byte
+  arrived, which is why v0.6.0 moved the width's start
+  ([Results with v0.6.0](#results-with-v060)).
+- A DTR or RTS call returns after about 50 us, and the edge reaches the
+  board 25 us after the call starts, inside the call. A width timed from
+  the return is the call's length too long (+49 us); from the call's
+  start (ysp_dtr_t0) it is 1 us short. Use `yser_pulse_off_at_ns()` with
+  the start time.
+- `yser_pulse` and `yser_pulse_async` match within 0.2 us at the median
+  (their p99 differ by up to 7 us), so the FIFO worker times the trailing
+  edge as well as a caller that blocks; it returns in 1.2 us (20 us on Windows) and adds 7
+  us to the onset (its wake).
+- The width's p5 to p95 spread is 26 to 51 us, against 91 to 137 us on
+  Windows with the same board, and smaller than a high-speed microframe
+  (125 us). The header's TIMING no longer calls the frame period a floor.
+- The DTR and RTS call tail of Windows ([The DTR call
+  tail](#the-dtr-call-tail)) is not here: the longest DTR or RTS call
+  took 90 us in 8000.
 
 ### What explains the differences
 

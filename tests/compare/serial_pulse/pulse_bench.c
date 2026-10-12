@@ -24,15 +24,17 @@
  *   ysp_rts          the same with yser_set_rts. ysp/serial.h has no line
  *                    pulse call, so the bench writes this one out.
  *   raw_byte         non-overlapped CreateFile; WriteFile of 0x55, the same
- *                    wait, WriteFile of 0x00
+ *                    wait, WriteFile of 0x00 (POSIX: a blocking descriptor
+ *                    in raw termios, write())
  *   raw_dtr, raw_rts EscapeCommFunction(SETDTR or SETRTS), the same wait,
- *                    CLRDTR or CLRRTS
+ *                    CLRDTR or CLRRTS (POSIX: ioctl TIOCMBIS, TIOCMBIC)
  *   ysp_bytes_t0     yser_write_byte(0x55), yrt_sleep_until(call start +
  *                    width), yser_write_byte(0x00): the width timed from the
  *                    call start instead of the onset call's return
  *   ysp_dtr_t0       the same for yser_set_dtr
  * The raw modes stamp with QueryPerformanceCounter, converted with
- * yrt_ticks_to_ns (bit-identical to yrt_now_ns). Every wait is
+ * yrt_ticks_to_ns (bit-identical to yrt_now_ns); on POSIX with yrt_now_ns,
+ * which is CLOCK_MONOTONIC. Every wait is
  * yrt_sleep_until with YRT_DEFAULT_SPIN_NS, the wait yser_pulse uses, so the
  * modes differ in the transport calls only. In the bench's own modes the
  * width starts after the onset call returns (the rule yser_pulse had until
@@ -55,19 +57,31 @@
  * Build (Visual C++, from a Developer Command Prompt):
  *   cl /O2 /W3 /I..\..\..\include pulse_bench.c
  * or MinGW-w64: gcc -O2 -Wall -I../../../include -o pulse_bench.exe pulse_bench.c
+ * or Linux:     cc -O2 -Wall -I../../../include -o pulse_bench pulse_bench.c -lpthread -lm
  *
- * Windows only, because the raw floor is Win32. The process runs at normal
- * priority, as a MATLAB or Python experiment does.
+ * The process runs at normal priority, as a MATLAB or Python experiment
+ * does.
  *
  * Public domain / MIT-0, as the rest of ysp. */
 #define _CRT_SECURE_NO_WARNINGS
+#if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#endif
 #define YSP_SERIAL_IMPLEMENTATION
 #include "ysp/serial.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if !defined(_WIN32)
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <sys/stat.h>
+#include <termios.h>
+#include <unistd.h>
+#define Sleep(ms) yrt_sleep_ns(YRT_MS(ms))
+#endif
 
 #define BLOCK 20
 #define N_PROBE 10
@@ -89,11 +103,16 @@ static int is_rts(int m) { return m == M_YSP_RTS || m == M_RAW_RTS; }
 typedef struct {
     int raw;
     yser_port sp;
+#if defined(_WIN32)
     HANDLE h;
+#else
+    int fd;
+#endif
 } port;
 
 static int64_t g_hold_ns = 0;  /* desc.min_hold_ns for the ysp modes */
 
+#if defined(_WIN32)
 static void die(const char* what, int code) {
     fprintf(stderr, "pulse_bench: %s failed (%d, os error %lu)\n", what, code,
             (unsigned long)GetLastError());
@@ -105,6 +124,14 @@ static int64_t qpc_ns(void) {
     QueryPerformanceCounter(&c);
     return yrt_ticks_to_ns((int64_t)c.QuadPart);
 }
+#else
+static void die(const char* what, int code) {
+    fprintf(stderr, "pulse_bench: %s failed (%d, %s)\n", what, code, strerror(errno));
+    exit(1);
+}
+
+static int64_t qpc_ns(void) { return yrt_now_ns(); }
+#endif
 
 static int64_t pnow(const port* p) { return p->raw ? qpc_ns() : yrt_now_ns(); }
 
@@ -121,6 +148,7 @@ static void port_open(port* p, const char* dev, int raw) {
         }
         return;
     }
+#if defined(_WIN32)
     char path[64];
     snprintf(path, sizeof path, "\\\\.\\%s", dev);
     p->h = CreateFileA(path, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
@@ -152,8 +180,27 @@ static void port_open(port* p, const char* dev, int raw) {
     if (!SetCommTimeouts(p->h, &t)) die("SetCommTimeouts", 0);
     SetupComm(p->h, 65536, 4096);
     PurgeComm(p->h, PURGE_RXCLEAR | PURGE_TXCLEAR);
+#else
+    struct termios t;
+    int bits = TIOCM_DTR | TIOCM_RTS;
+    p->fd = open(dev, O_RDWR | O_NOCTTY | O_CLOEXEC);
+    if (p->fd < 0) die("open", 0);
+    if (tcgetattr(p->fd, &t) != 0) die("tcgetattr", 0);
+    cfmakeraw(&t);
+    t.c_cflag |= CLOCAL | CREAD;
+    t.c_cflag &= ~(tcflag_t)CRTSCTS;
+    /* read() returns as soon as one byte is there, or after 100 ms */
+    t.c_cc[VMIN] = 0;
+    t.c_cc[VTIME] = 1;
+    cfsetispeed(&t, B115200);
+    cfsetospeed(&t, B115200);
+    if (tcsetattr(p->fd, TCSANOW, &t) != 0) die("tcsetattr", 0);
+    ioctl(p->fd, TIOCMBIS, &bits);   /* DTR and RTS on, as DTR_CONTROL_ENABLE */
+    tcflush(p->fd, TCIOFLUSH);
+#endif
 }
 
+#if defined(_WIN32)
 static void port_close(port* p) {
     if (p->raw) CloseHandle(p->h);
     else yser_close(&p->sp);
@@ -173,6 +220,27 @@ static int port_read(port* p, unsigned char* buf, int cap) {
     if (!ReadFile(p->h, buf, (DWORD)cap, &done, NULL)) return -1;
     return (int)done;
 }
+#else
+static void port_close(port* p) {
+    if (p->raw) close(p->fd);
+    else yser_close(&p->sp);
+}
+
+static int port_write(port* p, const void* buf, int n) {
+    ssize_t w;
+    if (!p->raw) return yser_write(&p->sp, buf, n);
+    while ((w = write(p->fd, buf, (size_t)n)) < 0 && errno == EINTR) { }
+    return (int)w;
+}
+
+/* Whatever arrived, waiting up to 100 ms for the first byte. */
+static int port_read(port* p, unsigned char* buf, int cap) {
+    ssize_t r;
+    if (!p->raw) return yser_read(&p->sp, buf, cap, YRT_MS(100), YSER_READ_ANY);
+    while ((r = read(p->fd, buf, (size_t)cap)) < 0 && errno == EINTR) { }
+    return (int)r;
+}
+#endif
 
 static int port_read_exact(port* p, unsigned char* buf, int n, int64_t timeout_ns) {
     int got = 0;
@@ -186,14 +254,23 @@ static int port_read_exact(port* p, unsigned char* buf, int n, int64_t timeout_n
 }
 
 static void port_purge(port* p) {
+#if defined(_WIN32)
     if (p->raw) PurgeComm(p->h, PURGE_RXCLEAR);
+#else
+    if (p->raw) tcflush(p->fd, TCIFLUSH);
+#endif
     else yser_purge(&p->sp, YSER_PURGE_RX);
 }
 
 static int port_line(port* p, int rts, int on) {
     if (!p->raw) return rts ? yser_set_rts(&p->sp, on != 0) : yser_set_dtr(&p->sp, on != 0);
+#if defined(_WIN32)
     DWORD fn = rts ? (on ? SETRTS : CLRRTS) : (on ? SETDTR : CLRDTR);
     return EscapeCommFunction(p->h, fn) ? 0 : -1;
+#else
+    int bit = rts ? TIOCM_RTS : TIOCM_DTR;
+    return ioctl(p->fd, on ? TIOCMBIS : TIOCMBIC, &bit) == 0 ? 0 : -1;
+#endif
 }
 
 static int port_byte(port* p, unsigned char v) { return port_write(p, &v, 1); }
@@ -426,7 +503,11 @@ int main(int argc, char** argv) {
             for (char* t = strtok(tmp, ","); t && nw < 8; t = strtok(NULL, ",")) widths[nw++] = atof(t);
         } else n = atoi(argv[a]);
     }
+#if defined(_WIN32)
     CreateDirectoryA(dir, NULL);
+#else
+    mkdir(dir, 0777);
+#endif
     outs o;
     o.probes = open_csv(dir, "probes.csv", "cell,mode,width_us,t0_ns,t2_ns,rx_us,tx_us");
     o.pulses = open_csv(dir, "pulses.csv", "cell,mode,width_us,block,i,t_start_ns,t_ret_ns,t_off_ns,t_off_ret_ns,rc");

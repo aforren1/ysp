@@ -1,0 +1,22 @@
+Trigger pulses with ysp/serial.h 0.6.1 on Linux, timed by the echo board.
+2026-10-12 13:26 to 13:49 (pulse_bench, run 1 forward, run 2 "rev").
+
+Machine: Debian 12, kernel 6.11.5-1-liquorix-amd64 (PDS scheduler,
+CONFIG_HZ=1000), Intel Core i5-14500, cpufreq governor "performance",
+desktop on mains. Xorg session idle; load average 0.20 at the start. Nothing
+else measured during the runs.
+User limits: RLIMIT_RTPRIO 50 (limits.conf, the psychtoolbox group), no
+CAP_SYS_NICE, so ysp/rt.h's ladder gave the async worker SCHED_FIFO 1
+(cells.csv: async_policy FIFO).
+Board: Teensy 4.0, firmware/ysp_echo version 2 ("V ysp-echo 2 teensy b l g"),
+native USB high speed (480M), Linux cdc_acm, /dev/ttyACM0, on port 7 of the
+Intel xHCI controller at 0000:00:14.0 (bus 1, 480M root hub).
+Build: cc (Debian 12.2.0-14) 12.2.0, -O2, tests/compare/serial_pulse/pulse_bench.c
+with the POSIX raw layer (raw modes: blocking descriptor in raw termios, write();
+DTR and RTS with ioctl TIOCMBIS and TIOCMBIC).
+Command:
+  pulse_bench /dev/ttyACM0 out 200
+  pulse_bench /dev/ttyACM0 out 200 rev
+  uv run --no-project python pulse_stats.py out > summary_c.txt
+200 pulses per cell, widths 1, 2, 5 and 10 ms, 9 modes, min_hold the
+default (0.25 ms). Raw CSVs (2.8 MB) not kept.
