@@ -849,6 +849,21 @@ the background: DWM showed it at 15 Hz and every record was ESTIMATED, in
 both builds. A window that does not get the foreground is not a timing
 run.
 
+`trial_rdk` before and after its conversion (2026-10-11 and 2026-10-12),
+the same wrapper and conditions, in a window: 16 trials with no key
+(`--reps 2 --seed 7`), five runs of each, interleaved. The first 120
+frames of each run are left out.
+
+| Runs | Frames each | Late | Late target | Early | Tier | Interval mean, sd, max (ms) | CPU p50 (ms) | CPU p99 (ms) |
+|---|---|---|---|---|---|---|---|---|
+| before, 5 | 2596 to 2599 | 0 | 0 | 0 | 1 | 16.6664, 0.0006 to 0.0010, 16.669 to 16.678 | 0.166 to 0.209 | 0.346 to 0.578 |
+| after, 5 | 2598 to 2599 | 0 | 0 | 0 | 1 | 16.6664, 0.0006 to 0.0009, 16.669 to 16.670 | 0.161 to 0.186 | 0.372 to 0.513 |
+
+No flip moved after frame 120. Among the first 120 frames, frame 0 of one
+after run was a frame late (24 ms, on the composed path while the window
+took the foreground); no other frame of the ten runs was late. Frame 0
+is the first trial's fixation, 0.5 s before the dots.
+
 ### Tests and mutations
 
 Checked on 2026-10-11 with MSVC 19.44 (`msvc-full`) and MinGW-w64 gcc
