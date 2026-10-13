@@ -299,7 +299,7 @@ id = "cap-08"
 name = "late blocks without reports never restart the fit"
 test = "audio"
 why = "Without reports, a loss shows only as blocks late against the fit; the fit must start over."
-find = '        if (r > 0.5 * (double)period * c->fit.k) {'
+find = '        if (r > yau__cgate(c)) {'
 replace = '        if (r > 1e18) {'
 
 [[mutant]]

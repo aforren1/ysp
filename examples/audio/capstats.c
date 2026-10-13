@@ -77,7 +77,7 @@ static void cs_on_capture(const void* cp, const void* tkp, int32_t n) {
     }
     if (i >= CS_MAX) return;
     g_blk[i].t_entry = tk->t_entry;
-    g_blk[i].pos = tk->pos;
+    g_blk[i].pos = tk->pos >= 0 ? tk->pos + c->p_off : -1;   /* in capture frames, past halts */
     g_blk[i].pos_t = tk->pos_t;
     g_blk[i].f = c->f;
     g_blk[i].n = n;

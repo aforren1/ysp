@@ -557,7 +557,10 @@
  *   exactly desc.format.channels, when given). On Windows a microphone
  *   array may have 4 channels; the rate is the endpoint's Default Format
  *   under Sound > Recording. open() starts the input and waits until the
- *   fit spans 0.5 s, as yau_open() does.
+ *   fit spans 0.5 s, as yau_open() does. Backends: WASAPI reads the capture
+ *   client's IAudioClock (shared and exclusive); every other backend fits
+ *   callback times; the null backend's input is silence on a timer, tier
+ *   SIM.
  *
  *   CAPTURE FRAMES. Frame F is the F-th frame the input recorded since
  *   open. Frames that never reach a reader still count: frames the ring had
@@ -613,22 +616,32 @@
  *
  *   LOSS. A device that is not read in time loses frames (an overrun);
  *   miniaudio does not pass WASAPI's discontinuity flag on, so the header
- *   finds a loss itself. With reports: q = the position minus the frame
- *   after the block is the input recorded and not yet delivered. Measured
- *   on the test laptop (480-frame packets that miniaudio hands over as 256
- *   + 224), q was 0 or 224 frames, at most 992 for a few blocks after
- *   stalls of 60 to 81 ms that lost nothing, and never stayed a period
- *   over its floor. A device that loses a packet moves q up by the packet
- *   for good. So q at least a period over its floor in every block for
- *   200 ms is a loss of the excess in whole periods: the capture frames
- *   jump by it (a LOST gap) and the fit, on device frames, goes on. The
- *   frames delivered in those 200 ms keep the old numbers, off by the loss;
- *   the YAU_EV_CAP_XRUN record gives the first of them. Without reports,
- *   blocks that reach the callback more than half a period later than the
- *   fit says, for 200 ms, are a loss of unknown size: the fit starts over
- *   (0.5 s to ready, 5 s to a fitted slope). A device that flags an
- *   underrun in its tick (YAU_TICK_XRUN) restarts the fit too. Every loss
- *   counts in .xruns; known counts in .lost.
+ *   finds each loss itself, three ways, and counts it:
+ *     HALT (reports): the position stands while nothing is recorded, so
+ *     every later report is late against the fit by the time lost.
+ *     Measured on the test laptop's microphone in shared mode, every stall
+ *     of the device thread lost the stall less about 12 ms (20 ms: 8 ms;
+ *     60 ms: 48 ms; 300 ms: 288 ms). Three late reports in a row (more
+ *     than half a period or 5 ms off) are a halt of the least delay but
+ *     the first report's, which can be the halt half over.
+ *     BACKLOG (reports): the position counts frames the device could not
+ *     deliver, so q = the position minus the frame after the block stays
+ *     up by them. q at least a period over its floor in every block for
+ *     200 ms is a loss of the excess in whole periods. Measured in
+ *     exclusive mode: each 60 ms stall lost 2400 frames this way.
+ *     LATE BLOCKS (no reports): blocks later than the fit says by more
+ *     than half a period or 5 ms, in every block for 200 ms, are a loss of
+ *     the least of those delays. A backlog drains in a few blocks; a halt
+ *     keeps every later block late.
+ *   The capture frames jump by the count (a LOST gap), so a later frame
+ *   keeps its place on the device clock within the count's error (tens of
+ *   frames measured), and the fit starts over from the frames after the
+ *   loss (0.5 s to ready, 5 s to a fitted slope). The frames delivered
+ *   between the loss and its finding (40 ms for a halt, 200 ms for the
+ *   others) keep numbers from before it; the YAU_EV_CAP_XRUN record gives
+ *   the first of them. A device that flags an underrun in its tick
+ *   (YAU_TICK_XRUN) restarts the fit with no count. Every loss counts in
+ *   .xruns; counts in .lost.
  *
  *   DUPLEX. yau_desc.capture (a zeroed yau_capture) with
  *   yau_desc.capture_desc makes yau_open() open one miniaudio duplex
@@ -714,9 +727,6 @@
  *     Compiled through miniaudio. v0.1 reads no position on them, so every
  *     onset is unconfirmed (tier 3) and the fit uses callback times. They have
  *     not run here (STATUS).
- *   CAPTURE on each backend: WASAPI reads the capture client's IAudioClock
- *     (shared and exclusive); every other backend fits callback times. The
- *     null backend's input gives silence on a timer, tier SIM.
  *   YAU_BACKEND_NULL
  *     miniaudio's null device: a timer, no hardware. Tier SIM.
  *   YAU_BACKEND_CUSTOM
@@ -5324,8 +5334,11 @@ static void yau__cfeed(yau_capture* c, int64_t w, int64_t t) {
 }
 
 /* The device lost frames (LOSS). With a count, the capture frames jump by
- * it at the next frame written, so every later frame keeps its place on
- * the device clock and the fit goes on; without one, the fit starts over.
+ * it at the next frame written, so a later frame keeps its place on the
+ * device clock within the count's error. The fit starts over in every
+ * case: measured with stalls every 3 s, counts off by up to 20 frames
+ * left steps in the window that bent the fitted slope to +68 ppm (the
+ * device runs at +4.6); a fit from the reports after the loss has none.
  * f0: the first frame delivered after the loss that may still carry a
  * number from before it. */
 static void yau__cxrun(yau_capture* c, int64_t t, int64_t lost, int64_t f0) {
@@ -5337,9 +5350,8 @@ static void yau__cxrun(yau_capture* c, int64_t t, int64_t lost, int64_t f0) {
         c->gap_kind |= YAU_GAP_LOST;
         c->f += lost;
         yau__st64(&c->lost, c->lost + lost);
-    } else {
-        yau__cfit_restart(c);
     }
+    yau__cfit_restart(c);
     memset(&u, 0, sizeof u);
     u.i64[0] = c->f - lost;
     u.i64[1] = lost;
@@ -5537,8 +5549,8 @@ YAU_API void yau_capture_block(void* host, void* in, int32_t frames, const yau_t
      *   numbers say. The first late report can be the halt half over (38
      *   ms late, then 48, in the same runs). Three late reports in a row are
      *   a halt of the least delay but the first's: the capture frames jump by
-     *   it (a LOST gap) and the position is counted on by it, so the fit goes
-     *   on.
+     *   it (a LOST gap), the position is counted on by it, and the fit starts
+     *   over (yau__cxrun).
      *   Early, for 2 s: the fit starts over from the reports, as the
      *   output's does (REANCHOR). */
     if (have_pos) {

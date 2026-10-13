@@ -368,8 +368,7 @@ static void test_capture_loss(void) {
                (long long)before, (double)before / 48.0);
         CHECK(before <= 23 * 480 && before >= 19 * 480);
     }
-    sc_run_s(s, 2.0);
-    (void)cap_drain(0, 0, &wrong, NULL);
+    for (x = 0; x < 14; x++) { sc_run_s(s, 0.5); (void)cap_drain(0, 0, &wrong, NULL); }
     CHECK_I(wrong, 0);
     (void)yau_capture_update(&g_cap);
     for (x = s->dev_next - 24000; x < s->dev_next; x += 101) {
@@ -444,7 +443,7 @@ static void test_capture_loss(void) {
         CHECK(nb <= 8 * 480);
         printf("capture halt: 48 ms (2304 frames), counted %lld, found after %.0f ms of frames\n", (long long)est,
                (double)nb / 48.0);
-        for (x = 0; x < 4; x++) {
+        for (x = 0; x < 14; x++) {
             sc_run_s(s, 0.5);
             cap_drain2(-est, -est, &nb, &na, &wrong, NULL);
         }
