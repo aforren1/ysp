@@ -104,12 +104,14 @@ static void sc_block(scap* s) {
     tk.t_entry = t;
     tk.pos = -1;
     if (s->pos_source == YAU_POS_DEVICE) {
-        if (s->k % s->report_every == 0 || s->last_pos < 0) {
-            int64_t pass = t - (s->report_noise_ns > 0 ? (int64_t)(-s->report_noise_ns * log(sc_rand(s))) : 0);
-            int64_t f = (int64_t)floor((double)(pass - s->T0) / kd);
-            s->last_pos = f;
+        /* the position moves every block; its stamp, as measured, only
+         * every report_every blocks, so between those the pair is off by
+         * the blocks since the stamp */
+        int64_t pass = t - (s->report_noise_ns > 0 ? (int64_t)(-s->report_noise_ns * log(sc_rand(s))) : 0);
+        int64_t f = (int64_t)floor((double)(pass - s->T0) / kd);
+        if (s->k % s->report_every == 0 || s->last_pos < 0)
             s->last_stamp = s->T0 + (int64_t)floor((double)f * kd + 0.5) + (t - pass);
-        }
+        s->last_pos = f;
         tk.pos = s->last_pos;
         tk.pos_t = s->last_stamp;
     }
@@ -286,6 +288,36 @@ static void test_capture_overflow(void) {
     yau_capture_close(&g_cap);
 }
 
+/* sec of blocks with reader 0 reading every 10, each sample checked: the
+ * ring never fills. */
+static void sc_run_read(scap* s, double sec, int64_t* wrong) {
+    int64_t i, b = (int64_t)(sec * s->rate / s->period + 0.5);
+    for (i = 0; i < b; i++) {
+        sc_block(s);
+        if (i % 10 == 9) (void)cap_drain(0, 0, wrong, NULL);
+    }
+    (void)cap_drain(0, 0, wrong, NULL);
+}
+
+/* Drains reader 0. Until its first gap a sample's device frame is its
+ * capture frame + s_before, after it + s_after; counts both and the
+ * samples that are neither. */
+static void cap_drain2(int64_t s_before, int64_t s_after, int64_t* nb, int64_t* na, int64_t* wrong, int* gap) {
+    int64_t n, f, i;
+    const float* p;
+    int g = 0, seen = 0;
+    while ((p = yau_capture_acquire(&g_cap, 0, &n, &f, &g)) != NULL) {
+        if (g) seen = 1;
+        if (gap) *gap |= g;
+        for (i = 0; i < n; i++) {
+            int64_t d = f + i + (seen ? s_after : s_before);
+            if (p[2 * i] == idv(d, 0) && p[2 * i + 1] == idv(d, 1)) { if (seen) (*na)++; else (*nb)++; }
+            else (*wrong)++;
+        }
+        CHECK_I(yau_capture_release(&g_cap, 0, n), 0);
+    }
+}
+
 /* A device that loses frames (an overrun). With reports the loss shows as
  * the position moving ahead of the frames handed over for good: the
  * header counts it in whole periods, numbers the frames across it, and
@@ -356,28 +388,78 @@ static void test_capture_loss(void) {
     }
     yau_capture_close(&g_cap);
 
-    /* callbacks only: the loss restarts the fit, the times are right again */
+    /* callbacks only: the blocks come late by the loss for good; the
+     * header counts the least delay of 200 ms of them, within the jitter */
     sc_default(s);
     s->pos_source = YAU_POS_CALLBACK;
     s->jitter_ns = 300000;
     CHECK(cap_open(s, NULL));
-    sc_run_s(s, 6.0);
-    (void)cap_drain(0, 0, &wrong, NULL);
+    sc_run_read(s, 6.0, &wrong);
     s->skip = 6 * 480;
-    sc_run_s(s, 7.0);
-    (void)cap_drain(0, 6 * 480, &wrong, NULL);
-    (void)yau_capture_update(&g_cap);
+    sc_run_s(s, 0.5);
     yau_capture_get_info(&g_cap, &in);
     CHECK_I(in.xruns, 1);
-    CHECK_I(in.lost, 0);
-    worst = 0;
-    for (x = s->dev_next - 6 * 480 - 24000; x < s->dev_next - 6 * 480; x += 101) {
-        int64_t e = yau_capture_time_of(&g_cap, x) - sc_truth(s, (double)(x + 6 * 480)) - (int64_t)((double)s->Lin * sc_kd(s));
-        if (e < 0) e = -e;
-        if (e > worst) worst = e;
+    CHECK(llabs(in.lost - 6 * 480) <= 2);
+    {
+        int64_t nb = 0, na = 0, est = in.lost;
+        cap_drain2(6 * 480, 6 * 480 - est, &nb, &na, &wrong, &gap);
+        CHECK_I(gap, YAU_GAP_LOST);
+        printf("capture loss without reports: 2880 frames lost, counted %lld, found after %.0f ms\n", (long long)est,
+               (double)nb / 48.0);
+        for (x = 0; x < 14; x++) {
+            sc_run_s(s, 0.5);
+            cap_drain2(6 * 480 - est, 6 * 480 - est, &nb, &na, &wrong, NULL);
+        }
+        (void)yau_capture_update(&g_cap);
+        worst = 0;
+        for (x = s->dev_next - (6 * 480 - est) - 24000; x < s->dev_next - (6 * 480 - est); x += 101) {
+            int64_t e = yau_capture_time_of(&g_cap, x) - sc_truth(s, (double)(x + 6 * 480 - est)) - (int64_t)((double)s->Lin * sc_kd(s));
+            if (e < 0) e = -e;
+            if (e > worst) worst = e;
+        }
+        printf("  worst time error after it %.1f us\n", (double)worst / 1e3);
+        CHECK(worst < 60000);
     }
-    printf("capture loss without reports: fit restarted, worst time error after %.1f us\n", (double)worst / 1e3);
-    CHECK(worst < 60000);
+    yau_capture_close(&g_cap);
+    CHECK_I(wrong, 0);
+
+    /* a halt, with reports: the device records nothing for 48 ms and its
+     * position does not count it (WASAPI, measured), so the reports come
+     * 48 ms late for good; two of them make a halt, the frames jump by it */
+    sc_default(s);
+    s->jitter_ns = 300000;
+    CHECK(cap_open(s, NULL));
+    sc_run_read(s, 6.0, &wrong);
+    s->T0 += 48000000;
+    sc_run_s(s, 0.5);
+    yau_capture_get_info(&g_cap, &in);
+    CHECK_I(in.xruns, 1);
+    /* the least late of the two reports, late by its own scatter */
+    CHECK(llabs(in.lost - 2304) <= 4);
+    {
+        int64_t nb = 0, na = 0, est = in.lost;
+        gap = 0;
+        cap_drain2(0, -est, &nb, &na, &wrong, &gap);
+        CHECK_I(gap, YAU_GAP_LOST);
+        CHECK(nb <= 6 * 480);
+        printf("capture halt: 48 ms (2304 frames), counted %lld, found after %.0f ms of frames\n", (long long)est,
+               (double)nb / 48.0);
+        for (x = 0; x < 4; x++) {
+            sc_run_s(s, 0.5);
+            cap_drain2(-est, -est, &nb, &na, &wrong, NULL);
+        }
+        (void)yau_capture_update(&g_cap);
+        worst = 0;
+        for (x = s->dev_next + est - 24000; x < s->dev_next + est; x += 101) {
+            int64_t e = yau_capture_time_of(&g_cap, x) - sc_truth(s, (double)(x - est));
+            if (e < 0) e = -e;
+            if (e > worst) worst = e;
+        }
+        printf("  worst time error after it %.1f us\n", (double)worst / 1e3);
+        CHECK(worst < 25000);
+        yau_capture_get_info(&g_cap, &in);
+        CHECK_I(in.xruns, 1);
+    }
     yau_capture_close(&g_cap);
     CHECK_I(wrong, 0);
 }
@@ -510,9 +592,10 @@ static void test_vkey(void) {
     CHECK_I(yau_vkey_init(&vk, &d, 48000), 0);
     CHECK_I(yau_vkey_feed(&vk, g_sig, n, 1, 0, ev, 16), 0);
     CHECK_I((int)vk.rejected_, 1);
-    /* hysteresis: a dip under on but over off ends nothing */
+    /* hysteresis: a dip under on but over off, longer than hold_ns, ends
+     * nothing */
     for (i = 0; i < n; i++) {
-        double a = i >= 10000 && i < 40000 ? (i >= 20000 && i < 22000 ? 0.009 : 0.03) : 0;
+        double a = i >= 10000 && i < 60000 ? (i >= 20000 && i < 30000 ? 0.009 : 0.03) : 0;
         g_sig[i] = (float)(a * sin((double)i * 0.3));
     }
     m = vkey_run(&d, g_sig, n, 480, ev, 16);
@@ -801,8 +884,13 @@ static void test_capture_open(void) {
     s->out = YAU_OUT_S16;
     CHECK(!cap_open(s, &d));
     d.format.sample = YAU_S16;
+    d.offset_ns = -7000;
     CHECK(cap_open(s, &d));
     sc_run_s(s, 1.0);
+    (void)yau_capture_update(&g_cap);
+    CHECK_I(yau_capture_time_of(&g_cap, 12345) - yau__fit_time(&g_cap.fit_ft, 12345), -7000);
+    CHECK(llabs(yau_capture_time_at(&g_cap, 12345.0) - yau_capture_time_of(&g_cap, 12345)) <= 1);
+    CHECK_I(yau_capture_frame_at(&g_cap, yau_capture_time_of(&g_cap, 12345)), 12345);
     {
         int64_t wrong = 0, n;
         int64_t fr;
@@ -820,6 +908,113 @@ static void test_capture_open(void) {
     CHECK(yau_capture_time_of(&g_cap, 0) == -1);
 }
 
+/* The device on a real thread, reader 0 on this one and reader 1 on a
+ * third, with a ring small enough to drop: every sample a reader gets is
+ * its own frame's, and the frames a reader never got are exactly the ones
+ * the ring dropped. ThreadSanitizer checks the indices and the gap queue. */
+static uint32_t g_cthr_stop = 0;
+static int64_t g_cthr_r1 = 0, g_cthr_r1_wrong = 0;
+#if defined(_WIN32)
+static unsigned __stdcall cthr_dev(void* p)
+#else
+static void* cthr_dev(void* p)
+#endif
+{
+    scap* s = (scap*)p;
+    yau_capture_thread_init(s->host);
+    while (!yau__ld32(&g_cthr_stop)) {
+        yau_tick tk;
+        int64_t i;
+        memset(&tk, 0, sizeof tk);
+        tk.t_entry = yrt_now_ns();
+        tk.pos = -1;
+        for (i = 0; i < s->period; i++) {
+            ((float*)(void*)s->in_mem)[2 * i] = idv(s->dev_next + i, 0);
+            ((float*)(void*)s->in_mem)[2 * i + 1] = idv(s->dev_next + i, 1);
+        }
+        s->block(s->host, s->in_mem, s->period, &tk);
+        s->dev_next += s->period;
+        yrt_sleep_until(yrt_now_ns() + 300000, 0);
+    }
+#if defined(_WIN32)
+    return 0;
+#else
+    return NULL;
+#endif
+}
+#if defined(_WIN32)
+static unsigned __stdcall cthr_r1(void* p)
+#else
+static void* cthr_r1(void* p)
+#endif
+{
+    (void)p;
+    while (!yau__ld32(&g_cthr_stop)) {
+        int64_t n, f, i;
+        const float* q = yau_capture_acquire(&g_cap, 1, &n, &f, NULL);
+        if (!q) { yrt_sleep_until(yrt_now_ns() + 700000, 0); continue; }
+        for (i = 0; i < n; i++) if (q[2 * i] != idv(f + i, 0) || q[2 * i + 1] != idv(f + i, 1)) g_cthr_r1_wrong++;
+        g_cthr_r1 += n;
+        (void)yau_capture_release(&g_cap, 1, n);
+    }
+#if defined(_WIN32)
+    return 0;
+#else
+    return NULL;
+#endif
+}
+
+static void test_capture_threads(void) {
+    scap* s = &g_sc;
+    yau_capture_desc d;
+    yau_capture_info in;
+    int64_t wrong = 0, got = 0, k;
+    sc_default(s);
+    s->period = 48;
+    s->pos_source = YAU_POS_CALLBACK;
+    s->tier = YAU_TIER_SIM;
+    memset(&d, 0, sizeof d);
+    d.frames = 480;
+    d.readers = 2;
+    g_virtual = 0;
+    CHECK(cap_open(s, &d));
+    yau__st32(&g_cthr_stop, 0);
+    g_cthr_r1 = g_cthr_r1_wrong = 0;
+    {
+#if defined(_WIN32)
+        HANDLE th = (HANDLE)_beginthreadex(NULL, 0, cthr_dev, s, 0, NULL);
+        HANDLE t1 = (HANDLE)_beginthreadex(NULL, 0, cthr_r1, NULL, 0, NULL);
+#else
+        pthread_t th, t1;
+        pthread_create(&th, NULL, cthr_dev, s);
+        pthread_create(&t1, NULL, cthr_r1, NULL);
+#endif
+        for (k = 0; k < 400; k++) {
+            got += cap_drain(0, 0, &wrong, NULL);
+            yrt_sleep_until(yrt_now_ns() + (k % 7 == 0 ? 15000000 : 500000), 0);
+        }
+        yau__st32(&g_cthr_stop, 1);
+#if defined(_WIN32)
+        WaitForSingleObject(th, INFINITE); CloseHandle(th);
+        WaitForSingleObject(t1, INFINITE); CloseHandle(t1);
+#else
+        pthread_join(th, NULL);
+        pthread_join(t1, NULL);
+#endif
+    }
+    got += cap_drain(0, 0, &wrong, NULL);
+    yau_capture_get_info(&g_cap, &in);
+    printf("capture threads: %lld frames made, reader 0 got %lld, reader 1 %lld, %lld dropped in %u runs, 0 wrong expected: %lld, %lld\n",
+           (long long)s->dev_next, (long long)got, (long long)g_cthr_r1, (long long)in.dropped, (unsigned)in.drops,
+           (long long)wrong, (long long)g_cthr_r1_wrong);
+    CHECK_I(wrong, 0);
+    CHECK_I(g_cthr_r1_wrong, 0);
+    CHECK_I(got + in.dropped, s->dev_next);
+    CHECK(got > 0 && g_cthr_r1 > 0);
+    yau_capture_close(&g_cap);
+    g_virtual = 1;
+}
+
 static void test_capture(void) {
     test_capture_open();
     test_capture_fit();
@@ -829,4 +1024,5 @@ static void test_capture(void) {
     test_edge();
     test_vkey_clock();
     test_wavw();
+    test_capture_threads();
 }

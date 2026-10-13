@@ -122,8 +122,10 @@ id = "h-01"
 name = "late threshold two periods"
 test = "audio"
 why = "A halt of one period makes every later report a period late; a threshold above that never sees it, and later onsets are off by the halt while they say tier 2."
-find = '''            if (r > half) {'''
-replace = '''            if (r > 4.0 * half) {'''
+find = '''            double half = 0.5 * (double)au->dcaps.period * au->fit.k;
+            if (r > half) {'''
+replace = '''            double half = 0.5 * (double)au->dcaps.period * au->fit.k;
+            if (r > 4.0 * half) {'''
 
 [[mutant]]
 id = "h-02"
@@ -229,3 +231,185 @@ replace = '''
                 st->in_arena_ = 0;
                 st->au_ = NULL;
                 return;'''
+
+# v0.5.0: capture (docs/audio.md, "Capture"). The miniaudio input and the
+# duplex device run only on hardware (audio_capstats measures them) or on
+# the null backend (the compile check), so they have no mutant here.
+
+[[mutant]]
+id = "cap-01"
+name = "a closed gap carries no frames"
+test = "audio"
+why = "The capture frames jump by the frames dropped at the gap, so every later sample keeps its frame."
+find = '            g->frames = c->gap_frames;'
+replace = '            g->frames = 0;'
+
+[[mutant]]
+id = "cap-02"
+name = "room only for the fastest reader"
+test = "audio"
+why = "The device must not overwrite what the slowest reader has not read."
+find = '        if (p < m) m = p;'
+replace = '        if (p > m || m == INT64_MAX) m = p;'
+
+[[mutant]]
+id = "cap-03"
+name = "dropped frames not counted"
+test = "audio"
+why = "Every frame the ring had no room for is counted (yau_capture_info.dropped)."
+find = '        yau__st64(&c->dropped, c->dropped + (n - k));'
+replace = '        (void)k;'
+
+[[mutant]]
+id = "cap-04"
+name = "a read crosses a gap"
+test = "audio"
+why = "acquire stops at the next gap, so the frames after it get their jumped frame numbers."
+find = '        if (gp - r->pos < n) n = gp - r->pos;'
+replace = '        (void)gp;'
+
+[[mutant]]
+id = "cap-05"
+name = "reports fed whatever their stamp"
+test = "audio"
+why = "Measured on WASAPI capture, the position moves every 10 ms and its stamp every 20 ms; only a new stamp pairs with its position."
+find = '        if (tk->pos_t != c->last_stamp && pw > c->last_pos) {'
+replace = '        if (pw > c->last_pos) {'
+
+[[mutant]]
+id = "cap-06"
+name = "a loss counted at once"
+test = "audio"
+why = "A stall the device rides out moves q up for a few blocks; only 200 ms of it is a loss."
+find = '''            if (now_t - c->loss_since >= YAU__LOSS_NS) {
+                int64_t lost'''
+replace = '''            if (1) {
+                int64_t lost'''
+
+[[mutant]]
+id = "cap-07"
+name = "a counted loss leaves the frames as they were"
+test = "audio"
+why = "The frames after a loss are numbered across it, so the fit, on device frames, stays right."
+find = '        c->f += lost;'
+replace = '        (void)0;'
+
+[[mutant]]
+id = "cap-08"
+name = "late blocks without reports never restart the fit"
+test = "audio"
+why = "Without reports, a loss shows only as blocks late against the fit; the fit must start over."
+find = '        if (r > 0.5 * (double)period * c->fit.k) {'
+replace = '        if (r > 1e18) {'
+
+[[mutant]]
+id = "cap-09"
+name = "the voice key reports a candidate shorter than min_ns"
+test = "audio"
+why = "A click is not a voice onset: the level must hold over off_db for min_ns."
+find = '            if (f - vk->cand_i_ + 1 >= vk->min_) {'
+replace = '            if (1) {'
+
+[[mutant]]
+id = "cap-10"
+name = "no hysteresis"
+test = "audio"
+why = "A dip under on_db but over off_db does not end a sound."
+find = '    vk->off2_ = yau__db_pow((float)off);'
+replace = '    vk->off2_ = yau__db_pow(d->on_db);'
+
+[[mutant]]
+id = "cap-11"
+name = "the onset is not interpolated"
+test = "audio"
+why = "The onset is the crossing between frames, as the definition (and ref_onset) puts it."
+find = '                vk->cand_ = yau__cross(f, vk->prev_, p, vk->on2_);'
+replace = '                vk->cand_ = (double)f;'
+
+[[mutant]]
+id = "cap-12"
+name = "an edge without a crossing"
+test = "audio"
+why = "A level held past the dead time is one edge, not one per dead time."
+find = '        if (a >= e->level_ && a0 < e->level_ && f >= e->until_) {'
+replace = '        if (a >= e->level_ && f >= e->until_) {'
+
+[[mutant]]
+id = "cap-13"
+name = "no dead time"
+test = "audio"
+why = "A click's ringing must not be a second edge."
+find = '            e->until_ = f + e->dead_;'
+replace = '            e->until_ = f;'
+
+[[mutant]]
+id = "cap-14"
+name = "16-bit input widened by 32767"
+test = "audio"
+why = "Widening is exact: an s16 sample s is s / 32768."
+find = '        for (i = 0; i < ns; i++) dst[i] = (float)s[i] / 32768.0f;'
+replace = '        for (i = 0; i < ns; i++) dst[i] = (float)s[i] / 32767.0f;'
+
+[[mutant]]
+id = "cap-15"
+name = "24-bit WAV output without its top byte"
+test = "audio"
+why = "The writer's s24 must read back bit for bit through the parser."
+find = 'o[3 * i + 2] = (unsigned char)((iv >> 16) & 0xFF); }'
+replace = 'o[3 * i + 2] = 0; }'
+
+[[mutant]]
+id = "cap-16"
+name = "the WAV sizes not written at close"
+test = "audio"
+why = "A file whose data size stays 0 reads back empty."
+find = '    yau__wavw_header(w, h, data);'
+replace = '    yau__wavw_header(w, h, 0);'
+
+[[mutant]]
+id = "cap-17"
+name = "a saved gap has no silence"
+test = "audio"
+why = "The file's sample s is capture frame first + s, also across a gap."
+find = '            while (z > 0) {'
+replace = '            while (z > 0 && 0) {'
+
+[[mutant]]
+id = "cap-18"
+name = "capture times without desc.offset_ns"
+test = "audio"
+why = "desc.offset_ns, from a line-in test, is added to every capture time."
+find = '    return yau__fit_time(&c->fit_ft, frame) + c->desc.offset_ns;'
+replace = '    return yau__fit_time(&c->fit_ft, frame);'
+
+[[mutant]]
+id = "cap-19"
+name = "callback points from the block's first frame"
+test = "audio"
+why = "A block has arrived when its last frame has: the point is the frame after it at the callback's entry."
+find = '        yau__cfeed(c, fend, now_t);'
+replace = '        yau__cfeed(c, fend - frames, now_t);'
+
+[[mutant]]
+id = "cap-20"
+name = "a halt is never found"
+test = "audio"
+why = "Measured on WASAPI capture, a stall longer than the buffer makes the reports late for good: the position stood while nothing was recorded."
+find = '                    if (c->halt_run >= YAU__CAP_HALT_REPORTS) {'
+replace = '                    if (0) {'
+
+[[mutant]]
+id = "cap-21"
+name = "a halt does not count the position on"
+test = "audio"
+why = "After a halt the position must count the frames it left out, or every later report is late again."
+find = '                        c->p_off += lost;'
+replace = '                        (void)0;'
+
+[[mutant]]
+id = "cap-22"
+name = "late blocks without reports restart the fit instead of counting"
+test = "audio"
+why = "The blocks' delay is the loss: the frames jump by it and the fit goes on."
+find = '                yau__cxrun(c, now_t, (int64_t)floor(c->late_min / c->fit.k + 0.5), c->loss_f0);'
+replace = '                yau__cxrun(c, now_t, 0, c->loss_f0);'

@@ -12,7 +12,10 @@
  *   WAV files (RIFF, RF64, BW64) streamed or loaded, tones, noise and clicks
  *   at the project rate, a strict open that refuses any format or rate
  *   conversion, and the device and source interfaces of the rig's Audio
- *   device and Audio source extensions.
+ *   device and Audio source extensions. v0.5.0: CAPTURE, an input on the
+ *   same clock, each captured frame mapped to ysp_rt time by a fit of the
+ *   input's own clock, alone or as one duplex device; a voice key and a
+ *   click finder (DETECTORS); a WAV writer (WAV OUT).
  *
  *   REQUIRES ysp/rt.h beside it (the clock, the event ring, the thread
  *   elevation, the instrumentation macros), and miniaudio 0.11.25 or a
@@ -526,6 +529,173 @@
  *   while a sound from the arena is playing or waiting.
  *
  *   ---------------------------------------------------------------------
+ *   CAPTURE (v0.5.0)
+ *   ---------------------------------------------------------------------
+ *   A yau_capture records an input on the same clock as the output: every
+ *   frame it captures has a capture frame number and a ysp_rt time from a
+ *   fit of the input's own clock, made the way the output's is.
+ *
+ *       static yau_capture mic;                       // zeroed; about 40 KB
+ *       yau_capture_desc cd = { 0 };                  // the OS default input
+ *       if (!yau_capture_open(&mic, &cd)) die(yau_capture_error(&mic));
+ *       ...                                             // each frame:
+ *       int64_t n, first;
+ *       const float* x;
+ *       while ((x = yau_capture_acquire(&mic, 0, &n, &first, NULL)) != NULL) {
+ *           use(x, n, first);                         // interleaved float
+ *           yau_capture_release(&mic, 0, n);
+ *       }
+ *       int64_t t = yau_capture_time_of(&mic, first); // frame -> ysp_rt ns
+ *       ...
+ *       yau_capture_close(&mic);
+ *
+ *   OPEN. The same STRICT OPEN as the output: no format, rate or channel
+ *   count is asked for, nothing is converted, and the open fails unless
+ *   the input runs at desc.format.rate (default 48000) with at least the
+ *   resolution of desc.format.sample (float counts as 24 bits: a 16-bit
+ *   input needs YAU_S16). The ring takes every channel of the input (or
+ *   exactly desc.format.channels, when given). On Windows a microphone
+ *   array may have 4 channels; the rate is the endpoint's Default Format
+ *   under Sound > Recording. open() starts the input and waits until the
+ *   fit spans 0.5 s, as yau_open() does.
+ *
+ *   CAPTURE FRAMES. Frame F is the F-th frame the input recorded since
+ *   open. Frames that never reach a reader still count: frames the ring had
+ *   no room for, and frames the device lost when the count is known (LOSS).
+ *   So frame F keeps its place on the device's clock however the delivery
+ *   went, as a stream's sample s keeps frame origin + s.
+ *
+ *   TIME. yau_capture_time_of(F) is t0 + (F - W0) * k + desc.offset_ns
+ *   from THE FIT, with the same buckets, window and refit as the output's.
+ *   The points are position reports where the backend has them (WASAPI:
+ *   the capture client's IAudioClock, fitted by least squares), else the
+ *   callback times (the frame after the block, at the callback's entry,
+ *   fitted by the lower envelope). A report is used only when its stamp is
+ *   new: measured on the test laptop's microphone, WASAPI's capture clock
+ *   moves the position every 10 ms but the stamp every 20 ms, and only
+ *   the pair read when the stamp changes lies on the line. Once the fit is
+ *   ready, a report more than half a period off it is set aside and
+ *   counted. Neither source is the sound at the input: a report's time is
+ *   the OS's for the position ("the sample being recorded", Microsoft), a
+ *   callback's comes a pipeline later. Measured here, the frame after a
+ *   block reached the callback 10.2 ms or more after the reports' time for
+ *   it. A line-in test (audio_loopback_latency with a TTL into the input,
+ *   or tests/loopback/audio_loopback.c --line) measures what desc.offset_ns
+ *   must be. yau_capture_time_at(double) takes a detector's fractional
+ *   frame; yau_capture_frame_at(t) is the inverse. The times come from the
+ *   frame thread's copy of the fit, which yau_capture_update() refreshes
+ *   (reader 0's acquire calls it).
+ *
+ *   TIERS. YAU_TIER_SIM for the null input, YAU_TIER_3 for every hardware
+ *   path in v0.5.0: no capture path has had a loopback check of its times
+ *   against a reference on the test laptop (no cable). The tier is in
+ *   yau_capture_info and the describe line; it is the tier of every time
+ *   the handle gives.
+ *
+ *   READING. A ring of desc.frames (default 2 s) float frames, from the
+ *   device thread to one or two readers (desc.readers): reader 0 is the
+ *   frame thread, reader 1 any one other thread (a pump that saves to
+ *   disk). Single producer, a reader index per reader, acquire and
+ *   release only: no lock, no allocation, no I/O and no wait on the device
+ *   thread. acquire gives the contiguous frames up to the ring's wrap or the
+ *   next gap; read copies; save writes a WAV file. The device never
+ *   overwrites what the slowest reader has not released: when the ring is
+ *   full the new frames are dropped and counted, never the old ones. A
+ *   reader that is not read empties nothing: leave readers at 1 unless
+ *   reader 1 reads.
+ *
+ *   GAPS. Where frames are missing, acquire skips to the next frame that
+ *   is there, *first_frame jumps by the frames missing, and *gap says why:
+ *   YAU_GAP_DROP (the ring was full), YAU_GAP_LOST (the device lost them).
+ *   save writes silence for them, so a file's sample s is capture frame
+ *   first + s. Each run of drops is one YAU_EV_CAP_DROP record and counts
+ *   in yau_capture_info.dropped and .drops.
+ *
+ *   LOSS. A device that is not read in time loses frames (an overrun);
+ *   miniaudio does not pass WASAPI's discontinuity flag on, so the header
+ *   finds a loss itself. With reports: q = the position minus the frame
+ *   after the block is the input recorded and not yet delivered. Measured
+ *   on the test laptop (480-frame packets that miniaudio hands over as 256
+ *   + 224), q was 0 or 224 frames, at most 992 for a few blocks after
+ *   stalls of 60 to 81 ms that lost nothing, and never stayed a period
+ *   over its floor. A device that loses a packet moves q up by the packet
+ *   for good. So q at least a period over its floor in every block for
+ *   200 ms is a loss of the excess in whole periods: the capture frames
+ *   jump by it (a LOST gap) and the fit, on device frames, goes on. The
+ *   frames delivered in those 200 ms keep the old numbers, off by the loss;
+ *   the YAU_EV_CAP_XRUN record gives the first of them. Without reports,
+ *   blocks that reach the callback more than half a period later than the
+ *   fit says, for 200 ms, are a loss of unknown size: the fit starts over
+ *   (0.5 s to ready, 5 s to a fitted slope). A device that flags an
+ *   underrun in its tick (YAU_TICK_XRUN) restarts the fit too. Every loss
+ *   counts in .xruns; known counts in .lost.
+ *
+ *   DUPLEX. yau_desc.capture (a zeroed yau_capture) with
+ *   yau_desc.capture_desc makes yau_open() open one miniaudio duplex
+ *   device: the input's blocks go to the capture handle on the output's
+ *   device thread, before the output renders. The capture is open when
+ *   yau_open() returns and closes with yau_close(); its own close does
+ *   nothing. Each side keeps its own fit from its own reports or callbacks,
+ *   so a converter that clocks both shows one drift twice. On WASAPI the
+ *   input paces the device thread (miniaudio reads the input, then writes
+ *   the output), so the output has no queue gate (desc.queue does not
+ *   apply; caps.queue is 0). Not with YAU_BACKEND_CUSTOM: a custom device
+ *   records through its own yau_capture (DEVICE).
+ *
+ *   RECORDS (desc.ring): YAU_EV_CAP_OPEN, _FIT (as YAU_EV_FIT, in capture
+ *   frames), _XRUN, _DROP (their fields at the YAU_EV_CAP_* definitions),
+ *   and once a second the raw report, YRT_KIND_CLOCK with aux 0x41430000 +
+ *   device_index, u.u64[0] the capture frame.
+ *
+ *   ---------------------------------------------------------------------
+ *   DETECTORS (v0.5.0)
+ *   ---------------------------------------------------------------------
+ *   Pure functions on float frames and their capture frame numbers: no
+ *   handle, no allocation, deterministic (the same events from the same
+ *   samples whatever the block sizes), any thread. A frame number that does
+ *   not follow the last block starts a detector over.
+ *
+ *   yau_vkey, a voice key: the RMS over window_ns (default 5 ms) of one
+ *   channel. The level crossing on_db starts a candidate; it is a sound if
+ *   the level stays over off_db (default on_db - 6 dB) for min_ns (default
+ *   30 ms), and its YAU_VKEY_ON event comes then, with the frame where the
+ *   RMS crossed on_db, interpolated between two frames. A sound ends with
+ *   YAU_VKEY_OFF when the level stays under off_db for hold_ns (default
+ *   100 ms), at the frame where it went under. The onset is late against
+ *   the true start by the time the RMS needs to reach on_db: measured on
+ *   synthetic speech (a 120 Hz harmonic complex) in -60 dBFS noise, 6.4 ms
+ *   for a 10 ms attack to -28.5 dBFS and 16 ms for a 25 ms attack to -34.5
+ *   dBFS, at on_db -40. That delay belongs to the detector, not the clock:
+ *   through the scripted input with drift and jitter, onset times were the
+ *   true start plus that delay within 2.2 us.
+ *
+ *   yau_edge, a click finder for loopback tests: the first frame where |x|
+ *   (or x, or -x: polarity) reaches level_db after being under it, the
+ *   crossing interpolated between the two frames, then nothing for dead_ns
+ *   (default 50 ms).
+ *
+ *       yau_vkey vk;                                  // about 39 KB
+ *       yau_vkey_desc vd = { 0 };
+ *       vd.on_db = -40;
+ *       yau_vkey_init(&vk, &vd, 48000);
+ *       yau_vkey_event ev[4];
+ *       int m = yau_vkey_feed(&vk, x, n, channels, first, ev, 4);
+ *       if (m > 0 && ev[0].kind == YAU_VKEY_ON)
+ *           rt = yau_capture_time_at(&mic, ev[0].frame) - beep.onset;
+ *
+ *   ---------------------------------------------------------------------
+ *   WAV OUT (v0.5.0)
+ *   ---------------------------------------------------------------------
+ *   yau_wavw writes float frames to a WAV file: 32-bit float (default),
+ *   16-bit or 24-bit PCM, rounded to nearest with no dither and clipped at
+ *   full scale (counted in .clipped). The header holds a JUNK chunk where
+ *   ds64 goes, so close() makes a file past 4 GB RF64 in place. The parser
+ *   (WAV FILES) reads every form it writes back to the bit. The file has no
+ *   stdio buffer; writes go to the OS 16 KB at a time. One thread; never
+ *   the device thread: yau_capture_save() on a reader's thread, or the frame
+ *   thread between trials.
+ *
+ *   ---------------------------------------------------------------------
  *   BACKENDS
  *   ---------------------------------------------------------------------
  *   YAU_BACKEND_WASAPI (Windows; AUTO there)
@@ -544,6 +714,9 @@
  *     Compiled through miniaudio. v0.1 reads no position on them, so every
  *     onset is unconfirmed (tier 3) and the fit uses callback times. They have
  *     not run here (STATUS).
+ *   CAPTURE on each backend: WASAPI reads the capture client's IAudioClock
+ *     (shared and exclusive); every other backend fits callback times. The
+ *     null backend's input gives silence on a timer, tier SIM.
  *   YAU_BACKEND_NULL
  *     miniaudio's null device: a timer, no hardware. Tier SIM.
  *   YAU_BACKEND_CUSTOM
@@ -592,7 +765,11 @@
  *   the header's code allocates nothing. miniaudio allocates its own
  *   objects inside open(), none afterwards. The callback, yau_play(),
  *   yau_update() and yau_result() allocate nothing and take no lock;
- *   the two queues are single-producer single-consumer rings.
+ *   the two queues are single-producer single-consumer rings. A capture's
+ *   ring is the one more allocation: open() takes desc.frames x channels
+ *   floats with malloc when desc.memory is NULL, and close() frees it. The
+ *   capture block (yau_capture_block) allocates nothing, takes no lock and
+ *   does no I/O; it converts and copies the block into the ring.
  *   One thread calls the API for a handle (the frame thread). A stream's
  *   producer calls (acquire, commit, write, end, reset, and yau_wav_feed,
  *   seek, step, on_msg) come from one other thread at a time, or the frame
@@ -612,7 +789,10 @@
  *   return codes and write nothing: they run on another thread, and a
  *   write into the handle would race with the frame thread's. yau_wav has
  *   a message of its own (yau_wav_error), which open and yau_wav_feed
- *   write, and open's code in error_code. The callback writes nothing.
+ *   write, and open's code in error_code. The callback writes nothing. A
+ *   capture has its own message (yau_capture_error), which its frame-thread
+ *   calls write; reader 1's calls return codes only. A yau_wavw has its own
+ *   (yau_wavw_error).
  *
  *   ---------------------------------------------------------------------
  *   BUILDING
@@ -629,13 +809,27 @@
  *   any system header in the implementation file. Define YAU_API to
  *   change the linkage of every function.
  *   Hot paths carry ysp/rt.h's instrumentation macros: zones yau.render,
- *   yau.mix, yau.fit; a plot of the queue depth in frames.
+ *   yau.mix, yau.fit, yau.capture, yau.cap.fit; a plot of the queue depth in
+ *   frames.
  *
  *   LICENSE: public domain / MIT-0, see end of file.
  *
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.5.0 - CAPTURE: yau_capture, an input on the rig clock. Capture
+ *          frames that keep their place through drops and losses; a fit of
+ *          the input's clock by THE FIT's method (refit shared with the
+ *          output's), from WASAPI's capture IAudioClock where the stamp is
+ *          new, else from callback times; a ring to one or two readers
+ *          (acquire, release, read, save), drops counted; losses found from
+ *          the reports or from late blocks; records YAU_EV_CAP_OPEN, _FIT,
+ *          _XRUN, _DROP. DUPLEX: yau_desc.capture and .capture_desc open
+ *          one miniaudio duplex device. yau_device_open.capture and
+ *          .capture_host for the device interface. DETECTORS: yau_vkey (a
+ *          voice key) and yau_edge (a click finder). WAV OUT: yau_wavw.
+ *          Examples: audio_capstats, audio_loopback_latency,
+ *          audio_first_sound, audio_voice_rt. No change to the output.
  *   v0.4.0 - the repository conventions (README.md). Breaks the API:
  *          yau_stream_init()/yau_stream_release() are bool
  *          yau_stream_open() and void yau_stream_close(), which never
@@ -1594,7 +1788,7 @@ typedef struct yau__creader {   /* one reader's line                          */
     unsigned char pad_[40];
 } yau__creader;
 
-/* A capture handle. Caller-allocated and zeroed (about 70 KB: static, or
+/* A capture handle. Caller-allocated and zeroed (about 40 KB: static, or
  * allocated); every field is private. One cache line for each writer of an
  * index: the device thread, each reader, the frame thread's message tail. */
 struct yau_capture {
@@ -1630,6 +1824,10 @@ struct yau_capture {
     int64_t        q_floor;     /* reports: the least backlog seen (LOSS)    */
     int64_t        loss_since, loss_min, loss_f0;
     int32_t        loss_run, late_run, gap_open, gap_kind;
+    double         late_min, halt_min;
+    int64_t        p_off;       /* frames halts left out of the position     */
+    int64_t        halt_f0, early_since;
+    int32_t        halt_run, early_run;
     uint32_t       tid;
     int            first_block;
     yau__fit       fit;
@@ -5021,6 +5219,7 @@ YAU_API yau_buf yau_wav_load(yau_audio* au, const yau_wav_desc* d) {
 enum { YAU__CM_FIT = 1, YAU__CM_XRUN, YAU__CM_DROP };
 
 #define YAU__LOSS_NS 200000000LL   /* a loss shows this long before it counts */
+#define YAU__CAP_HALT_REPORTS 2    /* late reports in a row that make a halt */
 
 static void yau__cerr(yau_capture* c, const char* fmt, ...) {
     va_list ap;
@@ -5066,6 +5265,8 @@ static void yau__cfit_restart(yau_capture* c) {
     c->first_block = 1;
     c->late_run = 0;
     c->loss_run = 0;
+    c->halt_run = 0;
+    c->early_run = 0;
     c->q_floor = INT64_MAX;
 }
 
@@ -5110,8 +5311,10 @@ static void yau__cfeed(yau_capture* c, int64_t w, int64_t t) {
 
 /* The device lost frames (LOSS). With a count, the capture frames jump by
  * it at the next frame written, so every later frame keeps its place on
- * the device clock and the fit goes on; without one, the fit starts over. */
-static void yau__cxrun(yau_capture* c, int64_t t, int64_t lost) {
+ * the device clock and the fit goes on; without one, the fit starts over.
+ * f0: the first frame delivered after the loss that may still carry a
+ * number from before it. */
+static void yau__cxrun(yau_capture* c, int64_t t, int64_t lost, int64_t f0) {
     yrt_payload u;
     yau__st32(&c->xruns, c->xruns + 1);
     if (lost > 0) {
@@ -5126,7 +5329,7 @@ static void yau__cxrun(yau_capture* c, int64_t t, int64_t lost) {
     memset(&u, 0, sizeof u);
     u.i64[0] = c->f - lost;
     u.i64[1] = lost;
-    u.i64[2] = lost > 0 ? c->loss_f0 : c->f;
+    u.i64[2] = f0;
     yau__cring(c, (uint16_t)YAU_EV_CAP_XRUN, t, c->xruns, &u);
     yau__cmsg_push(c, YAU__CM_XRUN, c->f - lost, lost);
     YRT_MESSAGE("yau capture overrun");
@@ -5233,20 +5436,22 @@ static void yau__cwrite(yau_capture* c, const void* in, int32_t n) {
     }
 }
 
-/* LOSS. With reports, q = position - the frame after the block is the
- * input recorded and not yet delivered: in the device's buffer, or read by
- * miniaudio and not yet handed over. Its least value since the fit was
- * ready is the floor. Measured on the test laptop's microphone (WASAPI
- * shared, 480-frame packets that miniaudio hands over as 256 + 224), q
- * went from 0 and 224 to at most 992 right after stalls of 60 to 81 ms and
- * back within three blocks, its least value then 32 to 192 frames over the
- * floor: no frame was lost, the packets were split at another place. A
- * device that loses a packet moves q up by the packet for good. So q at
- * least a period over the floor in every block for 200 ms is a loss, of
- * the excess in whole periods (rounded down: the split moves q by less
- * than a period). Without reports, the frame after the block reaching the
- * callback later than the fit says by more than half a period for 200 ms
- * is a loss of unknown size: the fit starts over. */
+/* LOSS, from the backlog. With reports, q = position - the frame after the
+ * block is the input recorded and not yet delivered: in the device's
+ * buffer, or read by miniaudio and not yet handed over. Its least value
+ * since the fit was ready is the floor. Measured on the test laptop's
+ * microphone (WASAPI shared, 480-frame packets that miniaudio hands over
+ * as 256 + 224), q was 0 or 224, at most 992 for a few blocks after stalls
+ * of 60 to 81 ms, then 32 to 192 frames over the floor, never a period:
+ * the packets were split at another place. A device whose position counts
+ * the frames it could not deliver moves q up by them for good. So q at
+ * least a period over the floor in every block for 200 ms is a loss of
+ * the excess, in whole periods (rounded down past the split). Without
+ * reports: the frame after the block reaching the callback later than the
+ * fit says by more than half a period, in every block for 200 ms, is a
+ * loss of the least of those delays: a device that stops recording for a
+ * while hands over every later frame that much later (as WASAPI's does,
+ * HALT below), while a backlog drains in a few blocks. */
 static void yau__closs(yau_capture* c, int64_t now_t, int have_pos, int64_t pw, int64_t fend) {
     int64_t period = c->dcaps.period > 0 ? c->dcaps.period : 1;
     if (!c->fit.ready || c->dcaps.tier == YAU_TIER_SIM) return;
@@ -5254,12 +5459,12 @@ static void yau__closs(yau_capture* c, int64_t now_t, int have_pos, int64_t pw, 
         int64_t q = pw - fend;
         if (q < c->q_floor) c->q_floor = q;
         if (q - c->q_floor >= period) {
-            if (!c->loss_run) { c->loss_run = 1; c->loss_since = now_t; c->loss_min = q; c->loss_f0 = fend; }
+            if (!c->loss_run) { c->loss_run = 1; c->loss_since = now_t; c->loss_min = q; c->loss_f0 = c->f; }
             if (q < c->loss_min) c->loss_min = q;
             if (now_t - c->loss_since >= YAU__LOSS_NS) {
                 int64_t lost = (c->loss_min - c->q_floor) / period * period;
                 c->loss_run = 0;
-                yau__cxrun(c, now_t, lost);
+                yau__cxrun(c, now_t, lost, c->loss_f0);
             }
         } else {
             c->loss_run = 0;
@@ -5267,8 +5472,12 @@ static void yau__closs(yau_capture* c, int64_t now_t, int have_pos, int64_t pw, 
     } else {
         double r = (double)(now_t - yau__fit_time(&c->fit, fend));
         if (r > 0.5 * (double)period * c->fit.k) {
-            if (!c->late_run) { c->late_run = 1; c->loss_since = now_t; }
-            if (now_t - c->loss_since >= YAU__LOSS_NS) yau__cxrun(c, now_t, 0);
+            if (!c->late_run) { c->late_run = 1; c->loss_since = now_t; c->late_min = r; c->loss_f0 = c->f; }
+            if (r < c->late_min) c->late_min = r;
+            if (now_t - c->loss_since >= YAU__LOSS_NS) {
+                c->late_run = 0;
+                yau__cxrun(c, now_t, (int64_t)floor(c->late_min / c->fit.k + 0.5), c->loss_f0);
+            }
         } else {
             c->late_run = 0;
         }
@@ -5284,7 +5493,8 @@ YAU_API void yau_capture_block(void* host, void* in, int32_t frames, const yau_t
     YAU__ON_CAPTURE(c, tk, frames);
     now_t = tk->t_entry;
     have_pos = c->dcaps.pos_source == YAU_POS_DEVICE && tk->pos >= 0 && tk->pos_t > 0;
-    if (have_pos) pw = tk->pos;
+    /* the position in capture frames: plus every frame a halt left out */
+    if (have_pos) pw = tk->pos + c->p_off;
     if (c->first_block) {
         c->first_block = 0;
         c->fit.w0 = have_pos ? pw : c->f + frames;
@@ -5292,8 +5502,8 @@ YAU_API void yau_capture_block(void* host, void* in, int32_t frames, const yau_t
         c->fit.k = yau__ck_nom(c);
         c->fit.source = c->dcaps.pos_source;
     }
-    /* 1. losses: a device that says so, then the reports or the callbacks */
-    if (tk->flags & YAU_TICK_XRUN) yau__cxrun(c, now_t, 0);
+    /* 1. losses: a device that says so, then the backlog or the callbacks */
+    if (tk->flags & YAU_TICK_XRUN) yau__cxrun(c, now_t, 0, c->f);
     else yau__closs(c, now_t, have_pos, pw, c->f + frames);
     fend = c->f + frames;
     c->last_entry = now_t;
@@ -5302,17 +5512,53 @@ YAU_API void yau_capture_block(void* host, void* in, int32_t frames, const yau_t
      * measured on the test laptop's microphone, WASAPI's capture clock
      * moves the position every 10 ms and the stamp every 20 ms, and only
      * the pair read when the stamp changes lies on the line (79 us sd
-     * over 10 s). Once the fit is ready, a report more than half a period
-     * off it is set aside and counted. */
+     * over 10 s; at most 1.2 ms off it in 6 minutes idle and under load).
+     * Once the fit is ready a report more than half a period off it is
+     * kept out of the fit and counted (set_aside), and:
+     *   HALT: late. Measured, after each stall of the device thread longer
+     *   than the device's buffer (60 to 81 ms), the reports lay 48 ms late
+     *   for good: the position stood while nothing was recorded, so the
+     *   frames before and after it are 48 ms further apart than their
+     *   numbers say. Two late reports in a row are a halt of the lesser
+     *   delay: the capture frames jump by it (a LOST gap) and the position
+     *   is counted on by it, so the fit goes on.
+     *   Early, for 2 s: the fit starts over from the reports, as the
+     *   output's does (REANCHOR). */
     if (have_pos) {
         if (tk->pos_t != c->last_stamp && pw > c->last_pos) {
             int use = 1;
             if (c->fit.ready) {
                 double r = (double)(tk->pos_t - yau__fit_time(&c->fit, pw));
                 double half = 0.5 * (double)c->dcaps.period * c->fit.k;
-                if (r > half || r < -half) { use = 0; yau__st32(&c->set_aside, c->set_aside + 1); }
+                if (r > half) {
+                    use = 0;
+                    c->early_run = 0;
+                    if (c->halt_run++ == 0) { c->halt_min = r; c->halt_f0 = c->f; }
+                    else if (r < c->halt_min) c->halt_min = r;
+                    if (c->halt_run >= YAU__CAP_HALT_REPORTS) {
+                        int64_t lost = (int64_t)floor(c->halt_min / c->fit.k + 0.5);
+                        c->halt_run = 0;
+                        c->p_off += lost;
+                        pw += lost;
+                        fend += lost;
+                        yau__cxrun(c, now_t, lost, c->halt_f0);
+                        use = 1;
+                    }
+                } else if (r < -half) {
+                    use = 0;
+                    c->halt_run = 0;
+                    if (!c->early_run) { c->early_run = 1; c->early_since = tk->pos_t; }
+                    if (tk->pos_t - c->early_since >= YAU__REANCHOR_NS) {
+                        yau__cxrun(c, now_t, 0, c->f);
+                        c->early_run = 0;
+                    }
+                } else {
+                    c->halt_run = 0;
+                    c->early_run = 0;
+                }
+                if (!use) yau__st32(&c->set_aside, c->set_aside + 1);
             }
-            if (use) yau__cfeed(c, pw, tk->pos_t);
+            if (use && !c->first_block) yau__cfeed(c, pw, tk->pos_t);
             c->last_stamp = tk->pos_t;
             c->last_pos = pw;
         }
@@ -5446,7 +5692,7 @@ YAU_API int64_t yau_capture_save(yau_capture* c, int reader, yau_wavw* w, int64_
         int64_t before = reader >= 0 && reader < YAU_CAP_READERS ? c->rd[reader].frame : 0;
         int g = 0;
         p = yau_capture_acquire(c, reader, &n, &f, &g);
-        if (g && w->frames > 0) {
+        if (g) {
             /* the file keeps sample s on capture frame first + s */
             int64_t z = f - before, rc;
             static const float zeros[256] = { 0 };
