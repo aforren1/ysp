@@ -1383,9 +1383,13 @@ extension implements one of these kinds, each a versioned C vtable:
   needed at int24 with 288 frames kept, 58 ms at the device format. So
   the cause is the driver's event-driven exclusive path. Not adopted:
   miniaudio has no such mode, and the gain over shared mode is 3.5 to
-  16.5 ms with a thin margin. Open: `audio_schedule --exclusive` gave XRUN
-  records and LATE at every lead in 4 of 5 runs that day (0 XRUN records
-  in `audio_clockstats --exclusive`); not traced.
+  16.5 ms with a thin margin. `audio_schedule --exclusive` gave XRUN
+  records and LATE at every lead in 4 of 5 runs that day. Traced the same
+  day (docs/audio.md, "Exclusive start"): real underruns, in about half of
+  all exclusive opens of both programs and of every header version
+  tested (v0.3.1 to v0.5.0), because miniaudio starts the stream on an
+  empty buffer; with one silent buffer written before Start (ysp/audio.h
+  v0.5.1), 0 of 22 opens.
 - The first sound after a long silence (added 2026-10-10). `yau_open()`
   runs the stream silent until the fit is ready and keeps it running
   until `yau_close()`, so the OS, driver and DMA path stays awake between

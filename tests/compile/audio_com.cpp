@@ -1,6 +1,7 @@
-// Compile check: ysp/audio.h's own declarations of IAudioClock and of the
-// IAudioClient slots it calls (GetStreamLatency, GetService), against the
-// Windows SDK's.
+// Compile check: ysp/audio.h's own declarations of IAudioClock, of the
+// IAudioClient slots it calls (GetStreamLatency, GetCurrentPadding,
+// GetService) and of IAudioRenderClient (the exclusive-mode prefill), against
+// the Windows SDK's.
 //
 // A spy class derives from each SDK interface and records which method ran.
 // The test calls every slot the header uses through the header's C table and
@@ -57,8 +58,23 @@ struct SpyClient : IAudioClient {
     }
 };
 
+struct SpyRender : IAudioRenderClient {
+    BYTE mem[16];
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID, void**) override { g_hit = 0; return E_NOINTERFACE; }
+    ULONG STDMETHODCALLTYPE AddRef() override { g_hit = 1; return 1; }
+    ULONG STDMETHODCALLTYPE Release() override { g_hit = 2; return 1; }
+    HRESULT STDMETHODCALLTYPE GetBuffer(UINT32 n, BYTE** p) override { g_hit = 3; *p = n == 480 ? mem : nullptr; return S_OK; }
+    HRESULT STDMETHODCALLTYPE ReleaseBuffer(UINT32 n, DWORD f) override {
+        g_hit = 4;
+        return n == 480 && f == AUDCLNT_BUFFERFLAGS_SILENT ? S_OK : E_INVALIDARG;
+    }
+};
+
 int main(void) {
     SpyClient client;
+    SpyRender render;
+    yau__IAudioRenderClient* rc = reinterpret_cast<yau__IAudioRenderClient*>(static_cast<IAudioRenderClient*>(&render));
+    BYTE* buf = nullptr;
     yau__IAudioClient* ac = reinterpret_cast<yau__IAudioClient*>(static_cast<IAudioClient*>(&client));
     void* clk = nullptr;
     LONGLONG lat = 0;
@@ -75,6 +91,8 @@ int main(void) {
         c->lpVtbl->Release(c);
         CHECK(g_hit == 2);
     }
+    CHECK(rc->lpVtbl->GetBuffer(rc, 480, &buf) == S_OK && g_hit == 3 && buf == render.mem);
+    CHECK(rc->lpVtbl->ReleaseBuffer(rc, 480, YAU__BUFFERFLAGS_SILENT) == S_OK && g_hit == 4);
     if (g_failures) return 1;
     printf("audio_com: every slot matches the SDK\n");
     return 0;

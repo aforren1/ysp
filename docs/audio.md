@@ -914,7 +914,10 @@ int24 instead of the device format takes 33 ms off the lead.
 every lead up to 200 ms, 14 to 37 XRUN records before the first sound and
 447 to 773 by the end. `audio_clockstats --exclusive` (no sounds) gave 0
 XRUN records at 144 and at 480. The probe saw no position past the frames
-written in any event-driven run. Not traced.
+written in any event-driven run. Traced in "Exclusive start (v0.5.1)":
+both programs reach a state of real underruns in about half of the
+opens, because miniaudio starts the stream on an empty buffer; v0.5.1
+writes one silent buffer before Start.
 
 ### Conclusion
 
@@ -942,8 +945,9 @@ Its raw lead (23.5 to 26.5 ms, with 288 frames kept) is 3.5 to 16.5 ms
 under shared mode's 30 ms (queue 1) and 40 ms (queue 2) through the
 header, before the header's own cost, and its margin is small: 192 frames
 kept underran at almost every wake. Shared mode stays the default;
-exclusive mode stays opt-in, tier 3. The open item is the XRUN records of
-`audio_schedule --exclusive`, above.
+exclusive mode stays opt-in, tier 3. The XRUN records of
+`audio_schedule --exclusive`, above, are answered in "Exclusive start
+(v0.5.1)".
 
 Run it: `sh tests/probe/wasapi_exclusive/run.sh` (the cave and raw
 presets at both periods), or the probe with one option changed.
@@ -1613,6 +1617,142 @@ mutant `cap-23`). No page has opened an input: web capture never ran
   does not hear the speakers here).
 - Any capture backend but WASAPI; any input but the SST microphone array.
 - A loss with a device that flags it (the YAU_TICK_XRUN path) on hardware.
+
+## Exclusive start (v0.5.1)
+
+The problem ("Through ysp/audio.h", above): on 2026-10-13
+`audio_schedule --exclusive` gave LATE records at every lead and hundreds
+of XRUN records in 4 of 5 runs, while `audio_clockstats --exclusive` gave
+none. Conditions: the laptop of this note, 2026-10-13, AC power, the
+speaker endpoint (Realtek behind Intel SST, 480-frame period unless a row
+says 144), MinGW gcc 16.1 -O2, miniaudio 0.11.25, each run under the
+measurement lock (load at the lock 0 to 20 %), runs of different builds
+interleaved. Every run wrote silence except `audio_schedule`'s tones at
+-40 dBFS, endpoint muted.
+
+### Two states
+
+Each exclusive open ends up in one of two states, and stays in it for the
+whole run:
+
+| | Good state | Bad state |
+|---|---|---|
+| Callbacks a second (100 needed at 480 frames) | 100 | 27 to 62 |
+| Callback interval p50 / p99 | 0.24 to 0.38 ms / 75 to 76 ms | 12 to 32 ms / 76 to 80 ms |
+| Frames written minus position, at callback entry | about 960 to 5460 | at most 955; the position runs past them |
+| `GetPosition` p50 | 4.6 to 5.2 us | 84 to 92 us |
+| XRUN records | 0 | 20 to 26 a second, from the first 0.2 s on |
+
+In the bad state the driver takes one or two blocks per group of wakes,
+plays silence while it waits for more, and counts the silence in its
+position (in exclusive mode the position counts an underrun's silence:
+"Exclusive mode", above). The records are real underruns, not false
+positives of the detector: in two `audio_schedule` runs the position
+ended 635,341 and 676,698 frames (13 and 14 s) past the frames written,
+in 22.6 s. Each record is the rule "position at or past the frames
+written"; none came from the halt or early-report rules. The position
+itself stays a clean line (drift +2 to +5 ppm), so the fit plans on the
+device's time and every onset that the starved queue cannot reach in time
+is LATE, at any lead.
+
+`audio_clockstats` and `audio_schedule` differ in nothing that matters
+here: both open the same way, and both reach both states. The earlier
+`audio_clockstats` runs were in the good state by chance.
+
+### Bisect
+
+`audio_clockstats --exclusive --seconds 15`, each version's header and
+example, interleaved in one session, three runs each:
+
+| Header | Commit | Opens in the bad state |
+|---|---|---|
+| v0.3.1 | d42cf92 | 2 of 3 |
+| v0.4.0 | 7316129 | 1 of 3 |
+| v0.4.1 | 3402098 | 2 of 3 |
+| v0.5.0 | 24178ce | 1 of 3 |
+
+Not a regression: every version tested reaches the bad state, and v0.3.1
+has the exclusive setup of v0.3.0 (one period per buffer). Over all of
+this day's runs, v0.5.0 opened in the bad state 19 times of 35 (12 to 30
+s runs of both programs, at 480 and 144 frames). The rate moves between
+sessions: 0 of 6 in one session, 5 of 8 in the next. So the v0.3.0 runs
+that gave a 125 ms lead were good opens, not a different driver.
+
+### The start decides
+
+The two states differ from the first callbacks. miniaudio starts an
+exclusive stream with an empty buffer, then renders and writes its first
+block at once, then waits on the event:
+
+- Good opens: the first `GetPosition` blocked for 40 to 47 ms and the
+  second for 15 ms; then the driver pulled 10 to 12 blocks 0.1 ms apart
+  and kept about 100 ms queued from then on.
+- Bad opens: the first two callbacks came 0.14 ms apart, with no
+  blocking; in one run the next wake came 16 ms later, and the queue
+  never filled.
+
+The raw probe (`tests/probe/wasapi_exclusive`), which writes one silent
+buffer before Start and then waits for the event, was in the good state
+in 6 of 6 runs; with `--no-prefill`, 1 of 8 runs was in the bad state
+(the cave preset). Microsoft's exclusive-mode example also loads the
+first buffer before Start.
+
+### The fix
+
+v0.5.1 writes one silent buffer (`AUDCLNT_BUFFERFLAGS_SILENT`, the whole
+buffer) through miniaudio's `IAudioRenderClient` before
+`ma_device_start()`. The device position counts those frames, so the
+backend subtracts them: stream frame 0 is the first frame the header
+renders, and a report before it is no report.
+
+The first build of this showed a second fault. Its first 10 blocks had no
+report (the prefill was still playing), and the core fed their callback
+entry times to the fit, as it does on a device without reports. A
+callback point is the output latency (about 100 ms here) before the
+frame's play time, so the first fit was off, and the reports after it
+looked late: a halt record (25.2 to 36.7 ms) at 0.62 to 0.89 s in 7 of 7
+runs, while the position stayed within 0.02 ms of its line. Now a device
+with position reports (`YAU_POS_DEVICE`) fits reports only; v0.4.1 made
+the same rule for the browser's device alone. Unpatched good opens gave
+a single halt record too, in 1 of 16 v0.5.0 runs (24.8 ms) and 1 of 4
+older ones (33.7 ms); their first reports stood 4 to 104 ms early against
+the final line while the driver started. Not traced further: with v0.5.1
+the fit's first report comes after the prefill has played, and 15 of 15
+runs gave no record.
+
+### Measurements
+
+Interleaved, patched and v0.5.0, in one session each:
+
+| Program | v0.5.1 | v0.5.0 |
+|---|---|---|
+| `audio_clockstats --exclusive --seconds 12`, 8 runs each | 8 good, 0 XRUN records | 5 bad (252 to 305 records), 3 good |
+| `audio_schedule --exclusive`, 4 runs each | 4 good, 0 XRUN records; shortest safe lead 125 ms in each; 14 residuals -12.8 to +10.0 us | 4 bad: 13 to 23 records before the first sound, 430 to 467 by the end; LATE at every lead |
+| `audio_clockstats --exclusive --period 144 --seconds 12`, 3 runs each | 3 good, 0 XRUN records | 3 bad (294 to 338 records) |
+
+The patched good state is the old good state: `GetPosition` p50 2.5 to
+5.7 us (one run 41.9 us), stream frames written minus position 3779 to
+4575 p50 (the device holds the 480-frame prefill on top). Shared mode
+with the patch: `audio_schedule` shortest safe lead 40 ms, 14 residuals
+-31.7 to +10.0 us, 0 XRUN records; `audio_clockstats` 20 s, 0 records.
+
+The lead stays 125 ms: the bursts and the 100 ms the driver holds are the
+driver's event-driven path ("Exclusive mode compared with cave-audio").
+Exclusive mode stays opt-in, tier 3, and on this laptop slower than
+shared mode.
+
+### Tests
+
+`test_report_less_start` in `tests/adapt/audio_test.c`: a scripted device
+with reports whose first 10 blocks carry none, 4000 frames from render to
+output. No XRUN record, and a sound lands on the truth's frame, tier 2,
+confirmed. With the old rule it fails (one record). Mutant `start-01`
+puts the old rule back and is killed. `tests/compile/audio_com.cpp`
+checks the two `IAudioRenderClient` slots against the SDK. The prefill
+itself runs only on hardware: to check a machine, open exclusive mode
+several times, because one open shows one state.
+`audio_clockstats --exclusive --seconds 12`, 8 times in a row, must give
+0 XRUN records in every run.
 
 ## Not measured
 
