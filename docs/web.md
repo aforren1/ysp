@@ -187,7 +187,12 @@ real device. On each device, open the site over HTTPS (GitHub Pages) and:
    fullscreen, the run stays fullscreen to the end. Switch to another app
    and back during a run: if the browser left fullscreen, the stage says
    so, and one tap brings it back without a response.
-5. Run `selftest.html` and tap the canvas a few times: the result says how
+5. During each run with touch targets (tutorial, dot motion, gallery), in
+   portrait and landscape, with the browser's toolbar shown and hidden:
+   the two labels are whole, above the screen's bottom edge, the home
+   indicator and the toolbar, with a gap about the height of a line of
+   text.
+6. Run `selftest.html` and tap the canvas a few times: the result says how
    many taps had the DOM's time.
 
 ## Reference
@@ -252,12 +257,12 @@ During a run, `ysp-web.js` and `style.css` give every page:
 
 | Item | Behavior |
 |---|---|
-| Stage | covers the viewport less `env(safe-area-inset-*)`; the canvas opens at its size (`--size`), except the gallery's fixed 1200 x 760 |
+| Stage | covers the visual viewport (`visualViewport.height`, so not the part under a phone browser's toolbar; CSS falls back to `100dvh`, then `100vh`) less `env(safe-area-inset-*)`; the canvas opens at its size (`--size`), except the gallery's fixed 1200 x 760 |
 | Rotation, fullscreen change | the drawing buffer keeps its size; the canvas's CSS box scales to fit, aspect kept; the session log counts each change (`viewport_changes`) |
 | Scroll and zoom | `touch-action: none` and `overscroll-behavior: none` on the stage and the body, `gesturestart` stopped (iOS); the viewport meta has `viewport-fit=cover` |
 | Fullscreen | asked from the Start tap when the box is checked; checked by default on a coarse pointer; iPhone Safari has no element fullscreen |
 | Fullscreen lost | when the browser leaves fullscreen or refuses it during the run, the stage says so, and the next key or tap (not Esc, not the Stop button) asks again; that key or tap does not reach the program. The session log has a line for each, and `fullscreen_lost` counts them |
-| Targets | two labels over the canvas halves with `pointer-events: none`; the Stop button in the stage's corner |
+| Targets | two labels for the canvas halves with `pointer-events: none`, as wide as the canvas: under it where the stage has room, else inside its bottom edge. Margin 5 % and text 4.5 % (12 to 24 px) of the canvas's shorter side; placed again at each viewport change. The Stop button in the stage's corner |
 | Ready | the canvas stays hidden ("Preparing...") until the program calls `web_ready()` after its prime |
 
 ### Sizes
@@ -676,6 +681,29 @@ internal panel at 60 Hz), on AC.
   responses with `rsp_kind` = `touch` in the tutorial's CSV and turned the
   gallery's pages both ways; a turn to 839 x 412 during a run scaled the
   canvas's box to 202 x 412, aspect kept, and counted one viewport change.
+- Target labels in Chrome 154's device emulation (headless, Fullscreen
+  off, safe-area insets set by `Emulation.setSafeAreaInsetsOverride`:
+  iPhone 14 Pro 59 top and 34 bottom in portrait, 59 left and right and 21
+  bottom in landscape). Distance from the bottom of the label text to the
+  visible bottom edge, in CSS px, tutorial and dot motion (the gallery in
+  landscape is the same):
+
+  | Device | Before | After |
+  |---|---|---|
+  | Pixel 7, portrait 412 x 839 | 8 (text 16 px) | 21 (text 19 px) |
+  | Pixel 7, landscape 863 x 360 | 8 | 18 (16 px) |
+  | iPhone SE, portrait 320 x 568 | 8 | 16 (14 px) |
+  | iPhone SE, landscape 568 x 320 | 8 | 16 (14 px) |
+  | iPhone 14 Pro, portrait 393 x 660 | 42: 8 above the safe area | 54: 20 above it (18 px) |
+  | iPhone 14 Pro, landscape 734 x 343 | 29: 8 above the safe area | 37: 16 above it (14 px) |
+
+  Before, the labels sat at the stage's bottom whatever the canvas did:
+  in portrait they were 150 to 280 px under the gallery's canvas, and in
+  landscape they spanned the stage, not the canvas. After, they sit 28 to
+  31 px under the gallery's canvas in portrait, as wide as it. With the viewport made 56 px shorter during a run (a
+  toolbar), the stage, the canvas and the labels followed: 13 to 52 px
+  from the new edge. Emulation has no browser toolbar, so the visual
+  viewport against `100vh` on a real phone is not measured.
 
 ### Not measured
 

@@ -186,6 +186,49 @@
     const k = Math.min(W / logical[0], H / logical[1]);
     c.style.setProperty('width', Math.floor(logical[0] * k) + 'px', 'important');
     c.style.setProperty('height', Math.floor(logical[1] * k) + 'px', 'important');
+    placeTargets();
+  }
+
+  // The target labels follow the canvas, whose halves they name: over its
+  // width, and under it where the stage has room (the gallery's canvas in
+  // portrait), else inside its bottom edge. The margin and the text scale
+  // with the canvas's shorter side, not fixed pixels: 8 px from the bottom
+  // put the text at the edge of a phone's screen. The canvas is inside the
+  // safe area, so the labels are too.
+  const TARGET_MARGIN = 0.05;   // of the canvas's shorter side
+  const TARGET_FONT = 0.045;    // the same, clamped to 12..24 px
+  function placeTargets() {
+    const s = $('stage'), c = $('canvas'), t = s && s.querySelector('.targets');
+    if (!t || !c) return;
+    const sr = s.getBoundingClientRect(), cr = c.getBoundingClientRect();
+    if (cr.width < 1) return;
+    const unit = Math.min(cr.width, cr.height);
+    const margin = Math.max(6, Math.round(unit * TARGET_MARGIN));
+    const font = Math.min(24, Math.max(12, Math.round(unit * TARGET_FONT)));
+    const line = Math.ceil(font * 1.5);
+    const below = sr.bottom - parseFloat(getComputedStyle(s).paddingBottom) - cr.bottom;
+    t.style.left = (cr.left - sr.left) + 'px';
+    t.style.width = cr.width + 'px';
+    t.style.right = 'auto';
+    t.style.fontSize = font + 'px';
+    t.style.lineHeight = line + 'px';
+    t.style.top = 'auto';
+    t.style.bottom = (sr.bottom - cr.bottom + (below >= line + 2 * margin ? -(line + margin) : margin)) + 'px';
+  }
+
+  // The stage covers what the participant sees: the visual viewport, which
+  // a phone's browser shrinks while it shows its toolbars (100vh does not;
+  // 100dvh is the CSS fallback in style.css).
+  function stageVars() {
+    const vv = window.visualViewport, s = $('stage');
+    if (!vv || !s) return;
+    s.style.setProperty('--stage-h', vv.height + 'px');
+    s.style.setProperty('--stage-top', vv.offsetTop + 'px');
+  }
+  function stageViewport() { stageVars(); fit(); }
+  if (window.visualViewport) {
+    visualViewport.addEventListener('resize', stageViewport);
+    visualViewport.addEventListener('scroll', stageViewport);
   }
   function onViewport() {
     const v = window.innerWidth + 'x' + window.innerHeight;
@@ -281,6 +324,7 @@
     document.body.classList.add('running', 'preparing');
     if ($('intro')) $('intro').classList.add('hidden');
     $('stage').classList.add('running');
+    stageVars();
     if ($('stop')) $('stop').disabled = false;
     if (!page.fixedSize) {
       const [w, h] = stageBox();
