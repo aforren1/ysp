@@ -801,6 +801,153 @@ and the gate's threshold (`YAU__QUEUE_PAD`); the gate's wait and the
 exclusive buffer run only on hardware. Mutations: 7 more in
 `tests/mutate/audio.toml` (11 in all), 11 killed.
 
+## Exclusive mode compared with cave-audio
+
+The question: the user's cave-audio project (github.com/aforren1/cave-audio,
+GPL-3.0) has a WASAPI exclusive sink, `src/sink/wasapi_sink.cpp`. Does
+its setup avoid the bursts of "Exclusive mode" above on this laptop?
+Conditions: the laptop above, 2026-10-13, AC power, the speaker endpoint
+(Realtek(R) Audio behind Intel SST, muted at volume 0), MinGW gcc 16.1
+-O2, the measurement lock held for each 30 s run, load at the lock 0 to
+20 %. Every run except the `--tone` runs wrote silence.
+
+### The setups
+
+`tests/probe/wasapi_exclusive/wasapi_exclusive_probe.c` makes each choice
+a switch. `--preset cave` is cave-audio's sink, `--preset raw` is the raw
+loop of v0.3.0. No code is taken from cave-audio; the choices come from
+reading it.
+
+| Choice | cave-audio | ysp/audio.h (miniaudio 0.11.25) | Raw loop (v0.3.0) |
+|---|---|---|---|
+| Interface | `IAudioClient::Initialize` | the same | the same |
+| Driving | the event (`AUDCLNT_STREAMFLAGS_EVENTCALLBACK`) | the event | the event |
+| Period and buffer | the minimum of `GetDevicePeriod` (3 ms, 144 frames) for both | `desc.period` for both (one period per buffer since v0.3.0) | the period asked for, for both |
+| `AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED` | `GetBufferSize`, a new client, a second `Initialize` | the same | not handled |
+| Format | the first of float32, int32 (32 valid), int24 (packed), int16 that `IsFormatSupported(EXCLUSIVE)` takes: int24 here | `PKEY_AudioEngine_DeviceFormat`: int32 with 24 valid bits | the device format |
+| Prefill | one buffer, `AUDCLNT_BUFFERFLAGS_SILENT` | miniaudio's | one buffer, silent flag |
+| Thread | created before `Start`, COM (MTA) on it | miniaudio's | created after `Start`, no COM call |
+| MMCSS | "Pro Audio", no priority call | "Pro Audio" | "Pro Audio" |
+| At each event | `GetBuffer` of the whole buffer, `GetPosition`, the render, `ReleaseBuffer` with flags 0 | the whole buffer in callbacks of one period | the whole buffer with the silent flag, then `GetPosition` |
+| Timer resolution | not changed | not changed | `timeBeginPeriod(1)` |
+| Latency it reports | `GetStreamLatency` plus the buffer plus one block (352 frames at a 64-frame block) | the fit of the positions | none |
+
+cave-audio's docs give 352, 416 and 544 frames of exclusive latency on a
+Realtek endpoint at blocks of 64, 128 and 256 frames. Those are the
+formula above, not a measurement. Its tests do not record callback
+intervals or the queue behind the position. Its docs also say that the
+format walk stopped at int24 and that the driver gave 144 frames at every
+request: the same as here.
+
+### Event-driven
+
+"Lead needed" is the time from one wake to the play time of the first
+frame the next wake writes, from a line fitted to the `GetPosition`
+pairs: the shortest safe lead of a client that takes no time. "Back to
+back" is a wake less than a quarter period after the one before it.
+
+| Run | Format | Buffer | Interval p50 / p99 / max ms | Back to back | Written minus position min / p50 / max frames | Lead needed p50 / max ms |
+|---|---|---|---|---|---|---|
+| cave, 144 (1) | int24 | 144 | 0.13 / 74.6 / 76.9 | 8717 of 9666 | 1566 / 4094 / 5133 | 85.3 / 107.0 |
+| cave, 144 (2) | int24 | 144 | 0.22 / 74.6 / 77.1 | 8647 of 9660 | 1511 / 4117 / 5085 | 85.8 / 106.0 |
+| cave, 480 | int24 | 480 | 0.21 / 75.3 / 83.3 | 2099 of 2902 | 1853 / 4452 / 5420 | 92.8 / 113.0 |
+| raw, 144 | int32 (24) | 144 | 0.52 / 36.8 / 77.1 | 5202 of 9663 | 1508 / 4932 / 5085 | 102.9 / 106.0 |
+| raw, 480 | int32 (24) | 480 | 7.01 / 75.1 / 80.0 | 1257 of 2895 | 1177 / 4449 / 4744 | 92.8 / 98.9 |
+| `audio_clockstats --exclusive --period 144` | int32 (24) | 144 | 0.16 / 74.8 / 86.2 | | 286 / 3993 / 5132 | |
+| `audio_clockstats --exclusive` | int32 (24) | 480 | 0.35 / 75.1 / 89.2 | | 958 / 4686 / 5419 | |
+
+The wakes come in groups of up to 27 (81 ms of audio at 144 frames), with
+gaps of up to 77 ms between them. Then one setting of the cave preset at
+a time, at 144 frames:
+
+| Change from the cave preset | Lead needed max ms | Written minus position max frames |
+|---|---|---|
+| none (two runs) | 107.0, 106.0 | 5133, 5085 |
+| the device format (int32, 24 valid) | 105.9 | 5085 |
+| `AUDCLNT_BUFFERFLAGS_SILENT` in place of zeros | 106.0 | 5085 |
+| `GetPosition` after `ReleaseBuffer` | 105.9 | 5084 |
+| `Start` before the thread | 106.0 | 5086 |
+| no MMCSS | 106.0 | 5085 |
+| no prefill | 109.9 | 5276 |
+| `timeBeginPeriod(1)` | 106.0 | 5086 |
+| no COM call on the thread | 106.0 | 5086 |
+| `AUDCLNT_STREAMOPTIONS_RAW` (`IAudioClient2`) | 106.0 | 5085 |
+| 8 threads spinning | 106.0 | 5085 |
+| a -40 dBFS tone; the tone gated 100 ms on and off | 106.0; 106.0 | 5084; 5085 |
+
+No client setting changes the bursts or the queue. The position itself
+is a clean clock in every run: the line through the `GetPosition` pairs
+runs at 48000.22 frames/s (+5 ppm), with a residual of 6 us p50 and 19
+us p99 (54 us max in one run, 191 us in another), and the stamp is 15 to
+390 us after the wake (p1 to p99). The driver holds what the client
+writes; it reports where it is correctly.
+
+### Timer-driven
+
+Exclusive mode without the event (`--poll`): `Initialize` with no flags,
+a buffer duration and the 3 ms period; the thread calls `Sleep(1)` with
+`timeBeginPeriod(1)` (wakes at 2.0 ms p50, 2.7 ms p99, 5.5 ms max) and
+keeps a number of frames in the buffer. Neither cave-audio nor miniaudio
+has this mode.
+
+| Run | Format | Buffer granted | Kept frames | Written minus position min / p50 / max frames | Lead needed max ms |
+|---|---|---|---|---|---|
+| cave (four runs: buffer 288 or 960 asked, 8 threads spinning, gated tone) | int24 | 2048 | 288 | 1034 to 1103 / 1127 to 1191 / 1213 to 1263 | 25.5, 26.5, 26.4, 26.5 |
+| cave, the silent flag | int24 | 2048 | 288 | 997 / 1095 / 1166 | 24.4 |
+| raw, the format walk | int24 | 2048 | 288 | 954 / 1040 / 1118 | 23.5 |
+| raw (two runs) | int32 (24) | 512 | 288 | 2604 / 2693 / 2783; 2657 / 2743 / 2826 | 58.1, 59.1 |
+| cave, the device format | int32 (24) | 512 | 288 | 2606 / 2690 / 2783 | 58.1 |
+| cave | int24 | 2048 | 480 | 1954 / 2059 / 2126 | 44.6 |
+| cave | int24 | 2048 | 192 | the position passed the frames written at 14056 of 14557 wakes | |
+| cave, no `timeBeginPeriod` (15.6 ms wakes) | int24 | 2048 | 288 | the position passed the frames written at every wake | |
+
+With no event the stream runs smoothly: no groups, and the driver holds
+about 18 ms past the kept frames at int24 and about 50 ms at int32 with 24
+valid bits. So here, and only here, cave-audio's format choice matters:
+int24 instead of the device format takes 33 ms off the lead.
+
+### Through ysp/audio.h
+
+`audio_schedule --exclusive`, the same day: at 480 frames, one run gave
+125 ms as the shortest safe lead (the v0.3.0 value; 14 residuals -4.8 to
++837.6 us). Two more runs at 480 and two at 144 gave LATE records at
+every lead up to 200 ms, 14 to 37 XRUN records before the first sound and
+447 to 773 by the end. `audio_clockstats --exclusive` (no sounds) gave 0
+XRUN records at 144 and at 480. The probe saw no position past the frames
+written in any event-driven run. Not traced.
+
+### Conclusion
+
+cave-audio's setup is not better on this laptop: in event-driven
+exclusive mode it gives the same groups of wakes, the same 1500 to 5100
+frames behind the position and the same 106 ms lead as the raw loop and
+the header. Each of its differences from the raw loop, one at a time,
+changed nothing. cave-audio did not see it because it reports a latency
+from a formula and does not measure the position against the frames
+written. On this endpoint that formula (7.3 ms at a 64-frame block) is
+low by at least 24 to 100 ms (the frames behind the position alone), and
+the error changes from wake to wake, so no constant corrects it.
+
+The cause is the driver's event-driven exclusive path, not exclusive
+mode as such: without the event the same driver runs smoothly. The
+earlier "Exclusive mode" note gave 583 frames (12 ms) for this mode in a
+10 s run; these 30 s runs give 1130 frames at int24 and 2690 at the
+device format.
+
+No change to `ysp/audio.h` or its miniaudio config. miniaudio's exclusive
+mode is event-driven only and opens at the device format, so no config
+reaches the timer-driven int24 path. That path would need WASAPI code in
+the header: a 1 ms timer, `timeBeginPeriod(1)`, and its own format walk.
+Its raw lead (23.5 to 26.5 ms, with 288 frames kept) is 3.5 to 16.5 ms
+under shared mode's 30 ms (queue 1) and 40 ms (queue 2) through the
+header, before the header's own cost, and its margin is small: 192 frames
+kept underran at almost every wake. Shared mode stays the default;
+exclusive mode stays opt-in, tier 3. The open item is the XRUN records of
+`audio_schedule --exclusive`, above.
+
+Run it: `sh tests/probe/wasapi_exclusive/run.sh` (the cave and raw
+presets at both periods), or the probe with one option changed.
+
 ## Halts (v0.3.1)
 
 The problem (Queue depth, above): a stall of a period or two halts the
