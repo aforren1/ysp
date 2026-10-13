@@ -554,7 +554,10 @@
  *       ScriptProcessorNode  any other build. The callback runs on the
  *                     page's main thread, desc.period frames rounded up to
  *                     a power of 2 (256 to 16384); a stalled main thread
- *                     stalls the sound
+ *                     stalls the sound, and after a stall of seconds the
+ *                     blocks' playbackTime no longer told where they
+ *                     played (Chrome 154, Firefox 157): open the sound
+ *                     again after a long setup (examples/web/av_sync.c)
  *     Both need -sASYNCIFY or -sJSPI: on the main thread open() and
  *     yau_wait() sleep through emscripten_sleep(), so the page runs the
  *     callbacks and the timer below. The AudioContext runs at the project
@@ -572,7 +575,14 @@
  *     AudioWorklet's currentFrame, exact, or the ScriptProcessorNode
  *     block's playbackTime, which Chrome 154 gives as currentTime plus the
  *     buffer: late by up to the audio device's chunk (10 ms there). A
- *     block that moves it (a skipped block) is an XRUN. performance.now()
+ *     block that moves it (a skipped block) is an XRUN. A pair more than
+ *     0.5 ms later, against its contextTime, than the least late of the
+ *     last 32 is passed over: Firefox 157's pairs spread -3.3 to +3.1 ms
+ *     (p1 to p99), its contextTime stepping with its 512-frame callback
+ *     while performanceTime follows the read. Firefox 157 also gives
+ *     performanceTime outputLatency before the read; where a pair is that
+ *     old, outputLatency goes back on, so the frame its own claim puts at
+ *     the output is stamped at the read. performance.now()
  *     maps to the ysp_rt clock by a correlation at open, on the main
  *     thread. An AudioWorklet's scope has no performance.now() (Chrome 154;
  *     yrt_now_ns() reads 0 there): its tick.t_entry is Date.now() less its
@@ -679,7 +689,9 @@
  *   v0.4.1 - YAU_BACKEND_WEB (BACKENDS, WEB): position reports from the
  *          AudioContext's getOutputTimestamp() on miniaudio's AudioWorklet
  *          and ScriptProcessorNode paths, the context at the project's
- *          rate and channels, YAU_TIER_WEB (5) for every web onset, no fit
+ *          rate and channels, the lower envelope of the pairs and
+ *          Firefox's outputLatency put back on its performanceTime,
+ *          YAU_TIER_WEB (5) for every web onset, no fit
  *          point from a web block without a report, main-thread waits that
  *          yield (emscripten_sleep). The describe line's backend part may be
  *          160 bytes (was 32). Nothing changes on the other backends.
@@ -749,11 +761,12 @@
  *   STATUS: v0.4.1, 2026-10-13 (WEB; docs/web.md, "Audio"): emsdk 6.0.12,
  *   Chrome 154 headed on the laptop below, examples/web/av_sync.c, 3 runs
  *   of 20 flash-and-click trials a path: sound minus light (both the
- *   browser's estimates) -0.18 to +0.26 ms on the AudioWorklet path and
- *   -0.58 to +0.11 ms on the ScriptProcessorNode path at 2048 frames; the
- *   fit of the reports 36 to 73 us RMS; the browser's render-to-onset
- *   figure 53 to 55 and 123 to 130 ms. Sound at the speaker not measured.
- *   test_web_tier passes (MSVC 19.44); web-01 and web-02 killed.
+ *   browser's estimates) -0.26 to +0.25 ms on the AudioWorklet path and
+ *   -0.25 to +0.28 ms on the ScriptProcessorNode path at 2048 frames; the
+ *   fit of the reports 32 to 323 us RMS; the browser's render-to-onset
+ *   figure 52 to 55 and 111 to 127 ms. Firefox 157, one AudioWorklet run:
+ *   -1.27 to +0.03 ms. Sound at the speaker not measured. test_web_tier
+ *   passes (MSVC 19.44, MinGW-w64 gcc); web-01 and web-02 killed.
  *   v0.4.0, 2026-10-10: tests/adapt/audio_test.c passes on the
  *   scripted device with new checks of close and the messages (MinGW-w64
  *   gcc 16.1, MSVC 19.44); the USAGE blocks compile as C99 (C, { 0 });
@@ -2860,7 +2873,10 @@ typedef struct yau__ma {
     int64_t    web_c0;      /* the context frame of stream frame 0; -1 = none */
     int64_t    web_ctx;     /* the newest report's context frame            */
     int64_t    web_est[8];  /* ScriptProcessorNode: the last estimates of web_c0 */
-    int32_t    web_n_est;
+    int32_t    web_n_est, web_n_off;
+    double     web_off_ms[32];  /* the last pairs' performanceTime less contextTime */
+    double     web_seen;    /* the newest pair read, used or not             */
+    uint32_t   web_passed;  /* pairs passed over (above the lower envelope)  */
     double     web_last;    /* the newest report's performanceTime; 0 = none */
     double     web_date_off;/* Date.now() minus performance.now(), ms       */
     uint32_t   web_moves;   /* times web_c0 moved: blocks the context skipped */
@@ -2906,16 +2922,25 @@ EM_JS(int, yau__web_attach, (int idx, void* pub), {
     if (!d || !d.webaudio) return -1;
     var ctx = d.webaudio, ok = typeof ctx.getOutputTimestamp === 'function', p = pub;
     function publish() {
-        var o, s;
+        var o, s, pt, lat, now = performance.now();
         if (!ok || ctx.state !== 'running') return;
         o = ctx.getOutputTimestamp();
+        pt = o.performanceTime;
+        lat = typeof ctx.outputLatency === 'number' ? ctx.outputLatency * 1e3 : 0;
+        /* Firefox 157 gives contextTime as currentTime less outputLatency,
+         * the frame it says is at the output now, but performanceTime as
+         * now less outputLatency again (both measured to 0.5 ms); Chrome
+         * 154 gives performanceTime 2 ms before the read. Where the pair
+         * is outputLatency old, its own claim puts the frame at the
+         * output at the read, so outputLatency goes back on. */
+        if (lat > 5 && Math.abs(now - pt - lat) < 3) { pt += lat; d.yauShift = (d.yauShift || 0) + 1; }
         /* none yet, or one the browser has not renewed for 100 ms (seen
          * once, 1 s old, right after the context started) */
-        if (!(o.contextTime > 0) || !(o.performanceTime > 0) || performance.now() - o.performanceTime > 100) return;
+        if (!(o.contextTime > 0) || !(pt > 0) || now - pt > 100) return;
         s = Atomics.load(HEAP32, p >> 2);
         Atomics.store(HEAP32, p >> 2, (s + 1) | 0);
         HEAPF64[(p + 8) >> 3] = o.contextTime;
-        HEAPF64[(p + 16) >> 3] = o.performanceTime;
+        HEAPF64[(p + 16) >> 3] = pt;
         HEAPF64[(p + 24) >> 3] = typeof ctx.baseLatency === 'number' ? ctx.baseLatency : -1;
         HEAPF64[(p + 32) >> 3] = typeof ctx.outputLatency === 'number' ? ctx.outputLatency : -1;
         Atomics.store(HEAP32, p >> 2, (s + 2) | 0);
@@ -2981,9 +3006,24 @@ static void yau__web_tick(yau__ma* m, ma_uint32 n, yau_tick* tk) {
         perf = *(volatile double*)&m->pub.perf_ms;
         __atomic_thread_fence(__ATOMIC_ACQUIRE);
         s1 = yau__ld32(&m->pub.seq);
-        if (s0 == s1 && perf > m->web_last) {
-            m->web_last = perf;
-            m->web_ctx = (int64_t)floor(ctx_s * (double)m->dev.playback.internalSampleRate + 0.5);
+        if (s0 == s1 && perf > m->web_last && perf != m->web_seen) {
+            /* the lower envelope: a pair whose time is more than 0.5 ms
+             * later, against its context time, than the least late of the
+             * last 32 is passed over. Firefox 157 gives performanceTime
+             * from the read but contextTime from its last callback, 512
+             * frames apart: its pairs spread -3.3 to +3.1 ms (p1 to p99)
+             * about their line, Chrome 154's -0.15 to +0.14 ms. */
+            double off = perf - ctx_s * 1e3, lo = off;
+            int i;
+            m->web_seen = perf;
+            m->web_off_ms[m->web_n_off++ & 31] = off;
+            for (i = 0; i < 32 && i < m->web_n_off; i++) if (m->web_off_ms[i] < lo) lo = m->web_off_ms[i];
+            if (off <= lo + 0.5) {
+                m->web_last = perf;
+                m->web_ctx = (int64_t)floor(ctx_s * (double)m->dev.playback.internalSampleRate + 0.5);
+            } else {
+                m->web_passed++;
+            }
         }
     }
     if (blk >= 0) {
@@ -3302,10 +3342,11 @@ static int yau__ma_describe(void* ctx, char* buf, size_t cap) {
 #if defined(MA_HAS_WEBAUDIO)
     if (m->backend == ma_backend_webaudio) {
         double base = m->pub.base_s, lat = m->pub.out_s;
-        return snprintf(buf, cap, "%s path=%s reports=%s base_latency=%.1fms output_latency=%.1fms block_moves=%u",
+        return snprintf(buf, cap, "%s path=%s reports=%s(%d,%u passed) base_latency=%.1fms output_latency=%.1fms "
+                        "block_moves=%u",
                         ma_get_backend_name(m->backend), m->web_worklet ? "audioworklet" : "scriptprocessor",
-                        m->web_reports ? "getOutputTimestamp" : "none", base >= 0 ? base * 1e3 : -1.0,
-                        lat >= 0 ? lat * 1e3 : -1.0, (unsigned)m->web_moves);
+                        m->web_reports ? "getOutputTimestamp" : "none", (int)m->web_n_off, (unsigned)m->web_passed,
+                        base >= 0 ? base * 1e3 : -1.0, lat >= 0 ? lat * 1e3 : -1.0, (unsigned)m->web_moves);
     }
 #endif
     return snprintf(buf, cap, "%s", ma_get_backend_name(m->backend));
