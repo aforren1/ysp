@@ -1,4 +1,4 @@
-/* ysp/screen.h - v0.7.0 - public domain single-header display library
+/* ysp/screen.h - v0.7.1 - public domain single-header display library
  *
  *   The window, the GL ES 3.0 context, the display mode and the swap path
  *   of a stimulus display, with flip at a time: each frame learns the
@@ -541,9 +541,24 @@
  *     shown again (hidden= in the describe line); the frame in flight
  *     completes OCCLUDED, with no time; each change writes a
  *     YSCR_EV_VISIBILITY ring record at the next begin().
- *     Input: SDL's Emscripten events, stamped when the page's handler ran
- *     (SDL_GetTicksNS), not with the DOM event's own time, so a key pressed
- *     while a frame is drawn is stamped when that task ends.
+ *     Input: SDL's Emscripten events. SDL stamps an event when the page's
+ *     handler ran (SDL_GetTicksNS), so a key pressed while a frame is drawn
+ *     is stamped when that task ends. From v0.7.1 yscr_event_input() gives
+ *     a key, mouse button, touch (finger) or pen press or release the DOM
+ *     event's own time (Event.timeStamp, on the performance.now() clock;
+ *     for input, when the OS gave it to the browser) where it finds it: a
+ *     capture listener on the window keeps the newest 64 keydown, keyup
+ *     and pointer events with the time their listener ran, which is in the
+ *     same task as SDL's handler and just before it, and an SDL event takes
+ *     the newest of its class (and pointer id, for a finger) whose listener
+ *     ran at most 1 ms after SDL's stamp and 50 ms before it. Where none
+ *     matches, SDL's stamp stays; dom_stamps=found/tried in the describe
+ *     line counts them. yscr_poll()'s time and SDL's own events keep SDL's
+ *     stamp. Touch comes as SDL's finger events from pointer events on the
+ *     canvas (SDL 3.4.2 sets its touch-action to none): x and y 0..1 of
+ *     the canvas's CSS box, finger id the pointerId + 1; SDL's mouse events
+ *     made from touch are dropped by ysp/input.h as before. Not measured
+ *     against a physical key or touch (docs/web.md).
  *     Not for a browser: triggers (they need -pthread and an isolated
  *     page; not tested), codes (drawn through GL, always at risk:
  *     CODE_RISK_COMPOSED), the gamma ramp, raw mice and the panic watchdog
@@ -1300,6 +1315,11 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.7.1 - BACKENDS, WEB: yscr_event_input() stamps a key, mouse
+ *          button, touch or pen press or release with the DOM event's own
+ *          time where it finds it (Input, in BACKENDS, WEB); the describe
+ *          line adds dpr= and dom_stamps=found/tried. Nothing changes on
+ *          the other backends.
  *   v0.7.0 - YSCR_BACKEND_WEB (BACKENDS, WEB; docs/web.md): under
  *          Emscripten, SDL3's canvas and the header's WebGL2 context,
  *          frames paced by requestAnimationFrame through an awaited
@@ -1729,8 +1749,8 @@
 
 #define YSCR_VERSION_MAJOR 0
 #define YSCR_VERSION_MINOR 7
-#define YSCR_VERSION_PATCH 0
-#define YSCR_VERSION_STRING "0.7.0"
+#define YSCR_VERSION_PATCH 1
+#define YSCR_VERSION_STRING "0.7.1"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -4043,6 +4063,7 @@ typedef struct yscr__web {
     int64_t     hidden_ns;
     int64_t     pend_t;           /* when the pending present was made      */
     uint32_t    callbacks, hidden_waits, skipped, late;
+    uint32_t    dom_found, dom_tried; /* input stamped with the DOM's time   */
     int64_t     iv[YSCR__WEB_N];
     yscr_vblank done;
     char        canvas[64];
@@ -4125,7 +4146,8 @@ EM_JS(int, yscr__web_gl_create, (const char* sel, int desync), {
 
 /* 0 crossOriginIsolated, 1 visible now, 2 Module.yscrDesynchronized,
  * 3 visibility changes so far (the listener counts from the first open),
- * 4 and 5 the viewport's width and height in CSS pixels. */
+ * 4 and 5 the viewport's width and height in CSS pixels, 6 the
+ * devicePixelRatio times 100. */
 EM_JS(int, yscr__web_query, (int what), {
     if (!Module['yscrVis']) {
         Module['yscrVis'] = { changes: 0, log: [] };
@@ -4140,7 +4162,52 @@ EM_JS(int, yscr__web_query, (int what), {
     if (what === 2) return Module['yscrDesynchronized'] ? 1 : 0;
     if (what === 4) return window.innerWidth;
     if (what === 5) return window.innerHeight;
+    if (what === 6) return Math.round((window.devicePixelRatio || 1) * 100);
     return Module['yscrVis'].changes;
+})
+
+/* The DOM's own times of the input events SDL turns into events (INPUT,
+ * BACKENDS WEB). SDL's Emscripten port stamps an event when its handler
+ * runs; Event.timeStamp is when the browser made the event, on the
+ * performance.now() clock, and for input it is the time the OS gave the
+ * browser. These capture listeners on the window run in the same task as
+ * SDL's handler, before it, so the record whose run time is just before an
+ * SDL event's stamp is that event's. A record: class (1 key down, 2 key
+ * up, 3 pointer down, 4 pointer up or cancel), the pointer id or -1, the
+ * DOM's time, the time the listener ran. The newest 64 are kept. */
+EM_JS(void, yscr__web_in_init, (void), {
+    if (Module['yscrIn']) return;
+    var r = Module['yscrIn'] = { log: [], head: 0 };
+    function add(cls, id, e) {
+        var x = [cls, id, e.timeStamp, performance.now()];
+        if (r.log.length < 64) r.log.push(x); else { r.log[r.head] = x; r.head = (r.head + 1) & 63; }
+    }
+    window.addEventListener('keydown', function(e) { add(1, -1, e); }, true);
+    window.addEventListener('keyup', function(e) { add(2, -1, e); }, true);
+    window.addEventListener('pointerdown', function(e) { add(3, e.pointerId, e); }, true);
+    window.addEventListener('pointerup', function(e) { add(4, e.pointerId, e); }, true);
+    window.addEventListener('pointercancel', function(e) { add(4, e.pointerId, e); }, true);
+    /* a second mouse button while one is held comes as a move */
+    window.addEventListener('pointermove', function(e) {
+        var bit = [1, 4, 2, 8, 16][e.button];
+        if (e.button >= 0 && bit) add((e.buttons & bit) ? 3 : 4, e.pointerId, e);
+    }, true);
+})
+
+/* The DOM time (ms) of the newest record of class cls (and pointer id, when
+ * id >= 0) whose listener ran at most 1 ms after t_ms and at most 50 ms
+ * before it, or -1. A time that is not a performance.now() time (more than
+ * 1 s before the listener ran, or after it) is not used. */
+EM_JS(double, yscr__web_in_find, (int cls, int id, double t_ms), {
+    var r = Module['yscrIn'], best = null, i, x;
+    if (!r) return -1;
+    for (i = 0; i < r.log.length; i++) {
+        x = r.log[i];
+        if (x[0] !== cls || (id >= 0 && x[1] !== id) || x[3] > t_ms + 1 || t_ms - x[3] > 50) continue;
+        if (!best || x[3] > best[3]) best = x;
+    }
+    if (!best || !(best[2] <= best[3] + 0.001) || best[3] - best[2] > 1000) return -1;
+    return best[2];
 })
 
 /* The oldest visibility change not taken yet: its DOM time (ms) in *t and
@@ -4156,6 +4223,30 @@ EM_JS(int, yscr__web_vis_take, (double* t), {
 static uint64_t yscr__web_perf_ns(void) { return (uint64_t)(yscr__web_perf_ms() * 1e6); }
 
 static int64_t yscr__web_to_rt(const yscr__web* w, double ms) { return (int64_t)llround(ms * 1e6) + w->off_ns; }
+
+/* A press or release from SDL gets the DOM event's own time in place of
+ * SDL's handler time, when its record is found (yscr__web_in_find). */
+static void yscr__web_dom_stamp(yscr__web* w, const SDL_Event* ev, yin_event* out) {
+    int cls, id = -1;
+    double ms;
+    switch (ev->type) {
+    case SDL_EVENT_KEY_DOWN:            cls = 1; break;
+    case SDL_EVENT_KEY_UP:              cls = 2; break;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_PEN_DOWN:            cls = 3; break;
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+    case SDL_EVENT_PEN_UP:              cls = 4; break;
+    case SDL_EVENT_FINGER_DOWN:         cls = 3; id = (int)ev->tfinger.fingerID - 1; break;   /* SDL: pointerId + 1 */
+    case SDL_EVENT_FINGER_UP:
+    case SDL_EVENT_FINGER_CANCELED:     cls = 4; id = (int)ev->tfinger.fingerID - 1; break;
+    default: return;
+    }
+    w->dom_tried++;
+    ms = yscr__web_in_find(cls, id, (double)(out->t - w->off_ns) * 1e-6);
+    if (ms < 0) return;
+    out->t = yscr__web_to_rt(w, ms);
+    w->dom_found++;
+}
 
 /* Waits for the next frame callback. While the page is hidden none come:
  * the pending present completes with no time (OCCLUDED), and the wait goes
@@ -4213,6 +4304,7 @@ static int yscr__web_open(void* ctx, const yscr_presenter_open* in, yscr_caps* c
     yscr__copy(w->canvas, sizeof w->canvas, sel);
     w->coi = yscr__web_query(0);
     w->desync = yscr__web_query(2);
+    yscr__web_in_init();
     w->ctx = yscr__web_gl_create(w->canvas, w->desync);
     if (w->ctx <= 0) {
         yscr__set_error(err, err_cap, "ysp_screen: web: no WebGL2 context on %s (the browser or its GPU has no WebGL2)", w->canvas);
@@ -4328,11 +4420,13 @@ static int yscr__web_describe(void* ctx, char* buf, size_t cap) {
     yrt_clock_info ci;
     yrt_get_clock_info(&ci);
     return snprintf(buf, cap, "raf_period=%.4fms raf_settle=%s%.2fs(%d callbacks,sd=%.0fus) coi=%d clock_step=%lldns "
-                    "corr=%lldns desync=%d skipped=%u late=%u hidden=%u(%.1fs) vis_changes=%d canvas=%s",
+                    "corr=%lldns desync=%d skipped=%u late=%u hidden=%u(%.1fs) vis_changes=%d canvas=%s dpr=%.2f "
+                    "dom_stamps=%u/%u",
                     (double)w->period * 1e-6, w->settled ? "" : "UNSTEADY,", (double)w->settle_ns * 1e-9,
                     (int)w->settle_frames, (double)w->sd_ns * 1e-3, w->coi, (long long)ci.resolution_ns,
                     (long long)w->corr_ns, w->desync, (unsigned)w->skipped, (unsigned)w->late, (unsigned)w->hidden_waits,
-                    (double)w->hidden_ns * 1e-9, yscr__web_query(3), w->canvas);
+                    (double)w->hidden_ns * 1e-9, yscr__web_query(3), w->canvas, (double)yscr__web_query(6) * 0.01,
+                    (unsigned)w->dom_found, (unsigned)w->dom_tried);
 }
 
 static const yscr_presenter yscr__web_presenter = {
@@ -9696,7 +9790,12 @@ YSCR_API bool yscr_event_input(yscr_screen* s, const union SDL_Event* ev, yin_ev
         yin_sdl_ctx ctx;
         ctx.raw_keyboard = s ? yscr__raw_keyboard(s) : true;
         ctx.keep_synthetic = false;
-        return yin_from_sdl(ev, yscr_restamp(s, ev->common.timestamp), &ctx, out) != 0 && yscr__key_keep(s, out);
+        if (!yin_from_sdl(ev, yscr_restamp(s, ev->common.timestamp), &ctx, out)) return false;
+#if defined(YSCR__WEB)
+        if (s && s->open && s->backend == YSCR_BACKEND_WEB)
+            yscr__web_dom_stamp((yscr__web*)(void*)s->backend_mem, ev, out);
+#endif
+        return yscr__key_keep(s, out);
     }
 #else
     (void)s;
