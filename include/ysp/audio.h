@@ -1,4 +1,3 @@
-
 /* ysp/audio.h - v0.6.0 - public domain single-header audio library
  *
  *   Sound at a time on the ysp/rt.h clock. A buffer is played with

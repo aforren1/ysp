@@ -1,4 +1,3 @@
-
 /* ysp/screen.h - v0.8.0 - public domain single-header display library
  *
  *   The window, the GL ES 3.0 context, the display mode and the swap path
