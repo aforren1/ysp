@@ -229,3 +229,21 @@ replace = '''
                 st->in_arena_ = 0;
                 st->au_ = NULL;
                 return;'''
+
+# v0.4.1: the Web Audio path's two rules in the core (BACKENDS, WEB).
+
+[[mutant]]
+id = "web-01"
+name = "an unconfirmed web onset is tier 3"
+test = "audio"
+why = "A browser's onset is its estimate, confirmed or not: tier 3 would rank it above a simulated display's, as a rig's unconfirmed onset."
+find = '''    int tier = au->dcaps.tier == YAU_TIER_SIM || au->dcaps.tier == YAU_TIER_WEB ? au->dcaps.tier'''
+replace = '''    int tier = au->dcaps.tier == YAU_TIER_SIM ? au->dcaps.tier'''
+
+[[mutant]]
+id = "web-02"
+name = "a web block without a report feeds its entry time"
+test = "audio"
+why = "A browser reports every 10 ms, and an AudioWorklet's entry time has no clock; such points in a fit of reports move every plan off its frame."
+find = '''    } else if (au->dcaps.tier != YAU_TIER_WEB || au->dcaps.pos_source != YAU_POS_DEVICE) {'''
+replace = '''    } else {'''

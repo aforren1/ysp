@@ -1,4 +1,4 @@
-/* ysp/audio.h - v0.4.0 - public domain single-header audio library
+/* ysp/audio.h - v0.4.1 - public domain single-header audio library
  *
  *   Sound at a time on the ysp/rt.h clock. A buffer is played with
  *   yau_play_at(buf, t); the header plans its first sample on the device
@@ -540,10 +540,50 @@
  *     and no automatic rerouting: a default-device change makes the device
  *     LOST. Exclusive mode: one buffer of one period, event-driven.
  *     Positions: IAudioClock, called in each callback.
- *   YAU_BACKEND_COREAUDIO, _ALSA, _PULSE, _WEB
+ *   YAU_BACKEND_COREAUDIO, _ALSA, _PULSE
  *     Compiled through miniaudio. v0.1 reads no position on them, so every
  *     onset is unconfirmed (tier 3) and the fit uses callback times. They have
  *     not run here (STATUS).
+ *   YAU_BACKEND_WEB (Emscripten; AUTO there; v0.4.1; docs/web.md)
+ *     miniaudio's Web Audio backend, on one of its two paths:
+ *       AudioWorklet  build with -DMA_ENABLE_AUDIO_WORKLETS -pthread
+ *                     -sAUDIO_WORKLET=1 -sWASM_WORKERS=1; it needs
+ *                     SharedArrayBuffer, so a cross-origin isolated page.
+ *                     The callback runs on the audio thread, 128 frames
+ *                     (one render quantum) a call
+ *       ScriptProcessorNode  any other build. The callback runs on the
+ *                     page's main thread, desc.period frames rounded up to
+ *                     a power of 2 (256 to 16384); a stalled main thread
+ *                     stalls the sound
+ *     Both need -sASYNCIFY or -sJSPI: on the main thread open() and
+ *     yau_wait() sleep through emscripten_sleep(), so the page runs the
+ *     callbacks and the timer below. The AudioContext runs at the project
+ *     rate and channels, which the strict open then finds; the browser
+ *     converts to the device's format unseen. An AudioContext starts only
+ *     after a user gesture (a tap or click on the page; on iOS Safari the
+ *     gesture must come first): open from the gesture's handler, or the
+ *     context waits for miniaudio's next tap.
+ *     Positions: a timer on the main thread reads getOutputTimestamp()
+ *     every 10 ms (and the ScriptProcessorNode's handler each block):
+ *     contextTime, the context frame the browser says is at the output,
+ *     and performanceTime, when. Less the context frame of stream frame 0
+ *     it is a position report, and every block passes the newest
+ *     (pos_source DEVICE). Stream frame 0's context frame comes from the
+ *     AudioWorklet's currentFrame, exact, or the ScriptProcessorNode
+ *     block's playbackTime, which Chrome 154 gives as currentTime plus the
+ *     buffer: late by up to the audio device's chunk (10 ms there). A
+ *     block that moves it (a skipped block) is an XRUN. performance.now()
+ *     maps to the ysp_rt clock by a correlation at open, on the main
+ *     thread. An AudioWorklet's scope has no performance.now() (Chrome 154;
+ *     yrt_now_ns() reads 0 there): its tick.t_entry is Date.now() less its
+ *     offset to performance.now() at open, 1 ms steps. Its fit is of the
+ *     reports only: a block without one adds no point.
+ *     Tier YAU_TIER_WEB (5), the lowest, confirmed or not. Every onset is
+ *     the browser's estimate: getOutputTimestamp() includes the browser's
+ *     own figure for the output latency (outputLatency), which nothing here
+ *     checked against sound. The describe line says the path, the reports,
+ *     baseLatency and outputLatency, and block_moves. No browser runs
+ *     capture or an exclusive device. Measured in docs/web.md, "Audio".
  *   YAU_BACKEND_NULL
  *     miniaudio's null device: a timer, no hardware. Tier SIM.
  *   YAU_BACKEND_CUSTOM
@@ -636,6 +676,13 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.4.1 - YAU_BACKEND_WEB (BACKENDS, WEB): position reports from the
+ *          AudioContext's getOutputTimestamp() on miniaudio's AudioWorklet
+ *          and ScriptProcessorNode paths, the context at the project's
+ *          rate and channels, YAU_TIER_WEB (5) for every web onset, no fit
+ *          point from a web block without a report, main-thread waits that
+ *          yield (emscripten_sleep). The describe line's backend part may be
+ *          160 bytes (was 32). Nothing changes on the other backends.
  *   v0.4.0 - the repository conventions (README.md). Breaks the API:
  *          yau_stream_init()/yau_stream_release() are bool
  *          yau_stream_open() and void yau_stream_close(), which never
@@ -800,8 +847,8 @@
 
 #define YAU_VERSION_MAJOR 0
 #define YAU_VERSION_MINOR 4
-#define YAU_VERSION_PATCH 0
-#define YAU_VERSION_STRING "0.4.0"
+#define YAU_VERSION_PATCH 1
+#define YAU_VERSION_STRING "0.4.1"
 
 #include "ysp/rt.h"
 
@@ -929,7 +976,10 @@ typedef enum yau_tier {
     YAU_TIER_2       = 2,  /* fit time, confirmed played, on a loopback-
                               * checked path, under stated conditions       */
     YAU_TIER_3       = 3,  /* unconfirmed, or an unchecked path           */
-    YAU_TIER_SIM     = 4   /* no hardware                                  */
+    YAU_TIER_SIM     = 4,  /* no hardware                                  */
+    YAU_TIER_WEB     = 5   /* a browser's estimate (v0.4.1; BACKENDS,
+                              * WEB): the lowest, below SIM, as
+                              * ysp/screen.h's YSCR_TIER_WEB              */
 } yau_tier;
 
 typedef struct yau_format {
@@ -1644,6 +1694,20 @@ extern "C" {
 #ifndef YAU__NOW
 #define YAU__NOW() (yrt_now_ns())
 #endif
+#if defined(MA_HAS_WEBAUDIO) && !defined(YAU__SLEEP_UNTIL)
+#include <emscripten/threading.h>
+/* A wait on a browser's main thread must yield to it: without threads the
+ * ScriptProcessorNode's callbacks run there, and with them the page's timer
+ * that reads getOutputTimestamp() does (BACKENDS, WEB). So the main thread
+ * sleeps through ASYNCIFY or JSPI, which ysp/screen.h's web backend needs
+ * too, and miniaudio's AudioWorklet path itself. */
+static void yau__web_sleep_until(int64_t t) {
+    int64_t d = t - yrt_now_ns();
+    if (!emscripten_is_main_runtime_thread()) { yrt_sleep_until(t, 0); return; }
+    emscripten_sleep(d > 1000000 ? (unsigned)(d / 1000000) : 1u);
+}
+#define YAU__SLEEP_UNTIL(t) yau__web_sleep_until((int64_t)(t))
+#endif
 #ifndef YAU__SLEEP_UNTIL
 #define YAU__SLEEP_UNTIL(t) yrt_sleep_until((int64_t)(t), 0)
 #endif
@@ -1967,7 +2031,9 @@ static void yau__stream_detach(yau_audio* au, yau__voice* v) {
 static void yau__onset_done(yau_audio* au, yau__voice* v, int64_t onset, int64_t devpos, int confirmed) {
     yau__msg m;
     yrt_payload u;
-    int tier = au->dcaps.tier == YAU_TIER_SIM ? YAU_TIER_SIM
+    /* SIM and WEB stay what they are: a browser's onset is its estimate,
+     * confirmed or not */
+    int tier = au->dcaps.tier == YAU_TIER_SIM || au->dcaps.tier == YAU_TIER_WEB ? au->dcaps.tier
              : (confirmed ? yau__path_tier(au) : YAU_TIER_3);
     uint16_t flags = v->flags;
     if (!confirmed) flags |= YAU_ONSET_UNCONFIRMED;
@@ -2573,7 +2639,10 @@ YAU_API void yau_render(void* host, void* out, int32_t frames, const yau_tick* t
             (void)yrt_ring_push(au->desc.ring, &ev);
             au->last_clock_t = tk->pos_t;
         }
-    } else {
+    } else if (au->dcaps.tier != YAU_TIER_WEB || au->dcaps.pos_source != YAU_POS_DEVICE) {
+        /* A browser's first blocks have no report at or past stream frame
+         * 0, and an AudioWorklet's entry times have 1 ms steps: its fit is
+         * of reports only (BACKENDS, WEB). */
         yau__feed(au, W, now_t);
     }
     YRT_PLOT("yau queued frames", have_pos ? (double)(W - pw) : 0.0);
@@ -2750,6 +2819,17 @@ static const IID yau__IID_IAudioClock =
     { 0xcd63314f, 0x3fba, 0x4a1b, { 0x81, 0x2c, 0xef, 0x96, 0x35, 0x87, 0x28, 0xe7 } };
 #endif
 
+#if defined(MA_HAS_WEBAUDIO)
+/* What the page's timer last read from the AudioContext, on the main
+ * thread, for the callback (BACKENDS, WEB): seq is odd while it writes. */
+typedef struct yau__web_pub {
+    uint32_t seq, reserved_;
+    double   ctx_s;          /* getOutputTimestamp().contextTime            */
+    double   perf_ms;        /* its performanceTime                         */
+    double   base_s, out_s;  /* baseLatency, outputLatency; -1 = none      */
+} yau__web_pub;
+#endif
+
 typedef struct yau__ma {
     ma_context ctx;
     ma_device  dev;
@@ -2764,6 +2844,19 @@ typedef struct yau__ma {
     uint64_t   freq;
     int        gate;        /* the queue gate is on (QUEUE)                */
     uint32_t   gate_pad;    /* render when the WASAPI buffer holds at most this */
+#endif
+#if defined(MA_HAS_WEBAUDIO)
+    yau__web_pub pub;       /* the main thread writes it (JavaScript)      */
+    int64_t    web_off;     /* ysp_rt ns minus performance.now() ns        */
+    int64_t    web_frames;  /* frames handed to the context                */
+    int64_t    web_c0;      /* the context frame of stream frame 0; -1 = none */
+    int64_t    web_ctx;     /* the newest report's context frame            */
+    int64_t    web_est[8];  /* ScriptProcessorNode: the last estimates of web_c0 */
+    int32_t    web_n_est;
+    double     web_last;    /* the newest report's performanceTime; 0 = none */
+    double     web_date_off;/* Date.now() minus performance.now(), ms       */
+    uint32_t   web_moves;   /* times web_c0 moved: blocks the context skipped */
+    int        web_idx, web_worklet, web_reports;
 #endif
 } yau__ma;
 typedef char yau__ma_fits[sizeof(yau__ma) <= sizeof(((yau_audio*)0)->backend_mem) ? 1 : -1];
@@ -2792,6 +2885,121 @@ static void yau__ma_gate(yau__ma* m, ma_device* d) {
 }
 #endif
 
+#if defined(MA_HAS_WEBAUDIO)
+/* Attaches the reader to miniaudio's device (its window.miniaudio list,
+ * miniaudio 0.11.25's JavaScript): a timer every 10 ms, and on the
+ * ScriptProcessorNode path each callback too, writes the context's
+ * getOutputTimestamp() into *pub; the ScriptProcessorNode's handler also
+ * keeps the block's playbackTime. Returns -1 when the device is not there,
+ * else (1 when getOutputTimestamp exists) | (2 on the AudioWorklet path). */
+EM_JS(int, yau__web_attach, (int idx, void* pub), {
+    var ma = typeof window !== 'undefined' ? window.miniaudio : null;
+    var d = ma ? ma.get_device_by_index(idx) : null;
+    if (!d || !d.webaudio) return -1;
+    var ctx = d.webaudio, ok = typeof ctx.getOutputTimestamp === 'function', p = pub;
+    function publish() {
+        var o, s;
+        if (!ok || ctx.state !== 'running') return;
+        o = ctx.getOutputTimestamp();
+        /* none yet, or one the browser has not renewed for 100 ms (seen
+         * once, 1 s old, right after the context started) */
+        if (!(o.contextTime > 0) || !(o.performanceTime > 0) || performance.now() - o.performanceTime > 100) return;
+        s = Atomics.load(HEAP32, p >> 2);
+        Atomics.store(HEAP32, p >> 2, (s + 1) | 0);
+        HEAPF64[(p + 8) >> 3] = o.contextTime;
+        HEAPF64[(p + 16) >> 3] = o.performanceTime;
+        HEAPF64[(p + 24) >> 3] = typeof ctx.baseLatency === 'number' ? ctx.baseLatency : -1;
+        HEAPF64[(p + 32) >> 3] = typeof ctx.outputLatency === 'number' ? ctx.outputLatency : -1;
+        Atomics.store(HEAP32, p >> 2, (s + 2) | 0);
+    }
+    if (d.scriptNode) {
+        var f = d.scriptNode.onaudioprocess;
+        d.yauPT = -1;
+        d.scriptNode.onaudioprocess = function(e) { d.yauPT = e.playbackTime; publish(); f(e); };
+    }
+    d.yauTimer = setInterval(publish, 10);
+    return (ok ? 1 : 0) | (d.scriptNode ? 0 : 2);
+})
+
+EM_JS(void, yau__web_detach, (int idx), {
+    var ma = typeof window !== 'undefined' ? window.miniaudio : null;
+    var d = ma ? ma.get_device_by_index(idx) : null;
+    if (d && d.yauTimer) { clearInterval(d.yauTimer); d.yauTimer = 0; }
+})
+
+/* The context frame the block now rendered plays at: the AudioWorklet's
+ * currentFrame in its own scope, or the ScriptProcessorNode block's
+ * playbackTime; -1 when neither is known. */
+EM_JS(double, yau__web_block, (int idx), {
+    if (typeof AudioWorkletGlobalScope !== 'undefined' && typeof currentFrame === 'number') return currentFrame;
+    var ma = typeof window !== 'undefined' ? window.miniaudio : null;
+    var d = ma ? ma.get_device_by_index(idx) : null;
+    return d && d.yauPT >= 0 ? Math.round(d.yauPT * d.webaudio.sampleRate) : -1;
+})
+
+EM_JS(double, yau__web_perf_ms, (void), { return performance.now(); })
+EM_JS(double, yau__web_date_ms, (void), { return Date.now(); })
+static uint64_t yau__web_perf_ns(void) { return (uint64_t)(yau__web_perf_ms() * 1e6); }
+
+/* performance.now() where the scope has it; an AudioWorklet's has not
+ * (Chrome 154: no performance object, and yrt_now_ns() reads 0 there), so
+ * Date.now() less its offset to performance.now() read at open: 1 ms
+ * steps, and a jump when the system's wall clock is set. */
+EM_JS(double, yau__web_now_ms, (double date_minus_perf), {
+    return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now() - date_minus_perf;
+})
+
+/* The block's tick. The newest getOutputTimestamp() is the report of
+ * every block: the context frame at the output, less the context frame of
+ * stream frame 0, is the stream frame at the output, at performanceTime.
+ * A report that has not moved since the last block is given again; the
+ * core takes it as one that has not moved, which feeds nothing.
+ * Stream frame 0's context frame: on the AudioWorklet path currentFrame
+ * less the frames handed before, exact, so a change is a skipped block.
+ * On the ScriptProcessorNode path the block's playbackTime, which Chrome
+ * 154 gives as currentTime plus the buffer when the event runs: currentTime
+ * moves in the audio device's chunks (480 frames here), and after the main
+ * thread stalls the events that waited run back to back, so an estimate
+ * is late by up to a chunk, or by the wait. The largest of the last 8 is
+ * kept; one that moves by more than half a buffer is a skipped block. */
+static void yau__web_tick(yau__ma* m, ma_uint32 n, yau_tick* tk) {
+    double blk = yau__web_block(m->web_idx), ctx_s, perf;
+    uint32_t s0, s1;
+    tk->t_entry = (int64_t)llround(yau__web_now_ms(m->web_date_off) * 1e6) + m->web_off;
+    /* a seqlock: the main thread may write while the worklet reads */
+    s0 = yau__ld32(&m->pub.seq);
+    if (!(s0 & 1u)) {
+        ctx_s = *(volatile double*)&m->pub.ctx_s;
+        perf = *(volatile double*)&m->pub.perf_ms;
+        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+        s1 = yau__ld32(&m->pub.seq);
+        if (s0 == s1 && perf > m->web_last) {
+            m->web_last = perf;
+            m->web_ctx = (int64_t)floor(ctx_s * (double)m->dev.playback.internalSampleRate + 0.5);
+        }
+    }
+    if (blk >= 0) {
+        int64_t c0 = (int64_t)blk - m->web_frames, d;
+        int i;
+        if (!m->web_worklet) {   /* the largest of the last 8 estimates */
+            m->web_est[m->web_n_est++ & 7] = c0;
+            for (i = 0; i < 8 && i < m->web_n_est; i++) if (m->web_est[i] > c0) c0 = m->web_est[i];
+        }
+        d = c0 - m->web_c0;
+        if (m->web_c0 >= 0 && (m->web_worklet ? d != 0 : (d > (int64_t)n / 2 || d < -(int64_t)n / 2))) {
+            m->web_moves++;
+            tk->flags |= YAU_TICK_XRUN;
+        }
+        m->web_c0 = c0;
+    }
+    m->web_frames += n;
+    if (m->web_reports && m->web_c0 >= 0 && m->web_last > 0) {
+        tk->pos = m->web_ctx - m->web_c0;
+        tk->pos_t = (int64_t)llround(m->web_last * 1e6) + m->web_off;
+    }
+}
+#endif
+
 static void yau__ma_data(ma_device* d, void* out, const void* in, ma_uint32 n) {
     yau__ma* m = (yau__ma*)d->pUserData;
     yau_tick tk;
@@ -2804,6 +3012,9 @@ static void yau__ma_data(ma_device* d, void* out, const void* in, ma_uint32 n) {
     tk.pos_t = 0;
     tk.flags = 0;
     tk.reserved_ = 0;
+#if defined(MA_HAS_WEBAUDIO)
+    if (m->backend == ma_backend_webaudio) yau__web_tick(m, n, &tk);
+#endif
 #if defined(MA_SUPPORT_WASAPI)
     if (m->clock && m->freq) {
         UINT64 pos = 0, qpc = 0;
@@ -2888,6 +3099,17 @@ static int yau__ma_open(void* ctx, const yau_device_open* in, yau_device_caps* c
                                  : ma_format_unknown;
     dc.playback.channels = is_null ? in->format->channels : 0;
     dc.sampleRate = is_null ? in->format->rate : 0;
+#if defined(MA_HAS_WEBAUDIO)
+    /* A browser shows no device format: the AudioContext runs at the rate
+     * it is asked for and converts to the device's own unseen (BACKENDS,
+     * WEB), so ask for the project's format, which the strict open below
+     * then finds. */
+    if (m->backend == ma_backend_webaudio) {
+        dc.playback.format = ma_format_f32;
+        dc.playback.channels = in->format->channels;
+        dc.sampleRate = in->format->rate;
+    }
+#endif
     dc.playback.pChannelMap = NULL;
     dc.playback.shareMode = in->exclusive ? ma_share_mode_exclusive : ma_share_mode_shared;
     dc.periodSizeInFrames = (ma_uint32)in->period;
@@ -2946,6 +3168,34 @@ static int yau__ma_open(void* ctx, const yau_device_open* in, yau_device_caps* c
     }
 #if defined(MA_SUPPORT_COREAUDIO) && defined(MA_APPLE_DESKTOP)
     if (m->backend == ma_backend_coreaudio) yau__coreaudio_claims(m, caps);
+#endif
+#if defined(MA_HAS_WEBAUDIO)
+    if (m->backend == ma_backend_webaudio) {
+        /* BACKENDS, WEB: position reports from getOutputTimestamp(), whose
+         * performanceTime is on performance.now()'s clock; that clock's
+         * offset to ysp_rt is read here, on the main thread */
+        yrt_corr_desc cd;
+        yrt_corr c;
+        int a;
+        memset(&cd, 0, sizeof cd);
+        cd.read = yau__web_perf_ns;
+        if (yrt_correlate(&cd, &c) > 0) m->web_off = c.rt_ns - (int64_t)c.other;
+        m->web_date_off = yau__web_date_ms() - yau__web_perf_ms();
+        m->web_c0 = -1;
+        m->web_idx = m->dev.webaudio.deviceIndex;
+        a = yau__web_attach(m->web_idx, &m->pub);
+        m->web_reports = a > 0 && (a & 1);
+        m->web_worklet = a > 0 && (a & 2);
+        caps->tier = YAU_TIER_WEB;
+        caps->buffer = caps->period;
+        if (m->web_reports) {
+            caps->pos_source = YAU_POS_DEVICE;
+            /* the browser's claim: contextTime is the frame at the output */
+            caps->os_latency_ns = 0;
+            caps->os_stream_latency_ns = -1;
+            snprintf(caps->os_latency_src, sizeof caps->os_latency_src, "web:getOutputTimestamp");
+        }
+    }
 #endif
 #if defined(MA_SUPPORT_WASAPI)
     if (m->backend == ma_backend_wasapi && m->dev.wasapi.pAudioClientPlayback) {
@@ -3032,12 +3282,24 @@ static void yau__ma_close(void* ctx) {
 #if defined(MA_SUPPORT_WASAPI)
     if (m->clock) { m->clock->lpVtbl->Release(m->clock); m->clock = NULL; }
 #endif
+#if defined(MA_HAS_WEBAUDIO)
+    if (m->dev_up && m->backend == ma_backend_webaudio) yau__web_detach(m->web_idx);
+#endif
     if (m->dev_up) { ma_device_uninit(&m->dev); m->dev_up = 0; }
     if (m->ctx_up) { ma_context_uninit(&m->ctx); m->ctx_up = 0; }
 }
 
 static int yau__ma_describe(void* ctx, char* buf, size_t cap) {
     yau__ma* m = (yau__ma*)ctx;
+#if defined(MA_HAS_WEBAUDIO)
+    if (m->backend == ma_backend_webaudio) {
+        double base = m->pub.base_s, lat = m->pub.out_s;
+        return snprintf(buf, cap, "%s path=%s reports=%s base_latency=%.1fms output_latency=%.1fms block_moves=%u",
+                        ma_get_backend_name(m->backend), m->web_worklet ? "audioworklet" : "scriptprocessor",
+                        m->web_reports ? "getOutputTimestamp" : "none", base >= 0 ? base * 1e3 : -1.0,
+                        lat >= 0 ? lat * 1e3 : -1.0, (unsigned)m->web_moves);
+    }
+#endif
     return snprintf(buf, cap, "%s", ma_get_backend_name(m->backend));
 }
 
@@ -3545,7 +3807,7 @@ static const char* yau__out_name(int o) {
 
 YAU_API int yau_describe(const yau_audio* au, char* buf, size_t cap) {
     yau_caps c;
-    char be[32] = "", claim[96];
+    char be[160] = "", claim[96];   /* the web device's is about 120 bytes */
     if (!buf || cap == 0) return 0;
     if (!au || !au->open) return snprintf(buf, cap, "ysp_audio: closed");
     yau_get_caps(au, &c);
