@@ -37,7 +37,8 @@
 #if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_WARNINGS)
 #define _CRT_SECURE_NO_WARNINGS
 #endif
-#include <stdint.h>
+/* No system header before the ysp headers: glibc fixes its feature set at
+ * the first one, and rt.h's _DEFAULT_SOURCE must come first (CI Linux). */
 struct yau_tick;
 static void av_tick(const struct yau_tick* tk);
 #define YAU__ON_TICK(au, tk) av_tick(tk)   /* measurement seam (ysp/audio.h) */
@@ -367,7 +368,12 @@ int main(int argc, char** argv) {
                                       i ? "," : "", isnan(fp) ? -1e9 : fp, isnan(ap) ? -1e9 : ap, isnan(d) ? -1e9 : d,
                                       (unsigned)t->flip.tier, (unsigned)t->a.tier, (unsigned)t->a.flags, isnan(r) ? -1e9 : r,
                                       t->out_s * 1e3, t->base_s * 1e3);
-            if (sim && (!ok || t->flip.tier != YSCR_TIER_SIM || t->a.tier != YAU_TIER_SIM || fabs(d) > 2.0)) {
+            /* --sim: the sound on plan, the flash on plan or whole frames
+             * late (a loaded host's frame loop falls behind, as a real
+             * display's would; CI macOS showed 1 to 4 frames) */
+            double per_ms = (double)per * 1e-6, late = per_ms > 0 ? floor(fp / per_ms + 0.5) : 0;
+            int flip_ok = ok && late >= 0 && late <= 6 && fabs(fp - late * per_ms) < 0.01;
+            if (sim && (!flip_ok || t->flip.tier != YSCR_TIER_SIM || t->a.tier != YAU_TIER_SIM || fabs(ap) > 2.0)) {
                 fprintf(stderr, "web_av_sync: --sim: trial %d is off (audio %s, flip %d, %.3f ms)\n", i,
                         yau_strerror(t->a_rc), t->have_flip, d);
                 bad = 1;
@@ -422,6 +428,6 @@ int main(int argc, char** argv) {
     av_done(json, csv);
 #endif
     if (sim && (bad || planned != n)) return 1;
-    if (sim) printf("--sim: every trial had both records within 2 ms\n");
+    if (sim) printf("--sim: every sound within 2 ms of its plan, every flash on its frame or whole frames late\n");
     return failed;
 }
