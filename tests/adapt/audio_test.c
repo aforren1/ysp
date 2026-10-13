@@ -109,8 +109,6 @@ typedef struct sdev {
     int64_t  stale_ns;      /* the next stale_n reports read a position this
                                much older than their stamp                    */
     int      stale_n;
-    int      report_every;  /* > 1: a report every this many blocks only, as
-                             * PulseAudio's timing replies come            */
     int64_t  halt_ns;       /* the last halt, for the checks                  */
     int64_t  stood_ahead;   /* with halt_pipe: the report that reads the
                                position standing is this many frames ahead
@@ -132,6 +130,12 @@ typedef struct sdev {
     unsigned char out_mem[8192 * 8 * 4];
     int      started, stopped, closed;
     int32_t  queue_asked;   /* yau_device_open.queue at the last open          */
+    int      report_every;  /* a report in every Nth block only (a browser's
+                               timer, PulseAudio's timing replies); 0 or 1 =
+                               every block                                    */
+    int      entry_zero;    /* t_entry 0: an AudioWorklet with no clock       */
+    int64_t  no_report_k;   /* blocks before this one carry no report (WASAPI
+                               exclusive: the prefill is still playing)       */
 } sdev;
 
 static sdev g_sd;
@@ -263,10 +267,12 @@ static void sd_block(sdev* s) {
             tk.pos = fs - s->L;
             s->stale_n--;
         }
-        if (s->report_every > 1 && s->k % s->report_every != 0) { tk.pos = -1; tk.pos_t = 0; }
     } else {
         tk.pos = -1;
     }
+    if (s->report_every > 1 && s->k % s->report_every) { tk.pos = -1; tk.pos_t = 0; }
+    if (s->k < s->no_report_k) { tk.pos = -1; tk.pos_t = 0; }
+    if (s->entry_zero) tk.t_entry = 0;
 rendered:
     s->render(s->host, s->out_mem, s->period, &tk);
     if (s->on_block) s->on_block(s, (const float*)(const void*)s->out_mem, s->period);
@@ -903,6 +909,84 @@ static void test_callback_source(void) {
         CHECK(g_au.fit_ft.n >= n_before);
         yau_close(&g_au);
     }
+}
+
+/* v0.4.1: a browser's device (BACKENDS, WEB): tier WEB, a report in one
+ * block of 4, and entry times of 0 (an AudioWorklet has no clock). The fit
+ * is of the reports only, so the sound lands on the truth's frame; its
+ * record is tier WEB, confirmed or not. */
+static void test_web_tier(void) {
+    sdev* s = &g_sd;
+    yau_buf b;
+    yau_onset r = { 0 };
+    yau_id id;
+    yrt_event ev[512];
+    int n, i, seen = 0;
+    int64_t t, want;
+    sd_default(s);
+    s->tier = YAU_TIER_WEB;
+    s->period = 128;
+    s->report_every = 4;
+    s->entry_zero = 1;
+    CHECK(open_dev(s, NULL));
+    sd_run_s(s, 6.0);
+    memset(&b, 0, sizeof b);
+    b.frames = g_buf; b.n = 100; b.channels = 1;
+    t = g_vt + 80000000;
+    id = yau_play_at(&g_au, b, t);
+    sd_run_s(s, 0.3);
+    CHECK_I(yau_result(&g_au, id, &r), YAU_OK);
+    want = sd_frame_of(s, t);
+    CHECK(llabs(r.start_frame - want) <= 1);
+    CHECK_I(r.tier, YAU_TIER_WEB);
+    CHECK(!(r.flags & YAU_ONSET_UNCONFIRMED));
+    /* no report past its frame: unconfirmed, and still tier WEB */
+    id = yau_play_at(&g_au, b, g_vt + 60000000);
+    s->report_every = 1 << 30;
+    sd_run_s(s, 0.3);
+    yau_close(&g_au);
+    while ((n = yrt_ring_drain(&g_ring, ev, 512)) > 0)
+        for (i = 0; i < n; i++)
+            if (ev[i].source == YRT_SRC_AUDIO && ev[i].kind == YAU_EV_ONSET && ev[i].aux == (uint32_t)id) {
+                seen++;
+                CHECK(ev[i].u.u16[18] & YAU_ONSET_UNCONFIRMED);
+                CHECK_I(YAU_EV_TIER_OF(ev[i].u.u16[19]), YAU_TIER_WEB);
+            }
+    CHECK_I(seen, 1);
+}
+
+/* v0.5.1: a WASAPI exclusive stream's first blocks come while the prefill
+ * plays, so they carry no report at or past stream frame 0 (EXCLUSIVE
+ * START). Their entry times are L frames before their output; as fit
+ * points among the reports they moved the first fit by tens of ms, and
+ * the reports after it made a false halt record (measured: one in each of
+ * 6 runs on the test laptop). The fit takes reports only: no XRUN, and the
+ * sound lands on the truth's frame. */
+static void test_report_less_start(void) {
+    sdev* s = &g_sd;
+    yau_buf b;
+    yau_onset r = { 0 };
+    yau_id id;
+    int64_t t;
+    sd_default(s);
+    s->no_report_k = 10;
+    s->L = 4000;
+    CHECK(open_dev(s, NULL));
+    sd_run_s(s, 2.0);
+    yau_update(&g_au);
+    CHECK_I(g_au.xruns_ft, 0);
+    memset(&b, 0, sizeof b);
+    b.frames = g_buf; b.n = 100; b.channels = 1;
+    t = g_vt + 150000000;
+    id = yau_play_at(&g_au, b, t);
+    sd_run_s(s, 0.4);
+    CHECK_I(yau_result(&g_au, id, &r), YAU_OK);
+    CHECK(llabs(r.start_frame - sd_frame_of(s, t)) <= 1);
+    CHECK(!(r.flags & (YAU_ONSET_XRUN | YAU_ONSET_UNCONFIRMED | YAU_ONSET_LATE)));
+    CHECK_I(r.tier, YAU_TIER_2);
+    yau_update(&g_au);
+    CHECK_I(g_au.xruns_ft, 0);
+    yau_close(&g_au);
 }
 
 /* The records in the ring, field by field. */
@@ -2604,6 +2688,10 @@ static void test_misc(void) {
     }
 }
 
+#if YAU_VERSION_MINOR >= 5
+#include "audio_test_capture.h"
+#endif
+
 int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     g_tape = (float*)calloc((size_t)TAPE_FRAMES * 2, sizeof(float));
@@ -2621,6 +2709,8 @@ int main(int argc, char** argv) {
     test_xrun();
     test_halt();
     test_callback_source();
+    test_web_tier();
+    test_report_less_start();
     test_ring();
     test_limits();
     test_strict_open();
@@ -2645,6 +2735,9 @@ int main(int argc, char** argv) {
 #endif
 #if YAU_VERSION_MINOR >= 3
     test_queue();
+#endif
+#if YAU_VERSION_MINOR >= 5
+    test_capture();
 #endif
     test_misc();
     free(g_tape);

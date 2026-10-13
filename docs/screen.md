@@ -2728,6 +2728,28 @@ design decisions that touch the core.
   platform, so `tests/adapt/screen_test.c` checks them; mutants wb-01 to
   wb-04. The presenter itself runs only in a page: the demos ran in Chrome
   154 (headless and headed), Edge 155 and Firefox 154 to 157 (headless).
+- **Input stamps (v0.7.1).** `yscr_event_input()` on the web backend
+  replaces SDL's handler time of a key, mouse button, touch or pen press
+  or release with the DOM event's `timeStamp` where a capture listener
+  recorded it. The match is by the time the listener ran, which is in the
+  same task as SDL's handler and just before it, so it needs no key or
+  button mapping between the DOM and SDL. `yscr_poll()`'s time stays
+  SDL's: a program that reads SDL's events itself (the gallery) keeps what
+  SDL gives. The matching is JavaScript and has no native test or mutant;
+  `selftest.html` reports, per run, how many events got the DOM's time
+  ([web.md](web.md), "Input: touch, the mouse and the DOM's time").
+- **Fullscreen (v0.7.2).** The page owns fullscreen; the header never asks
+  and now keeps SDL from leaving it. SDL 3.4.2's port applies a window's
+  flags at create, destroy and a show, and its driver calls
+  `emscripten_exit_fullscreen()` whenever the document is fullscreen and
+  the window is not flagged fullscreen. Flagging the window fullscreen was
+  not tried: SDL's resize handler sizes a fullscreen window's canvas to
+  the page (`Emscripten_HandleResize()`), and the demos keep the drawing
+  buffer they opened with. So the document's `exitFullscreen`
+  is a no-op during `SDL_CreateWindowWithProperties()` and
+  `SDL_DestroyWindow()`, and SDL's `visibilitychange` handler is removed
+  after the create. Evidence and the page's side are in
+  [web.md](web.md#fullscreen).
 
 ## Linux X11: GLX_OML (v0.8.0)
 

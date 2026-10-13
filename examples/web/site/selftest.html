@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>ysp demo: browser timing self-test</title>
 <script src="coi-serviceworker.js"></script>
 <link rel="stylesheet" href="style.css">
@@ -21,16 +21,20 @@ on a lab rig measures that; a browser never does.
 <div id="intro" class="panel">
   <p>The test draws a gray field with a bar that moves one step per frame, for the number of frames
      below. A skipped frame shows as a jump of the bar and as an interval near twice the period.
-     Press a few keys during the run to measure how late the program sees a key after the browser
-     stamped it.</p>
+     Press a few keys, or tap or click the canvas, during the run to measure how late SDL stamped
+     each one after the browser did, and whether the program's input path got the browser's own
+     time.</p>
   <p><label>Frames <input type="number" id="frames" value="600" min="2" max="36000"></label>
      <label>Busy time per frame (ms) <input type="number" id="load" value="0" min="0" max="100" step="1"></label></p>
   <p><label><input type="checkbox" id="fs"> Fullscreen</label></p>
   <button id="start" data-ready="Start" disabled>Loading...</button>
 </div>
 
-<div id="stage"><canvas id="canvas" tabindex="-1"></canvas></div>
-<p><button id="stop" class="secondary" disabled>Stop</button></p>
+<div id="stage">
+  <canvas id="canvas" tabindex="-1"></canvas>
+  <div class="note">Preparing...</div>
+  <button id="stop" class="stop secondary" disabled>Stop</button>
+</div>
 
 <div id="results" class="panel hidden">
   <h2>Intervals between frame callbacks</h2>
@@ -47,11 +51,14 @@ on a lab rig measures that; a browser never does.
 
 <script>
 const $ = (id) => document.getElementById(id);
-window.yspPage = { name: 'selftest', args: () => ['--frames', String($('frames').value | 0), '--load-ms', String(+$('load').value || 0)] };
-// The DOM's own times of each key, to compare with the stamps the program got.
+window.yspPage = { name: 'selftest', args: () => ['--frames', String($('frames').value | 0), '--load-ms', String(+$('load').value || 0)],
+                   builds: { fallback: 'selftest.js' } };
+// The DOM's own times of each key and each press on the canvas, to compare
+// with the stamps the program got. type: 1 key down, 0 key up, 3 a press.
 const domKeys = [];
-window.addEventListener('keydown', (e) => { if (!e.repeat) domKeys.push([1, e.timeStamp]); }, true);
+window.addEventListener('keydown', (e) => domKeys.push([1, e.timeStamp]), true);
 window.addEventListener('keyup', (e) => domKeys.push([0, e.timeStamp]), true);
+window.addEventListener('pointerdown', (e) => { if (e.target && e.target.id === 'canvas') domKeys.push([3, e.timeStamp]); }, true);
 </script>
 <script src="ysp-web.js"></script>
 <script>
@@ -60,16 +67,22 @@ $('stop').onclick = () => ysp.stop();
 $('json').onclick = () => ysp.download('ysp_selftest.json', JSON.stringify(Object.assign({ page: ysp.status, keys: keyStats() }, Module.yspResult), null, 1), 'application/json');
 $('session').onclick = () => ysp.download('ysp_selftest_session.txt', ysp.sessionText());
 
-// The program's stamp minus the DOM's timeStamp, per key event, paired in
-// order by type. Both are performance.now() times.
+// Each event the program got, against the DOM event of its type with the
+// newest timeStamp at or before SDL's stamp (all performance.now() times):
+// SDL's stamp minus the DOM's time (how late SDL's handler ran), and
+// whether yscr_event_input()'s stamp is the DOM's time.
 function keyStats() {
-  const sdl = (Module.yspKeys || []), d = [];
-  for (const type of [1, 0]) {
-    const a = sdl.filter((k) => k[0] === type), b = domKeys.filter((k) => k[0] === type);
-    for (let i = 0; i < Math.min(a.length, b.length); i++) d.push(a[i][1] - b[i][1]);
+  const sdl = (Module.yspKeys || []), d = [], press = [];
+  let dom = 0;
+  for (const [type, s, input] of sdl) {
+    let best = null;
+    for (const [t, ts] of domKeys) if (t === type && ts <= s + 0.001 && (best === null || ts > best)) best = ts;
+    if (best === null) continue;
+    (type === 3 ? press : d).push(s - best);
+    if (Math.abs(input - best) < 0.002) dom++;
   }
-  d.sort((x, y) => x - y);
-  return { n: d.length, p50_ms: d.length ? d[Math.floor((d.length - 1) / 2)] : null, max_ms: d.length ? d[d.length - 1] : null };
+  const q = (v) => { v.sort((x, y) => x - y); return { n: v.length, p50_ms: v.length ? v[Math.floor((v.length - 1) / 2)] : null, max_ms: v.length ? v[v.length - 1] : null }; };
+  return { keys: q(d), presses: q(press), dom_stamped: dom, events: sdl.length };
 }
 
 function histogram(el, r) {
@@ -123,7 +136,9 @@ Module.onYspResult = (r) => {
     ['callback to program, p50 and p99 (ms)', f(r.resume_p50_ms, 3) + ', ' + f(r.resume_p99_ms, 3)],
     ['clock step (program, ns)', r.clock_step_ns], ['clock step (page, µs)', ysp.status.clock_step_us],
     ['cross-origin isolated', ysp.status.coi ? 'yes' : 'no'],
-    ['keys paired', k.n], ['key: program stamp minus DOM time, p50 and max (ms)', f(k.p50_ms, 3) + ', ' + f(k.max_ms, 3)],
+    ['keys paired', k.keys.n], ['key: SDL stamp minus DOM time, p50 and max (ms)', f(k.keys.p50_ms, 3) + ', ' + f(k.keys.max_ms, 3)],
+    ['taps and clicks paired', k.presses.n], ['press: SDL stamp minus DOM time, p50 and max (ms)', f(k.presses.p50_ms, 3) + ', ' + f(k.presses.max_ms, 3)],
+    ['events whose input stamp is the DOM time', k.dom_stamped + ' of ' + k.events],
     ['screen', r.describe],
   ];
   const t = document.createElement('table');
@@ -133,6 +148,5 @@ Module.onYspResult = (r) => {
   Module.yspScreen = r.describe;
 };
 </script>
-<script src="selftest.js" async></script>
 </body>
 </html>

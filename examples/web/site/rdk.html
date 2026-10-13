@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>ysp demo: dot motion threshold</title>
 <script src="coi-serviceworker.js"></script>
 <link rel="stylesheet" href="style.css">
@@ -13,26 +13,31 @@
 <h1>Dot motion: a coherence threshold with a staircase</h1>
 <div class="notice"><strong>Browser timing is not rig timing.</strong> The times on this page are what the
 browser reports. The browser does not report when the display showed a frame, so the onsets are
-estimates. The threshold does not depend on them, but the dot speed and size are in pixels of this
-screen, not in degrees. <a href="https://github.com/aforren1/ysp/blob/main/docs/web.md">How the web backend works</a>.</div>
+estimates. The threshold does not depend on them, but the dot speed and size are in units of this
+canvas, not in degrees. <a href="https://github.com/aforren1/ysp/blob/main/docs/web.md">How the web backend works</a>.</div>
 <div id="status" class="status"></div>
 
 <div id="intro" class="panel">
   <h2>Instructions</h2>
   <p>Each trial shows a cross, then a cloud of moving dots. Some of the dots move together to the
      left or to the right; the rest move at random.</p>
-  <p>Press the <strong>Left arrow</strong> or the <strong>Right arrow</strong> for the direction of
+  <p>Press the <strong>Left arrow</strong> or the <strong>Right arrow</strong>, or tap the
+     <strong>left half</strong> or the <strong>right half</strong> of the screen, for the direction of
      the dots that move together. Keep your eyes on the cross. The cross turns green when you are
      correct and red when you are not.</p>
   <p>The task gets harder after correct answers and easier after errors (a 2-down 1-up staircase).
-     It ends after 8 reversals or 40 answered trials (60 in all), about 2 minutes. Shift+Esc or the Stop button ends the
-     run early.</p>
+     It ends after 8 reversals or 40 answered trials (60 in all), about 2 minutes. Stop, or Shift+Esc
+     on a keyboard, ends the run early.</p>
   <p><label><input type="checkbox" id="fs"> Fullscreen</label></p>
   <button id="start" data-ready="Start" disabled>Loading...</button>
 </div>
 
-<div id="stage"><canvas id="canvas" tabindex="-1"></canvas></div>
-<p><button id="stop" class="secondary" disabled>Stop</button></p>
+<div id="stage">
+  <canvas id="canvas" tabindex="-1"></canvas>
+  <div class="note">Preparing the stimuli...</div>
+  <div class="targets" aria-hidden="true"><span>&#9664; left</span><span>right &#9654;</span></div>
+  <button id="stop" class="stop secondary" disabled>Stop</button>
+</div>
 
 <div id="results" class="panel hidden">
   <h2>Results</h2>
@@ -46,7 +51,7 @@ screen, not in degrees. <a href="https://github.com/aforren1/ysp/blob/main/docs/
 <div id="log"><div id="log-text"></div></div>
 
 <script>
-window.yspPage = { name: 'rdk_staircase', args: () => [] };
+window.yspPage = { name: 'rdk_staircase', args: () => [], builds: { fallback: 'rdk_staircase.js' } };
 </script>
 <script src="ysp-web.js"></script>
 <script>
@@ -61,9 +66,8 @@ Module.onYspDone = () => {
     ? 'Threshold (70.7 % correct): coherence ' + t.toFixed(3) + ', the geometric mean of the last ' + n + ' reversals.'
     : 'No threshold: the staircase had no reversals yet.';
   ysp.table(document.getElementById('rows'), ysp.parseCsv(Module.yspCsv),
-    ['trial', 'coherence', 'direction', 'response', 'rt_s', 'correct', 'reversal', 'frames_dropped']);
+    ['trial', 'coherence', 'direction', 'response', 'rsp_kind', 'rt_s', 'correct', 'reversal', 'frames_dropped']);
 };
 </script>
-<script src="rdk_staircase.js" async></script>
 </body>
 </html>

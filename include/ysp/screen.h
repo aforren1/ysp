@@ -1,3 +1,4 @@
+
 /* ysp/screen.h - v0.8.0 - public domain single-header display library
  *
  *   The window, the GL ES 3.0 context, the display mode and the swap path
@@ -541,14 +542,38 @@
  *     Fullscreen. A page enters fullscreen only from a user gesture, so the
  *     header never asks. desc.windowed false gives a canvas the size of the
  *     page's viewport at open; the page may enter fullscreen before
- *     (examples/web/site). desc.mode must stay zero.
+ *     (examples/web/site). desc.mode must stay zero. From v0.7.2 the header
+ *     also keeps SDL from leaving the page's fullscreen: SDL's port applies
+ *     a window's flags (not fullscreen) at SDL_CreateWindow, at
+ *     SDL_DestroyWindow and when the page is shown again, and that called
+ *     document.exitFullscreen() whenever the document was fullscreen. So
+ *     the document's exitFullscreen does nothing during the create and the
+ *     destroy, and SDL's visibilitychange handler is removed after the
+ *     create (the header has its own; SDL sends no WINDOW_SHOWN or
+ *     WINDOW_HIDDEN for the page on this backend). A browser's own exit
+ *     (Esc, a switch of tab) is the page's to handle (docs/web.md).
  *     A hidden page gets no callbacks. begin() waits until the page is
  *     shown again (hidden= in the describe line); the frame in flight
  *     completes OCCLUDED, with no time; each change writes a
  *     YSCR_EV_VISIBILITY ring record at the next begin().
- *     Input: SDL's Emscripten events, stamped when the page's handler ran
- *     (SDL_GetTicksNS), not with the DOM event's own time, so a key pressed
- *     while a frame is drawn is stamped when that task ends.
+ *     Input: SDL's Emscripten events. SDL stamps an event when the page's
+ *     handler ran (SDL_GetTicksNS), so a key pressed while a frame is drawn
+ *     is stamped when that task ends. From v0.7.1 yscr_event_input() gives
+ *     a key, mouse button, touch (finger) or pen press or release the DOM
+ *     event's own time (Event.timeStamp, on the performance.now() clock;
+ *     for input, when the OS gave it to the browser) where it finds it: a
+ *     capture listener on the window keeps the newest 64 keydown, keyup
+ *     and pointer events with the time their listener ran, which is in the
+ *     same task as SDL's handler and just before it, and an SDL event takes
+ *     the newest of its class (and pointer id, for a finger) whose listener
+ *     ran at most 1 ms after SDL's stamp and 50 ms before it. Where none
+ *     matches, SDL's stamp stays; dom_stamps=found/tried in the describe
+ *     line counts them. yscr_poll()'s time and SDL's own events keep SDL's
+ *     stamp. Touch comes as SDL's finger events from pointer events on the
+ *     canvas (SDL 3.4.2 sets its touch-action to none): x and y 0..1 of
+ *     the canvas's CSS box, finger id the pointerId + 1; SDL's mouse events
+ *     made from touch are dropped by ysp/input.h as before. Not measured
+ *     against a physical key or touch (docs/web.md).
  *     Not for a browser: triggers (they need -pthread and an isolated
  *     page; not tested), codes (drawn through GL, always at risk:
  *     CODE_RISK_COMPOSED), the gamma ramp, raw mice and the panic watchdog
@@ -1471,6 +1496,18 @@
  *          1: X11's Present copies on the next vblank (DEPTH's table gave
  *          it DWM's 2). New enum values only; nothing changes on Windows
  *          or the web.
+ *   v0.7.2 - BACKENDS, WEB: open() and close() no longer leave a
+ *          fullscreen the page entered (Fullscreen, in BACKENDS, WEB). A
+ *          program that yielded between the page's request and open() (the
+ *          sound demo: its sound's open awaits callbacks) lost fullscreen
+ *          when SDL made the window, 2.2 to 3.7 s into the run in Chrome 154
+ *          and Firefox 157, and every demo lost it when the page was shown
+ *          again after hidden. Nothing changes on the other backends.
+ *   v0.7.1 - BACKENDS, WEB: yscr_event_input() stamps a key, mouse
+ *          button, touch or pen press or release with the DOM event's own
+ *          time where it finds it (Input, in BACKENDS, WEB); the describe
+ *          line adds dpr= and dom_stamps=found/tried. Nothing changes on
+ *          the other backends.
  *   v0.7.0 - YSCR_BACKEND_WEB (BACKENDS, WEB; docs/web.md): under
  *          Emscripten, SDL3's canvas and the header's WebGL2 context,
  *          frames paced by requestAnimationFrame through an awaited
@@ -1714,7 +1751,20 @@
  *          groups, input restamping, mode lists and the parameter table.
  *          The other swap paths are stubs that refuse to open.
  *
- *   STATUS: v0.8.0 (GLX_OML, at the end of this block). v0.7.0 (WEB; docs/web.md): built with emsdk 6.0.12 and SDL3's
+ *   STATUS: v0.8.0 (GLX_OML, at the end of this block). v0.7.2 (WEB fullscreen; docs/web.md): every demo of
+ *   examples/web ran with fullscreen asked in headed Chrome 154 and
+ *   Firefox 157, isolated and not; each page stayed fullscreen until it
+ *   left fullscreen itself at the end (before: av.html lost it when SDL
+ *   made the window in all four runs). A page shown again after a scripted
+ *   hidden state kept fullscreen (before: it left). JavaScript only: no
+ *   native test or mutant.
+ *   v0.7.1 (WEB input; docs/web.md): scripted keys (desktop) and
+ *   taps (Pixel 7 emulation) in Chrome 154 got the DOM's time in
+ *   yscr_event_input() (dom_stamps in the describe line, the self-test's
+ *   table); a run of av_sync_mt opened this backend with -pthread. No
+ *   physical key or touch measured; the matching is JavaScript, with no
+ *   native test or mutant.
+ *   v0.7.0 (WEB; docs/web.md): built with emsdk 6.0.12 and SDL3's
  *   port 3.4.2, ASYNCIFY, YRT_NO_THREADS; the demos of examples/web ran in
  *   Chrome 154 (headless and headed), Edge 155 (headless) and Firefox 154
  *   to 157 (headless) on the laptop below. Chrome headed on its 60 Hz
@@ -4274,6 +4324,7 @@ typedef struct yscr__web {
     int64_t     hidden_ns;
     int64_t     pend_t;           /* when the pending present was made      */
     uint32_t    callbacks, hidden_waits, skipped, late;
+    uint32_t    dom_found, dom_tried; /* input stamped with the DOM's time   */
     int64_t     iv[YSCR__WEB_N];
     yscr_vblank done;
     char        canvas[64];
@@ -4356,7 +4407,8 @@ EM_JS(int, yscr__web_gl_create, (const char* sel, int desync), {
 
 /* 0 crossOriginIsolated, 1 visible now, 2 Module.yscrDesynchronized,
  * 3 visibility changes so far (the listener counts from the first open),
- * 4 and 5 the viewport's width and height in CSS pixels. */
+ * 4 and 5 the viewport's width and height in CSS pixels, 6 the
+ * devicePixelRatio times 100. */
 EM_JS(int, yscr__web_query, (int what), {
     if (!Module['yscrVis']) {
         Module['yscrVis'] = { changes: 0, log: [] };
@@ -4371,7 +4423,73 @@ EM_JS(int, yscr__web_query, (int what), {
     if (what === 2) return Module['yscrDesynchronized'] ? 1 : 0;
     if (what === 4) return window.innerWidth;
     if (what === 5) return window.innerHeight;
+    if (what === 6) return Math.round((window.devicePixelRatio || 1) * 100);
     return Module['yscrVis'].changes;
+})
+
+/* The page's fullscreen is the page's (BACKENDS, WEB). SDL's port leaves
+ * it when it applies a window's flags: at SDL_CreateWindow and at
+ * SDL_DestroyWindow whenever the document is fullscreen, which it is when
+ * the program yielded between the page's request and open() (av_sync: the
+ * sound's open awaits its callbacks; Chrome 154 and Firefox 157 left
+ * fullscreen 1.4 to 3 s into the run). While on is 1, the document's
+ * exitFullscreen does nothing; 0 gives the browser's back. */
+EM_JS(void, yscr__web_fs_hold, (int on), {
+    var d = document, h = Module['yscrFsHold'];
+    if (on && !h) {
+        var no = function() { return Promise.resolve(); };
+        h = Module['yscrFsHold'] = { exit: d.hasOwnProperty('exitFullscreen'), wexit: d.hasOwnProperty('webkitExitFullscreen') };
+        if (!h.exit) Object.defineProperty(d, 'exitFullscreen', { value: no, configurable: true, writable: true });
+        if (!h.wexit) Object.defineProperty(d, 'webkitExitFullscreen', { value: no, configurable: true, writable: true });
+    } else if (!on && h) {
+        if (!h.exit) delete d.exitFullscreen;
+        if (!h.wexit) delete d.webkitExitFullscreen;
+        Module['yscrFsHold'] = null;
+    }
+})
+
+/* The DOM's own times of the input events SDL turns into events (INPUT,
+ * BACKENDS WEB). SDL's Emscripten port stamps an event when its handler
+ * runs; Event.timeStamp is when the browser made the event, on the
+ * performance.now() clock, and for input it is the time the OS gave the
+ * browser. These capture listeners on the window run in the same task as
+ * SDL's handler, before it, so the record whose run time is just before an
+ * SDL event's stamp is that event's. A record: class (1 key down, 2 key
+ * up, 3 pointer down, 4 pointer up or cancel), the pointer id or -1, the
+ * DOM's time, the time the listener ran. The newest 64 are kept. */
+EM_JS(void, yscr__web_in_init, (void), {
+    if (Module['yscrIn']) return;
+    var r = Module['yscrIn'] = { log: [], head: 0 };
+    function add(cls, id, e) {
+        var x = [cls, id, e.timeStamp, performance.now()];
+        if (r.log.length < 64) r.log.push(x); else { r.log[r.head] = x; r.head = (r.head + 1) & 63; }
+    }
+    window.addEventListener('keydown', function(e) { add(1, -1, e); }, true);
+    window.addEventListener('keyup', function(e) { add(2, -1, e); }, true);
+    window.addEventListener('pointerdown', function(e) { add(3, e.pointerId, e); }, true);
+    window.addEventListener('pointerup', function(e) { add(4, e.pointerId, e); }, true);
+    window.addEventListener('pointercancel', function(e) { add(4, e.pointerId, e); }, true);
+    /* a second mouse button while one is held comes as a move */
+    window.addEventListener('pointermove', function(e) {
+        var bit = [1, 4, 2, 8, 16][e.button];
+        if (e.button >= 0 && bit) add((e.buttons & bit) ? 3 : 4, e.pointerId, e);
+    }, true);
+})
+
+/* The DOM time (ms) of the newest record of class cls (and pointer id, when
+ * id >= 0) whose listener ran at most 1 ms after t_ms and at most 50 ms
+ * before it, or -1. A time that is not a performance.now() time (more than
+ * 1 s before the listener ran, or after it) is not used. */
+EM_JS(double, yscr__web_in_find, (int cls, int id, double t_ms), {
+    var r = Module['yscrIn'], best = null, i, x;
+    if (!r) return -1;
+    for (i = 0; i < r.log.length; i++) {
+        x = r.log[i];
+        if (x[0] !== cls || (id >= 0 && x[1] !== id) || x[3] > t_ms + 1 || t_ms - x[3] > 50) continue;
+        if (!best || x[3] > best[3]) best = x;
+    }
+    if (!best || !(best[2] <= best[3] + 0.001) || best[3] - best[2] > 1000) return -1;
+    return best[2];
 })
 
 /* The oldest visibility change not taken yet: its DOM time (ms) in *t and
@@ -4387,6 +4505,30 @@ EM_JS(int, yscr__web_vis_take, (double* t), {
 static uint64_t yscr__web_perf_ns(void) { return (uint64_t)(yscr__web_perf_ms() * 1e6); }
 
 static int64_t yscr__web_to_rt(const yscr__web* w, double ms) { return (int64_t)llround(ms * 1e6) + w->off_ns; }
+
+/* A press or release from SDL gets the DOM event's own time in place of
+ * SDL's handler time, when its record is found (yscr__web_in_find). */
+static void yscr__web_dom_stamp(yscr__web* w, const SDL_Event* ev, yin_event* out) {
+    int cls, id = -1;
+    double ms;
+    switch (ev->type) {
+    case SDL_EVENT_KEY_DOWN:            cls = 1; break;
+    case SDL_EVENT_KEY_UP:              cls = 2; break;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_PEN_DOWN:            cls = 3; break;
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+    case SDL_EVENT_PEN_UP:              cls = 4; break;
+    case SDL_EVENT_FINGER_DOWN:         cls = 3; id = (int)ev->tfinger.fingerID - 1; break;   /* SDL: pointerId + 1 */
+    case SDL_EVENT_FINGER_UP:
+    case SDL_EVENT_FINGER_CANCELED:     cls = 4; id = (int)ev->tfinger.fingerID - 1; break;
+    default: return;
+    }
+    w->dom_tried++;
+    ms = yscr__web_in_find(cls, id, (double)(out->t - w->off_ns) * 1e-6);
+    if (ms < 0) return;
+    out->t = yscr__web_to_rt(w, ms);
+    w->dom_found++;
+}
 
 /* Waits for the next frame callback. While the page is hidden none come:
  * the pending present completes with no time (OCCLUDED), and the wait goes
@@ -4444,6 +4586,7 @@ static int yscr__web_open(void* ctx, const yscr_presenter_open* in, yscr_caps* c
     yscr__copy(w->canvas, sizeof w->canvas, sel);
     w->coi = yscr__web_query(0);
     w->desync = yscr__web_query(2);
+    yscr__web_in_init();
     w->ctx = yscr__web_gl_create(w->canvas, w->desync);
     if (w->ctx <= 0) {
         yscr__set_error(err, err_cap, "ysp_screen: web: no WebGL2 context on %s (the browser or its GPU has no WebGL2)", w->canvas);
@@ -4559,11 +4702,13 @@ static int yscr__web_describe(void* ctx, char* buf, size_t cap) {
     yrt_clock_info ci;
     yrt_get_clock_info(&ci);
     return snprintf(buf, cap, "raf_period=%.4fms raf_settle=%s%.2fs(%d callbacks,sd=%.0fus) coi=%d clock_step=%lldns "
-                    "corr=%lldns desync=%d skipped=%u late=%u hidden=%u(%.1fs) vis_changes=%d canvas=%s",
+                    "corr=%lldns desync=%d skipped=%u late=%u hidden=%u(%.1fs) vis_changes=%d canvas=%s dpr=%.2f "
+                    "dom_stamps=%u/%u",
                     (double)w->period * 1e-6, w->settled ? "" : "UNSTEADY,", (double)w->settle_ns * 1e-9,
                     (int)w->settle_frames, (double)w->sd_ns * 1e-3, w->coi, (long long)ci.resolution_ns,
                     (long long)w->corr_ns, w->desync, (unsigned)w->skipped, (unsigned)w->late, (unsigned)w->hidden_waits,
-                    (double)w->hidden_ns * 1e-9, yscr__web_query(3), w->canvas);
+                    (double)w->hidden_ns * 1e-9, yscr__web_query(3), w->canvas, (double)yscr__web_query(6) * 0.01,
+                    (unsigned)w->dom_found, (unsigned)w->dom_tried);
 }
 
 static const yscr_presenter yscr__web_presenter = {
@@ -10640,6 +10785,15 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
         SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN, !desc->windowed);
 #endif
         SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_HIGH_PIXEL_DENSITY_BOOLEAN, true);
+#if defined(YSCR__WEB)
+        yscr__web_fs_hold(1);
+        s->window = SDL_CreateWindowWithProperties(props);
+        yscr__web_fs_hold(0);
+        /* SDL's visibility handler re-applies the window's flags when the
+         * page is shown again, which leaves the page's fullscreen; the
+         * header has its own listener (yscr__web_query) */
+        if (s->window) emscripten_set_visibilitychange_callback(NULL, 0, NULL);
+#else
         {   /* SDL's hint is process-wide: set for this window only, then
              * put back, so an operator window made later is managed */
             char or_prev[16] = "";
@@ -10656,6 +10810,7 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
                 else SDL_ResetHint(SDL_HINT_X11_FORCE_OVERRIDE_REDIRECT);
             }
         }
+#endif
         SDL_DestroyProperties(props);
         if (!s->window) {
             yscr__set_error(s->error, sizeof s->error, "ysp_screen: window: %s", SDL_GetError());
@@ -10971,7 +11126,15 @@ YSCR_API void yscr_close(yscr_screen* s) {
     s->pr_open = 0;
 #if !defined(YSCR_NO_SDL)
     if (s->cursor_hidden) SDL_ShowCursor();
+#if defined(YSCR__WEB)
+    if (s->window) {   /* the page leaves its fullscreen itself */
+        yscr__web_fs_hold(1);
+        SDL_DestroyWindow(s->window);
+        yscr__web_fs_hold(0);
+    }
+#else
     if (s->window) SDL_DestroyWindow(s->window);
+#endif
 #if defined(YSCR__GLX)
     yscr__xm_release(s);   /* after SDL put the desktop mode back */
 #endif
@@ -11919,7 +12082,12 @@ YSCR_API bool yscr_event_input(yscr_screen* s, const union SDL_Event* ev, yin_ev
         yin_sdl_ctx ctx;
         ctx.raw_keyboard = s ? yscr__raw_keyboard(s) : true;
         ctx.keep_synthetic = false;
-        return yin_from_sdl(ev, yscr_restamp(s, ev->common.timestamp), &ctx, out) != 0 && yscr__key_keep(s, out);
+        if (!yin_from_sdl(ev, yscr_restamp(s, ev->common.timestamp), &ctx, out)) return false;
+#if defined(YSCR__WEB)
+        if (s && s->open && s->backend == YSCR_BACKEND_WEB)
+            yscr__web_dom_stamp((yscr__web*)(void*)s->backend_mem, ev, out);
+#endif
+        return yscr__key_keep(s, out);
     }
 #else
     (void)s;

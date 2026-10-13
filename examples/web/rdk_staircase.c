@@ -3,10 +3,12 @@
  * picks each trial's coherence, ysp/response.h takes the arrow key, and
  * the page shows the threshold estimate and offers the rows as a CSV.
  *
- * Each trial: a fixation cross for 0.5 s, then 150 white dots in a 360 px
- * circle (4 px, 200 px/s) until a response or 2 s. Left or Right arrow for
- * the direction of the coherent dots (180 or 0 deg, at random). The cross
- * turns green or red for 0.3 s, then a blank of 0.5 s.
+ * Each trial: a fixation cross for 0.5 s, then 150 white dots in a circle
+ * of 360 units (4 units, 200 units/s; 480 units are the canvas's shorter
+ * side) until a response or 2 s. Left or Right arrow, or a tap or click on
+ * the left or right half of the canvas (web_common.h), for the direction
+ * of the coherent dots (180 or 0 deg, at random). The cross turns green or
+ * red for 0.3 s, then a blank of 0.5 s.
  *
  * The staircase: 2-down 1-up on log10 coherence (70.7 % correct; Levitt
  * 1971), from 0.5, steps 0.3, 0.15 and 0.1 log10 units, coherence 0.01 to
@@ -15,17 +17,19 @@
  * trial with no response is not given to the staircase; 60 trials with
  * those end the run.
  *
- * Columns: trial, coherence, direction, response, rt_s, correct,
- * reversal, onset_tier, frames_dropped, then the constant columns coi,
- * clock_step_s and audio. In a browser the onset is the browser's frame
- * time (tier 5), not light (docs/web.md).
+ * Columns: trial, coherence, direction, response, rsp_kind (keyboard,
+ * touch or mouse), rt_s, correct, reversal, onset_tier, frames_dropped,
+ * then the constant columns coi, clock_step_s and audio. In a browser the
+ * onset is the browser's frame time (tier 5), not light (docs/web.md).
  *
  * --sim: the simulated display and a simulated observer (a Weibull with a
  * 70.7 % point at coherence 0.15, slope 2, lapse 0.02; RT 0.5 s). It
  * checks that the staircase stopped and that the estimate is within a
  * factor of 2 of 0.15, and exits 1 otherwise.
  *
- * Usage: web_rdk_staircase [--sim] [--seed N]
+ * Usage: web_rdk_staircase [--sim] [--seed N] [--size WxH]
+ *   --size WxH  the window in CSS pixels (default 720x480; the page passes
+ *               its stage's size)
  * Exit code: 0 (also after Shift+Esc), 1 when something did not open or a
  * --sim check failed, 2 for a bad argument.
  */
@@ -44,6 +48,7 @@
 #include "ysp/rdk.h"
 #define YSP_STAIR_IMPLEMENTATION
 #include "ysp/stair.h"
+#include "web_common.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -76,13 +81,22 @@ enum { END_OF_TRIAL = 1 };
 #define SIM_THRESHOLD 0.15
 #define MAX_TRIALS 60       /* with misses: a participant who left ends the run */
 
-static const yrsp_choice keys[] = { { .key = "left" }, { .key = "right" } };
+/* The arrow keys, and the canvas halves for touch and the mouse (web_side). */
+static const yrsp_choice keys[] = {
+    { .key = "left" }, { .key = "right" },
+    { .name = "left", .kind = YRSP_KIND_TOUCH, .match = YRSP_MATCH_KEYCODE, .code = 1 },
+    { .name = "right", .kind = YRSP_KIND_TOUCH, .match = YRSP_MATCH_KEYCODE, .code = 2 },
+    { .name = "left", .kind = YRSP_KIND_MOUSE, .match = YRSP_MATCH_KEYCODE, .code = 1 },
+    { .name = "right", .kind = YRSP_KIND_MOUSE, .match = YRSP_MATCH_KEYCODE, .code = 2 },
+};
+#define N_KEYS (int)(sizeof keys / sizeof keys[0])
 
 typedef struct row {
     int         trial;
     double      coherence;
     int         direction;
     const char* response;
+    const char* rsp_kind;
     int64_t     rt_ns;
     bool        correct;
     bool        reversal;
@@ -119,12 +133,12 @@ static bool to_memory(void* ctx, const void* bytes, size_t n) {
     return true;
 }
 
-static ygfx_stim cross(float r, float g, float b) {
+static ygfx_stim cross(float r, float g, float b, float u) {
     ygfx_shape_desc d;
     memset(&d, 0, sizeof d);
     d.shape = YGFX_CROSS;
-    d.w = d.h = 16;
-    d.shape_p[0] = 3;
+    d.w = d.h = 16 * u;
+    d.shape_p[0] = 3 * u;
     d.edge = YGFX_EDGE_COSINE;
     d.edge_width = 1;
     d.color[0] = r; d.color[1] = g; d.color[2] = b;
@@ -142,7 +156,7 @@ int main(int argc, char** argv) {
     yst_desc stdesc;
     yrsp_desc pd;
     yrsp_sdl_ctx sdl;
-    yrsp_source sources[1];
+    yrsp_source sources[3];
     yscr_caps caps;
     yscr_frame f;
     yrt_clock_info ci;
@@ -153,21 +167,23 @@ int main(int argc, char** argv) {
     char line[1536], step[32], coi[4];
     uint64_t seed = 20261010, rng;
     int i, n, sim = 0, aborted = 0, failed = 0, trial = 0, n_sim_ev = 0, sim_next = 0;
-    int in_trial = 0, responding = 0, moving = 0, answer = 0, dropped = 0;
+    int in_trial = 0, responding = 0, moving = 0, answer = 0, dropped = 0, win_w = 720, win_h = 480;
     int64_t stim_frame = -1, motion_t0 = 0;
     double coherence = 0, threshold = NAN;
+    float u, scr_w, scr_h;
 
     memset(&sd, 0, sizeof sd);
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--sim")) sim = 1;
         else if (!strcmp(argv[i], "--seed") && i + 1 < argc) seed = (uint64_t)strtoull(argv[++i], NULL, 10);
-        else { fprintf(stderr, "usage: web_rdk_staircase [--sim] [--seed N]\n"); return 2; }
+        else if (!strcmp(argv[i], "--size") && i + 1 < argc && web_size_arg(argv[i + 1], &win_w, &win_h)) i++;
+        else { fprintf(stderr, "usage: web_rdk_staircase [--sim] [--seed N] [--size WxH]\n"); return 2; }
     }
     rng = seed;
     if (sim) sd.backend = YSCR_BACKEND_SIM;
     sd.windowed = true;
-    sd.window_w = 720;
-    sd.window_h = 480;
+    sd.window_w = win_w;
+    sd.window_h = win_h;
     if (!yscr_open(&scr, &sd)) { fprintf(stderr, "web_rdk_staircase: %s\n", yscr_error(&scr)); return 1; }
     yscr_get_caps(&scr, &caps);
     yrt_get_clock_info(&ci);
@@ -175,24 +191,28 @@ int main(int argc, char** argv) {
     gd.screen = &scr;
     gd.background[0] = gd.background[1] = gd.background[2] = 0.25f;
     if (!ygfx_open(&gfx, &gd)) { fprintf(stderr, "web_rdk_staircase: %s\n", ygfx_error(&gfx)); return 1; }
+    /* 480 units on the canvas's shorter side, in its pixels */
+    ygfx_size(&gfx, &scr_w, &scr_h);
+    u = (scr_w < scr_h ? scr_w : scr_h) / 480.0f;
+    if (!(u > 0)) u = 1;
 
     memset(&rdesc, 0, sizeof rdesc);
-    rdesc.w = FIELD_PX;
+    rdesc.w = FIELD_PX * u;
     rdesc.count = N_DOTS;
-    rdesc.speed = 200;
+    rdesc.speed = 200 * u;
     if (!yrdk_open(&rdk, &rdesc)) { fprintf(stderr, "web_rdk_staircase: %s\n", yrdk_error(&rdk)); return 1; }
     buf = ygfx_buffer(&gfx, sizeof xy);
     memset(&dd, 0, sizeof dd);
     dd.buf = buf;
     dd.count = N_DOTS;
-    dd.dot_size = 4;
+    dd.dot_size = 4 * u;
     dd.aperture = YGFX_CIRCLE;
-    dd.w = FIELD_PX;
+    dd.w = FIELD_PX * u;
     dd.color[0] = dd.color[1] = dd.color[2] = 1.0f;
     dots = ygfx_dots(&dd);
-    fix = cross(0.85f, 0.85f, 0.85f);
-    fix_right = cross(0.1f, 0.75f, 0.1f);
-    fix_wrong = cross(0.85f, 0.1f, 0.1f);
+    fix = cross(0.85f, 0.85f, 0.85f, u);
+    fix_right = cross(0.1f, 0.75f, 0.1f, u);
+    fix_wrong = cross(0.85f, 0.1f, 0.1f, u);
 
     memset(&stdesc, 0, sizeof stdesc);
     stdesc.start = 0.5;
@@ -220,6 +240,7 @@ int main(int argc, char** argv) {
             YTR_COL_D(row, coherence, YTR_COL_DOUBLE, 4),
             YTR_COL(row, direction, YTR_COL_INT),
             YTR_COL(row, response, YTR_COL_STRING),
+            YTR_COL(row, rsp_kind, YTR_COL_STRING),
             YTR_COL_D(row, rt_ns, YTR_COL_TIME_NS, 6),
             YTR_COL(row, correct, YTR_COL_BOOL),
             YTR_COL(row, reversal, YTR_COL_BOOL),
@@ -245,17 +266,26 @@ int main(int argc, char** argv) {
     memset(&sdl, 0, sizeof sdl);
     sdl.raw_keyboard = caps.raw_keyboard;
     sources[0] = yrsp_sdl_source(&sdl, YRSP_KIND_KEYBOARD);
+    sources[1] = yrsp_sdl_source(&sdl, YRSP_KIND_TOUCH);
+    sources[2] = yrsp_sdl_source(&sdl, YRSP_KIND_MOUSE);
     memset(&pd, 0, sizeof pd);
     pd.choices = keys;
-    pd.n_choices = 2;
+    pd.n_choices = N_KEYS;
     pd.duration_ns = YRT_S(RESPONSE_S);
     pd.min_rt_ns = YRT_S(MIN_RT_S);
     pd.sources = sources;
-    pd.n_sources = 1;
+    pd.n_sources = 3;
     if (!yrsp_open(&rsp, &pd)) { fprintf(stderr, "web_rdk_staircase: %s\n", yrsp_error(&rsp)); return 1; }
 
     printf("%s\n", line);
+    /* every program's first draw, and the dots' first upload, before the
+     * page shows the canvas */
+    yrdk_start(&rdk, seed, 0);
+    yrdk_update(&rdk, 0);
+    yrdk_xy(&rdk, xy);
+    ygfx_buffer_update(&gfx, buf, 0, xy, sizeof xy);
     ygfx_prime(&gfx);
+    web_ready();
     for (;;) {
         SDL_Event ev;
         int64_t bt = 0;
@@ -294,7 +324,7 @@ int main(int argc, char** argv) {
         }
 
         while (yscr_poll(&scr, &ev, NULL))
-            if (yscr_event_input(&scr, &ev, &in)) yrsp_feed(&rsp, &in);
+            if (yscr_event_input(&scr, &ev, &in)) { web_side(&scr, &in); yrsp_feed(&rsp, &in); }
         for (; sim && sim_next < n_sim_ev && sim_ev[sim_next].t <= f.onset; sim_next++)
             yrsp_feed(&rsp, &sim_ev[sim_next]);
 
@@ -302,7 +332,7 @@ int main(int argc, char** argv) {
             ytl_seq q = ytl_seq_on(&tl, TRIAL);
             int ok;
             yrsp_finish(&rsp, &res);
-            ok = (res.flags & YRSP_R_RESPONDED) && res.response == answer;
+            ok = (res.flags & YRSP_R_RESPONDED) && res.response_name && !strcmp(res.response_name, answer ? "right" : "left");
             ytl_base_time(&tl, TRIAL, f.onset, &bt);
             ytl_at(&q, bt);
             ytl_off(&q, DOTS_ON);
@@ -349,8 +379,10 @@ int main(int argc, char** argv) {
                 r.coherence = coherence;
                 r.direction = answer ? 0 : 180;
                 r.response = res.response_name;
+                r.rsp_kind = (res.flags & YRSP_R_RESPONDED) ? web_kind_name(res.kind) : NULL;
                 r.rt_ns = res.rt_ns == YRSP_NO_TIME ? YTR_MISSING_NS : res.rt_ns;
-                r.correct = (res.flags & YRSP_R_RESPONDED) && res.response == answer;
+                r.correct = (res.flags & YRSP_R_RESPONDED) && res.response_name &&
+                            !strcmp(res.response_name, answer ? "right" : "left");
                 r.onset_tier = res.onset_tier;
                 r.frames_dropped = dropped;
                 if (res.flags & YRSP_R_RESPONDED) {   /* a miss is not the staircase's */

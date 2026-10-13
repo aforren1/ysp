@@ -162,6 +162,16 @@ jobs:
           # PTB's sound schedule demos on the null device; 1 if a record is off its plan (about 9 s).
           expect 0 "$bin/audio_schedule" --null
           expect 2 "$bin/audio_schedule" --db -10
+          # Capture (v0.5.0): the null input; the simulated loop, an output and an
+          # input on one timer thread, for the latency, the first sound after a
+          # silence (with and without a gate in the sink) and a voice RT. Each is
+          # 1 when its measured result is off the loop's.
+          expect 0 "$bin/audio_capstats" --null --seconds 2
+          expect 0 "$bin/audio_loopback_latency" --sim --clicks 10 --every-ms 200
+          expect 2 "$bin/audio_loopback_latency" --db 0
+          expect 0 "$bin/audio_first_sound" --sim
+          expect 0 "$bin/audio_first_sound" --sim --sim-gate-ms 20
+          expect 0 "$bin/audio_voice_rt" --sim --trials 3
           # The rig profile (ysp/rigfile.h) in a folder of the runner's, never
           # the user's: a simulated output latency stored into it, then
           # the CLI on it; a second --new must not replace it.
@@ -272,6 +282,7 @@ jobs:
           expect 0 build/timeline_tracking
           expect 0 build/color_convert
           expect 0 build/audio_tone --null
+          expect 0 build/audio_loopback_latency --sim --clicks 10 --every-ms 200
 
   # --------------------------------------------------------------------- #
   # MinGW: the headers carry explicit MinGW handling (no #pragma           #
@@ -841,7 +852,7 @@ jobs:
       # out of this list is compiled nowhere on CI. ctest below runs every
       # test that matches its pattern, built or not.
       - name: Build
-        run: cmake --build build --config Release --target compile_screen_c compile_screen_cxx compile_screen_com test_screen screen_hello screen_flipstats screen_input screen_abort screen_gamma screen_sync_check screen_loopback compile_gfx_c compile_gfx_cxx test_gfx gfx_hello gfx_trial gfx_load gfx_calib gfx_bench gfx_gallery gfx_text gfx_gratings gfx_luminance_bits gfx_clut_sync gfx_filtered_noise gfx_gaze_contingent gfx_capture gfx_rdk gfx_rdk_bench trial_rdk compile_video_c compile_video_cxx compile_video_com test_video video_play video_bench video_check test_response_sdl test_input_sdl trial_keyboard trial_same_different trial_srt trial_adjustment trial_mouse_tracking trial_audio_keyboard trial_stop_signal trial_sternberg trial_2afc_adaptive trial_two_keyboards audio_av_sync web_tutorial web_rdk_staircase web_selftest
+        run: cmake --build build --config Release --target compile_screen_c compile_screen_cxx compile_screen_com test_screen screen_hello screen_flipstats screen_input screen_abort screen_gamma screen_sync_check screen_loopback compile_gfx_c compile_gfx_cxx test_gfx gfx_hello gfx_trial gfx_load gfx_calib gfx_bench gfx_gallery gfx_text gfx_gratings gfx_luminance_bits gfx_clut_sync gfx_filtered_noise gfx_gaze_contingent gfx_capture gfx_rdk gfx_rdk_bench trial_rdk compile_video_c compile_video_cxx compile_video_com test_video video_play video_bench video_check test_response_sdl test_input_sdl trial_keyboard trial_same_different trial_srt trial_adjustment trial_mouse_tracking trial_audio_keyboard trial_stop_signal trial_sternberg trial_2afc_adaptive trial_two_keyboards audio_av_sync web_tutorial web_rdk_staircase web_selftest web_av_sync
 
       # ysp/gfx.h's pixel checks must run where software GL exists; macOS has
       # no EGL, so its test runs the CPU checks only.
@@ -903,6 +914,8 @@ jobs:
           expect 0 "$bin/web_rdk_staircase" --sim
           expect 0 "$bin/web_selftest" --sim --frames 120
           expect 2 "$bin/web_selftest" --frames 1
+          expect 0 "$bin/web_av_sync" --sim
+          expect 2 "$bin/web_av_sync" --lead 9
           expect 2 "$bin/trial_sternberg" --bogus
           expect 2 "$bin/trial_srt" --blocks SX
           expect 0 "$bin/gfx_load" --sim --gabors 10 --dots 100 --seconds 1

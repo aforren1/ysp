@@ -355,8 +355,11 @@ int main(int argc, char** argv) {
             int ok = it->rc == YAU_OK && it->r.tier == YAU_TIER_SIM;
             if (ok && strcmp(it->part, "probe"))
                 ok = !(it->r.flags & (YAU_ONSET_LATE | YAU_ONSET_CANCELED | YAU_ONSET_XRUN)) && llabs(it->r.residual) <= res_bar;
+            /* The stop is placed by the fit of its moment and read back
+             * through the final fit: each can be off by res_bar
+             * (CI macOS, fit spread 3.8 ms: 1.63 ms) */
             if (ok && it == stop_it) ok = (it->r.flags & YAU_ONSET_STOPPED) && it->r.end_frame > 0 &&
-                llabs(yau_time_of(&au, it->r.end_frame) - at_ns(STOP_START_S + STOP_AT_S)) <= res_bar;
+                llabs(yau_time_of(&au, it->r.end_frame) - at_ns(STOP_START_S + STOP_AT_S)) <= 2 * res_bar;
             if (ok && it == loop_it) ok = it->r.end_frame - it->r.start_frame == 4 * rep.n;
             if (!ok) { fprintf(stderr, "audio_schedule: --null: %s %s: rc %d flags 0x%03x residual %lld ns\n", it->part,
                                it->name, it->rc, (unsigned)it->r.flags, (long long)it->r.residual); bad = 1; }
