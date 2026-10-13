@@ -129,6 +129,10 @@ int main(void) {
             if (yau_is_open(&au)) yau_close(&au);
         }
     }
+    /* only a busy open suspends the sound server: no other failure on this
+     * machine reaches that line, so the predicate is checked here */
+    CHECK(yau__ma_suspend_on(MA_BUSY));
+    CHECK(!yau__ma_suspend_on(MA_FORMAT_NOT_SUPPORTED) && !yau__ma_suspend_on(MA_ERROR) && !yau__ma_suspend_on(MA_INVALID_ARGS));
     /* 1 */
     n = yau_list_devices(YAU_BACKEND_ALSA, g_list, 128);
     printf("ALSA lists %d playback devices\n", n);

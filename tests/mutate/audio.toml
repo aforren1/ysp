@@ -649,8 +649,8 @@ id = "alsa-12"
 name = "capture position less the delay"
 test = "audio_alsa_capture"
 why = "The output's formula copied: for an input the delay is recorded and not yet read, so it is added; less, the backlog goes below 0."
-find = "    raw = p->read + (int64_t)n + (int64_t)a->delay(a->st);"
-replace = "    raw = p->read + (int64_t)n - (int64_t)a->delay(a->st);"
+find = "    raw = p->read + (int64_t)n + delay;"
+replace = "    raw = p->read + (int64_t)n - delay;"
 
 [[mutant]]
 id = "alsa-13"
@@ -808,3 +808,89 @@ find = """    if (c->dev_lost > 0) {
         yau__cxrun(c, now_t, lost, c->f);
     }"""
 replace = """    c->dev_lost = 0;"""
+
+# Review fixes (v0.6.0): split duplex reads, the suspension held by every
+# hw: device on the card, the busy-only suspension,
+# the duplex buffer and its silence, the input's keep_sound_server in
+# duplex, the watchdog's buffer scaling, the PULSE capture count, and the
+# late-blocks rule left to devices with no reports.
+
+[[mutant]]
+id = "alsa-24"
+name = "a split duplex read reports from every callback"
+test = "audio_alsa_capture"
+why = "A callback before a read's last reports the whole read's status against fewer frames: 9.3 ms short at 512 + 448, a second line in the fit."
+find = "    if (p->chunk <= 0) { yau__alc_commit(p, c, raw, t, trig, rate, tk); return; }"
+replace = "    if (1) { yau__alc_commit(p, c, raw, t, trig, rate, tk); return; }"
+
+[[mutant]]
+id = "alsa-25"
+name = "a held full chunk reported whether or not its read ended"
+test = "audio_alsa_capture"
+why = "At 512 + 512 the first chunk is mid-read; reported, it is 10.7 ms short."
+find = "        prev_ended = moved >= (double)n / 2.0;"
+replace = "        prev_ended = 1;"
+
+[[mutant]]
+id = "alsa-26"
+name = "a device on a suspended card does not hold it"
+test = "audio_alsa_capture"
+why = "The output's close would resume the card under the input, and the source's resume fails on the input's PCM."
+find = "    if (r == MA_SUCCESS && hw) yau__ma_join(dc.capture.pDeviceID, &m->suspended);"
+replace = "    (void)0;"
+
+[[mutant]]
+id = "alsa-28"
+name = "any failed open suspends the sound server"
+test = "audio_alsa"
+why = "A failure other than a busy card fails again after the suspension; the desktop loses its sound for nothing. No hardware path here fails that way, so the test checks the predicate."
+find = "static int yau__ma_suspend_on(ma_result r) { return r == MA_BUSY; }"
+replace = "static int yau__ma_suspend_on(ma_result r) { return r != MA_SUCCESS; }"
+
+[[mutant]]
+id = "alsa-29"
+name = "no silence before a hw: duplex start"
+test = "audio_alsa_capture"
+why = "Measured: with no prefill 236 output xruns in 30 s at 64 frames."
+find = "        m->al_prefill = yau__al_prefill(m);"
+replace = "        (void)0;"
+
+[[mutant]]
+id = "alsa-30"
+name = "a hw: duplex device of three periods"
+test = "audio_alsa_capture"
+why = "Measured: 3 periods underran at 64 frames with any prefill; 6 with 4 of silence ran clean."
+find = "        dc->periods = YAU__DUPLEX_PERIODS;"
+replace = "        (void)0;"
+
+[[mutant]]
+id = "alsa-31"
+name = "the input's keep_sound_server ignored in duplex"
+test = "audio_alsa_capture"
+why = "A program that asked to keep the sound server would have it suspended by its duplex device."
+find = "    if (c->desc.keep_sound_server) m->keep_server = 1;"
+replace = "    (void)0;"
+
+[[mutant]]
+id = "pulse-13"
+name = "a closed PULSE capture still counted on its card"
+test = "audio_pulse_capture"
+why = "After the capture's close an AUTO output on the card would still be refused."
+find = "    if (m->pa_card) { yau__pas.caps[m->pa_card - 1]--; m->pa_card = 0; }"
+replace = "    if (m->pa_card) { m->pa_card = 0; }"
+
+[[mutant]]
+id = "cap-26"
+name = "the late-blocks rule on a device with reports"
+test = "audio"
+why = "Its blocks without a report come a pipeline late; after 200 ms that read as a loss (485 to 505 frames on hw:0,0 duplex with split reads)."
+find = "    } else if (c->dcaps.pos_source != YAU_POS_DEVICE) {"
+replace = "    } else {"
+
+[[mutant]]
+id = "cap-27"
+name = "the watchdog's limit not scaled to 4 buffers"
+test = "audio"
+why = "A device with a 100 ms buffer can deliver 400 ms apart without being lost."
+find = "            if (b4 > lim) lim = b4;"
+replace = "            (void)b4;"

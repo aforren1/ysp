@@ -688,7 +688,9 @@
  *   the input on the same card (one converter clock): the capture desc's
  *   device, else the card's first input. Six periods per buffer and four
  *   of silence written before the start (DUPLEX START, BACKENDS).
- *   PulseAudio and ALSA's "default" are refused.
+ *   PulseAudio and ALSA's "default" are refused. The capture desc's
+ *   keep_sound_server counts as yau_desc's: either keeps the card's
+ *   sound server.
  *
  *   RECORDS (desc.ring): YAU_EV_CAP_OPEN, _FIT (as YAU_EV_FIT, in capture
  *   frames), _XRUN, _DROP (their fields at the YAU_EV_CAP_* definitions),
@@ -777,7 +779,10 @@
  *     says busy, open() suspends PulseAudio's sinks and sources on that
  *     card (their alsa.card property; Psychtoolbox's PsychPortAudio
  *     suspends every one), and resumes them at the card's last close and
- *     at exit(); other cards keep playing and recording. The describe
+ *     at exit(); other cards keep playing and recording. Every hw: device
+ *     open on the card holds the suspension, also one that opened without
+ *     a busy error because another had freed the card: the last of them
+ *     to close resumes it, or exit(). The describe
  *     line's backend field says ALSA,sound-server-suspended. A program
  *     that dies without exit() leaves them suspended: `pactl suspend-sink
  *     0` and `pactl suspend-source 0` resume them. desc.keep_sound_server
@@ -815,9 +820,10 @@
  *     is the frame at the converter at the status timestamp
  *     (os_claim=alsa:status): 3.0 to 9.4 us sd from a line over 30 s at
  *     64 to 480-frame periods, idle and loaded, against 77 to 615 us for
- *     callback times. A buffer of 40 ms at least (3 to 32 periods): for an
- *     input it adds no latency, only room for a stall (36 ms rode out at
- *     64 frames, 3 periods lost frames at 2 ms). RESTART (LOSS) counts an
+ *     callback times. A buffer of 40 ms, at least 3 and at most 32
+ *     periods (so less at short periods: 21 ms at 32 frames, 48 kHz): for
+ *     an input it adds no latency, only room for a stall (36 ms rode out
+ *     at 64 frames, 3 periods lost frames at 2 ms). RESTART (LOSS) counts an
  *     overrun to the frame. The card's sinks and sources are suspended as
  *     for the output when the open says busy (PulseAudio holds the
  *     capture PCM in an input or duplex profile). The device thread takes
@@ -834,6 +840,11 @@
  *     when the sink starts, so open the output first. Refused on a card
  *     this program holds suspended (it records nothing there).
  *     DUPLEX: ALSA exclusive on one card (DUPLEX); PulseAudio refused.
+ *     SPLIT READS: miniaudio's duplex loop calls back in chunks that fit
+ *     its playback buffer too, so a read can come in several callbacks (a
+ *     16-bit input beside a 32-bit output past 512 frames; more output
+ *     than input channels); the status is the whole read's, so only a
+ *     read's last callback reports, a full chunk one callback late.
  *     Tier 3 on every path: no line-in run (TIERS).
  *   YAU_BACKEND_COREAUDIO
  *     Compiled through miniaudio; no position, so every onset is
@@ -1027,7 +1038,7 @@
  *          runs"). CAPTURE on Linux (BACKENDS): AUTO's input is ALSA
  *          exclusive on the default card's first capture device, with the
  *          hw: PCM's status as its position (alsa:status), a buffer of
- *          40 ms at least, and an overrun restart counted to the frame
+ *          40 ms (3 to 32 periods), and an overrun restart counted to the frame
  *          (LOSS, RESTART); ALSA exclusive capture needs a card's device;
  *          PulseAudio capture reads its record stream's timing info
  *          (pulse:timing-info) and refuses a monitor as the default input
@@ -1046,6 +1057,10 @@
  *          yau_capture_update() return YAU_ERR_LOST while it lasts. Fixed:
  *          miniaudio's failed ALSA duplex init left the capture PCM open,
  *          so the open after a suspension failed; the header closes it.
+ *          Every hw: device on a suspended card holds the suspension; a
+ *          suspension that half failed is taken back. A device with reports no longer runs
+ *          the late-blocks loss rule on its blocks without one (it counted
+ *          a pipeline's lateness as a loss when reports were sparse).
  *          Tier 3 on every Linux input: no line-in run.
  *   v0.5.1 - EXCLUSIVE START: WASAPI exclusive mode writes one silent
  *          buffer before Start, and position reports count stream frames
@@ -1185,7 +1200,13 @@
  *   (alsa-22 new), test_audio_alsa_capture's 9 (alsa-11 to alsa-16,
  *   alsa-19, alsa-21, alsa-23), test_audio_pulse's 4 and
  *   test_audio_pulse_capture's 8 (pulse-05 to pulse-12; pulse-06 in the
- *   duplex profile only). Tier 3 on every Linux input: no line-in or
+ *   duplex profile only). After the review fixes (split duplex reads at
+ *   960 and 1024 frames: reports 10.5 to 31.2 us sd from their line, no
+ *   loss; the suspension held by every hw: device on the card; the
+ *   late-blocks rule left to devices with no reports), all again: the
+ *   core test's 53, test_audio_alsa's 13, test_audio_alsa_capture's 15,
+ *   test_audio_pulse's 4, test_audio_pulse_capture's 9 (pulse-13 new).
+ *   Tier 3 on every Linux input: no line-in or
  *   photodiode run (the Teensy needs a TRRS breakout and a divider into
  *   the combo jack's microphone contact, which this machine lacks).
  *   STATUS: v0.5.1, 2026-10-13 (docs/audio.md, "Exclusive start"): WASAPI
@@ -2465,6 +2486,16 @@ YAU_API const yau_param* yau_params(int* n);
 #ifdef YSP_AUDIO_IMPLEMENTATION
 #ifndef YSP_AUDIO_IMPLEMENTATION_GUARD
 #define YSP_AUDIO_IMPLEMENTATION_GUARD
+/* Linux desktop code (ALSA hw:, the PulseAudio suspension and checks).
+ * tests/compile/audio.c builds with it 0 on Linux, as a unix with
+ * PulseAudio and no Linux (illumos, Hurd) would. */
+#ifndef YAU__LINUX
+#if defined(__linux__) && !defined(__ANDROID__)
+#define YAU__LINUX 1
+#else
+#define YAU__LINUX 0
+#endif
+#endif
 
 #ifndef YSP_RT_IMPLEMENTATION_GUARD
     #define YSP_RT_IMPLEMENTATION
@@ -3721,7 +3752,7 @@ typedef void (*yau__pa_unref_fn)(void* op);
 #define YAU__PA_EVERY_NS 50000000LL
 #endif
 
-#if defined(__linux__) && !defined(__ANDROID__)
+#if YAU__LINUX
 /* The leading fields that libpulse's pa_sink_info and pa_source_info share
  * (monitor is monitor_source in one, monitor_of_sink in the other), up to
  * the property list; tests/compile/audio_pulse.cpp checks the offsets. */
@@ -3768,6 +3799,10 @@ typedef struct yau__alc {
     yau__al  al;
     int64_t  read, off, trig, lpos, lt;
     uint32_t restarts;
+    int32_t  chunk;     /* DUPLEX: miniaudio's callback size where it splits a
+                         * read into callbacks (yau__ma_cap_post), else 0 */
+    int      held;      /* the last callback's candidate, its read's end unknown */
+    int64_t  h_raw, h_t, h_trig, h_delay;
 } yau__alc;
 #endif
 
@@ -3927,17 +3962,8 @@ static void yau__ma_alsa_pos(yau__ma* m, ma_device* d, yau_tick* tk) {
  * the frame this report gives: they go to the core with the block
  * (yau_capture.dev_lost), so its frames keep their place on the device
  * clock. */
-static void yau__alc_pos(yau__alc* p, yau_capture* c, void* pcm, uint32_t rate, ma_uint32 n, yau_tick* tk) {
-    yau__al* a = &p->al;
-    struct timespec ts, tr;
-    int64_t t, trig, raw;
-    if (!pcm || a->status(pcm, a->st) != 0 || a->state(a->st) != 3 /* SND_PCM_STATE_RUNNING */) return;
-    a->htstamp(a->st, &ts);
-    a->trigger(a->st, &tr);
-    if (ts.tv_sec == 0 && ts.tv_nsec == 0) return;
-    t = (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
-    trig = (int64_t)tr.tv_sec * 1000000000 + tr.tv_nsec;
-    raw = p->read + (int64_t)n + (int64_t)a->delay(a->st);
+static void yau__alc_commit(yau__alc* p, yau_capture* c, int64_t raw, int64_t t, int64_t trig, uint32_t rate,
+                            yau_tick* tk) {
     if (p->trig == 0) {
         p->trig = trig;
     } else if (trig != p->trig) {
@@ -3955,6 +3981,45 @@ static void yau__alc_pos(yau__alc* p, yau_capture* c, void* pcm, uint32_t rate, 
     tk->pos_t = t;
     p->lpos = tk->pos;
     p->lt = t;
+}
+
+/* SPLIT READS (DUPLEX): miniaudio 0.11.25's duplex loop reads up to a
+ * stack buffer of capture frames, then calls back in chunks that fit the
+ * playback side's stack buffer too. The status is of the whole read, so a
+ * chunk before the read's last reports short by the rest of the read (4.7
+ * ms for 256 + 224 at a 480-frame period: inside the halt gate, a second
+ * line in the fit). A chunk shorter than miniaudio's chunk size ends its
+ * read. A full one is held: the next callback's status says whether the
+ * PCM was read again since (the frames the hardware recorded over the two
+ * stamps less the delay's change: none within one read, the next read's
+ * size after it), and only then is it reported, one callback late, with
+ * its own stamp. */
+static void yau__alc_pos(yau__alc* p, yau_capture* c, void* pcm, uint32_t rate, ma_uint32 n, yau_tick* tk) {
+    yau__al* a = &p->al;
+    struct timespec ts, tr;
+    int64_t t, trig, raw, delay;
+    int prev_ended = 0;
+    if (!pcm || a->status(pcm, a->st) != 0 || a->state(a->st) != 3 /* SND_PCM_STATE_RUNNING */) { p->held = 0; return; }
+    a->htstamp(a->st, &ts);
+    a->trigger(a->st, &tr);
+    if (ts.tv_sec == 0 && ts.tv_nsec == 0) { p->held = 0; return; }
+    t = (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
+    trig = (int64_t)tr.tv_sec * 1000000000 + tr.tv_nsec;
+    delay = (int64_t)a->delay(a->st);
+    raw = p->read + (int64_t)n + delay;
+    if (p->chunk <= 0) { yau__alc_commit(p, c, raw, t, trig, rate, tk); return; }
+    if (p->held) {
+        double moved = (double)(t - p->h_t) * (double)rate / 1e9 - (double)(delay - p->h_delay);
+        prev_ended = moved >= (double)n / 2.0;
+        p->held = 0;
+    }
+    if ((int32_t)n < p->chunk) { yau__alc_commit(p, c, raw, t, trig, rate, tk); return; }
+    if (prev_ended) yau__alc_commit(p, c, p->h_raw, p->h_t, p->h_trig, rate, tk);
+    p->held = 1;
+    p->h_raw = raw;
+    p->h_t = t;
+    p->h_trig = trig;
+    p->h_delay = delay;
 }
 
 /* Turns a hw: PCM's status timestamps on (SND_PCM_TSTAMP_ENABLE 1, on
@@ -3985,6 +4050,7 @@ static int yau__al_setup(void* so, void* pcm, yau__al* a) {
     return a->status != NULL;
 }
 
+#if YAU__LINUX
 /* ":0,0" (miniaudio's id) or "hw:0,0": the card, else -1. */
 static int yau__al_card(const char* id) {
     int c, d;
@@ -3992,6 +4058,7 @@ static int yau__al_card(const char* id) {
     if (strncmp(id, "hw:", 3) == 0) id += 2;
     return sscanf(id, ":%d,%d", &c, &d) == 2 && c >= 0 ? c : -1;
 }
+#endif
 #endif
 
 #if defined(MA_HAS_WEBAUDIO)
@@ -4140,7 +4207,7 @@ static void yau__ma_data(ma_device* d, void* out, const void* in, ma_uint32 n) {
 #if defined(MA_SUPPORT_WASAPI)
     if (m->gate) yau__ma_gate(m, d);
 #endif
-#if defined(__linux__) && !defined(__ANDROID__)
+#if YAU__LINUX
     /* miniaudio's "highest" keeps the creating thread's policy on Linux, so
      * the device thread takes ysp/rt.h's ladder itself (SCHED_FIFO under an
      * rtprio grant), as WASAPI's takes MMCSS Pro Audio. Measured on ALSA
@@ -4218,7 +4285,7 @@ static int yau__ma_out(ma_format f) {
 static void yau__coreaudio_claims(yau__ma* m, yau_device_caps* caps);
 #endif
 
-#if defined(__linux__) && !defined(__ANDROID__)
+#if YAU__LINUX
 /* A sound server holds the card while it runs. For ALSA exclusive on a
  * card the header suspends PulseAudio's sinks and sources on that card (its
  * alsa.card property), only when the open says busy, and resumes them at
@@ -4233,9 +4300,10 @@ static void yau__coreaudio_claims(yau__ma* m, yau_device_caps* caps);
  * connection answers the PulseAudio capture's question: which card a
  * source is on, and whether it is a sink's monitor. */
 static struct {
-    int refs[YAU__PA_CARDS];   /* this process's opens holding a card suspended */
+    int refs[YAU__PA_CARDS];   /* this process's open hw: devices on a suspended card */
     int caps[YAU__PA_CARDS];   /* this process's PulseAudio captures on a card  */
     int at_exit;
+    int suspends;              /* suspensions sent                             */
 } yau__pas;
 
 typedef void* (*yau__pa_v_fn)(void);
@@ -4245,7 +4313,8 @@ typedef int   (*yau__pa_state_fn)(const void*);
 typedef void (*yau__pa_info_cb)(void*, const yau__pa_dev_info*, int, void*);
 typedef void* (*yau__pa_list_fn)(void*, yau__pa_info_cb, void*);
 typedef void* (*yau__pa_byname_fn)(void*, const char*, yau__pa_info_cb, void*);
-typedef void* (*yau__pa_susp_fn)(void*, uint32_t, int, void*, void*);
+typedef void  (*yau__pa_ok_cb)(void*, int, void*);
+typedef void* (*yau__pa_susp_fn)(void*, uint32_t, int, yau__pa_ok_cb, void*);
 typedef const char* (*yau__pa_gets_fn)(const void*, const char*);
 typedef int   (*yau__pa_iter_fn)(void*, int, int*);
 typedef void* (*yau__pa_cnew_fn)(void*, const char*);
@@ -4359,13 +4428,18 @@ static void yau__pa_scan_cb(void* ctx, const yau__pa_dev_info* i, int eol, void*
     s->n++;
 }
 
+static void yau__pa_ok(void* ctx, int success, void* ud) { (void)ctx; *(int*)ud = success ? 1 : -1; }
+
 /* Suspends (on 1) or resumes (on 0) the sinks and sources of an ALSA card;
- * 1 when at least one was there and every request was done. A monitor is
- * left alone: it follows its sink. */
+ * 1 when at least one was there and the server said yes to each. A
+ * monitor is left alone: it follows its sink. A suspension that did not
+ * complete is taken back for the ones that did, so the card is not left
+ * half suspended with no reference to resume it. */
 static int yau__pulse_suspend(int card, int on) {
     yau__pac p;
     yau__pa_scan s;
     void* ops[YAU__PA_DEVS];
+    int said[YAU__PA_DEVS], who[YAU__PA_DEVS];
     int i, n = 0, ok;
     if (!yau__pac_open(&p)) return 0;
     memset(&s, 0, sizeof s);
@@ -4378,23 +4452,41 @@ static int yau__pulse_suspend(int card, int on) {
     ok = ok && yau__pac_wait(&p, ops, 1);
     for (i = 0; ok && i < s.n; i++) {
         if (s.dev[i].card != card || (!s.dev[i].is_sink && s.dev[i].monitor != 0xFFFFFFFFu)) continue;
-        ops[n++] = s.dev[i].is_sink ? p.s_sink(p.c, s.dev[i].index, on, NULL, NULL)
-                                    : p.s_src(p.c, s.dev[i].index, on, NULL, NULL);
+        said[n] = 0;
+        who[n] = i;
+        ops[n] = s.dev[i].is_sink ? p.s_sink(p.c, s.dev[i].index, on, yau__pa_ok, &said[n])
+                                  : p.s_src(p.c, s.dev[i].index, on, yau__pa_ok, &said[n]);
+        n++;
     }
     ok = ok && n > 0 && yau__pac_wait(&p, ops, n);
+    for (i = 0; i < n; i++) if (said[i] != 1) ok = 0;
+    if (on && n > 0) yau__pas.suspends++;
+    if (on && !ok && n > 0) {
+        int m = 0;
+        p.end = yrt_now_ns() + 2000000000LL;
+        for (i = 0; i < n; i++)
+            if (said[i] == 1)
+                ops[m++] = s.dev[who[i]].is_sink ? p.s_sink(p.c, s.dev[who[i]].index, 0, NULL, NULL)
+                                                 : p.s_src(p.c, s.dev[who[i]].index, 0, NULL, NULL);
+        if (m) (void)yau__pac_wait(&p, ops, m);
+    }
     yau__pac_close(&p);
     return ok;
 }
 
+/* exit() with devices still open resumes their cards too. Measured
+ * (PulseAudio 17): the sink and the source came back with the program's
+ * PCMs open when it asked, as after a close (docs/audio.md, "The sound
+ * server"); closing the devices first changed nothing, so it does not. */
 static void yau__pulse_at_exit(void) {
     int k;
     for (k = 0; k < YAU__PA_CARDS; k++)
         if (yau__pas.refs[k] > 0) { yau__pas.refs[k] = 0; (void)yau__pulse_suspend(k, 0); }
 }
 
-/* 1: the card's sinks and sources are suspended for this open; 0: no
- * server, or none of them on the card; -1: a PulseAudio capture of this
- * process records from the card (its source would stop). */
+/* 1: the card's sinks and sources are suspended, and this device holds
+ * them so; 0: no server, or none of them on the card; -1: a PulseAudio
+ * capture of this process records from the card (its source would stop). */
 static int yau__pulse_take(int card) {
     if (card < 0 || card >= YAU__PA_CARDS) return 0;
     if (yau__pas.refs[card] > 0) { yau__pas.refs[card]++; return 1; }
@@ -4405,6 +4497,16 @@ static int yau__pulse_take(int card) {
     return 1;
 }
 
+/* A hw: device that opened without a busy error on a card this process
+ * holds suspended (another device's suspension freed it): it holds the
+ * card too, so the first close does not resume the card under it. */
+static int yau__pulse_join(int card) {
+    if (card < 0 || card >= YAU__PA_CARDS || yau__pas.refs[card] <= 0) return 0;
+    yau__pas.refs[card]++;
+    return 1;
+}
+
+/* After the device's PCMs are closed: the card's last holder resumes it. */
 static void yau__pulse_give(int card) {
     if (card >= 0 && card < YAU__PA_CARDS && yau__pas.refs[card] > 0 && --yau__pas.refs[card] == 0)
         (void)yau__pulse_suspend(card, 0);
@@ -4490,7 +4592,7 @@ static ma_device_id* yau__ma_pick(ma_backend b, const char* want, ma_device_info
     return NULL;
 }
 
-#if defined(__linux__) && !defined(__ANDROID__)
+#if YAU__LINUX
 /* The default ALSA card: ALSA_CARD as alsa-lib reads it, else card 0. */
 static int yau__ma_alsa_card0(ma_context* ctx) {
     typedef int (*card_index_fn)(const char*);
@@ -4539,8 +4641,9 @@ static int yau__ma_alsa_hw(ma_backend b, const ma_device_id* pick, int capture, 
  * stays busy until the process ends, and the open after a suspension
  * failed on it. This closes what the failed init left. */
 static void yau__ma_alsa_drop(ma_context* ctx, ma_device* dev) {
+    typedef int (*close_fn)(void*);   /* miniaudio declares its own only with the ALSA backend built */
     if (ctx->backend != ma_backend_alsa || !dev->alsa.pPCMCapture) return;
-    ((ma_snd_pcm_close_proc)ctx->alsa.snd_pcm_close)((ma_snd_pcm_t*)dev->alsa.pPCMCapture);
+    ((close_fn)ctx->alsa.snd_pcm_close)(dev->alsa.pPCMCapture);
     close(dev->alsa.wakeupfdCapture);
     ma_free(dev->alsa.pPollDescriptorsCapture, &ctx->allocationCallbacks);
     dev->alsa.pPCMCapture = NULL;
@@ -4552,7 +4655,7 @@ static void yau__ma_alsa_drop(ma_context* ctx, ma_device* dev) {
  * Suspend that card's sinks and sources and try once more; *held is the
  * card + 1 on success. *by_cap: refused, because a PulseAudio capture of
  * this process records from that card. */
-#if defined(__linux__) && !defined(__ANDROID__)
+#if YAU__LINUX
 static ma_result yau__ma_busy(ma_context* ctx, const ma_device_config* dc, ma_device* dev, const ma_device_id* pick,
                               int* held, int* by_cap) {
     char id[256];
@@ -4569,6 +4672,23 @@ static ma_result yau__ma_busy(ma_context* ctx, const ma_device_config* dc, ma_de
     if (r == MA_SUCCESS) *held = card + 1;
     else yau__pulse_give(card);
     return r;
+}
+
+/* Only a busy card is the sound server's to give up: any other failure
+ * would fail again after a suspension, and the desktop would have lost its
+ * sound for nothing. */
+static int yau__ma_suspend_on(ma_result r) { return r == MA_BUSY; }
+
+/* After an open that did not need the suspension: join a card this
+ * process holds suspended. */
+static void yau__ma_join(const ma_device_id* pick, int* held) {
+    char id[256];
+    int card;
+    if (*held) return;
+    id[0] = 0;
+    if (pick) yau__ma_id_str(ma_backend_alsa, pick, id, sizeof id);
+    card = yau__al_card(id);
+    if (yau__pulse_join(card)) *held = card + 1;
 }
 #endif
 
@@ -4600,7 +4720,7 @@ static int yau__ma_open(void* ctx, const yau_device_open* in, yau_device_caps* c
     cc.allocationCallbacks.onRealloc = yau__ma_realloc;
     cc.allocationCallbacks.onFree = yau__ma_free;
     cc.threadPriority = ma_thread_priority_highest;
-#if defined(__linux__) && !defined(__ANDROID__)
+#if YAU__LINUX
     /* AUTO on Linux: ALSA exclusive on the default card (BACKENDS), the
      * shortest periods with a device position; a program that wants the
      * sound server says YAU_BACKEND_PULSE */
@@ -4620,7 +4740,7 @@ static int yau__ma_open(void* ctx, const yau_device_open* in, yau_device_caps* c
             snprintf(err, err_cap, "ysp_audio: %s did not list its devices", ma_get_backend_name(m->backend));
         if (!pick) return YAU_ERR_ARG;
     }
-#if defined(__linux__) && !defined(__ANDROID__)
+#if YAU__LINUX
     if (m->auto_pick && !pick && m->backend == ma_backend_alsa) {
         int card = yau__ma_alsa_card0(&m->ctx);
         if (ma_context_get_devices(&m->ctx, &infos, &ninfo, NULL, NULL) == MA_SUCCESS)
@@ -4687,9 +4807,10 @@ static int yau__ma_open(void* ctx, const yau_device_open* in, yau_device_caps* c
      * (docs/audio.md) */
     dc.wasapi.usage = ma_wasapi_usage_pro_audio;
     r = ma_device_init(&m->ctx, &dc, &m->dev);
-#if defined(__linux__) && !defined(__ANDROID__)
-    if (r == MA_BUSY && m->backend == ma_backend_alsa && excl && !m->keep_server)
+#if YAU__LINUX
+    if (yau__ma_suspend_on(r) && m->backend == ma_backend_alsa && excl && !m->keep_server)
         r = yau__ma_busy(&m->ctx, &dc, &m->dev, pick, &m->suspended, &held_by_cap);
+    if (r == MA_SUCCESS && m->backend == ma_backend_alsa && excl) yau__ma_join(pick, &m->suspended);
 #endif
 #if defined(MA_SUPPORT_ALSA)
     if (r != MA_SUCCESS) yau__ma_alsa_drop(&m->ctx, &m->dev);
@@ -4941,7 +5062,7 @@ static void yau__ma_close(void* ctx) {
 #endif
     if (m->dev_up) { ma_device_uninit(&m->dev); m->dev_up = 0; }
     if (m->ctx_up) { ma_context_uninit(&m->ctx); m->ctx_up = 0; }
-#if defined(__linux__) && !defined(__ANDROID__)
+#if YAU__LINUX
     if (m->suspended) { yau__pulse_give(m->suspended - 1); m->suspended = 0; }
 #endif
 }
@@ -5115,7 +5236,7 @@ static ma_device_id* yau__mac_pick(ma_context* ctx, const char* want, char* err,
     return id;
 }
 
-#if defined(__linux__) && !defined(__ANDROID__)
+#if YAU__LINUX
 /* AUTO's input on Linux, or a duplex input beside a hw: output: a card's
  * first capture device. */
 static ma_device_id* yau__mac_first(ma_context* ctx, int card) {
@@ -5173,7 +5294,7 @@ static void yau__mac_data(ma_device* d, void* out, const void* in, ma_uint32 n) 
     yau__mac* m = (yau__mac*)d->pUserData;
     yau_tick tk;
     (void)out;
-#if defined(__linux__) && !defined(__ANDROID__)
+#if YAU__LINUX
     /* as the output's device thread (yau__ma_data): miniaudio's "highest"
      * keeps the creator's policy on Linux. It blocks in poll() and starts
      * no thread, so nothing inherits SCHED_FIFO from it. */
@@ -5216,7 +5337,8 @@ static void yau__mac_note(const ma_device_notification* nt) {
 #if defined(MA_SUPPORT_PULSEAUDIO)
 /* A PulseAudio input after its open: the source the server gave, its card,
  * and the two refusals (CAPTURE on Linux). Then the timing calls. */
-static int yau__mac_pulse_post(yau__mac* m, const char* asked, yau_device_caps* caps, char* err, size_t err_cap) {
+#if YAU__LINUX
+static int yau__mac_pulse_check(yau__mac* m, const char* asked, char* err, size_t err_cap) {
     typedef const char* (*name_fn)(void*);
     void* so = m->ctx.pulse.pulseSO;
     void* s = m->dev.pulse.pStreamCapture;
@@ -5239,6 +5361,18 @@ static int yau__mac_pulse_post(yau__mac* m, const char* asked, yau_device_caps* 
         }
         if (card >= 0 && card < YAU__PA_CARDS) { yau__pas.caps[card]++; m->pa_card = card + 1; }
     }
+    return 0;
+}
+#endif
+
+static int yau__mac_pulse_post(yau__mac* m, const char* asked, yau_device_caps* caps, char* err, size_t err_cap) {
+    void* so = m->ctx.pulse.pulseSO;
+#if YAU__LINUX
+    int rc = yau__mac_pulse_check(m, asked, err, err_cap);
+    if (rc != 0) return rc;
+#else
+    (void)asked; (void)err; (void)err_cap;
+#endif
     m->pa_update = (yau__pa_update_fn)ma_dlsym(NULL, so, "pa_stream_update_timing_info");
     m->pa_get = (yau__pa_get_fn)ma_dlsym(NULL, so, "pa_stream_get_timing_info");
     m->pa_unref = (yau__pa_unref_fn)ma_dlsym(NULL, so, "pa_operation_unref");
@@ -5268,7 +5402,7 @@ static int yau__mac_open(void* ctx, const yau_device_open* in, yau_device_caps* 
     cc.allocationCallbacks.onRealloc = yau__mac_realloc;
     cc.allocationCallbacks.onFree = yau__mac_free;
     cc.threadPriority = ma_thread_priority_highest;
-#if defined(__linux__) && !defined(__ANDROID__)
+#if YAU__LINUX
     /* AUTO on Linux: ALSA exclusive on the default card's first input, as
      * for the output; the sound server's input is YAU_BACKEND_PULSE */
     if (m->auto_pick) excl = 1;
@@ -5282,7 +5416,7 @@ static int yau__mac_open(void* ctx, const yau_device_open* in, yau_device_caps* 
     m->ctx_up = 1;
     dc.capture.pDeviceID = yau__mac_pick(&m->ctx, in->device, err, err_cap, &rc);
     if (rc < 0) return rc;
-#if defined(__linux__) && !defined(__ANDROID__)
+#if YAU__LINUX
     if (m->auto_pick && !dc.capture.pDeviceID && m->backend == ma_backend_alsa) {
         int card = yau__ma_alsa_card0(&m->ctx);
         dc.capture.pDeviceID = yau__mac_first(&m->ctx, card);
@@ -5318,9 +5452,10 @@ static int yau__mac_open(void* ctx, const yau_device_open* in, yau_device_caps* 
     dc.wasapi.noAutoStreamRouting = MA_TRUE;
     dc.wasapi.usage = ma_wasapi_usage_pro_audio;
     r = ma_device_init(&m->ctx, &dc, &m->dev);
-#if defined(__linux__) && !defined(__ANDROID__)
-    if (r == MA_BUSY && hw && !m->keep_server)
+#if YAU__LINUX
+    if (yau__ma_suspend_on(r) && hw && !m->keep_server)
         r = yau__ma_busy(&m->ctx, &dc, &m->dev, dc.capture.pDeviceID, &m->suspended, &by_cap);
+    if (r == MA_SUCCESS && hw) yau__ma_join(dc.capture.pDeviceID, &m->suspended);
 #endif
     if (r != MA_SUCCESS) {
         snprintf(err, err_cap, "ysp_audio: %s did not open the input%s (%s)%s", ma_get_backend_name(m->backend),
@@ -5371,10 +5506,10 @@ static void yau__mac_close(void* ctx) {
     yau__wasapi_release(&m->clock);
     if (m->dev_up) { ma_device_uninit(&m->dev); m->dev_up = 0; }
     if (m->ctx_up) { ma_context_uninit(&m->ctx); m->ctx_up = 0; }
-#if defined(MA_SUPPORT_PULSEAUDIO)
+#if defined(MA_SUPPORT_PULSEAUDIO) && YAU__LINUX
     if (m->pa_card) { yau__pas.caps[m->pa_card - 1]--; m->pa_card = 0; }
 #endif
-#if defined(__linux__) && !defined(__ANDROID__)
+#if YAU__LINUX
     if (m->suspended) { yau__pulse_give(m->suspended - 1); m->suspended = 0; }
 #endif
 }
@@ -5409,6 +5544,9 @@ static int yau__ma_cap_config(yau__ma* m, const yau_device_open* in, ma_device_c
         return YAU_ERR_ARG;
     }
     m->cap = c;
+    /* either desc's keep_sound_server keeps the card's sound server: the
+     * device suspends it for both halves or for neither */
+    if (c->desc.keep_sound_server) m->keep_server = 1;
     dc->deviceType = ma_device_type_duplex;
     dc->capture.pDeviceID = yau__mac_pick(&m->ctx, c->desc.device, err, err_cap, &rc);
     if (rc < 0) return rc;
@@ -5417,7 +5555,7 @@ static int yau__ma_cap_config(yau__ma* m, const yau_device_open* in, ma_device_c
     dc->capture.channels = m->backend == ma_backend_null ? (c->desc.format.channels ? c->desc.format.channels : 2u) : 0;
     dc->capture.pChannelMap = NULL;
     dc->capture.shareMode = dc->playback.shareMode;
-#if defined(__linux__) && !defined(__ANDROID__)
+#if YAU__LINUX
     if (m->backend == ma_backend_alsa) {
         char pid[256], cid[256];
         int card;
@@ -5456,6 +5594,29 @@ static int yau__ma_cap_post(yau__ma* m, char* err, size_t err_cap) {
 #endif
 #if defined(MA_SUPPORT_ALSA)
     memset(&m->cap_al, 0, sizeof m->cap_al);
+    if (m->backend == ma_backend_alsa) {
+        /* miniaudio 0.11.25's duplex loop (ma_device_audio_thread__default_
+         * read_write): per pass of min(the two periods) frames it reads up to
+         * stack/capture-device-frame frames at a time, then calls back in
+         * chunks of min(stack/capture frame, stack/playback frame); a read
+         * longer than a chunk is split (SPLIT READS, yau__alc_pos) */
+#if defined(MA_DATA_CONVERTER_STACK_BUFFER_SIZE)
+        const uint32_t stack = MA_DATA_CONVERTER_STACK_BUFFER_SIZE;
+#else
+        const uint32_t stack = 4096;
+#endif
+        uint32_t cb = ma_get_bytes_per_frame(m->dev.capture.format, m->dev.capture.channels);
+        uint32_t pb = ma_get_bytes_per_frame(m->dev.playback.format, m->dev.playback.channels);
+        uint32_t db = ma_get_bytes_per_frame(m->dev.capture.internalFormat, m->dev.capture.internalChannels);
+        uint32_t pass = m->dev.capture.internalPeriodSizeInFrames < m->dev.playback.internalPeriodSizeInFrames
+                      ? m->dev.capture.internalPeriodSizeInFrames : m->dev.playback.internalPeriodSizeInFrames;
+        uint32_t chunk, read;
+        if (cb && pb && db) {
+            chunk = stack / cb < stack / pb ? stack / cb : stack / pb;
+            read = stack / db < pass ? stack / db : pass;
+            if (chunk < read) m->cap_al.chunk = (int32_t)chunk;
+        }
+    }
     if (m->backend == ma_backend_alsa && m->cap->dcaps.exclusive
         && yau__al_setup(m->ctx.alsa.asoundSO, m->dev.alsa.pPCMCapture, &m->cap_al.al)) {
         m->cap->dcaps.pos_source = YAU_POS_DEVICE;
@@ -7157,7 +7318,12 @@ static void yau__closs(yau_capture* c, int64_t now_t, int have_pos, int64_t pw, 
         } else {
             c->loss_run = 0;
         }
-    } else {
+    } else if (c->dcaps.pos_source != YAU_POS_DEVICE) {
+        /* a device with reports and a block without one (PulseAudio's
+         * reports every 50 ms; a split read's first callbacks) says
+         * nothing of a loss: its entry time is a pipeline late, which the
+         * reports' fit does not include, and read as a loss of that much
+         * after 200 ms */
         double r = (double)(now_t - yau__fit_time(&c->fit, fend));
         if (r > yau__cgate(c)) {
             if (!c->late_run) { c->late_run = 1; c->loss_since = now_t; c->late_min = r; c->loss_f0 = c->f; }

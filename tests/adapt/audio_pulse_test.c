@@ -51,6 +51,14 @@ int main(void) {
         if (f) { if (!fgets(r, sizeof r, f)) r[0] = 0; pclose(f); }
         d.format.rate = (uint32_t)atoi(r);   /* 0: the header's 48000 */
     }
+    /* a first open after the sink was suspended (an AUTO run before this
+     * one) runs 3 s and closes: just after a resume PulseAudio's latency
+     * estimate moved, and the fit's spread was 52 and 101 us in two runs */
+    if (yau_open(&au, &d)) {
+        int64_t w = yrt_now_ns() + 3000000000LL;
+        while (yrt_now_ns() < w) { (void)yau_update(&au); yrt_sleep_ns(YRT_MS(20)); }
+        yau_close(&au);
+    }
     if (!yau_open(&au, &d)) {
         if (req && req[0] == '1') {
             fprintf(stderr, "audio_pulse_test: FAIL open: %s\n", yau_error(&au));

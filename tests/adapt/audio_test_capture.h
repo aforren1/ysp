@@ -25,6 +25,7 @@ typedef struct scap {
     int64_t  k, dev_next;       /* blocks handed over; the next device frame   */
     int64_t  skip;              /* device frames the next block loses          */
     int64_t  dev_lost;          /* the built-in device's own count of them      */
+    int      pos_every;         /* a report with every this many blocks; 0 = 1 */
     int64_t  stall_ns;          /* the next block is this much later           */
     int64_t  last_pos, last_stamp, last_t;
     float  (*sig)(struct scap* s, int64_t w, int c);   /* NULL: idv(w, c)      */
@@ -104,7 +105,7 @@ static void sc_block(scap* s) {
     memset(&tk, 0, sizeof tk);
     tk.t_entry = t;
     tk.pos = -1;
-    if (s->pos_source == YAU_POS_DEVICE) {
+    if (s->pos_source == YAU_POS_DEVICE && (s->pos_every <= 1 || s->k % s->pos_every == 0)) {
         /* the position moves every block; its stamp, as measured, only
          * every report_every blocks, so between those the pair is off by
          * the blocks since the stamp */
@@ -1079,6 +1080,33 @@ static void test_capture_device_loss(void) {
     yau_capture_close(&g_cap);
 }
 
+/* A device with reports on some blocks only (PulseAudio's every 50 ms; a
+ * split duplex read's last callback): the blocks without one come a
+ * pipeline late (Lin, 10 ms here, past the 5 ms gate), and that is no
+ * loss. */
+static void test_capture_sparse_reports(void) {
+    scap* s = &g_sc;
+    yau_capture_info in;
+    int64_t wrong = 0, x, worst = 0;
+    sc_default(s);
+    s->pos_every = 2;
+    s->jitter_ns = 300000;
+    CHECK(cap_open(s, NULL));
+    sc_run_read(s, 6.0, &wrong);
+    (void)yau_capture_update(&g_cap);
+    yau_capture_get_info(&g_cap, &in);
+    CHECK_I(in.xruns, 0);
+    CHECK_I(in.lost, 0);
+    CHECK_I(wrong, 0);
+    for (x = s->dev_next - 24000; x < s->dev_next; x += 101) {
+        int64_t e = yau_capture_time_of(&g_cap, x) - sc_truth(s, (double)x);
+        if (e < 0) e = -e;
+        if (e > worst) worst = e;
+    }
+    CHECK(worst < 20000);
+    yau_capture_close(&g_cap);
+}
+
 /* WATCHDOG: a device that stops calling back, with no notification, makes
  * the capture LOST while no block has come for 200 ms (or 4 buffers): not
  * at 150 ms, at 250 ms; when blocks come again it is not. */
@@ -1098,12 +1126,23 @@ static void test_capture_watchdog(void) {
     sc_run_s(s, 0.2);
     CHECK(yau_capture_update(&g_cap) >= 0);
     yau_capture_close(&g_cap);
+    /* a 100 ms buffer: 4 buffers, 400 ms, is the limit */
+    sc_default(s);
+    s->buffer = 4800;
+    CHECK(cap_open(s, NULL));
+    sc_run_s(s, 1.0);
+    g_vt += 300000000;
+    CHECK(yau_capture_update(&g_cap) >= 0);
+    g_vt += 150000000;
+    CHECK_I(yau_capture_update(&g_cap), YAU_ERR_LOST);
+    yau_capture_close(&g_cap);
 }
 
 static void test_capture(void) {
     test_capture_open();
     test_capture_device_loss();
     test_capture_watchdog();
+    test_capture_sparse_reports();
     test_capture_web_tier();
     test_capture_fit();
     test_capture_overflow();

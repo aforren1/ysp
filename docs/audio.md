@@ -2081,7 +2081,7 @@ after). "Load" is 20 threads spinning at normal priority.
 
 | Desc | Device | Position | Buffer |
 |---|---|---|---|
-| AUTO | ALSA exclusive on the default card's first capture device (`hw:0,0`), 32 bits for a desc of 24 bits or more, 16 for `YAU_S16`, the desc's rate | the hw: PCM's status (`alsa:status`) | 40 ms at least: 3 to 32 periods |
+| AUTO | ALSA exclusive on the default card's first capture device (`hw:0,0`), 32 bits for a desc of 24 bits or more, 16 for `YAU_S16`, the desc's rate | the hw: PCM's status (`alsa:status`) | 40 ms, at least 3 and at most 32 periods (21 ms at 32-frame periods) |
 | ALSA, `exclusive` | the card's device that `desc.device` names (an id like `hw:0,0`); refused without one | the same | the same |
 | ALSA, shared | the device `desc.device` names, else `"default"` | callback times | miniaudio's |
 | PULSE | the source `desc.device` names, else the server's default; a monitor is refused as the default | the record stream's timing info (`pulse:timing-info`) | miniaudio's |
@@ -2161,7 +2161,8 @@ the capture block (`YAU__ON_CAPTURE`), 6 a run:
 
 Every record had 0 frames numbered from before the loss. At 3 periods a
 stall of 6 ms set off further restarts (21 for 6 stalls). So the buffer
-is 40 ms at least: for an input it adds no latency (the blocks still
+is 40 ms, within 3 to 32 periods (so 21 ms at 32-frame periods at 48 kHz,
+the one case under 40 ms): for an input it adds no latency (the blocks still
 come each period, the times come from the fit), only room to ride out a
 stall of the device thread. `test_audio_alsa_capture` checks a 25 ms
 stall (nothing lost) and a 70 ms one: one loss (71.6 to 72.4 ms in three
@@ -2237,6 +2238,33 @@ the writes do not start the PCM and miniaudio's own `snd_pcm_start()`
 still succeeds. The output's position, frames handed over less the
 delay, leaves the silence out already.
 
+- Split reads. miniaudio's duplex loop reads up to 4096 bytes of capture
+  frames at a time and calls back in chunks that fit 4096 bytes of the
+  playback format too. Where the playback frame is the larger (a 16-bit
+  input beside a 32-bit output, or more output than input channels) a
+  read longer than a chunk comes in several callbacks, and the status,
+  read in each, is the whole read's: every callback but the last
+  reported short by the rest of the read. A callback shorter than the
+  chunk ends its read; a full one is held, and the next callback's
+  status says whether the PCM was read again in between (the frames
+  recorded over the two status stamps less the change of the delay: 0
+  within a read, the next read's size after). `test_audio_alsa_capture`
+  part 5b, a 16-bit input beside the 32-bit output: at 960-frame periods
+  (512 + 448 a read), 10 s, every report within 10.5 to 16.0 us sd of a
+  line through them (4 runs), the fit's spread 4.3 and 6.7 us (2 of
+  them), nothing lost; at 1024 frames (512 + 512, each held one callback), 6 s, 11.9
+  to 31.2 us sd (3 runs). `audio_capstats --duplex --s16 --period 1024`,
+  10 s: residuals -17 to +68 us against the final fit, spread 7.2 us,
+  nothing lost. A callback reported short is 9 to 11 ms off, so the test
+  bounds the sd at 100 us.
+- That run also showed a fault in the core's loss rules: a device with
+  reports ran the late-blocks rule (LOSS, for callback times) on its
+  blocks without a report, whose entry is a pipeline late (10 ms here);
+  after 200 ms it counted that lateness as a loss, 485 to 505 frames, in
+  each of 4 runs, with the frames of those 200 ms numbered from before.
+  Now only a device with no reports runs that rule. PulseAudio's capture
+  (a report each 50 ms) had the same exposure; its blocks were late by
+  less than the 5 ms gate here.
 - One card only: two cards are two clocks, and the queue would run out
   or grow. A capture desc that names an input on another card is
   refused.
@@ -2266,6 +2294,25 @@ Two refusals keep the paths apart: a PULSE capture on a card this
 program holds suspended (its source would record nothing), and an ALSA
 exclusive open that would suspend a card a PULSE capture of the program
 records from.
+
+Who resumes the card. The first version counted only the opens that
+suspended (a busy error, then the suspension). An AUTO input opened after
+an AUTO output on the same card opens without a busy error, because the
+output's suspension freed the card, and took no count: the output's
+close resumed the card under the input, whose PCM made the source's
+resume fail, and nothing resumed it after. Now every hw: device open on
+a suspended card holds it, and the last close resumes it. exit() with
+devices open: the handler resumes their cards while their PCMs are still
+open. A build that closed the devices first in the handler measured the
+same as one that did not: in both, a child that opened an AUTO output
+and an AUTO input and called exit() left the sink and the source IDLE,
+in the output and in the duplex profile (PulseAudio 17). So the handler
+does not close them. `test_audio_alsa_capture` part 6: output, then
+input, close the output: the card stays suspended; close the input:
+resumed; the child's exit(): resumed. A suspension that the
+server half refused (one sink of two, say) is taken back for the ones it
+did, so no card is left half suspended with no count to resume it. In
+duplex, either desc's `keep_sound_server` keeps the card's sound server.
 
 ### The digital loopback
 
@@ -2320,6 +2367,24 @@ for either time: no sound left the machine. It gives no tier.
   plan's capture copies of `alsa-04` and `alsa-10` (the input shares
   their lines), a duplex input on another card (no second card with an
   input here).
+- After the review fixes: `alsa-24` to `alsa-26`, `alsa-28` to `alsa-31`,
+  `pulse-13`, `cap-26`, `cap-27`. First runs: `alsa-21` survived (the
+  stall test took the buffer's own length, so a 4 ms buffer made a
+  negative stall; it now checks the buffer is 40 ms), `pulse-13` survived
+  (the kept count refused the next AUTO output, and the test took that
+  as "no AUTO output" and skipped its part 4; it now fails on that
+  message and reads the count), and
+  `pulse-04` survived once because its baseline failed: right after an
+  AUTO run had suspended and resumed the sink, PulseAudio's position
+  spread 11.5 to 101 us for several seconds (settled: 4.2 to 5.1 us).
+  `test_audio_pulse` now runs 3 s and reopens first, and the list runs
+  the PulseAudio tests before the ALSA ones. A mutant that skipped
+  closing the open devices at exit() survived: closing them changed
+  nothing measurable, so the code was taken out.
+- `tests/compile/audio.c` builds also with `MA_NO_ALSA`, with
+  `MA_NO_PULSEAUDIO` and with `YAU__LINUX=0` (a unix with PulseAudio and
+  no Linux); the first did not compile before (miniaudio declares its
+  ALSA function types only with that backend built).
 - The capture device thread ran SCHED_FIFO 1 (`ps -L` during
   `audio_capstats`), as the output's: it takes ysp/rt.h's ladder at its
   first block. It starts no thread.

@@ -29,7 +29,8 @@
  *   3. DUPLEX on PULSE is refused.
  *   4. With an AUTO output open (ALSA exclusive, card 0 suspended): a
  *      PULSE capture of card 0's monitor is refused. With a PULSE capture
- *      of it open: the AUTO output is refused, naming the capture.
+ *      of it open: the AUTO output is refused, naming the capture; after
+ *      the capture's close it opens.
  *
  * Exit 0 on pass, 1 on a failed check; 0 with "SKIP" when no server
  * answers, unless YAU_PULSE_TEST_REQUIRE=1 (the mutation list).
@@ -214,6 +215,7 @@ int main(void) {
     }
     yau_capture_close(&g_cap);
     yau_close(&g_au);
+    CHECK(yau__pas.caps[0] == 0);   /* the closed capture no longer counts on card 0 */
     /* 2b */
     {
         char in_src[256], in_rate[32];
@@ -276,6 +278,8 @@ int main(void) {
     memset(&od, 0, sizeof od);
     if (!yau_open(&g_au, &od)) {
         printf("no AUTO output (%s): part 4 skipped\n", yau_error(&g_au));
+        /* a closed capture must not keep the card */
+        CHECK(strstr(yau_error(&g_au), "PulseAudio capture") == NULL);
     } else {
         memset(&cd, 0, sizeof cd);
         cd.backend = YAU_BACKEND_PULSE;
@@ -295,6 +299,12 @@ int main(void) {
             CHECK(strstr(yau_error(&g_au), "PulseAudio capture") != NULL);
             if (yau_is_open(&g_au)) yau_close(&g_au);
             yau_capture_close(&g_cap);
+            /* the capture's close lets the card go again (the count, since
+             * an idle sink may have closed its PCM and need no suspension) */
+            CHECK(yau__pas.caps[0] == 0);
+            yrt_sleep_ns(YRT_MS(300));
+            CHECK(yau_open(&g_au, &od));
+            if (yau_is_open(&g_au)) yau_close(&g_au);
         }
     }
     if (g_failures) return 1;
