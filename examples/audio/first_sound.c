@@ -118,6 +118,7 @@ int main(int argc, char** argv) {
     d.arena_bytes = 1 << 20;
     cd.device = in;
     cd.frames = 4 * 48000;
+    cd.format.sample = YAU_S16;   /* any input of 16 bits or more */
     if (sim) {
         if (lp_sim_init(&g_lp, 20, gate_ms, 250) < 0) return 1;
         d.backend = YAU_BACKEND_CUSTOM; d.dev = &g_lp_out; d.dev_ctx = &g_lp;

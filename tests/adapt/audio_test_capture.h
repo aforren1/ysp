@@ -425,7 +425,7 @@ static void test_capture_loss(void) {
 
     /* a halt, with reports: the device records nothing for 48 ms and its
      * position does not count it (WASAPI, measured), so the reports come
-     * 48 ms late for good; two of them make a halt, the frames jump by it */
+     * 48 ms late for good; three of them make a halt, the frames jump by it */
     sc_default(s);
     s->jitter_ns = 300000;
     CHECK(cap_open(s, NULL));
@@ -441,7 +441,7 @@ static void test_capture_loss(void) {
         gap = 0;
         cap_drain2(0, -est, &nb, &na, &wrong, &gap);
         CHECK_I(gap, YAU_GAP_LOST);
-        CHECK(nb <= 6 * 480);
+        CHECK(nb <= 8 * 480);
         printf("capture halt: 48 ms (2304 frames), counted %lld, found after %.0f ms of frames\n", (long long)est,
                (double)nb / 48.0);
         for (x = 0; x < 4; x++) {

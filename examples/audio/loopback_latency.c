@@ -124,6 +124,7 @@ static int run_path(const opt* o, int exclusive, FILE* csv) {
     cd.device = o->in;
     cd.exclusive = o->in_exclusive != 0;
     cd.frames = 4 * 48000;
+    cd.format.sample = YAU_S16;   /* any input of 16 bits or more: a microphone in exclusive mode gives 16 */
     if (o->sim) {
         if (lp_sim_init(&g_lp, o->sim_delay_ms, 0, 0) < 0) return 1;
         d.backend = YAU_BACKEND_CUSTOM; d.dev = &g_lp_out; d.dev_ctx = &g_lp;

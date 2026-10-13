@@ -80,6 +80,7 @@ int main(int argc, char** argv) {
     d.device = out;
     d.arena_bytes = 1 << 20;
     cd.device = in;
+    cd.format.sample = YAU_S16;   /* any input of 16 bits or more */
     if (sim) {
         if (lp_sim_init(&g_lp, 20, 0, 0) < 0) return 1;
         for (i = 0; i < trials; i++) g_lp.rt_ms[i] = 400.0 + (double)((i * 37) % 200);

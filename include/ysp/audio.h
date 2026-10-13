@@ -4511,6 +4511,8 @@ YAU_API bool yau_open(yau_audio* au, const yau_desc* desc) {
     }
     if (d.capture) {
         d.capture->duplex = 1;
+        d.capture->dev = au->dev;   /* the describe line names the backend */
+        d.capture->dev_ctx = au->dev_ctx;
         if (yau__cap_setup(d.capture) < 0) {
             yau__err(au, "%s", d.capture->error);
             if (au->dev->close) au->dev->close(au->dev_ctx);
@@ -5219,7 +5221,19 @@ YAU_API yau_buf yau_wav_load(yau_audio* au, const yau_wav_desc* d) {
 enum { YAU__CM_FIT = 1, YAU__CM_XRUN, YAU__CM_DROP };
 
 #define YAU__LOSS_NS 200000000LL   /* a loss shows this long before it counts */
-#define YAU__CAP_HALT_REPORTS 2    /* late reports in a row that make a halt */
+#define YAU__CAP_HALT_REPORTS 3    /* late reports in a row that make a halt */
+/* A capture report or block this far off the fit, or half a period if
+ * that is more, is off it (HALT, LOSS). Measured on the test laptop, no
+ * report without a stall was more than 1.2 ms off the fit at a 480-frame
+ * period; at 96 frames (2 ms) the reports scattered +-0.6 ms, so half a
+ * period alone would make halts of the scatter. 5 ms is half of WASAPI's
+ * 10 ms shared engine pass. */
+#define YAU__CAP_GATE_NS 5000000.0
+
+static double yau__cgate(const yau_capture* c) {
+    double half = 0.5 * (double)c->dcaps.period * c->fit.k;
+    return half > YAU__CAP_GATE_NS ? half : YAU__CAP_GATE_NS;
+}
 
 static void yau__cerr(yau_capture* c, const char* fmt, ...) {
     va_list ap;
@@ -5471,7 +5485,7 @@ static void yau__closs(yau_capture* c, int64_t now_t, int have_pos, int64_t pw, 
         }
     } else {
         double r = (double)(now_t - yau__fit_time(&c->fit, fend));
-        if (r > 0.5 * (double)period * c->fit.k) {
+        if (r > yau__cgate(c)) {
             if (!c->late_run) { c->late_run = 1; c->loss_since = now_t; c->late_min = r; c->loss_f0 = c->f; }
             if (r < c->late_min) c->late_min = r;
             if (now_t - c->loss_since >= YAU__LOSS_NS) {
@@ -5513,15 +5527,18 @@ YAU_API void yau_capture_block(void* host, void* in, int32_t frames, const yau_t
      * moves the position every 10 ms and the stamp every 20 ms, and only
      * the pair read when the stamp changes lies on the line (79 us sd
      * over 10 s; at most 1.2 ms off it in 6 minutes idle and under load).
-     * Once the fit is ready a report more than half a period off it is
-     * kept out of the fit and counted (set_aside), and:
+     * Once the fit is ready a report off it by more than half a period or
+     * 5 ms, whichever is more (YAU__CAP_GATE_NS), is kept out of the fit and
+     * counted (set_aside), and:
      *   HALT: late. Measured, after each stall of the device thread longer
      *   than the device's buffer (60 to 81 ms), the reports lay 48 ms late
      *   for good: the position stood while nothing was recorded, so the
      *   frames before and after it are 48 ms further apart than their
-     *   numbers say. Two late reports in a row are a halt of the lesser
-     *   delay: the capture frames jump by it (a LOST gap) and the position
-     *   is counted on by it, so the fit goes on.
+     *   numbers say. The first late report can be the halt half over (38
+     *   ms late, then 48, in the same runs). Three late reports in a row are
+     *   a halt of the least delay but the first's: the capture frames jump by
+     *   it (a LOST gap) and the position is counted on by it, so the fit goes
+     *   on.
      *   Early, for 2 s: the fit starts over from the reports, as the
      *   output's does (REANCHOR). */
     if (have_pos) {
@@ -5529,12 +5546,13 @@ YAU_API void yau_capture_block(void* host, void* in, int32_t frames, const yau_t
             int use = 1;
             if (c->fit.ready) {
                 double r = (double)(tk->pos_t - yau__fit_time(&c->fit, pw));
-                double half = 0.5 * (double)c->dcaps.period * c->fit.k;
+                double half = yau__cgate(c);
                 if (r > half) {
                     use = 0;
                     c->early_run = 0;
-                    if (c->halt_run++ == 0) { c->halt_min = r; c->halt_f0 = c->f; }
-                    else if (r < c->halt_min) c->halt_min = r;
+                    /* the first can be the halt half over: not in its length */
+                    if (c->halt_run++ == 0) c->halt_f0 = c->f;
+                    else if (c->halt_run == 2 || r < c->halt_min) c->halt_min = r;
                     if (c->halt_run >= YAU__CAP_HALT_REPORTS) {
                         int64_t lost = (int64_t)floor(c->halt_min / c->fit.k + 0.5);
                         c->halt_run = 0;
