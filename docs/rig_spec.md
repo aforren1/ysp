@@ -1373,6 +1373,19 @@ extension implements one of these kinds, each a versioned C vtable:
   firmware, then rerun both programs. Public reports agree that Realtek
   drivers offer 480 frames only (miniaudio discussion 1084, issue 949;
   JUCE issue 560); none found measures SST in exclusive mode.
+  Measured 2026-10-13 (docs/audio.md, "Exclusive mode compared with
+  cave-audio"): cave-audio's exclusive setup (int24 format walk, minimum
+  period, thread and COM order, zeros with flags 0) gives the same groups
+  of events, 1500 to 5100 frames behind the position and a 106 ms lead
+  needed; none of its differences, one at a time, nor
+  `AUDCLNT_STREAMOPTIONS_RAW`, a tone or load changed it. Timer-driven
+  exclusive mode on the same driver runs smoothly: 23.5 to 26.5 ms lead
+  needed at int24 with 288 frames kept, 58 ms at the device format. So
+  the cause is the driver's event-driven exclusive path. Not adopted:
+  miniaudio has no such mode, and the gain over shared mode is 3.5 to
+  16.5 ms with a thin margin. Open: `audio_schedule --exclusive` gave XRUN
+  records and LATE at every lead in 4 of 5 runs that day (0 XRUN records
+  in `audio_clockstats --exclusive`); not traced.
 - The first sound after a long silence (added 2026-10-10). `yau_open()`
   runs the stream silent until the fit is ready and keeps it running
   until `yau_close()`, so the OS, driver and DMA path stays awake between
