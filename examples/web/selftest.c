@@ -1,8 +1,9 @@
 /* web_selftest.c - what a browser's frame loop can and cannot show about
  * timing: the measured refresh, the interval between frame callbacks as a
  * histogram, the clock's resolution, cross-origin isolation, visibility
- * changes, and, for keys pressed during the run, how late SDL stamped
- * them against the DOM event's own time.
+ * changes, and, for keys pressed and taps or clicks made during the run,
+ * how late SDL stamped them against the DOM event's own time, and the
+ * stamp yscr_event_input() gave them (the DOM's time when it found it).
  *
  * It draws a gray field with a bar that moves one step per frame, so a
  * skipped frame shows as a jump. Nothing here is a statement about light:
@@ -38,11 +39,14 @@
 EM_JS(double, web_perf_ms, (void), { return performance.now(); })
 EM_JS(double, web_raf_run_ms, (void), { return Module['yscrRafRun'] || 0; })
 EM_JS(double, web_raf_t_ms, (void), { return Module['yscrRafT'] || 0; })
-/* A key SDL stamped, in performance.now() ms, for the page to pair with
- * the DOM event's timeStamp. */
-EM_JS(void, web_key, (int down, double ms), {
-    (Module['yspKeys'] = Module['yspKeys'] || []).push([down, ms]);
+/* A key or a press SDL stamped, and the stamp yscr_event_input() gave it
+ * (the DOM's own time when found), both in performance.now() ms, for the
+ * page to pair with the DOM event's timeStamp. type: 1 key down, 0 key
+ * up, 3 a touch or mouse press. */
+EM_JS(void, web_key, (int type, double sdl_ms, double input_ms), {
+    (Module['yspKeys'] = Module['yspKeys'] || []).push([type, sdl_ms, input_ms]);
 })
+EM_JS(void, web_ready, (void), { if (Module['onYspReady']) Module['onYspReady'](); })
 EM_JS(void, web_result, (const char* json), {
     Module['yspResult'] = JSON.parse(UTF8ToString(json));
     if (Module['onYspResult']) Module['onYspResult'](Module['yspResult']);
@@ -142,6 +146,9 @@ int main(int argc, char** argv) {
 #endif
     yscr_describe(&scr, line, sizeof line);
     printf("%s\n", line);
+#if defined(__EMSCRIPTEN__)
+    web_ready();
+#endif
 
     for (;;) {
         SDL_Event ev;
@@ -170,12 +177,14 @@ int main(int argc, char** argv) {
             if (r->onset) { prev_onset = r->onset; prev_index = r->index; }
         }
         while (yscr_poll(&scr, &ev, &t_in)) {
-            if (ev.type == SDL_EVENT_KEY_DOWN || ev.type == SDL_EVENT_KEY_UP) {
-                keys++;
+            int type = ev.type == SDL_EVENT_KEY_DOWN ? 1 : ev.type == SDL_EVENT_KEY_UP ? 0
+                     : ev.type == SDL_EVENT_FINGER_DOWN || ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN ? 3 : -1;
+            yin_event in;
+            if (type < 0 || !yscr_event_input(&scr, &ev, &in)) continue;
+            keys++;
 #if defined(__EMSCRIPTEN__)
-                web_key(ev.type == SDL_EVENT_KEY_DOWN, (double)(t_in - perf_off) * 1e-6);
+            web_key(type, (double)(t_in - perf_off) * 1e-6, (double)(in.t - perf_off) * 1e-6);
 #endif
-            }
         }
         t_in = yrt_now_ns();
         if (clear) {

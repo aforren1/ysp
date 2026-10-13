@@ -29,7 +29,7 @@
 body {
   margin: 0 auto;
   max-width: 980px;
-  padding: 16px 20px 48px;
+  padding: 16px max(20px, env(safe-area-inset-right)) 48px max(20px, env(safe-area-inset-left));
   background: var(--surface-1);
   color: var(--text-primary);
   font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -45,7 +45,9 @@ code, pre, .mono { font-family: ui-monospace, Consolas, monospace; font-size: 0.
   padding: 10px 14px;
   margin: 8px 0 16px;
 }
-.status { color: var(--text-secondary); font-size: 0.9rem; }
+/* Nothing may be wider than a phone's viewport: a wider page makes the
+ * browser lay it out wider and zoom out, which moves every tap. */
+.status { color: var(--text-secondary); font-size: 0.9rem; display: flex; flex-wrap: wrap; }
 .status span { margin-right: 1.2em; white-space: nowrap; }
 .panel { background: var(--surface-2); border-radius: 8px; padding: 14px 18px; margin: 12px 0; }
 button {
@@ -61,10 +63,38 @@ button.secondary { background: transparent; color: var(--text-primary); }
 button:disabled { opacity: 0.5; cursor: default; }
 label { margin-right: 1em; }
 input[type=number] { width: 6em; font: inherit; }
-#stage { display: none; text-align: center; background: #808080; padding: 0; margin: 12px 0; }
-#stage.running { display: block; }
-#stage:fullscreen { display: flex; align-items: center; justify-content: center; }
-canvas { display: inline-block; outline: none; }
+/* During a run the stage covers the viewport, less the safe areas (a
+ * notch, the home indicator), and nothing under it scrolls or zooms. The
+ * canvas opens at the stage's size; ysp-web.js scales its box to fit after
+ * a rotation. */
+#stage { display: none; }
+#stage.running {
+  display: flex; align-items: center; justify-content: center;
+  position: fixed; inset: 0; z-index: 10; margin: 0;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  background: #000000;
+  touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+  overscroll-behavior: none;
+}
+body.running { overflow: hidden; touch-action: none; overscroll-behavior: none; }
+canvas { display: block; outline: none; touch-action: none; }
+body.preparing #canvas { visibility: hidden; }
+#stage .note { display: none; position: absolute; color: #d6d5d0; font-size: 1.1rem; }
+body.preparing #stage .note { display: block; }
+/* The two response targets are the canvas's halves; these labels only
+ * name them and let every touch through to the canvas. */
+#stage .targets {
+  position: absolute; left: env(safe-area-inset-left); right: env(safe-area-inset-right);
+  bottom: calc(env(safe-area-inset-bottom) + 8px);
+  display: flex; pointer-events: none; color: #ffffff; opacity: 0.55; font-size: 1rem;
+}
+#stage .targets span { flex: 1; text-align: center; }
+body.preparing #stage .targets { display: none; }
+#stage .stop {
+  position: absolute; top: calc(env(safe-area-inset-top) + 8px); right: calc(env(safe-area-inset-right) + 8px);
+  padding: 6px 14px; color: #ffffff; border-color: #ffffff; opacity: 0.6;
+}
+button { touch-action: manipulation; min-height: 44px; }
 /* Fixed size and contain: strict, so a new log line never lays out the rest
  * of the page; column-reverse keeps the newest line in view without a
  * script reading or setting the scroll position (ysp-web.js). */
@@ -80,7 +110,8 @@ canvas { display: inline-block; outline: none; }
   padding: 8px 10px;
   font-size: 0.8rem;
 }
-table { border-collapse: collapse; font-size: 0.85rem; }
+table { border-collapse: collapse; font-size: 0.85rem; display: block; max-width: 100%; overflow-x: auto; }
+h1, p, li { overflow-wrap: anywhere; }
 th, td { padding: 3px 10px; border-bottom: 1px solid var(--rule); text-align: right; }
 th { color: var(--text-secondary); font-weight: 600; }
 .hidden { display: none; }

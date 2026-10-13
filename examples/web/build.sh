@@ -25,19 +25,40 @@ check() {
 check "$out/coi-serviceworker.js" e97bbac6017322d48aa54a5bc7ce473c725a4b7376ff245002e0ba71c3dcdd7e
 check "$out/coi-serviceworker.LICENSE.txt" 3ee2c88cec9f3036fd4b0cba94e94485bb8b4673be7b8e0f3b1496c5baff75cb
 
-# One build per demo, no threads: the demos use no worker, so a threaded
-# build buys them nothing, and the same build runs isolated (finer clock)
-# and not. ASYNCIFY, not JSPI: it runs in every WebGL2 browser, and
-# measured on Chrome it cost 15 to 20 us more per frame (docs/web.md).
-flags="-O2 -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wfloat-conversion -Werror -Iinclude -DYRT_NO_THREADS
+# One build per demo without sound, no threads: those demos use no
+# worker, so a threaded build buys them nothing, and the same build runs
+# isolated (finer clock) and not. ASYNCIFY, not JSPI: it runs in every
+# WebGL2 browser, and measured on Chrome it cost 15 to 20 us more per
+# frame (docs/web.md).
+common="-O2 -Wall -Wextra -Wpedantic -Wshadow -Wfloat-conversion -Werror -Iinclude
  -sUSE_SDL=3 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sASYNCIFY -sASYNCIFY_STACK_SIZE=65536
  -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=1MB -sENVIRONMENT=web
  -sEXPORTED_FUNCTIONS=_main,_yscr_request_abort -sEXPORTED_RUNTIME_METHODS=callMain"
+flags="$common -std=c11 -DYRT_NO_THREADS"
+size() { echo "$1: $(wc -c < "$out/$1.wasm") bytes wasm, $(wc -c < "$out/$1.js") bytes js"; }
 for demo in tutorial:examples/web/tutorial.c rdk_staircase:examples/web/rdk_staircase.c \
             gallery:examples/gfx/gallery.c selftest:examples/web/selftest.c; do
     name=${demo%%:*}
     src=${demo#*:}
     # shellcheck disable=SC2086
     emcc $flags -o "$out/$name.js" "$src"
-    echo "$name: $(wc -c < "$out/$name.wasm") bytes wasm, $(wc -c < "$out/$name.js") bytes js"
+    size "$name"
 done
+
+# The sound demo, twice (docs/web.md, "Audio"): av_sync_mt with threads and
+# miniaudio's AudioWorklet path, for a cross-origin isolated page (it needs
+# SharedArrayBuffer), and av_sync without threads on miniaudio's
+# ScriptProcessorNode path for every other page; the page picks one by
+# crossOriginIsolated. miniaudio 0.11.25, the version ysp/audio.h pins,
+# fetched and checked as CMakeLists.txt does; its EM_ASM needs -std=gnu11.
+ma=$(mktemp -d)
+curl -fsSL -o "$ma/miniaudio.h" https://raw.githubusercontent.com/mackron/miniaudio/0.11.25/miniaudio.h
+check "$ma/miniaudio.h" ac7af4de748b7e26b777f37e01cee313a308a7296a3eb080e2906b320cc55c89
+# shellcheck disable=SC2086
+emcc $common -std=gnu11 -DYRT_NO_THREADS -I"$ma" -o "$out/av_sync.js" examples/web/av_sync.c
+size av_sync
+# shellcheck disable=SC2086
+emcc $common -std=gnu11 -I"$ma" -pthread -Wno-pthreads-mem-growth -DMA_ENABLE_AUDIO_WORKLETS \
+     -sAUDIO_WORKLET=1 -sWASM_WORKERS=1 -o "$out/av_sync_mt.js" examples/web/av_sync.c
+size av_sync_mt
+rm -rf "$ma"

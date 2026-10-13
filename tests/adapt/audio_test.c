@@ -113,6 +113,9 @@ typedef struct sdev {
     unsigned char out_mem[8192 * 8 * 4];
     int      started, stopped, closed;
     int32_t  queue_asked;   /* yau_device_open.queue at the last open          */
+    int      report_every;  /* a report in every Nth block only (a browser's
+                               timer); 0 or 1 = every block                   */
+    int      entry_zero;    /* t_entry 0: an AudioWorklet with no clock       */
 } sdev;
 
 static sdev g_sd;
@@ -247,6 +250,8 @@ static void sd_block(sdev* s) {
     } else {
         tk.pos = -1;
     }
+    if (s->report_every > 1 && s->k % s->report_every) { tk.pos = -1; tk.pos_t = 0; }
+    if (s->entry_zero) tk.t_entry = 0;
 rendered:
     s->render(s->host, s->out_mem, s->period, &tk);
     if (s->on_block) s->on_block(s, (const float*)(const void*)s->out_mem, s->period);
@@ -857,6 +862,50 @@ static void test_callback_source(void) {
         CHECK(g_au.fit_ft.n >= n_before);
         yau_close(&g_au);
     }
+}
+
+/* v0.4.1: a browser's device (BACKENDS, WEB): tier WEB, a report in one
+ * block of 4, and entry times of 0 (an AudioWorklet has no clock). The fit
+ * is of the reports only, so the sound lands on the truth's frame; its
+ * record is tier WEB, confirmed or not. */
+static void test_web_tier(void) {
+    sdev* s = &g_sd;
+    yau_buf b;
+    yau_onset r = { 0 };
+    yau_id id;
+    yrt_event ev[512];
+    int n, i, seen = 0;
+    int64_t t, want;
+    sd_default(s);
+    s->tier = YAU_TIER_WEB;
+    s->period = 128;
+    s->report_every = 4;
+    s->entry_zero = 1;
+    CHECK(open_dev(s, NULL));
+    sd_run_s(s, 6.0);
+    memset(&b, 0, sizeof b);
+    b.frames = g_buf; b.n = 100; b.channels = 1;
+    t = g_vt + 80000000;
+    id = yau_play_at(&g_au, b, t);
+    sd_run_s(s, 0.3);
+    CHECK_I(yau_result(&g_au, id, &r), YAU_OK);
+    want = sd_frame_of(s, t);
+    CHECK(llabs(r.start_frame - want) <= 1);
+    CHECK_I(r.tier, YAU_TIER_WEB);
+    CHECK(!(r.flags & YAU_ONSET_UNCONFIRMED));
+    /* no report past its frame: unconfirmed, and still tier WEB */
+    id = yau_play_at(&g_au, b, g_vt + 60000000);
+    s->report_every = 1 << 30;
+    sd_run_s(s, 0.3);
+    yau_close(&g_au);
+    while ((n = yrt_ring_drain(&g_ring, ev, 512)) > 0)
+        for (i = 0; i < n; i++)
+            if (ev[i].source == YRT_SRC_AUDIO && ev[i].kind == YAU_EV_ONSET && ev[i].aux == (uint32_t)id) {
+                seen++;
+                CHECK(ev[i].u.u16[18] & YAU_ONSET_UNCONFIRMED);
+                CHECK_I(YAU_EV_TIER_OF(ev[i].u.u16[19]), YAU_TIER_WEB);
+            }
+    CHECK_I(seen, 1);
 }
 
 /* The records in the ring, field by field. */
@@ -2570,6 +2619,7 @@ int main(int argc, char** argv) {
     test_xrun();
     test_halt();
     test_callback_source();
+    test_web_tier();
     test_ring();
     test_limits();
     test_strict_open();

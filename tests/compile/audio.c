@@ -21,6 +21,10 @@ static int touch_fields(ma_device* d) {
 }
 #endif
 
+/* v0.4.1: the web tier is the lowest, as ysp/screen.h's, and fits the
+ * ring's 3-bit tier field; checked at compile time. */
+typedef char web_tier_fits[(YAU_TIER_WEB == 5 && YAU_TIER_WEB > YAU_TIER_SIM && YAU_TIER_WEB <= 7) ? 1 : -1];
+
 /* The lifecycle calls v0.4.0 changed, by type. */
 typedef struct au_api {
     bool (*stream_open)(yau_audio*, yau_stream*, const yau_stream_desc*);

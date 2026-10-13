@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ysp demo: flash and click</title>
+<script src="coi-serviceworker.js"></script>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:,">
+</head>
+<body>
+<p><a href="index.html">ysp web demos</a></p>
+<h1>Flash and click: what a browser says about audio-visual timing</h1>
+<div class="notice"><strong>Browser timing is not rig timing.</strong> Both times this page compares are
+the browser's estimates. The flash's time is when the browser began the frame, before its compositor
+and the display; the click's time comes from the browser's own figure for its audio output, which no
+one checked on this device. Neither is when light or sound reached you. A photodiode and a microphone
+on an oscilloscope measure that; a browser never does.
+<a href="https://github.com/aforren1/ysp/blob/main/docs/web.md">How the web backend works</a>.</div>
+<div id="status" class="status"></div>
+
+<div id="intro" class="panel">
+  <h2>What it does</h2>
+  <p>Each trial plans a flash (a light disk for 3 frames) and a short click for the same time,
+     0.3 s ahead. Then it compares the two records: the frame's onset as <code>ysp/screen.h</code> estimates it, and the
+     click's onset as <code>ysp/audio.h</code> estimates it from the browser's output timestamps. It also records
+     every audio callback, to show how regular they were.</p>
+  <p>Warning: about one flash a second for 20 seconds. Set the volume low; the click is short and
+     quiet. On a phone, turn off silent mode.</p>
+  <p>This page uses the <strong id="path">-</strong> audio path. A cross-origin isolated page gets the
+     AudioWorklet build with threads; every other page gets the ScriptProcessorNode build.</p>
+  <p><label>Trials <input type="number" id="n" value="20" min="1" max="200"></label></p>
+  <p><label><input type="checkbox" id="fs"> Fullscreen</label></p>
+  <button id="start" data-ready="Start" disabled>Loading...</button>
+</div>
+
+<div id="stage">
+  <canvas id="canvas" tabindex="-1"></canvas>
+  <div class="note">Preparing...</div>
+  <button id="stop" class="stop secondary" disabled>Stop</button>
+</div>
+
+<div id="results" class="panel hidden">
+  <h2>Results</h2>
+  <div id="summary"></div>
+  <h2>Trials</h2>
+  <div id="rows"></div>
+  <p><button id="csv">Download the trials (CSV)</button>
+     <button id="json">Download the results (JSON)</button>
+     <button id="session" class="secondary">Download the session log</button></p>
+</div>
+
+<h2>Log</h2>
+<div id="log"><div id="log-text"></div></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+// The ScriptProcessorNode runs on the page's main thread: 2048 frames (43 ms
+// at 48 kHz) per callback (docs/web.md, "Audio"); ?period=N overrides it.
+const period = new URLSearchParams(location.search).get('period') || (window.crossOriginIsolated ? '' : '2048');
+window.yspPage = { name: 'av_sync', audio: true,
+                   args: () => ['--n', String(Math.max(1, Math.min(200, $('n').value | 0))),
+                                ...(period ? ['--period', period] : [])],
+                   builds: { coi: 'av_sync_mt.js', fallback: 'av_sync.js' } };
+</script>
+<script src="ysp-web.js"></script>
+<script>
+$('path').textContent = ysp.status.audio;
+$('start').onclick = () => ysp.start({ fullscreen: $('fs').checked });
+$('stop').onclick = () => ysp.stop();
+$('csv').onclick = () => ysp.download('ysp_av_sync.csv', Module.yspCsv, 'text/csv');
+$('json').onclick = () => ysp.download('ysp_av_sync.json', JSON.stringify(Object.assign({ page: ysp.status }, Module.yspResult), null, 1), 'application/json');
+$('session').onclick = () => ysp.download('ysp_av_sync_session.txt', ysp.sessionText());
+Module.onYspDone = (r) => {
+  ysp.finish();
+  const f = (x, d) => (x == null || x < -1e8 ? '-' : (+x).toFixed(d));
+  const s = (o, d) => o && o.n ? f(o.mean, d) + ' (SD ' + f(o.sd, d) + ', ' + f(o.min, d) + ' to ' + f(o.max, d) + ', n ' + o.n + ')' : '-';
+  const last = r.trials.length ? r.trials[r.trials.length - 1] : {};
+  const rows = [
+    ['audio path', ysp.status.audio + (r.have_audio ? '' : ': no audio opened')],
+    ['click minus flash, both estimates (ms)', s(r.audio_minus_flip_ms, 2)],
+    ['click: render to onset, the browser\'s figure (ms)', s(r.render_to_onset_ms, 1)],
+    ['AudioContext outputLatency, baseLatency at the last trial (ms)', f(last.output_latency_ms, 1) + ', ' + f(last.base_latency_ms, 1)],
+    ['audio callbacks', r.callbacks + ' of ' + r.period + ' frames at ' + r.rate + ' Hz (' + f(r.callback_nominal_ms, 3) + ' ms each)'],
+    ['callback interval p50, p99, max (ms)', [r.callback_interval_ms.median, r.callback_interval_ms.p99, r.callback_interval_ms.max].map((x) => f(x, 3)).join(', ')],
+    ['gaps of 2 ms or more between callbacks: p50, p99, max (ms)', [r.callback_gap_ms.median, r.callback_gap_ms.p99, r.callback_gap_ms.max].map((x) => f(x, 3)).join(', ') + ' (n ' + r.callback_gap_ms.n + ')'],
+    ['callbacks over 1.5 periods after the last', r.callbacks_over_1_5x],
+    ['smallest step of the callback clock (ms)', f(r.callback_step_ms, 3) + (r.callback_zero ? '; ' + r.callback_zero + ' intervals of 0' : '')],
+    ['position reports (getOutputTimestamp)', r.reports + ' over ' + f(r.report_span_s, 1) + ' s'],
+    ['underruns found, drift, fit spread', r.xruns + ', ' + f(r.drift_ppm, 1) + ' ppm, ' + f(r.fit_spread_us, 0) + ' µs'],
+    ['screen', r.screen], ['audio', r.audio],
+  ];
+  const t = document.createElement('table');
+  for (const [a, b] of rows) { const tr = t.insertRow(); const th = document.createElement('th'); th.textContent = a; tr.appendChild(th); const td = tr.insertCell(); td.textContent = b; td.style.textAlign = 'left'; }
+  $('summary').innerHTML = '';
+  $('summary').appendChild(t);
+  ysp.table($('rows'), ysp.parseCsv(Module.yspCsv), ['trial', 'flip_minus_plan_s', 'audio_minus_plan_s', 'audio_minus_flip_s', 'flip_tier', 'audio_tier', 'output_latency_s']);
+  Module.yspScreen = r.screen;
+};
+</script>
+</body>
+</html>

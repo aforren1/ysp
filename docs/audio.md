@@ -983,13 +983,63 @@ virtual time, the hold kept, the next block ending the play) and of the
 messages. The USAGE blocks compile as C99 and C++17. Mutants `conv-01`
 to `conv-03` are caught.
 
+## The Web Audio path (v0.4.1)
+
+[web.md](web.md), "Audio: what the records say", has the measurements and
+what a browser can claim; this section has the design decisions that
+touch the core.
+
+- **Reports, not callbacks.** A browser's `getOutputTimestamp()` is a
+  position report in WASAPI's sense (a frame at the output, at a time), so
+  the web device feeds it as `tick.pos` and the fit is least squares on
+  reports. A page's timer reads it every 10 ms on the main thread, where
+  the AudioContext lives; every block passes the newest pair, and one that
+  has not moved feeds nothing, as on WASAPI.
+- **No callback points.** A web block without a report adds no fit point
+  (`web-02`). The first blocks have none at or past stream frame 0, and an
+  AudioWorklet's entry time comes from `Date.now()` in 1 ms steps (its
+  scope has no `performance.now()`, and `yrt_now_ns()` reads 0 there);
+  mixed into a fit of reports, those points moved every plan. Only a
+  device with `YAU_TIER_WEB` and `YAU_POS_DEVICE` takes this rule, so
+  WASAPI and the null device are unchanged.
+- **Two browsers, two readings.** Chrome 154's pairs lie within 0.15 ms
+  of a line; Firefox 157's spread over 6 ms (its `contextTime` steps with
+  its 512-frame callback, its `performanceTime` follows the read) and are
+  stamped `outputLatency` before the read. The device keeps the lower
+  envelope (a pair at most 0.5 ms above the least late of the last 32)
+  and puts `outputLatency` back where a pair is that old. Both rules are
+  in the device's JavaScript and C, not the core: a core rule on report
+  spread (the halt rule's half period, 1.3 ms at 128 frames) restarted
+  Firefox's fit 41 times in one run before them.
+- **One tier.** Every web onset is `YAU_TIER_WEB` (5), confirmed or not
+  (`web-01`): confirmation by a browser's own estimate does not make it
+  better than tier 3, and an unconfirmed one is not worse than the
+  estimate.
+- **Waits yield.** On the main thread `yau_open()`'s warm-up and
+  `yau_wait()` sleep through `emscripten_sleep()`: a busy wait there would
+  stop the ScriptProcessorNode's callbacks and the timer that reads the
+  reports. ysp/screen.h's web backend already needs ASYNCIFY or JSPI, and
+  miniaudio's AudioWorklet path sleeps the same way at init.
+- **The project's format.** The AudioContext is asked for the project's
+  rate and channels; the browser converts to the device unseen, so the
+  strict open's rule (no conversion) holds only up to the browser.
+- **Tests.** `test_web_tier` in `tests/adapt/audio_test.c` runs the scripted
+  device as a browser's: tier WEB, a report in one block of 4, entry times
+  of 0. The sound lands on the truth's frame, confirmed and tier 5, and an
+  unconfirmed one is tier 5 too. `tests/compile/audio.c` checks the tier's
+  value. Mutants `web-01` and `web-02` are killed. The JavaScript and the
+  rest of the device run only in a browser (`examples/web/av_sync.c`).
+
 ## Not measured
 
 - Latency to sound. No loopback cable; `--line` is built, not run. It
   reports the measured latency minus the OS's claim when it does.
   `--line --stream` (stream placement and latency) is built, not run.
-- CoreAudio, ALSA, PulseAudio, Web Audio: compiled, never run. PulseAudio
+- CoreAudio, ALSA, PulseAudio: compiled, never run. PulseAudio
   under WSLg plays to the Windows speakers and was not run.
+- Web Audio: run in Chrome 154 (and Firefox, [web.md](web.md)) on this
+  laptop; sound at the speaker never measured, so the browser's
+  `outputLatency` in every web onset is unchecked.
 - Exclusive mode beyond the 60 s runs of "Periods and buffers"; under
   load, never.
 - Whether the in-box Microsoft HD Audio driver offers shared periods under
