@@ -234,6 +234,27 @@ int main(int argc, char** argv) {
     sh.color[0] = sh.color[1] = sh.color[2] = 0.35f;
     dot = ygfx_shape(&sh);
     ygfx_prime(&gfx);
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+    /* The ScriptProcessorNode's callbacks run on this thread, and the
+     * screen's setup above held it for about 2 s. After such a stall its
+     * blocks' playbackTime no longer told where they played (Firefox 157:
+     * every onset 7.7 s off; Chrome 154: 51 to 63 skipped blocks), so the
+     * sound opens again now. The page has had its tap: Chrome and Firefox
+     * let the new AudioContext start. */
+    if (have_audio) {
+        yau_close(&au);
+        have_audio = 0;
+        n_ticks = 0;   /* the callbacks of this stream only */
+        n_reports = 0;
+        if (yau_open(&au, &ad)) {
+            have_audio = 1;
+            click = yau_click(&au, &cd);
+            if (!click.frames) { snprintf(aerr, sizeof aerr, "%s", yau_error(&au)); yau_close(&au); have_audio = 0; }
+        } else {
+            snprintf(aerr, sizeof aerr, "%s", yau_error(&au));
+        }
+    }
+#endif
 
     yscr_describe(&scr, line, sizeof line);
     printf("%s\n", line);

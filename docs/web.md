@@ -135,13 +135,15 @@ sets no COOP or COEP headers, so `coi-serviceworker.js` isolates the pages
    'app.js' }` before `ysp-web.js`; it loads the one the page can run.
 3. On the ScriptProcessorNode path, ask for 2048 frames (`desc.period`;
    43 ms at 48 kHz): its callbacks run on the page's main thread, and 512
-   frames gave onsets up to 5.5 ms off their plan (see
+   frames gave onsets up to 5.6 ms off their plan. After the screen's
+   setup, close the sound and open it again: a main-thread stall of
+   seconds with a ScriptProcessorNode running left its timing wrong (see
    [Audio](#audio-what-the-records-say)).
 4. Plan each sound at least `yau_lead_ns()` ahead (about 60 ms on the
-   AudioWorklet path, 170 ms on the ScriptProcessorNode path in Chrome on
-   the laptop below) with `yau_play_at()`, call `yau_update()` each frame,
-   and read the record with `yau_result()`. Do not call `yau_wait()` in the
-   frame loop.
+   AudioWorklet path, 140 to 170 ms on the ScriptProcessorNode path in
+   Chrome on the laptop below) with `yau_play_at()`, call `yau_update()`
+   each frame, and read the record with `yau_result()`. Do not call
+   `yau_wait()` in the frame loop.
 5. Record the audio path and the record's tier (5) with the data.
    `examples/web/av_sync.c` and `av.html` do all of this.
 
@@ -264,8 +266,8 @@ sends.
 | rdk_staircase | 1,369,055 | 450,111 | 216,740 | 48,983 |
 | gallery | 1,521,496 | 493,965 | 216,553 | 48,774 |
 | selftest | 1,075,629 | 323,835 | 215,729 | 48,804 |
-| av_sync (no threads) | 1,391,145 | 452,697 | 225,079 | 50,684 |
-| av_sync_mt (threads, AudioWorklet) | 1,457,922 | 470,713 | 259,974 | 57,523 |
+| av_sync (no threads) | 1,392,633 | 453,186 | 225,205 | 50,751 |
+| av_sync_mt (threads, AudioWorklet) | 1,458,322 | 470,922 | 260,100 | 57,603 |
 
 Against the same demos built from main at 7316129 with the same emsdk, the
 input stamps, the touch choices and the priming added 1.7 to 4.1 KB of
@@ -480,39 +482,67 @@ A photodiode and a microphone on an oscilloscope measure that.
 
 Measured on the laptop of [status](status.md) (Windows 11, Realtek
 speakers, WASAPI shared at 48 kHz under the browser), Chrome 154 headed,
-`av.html`, 20 trials a run, 3 runs a path interleaved, under the timing
-guard (load 0 to 19 % at the start):
+`av.html`, 20 trials a run, 3 runs a path interleaved, in one session
+under the timing guard (load 0 to 19 % at the start):
 
 | | AudioWorklet (isolated) | ScriptProcessorNode, 2048 frames (not isolated) |
 |---|---|---|
-| Sound minus light, mean per run | +0.06 to +0.14 ms | -0.44 to +0.08 ms |
-| Sound minus light, SD per run | 0.06 to 0.10 ms | 0.07 to 0.13 ms |
-| Sound minus light, all trials | -0.18 to +0.26 ms | -0.58 to +0.11 ms |
-| Render to onset (the browser's figure), median | 53 to 55 ms | 123 to 130 ms |
-| `outputLatency`, `baseLatency` | 48 ms, 10 ms | 48 ms, 10 ms |
-| Lead at the end (`yau_lead_ns()`) | 52 to 58 ms | 144 to 171 ms |
-| Callbacks per run | 11,704 to 11,948, 128 frames each | 745 to 760 |
-| Callback rhythm | bursts every 10 ms: gaps of 2 ms or more p50 10, max 11 ms; within a burst 0 or 1 ms (the worklet's clock has 1 ms steps) | p50 40 ms, p99 50 ms, one gap of 2.2 to 2.7 s a run |
-| Fit of the reports: residual RMS, drift | 36 to 43 us, +3.4 to +4.5 ppm | 55 to 73 us, +4.4 to +6.1 ppm |
-| Skipped blocks found (`block_moves`) | 0 | 51 to 63 a run |
-| Trials with a late or dropped flash, a flagged sound | 0, 0 | 0, 0 |
+| Sound minus light, mean per run | -0.01 to +0.07 ms | -0.03 to +0.12 ms |
+| Sound minus light, SD per run | 0.06 to 0.10 ms | 0.08 to 0.10 ms |
+| Sound minus light, all trials | -0.26 to +0.25 ms | -0.25 to +0.28 ms |
+| Render to onset (the browser's figure), median | 52 to 55 ms | 111 to 127 ms |
+| `outputLatency`, `baseLatency` | 48 ms, 10 ms | 40 ms, 10 ms |
+| Lead at the end (`yau_lead_ns()`) | 56 to 60 ms | 137 to 168 ms |
+| Callbacks per run | 11,772 to 11,937, 128 frames each | 711 to 713 |
+| Callback rhythm | bursts every 10 ms: gaps of 2 ms or more p50 10, max 11 ms; within a burst 0 or 1 ms (the worklet's clock has 1 ms steps) | p50 40 ms, p99 50 ms, max 52 ms |
+| Fit of the reports: residual RMS, drift | 32 and 38 us, +3.1 and +4.8 ppm (2 runs); one run restarted its fit 8 times (7 skipped blocks) | 49 to 323 us, +4.2 to +13.0 ppm |
+| Skipped blocks found (`block_moves`) | 0, 7, 0 | 0, 0, 0 |
+| Trials with a late or dropped flash, a flagged sound | 0, 1 | 0, 0 |
 
-The ScriptProcessorNode's long gap is setup: the program opens the sound
-first (in the Start tap), then the screen's settling and the shader
-compiles hold the main thread for 2 s, and its callbacks wait. The events
-that waited then run back to back; most of the skipped blocks are there,
-and the fit starts over after them. `av_sync.c` waits 2 s before its
-first trial for that reason. With 1024 frames the residual RMS was 311 us
-and every onset stayed within 0.7 ms of its plan; with 512, 192 callbacks
-came over 1.5 periods late and one onset was 5.5 ms off: the page asks for
-2048.
+Earlier the same session's ScriptProcessorNode runs had one callback gap
+of 2.2 to 2.7 s each and 51 to 63 skipped blocks: the program opens the
+sound first (in the Start tap), then the screen's settling and the shader
+compiles hold the main thread for 2 s. The events that waited then ran
+back to back, and their `playbackTime` no longer said where their blocks
+played. In Firefox 157 the same stall put every onset 7.7 s off. The
+ScriptProcessorNode build of `av_sync.c` now closes the sound and opens it
+again after its setup; the table is from that build. On the AudioWorklet
+path the sound runs on its own thread and the stall did not touch it.
 
-`getOutputTimestamp()` itself, read every 2 ms for 6 s in headed Chrome
-154: a new pair every 10.0 ms (the device's chunk), its `performanceTime`
-against a line through its `contextTime` within -0.15 to +0.14 ms (p1 to
-p99), at most 0.50 ms. Headless Chrome's pairs came every 10 ms too, but
-one was 34 ms off and the first was 1 s old; the reader drops pairs more
-than 100 ms old.
+The ScriptProcessorNode's period, 2 runs each after the fix: 1024 frames
+gave sound minus light -0.19 to +0.17 ms, no skipped block, a lead of 97
+to 110 ms; 512 frames gave 184 and 185 callbacks over 1.5 periods late,
+26 and 28 underruns found, and onsets up to 5.6 ms off their plan. The
+page asks for 2048, the margin against the frame loop's own work on the
+same thread; 1024 also held here.
+
+Firefox 157 headed, the same pages started by script (its own profile,
+autoplay allowed): one AudioWorklet run in the guarded session, sound
+minus light -1.27 to +0.03 ms (SD 0.32 ms), the browser's render to onset
+28 ms (`outputLatency` 32 ms, `baseLatency` 0), residual RMS 517 us; two
+more runs of that session never showed the page in front, so its frame
+callbacks did not run. Unguarded checks (not timing claims): an
+AudioWorklet run with SD 0.41 ms, and a ScriptProcessorNode run with a
+mean of -1.9 ms (SD 0.32 ms) and no skipped block.
+
+`getOutputTimestamp()` itself, read every 2 ms for 6 s:
+
+| | Chrome 154 headed | Firefox 157 headed |
+|---|---|---|
+| A new pair every | 10.0 ms (the device's chunk) | 10.7 ms (512 frames) |
+| `performanceTime` against a line through `contextTime`, p1 to p99 | -0.15 to +0.14 ms | -3.0 to +3.1 ms |
+| The read minus `performanceTime` | 2 ms | 39 ms: `outputLatency` |
+| `contextTime` | the frame at the output | `currentTime` less `outputLatency` |
+
+Headless Chrome's pairs came every 10 ms too, but one was 34 ms off and
+the first was 1 s old; the reader drops pairs more than 100 ms old.
+Firefox's `contextTime` steps with its callback while `performanceTime`
+follows the read, hence the spread; the reader keeps the lower envelope (a
+pair at most 0.5 ms later than the least late of the last 32). Firefox
+also stamps the pair `outputLatency` before the read, though by its own
+`contextTime` that frame is at the output at the read; the reader adds
+`outputLatency` back where it sees that. Both are readings of one
+browser's behavior, not of sound.
 
 ### Input: touch, the mouse and the DOM's time
 
@@ -565,6 +595,20 @@ internal panel at 60 Hz), on AC.
   dropped (0). The self-test reports both.
 - Headless Chrome 154 (no panel: its frame source is a timer), 600 frames:
   mean 16.667 ms, SD 63 to 70 us; settling took 0.36 to 0.92 s.
+- Input stamps (v0.7.1), the self-test, headless Chrome 154, isolated,
+  under the timing guard, events sent by script. 30 key taps (60 events)
+  on the desktop page: every one got the DOM's time (`dom_stamps=60/60`);
+  SDL's stamp was 0.53 ms after the DOM's at the median and 352 ms after
+  it at most (a key pressed while setup held the main thread). 29 taps in
+  Pixel 7 emulation: `dom_stamps=29/29`; SDL's stamp 11.2 ms after the
+  DOM's at the median, 18.0 ms at most. That difference is what the DOM's
+  time removes from each response; the delay before the DOM's time
+  remains.
+- Touch path in Pixel 7 emulation (412 x 839 CSS pixels, device pixel
+  ratio 2.625): taps on the canvas halves gave `left` and `right`
+  responses with `rsp_kind` = `touch` in the tutorial's CSV and turned the
+  gallery's pages both ways; a turn to 839 x 412 during a run scaled the
+  canvas's box to 202 x 412, aspect kept, and counted one viewport change.
 
 ### Not measured
 

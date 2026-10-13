@@ -1002,6 +1002,15 @@ touch the core.
   mixed into a fit of reports, those points moved every plan. Only a
   device with `YAU_TIER_WEB` and `YAU_POS_DEVICE` takes this rule, so
   WASAPI and the null device are unchanged.
+- **Two browsers, two readings.** Chrome 154's pairs lie within 0.15 ms
+  of a line; Firefox 157's spread over 6 ms (its `contextTime` steps with
+  its 512-frame callback, its `performanceTime` follows the read) and are
+  stamped `outputLatency` before the read. The device keeps the lower
+  envelope (a pair at most 0.5 ms above the least late of the last 32)
+  and puts `outputLatency` back where a pair is that old. Both rules are
+  in the device's JavaScript and C, not the core: a core rule on report
+  spread (the halt rule's half period, 1.3 ms at 128 frames) restarted
+  Firefox's fit 41 times in one run before them.
 - **One tier.** Every web onset is `YAU_TIER_WEB` (5), confirmed or not
   (`web-01`): confirmation by a browser's own estimate does not make it
   better than tier 3, and an unconfirmed one is not worse than the
