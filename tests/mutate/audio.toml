@@ -25,6 +25,22 @@ libs = ["-ldl", "-lpthread", "-lm"]
 timeout = 60
 env = { YAU_PULSE_TEST_REQUIRE = "1" }
 
+[test.audio_alsa_capture]
+source = "tests/adapt/audio_alsa_capture_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O2", "-w", "-I$YSP_MINIAUDIO"]
+libs = ["-ldl", "-lpthread", "-lm"]
+timeout = 150
+env = { YAU_ALSA_TEST_REQUIRE = "1" }
+
+[test.audio_pulse_capture]
+source = "tests/adapt/audio_pulse_capture_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O2", "-w", "-I$YSP_MINIAUDIO"]
+libs = ["-ldl", "-lpthread", "-lm"]
+timeout = 90
+env = { YAU_PULSE_TEST_REQUIRE = "1" }
+
 [[mutant]]
 id = "p-01"
 name = "the probe checks the device rate"
@@ -324,8 +340,8 @@ id = "alsa-03"
 name = "ALSA exclusive on the default device"
 test = "audio_alsa"
 why = "miniaudio would open 'default', the sound server's plugin: exclusive in name only."
-find = "        if (id[0] != ':') {"
-replace = "        if (0) {"
+find = "    if (id[0] != ':') {"
+replace = "    if (0) {"
 
 [[mutant]]
 id = "alsa-04"
@@ -351,24 +367,27 @@ id = "alsa-06"
 name = "AUTO on Linux not exclusive"
 test = "audio_alsa"
 why = "AUTO would open ALSA's default, the sound server's plugin: callback times and the server's latency, the worse path no one asked for."
-find = "    if (m->auto_pick) excl = 1;"
-replace = "    (void)0;"
+find = """     * sound server says YAU_BACKEND_PULSE */
+    if (m->auto_pick) excl = 1;"""
+replace = """     * sound server says YAU_BACKEND_PULSE */
+    (void)0;"""
 
 [[mutant]]
 id = "alsa-07"
 name = "the sound server not suspended"
 test = "audio_alsa"
 why = "On a desktop the server holds the card, and AUTO would fail on every run."
-find = "    if (r != MA_SUCCESS && m->backend == ma_backend_alsa && excl && !m->keep_server && yau__pulse_take()) {"
-replace = "    if (0) {"
+find = "    got = yau__pulse_take(card);"
+replace = "    got = 0;"
 
 [[mutant]]
 id = "alsa-08"
 name = "the sound server not resumed at close"
 test = "audio_alsa"
 why = "A suspension outlives its client: the desktop would stay silent after the experiment."
-find = "    if (m->suspended) { m->suspended = 0; yau__pulse_give(); }"
+find = "    if (m->suspended) { yau__pulse_give(m->suspended - 1); m->suspended = 0; }"
 replace = "    (void)0;"
+count = 2
 
 [[mutant]]
 id = "alsa-09"
@@ -383,8 +402,8 @@ id = "alsa-10"
 name = "the default card's last device"
 test = "audio_alsa"
 why = "AUTO takes the default card's first playback device (here the analog output; the later ones are HDMI)."
-find = "                if (sscanf(id, \":%d,%d\", &c, &dv) == 2 && c == card && (best < 0 || dv < best)) {"
-replace = "                if (sscanf(id, \":%d,%d\", &c, &dv) == 2 && c == card && (best < 0 || dv > best)) {"
+find = "        if (sscanf(id, \":%d,%d\", &c, &dv) == 2 && c == card && (best < 0 || dv < best)) {"
+replace = "        if (sscanf(id, \":%d,%d\", &c, &dv) == 2 && c == card && (best < 0 || dv > best)) {"
 
 # v0.4.1: the Web Audio path's two rules in the core (BACKENDS, WEB).
 
@@ -607,3 +626,185 @@ test = "audio"
 why = "A browser's capture times are its estimates: tier 3 would rank them above a simulated input's, as an unchecked rig's."
 find = '''    if (c->dcaps.tier == YAU_TIER_SIM || c->dcaps.tier == YAU_TIER_WEB) return c->dcaps.tier;'''
 replace = '''    if (c->dcaps.tier == YAU_TIER_SIM) return c->dcaps.tier;'''
+
+# v0.6.0, capture on Linux (docs/audio.md, "Linux: capture"): ALSA
+# exclusive on hw:, PulseAudio's record stream, the suspension narrowed to
+# one card, and the core's watchdog and device loss count. alsa-1x need
+# hw:0,0's input; pulse-05 to pulse-12 a running PulseAudio and, for part
+# 4, hw:0,0. Not listed: AUTO's input on the card's last device and the
+# first of several name matches, which share alsa-10's and alsa-04's line
+# with the output (the capture test passes on those lines too); the duplex
+# input on another card, which needs a second card with an input.
+
+[[mutant]]
+id = "alsa-11"
+name = "capture status timestamps not set up"
+test = "audio_alsa_capture"
+why = "Without them the input's fit falls back to callback times, 170 to 610 us sd against 3 to 9."
+find = "    if (hw && caps->exclusive && yau__al_setup(m->ctx.alsa.asoundSO, m->dev.alsa.pPCMCapture, &m->al.al)) {"
+replace = "    if (0) {"
+
+[[mutant]]
+id = "alsa-12"
+name = "capture position less the delay"
+test = "audio_alsa_capture"
+why = "The output's formula copied: for an input the delay is recorded and not yet read, so it is added; less, the backlog goes below 0."
+find = "    raw = p->read + (int64_t)n + (int64_t)a->delay(a->st);"
+replace = "    raw = p->read + (int64_t)n - (int64_t)a->delay(a->st);"
+
+[[mutant]]
+id = "alsa-13"
+name = "a moved trigger stamp not counted"
+test = "audio_alsa_capture"
+why = "miniaudio restarts an overrun PCM inside its read; the core's halt rule finds it three reports later, with frames numbered from before it."
+find = "    } else if (trig != p->trig) {"
+replace = "    } else if (0) {"
+
+[[mutant]]
+id = "alsa-14"
+name = "ALSA exclusive capture without a hw: device"
+test = "audio_alsa_capture"
+why = "miniaudio would open 'default', the sound server's plugin: exclusive in name only."
+find = "    if (hw && (rc = yau__ma_alsa_hw(m->backend, dc.capture.pDeviceID, 1, err, err_cap)) != 0) return rc;"
+replace = "    (void)0;"
+
+[[mutant]]
+id = "alsa-15"
+name = "AUTO capture on Linux shared"
+test = "audio_alsa_capture"
+why = "AUTO's input would be ALSA's default: the sound server's plugin, here a monitor of the output, with callback times."
+find = """     * for the output; the sound server's input is YAU_BACKEND_PULSE */
+    if (m->auto_pick) excl = 1;"""
+replace = """     * for the output; the sound server's input is YAU_BACKEND_PULSE */
+    (void)0;"""
+
+[[mutant]]
+id = "alsa-16"
+name = "no 32-bit request on a hw: input"
+test = "audio_alsa_capture"
+why = "Left to choose, miniaudio takes 16 bits on this codec, and a float desc is refused."
+find = "    if (hw) dc.capture.format = in->format->sample == YAU_S16 ? ma_format_s16 : ma_format_s32;"
+replace = "    (void)0;"
+
+[[mutant]]
+id = "alsa-19"
+name = "the duplex input not taken from the output's card"
+test = "audio_alsa_capture"
+why = "With no input named, miniaudio would open 'default' for the input beside a hw: output."
+find = "        if (!dc->capture.pDeviceID) dc->capture.pDeviceID = yau__mac_first(&m->ctx, card);"
+replace = "        (void)0;"
+
+[[mutant]]
+id = "alsa-21"
+name = "a hw: input's buffer of three periods"
+test = "audio_alsa_capture"
+why = "At 64 frames three periods are 4 ms: a stall of the device thread longer than that loses frames; 40 ms rode out 25 ms."
+find = "    int64_t want = (int64_t)rate * YAU__CAP_BUF_MS / 1000, k;"
+replace = "    int64_t want = 0, k;"
+
+[[mutant]]
+id = "alsa-22"
+name = "every card's sinks and sources suspended"
+test = "audio_alsa"
+why = "A sink on another card (here a null sink) must keep playing while AUTO holds one card."
+find = "        if (s.dev[i].card != card || (!s.dev[i].is_sink && s.dev[i].monitor != 0xFFFFFFFFu)) continue;"
+replace = "        if (!s.dev[i].is_sink && s.dev[i].monitor != 0xFFFFFFFFu) continue;"
+
+[[mutant]]
+id = "alsa-23"
+name = "the input a failed duplex init left open"
+test = "audio_alsa_capture"
+why = "miniaudio leaves the capture PCM open when the playback PCM is busy; the open after the suspension then fails on the input."
+find = """    if (got <= 0) return MA_BUSY;
+    yau__ma_alsa_drop(ctx, dev);"""
+replace = """    if (got <= 0) return MA_BUSY;"""
+
+[[mutant]]
+id = "pulse-05"
+name = "the capture timing info not declared"
+test = "audio_pulse_capture"
+why = "Without it the input's fit uses callback times."
+find = """    if (m->pa_update && m->pa_get && m->pa_unref && m->pa_bpf) {
+        caps->pos_source = YAU_POS_DEVICE;
+        caps->os_latency_ns = 0;
+        caps->os_stream_latency_ns = 0;"""
+replace = """    if (m->pa_update && m->pa_get && m->pa_unref && m->pa_bpf) {
+        caps->os_latency_ns = 0;
+        caps->os_stream_latency_ns = 0;"""
+
+[[mutant]]
+id = "pulse-06"
+name = "the capture position without the source's latency"
+test = "audio_pulse_capture"
+why = "The write index steps as the server pushes blocks: 114 to 121 us sd from a line on the analog source, against 0.8 to 3.6 us with the source's latency. A monitor has none (0 us), so only part 2b, a card in an input or duplex profile, kills it."
+find = """        int64_t pos = ti->write_index / m->pa_bpf +
+                      (int64_t)((double)ti->source_usec * (double)d->capture.internalSampleRate / 1e6 + 0.5);"""
+replace = """        int64_t pos = ti->write_index / m->pa_bpf;"""
+
+[[mutant]]
+id = "pulse-07"
+name = "the write index taken as frames"
+test = "audio_pulse_capture"
+why = "The write index counts bytes: as frames the input runs four times too fast."
+find = "        int64_t pos = ti->write_index / m->pa_bpf +"
+replace = "        int64_t pos = ti->write_index +"
+
+[[mutant]]
+id = "pulse-08"
+name = "the capture stamp left on CLOCK_REALTIME"
+test = "audio_pulse_capture"
+why = "The reply's stamp is wall-clock time; on the ysp_rt clock every capture time is decades off."
+find = "            tk->pos_t = ts - ((int64_t)r.tv_sec * 1000000000 + r.tv_nsec - yrt_now_ns());"
+replace = "            tk->pos_t = ts;"
+
+[[mutant]]
+id = "pulse-09"
+name = "a monitor taken as the default input"
+test = "audio_pulse_capture"
+why = "Here the server's default source is the sink's monitor: a voice key would fire on the stimulus."
+find = "        if (monitor && !(asked && asked[0])) {"
+replace = "        if (0) {"
+
+[[mutant]]
+id = "pulse-10"
+name = "a PULSE input on a card this process suspended"
+test = "audio_pulse_capture"
+why = "Its source records nothing while the card is suspended."
+find = "        if (card >= 0 && card < YAU__PA_CARDS && yau__pas.refs[card] > 0) {"
+replace = "        if (0) {"
+
+[[mutant]]
+id = "pulse-11"
+name = "PULSE duplex accepted"
+test = "audio_pulse_capture"
+why = "miniaudio's duplex buffer gives silence as input when it runs empty, counted as recorded."
+find = "    if (m->backend == ma_backend_pulseaudio) {\n        snprintf(err, err_cap, \"ysp_audio: DUPLEX on PulseAudio is refused"
+replace = "    if (0) {\n        snprintf(err, err_cap, \"ysp_audio: DUPLEX on PulseAudio is refused"
+
+[[mutant]]
+id = "pulse-12"
+name = "a card suspended under a PULSE input"
+test = "audio_pulse_capture"
+why = "An AUTO output would stop this process's own PulseAudio capture on that card."
+find = "    if (yau__pas.caps[card] > 0) return -1;"
+replace = "    (void)0;"
+
+[[mutant]]
+id = "cap-24"
+name = "the watchdog never fires"
+test = "audio"
+why = "A device that stops calling back with no notification would leave the frame thread with no frames and no error."
+find = "        if (last > 0 && now - last > lim) {"
+replace = "        if (0) {"
+
+[[mutant]]
+id = "cap-25"
+name = "the device's own loss count ignored"
+test = "audio"
+why = "A hw: input's restart is counted to the frame with the first block after it; ignored, the backlog rule finds it 200 ms later in whole periods."
+find = """    if (c->dev_lost > 0) {
+        int64_t lost = c->dev_lost;
+        c->dev_lost = 0;
+        yau__cxrun(c, now_t, lost, c->f);
+    }"""
+replace = """    c->dev_lost = 0;"""

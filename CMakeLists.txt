@@ -603,9 +603,14 @@ endif()
 # of silence, so by hand (and by the pulse- mutants), not ctest.
 if(TARGET ysp::miniaudio AND YSP_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     ysp_add_program(test_audio_pulse tests/adapt/audio_pulse_test.c rig)
-    # ALSA exclusive on hw:0,0 (YAU_ALSA_TEST_DEVICE), under pasuspender when
-    # PulseAudio runs: by hand and by the alsa- mutants
+    # ALSA exclusive on hw:0,0 (YAU_ALSA_TEST_DEVICE); AUTO suspends the
+    # card's PulseAudio sinks and sources when they hold it: by hand and by
+    # the alsa- mutants
     ysp_add_program(test_audio_alsa tests/adapt/audio_alsa_test.c rig)
+    # capture: hw:0,0's input (about 50 s), and PulseAudio's record stream
+    # through the default sink's monitor (about 15 s)
+    ysp_add_program(test_audio_alsa_capture tests/adapt/audio_alsa_capture_test.c rig)
+    ysp_add_program(test_audio_pulse_capture tests/adapt/audio_pulse_capture_test.c rig)
 endif()
 if(TARGET SDL3::SDL3 AND YSP_BUILD_EXAMPLES)
     # The jsPsych-style trials of examples/response/ (docs/response.md,

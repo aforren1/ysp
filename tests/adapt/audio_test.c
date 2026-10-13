@@ -469,7 +469,7 @@ static void test_fit_drift(void) {
 }
 
 /* Reports every fifth block (PulseAudio's timing replies): the callbacks
- * between them must not feed the fit. Before ysp/audio.h v0.5.0 they fed
+ * between them must not feed the fit. Before ysp/audio.h v0.5.1 they fed
  * the frames written at callback entry, a queue ahead of the reports: the
  * fit sat that far early and every report read as late, a false halt each
  * 0.9 s on PulseAudio. */

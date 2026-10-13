@@ -24,6 +24,7 @@ typedef struct scap {
     int64_t  T0;
     int64_t  k, dev_next;       /* blocks handed over; the next device frame   */
     int64_t  skip;              /* device frames the next block loses          */
+    int64_t  dev_lost;          /* the built-in device's own count of them      */
     int64_t  stall_ns;          /* the next block is this much later           */
     int64_t  last_pos, last_stamp, last_t;
     float  (*sig)(struct scap* s, int64_t w, int c);   /* NULL: idv(w, c)      */
@@ -115,6 +116,9 @@ static void sc_block(scap* s) {
         tk.pos = s->last_pos;
         tk.pos_t = s->last_stamp;
     }
+    /* as a hw: input's restart does (yau__alc_pos): the count goes with
+     * the first block after the loss */
+    if (s->dev_lost) { ((yau_capture*)s->host)->dev_lost = s->dev_lost; s->dev_lost = 0; }
     s->block(s->host, s->in_mem, (int32_t)n, &tk);
     s->dev_next += n;
     s->k++;
@@ -1034,8 +1038,72 @@ static void test_capture_threads(void) {
     g_virtual = 1;
 }
 
+/* A loss the built-in device counted itself (a hw: input's restart: its
+ * trigger stamp moved): applied with the first block after it, to the
+ * frame, so no block keeps a number from before the loss, and not counted
+ * again by the backlog rule. 1234 frames, not a whole number of periods. */
+static void test_capture_device_loss(void) {
+    scap* s = &g_sc;
+    yau_capture_info in;
+    int64_t wrong = 0, nb = 0, na = 0;
+    int gap = 0;
+    sc_default(s);
+    s->jitter_ns = 300000;
+    CHECK(cap_open(s, NULL));
+    sc_run_read(s, 3.0, &wrong);
+    s->skip = 1234;
+    s->dev_lost = 1234;
+    sc_run_s(s, 0.5);
+    cap_drain2(0, 0, &nb, &na, &wrong, &gap);
+    sc_run_s(s, 0.5);
+    cap_drain2(0, 0, &nb, &na, &wrong, &gap);
+    yau_capture_get_info(&g_cap, &in);
+    CHECK_I(in.xruns, 1);
+    CHECK_I(in.lost, 1234);
+    CHECK_I(in.dropped, 0);
+    CHECK_I(gap, YAU_GAP_LOST);
+    CHECK_I(wrong, 0);
+    CHECK(na > 0);
+    {
+        yrt_event ev[256];
+        int m, j, xr = 0;
+        while ((m = yrt_ring_drain(&g_cring, ev, 256)) > 0)
+            for (j = 0; j < m; j++)
+                if (ev[j].source == YRT_SRC_AUDIO && ev[j].kind == YAU_EV_CAP_XRUN) {
+                    xr++;
+                    CHECK_I(ev[j].u.i64[1], 1234);
+                    CHECK_I(ev[j].u.i64[2], ev[j].u.i64[0]);   /* no frame numbered from before it */
+                }
+        CHECK_I(xr, 1);
+    }
+    yau_capture_close(&g_cap);
+}
+
+/* WATCHDOG: a device that stops calling back, with no notification, makes
+ * the capture LOST while no block has come for 200 ms (or 4 buffers): not
+ * at 150 ms, at 250 ms; when blocks come again it is not. */
+static void test_capture_watchdog(void) {
+    scap* s = &g_sc;
+    sc_default(s);
+    CHECK(cap_open(s, NULL));
+    sc_run_s(s, 1.0);
+    CHECK(yau_capture_update(&g_cap) >= 0);
+    g_vt += 150000000;
+    CHECK(yau_capture_update(&g_cap) >= 0);
+    g_vt += 100000000;
+    CHECK_I(yau_capture_update(&g_cap), YAU_ERR_LOST);
+    CHECK(strstr(yau_capture_error(&g_cap), "WATCHDOG") != NULL);
+    CHECK_I(yau_capture_update(&g_cap), YAU_ERR_LOST);
+    s->T0 += 250000000;   /* the device resumes, its frames recorded later */
+    sc_run_s(s, 0.2);
+    CHECK(yau_capture_update(&g_cap) >= 0);
+    yau_capture_close(&g_cap);
+}
+
 static void test_capture(void) {
     test_capture_open();
+    test_capture_device_loss();
+    test_capture_watchdog();
     test_capture_web_tier();
     test_capture_fit();
     test_capture_overflow();

@@ -2,6 +2,7 @@
  * cable from line out to line in, or a speaker heard by a microphone.
  *
  *     audio_loopback_latency [--sim [--sim-delay-ms D]] [--device OUT] [--in IN]
+ *                            [--backend B] [--in-backend B] [--s16] [--rate R]
  *                            [--exclusive] [--in-exclusive] [--duplex] [--paths]
  *                            [--clicks N] [--every-ms MS] [--db DB] [--edge-db DB]
  *                            [--channel C] [--volume V] [--unmute]
@@ -12,9 +13,20 @@
  *                  the input hearing the output --sim-delay-ms later (default
  *                  20). Exit 1 if the median is not the delay minus a period
  *                  within 1 ms (CI runs this)
- *   --device OUT, --in IN   the output and input whose names contain these;
- *                  default the OS's
- *   --exclusive, --in-exclusive   WASAPI exclusive mode for either side
+ *   --device OUT, --in IN   the output and input: an id, or a part of the
+ *                  name only one device has; default AUTO's (the OS's)
+ *   --backend B, --in-backend B   auto (default), wasapi, coreaudio, alsa,
+ *                  pulse or null for the output and the input (the input
+ *                  takes the output's unless given). Linux: AUTO is ALSA
+ *                  exclusive on the default card, both sides; a sink's
+ *                  monitor (--backend pulse --in-backend pulse --in
+ *                  NAME.monitor) is a digital loop with no cable
+ *   --s16          a 16-bit output (a PulseAudio sink runs s16 unless
+ *                  configured)
+ *   --rate R       the project rate of both sides (default 48000; a
+ *                  PulseAudio sink may run 44100)
+ *   --exclusive, --in-exclusive   exclusive mode for either side (WASAPI;
+ *                  on ALSA a hw: device, which --device or --in names)
  *   --duplex       one device plays and records (desc.capture, DUPLEX)
  *   --paths        run twice: shared, then exclusive output (the same input)
  *   --clicks N     clicks per path (default 50), --every-ms apart (default 400)
@@ -67,10 +79,21 @@ static yau_capture g_cap;
 static lp_rec g_rec;
 
 typedef struct opt {
-    int sim, exclusive, in_exclusive, duplex, clicks, channel, unmute, in_unmute;
+    int sim, exclusive, in_exclusive, duplex, clicks, channel, unmute, in_unmute, s16, backend, in_backend;
+    uint32_t rate;
     double sim_delay_ms, every_ms, db, edge_db, volume, in_volume, distance_cm, burst_ms;
     const char *out, *in, *csv;
 } opt;
+
+static int lp_backend(const char* b) {
+    if (!strcmp(b, "auto")) return YAU_BACKEND_AUTO;
+    if (!strcmp(b, "wasapi")) return YAU_BACKEND_WASAPI;
+    if (!strcmp(b, "coreaudio")) return YAU_BACKEND_COREAUDIO;
+    if (!strcmp(b, "alsa")) return YAU_BACKEND_ALSA;
+    if (!strcmp(b, "pulse")) return YAU_BACKEND_PULSE;
+    if (!strcmp(b, "null")) return YAU_BACKEND_NULL;
+    return -1;
+}
 
 /* Both fits warm, or 3 s: a CUSTOM device's open does not wait. */
 static int wait_fits(int64_t until) {
@@ -121,9 +144,14 @@ static int run_path(const opt* o, int exclusive, FILE* csv) {
     memset(&d, 0, sizeof d);
     memset(&cd, 0, sizeof cd);
     d.device = o->out;
+    d.backend = (yau_backend)o->backend;
+    d.format.rate = o->rate;
+    if (o->s16) d.format.sample = YAU_S16;
     d.exclusive = exclusive != 0;
     d.arena_bytes = 1 << 16;
     cd.device = o->in;
+    cd.backend = (yau_backend)(o->in_backend >= 0 ? o->in_backend : o->backend);
+    cd.format.rate = o->rate;
     cd.exclusive = o->in_exclusive != 0;
     cd.frames = 4 * 48000;
     cd.format.sample = YAU_S16;   /* any input of 16 bits or more: a microphone in exclusive mode gives 16 */
@@ -133,10 +161,15 @@ static int run_path(const opt* o, int exclusive, FILE* csv) {
         cd.backend = YAU_BACKEND_CUSTOM; cd.dev = &g_lp_in; cd.dev_ctx = &g_lp;
     }
     if (o->duplex) { d.capture = &g_cap; d.capture_desc = &cd; }
-    else if (!yau_capture_open(&g_cap, &cd)) { fprintf(stderr, "%s\n", yau_capture_error(&g_cap)); return 1; }
+    /* the output first: a PulseAudio monitor's reports move when its sink
+     * starts playing (docs/audio.md, "Linux: capture") */
     if (!yau_open(&g_au, &d)) {
         fprintf(stderr, "%s\n", yau_error(&g_au));
-        yau_capture_close(&g_cap);
+        return 1;
+    }
+    if (!o->duplex && !yau_capture_open(&g_cap, &cd)) {
+        fprintf(stderr, "%s\n", yau_capture_error(&g_cap));
+        yau_close(&g_au);
         return 1;
     }
     g_rec.ch = o->channel;
@@ -265,10 +298,19 @@ int main(int argc, char** argv) {
 #endif
     memset(&o, 0, sizeof o);
     o.clicks = 50; o.every_ms = 400; o.db = -20; o.sim_delay_ms = 20; o.volume = -1; o.in_volume = -1; o.edge_db = 1;
+    o.in_backend = -1;
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--sim")) o.sim = 1;
         else if (!strcmp(argv[i], "--sim-delay-ms") && i + 1 < argc) o.sim_delay_ms = atof(argv[++i]);
         else if (!strcmp(argv[i], "--device") && i + 1 < argc) o.out = argv[++i];
+        else if ((!strcmp(argv[i], "--backend") || !strcmp(argv[i], "--in-backend")) && i + 1 < argc) {
+            int b = lp_backend(argv[i + 1]);
+            if (b < 0) { fprintf(stderr, "audio_loopback_latency: unknown backend %s\n", argv[i + 1]); return 2; }
+            if (!strcmp(argv[i], "--backend")) o.backend = b; else o.in_backend = b;
+            i++;
+        }
+        else if (!strcmp(argv[i], "--s16")) o.s16 = 1;
+        else if (!strcmp(argv[i], "--rate") && i + 1 < argc) o.rate = (uint32_t)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--in") && i + 1 < argc) o.in = argv[++i];
         else if (!strcmp(argv[i], "--exclusive")) o.exclusive = 1;
         else if (!strcmp(argv[i], "--in-exclusive")) o.in_exclusive = 1;

@@ -10,9 +10,10 @@
  *   0. AUTO with a float project: ALSA exclusive on the default card's
  *      first playback device at 32 bits. Where a PulseAudio server runs
  *      (pactl answers): open() suspended it (the describe line says so),
- *      its sinks are SUSPENDED while the device is open and not after
- *      close; with desc.keep_sound_server the open fails and names
- *      YAU_BACKEND_PULSE.
+ *      the card's sinks are SUSPENDED while the device is open and not
+ *      after close, and a sink on no card (a null sink this test loads,
+ *      playing silence) is not suspended; with desc.keep_sound_server the
+ *      open fails and names YAU_BACKEND_PULSE.
  *   1. yau_list_devices(ALSA) lists the test device's id.
  *   2. Exclusive mode with no device is refused (miniaudio would take
  *      "default", the sound server's plugin), and so is a name part that
@@ -42,6 +43,15 @@ static int g_failures = 0;
 
 static yau_device_entry g_list[128];
 
+/* the null sink and its player, gone at every exit (a failed check
+ * returns early) */
+static char g_mod[32] = "", g_pid[32] = "";
+static void undo_null_sink(void) {
+    char cmd[64];
+    if (g_pid[0]) { snprintf(cmd, sizeof cmd, "kill %s 2>/dev/null", g_pid); (void)!system(cmd); g_pid[0] = 0; }
+    if (g_mod[0]) { snprintf(cmd, sizeof cmd, "pactl unload-module %s", g_mod); (void)!system(cmd); g_mod[0] = 0; }
+}
+
 int main(void) {
     static yau_audio au;
     yau_desc d;
@@ -55,6 +65,19 @@ int main(void) {
     /* 0 */
     {
         int server = access("/usr/bin/pactl", X_OK) == 0 && system("pactl info > /dev/null 2>&1") == 0;
+        char* mod = g_mod;
+        char* pid = g_pid;
+        if (server) {
+            /* a sink on no card, kept RUNNING: AUTO must leave it alone */
+            FILE* f = popen("pactl load-module module-null-sink sink_name=ysp_alsa_test 2>/dev/null", "r");
+            atexit(undo_null_sink);
+            if (f) { if (!fgets(mod, sizeof g_mod, f)) mod[0] = 0; pclose(f); }
+            mod[strcspn(mod, "\r\n")] = 0;
+            f = popen("pacat -d ysp_alsa_test /dev/zero > /dev/null 2>&1 & echo $!", "r");
+            if (f) { if (!fgets(pid, sizeof g_pid, f)) pid[0] = 0; pclose(f); }
+            pid[strcspn(pid, "\r\n")] = 0;
+            yrt_sleep_ns(YRT_MS(500));
+        }
         memset(&d, 0, sizeof d);
         if (!yau_open(&au, &d)) {
             if (req && req[0] == '1') { fprintf(stderr, "audio_alsa_test: FAIL AUTO open: %s\n", yau_error(&au)); return 1; }
@@ -87,8 +110,14 @@ int main(void) {
         if (server) {
             CHECK(strstr(line, "sound-server-suspended") != NULL);
             CHECK(system("pactl list short sinks | grep -q SUSPENDED") == 0);
+            if (mod[0] && pid[0]) {
+                CHECK(system("pactl list short sinks | grep ysp_alsa_test | grep -q RUNNING") == 0);
+                printf("a sink on no card while AUTO holds card 0: %s\n",
+                       system("pactl list short sinks | grep ysp_alsa_test | grep -q RUNNING") == 0 ? "RUNNING" : "not RUNNING");
+            }
         }
         yau_close(&au);
+        undo_null_sink();
         if (server) {
             yrt_sleep_ns(YRT_MS(300));
             CHECK(system("pactl list short sinks | grep -q SUSPENDED") != 0);   /* resumed */

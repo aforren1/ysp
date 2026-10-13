@@ -1287,6 +1287,21 @@ back after it:
 
 The air adds 2.9 us per millimeter (343 m/s).
 
+On Linux (hand steps; not run with a cable): AUTO is ALSA exclusive on
+the default card on both sides, so no option names a backend. The
+Windows endpoint options do nothing there; set the levels with
+`amixer` instead, for example `amixer -c 0 sset Master 30%` and
+`amixer -c 0 sset Capture 50% cap`, and read them back with
+`amixer -c 0 contents`. Then:
+
+    audio_loopback_latency --clicks 200
+    audio_loopback_latency --duplex --clicks 200
+
+With no cable, the sink's monitor checks the two PulseAudio fits against
+each other (not a latency; "Linux: capture", "The digital loopback"):
+
+    audio_loopback_latency --backend pulse --s16 --rate 48000 --in SINK.monitor --edge-db -60
+
 ### Reference
 
 | Call | Thread | What it does |
@@ -1760,7 +1775,7 @@ several times, because one open shows one state.
 The Linux sections were measured on this work's first numbering,
 v0.5.0, before the merge with v0.5.0 (capture) and v0.5.1 (exclusive
 start) above. The work is v0.6.0, and the sections say v0.6.0. Capture
-has not run on Linux.
+on Linux is in "Linux: capture".
 
 The machine: Debian 12, kernel 6.11.5 liquorix, PulseAudio 16 (not
 PipeWire), the Intel HDA codec's analog output (ALC3246) as the default
@@ -1849,10 +1864,10 @@ A fault the first build showed: with a report every fifth callback, the
 callbacks between them still fed the fit with their callback times (the
 frames written, about one queue, 8 ms, ahead of the position). The fit
 then sat 8 ms early, every report read as late, and the halt rule
-("Halts") made an XRUN record every 0.92 s. On WASAPI every callback
-carries a report, so this had never run. Now a device that reports
+("Halts") made an XRUN record every 0.92 s. Now a device that reports
 positions feeds the fit only with reports: the rule v0.5.1 made for
-WASAPI exclusive ("Exclusive start"), found here on its own.
+WASAPI exclusive's first blocks ("Exclusive start"), found here on its
+own.
 `tests/adapt/audio_test.c` checks it on the scripted device with a
 report every fifth block (offset 5.6 us, no XRUN; mutant `web-02`, which
 was `pulse-00` before the merge made the same edit).
@@ -1989,9 +2004,8 @@ headphone amplifier and HDMI has several plausible outputs. From v0.6.0:
   screen can show it.
 - AUTO on Linux: next section.
 
-These rules are for playback. A capture's `desc.device` is still a part
-of an input's name, and the first input whose name has it is taken
-(Capture); `yau_list_devices()` lists no inputs.
+A capture's `desc.device` follows the same rules, and
+`yau_list_inputs()` lists the inputs ("Linux: capture").
 
 ## AUTO on Linux (v0.6.0)
 
@@ -2020,13 +2034,15 @@ than exclusive and has the loopback check for tier 2.
   fails with "Device or resource busy". Psychtoolbox's PsychPortAudio
   (3.0.19, its `audioserver_autosuspend`, on by default) runs
   `pactl suspend-sink 1` and `pactl suspend-source 1` while it is active.
-  The header does the same through libpulse in-process: on a busy card it
-  suspends every sink and source, opens again, and resumes them at the
-  last close and in an `atexit()` handler. A suspension outlives the
-  client that asked (a sink suspended by `pactl` stayed SUSPENDED after
-  `pactl` exited), so a program that dies without `exit()` leaves the
-  desktop silent: `pactl suspend-sink 0` resumes it. The describe line's
-  backend field says `ALSA,sound-server-suspended`.
+  The header did the same through libpulse in-process: on a busy card it
+  suspended every sink and source, opened again, and resumed them at the
+  last close and in an `atexit()` handler. Now it suspends only the
+  sinks and sources of the card it opens ("Linux: capture", "The sound
+  server"). A suspension outlives the client that asked (a sink
+  suspended by `pactl` stayed SUSPENDED after `pactl` exited), so a
+  program that dies without `exit()` leaves the card silent: `pactl
+  suspend-sink 0` and `pactl suspend-source 0` resume it. The describe
+  line's backend field says `ALSA,sound-server-suspended`.
   `desc.keep_sound_server` makes the open fail instead, naming
   `YAU_BACKEND_PULSE`.
 
@@ -2042,6 +2058,272 @@ default card's first device), and the refusal under
 not exclusive, no suspension, no resume, no 32-bit request, the card's
 last device.
 
+## Linux: capture (v0.6.0)
+
+Until this section the capture had not run on Linux. v0.5.0's code there
+fitted callback times on every Linux path, and under AUTO it opened ALSA's
+`"default"`: on this desktop PulseAudio's plugin, whose default source is
+the sink's monitor (a copy of the output). This section gives what the
+header does now, why, and what was measured.
+
+Conditions for every number in this section: the Linux desktop (Dell
+Precision 3680, i5-14500, Debian 12, kernel 6.11.5 liquorix, PulseAudio
+17.0, the Intel HDA codec ALC3246, miniaudio 0.11.25, gcc 12.2),
+2026-10-13, one run at a time, nothing else measuring. The codec's only
+analog input is the front combo jack's microphone contact; nothing was
+plugged in, so every input recorded its own noise. The card's PulseAudio
+profile was `output:analog-stereo` (no input source; the monitor is the
+default source), except where a row says "duplex profile" (the profile
+`output:analog-stereo+input:analog-stereo`, set for the run and put back
+after). "Load" is 20 threads spinning at normal priority.
+
+### What the header does
+
+| Desc | Device | Position | Buffer |
+|---|---|---|---|
+| AUTO | ALSA exclusive on the default card's first capture device (`hw:0,0`), 32 bits for a desc of 24 bits or more, 16 for `YAU_S16`, the desc's rate | the hw: PCM's status (`alsa:status`) | 40 ms at least: 3 to 32 periods |
+| ALSA, `exclusive` | the card's device that `desc.device` names (an id like `hw:0,0`); refused without one | the same | the same |
+| ALSA, shared | the device `desc.device` names, else `"default"` | callback times | miniaudio's |
+| PULSE | the source `desc.device` names, else the server's default; a monitor is refused as the default | the record stream's timing info (`pulse:timing-info`) | miniaudio's |
+| DUPLEX | AUTO or ALSA exclusive only: the output's card, its first input unless the capture desc names one on that card | both from the status | 6 periods, 4 of them silence before the start |
+
+Every Linux input is tier 3: no line-in or photodiode run (TIERS).
+
+The device choice and the list. A capture `desc.device` follows the
+playback rule ("Choosing a device"): an exact id, else a name part that
+only one input has. `yau_list_inputs()` lists the inputs. On this
+machine ALSA lists 13: two of the card (`:0,0` "HDA Intel PCH, ALC3246
+Analog" and `:0,2` "... Alt Analog") and alsa-lib's plugins; "HDA Inte"
+names both and is refused with their ids.
+
+### The ALSA position
+
+`tests/probe/audio_alsa/alsa_capture_probe.c` opened `hw:0,0` for capture
+through miniaudio (32 bits, 48 kHz, 2 channels; 30, 15 and 4 periods at
+64, 128 and 480 frames) and read `snd_pcm_status()` in every callback,
+30 s a run. `fit_capture.py` fitted one line to each candidate (the
+first 0.5 s left out). "read" is the frames handed to the callbacks
+before this one, n this block.
+
+| Period, load | read + n + delay, at the status stamp (sd / p99 / max, us) | read + n + avail, at the status stamp | read + n, at the callback's entry |
+|---|---|---|---|
+| 64, idle | 5.8 / 21.8 / 42.9 | 3.9 / 8.1 / 94.7 | 559 / 800 / 1975 |
+| 64, load | 8.4 / 15.0 / 53.1 | 18.6 / 37.5 / 729 | 615 / 1282 / 3430 |
+| 128, idle | 8.2 / 17.0 / 35.7 | 22.5 / 49.3 / 273 | 169 / 447 / 525 |
+| 128, load | 9.4 / 18.1 / 49.5 | 16.8 / 23.6 / 676 | 256 / 339 / 1532 |
+| 480, idle | 8.7 / 19.8 / 28.0 | 3.3 / 10.3 / 54.1 | 226 / 507 / 601 |
+| 480, load | 3.2 / 20.0 / 24.0 | 3.8 / 14.7 / 50.4 | 77 / 145 / 1318 |
+
+- The delay, not avail: avail leaves out the controller's FIFO, and its
+  largest residual under load was 0.7 ms. `delay - avail` was 0 to 36
+  frames (median 1 to 5).
+- The status stamp lay 2 to 14 us before the callback's entry (median):
+  it is the time of the PCM's last pointer update. The same delay at the
+  callback's entry fitted as well (3.0 to 6.3 us sd); the header uses the
+  status stamp, the pair the kernel gives, as the output does.
+- The rate: the status line put the input at -3.5 to -3.9 ppm in each
+  run (the probe's sign: frames per ns against nominal), and the header's
+  fits of the output on `hw:0,0` the same: one converter clock.
+- Dropped: an HDA link-synchronized audio stamp
+  (`SND_PCM_AUDIO_TSTAMP_TYPE_LINK_SYNCHRONIZED`, offered here with
+  `CLOCK_MONOTONIC_RAW` stamps). Idle at 64 frames it lay 0.04 us sd from
+  its line, but the loaded run gave rows with stamps 10^15 ns off, and it
+  needs a `CLOCK_MONOTONIC_RAW` mapping on every read. The fit keeps one
+  point per 200 ms; 25 points of 5 to 9 us sd average to 1 to 2 us
+  (computed, not measured), a tenth of a frame.
+
+### Restarts
+
+miniaudio recovers a capture overrun inside its read: `snd_pcm_recover()`
+(which prepares the PCM and drops what the buffer held) and
+`snd_pcm_start()`, with nothing to the callback. The frames handed over
+then run behind the device by the loss, and the reports read late: the
+halt rule ("Design: halts and losses") counts it three reports later,
+and only past its 5 ms gate. The status gives the restart: its trigger
+stamp moves. The header counts the frames lost as the frame the last
+report puts at the new status stamp (at the nominal rate) less the frame
+the new report gives, and passes the count with that block (an internal
+field of the handle, so the device interface is unchanged): the block's
+first frame is numbered after the loss.
+
+`audio_capstats --backend alsa --exclusive --device hw:0,0 --period 64
+--stall-at 2 --stall MS --stall-every 2 --seconds 12`, stalls injected in
+the capture block (`YAU__ON_CAPTURE`), 6 a run:
+
+| Buffer | Stall | Losses | Lost per stall | Found after the last block before it |
+|---|---|---|---|---|
+| 40 ms (30 periods) | 20, 30, 36 ms | 0, 0, 0 | | |
+| 40 ms | 45 ms | 6 | 46.4 to 47.3 ms | 47.2 to 47.8 ms |
+| 40 ms | 60 ms | 6 | 61.0 to 62.2 ms | 62.3 to 62.9 ms |
+| 3 periods (4 ms) | 2 ms | 1 | 4.1 ms | 5.3 ms |
+| 3 periods | 3 ms | 0 | | |
+| 3 periods | 6 ms | 21 | 4.1 to 8.4 ms | 5.0 to 8.9 ms |
+
+Every record had 0 frames numbered from before the loss. At 3 periods a
+stall of 6 ms set off further restarts (21 for 6 stalls). So the buffer
+is 40 ms at least: for an input it adds no latency (the blocks still
+come each period, the times come from the fit), only room to ride out a
+stall of the device thread. `test_audio_alsa_capture` checks a 25 ms
+stall (nothing lost) and a 70 ms one: one loss (71.6 to 72.4 ms in three
+runs), found 72.3 to 72.8 ms after the stall began, and the frames after
+it within 1.0 to 29.8 us of the fit from before.
+
+The watchdog. A device that stops calling back gave no error: `gone` is
+set only by miniaudio's stopped notification. A 300 ms stall in the same
+test: `yau_capture_update()` returned `YAU_ERR_LOST` from 200.0 ms after
+the stall began and again from 304 ms not; the loss was counted.
+
+### The PulseAudio position
+
+`tests/probe/audio_pulse/pulse_record_probe.c` recorded through
+miniaudio's PulseAudio backend (16 bits, the source's rate, 480-frame
+periods), asked for the record stream's timing info in every callback
+and logged each new reply, 30 s a run. `fit_record.py` fitted each
+candidate against the reply's timestamp.
+
+| Source, load | write index (sd / p99 / max, us) | write index + source latency | the same + transport | callback times |
+|---|---|---|---|---|
+| the sink's monitor, idle | 149 / 691 / 2139 | the same (latency 0) | 149 / 688 / 2139 | 2355 sd |
+| the monitor, load | 122 / 630 / 2370 | the same | 138 / 659 / 2376 | 2325 sd |
+| analog input, 44.1 kHz, idle (duplex profile) | 114 / 303 / 503 | 3.6 / 7.4 / 8.2 | 3.7 / 10.2 / 30.6 | 179 sd |
+| analog input, load (duplex profile) | 121 / 325 / 3244 | 0.8 / 2.0 / 2.4 | 56.6 / 5.1 / 1973 | 198 sd |
+
+So a PulseAudio report is the write index in frames plus the source's
+latency in frames, at the reply's timestamp mapped from CLOCK_REALTIME,
+asked for at most every 50 ms, as for the output. The source's latency
+was 555 to 608 us (median); the transport delay adds noise. The analog
+source's rate came out -3.9 and -4.2 ppm, the hw: device's.
+
+A monitor has no latency of its own: the server writes the sink's frames
+into it as it mixes them. With the sink idle (the probe's runs above:
+nothing played) its line was 120 to 150 us sd, and the header's fit of
+it 289 us (`audio_capstats`, 20 s). With a stream playing on the sink
+the fit's spread was 6 to 19 us (`audio_loopback_latency`, three runs),
+and a monitor opened before the sink started had its reports jump when
+it did (the fit came out -161 ppm): open the output first.
+
+The monitor. With the card in its output profile, PulseAudio's only
+source and its default is the sink's monitor. Through `"default"` (v0.5.0's
+AUTO) or PULSE with no device, a voice key would hear the stimulus. The
+header asks the server, through a connection of its own at open, whether
+the source it got is a monitor (`monitor_of_sink`, not the name, which
+depends on the locale); with no `desc.device` it refuses one, naming
+`desc.device`. By name it opens.
+
+### Duplex
+
+miniaudio's ALSA duplex loop reads one capture period, calls back, and
+writes one output period; it starts the playback PCM with nothing in it.
+`audio_capstats --duplex --period P --seconds 30` (AUTO), with a build
+for each count of periods of silence written before the start:
+
+| Buffer | Silence | 64 frames: output xruns, input losses | 128 frames |
+|---|---|---|---|
+| 3 periods | 0 | 236, 0 | 201, 0 |
+| 3 periods | 1 | 325, 2 | 201, 0 |
+| 3 periods | 2 | the fit did not warm up in 3 s | 2, 0 |
+| 3 periods | 3 | 26, 1 | 0, 0 |
+| 6 periods | 3 | 95, 0 | 0, 0 |
+| 6 periods | 4 | 0, 0 | 0, 0 |
+| 6 periods | 5 | 0, 0 | 0, 0 |
+
+Six periods with four of silence ran again 2 runs idle and 2 loaded at
+each period: 0 output xruns and 0 input losses in all 8; both fits
+-3.4 to -4.1 ppm; the output's shortest safe lead 3.9 to 4.8 ms at 64
+frames and 9.2 to 10.8 ms at 128. So DUPLEX on ALSA stays, with those
+numbers (`YAU__DUPLEX_PERIODS`, `YAU__DUPLEX_PREFILL`). The silence goes
+in before the start with the start threshold moved to the boundary, so
+the writes do not start the PCM and miniaudio's own `snd_pcm_start()`
+still succeeds. The output's position, frames handed over less the
+delay, leaves the silence out already.
+
+- One card only: two cards are two clocks, and the queue would run out
+  or grow. A capture desc that names an input on another card is
+  refused.
+- PulseAudio duplex is refused: miniaudio's duplex ring buffer hands
+  silence to the callback when it runs empty and drops frames when it is
+  full, so capture frames would not be the device's.
+- A fault the first duplex open showed: when the playback PCM was busy,
+  miniaudio's ALSA init returned without closing the capture PCM it had
+  opened first, so the open after the suspension failed on the input
+  ("Device or resource busy"). The header closes what the failed init
+  left.
+
+### The sound server
+
+Until this version an ALSA exclusive open suspended every PulseAudio
+sink and source after any failed open. Now it suspends the sinks and
+sources of the card it opens (their `alsa.card` property), and only when
+the open says busy; a monitor follows its sink. So a USB microphone or a
+second card keeps working through PulseAudio. `test_audio_alsa` loads a
+null sink (no card) and plays silence into it: it stayed RUNNING while
+AUTO held card 0, whose sink was SUSPENDED. With the card in its output
+profile, the capture PCM is free and the AUTO input opens without a
+suspension; in the duplex profile it suspends card 0, and
+`keep_sound_server` fails naming `YAU_BACKEND_PULSE`.
+
+Two refusals keep the paths apart: a PULSE capture on a card this
+program holds suspended (its source would record nothing), and an ALSA
+exclusive open that would suspend a card a PULSE capture of the program
+records from.
+
+### The digital loopback
+
+`audio_loopback_latency --backend pulse --s16 --rate 48000 --in
+<sink>.monitor --clicks 30 --db -40 --edge-db -60` plays clicks (12
+frames) on a PULSE output and finds them in a PULSE capture of the
+sink's monitor. Three runs: the input's edge time less the output's
+onset -1.843, -1.842 and -1.839 ms (median), sd 2 to 5 us; the two fits'
+rates within 0.17, 0.18 and 1.04 ppm. `test_audio_pulse_capture` does
+the same with a 2 ms tone burst: -1.89 to -1.94 ms, each run's 20
+within 0.085 ms of its median (the burst's edge depends on its phase).
+The monitor has the frames when the sink mixes them, a sink latency
+before they play (2.7 to 3.5 ms measured for the output), so the
+difference is early. It checks the two fits against each other through
+one digital path, and they agree to microseconds. It is no reference
+for either time: no sound left the machine. It gives no tier.
+
+### Tests and mutations
+
+- `test_audio_alsa_capture` (not in ctest; about 60 s; `hw:0,0`): AUTO
+  (exclusive, 32 bits, the status position, the suspension where the
+  profile holds the input), the list, the refusals, a unique name, both
+  spellings of the id, 10 s at 64 and 480 frames (spread 5.9 to 9.4 us,
+  backlog 2 to 131 frames against a 1920-frame buffer, no loss), the
+  stalls and the watchdog above, and duplex at 64 frames (the silence
+  written, no xrun on either side). Passed in both profiles.
+- `test_audio_pulse_capture` (not in ctest; a running server): the
+  monitor refused as the default, the loopback above, the analog source
+  in the duplex profile (the fit's spread 5.6 us; every new report 6.7
+  and 7.8 us sd from a least-squares line, 201 reports in 10 s), PULSE
+  duplex refused, and both refusals beside an AUTO output. The header's
+  fit keeps the least late report of each 200 ms, which hid the write
+  index's steps: with the source's latency left out (`pulse-06`) the
+  fit's spread stayed under 50 us, so the test fits a line of its own
+  through every report.
+- `test_audio_alsa` adds the null-sink check; `test_audio_pulse` now opens
+  at the default sink's rate (PulseAudio moves an idle sink between
+  44100 and 48000 Hz: after AUTO's suspension it came back at 44100, and
+  the fixed 48000 Hz open failed).
+- The core test (`[test.audio]`): a device's own loss count of 1234
+  frames applied with its block (no frame numbered from before it, no
+  second count), and the watchdog (not LOST at 150 ms, LOST at 250 ms,
+  not LOST once blocks come again).
+- Mutants, all killed (`tests/mutate/audio.toml`): `alsa-11` to
+  `alsa-16`, `alsa-19`, `alsa-21`, `alsa-23` (test_audio_alsa_capture),
+  `alsa-22` (test_audio_alsa), `pulse-05` to `pulse-12`
+  (test_audio_pulse_capture; `pulse-06` only in the duplex profile, where
+  a source has a latency), `cap-24` and `cap-25` (the core test). With
+  them the core test's 51, test_audio_alsa's 12 and test_audio_pulse's 4
+  were killed again after the merge. `alsa-19` survived the first run:
+  the test then took a refused duplex open as a pass. Not added: the
+  plan's capture copies of `alsa-04` and `alsa-10` (the input shares
+  their lines), a duplex input on another card (no second card with an
+  input here).
+- The capture device thread ran SCHED_FIFO 1 (`ps -L` during
+  `audio_capstats`), as the output's: it takes ysp/rt.h's ladder at its
+  first block. It starts no thread.
+
 ## Not measured
 
 - Latency to sound by cable (an acoustic loop is in "Capture"). No
@@ -2053,8 +2335,12 @@ last device.
   ALSA shared has no position source, and no Linux path has a loopback.
   PipeWire's PulseAudio service: not run. PulseAudio under WSLg plays to
   the Windows speakers and was not run.
-- Capture on Linux (ALSA and PulseAudio, alone or duplex): compiled,
-  never run.
+- Capture times on Linux against a reference: no line-in on this
+  desktop. The rig for it: the Teensy (`firmware/ysp_line`) through a
+  divider into the combo jack's microphone contact (a TRRS breakout,
+  which this machine does not have), then the cable loop from Line Out.
+  Until then every Linux input is tier 3. ALSA shared capture (callback
+  times only) and capture on PipeWire: not run.
 - Web Audio: run in Chrome 154 (and Firefox, [web.md](web.md)) on this
   laptop; sound at the speaker never measured, so the browser's
   `outputLatency` in every web onset is unchecked.
