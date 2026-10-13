@@ -1563,7 +1563,13 @@
  *          groups, input restamping, mode lists and the parameter table.
  *          The other swap paths are stubs that refuse to open.
  *
- *   STATUS: v0.7.0 (WEB; docs/web.md): built with emsdk 6.0.12 and SDL3's
+ *   STATUS: v0.7.1 (WEB input; docs/web.md): scripted keys (desktop) and
+ *   taps (Pixel 7 emulation) in Chrome 154 got the DOM's time in
+ *   yscr_event_input() (dom_stamps in the describe line, the self-test's
+ *   table); a run of av_sync_mt opened this backend with -pthread. No
+ *   physical key or touch measured; the matching is JavaScript, with no
+ *   native test or mutant.
+ *   v0.7.0 (WEB; docs/web.md): built with emsdk 6.0.12 and SDL3's
  *   port 3.4.2, ASYNCIFY, YRT_NO_THREADS; the demos of examples/web ran in
  *   Chrome 154 (headless and headed), Edge 155 (headless) and Firefox 154
  *   to 157 (headless) on the laptop below. Chrome headed on its 60 Hz

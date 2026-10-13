@@ -746,7 +746,15 @@
  *          positions, miniaudio's null device, the device and source
  *          interfaces, synthesis, the records, the parameter table.
  *
- *   STATUS: v0.4.0, 2026-10-10: tests/adapt/audio_test.c passes on the
+ *   STATUS: v0.4.1, 2026-10-13 (WEB; docs/web.md, "Audio"): emsdk 6.0.12,
+ *   Chrome 154 headed on the laptop below, examples/web/av_sync.c, 3 runs
+ *   of 20 flash-and-click trials a path: sound minus light (both the
+ *   browser's estimates) -0.18 to +0.26 ms on the AudioWorklet path and
+ *   -0.58 to +0.11 ms on the ScriptProcessorNode path at 2048 frames; the
+ *   fit of the reports 36 to 73 us RMS; the browser's render-to-onset
+ *   figure 53 to 55 and 123 to 130 ms. Sound at the speaker not measured.
+ *   test_web_tier passes (MSVC 19.44); web-01 and web-02 killed.
+ *   v0.4.0, 2026-10-10: tests/adapt/audio_test.c passes on the
  *   scripted device with new checks of close and the messages (MinGW-w64
  *   gcc 16.1, MSVC 19.44); the USAGE blocks compile as C99 (C, { 0 });
  *   3 of 3 new mutants caught (docs/audio.md, "Units, open and close").

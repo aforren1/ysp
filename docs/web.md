@@ -4,11 +4,15 @@
 A program written as a blocking frame loop compiles with Emscripten and
 runs in a page: SDL3's Emscripten port gives the canvas and the input,
 the header makes a WebGL2 context, and `requestAnimationFrame` paces the
-frames. `examples/web/` has four demos and a static site that GitHub Pages
-serves.
+frames. v0.7.1 stamps key, mouse, touch and pen presses with the DOM
+event's own time. `ysp/audio.h` v0.4.1 plays sound through Web Audio, with
+onset records from the browser's output timestamps. `examples/web/` has
+five demos and a static site that GitHub Pages serves; each demo works
+with a keyboard on a desktop and by touch alone on a phone or a tablet.
 
 Browser timing is not rig timing. A browser does not report when the
-display showed a frame, gives a page no control of the display, and runs
+display showed a frame or when the speaker played a sound, gives a page
+no control of the display or the audio device, and runs
 other work on the same thread. In a browser, timing is measured and
 reported, never controlled (docs/rig_spec.md, section 6).
 
@@ -37,9 +41,10 @@ You need [emsdk](https://emscripten.org/docs/getting_started/downloads.html)
    ```
 
    The script copies `examples/web/site/`, fetches `coi-serviceworker.js`
-   at a pinned commit and checks its SHA-256, and compiles each demo to
-   `web_site/<name>.js` and `web_site/<name>.wasm`. The first build also
-   compiles SDL3's port (about 40 s).
+   at a pinned commit and miniaudio 0.11.25 and checks their SHA-256, and
+   compiles each demo to `web_site/<name>.js` and `web_site/<name>.wasm`;
+   the sound demo twice, `av_sync` and `av_sync_mt`. The first build also
+   compiles SDL3's port, without and with threads (about 40 s each).
 
 3. Serve the directory and open <http://localhost:8000/>:
 
@@ -99,11 +104,86 @@ sets no COOP or COEP headers, so `coi-serviceworker.js` isolates the pages
    ```
 
 4. Give the page a `<canvas id="canvas">`, set `Module.noInitialRun = true`,
-   and call `Module.callMain(args)` from a button. The button's click is
-   also the user gesture that fullscreen and Web Audio need.
+   and call `Module.callMain(args)` from a button's click handler, in the
+   handler itself, not from a timer: that click is the user gesture that
+   fullscreen and Web Audio need, and iOS Safari takes no later one for an
+   AudioContext.
 5. Hand the data to the page from C with an `EM_JS` function, as
    `examples/web/tutorial.c` does: `ytr_data` writes the rows to a memory
    buffer through `desc.write`, and the page offers them as a download.
+6. Make and prime the stimuli (`ygfx_prime()`) before the first trial, then
+   tell the page, which shows the canvas then (`web_ready()` in
+   `examples/web/web_common.h`; see [Priming](#priming-before-the-page-shows-the-canvas)).
+
+## How to add sound
+
+1. Open `ysp/audio.h` first in `main()`, before the screen, so the
+   AudioContext is made inside the Start click (step 4 above). Leave
+   `desc.backend` at AUTO.
+2. Build twice and let the page pick one by `crossOriginIsolated`:
+
+   ```sh
+   # an isolated page: threads, miniaudio's AudioWorklet path
+   emcc ... -std=gnu11 -I<miniaudio dir> -pthread -Wno-pthreads-mem-growth \
+        -DMA_ENABLE_AUDIO_WORKLETS -sAUDIO_WORKLET=1 -sWASM_WORKERS=1 -o app_mt.js app.c
+   # every other page: no threads, miniaudio's ScriptProcessorNode path
+   emcc ... -std=gnu11 -I<miniaudio dir> -DYRT_NO_THREADS -o app.js app.c
+   ```
+
+   miniaudio's EM_ASM needs `-std=gnu11`. Both builds need ASYNCIFY or
+   JSPI. In the page, set `yspPage.builds = { coi: 'app_mt.js', fallback:
+   'app.js' }` before `ysp-web.js`; it loads the one the page can run.
+3. On the ScriptProcessorNode path, ask for 2048 frames (`desc.period`;
+   43 ms at 48 kHz): its callbacks run on the page's main thread, and 512
+   frames gave onsets up to 5.5 ms off their plan (see
+   [Audio](#audio-what-the-records-say)).
+4. Plan each sound at least `yau_lead_ns()` ahead (about 60 ms on the
+   AudioWorklet path, 170 ms on the ScriptProcessorNode path in Chrome on
+   the laptop below) with `yau_play_at()`, call `yau_update()` each frame,
+   and read the record with `yau_result()`. Do not call `yau_wait()` in the
+   frame loop.
+5. Record the audio path and the record's tier (5) with the data.
+   `examples/web/av_sync.c` and `av.html` do all of this.
+
+## How to take touch responses
+
+1. Open the window at the size of the stage the page gives (`--size WxH`
+   from `ysp-web.js`), and size the stimuli in units of the canvas's
+   shorter side (`ygfx_size()`): a phone's canvas has 2 to 3 device pixels
+   per CSS pixel.
+2. Read events with `yscr_poll()` and `yscr_event_input()`. Touch comes as
+   `YIN_KIND_TOUCH` presses and releases, x and y 0..1 of the canvas, time
+   the DOM event's `timeStamp`.
+3. Turn a press into a choice by where it landed: `web_side()` in
+   `examples/web/web_common.h` sets `code` to 1 (left half) or 2 (right
+   half) for touch and for the primary mouse button. Give
+   `ysp/response.h` the choices `{ kind TOUCH, match KEYCODE, code 1 }`
+   and the like beside the keys, with the same names. Feed every event;
+   the response, its RT and its kind come out of the one collector.
+4. Write the response's kind to the data file (`rsp_kind`, from
+   `yrsp_result.kind`).
+5. Keep anything the participant must not tap off the canvas, or above it
+   with `pointer-events: none` (the demos' target labels).
+
+## How to check a demo on a phone or a tablet by hand
+
+Chrome's device emulation checks the layout and the touch path, not a
+real device. On each device, open the site over HTTPS (GitHub Pages) and:
+
+1. On the index page, check that the status line says
+   `cross-origin isolated: yes` after the one reload.
+2. Run `tutorial.html` with touch only: the Start tap enters fullscreen
+   (Android Chrome, iPad Safari; not iPhone Safari), the canvas fills the
+   screen less the notch, the page does not scroll or zoom on a swipe, a
+   pinch or a double tap, and the CSV has `rsp_kind` = `touch`.
+3. Turn the device during a run: the canvas keeps its aspect and the
+   session log has a `viewport ... during the run` line.
+4. Run `av.html` with silent mode off: the status line names the audio
+   path, the click is heard, and the summary has 20 trials with tier 5.
+   On iOS Safari, if no sound plays, tap the page once more (miniaudio
+   resumes its AudioContext on the next tap).
+5. Run `selftest.html` and tap the canvas a few times: the result says how
+   many taps had the DOM's time.
 
 ## Reference
 
@@ -124,36 +204,72 @@ reference. In short:
 | Holds | none: a later target shows at the next frame and is recorded `EARLY` |
 | Fullscreen | never requested by the header; `desc.windowed = false` sizes the canvas to the viewport at open |
 | Hidden page | `yscr_begin()` waits until the page is shown; the frame in flight completes `OCCLUDED`; `YSCR_EV_VISIBILITY` records |
-| Input | SDL's events, stamped when the page's handler ran, not with the DOM event's `timeStamp` |
-| Threads | the demos build with `YRT_NO_THREADS`; triggers need `-pthread` and were not tested |
-| Describe line | `raf_period`, `raf_settle`, `coi`, `clock_step`, `corr`, `desync`, `skipped`, `late`, `hidden`, `vis_changes`, `canvas` |
+| Input | SDL's events, stamped when SDL's handler ran. From v0.7.1 `yscr_event_input()` gives a key, mouse button, touch or pen press or release the DOM event's `timeStamp` where it finds its record; `yscr_poll()`'s time stays SDL's |
+| Touch | SDL's finger events from pointer events on the canvas: x, y 0..1 of its CSS box, finger id the `pointerId` + 1; SDL's mouse events made from touch are dropped |
+| Threads | the demos without sound build with `YRT_NO_THREADS`; `av_sync_mt` runs the screen with `-pthread` (checked in Chrome 154); triggers were not tested |
+| Describe line | `raf_period`, `raf_settle`, `coi`, `clock_step`, `corr`, `desync`, `skipped`, `late`, `hidden`, `vis_changes`, `canvas`, `dpr`, `dom_stamps` (found/tried) |
+
+### The audio path
+
+`ysp/audio.h`'s top comment, BACKENDS, YAU_BACKEND_WEB, is the complete
+reference. In short:
+
+| Item | AudioWorklet (`av_sync_mt`) | ScriptProcessorNode (`av_sync`) |
+|---|---|---|
+| Page | cross-origin isolated (SharedArrayBuffer) | any |
+| Build | `-pthread -sAUDIO_WORKLET=1 -sWASM_WORKERS=1 -DMA_ENABLE_AUDIO_WORKLETS` | `-DYRT_NO_THREADS` |
+| Callback | audio thread, 128 frames (a render quantum) | main thread, `desc.period` rounded up to a power of 2 |
+| Stream frame 0 in context frames | `currentFrame`, exact | `playbackTime`, late by up to a device chunk |
+| Callback clock | `Date.now()`, 1 ms (the worklet has no `performance.now()`) | `performance.now()` |
+| Position reports | `getOutputTimestamp()`, read every 10 ms on the main thread | the same, and in each callback |
+| Tier | `YAU_TIER_WEB` (5), confirmed or not | the same |
+| Describe line | `path=`, `reports=`, `base_latency=`, `output_latency=`, `block_moves=` | the same |
 
 ### The demos
 
 | Page | Program | What it does |
 |---|---|---|
-| `tutorial.html` | `examples/web/tutorial.c` | A Gabor tilted left or right after a fixation cross; F or J; 10 trials; RT from the flip record; results and a CSV from `ytr_data` |
-| `rdk.html` | `examples/web/rdk_staircase.c` | Random dot motion, left or right (`ysp/rdk.h`); a 2-down 1-up staircase on coherence (`ysp/stair.h`); the threshold at the end |
-| `gallery.html` | `examples/gfx/gallery.c` | The `ysp/gfx.h` gallery, eight pages, compiled without a change |
-| `selftest.html` | `examples/web/selftest.c` | The measured period, a histogram of callback intervals, the clock step, isolation, drops, and key latency against the DOM's `timeStamp` |
+| `tutorial.html` | `examples/web/tutorial.c` | A Gabor tilted left or right after a fixation cross; F or J, or a tap on a canvas half; 10 trials; RT from the flip record; results and a CSV from `ytr_data` with `rsp_kind` |
+| `rdk.html` | `examples/web/rdk_staircase.c` | Random dot motion, left or right (`ysp/rdk.h`); the arrow keys or a tap on a canvas half; a 2-down 1-up staircase on coherence (`ysp/stair.h`); the threshold at the end |
+| `av.html` | `examples/web/av_sync.c` | A flash and a click planned for one time, 20 trials; the two records, sound minus light, the browser's latency figures, every audio callback; two builds |
+| `gallery.html` | `examples/gfx/gallery.c` | The `ysp/gfx.h` gallery, eight pages; a tap on the right half turns the page, on the left half turns back |
+| `selftest.html` | `examples/web/selftest.c` | The measured period, a histogram of callback intervals, the clock step, isolation, drops, and the delay of keys and taps against the DOM's `timeStamp` |
 
 Each page shows, and each CSV or JSON result records, whether the page was
-cross-origin isolated (`coi`), the clock step, and the audio path (`none`:
-no demo plays sound). The three programs with `--sim` also build natively
-(`web_tutorial`, `web_rdk_staircase`, `web_selftest`) and CI runs them on
-the simulated display.
+cross-origin isolated (`coi`), the clock step, and the audio path (`none`
+on every page but `av.html`). The four programs with `--sim` also build
+natively (`web_tutorial`, `web_rdk_staircase`, `web_selftest`,
+`web_av_sync`) and CI runs them on the simulated display (`web_av_sync` on
+miniaudio's null device).
+
+During a run, `ysp-web.js` and `style.css` give every page:
+
+| Item | Behavior |
+|---|---|
+| Stage | covers the viewport less `env(safe-area-inset-*)`; the canvas opens at its size (`--size`), except the gallery's fixed 1200 x 760 |
+| Rotation, fullscreen change | the drawing buffer keeps its size; the canvas's CSS box scales to fit, aspect kept; the session log counts each change (`viewport_changes`) |
+| Scroll and zoom | `touch-action: none` and `overscroll-behavior: none` on the stage and the body, `gesturestart` stopped (iOS); the viewport meta has `viewport-fit=cover` |
+| Fullscreen | asked from the Start tap when the box is checked; checked by default on a coarse pointer; iPhone Safari has no element fullscreen |
+| Targets | two labels over the canvas halves with `pointer-events: none`; the Stop button in the stage's corner |
+| Ready | the canvas stays hidden ("Preparing...") until the program calls `web_ready()` after its prime |
 
 ### Sizes
 
-emsdk 6.0.12, `-O2`, ASYNCIFY, no threads. gzip -9 is what a server that
-compresses sends.
+emsdk 6.0.12, `-O2`, ASYNCIFY. gzip -9 is what a server that compresses
+sends.
 
 | Demo | wasm | wasm, gzip | js | js, gzip |
 |---|---|---|---|---|
-| tutorial | 1,408,705 | 463,878 | 215,489 | 48,571 |
-| rdk_staircase | 1,364,301 | 448,836 | 215,509 | 48,605 |
-| gallery | 1,514,551 | 492,453 | 215,641 | 48,517 |
-| selftest | 1,071,474 | 321,673 | 214,466 | 48,422 |
+| tutorial | 1,413,407 | 465,295 | 216,720 | 48,955 |
+| rdk_staircase | 1,369,055 | 450,111 | 216,740 | 48,983 |
+| gallery | 1,521,496 | 493,965 | 216,553 | 48,774 |
+| selftest | 1,075,629 | 323,835 | 215,729 | 48,804 |
+| av_sync (no threads) | 1,391,145 | 452,697 | 225,079 | 50,684 |
+| av_sync_mt (threads, AudioWorklet) | 1,457,922 | 470,713 | 259,974 | 57,523 |
+
+Against the same demos built from main at 7316129 with the same emsdk, the
+input stamps, the touch choices and the priming added 1.7 to 4.1 KB of
+wasm a demo.
 
 ## Explanation
 
@@ -235,16 +351,16 @@ checked. ASYNCIFY runs in every WebGL2 browser, and 20 us is 0.1 % of a
 16.7 ms frame, so the demos use ASYNCIFY. A site that serves only browsers
 with JSPI can build with `-sJSPI` in place of `-sASYNCIFY`.
 
-### No threads
+### Threads only where sound needs them
 
-The demos build with `YRT_NO_THREADS`. They use no worker: no trigger, no
-pump, no sound. A threaded build needs `SharedArrayBuffer`, so it runs only
-on an isolated page and needs a second build as the fallback; the isolation
-gives the finer clock to the no-threads build too (measured below). A
-program that needs threads (the pump for QUEST+ in the background, or
-miniaudio's AudioWorklet path, which also needs `SharedArrayBuffer`) builds
-with `-pthread`, runs only when `crossOriginIsolated` is true, and needs a
-fallback build. No demo does that yet.
+The demos without sound build with `YRT_NO_THREADS`: they use no worker,
+and one build runs isolated (with the finer clock) and not. A threaded
+build needs `SharedArrayBuffer`, so it runs only on an isolated page and
+needs a second build as the fallback. The sound demo has both:
+miniaudio's AudioWorklet path needs `SharedArrayBuffer`, and its
+ScriptProcessorNode path runs anywhere. `ysp-web.js` picks the build by
+`crossOriginIsolated` before it loads one. The page's status line says
+which.
 
 ### Isolation and the service worker
 
@@ -295,10 +411,139 @@ Now lines wait in a buffer and reach the box at most every 300 ms from
 an idle callback, as one appended text node; the box keeps the newest 400
 lines, shows the newest by `flex-direction: column-reverse` with no scroll
 position read, and has `contain: strict`. The intervals over 1.5 periods
-that remain come with the programs' own work (a trial's first frame, a
-gallery page's setup), not with the log. No demo prints once per frame:
-the gallery prints a page's tile list when the page changes, the trials
-one line per trial.
+that remain come with the programs' own work, not with the log (next
+section). No demo prints once per frame: the gallery prints a page's tile
+list when the page changes, the trials one line per trial.
+
+### Priming before the page shows the canvas
+
+The intervals over 1.5 periods left after the log fix were named "a
+trial's first frame, a gallery page's setup". The page's own
+`requestAnimationFrame` times with each printed line beside them (the
+same runs as above: 3 runs a demo, keys by script, isolated, Chrome 154)
+place them: in headless Chrome 10 of 11 (9 runs), and in headed Chrome 9
+of 14, came 50 to 400 ms after the screen's describe line, so during
+setup after `yscr_open()` (making the stimuli, `ygfx_prime()`'s wait for
+the GPU) and before the first frame of the loop, while the canvas showed
+nothing. The gallery called no `ygfx_prime()`: in 1 of 3 headless runs
+the page change that first drew new kinds took a 33 ms frame. The rest,
+headed only, came during trials (tutorial: 3 in one run; dot motion: 2 in
+one run).
+
+Now each program makes and primes its stimuli (the gallery all eight
+pages', the dot motion demo also the dots' first buffer upload), then calls
+`web_ready()`; the page keeps the canvas hidden behind "Preparing..." until
+then. Counted from the frame the page got the signal (the stage shown):
+
+| Intervals over 1.5 periods, per run | Tutorial | Dot motion | Gallery |
+|---|---|---|---|
+| Before, headless, from the click | 1, 1, 2 (all setup) | 1, 1, 1 (all setup) | 2, 1, 1 (setup, one page change) |
+| After, headless, from ready | 0, 0, 0 | 0, 0, 0 | 0, 0, 0 |
+| Before, headed, from the click | 1, 4, 1 | 1, 3, 1 | 1, 1, 1 |
+| After, headed, from ready | 0, 0, 1 | 1, 0, 0 | 0, 0, 2 |
+
+The headed "after" ones: one 33 ms interval on the tutorial's first frame
+after the signal, one 67 ms frame in a dot motion trial, and two of 32 and
+29 ms in the gallery 26 s into a run with no page change; nothing in the
+program's own work ran then, so they are not setup. The "after" runs drew
+a larger canvas (the stage: 1280 x 860 CSS pixels) than the "before" runs
+(720 x 480). Setup still blocks the page as long as before; it now happens
+before the participant sees the canvas.
+
+### Audio: what the records say
+
+A browser reports three things about its audio output: the context's
+clock (`currentTime`, frames rendered), `getOutputTimestamp()` (the
+context time of the frame it says is at the output now, and the
+`performance.now()` time of that), and `outputLatency` and `baseLatency`.
+None of them is an observation of sound. `getOutputTimestamp()` is the
+render position less the browser's own figure for the delay to the
+speaker, which comes from the operating system's audio API and covers
+neither a Bluetooth link's delay nor the device's own.
+
+`ysp/audio.h` treats each `getOutputTimestamp()` as a WASAPI position
+report: the stream frame at the output at a time, fitted against the
+ysp_rt clock, which `performance.now()` maps to by a correlation at open.
+A sound's onset is the fit's time for its first frame. On the AudioWorklet
+path the stream's frame 0 is a known context frame (`currentFrame`); on
+the ScriptProcessorNode path it is estimated from `playbackTime`, which
+Chrome 154 gives as `currentTime` plus the buffer when the event runs, so
+it is late by up to the audio device's chunk (10 ms here) or by however
+long the main thread made the event wait. The tier is `YAU_TIER_WEB` (5),
+confirmed or not: the browser's estimate, as a web flip record is.
+
+So "sound minus light" on `av.html` is what the two headers believe, both
+from the browser: the flip's onset (a frame callback's vsync, before the
+compositor) and the click's (the browser's output figure). Its spread
+says how well the two plans agree, not when light and sound arrived.
+A photodiode and a microphone on an oscilloscope measure that.
+
+Measured on the laptop of [status](status.md) (Windows 11, Realtek
+speakers, WASAPI shared at 48 kHz under the browser), Chrome 154 headed,
+`av.html`, 20 trials a run, 3 runs a path interleaved, under the timing
+guard (load 0 to 19 % at the start):
+
+| | AudioWorklet (isolated) | ScriptProcessorNode, 2048 frames (not isolated) |
+|---|---|---|
+| Sound minus light, mean per run | +0.06 to +0.14 ms | -0.44 to +0.08 ms |
+| Sound minus light, SD per run | 0.06 to 0.10 ms | 0.07 to 0.13 ms |
+| Sound minus light, all trials | -0.18 to +0.26 ms | -0.58 to +0.11 ms |
+| Render to onset (the browser's figure), median | 53 to 55 ms | 123 to 130 ms |
+| `outputLatency`, `baseLatency` | 48 ms, 10 ms | 48 ms, 10 ms |
+| Lead at the end (`yau_lead_ns()`) | 52 to 58 ms | 144 to 171 ms |
+| Callbacks per run | 11,704 to 11,948, 128 frames each | 745 to 760 |
+| Callback rhythm | bursts every 10 ms: gaps of 2 ms or more p50 10, max 11 ms; within a burst 0 or 1 ms (the worklet's clock has 1 ms steps) | p50 40 ms, p99 50 ms, one gap of 2.2 to 2.7 s a run |
+| Fit of the reports: residual RMS, drift | 36 to 43 us, +3.4 to +4.5 ppm | 55 to 73 us, +4.4 to +6.1 ppm |
+| Skipped blocks found (`block_moves`) | 0 | 51 to 63 a run |
+| Trials with a late or dropped flash, a flagged sound | 0, 0 | 0, 0 |
+
+The ScriptProcessorNode's long gap is setup: the program opens the sound
+first (in the Start tap), then the screen's settling and the shader
+compiles hold the main thread for 2 s, and its callbacks wait. The events
+that waited then run back to back; most of the skipped blocks are there,
+and the fit starts over after them. `av_sync.c` waits 2 s before its
+first trial for that reason. With 1024 frames the residual RMS was 311 us
+and every onset stayed within 0.7 ms of its plan; with 512, 192 callbacks
+came over 1.5 periods late and one onset was 5.5 ms off: the page asks for
+2048.
+
+`getOutputTimestamp()` itself, read every 2 ms for 6 s in headed Chrome
+154: a new pair every 10.0 ms (the device's chunk), its `performanceTime`
+against a line through its `contextTime` within -0.15 to +0.14 ms (p1 to
+p99), at most 0.50 ms. Headless Chrome's pairs came every 10 ms too, but
+one was 34 ms off and the first was 1 s old; the reader drops pairs more
+than 100 ms old.
+
+### Input: touch, the mouse and the DOM's time
+
+SDL's Emscripten port stamps an event in its own handler, which runs when
+the page's main thread gets to it: after the frame the program is drawing,
+or after a stall. The DOM event's `timeStamp` is when the browser made the
+event, for input the time the operating system gave it to the browser,
+on the `performance.now()` clock. `yscr_event_input()` now takes that
+time. A capture listener on the window records each keydown, keyup and
+pointer event with the time its listener ran; SDL's handler for the same
+event runs in the same task right after it, so the newest record of the
+event's class whose listener ran just before SDL's stamp is the match.
+
+Touch on the canvas reaches SDL as pointer events, and `ysp/input.h`
+turns them into `YIN_KIND_TOUCH` presses and releases; the demos make a
+press on the left or right half of the canvas a choice, so a tap, a click
+and a key go through one `ysp/response.h` collector and the data file
+says which (`rsp_kind`). Stamp delays are in the
+[measurements](#measurements). What is not known is the delay from the
+finger to the browser's event: the touch panel's scan and the operating
+system's processing, often 10 to 50 ms on phones by others' reports and
+never measured here.
+
+iOS specifics the pages rely on: an AudioContext starts only from a user
+gesture (the Start tap, which runs the program's audio open inside it;
+miniaudio resumes a suspended context on the next tap); iPhone Safari has
+no element fullscreen (iPad Safari has `webkitRequestFullscreen`), so the
+stage covers the viewport less the safe areas instead; `touch-action:
+none` and the `gesturestart` handler stop pinch zoom during a run, and the
+viewport meta has `viewport-fit=cover` for `env(safe-area-inset-*)`.
+None of these was checked on an iOS device here.
 
 ### Measurements
 
@@ -326,8 +571,10 @@ internal panel at 60 Hz), on AC.
 - When light appears. No photodiode has watched a web demo; the
   compositor's delay after the onset in the record is unknown on every
   browser here.
-- A desynchronized context, Safari, mobile browsers, a display above 60 Hz,
-  a second display.
-- Key latency from a physical key. The self-test reports the program's
-  stamp against the DOM event's `timeStamp`; the headless runs pressed keys
-  by script only.
+- When sound appears. No microphone or line-in has heard `av.html`; the
+  browser's `outputLatency` is in every audio onset and was not checked.
+- A desynchronized context, Safari, a real phone or tablet (only Chrome's
+  device emulation ran), a display above 60 Hz, a second display.
+- Key and touch latency from a physical key or finger. The self-test
+  reports SDL's stamp against the DOM event's `timeStamp`; the runs here
+  pressed keys and tapped by script only.

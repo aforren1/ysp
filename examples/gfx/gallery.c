@@ -2623,8 +2623,8 @@ int main(int argc, char** argv) {
     }
     if (shots) shot_px = (uint8_t*)malloc((size_t)scr_w * (size_t)scr_h * 4);
     /* Each program's first draw now, not on the page that first shows it:
-     * in Chrome a page whose kinds had not been drawn yet took one frame of
-     * 33 ms (docs/web.md, "Priming"). */
+     * in 1 of 3 headless Chrome runs the page change that first drew new
+     * kinds took a 33 ms frame (docs/web.md, "Priming"). */
     if (ygfx_prime(&gfx) < 0) { fprintf(stderr, "gfx_gallery: prime: %s\n", ygfx_error(&gfx)); refused++; }
     gallery_ready();
 

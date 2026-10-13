@@ -2727,6 +2727,16 @@ design decisions that touch the core.
   platform, so `tests/adapt/screen_test.c` checks them; mutants wb-01 to
   wb-04. The presenter itself runs only in a page: the demos ran in Chrome
   154 (headless and headed), Edge 155 and Firefox 154 to 157 (headless).
+- **Input stamps (v0.7.1).** `yscr_event_input()` on the web backend
+  replaces SDL's handler time of a key, mouse button, touch or pen press
+  or release with the DOM event's `timeStamp` where a capture listener
+  recorded it. The match is by the time the listener ran, which is in the
+  same task as SDL's handler and just before it, so it needs no key or
+  button mapping between the DOM and SDL. `yscr_poll()`'s time stays
+  SDL's: a program that reads SDL's events itself (the gallery) keeps what
+  SDL gives. The matching is JavaScript and has no native test or mutant;
+  `selftest.html` reports, per run, how many events got the DOM's time
+  ([web.md](web.md), "Input: touch, the mouse and the DOM's time").
 
 ## Not measured
 
