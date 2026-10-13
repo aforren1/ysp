@@ -2,12 +2,14 @@
  * machine: callback timing, position reports, the fit and its quality.
  * Records the input; plays nothing (with --duplex, silence).
  *
- *     audio_capstats [--null] [--device NAME] [--exclusive] [--period N]
+ *     audio_capstats [--null] [--device NAME] [--exclusive] [--s16] [--period N]
  *                    [--seconds S] [--load N] [--duplex] [--ring S]
  *                    [--stall-at S --stall MS [--stall-every S]] [--csv PREFIX]
  *
  *   --device NAME  the input whose name contains NAME (default: the OS's)
  *   --exclusive    WASAPI exclusive mode; at most 30 s
+ *   --s16          accept a 16-bit input (the default asks for 24 bits or
+ *                  float: STRICT OPEN)
  *   --period N     frames per block asked for (default: the header's)
  *   --seconds S    run length (default 10)
  *   --load N       N threads spin at normal priority
@@ -132,6 +134,7 @@ int main(int argc, char** argv) {
         if (!strcmp(argv[i], "--null")) cd.backend = YAU_BACKEND_NULL;
         else if (!strcmp(argv[i], "--device") && i + 1 < argc) cd.device = argv[++i];
         else if (!strcmp(argv[i], "--exclusive")) cd.exclusive = true;
+        else if (!strcmp(argv[i], "--s16")) cd.format.sample = YAU_S16;
         else if (!strcmp(argv[i], "--period") && i + 1 < argc) cd.period = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--seconds") && i + 1 < argc) seconds = atof(argv[++i]);
         else if (!strcmp(argv[i], "--load") && i + 1 < argc) load = atoi(argv[++i]);
