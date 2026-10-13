@@ -2737,6 +2737,18 @@ design decisions that touch the core.
   SDL gives. The matching is JavaScript and has no native test or mutant;
   `selftest.html` reports, per run, how many events got the DOM's time
   ([web.md](web.md), "Input: touch, the mouse and the DOM's time").
+- **Fullscreen (v0.7.2).** The page owns fullscreen; the header never asks
+  and now keeps SDL from leaving it. SDL 3.4.2's port applies a window's
+  flags at create, destroy and a show, and its driver calls
+  `emscripten_exit_fullscreen()` whenever the document is fullscreen and
+  the window is not flagged fullscreen. Flagging the window fullscreen was
+  not tried: SDL's resize handler sizes a fullscreen window's canvas to
+  the page (`Emscripten_HandleResize()`), and the demos keep the drawing
+  buffer they opened with. So the document's `exitFullscreen`
+  is a no-op during `SDL_CreateWindowWithProperties()` and
+  `SDL_DestroyWindow()`, and SDL's `visibilitychange` handler is removed
+  after the create. Evidence and the page's side are in
+  [web.md](web.md#fullscreen).
 
 ## Not measured
 

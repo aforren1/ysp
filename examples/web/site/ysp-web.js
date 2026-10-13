@@ -215,11 +215,69 @@
     return true;
   }
 
+  // Fullscreen during a run. The browser leaves it on Esc, on a switch of
+  // tab or window, or by its own rules, and a page may ask again only from a
+  // user gesture. So after an exit the stage says so, and the next key or
+  // tap asks again; that key or tap is the page's, not a response, and never
+  // reaches the program. Each exit is logged and counted (fullscreen_lost).
+  let wantFs = false, fsLost = false, fsUp = null;
+  const fsElement = () => document.fullscreenElement || document.webkitFullscreenElement;
+  const running = () => document.body.classList.contains('running');
+  function onFsChange() {
+    if (!wantFs || !running()) return;
+    if (fsElement()) {
+      if (fsLost) log('fullscreen again');
+      fsLost = false;
+      document.body.classList.remove('fs-lost');
+    } else if (!fsLost) {
+      fsLost = true;
+      status.fullscreen_lost = (status.fullscreen_lost || 0) + 1;
+      log('fullscreen ended or was refused during the run; the next key or tap asks again');
+      document.body.classList.add('fs-lost');
+    }
+  }
+  document.addEventListener('fullscreenchange', onFsChange);
+  document.addEventListener('webkitfullscreenchange', onFsChange);
+  document.addEventListener('fullscreenerror', onFsChange);   // refused: the same note
+  // Window capture listeners, added before the program's, so they see the
+  // event first. A key down and a mouse press give a user activation, a
+  // touch only on its release: ask there, and hold back the matching release.
+  function fsAgain(e) {
+    if (fsUp && (e.type === 'keyup' || e.type === 'pointerup' || e.type === 'pointercancel')) {
+      if (fsUp === (e.type === 'keyup' ? 'k' + e.code : 'p' + e.pointerId)) {
+        fsUp = null;
+        if (e.type === 'pointerup' && e.pointerType !== 'mouse') requestFullscreen($('stage'));
+        e.stopImmediatePropagation();
+        e.preventDefault();
+      }
+      return;
+    }
+    if (!fsLost || !wantFs || !running() || e.key === 'Escape') return;
+    if (e.target && e.target.closest && e.target.closest('button')) return;   // Stop stays Stop
+    e.stopImmediatePropagation();
+    e.preventDefault();
+    if (e.type === 'keydown') { if (!e.repeat) fsUp = 'k' + e.code; requestFullscreen($('stage')); }
+    else { fsUp = 'p' + e.pointerId; if (e.pointerType === 'mouse') requestFullscreen($('stage')); }
+  }
+  for (const t of ['keydown', 'keyup', 'pointerdown', 'pointerup', 'pointercancel']) window.addEventListener(t, fsAgain, true);
+
   function start(opts) {
     const args = page.args ? page.args() : [];
     // Fullscreen and an AudioContext both need this tap or click: the
     // request and the program's start (its sound opens first) run inside it.
-    if (opts && opts.fullscreen) status.fullscreen = requestFullscreen($('stage')) ? 'asked' : 'not available';
+    if (opts && opts.fullscreen) {
+      status.fullscreen = requestFullscreen($('stage')) ? 'asked' : 'not available';
+      wantFs = status.fullscreen === 'asked';
+      status.fullscreen_lost = 0;
+      fsLost = false;
+      fsUp = null;
+      if (wantFs && $('stage') && !$('stage').querySelector('.fsnote')) {
+        const n = document.createElement('div');
+        n.className = 'fsnote';
+        n.textContent = 'Fullscreen ended. Press a key or tap to go back to fullscreen.';
+        $('stage').appendChild(n);
+      }
+    }
     document.body.classList.add('running', 'preparing');
     if ($('intro')) $('intro').classList.add('hidden');
     $('stage').classList.add('running');
@@ -239,7 +297,9 @@
 
   function finish() {
     flush();   /* the run is over: the last lines now */
-    document.body.classList.remove('running', 'preparing');
+    wantFs = false;
+    fsLost = false;
+    document.body.classList.remove('running', 'preparing', 'fs-lost');
     $('stage').classList.remove('running');
     const fe = document.fullscreenElement || document.webkitFullscreenElement;
     if (fe) (document.exitFullscreen || document.webkitExitFullscreen).call(document);

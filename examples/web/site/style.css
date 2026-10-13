@@ -94,6 +94,13 @@ body.preparing #stage .targets { display: none; }
   position: absolute; top: calc(env(safe-area-inset-top) + 8px); right: calc(env(safe-area-inset-right) + 8px);
   padding: 6px 14px; color: #ffffff; border-color: #ffffff; opacity: 0.6;
 }
+/* The browser left fullscreen during a run: the next key or tap asks again
+ * (ysp-web.js). Over the top edge only, and no tap stops on it. */
+#stage .fsnote {
+  display: none; position: absolute; top: calc(env(safe-area-inset-top) + 8px); left: 0; right: 0;
+  text-align: center; color: #ffffff; font-size: 1.1rem; pointer-events: none;
+}
+body.fs-lost #stage .fsnote { display: block; }
 button { touch-action: manipulation; min-height: 44px; }
 /* Fixed size and contain: strict, so a new log line never lays out the rest
  * of the page; column-reverse keeps the newest line in view without a

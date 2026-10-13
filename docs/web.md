@@ -5,7 +5,7 @@ A program written as a blocking frame loop compiles with Emscripten and
 runs in a page: SDL3's Emscripten port gives the canvas and the input,
 the header makes a WebGL2 context, and `requestAnimationFrame` paces the
 frames. v0.7.1 stamps key, mouse, touch and pen presses with the DOM
-event's own time. `ysp/audio.h` v0.4.1 plays sound through Web Audio, with
+event's own time; v0.7.2 keeps SDL from leaving the page's fullscreen. `ysp/audio.h` v0.4.1 plays sound through Web Audio, with
 onset records from the browser's output timestamps. `examples/web/` has
 five demos and a static site that GitHub Pages serves; each demo works
 with a keyboard on a desktop and by touch alone on a phone or a tablet.
@@ -183,7 +183,10 @@ real device. On each device, open the site over HTTPS (GitHub Pages) and:
 4. Run `av.html` with silent mode off: the status line names the audio
    path, the click is heard, and the summary has 20 trials with tier 5.
    On iOS Safari, if no sound plays, tap the page once more (miniaudio
-   resumes its AudioContext on the next tap).
+   resumes its AudioContext on the next tap). Where the device has element
+   fullscreen, the run stays fullscreen to the end. Switch to another app
+   and back during a run: if the browser left fullscreen, the stage says
+   so, and one tap brings it back without a response.
 5. Run `selftest.html` and tap the canvas a few times: the result says how
    many taps had the DOM's time.
 
@@ -204,7 +207,7 @@ reference. In short:
 | Capability | `caps.kind = YSCR_CALLBACK`; `caps.period_ns` measured at open; `caps.mode` the drawing buffer in device pixels |
 | Settling | at least 0.25 s, at most 2 s: 20 intervals, none over 1.5 times their median, SD at most 0.5 ms. Warns, never fails |
 | Holds | none: a later target shows at the next frame and is recorded `EARLY` |
-| Fullscreen | never requested by the header; `desc.windowed = false` sizes the canvas to the viewport at open |
+| Fullscreen | never requested by the header; `desc.windowed = false` sizes the canvas to the viewport at open. From v0.7.2 SDL cannot leave the page's fullscreen at open, at close or when the page is shown again (see [Fullscreen](#fullscreen)); SDL sends no `WINDOW_SHOWN` or `WINDOW_HIDDEN` for the page |
 | Hidden page | `yscr_begin()` waits until the page is shown; the frame in flight completes `OCCLUDED`; `YSCR_EV_VISIBILITY` records |
 | Input | SDL's events, stamped when SDL's handler ran. From v0.7.1 `yscr_event_input()` gives a key, mouse button, touch or pen press or release the DOM event's `timeStamp` where it finds its record; `yscr_poll()`'s time stays SDL's |
 | Touch | SDL's finger events from pointer events on the canvas: x, y 0..1 of its CSS box, finger id the `pointerId` + 1; SDL's mouse events made from touch are dropped |
@@ -253,6 +256,7 @@ During a run, `ysp-web.js` and `style.css` give every page:
 | Rotation, fullscreen change | the drawing buffer keeps its size; the canvas's CSS box scales to fit, aspect kept; the session log counts each change (`viewport_changes`) |
 | Scroll and zoom | `touch-action: none` and `overscroll-behavior: none` on the stage and the body, `gesturestart` stopped (iOS); the viewport meta has `viewport-fit=cover` |
 | Fullscreen | asked from the Start tap when the box is checked; checked by default on a coarse pointer; iPhone Safari has no element fullscreen |
+| Fullscreen lost | when the browser leaves fullscreen or refuses it during the run, the stage says so, and the next key or tap (not Esc, not the Stop button) asks again; that key or tap does not reach the program. The session log has a line for each, and `fullscreen_lost` counts them |
 | Targets | two labels over the canvas halves with `pointer-events: none`; the Stop button in the stage's corner |
 | Ready | the canvas stays hidden ("Preparing...") until the program calls `web_ready()` after its prime |
 
@@ -544,6 +548,68 @@ also stamps the pair `outputLatency` before the read, though by its own
 `contextTime` that frame is at the output at the read; the reader adds
 `outputLatency` back where it sees that. Both are readings of one
 browser's behavior, not of sound.
+
+### Fullscreen
+
+The page asks for fullscreen on the stage (the canvas's parent) in the
+Start tap, then runs the program. Before v0.7.2 the sound demo left
+fullscreen soon after it entered it. A listener on `fullscreenchange` and a
+wrapper on `document.exitFullscreen` that logged the caller's stack, in
+headed Chrome 154 and Firefox 157, showed the cause in every run (Chrome:
+not isolated and isolated; Firefox: isolated):
+
+```
+_emscripten_exit_fullscreen
+Emscripten_SetWindowFullscreen
+SDL_UpdateFullscreenMode
+SDL_SetWindowFullscreen
+ApplyWindowFlags
+SDL_SendWindowEvent
+SDL_ShowWindow
+```
+
+SDL 3.4.2's Emscripten port applies the window's flags when it shows a
+new window, and its driver calls `emscripten_exit_fullscreen()` when the
+document is fullscreen and the window is not flagged fullscreen. In the
+other demos, `yscr_open()` makes the window inside the Start tap, before
+the browser enters fullscreen, so the driver saw no fullscreen. The sound
+demo opens its sound first, and the sound's open waits for callbacks
+(ASYNCIFY), which lets the browser finish entering fullscreen before the
+window exists. Fullscreen ended 2.2 to 3.7 s after the tap, when the
+screen opened. The same call came from SDL's `visibilitychange` handler in
+every demo: with a hidden state faked by script during a fullscreen run of
+the tutorial, the page left fullscreen when it was shown again.
+
+`ysp/screen.h` v0.7.2 makes `document.exitFullscreen` a no-op while SDL
+makes and destroys the window, and removes SDL's `visibilitychange`
+handler (BACKENDS, WEB, in the header). Checked after the change, headed,
+with Fullscreen checked, on this laptop:
+
+| Browser, page | Isolated | Not isolated |
+|---|---|---|
+| Chrome 154, `av.html` (both builds) | fullscreen 33 s, to the end; 20 trials | fullscreen 35 to 36 s, to the end; 20 trials (2 runs) |
+| Chrome 154, tutorial, dot motion, gallery, self-test | fullscreen for the whole run (14 to 16 s, or the self-test's end) | the same |
+| Firefox 157, `av.html` | fullscreen 33 to 34 s, to the end (2 runs, one after the service worker's reload) | fullscreen to the end in 4 of 4 runs |
+| Firefox 157, the other four | the same as Chrome | the same as Chrome |
+
+The faked hidden state no longer ends fullscreen. In each run the only
+exit was the page's own, in `ysp.finish()`.
+
+The browser still leaves fullscreen by its own rules: Esc, a switch of tab,
+and in Firefox a switch of window. A page may ask again only from a user
+gesture, so `ysp-web.js` shows "Fullscreen ended. Press a key or tap to go
+back to fullscreen." over the top of the stage and asks again on the next
+key down, mouse press or touch release. That key or tap stops at the page:
+the program does not see it as a response. Checked by an exit from script
+in Chrome 154 (a key, a mouse press, a tap in touch emulation) and Firefox
+157 (a key): fullscreen came back, the program's input log did not grow,
+and the next key reached the program. An Esc sent by script does not end
+fullscreen in Chrome, so the real Esc was not checked.
+
+Some runs of the ScriptProcessorNode build opened no sound ("gave no
+steady callbacks within 3 s"): in Firefox 157, 2 of 6 interleaved runs, one
+with fullscreen and one without, and one more run in each browser.
+Fullscreen is not the cause; the cause is not known.
 
 ### Input: touch, the mouse and the DOM's time
 

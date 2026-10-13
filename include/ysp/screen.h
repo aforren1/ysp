@@ -1,4 +1,4 @@
-/* ysp/screen.h - v0.7.1 - public domain single-header display library
+/* ysp/screen.h - v0.7.2 - public domain single-header display library
  *
  *   The window, the GL ES 3.0 context, the display mode and the swap path
  *   of a stimulus display, with flip at a time: each frame learns the
@@ -536,7 +536,16 @@
  *     Fullscreen. A page enters fullscreen only from a user gesture, so the
  *     header never asks. desc.windowed false gives a canvas the size of the
  *     page's viewport at open; the page may enter fullscreen before
- *     (examples/web/site). desc.mode must stay zero.
+ *     (examples/web/site). desc.mode must stay zero. From v0.7.2 the header
+ *     also keeps SDL from leaving the page's fullscreen: SDL's port applies
+ *     a window's flags (not fullscreen) at SDL_CreateWindow, at
+ *     SDL_DestroyWindow and when the page is shown again, and that called
+ *     document.exitFullscreen() whenever the document was fullscreen. So
+ *     the document's exitFullscreen does nothing during the create and the
+ *     destroy, and SDL's visibilitychange handler is removed after the
+ *     create (the header has its own; SDL sends no WINDOW_SHOWN or
+ *     WINDOW_HIDDEN for the page on this backend). A browser's own exit
+ *     (Esc, a switch of tab) is the page's to handle (docs/web.md).
  *     A hidden page gets no callbacks. begin() waits until the page is
  *     shown again (hidden= in the describe line); the frame in flight
  *     completes OCCLUDED, with no time; each change writes a
@@ -1315,6 +1324,13 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.7.2 - BACKENDS, WEB: open() and close() no longer leave a
+ *          fullscreen the page entered (Fullscreen, in BACKENDS, WEB). A
+ *          program that yielded between the page's request and open() (the
+ *          sound demo: its sound's open awaits callbacks) lost fullscreen
+ *          when SDL made the window, 2.2 to 3.7 s into the run in Chrome 154
+ *          and Firefox 157, and every demo lost it when the page was shown
+ *          again after hidden. Nothing changes on the other backends.
  *   v0.7.1 - BACKENDS, WEB: yscr_event_input() stamps a key, mouse
  *          button, touch or pen press or release with the DOM event's own
  *          time where it finds it (Input, in BACKENDS, WEB); the describe
@@ -1563,7 +1579,14 @@
  *          groups, input restamping, mode lists and the parameter table.
  *          The other swap paths are stubs that refuse to open.
  *
- *   STATUS: v0.7.1 (WEB input; docs/web.md): scripted keys (desktop) and
+ *   STATUS: v0.7.2 (WEB fullscreen; docs/web.md): every demo of
+ *   examples/web ran with fullscreen asked in headed Chrome 154 and
+ *   Firefox 157, isolated and not; each page stayed fullscreen until it
+ *   left fullscreen itself at the end (before: av.html lost it when SDL
+ *   made the window in all four runs). A page shown again after a scripted
+ *   hidden state kept fullscreen (before: it left). JavaScript only: no
+ *   native test or mutant.
+ *   v0.7.1 (WEB input; docs/web.md): scripted keys (desktop) and
  *   taps (Pixel 7 emulation) in Chrome 154 got the DOM's time in
  *   yscr_event_input() (dom_stamps in the describe line, the self-test's
  *   table); a run of av_sync_mt opened this backend with -pthread. No
@@ -1755,8 +1778,8 @@
 
 #define YSCR_VERSION_MAJOR 0
 #define YSCR_VERSION_MINOR 7
-#define YSCR_VERSION_PATCH 1
-#define YSCR_VERSION_STRING "0.7.1"
+#define YSCR_VERSION_PATCH 2
+#define YSCR_VERSION_STRING "0.7.2"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -4170,6 +4193,27 @@ EM_JS(int, yscr__web_query, (int what), {
     if (what === 5) return window.innerHeight;
     if (what === 6) return Math.round((window.devicePixelRatio || 1) * 100);
     return Module['yscrVis'].changes;
+})
+
+/* The page's fullscreen is the page's (BACKENDS, WEB). SDL's port leaves
+ * it when it applies a window's flags: at SDL_CreateWindow and at
+ * SDL_DestroyWindow whenever the document is fullscreen, which it is when
+ * the program yielded between the page's request and open() (av_sync: the
+ * sound's open awaits its callbacks; Chrome 154 and Firefox 157 left
+ * fullscreen 1.4 to 3 s into the run). While on is 1, the document's
+ * exitFullscreen does nothing; 0 gives the browser's back. */
+EM_JS(void, yscr__web_fs_hold, (int on), {
+    var d = document, h = Module['yscrFsHold'];
+    if (on && !h) {
+        var no = function() { return Promise.resolve(); };
+        h = Module['yscrFsHold'] = { exit: d.hasOwnProperty('exitFullscreen'), wexit: d.hasOwnProperty('webkitExitFullscreen') };
+        if (!h.exit) Object.defineProperty(d, 'exitFullscreen', { value: no, configurable: true, writable: true });
+        if (!h.wexit) Object.defineProperty(d, 'webkitExitFullscreen', { value: no, configurable: true, writable: true });
+    } else if (!on && h) {
+        if (!h.exit) delete d.exitFullscreen;
+        if (!h.wexit) delete d.webkitExitFullscreen;
+        Module['yscrFsHold'] = null;
+    }
 })
 
 /* The DOM's own times of the input events SDL turns into events (INPUT,
@@ -8573,7 +8617,17 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
         SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN, !desc->windowed);
 #endif
         SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_HIGH_PIXEL_DENSITY_BOOLEAN, true);
+#if defined(YSCR__WEB)
+        yscr__web_fs_hold(1);
         s->window = SDL_CreateWindowWithProperties(props);
+        yscr__web_fs_hold(0);
+        /* SDL's visibility handler re-applies the window's flags when the
+         * page is shown again, which leaves the page's fullscreen; the
+         * header has its own listener (yscr__web_query) */
+        if (s->window) emscripten_set_visibilitychange_callback(NULL, 0, NULL);
+#else
+        s->window = SDL_CreateWindowWithProperties(props);
+#endif
         SDL_DestroyProperties(props);
         if (!s->window) {
             yscr__set_error(s->error, sizeof s->error, "ysp_screen: window: %s", SDL_GetError());
@@ -8860,7 +8914,15 @@ YSCR_API void yscr_close(yscr_screen* s) {
     s->pr_open = 0;
 #if !defined(YSCR_NO_SDL)
     if (s->cursor_hidden) SDL_ShowCursor();
+#if defined(YSCR__WEB)
+    if (s->window) {   /* the page leaves its fullscreen itself */
+        yscr__web_fs_hold(1);
+        SDL_DestroyWindow(s->window);
+        yscr__web_fs_hold(0);
+    }
+#else
     if (s->window) SDL_DestroyWindow(s->window);
+#endif
 #if defined(YSCR__DXGI)
     {   /* after the window that showed them */
         int k;
