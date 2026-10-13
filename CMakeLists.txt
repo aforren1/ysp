@@ -531,6 +531,12 @@ endif()
 if(TARGET audio_wasapi_periods AND WIN32)
     target_link_libraries(audio_wasapi_periods PRIVATE ole32)
 endif()
+# The loop examples set the endpoints' volume and mute for an acoustic run.
+foreach(_t audio_loopback_latency audio_first_sound audio_voice_rt)
+    if(TARGET ${_t} AND WIN32)
+        target_link_libraries(${_t} PRIVATE ole32)
+    endif()
+endforeach()
 
 # ysp/net.h loads liblsl at run time and never links it. tools/vendor_lsl.py
 # fetches a pinned release for the tests into third_party/liblsl/<platform>/.

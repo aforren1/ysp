@@ -162,6 +162,16 @@ jobs:
           # PTB's sound schedule demos on the null device; 1 if a record is off its plan (about 9 s).
           expect 0 "$bin/audio_schedule" --null
           expect 2 "$bin/audio_schedule" --db -10
+          # Capture (v0.5.0): the null input; the simulated loop, an output and an
+          # input on one timer thread, for the latency, the first sound after a
+          # silence (with and without a gate in the sink) and a voice RT. Each is
+          # 1 when its measured result is off the loop's.
+          expect 0 "$bin/audio_capstats" --null --seconds 2
+          expect 0 "$bin/audio_loopback_latency" --sim --clicks 10 --every-ms 200
+          expect 2 "$bin/audio_loopback_latency" --db 0
+          expect 0 "$bin/audio_first_sound" --sim
+          expect 0 "$bin/audio_first_sound" --sim --sim-gate-ms 20
+          expect 0 "$bin/audio_voice_rt" --sim --trials 3
           # The rig profile (ysp/rigfile.h) in a folder of the runner's, never
           # the user's: a simulated output latency stored into it, then
           # the CLI on it; a second --new must not replace it.
@@ -272,6 +282,7 @@ jobs:
           expect 0 build/timeline_tracking
           expect 0 build/color_convert
           expect 0 build/audio_tone --null
+          expect 0 build/audio_loopback_latency --sim --clicks 10 --every-ms 200
 
   # --------------------------------------------------------------------- #
   # MinGW: the headers carry explicit MinGW handling (no #pragma           #

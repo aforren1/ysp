@@ -226,6 +226,7 @@ reference. In short:
 | Position reports | `getOutputTimestamp()`, read every 10 ms on the main thread | the same, and in each callback |
 | Tier | `YAU_TIER_WEB` (5), confirmed or not | the same |
 | Describe line | `path=`, `reports=`, `base_latency=`, `output_latency=`, `block_moves=` | the same |
+| Capture (`yau_capture`, v0.5.0) | compiled, never run; its callback times would read 0 | compiled, never run |
 
 ### The demos
 
@@ -617,6 +618,10 @@ internal panel at 60 Hz), on AC.
   browser here.
 - When sound appears. No microphone or line-in has heard `av.html`; the
   browser's `outputLatency` is in every audio onset and was not checked.
+- Capture. `ysp/audio.h` 0.5.0's input compiles under emcc (alone and
+  duplex, both builds of `av_sync`) and has `YAU_TIER_WEB`, but no page
+  has opened one. On the AudioWorklet path its callback times would come
+  from `yrt_now_ns()`, which reads 0 in that scope.
 - A desynchronized context, Safari, a real phone or tablet (only Chrome's
   device emulation ran), a display above 60 Hz, a second display.
 - Key and touch latency from a physical key or finger. The self-test

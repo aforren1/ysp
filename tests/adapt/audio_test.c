@@ -2603,6 +2603,10 @@ static void test_misc(void) {
     }
 }
 
+#if YAU_VERSION_MINOR >= 5
+#include "audio_test_capture.h"
+#endif
+
 int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     g_tape = (float*)calloc((size_t)TAPE_FRAMES * 2, sizeof(float));
@@ -2644,6 +2648,9 @@ int main(int argc, char** argv) {
 #endif
 #if YAU_VERSION_MINOR >= 3
     test_queue();
+#endif
+#if YAU_VERSION_MINOR >= 5
+    test_capture();
 #endif
     test_misc();
     free(g_tape);

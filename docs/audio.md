@@ -1030,9 +1030,447 @@ touch the core.
   value. Mutants `web-01` and `web-02` are killed. The JavaScript and the
   rest of the device run only in a browser (`examples/web/av_sync.c`).
 
+## Capture (v0.5.0)
+
+v0.5.0 adds an input on the rig clock: `yau_capture`. This chapter has two
+how-to guides, a reference table, the design notes and what was measured.
+The manual is the CAPTURE, DETECTORS and WAV OUT sections of the header.
+
+Conditions for every measurement in this chapter: the laptop of this note,
+2026-10-12 and 13, on AC power, the measurement lock held for each run
+(the guard script; its load figure is the CPU load when the run started),
+miniaudio 0.11.25, MinGW-w64 gcc 16.1 -O2. The input is "Microphone Array
+(Intel Smart Sound Technology for Digital Microphones)", the laptop's own
+microphones behind the SST DSP: in shared mode float, 48000 Hz, 4
+channels, a 480-frame period and a 1056-frame buffer; in exclusive mode
+16 bits, 48000 Hz, 2 channels. Nobody spoke during the runs: the shared
+input read -88 dBFS RMS (the endpoint's processing), the exclusive one
+-70 dBFS RMS. No cable, no second interface and no TTL into an input
+were available, so no number here is an input latency against a
+reference. One run window was disturbed by another worker's browser
+(Measurements, the note under the stall table).
+
+### How to record a spoken response
+
+`examples/audio/voice_rt.c` is this guide as a program (`--sim` runs it
+without hardware).
+
+1. Open the output and the input. Open the input with
+   `yau_capture_desc.format.sample = YAU_S16` if it may run in exclusive
+   mode, where microphones give 16 bits.
+2. Wait until both fits are ready: `yau_capture_get_info()`'s
+   `fit_ready`. `yau_capture_open()` waits for it already, a CUSTOM device
+   does not.
+3. For each trial, play the stimulus with `yau_play_at(t)`, and get the
+   capture frame of `t` with `yau_capture_frame_at(t)`.
+4. Each frame of the frame loop, read reader 0 with
+   `yau_capture_acquire()` and `yau_capture_release()` (or
+   `yau_capture_read()`). Keep the trial's frames if you save them. Feed
+   `yau_vkey_feed()` from the frame where you start to listen. On
+   speakers, the stimulus comes back through the microphone: listen from
+   after its end.
+5. When the voice key gives `YAU_VKEY_ON`, the voice onset is
+   `yau_capture_time_at(ev.frame)`. The RT is that time minus the
+   stimulus's onset from its record (`yau_wait()`).
+6. Between trials, write the trial's frames with `yau_wavw_open()`,
+   `yau_wavw_write()` and `yau_wavw_close()`. Write the first frame's
+   capture frame number to your data file, so each sample has its time.
+7. Subtract the loop's latency from the RT, or set the input's
+   `desc.offset_ns` to minus the input's share of it, measured as in the
+   next guide. Until you do, the RT holds the output's pipeline and the
+   input's: 36.6 ms through the air on this laptop (shared output,
+   exclusive input; Measurements).
+
+For a long recording, open the input with `readers = 2` and let a
+`yrt_pump` (reader 1) call `yau_capture_save()` into one WAV file while
+the frame thread runs the voice key on reader 0. The file then has
+silence where frames are missing, so its sample s is capture frame
+first + s.
+
+### How to measure the output-to-input latency
+
+`examples/audio/loopback_latency.c` plays clicks (12 frames at -20 dBFS,
+400 ms apart), finds each one in the input with `yau_edge`, and reports
+the input fit's time of the edge minus the output fit's onset, per click.
+
+With a cable (hand steps; this laptop had none):
+
+1. Connect the line output to a line input with a cable. On a USB or
+   PCIe interface, use its own output and input: one converter clock.
+2. In Sound settings, set both endpoints' Default Format to 48000 Hz.
+   Set the input's level so that a -20 dBFS click reads between -30 and
+   -6 dBFS in the input.
+3. Run, for the shared and the exclusive output against the same input:
+
+       audio_loopback_latency --device "OUT" --in "IN" --paths --clicks 200 --csv lat.csv
+
+   and for one duplex device, which needs both on one interface:
+
+       audio_loopback_latency --device "OUT" --in "IN" --duplex --clicks 200
+
+4. Read the median, p1 and p99 per path. Two fits of two clocks are
+   compared: the program prints each fit's drift. On one converter clock
+   the drifts agree within the fits' own noise.
+5. The median is the whole loop: output pipeline, converter, cable,
+   input pipeline. To split it, put a TTL from the trigger output into a
+   second input channel at each target (`tests/loopback/audio_loopback.c
+   --line --ttl-ch C --ttl-dtr PORT`): both edges are on the input's
+   converter clock, so the input's latency cancels and the output's is
+   left. The input's share is the loop's median minus that. Set the
+   input's `desc.offset_ns` to minus the input's share and the output's
+   `desc.onset_offset_ns` to the output's.
+6. For the first sound after a silence (rig_spec.md section 13), on each
+   output path:
+
+       audio_first_sound --device "OUT" --in "IN" --gaps 1,10,60
+
+   A path that gates on digital silence shows a later onset and a lower
+   level for the first sound than for the repeat.
+
+Acoustic, speaker to microphone: the same program with the Windows
+endpoint options, which set the volume and mute for the run and put them
+back after it:
+
+    audio_loopback_latency --unmute --volume 0.2 --in-unmute --distance-cm CM
+
+The air adds 2.9 us per millimeter (343 m/s).
+
+### Reference
+
+| Call | Thread | What it does |
+|---|---|---|
+| `yau_capture_open(c, d)`, `yau_capture_close(c)` | frame | An input alone: open, start, wait for the fit (0.5 s); stop and free the ring |
+| `yau_desc.capture`, `.capture_desc` | frame | DUPLEX: `yau_open()` opens one device that plays and records |
+| `yau_capture_update(c)` | frame | The device thread's fits into the frame thread's copy |
+| `yau_capture_acquire(c, r, &n, &first, &gap)`, `_release(c, r, n)` | reader r | The contiguous frames a reader has not released; hand them back |
+| `yau_capture_read(c, r, dst, max, &first)` | reader r | Copy and release, up to a gap |
+| `yau_capture_save(c, r, wavw, max)` | reader r | To a WAV file, with silence for gaps |
+| `yau_capture_time_of(c, F)`, `_time_at(c, f)`, `_frame_at(c, t)` | frame | Capture frame to ysp_rt ns and back, from the fit plus `offset_ns` |
+| `yau_capture_get_info(c, &in)`, `_describe(c, buf, cap)` | frame | Format, fit (source, drift, spread, points, ready), tier, counts |
+| `yau_capture_block(host, in, n, tick)` | device | The device side, for a CUSTOM input |
+| `yau_vkey_init`, `yau_vkey_feed` | any | Voice key |
+| `yau_edge_init`, `yau_edge_feed` | any | Click finder |
+| `yau_wavw_open`, `_write`, `_close` | one | WAV writer |
+
+| Record (`YRT_SRC_AUDIO`) | Fields |
+|---|---|
+| `YAU_EV_CAP_OPEN` (9) | i32[0] rate, [1] channels, [2] input format, [3] period, [4] buffer, [5] exclusive, [6] duplex, [7] backend, [8] position source |
+| `YAU_EV_CAP_FIT` (10) | as `YAU_EV_FIT`: t_ns t0, aux generation, i64[0] W0, f64[1] frames per second, f64[2] spread ns, u32[6] points, u32[7] source |
+| `YAU_EV_CAP_XRUN` (11) | i64[0] the frame where the count goes in, [1] frames lost (0: not known, the fit started over), [2] the first frame that may still carry a number from before the loss |
+| `YAU_EV_CAP_DROP` (12) | i64[0] the first frame dropped, [1] frames dropped |
+| `YRT_KIND_CLOCK` (`YRT_SRC_RT`), aux 0x41430000 + device index | once a second: u64[0] the reported position in capture frames, t_ns its stamp |
+
+### Design: the fit of an input
+
+An input has its own clock, as an output has. The header fits it the
+same way: one point per bucket (200 ms of reports, 50 ms of callbacks),
+its least late, a window of 1024 points, a refit each second, the slope
+from 5 s of points on. `yau__refit_pts()` is the output's refit, shared;
+only the points differ.
+
+- From callbacks the point is (the frame after the block, the callback's
+  entry). A block can reach the callback only after its last frame was
+  recorded, so the entry is late and never early, as an output's
+  callback is: the lower envelope fits it.
+- From reports the point is (a position, its stamp). WASAPI's capture
+  client has an `IAudioClock` too. Microsoft documents its position as
+  "the sample that is currently being recorded".
+
+What a capture report is on this laptop, from the scratch probe and
+`audio_capstats` (shared mode, 10 s to 3 min):
+
+| Quantity | Result |
+|---|---|
+| The position's step between blocks | 480 frames or 0: one engine pass each 10 ms |
+| The stamp's step | every other pass: each 20 ms, at a pass where the position also moved |
+| The stamp's age at the block | 10.2 to 21.3 ms |
+| Position minus the frame after the block | 0 or 224 frames: miniaudio hands a 480-frame packet over as 256 + 224 (its stack buffer holds 256 frames of 4 channels) |
+| Reports with a new stamp, against a least-squares line, 10 s | 79 us sd; +3.08 ppm |
+| All reports, against the same line | not a line: a report between two stamps pairs a new position with the old stamp, 10 ms off |
+
+So the header uses a report only when its stamp is new. Over 3 minutes
+idle and 3 under load (8 spinning threads), no new-stamp report was more
+than 1.2 ms off the final fit (p99 226 us idle, 149 us under load), with
+no stall.
+
+In exclusive mode (16 bits, 2 channels), the stamp moves with every
+block, 10.0 to 10.2 ms old, and `GetStreamLatency` claims the period (10
+ms at 480 frames, 3 ms at 144).
+
+### Design: halts and losses
+
+The first capture design looked for a loss as the position running ahead
+of the frames handed over (backlog q), the way a WASAPI output's
+position counts the silence of an exclusive-mode underrun. Measured, the
+microphone does not do that. Stalls injected into the capture block, 60,
+70 and 81 ms, against a 1056-frame (22 ms) buffer:
+
+| What | Result |
+|---|---|
+| q after the stall | 800, 672 and 992 frames, back to a period's split within 3 blocks |
+| The new-stamp reports after it | 47.9 to 48.1 ms late against the line before it, for good |
+
+So the position stood for 48 ms while nothing was recorded, and the
+frames on either side of that are 48 ms further apart than their numbers
+say. In exclusive mode the position does count the lost frames: each 60
+ms stall raised the backlog by 2400 frames for good. That is the output's HALT, seen from the input. The first build
+without a rule for it set every later report aside (more than half a
+period off the fit), the fit stopped at 8 or 9 points, and the capture
+times were off by 0.35 to 3.7 s at the end of 40 s runs with stalls of
+60 to 300 ms every 3 s.
+
+The rules, in order of what they see:
+
+- Three new-stamp reports in a row late by more than half a period or 5
+  ms are a halt of the least delay but the first report's. The capture
+  frames jump by it (a LOST gap) and the position is counted on by it.
+  The first report can be the halt half over: after each 60 ms stall it
+  was 38 ms late and the next ones 48, and a rule of two reports counted
+  each stall as two halts (1828 and 480 frames). None was more than 1.2
+  ms late without a stall here, against the 5 ms threshold.
+- q at least a period over its floor in every block for 200 ms is a loss
+  of the excess in whole periods: a device whose position counts what it
+  could not deliver. Not seen here; the scripted input checks it.
+- Without reports, blocks later than the fit by more than half a period
+  in every block for 200 ms are a loss of the least of those delays. A
+  backlog drains in a few blocks; a halt keeps every later block late.
+- A device that flags a gap in its tick restarts the fit.
+
+After every counted loss the fit starts over. A first build kept its
+points and shifted the numbering instead; with a stall every 3 s, counts
+off by up to 20 frames left steps in the window, and the fitted slope
+came out at +68 ppm (+9 to +68 over six runs) against the device's +4.6.
+The frames handed over between a loss and its finding keep their old
+numbers. The record says from which frame: from the halt rule, three
+stamps (40 to 60 ms); from the others, 200 ms.
+
+### Design: the ring
+
+One producer (the device thread), one or two readers, an index per
+reader on its own cache line, acquire loads and release stores only. The
+device writes a block only into slots that every reader has released;
+when the ring is full it drops the new frames, not the old ones. Two
+other designs were not taken:
+
+- Overwrite the oldest and let a reader find out: a reader can copy a
+  slot while the device writes it. Telling that from the index after the
+  copy needs fences around plain memory accesses, which C99 does not
+  have and ThreadSanitizer reports as races.
+- A ring per reader: a second copy of every block on the device thread.
+
+A dropped run is a gap: its entry (the ring position where writing
+resumed, the frames missing, the kind) goes into a 64-entry queue before
+the write index passes it, so a reader that sees the frames after it sees
+the gap. The capture frame numbers count the missing frames, so the fit,
+which is on device frames, is not touched by a drop, and a saved file
+keeps its timeline with silence. A gap that finds the gap queue full
+waits and grows; nothing is overwritten.
+
+Cost of `yau_capture_block` per block (conversion, ring, fit), MinGW gcc
+-O2, from block entry to its end: shared mode (4 channels, float, 224 or
+256 frames) 1.5 us mean, 8.1 us p99 idle; 2.2 us mean, 11.4 us p99 under
+load. In exclusive mode the measured span holds `GetPosition()`: 30 us
+mean, 61 us p99 at 480 frames.
+
+### Design: duplex
+
+`yau_desc.capture` opens one miniaudio device of type duplex. On WASAPI
+miniaudio runs both clients on one thread: it reads a capture packet
+(waiting on the capture event), calls the data callback with the input
+and an output block of the same size, then writes the output block
+(waiting for room). The header's callback hands the input to the capture
+handle, then renders. So the input paces the device thread, and the
+output's queue gate (QUEUE), which waits on the output's event, is off:
+`caps.queue` is 0. Each side keeps its own fit from its own client's
+reports. On the laptop, the speakers (Realtek) and the microphones (SST)
+are two endpoints.
+
+### Design: the detectors
+
+Both detectors run on frames and frame numbers, not times, so they are
+deterministic: the same samples in any blocks give the same events
+(checked with blocks of 1, 7, 256, 480 and 4096 frames). Times come after,
+from the input's fit, at the interpolated frame.
+
+The voice key's RMS is a running sum of squares in double over a ring of
+the window's squares, summed again each time the ring wraps, so it does
+not pick up rounding over hours. The onset is the frame where the RMS
+crosses on_db, interpolated between the two frames around it. That
+frame is late against the sound's true start by the time the RMS needs to
+reach the level, which depends on the sound's rise and level. It is the
+same rule as a hardware voice key with a threshold, and a fixed rule:
+an analysis can model it. PTB's SimpleVoiceTriggerDemo takes the first
+sample over a threshold, without RMS or hysteresis; it fires on a click.
+
+The click finder has no window: the first frame over the level after
+one under it, interpolated, then a dead time. On a ramp through the
+level it returns the exact crossing (checked to 1e-6 frames).
+
+### Measurements
+
+Tool: `examples/audio/capstats.c` (`audio_capstats`), the input alone
+unless the row says duplex. The main thread is reader 0 and reads every
+10 ms. "Load" is 8 threads spinning at normal priority. "Lateness" is
+each block's entry minus the final fit's time for the frame after it.
+"Residual" is each new-stamp report's stamp minus the final fit's time
+for its position. "Cost" is yau_capture_block from the block's entry to
+its end, `GetPosition()` included. The guard's load is the CPU load when
+the run started.
+
+| Run | Blocks | Interval p50 / p99 / max ms | Lateness min / p50 / p99 / max ms | Residual p1 / p50 / p99 / max us | Fit spread us, drift ppm | Cost mean / p99 us | Losses |
+|---|---|---|---|---|---|---|---|
+| shared, idle, 180 s (load 5 %) | 36134 | 0.19 / 10.19 / 12.4 | 10.16 / 14.83 / 15.24 / 17.5 | -46 / 76 / 226 / 1180 | 33.6, +4.89 | 1.5 / 8.1 | 0 |
+| shared, load, 180 s (3 %) | 36176 | 0.54 / 10.14 / 11.0 | 10.16 / 14.83 / 15.20 / 16.1 | -66 / 34 / 149 / 862 | 69.6, +4.38 | 2.2 / 11.4 | 0 |
+| shared, idle, 120 s (10 %) | 24182 | 0.04 / 10.18 / 11.0 | 9.97 / 14.64 / 15.01 / 15.8 | -59 / 69 / 205 / 1052 | 41.4, +4.61 | | 0 |
+| shared, period 96 asked, 30 s (0 %) | 15408 | 2.00 / 2.16 / 3.4 | 2.82 / 3.01 / 3.22 / 6.5 | -58 / 873 / 962 / 1514 | 171.9, +6.58 | 0.9 p50 / 6.7 | 0 |
+| exclusive, 480 frames, 30 s (0 %) | 3104 | 10.00 / 10.20 / 10.6 | 9.96 / 10.16 / 10.29 / 10.8 | -42 / 109 / 231 / 707 | 40.3, +5.06 | 30 / 61 | 0 |
+| exclusive, 480 frames, load, 30 s (4 %) | 3085 | 10.00 / 10.13 / 10.7 | 10.00 / 10.10 / 10.32 / 10.8 | -11 / 37 / 244 / 732 | 14.5, +4.90 | 38 / 73 | 0 |
+| exclusive, 144 frames, 30 s (6 %) | 10275 | 3.07 / 3.96 / 5.3 | 3.05 / 3.84 / 4.27 / 5.6 | -15 / 200 / 934 / 1543 | 36.2, +5.20 | 37 p50 / 68 | 0 |
+| duplex with the speakers, shared, 60 s (17 %) | 12174 | 0.11 / 10.18 / 10.6 | 20.82 / 25.48 / 25.86 / 26.5 | -75 / 104 / 187 / 566 | 52.6, +4.45 | 1.1 p50 / 9.4 | 0 |
+
+- Shared mode: miniaudio hands each 480-frame packet over as 256 + 224
+  frames (its 4096-byte stack buffer holds 256 frames of 4 float
+  channels), so the intervals are 0.01 to 0.2 ms and 10 ms. The backlog
+  (position minus the frame after the block) was 0 or 224 frames in every
+  idle and load row.
+- A 96-frame period, asked for in shared mode, was granted (a 210-frame
+  buffer): blocks every 2 ms. Its reports scatter: new stamps every 4 ms,
+  0.6 ms either side of a line (scratch analysis of the run's blocks),
+  and the fit drifts +6.6 ppm against +4.4 to +5.2 in every 480-frame row.
+  An earlier build that set aside reports more than half a period (1 ms)
+  off the fit set aside 4987 of 7652 and fitted -22 ppm; hence the 5 ms
+  floor.
+- Exclusive mode gives 16 bits on 2 channels, a stamp with every block,
+  and `GetStreamLatency` claims the period (10 ms at 480 frames, 3 ms at
+  144). `GetPosition()` costs about 25 us there, against about 1 us in
+  shared mode.
+- Duplex: the output (Realtek speakers) and the input (SST microphones)
+  are two endpoints; their fits gave +4.67 and +4.45 ppm in the same 60
+  s. The output ran with no gate (`caps.queue` 0) and a lead of 33.6 ms,
+  0 underruns. A block reaches the capture 20.8 ms or more after the
+  input fit's time for its last frame, 10.6 ms more than without duplex:
+  miniaudio's loop reads the input, then waits to write the output.
+- Drift: the input and output fits of every run agree within the fits'
+  own run-to-run spread (+4.4 to +5.2 ppm in runs of 30 s and more);
+  whether the two endpoints share a crystal is not known from that.
+
+Stalls injected into the capture block (`--stall-at 3 --stall MS
+--stall-every 3`, 40 s, 13 stalls a run, shared mode):
+
+| Stall | Losses found | Count per stall, frames (ms) |
+|---|---|---|
+| 10 ms | 0 | none lost |
+| 20 ms | 13 of 13 | 383 to 392 (8.0 to 8.2) |
+| 30 ms (*) | 13 of 13 | 864 to 906 (18.0 to 18.9) |
+| 40 ms (*) | 13 of 13 | 1341 to 1349 (27.9 to 28.1) |
+| 60 ms | 13 of 13 | 2303 to 2349 (48.0 to 48.9) |
+| 150 ms | 13 of 13 | 6623 to 6667 (138.0 to 138.9) |
+| 300 ms (*) | 13 of 13 | 13356 to 13833 (278 to 288) |
+| 60 ms, exclusive (30 s) | 10 of 10 | 2400 each (50.0), by the backlog rule |
+
+Each stall lost its length less about 12 ms; the input keeps about 12 ms
+of slack, against a 22 ms buffer. One record per stall, no record for
+10 ms. The final fit had no slope in these runs (a stall every 3 s
+restarts it before 5 s of points), so its drift reads +0.00.
+
+(*) The 30, 40 and 300 ms rows ran between 00:59 and 01:12 on 2026-10-13,
+when another worker ran Firefox outside the measurement guard. They
+count frames that the device lost during an injected stall, which the
+stall's length sets; the 20, 60 and 150 ms rows of the same build in
+that window agreed with the later undisturbed runs within 30 frames
+(378 to 419, 2299 to 2342, 6620 to 6628 frames). Every other row of this
+chapter ran outside that window, or ran again after it (exclusive, 144
+frames: the same within the runs' spread).
+
+Acoustic, speaker to microphone, through the air of one laptop chassis
+(the distance between the speakers and the microphone array was not
+measured). The output endpoint was unmuted at volume 0.40 for the run
+and put back (muted, 0) after it; the input at 1.0 as found.
+`audio_loopback_latency --unmute --volume 0.4 --clicks 10 --every-ms
+500 --db -6 --burst-ms 20`:
+
+| Output | Input | Found | Latency min / p50 / max ms, sd |
+|---|---|---|---|
+| shared | exclusive | 10 of 10 | 36.34 / 36.64 / 36.90, 0.18 |
+| shared | shared | 0 of 10 | none: the input's peak during the bursts was -75 dBFS, under its -88 dBFS floor plus 25 dB |
+
+The shared input does not pass the speakers' sound: its peak in the run
+was the same as in silence. The shared endpoint's own processing (the
+SST microphone array's effects, which give the -88 dBFS floor against
+-70 in exclusive mode) removes it; which effect does was not checked.
+So on this laptop an acoustic loop needs the exclusive input. The 36.6
+ms is the whole loop: the output's queue and pipeline, the air (a few
+centimeters: well under 1 ms), and the input's pipeline. It is not
+split into output and input: no TTL into an input. Earlier attempts
+with 12-frame clicks at -12 dBFS and volume 0.15 found no edge on any
+path (input peaks under the edge level). Not run: the first sound after
+a silence through the air (the run at volume 0.15 found no sound on the
+shared input), exclusive output (its own underruns on this driver), and
+duplex (shared both ways).
+
+### Tests and mutations
+
+`tests/adapt/audio_test_capture.h`, included by `audio_test.c`, drives
+`yau_capture` through a scripted input on the virtual clock: device frame
+w is recorded at T0 + w * kd at a set drift, a block is handed over Lin
+frames after its last one, late by a seeded exponential, with a report
+whose position moves every block and whose stamp changes every other
+block, as measured. Every sample is a function of its device frame, so a
+reader checks the frame of each one.
+
+| Case | What it checks |
+|---|---|
+| Open | refusals (rate, channel count, resolution, a ring under 4 periods, readers), s16 widened exactly, `offset_ns` in every time, describe |
+| Fit | reports and callbacks at -43, +100 and -100 ppm, 12 s: drift within 0.4 ppm (one seed, the output's bound), every frame of the last second within 1.9 us of its true time (callbacks: plus the constant Lin), `time_at` and `frame_at` against `time_of` |
+| Overflow | a 0.1 s ring, two readers, nobody reads: 21 blocks dropped and counted, one DROP record, both readers resume on the right frame number, a read across the wrap stops at a gap |
+| Losses | a stall the device rides out: no record. A loss the position counts: 2880 frames counted exactly, frames after it numbered right, times within 20 us. Without reports: counted 2881 of 2880, times within 1 us after. A 48 ms halt: counted 2308 of 2304 (the reports' own lateness), found 40 ms of frames later, times within 1.3 us after |
+| Voice key | refusals; two speech-like words in -60 dBFS noise: onsets 6.4 and 16.0 ms into 10 and 25 ms attacks, equal to a brute-force reference to 1e-6 frames; the same events in blocks of 1, 7, 256, 480, 4096 frames; noise 10 dB under: nothing; a 2 ms click: rejected; a dip under on_db but over off_db for longer than hold_ns: no end; a frame gap: starts over; events past the caller's array counted |
+| Edge | crossings at 1000.4 and 4999.3333 frames exactly; dead time; polarity; a held level is one edge |
+| On the clock | four words through the scripted input at +61 ppm: each onset time equal to the true start plus the detector's delay within 2.2 us |
+| WAV writer | float, 16 and 24 bits, 1, 2 and 4 channels, read back by the parser to the bit; rounding and clipping; the RF64 header past 4 GB; a capture saved across a gap has silence there |
+| Threads | the device on a real thread, reader 1 on another, reader 0 here with stalls: about 45 % of the frames dropped, every sample read on its frame, read + dropped = made |
+
+ThreadSanitizer (gcc 11.4, WSL2): 0 reports in 3 runs. With the device's
+write-index store made plain: 3 reports per run; with reader 0's index
+store made plain: 5 per run (3 runs each). `tests/mutate/audio.toml` has
+22 capture mutants (cap-01 to cap-22; the rest of the list's anchors
+checked again): 45 of 45 killed. The examples' `--sim` runs (CI) check
+the loop's latency within 1 ms (measured 9.98 ms against 10.00), a 20 ms
+gate in the sink (A - B 19.82 ms, 1.31 dB lower), and the voice RT of a
+simulated participant within 8 ms (measured 3.4 ms over the loop).
+
+Builds: MinGW-w64 gcc 16.1 (C11 test and examples with -Werror, the
+compile check as C11 and C++17, `cmake --preset mingw` and ctest: 76 of
+76), MSVC 19.44 (`msvc-full` and ctest: 88 of 88), gcc 11.4 in WSL2 (C99
+-O3, C11 with ASan and UBSan, C11 with ThreadSanitizer). Not built here:
+clang.
+
+With the Web Audio path (v0.4.1) merged in: emcc 6.0.12 builds the core
+test (capture cases included; it passes under node) and the header with
+miniaudio's Web Audio backend, with and without the AudioWorklet
+configuration, `-Werror`. That build found a WASAPI-only capture helper
+unused off Windows (`-Wunused-function`); it is now compiled on WASAPI
+builds only. In a browser an input has `YAU_TIER_WEB` (`test_capture_web_tier`,
+mutant `cap-23`). No page has opened an input: web capture never ran
+([web.md](web.md), "Not measured").
+
+### Not measured (capture)
+
+- Capture times against a reference: no line-in cable and no TTL into an
+  input, so every capture time is tier 3 and the input's share of a
+  loop's latency is not known. The hand steps are in "How to measure the
+  output-to-input latency".
+- The first sound after a silence (rig_spec.md 13), by cable or through
+  the air.
+- Exclusive output in a loop; duplex in a loop (its input is shared, which
+  does not hear the speakers here).
+- Any capture backend but WASAPI; any input but the SST microphone array.
+- A loss with a device that flags it (the YAU_TICK_XRUN path) on hardware.
+
 ## Not measured
 
-- Latency to sound. No loopback cable; `--line` is built, not run. It
+- Latency to sound by cable (an acoustic loop is in "Capture"). No
+  loopback cable; `--line` is built, not run. It
   reports the measured latency minus the OS's claim when it does.
   `--line --stream` (stream placement and latency) is built, not run.
 - CoreAudio, ALSA, PulseAudio: compiled, never run. PulseAudio

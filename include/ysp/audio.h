@@ -1,4 +1,4 @@
-/* ysp/audio.h - v0.4.1 - public domain single-header audio library
+/* ysp/audio.h - v0.5.0 - public domain single-header audio library
  *
  *   Sound at a time on the ysp/rt.h clock. A buffer is played with
  *   yau_play_at(buf, t); the header plans its first sample on the device
@@ -12,7 +12,10 @@
  *   WAV files (RIFF, RF64, BW64) streamed or loaded, tones, noise and clicks
  *   at the project rate, a strict open that refuses any format or rate
  *   conversion, and the device and source interfaces of the rig's Audio
- *   device and Audio source extensions.
+ *   device and Audio source extensions. v0.5.0: CAPTURE, an input on the
+ *   same clock, each captured frame mapped to ysp_rt time by a fit of the
+ *   input's own clock, alone or as one duplex device; a voice key and a
+ *   click finder (DETECTORS); a WAV writer (WAV OUT).
  *
  *   REQUIRES ysp/rt.h beside it (the clock, the event ring, the thread
  *   elevation, the instrumentation macros), and miniaudio 0.11.25 or a
@@ -526,6 +529,187 @@
  *   while a sound from the arena is playing or waiting.
  *
  *   ---------------------------------------------------------------------
+ *   CAPTURE (v0.5.0)
+ *   ---------------------------------------------------------------------
+ *   A yau_capture records an input on the same clock as the output: every
+ *   frame it captures has a capture frame number and a ysp_rt time from a
+ *   fit of the input's own clock, made the way the output's is.
+ *
+ *       static yau_capture mic;                       // zeroed; about 40 KB
+ *       yau_capture_desc cd = { 0 };                  // the OS default input
+ *       if (!yau_capture_open(&mic, &cd)) die(yau_capture_error(&mic));
+ *       ...                                             // each frame:
+ *       int64_t n, first;
+ *       const float* x;
+ *       while ((x = yau_capture_acquire(&mic, 0, &n, &first, NULL)) != NULL) {
+ *           use(x, n, first);                         // interleaved float
+ *           yau_capture_release(&mic, 0, n);
+ *       }
+ *       int64_t t = yau_capture_time_of(&mic, first); // frame -> ysp_rt ns
+ *       ...
+ *       yau_capture_close(&mic);
+ *
+ *   OPEN. The same STRICT OPEN as the output: no format, rate or channel
+ *   count is asked for, nothing is converted, and the open fails unless
+ *   the input runs at desc.format.rate (default 48000) with at least the
+ *   resolution of desc.format.sample (float counts as 24 bits: a 16-bit
+ *   input needs YAU_S16). The ring takes every channel of the input (or
+ *   exactly desc.format.channels, when given). On Windows a microphone
+ *   array may have 4 channels; the rate is the endpoint's Default Format
+ *   under Sound > Recording. open() starts the input and waits until the
+ *   fit spans 0.5 s, as yau_open() does. Backends: WASAPI reads the capture
+ *   client's IAudioClock (shared and exclusive); every other backend fits
+ *   callback times; the null backend's input is silence on a timer, tier
+ *   SIM.
+ *
+ *   CAPTURE FRAMES. Frame F is the F-th frame the input recorded since
+ *   open. Frames that never reach a reader still count: frames the ring had
+ *   no room for, and frames the device lost when the count is known (LOSS).
+ *   So frame F keeps its place on the device's clock however the delivery
+ *   went, as a stream's sample s keeps frame origin + s.
+ *
+ *   TIME. yau_capture_time_of(F) is t0 + (F - W0) * k + desc.offset_ns
+ *   from THE FIT, with the same buckets, window and refit as the output's.
+ *   The points are position reports where the backend has them (WASAPI:
+ *   the capture client's IAudioClock, fitted by least squares), else the
+ *   callback times (the frame after the block, at the callback's entry,
+ *   fitted by the lower envelope). A report is used only when its stamp is
+ *   new: measured on the test laptop's microphone, WASAPI's capture clock
+ *   moves the position every 10 ms but the stamp every 20 ms, and only
+ *   the pair read when the stamp changes lies on the line. Once the fit is
+ *   ready, a report more than half a period off it is set aside and
+ *   counted. Neither source is the sound at the input: a report's time is
+ *   the OS's for the position ("the sample being recorded", Microsoft), a
+ *   callback's comes a pipeline later. Measured here, the frame after a
+ *   block reached the callback 10 ms or more after the reports' time for
+ *   it (20.8 ms in duplex). A line-in test (audio_loopback_latency with a TTL into the input,
+ *   or tests/loopback/audio_loopback.c --line) measures what desc.offset_ns
+ *   must be. yau_capture_time_at(double) takes a detector's fractional
+ *   frame; yau_capture_frame_at(t) is the inverse. The times come from the
+ *   frame thread's copy of the fit, which yau_capture_update() refreshes
+ *   (reader 0's acquire calls it).
+ *
+ *   TIERS. YAU_TIER_SIM for the null input, YAU_TIER_WEB in a browser
+ *   (BACKENDS, WEB; never run), YAU_TIER_3 for every other hardware
+ *   path in v0.5.0: no capture path has had a loopback check of its times
+ *   against a reference on the test laptop (no cable). The tier is in
+ *   yau_capture_info and the describe line; it is the tier of every time
+ *   the handle gives.
+ *
+ *   READING. A ring of desc.frames (default 2 s) float frames, from the
+ *   device thread to one or two readers (desc.readers): reader 0 is the
+ *   frame thread, reader 1 any one other thread (a pump that saves to
+ *   disk). Single producer, a reader index per reader, acquire and
+ *   release only: no lock, no allocation, no I/O and no wait on the device
+ *   thread. acquire gives the contiguous frames up to the ring's wrap or the
+ *   next gap; read copies; save writes a WAV file. The device never
+ *   overwrites what the slowest reader has not released: when the ring is
+ *   full the new frames are dropped and counted, never the old ones. A
+ *   reader that is not read empties nothing: leave readers at 1 unless
+ *   reader 1 reads.
+ *
+ *   GAPS. Where frames are missing, acquire skips to the next frame that
+ *   is there, *first_frame jumps by the frames missing, and *gap says why:
+ *   YAU_GAP_DROP (the ring was full), YAU_GAP_LOST (the device lost them).
+ *   save writes silence for them, so a file's sample s is capture frame
+ *   first + s. Each run of drops is one YAU_EV_CAP_DROP record and counts
+ *   in yau_capture_info.dropped and .drops.
+ *
+ *   LOSS. A device that is not read in time loses frames (an overrun);
+ *   miniaudio does not pass WASAPI's discontinuity flag on, so the header
+ *   finds each loss itself, three ways, and counts it:
+ *     HALT (reports): the position stands while nothing is recorded, so
+ *     every later report is late against the fit by the time lost.
+ *     Measured on the test laptop's microphone in shared mode, every stall
+ *     of the device thread lost the stall less about 12 ms (20 ms: 8 ms;
+ *     60 ms: 48 ms; 300 ms: 288 ms). Three late reports in a row (more
+ *     than half a period or 5 ms off) are a halt of the least delay but
+ *     the first report's, which can be the halt half over.
+ *     BACKLOG (reports): the position counts frames the device could not
+ *     deliver, so q = the position minus the frame after the block stays
+ *     up by them. q at least a period over its floor in every block for
+ *     200 ms is a loss of the excess in whole periods. Measured in
+ *     exclusive mode: each 60 ms stall lost 2400 frames this way.
+ *     LATE BLOCKS (no reports): blocks later than the fit says by more
+ *     than half a period or 5 ms, in every block for 200 ms, are a loss of
+ *     the least of those delays. A backlog drains in a few blocks; a halt
+ *     keeps every later block late.
+ *   The capture frames jump by the count (a LOST gap), so a later frame
+ *   keeps its place on the device clock within the count's error (tens of
+ *   frames measured), and the fit starts over from the frames after the
+ *   loss (0.5 s to ready, 5 s to a fitted slope). The frames delivered
+ *   between the loss and its finding (40 ms for a halt, 200 ms for the
+ *   others) keep numbers from before it; the YAU_EV_CAP_XRUN record gives
+ *   the first of them. A device that flags an underrun in its tick
+ *   (YAU_TICK_XRUN) restarts the fit with no count. Every loss counts in
+ *   .xruns; counts in .lost.
+ *
+ *   DUPLEX. yau_desc.capture (a zeroed yau_capture) with
+ *   yau_desc.capture_desc makes yau_open() open one miniaudio duplex
+ *   device: the input's blocks go to the capture handle on the output's
+ *   device thread, before the output renders. The capture is open when
+ *   yau_open() returns and closes with yau_close(); its own close does
+ *   nothing. Each side keeps its own fit from its own reports or callbacks,
+ *   so a converter that clocks both shows one drift twice. On WASAPI the
+ *   input paces the device thread (miniaudio reads the input, then writes
+ *   the output), so the output has no queue gate (desc.queue does not
+ *   apply; caps.queue is 0). Not with YAU_BACKEND_CUSTOM: a custom device
+ *   records through its own yau_capture (DEVICE).
+ *
+ *   RECORDS (desc.ring): YAU_EV_CAP_OPEN, _FIT (as YAU_EV_FIT, in capture
+ *   frames), _XRUN, _DROP (their fields at the YAU_EV_CAP_* definitions),
+ *   and once a second the raw report, YRT_KIND_CLOCK with aux 0x41430000 +
+ *   device_index, u.u64[0] the capture frame.
+ *
+ *   ---------------------------------------------------------------------
+ *   DETECTORS (v0.5.0)
+ *   ---------------------------------------------------------------------
+ *   Pure functions on float frames and their capture frame numbers: no
+ *   handle, no allocation, deterministic (the same events from the same
+ *   samples whatever the block sizes), any thread. A frame number that does
+ *   not follow the last block starts a detector over.
+ *
+ *   yau_vkey, a voice key: the RMS over window_ns (default 5 ms) of one
+ *   channel. The level crossing on_db starts a candidate; it is a sound if
+ *   the level stays over off_db (default on_db - 6 dB) for min_ns (default
+ *   30 ms), and its YAU_VKEY_ON event comes then, with the frame where the
+ *   RMS crossed on_db, interpolated between two frames. A sound ends with
+ *   YAU_VKEY_OFF when the level stays under off_db for hold_ns (default
+ *   100 ms), at the frame where it went under. The onset is late against
+ *   the true start by the time the RMS needs to reach on_db: measured on
+ *   synthetic speech (a 120 Hz harmonic complex) in -60 dBFS noise, 6.4 ms
+ *   for a 10 ms attack to -28.5 dBFS and 16 ms for a 25 ms attack to -34.5
+ *   dBFS, at on_db -40. That delay belongs to the detector, not the clock:
+ *   through the scripted input with drift and jitter, onset times were the
+ *   true start plus that delay within 2.2 us.
+ *
+ *   yau_edge, a click finder for loopback tests: the first frame where |x|
+ *   (or x, or -x: polarity) reaches level_db after being under it, the
+ *   crossing interpolated between the two frames, then nothing for dead_ns
+ *   (default 50 ms).
+ *
+ *       yau_vkey vk;                                  // about 39 KB
+ *       yau_vkey_desc vd = { 0 };
+ *       vd.on_db = -40;
+ *       yau_vkey_init(&vk, &vd, 48000);
+ *       yau_vkey_event ev[4];
+ *       int m = yau_vkey_feed(&vk, x, n, channels, first, ev, 4);
+ *       if (m > 0 && ev[0].kind == YAU_VKEY_ON)
+ *           rt = yau_capture_time_at(&mic, ev[0].frame) - beep.onset;
+ *
+ *   ---------------------------------------------------------------------
+ *   WAV OUT (v0.5.0)
+ *   ---------------------------------------------------------------------
+ *   yau_wavw writes float frames to a WAV file: 32-bit float (default),
+ *   16-bit or 24-bit PCM, rounded to nearest with no dither and clipped at
+ *   full scale (counted in .clipped). The header holds a JUNK chunk where
+ *   ds64 goes, so close() makes a file past 4 GB RF64 in place. The parser
+ *   (WAV FILES) reads every form it writes back to the bit. The file has no
+ *   stdio buffer; writes go to the OS 16 KB at a time. One thread; never
+ *   the device thread: yau_capture_save() on a reader's thread, or the frame
+ *   thread between trials.
+ *
+ *   ---------------------------------------------------------------------
  *   BACKENDS
  *   ---------------------------------------------------------------------
  *   YAU_BACKEND_WASAPI (Windows; AUTO there)
@@ -592,8 +776,12 @@
  *     the browser's estimate: getOutputTimestamp() includes the browser's
  *     own figure for the output latency (outputLatency), which nothing here
  *     checked against sound. The describe line says the path, the reports,
- *     baseLatency and outputLatency, and block_moves. No browser runs
- *     capture or an exclusive device. Measured in docs/web.md, "Audio".
+ *     baseLatency and outputLatency, and block_moves. No browser runs an
+ *     exclusive device. CAPTURE compiles on this backend, alone or DUPLEX,
+ *     tier WEB with callback times only, but no browser has run it: on the
+ *     AudioWorklet path its callback times would read 0 (yrt_now_ns()
+ *     there), so it is not usable there as it is. Measured in
+ *     docs/web.md, "Audio".
  *   YAU_BACKEND_NULL
  *     miniaudio's null device: a timer, no hardware. Tier SIM.
  *   YAU_BACKEND_CUSTOM
@@ -642,7 +830,11 @@
  *   the header's code allocates nothing. miniaudio allocates its own
  *   objects inside open(), none afterwards. The callback, yau_play(),
  *   yau_update() and yau_result() allocate nothing and take no lock;
- *   the two queues are single-producer single-consumer rings.
+ *   the two queues are single-producer single-consumer rings. A capture's
+ *   ring is the one more allocation: open() takes desc.frames x channels
+ *   floats with malloc when desc.memory is NULL, and close() frees it. The
+ *   capture block (yau_capture_block) allocates nothing, takes no lock and
+ *   does no I/O; it converts and copies the block into the ring.
  *   One thread calls the API for a handle (the frame thread). A stream's
  *   producer calls (acquire, commit, write, end, reset, and yau_wav_feed,
  *   seek, step, on_msg) come from one other thread at a time, or the frame
@@ -662,7 +854,10 @@
  *   return codes and write nothing: they run on another thread, and a
  *   write into the handle would race with the frame thread's. yau_wav has
  *   a message of its own (yau_wav_error), which open and yau_wav_feed
- *   write, and open's code in error_code. The callback writes nothing.
+ *   write, and open's code in error_code. The callback writes nothing. A
+ *   capture has its own message (yau_capture_error), which its frame-thread
+ *   calls write; reader 1's calls return codes only. A yau_wavw has its own
+ *   (yau_wavw_error).
  *
  *   ---------------------------------------------------------------------
  *   BUILDING
@@ -679,13 +874,29 @@
  *   any system header in the implementation file. Define YAU_API to
  *   change the linkage of every function.
  *   Hot paths carry ysp/rt.h's instrumentation macros: zones yau.render,
- *   yau.mix, yau.fit; a plot of the queue depth in frames.
+ *   yau.mix, yau.fit, yau.capture, yau.cap.fit; a plot of the queue depth in
+ *   frames.
  *
  *   LICENSE: public domain / MIT-0, see end of file.
  *
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.5.0 - CAPTURE: yau_capture, an input on the rig clock. Capture
+ *          frames that keep their place through drops and losses; a fit of
+ *          the input's clock by THE FIT's method (refit shared with the
+ *          output's), from WASAPI's capture IAudioClock where the stamp is
+ *          new, else from callback times; a ring to one or two readers
+ *          (acquire, release, read, save), drops counted; losses found from
+ *          the reports or from late blocks; records YAU_EV_CAP_OPEN, _FIT,
+ *          _XRUN, _DROP. DUPLEX: yau_desc.capture and .capture_desc open
+ *          one miniaudio duplex device. yau_device_open.capture and
+ *          .capture_host for the device interface. DETECTORS: yau_vkey (a
+ *          voice key) and yau_edge (a click finder). WAV OUT: yau_wavw.
+ *          Examples: audio_capstats, audio_loopback_latency,
+ *          audio_first_sound, audio_voice_rt. No change to the output.
+ *          Under Emscripten an input has YAU_TIER_WEB, as v0.4.1's output
+ *          (compiled with emcc, never run in a browser).
  *   v0.4.1 - YAU_BACKEND_WEB (BACKENDS, WEB): position reports from the
  *          AudioContext's getOutputTimestamp() on miniaudio's AudioWorklet
  *          and ScriptProcessorNode paths, the context at the project's
@@ -758,6 +969,25 @@
  *          positions, miniaudio's null device, the device and source
  *          interfaces, synthesis, the records, the parameter table.
  *
+ *   STATUS: v0.5.0, 2026-10-13, capture (docs/audio.md, "Capture"), on the
+ *   test laptop's SST microphone array through WASAPI, MinGW gcc 16.1: in
+ *   shared mode (float, 4 channels, 480-frame packets) 3 minutes idle and
+ *   3 under load: 0 losses, 0 drops, the fit's spread 34 and 70 us, every
+ *   new-stamp report within 1.2 ms of the final fit (p99 226 and 149 us),
+ *   1.5 and 2.2 us mean per block. Exclusive mode (16 bits, 2 channels)
+ *   at 480 and 144 frames: 0 losses in 30 s, spread 14 to 40 us. Duplex
+ *   with the speakers: both fits within 0.2 ppm, 0 underruns, the output
+ *   ungated (lead 33.6 ms). Injected stalls of the capture thread: 10 ms
+ *   lost nothing; 20 to 300 ms each lost the stall less about 12 ms, and
+ *   every one was found (halts in shared mode, the backlog in exclusive
+ *   mode), one record each. Acoustic, the laptop's speakers to its
+ *   microphones (distance not measured, one chassis): 36.6 ms p50, sd 0.18
+ *   ms, 10 bursts, shared output and exclusive input; the shared input
+ *   does not pass the speakers' sound. Every capture time is tier 3: no
+ *   input was checked against a reference (no cable, no TTL). The core
+ *   test's capture cases (scripted input, virtual clock) pass on MinGW,
+ *   MSVC and gcc 11.4 (C99 -O3, ASan, UBSan, ThreadSanitizer: 0 reports in
+ *   3 runs); 22 capture mutants killed, 45 of 45 in the list.
  *   STATUS: v0.4.1, 2026-10-13 (WEB; docs/web.md, "Audio"): emsdk 6.0.12,
  *   Chrome 154 headed on the laptop below, examples/web/av_sync.c, 3 runs
  *   of 20 flash-and-click trials a path: sound minus light (both the
@@ -867,9 +1097,9 @@
 #define YSP_AUDIO_H_INCLUDED
 
 #define YAU_VERSION_MAJOR 0
-#define YAU_VERSION_MINOR 4
-#define YAU_VERSION_PATCH 1
-#define YAU_VERSION_STRING "0.4.1"
+#define YAU_VERSION_MINOR 5
+#define YAU_VERSION_PATCH 0
+#define YAU_VERSION_STRING "0.5.0"
 
 #include "ysp/rt.h"
 
@@ -974,6 +1204,8 @@ extern "C" {
 
 typedef int64_t yau_id;
 typedef struct yau_stream yau_stream;
+typedef struct yau_capture yau_capture;
+typedef struct yau_capture_desc yau_capture_desc;
 
 typedef enum yau_sample {
     YAU_F32 = 0, YAU_S16 = 1, YAU_S24 = 2
@@ -1075,6 +1307,11 @@ typedef struct yau_device_open {
     bool        exclusive;
     const char* device;         /* desc.device                               */
     int32_t     queue;          /* desc.queue                                */
+    int32_t     capture;        /* v0.5.0: 1 = an input, whose start() gets
+                                 * yau_capture_block; 2 = DUPLEX, an output
+                                 * that also hands its input to
+                                 * yau_capture_block(capture_host, ...)     */
+    void*       capture_host;
 } yau_device_open;
 
 typedef struct yau_device_caps {
@@ -1142,6 +1379,9 @@ typedef struct yau_desc {
     int64_t              onset_offset_ns;  /* from a line-in test; 0         */
     void*                arena;         /* synthesis memory; NULL = malloc   */
     size_t               arena_bytes;   /* 0 = 8 MB                          */
+    yau_capture*         capture;       /* v0.5.0: DUPLEX, with capture_desc:
+                                         * one device plays and records     */
+    const yau_capture_desc* capture_desc;
     const yau_source*  source;
     void*                source_ctx;
     const yau_device*  dev;           /* YAU_BACKEND_CUSTOM              */
@@ -1340,6 +1580,151 @@ typedef struct yau_wav {
 
 typedef struct yau_wav_msg { int64_t seek; } yau_wav_msg;   /* -1 = wake only */
 
+/* --- capture (CAPTURE, v0.5.0) ---------------------------------------------- */
+
+#define YAU_CAP_READERS 2       /* readers of one capture ring               */
+
+/* Ring record kinds of a capture, under YRT_SRC_AUDIO. */
+#define YAU_EV_CAP_OPEN 9u      /* i32[0] rate, [1] channels, [2] input format
+                                 * (YAU_OUT_*), [3] period, [4] buffer, [5]
+                                 * exclusive, [6] duplex, [7] backend, [8]
+                                 * position source                            */
+#define YAU_EV_CAP_FIT  10u     /* as YAU_EV_FIT, in capture frames          */
+#define YAU_EV_CAP_XRUN 11u     /* the device lost frames: i64[0] the capture
+                                 * frame where the count goes in, [1] frames
+                                 * lost (0: not known, the fit starts over),
+                                 * [2] the first frame that may be numbered
+                                 * before the loss was found (LOSS)           */
+#define YAU_EV_CAP_DROP 12u     /* the ring had no room: i64[0] the first
+                                 * frame dropped, [1] frames dropped          */
+
+/* What a gap in the capture frames is (yau_capture_acquire's *gap). */
+#define YAU_GAP_DROP 1          /* a reader fell behind; the ring was full   */
+#define YAU_GAP_LOST 2          /* the device lost them (an overrun)         */
+
+struct yau_capture_desc {
+    yau_format        format;   /* rate: 0 = 48000, the device must run at it;
+                                 * channels: 0 = the device's; sample: the
+                                 * least resolution; map: checked when set  */
+    yau_backend       backend;  /* 0 = AUTO                                  */
+    const char*       device;   /* name part; NULL = the OS default input    */
+    bool              exclusive;
+    int32_t           period;   /* frames; 0 = 10 ms                         */
+    int64_t           frames;   /* ring capacity; 0 = 2 s                    */
+    float*            memory;   /* frames x channels floats; NULL = malloc   */
+    int32_t           readers;  /* 1 or 2 (YAU_CAP_READERS); 0 = 1           */
+    yrt_ring*         ring;     /* records; NULL = none                      */
+    uint32_t          device_index;  /* 0..7, in every record                */
+    int64_t           offset_ns;     /* added to every capture time; from a
+                                      * line-in test (CAPTURE, TIME)          */
+    const yau_device* dev;      /* YAU_BACKEND_CUSTOM                        */
+    void*             dev_ctx;
+};
+
+typedef struct yau_capture_info {
+    uint32_t rate;
+    uint16_t channels;
+    uint16_t in;                /* the device's sample format, YAU_OUT_*     */
+    int32_t  period, buffer;    /* frames                                    */
+    bool     exclusive;
+    bool     duplex;            /* opened by yau_open() with desc.capture    */
+    bool     fit_ready;
+    int32_t  pos_source;        /* YAU_POS_*                                 */
+    int32_t  tier;              /* of every capture time: YAU_TIER_3 or _SIM */
+    double   drift_ppm;         /* device rate against the ysp_rt clock      */
+    double   fit_spread_ns;
+    uint32_t fit_points;
+    uint32_t xruns;             /* device overruns seen                      */
+    uint32_t drops;             /* runs of frames the ring had no room for   */
+    uint32_t set_aside;         /* position reports kept out of the fit      */
+    int64_t  frames;            /* the next capture frame, gaps included     */
+    int64_t  dropped;           /* frames the ring had no room for           */
+    int64_t  lost;              /* frames the device lost, where known       */
+    int64_t  fill[YAU_CAP_READERS]; /* frames waiting for each reader        */
+    int64_t  os_latency_ns;     /* the OS's claim; -1 = none (CAPTURE)       */
+    int64_t  os_stream_latency_ns;
+    char     os_latency_src[32];
+    char     name[64];
+} yau_capture_info;
+
+/* --- detectors (DETECTORS, v0.5.0): pure, no handle, no allocation ------------ */
+
+#define YAU_VKEY_ON  1
+#define YAU_VKEY_OFF 2
+#define YAU__VKEY_WIN 9600      /* the longest RMS window, frames            */
+
+typedef struct yau_vkey_desc {
+    float    on_db;             /* required: RMS level, dBFS (< 0), at which a
+                                 * sound starts                              */
+    float    off_db;            /* RMS level under which it ends; 0 = on_db - 6 */
+    int64_t  window_ns;         /* RMS window; 0 = 5 ms                      */
+    int64_t  min_ns;            /* the level stays over off_db this long from
+                                 * the start, or it was no sound; 0 = 30 ms  */
+    int64_t  hold_ns;           /* under off_db this long ends it; 0 = 100 ms */
+    uint16_t channel;           /* the channel it listens to                 */
+} yau_vkey_desc;
+
+typedef struct yau_vkey_event {
+    int32_t kind;               /* YAU_VKEY_ON or YAU_VKEY_OFF               */
+    float   level_db;           /* ON: the highest RMS within min_ns; OFF: the
+                                 * highest of the sound                      */
+    double  frame;              /* capture frame of the crossing, interpolated
+                                 * between frames: yau_capture_time_at()     */
+} yau_vkey_event;
+
+/* A voice key: caller-allocated (about 39 KB: its window of squares). */
+typedef struct yau_vkey {
+    /* private */
+    double   on2_, off2_, sum_, prev_, peak_;
+    double   cand_;             /* the candidate's crossing frame            */
+    int64_t  win_, min_, hold_, next_, cand_i_, below_i_;
+    double   below_f_;
+    int32_t  state_, at_;
+    uint16_t ch_;
+    uint32_t rejected_;         /* candidates shorter than min_ns            */
+    uint32_t missed_;           /* events past the caller's cap              */
+    float    sq_[YAU__VKEY_WIN];
+} yau_vkey;
+
+typedef struct yau_edge_desc {
+    float    level_db;          /* required: |x| in dBFS (<= 0) that is an edge */
+    int32_t  polarity;          /* 0: either sign; 1: x >= level; -1: x <= -level */
+    int64_t  dead_ns;           /* no edge for this long after one; 0 = 50 ms */
+    uint16_t channel;
+} yau_edge_desc;
+
+typedef struct yau_edge {
+    /* private */
+    double   level_;
+    int64_t  dead_, next_, until_;
+    float    prev_;
+    int32_t  pol_, have_prev_;
+    uint16_t ch_;
+    uint32_t missed_;
+} yau_edge;
+
+/* --- WAV writer (CAPTURE, v0.5.0) ------------------------------------------- */
+
+typedef struct yau_wavw_desc {
+    const char* path;           /* required                                  */
+    uint32_t    rate;           /* required                                  */
+    uint16_t    channels;       /* required                                  */
+    uint16_t    format;         /* YAU_WAV_F32 (0), YAU_WAV_S16, YAU_WAV_S24 */
+} yau_wavw_desc;
+
+/* Caller-allocated and zeroed; about 17 KB. */
+typedef struct yau_wavw {
+    int64_t  frames;            /* written so far                            */
+    int64_t  clipped;           /* integer samples clipped to full scale     */
+    /* private */
+    void*    fh_;
+    uint32_t rate_;
+    uint16_t ch_, format_;
+    int32_t  open_, failed_;
+    char     error_[256];
+    unsigned char scratch_[YAU__WAV_SCRATCH];
+} yau_wavw;
+
 /* --- private state, in the handle ---------------------------------------- */
 
 #define YAU__CMDS      256
@@ -1488,6 +1873,82 @@ typedef struct yau_audio {
     uint64_t       backend_mem[YAU__BACKEND_WORDS];
 } yau_audio;
 
+#define YAU__CAP_GAPS 64       /* gaps in flight between the device and a reader */
+#define YAU__CAP_MSGS 64
+
+typedef struct yau__cgap {      /* the capture frames jump at ring position pos */
+    int64_t pos, frames;
+    int32_t kind, reserved_;
+} yau__cgap;
+
+typedef struct yau__cmsg {      /* device thread to the frame thread          */
+    int32_t  kind, reserved_;
+    yau__fit fit;
+    int64_t  a, b;
+} yau__cmsg;
+
+typedef struct yau__creader {   /* one reader's line                          */
+    int64_t  pos;               /* the next ring position it reads           */
+    int64_t  frame;             /* the capture frame of pos                  */
+    uint32_t gap_tail;
+    int32_t  on;
+    unsigned char pad_[40];
+} yau__creader;
+
+/* A capture handle. Caller-allocated and zeroed (about 40 KB: static, or
+ * allocated); every field is private. One cache line for each writer of an
+ * index: the device thread, each reader, the frame thread's message tail. */
+struct yau_capture {
+    /* --- device thread, published --- */
+    int64_t        wpos;        /* ring positions written                     */
+    int64_t        wframe;      /* the capture frame of wpos                  */
+    int64_t        dropped, lost;
+    uint32_t       gap_head, msg_head;
+    uint32_t       xruns, drops, set_aside;
+    uint32_t       gone;        /* the device went away                       */
+    unsigned char  pad0_[8];
+    yau__creader   rd[YAU_CAP_READERS];
+    /* --- frame thread --- */
+    uint32_t       msg_tail;
+    unsigned char  pad1_[60];
+    yau__cgap      gap[YAU__CAP_GAPS];
+    yau__cmsg      msg[YAU__CAP_MSGS];
+    int            open, started, duplex, mem_owned;
+    uint32_t       err_n;
+    char           error[512];
+    yau_capture_desc desc;
+    yau_device_caps dcaps;
+    const yau_device* dev;
+    void*          dev_ctx;
+    float*         mem;
+    int64_t        cap;
+    yau__fit       fit_ft;
+    /* --- device thread --- */
+    int64_t        p, f;        /* ring position and capture frame of the next block */
+    int64_t        last_entry, last_stamp, last_pos, last_clock_t, last_fit_t;
+    int64_t        gap_frames;  /* an open run of dropped frames             */
+    int64_t        gap_frame0;
+    int64_t        q_floor;     /* reports: the least backlog seen (LOSS)    */
+    int64_t        loss_since, loss_min, loss_f0;
+    int32_t        loss_run, late_run, gap_open, gap_kind;
+    double         late_min, halt_min;
+    int64_t        p_off;       /* frames halts left out of the position     */
+    int64_t        halt_f0, early_since;
+    int32_t        halt_run, early_run;
+    uint32_t       tid;
+    int            first_block;
+    yau__fit       fit;
+    int64_t        pt_w[YAU__FIT_PTS];
+    int64_t        pt_t[YAU__FIT_PTS];
+    int32_t        pt_head, pt_n;
+    int32_t        hull[YAU__FIT_PTS];
+    int            b_open;
+    int64_t        b_w0, b_t0, b_bw, b_bt;
+    double         b_best;
+    /* --- backend --- */
+    uint64_t       backend_mem[YAU__BACKEND_WORDS];
+};
+
 /* --- API ----------------------------------------------------------------- */
 
 /* YAU_VERSION_STRING of the implementation that was compiled. */
@@ -1633,6 +2094,78 @@ YAU_API yau_buf yau_wav_load(yau_audio* au, const yau_wav_desc* d);
  * and closed. */
 YAU_API int       yau_wav_probe(const yau_wav_desc* d, yau_wav_info* info, char* err, size_t cap);
 
+/* Capture (CAPTURE, v0.5.0). open, close, update, the times, get_info and
+ * describe: the frame thread, which is also reader 0. open starts the
+ * input and waits until the fit spans 0.5 s (not for a CUSTOM device);
+ * false with the message in yau_capture_error(c). close stops it and frees
+ * the ring open() allocated; safe on a zeroed handle and twice. A capture
+ * that yau_open() opened (desc.capture: DUPLEX) is closed by yau_close();
+ * its yau_capture_close() does nothing. */
+YAU_API bool        yau_capture_open(yau_capture* c, const yau_capture_desc* d);
+YAU_API void        yau_capture_close(yau_capture* c);
+YAU_API bool        yau_capture_is_open(const yau_capture* c);
+YAU_API const char* yau_capture_error(const yau_capture* c);
+/* Moves the device thread's fits and notices into the handle. Returns the
+ * number moved, or YAU_ERR_LOST once the device has gone away. */
+YAU_API int         yau_capture_update(yau_capture* c);
+
+/* The readers (READING). Each reader is one thread; reader 0 is the frame
+ * thread, reader 1 (desc.readers = 2) any one other thread. acquire
+ * returns the contiguous captured frames the reader has not released, up
+ * to the ring's wrap or the next gap, with *frames, and *first_frame the
+ * capture frame of the first; NULL with *frames 0 when there are none. At
+ * a gap, *gap (may be NULL) gets its kind (YAU_GAP_*) and the call skips
+ * it: *first_frame then jumps by the frames missing. release hands back
+ * the first `frames` of it. read copies and releases; save writes them to
+ * a WAV file, with silence for the frames of a gap, so the file's sample s
+ * is capture frame first + s. Reader 1's calls return codes and write no
+ * message. */
+YAU_API const float* yau_capture_acquire(yau_capture* c, int reader, int64_t* frames,
+                                         int64_t* first_frame, int* gap);
+YAU_API int          yau_capture_release(yau_capture* c, int reader, int64_t frames);
+YAU_API int64_t      yau_capture_read(yau_capture* c, int reader, float* dst, int64_t max_frames,
+                                      int64_t* first_frame);
+YAU_API int64_t      yau_capture_save(yau_capture* c, int reader, yau_wavw* w, int64_t max_frames);
+
+/* Frame thread: the ysp_rt time of a capture frame, of a fractional frame
+ * (a detector's interpolated crossing), and the frame at time t_ns (the
+ * nearest), from the fit (+ desc.offset_ns). -1 before the first fit. */
+YAU_API int64_t yau_capture_time_of(const yau_capture* c, int64_t frame);
+YAU_API int64_t yau_capture_time_at(const yau_capture* c, double frame);
+YAU_API int64_t yau_capture_frame_at(const yau_capture* c, int64_t t_ns);
+YAU_API void    yau_capture_get_info(const yau_capture* c, yau_capture_info* out);
+YAU_API int     yau_capture_describe(const yau_capture* c, char* buf, size_t cap);
+
+/* The device side of a capture (DEVICE): one call per block of input from
+ * the device thread, in the device's format (caps.out), with the tick. The
+ * thread calls yau_capture_thread_init(host) once before the first. */
+YAU_API void yau_capture_block(void* host, void* in, int32_t frames, const yau_tick* tick);
+YAU_API void yau_capture_thread_init(void* host);
+
+/* Detectors (DETECTORS): any thread, deterministic, no allocation. init
+ * returns 0 or YAU_ERR_ARG. feed takes `frames` interleaved frames of
+ * `channels` channels whose first is capture frame first_frame, and writes
+ * up to `cap` events; it returns how many. A first_frame that does not
+ * follow the last block (a gap) starts the detector over. */
+YAU_API int yau_vkey_init(yau_vkey* vk, const yau_vkey_desc* d, uint32_t rate);
+YAU_API int yau_vkey_feed(yau_vkey* vk, const float* x, int64_t frames, uint16_t channels,
+                          int64_t first_frame, yau_vkey_event* out, int cap);
+YAU_API int yau_edge_init(yau_edge* e, const yau_edge_desc* d, uint32_t rate);
+/* Each edge: the capture frame where |x| (or the signed x) crossed the
+ * level, interpolated between the two frames around it. */
+YAU_API int yau_edge_feed(yau_edge* e, const float* x, int64_t frames, uint16_t channels,
+                          int64_t first_frame, double* edges, int cap);
+
+/* WAV writer (CAPTURE, WAV OUT): one thread. open creates the file (false
+ * with the message in yau_wavw_error(w)); write converts and appends float
+ * frames and returns the frames written or a negative code; close writes
+ * the sizes (RF64 past 4 GB) and closes the file, never fails, and is safe
+ * twice. */
+YAU_API bool        yau_wavw_open(yau_wavw* w, const yau_wavw_desc* d);
+YAU_API int64_t     yau_wavw_write(yau_wavw* w, const float* x, int64_t frames);
+YAU_API void        yau_wavw_close(yau_wavw* w);
+YAU_API const char* yau_wavw_error(const yau_wavw* w);
+
 /* The table of desc fields a designer sets; *n gets the count. */
 YAU_API const yau_param* yau_params(int* n);
 
@@ -1739,6 +2272,12 @@ static void yau__web_sleep_until(int64_t t) {
 #endif
 #ifndef YAU__ON_RENDER_END
 #define YAU__ON_RENDER_END(au) ((void)0)
+#endif
+#ifndef YAU__ON_CAPTURE
+#define YAU__ON_CAPTURE(c, tk, frames) ((void)0)
+#endif
+#ifndef YAU__ON_CAPTURE_END
+#define YAU__ON_CAPTURE_END(c) ((void)0)
 #endif
 
 
@@ -1855,16 +2394,22 @@ static int64_t yau__fit_frame(const yau__fit* f, int64_t t) {
     return f->w0 + (int64_t)ceil(x - 0.5);
 }
 
-static void yau__fit_point(yau_audio* au, int64_t w, int64_t t) {
-    int32_t i = (au->pt_head + au->pt_n) % YAU__FIT_PTS;
-    if (au->pt_n == YAU__FIT_PTS) {
-        au->pt_head = (au->pt_head + 1) % YAU__FIT_PTS;
-        i = (au->pt_head + au->pt_n - 1) % YAU__FIT_PTS;
+/* The window of fit points, oldest first from head, YAU__FIT_PTS at most:
+ * playback's and a capture's. */
+static void yau__pts_add(int64_t* pw, int64_t* pt, int32_t* head, int32_t* n, int64_t w, int64_t t) {
+    int32_t i = (*head + *n) % YAU__FIT_PTS;
+    if (*n == YAU__FIT_PTS) {
+        *head = (*head + 1) % YAU__FIT_PTS;
+        i = (*head + *n - 1) % YAU__FIT_PTS;
     } else {
-        au->pt_n++;
+        (*n)++;
     }
-    au->pt_w[i] = w;
-    au->pt_t[i] = t;
+    pw[i] = w;
+    pt[i] = t;
+}
+
+static void yau__fit_point(yau_audio* au, int64_t w, int64_t t) {
+    yau__pts_add(au->pt_w, au->pt_t, &au->pt_head, &au->pt_n, w, t);
 }
 
 /* One point per bucket, its least late: 200 ms of reports or 50 ms of
@@ -1883,18 +2428,17 @@ static void yau__fit_point(yau_audio* au, int64_t w, int64_t t) {
  * worse than the drift it corrects. Computed on x = frames since the
  * oldest point and y = ns since it minus x at the nominal rate, so the
  * doubles stay small. */
-static void yau__refit(yau_audio* au) {
-    int32_t n = au->pt_n, i, j, h = 0;
+static void yau__refit_pts(yau__fit* f, const int64_t* pw, const int64_t* pt, int32_t head, int32_t n,
+                           int32_t* hull, int pos_source, double kn) {
+    int32_t i, j, h = 0;
     int64_t wb, tb, span;
-    double kn = yau__k_nom(au), sx = 0, a, b, xm, spread = 0;
-    int32_t* hull = au->hull;
-    yau__fit* f = &au->fit;
+    double sx = 0, a, b, xm, spread = 0;
     if (n < 1) return;
-    wb = au->pt_w[au->pt_head];
-    tb = au->pt_t[au->pt_head];
-    span = au->pt_t[(au->pt_head + n - 1) % YAU__FIT_PTS] - tb;
-#define YAU__X(k) ((double)(au->pt_w[((k) + au->pt_head) % YAU__FIT_PTS] - wb))
-#define YAU__Y(k) ((double)(au->pt_t[((k) + au->pt_head) % YAU__FIT_PTS] - tb) - YAU__X(k) * kn)
+    wb = pw[head];
+    tb = pt[head];
+    span = pt[(head + n - 1) % YAU__FIT_PTS] - tb;
+#define YAU__X(k) ((double)(pw[((k) + head) % YAU__FIT_PTS] - wb))
+#define YAU__Y(k) ((double)(pt[((k) + head) % YAU__FIT_PTS] - tb) - YAU__X(k) * kn)
     for (i = 0; i < n; i++) sx += YAU__X(i);
     xm = sx / n;
     b = 0;
@@ -1902,17 +2446,17 @@ static void yau__refit(yau_audio* au) {
     if (n < 2 || span < YAU__SLOPE_NS) {
         /* the offset from the last second only, so the drift the nominal
          * slope ignores costs at most a second's worth */
-        int64_t tl = au->pt_t[(au->pt_head + n - 1) % YAU__FIT_PTS];
+        int64_t tl = pt[(head + n - 1) % YAU__FIT_PTS];
         double sum = 0;
         int32_t m = 0;
         a = YAU__Y(n - 1);
         for (i = 0; i < n; i++) {
-            if (au->pt_t[(au->pt_head + i) % YAU__FIT_PTS] < tl - 1000000000LL) continue;
+            if (pt[(head + i) % YAU__FIT_PTS] < tl - 1000000000LL) continue;
             if (YAU__Y(i) < a) a = YAU__Y(i);
             sum += YAU__Y(i); m++;
         }
-        if (au->dcaps.pos_source == YAU_POS_DEVICE && m > 0) a = sum / m;
-    } else if (au->dcaps.pos_source == YAU_POS_DEVICE) {
+        if (pos_source == YAU_POS_DEVICE && m > 0) a = sum / m;
+    } else if (pos_source == YAU_POS_DEVICE) {
         double sxx = 0, sxy = 0, sy = 0;
         for (i = 0; i < n; i++) sy += YAU__Y(i);
         for (i = 0; i < n; i++) {
@@ -1943,9 +2487,9 @@ static void yau__refit(yau_audio* au) {
     /* the spread: rms residual for least squares, mean gap for the envelope */
     for (i = 0; i < n; i++) {
         double r = YAU__Y(i) - a - b * YAU__X(i);
-        spread += au->dcaps.pos_source == YAU_POS_DEVICE ? r * r : r;
+        spread += pos_source == YAU_POS_DEVICE ? r * r : r;
     }
-    spread = au->dcaps.pos_source == YAU_POS_DEVICE ? sqrt(spread / n) : spread / n;
+    spread = pos_source == YAU_POS_DEVICE ? sqrt(spread / n) : spread / n;
     {
         double xl = YAU__X(n - 1);
         f->w0 = wb + (int64_t)xl;
@@ -1954,11 +2498,16 @@ static void yau__refit(yau_audio* au) {
         f->spread = spread;
         f->n = (uint32_t)n;
         f->gen++;
-        f->source = au->dcaps.pos_source;
+        f->source = pos_source;
         f->ready = span >= YAU__WARM_NS;
     }
 #undef YAU__X
 #undef YAU__Y
+}
+
+static void yau__refit(yau_audio* au) {
+    yau__refit_pts(&au->fit, au->pt_w, au->pt_t, au->pt_head, au->pt_n, au->hull, au->dcaps.pos_source,
+                   yau__k_nom(au));
 }
 
 /* --- queues ------------------------------------------------------------------ */
@@ -2814,6 +3363,13 @@ YAU_API void yau_rt_thread_init(void* host) {
 
 #if !defined(YAU_NO_MINIAUDIO)
 
+/* DUPLEX, defined with the capture device below */
+struct yau__ma;
+static int  yau__ma_cap_config(struct yau__ma* m, const yau_device_open* in, ma_device_config* dc, char* err,
+                               size_t err_cap);
+static int  yau__ma_cap_post(struct yau__ma* m, char* err, size_t err_cap);
+static void yau__ma_cap_in(struct yau__ma* m, ma_device* d, const void* in, ma_uint32 n);
+
 #if defined(MA_SUPPORT_WASAPI)
 /* IAudioClock and the IAudioClient slot that hands it out, declared here so
  * the header needs no SDK header and works when miniaudio was compiled in
@@ -2860,6 +3416,9 @@ typedef struct yau__ma {
     void*      host;
     uint32_t   allocs;      /* miniaudio heap calls; M7 counts them after start */
     ma_backend backend;
+    yau_capture* cap;       /* DUPLEX: the input's half goes here          */
+    void*      cap_clock;   /* WASAPI: the capture client's IAudioClock      */
+    uint64_t   cap_freq;
 #if defined(MA_SUPPORT_WASAPI)
     yau__IAudioClock* clock;
     uint64_t   freq;
@@ -3051,7 +3610,7 @@ static void yau__web_tick(yau__ma* m, ma_uint32 n, yau_tick* tk) {
 static void yau__ma_data(ma_device* d, void* out, const void* in, ma_uint32 n) {
     yau__ma* m = (yau__ma*)d->pUserData;
     yau_tick tk;
-    (void)in;
+    if (m->cap && in) yau__ma_cap_in(m, d, in, n);
 #if defined(MA_SUPPORT_WASAPI)
     if (m->gate) yau__ma_gate(m, d);
 #endif
@@ -3083,11 +3642,13 @@ static void yau__ma_note(const ma_device_notification* nt) {
     switch (nt->type) {
     case ma_device_notification_type_started:
         yau_rt_thread_init(m->host);
+        if (m->cap) yau_capture_thread_init(m->cap);
         break;
     case ma_device_notification_type_stopped:
     case ma_device_notification_type_rerouted:
     case ma_device_notification_type_interruption_began:
         if (!m->closing) yau__st32(&m->au->lost, 1u);
+        if (!m->closing && m->cap) yau__st32(&m->cap->gone, 1u);
         break;
     default: break;
     }
@@ -3177,6 +3738,7 @@ static int yau__ma_open(void* ctx, const yau_device_open* in, yau_device_caps* c
     dc.wasapi.noDefaultQualitySRC = MA_TRUE;
     dc.wasapi.noHardwareOffloading = MA_TRUE;
     dc.wasapi.noAutoStreamRouting = MA_TRUE;
+    if ((r = (ma_result)yau__ma_cap_config(m, in, &dc, err, err_cap)) != 0) return (int)r;
     /* MMCSS "Pro Audio" for the device thread: of miniaudio's default
      * priority, MMCSS, yrt_thread_elevate() and both, it had the smallest
      * p99 callback interval error under load, with no underrun in any
@@ -3214,6 +3776,7 @@ static int yau__ma_open(void* ctx, const yau_device_open* in, yau_device_caps* c
                  "device '%s'; the header refuses any conversion", caps->name);
         return YAU_ERR_FORMAT;
     }
+    if ((r = (ma_result)yau__ma_cap_post(m, err, err_cap)) != 0) return (int)r;
 #if defined(MA_SUPPORT_COREAUDIO) && defined(MA_APPLE_DESKTOP)
     if (m->backend == ma_backend_coreaudio) yau__coreaudio_claims(m, caps);
 #endif
@@ -3329,6 +3892,7 @@ static void yau__ma_close(void* ctx) {
     m->closing = 1;
 #if defined(MA_SUPPORT_WASAPI)
     if (m->clock) { m->clock->lpVtbl->Release(m->clock); m->clock = NULL; }
+    if (m->cap_clock) { ((yau__IAudioClock*)m->cap_clock)->lpVtbl->Release(m->cap_clock); m->cap_clock = NULL; }
 #endif
 #if defined(MA_HAS_WEBAUDIO)
     if (m->dev_up && m->backend == ma_backend_webaudio) yau__web_detach(m->web_idx);
@@ -3356,6 +3920,290 @@ static const yau_device yau__ma_device = {
     YAU_DEVICE_VERSION, "miniaudio",
     yau__ma_open, yau__ma_start, yau__ma_stop, yau__ma_close, yau__ma_describe
 };
+
+/* --- miniaudio capture (CAPTURE) ------------------------------------------------- */
+
+/* A capture-only input. Like the output: asks for no format, rate or
+ * channel count, refuses any conversion, and on WASAPI reads the capture
+ * client's IAudioClock at every block. */
+typedef struct yau__mac {
+    ma_context ctx;
+    ma_device  dev;
+    int        ctx_up, dev_up, closing;
+    yau_capture* c;
+    yau_render_fn block;
+    void*      host;
+    uint32_t   allocs;
+    ma_backend backend;
+    void*      clock;       /* WASAPI: the capture client's IAudioClock      */
+    uint64_t   freq;
+} yau__mac;
+typedef char yau__mac_fits[sizeof(yau__mac) <= sizeof(((yau_capture*)0)->backend_mem) ? 1 : -1];
+
+static void* yau__mac_malloc(size_t sz, void* ud) { ((yau__mac*)ud)->allocs++; return malloc(sz); }
+static void* yau__mac_realloc(void* p, size_t sz, void* ud) { ((yau__mac*)ud)->allocs++; return realloc(p, sz); }
+static void  yau__mac_free(void* p, void* ud) { if (p) ((yau__mac*)ud)->allocs++; free(p); }
+
+/* A WASAPI capture client's position and stamp: the position counts the
+ * clock's frequency units, the stamp is QPC time in 100 ns units. */
+static void yau__wasapi_cap_pos(void* clock, uint64_t freq, uint32_t rate, yau_tick* tk) {
+#if defined(MA_SUPPORT_WASAPI)
+    yau__IAudioClock* k = (yau__IAudioClock*)clock;
+    UINT64 pos = 0, qpc = 0;
+    if (k && freq && SUCCEEDED(k->lpVtbl->GetPosition(k, &pos, &qpc)) && qpc) {
+        tk->pos = (int64_t)((double)pos * (double)rate / (double)freq + 0.5);
+        tk->pos_t = (int64_t)qpc * 100;
+    }
+#else
+    (void)clock; (void)freq; (void)rate; (void)tk;
+#endif
+}
+
+/* The capture side of a WASAPI client: its stream latency claim and its
+ * IAudioClock; caps->pos_source DEVICE when the clock answers. Only WASAPI
+ * builds call it: elsewhere an unused static function fails -Werror. */
+#if defined(MA_SUPPORT_WASAPI)
+static void yau__wasapi_cap_clock(void* client, yau_device_caps* caps, void** clock, uint64_t* freq) {
+    yau__IAudioClient* ac = (yau__IAudioClient*)client;
+    void* clk = NULL;
+    UINT64 f = 0;
+    LONGLONG lat = -1;
+    *clock = NULL;
+    *freq = 0;
+    if (!ac) return;
+    caps->os_stream_latency_ns = SUCCEEDED(ac->lpVtbl->GetStreamLatency(ac, &lat)) && lat >= 0 ? (int64_t)lat * 100 : -1;
+    if (SUCCEEDED(ac->lpVtbl->GetService(ac, &yau__IID_IAudioClock, &clk)) && clk) {
+        yau__IAudioClock* k = (yau__IAudioClock*)clk;
+        if (SUCCEEDED(k->lpVtbl->GetFrequency(k, &f)) && f) {
+            *clock = clk;
+            *freq = f;
+            caps->pos_source = YAU_POS_DEVICE;
+            /* Microsoft: the capture position is the sample being recorded */
+            caps->os_latency_ns = 0;
+            snprintf(caps->os_latency_src, sizeof caps->os_latency_src, "wasapi:iaudioclock");
+        } else {
+            k->lpVtbl->Release(k);
+        }
+    }
+}
+#endif
+
+static void yau__wasapi_release(void** clock) {
+#if defined(MA_SUPPORT_WASAPI)
+    if (*clock) ((yau__IAudioClock*)*clock)->lpVtbl->Release(*clock);
+#endif
+    *clock = NULL;
+}
+
+/* The input's caps from miniaudio's capture side; false (with the
+ * message) when miniaudio would convert. */
+static int yau__mac_caps(ma_device* d, int is_null, yau_device_caps* caps, char* err, size_t err_cap) {
+    ma_uint32 i;
+    size_t k;
+    memset(caps, 0, sizeof *caps);
+    caps->rate = d->capture.internalSampleRate;
+    caps->channels = (uint16_t)d->capture.internalChannels;
+    caps->out = (uint16_t)yau__ma_out(d->capture.internalFormat);
+    for (i = 0; i < d->capture.internalChannels && i < YAU_MAX_CHANNELS; i++)
+        caps->map[i] = (uint8_t)d->capture.internalChannelMap[i];
+    caps->period = (int32_t)d->capture.internalPeriodSizeInFrames;
+    caps->buffer = (int32_t)(d->capture.internalPeriodSizeInFrames * d->capture.internalPeriods);
+    caps->exclusive = d->capture.shareMode == ma_share_mode_exclusive;
+    caps->pos_source = YAU_POS_CALLBACK;
+    /* no capture path has had a loopback check: tier 3 (CAPTURE, TIERS);
+     * a browser's times are its estimates, the lowest tier */
+    caps->tier = is_null ? YAU_TIER_SIM : YAU_TIER_3;
+#if defined(MA_HAS_WEBAUDIO)
+    if (d->pContext->backend == ma_backend_webaudio) caps->tier = YAU_TIER_WEB;
+#endif
+    caps->os_latency_ns = -1;
+    caps->os_stream_latency_ns = -1;
+    k = strlen(d->capture.name);
+    if (k >= sizeof caps->name) k = sizeof caps->name - 1;
+    memcpy(caps->name, d->capture.name, k);
+    caps->name[k] = 0;
+    if (!d->capture.converter.isPassthrough || d->capture.format != d->capture.internalFormat
+        || d->sampleRate != d->capture.internalSampleRate || d->capture.channels != d->capture.internalChannels) {
+        snprintf(err, err_cap, "ysp_audio: miniaudio would convert between input '%s' and the program; the "
+                 "header refuses any conversion", caps->name);
+        return YAU_ERR_FORMAT;
+    }
+#if defined(MA_SUPPORT_WASAPI)
+    if (d->pContext->backend == ma_backend_wasapi && d->wasapi.actualBufferSizeInFramesCapture)
+        caps->buffer = (int32_t)d->wasapi.actualBufferSizeInFramesCapture;
+#endif
+    return 0;
+}
+
+/* The capture device whose name contains want, from the context's list. */
+static ma_device_id* yau__mac_pick(ma_context* ctx, const char* want, char* err, size_t err_cap, int* rc) {
+    ma_device_info* infos = NULL;
+    ma_uint32 n = 0, i;
+    *rc = 0;
+    if (!want || !want[0]) return NULL;
+    if (ma_context_get_devices(ctx, NULL, NULL, &infos, &n) == MA_SUCCESS)
+        for (i = 0; i < n; i++)
+            if (strstr(infos[i].name, want)) return &infos[i].id;
+    snprintf(err, err_cap, "ysp_audio: no capture device named like '%s'", want);
+    *rc = YAU_ERR_ARG;
+    return NULL;
+}
+
+static void yau__mac_data(ma_device* d, void* out, const void* in, ma_uint32 n) {
+    yau__mac* m = (yau__mac*)d->pUserData;
+    yau_tick tk;
+    (void)out;
+    tk.t_entry = yrt_now_ns();
+    tk.pos = -1;
+    tk.pos_t = 0;
+    tk.flags = 0;
+    tk.reserved_ = 0;
+    if (m->clock) yau__wasapi_cap_pos(m->clock, m->freq, d->capture.internalSampleRate, &tk);
+    if (m->block && in) m->block(m->host, (void*)(uintptr_t)in, (int32_t)n, &tk);
+}
+
+static void yau__mac_note(const ma_device_notification* nt) {
+    yau__mac* m = (yau__mac*)nt->pDevice->pUserData;
+    if (!m || !m->c) return;
+    switch (nt->type) {
+    case ma_device_notification_type_started:
+        yau_capture_thread_init(m->host);
+        break;
+    case ma_device_notification_type_stopped:
+    case ma_device_notification_type_rerouted:
+    case ma_device_notification_type_interruption_began:
+        if (!m->closing) yau__st32(&m->c->gone, 1u);
+        break;
+    default: break;
+    }
+}
+
+static int yau__mac_open(void* ctx, const yau_device_open* in, yau_device_caps* caps, char* err, size_t err_cap) {
+    yau__mac* m = (yau__mac*)ctx;
+    ma_context_config cc = ma_context_config_init();
+    ma_device_config dc = ma_device_config_init(ma_device_type_capture);
+    ma_result r;
+    int is_null = m->backend == ma_backend_null, rc;
+    cc.allocationCallbacks.pUserData = m;
+    cc.allocationCallbacks.onMalloc = yau__mac_malloc;
+    cc.allocationCallbacks.onRealloc = yau__mac_realloc;
+    cc.allocationCallbacks.onFree = yau__mac_free;
+    cc.threadPriority = ma_thread_priority_highest;
+    r = ma_context_init(&m->backend, 1, &cc, &m->ctx);
+    if (r != MA_SUCCESS) {
+        snprintf(err, err_cap, "ysp_audio: the %s backend did not start (%s)", ma_get_backend_name(m->backend),
+                 ma_result_description(r));
+        return YAU_ERR_LOST;
+    }
+    m->ctx_up = 1;
+    dc.capture.pDeviceID = yau__mac_pick(&m->ctx, in->device, err, err_cap, &rc);
+    if (rc < 0) return rc;
+    /* STRICT OPEN, as for the output; the null device takes the desc's */
+    dc.capture.format = is_null ? (in->format->sample == YAU_S16 ? ma_format_s16 : ma_format_f32) : ma_format_unknown;
+    dc.capture.channels = is_null ? (in->format->channels ? in->format->channels : 2u) : 0;
+    dc.sampleRate = is_null ? in->format->rate : 0;
+    dc.capture.pChannelMap = NULL;
+    dc.capture.shareMode = in->exclusive ? ma_share_mode_exclusive : ma_share_mode_shared;
+    dc.periodSizeInFrames = (ma_uint32)in->period;
+    dc.periods = in->exclusive ? 1 : 0;
+    dc.performanceProfile = ma_performance_profile_low_latency;
+    dc.noFixedSizedCallback = MA_TRUE;
+    dc.dataCallback = yau__mac_data;
+    dc.notificationCallback = yau__mac_note;
+    dc.pUserData = m;
+    dc.wasapi.noAutoConvertSRC = MA_TRUE;
+    dc.wasapi.noDefaultQualitySRC = MA_TRUE;
+    dc.wasapi.noAutoStreamRouting = MA_TRUE;
+    dc.wasapi.usage = ma_wasapi_usage_pro_audio;
+    r = ma_device_init(&m->ctx, &dc, &m->dev);
+    if (r != MA_SUCCESS) {
+        snprintf(err, err_cap, "ysp_audio: %s did not open the input%s (%s)", ma_get_backend_name(m->backend),
+                 in->exclusive ? " in exclusive mode" : "", ma_result_description(r));
+        return r == MA_BUSY || r == MA_ACCESS_DENIED ? YAU_ERR_LOST : YAU_ERR_FORMAT;
+    }
+    m->dev_up = 1;
+    rc = yau__mac_caps(&m->dev, is_null, caps, err, err_cap);
+    if (rc < 0) return rc;
+#if defined(MA_SUPPORT_WASAPI)
+    if (m->backend == ma_backend_wasapi) yau__wasapi_cap_clock(m->dev.wasapi.pAudioClientCapture, caps, &m->clock, &m->freq);
+#endif
+    return 0;
+}
+
+static int yau__mac_start(void* ctx, yau_render_fn block, void* host) {
+    yau__mac* m = (yau__mac*)ctx;
+    m->block = block;
+    m->host = host;
+    return ma_device_start(&m->dev) == MA_SUCCESS ? 0 : YAU_ERR_LOST;
+}
+
+static void yau__mac_stop(void* ctx) {
+    yau__mac* m = (yau__mac*)ctx;
+    m->closing = 1;
+    if (m->dev_up) (void)ma_device_stop(&m->dev);
+}
+
+static void yau__mac_close(void* ctx) {
+    yau__mac* m = (yau__mac*)ctx;
+    m->closing = 1;
+    yau__wasapi_release(&m->clock);
+    if (m->dev_up) { ma_device_uninit(&m->dev); m->dev_up = 0; }
+    if (m->ctx_up) { ma_context_uninit(&m->ctx); m->ctx_up = 0; }
+}
+
+static int yau__mac_describe(void* ctx, char* buf, size_t cap) {
+    yau__mac* m = (yau__mac*)ctx;
+    return snprintf(buf, cap, "%s", ma_get_backend_name(m->backend));
+}
+
+static const yau_device yau__mac_device = {
+    YAU_DEVICE_VERSION, "miniaudio",
+    yau__mac_open, yau__mac_start, yau__mac_stop, yau__mac_close, yau__mac_describe
+};
+
+/* DUPLEX: the output's device opens as a duplex device; the input's half
+ * goes to the capture handle, on the same device thread. */
+static int yau__ma_cap_config(yau__ma* m, const yau_device_open* in, ma_device_config* dc, char* err, size_t err_cap) {
+    yau_capture* c;
+    int rc = 0;
+    m->cap = NULL;
+    if (in->capture != 2 || !in->capture_host) return 0;
+    c = (yau_capture*)in->capture_host;
+    m->cap = c;
+    dc->deviceType = ma_device_type_duplex;
+    dc->capture.pDeviceID = yau__mac_pick(&m->ctx, c->desc.device, err, err_cap, &rc);
+    if (rc < 0) return rc;
+    dc->capture.format = m->backend == ma_backend_null
+        ? (c->desc.format.sample == YAU_S16 ? ma_format_s16 : ma_format_f32) : ma_format_unknown;
+    dc->capture.channels = m->backend == ma_backend_null ? (c->desc.format.channels ? c->desc.format.channels : 2u) : 0;
+    dc->capture.pChannelMap = NULL;
+    dc->capture.shareMode = dc->playback.shareMode;
+    return 0;
+}
+
+static int yau__ma_cap_post(yau__ma* m, char* err, size_t err_cap) {
+    int rc;
+    if (!m->cap) return 0;
+    rc = yau__mac_caps(&m->dev, m->backend == ma_backend_null, &m->cap->dcaps, err, err_cap);
+    if (rc < 0) return rc;
+#if defined(MA_SUPPORT_WASAPI)
+    if (m->backend == ma_backend_wasapi)
+        yau__wasapi_cap_clock(m->dev.wasapi.pAudioClientCapture, &m->cap->dcaps, &m->cap_clock, &m->cap_freq);
+#endif
+    return 0;
+}
+
+static void yau__ma_cap_in(yau__ma* m, ma_device* d, const void* in, ma_uint32 n) {
+    yau_tick tk;
+    tk.t_entry = yrt_now_ns();
+    tk.pos = -1;
+    tk.pos_t = 0;
+    tk.flags = 0;
+    tk.reserved_ = 0;
+    if (m->cap_clock) yau__wasapi_cap_pos(m->cap_clock, m->cap_freq, d->capture.internalSampleRate, &tk);
+    yau_capture_block(m->cap, (void*)(uintptr_t)in, (int32_t)n, &tk);
+}
+
 
 static int yau__ma_backend(yau_backend b, ma_backend* out) {
     switch (b) {
@@ -3891,6 +4739,13 @@ static int yau__resolution(int out, int bits) {
     }
 }
 
+/* CAPTURE, defined with the capture below: yau_open() sets up a DUPLEX
+ * capture with them */
+static int  yau__cap_desc(yau_capture* c, const yau_capture_desc* d);
+static int  yau__cap_setup(yau_capture* c);
+static bool yau__cap_warm(yau_capture* c);
+static void yau__cap_free(yau_capture* c);
+
 YAU_API bool yau_open(yau_audio* au, const yau_desc* desc) {
     yau_desc d;
     yau_device_open in;
@@ -3913,6 +4768,11 @@ YAU_API bool yau_open(yau_audio* au, const yau_desc* desc) {
     if (d.source && d.source->version != YAU_SOURCE_VERSION) { yau__err(au, "ysp_audio: source version %u, header wants %d", d.source->version, YAU_SOURCE_VERSION); return false; }
     if (!d.period) d.period = (int32_t)(d.format.rate / 100);
     if (!d.queue) d.queue = 2;
+    if (d.capture && (d.backend == YAU_BACKEND_CUSTOM || yau__cap_desc(d.capture, d.capture_desc) < 0)) {
+        yau__err(au, "%s", d.backend == YAU_BACKEND_CUSTOM ? "ysp_audio: desc.capture (DUPLEX) needs a miniaudio "
+                 "backend; a CUSTOM device records through its own yau_capture" : d.capture->error);
+        return false;
+    }
     au->desc = d;
     au->fmt = d.format;
     au->voices_max = d.voices;
@@ -3944,6 +4804,12 @@ YAU_API bool yau_open(yau_audio* au, const yau_desc* desc) {
     in.exclusive = d.exclusive;
     in.device = d.device;
     in.queue = d.queue;
+    if (d.capture) {
+        /* the input paces a duplex device, so the output has no gate */
+        in.queue = 0;
+        in.capture = 2;
+        in.capture_host = d.capture;
+    }
     rc = au->dev->open(au->dev_ctx, &in, &au->dcaps, au->error, sizeof au->error);
     if (rc < 0) {
         if (!au->error[0]) yau__err(au, "ysp_audio: the device did not open (%s)", yau_strerror(rc));
@@ -3993,6 +4859,19 @@ YAU_API bool yau_open(yau_audio* au, const yau_desc* desc) {
         au->arena_cap = bytes;
         au->arena_owned = 1;
     }
+    if (d.capture) {
+        d.capture->duplex = 1;
+        d.capture->dev = au->dev;   /* the describe line names the backend */
+        d.capture->dev_ctx = au->dev_ctx;
+        if (yau__cap_setup(d.capture) < 0) {
+            yau__err(au, "%s", d.capture->error);
+            if (au->dev->close) au->dev->close(au->dev_ctx);
+            if (au->arena_owned) free(au->arena);
+            au->arena = NULL;
+            au->arena_owned = 0;
+            return false;
+        }
+    }
     au->open = 1;
     {
         yrt_payload u;
@@ -4036,6 +4915,11 @@ YAU_API bool yau_open(yau_audio* au, const yau_desc* desc) {
             }
             YAU__SLEEP_UNTIL(YAU__NOW() + 10000000);
         }
+        if (d.capture && !yau__cap_warm(d.capture)) {
+            yau__err(au, "%s", d.capture->error);
+            yau_close(au);
+            return false;
+        }
     }
     return true;
 }
@@ -4057,6 +4941,10 @@ YAU_API void yau_close(yau_audio* au) {
     }
     (void)yau__update_rc(au);
     if (au->dev->close) au->dev->close(au->dev_ctx);
+    if (au->desc.capture && au->desc.capture->duplex) {
+        yau__cap_free(au->desc.capture);
+        au->desc.capture->duplex = 0;
+    }
     if (au->arena_owned) free(au->arena);
     au->arena = NULL;
     au->arena_owned = 0;
@@ -4676,6 +5564,1075 @@ YAU_API yau_buf yau_wav_load(yau_audio* au, const yau_wav_desc* d) {
     b.channels = info.channels;
     b.id = d->id;
     return b;
+}
+
+/* --- capture (CAPTURE) ------------------------------------------------------- */
+
+enum { YAU__CM_FIT = 1, YAU__CM_XRUN, YAU__CM_DROP };
+
+#define YAU__LOSS_NS 200000000LL   /* a loss shows this long before it counts */
+#define YAU__CAP_HALT_REPORTS 3    /* late reports in a row that make a halt */
+/* A capture report or block this far off the fit, or half a period if
+ * that is more, is off it (HALT, LOSS). Measured on the test laptop, no
+ * report without a stall was more than 1.2 ms off the fit at a 480-frame
+ * period; at 96 frames (2 ms) the reports scattered +-0.6 ms, so half a
+ * period alone would make halts of the scatter. 5 ms is half of WASAPI's
+ * 10 ms shared engine pass. */
+#define YAU__CAP_GATE_NS 5000000.0
+
+static double yau__cgate(const yau_capture* c) {
+    double half = 0.5 * (double)c->dcaps.period * c->fit.k;
+    return half > YAU__CAP_GATE_NS ? half : YAU__CAP_GATE_NS;
+}
+
+static void yau__cerr(yau_capture* c, const char* fmt, ...) {
+    va_list ap;
+    c->err_n++;
+    va_start(ap, fmt);
+    vsnprintf(c->error, sizeof c->error, fmt, ap);
+    va_end(ap);
+}
+
+static double yau__ck_nom(const yau_capture* c) { return 1e9 / (double)c->dcaps.rate; }
+
+static void yau__cring(yau_capture* c, uint16_t kind, int64_t t, uint32_t aux, const yrt_payload* u) {
+    yrt_event ev;
+    if (!c->desc.ring) return;
+    memset(&ev, 0, sizeof ev);
+    ev.t_ns = (uint64_t)(t > 0 ? t : 1);
+    ev.tid = c->tid;
+    ev.source = (uint16_t)YRT_SRC_AUDIO;
+    ev.kind = kind;
+    ev.aux = aux;
+    ev.u = *u;
+    (void)yrt_ring_push(c->desc.ring, &ev);
+}
+
+/* A full queue drops the message: the next fit replaces a fit, and the
+ * counters a notice carries are published in the handle anyway. */
+static void yau__cmsg_push(yau_capture* c, int32_t kind, int64_t a, int64_t b) {
+    uint32_t head = c->msg_head, tail = yau__ld32(&c->msg_tail);
+    yau__cmsg* m;
+    if (head - tail >= YAU__CAP_MSGS) return;
+    m = &c->msg[head % YAU__CAP_MSGS];
+    memset(m, 0, sizeof *m);
+    m->kind = kind;
+    m->fit = c->fit;
+    m->a = a;
+    m->b = b;
+    yau__st32(&c->msg_head, head + 1);
+}
+
+static void yau__cfit_restart(yau_capture* c) {
+    c->pt_n = 0; c->pt_head = 0; c->b_open = 0;
+    c->fit.ready = 0;
+    c->first_block = 1;
+    c->late_run = 0;
+    c->loss_run = 0;
+    c->halt_run = 0;
+    c->early_run = 0;
+    c->q_floor = INT64_MAX;
+}
+
+static void yau__cpublish_fit(yau_capture* c) {
+    yrt_payload u;
+    yau__cmsg_push(c, YAU__CM_FIT, 0, 0);
+    memset(&u, 0, sizeof u);
+    u.i64[0] = c->fit.w0;
+    u.f64[1] = 1e9 / c->fit.k;
+    u.f64[2] = c->fit.spread;
+    u.u32[6] = c->fit.n;
+    u.u32[7] = (uint32_t)c->fit.source;
+    yau__cring(c, (uint16_t)YAU_EV_CAP_FIT, c->fit.t0, c->fit.gen, &u);
+}
+
+/* One point per bucket, its least late, and a refit once a second: the
+ * same rule and the same fit as playback's (THE FIT), on capture frames.
+ * A capture point is (the frame after the block, the callback's entry)
+ * from callbacks, or (a position, its stamp) from reports. */
+static void yau__cfeed(yau_capture* c, int64_t w, int64_t t) {
+    double r, k = c->fit.k > 0 ? c->fit.k : yau__ck_nom(c);
+    if (c->b_open && t - c->b_t0 >= (c->dcaps.pos_source == YAU_POS_DEVICE ? YAU__BUCKET_POS_NS : YAU__BUCKET_NS)) {
+        yau__pts_add(c->pt_w, c->pt_t, &c->pt_head, &c->pt_n, c->b_bw, c->b_bt);
+        c->b_open = 0;
+        if (!c->fit.ready || t - c->last_fit_t >= YAU__REFIT_NS) {
+            YRT_ZONE(zf, "yau.cap.fit");
+            yau__refit_pts(&c->fit, c->pt_w, c->pt_t, c->pt_head, c->pt_n, c->hull, c->dcaps.pos_source,
+                           yau__ck_nom(c));
+            YRT_ZONE_END(zf);
+            c->last_fit_t = t;
+            yau__cpublish_fit(c);
+        }
+    }
+    if (!c->b_open) {
+        c->b_open = 1;
+        c->b_w0 = w; c->b_t0 = t;
+        c->b_bw = w; c->b_bt = t; c->b_best = 0;
+    }
+    r = (double)(t - c->b_t0) - (double)(w - c->b_w0) * k;
+    if (r < c->b_best) { c->b_best = r; c->b_bw = w; c->b_bt = t; }
+}
+
+/* The device lost frames (LOSS). With a count, the capture frames jump by
+ * it at the next frame written, so a later frame keeps its place on the
+ * device clock within the count's error. The fit starts over in every
+ * case: measured with stalls every 3 s, counts off by up to 20 frames
+ * left steps in the window that bent the fitted slope to +68 ppm (the
+ * device runs at +4.6); a fit from the reports after the loss has none.
+ * f0: the first frame delivered after the loss that may still carry a
+ * number from before it. */
+static void yau__cxrun(yau_capture* c, int64_t t, int64_t lost, int64_t f0) {
+    yrt_payload u;
+    yau__st32(&c->xruns, c->xruns + 1);
+    if (lost > 0) {
+        if (!c->gap_open) { c->gap_open = 1; c->gap_frames = 0; c->gap_frame0 = c->f; c->gap_kind = 0; }
+        c->gap_frames += lost;
+        c->gap_kind |= YAU_GAP_LOST;
+        c->f += lost;
+        yau__st64(&c->lost, c->lost + lost);
+    }
+    yau__cfit_restart(c);
+    memset(&u, 0, sizeof u);
+    u.i64[0] = c->f - lost;
+    u.i64[1] = lost;
+    u.i64[2] = f0;
+    yau__cring(c, (uint16_t)YAU_EV_CAP_XRUN, t, c->xruns, &u);
+    yau__cmsg_push(c, YAU__CM_XRUN, c->f - lost, lost);
+    YRT_MESSAGE("yau capture overrun");
+}
+
+static int64_t yau__cmin_reader(const yau_capture* c, uint32_t* gap_tail) {
+    int64_t m = INT64_MAX;
+    uint32_t gt = c->gap_head;
+    int i;
+    for (i = 0; i < YAU_CAP_READERS; i++) {
+        int64_t p;
+        uint32_t g;
+        if (!c->rd[i].on) continue;
+        p = yau__ld64(&c->rd[i].pos);
+        g = yau__ld32(&c->rd[i].gap_tail);
+        if (p < m) m = p;
+        if (c->gap_head - g > c->gap_head - gt) gt = g;
+    }
+    *gap_tail = gt;
+    return m == INT64_MAX ? c->p : m;
+}
+
+/* n frames of the device's format into the ring at position at, as float:
+ * 16 and 24 bits exactly, 32-bit integers to float's 24 bits. */
+static void yau__cconvert(const yau_capture* c, float* dst, const void* in, int64_t from, int64_t n) {
+    int64_t i, ns = n * c->dcaps.channels, o = from * c->dcaps.channels;
+    switch (c->dcaps.out) {
+    case YAU_OUT_S16: {
+        const int16_t* s = (const int16_t*)in + o;
+        for (i = 0; i < ns; i++) dst[i] = (float)s[i] / 32768.0f;
+    } break;
+    case YAU_OUT_S24: {
+        const unsigned char* s = (const unsigned char*)in + o * 3;
+        for (i = 0; i < ns; i++) {
+            int32_t v = (int32_t)((uint32_t)s[3 * i] | ((uint32_t)s[3 * i + 1] << 8) | ((uint32_t)s[3 * i + 2] << 16));
+            if (v & 0x800000) v -= 0x1000000;
+            dst[i] = (float)v / 8388608.0f;
+        }
+    } break;
+    case YAU_OUT_S32: {
+        const int32_t* s = (const int32_t*)in + o;
+        for (i = 0; i < ns; i++) dst[i] = (float)((double)s[i] / 2147483648.0);
+    } break;
+    default:
+        memcpy(dst, (const float*)in + o, (size_t)ns * sizeof(float));
+        break;
+    }
+}
+
+/* The block into the ring. A full ring drops frames (the readers keep what
+ * they have not read); the capture frames still count them, so a dropped
+ * run is a gap that the readers see at the position where writing resumes.
+ * A gap waits for a free entry in the gap queue: until then nothing is
+ * written. Gap entries go out before the position that passes them. */
+static void yau__cwrite(yau_capture* c, const void* in, int32_t n) {
+    uint32_t gtail;
+    int64_t minp = yau__cmin_reader(c, &gtail), room = c->cap - (c->p - minp), k = n, done = 0;
+    int C = c->dcaps.channels;
+    if (room < 0) room = 0;
+    if (k > room) k = room;
+    if (c->gap_open && k > 0) {
+        if (c->gap_head - gtail >= YAU__CAP_GAPS) {
+            k = 0;   /* no entry to describe the gap: it grows */
+        } else {
+            yau__cgap* g = &c->gap[c->gap_head % YAU__CAP_GAPS];
+            g->pos = c->p;
+            g->frames = c->gap_frames;
+            g->kind = c->gap_kind;
+            yau__st32(&c->gap_head, c->gap_head + 1);
+            if (c->gap_kind & YAU_GAP_DROP) {
+                yrt_payload u;
+                memset(&u, 0, sizeof u);
+                u.i64[0] = c->gap_frame0;
+                u.i64[1] = c->gap_frames;
+                yau__cring(c, (uint16_t)YAU_EV_CAP_DROP, yau__fit_time(&c->fit, c->gap_frame0), c->drops, &u);
+                yau__cmsg_push(c, YAU__CM_DROP, c->gap_frame0, c->gap_frames);
+            }
+            c->gap_open = 0;
+            c->gap_frames = 0;
+        }
+    }
+    while (done < k) {
+        int64_t at = c->p % c->cap, m = k - done;
+        if (c->cap - at < m) m = c->cap - at;
+        yau__cconvert(c, c->mem + at * C, in, done, m);
+        c->p += m;
+        done += m;
+    }
+    if (k > 0) {
+        yau__st64(&c->wframe, c->f + k);
+        yau__st64(&c->wpos, c->p);
+    }
+    if (k < n) {
+        if (!c->gap_open) {
+            c->gap_open = 1;
+            c->gap_frames = 0;
+            c->gap_frame0 = c->f + k;
+            c->gap_kind = 0;
+        }
+        if (!(c->gap_kind & YAU_GAP_DROP)) yau__st32(&c->drops, c->drops + 1);
+        c->gap_kind |= YAU_GAP_DROP;
+        c->gap_frames += n - k;
+        yau__st64(&c->dropped, c->dropped + (n - k));
+    }
+}
+
+/* LOSS, from the backlog. With reports, q = position - the frame after the
+ * block is the input recorded and not yet delivered: in the device's
+ * buffer, or read by miniaudio and not yet handed over. Its least value
+ * since the fit was ready is the floor. Measured on the test laptop's
+ * microphone (WASAPI shared, 480-frame packets that miniaudio hands over
+ * as 256 + 224), q was 0 or 224, at most 992 for a few blocks after stalls
+ * of 60 to 81 ms, then 32 to 192 frames over the floor, never a period:
+ * the packets were split at another place. A device whose position counts
+ * the frames it could not deliver moves q up by them for good. So q at
+ * least a period over the floor in every block for 200 ms is a loss of
+ * the excess, in whole periods (rounded down past the split). Without
+ * reports: the frame after the block reaching the callback later than the
+ * fit says by more than half a period, in every block for 200 ms, is a
+ * loss of the least of those delays: a device that stops recording for a
+ * while hands over every later frame that much later (as WASAPI's does,
+ * HALT below), while a backlog drains in a few blocks. */
+static void yau__closs(yau_capture* c, int64_t now_t, int have_pos, int64_t pw, int64_t fend) {
+    int64_t period = c->dcaps.period > 0 ? c->dcaps.period : 1;
+    if (!c->fit.ready || c->dcaps.tier == YAU_TIER_SIM) return;
+    if (have_pos) {
+        int64_t q = pw - fend;
+        if (q < c->q_floor) c->q_floor = q;
+        if (q - c->q_floor >= period) {
+            if (!c->loss_run) { c->loss_run = 1; c->loss_since = now_t; c->loss_min = q; c->loss_f0 = c->f; }
+            if (q < c->loss_min) c->loss_min = q;
+            if (now_t - c->loss_since >= YAU__LOSS_NS) {
+                int64_t lost = (c->loss_min - c->q_floor) / period * period;
+                c->loss_run = 0;
+                yau__cxrun(c, now_t, lost, c->loss_f0);
+            }
+        } else {
+            c->loss_run = 0;
+        }
+    } else {
+        double r = (double)(now_t - yau__fit_time(&c->fit, fend));
+        if (r > yau__cgate(c)) {
+            if (!c->late_run) { c->late_run = 1; c->loss_since = now_t; c->late_min = r; c->loss_f0 = c->f; }
+            if (r < c->late_min) c->late_min = r;
+            if (now_t - c->loss_since >= YAU__LOSS_NS) {
+                c->late_run = 0;
+                yau__cxrun(c, now_t, (int64_t)floor(c->late_min / c->fit.k + 0.5), c->loss_f0);
+            }
+        } else {
+            c->late_run = 0;
+        }
+    }
+}
+
+YAU_API void yau_capture_block(void* host, void* in, int32_t frames, const yau_tick* tk) {
+    yau_capture* c = (yau_capture*)host;
+    int64_t fend, now_t, pw = 0;
+    int have_pos;
+    YRT_ZONE(zc, "yau.capture");
+    if (!c || !in || frames <= 0 || !tk || !c->mem) { YRT_ZONE_END(zc); return; }
+    YAU__ON_CAPTURE(c, tk, frames);
+    now_t = tk->t_entry;
+    have_pos = c->dcaps.pos_source == YAU_POS_DEVICE && tk->pos >= 0 && tk->pos_t > 0;
+    /* the position in capture frames: plus every frame a halt left out */
+    if (have_pos) pw = tk->pos + c->p_off;
+    if (c->first_block) {
+        c->first_block = 0;
+        c->fit.w0 = have_pos ? pw : c->f + frames;
+        c->fit.t0 = have_pos ? tk->pos_t : now_t;
+        c->fit.k = yau__ck_nom(c);
+        c->fit.source = c->dcaps.pos_source;
+    }
+    /* 1. losses: a device that says so, then the backlog or the callbacks */
+    if (tk->flags & YAU_TICK_XRUN) yau__cxrun(c, now_t, 0, c->f);
+    else yau__closs(c, now_t, have_pos, pw, c->f + frames);
+    fend = c->f + frames;
+    c->last_entry = now_t;
+
+    /* 2. the fit. A report whose stamp has not changed says nothing new:
+     * measured on the test laptop's microphone, WASAPI's capture clock
+     * moves the position every 10 ms and the stamp every 20 ms, and only
+     * the pair read when the stamp changes lies on the line (79 us sd
+     * over 10 s; at most 1.2 ms off it in 6 minutes idle and under load).
+     * Once the fit is ready a report off it by more than half a period or
+     * 5 ms, whichever is more (YAU__CAP_GATE_NS), is kept out of the fit and
+     * counted (set_aside), and:
+     *   HALT: late. Measured, after each stall of the device thread longer
+     *   than the device's buffer (60 to 81 ms), the reports lay 48 ms late
+     *   for good: the position stood while nothing was recorded, so the
+     *   frames before and after it are 48 ms further apart than their
+     *   numbers say. The first late report can be the halt half over (38
+     *   ms late, then 48, in the same runs). Three late reports in a row are
+     *   a halt of the least delay but the first's: the capture frames jump by
+     *   it (a LOST gap), the position is counted on by it, and the fit starts
+     *   over (yau__cxrun).
+     *   Early, for 2 s: the fit starts over from the reports, as the
+     *   output's does (REANCHOR). */
+    if (have_pos) {
+        if (tk->pos_t != c->last_stamp && pw > c->last_pos) {
+            int use = 1;
+            if (c->fit.ready) {
+                double r = (double)(tk->pos_t - yau__fit_time(&c->fit, pw));
+                double half = yau__cgate(c);
+                if (r > half) {
+                    use = 0;
+                    c->early_run = 0;
+                    /* the first can be the halt half over: not in its length */
+                    if (c->halt_run++ == 0) c->halt_f0 = c->f;
+                    else if (c->halt_run == 2 || r < c->halt_min) c->halt_min = r;
+                    if (c->halt_run >= YAU__CAP_HALT_REPORTS) {
+                        int64_t lost = (int64_t)floor(c->halt_min / c->fit.k + 0.5);
+                        c->halt_run = 0;
+                        c->p_off += lost;
+                        pw += lost;
+                        fend += lost;
+                        yau__cxrun(c, now_t, lost, c->halt_f0);
+                        use = 1;
+                    }
+                } else if (r < -half) {
+                    use = 0;
+                    c->halt_run = 0;
+                    if (!c->early_run) { c->early_run = 1; c->early_since = tk->pos_t; }
+                    if (tk->pos_t - c->early_since >= YAU__REANCHOR_NS) {
+                        yau__cxrun(c, now_t, 0, c->f);
+                        c->early_run = 0;
+                    }
+                } else {
+                    c->halt_run = 0;
+                    c->early_run = 0;
+                }
+                if (!use) yau__st32(&c->set_aside, c->set_aside + 1);
+            }
+            if (use && !c->first_block) yau__cfeed(c, pw, tk->pos_t);
+            c->last_stamp = tk->pos_t;
+            c->last_pos = pw;
+        }
+        if (c->desc.ring && tk->pos_t - c->last_clock_t >= 1000000000LL) {
+            yrt_event ev;
+            memset(&ev, 0, sizeof ev);
+            ev.t_ns = (uint64_t)tk->pos_t;
+            ev.tid = c->tid;
+            ev.source = (uint16_t)YRT_SRC_RT;
+            ev.kind = (uint16_t)YRT_KIND_CLOCK;
+            ev.aux = 0x41430000u + (c->desc.device_index & 7u);
+            ev.u.u64[0] = (uint64_t)pw;
+            (void)yrt_ring_push(c->desc.ring, &ev);
+            c->last_clock_t = tk->pos_t;
+        }
+    } else {
+        yau__cfeed(c, fend, now_t);
+    }
+
+    /* 3. the samples */
+    yau__cwrite(c, in, frames);
+    c->f = fend;
+    YAU__ON_CAPTURE_END(c);
+    YRT_ZONE_END(zc);
+}
+
+YAU_API void yau_capture_thread_init(void* host) {
+    yau_capture* c = (yau_capture*)host;
+    if (!c) return;
+    if (!c->duplex) YRT_THREAD_INIT("yau capture");
+    c->tid = yrt_thread_id();
+}
+
+/* --- capture: frame thread ------------------------------------------------------ */
+
+static int yau__cap_update_rc(yau_capture* c) {
+    uint32_t head, tail;
+    int n = 0;
+    if (!c || !c->open) return YAU_ERR_CLOSED;
+    head = yau__ld32(&c->msg_head);
+    tail = c->msg_tail;
+    while (tail != head) {
+        const yau__cmsg* m = &c->msg[tail % YAU__CAP_MSGS];
+        if (m->kind == YAU__CM_FIT || m->kind == YAU__CM_XRUN) c->fit_ft = m->fit;
+        tail++;
+        n++;
+    }
+    yau__st32(&c->msg_tail, tail);
+    if (yau__ld32(&c->gone)) return YAU_ERR_LOST;
+    return n;
+}
+
+YAU_API int yau_capture_update(yau_capture* c) {
+    uint32_t n0 = c ? c->err_n : 0u;
+    int rc = yau__cap_update_rc(c);
+    if (rc < 0 && c && c->err_n == n0) yau__cerr(c, "ysp_audio: yau_capture_update: %s", yau_strerror(rc));
+    return rc;
+}
+
+YAU_API const float* yau_capture_acquire(yau_capture* c, int reader, int64_t* frames, int64_t* first_frame,
+                                         int* gap) {
+    yau__creader* r;
+    int64_t w, n, at;
+    uint32_t gh;
+    if (frames) *frames = 0;
+    if (gap) *gap = 0;
+    if (!c || !c->open || !c->mem || reader < 0 || reader >= YAU_CAP_READERS || !c->rd[reader].on || !frames)
+        return NULL;
+    if (reader == 0) (void)yau__cap_update_rc(c);
+    r = &c->rd[reader];
+    w = yau__ld64(&c->wpos);
+    gh = yau__ld32(&c->gap_head);
+    /* the gaps at this position: the frames jump, nothing to read */
+    while (r->gap_tail != gh && c->gap[r->gap_tail % YAU__CAP_GAPS].pos == r->pos) {
+        const yau__cgap* g = &c->gap[r->gap_tail % YAU__CAP_GAPS];
+        r->frame += g->frames;
+        if (gap) *gap |= g->kind;
+        yau__st32(&r->gap_tail, r->gap_tail + 1);
+    }
+    n = w - r->pos;
+    if (r->gap_tail != gh) {
+        int64_t gp = c->gap[r->gap_tail % YAU__CAP_GAPS].pos;
+        if (gp - r->pos < n) n = gp - r->pos;
+    }
+    if (first_frame) *first_frame = r->frame;
+    if (n <= 0) return NULL;
+    at = r->pos % c->cap;
+    if (c->cap - at < n) n = c->cap - at;
+    *frames = n;
+    return c->mem + at * c->dcaps.channels;
+}
+
+YAU_API int yau_capture_release(yau_capture* c, int reader, int64_t frames) {
+    yau__creader* r;
+    int64_t w;
+    if (!c || !c->open || reader < 0 || reader >= YAU_CAP_READERS || !c->rd[reader].on || frames < 0)
+        return YAU_ERR_ARG;
+    r = &c->rd[reader];
+    w = yau__ld64(&c->wpos);
+    if (frames > w - r->pos) return YAU_ERR_ARG;
+    r->frame += frames;
+    /* the frames are read before the slots go back to the device */
+    yau__st64(&r->pos, r->pos + frames);
+    return 0;
+}
+
+YAU_API int64_t yau_capture_read(yau_capture* c, int reader, float* dst, int64_t max_frames, int64_t* first_frame) {
+    int64_t done = 0, n, f0 = -1, f;
+    const float* p;
+    int C;
+    if (!c || !dst || max_frames < 0) return YAU_ERR_ARG;
+    C = c->dcaps.channels;
+    while (done < max_frames && (p = yau_capture_acquire(c, reader, &n, &f, NULL)) != NULL) {
+        if (f0 < 0) f0 = f;
+        else if (f != f0 + done) break;   /* a gap: the next read starts after it */
+        if (n > max_frames - done) n = max_frames - done;
+        memcpy(dst + done * C, p, (size_t)(n * C) * sizeof(float));
+        (void)yau_capture_release(c, reader, n);
+        done += n;
+    }
+    if (first_frame) *first_frame = f0 >= 0 ? f0 : (c->open && reader >= 0 && reader < YAU_CAP_READERS ? c->rd[reader].frame : -1);
+    return done;
+}
+
+YAU_API int64_t yau_capture_save(yau_capture* c, int reader, yau_wavw* w, int64_t max_frames) {
+    int64_t done = 0, n, f;
+    const float* p;
+    if (!c || !w || !w->open_ || max_frames < 0) return YAU_ERR_ARG;
+    if (c->dcaps.channels != w->ch_) return YAU_ERR_FORMAT;
+    for (;;) {
+        int64_t before = reader >= 0 && reader < YAU_CAP_READERS ? c->rd[reader].frame : 0;
+        int g = 0;
+        p = yau_capture_acquire(c, reader, &n, &f, &g);
+        if (g) {
+            /* the file keeps sample s on capture frame first + s */
+            int64_t z = f - before, rc;
+            static const float zeros[256] = { 0 };
+            while (z > 0) {
+                int64_t k = z;
+                if (k > (int64_t)(sizeof zeros / sizeof zeros[0]) / w->ch_) k = (int64_t)(sizeof zeros / sizeof zeros[0]) / w->ch_;
+                rc = yau_wavw_write(w, zeros, k);
+                if (rc < 0) return rc;
+                z -= k;
+            }
+        }
+        if (!p || (max_frames && done >= max_frames)) break;
+        if (max_frames && n > max_frames - done) n = max_frames - done;
+        {
+            int64_t rc = yau_wavw_write(w, p, n);
+            if (rc < 0) return rc;
+        }
+        (void)yau_capture_release(c, reader, n);
+        done += n;
+    }
+    return done;
+}
+
+YAU_API int64_t yau_capture_time_of(const yau_capture* c, int64_t frame) {
+    if (!c || !c->open || c->fit_ft.k <= 0) return -1;
+    return yau__fit_time(&c->fit_ft, frame) + c->desc.offset_ns;
+}
+
+YAU_API int64_t yau_capture_time_at(const yau_capture* c, double frame) {
+    if (!c || !c->open || c->fit_ft.k <= 0) return -1;
+    return c->fit_ft.t0 + (int64_t)floor((frame - (double)c->fit_ft.w0) * c->fit_ft.k + 0.5) + c->desc.offset_ns;
+}
+
+YAU_API int64_t yau_capture_frame_at(const yau_capture* c, int64_t t) {
+    if (!c || !c->open || c->fit_ft.k <= 0) return -1;
+    return yau__fit_frame(&c->fit_ft, t - c->desc.offset_ns);
+}
+
+YAU_API bool yau_capture_is_open(const yau_capture* c) { return c && c->open; }
+YAU_API const char* yau_capture_error(const yau_capture* c) { return c ? c->error : ""; }
+
+static int yau__cap_tier(const yau_capture* c) {
+    if (c->dcaps.tier == YAU_TIER_SIM || c->dcaps.tier == YAU_TIER_WEB) return c->dcaps.tier;
+    return c->dcaps.tier >= YAU_TIER_1 && c->dcaps.tier <= YAU_TIER_3 ? c->dcaps.tier : YAU_TIER_3;
+}
+
+YAU_API void yau_capture_get_info(const yau_capture* c, yau_capture_info* out) {
+    int i;
+    int64_t w;
+    if (!out) return;
+    memset(out, 0, sizeof *out);
+    if (!c || !c->open) return;
+    out->rate = c->dcaps.rate;
+    out->channels = c->dcaps.channels;
+    out->in = c->dcaps.out;
+    out->period = c->dcaps.period;
+    out->buffer = c->dcaps.buffer;
+    out->exclusive = c->dcaps.exclusive;
+    out->duplex = c->duplex != 0;
+    out->fit_ready = c->fit_ft.ready != 0;
+    out->pos_source = c->dcaps.pos_source;
+    out->tier = yau__cap_tier(c);
+    out->drift_ppm = c->fit_ft.k > 0 ? (yau__ck_nom(c) / c->fit_ft.k - 1.0) * 1e6 : 0;
+    out->fit_spread_ns = c->fit_ft.spread;
+    out->fit_points = c->fit_ft.n;
+    out->xruns = yau__ld32(&c->xruns);
+    out->drops = yau__ld32(&c->drops);
+    out->set_aside = yau__ld32(&c->set_aside);
+    out->frames = yau__ld64(&c->wframe);
+    out->dropped = yau__ld64(&c->dropped);
+    out->lost = yau__ld64(&c->lost);
+    w = yau__ld64(&c->wpos);
+    for (i = 0; i < YAU_CAP_READERS; i++) out->fill[i] = c->rd[i].on ? w - yau__ld64(&c->rd[i].pos) : 0;
+    out->os_latency_ns = c->dcaps.os_latency_src[0] ? c->dcaps.os_latency_ns : -1;
+    out->os_stream_latency_ns = c->dcaps.os_latency_src[0] ? c->dcaps.os_stream_latency_ns : -1;
+    memcpy(out->os_latency_src, c->dcaps.os_latency_src, sizeof out->os_latency_src);
+    out->os_latency_src[sizeof out->os_latency_src - 1] = 0;
+    memcpy(out->name, c->dcaps.name, sizeof out->name);
+    out->name[sizeof out->name - 1] = 0;
+}
+
+YAU_API int yau_capture_describe(const yau_capture* c, char* buf, size_t cap) {
+    yau_capture_info in;
+    char be[160] = "", claim[96];   /* a duplex web device's is about 120 bytes */
+    if (!buf || cap == 0) return 0;
+    if (!c || !c->open) return snprintf(buf, cap, "ysp_audio capture: closed");
+    yau_capture_get_info(c, &in);
+    if (in.os_latency_src[0])
+        snprintf(claim, sizeof claim, "%s:%.3fms,stream:%.3fms", in.os_latency_src, (double)in.os_latency_ns / 1e6,
+                 (double)in.os_stream_latency_ns / 1e6);
+    else
+        snprintf(claim, sizeof claim, "none");
+    if (c->dev && c->dev->describe) (void)c->dev->describe(c->dev_ctx, be, sizeof be);
+    else snprintf(be, sizeof be, "%s", c->dev && c->dev->name ? c->dev->name : "?");
+    return snprintf(buf, cap,
+        "ysp_audio capture: backend=%s%s device='%s' rate=%u ch=%u in=%s period=%d buffer=%d share=%s pos=%s "
+        "drift=%+.2fppm spread=%.0fns points=%u set_aside=%u xruns=%u lost=%lld drops=%u dropped=%lld tier=%d "
+        "os_claim=%s%s",
+        c->duplex ? "duplex," : "", be, in.name, (unsigned)in.rate, (unsigned)in.channels, yau__out_name(in.in),
+        (int)in.period, (int)in.buffer, in.exclusive ? "exclusive" : "shared",
+        in.pos_source == YAU_POS_DEVICE ? "device" : "callback", in.drift_ppm, in.fit_spread_ns,
+        (unsigned)in.fit_points, (unsigned)in.set_aside, (unsigned)in.xruns, (long long)in.lost,
+        (unsigned)in.drops, (long long)in.dropped, (int)in.tier,
+        claim, yau__ld32(&c->gone) ? " LOST" : "");
+}
+
+/* The checks of a capture desc that need no device. */
+static int yau__cap_desc(yau_capture* c, const yau_capture_desc* d) {
+    memset(c, 0, sizeof *c);
+    if (!d) { yau__cerr(c, "ysp_audio: capture desc is NULL"); return YAU_ERR_ARG; }
+    c->desc = *d;
+    if (!c->desc.format.rate) c->desc.format.rate = 48000;
+    if (!c->desc.readers) c->desc.readers = 1;
+    if (!c->desc.frames) c->desc.frames = 2 * (int64_t)c->desc.format.rate;
+    if (c->desc.format.channels > YAU_MAX_CHANNELS || c->desc.format.sample > YAU_S24 || c->desc.format.rate > 768000
+        || c->desc.period < 0 || c->desc.readers < 1 || c->desc.readers > YAU_CAP_READERS || c->desc.frames < 0
+        || c->desc.device_index > 7) {
+        yau__cerr(c, "ysp_audio: a capture desc field is out of range (channels <= %d, sample, rate, period >= 0, "
+                     "readers 1..%d, frames >= 0, device_index 0..7)", YAU_MAX_CHANNELS, YAU_CAP_READERS);
+        return YAU_ERR_ARG;
+    }
+    if (!c->desc.period) c->desc.period = (int32_t)(c->desc.format.rate / 100);
+    c->first_block = 1;
+    c->last_stamp = -1;
+    c->last_pos = INT64_MIN;
+    c->q_floor = INT64_MAX;
+    return 0;
+}
+
+/* STRICT OPEN for the input, then the ring: the device's own rate, channel
+ * count (all of them unless the desc names a count, which must match), map
+ * and at least the resolution asked for. */
+static int yau__cap_setup(yau_capture* c) {
+    const yau_format* f = &c->desc.format;
+    int i, need = f->sample == YAU_S16 ? 16 : 24;
+    int64_t floats;
+    if (c->dcaps.rate != f->rate) {
+        yau__cerr(c, "ysp_audio: input '%s' runs at %u Hz; the project is %u Hz. On Windows the rate is the "
+                     "device's Default Format (Sound > Recording > the device > Properties > Advanced).",
+                  c->dcaps.name, (unsigned)c->dcaps.rate, (unsigned)f->rate);
+        return YAU_ERR_FORMAT;
+    }
+    if (c->dcaps.channels == 0 || (f->channels && c->dcaps.channels != f->channels)) {
+        yau__cerr(c, "ysp_audio: input '%s' has %u channels; the capture desc asks for %u",
+                  c->dcaps.name, (unsigned)c->dcaps.channels, (unsigned)f->channels);
+        return YAU_ERR_FORMAT;
+    }
+    if (yau__resolution(c->dcaps.out, c->dcaps.bits) < need) {
+        yau__cerr(c, "ysp_audio: input '%s' gives %s samples, fewer bits than the desc asks for",
+                  c->dcaps.name, yau__out_name(c->dcaps.out));
+        return YAU_ERR_FORMAT;
+    }
+    if (f->map)
+        for (i = 0; i < c->dcaps.channels; i++)
+            if (c->dcaps.map[i] != f->map[i]) {
+                yau__cerr(c, "ysp_audio: input '%s' channel %d is position %u; the map says %u", c->dcaps.name, i,
+                          (unsigned)c->dcaps.map[i], (unsigned)f->map[i]);
+                return YAU_ERR_FORMAT;
+            }
+    if (c->dcaps.period <= 0) c->dcaps.period = c->desc.period;
+    if (c->desc.frames < 4 * (int64_t)c->dcaps.period) {
+        yau__cerr(c, "ysp_audio: a capture ring needs at least 4 periods (%d frames)", 4 * (int)c->dcaps.period);
+        return YAU_ERR_ARG;
+    }
+    c->dcaps.os_latency_src[sizeof c->dcaps.os_latency_src - 1] = 0;
+    c->cap = c->desc.frames;
+    floats = c->cap * c->dcaps.channels;
+    if (c->desc.memory) {
+        c->mem = c->desc.memory;
+    } else {
+        c->mem = (float*)malloc((size_t)floats * sizeof(float));
+        if (!c->mem) { yau__cerr(c, "ysp_audio: no memory for a %lld-frame capture ring", (long long)c->cap); return YAU_ERR_FULL; }
+        c->mem_owned = 1;
+    }
+    for (i = 0; i < YAU_CAP_READERS; i++) {
+        c->rd[i].pos = 0;
+        c->rd[i].frame = 0;
+        c->rd[i].gap_tail = 0;
+        c->rd[i].on = i < c->desc.readers;
+    }
+    c->open = 1;
+    {
+        yrt_payload u;
+        memset(&u, 0, sizeof u);
+        u.i32[0] = (int32_t)c->dcaps.rate;
+        u.i32[1] = c->dcaps.channels;
+        u.i32[2] = c->dcaps.out;
+        u.i32[3] = c->dcaps.period;
+        u.i32[4] = c->dcaps.buffer;
+        u.i32[5] = c->dcaps.exclusive;
+        u.i32[6] = c->duplex;
+        u.i32[7] = (int32_t)c->desc.backend;
+        u.i32[8] = c->dcaps.pos_source;
+        yau__cring(c, (uint16_t)YAU_EV_CAP_OPEN, YAU__NOW(), c->desc.device_index, &u);
+    }
+    return 0;
+}
+
+/* The fit spans 0.5 s, or 3 s passed; false with the message. */
+static bool yau__cap_warm(yau_capture* c) {
+    int64_t end = YAU__NOW() + 3000000000LL;
+    while (!c->fit_ft.ready) {
+        (void)yau__cap_update_rc(c);
+        if (c->fit_ft.ready) break;
+        if (yau__ld32(&c->gone) || YAU__NOW() > end) {
+            yau__cerr(c, "ysp_audio: input '%s' gave no steady blocks within 3 s (lost=%u, fit points=%u, fits=%u)",
+                      c->dcaps.name, (unsigned)yau__ld32(&c->gone), (unsigned)c->fit_ft.n, (unsigned)c->fit_ft.gen);
+            return false;
+        }
+        YAU__SLEEP_UNTIL(YAU__NOW() + 10000000);
+    }
+    return true;
+}
+
+static void yau__cap_free(yau_capture* c) {
+    if (c->mem_owned) free(c->mem);
+    c->mem = NULL;
+    c->mem_owned = 0;
+    c->open = 0;
+}
+
+YAU_API bool yau_capture_open(yau_capture* c, const yau_capture_desc* d) {
+    yau_device_open in;
+    int rc;
+    if (!c) return false;
+    if (c->open) yau_capture_close(c);
+    if (yau__cap_desc(c, d) < 0) return false;
+    if (c->desc.backend == YAU_BACKEND_CUSTOM) {
+        if (!c->desc.dev || c->desc.dev->version != YAU_DEVICE_VERSION || !c->desc.dev->open || !c->desc.dev->start) {
+            yau__cerr(c, "ysp_audio: a CUSTOM capture needs desc.dev with version %d, open and start", YAU_DEVICE_VERSION);
+            return false;
+        }
+        c->dev = c->desc.dev;
+        c->dev_ctx = c->desc.dev_ctx;
+    } else {
+#if defined(YAU_NO_MINIAUDIO)
+        yau__cerr(c, "ysp_audio: built with YAU_NO_MINIAUDIO: only a CUSTOM capture opens");
+        return false;
+#else
+        yau__mac* m = (yau__mac*)(void*)c->backend_mem;
+        if (!yau__ma_backend(c->desc.backend, &m->backend)) { yau__cerr(c, "ysp_audio: unknown backend %d", (int)c->desc.backend); return false; }
+        m->c = c;
+        c->dev = &yau__mac_device;
+        c->dev_ctx = m;
+#endif
+    }
+    memset(&in, 0, sizeof in);
+    in.format = &c->desc.format;
+    in.period = c->desc.period;
+    in.exclusive = c->desc.exclusive;
+    in.device = c->desc.device;
+    in.capture = 1;
+    rc = c->dev->open(c->dev_ctx, &in, &c->dcaps, c->error, sizeof c->error);
+    if (rc >= 0) rc = yau__cap_setup(c);
+    else if (!c->error[0]) yau__cerr(c, "ysp_audio: the input did not open (%s)", yau_strerror(rc));
+    if (rc < 0) {
+        if (c->dev->close) c->dev->close(c->dev_ctx);
+        yau__cap_free(c);
+        return false;
+    }
+    rc = c->dev->start(c->dev_ctx, yau_capture_block, c);
+    if (rc < 0) {
+        yau__cerr(c, "ysp_audio: input '%s' did not start", c->dcaps.name);
+        yau_capture_close(c);
+        return false;
+    }
+    c->started = 1;
+    if (c->desc.backend != YAU_BACKEND_CUSTOM && !yau__cap_warm(c)) {
+        char msg[sizeof c->error];
+        memcpy(msg, c->error, sizeof msg);
+        yau_capture_close(c);
+        memcpy(c->error, msg, sizeof msg);
+        return false;
+    }
+    return true;
+}
+
+YAU_API void yau_capture_close(yau_capture* c) {
+    if (!c || !c->open || c->duplex) return;
+    if (c->started && c->dev->stop) c->dev->stop(c->dev_ctx);
+    c->started = 0;
+    if (c->dev->close) c->dev->close(c->dev_ctx);
+    yau__cap_free(c);
+}
+
+/* --- detectors (DETECTORS) ------------------------------------------------------- */
+
+static double yau__db_pow(float db) { return pow(10.0, (double)db / 10.0); }
+
+YAU_API int yau_vkey_init(yau_vkey* vk, const yau_vkey_desc* d, uint32_t rate) {
+    double off;
+    if (!vk || !d || rate == 0) return YAU_ERR_ARG;
+    memset(vk, 0, sizeof *vk);
+    off = d->off_db != 0 ? d->off_db : d->on_db - 6.0f;
+    if (!(d->on_db < 0) || !(off <= d->on_db) || d->window_ns < 0 || d->min_ns < 0 || d->hold_ns < 0) return YAU_ERR_ARG;
+    vk->on2_ = yau__db_pow(d->on_db);
+    vk->off2_ = yau__db_pow((float)off);
+    vk->win_ = yau__frames_of(d->window_ns ? d->window_ns : 5000000, rate);
+    vk->min_ = yau__frames_of(d->min_ns ? d->min_ns : 30000000, rate);
+    vk->hold_ = yau__frames_of(d->hold_ns ? d->hold_ns : 100000000, rate);
+    if (vk->win_ < 1 || vk->win_ > YAU__VKEY_WIN) return YAU_ERR_ARG;
+    if (vk->min_ < 1) vk->min_ = 1;
+    if (vk->hold_ < 1) vk->hold_ = 1;
+    vk->ch_ = d->channel;
+    vk->next_ = INT64_MIN;
+    return 0;
+}
+
+static void yau__vkey_restart(yau_vkey* vk, int64_t frame) {
+    memset(vk->sq_, 0, sizeof(float) * (size_t)vk->win_);
+    vk->sum_ = 0;
+    vk->prev_ = 0;
+    vk->at_ = 0;
+    vk->state_ = 0;
+    vk->next_ = frame;
+}
+
+/* The frame where the RMS envelope crossed level2 (a power) between frame
+ * i - 1 (power p0) and frame i (power p1), linear in the RMS. */
+static double yau__cross(int64_t i, double p0, double p1, double level2) {
+    double r0 = sqrt(p0), r1 = sqrt(p1), l = sqrt(level2);
+    if (r1 == r0) return (double)i;
+    return (double)(i - 1) + (l - r0) / (r1 - r0);
+}
+
+static int yau__vkey_emit(yau_vkey* vk, yau_vkey_event* out, int cap, int n, int32_t kind, double frame, double peak2) {
+    if (n >= cap) { vk->missed_++; return n; }
+    out[n].kind = kind;
+    out[n].frame = frame;
+    out[n].level_db = (float)(peak2 > 0 ? 10.0 * log10(peak2) : -999.0);
+    return n + 1;
+}
+
+/* The RMS over the last window_ns, from a running sum of squares that is
+ * summed again each time its ring wraps, so the result depends on the
+ * samples alone, not on how they were split into blocks or on rounding
+ * that piles up over hours. States: 0 quiet, 1 a candidate (over on_db,
+ * not yet min_ns), 2 a sound, the onset reported. */
+YAU_API int yau_vkey_feed(yau_vkey* vk, const float* x, int64_t frames, uint16_t channels, int64_t first_frame,
+                          yau_vkey_event* out, int cap) {
+    int64_t i;
+    int n = 0;
+    double w;
+    if (!vk || !x || frames < 0 || channels == 0 || vk->ch_ >= channels || (cap > 0 && !out) || vk->win_ < 1)
+        return YAU_ERR_ARG;
+    if (first_frame != vk->next_) yau__vkey_restart(vk, first_frame);
+    w = (double)vk->win_;
+    for (i = 0; i < frames; i++) {
+        int64_t f = first_frame + i;
+        float s = x[i * channels + vk->ch_];
+        float q = s * s;
+        double p;
+        vk->sum_ += (double)q - (double)vk->sq_[vk->at_];
+        vk->sq_[vk->at_] = q;
+        if (++vk->at_ == vk->win_) {
+            int64_t k;
+            vk->at_ = 0;
+            vk->sum_ = 0;
+            for (k = 0; k < vk->win_; k++) vk->sum_ += (double)vk->sq_[k];
+        }
+        p = vk->sum_ > 0 ? vk->sum_ / w : 0;
+        switch (vk->state_) {
+        case 0:
+            if (p >= vk->on2_) {
+                vk->state_ = 1;
+                vk->cand_ = yau__cross(f, vk->prev_, p, vk->on2_);
+                vk->cand_i_ = f;
+                vk->peak_ = p;
+            }
+            break;
+        case 1:
+            if (p > vk->peak_) vk->peak_ = p;
+            if (p < vk->off2_) { vk->state_ = 0; vk->rejected_++; break; }
+            if (f - vk->cand_i_ + 1 >= vk->min_) {
+                n = yau__vkey_emit(vk, out, cap, n, YAU_VKEY_ON, vk->cand_, vk->peak_);
+                vk->state_ = 2;
+                vk->below_i_ = -1;
+            }
+            break;
+        default:
+            if (p > vk->peak_) vk->peak_ = p;
+            if (p < vk->off2_) {
+                if (vk->below_i_ < 0) { vk->below_i_ = f; vk->below_f_ = yau__cross(f, vk->prev_, p, vk->off2_); }
+                if (f - vk->below_i_ + 1 >= vk->hold_) {
+                    n = yau__vkey_emit(vk, out, cap, n, YAU_VKEY_OFF, vk->below_f_, vk->peak_);
+                    vk->state_ = 0;
+                }
+            } else {
+                vk->below_i_ = -1;
+            }
+            break;
+        }
+        vk->prev_ = p;
+    }
+    vk->next_ = first_frame + frames;
+    return n;
+}
+
+YAU_API int yau_edge_init(yau_edge* e, const yau_edge_desc* d, uint32_t rate) {
+    if (!e || !d || rate == 0) return YAU_ERR_ARG;
+    memset(e, 0, sizeof *e);
+    if (!(d->level_db <= 0) || d->dead_ns < 0 || d->polarity < -1 || d->polarity > 1) return YAU_ERR_ARG;
+    e->level_ = pow(10.0, (double)d->level_db / 20.0);
+    e->dead_ = yau__frames_of(d->dead_ns ? d->dead_ns : 50000000, rate);
+    e->pol_ = d->polarity;
+    e->ch_ = d->channel;
+    e->next_ = INT64_MIN;
+    e->until_ = INT64_MIN;
+    return 0;
+}
+
+YAU_API int yau_edge_feed(yau_edge* e, const float* x, int64_t frames, uint16_t channels, int64_t first_frame,
+                          double* edges, int cap) {
+    int64_t i;
+    int n = 0;
+    if (!e || !x || frames < 0 || channels == 0 || e->ch_ >= channels || (cap > 0 && !edges)) return YAU_ERR_ARG;
+    if (first_frame != e->next_) e->have_prev_ = 0;
+    for (i = 0; i < frames; i++) {
+        int64_t f = first_frame + i;
+        float s = x[i * channels + e->ch_];
+        double a = e->pol_ > 0 ? (double)s : e->pol_ < 0 ? -(double)s : fabs((double)s);
+        double a0 = !e->have_prev_ ? -1.0 : e->pol_ > 0 ? (double)e->prev_ : e->pol_ < 0 ? -(double)e->prev_
+                  : fabs((double)e->prev_);
+        /* a crossing: a level held past the dead time is not a new edge */
+        if (a >= e->level_ && a0 < e->level_ && f >= e->until_) {
+            double at = e->have_prev_ ? (double)(f - 1) + (e->level_ - a0) / (a - a0) : (double)f;
+            if (n < cap) edges[n++] = at; else e->missed_++;
+            e->until_ = f + e->dead_;
+        }
+        e->prev_ = s;
+        e->have_prev_ = 1;
+    }
+    e->next_ = first_frame + frames;
+    return n;
+}
+
+/* --- WAV writer (WAV OUT) -------------------------------------------------------- */
+
+static void yau__put16(unsigned char* p, uint32_t v) { p[0] = (unsigned char)v; p[1] = (unsigned char)(v >> 8); }
+static void yau__put32(unsigned char* p, uint32_t v) { yau__put16(p, v); yau__put16(p + 2, v >> 16); }
+static void yau__put64(unsigned char* p, uint64_t v) { yau__put32(p, (uint32_t)v); yau__put32(p + 4, (uint32_t)(v >> 32)); }
+
+#define YAU__WAVW_HDR 80   /* RIFF 12, JUNK (ds64's place) 36, fmt 24, data 8 */
+
+/* The header, at open with sizes 0, at close with the real ones. A JUNK
+ * chunk holds ds64's place, so a file past 4 GB becomes RF64 in place
+ * (EBU Tech 3306), which the reader accepts. */
+static void yau__wavw_header(const yau_wavw* w, unsigned char* h, uint64_t data) {
+    int bytes = yau__wav_bytes(w->format_);
+    uint64_t riff = (uint64_t)YAU__WAVW_HDR - 8 + data + (data & 1u);
+    int big = riff > 0xFFFFFFFFull;
+    memset(h, 0, YAU__WAVW_HDR);
+    memcpy(h, big ? "RF64" : "RIFF", 4);
+    yau__put32(h + 4, big ? 0xFFFFFFFFu : (uint32_t)riff);
+    memcpy(h + 8, "WAVE", 4);
+    memcpy(h + 12, big ? "ds64" : "JUNK", 4);
+    yau__put32(h + 16, 28);
+    if (big) {
+        yau__put64(h + 20, riff);
+        yau__put64(h + 28, data);
+        yau__put64(h + 36, data / ((uint64_t)bytes * w->ch_));
+    }
+    memcpy(h + 48, "fmt ", 4);
+    yau__put32(h + 52, 16);
+    yau__put16(h + 56, w->format_ == YAU_WAV_F32 ? 3u : 1u);
+    yau__put16(h + 58, w->ch_);
+    yau__put32(h + 60, w->rate_);
+    yau__put32(h + 64, w->rate_ * (uint32_t)(bytes * w->ch_));
+    yau__put16(h + 68, (uint32_t)(bytes * w->ch_));
+    yau__put16(h + 70, (uint32_t)(bytes * 8));
+    memcpy(h + 72, "data", 4);
+    yau__put32(h + 76, big ? 0xFFFFFFFFu : (uint32_t)data);
+}
+
+YAU_API const char* yau_wavw_error(const yau_wavw* w) { return w ? w->error_ : ""; }
+
+YAU_API bool yau_wavw_open(yau_wavw* w, const yau_wavw_desc* d) {
+    FILE* f = NULL;
+    unsigned char h[YAU__WAVW_HDR];
+    if (!w) return false;
+    if (w->open_) yau_wavw_close(w);
+    memset(w, 0, sizeof *w);
+    if (!d || !d->path || d->rate == 0 || d->channels == 0 || d->channels > YAU_MAX_CHANNELS
+        || (d->format != 0 && d->format != YAU_WAV_F32 && d->format != YAU_WAV_S16 && d->format != YAU_WAV_S24)) {
+        snprintf(w->error_, sizeof w->error_, "ysp_audio: a WAV writer needs a path, a rate, 1 to %d channels and "
+                 "YAU_WAV_F32, _S16 or _S24", YAU_MAX_CHANNELS);
+        return false;
+    }
+    w->rate_ = d->rate;
+    w->ch_ = d->channels;
+    w->format_ = d->format ? d->format : (uint16_t)YAU_WAV_F32;
+#if defined(_MSC_VER)
+    if (fopen_s(&f, d->path, "wb") != 0) f = NULL;
+#else
+    f = fopen(d->path, "wb");
+#endif
+    if (!f) { snprintf(w->error_, sizeof w->error_, "ysp_audio: cannot create '%s'", d->path); return false; }
+    /* no stdio buffer: the C runtime would allocate one at the first write */
+    setvbuf(f, NULL, _IONBF, 0);
+    yau__wavw_header(w, h, 0);
+    if (fwrite(h, 1, sizeof h, f) != sizeof h) {
+        fclose(f);
+        snprintf(w->error_, sizeof w->error_, "ysp_audio: cannot write '%s'", d->path);
+        return false;
+    }
+    w->fh_ = f;
+    w->open_ = 1;
+    return true;
+}
+
+YAU_API int64_t yau_wavw_write(yau_wavw* w, const float* x, int64_t frames) {
+    int bytes, C;
+    int64_t done = 0, per;
+    if (!w || !w->open_ || !x || frames < 0) return YAU_ERR_ARG;
+    if (w->failed_) return YAU_ERR_IO;
+    bytes = yau__wav_bytes(w->format_);
+    C = w->ch_;
+    per = YAU__WAV_SCRATCH / (bytes * C);
+    while (done < frames) {
+        int64_t k = frames - done, i, ns;
+        unsigned char* o = w->scratch_;
+        const float* s = x + done * C;
+        if (k > per) k = per;
+        ns = k * C;
+        for (i = 0; i < ns; i++) {
+            float v = s[i];
+            if (w->format_ == YAU_WAV_F32) {
+                uint32_t u;
+                memcpy(&u, &v, 4);
+                yau__put32(o + 4 * i, u);
+            } else {
+                double full = w->format_ == YAU_WAV_S16 ? 32768.0 : 8388608.0;
+                double q = floor((double)v * full + 0.5);
+                int32_t iv;
+                if (q > full - 1) { q = full - 1; w->clipped++; }
+                else if (q < -full) { q = -full; w->clipped++; }
+                else if (q != q) { q = 0; w->clipped++; }
+                iv = (int32_t)q;
+                if (w->format_ == YAU_WAV_S16) yau__put16(o + 2 * i, (uint32_t)iv);
+                else { o[3 * i] = (unsigned char)(iv & 0xFF); o[3 * i + 1] = (unsigned char)((iv >> 8) & 0xFF); o[3 * i + 2] = (unsigned char)((iv >> 16) & 0xFF); }
+            }
+        }
+        if (fwrite(w->scratch_, 1, (size_t)(ns * bytes), (FILE*)w->fh_) != (size_t)(ns * bytes)) {
+            w->failed_ = 1;
+            snprintf(w->error_, sizeof w->error_, "ysp_audio: WAV write failed after %lld frames", (long long)w->frames);
+            return YAU_ERR_IO;
+        }
+        w->frames += k;
+        done += k;
+    }
+    return done;
+}
+
+YAU_API void yau_wavw_close(yau_wavw* w) {
+    FILE* f;
+    unsigned char h[YAU__WAVW_HDR];
+    uint64_t data;
+    if (!w || !w->open_) return;
+    f = (FILE*)w->fh_;
+    data = (uint64_t)w->frames * (uint64_t)yau__wav_bytes(w->format_) * w->ch_;
+    if (data & 1u) { unsigned char z = 0; (void)fwrite(&z, 1, 1, f); }
+    yau__wavw_header(w, h, data);
+#if defined(_WIN32)
+    if (_fseeki64(f, 0, SEEK_SET) == 0) (void)fwrite(h, 1, sizeof h, f);
+#else
+    if (fseeko(f, 0, SEEK_SET) == 0) (void)fwrite(h, 1, sizeof h, f);
+#endif
+    fclose(f);
+    w->fh_ = NULL;
+    w->open_ = 0;
 }
 
 YAU_API const yau_param* yau_params(int* n) {
