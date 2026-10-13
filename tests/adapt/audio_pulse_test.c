@@ -6,8 +6,12 @@
  * test_audio_pulse on Linux with miniaudio; the mutation list
  * (tests/mutate/audio.toml, pulse-*) runs it.
  *
- *   1. A 16-bit project opens on YAU_BACKEND_PULSE (a float project is
- *      refused where the sink runs s16, docs/audio.md "Linux: first runs").
+ *   1. A 16-bit project at the default sink's rate opens on
+ *      YAU_BACKEND_PULSE (a float project is refused where the sink runs
+ *      s16, docs/audio.md "Linux: first runs"). The sink's rate is the
+ *      one it runs now: PulseAudio moves an idle sink between its default
+ *      and alternate rates (44100, 48000 here), so a fixed rate failed
+ *      the open after another program's stream had moved it.
  *   2. The position source is the device (PulseAudio's stream timing info),
  *      and the OS claim names it.
  *   3. Over 10 s: no underrun or halt, the fit's spread under 20 us (2.7
@@ -40,6 +44,13 @@ int main(void) {
     memset(&d, 0, sizeof d);
     d.backend = YAU_BACKEND_PULSE;
     d.format.sample = YAU_S16;
+    {
+        char r[32] = "";
+        FILE* f = popen("pactl list short sinks 2>/dev/null | awk -v s=\"$(pactl get-default-sink 2>/dev/null)\" "
+                        "'$2==s {for (i = 1; i <= NF; i++) if ($i ~ /Hz$/) print $i}' | tr -dc 0-9", "r");
+        if (f) { if (!fgets(r, sizeof r, f)) r[0] = 0; pclose(f); }
+        d.format.rate = (uint32_t)atoi(r);   /* 0: the header's 48000 */
+    }
     if (!yau_open(&au, &d)) {
         if (req && req[0] == '1') {
             fprintf(stderr, "audio_pulse_test: FAIL open: %s\n", yau_error(&au));
