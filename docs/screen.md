@@ -2756,9 +2756,13 @@ design decisions that touch the core.
 The design comes from the X11 probe ([screen_x11_probe.md](screen_x11_probe.md),
 section 5.6). This section records what the backend itself does and
 what was measured with it. The measurements ran on the backend's code
-before screen.h's v0.5 to v0.7 changes (settling, the foreground, the
-messages, the web backend) were merged under it; after the merge its
-display test and its eight mutants passed again.
+before screen.h's v0.5 to v0.7.2 changes (settling, the foreground, the
+messages, the web backend) were merged under it. After the merge with
+v0.7.2 (2026-10-13), `test_screen_glx` passed and the 31 `glx-` mutants
+gave the expected results (30 killed; `glx-21` survives, as its entry
+says), with SDL 3.4.18. With SDL before 3.4.18 the test ended on an X
+error (BadWindow in X_TranslateCoords) in its first part, and the mutant
+runner's baseline failed.
 
 The machine: Debian 12, kernel 6.11.5-liquorix, Xorg 21.1 with the
 amdgpu DDX, Mesa 22.3.6 (radeonsi) on an AMD RX 6600, one 1920 x 1080

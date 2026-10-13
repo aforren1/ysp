@@ -1750,7 +1750,8 @@
  *          groups, input restamping, mode lists and the parameter table.
  *          The other swap paths are stubs that refuse to open.
  *
- *   STATUS: v0.8.0 (GLX_OML, at the end of this block). v0.7.2 (WEB fullscreen; docs/web.md): every demo of
+ *   STATUS: v0.8.0 (GLX_OML, at the end of this block). v0.7.2 (WEB
+ *   fullscreen; docs/web.md): every demo of
  *   examples/web ran with fullscreen asked in headed Chrome 154 and
  *   Firefox 157, isolated and not; each page stayed fullscreen until it
  *   left fullscreen itself at the end (before: av.html lost it when SDL
@@ -1936,10 +1937,11 @@
  *   drawn (read back, 96 dpi).
  *   tests/compile/screen_com.cpp checks every COM slot and struct the
  *   header declares against the Windows SDK (MSVC; MinGW for DComp only).
- *   GLX_OML (v0.8.0; measured on the same code before the v0.6 and v0.7.0
- *   changes came in, and its display test passed again after; v0.7.1 and
- *   v0.7.2 change the web backend only, and the display test has not run
- *   since they came in): one machine, Debian 12, kernel 6.11.5-liquorix,
+ *   GLX_OML (v0.8.0; measured on the same code before the v0.6 to v0.7.2
+ *   changes came in; after them, on 2026-10-13, test_screen_glx passed and
+ *   its 31 glx- mutants gave the expected results, 30 killed and glx-21
+ *   survived as listed, with SDL 3.4.18): one machine, Debian 12, kernel
+ *   6.11.5-liquorix,
  *   Xorg 21.1 with the amdgpu DDX, Mesa 22.3.6 radeonsi on an AMD RX 6600,
  *   one 1920 x 1080 output at 60.000000 Hz (dot clock), Xfwm4 with its
  *   compositor off, SDL 3.4.18 (with 3.4.0 an X error race in SDL ended
