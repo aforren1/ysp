@@ -160,7 +160,7 @@ int main(int argc, char** argv) {
     yscr_frame f;
     ygfx_shape_desc sh;
     ygfx_stim disk, dot;
-    char line[1024], aline[1024], aerr[256] = "";
+    char line[1024], aline[1024], aerr[512] = "";   /* holds yau_error() whole */
     static double v[MAX_TICKS], g[MAX_TICKS];
     double lead_s = 0.3;
     float u, scr_w, scr_h;

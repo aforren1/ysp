@@ -129,6 +129,8 @@ int main(int argc, char** argv) {
         if (lp_ep_open(&eo, 0, out) == 0) { lp_ep_set(&eo, unmute, (float)volume); lp_ep_print(&eo, "output"); }
         if (lp_ep_open(&ei, 1, in) == 0) { lp_ep_set(&ei, in_unmute, (float)in_volume); lp_ep_print(&ei, "input"); }
     }
+#else
+    if (volume >= 0 || unmute || in_volume >= 0 || in_unmute) printf("volume and mute: Windows only; set them by hand\n");
 #endif
     if (!yau_capture_open(&g_cap, &cd)) { fprintf(stderr, "%s\n", yau_capture_error(&g_cap)); rc = 1; goto restore; }
     if (!yau_open(&g_au, &d)) { fprintf(stderr, "%s\n", yau_error(&g_au)); yau_capture_close(&g_cap); rc = 1; goto restore; }
