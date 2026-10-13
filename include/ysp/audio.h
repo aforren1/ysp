@@ -1071,18 +1071,20 @@
  *          positions, miniaudio's null device, the device and source
  *          interfaces, synthesis, the records, the parameter table.
  *
- *   STATUS: v0.6.0, 2026-10-12 (docs/audio.md, "Linux: ..."): the Linux
+ *   STATUS: v0.6.0, 2026-10-12 (docs/audio.md, "Linux: a position from
+ *   PulseAudio", "Linux: ALSA exclusive", "AUTO on Linux"): the Linux
  *   desktop below (Debian 12, PulseAudio 16, Intel HDA analog output),
  *   gcc 12.2. ALSA exclusive on hw:0,0 with snd_pcm_status() positions
  *   (6 us sd from a line over 30 s): 64-frame periods with 0 underruns
  *   idle, a 3.6 to 5.8 ms shortest safe lead; under 20 spinning threads 0
  *   underruns in 2 runs of 30 s with the device thread at SCHED_FIFO 1.
  *   AUTO: ALSA exclusive at 32 bits, PulseAudio suspended while open and
- *   resumed after. test_audio_alsa and test_audio_pulse pass (not in
- *   ctest); alsa-00 to alsa-10 and pulse-00 to pulse-04 killed. Tier 3:
- *   no loopback. Measured on the v0.5.0 numbering of this work, before
- *   the merge with v0.5.1 (capture, exclusive start); capture has not run
- *   on Linux.
+ *   resumed after. PulseAudio's timing info: fit spread 2.7 to 3.9 us.
+ *   test_audio_alsa and test_audio_pulse (not in ctest) passed, and
+ *   alsa-00 to alsa-10, pulse-01 to pulse-04 and the callback feed (now
+ *   web-02) were killed, on this work's first numbering (v0.5.0), before
+ *   the merge with v0.5.0 (capture) and v0.5.1 (exclusive start); not run
+ *   on hardware since. Tier 3: no loopback. Capture has not run on Linux.
  *   STATUS: v0.5.1, 2026-10-13 (docs/audio.md, "Exclusive start"): WASAPI
  *   exclusive on the test laptop's speakers (Realtek behind Intel SST, 480
  *   frames), MinGW gcc 16.1, interleaved with v0.5.0 under the measurement
