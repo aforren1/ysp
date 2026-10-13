@@ -5,7 +5,7 @@
  *                            [--exclusive] [--in-exclusive] [--duplex] [--paths]
  *                            [--clicks N] [--every-ms MS] [--db DB] [--edge-db DB]
  *                            [--channel C] [--volume V] [--unmute]
- *                            [--in-volume V] [--in-unmute] [--distance-cm CM]
+ *                            [--in-volume V] [--in-unmute] [--distance-cm CM] [--burst-ms MS]
  *                            [--csv FILE]
  *
  *   --sim          no hardware: an output and an input on one timer thread,
@@ -25,6 +25,8 @@
  *   --volume V, --unmute   Windows: the output endpoint's volume scalar and
  *                  mute for the run (restored after; V at most 0.5)
  *   --in-volume V, --in-unmute   the same for the input endpoint
+ *   --burst-ms MS  a 2 kHz tone burst of MS ms (0.5 ms ramps) instead of the
+ *                  click: more energy for small speakers
  *   --distance-cm CM  printed with the result: speaker to microphone through
  *                  air (343 m/s: 2.9 us a mm)
  *   --csv FILE     one row per click
@@ -66,7 +68,7 @@ static lp_rec g_rec;
 
 typedef struct opt {
     int sim, exclusive, in_exclusive, duplex, clicks, channel, unmute, in_unmute;
-    double sim_delay_ms, every_ms, db, edge_db, volume, in_volume, distance_cm;
+    double sim_delay_ms, every_ms, db, edge_db, volume, in_volume, distance_cm, burst_ms;
     const char *out, *in, *csv;
 } opt;
 
@@ -160,7 +162,15 @@ static int run_path(const opt* o, int exclusive, FILE* csv) {
     memset(&kd, 0, sizeof kd);
     kd.dur_ns = YRT_US(250);
     kd.peak = yau_db((float)o->db);
-    click = yau_click(&g_au, &kd);
+    if (o->burst_ms > 0) {
+        /* a 2 kHz burst with 0.5 ms ramps: more energy for small speakers */
+        yau_tone_desc td;
+        memset(&td, 0, sizeof td);
+        td.hz = 2000; td.dur_ns = (int64_t)(o->burst_ms * 1e6); td.peak = kd.peak; td.ramp_ns = YRT_US(500);
+        click = yau_tone(&g_au, &td);
+    } else {
+        click = yau_click(&g_au, &kd);
+    }
     if (!click.frames) { fprintf(stderr, "%s\n", yau_error(&g_au)); rc = 1; goto done; }
     t0 = yrt_now_ns() + YRT_MS(300);
     for (i = 0; i < nclick; i++) {
@@ -183,6 +193,14 @@ static int run_path(const opt* o, int exclusive, FILE* csv) {
         if (i == 0) printf("first click: tier %d, flags 0x%03x\n", r.tier, (unsigned)r.flags);
     }
     print_fits();
+    {
+        /* the loudest the input got during the clicks: an acoustic run that
+         * finds no edge shows here whether anything came back */
+        double pk = 0;
+        int64_t j, from = yau_capture_frame_at(&g_cap, t0) - 4800;
+        for (j = from < 0 ? 0 : from; j < g_rec.n; j++) if (fabs((double)g_rec.x[j]) > pk) pk = fabs((double)g_rec.x[j]);
+        printf("input peak during the clicks: %.1f dBFS\n", pk > 0 ? 20 * log10(pk) : -999.0);
+    }
     /* the edges, then each click's: the first edge at or after its onset
      * minus 2 ms and before the next click */
     memset(&ekd, 0, sizeof ekd);
@@ -266,11 +284,12 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--in-volume") && i + 1 < argc) o.in_volume = atof(argv[++i]);
         else if (!strcmp(argv[i], "--in-unmute")) o.in_unmute = 1;
         else if (!strcmp(argv[i], "--distance-cm") && i + 1 < argc) o.distance_cm = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--burst-ms") && i + 1 < argc) o.burst_ms = atof(argv[++i]);
         else if (!strcmp(argv[i], "--csv") && i + 1 < argc) o.csv = argv[++i];
         else { fprintf(stderr, "audio_loopback_latency: unknown argument %s (see the top of the file)\n", argv[i]); return 2; }
     }
     if (o.clicks < 2 || o.clicks > 2000 || o.every_ms < 50 || o.every_ms > 5000 || o.db > -6 || o.volume > 0.5
-        || o.in_volume > 1 || o.channel < 0 || o.sim_delay_ms < 10 || o.sim_delay_ms > 500 || (o.edge_db >= 0 && o.edge_db != 1)
+        || o.in_volume > 1 || o.channel < 0 || o.burst_ms < 0 || o.burst_ms > 100 || o.sim_delay_ms < 10 || o.sim_delay_ms > 500 || (o.edge_db >= 0 && o.edge_db != 1)
         || (o.duplex && (o.in_exclusive != o.exclusive || paths))) {
         fprintf(stderr, "audio_loopback_latency: bad option (clicks 2..2000, every-ms 50..5000, db <= -6, volume <= 0.5, "
                         "edge-db < 0; --duplex shares one mode and has no --paths)\n");

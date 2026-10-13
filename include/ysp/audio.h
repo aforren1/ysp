@@ -581,8 +581,8 @@
  *   counted. Neither source is the sound at the input: a report's time is
  *   the OS's for the position ("the sample being recorded", Microsoft), a
  *   callback's comes a pipeline later. Measured here, the frame after a
- *   block reached the callback 10.2 ms or more after the reports' time for
- *   it. A line-in test (audio_loopback_latency with a TTL into the input,
+ *   block reached the callback 10 ms or more after the reports' time for
+ *   it (20.8 ms in duplex). A line-in test (audio_loopback_latency with a TTL into the input,
  *   or tests/loopback/audio_loopback.c --line) measures what desc.offset_ns
  *   must be. yau_capture_time_at(double) takes a detector's fractional
  *   frame; yau_capture_frame_at(t) is the inverse. The times come from the
@@ -903,7 +903,26 @@
  *          positions, miniaudio's null device, the device and source
  *          interfaces, synthesis, the records, the parameter table.
  *
- *   STATUS: v0.4.0, 2026-10-10: tests/adapt/audio_test.c passes on the
+ *   STATUS: v0.5.0, 2026-10-13, capture (docs/audio.md, "Capture"), on the
+ *   test laptop's SST microphone array through WASAPI, MinGW gcc 16.1: in
+ *   shared mode (float, 4 channels, 480-frame packets) 3 minutes idle and
+ *   3 under load: 0 losses, 0 drops, the fit's spread 34 and 70 us, every
+ *   new-stamp report within 1.2 ms of the final fit (p99 226 and 149 us),
+ *   1.5 and 2.2 us mean per block. Exclusive mode (16 bits, 2 channels)
+ *   at 480 and 144 frames: 0 losses in 30 s, spread 14 to 40 us. Duplex
+ *   with the speakers: both fits within 0.2 ppm, 0 underruns, the output
+ *   ungated (lead 33.6 ms). Injected stalls of the capture thread: 10 ms
+ *   lost nothing; 20 to 300 ms each lost the stall less about 12 ms, and
+ *   every one was found (halts in shared mode, the backlog in exclusive
+ *   mode), one record each. Acoustic, the laptop's speakers to its
+ *   microphones (distance not measured, one chassis): 36.6 ms p50, sd 0.18
+ *   ms, 10 bursts, shared output and exclusive input; the shared input
+ *   does not pass the speakers' sound. Every capture time is tier 3: no
+ *   input was checked against a reference (no cable, no TTL). The core
+ *   test's capture cases (scripted input, virtual clock) pass on MinGW,
+ *   MSVC and gcc 11.4 (C99 -O3, ASan, UBSan, ThreadSanitizer: 0 reports in
+ *   3 runs); 22 capture mutants killed, 45 of 45 in the list.
+ *   v0.4.0, 2026-10-10: tests/adapt/audio_test.c passes on the
  *   scripted device with new checks of close and the messages (MinGW-w64
  *   gcc 16.1, MSVC 19.44); the USAGE blocks compile as C99 (C, { 0 });
  *   3 of 3 new mutants caught (docs/audio.md, "Units, open and close").
