@@ -1,4 +1,4 @@
-/* ysp/audio.h - v0.5.0 - public domain single-header audio library
+/* ysp/audio.h - v0.5.1 - public domain single-header audio library
  *
  *   Sound at a time on the ysp/rt.h clock. A buffer is played with
  *   yau_play_at(buf, t); the header plans its first sample on the device
@@ -722,7 +722,9 @@
  *     drivers offer periods under the default: audio_wasapi_periods
  *     says. No automatic conversion, no hardware offload
  *     and no automatic rerouting: a default-device change makes the device
- *     LOST. Exclusive mode: one buffer of one period, event-driven.
+ *     LOST. Exclusive mode: one buffer of one period, event-driven, one
+ *     silent buffer written before Start (EXCLUSIVE START: without it the
+ *     test laptop's driver underran for the whole run in half the opens).
  *     Positions: IAudioClock, called in each callback.
  *   YAU_BACKEND_COREAUDIO, _ALSA, _PULSE
  *     Compiled through miniaudio. v0.1 reads no position on them, so every
@@ -882,6 +884,18 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.5.1 - EXCLUSIVE START: WASAPI exclusive mode writes one silent
+ *          buffer before Start, and position reports count stream frames
+ *          from after it. miniaudio started the stream on an empty buffer;
+ *          in 19 of 35 opens on the test laptop's Intel SST endpoint the
+ *          driver then pulled one or two blocks per group of wakes and
+ *          played silence between them: 13 to 37 XRUN records before
+ *          the first sound, 20 to 26 a second after, LATE at every lead.
+ *          With the buffer: 0 of 22 (docs/audio.md, "Exclusive start"). A
+ *          device with position reports (YAU_POS_DEVICE) fits reports
+ *          only: a block without one adds no callback point (was: web
+ *          devices only); such points made a false halt record at every
+ *          exclusive open with the buffer. Shared mode: no change.
  *   v0.5.0 - CAPTURE: yau_capture, an input on the rig clock. Capture
  *          frames that keep their place through drops and losses; a fit of
  *          the input's clock by THE FIT's method (refit shared with the
@@ -969,6 +983,16 @@
  *          positions, miniaudio's null device, the device and source
  *          interfaces, synthesis, the records, the parameter table.
  *
+ *   STATUS: v0.5.1, 2026-10-13 (docs/audio.md, "Exclusive start"): WASAPI
+ *   exclusive on the test laptop's speakers (Realtek behind Intel SST, 480
+ *   frames), MinGW gcc 16.1, interleaved with v0.5.0 under the measurement
+ *   lock (load 1 to 19 %): audio_clockstats 8 of 8 runs, 3 of 3 at 144
+ *   frames, and audio_schedule 4 of 4 with 0 XRUN records (v0.5.0: 5 of 8,
+ *   3 of 3 and 4 of 4 underran for the whole run); audio_schedule's
+ *   shortest safe lead 125 ms in each, its 14 residuals -12.8 to +10.0 us.
+ *   Shared mode unchanged: lead 40 ms, 0 XRUN records. MSVC 19.44: 2 of 2
+ *   exclusive runs with 0 XRUN records. The core test's report-less start
+ *   passes; mutant start-01 killed, 49 of 49 in the list.
  *   STATUS: v0.5.0, 2026-10-13, capture (docs/audio.md, "Capture"), on the
  *   test laptop's SST microphone array through WASAPI, MinGW gcc 16.1: in
  *   shared mode (float, 4 channels, 480-frame packets) 3 minutes idle and
@@ -1098,8 +1122,8 @@
 
 #define YAU_VERSION_MAJOR 0
 #define YAU_VERSION_MINOR 5
-#define YAU_VERSION_PATCH 0
-#define YAU_VERSION_STRING "0.5.0"
+#define YAU_VERSION_PATCH 1
+#define YAU_VERSION_STRING "0.5.1"
 
 #include "ysp/rt.h"
 
@@ -3209,10 +3233,15 @@ YAU_API void yau_render(void* host, void* out, int32_t frames, const yau_tick* t
             (void)yrt_ring_push(au->desc.ring, &ev);
             au->last_clock_t = tk->pos_t;
         }
-    } else if (au->dcaps.tier != YAU_TIER_WEB || au->dcaps.pos_source != YAU_POS_DEVICE) {
-        /* A browser's first blocks have no report at or past stream frame
-         * 0, and an AudioWorklet's entry times have 1 ms steps: its fit is
-         * of reports only (BACKENDS, WEB). */
+    } else if (au->dcaps.pos_source != YAU_POS_DEVICE) {
+        /* A device with reports fits reports only. A block without one
+         * adds no callback point: the entry time of frame W is the output
+         * latency (tens of ms) before its report time, so one such point
+         * in a bucket of reports moves the fit by that much. A browser's
+         * first blocks have no report at or past stream frame 0 and an
+         * AudioWorklet's entry times have 1 ms steps (BACKENDS, WEB); a
+         * WASAPI exclusive stream's first blocks come before the prefill
+         * has played (EXCLUSIVE START). */
         yau__feed(au, W, now_t);
     }
     YRT_PLOT("yau queued frames", have_pos ? (double)(W - pw) : 0.0);
@@ -3392,6 +3421,13 @@ typedef struct yau__IAudioClientV {
     HRESULT (STDMETHODCALLTYPE *GetService)(void*, const IID*, void**);
 } yau__IAudioClientV;
 typedef struct yau__IAudioClient { const yau__IAudioClientV* lpVtbl; } yau__IAudioClient;
+typedef struct yau__IAudioRenderClientV {
+    void* slots0_[3];   /* IUnknown */
+    HRESULT (STDMETHODCALLTYPE *GetBuffer)(void*, UINT32, BYTE**);
+    HRESULT (STDMETHODCALLTYPE *ReleaseBuffer)(void*, UINT32, DWORD);
+} yau__IAudioRenderClientV;
+typedef struct yau__IAudioRenderClient { const yau__IAudioRenderClientV* lpVtbl; } yau__IAudioRenderClient;
+#define YAU__BUFFERFLAGS_SILENT 0x2u   /* AUDCLNT_BUFFERFLAGS_SILENT */
 static const IID yau__IID_IAudioClock =
     { 0xcd63314f, 0x3fba, 0x4a1b, { 0x81, 0x2c, 0xef, 0x96, 0x35, 0x87, 0x28, 0xe7 } };
 #endif
@@ -3424,6 +3460,7 @@ typedef struct yau__ma {
     uint64_t   freq;
     int        gate;        /* the queue gate is on (QUEUE)                */
     uint32_t   gate_pad;    /* render when the WASAPI buffer holds at most this */
+    int64_t    prefill;     /* exclusive: silent frames written before Start */
 #endif
 #if defined(MA_HAS_WEBAUDIO)
     yau__web_pub pub;       /* the main thread writes it (JavaScript)      */
@@ -3628,8 +3665,13 @@ static void yau__ma_data(ma_device* d, void* out, const void* in, ma_uint32 n) {
         if (SUCCEEDED(m->clock->lpVtbl->GetPosition(m->clock, &pos, &qpc)) && qpc) {
             /* pos counts GetFrequency() units since the stream started; the
              * stamp is QPC time in 100 ns units */
-            tk.pos = (int64_t)((double)pos * (double)d->playback.internalSampleRate / (double)m->freq + 0.5);
-            tk.pos_t = (int64_t)qpc * 100;
+            int64_t f = (int64_t)((double)pos * (double)d->playback.internalSampleRate / (double)m->freq + 0.5);
+            /* the position counts the prefill; before stream frame 0 it
+             * says nothing about the frames the header wrote */
+            if (f - m->prefill >= 0) {
+                tk.pos = f - m->prefill;
+                tk.pos_t = (int64_t)qpc * 100;
+            }
         }
     }
 #endif
@@ -3877,6 +3919,25 @@ static int yau__ma_start(void* ctx, yau_render_fn render, void* host) {
     ma_result r;
     m->render = render;
     m->host = host;
+#if defined(MA_SUPPORT_WASAPI)
+    if (m->backend == ma_backend_wasapi && m->dev.playback.shareMode == ma_share_mode_exclusive
+        && m->dev.wasapi.pRenderClient && !m->prefill) {
+        /* EXCLUSIVE START: miniaudio starts an exclusive stream on an empty
+         * buffer. On the test laptop's Intel SST endpoint that left the
+         * stream, in 19 of 35 opens, in a state where the driver
+         * pulled 1 or 2 blocks per wake group and played silence between
+         * them (position past the frames written, 20 to 26 XRUN records a
+         * second); with one silent buffer written before Start, as
+         * Microsoft's exclusive-mode example does, 0 of 22 did
+         * (docs/audio.md, "Exclusive start"). */
+        yau__IAudioRenderClient* rc = (yau__IAudioRenderClient*)m->dev.wasapi.pRenderClient;
+        UINT32 n = m->dev.wasapi.actualBufferSizeInFramesPlayback;
+        BYTE* p = NULL;
+        if (n && SUCCEEDED(rc->lpVtbl->GetBuffer(rc, n, &p)) && p
+            && SUCCEEDED(rc->lpVtbl->ReleaseBuffer(rc, n, YAU__BUFFERFLAGS_SILENT)))
+            m->prefill = (int64_t)n;
+    }
+#endif
     r = ma_device_start(&m->dev);
     return r == MA_SUCCESS ? 0 : YAU_ERR_LOST;
 }

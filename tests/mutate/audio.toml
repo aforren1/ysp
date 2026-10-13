@@ -247,8 +247,19 @@ id = "web-02"
 name = "a web block without a report feeds its entry time"
 test = "audio"
 why = "A browser reports every 10 ms, and an AudioWorklet's entry time has no clock; such points in a fit of reports move every plan off its frame."
-find = '''    } else if (au->dcaps.tier != YAU_TIER_WEB || au->dcaps.pos_source != YAU_POS_DEVICE) {'''
+find = '''    } else if (au->dcaps.pos_source != YAU_POS_DEVICE) {'''
 replace = '''    } else {'''
+
+# v0.5.1: the exclusive start (docs/audio.md, "Exclusive start"). The prefill
+# runs only on hardware; the core rule it needs has a mutant.
+
+[[mutant]]
+id = "start-01"
+name = "only a web device's report-less blocks stay out of the fit"
+test = "audio"
+why = "A WASAPI exclusive stream's first blocks come while the prefill plays, with no report; their entry times moved the first fit by tens of ms and made a false halt record on every open."
+find = '''    } else if (au->dcaps.pos_source != YAU_POS_DEVICE) {'''
+replace = '''    } else if (au->dcaps.tier != YAU_TIER_WEB || au->dcaps.pos_source != YAU_POS_DEVICE) {'''
 
 # v0.5.0: capture (docs/audio.md, "Capture"). The miniaudio input and the
 # duplex device run only on hardware (audio_capstats measures them) or on
