@@ -5,17 +5,21 @@
  *
  * Each trial: a fixation cross for 0.5 s, then the Gabor until a response
  * or 2 s. F when the bars lean left, J when they lean right (the physical
- * keys). Responses before 0.1 s are anticipations. Feedback for 0.4 s (a
- * green ring when correct, red when wrong, gray when too slow), then a
- * blank of 0.6 s. The page shows the instructions before the first frame
- * and the results after the last.
+ * keys), or a tap or click on the left or right half of the canvas (the
+ * same collector: web_common.h). Responses before 0.1 s are
+ * anticipations. Feedback for 0.4 s (a green ring when correct, red when
+ * wrong, gray when too slow), then a blank of 0.6 s. The page shows the
+ * instructions before the first frame and the results after the last;
+ * the stimuli are made and primed before the page shows the canvas.
+ * Sizes are in units of the canvas: 480 units are its shorter side.
  *
  * The data rows go to memory through ytr_data's write function, not to a
  * file: in a browser the page hands them to the visitor. Columns: the
- * session's (index, block, ..., outcome, tilt, key_answer), then response,
- * rt_s, correct, onset_tier, onset_src, rsp_tier, n_anticipations,
- * frames_dropped, and the constant columns coi (cross-origin isolated),
- * clock_step_s and audio. Times in seconds. In a browser onset_tier is 5
+ * session's (index, block, ..., outcome, tilt, key_answer), then response
+ * (left or right), rsp_kind (keyboard, touch or mouse), rt_s, correct,
+ * onset_tier, onset_src, rsp_tier, n_anticipations, frames_dropped, and
+ * the constant columns coi (cross-origin isolated), clock_step_s and
+ * audio. Times in seconds. In a browser onset_tier is 5
  * (YSCR_TIER_WEB): the onset is the browser's frame time, not a
  * measurement of light, and the RT carries the browser's unknown delay
  * (docs/web.md). The same program runs natively with the OS's flip times.
@@ -24,9 +28,11 @@
  * keyboard): correct, an anticipation then a response, wrong, a timeout,
  * and correct. It checks every row and exits 1 on a mismatch.
  *
- * Usage: web_tutorial [--sim] [--reps N] [--seed N] [--out FILE]
+ * Usage: web_tutorial [--sim] [--reps N] [--seed N] [--out FILE] [--size WxH]
  *   --reps N   repetitions of each tilt (default 5; --sim: 3)
  *   --out FILE also write the CSV to FILE (native; default none)
+ *   --size WxH the window in CSS pixels (default 720x480; the page passes
+ *              its stage's size)
  * Exit code: 0 (also after Shift+Esc), 1 when something did not open or a
  * --sim check failed, 2 for a bad argument.
  */
@@ -41,6 +47,7 @@
 #include "ysp/trials.h"
 #define YSP_RESPONSE_IMPLEMENTATION
 #include "ysp/response.h"
+#include "web_common.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -74,7 +81,15 @@ static const char conditions_csv[] =
     "left,f\n"
     "right,j\n";
 
-static const yrsp_choice keys[] = { { .key = "f" }, { .key = "j" } };
+/* The keys, and the canvas halves for touch and the mouse (web_side). */
+static const yrsp_choice keys[] = {
+    { .key = "f", .name = "left" }, { .key = "j", .name = "right" },
+    { .name = "left", .kind = YRSP_KIND_TOUCH, .match = YRSP_MATCH_KEYCODE, .code = 1 },
+    { .name = "right", .kind = YRSP_KIND_TOUCH, .match = YRSP_MATCH_KEYCODE, .code = 2 },
+    { .name = "left", .kind = YRSP_KIND_MOUSE, .match = YRSP_MATCH_KEYCODE, .code = 1 },
+    { .name = "right", .kind = YRSP_KIND_MOUSE, .match = YRSP_MATCH_KEYCODE, .code = 2 },
+};
+#define N_KEYS (int)(sizeof keys / sizeof keys[0])
 
 /* --sim's participant, by trial: a press at `at` s after the onset; which
  * 1 the correct key, 2 the other. Trial 3 has no press: a timeout. */
@@ -87,6 +102,7 @@ static const sim_press sim_script[] = {
 /* One row of the caller's columns. */
 typedef struct row {
     const char* response;
+    const char* rsp_kind;
     int64_t     rt_ns;           /* YTR_MISSING_NS: none */
     bool        correct;
     int         onset_tier, onset_src, rsp_tier, n_anticipations, frames_dropped;
@@ -138,12 +154,12 @@ static ygfx_stim shape(ygfx_shape_kind kind, float w, float p0, float r, float g
     return ygfx_shape(&d);
 }
 
-static ygfx_stim gabor(float ori) {
+static ygfx_stim gabor(float ori, float u) {
     ygfx_gabor_desc d;
     memset(&d, 0, sizeof d);
     d.ori = ori;
-    d.sf = 1.0f / 28.0f;    /* cycles per pixel */
-    d.sigma = 26.0f;
+    d.sf = 1.0f / (28.0f * u);    /* cycles per pixel */
+    d.sigma = 26.0f * u;
     d.contrast = 0.8f;
     return ygfx_gabor(&d);
 }
@@ -157,7 +173,7 @@ int main(int argc, char** argv) {
     ytr_data_desc dd;
     yrsp_desc pd;
     yrsp_sdl_ctx sdl;
-    yrsp_source sources[1];
+    yrsp_source sources[3];
     yscr_caps caps;
     yscr_frame f;
     yrt_clock_info ci;
@@ -169,10 +185,11 @@ int main(int argc, char** argv) {
     char line[1536], step[32], coi[4];
     const char* out_path = NULL;
     uint64_t seed = 20261010;
-    int i, n, sim = 0, reps = 0, aborted = 0, failed = 0, rows = 0, dropped = 0;
+    int i, n, sim = 0, reps = 0, aborted = 0, failed = 0, rows = 0, dropped = 0, win_w = 720, win_h = 480;
     int in_trial = 0, responding = 0, n_sim_ev = 0, sim_next = 0, stim_ch = 0, tilt_col, key_col;
     int64_t stim_frame = -1;
-    char key_answer[8] = "";
+    float u, scr_w, scr_h;
+    char key_answer[8] = "", tilt[8] = "";
 
     memset(&sd, 0, sizeof sd);
     for (i = 1; i < argc; i++) {
@@ -180,8 +197,9 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--reps") && i + 1 < argc) reps = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--seed") && i + 1 < argc) seed = (uint64_t)strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--out") && i + 1 < argc) out_path = argv[++i];
+        else if (!strcmp(argv[i], "--size") && i + 1 < argc && web_size_arg(argv[i + 1], &win_w, &win_h)) i++;
         else {
-            fprintf(stderr, "usage: web_tutorial [--sim] [--reps N] [--seed N] [--out FILE]\n");
+            fprintf(stderr, "usage: web_tutorial [--sim] [--reps N] [--seed N] [--out FILE] [--size WxH]\n");
             return 2;
         }
     }
@@ -189,8 +207,8 @@ int main(int argc, char** argv) {
     if (reps < 1 || reps > 50) { fprintf(stderr, "web_tutorial: --reps takes 1..50\n"); return 2; }
     if (sim) sd.backend = YSCR_BACKEND_SIM;
     sd.windowed = true;
-    sd.window_w = 720;
-    sd.window_h = 480;
+    sd.window_w = win_w;
+    sd.window_h = win_h;
 
     if (!yscr_open(&scr, &sd)) { fprintf(stderr, "web_tutorial: %s\n", yscr_error(&scr)); return 1; }
     yscr_get_caps(&scr, &caps);
@@ -199,12 +217,17 @@ int main(int argc, char** argv) {
     gd.screen = &scr;
     gd.background[0] = gd.background[1] = gd.background[2] = 0.5f;
     if (!ygfx_open(&gfx, &gd)) { fprintf(stderr, "web_tutorial: %s\n", ygfx_error(&gfx)); return 1; }
-    fix = shape(YGFX_CROSS, 16, 3, 0.15f, 0.15f, 0.15f);
-    gabor_l = gabor(-TILT_DEG);
-    gabor_r = gabor(TILT_DEG);
-    fb_right = shape(YGFX_ANNULUS, 60, 24, 0.1f, 0.6f, 0.1f);
-    fb_wrong = shape(YGFX_ANNULUS, 60, 24, 0.75f, 0.1f, 0.1f);
-    fb_none = shape(YGFX_ANNULUS, 60, 24, 0.35f, 0.35f, 0.35f);
+    /* 480 units on the canvas's shorter side, in its pixels: the same look
+     * on a phone, a HiDPI laptop and the 720 x 480 window */
+    ygfx_size(&gfx, &scr_w, &scr_h);
+    u = (scr_w < scr_h ? scr_w : scr_h) / 480.0f;
+    if (!(u > 0)) u = 1;
+    fix = shape(YGFX_CROSS, 16 * u, 3 * u, 0.15f, 0.15f, 0.15f);
+    gabor_l = gabor(-TILT_DEG, u);
+    gabor_r = gabor(TILT_DEG, u);
+    fb_right = shape(YGFX_ANNULUS, 60 * u, 24 * u, 0.1f, 0.6f, 0.1f);
+    fb_wrong = shape(YGFX_ANNULUS, 60 * u, 24 * u, 0.75f, 0.1f, 0.1f);
+    fb_none = shape(YGFX_ANNULUS, 60 * u, 24 * u, 0.35f, 0.35f, 0.35f);
 
     memset(&cd, 0, sizeof cd);
     cd.text = conditions_csv;
@@ -228,6 +251,7 @@ int main(int argc, char** argv) {
     {
         const ytr_col cols[] = {
             YTR_COL(row, response, YTR_COL_STRING),
+            YTR_COL(row, rsp_kind, YTR_COL_STRING),
             YTR_COL_D(row, rt_ns, YTR_COL_TIME_NS, 6),
             YTR_COL(row, correct, YTR_COL_BOOL),
             YTR_COL(row, onset_tier, YTR_COL_INT),
@@ -257,17 +281,21 @@ int main(int argc, char** argv) {
     memset(&sdl, 0, sizeof sdl);
     sdl.raw_keyboard = caps.raw_keyboard;
     sources[0] = yrsp_sdl_source(&sdl, YRSP_KIND_KEYBOARD);
+    sources[1] = yrsp_sdl_source(&sdl, YRSP_KIND_TOUCH);
+    sources[2] = yrsp_sdl_source(&sdl, YRSP_KIND_MOUSE);
     memset(&pd, 0, sizeof pd);
     pd.choices = keys;
-    pd.n_choices = 2;
+    pd.n_choices = N_KEYS;
     pd.duration_ns = YRT_S(RESPONSE_S);
     pd.min_rt_ns = YRT_S(MIN_RT_S);
     pd.sources = sources;
-    pd.n_sources = 1;
+    pd.n_sources = 3;
     if (!yrsp_open(&rsp, &pd)) { fprintf(stderr, "web_tutorial: %s\n", yrsp_error(&rsp)); return 1; }
 
     printf("%s\n", line);
+    /* every program's first draw before the page shows the canvas */
     ygfx_prime(&gfx);
+    web_ready();
     for (;;) {
         SDL_Event ev;
         int64_t bt = 0;
@@ -290,7 +318,9 @@ int main(int argc, char** argv) {
             if (ytr_next(&trials, &ti) < 0) break;
             ka = ytb_text(&tab, ti.condition, key_col);
             snprintf(key_answer, sizeof key_answer, "%s", ka ? ka : "");
-            stim_ch = !strcmp(ytb_text(&tab, ti.condition, tilt_col), "left") ? GABOR_L : GABOR_R;
+            ka = ytb_text(&tab, ti.condition, tilt_col);
+            snprintf(tilt, sizeof tilt, "%s", ka ? ka : "");
+            stim_ch = !strcmp(tilt, "left") ? GABOR_L : GABOR_R;
             ytl_clear(&tl, TRIAL);
             ytl_anchor(&tl, TRIAL, f.onset, 0);
             q = ytl_seq_on(&tl, TRIAL);
@@ -307,7 +337,7 @@ int main(int argc, char** argv) {
         }
 
         while (yscr_poll(&scr, &ev, NULL))
-            if (yscr_event_input(&scr, &ev, &in)) yrsp_feed(&rsp, &in);
+            if (yscr_event_input(&scr, &ev, &in)) { web_side(&scr, &in); yrsp_feed(&rsp, &in); }
         for (; sim && sim_next < n_sim_ev && sim_ev[sim_next].t <= f.onset; sim_next++)
             if (yscr_key_filter(&scr, &sim_ev[sim_next])) yrsp_feed(&rsp, &sim_ev[sim_next]);
 
@@ -316,7 +346,7 @@ int main(int argc, char** argv) {
             int fb;
             yrsp_finish(&rsp, &res);
             fb = !(res.flags & YRSP_R_RESPONDED) ? FB_NONE
-                 : res.response_name && !strcmp(res.response_name, key_answer) ? FB_RIGHT : FB_WRONG;
+                 : res.response_name && !strcmp(res.response_name, tilt) ? FB_RIGHT : FB_WRONG;
             ytl_base_time(&tl, TRIAL, f.onset, &bt);
             ytl_at(&q, bt);
             ytl_off(&q, stim_ch);
@@ -363,8 +393,9 @@ int main(int argc, char** argv) {
                 yrsp_finish(&rsp, &res);
                 memset(&r, 0, sizeof r);
                 r.response = res.response_name;
+                r.rsp_kind = (res.flags & YRSP_R_RESPONDED) ? web_kind_name(res.kind) : NULL;
                 r.rt_ns = res.rt_ns == YRSP_NO_TIME ? YTR_MISSING_NS : res.rt_ns;
-                r.correct = (res.flags & YRSP_R_RESPONDED) && res.response_name && !strcmp(res.response_name, key_answer);
+                r.correct = (res.flags & YRSP_R_RESPONDED) && res.response_name && !strcmp(res.response_name, tilt);
                 r.onset_tier = res.onset_tier;
                 r.onset_src = res.onset_src;
                 r.rsp_tier = res.stamp_tier;

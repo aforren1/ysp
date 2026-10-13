@@ -33,7 +33,8 @@
  * Usage: gfx_gallery [--sim] [--page N] [--frames N] [--composition]
  *                    [--topmost] [--shots PREFIX] [--cache DIR] [--no-cache]
  *   Right, Down, Space, Page Down: next page; Left, Up, Page Up: previous;
- *   1 to 8: that page; Shift+Esc or closing the window: quit.
+ *   1 to 8: that page; a tap on the right half: next, on the left half:
+ *   previous; Shift+Esc or closing the window: quit.
  *   --sim          the simulated display and the null backend, for CI:
  *                  draws each page once and exits
  *   --page N       start on page N (1 to 8)
@@ -64,6 +65,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#if defined(__EMSCRIPTEN__)
+#include <emscripten.h>
+/* The web page shows the canvas when the pages are made and primed. */
+EM_JS(void, gallery_ready, (void), { if (Module['onYspReady']) Module['onYspReady'](); })
+#else
+static void gallery_ready(void) {}
+#endif
 
 #if defined(_WIN32)
 /* Windows gives the foreground to a program started from the background
@@ -2613,6 +2622,11 @@ int main(int argc, char** argv) {
         if (page_text_setup(p) < 0) { fprintf(stderr, "gfx_gallery: labels: %s\n", ygfx_error(&gfx)); refused++; }
     }
     if (shots) shot_px = (uint8_t*)malloc((size_t)scr_w * (size_t)scr_h * 4);
+    /* Each program's first draw now, not on the page that first shows it:
+     * in Chrome a page whose kinds had not been drawn yet took one frame of
+     * 33 ms (docs/web.md, "Priming"). */
+    if (ygfx_prime(&gfx) < 0) { fprintf(stderr, "gfx_gallery: prime: %s\n", ygfx_error(&gfx)); refused++; }
+    gallery_ready();
 
     next = cur;
     while (yscr_begin(&scr, &f) == YSCR_OK) {
@@ -2623,6 +2637,8 @@ int main(int argc, char** argv) {
             while (yscr_poll(&scr, &ev, NULL)) {   /* yscr_begin() reports Shift+Esc and close itself */
                 if (ev.type == SDL_EVENT_QUIT || ev.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) quit = 1;
                 else if (ev.type == SDL_EVENT_MOUSE_MOTION) { mouse_x = ev.motion.x; mouse_y = ev.motion.y; }   /* px at density 1 */
+                else if (ev.type == SDL_EVENT_FINGER_DOWN)   /* a tap: right half next, left half previous */
+                    next = ev.tfinger.x >= 0.5f ? (cur + 1) % N_PAGES : (cur + N_PAGES - 1) % N_PAGES;
                 else if (ev.type == SDL_EVENT_KEY_DOWN && !ev.key.repeat) {
                     SDL_Keycode k = ev.key.key;
                     if (k == SDLK_RIGHT || k == SDLK_DOWN || k == SDLK_SPACE || k == SDLK_PAGEDOWN) next = (cur + 1) % N_PAGES;

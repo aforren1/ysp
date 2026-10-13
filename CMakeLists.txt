@@ -608,6 +608,8 @@ if(TARGET SDL3::SDL3 AND YSP_BUILD_EXAMPLES)
         # PTB's PsychPortAudioTimingTest (docs/rig_spec.md 16.6): a flash and
         # a click for one time, the records, and line boards in hardware mode.
         ysp_add_program(audio_av_sync examples/audio/av_sync.c rig devices)
+        # its web form (docs/web.md): the records and the audio callbacks
+        ysp_add_program(web_av_sync examples/web/av_sync.c rig)
     endif()
     # PsychoPy's Sternberg demo (docs/rig_spec.md 15.5): a timed sequence as
     # an op table, digits from ysp/outline.h. trial_stroop and trial_images
