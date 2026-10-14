@@ -38,23 +38,29 @@
  * planned: the landing on the frame grid and any drop), dropped (the
  * vblanks the disc's flip missed), from_pulse (the onset minus its
  * volume's pulse), then the response's (YRSP_DATA_COLS).
+ * Onsets land on the first frame at or after their planned time
+ * (YTL_LEAD_NONE), not on the nearest one: an onset planned at a pulse
+ * (offset_tr 0) on the nearest frame can come before that pulse and then
+ * count in the volume before (the emulator on the simulated display: 4.6
+ * ms early, from_pulse near TR). The cost is up to one frame of slip.
  * from_pulse drifts when the scanner's clock and this PC's differ: the
- * base runs on the PC's clock. An onset planned at a pulse (offset_tr 0)
- * lands on the nearest frame, which can come before the pulse: it then
- * counts in the volume before, with from_pulse near TR (the emulator on
- * the simulated display: 4.6 ms early). --pulses FILE gets every pulse
- * (volume, t in s from the anchor, the interval); the end of the run
- * prints the mean TR the PC measured and its difference from --tr in ppm.
+ * base runs on the PC's clock. A scanner clock slower than the PC's puts
+ * pulse m up to m x TR x the difference after its plan, so over a long run
+ * an onset can still precede its pulse by that much; the pulses file shows
+ * the drift. --pulses FILE gets every pulse (volume, t in s from the
+ * anchor, the interval); the end of the run prints the mean TR the PC
+ * measured and its difference from --tr in ppm.
  *
  * --sim: the simulated display, scripted pulses (TR 1 s, 2 dummies, the
  * scanner's clock 100 ppm fast against the PC's, so from_pulse grows by
  * 0.1 ms a volume) and a scripted participant (a wrong key on trial 1, no
  * response on trial 3). It checks every pulse interval and the anchor
  * (exact); that each disc's flip was planned for the vblank where the
- * timeline landed it, never more than half a frame early (later only
- * when the loop fell behind, which the landing's residual says); each
- * volume and from_pulse against the pulses the script implies (exact);
- * and each response (key and RT exact). --sim --sync emulate runs the
+ * timeline landed it, never before its planned time; that no onset comes
+ * before its pulse, each in its planned volume, from_pulse minus the
+ * offset in [0, one frame) (more only when the loop fell behind, which
+ * the landing's residual says); volume and from_pulse against the pulses
+ * the script implies (exact); and each response (key and RT exact). --sim --sync emulate runs the
  * emulator thread instead of the script, on the same checks; its pulses
  * come on the real clock. Exits 1 on a mismatch. About 11 s.
  *
@@ -184,7 +190,7 @@ int main(int argc, char** argv) {
     static yrsp_result sim_res[MAX_ROWS];
     static row sim_row[MAX_ROWS];
     static int sim_key[MAX_ROWS];
-    static int64_t sim_plan[MAX_ROWS], sim_vblank[MAX_ROWS], sim_resid[MAX_ROWS];
+    static int64_t sim_plan[MAX_ROWS], sim_vblank[MAX_ROWS], sim_resid[MAX_ROWS], sim_off[MAX_ROWS];
     yscr_caps caps;
     yscr_frame f;
     yrsp_source source;
@@ -283,6 +289,7 @@ int main(int argc, char** argv) {
                                         .rng_ctx = &seed }))
         return fail(ytr_error(&trials));
     if (!ytl_open(&tl, &(ytl_desc){ .events = storage, .event_capacity = 64, .n_channels = N_CHANNELS,
+                                    .lead = YTL_LEAD_NONE,   /* pulse-locked: never before the plan */
                                     .initial = (const float[N_CHANNELS]){ 1, 0, 0 } }))
         return fail(ytl_error(&tl));
     source = yrsp_sdl_source(&(yrsp_sdl_ctx){ .raw_keyboard = caps.raw_keyboard }, YRSP_KIND_KEYBOARD);
@@ -429,6 +436,7 @@ int main(int argc, char** argv) {
                     sim_res[ti.index] = res;
                     sim_row[ti.index] = r;
                     sim_plan[ti.index] = planned;
+                    sim_off[ti.index] = (int64_t)llround(frac * (double)tr);
                     sim_vblank[ti.index] = disc_planned;
                 }
                 rows++;
@@ -471,7 +479,7 @@ int main(int argc, char** argv) {
     }
 
     if (sim && !failed && !aborted) {
-        int64_t want_tr = sync == SYNC_SCRIPT ? script_tr : tr, half = YRT_S(1) / 120;
+        int64_t want_tr = sync == SYNC_SCRIPT ? script_tr : tr, period = YRT_S(1) / 60;   /* the simulated display's */
         for (i = 1; i < n_pulses; i++)
             if (pulse_t[i] - pulse_t[i - 1] != want_tr) {
                 fprintf(stderr, "trial_scanner_sync: --sim: pulse %d came %lld ns after the one before, not %lld\n", i,
@@ -491,8 +499,11 @@ int main(int argc, char** argv) {
             if (resp_want != ((q->flags & YRSP_R_RESPONDED) != 0) || (resp_want && q->response != sim_key[i]) ||
                 (resp_want && llabs(q->rt_ns - YRT_S(0.4 + 0.05 * (i % 3))) > 1000) ||
                 q->onset_tier != YSCR_TIER_SIM || q->onset_src != YRSP_ONSET_FLIP ||
-                sim_resid[i] < -half || llabs(sim_vblank[i] - anchor - x->planned_ns - sim_resid[i]) > 1000 || x->onset_ns != q->t_onset - anchor || x->planned_ns != sim_plan[i] ||
-                x->volume != vol - skip || x->from_pulse_ns != pulse_onset || x->volume < 1) {
+                sim_resid[i] < 0 || llabs(sim_vblank[i] - anchor - x->planned_ns - sim_resid[i]) > 1000 || x->onset_ns != q->t_onset - anchor || x->planned_ns != sim_plan[i] ||
+                x->volume != vol - skip || x->from_pulse_ns != pulse_onset || x->volume < 1 ||
+                /* never before its pulse, in its planned volume, within a frame of the offset */
+                x->volume != (int)((sim_plan[i] - sim_off[i]) / tr) || x->from_pulse_ns - sim_off[i] < 0 ||
+                (x->from_pulse_ns - sim_off[i] >= period && sim_resid[i] < period)) {
                 fprintf(stderr, "trial_scanner_sync: --sim: trial %d: response %d (want %d) rt %.9f; planned %.9f "
                                 "onset %.9f slip %.9f volume %d (want %d) from_pulse %.9f\n", i, q->response,
                         sim_key[i], YRT_TO_S(q->rt_ns), YRT_TO_S(x->planned_ns), YRT_TO_S(x->onset_ns),
