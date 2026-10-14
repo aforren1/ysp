@@ -19,13 +19,13 @@ static int usage(void) {
           "core build: no glyph runs (configure with -DYSP_BUILD_LAYOUT=ON for them)\n"
 #endif
           "usage:\n"
-          "  ypak build SOURCE.json -o OUT.ysppak [--sources DIR] [-v]\n"
+          "  ypak build SOURCE.json -o OUT.ysppak [--sources DIR] [--ffmpeg PATH] [-v]\n"
           "  ypak verify PACK\n"
           "  ypak list PACK\n"
           "  ypak info PACK\n"
           "  ypak extract PACK [NAME...] -C DIR [--force]\n"
           "  ypak cat PACK NAME\n"
-          "  ypak rebuild PACK --sources DIR [-o OUT]\n"
+          "  ypak rebuild PACK --sources DIR [-o OUT] [--ffmpeg PATH]\n"
           "  ypak append PLAYER PACK -o OUT\n", stderr);
     return 2;
 }
@@ -57,6 +57,7 @@ int main(int argc, char** argv) {
         if (!out) return usage();
         memset(&o, 0, sizeof o);
         o.sources = opt(argc, argv, "--sources");
+        o.ffmpeg = opt(argc, argv, "--ffmpeg");
         o.log = flag(argc, argv, "-v") ? stdout : NULL;
         rc = ypt_build(argv[2], out, &o, err, sizeof err);
         if (rc == 0) printf("ypak: wrote %s\n", out);
@@ -85,8 +86,11 @@ int main(int argc, char** argv) {
         rc = ypt_cat(argv[2], argv[3], stdout, err, sizeof err);
     } else if (!strcmp(cmd, "rebuild")) {
         const char* src = opt(argc, argv, "--sources");
+        ypt_options o;
         if (!src) return usage();
-        rc = ypt_rebuild(argv[2], src, opt(argc, argv, "-o"), stdout, err, sizeof err);
+        memset(&o, 0, sizeof o);
+        o.ffmpeg = opt(argc, argv, "--ffmpeg");
+        rc = ypt_rebuild_ex(argv[2], src, opt(argc, argv, "-o"), &o, stdout, err, sizeof err);
     } else if (!strcmp(cmd, "append")) {
         const char* out = opt(argc, argv, "-o");
         if (argc < 4 || !out) return usage();

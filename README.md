@@ -77,7 +77,7 @@ To build the examples and tests in this repository:
 cmake --preset msvc          # or msvc-full, mingw, linux, clang, sanitizers, nothreads-cxx
 cmake --build --preset msvc
 ctest --preset msvc
-uv run --no-project python tools/vendor_pack.py --write     # lodepng, for -DYSP_BUILD_PACK=ON
+uv run --no-project python tools/vendor_pack.py --write     # lodepng, stb_image, pl_mpeg, libsamplerate, for -DYSP_BUILD_PACK=ON
 uv run --no-project python tools/vendor_layout.py --write   # HarfBuzz, Skribidi, for -DYSP_BUILD_LAYOUT=ON
 ```
 

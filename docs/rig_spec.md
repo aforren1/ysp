@@ -2013,7 +2013,7 @@ user can do today, but with work each time or with a conversion. The
 | 9 | Untimed screens: an operator window beside the stimulus | None (new) | `ysp/screen.h` (4.2 proposal) | 1: `dualWindow/` | 1: `screensAndWindows.py` (two windows on one display) | Small |
 | 10 | Bit-state box decoder (PST SRBox) | None | `ysp/box.h` (docs/devices_spec.md 10.1) | 1: `pstbox.py` | None | Small |
 | 11 | LabJack glue | None | `ysp/labjack.h` (docs/devices_spec.md) | 1: `labjack_u3.py` | None | Small |
-| Burden | Source formats: `.xlsx` conditions, JPEG, MP3 | 5 (images) | Pack tool importers (docs/pack.md takes CSV, PNG, WAV) | None | 16 demos load `.xlsx` conditions; 11 use JPEG; 1 uses MP3 | Small each |
+| Burden | Source formats: `.xlsx` conditions, JPEG, MP3 | 5 (images) | Pack tool importers (docs/pack.md takes CSV, PNG, WAV; `.xlsx` and JPEG from tool v0.4.0, 2026-10-13: all 23 demo workbooks read, 14 of 15 demo photographs; MP3 not taken) | None | 16 demos load `.xlsx` conditions; 11 use JPEG; 1 uses MP3 | Small each |
 | Burden | Text in C | 3 | Done for C: `pack/layout` v0.1.0 (Skribidi, `YSP_BUILD_LAYOUT`); the player's text is not built | None | Every Builder demo with instructions or word stimuli | None left in C; a build option and `third_party/` |
 
 Notes on the merge with 14.7:
@@ -2024,7 +2024,8 @@ Notes on the merge with 14.7:
 - 14.7 rank 3 (text) is closed for C programs since `pack/layout`
   v0.1.0. It stays open for the player.
 - 14.7 rank 5 (image decode) is closed for PNG by the pack tool
-  (lodepng). JPEG is not taken; PsychoPy's demos use it for photographs.
+  (lodepng), and for JPEG by pack tool v0.4.0 (stb_image; docs/pack.md
+  4.9).
 - Ranks 4, 5, 8, 9, 10 and 11 have no jsPsych counterpart. Ranks 4,
   10 and 11 are already in docs/devices_spec.md.
 

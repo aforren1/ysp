@@ -1,4 +1,4 @@
-/* ysp/pack_tool.h - v0.3.0 - the pack tool as a library (prefix ypt_)
+/* ysp/pack_tool.h - v0.4.0 - the pack tool as a library (prefix ypt_)
  *
  *   Builds, verifies, lists, extracts, rebuilds and appends ysp packs
  *   (docs/pack.md). The CLI `ypak` (pack/ypak.c) is a thin layer over these
@@ -6,7 +6,9 @@
  *   header: a C11 library in the pack tool's tree that links ysp/pack.h,
  *   ysp/json.h (every description and manifest), ysp/table.h,
  *   ysp/outline.h, ysp/gfx.h (CPU parts: the shader wrapper and the curve
- *   set check), ysp/color.h, ysp/audio.h (the WAV probe), lodepng (PNG)
+ *   set check), ysp/color.h, ysp/audio.h (the WAV probe), ysp/video.h
+ *   (video indexes: pl_mpeg for MPEG-1, Media Foundation for MP4 on
+ *   Windows), lodepng (PNG, and inflate for .xlsx), stb_image (JPEG)
  *   and, for glyph runs only, pack/layout (Skribidi and HarfBuzz). Built
  *   with YPT_NO_LAYOUT (CMake: YSP_BUILD_PACK=ON without YSP_BUILD_LAYOUT),
  *   the library has no pack/layout and refuses a GLYPHRUNS resource by
@@ -14,8 +16,8 @@
  *   those headers' implementations itself (pack/pack_impl.c): a program
  *   that links it does not define YSP_PACK_IMPLEMENTATION,
  *   YSP_JSON_IMPLEMENTATION, YSP_TABLE_IMPLEMENTATION,
- *   YSP_OUTLINE_IMPLEMENTATION, YSP_GFX_IMPLEMENTATION or
- *   YSP_AUDIO_IMPLEMENTATION again.
+ *   YSP_OUTLINE_IMPLEMENTATION, YSP_GFX_IMPLEMENTATION,
+ *   YSP_AUDIO_IMPLEMENTATION or YSP_VIDEO_IMPLEMENTATION again.
  *
  *   v0.1.1 (2026-10-09): the JSON reader and writer moved to ysp/json.h,
  *   the repository's one strict reader. Every pack of the test corpus is
@@ -36,6 +38,20 @@
  *   has the same bytes and pack ID from the core and the full tool; its
  *   manifest differs from v0.2.0's by that line, and every other entry is
  *   byte-identical to v0.2.0's.
+ *
+ *   v0.4.0 (2026-10-13): phase 3 (docs/pack.md 13). VIDEO and its
+ *   VIDEO_INDEX from an MPEG-1 or MP4 file, as given or made by an ffmpeg
+ *   step whose argument vector and version the manifest records (the tool
+ *   encodes on one thread, `-threads 1` and libx265's pools=1, and refuses
+ *   the author's thread settings, so any machine rebuilds the bytes; the
+ *   user's decision of 2026-10-14); opt-in resampling; FRAMESEQ
+ *   from a ysp/video.h frame sequence, every frame checked; a TABLE from an
+ *   .xlsx sheet; a TEXTURE from a JPEG; an ICC profile in a PNG or JPEG is
+ *   accepted when it is sRGB's and refused otherwise (v0.3.0 refused every
+ *   iCCP). `ypak rebuild` takes an ffmpeg output from the pack when this
+ *   ffmpeg is another version. The manifest names ysp/video.h, stb_image
+ *   and pl_mpeg, so every pack ID differs from v0.3.0's; every other entry
+ *   of the v0.3.0 test corpus is byte-identical.
  *
  *   Every call returns 0 or a negative code (ysp/pack.h's YPAK_ERR_*
  *   values) and writes one line into err: what failed, where, and what to
@@ -58,11 +74,12 @@
 extern "C" {
 #endif
 
-#define YPT_VERSION_STRING "0.3.0"
+#define YPT_VERSION_STRING "0.4.0"
 
 typedef struct ypt_options {
     const char* sources;   /* the sources' folder; NULL: the description's folder */
     FILE*       log;       /* one line per entry built; NULL: quiet               */
+    const char* ffmpeg;    /* the ffmpeg program; NULL: "ffmpeg" on the PATH     */
 } ypt_options;
 
 /* Builds the pack that a source description (JSON, docs/pack.md 5.2)
@@ -95,6 +112,12 @@ int ypt_cat(const char* pack_path, const char* name, FILE* out, char* err, size_
  * gets "identical" or the first entry and offset that differ. */
 int ypt_rebuild(const char* pack_path, const char* sources_dir, const char* out_path, FILE* report,
                 char* err, size_t cap);
+/* The same with options (o->ffmpeg; o->sources and o->log are not used). An
+ * ffmpeg step runs again only when this ffmpeg reports the version that the
+ * manifest records; otherwise the entry's bytes come from the pack, checked
+ * by its hashes, report says so, and everything made from it is rebuilt. */
+int ypt_rebuild_ex(const char* pack_path, const char* sources_dir, const char* out_path, const ypt_options* o,
+                   FILE* report, char* err, size_t cap);
 /* Writes player, zero padding to a multiple of 4096, and the pack with
  * absolute offsets, to out_path. The pack ID does not change. */
 int ypt_append(const char* player_path, const char* pack_path, const char* out_path, char* err, size_t cap);
@@ -102,6 +125,46 @@ int ypt_append(const char* player_path, const char* pack_path, const char* out_p
 /* The writer's name rule (docs/pack.md 2.7): 1 when name is a portable
  * entry name. Case-insensitive uniqueness is the build's check. */
 int ypt_name_ok(const char* name, size_t n);
+
+/* --- source readers (pack/import.c), public for the fuzz target and tests --- */
+
+/* One worksheet of an .xlsx workbook as RFC 4180 CSV (LF line ends) for
+ * ysp/table.h: row 1 names the columns, and line k of the text is sheet row
+ * k. A number keeps the text the workbook stores; a boolean is TRUE or
+ * FALSE; a formula gives its saved value. Refused by name: a date or a
+ * time, an error value, a formula without a saved value, a value in a
+ * column without a name, a password, zip64, and a part past its bound. */
+typedef struct ypt_sheet {
+    char*    csv;          /* malloc'd; a NUL after csv_len                    */
+    size_t   csv_len;
+    char     sheet[256];   /* the sheet read                                   */
+    int      n_cols;
+    int      rows;         /* the last sheet row with a value, less the header */
+    int      formulas;     /* cells whose value is a formula's saved result    */
+    uint64_t text_cols;    /* bit k: every value of column k is a text cell    */
+} ypt_sheet;
+/* sheet: a sheet's name, or NULL for the first sheet. 0 or a negative code
+ * with err. */
+int  ypt_xlsx_read(const void* data, size_t n, const char* sheet, ypt_sheet* out, char* err, size_t cap);
+void ypt_sheet_free(ypt_sheet* s);
+
+/* A JPEG's frame and segments checked (baseline, extended or progressive
+ * Huffman coding, 8-bit, 1 or 3 components, EXIF orientation 1 or none, an
+ * ICC profile only when it is sRGB's), then, with decode, its texels from
+ * stb_image: gray as 1 channel, color as RGBA with alpha 255. */
+typedef struct ypt_jpeg {
+    uint8_t* px;           /* w h channels bytes; ypt_jpeg_free() releases it */
+    int      w, h, channels, components, progressive, icc_srgb;
+    char     sampling[24]; /* "gray", or "2x2,1x1,1x1" (h x v per component)  */
+} ypt_jpeg;
+int  ypt_jpeg_read(const void* data, size_t n, int decode, ypt_jpeg* out, char* err, size_t cap);
+void ypt_jpeg_free(ypt_jpeg* j);
+
+/* 1 when an ICC profile is sRGB's (an RGB matrix-and-curves profile whose
+ * colorants are within 0.002 of sRGB's D50 values and whose curves are
+ * within half a code of 255 of sRGB's at every code), 0 when it is another
+ * (why says how), < 0 when it is damaged. */
+int ypt_icc_srgb(const void* data, size_t n, char* why, size_t cap);
 
 #ifdef __cplusplus
 }

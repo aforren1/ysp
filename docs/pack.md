@@ -5,8 +5,11 @@ left open (the coordinator approved them, with the recommendations of
 section 10 as defaults); phase 2 built them: `include/ysp/pack.h` v0.1.0
 (the reader), `pack/ysp/pack_tool.h` v0.1.0 (the tool library) and the
 `ypak` CLI. Section 9.1 has the phase 1 probes and the phase 2
-measurements. Where the build changed the design, the text says so. When
-this page and rig_spec 5 disagree, this page is newer.
+measurements. Phase 3 (2026-10-13, tool v0.4.0, section 13) added video
+with its index, frame sequences, tables from `.xlsx` workbooks and
+textures from JPEG files; the reader did not change. Where the build
+changed the design, the text says so. When this page and rig_spec 5
+disagree, this page is newer.
 
 Settled before this page, in rig_spec 5, and not reopened here: one zip
 file in store-only mode; entries aligned to 4 KB; readable by any zip
@@ -291,10 +294,10 @@ hostile:
 | 11 | AUDIO | `.wav` | WAV at the project rate | 2 |
 | 12 | SHADER | `.yspshd` | the fragment body, mode and reflection | 2 |
 | 13 | TEXTURE | `.ysptex` | ysp/gfx.h planes, raw or QOI | 2 |
-| 14 | VIDEO | `.mpg`, `.mp4` | the media file, CFR, closed GOPs, no B-frames | 3 |
-| 15 | VIDEO_INDEX | `.yspvi` | ysp/video.h's index | 3 |
-| 16 | FRAMESEQ | `.yspvseq` | ysp/video.h's frame sequence | 3 |
-| 17 | ALPHA | `.yspalpha` | exact alpha coverage at stated sizes | 3 |
+| 14 | VIDEO | `.mpg`, `.mp4` | the media file, CFR, closed GOPs, no B-frames | 3 (tool v0.4.0) |
+| 15 | VIDEO_INDEX | `.yspvi` | ysp/video.h's index | 3 (tool v0.4.0) |
+| 16 | FRAMESEQ | `.yspvseq` | ysp/video.h's frame sequence | 3 (tool v0.4.0) |
+| 17 | ALPHA | `.yspalpha` | exact alpha coverage at stated sizes | not built (4.11) |
 | 18 | SCRIPT | | reserved (Luau source and bytecode) | later |
 | 19 | EXTENSION | | reserved (native modules by hash, rig_spec 12) | later |
 
@@ -436,7 +439,10 @@ Rules:
   documentation. Some values are records only and are not taken back by a
   rebuild: `faces` and `fs_type` (font), `role` (calibration), `resolve`
   and `backward` (curve set), `contract` and `validated` (shader),
-  `convert` (audio).
+  `convert` (audio), `formulas` and `text_columns` (a table from a
+  workbook), `icc` (texture), `command` (video), every key of a frame
+  sequence's and a video index's derivation. A VIDEO_INDEX entry is not a
+  resource of the description: its video makes it again.
 - Numbers are integers. A real-valued parameter is a JSON string with the
   decimal text the tool parsed (`"1e-4"`), read by ysp/table.h's
   locale-free, correctly rounded parser. The tool refuses a JSON number
@@ -468,6 +474,39 @@ The PSTB block (docs/table.md, format 1), unchanged; `ytb_open_view()` reads
 it in place. Source: CSV or TSV through `ytb_open_csv()`. Parameters:
 `delimiter` (`","`, `";"` or `"\t"`; default `","`), `types` (column name
 to `"integer"`, `"number"` or `"string"`), `allow_empty` (default false).
+
+Source `.xlsx` or `.xlsm` (tool v0.4.0, `op` `"xlsx"`): one worksheet
+becomes CSV text (`ypt_xlsx_read()`, `pack/import.c`), and
+`ytb_open_csv()` reads that text, so a workbook and the CSV that Excel
+would write give the same table, with full precision. Parameter `sheet`:
+the sheet's name; the first sheet when not given. The manifest records
+the sheet read. The rules:
+
+- Row 1 names the columns; its cells must be text. A column without a
+  name in row 1 must be empty: a value there is refused by its cell
+  reference (PsychoPy drops such a column without a word).
+- A number keeps the text the workbook stores (`0.25`,
+  `1.0000000000000001E-2`); ysp/table.h's parser reads it. A boolean is
+  `TRUE` or `FALSE`. A formula gives its saved value; the manifest counts
+  them (`formulas`). A formula with no saved value is refused: the tool
+  computes no formula.
+- A column whose every value is a text cell is `"string"`, so `007` keeps
+  its zeros as the workbook shows it; the manifest lists these columns
+  (`text_columns`). `types` in the description comes first.
+- Refused by cell reference: a date or a time (a cell format with day,
+  month, year, hour or second, or a built-in date format), an error value
+  (`#N/A`), a cell type the reader does not know. A date in a conditions
+  file is a datetime in PsychoPy and a serial number in the file; a table
+  holds numbers and text, so the author picks one.
+- Refused by name: a password-protected workbook (an OLE file, not a
+  zip), an old `.xls`, zip64, a part that inflates past 64 MiB, a part
+  whose CRC-32 or size does not match, a DOCTYPE, an entity other than
+  XML's five.
+- Shared strings with rich text are joined; phonetic guides (`rPh`) are
+  left out; `_xHHHH_` escapes (ECMA-376) are decoded.
+
+Measured on PsychoPy's 23 demo workbooks (9.1, phase 3): every one reads,
+and every cell equals openpyxl's value.
 
 ### 4.2 CALIBRATION (decided 2026-10-09: open question 1)
 
@@ -577,6 +616,22 @@ only). Anything else, and any rate other than the project's, is refused
 with a message that says what to export. Parameter: `stream` (flag
 STREAM).
 
+Parameter `resample` (tool v0.4.0, open question 4): `"sinc_best"`
+resamples a file at another rate to the project rate with libsamplerate
+0.2.2's best sinc converter (`SRC_SINC_BEST_QUALITY`; BSD-2-Clause,
+pinned, `tools/vendor_pack.py`), offline, so the player still never
+resamples. The samples are widened to float exactly first, as ysp/audio.h
+does at load, and the result is a 32-bit float WAV (`op` `"resample"`).
+The derivation records `from_rate` and `clipped`, the count of samples
+past full scale (a resampled peak can pass it; float holds it, and the
+author sees the count). Without `resample`, a rate other than the
+project's is refused as before, and the message names the parameter.
+libsamplerate is compiled without FMA contraction (`-ffp-contract=off`),
+so every compiler gives the same samples (the test corpus pins a
+resampled file). Measured (section 9.1, phase 3): a 997 Hz sine at
+44.1 kHz comes out at 48 kHz within 5.2e-8 of the ideal sine, 140 dB
+below its amplitude, away from the file's first and last 200 samples.
+
 ### 4.8 SHADER
 
 | Offset | Size | Field |
@@ -618,10 +673,40 @@ type: 8-bit gray to R8, gray and alpha to RG8, RGB, RGBA and palette to
 RGBA8 (RGB gets alpha 255), 16-bit gray to R16UI (little-endian); 16-bit
 color needs `"format": "rgba32f"` (k / 65535 as f32). A `format` that
 would drop or round values is refused. `encoding`: `srgb` (the default
-for 8-bit), `linear` or `device`; a 16-bit PNG has no default. An `iCCP`
-chunk, a `gAMA` other than 45455 and a `cHRM` other than sRGB's are
-refused by name. `compression`: `raw` (default) or `qoi`; the reader's
+for 8-bit), `linear` or `device`; a 16-bit PNG has no default. A `gAMA`
+other than 45455 and a `cHRM` other than sRGB's are refused by name.
+`compression`: `raw` (default) or `qoi`; the reader's
 `ypak_qoi_decode()` checks the raw hash.
+
+An ICC profile (a PNG's `iCCP`, a JPEG's `APP2` chunks) is accepted when
+it is sRGB's and refused otherwise (`ypt_icc_srgb()`): an RGB
+matrix-and-curves profile whose colorants are within 0.002 of sRGB's D50
+values and whose three curves are within half a code of 255 of sRGB's at
+every code. The manifest records `"icc": "srgb"`. Changed in tool v0.4.0:
+v0.3.0 refused every `iCCP`, but 3 of the 4 profiles in PsychoPy's demo
+photographs are sRGB's (two `sRGB IEC61966-2.1`, one compact `c2`); the
+fourth, a laptop panel's profile (`Color LCD`, colorants 0.04 off, a
+gamma of 1.8), is refused. The tool still converts no color: an sRGB
+profile says what `"encoding": "srgb"` says.
+
+Source JPEG (tool v0.4.0, `op` `"jpeg"`): decoded by stb_image 2.30
+(pinned, `tools/vendor_pack.py`), after `ypt_jpeg_read()` checks the
+frame and the segments. Gray to R8, color to RGBA8 (alpha 255); `rgba8`
+for gray and `rgba32f` (k / 255, as an 8-bit PNG gives) widen exactly;
+`r8` from color, `rg8` and `r16ui` are refused. `encoding` defaults to
+`srgb`, so color needs `primaries` as an RGB PNG does. Refused by name:
+an EXIF orientation other than 1 (programs disagree on whether to turn
+the picture: save it turned, with orientation 1), CMYK, 12-bit samples,
+lossless, hierarchical and arithmetic coding, two frame headers, ICC
+chunks out of order or missing, a profile that is not sRGB's, a file
+with no end marker, and a file too short for its frame (every 8x8 block
+costs at least one bit): stb_image would decode a cut file with zeros in
+place of the missing data. The fuzzer found the second case: 1,450 bytes
+that claimed 512 x 62977 and decoded. JPEG decoders do not agree to the bit: on
+PsychoPy's photographs stb_image and libjpeg-turbo differ by at most 3
+codes, except the second-to-last column of an image with horizontally
+halved chroma (up to 20 codes; 9.1, phase 3). The texture holds
+stb_image's bytes, and the manifest names the decoder.
 
 The encoding bytes are the `enc` of `ygfx_texture_desc` (ysp/gfx.h
 v0.10.5), copied unchanged: the tool refuses at build every texture that
@@ -651,18 +736,69 @@ or shader texture is built `linear`. Changed in tool v0.2.0 (2026-10-09):
 v0.1.1 wrote matrix, range and transfer on every texture with primaries
 0, which `ygfx_texture()` refused, and refused any encoding on R8 and RG8.
 
-### 4.10 VIDEO, VIDEO_INDEX, FRAMESEQ (phase 3, not built)
+### 4.10 VIDEO, VIDEO_INDEX, FRAMESEQ (tool v0.4.0)
 
-The design of the first page stands: the media file unchanged with flag
-STREAM, the `.yspvi` index from `yvid_index_make()`, a `YSPVSEQ1` file
-unchanged; ffmpeg's argument vector and version recorded. The reader
-already reads these kinds (a cursor feeds `yvid_desc.reader`); the tool
-refuses them.
+The design of the first page, built: the media file unchanged with flag
+STREAM, its `.yspvi` index from `yvid_index_make()`, a `YSPVSEQ1` file
+unchanged with flag STREAM; ffmpeg's argument vector and version
+recorded. The reader did not change (a cursor feeds `yvid_desc.reader`,
+the index entry `yvid_desc.index`).
 
-### 4.11 ALPHA (phase 3, not built)
+A `video` resource makes two entries: the media file, named by `name`
+(it ends in `.mp4` or `.mpg`, and the bytes must be that form), and
+`name` + `.yspvi`, the index, as ysp/video.h finds an index beside a
+file. Parameters:
+
+- `source`: the media file, or ffmpeg's input.
+- `ffmpeg`: the arguments between the input and the output. With it, the
+  tool runs `ffmpeg -nostdin -hide_banner -loglevel error -y
+  [ffmpeg_input] -i SOURCE [ffmpeg] -threads 1 OUTPUT` (no shell; each
+  argument as given) and stores the output. The encode runs on one
+  thread, set by the tool (decided 2026-10-14): `-threads 1` before the
+  output, and for libx265 `pools=1:frame-threads=1` appended to the
+  author's `-x265-params` (or added as `-x265-params` when there is
+  none). Every encoder measured gives other bytes with another thread
+  count, and ffmpeg's default is the machine's core count (9.1, phase 3),
+  so without this a pack would rebuild the same only on a machine with as
+  many cores. A thread setting of the author's (`-threads`, or `threads=`,
+  `pools=`, `frame-threads=`, `lookahead-threads=` in `-x264-params`,
+  `-x265-params` or `-x264opts`) is refused by name. Input options in
+  `ffmpeg_input` are not touched: decoding gives the same frames on any
+  thread count. `ffmpeg_input`: input options, before
+  `-i` (a raw source: `-f rawvideo -pix_fmt gray -s 64x48 -framerate
+  30`). The derivation's `by` is the first line of `ffmpeg -version`, and
+  `command` is the vector with `{source}` and `{output}` for the paths, so
+  the manifest names no path of the machine. The same text is the index's
+  note. `ypak --ffmpeg PATH` names the program; the default is `ffmpeg` on
+  the PATH.
+- `color`: `matrix`, `range`, `transfer`, `primaries`, `siting`, by
+  ysp/video.h's names (`bt709`, `limited`, `bt1886`, `bt709`, `left`).
+  What the stream states wins; a field that contradicts it is refused
+  (`yvid_index_make()`). MPEG-1 defaults to BT.601, limited, BT.1886,
+  BT.709, center.
+
+The index is made by decoding every frame: MPEG-1 with pl_mpeg (pinned,
+`tools/vendor_pack.py`), on every platform; H.264 and HEVC in MP4 with
+Media Foundation's software decoder, on Windows only (H.264 decoding is
+exact by the standard, so every decoder gives the index's hashes,
+docs/video.md). ysp/video.h refuses what is not canonical, by name: a
+variable rate, B-frames, a GOP that changes, an edit list, 10-bit, and
+the rest of its CANONICAL FORM. The index's derivation records codec,
+size, rate, frames, GOP and color.
+
+`frameseq`: the file from `yvid_seq_open()`, unchanged, after every byte
+is checked: the header and its hash, the canonical color (RGB formats as
+device values, YUV formats with every field stated), each frame's header
+against the index, its data against its XXH64 (QOI frames decoded), the
+zero padding, and the index at the file's end. Only a frame header's
+capture fields (times, trial, event) are free. The derivation records
+frames, size, format, compression and rate.
+
+### 4.11 ALPHA (not built)
 
 Exact alpha coverage at stated sizes; the form follows the first
-experiment that needs it.
+experiment that needs it. No experiment has needed it, so the tool
+refuses `"kind": "alpha"` with that reason (tool v0.4.0).
 
 ### 4.12 EXPERIMENT and FILE
 
@@ -678,18 +814,23 @@ Bytes, unchanged. The experiment comes from the description's top-level
 `pack_impl.c` compiles the implementations of ysp/pack.h, ysp/json.h,
 ysp/table.h, ysp/outline.h, ysp/gfx.h (without SDL: the shader wrapper
 and the curve set check), ysp/color.h, ysp/audio.h (without miniaudio:
-the WAV probe) and ysp/rt.h once, so a program that links the library
-defines none of them. It also links lodepng (compiled as C from a copy,
-its warnings off) and, in the full tool only, `pack/layout` (Skribidi and
-HarfBuzz). It builds with MSVC, MinGW, Linux gcc and emcc, so the designer
-can run the same code in the browser (the tool test passes under node).
+the WAV probe), ysp/video.h (from tool v0.4.0: `yvid_index_make()` with
+pl_mpeg, and Media Foundation on Windows), ysp/timeline.h and ysp/rt.h
+once, so a program that links the library defines none of them.
+`pack/import.c` holds the readers of other formats (`.xlsx`, JPEG, ICC).
+It also links lodepng and stb_image (each compiled as C from the fetched
+file, its warnings off) and, in the full tool only, `pack/layout`
+(Skribidi and HarfBuzz). It builds with MSVC, MinGW, Linux gcc and emcc,
+so the designer can run the same code in the browser (the tool test
+passed under node in phase 2; phase 3 was not run there, and the ffmpeg
+step cannot run in a browser).
 
 Two builds of one tool (decided 2026-10-10, review decision E). The CLI,
 the library's calls and the pack format are the same in both:
 
 | Build | CMake | Fetch once | Kinds |
 |---|---|---|---|
-| Core | `YSP_BUILD_PACK=ON` | `tools/vendor_pack.py --write` (lodepng) | every kind but GLYPHRUNS: tables, calibrations, fonts, curve sets, artwork, audio, shaders, textures, files, the experiment; and verify, list, info, extract, cat, rebuild, append |
+| Core | `YSP_BUILD_PACK=ON` | `tools/vendor_pack.py --write` (lodepng, stb_image, pl_mpeg) | every kind but GLYPHRUNS: tables, calibrations, fonts, curve sets, artwork, audio, shaders, textures, video, frame sequences, files, the experiment; and verify, list, info, extract, cat, rebuild, append |
 | Full | `YSP_BUILD_PACK=ON` and `YSP_BUILD_LAYOUT=ON` | also `tools/vendor_layout.py --write` | all, GLYPHRUNS too |
 
 Configure stops with the fetch command when a file set is missing. The
@@ -715,13 +856,13 @@ Sizes and build times: section 8.1.
 
 | Command | What it does |
 |---|---|
-| `ypak build SRC.json -o OUT.ysppak` | Builds a pack from a source description |
+| `ypak build SRC.json -o OUT.ysppak [--ffmpeg PATH]` | Builds a pack from a source description |
 | `ypak verify PACK` | Every check: structure, canonical container, CRC-32, XXH64 tree, SHA-256 per entry against the manifest, the manifest against the 0x7379 records, the pack ID. Exit 0 only when all pass |
 | `ypak list PACK` | Name, kind, size, data offset, flags |
 | `ypak info PACK` | Pack ID, format, tool, experiment, project audio |
 | `ypak extract PACK [NAME...] -C DIR` | Writes entries, applying the writer's name rule; does not overwrite without `--force` |
 | `ypak cat PACK NAME` | One entry to standard output |
-| `ypak rebuild PACK --sources DIR [-o OUT]` | 5.3; a pack appended to a program is refused (rebuild the pack it was made from) |
+| `ypak rebuild PACK --sources DIR [-o OUT] [--ffmpeg PATH]` | 5.3; a pack appended to a program is refused (rebuild the pack it was made from) |
 | `ypak append PLAYER PACK -o OUT` | Pads the player to 4096, appends the pack with absolute offsets, rewrites the comment's directory hash. The pack ID does not change. A pack already appended is refused |
 
 Exit codes: 0, 1 with the message on standard error, 2 for a usage
@@ -757,7 +898,14 @@ kind's extension.
     { "name": "art/fixation.yspart", "kind": "artwork", "source": "art/fixation.svg" },
     { "name": "audio/beep.wav", "kind": "audio", "source": "audio/beep.wav" },
     { "name": "shaders/plaid.yspshd", "kind": "shader", "source": "shaders/plaid.glsl", "mode": "modulation" },
-    { "name": "faces/f01.ysptex", "kind": "texture", "source": "faces/f01.png", "compression": "qoi" }
+    { "name": "faces/f01.ysptex", "kind": "texture", "source": "faces/f01.png", "compression": "qoi" },
+    { "name": "faces/f02.ysptex", "kind": "texture", "source": "faces/f02.jpg", "primaries": "device" },
+    { "name": "blocks.pstb", "kind": "table", "source": "blocks.xlsx", "sheet": "Conditions" },
+    { "name": "video/intro.mp4", "kind": "video", "source": "raw/intro.mov",
+      "ffmpeg": ["-an", "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-bf", "0", "-g", "30",
+                 "-keyint_min", "30", "-sc_threshold", "0", "-x264-params", "open-gop=0:scenecut=0",
+                 "-video_track_timescale", "30000"] },
+    { "name": "video/gratings.yspvseq", "kind": "frameseq", "source": "video/gratings.yspvseq" }
   ]
 }
 ```
@@ -778,7 +926,14 @@ A methods section cites the pack ID. A reviewer checks it:
    differ, and exits 0 only on `identical`.
 3. An `exec` step (ffmpeg) runs again only when the same program version
    is present; otherwise the tool says so, checks the recorded output by
-   its hash, and rebuilds everything downstream of it.
+   its hash, and rebuilds everything downstream of it. Built in tool
+   v0.4.0: when `ffmpeg -version` gives another first line than the
+   derivation's `by`, or ffmpeg does not run, the video entry's bytes come
+   from the pack (read through ysp/pack.h, so checked by their hashes),
+   the report prints a `note:` line, and the index is made again from
+   them. An index that cannot be made here (an MP4 index off Windows) is
+   taken from the pack the same way. The source's SHA-256 is checked in
+   either case.
 
 Phase 2 CI builds one corpus pack with the MSVC, MinGW and emcc builds of
 the tool and requires the same bytes (open question 2).
@@ -795,7 +950,8 @@ the tool and requires the same bytes (open question 2).
 | AUDIO | `yau_wav_load()` from data, or `yau_wav_open()` with a cursor | widened to float (load) or streamed |
 | SHADER | view, `ygfx_pipeline()` | none |
 | TEXTURE | view, `ygfx_texture()` with the stored `enc` bytes unchanged (4.9); QOI decoded first | none raw; one buffer for QOI |
-| VIDEO | `yvid_desc.reader` = cursor, `.index` = index entry | streamed |
+| VIDEO | `yvid_desc.reader` = cursor, `.index` = the VIDEO_INDEX entry (`name.yspvi`) | streamed |
+| FRAMESEQ | `yvid_desc.reader` = cursor (no index entry: the file holds its own) | streamed |
 
 ## 7. Determinism
 
@@ -837,6 +993,18 @@ bytes. What makes it so:
   arcs, strokes, skews, CFF cubics, a TrueType collection and glyph runs
   in four scripts. Open question 2 stays open only for platforms not run
   (macOS, ARM).
+- **Decoders** (tool v0.4.0): stb_image's JPEG path is integer
+  arithmetic, and its SSE2 code gives the scalar code's bytes (measured:
+  the 15 PsychoPy photographs, MinGW gcc 16.1 with and without
+  `STBI_NO_SIMD`, 15 of 15 identical). pl_mpeg's MPEG-1 decode and Media
+  Foundation's H.264 decode give one index per file; H.264 is exact by the
+  standard (docs/video.md). The xlsx reader is integer and text only.
+- **ffmpeg**: its output is the same bytes for the same ffmpeg build,
+  arguments and input (measured: section 9.1, phase 3). The encoders'
+  output also depends on their thread count, which defaults to the core
+  count, so the tool encodes on one thread itself and records it in the
+  command (4.10, decided 2026-10-14). A rebuild with another ffmpeg takes
+  the recorded output (5.3).
 
 ## 8. Costs: targets and measurements
 
@@ -889,6 +1057,53 @@ fetched sources were already on disk, so no time is download time.
 The core `ypak` from MSVC and from MinGW and the full `ypak` from
 both compilers wrote the same `core.ysppak` (the tool test's description
 without glyph runs), byte for byte.
+
+### 8.2 The tool's throughput per kind (tool v0.4.0)
+
+`tests/pack/throughput.py`, 2026-10-13, the same laptop (i7-1360P), AC,
+under the measurement lock (load 17 % at the start, 16 % at the end),
+`ypak.exe` MSVC 19.44 Release, core build. Each row is one `ypak build` of
+every file of that kind, so it includes the process start, the source's
+SHA-256, the derivation, the entry hashes and the write; median of 5
+rounds (3 for the panorama), min to max in brackets. The corpus is
+realistic: PsychoPy's demo workbooks and photographs (section 9.1, phase
+3), their sheets saved as CSV by the tool's reader, the photographs saved
+as PNG by Pillow, two H.264 clips made as `tests/media/make_video_clips.sh`
+makes them (1280 x 720 and 1920 x 1080, 300 frames each, 30 fps) and one
+MPEG-1 clip (1280 x 720, 300 frames), two 1920 x 1080 frame sequences of
+60 frames (RGBA8 as QOI, 5.9 MB; I420 raw, 186.8 MB), and two WAV files at
+48 kHz (60 s of 16-bit stereo, 10 s of float stereo).
+
+| Kind | Files | Source | Pack | Time | Source rate | Per file |
+|---|---|---|---|---|---|---|
+| TABLE from `.xlsx` | 23 | 0.6 MB | 0.1 MB | 0.051 s (0.047 to 0.053) | 12.2 MB/s | 2.2 ms |
+| TABLE from CSV (the same sheets) | 23 | 0.02 MB | 0.1 MB | 0.044 s (0.035 to 0.047) | | 1.9 ms |
+| TEXTURE from JPEG | 14 | 2.6 MB | 30.1 MB | 0.270 s (0.245 to 0.311) | 9.7 MB/s; 111 MB/s of texels | 19.3 ms |
+| TEXTURE from PNG (the same photographs) | 14 | 11.4 MB | 30.1 MB | 0.415 s (0.354 to 0.429) | 27.6 MB/s | 29.6 ms |
+| TEXTURE from JPEG, the 10240 x 5120 panorama | 1 | 14.1 MB | 209.7 MB | 1.228 s (1.208 to 1.453) | 11.5 MB/s; 171 MB/s of texels | |
+| TEXTURE from PNG, the same panorama | 1 | 77.6 MB | 209.7 MB | 2.615 s (2.601 to 2.634) | 29.7 MB/s | |
+| VIDEO and its index (copy; every frame decoded) | 3 | 31.7 MB | 31.7 MB | 3.342 s (3.296 to 3.519) | 9.5 MB/s | 3.7 ms a frame |
+| FRAMESEQ (every frame checked) | 2 | 192.7 MB | 192.7 MB | 1.741 s (1.410 to 1.747) | 110.7 MB/s | |
+| AUDIO (copy) | 2 | 15.4 MB | 15.4 MB | 0.159 s (0.153 to 0.171) | 96.5 MB/s | |
+| TEXTURE from PNG as QOI (the 14 photographs; second session) | 14 | 11.4 MB | 13.6 MB (45 % of raw) | 0.331 s (0.324 to 0.333); raw 0.354 s (0.343 to 0.410) in the same session | | |
+| AUDIO resampled 44.1 to 48 kHz, 60 s of 16-bit stereo (second session) | 1 | 10.6 MB | 23.1 MB | 2.043 s (2.023 to 2.061); a 48 kHz copy 0.107 s | 1.3 million frames a second, 29 times real time | |
+| VIDEO through the ffmpeg step: PsychoPy's demo movie, 640 x 480, 173 frames, x264 on one thread, then its index (second session, 3 rounds) | 1 | 0.8 MB | 0.5 MB | 1.651 s (1.615 to 1.812) | | |
+
+The second session (QOI, resampling, ffmpeg) ran later the same night
+under the lock, with the full build's `ypak.exe`; its load was not
+recorded. QOI answers the first half of open question 6: on these
+photographs it stores 45 % of the raw bytes and builds no slower; its
+decode at load was not timed.
+
+What this shows: a conditions workbook costs 2.2 ms, 0.3 ms more than its
+CSV; neither matters beside the process start. A JPEG photograph builds
+1.5 times faster than the same photograph as PNG; the PNG is 4.4 times
+larger to read, hash and inflate (the parts were not timed apart). The
+index dominates video: it decodes every frame on one thread to hash it,
+3.7 ms a frame over the three clips. Frame sequences and copies are bound
+by the two SHA-256 passes (the source's and the entry's) in portable C at
+0.31 to 0.38 GB/s (9.1): for the 193 MB of frame sequences that is about
+1.1 s of the 1.7 s, for the 15 MB of audio about half of the 0.16 s.
 
 ## 9. Explanation
 
@@ -1020,6 +1235,117 @@ reported 4.3 to 5.3 GB/s; its owner may want the same change (not
 measured there). One `fwrite` of 4.3 GB under MinGW's msvcrt ran for
 minutes and wrote 5 MB; the tool now reads and writes in 16 MiB pieces.
 
+**Phase 3: the readers against other readers**, 2026-10-13, the same
+laptop (i7-1360P), on PsychoPy's demo files (`psychopy/psychopy` branch
+`release` at `051482a`: 23 workbooks, 16 JPEG files, one MP4).
+
+- Workbooks: all 23 read. Every cell of each first sheet's named columns
+  (2,305 cells) equals openpyxl 3.1's value with `data_only=True`: text
+  equal, numbers equal as doubles, booleans `TRUE` or `FALSE`, no row
+  more or less.
+- JPEG: 14 of the 15 distinct photographs decode; the 15th
+  (`stimuli/beach.jpg`) carries a laptop panel's ICC profile (`Color LCD`,
+  rXYZ 0.3949 0.2251 0.0296, a gamma of 1.8) and is refused. Against
+  Pillow 12.3 (libjpeg-turbo): at most 3 codes apart on 13 files, 0.005 to
+  0.14 codes on average; on `canal.jpg` (progressive, chroma halved across
+  only) up to 20 codes, all in the second-to-last column (224 of 786,432
+  texels above 3 codes): the two decoders treat the right edge of
+  horizontally halved chroma differently. 3 of the 4 profiles in the set
+  are sRGB's: two `sRGB IEC61966-2.1` (a 1024-entry curve, 0.00 codes from
+  sRGB's), one compact `c2` (26 entries, 0.11 codes).
+- stb_image's SSE2 code against `STBI_NO_SIMD` (MinGW gcc 16.1 `-O2`):
+  the same bytes on all 15 files.
+- The MP4 (`stimuli/jwpIntro.mp4`, 173 frames at 2997/100 fps, no color
+  stated) is refused as given: its frame times fit no constant rate.
+  Through the ffmpeg step (x264, `-vf fps=30000/1001`, stated BT.601
+  color, one thread) it builds in 1.65 s (8.2), and its index reads 173
+  frames at 30000/1001.
+
+**Phase 3: ffmpeg's bytes.** ffmpeg N-122953-g7b15039cdb-20260223
+(gcc 15.2), the movie above through libx264 `-preset medium -crf 18`,
+twice for each thread count: each count gives the same bytes run to run;
+`threads=1`, `threads=4`, `threads=8` and the default (16 logical
+processors here) give four different files.
+
+2026-10-14, the encoders the tool is likely to be asked for, 120 frames
+of the same movie, twice each with the default threads and with
+`-threads 1`, `-threads 4`, `-threads 8`:
+
+| Encoder | Run to run | Thread counts | With `-threads 1` |
+|---|---|---|---|
+| libx264 | same | default, 4 and 8 all differ | same run to run; equal to `-x264-params threads=1` |
+| libx265 | same | default, 1 and 8 differ (4 happened to equal the default) | depends still on x265's own pool: `pools=1`, `pools=4` and the default pool give three files; `pools=1:frame-threads=1` is pinned, `lookahead-threads` changes nothing |
+| mpeg1video | same | default, 1, 4 and 8 all differ | same run to run |
+| mpeg2video | same | default, 1, 4 and 8 all differ | same run to run |
+
+Hence the rule of 4.10 (decided 2026-10-14): `-threads 1` for every
+encode, and `pools=1:frame-threads=1` for libx265. The tool test's
+MPEG-1, H.264 and HEVC clips are the same bytes on a second build, the
+HEVC clip's command shows the pools appended to the author's
+`-x265-params`, and `ypak rebuild` with this ffmpeg and with no ffmpeg
+gives the pack byte for byte.
+
+**Phase 3: the thread rule's mutants, by hand** (the runner cannot
+build the tool), 2026-10-14, MSVC 19.44, `test_pack_tool`: no
+`-threads 1` (killed, 2 checks), libx265's pools not merged into the
+author's `-x265-params` (killed: ffmpeg's second `-x265-params` replaces
+the author's, B-frames return and the index refuses them), the author's
+thread settings taken (killed, 3 checks). 3 of 3.
+
+**Phase 3: the cost of one thread**, 2026-10-14, under the measurement
+lock (load 41 % when it ended; other workers' jobs started after it), the
+same ffmpeg, median of 3 encodes (min to max), the encode alone:
+
+| Source | Encoder | Default threads | One thread | Ratio |
+|---|---|---|---|---|
+| PsychoPy's demo movie, 640 x 480, 173 frames | libx264 medium, crf 18 | 0.76 s (0.73 to 0.92) | 1.34 s (1.19 to 1.56) | 1.8 |
+| the same | libx265 medium, crf 20 | 1.69 s (1.52 to 1.79) | 3.14 s (2.42 to 3.59) | 1.9 |
+| the same | mpeg1video, q 3 | 0.23 s (0.22 to 0.25) | 0.33 s (0.32 to 0.57) | 1.4 |
+| testsrc2, 1920 x 1080, 300 frames (10 s) | libx264 medium, crf 18 | 2.89 s (2.89 to 3.45) | 29.43 s (24.23 to 31.23) | 10.2 |
+| the same | libx265 medium, crf 20 | 13.45 s (11.48 to 16.59) | 73.80 s (66.66 to 81.92) | 5.5 |
+| the same | mpeg1video, q 3 | 0.83 s (0.81 to 0.89) | 1.36 s (1.31 to 1.43) | 1.6 |
+
+What this costs: short clips at stimulus sizes pay under a factor of 2;
+1080p H.264 pays 10 times, about 3 s of encode a second of film here, so
+a two-hour 1080p film would take about 6 hours to pack once. The
+encode runs once per pack; a rebuild with another ffmpeg takes the
+recorded output instead. A faster `-preset` is the author's lever, and it
+is recorded like any argument.
+
+**Phase 3: resampling.** A 997 Hz sine at 44.1 kHz (float, amplitude
+0.5) through `"resample": "sinc_best"` to 48 kHz: 48,000 frames, the
+largest difference from the ideal sine 5.2e-8 (140 dB below the
+amplitude) between frame 200 and the last 200 frames (MSVC 19.44).
+
+**Phase 3: tests**, 2026-10-13.
+
+| Build | Tool test | Import test | Notes |
+|---|---|---|---|
+| MSVC 19.44 `/W4 /WX`, full (`YSP_BUILD_LAYOUT`) | 255 checks, 0 failed (2026-10-14) | 89, 0 failed | video through ffmpeg: MPEG-1, H.264 and HEVC in MP4 |
+| MSVC 19.44 `/W4 /WX`, core | 246, 0 failed | 89, 0 failed | the same `core.ysppak` as the full build, byte for byte |
+| Linux gcc 11.4 (WSL2), ASan and UBSan, core | 242, 0 failed | 89, 0 failed | MPEG-1 through ffmpeg 4.4.2; no MP4 index off Windows; the corpus pack, manifest included, is the MSVC core build's byte for byte (`sha256:013f3079...`), the resampled WAV and the sine's error too |
+| MinGW gcc 16.1, `-Wall -Wextra -Wpedantic -Wshadow -Wfloat-conversion` | | 89, 0 failed | `pack/import.c` without a warning |
+
+**Phase 3: mutations.** `tests/mutate/import.toml`, 38 mutants of
+`pack/import.c` (zip 9, XML 5, cells 11, JPEG 10, ICC 3), MinGW gcc 16.1:
+37 of 37 killed on the first run, after the test gained a repeated row
+number, a comma without a quote and a column of numbers and text while
+the list was written; the 38th (j-10, the frame-size check the fuzzer
+led to) killed too.
+
+**Phase 3: fuzzing.** `tests/fuzz/import_fuzz.c` under MSVC 19.51
+`/fsanitize=address /fsanitize=fuzzer`, from 97 seeds (PsychoPy's
+workbooks and photographs, their ICC profiles, the tool test's workbooks
+and JPEG files), in 10-minute pieces under the build guard. A first run
+without a length bound (about 150,000 inputs) found one timeout: 1,450
+bytes whose frame claimed 512 x 62977, which the reader passed and
+stb_image decoded (0.3 s without sanitizers, 13 s under them). The
+reader now refuses a file too short for its frame (4.9, mutant j-10),
+and the target decodes frames up to 4 megapixels only. Then, with
+`-max_len=40000`: 922,080 inputs in 3,600 s, no crash, no timeout, no
+leak; 6,272 coverage features, 3,499 corpus files, peak RSS 519 MB. The
+3,499 files replayed on Linux gcc 11.4 under ASan and UBSan: no report.
+
 ### 9.2 Why zip64 only where needed
 
 Two hours of 1080p H.264 at 8 Mbit/s is 7.2 GB; MPEG-1 for pl_mpeg needs
@@ -1150,14 +1476,17 @@ one function in the tool.
    ASCII set; the reader accepts UTF-8, so a later tool can widen the set
    (NFC, the tool normalizing names) with no format change.
 4. **Audio resampling. Default: refuse.** Built: the refusal names the
-   rate and the project rate. Not built: opt-in resampling with
-   libsamplerate (BSD-2-Clause) at `SRC_SINC_BEST_QUALITY` to 32-bit float.
+   rate and the project rate. Built in tool v0.4.0: opt-in resampling with
+   libsamplerate 0.2.2 (BSD-2-Clause) at `SRC_SINC_BEST_QUALITY` to 32-bit
+   float (`"resample": "sinc_best"`, 4.7). The default stays refuse: the
+   author decides that a file is resampled, and the manifest says so.
 5. **glslang. Default: optional, not linked.** The shader entry records
    `"validated": false` and flag bit 2 stays 0; ANGLE compiles at load and
    names the body's lines.
 6. **Texture compression. Default: raw and QOI.** Built. LZ4 and deflate
-   are not built. QOI's ratio and decode rate on a real stimulus set are
-   not measured yet.
+   are not built. QOI's ratio on a real stimulus set, measured in phase 3
+   (8.2): 45 % of the raw bytes on PsychoPy's 14 demo photographs, built
+   no slower than raw. Its decode rate at load is not measured yet.
 7. **Font licenses. Decided 2026-10-09 (user).** The tool refuses a face whose
    OS/2 `fsType` says restricted license embedding (bits 0 to 3 equal 2)
    unless the description sets `"private": true`, which the manifest
@@ -1205,9 +1534,10 @@ when `YSP_BUILD_LAYOUT=ON` too (5.1).
 ### Not done
 
 - VIDEO, VIDEO_INDEX, FRAMESEQ and ALPHA in the tool (phase 3); the
-  reader reads them.
+  reader reads them. Built in phase 3 but ALPHA (section 13).
 - Audio resampling, glslang validation, LZ4, JPEG, ELAN and Praat
-  imports, spans in glyph runs, BIDS `n/a` cells.
+  imports, spans in glyph runs, BIDS `n/a` cells. Phase 3 built
+  resampling and JPEG, and `.xlsx` tables (section 13).
 - Signed players (question 10).
 - The bench's cold-SSD number: the phase 1 probe measured it (9.1); the
   bench measures the mapped first touch.
@@ -1246,3 +1576,80 @@ prefix; the message after them is one whole text, the code is
 failure that leaves no code) and `conv-02` (a claim never released) are
 killed. The tool's test and the fuzz target build against the new open;
 `pack/` changed in one line (`open_pack()` reads `pk.error_code`).
+
+## 13. Phase 3: what was built (tool v0.4.0, 2026-10-13)
+
+Phase 3 is the tool's half of the kinds that phase 2 left to it, in the
+order of section 11's list, and the source formats that PsychoPy's demos
+use (rig_spec 15.4). The reader, `include/ysp/pack.h` v0.2.0, did not
+change: it already read every kind.
+
+| File | Version | What |
+|---|---|---|
+| `pack/ysp/pack_tool.h`, `pack/pack_tool.c` | 0.4.0 | VIDEO with its VIDEO_INDEX, the ffmpeg step and its rebuild (4.10, 5.3); FRAMESEQ (4.10); TABLE from `.xlsx` (4.1); TEXTURE from JPEG, ICC profiles that are sRGB's (4.9); audio resampling (4.7); `ypt_rebuild_ex()` with `ypt_options.ffmpeg` |
+| `pack/import.c` | new | The readers of other formats: `ypt_xlsx_read()`, `ypt_jpeg_read()`, `ypt_icc_srgb()` |
+| `pack/stb_image.c`, `pack/pack_impl.c` | | stb_image compiled JPEG only; the ysp/video.h implementation in the tool |
+| `pack/ypak.c` | 0.4.0 | `--ffmpeg PATH` for `build` and `rebuild` |
+| `tools/vendor_pack.py` | | Fetches and checks stb_image, pl_mpeg and libsamplerate beside lodepng |
+| `tests/adapt/import_test.c`, `tests/adapt/import_gen.h` | | The readers on their own; writers of ICC profiles, JPEG files and workbooks that the tool test shares |
+| `tests/pack/tool_test.c`, `tests/pack/corpus.sha256` | | New kinds and sources in the pinned corpus (30 entries), 34 new refusals, video through ffmpeg, the resampled sine |
+| `tests/fuzz/import_fuzz.c` | | libFuzzer: two workbook targets, JPEG, ICC |
+| `tests/mutate/import.toml`, `tests/mutate/mutate.py` | | 38 mutants of `pack/import.c`; the runner can now mutate a `pack/*.c` file |
+| `tests/pack/throughput.py` | | Section 8.2 |
+
+Third-party code added, each fetched at a commit and checked by SHA-256
+(`tools/vendor_pack.py`), none committed:
+
+| Code | License | Pin | Use |
+|---|---|---|---|
+| stb_image.h 2.30 | public domain or MIT | nothings/stb `2c980bb`, `stb_image.h` SHA-256 `594c2fe3...` | JPEG |
+| pl_mpeg.h | MIT | phoboslab/pl_mpeg `c871f2b`, SHA-256 `3a8cb30c...` (the top-level `YSP_FETCH_PL_MPEG` pin) | MPEG-1 indexes |
+| libsamplerate 0.2.2 | BSD-2-Clause | libsndfile/libsamplerate `c96f5e3` (tag 0.2.2), 10 files, `src_sinc.c` SHA-256 `8e59137d...` | resampling |
+
+The manifest names each (`tool.libraries`), with `,tree-differs` when
+the fetched file is not the pinned one.
+
+### Decided (the user, 2026-10-14)
+
+- **ICC profiles.** A profile is accepted in PNG and JPEG only once it is
+  identified as sRGB's, and refused otherwise (4.9). It is identified by
+  its content, never by its name: an RGB matrix-and-curves profile whose
+  three colorants (rXYZ, gXYZ, bXYZ) are each within 0.002 of sRGB's D50
+  values and whose three curves (rTRC, gTRC, bTRC, a table or a
+  parametric curve) are each within half a code of 255 of sRGB's curve at
+  all 256 codes. v0.3.0 refused every `iCCP`.
+- **EXIF orientation.** Anything but 1 is refused, not applied: browsers
+  apply it and PIL does not, so either choice would surprise someone.
+- **Workbooks.** Dates and times are refused; a value in a column without
+  a name is refused (PsychoPy drops the column); a column of text cells
+  stays text. Booleans are `TRUE` and `FALSE` as text.
+- **ffmpeg.** Changed from the proposal: the tool encodes on one thread
+  itself (`-threads 1`; for libx265 also `pools=1:frame-threads=1`), so a
+  pack rebuilds byte for byte on any machine without the author asking,
+  and the command records it (4.10). The author's thread settings are
+  refused. The cost is measured in 9.1, phase 3.
+- **MP4 indexes** are made on Windows only (Media Foundation), for now;
+  MPEG-1 on every platform. A rebuild elsewhere takes the recorded index.
+
+Proposed in phase 3 and not reviewed:
+- **Resampling** is opt-in (`"resample": "sinc_best"`); refusal stays the
+  default (open question 4).
+- **ALPHA** stays unbuilt (4.11).
+
+### Left
+
+- ALPHA, until an experiment needs it.
+- glslang validation of shaders (open question 5) and LZ4 or deflate
+  textures (open question 6): not built, the defaults stand.
+- MP4 indexes off Windows: ysp/video.h has no FFmpeg or AVFoundation
+  backend.
+- A video source is read whole into memory, hashed and copied; a two-hour
+  film needs its size in memory. Streaming the copy and the hashes is not
+  built.
+- The ffmpeg step takes one source file; an image sequence
+  (`frames/%04d.png`) as ffmpeg's input is not taken, because the manifest
+  hashes one source file.
+- MP3 sources, ELAN and Praat imports, BIDS `n/a` cells, spans in glyph
+  runs.
+- emcc (the designer's build) and macOS: phase 3 was not run there. The
+  ffmpeg step cannot run in a browser.
