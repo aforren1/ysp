@@ -1,4 +1,4 @@
-/* ysp/video.h - v0.3.1 - public domain single-header video playback library
+/* ysp/video.h - v0.4.0 - public domain single-header video playback library
  *
  *   A movie as a stimulus. On each display frame the header takes the
  *   frame's PREDICTED ONSET, asks the movie clock for the movie time at
@@ -422,14 +422,21 @@
  *   source are not available for MPEG-1). Its heap calls go through
  *   YVID_MALLOC, YVID_REALLOC and YVID_FREE (default: the C
  *   library's), which yvid_heap_calls() counts. YRT_NO_THREADS forces
- *   desc.inline_decode, and so does a decode thread that cannot start (wasm
- *   built without -pthread): the movie plays, each decode inside
- *   yvid_update() on the frame thread, and yvid_describe() says so.
+ *   desc.inline_decode, and so do ysp/rt.h's virtual clock (v0.4.0) and a
+ *   decode thread that cannot start (wasm built without -pthread): the
+ *   movie plays, each decode inside yvid_update() on the frame thread, and
+ *   yvid_describe() says so.
  *   Define YVID_API to change the linkage.
  *
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.4.0 - VIRTUAL CLOCK: on ysp/rt.h's virtual clock (yrt_virtual_begin,
+ *          rt.h v0.9.0) a movie decodes inline, as with
+ *          desc.inline_decode: a decode thread on real time fell behind a
+ *          frame loop that never waits, and video_play --sim showed a
+ *          different count of shown and dropped frames each run. Now the
+ *          same each run. Real clock: no change.
  *   v0.3.1 - pl_mpeg.h builds under -Wfloat-conversion (gcc and clang): its
  *          double-to-integer and double-to-float conversions are its own,
  *          so the include silences that warning as it already did
@@ -526,9 +533,9 @@
 #define YSP_VIDEO_H_INCLUDED
 
 #define YVID_VERSION_MAJOR 0
-#define YVID_VERSION_MINOR 3
-#define YVID_VERSION_PATCH 1
-#define YVID_VERSION_STRING "0.3.1"
+#define YVID_VERSION_MINOR 4
+#define YVID_VERSION_PATCH 0
+#define YVID_VERSION_STRING "0.4.0"
 
 #include "ysp/gfx.h"
 #include "ysp/timeline.h"
@@ -4853,7 +4860,10 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
     mv->late_from = INT64_MAX;
     mv->next_id = 1;
     mv->state = YVID__STOPPED;
-    mv->inline_mode = desc->inline_decode ? 1 : 0;
+    /* On ysp/rt.h's virtual clock (v0.4.0) the frame loop never waits, so
+     * a decode thread on real time fell behind it: shown 6, dropped 54 of
+     * 60 frames in video_play --sim, a different count each run. */
+    mv->inline_mode = desc->inline_decode || yrt_is_virtual() ? 1 : 0;
 #if defined(YRT_NO_THREADS)
     mv->inline_mode = 1;
 #else

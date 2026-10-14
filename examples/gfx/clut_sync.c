@@ -184,6 +184,8 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--seconds") && i + 1 < argc) seconds = atof(argv[++i]);
         else { fprintf(stderr, "usage: gfx_clut_sync [--sim] [--fullscreen] [--seconds S] [--os-ramp]\n"); return 2; }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     if (!(seconds > 0) || (os_visible && (!fullscreen || sim))) {
         fprintf(stderr, "gfx_clut_sync: --seconds takes a number above 0; --os-ramp needs --fullscreen, because the ramp\n"
                         "  changes the whole display\n");

@@ -119,6 +119,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     if (frames < 2 || frames > MAX_FRAMES || load_ms < 0 || load_ms > 100) {
         fprintf(stderr, "web_selftest: --frames takes 2..%d, --load-ms 0..100\n", MAX_FRAMES);
         return 2;

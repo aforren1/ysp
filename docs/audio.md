@@ -1605,7 +1605,55 @@ builds only. In a browser an input has `YAU_TIER_WEB` (`test_capture_web_tier`,
 mutant `cap-23`). No page has opened an input: web capture never ran
 ([web.md](web.md), "Not measured").
 
-### Not measured (capture)
+### The null device on a virtual clock (v0.6.0)
+
+`YAU_BACKEND_NULL` was miniaudio's null device only: a timer thread on
+real time, tier SIM. On a loaded CI runner its callbacks came late and
+early, the fit of callback times spread by milliseconds (3.8 ms on a
+macOS runner), and the `--sim` checks of `audio_schedule`,
+`audio_av_sync`, `trial_audio_keyboard` and `trial_stop_signal` allowed 1
+to 10 ms, each widened after a failure.
+
+On ysp/rt.h's virtual clock (rt.h v0.9.0) `BACKEND_NULL` is now a device
+of the header's own, "virtual null". Decisions:
+
+- **A virtual timer per device, on the driver thread.** Each block is
+  rendered when the frame thread's wait passes the block's time
+  (`t0 + frames * 1e9 / rate`), with that time as `tick.t_entry`. The
+  fit's points are then on one line: drift 0, spread 0. A real thread
+  in lockstep with the clock would give the same times with a handshake
+  per block.
+- **The render runs on the frame thread.** The command and completion
+  queues are single-producer single-consumer rings, and producer and
+  consumer are then the same thread, at different times. Nothing in
+  `yau_render()` waits, so it is safe inside a wait.
+- **Its caps copy miniaudio's null device:** the project format, a
+  period of `desc.period` (10 ms by default), a buffer of three periods,
+  callback positions, tier SIM. One block lives in the handle's backend
+  memory (8 KB), so the period is capped at 1024 stereo float frames;
+  the caps say so. The capture side and DUPLEX get the same device,
+  which hands the input silence.
+- **A real backend is refused on the virtual clock**, with a message.
+  Its callbacks come on real time, so their stamps would mean nothing.
+
+Measured on 2026-10-14 (Windows 11 test laptop, MSVC 19.44 Release, and
+MinGW-w64 gcc 16.1): every onset of the four examples is on its plan
+within half a sample (at most 10.4 us at 48 kHz, where the plan falls
+between two samples), and their checks now say so. `audio_schedule
+--null`'s stop is on its plan within half a sample, and its four starts
+are exactly 9600 frames apart. The same records in three idle runs and
+two runs beside 24 CPU-bound processes.
+
+Tests: `tests/adapt/audio_test_vnull.h` opens the null device on the
+virtual clock, checks the caps, the exact fit and frame 0 at the open's
+time, plays three clicks at times off the sample grid (each on its plan
+within half a sample), repeats the run later on the clock and compares
+it to the nanosecond from its own start, opens a virtual null input and
+a DUPLEX pair (a 4-channel input: exactly 48000 frames in a virtual
+second), and checks the refusal of a real backend for output and input.
+Mutants vn-01 to vn-08 are caught (8 of 8).
+
+## Not measured (capture)
 
 - Capture times against a reference: no line-in cable and no TTL into an
   input, so every capture time is tier 3 and the input's share of a

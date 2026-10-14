@@ -2643,6 +2643,9 @@ static void test_misc(void) {
 #if YAU_VERSION_MINOR >= 5
 #include "audio_test_capture.h"
 #endif
+#if YAU_VERSION_MINOR >= 6
+#include "audio_test_vnull.h"
+#endif
 
 int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -2689,6 +2692,9 @@ int main(int argc, char** argv) {
 #endif
 #if YAU_VERSION_MINOR >= 5
     test_capture();
+#endif
+#if YAU_VERSION_MINOR >= 6
+    test_virtual_null();
 #endif
     test_misc();
     free(g_tape);

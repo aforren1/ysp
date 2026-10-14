@@ -394,6 +394,8 @@ int main(int argc, char** argv) {
         else if (i == 1 && atoi(argv[i]) > 0) frames = atoi(argv[i]);
         else { fprintf(stderr, "usage: see the comment at the top of screen_flipstats.c\n"); return 2; }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
 #if !defined(_WIN32)
     if (topmost || cover) fprintf(stderr, "screen_flipstats: --topmost and --cover act on Win32 windows; ignored here\n");
 #endif

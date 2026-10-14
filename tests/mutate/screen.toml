@@ -1135,3 +1135,21 @@ test = "screen"
 why = "v0.7.0: the mean of 20 intervals is the period; the median of coarse callback times is off by a clock step."
 find = "    w->period = (int64_t)llround(m);"
 replace = "    w->period = med;"
+
+# v0.8.0: the simulated backend on ysp/rt.h's virtual clock (test_sim_virtual).
+
+[[mutant]]
+id = "sv-01"
+name = "a real backend on the virtual clock"
+test = "screen"
+why = "v0.8.0: a display flips on real time; on the virtual clock open must refuse it and say why."
+find = "    if (yrt_is_virtual() && s->backend != YSCR_BACKEND_SIM && s->backend != YSCR_BACKEND_CUSTOM) {"
+replace = "    if (0) {"
+
+[[mutant]]
+id = "sv-02"
+name = "the describe line hides the virtual clock"
+test = "screen"
+why = "v0.8.0: a log must say its records are on the virtual clock, or a dry run reads as a measurement."
+find = '''                    yrt_is_virtual() ? " clock=virtual" : "", s->caps.mode.w, s->caps.mode.h,'''
+replace = '''                    "", s->caps.mode.w, s->caps.mode.h,'''

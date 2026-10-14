@@ -257,3 +257,114 @@ test = "fit"
 why = "A closed handle must refuse pairs and report no map, as a zeroed one does."
 find = '''    if (f) memset(f, 0, sizeof *f);'''
 replace = '''    (void)f;'''
+
+# v0.9.0: the virtual clock (VIRTUAL CLOCK; tests/adapt/rt_test_virtual.h,
+# which the fit-only build runs too).
+
+[[mutant]]
+id = "vc-01"
+name = "now reads the real clock"
+test = "fit"
+why = "On the virtual clock every time the headers read must be the virtual one, or a --sim run mixes clocks."
+find = '''int64_t yrt_now_ns(void) {
+    if (yrt__rload(&yrt__v_on)) return yrt__ld64(&yrt__v_now);'''
+replace = '''int64_t yrt_now_ns(void) {'''
+
+[[mutant]]
+id = "vc-02"
+name = "the driver's wait sleeps on real time"
+test = "fit"
+why = "The driver's wait is what moves the virtual clock; a real sleep leaves it standing and the SIM grid never advances."
+find = '''int64_t yrt_sleep_until(int64_t deadline_ns, int64_t spin_ns) {
+    if (yrt__rload(&yrt__v_on)) return yrt__v_wait(deadline_ns);'''
+replace = '''int64_t yrt_sleep_until(int64_t deadline_ns, int64_t spin_ns) {'''
+
+[[mutant]]
+id = "vc-03"
+name = "any thread moves the clock"
+test = "fit"
+why = "Only the driver may move the clock: a worker's wait that moved it would make the time depend on which thread ran first."
+find = '''    if (yrt__v_is_driver()) { yrt__v_advance(deadline); return 0; }'''
+replace = '''    { yrt__v_advance(deadline); return 0; }'''
+
+[[mutant]]
+id = "vc-04"
+name = "ties in the last slot's order"
+test = "fit"
+why = "Timers due at once run in the order they were set, so a run repeats exactly; the reverse order changes what a block sees."
+find = '''            if (yrt__v_t[i].fn && (k < 0 || yrt__v_t[i].at < at)) { k = i; at = yrt__v_t[i].at; }'''
+replace = '''            if (yrt__v_t[i].fn && (k < 0 || yrt__v_t[i].at <= at)) { k = i; at = yrt__v_t[i].at; }'''
+
+[[mutant]]
+id = "vc-05"
+name = "a timer sees the wait's deadline"
+test = "fit"
+why = "A timer runs at its own time: an audio block stamped with the end of the wait would land a frame late."
+find = '''        if (at > yrt__ld64(&yrt__v_now)) yrt__st64(&yrt__v_now, at);
+        {'''
+replace = '''        if (to > yrt__ld64(&yrt__v_now)) yrt__st64(&yrt__v_now, to);
+        {'''
+
+[[mutant]]
+id = "vc-06"
+name = "every timer is one shot"
+test = "fit"
+why = "A periodic timer (the null device's blocks) returns its next time; dropping it stops the device after one block."
+find = '''                if (next > now) yrt__v_t[k].at = next;
+                else yrt__v_t[k].fn = NULL;'''
+replace = '''                (void)next;
+                yrt__v_t[k].fn = NULL;'''
+
+[[mutant]]
+id = "vc-07"
+name = "a past deadline is on time"
+test = "fit"
+why = "A wait whose deadline has passed returns its lateness, on either clock; 0 hides a late frame loop."
+find = '''    if (now >= deadline) return now - deadline;
+    if (yrt__v_is_driver())'''
+replace = '''    if (now >= deadline) return 0;
+    if (yrt__v_is_driver())'''
+
+[[mutant]]
+id = "vc-08"
+name = "the worker waits on real time"
+test = "fit"
+why = "A job's deadline is a virtual time: against the real clock it is long past and the job runs before the clock reaches it."
+find = '''        if (yrt__rload(&yrt__v_on)) {
+            /* VIRTUAL CLOCK: the job runs once the driver has moved the'''
+replace = '''        if (0) {
+            /* VIRTUAL CLOCK: the job runs once the driver has moved the'''
+
+[[mutant]]
+id = "vc-09"
+name = "ring stamps on real time"
+test = "fit"
+why = "A record stamped at the push must be on the clock the rest of the run's records are on."
+find = '''    t_ns = ev->t_ns ? ev->t_ns : yrt__clock();'''
+replace = '''    t_ns = ev->t_ns ? ev->t_ns : (int64_t)yrt__now();'''
+
+[[mutant]]
+id = "vc-10"
+name = "cancel does nothing"
+test = "fit"
+why = "A closed device cancels its timer; a timer left set calls into freed memory."
+find = '''    if (id < 0 || id >= YRT_VIRTUAL_TIMERS || !yrt__v_is_driver()) return;
+    yrt__v_t[id].fn = NULL;'''
+replace = '''    (void)id;'''
+
+[[mutant]]
+id = "vc-11"
+name = "a second begin restarts the clock"
+test = "fit"
+why = "A second begin would move the clock back under every time already taken."
+find = '''    if (yrt__rload(&yrt__v_on)) return YRT_ERR_STATE;
+    memset(yrt__v_t, 0, sizeof yrt__v_t);'''
+replace = '''    memset(yrt__v_t, 0, sizeof yrt__v_t);'''
+
+[[mutant]]
+id = "vc-12"
+name = "a wait in a timer runs the timers"
+test = "fit"
+why = "A wait inside a timer would run the same timer again, at the same time, without end."
+find = '''    for (; !yrt__v_busy;) {'''
+replace = '''    for (;;) {'''

@@ -330,6 +330,88 @@ waits and the fit calls by type and checks the macros' values in a static
 initializer. Mutants `conv-01` (an open that takes a zero tick) and
 `conv-02` (a close that keeps the map) are caught.
 
+## Virtual clock (v0.9.0)
+
+The examples' `--sim` runs compared their records with a script on the
+real clock. On a loaded CI runner the simulated display dropped whole
+frames, a check failed, and the fix each time was a wider check (seven
+examples by 2026-10-13; [screen.md](screen.md#sim-on-a-virtual-clock-v080)
+lists them). v0.9.0 gives the process a virtual clock, so a `--sim` run is
+a function of its seed. Decisions:
+
+- **One clock for the process, switched at run time.** The headers read
+  the clock through `yrt_now_ns()` and wait through `yrt_sleep_until()`.
+  A flag in those calls is the whole seam: ysp/screen.h's 60 clock reads,
+  ysp/timeline.h, ysp/response.h and the examples need no change. A
+  compile-time macro per header (the test seams `YSCR__NOW` and
+  `YAU__NOW`) cannot reach the examples, and it would not put two headers
+  on the same virtual clock.
+- **One driver thread moves it.** The thread that called
+  `yrt_virtual_begin()` moves the clock when it waits, to the wait's
+  deadline. A clock that any waiting thread could move would make the
+  time depend on which thread the OS ran first. Other threads wait in
+  real time until the driver gets there.
+- **Virtual timers, not lockstep threads.** What must keep its own time
+  (the null audio device's blocks, the simulated audio loop of the
+  capture examples) runs as a timer on the driver, inside its waits, in
+  time order with ties in slot order (a timer takes the lowest free
+  slot). Lockstep with a real thread per device would also be
+  deterministic, but each thread would need a handshake per tick and a
+  rule for two threads due at once.
+  A timer table of 16 entries, scanned per event, needs neither.
+- **Real time where real time is the point.** Instrumentation zones,
+  `yrt_correlate()` (a bracket around another clock's read) and the
+  timeout of `yrt_pump_wait()` read the real counter. So
+  `screen_flipstats --sim` still reports the header's CPU cost per frame.
+- **The clock stands still between waits.** A frame's work takes no
+  virtual time, so a cost read with `yrt_now_ns()` is 0 on the virtual
+  clock. The examples that exist to measure a real cost or a real thread
+  (`gfx_load`, `gfx_filtered_noise`, `gfx_capture`, `gfx_text`,
+  `gfx_layout`, `gfx_gallery`) stay on the real clock; none of their
+  checks compares a time.
+
+Two failure modes remain and are stated in the header: a driver that
+polls for a real thread's progress with sleeps sees its timeout pass at
+once, and a real thread's own progress is not paced by the clock. Both
+came up. ysp/video.h's decode thread fell behind a frame loop that never
+waits, so on the virtual clock a movie decodes inline (video.h v0.4.0).
+miniaudio's null device is a real thread, so ysp/audio.h v0.6.0 has a
+null device of its own on a virtual timer.
+
+### Cost on the real clock
+
+`yrt_now_ns()` and the three waits test one flag first. Measured on
+2026-10-14 on the Windows 11 test laptop (Iris Xe, 16 logical CPUs, AC
+power, under the shared guard with no build running), base v0.8.0 against
+v0.9.0, interleaved:
+
+| Measure | v0.8.0 | v0.9.0 |
+|---|---|---|
+| `yrt_now_ns()`, ns a call: median of 7 runs of 20 M calls, thread pinned to CPU 2, MinGW-w64 gcc 16.1 -O2; 6 rounds | 23.5 to 26.1 | 24.3 to 26.3 |
+| `yrt_sleep_until()` lateness, 2000 waits of 1.0 to 2.8 ms, default spin, not pinned; 3 rounds: median / p99 | 0 / 2.4 to 172 us | 0 / 0.2 to 10.9 us |
+| `screen_flipstats --sim --frames 1200` (real clock), header cost in `yscr_begin()`, p50 / p99, us, MSVC 19.44 Release; 3 rounds | 6.7 to 7.2 / 14.4 to 15.4 | 6.5 to 6.8 / 13.3 to 14.8 |
+| The same, header cost in `yscr_flip()` | 2.0 to 2.5 / 4.3 to 4.5 | 1.8 to 2.0 / 4.3 to 4.5 |
+
+The difference is inside the run-to-run spread on every line. Unpinned,
+the clock bench's medians moved by 6 ns between runs of the same binary
+(the scheduler moved it between core types), so only the pinned rounds
+count. The flag is one load of a word that only `yrt_virtual_begin()` and
+`yrt_virtual_end()` write.
+
+### Tests and mutants
+
+`tests/adapt/rt_test_virtual.h` (run by `rt_test.c`, the fit-only
+mutation build too): the clock starts at `YRT_VIRTUAL_T0_NS` and stands
+still between waits; the driver's waits jump it and return 0 lateness,
+and a past deadline returns its lateness; timers in time order with ties
+in slot order, a periodic timer, a timer that cancels another, a timer
+that waits (the wait moves the clock and runs no timer), a full table;
+ring stamps; a worker job that runs only once the driver passes its
+deadline, with a virtual `at_ns`; a wait on the worker thread that blocks
+until the driver reaches it; `yrt_virtual_end()`. The compile check names
+the five calls by type and runs a timer. Mutants vc-01 to vc-12 are
+caught (12 of 12).
+
 ## Windows 11 power throttling
 
 Windows 11 can throttle a process when all its windows are minimized,

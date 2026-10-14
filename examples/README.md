@@ -14,13 +14,16 @@ Run a program from the build folder (`build/<preset>/Release/` with MSVC,
 `build/<preset>/` otherwise). "Needs" says what a run needs beyond the
 build: SDL3 (a window), ANGLE (GL ES on Windows), a font, a device, or
 nothing. `--sim` runs a windowed example on the simulated display, which
-needs nothing; CI runs the commands marked "CI". The simulated display
-runs on the host's clock: while a loaded host's frame loop is behind,
-`yscr_begin()` plans later vblanks, as on a real display. So a `--sim`
-script times its synthetic input from the stimulus's flip record, not
-from a frame count, and checks onsets to whole periods (measured
-2026-10-10 under 12 CPU-bound processes: a target up to 550 ms after its
-frame count's time).
+needs nothing; CI runs the commands marked "CI". A `--sim` run calls
+`yrt_virtual_begin()` first (ysp/rt.h v0.9.0, VIRTUAL CLOCK): the
+simulated display, the null audio device and the synthetic input then
+run on a virtual clock, so the run gives the same records and output on
+any host, loaded or not, and takes the CPU time of its frames, not their
+display time. Its checks are exact: no frame slips. The examples that
+measure a real cost or a real thread (`gfx_load`, `gfx_filtered_noise`,
+`gfx_capture`, `gfx_text`, `gfx_layout`, `gfx_gallery`) stay on the real
+clock. A script still times its synthetic input from the stimulus's flip
+record, not from a frame count, so it also runs on a real display.
 
 ## aep
 

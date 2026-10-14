@@ -233,6 +233,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     if (strcmp(method, "stair") && strcmp(method, "quest") && strcmp(method, "both")) {
         fprintf(stderr, "trial_2afc_adaptive: --method takes stair, quest or both\n");
         return 2;

@@ -986,6 +986,17 @@ twice, a close that finishes, and `yvid_probe()`'s codes.
 Mutants v030-00 (a failure that writes nothing) and v030-01 (a close
 that does not finish) are caught.
 
+## Inline on the virtual clock (v0.4.0)
+
+On ysp/rt.h's virtual clock (rt.h v0.9.0) the frame loop never waits:
+each flip jumps the clock a period. The decode thread runs on real time,
+so it fell behind. `video_play --sim` showed 6 frames of 60 and dropped
+54; its I420 clip showed 9 of 20 in one run and 10 in the next. On the virtual clock a movie now decodes inline, as with
+`desc.inline_decode`, and every run shows the same frames. The real
+clock does not change. `test_virtual_inline` in `tests/adapt/video_test.c`
+opens a movie on the virtual clock with `desc.inline_decode` false and
+checks inline decoding and the describe line; mutant vi-01 is caught.
+
 ## Needed from the other headers
 
 | Header | Request | Why |

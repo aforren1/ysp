@@ -172,6 +172,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sd.backend == YSCR_BACKEND_SIM) yrt_virtual_begin(0);
     if (w <= 0 || h <= 0 || n <= 0 || fps <= 0 || ww <= 0 || wh <= 0) { fprintf(stderr, "video_play: bad size, count or rate\n"); return 2; }
 
     if (!file) {

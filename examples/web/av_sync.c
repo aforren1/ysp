@@ -19,8 +19,9 @@
  * It also records every audio callback's entry time and position report
  * (the YAU__ON_TICK measurement seam), for the callbacks' regularity.
  *
- * --sim: the simulated display and miniaudio's null device (CI); checks
- * that every trial has both records and |audio - flip| <= 2 ms.
+ * --sim: the simulated display and the null device on ysp/rt.h's virtual
+ * clock (CI); checks that every trial has both records, the flash on its
+ * planned frame and the sound on its plan within half a sample.
  *
  * Usage: web_av_sync [--sim] [--n N] [--lead S] [--period FRAMES]
  *                    [--size WxH]
@@ -182,6 +183,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     if (n == 0) n = sim ? 8 : 20;
     if (n < 1 || n > MAX_TRIALS || !(lead_s >= 0.05 && lead_s <= 2) || period < 0 || period > 16384) {
         fprintf(stderr, "web_av_sync: --n 1..%d, --lead 0.05..2 s, --period 0..16384\n", MAX_TRIALS);
@@ -368,12 +371,13 @@ int main(int argc, char** argv) {
                                       i ? "," : "", isnan(fp) ? -1e9 : fp, isnan(ap) ? -1e9 : ap, isnan(d) ? -1e9 : d,
                                       (unsigned)t->flip.tier, (unsigned)t->a.tier, (unsigned)t->a.flags, isnan(r) ? -1e9 : r,
                                       t->out_s * 1e3, t->base_s * 1e3);
-            /* --sim: the sound on plan, the flash on plan or whole frames
-             * late (a loaded host's frame loop falls behind, as a real
-             * display's would; CI macOS showed 1 to 4 frames) */
-            double per_ms = (double)per * 1e-6, late = per_ms > 0 ? floor(fp / per_ms + 0.5) : 0;
-            int flip_ok = ok && late >= 0 && late <= 6 && fabs(fp - late * per_ms) < 0.01;
-            if (sim && (!flip_ok || t->flip.tier != YSCR_TIER_SIM || t->a.tier != YAU_TIER_SIM || fabs(ap) > 2.0)) {
+            /* --sim runs on the virtual clock: the flash on its plan (within
+             * 1 us, the grid of a 16666667 ns period) and the sound on its
+             * plan within half a sample, where the plan meets the sample
+             * grid */
+            double half_sample_ms = ac.rate ? 0.5e3 / (double)ac.rate : 0;
+            int flip_ok = ok && fabs(fp) < 1e-3;
+            if (sim && (!flip_ok || t->flip.tier != YSCR_TIER_SIM || t->a.tier != YAU_TIER_SIM || !(fabs(ap) <= half_sample_ms))) {
                 fprintf(stderr, "web_av_sync: --sim: trial %d is off (audio %s, flip %d, %.3f ms)\n", i,
                         yau_strerror(t->a_rc), t->have_flip, d);
                 bad = 1;
@@ -428,6 +432,6 @@ int main(int argc, char** argv) {
     av_done(json, csv);
 #endif
     if (sim && (bad || planned != n)) return 1;
-    if (sim) printf("--sim: every sound within 2 ms of its plan, every flash on its frame or whole frames late\n");
+    if (sim) printf("--sim: every sound on its plan within half a sample, every flash on its frame\n");
     return failed;
 }

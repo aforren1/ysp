@@ -259,3 +259,13 @@ test = "video"
 why = "v0.3.0: yvid_seq_close() on a writer not finished must finish it, or the frames written are lost (the file has no header)."
 find = '    if (w && w->open) (void)yvid_seq_finish(w);'
 replace = '    (void)w;'
+
+# v0.4.0: inline decoding on ysp/rt.h's virtual clock (test_virtual_inline).
+
+[[mutant]]
+id = "vi-01"
+name = "a decode thread on the virtual clock"
+test = "video"
+why = "v0.4.0: a decode thread on real time falls behind a frame loop that never waits; on the virtual clock the movie must decode inline."
+find = "    mv->inline_mode = desc->inline_decode || yrt_is_virtual() ? 1 : 0;"
+replace = "    mv->inline_mode = desc->inline_decode ? 1 : 0;"

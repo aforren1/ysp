@@ -28,7 +28,8 @@
  * synthetic participant: taps, a tap reported twice 9 ms apart (through
  * the same filter, yscr_key_filter()), a held key with OS repeats, a
  * confirm. It
- * checks its own results and exits 1 on a mismatch. About 9 s.
+ * checks its own results and exits 1 on a mismatch.
+ * Under a second: the virtual clock does not wait.
  *
  * Usage: trial_adjustment [--sim] [--fullscreen] [--reps N] [--seed N] [--out FILE] [--traj FILE]
  *   --reps N   repetitions of each reference (default 4; --sim: 1)
@@ -168,6 +169,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     if (reps == 0) reps = sim ? 1 : 4;
     if (reps < 1 || reps > 100) { fprintf(stderr, "trial_adjustment: --reps takes 1..100\n"); return 2; }
     /* the display and the graphics, opened together and primed */
@@ -384,9 +387,9 @@ int main(int argc, char** argv) {
             const yrsp_result* r = &sim_res[i];
             int ok = sim_steps[i] == want_steps[i] && fabs(sim_final[i] - sim_start[i] - want_net[i] * STEP) < 1e-9 &&
                      (r->flags & YRSP_R_RESPONDED) &&
-                     /* the script runs from the planned onset; RT from the flip
-                      * record's, which a loaded host shows whole frames later */
-                     llabs(r->rt_ns + (r->t_onset - sim_plan_onset[i]) - YRT_S(sim_confirm_at[i])) <= 1000 &&
+                     /* on the virtual clock the onset is the plan and the RT
+                      * the script's, to the nanosecond */
+                     r->t_onset == sim_plan_onset[i] && r->rt_ns == YRT_S(sim_confirm_at[i]) &&
                      r->onset_tier == YSCR_TIER_SIM && r->onset_src == YRSP_ONSET_FLIP;
             if (!ok) {
                 fprintf(stderr, "trial_adjustment: --sim: trial %d: %d steps, %.2f -> %.2f, rt %.9f flags 0x%x\n", i,

@@ -1864,6 +1864,30 @@ static void test_reader(void) {
     yvid_close(&g_mv);
 }
 
+/* v0.4.0: on ysp/rt.h's virtual clock a movie decodes inline, whatever
+ * desc.inline_decode says: a real decode thread cannot keep up with a
+ * frame loop that never waits. */
+static void test_virtual_inline(void) {
+    yvid_desc vd;
+    char line[1024];
+    g_case = "virtual inline";
+    g_virtual = 0;
+    CHECK_I(yrt_virtual_begin(0), 0);
+    rec_reset();
+    sd_default(&g_sd, 60, 1, 1000, 5);
+    desc_default(&vd);
+    vd.inline_decode = false;
+    vd.refresh_num = 60;
+    if (open_mv(&vd)) {
+        CHECK_I(g_mv.inline_mode, 1);
+        yvid_describe(&g_mv, line, sizeof line);
+        CHECK(strstr(line, "decoded inline") != NULL);
+        yvid_close(&g_mv);
+    }
+    yrt_virtual_end();
+    g_virtual = 1;
+}
+
 /* The decode thread for real, against the frame thread, on the ysp_rt clock. */
 static void test_threaded(void) {
 #if !defined(YRT_NO_THREADS)
@@ -3221,6 +3245,7 @@ int main(void) {
     test_replay_and_heap();
     test_seq();
     test_reader();
+    test_virtual_inline();
     test_threaded();
     test_threaded_stall();
     test_soundtrack();
