@@ -1,4 +1,4 @@
-/* ysp/rigfile.h - v0.3.0 - public domain single-header rig profile
+/* ysp/rigfile.h - v0.4.0 - public domain single-header rig profile
  *
  *   The file on a rig that says which device plays each role and what the
  *   rig's loopbacks measured, kept outside every pack (docs/devices_spec.md
@@ -49,7 +49,7 @@
  *     written   when it was last written                       required
  *     roles     { NAME: role, ... }, at most 32; NAME is 1 to 31 of
  *               A-Z a-z 0-9 _ . - (the ydev_roles name)         required
- *     display   { onset_offset_s, calibration: { file, sha256 } }
+ *     display   { onset_offset_s, latency, calibration: { file, sha256 } }
  *   A role:
  *     family    a ysp/box.h family name: xid, line, photo, triggerbox,
  *               biosemi, mmbts, lines, parallel; or lsl, a Lab
@@ -69,6 +69,9 @@
  *               <= max
  *     bounds    an input's stamp minus event: { n, lo_s, hi_s, date,
  *               sha256 }, all required, lo <= hi
+ *   display.onset_offset_s is desc.onset_offset_ns of ysp/screen.h, -1 to
+ *   1 s, required; display.latency (v0.4.0) is the photodiode run it came
+ *   from, light minus flip onset, in a role latency's shape.
  *   sha256 names the loopback's own result file, kept beside the profile
  *   in loopback/<sha256>.txt (yrig_store_loopback() puts it there), 64
  *   lowercase hex digits. display.calibration.file is a plain file name in
@@ -81,6 +84,20 @@
  *   option, latched false, an unset pulse, an empty button map). The
  *   profile's hash, yrig_hash(), is the SHA-256 of these bytes, so it does
  *   not change with the whitespace or number spelling of a hand edit.
+ *
+ *   ---------------------------------------------------------------------
+ *   LOOPBACK FILES
+ *   ---------------------------------------------------------------------
+ *   Text, "name value" lines, durations in seconds read exactly to the ns;
+ *   other lines (comments, samples_s, the tool's notes) are in the hash, not
+ *   read. One "format" line says which file it is:
+ *     ysp-out-latency 1    n p5_s median_s p95_s max_s date
+ *                          (examples/device/out_latency.c; role latency)
+ *     ysp-in-bounds 1      n lo_s hi_s date
+ *                          (examples/rigfile/bounds.c; role bounds)
+ *     ysp-display-onset 1  n p5_s median_s p95_s max_s date onset_offset_s
+ *                          (examples/rigfile/onset.c; display.latency)
+ *   yrig_read_loopback() reads any of them and returns which.
  *
  *   ---------------------------------------------------------------------
  *   WHERE IT LIVES
@@ -103,8 +120,10 @@
  *   dir), each latency and bounds file and the calibration file is read
  *   and hashed: check is YRIG_CHECK_OK, MISSING, CHANGED (another hash), or
  *   DIFFERS (the hash is right, but the profile's summary is not the
- *   file's; the output latency files of examples/device/out_latency.c are
- *   compared field by field). Every check that is not OK adds a line to
+ *   file's, or the file is another kind: a file with a LOOPBACK FILES
+ *   format line is compared field by field, and display.onset_offset_s
+ *   with the file's onset_offset_s; a file without one is checked by its
+ *   hash only). Every check that is not OK adds a line to
  *   notes, and yrig_source() gives that role YIN_TIER_UNKNOWN: the numbers
  *   stay in the struct for the log, never for a tier. Without a folder
  *   every check is YRIG_CHECK_NOT_RUN. A file that fails its check is not
@@ -141,6 +160,15 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.4.0 - display.latency: the photodiode run behind onset_offset_s,
+ *          checked at load like a role's latency (yrig_display.latency).
+ *          yrig_read_loopback() reads the three LOOPBACK FILES formats:
+ *          the new "ysp-in-bounds 1" (examples/rigfile/bounds.c) and
+ *          "ysp-display-onset 1" (examples/rigfile/onset.c) beside
+ *          "ysp-out-latency 1"; yrig_loopback.offset_ns. Bounds files, like
+ *          the display's file, are now compared with the profile's summary
+ *          (DIFFERS), and a file of the wrong kind DIFFERS. Profiles of
+ *          v0.3.0 load unchanged; a v0.3.0 reader refuses display.latency.
  *   v0.3.0 - The ysp conventions (README.md, Conventions); breaks the API.
  *          yrig_start(dev, p, role, base, err, cap) is
  *          bool yrig_open_device(dev, p, role, base): it opens a device,
@@ -157,7 +185,7 @@
  *   v0.1.0 - first version: the "ysp-rig 1" format, load, check, write,
  *          hash, bind, store a loopback result.
  *
- *   STATUS: v0.2.0, 2026-10-09. docs/device.md ("The rig profile") has the
+ *   STATUS: v0.4.0, 2026-10-13. docs/device.md ("The rig profile") has the
  *   how-to, the reference and the test counts.
  *
  *   ---------------------------------------------------------------------
@@ -167,9 +195,9 @@
 #define YSP_RIGFILE_H_INCLUDED
 
 #define YRIG_VERSION_MAJOR 0
-#define YRIG_VERSION_MINOR 3
+#define YRIG_VERSION_MINOR 4
 #define YRIG_VERSION_PATCH 0
-#define YRIG_VERSION_STRING "0.3.0"
+#define YRIG_VERSION_STRING "0.4.0"
 
 #include "ysp/device.h"
 #include "ysp/json.h"
@@ -214,13 +242,21 @@ extern "C" {
 #define YRIG_CHECK_DIFFERS 4   /* the summary is not the file's             */
 #define YRIG_CHECK_NOT_RUN 5   /* parsed without a folder                   */
 
-/* A loopback's summary: latency (an output) uses n, p5, median, p95, max;
- * bounds (an input) uses n, lo, hi. */
+/* The kinds of loopback file (LOOPBACK FILES): yrig_read_loopback()'s
+ * result. */
+#define YRIG_FILE_OUT_LATENCY   1   /* "ysp-out-latency 1"                     */
+#define YRIG_FILE_IN_BOUNDS     2   /* "ysp-in-bounds 1"                       */
+#define YRIG_FILE_DISPLAY_ONSET 3   /* "ysp-display-onset 1"                   */
+
+/* A loopback's summary: latency (an output, the display) uses n, p5,
+ * median, p95, max; bounds (an input) uses n, lo, hi. */
 typedef struct yrig_loopback {
     bool     set;
     int32_t  n;
     int64_t  p5_ns, median_ns, p95_ns, max_ns;
     int64_t  lo_ns, hi_ns;
+    int64_t  offset_ns;          /* a display onset file's onset_offset_s;
+                                  * not in the profile's JSON               */
     char     date[24];
     char     sha256[65];
     int      check;              /* YRIG_CHECK_*                              */
@@ -249,6 +285,7 @@ typedef struct yrig_role {
 typedef struct yrig_display {
     bool     set;
     int64_t  onset_offset_ns;
+    yrig_loopback latency;       /* the photodiode run (v0.4.0)              */
     char     calibration[64];    /* a file in the rig folder; "" = none      */
     char     calibration_sha256[65];
     int      check;              /* the calibration file's                   */
@@ -301,6 +338,10 @@ YRIG_API int  yrig_bind(yrig_profile* p, const char* role, int family, const cha
 YRIG_API int  yrig_store_loopback(const char* dir, const void* data, size_t n, char sha_hex[65], char* err, size_t cap);
 /* The summary of an output latency file ("format ysp-out-latency 1"). */
 YRIG_API int  yrig_read_latency(const char* text, size_t n, yrig_loopback* out, char* err, size_t cap);
+/* The summary of a file of any LOOPBACK FILES format: its YRIG_FILE_*
+ * kind, or a YRIG_ERR_*. out gets that kind's fields, the date and the
+ * text's SHA-256. */
+YRIG_API int  yrig_read_loopback(const char* text, size_t n, yrig_loopback* out, char* err, size_t cap);
 YRIG_API void yrig_sha256(const void* data, size_t n, uint8_t out[32]);
 
 /* --- binding (ysp/device.h) ---------------------------------------------------- */
@@ -859,7 +900,7 @@ static bool yrig__file_name_ok(const char* s) {
 }
 
 static int yrig__display(yrig__rd* r, const yjs_value* o, yrig_display* d) {
-    static const char* const keys[] = { "onset_offset_s", "calibration", NULL };
+    static const char* const keys[] = { "onset_offset_s", "latency", "calibration", NULL };
     static const char* const ckeys[] = { "file", "sha256", NULL };
     const yjs_value* c;
     int rc;
@@ -874,6 +915,7 @@ static int yrig__display(yrig__rd* r, const yjs_value* o, yrig_display* d) {
             return yrig__bad(r, yjs_get(c, "file"), "display.calibration.file", "must be a file name in the rig folder, with no separator");
         if ((rc = yrig__sha(r, c, "display.calibration", d->calibration_sha256)) != YRIG_OK) return rc;
     }
+    if ((c = yjs_get(o, "latency")) != NULL && (rc = yrig__loopback(r, c, "display.latency", &d->latency, true)) != YRIG_OK) return rc;
     d->set = true;
     return YRIG_OK;
 }
@@ -886,11 +928,19 @@ static void yrig__note(yrig_profile* p, const char* fmt, ...) {
     va_end(ap);
 }
 
-YRIG_API int yrig_read_latency(const char* text, size_t n, yrig_loopback* out, char* err, size_t cap) {
+static const char* const yrig__formats[4] = { "", "ysp-out-latency 1", "ysp-in-bounds 1", "ysp-display-onset 1" };
+static const char* const yrig__kinds[4] = { "a loopback file", "an output latency file", "an input bounds file", "a display onset file" };
+
+/* The fields each kind must have: format 1, n 2, p5 4, median 8, p95 16,
+ * max 32, date 64, lo 128, hi 256, onset_offset 512. */
+static const int yrig__need[4] = { 0, 127, 1 | 2 | 64 | 128 | 256, 127 | 512 };
+
+/* A LOOPBACK FILES summary: the kind, a YRIG_ERR_*, or 0 when no line names
+ * a known format (err says which). want 0 takes any kind. */
+static int yrig__read_lb(const char* text, size_t n, int want, yrig_loopback* out, char* err, size_t cap) {
     size_t i = 0;
-    int have = 0;
+    int have = 0, kind = 0;
     yrig_loopback lb;
-    if (!text || !out) return YRIG_ERR_ARG;
     memset(&lb, 0, sizeof lb);
     while (i < n) {
         size_t e = i, sp;
@@ -905,21 +955,34 @@ YRIG_API int yrig_read_latency(const char* text, size_t n, yrig_loopback* out, c
         if (vl && val[vl - 1] == '\r') vl--;
 #define YRIG__IS(lit) (nl == sizeof(lit) - 1 && memcmp(name, lit, nl) == 0)
         if (YRIG__IS("format")) {
-            if (!(vl == 17 && memcmp(val, "ysp-out-latency 1", 17) == 0))
-                return yrig__err(err, cap, YRIG_ERR_FORMAT, "not an output latency file (format %.*s)", (int)(vl < 40 ? vl : 40), val);
+            int k;
+            for (k = 1; k <= 3; k++)
+                if (vl == strlen(yrig__formats[k]) && memcmp(val, yrig__formats[k], vl) == 0) break;
+            if (k > 3) {
+                yrig__err(err, cap, YRIG_ERR_FORMAT, "not %s (format %.*s)", yrig__kinds[want], (int)(vl < 40 ? vl : 40), val);
+                return want ? YRIG_ERR_FORMAT : 0;
+            }
+            if (want && k != want)
+                return yrig__err(err, cap, YRIG_ERR_FORMAT, "not %s (format %.*s)", yrig__kinds[want], (int)(vl < 40 ? vl : 40), val);
+            if (kind && k != kind) return yrig__err(err, cap, YRIG_ERR_FORMAT, "two format lines");
+            kind = k;
             have |= 1;
         } else if (YRIG__IS("n")) {
             int64_t v;
             if (yjs_parse_fixed(val, vl, 0, &v) != YJS_OK || v < 0 || v > 100000000) return yrig__err(err, cap, YRIG_ERR_FORMAT, "bad n");
             lb.n = (int32_t)v;
             have |= 2;
-        } else if (YRIG__IS("p5_s") || YRIG__IS("median_s") || YRIG__IS("p95_s") || YRIG__IS("max_s")) {
+        } else if (YRIG__IS("p5_s") || YRIG__IS("median_s") || YRIG__IS("p95_s") || YRIG__IS("max_s") || YRIG__IS("lo_s") ||
+                   YRIG__IS("hi_s") || YRIG__IS("onset_offset_s")) {
             int64_t v;
             if (yjs_parse_fixed(val, vl, 9, &v) != YJS_OK) return yrig__err(err, cap, YRIG_ERR_FORMAT, "bad %.*s", (int)nl, name);
             if (YRIG__IS("p5_s")) { lb.p5_ns = v; have |= 4; }
             else if (YRIG__IS("median_s")) { lb.median_ns = v; have |= 8; }
             else if (YRIG__IS("p95_s")) { lb.p95_ns = v; have |= 16; }
-            else { lb.max_ns = v; have |= 32; }
+            else if (YRIG__IS("max_s")) { lb.max_ns = v; have |= 32; }
+            else if (YRIG__IS("lo_s")) { lb.lo_ns = v; have |= 128; }
+            else if (YRIG__IS("hi_s")) { lb.hi_ns = v; have |= 256; }
+            else { lb.offset_ns = v; have |= 512; }
         } else if (YRIG__IS("date")) {
             if (vl >= sizeof lb.date) return yrig__err(err, cap, YRIG_ERR_FORMAT, "bad date");
             yrig__copy(lb.date, sizeof lb.date, val, vl);
@@ -928,17 +991,38 @@ YRIG_API int yrig_read_latency(const char* text, size_t n, yrig_loopback* out, c
 #undef YRIG__IS
         i = e + 1;
     }
-    if (!(have & 1)) return yrig__err(err, cap, YRIG_ERR_FORMAT, "not an output latency file (no format line)");
-    if (have != 127) return yrig__err(err, cap, YRIG_ERR_FORMAT, "an output latency file without its summary (no edges?)");
+    if (!kind) {
+        yrig__err(err, cap, YRIG_ERR_FORMAT, "not %s (no format line)", yrig__kinds[want]);
+        return want ? YRIG_ERR_FORMAT : 0;
+    }
+    if ((have & yrig__need[kind]) != yrig__need[kind])
+        return yrig__err(err, cap, YRIG_ERR_FORMAT, "%s without its summary (no edges?)", yrig__kinds[kind]);
     yrig__sha_hex(text, n, lb.sha256);
     lb.set = true;
     lb.check = YRIG_CHECK_OK;
     *out = lb;
-    return YRIG_OK;
+    return kind;
 }
 
-/* The check of one file the profile names. */
-static int yrig__check_file(const char* dir, const char* sub, const char* name, const char* sha, const yrig_loopback* lb) {
+YRIG_API int yrig_read_latency(const char* text, size_t n, yrig_loopback* out, char* err, size_t cap) {
+    int rc;
+    if (!text || !out) return YRIG_ERR_ARG;
+    rc = yrig__read_lb(text, n, YRIG_FILE_OUT_LATENCY, out, err, cap);
+    return rc < 0 ? rc : YRIG_OK;
+}
+
+YRIG_API int yrig_read_loopback(const char* text, size_t n, yrig_loopback* out, char* err, size_t cap) {
+    int rc;
+    if (!text || !out) return YRIG_ERR_ARG;
+    rc = yrig__read_lb(text, n, 0, out, err, cap);
+    return rc == 0 ? YRIG_ERR_FORMAT : rc;
+}
+
+/* The check of one file the profile names. With lb, a file in a LOOPBACK
+ * FILES format must be of kind want and hold lb's summary (and, for the
+ * display, the profile's onset offset). */
+static int yrig__check_file(const char* dir, const char* sub, const char* name, const char* sha, const yrig_loopback* lb, int want,
+                            int64_t offset_ns) {
     char path[1100], hex[65];
     char* data;
     size_t n;
@@ -950,18 +1034,29 @@ static int yrig__check_file(const char* dir, const char* sub, const char* name, 
     if (rc != YRIG_OK) return rc == YRIG_ERR_MISSING ? YRIG_CHECK_MISSING : YRIG_CHECK_CHANGED;
     yrig__sha_hex(data, n, hex);
     rc = strcmp(hex, sha) == 0 ? YRIG_CHECK_OK : YRIG_CHECK_CHANGED;
-    if (rc == YRIG_CHECK_OK && lb && n >= 24 && strstr(data, "\nformat ysp-out-latency 1") != NULL) {
+    if (rc == YRIG_CHECK_OK && lb) {
         yrig_loopback f;
-        if (yrig_read_latency(data, n, &f, NULL, 0) != YRIG_OK || f.n != lb->n || f.p5_ns != lb->p5_ns || f.median_ns != lb->median_ns ||
-            f.p95_ns != lb->p95_ns || f.max_ns != lb->max_ns || strcmp(f.date, lb->date) != 0)
-            rc = YRIG_CHECK_DIFFERS;
+        int kind = yrig__read_lb(data, n, 0, &f, NULL, 0);
+        if (kind != 0) {   /* a file with no known format line is checked by its hash only */
+            bool same = kind == want && f.n == lb->n && strcmp(f.date, lb->date) == 0;
+            if (same && want == YRIG_FILE_IN_BOUNDS) same = f.lo_ns == lb->lo_ns && f.hi_ns == lb->hi_ns;
+            else if (same)
+                same = f.p5_ns == lb->p5_ns && f.median_ns == lb->median_ns && f.p95_ns == lb->p95_ns && f.max_ns == lb->max_ns &&
+                       (want != YRIG_FILE_DISPLAY_ONSET || f.offset_ns == offset_ns);
+            if (!same) rc = YRIG_CHECK_DIFFERS;
+        }
     }
     free(data);
     return rc;
 }
 
+static const char* yrig__check_says(int check) {
+    return check == YRIG_CHECK_MISSING ? "is missing" : check == YRIG_CHECK_CHANGED ? "has changed" : "does not match the profile's summary";
+}
+
 static void yrig__checks(yrig_profile* p, const char* dir) {
     int i;
+    yrig_loopback* dl = &p->display.latency;
     for (i = 0; i < p->n_roles; i++) {
         yrig_role* ro = &p->role[i];
         int k;
@@ -971,17 +1066,26 @@ static void yrig__checks(yrig_profile* p, const char* dir) {
             if (!lb->set) { lb->check = YRIG_CHECK_NONE; continue; }
             if (!dir) { lb->check = YRIG_CHECK_NOT_RUN; continue; }
             snprintf(name, sizeof name, "%s.txt", lb->sha256);
-            lb->check = yrig__check_file(dir, "loopback", name, lb->sha256, k ? NULL : lb);
+            lb->check = yrig__check_file(dir, "loopback", name, lb->sha256, lb, k ? YRIG_FILE_IN_BOUNDS : YRIG_FILE_OUT_LATENCY, 0);
             if (lb->check != YRIG_CHECK_OK)
                 yrig__note(p, "roles.%s.%s: loopback/%.12s....txt %s: the role's tier is UNKNOWN", ro->name, k ? "bounds" : "latency",
-                           lb->sha256, lb->check == YRIG_CHECK_MISSING ? "is missing" : lb->check == YRIG_CHECK_CHANGED ? "has changed"
-                                                                                         : "does not match the profile's summary");
+                           lb->sha256, yrig__check_says(lb->check));
         }
+    }
+    if (!dl->set) dl->check = YRIG_CHECK_NONE;
+    else if (!dir) dl->check = YRIG_CHECK_NOT_RUN;
+    else {
+        char name[80];
+        snprintf(name, sizeof name, "%s.txt", dl->sha256);
+        dl->check = yrig__check_file(dir, "loopback", name, dl->sha256, dl, YRIG_FILE_DISPLAY_ONSET, p->display.onset_offset_ns);
+        if (dl->check != YRIG_CHECK_OK)
+            yrig__note(p, "display.latency: loopback/%.12s....txt %s: the onset offset is not checked", dl->sha256,
+                       yrig__check_says(dl->check));
     }
     if (p->display.set && p->display.calibration[0]) {
         if (!dir) p->display.check = YRIG_CHECK_NOT_RUN;
         else {
-            p->display.check = yrig__check_file(dir, NULL, p->display.calibration, p->display.calibration_sha256, NULL);
+            p->display.check = yrig__check_file(dir, NULL, p->display.calibration, p->display.calibration_sha256, NULL, 0, 0);
             if (p->display.check != YRIG_CHECK_OK)
                 yrig__note(p, "display.calibration: %.40s %s", p->display.calibration,
                            p->display.check == YRIG_CHECK_MISSING ? "is missing" : "has changed");
@@ -1148,6 +1252,7 @@ static yjs_value* yrig__json(yjs_arena* a, const yrig_profile* p) {
             ok = c && yrig__set_str(a, c, "file", p->display.calibration) && yrig__set_str(a, c, "sha256", p->display.calibration_sha256) &&
                  yjs_set(a, d, "calibration", c) == YJS_OK;
         }
+        if (ok && p->display.latency.set) ok = yjs_set(a, d, "latency", yrig__lb_json(a, &p->display.latency, true)) == YJS_OK;
         if (ok) ok = yjs_set(a, root, "display", d) == YJS_OK;
     }
     return ok ? root : NULL;

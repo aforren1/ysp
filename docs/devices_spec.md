@@ -647,6 +647,14 @@ What the build settled (2026-10-09):
 - **Options**: `baud`, `latched` (MMBT-S only), `ftdi_latency_s`,
   `buttons` (code to name, at most 16). A new binding drops the role's
   latency and bounds, which belonged to the device it had.
+- **The two tools** (2026-10-13, `ysp/rigfile.h` v0.4.0; docs/device.md,
+  "The rig profile tools"): `rigfile_bounds` measures an input's bounds
+  against a second line board's own reports of its pin (not the line-in:
+  its capture times have no loopback check yet), lo and hi the least and
+  most difference; `rigfile_onset` takes the CSV of a photodiode run and
+  stores the median as `onset_offset_s`. The display gets `latency`, the
+  run's summary and hash, checked at load like a role's; an offset that is
+  not the file's DIFFERS.
 
 ### 11.3 Binding
 
