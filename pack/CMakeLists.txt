@@ -35,6 +35,10 @@ if(YSP_BUILD_LAYOUT)
         # PsychoPy's Stroop demos (docs/rig_spec.md 15.5): words laid out here.
         ysp_add_program(trial_stroop ${PROJECT_SOURCE_DIR}/examples/response/trial_stroop.c rig methods)
         target_link_libraries(trial_stroop PRIVATE ysp_layout)
+        # jsPsych's instructions and PsychoPy's text demos (docs/rig_spec.md
+        # 15.5): pages laid out once and rendered into targets at setup.
+        ysp_add_program(trial_instructions ${PROJECT_SOURCE_DIR}/examples/layout/trial_instructions.c rig methods)
+        target_link_libraries(trial_instructions PRIVATE ysp_layout)
     endif()
 endif()
 

@@ -6,11 +6,12 @@ program `<lib>_<name>` (for example `examples/gfx/gallery.c` is
 show but use another header's build; they keep their own file name as
 their program name (`YSP_EXAMPLES_ACROSS` in `CMakeLists.txt`):
 `rdk/gfx_rdk.c`, `rdk/gfx_rdk_bench.c`, `rdk/trial_rdk.c`, `timeline/gfx_trial.c`,
-`layout/gfx_layout.c`, `device/photodiode_check.c`,
+`layout/gfx_layout.c`, `layout/trial_instructions.c`,
+`video/trial_movie.c`, `device/photodiode_check.c`,
 `device/trial_eeg_triggers.c`, `timeline/trial_scanner_sync.c` and the
 `response/trial_*.c`; `net/labstreamer_flip.c` is `net_labstreamer_flip`,
-`audio/av_sync.c` is `audio_av_sync` and `gfx/gamma_null.c` is
-`gfx_gamma_null`.
+`audio/av_sync.c` is `audio_av_sync`, `color/patch.c` is `color_patch`
+and `gfx/gamma_null.c` is `gfx_gamma_null`.
 
 Run a program from the build folder (`build/<preset>/Release/` with MSVC,
 `build/<preset>/` otherwise). "Needs" says what a run needs beyond the
@@ -54,6 +55,7 @@ record, not from a frame count, so it also runs on a real display.
 |---|---|---|---|---|
 | `color_convert` | Conversions, gamut questions and gamut mapping on a calibration | color | `color_convert` (CI) | nothing |
 | `color_bench` | The cost of the conversions | rt, color | `color_bench` | nothing |
+| `color_patch` | PsychoPy's color and monitor demos: a patch through a `.yspcal` (or a nominal calibration, flagged) in the output stage, the OS gamma ramp untouched; a color in CIELAB, xyY or DKL walked in hue, chroma and lightness by keys; device RGB, gamut distance, refusals and 8-bit codes per step, the codes checked against the output pixel in a window | color, gfx, trials | `color_patch --sim` (CI); `color_patch --cal display.yspcal`; `color_patch --auto` (the walk in a window) | SDL3, ANGLE; a photometer's calibration for a claim about light |
 
 ## device
 
@@ -87,6 +89,7 @@ record, not from a frame count, so it also runs on a real display.
 | Program | Shows | Headers | Run | Needs |
 |---|---|---|---|---|
 | `gfx_layout` | Paragraphs in seven scripts, bidi strings, BudouX breaking and an editor, through pack/layout | gfx, outline, pack/layout | `gfx_layout` | SDL3, ANGLE, `YSP_BUILD_LAYOUT=ON`, Windows fonts |
+| `trial_instructions` | jsPsych's instructions and PsychoPy's text demos: paragraph pages laid out once, rendered into targets in a setup pass, turned by Left and Right; each view's viewing time from two flip records, the key's RT from the view's | gfx, outline, pack/layout, trials, response | `trial_instructions --sim` (CI); `trial_instructions`; `trial_instructions --auto` (the scripted reader in a window) | SDL3, ANGLE, `YSP_BUILD_LAYOUT=ON`; a font for a window run |
 
 ## net
 
@@ -223,6 +226,7 @@ The X11 display-timing probe for the GLX backend is in `tests/probe/screen_x11/`
 | `video_play` | A movie in a window, and the frame-thread cost | video | `video_play --sim` (CI); `video_play --file movie.mpg` | SDL3, ANGLE; a frame sequence or MPEG-1 file for `--file` |
 | `video_bench` | The decode thread's cost per frame | video | `video_bench --size 64x48 --reps 3` (CI); `video_bench --mpg clip.mpg` | SDL3 to build; a clip for MPEG-1 |
 | `video_check` | The GPU paths against the upload path, frame by frame | video | `video_check --file clip.mp4` | SDL3, ANGLE; Windows (Media Foundation); the test clips |
+| `trial_movie` | PsychoPy's movie demos and jsPsych's video-keyboard-response: RT from the flip record of the display frame that first showed a video frame (an event on the movie's timeline base), pause and seek by keys, each trial's shown, repeated and dropped counts, the soundtrack as a ysp/audio.h stream | video, audio, timeline, gfx, trials, response | `trial_movie --sim` (CI); `trial_movie`; `trial_movie --auto` (the scripted participant in a window) | SDL3, ANGLE, miniaudio; a sound device without `--sim` or `--no-sound` |
 
 ## web
 

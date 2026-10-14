@@ -1784,12 +1784,13 @@ A Builder demo is a C program for a ysp user today. For a user who does
 not write C, every Builder demo needs the player (rank 1 in 15.4). The
 status columns below give the C status.
 
-Totals: 140 demos (97 Coder, 43 Builder). Example 53 (38 + 15), Possible
-41 (27 + 14), Gap 24 (12 + 12), Out 22 (20 + 2). Updated 2026-10-09 for
+Totals: 140 demos (97 Coder, 43 Builder). Example 57 (40 + 17), Possible
+37 (25 + 12), Gap 24 (12 + 12), Out 22 (20 + 2). Updated 2026-10-09 for
 `gfx_gratings`, `trial_2afc_adaptive`, `trial_rdk`, `trial_stroop`,
 `trial_sternberg` and `trial_images` (15 demos from Possible to Example),
-and 2026-10-13 for `trial_eeg_triggers`, `trial_scanner_sync` and
-`gfx_gamma_null` (3 more).
+and 2026-10-13 for `trial_eeg_triggers`, `trial_scanner_sync`,
+`gfx_gamma_null`, `trial_movie`, `color_patch` and `trial_instructions`
+(7 more).
 
 ### 15.2 Coder demos
 
@@ -1799,7 +1800,7 @@ Paths are from `psychopy/demos/coder/`.
 
 | Demo | What it shows | ysp headers | Status |
 |---|---|---|---|
-| `basic/hello_world.py` | Two lines of text, one with an accented capital | gfx, outline | Example: `gfx_text` |
+| `basic/hello_world.py` | Two lines of text, one with an accented capital | gfx, outline | Example: `gfx_text`; `trial_instructions` (paragraph pages) |
 | `stimuli/gabor.py` | A gabor with drifting phase | gfx | Example: `gfx_hello` |
 | `stimuli/counterphase.py` | A grating whose contrast follows a sine (counterphase flicker) | gfx, timeline | Example: `gfx_gratings` tile 1 (a contrast track; the achieved frequency from the flip records) |
 | `stimuli/plaid.py` | Two gratings summed into a drifting plaid | gfx | Example: `gfx_gallery` page 1 (plaid tile) |
@@ -1821,21 +1822,21 @@ Paths are from `psychopy/demos/coder/`.
 | `stimuli/imagesAndPatches.py` | Images at pixel size, mirrored; an image as a mask; frame intervals | gfx, pack, screen | Possible, with the same mask question |
 | `stimuli/bufferImageStim.py` | Many static stimuli captured into one image, and the speed gain | gfx (targets, setup passes) | Example: `gfx_gallery` page 5 (target drawn once), page 7 (static text rendered at setup) |
 | `stimuli/variousVisualStims.py` | A gabor, a movie, text and an image turned by the mouse | gfx, video, screen | Possible |
-| `stimuli/MovieStim.py` | A movie with sound; play, pause, stop by keys | video, audio | Example: `video_play` (keys for pause not shown) |
+| `stimuli/MovieStim.py` | A movie with sound; play, pause, stop by keys | video, audio | Example: `trial_movie` (pause and seek by keys, the soundtrack as a stream); `video_play` |
 | `stimuli/soundStimuli.py` | Tones by note name and by frequency | audio | Example: `audio_tone` |
 | `stimuli/ratingScale.py` | Rating scales: choices, a line, an accept button | None | Gap: widget layer (14.7 rank 4) |
 | `stimuli/screensAndWindows.py` | Two windows, on one screen or on two | screen (one `yscr_screen` per display) | Possible on two displays. Two windows on one display: gap, untimed screens (4.2 proposal) |
 | `stimuli/embeddedOpenGL.py` | Raw OpenGL calls among stimuli | gfx (USER pipeline) | Possible through the shader contract; raw GL in the frame is not supported. A Renderer extension (12) draws into a target |
 | `stimuli/stim3d.py` | Lit, textured 3D boxes and spheres | None | Out: 3D is a Renderer extension (12), not a header |
-| `stimuli/colors/colors.py` | Type a value in a color space, see the color | color, gfx | Possible: a key cycles the space in place of the slider. `color_convert` shows the conversions without a display |
-| `stimuli/colors/hsvColorPalette.py` | An HSV color picker | color | Out: HSV is device RGB with no calibration, and every `ysp/color.h` conversion goes through one. A lightness and hue picker in CIELAB or Oklab is possible |
+| `stimuli/colors/colors.py` | Type a value in a color space, see the color | color, gfx | Example: `color_patch` (CIELAB, xyY or DKL; Tab cycles the space in place of the slider). `color_convert` shows the conversions without a display |
+| `stimuli/colors/hsvColorPalette.py` | An HSV color picker | color | Out: HSV is device RGB with no calibration, and every `ysp/color.h` conversion goes through one. `color_patch` is a lightness, chroma and hue picker in CIELAB |
 
 #### Text
 
 | Demo | What it shows | ysp headers | Status |
 |---|---|---|---|
 | `stimuli/text/textStimuli.py` | Fonts, Unicode, turned and mirrored text, bidi Arabic | pack/layout, outline, gfx | Example: `gfx_layout` (seven scripts, bidi), `gfx_gallery` page 8 (turning text) |
-| `stimuli/text/textbox_simple.py` | Two text boxes with options | pack/layout, gfx | Example: `gfx_text`, `gfx_layout` |
+| `stimuli/text/textbox_simple.py` | Two text boxes with options | pack/layout, gfx | Example: `gfx_text`, `gfx_layout`, `trial_instructions` |
 | `stimuli/text/textbox_editable.py` | An editable text box | pack/layout, screen (`yscr_text_input()`) | Example: `gfx_layout` (Skribidi's editor) |
 | `stimuli/text/textbox_glyph_placement.py` | The box of the glyph at a string index, checked by the mouse | pack/layout, gfx (`ygfx_hit_index()` on a curve run) | Possible |
 | `stimuli/text/fontLayout.py` | A diagram of the font metrics that place lines | outline (`yol_font_hmetrics()`, font metrics), gfx | Possible |
@@ -1885,7 +1886,7 @@ Paths are from `psychopy/demos/coder/`.
 | `hardware/parallelPortOutput.py` | A pin held high for N frames with a stimulus | parallel, device, screen | Example: `parallel_trigger`, `device_trigger_flip`, `trial_eeg_triggers` (a stimulus code at its flip) |
 | `hardware/cedrusRB730.py` | A Cedrus RB-730: info, round trip, keys | device (XID), box | Possible (no box on hand; docs/devices_spec.md) |
 | `hardware/fMRI_launchScan.py` | Wait for scanner sync pulses, or emulate them | screen (a pulse as a key), device (`YIN_KIND_SYNC` from a board), timeline | Example: `trial_scanner_sync` (pulses from a key, a line board or an emulator thread) |
-| `hardware/monitorDemo.py` | Monitor profiles: distance, calibration by name | color (`ycol_cal` load), gfx (`ygfx_view`) | Possible |
+| `hardware/monitorDemo.py` | Monitor profiles: distance, calibration by name | color (`ycol_cal` load), gfx (`ygfx_view`) | Example: `color_patch` (a `.yspcal` by path, or a nominal one, flagged; no viewing distance) |
 | `hardware/gammaMotionNull.py` | Display gamma by motion nulling (Ledgeway and Smith 1994) | gfx, stair, response | Example: `gfx_gamma_null` (a staircase on the output stage's table; the readback checks the codes) |
 | `hardware/gammaMotionAnalysis.py` | Plots of the nulling staircases | None | Out: offline analysis (4.8) |
 | `hardware/testSoundLatency.py` | Sound onset latency measured by a LabJack | audio | Possible by line-in: `tests/loopback/audio_loopback.c` (a test, not an example) |
@@ -1959,7 +1960,7 @@ Paths are from `psychopy/demos/builder/`. `Experiments/GoNoGo/` and
 |---|---|---|---|
 | `Feature Demos/gratings/` | Contrast-modulated sine and noise, beats | gfx (USER shader) | Example: `gfx_gratings` |
 | `Feature Demos/noise/` | Binary, filtered (band-pass), Gabor and image noise; new samples per repeat | gfx (NOISE) | Gap: filtered noise. Binary, uniform, Gaussian and simplex exist; `ysp/gfx.h` lists filtered noise on the GPU as not done |
-| `Feature Demos/movies/` | A movie with play, pause and seek by a button and a slider | video, gfx | Possible with keys for the controls (the widgets: 14.7 rank 4) |
+| `Feature Demos/movies/` | A movie with play, pause and seek by a button and a slider | video, gfx | Example: `trial_movie`, with keys for the controls (the widgets: 14.7 rank 4) |
 | `Feature Demos/panorama/` | A 360 degree image, looked around by mouse or keys | gfx (USER shader, IMAGE) | Possible (texture size and target sampling not verified, 15.6) |
 | `Feature Demos/sliders/` | Slider styles, vertical and horizontal | None | Gap: widget layer (14.7 rank 4) |
 | `Feature Demos/progress/` | A progress bar | gfx | Possible |
@@ -1992,7 +1993,7 @@ Paths are from `psychopy/demos/builder/`. `Experiments/GoNoGo/` and
 | `Helper Tools/keyNameFinder/` | Key names | screen | Example: `screen_input --hand` |
 | `Helper Tools/spatialUnits/` | One square in several units | gfx (`ygfx_view`, `YGFX_DEG`) | Possible |
 | `Helper Tools/clockFace/` | Clock hands turned by routine time | gfx, timeline | Possible |
-| `Helper Tools/colors/` | Type a color in a space, see it | color, gfx | Possible with keys; `color_convert` |
+| `Helper Tools/colors/` | Type a color in a space, see it | color, gfx | Example: `color_patch` (keys); `color_convert` |
 | `Helper Tools/drawPolygon/` | Click vertices, then change size, position and angle by sliders | gfx (POLYGON to 16 vertices, POLYLINE to 224 points), screen | Possible with keys in place of the sliders |
 | `Helper Tools/achorVSalignment/` | Text anchor against text alignment, set by sliders | gfx (`anchor`), pack/layout | Possible with keys |
 
@@ -2048,21 +2049,24 @@ the response examples (330 to 500 lines).
 | 1 | `trial_2afc_adaptive` (`examples/response/`), built | `psychophysicsStairsInterleaved/`, `psychophysicsStaircase/`, `JND_staircase_exp.py` | gfx, color, trials, stair, quest, response, timeline | A spatial 2AFC gabor detection on a display: two staircases and one QUEST+ track interleaved in `ysp/trials.h`; contrast set through the calibration with its gamut check; sizes in deg. Today the adaptive headers run only against simulated observers | 450 | None (a nominal calibration unless a `.yspcal` is given) |
 | 2 | `trial_rdk` (`examples/rdk/`), built | `dots.py`, `dot_gabors.py`; contrib `plugin-rdk` (14.4) | rdk, gfx, timeline, trials, response | An RDK direction discrimination with RT from the motion onset's flip record, coherence per trial from a factor, and the field's replay digest in each data row | 350 | None |
 | 3 | `trial_stroop` (`examples/response/`), built | `stroop/`, `stroopExtended/`, `EGI_netstation/` (task part) | pack/layout, outline, gfx, table, trials, response | Words as text in a timed trial: color words in an ink color, conditions from a CSV through `ysp/table.h`, a practice block with feedback text, congruency in the row | 400 | None; needs `YSP_BUILD_LAYOUT` (or one-line words by advances, as `outline_font`) |
-| 4 | `trial_movie` (`examples/video/`) | `Feature Demos/movies/`, `MovieStim.py`; jsPsych `video-keyboard-response` (14.3) | video, audio, timeline, gfx, response | RT from a video frame's flip record (the frame named in the trial row); pause and seek by key; each trial's shown, repeated and dropped counts | 350 | A sound device for the soundtrack (none with `--sim`) |
+| 4 | `trial_movie` (`examples/video/`), built | `Feature Demos/movies/`, `MovieStim.py`; jsPsych `video-keyboard-response` (14.3) | video, audio, timeline, gfx, response | RT from a video frame's flip record (the frame named in the trial row); pause and seek by key; each trial's shown, repeated and dropped counts | 350 | A sound device for the soundtrack (none with `--sim`) |
 | 5 | `gfx_gratings` (`examples/gfx/`), built | `counterphase.py`, `secondOrderGratings.py`, `rotatingFlashingWedge.py`, `Feature Demos/gratings/` | gfx (GRATING, GABOR, USER), timeline | Phase drift on a timeline track; counterphase flicker as a contrast track, with the achieved frequency from the flip records; contrast-modulated gratings and a noise-carrier envelope in USER shaders; a flashing checkerboard wedge | 400 | None |
 | 6 | `trial_sternberg` (`examples/timeline/`), built | `sternberg/`; jsPsych `animation` (14.3) | timeline (`ytl_seq` op tables), gfx, outline, trials, response | A timed sequence: a memory set of 1 to 6 digits at a fixed SOA, a probe, and the landing record of each item; the SOAs measured from the flip records; set size as a factor | 350 | None |
-| 7 | `color_patch` (`examples/color/`) | `monitorDemo.py`, `colors/colors.py`, `Helper Tools/colors/`, `hsvColorPalette.py` (as a CIELAB picker) | color, gfx, screen | A calibrated patch: a `.yspcal` loaded; a color given in CIELAB, xyY or DKL; keys walk hue and chroma; the device RGB, the gamut distance and refusals printed; the OS gamma ramp left alone | 250 | A calibration of the display for a claim about light; a nominal one otherwise (flagged) |
+| 7 | `color_patch` (`examples/color/`), built | `monitorDemo.py`, `colors/colors.py`, `Helper Tools/colors/`, `hsvColorPalette.py` (as a CIELAB picker) | color, gfx, screen | A calibrated patch: a `.yspcal` loaded; a color given in CIELAB, xyY or DKL; keys walk hue and chroma; the device RGB, the gamut distance and refusals printed; the OS gamma ramp left alone | 250 | A calibration of the display for a claim about light; a nominal one otherwise (flagged) |
 | 8 | `trial_eeg_triggers` (`examples/device/`), built | `EEG_parallel_component/`, `EEG_serial_component/`, `EEG_serial_code/`, `parallelPortOutput.py`, `callOnFlip.py` | device, screen, gfx, timeline, trials, response | A stimulus code at the flip through the trigger channel, a response code at the key event, and an end code; each write's record beside the flip and response records in the row. `device_trigger_flip` has no stimulus or response | 350 | A trigger output for real lines; the in-process box without one |
 | 9 | `trial_images` (`examples/pack/`), built | `randomisedBlocks/`, `GoNoGo/`, `navon/`, `mentalRotation/`, `face_jpg.py` | pack, gfx (IMAGE), table, trials (groups), response | The pack path end to end: textures and the conditions table read from a pack built by `ypak`; blocks in random order; images turned for mental rotation | 350 | None; needs a pack (`ypak build`, `YSP_BUILD_PACK`) |
-| 10 | `trial_instructions` (`examples/layout/`) | `hello_world.py`, `textbox_simple.py`; jsPsych `instructions` (14.3) | pack/layout, outline, gfx (setup passes, targets), screen | Paragraph pages laid out once and rendered into targets at setup, turned by keys; the time each page was shown, from the flip records | 250 | None; needs `YSP_BUILD_LAYOUT` |
+| 10 | `trial_instructions` (`examples/layout/`), built | `hello_world.py`, `textbox_simple.py`; jsPsych `instructions` (14.3) | pack/layout, outline, gfx (setup passes, targets), screen | Paragraph pages laid out once and rendered into targets at setup, turned by keys; the time each page was shown, from the flip records | 250 | None; needs `YSP_BUILD_LAYOUT` |
 | 11 | `trial_scanner_sync` (`examples/timeline/`), built | `Hardware/fMRI/`, `fMRI_launchScan.py` | input (`YIN_KIND_SYNC`), device or screen, timeline, trials | Trials on a base anchored at a scanner pulse (non-slip timing): pulses from a key or a line board, each onset as an offset from the volume pulse; an emulator thread for runs without a scanner | 300 | A scanner or a line board for real pulses; the emulator without |
 | 12 | `gfx_gamma_null` (`examples/gfx/`), built | `gammaMotionNull.py` | gfx (square-wave gratings, output stage), stair, response, timeline | A psychophysical check of the display's linearization by motion nulling, through the output stage's lookup table, with no photometer | 300 | None |
 
 Examples 1 to 4 close the first-order holes: adaptive methods, RDK and
 video are built and tested but no example runs them with a participant.
 Examples 8 and 11 need hardware for their claims and run without it.
-Built by 2026-10-09: 1, 2, 3, 5, 6 and 9; by 2026-10-13: 8, 11 and 12
-("built" in the Program column); 15.2 and 15.3 name them.
+Built by 2026-10-09: 1, 2, 3, 5, 6 and 9; by 2026-10-13: 4, 7, 8, 10, 11
+and 12 ("built" in the Program column; 4, 7 and 10 at 520, 526 and 472
+lines against the estimates of 350, 250 and 250: each has a `--sim`
+self-check and an `--auto` run of the same script in a window); 15.2
+and 15.3 name them.
 
 ### 15.6 Not verified
 
