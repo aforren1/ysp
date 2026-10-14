@@ -61,8 +61,34 @@ if(YSP_BUILD_PACK)
         set(_lp_pin "${_lp_pin},tree-differs")
     endif()
 
-    add_library(ysp_pack_tool STATIC pack_tool.c pack_impl.c ysp/pack_tool.h)
+    # stb_image.h (JPEG only) and pl_mpeg.h (MPEG-1 indexes), fetched and
+    # checked by tools/vendor_pack.py like lodepng. stb_image in its own
+    # library so upstream's warnings stay off.
+    set(_stb ${PROJECT_SOURCE_DIR}/third_party/stb)
+    set(_plm ${PROJECT_SOURCE_DIR}/third_party/pl_mpeg)
+    add_library(ysp_stb_image STATIC stb_image.c)
+    target_include_directories(ysp_stb_image PRIVATE ${_stb})
+    if(MSVC)
+        target_compile_options(ysp_stb_image PRIVATE /W0)
+    else()
+        target_compile_options(ysp_stb_image PRIVATE -w)
+    endif()
+    file(SHA256 ${_stb}/stb_image.h _stb_hash)
+    set(_stb_pin "2.30 2c980bb59875b0d32144a71867fbdebb2f77cd20")
+    if(NOT _stb_hash STREQUAL "594c2fe35d49488b4382dbfaec8f98366defca819d916ac95becf3e75f4200b3")
+        set(_stb_pin "${_stb_pin},tree-differs")
+    endif()
+    file(SHA256 ${_plm}/pl_mpeg.h _plm_hash)
+    set(_plm_pin "c871f2be022ece7ef4f64230b4fb8e1fb9eb6023")
+    if(NOT _plm_hash STREQUAL "3a8cb30c83c2a1147719c30fe0c8b93da2987aa43140077c575b39aaa75fc2c9")
+        set(_plm_pin "${_plm_pin},tree-differs")
+    endif()
+
+    add_library(ysp_pack_tool STATIC pack_tool.c pack_impl.c import.c ysp/pack_tool.h)
     target_include_directories(ysp_pack_tool PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+    target_include_directories(ysp_pack_tool SYSTEM PRIVATE ${_plm})
+    target_link_libraries(ysp_pack_tool PRIVATE ysp_stb_image)
+    target_compile_definitions(ysp_pack_tool PRIVATE YPT_STB_IMAGE="${_stb_pin}" YPT_PL_MPEG="${_plm_pin}")
     # The headers' implementations need ysp::core's threads and libm, and dl
     # for ysp/gfx.h's headless presenter; not ysp::rig, which would link SDL3
     # into a tool that never opens a window.

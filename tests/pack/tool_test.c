@@ -29,6 +29,7 @@
 #include "ysp/gfx.h"
 #include "ysp/color.h"
 #include "ysp/audio.h"
+#include "ysp/video.h"
 #ifndef YPT_NO_LAYOUT
 #include "ysp/layout.h"
 #endif
@@ -226,6 +227,43 @@ static void chunk(bb* b, const char* type, const uint8_t* d, size_t n) {
     b32(b, crc);
 }
 
+/* An ICC v2 RGB matrix-and-curves profile: sRGB's colorants and its curve
+ * as a parametric curve (type 3), or a display's (a laptop panel's
+ * colorants and a pure gamma of 1.8), which the tool must refuse. Integer
+ * constants only, so every platform writes the same bytes. */
+static void make_icc(bb* b, int srgb) {
+    static const int32_t s_xyz[3][3] = { { 28580, 14582, 911 }, { 25238, 46983, 6364 }, { 9378, 3971, 46799 } };
+    static const int32_t d_xyz[3][3] = { { 25880, 14752, 1940 }, { 28043, 45358, 9450 }, { 9260, 5459, 42664 } };
+    static const char* const tags[6] = { "rXYZ", "gXYZ", "bXYZ", "rTRC", "gTRC", "bTRC" };
+    size_t start = b->n, k;
+    uint32_t trc_off = 132 + 6 * 12 + 3 * 20, trc_n = srgb ? 32 : 16;
+    b32(b, 0); b32(b, 0); b32(b, 0x02100000u); bput(b, "mntr", 4); bput(b, "RGB ", 4); bput(b, "XYZ ", 4);
+    for (k = 0; k < 12; k++) b8(b, 0);
+    bput(b, "acsp", 4);
+    for (k = 0; k < 24; k++) b8(b, 0);   /* platform, flags, maker, model, attributes */
+    b32(b, 0);                             /* intent */
+    b32(b, 63190); b32(b, 65536); b32(b, 54061);   /* D50 */
+    for (k = 0; k < 48; k++) b8(b, 0);   /* creator, id, reserved */
+    b32(b, 6);
+    for (k = 0; k < 6; k++) {
+        bput(b, tags[k], 4);
+        b32(b, k < 3 ? 132 + 6 * 12 + 20 * (uint32_t)k : trc_off);
+        b32(b, k < 3 ? 20 : trc_n);
+    }
+    for (k = 0; k < 3; k++) {
+        const int32_t* v = srgb ? s_xyz[k] : d_xyz[k];
+        bput(b, "XYZ ", 4); b32(b, 0); b32(b, (uint32_t)v[0]); b32(b, (uint32_t)v[1]); b32(b, (uint32_t)v[2]);
+    }
+    if (srgb) {   /* 2.4, 1/1.055, 0.055/1.055, 1/12.92, 0.04045 */
+        bput(b, "para", 4); b32(b, 0); b16(b, 3); b16(b, 0);
+        b32(b, 157286); b32(b, 62119); b32(b, 3417); b32(b, 5072); b32(b, 2651);
+    } else {      /* gamma 1.8 */
+        bput(b, "curv", 4); b32(b, 0); b32(b, 1); b16(b, 0x01CD); b16(b, 0);
+    }
+    k = b->n - start;
+    b->d[start] = (uint8_t)(k >> 24); b->d[start + 1] = (uint8_t)(k >> 16); b->d[start + 2] = (uint8_t)(k >> 8); b->d[start + 3] = (uint8_t)k;
+}
+
 /* A PNG with stored (uncompressed) deflate blocks. */
 static void make_png(const char* path, uint32_t w, uint32_t h, int ct, int depth, const uint8_t* rows, int iccp) {
     static const uint8_t sig[8] = { 137, 80, 78, 71, 13, 10, 26, 10 };
@@ -254,14 +292,301 @@ static void make_png(const char* path, uint32_t w, uint32_t h, int ct, int depth
     ih[4] = (uint8_t)(h >> 24); ih[5] = (uint8_t)(h >> 16); ih[6] = (uint8_t)(h >> 8); ih[7] = (uint8_t)h;
     ih[8] = (uint8_t)depth; ih[9] = (uint8_t)ct; ih[10] = 0; ih[11] = 0; ih[12] = 0;
     chunk(&b, "IHDR", ih, 13);
-    if (iccp) {
+    if (iccp == 1) {
         static const uint8_t pr[] = { 'x', 0, 0, 0x78, 0x01, 0x01, 0x00, 0x00, 0xff, 0xff, 0x00, 0x00, 0x00, 0x01 };
         chunk(&b, "iCCP", pr, sizeof pr);
+    } else if (iccp) {
+        /* a real profile, zlib with one stored block */
+        bb pf, c;
+        uint32_t a2 = 1, t2 = 0;
+        memset(&pf, 0, sizeof pf);
+        memset(&c, 0, sizeof c);
+        make_icc(&pf, iccp == 2);
+        for (i = 0; i < pf.n; i++) { a2 = (a2 + pf.d[i]) % 65521; t2 = (t2 + a2) % 65521; }
+        bput(&c, "icc", 4);   /* name and its NUL */
+        b8(&c, 0);            /* compression method */
+        b8(&c, 0x78); b8(&c, 0x01); b8(&c, 1);
+        le16(&c, (uint32_t)pf.n); le16(&c, (uint32_t)(~pf.n & 0xffff));
+        bput(&c, pf.d, pf.n);
+        b32(&c, (t2 << 16) | a2);
+        chunk(&b, "iCCP", c.d, c.n);
+        free(pf.d); free(c.d);
     }
     chunk(&b, "IDAT", z.d, z.n);
     chunk(&b, "IEND", NULL, 0);
     write_file(path, b.d, b.n);
     free(b.d); free(z.d); free(raw);
+}
+
+/* --- JPEG files: every 8x8 block flat (DC only, quantizer 1), written with
+ * integer arithmetic, so every platform makes the same bytes -------------- */
+
+typedef struct bitw { bb* b; uint32_t acc; int n; } bitw;
+static void bw_put(bitw* w, uint32_t code, int len) {   /* MSB first, 0xFF stuffed */
+    int i;
+    for (i = len - 1; i >= 0; i--) {
+        w->acc = (w->acc << 1) | ((code >> i) & 1u);
+        if (++w->n == 8) {
+            b8(w->b, w->acc & 255);
+            if ((w->acc & 255) == 255) b8(w->b, 0);
+            w->acc = 0;
+            w->n = 0;
+        }
+    }
+}
+static void bw_flush(bitw* w) { while (w->n) bw_put(w, 1, 1); }
+
+/* the standard luminance DC table (ITU T.81 K.3) */
+static const uint8_t dc_bits[16] = { 0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0 };
+static void put_dc(bitw* w, int diff) {
+    uint32_t code = 0;
+    int a = diff < 0 ? -diff : diff, s = 0, len, k, sym = 0;
+    while (a >> s) s++;
+    for (len = 1; len <= 16; len++) {
+        for (k = 0; k < dc_bits[len - 1]; k++, sym++, code++)
+            if (sym == s) {
+                bw_put(w, code, len);
+                if (s) bw_put(w, (uint32_t)(diff < 0 ? diff - 1 : diff) & ((1u << s) - 1u), s);
+                return;
+            }
+        code <<= 1;
+    }
+}
+
+static void seg(bb* b, int marker, const uint8_t* d, size_t n) {
+    b8(b, 0xFF); b8(b, (uint32_t)marker); b16(b, (uint32_t)(n + 2)); bput(b, d, n);
+}
+
+/* The block value of component c at block (bx, by): gray steps, chroma
+ * that varies, or 128 (no chroma) when flat_chroma. */
+static int jpeg_val(int c, int bx, int by, int flat_chroma) {
+    if (c == 0) return 16 + (bx * 37 + by * 53) % 224;
+    if (flat_chroma) return 128;
+    return c == 1 ? 64 + (bx * 29 + by * 7) % 128 : 64 + (by * 41 + bx * 3) % 128;
+}
+
+/* nc 1 or 3 (4 writes a CMYK frame header for a refusal); sub 2: 4:2:0;
+ * marker: the SOF (0xC0 baseline, 0xC2 progressive with one DC scan);
+ * prec: the sample precision; app: segments after SOI. */
+static void make_jpeg(const char* path, int w, int h, int nc, int sub, int marker, int prec, int flat_chroma, const bb* app) {
+    static const uint8_t ac_one[17] = { 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00 };   /* EOB is "0" */
+    bb b;
+    bitw bw;
+    uint8_t t[64 + 32];
+    int c, k, prog = marker == 0xC2, mx, my, pred[4] = { 0, 0, 0, 0 };
+    memset(&b, 0, sizeof b);
+    b8(&b, 0xFF); b8(&b, 0xD8);
+    if (app) bput(&b, app->d, app->n);
+    t[0] = 0;
+    memset(t + 1, 1, 64);
+    seg(&b, 0xDB, t, 65);
+    t[0] = (uint8_t)prec; t[1] = (uint8_t)(h >> 8); t[2] = (uint8_t)h; t[3] = (uint8_t)(w >> 8); t[4] = (uint8_t)w; t[5] = (uint8_t)nc;
+    for (c = 0; c < nc; c++) { t[6 + 3 * c] = (uint8_t)(c + 1); t[7 + 3 * c] = (uint8_t)(c == 0 && sub == 2 ? 0x22 : 0x11); t[8 + 3 * c] = 0; }
+    seg(&b, marker, t, 6 + 3 * (size_t)nc);
+    t[0] = 0x00;
+    memcpy(t + 1, dc_bits, 16);
+    for (k = 0; k < 12; k++) t[17 + k] = (uint8_t)k;
+    seg(&b, 0xC4, t, 29);
+    if (!prog) { t[0] = 0x10; memcpy(t + 1, ac_one, 17); seg(&b, 0xC4, t, 18); }
+    t[0] = (uint8_t)nc;
+    for (c = 0; c < nc; c++) { t[1 + 2 * c] = (uint8_t)(c + 1); t[2 + 2 * c] = 0x00; }
+    t[1 + 2 * nc] = 0; t[2 + 2 * nc] = prog ? 0 : 63; t[3 + 2 * nc] = 0;
+    seg(&b, 0xDA, t, 4 + 2 * (size_t)nc);
+    memset(&bw, 0, sizeof bw);
+    bw.b = &b;
+#define BLOCK(c_, bx_, by_) do { int v_ = (jpeg_val((c_), (bx_), (by_), flat_chroma) - 128) * 8; put_dc(&bw, v_ - pred[c_]); pred[c_] = v_; \
+                                 if (!prog) bw_put(&bw, 0, 1); } while (0)
+    if (nc == 1) {
+        for (my = 0; my < (h + 7) / 8; my++)
+            for (mx = 0; mx < (w + 7) / 8; mx++) BLOCK(0, mx, my);
+    } else if (nc == 3) {
+        int m = sub == 2 ? 16 : 8;
+        for (my = 0; my < (h + m - 1) / m; my++)
+            for (mx = 0; mx < (w + m - 1) / m; mx++) {
+                if (sub == 2) { BLOCK(0, 2 * mx, 2 * my); BLOCK(0, 2 * mx + 1, 2 * my); BLOCK(0, 2 * mx, 2 * my + 1); BLOCK(0, 2 * mx + 1, 2 * my + 1); }
+                else BLOCK(0, mx, my);
+                BLOCK(1, mx, my);
+                BLOCK(2, mx, my);
+            }
+    }
+#undef BLOCK
+    bw_flush(&bw);
+    b8(&b, 0xFF); b8(&b, 0xD9);
+    write_file(path, b.d, b.n);
+    free(b.d);
+}
+
+/* APP1 Exif with IFD0 orientation o (big-endian TIFF) */
+static void app_exif(bb* b, int o) {
+    static const uint8_t tiff[] = { 'E', 'x', 'i', 'f', 0, 0, 'M', 'M', 0, 42, 0, 0, 0, 8, 0, 1, 0x01, 0x12, 0, 3, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0 };
+    uint8_t t[sizeof tiff];
+    memcpy(t, tiff, sizeof t);
+    t[24] = 0;
+    t[25] = (uint8_t)o;
+    seg(b, 0xE1, t, sizeof t);
+}
+
+/* APP2 ICC_PROFILE chunks: the profile split in `parts` pieces */
+static void app_icc(bb* b, int srgb, int parts) {
+    bb p;
+    int k;
+    size_t at = 0;
+    memset(&p, 0, sizeof p);
+    make_icc(&p, srgb);
+    for (k = 1; k <= parts; k++) {
+        size_t n = k == parts ? p.n - at : p.n / (size_t)parts;
+        bb s;
+        memset(&s, 0, sizeof s);
+        bput(&s, "ICC_PROFILE", 12);
+        b8(&s, (uint32_t)k); b8(&s, (uint32_t)parts);
+        bput(&s, p.d + at, n);
+        seg(b, 0xE2, s.d, s.n);
+        at += n;
+        free(s.d);
+    }
+    free(p.d);
+}
+
+/* --- .xlsx workbooks: a zip of XML parts, some stored and some deflated
+ * with the fixed Huffman code (written here; nothing to link) ------------- */
+
+static uint32_t bit_rev(uint32_t v, int n) {
+    uint32_t r = 0;
+    int i;
+    for (i = 0; i < n; i++) r |= ((v >> i) & 1u) << (n - 1 - i);
+    return r;
+}
+
+static void deflate_fixed(bb* out, const uint8_t* d, size_t n) {
+    uint32_t acc = 0;
+    int bits = 0;
+    size_t i;
+#define PUT(v, l) do { acc |= (uint32_t)(v) << bits; bits += (l); while (bits >= 8) { b8(out, acc & 255); acc >>= 8; bits -= 8; } } while (0)
+    PUT(1, 1);   /* the last block */
+    PUT(1, 2);   /* fixed Huffman codes */
+    for (i = 0; i < n; i++) {
+        if (d[i] < 144) PUT(bit_rev(0x30u + d[i], 8), 8);
+        else PUT(bit_rev(0x190u + (d[i] - 144u), 9), 9);
+    }
+    PUT(0, 7);   /* end of block */
+    if (bits) b8(out, acc & 255);
+#undef PUT
+}
+
+typedef struct zw { bb b, cd; int n; } zw;
+
+static void zip_add(zw* z, const char* name, const char* text, int deflate) {
+    size_t n = strlen(text), nl = strlen(name);
+    uint32_t crc = ypak_crc32(0, text, n), lho = (uint32_t)z->b.n;
+    bb data;
+    memset(&data, 0, sizeof data);
+    if (deflate) deflate_fixed(&data, (const uint8_t*)text, n);
+    else bput(&data, text, n);
+    le32(&z->b, 0x04034B50u); le16(&z->b, 20); le16(&z->b, 0); le16(&z->b, deflate ? 8 : 0); le16(&z->b, 0); le16(&z->b, 0x21);
+    le32(&z->b, crc); le32(&z->b, (uint32_t)data.n); le32(&z->b, (uint32_t)n); le16(&z->b, (uint32_t)nl); le16(&z->b, 0);
+    bput(&z->b, name, nl);
+    bput(&z->b, data.d, data.n);
+    le32(&z->cd, 0x02014B50u); le16(&z->cd, 20); le16(&z->cd, 20); le16(&z->cd, 0); le16(&z->cd, deflate ? 8 : 0); le16(&z->cd, 0);
+    le16(&z->cd, 0x21); le32(&z->cd, crc); le32(&z->cd, (uint32_t)data.n); le32(&z->cd, (uint32_t)n); le16(&z->cd, (uint32_t)nl);
+    le16(&z->cd, 0); le16(&z->cd, 0); le16(&z->cd, 0); le16(&z->cd, 0); le32(&z->cd, 0); le32(&z->cd, lho);
+    bput(&z->cd, name, nl);
+    z->n++;
+    free(data.d);
+}
+
+#define XL_NS "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" " \
+              "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\""
+#define XL_REL "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
+
+/* A workbook with the sheets "Conditions" (sheet1, given) and "Sheet2". */
+static void make_xlsx(const char* path, const char* sheet1) {
+    zw z;
+    static const char* const strings =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
+        "<sst " XL_NS " count=\"9\" uniqueCount=\"9\">"
+        "<si><t>word</t></si><si><t>contrast</t></si><si><t>code</t></si><si><t>flag</t></si><si><t>cat</t></si>"
+        "<si><t>007</t></si><si><r><t>d&lt;o</t></r><r><rPr><b/></rPr><t>g</t></r><rPh sb=\"0\" eb=\"1\"><t>DOG</t></rPh></si>"
+        "<si><t>x_x0041_y</t></si><si><t>&#x3b1;&#946;</t></si></sst>";
+    static const char* const styles =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
+        "<styleSheet " XL_NS "><numFmts count=\"1\"><numFmt numFmtId=\"164\" formatCode=\"yyyy\\-mm\\-dd\"/></numFmts>"
+        "<cellXfs count=\"4\"><xf numFmtId=\"0\"/><xf numFmtId=\"164\" applyNumberFormat=\"1\"/><xf numFmtId=\"14\"/><xf numFmtId=\"2\"/></cellXfs></styleSheet>";
+    memset(&z, 0, sizeof z);
+    zip_add(&z, "[Content_Types].xml", "<?xml version=\"1.0\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"/>", 0);
+    zip_add(&z, "_rels/.rels", "<?xml version=\"1.0\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+                               "<Relationship Id=\"rId1\" Type=\"" XL_REL "officeDocument\" Target=\"xl/workbook.xml\"/></Relationships>", 0);
+    zip_add(&z, "xl/workbook.xml", "<?xml version=\"1.0\"?><workbook " XL_NS "><sheets><sheet name=\"Conditions\" sheetId=\"1\" r:id=\"rId1\"/>"
+                                   "<sheet name=\"Sheet2\" sheetId=\"2\" r:id=\"rId2\"/></sheets></workbook>", 1);
+    zip_add(&z, "xl/_rels/workbook.xml.rels", "<?xml version=\"1.0\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+                                              "<Relationship Id=\"rId1\" Type=\"" XL_REL "worksheet\" Target=\"worksheets/sheet1.xml\"/>"
+                                              "<Relationship Id=\"rId2\" Type=\"" XL_REL "worksheet\" Target=\"/xl/worksheets/sheet2.xml\"/>"
+                                              "<Relationship Id=\"rId3\" Type=\"" XL_REL "sharedStrings\" Target=\"sharedStrings.xml\"/>"
+                                              "<Relationship Id=\"rId4\" Type=\"" XL_REL "styles\" Target=\"./styles.xml\"/></Relationships>", 0);
+    zip_add(&z, "xl/sharedStrings.xml", strings, 1);
+    zip_add(&z, "xl/styles.xml", styles, 0);
+    zip_add(&z, "xl/worksheets/sheet1.xml", sheet1, 1);
+    zip_add(&z, "xl/worksheets/sheet2.xml", "<worksheet " XL_NS "><sheetData><row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>n</t></is></c></row>"
+                                            "<row r=\"2\"><c r=\"A2\"><v>3</v></c></row></sheetData></worksheet>", 1);
+    {
+        uint32_t cdo = (uint32_t)z.b.n;
+        bput(&z.b, z.cd.d, z.cd.n);
+        le32(&z.b, 0x06054B50u); le16(&z.b, 0); le16(&z.b, 0); le16(&z.b, (uint32_t)z.n); le16(&z.b, (uint32_t)z.n);
+        le32(&z.b, (uint32_t)z.cd.n); le32(&z.b, cdo); le16(&z.b, 0);
+    }
+    write_file(path, z.b.d, z.b.n);
+    free(z.b.d); free(z.cd.d);
+}
+
+/* The conditions sheet: shared, inline and formula strings, a boolean, a
+ * cached formula, an empty row, cells without references (row 5). */
+#define XL_SHEET_HEAD "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<worksheet " XL_NS "><dimension ref=\"A1:F5\"/><sheetData>" \
+    "<row r=\"1\"><c r=\"A1\" t=\"s\"><v>0</v></c><c r=\"B1\" t=\"s\"><v>1</v></c><c r=\"C1\" t=\"s\"><v>2</v></c><c r=\"D1\" t=\"s\"><v>3</v></c>" \
+    "<c r=\"E1\" t=\"inlineStr\"><is><t>note</t></is></c><c r=\"F1\" s=\"3\"/></row>"
+static const char* g_sheet1 = XL_SHEET_HEAD
+    "<row r=\"2\"><c r=\"A2\" t=\"s\"><v>4</v></c><c r=\"B2\"><v>0.25</v></c><c r=\"C2\" t=\"s\"><v>5</v></c><c r=\"D2\" t=\"b\"><v>1</v></c>"
+    "<c r=\"E2\" t=\"inlineStr\"><is><r><t>a, </t></r><r><rPr/><t xml:space=\"preserve\">\"b\"</t></r></is></c></row>"
+    "<row r=\"3\"><c r=\"A3\" t=\"s\"><v>6</v></c><c r=\"B3\" s=\"3\"><f>B2*4</f><v>1</v></c><c r=\"C3\" t=\"s\"><v>7</v></c><c r=\"D3\" t=\"b\"><v>0</v></c></row>"
+    "<row r=\"4\" spans=\"1:6\"><c r=\"B4\" s=\"3\"/></row>"
+    "<row r=\"5\"><c t=\"s\"><v>8</v></c><c><v>1.0000000000000001E-2</v></c><c t=\"s\"><v>5</v></c><c t=\"b\"><v>0</v></c>"
+    "<c t=\"str\"><f>\"x\"&amp;\"y\"</f><v>xy</v></c></row></sheetData></worksheet>";
+
+/* --- frame sequences (ysp/video.h's writer) ---------------------------------- */
+
+static int make_seq(const char* path, int32_t fmt, int32_t comp, int frames) {
+    static uint8_t px[16 * 8 * 4];
+    yvid_seq w;
+    yvid_seq_desc d;
+    int i, k;
+    memset(&d, 0, sizeof d);
+    d.path = path;
+    d.w = 16;
+    d.h = 8;
+    d.format = fmt;
+    d.compression = comp;
+    d.fps_num = 30;
+    d.fps_den = 1;
+    if (fmt == YVID_FMT_I420) {
+        d.matrix = YVID_MATRIX_BT709; d.range = YVID_RANGE_LIMITED; d.transfer = YVID_TRC_BT1886; d.primaries = YVID_PRIM_BT709;
+        d.siting = YVID_SITING_LEFT;
+    }
+    memset(&w, 0, sizeof w);
+    if (!yvid_seq_open(&w, &d)) return -1;
+    for (i = 0; i < frames; i++) {
+        const void* planes[3];
+        int32_t strides[3];
+        for (k = 0; k < (int)sizeof px; k++) px[k] = (uint8_t)(k * 7 + i * 31 + (k % 4 == 3 ? 255 : 0));
+        if (fmt == YVID_FMT_I420) {
+            planes[0] = px; planes[1] = px + 128; planes[2] = px + 160;
+            strides[0] = 16; strides[1] = 8; strides[2] = 8;
+        } else {
+            planes[0] = px; planes[1] = planes[2] = NULL;
+            strides[0] = 64; strides[1] = strides[2] = 0;
+        }
+        if (yvid_seq_write(&w, planes, strides, NULL) < 0) { yvid_seq_close(&w); return -1; }
+    }
+    if (yvid_seq_finish(&w) < 0) return -1;
+    yvid_seq_close(&w);
+    return 0;
 }
 
 static uint8_t g_rgba[33 * 21 * 4], g_gray[17 * 9], g_g16[11 * 7 * 2], g_c16[5 * 4 * 6];
@@ -270,6 +595,7 @@ static void make_sources(void) {
     bb f;
     uint32_t i;
     MKDIR(W); MKDIR(W "/fonts"); MKDIR(W "/audio"); MKDIR(W "/img"); MKDIR(W "/art"); MKDIR(W "/shaders"); MKDIR(W "/data");
+    MKDIR(W "/video"); MKDIR(W "/tables");
     memset(&f, 0, sizeof f);
     make_font(&f, -1);
     write_file(W "/fonts/box.ttf", f.d, f.n);
@@ -317,6 +643,21 @@ static void make_sources(void) {
     copy_in("shaders/plaid.glsl");
     copy_in("main.json");
     copy_in("readme.txt");
+    /* phase 3 sources (docs/pack.md 13) */
+    {
+        bb app;
+        make_xlsx(W "/tables/cond.xlsx", g_sheet1);
+        make_jpeg(W "/img/grayj.jpg", 20, 12, 1, 1, 0xC0, 8, 0, NULL);
+        memset(&app, 0, sizeof app);
+        app_exif(&app, 1);
+        app_icc(&app, 1, 2);   /* an sRGB profile in two chunks */
+        make_jpeg(W "/img/photo.jpg", 40, 24, 3, 2, 0xC0, 8, 0, &app);
+        free(app.d);
+        make_jpeg(W "/img/flat.jpg", 24, 16, 3, 1, 0xC2, 8, 1, NULL);
+        make_png(W "/img/icc.png", 33, 21, 6, 8, g_rgba, 2);
+        CHECK(make_seq(W "/video/bars.yspvseq", YVID_FMT_RGBA8, YVID_SEQ_QOI, 3) == 0, "frame sequence (QOI)");
+        CHECK(make_seq(W "/video/yuv.yspvseq", YVID_FMT_I420, YVID_SEQ_RAW, 2) == 0, "frame sequence (I420)");
+    }
 }
 
 #define DESC_HEAD \
@@ -350,7 +691,15 @@ static void make_sources(void) {
     "    {\"kind\": \"texture\", \"source\": \"img/gray16.png\", \"encoding\": \"linear\"},\n" \
     "    {\"kind\": \"texture\", \"source\": \"img/rgb16.png\", \"format\": \"rgba32f\", \"encoding\": \"linear\"},\n" \
     "    {\"kind\": \"file\", \"source\": \"readme.txt\"},\n" \
-    "    {\"kind\": \"file\", \"source\": \"data/big.bin\"}\n" \
+    "    {\"kind\": \"file\", \"source\": \"data/big.bin\"},\n" \
+    "    {\"kind\": \"table\", \"source\": \"tables/cond.xlsx\", \"types\": {\"contrast\": \"number\"}},\n" \
+    "    {\"kind\": \"table\", \"name\": \"tables/sheet2.pstb\", \"source\": \"tables/cond.xlsx\", \"sheet\": \"Sheet2\"},\n" \
+    "    {\"kind\": \"texture\", \"source\": \"img/grayj.jpg\"},\n" \
+    "    {\"kind\": \"texture\", \"source\": \"img/photo.jpg\", \"primaries\": \"bt709\"},\n" \
+    "    {\"kind\": \"texture\", \"source\": \"img/flat.jpg\", \"primaries\": \"device\", \"compression\": \"qoi\"},\n" \
+    "    {\"kind\": \"texture\", \"source\": \"img/icc.png\", \"primaries\": \"device\"},\n" \
+    "    {\"kind\": \"frameseq\", \"source\": \"video/bars.yspvseq\"},\n" \
+    "    {\"kind\": \"frameseq\", \"source\": \"video/yuv.yspvseq\"}\n" \
     "  ]\n" \
     "}\n"
 
@@ -358,10 +707,10 @@ static void make_sources(void) {
 static const char* g_desc_core = DESC_HEAD DESC_TAIL;
 #ifdef YPT_NO_LAYOUT
 static const char* g_desc = DESC_HEAD DESC_TAIL;
-#define N_ENTRIES 21u
+#define N_ENTRIES 29u
 #else
 static const char* g_desc = DESC_HEAD DESC_RUNS DESC_TAIL;
-#define N_ENTRIES 22u
+#define N_ENTRIES 30u
 #endif
 
 static int build_text(const char* text, const char* out, char* err, size_t cap) {
@@ -516,6 +865,79 @@ static void check_entries(const char* path) {
         CHECK(src && n == (size_t)e.size && memcmp(src, x, n) == 0 && e.chunk_first != YPAK_NO_CHUNK, "big file");
         free(src);
     }
+    /* phase 3: an .xlsx sheet as a table */
+    if ((x = entry(&p, "tables/cond.pstb", &e)) != NULL) {
+        ytb_table t;
+        int ok = ytb_open_view(&t, x, (size_t)e.size);
+        int cw = ytb_col(&t, "word"), cc = ytb_col(&t, "contrast"), cd = ytb_col(&t, "code"), cf = ytb_col(&t, "flag"), cn = ytb_col(&t, "note");
+        CHECK(ok && t.n_rows == 3 && t.n_cols == 5, "xlsx table: %s (%u rows)", ytb_error(&t), ok ? t.n_rows : 0);
+        if (ok && t.n_rows == 3) {
+            CHECK(!strcmp(ytb_text(&t, 0, cw), "cat") && !strcmp(ytb_text(&t, 1, cw), "d<og") && !strcmp(ytb_text(&t, 2, cw), "\xce\xb1\xce\xb2"),
+                  "xlsx shared strings: rich text, phonetic text left out, character references");
+            CHECK(ytb_num(&t, 0, cc) == 0.25 && ytb_num(&t, 1, cc) == 1.0 && ytb_num(&t, 2, cc) == 0.01, "xlsx numbers and a cached formula");
+            CHECK(ytb_col_type(&t, cd) == YTB_STRING && !strcmp(ytb_text(&t, 0, cd), "007") && !strcmp(ytb_text(&t, 1, cd), "xAy"),
+                  "xlsx text cells stay text ('007'), _xHHHH_ escapes");
+            CHECK(!strcmp(ytb_text(&t, 0, cf), "TRUE") && !strcmp(ytb_text(&t, 1, cf), "FALSE"), "xlsx booleans");
+            CHECK(!strcmp(ytb_text(&t, 0, cn), "a, \"b\"") && !strcmp(ytb_text(&t, 1, cn), "") && !strcmp(ytb_text(&t, 2, cn), "xy"),
+                  "xlsx inline rich text with a comma and quotes, a formula string");
+        }
+    }
+    if ((x = entry(&p, "tables/sheet2.pstb", &e)) != NULL) {
+        ytb_table t;
+        CHECK(ytb_open_view(&t, x, (size_t)e.size) && t.n_rows == 1 && ytb_int(&t, 0, ytb_col(&t, "n")) == 3, "xlsx sheet by name");
+    }
+    /* phase 3: JPEG textures */
+    if ((x = entry(&p, "img/grayj.ysptex", &e)) != NULL) {
+        ypak_texture t;
+        int bad = 0, xx, yy;
+        CHECK(ypak_texture_view(x, e.size, &t, err, sizeof err) == 0 && t.format == YPAK_TEX_R8 && t.w == 20 && t.h == 12 && enc_is(t.enc, 1, 2, 3, 1),
+              "gray JPEG texture: %s", err);
+        for (yy = 0; yy < 12 && t.data; yy++)
+            for (xx = 0; xx < 20; xx++) bad += t.data[yy * 20 + xx] != jpeg_val(0, xx / 8, yy / 8, 0);
+        CHECK(bad == 0, "gray JPEG: every texel is its block's value (%d differ)", bad);
+    }
+    if ((x = entry(&p, "img/photo.ysptex", &e)) != NULL) {
+        ypak_texture t;
+        CHECK(ypak_texture_view(x, e.size, &t, err, sizeof err) == 0 && t.format == YPAK_TEX_RGBA8 && t.w == 40 && t.h == 24 &&
+              enc_is(t.enc, 1, 2, 3, 2) && t.data[3] == 255, "4:2:0 JPEG with EXIF and an sRGB profile: %s", err);
+    }
+    if ((x = entry(&p, "img/flat.ysptex", &e)) != NULL) {
+        ypak_texture t;
+        static uint8_t dec[24 * 16 * 4];
+        int bad = 0, k;
+        CHECK(ypak_texture_view(x, e.size, &t, err, sizeof err) == 0 && t.compression == YPAK_TEX_QOI && ypak_qoi_decode(&t, dec, sizeof dec, err, sizeof err) == 0,
+              "progressive JPEG as QOI: %s", err);
+        for (k = 0; k < 24 * 16; k++) {
+            int v = jpeg_val(0, (k % 24) / 8, (k / 24) / 8, 1);
+            bad += dec[4 * k] != v || dec[4 * k + 1] != v || dec[4 * k + 2] != v || dec[4 * k + 3] != 255;
+        }
+        CHECK(bad == 0, "progressive JPEG without chroma: R = G = B = Y (%d texels differ)", bad);
+    }
+    if ((x = entry(&p, "img/icc.ysptex", &e)) != NULL) {
+        ypak_texture t;
+        CHECK(ypak_texture_view(x, e.size, &t, err, sizeof err) == 0 && memcmp(t.data, g_rgba, sizeof g_rgba) == 0, "PNG with an sRGB profile");
+    }
+    /* phase 3: frame sequences, unchanged, streamed */
+    {
+        static const char* const seqs[2] = { "video/bars.yspvseq", "video/yuv.yspvseq" };
+        int k;
+        for (k = 0; k < 2; k++)
+            if ((x = entry(&p, seqs[k], &e)) != NULL) {
+                char src[256];
+                size_t n;
+                uint8_t* s;
+                yvid_desc vd;
+                yvid_info vi;
+                snprintf(src, sizeof src, W "/%s", seqs[k]);
+                s = read_all(src, &n);
+                CHECK(e.kind == YPAK_KIND_FRAMESEQ && (e.flags & YPAK_F_STREAM) && s && n == (size_t)e.size && memcmp(s, x, n) == 0, "%s unchanged", seqs[k]);
+                memset(&vd, 0, sizeof vd);
+                vd.data = x;
+                vd.size = (size_t)e.size;
+                CHECK(yvid_probe(&vd, &vi, err, sizeof err) == 0 && vi.frames == (k ? 2 : 3) && vi.w == 16, "%s probes: %s", seqs[k], err);
+                free(s);
+            }
+    }
     ypak_close(&p);
 }
 
@@ -619,7 +1041,113 @@ static void test_refusals(void) {
     expect_refusal("shader mode", "{\"kind\": \"shader\", \"source\": \"shaders/plaid.glsl\", \"mode\": \"blend\"}", "mode must be", 0);
     expect_refusal("csv", "{\"kind\": \"table\", \"source\": \"readme.txt\", \"types\": {\"A\": \"integer\"}}", "", 0);
     expect_refusal("curveset from", "{\"kind\": \"curveset\", \"from\": \"readme.txt\"}, {\"kind\": \"file\", \"source\": \"readme.txt\"}", "not a font entry", 0);
-    expect_refusal("kind", "{\"kind\": \"video\", \"source\": \"readme.txt\"}", "not one this tool builds", 0);
+    expect_refusal("kind", "{\"kind\": \"glyphs\", \"source\": \"readme.txt\"}", "not one this tool builds", 0);
+    expect_refusal("alpha", "{\"kind\": \"alpha\", \"name\": \"a.yspalpha\"}", "alpha is not built yet", 0);
+    expect_refusal("video index", "{\"kind\": \"video_index\", \"name\": \"a.yspvi\"}", "made with its video", 0);
+    /* phase 3 refusals: workbooks */
+    {
+        static const char* const bad_cells[] = {
+            "<row r=\"2\"><c r=\"A2\" t=\"s\"><v>4</v></c><c r=\"B2\" s=\"1\"><v>45000</v></c></row>",
+            "<row r=\"2\"><c r=\"A2\" t=\"s\"><v>4</v></c><c r=\"B2\" s=\"2\"><v>45000</v></c></row>",
+            "<row r=\"2\"><c r=\"A2\" t=\"s\"><v>4</v></c><c r=\"B2\"><f>1+1</f></c></row>",
+            "<row r=\"2\"><c r=\"A2\" t=\"s\"><v>4</v></c><c r=\"B2\" t=\"e\"><v>#DIV/0!</v></c></row>",
+            "<row r=\"2\"><c r=\"A2\" t=\"s\"><v>4</v></c><c r=\"G2\"><v>1</v></c></row>",
+            "<row r=\"2\"><c r=\"A2\" t=\"s\"><v>99</v></c></row>",
+            "<row r=\"3\"><c r=\"A3\" t=\"s\"><v>4</v></c></row><row r=\"2\"><c r=\"A2\" t=\"s\"><v>4</v></c></row>",
+        };
+        static const char* const says[] = { "is a date or a time", "is a date or a time", "no saved value", "holds the error #DIV/0!",
+                                            "cell G2 has a value, but its column has no name", "shared string '99'", "out of order" };
+        int k;
+        char res[256];
+        for (k = 0; k < 7; k++) {
+            char sheet[4096], path[256];
+            snprintf(sheet, sizeof sheet, "%s%s</sheetData></worksheet>", XL_SHEET_HEAD, bad_cells[k]);
+            snprintf(path, sizeof path, W "/tables/bad%d.xlsx", k);
+            make_xlsx(path, sheet);
+            snprintf(res, sizeof res, "{\"kind\": \"table\", \"name\": \"t.pstb\", \"source\": \"tables/bad%d.xlsx\"}", k);
+            expect_refusal(says[k], res, says[k], 0);
+        }
+        {
+            static const uint8_t ole[16] = { 0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1 };
+            write_file(W "/tables/ole.xlsx", ole, sizeof ole);
+        }
+        expect_refusal("encrypted workbook", "{\"kind\": \"table\", \"name\": \"t.pstb\", \"source\": \"tables/ole.xlsx\"}", "password-protected", 0);
+        expect_refusal("not a zip", "{\"kind\": \"table\", \"name\": \"t.pstb\", \"source\": \"readme.xlsx\"}", "cannot open", 0);
+        write_file(W "/tables/text.xlsx", "hello", 5);
+        expect_refusal("not a zip", "{\"kind\": \"table\", \"name\": \"t.pstb\", \"source\": \"tables/text.xlsx\"}", "not a zip", 0);
+        expect_refusal("no such sheet", "{\"kind\": \"table\", \"source\": \"tables/cond.xlsx\", \"sheet\": \"Nope\"}",
+                       "no worksheet named 'Nope'; the workbook has 'Conditions', 'Sheet2'", 0);
+        expect_refusal("delimiter on a workbook", "{\"kind\": \"table\", \"source\": \"tables/cond.xlsx\", \"delimiter\": \";\"}", "not a workbook", 0);
+        expect_refusal("sheet on a CSV", "{\"kind\": \"table\", \"source\": \"conditions.csv\", \"sheet\": \"A\"}", "for .xlsx workbooks", 0);
+        /* a damaged deflate stream or CRC */
+        {
+            size_t n;
+            uint8_t* d = read_all(W "/tables/cond.xlsx", &n);
+            if (d) {
+                size_t at;
+                /* the sheet's data: the last local entry before Sheet2's; flip a byte inside it */
+                for (at = 0; at + 24 < n && memcmp(d + at, "xl/worksheets/sheet1.xml", 24) != 0; at++) {}
+                CHECK(at + 24 < n, "find the sheet in the zip");
+                d[at + 24 + 40] ^= 0x10;
+                write_file(W "/tables/damaged.xlsx", d, n);
+                free(d);
+                expect_refusal("damaged sheet", "{\"kind\": \"table\", \"name\": \"t.pstb\", \"source\": \"tables/damaged.xlsx\"}", "sheet1.xml", 0);
+            }
+        }
+    }
+    /* phase 3 refusals: images */
+    {
+        bb app;
+        memset(&app, 0, sizeof app);
+        app_exif(&app, 6);
+        make_jpeg(W "/img/turned.jpg", 16, 16, 1, 1, 0xC0, 8, 0, &app);
+        app.n = 0;
+        app_icc(&app, 0, 1);
+        make_jpeg(W "/img/panel.jpg", 16, 16, 3, 1, 0xC0, 8, 0, &app);
+        free(app.d);
+        make_jpeg(W "/img/cmyk.jpg", 16, 16, 4, 1, 0xC0, 8, 0, NULL);
+        make_jpeg(W "/img/arith.jpg", 16, 16, 1, 1, 0xC9, 8, 0, NULL);
+        make_jpeg(W "/img/twelve.jpg", 16, 16, 1, 1, 0xC1, 12, 0, NULL);
+        make_png(W "/img/panel.png", 17, 9, 0, 8, g_gray, 3);
+        expect_refusal("exif orientation", "{\"kind\": \"texture\", \"source\": \"img/turned.jpg\"}", "EXIF orientation is 6", 0);
+        expect_refusal("jpeg icc", "{\"kind\": \"texture\", \"source\": \"img/panel.jpg\", \"primaries\": \"device\"}", "primaries are not sRGB's", 0);
+        expect_refusal("png icc", "{\"kind\": \"texture\", \"source\": \"img/panel.png\"}", "primaries are not sRGB's", 0);
+        expect_refusal("cmyk", "{\"kind\": \"texture\", \"source\": \"img/cmyk.jpg\"}", "CMYK", 0);
+        expect_refusal("arithmetic", "{\"kind\": \"texture\", \"source\": \"img/arith.jpg\"}", "arithmetic coding", 0);
+        expect_refusal("12-bit", "{\"kind\": \"texture\", \"source\": \"img/twelve.jpg\"}", "12-bit samples", 0);
+        expect_refusal("jpeg r8 from color", "{\"kind\": \"texture\", \"source\": \"img/photo.jpg\", \"format\": \"r8\"}", "would drop or round", 0);
+        expect_refusal("jpeg rg8", "{\"kind\": \"texture\", \"source\": \"img/grayj.jpg\", \"format\": \"rg8\"}", "does not hold a JPEG's values", 0);
+        expect_refusal("jpeg primaries", "{\"kind\": \"texture\", \"source\": \"img/photo.jpg\"}", "need \"primaries\"", 0);
+    }
+    /* phase 3 refusals: video and frame sequences */
+    {
+        size_t n;
+        uint8_t* d = read_all(W "/video/yuv.yspvseq", &n);
+        if (d) {
+            d[4096 + 64 + 5] ^= 0x01;   /* frame 0's texels */
+            write_file(W "/video/damaged.yspvseq", d, n);
+            d[4096 + 64 + 5] ^= 0x01;
+            write_file(W "/video/short.yspvseq", d, n - 24);
+            free(d);
+        }
+        expect_refusal("damaged frame", "{\"kind\": \"frameseq\", \"source\": \"video/damaged.yspvseq\"}", "frame 0 does not match its hash", 0);
+        expect_refusal("short sequence", "{\"kind\": \"frameseq\", \"source\": \"video/short.yspvseq\"}", "the index does not end the file", 0);
+        expect_refusal("not a sequence", "{\"kind\": \"frameseq\", \"source\": \"readme.txt\"}", "not a ysp/video.h frame sequence", 0);
+        expect_refusal("video name", "{\"kind\": \"video\", \"source\": \"readme.txt\"}", "ends in .mp4 or .mpg", 0);
+        expect_refusal("video bytes", "{\"kind\": \"video\", \"name\": \"v.mp4\", \"source\": \"readme.txt\"}", "neither MP4 nor MPEG-1", 0);
+        expect_refusal("video color", "{\"kind\": \"video\", \"name\": \"v.mp4\", \"source\": \"readme.txt\", \"color\": {\"matrix\": \"bt999\"}}",
+                       "color matrix 'bt999'", 0);
+        expect_refusal("ffmpeg_input alone", "{\"kind\": \"video\", \"name\": \"v.mp4\", \"source\": \"readme.txt\", \"ffmpeg_input\": [\"-f\"]}",
+                       "'ffmpeg_input' needs 'ffmpeg'", 0);
+        {
+            static const char t[] = "{\"format\": \"ysp-pack-source\", \"version\": 1, \"resources\": [{\"kind\": \"video\", \"name\": \"v.mp4\", "
+                                    "\"source\": \"readme.txt\", \"ffmpeg\": [\"-c:v\", \"libx264\"]}]}";
+            ypt_options o;
+            memset(&o, 0, sizeof o);
+            o.ffmpeg = "ypak-test-no-such-ffmpeg";
+            CHECK(ypt_build_text(t, strlen(t), W, W "/refused.ysppak", &o, err, sizeof err) < 0 && strstr(err, "cannot run"), "no ffmpeg: %s", err);
+        }
+    }
     /* open question 7's default: a restricted font is accepted in a private pack */
     {
         static const char t[] = "{\"format\": \"ysp-pack-source\", \"version\": 1, \"private\": true, \"resources\": "
@@ -707,6 +1235,99 @@ static int names_layout(const char* path) {
     }
     ypak_close(&p);
     return r;
+}
+
+/* VIDEO and VIDEO_INDEX through the ffmpeg step, when ffmpeg runs here: a
+ * raw gray clip made in code becomes MPEG-1 (pl_mpeg indexes it on every
+ * platform) and, on Windows, H.264 in MP4 (Media Foundation indexes it).
+ * The build is repeated (ffmpeg's bytes must not change), the pack is
+ * rebuilt with this ffmpeg (the step runs again) and with no ffmpeg (the
+ * recorded output is used), both identical. Skipped without ffmpeg; CI
+ * runners may not have it. */
+static void test_video(void) {
+    static const char t[] =
+        "{\"format\": \"ysp-pack-source\", \"version\": 1, \"resources\": [\n"
+        "  {\"kind\": \"video\", \"name\": \"video/clip.mpg\", \"source\": \"video/raw.gray\",\n"
+        "   \"ffmpeg_input\": [\"-f\", \"rawvideo\", \"-pix_fmt\", \"gray\", \"-s\", \"64x48\", \"-framerate\", \"30\"],\n"
+        "   \"ffmpeg\": [\"-c:v\", \"mpeg1video\", \"-q:v\", \"3\", \"-g\", \"10\", \"-bf\", \"0\", \"-pix_fmt\", \"yuv420p\", \"-f\", \"mpeg\"]}"
+#if defined(_WIN32)
+        ",\n  {\"kind\": \"video\", \"name\": \"video/clip.mp4\", \"source\": \"video/raw.gray\",\n"
+        "   \"ffmpeg_input\": [\"-f\", \"rawvideo\", \"-pix_fmt\", \"gray\", \"-s\", \"64x48\", \"-framerate\", \"30\"],\n"
+        "   \"ffmpeg\": [\"-c:v\", \"libx264\", \"-preset\", \"fast\", \"-crf\", \"20\", \"-pix_fmt\", \"yuv420p\", \"-bf\", \"0\", \"-g\", \"10\",\n"
+        "               \"-keyint_min\", \"10\", \"-sc_threshold\", \"0\", \"-x264-params\",\n"
+        "               \"bframes=0:scenecut=0:open-gop=0:threads=1:colorprim=bt709:transfer=bt709:colormatrix=bt709:range=tv:chromaloc=0\",\n"
+        "               \"-video_track_timescale\", \"30\", \"-an\"]}"
+#endif
+        "\n]}\n";
+    static uint8_t raw[64 * 48 * 30];
+    char err[1024];
+    int k, rc;
+    FILE* rep;
+#if defined(_WIN32)
+    if (system("ffmpeg -version > NUL 2>&1") != 0) { printf("tool_test: video through ffmpeg skipped (no ffmpeg on the PATH)\n"); return; }
+#else
+    if (system("ffmpeg -version > /dev/null 2>&1") != 0) { printf("tool_test: video through ffmpeg skipped (no ffmpeg on the PATH)\n"); return; }
+#endif
+    for (k = 0; k < (int)sizeof raw; k++) raw[k] = (uint8_t)((k % 64) * 3 + ((k / 64) % 48) * 5 + (k / (64 * 48)) * 7);
+    write_file(W "/video/raw.gray", raw, sizeof raw);
+    rc = build_text(t, W "/video.ysppak", err, sizeof err);
+    CHECK(rc == 0, "video through ffmpeg: %s", err);
+    if (rc) return;
+    {
+        ypak_pack p;
+        ypak_desc d;
+        static const char* const names[2] = { "video/clip.mpg", "video/clip.mp4" };
+        memset(&d, 0, sizeof d);
+        d.path = W "/video.ysppak";
+        d.verify = YPAK_VERIFY_OPEN;
+        if (ypak_open(&p, &d)) {
+            for (k = 0; k < 2; k++) {
+                ypak_entry e, ie;
+                char in[64];
+                yvid_desc vd;
+                yvid_info vi;
+                const void* v;
+                const void* iv;
+#if !defined(_WIN32)
+                if (k == 1) break;
+#endif
+                snprintf(in, sizeof in, "%s.yspvi", names[k]);
+                v = entry(&p, names[k], &e);
+                iv = entry(&p, in, &ie);
+                CHECK(v && iv && e.kind == YPAK_KIND_VIDEO && (e.flags & YPAK_F_STREAM) && ie.kind == YPAK_KIND_VIDEO_INDEX, "%s and its index", names[k]);
+                if (!v || !iv) continue;
+                memset(&vd, 0, sizeof vd);
+                vd.data = v;
+                vd.size = (size_t)e.size;
+                vd.index = iv;
+                vd.index_size = (size_t)ie.size;
+                CHECK(yvid_probe(&vd, &vi, err, sizeof err) == 0 && vi.frames == 30 && vi.w == 64 && vi.h == 48 && vi.fps_num == 30 * vi.fps_den,
+                      "%s: the index describes 30 frames of 64 x 48 at 30 fps: %s", names[k], err);
+            }
+            ypak_close(&p);
+        } else {
+            CHECK(0, "video pack opens: %s", ypak_error(&p));
+        }
+    }
+    CHECK(build_text(t, W "/video_again.ysppak", err, sizeof err) == 0 && same_file(W "/video.ysppak", W "/video_again.ysppak"),
+          "video through ffmpeg twice: same bytes (%s)", err);
+    CHECK(ypt_verify(W "/video.ysppak", NULL, err, sizeof err) == 0, "video pack verifies: %s", err);
+    rc = ypt_rebuild(W "/video.ysppak", W, W "/video_rebuilt.ysppak", NULL, err, sizeof err);
+    CHECK(rc == 0 && same_file(W "/video.ysppak", W "/video_rebuilt.ysppak"), "video rebuild with this ffmpeg: %s", err);
+    {
+        ypt_options o;
+        size_t n;
+        uint8_t* text;
+        memset(&o, 0, sizeof o);
+        o.ffmpeg = "ypak-test-no-such-ffmpeg";
+        rep = fopen(W "/video_rebuild.txt", "w");
+        rc = ypt_rebuild_ex(W "/video.ysppak", W, W "/video_rebuilt2.ysppak", &o, rep, err, sizeof err);
+        if (rep) fclose(rep);
+        text = read_all(W "/video_rebuild.txt", &n);
+        CHECK(rc == 0 && same_file(W "/video.ysppak", W "/video_rebuilt2.ysppak") && text && strstr((const char*)text, "recorded output is used"),
+              "video rebuild without ffmpeg takes the recorded output: %s", err);
+        free(text);
+    }
 }
 
 /* The pack both builds make: the core and the full tool must give the same
@@ -797,7 +1418,7 @@ int main(void) {
             CHECK(rep && ypt_list(W "/corpus.ysppak", rep, err, sizeof err) == 0 && ypt_info(W "/corpus.ysppak", rep, err, sizeof err) == 0, "list, info");
             if (rep) fclose(rep);
             x = read_all(W "/list.txt", &n);
-            CHECK(x && strstr((const char*)x, N_ENTRIES == 22u ? "glyphruns" : "curveset") && strstr((const char*)x, "experiment: experiment/main.json") &&
+            CHECK(x && strstr((const char*)x, N_ENTRIES == 30u ? "glyphruns" : "curveset") && strstr((const char*)x, "experiment: experiment/main.json") &&
                   strstr((const char*)x, "audio: 48000 Hz"), "list and info text");
             free(x);
         }
@@ -873,7 +1494,7 @@ int main(void) {
                                     name, got, hx, pin_path);
                     }
                     if (pin) fclose(pin);
-                    CHECK(lines == (int)p.n - 1 - (N_ENTRIES == 22u ? 0 : 1) && same == lines, "corpus pin: %d of %d entries as pinned (%u in the pack besides the manifest)",
+                    CHECK(lines == (int)p.n - 1 - (N_ENTRIES == 30u ? 0 : 1) && same == lines, "corpus pin: %d of %d entries as pinned (%u in the pack besides the manifest)",
                           same, lines, p.n - 1);
                 }
                 ypak_close(&p);
@@ -882,6 +1503,7 @@ int main(void) {
         }
     }
     test_core_pack();
+    test_video();
     test_refusals();
     printf("tool_test: %d checks, %d failed\n", g_checks, g_fail);
     return g_fail ? 1 : 0;
