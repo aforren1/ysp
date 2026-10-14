@@ -2697,10 +2697,14 @@ places. It moves the clock under them:
 - **Video decodes inline** (ysp/video.h v0.4.0). A decode thread on real
   time could not keep up with a frame loop that never waits: `video_play
   --sim` showed 6 frames and dropped 54, a different count each run.
-- **Real cost stays real.** The instrumentation zones read the real
-  counter, so `screen_flipstats --sim` still reports the header's CPU
-  cost per frame. The examples that print a build or draw time
-  (`gfx_layout`, `gfx_text`) print real milliseconds.
+- **Costs stay real.** A record's phases (DRAW, UPLOAD, SWAP) are costs:
+  they read `yrt_real_ns()`, the real counter on either clock, through
+  the seam `YSCR__COST_NOW()`. Through `yrt_now_ns()` they read 0 for
+  DRAW and the 16.7 ms jump for SWAP. The instrumentation zones are real
+  too, so `screen_flipstats --sim` reports the header's CPU cost and the
+  draw phase in real microseconds. Times that feed a plan or a record
+  (onsets, the prediction, the flip's call and return) stay on
+  `yrt_now_ns()`.
 
 The examples call `yrt_virtual_begin(0)` right after they parse `--sim`.
 The checks that allowed whole frames are exact again: an onset is the
@@ -2716,15 +2720,18 @@ Xe, 16 logical CPUs): the CI list of 49 `--sim` and `--null` runs.
 
 | Build | Runs | Exit codes as CI expects | Output of the virtual-clock runs |
 |---|---|---|---|
-| MSVC 19.44 Release | 3 idle, 2 beside 24 CPU-bound processes (`burn.exe`) | 49 of 49 in each | data files and standard output identical in all 5 |
-| MinGW-w64 gcc 16.1 Release | 1 idle | 49 of 49 | data files identical to MSVC's (paths aside) |
-| WSL2 Ubuntu 22.04, gcc 11.4, SDL 3.4.0 console | 2 idle | 49 of 49 in each | identical between the 2 (paths aside); the data match MSVC's but for platform facts (the clock step, the fonts found) |
+| MSVC 19.44 Release | 2 idle, 1 beside 24 CPU-bound processes (`burn.exe`) | 49 of 49 in each | data files and standard output identical in all 3 |
+| MinGW-w64 gcc 16.1 Release | 1 idle | 49 of 49 | data files and standard output the same as MSVC's (paths aside) |
+| WSL2 Ubuntu 22.04, gcc 11.4, SDL 3.4.0 console | 2 idle | 49 of 49 in each | identical between the 2 (paths aside) |
 
-The lines that differ between runs are the real clock's: the header cost
-lines of `screen_flipstats`, and the six examples that stay on the real
-clock (`gfx_load`, `gfx_filtered_noise`, `gfx_capture`, `gfx_text`,
-`gfx_layout`, `gfx_gallery`). The MSVC list took 19 s idle and 94 to 99 s
-under the load.
+The lines that differ between runs print a real cost (the phases and
+header costs of `screen_flipstats`, the build, draw, decode and upload
+times of the gfx and video examples, the battery level), and the frames
+of `gfx_capture`, which stays on the real clock: its writer thread is
+real, and on the virtual clock the frame loop outran it (6 of 21 chosen
+frames read, against 21 of 21 on the real clock). Every other run but
+`trials_save_rows` (it reads no clock) is on the virtual clock. The MSVC
+list took 25 s idle and 29 s under the load.
 
 Tests: `test_sim_virtual` in `tests/adapt/screen_test.c` runs 120 frames
 of SIM on the virtual clock through the header's own clock calls: every

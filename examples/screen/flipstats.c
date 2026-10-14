@@ -288,8 +288,8 @@ static uint32_t rng_state = 12345u;
 static uint32_t rnd(void) { rng_state = rng_state * 1664525u + 1013904223u; return rng_state >> 8; }
 
 static void busy_ms(double ms) {
-    int64_t end = yrt_now_ns() + (int64_t)(ms * 1e6);
-    while (yrt_now_ns() < end) { }
+    int64_t end = yrt_real_ns() + (int64_t)(ms * 1e6);   /* CPU time: real on either clock */
+    while (yrt_real_ns() < end) { }
 }
 
 #if defined(_WIN32)

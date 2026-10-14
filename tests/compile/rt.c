@@ -119,6 +119,7 @@ typedef struct clock_api {
     int (*virtual_begin)(int64_t);
     void (*virtual_end)(void);
     bool (*is_virtual)(void);
+    int64_t (*real_ns)(void);
     int (*virtual_timer)(yrt_virtual_fn, void*, int64_t);
     void (*virtual_cancel)(int);
 } clock_api;
@@ -128,7 +129,7 @@ static const clock_api g_clock_api = {
     yrt_sched_normalize, yrt_thread_set_timer_slack, yrt_thread_pin,
     yrt_process_lock_memory, yrt_timer_resolution_begin,
     yrt_fit_open, yrt_fit_close, yrt_fit_error,
-    yrt_virtual_begin, yrt_virtual_end, yrt_is_virtual, yrt_virtual_timer, yrt_virtual_cancel
+    yrt_virtual_begin, yrt_virtual_end, yrt_is_virtual, yrt_real_ns, yrt_virtual_timer, yrt_virtual_cancel
 };
 
 /* A virtual timer that ends after one call. */
@@ -170,7 +171,7 @@ static int clock_check(void) {
     {   /* the virtual clock: a wait jumps it, a timer runs at its time */
         int64_t seen = 0;
         if (g_clock_api.is_virtual() || g_clock_api.virtual_begin(0) != 0) rc = 1;
-        if (g_clock_api.now_ns() != YRT_VIRTUAL_T0_NS) rc = 1;
+        if (g_clock_api.now_ns() != YRT_VIRTUAL_T0_NS || g_clock_api.real_ns() <= 0) rc = 1;
         if (g_clock_api.virtual_timer(one_tick, &seen, YRT_VIRTUAL_T0_NS + YRT_MS(5)) < 0) rc = 1;
         if (g_clock_api.sleep_until(YRT_VIRTUAL_T0_NS + YRT_MS(10), 0) != 0) rc = 1;
         if (seen != YRT_VIRTUAL_T0_NS + YRT_MS(5) || g_clock_api.now_ns() != YRT_VIRTUAL_T0_NS + YRT_MS(10)) rc = 1;

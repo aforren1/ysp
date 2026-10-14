@@ -187,6 +187,13 @@
  *   its results can still differ between runs; make it inline, or a
  *   virtual timer. yrt_virtual_end() returns to the real clock.
  *
+ *   COSTS. Between two waits the virtual clock stands still, so a cost
+ *   read with yrt_now_ns() is 0, and one across a wait is the jump. A
+ *   time that feeds a plan or a record reads yrt_now_ns(); a cost (a draw,
+ *   a decode, a build, a CPU phase) reads yrt_real_ns(), the real counter
+ *   on either clock. The headers do so: ysp/screen.h's phases, ysp/gfx.h's
+ *   program and glyph build times, ysp/video.h's decode and upload times.
+ *
  *   Cost on the real clock: yrt_now_ns() and the waits test one flag
  *   first. See docs/rt.md, "Virtual clock", for the measurement.
  *
@@ -1046,7 +1053,8 @@
  *   ---------------------------------------------------------------------
  *   v0.9.0 - VIRTUAL CLOCK: yrt_virtual_begin(), yrt_virtual_end(),
  *          yrt_is_virtual(), yrt_virtual_timer(), yrt_virtual_cancel(),
- *          YRT_VIRTUAL_T0_NS, YRT_VIRTUAL_TIMERS and YRT_ERR_STATE. The
+ *          YRT_VIRTUAL_T0_NS, YRT_VIRTUAL_TIMERS and YRT_ERR_STATE;
+ *          yrt_real_ns(), the real clock for costs on either clock. The
  *          examples' --sim runs compared against the real clock and failed
  *          on loaded CI runners (a dropped frame moved an onset); on the
  *          virtual clock they give the same output on every run. The real
@@ -1571,6 +1579,12 @@ YRT_API void yrt_virtual_end(void);
 
 /* True while the clock is virtual. */
 YRT_API bool yrt_is_virtual(void);
+
+/* The real clock, also while the clock is virtual: yrt_now_ns()'s counter
+ * before VIRTUAL CLOCK. For a cost (how long a draw, a decode or a build
+ * took), never for a time that feeds a plan or a record: those read
+ * yrt_now_ns(). On the real clock the two return the same counter. */
+YRT_API int64_t yrt_real_ns(void);
 
 /* Call fn(ctx, t) on the driver thread when the virtual clock reaches
  * at_ns (at once, at the next wait of the driver, when at_ns is already
@@ -3747,6 +3761,8 @@ void yrt_virtual_end(void) {
 }
 
 bool yrt_is_virtual(void) { return yrt__rload(&yrt__v_on) != 0; }
+
+int64_t yrt_real_ns(void) { return (int64_t)yrt__now(); }
 
 int yrt_virtual_timer(yrt_virtual_fn fn, void* ctx, int64_t at_ns) {
     int i;

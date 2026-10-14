@@ -368,3 +368,11 @@ test = "fit"
 why = "A wait inside a timer would run the same timer again, at the same time, without end."
 find = '''    for (; !yrt__v_busy;) {'''
 replace = '''    for (;;) {'''
+
+[[mutant]]
+id = "vc-13"
+name = "the real read follows the virtual clock"
+test = "fit"
+why = "A cost read on the virtual clock must be real: through yrt_now_ns() a draw takes 0 and a wait the jump."
+find = '''int64_t yrt_real_ns(void) { return (int64_t)yrt__now(); }'''
+replace = '''int64_t yrt_real_ns(void) { return yrt__clock(); }'''

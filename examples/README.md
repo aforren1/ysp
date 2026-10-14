@@ -19,10 +19,10 @@ needs nothing; CI runs the commands marked "CI". A `--sim` run calls
 simulated display, the null audio device and the synthetic input then
 run on a virtual clock, so the run gives the same records and output on
 any host, loaded or not, and takes the CPU time of its frames, not their
-display time. Its checks are exact: no frame slips. The examples that
-measure a real cost or a real thread (`gfx_load`, `gfx_filtered_noise`,
-`gfx_capture`, `gfx_text`, `gfx_layout`, `gfx_gallery`) stay on the real
-clock. A script still times its synthetic input from the stimulus's flip
+display time. Its checks are exact: no frame slips. Costs (a draw, a
+decode, a build) read `yrt_real_ns()`, the real clock, so they print real
+times on either clock. `gfx_capture` stays on the real clock: its writer
+thread is real, and on the virtual clock the frame loop outran it. A script still times its synthetic input from the stimulus's flip
 record, not from a frame count, so it also runs on a real display.
 
 ## aep

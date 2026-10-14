@@ -153,9 +153,9 @@ static int ramp_set(WORD (*r)[256], double* us) {
     int64_t t0;
     BOOL ok;
     if (!dc) return 0;
-    t0 = yrt_now_ns();
+    t0 = yrt_real_ns();   /* a cost: the real clock */
     ok = yscr__win.set_ramp(dc, r);
-    *us = (double)(yrt_now_ns() - t0) / 1e3;
+    *us = (double)(yrt_real_ns() - t0) / 1e3;
     yscr__win.delete_dc(dc);
     return ok ? 1 : 0;
 }
@@ -240,11 +240,11 @@ int main(int argc, char** argv) {
             }
             if (n < MAXF) planned[n] = f.onset;
             /* the table for this frame, between frames */
-            t = yrt_now_ns();
+            t = yrt_real_ns();
             if (ph == ANIM) { palette_lut((int)(n % NPAL)); rc = ygfx_set_lut(&gfx, lut, NLUT); }
             else if (ph == CANCEL) rc = ygfx_set_lut(&gfx, b ? ident : half_lut, 2);
             else rc = n == 0 ? ygfx_set_lut(&gfx, ident, 2) : YGFX_OK;
-            if (n < MAXF && ph != OSRAMP) cost_us[ph][n_cost[ph]++] = (double)(yrt_now_ns() - t) / 1e3;
+            if (n < MAXF && ph != OSRAMP) cost_us[ph][n_cost[ph]++] = (double)(yrt_real_ns() - t) / 1e3;
             if (rc != YGFX_OK) { fprintf(stderr, "gfx_clut_sync: set_lut: %s\n", ygfx_error(&gfx)); failed = 1; }
 #if defined(YSCR__DXGI)
             if (ph == OSRAMP && n < MAXF) {

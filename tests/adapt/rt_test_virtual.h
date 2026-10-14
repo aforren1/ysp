@@ -80,8 +80,22 @@ static void test_virtual(void) {
     CHECK_I(yrt_virtual_begin(5), YRT_ERR_STATE, "a second begin is refused");
     t0 = yrt_now_ns();
     CHECK(t0 == YRT_VIRTUAL_T0_NS, "0 starts at YRT_VIRTUAL_T0_NS");
-    (void)yrt__sleep_until(yrt__now() + 2000000u, 0);   /* 2 ms of real time */
+    {   /* the real read moves while the virtual clock stands still */
+        int64_t r0 = yrt_real_ns(), r1;
+        (void)yrt__sleep_until(yrt__now() + 2000000u, 0);   /* 2 ms of real time */
+        r1 = yrt_real_ns();
+        CHECK(r1 - r0 >= 2000000 && r1 - r0 < 2000000000, "yrt_real_ns() is the real clock on the virtual one");
+        CHECK(llabs(r1 - (int64_t)yrt__now()) < YRT_MS(100), "yrt_real_ns() reads the counter yrt_now_ns() reads when real");
+    }
     CHECK(yrt_now_ns() == t0, "the clock stands still between waits");
+    {   /* a driver's wait jumps virtual time, not real time */
+        int64_t r0 = yrt_real_ns();
+        (void)yrt_sleep_until(t0 + YRT_S(10), 0);
+        CHECK(yrt_real_ns() - r0 < YRT_S(1), "a 10 s virtual wait takes no real time");
+        yrt_virtual_end();
+        CHECK_I(yrt_virtual_begin(t0), 0, "begin at a given time");
+        CHECK(yrt_now_ns() == t0, "t0_ns is the start");
+    }
 
     /* the driver's waits jump the clock and are never late */
     CHECK_I(yrt_sleep_until(t0 + YRT_MS(5), YRT_DEFAULT_SPIN_NS), 0, "sleep_until is on time");

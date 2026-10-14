@@ -363,12 +363,19 @@ a function of its seed. Decisions:
   `yrt_correlate()` (a bracket around another clock's read) and the
   timeout of `yrt_pump_wait()` read the real counter. So
   `screen_flipstats --sim` still reports the header's CPU cost per frame.
-- **The clock stands still between waits.** A frame's work takes no
-  virtual time, so a cost read with `yrt_now_ns()` is 0 on the virtual
-  clock. The examples that exist to measure a real cost or a real thread
-  (`gfx_load`, `gfx_filtered_noise`, `gfx_capture`, `gfx_text`,
-  `gfx_layout`, `gfx_gallery`) stay on the real clock; none of their
-  checks compares a time.
+- **Costs read the real clock.** Between waits the virtual clock stands
+  still, so a cost read with `yrt_now_ns()` is 0, and one across a wait
+  is the jump. `yrt_real_ns()` is the real counter on either clock. A
+  time that feeds a plan or a record reads `yrt_now_ns()`; a cost reads
+  `yrt_real_ns()`. ysp/screen.h's phases, ysp/gfx.h's program and glyph
+  build times, ysp/video.h's decode and upload times and the examples'
+  cost lines do. So `gfx_load`, `gfx_filtered_noise`, `gfx_text`,
+  `gfx_layout` and `gfx_gallery` run on the virtual clock too and still
+  print real costs (`gfx_text --sim`: 171 ms for 1728 CJK glyphs).
+  `gfx_capture` stays on the real clock: its writer thread is a real
+  thread, and on the virtual clock the frame loop outran it (6 of 21
+  chosen frames read, 15 dropped, against 21 of 21 on the real clock), so
+  the counts its check compares would depend on the host's load.
 
 Two failure modes remain and are stated in the header: a driver that
 polls for a real thread's progress with sleeps sees its timeout pass at
@@ -409,8 +416,9 @@ that waits (the wait moves the clock and runs no timer), a full table;
 ring stamps; a worker job that runs only once the driver passes its
 deadline, with a virtual `at_ns`; a wait on the worker thread that blocks
 until the driver reaches it; `yrt_virtual_end()`. The compile check names
-the five calls by type and runs a timer. Mutants vc-01 to vc-12 are
-caught (12 of 12).
+the six calls by type and runs a timer. `yrt_real_ns()` moves 2 ms in 2 ms
+of real time while the virtual clock stands still, and a 10 s virtual wait
+takes under 1 s of it. Mutants vc-01 to vc-13 are caught (13 of 13).
 
 ## Windows 11 power throttling
 

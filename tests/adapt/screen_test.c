@@ -36,6 +36,8 @@ static long long vnow(void);
 static void vsleep_until(long long t);
 #define YSCR__NOW() ((int64_t)vnow())
 #define YSCR__SLEEP_UNTIL(t, spin) vsleep_until((long long)(t))
+/* the phases too: scripted costs are on the same clock */
+#define YSCR__COST_NOW() ((int64_t)vnow())
 /* The trigger worker's wake-up: recorded here, and run by the clock as it
  * passes, through the same function the worker thread calls. */
 struct yscr_screen;

@@ -1337,7 +1337,10 @@
  *          run. The describe line says clock=virtual. open() refuses
  *          every backend but SIM and CUSTOM on the virtual clock. The
  *          examples' --sim checks that allowed whole-frame slips on a
- *          loaded CI runner are exact again. The real clock: no change.
+ *          loaded CI runner are exact again. A record's phases are costs
+ *          and read yrt_real_ns(), so they stay real on the virtual clock
+ *          (they read 0 for DRAW and the jump for SWAP through
+ *          yrt_now_ns()). The real clock: no change.
  *   v0.7.2 - BACKENDS, WEB: open() and close() no longer leave a
  *          fullscreen the page entered (Fullscreen, in BACKENDS, WEB). A
  *          program that yielded between the page's request and open() (the
@@ -3058,6 +3061,11 @@ enum {
 #endif
 #ifndef YSCR__SLEEP_UNTIL
 #define YSCR__SLEEP_UNTIL(t, spin) yrt_sleep_until((int64_t)(t), (spin))
+#endif
+/* The phases are costs: the real clock, also on ysp/rt.h's virtual clock,
+ * where a draw read with yrt_now_ns() takes 0 and a wait is the jump. */
+#ifndef YSCR__COST_NOW
+#define YSCR__COST_NOW() (yrt_real_ns())
 #endif
 /* Whether SDL text input is on for the screen's window now: another
  * library (a GUI) can start it, so the header reads it instead of trusting
@@ -9142,7 +9150,7 @@ static void yscr__pump(yscr_screen* s) {
 }
 
 static int yscr__begin(yscr_screen* s, yscr_frame* f) {
-    int64_t t0, now, wait, prev_pred;
+    int64_t t0, now, wait, prev_pred, c0;
     int rc;
     YRT_ZONE(z_begin, "yscr.begin");
     if (!s || !f) { YRT_ZONE_END(z_begin); return YSCR_ERR_ARG; }
@@ -9169,6 +9177,7 @@ static int yscr__begin(yscr_screen* s, yscr_frame* f) {
     yscr__in_log(s);
     if (yscr__abort_take(s, f)) { YRT_ZONE_END(z_begin); return YSCR_QUIT; }
     t0 = yscr__now();
+    c0 = YSCR__COST_NOW();
     if (!s->slot_held) {
         yscr_vblank newest;
         YRT_ZONE(z_wait, "yscr.wait");
@@ -9188,7 +9197,7 @@ static int yscr__begin(yscr_screen* s, yscr_frame* f) {
         s->pr->bind(s->pr_ctx);
     }
     s->slot_held = 0;
-    wait = yscr__now() - t0;
+    wait = YSCR__COST_NOW() - c0;
     {
         YRT_ZONE(z_stats, "yscr.stats");
         yscr__drain(s);
@@ -9238,7 +9247,7 @@ static int yscr__begin(yscr_screen* s, yscr_frame* f) {
     memset(s->acc, 0, sizeof s->acc);
     s->acc[YSCR_PHASE_SWAP] = yscr__sat32(wait);
     s->acc[YSCR_PHASE_GPU] = YSCR_PHASE_UNKNOWN;
-    s->mark_t = yscr__now();
+    s->mark_t = YSCR__COST_NOW();
     s->begun = 1;
     YRT_ZONE_END(z_begin);
     return YSCR_OK;
@@ -9247,13 +9256,13 @@ static int yscr__begin(yscr_screen* s, yscr_frame* f) {
 YSCR_API void yscr_mark(yscr_screen* s, int phase) {
     int64_t now;
     if (!s || !s->begun || phase < 0 || phase >= YSCR_PHASE_GPU) return;
-    now = yscr__now();
+    now = YSCR__COST_NOW();
     s->acc[phase] = yscr__sat32((int64_t)s->acc[phase] + (now - s->mark_t));
     s->mark_t = now;
 }
 
 static int yscr__flip_at(yscr_screen* s, int64_t t, yscr_record* out) {
-    int64_t now, tg, count_t, earliest, planned, t_call;
+    int64_t now, tg, count_t, earliest, planned, t_call, c_call;
     yscr__pend* p = NULL;
     yscr_present_req req;
     const yscr_code_draw* codes = NULL;
@@ -9264,8 +9273,9 @@ static int yscr__flip_at(yscr_screen* s, int64_t t, yscr_record* out) {
     if (!s) { YRT_ZONE_END(z_flip); return YSCR_ERR_ARG; }
     if (!s->open) { YRT_ZONE_END(z_flip); return YSCR_ERR_CLOSED; }
     if (!s->begun) { YRT_ZONE_END(z_flip); return YSCR_ERR_ORDER; }
-    now = yscr__now();
+    now = YSCR__COST_NOW();
     s->acc[YSCR_PHASE_DRAW] = yscr__sat32((int64_t)s->acc[YSCR_PHASE_DRAW] + (now - s->mark_t));
+    now = yscr__now();
     if (s->on_present) {
         yscr_present_info pi;
         memset(&pi, 0, sizeof pi);
@@ -9372,6 +9382,7 @@ static int yscr__flip_at(yscr_screen* s, int64_t t, yscr_record* out) {
     }
     if (codes) memcpy(p->code_vals, code_vals, sizeof(uint32_t) * (size_t)s->n_codes);
     yscr__drain_overdue(s);
+    c_call = YSCR__COST_NOW();
     t_call = yscr__now();
     p->t_call = t_call;
     p->count_at_present = yscr__count_at(s, t_call);
@@ -9381,7 +9392,7 @@ static int yscr__flip_at(yscr_screen* s, int64_t t, yscr_record* out) {
         YRT_ZONE_END(z_present);
     }
     p->t_ret = yscr__now();
-    s->acc[YSCR_PHASE_SWAP] = yscr__sat32((int64_t)s->acc[YSCR_PHASE_SWAP] + (yscr__now() - t_call));
+    s->acc[YSCR_PHASE_SWAP] = yscr__sat32((int64_t)s->acc[YSCR_PHASE_SWAP] + (YSCR__COST_NOW() - c_call));
     memcpy(p->rec.phase_ns, s->acc, sizeof s->acc);
     if (rc < 0) {
         p->used = 0;

@@ -85,7 +85,7 @@ Purpose: The shared base: monotonic clock, deadline waits, thread elevation, a o
 
 Status:
 
-- v0.9.0: a virtual clock for simulated runs (`yrt_virtual_begin()`, virtual timers): the driver thread's waits move it, other threads wait for it, and ysp/screen.h's SIM backend, ysp/audio.h's null device and ysp/video.h follow it. The CI list of 49 `--sim` and `--null` runs gave the same data files and output in three idle runs and two beside 24 CPU-bound processes (MSVC), and the same data with MinGW-w64; the lines that differ print real CPU time. Real-clock cost inside the run-to-run spread: `yrt_now_ns()` 24.3 to 26.3 ns against 23.5 to 26.1 ns pinned, the screen's per-frame header cost unchanged. 12 of 12 new mutants caught ([Virtual clock](rt.md#virtual-clock-v090)).
+- v0.9.0: a virtual clock for simulated runs (`yrt_virtual_begin()`, virtual timers), and `yrt_real_ns()`, the real clock for costs on either clock: the driver thread's waits move it, other threads wait for it, and ysp/screen.h's SIM backend, ysp/audio.h's null device and ysp/video.h follow it. The CI list of 49 `--sim` and `--null` runs gave the same data files and output in three idle runs and two beside 24 CPU-bound processes (MSVC), and the same data with MinGW-w64; the lines that differ print real CPU time. Real-clock cost inside the run-to-run spread: `yrt_now_ns()` 24.3 to 26.3 ns against 23.5 to 26.1 ns pinned, the screen's per-frame header cost unchanged. 13 of 13 new mutants caught ([Virtual clock](rt.md#virtual-clock-v090)).
 - v0.8.0 (the [Conventions](conventions.md): `yrt_now_ns()` and every time `int64_t` ns, `YRT_S()`/`YRT_MS()`/`YRT_US()`, worker and pump open/close, `yrt_fit_open()`; 2 mutants added, both caught).
 - v0.7.0 (per-user folders: `yrt_user_dir()`, the rules of gfx's program cache folder, tested on Windows, WSL2 and emcc).
 - v0.6.0 (the device clock fit: on synthetic devices within tens of us of the truth for dense pairs, ms for sparse pairs behind a 16 ms timer; 17 of 17 mutants caught; no real device yet).
@@ -389,7 +389,7 @@ Purpose: The stimulus display: window, GL ES 3.0 context, display modes and the 
 
 Status:
 
-- v0.8.0: BACKEND_SIM on ysp/rt.h's virtual clock: no frame drops and the same records every run; `clock=virtual` in the describe line; a real backend refused there. The `--sim` checks widened for loaded CI runners are exact again, `trial_mouse_tracking --raw-mice` included. 2 of 2 new mutants caught ([SIM on a virtual clock](screen.md#sim-on-a-virtual-clock-v080)).
+- v0.8.0: BACKEND_SIM on ysp/rt.h's virtual clock: no frame drops and the same records every run; `clock=virtual` in the describe line; a real backend refused there; a record's phases are costs on the real clock. The `--sim` checks widened for loaded CI runners are exact again, `trial_mouse_tracking --raw-mice` included. 2 of 2 new mutants caught ([SIM on a virtual clock](screen.md#sim-on-a-virtual-clock-v080)).
 - v0.7.2: on the web backend `yscr_open()` and `yscr_close()` no longer leave a fullscreen the page entered, and a page shown again keeps it: SDL's port called `document.exitFullscreen()` when it made, destroyed or showed the window. `av.html` lost fullscreen 2.2 to 3.7 s into each run before (Chrome 154 and Firefox 157, isolated and not); after, every demo kept it until the page left it at the end. The pages now ask again on the next key or tap after a browser's own exit ([web.md](web.md#fullscreen)). JavaScript only: no native test or mutant.
 - v0.7.1: on the web backend `yscr_event_input()` stamps key, mouse, touch and pen presses and releases with the DOM event's `timeStamp` where it finds it (`dom_stamps=` in the describe line), and the describe line adds `dpr=`. Checked with scripted keys and taps in Chrome 154 (headless, and Pixel 7 emulation); no physical key or touch measured. The matching is JavaScript: no native test or mutant.
 - v0.7.0: `YSCR_BACKEND_WEB` ([web.md](web.md)): under Emscripten, SDL3's canvas and the header's WebGL2 context, frames paced by awaited `requestAnimationFrame` callbacks (ASYNCIFY or JSPI), records from the callback times as estimates (`YSCR_TIER_WEB`, `YSCR_PATH_BROWSER`), the period measured at open, settling that warns and never fails, `YSCR_EV_VISIBILITY` records. Run in Chrome 154, Edge 155 and Firefox 154 to 157; no light measured. 4 mutants added.
@@ -441,6 +441,7 @@ Purpose: Stimuli on GL ES 3.0 over ysp/screen.h: signed-distance shapes with a s
 
 Status:
 
+- v0.15.1: the program cache's open and store times and a text's build time read the real clock (`yrt_real_ns()`), so they are costs also on ysp/rt.h's virtual clock, where they read 0 before. No other change.
 - v0.15.0: `ygfx_open_screen()` (the screen and the gfx with OPEN START's overlap, then primed, in one call), `ygfx_show_until_key()` (an instruction or break screen), and with ysp/outline.h first `ygfx_text_make()` (text by advances, wrapped and centered, its program primed: the text's first frame 0.8 to 1.3 ms of CPU against 10.1 to 11.0 ms unprimed on the Iris Xe); 5 of 5 new mutants caught.
 - v0.14.0: capture writes PPM only (the user, 2026-10-10): `YGFX_IMAGE_PNG`, `YGFX_IMAGE_PPM`, `ygfx_capture_desc.format` and the `format` argument of `ygfx_image_write()` removed, with the stored-PNG writer and its CRC-32 and Adler-32; the PPM writer's two-line comment tested; PNG's 3 mutants removed, 1 added.
 - v0.13.1: fixed under WebGL: a pass into a render target unbinds its texture from every unit first; WebGL refused every draw with it bound to a sampled unit (133 on the gallery's first page in Chrome 154). No change natively.
@@ -473,7 +474,7 @@ Purpose: A movie as a stimulus: on each display frame the frame due at the predi
 
 Status:
 
-- v0.4.0: on ysp/rt.h's virtual clock a movie decodes inline (`video_play --sim` showed 6 of 60 frames on a decode thread, a different count each run). 1 of 1 new mutant caught.
+- v0.4.0: on ysp/rt.h's virtual clock a movie decodes inline, and its decode and upload times stay real (`video_play --sim` showed 6 of 60 frames on a decode thread, a different count each run). 1 of 1 new mutant caught.
 - v0.3.1: pl_mpeg.h builds under `-Wfloat-conversion` (gcc and clang); no change to ysp code.
 - v0.3.0 (the [Conventions](conventions.md): `yvid_seq_open()`/`_finish()`/`_close()`, `yvid_probe()` returns a code, every failing call writes its message; 2 mutants added).
 - v0.2.2: XXH64 twice as fast on MSVC (11.9 to 14.1 GB/s), the same hashes.

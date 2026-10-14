@@ -39,6 +39,7 @@ static int g_virtual = 1;
 static long long g_vt = 1000000000000LL;
 static long long vnow(void);
 #define YVID__NOW() ((int64_t)vnow())
+#define YVID__COST_NOW() ((int64_t)vnow())   /* scripted decode times */
 
 /* ysp/audio.h first, on the same virtual clock, with no miniaudio: the
  * soundtrack's cases drive its scripted device */
