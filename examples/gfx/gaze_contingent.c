@@ -168,6 +168,8 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--out") && i + 1 < argc) out_path = argv[++i];
         else { fprintf(stderr, "usage: gfx_gaze_contingent [--sim] [--fullscreen] [--seconds S] [--raw-mice] [--inject] [--out FILE]\n"); return 2; }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
 #if !defined(YSCR__DXGI)
     if (inject || raw) { fprintf(stderr, "gfx_gaze_contingent: --inject and --raw-mice are Windows only\n"); return 2; }
 #endif

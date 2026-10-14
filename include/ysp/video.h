@@ -1,4 +1,4 @@
-/* ysp/video.h - v0.3.1 - public domain single-header video playback library
+/* ysp/video.h - v0.4.0 - public domain single-header video playback library
  *
  *   A movie as a stimulus. On each display frame the header takes the
  *   frame's PREDICTED ONSET, asks the movie clock for the movie time at
@@ -422,14 +422,23 @@
  *   source are not available for MPEG-1). Its heap calls go through
  *   YVID_MALLOC, YVID_REALLOC and YVID_FREE (default: the C
  *   library's), which yvid_heap_calls() counts. YRT_NO_THREADS forces
- *   desc.inline_decode, and so does a decode thread that cannot start (wasm
- *   built without -pthread): the movie plays, each decode inside
- *   yvid_update() on the frame thread, and yvid_describe() says so.
+ *   desc.inline_decode, and so do ysp/rt.h's virtual clock (v0.4.0) and a
+ *   decode thread that cannot start (wasm built without -pthread): the
+ *   movie plays, each decode inside yvid_update() on the frame thread, and
+ *   yvid_describe() says so.
  *   Define YVID_API to change the linkage.
  *
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.4.0 - VIRTUAL CLOCK: on ysp/rt.h's virtual clock (yrt_virtual_begin,
+ *          rt.h v0.9.0) a movie decodes inline, as with
+ *          desc.inline_decode: a decode thread on real time fell behind a
+ *          frame loop that never waits, and video_play --sim showed a
+ *          different count of shown and dropped frames each run. Now the
+ *          same each run. Decode and upload times are costs and read
+ *          yrt_real_ns(), so they stay real on the virtual clock. Real
+ *          clock: no change.
  *   v0.3.1 - pl_mpeg.h builds under -Wfloat-conversion (gcc and clang): its
  *          double-to-integer and double-to-float conversions are its own,
  *          so the include silences that warning as it already did
@@ -526,9 +535,9 @@
 #define YSP_VIDEO_H_INCLUDED
 
 #define YVID_VERSION_MAJOR 0
-#define YVID_VERSION_MINOR 3
-#define YVID_VERSION_PATCH 1
-#define YVID_VERSION_STRING "0.3.1"
+#define YVID_VERSION_MINOR 4
+#define YVID_VERSION_PATCH 0
+#define YVID_VERSION_STRING "0.4.0"
 
 #include "ysp/gfx.h"
 #include "ysp/timeline.h"
@@ -1209,6 +1218,11 @@ YVID_API int yvid_soundtrack(yvid_movie* mv, yau_audio* au, const yvid_soundtrac
 #endif
 #ifndef YVID__NOW
 #define YVID__NOW() (yrt_now_ns())
+#endif
+/* Decode and upload times are costs: the real clock, also on ysp/rt.h's
+ * virtual clock, where yrt_now_ns() stands still between waits. */
+#ifndef YVID__COST_NOW
+#define YVID__COST_NOW() (yrt_real_ns())
 #endif
 
 
@@ -4357,7 +4371,7 @@ static bool yvid__dstep(yvid_movie* mv) {
     out.index = -1;
     {
         yvid_planes dst;
-        int64_t t0 = YVID__NOW(), dt;
+        int64_t t0 = YVID__COST_NOW(), dt;
         uint8_t* base = sl->data;
         YRT_ZONE(zd, "yvid.decode");
         yvid__planes_layout(mv->info.format, mv->info.w, mv->info.h, base, &dst);
@@ -4365,7 +4379,7 @@ static bool yvid__dstep(yvid_movie* mv) {
         if (mv->gpu) ((yvid__mf*)mv->dec_ctx)->gpu_dst = sl->gtex;   /* where the decoder copies */
 #endif
         rc = mv->dec->next(mv->dec_ctx, &dst, &out);
-        dt = YVID__NOW() - t0;
+        dt = YVID__COST_NOW() - t0;
         YRT_ZONE_END(zd);
         if (rc == YVID_PENDING) { mv->dt_spare = s; return yvid__pending(mv); }
         if (rc == YVID_ENDED) {
@@ -4853,7 +4867,10 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
     mv->late_from = INT64_MAX;
     mv->next_id = 1;
     mv->state = YVID__STOPPED;
-    mv->inline_mode = desc->inline_decode ? 1 : 0;
+    /* On ysp/rt.h's virtual clock (v0.4.0) the frame loop never waits, so
+     * a decode thread on real time fell behind it: shown 6, dropped 54 of
+     * 60 frames in video_play --sim, a different count each run. */
+    mv->inline_mode = desc->inline_decode || yrt_is_virtual() ? 1 : 0;
 #if defined(YRT_NO_THREADS)
     mv->inline_mode = 1;
 #else
@@ -5208,19 +5225,19 @@ static int yvid__upload(yvid_movie* mv, int s) {
         /* the slot's texture is shown; the one shown before goes back to the
          * decoder. Its last draw is already on the device's one immediate
          * context, so a copy into it later runs after that draw */
-        int64_t t0 = YVID__NOW();
+        int64_t t0 = YVID__COST_NOW();
         int old = mv->gpu_shown, g;
         YRT_ZONE(zg, "yvid.rebind");
         g = ygfx_texture_rebind(mv->gfx, mv->tex, mv->slots[s].gimp);
         YRT_ZONE_END(zg);
         mv->gpu_shown = s;
         if (old >= 0 && old != s) yvid__free_push(mv, (uint32_t)old);
-        mv->upload_ns_last = (uint64_t)(YVID__NOW() - t0);
+        mv->upload_ns_last = (uint64_t)(YVID__COST_NOW() - t0);
         if (mv->upload_ns_last > mv->upload_ns_max) mv->upload_ns_max = mv->upload_ns_last;
         return g == YGFX_ERR_ORDER ? YVID_ERR_ORDER : g < 0 ? YVID_ERR_ARG : YVID_OK;
     }
     if (mv->gfx) {
-        int64_t t0 = YVID__NOW();
+        int64_t t0 = YVID__COST_NOW();
         int g;
         YRT_ZONE(zu, "yvid.upload");
         if (yvid__is_yuv(mv->info.upload_format)) {
@@ -5236,7 +5253,7 @@ static int yvid__upload(yvid_movie* mv, int s) {
                                       (size_t)mv->info.w * (size_t)yvid__bpt(mv->info.upload_format));
         }
         YRT_ZONE_END(zu);
-        mv->upload_ns_last = (uint64_t)(YVID__NOW() - t0);
+        mv->upload_ns_last = (uint64_t)(YVID__COST_NOW() - t0);
         if (mv->upload_ns_last > mv->upload_ns_max) mv->upload_ns_max = mv->upload_ns_last;
         if (g == YGFX_ERR_ORDER) rc = YVID_ERR_ORDER;
         else if (g == YGFX_ERR_LOST) rc = YVID_ERR_LOST;

@@ -40,7 +40,7 @@
  * a straight path to the correct box, and a path curved toward the other
  * box first. With --raw-mice too, it feeds the same paths as raw counts
  * through the drawn cursor. It checks its own results and exits 1 on a
- * mismatch. About 5 s.
+ * mismatch. Under a second: the virtual clock does not wait.
  *
  * Usage: trial_mouse_tracking [--sim] [--raw-mice] [--reps N] [--seed N] [--out FILE] [--traj FILE]
  *   --reps N   repetitions of each color (default 10; --sim: 1)
@@ -219,6 +219,7 @@ int main(int argc, char** argv) {
     int n_sim_ev = 0, sim_next = 0, color_col, answer_col;
     float W, H, cx, cy;
     double sim_init[2], sim_dev[2];
+    int64_t sim_t0[2] = { 0, 0 }, sim_rt_ns[2] = { 0, 0 }, sim_onset[2] = { 0, 0 };
     int sim_correct[2], sim_samples[2];
 
     memset(&sd, 0, sizeof sd);
@@ -234,6 +235,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     seed0 = seed;
     if (reps == 0) reps = sim ? 1 : 10;
     if (reps < 1 || reps > 100) { fprintf(stderr, "trial_mouse_tracking: --reps takes 1..100\n"); return 2; }
@@ -352,6 +355,7 @@ int main(int argc, char** argv) {
                 ygfx_resolve(&gfx, &start, &sx, &sy);
                 ygfx_resolve(&gfx, &boxes[!strcmp(ytb_text(&tab, ti.condition, answer_col), "right")], &bx, &by);
                 n_sim_ev = sim_path(f.onset, ti.index, sx, sy, bx, by, bx < cx ? W - 100 : 100);
+                if (ti.index < 2) sim_t0[ti.index] = f.onset;
                 sim_next = 0;
             }
         }
@@ -431,6 +435,8 @@ int main(int argc, char** argv) {
                 ytr_update(&trials, correct, NULL);
                 if (ti.index < 2) {
                     sim_init[ti.index] = res.rt_ns == YRSP_NO_TIME ? NAN : YRT_TO_S(res.rt_ns);
+                    sim_rt_ns[ti.index] = res.rt_ns;
+                    sim_onset[ti.index] = res.t_onset;
                     sim_dev[ti.index] = dev;
                     sim_correct[ti.index] = correct;
                     sim_samples[ti.index] = n_samples;
@@ -460,14 +466,20 @@ int main(int argc, char** argv) {
 
     if (sim && !failed && reps != 1) printf("--sim: the self-check needs the default --reps\n");
     else if (sim && !failed) {
-        /* 64 samples after the start click; the movement onset 0.30 s
-         * after the click, less the wait for the disc's frame, plus a
-         * sample or two to pass 10 px. The low bound allows 3 frames of
-         * wait: a slow CI runner (macOS) shows 2 */
+        /* 64 samples after the start click. The movement onset is the
+         * sample that passes 10 px: trial 0's first step is 8.7 px, so its
+         * second sample; trial 1 bends, so its first. Samples run from
+         * 0.3 s after the click (0.6 s after the script's t0), one per
+         * 8 ms; the init is from the disc's flip record, the first vblank
+         * at or after the click. On the virtual clock all of it is exact,
+         * with raw counts too. */
+        static const int cross[2] = { 2, 1 };
         int bad = rows != 2;
         if (bad) fprintf(stderr, "trial_mouse_tracking: --sim: %d rows, not 2\n", rows);
         for (i = 0; i < rows && i < 2; i++) {
-            int ok = sim_correct[i] && sim_samples[i] == 64 && sim_init[i] > 0.24 && sim_init[i] < 0.34;
+            int64_t click = sim_t0[i] + YRT_MS(300), sample = click + YRT_MS(300) + (cross[i] - 1) * YRT_MS(8);
+            int ok = sim_correct[i] && sim_samples[i] == 64 && sim_onset[i] >= click && sim_onset[i] - click < f.period &&
+                     sim_rt_ns[i] == sample - sim_onset[i];
             if (i == 1) ok = ok && sim_dev[1] > sim_dev[0] + 50;
             if (!ok) {
                 fprintf(stderr, "trial_mouse_tracking: --sim: trial %d: correct %d, %d samples, init %.9f, deviation %.1f\n",

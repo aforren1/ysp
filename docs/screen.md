@@ -2658,39 +2658,86 @@ message, and the refusal of a negative `panic_grace_ns`.
 Mutants cv-01 (a failure that writes nothing) and cv-02 (a success that
 drops the message) are caught.
 
-## SIM on a virtual clock (design note; not built)
+## SIM on a virtual clock (v0.8.0)
 
-`--sim` self-checks flaked on slow CI hosts (macOS, twice): the SIM
-presenter sleeps to a vblank grid on the real clock, so a slow host drops
-whole frames. A virtual clock would advance one period per flip and never
-sleep. What reads the real clock in a `--sim` run:
+`--sim` self-checks failed on loaded CI runners (macOS most often): the
+SIM presenter sleeps to a vblank grid on the real clock, so a slow host
+dropped whole frames, and a check that compared with the script failed
+or was widened to allow the drop. Ten examples were widened that way:
+`trial_adjustment`, `trial_srt`, `trial_stroop`, `trial_rdk`,
+`trial_same_different`, `trial_sternberg`, `trial_mouse_tracking`,
+`web_av_sync`, `audio_av_sync` and `audio_schedule`.
 
-- ysp/screen.h: `yscr__now()` at about 60 places through one compile-time
-  macro (`YSCR__NOW`), for every screen at once: the SIM presenter, the
-  core's prediction (`yscr__count_at(s, now + margin)`), `flip_at()`, the
-  waits, the trigger worker's deadlines, ring stamps. A virtual SIM
-  needs a clock per screen threaded through the core; a CUSTOM presenter
-  (`screen_sync_check --sim-vsync-off`) and the abort and raw-input state,
-  which have no screen, must stay real.
-- ysp/audio.h: the null device is miniaudio's real-time thread, and the
-  callback stamp reads `yrt_now_ns()` with no hook. `trial_audio_keyboard`,
-  `trial_stop_signal` and `audio_av_sync` compare audio onsets with flip
-  onsets (10 ms and 2 ms limits), so they break unless the audio null
-  device runs on the same virtual clock.
-- ysp/video.h: decode-ahead runs on its own thread; a frame loop that
-  never sleeps outruns it (more repeats). `video_play --sim` checks only
-  for no error, so it should pass.
-- ysp/gfx.h: shader time 0 is `yrt_now_ns()` at open; a virtual epoch
-  must start there.
-- ysp/timeline.h, ysp/response.h, ysp/trials.h, ysp/input.h: no clock;
-  nothing to change. The response examples stamp their synthetic events
-  from `f.onset`, so they would become exact.
-- ysp/rt.h has no clock override at all.
+The note that stood here (v0.5.1) judged the change not contained: the
+core reads its clock at about 60 places through one compile-time macro,
+and three examples compare audio onsets from miniaudio's real-time null
+device with flip onsets. The built design does not touch those 60
+places. It moves the clock under them:
 
-So it is not contained: it changes the core's clock in every function,
-and three examples need a virtual audio device. Until then, the
-examples tolerate whole-frame drops (`trial_same_different`,
-`trial_sternberg`).
+- **ysp/rt.h v0.9.0 owns the virtual clock.** `yrt_virtual_begin()`
+  makes `yrt_now_ns()` virtual for the whole process. The thread that
+  called it is the driver: its `yrt_sleep_until()` jumps the clock to the
+  deadline at once. Other threads wait in real time until the driver gets
+  there. Virtual timers run on the driver, in time order, inside its
+  waits. rt.h's VIRTUAL CLOCK has the rules.
+- **The SIM presenter needs no change.** Its sleep to the vblank is a
+  `yrt_sleep_until()`, which on the virtual clock is the jump. So the
+  core's prediction, `flip_at()`, the waits and the ring stamps all read
+  one clock, and no frame can drop. A CUSTOM presenter that times itself
+  with `yrt_now_ns()` (`screen_sync_check --sim-vsync-off`) runs on it
+  too.
+- **The screen refuses a real backend on the virtual clock.** A display
+  flips on real time; its records against a virtual prediction would be
+  nonsense. The describe line says `clock=virtual`, so a log of a dry run
+  cannot pass for a measurement.
+- **The audio null device is virtual too** (ysp/audio.h v0.6.0). On the
+  virtual clock `YAU_BACKEND_NULL` is the header's own device: a virtual
+  timer renders one block a period at the block's own time. The fit is
+  exact, and an onset is on its plan within half a sample.
+- **Video decodes inline** (ysp/video.h v0.4.0). A decode thread on real
+  time could not keep up with a frame loop that never waits: `video_play
+  --sim` showed 6 frames and dropped 54, a different count each run.
+- **Costs stay real.** A record's phases (DRAW, UPLOAD, SWAP) are costs:
+  they read `yrt_real_ns()`, the real counter on either clock, through
+  the seam `YSCR__COST_NOW()`. Through `yrt_now_ns()` they read 0 for
+  DRAW and the 16.7 ms jump for SWAP. The instrumentation zones are real
+  too, so `screen_flipstats --sim` reports the header's CPU cost and the
+  draw phase in real microseconds. Times that feed a plan or a record
+  (onsets, the prediction, the flip's call and return) stay on
+  `yrt_now_ns()`.
+
+The examples call `yrt_virtual_begin(0)` right after they parse `--sim`.
+The checks that allowed whole frames are exact again: an onset is the
+plan, an RT is the script's to the nanosecond (or within 1 us where the
+script times from a plan that is off the 16666667 ns grid), and an audio
+onset is on its plan within half a sample. `trial_mouse_tracking
+--raw-mice` (CI run 38410242460: init 0.2247 s against 0.2913 s without
+`--raw-mice`) now gives the init of the sample that passes 10 px, exactly,
+with and without raw counts.
+
+Determinism, measured on 2026-10-14 on the Windows 11 test laptop (Iris
+Xe, 16 logical CPUs): the CI list of 49 `--sim` and `--null` runs.
+
+| Build | Runs | Exit codes as CI expects | Output of the virtual-clock runs |
+|---|---|---|---|
+| MSVC 19.44 Release | 2 idle, 1 beside 24 CPU-bound processes (`burn.exe`) | 49 of 49 in each | data files and standard output identical in all 3 |
+| MinGW-w64 gcc 16.1 Release | 1 idle | 49 of 49 | data files and standard output the same as MSVC's (paths aside) |
+| WSL2 Ubuntu 22.04, gcc 11.4, SDL 3.4.0 console | 2 idle | 49 of 49 in each | identical between the 2 (paths aside) |
+
+The lines that differ between runs print a real cost (the phases and
+header costs of `screen_flipstats`, the build, draw, decode and upload
+times of the gfx and video examples, the battery level), and the frames
+of `gfx_capture`, which stays on the real clock: its writer thread is
+real, and on the virtual clock the frame loop outran it (6 of 21 chosen
+frames read, against 21 of 21 on the real clock). Every other run but
+`trials_save_rows` (it reads no clock) is on the virtual clock. The MSVC
+list took 25 s idle and 29 s under the load.
+
+Tests: `test_sim_virtual` in `tests/adapt/screen_test.c` runs 120 frames
+of SIM on the virtual clock through the header's own clock calls: every
+onset on the grid and on the prediction, no drop, no late target, a real
+backend refused. Mutants sv-01 (a real backend opens) and sv-02 (the
+describe line hides the clock) are caught.
 
 ## The web backend (v0.7.0)
 

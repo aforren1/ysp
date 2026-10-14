@@ -25,10 +25,11 @@
  * n_anticipations, n_early). Times in seconds; the settings go to
  * FILE.meta. Shift+Esc stops the session; the rows so far are kept.
  *
- * --sim runs on the simulated display and miniaudio's null device with a
- * synthetic participant: a correct response, a press in the foreperiod
- * and then a response, an anticipation and then a wrong key, a timeout.
- * It checks its own results and exits 1 on a mismatch. About 12 s.
+ * --sim runs on the simulated display and the null device, on ysp/rt.h's
+ * virtual clock, with a synthetic participant: a correct response, a
+ * press in the foreperiod and then a response, an anticipation and then a
+ * wrong key, a timeout. It checks its own results and exits 1 on a
+ * mismatch. Under a second: the virtual clock does not wait.
  *
  * Usage: trial_audio_keyboard [--sim] [--fullscreen] [--reps N] [--seed N] [--out FILE]
  *   --reps N   repetitions of each tone (default 10; --sim: 2)
@@ -127,6 +128,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     if (reps == 0) reps = sim ? SIM_TRIALS / 2 : 10;
     if (reps < 1 || reps > 100) { fprintf(stderr, "trial_audio_keyboard: --reps takes 1..100\n"); return 2; }
     if (sim) ad.backend = YAU_BACKEND_NULL;
@@ -285,14 +288,16 @@ int main(int argc, char** argv) {
 
     if (sim && !failed && reps != SIM_TRIALS / 2) printf("--sim: the self-check needs the default --reps\n");
     else if (sim && !failed) {
-        /* RT is the press minus the record's onset, which the null
-         * device's fit puts within a period (10 ms) of the target */
+        /* RT is the press minus the record's onset. On the virtual clock
+         * the null device's fit is exact: the onset is on the target
+         * within half a sample at 48 kHz, where the plan meets the sample
+         * grid */
         int bad = rows != SIM_TRIALS;
         if (bad) fprintf(stderr, "trial_audio_keyboard: --sim: %d rows, not %d\n", rows, SIM_TRIALS);
         for (i = 0; i < rows && i < SIM_TRIALS; i++) {
             const yrsp_result* sr = &sim_res[i];
             int ok = sr->onset_src == YRSP_ONSET_AUDIO && sr->onset_tier == YAU_TIER_SIM &&
-                     !(sr->flags & YRSP_R_ONSET_PLAN) && llabs(sr->onset_residual) <= YRT_MS(10);
+                     !(sr->flags & YRSP_R_ONSET_PLAN) && llabs(sr->onset_residual) <= 1000000000 / 48000 / 2;
             if (i == 3) ok = ok && !(sr->flags & YRSP_R_RESPONDED) && (sr->flags & YRSP_R_TIMEOUT);
             else ok = ok && (sr->flags & YRSP_R_RESPONDED) &&
                       fabs(YRT_TO_S(sr->rt_ns) - (double)(sim_t_press[i] - sr->t_onset) / 1e9) < 1e-9 && sim_correct[i] == (i < 2);

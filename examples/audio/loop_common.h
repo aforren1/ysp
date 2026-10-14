@@ -38,6 +38,7 @@ typedef struct lp_sim {
     void*    out_host;
     void*    in_host;
     volatile int run, started;
+    int      out_init, in_init, timer;
     float    out[480 * 2];
     float    in[480];
 } lp_sim;
@@ -71,6 +72,67 @@ static int lp_in_open(void* ctx, const yau_device_open* in, yau_device_caps* cap
     return 0;
 }
 
+/* One 10 ms tick of the loop, entered at t_entry. */
+static void lp_step(lp_sim* s, int64_t t_entry) {
+    yau_tick tk;
+    int i;
+    memset(&tk, 0, sizeof tk);
+    tk.t_entry = t_entry;
+    tk.pos = -1;
+    if (s->render && s->out_host) {
+        if (!s->out_init) { yau_rt_thread_init(s->out_host); s->out_init = 1; }
+        s->render(s->out_host, s->out, 480, &tk);
+    } else {
+        memset(s->out, 0, sizeof s->out);
+    }
+    for (i = 0; i < 480; i++) {
+        float x = s->out[i * 2];
+        int64_t at = (s->w + i) % (s->delay + 480), f = s->w + i;
+        if (s->nrt > 0) {
+            if (fabs((double)x) > 0.01 && s->quiet_in >= 14400 && s->heard < s->nrt)
+                s->resp_at = f + (int64_t)(s->rt_ms[s->heard++] * 48.0 + 0.5);
+            s->quiet_in = fabs((double)x) > 0.01 ? 0 : s->quiet_in + 1;
+            if (s->resp_at > 0 && f >= s->resp_at && f < s->resp_at + 14400) {
+                /* a word: 120 Hz and 4 harmonics, 5 ms attack, -24 dBFS rms */
+                double t = (double)(f - s->resp_at) / 48.0, env = t < 5 ? 0.5 * (1 - cos(3.14159265358979 * t / 5)) : 1, v = 0;
+                int h;
+                for (h = 1; h <= 5; h++) v += sin(2 * 3.14159265358979 * 120.0 * h * t / 1000.0) / h;
+                x += (float)(0.2 * env * v / 2.28);
+            }
+        }
+        if (s->gate_frames > 0) {
+            if (x == 0.0f) s->quiet++;
+            else {
+                if (s->quiet >= s->gate_quiet) s->muting = s->gate_frames;
+                s->quiet = 0;
+            }
+            if (s->muting > 0) { s->muting--; x = 0.0f; }
+        }
+        s->line[at] = x;
+    }
+    for (i = 0; i < 480; i++) {
+        int64_t at = (s->w + i + 480) % (s->delay + 480);   /* delay frames ago */
+        double u;
+        s->rng = s->rng * 6364136223846793005ull + 1442695040888963407ull;
+        u = ((double)(s->rng >> 11) / 9007199254740992.0) * 2.0 - 1.0;
+        s->in[i] = s->line[at] + (float)(u * 1.7e-4);   /* -80 dBFS rms */
+    }
+    s->w += 480;
+    if (s->block && s->in_host) {
+        if (!s->in_init) { yau_capture_thread_init(s->in_host); s->in_init = 1; }
+        s->block(s->in_host, s->in, 480, &tk);
+    }
+}
+
+/* On ysp/rt.h's virtual clock (--sim) the tick is a virtual timer on the
+ * frame thread, so the loop's blocks land at the same times on any host. */
+static int64_t lp_tick(void* p, int64_t now) {
+    lp_sim* s = (lp_sim*)p;
+    if (!s->run) return 0;
+    lp_step(s, now);
+    return now + 10000000;
+}
+
 #if defined(_WIN32)
 static unsigned __stdcall lp_thread(void* p)
 #else
@@ -79,59 +141,11 @@ static void* lp_thread(void* p)
 {
     lp_sim* s = (lp_sim*)p;
     int64_t next = yrt_now_ns();
-    int out_init = 0, in_init = 0;
     (void)yrt_thread_elevate(NULL);
     while (s->run) {
-        yau_tick tk;
-        int i;
         next += 10000000;
         yrt_sleep_until(next, YRT_DEFAULT_SPIN_NS);
-        memset(&tk, 0, sizeof tk);
-        tk.t_entry = yrt_now_ns();
-        tk.pos = -1;
-        if (s->render && s->out_host) {
-            if (!out_init) { yau_rt_thread_init(s->out_host); out_init = 1; }
-            s->render(s->out_host, s->out, 480, &tk);
-        } else {
-            memset(s->out, 0, sizeof s->out);
-        }
-        for (i = 0; i < 480; i++) {
-            float x = s->out[i * 2];
-            int64_t at = (s->w + i) % (s->delay + 480), f = s->w + i;
-            if (s->nrt > 0) {
-                if (fabs((double)x) > 0.01 && s->quiet_in >= 14400 && s->heard < s->nrt)
-                    s->resp_at = f + (int64_t)(s->rt_ms[s->heard++] * 48.0 + 0.5);
-                s->quiet_in = fabs((double)x) > 0.01 ? 0 : s->quiet_in + 1;
-                if (s->resp_at > 0 && f >= s->resp_at && f < s->resp_at + 14400) {
-                    /* a word: 120 Hz and 4 harmonics, 5 ms attack, -24 dBFS rms */
-                    double t = (double)(f - s->resp_at) / 48.0, env = t < 5 ? 0.5 * (1 - cos(3.14159265358979 * t / 5)) : 1, v = 0;
-                    int h;
-                    for (h = 1; h <= 5; h++) v += sin(2 * 3.14159265358979 * 120.0 * h * t / 1000.0) / h;
-                    x += (float)(0.2 * env * v / 2.28);
-                }
-            }
-            if (s->gate_frames > 0) {
-                if (x == 0.0f) s->quiet++;
-                else {
-                    if (s->quiet >= s->gate_quiet) s->muting = s->gate_frames;
-                    s->quiet = 0;
-                }
-                if (s->muting > 0) { s->muting--; x = 0.0f; }
-            }
-            s->line[at] = x;
-        }
-        for (i = 0; i < 480; i++) {
-            int64_t at = (s->w + i + 480) % (s->delay + 480);   /* delay frames ago */
-            double u;
-            s->rng = s->rng * 6364136223846793005ull + 1442695040888963407ull;
-            u = ((double)(s->rng >> 11) / 9007199254740992.0) * 2.0 - 1.0;
-            s->in[i] = s->line[at] + (float)(u * 1.7e-4);   /* -80 dBFS rms */
-        }
-        s->w += 480;
-        if (s->block && s->in_host) {
-            if (!in_init) { yau_capture_thread_init(s->in_host); in_init = 1; }
-            s->block(s->in_host, s->in, 480, &tk);
-        }
+        lp_step(s, yrt_now_ns());
     }
 #if defined(_WIN32)
     return 0;
@@ -144,6 +158,10 @@ static void lp_go(lp_sim* s) {
     if (s->started) return;
     s->started = 1;
     s->run = 1;
+    if (yrt_is_virtual()) {
+        s->timer = yrt_virtual_timer(lp_tick, s, yrt_now_ns() + 10000000);
+        return;
+    }
 #if defined(_WIN32)
     CloseHandle((HANDLE)_beginthreadex(NULL, 0, lp_thread, s, 0, NULL));
 #else
@@ -169,6 +187,7 @@ static void lp_stop(void* ctx) {
     lp_sim* s = (lp_sim*)ctx;
     if (!s->run) return;
     s->run = 0;
+    if (yrt_is_virtual()) { yrt_virtual_cancel(s->timer); return; }
     yrt_sleep_until(yrt_now_ns() + 30000000, 0);
 }
 static void lp_close(void* ctx) { (void)ctx; }

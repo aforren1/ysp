@@ -34,9 +34,10 @@
  * are kept.
  *
  * --sim runs one block of 8 trials (2 with a signal) on the simulated
- * display and miniaudio's null device with a synthetic participant who
- * stops on the first signal and fails on the second. It checks its own
- * results and exits 1 on a mismatch. About 16 s.
+ * display and the null device, on ysp/rt.h's virtual clock, with a
+ * synthetic participant who stops on the first signal and fails on the
+ * second. It checks its own results and exits 1 on a mismatch. Under a
+ * second: the virtual clock does not wait.
  *
  * Usage: trial_stop_signal [--sim] [--fullscreen] [--reps N] [--seed N] [--out FILE]
  *   --reps N   blocks of 8 trials, 2 with a signal (default 8; --sim: 1)
@@ -170,6 +171,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     if (reps == 0) reps = sim ? 1 : 8;
     if (reps < 1 || reps > 100) { fprintf(stderr, "trial_stop_signal: --reps takes 1..100\n"); return 2; }
     if (sim) ad.backend = YAU_BACKEND_NULL;
@@ -401,12 +404,13 @@ int main(int argc, char** argv) {
 
     if (sim && !failed && reps != 1) printf("--sim: the self-check needs the default --reps\n");
     else if (sim && !failed) {
-        /* the SSD 0.25 then 0.30 s; shown within the null device's 10 ms
-         * period of it (the go stimulus is on the plan's frame there) */
+        /* the SSD 0.25 then 0.30 s; on the virtual clock the stop tone is
+         * on it within half a sample at 48 kHz, where the plan meets the
+         * sample grid */
         int bad = rows != 8 || n_stop != 2 || n_go_rt != 6 || fabs(sim_go_rt - SIM_GO_RT) > 1e-6;
         for (i = 0; i < 2; i++)
             if (sim_stopped[i] != !i || fabs(sim_ssd[i] - 0.25 - 0.05 * i) > 1e-9 ||
-                fabs(sim_ssd_actual[i] - sim_ssd[i]) > 0.010)
+                fabs(sim_ssd_actual[i] - sim_ssd[i]) > 0.5 / 48000)
                 bad = 1;
         if (bad) {
             fprintf(stderr, "trial_stop_signal: --sim: %d rows, %d signals, %d go rts (last %.9f); stopped %d %d, ssd %.3f "

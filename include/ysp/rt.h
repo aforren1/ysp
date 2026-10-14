@@ -1,4 +1,4 @@
-/* ysp/rt.h - v0.8.0 - public domain single-header real-time timing library
+/* ysp/rt.h - v0.9.0 - public domain single-header real-time timing library
  *
  *   The clock, the waits, the scheduling ladder, the one-shot deadline
  *   worker, the background-compute pump, the event ring, the clock
@@ -142,6 +142,60 @@
  *   yrt_sleep_until() creates one waitable timer on first use and reuses
  *   it; yrt_thread_cleanup() releases it for a thread that is about to
  *   end and will not wait again.
+ *
+ *   ---------------------------------------------------------------------
+ *   VIRTUAL CLOCK (v0.9.0)
+ *   ---------------------------------------------------------------------
+ *   yrt_virtual_begin(t0_ns) puts the whole process on a virtual clock, so
+ *   a simulated run gives the same records and output on any host, loaded
+ *   or not. Call it before anything reads the clock (the examples call it
+ *   right after they parse --sim):
+ *
+ *       if (sim) yrt_virtual_begin(0);   // starts at YRT_VIRTUAL_T0_NS
+ *
+ *   From then on yrt_now_ns() reads the virtual time, and the time moves
+ *   only when the thread that called yrt_virtual_begin() (the DRIVER)
+ *   waits: yrt_sleep_until(), yrt_sleep_ns() and yrt_spin_until() on the
+ *   driver jump the clock to their deadline at once and return 0. Between
+ *   two waits the clock stands still, so a frame's own work takes no time.
+ *   On any other thread those waits block, in real 100 us steps, until the
+ *   driver has moved the clock to the deadline. A yrt_worker job runs once
+ *   the clock passes its deadline, the same way, and its at_ns reads the
+ *   virtual clock. Event ring stamps (t_ns 0) are virtual too.
+ *
+ *   What moves with the clock runs as a VIRTUAL TIMER on the driver:
+ *   yrt_virtual_timer(fn, ctx, at_ns) calls fn(ctx, t) when a wait of the
+ *   driver passes at_ns, with the clock set to that time, and fn returns
+ *   its next time or ends. Timers run in time order, ties in slot order (a
+ *   timer takes the lowest free slot), so a run repeats exactly.
+ *   YRT_VIRTUAL_TIMERS (16) can be set at once; set and cancel them on the
+ *   driver only. A timer must not wait: it runs inside a wait already (a
+ *   wait there moves the clock and runs no timer).
+ *
+ *   What uses it: ysp/screen.h's BACKEND_SIM sleeps to its vblank grid,
+ *   which on the virtual clock jumps there, so no frame drops; ysp/audio.h's
+ *   BACKEND_NULL becomes a device on a virtual timer (one block per period,
+ *   at its own time), and both refuse a real device; ysp/video.h decodes
+ *   inline. Real time stays where it is the point: the instrumentation
+ *   zones (a cost is real CPU time), yrt_correlate(), and the timeout of
+ *   yrt_pump_wait().
+ *
+ *   Limits. A driver that polls for another thread's real progress
+ *   (poll, sleep 1 ms, until a timeout) sees the timeout pass at once: on
+ *   the virtual clock a wait is free. Work that only a real thread does (a
+ *   decode thread, a capture writer) is not paced by the virtual clock, so
+ *   its results can still differ between runs; make it inline, or a
+ *   virtual timer. yrt_virtual_end() returns to the real clock.
+ *
+ *   COSTS. Between two waits the virtual clock stands still, so a cost
+ *   read with yrt_now_ns() is 0, and one across a wait is the jump. A
+ *   time that feeds a plan or a record reads yrt_now_ns(); a cost (a draw,
+ *   a decode, a build, a CPU phase) reads yrt_real_ns(), the real counter
+ *   on either clock. The headers do so: ysp/screen.h's phases, ysp/gfx.h's
+ *   program and glyph build times, ysp/video.h's decode and upload times.
+ *
+ *   Cost on the real clock: yrt_now_ns() and the waits test one flag
+ *   first. See docs/rt.md, "Virtual clock", for the measurement.
  *
  *   ---------------------------------------------------------------------
  *   SCHEDULING
@@ -997,6 +1051,14 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.9.0 - VIRTUAL CLOCK: yrt_virtual_begin(), yrt_virtual_end(),
+ *          yrt_is_virtual(), yrt_virtual_timer(), yrt_virtual_cancel(),
+ *          YRT_VIRTUAL_T0_NS, YRT_VIRTUAL_TIMERS and YRT_ERR_STATE;
+ *          yrt_real_ns(), the real clock for costs on either clock. The
+ *          examples' --sim runs compared against the real clock and failed
+ *          on loaded CI runners (a dropped frame moved an onset); on the
+ *          virtual clock they give the same output on every run. The real
+ *          clock: yrt_now_ns() and the waits test one flag first.
  *   v0.8.0 - The ysp conventions (README.md, Conventions); breaks the API.
  *          Every time is int64_t ns: yrt_now_ns(), yrt_sleep_until(),
  *          yrt_sleep_ns(), yrt_spin_until(), yrt_worker_submit(),
@@ -1305,9 +1367,9 @@
 /* The version of this header, for a binding's __version__ and for a log line.
  * The string always matches the three numbers. */
 #define YRT_VERSION_MAJOR  0
-#define YRT_VERSION_MINOR  8
+#define YRT_VERSION_MINOR  9
 #define YRT_VERSION_PATCH  0
-#define YRT_VERSION_STRING "0.8.0"
+#define YRT_VERSION_STRING "0.9.0"
 
 /* Feature-test macro for clock_nanosleep() and mlockall() in the Linux
  * implementation. Defined here, before the first system header, so it takes
@@ -1491,6 +1553,50 @@ YRT_API int64_t yrt_spin_until(int64_t deadline_ns);
  * process ends, which is why a long-lived experiment thread need not bother
  * and a worker pool should. No-op on POSIX. */
 YRT_API void yrt_thread_cleanup(void);
+
+/* --- virtual clock (v0.9.0) --------------------------------------------- */
+
+/* The time a virtual clock starts at when yrt_virtual_begin() gets 0:
+ * 1000 s, far from 0, which several headers read as "no time". */
+#define YRT_VIRTUAL_T0_NS ((int64_t)1000000000000LL)
+/* Timers a virtual clock holds at once. */
+#define YRT_VIRTUAL_TIMERS 16
+
+/* A virtual timer: called on the driver thread with the clock at its time.
+ * Return the next time to call it (later than now_ns), or any other value
+ * to end it. */
+typedef int64_t (*yrt_virtual_fn)(void* ctx, int64_t now_ns);
+
+/* Put the whole process on a virtual clock that starts at t0_ns (0 =
+ * YRT_VIRTUAL_T0_NS). See VIRTUAL CLOCK. The calling thread becomes the
+ * driver: its waits move the clock. Returns 0, or YRT_ERR_STATE when
+ * the clock is already virtual. Call it before anything reads the clock. */
+YRT_API int yrt_virtual_begin(int64_t t0_ns);
+
+/* Back to the real clock, and drop every virtual timer. Times read before
+ * and after are on different clocks. Safe when the clock is real. */
+YRT_API void yrt_virtual_end(void);
+
+/* True while the clock is virtual. */
+YRT_API bool yrt_is_virtual(void);
+
+/* The real clock, also while the clock is virtual: yrt_now_ns()'s counter
+ * before VIRTUAL CLOCK. For a cost (how long a draw, a decode or a build
+ * took), never for a time that feeds a plan or a record: those read
+ * yrt_now_ns(). On the real clock the two return the same counter. */
+YRT_API int64_t yrt_real_ns(void);
+
+/* Call fn(ctx, t) on the driver thread when the virtual clock reaches
+ * at_ns (at once, at the next wait of the driver, when at_ns is already
+ * past). Returns the timer's id (0 or more), YRT_ERR_ARG for a NULL fn,
+ * YRT_ERR_FULL when YRT_VIRTUAL_TIMERS are set, or YRT_ERR_STATE when
+ * the clock is real or the caller is not the driver thread. Driver
+ * thread only, timer callbacks included. */
+YRT_API int yrt_virtual_timer(yrt_virtual_fn fn, void* ctx, int64_t at_ns);
+
+/* End a timer before its time. Safe on an id that has ended. Driver
+ * thread only. */
+YRT_API void yrt_virtual_cancel(int id);
 
 /* --- scheduling --------------------------------------------------------- */
 
@@ -1721,6 +1827,8 @@ YRT_API int yrt_describe(const yrt_report* r, char* buf, size_t cap);
                                 * yrt_correlate: the clock never ticked   */
 #define YRT_ERR_UNSUPPORTED (-5) /* this platform has no such facility    */
 #define YRT_ERR_REFUSED (-6) /* the OS refused the request               */
+#define YRT_ERR_STATE   (-7) /* v0.9.0: the clock is real, or the caller is
+                                * not the virtual clock's driver thread    */
 
 /* Static description of a YRT_ERR_* code ("ok" for values >= 0). */
 YRT_API const char* yrt_strerror(int code);
@@ -3553,7 +3661,130 @@ yrt_policy yrt_thread_elevate(const yrt_sched_deadline* rt) {
 
 const char* yrt_version(void) { return YRT_VERSION_STRING; }
 
+/* --- virtual clock ------------------------------------------------------- */
+
+/* One driver thread writes the time; any thread reads it. A 64-bit load
+ * must not tear on a 32-bit target, hence the helpers. */
+#if defined(_MSC_VER) && defined(_M_ARM64)
+static int64_t yrt__ld64(const int64_t* p) { return (int64_t)__ldar64((unsigned __int64 volatile*)(uintptr_t)p); }
+static void yrt__st64(int64_t* p, int64_t v) { __stlr64((unsigned __int64 volatile*)p, (unsigned __int64)v); }
+#elif defined(_MSC_VER) && defined(_M_IX86)
+static int64_t yrt__ld64(const int64_t* p) { return _InterlockedCompareExchange64((volatile __int64*)(uintptr_t)p, 0, 0); }
+static void yrt__st64(int64_t* p, int64_t v) {
+    int64_t o = *(volatile int64_t*)p;
+    while (_InterlockedCompareExchange64((volatile __int64*)p, v, o) != o) o = *(volatile int64_t*)p;
+}
+#elif defined(_MSC_VER)
+static int64_t yrt__ld64(const int64_t* p) { int64_t v = *(const volatile int64_t*)p; _ReadWriteBarrier(); return v; }
+static void yrt__st64(int64_t* p, int64_t v) { _ReadWriteBarrier(); *(volatile int64_t*)p = v; }
+#else
+static int64_t yrt__ld64(const int64_t* p) { return __atomic_load_n(p, __ATOMIC_ACQUIRE); }
+static void yrt__st64(int64_t* p, int64_t v) { __atomic_store_n(p, v, __ATOMIC_RELEASE); }
+#endif
+
+typedef struct yrt__vtimer {
+    yrt_virtual_fn fn;
+    void*          ctx;
+    int64_t        at;
+} yrt__vtimer;
+
+/* The flag is the one word every yrt_now_ns() reads; the rest is cold. */
+static uint32_t yrt__v_on = 0;
+static uint32_t yrt__v_driver = 0;
+static int64_t  yrt__v_now = 0;
+static int      yrt__v_busy = 0;   /* inside a timer: a wait there must not recurse */
+static yrt__vtimer yrt__v_t[YRT_VIRTUAL_TIMERS];
+
+/* The clock every public time reads: virtual when on. yrt__now() stays
+ * the real counter, for what measures real time (zones, correlation, the
+ * OS waits themselves). */
+static int64_t yrt__clock(void) {
+    if (yrt__rload(&yrt__v_on)) return yrt__ld64(&yrt__v_now);
+    return (int64_t)yrt__now();
+}
+
+static int yrt__v_is_driver(void) { return yrt_thread_id() == yrt__rload(&yrt__v_driver); }
+
+/* The driver's wait: run every timer due by `to` in time order (ties in
+ * slot order, so a run repeats exactly), then stand at `to`. */
+static void yrt__v_advance(int64_t to) {
+    for (; !yrt__v_busy;) {
+        int i, k = -1;
+        int64_t at = 0;
+        for (i = 0; i < YRT_VIRTUAL_TIMERS; i++)
+            if (yrt__v_t[i].fn && (k < 0 || yrt__v_t[i].at < at)) { k = i; at = yrt__v_t[i].at; }
+        if (k < 0 || at > to) break;
+        if (at > yrt__ld64(&yrt__v_now)) yrt__st64(&yrt__v_now, at);
+        {
+            yrt_virtual_fn fn = yrt__v_t[k].fn;
+            int64_t now = yrt__ld64(&yrt__v_now), next;
+            yrt__v_busy = 1;
+            next = fn(yrt__v_t[k].ctx, now);
+            yrt__v_busy = 0;
+            /* The callback may have canceled or replaced its own slot. */
+            if (yrt__v_t[k].fn == fn && yrt__v_t[k].at == at) {
+                if (next > now) yrt__v_t[k].at = next;
+                else yrt__v_t[k].fn = NULL;
+            }
+        }
+    }
+    if (to > yrt__ld64(&yrt__v_now)) yrt__st64(&yrt__v_now, to);
+}
+
+/* A wait on the virtual clock. The driver moves the clock; any other
+ * thread sleeps in real 100 us steps until the driver has moved it far
+ * enough, or until the clock is real again. */
+static int64_t yrt__v_wait(int64_t deadline) {
+    int64_t now = yrt__ld64(&yrt__v_now);
+    if (now >= deadline) return now - deadline;
+    if (yrt__v_is_driver()) { yrt__v_advance(deadline); return 0; }
+    while (yrt__rload(&yrt__v_on)) {
+        now = yrt__ld64(&yrt__v_now);
+        if (now >= deadline) return now - deadline;
+        (void)yrt__sleep_until(yrt__now() + 100000u, 0);
+    }
+    return 0;
+}
+
+int yrt_virtual_begin(int64_t t0_ns) {
+    if (yrt__rload(&yrt__v_on)) return YRT_ERR_STATE;
+    memset(yrt__v_t, 0, sizeof yrt__v_t);
+    yrt__st64(&yrt__v_now, t0_ns > 0 ? t0_ns : YRT_VIRTUAL_T0_NS);
+    yrt__rstore(&yrt__v_driver, yrt_thread_id());
+    yrt__rstore(&yrt__v_on, 1u);
+    return 0;
+}
+
+void yrt_virtual_end(void) {
+    yrt__rstore(&yrt__v_on, 0u);
+    memset(yrt__v_t, 0, sizeof yrt__v_t);
+}
+
+bool yrt_is_virtual(void) { return yrt__rload(&yrt__v_on) != 0; }
+
+int64_t yrt_real_ns(void) { return (int64_t)yrt__now(); }
+
+int yrt_virtual_timer(yrt_virtual_fn fn, void* ctx, int64_t at_ns) {
+    int i;
+    if (!fn) return YRT_ERR_ARG;
+    if (!yrt__rload(&yrt__v_on) || !yrt__v_is_driver()) return YRT_ERR_STATE;
+    for (i = 0; i < YRT_VIRTUAL_TIMERS; i++)
+        if (!yrt__v_t[i].fn) {
+            yrt__v_t[i].ctx = ctx;
+            yrt__v_t[i].at = at_ns;
+            yrt__v_t[i].fn = fn;
+            return i;
+        }
+    return YRT_ERR_FULL;
+}
+
+void yrt_virtual_cancel(int id) {
+    if (id < 0 || id >= YRT_VIRTUAL_TIMERS || !yrt__v_is_driver()) return;
+    yrt__v_t[id].fn = NULL;
+}
+
 int64_t yrt_now_ns(void) {
+    if (yrt__rload(&yrt__v_on)) return yrt__ld64(&yrt__v_now);
     return (int64_t)yrt__now();
 }
 
@@ -3570,14 +3801,17 @@ static uint64_t yrt__spin_until(uint64_t deadline_ns) {
 static uint64_t yrt__unsigned(int64_t t) { return t > 0 ? (uint64_t)t : 0u; }
 
 int64_t yrt_sleep_until(int64_t deadline_ns, int64_t spin_ns) {
+    if (yrt__rload(&yrt__v_on)) return yrt__v_wait(deadline_ns);
     return (int64_t)yrt__sleep_until(yrt__unsigned(deadline_ns), yrt__unsigned(spin_ns));
 }
 
 int64_t yrt_spin_until(int64_t deadline_ns) {
+    if (yrt__rload(&yrt__v_on)) return yrt__v_wait(deadline_ns);
     return (int64_t)yrt__spin_until(yrt__unsigned(deadline_ns));
 }
 
 int64_t yrt_sleep_ns(int64_t ns) {
+    if (yrt__rload(&yrt__v_on)) return yrt__v_wait(yrt__ld64(&yrt__v_now) + (ns > 0 ? ns : 0));
     /* The deadline is taken here, so the call's own overhead comes out of the
      * wait instead of being added to it. */
     return (int64_t)yrt__sleep_until(yrt__now() + yrt__unsigned(ns),
@@ -3709,6 +3943,7 @@ const char* yrt_strerror(int code) {
         case YRT_ERR_TIMEOUT: return "timed out";
         case YRT_ERR_UNSUPPORTED: return "not on this platform";
         case YRT_ERR_REFUSED: return "refused by the OS";
+        case YRT_ERR_STATE:   return "the clock is real, or not the driver thread";
         default:                return code >= 0 ? "ok" : "unknown error";
     }
 }
@@ -3783,7 +4018,7 @@ int yrt_ring_push(yrt_ring* r, const yrt_event* ev) {
     if (!r || !ev || !r->slots) return YRT_ERR_ARG;
     /* Before the claim: between its ticket and its publish a push holds up
      * the drainer, so nothing optional happens in that window. */
-    t_ns = ev->t_ns ? ev->t_ns : (int64_t)yrt__now();
+    t_ns = ev->t_ns ? ev->t_ns : yrt__clock();
     tid  = ev->tid ? ev->tid : yrt_thread_id();
     n = yrt__rfadd(&r->used, 1u);
     if (n > r->mask) {
@@ -3816,7 +4051,7 @@ int yrt_ring_drain(yrt_ring* r, yrt_event* out, int cap) {
         r->dropped_seen = d;
         r->lost += delta;
         memset(&out[0], 0, sizeof(out[0]));
-        out[0].t_ns   = (int64_t)yrt__now();
+        out[0].t_ns   = yrt__clock();
         out[0].tid    = yrt_thread_id();
         out[0].source = (uint16_t)YRT_SRC_RT;
         out[0].kind   = (uint16_t)YRT_KIND_LOSS;
@@ -4681,7 +4916,7 @@ static void yrt__worker_run(yrt_worker* w, bool flushed) {
     w->has_job = 0;
     w->gen = yrt__next_gen(w->gen);
     yrt__worker_unlock(w);
-    info.at_ns = (int64_t)yrt__now();
+    info.at_ns = yrt__clock();
     info.late_ns = info.at_ns - info.deadline_ns;
     if (fn) {
         YRT_ZONE(z, "yrt.worker.job");
@@ -5083,7 +5318,18 @@ static void yrt__worker_loop(yrt_worker* w) {
          * than a system tick, so the last tick is spun. See yrt_sleep_until. */
         if (!yrt__w(w)->hires && spin < YRT__TICK_NS) spin = YRT__TICK_NS;
 #endif
-        uint64_t now = yrt__now();
+        uint64_t now;
+        if (yrt__rload(&yrt__v_on)) {
+            /* VIRTUAL CLOCK: the job runs once the driver has moved the
+             * clock to its deadline; the worker looks in real 100 us steps. */
+            if (yrt__clock() < (int64_t)deadline) {
+                yrt__worker_wait_until(w, yrt__now() + 100000u);
+                continue;
+            }
+            yrt__worker_run(w, false);
+            continue;
+        }
+        now = yrt__now();
         uint64_t wake = (deadline > spin) ? deadline - spin : 0;
         if (now < wake) {
             /* Wakes on the deadline OR on a submit, then re-evaluates from

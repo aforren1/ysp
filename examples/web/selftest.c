@@ -119,6 +119,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     if (frames < 2 || frames > MAX_FRAMES || load_ms < 0 || load_ms > 100) {
         fprintf(stderr, "web_selftest: --frames takes 2..%d, --load-ms 0..100\n", MAX_FRAMES);
         return 2;
@@ -156,7 +158,7 @@ int main(int argc, char** argv) {
         int rc = yscr_begin(&scr, &f);
         if (rc == YSCR_QUIT) { aborted = 1; break; }
         if (rc != YSCR_OK) { fprintf(stderr, "web_selftest: %s\n", yscr_error(&scr)); break; }
-        t_in = yrt_now_ns();
+        t_in = yrt_real_ns();   /* the frame's cost: the real clock */
 #if defined(__EMSCRIPTEN__)
         if (!sim && web_raf_run_ms() > 0 && n_res < MAX_FRAMES)
             resume[n_res++] = (int64_t)llround((web_perf_ms() - web_raf_run_ms()) * 1e6);
@@ -186,7 +188,7 @@ int main(int argc, char** argv) {
             web_key(type, (double)(t_in - perf_off) * 1e-6, (double)(in.t - perf_off) * 1e-6);
 #endif
         }
-        t_in = yrt_now_ns();
+        t_in = yrt_real_ns();   /* the frame's cost: the real clock */
         if (clear) {
             int x = (int)((f.index * 4) % (caps.mode.w > 40 ? caps.mode.w - 40 : 1));
             clear_color(0.5f, 0.5f, 0.5f, 1.0f);
@@ -198,11 +200,11 @@ int main(int argc, char** argv) {
             disable(0x0C11u);
         }
         if (load_ms > 0) {
-            int64_t until = yrt_now_ns() + (int64_t)(load_ms * 1e6);
-            while (yrt_now_ns() < until) { }
+            int64_t until = yrt_real_ns() + (int64_t)(load_ms * 1e6);
+            while (yrt_real_ns() < until) { }
         }
         if (yscr_flip(&scr) < 0) { fprintf(stderr, "web_selftest: %s\n", yscr_error(&scr)); break; }
-        t_out = yrt_now_ns();
+        t_out = yrt_real_ns();
         if (n < MAX_FRAMES) cost[n] = t_out - t_in;
         if (++n >= frames) break;
     }
