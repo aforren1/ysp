@@ -150,6 +150,8 @@ All three load liblsl at run time (docs/net.md, "How-to: get liblsl"); without i
 | Program | Shows | Headers | Run | Needs |
 |---|---|---|---|---|
 | `rigfile_profile` | The rig profile: load and check it (each loopback file by SHA-256), its roles, notes and hash; list profiles; a new profile; a binding by hand, also of an LSL stream (family `lsl`) | rigfile | `rigfile_profile`; `rigfile_profile --rig booth2`; `rigfile_profile --list`; `rigfile_profile --new booth-2`; `rigfile_profile --bind resp xid serial:0403:6001:FT4ABC12:`; `rigfile_profile --bind ref lsl lsl:Data::` (CI, in a folder of the runner's with `--dir`) | nothing |
+| `rigfile_bounds` | An input's bounds (stamp minus event) by loopback: a reference line board's pin into the input, each change against the board's own report, widened by that board's clock bracket; the range stored in the profile with `--store` | rigfile, device | `rigfile_bounds --sim --role photo --store --rig-dir DIR` (CI); `rigfile_bounds --role photo --ref serial:16C0:0483:<serial>: --store` | a second board with `firmware/ysp_line/` for a hardware run |
+| `rigfile_onset` | The display's onset offset from a photodiode run's CSV (`photodiode_check --csv`): the median of light minus flip onset, stored in the profile with its run | rigfile | `rigfile_onset run.csv --store` (CI, on a generated CSV) | a photodiode run for a real offset |
 | `rigfile_bench` | The costs of reading, checking, writing and hashing a profile, and ysp/json.h on a 1 MB document | rt, json, rigfile | `rigfile_bench` (under the measurement lock) | nothing |
 
 ## rt

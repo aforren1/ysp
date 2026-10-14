@@ -314,6 +314,7 @@ Purpose: The rig profile ("ysp-rig 1", docs/devices_spec.md 11.2): which device 
 
 Status:
 
+- v0.4.0: `display.latency`, the photodiode run behind the onset offset, checked at load; `yrig_read_loopback()` reads the new input bounds and display onset files, and a bounds file is now compared with the profile (DIFFERS). Two tools: `rigfile_bounds` (an input's bounds against a reference line board, each difference widened by its bracket; in 160 of 160 simulated runs over seeds and USB tails the bounds contained the truth) and `rigfile_onset` (the offset from a photodiode run's CSV). 501 checks; 37 of 37 mutations caught (8 new). Run on simulated boards and a generated CSV only. [The tools](device.md#the-rig-profile-tools-ysprigfileh-v040-2026-10-13).
 - v0.3.0 (the [Conventions](conventions.md): `yrig_open_device()` replaces `yrig_start()`, its message in `ydev_error()`).
 - v0.2.0. 403 checks pass on MSVC and MinGW, 410 on WSL2 gcc with the planted-folder checks; canonical bytes pinned; 66 refusals by field, 7 more for `lsl` roles; binding through a fake transport; 28 of 28 mutations caught. A 4-role profile read and checked in 18 to 23 us. [Design notes](device.md#how-to-keep-a-rigs-devices-and-latencies-in-its-rig-profile).
 

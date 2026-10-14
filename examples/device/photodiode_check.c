@@ -22,7 +22,9 @@
  *       (yscr_poll, yscr_event_input). Each change of the patch is matched
  *       to the next edge of its polarity; the program prints edge minus
  *       flip onset (mean, SD, p1, p50, p99), the edges missing and extra,
- *       the device's fit and its statistics. --invert when the board reads
+ *       the device's fit and its statistics; --csv writes each edge, the
+ *       input of rigfile_onset (examples/rigfile/onset.c), which puts the
+ *       offset into the rig profile. --invert when the board reads
  *       light as 0. Shift+Esc ends the run.
  *
  * The key of a Teensy in serial mode is "serial:16C0:0483:<serial>:" (any

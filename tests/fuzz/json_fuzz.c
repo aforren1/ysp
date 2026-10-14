@@ -8,7 +8,9 @@
  *      the second byte
  *   2  yrig_parse() of a rig profile; on success its canonical bytes are
  *      parsed again and must give the same bytes
- *   3  yrig_read_latency() of an output latency file, and
+ *   3  yrig_read_latency() of an output latency file and
+ *      yrig_read_loopback() of any loopback file (ysp/rigfile.h v0.4.0),
+ *      which must agree on an output latency file; and
  *      yjs_parse_fixed() / yjs_parse_double() on the whole input
  * Every input must return without a sanitizer report. A refusal is a
  * correct answer to a bad input; only a broken round trip is a finding of
@@ -136,7 +138,15 @@ int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
         yrig_loopback lb;
         int64_t i;
         double d;
-        g_sink += (unsigned)yrig_read_latency(t, n, &lb, err, sizeof err);
+        yrig_loopback lb2;
+        int r1 = yrig_read_latency(t, n, &lb, err, sizeof err);
+        int r2 = yrig_read_loopback(t, n, &lb2, err, sizeof err);
+        /* one parser behind both: an output latency file reads the same through each */
+        if ((r1 == YRIG_OK) != (r2 == YRIG_FILE_OUT_LATENCY)) abort();
+        if (r1 == YRIG_OK && (lb.n != lb2.n || lb.median_ns != lb2.median_ns || lb.max_ns != lb2.max_ns || strcmp(lb.sha256, lb2.sha256) != 0))
+            abort();
+        if (r2 > YRIG_FILE_DISPLAY_ONSET || (r2 < 0 && r2 != YRIG_ERR_FORMAT)) abort();
+        g_sink += (unsigned)r1 + (unsigned)r2;
         g_sink += (unsigned)yjs_parse_fixed(t, n, data[1] % 19, &i) + (unsigned)yjs_parse_double(t, n, &d);
     } break;
     }
@@ -174,7 +184,14 @@ int main(int argc, char** argv) {
         "\"triggerbox\", \"key\": \"serial:0403:6001:TB0123:\", \"latency\": {\"date\": \"2026-10-09T13:58:12Z\", \"max_s\": 0.0021, "
         "\"median_s\": 0.000577, \"n\": 200, \"p5_s\": 0.000201, \"p95_s\": 0.000983, \"sha256\": "
         "\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"}, \"pulse_s\": 0.002}}, \"written\": \"2026-10-09T14:03:00Z\"}";
-    static const char lat[] = "format ysp-out-latency 1\ndate 2026-10-09T13:58:12Z\nn 200\np5_s 0.0002010\nmedian_s 0.0005770\n"
+    static const char profile4[] =
+        "{\"display\": {\"latency\": {\"date\": \"2026-10-13T10:05:00Z\", \"max_s\": 0.013, \"median_s\": 0.0123, \"n\": 1180, "
+        "\"p5_s\": 0.01201, \"p95_s\": 0.01261, \"sha256\": \"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"}, "
+        "\"onset_offset_s\": 0.0123}, \"format\": \"ysp-rig 1\", \"rig\": \"v04\", \"roles\": {}, \"written\": \"2026-10-13T10:05:00Z\"}";
+    static const char bnd[] = "format ysp-in-bounds 1\ndate 2026-10-13T10:00:00Z\nn 398\nlo_s -0.000312000\nhi_s 0.001104000\n";
+    static const char ons[] = "format ysp-display-onset 1\ndate 2026-10-13T10:05:00Z\nn 1180\np5_s 0.012010000\nmedian_s 0.012300000\n"
+                              "p95_s 0.012610000\nmax_s 0.013000000\nonset_offset_s 0.012300000\n";
+    static const char lat[] ="format ysp-out-latency 1\ndate 2026-10-09T13:58:12Z\nn 200\np5_s 0.0002010\nmedian_s 0.0005770\n"
                               "p95_s 0.0009830\nmax_s 0.0021000\n";
     char name[32];
     size_t i;
@@ -189,7 +206,10 @@ int main(int argc, char** argv) {
     put(argv[1], "profile_json", 0, 0, profile);
     put(argv[1], "latency", 3, 9, lat);
     put(argv[1], "fixed", 3, 9, "-1.5e-3");
-    printf("json_fuzz: wrote %u seeds to %s\n", (unsigned)(2 * (sizeof docs / sizeof docs[0]) + 4), argv[1]);
+    put(argv[1], "profile4", 2, 0, profile4);
+    put(argv[1], "bounds", 3, 9, bnd);
+    put(argv[1], "onset", 3, 9, ons);
+    printf("json_fuzz: wrote %u seeds to %s\n", (unsigned)(2 * (sizeof docs / sizeof docs[0]) + 7), argv[1]);
     return 0;
 }
 #elif defined(YSP_FUZZ_REPLAY)

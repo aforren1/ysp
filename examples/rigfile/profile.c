@@ -131,6 +131,14 @@ static int show(const yrig_profile* p, const char* path) {
             if (p->display.check != YRIG_CHECK_OK) bad = 1;
         }
         printf("\n");
+        if (p->display.latency.set) {
+            const yrig_loopback* l = &p->display.latency;
+            secs(a, sizeof a, l->p5_ns);
+            secs(b, sizeof b, l->p95_ns);
+            printf("               photodiode run p5 %s s, p95 %s s, n %d, %s, file %.12s... %s\n", a, b, (int)l->n, l->date, l->sha256,
+                   yrig_check_name(l->check));
+            if (l->check != YRIG_CHECK_OK) bad = 1;
+        }
     }
     for (i = 0; i < p->n_notes; i++) printf("note: %s\n", p->notes[i]);
     if (yrig_hash(p, hash) == YRIG_OK) printf("sha256 %s\n", hash);

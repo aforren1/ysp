@@ -1025,6 +1025,219 @@ static void check_lsl(void) {
     CHECK(n > 0 && yrig_parse(&g_p, g_buf, n, NULL, g_err, sizeof g_err) == YRIG_OK);
 }
 
+/* ------------------------------------- bounds and display onset (v0.4.0) */
+
+/* An input bounds file as examples/rigfile/bounds.c writes it. */
+static const char BNDFILE[] =
+    "# ysp input bounds: the input's event time minus the reference board's edge (docs/devices_spec.md 12)\n"
+    "format ysp-in-bounds 1\n"
+    "date 2026-10-13T10:00:00Z\n"
+    "in_family xid\n"
+    "n 398\n"
+    "missed 2\n"
+    "lo_s -0.000312000\n"
+    "median_s 0.000101000\n"
+    "hi_s 0.001104000\n"
+    "samples_s -0.000312000 0.001104000\n";
+
+/* A display onset file as examples/rigfile/onset.c writes it. */
+static const char ONSFILE[] =
+    "# ysp display onset: photodiode edge minus flip onset (docs/devices_spec.md 12)\n"
+    "format ysp-display-onset 1\n"
+    "date 2026-10-13T10:05:00Z\n"
+    "n 1180\n"
+    "min_s 0.011900000\n"
+    "p5_s 0.012010000\n"
+    "median_s 0.012300000\n"
+    "p95_s 0.012610000\n"
+    "max_s 0.013000000\n"
+    "onset_offset_s 0.012300000\n";
+
+/* text with one edit, parsed without a folder: the result and a substring */
+static void refuse_in(int line, const char* text, const char* find, const char* repl, int code, const char* says) {
+    static char t[1 << 16];
+    const char* at = strstr(text, find);
+    size_t fl = strlen(find), rl = strlen(repl), pre;
+    int rc;
+    g_checks++;
+    if (!at) { fprintf(stderr, "rigfile_test: FAIL at line %d: '%s' is not in the text\n", line, find); g_failures++; return; }
+    pre = (size_t)(at - text);
+    memcpy(t, text, pre);
+    memcpy(t + pre, repl, rl);
+    strcpy(t + pre + rl, at + fl);
+    g_err[0] = '\0';
+    rc = yrig_parse(&g_q, t, strlen(t), NULL, g_err, sizeof g_err);
+    if (rc != code || !strstr(g_err, says)) {
+        fprintf(stderr, "rigfile_test: FAIL at line %d: %d '%s' (want %d '%s')\n", line, rc, g_err, code, says);
+        g_failures++;
+    }
+}
+
+static void check_v04(void) {
+    char dir[900], path[1000], bsha[65], osha[65], lsha[65], op[1100];
+    yrig_loopback lb, ob;
+    yrig_role* r;
+    yin_source s, base;
+    /* the readers of the three formats */
+    CHECK_I(yrig_read_loopback(BNDFILE, strlen(BNDFILE), &lb, g_err, sizeof g_err), YRIG_FILE_IN_BOUNDS);
+    CHECK(lb.set && lb.n == 398 && lb.lo_ns == -312000 && lb.hi_ns == 1104000 && lb.check == YRIG_CHECK_OK);
+    CHECK_S(lb.date, "2026-10-13T10:00:00Z");
+    sha_hex(BNDFILE, strlen(BNDFILE), bsha);
+    CHECK_S(lb.sha256, bsha);
+    CHECK_I(yrig_read_loopback(ONSFILE, strlen(ONSFILE), &ob, g_err, sizeof g_err), YRIG_FILE_DISPLAY_ONSET);
+    CHECK(ob.n == 1180 && ob.p5_ns == 12010000 && ob.median_ns == 12300000 && ob.p95_ns == 12610000 && ob.max_ns == 13000000);
+    CHECK_I(ob.offset_ns, 12300000);
+    CHECK_I(yrig_read_loopback(LATFILE, strlen(LATFILE), &lb, g_err, sizeof g_err), YRIG_FILE_OUT_LATENCY);
+    CHECK_I(yrig_read_latency(BNDFILE, strlen(BNDFILE), &lb, g_err, sizeof g_err), YRIG_ERR_FORMAT);
+    CHECK_HAS(g_err, "not an output latency file (format ysp-in-bounds 1)");
+    CHECK_I(yrig_read_loopback("format other 1\n", 15, &lb, g_err, sizeof g_err), YRIG_ERR_FORMAT);
+    CHECK_HAS(g_err, "not a loopback file (format other 1)");
+    CHECK_I(yrig_read_loopback("n 5\n", 4, &lb, g_err, sizeof g_err), YRIG_ERR_FORMAT);
+    CHECK_HAS(g_err, "not a loopback file (no format line)");
+    CHECK_I(yrig_read_loopback("format ysp-in-bounds 1\nn 3\nlo_s 0\ndate 2026-10-13T10:00:00Z\n", 59, &lb, g_err, sizeof g_err),
+            YRIG_ERR_FORMAT);
+    CHECK_HAS(g_err, "an input bounds file without its summary");
+    {
+        /* the onset file without its onset_offset_s line */
+        char t[1024];
+        const char* f = strstr(ONSFILE, "onset_offset_s");
+        memcpy(t, ONSFILE, (size_t)(f - ONSFILE));
+        t[f - ONSFILE] = '\0';
+        CHECK_I(yrig_read_loopback(t, strlen(t), &lb, g_err, sizeof g_err), YRIG_ERR_FORMAT);
+        CHECK_HAS(g_err, "a display onset file without its summary");
+    }
+    CHECK_I(yrig_read_loopback("format ysp-in-bounds 1\nformat ysp-out-latency 1\n", 47, &lb, g_err, sizeof g_err), YRIG_ERR_FORMAT);
+    CHECK_HAS(g_err, "two format lines");
+    CHECK_I(yrig_read_loopback("format ysp-in-bounds 1\nlo_s 1 ms\n", 34, &lb, g_err, sizeof g_err), YRIG_ERR_FORMAT);
+    CHECK_HAS(g_err, "bad lo_s");
+    CHECK_I(yrig_read_loopback(NULL, 0, &lb, g_err, sizeof g_err), YRIG_ERR_ARG);
+
+    /* a profile that names both files: stored, checked OK, canonical */
+    snprintf(dir, sizeof dir, "%s" YRIG__SEP "rig_test_work" YRIG__SEP "rig4", g_cwd);
+    CHECK_I(yrig_store_loopback(dir, BNDFILE, strlen(BNDFILE), bsha, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig_store_loopback(dir, ONSFILE, strlen(ONSFILE), osha, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig_store_loopback(dir, LATFILE, strlen(LATFILE), lsha, g_err, sizeof g_err), YRIG_OK);
+    yrig_init(&g_p, "v04");
+    CHECK_I(yrig_bind(&g_p, "resp", YBOX_XID, "serial:0403:6001:FT4ABC12:"), YRIG_OK);
+    r = yrig_find(&g_p, "resp");
+    CHECK_I(yrig_read_loopback(BNDFILE, strlen(BNDFILE), &r->bounds, g_err, sizeof g_err), YRIG_FILE_IN_BOUNDS);
+    g_p.display.set = true;
+    g_p.display.onset_offset_ns = ob.offset_ns;
+    g_p.display.latency = ob;
+    snprintf(path, sizeof path, "%s" YRIG__SEP "profile.json", dir);
+    CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(g_q.n_notes, 0);
+    CHECK_I(yrig_find(&g_q, "resp")->bounds.check, YRIG_CHECK_OK);
+    CHECK_I(g_q.display.latency.check, YRIG_CHECK_OK);
+    CHECK(g_q.display.latency.set && g_q.display.latency.median_ns == 12300000 && g_q.display.latency.n == 1180);
+    CHECK_S(g_q.display.latency.sha256, osha);
+    {
+        size_t n = yrig_write(&g_q, g_buf, sizeof g_buf);
+        CHECK(n > 0 && n < sizeof g_buf);
+        CHECK_HAS(g_buf, "  \"display\": {\n    \"latency\": {\n      \"date\": \"2026-10-13T10:05:00Z\",\n      \"max_s\": 0.013,\n"
+                         "      \"median_s\": 0.0123,\n      \"n\": 1180,\n      \"p5_s\": 0.01201,\n      \"p95_s\": 0.01261,\n");
+        CHECK_HAS(g_buf, "\n    },\n    \"onset_offset_s\": 0.0123\n  },\n");
+    }
+    /* tier 1 from the checked bounds file, through the role's name */
+    memset(&base, 0, sizeof base);
+    s = yrig_source_role(&g_q, "resp", base);
+    CHECK(s.tier == YIN_TIER_1 && s.lo_ns == -312000 && s.hi_ns == 1104000);
+
+    /* a bounds summary edited by hand: DIFFERS, tier UNKNOWN */
+    yrig_find(&g_p, "resp")->bounds.hi_ns = 1000000;
+    CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig_find(&g_q, "resp")->bounds.check, YRIG_CHECK_DIFFERS);
+    CHECK_I(g_q.n_notes, 1);
+    CHECK_HAS(g_q.notes[0], "roles.resp.bounds: loopback/");
+    CHECK_HAS(g_q.notes[0], "does not match the profile's summary: the role's tier is UNKNOWN");
+    CHECK_I(yrig_source_role(&g_q, "resp", base).tier, YIN_TIER_UNKNOWN);
+    yrig_find(&g_p, "resp")->bounds.hi_ns = 1104000;
+    yrig_find(&g_p, "resp")->bounds.lo_ns = -300000;
+    CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig_find(&g_q, "resp")->bounds.check, YRIG_CHECK_DIFFERS);
+    yrig_find(&g_p, "resp")->bounds.lo_ns = -312000;
+    /* the display's offset edited by hand, its file genuine: DIFFERS */
+    g_p.display.onset_offset_ns = 12000000;
+    CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig_find(&g_q, "resp")->bounds.check, YRIG_CHECK_OK);
+    CHECK_I(g_q.display.latency.check, YRIG_CHECK_DIFFERS);
+    CHECK_I(g_q.n_notes, 1);
+    CHECK_HAS(g_q.notes[0], "display.latency: loopback/");
+    CHECK_HAS(g_q.notes[0], "does not match the profile's summary: the onset offset is not checked");
+    g_p.display.onset_offset_ns = 12300000;
+    /* the display's summary edited: DIFFERS */
+    g_p.display.latency.p95_ns = 12620000;
+    CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(g_q.display.latency.check, YRIG_CHECK_DIFFERS);
+    g_p.display.latency.p95_ns = 12610000;
+    g_p.display.latency.date[3] = '7';
+    CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(g_q.display.latency.check, YRIG_CHECK_DIFFERS);
+    g_p.display.latency.date[3] = '6';
+    /* a genuine file of the wrong kind: the onset file named as the bounds,
+     * the bounds file as the display's, an output latency file as either */
+    r = yrig_find(&g_p, "resp");
+    strcpy(r->bounds.sha256, osha);
+    strcpy(g_p.display.latency.sha256, bsha);
+    CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig_find(&g_q, "resp")->bounds.check, YRIG_CHECK_DIFFERS);
+    CHECK_I(g_q.display.latency.check, YRIG_CHECK_DIFFERS);
+    CHECK_I(g_q.n_notes, 2);
+    strcpy(r->bounds.sha256, lsha);
+    strcpy(g_p.display.latency.sha256, lsha);
+    CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig_find(&g_q, "resp")->bounds.check, YRIG_CHECK_DIFFERS);
+    CHECK_I(g_q.display.latency.check, YRIG_CHECK_DIFFERS);
+    strcpy(r->bounds.sha256, bsha);
+    strcpy(g_p.display.latency.sha256, osha);
+    {
+        /* the display's file named as an output's latency, every field the
+         * same: only its kind tells it apart */
+        yrig_role* t;
+        CHECK_I(yrig_bind(&g_p, "trig", YBOX_TRIGGERBOX, "serial:0403:6001:TB0123:"), YRIG_OK);
+        t = yrig_find(&g_p, "trig");
+        t->latency = g_p.display.latency;
+        CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
+        CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
+        CHECK_I(yrig_find(&g_q, "trig")->latency.check, YRIG_CHECK_DIFFERS);
+        CHECK_I(g_q.display.latency.check, YRIG_CHECK_OK);
+        CHECK(yrig_remove(&g_p, "trig"));
+    }
+    /* the display's file removed: MISSING, with a note; without a folder: NOT_RUN */
+    snprintf(op, sizeof op, "%s" YRIG__SEP "loopback" YRIG__SEP "%s.txt", dir, osha);
+    CHECK(remove(op) == 0);
+    CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(g_q.display.latency.check, YRIG_CHECK_MISSING);
+    CHECK_I(yrig_find(&g_q, "resp")->bounds.check, YRIG_CHECK_OK);
+    CHECK_I(g_q.n_notes, 1);
+    CHECK_HAS(g_q.notes[0], "is missing: the onset offset is not checked");
+    {
+        size_t n = yrig_write(&g_p, g_buf, sizeof g_buf);
+        CHECK_I(yrig_parse(&g_q, g_buf, n, NULL, g_err, sizeof g_err), YRIG_OK);
+        CHECK_I(g_q.display.latency.check, YRIG_CHECK_NOT_RUN);
+        CHECK_I(g_q.n_notes, 0);
+        /* the refusals of display.latency, by field */
+        refuse_in(__LINE__, g_buf, "\"max_s\": 0.013,\n", "", YRIG_ERR_FORMAT, "display.latency.max_s: is missing");
+        refuse_in(__LINE__, g_buf, "\"max_s\": 0.013,\n", "\"max_s\": 0.013,\n      \"lo_s\": 0,\n", YRIG_ERR_FORMAT,
+                  "display.latency: unknown key \"lo_s\"");
+        refuse_in(__LINE__, g_buf, "\"median_s\": 0.0123", "\"median_s\": 0.0127", YRIG_ERR_FORMAT,
+                  "display.latency: p5_s <= median_s <= p95_s <= max_s");
+        refuse_in(__LINE__, g_buf, "\"n\": 1180", "\"n\": 0", YRIG_ERR_FORMAT, "display.latency.n: 0 is out of range");
+        refuse_in(__LINE__, g_buf, "\"display\": {\n", "\"display\": {\n    \"latencies\": 1,\n", YRIG_ERR_FORMAT,
+                  "display: unknown key \"latencies\"");
+    }
+    printf("  bounds and display onset files (v0.4.0): ok\n");
+}
+
 int main(void) {
     printf("ysp_rig %s (ysp_json %s, ysp_device %s)\n", yrig_version(), yjs_version(), ydev_version());
     CHECK_S(yrig_version(), YRIG_VERSION_STRING);
@@ -1036,6 +1249,7 @@ int main(void) {
     check_user_folder();
     check_binding();
     check_lsl();
+    check_v04();
     check_damage();
     if (g_failures) {
         fprintf(stderr, "rigfile_test: %d of %d checks FAILED\n", g_failures, g_checks);

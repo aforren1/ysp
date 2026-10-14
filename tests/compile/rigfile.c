@@ -31,6 +31,7 @@ typedef struct rigfile_api {
     int  (*bind)(yrig_profile*, const char*, int, const char*);
     int  (*store_loopback)(const char*, const void*, size_t, char[65], char*, size_t);
     int  (*read_latency)(const char*, size_t, yrig_loopback*, char*, size_t);
+    int  (*read_loopback)(const char*, size_t, yrig_loopback*, char*, size_t);
     void (*sha256)(const void*, size_t, uint8_t[32]);
     int  (*desc)(const yrig_profile*, const char*, ydev_desc*, char*, size_t);
     bool (*open_device)(ydev_device*, const yrig_profile*, const char*, const ydev_desc*);
@@ -42,7 +43,7 @@ static const rigfile_api g_api = {
     yrig_version, yrig_check_name, yrig_dir, yrig_path, yrig_load, yrig_load_file,
     yrig_parse, yrig_save, yrig_save_file, yrig_init, yrig_write, yrig_hash,
     yrig_find, yrig_add, yrig_remove, yrig_bind, yrig_store_loopback,
-    yrig_read_latency, yrig_sha256, yrig_desc, yrig_open_device, yrig_source,
+    yrig_read_latency, yrig_read_loopback, yrig_sha256, yrig_desc, yrig_open_device, yrig_source,
     yrig_source_role
 };
 
@@ -58,6 +59,11 @@ int main(void) {
     int ok;
     if (g_api.parse(&g_prof, text, sizeof text - 1, NULL, err, sizeof err) != YRIG_OK) return 1;
     if (g_api.write(&g_prof, out, sizeof out) == 0 || g_api.hash(&g_prof, hash) != YRIG_OK) return 2;
+    {
+        static const char bounds[] = "format ysp-in-bounds 1\nn 1\nlo_s -0.0001\nhi_s 0.0002\ndate 2026-10-13T00:00:00Z\n";
+        yrig_loopback lb;
+        if (g_api.read_loopback(bounds, sizeof bounds - 1, &lb, err, sizeof err) != YRIG_FILE_IN_BOUNDS || lb.hi_ns != 200000) return 5;
+    }
     memset(&d, 0, sizeof d);
     d.device = 1;
     d.manual = true;

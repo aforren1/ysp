@@ -185,6 +185,21 @@ jobs:
           expect 2 "$bin/rigfile_profile" --bogus
           expect 0 "$bin/rigfile_profile" --dir "$rig" --bind ref lsl lsl:Data::LabStreamer:
           expect 2 "$bin/rigfile_profile" --dir "$rig" --bind ref lsl serial:0403:6001::
+          # The rig profile tools (ysp/rigfile.h v0.4.0): an input's bounds on
+          # two simulated line boards, and the onset offset from a generated
+          # photodiode CSV (300 edges, light 12.0 to 12.6 ms after the onset),
+          # both stored; the profile then checks both files.
+          awk 'BEGIN { print "frame,level,onset_ns,photodiode_ns,diff_us,path,flags"; s = 1;
+            for (i = 1; i <= 300; i++) { s = (s * 1103515245 + 12345) % 2147483648; d = 12000000 + s % 600000; o = 1000000000 + i * 33333333;
+              printf "%d,%d,%.0f,%.0f,%.1f,3,0\n", 2 * i, i % 2, o, o + d, d / 1000 } }' > "$RUNNER_TEMP/photodiode.csv"
+          expect 0 "$bin/rigfile_profile" --dir "$rig" --bind photo line serial:16C0:0483:SIM:
+          expect 0 "$bin/rigfile_bounds" --sim --role photo --n 50 --warmup 2 --file "$RUNNER_TEMP/in_bounds.txt" --store --rig-dir "$rig"
+          expect 0 "$bin/rigfile_onset" "$RUNNER_TEMP/photodiode.csv" --file "$RUNNER_TEMP/display_onset.txt" --store --rig-dir "$rig"
+          expect 0 "$bin/rigfile_profile" --dir "$rig"
+          expect 1 "$bin/rigfile_onset" "$RUNNER_TEMP/photodiode.csv" --min-n 301 --file "$RUNNER_TEMP/x.txt"
+          expect 2 "$bin/rigfile_bounds" --role photo
+          # 1 when the bounds do not contain the simulated truth: a heavy USB tail and another seed.
+          expect 0 "$bin/rigfile_bounds" --sim --sim-seed 3 --sim-tail-us 500 --n 50 --warmup 2 --file "$RUNNER_TEMP/b2.txt"
           # ysp/net.h loads liblsl at run time; the fetched copy is not on the
           # loader's path, so each program must say so and exit with its
           # code, not crash.

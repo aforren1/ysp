@@ -2,7 +2,9 @@
 
 Status: v0.3.0, 2026-10-10 (v0.2.0, 2026-10-08, for the outputs); the rig profile, `ysp/rigfile.h` v0.2.0,
 2026-10-09 (v0.2.0 adds roles bound to LSL streams, docs/net.md; v0.3.0,
-2026-10-10, opens the device with `yrig_open_device()`). The headers' manuals are the reference (OUTPUTS, AT THE FLIP
+2026-10-10, opens the device with `yrig_open_device()`; v0.4.0, 2026-10-13,
+adds the photodiode run behind the display's onset offset and the input
+bounds file, with the tools `rigfile_bounds` and `rigfile_onset`). The headers' manuals are the reference (OUTPUTS, AT THE FLIP
 and ROLES of `ysp/device.h`; THE FILE, CHECKS AT LOAD and BINDING of
 `ysp/rigfile.h`). This page records the decisions the plan
 (`docs/devices_spec.md`, steps 2 and 3 of section 14.2, and 11.2) left
@@ -25,9 +27,9 @@ open, the results, and what needs the user's hardware.
 4. Check the board alone: `photodiode_check --key serial:16C0:0483:: --monitor 10`
    prints each edge, the state changes and the fit.
 5. Tape it over the top-left corner of the display and run
-   `photodiode_check --key <key>` (WARNING: flicker up to 30 Hz). It prints
-   edge minus flip onset; that mean is `desc.onset_offset_ns` of
-   `ysp/screen.h`.
+   `photodiode_check --key <key> --csv run.csv` (WARNING: flicker up to
+   30 Hz). It prints edge minus flip onset. To put the offset into the rig
+   profile, see [set the display's onset offset](#how-to-set-the-displays-onset-offset-from-a-photodiode-run).
 
 ## How-to: send a trigger code
 
@@ -132,8 +134,65 @@ user's config folder: `%APPDATA%\ysp\rig\profile.json` on Windows,
    check: that role runs with tier UNKNOWN.
 
 A machine with two rigs keeps `<NAME>.json` beside `profile.json`: give
-`--rig NAME` to both programs. `--dir DIR` (`rigfile_profile`) and
-`--rig-dir DIR` (`device_out_latency`) use another folder, for a test.
+`--rig NAME` to each program. `--dir DIR` (`rigfile_profile`) and
+`--rig-dir DIR` (`device_out_latency`, `rigfile_bounds`, `rigfile_onset`)
+use another folder, for a test.
+
+## How-to: measure an input's bounds
+
+An input's bounds are its event time minus the true time of the event
+(devices_spec 12, "Input device with a clock"). A tier 1 input needs them
+(`yrig_source()`). The reference is a second board with `firmware/ysp_line/`:
+it reports each change of its output pin in its own clock.
+
+1. Bind the input's role in the profile: for example
+   `rigfile_profile --bind photo line serial:16C0:0483:<serial>:` or
+   `rigfile_profile --bind resp xid serial:0403:6001:FT4ABC12:`. The role's
+   family must be `xid`, `line` or `photo`.
+2. Wire the reference board's pin 3 to the input, grounds joined: a line
+   board's pin 2, a box's external input, or a relay on a button. A
+   mechanical relay's operate time and bounce go into the bounds; prefer an
+   optocoupler or a solid-state relay.
+3. Find the reference board's key: `rigfile_bounds --list`.
+4. Run `rigfile_bounds --role photo --ref serial:16C0:0483:<serial>: --store`.
+   The program waits 6 s (`--warmup`) for both clock fits, pulses the pin
+   200 times (`--n`) for 20 ms (`--width`), 50 to 150 ms apart, and matches
+   each of the 400 changes to the first press or release of the input
+   within 10 ms. It prints n, missed, extra, lo, p5, median, p95, hi and
+   mean in seconds, writes them with the samples to `in_bounds.txt`
+   (`--file`), and prints the file's SHA-256.
+5. If at least 90% of the changes matched and the input sent no other
+   event, `--store` keeps the file as `loopback\<sha256>.txt` and writes
+   `roles.photo.bounds`. Each difference is widened on both sides by the
+   widest bracket the reference board's clock map rested on at that change,
+   and 1 us; lo is the least of these, hi the most. The file also keeps the
+   raw least and most difference (`raw_lo_s`, `raw_hi_s`). Otherwise the
+   exit code is 1 and the profile does not change.
+6. Check: `rigfile_profile` shows the bounds with the check `ok`. The role
+   now gets tier 1 from `yrig_source()`.
+
+`rigfile_bounds --sim` runs the same procedure on two simulated boards on a
+virtual clock and prints the model's truth beside the measurement.
+
+## How-to: set the display's onset offset from a photodiode run
+
+1. Run the photodiode on the display with a CSV:
+   `photodiode_check --key <key> --csv run.csv` (or
+   `screen_loopback <port> 3600 run.csv`). Use a run that exits 0: no edge
+   missing or extra. Leave `desc.onset_offset_ns` at 0 for the run; both
+   programs do.
+2. Run `rigfile_onset run.csv --store`. It reads each row's
+   `photodiode_ns - onset_ns`, writes n, min, p5, median, p95, max, mean,
+   SD, the median of each polarity, `onset_offset_s` (the median) and the
+   samples to `display_onset.txt` (`--file`), and prints the file's SHA-256.
+   `--store` keeps the file as `loopback\<sha256>.txt` and writes
+   `display.onset_offset_s` and `display.latency` into the profile.
+3. If the CSV has rows of two presentation paths (composed and
+   independent, for example), the program refuses it. Give `--path N` to
+   keep one path; the offset is for that path only.
+4. Give the profile's `display.onset_offset_ns` to `yscr_desc.onset_offset_ns`.
+   `rigfile_profile` shows the run with its check; a changed or missing
+   file, or an offset edited by hand, gives a note.
 
 ## How-to: open a role's device from the profile
 
@@ -226,6 +285,28 @@ checks (the messages of a refused role and of a refused open in
 outliving the profile); `tests/compile/rigfile.c` names every entry point by
 type. Its mutation list's anchors all match; mutant `rig-29` (a refused
 role's message not in `ydev_error()`) is new and was caught.
+
+### The rig profile tools (`ysp/rigfile.h` v0.4.0, 2026-10-13)
+
+devices_spec 11.2 names the fields (`bounds` per input, the display's
+`onset_offset_s`) and 12 the loopbacks; it does not say what a tool reads,
+which statistic it stores, or what the reference is. These are the choices.
+
+| Question | Decision | Why |
+|---|---|---|
+| The bounds' reference | A second line board (`firmware/ysp_line/`): its output pin drives the input, and its "O" report, mapped by its own bracket fit, is the event's time | devices_spec 12 proposes the line-in capture. Its times are tier 3 (ysp/audio.h: no capture path has had a loopback check), and a capture's fixed delay would go into every bound. The board stamps its pin change in its interrupt, on native USB. Its own error stays in the result: the file states its fit's widest bracket and spread |
+| lo and hi (changed 2026-10-14, user) | Each difference widened on both sides by the widest bracket the reference's map rested on at that change, plus 1 us (the board's tick); lo the least, hi the most; not percentiles. The file says `bounds_method reference-bracket` and keeps the raw range | The reference's own error is in every difference, so the raw range need not contain the truth: in the first simulated run it did not (truth -57.5 to +59.8 us, raw -106.2 to +34.7 us). A correction by ysp/rt.h's "a BRACKET map is late by 0 to its widest bracket" (d - 1 us to d + bracket + 1 us) missed the truth in 2 of 60 runs, by 1.0 and 5.1 us: the map also rests on the board's syncs, pairs of width 0 whose delivery no bracket bounds, and was early by up to 65 us. Widening both sides contained the truth in 160 of 160 runs (Results). A bound that leaves out 1% of events is not a bound |
+| Matching | Both changes of each pulse (20 ms by default), each to the first press or release within half a width; any other event of the input fails the run | Both polarities are checked. An extra event means a wrong wire or a bouncing contact, and a bound from such a run is not one |
+| When `--store` writes | Only when at least 90% of the changes matched and nothing was extra | A profile is evidence; a failed run must not replace a good one |
+| Families | `xid`, `line`, `photo` (ysp/device.h with a device clock); `lsl` is open | tier 1 is for a device clock; an LSL inlet is ysp/net.h's and needs its own run loop |
+| The onset tool's input | The per-edge CSV that `photodiode_check --csv` and `screen_loopback` write (`frame,level,onset_ns,photodiode_ns,diff_us,path,flags`), read strictly; integer ns, not the rounded `diff_us` | It is what a photodiode run produces today. The run must have `desc.onset_offset_ns` 0 (both programs leave it 0); the CSV does not say, so the how-to does |
+| The offset | The median of light minus flip onset over both polarities | One edge matched to the wrong flip moves a mean of 200 edges by 80 us at 60 Hz and the median not at all. A stimulus change can go either way; the file keeps each polarity's median for a display whose rise and fall differ |
+| Presentation paths | One path per offset: a CSV with two is refused unless `--path N` | A composed frame goes through the compositor and an independent flip does not (docs/screen.md); no measurement shows that one offset fits both, so a mix is refused rather than averaged |
+| Minimum | 100 edges (`--min-n`) | A 600-frame run at 60 Hz gives about 200 |
+| The file the profile names | The tool's own summary file (`ysp-display-onset 1`, `ysp-in-bounds 1`), with the samples and, for the onset, the CSV's SHA-256 | As `device_out_latency` (11.2: "the tool's own file"); the CSV's hash ties the summary to the raw run |
+| Where the run goes in the profile | `display.latency`, in a role latency's shape; `display.onset_offset_s` must equal the file's `onset_offset_s` | 11.2 lists only `onset_offset_s` for the display; without the run's hash, the offset could not be checked as a role's latency is. An offset edited by hand with a genuine file gives DIFFERS |
+| Shared code | Only the readers of the two new formats, in `ysp/rigfile.h` (`yrig_read_loopback()`); the statistics and the CSV parser stay in the tools | The player needs the readers for the DIFFERS check at load; it never computes a distribution |
+| Bounds files at load | Compared with the profile's summary like latency files (they were checked by hash only); a file of another kind DIFFERS | A hand-edited bound would otherwise give tier 1 to a range nobody measured. A file with no format line is still checked by hash only, so hand-made files of v0.3 profiles keep their check |
 
 ### Open, close and the wait for RUNNING (v0.3.0)
 
@@ -391,6 +472,23 @@ new; the anchors of `rig-04`, `rig-13` and `rig-14` moved with the code).
 
 Costs (`examples/rigfile/bench.c`, Iris Xe laptop on AC, under the measurement lock (load 9 %), 21 rounds, MSVC 19.44 /O2 and MinGW-w64 gcc 16.1 -O2; a 3453-byte profile with 4 roles and every field): `yrig_parse()` of a 3453-byte profile with 4 roles, every field checked: 23.3 us (MSVC) and 17.7 us (MinGW), medians; the JSON parse alone 4.9 and 4.4 us; `yrig_write()` 7.0 and 6.6 us; `yrig_hash()` 43 us. docs/json.md has the table.
 
+### The rig profile tools (v0.4.0)
+
+On 2026-10-13, MSVC 19.44 (/W4 /WX) and MinGW-w64 gcc 16.1 (-Werror) on
+Windows 11, gcc 11.4 on WSL2 (C99, C11, the compile check as C++17; the
+test and both tools also under ASan and UBSan). Nothing here is timed. No
+board was attached: the tools ran on simulated boards and a generated CSV
+only.
+
+| Check | Result |
+|---|---|
+| `tests/adapt/rigfile_test.c` | 501 checks pass on MSVC and MinGW (409 before), 508 on WSL2 with the planted-folder checks: the three formats read, each refusal by message (another format, no format line, a missing `hi_s` or `onset_offset_s`, two format lines, a bad number); a profile with `display.latency` and a bounds file stored, loaded with both checks `ok`, written in canonical form; tier 1 from the checked bounds; DIFFERS for an edited bound, an edited offset, an edited display summary or date, and a genuine file of another kind (also one whose every field matches); MISSING with its note; NOT_RUN without a folder; 5 refusals of `display.latency` by field |
+| `rigfile_bounds --sim` (defaults: 200 pulses, 6 s warm-up), first version (raw range) | 400 of 400 changes matched; raw -106.2 to +34.7 us against the truth -57.5 to +59.8 us (the reference's own error +8.2 to +68.0 us): the truth was outside. Bytes identical from all three compilers |
+| `rigfile_bounds --sim`, 2026-10-14, widened on both sides (25 us virtual-clock steps) | 160 runs: seeds 1 to 20, delivery tails of 50, 200, 500 and 1000 us (`--sim-tail-us`), 6 s warm-up with 200 pulses and 2 s with 50. The bounds contained the truth in 160 of 160. How much wider than the truth, below and above, median (min to max) per tail at 6 s: 50 us: 169 (112 to 559) and 148 (91 to 529) us, truth 37 us wide; 200 us: 854 (99 to 2011) and 839 (51 to 2081) us; 500 us: 1673 (159 to 3291) and 1595 (73 to 3293) us; 1000 us: 3957 (215 to 6361) and 3921 (115 to 6197) us, truth 119 us wide. At 2 s: 50 us: 235 and 198 us; 1000 us: 3861 and 3534 us. The width comes from the reference's bracket, which grows with the tail (largest 0.48 ms in the default run; at most 0.56, 3.4 and 6.5 ms at tails of 50, 500 and 1000 us: with no bracket the width is the fit's spread); per change, 63 of the 40,000 reference errors lay outside that change's own bracket, but never outside the run's range. The "late by 0 to the bracket" correction, measured first on 60 of these runs (100 us steps then): truth outside in 2 |
+| `rigfile_bounds --sim --role photo --n 50 --warmup 2 --store`, then `rigfile_onset run.csv --store` on a generated 300-row CSV, then `rigfile_profile` | Both stored and both checks `ok` (the CI steps); a CSV with two paths refused (exit 1) and kept with `--path`; a CSV with a wrong header refused (exit 2); fewer edges than `--min-n` refused (exit 1) |
+| Fuzzing (`tests/fuzz/json_fuzz.c`, target 3 now also `yrig_read_loopback()`, which must agree with `yrig_read_latency()` on an output latency file; 3 new seeds) | MSVC libFuzzer with ASan, all four targets from the 15 seeds: 7,533,408 inputs in 901 s, no crash, no broken round trip, no disagreement; the 1297 corpus files replayed on WSL2 gcc under ASan and UBSan with no report |
+| Mutants (`tests/mutate/rigfile.toml`) | 37 of 37 caught; `rig-30` to `rig-37` new, the anchors of `rig-10` and `rig-24` moved |
+
 ## What needs the user's hardware
 
 | Hardware | Checks | How |
@@ -402,6 +500,9 @@ Costs (`examples/rigfile/bench.c`, Iris Xe laptop on AC, under the measurement l
 | A trigger box at a flip | The trigger channel with a real output | `device_trigger_flip --out lines:<adapter key>` (simulated display; a windowed program sets only `sd.backend`) |
 | A Cedrus box (XID) | The decoder on real bytes, `_c1` and `_d` answers, the 1 ms byte gap, brackets behind the FTDI latency timer | `photodiode_check --family xid --key serial:0403:6001:<serial>: --monitor 30`, pressing buttons |
 | The LabStreamer | An independent reference for the same flips | `net_labstreamer_flip` (docs/net.md, "LabStreamer hand test") |
+| Two Teensy or Pico boards with `firmware/ysp_line/` (one with the photodiode module) | An input's bounds on real USB delivery; the reference's bracket widths | [Measure an input's bounds](#how-to-measure-an-inputs-bounds): the reference's pin 3 to the photodiode board's pin 2, `rigfile_bounds --role photo --ref <reference key>`. Compare `raw_lo_s` and `raw_hi_s` with lo and hi: the gap is the reference's bracket (`ref_bracket_max_s`), which only real USB delivery sizes; `extra` above 0 is a wire or contact fault |
+| A Cedrus box with an external input, or a relay on a button | The XID FIT map behind the FTDI latency timer | The same, with the box's role: `rigfile_bounds --role resp --ref <reference key>`. The box's 1 ms tick puts up to 1 ms in the range |
+| The photodiode board on the display | The display's onset offset into the profile | [Set the display's onset offset](#how-to-set-the-displays-onset-offset-from-a-photodiode-run): `photodiode_check --key <key> --csv run.csv`, then `rigfile_onset run.csv --store`; once for each presentation path the experiments use |
 
 ## Not done
 
@@ -411,10 +512,11 @@ Costs (`examples/rigfile/bench.c`, Iris Xe laptop on AC, under the measurement l
 - The parallel transport (`ydev_parallel_transport()`): compiled with
   MSVC, MinGW and gcc, never run (no LPT port here; devices_spec 16,
   decision 12).
-- The rig profile: no tool measures an input's `bounds` yet (the field
-  is read, written and checked); the display's onset offset is written
-  by hand or a later tool (`photodiode_check` prints it); the player
-  that refuses a session below `min_tier` does not exist yet.
+- The rig profile: `rigfile_bounds` and `rigfile_onset` (v0.4.0) ran on
+  simulated boards and a generated CSV only. Not built: bounds of an `lsl`
+  role (the LabStreamer), the line-in as the bounds' reference, one onset
+  offset per display on a rig with two (`display` is one object), and the
+  player that refuses a session below `min_tier`.
 - Every vendor output: no TriggerBox, BioSemi, MMBT-S, c-pod or
   StimTracker was attached; their bytes come from documentation and
   open-source code (docs/box.md).
