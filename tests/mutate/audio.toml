@@ -250,6 +250,28 @@ why = "A browser reports every 10 ms, and an AudioWorklet's entry time has no cl
 find = '''    } else if (au->dcaps.pos_source != YAU_POS_DEVICE) {'''
 replace = '''    } else {'''
 
+# v0.5.2: open()'s warm-up limit (docs/audio.md, "Web envelope"). The
+# envelope and the kept context are the web device's JavaScript, which only
+# a browser runs (tests/probe/web_audio).
+
+[[mutant]]
+id = "warm-01"
+name = "the warm-up limit runs from the start"
+test = "audio"
+why = "A browser's context runs up to 0.8 s after it is made; 3 s from the start left a Firefox ScriptProcessorNode fit too little time, and the open failed."
+find = '''    if (t_first < 0) return cap;
+    return t_first + YAU__WARM_LIMIT_NS < cap ? t_first + YAU__WARM_LIMIT_NS : cap;'''
+replace = '''    if (t_first < 0) return cap;
+    return t_start + YAU__WARM_LIMIT_NS;'''
+
+[[mutant]]
+id = "warm-02"
+name = "no cap on the wait from the start"
+test = "audio"
+why = "A device whose first callback comes late must still fail in bounded time: the cap is 5 s from the start."
+find = '''    return t_first + YAU__WARM_LIMIT_NS < cap ? t_first + YAU__WARM_LIMIT_NS : cap;'''
+replace = '''    return t_first + YAU__WARM_LIMIT_NS;'''
+
 # v0.5.1: the exclusive start (docs/audio.md, "Exclusive start"). The prefill
 # runs only on hardware; the core rule it needs has a mutant.
 

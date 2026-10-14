@@ -138,7 +138,12 @@ sets no COOP or COEP headers, so `coi-serviceworker.js` isolates the pages
    frames gave onsets up to 5.6 ms off their plan. After the screen's
    setup, close the sound and open it again: a main-thread stall of
    seconds with a ScriptProcessorNode running left its timing wrong (see
-   [Audio](#audio-what-the-records-say)).
+   [Audio](#audio-what-the-records-say)). The second open does not make
+   a new AudioContext: `ysp/audio.h` (v0.5.2) keeps the one the tap
+   started, suspends it at `yau_close()` and resumes it at the next
+   `yau_open()`, so the reopen needs no second tap. Do not make an
+   AudioContext of your own after the tap: iOS Safari may keep it
+   suspended.
 4. Plan each sound at least `yau_lead_ns()` ahead (about 60 ms on the
    AudioWorklet path, 140 to 170 ms on the ScriptProcessorNode path in
    Chrome on the laptop below) with `yau_play_at()`, call `yau_update()`
@@ -194,6 +199,59 @@ real device. On each device, open the site over HTTPS (GitHub Pages) and:
    text.
 6. Run `selftest.html` and tap the canvas a few times: the result says how
    many taps had the DOM's time.
+
+## How to check the sound at open
+
+One open shows one outcome, so count many. On a desktop, with node, npm,
+uv, Chrome and Firefox installed, build the site and run the probe:
+
+```sh
+sh examples/web/build.sh web_site
+sh tests/probe/web_audio/run.sh web_site 30
+```
+
+It opens `av.html` 30 times in each browser on each audio path, with a
+real click on Start, and prints the silent opens and the counts (design
+notes: [audio.md](audio.md#web-envelope-v052)). Add `--headed` to see the
+windows. Run nothing else while it counts: the ScriptProcessorNode path
+shares the main thread with the page.
+
+By hand, on each phone, tablet or desktop browser:
+
+1. Turn silent mode off and set the volume to about half.
+2. Open `av.html` once on each path. The isolated page (the normal
+   address, after the one reload) gives `AudioWorklet (threads)` on the
+   status line. A private or incognito window, where the service worker is
+   usually off, gives `ScriptProcessorNode (no threads)`. If the status
+   line does not say the path you want, write down what it says.
+3. Tap Start once, then do not touch the page until the results show.
+4. Count the open as silent when the summary's first row says `no audio
+   opened`, or when you heard no click during the flashes.
+5. Reload the page and do steps 3 and 4 again, 10 times for each path.
+6. For each silent open, download the session log, and write down the
+   browser, its version, the device and the path.
+
+On iOS Safari (and iPadOS Safari), WebKit starts audio only from a tap,
+and the ScriptProcessorNode path opens the sound twice: in the Start tap,
+and again after the screen's setup, about 2 s later and outside the tap.
+The second open resumes the context of the first (v0.5.2). Check that
+on each iPhone or iPad:
+
+1. Turn off silent mode (the switch or Control Center) and Low Power
+   Mode, and set the volume to about half.
+2. Open `av.html` in a private tab, so that the status line says
+   `ScriptProcessorNode (no threads)`.
+3. Tap Start once. Do not touch the screen again until the results show.
+4. Listen for a click with each flash. After the run, the summary's first
+   row must not say `no audio opened`, and the trials table must have an
+   audio onset for each trial.
+5. Do steps 3 and 4 ten times (reload the page each time), then ten times
+   in a normal tab (`AudioWorklet (threads)`).
+6. If a run is silent, do it once more and tap the page once while it
+   says `Preparing...` (the second open waits up to 5 s for its first
+   callback). Write down whether the clicks then play. A context that
+   waits for a tap is the WebKit rule this check looks for. Download the
+   session log and send it with the iOS version.
 
 ## Reference
 
@@ -548,7 +606,7 @@ Headless Chrome's pairs came every 10 ms too, but one was 34 ms off and
 the first was 1 s old; the reader drops pairs more than 100 ms old.
 Firefox's `contextTime` steps with its callback while `performanceTime`
 follows the read, hence the spread; the reader keeps the lower envelope (a
-pair at most 0.5 ms later than the least late of the last 32). Firefox
+read at most 0.5 ms later than the least late of its last 32 reads). Firefox
 also stamps the pair `outputLatency` before the read, though by its own
 `contextTime` that frame is at the output at the read; the reader adds
 `outputLatency` back where it sees that. Both are readings of one

@@ -2640,6 +2640,19 @@ static void test_misc(void) {
     }
 }
 
+/* v0.5.2: open()'s warm-up runs 3 s from the device's first callback, at
+ * most 5 s from its start. A browser's context starts up to 0.8 s after it
+ * is made; with 3 s from the start, a Firefox fit that needed 2.2 s after
+ * that failed. */
+static void test_warm_end(void) {
+    const int64_t s = 1000000000000LL, S = 1000000000LL;
+    CHECK_I(yau__warm_end(s, -1) - s, 5 * S);              /* no callback yet */
+    CHECK_I(yau__warm_end(s, s + S / 2) - s, 3 * S + S / 2); /* 3 s from the first */
+    CHECK_I(yau__warm_end(s, s + 19 * S / 10) - s, 49 * S / 10);
+    CHECK_I(yau__warm_end(s, s + 5 * S / 2) - s, 5 * S);   /* the cap */
+    CHECK_I(yau__warm_end(s, s + 6 * S) - s, 5 * S);
+}
+
 #if YAU_VERSION_MINOR >= 5
 #include "audio_test_capture.h"
 #endif
@@ -2693,6 +2706,7 @@ int main(int argc, char** argv) {
 #if YAU_VERSION_MINOR >= 5
     test_capture();
 #endif
+    test_warm_end();
 #if YAU_VERSION_MINOR >= 6
     test_virtual_null();
 #endif
