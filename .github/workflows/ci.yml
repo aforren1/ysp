@@ -185,6 +185,21 @@ jobs:
           expect 2 "$bin/rigfile_profile" --bogus
           expect 0 "$bin/rigfile_profile" --dir "$rig" --bind ref lsl lsl:Data::LabStreamer:
           expect 2 "$bin/rigfile_profile" --dir "$rig" --bind ref lsl serial:0403:6001::
+          # The rig profile tools (ysp/rigfile.h v0.4.0): an input's bounds on
+          # two simulated line boards, and the onset offset from a generated
+          # photodiode CSV (300 edges, light 12.0 to 12.6 ms after the onset),
+          # both stored; the profile then checks both files.
+          awk 'BEGIN { print "frame,level,onset_ns,photodiode_ns,diff_us,path,flags"; s = 1;
+            for (i = 1; i <= 300; i++) { s = (s * 1103515245 + 12345) % 2147483648; d = 12000000 + s % 600000; o = 1000000000 + i * 33333333;
+              printf "%d,%d,%.0f,%.0f,%.1f,3,0\n", 2 * i, i % 2, o, o + d, d / 1000 } }' > "$RUNNER_TEMP/photodiode.csv"
+          expect 0 "$bin/rigfile_profile" --dir "$rig" --bind photo line serial:16C0:0483:SIM:
+          expect 0 "$bin/rigfile_bounds" --sim --role photo --n 50 --warmup 2 --file "$RUNNER_TEMP/in_bounds.txt" --store --rig-dir "$rig"
+          expect 0 "$bin/rigfile_onset" "$RUNNER_TEMP/photodiode.csv" --file "$RUNNER_TEMP/display_onset.txt" --store --rig-dir "$rig"
+          expect 0 "$bin/rigfile_profile" --dir "$rig"
+          expect 1 "$bin/rigfile_onset" "$RUNNER_TEMP/photodiode.csv" --min-n 301 --file "$RUNNER_TEMP/x.txt"
+          expect 2 "$bin/rigfile_bounds" --role photo
+          # 1 when the bounds do not contain the simulated truth: a heavy USB tail and another seed.
+          expect 0 "$bin/rigfile_bounds" --sim --sim-seed 3 --sim-tail-us 500 --n 50 --warmup 2 --file "$RUNNER_TEMP/b2.txt"
           # ysp/net.h loads liblsl at run time; the fetched copy is not on the
           # loader's path, so each program must say so and exit with its
           # code, not crash.
@@ -350,8 +365,8 @@ jobs:
         run: |
           set -eu
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DYSP_BUILD_PACK=ON -DYSP_BUILD_EXAMPLES=OFF
-          cmake --build build --config Release --target ypak test_pack_tool
-          ctest --test-dir build -C Release -R pack_tool --output-on-failure
+          cmake --build build --config Release --target ypak test_pack_tool test_pack_import
+          ctest --test-dir build -C Release -R "pack_tool|pack_import" --output-on-failure
           if [ "$RUNNER_OS" = Windows ]; then bin=build/pack/Release; else bin=build/pack; fi
           "$bin/ypak" verify build/pack/pack_tool_work/corpus.ysppak
           "$bin/ypak" verify build/pack/pack_tool_work/core.ysppak
@@ -822,7 +837,7 @@ jobs:
           PY=$(command -v python3 || command -v python)
           "$PY" tools/vendor_layout.py --write --cache ~/ysp-layout-tarballs
 
-      # lodepng for the pack tool (docs/pack.md): three files at a commit,
+      # lodepng, stb_image and pl_mpeg for the pack tool (docs/pack.md), each at a commit,
       # each checked by SHA-256 (tools/vendor_pack.py).
       - name: lodepng cache (Windows, Linux)
         if: runner.os != 'macOS'
@@ -986,8 +1001,8 @@ jobs:
         shell: bash
         run: |
           set -eu
-          cmake --build build --config Release --target test_pack_tool ypak trial_images
-          ctest --test-dir build -C Release -R pack_tool --output-on-failure
+          cmake --build build --config Release --target test_pack_tool test_pack_import ypak trial_images
+          ctest --test-dir build -C Release -R "pack_tool|pack_import" --output-on-failure
           if [ "$RUNNER_OS" = Windows ]; then bin=build/pack/Release; else bin=build/pack; fi
           "$bin/ypak" verify build/pack/pack_tool_work/corpus.ysppak
           "$bin/ypak" list build/pack/pack_tool_work/corpus.ysppak > /dev/null
@@ -1006,8 +1021,8 @@ jobs:
         run: |
           set -eu
           cmake -B build-core -DCMAKE_BUILD_TYPE=Release -DYSP_BUILD_PACK=ON -DYSP_BUILD_EXAMPLES=OFF
-          cmake --build build-core --config Release --target ypak test_pack_tool
-          ctest --test-dir build-core -C Release -R pack_tool --output-on-failure
+          cmake --build build-core --config Release --target ypak test_pack_tool test_pack_import
+          ctest --test-dir build-core -C Release -R "pack_tool|pack_import" --output-on-failure
           if [ "$RUNNER_OS" = Windows ]; then full=build/pack/Release core=build-core/pack/Release; else full=build/pack core=build-core/pack; fi
           cmp build/pack/pack_tool_work/core.ysppak build-core/pack/pack_tool_work/core.ysppak
           "$full/ypak" verify build-core/pack/pack_tool_work/corpus.ysppak

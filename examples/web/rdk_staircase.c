@@ -179,6 +179,8 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--size") && i + 1 < argc && web_size_arg(argv[i + 1], &win_w, &win_h)) i++;
         else { fprintf(stderr, "usage: web_rdk_staircase [--sim] [--seed N] [--size WxH]\n"); return 2; }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     rng = seed;
     if (sim) sd.backend = YSCR_BACKEND_SIM;
     sd.windowed = true;

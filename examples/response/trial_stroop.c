@@ -38,7 +38,8 @@
  * synthetic participant who is 0.1 s slower on incongruent trials: a word
  * read in place of the ink, a timeout and a Stroop error among correct
  * responses. It checks the rows, their classification, the feedback and
- * the order's rule, and exits 1 on a mismatch. About 30 s.
+ * the order's rule, and exits 1 on a mismatch.
+ * Under a second: the virtual clock does not wait.
  *
  * Usage: trial_stroop [--sim] [--fullscreen] [--reps N] [--seed N] [--out FILE]
  *                     [--font PATH] [--conditions FILE]
@@ -225,6 +226,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     if (reps == 0) reps = sim ? 1 : 3;
     if (reps < 1 || reps > 20) { fprintf(stderr, "trial_stroop: --reps takes 1..20\n"); return 2; }
 
@@ -468,8 +471,8 @@ int main(int argc, char** argv) {
             const yrsp_result* r = &sim_res[i];
             int cong = sim_cong[i] >> 1, ok = (sim_cong[i] & 1) == cong && sim_prac[i] == (i < N_PRACTICE);
             if (sim_silent(i)) ok = ok && !(r->flags & YRSP_R_RESPONDED) && (r->flags & YRSP_R_TIMEOUT) && !sim_correct[i];
-            else ok = ok && (r->flags & YRSP_R_RESPONDED) && /* script from the plan, RT from the flip record */
-                      llabs(r->rt_ns + (r->t_onset - sim_plan[i]) - YRT_S(sim_rt(cong))) <= 1000 && sim_correct[i] == !sim_wrong(i);
+            else ok = ok && (r->flags & YRSP_R_RESPONDED) && /* on the virtual clock: the plan, to the ns */
+                      r->t_onset == sim_plan[i] && r->rt_ns == YRT_S(sim_rt(cong)) && sim_correct[i] == !sim_wrong(i);
             ok = ok && sim_fb[i] == (i >= N_PRACTICE ? -1 : sim_silent(i) ? 2 : sim_wrong(i) ? 1 : 0);
             ok = ok && r->onset_tier == YSCR_TIER_SIM && r->onset_src == YRSP_ONSET_FLIP;
             if (i >= N_PRACTICE) {   /* the rule: at most 3 congruent test trials in a row */

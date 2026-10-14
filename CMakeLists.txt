@@ -95,7 +95,7 @@ option(YSP_TRACY_CHECK "Fetch Tracy and build the YRT_TRACY compile check" OFF)
 # tests/layout/). About 8 MB of sources that no header needs.
 option(YSP_BUILD_LAYOUT "Build the layout library (pack/, third_party/), its test and gfx_layout" OFF)
 # Off by default: the pack tool (pack/pack_tool.c, the ypak CLI, tests/pack/).
-# It needs lodepng in third_party/lodepng/ (tools/vendor_pack.py fetches it).
+# It needs lodepng, stb_image, pl_mpeg and libsamplerate in third_party/ (tools/vendor_pack.py fetches them).
 # With YSP_BUILD_LAYOUT also ON it builds glyph runs; without, it is the core
 # tool, which refuses them and builds every other kind to the same bytes, so
 # a pack of tables, sounds and images does not need HarfBuzz. ysp/pack.h
@@ -669,8 +669,11 @@ if(YSP_BUILD_LAYOUT)
     endforeach()
     add_subdirectory(third_party)
 endif()
-if(YSP_BUILD_PACK AND NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lodepng/lodepng.cpp)
-    message(FATAL_ERROR "YSP_BUILD_PACK: third_party/lodepng is missing. Fetch and verify it once, from the "
+if(YSP_BUILD_PACK AND (NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lodepng/lodepng.cpp OR
+                        NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb/stb_image.h OR
+                        NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/pl_mpeg/pl_mpeg.h OR
+                        NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/libsamplerate/src_sinc.c))
+    message(FATAL_ERROR "YSP_BUILD_PACK: third_party/lodepng, stb, pl_mpeg or libsamplerate is missing. Fetch and verify them once, from the "
         "repository root:\n"
         "    uv run --no-project python tools/vendor_pack.py --write\n"
         "(or python3 tools/vendor_pack.py --write)")

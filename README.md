@@ -9,7 +9,7 @@ C11 or C++17, and its top comment is its manual.
 
 | Header | Prefix | Purpose | Version | Status |
 |---|---|---|---|---|
-| [rt](docs/rt.md) | `yrt_` | Clock, deadline waits, worker, pump, event ring, clock fit | 0.8.0 | 1 machine |
+| [rt](docs/rt.md) | `yrt_` | Clock, deadline waits, worker, pump, event ring, clock fit, virtual clock | 0.9.0 | 1 machine |
 | [parallel](docs/parallel.md) | `ypar_` | Parallel port trigger output and line input | 0.4.0 | no device |
 | [serial](docs/serial.md) | `yser_` | Serial port byte I/O for trigger and response boxes | 0.6.1 | 1 machine |
 | [trials](docs/trials.md) | `ytr_` | Trial orders, blocks, adaptive tracks, jitter, replay, a CSV row per trial | 0.4.1 | tested |
@@ -24,15 +24,15 @@ C11 or C++17, and its top comment is its manual.
 | [response](docs/response.md) | `yrsp_` | Trial responses and RT from any input device | 0.4.0 | 1 machine |
 | [box](docs/box.md) | `ybox_` | Response and trigger box protocols, bytes to events | 0.3.0 | no device |
 | [device](docs/device.md) | `ydev_` | Boxes and boards on the rig clock, with outputs | 0.3.1 | 1 machine |
-| [rigfile](docs/device.md#how-to-keep-a-rigs-devices-and-latencies-in-its-rig-profile) | `yrig_` | Rig profile: devices per role, loopback results | 0.3.0 | no device |
+| [rigfile](docs/device.md#how-to-keep-a-rigs-devices-and-latencies-in-its-rig-profile) | `yrig_` | Rig profile: devices per role, loopback results | 0.4.0 | no device |
 | [net](docs/net.md) | `ynet_` | Lab Streaming Layer markers and streams | 0.3.0 | no device |
 | [color](docs/color.md) | `ycol_` | Display calibration and color space conversions | 0.2.0 | tested |
 | [rdk](docs/rdk.md) | `yrdk_` | Random dot kinematograms, reproducible bit for bit | 0.2.0 | tested |
 | [outline](docs/outline.md) | `yol_` | Paths, font glyphs and SVG into curve sets | 0.3.2 | tested |
-| [screen](docs/screen.md) | `yscr_` | Stimulus window, flip at a time, flip records; a web backend | 0.7.2 | 1 machine |
-| [audio](docs/audio.md) | `yau_` | Sound at a time and its capture on the rig clock; Web Audio in a browser | 0.5.1 | 1 machine |
-| [gfx](docs/gfx.md) | `ygfx_` | GL ES 3.0 stimuli: shapes, gratings, gabors, text, frame capture | 0.15.0 | 1 machine |
-| [video](docs/video.md) | `yvid_` | Movies as stimuli, frame by predicted onset | 0.3.1 | 1 machine |
+| [screen](docs/screen.md) | `yscr_` | Stimulus window, flip at a time, flip records; a web backend | 0.8.0 | 1 machine |
+| [audio](docs/audio.md) | `yau_` | Sound at a time and its capture on the rig clock; Web Audio in a browser | 0.6.0 | 1 machine |
+| [gfx](docs/gfx.md) | `ygfx_` | GL ES 3.0 stimuli: shapes, gratings, gabors, text, frame capture | 0.15.1 | 1 machine |
+| [video](docs/video.md) | `yvid_` | Movies as stimuli, frame by predicted onset | 0.4.0 | 1 machine |
 
 Each header is `include/ysp/<name>.h`; macros use the uppercase prefix
 (`YRT_`). Status: **tested** is pure computation, checked by tests;
@@ -77,7 +77,7 @@ To build the examples and tests in this repository:
 cmake --preset msvc          # or msvc-full, mingw, linux, clang, sanitizers, nothreads-cxx
 cmake --build --preset msvc
 ctest --preset msvc
-uv run --no-project python tools/vendor_pack.py --write     # lodepng, for -DYSP_BUILD_PACK=ON
+uv run --no-project python tools/vendor_pack.py --write     # lodepng, stb_image, pl_mpeg, libsamplerate, for -DYSP_BUILD_PACK=ON
 uv run --no-project python tools/vendor_layout.py --write   # HarfBuzz, Skribidi, for -DYSP_BUILD_LAYOUT=ON
 ```
 

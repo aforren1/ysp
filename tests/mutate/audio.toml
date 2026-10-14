@@ -453,3 +453,88 @@ test = "audio"
 why = "A browser's capture times are its estimates: tier 3 would rank them above a simulated input's, as an unchecked rig's."
 find = '''    if (c->dcaps.tier == YAU_TIER_SIM || c->dcaps.tier == YAU_TIER_WEB) return c->dcaps.tier;'''
 replace = '''    if (c->dcaps.tier == YAU_TIER_SIM) return c->dcaps.tier;'''
+
+# v0.6.0: BACKEND_NULL on ysp/rt.h's virtual clock (tests/adapt/audio_test_vnull.h).
+
+[[mutant]]
+id = "vn-01"
+name = "blocks stamped a sample late"
+test = "audio"
+why = "A block's callback time is its own virtual time; a stamp off by a sample moves every onset off its plan."
+find = '''    tk.t_entry = now;
+    tk.pos = -1;
+    tk.pos_t = 0;
+    tk.flags = 0;
+    tk.reserved_ = 0;
+    if (!v->inited) {'''
+replace = '''    tk.t_entry = now + 20833;
+    tk.pos = -1;
+    tk.pos_t = 0;
+    tk.flags = 0;
+    tk.reserved_ = 0;
+    if (!v->inited) {'''
+
+[[mutant]]
+id = "vn-02"
+name = "the blocks drift"
+test = "audio"
+why = "Blocks at the nominal rate keep the fit exact (drift 0); one more frame of time per block is a device 2083 ppm slow."
+find = '''    return v->t0 + (int64_t)((double)v->w * 1e9 / (double)v->rate + 0.5);'''
+replace = '''    return v->t0 + (int64_t)((double)(v->w + v->w / v->period) * 1e9 / (double)v->rate + 0.5);'''
+
+[[mutant]]
+id = "vn-03"
+name = "miniaudio's null device on the virtual clock"
+test = "audio"
+why = "miniaudio's null device is a real-time thread; on the virtual clock the header's own device must open instead."
+find = '''    } else if (d.backend == YAU_BACKEND_NULL && yrt_is_virtual()) {
+        au->dev = &yau__vnull_device;'''
+replace = '''    } else if (0) {
+        au->dev = &yau__vnull_device;'''
+
+[[mutant]]
+id = "vn-04"
+name = "a real device on the virtual clock"
+test = "audio"
+why = "A real device's callbacks come on real time; on the virtual clock its open must fail and say why."
+find = '''    } else if (yrt_is_virtual()) {
+        /* a device's callbacks come on real time: on the virtual clock'''
+replace = '''    } else if (0) {
+        /* a device's callbacks come on real time: on the virtual clock'''
+
+[[mutant]]
+id = "vn-05"
+name = "a virtual null input stays real"
+test = "audio"
+why = "The capture side opens the same virtual device; without it a null input on the virtual clock has no device."
+find = '''    } else if (c->desc.backend == YAU_BACKEND_NULL && yrt_is_virtual()) {
+        c->dev = &yau__vnull_device;'''
+replace = '''    } else if (0) {
+        c->dev = &yau__vnull_device;'''
+
+[[mutant]]
+id = "vn-06"
+name = "close leaves the timer set"
+test = "audio"
+why = "A closed handle's timer would render into a closed handle at the next wait, and the second run would find the table fuller."
+find = '''    if (v->timer >= 0) yrt_virtual_cancel(v->timer);
+    v->timer = -1;'''
+replace = '''    v->timer = -1;'''
+
+[[mutant]]
+id = "vn-07"
+name = "DUPLEX without the input's caps"
+test = "audio"
+why = "In DUPLEX the device fills the input's caps; without them the input's strict open sees 0 Hz and refuses."
+find = '''    if (v->cap_host) {
+        /* DUPLEX: the device fills the input's caps, as miniaudio's does */'''
+replace = '''    if (0) {
+        /* DUPLEX: the device fills the input's caps, as miniaudio's does */'''
+
+[[mutant]]
+id = "vn-08"
+name = "DUPLEX input never fed"
+test = "audio"
+why = "In DUPLEX each block hands the input its frames first; without it the input's frame count stands still."
+find = '''    if (v->cap_host) yau_capture_block(v->cap_host, v->buf, v->period, &tk);'''
+replace = '''    (void)0;'''

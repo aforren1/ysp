@@ -40,7 +40,7 @@
  * key-up comes while player 2 holds the same key) beside a third keyboard's
  * press (ignored), an early press, a timeout. It checks its own results,
  * key_doubles and key_double_ups included, and exits 1 on a mismatch.
- * About 20 s.
+ * Under a second: the virtual clock does not wait.
  *
  * Usage: trial_two_keyboards [--sim] [--one-keyboard] [--fullscreen] [--reps N] [--seed N] [--out FILE]
  * Exit code: 0 (also after Shift+Esc), 1 when something did not open or a
@@ -203,6 +203,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     if (reps == 0) reps = sim ? SIM_TRIALS / 2 : 10;
     if (reps < 1 || reps > 100 || (sim && one)) { fprintf(stderr, "trial_two_keyboards: --reps 1..100; --sim plays two keyboards\n"); return 2; }
     if (sim) sd.backend = YSCR_BACKEND_SIM;

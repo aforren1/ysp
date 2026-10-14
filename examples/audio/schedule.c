@@ -12,8 +12,9 @@
  *                    [--period N] [--queue Q] [--db DB] [--probe-n N]
  *                    [--csv FILE]
  *
- *   --null, --sim  miniaudio's null device (no sound hardware), with a
- *                  self-check that exits 1 on a mismatch (CI runs this)
+ *   --null, --sim  the null device (no sound hardware) on ysp/rt.h's
+ *                  virtual clock, with a self-check that exits 1 on a
+ *                  mismatch (CI runs this)
  *   --device NAME  the playback device whose name contains NAME
  *   --exclusive    WASAPI exclusive mode (every other program goes silent)
  *   --period N     frames per callback asked for (desc.period)
@@ -169,6 +170,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     if (probe_n == 0) probe_n = sim ? 3 : 10;
     if (db > -30 || probe_n < 1 || probe_n > 12) { fprintf(stderr, "audio_schedule: --db at most -30, --probe-n 1..12\n"); return 2; }
     if (sim) d.backend = YAU_BACKEND_NULL;
@@ -347,29 +350,25 @@ int main(int argc, char** argv) {
     puts(line);
 
     if (sim) {
-        /* The null device's fit is of callback times only, so a plan can
-         * move with a refit; the bars are what that allows, not tier 2's */
-        const int64_t res_bar = YRT_MS(1);
+        /* On ysp/rt.h's virtual clock the null device's blocks keep their
+         * times, so the fit is exact: an onset is on its plan within half
+         * a sample, where the plan meets the sample grid */
+        const int64_t res_bar = 500000000 / (int64_t)caps.rate + 1;
         for (i = 0; i < n_items; i++) {
             const item* it = &items[i];
             int ok = it->rc == YAU_OK && it->r.tier == YAU_TIER_SIM;
             if (ok && strcmp(it->part, "probe"))
                 ok = !(it->r.flags & (YAU_ONSET_LATE | YAU_ONSET_CANCELED | YAU_ONSET_XRUN)) && llabs(it->r.residual) <= res_bar;
-            /* The stop is placed by the fit of its moment and read back
-             * through the final fit: each can be off by res_bar
-             * (CI macOS, fit spread 3.8 ms: 1.63 ms) */
             if (ok && it == stop_it) ok = (it->r.flags & YAU_ONSET_STOPPED) && it->r.end_frame > 0 &&
-                llabs(yau_time_of(&au, it->r.end_frame) - at_ns(STOP_START_S + STOP_AT_S)) <= 2 * res_bar;
+                llabs(yau_time_of(&au, it->r.end_frame) - at_ns(STOP_START_S + STOP_AT_S)) <= res_bar;
             if (ok && it == loop_it) ok = it->r.end_frame - it->r.start_frame == 4 * rep.n;
             if (!ok) { fprintf(stderr, "audio_schedule: --null: %s %s: rc %d flags 0x%03x residual %lld ns\n", it->part,
                                it->name, it->rc, (unsigned)it->r.flags, (long long)it->r.residual); bad = 1; }
         }
-        /* Each start can move by res_bar with its own refit, so their
-         * distance can move by twice that (CI, Ubuntu: 63 frames) */
+        /* the starts 0.2 s apart, to the frame */
         for (k = 1; k < 4; k++)
             if (starts[k]->rc == YAU_OK && starts[k - 1]->rc == YAU_OK &&
-                llabs((starts[k]->r.start_frame - starts[k - 1]->r.start_frame) - (int64_t)(0.2 * caps.rate)) >
-                    2 * (int64_t)caps.rate / 1000) {
+                starts[k]->r.start_frame - starts[k - 1]->r.start_frame != (int64_t)(0.2 * caps.rate)) {
                 fprintf(stderr, "audio_schedule: --null: start %d is off its planned distance\n", k + 1);
                 bad = 1;
             }

@@ -114,6 +114,8 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--windowed")) windowed = true;
         else { fprintf(stderr, "usage: screen_hello [--sim] [--windowed]\n"); return 2; }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
 
     memset(&td, 0, sizeof td);
     td.events = storage;

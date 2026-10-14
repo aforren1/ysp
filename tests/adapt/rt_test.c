@@ -1,7 +1,7 @@
 /* rt_test.c - self-checking test for yrt_pump, the event ring, the
  * trace macros, the clock correlation, the device clock fit
- * (rt_test_fit.h) and the per-user folders (rt_test_userdir.h) in
- * ysp/rt.h. No framework: it returns 0 when every check passed and 1 after
+ * (rt_test_fit.h), the per-user folders (rt_test_userdir.h) and the
+ * virtual clock (rt_test_virtual.h) in ysp/rt.h. No framework: it returns 0 when every check passed and 1 after
  * printing each failure. With YRT_TEST_FIT_ONLY it runs the fit and the
  * folders only, as tests/mutate/rt.toml does.
  *
@@ -51,6 +51,7 @@
 #include "ysp/rt.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ---------------------------------------------------------------- harness */
@@ -1462,6 +1463,7 @@ static void test_version(void) {
 
 #include "rt_test_fit.h"
 #include "rt_test_userdir.h"
+#include "rt_test_virtual.h"
 
 /* -------------------------------------------------------------------- main */
 
@@ -1471,10 +1473,11 @@ int main(void) {
 
     test_fit();
     test_user_dir();
+    test_virtual();
 #ifdef YRT_TEST_FIT_ONLY
-    /* the mutation runs of tests/mutate/rt.toml: the fit and the per-user
-     * folders alone, in seconds */
-    printf("ysp_rt_pump_test: %s (%d failures, fit and folders only)\n",
+    /* the mutation runs of tests/mutate/rt.toml: the fit, the per-user
+     * folders and the virtual clock alone, in seconds */
+    printf("ysp_rt_pump_test: %s (%d failures, fit, folders and virtual clock only)\n",
            g_failures ? "FAILED" : "all checks passed", g_failures);
     (void)caller_ring;
     return g_failures ? 1 : 0;

@@ -186,6 +186,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    /* both simulated runs are on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim || sim_off) yrt_virtual_begin(0);
     if (sim && sim_off) { fprintf(stderr, "screen_sync_check: --sim or --sim-vsync-off, not both\n"); return 2; }
     if (seconds == 0) seconds = sim || sim_off ? 2 : 10;
     if (flicker && !sim && !sim_off)

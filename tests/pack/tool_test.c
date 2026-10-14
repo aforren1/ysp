@@ -29,10 +29,12 @@
 #include "ysp/gfx.h"
 #include "ysp/color.h"
 #include "ysp/audio.h"
+#include "ysp/video.h"
 #ifndef YPT_NO_LAYOUT
 #include "ysp/layout.h"
 #endif
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -53,20 +55,7 @@ static int g_fail, g_checks;
 
 #define W "pack_tool_work"
 
-typedef struct bb { uint8_t* d; size_t n, cap; } bb;
-static void b_need(bb* b, size_t k) {
-    if (b->n + k > b->cap) {
-        while (b->n + k > b->cap) b->cap = b->cap ? 2 * b->cap : 256;
-        b->d = (uint8_t*)realloc(b->d, b->cap);
-        if (!b->d) { printf("out of memory\n"); exit(1); }
-    }
-}
-static void b8(bb* b, uint32_t v) { b_need(b, 1); b->d[b->n++] = (uint8_t)v; }
-static void b16(bb* b, uint32_t v) { b8(b, v >> 8 & 255); b8(b, v & 255); }
-static void b32(bb* b, uint32_t v) { b16(b, v >> 16); b16(b, v & 0xffff); }
-static void bput(bb* b, const void* p, size_t n) { b_need(b, n); memcpy(b->d + b->n, p, n); b->n += n; }
-static void le16(bb* b, uint32_t v) { b8(b, v & 255); b8(b, v >> 8 & 255); }
-static void le32(bb* b, uint32_t v) { le16(b, v & 0xffff); le16(b, v >> 16); }
+#include "../adapt/import_gen.h"
 static void bpad4(bb* b) { while (b->n & 3) b8(b, 0); }
 
 static int write_file(const char* path, const void* d, size_t n) {
@@ -254,14 +243,83 @@ static void make_png(const char* path, uint32_t w, uint32_t h, int ct, int depth
     ih[4] = (uint8_t)(h >> 24); ih[5] = (uint8_t)(h >> 16); ih[6] = (uint8_t)(h >> 8); ih[7] = (uint8_t)h;
     ih[8] = (uint8_t)depth; ih[9] = (uint8_t)ct; ih[10] = 0; ih[11] = 0; ih[12] = 0;
     chunk(&b, "IHDR", ih, 13);
-    if (iccp) {
+    if (iccp == 1) {
         static const uint8_t pr[] = { 'x', 0, 0, 0x78, 0x01, 0x01, 0x00, 0x00, 0xff, 0xff, 0x00, 0x00, 0x00, 0x01 };
         chunk(&b, "iCCP", pr, sizeof pr);
+    } else if (iccp) {
+        /* a real profile, zlib with one stored block */
+        bb pf, c;
+        uint32_t a2 = 1, t2 = 0;
+        memset(&pf, 0, sizeof pf);
+        memset(&c, 0, sizeof c);
+        make_icc(&pf, iccp == 2);
+        for (i = 0; i < pf.n; i++) { a2 = (a2 + pf.d[i]) % 65521; t2 = (t2 + a2) % 65521; }
+        bput(&c, "icc", 4);   /* name and its NUL */
+        b8(&c, 0);            /* compression method */
+        b8(&c, 0x78); b8(&c, 0x01); b8(&c, 1);
+        le16(&c, (uint32_t)pf.n); le16(&c, (uint32_t)(~pf.n & 0xffff));
+        bput(&c, pf.d, pf.n);
+        b32(&c, (t2 << 16) | a2);
+        chunk(&b, "iCCP", c.d, c.n);
+        free(pf.d); free(c.d);
     }
     chunk(&b, "IDAT", z.d, z.n);
     chunk(&b, "IEND", NULL, 0);
     write_file(path, b.d, b.n);
     free(b.d); free(z.d); free(raw);
+}
+
+static void jpeg_file(const char* path, int w, int h, int nc, int sub, int marker, int prec, int flat_chroma, const bb* app) {
+    bb b;
+    make_jpeg(&b, w, h, nc, sub, marker, prec, flat_chroma, app);
+    write_file(path, b.d, b.n);
+    free(b.d);
+}
+
+static void xlsx_file(const char* path, const char* sheet1) {
+    bb b;
+    make_xlsx(&b, sheet1);
+    write_file(path, b.d, b.n);
+    free(b.d);
+}
+
+/* --- frame sequences (ysp/video.h's writer) ---------------------------------- */
+
+static int make_seq(const char* path, int32_t fmt, int32_t comp, int frames) {
+    static uint8_t px[16 * 8 * 4];
+    yvid_seq w;
+    yvid_seq_desc d;
+    int i, k;
+    memset(&d, 0, sizeof d);
+    d.path = path;
+    d.w = 16;
+    d.h = 8;
+    d.format = fmt;
+    d.compression = comp;
+    d.fps_num = 30;
+    d.fps_den = 1;
+    if (fmt == YVID_FMT_I420) {
+        d.matrix = YVID_MATRIX_BT709; d.range = YVID_RANGE_LIMITED; d.transfer = YVID_TRC_BT1886; d.primaries = YVID_PRIM_BT709;
+        d.siting = YVID_SITING_LEFT;
+    }
+    memset(&w, 0, sizeof w);
+    if (!yvid_seq_open(&w, &d)) return -1;
+    for (i = 0; i < frames; i++) {
+        const void* planes[3];
+        int32_t strides[3];
+        for (k = 0; k < (int)sizeof px; k++) px[k] = (uint8_t)(k * 7 + i * 31 + (k % 4 == 3 ? 255 : 0));
+        if (fmt == YVID_FMT_I420) {
+            planes[0] = px; planes[1] = px + 128; planes[2] = px + 160;
+            strides[0] = 16; strides[1] = 8; strides[2] = 8;
+        } else {
+            planes[0] = px; planes[1] = planes[2] = NULL;
+            strides[0] = 64; strides[1] = strides[2] = 0;
+        }
+        if (yvid_seq_write(&w, planes, strides, NULL) < 0) { yvid_seq_close(&w); return -1; }
+    }
+    if (yvid_seq_finish(&w) < 0) return -1;
+    yvid_seq_close(&w);
+    return 0;
 }
 
 static uint8_t g_rgba[33 * 21 * 4], g_gray[17 * 9], g_g16[11 * 7 * 2], g_c16[5 * 4 * 6];
@@ -270,6 +328,7 @@ static void make_sources(void) {
     bb f;
     uint32_t i;
     MKDIR(W); MKDIR(W "/fonts"); MKDIR(W "/audio"); MKDIR(W "/img"); MKDIR(W "/art"); MKDIR(W "/shaders"); MKDIR(W "/data");
+    MKDIR(W "/video"); MKDIR(W "/tables");
     memset(&f, 0, sizeof f);
     make_font(&f, -1);
     write_file(W "/fonts/box.ttf", f.d, f.n);
@@ -317,6 +376,21 @@ static void make_sources(void) {
     copy_in("shaders/plaid.glsl");
     copy_in("main.json");
     copy_in("readme.txt");
+    /* phase 3 sources (docs/pack.md 13) */
+    {
+        bb app;
+        xlsx_file(W "/tables/cond.xlsx", g_sheet1);
+        jpeg_file(W "/img/grayj.jpg", 20, 12, 1, 1, 0xC0, 8, 0, NULL);
+        memset(&app, 0, sizeof app);
+        app_exif(&app, 1);
+        app_icc(&app, 1, 2);   /* an sRGB profile in two chunks */
+        jpeg_file(W "/img/photo.jpg", 40, 24, 3, 2, 0xC0, 8, 0, &app);
+        free(app.d);
+        jpeg_file(W "/img/flat.jpg", 24, 16, 3, 1, 0xC2, 8, 1, NULL);
+        make_png(W "/img/icc.png", 33, 21, 6, 8, g_rgba, 2);
+        CHECK(make_seq(W "/video/bars.yspvseq", YVID_FMT_RGBA8, YVID_SEQ_QOI, 3) == 0, "frame sequence (QOI)");
+        CHECK(make_seq(W "/video/yuv.yspvseq", YVID_FMT_I420, YVID_SEQ_RAW, 2) == 0, "frame sequence (I420)");
+    }
 }
 
 #define DESC_HEAD \
@@ -350,7 +424,16 @@ static void make_sources(void) {
     "    {\"kind\": \"texture\", \"source\": \"img/gray16.png\", \"encoding\": \"linear\"},\n" \
     "    {\"kind\": \"texture\", \"source\": \"img/rgb16.png\", \"format\": \"rgba32f\", \"encoding\": \"linear\"},\n" \
     "    {\"kind\": \"file\", \"source\": \"readme.txt\"},\n" \
-    "    {\"kind\": \"file\", \"source\": \"data/big.bin\"}\n" \
+    "    {\"kind\": \"file\", \"source\": \"data/big.bin\"},\n" \
+    "    {\"kind\": \"table\", \"source\": \"tables/cond.xlsx\", \"types\": {\"contrast\": \"number\"}},\n" \
+    "    {\"kind\": \"table\", \"name\": \"tables/sheet2.pstb\", \"source\": \"tables/cond.xlsx\", \"sheet\": \"Sheet2\"},\n" \
+    "    {\"kind\": \"texture\", \"source\": \"img/grayj.jpg\"},\n" \
+    "    {\"kind\": \"texture\", \"source\": \"img/photo.jpg\", \"primaries\": \"bt709\"},\n" \
+    "    {\"kind\": \"texture\", \"source\": \"img/flat.jpg\", \"primaries\": \"device\", \"compression\": \"qoi\"},\n" \
+    "    {\"kind\": \"texture\", \"source\": \"img/icc.png\", \"primaries\": \"device\"},\n" \
+    "    {\"kind\": \"frameseq\", \"source\": \"video/bars.yspvseq\"},\n" \
+    "    {\"kind\": \"frameseq\", \"source\": \"video/yuv.yspvseq\"},\n" \
+    "    {\"kind\": \"audio\", \"name\": \"audio/at44_48k.wav\", \"source\": \"audio/at44.wav\", \"resample\": \"sinc_best\"}\n" \
     "  ]\n" \
     "}\n"
 
@@ -358,10 +441,10 @@ static void make_sources(void) {
 static const char* g_desc_core = DESC_HEAD DESC_TAIL;
 #ifdef YPT_NO_LAYOUT
 static const char* g_desc = DESC_HEAD DESC_TAIL;
-#define N_ENTRIES 21u
+#define N_ENTRIES 30u
 #else
 static const char* g_desc = DESC_HEAD DESC_RUNS DESC_TAIL;
-#define N_ENTRIES 22u
+#define N_ENTRIES 31u
 #endif
 
 static int build_text(const char* text, const char* out, char* err, size_t cap) {
@@ -459,6 +542,16 @@ static void check_entries(const char* path) {
                   memcmp(got, src, n) == 0, "cursor reads long.wav");
             free(src); free(got);
         }
+        /* resampled from 44.1 kHz: float at the project rate */
+        if ((x = entry(&p, "audio/at44_48k.wav", &e)) != NULL) {
+            yau_wav_desc wd;
+            yau_wav_info wi;
+            memset(&wd, 0, sizeof wd);
+            wd.data = x;
+            wd.size = (size_t)e.size;
+            CHECK(yau_wav_probe(&wd, &wi, err, sizeof err) == 0 && wi.rate == 48000 && wi.format == YAU_WAV_F32 && wi.channels == 2 &&
+                  wi.frames >= 1088 && wi.frames <= 1089, "resampled WAV: %s (%u Hz, %lld frames)", err, wi.rate, (long long)wi.frames);
+        }
         /* the u8 conversion: exact */
         if ((x = entry(&p, "audio/u8.wav", &e)) != NULL) {
             const uint8_t* s = (const uint8_t*)x + 44;
@@ -515,6 +608,79 @@ static void check_entries(const char* path) {
         uint8_t* src = read_all(W "/data/big.bin", &n);
         CHECK(src && n == (size_t)e.size && memcmp(src, x, n) == 0 && e.chunk_first != YPAK_NO_CHUNK, "big file");
         free(src);
+    }
+    /* phase 3: an .xlsx sheet as a table */
+    if ((x = entry(&p, "tables/cond.pstb", &e)) != NULL) {
+        ytb_table t;
+        int ok = ytb_open_view(&t, x, (size_t)e.size);
+        int cw = ytb_col(&t, "word"), cc = ytb_col(&t, "contrast"), cd = ytb_col(&t, "code"), cf = ytb_col(&t, "flag"), cn = ytb_col(&t, "note");
+        CHECK(ok && t.n_rows == 3 && t.n_cols == 5, "xlsx table: %s (%u rows)", ytb_error(&t), ok ? t.n_rows : 0);
+        if (ok && t.n_rows == 3) {
+            CHECK(!strcmp(ytb_text(&t, 0, cw), "cat") && !strcmp(ytb_text(&t, 1, cw), "d<og") && !strcmp(ytb_text(&t, 2, cw), "\xce\xb1\xce\xb2"),
+                  "xlsx shared strings: rich text, phonetic text left out, character references");
+            CHECK(ytb_num(&t, 0, cc) == 0.25 && ytb_num(&t, 1, cc) == 1.0 && ytb_num(&t, 2, cc) == 0.01, "xlsx numbers and a cached formula");
+            CHECK(ytb_col_type(&t, cd) == YTB_STRING && !strcmp(ytb_text(&t, 0, cd), "007") && !strcmp(ytb_text(&t, 1, cd), "xAy"),
+                  "xlsx text cells stay text ('007'), _xHHHH_ escapes");
+            CHECK(!strcmp(ytb_text(&t, 0, cf), "TRUE") && !strcmp(ytb_text(&t, 1, cf), "FALSE"), "xlsx booleans");
+            CHECK(!strcmp(ytb_text(&t, 0, cn), "a, \"b\"") && !strcmp(ytb_text(&t, 1, cn), "") && !strcmp(ytb_text(&t, 2, cn), "xy"),
+                  "xlsx inline rich text with a comma and quotes, a formula string");
+        }
+    }
+    if ((x = entry(&p, "tables/sheet2.pstb", &e)) != NULL) {
+        ytb_table t;
+        CHECK(ytb_open_view(&t, x, (size_t)e.size) && t.n_rows == 1 && ytb_int(&t, 0, ytb_col(&t, "n")) == 3, "xlsx sheet by name");
+    }
+    /* phase 3: JPEG textures */
+    if ((x = entry(&p, "img/grayj.ysptex", &e)) != NULL) {
+        ypak_texture t;
+        int bad = 0, xx, yy;
+        CHECK(ypak_texture_view(x, e.size, &t, err, sizeof err) == 0 && t.format == YPAK_TEX_R8 && t.w == 20 && t.h == 12 && enc_is(t.enc, 1, 2, 3, 1),
+              "gray JPEG texture: %s", err);
+        for (yy = 0; yy < 12 && t.data; yy++)
+            for (xx = 0; xx < 20; xx++) bad += t.data[yy * 20 + xx] != jpeg_val(0, xx / 8, yy / 8, 0);
+        CHECK(bad == 0, "gray JPEG: every texel is its block's value (%d differ)", bad);
+    }
+    if ((x = entry(&p, "img/photo.ysptex", &e)) != NULL) {
+        ypak_texture t;
+        CHECK(ypak_texture_view(x, e.size, &t, err, sizeof err) == 0 && t.format == YPAK_TEX_RGBA8 && t.w == 40 && t.h == 24 &&
+              enc_is(t.enc, 1, 2, 3, 2) && t.data[3] == 255, "4:2:0 JPEG with EXIF and an sRGB profile: %s", err);
+    }
+    if ((x = entry(&p, "img/flat.ysptex", &e)) != NULL) {
+        ypak_texture t;
+        static uint8_t dec[24 * 16 * 4];
+        int bad = 0, k;
+        CHECK(ypak_texture_view(x, e.size, &t, err, sizeof err) == 0 && t.compression == YPAK_TEX_QOI && ypak_qoi_decode(&t, dec, sizeof dec, err, sizeof err) == 0,
+              "progressive JPEG as QOI: %s", err);
+        for (k = 0; k < 24 * 16; k++) {
+            int v = jpeg_val(0, (k % 24) / 8, (k / 24) / 8, 1);
+            bad += dec[4 * k] != v || dec[4 * k + 1] != v || dec[4 * k + 2] != v || dec[4 * k + 3] != 255;
+        }
+        CHECK(bad == 0, "progressive JPEG without chroma: R = G = B = Y (%d texels differ)", bad);
+    }
+    if ((x = entry(&p, "img/icc.ysptex", &e)) != NULL) {
+        ypak_texture t;
+        CHECK(ypak_texture_view(x, e.size, &t, err, sizeof err) == 0 && memcmp(t.data, g_rgba, sizeof g_rgba) == 0, "PNG with an sRGB profile");
+    }
+    /* phase 3: frame sequences, unchanged, streamed */
+    {
+        static const char* const seqs[2] = { "video/bars.yspvseq", "video/yuv.yspvseq" };
+        int k;
+        for (k = 0; k < 2; k++)
+            if ((x = entry(&p, seqs[k], &e)) != NULL) {
+                char src[256];
+                size_t n;
+                uint8_t* s;
+                yvid_desc vd;
+                yvid_info vi;
+                snprintf(src, sizeof src, W "/%s", seqs[k]);
+                s = read_all(src, &n);
+                CHECK(e.kind == YPAK_KIND_FRAMESEQ && (e.flags & YPAK_F_STREAM) && s && n == (size_t)e.size && memcmp(s, x, n) == 0, "%s unchanged", seqs[k]);
+                memset(&vd, 0, sizeof vd);
+                vd.data = x;
+                vd.size = (size_t)e.size;
+                CHECK(yvid_probe(&vd, &vi, err, sizeof err) == 0 && vi.frames == (k ? 2 : 3) && vi.w == 16, "%s probes: %s", seqs[k], err);
+                free(s);
+            }
     }
     ypak_close(&p);
 }
@@ -619,7 +785,113 @@ static void test_refusals(void) {
     expect_refusal("shader mode", "{\"kind\": \"shader\", \"source\": \"shaders/plaid.glsl\", \"mode\": \"blend\"}", "mode must be", 0);
     expect_refusal("csv", "{\"kind\": \"table\", \"source\": \"readme.txt\", \"types\": {\"A\": \"integer\"}}", "", 0);
     expect_refusal("curveset from", "{\"kind\": \"curveset\", \"from\": \"readme.txt\"}, {\"kind\": \"file\", \"source\": \"readme.txt\"}", "not a font entry", 0);
-    expect_refusal("kind", "{\"kind\": \"video\", \"source\": \"readme.txt\"}", "not one this tool builds", 0);
+    expect_refusal("kind", "{\"kind\": \"glyphs\", \"source\": \"readme.txt\"}", "not one this tool builds", 0);
+    expect_refusal("alpha", "{\"kind\": \"alpha\", \"name\": \"a.yspalpha\"}", "alpha is not built yet", 0);
+    expect_refusal("video index", "{\"kind\": \"video_index\", \"name\": \"a.yspvi\"}", "made with its video", 0);
+    /* phase 3 refusals: workbooks */
+    {
+        static const char* const bad_cells[] = {
+            "<row r=\"2\"><c r=\"A2\" t=\"s\"><v>4</v></c><c r=\"B2\" s=\"1\"><v>45000</v></c></row>",
+            "<row r=\"2\"><c r=\"A2\" t=\"s\"><v>4</v></c><c r=\"B2\" s=\"2\"><v>45000</v></c></row>",
+            "<row r=\"2\"><c r=\"A2\" t=\"s\"><v>4</v></c><c r=\"B2\"><f>1+1</f></c></row>",
+            "<row r=\"2\"><c r=\"A2\" t=\"s\"><v>4</v></c><c r=\"B2\" t=\"e\"><v>#DIV/0!</v></c></row>",
+            "<row r=\"2\"><c r=\"A2\" t=\"s\"><v>4</v></c><c r=\"G2\"><v>1</v></c></row>",
+            "<row r=\"2\"><c r=\"A2\" t=\"s\"><v>99</v></c></row>",
+            "<row r=\"3\"><c r=\"A3\" t=\"s\"><v>4</v></c></row><row r=\"2\"><c r=\"A2\" t=\"s\"><v>4</v></c></row>",
+        };
+        static const char* const says[] = { "is a date or a time", "is a date or a time", "no saved value", "holds the error #DIV/0!",
+                                            "cell G2 has a value, but its column has no name", "shared string '99'", "out of order" };
+        int k;
+        char res[256];
+        for (k = 0; k < 7; k++) {
+            char sheet[4096], path[256];
+            snprintf(sheet, sizeof sheet, "%s%s</sheetData></worksheet>", XL_SHEET_HEAD, bad_cells[k]);
+            snprintf(path, sizeof path, W "/tables/bad%d.xlsx", k);
+            xlsx_file(path, sheet);
+            snprintf(res, sizeof res, "{\"kind\": \"table\", \"name\": \"t.pstb\", \"source\": \"tables/bad%d.xlsx\"}", k);
+            expect_refusal(says[k], res, says[k], 0);
+        }
+        {
+            static const uint8_t ole[16] = { 0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1 };
+            write_file(W "/tables/ole.xlsx", ole, sizeof ole);
+        }
+        expect_refusal("encrypted workbook", "{\"kind\": \"table\", \"name\": \"t.pstb\", \"source\": \"tables/ole.xlsx\"}", "password-protected", 0);
+        expect_refusal("not a zip", "{\"kind\": \"table\", \"name\": \"t.pstb\", \"source\": \"readme.xlsx\"}", "cannot open", 0);
+        write_file(W "/tables/text.xlsx", "hello", 5);
+        expect_refusal("not a zip", "{\"kind\": \"table\", \"name\": \"t.pstb\", \"source\": \"tables/text.xlsx\"}", "not a zip", 0);
+        expect_refusal("no such sheet", "{\"kind\": \"table\", \"source\": \"tables/cond.xlsx\", \"sheet\": \"Nope\"}",
+                       "no worksheet named 'Nope'; the workbook has 'Conditions', 'Sheet2'", 0);
+        expect_refusal("delimiter on a workbook", "{\"kind\": \"table\", \"source\": \"tables/cond.xlsx\", \"delimiter\": \";\"}", "not a workbook", 0);
+        expect_refusal("sheet on a CSV", "{\"kind\": \"table\", \"source\": \"conditions.csv\", \"sheet\": \"A\"}", "for .xlsx workbooks", 0);
+        /* a damaged deflate stream or CRC */
+        {
+            size_t n;
+            uint8_t* d = read_all(W "/tables/cond.xlsx", &n);
+            if (d) {
+                size_t at;
+                /* the sheet's data: the last local entry before Sheet2's; flip a byte inside it */
+                for (at = 0; at + 24 < n && memcmp(d + at, "xl/worksheets/sheet1.xml", 24) != 0; at++) {}
+                CHECK(at + 24 < n, "find the sheet in the zip");
+                d[at + 24 + 40] ^= 0x10;
+                write_file(W "/tables/damaged.xlsx", d, n);
+                free(d);
+                expect_refusal("damaged sheet", "{\"kind\": \"table\", \"name\": \"t.pstb\", \"source\": \"tables/damaged.xlsx\"}", "sheet1.xml", 0);
+            }
+        }
+    }
+    /* phase 3 refusals: images */
+    {
+        bb app;
+        memset(&app, 0, sizeof app);
+        app_exif(&app, 6);
+        jpeg_file(W "/img/turned.jpg", 16, 16, 1, 1, 0xC0, 8, 0, &app);
+        app.n = 0;
+        app_icc(&app, 0, 1);
+        jpeg_file(W "/img/panel.jpg", 16, 16, 3, 1, 0xC0, 8, 0, &app);
+        free(app.d);
+        jpeg_file(W "/img/cmyk.jpg", 16, 16, 4, 1, 0xC0, 8, 0, NULL);
+        jpeg_file(W "/img/arith.jpg", 16, 16, 1, 1, 0xC9, 8, 0, NULL);
+        jpeg_file(W "/img/twelve.jpg", 16, 16, 1, 1, 0xC1, 12, 0, NULL);
+        make_png(W "/img/panel.png", 17, 9, 0, 8, g_gray, 3);
+        expect_refusal("exif orientation", "{\"kind\": \"texture\", \"source\": \"img/turned.jpg\"}", "EXIF orientation is 6", 0);
+        expect_refusal("jpeg icc", "{\"kind\": \"texture\", \"source\": \"img/panel.jpg\", \"primaries\": \"device\"}", "primaries are not sRGB's", 0);
+        expect_refusal("png icc", "{\"kind\": \"texture\", \"source\": \"img/panel.png\"}", "primaries are not sRGB's", 0);
+        expect_refusal("cmyk", "{\"kind\": \"texture\", \"source\": \"img/cmyk.jpg\"}", "CMYK", 0);
+        expect_refusal("arithmetic", "{\"kind\": \"texture\", \"source\": \"img/arith.jpg\"}", "arithmetic coding", 0);
+        expect_refusal("12-bit", "{\"kind\": \"texture\", \"source\": \"img/twelve.jpg\"}", "12-bit samples", 0);
+        expect_refusal("jpeg r8 from color", "{\"kind\": \"texture\", \"source\": \"img/photo.jpg\", \"format\": \"r8\"}", "would drop or round", 0);
+        expect_refusal("jpeg rg8", "{\"kind\": \"texture\", \"source\": \"img/grayj.jpg\", \"format\": \"rg8\"}", "does not hold a JPEG's values", 0);
+        expect_refusal("jpeg primaries", "{\"kind\": \"texture\", \"source\": \"img/photo.jpg\"}", "need \"primaries\"", 0);
+    }
+    /* phase 3 refusals: video and frame sequences */
+    {
+        size_t n;
+        uint8_t* d = read_all(W "/video/yuv.yspvseq", &n);
+        if (d) {
+            d[4096 + 64 + 5] ^= 0x01;   /* frame 0's texels */
+            write_file(W "/video/damaged.yspvseq", d, n);
+            d[4096 + 64 + 5] ^= 0x01;
+            write_file(W "/video/short.yspvseq", d, n - 24);
+            free(d);
+        }
+        expect_refusal("damaged frame", "{\"kind\": \"frameseq\", \"source\": \"video/damaged.yspvseq\"}", "frame 0 does not match its hash", 0);
+        expect_refusal("short sequence", "{\"kind\": \"frameseq\", \"source\": \"video/short.yspvseq\"}", "the index does not end the file", 0);
+        expect_refusal("not a sequence", "{\"kind\": \"frameseq\", \"source\": \"readme.txt\"}", "not a ysp/video.h frame sequence", 0);
+        expect_refusal("video name", "{\"kind\": \"video\", \"source\": \"readme.txt\"}", "ends in .mp4 or .mpg", 0);
+        expect_refusal("video bytes", "{\"kind\": \"video\", \"name\": \"v.mp4\", \"source\": \"readme.txt\"}", "neither MP4 nor MPEG-1", 0);
+        expect_refusal("video color", "{\"kind\": \"video\", \"name\": \"v.mp4\", \"source\": \"readme.txt\", \"color\": {\"matrix\": \"bt999\"}}",
+                       "color matrix 'bt999'", 0);
+        expect_refusal("ffmpeg_input alone", "{\"kind\": \"video\", \"name\": \"v.mp4\", \"source\": \"readme.txt\", \"ffmpeg_input\": [\"-f\"]}",
+                       "'ffmpeg_input' needs 'ffmpeg'", 0);
+        {
+            static const char t[] = "{\"format\": \"ysp-pack-source\", \"version\": 1, \"resources\": [{\"kind\": \"video\", \"name\": \"v.mp4\", "
+                                    "\"source\": \"readme.txt\", \"ffmpeg\": [\"-c:v\", \"libx264\"]}]}";
+            ypt_options o;
+            memset(&o, 0, sizeof o);
+            o.ffmpeg = "ypak-test-no-such-ffmpeg";
+            CHECK(ypt_build_text(t, strlen(t), W, W "/refused.ysppak", &o, err, sizeof err) < 0 && strstr(err, "cannot run"), "no ffmpeg: %s", err);
+        }
+    }
     /* open question 7's default: a restricted font is accepted in a private pack */
     {
         static const char t[] = "{\"format\": \"ysp-pack-source\", \"version\": 1, \"private\": true, \"resources\": "
@@ -707,6 +979,222 @@ static int names_layout(const char* path) {
     }
     ypak_close(&p);
     return r;
+}
+
+/* The opt-in resampling against the signal itself: a 997 Hz sine at
+ * 44.1 kHz (32-bit float, amplitude 0.5) resampled to 48 kHz must be the
+ * same sine at 48 kHz, away from the ends, where the filter has no data on
+ * one side. libsamplerate's best converter states 97 dB of SNR. */
+static void test_resample(void) {
+    static const char t[] = "{\"format\": \"ysp-pack-source\", \"version\": 1, \"audio\": {\"rate\": 48000, \"channels\": 1}, \"resources\": ["
+                            "{\"kind\": \"audio\", \"name\": \"sine48.wav\", \"source\": \"audio/sine441.wav\", \"resample\": \"sinc_best\"}]}";
+    static float in[44100];
+    bb b;
+    char err[512];
+    int i, rc;
+    ypak_pack p;
+    ypak_desc d;
+    ypak_entry e;
+    memset(&b, 0, sizeof b);
+    for (i = 0; i < 44100; i++) in[i] = (float)(0.5 * sin(2.0 * 3.14159265358979323846 * 997.0 * i / 44100.0));
+    bput(&b, "RIFF", 4); le32(&b, 36 + 4 * 44100); bput(&b, "WAVEfmt ", 8); le32(&b, 16); le16(&b, 3); le16(&b, 1); le32(&b, 44100);
+    le32(&b, 44100 * 4); le16(&b, 4); le16(&b, 32); bput(&b, "data", 4); le32(&b, 4 * 44100); bput(&b, in, sizeof in);
+    write_file(W "/audio/sine441.wav", b.d, b.n);
+    free(b.d);
+    rc = build_text(t, W "/sine.ysppak", err, sizeof err);
+    CHECK(rc == 0, "resample: %s", err);
+    memset(&d, 0, sizeof d);
+    d.path = W "/sine.ysppak";
+    if (rc == 0 && ypak_open(&p, &d)) {
+        const uint8_t* x = (const uint8_t*)entry(&p, "sine48.wav", &e);
+        yau_wav_desc wd;
+        yau_wav_info wi;
+        memset(&wd, 0, sizeof wd);
+        wd.data = x;
+        wd.size = (size_t)e.size;
+        if (x && yau_wav_probe(&wd, &wi, err, sizeof err) == 0) {
+            double worst = 0;
+            int64_t k;
+            for (k = 200; k < wi.frames - 200; k++) {
+                float v;
+                double want = 0.5 * sin(2.0 * 3.14159265358979323846 * 997.0 * (double)k / 48000.0);
+                memcpy(&v, x + wi.data_offset + 4 * k, 4);
+                if (fabs(v - want) > worst) worst = fabs(v - want);
+            }
+            CHECK(wi.rate == 48000 && wi.frames >= 47999 && wi.frames <= 48001 && worst < 1e-4,
+                  "resampled sine: %lld frames, largest error %.2e (%.1f dB below the amplitude)", (long long)wi.frames, worst, 20 * log10(0.5 / worst));
+            printf("tool_test: resampled sine, largest error %.2e (%.1f dB below the amplitude)\n", worst, 20 * log10(0.5 / worst));
+        } else {
+            CHECK(0, "resampled sine reads: %s", err);
+        }
+        ypak_close(&p);
+    }
+    expect_refusal("resample name", "{\"kind\": \"audio\", \"source\": \"audio/at44.wav\", \"resample\": \"linear\"}", "resample is \"sinc_best\"", 0);
+}
+
+/* The author's thread settings in an ffmpeg step are refused (decided
+ * 2026-10-14): the tool sets them. No ffmpeg needed. */
+static void test_ffmpeg_refusals(void) {
+    expect_refusal("ffmpeg threads", "{\"kind\": \"video\", \"name\": \"v.mpg\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-threads\", \"4\"]}",
+                   "remove the thread setting from 'ffmpeg' (-threads)", 0);
+    expect_refusal("x264 threads", "{\"kind\": \"video\", \"name\": \"v.mp4\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-x264-params\", \"bframes=0:threads=8\"]}",
+                   "(-x264-params bframes=0:threads=8)", 0);
+    expect_refusal("x265 pools", "{\"kind\": \"video\", \"name\": \"v.mp4\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-x265-params\", \"pools=4\"]}",
+                   "(-x265-params pools=4)", 0);
+}
+
+/* VIDEO and VIDEO_INDEX through the ffmpeg step, when ffmpeg runs here: a
+ * raw gray clip made in code becomes MPEG-1 (pl_mpeg indexes it on every
+ * platform) and, on Windows, H.264 in MP4 (Media Foundation indexes it).
+ * The build is repeated (ffmpeg's bytes must not change), the pack is
+ * rebuilt with this ffmpeg (the step runs again) and with no ffmpeg (the
+ * recorded output is used), both identical. Skipped without ffmpeg; CI
+ * runners may not have it. */
+static void test_video(void) {
+    static const char t[] =
+        "{\"format\": \"ysp-pack-source\", \"version\": 1, \"resources\": [\n"
+        "  {\"kind\": \"video\", \"name\": \"video/clip.mpg\", \"source\": \"video/raw.gray\",\n"
+        "   \"ffmpeg_input\": [\"-f\", \"rawvideo\", \"-pix_fmt\", \"gray\", \"-s\", \"64x48\", \"-framerate\", \"30\"],\n"
+        "   \"ffmpeg\": [\"-c:v\", \"mpeg1video\", \"-q:v\", \"3\", \"-g\", \"10\", \"-bf\", \"0\", \"-pix_fmt\", \"yuv420p\", \"-f\", \"mpeg\"]}"
+#if defined(_WIN32)
+        ",\n  {\"kind\": \"video\", \"name\": \"video/clip.mp4\", \"source\": \"video/raw.gray\",\n"
+        "   \"ffmpeg_input\": [\"-f\", \"rawvideo\", \"-pix_fmt\", \"gray\", \"-s\", \"64x48\", \"-framerate\", \"30\"],\n"
+        "   \"ffmpeg\": [\"-c:v\", \"libx264\", \"-preset\", \"fast\", \"-crf\", \"20\", \"-pix_fmt\", \"yuv420p\", \"-bf\", \"0\", \"-g\", \"10\",\n"
+        "               \"-keyint_min\", \"10\", \"-sc_threshold\", \"0\", \"-x264-params\",\n"
+        "               \"bframes=0:scenecut=0:open-gop=0:colorprim=bt709:transfer=bt709:colormatrix=bt709:range=tv:chromaloc=0\",\n"
+        "               \"-video_track_timescale\", \"30\", \"-an\"]}"
+#endif
+        "\n]}\n";
+    static uint8_t raw[64 * 48 * 30];
+    char err[1024];
+    int k, rc;
+    FILE* rep;
+#if defined(_WIN32)
+    if (system("ffmpeg -version > NUL 2>&1") != 0) { printf("tool_test: video through ffmpeg skipped (no ffmpeg on the PATH)\n"); return; }
+#else
+    if (system("ffmpeg -version > /dev/null 2>&1") != 0) { printf("tool_test: video through ffmpeg skipped (no ffmpeg on the PATH)\n"); return; }
+#endif
+    for (k = 0; k < (int)sizeof raw; k++) raw[k] = (uint8_t)((k % 64) * 3 + ((k / 64) % 48) * 5 + (k / (64 * 48)) * 7);
+    write_file(W "/video/raw.gray", raw, sizeof raw);
+    rc = build_text(t, W "/video.ysppak", err, sizeof err);
+    CHECK(rc == 0, "video through ffmpeg: %s", err);
+    if (rc) return;
+    {
+        ypak_pack p;
+        ypak_desc d;
+        static const char* const names[2] = { "video/clip.mpg", "video/clip.mp4" };
+        memset(&d, 0, sizeof d);
+        d.path = W "/video.ysppak";
+        d.verify = YPAK_VERIFY_OPEN;
+        if (ypak_open(&p, &d)) {
+            for (k = 0; k < 2; k++) {
+                ypak_entry e, ie;
+                char in[64];
+                yvid_desc vd;
+                yvid_info vi;
+                const void* v;
+                const void* iv;
+#if !defined(_WIN32)
+                if (k == 1) break;
+#endif
+                snprintf(in, sizeof in, "%s.yspvi", names[k]);
+                v = entry(&p, names[k], &e);
+                iv = entry(&p, in, &ie);
+                CHECK(v && iv && e.kind == YPAK_KIND_VIDEO && (e.flags & YPAK_F_STREAM) && ie.kind == YPAK_KIND_VIDEO_INDEX, "%s and its index", names[k]);
+                if (!v || !iv) continue;
+                memset(&vd, 0, sizeof vd);
+                vd.data = v;
+                vd.size = (size_t)e.size;
+                vd.index = iv;
+                vd.index_size = (size_t)ie.size;
+                CHECK(yvid_probe(&vd, &vi, err, sizeof err) == 0 && vi.frames == 30 && vi.w == 64 && vi.h == 48 && vi.fps_num == 30 * vi.fps_den,
+                      "%s: the index describes 30 frames of 64 x 48 at 30 fps: %s", names[k], err);
+            }
+            ypak_close(&p);
+        } else {
+            CHECK(0, "video pack opens: %s", ypak_error(&p));
+        }
+    }
+    CHECK(build_text(t, W "/video_again.ysppak", err, sizeof err) == 0 && same_file(W "/video.ysppak", W "/video_again.ysppak"),
+          "video through ffmpeg twice: same bytes (%s)", err);
+    CHECK(ypt_verify(W "/video.ysppak", NULL, err, sizeof err) == 0, "video pack verifies: %s", err);
+    rc = ypt_rebuild(W "/video.ysppak", W, W "/video_rebuilt.ysppak", NULL, err, sizeof err);
+    CHECK(rc == 0 && same_file(W "/video.ysppak", W "/video_rebuilt.ysppak"), "video rebuild with this ffmpeg: %s", err);
+    {
+        ypt_options o;
+        size_t n;
+        uint8_t* text;
+        memset(&o, 0, sizeof o);
+        o.ffmpeg = "ypak-test-no-such-ffmpeg";
+        rep = fopen(W "/video_rebuild.txt", "w");
+        rc = ypt_rebuild_ex(W "/video.ysppak", W, W "/video_rebuilt2.ysppak", &o, rep, err, sizeof err);
+        if (rep) fclose(rep);
+        text = read_all(W "/video_rebuild.txt", &n);
+        CHECK(rc == 0 && same_file(W "/video.ysppak", W "/video_rebuilt2.ysppak") && text && strstr((const char*)text, "recorded output is used"),
+              "video rebuild without ffmpeg takes the recorded output: %s", err);
+        free(text);
+    }
+    /* the forced single thread (decided 2026-10-14), in the recorded command */
+    {
+        ypak_pack p;
+        ypak_desc d;
+        ypak_entry e;
+        memset(&d, 0, sizeof d);
+        d.path = W "/video.ysppak";
+        if (ypak_open(&p, &d)) {
+            const char* m = (const char*)entry(&p, "ysp/manifest.json", &e);
+            char* z = (char*)malloc((size_t)e.size + 1);
+            if (m && z) {
+                memcpy(z, m, (size_t)e.size);
+                z[e.size] = 0;
+                CHECK(strstr(z, "-f mpeg -threads 1 {output}") != NULL, "the recorded command ends with -threads 1");
+            }
+            free(z);
+            ypak_close(&p);
+        }
+    }
+#if defined(_WIN32)
+    /* libx265: its pools forced into the author's x265-params. Media
+     * Foundation's HEVC decoder is a Store extension; without it the index
+     * cannot be made, and only the command is checked by the refusal. */
+    {
+        static const char t5[] =
+            "{\"format\": \"ysp-pack-source\", \"version\": 1, \"resources\": [\n"
+            "  {\"kind\": \"video\", \"name\": \"video/clip265.mp4\", \"source\": \"video/raw.gray\",\n"
+            "   \"ffmpeg_input\": [\"-f\", \"rawvideo\", \"-pix_fmt\", \"gray\", \"-s\", \"64x48\", \"-framerate\", \"30\"],\n"
+            "   \"ffmpeg\": [\"-c:v\", \"libx265\", \"-crf\", \"24\", \"-pix_fmt\", \"yuv420p\", \"-x265-params\",\n"
+            "               \"bframes=0:keyint=10:min-keyint=10:scenecut=0:log-level=error:colorprim=bt709:transfer=bt709:colormatrix=bt709:range=limited\",\n"
+            "               \"-video_track_timescale\", \"30\", \"-an\"],\n"
+            "   \"color\": {\"matrix\": \"bt709\", \"range\": \"limited\", \"transfer\": \"bt1886\", \"primaries\": \"bt709\", \"siting\": \"left\"}}]}\n";
+        rc = build_text(t5, W "/video265.ysppak", err, sizeof err);
+        if (rc == 0) {
+            ypak_pack p;
+            ypak_desc d;
+            ypak_entry e;
+            memset(&d, 0, sizeof d);
+            d.path = W "/video265.ysppak";
+            if (ypak_open(&p, &d)) {
+                const char* m = (const char*)entry(&p, "ysp/manifest.json", &e);
+                char* z = (char*)malloc((size_t)e.size + 1);
+                if (m && z) {
+                    memcpy(z, m, (size_t)e.size);
+                    z[e.size] = 0;
+                    CHECK(strstr(z, "range=limited:pools=1:frame-threads=1 -video_track_timescale") && strstr(z, "-an -threads 1 {output}"),
+                          "libx265: pools and frame threads forced in the recorded command");
+                }
+                free(z);
+                ypak_close(&p);
+            }
+            CHECK(build_text(t5, W "/video265_again.ysppak", err, sizeof err) == 0 && same_file(W "/video265.ysppak", W "/video265_again.ysppak"),
+                  "libx265 twice: same bytes");
+        } else if (strstr(err, "Unknown encoder") || strstr(err, "Media Foundation")) {
+            /* an ffmpeg without libx265, or no HEVC decoder in Media Foundation */
+            printf("tool_test: the libx265 pack was not built here (%s)\n", err);
+        } else {
+            CHECK(0, "libx265 through ffmpeg: %s", err);
+        }
+    }
+#endif
 }
 
 /* The pack both builds make: the core and the full tool must give the same
@@ -797,7 +1285,7 @@ int main(void) {
             CHECK(rep && ypt_list(W "/corpus.ysppak", rep, err, sizeof err) == 0 && ypt_info(W "/corpus.ysppak", rep, err, sizeof err) == 0, "list, info");
             if (rep) fclose(rep);
             x = read_all(W "/list.txt", &n);
-            CHECK(x && strstr((const char*)x, N_ENTRIES == 22u ? "glyphruns" : "curveset") && strstr((const char*)x, "experiment: experiment/main.json") &&
+            CHECK(x && strstr((const char*)x, N_ENTRIES == 31u ? "glyphruns" : "curveset") && strstr((const char*)x, "experiment: experiment/main.json") &&
                   strstr((const char*)x, "audio: 48000 Hz"), "list and info text");
             free(x);
         }
@@ -873,7 +1361,7 @@ int main(void) {
                                     name, got, hx, pin_path);
                     }
                     if (pin) fclose(pin);
-                    CHECK(lines == (int)p.n - 1 - (N_ENTRIES == 22u ? 0 : 1) && same == lines, "corpus pin: %d of %d entries as pinned (%u in the pack besides the manifest)",
+                    CHECK(lines == (int)p.n - 1 - (N_ENTRIES == 31u ? 0 : 1) && same == lines, "corpus pin: %d of %d entries as pinned (%u in the pack besides the manifest)",
                           same, lines, p.n - 1);
                 }
                 ypak_close(&p);
@@ -882,6 +1370,9 @@ int main(void) {
         }
     }
     test_core_pack();
+    test_resample();
+    test_ffmpeg_refusals();
+    test_video();
     test_refusals();
     printf("tool_test: %d checks, %d failed\n", g_checks, g_fail);
     return g_fail ? 1 : 0;

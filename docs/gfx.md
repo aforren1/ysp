@@ -3920,3 +3920,13 @@ SEE", show the bands and the two dither patterns.
   programs' GPU time on renderers other than the Iris Xe.
 - Curve runs on real fonts against an exact reference: the pixel tests use
   the test builder's glyphs; the probe's font tables are not repeated.
+
+## v0.15.1: costs on the real clock
+
+On ysp/rt.h's virtual clock (rt.h v0.9.0) `yrt_now_ns()` stands still
+between waits, so the program cache's open and store times and a text's
+build time read 0 in a `--sim` run. They are costs, so they read
+`yrt_real_ns()`, the real counter on either clock. `gfx_text --sim`
+then prints 5 ms for Segoe UI's 95 glyphs and 171 ms for Microsoft YaHei's
+1728 (Windows 11 test laptop, MSVC 19.44 Release, 2026-10-14). Shader time
+stays on `yrt_now_ns()`: it is a stimulus time.

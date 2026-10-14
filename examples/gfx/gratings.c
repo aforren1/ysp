@@ -179,6 +179,8 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--tf") && i + 1 < argc) tf = atof(argv[++i]);
         else { fprintf(stderr, "usage: gfx_gratings [--sim] [--fullscreen] [--seconds S] [--tf HZ]\n"); return 2; }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     if (!(tf > 0 && tf <= 30) || !(seconds >= 0)) { fprintf(stderr, "gfx_gratings: --tf takes 0..30 Hz, --seconds >= 0\n"); return 2; }
     if (sim && seconds == 0) seconds = 2;
     if (sim) sd.backend = YSCR_BACKEND_SIM;

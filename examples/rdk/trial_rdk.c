@@ -42,7 +42,7 @@
  * --sim: the simulated display and a synthetic participant (RT 0.65 s
  * minus 0.8 s x coherence, correct on every trial but the one at the
  * lowest coherence leftward). It also checks every row as scripted.
- * Exits 1 on a mismatch. About 15 s.
+ * Exits 1 on a mismatch. Under a second: the virtual clock does not wait.
  *
  * Usage: trial_rdk [--sim] [--fullscreen] [--reps N] [--seed N] [--out FILE] [--steps FILE]
  *   --reps N    repetitions of each condition (default 5; --sim: 1)
@@ -208,6 +208,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     if (reps == 0) reps = sim ? 1 : 5;
     if (reps < 1 || reps > 50) { fprintf(stderr, "trial_rdk: --reps takes 1..50\n"); return 2; }
 
@@ -375,8 +377,9 @@ int main(int argc, char** argv) {
     if (sim && !failed && !aborted) {
         for (i = 0; i < rows; i++) {
             const yrsp_result* q = &sim_res[i];
-            if (!(q->flags & YRSP_R_RESPONDED) || q->response != sim_key[i] || /* script from the plan, RT from the flip record */
-                llabs(q->rt_ns + (q->t_onset - sim_plan[i]) - YRT_S(sim_rt[i])) > 1000 ||
+            /* on the virtual clock the onset is the plan and the RT the script's, to the ns */
+            if (!(q->flags & YRSP_R_RESPONDED) || q->response != sim_key[i] ||
+                q->t_onset != sim_plan[i] || q->rt_ns != YRT_S(sim_rt[i]) ||
                 q->onset_tier != YSCR_TIER_SIM || q->onset_src != YRSP_ONSET_FLIP) {
                 fprintf(stderr, "trial_rdk: --sim: trial %d: rt %.9f (want %.9f) response %d (want %d) onset tier %d "
                                 "src %d\n", i, YRT_TO_S(q->rt_ns), sim_rt[i], q->response, sim_key[i], q->onset_tier, q->onset_src);
