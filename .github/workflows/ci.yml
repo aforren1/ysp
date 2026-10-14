@@ -920,15 +920,16 @@ jobs:
           # PsychoPy's Sternberg demo: digits from a font or the bitmap font, SOAs from flip records (about 27 s).
           expect 0 "$bin/trial_sternberg" --sim --out "$RUNNER_TEMP/trial_sternberg.csv"
           # PsychoPy's EEG demos: stimulus, response and end codes into the in-process box; 1 if a row,
-          # a write's deadline or a byte is off (about 11 s).
+          # a write's deadline or a byte is off (virtual clock).
           expect 0 "$bin/trial_eeg_triggers" --sim --out "$RUNNER_TEMP/trial_eeg_triggers.csv"
           expect 2 "$bin/trial_eeg_triggers" --pulse 0
-          # PsychoPy's fMRI demos: trials on a base anchored at a scripted scanner pulse; 1 if an onset,
-          # a volume or a pulse is off (about 11 s).
+          # PsychoPy's fMRI demos: trials on a base anchored at a scripted or emulated scanner pulse; 1 if an
+          # onset, a volume or a pulse is off (virtual clock).
           expect 0 "$bin/trial_scanner_sync" --sim --out "$RUNNER_TEMP/trial_scanner_sync.csv" --pulses "$RUNNER_TEMP/trial_scanner_sync_pulses.csv"
+          expect 0 "$bin/trial_scanner_sync" --sim --sync emulate --out "$RUNNER_TEMP/trial_scanner_sync_emulate.csv"
           expect 2 "$bin/trial_scanner_sync" --sim --sync board
           # gammaMotionNull.py: two staircases on the output stage's table against a simulated observer;
-          # 1 if a row or the null is off (about 30 s).
+          # 1 if a row or the null is off (virtual clock).
           expect 0 "$bin/gfx_gamma_null" --sim --out "$RUNNER_TEMP/gfx_gamma_null.csv"
           expect 2 "$bin/gfx_gamma_null" --trials 1
           # The web demos, natively (docs/web.md): scripted rows, a staircase against an observer, the loop.

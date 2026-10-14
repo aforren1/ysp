@@ -25,7 +25,9 @@
  *            board with firmware/ysp_line/ on the scanner's TTL output):
  *            its SYNC events, stamped on the board's clock fit.
  *   emulate  a ysp/rt.h worker thread makes a pulse every TR, each
- *            stamped with its deadline: a run without a scanner.
+ *            stamped with its deadline: a run without a scanner. Under
+ *            --sim it is a virtual timer on the frame loop's thread
+ *            instead: a real thread is not paced by the virtual clock.
  * Every source pushes its pulses into one wait-free ysp/rt.h ring; the
  * frame loop drains it. Default: board when the profile has the role,
  * else key.
@@ -58,11 +60,11 @@
  * (exact); that each disc's flip was planned for the vblank where the
  * timeline landed it, never before its planned time; that no onset comes
  * before its pulse, each in its planned volume, from_pulse minus the
- * offset in [0, one frame) (more only when the loop fell behind, which
- * the landing's residual says); volume and from_pulse against the pulses
- * the script implies (exact); and each response (key and RT exact). --sim --sync emulate runs the
- * emulator thread instead of the script, on the same checks; its pulses
- * come on the real clock. Exits 1 on a mismatch. About 11 s.
+ * offset in [0, one frame); volume and from_pulse against the pulses the
+ * script implies (exact); and each response (key and RT exact). --sim
+ * --sync emulate runs the emulator instead of the script, on the same
+ * checks. --sim runs on ysp/rt.h's virtual clock, so its output is the
+ * same on every run and host. Exits 1 on a mismatch. Under a second.
  *
  * Usage: trial_scanner_sync [--sim] [--fullscreen] [--tr S] [--vols N]
  *          [--skip N] [--reps N] [--sync key|board|emulate] [--sync-key K]
@@ -166,6 +168,18 @@ static void pulse_in(const yin_event* e, int source) {
 }
 static void board_sink(void* ctx, const yin_event* e) { (void)ctx; pulse_in(e, SYNC_BOARD); }
 
+/* --sim's emulator: the same pulses as a virtual timer. */
+static int64_t emu_timer(void* ctx, int64_t now) {
+    yin_event e;
+    (void)ctx;
+    memset(&e, 0, sizeof e);
+    e.t = now;
+    e.kind = YIN_KIND_SYNC;
+    e.type = YIN_PRESS;
+    pulse_in(&e, SYNC_EMULATE);
+    return now + emu_tr;
+}
+
 /* The emulator: a pulse at each deadline, stamped with it, then the next. */
 static void emu_job(void* ctx, const yrt_job_info* info) {
     yin_event e;
@@ -232,6 +246,8 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--pulses") && v) { pulses_path = v; i++; }
         else { sync = -1; break; }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim && sync >= 0) yrt_virtual_begin(0);
     if (tr_s == 0) tr_s = sim ? 1.0 : 2.0;
     if (skip < 0) skip = sim ? 2 : 0;
     if (reps == 0) reps = sim ? 1 : 4;
@@ -311,8 +327,12 @@ int main(int argc, char** argv) {
 
     if (sync == SYNC_EMULATE) {
         emu_tr = tr;
-        if (!yrt_worker_open(&emu, NULL)) return fail(yrt_worker_error(&emu));
-        if (yrt_worker_submit(&emu, yrt_now_ns() + YRT_S(0.5), emu_job, NULL) < 0) return fail("emulator");
+        if (sim) {
+            if (yrt_virtual_timer(emu_timer, NULL, yrt_now_ns() + YRT_S(0.5)) < 0) return fail("emulator");
+        } else {
+            if (!yrt_worker_open(&emu, NULL)) return fail(yrt_worker_error(&emu));
+            if (yrt_worker_submit(&emu, yrt_now_ns() + YRT_S(0.5), emu_job, NULL) < 0) return fail("emulator");
+        }
     }
     printf("waiting for the scanner%s\n", sync == SYNC_KEY ? " (or press the sync key)" : "");
 
@@ -321,10 +341,10 @@ int main(int argc, char** argv) {
         if (rc == YSCR_QUIT) { aborted = 1; break; }
         if (rc != YSCR_OK) { failed = fail(yscr_error(&scr)); break; }
         if (sync == SYNC_SCRIPT) {
-            /* the scanner's pulses, reached by the loop (f.onset - period is
-             * about when begin() returned); its clock runs SIM_DRIFT slow */
+            /* the scanner's pulses, once the clock has reached them; its
+             * clock runs 100 ppm fast (SIM_DRIFT) */
             if (!script_t0) { script_t0 = f.onset + YRT_S(0.5); script_tr = tr + (int64_t)llround(tr_s * SIM_DRIFT * 1e9); }
-            while (script_t0 + n_script * script_tr <= f.onset - f.period) {
+            while (script_t0 + n_script * script_tr <= yrt_now_ns()) {
                 yin_event e = { 0 };
                 e.t = script_t0 + script_tr * n_script++;
                 e.kind = YIN_KIND_SYNC;
@@ -387,7 +407,7 @@ int main(int argc, char** argv) {
                 sim_next = 0;
                 sim_frame = -1;
             }
-        for (; sim && sim_next < n_sim_ev && sim_ev[sim_next].t <= f.onset - f.period; sim_next++)
+        for (; sim && sim_next < n_sim_ev && sim_ev[sim_next].t <= yrt_now_ns(); sim_next++)
             yrsp_feed(&rsp, &sim_ev[sim_next]);
         yrsp_update_frame(&rsp, &f);   /* the disc's flip record makes RT final */
 
@@ -452,7 +472,7 @@ int main(int argc, char** argv) {
         ygfx_end(&gfx);
         yscr_flip(&scr);
     }
-    if (sync == SYNC_EMULATE) yrt_worker_close(&emu);
+    if (sync == SYNC_EMULATE && !sim) yrt_worker_close(&emu);
     ydev_close(&board);
     if (ytr_data_finish(&data) < 0) failed = fail(ytr_data_error(&data));
     ygfx_close(&gfx);
@@ -499,11 +519,11 @@ int main(int argc, char** argv) {
             if (resp_want != ((q->flags & YRSP_R_RESPONDED) != 0) || (resp_want && q->response != sim_key[i]) ||
                 (resp_want && llabs(q->rt_ns - YRT_S(0.4 + 0.05 * (i % 3))) > 1000) ||
                 q->onset_tier != YSCR_TIER_SIM || q->onset_src != YRSP_ONSET_FLIP ||
-                sim_resid[i] < 0 || llabs(sim_vblank[i] - anchor - x->planned_ns - sim_resid[i]) > 1000 || x->onset_ns != q->t_onset - anchor || x->planned_ns != sim_plan[i] ||
+                sim_resid[i] < 0 || sim_resid[i] >= period || sim_vblank[i] - anchor - x->planned_ns != sim_resid[i] || x->onset_ns != q->t_onset - anchor || x->planned_ns != sim_plan[i] ||
                 x->volume != vol - skip || x->from_pulse_ns != pulse_onset || x->volume < 1 ||
                 /* never before its pulse, in its planned volume, within a frame of the offset */
                 x->volume != (int)((sim_plan[i] - sim_off[i]) / tr) || x->from_pulse_ns - sim_off[i] < 0 ||
-                (x->from_pulse_ns - sim_off[i] >= period && sim_resid[i] < period)) {
+                x->from_pulse_ns - sim_off[i] >= period) {
                 fprintf(stderr, "trial_scanner_sync: --sim: trial %d: response %d (want %d) rt %.9f; planned %.9f "
                                 "onset %.9f slip %.9f volume %d (want %d) from_pulse %.9f\n", i, q->response,
                         sim_key[i], YRT_TO_S(q->rt_ns), YRT_TO_S(x->planned_ns), YRT_TO_S(x->onset_ns),

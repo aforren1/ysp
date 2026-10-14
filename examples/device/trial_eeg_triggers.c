@@ -47,13 +47,20 @@
  * screen, the output, the codes and the rig profile's hash.
  *
  * --sim: the simulated display and a scripted participant (RT 0.35 to
- * 0.45 s, a wrong key on trial 2, no response on trial 4). It checks each
- * row (key and RT exact, onsets from flip records), that each flip code's
- * deadline is its flip's onset, that the flip codes' writes start within
- * a frame of their deadline and the response code's after the key (how
- * long after is the loop's, which a loaded host stretches: it prints the
- * range), and that the in-process box got exactly the bytes the script
- * implies. Exits 1 on a mismatch. About 11 s.
+ * 0.45 s, a wrong key on trial 2, no response on trial 4), on ysp/rt.h's
+ * virtual clock, so the output is the same on every run and host. The
+ * in-process box runs in manual mode (ydev_poll() each frame ends the
+ * pulses; no device thread). The screen's trigger worker is a real thread
+ * that the virtual clock does not pace (measured: it wrote 117 to 500 ms
+ * after the deadline, a different amount each run), so under --sim a
+ * virtual timer makes its call, ydev_out_trigger() at the deadline;
+ * device_trigger_flip runs the worker itself, on the real clock. It
+ * checks each row (key and RT exact, onsets from flip records), that each
+ * flip code's deadline is its flip's onset and its write starts there,
+ * that the response code's write starts on the frame that took the key
+ * (7 to 9 ns after the key's stamp, off the frame grid by rounding), and
+ * that the in-process box got exactly the bytes the script implies.
+ * Exits 1 on a mismatch. Under a second.
  *
  * Usage: trial_eeg_triggers [--sim] [--fullscreen] [--reps N] [--seed N]
  *          [--pulse S] [--rig NAME | --no-rig] [--out FILE]
@@ -110,6 +117,7 @@ static int fb_write(void* conn, const uint8_t* buf, int n) {
     return n;
 }
 static void fb_close(void* conn) { (void)conn; }
+static int64_t virtual_now(void* ctx) { (void)ctx; return yrt_now_ns(); }
 
 /* One write's record (YDEV_REC_OUT): start, end, deadline, code. */
 typedef struct wrec { int64_t t0, t1, deadline; uint32_t code; int have, failed; } wrec;
@@ -149,6 +157,24 @@ static const ygfx_bind binds[] = {
     { .stim = &disc, .param = YGFX_P_VISIBLE, .channel = DISC_ON },
 };
 
+/* --sim: a flip code on a virtual timer at its deadline, the call the
+ * screen's trigger worker makes (ydev_trigger_fn()). The worker is a real
+ * thread, which the virtual clock does not pace: it wrote 117 to 500 ms
+ * of virtual time after the deadline, a different amount each run. */
+static uint32_t g_vcode[YRT_VIRTUAL_TIMERS];
+static int g_vnext;
+static int64_t code_timer(void* ctx, int64_t now) {
+    (void)ydev_out_trigger(&trig, *(const uint32_t*)ctx, now);
+    return 0;   /* once */
+}
+static int flip_code(int sim, uint32_t code, int64_t deadline) {
+    if (!sim) return yscr_trigger(&scr, 0, code);
+    g_vcode[g_vnext] = code;
+    if (yrt_virtual_timer(code_timer, &g_vcode[g_vnext], deadline) < 0) return -1;
+    g_vnext = (g_vnext + 1) % YRT_VIRTUAL_TIMERS;
+    return 0;
+}
+
 static int fail(const char* why) {
     fprintf(stderr, "trial_eeg_triggers: %s\n", why);
     return 1;
@@ -162,7 +188,7 @@ int main(int argc, char** argv) {
     static wrec sim_w[MAX_ROWS][N_WRITES];
     static yrsp_result sim_res[MAX_ROWS];
     static int sim_side[MAX_ROWS], sim_key[MAX_ROWS];
-    static int64_t sim_stim_on[MAX_ROWS], sim_end_on[MAX_ROWS];
+    static int64_t sim_stim_on[MAX_ROWS], sim_end_on[MAX_ROWS], sim_fed[MAX_ROWS];
     static int64_t lag[3][MAX_ROWS];
     yscr_desc sd = { 0 };
     yscr_trigger_desc ch;
@@ -200,6 +226,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     if (reps == 0) reps = sim ? 3 : 20;
     if (reps < 1 || reps > MAX_ROWS / 2 || !(pulse_s > 0.0 && pulse_s <= 0.1) || (rig_name && no_rig)) {
         fprintf(stderr, "trial_eeg_triggers: --reps takes 1..256, --pulse 0 to 0.1 s; --rig or --no-rig\n");
@@ -235,6 +263,12 @@ int main(int argc, char** argv) {
         od.transport.write = fb_write;
         od.transport.close = fb_close;
         od.transport.user = &g_box;
+        if (sim) {
+            /* no reader thread and no trailing-edge worker: ydev_poll() in the
+             * frame loop ends each pulse on the virtual clock */
+            od.manual = true;
+            od.now = virtual_now;
+        }
         if (!ydev_open(&trig, &od)) return fail(ydev_error(&trig));
     }
     if (ydev_wait_running(&trig, YRT_S(3)) < 0) { fail(ydev_error(&trig)); ydev_close(&trig); return 1; }
@@ -250,8 +284,10 @@ int main(int argc, char** argv) {
     ch = ydev_trigger_channel(&trig, 0);
     sd.backend = sim ? YSCR_BACKEND_SIM : 0;
     sd.windowed = !fullscreen;
-    sd.triggers = &ch;
-    sd.n_triggers = 1;
+    if (!sim) {
+        sd.triggers = &ch;
+        sd.n_triggers = 1;
+    }
     if (!ygfx_open_screen(&gfx, &scr, &sd, &(ygfx_desc){ .background = { 0.5f, 0.5f, 0.5f } })) {
         fail(ygfx_error(&gfx));
         ydev_close(&trig);
@@ -293,6 +329,7 @@ int main(int argc, char** argv) {
 
     while (!aborted) {
         int rc = yscr_begin(&scr, &f);
+        if (trig.d.manual) (void)ydev_poll(&trig, 0);   /* trailing edges that are due */
         if (rc == YSCR_QUIT) { aborted = 1; break; }
         if (rc != YSCR_OK) { failed = fail(yscr_error(&scr)); break; }
 
@@ -371,9 +408,8 @@ int main(int argc, char** argv) {
             in_trial = responding = 1;
         }
 
-        /* --sim: the key from the disc's flip record, fed once the loop has
-         * reached it (f.onset - period is about when begin() returned; a
-         * loop behind plans later vblanks, so the clock too) */
+        /* --sim: the key from the disc's flip record, fed once the clock
+         * has reached it */
         for (i = 0; sim && sim_frame >= 0 && i < f.n_done; i++)
             if (f.done[i].index == sim_frame && yrsp_onset_flip(&f.done[i]).final) {
                 sim_stim_on[ti.index] = f.done[i].onset;
@@ -384,9 +420,10 @@ int main(int argc, char** argv) {
                 sim_frame = -1;
             }
         yrsp_feed_screen(&scr, &rsp, 1);
-        for (; sim && sim_next < n_sim_ev && sim_ev[sim_next].t <= f.onset - f.period && sim_ev[sim_next].t <= yrt_now_ns();
-             sim_next++)
+        for (; sim && sim_next < n_sim_ev && sim_ev[sim_next].t <= yrt_now_ns(); sim_next++) {
+            if (sim_next == 0) sim_fed[ti.index] = yrt_now_ns();
             yrsp_feed(&rsp, &sim_ev[sim_next]);
+        }
 
         /* the response or the deadline: the response's code now, the end 0.6 s on */
         if (yrsp_update_frame(&rsp, &f) == YRSP_ENDED && responding) {
@@ -408,7 +445,7 @@ int main(int argc, char** argv) {
         for (i = 0; i < n; i++) {
             if (fired[i].kind == YTL_ONSET && fired[i].target == DISC_ON) {
                 yrsp_set_landing(&rsp, &fired[i], 1, DISC_ON);
-                if (yscr_trigger(&scr, 0, code[W_STIM][side]) < 0) failed = fail(yscr_error(&scr));
+                if (flip_code(sim, code[W_STIM][side], f.onset) < 0) failed = fail("the stimulus code");
                 stim_frame = fired[i].frame;
                 if (sim && ti.index < MAX_ROWS) {
                     int which = sim_which(ti.index);
@@ -430,7 +467,7 @@ int main(int argc, char** argv) {
                 }
             }
             if (fired[i].kind == YTL_MARK && fired[i].code == END_OF_TRIAL) {
-                if (yscr_trigger(&scr, 0, code[W_END][0]) < 0) failed = fail(yscr_error(&scr));
+                if (flip_code(sim, code[W_END][0], f.onset) < 0) failed = fail("the end code");
                 yrsp_finish(&rsp, &res);   /* with the release and the final onset */
                 end_frame = fired[i].frame;
                 end_since = f.onset;
@@ -456,26 +493,25 @@ int main(int argc, char** argv) {
         uint8_t want[MAX_ROWS * 6 + 2];
         int nw = 0, nl[3] = { 0, 0, 0 };
         want[nw++] = 0;   /* the 0 a TriggerBox gets when it opens */
-        int64_t period = YRT_S(1) / 60;
         for (i = 0; i < rows; i++) {
             const yrsp_result* q = &sim_res[i];
             const wrec* x = sim_w[i];
             int resp_want = sim_key[i] >= 0, bad = 0;
             if (resp_want != ((q->flags & YRSP_R_RESPONDED) != 0) || (resp_want && q->response != sim_key[i]) ||
-                (resp_want && llabs(q->rt_ns - YRT_S(sim_rt(i))) > 1000) || q->onset_tier != YSCR_TIER_SIM ||
+                (resp_want && q->rt_ns != YRT_S(sim_rt(i))) || q->onset_tier != YSCR_TIER_SIM ||
                 q->onset_src != YRSP_ONSET_FLIP || q->t_onset != sim_stim_on[i])
                 bad = 1;
-            /* the flip codes: deadline at the flip's onset, written within a frame of it */
+            /* the flip codes: deadline at the flip's onset, written at it (the
+             * virtual clock stands still during a write) */
             if (!x[W_STIM].have || x[W_STIM].failed || x[W_STIM].code != code[W_STIM][sim_side[i]] ||
-                x[W_STIM].deadline != q->t_onset || x[W_STIM].t0 < x[W_STIM].deadline ||
-                x[W_STIM].t0 - x[W_STIM].deadline >= period)
+                x[W_STIM].deadline != q->t_onset || x[W_STIM].t0 != x[W_STIM].deadline || x[W_STIM].t1 != x[W_STIM].t0)
                 bad = 1;
             if (!x[W_END].have || x[W_END].failed || x[W_END].code != code[W_END][0] || x[W_END].deadline != sim_end_on[i] ||
-                x[W_END].t0 < x[W_END].deadline || x[W_END].t0 - x[W_END].deadline >= period)
+                x[W_END].t0 != x[W_END].deadline || x[W_END].t1 != x[W_END].t0)
                 bad = 1;
-            /* the response code: from the loop, after the key */
+            /* the response code: from the loop, on the frame that took the key */
             if (resp_want != x[W_RESP].have || (resp_want && (x[W_RESP].failed || x[W_RESP].code != code[W_RESP][sim_key[i]] ||
-                x[W_RESP].t0 < q->t_response)))
+                x[W_RESP].t0 != sim_fed[i] || x[W_RESP].t0 < q->t_response)))
                 bad = 1;
             if (bad) {
                 fprintf(stderr, "trial_eeg_triggers: --sim: trial %d: response %d (want %d) rt %.9f; stim %d code %u "
@@ -507,9 +543,9 @@ int main(int argc, char** argv) {
             int64_t lo = INT64_MAX, hi = INT64_MIN;
             int k;
             for (k = 0; k < nl[i]; k++) { if (lag[i][k] < lo) lo = lag[i][k]; if (lag[i][k] > hi) hi = lag[i][k]; }
-            if (nl[i]) printf("--sim: %-8s write start minus %-8s %.1f to %.1f us (%d writes)\n",
+            if (nl[i]) printf("--sim: %-8s write start minus %-8s %lld to %lld ns (%d writes)\n",
                               i == 0 ? "stimulus" : i == 1 ? "response" : "end", i == 1 ? "key" : "deadline",
-                              (double)lo / 1e3, (double)hi / 1e3, nl[i]);
+                              (long long)lo, (long long)hi, nl[i]);
         }
         if (!sim_bad) printf("--sim: every trial and every byte came out as scripted\n");
         failed = sim_bad;

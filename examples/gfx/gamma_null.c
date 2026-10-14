@@ -51,8 +51,10 @@
  * gamma 2.2 (--sim-gamma) with a black of 0.2 % of white, who sees the
  * motion of the luminance artifact (the noise's mean minus the uniform
  * bars' light, over the mean) through a cumulative normal of SD 1 % with
- * 2 % lapses; shorter fixation and blank (about 30 s for 2 x 20 trials).
- * It checks each row (key and RT as scripted, onsets from flip records)
+ * 2 % lapses; shorter fixation and blank (2 x 20 trials). It runs on
+ * ysp/rt.h's virtual clock: the same output on every run and host, in
+ * under a second. It checks each row (key and RT exact, onsets from flip
+ * records)
  * and that the result is within 0.02 log10 units of the observer's null
  * (seeds 1 to 24 on the simulated display, 2026-10-13: 2.179 to 2.238
  * against 2.2, at most 0.008 log10 units off).
@@ -231,6 +233,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     if (n_trials == 0) n_trials = sim ? 20 : 30;
     if (n_trials < 5 || n_trials > MAX_TRIALS / 2 || !(sim_gamma >= 1.0 && sim_gamma <= 4.0)) {
         fprintf(stderr, "gfx_gamma_null: --trials takes 5..256, --sim-gamma 1..4\n");
@@ -350,7 +354,7 @@ int main(int argc, char** argv) {
                 sim_frame = -1;
             }
         yrsp_feed_screen(&scr, &rsp, 1);
-        for (; sim && sim_next < n_sim_ev && sim_ev[sim_next].t <= f.onset; sim_next++) yrsp_feed(&rsp, &sim_ev[sim_next]);
+        for (; sim && sim_next < n_sim_ev && sim_ev[sim_next].t <= yrt_now_ns(); sim_next++) yrsp_feed(&rsp, &sim_ev[sim_next]);
 
         if (yrsp_update_frame(&rsp, &f) == YRSP_ENDED && responding) {
             ytl_seq q = ytl_seq_on(&tl, TRIAL);
@@ -473,7 +477,7 @@ int main(int argc, char** argv) {
     if (sim && !failed && !aborted) {
         for (i = 0; i < rows && i < MAX_TRIALS; i++) {
             const yrsp_result* q = &sim_res[i];
-            if (!(q->flags & YRSP_R_RESPONDED) || q->response != sim_key[i] || fabs(YRT_TO_S(q->rt_ns) - sim_rt[i]) > 1e-6 ||
+            if (!(q->flags & YRSP_R_RESPONDED) || q->response != sim_key[i] || q->rt_ns != YRT_S(sim_rt[i]) ||
                 q->onset_tier != YSCR_TIER_SIM || q->onset_src != YRSP_ONSET_FLIP) {
                 fprintf(stderr, "gfx_gamma_null: --sim: trial %d: rt %.9f (want %.9f) response %d (want %d) onset tier %d "
                                 "src %d\n", i, YRT_TO_S(q->rt_ns), sim_rt[i], q->response, sim_key[i], q->onset_tier,
