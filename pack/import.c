@@ -33,16 +33,16 @@ static int ferr(char* err, size_t cap, int code, const char* fmt, ...) {
     return code;
 }
 
-static uint32_t le16(const uint8_t* p) { return (uint32_t)p[0] | ((uint32_t)p[1] << 8); }
-static uint32_t le32(const uint8_t* p) { return le16(p) | (le16(p + 2) << 16); }
-static uint32_t be16(const uint8_t* p) { return ((uint32_t)p[0] << 8) | p[1]; }
-static uint32_t be32(const uint8_t* p) { return (be16(p) << 16) | be16(p + 2); }
+static uint32_t rle16(const uint8_t* p) { return (uint32_t)p[0] | ((uint32_t)p[1] << 8); }
+static uint32_t rle32(const uint8_t* p) { return rle16(p) | (rle16(p + 2) << 16); }
+static uint32_t rbe16(const uint8_t* p) { return ((uint32_t)p[0] << 8) | p[1]; }
+static uint32_t rbe32(const uint8_t* p) { return (rbe16(p) << 16) | rbe16(p + 2); }
 
 /* --- a growable byte buffer ----------------------------------------------------- */
 
 typedef struct buf { char* p; size_t n, cap, limit; int bad; } buf;
 
-static void bput(buf* b, const void* s, size_t n) {
+static void buf_put(buf* b, const void* s, size_t n) {
     if (b->bad) return;
     if (b->n + n + 1 > b->cap) {
         size_t c = b->cap ? b->cap : 4096;
@@ -59,7 +59,7 @@ static void bput(buf* b, const void* s, size_t n) {
     b->n += n;
     b->p[b->n] = 0;
 }
-static void bputc(buf* b, char ch) { bput(b, &ch, 1); }
+static void buf_putc(buf* b, char ch) { buf_put(b, &ch, 1); }
 
 /* ======================================================================== */
 /* xlsx                                                                      */
@@ -84,18 +84,18 @@ static int zip_open(zip* z, const uint8_t* d, size_t n, char* err, size_t cap) {
     memset(z, 0, sizeof *z);
     z->d = d;
     z->n = n;
-    if (n >= 8 && be32(d) == 0xD0CF11E0u)
+    if (n >= 8 && rbe32(d) == 0xD0CF11E0u)
         return ferr(err, cap, YPAK_ERR_FORMAT, "an OLE compound file, not a zip: a password-protected workbook or an old .xls; save it as .xlsx without a password");
     if (n < 22) return ferr(err, cap, YPAK_ERR_FORMAT, "not a zip file (%zu bytes)", n);
     for (i = n - 22 + 1; i-- > lo;) {
-        if (le32(d + i) == 0x06054B50u && i + 22 + le16(d + i + 20) == n) { eocd = i; found = 1; break; }
+        if (rle32(d + i) == 0x06054B50u && i + 22 + rle16(d + i + 20) == n) { eocd = i; found = 1; break; }
     }
     if (!found) return ferr(err, cap, YPAK_ERR_FORMAT, "not a zip file: no end of central directory record");
-    if (le16(d + eocd + 4) || le16(d + eocd + 6) || le16(d + eocd + 8) != le16(d + eocd + 10))
+    if (rle16(d + eocd + 4) || rle16(d + eocd + 6) || rle16(d + eocd + 8) != rle16(d + eocd + 10))
         return ferr(err, cap, YPAK_ERR_FORMAT, "a zip that spans several disks");
-    ne = le16(d + eocd + 10);
-    cds = le32(d + eocd + 12);
-    cdo = le32(d + eocd + 16);
+    ne = rle16(d + eocd + 10);
+    cds = rle32(d + eocd + 12);
+    cdo = rle32(d + eocd + 16);
     if (ne == 0xFFFFu || cds == 0xFFFFFFFFu || cdo == 0xFFFFFFFFu)
         return ferr(err, cap, YPAK_ERR_FORMAT, "a zip64 workbook; a conditions file is far smaller than 4 GB");
     if (ne == 0 || ne > XL_MAX_ENTRIES) return ferr(err, cap, YPAK_ERR_FORMAT, "%u zip entries (1 to %u)", ne, XL_MAX_ENTRIES);
@@ -106,17 +106,17 @@ static int zip_open(zip* z, const uint8_t* d, size_t n, char* err, size_t cap) {
     for (k = 0; k < ne; k++) {
         zent* e = &z->e[k];
         uint32_t el, cl;
-        if (at + 46 > (size_t)cdo + cds || le32(d + at) != 0x02014B50u)
+        if (at + 46 > (size_t)cdo + cds || rle32(d + at) != 0x02014B50u)
             return ferr(err, cap, YPAK_ERR_FORMAT, "zip central record %u is damaged", k);
-        e->flags = le16(d + at + 8);
-        e->method = le16(d + at + 10);
-        e->crc = le32(d + at + 16);
-        e->csize = le32(d + at + 20);
-        e->usize = le32(d + at + 24);
-        e->nl = le16(d + at + 28);
-        el = le16(d + at + 30);
-        cl = le16(d + at + 32);
-        e->lho = le32(d + at + 42);
+        e->flags = rle16(d + at + 8);
+        e->method = rle16(d + at + 10);
+        e->crc = rle32(d + at + 16);
+        e->csize = rle32(d + at + 20);
+        e->usize = rle32(d + at + 24);
+        e->nl = rle16(d + at + 28);
+        el = rle16(d + at + 30);
+        cl = rle16(d + at + 32);
+        e->lho = rle32(d + at + 42);
         if (at + 46 + (size_t)e->nl + el + cl > (size_t)cdo + cds) return ferr(err, cap, YPAK_ERR_FORMAT, "zip central record %u is damaged", k);
         e->name = d + at + 46;
         at += 46 + (size_t)e->nl + el + cl;
@@ -155,8 +155,8 @@ static int zip_part(const zip* z, const char* name, char** out, size_t* outn, ch
         if (!name_ieq(e->name, e->nl, name)) continue;
         if (e->flags & 1u) return ferr(err, cap, YPAK_ERR_FORMAT, "zip entry '%s' is encrypted", name);
         if (e->usize > XL_MAX_PART) return ferr(err, cap, YPAK_ERR_FORMAT, "'%s' is %u bytes; the limit is %zu MiB", name, e->usize, XL_MAX_PART >> 20);
-        if (lh + 30 > z->n || le32(z->d + lh) != 0x04034B50u) return ferr(err, cap, YPAK_ERR_FORMAT, "zip entry '%s': no local header", name);
-        data = lh + 30 + le16(z->d + lh + 26) + le16(z->d + lh + 28);
+        if (lh + 30 > z->n || rle32(z->d + lh) != 0x04034B50u) return ferr(err, cap, YPAK_ERR_FORMAT, "zip entry '%s': no local header", name);
+        data = lh + 30 + rle16(z->d + lh + 26) + rle16(z->d + lh + 28);
         if (data > z->n || e->csize > z->n - data) return ferr(err, cap, YPAK_ERR_FORMAT, "zip entry '%s' runs past the end of the file", name);
         if (e->method == 0) {
             if (e->csize != e->usize) return ferr(err, cap, YPAK_ERR_FORMAT, "zip entry '%s': stored with two sizes", name);
@@ -306,10 +306,10 @@ static int x_attr(const xt* t, const char* local, int prefixed, const char** v, 
 
 static void put_utf8(buf* b, uint32_t c) {
     char u[4];
-    if (c < 0x80) { u[0] = (char)c; bput(b, u, 1); }
-    else if (c < 0x800) { u[0] = (char)(0xC0 | (c >> 6)); u[1] = (char)(0x80 | (c & 63)); bput(b, u, 2); }
-    else if (c < 0x10000) { u[0] = (char)(0xE0 | (c >> 12)); u[1] = (char)(0x80 | ((c >> 6) & 63)); u[2] = (char)(0x80 | (c & 63)); bput(b, u, 3); }
-    else { u[0] = (char)(0xF0 | (c >> 18)); u[1] = (char)(0x80 | ((c >> 12) & 63)); u[2] = (char)(0x80 | ((c >> 6) & 63)); u[3] = (char)(0x80 | (c & 63)); bput(b, u, 4); }
+    if (c < 0x80) { u[0] = (char)c; buf_put(b, u, 1); }
+    else if (c < 0x800) { u[0] = (char)(0xC0 | (c >> 6)); u[1] = (char)(0x80 | (c & 63)); buf_put(b, u, 2); }
+    else if (c < 0x10000) { u[0] = (char)(0xE0 | (c >> 12)); u[1] = (char)(0x80 | ((c >> 6) & 63)); u[2] = (char)(0x80 | (c & 63)); buf_put(b, u, 3); }
+    else { u[0] = (char)(0xF0 | (c >> 18)); u[1] = (char)(0x80 | ((c >> 12) & 63)); u[2] = (char)(0x80 | ((c >> 6) & 63)); u[3] = (char)(0x80 | (c & 63)); buf_put(b, u, 4); }
 }
 
 static int hexv(int c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1; }
@@ -357,7 +357,7 @@ static int x_text(buf* b, const char* s, size_t n, int cdata, int ooxml, char* e
             i += 7;
             continue;
         }
-        bputc(b, ch);
+        buf_putc(b, ch);
         i++;
     }
     return b->bad ? ferr(err, cap, YPAK_ERR_NOMEM, "out of memory or past the size limit") : 0;
@@ -603,14 +603,14 @@ static int read_sst(const char* xml, size_t n, sst* s, char* err, size_t cap) {
 /* --- the sheet ----------------------------------------------------------------- */
 
 enum { CV_NUMBER, CV_TEXT, CV_BOOL };
-typedef struct cell { uint32_t row, col, off, len; int kind; } cell;
+typedef struct xcell { uint32_t row, col, off, len; int kind; } xcell;
 
-typedef struct sheet {
-    cell*    c;
+typedef struct xsheet {
+    xcell*   c;
     size_t   n, cap;
     buf      text;     /* every cell's value, back to back */
     int      formulas;
-} sheet;
+} xsheet;
 
 static void cell_ref(uint32_t row, uint32_t col, char* out) {
     char letters[4];
@@ -637,13 +637,13 @@ static int parse_ref(const char* s, size_t n, uint32_t* row, uint32_t* col) {
     return 0;
 }
 
-static int add_cell(sheet* sh, uint32_t row, uint32_t col, int kind, const char* v, size_t vn, char* err, size_t cap) {
+static int add_cell(xsheet* sh, uint32_t row, uint32_t col, int kind, const char* v, size_t vn, char* err, size_t cap) {
     if (sh->n == sh->cap) {
         size_t nc = sh->cap ? 2 * sh->cap : 1024;
-        cell* c2;
+        xcell* c2;
         if (sh->n >= XL_MAX_CELLS) return ferr(err, cap, YPAK_ERR_FORMAT, "more than %zu cells with values; a table holds %d rows of %d columns",
                                               XL_MAX_CELLS, YTB_MAX_ROWS, YTB_MAX_COLUMNS);
-        c2 = (cell*)realloc(sh->c, nc * sizeof(cell));
+        c2 = (xcell*)realloc(sh->c, nc * sizeof(xcell));
         if (!c2) return ferr(err, cap, YPAK_ERR_NOMEM, "out of memory");
         sh->c = c2;
         sh->cap = nc;
@@ -658,13 +658,13 @@ static int add_cell(sheet* sh, uint32_t row, uint32_t col, int kind, const char*
     sh->c[sh->n].off = (uint32_t)sh->text.n;
     sh->c[sh->n].len = (uint32_t)vn;
     sh->c[sh->n].kind = kind;
-    bput(&sh->text, v, vn);
+    buf_put(&sh->text, v, vn);
     if (sh->text.bad) return ferr(err, cap, YPAK_ERR_NOMEM, "out of memory");
     sh->n++;
     return 0;
 }
 
-static int read_sheet(const char* xml, size_t n, const sst* ss, const uint8_t* is_date, uint32_t n_styles, sheet* sh,
+static int read_sheet(const char* xml, size_t n, const sst* ss, const uint8_t* is_date, uint32_t n_styles, xsheet* sh,
                       char* err, size_t cap) {
     xr x;
     xt t;
@@ -809,20 +809,20 @@ static void csv_field(buf* b, const char* s, size_t n) {
     size_t i;
     int q = 0;
     for (i = 0; i < n; i++) if (s[i] == ',' || s[i] == '"' || s[i] == '\r' || s[i] == '\n') q = 1;
-    if (!q) { bput(b, s, n); return; }
-    bputc(b, '"');
-    for (i = 0; i < n; i++) { if (s[i] == '"') bputc(b, '"'); bputc(b, s[i]); }
-    bputc(b, '"');
+    if (!q) { buf_put(b, s, n); return; }
+    buf_putc(b, '"');
+    for (i = 0; i < n; i++) { if (s[i] == '"') buf_putc(b, '"'); buf_putc(b, s[i]); }
+    buf_putc(b, '"');
 }
 
 static int cell_cmp(const void* a, const void* b) {
-    const cell* x = (const cell*)a;
-    const cell* y = (const cell*)b;
+    const xcell* x = (const xcell*)a;
+    const xcell* y = (const xcell*)b;
     if (x->row != y->row) return x->row < y->row ? -1 : 1;
     return x->col < y->col ? -1 : x->col > y->col;
 }
 
-static int sheet_csv(sheet* sh, ypt_sheet* out, char* err, size_t cap) {
+static int sheet_csv(xsheet* sh, ypt_sheet* out, char* err, size_t cap) {
     uint32_t cols[YTB_MAX_COLUMNS];
     int nc = 0, k;
     uint8_t any_text[YTB_MAX_COLUMNS], any_other[YTB_MAX_COLUMNS];
@@ -831,7 +831,7 @@ static int sheet_csv(sheet* sh, ypt_sheet* out, char* err, size_t cap) {
     buf b;
     if (!sh->n) return ferr(err, cap, YPAK_ERR_FORMAT, "the sheet is empty");
     /* in order already when the XML is; sorted for any other order */
-    qsort(sh->c, sh->n, sizeof(cell), cell_cmp);
+    qsort(sh->c, sh->n, sizeof(xcell), cell_cmp);
     if (sh->c[0].row != 0) return ferr(err, cap, YPAK_ERR_FORMAT, "row 1 is empty; the first row names the columns");
     for (; i < sh->n && sh->c[i].row == 0; i++) {
         if (nc == YTB_MAX_COLUMNS) return ferr(err, cap, YPAK_ERR_FORMAT, "more than %d named columns in row 1", YTB_MAX_COLUMNS);
@@ -847,10 +847,10 @@ static int sheet_csv(sheet* sh, ypt_sheet* out, char* err, size_t cap) {
     memset(&b, 0, sizeof b);
     b.limit = (size_t)1 << 31;
     for (k = 0; k < nc; k++) {
-        if (k) bputc(&b, ',');
+        if (k) buf_putc(&b, ',');
         csv_field(&b, sh->text.p + sh->c[k].off, sh->c[k].len);
     }
-    bputc(&b, '\n');
+    buf_putc(&b, '\n');
     last = sh->c[sh->n - 1].row;
     if (last > (uint32_t)YTB_MAX_ROWS) {
         free(b.p);
@@ -858,7 +858,7 @@ static int sheet_csv(sheet* sh, ypt_sheet* out, char* err, size_t cap) {
     }
     for (r = 1; r <= last; r++) {
         for (k = 0; k < nc; k++) {
-            if (k) bputc(&b, ',');
+            if (k) buf_putc(&b, ',');
             while (i < sh->n && sh->c[i].row == r && sh->c[i].col < cols[k]) {
                 char ref[16];
                 cell_ref(r, sh->c[i].col, ref);
@@ -878,7 +878,7 @@ static int sheet_csv(sheet* sh, ypt_sheet* out, char* err, size_t cap) {
             free(b.p);
             return ferr(err, cap, YPAK_ERR_FORMAT, "cell %s has a value, but its column has no name in row 1", ref);
         }
-        bputc(&b, '\n');
+        buf_putc(&b, '\n');
     }
     if (b.bad) { free(b.p); return ferr(err, cap, YPAK_ERR_NOMEM, "out of memory"); }
     out->csv = b.p;
@@ -904,7 +904,7 @@ int ypt_xlsx_read(const void* data, size_t n, const char* want, ypt_sheet* out, 
     int nr = 0, k, rc;
     char doc[512], dir[512], rp[600], sheet_part[512], strings_part[512], styles_part[512];
     sst ss;
-    sheet sh;
+    xsheet sh;
     uint8_t* is_date = NULL;
     uint32_t n_styles = 0;
     if (err && cap) err[0] = 0;
@@ -1037,7 +1037,7 @@ done:
 /* ICC profiles                                                              */
 /* ======================================================================== */
 
-static double s15(const uint8_t* p) { return (double)(int32_t)be32(p) / 65536.0; }
+static double s15(const uint8_t* p) { return (double)(int32_t)rbe32(p) / 65536.0; }
 
 static double srgb_eotf(double x) { return x <= 0.04045 ? x / 12.92 : pow((x + 0.055) / 1.055, 2.4); }
 
@@ -1048,19 +1048,19 @@ static double trc_err(const uint8_t* t, size_t n) {
     int k;
     if (n < 12) return -1;
     if (!memcmp(t, "curv", 4)) {
-        uint32_t cnt = be32(t + 8);
+        uint32_t cnt = rbe32(t + 8);
         if (cnt < 2 || (size_t)cnt > (n - 12) / 2) return -1;   /* identity or a pure gamma: not sRGB */
         for (k = 0; k < 256; k++) {
             double x = k / 255.0, p = x * (cnt - 1), y;
             uint32_t j = (uint32_t)p;
             if (j > cnt - 2) j = cnt - 2;
-            y = (be16(t + 12 + 2 * j) + (be16(t + 14 + 2 * j) - (double)be16(t + 12 + 2 * j)) * (p - j)) / 65535.0;
+            y = (rbe16(t + 12 + 2 * j) + (rbe16(t + 14 + 2 * j) - (double)rbe16(t + 12 + 2 * j)) * (p - j)) / 65535.0;
             if (fabs(y - srgb_eotf(x)) > worst) worst = fabs(y - srgb_eotf(x));
         }
         return worst;
     }
     if (!memcmp(t, "para", 4)) {
-        uint32_t fn = be16(t + 8);
+        uint32_t fn = rbe16(t + 8);
         static const int np[5] = { 1, 3, 4, 5, 7 };
         double g, a = 1, b = 0, c = 0, d = 0, e = 0, f = 0;
         if (fn > 4 || n < 12 + 4 * (size_t)np[fn]) return -1;
@@ -1094,17 +1094,17 @@ int ypt_icc_srgb(const void* data, size_t n, char* why, size_t cap) {
     int k, have = 0;
     if (why && cap) why[0] = 0;
     if (n < 132) return ferr(why, cap, YPAK_ERR_FORMAT, "an ICC profile of %zu bytes", n);
-    size = be32(p);
+    size = rbe32(p);
     if (size > n || size < 132 || memcmp(p + 36, "acsp", 4)) return ferr(why, cap, YPAK_ERR_FORMAT, "a damaged ICC profile");
     if (memcmp(p + 16, "RGB ", 4)) return ferr(why, cap, 0, "an ICC profile for %.4s, not RGB", (const char*)p + 16);
-    nt = be32(p + 128);
+    nt = rbe32(p + 128);
     if (nt > (size - 132) / 12) return ferr(why, cap, YPAK_ERR_FORMAT, "a damaged ICC profile (tag count)");
     for (k = 0; k < 6; k++) {
         const char* sig = k < 3 ? xyz[k] : trc[k - 3];
         int found = 0;
         for (i = 0; i < nt; i++) {
             const uint8_t* r = p + 132 + 12 * i;
-            uint32_t off = be32(r + 4), sz = be32(r + 8);
+            uint32_t off = rbe32(r + 4), sz = rbe32(r + 8);
             if (memcmp(r, sig, 4)) continue;
             if (off > size || sz > size - off) return ferr(why, cap, YPAK_ERR_FORMAT, "a damaged ICC profile (tag %s)", sig);
             found = 1;
@@ -1146,16 +1146,16 @@ static int exif_orientation(const uint8_t* t, size_t n) {
     if (!memcmp(t, "II*\0", 4)) le = 1;
     else if (!memcmp(t, "MM\0*", 4)) le = 0;
     else return -1;
-    off = le ? le32(t + 4) : be32(t + 4);
+    off = le ? rle32(t + 4) : rbe32(t + 4);
     if (off > n || n - off < 2) return -1;
-    cnt = le ? le16(t + off) : be16(t + off);
+    cnt = le ? rle16(t + off) : rbe16(t + off);
     if ((size_t)cnt > (n - off - 2) / 12) return -1;
     for (k = 0; k < cnt; k++) {
         const uint8_t* e = t + off + 2 + 12 * k;
-        uint32_t tag = le ? le16(e) : be16(e), type = le ? le16(e + 2) : be16(e + 2);
+        uint32_t tag = le ? rle16(e) : rbe16(e), type = le ? rle16(e + 2) : rbe16(e + 2);
         if (tag != 0x0112) continue;
         if (type != 3) return -1;
-        return (int)(le ? le16(e + 8) : be16(e + 8));
+        return (int)(le ? rle16(e + 8) : rbe16(e + 8));
     }
     return 0;
 }
@@ -1181,12 +1181,19 @@ int ypt_jpeg_read(const void* data, size_t n, int decode, ypt_jpeg* out, char* e
         if (at + 4 > n) { rc = ferr(err, cap, YPAK_ERR_FORMAT, "the JPEG ends before its image data"); break; }
         m = d[at + 1];
         if (m == 0xD8 || m == 0xD9 || (m >= 0xD0 && m <= 0xD7) || m == 0x01) { rc = ferr(err, cap, YPAK_ERR_FORMAT, "JPEG: marker 0x%02X before the image data", m); break; }
-        len = be16(d + at + 2);
+        len = rbe16(d + at + 2);
         if (len < 2 || at + 2 + len > n) { rc = ferr(err, cap, YPAK_ERR_FORMAT, "JPEG: segment 0x%02X runs past the end", m); break; }
         s = d + at + 4;
         len -= 2;
         if (m == 0xDA) {
+            size_t k;
+            int eoi = 0;
             if (!sof) { rc = ferr(err, cap, YPAK_ERR_FORMAT, "JPEG: image data before the frame header"); break; }
+            /* stb_image pads a cut stream with zeros and decodes it, so a
+             * file cut short is found here: in entropy data 0xFF is always
+             * stuffed, so FF D9 is the end marker */
+            for (k = at + 2; k + 1 < n && !eoi; k++) eoi = d[k] == 0xFF && d[k + 1] == 0xD9;
+            if (!eoi) rc = ferr(err, cap, YPAK_ERR_FORMAT, "the JPEG has no end marker (EOI): the file is cut short");
             break;
         }
         if (m >= 0xC0 && m <= 0xCF && m != 0xC4 && m != 0xC8 && m != 0xCC) {
@@ -1198,8 +1205,8 @@ int ypt_jpeg_read(const void* data, size_t n, int decode, ypt_jpeg* out, char* e
             }
             if (len < 6) { rc = ferr(err, cap, YPAK_ERR_FORMAT, "JPEG: a short frame header"); break; }
             if (s[0] != 8) { rc = ferr(err, cap, YPAK_ERR_FORMAT, "JPEG: %u-bit samples; 8-bit only", s[0]); break; }
-            h = (int)be16(s + 1);
-            w = (int)be16(s + 3);
+            h = (int)rbe16(s + 1);
+            w = (int)rbe16(s + 3);
             comp = s[5];
             if (!w || !h) { rc = ferr(err, cap, YPAK_ERR_FORMAT, "JPEG: no size in the frame header (a DNL marker)"); break; }
             if (comp == 4) { rc = ferr(err, cap, YPAK_ERR_FORMAT, "a CMYK JPEG; ysp converts no color: export it as RGB"); break; }

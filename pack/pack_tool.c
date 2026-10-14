@@ -26,6 +26,7 @@
 #include "ysp/layout.h"
 #endif
 #include "lodepng.h"
+#include "samplerate.h"
 
 #include <stdarg.h>
 #include <stdlib.h>
@@ -54,6 +55,9 @@ extern char** environ;
 #endif
 #ifndef YPT_STB_IMAGE
 #define YPT_STB_IMAGE "unknown"
+#endif
+#ifndef YPT_LIBSAMPLERATE
+#define YPT_LIBSAMPLERATE "unknown"
 #endif
 #ifndef YPT_PL_MPEG
 #define YPT_PL_MPEG "unknown"
@@ -982,18 +986,68 @@ static int wav_convert(B* b, E* e, const uint8_t* d, int64_t n, const char** wha
     return 1;
 }
 
+/* Open question 4 of docs/pack.md, opt-in (tool v0.4.0): a WAV at another
+ * rate becomes 32-bit float at the project rate through libsamplerate's
+ * best sinc converter, offline, so the player never resamples. The samples
+ * are widened to float exactly first (as ysp/audio.h does at load); a
+ * resampled peak can pass full scale, and the manifest counts the samples
+ * that do. */
+static int wav_resample(B* b, E* e, const yau_wav_info* in, int64_t* clipped) {
+    int64_t ns = in->frames * (int64_t)in->channels, i, cap_frames;
+    const uint8_t* s = e->data + in->data_offset;
+    float* fi;
+    float* fo;
+    SRC_DATA sd;
+    int err;
+    if (in->frames <= 0 || in->frames > 0x7FFFFFFFLL / 4) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %lld frames to resample", e->name, (long long)in->frames);
+    cap_frames = (in->frames * (int64_t)b->rate + in->rate - 1) / in->rate + 64;
+    fi = (float*)calloc_c(b->c, (size_t)ns * 4 + 16);
+    fo = (float*)calloc_c(b->c, (size_t)(cap_frames * in->channels) * 4 + 16);
+    if (!fi || !fo) return cfail(b->c, YPAK_ERR_NOMEM, "out of memory");
+    for (i = 0; i < ns; i++) {
+        if (in->format == YAU_WAV_S16) fi[i] = (float)(int16_t)r16(s + 2 * i) / 32768.0f;
+        else if (in->format == YAU_WAV_F32) memcpy(&fi[i], s + 4 * i, 4);
+        else {
+            int bpb = in->format == YAU_WAV_S24 ? 3 : 4, o = in->format == YAU_WAV_S24 ? 0 : 1;
+            const uint8_t* p = s + bpb * i + o;   /* the low byte of 24 in 32 is padding */
+            int32_t v = (int32_t)((uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16));
+            if (v & 0x800000) v -= 0x1000000;
+            fi[i] = (float)v / 8388608.0f;
+        }
+    }
+    memset(&sd, 0, sizeof sd);
+    sd.data_in = fi;
+    sd.input_frames = (long)in->frames;
+    sd.data_out = fo;
+    sd.output_frames = (long)cap_frames;
+    sd.end_of_input = 1;
+    sd.src_ratio = (double)b->rate / (double)in->rate;
+    err = src_simple(&sd, SRC_SINC_BEST_QUALITY, (int)in->channels);
+    if (err) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': libsamplerate: %s", e->name, src_strerror(err));
+    *clipped = 0;
+    for (i = 0; i < (int64_t)sd.output_frames_gen * in->channels; i++)
+        if (fo[i] > 1.0f || fo[i] < -1.0f) (*clipped)++;
+    e->data = wav_write(b, 3, 32, 32, in->channels, (uint32_t)b->rate, (const uint8_t*)fo, (int64_t)sd.output_frames_gen * in->channels * 4, &e->size);
+    return e->data ? 0 : cfail(b->c, YPAK_ERR_NOMEM, "out of memory");
+}
+
 static int build_audio(B* b, E* e) {
-    static const char* const keys[] = { "name", "kind", "source", "license", "stream", NULL };
+    static const char* const keys[] = { "name", "kind", "source", "license", "stream", "resample", NULL };
     const char* src = str_of(e->res, "source", NULL);
+    const char* rs = str_of(e->res, "resample", NULL);
     jv* st = jget(e->res, "stream");
     yau_wav_desc wd;
     yau_wav_info info;
-    char msg[256], ver[64];
+    char msg[256], ver[128];
     const char* conv = NULL;
-    int64_t n, k;
+    int64_t n, k, clipped = 0;
+    uint32_t from_rate = 0;
     const uint8_t* d;
     int rc;
-    if (keys_ok(b->c, e->res, keys, e->name) || want_type(b->c, e->res, "stream", J_TRUE, e->name)) return YPAK_ERR_FORMAT;
+    if (keys_ok(b->c, e->res, keys, e->name) || want_type(b->c, e->res, "stream", J_TRUE, e->name) ||
+        want_type(b->c, e->res, "resample", J_STR, e->name))
+        return YPAK_ERR_FORMAT;
+    if (rs && strcmp(rs, "sinc_best")) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': resample is \"sinc_best\" (libsamplerate's best converter) or absent", e->name);
     if (!src) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': no 'source' (a WAV file)", e->name);
     if (!b->rate) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': audio needs the project's \"audio\": {\"rate\", \"channels\"} in the description", e->name);
     d = load_source(b, e, src, &n);
@@ -1013,9 +1067,9 @@ static int build_audio(B* b, E* e) {
         rc = yau_wav_probe(&wd, &info, msg, sizeof msg);
         if (rc < 0) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': after converting: %s", e->name, msg);
     }
-    if ((int)info.rate != b->rate)
-        return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %u Hz; the project rate is %d Hz. ysp never resamples at play, and this "
-                     "tool does not resample yet: export the file at %d Hz", e->name, info.rate, b->rate, b->rate);
+    if ((int)info.rate != b->rate && !rs)
+        return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %u Hz; the project rate is %d Hz. ysp never resamples at play: export the file "
+                     "at %d Hz, or set \"resample\": \"sinc_best\" to resample it here", e->name, info.rate, b->rate, b->rate);
     if (info.channels != 1 && (int)info.channels != b->channels)
         return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %u channels; the project has %d (1 is also accepted)", e->name, info.channels, b->channels);
     if (info.format == YAU_WAV_F32) {
@@ -1026,10 +1080,23 @@ static int build_audio(B* b, E* e) {
                 return cfail(b->c, YPAK_ERR_FORMAT, "'%s': float sample %lld is not a number (NaN or infinity)", e->name, (long long)k);
         }
     }
+    if ((int)info.rate != b->rate) {
+        from_rate = info.rate;
+        rc = wav_resample(b, e, &info, &clipped);
+        if (rc) return rc;
+    }
     if (st && st->type == J_TRUE) e->flags |= YPAK_F_STREAM;
-    snprintf(ver, sizeof ver, "ysp/audio.h %s", YAU_VERSION_STRING);
-    e->deriv = deriv_new(b, conv ? "convert" : "copy", ver);
+    if (from_rate) {
+        snprintf(ver, sizeof ver, "libsamplerate 0.2.2 SRC_SINC_BEST_QUALITY; ysp/audio.h %s", YAU_VERSION_STRING);
+        e->deriv = deriv_new(b, "resample", ver);
+        jset(b->c, e->deriv, "from_rate", jint(b->c, from_rate));
+        jset(b->c, e->deriv, "clipped", jint(b->c, clipped));
+    } else {
+        snprintf(ver, sizeof ver, "ysp/audio.h %s", YAU_VERSION_STRING);
+        e->deriv = deriv_new(b, conv ? "convert" : "copy", ver);
+    }
     if (conv) jset(b->c, e->deriv, "convert", jstrz(b->c, conv));
+    if (rs) jset(b->c, e->deriv, "resample", jstrz(b->c, rs));
     jset(b->c, e->deriv, "stream", jbool(b->c, (e->flags & YPAK_F_STREAM) != 0));
     return 0;
 }
@@ -2221,6 +2288,7 @@ static void lib_versions(C* c, jv* tool, int laid_out) {
     jset(c, l, "ysp/video.h", jstrz(c, YVID_VERSION_STRING));
     jset(c, l, "stb_image", jstrz(c, YPT_STB_IMAGE));
     jset(c, l, "pl_mpeg", jstrz(c, YPT_PL_MPEG));
+    jset(c, l, "libsamplerate", jstrz(c, YPT_LIBSAMPLERATE));
 #ifndef YPT_NO_LAYOUT
     if (laid_out) {
         const ylay_versions* v = ylay_get_versions();
@@ -2852,7 +2920,7 @@ static jv* manifest_to_desc(C* c, const jv* m) {
                 (!strcmp(kind, "calibration") && !strcmp(key, "role")) ||
                 (!strcmp(kind, "curveset") && (!strcmp(key, "resolve") || !strcmp(key, "backward"))) ||
                 (!strcmp(kind, "shader") && (!strcmp(key, "contract") || !strcmp(key, "validated"))) ||
-                (!strcmp(kind, "audio") && !strcmp(key, "convert")) ||
+                (!strcmp(kind, "audio") && (!strcmp(key, "convert") || !strcmp(key, "from_rate") || !strcmp(key, "clipped"))) ||
                 (!strcmp(kind, "table") && (!strcmp(key, "formulas") || !strcmp(key, "text_columns"))) ||
                 (!strcmp(kind, "texture") && !strcmp(key, "icc")) ||
                 (!strcmp(kind, "video") && !strcmp(key, "command")) ||

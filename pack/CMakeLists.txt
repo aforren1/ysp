@@ -84,11 +84,30 @@ if(YSP_BUILD_PACK)
         set(_plm_pin "${_plm_pin},tree-differs")
     endif()
 
+    # libsamplerate 0.2.2, the best sinc converter only (the opt-in audio
+    # resampling, docs/pack.md 4.7). No FMA contraction, so every compiler
+    # gives the same samples (docs/pack.md 7).
+    set(_lsr ${PROJECT_SOURCE_DIR}/third_party/libsamplerate)
+    add_library(ysp_samplerate STATIC ${_lsr}/samplerate.c ${_lsr}/src_sinc.c ${_lsr}/src_linear.c ${_lsr}/src_zoh.c)
+    target_include_directories(ysp_samplerate SYSTEM PUBLIC ${_lsr})
+    target_compile_definitions(ysp_samplerate PRIVATE ENABLE_SINC_BEST_CONVERTER=1 HAVE_STDBOOL_H=1 PACKAGE="libsamplerate" VERSION="0.2.2")
+    if(MSVC)
+        target_compile_options(ysp_samplerate PRIVATE /W0 /fp:precise)
+    else()
+        target_compile_options(ysp_samplerate PRIVATE -w -ffp-contract=off)
+        target_link_libraries(ysp_samplerate PUBLIC m)
+    endif()
+    set(_lsr_pin "0.2.2 c96f5e3de9c4488f4e6c97f59f5245f22fda22f7")
+    file(SHA256 ${_lsr}/src_sinc.c _lsr_hash)
+    if(NOT _lsr_hash STREQUAL "8e59137d758dae5027410af7f81010e7a9c33892070091866510f0f8b638237e")
+        set(_lsr_pin "${_lsr_pin},tree-differs")
+    endif()
+
     add_library(ysp_pack_tool STATIC pack_tool.c pack_impl.c import.c ysp/pack_tool.h)
     target_include_directories(ysp_pack_tool PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     target_include_directories(ysp_pack_tool SYSTEM PRIVATE ${_plm})
-    target_link_libraries(ysp_pack_tool PRIVATE ysp_stb_image)
-    target_compile_definitions(ysp_pack_tool PRIVATE YPT_STB_IMAGE="${_stb_pin}" YPT_PL_MPEG="${_plm_pin}")
+    target_link_libraries(ysp_pack_tool PRIVATE ysp_stb_image ysp_samplerate)
+    target_compile_definitions(ysp_pack_tool PRIVATE YPT_STB_IMAGE="${_stb_pin}" YPT_PL_MPEG="${_plm_pin}" YPT_LIBSAMPLERATE="${_lsr_pin}")
     # The headers' implementations need ysp::core's threads and libm, and dl
     # for ysp/gfx.h's headless presenter; not ysp::rig, which would link SDL3
     # into a tool that never opens a window.
@@ -117,6 +136,15 @@ if(YSP_BUILD_PACK)
         target_compile_definitions(test_pack_tool PRIVATE YPT_TEST_DIR="${PROJECT_SOURCE_DIR}/tests/pack"
             YPT_TEST_FONTS="${YSP_PACK_TEST_FONTS}")
         add_test(NAME test_pack_tool COMMAND test_pack_tool WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+        # The readers of other formats (pack/import.c) on their own: the test
+        # compiles that file into itself, so the mutation runner can mutate it
+        # (tests/mutate/import.toml).
+        add_executable(test_pack_import ${PROJECT_SOURCE_DIR}/tests/adapt/import_test.c)
+        target_include_directories(test_pack_import PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+        target_link_libraries(test_pack_import PRIVATE ysp_lodepng ysp_stb_image ysp::core)
+        target_compile_options(test_pack_import PRIVATE ${YSP_WARNINGS})
+        set_target_properties(test_pack_import PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+        add_test(NAME test_pack_import COMMAND test_pack_import)
     endif()
 
     # trial_images (docs/rig_spec.md 15.5), the pack path end to end. Its

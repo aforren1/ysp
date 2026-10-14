@@ -13,6 +13,8 @@ the SHA-256 value here; nothing else is accepted:
     third_party/stb/       stb_image.h (public domain or MIT): JPEG textures
     third_party/pl_mpeg/   pl_mpeg.h (MIT): MPEG-1 video indexes, the same
                            pin as the top-level YSP_FETCH_PL_MPEG
+    third_party/libsamplerate/  libsamplerate 0.2.2 (BSD-2-Clause): the
+                           opt-in resampling of audio to the project rate
 
 The pack tool (CMake option YSP_BUILD_PACK) needs them; the layout library
 (YSP_BUILD_LAYOUT) does not. This is the only fetch the core pack tool needs
@@ -55,6 +57,23 @@ SETS = [
             "pl_mpeg.h": "3a8cb30c83c2a1147719c30fe0c8b93da2987aa43140077c575b39aaa75fc2c9",
         },
     },
+    {
+        "dest": "libsamplerate",
+        "repo": "libsndfile/libsamplerate",
+        "commit": "c96f5e3de9c4488f4e6c97f59f5245f22fda22f7",   # tag 0.2.2
+        "files": {
+            "src/samplerate.c": "ecc11b6bec5bd8131a3dd510a7017a5b7b503573d9b49b7e02ee5c3c86568717",
+            "src/src_sinc.c": "8e59137d758dae5027410af7f81010e7a9c33892070091866510f0f8b638237e",
+            "src/src_linear.c": "f04a3e79b7150f2f6e6ad2b05979d874e03bf567a682bbb6507c797d4ea8a972",
+            "src/src_zoh.c": "c089678c9e6463896507a8d476fc4a33641c46fbe94aa8243acf725d4c203adb",
+            "src/common.h": "0826d52807152f5577ecb519c3df46f4453a9b7e55ad9b2880ff82a95977c3ca",
+            "src/fastest_coeffs.h": "60b342165e7be7c58efd9002163c07b65ece52994ee839dbe06908991ef1fb1b",
+            "src/mid_qual_coeffs.h": "22b2b75ef0344f60787f19c3bfd594d47303c0fafe7e13d0e7517612b8963d7d",
+            "src/high_qual_coeffs.h": "35d4bc6ed93cbd5a89510d7d7efda00116b5c28a25369c07288bc7d25a937df6",
+            "include/samplerate.h": "dfe5f4107782bcf6e9b8421a9e7c4772e19446a4c18727c73b22286d3fbb6626",
+            "COPYING": "2c1f76ce2effdddb425018405d5690c0b1ab4e6976e35296b0a6db65c5e1a55d",
+        },
+    },
 ]
 
 
@@ -62,7 +81,7 @@ def fetch(s, name, cache):
     """The file's bytes: from the cache when its hash is right, else downloaded."""
     want = s["files"][name]
     if cache:
-        cp = os.path.join(cache, s["commit"], name)
+        cp = os.path.join(cache, s["commit"], os.path.basename(name))
         if os.path.exists(cp):
             with open(cp, "rb") as f:
                 data = f.read()
@@ -73,7 +92,7 @@ def fetch(s, name, cache):
         data = r.read()
     if cache and hashlib.sha256(data).hexdigest() == want:
         os.makedirs(os.path.join(cache, s["commit"]), exist_ok=True)
-        with open(os.path.join(cache, s["commit"], name), "wb") as f:
+        with open(os.path.join(cache, s["commit"], os.path.basename(name)), "wb") as f:
             f.write(data)
     return data
 
@@ -89,7 +108,7 @@ def main():
         if a.write:
             os.makedirs(dest, exist_ok=True)
         for name, want in sorted(s["files"].items()):
-            path = os.path.join(dest, name)
+            path = os.path.join(dest, os.path.basename(name))   # flat: the repository path is only the URL
             if a.write:
                 data = fetch(s, name, a.cache)
                 got = hashlib.sha256(data).hexdigest()

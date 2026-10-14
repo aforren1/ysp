@@ -5,8 +5,11 @@ left open (the coordinator approved them, with the recommendations of
 section 10 as defaults); phase 2 built them: `include/ysp/pack.h` v0.1.0
 (the reader), `pack/ysp/pack_tool.h` v0.1.0 (the tool library) and the
 `ypak` CLI. Section 9.1 has the phase 1 probes and the phase 2
-measurements. Where the build changed the design, the text says so. When
-this page and rig_spec 5 disagree, this page is newer.
+measurements. Phase 3 (2026-10-13, tool v0.4.0, section 13) added video
+with its index, frame sequences, tables from `.xlsx` workbooks and
+textures from JPEG files; the reader did not change. Where the build
+changed the design, the text says so. When this page and rig_spec 5
+disagree, this page is newer.
 
 Settled before this page, in rig_spec 5, and not reopened here: one zip
 file in store-only mode; entries aligned to 4 KB; readable by any zip
@@ -291,10 +294,10 @@ hostile:
 | 11 | AUDIO | `.wav` | WAV at the project rate | 2 |
 | 12 | SHADER | `.yspshd` | the fragment body, mode and reflection | 2 |
 | 13 | TEXTURE | `.ysptex` | ysp/gfx.h planes, raw or QOI | 2 |
-| 14 | VIDEO | `.mpg`, `.mp4` | the media file, CFR, closed GOPs, no B-frames | 3 |
-| 15 | VIDEO_INDEX | `.yspvi` | ysp/video.h's index | 3 |
-| 16 | FRAMESEQ | `.yspvseq` | ysp/video.h's frame sequence | 3 |
-| 17 | ALPHA | `.yspalpha` | exact alpha coverage at stated sizes | 3 |
+| 14 | VIDEO | `.mpg`, `.mp4` | the media file, CFR, closed GOPs, no B-frames | 3 (tool v0.4.0) |
+| 15 | VIDEO_INDEX | `.yspvi` | ysp/video.h's index | 3 (tool v0.4.0) |
+| 16 | FRAMESEQ | `.yspvseq` | ysp/video.h's frame sequence | 3 (tool v0.4.0) |
+| 17 | ALPHA | `.yspalpha` | exact alpha coverage at stated sizes | not built (4.11) |
 | 18 | SCRIPT | | reserved (Luau source and bytecode) | later |
 | 19 | EXTENSION | | reserved (native modules by hash, rig_spec 12) | later |
 
@@ -436,7 +439,10 @@ Rules:
   documentation. Some values are records only and are not taken back by a
   rebuild: `faces` and `fs_type` (font), `role` (calibration), `resolve`
   and `backward` (curve set), `contract` and `validated` (shader),
-  `convert` (audio).
+  `convert` (audio), `formulas` and `text_columns` (a table from a
+  workbook), `icc` (texture), `command` (video), every key of a frame
+  sequence's and a video index's derivation. A VIDEO_INDEX entry is not a
+  resource of the description: its video makes it again.
 - Numbers are integers. A real-valued parameter is a JSON string with the
   decimal text the tool parsed (`"1e-4"`), read by ysp/table.h's
   locale-free, correctly rounded parser. The tool refuses a JSON number
@@ -468,6 +474,39 @@ The PSTB block (docs/table.md, format 1), unchanged; `ytb_open_view()` reads
 it in place. Source: CSV or TSV through `ytb_open_csv()`. Parameters:
 `delimiter` (`","`, `";"` or `"\t"`; default `","`), `types` (column name
 to `"integer"`, `"number"` or `"string"`), `allow_empty` (default false).
+
+Source `.xlsx` or `.xlsm` (tool v0.4.0, `op` `"xlsx"`): one worksheet
+becomes CSV text (`ypt_xlsx_read()`, `pack/import.c`), and
+`ytb_open_csv()` reads that text, so a workbook and the CSV that Excel
+would write give the same table, with full precision. Parameter `sheet`:
+the sheet's name; the first sheet when not given. The manifest records
+the sheet read. The rules:
+
+- Row 1 names the columns; its cells must be text. A column without a
+  name in row 1 must be empty: a value there is refused by its cell
+  reference (PsychoPy drops such a column without a word).
+- A number keeps the text the workbook stores (`0.25`,
+  `1.0000000000000001E-2`); ysp/table.h's parser reads it. A boolean is
+  `TRUE` or `FALSE`. A formula gives its saved value; the manifest counts
+  them (`formulas`). A formula with no saved value is refused: the tool
+  computes no formula.
+- A column whose every value is a text cell is `"string"`, so `007` keeps
+  its zeros as the workbook shows it; the manifest lists these columns
+  (`text_columns`). `types` in the description comes first.
+- Refused by cell reference: a date or a time (a cell format with day,
+  month, year, hour or second, or a built-in date format), an error value
+  (`#N/A`), a cell type the reader does not know. A date in a conditions
+  file is a datetime in PsychoPy and a serial number in the file; a table
+  holds numbers and text, so the author picks one.
+- Refused by name: a password-protected workbook (an OLE file, not a
+  zip), an old `.xls`, zip64, a part that inflates past 64 MiB, a part
+  whose CRC-32 or size does not match, a DOCTYPE, an entity other than
+  XML's five.
+- Shared strings with rich text are joined; phonetic guides (`rPh`) are
+  left out; `_xHHHH_` escapes (ECMA-376) are decoded.
+
+Measured on PsychoPy's 23 demo workbooks (9.1, phase 3): every one reads,
+and every cell equals openpyxl's value.
 
 ### 4.2 CALIBRATION (decided 2026-10-09: open question 1)
 
@@ -618,10 +657,38 @@ type: 8-bit gray to R8, gray and alpha to RG8, RGB, RGBA and palette to
 RGBA8 (RGB gets alpha 255), 16-bit gray to R16UI (little-endian); 16-bit
 color needs `"format": "rgba32f"` (k / 65535 as f32). A `format` that
 would drop or round values is refused. `encoding`: `srgb` (the default
-for 8-bit), `linear` or `device`; a 16-bit PNG has no default. An `iCCP`
-chunk, a `gAMA` other than 45455 and a `cHRM` other than sRGB's are
-refused by name. `compression`: `raw` (default) or `qoi`; the reader's
+for 8-bit), `linear` or `device`; a 16-bit PNG has no default. A `gAMA`
+other than 45455 and a `cHRM` other than sRGB's are refused by name.
+`compression`: `raw` (default) or `qoi`; the reader's
 `ypak_qoi_decode()` checks the raw hash.
+
+An ICC profile (a PNG's `iCCP`, a JPEG's `APP2` chunks) is accepted when
+it is sRGB's and refused otherwise (`ypt_icc_srgb()`): an RGB
+matrix-and-curves profile whose colorants are within 0.002 of sRGB's D50
+values and whose three curves are within half a code of 255 of sRGB's at
+every code. The manifest records `"icc": "srgb"`. Changed in tool v0.4.0:
+v0.3.0 refused every `iCCP`, but 3 of the 4 profiles in PsychoPy's demo
+photographs are sRGB's (two `sRGB IEC61966-2.1`, one compact `c2`); the
+fourth, a laptop panel's profile (`Color LCD`, colorants 0.04 off, a
+gamma of 1.8), is refused. The tool still converts no color: an sRGB
+profile says what `"encoding": "srgb"` says.
+
+Source JPEG (tool v0.4.0, `op` `"jpeg"`): decoded by stb_image 2.30
+(pinned, `tools/vendor_pack.py`), after `ypt_jpeg_read()` checks the
+frame and the segments. Gray to R8, color to RGBA8 (alpha 255); `rgba8`
+for gray and `rgba32f` (k / 255, as an 8-bit PNG gives) widen exactly;
+`r8` from color, `rg8` and `r16ui` are refused. `encoding` defaults to
+`srgb`, so color needs `primaries` as an RGB PNG does. Refused by name:
+an EXIF orientation other than 1 (programs disagree on whether to turn
+the picture: save it turned, with orientation 1), CMYK, 12-bit samples,
+lossless, hierarchical and arithmetic coding, two frame headers, ICC
+chunks out of order or missing, a profile that is not sRGB's, and a file
+with no end marker (stb_image would decode a cut file with zeros in
+place of the missing data). JPEG decoders do not agree to the bit: on
+PsychoPy's photographs stb_image and libjpeg-turbo differ by at most 3
+codes, except the second-to-last column of an image with horizontally
+halved chroma (up to 20 codes; 9.1, phase 3). The texture holds
+stb_image's bytes, and the manifest names the decoder.
 
 The encoding bytes are the `enc` of `ygfx_texture_desc` (ysp/gfx.h
 v0.10.5), copied unchanged: the tool refuses at build every texture that
@@ -651,18 +718,58 @@ or shader texture is built `linear`. Changed in tool v0.2.0 (2026-10-09):
 v0.1.1 wrote matrix, range and transfer on every texture with primaries
 0, which `ygfx_texture()` refused, and refused any encoding on R8 and RG8.
 
-### 4.10 VIDEO, VIDEO_INDEX, FRAMESEQ (phase 3, not built)
+### 4.10 VIDEO, VIDEO_INDEX, FRAMESEQ (tool v0.4.0)
 
-The design of the first page stands: the media file unchanged with flag
-STREAM, the `.yspvi` index from `yvid_index_make()`, a `YSPVSEQ1` file
-unchanged; ffmpeg's argument vector and version recorded. The reader
-already reads these kinds (a cursor feeds `yvid_desc.reader`); the tool
-refuses them.
+The design of the first page, built: the media file unchanged with flag
+STREAM, its `.yspvi` index from `yvid_index_make()`, a `YSPVSEQ1` file
+unchanged with flag STREAM; ffmpeg's argument vector and version
+recorded. The reader did not change (a cursor feeds `yvid_desc.reader`,
+the index entry `yvid_desc.index`).
 
-### 4.11 ALPHA (phase 3, not built)
+A `video` resource makes two entries: the media file, named by `name`
+(it ends in `.mp4` or `.mpg`, and the bytes must be that form), and
+`name` + `.yspvi`, the index, as ysp/video.h finds an index beside a
+file. Parameters:
+
+- `source`: the media file, or ffmpeg's input.
+- `ffmpeg`: the arguments between the input and the output. With it, the
+  tool runs `ffmpeg -nostdin -hide_banner -loglevel error -y
+  [ffmpeg_input] -i SOURCE [ffmpeg] OUTPUT` (no shell; each argument as
+  given) and stores the output. `ffmpeg_input`: input options, before
+  `-i` (a raw source: `-f rawvideo -pix_fmt gray -s 64x48 -framerate
+  30`). The derivation's `by` is the first line of `ffmpeg -version`, and
+  `command` is the vector with `{source}` and `{output}` for the paths, so
+  the manifest names no path of the machine. The same text is the index's
+  note. `ypak --ffmpeg PATH` names the program; the default is `ffmpeg` on
+  the PATH.
+- `color`: `matrix`, `range`, `transfer`, `primaries`, `siting`, by
+  ysp/video.h's names (`bt709`, `limited`, `bt1886`, `bt709`, `left`).
+  What the stream states wins; a field that contradicts it is refused
+  (`yvid_index_make()`). MPEG-1 defaults to BT.601, limited, BT.1886,
+  BT.709, center.
+
+The index is made by decoding every frame: MPEG-1 with pl_mpeg (pinned,
+`tools/vendor_pack.py`), on every platform; H.264 and HEVC in MP4 with
+Media Foundation's software decoder, on Windows only (H.264 decoding is
+exact by the standard, so every decoder gives the index's hashes,
+docs/video.md). ysp/video.h refuses what is not canonical, by name: a
+variable rate, B-frames, a GOP that changes, an edit list, 10-bit, and
+the rest of its CANONICAL FORM. The index's derivation records codec,
+size, rate, frames, GOP and color.
+
+`frameseq`: the file from `yvid_seq_open()`, unchanged, after every byte
+is checked: the header and its hash, the canonical color (RGB formats as
+device values, YUV formats with every field stated), each frame's header
+against the index, its data against its XXH64 (QOI frames decoded), the
+zero padding, and the index at the file's end. Only a frame header's
+capture fields (times, trial, event) are free. The derivation records
+frames, size, format, compression and rate.
+
+### 4.11 ALPHA (not built)
 
 Exact alpha coverage at stated sizes; the form follows the first
-experiment that needs it.
+experiment that needs it. No experiment has needed it, so the tool
+refuses `"kind": "alpha"` with that reason (tool v0.4.0).
 
 ### 4.12 EXPERIMENT and FILE
 
@@ -678,18 +785,23 @@ Bytes, unchanged. The experiment comes from the description's top-level
 `pack_impl.c` compiles the implementations of ysp/pack.h, ysp/json.h,
 ysp/table.h, ysp/outline.h, ysp/gfx.h (without SDL: the shader wrapper
 and the curve set check), ysp/color.h, ysp/audio.h (without miniaudio:
-the WAV probe) and ysp/rt.h once, so a program that links the library
-defines none of them. It also links lodepng (compiled as C from a copy,
-its warnings off) and, in the full tool only, `pack/layout` (Skribidi and
-HarfBuzz). It builds with MSVC, MinGW, Linux gcc and emcc, so the designer
-can run the same code in the browser (the tool test passes under node).
+the WAV probe), ysp/video.h (from tool v0.4.0: `yvid_index_make()` with
+pl_mpeg, and Media Foundation on Windows), ysp/timeline.h and ysp/rt.h
+once, so a program that links the library defines none of them.
+`pack/import.c` holds the readers of other formats (`.xlsx`, JPEG, ICC).
+It also links lodepng and stb_image (each compiled as C from the fetched
+file, its warnings off) and, in the full tool only, `pack/layout`
+(Skribidi and HarfBuzz). It builds with MSVC, MinGW, Linux gcc and emcc,
+so the designer can run the same code in the browser (the tool test
+passed under node in phase 2; phase 3 was not run there, and the ffmpeg
+step cannot run in a browser).
 
 Two builds of one tool (decided 2026-10-10, review decision E). The CLI,
 the library's calls and the pack format are the same in both:
 
 | Build | CMake | Fetch once | Kinds |
 |---|---|---|---|
-| Core | `YSP_BUILD_PACK=ON` | `tools/vendor_pack.py --write` (lodepng) | every kind but GLYPHRUNS: tables, calibrations, fonts, curve sets, artwork, audio, shaders, textures, files, the experiment; and verify, list, info, extract, cat, rebuild, append |
+| Core | `YSP_BUILD_PACK=ON` | `tools/vendor_pack.py --write` (lodepng, stb_image, pl_mpeg) | every kind but GLYPHRUNS: tables, calibrations, fonts, curve sets, artwork, audio, shaders, textures, video, frame sequences, files, the experiment; and verify, list, info, extract, cat, rebuild, append |
 | Full | `YSP_BUILD_PACK=ON` and `YSP_BUILD_LAYOUT=ON` | also `tools/vendor_layout.py --write` | all, GLYPHRUNS too |
 
 Configure stops with the fetch command when a file set is missing. The
@@ -715,13 +827,13 @@ Sizes and build times: section 8.1.
 
 | Command | What it does |
 |---|---|
-| `ypak build SRC.json -o OUT.ysppak` | Builds a pack from a source description |
+| `ypak build SRC.json -o OUT.ysppak [--ffmpeg PATH]` | Builds a pack from a source description |
 | `ypak verify PACK` | Every check: structure, canonical container, CRC-32, XXH64 tree, SHA-256 per entry against the manifest, the manifest against the 0x7379 records, the pack ID. Exit 0 only when all pass |
 | `ypak list PACK` | Name, kind, size, data offset, flags |
 | `ypak info PACK` | Pack ID, format, tool, experiment, project audio |
 | `ypak extract PACK [NAME...] -C DIR` | Writes entries, applying the writer's name rule; does not overwrite without `--force` |
 | `ypak cat PACK NAME` | One entry to standard output |
-| `ypak rebuild PACK --sources DIR [-o OUT]` | 5.3; a pack appended to a program is refused (rebuild the pack it was made from) |
+| `ypak rebuild PACK --sources DIR [-o OUT] [--ffmpeg PATH]` | 5.3; a pack appended to a program is refused (rebuild the pack it was made from) |
 | `ypak append PLAYER PACK -o OUT` | Pads the player to 4096, appends the pack with absolute offsets, rewrites the comment's directory hash. The pack ID does not change. A pack already appended is refused |
 
 Exit codes: 0, 1 with the message on standard error, 2 for a usage
@@ -757,7 +869,14 @@ kind's extension.
     { "name": "art/fixation.yspart", "kind": "artwork", "source": "art/fixation.svg" },
     { "name": "audio/beep.wav", "kind": "audio", "source": "audio/beep.wav" },
     { "name": "shaders/plaid.yspshd", "kind": "shader", "source": "shaders/plaid.glsl", "mode": "modulation" },
-    { "name": "faces/f01.ysptex", "kind": "texture", "source": "faces/f01.png", "compression": "qoi" }
+    { "name": "faces/f01.ysptex", "kind": "texture", "source": "faces/f01.png", "compression": "qoi" },
+    { "name": "faces/f02.ysptex", "kind": "texture", "source": "faces/f02.jpg", "primaries": "device" },
+    { "name": "blocks.pstb", "kind": "table", "source": "blocks.xlsx", "sheet": "Conditions" },
+    { "name": "video/intro.mp4", "kind": "video", "source": "raw/intro.mov",
+      "ffmpeg": ["-an", "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-bf", "0", "-g", "30",
+                 "-keyint_min", "30", "-sc_threshold", "0", "-x264-params", "open-gop=0:scenecut=0:threads=1",
+                 "-video_track_timescale", "30000"] },
+    { "name": "video/gratings.yspvseq", "kind": "frameseq", "source": "video/gratings.yspvseq" }
   ]
 }
 ```
@@ -778,7 +897,14 @@ A methods section cites the pack ID. A reviewer checks it:
    differ, and exits 0 only on `identical`.
 3. An `exec` step (ffmpeg) runs again only when the same program version
    is present; otherwise the tool says so, checks the recorded output by
-   its hash, and rebuilds everything downstream of it.
+   its hash, and rebuilds everything downstream of it. Built in tool
+   v0.4.0: when `ffmpeg -version` gives another first line than the
+   derivation's `by`, or ffmpeg does not run, the video entry's bytes come
+   from the pack (read through ysp/pack.h, so checked by their hashes),
+   the report prints a `note:` line, and the index is made again from
+   them. An index that cannot be made here (an MP4 index off Windows) is
+   taken from the pack the same way. The source's SHA-256 is checked in
+   either case.
 
 Phase 2 CI builds one corpus pack with the MSVC, MinGW and emcc builds of
 the tool and requires the same bytes (open question 2).
@@ -795,7 +921,8 @@ the tool and requires the same bytes (open question 2).
 | AUDIO | `yau_wav_load()` from data, or `yau_wav_open()` with a cursor | widened to float (load) or streamed |
 | SHADER | view, `ygfx_pipeline()` | none |
 | TEXTURE | view, `ygfx_texture()` with the stored `enc` bytes unchanged (4.9); QOI decoded first | none raw; one buffer for QOI |
-| VIDEO | `yvid_desc.reader` = cursor, `.index` = index entry | streamed |
+| VIDEO | `yvid_desc.reader` = cursor, `.index` = the VIDEO_INDEX entry (`name.yspvi`) | streamed |
+| FRAMESEQ | `yvid_desc.reader` = cursor (no index entry: the file holds its own) | streamed |
 
 ## 7. Determinism
 
@@ -837,6 +964,18 @@ bytes. What makes it so:
   arcs, strokes, skews, CFF cubics, a TrueType collection and glyph runs
   in four scripts. Open question 2 stays open only for platforms not run
   (macOS, ARM).
+- **Decoders** (tool v0.4.0): stb_image's JPEG path is integer
+  arithmetic, and its SSE2 code gives the scalar code's bytes (measured:
+  the 15 PsychoPy photographs, MinGW gcc 16.1 with and without
+  `STBI_NO_SIMD`, 15 of 15 identical). pl_mpeg's MPEG-1 decode and Media
+  Foundation's H.264 decode give one index per file; H.264 is exact by the
+  standard (docs/video.md). The xlsx reader is integer and text only.
+- **ffmpeg**: its output is the same bytes for the same ffmpeg build,
+  arguments and input (measured: section 9.1, phase 3), but x264's
+  output depends on its thread count, which defaults to the core count:
+  give `threads=1` (or a fixed count) in `-x264-params` for a pack that
+  another machine must rebuild. A rebuild with another ffmpeg takes the
+  recorded output (5.3).
 
 ## 8. Costs: targets and measurements
 
