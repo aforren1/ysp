@@ -365,6 +365,15 @@ static void test_jpeg(void) {
         b.d[find_bytes(&b, "\xff\xc0", 2, 0) + 6] = 0;
         CHECK(ypt_jpeg_read(b.d, b.n, 1, &j2, err, sizeof err) < 0 && strstr(err, "DNL"), "height 0: %s", err);
         free(b.d);
+        /* a frame far larger than the data: refused before stb_image pads it */
+        make_jpeg(&b, 16, 16, 1, 1, 0xC0, 8, 0, NULL);
+        {
+            size_t f = find_bytes(&b, "\xff\xc0", 2, 0);
+            b.d[f + 5] = 0x10; b.d[f + 6] = 0x00; b.d[f + 7] = 0x10; b.d[f + 8] = 0x00;   /* 4096 x 4096 */
+            CHECK(ypt_jpeg_read(b.d, b.n, 1, &j2, err, sizeof err) < 0 && strstr(err, "too short for its size: 4096 x 4096 needs 262144 blocks"),
+                  "a large frame on little data: %s", err);
+        }
+        free(b.d);
         /* the frame header twice */
         make_jpeg(&b, 16, 16, 1, 1, 0xC0, 8, 0, NULL);
         {

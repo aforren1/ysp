@@ -84,6 +84,14 @@ static void one(const uint8_t* data, size_t size) {
     case 1: sheet_target(data + 1, size - 1, "Sheet2"); break;
     case 2: {
         ypt_jpeg j;
+        /* the decode only up to 4 megapixels: a larger frame is legal
+         * (stb_image decodes 52 megapixels in about a second), but under
+         * ASan it costs seconds an input; the checks before it all run */
+        if (ypt_jpeg_read(data + 1, size - 1, 0, &j, err, sizeof err) < 0) {
+            if (!err[0]) abort();
+            break;
+        }
+        if ((int64_t)j.w * j.h > ((int64_t)1 << 22)) break;
         if (ypt_jpeg_read(data + 1, size - 1, 1, &j, err, sizeof err) == 0) {
             if (!j.px || j.w < 1 || j.h < 1 || (j.channels != 1 && j.channels != 4)) abort();
             /* touch every texel: a short buffer is a sanitizer report */

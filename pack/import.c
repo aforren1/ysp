@@ -1166,6 +1166,7 @@ int ypt_jpeg_read(const void* data, size_t n, int decode, ypt_jpeg* out, char* e
     uint8_t* icc = NULL;
     size_t icc_n = 0;
     int icc_parts = 0, icc_seen = 0, sof = 0, rc = 0, w = 0, h = 0, comp = 0;
+    int64_t blocks = 0;
     uint8_t icc_have[256];
     if (err && cap) err[0] = 0;
     memset(out, 0, sizeof *out);
@@ -1215,6 +1216,23 @@ int ypt_jpeg_read(const void* data, size_t n, int decode, ypt_jpeg* out, char* e
             if (comp == 1) snprintf(out->sampling, sizeof out->sampling, "gray");
             else snprintf(out->sampling, sizeof out->sampling, "%dx%d,%dx%d,%dx%d", s[7] >> 4, s[7] & 15, s[10] >> 4, s[10] & 15, s[13] >> 4, s[13] & 15);
             out->progressive = m == 0xC2;
+            {
+                /* every 8x8 block of every component costs at least one bit
+                 * (its DC code); stb_image decodes missing data as zeros, so
+                 * a short file with a large frame is refused here */
+                int k, hmax = 1, vmax = 1;
+                for (k = 0; k < comp; k++) {
+                    int hs = s[7 + 3 * k] >> 4, vs = s[7 + 3 * k] & 15;
+                    if (hs < 1 || hs > 4 || vs < 1 || vs > 4) { rc = ferr(err, cap, YPAK_ERR_FORMAT, "JPEG: sampling factors %dx%d", hs, vs); break; }
+                    if (hs > hmax) hmax = hs;
+                    if (vs > vmax) vmax = vs;
+                }
+                if (rc < 0) break;
+                for (k = 0; k < comp; k++) {
+                    int64_t cw = ((int64_t)w * (s[7 + 3 * k] >> 4) + hmax - 1) / hmax, ch = ((int64_t)h * (s[7 + 3 * k] & 15) + vmax - 1) / vmax;
+                    blocks += ((cw + 7) / 8) * ((ch + 7) / 8);
+                }
+            }
             sof = 1;
         } else if (m == 0xE1 && len >= 6 && !memcmp(s, "Exif\0\0", 6)) {
             int o = exif_orientation(s + 6, len - 6);
@@ -1251,6 +1269,9 @@ int ypt_jpeg_read(const void* data, size_t n, int decode, ypt_jpeg* out, char* e
     free(icc);
     if (rc < 0) return rc;
     if (w > 65536 || h > 65536) return ferr(err, cap, YPAK_ERR_FORMAT, "JPEG: %d x %d; a texture is at most 65536 on a side", w, h);
+    if ((int64_t)n * 8 < blocks)
+        return ferr(err, cap, YPAK_ERR_FORMAT, "the JPEG is too short for its size: %d x %d needs %lld blocks, at least %lld bytes, and the file "
+                    "has %zu; it is cut short or damaged", w, h, (long long)blocks, (long long)((blocks + 7) / 8), n);
     out->w = w;
     out->h = h;
     out->components = comp;

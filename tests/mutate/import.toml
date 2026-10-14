@@ -294,6 +294,14 @@ why = "A second frame header changes the image the decoder makes."
 find = 'if (sof) { rc = ferr(err, cap, YPAK_ERR_FORMAT, "JPEG: two frame headers"); break; }'
 replace = ';'
 
+[[mutant]]
+id = "j-10"
+name = "a large frame on little data decoded"
+test = "import"
+why = "Every block costs at least a bit; a 4096 x 4096 frame on 300 bytes is a cut or damaged file that stb_image would pad with zeros."
+find = 'if ((int64_t)n * 8 < blocks)'
+replace = 'if (0)'
+
 # --- ICC ------------------------------------------------------------------------------
 
 [[mutant]]

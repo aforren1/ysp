@@ -698,9 +698,11 @@ for gray and `rgba32f` (k / 255, as an 8-bit PNG gives) widen exactly;
 an EXIF orientation other than 1 (programs disagree on whether to turn
 the picture: save it turned, with orientation 1), CMYK, 12-bit samples,
 lossless, hierarchical and arithmetic coding, two frame headers, ICC
-chunks out of order or missing, a profile that is not sRGB's, and a file
-with no end marker (stb_image would decode a cut file with zeros in
-place of the missing data). JPEG decoders do not agree to the bit: on
+chunks out of order or missing, a profile that is not sRGB's, a file
+with no end marker, and a file too short for its frame (every 8x8 block
+costs at least one bit): stb_image would decode a cut file with zeros in
+place of the missing data. The fuzzer found the second case: 1,450 bytes
+that claimed 512 x 62977 and decoded. JPEG decoders do not agree to the bit: on
 PsychoPy's photographs stb_image and libjpeg-turbo differ by at most 3
 codes, except the second-to-last column of an image with horizontally
 halved chroma (up to 20 codes; 9.1, phase 3). The texture holds
@@ -1266,16 +1268,17 @@ amplitude) between frame 200 and the last 200 frames (MSVC 19.44).
 
 | Build | Tool test | Import test | Notes |
 |---|---|---|---|
-| MSVC 19.44 `/W4 /WX`, full (`YSP_BUILD_LAYOUT`) | 246 checks, 0 failed | 88, 0 failed | video through ffmpeg: MPEG-1 and MP4 |
-| MSVC 19.44 `/W4 /WX`, core | 237, 0 failed | 88, 0 failed | the same `core.ysppak` as the full build, byte for byte |
+| MSVC 19.44 `/W4 /WX`, full (`YSP_BUILD_LAYOUT`) | 246 checks, 0 failed | 89, 0 failed | video through ffmpeg: MPEG-1 and MP4 |
+| MSVC 19.44 `/W4 /WX`, core | 237, 0 failed | 89, 0 failed | the same `core.ysppak` as the full build, byte for byte |
 | Linux gcc 11.4 (WSL2), ASan and UBSan, core | 235, 0 failed | 88, 0 failed | MPEG-1 through ffmpeg 4.4.2; no MP4 index off Windows; the corpus pack, manifest included, is the MSVC core build's byte for byte (`sha256:013f3079...`), the resampled WAV and the sine's error too |
-| MinGW gcc 16.1, `-Wall -Wextra -Wpedantic -Wshadow -Wfloat-conversion` | | 88, 0 failed | `pack/import.c` without a warning |
+| MinGW gcc 16.1, `-Wall -Wextra -Wpedantic -Wshadow -Wfloat-conversion` | | 89, 0 failed | `pack/import.c` without a warning |
 
-**Phase 3: mutations.** `tests/mutate/import.toml`, 37 mutants of
-`pack/import.c` (zip 9, XML 5, cells 11, JPEG 9, ICC 3), MinGW gcc 16.1:
+**Phase 3: mutations.** `tests/mutate/import.toml`, 38 mutants of
+`pack/import.c` (zip 9, XML 5, cells 11, JPEG 10, ICC 3), MinGW gcc 16.1:
 37 of 37 killed on the first run, after the test gained a repeated row
 number, a comma without a quote and a column of numbers and text while
-the list was written.
+the list was written; the 38th (j-10, the frame-size check the fuzzer
+led to) killed too.
 
 **Phase 3: fuzzing.** FUZZ_RESULT
 
@@ -1527,7 +1530,7 @@ change: it already read every kind.
 | `tests/adapt/import_test.c`, `tests/adapt/import_gen.h` | | The readers on their own; writers of ICC profiles, JPEG files and workbooks that the tool test shares |
 | `tests/pack/tool_test.c`, `tests/pack/corpus.sha256` | | New kinds and sources in the pinned corpus (30 entries), 34 new refusals, video through ffmpeg, the resampled sine |
 | `tests/fuzz/import_fuzz.c` | | libFuzzer: two workbook targets, JPEG, ICC |
-| `tests/mutate/import.toml`, `tests/mutate/mutate.py` | | 37 mutants of `pack/import.c`; the runner can now mutate a `pack/*.c` file |
+| `tests/mutate/import.toml`, `tests/mutate/mutate.py` | | 38 mutants of `pack/import.c`; the runner can now mutate a `pack/*.c` file |
 | `tests/pack/throughput.py` | | Section 8.2 |
 
 Third-party code added, each fetched at a commit and checked by SHA-256
