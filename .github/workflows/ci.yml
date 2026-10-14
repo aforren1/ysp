@@ -918,10 +918,10 @@ jobs:
           # PsychoPy's dots.py as a trial; 1 if a row is off or a replay from the steps file differs (about 15 s).
           expect 0 "$bin/trial_rdk" --sim --out "$RUNNER_TEMP/trial_rdk.csv" --steps "$RUNNER_TEMP/trial_rdk_steps.csv"
           # PsychoPy's movie demos: RT from a video frame's flip record, pause and seek by keys, the soundtrack on
-          # the null device; 1 if a row is off (about 20 s).
+          # the null device; 1 if a row is off (under a second, virtual clock).
           expect 0 "$bin/trial_movie" --sim --out "$RUNNER_TEMP/trial_movie.csv"
           expect 2 "$bin/trial_movie" --bogus
-          # PsychoPy's color demos: a walk in CIELAB, xyY and DKL through a nominal calibration; 1 if a step is off (about 11 s).
+          # PsychoPy's color demos: a walk in CIELAB, xyY and DKL through a nominal calibration; 1 if a step is off (under a second, virtual clock).
           expect 0 "$bin/color_patch" --sim --out "$RUNNER_TEMP/color_patch.csv"
           expect 2 "$bin/color_patch" --space hsv
           # PsychoPy's Sternberg demo: digits from a font or the bitmap font, SOAs from flip records (about 27 s).
@@ -988,7 +988,7 @@ jobs:
           # PsychoPy's Stroop demos with a synthetic participant (about 30 s);
           # without a font (Linux runners) the trials run with no text drawn.
           "$bin/trial_stroop" --sim --out "$RUNNER_TEMP/trial_stroop.csv"
-          # Instruction pages turned by a scripted reader, viewing times from flip records (about 8 s);
+          # Instruction pages turned by a scripted reader, viewing times from flip records (under a second, virtual clock);
           # without a font (Linux runners) the views run with no text drawn.
           "$bin/trial_instructions" --sim --out "$RUNNER_TEMP/trial_instructions.csv"
 

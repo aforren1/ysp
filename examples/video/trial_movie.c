@@ -43,16 +43,20 @@
  * (YRSP_DATA_COLS). Times in seconds; the screen, the sound device and
  * the movie go to FILE.meta.
  *
- * --sim: the simulated display, miniaudio's null device and a synthetic
+ * --sim: the simulated display and ysp/audio.h's null device on ysp/rt.h's
+ * virtual clock (the movie decodes inline there), and a synthetic
  * participant over 6 trials: a press 0.30 to 0.45 s after the onset, a
  * pause of 0.5 s before the onset in trial 1, two seeks ahead in trial 2
  * (past frame 60 from any start) and one back in trial 4, no press in
- * trial 3. It checks every row (RT and key as scripted from the flip
- * record, no EARLY press, the pause and seek counts, the onset's video
- * frame and path, every video frame the trial passed shown or dropped) and
- * exits 1 on a mismatch. A dropped frame is counted, not failed: on a
- * loaded host the decode thread can be late (1 of 6 trials once, 6 frames).
- * 19 s on the Iris Xe laptop (MSVC).
+ * trial 3. It checks every row and exits 1 on a mismatch: RT and key as
+ * scripted from the flip record, to the ns; no EARLY press; the pause and
+ * seek counts; the onset's video frame and path; no dropped video frame
+ * and no late, skipped or canceled flip; each trial's frames shown and
+ * repeated against sim_counts (the default seed). On the real clock a
+ * loaded host dropped up to 35 frames a run and moved an onset by a frame;
+ * on the virtual clock 3 idle runs and one beside a CPU burner per core
+ * wrote the same bytes (MSVC, MinGW gcc, WSL gcc; the files of the three
+ * the same too). Under a second: the virtual clock does not wait.
  *
  * Usage: trial_movie [--sim] [--auto] [--fullscreen] [--no-sound] [--reps N] [--seed N] [--out FILE]
  *   --auto       the --sim participant and checks on the real display and
@@ -125,17 +129,24 @@ static uint64_t table_arena[1024];
 static ytb_table tab;
 
 /* The trial's control state, changed by keys. */
-static int playing, n_pauses, n_seeks, seek_to = -1, last_vframe = -1;
+static int playing, n_pauses, n_seeks, seek_to = -1, last_vframe = -1, past_to = -1, onset_known = 0;
 
 /* --sim: the participant's script, per trial index. Controls are times
  * from the trial's start; the press is a time from the onset's flip.
- * seek_dir x n_seeks presses of an arrow, 0.3 s apart from seek_s: two
+ * seek_dir x n_seeks presses of an arrow, 0.1 s apart from seek_s: two
  * Rights pass frame 60 from any start frame, so the onset comes from the
  * record (THE ONSET). */
 typedef struct sim_trial { double press_s, pause_s, resume_s, seek_s; int seek_dir, n_seeks; } sim_trial;
 static const sim_trial script[SIM_TRIALS] = {
-    { 0.35, 0, 0, 0, 0, 0 }, { 0.40, 0.4, 0.9, 0, 0, 0 }, { 0.30, 0, 0, 0.3, 1, 2 },
+    { 0.35, 0, 0, 0, 0, 0 }, { 0.40, 0.4, 0.9, 0, 0, 0 }, { 0.30, 0, 0, 0.1, 1, 2 },
     { -1, 0, 0, 0, 0, 0 },   { 0.45, 0, 0, 0.5, -1, 1 },  { 0.30, 0, 0, 0, 0, 0 },
+};
+/* --sim with the default seed, on the virtual clock: each trial's frames
+ * shown and repeated and the onset's video frame, exactly. Read from a run
+ * and kept: a change in ysp/video.h's decisions or in the script shows here. */
+#define SIM_SEED 20261013u
+static const int sim_counts[SIM_TRIALS][3] = {
+    { 43, 42, 60 }, { 74, 74, 60 }, { 15, 14, 78 }, { 107, 107, 60 }, { 76, 76, 60 }, { 56, 56, 60 },
 };
 static yrsp_input sim_ev[8];
 static int n_sim_ev, sim_next;
@@ -254,6 +265,7 @@ static void on_input(const yrsp_input* in, int controls, const yscr_frame* f) {
         if (yvid_seek(&mv, to, playing ? YVID_ASAP : YVID_STAY_PAUSED) > 0) {
             n_seeks++;
             seek_to = (int)yvid_due(FPS, 1, to, 0);
+            if (seek_to > TARGET && past_to < 0 && !onset_known) past_to = seek_to;   /* the onset is its landing */
         }
     }
 }
@@ -261,7 +273,7 @@ static void on_input(const yrsp_input* in, int controls, const yscr_frame* f) {
 int main(int argc, char** argv) {
     static yrsp_result sim_res[MAX_ROWS];
     static row sim_row[MAX_ROWS];
-    static int sim_seek_to[MAX_ROWS], sim_span[MAX_ROWS];
+    static int sim_seek_to[MAX_ROWS], sim_span[MAX_ROWS], sim_past[MAX_ROWS];
     yscr_frame f;
     yscr_caps caps;
     yau_caps ac;
@@ -277,10 +289,11 @@ int main(int argc, char** argv) {
     const char* out_path = "trial_movie.csv";
     uint8_t* wav = NULL;
     size_t wav_n = 0;
-    uint64_t seed = 20261013;
+    uint64_t seed = SIM_SEED;
     int i, n, sim = 0, scripted = 0, reps = 0, fullscreen = 0, sound = 1, aborted = 0, failed = 0, rows = 0, sim_bad = 0;
     int in_trial = 0, responding = 0, onset_set = 0, shown = 0, start_col, start = 0, vrc = YVID_OK;
     int64_t trial_t0 = 0, end_t = 0, onset_display = -1, sim_wait = -1;
+    int n_late_flips = 0, own_seed = 0;   /* own_seed: --seed other than the table's */
 
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--sim")) sim = scripted = 1;
@@ -288,7 +301,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--fullscreen")) fullscreen = 1;
         else if (!strcmp(argv[i], "--no-sound")) sound = 0;
         else if (!strcmp(argv[i], "--reps") && i + 1 < argc) reps = atoi(argv[++i]);
-        else if (!strcmp(argv[i], "--seed") && i + 1 < argc) seed = (uint64_t)strtoull(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--seed") && i + 1 < argc) { seed = (uint64_t)strtoull(argv[++i], NULL, 10); own_seed = seed != SIM_SEED; }
         else if (!strcmp(argv[i], "--out") && i + 1 < argc) out_path = argv[++i];
         else {
             fprintf(stderr, "usage: trial_movie [--sim] [--auto] [--fullscreen] [--no-sound] [--reps N] [--seed N] [--out FILE]\n");
@@ -297,6 +310,9 @@ int main(int argc, char** argv) {
     }
     if (reps == 0) reps = scripted ? 2 : 3;
     if (reps < 1 || reps > MAX_ROWS / 3) { fprintf(stderr, "trial_movie: --reps takes 1..%d\n", MAX_ROWS / 3); return 2; }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host;
+     * the movie decodes inline there (ysp/video.h v0.4.0) */
+    if (sim) yrt_virtual_begin(0);
     if (write_movie()) return 1;
 
     /* the display, the sound device, the movie on its timeline base, its soundtrack */
@@ -352,6 +368,8 @@ int main(int argc, char** argv) {
         int rc = yscr_begin(&scr, &f);
         if (rc == YSCR_QUIT) { aborted = 1; break; }
         if (rc != YSCR_OK) { failed = fail(yscr_error(&scr)); break; }
+        for (i = 0; i < f.n_done; i++)   /* late, skipped or canceled flips: none on the virtual clock */
+            n_late_flips += f.done[i].dropped > 0 || (f.done[i].flags & (YSCR_FLIP_LATE_TARGET | YSCR_FLIP_SKIPPED | YSCR_FLIP_CANCELED));
 
         if (!in_trial && f.onset >= end_t) {
             /* a new trial: a seek to the start frame that plays once its
@@ -364,7 +382,8 @@ int main(int argc, char** argv) {
             yrsp_arm(&rsp, f.onset);
             playing = in_trial = responding = 1;
             onset_set = shown = n_pauses = n_seeks = 0;
-            seek_to = last_vframe = -1;
+            seek_to = last_vframe = past_to = -1;
+            onset_known = 0;
             onset_display = sim_wait = -1;
             r.onset_video_frame = YTR_MISSING_INT;
             r.onset_via = "none";
@@ -373,7 +392,7 @@ int main(int argc, char** argv) {
             if (scripted && ti.index < SIM_TRIALS) {
                 const sim_trial* s = &script[ti.index];
                 if (s->pause_s > 0) { sim_key(trial_t0 + YRT_S(s->pause_s), "p"); sim_key(trial_t0 + YRT_S(s->resume_s), "p"); }
-                for (k = 0; k < s->n_seeks; k++) sim_key(trial_t0 + YRT_S(s->seek_s + 0.3 * k), s->seek_dir > 0 ? "right" : "left");
+                for (k = 0; k < s->n_seeks; k++) sim_key(trial_t0 + YRT_S(s->seek_s + 0.1 * k), s->seek_dir > 0 ? "right" : "left");
             }
         }
 
@@ -409,7 +428,7 @@ int main(int argc, char** argv) {
         }
         n = ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, fired, 64);
         if (responding && !onset_set && (landed = yrsp_set_landing(&rsp, fired, n, DISK_ON)) >= 0) {
-            onset_set = 1;
+            onset_set = onset_known = 1;
             onset_display = fired[landed].frame;
             r.onset_via = "timeline";
         }
@@ -424,7 +443,7 @@ int main(int argc, char** argv) {
                     o.frame = f.index;
                     o.src = YRSP_ONSET_PLAN;
                     yrsp_set_onset(&rsp, &o);
-                    onset_set = 1;
+                    onset_set = onset_known = 1;
                     onset_display = f.index;
                     r.onset_via = "record";
                 } else if (onset_display != f.index) {
@@ -463,6 +482,7 @@ int main(int argc, char** argv) {
             sim_res[ti.index] = res;
             sim_row[ti.index] = r;
             sim_seek_to[ti.index] = seek_to;
+            sim_past[ti.index] = past_to;
             sim_span[ti.index] = last_vframe - start + 1;   /* video frames the trial passed */
             rows++;
             in_trial = 0;
@@ -491,7 +511,7 @@ int main(int argc, char** argv) {
         for (i = 0; i < rows && i < SIM_TRIALS; i++) {
             const yrsp_result* q = &sim_res[i];
             const row* w = &sim_row[i];
-            int want_frame = sim_seek_to[i] > TARGET ? sim_seek_to[i] : TARGET, ok = 1;
+            int want_frame = sim_past[i] >= 0 ? sim_past[i] : TARGET, ok = 1;
             if (script[i].press_s > 0)   /* RT from the flip record, as scripted */
                 ok = (q->flags & YRSP_R_RESPONDED) && q->response == 0 && q->rt_ns == YRT_S(script[i].press_s);
             else
@@ -499,10 +519,14 @@ int main(int argc, char** argv) {
             ok = ok && q->onset_src == YRSP_ONSET_FLIP && (sim ? q->onset_tier == YSCR_TIER_SIM : q->onset_tier > 0) && q->n_early == 0;
             ok = ok && w->n_pauses == (script[i].pause_s > 0) && w->n_seeks == script[i].n_seeks;
             ok = ok && w->onset_video_frame == want_frame && !strcmp(w->onset_via, want_frame > TARGET ? "record" : "timeline");
-            /* every video frame the trial passed was shown or dropped; a
-             * drop is the host's (a late decode on a loaded machine), so it
-             * is counted, not failed */
-            ok = ok && w->frames_shown > 0 && (sim_seek_to[i] >= 0 || w->frames_shown + w->frames_dropped == sim_span[i]);
+            /* every video frame the trial passed shown or dropped; none
+             * dropped on the virtual clock, where the counts are exact
+             * (sim_counts); a window (--auto) can drop, and says so */
+            ok = ok && w->frames_shown > 0 && (!sim || w->frames_dropped == 0) &&
+                 (sim_seek_to[i] >= 0 || w->frames_shown + w->frames_dropped == sim_span[i]);
+            if (sim && !own_seed)
+                ok = ok && w->frames_shown == sim_counts[i][0] && w->frames_repeated == sim_counts[i][1] &&
+                     w->onset_video_frame == sim_counts[i][2];
             n_dropped += w->frames_dropped;
             if (!ok) {
                 fprintf(stderr, "trial_movie: --sim: trial %d: rt %.9f flags 0x%x onset src %d tier %d pauses %d seeks %d "
@@ -513,8 +537,9 @@ int main(int argc, char** argv) {
             }
         }
         if (rows != SIM_TRIALS) { fprintf(stderr, "trial_movie: --sim: %d rows, not %d\n", rows, SIM_TRIALS); sim_bad = 1; }
+        if (sim && n_late_flips) { fprintf(stderr, "trial_movie: --sim: %d late flips\n", n_late_flips); sim_bad = 1; }
         if (sim_bad) failed = 1;
-        else printf("--sim: every trial came out as scripted (%d video frames dropped by the host)\n", n_dropped);
+        else printf("--sim: every trial came out as scripted (%d video frames dropped, %d late flips)\n", n_dropped, n_late_flips);
     } else if (scripted && !failed && !aborted) printf("--sim: the self-check needs --reps 2\n");
     return failed;
 }

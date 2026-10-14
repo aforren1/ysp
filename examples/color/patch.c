@@ -44,12 +44,15 @@
  * too), onset (s from the first color's onset, both from flip records) and
  * onset_tier. FILE.meta has the calibration and the screen.
  *
- * --sim: the simulated display and a scripted walk of 53 keys through the
- * three spaces, out of the gamut and into a refusal (L* 105). It checks
- * every row (each step against the polar arithmetic, the round trip from
- * device RGB, a Tab's color against the one before, the gamut flags, the
- * shown color inside, the onset from a flip record within two frames of
- * the key) and exits 1 on a mismatch. 11 s on the Iris Xe laptop (MSVC).
+ * --sim: the simulated display on ysp/rt.h's virtual clock and a scripted
+ * walk of 53 keys through the three spaces, out of the gamut and into a
+ * refusal (L* 105). It checks every row (each step against the polar
+ * arithmetic, the round trip from device RGB, a Tab's color against the
+ * one before, the gamut flags, the shown color inside, the onset from a
+ * flip record within two frames of the key, with no frame held by the
+ * host) and exits 1 on a mismatch. 3 idle runs and one beside a CPU burner
+ * per core wrote the same bytes; MSVC and MinGW gcc differ in the last
+ * digit of one value (their C libraries' cos). Under a second.
  *
  * Usage: color_patch [--sim] [--auto] [--fullscreen] [--cal FILE] [--space lab|xyy|dkl]
  *                    [--color A B C] [--out FILE]
@@ -274,6 +277,8 @@ int main(int argc, char** argv) {
         }
     }
 
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     /* the calibration, measured or nominal; the context about mid-gray */
     if (cal_path ? load_cal(cal_path) < 0 : nominal() < 0) return 1;
     {
@@ -497,12 +502,12 @@ int main(int argc, char** argv) {
                          w->shown_b >= -e && w->shown_b <= 1 + e) << 4;
                 /* the change on the key's frame: within two periods of it on
                  * the simulated grid, four in a window that a compositor
-                 * runs; not checked where the host held the loop (a vblank
+                 * runs; in a window (--auto) not checked where the host held the loop (a vblank
                  * skipped) or the flip (dropped), which is counted */
-                n_late += k > 0 && stalled[k];
+                n_late += k > 0 && stalled[k];   /* none on the virtual clock: there it fails */
                 off |= !((sim ? w->onset_tier == YSCR_TIER_SIM : w->onset_tier > 0) && w->onset_ns > 0 &&
                          (k == 0 || (w->onset_ns >= key_t[k] &&
-                                     (stalled[k] || w->onset_ns - key_t[k] <= (sim ? 2 : 4) * period)))) << 5;
+                                     ((!sim && stalled[k]) || w->onset_ns - key_t[k] <= (sim ? 2 : 4) * period)))) << 5;
                 n_out += !in;
                 prev = c;
                 s_prev = s;

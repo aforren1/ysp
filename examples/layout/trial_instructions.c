@@ -38,11 +38,14 @@
  * FILE.meta has the screen, the layout stamp (versions and font hashes)
  * and the page sizes.
  *
- * --sim: the simulated display and a scripted reader who turns 0, 1, 2,
- * back to 1, 2, 3 and out, with a Left on the first page that must change
- * nothing. It checks each view (page, RT as scripted from the flip record,
- * viewing time from two flip records, the page turned within two frames of
- * the key) and exits 1 on a mismatch. 8 s on the Iris Xe laptop (MSVC).
+ * --sim: the simulated display on ysp/rt.h's virtual clock and a scripted
+ * reader who turns 0, 1, 2, back to 1, 2, 3 and out, with a Left on the
+ * first page that must change nothing. It checks each view (page, RT as
+ * scripted from the flip record, viewing time from two flip records, the
+ * page turned within two frames of the key, with no frame held by the
+ * host) and exits 1 on a mismatch. 3 idle runs and one beside a CPU burner
+ * per core wrote the same bytes, the same on MSVC, MinGW gcc and WSL gcc.
+ * Under a second; the layout time it prints is real (yrt_real_ns()).
  *
  * Usage: trial_instructions [--sim] [--auto] [--fullscreen] [--font PATH] [--out FILE]
  *   --auto  the --sim reader and checks in a window (four frames for the
@@ -296,6 +299,8 @@ int main(int argc, char** argv) {
         }
     }
 
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     if (!ygfx_open_screen(&gfx, &scr, &(yscr_desc){ .backend = sim ? YSCR_BACKEND_SIM : 0, .windowed = !fullscreen },
                           &(ygfx_desc){ .background = { 0.08f, 0.08f, 0.08f } }))
         return fail(ygfx_error(&gfx));
@@ -303,13 +308,13 @@ int main(int argc, char** argv) {
     if (!yol_open(&ol, NULL) || ylay_create(&L, &(ylay_desc){ .ol = &ol }) != YLAY_OK) return fail("the layout library did not open");
     font = read_file(font_path, &font_n);
     if (font && ylay_add_font(L, font, font_n, 0, font_path) >= 0) {
-        int64_t t0 = yrt_now_ns();
+        int64_t t0 = yrt_real_ns();
         if ((th = setup_pages()) < 0) {
             fprintf(stderr, "trial_instructions: pages: %s %s\n", ylay_error(L), ygfx_error(&gfx));
             return 1;
         }
         printf("%d pages laid out and rendered into %d x %d targets in %.1f ms\n", N_PAGES, column + 2 * MARGIN_PX, th,
-               (double)(yrt_now_ns() - t0) / 1e6);
+               (double)(yrt_real_ns() - t0) / 1e6);
         ylay_stamp(L, NULL, stamp, sizeof stamp);
         have_font = 1;
     } else {
@@ -448,14 +453,14 @@ int main(int argc, char** argv) {
             const row* w = &views[i];
             const yrsp_result* r = &res[i];
             int64_t lag = w->viewing_time_ns - r->rt_ns;   /* key to the next page's flip */
-            /* not checked where the host held the turning frame (a vblank
+            /* in a window (--auto) not checked where the host held the turning frame (a vblank
              * skipped) or its flip (dropped); counted */
             int stall = i + 1 < n_written ? view_stall[i + 1] : end_stall;
             int ok = w->page_index == script[i].page && (r->flags & YRSP_R_RESPONDED) && r->rt_ns == YRT_S(script[i].t) &&
                      !strcmp(r->response_name, !strcmp(script[i].key, "left") ? "back" : "next") &&
                      r->onset_src == YRSP_ONSET_FLIP && (sim ? r->onset_tier == YSCR_TIER_SIM && w->end_tier == YSCR_TIER_SIM :
-                     r->onset_tier > 0 && w->end_tier > 0) && lag >= 0 && (stall || lag <= lag_max);
-            n_late += stall;
+                     r->onset_tier > 0 && w->end_tier > 0) && lag >= 0 && ((!sim && stall) || lag <= lag_max);
+            n_late += stall;   /* none on the virtual clock: there it fails */
             if (i == 0) ok = ok && r->n_anticipations + r->n_early == 0;   /* the Left on page 1 was not a response */
             if (!ok) {
                 fprintf(stderr, "trial_instructions: --sim: view %d: page %d (want %d) rt %.9f (want %.3f) %s, shown %.9f, "
