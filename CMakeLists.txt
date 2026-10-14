@@ -203,7 +203,10 @@ set(YSP_EXAMPLES_ACROSS
     device/photodiode_check.c  -
     net/labstreamer_flip.c     -
     audio/av_sync.c            -
-    response/trial_two_keyboards.c -)
+    response/trial_two_keyboards.c -
+    video/trial_movie.c        -
+    color/patch.c              -
+    layout/trial_instructions.c -)
 
 set(YSP_PREFIX_rt          YRT)
 set(YSP_GROUP_rt           core)
@@ -616,7 +619,13 @@ if(TARGET SDL3::SDL3 AND YSP_BUILD_EXAMPLES)
         ysp_add_program(audio_av_sync examples/audio/av_sync.c rig devices)
         # its web form (docs/web.md): the records and the audio callbacks
         ysp_add_program(web_av_sync examples/web/av_sync.c rig)
+        # PsychoPy's movie demos (docs/rig_spec.md 15.5): RT from a video
+        # frame's flip record, pause and seek by keys, a soundtrack stream.
+        ysp_add_program(trial_movie examples/video/trial_movie.c rig methods)
     endif()
+    # PsychoPy's color and monitor demos (docs/rig_spec.md 15.5): a patch
+    # through the calibration, walked in hue and chroma by keys.
+    ysp_add_program(color_patch examples/color/patch.c rig)
     # PsychoPy's Sternberg demo (docs/rig_spec.md 15.5): a timed sequence as
     # an op table, digits from ysp/outline.h. trial_stroop and trial_images
     # are in pack/CMakeLists.txt: they need the layout library and ypak.
@@ -633,7 +642,7 @@ endif()
 # without MPEG-1. The test has its own scripted decoder; it compares QOI
 # bytes with qoi.h when that was fetched.
 if(NOT TARGET ysp::pl_mpeg)
-    foreach(t compile_video_c compile_video_cxx video_play video_bench)
+    foreach(t compile_video_c compile_video_cxx video_play video_bench trial_movie)
         if(TARGET ${t})
             target_compile_definitions(${t} PRIVATE YVID_NO_PL_MPEG)
         endif()
