@@ -41,7 +41,10 @@
  *
  *   v0.4.0 (2026-10-13): phase 3 (docs/pack.md 13). VIDEO and its
  *   VIDEO_INDEX from an MPEG-1 or MP4 file, as given or made by an ffmpeg
- *   step whose argument vector and version the manifest records; FRAMESEQ
+ *   step whose argument vector and version the manifest records (the tool
+ *   encodes on one thread, `-threads 1` and libx265's pools=1, and refuses
+ *   the author's thread settings, so any machine rebuilds the bytes; the
+ *   user's decision of 2026-10-14); opt-in resampling; FRAMESEQ
  *   from a ysp/video.h frame sequence, every frame checked; a TABLE from an
  *   .xlsx sheet; a TEXTURE from a JPEG; an ICC profile in a PNG or JPEG is
  *   accepted when it is sRGB's and refused otherwise (v0.3.0 refused every

@@ -752,8 +752,19 @@ file. Parameters:
 - `source`: the media file, or ffmpeg's input.
 - `ffmpeg`: the arguments between the input and the output. With it, the
   tool runs `ffmpeg -nostdin -hide_banner -loglevel error -y
-  [ffmpeg_input] -i SOURCE [ffmpeg] OUTPUT` (no shell; each argument as
-  given) and stores the output. `ffmpeg_input`: input options, before
+  [ffmpeg_input] -i SOURCE [ffmpeg] -threads 1 OUTPUT` (no shell; each
+  argument as given) and stores the output. The encode runs on one
+  thread, set by the tool (decided 2026-10-14): `-threads 1` before the
+  output, and for libx265 `pools=1:frame-threads=1` appended to the
+  author's `-x265-params` (or added as `-x265-params` when there is
+  none). Every encoder measured gives other bytes with another thread
+  count, and ffmpeg's default is the machine's core count (9.1, phase 3),
+  so without this a pack would rebuild the same only on a machine with as
+  many cores. A thread setting of the author's (`-threads`, or `threads=`,
+  `pools=`, `frame-threads=`, `lookahead-threads=` in `-x264-params`,
+  `-x265-params` or `-x264opts`) is refused by name. Input options in
+  `ffmpeg_input` are not touched: decoding gives the same frames on any
+  thread count. `ffmpeg_input`: input options, before
   `-i` (a raw source: `-f rawvideo -pix_fmt gray -s 64x48 -framerate
   30`). The derivation's `by` is the first line of `ffmpeg -version`, and
   `command` is the vector with `{source}` and `{output}` for the paths, so
@@ -892,7 +903,7 @@ kind's extension.
     { "name": "blocks.pstb", "kind": "table", "source": "blocks.xlsx", "sheet": "Conditions" },
     { "name": "video/intro.mp4", "kind": "video", "source": "raw/intro.mov",
       "ffmpeg": ["-an", "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-bf", "0", "-g", "30",
-                 "-keyint_min", "30", "-sc_threshold", "0", "-x264-params", "open-gop=0:scenecut=0:threads=1",
+                 "-keyint_min", "30", "-sc_threshold", "0", "-x264-params", "open-gop=0:scenecut=0",
                  "-video_track_timescale", "30000"] },
     { "name": "video/gratings.yspvseq", "kind": "frameseq", "source": "video/gratings.yspvseq" }
   ]
@@ -989,11 +1000,11 @@ bytes. What makes it so:
   Foundation's H.264 decode give one index per file; H.264 is exact by the
   standard (docs/video.md). The xlsx reader is integer and text only.
 - **ffmpeg**: its output is the same bytes for the same ffmpeg build,
-  arguments and input (measured: section 9.1, phase 3), but x264's
-  output depends on its thread count, which defaults to the core count:
-  give `threads=1` (or a fixed count) in `-x264-params` for a pack that
-  another machine must rebuild. A rebuild with another ffmpeg takes the
-  recorded output (5.3).
+  arguments and input (measured: section 9.1, phase 3). The encoders'
+  output also depends on their thread count, which defaults to the core
+  count, so the tool encodes on one thread itself and records it in the
+  command (4.10, decided 2026-10-14). A rebuild with another ffmpeg takes
+  the recorded output (5.3).
 
 ## 8. Costs: targets and measurements
 
@@ -1076,7 +1087,7 @@ MPEG-1 clip (1280 x 720, 300 frames), two 1920 x 1080 frame sequences of
 | AUDIO (copy) | 2 | 15.4 MB | 15.4 MB | 0.159 s (0.153 to 0.171) | 96.5 MB/s | |
 | TEXTURE from PNG as QOI (the 14 photographs; second session) | 14 | 11.4 MB | 13.6 MB (45 % of raw) | 0.331 s (0.324 to 0.333); raw 0.354 s (0.343 to 0.410) in the same session | | |
 | AUDIO resampled 44.1 to 48 kHz, 60 s of 16-bit stereo (second session) | 1 | 10.6 MB | 23.1 MB | 2.043 s (2.023 to 2.061); a 48 kHz copy 0.107 s | 1.3 million frames a second, 29 times real time | |
-| VIDEO through the ffmpeg step: PsychoPy's demo movie, 640 x 480, 173 frames, x264 `threads=1`, then its index (second session, 3 rounds) | 1 | 0.8 MB | 0.5 MB | 1.651 s (1.615 to 1.812) | | |
+| VIDEO through the ffmpeg step: PsychoPy's demo movie, 640 x 480, 173 frames, x264 on one thread, then its index (second session, 3 rounds) | 1 | 0.8 MB | 0.5 MB | 1.651 s (1.615 to 1.812) | | |
 
 The second session (QOI, resampling, ffmpeg) ran later the same night
 under the lock, with the full build's `ypak.exe`; its load was not
@@ -1247,17 +1258,59 @@ laptop (i7-1360P), on PsychoPy's demo files (`psychopy/psychopy` branch
 - The MP4 (`stimuli/jwpIntro.mp4`, 173 frames at 2997/100 fps, no color
   stated) is refused as given: its frame times fit no constant rate.
   Through the ffmpeg step (x264, `-vf fps=30000/1001`, stated BT.601
-  color, `threads=1`) it builds in 1.65 s (8.2), and its index reads 173
+  color, one thread) it builds in 1.65 s (8.2), and its index reads 173
   frames at 30000/1001.
 
 **Phase 3: ffmpeg's bytes.** ffmpeg N-122953-g7b15039cdb-20260223
 (gcc 15.2), the movie above through libx264 `-preset medium -crf 18`,
 twice for each thread count: each count gives the same bytes run to run;
 `threads=1`, `threads=4`, `threads=8` and the default (16 logical
-processors here) give four different files. The tool test's MPEG-1
-(`mpeg1video`) and MP4 (`libx264 threads=1`) clips are the same bytes on
-a second build, and `ypak rebuild` with this ffmpeg and with no ffmpeg
+processors here) give four different files.
+
+2026-10-14, the encoders the tool is likely to be asked for, 120 frames
+of the same movie, twice each with the default threads and with
+`-threads 1`, `-threads 4`, `-threads 8`:
+
+| Encoder | Run to run | Thread counts | With `-threads 1` |
+|---|---|---|---|
+| libx264 | same | default, 4 and 8 all differ | same run to run; equal to `-x264-params threads=1` |
+| libx265 | same | default, 1 and 8 differ (4 happened to equal the default) | depends still on x265's own pool: `pools=1`, `pools=4` and the default pool give three files; `pools=1:frame-threads=1` is pinned, `lookahead-threads` changes nothing |
+| mpeg1video | same | default, 1, 4 and 8 all differ | same run to run |
+| mpeg2video | same | default, 1, 4 and 8 all differ | same run to run |
+
+Hence the rule of 4.10 (decided 2026-10-14): `-threads 1` for every
+encode, and `pools=1:frame-threads=1` for libx265. The tool test's
+MPEG-1, H.264 and HEVC clips are the same bytes on a second build, the
+HEVC clip's command shows the pools appended to the author's
+`-x265-params`, and `ypak rebuild` with this ffmpeg and with no ffmpeg
 gives the pack byte for byte.
+
+**Phase 3: the thread rule's mutants, by hand** (the runner cannot
+build the tool), 2026-10-14, MSVC 19.44, `test_pack_tool`: no
+`-threads 1` (killed, 2 checks), libx265's pools not merged into the
+author's `-x265-params` (killed: ffmpeg's second `-x265-params` replaces
+the author's, B-frames return and the index refuses them), the author's
+thread settings taken (killed, 3 checks). 3 of 3.
+
+**Phase 3: the cost of one thread**, 2026-10-14, under the measurement
+lock (load 41 % when it ended; other workers' jobs started after it), the
+same ffmpeg, median of 3 encodes (min to max), the encode alone:
+
+| Source | Encoder | Default threads | One thread | Ratio |
+|---|---|---|---|---|
+| PsychoPy's demo movie, 640 x 480, 173 frames | libx264 medium, crf 18 | 0.76 s (0.73 to 0.92) | 1.34 s (1.19 to 1.56) | 1.8 |
+| the same | libx265 medium, crf 20 | 1.69 s (1.52 to 1.79) | 3.14 s (2.42 to 3.59) | 1.9 |
+| the same | mpeg1video, q 3 | 0.23 s (0.22 to 0.25) | 0.33 s (0.32 to 0.57) | 1.4 |
+| testsrc2, 1920 x 1080, 300 frames (10 s) | libx264 medium, crf 18 | 2.89 s (2.89 to 3.45) | 29.43 s (24.23 to 31.23) | 10.2 |
+| the same | libx265 medium, crf 20 | 13.45 s (11.48 to 16.59) | 73.80 s (66.66 to 81.92) | 5.5 |
+| the same | mpeg1video, q 3 | 0.83 s (0.81 to 0.89) | 1.36 s (1.31 to 1.43) | 1.6 |
+
+What this costs: short clips at stimulus sizes pay under a factor of 2;
+1080p H.264 pays 10 times, about 3 s of encode a second of film here, so
+a two-hour 1080p film would take about 6 hours to pack once. The
+encode runs once per pack; a rebuild with another ffmpeg takes the
+recorded output instead. A faster `-preset` is the author's lever, and it
+is recorded like any argument.
 
 **Phase 3: resampling.** A 997 Hz sine at 44.1 kHz (float, amplitude
 0.5) through `"resample": "sinc_best"` to 48 kHz: 48,000 frames, the
@@ -1268,9 +1321,9 @@ amplitude) between frame 200 and the last 200 frames (MSVC 19.44).
 
 | Build | Tool test | Import test | Notes |
 |---|---|---|---|
-| MSVC 19.44 `/W4 /WX`, full (`YSP_BUILD_LAYOUT`) | 246 checks, 0 failed | 89, 0 failed | video through ffmpeg: MPEG-1 and MP4 |
-| MSVC 19.44 `/W4 /WX`, core | 237, 0 failed | 89, 0 failed | the same `core.ysppak` as the full build, byte for byte |
-| Linux gcc 11.4 (WSL2), ASan and UBSan, core | 235, 0 failed | 89, 0 failed | MPEG-1 through ffmpeg 4.4.2; no MP4 index off Windows; the corpus pack, manifest included, is the MSVC core build's byte for byte (`sha256:013f3079...`), the resampled WAV and the sine's error too |
+| MSVC 19.44 `/W4 /WX`, full (`YSP_BUILD_LAYOUT`) | 255 checks, 0 failed (2026-10-14) | 89, 0 failed | video through ffmpeg: MPEG-1, H.264 and HEVC in MP4 |
+| MSVC 19.44 `/W4 /WX`, core | 246, 0 failed | 89, 0 failed | the same `core.ysppak` as the full build, byte for byte |
+| Linux gcc 11.4 (WSL2), ASan and UBSan, core | 242, 0 failed | 89, 0 failed | MPEG-1 through ffmpeg 4.4.2; no MP4 index off Windows; the corpus pack, manifest included, is the MSVC core build's byte for byte (`sha256:013f3079...`), the resampled WAV and the sine's error too |
 | MinGW gcc 16.1, `-Wall -Wextra -Wpedantic -Wshadow -Wfloat-conversion` | | 89, 0 failed | `pack/import.c` without a warning |
 
 **Phase 3: mutations.** `tests/mutate/import.toml`, 38 mutants of
@@ -1556,22 +1609,29 @@ Third-party code added, each fetched at a commit and checked by SHA-256
 The manifest names each (`tool.libraries`), with `,tree-differs` when
 the fetched file is not the pinned one.
 
-### Decisions taken in phase 3, to review
+### Decided (the user, 2026-10-14)
 
-- **ICC profiles.** An sRGB profile is accepted in PNG and JPEG; another
-  is refused (4.9). v0.3.0 refused every `iCCP`. The check compares
-  colorants and curves, not the profile's name.
+- **ICC profiles.** A profile is accepted in PNG and JPEG only once it is
+  identified as sRGB's, and refused otherwise (4.9). It is identified by
+  its content, never by its name: an RGB matrix-and-curves profile whose
+  three colorants (rXYZ, gXYZ, bXYZ) are each within 0.002 of sRGB's D50
+  values and whose three curves (rTRC, gTRC, bTRC, a table or a
+  parametric curve) are each within half a code of 255 of sRGB's curve at
+  all 256 codes. v0.3.0 refused every `iCCP`.
 - **EXIF orientation.** Anything but 1 is refused, not applied: browsers
   apply it and PIL does not, so either choice would surprise someone.
 - **Workbooks.** Dates and times are refused; a value in a column without
   a name is refused (PsychoPy drops the column); a column of text cells
   stays text. Booleans are `TRUE` and `FALSE` as text.
-- **ffmpeg.** The tool adds no flag of its own beyond `-nostdin
-  -hide_banner -loglevel error -y`. x264's bytes depend on its thread
-  count, so a description meant for another machine gives `threads=1`
-  (measured, 9.1).
-- **MP4 indexes** are made on Windows only (Media Foundation); MPEG-1 on
-  every platform. A rebuild elsewhere takes the recorded index.
+- **ffmpeg.** Changed from the proposal: the tool encodes on one thread
+  itself (`-threads 1`; for libx265 also `pools=1:frame-threads=1`), so a
+  pack rebuilds byte for byte on any machine without the author asking,
+  and the command records it (4.10). The author's thread settings are
+  refused. The cost is measured in 9.1, phase 3.
+- **MP4 indexes** are made on Windows only (Media Foundation), for now;
+  MPEG-1 on every platform. A rebuild elsewhere takes the recorded index.
+
+Proposed in phase 3 and not reviewed:
 - **Resampling** is opt-in (`"resample": "sinc_best"`); refusal stays the
   default (open question 4).
 - **ALPHA** stays unbuilt (4.11).

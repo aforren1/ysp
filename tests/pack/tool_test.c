@@ -1032,6 +1032,17 @@ static void test_resample(void) {
     expect_refusal("resample name", "{\"kind\": \"audio\", \"source\": \"audio/at44.wav\", \"resample\": \"linear\"}", "resample is \"sinc_best\"", 0);
 }
 
+/* The author's thread settings in an ffmpeg step are refused (decided
+ * 2026-10-14): the tool sets them. No ffmpeg needed. */
+static void test_ffmpeg_refusals(void) {
+    expect_refusal("ffmpeg threads", "{\"kind\": \"video\", \"name\": \"v.mpg\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-threads\", \"4\"]}",
+                   "remove the thread setting from 'ffmpeg' (-threads)", 0);
+    expect_refusal("x264 threads", "{\"kind\": \"video\", \"name\": \"v.mp4\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-x264-params\", \"bframes=0:threads=8\"]}",
+                   "(-x264-params bframes=0:threads=8)", 0);
+    expect_refusal("x265 pools", "{\"kind\": \"video\", \"name\": \"v.mp4\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-x265-params\", \"pools=4\"]}",
+                   "(-x265-params pools=4)", 0);
+}
+
 /* VIDEO and VIDEO_INDEX through the ffmpeg step, when ffmpeg runs here: a
  * raw gray clip made in code becomes MPEG-1 (pl_mpeg indexes it on every
  * platform) and, on Windows, H.264 in MP4 (Media Foundation indexes it).
@@ -1050,7 +1061,7 @@ static void test_video(void) {
         "   \"ffmpeg_input\": [\"-f\", \"rawvideo\", \"-pix_fmt\", \"gray\", \"-s\", \"64x48\", \"-framerate\", \"30\"],\n"
         "   \"ffmpeg\": [\"-c:v\", \"libx264\", \"-preset\", \"fast\", \"-crf\", \"20\", \"-pix_fmt\", \"yuv420p\", \"-bf\", \"0\", \"-g\", \"10\",\n"
         "               \"-keyint_min\", \"10\", \"-sc_threshold\", \"0\", \"-x264-params\",\n"
-        "               \"bframes=0:scenecut=0:open-gop=0:threads=1:colorprim=bt709:transfer=bt709:colormatrix=bt709:range=tv:chromaloc=0\",\n"
+        "               \"bframes=0:scenecut=0:open-gop=0:colorprim=bt709:transfer=bt709:colormatrix=bt709:range=tv:chromaloc=0\",\n"
         "               \"-video_track_timescale\", \"30\", \"-an\"]}"
 #endif
         "\n]}\n";
@@ -1123,6 +1134,67 @@ static void test_video(void) {
               "video rebuild without ffmpeg takes the recorded output: %s", err);
         free(text);
     }
+    /* the forced single thread (decided 2026-10-14), in the recorded command */
+    {
+        ypak_pack p;
+        ypak_desc d;
+        ypak_entry e;
+        memset(&d, 0, sizeof d);
+        d.path = W "/video.ysppak";
+        if (ypak_open(&p, &d)) {
+            const char* m = (const char*)entry(&p, "ysp/manifest.json", &e);
+            char* z = (char*)malloc((size_t)e.size + 1);
+            if (m && z) {
+                memcpy(z, m, (size_t)e.size);
+                z[e.size] = 0;
+                CHECK(strstr(z, "-f mpeg -threads 1 {output}") != NULL, "the recorded command ends with -threads 1");
+            }
+            free(z);
+            ypak_close(&p);
+        }
+    }
+#if defined(_WIN32)
+    /* libx265: its pools forced into the author's x265-params. Media
+     * Foundation's HEVC decoder is a Store extension; without it the index
+     * cannot be made, and only the command is checked by the refusal. */
+    {
+        static const char t5[] =
+            "{\"format\": \"ysp-pack-source\", \"version\": 1, \"resources\": [\n"
+            "  {\"kind\": \"video\", \"name\": \"video/clip265.mp4\", \"source\": \"video/raw.gray\",\n"
+            "   \"ffmpeg_input\": [\"-f\", \"rawvideo\", \"-pix_fmt\", \"gray\", \"-s\", \"64x48\", \"-framerate\", \"30\"],\n"
+            "   \"ffmpeg\": [\"-c:v\", \"libx265\", \"-crf\", \"24\", \"-pix_fmt\", \"yuv420p\", \"-x265-params\",\n"
+            "               \"bframes=0:keyint=10:min-keyint=10:scenecut=0:log-level=error:colorprim=bt709:transfer=bt709:colormatrix=bt709:range=limited\",\n"
+            "               \"-video_track_timescale\", \"30\", \"-an\"],\n"
+            "   \"color\": {\"matrix\": \"bt709\", \"range\": \"limited\", \"transfer\": \"bt1886\", \"primaries\": \"bt709\", \"siting\": \"left\"}}]}\n";
+        rc = build_text(t5, W "/video265.ysppak", err, sizeof err);
+        if (rc == 0) {
+            ypak_pack p;
+            ypak_desc d;
+            ypak_entry e;
+            memset(&d, 0, sizeof d);
+            d.path = W "/video265.ysppak";
+            if (ypak_open(&p, &d)) {
+                const char* m = (const char*)entry(&p, "ysp/manifest.json", &e);
+                char* z = (char*)malloc((size_t)e.size + 1);
+                if (m && z) {
+                    memcpy(z, m, (size_t)e.size);
+                    z[e.size] = 0;
+                    CHECK(strstr(z, "range=limited:pools=1:frame-threads=1 -video_track_timescale") && strstr(z, "-an -threads 1 {output}"),
+                          "libx265: pools and frame threads forced in the recorded command");
+                }
+                free(z);
+                ypak_close(&p);
+            }
+            CHECK(build_text(t5, W "/video265_again.ysppak", err, sizeof err) == 0 && same_file(W "/video265.ysppak", W "/video265_again.ysppak"),
+                  "libx265 twice: same bytes");
+        } else if (strstr(err, "Unknown encoder") || strstr(err, "Media Foundation")) {
+            /* an ffmpeg without libx265, or no HEVC decoder in Media Foundation */
+            printf("tool_test: the libx265 pack was not built here (%s)\n", err);
+        } else {
+            CHECK(0, "libx265 through ffmpeg: %s", err);
+        }
+    }
+#endif
 }
 
 /* The pack both builds make: the core and the full tool must give the same
@@ -1299,6 +1371,7 @@ int main(void) {
     }
     test_core_pack();
     test_resample();
+    test_ffmpeg_refusals();
     test_video();
     test_refusals();
     printf("tool_test: %d checks, %d failed\n", g_checks, g_fail);

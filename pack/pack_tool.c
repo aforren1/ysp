@@ -1530,6 +1530,38 @@ static int ffmpeg_version(const char* prog, char* out, size_t cap) {
     return 0;
 }
 
+/* Decided 2026-10-14 (docs/pack.md 13): every encoder measured gives other
+ * bytes with another thread count (libx264, libx265, mpeg1video,
+ * mpeg2video), and ffmpeg's default count is the machine's core count, so
+ * the tool encodes on one thread itself: `-threads 1` before the output,
+ * and for libx265, whose own thread pool also changes the bytes,
+ * `pools=1:frame-threads=1` in its x265-params. A thread setting of the
+ * author's is refused, so these cannot be overridden by accident. */
+static const char* const forced_x265 = "pools=1:frame-threads=1";
+
+static int thread_setting(const char* a) {
+    static const char* const keys[] = { "threads=", "pools=", "frame-threads=", "lookahead-threads=", NULL };
+    int k;
+    const char* p;
+    for (k = 0; keys[k]; k++)
+        for (p = strstr(a, keys[k]); p; p = strstr(p + 1, keys[k]))
+            if (p == a || p[-1] == ':' || p[-1] == ',') return 1;
+    return 0;
+}
+
+static int ffmpeg_threads_ok(B* b, E* e, const jv* ff) {
+    int i;
+    for (i = 0; i < jn(ff); i++) {
+        const char* a = jat(ff, i)->u.s;
+        int params = !strcmp(a, "-x264-params") || !strcmp(a, "-x265-params") || !strcmp(a, "-x264opts");
+        if (!strncmp(a, "-threads", 8) || (params && i + 1 < jn(ff) && thread_setting(jat(ff, i + 1)->u.s)))
+            return cfail(b->c, YPAK_ERR_FORMAT, "'%s': remove the thread setting from 'ffmpeg' (%s%s%s): the tool encodes on one thread itself "
+                         "(-threads 1, and %s for libx265), because the bytes change with the thread count and a pack must rebuild the same "
+                         "on any machine", e->name, a, params ? " " : "", params ? jat(ff, i + 1)->u.s : "", forced_x265);
+    }
+    return 0;
+}
+
 /* The recorded derivation of an entry of the pack being rebuilt. */
 static const jv* prior_deriv(B* b, const char* name) {
     jv* ents = b->prior_man ? jget(b->prior_man, "entries") : NULL;
@@ -1643,9 +1675,10 @@ static int build_video(B* b, E* e) {
             const jv* a = i < na ? jat(ff, i) : jat(fin, i - na);
             if (a->type != J_STR || !a->n) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': each ffmpeg argument is a non-empty string", e->name);
         }
+        if (ffmpeg_threads_ok(b, e, ff)) return YPAK_ERR_FORMAT;
         /* the source's SHA-256 goes into the manifest whatever makes the bytes */
         if (!load_source(b, e, src, &n)) return YPAK_ERR_IO;
-        argv = (const char**)calloc_c(b->c, sizeof(char*) * (size_t)(na + ni + 12));
+        argv = (const char**)calloc_c(b->c, sizeof(char*) * (size_t)(na + ni + 16));
         if (!argv) return cfail(b->c, YPAK_ERR_NOMEM, "out of memory");
         snprintf(media, sizeof media, "%s.v%d%s", b->tmp, vi, is_mp4 ? ".mp4" : ".mpg");
         k = 0;
@@ -1655,7 +1688,28 @@ static int build_video(B* b, E* e) {
         argv[k++] = "-i";
         at_src = k;
         argv[k++] = srcpath;
-        for (i = 0; i < na; i++) argv[k++] = jat(ff, i)->u.s;
+        {
+            int x265 = 0, merged = 0;
+            for (i = 0; i < na; i++) x265 |= !strcmp(jat(ff, i)->u.s, "libx265");
+            for (i = 0; i < na; i++) {
+                const char* a = jat(ff, i)->u.s;
+                if (x265 && i > 0 && !strcmp(jat(ff, i - 1)->u.s, "-x265-params")) {
+                    /* the author's x265-params with the forced pools appended */
+                    size_t al = strlen(a);
+                    char* m = (char*)calloc_c(b->c, al + strlen(forced_x265) + 2);
+                    if (!m) return cfail(b->c, YPAK_ERR_NOMEM, "out of memory");
+                    memcpy(m, a, al);
+                    m[al] = ':';
+                    memcpy(m + al + 1, forced_x265, strlen(forced_x265));
+                    a = m;
+                    merged = 1;
+                }
+                argv[k++] = a;
+            }
+            if (x265 && !merged) { argv[k++] = "-x265-params"; argv[k++] = forced_x265; }
+            argv[k++] = "-threads";
+            argv[k++] = "1";
+        }
         argv[k++] = media;
         argv[k] = NULL;
         /* the recorded command: the program's name and placeholders for the
