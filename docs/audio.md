@@ -1811,6 +1811,40 @@ and the block takes each new published pair. The rule is the one v0.4.1
 measured; only the samples it sees changed. The describe line's
 `passed` count is now the reader's.
 
+### One context
+
+`av_sync.c` opens the sound in the Start tap, then closes it and opens it
+again after the screen's setup (a stall of seconds with a
+ScriptProcessorNode running left its timing wrong). Before this change
+the second open made a new AudioContext, about 2 s after the tap.
+Chrome and Firefox let it start (the page had a user activation once),
+but WebKit starts audio only from a gesture, so on iOS Safari it may wait
+suspended, and the open fails.
+
+The web device now keeps the page's AudioContext on the ScriptProcessorNode
+path. Around miniaudio's device init it puts a wrapper in place of
+`AudioContext`: the first context made is the kept one when it is free and
+at the asked rate, else a new one that is kept. miniaudio's sample-rate
+queries in the same init get the same context, and the kept context's
+`close()` does nothing. `yau_close()` suspends it (miniaudio's stop), the
+next `yau_open()` resumes it with a new ScriptProcessorNode. No API
+changed; a program that reopens needs no change. A second output open at
+the same time, another rate, a DUPLEX device and the AudioWorklet path
+(whose worklet module a context registers once) make their own context,
+as before.
+
+### The warm-up limit
+
+`yau_open()` waited at most 3 s from the device's start for the fit to
+span 0.5 s. A browser's context runs some time after it is made (0.23 to
+0.72 s in Chrome 155, 0.40 to 0.79 s in Firefox 157 on the
+ScriptProcessorNode path, measured by the probe), and that time came out
+of the 3 s. Now the 3 s run from the first callback the frame thread
+sees, and the whole wait is at most 5 s from the start. The cap lets the
+first callback come 2 s late, 2.5 times the latest measured, with the
+full 3 s after it; a device that never calls back fails after 5 s, not 3.
+The error says which: no callback, or no steady callbacks.
+
 ### Measurements
 
 The v0.5.1 and v0.5.2 builds of the same `av_sync.c`. Headless rows: one
@@ -1841,6 +1875,24 @@ passed nearly every block's pair; a single pair far below the line, as
 headless Chrome once gave (34 ms off, [web.md](web.md)), would have held
 v0.5.1's reports for 32 blocks (1.4 s), and holds v0.5.2's for 32 reads
 (0.3 s). That is a reading of the rule, not a measurement.
+
+With one context and the warm-up limit (the final v0.5.2), headless, the
+same conditions, one batch per cell, `tests/probe/web_audio/run.sh`. A
+driver failure (a timeout or a detached frame before the page gave a
+result; 3 in 128 runs) is not an open, so two cells got extra opens:
+
+| | Opens | Silent | AudioContexts made per open | Sound after the reopen |
+|---|---|---|---|---|
+| Firefox, ScriptProcessorNode | 30 | 0 | 1 | 30 of 30 |
+| Firefox, AudioWorklet | 31 | 0 | 3 (the device's, 2 rate queries) | no reopen |
+| Chrome, ScriptProcessorNode | 31 | 0 | 1 | 31 of 31 |
+| Chrome, AudioWorklet | 30 | 0 | 3 | no reopen |
+
+On the ScriptProcessorNode path the reopen's `resume()` came 4.1 to 9.7 s
+after the tap and ran the kept context in both browsers. Firefox reported
+no transient activation at that call in all 30 opens; headless Chrome
+under the driver reported one even 9.7 s after the tap, so Chrome's runs
+do not show the case without one. 0 XRUN records on that path.
 
 In the headless Firefox ScriptProcessorNode runs with sound, every
 trial's flash record was 16.7 or 33.3 ms (one or two frames) before its

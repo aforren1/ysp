@@ -752,6 +752,13 @@
  *     after a user gesture (a tap or click on the page; on iOS Safari the
  *     gesture must come first): open from the gesture's handler, or the
  *     context waits for miniaudio's next tap.
+ *     ONE CONTEXT (v0.5.2): on the ScriptProcessorNode path the page keeps
+ *     the first output's AudioContext. yau_close() suspends it (its
+ *     close() does nothing), and a later yau_open() at the same rate
+ *     resumes it with a new ScriptProcessorNode, so a reopen after the
+ *     gesture needs no new gesture. A second output open at the same time,
+ *     or another rate, gets a context of its own. The AudioWorklet path
+ *     and a DUPLEX device make a new context at each open, as before.
  *     Positions: a timer on the main thread reads getOutputTimestamp()
  *     every 10 ms (and the ScriptProcessorNode's handler each block):
  *     contextTime, the context frame the browser says is at the output,
@@ -894,6 +901,12 @@
  *          up in 3 s, and yau_open() failed: 8 of 30 opens of av.html had
  *          no sound, 0 of 30 with the fix (docs/audio.md, "Web
  *          envelope"). The describe line's passed count is the reader's.
+ *          ONE CONTEXT: on the ScriptProcessorNode path a reopen resumes
+ *          the page's kept AudioContext instead of making one after the
+ *          user's tap, which iOS Safari may keep suspended (no iPhone
+ *          tested; docs/web.md has the hand test). WARM-UP:
+ *          open() gives the fit 3 s from the first callback, at most 5 s
+ *          from the start (was 3 s from the start).
  *   v0.5.1 - EXCLUSIVE START: WASAPI exclusive mode writes one silent
  *          buffer before Start, and position reports count stream frames
  *          from after it. miniaudio started the stream on an empty buffer;
@@ -1000,7 +1013,11 @@
  *   ScriptProcessorNode 8 of 30 against 0 of 30 headless and 3 of 15
  *   against 0 of 15 headed; Firefox AudioWorklet, Chrome on both paths:
  *   none in either. Firefox's first open took 1.4 to 2.3 s (was 2.0 to
- *   3.0 s). Not run on a phone.
+ *   3.0 s). With ONE CONTEXT and the WARM-UP limit, headless: 0 silent
+ *   in 30, 31, 31 and 30 opens (Firefox and Chrome, ScriptProcessorNode
+ *   and AudioWorklet); one AudioContext per ScriptProcessorNode page, and
+ *   the reopen played in 61 of 61. Core test test_warm_end; mutants
+ *   warm-01 and warm-02 killed. Not run on a phone or in Safari.
  *   STATUS: v0.5.1, 2026-10-13 (docs/audio.md, "Exclusive start"): WASAPI
  *   exclusive on the test laptop's speakers (Realtek behind Intel SST, 480
  *   frames), MinGW gcc 16.1, interleaved with v0.5.0 under the measurement
@@ -2000,9 +2017,10 @@ YAU_API const char* yau_version(void);
 YAU_API const char* yau_strerror(int code);
 
 /* Opens the device in the project format or fails (STRICT OPEN), starts it
- * silent, and waits until the fit spans 0.5 s (at most 3 s; not for a
- * CUSTOM device, whose render calls are the caller's). The handle must be
- * zeroed or closed. On false, yau_error() says why. */
+ * silent, and waits until the fit spans 0.5 s (at most 3 s from the first
+ * callback and 5 s from the start; not for a CUSTOM device, whose render
+ * calls are the caller's). The handle must be zeroed or closed. On false,
+ * yau_error() says why. */
 YAU_API bool        yau_open(yau_audio* au, const yau_desc* desc);
 
 /* Stops the device, completes every record (sounds that never played are
@@ -2327,6 +2345,20 @@ static void yau__web_sleep_until(int64_t t) {
 #define YAU__BUCKET_POS_NS 200000000LL /* and per 200 ms of reports         */
 #define YAU__REFIT_NS 1000000000LL    /* refit once a second                */
 #define YAU__WARM_NS   500000000LL    /* open() waits for this much fit     */
+/* WARM-UP (v0.5.2): open() gives the fit 3 s from the device's first
+ * callback, and waits at most 5 s from its start. A browser's context ran
+ * 0.23 to 0.79 s after it was made (Chrome 155, Firefox 157, docs/audio.md,
+ * "Web envelope"), and a 3 s limit from the start left Firefox's
+ * ScriptProcessorNode fit 2.2 s. The cap lets the first callback come 2 s
+ * late, 2.5 times the latest measured, with the full 3 s after it. */
+#define YAU__WARM_LIMIT_NS 3000000000LL
+#define YAU__START_CAP_NS  5000000000LL
+/* When open() stops waiting: t_first is the first callback seen, -1 none. */
+static int64_t yau__warm_end(int64_t t_start, int64_t t_first) {
+    int64_t cap = t_start + YAU__START_CAP_NS;
+    if (t_first < 0) return cap;
+    return t_first + YAU__WARM_LIMIT_NS < cap ? t_first + YAU__WARM_LIMIT_NS : cap;
+}
 #define YAU__SLOPE_NS  5000000000LL   /* fit the slope from this span on    */
 #define YAU__REANCHOR_NS 2000000000LL /* reports early this long: start over */
 #define YAU__HALT_REPORTS 3           /* late reports in a row that make a halt */
@@ -3590,6 +3622,53 @@ EM_JS(void, yau__web_detach, (int idx), {
     var ma = typeof window !== 'undefined' ? window.miniaudio : null;
     var d = ma ? ma.get_device_by_index(idx) : null;
     if (d && d.yauTimer) { clearInterval(d.yauTimer); d.yauTimer = 0; }
+    if (d && d.webaudio && d.webaudio.yauKept) d.webaudio.yauBusy = 0;
+})
+
+/* ONE CONTEXT (v0.5.2): around miniaudio's ScriptProcessorNode device init
+ * (playback only), the first AudioContext made is the device's: the
+ * page's kept context when it is free, open and at that rate, else a new
+ * one, which is kept. Later ones in the same init (miniaudio's sample-rate
+ * queries) get the device's context too. A kept context's close() does
+ * nothing: yau_close() suspends it and the next yau_open() resumes it.
+ * So only the first open makes a context, inside the user's tap; a new
+ * context made after the tap may stay suspended on iOS Safari (WebKit
+ * starts audio only from a gesture; not tested here). on = 0 puts
+ * the page's AudioContext back; 2 does that and frees the kept context
+ * (the init failed). */
+EM_JS(void, yau__web_hold, (int on), {
+    if (typeof window === 'undefined') return;
+    var w = window, AC = w.yauRealAC || w.AudioContext || w.webkitAudioContext, dev = null;
+    if (!AC) return;
+    if (on !== 1) {
+        if (on === 2 && w.yauCtx) w.yauCtx.yauBusy = 0;
+        if (w.yauRealAC) { w.AudioContext = w.yauRealAC; if (w.yauRealWAC) w.webkitAudioContext = w.yauRealWAC; }
+        w.yauRealAC = w.yauRealWAC = null;
+        return;
+    }
+    w.yauRealAC = w.AudioContext || AC;
+    w.yauRealWAC = w.webkitAudioContext || null;
+    function held(opts) {
+        var k = w.yauCtx, rate = opts && opts.sampleRate;
+        if (dev) return dev.yauKept ? dev : (opts === undefined ? new AC() : new AC(opts));
+        if (k && !k.yauBusy && k.state !== 'closed' && (!rate || k.sampleRate === rate)) {
+            dev = k;
+        } else {
+            dev = opts === undefined ? new AC() : new AC(opts);
+            if (!k || !k.yauBusy) {
+                if (k && k.state !== 'closed') k.yauClose();
+                dev.yauKept = 1;
+                dev.yauClose = dev.close;
+                dev.close = function() { return Promise.resolve(); };
+                w.yauCtx = dev;
+            }
+        }
+        dev.yauBusy = 1;
+        return dev;
+    }
+    held.prototype = AC.prototype;
+    w.AudioContext = held;
+    if (w.yauRealWAC) w.webkitAudioContext = held;
 })
 
 /* The context frame the block now rendered plays at: the AudioWorklet's
@@ -3810,7 +3889,14 @@ static int yau__ma_open(void* ctx, const yau_device_open* in, yau_device_caps* c
      * p99 callback interval error under load, with no underrun in any
      * (docs/audio.md) */
     dc.wasapi.usage = ma_wasapi_usage_pro_audio;
+#if defined(MA_HAS_WEBAUDIO) && !defined(MA_USE_AUDIO_WORKLETS)
+    /* ONE CONTEXT: the ScriptProcessorNode path reuses the page's context */
+    if (m->backend == ma_backend_webaudio && !m->cap) yau__web_hold(1);
     r = ma_device_init(&m->ctx, &dc, &m->dev);
+    if (m->backend == ma_backend_webaudio && !m->cap) yau__web_hold(r == MA_SUCCESS ? 0 : 2);
+#else
+    r = ma_device_init(&m->ctx, &dc, &m->dev);
+#endif
     if (r != MA_SUCCESS) {
         snprintf(err, err_cap, "ysp_audio: %s did not open the device%s (%s)",
                  ma_get_backend_name(m->backend), in->exclusive ? " in exclusive mode" : "",
@@ -4985,16 +5071,22 @@ YAU_API bool yau_open(yau_audio* au, const yau_desc* desc) {
     }
     au->started = 1;
     if (d.backend != YAU_BACKEND_CUSTOM) {
-        int64_t end = YAU__NOW() + 3000000000LL;
+        int64_t t_start = YAU__NOW(), t_first = -1;
         while (!au->fit_ft.ready) {
             (void)yau__update_rc(au);
             if (au->fit_ft.ready) break;
-            if (yau__ld32(&au->lost) || YAU__NOW() > end) {
+            if (t_first < 0 && yau__ld64(&au->w_pub) > 0) t_first = YAU__NOW();
+            if (yau__ld32(&au->lost) || YAU__NOW() > yau__warm_end(t_start, t_first)) {
                 /* which of three failures: a lost device, no callbacks at
                  * all, or callbacks too irregular for the fit to warm up */
-                yau__err(au, "ysp_audio: device '%s' gave no steady callbacks within 3 s "
-                           "(lost=%u, fit points=%u, fits=%u)", au->dcaps.name,
-                           (unsigned)yau__ld32(&au->lost), (unsigned)au->fit_ft.n, (unsigned)au->fit_ft.gen);
+                if (t_first < 0)
+                    yau__err(au, "ysp_audio: device '%s' gave no callback within %d s of its start (lost=%u)",
+                             au->dcaps.name, (int)(YAU__START_CAP_NS / 1000000000LL), (unsigned)yau__ld32(&au->lost));
+                else
+                    yau__err(au, "ysp_audio: device '%s' gave no steady callbacks (%d s from the first, %d s from "
+                               "the start; lost=%u, fit points=%u, fits=%u)", au->dcaps.name,
+                               (int)(YAU__WARM_LIMIT_NS / 1000000000LL), (int)(YAU__START_CAP_NS / 1000000000LL),
+                               (unsigned)yau__ld32(&au->lost), (unsigned)au->fit_ft.n, (unsigned)au->fit_ft.gen);
                 yau_close(au);
                 return false;
             }

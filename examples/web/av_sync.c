@@ -240,8 +240,9 @@ int main(int argc, char** argv) {
      * screen's setup above held it for about 2 s. After such a stall its
      * blocks' playbackTime no longer told where they played (Firefox 157:
      * every onset 7.7 s off; Chrome 154: 51 to 63 skipped blocks), so the
-     * sound opens again now. The page has had its tap: Chrome and Firefox
-     * let the new AudioContext start. */
+     * sound opens again now. ysp/audio.h keeps the AudioContext the tap
+     * started and resumes it (ONE CONTEXT, v0.5.2): a context made now,
+     * after the tap, may stay suspended on iOS Safari. */
     if (have_audio) {
         yau_close(&au);
         have_audio = 0;

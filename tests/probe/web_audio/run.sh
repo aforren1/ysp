@@ -1,14 +1,28 @@
 #!/bin/sh
 # Opens the sound demo (av.html) COUNT times in each browser on each audio
 # path and counts the opens with no sound (docs/web.md, "How to check the
-# sound at open"). Git Bash, from the repo root, with node, npm and uv on
-# PATH and a site built by examples/web/build.sh:
+# sound at open"; docs/audio.md, "Web envelope").
+#
+# Setup, once:
+# - Node.js 18 or later with npm on PATH (emsdk's node works:
+#   PATH=<emsdk>/node/<version>_64bit:$PATH).
+# - uv on PATH (it runs serve.py and summary.py).
+# - Google Chrome and Mozilla Firefox installed. open.mjs looks in the
+#   Windows default folders; give another one with --exe PATH (one browser
+#   a run: BROWSERS=chrome or BROWSERS=firefox).
+# - puppeteer-core: this script installs it into build/web_audio_probe on
+#   its first run (npm install puppeteer-core, no browser download). It
+#   drives Chrome through CDP and stock Firefox through WebDriver BiDi.
+# - A site built by examples/web/build.sh (emsdk, see docs/web.md).
+#
+# Run, from the repo root in Git Bash or a POSIX shell:
 #   sh tests/probe/web_audio/run.sh SITE [COUNT] [--headed] [open.mjs options...]
 # BROWSERS (default "firefox chrome") and PATHS (default "fallback worklet")
 # choose the runs; the servers use PORT (default 8871) and PORT + 1. Each
 # open starts a new browser and takes about 20 s. The RESULT lines go to
 # build/web_audio_probe/<browser>_<path>.txt (appended), then summary.py
-# prints the silent opens and the counts.
+# prints the silent opens and the counts. Run nothing else while it
+# counts: the ScriptProcessorNode path shares the page's main thread.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../../.." && pwd)

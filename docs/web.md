@@ -138,7 +138,12 @@ sets no COOP or COEP headers, so `coi-serviceworker.js` isolates the pages
    frames gave onsets up to 5.6 ms off their plan. After the screen's
    setup, close the sound and open it again: a main-thread stall of
    seconds with a ScriptProcessorNode running left its timing wrong (see
-   [Audio](#audio-what-the-records-say)).
+   [Audio](#audio-what-the-records-say)). The second open does not make
+   a new AudioContext: `ysp/audio.h` (v0.5.2) keeps the one the tap
+   started, suspends it at `yau_close()` and resumes it at the next
+   `yau_open()`, so the reopen needs no second tap. Do not make an
+   AudioContext of your own after the tap: iOS Safari may keep it
+   suspended.
 4. Plan each sound at least `yau_lead_ns()` ahead (about 60 ms on the
    AudioWorklet path, 140 to 170 ms on the ScriptProcessorNode path in
    Chrome on the laptop below) with `yau_play_at()`, call `yau_update()`
@@ -226,9 +231,27 @@ By hand, on each phone, tablet or desktop browser:
 6. For each silent open, download the session log, and write down the
    browser, its version, the device and the path.
 
-On iOS Safari, an AudioContext starts only from a tap: if a run is
-silent, tap the page once during the flashes and write down whether the
-clicks start then.
+On iOS Safari (and iPadOS Safari), WebKit starts audio only from a tap,
+and the ScriptProcessorNode path opens the sound twice: in the Start tap,
+and again after the screen's setup, about 2 s later and outside the tap.
+The second open resumes the context of the first (v0.5.2). Check that
+on each iPhone or iPad:
+
+1. Turn off silent mode (the switch or Control Center) and Low Power
+   Mode, and set the volume to about half.
+2. Open `av.html` in a private tab, so that the status line says
+   `ScriptProcessorNode (no threads)`.
+3. Tap Start once. Do not touch the screen again until the results show.
+4. Listen for a click with each flash. After the run, the summary's first
+   row must not say `no audio opened`, and the trials table must have an
+   audio onset for each trial.
+5. Do steps 3 and 4 ten times (reload the page each time), then ten times
+   in a normal tab (`AudioWorklet (threads)`).
+6. If a run is silent, do it once more and tap the page once while it
+   says `Preparing...` (the second open waits up to 5 s for its first
+   callback). Write down whether the clicks then play. A context that
+   waits for a tap is the WebKit rule this check looks for. Download the
+   session log and send it with the iOS version.
 
 ## Reference
 
