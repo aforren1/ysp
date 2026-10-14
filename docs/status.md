@@ -85,6 +85,7 @@ Purpose: The shared base: monotonic clock, deadline waits, thread elevation, a o
 
 Status:
 
+- v0.9.0: a virtual clock for simulated runs (`yrt_virtual_begin()`, virtual timers), and `yrt_real_ns()`, the real clock for costs on either clock: the driver thread's waits move it, other threads wait for it, and ysp/screen.h's SIM backend, ysp/audio.h's null device and ysp/video.h follow it. The CI list of 49 `--sim` and `--null` runs gave the same data files and output in three idle runs and two beside 24 CPU-bound processes (MSVC), and the same data with MinGW-w64; the lines that differ print real CPU time. Real-clock cost inside the run-to-run spread: `yrt_now_ns()` 24.3 to 26.3 ns against 23.5 to 26.1 ns pinned, the screen's per-frame header cost unchanged. 13 of 13 new mutants caught ([Virtual clock](rt.md#virtual-clock-v090)).
 - v0.8.0 (the [Conventions](conventions.md): `yrt_now_ns()` and every time `int64_t` ns, `YRT_S()`/`YRT_MS()`/`YRT_US()`, worker and pump open/close, `yrt_fit_open()`; 2 mutants added, both caught).
 - v0.7.0 (per-user folders: `yrt_user_dir()`, the rules of gfx's program cache folder, tested on Windows, WSL2 and emcc).
 - v0.6.0 (the device clock fit: on synthetic devices within tens of us of the truth for dense pairs, ms for sparse pairs behind a 16 ms timer; 17 of 17 mutants caught; no real device yet).
@@ -161,10 +162,11 @@ Status:
 - Platforms: Windows, Linux, WebAssembly; macOS not run
 - Needs: OS file mapping (`YPAK_NO_FILE`: nothing)
 
-Purpose: Reads a ysp pack (a store-only zip, entries aligned to 4096, a JSON manifest, XXH64 over 1 MiB chunks, the pack ID in the comment): from a mapped file, memory, a range reader, or bytes a browser fetched; lookups by name, zero-copy entries verified on first use, cursors that verify each chunk as it streams; views of the pack's own forms (curve sets, artwork, glyph runs, shaders, textures with QOI). Hostile input is checked before any pointer leaves it. The pack tool (`pack/ysp/pack_tool.h`, the `ypak` CLI; `YSP_BUILD_PACK`) builds, verifies, rebuilds and appends packs; it needs only lodepng, and glyph runs also need the layout library (`YSP_BUILD_LAYOUT`, HarfBuzz and Skribidi)
+Purpose: Reads a ysp pack (a store-only zip, entries aligned to 4096, a JSON manifest, XXH64 over 1 MiB chunks, the pack ID in the comment): from a mapped file, memory, a range reader, or bytes a browser fetched; lookups by name, zero-copy entries verified on first use, cursors that verify each chunk as it streams; views of the pack's own forms (curve sets, artwork, glyph runs, shaders, textures with QOI). Hostile input is checked before any pointer leaves it. The pack tool (`pack/ysp/pack_tool.h`, the `ypak` CLI; `YSP_BUILD_PACK`) builds, verifies, rebuilds and appends packs; it needs lodepng, stb_image, pl_mpeg and libsamplerate (all fetched by `tools/vendor_pack.py`), and glyph runs also need the layout library (`YSP_BUILD_LAYOUT`, HarfBuzz and Skribidi)
 
 Status:
 
+- Tool v0.4.0 (2026-10-13; the header unchanged): phase 3. Video with its index (MPEG-1 everywhere, MP4 on Windows) as given or made by a recorded ffmpeg step that the tool runs on one thread (any machine rebuilds the same bytes; 1.8 times slower on a 640 x 480 clip with x264, 10 times at 1080p), which a rebuild runs again only with the same ffmpeg and otherwise takes from the pack; frame sequences with every frame checked; tables from `.xlsx` (all 23 PsychoPy demo workbooks, 2,305 cells equal to openpyxl's); textures from JPEG (stb_image; 14 of 15 demo photographs, the 15th has a display's ICC profile); sRGB ICC profiles accepted; opt-in resampling (libsamplerate, 140 dB below a test sine). Tests 255 checks (MSVC), 242 under ASan and UBSan on Linux (the same corpus pack ID as MSVC), 89 in the readers' own test; 38 of 38 mutations caught; 922,080 fuzz inputs after the one finding (a JPEG too short for its frame, now refused), none since. Throughput: a workbook 2.2 ms, a photograph 19 ms, a video frame indexed 3.7 ms. [Design notes](pack.md#13-phase-3-what-was-built-tool-v040-2026-10-13).
 - v0.2.0 (the [Conventions](conventions.md): `ypak_open()` returns `bool`, true with `pk.need_len > 0` for an incremental open; `pk.error_code` and `ypak_strerror()`; concurrent failures write the message under an atomic claim).
 - v0.1.0. Every bit flip and truncation of a test pack refused; 29 rule faults refused for their own reason; a virtual 4.3 GB entry and 65,537 entries (zip64); ASan and UBSan clean on Linux; 36 of 36 mutations caught; 28.7 million fuzz inputs, no finding. Open 0.2 ms at 100 entries, 15 ms at 10,000; lookup 0.06 to 0.14 us; verification 3.4 to 3.6 GB/s on a 1 GiB pack; 0 allocations after open. The tool gives the same bytes from MSVC, MinGW, emcc and Linux gcc builds; six zip readers read its packs. Tool v0.2.0 (2026-10-09): a TEXTURE entry stores the encoding `ygfx_texture()` takes, and sRGB codes in RGB need `"primaries"` in the description. Tool v0.3.0 (2026-10-10): the core tool, without the layout library, packs tables, WAV, textures and every other kind but glyph runs to the same bytes as the full tool (MSVC `ypak.exe` 0.45 MB against 1.85 MB). [Design notes](pack.md).
 
@@ -314,6 +316,7 @@ Purpose: The rig profile ("ysp-rig 1", docs/devices_spec.md 11.2): which device 
 
 Status:
 
+- v0.4.0: `display.latency`, the photodiode run behind the onset offset, checked at load; `yrig_read_loopback()` reads the new input bounds and display onset files, and a bounds file is now compared with the profile (DIFFERS). Two tools: `rigfile_bounds` (an input's bounds against a reference line board, each difference widened by its bracket; in 160 of 160 simulated runs over seeds and USB tails the bounds contained the truth) and `rigfile_onset` (the offset from a photodiode run's CSV). 501 checks; 37 of 37 mutations caught (8 new). Run on simulated boards and a generated CSV only. [The tools](device.md#the-rig-profile-tools-ysprigfileh-v040-2026-10-13).
 - v0.3.0 (the [Conventions](conventions.md): `yrig_open_device()` replaces `yrig_start()`, its message in `ydev_error()`).
 - v0.2.0. 403 checks pass on MSVC and MinGW, 410 on WSL2 gcc with the planted-folder checks; canonical bytes pinned; 66 refusals by field, 7 more for `lsl` roles; binding through a fake transport; 28 of 28 mutations caught. A 4-role profile read and checked in 18 to 23 us. [Design notes](device.md#how-to-keep-a-rigs-devices-and-latencies-in-its-rig-profile).
 
@@ -388,6 +391,7 @@ Purpose: The stimulus display: window, GL ES 3.0 context, display modes and the 
 
 Status:
 
+- v0.8.0: BACKEND_SIM on ysp/rt.h's virtual clock: no frame drops and the same records every run; `clock=virtual` in the describe line; a real backend refused there; a record's phases are costs on the real clock. The `--sim` checks widened for loaded CI runners are exact again, `trial_mouse_tracking --raw-mice` included. 2 of 2 new mutants caught ([SIM on a virtual clock](screen.md#sim-on-a-virtual-clock-v080)).
 - v0.7.2: on the web backend `yscr_open()` and `yscr_close()` no longer leave a fullscreen the page entered, and a page shown again keeps it: SDL's port called `document.exitFullscreen()` when it made, destroyed or showed the window. `av.html` lost fullscreen 2.2 to 3.7 s into each run before (Chrome 154 and Firefox 157, isolated and not); after, every demo kept it until the page left it at the end. The pages now ask again on the next key or tap after a browser's own exit ([web.md](web.md#fullscreen)). JavaScript only: no native test or mutant.
 - v0.7.1: on the web backend `yscr_event_input()` stamps key, mouse, touch and pen presses and releases with the DOM event's `timeStamp` where it finds it (`dom_stamps=` in the describe line), and the describe line adds `dpr=`. Checked with scripted keys and taps in Chrome 154 (headless, and Pixel 7 emulation); no physical key or touch measured. The matching is JavaScript: no native test or mutant.
 - v0.7.0: `YSCR_BACKEND_WEB` ([web.md](web.md)): under Emscripten, SDL3's canvas and the header's WebGL2 context, frames paced by awaited `requestAnimationFrame` callbacks (ASYNCIFY or JSPI), records from the callback times as estimates (`YSCR_TIER_WEB`, `YSCR_PATH_BROWSER`), the period measured at open, settling that warns and never fails, `YSCR_EV_VISIBILITY` records. Run in Chrome 154, Edge 155 and Firefox 154 to 157; no light measured. 4 mutants added.
@@ -418,6 +422,7 @@ Purpose: Sound at a time, and its capture, on the ysp/rt.h clock: `yau_play_at(b
 
 Status:
 
+- v0.6.0: on ysp/rt.h's virtual clock `BACKEND_NULL` is the header's own device, its blocks on a virtual timer: the fit exact, every onset of the `--sim` examples on its plan within half a sample (was 1 to 10 ms allowed); a real backend refused there. 8 of 8 new mutants caught ([The null device on a virtual clock](audio.md#the-null-device-on-a-virtual-clock-v060)).
 - v0.5.1: WASAPI exclusive mode writes one silent buffer before Start. Without it, 19 of 35 exclusive opens on this laptop (Realtek behind Intel SST) underran for the whole run: 20 to 26 XRUN records a second, LATE at every lead, in every version tested (v0.3.1 to v0.5.0). With it, 0 of 22; `audio_schedule --exclusive` gives a 125 ms shortest safe lead again, residuals -12.8 to +10.0 us. A device with position reports now fits reports only, which removed a false halt record at each exclusive open. Shared mode unchanged. 1 new mutant killed. [Exclusive start](audio.md#exclusive-start-v051).
 - v0.5.0: capture. On the laptop's SST microphone array through WASAPI: 0 losses and 0 drops in 3 minutes idle and 3 under load (shared) and 30 s at 480 and 144 frames (exclusive); the input fit's spread 14 to 70 us; duplex with the speakers, both fits within 0.2 ppm, 0 underruns. Every injected stall of 20 to 300 ms lost the stall less about 12 ms and was found, one record each; 10 ms lost nothing. Through the air, speakers to microphones: 36.6 ms p50, sd 0.18 ms (shared output, exclusive input; the shared input does not pass the speakers' sound). Capture times are tier 3: no input checked against a reference. 22 capture mutants killed. In a browser: compiled with emcc, tier WEB, never run. [Design notes and how-to guides](audio.md#capture-v050).
 - v0.4.1: `YAU_BACKEND_WEB` ([web.md](web.md), "Audio"): position reports from the AudioContext's `getOutputTimestamp()` on miniaudio's AudioWorklet path (threads, an isolated page) and ScriptProcessorNode path (no threads), `YAU_TIER_WEB` (5) for every web onset, main-thread waits that yield. Chrome 154 headed on this laptop, `av.html`, 3 runs a path: sound minus light (both the browser's estimates) within -0.26 to +0.25 ms (AudioWorklet) and -0.25 to +0.28 ms (ScriptProcessorNode, 2048 frames); the browser's render-to-onset figure 52 to 55 ms and 111 to 127 ms. Firefox 157: one guarded AudioWorklet run, -1.27 to +0.03 ms; its pairs need a lower envelope and an `outputLatency` correction. Sound at the speaker not measured. 2 of 2 new mutants killed.
@@ -438,6 +443,7 @@ Purpose: Stimuli on GL ES 3.0 over ysp/screen.h: signed-distance shapes with a s
 
 Status:
 
+- v0.15.1: the program cache's open and store times and a text's build time read the real clock (`yrt_real_ns()`), so they are costs also on ysp/rt.h's virtual clock, where they read 0 before. No other change.
 - v0.15.0: `ygfx_open_screen()` (the screen and the gfx with OPEN START's overlap, then primed, in one call), `ygfx_show_until_key()` (an instruction or break screen), and with ysp/outline.h first `ygfx_text_make()` (text by advances, wrapped and centered, its program primed: the text's first frame 0.8 to 1.3 ms of CPU against 10.1 to 11.0 ms unprimed on the Iris Xe); 5 of 5 new mutants caught.
 - v0.14.0: capture writes PPM only (the user, 2026-10-10): `YGFX_IMAGE_PNG`, `YGFX_IMAGE_PPM`, `ygfx_capture_desc.format` and the `format` argument of `ygfx_image_write()` removed, with the stored-PNG writer and its CRC-32 and Adler-32; the PPM writer's two-line comment tested; PNG's 3 mutants removed, 1 added.
 - v0.13.1: fixed under WebGL: a pass into a render target unbinds its texture from every unit first; WebGL refused every draw with it bound to a sampled unit (133 on the gallery's first page in Chrome 154). No change natively.
@@ -470,9 +476,24 @@ Purpose: A movie as a stimulus: on each display frame the frame due at the predi
 
 Status:
 
+- v0.4.0: on ysp/rt.h's virtual clock a movie decodes inline, and its decode and upload times stay real (`video_play --sim` showed 6 of 60 frames on a decode thread, a different count each run). 1 of 1 new mutant caught.
 - v0.3.1: pl_mpeg.h builds under `-Wfloat-conversion` (gcc and clang); no change to ysp code.
 - v0.3.0 (the [Conventions](conventions.md): `yvid_seq_open()`/`_finish()`/`_close()`, `yvid_probe()` returns a code, every failing call writes its message; 2 mutants added).
 - v0.2.2: XXH64 twice as fast on MSVC (11.9 to 14.1 GB/s), the same hashes.
 - v0.2.1: a custom decoder that returned not-ready was never woken again (a lost wake-up on the decode thread); now it is retried each display frame, and after an outage the due frame shows on time (docs/video.md).
 - v0.2.0: Media Foundation (DXVA by default), planar NV12/I420 upload to ysp_gfx's shader by default, the shared D3D11 GPU path as an option, the soundtrack on ysp/audio.h streams, and ysp_timeline base rates for any rate but 1.
 - v0.1.0. A core test with a scripted decoder and display on a virtual clock (cadences, slips against an exact model, stalls, seeks, the timeline agreement under 20 us of noise); 20 mutations caught. In a 640 x 360 window on the Iris Xe: `yvid_update()` with a 1920 x 1080 RGBA8 upload 0.95 ms mean, 1.8 ms p99; no heap call per frame. pl_mpeg 1080p 5.5 ms a frame plus 7 ms of I420 to RGBA8 on the decode thread. No Media Foundation, no GPU zero-copy, no capture yet. [Design notes](video.md).
+
+## Formats not built
+
+### The experiment definition
+
+- Design: [experiment_format.md](experiment_format.md)
+- Read by: the player (rig_spec 6); not built
+
+Purpose: The pack's EXPERIMENT entry: a JSON file, read by ysp/json.h, that names stimuli, trial templates, adaptive methods, device roles and a tree of nodes, each lowered to ysp/trials.h, ysp/timeline.h, ysp/response.h, ysp/gfx.h and the method headers; and the data set the player writes.
+
+Status:
+
+- Design decided, 2026-10-14: all 15 decisions accepted; D4 changed (durations are plain numbers in seconds, and every duration key and variable ends in `_s`); D11 records flagged frames only, and a requeue, if ever added, is an explicit rule in the definition. G7 (a canonical form for non-integer numbers in ysp/json.h) is the prerequisite for the experiment hash. No loader, no player, no test.
+- Proposal, 2026-10-13. Four worked examples (2AFC staircase, RDK, Stroop from a CSV, EEG trigger) were mapped to the C examples field by field; 13 gaps in the C APIs are listed.

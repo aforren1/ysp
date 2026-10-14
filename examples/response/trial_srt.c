@@ -26,7 +26,7 @@
  * --sim runs blocks S and R once each on the simulated display with a
  * synthetic participant: 0.30 s in S, 0.45 s in R, one wrong key in R, one
  * extra press during an RSI. It checks its own results and exits 1 on a
- * mismatch. About 20 s.
+ * mismatch. Under a second: the virtual clock does not wait.
  *
  * Usage: trial_srt [--sim] [--fullscreen] [--reps N] [--blocks SRS] [--seed N] [--out FILE]
  *   --reps N    passes of the sequence per block (default 4; --sim: 1)
@@ -169,6 +169,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     if (reps == 0) reps = sim ? 1 : 4;
     if (!blocks) blocks = sim ? "SR" : "SRS";
     if (reps < 1 || reps > MAX_REPS) { fprintf(stderr, "trial_srt: --reps takes 1..%d\n", MAX_REPS); return 2; }
@@ -325,9 +327,9 @@ int main(int argc, char** argv) {
             int s = i < SEQ_LEN, k = i % SEQ_LEN;
             double want = s ? SIM_RT_S : k == 2 ? SIM_WRONG_RT : SIM_RT_R;
             int ok = (r->flags & YRSP_R_RESPONDED) &&
-                     /* the script runs from the planned onset; RT from the flip
-                      * record's, which a loaded host shows whole frames later */
-                     llabs(r->rt_ns + (r->t_onset - sim_plan[i]) - YRT_S(want)) <= 1000 &&
+                     /* on the virtual clock the onset is the plan and the RT
+                      * the script's, to the nanosecond */
+                     r->t_onset == sim_plan[i] && r->rt_ns == YRT_S(want) &&
                      sim_correct[i] == (s || k != 2) && r->n_after_end == (s && k == 4) &&
                      r->onset_tier == YSCR_TIER_SIM && r->onset_src == YRSP_ONSET_FLIP;
             if (!ok) {

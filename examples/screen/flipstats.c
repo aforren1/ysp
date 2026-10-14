@@ -288,8 +288,8 @@ static uint32_t rng_state = 12345u;
 static uint32_t rnd(void) { rng_state = rng_state * 1664525u + 1013904223u; return rng_state >> 8; }
 
 static void busy_ms(double ms) {
-    int64_t end = yrt_now_ns() + (int64_t)(ms * 1e6);
-    while (yrt_now_ns() < end) { }
+    int64_t end = yrt_real_ns() + (int64_t)(ms * 1e6);   /* CPU time: real on either clock */
+    while (yrt_real_ns() < end) { }
 }
 
 #if defined(_WIN32)
@@ -394,6 +394,8 @@ int main(int argc, char** argv) {
         else if (i == 1 && atoi(argv[i]) > 0) frames = atoi(argv[i]);
         else { fprintf(stderr, "usage: see the comment at the top of screen_flipstats.c\n"); return 2; }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
 #if !defined(_WIN32)
     if (topmost || cover) fprintf(stderr, "screen_flipstats: --topmost and --cover act on Win32 windows; ignored here\n");
 #endif

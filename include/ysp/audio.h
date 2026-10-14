@@ -1,4 +1,4 @@
-/* ysp/audio.h - v0.5.1 - public domain single-header audio library
+/* ysp/audio.h - v0.6.0 - public domain single-header audio library
  *
  *   Sound at a time on the ysp/rt.h clock. A buffer is played with
  *   yau_play_at(buf, t); the header plans its first sample on the device
@@ -786,6 +786,17 @@
  *     docs/web.md, "Audio".
  *   YAU_BACKEND_NULL
  *     miniaudio's null device: a timer, no hardware. Tier SIM.
+ *     VIRTUAL CLOCK (v0.6.0): on ysp/rt.h's virtual clock
+ *     (yrt_virtual_begin) it is the header's own device instead, named
+ *     "virtual null": a virtual timer on the driver thread renders one
+ *     block a period (desc.period, 10 ms by default; at most 8 KB a
+ *     block, 1024 stereo float frames), at the block's own time, and
+ *     fills a capture or DUPLEX input with silence the same way. The fit
+ *     is then exact (drift 0, spread 0) and an onset is on its plan
+ *     within half a sample, the same on every run whatever the host's
+ *     load. Every other backend is refused on the virtual clock: its
+ *     callbacks come on real time. Without miniaudio (YAU_NO_MINIAUDIO)
+ *     it opens too.
  *   YAU_BACKEND_CUSTOM
  *     desc.dev and desc.dev_ctx: your device (DEVICE).
  *
@@ -884,6 +895,14 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.6.0 - VIRTUAL CLOCK (ysp/rt.h v0.9.0): BACKEND_NULL on the virtual
+ *          clock is a device of the header's own, its blocks on a virtual
+ *          timer at their own times, for output, capture and DUPLEX; every
+ *          other backend is refused there. miniaudio's null device is a
+ *          real-time thread: its onsets moved with the host's load, and
+ *          the --sim checks of audio_schedule, audio_av_sync,
+ *          trial_audio_keyboard and trial_stop_signal allowed 2 to 10 ms.
+ *          Now within half a sample. The real clock: no change.
  *   v0.5.1 - EXCLUSIVE START: WASAPI exclusive mode writes one silent
  *          buffer before Start, and position reports count stream frames
  *          from after it. miniaudio started the stream on an empty buffer;
@@ -1121,9 +1140,9 @@
 #define YSP_AUDIO_H_INCLUDED
 
 #define YAU_VERSION_MAJOR 0
-#define YAU_VERSION_MINOR 5
-#define YAU_VERSION_PATCH 1
-#define YAU_VERSION_STRING "0.5.1"
+#define YAU_VERSION_MINOR 6
+#define YAU_VERSION_PATCH 0
+#define YAU_VERSION_STRING "0.6.0"
 
 #include "ysp/rt.h"
 
@@ -4800,6 +4819,122 @@ static int yau__resolution(int out, int bits) {
     }
 }
 
+/* --- the null device on a virtual clock (VIRTUAL CLOCK) -------------------------- */
+
+/* miniaudio's null device is a real-time timer thread: on ysp/rt.h's
+ * virtual clock its blocks would land at whatever virtual time the frame
+ * thread had reached, so a loaded host changed the onsets. This one renders
+ * each block on a virtual timer at its own time, on the driver thread. */
+typedef struct yau__vnull {
+    yau_render_fn fn;
+    void*         host;
+    void*         cap_host;     /* DUPLEX: the capture fed before each block */
+    uint32_t      rate;
+    int32_t       period, channels, bytes, timer, inited;
+    int64_t       t0, w;
+    float         buf[2048];    /* one block, in floats or s16 pairs       */
+} yau__vnull;
+
+static int64_t yau__vnull_tick(void* ctx, int64_t now) {
+    yau__vnull* v = (yau__vnull*)ctx;
+    yau_tick tk;
+    tk.t_entry = now;
+    tk.pos = -1;
+    tk.pos_t = 0;
+    tk.flags = 0;
+    tk.reserved_ = 0;
+    if (!v->inited) {
+        if (v->fn == yau_capture_block) yau_capture_thread_init(v->host);
+        else yau_rt_thread_init(v->host);
+        if (v->cap_host) yau_capture_thread_init(v->cap_host);
+        v->inited = 1;
+    }
+    memset(v->buf, 0, (size_t)v->bytes);
+    if (v->cap_host) yau_capture_block(v->cap_host, v->buf, v->period, &tk);
+    v->fn(v->host, v->buf, v->period, &tk);
+    v->w += v->period;
+    return v->t0 + (int64_t)((double)v->w * 1e9 / (double)v->rate + 0.5);
+}
+
+static int yau__vnull_open(void* ctx, const yau_device_open* in, yau_device_caps* caps, char* err, size_t err_cap) {
+    yau__vnull* v = (yau__vnull*)ctx;
+    int32_t obps = in->format->sample == YAU_S16 ? 2 : 4, bps = obps;
+    int32_t ch = in->capture == 1 ? (in->format->channels ? in->format->channels : 2) : in->format->channels;
+    int32_t wide = ch, most;
+    if (in->capture == 2 && in->capture_host) {
+        /* DUPLEX: the input reads the same silent block in its own
+         * channel count, as floats */
+        const yau_capture* c = (const yau_capture*)in->capture_host;
+        int32_t cc = c->desc.format.channels ? c->desc.format.channels : 2;
+        if (cc > wide) wide = cc;
+        bps = 4;
+    }
+    most = (int32_t)(sizeof v->buf / (size_t)(bps * (wide > 0 ? wide : 1)));
+    memset(v, 0, sizeof *v);
+    v->rate = in->format->rate;
+    v->channels = ch;
+    v->period = in->period > 0 ? in->period : (int32_t)(v->rate / 100);
+    if (v->period > most) v->period = most;   /* caps say what it runs at */
+    if (v->period <= 0 || v->rate == 0) {
+        snprintf(err, err_cap, "ysp_audio: the virtual null device needs a rate and a period");
+        return YAU_ERR_ARG;
+    }
+    v->bytes = v->period * wide * bps;
+    v->cap_host = in->capture == 2 ? in->capture_host : NULL;
+    v->timer = -1;
+    memset(caps, 0, sizeof *caps);
+    caps->rate = v->rate;
+    caps->channels = (uint16_t)ch;
+    caps->out = (uint16_t)(obps == 2 ? YAU_OUT_S16 : YAU_OUT_F32);
+    caps->period = v->period;
+    caps->buffer = 3 * v->period;   /* miniaudio's null device: 3 periods */
+    caps->pos_source = YAU_POS_CALLBACK;
+    caps->tier = YAU_TIER_SIM;
+    snprintf(caps->name, sizeof caps->name, "virtual null");
+    if (v->cap_host) {
+        /* DUPLEX: the device fills the input's caps, as miniaudio's does */
+        yau_capture* c = (yau_capture*)v->cap_host;
+        yau_device_caps* k = &c->dcaps;
+        memset(k, 0, sizeof *k);
+        k->rate = v->rate;
+        k->channels = (uint16_t)(c->desc.format.channels ? c->desc.format.channels : 2);
+        k->out = (uint16_t)(c->desc.format.sample == YAU_S16 ? YAU_OUT_S16 : YAU_OUT_F32);
+        k->period = v->period;
+        k->buffer = 3 * v->period;
+        k->pos_source = YAU_POS_CALLBACK;
+        k->tier = YAU_TIER_SIM;
+        k->os_latency_ns = -1;
+        k->os_stream_latency_ns = -1;
+        snprintf(k->name, sizeof k->name, "virtual null");
+    }
+    return 0;
+}
+
+static int yau__vnull_start(void* ctx, yau_render_fn render, void* host) {
+    yau__vnull* v = (yau__vnull*)ctx;
+    v->fn = render;
+    v->host = host;
+    v->t0 = yrt_now_ns();
+    v->w = 0;
+    v->timer = yrt_virtual_timer(yau__vnull_tick, v, v->t0);
+    return v->timer >= 0 ? 0 : YAU_ERR_LOST;
+}
+
+static void yau__vnull_stop(void* ctx) {
+    yau__vnull* v = (yau__vnull*)ctx;
+    if (v->timer >= 0) yrt_virtual_cancel(v->timer);
+    v->timer = -1;
+}
+
+static void yau__vnull_close(void* ctx) { yau__vnull_stop(ctx); }
+
+typedef char yau__vnull_fits[sizeof(yau__vnull) <= sizeof(((yau_audio*)0)->backend_mem)
+                             && sizeof(yau__vnull) <= sizeof(((yau_capture*)0)->backend_mem) ? 1 : -1];
+
+static const yau_device yau__vnull_device = {
+    YAU_DEVICE_VERSION, "null (virtual clock)", yau__vnull_open, yau__vnull_start, yau__vnull_stop, yau__vnull_close, NULL
+};
+
 /* CAPTURE, defined with the capture below: yau_open() sets up a DUPLEX
  * capture with them */
 static int  yau__cap_desc(yau_capture* c, const yau_capture_desc* d);
@@ -4847,6 +4982,14 @@ YAU_API bool yau_open(yau_audio* au, const yau_desc* desc) {
         }
         au->dev = d.dev;
         au->dev_ctx = d.dev_ctx;
+    } else if (d.backend == YAU_BACKEND_NULL && yrt_is_virtual()) {
+        au->dev = &yau__vnull_device;
+        au->dev_ctx = au->backend_mem;
+    } else if (yrt_is_virtual()) {
+        /* a device's callbacks come on real time: on the virtual clock
+         * their stamps would say nothing */
+        yau__err(au, "ysp_audio: the clock is virtual (yrt_virtual_begin); only BACKEND_NULL and BACKEND_CUSTOM run on it");
+        return false;
     } else {
 #if defined(YAU_NO_MINIAUDIO)
         yau__err(au, "ysp_audio: built with YAU_NO_MINIAUDIO: only BACKEND_CUSTOM opens");
@@ -6358,6 +6501,12 @@ YAU_API bool yau_capture_open(yau_capture* c, const yau_capture_desc* d) {
         }
         c->dev = c->desc.dev;
         c->dev_ctx = c->desc.dev_ctx;
+    } else if (c->desc.backend == YAU_BACKEND_NULL && yrt_is_virtual()) {
+        c->dev = &yau__vnull_device;
+        c->dev_ctx = c->backend_mem;
+    } else if (yrt_is_virtual()) {
+        yau__cerr(c, "ysp_audio: the clock is virtual (yrt_virtual_begin); only BACKEND_NULL and BACKEND_CUSTOM run on it");
+        return false;
     } else {
 #if defined(YAU_NO_MINIAUDIO)
         yau__cerr(c, "ysp_audio: built with YAU_NO_MINIAUDIO: only a CUSTOM capture opens");

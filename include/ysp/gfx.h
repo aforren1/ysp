@@ -1,4 +1,4 @@
-/* ysp/gfx.h - v0.15.0 - public domain single-header stimulus graphics library
+/* ysp/gfx.h - v0.15.1 - public domain single-header stimulus graphics library
  *   (with MIT-licensed parts: see below)
  *
  *   Stimuli on GL ES 3.0, on top of ysp/screen.h: signed-distance shapes
@@ -1299,6 +1299,10 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.15.1 - The program cache's open and store times and a text's build
+ *          time read yrt_real_ns() (ysp/rt.h v0.9.0): on the virtual clock
+ *          yrt_now_ns() stands still between waits, so they read 0. Shader
+ *          time stays on yrt_now_ns(). No other change.
  *   v0.15.0 - FIRST TRIAL and TEXT: ygfx_open_screen() (the screen and
  *          the gfx opened with OPEN START's overlap, then primed, in one
  *          call), ygfx_show_until_key() (an instruction or break screen:
@@ -1802,8 +1806,8 @@
 
 #define YGFX_VERSION_MAJOR 0
 #define YGFX_VERSION_MINOR 15
-#define YGFX_VERSION_PATCH 0
-#define YGFX_VERSION_STRING "0.15.0"
+#define YGFX_VERSION_PATCH 1
+#define YGFX_VERSION_STRING "0.15.1"
 
 #include "ysp/screen.h"
 #include "ysp/color.h"
@@ -6016,9 +6020,9 @@ static void ygfx__prog_store2(ygfx_gfx* g, uint32_t id, const ygfx__prec* r) {
 static void ygfx__prog_store(ygfx_gfx* g, uint32_t id, const ygfx__prec* r) {
     int64_t t0;
     if (!r->store || !id) return;
-    t0 = yrt_now_ns();
+    t0 = yrt_real_ns();
     ygfx__prog_store2(g, id, r);
-    g->progs.store_ns += yrt_now_ns() - t0;
+    g->progs.store_ns += yrt_real_ns() - t0;
 }
 
 /* Builds one program from its text, from desc.cache when an entry there is
@@ -6509,7 +6513,7 @@ static bool ygfx__open_c(ygfx_gfx* g, const ygfx_desc* d, int64_t t_start) {
         uint32_t u[10];
         u[0] = (uint32_t)g->lut_n; u[1] = (uint32_t)g->dither; u[2] = (uint32_t)d->output;
         u[3] = g->cal_crc; u[4] = d->cal ? d->cal->flags : 0u; u[5] = (uint32_t)g->w; u[6] = (uint32_t)g->h;
-        g->progs.open_ns += yrt_now_ns() - t_start;
+        g->progs.open_ns += yrt_real_ns() - t_start;
         u[7] = g->progs.loaded; u[8] = g->progs.compiled; u[9] = (uint32_t)(g->progs.open_ns / 1000000);
         ygfx__push(g, (uint16_t)YGFX_EV_OPEN, 0, (uint32_t)g->scene_format, u, 10, 0);
         if (g->has_color) {
@@ -6530,7 +6534,7 @@ fail:
 }
 
 YGFX_API bool ygfx_open(ygfx_gfx* g, const ygfx_desc* d) {
-    int64_t t_start = yrt_now_ns();
+    int64_t t_start = yrt_real_ns();
     if (!g) return false;
     if (g->started) {   /* after ygfx_open_start(): its desc, not this one */
         int st = g->started;
@@ -6553,7 +6557,7 @@ YGFX_API bool ygfx_open(ygfx_gfx* g, const ygfx_desc* d) {
 }
 
 YGFX_API bool ygfx_open_start(ygfx_gfx* g, const ygfx_desc* d) {
-    int64_t t_start = yrt_now_ns();
+    int64_t t_start = yrt_real_ns();
     if (!g) return false;
     if (!ygfx__open_a(g, d)) return false;
     g->sdesc = *d;
@@ -6565,7 +6569,7 @@ YGFX_API bool ygfx_open_start(ygfx_gfx* g, const ygfx_desc* d) {
     }
     g->start_mode = g->started;
     g->open = 0;   /* nothing but ygfx_open() and ygfx_close() until it finishes */
-    g->progs.open_ns = yrt_now_ns() - t_start;
+    g->progs.open_ns = yrt_real_ns() - t_start;
     return true;
 }
 
@@ -6721,7 +6725,7 @@ static int ygfx__fc_store(void* user, uint64_t key, const void* data, size_t n) 
     char tmp[620], path[600], ext[40];
     FILE* f;
     int ok;
-    snprintf(ext, sizeof ext, "tmp%08x", (unsigned)(yrt_now_ns() & 0xFFFFFFFFu));
+    snprintf(ext, sizeof ext, "tmp%08x", (unsigned)(yrt_real_ns() & 0xFFFFFFFFu));
     ygfx__fc_path(fc, key, ext, tmp, sizeof tmp);
     ygfx__fc_path(fc, key, "yspprog", path, sizeof path);
 #if defined(_WIN32)
@@ -12130,7 +12134,7 @@ static int ygfx__u32_cmp(const void* a, const void* b) {
 typedef struct ygfx__tglyph { uint32_t cp, gid; float adv; } ygfx__tglyph;
 
 static int ygfx__text_make(ygfx_gfx* g, ygfx_text* t, const ygfx_text_desc* d) {
-    int64_t t_start = (int64_t)yrt_now_ns();
+    int64_t t_start = yrt_real_ns();
     char path[512], tried[400], err[160];
     uint8_t* bytes = NULL;
     size_t nbytes = 0, len, i, a, n = 0, nl = 0, nu = 0, k;
@@ -12290,7 +12294,7 @@ static int ygfx__text_make(ygfx_gfx* g, ygfx_text* t, const ygfx_text_desc* d) {
             t->primed = ygfx_prime(g);
             if (t->primed < 0) { rc = t->primed; t->primed = 0; goto done; }
         }
-        t->build_ns = (int64_t)yrt_now_ns() - t_start;
+        t->build_ns = yrt_real_ns() - t_start;
     }
 done:
     free(bytes);

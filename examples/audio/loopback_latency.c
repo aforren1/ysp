@@ -288,6 +288,8 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--csv") && i + 1 < argc) o.csv = argv[++i];
         else { fprintf(stderr, "audio_loopback_latency: unknown argument %s (see the top of the file)\n", argv[i]); return 2; }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (o.sim) yrt_virtual_begin(0);
     if (o.clicks < 2 || o.clicks > 2000 || o.every_ms < 50 || o.every_ms > 5000 || o.db > -6 || o.volume > 0.5
         || o.in_volume > 1 || o.channel < 0 || o.burst_ms < 0 || o.burst_ms > 100 || o.sim_delay_ms < 10 || o.sim_delay_ms > 500 || (o.edge_db >= 0 && o.edge_db != 1)
         || (o.duplex && (o.in_exclusive != o.exclusive || paths))) {

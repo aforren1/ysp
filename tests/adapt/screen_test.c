@@ -36,6 +36,8 @@ static long long vnow(void);
 static void vsleep_until(long long t);
 #define YSCR__NOW() ((int64_t)vnow())
 #define YSCR__SLEEP_UNTIL(t, spin) vsleep_until((long long)(t))
+/* the phases too: scripted costs are on the same clock */
+#define YSCR__COST_NOW() ((int64_t)vnow())
 /* The trigger worker's wake-up: recorded here, and run by the clock as it
  * passes, through the same function the worker thread calls. */
 struct yscr_screen;
@@ -3036,6 +3038,51 @@ static void test_sim(void) {
     if (late || onset_ok < completed) printf("  sim: %d of 120 frames late, %d of %d on the prediction\n", late, onset_ok, completed);
 }
 
+/* v0.8.0: the simulated backend on ysp/rt.h's virtual clock, through the
+ * header's own clock calls (the test's seam off). Exact where test_sim
+ * allows a loaded host: no frame late or dropped, every onset on the
+ * grid and on the prediction, and a real backend refused. */
+static void test_sim_virtual(void) {
+    yscr_screen s;
+    yscr_desc d;
+    static yscr_frame f;
+    char line[512];
+    int i, completed = 0;
+    int64_t grid0 = 0;
+    g_virtual = 0;
+    CHECK_I(yrt_virtual_begin(0), 0);
+    memset(&s, 0, sizeof s);
+    memset(&d, 0, sizeof d);
+    d.backend = YSCR_BACKEND_DXGI_FLIP;
+    CHECK(!yscr_open(&s, &d));
+    CHECK(strstr(yscr_error(&s), "virtual") != NULL);
+    memset(&s, 0, sizeof s);
+    d.backend = YSCR_BACKEND_SIM;
+    d.sim_period_ns = P_NS;
+    CHECK(yscr_open(&s, &d));
+    if (!yscr_is_open(&s)) { yrt_virtual_end(); g_virtual = 1; return; }
+    for (i = 0; i < 120; i++) {
+        yscr_record out;
+        CHECK_I(yscr_begin(&s, &f), YSCR_OK);
+        if (!grid0) grid0 = f.onset;
+        CHECK(f.onset == grid0 + (int64_t)i * P_NS);
+        if (i && f.last) {
+            completed++;
+            CHECK_I(f.last->index, i - 1);
+            CHECK_I(f.last->dropped, 0);
+            CHECK(f.last->onset == f.last->planned && f.last->onset == grid0 + (int64_t)(i - 1) * P_NS);
+        }
+        CHECK_I(yscr_flip_at(&s, f.onset, &out), YSCR_OK);
+        CHECK(!(out.flags & YSCR_FLIP_LATE_TARGET));
+    }
+    CHECK_I(completed, 119);
+    CHECK(yscr_describe(&s, line, sizeof line) > 0);
+    CHECK(strstr(line, "backend=sim") != NULL && strstr(line, " clock=virtual ") != NULL);
+    yscr_close(&s);
+    yrt_virtual_end();
+    g_virtual = 1;
+}
+
 /* --------------------------------------------------------- the sync guard */
 
 static int g_unsynced_want;   /* the fires the forced-off cases expect */
@@ -4183,6 +4230,7 @@ int main(void) {
     test_panic_rule();
     test_icon();
     test_sim();
+    test_sim_virtual();
     test_sync_forced_off(1);
     test_sync_forced_off(2);
     test_sync_forced_off(3);

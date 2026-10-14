@@ -52,7 +52,8 @@
  * For each, the program finds the photodiode edge of the same polarity
  * that follows it within one period plus 30 ms, and reports edge minus
  * onset: the delay from the vblank the OS reports to light at the corner.
- * That mean is what desc.onset_offset_ns is for.
+ * desc.onset_offset_ns is for that delay: rigfile_onset (examples/rigfile/
+ * onset.c) takes out.csv and stores its median in the rig profile.
  *
  * Output: the describe line; per edge (to out.csv when given): frame,
  * polarity, flip onset, photodiode time, difference, path, flags; then the

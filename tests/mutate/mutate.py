@@ -127,7 +127,8 @@ def build(test, inc, src_dir, out_dir, tag):
         cmd[0] = shutil.which("cl", path=path) or "cl"
     else:
         gcc = find_gcc()
-        cmd = [gcc] + test.get("flags", []) + ["-I" + inc, "-o", exe, src] + test.get("libs", [])
+        cmd = [gcc] + [f.replace("{repo}", REPO) for f in test.get("flags", [])] + ["-I" + inc, "-o", exe, src] + \
+              [f.replace("{repo}", REPO) for f in test.get("libs", [])]
         env = dict(os.environ)
         env["PATH"] = os.path.dirname(gcc) + os.pathsep + env.get("PATH", "")
     r = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=out_dir)
@@ -208,9 +209,17 @@ def load(path):
     return d
 
 
+def repo_file(f):
+    """A mutated file's path in the repository: a header under include/
+    ("ysp/pack.h"), or a pack tool source under pack/ ("import.c")."""
+    p = os.path.join(REPO, "include", f)
+    return p if os.path.exists(p) else os.path.join(REPO, "pack", f)
+
+
 def snapshot(work):
-    """Copies the headers and tests/adapt once, so a header someone edits
-    during the run cannot mix two versions into one result."""
+    """Copies the headers, the pack tool's C sources and tests/adapt once,
+    so a file someone edits during the run cannot mix two versions into
+    one result."""
     hdr = os.path.join(work, "hdr")
     tdir = os.path.join(work, "test")
     os.makedirs(hdr, exist_ok=True)
@@ -219,6 +228,14 @@ def snapshot(work):
     for f in os.listdir(os.path.join(REPO, "include", "ysp")):
         if f.endswith(".h"):
             shutil.copy2(os.path.join(REPO, "include", "ysp", f), os.path.join(hdr, "ysp"))
+    # pack/*.c beside the headers' folder: a test that includes "import.c"
+    # finds the copy, mutated or not, before any -I of the repository
+    for f in os.listdir(os.path.join(REPO, "pack")):
+        if f.endswith(".c"):
+            shutil.copy2(os.path.join(REPO, "pack", f), hdr)
+    for f in os.listdir(os.path.join(REPO, "pack", "ysp")):
+        if f.endswith(".h"):
+            shutil.copy2(os.path.join(REPO, "pack", "ysp", f), os.path.join(hdr, "ysp"))
     adapt = os.path.join(REPO, "tests", "adapt")
     for f in os.listdir(adapt):
         if f.endswith((".h", ".c")):
@@ -246,7 +263,7 @@ def main():
             for m in L.get("mutant", []):
                 if a.only and m["id"] not in a.only:
                     continue
-                r = apply(m, L["header"], lambda f: open(os.path.join(REPO, "include", f), encoding="utf-8").read())
+                r = apply(m, L["header"], lambda f: open(repo_file(f), encoding="utf-8").read())
                 if isinstance(r, str):
                     bad += 1
                     say("%s %s: %s" % (os.path.basename(L["path"]), m["id"], r))

@@ -41,7 +41,8 @@
  * an absent probe: a press during the memory set and then a response, a
  * wrong key, and a timeout among correct responses. It checks its own
  * results (the script runs from the probe's planned onset, the RT from its
- * flip record) and exits 1 on a mismatch. About 27 s.
+ * flip record) and exits 1 on a mismatch.
+ * Under a second: the virtual clock does not wait.
  *
  * Usage: trial_sternberg [--sim] [--fullscreen] [--reps N] [--seed N] [--out FILE] [--font PATH]
  *   --reps N   repetitions of each of the 6 conditions (default 4; --sim: 1)
@@ -276,6 +277,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     if (reps == 0) reps = sim ? 1 : 4;
     if (reps < 1 || reps > 100) { fprintf(stderr, "trial_sternberg: --reps takes 1..100\n"); return 2; }
     digit_rng = seed ^ 0x9E3779B97F4A7C15ull;   /* the digits' own stream: the order's draws stay ytr's */
@@ -475,25 +478,21 @@ int main(int argc, char** argv) {
     if (sim && !failed && reps != 1) printf("--sim: the self-check needs the default --reps\n");
     else if (sim && !failed) {
         int bad = rows != SIM_TRIALS;
-        double period = (double)f.period / 1e9;
         if (bad) fprintf(stderr, "trial_sternberg: --sim: %d rows, not %d\n", rows, SIM_TRIALS);
         for (i = 0; i < rows && i < SIM_TRIALS; i++) {
             const yrsp_result* q = &sim_res[i];
             int ok = 1;
-            /* The simulated display runs on the host's clock: while a
-             * loaded host's frame loop is behind, begin() plans later
-             * vblanks, as on a real display, and a digit lands on a later
-             * frame. An SOA then differs by whole periods: 2 and 3 under 12
-             * CPU-bound processes (measured 2026-10-10; one period was
-             * allowed before, and 2 runs in 10 failed). */
+            /* On the virtual clock no frame slips: every SOA is the
+             * script's (within 1 us, the grid of a 16666667 ns period) and
+             * every RT is the script's to the nanosecond. */
             for (j = 0; j < MAX_SET; j++) {
-                double want = j == 0 ? ITEM_S + RETENTION_S : ITEM_S + GAP_S, d = fabs(sim_soa[i][j] - want);
+                double want = j == 0 ? ITEM_S + RETENTION_S : ITEM_S + GAP_S;
                 if (j > 0 && j >= sim_k[i]) ok = ok && sim_soa[i][j] != sim_soa[i][j];   /* empty past the set */
-                else ok = ok && fabs(d - period * floor(d / period + 0.5)) < 1e-6;
+                else ok = ok && fabs(sim_soa[i][j] - want) < 1e-6;
             }
             if (i == 4) ok = ok && !(q->flags & YRSP_R_RESPONDED) && (q->flags & YRSP_R_TIMEOUT);
-            else ok = ok && (q->flags & YRSP_R_RESPONDED) && /* script from the plan, RT from the flip record */
-                      llabs(q->rt_ns + (q->t_onset - sim_plan[i]) - YRT_S(sim_rt(sim_k[i], sim_present[i]))) <= 1000;
+            else ok = ok && (q->flags & YRSP_R_RESPONDED) && q->t_onset == sim_plan[i] &&
+                      q->rt_ns == YRT_S(sim_rt(sim_k[i], sim_present[i]));
             ok = ok && q->n_early == (i == 1);
             ok = ok && sim_correct[i] == (i != 2 && i != 4);
             ok = ok && q->onset_tier == YSCR_TIER_SIM && q->onset_src == YRSP_ONSET_FLIP;

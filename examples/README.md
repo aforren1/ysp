@@ -16,13 +16,16 @@ Run a program from the build folder (`build/<preset>/Release/` with MSVC,
 `build/<preset>/` otherwise). "Needs" says what a run needs beyond the
 build: SDL3 (a window), ANGLE (GL ES on Windows), a font, a device, or
 nothing. `--sim` runs a windowed example on the simulated display, which
-needs nothing; CI runs the commands marked "CI". The simulated display
-runs on the host's clock: while a loaded host's frame loop is behind,
-`yscr_begin()` plans later vblanks, as on a real display. So a `--sim`
-script times its synthetic input from the stimulus's flip record, not
-from a frame count, and checks onsets to whole periods (measured
-2026-10-10 under 12 CPU-bound processes: a target up to 550 ms after its
-frame count's time).
+needs nothing; CI runs the commands marked "CI". A `--sim` run calls
+`yrt_virtual_begin()` first (ysp/rt.h v0.9.0, VIRTUAL CLOCK): the
+simulated display, the null audio device and the synthetic input then
+run on a virtual clock, so the run gives the same records and output on
+any host, loaded or not, and takes the CPU time of its frames, not their
+display time. Its checks are exact: no frame slips. Costs (a draw, a
+decode, a build) read `yrt_real_ns()`, the real clock, so they print real
+times on either clock. `gfx_capture` stays on the real clock: its writer
+thread is real, and on the virtual clock the frame loop outran it. A script still times its synthetic input from the stimulus's flip
+record, not from a frame count, so it also runs on a real display.
 
 ## aep
 
@@ -154,6 +157,8 @@ All three load liblsl at run time (docs/net.md, "How-to: get liblsl"); without i
 | Program | Shows | Headers | Run | Needs |
 |---|---|---|---|---|
 | `rigfile_profile` | The rig profile: load and check it (each loopback file by SHA-256), its roles, notes and hash; list profiles; a new profile; a binding by hand, also of an LSL stream (family `lsl`) | rigfile | `rigfile_profile`; `rigfile_profile --rig booth2`; `rigfile_profile --list`; `rigfile_profile --new booth-2`; `rigfile_profile --bind resp xid serial:0403:6001:FT4ABC12:`; `rigfile_profile --bind ref lsl lsl:Data::` (CI, in a folder of the runner's with `--dir`) | nothing |
+| `rigfile_bounds` | An input's bounds (stamp minus event) by loopback: a reference line board's pin into the input, each change against the board's own report, widened by that board's clock bracket; the range stored in the profile with `--store` | rigfile, device | `rigfile_bounds --sim --role photo --store --rig-dir DIR` (CI); `rigfile_bounds --role photo --ref serial:16C0:0483:<serial>: --store` | a second board with `firmware/ysp_line/` for a hardware run |
+| `rigfile_onset` | The display's onset offset from a photodiode run's CSV (`photodiode_check --csv`): the median of light minus flip onset, stored in the profile with its run | rigfile | `rigfile_onset run.csv --store` (CI, on a generated CSV) | a photodiode run for a real offset |
 | `rigfile_bench` | The costs of reading, checking, writing and hashing a profile, and ysp/json.h on a 1 MB document | rt, json, rigfile | `rigfile_bench` (under the measurement lock) | nothing |
 
 ## rt

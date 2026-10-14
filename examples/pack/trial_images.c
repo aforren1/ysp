@@ -48,7 +48,8 @@
  * per degree of turn and 0.1 s more for a mirror image, one wrong key and
  * one timeout. It checks the rows, that each block ran whole, and the RTs
  * (the script runs from the image's planned onset, the RT from its flip
- * record), and exits 1 on a mismatch. About 22 s.
+ * record), and exits 1 on a mismatch.
+ * Under a second: the virtual clock does not wait.
  *
  * Usage: trial_images [--sim] [--fullscreen] [--reps N] [--seed N] [--out FILE] [--pack PATH]
  *   --reps N    repetitions of each row (default 2; --sim: 1)
@@ -228,6 +229,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     if (reps == 0) reps = sim ? 1 : 2;
     if (reps < 1 || reps > 50) { fprintf(stderr, "trial_images: --reps takes 1..50\n"); return 2; }
 

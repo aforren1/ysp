@@ -89,8 +89,8 @@ id = "rig-10"
 name = "the summary not compared"
 test = "rig"
 why = "A hand-edited median with a genuine file would pass as measured."
-find = '''            rc = YRIG_CHECK_DIFFERS;'''
-replace = '''            rc = YRIG_CHECK_OK;'''
+find = '''            if (!same) rc = YRIG_CHECK_DIFFERS;'''
+replace = '''            if (!same) rc = YRIG_CHECK_OK;'''
 
 [[mutant]]
 id = "rig-11"
@@ -205,8 +205,9 @@ id = "rig-24"
 name = "the summary of a file without its format line"
 test = "rig"
 why = "Only an output latency file has these fields with these meanings."
-find = '''    if (!(have & 1)) return yrig__err(err, cap, YRIG_ERR_FORMAT, "not an output latency file (no format line)");'''
-replace = '''    have |= 1;'''
+find = '''    if (!kind) {'''
+replace = '''    if (!kind) { kind = want ? want : YRIG_FILE_OUT_LATENCY; have |= 1; }
+    if (0) {'''
 
 # v0.2.0: lsl roles.
 
@@ -251,3 +252,69 @@ test = "rig"
 why = "yrig_open_device() has no err buffer: a role the profile refuses must still say why, in ydev_error(dev)."
 find = '''    if (yrig_desc(p, role, &d, dev->err, sizeof dev->err) != YRIG_OK) return false;'''
 replace = '''    if (yrig_desc(p, role, &d, NULL, 0) != YRIG_OK) return false;'''
+
+# v0.4.0: the bounds and display onset files, display.latency.
+
+[[mutant]]
+id = "rig-30"
+name = "a bounds file's range not compared"
+test = "rig"
+why = "A hand-edited bound with a genuine file would give tier 1 to a range nobody measured."
+find = '''            if (same && want == YRIG_FILE_IN_BOUNDS) same = f.lo_ns == lb->lo_ns && f.hi_ns == lb->hi_ns;'''
+replace = '''            if (same && want == YRIG_FILE_IN_BOUNDS) same = true;'''
+
+[[mutant]]
+id = "rig-31"
+name = "the display's offset not compared with its file"
+test = "rig"
+why = "The offset is the number the screen uses; a genuine file behind an edited offset proves nothing."
+find = '''                       (want != YRIG_FILE_DISPLAY_ONSET || f.offset_ns == offset_ns);'''
+replace = '''                       (want != YRIG_FILE_DISPLAY_ONSET || 1);'''
+
+[[mutant]]
+id = "rig-32"
+name = "a file of another kind passes"
+test = "rig"
+why = "A display onset file named as an output's latency is not that output's measurement, whatever its numbers."
+find = '''            bool same = kind == want && f.n == lb->n && strcmp(f.date, lb->date) == 0;'''
+replace = '''            bool same = f.n == lb->n && strcmp(f.date, lb->date) == 0;'''
+
+[[mutant]]
+id = "rig-33"
+name = "display.latency not checked at load"
+test = "rig"
+why = "A missing or changed photodiode run must show in the notes."
+find = '''        dl->check = yrig__check_file(dir, "loopback", name, dl->sha256, dl, YRIG_FILE_DISPLAY_ONSET, p->display.onset_offset_ns);'''
+replace = '''        dl->check = YRIG_CHECK_OK;'''
+
+[[mutant]]
+id = "rig-34"
+name = "display.latency not written"
+test = "rig"
+why = "A profile written back would lose the run behind its onset offset."
+find = '''        if (ok && p->display.latency.set) ok = yjs_set(a, d, "latency", yrig__lb_json(a, &p->display.latency, true)) == YJS_OK;'''
+replace = '''        if (0) ok = yjs_set(a, d, "latency", yrig__lb_json(a, &p->display.latency, true)) == YJS_OK;'''
+
+[[mutant]]
+id = "rig-35"
+name = "a bounds file without hi_s"
+test = "rig"
+why = "A bound read as 0 from a missing line is a false bound."
+find = '''static const int yrig__need[4] = { 0, 127, 1 | 2 | 64 | 128 | 256, 127 | 512 };'''
+replace = '''static const int yrig__need[4] = { 0, 127, 1 | 2 | 64 | 128, 127 | 512 };'''
+
+[[mutant]]
+id = "rig-36"
+name = "a display onset file without onset_offset_s"
+test = "rig"
+why = "The profile's offset is compared with the file's; a missing line would read as 0."
+find = '''static const int yrig__need[4] = { 0, 127, 1 | 2 | 64 | 128 | 256, 127 | 512 };'''
+replace = '''static const int yrig__need[4] = { 0, 127, 1 | 2 | 64 | 128 | 256, 127 };'''
+
+[[mutant]]
+id = "rig-37"
+name = "yrig_read_latency() takes any kind"
+test = "rig"
+why = "out_latency's --store would take a bounds file's numbers as an output's latency."
+find = '''            if (want && k != want)'''
+replace = '''            if (0)'''
