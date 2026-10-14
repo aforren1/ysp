@@ -195,6 +195,41 @@ real device. On each device, open the site over HTTPS (GitHub Pages) and:
 6. Run `selftest.html` and tap the canvas a few times: the result says how
    many taps had the DOM's time.
 
+## How to check the sound at open
+
+One open shows one outcome, so count many. On a desktop, with node, npm,
+uv, Chrome and Firefox installed, build the site and run the probe:
+
+```sh
+sh examples/web/build.sh web_site
+sh tests/probe/web_audio/run.sh web_site 30
+```
+
+It opens `av.html` 30 times in each browser on each audio path, with a
+real click on Start, and prints the silent opens and the counts (design
+notes: [audio.md](audio.md#web-envelope-v052)). Add `--headed` to see the
+windows. Run nothing else while it counts: the ScriptProcessorNode path
+shares the main thread with the page.
+
+By hand, on each phone, tablet or desktop browser:
+
+1. Turn silent mode off and set the volume to about half.
+2. Open `av.html` once on each path. The isolated page (the normal
+   address, after the one reload) gives `AudioWorklet (threads)` on the
+   status line. A private or incognito window, where the service worker is
+   usually off, gives `ScriptProcessorNode (no threads)`. If the status
+   line does not say the path you want, write down what it says.
+3. Tap Start once, then do not touch the page until the results show.
+4. Count the open as silent when the summary's first row says `no audio
+   opened`, or when you heard no click during the flashes.
+5. Reload the page and do steps 3 and 4 again, 10 times for each path.
+6. For each silent open, download the session log, and write down the
+   browser, its version, the device and the path.
+
+On iOS Safari, an AudioContext starts only from a tap: if a run is
+silent, tap the page once during the flashes and write down whether the
+clicks start then.
+
 ## Reference
 
 ### The backend
@@ -548,7 +583,7 @@ Headless Chrome's pairs came every 10 ms too, but one was 34 ms off and
 the first was 1 s old; the reader drops pairs more than 100 ms old.
 Firefox's `contextTime` steps with its callback while `performanceTime`
 follows the read, hence the spread; the reader keeps the lower envelope (a
-pair at most 0.5 ms later than the least late of the last 32). Firefox
+read at most 0.5 ms later than the least late of its last 32 reads). Firefox
 also stamps the pair `outputLatency` before the read, though by its own
 `contextTime` that frame is at the output at the read; the reader adds
 `outputLatency` back where it sees that. Both are readings of one

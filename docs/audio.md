@@ -1157,9 +1157,11 @@ touch the core.
   of a line; Firefox 157's spread over 6 ms (its `contextTime` steps with
   its 512-frame callback, its `performanceTime` follows the read) and are
   stamped `outputLatency` before the read. The device keeps the lower
-  envelope (a pair at most 0.5 ms above the least late of the last 32)
-  and puts `outputLatency` back where a pair is that old. Both rules are
-  in the device's JavaScript and C, not the core: a core rule on report
+  envelope (a read at most 0.5 ms above the least late of the last 32
+  reads; v0.5.2 moved it from the blocks to the reader, see
+  [Web envelope](#web-envelope-v052)) and puts `outputLatency` back where
+  a pair is that old. Both rules are in the device's JavaScript, not the
+  core: a core rule on report
   spread (the halt rule's half period, 1.3 ms at 128 frames) restarted
   Firefox's fit 41 times in one run before them.
 - **One tier.** Every web onset is `YAU_TIER_WEB` (5), confirmed or not
@@ -1753,6 +1755,103 @@ itself runs only on hardware: to check a machine, open exclusive mode
 several times, because one open shows one state.
 `audio_clockstats --exclusive --seconds 12`, 8 times in a row, must give
 0 XRUN records in every run.
+
+## Web envelope (v0.5.2)
+
+The problem: the sound demo (`av.html`) on the ScriptProcessorNode path
+sometimes opened with no sound. A session before this one saw it in 2 of
+6 Firefox runs and 1 Chrome run. Conditions below: the laptop of this
+note, 2026-10-14, Windows 11, Realtek speakers, Firefox 157.0.1 and
+Chrome 155, both headless unless a row says headed, emsdk 6.0.12,
+`av.html --n 4` with the 2048-frame period the page asks for, each batch
+under the measurement lock (load at the lock 0 to 19 %).
+
+### How the opens were counted
+
+The harness that is now `tests/probe/web_audio` opens the page as a
+visitor does: a new browser and profile for each open, a trusted click on
+Start, no autoplay flag or preference. `probe.js` wraps `AudioContext` and taps each
+connection to the destination with an `AnalyserNode`, read every 100 ms.
+An open is silent when `yau_open()` failed or when no context the program
+kept carried a sample above 0.005 (the click peaks at 0.050). The probe
+also records each context's states, its `resume()` and `suspend()` calls
+with the page's user activation, and its callbacks.
+
+### The cause
+
+Every silent open had the same record: the first `yau_open()`, inside
+the Start click, failed with `gave no steady callbacks within 3 s
+(fit points=1 to 3)`, and the program ran its flashes with no sound.
+The context was not the problem: it was allowed to start, it ran (0.44 to
+0.74 s after `new AudioContext()`, after miniaudio's `suspend()` and
+`resume()`), and it made 54 to 62 callbacks before the open gave up.
+
+The reports were the problem. A debug build logged each block's report
+and each read of `getOutputTimestamp()`. In Firefox, `contextTime` steps
+with the browser's audio callback (8, 10.7 and 21.3 ms steps headless),
+and `performanceTime` is the read's time, so a pair's offset
+(`performanceTime` less `contextTime`) is a sawtooth 12 ms wide. v0.4.1
+kept the lower envelope in the block's C code, over the pairs the blocks
+saw. A ScriptProcessorNode block sees the pair that its own handler read
+just before it, at a phase locked to the browser's audio callback. When
+one lucky pair set the envelope low, every block's pair was above it by
+more than 0.5 ms until that pair left the last 32 blocks, 1.4 s at 43 ms
+a block. In 3 failing opens with the debug build, the reports stood still
+for 0.4 to 0.7 s, moved, then stood still from 0.9 to 1.2 s after the
+first block to the end of the open. The fit got 1 to 3 points and no
+500 ms span. On the AudioWorklet path a block runs every 2.7 ms
+and sees every pair, so the envelope held there.
+
+### The fix
+
+The reader keeps the envelope, over every read: the 10 ms timer's and the
+ScriptProcessorNode handler's. It publishes only reads on the envelope
+(at most 0.5 ms above the least late of its last 32 reads, about 0.3 s),
+and the block takes each new published pair. The rule is the one v0.4.1
+measured; only the samples it sees changed. The describe line's
+`passed` count is now the reader's.
+
+### Measurements
+
+The v0.5.1 and v0.5.2 builds of the same `av_sync.c`. Headless rows: one
+batch of 30 per cell. Headed rows: the two builds interleaved, 15 each.
+
+| Opens with no sound | v0.5.1 | v0.5.2 |
+|---|---|---|
+| Firefox, ScriptProcessorNode, headless | 8 of 30 | 0 of 30 |
+| Firefox, ScriptProcessorNode, headed | 3 of 15 | 0 of 15 |
+| Firefox, AudioWorklet, headless | 0 of 30 | 0 of 30 |
+| Chrome, ScriptProcessorNode, headless | 0 of 30 | 0 of 30 |
+| Chrome, ScriptProcessorNode, headed | 0 of 15 | 0 of 15 |
+| Chrome, AudioWorklet, headless | 0 of 30 | 0 of 30 |
+
+A debug build of each timed the first `yau_open()` in Firefox
+(ScriptProcessorNode, headless, 10 opens each, interleaved): 2.0 to 3.0 s
+with v0.5.1, 1.4 to 2.3 s with v0.5.2, of which the context's start took
+0.42 to 0.75 s. The open's 3 s limit runs from the device's start, after
+the context is made, so v0.5.2 leaves about 0.7 s of it. With sound, the
+other figures did not move: blocks with a report per run 173 to 229
+(v0.5.1) and 172 to 198 (v0.5.2) on the ScriptProcessorNode path, 0 XRUN
+records there; each trial's sound within -0.74 to +0.82 ms of its plan in
+the headed Firefox runs of both builds.
+
+The Chrome failure of the earlier session did not come back in 75 Chrome
+opens of v0.5.1. In Chrome a pair spreads 0.15 ms, so the 0.5 ms rule
+passed nearly every block's pair; a single pair far below the line, as
+headless Chrome once gave (34 ms off, [web.md](web.md)), would have held
+v0.5.1's reports for 32 blocks (1.4 s), and holds v0.5.2's for 32 reads
+(0.3 s). That is a reading of the rule, not a measurement.
+
+In the headless Firefox ScriptProcessorNode runs with sound, every
+trial's flash record was 16.7 or 33.3 ms (one or two frames) before its
+plan while the sound's was on it, in both builds. That is the headless
+screen's record, not the sound's, and it is not a timing figure.
+
+### Tests
+
+The envelope is JavaScript in the device; it runs only in a browser, so
+no native test or mutant reaches it. `tests/probe/web_audio/run.sh` is
+the check: 30 opens per browser and path, 0 silent.
 
 ## Not measured
 

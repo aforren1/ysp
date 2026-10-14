@@ -1,4 +1,4 @@
-/* ysp/audio.h - v0.5.1 - public domain single-header audio library
+/* ysp/audio.h - v0.5.2 - public domain single-header audio library
  *
  *   Sound at a time on the ysp/rt.h clock. A buffer is played with
  *   yau_play_at(buf, t); the header plans its first sample on the device
@@ -761,10 +761,11 @@
  *     AudioWorklet's currentFrame, exact, or the ScriptProcessorNode
  *     block's playbackTime, which Chrome 154 gives as currentTime plus the
  *     buffer: late by up to the audio device's chunk (10 ms there). A
- *     block that moves it (a skipped block) is an XRUN. A pair more than
- *     0.5 ms later, against its contextTime, than the least late of the
- *     last 32 is passed over: Firefox 157's pairs spread -3.3 to +3.1 ms
- *     (p1 to p99), its contextTime stepping with its 512-frame callback
+ *     block that moves it (a skipped block) is an XRUN. The reader passes
+ *     over a read more than 0.5 ms later, against its contextTime, than
+ *     the least late of its last 32 reads (v0.5.2: of every read, not of
+ *     the pairs the blocks saw): Firefox 157's pairs spread -3.3 to
+ *     +3.1 ms (p1 to p99), its contextTime stepping with its callback
  *     while performanceTime follows the read. Firefox 157 also gives
  *     performanceTime outputLatency before the read; where a pair is that
  *     old, outputLatency goes back on, so the frame its own claim puts at
@@ -884,6 +885,15 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.5.2 - WEB: the reader on the main thread keeps the lower envelope
+ *          of getOutputTimestamp() over every read and publishes only the
+ *          pairs on it (was: the block kept it over the pairs it saw). A
+ *          ScriptProcessorNode block sees one pair, read at a phase locked
+ *          to the browser's audio callback; in Firefox 157 those stayed
+ *          above the envelope for up to a second, the fit did not warm
+ *          up in 3 s, and yau_open() failed: 8 of 30 opens of av.html had
+ *          no sound, 0 of 30 with the fix (docs/audio.md, "Web
+ *          envelope"). The describe line's passed count is the reader's.
  *   v0.5.1 - EXCLUSIVE START: WASAPI exclusive mode writes one silent
  *          buffer before Start, and position reports count stream frames
  *          from after it. miniaudio started the stream on an empty buffer;
@@ -983,6 +993,14 @@
  *          positions, miniaudio's null device, the device and source
  *          interfaces, synthesis, the records, the parameter table.
  *
+ *   STATUS: v0.5.2, 2026-10-14 (docs/audio.md, "Web envelope"): av.html
+ *   on the test laptop, emsdk 6.0.12, Firefox 157 and Chrome 155, each
+ *   open a new browser and a trusted click, batches under the
+ *   measurement lock. Opens with no sound, v0.5.1 against v0.5.2: Firefox
+ *   ScriptProcessorNode 8 of 30 against 0 of 30 headless and 3 of 15
+ *   against 0 of 15 headed; Firefox AudioWorklet, Chrome on both paths:
+ *   none in either. Firefox's first open took 1.4 to 2.3 s (was 2.0 to
+ *   3.0 s). Not run on a phone.
  *   STATUS: v0.5.1, 2026-10-13 (docs/audio.md, "Exclusive start"): WASAPI
  *   exclusive on the test laptop's speakers (Realtek behind Intel SST, 480
  *   frames), MinGW gcc 16.1, interleaved with v0.5.0 under the measurement
@@ -1122,8 +1140,8 @@
 
 #define YAU_VERSION_MAJOR 0
 #define YAU_VERSION_MINOR 5
-#define YAU_VERSION_PATCH 1
-#define YAU_VERSION_STRING "0.5.1"
+#define YAU_VERSION_PATCH 2
+#define YAU_VERSION_STRING "0.5.2"
 
 #include "ysp/rt.h"
 
@@ -3433,10 +3451,12 @@ static const IID yau__IID_IAudioClock =
 #endif
 
 #if defined(MA_HAS_WEBAUDIO)
-/* What the page's timer last read from the AudioContext, on the main
- * thread, for the callback (BACKENDS, WEB): seq is odd while it writes. */
+/* The newest pair on the lower envelope of the main thread's reads of
+ * the AudioContext, for the callback (BACKENDS, WEB): seq is odd while it
+ * writes. */
 typedef struct yau__web_pub {
-    uint32_t seq, reserved_;
+    uint32_t seq;
+    uint32_t passed;         /* reads above the envelope, not published     */
     double   ctx_s;          /* getOutputTimestamp().contextTime            */
     double   perf_ms;        /* its performanceTime                         */
     double   base_s, out_s;  /* baseLatency, outputLatency; -1 = none      */
@@ -3469,10 +3489,7 @@ typedef struct yau__ma {
     int64_t    web_c0;      /* the context frame of stream frame 0; -1 = none */
     int64_t    web_ctx;     /* the newest report's context frame            */
     int64_t    web_est[8];  /* ScriptProcessorNode: the last estimates of web_c0 */
-    int32_t    web_n_est, web_n_off;
-    double     web_off_ms[32];  /* the last pairs' performanceTime less contextTime */
-    double     web_seen;    /* the newest pair read, used or not             */
-    uint32_t   web_passed;  /* pairs passed over (above the lower envelope)  */
+    int32_t    web_n_est, web_n_off;   /* web_n_off: pairs taken            */
     double     web_last;    /* the newest report's performanceTime; 0 = none */
     double     web_date_off;/* Date.now() minus performance.now(), ms       */
     uint32_t   web_moves;   /* times web_c0 moved: blocks the context skipped */
@@ -3508,17 +3525,26 @@ static void yau__ma_gate(yau__ma* m, ma_device* d) {
 #if defined(MA_HAS_WEBAUDIO)
 /* Attaches the reader to miniaudio's device (its window.miniaudio list,
  * miniaudio 0.11.25's JavaScript): a timer every 10 ms, and on the
- * ScriptProcessorNode path each callback too, writes the context's
- * getOutputTimestamp() into *pub; the ScriptProcessorNode's handler also
- * keeps the block's playbackTime. Returns -1 when the device is not there,
- * else (1 when getOutputTimestamp exists) | (2 on the AudioWorklet path). */
+ * ScriptProcessorNode path each callback too, reads the context's
+ * getOutputTimestamp() and writes the pairs on its lower envelope into
+ * *pub; the ScriptProcessorNode's handler also keeps the block's
+ * playbackTime. Returns -1 when the device is not there, else (1 when
+ * getOutputTimestamp exists) | (2 on the AudioWorklet path).
+ * The envelope is kept here, over every read, not in the callback: a
+ * ScriptProcessorNode's callback sees only the pair its own handler read,
+ * at a phase locked to the browser's audio callback. In Firefox 157
+ * (headless, ScriptProcessorNode, 2048 frames) that pair stayed above the
+ * envelope of the callback's last 32 for 0.5 to 1 s at a time, the fit got
+ * 1 to 3 points in 2.3 s, and yau_open() failed in 8 of 30 opens (0 of 30
+ * with the envelope here; docs/audio.md, "Web envelope"). */
 EM_JS(int, yau__web_attach, (int idx, void* pub), {
     var ma = typeof window !== 'undefined' ? window.miniaudio : null;
     var d = ma ? ma.get_device_by_index(idx) : null;
     if (!d || !d.webaudio) return -1;
     var ctx = d.webaudio, ok = typeof ctx.getOutputTimestamp === 'function', p = pub;
+    var offs = [], nread = 0, passed = 0;
     function publish() {
-        var o, s, pt, lat, now = performance.now();
+        var o, s, pt, lat, off, lo, i, now = performance.now();
         if (!ok || ctx.state !== 'running') return;
         o = ctx.getOutputTimestamp();
         pt = o.performanceTime;
@@ -3533,6 +3559,16 @@ EM_JS(int, yau__web_attach, (int idx, void* pub), {
         /* none yet, or one the browser has not renewed for 100 ms (seen
          * once, 1 s old, right after the context started) */
         if (!(o.contextTime > 0) || !(pt > 0) || now - pt > 100) return;
+        /* the lower envelope: a read whose time is more than 0.5 ms later,
+         * against its context time, than the least late of the last 32
+         * reads (about 0.3 s) is passed over. Firefox 157 gives
+         * performanceTime from the read but contextTime from its last
+         * callback: its pairs spread -3.3 to +3.1 ms (p1 to p99) about
+         * their line, Chrome 154's -0.15 to +0.14 ms. */
+        off = pt - o.contextTime * 1e3;
+        offs[nread++ & 31] = off;
+        for (lo = off, i = 0; i < offs.length; i++) if (offs[i] < lo) lo = offs[i];
+        if (off > lo + 0.5) { passed++; Atomics.store(HEAP32, (p + 4) >> 2, passed | 0); return; }
         s = Atomics.load(HEAP32, p >> 2);
         Atomics.store(HEAP32, p >> 2, (s + 1) | 0);
         HEAPF64[(p + 8) >> 3] = o.contextTime;
@@ -3578,8 +3614,9 @@ EM_JS(double, yau__web_now_ms, (double date_minus_perf), {
     return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now() - date_minus_perf;
 })
 
-/* The block's tick. The newest getOutputTimestamp() is the report of
- * every block: the context frame at the output, less the context frame of
+/* The block's tick. The newest getOutputTimestamp() pair on the envelope
+ * (yau__web_attach) is the report of every block: the context frame at
+ * the output, less the context frame of
  * stream frame 0, is the stream frame at the output, at performanceTime.
  * A report that has not moved since the last block is given again; the
  * core takes it as one that has not moved, which feeds nothing.
@@ -3602,24 +3639,11 @@ static void yau__web_tick(yau__ma* m, ma_uint32 n, yau_tick* tk) {
         perf = *(volatile double*)&m->pub.perf_ms;
         __atomic_thread_fence(__ATOMIC_ACQUIRE);
         s1 = yau__ld32(&m->pub.seq);
-        if (s0 == s1 && perf > m->web_last && perf != m->web_seen) {
-            /* the lower envelope: a pair whose time is more than 0.5 ms
-             * later, against its context time, than the least late of the
-             * last 32 is passed over. Firefox 157 gives performanceTime
-             * from the read but contextTime from its last callback, 512
-             * frames apart: its pairs spread -3.3 to +3.1 ms (p1 to p99)
-             * about their line, Chrome 154's -0.15 to +0.14 ms. */
-            double off = perf - ctx_s * 1e3, lo = off;
-            int i;
-            m->web_seen = perf;
-            m->web_off_ms[m->web_n_off++ & 31] = off;
-            for (i = 0; i < 32 && i < m->web_n_off; i++) if (m->web_off_ms[i] < lo) lo = m->web_off_ms[i];
-            if (off <= lo + 0.5) {
-                m->web_last = perf;
-                m->web_ctx = (int64_t)floor(ctx_s * (double)m->dev.playback.internalSampleRate + 0.5);
-            } else {
-                m->web_passed++;
-            }
+        /* the main thread published only pairs on the envelope */
+        if (s0 == s1 && perf > m->web_last) {
+            m->web_n_off++;
+            m->web_last = perf;
+            m->web_ctx = (int64_t)floor(ctx_s * (double)m->dev.playback.internalSampleRate + 0.5);
         }
     }
     if (blk >= 0) {
@@ -3970,7 +3994,7 @@ static int yau__ma_describe(void* ctx, char* buf, size_t cap) {
         return snprintf(buf, cap, "%s path=%s reports=%s(%d,%u passed) base_latency=%.1fms output_latency=%.1fms "
                         "block_moves=%u",
                         ma_get_backend_name(m->backend), m->web_worklet ? "audioworklet" : "scriptprocessor",
-                        m->web_reports ? "getOutputTimestamp" : "none", (int)m->web_n_off, (unsigned)m->web_passed,
+                        m->web_reports ? "getOutputTimestamp" : "none", (int)m->web_n_off, (unsigned)yau__ld32(&m->pub.passed),
                         base >= 0 ? base * 1e3 : -1.0, lat >= 0 ? lat * 1e3 : -1.0, (unsigned)m->web_moves);
     }
 #endif
