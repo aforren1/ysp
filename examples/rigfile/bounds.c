@@ -14,34 +14,41 @@
  *       for --width seconds (default 0.02), 50 to 150 ms apart, and reports
  *       each change in its own clock ("O" reports, mapped by its fit). Each
  *       change is matched to the first press or release of ROLE within
- *       half a width of it. Event time minus the board's time of the change
- *       is ROLE's stamp minus event; its range is the bounds. The program
- *       writes n, missed, extra, lo (the least), p5, median, p95, hi (the
- *       most), mean and the samples to in_bounds.txt (--file), in seconds,
- *       and prints the file's SHA-256.
+ *       half a width of it. d, event time minus the board's time of the
+ *       change, is ROLE's stamp minus event plus the reference's own error.
+ *       Each d is widened on both sides by the widest bracket the
+ *       reference's map rested on at that change, and a tick; lo is the
+ *       least of these, hi the most. The program writes n, missed, extra,
+ *       the method, the raw least and most d, the largest bracket, lo, p5,
+ *       median, p95 (of d), hi, mean and the samples to in_bounds.txt
+ *       (--file), in seconds, and prints the file's SHA-256.
  *       --store keeps the file in the profile's loopback/ folder and writes
  *       ROLE's bounds into the profile, only when the run passed.
- *   rigfile_bounds --sim [--role ROLE ...] [--n 200] ...
- *       The same run on a virtual clock, in a second or so: two simulated
- *       line boards on native USB (125 us microframes and an exponential
- *       tail of 50 us), the reference 20 ppm fast, the input 35 ppm slow,
- *       the input stamping its edge 1 to 2 us after it. ROLE, when given,
- *       must be bound to a line board in the profile; its key is not used.
- *       It prints the model's truth beside the measurement and fails when
- *       the measured bounds are further from the true ones than the
- *       reference's own error. The software check of this procedure; the
- *       hardware run is the user's.
+ *   rigfile_bounds --sim [--role ROLE ...] [--n 200] [--sim-seed N]
+ *                  [--sim-tail-us T] ...
+ *       The same run on a virtual clock (25 us steps): two simulated line
+ *       boards on native USB (125 us microframes and an exponential tail
+ *       of T us, default 50), the reference 20 ppm fast, the input 35 ppm
+ *       slow, the input stamping its edge 1 to 2 us after it; N varies the
+ *       random streams. ROLE, when given, must be bound to a line board in
+ *       the profile; its key is not used. It prints the model's truth and
+ *       fails unless lo and hi contain it. The software check of this
+ *       procedure; the hardware run is the user's.
  *
  * Why the reference is a line board's own report and not the line-in of
  * devices_spec 12: the board stamps its pin change in its interrupt and its
  * clock is mapped by a bracket fit on native USB; ysp/audio.h's capture
  * times have no loopback check yet (tier 3), and a capture's fixed delay
- * would go into every bound. The reference's own error is in the
- * measurement: the file states its fit's widest bracket and spread.
+ * would go into every bound.
+ * Why both sides of each d: correcting d by "late by 0 to the bracket"
+ * (ysp/rt.h, BRACKET) left the truth outside the bounds in 2 of 60
+ * simulated runs, because the map also rests on the board's syncs, whose
+ * delivery no bracket bounds, and was early by up to 65 us
+ * (docs/device.md, "The rig profile tools").
  *
  * Exit code 0 when at least 90% of the changes were matched and the input
- * gave no event outside a match window (and, with --sim, the bounds agree
- * with the truth); 1 otherwise; 2 for a usage or setup error.
+ * gave no event outside a match window (and, with --sim, the bounds
+ * contain the truth); 1 otherwise; 2 for a usage or setup error.
  */
 #if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_WARNINGS)
 #define _CRT_SECURE_NO_WARNINGS
@@ -62,7 +69,7 @@
 
 #define SIMQ  65536
 #define SIMEV 256
-#define SIM_STEP_NS 100000      /* the main loop's step of the virtual clock */
+#define SIM_STEP_NS 25000       /* the main loop's step of the virtual clock */
 
 enum { SE_PIN, SE_Q, SE_I, SE_OUT };
 
@@ -86,6 +93,7 @@ typedef struct sboard {
 } sboard;
 
 static int64_t g_now = 1000000000;
+static double  g_tail_ns = 50000.0;  /* the mean of the delivery tail (--sim-tail-us) */
 static sboard  g_sref, g_sin;
 static int64_t g_truth[MAXE];   /* host time of each reference pin change  */
 static int     g_ntruth;
@@ -102,7 +110,7 @@ static uint32_t sim_ticks(const sboard* b, int64_t host) { return (uint32_t)(uin
 /* Bytes the board makes at host time t reach the host after a microframe
  * and a tail, in order. */
 static void sim_send(sboard* b, int64_t t, const char* s, int n) {
-    int64_t at = t + (int64_t)(sim_u01(b) * 125000.0 - 50000.0 * log(sim_u01(b)));
+    int64_t at = t + (int64_t)(sim_u01(b) * 125000.0 - g_tail_ns * log(sim_u01(b)));
     int i;
     if (b->qtail != b->qh && at < b->qt[(b->qtail - 1) % SIMQ]) at = b->qt[(b->qtail - 1) % SIMQ];
     for (i = 0; i < n; i++) {
@@ -224,7 +232,9 @@ static ydev_transport sim_transport(sboard* b) {
 
 /* --- the run ------------------------------------------------------------ */
 
-typedef struct stamp { int64_t t; uint32_t unc_us; int used; } stamp;
+/* t; for the input its unc_us; for the reference w, the widest bracket
+ * its map rested on when the report came */
+typedef struct stamp { int64_t t, w; uint32_t unc_us; int used; } stamp;
 
 static unsigned char g_ev_mem[YRT_RING_BYTES(4096)];
 static yrt_ring      g_evring;
@@ -234,7 +244,7 @@ static stamp         g_in[MAXE], g_ref[MAXE];
 static int           g_nin, g_nref, g_sim;
 static ydev_device   g_rdev, g_idev;
 static yrig_profile  g_prof;
-static int64_t       g_d[MAXE];
+static int64_t       g_d[MAXE], g_lo[MAXE], g_hi[MAXE], g_w[MAXE];
 static double        g_unc[MAXE];
 
 static void in_sink(void* ctx, const yin_event* e) {
@@ -259,13 +269,19 @@ static void collect(void) {
             g_in[g_nin].unc_us = ev[k].aux;
             g_in[g_nin++].used = 0;
         }
-    while ((n = yrt_ring_drain(&g_log, ev, 256)) > 0)
+    while ((n = yrt_ring_drain(&g_log, ev, 256)) > 0) {
+        ydev_stats st;
+        int64_t w;
+        ydev_get_stats(&g_rdev, &st);
+        w = st.fit.width_ns > 0 ? st.fit.width_ns : st.fit.spread_ns;
         for (k = 0; k < n && g_nref < MAXE; k++)
             if (ev[k].source == YRT_SRC_DEVICE && ev[k].kind == YDEV_REC_OUT && ev[k].aux == g_rdev.d.device &&
                 (ev[k].u.u16[18] & YDEV_OUT_REPORTED)) {
                 g_ref[g_nref].t = ev[k].u.i64[0];
+                g_ref[g_nref].w = w;
                 g_ref[g_nref++].used = 0;
             }
+    }
 }
 
 /* dt of the clock: the virtual one in steps, polling both boards; the real
@@ -327,7 +343,7 @@ static void usage(void) {
     fprintf(stderr, "usage: rigfile_bounds --list\n"
                     "       rigfile_bounds --role ROLE --ref KEY [--n N] [--width S] [--warmup S] [--file PATH]\n"
                     "                      [--rig NAME] [--rig-dir DIR] [--store]\n"
-                    "       rigfile_bounds --sim [--role ROLE] [--n N] ... (the same options)\n");
+                    "       rigfile_bounds --sim [--role ROLE] [--sim-seed N] [--sim-tail-us T] [--n N] ... (the same options)\n");
 }
 
 /* The profile at dir/name; 0, or 2 with a message. */
@@ -387,6 +403,8 @@ int main(int argc, char** argv) {
     const char* rig_name = NULL;
     const char* rig_dir = NULL;
     int n = 200, i, k, do_store = 0, nd = 0, missed = 0, extra = 0, ok, sim_ok = 1, nu = 0;
+    uint64_t seed = 0;
+    int64_t lo = 0, hi = 0, wmax = 0, tick = (int64_t)ybox_ns_per_tick(YBOX_LINE);
     double width_s = 0.02, warmup_s = 6.0;
     int64_t width_ns, half;
     char dir[600], path[700], a[40];
@@ -409,6 +427,8 @@ int main(int argc, char** argv) {
         else if (strcmp(s, "--n") == 0 && v) { n = atoi(v); i++; }
         else if (strcmp(s, "--width") == 0 && v) { width_s = atof(v); i++; }
         else if (strcmp(s, "--warmup") == 0 && v) { warmup_s = atof(v); i++; }
+        else if (strcmp(s, "--sim-seed") == 0 && v) { seed = strtoull(v, NULL, 10); i++; }
+        else if (strcmp(s, "--sim-tail-us") == 0 && v) { g_tail_ns = atof(v) * 1000.0; i++; }
         else if (strcmp(s, "--file") == 0 && v) { out = v; i++; }
         else if (strcmp(s, "--store") == 0) do_store = 1;
         else if (strcmp(s, "--rig") == 0 && v) { rig_name = v; i++; }
@@ -448,8 +468,10 @@ int main(int argc, char** argv) {
     ringd.bytes = sizeof g_log_mem;
     if (!yrt_ring_open(&g_log, &ringd)) return 2;
     if (g_sim) {
-        sim_init(&g_sref, 20.0, 0x9E3779B97F4A7C15ull, &g_sin, 1);
-        sim_init(&g_sin, -35.0, 0xD1B54A32D192ED03ull, NULL, 0);
+        sim_init(&g_sref, 20.0, 0x9E3779B97F4A7C15ull ^ (seed * 0x2545F4914F6CDD1Dull), &g_sin, 1);
+        sim_init(&g_sin, -35.0, 0xD1B54A32D192ED03ull ^ (seed * 0x9E3779B97F4A7C15ull), NULL, 0);
+        rng ^= seed * 0xD1B54A32D192ED03ull;
+        if (!rng) rng = 1;
     }
 
     memset(&rd, 0, sizeof rd);
@@ -525,17 +547,34 @@ int main(int argc, char** argv) {
         if (k < g_nin && g_in[k].t < g_ref[i].t + half) {
             g_in[k].used = 1;
             g_ref[i].used = 1;
-            g_d[nd++] = g_in[k].t - g_ref[i].t;
+            /* The input's stamp minus the true change is d plus the
+             * reference's own error. ysp/rt.h says a BRACKET map is late by
+             * 0 to its widest bracket, but the board's syncs are pairs of
+             * width 0 whose delivery delay no bracket bounds, and the
+             * simulation found the map early too (docs/device.md): so the
+             * error is taken as within that bracket, plus a tick, on
+             * either side. */
+            g_d[nd] = g_in[k].t - g_ref[i].t;
+            g_lo[nd] = g_d[nd] - g_ref[i].w - tick;
+            g_hi[nd] = g_d[nd] + g_ref[i].w + tick;
+            g_w[nd] = g_ref[i].w;
+            if (g_ref[i].w > wmax) wmax = g_ref[i].w;
+            nd++;
             g_unc[nu++] = (double)g_in[k].unc_us * 1e-6;
             k++;
         } else missed++;
     }
     missed += (2 * n > g_nref) ? 2 * n - g_nref : 0;   /* changes the board never reported */
     for (k = 0; k < g_nin; k++) if (!g_in[k].used) extra++;
+    for (i = 0; i < nd; i++) {
+        if (i == 0 || g_lo[i] < lo) lo = g_lo[i];
+        if (i == 0 || g_hi[i] > hi) hi = g_hi[i];
+    }
 
     if (g_sim) {
         /* the model's truth: each matched pair against the true pin change */
         int64_t in_lo = INT64_MAX, in_hi = INT64_MIN, ref_max = 0, ref_lo = INT64_MAX, ref_hi = INT64_MIN;
+        int early = 0, outside = 0;
         int m = 0, j = 0;
         for (i = 0, k = 0; i < g_nref; i++) {
             int64_t tp, ein, eref;
@@ -551,16 +590,20 @@ int main(int argc, char** argv) {
             if (eref < ref_lo) ref_lo = eref;
             if (eref > ref_hi) ref_hi = eref;
             if (llabs(eref) > ref_max) ref_max = llabs(eref);
+            if (eref < -tick) early++;                    /* outside "late by 0 to the bracket" */
+            if (llabs(eref) > g_w[m - 1] + tick) outside++;  /* outside this change's bracket */
         }
         (void)k;
         if (m > 0 && nd > 0) {
-            int64_t lo = INT64_MAX, hi = INT64_MIN;
-            char b1[40], b2[40], b3[40];
-            for (i = 0; i < nd; i++) { if (g_d[i] < lo) lo = g_d[i]; if (g_d[i] > hi) hi = g_d[i]; }
-            printf("simulated truth over %d changes: the input's stamp minus the change %s to %s s; the reference's %s to %s s\n", m,
-                   secs(b1, in_lo), secs(b2, in_hi), secs(b3, ref_lo), secs(a, ref_hi));
-            sim_ok = llabs(lo - in_lo) <= ref_max && llabs(hi - in_hi) <= ref_max;
-            if (!sim_ok) fprintf(stderr, "rigfile_bounds: the measured bounds are further from the truth than the reference's error\n");
+            char b1[40], b2[40], b3[40], b4[40];
+            printf("simulated truth over %d changes: the input's stamp minus the change %s to %s s; the reference's %s to %s s "
+                   "(largest %s s); %d changes with the reference early by more than a tick, %d outside their bracket\n", m,
+                   secs(b1, in_lo), secs(b2, in_hi), secs(b3, ref_lo), secs(a, ref_hi), secs(b4, ref_max), early, outside);
+            /* the bounds must contain the truth */
+            sim_ok = lo <= in_lo && hi >= in_hi;
+            printf("simulated check: bounds %s to %s s %s the truth; wider by %s s below and %s s above\n", secs(b1, lo), secs(b2, hi),
+                   sim_ok ? "contain" : "DO NOT contain", secs(b3, in_lo - lo), secs(a, hi - in_hi));
+            if (!sim_ok) fprintf(stderr, "rigfile_bounds: the bounds do not contain the model's truth\n");
         } else sim_ok = 0;
     }
 
@@ -592,11 +635,16 @@ int main(int argc, char** argv) {
         PUT("missed %d\n", missed);
         PUT("extra %d\n", extra);
         if (nd) {
-            PUT("lo_s %s\n", secs(a, g_d[0]));
+            PUT("bounds_method reference-bracket: each difference widened on both sides by the reference map's widest "
+                "bracket at that change and a tick; lo the least, hi the most\n");
+            PUT("raw_lo_s %s\n", secs(a, g_d[0]));
+            PUT("raw_hi_s %s\n", secs(a, g_d[nd - 1]));
+            PUT("ref_bracket_max_s %s\n", secs(a, wmax));
+            PUT("lo_s %s\n", secs(a, lo));
             PUT("p5_s %s\n", secs(a, pctl(g_d, nd, 0.05)));
             PUT("median_s %s\n", secs(a, pctl(g_d, nd, 0.5)));
             PUT("p95_s %s\n", secs(a, pctl(g_d, nd, 0.95)));
-            PUT("hi_s %s\n", secs(a, g_d[nd - 1]));
+            PUT("hi_s %s\n", secs(a, hi));
             PUT("mean_s %s\n", secs(a, (int64_t)floor(mean + 0.5)));
         }
         if (nu) PUT("in_unc_median_s %.7f\n", g_unc[nu / 2]);

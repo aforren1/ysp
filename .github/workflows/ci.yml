@@ -198,6 +198,8 @@ jobs:
           expect 0 "$bin/rigfile_profile" --dir "$rig"
           expect 1 "$bin/rigfile_onset" "$RUNNER_TEMP/photodiode.csv" --min-n 301 --file "$RUNNER_TEMP/x.txt"
           expect 2 "$bin/rigfile_bounds" --role photo
+          # 1 when the bounds do not contain the simulated truth: a heavy USB tail and another seed.
+          expect 0 "$bin/rigfile_bounds" --sim --sim-seed 3 --sim-tail-us 500 --n 50 --warmup 2 --file "$RUNNER_TEMP/b2.txt"
           # ysp/net.h loads liblsl at run time; the fetched copy is not on the
           # loader's path, so each program must say so and exit with its
           # code, not crash.
