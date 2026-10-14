@@ -719,6 +719,10 @@ pack and interprets the experiment definition. Deploy is player plus
 pack. Web deploy is `player.wasm` plus pack. No compile step in the
 common case.
 
+The experiment definition's format, with its open decisions and the
+gaps it found in the C APIs, is in
+[experiment_format.md](experiment_format.md) (decided 2026-10-14).
+
 - **Runner protocol.** A localhost WebSocket with a session token
   carrying control, resource updates, live parameters, status and the
   log stream. The designer, a future desktop shell, the operator

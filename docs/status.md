@@ -476,3 +476,17 @@ Status:
 - v0.2.1: a custom decoder that returned not-ready was never woken again (a lost wake-up on the decode thread); now it is retried each display frame, and after an outage the due frame shows on time (docs/video.md).
 - v0.2.0: Media Foundation (DXVA by default), planar NV12/I420 upload to ysp_gfx's shader by default, the shared D3D11 GPU path as an option, the soundtrack on ysp/audio.h streams, and ysp_timeline base rates for any rate but 1.
 - v0.1.0. A core test with a scripted decoder and display on a virtual clock (cadences, slips against an exact model, stalls, seeks, the timeline agreement under 20 us of noise); 20 mutations caught. In a 640 x 360 window on the Iris Xe: `yvid_update()` with a 1920 x 1080 RGBA8 upload 0.95 ms mean, 1.8 ms p99; no heap call per frame. pl_mpeg 1080p 5.5 ms a frame plus 7 ms of I420 to RGBA8 on the decode thread. No Media Foundation, no GPU zero-copy, no capture yet. [Design notes](video.md).
+
+## Formats not built
+
+### The experiment definition
+
+- Design: [experiment_format.md](experiment_format.md)
+- Read by: the player (rig_spec 6); not built
+
+Purpose: The pack's EXPERIMENT entry: a JSON file, read by ysp/json.h, that names stimuli, trial templates, adaptive methods, device roles and a tree of nodes, each lowered to ysp/trials.h, ysp/timeline.h, ysp/response.h, ysp/gfx.h and the method headers; and the data set the player writes.
+
+Status:
+
+- Design decided, 2026-10-14: all 15 decisions accepted; D4 changed (durations are plain numbers in seconds, and every duration key and variable ends in `_s`); D11 records flagged frames only, and a requeue, if ever added, is an explicit rule in the definition. G7 (a canonical form for non-integer numbers in ysp/json.h) is the prerequisite for the experiment hash. No loader, no player, no test.
+- Proposal, 2026-10-13. Four worked examples (2AFC staircase, RDK, Stroop from a CSV, EEG trigger) were mapped to the C examples field by field; 13 gaps in the C APIs are listed.
