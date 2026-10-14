@@ -19,7 +19,7 @@
  * after tools/vendor_pack.py --write):
  *     cl /nologo /O1 /Zi /fsanitize=address /fsanitize=fuzzer /Iinclude /Ipack
  *        /Ithird_party/lodepng /Ithird_party/stb tests\fuzz\import_fuzz.c
- *     import_fuzz.exe -max_total_time=3600 -timeout=10 -rss_limit_mb=4096 corpus_import
+ *     import_fuzz.exe -max_total_time=3600 -timeout=10 -rss_limit_mb=4096 -max_len=40000 corpus_import
  * libFuzzer, clang:
  *     clang -O1 -g -fsanitize=fuzzer,address,undefined -Iinclude -Ipack -Ithird_party/lodepng
  *         -Ithird_party/stb tests/fuzz/import_fuzz.c -o import_fuzz -lm

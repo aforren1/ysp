@@ -1270,7 +1270,7 @@ amplitude) between frame 200 and the last 200 frames (MSVC 19.44).
 |---|---|---|---|
 | MSVC 19.44 `/W4 /WX`, full (`YSP_BUILD_LAYOUT`) | 246 checks, 0 failed | 89, 0 failed | video through ffmpeg: MPEG-1 and MP4 |
 | MSVC 19.44 `/W4 /WX`, core | 237, 0 failed | 89, 0 failed | the same `core.ysppak` as the full build, byte for byte |
-| Linux gcc 11.4 (WSL2), ASan and UBSan, core | 235, 0 failed | 88, 0 failed | MPEG-1 through ffmpeg 4.4.2; no MP4 index off Windows; the corpus pack, manifest included, is the MSVC core build's byte for byte (`sha256:013f3079...`), the resampled WAV and the sine's error too |
+| Linux gcc 11.4 (WSL2), ASan and UBSan, core | 235, 0 failed | 89, 0 failed | MPEG-1 through ffmpeg 4.4.2; no MP4 index off Windows; the corpus pack, manifest included, is the MSVC core build's byte for byte (`sha256:013f3079...`), the resampled WAV and the sine's error too |
 | MinGW gcc 16.1, `-Wall -Wextra -Wpedantic -Wshadow -Wfloat-conversion` | | 89, 0 failed | `pack/import.c` without a warning |
 
 **Phase 3: mutations.** `tests/mutate/import.toml`, 38 mutants of
@@ -1280,7 +1280,18 @@ number, a comma without a quote and a column of numbers and text while
 the list was written; the 38th (j-10, the frame-size check the fuzzer
 led to) killed too.
 
-**Phase 3: fuzzing.** FUZZ_RESULT
+**Phase 3: fuzzing.** `tests/fuzz/import_fuzz.c` under MSVC 19.51
+`/fsanitize=address /fsanitize=fuzzer`, from 97 seeds (PsychoPy's
+workbooks and photographs, their ICC profiles, the tool test's workbooks
+and JPEG files), in 10-minute pieces under the build guard. A first run
+without a length bound (about 150,000 inputs) found one timeout: 1,450
+bytes whose frame claimed 512 x 62977, which the reader passed and
+stb_image decoded (0.3 s without sanitizers, 13 s under them). The
+reader now refuses a file too short for its frame (4.9, mutant j-10),
+and the target decodes frames up to 4 megapixels only. Then, with
+`-max_len=40000`: 922,080 inputs in 3,600 s, no crash, no timeout, no
+leak; 6,272 coverage features, 3,499 corpus files, peak RSS 519 MB. The
+3,499 files replayed on Linux gcc 11.4 under ASan and UBSan: no report.
 
 ### 9.2 Why zip64 only where needed
 
