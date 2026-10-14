@@ -1,9 +1,10 @@
 # The experiment definition
 
-Status: proposal, 2026-10-13. Nothing is built. This page designs the
-file that the player interprets (rig_spec 6): the EXPERIMENT entry of a
-pack. Each open decision gives the options, the evidence and a
-recommendation, and is PROPOSED until the user decides. Part 1 is
+Status: design decided 2026-10-14 (proposed 2026-10-13). Nothing is
+built. This page designs the file that the player interprets (rig_spec
+6): the EXPERIMENT entry of a pack. Each decision gives the options, the
+evidence and the choice. The user decided D1 to D15 on 2026-10-14; D4
+changed from the proposal. Part 1 is
 explanation; part 2 is reference, with four worked examples checked
 against the C examples. Where this page and rig_spec 6 or 14.5 to 14.6
 disagree about the definition, this page is newer.
@@ -53,7 +54,7 @@ that structure; it does not invent a new one.
 
 ### 1.3 Decisions
 
-**D1. Syntax. PROPOSED: JSON, with a `note` key for comments.**
+**D1. Syntax. DECIDED (2026-10-14): JSON, with a `note` key for comments.**
 - Options: JSON; TOML; YAML; JSON with comments (JSONC, JSON5).
 - Evidence: ysp/json.h is decided as the reader and writer, and the
   manifest, the pack source description and the rig profile are JSON.
@@ -63,10 +64,10 @@ that structure; it does not invent a new one.
   fuzz target and canonical writer. The designer writes most
   definitions; comments matter for hand edits only. ysp/json.h refuses
   comments, and a comment that the canonical form drops cannot be kept.
-- Recommendation: JSON. Any object may have `"note": "text"`. A note is
+- Decision: JSON. Any object may have `"note": "text"`. A note is
   part of the hash, as any value is.
 
-**D2. Canonical form, numbers and the hash. PROPOSED.**
+**D2. Canonical form, numbers and the hash. DECIDED (2026-10-14).**
 - Options for numbers: (a) JSON numbers in a canonical decimal form;
   (b) reals as decimal strings, as in the manifest (`"1e-4"`).
 - Evidence: the manifest uses strings because its tool refuses a
@@ -75,7 +76,7 @@ that structure; it does not invent a new one.
   errors in hand edits. ysp/json.h keeps a number's text and writes it
   back unchanged, so `0.50` and `0.5` hash differently (gap G7). The rig
   profile writes seconds as the exact decimal of the nanoseconds.
-- Recommendation: (a). A duration is read with `yjs_fixed(v, 9, &ns)`
+- Decision: (a). A duration is read with `yjs_fixed(v, 9, &ns)`
   and written as the exact decimal of its nanoseconds. Another real is
   written as the shortest exact decimal of its source text (no exponent,
   no trailing zeros, `-0` as `0`). A key at its default is left out. The
@@ -86,36 +87,50 @@ that structure; it does not invent a new one.
   bytes into the pack and records `"op": "canonical"` in the entry's
   derivation, so the entry's SHA-256 in the manifest is the experiment
   ID.
+- Prerequisite: gap G7. ysp/json.h has no canonical form for a
+  non-integer number other than fixed point, so the experiment hash
+  cannot be computed as decided until G7 is closed.
 
-**D3. Named sets are objects; order is in arrays. PROPOSED.**
+**D3. Named sets are objects; order is in arrays. DECIDED (2026-10-14).**
 - Evidence: the canonical form sorts keys, so order in an object is
   lost; arrays keep it. The parser refuses a duplicate key, which gives
   the duplicate-name check for free. devices_spec 11.1's YAML used a
   list of roles.
-- Recommendation: `stimuli`, `trials`, `methods`, `devices`, `vars` and
+- Decision: `stimuli`, `trials`, `methods`, `devices`, `vars` and
   `columns` are objects keyed by name. Steps, children, choices and
   rules are arrays. Draw order is `layer` (an integer, default 0), then
   the name.
 
-**D4. Units and names. PROPOSED.**
+**D4. Units and names. DECIDED (2026-10-14).**
 - Options (rig_spec 14.6 safeguards): a duration as a number or as text
   with a unit (`"250 ms"`); a `_s` suffix on duration keys, as in the
   rig profile; a warning above 60 s.
-- Evidence: one spelling per value keeps the hash stable. The bindings
-  carry no unit in a name (conventions.md, Units), and jsPsych's names
-  (`minimum_valid_rt`) carry none. A unit string accepted and rewritten
-  by the loader makes the stored bytes differ from the source.
-- Recommendation: a bare number in seconds, or a variable that holds
+- Evidence: one spelling per value keeps the hash stable. A unit string
+  accepted and rewritten by the loader makes the stored bytes differ
+  from the source. Without a suffix, a time reads like a size or a count
+  (`duration` beside `count`, `w`, `reps`). The rig profile already
+  writes `pulse_s` and `onset_offset_s` (devices_spec 11.2). The
+  bindings carry no unit in a name (conventions.md, Units), and
+  jsPsych's names (`minimum_valid_rt`) carry none; the definition
+  differs from both on purpose.
+- Decision (the user changed the proposal, which had no suffix): a
+  duration is a bare number in seconds, or a variable that holds
   seconds; any other string where a duration goes is refused with a
-  message that says "seconds".
-  No unit suffix on keys. A C field `x_ns` is the key `x`, in seconds.
+  message that says "seconds". Every key and every variable that holds
+  a duration ends in `_s`: `wait_s`, `at_s`, `duration_s`, `delay_s`,
+  `stagger_s`, `minimum_valid_rt_s`, `pulse_s`, a jitter named `soa_s`,
+  the response variable `rt_s`. Other quantities keep plain names (`w`,
+  `sf`, `count`, `speed`). A C field `x_ns` is the key `x_s`. The loader
+  refuses a duration key without the suffix and names the suffixed key.
+  Data column names come from the C writers (`YRSP_DATA_COLS` writes
+  `rt`), not from this rule.
   The designer shows the unit beside each field and warns above 60 s;
   the loader's lint warns too, and does not refuse. A jsPsych importer
   converts ms to s. Spatial units are `px` or `deg` for the whole
   display (`ygfx_desc.units`); the degrees come from the rig's viewing
   geometry, never from the pack, as the calibration does (gap G2).
 
-**D5. Order and sampling: the rules text. PROPOSED.**
+**D5. Order and sampling: the rules text. DECIDED (2026-10-14).**
 - Options: (a) jsPsych keys (`randomize_order`, `repetitions`,
   `sample`) that map to `ytr_desc`; (b) ysp/trials.h's rules text,
   one statement per array element; (c) both.
@@ -126,13 +141,14 @@ that structure; it does not invent a new one.
   settings back in the same text. jsPsych's keys cover a subset and
   would need constraints added anyway. Two syntaxes for one desc give
   two places to be wrong.
-- Recommendation: (b), `"rules": ["order constrained", "max_run
+- Decision: (b), `"rules": ["order constrained", "max_run
   congruent=1 3"]`. The designer and a jsPsych importer show and write
   rules. jsPsych's names stay for the tree (`timeline`,
   `timeline_variables`, `name`, `data`, `record_data`) and the response
-  (`choices`, `key_answer`, `minimum_valid_rt`, `response_ends_trial`).
+  (`choices`, `key_answer`, `minimum_valid_rt_s` with D4's suffix,
+  `response_ends_trial`).
 
-**D6. Values: references and maps, no expression language. PROPOSED.**
+**D6. Values: references and maps, no expression language. DECIDED (2026-10-14).**
 - Options: (a) references (`"$side"`) and lookups (`by` and `map`), with
   a few fixed forms; (b) a small expression grammar of our own;
   (c) Luau expressions.
@@ -140,12 +156,12 @@ that structure; it does not invent a new one.
   boolean variables (`$practice`, `$first_in_block`) and the response's
   correctness. A grammar of our own is a second language to specify,
   fuzz and teach. Luau is proposed for scripts, not decided.
-- Recommendation: (a) in version 1. A computed value, a branch on an
+- Decision: (a) in version 1. A computed value, a branch on an
   arithmetic test, or a custom flow is a script; when the script layer
   exists, a template takes `"script": "name"` and a value takes
   `{"lua": "..."}`, which version 1 refuses by name.
 
-**D7. The trial template: events, response, after. PROPOSED.**
+**D7. The trial template: events, response, after. DECIDED (2026-10-14).**
 - Options: (a) the three-part template; (b) a general state machine of
   routines (PsychoPy Builder); (c) only scripts for anything with a
   response.
@@ -155,15 +171,15 @@ that structure; it does not invent a new one.
   `ytl_at()`, ending in a MARK. (b) needs transitions, conditions and a
   scheduler in the format. (c) contradicts "a data-only experiment has
   no script".
-- Recommendation: (a). Anything else is a script (D6).
+- Decision: (a). Anything else is a script (D6).
 
-**D8. Random streams. PROPOSED.**
+**D8. Random streams. DECIDED (2026-10-14).**
 - Evidence: trials.md: "a draw from the session's generator between
   next() and update() would move every later draw and `ytr_restore()`
   would not repeat it". The RDK program seeds each field with
   `seed * 1000003 + index`, and the 2AFC program draws the side from a
   second generator of its own: two ad hoc schemes.
-- Recommendation: one session seed `S` (the operator gives it, or the
+- Decision: one session seed `S` (the operator gives it, or the
   player draws it from the OS at start), logged. Each node's generator
   is seeded from a fixed hash of `S`, the node's path and its iteration,
   so skipping a node or looping it does not shift any other node's
@@ -172,7 +188,7 @@ that structure; it does not invent a new one.
   `vars` draws and `$trial_seed` (a stimulus generator's seed). Version 1
   pins the hash.
 
-**D9. The data set. PROPOSED: a folder of CSV files and `session.json`.**
+**D9. The data set. DECIDED (2026-10-14): a folder of CSV files and `session.json`.**
 - Options: (a) a folder: `trials.csv`, `frames.csv`, `events.csv`,
   `streams/`, `clock.csv` and `session.json`; (b) the same in one zip,
   written at the end; (c) SQLite or HDF5.
@@ -182,12 +198,12 @@ that structure; it does not invent a new one.
   session unless it also writes (a). (c) adds a dependency and a reader.
   devices_spec 11.4 lists the content: device rows, event rows, stream
   tables, clock pairs and fits.
-- Recommendation: (a) on a rig; a zip of (a) on the web (2.13).
+- Decision: (a) on a rig; a zip of (a) on the web (2.13).
   `session.json` is canonical JSON written at start and again at close
   with `"closed": true`, so an unfinished session is visible, as the
   trials writer's sidecar does with `closed=1`.
 
-**D10. What a trial row records. PROPOSED.**
+**D10. What a trial row records. DECIDED (2026-10-14).**
 - Evidence: the examples write the response's columns
   (`YRSP_DATA_COLS`: onset source, tier, residuals, response tier,
   flags), a count of dropped vblanks over the motion frames (RDK), the
@@ -195,12 +211,12 @@ that structure; it does not invent a new one.
   contrast shown and the estimate (2AFC). jsPsych writes every timeline
   variable by default (`save_timeline_variables`). The writer takes at
   most 64 columns (gap G10).
-- Recommendation: 2.10 lists the columns. Per-stimulus landing columns
+- Decision: 2.10 lists the columns. Per-stimulus landing columns
   are written for the stimuli in the template's `record` list (default:
   the response's `from` and any stimulus with a trigger at its onset);
   every other landing is in `events.csv` and every flip in `frames.csv`.
 
-**D11. Flagged frames: record, do not act. PROPOSED.**
+**D11. Flagged frames: record, do not act. DECIDED (2026-10-14).**
 - Options: (a) record the tier and flags of every flip and the worst of
   them per stimulus and per trial, and do nothing else; (b) also allow
   `requeue` of a trial whose named stimulus had a dropped or flagged
@@ -211,18 +227,20 @@ that structure; it does not invent a new one.
   `YSCR_FLIP_BELOW_TIER`. Psychtoolbox users often repeat a trial with
   a missed flip; a requeue changes the trial counts that the analysis
   sees.
-- Recommendation: (a) in version 1. `display.min_tier` refuses a start
-  on a path below it and flags frames below it in the data. Add (b) only
-  if the user wants it; then the flagged row stays in the data, marked.
+- Decision: (a). No automatic requeue. `display.min_tier` refuses a
+  start on a path below it and flags frames below it in the data. If a
+  requeue is ever added, it is an explicit rule that the definition
+  states (a node key that names the stimulus and the flag), never a
+  default; the flagged row then stays in the data, marked.
 
-**D12. Versions and migration. PROPOSED.**
+**D12. Versions and migration. DECIDED (2026-10-14).**
 - Options: refuse every old version; migrate old versions at load;
   migrate only in the designer.
 - Evidence: the pack reader refuses a version it does not know
   (rig_spec 1, principle 4). ysp/json.h refuses unknown keys, so an older
   player meets a newer key as "unknown key", not as a version message.
   A methods section cites the pack ID, so an old pack must still run.
-- Recommendation: `"version"` is one integer, raised for every added
+- Decision: `"version"` is one integer, raised for every added
   key or changed meaning. The player refuses a newer version with "this
   player reads up to N". It migrates an older version forward at load,
   one pure step per version, and records the stored bytes' SHA-256 and
@@ -230,28 +248,28 @@ that structure; it does not invent a new one.
   of old files to their migrated canonical bytes. A step that cannot
   keep the meaning refuses and names the key.
 
-**D13. Designer state stays out of the file. PROPOSED.**
+**D13. Designer state stays out of the file. DECIDED (2026-10-14).**
 - Evidence: the hash covers every byte (D2). Node positions in an editor
   or a collapsed panel would change the experiment ID.
-- Recommendation: the designer keeps its view state in the project
+- Decision: the designer keeps its view state in the project
   (local storage), not in the definition. `note` is the only free text.
 
-**D14. Text from tables is laid out at pack build. PROPOSED.**
+**D14. Text from tables is laid out at pack build. DECIDED (2026-10-14).**
 - Evidence: rig_spec 5.2: static text is stored as laid-out glyph runs;
   layout belongs to the pack tool and the player. The values of a table
   column are known at build: they are the column's levels. The Stroop
   program lays out every word once at setup and allocates nothing in the
   frame loop.
-- Recommendation: the pack tool lays out every literal text and every
+- Decision: the pack tool lays out every literal text and every
   value a `map` or a table column can give a text stimulus, keyed by
   text and style (gap G9). The player looks up runs; it lays out text at
   run time only for a script.
 
-**D15. Web runs. PROPOSED.**
+**D15. Web runs. DECIDED (2026-10-14).**
 - Evidence: rig_spec 6: on a participant's machine timing is measured
   and excluded, never controlled, and the exclusion rule is written
   before data collection. Every web frame is tier WEB.
-- Recommendation: a `web` object: `allowed` (default false) and
+- Decision: a `web` object: `allowed` (default false) and
   `exclusion`, the rule as data (for example a refresh range and a
   maximum fraction of dropped frames). The player records it and the
   self-test's values; the analysis applies it. `min_tier` does not apply
@@ -270,7 +288,7 @@ the header.
 | G4 | `weight COLUMN` sets `cond_reps` from the column; nothing multiplies it by `reps`. The Stroop program computes weight x reps in C. | ysp/trials.h | Stroop | Small |
 | G5 | No call maps a Michelson contrast in light to ysp/gfx.h's contrast and back to the contrast the output codes show (about 20 lines in trial_2afc_adaptive.c with `ycol_output_code()`). | ysp/color.h | `{"michelson": ...}` | Small |
 | G6 | Parameter tables (rig_spec 1, principle 8) exist for audio, color, gfx, outline, rdk, screen and video only. None for stair, quest, aep, response, the device families or the timeline ops. `ygfx_params()` lists the bindable floats, not the desc enums (`shape`, `edge`, `aperture`, `place`). | those headers | The loader's key check and the designer's panels from one source | Medium |
-| G7 | The canonical writer writes a number's source text; only `yjs_new_fixed()` and `yjs_new_int()` make canonical numbers. No canonical decimal for other reals. | ysp/json.h | D2 | Small |
+| G7 | The canonical writer writes a number's source text; only `yjs_new_fixed()` and `yjs_new_int()` make canonical numbers. No canonical decimal for other reals. The prerequisite for the experiment hash (D2). | ysp/json.h | D2 | Small |
 | G8 | A response-driven output waits for the frame loop to see the response, up to a frame after the press. No callback on the input's thread. | ysp/response.h, ysp/device.h | Response triggers (EEG) | Medium; measure the lag first |
 | G9 | Glyph-run blocks are listed by hand in the source description. Nothing derives them from a definition's texts and a table's levels. | pack tool | D14; Stroop | Small to medium |
 | G10 | A trial row has at most 64 columns (ysp/table.h's bound, kept by the writer). | ysp/trials.h, ysp/table.h | Templates with many recorded stimuli | Small; `record` limits columns meanwhile |
@@ -316,7 +334,7 @@ writer's column rule). A pack entry is named by its exact pack name
 | `{"gamut": "stimulus.property"}` | The largest value of the property inside the display's gamut (`ycol_max_scale()`) |
 | `{"michelson": VALUE}` | Only for `contrast`: a Michelson contrast in light through the calibration; defines `$contrast_shown` (G5) |
 
-Durations are seconds (1.1). A value that a node or a template gives
+Durations are seconds (1.1), and their keys and variables end in `_s` (D4). A value that a node or a template gives
 can reference any variable known at that point. A step value is filled
 when its sequence is built (2.5).
 
@@ -332,7 +350,7 @@ when its sequence is built (2.5).
 | `practice`, `warmup`, `first_in_block`, `after_break` | trial start | `ytr_trial_info` flags |
 | `trial_seed` | trial start | the trial stream's 64-bit seed (D8) |
 | `method`, `level`, `estimate` | trial start (`estimate`: after the update) | the track's name, its proposal in stimulus units, its estimate |
-| `response`, `rt`, `responded` | `after` | `yrsp_result`: the choice's key, `rt_ns` in seconds, `YRSP_R_RESPONDED` |
+| `response`, `rt_s`, `responded` | `after` | `yrsp_result`: the choice's key, `rt_ns` in seconds, `YRSP_R_RESPONDED` |
 | `correct` | `after` | the response's key equals `key_answer` |
 | `outcome` | `after` | `"correct"`, `"wrong"` or `"timeout"` |
 | `contrast_shown` | trial start | with `{"michelson": ...}` only |
@@ -383,11 +401,11 @@ Steps:
 
 | Step | Lowers to |
 |---|---|
-| `{"on": S}`, `{"off": S}`; S a name or an array (with `"stagger": dt`) | `YTL_ON` / `YTL_OFF` on S's `visible` channel (`ytl_on_n()` with a stagger); a sound: `ytl_peek()` and `yau_play_at()` (rig_spec 4.5.1) |
-| `{"wait": dt}` | `YTL_WAIT` |
-| `{"at": t}` | `YTL_AT` |
+| `{"on": S}`, `{"off": S}`; S a name or an array (with `"stagger_s": dt`) | `YTL_ON` / `YTL_OFF` on S's `visible` channel (`ytl_on_n()` with a stagger); a sound: `ytl_peek()` and `yau_play_at()` (rig_spec 4.5.1) |
+| `{"wait_s": dt}` | `YTL_WAIT` |
+| `{"at_s": t}` | `YTL_AT` |
 | `{"set": S, "props": {P: v}}` | `YTL_SET_VALUE` on S.P's channel |
-| `{"to": S, "props": {P: v}, "duration": d, "ease": e, "delay": d}` | `YTL_TO` per property, `ytl_tween_desc` |
+| `{"to": S, "props": {P: v}, "duration_s": d, "ease": e, "delay_s": d}` | `YTL_TO` per property, `ytl_tween_desc` |
 | `{"then": ...}` | `YTL_THEN`: as `to`, then the cursor moves to its end |
 | `{"trigger": CODE, "role": R}` | `YTL_TRIGGER`; when it fires, `yscr_trigger(&scr, channel(R), code)` writes at the flip's planned vblank (G1) |
 | `{"mark": NAME}` | `YTL_MARK`, code = NAME's index |
@@ -407,8 +425,8 @@ session.
 | `role` | the role's source: a keyboard role is `yrsp_sdl_source()`; a device role's events come through the screen's input bridge (`yrsp_feed_screen()`) |
 | `choices` | `yrsp_desc.choices`: `"left"` or `{"key": "r", "name": "red"}`; for a button role, the role's button names |
 | `from` | the stimulus whose onset starts RT: `yrsp_set_landing()` on its channel, then its flip record (`yrsp_update_frame()`), or its audio onset |
-| `duration` | `duration_ns`, from the `from` onset; 0 means no deadline |
-| `minimum_valid_rt` | `min_rt_ns` |
+| `duration_s` | `duration_ns`, from the `from` onset; 0 means no deadline |
+| `minimum_valid_rt_s` | `min_rt_ns` |
 | `key_answer` | `$correct`: the response's key equals this value |
 | `response_ends_trial` | true (default): `after` starts at the response; false: at the window's end |
 | `persist`, `max_responses`, `allow_held_key`, `wait_for_key_release` | the `yrsp_desc` fields |
@@ -458,7 +476,7 @@ its updates (G12).
 
 A role has the keys of devices_spec 11.1: `direction`, `family` (an
 array; the first that the rig has binds), `required`, `min_tier`,
-`buttons`, `pulse` (seconds), `kind`, `map`. The player binds roles from
+`buttons`, `pulse_s` (seconds), `kind`, `map`. The player binds roles from
 the rig profile (`yrig_load()`, `yrig_open_device()`) and refuses to
 start when a required role is unbound, fails identify, or is below
 `min_tier`, naming the role. An output role becomes a screen trigger
@@ -498,7 +516,7 @@ relative to its onset. A trial row has, in order:
 
 ### 2.11 Versions
 
-Version 1 is this page once the user accepts it. 1.3 D12 gives the
+Version 1 is this page as decided on 2026-10-14. 1.3 D12 gives the
 rules. The player's describe line names the newest version it reads.
 
 ### 2.12 What the designer edits
@@ -561,10 +579,10 @@ named.
   },
   "trials": {
     "detect": {
-      "events": [{ "on": "fix" }, { "wait": 0.5 }, { "on": "gabor" }, { "wait": 0.2 }, { "off": "gabor" }],
+      "events": [{ "on": "fix" }, { "wait_s": 0.5 }, { "on": "gabor" }, { "wait_s": 0.2 }, { "off": "gabor" }],
       "response": { "role": "resp", "choices": ["left", "right"], "from": "gabor",
-                    "duration": 2.5, "key_answer": "$side" },
-      "after": [{ "off": "fix" }, { "wait": 0.5 }],
+                    "duration_s": 2.5, "key_answer": "$side" },
+      "after": [{ "off": "fix" }, { "wait_s": 0.5 }],
       "method_value": "$contrast_shown",
       "columns": { "stimulus": "$side", "contrast_shown": "$contrast_shown" }
     }
@@ -609,10 +627,10 @@ named.
   },
   "trials": {
     "rdk": {
-      "events": [{ "on": "fix" }, { "wait": 0.5 }, { "on": "dots" }],
-      "response": { "role": "resp", "choices": ["left", "right"], "from": "dots", "duration": 1.5,
-                    "minimum_valid_rt": 0.1, "key_answer": "$key_answer" },
-      "after": [{ "off": ["dots", "fix"] }, { "wait": 0.8 }],
+      "events": [{ "on": "fix" }, { "wait_s": 0.5 }, { "on": "dots" }],
+      "response": { "role": "resp", "choices": ["left", "right"], "from": "dots", "duration_s": 1.5,
+                    "minimum_valid_rt_s": 0.1, "key_answer": "$key_answer" },
+      "after": [{ "off": ["dots", "fix"] }, { "wait_s": 0.8 }],
       "record": ["dots"]
     }
   },
@@ -629,7 +647,7 @@ named.
 | `coherence`, `direction` | Same: `rdk.coherence`, `rdk.direction` from the row before the first frame |
 | `$trial_seed` | `seed * 1000003 + index`: replaced by D8 |
 | `rules` | Same: `YTR_ORDER_RANDOM`, `reps` 5 |
-| `minimum_valid_rt` | Same: `min_rt_ns` |
+| `minimum_valid_rt_s` | Same: `min_rt_ns` |
 | `after` | Same: off at the response frame's base time, wait 0.8, MARK |
 | Row | `rdk_seed`, `rdk_updates`, `rdk_digest` are `dots_seed`, `dots_updates`, `dots_digest`; `frames_dropped` is `dots_dropped`; the steps file is `streams/dots.csv` |
 
@@ -665,17 +683,17 @@ named.
   "trials": {
     "stroop": {
       "events": [
-        { "if": "$first_in_block", "steps": [{ "on": ["banner", "keys"] }, { "wait": 1.5 },
+        { "if": "$first_in_block", "steps": [{ "on": ["banner", "keys"] }, { "wait_s": 1.5 },
                                              { "off": ["banner", "keys"] }] },
-        { "on": "fix" }, { "wait": 0.5 }, { "off": "fix" }, { "on": "word" }],
-      "response": { "role": "resp", "from": "word", "duration": 2, "minimum_valid_rt": 0.1,
+        { "on": "fix" }, { "wait_s": 0.5 }, { "off": "fix" }, { "on": "word" }],
+      "response": { "role": "resp", "from": "word", "duration_s": 2, "minimum_valid_rt_s": 0.1,
                     "choices": [{ "key": "r", "name": "red" }, { "key": "g", "name": "green" },
                                 { "key": "b", "name": "blue" }],
                     "key_answer": "$answer" },
       "after": [
         { "off": "word" },
-        { "if": "$practice", "steps": [{ "on": "feedback" }, { "wait": 0.6 }, { "off": "feedback" }] },
-        { "wait": 0.4 }],
+        { "if": "$practice", "steps": [{ "on": "feedback" }, { "wait_s": 0.6 }, { "off": "feedback" }] },
+        { "wait_s": 0.4 }],
       "columns": { "feedback": { "by": "$practice", "map": { "true": "$outcome", "false": "" } } }
     }
   },
@@ -710,7 +728,7 @@ TEXTURE entry name), `type`, `code` and `answer`.
   "devices": {
     "resp": { "direction": "in", "family": ["xid", "keyboard"], "buttons": { "1": "left", "2": "right" },
               "required": true, "min_tier": 2 },
-    "trig": { "direction": "out", "family": ["parallel", "triggerbox", "xid"], "pulse": 0.002,
+    "trig": { "direction": "out", "family": ["parallel", "triggerbox", "xid"], "pulse_s": 0.002,
               "required": true },
     "light": { "direction": "in", "family": ["line"], "kind": "sync", "required": false }
   },
@@ -721,18 +739,18 @@ TEXTURE entry name), `type`, `code` and `answer`.
   },
   "trials": {
     "oddball": {
-      "events": [{ "on": "fix" }, { "wait": "$soa" }, { "on": "pic" },
-                 { "trigger": "$code", "role": "trig" }, { "wait": 0.1 }, { "off": "pic" }],
-      "response": { "role": "resp", "choices": ["left", "right"], "from": "pic", "duration": 1,
+      "events": [{ "on": "fix" }, { "wait_s": "$soa_s" }, { "on": "pic" },
+                 { "trigger": "$code", "role": "trig" }, { "wait_s": 0.1 }, { "off": "pic" }],
+      "response": { "role": "resp", "choices": ["left", "right"], "from": "pic", "duration_s": 1,
                     "key_answer": "$answer",
                     "trigger": { "role": "trig", "code": { "by": "$response", "map": { "left": 101, "right": 102 } } } },
-      "after": [{ "wait": 0.2 }],
+      "after": [{ "wait_s": 0.2 }],
       "record": ["pic"]
     }
   },
   "timeline": [
     { "name": "main", "timeline_variables": "oddball.pstb",
-      "rules": ["order constrained", "reps 4", "max_run type=target 1", "jitter soa uniform 0.8 1.2 rate=display"],
+      "rules": ["order constrained", "reps 4", "max_run type=target 1", "jitter soa_s uniform 0.8 1.2 rate=display"],
       "trial": "oddball" }
   ]
 }

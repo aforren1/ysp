@@ -721,7 +721,7 @@ common case.
 
 The experiment definition's format, with its open decisions and the
 gaps it found in the C APIs, is in
-[experiment_format.md](experiment_format.md) (proposal, 2026-10-13).
+[experiment_format.md](experiment_format.md) (decided 2026-10-14).
 
 - **Runner protocol.** A localhost WebSocket with a session token
   carrying control, resource updates, live parameters, status and the

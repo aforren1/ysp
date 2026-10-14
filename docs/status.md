@@ -488,4 +488,5 @@ Purpose: The pack's EXPERIMENT entry: a JSON file, read by ysp/json.h, that name
 
 Status:
 
-- Proposal, 2026-10-13. 15 decisions are PROPOSED and wait for the user. Four worked examples (2AFC staircase, RDK, Stroop from a CSV, EEG trigger) were mapped to the C examples field by field; 13 gaps in the C APIs are listed. No loader, no player, no test.
+- Design decided, 2026-10-14: all 15 decisions accepted; D4 changed (durations are plain numbers in seconds, and every duration key and variable ends in `_s`); D11 records flagged frames only, and a requeue, if ever added, is an explicit rule in the definition. G7 (a canonical form for non-integer numbers in ysp/json.h) is the prerequisite for the experiment hash. No loader, no player, no test.
+- Proposal, 2026-10-13. Four worked examples (2AFC staircase, RDK, Stroop from a CSV, EEG trigger) were mapped to the C examples field by field; 13 gaps in the C APIs are listed.
