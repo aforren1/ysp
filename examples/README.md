@@ -6,9 +6,11 @@ program `<lib>_<name>` (for example `examples/gfx/gallery.c` is
 show but use another header's build; they keep their own file name as
 their program name (`YSP_EXAMPLES_ACROSS` in `CMakeLists.txt`):
 `rdk/gfx_rdk.c`, `rdk/gfx_rdk_bench.c`, `rdk/trial_rdk.c`, `timeline/gfx_trial.c`,
-`layout/gfx_layout.c`, `device/photodiode_check.c` and the
-`response/trial_*.c`; `net/labstreamer_flip.c` is `net_labstreamer_flip`
-and `audio/av_sync.c` is `audio_av_sync`.
+`layout/gfx_layout.c`, `device/photodiode_check.c`,
+`device/trial_eeg_triggers.c`, `timeline/trial_scanner_sync.c` and the
+`response/trial_*.c`; `net/labstreamer_flip.c` is `net_labstreamer_flip`,
+`audio/av_sync.c` is `audio_av_sync` and `gfx/gamma_null.c` is
+`gfx_gamma_null`.
 
 Run a program from the build folder (`build/<preset>/Release/` with MSVC,
 `build/<preset>/` otherwise). "Needs" says what a run needs beyond the
@@ -60,6 +62,7 @@ record, not from a frame count, so it also runs on a real display.
 | `photodiode_check` | The MCU photodiode on the device layer: ports and keys, a console monitor, or edge minus flip onset in a window | device, screen | `photodiode_check --list`; `photodiode_check --key serial:16C0:0483:: --monitor 10`; `photodiode_check --key <key>` | SDL3; the board of `firmware/ysp_line/` (none for `--list`) |
 | `device_out_latency` | An output's write-to-edge latency by loopback: pulses on an output role, edges on an input board, the distribution in seconds and a file named by its SHA-256; `--store` keeps the file in the rig profile's `loopback/` and writes the role's binding and summary into the profile | device, rig (parallel) | `device_out_latency --sim` and `--sim --self` (no hardware); `device_out_latency --sim --n 20 --warmup 1 --store --rig-dir <folder>` (CI); `device_out_latency --out lines:<adapter key> --in <board key> --store` | nothing for `--sim`; else an output and a board of `firmware/ysp_line/` wired to it |
 | `device_trigger_flip` | An output role as a ysp/screen.h trigger channel: codes at planned vblanks, written by the device layer, deadline to write in the log | device, screen (no SDL) | `device_trigger_flip` (an in-process box); `device_trigger_flip --out lines:<adapter key>` | nothing; a trigger output with `--out` |
+| `trial_eeg_triggers` | PsychoPy's EEG demos: a stimulus code at the disc's flip (the trigger channel), a response code at the key, an end code at the trial's last flip, through the rig profile's role `trig` or an in-process TriggerBox; each write's start minus its flip onset or key stamp in the row | device, rigfile, gfx, timeline, trials, response | `trial_eeg_triggers --sim` (CI: every row, deadline and byte); `trial_eeg_triggers` | SDL3, ANGLE; a trigger output bound as `trig` in the rig profile for real lines |
 
 ## gfx
 
@@ -76,6 +79,7 @@ record, not from a frame count, so it also runs on a real display.
 | `gfx_clut_sync` | Psychtoolbox's ClutAnimDemo and SyncedCLUTUpdateTest: a palette turned by `ygfx_set_lut()` each frame, a cancel test (image and table swapped on the same flip), both read back; then the OS gamma ramp set once a frame, timed against the vblank grid | gfx, screen | `gfx_clut_sync --sim` (CI); `gfx_clut_sync`; `gfx_clut_sync --fullscreen --os-ramp` (watch for flicker) | SDL3, ANGLE; Windows for the ramp phase |
 | `gfx_filtered_noise` | Psychtoolbox's FastFilteredNoiseDemo on the CPU: band-pass oriented and 1/f noise by FFT each trial, uploaded as R32F images, beside NOISE GAUSSIAN and SIMPLEX; the power in the band for each, and the make and upload cost per trial against the frame | gfx | `gfx_filtered_noise --sim` (CI); `gfx_filtered_noise --every-frame` | SDL3, ANGLE |
 | `gfx_gaze_contingent` | Psychtoolbox's GazeContingentDemo with the mouse as the gaze: a sharp Gaussian window on a blurred image; per frame the sample's stamp, the read and the flip onset (input to photon in software); `--inject` moves the pointer by SendInput | gfx, screen, input | `gfx_gaze_contingent --sim` (CI); `gfx_gaze_contingent`; `gfx_gaze_contingent --inject --out lat.csv` | SDL3, ANGLE; Windows for `--inject` and `--raw-mice` |
+| `gfx_gamma_null` | PsychoPy's gammaMotionNull: luminance and binary-noise texture gratings in quarter-cycle steps; two interleaved staircases set the output stage's table until the motion nulls; the display's gamma (or with `--cal`, the calibration's error) without a photometer; one readback checks the codes | gfx, stair, trials, timeline, response | `gfx_gamma_null --sim` (CI: a simulated observer, the null within 0.02 log10); `gfx_gamma_null`; `gfx_gamma_null --cal display.yspcal` | SDL3, ANGLE |
 | `gfx_capture` | Stimulus capture during a trial: every Nth or marked frame of 100 drifting gabors and a bar to PPM files, by the writer thread or by `ygfx_capture_pump()`; flip records and `end()` cost with capture on and off | gfx | `gfx_capture --sim --frames 60 --every 3 --out capture_sim/f` and `--mark 5 --manual` (CI); `gfx_capture --fullscreen --every 1 --out cap/f` | SDL3, ANGLE |
 
 ## layout
@@ -201,6 +205,7 @@ The X11 display-timing probe for the GLX backend is in `tests/probe/screen_x11/`
 | `timeline_bench_targets` | The cost of target tweens per field, against channel tweens and a binding copy | rt, timeline | `timeline_bench_targets` | nothing |
 | `gfx_trial` | The timeline trial with gfx stimuli, whose fields the timeline writes itself (targets: GSAP-style sets and tweens) | gfx, timeline | `gfx_trial --sim` (CI); `gfx_trial` | SDL3, ANGLE |
 | `trial_sternberg` | PsychoPy's Sternberg demo: 2, 4 or 6 digits at a 0.5 s SOA from one op table (`ytl_run()`), a probe after 1 s; each digit's SOA from its flip record | gfx, outline, timeline, trials, response | `trial_sternberg --sim` (CI); `trial_sternberg` | SDL3, ANGLE; a font (the 5 x 7 bitmap digits without one) |
+| `trial_scanner_sync` | PsychoPy's fMRI demos: trials on a base anchored at the volume pulse after the dummies (non-slip timing), each onset on the first frame at or after its plan (`YTL_LEAD_NONE`), so none comes before its pulse; pulses as SYNC events from a key, the rig profile's line board `scanner` or an emulator thread; each onset's volume and its offset from that pulse; the TR the PC measured | input, device, rigfile, gfx, timeline, trials, response | `trial_scanner_sync --sim` (CI); `trial_scanner_sync --sync emulate`; `trial_scanner_sync` (the scanner's key 5) | SDL3, ANGLE; a scanner, or a line board on its TTL output |
 
 ## trials
 

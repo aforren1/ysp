@@ -198,6 +198,9 @@ set(YSP_EXAMPLES_ACROSS
     rdk/trial_rdk.c            -
     response/trial_stroop.c    -
     timeline/trial_sternberg.c -
+    device/trial_eeg_triggers.c -
+    timeline/trial_scanner_sync.c -
+    gfx/gamma_null.c           -
     pack/trial_images.c        -
     pack/trial_images_assets.c -
     device/photodiode_check.c  -
@@ -621,6 +624,16 @@ if(TARGET SDL3::SDL3 AND YSP_BUILD_EXAMPLES)
     # an op table, digits from ysp/outline.h. trial_stroop and trial_images
     # are in pack/CMakeLists.txt: they need the layout library and ypak.
     ysp_add_program(trial_sternberg examples/timeline/trial_sternberg.c rig methods)
+    # PsychoPy's EEG demos (docs/rig_spec.md 15.5): stimulus, response and
+    # end codes through the rig profile's trigger role, each write's record
+    # in the row.
+    ysp_add_program(trial_eeg_triggers examples/device/trial_eeg_triggers.c rig methods devices)
+    # PsychoPy's fMRI demos: trials on a base anchored at a scanner pulse,
+    # pulses from a key, a line board or an emulator thread.
+    ysp_add_program(trial_scanner_sync examples/timeline/trial_scanner_sync.c rig methods devices)
+    # gammaMotionNull.py: the display's gamma by motion nulling through the
+    # output stage's table, a staircase on the null.
+    ysp_add_program(gfx_gamma_null examples/gfx/gamma_null.c rig methods devices)
     # The MCU photodiode on ysp/device.h, its events over ysp/screen.h's
     # input bridge: the first real device's hand test.
     ysp_add_program(photodiode_check examples/device/photodiode_check.c rig devices)

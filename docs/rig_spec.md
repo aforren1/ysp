@@ -1784,10 +1784,12 @@ A Builder demo is a C program for a ysp user today. For a user who does
 not write C, every Builder demo needs the player (rank 1 in 15.4). The
 status columns below give the C status.
 
-Totals: 140 demos (97 Coder, 43 Builder). Example 50 (36 + 14), Possible
-44 (29 + 15), Gap 24 (12 + 12), Out 22 (20 + 2). Updated 2026-10-09 for
+Totals: 140 demos (97 Coder, 43 Builder). Example 53 (38 + 15), Possible
+41 (27 + 14), Gap 24 (12 + 12), Out 22 (20 + 2). Updated 2026-10-09 for
 `gfx_gratings`, `trial_2afc_adaptive`, `trial_rdk`, `trial_stroop`,
-`trial_sternberg` and `trial_images` (15 demos from Possible to Example).
+`trial_sternberg` and `trial_images` (15 demos from Possible to Example),
+and 2026-10-13 for `trial_eeg_triggers`, `trial_scanner_sync` and
+`gfx_gamma_null` (3 more).
 
 ### 15.2 Coder demos
 
@@ -1855,7 +1857,7 @@ Paths are from `psychopy/demos/coder/`.
 |---|---|---|---|
 | `timing/timeByFrames.py` | Frame intervals: histogram, drops | screen | Example: `screen_flipstats` |
 | `timing/timeByFramesEx.py` | The same with process priority and no garbage collection | screen, rt | Example: `screen_flipstats --load N` (no GC in C) |
-| `timing/callOnFlip.py` | A function called at the flip, for a trigger | screen (flip hooks), device | Example: `device_trigger_flip` |
+| `timing/callOnFlip.py` | A function called at the flip, for a trigger | screen (flip hooks), device | Example: `device_trigger_flip`; `trial_eeg_triggers` (codes at a stimulus's flip, at a key, at the trial's end) |
 | `timing/clocksAndTimers.py` | Clocks, count-down timers | rt | Possible; `rt_jitter` shows what the waits are worth |
 | `timing/millikeyKeyboardTimingTest.py` | Keyboard stamp error against key presses a MilliKey generates on command | serial (the command), screen (the key) | Possible: a MilliKey is a keyboard-mode box (docs/devices_spec.md 10.1). `screen_input` measures injected keys in software |
 
@@ -1880,11 +1882,11 @@ Paths are from `psychopy/demos/coder/`.
 
 | Demo | What it shows | ysp headers | Status |
 |---|---|---|---|
-| `hardware/parallelPortOutput.py` | A pin held high for N frames with a stimulus | parallel, device, screen | Example: `parallel_trigger`, `device_trigger_flip` |
+| `hardware/parallelPortOutput.py` | A pin held high for N frames with a stimulus | parallel, device, screen | Example: `parallel_trigger`, `device_trigger_flip`, `trial_eeg_triggers` (a stimulus code at its flip) |
 | `hardware/cedrusRB730.py` | A Cedrus RB-730: info, round trip, keys | device (XID), box | Possible (no box on hand; docs/devices_spec.md) |
-| `hardware/fMRI_launchScan.py` | Wait for scanner sync pulses, or emulate them | screen (a pulse as a key), device (`YIN_KIND_SYNC` from a board), timeline | Possible; the pulse emulator is caller code |
+| `hardware/fMRI_launchScan.py` | Wait for scanner sync pulses, or emulate them | screen (a pulse as a key), device (`YIN_KIND_SYNC` from a board), timeline | Example: `trial_scanner_sync` (pulses from a key, a line board or an emulator thread) |
 | `hardware/monitorDemo.py` | Monitor profiles: distance, calibration by name | color (`ycol_cal` load), gfx (`ygfx_view`) | Possible |
-| `hardware/gammaMotionNull.py` | Display gamma by motion nulling (Ledgeway and Smith 1994) | gfx, stair, response | Possible (proposed: `gfx_gamma_null`, 15.5) |
+| `hardware/gammaMotionNull.py` | Display gamma by motion nulling (Ledgeway and Smith 1994) | gfx, stair, response | Example: `gfx_gamma_null` (a staircase on the output stage's table; the readback checks the codes) |
 | `hardware/gammaMotionAnalysis.py` | Plots of the nulling staircases | None | Out: offline analysis (4.8) |
 | `hardware/testSoundLatency.py` | Sound onset latency measured by a LabJack | audio | Possible by line-in: `tests/loopback/audio_loopback.c` (a test, not an example) |
 | `hardware/VSHD_Distortion.py` | Barrel distortion for an in-scanner display | gfx (target, USER shader) | Example: `gfx_gratings` tile 5 (a target through a USER shader, ysp/gfx.h v0.10.4) |
@@ -1970,10 +1972,10 @@ Paths are from `psychopy/demos/builder/`. `Experiments/GoNoGo/` and
 
 | Demo | What it shows | ysp headers | Status |
 |---|---|---|---|
-| `Hardware/EEG_parallel_component/` | Parallel port codes at a stimulus, a key, a click | device (parallel), screen, response | Example: `device_trigger_flip`, `parallel_trigger`. Response-locked codes are caller code (proposed: `trial_eeg_triggers`) |
-| `Hardware/EEG_serial_component/` | The same through a serial trigger device | device, screen | Example: `device_trigger_flip --out` |
-| `Hardware/EEG_serial_code/` | Serial triggers written from code | serial, device | Example: `serial_trigger`, `device_trigger_flip` |
-| `Hardware/fMRI/` | Wait for the scanner's key, then non-slip timing | screen, input, timeline | Possible (proposed: `trial_scanner_sync`) |
+| `Hardware/EEG_parallel_component/` | Parallel port codes at a stimulus, a key, a click | device (parallel), screen, response | Example: `trial_eeg_triggers` (stimulus, response and end codes through the rig profile's trigger role; no click), `device_trigger_flip`, `parallel_trigger` |
+| `Hardware/EEG_serial_component/` | The same through a serial trigger device | device, screen | Example: `trial_eeg_triggers` (a serial trigger box as the rig profile's role), `device_trigger_flip --out` |
+| `Hardware/EEG_serial_code/` | Serial triggers written from code | serial, device | Example: `serial_trigger`, `device_trigger_flip`, `trial_eeg_triggers` |
+| `Hardware/fMRI/` | Wait for the scanner's key, then non-slip timing | screen, input, timeline | Example: `trial_scanner_sync` |
 | `Hardware/EGI_netstation/` | Stroop with NetStation tags | None | Gap: `ysp/net.h` and the NetStation protocol |
 | `Hardware/lab_streaming_layer/` (and `lab_streaming_layer_legacy/`) | LSL markers at a stimulus and a key | None | Gap: `ysp/net.h` LSL outlet (4.7) |
 | `Hardware/eyetracking/` | Calibration, recording, an ROI and a gaze cursor | None | Gap: eye-tracker input source (14.7 rank 6) |
@@ -2050,17 +2052,17 @@ the response examples (330 to 500 lines).
 | 5 | `gfx_gratings` (`examples/gfx/`), built | `counterphase.py`, `secondOrderGratings.py`, `rotatingFlashingWedge.py`, `Feature Demos/gratings/` | gfx (GRATING, GABOR, USER), timeline | Phase drift on a timeline track; counterphase flicker as a contrast track, with the achieved frequency from the flip records; contrast-modulated gratings and a noise-carrier envelope in USER shaders; a flashing checkerboard wedge | 400 | None |
 | 6 | `trial_sternberg` (`examples/timeline/`), built | `sternberg/`; jsPsych `animation` (14.3) | timeline (`ytl_seq` op tables), gfx, outline, trials, response | A timed sequence: a memory set of 1 to 6 digits at a fixed SOA, a probe, and the landing record of each item; the SOAs measured from the flip records; set size as a factor | 350 | None |
 | 7 | `color_patch` (`examples/color/`) | `monitorDemo.py`, `colors/colors.py`, `Helper Tools/colors/`, `hsvColorPalette.py` (as a CIELAB picker) | color, gfx, screen | A calibrated patch: a `.yspcal` loaded; a color given in CIELAB, xyY or DKL; keys walk hue and chroma; the device RGB, the gamut distance and refusals printed; the OS gamma ramp left alone | 250 | A calibration of the display for a claim about light; a nominal one otherwise (flagged) |
-| 8 | `trial_eeg_triggers` (`examples/device/`) | `EEG_parallel_component/`, `EEG_serial_component/`, `EEG_serial_code/`, `parallelPortOutput.py`, `callOnFlip.py` | device, screen, gfx, timeline, trials, response | A stimulus code at the flip through the trigger channel, a response code at the key event, and an end code; each write's record beside the flip and response records in the row. `device_trigger_flip` has no stimulus or response | 350 | A trigger output for real lines; the in-process box without one |
+| 8 | `trial_eeg_triggers` (`examples/device/`), built | `EEG_parallel_component/`, `EEG_serial_component/`, `EEG_serial_code/`, `parallelPortOutput.py`, `callOnFlip.py` | device, screen, gfx, timeline, trials, response | A stimulus code at the flip through the trigger channel, a response code at the key event, and an end code; each write's record beside the flip and response records in the row. `device_trigger_flip` has no stimulus or response | 350 | A trigger output for real lines; the in-process box without one |
 | 9 | `trial_images` (`examples/pack/`), built | `randomisedBlocks/`, `GoNoGo/`, `navon/`, `mentalRotation/`, `face_jpg.py` | pack, gfx (IMAGE), table, trials (groups), response | The pack path end to end: textures and the conditions table read from a pack built by `ypak`; blocks in random order; images turned for mental rotation | 350 | None; needs a pack (`ypak build`, `YSP_BUILD_PACK`) |
 | 10 | `trial_instructions` (`examples/layout/`) | `hello_world.py`, `textbox_simple.py`; jsPsych `instructions` (14.3) | pack/layout, outline, gfx (setup passes, targets), screen | Paragraph pages laid out once and rendered into targets at setup, turned by keys; the time each page was shown, from the flip records | 250 | None; needs `YSP_BUILD_LAYOUT` |
-| 11 | `trial_scanner_sync` (`examples/timeline/`) | `Hardware/fMRI/`, `fMRI_launchScan.py` | input (`YIN_KIND_SYNC`), device or screen, timeline, trials | Trials on a base anchored at a scanner pulse (non-slip timing): pulses from a key or a line board, each onset as an offset from the volume pulse; an emulator thread for runs without a scanner | 300 | A scanner or a line board for real pulses; the emulator without |
-| 12 | `gfx_gamma_null` (`examples/gfx/`) | `gammaMotionNull.py` | gfx (square-wave gratings, output stage), stair, response, timeline | A psychophysical check of the display's linearization by motion nulling, through the output stage's lookup table, with no photometer | 300 | None |
+| 11 | `trial_scanner_sync` (`examples/timeline/`), built | `Hardware/fMRI/`, `fMRI_launchScan.py` | input (`YIN_KIND_SYNC`), device or screen, timeline, trials | Trials on a base anchored at a scanner pulse (non-slip timing): pulses from a key or a line board, each onset as an offset from the volume pulse; an emulator thread for runs without a scanner | 300 | A scanner or a line board for real pulses; the emulator without |
+| 12 | `gfx_gamma_null` (`examples/gfx/`), built | `gammaMotionNull.py` | gfx (square-wave gratings, output stage), stair, response, timeline | A psychophysical check of the display's linearization by motion nulling, through the output stage's lookup table, with no photometer | 300 | None |
 
 Examples 1 to 4 close the first-order holes: adaptive methods, RDK and
 video are built and tested but no example runs them with a participant.
 Examples 8 and 11 need hardware for their claims and run without it.
-Built by 2026-10-09: 1, 2, 3, 5, 6 and 9 ("built" in the Program
-column); 15.2 and 15.3 name them.
+Built by 2026-10-09: 1, 2, 3, 5, 6 and 9; by 2026-10-13: 8, 11 and 12
+("built" in the Program column); 15.2 and 15.3 name them.
 
 ### 15.6 Not verified
 
