@@ -122,8 +122,12 @@ that structure; it does not invent a new one.
   the response variable `rt_s`. Other quantities keep plain names (`w`,
   `sf`, `count`, `speed`). A C field `x_ns` is the key `x_s`. The loader
   refuses a duration key without the suffix and names the suffixed key.
-  Data column names come from the C writers (`YRSP_DATA_COLS` writes
-  `rt`), not from this rule.
+  Data columns follow the same rule (the user, 2026-10-20): a column
+  that holds a time in seconds ends in `_s` (`YRSP_DATA_COLS` writes
+  `rt_s`, `onset_residual_s`), because jsPsych writes `rt` in ms and
+  PsychoPy in s, and a file read with the wrong habit is off by 1000
+  with nothing to flag it. `ysp/trials.h` v0.5.0 refuses a time column
+  or a jitter without the suffix.
   The designer shows the unit beside each field and warns above 60 s;
   the loader's lint warns too, and does not refuse. A jsPsych importer
   converts ms to s. Spatial units are `px` or `deg` for the whole
@@ -489,27 +493,28 @@ order of the role names.
 |---|---|---|
 | `session.json` | format `"ysp-session"` 1; experiment ID (stored and migrated, D12), pack ID, rig profile hash (`yrig_hash()`), device rows (devices_spec 11.4), describe lines of the screen, color context and audio, session fields, the seed, the player's and each header's version, start date (UTC), applied live changes, `closed` | the player, at start and at close |
 | `trials.csv` | one row per trial (below) | `ytr_data_open()` with `dd.trials` NULL and the player's columns, since a tree has several `ytr_trials` |
-| `frames.csv` | one row per `yscr_record`: index, target, planned, onset, residual, dropped, path, tier, flags, phase durations | the player, from `f.done` |
-| `events.csv` | timeline landings (kind, stimulus, planned time, frame, onset, residual), responses, device events, outputs (`YDEV_REC_OUT`: code, deadline, write start and end, flags), marks | the player, from the event ring |
+| `frames.csv` | one row per `yscr_record`: index, target_s, planned_s, onset_s, residual_s, dropped, path, tier, flags, phase durations (`_s`) | the player, from `f.done` |
+| `events.csv` | timeline landings (kind, stimulus, planned_s, frame, onset_s, residual_s), responses, device events, outputs (`YDEV_REC_OUT`: code, deadline_s, write start and end in `_s`, flags), marks | the player, from the event ring |
 | `streams/` | one table per stream and per `rdk` stimulus | the player |
 | `clock.csv` | thinned clock pairs and every fit | the player |
 
-Times are seconds on the ysp_rt clock (rig_spec 1, principle 1); RT is
+Times are seconds on the ysp_rt clock (rig_spec 1, principle 1), in
+columns whose names end in `_s` (D4; conventions.md, Units); RT is
 relative to its onset. A trial row has, in order:
 
 1. Session fields, as constant columns (the trials writer's rule).
-2. `node`, `trial_type` (the template), `trial_index`, `time_elapsed`,
+2. `node`, `trial_type` (the template), `trial_index`, `time_elapsed_s`,
    and the `ytr_trial_info` fields.
-3. Every table column of the row, the `vars`, the jitters and the
+3. Every table column of the row, the `vars`, the jitters (`soa_s`) and the
    inherited `data`.
 4. For each method trial: `method`, `level`, `estimate`.
-5. For each stimulus in `record`: `<s>_onset`, `<s>_offset`,
-   `<s>_frames` (frames shown), `<s>_residual`, `<s>_tier` (worst),
+5. For each stimulus in `record`: `<s>_onset_s`, `<s>_offset_s`,
+   `<s>_frames` (frames shown), `<s>_residual_s`, `<s>_tier` (worst),
    `<s>_dropped` (summed `yscr_record.dropped`), `<s>_flags` (OR of
    `YSCR_FLIP_*`).
 6. Over the trial's frames: `tier_worst`, `frames_dropped`,
    `flip_flags`.
-7. For each output role: `<role>_n`, `<role>_failed`, `<role>_lag_max`
+7. For each output role: `<role>_n`, `<role>_failed`, `<role>_lag_max_s`
    (write start minus deadline).
 8. `YRSP_DATA_COLS` (`yrsp_data_set()`), `correct`, `outcome`.
 9. The template's `columns`.

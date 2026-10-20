@@ -1,4 +1,4 @@
-/* ysp/response.h - v0.4.0 - public domain single-header response collector
+/* ysp/response.h - v0.5.0 - public domain single-header response collector
  *
  *   Turns timestamped input events from any device into the response of a
  *   trial: which key or button, when, measured from the stimulus onset that
@@ -150,7 +150,8 @@
  *   first to arrive: a box report read late but stamped by the device's
  *   clock wins over a key press that arrived first and happened later.
  *   RT in the result: rt_ns, YRSP_NO_TIME when there is none (jsPsych's
- *   null); YRT_TO_S(rt_ns) is jsPsych's rt in seconds for a data file.
+ *   null); YRT_TO_S(rt_ns) is jsPsych's rt in seconds, a data file's
+ *   rt_s (jsPsych's own rt column is in ms, so the name says the unit).
  *   The times it comes from are there too (t_response, t_onset).
  *
  *   ---------------------------------------------------------------------
@@ -211,19 +212,20 @@
  *   With ysp/trials.h included first: YRSP_DATA_COLS, YRSP_N_DATA_COLS
  *   (12) columns for its data writer, and yrsp_data_set(w, &r), which
  *   sets each one the file has from a result, for the next
- *   ytr_data_write(). Columns (seconds; an empty field where the result
- *   has none):
- *     response          the choice's name
- *     rt                rt_ns
- *     rt_key_duration   rt_key_duration_ns
- *     onset_src         yrsp_onset_src: 1 FLIP, 2 AUDIO, 3 PLAN
- *     onset_tier        the onset's tier
- *     onset_residual    the onset's residual: a flip record's onset minus
- *                       its target, the frame's lateness
- *     landing_residual  plan_residual
- *     onset_frame       the onset's frame
- *     rsp_tier          the response's stamp tier
- *     rsp_flags         YRSP_R_*
+ *   ytr_data_write(). Columns (an empty field where the result has none);
+ *   a column of seconds ends in _s (v0.5, ysp/trials.h DATA FILE): jsPsych
+ *   writes rt in ms and PsychoPy in s, and the suffix says which:
+ *     response            the choice's name
+ *     rt_s                rt_ns
+ *     rt_key_duration_s   rt_key_duration_ns
+ *     onset_src           yrsp_onset_src: 1 FLIP, 2 AUDIO, 3 PLAN
+ *     onset_tier          the onset's tier
+ *     onset_residual_s    the onset's residual: a flip record's onset
+ *                         minus its target, the frame's lateness
+ *     landing_residual_s  plan_residual
+ *     onset_frame         the onset's frame
+ *     rsp_tier            the response's stamp tier
+ *     rsp_flags           YRSP_R_*
  *     n_anticipations, n_early
  *   The onset's source, tier and residual are in every row, so a row whose
  *   RT came from a plan says so. A file that wants fewer declares them by
@@ -400,6 +402,12 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.5.0 - DATA: the columns of seconds end in _s (user decision,
+ *          2026-10-20; ysp/trials.h v0.5.0 refuses a TIME_NS column
+ *          without it): rt_s, rt_key_duration_s, onset_residual_s,
+ *          landing_residual_s (were rt, rt_key_duration, onset_residual,
+ *          landing_residual). BREAKING for a reader of those names, and
+ *          for a file that declares them with YTR_COL_SET. No rule changed.
  *   v0.4.0 - THE FRAME LOOP and DATA: yrsp_update_frame(),
  *          yrsp_feed_screen(), yrsp_set_landing(), YRSP_DATA_COLS and
  *          yrsp_data_set(), inline where ysp/screen.h, ysp/timeline.h and
@@ -456,6 +464,10 @@
  *          releases, the trace, the result and its CSV row, the SDL3
  *          adapter.
  *
+ *   STATUS: v0.5.0, 2026-10-20: the column names only. The test (20,644
+ *   checks; 20,709 with the SDL adapter) passes with MSVC 19.44 and
+ *   MinGW-w64 gcc 16.1, on Linux (WSL2) and under emcc; fl-08 to fl-10
+ *   caught; the CI --sim lists pass, their files' headers read with _s.
  *   STATUS: v0.4.0, 2026-10-11: the test (20,644 checks; 20,709 with the
  *   SDL adapter) and the compile checks pass with MinGW-w64 gcc 16.1 and
  *   MSVC 19.44; the frame-loop and data helpers are checked on filled
@@ -494,9 +506,9 @@
 #define YSP_RESPONSE_H_INCLUDED
 
 #define YRSP_VERSION_MAJOR 0
-#define YRSP_VERSION_MINOR 4
+#define YRSP_VERSION_MINOR 5
 #define YRSP_VERSION_PATCH 0
-#define YRSP_VERSION_STRING "0.4.0"
+#define YRSP_VERSION_STRING "0.5.0"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -954,12 +966,12 @@ static inline int yrsp_set_landing(yrsp_collector* c, const ytl_event* fired, in
  * Times in seconds; an empty field where the result has none. */
 #define YRSP_DATA_COLS \
     YTR_COL_SET("response", YTR_COL_STRING), \
-    YTR_COL_SET("rt", YTR_COL_TIME_NS), \
-    YTR_COL_SET("rt_key_duration", YTR_COL_TIME_NS), \
+    YTR_COL_SET("rt_s", YTR_COL_TIME_NS), \
+    YTR_COL_SET("rt_key_duration_s", YTR_COL_TIME_NS), \
     YTR_COL_SET("onset_src", YTR_COL_INT), \
     YTR_COL_SET("onset_tier", YTR_COL_INT), \
-    YTR_COL_SET("onset_residual", YTR_COL_TIME_NS), \
-    YTR_COL_SET("landing_residual", YTR_COL_TIME_NS), \
+    YTR_COL_SET("onset_residual_s", YTR_COL_TIME_NS), \
+    YTR_COL_SET("landing_residual_s", YTR_COL_TIME_NS), \
     YTR_COL_SET("onset_frame", YTR_COL_INT64), \
     YTR_COL_SET("rsp_tier", YTR_COL_INT), \
     YTR_COL_SET("rsp_flags", YTR_COL_INT), \
@@ -978,12 +990,12 @@ static inline int yrsp_data_set(ytr_data* w, const yrsp_result* r) {
 #define YRSP__DSET(name, call) \
     if (rc >= 0 && (col = ytr_data_col(w, name)) >= 0) { rc = call; if (rc >= 0) n++; }
     YRSP__DSET("response", ytr_data_set_string(w, col, r->response_name))
-    YRSP__DSET("rt", ytr_data_set_time_ns(w, col, r->rt_ns))
-    YRSP__DSET("rt_key_duration", ytr_data_set_time_ns(w, col, r->rt_key_duration_ns))
+    YRSP__DSET("rt_s", ytr_data_set_time_ns(w, col, r->rt_ns))
+    YRSP__DSET("rt_key_duration_s", ytr_data_set_time_ns(w, col, r->rt_key_duration_ns))
     YRSP__DSET("onset_src", ytr_data_set_int(w, col, on ? (int)r->onset_src : YTR_MISSING_INT))
     YRSP__DSET("onset_tier", ytr_data_set_int(w, col, on ? (int)r->onset_tier : YTR_MISSING_INT))
-    YRSP__DSET("onset_residual", ytr_data_set_time_ns(w, col, on ? r->onset_residual : YTR_MISSING_NS))
-    YRSP__DSET("landing_residual", ytr_data_set_time_ns(w, col, r->plan_residual))
+    YRSP__DSET("onset_residual_s", ytr_data_set_time_ns(w, col, on ? r->onset_residual : YTR_MISSING_NS))
+    YRSP__DSET("landing_residual_s", ytr_data_set_time_ns(w, col, r->plan_residual))
     YRSP__DSET("onset_frame", ytr_data_set_int64(w, col, r->onset_frame >= 0 ? r->onset_frame : YTR_MISSING_I64))
     YRSP__DSET("rsp_tier", ytr_data_set_int(w, col, (r->flags & YRSP_R_RESPONDED) ? (int)r->stamp_tier : YTR_MISSING_INT))
     YRSP__DSET("rsp_flags", ytr_data_set_int(w, col, (int)r->flags))

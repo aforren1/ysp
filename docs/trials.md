@@ -99,7 +99,10 @@ complete program that does it.
 2. Declare the columns. `YTR_COL` reads a field of the struct, and the
    column gets the field's name. The file holds seconds, so a time
    field's `_ns` becomes `_s` in the file: field `rt_ns` is column
-   `rt_s`. `YTR_COL_TEXT` writes the same text in
+   `rt_s`. Each column of seconds ends in `_s`: the open refuses a
+   `YTR_COL_TIME_NS` column named `rt`, and a session jitter named
+   `iti` (name it `iti_s`). Give a `YTR_COL_DOUBLE` column of seconds
+   the same suffix; the writer cannot see its unit. `YTR_COL_TEXT` writes the same text in
    each row. `YTR_COL_SET` is a column that you set by index for some rows
    only:
 
@@ -175,11 +178,12 @@ The header's DATA FILE section is the full reference. A summary:
 | Item | Rule |
 |---|---|
 | Columns | The session's (`ytr_format_header()`'s names), then `desc.cols` in order. At most 64 in all. A name is `[A-Za-z_][A-Za-z0-9_]*`, at most 63 bytes, unique. |
+| Columns of seconds | The name ends in `_s` (v0.5). The open refuses, by name, a `YTR_COL_TIME_NS` column without `_s` or `_ns` and a session whose jitter's name does not end in `_s`. A `YTR_COL_DOUBLE` or text column of seconds is the caller's to name. |
 | `YTR_COL_INT`, `YTR_COL_INT64` | Decimal. `YTR_MISSING_INT` (`INT_MIN`) or `YTR_MISSING_I64` (`INT64_MIN`) gives an empty field. |
 | `YTR_COL_DOUBLE` | `decimals` 0: the fewest of 15 to 17 significant digits that read back as the same double. 1 to 17: that many fixed decimals. NaN and the infinities give an empty field. |
 | `YTR_COL_BOOL` | `1` or `0`. |
 | `YTR_COL_STRING`, `YTR_COL_CHARS` | UTF-8 text, quoted when it holds a comma, a quote, a CR or an LF. A byte that is not valid UTF-8 becomes U+FFFD. NULL gives an empty field. |
-| `YTR_COL_TIME_NS` | `int64_t` nanoseconds written as seconds with 1 to 9 decimals (0 means 9, the exact value). Rounded half away from zero. `YTR_MISSING_NS` gives an empty field. A name that ends in `_ns` is written with `_s`. |
+| `YTR_COL_TIME_NS` | `int64_t` nanoseconds written as seconds with 1 to 9 decimals (0 means 9, the exact value). Rounded half away from zero. `YTR_MISSING_NS` gives an empty field. A name that ends in `_ns` is written with `_s`. A name that ends in neither `_s` nor `_ns` is refused at open (v0.5). |
 | `YTR_COL_CONST` | The same text in each row. |
 | Line endings, encoding | LF; UTF-8 without a BOM; no comment lines. The decimal point is `.` in every locale. |
 | When a row is on disk | `YTR_FLUSH_ROW` (default): in the OS when `ytr_data_write()` returns, so a crash of the program keeps it. `YTR_FLUSH_SYNC`: on the disk, so a power cut keeps it. |
@@ -756,6 +760,38 @@ Not done:
 | The Python and MEX bindings | Python has `csv` and pandas, MATLAB `writetable`; the bindings keep the sequencer only. |
 | A fuzz target | The writer parses no input; the round-trip test writes 400 random strings with every special byte and reads them back. |
 | Migrating the examples | A separate change; `examples/trials/mocs.c` is converted as the demonstration. |
+
+### v0.5: columns of seconds end in `_s`
+
+- Problem: jsPsych writes `rt` in milliseconds and PsychoPy in seconds.
+  A ysp file read with the wrong habit is off by 1000, and nothing in the
+  file flags it.
+- Decision (the user, 2026-10-20): each data-file column that holds a
+  time in seconds ends in `_s`. Experiment definitions already require
+  the suffix on duration keys ([experiment_format.md](experiment_format.md),
+  D4); data files now match. No user data existed, so there is no
+  migration.
+- Enforcement: `ytr_data_open()` refuses a `YTR_COL_TIME_NS` column whose
+  name ends in neither `_s` nor `_ns` (`_ns` is written `_s`), and a
+  session whose jitter's name does not end in `_s`, since the session's
+  jitter columns hold seconds. The message names the column and gives
+  the suffixed name. A refusal at open, not a silent rename: a silent
+  `rt` to `rt_s` would make the name in the code differ from the name in
+  the file, and `ytr_data_col()` and `yrsp_data_set()` find columns by
+  name.
+- Not enforced: a `YTR_COL_DOUBLE` or text column of seconds, a table
+  column of seconds that the session copies into the row, and
+  `ytr_format_header()` alone. The writer cannot see a double's unit, and
+  `ytr_format_header()` returns names and cannot refuse. These are the
+  caller's to name.
+- Checked on 2026-10-20 with MSVC 19.44 and MinGW-w64 gcc 16.1, on Linux
+  (WSL2) and under emcc: 6 new refusals (`x`, `rt`, `rts` and `rt_ms` as
+  `TIME_NS`, jitters `iti` and `is`) and 3 accepted names (`rt_s`, `_s`,
+  and `rt` as `DOUBLE`) in `tests/adapt/trials_test_data.h`; the C and
+  C++ compile checks refuse a `TIME_NS` column named `rt`. Mutations
+  `d-26` to `d-29` caught, 4 of 4, and `d-24` still caught. The examples
+  that write through the data writer or by hand were renamed, and the
+  CI `--sim` lists pass.
 
 ## Verification (v0.2)
 

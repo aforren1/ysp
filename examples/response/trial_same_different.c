@@ -12,15 +12,15 @@
  * A blank inter-trial interval of 1 s follows the response.
  *
  * The two onsets come from flip records, so the data row has the stimulus
- * onset asynchrony as shown (soa: second onset minus first onset) beside
+ * onset asynchrony as shown (soa_s: second onset minus first onset) beside
  * the planned 0.8 s, and both onsets' tiers. RT runs from the second
  * bar's flip onset.
  *
  * The data file has one row per trial (ysp/trials.h's data writer): the
  * session's columns (index, ..., first, second, answer: jsPsych's names),
- * then trial_index, correct, first_tier, soa, n_duplicates (second key
+ * then trial_index, correct, first_tier, soa_s, n_duplicates (second key
  * reports that ysp/screen.h's input bridge dropped during the trial), then
- * the response's (YRSP_DATA_COLS: response, rt, onset_src, onset_tier, the
+ * the response's (YRSP_DATA_COLS: response, rt_s, onset_src, onset_tier, the
  * residuals, rsp_tier, rsp_flags, n_anticipations, n_early). Times in
  * seconds; the settings go to FILE.meta. Shift+Esc stops the session; the
  * rows so far are kept.
@@ -101,7 +101,7 @@ static ytb_table tab;
 typedef struct row { int trial_index, first_tier, n_duplicates; bool correct; } row;
 static const ytr_col cols[] = {
     YTR_COL(row, trial_index, YTR_COL_INT), YTR_COL(row, correct, YTR_COL_BOOL),
-    YTR_COL(row, first_tier, YTR_COL_INT), YTR_COL_SET("soa", YTR_COL_TIME_NS),
+    YTR_COL(row, first_tier, YTR_COL_INT), YTR_COL_SET("soa_s", YTR_COL_TIME_NS),
     YTR_COL(row, n_duplicates, YTR_COL_INT), YRSP_DATA_COLS,
 };
 
@@ -303,7 +303,7 @@ int main(int argc, char** argv) {
                 r.n_duplicates = (int)(key_doubles() - doubles_at_arm);
                 soa_ns = res.t_onset && first_onset.t_ns ? res.t_onset - first_onset.t_ns : YTR_MISSING_NS;
                 ytr_update(&trials, (res.flags & YRSP_R_RESPONDED) ? r.correct : YTR_INVALID, NULL);
-                if (yrsp_data_set(&data, &res) < 0 || ytr_data_set_time_ns(&data, ytr_data_col(&data, "soa"), soa_ns) < 0 ||
+                if (yrsp_data_set(&data, &res) < 0 || ytr_data_set_time_ns(&data, ytr_data_col(&data, "soa_s"), soa_ns) < 0 ||
                     ytr_data_write(&data, &r) < 0)
                     failed = fail(ytr_data_error(&data));
                 printf("trial %2d %3s %3s soa %.6f s, %s\n", ti.index, ytb_text(&tab, ti.condition, first_col),

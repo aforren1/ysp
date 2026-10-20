@@ -41,8 +41,8 @@
  * Usage: gfx_gaze_contingent [--sim] [--fullscreen] [--seconds S] [--raw-mice]
  *                            [--inject] [--out FILE]
  *   --seconds S  run S seconds (default: until Shift+Esc)
- *   --out FILE   one row per frame with a new sample: frame, stamp, read,
- *                onset (s from the first frame's onset), latency (s)
+ *   --out FILE   one row per frame with a new sample: frame, stamp_s, read_s,
+ *                onset_s (from the first frame's onset), latency_s
  * Exit code: 0; 1 when something did not open or a check failed; 2 for a bad
  * argument. On Windows set YSCR_ANGLE_DIR.
  */
@@ -199,7 +199,7 @@ int main(int argc, char** argv) {
     win = ygfx_image(&gfx, &id);
     win.shape = YGFX_CIRCLE; win.edge = YGFX_EDGE_GAUSSIAN; win.edge_width = EDGE_SD;
     if (out_path && !(out = fopen(out_path, "w"))) { fprintf(stderr, "gfx_gaze_contingent: cannot write %s\n", out_path); return 1; }
-    if (out) fprintf(out, "frame,stamp,read,onset,latency\n");
+    if (out) fprintf(out, "frame,stamp_s,read_s,onset_s,latency_s\n");
 #if defined(YSCR__DXGI)
     if (inject) {
         /* SendInput reaches the foreground window only; a program started

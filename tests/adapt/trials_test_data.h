@@ -180,7 +180,7 @@ static void test_data_time(void) {
     static const int64_t vals[] = { 0, 1, -1, 4, 5, -5, 499999999, 500000000, 999999999,
                                     1000000000, -1000000000, 1499999999, 1500000000,
                                     -1500000000, INT64_MAX, INT64_MIN + 1 };
-    ytr_col col = YTR_COL_SET("t", YTR_COL_TIME_NS);
+    ytr_col col = YTR_COL_SET("t_s", YTR_COL_TIME_NS);
     ytr_data_desc dd;
     int dec, v, bad = 0;
     for (dec = 1; dec <= 9; dec++) {
@@ -399,7 +399,7 @@ static void test_data_session(void) {
     d.n_practice = 2;
     d.rng = ytr_splitmix;
     d.rng_ctx = &g_rng_state;
-    d.jitters[0] = ytr_uniform("iti", YRT_MS(500), YRT_S(1));
+    d.jitters[0] = ytr_uniform("iti_s", YRT_MS(500), YRT_S(1));
     d.n_jitters = 1;
     d.records = levels;
     d.record_size = sizeof(double);
@@ -415,7 +415,7 @@ static void test_data_session(void) {
     CHECK(ytr_data_open(&g_w, &dd));
     g_sink[g_sink_len] = '\0';
     CHECK_S(g_sink, "index,block,rep,condition,track,practice,warmup,requeued,after_break,outcome,"
-                    "ori,contrast,iti,rt_s,level\n");
+                    "ori,contrast,iti_s,rt_s,level\n");
     CHECK_I(ytr_data_write(&g_w, &r), YTR_ERR_ORDER);   /* nothing completed */
     CHECK_HAS(ytr_data_error(&g_w), "a trial is pending, or its row is written already");
     i = 0;
@@ -454,7 +454,7 @@ static void test_data_session(void) {
     if (g_back.base) {
         CHECK_I(g_back.n_rows, rows);
         CHECK_I(g_back.n_cols, 15);
-        CHECK_S(ytb_col_name(&g_back, 12), "iti");
+        CHECK_S(ytb_col_name(&g_back, 12), "iti_s");
         /* The quoted table text came back whole. */
         CHECK(ytb_find(&g_back, ytb_col(&g_back, "ori"), "up, high") >= 0);
     }
@@ -505,7 +505,30 @@ static void test_data_refusals(void) {
     c[0] = (ytr_col)YTR_COL(brow, i, YTR_COL_DOUBLE);   /* an int field as DOUBLE */
     CHECK(!ytr_data_open(&g_w, &dd));
     CHECK_HAS(ytr_data_error(&g_w), "'i' is DOUBLE but its field is 4 bytes");
+    /* A TIME_NS column is seconds in the file, so its name ends in _s or
+     * _ns (v0.5); the message names the column and the name to use. */
     c[0] = (ytr_col)YTR_COL(brow, x, YTR_COL_TIME_NS);
+    CHECK(!ytr_data_open(&g_w, &dd));
+    CHECK_HAS(ytr_data_error(&g_w), "column 'x' is TIME_NS, written in seconds, so its name ends in _s or _ns ('x_s')");
+    c[0] = (ytr_col)YTR_COL_SET("rt", YTR_COL_TIME_NS);
+    CHECK(!ytr_data_open(&g_w, &dd));
+    CHECK_HAS(ytr_data_error(&g_w), "column 'rt' is TIME_NS");
+    c[0] = (ytr_col)YTR_COL_SET("rts", YTR_COL_TIME_NS);      /* "s" without the "_" */
+    CHECK(!ytr_data_open(&g_w, &dd));
+    CHECK_HAS(ytr_data_error(&g_w), "column 'rts' is TIME_NS");
+    c[0] = (ytr_col)YTR_COL_SET("rt_ms", YTR_COL_TIME_NS);
+    CHECK(!ytr_data_open(&g_w, &dd));
+    CHECK_HAS(ytr_data_error(&g_w), "column 'rt_ms' is TIME_NS");
+    c[0] = (ytr_col)YTR_COL_SET("rt_s", YTR_COL_TIME_NS);
+    CHECK(ytr_data_open(&g_w, &dd));
+    ytr_data_close(&g_w);
+    c[0] = (ytr_col)YTR_COL_SET("_s", YTR_COL_TIME_NS);       /* the shortest */
+    CHECK(ytr_data_open(&g_w, &dd));
+    ytr_data_close(&g_w);
+    c[0] = (ytr_col)YTR_COL_SET("rt", YTR_COL_DOUBLE);        /* not TIME_NS: the caller's rule */
+    CHECK(ytr_data_open(&g_w, &dd));
+    ytr_data_close(&g_w);
+    c[0] = (ytr_col)YTR_COL_SET("x_s", YTR_COL_TIME_NS);
     c[0].decimals = 10;
     CHECK(!ytr_data_open(&g_w, &dd));
     CHECK_HAS(ytr_data_error(&g_w), "decimals 10");
@@ -549,6 +572,26 @@ static void test_data_refusals(void) {
     CHECK(!ytr_data_open(&g_w, &dd));
     CHECK_HAS(ytr_data_error(&g_w), "the session's column");
     d.factors[0] = ytr_factor("ori", 2);
+    /* A jitter's column holds seconds, so its name ends in _s (v0.5). */
+    d.rng = ytr_splitmix;
+    d.rng_ctx = &g_rng_state;
+    d.jitters[0] = ytr_uniform("iti", YRT_MS(500), YRT_S(1));
+    d.n_jitters = 1;
+    CHECK(ytr_open(&g_t, &d));
+    c[0] = (ytr_col)YTR_COL_SET("x", YTR_COL_INT);
+    CHECK(!ytr_data_open(&g_w, &dd));
+    CHECK_HAS(ytr_data_error(&g_w), "the jitter column 'iti' holds seconds, so its name ends in _s ('iti_s')");
+    d.jitters[0] = ytr_uniform("iti_s", YRT_MS(500), YRT_S(1));
+    CHECK(ytr_open(&g_t, &d));
+    CHECK(ytr_data_open(&g_w, &dd));
+    ytr_data_close(&g_w);
+    d.jitters[0] = ytr_uniform("is", YRT_MS(500), YRT_S(1));   /* "s" without the "_" */
+    CHECK(ytr_open(&g_t, &d));
+    CHECK(!ytr_data_open(&g_w, &dd));
+    CHECK_HAS(ytr_data_error(&g_w), "'is'");
+    d.n_jitters = 0;
+    d.rng = NULL;
+    d.rng_ctx = NULL;
     CHECK(ytr_open(&g_t, &d));
     c[0] = (ytr_col)YTR_COL_SET("outcome", YTR_COL_INT);
     CHECK(!ytr_data_open(&g_w, &dd));
@@ -770,6 +813,6 @@ static void test_data(void) {
     test_data_file();
     printf("  data writer: every type and missing value, times at 1 to 9 decimals, 400 random "
            "strings (commas, quotes, CR, LF, UTF-8, invalid bytes) read back by ytb_open_csv; a "
-           "session's rows equal format_row; 34 refusals; a failing write; a UTF-8 path and "
+           "session's rows equal format_row; 40 refusals; a failing write; a UTF-8 path and "
            "its sidecar; sizeof(ytr_data) = %lu\n", (unsigned long)sizeof(ytr_data));
 }

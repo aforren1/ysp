@@ -1666,7 +1666,10 @@ definition:
   `response_allowed_while_playing`, `frame_time`, `frame_isi`,
   `sequence_reps`, `target_present`, `set_size`.
 - Data columns: `rt`, `response`, `stimulus`, `correct`, `trial_index`,
-  `trial_type`, `time_elapsed`, `rt_key_duration`.
+  `trial_type`, `time_elapsed`, `rt_key_duration`. A time column is
+  seconds and gets `_s` (`rt_s`, `time_elapsed_s`,
+  `rt_key_duration_s`): jsPsych writes ms, and a bare name read with the
+  wrong habit is off by 1000 (decided 2026-10-20; conventions.md, Units).
 - From jspsych-psychophysics, for timed stimulus objects:
   `show_start_time`, `show_end_time`, `motion_start_time`,
   `motion_end_time`, `response_start_time`.

@@ -101,20 +101,21 @@ its own copy of the block; `to_bytes()` is the block a pack stores, and
 
 ```python
 t = pt.Trials(n_conditions=4, reps=25, order=pt.ORDER_FULL_RANDOM, rng=20261007,
-              jitters=[pt.exponential("fp", 0.5, 2.0, 0.4, rate=(60000, 1001)),  # non-aging
-                       pt.uniform("iti", 0.8, 1.2)])
+              jitters=[pt.exponential("fp_s", 0.5, 2.0, 0.4, rate=(60000, 1001)),  # non-aging
+                       pt.uniform("iti_s", 0.8, 1.2)])
 while (ti := t.next()) is not None:
-    fp = t.jitter(ti.index, "fp")            # Jitter(s, ns, frames)
+    fp = t.jitter(ti.index, "fp_s")           # Jitter(s, ns, frames)
     show_cue(); wait_frames(fp.frames); t.update(run_target(ti.condition))
-    wait_ns(t.jitter(ti.index, "iti").ns)
+    wait_ns(t.jitter(ti.index, "iti_s").ns)
 ```
 
 The durations come from the session's generator, one draw per jitter per
 trial in a fixed order, so `restore()` and `load()` reproduce them, and
-`format_row()` logs each in its own column (seconds to the nanosecond). A
+`format_row()` logs each in its own column (seconds to the nanosecond), so name
+a jitter with `_s` at the end, as ysp/trials.h's data writer requires. A
 jitter's `lo`, `hi` and `scale` can name table columns, for an interval per
-condition: `pt.uniform("fp", "fp_lo", "fp_hi")`. The rules text takes
-`jitter fp exponential 0.5 2.0 0.4 rate=60000/1001`. `pt.jitter_map(spec, u)`
+condition: `pt.uniform("fp_s", "fp_lo_s", "fp_hi_s")`. The rules text takes
+`jitter fp_s exponential 0.5 2.0 0.4 rate=60000/1001`. `pt.jitter_map(spec, u)`
 maps a variate of your own with no session, and nothing replays it.
 
 ## How to interleave adaptive tracks

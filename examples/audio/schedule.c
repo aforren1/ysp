@@ -334,7 +334,7 @@ int main(int argc, char** argv) {
         if (!f) { fprintf(stderr, "audio_schedule: cannot write %s\n", csv_path); bad = 1; }
         else {
             fprintf(f, "# %s\n# T0 %.9f s on the ysp_rt clock; times below are seconds after T0\n", line, (double)t0 / 1e9);
-            fprintf(f, "part,name,planned,onset,residual,start_frame,end_frame,lead,tier,flags\n");
+            fprintf(f, "part,name,planned_s,onset_s,residual_s,start_frame,end_frame,lead_s,tier,flags\n");
             for (i = 0; i < n_items; i++) {
                 const item* it = &items[i];
                 if (it->rc != YAU_OK) { fprintf(f, "%s,%s,%.9f,,,,,,,\n", it->part, it->name, it->at); continue; }

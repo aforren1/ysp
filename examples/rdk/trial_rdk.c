@@ -31,9 +31,9 @@
  * key_answer: jsPsych's names), then trial_index, correct, rdk_seed,
  * rdk_updates, rdk_digest, frames_dropped (flip records of the motion
  * frames with a dropped vblank), then the response's (YRSP_DATA_COLS:
- * response, rt, onset_src, onset_tier, the residuals, onset_frame,
+ * response, rt_s, onset_src, onset_tier, the residuals, onset_frame,
  * rsp_tier, rsp_flags, n_anticipations, n_early). Times in seconds; the
- * settings go to FILE.meta. Steps file: trial_index, update, t (s from the
+ * settings go to FILE.meta. Steps file: trial_index, update, t_s (from the
  * motion onset), coherence, direction, speed.
  *
  * At the end of every run the program reads the steps file back and
@@ -257,7 +257,7 @@ int main(int argc, char** argv) {
             .n_cols = (int)(sizeof cols / sizeof cols[0]), .meta_path = meta_path, .meta = meta }))
         return fail(ytr_data_error(&data));
     if (!(sout = fopen(steps_path, "w"))) return fail("cannot write the steps file");
-    fprintf(sout, "trial_index,update,t,coherence,direction,speed\n");
+    fprintf(sout, "trial_index,update,t_s,coherence,direction,speed\n");
     printf("%s\n", line);
 
     while (!aborted) {

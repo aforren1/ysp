@@ -18,10 +18,10 @@
  * (SIM) on the null device. The display plays no part in the onset.
  *
  * The data file has one row per trial (ysp/trials.h's data writer): the
- * session's columns (index, ..., stimulus, hz, key_answer, foreperiod),
+ * session's columns (index, ..., stimulus, hz, key_answer, foreperiod_s),
  * then trial_index, correct, audio_flags (YAU_ONSET_*), then the
- * response's (YRSP_DATA_COLS: response, rt, onset_src, onset_tier,
- * onset_residual: the tone's onset minus its target, rsp_tier, rsp_flags,
+ * response's (YRSP_DATA_COLS: response, rt_s, onset_src, onset_tier,
+ * onset_residual_s: the tone's onset minus its target, rsp_tier, rsp_flags,
  * n_anticipations, n_early). Times in seconds; the settings go to
  * FILE.meta. Shift+Esc stops the session; the rows so far are kept.
  *
@@ -166,7 +166,7 @@ int main(int argc, char** argv) {
     }
     /* any time: a sound is not on the frame grid */
     if (!ytr_open(&trials, &(ytr_desc){ .table = &tab, .reps = reps, .order = YTR_ORDER_RANDOM, .rng = ytr_splitmix,
-            .rng_ctx = &seed, .n_jitters = 1, .jitters = { ytr_uniform("foreperiod", YRT_MS(600), YRT_MS(1000)) } })) {
+            .rng_ctx = &seed, .n_jitters = 1, .jitters = { ytr_uniform("foreperiod_s", YRT_MS(600), YRT_MS(1000)) } })) {
         fprintf(stderr, "trial_audio_keyboard: %s\n", ytr_error(&trials));
         return 1;
     }

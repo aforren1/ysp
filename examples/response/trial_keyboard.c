@@ -19,12 +19,13 @@
  *
  * The data file has one row per trial (ysp/trials.h's data writer): the
  * session's columns (index, block, condition, ..., stimulus, key_answer,
- * iti), then trial_index, correct, n_duplicates (second key reports that
- * ysp/screen.h's input bridge dropped during the trial), then the
- * response's (YRSP_DATA_COLS: response, rt, rt_key_duration, onset_src,
- * onset_tier, onset_residual, landing_residual, onset_frame, rsp_tier,
- * rsp_flags, n_anticipations, n_early). Times in seconds. The settings go
- * to FILE.meta. Shift+Esc stops the session; the rows so far are kept.
+ * iti_s), then trial_index, correct, n_duplicates (second key reports
+ * that ysp/screen.h's input bridge dropped during the trial), then the
+ * response's (YRSP_DATA_COLS: response, rt_s, rt_key_duration_s,
+ * onset_src, onset_tier, onset_residual_s, landing_residual_s,
+ * onset_frame, rsp_tier, rsp_flags, n_anticipations, n_early). Times in
+ * seconds, in the columns that end in _s. The settings go to FILE.meta.
+ * Shift+Esc stops the session; the rows so far are kept.
  *
  * --sim runs on the simulated display with a synthetic participant (no
  * keyboard; the instructions show for 0.5 s): a correct response, an
@@ -216,7 +217,7 @@ int main(int argc, char** argv) {
     stim_col = ytb_col(&tab, "stimulus");
     key_col = ytb_col(&tab, "key_answer");
     if (!ytr_open(&trials, &(ytr_desc){ .table = &tab, .reps = reps, .order = YTR_ORDER_RANDOM, .rng = ytr_splitmix,
-            .rng_ctx = &seed, .n_jitters = 1, .jitters = { ytr_frames(ytr_uniform("iti", YRT_MS(800), YRT_MS(1200)),
+            .rng_ctx = &seed, .n_jitters = 1, .jitters = { ytr_frames(ytr_uniform("iti_s", YRT_MS(800), YRT_MS(1200)),
             caps.mode.refresh_num ? caps.mode.refresh_num : 60, caps.mode.refresh_num ? caps.mode.refresh_den : 1) } }))
         return fail(ytr_error(&trials));
 
@@ -333,9 +334,9 @@ int main(int argc, char** argv) {
     if (sim && !failed && reps != SIM_TRIALS / 2) printf("--sim: the self-check needs the default --reps\n");
     else if (sim && !failed) {
         /* the synthetic participant's trials must come out as scripted */
-        static const char* const v030_cols[] = { "trial_index", "stimulus", "key_answer", "response", "rt",
-            "correct", "rt_key_duration", "onset_tier", "onset_src", "landing_residual", "onset_frame",
-            "rsp_tier", "rsp_flags", "n_anticipations", "n_duplicates", "iti" };
+        static const char* const want_cols[] = { "trial_index", "stimulus", "key_answer", "response", "rt_s",
+            "correct", "rt_key_duration_s", "onset_tier", "onset_src", "landing_residual_s", "onset_frame",
+            "rsp_tier", "rsp_flags", "n_anticipations", "n_duplicates", "iti_s" };
         int bad = 0;
         if (rows != SIM_TRIALS) { fprintf(stderr, "trial_keyboard: --sim: %d rows, not %d\n", rows, SIM_TRIALS); bad = 1; }
         for (i = 0; i < rows && i < SIM_TRIALS; i++) {
@@ -357,13 +358,13 @@ int main(int argc, char** argv) {
                 bad = 1;
             }
         }
-        /* the file: every row, and every column the v0.3.0 example wrote */
+        /* the file: every row, and every column under its name (seconds end in _s) */
         if (!ytb_open_csv_file(&back, out_path, &(ytb_csv_desc){ .allow_empty = true, .arena = back_arena,
                                                                  .arena_size = sizeof back_arena })) { fprintf(stderr, "trial_keyboard: --sim: %s\n", ytb_error(&back)); bad = 1; }
         else {
             if (back.n_rows != rows) { fprintf(stderr, "trial_keyboard: --sim: the file has %d rows\n", back.n_rows); bad = 1; }
-            for (i = 0; i < (int)(sizeof v030_cols / sizeof v030_cols[0]); i++)
-                if (ytb_col(&back, v030_cols[i]) < 0) { fprintf(stderr, "trial_keyboard: --sim: no column %s\n", v030_cols[i]); bad = 1; }
+            for (i = 0; i < (int)(sizeof want_cols / sizeof want_cols[0]); i++)
+                if (ytb_col(&back, want_cols[i]) < 0) { fprintf(stderr, "trial_keyboard: --sim: no column %s\n", want_cols[i]); bad = 1; }
             ytb_close(&back);
         }
         if (bad) return 1;

@@ -35,10 +35,10 @@
  * The data file has one row per trial (ysp/trials.h's data writer): the
  * session's columns (index, ..., side, offset_tr, key_answer), then
  * trial_index, correct, volume (the last pulse at or before the onset,
- * 0 = the anchor's), planned (the onset's base time, s from the anchor),
- * onset (the disc's flip onset, s from the anchor), slip (onset minus
+ * 0 = the anchor's), planned_s (the onset's base time, from the anchor),
+ * onset_s (the disc's flip onset, from the anchor), slip_s (onset minus
  * planned: the landing on the frame grid and any drop), dropped (the
- * vblanks the disc's flip missed), from_pulse (the onset minus its
+ * vblanks the disc's flip missed), from_pulse_s (the onset minus its
  * volume's pulse), then the response's (YRSP_DATA_COLS).
  * Onsets land on the first frame at or after their planned time
  * (YTL_LEAD_NONE), not on the nearest one: an onset planned at a pulse
@@ -49,8 +49,8 @@
  * base runs on the PC's clock. A scanner clock slower than the PC's puts
  * pulse m up to m x TR x the difference after its plan, so over a long run
  * an onset can still precede its pulse by that much; the pulses file shows
- * the drift. --pulses FILE gets every pulse (volume, t in s from the
- * anchor, the interval); the end of the run prints the mean TR the PC
+ * the drift. --pulses FILE gets every pulse (volume, t_s from the
+ * anchor, interval_s); the end of the run prints the mean TR the PC
  * measured and its difference from --tr in ppm.
  *
  * --sim: the simulated display, scripted pulses (TR 1 s, 2 dummies, the

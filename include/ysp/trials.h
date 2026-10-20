@@ -1,4 +1,4 @@
-/* ysp/trials.h - v0.4.1 - public domain single-header trial sequencing library
+/* ysp/trials.h - v0.5.0 - public domain single-header trial sequencing library
  *
  *   The layer above the adaptive methods: which trial comes next, and what
  *   happened on it. Conditions and repetitions (the method of constant
@@ -588,7 +588,9 @@
  *     line (ytr_format_row) ends with one column per jitter, named by
  *     the jitter, the seconds as the exact decimal of .ns
  *     (1.184516667); ytr_format_meta() and ytr_format_rules() write
- *     the jitters' settings.
+ *     the jitters' settings. Name a jitter for its column of seconds,
+ *     with _s at the end (iti_s, soa_s): the data writer (DATA FILE)
+ *     refuses a session with any other jitter name (v0.5).
  *     CALL LEVEL. ytr_jitter_draw(&j, rng, ctx) calls rng once and maps
  *     the variate; ytr_jitter_map(&j, u) maps a variate the caller has;
  *     ytr_jitter_check() returns YTR_ERR_ARG and says why a desc is
@@ -808,6 +810,14 @@
  *     A TIME_NS column whose name ends in "_ns" is written with "_s"
  *     (field rt_ns, column rt_s), because the file holds seconds and a
  *     column's name says its unit; ytr_data_col() finds it by either name.
+ *     Every column of seconds ends in "_s" (v0.5): jsPsych writes rt in
+ *     ms and PsychoPy in s, and a file read with the wrong habit is off
+ *     by 1000 with nothing to flag it. open() refuses, by name, a
+ *     TIME_NS column whose name ends in neither "_s" nor "_ns" (rt, soa),
+ *     and a session whose jitter's name does not end in "_s" (a jitter's
+ *     column holds seconds). A DOUBLE or text column of seconds follows
+ *     the same rule; the writer cannot tell its unit, so it is the
+ *     caller's to keep.
  *       YTR_COL_SET(name, type)     from ytr_data_set_<type>(w, col, v)
  *                                     before the row (PsychoPy's addData;
  *                                     col is the index in desc.cols, or
@@ -1073,6 +1083,14 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.5.0 - every column of seconds ends in _s (user decision,
+ *          2026-10-20): jsPsych writes rt in ms and PsychoPy in s, and a
+ *          file read with the wrong habit is off by 1000 with nothing to
+ *          flag it. ytr_data_open() refuses, with a message that names
+ *          the column, a TIME_NS column whose name ends in neither _s nor
+ *          _ns, and a session whose jitter's name does not end in _s.
+ *          BREAKING for such columns: name them rt_s or rt_ns, and a
+ *          jitter iti_s. No other change; the pins still match.
  *   v0.4.1 - fileno() for YTR_FLUSH_SYNC under -std=c11 when the caller
  *          included a system header first: glibc had already fixed its
  *          feature set, so fileno() was undeclared and the build failed;
@@ -1226,6 +1244,11 @@
  *          - ytr_condition_at() indexes the practice slots too.
  *   v0.0 - specification. Declarations and the manual, no implementation.
  *
+ *   STATUS: v0.5.0, 2026-10-20. The refusal of a column of seconds
+ *   without _s: 6 new refusals in tests/adapt/trials_test_data.h (40 in
+ *   all), the compile check refuses a TIME_NS column named rt; d-26 to
+ *   d-29 caught, d-24 still caught. MSVC 19.44 and MinGW-w64 gcc 16.1,
+ *   Linux (WSL2), emcc; the CI --sim lists pass.
  *   STATUS: v0.4.0, 2026-10-10. The data writer, built and run on Windows
  *   11 with MinGW-w64 gcc 16.1 (C11, C++17, warnings as errors) and MSVC
  *   19.44 (/W4 /WX, C and C++17); not yet run on Linux or macOS (CI's
@@ -1406,9 +1429,9 @@
 /* The version of this header, for a log line or a compile-time check. The
  * string is the three numbers, and the test asserts that it stays so. */
 #define YTR_VERSION_MAJOR 0
-#define YTR_VERSION_MINOR 4
-#define YTR_VERSION_PATCH 1
-#define YTR_VERSION_STRING "0.4.1"
+#define YTR_VERSION_MINOR 5
+#define YTR_VERSION_PATCH 0
+#define YTR_VERSION_STRING "0.5.0"
 
 /* fsync() and fileno() for YTR_FLUSH_SYNC under -std=c11: the feature-test
  * macro of ysp/rt.h and ysp/pack.h, set before the first system header
@@ -1633,7 +1656,8 @@ typedef struct ytr_jitter_value {
     int64_t frames;
 } ytr_jitter_value;
 
-/* Durations in ns: ytr_uniform("iti", YRT_MS(800), YRT_MS(1200)). */
+/* Durations in ns: ytr_uniform("iti_s", YRT_MS(800), YRT_MS(1200)). The
+ * name ends in _s, since it names a column of seconds (DATA FILE). */
 YTR_API ytr_jitter_desc ytr_uniform(const char* name, int64_t lo_ns, int64_t hi_ns);
 YTR_API ytr_jitter_desc ytr_choice(const char* name, const int64_t* values_ns, int n);
 YTR_API ytr_jitter_desc ytr_exponential(const char* name, int64_t lo_ns, int64_t hi_ns,
@@ -1989,7 +2013,8 @@ typedef enum ytr_col_type {
     YTR_COL_STRING,    /* const char*, UTF-8; NULL is missing             */
     YTR_COL_CHARS,     /* char[size], UTF-8, to the first NUL or the end  */
     YTR_COL_TIME_NS,   /* int64_t nanoseconds, written as seconds;
-                        * YTR_MISSING_NS is missing                       */
+                        * YTR_MISSING_NS is missing. The name ends in _s,
+                        * or in _ns (written _s); open() refuses others */
     YTR_COL_CONST      /* the same text on every row (participant, session) */
 } ytr_col_type;
 
@@ -6903,6 +6928,13 @@ static bool ytr__dname_ns(const char* s, size_t n) {
     return n >= 3u && s[n - 3u] == '_' && s[n - 2u] == 'n' && s[n - 1u] == 's';
 }
 
+/* A name of n bytes that ends in "_s". A column of seconds must say so:
+ * jsPsych writes rt in ms and PsychoPy in s, and a file read with the
+ * wrong habit is off by 1000 with nothing to flag it. */
+static bool ytr__dname_s(const char* s, size_t n) {
+    return n >= 2u && s[n - 2u] == '_' && s[n - 1u] == 's';
+}
+
 /* The longest line ytr_format_row() can give this session: ten integers,
  * a lead-in flag, the factors (a table cell quoted, every byte a quote at
  * worst) and the jitters' seconds. */
@@ -7026,6 +7058,12 @@ YTR_API bool ytr_data_open(ytr_data* w, const ytr_data_desc* desc) {
             p += k;
             if (*p == ',') p++;
         }
+        for (j = 0; j < desc->trials->n_jit && j < YTR_MAX_JITTERS; j++) {
+            const char* jn = desc->trials->jit[j].name;
+            if (!ytr__dname_s(jn, strlen(jn)))
+                return ytr__dfail(w, "ytr_data_open: the jitter column '%s' holds seconds, so its name "
+                                       "ends in _s ('%s_s')", jn, jn);
+        }
         w->len = (size_t)len - 1u;  /* the header line, without its newline */
         w->trials = desc->trials;
         w->next_trial = ytr_n_done(desc->trials);
@@ -7052,6 +7090,9 @@ YTR_API bool ytr_data_open(ytr_data* w, const ytr_data_desc* desc) {
             d->name[k - 2u] = 's';
             d->name[k - 1u] = '\0';
         }
+        if (c->type == YTR_COL_TIME_NS && !ytr__dname_s(d->name, strlen(d->name)))
+            return ytr__dfail(w, "ytr_data_open: column '%s' is TIME_NS, written in seconds, so its name "
+                                   "ends in _s or _ns ('%s_s')", c->name, c->name);
         memcpy(names[n_names], d->name, strlen(d->name) + 1u);
         n_names++;
         d->type = (int)c->type;

@@ -22,8 +22,8 @@
  *
  * THE TIMES. The key turns the page on the first frame that begins after
  * it; that frame's flip record is the new view's onset and ends the view
- * before it (the last view ends at a blank frame's flip). viewing_time is
- * the difference of two flip records; rt is the key from the view's
+ * before it (the last view ends at a blank frame's flip). viewing_time_s is
+ * the difference of two flip records; rt_s is the key from the view's
  * onset. The key that turned the page is usually still down when the next
  * view opens: rsp_flags then has HELD_AT_OPEN (256).
  *
@@ -32,9 +32,9 @@
  * a window run stops, since a reader would see no text.
  *
  * Data (--out, ysp/trials.h's writer): one row per view: view_index,
- * page_index, onset (s from the first view's onset), viewing_time (s),
+ * page_index, onset_s (from the first view's onset), viewing_time_s,
  * end_tier (the tier of the flip that ended it), then the response's
- * columns (YRSP_DATA_COLS: response, rt, onset_src, onset_tier, ...).
+ * columns (YRSP_DATA_COLS: response, rt_s, onset_src, onset_tier, ...).
  * FILE.meta has the screen, the layout stamp (versions and font hashes)
  * and the page sizes.
  *

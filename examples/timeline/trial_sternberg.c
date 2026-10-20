@@ -19,8 +19,8 @@
  * The trial is one op table (ytl_run()), built per trial and checked as a
  * whole before any event goes in: a table that does not fit adds nothing.
  * Each digit's onset comes from its flip record, so the row has the SOAs
- * as shown (soa_2 .. soa_6: a digit's onset minus the one before it) and
- * probe_soa (the probe's onset minus the last digit's, planned 1.3 s). RT
+ * as shown (soa_2_s .. soa_6_s: a digit's onset minus the one before it) and
+ * probe_soa_s (the probe's onset minus the last digit's, planned 1.3 s). RT
  * runs from the probe's flip onset.
  *
  * Digits: Arial (Windows) or DejaVu Sans (Linux), or --font; a 5 x 7
@@ -30,8 +30,8 @@
  * The data file has one row per trial (ysp/trials.h's data writer): the
  * session's columns (index, block, ..., set_size, probe_type, answer),
  * then trial_index, memory_set, probe (the digit), probe_present, correct,
- * items_tier (the worst tier of the digits' onsets), probe_soa, soa_2 ..
- * soa_6, then the response's (YRSP_DATA_COLS: response, rt, onset_src,
+ * items_tier (the worst tier of the digits' onsets), probe_soa_s, soa_2_s ..
+ * soa_6_s, then the response's (YRSP_DATA_COLS: response, rt_s, onset_src,
  * onset_tier, the residuals, onset_frame, rsp_tier, rsp_flags,
  * n_anticipations, n_early). Times in seconds; the settings go to
  * FILE.meta. Shift+Esc stops the session; the rows so far are kept.
@@ -124,8 +124,8 @@ typedef struct row { int trial_index, probe, items_tier; bool probe_present, cor
 static const ytr_col cols[] = {
     YTR_COL(row, trial_index, YTR_COL_INT), YTR_COL(row, memory_set, YTR_COL_CHARS), YTR_COL(row, probe, YTR_COL_INT),
     YTR_COL(row, probe_present, YTR_COL_BOOL), YTR_COL(row, correct, YTR_COL_BOOL), YTR_COL(row, items_tier, YTR_COL_INT),
-    YTR_COL_SET("probe_soa", YTR_COL_TIME_NS), YTR_COL_SET("soa_2", YTR_COL_TIME_NS), YTR_COL_SET("soa_3", YTR_COL_TIME_NS),
-    YTR_COL_SET("soa_4", YTR_COL_TIME_NS), YTR_COL_SET("soa_5", YTR_COL_TIME_NS), YTR_COL_SET("soa_6", YTR_COL_TIME_NS),
+    YTR_COL_SET("probe_soa_s", YTR_COL_TIME_NS), YTR_COL_SET("soa_2_s", YTR_COL_TIME_NS), YTR_COL_SET("soa_3_s", YTR_COL_TIME_NS),
+    YTR_COL_SET("soa_4_s", YTR_COL_TIME_NS), YTR_COL_SET("soa_5_s", YTR_COL_TIME_NS), YTR_COL_SET("soa_6_s", YTR_COL_TIME_NS),
     YRSP_DATA_COLS,
 };
 
@@ -322,7 +322,7 @@ int main(int argc, char** argv) {
     if (!ytr_data_open(&data, &(ytr_data_desc){ .path = out_path, .trials = &trials, .cols = cols,
             .n_cols = (int)(sizeof cols / sizeof cols[0]), .meta_path = meta_path, .meta = meta }))
         return fail(ytr_data_error(&data));
-    soa_col = ytr_data_col(&data, "probe_soa");   /* then soa_2 .. soa_6 */
+    soa_col = ytr_data_col(&data, "probe_soa_s");   /* then soa_2_s .. soa_6_s */
     printf("%s\n", line);
 
     while (!aborted) {

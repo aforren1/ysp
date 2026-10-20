@@ -41,7 +41,7 @@
  * unclipped), in_gamut, distance, kept, shown_r, shown_g, shown_b, code_r,
  * code_g, code_b (the 8-bit codes the output stage writes), refused (the
  * reason, empty when shown; then the columns it did not reach are empty
- * too), onset (s from the first color's onset, both from flip records) and
+ * too), onset_s (from the first color's onset, both from flip records) and
  * onset_tier. FILE.meta has the calibration and the screen.
  *
  * --sim: the simulated display on ysp/rt.h's virtual clock and a scripted

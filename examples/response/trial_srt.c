@@ -16,7 +16,7 @@
  * shows as slower responses in R. A 2 s rest precedes each block.
  *
  * The data file has one row per trial: block, block_type, trial_index,
- * position, response, rt, correct; then onset_tier, onset_src, rsp_tier,
+ * position, response, rt_s, correct; then onset_tier, onset_src, rsp_tier,
  * rsp_flags, n_rsi_presses, n_duplicates (second key reports that
  * ysp/screen.h's input bridge dropped during the trial). Times in
  * seconds; RT from the target's flip onset. A summary of the mean correct
@@ -208,7 +208,7 @@ int main(int argc, char** argv) {
     yscr_describe(&scr, line, sizeof line);
     fprintf(out, "# blocks %s, reps %d, seed %llu, rsi %.3f s\n# %s\n# ysp_response %s; keyboard: %s\n", blocks, reps,
             (unsigned long long)seed, RSI_S, line, yrsp_version(), sim ? "synthetic (tier SIM)" : "SDL through yscr_event_input");
-    fprintf(out, "block,block_type,trial_index,position,response,rt,correct,onset_tier,onset_src,rsp_tier,rsp_flags,"
+    fprintf(out, "block,block_type,trial_index,position,response,rt_s,correct,onset_tier,onset_src,rsp_tier,rsp_flags,"
                  "n_rsi_presses,n_duplicates\n");
     printf("%s\n", line);
 

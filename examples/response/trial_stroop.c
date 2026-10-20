@@ -29,7 +29,7 @@
  * a window run stops, since a participant would see no words.
  *
  * The data file has one row per trial: trial_index, block, stimulus, ink,
- * congruent, answer, response, rt, correct, feedback (jsPsych-style names
+ * congruent, answer, response, rt_s, correct, feedback (jsPsych-style names
  * first); then onset_tier, onset_src, rsp_tier, rsp_flags,
  * n_anticipations. Times in seconds. Shift+Esc stops the session; the rows
  * so far are kept.
@@ -331,7 +331,7 @@ int main(int argc, char** argv) {
     fprintf(out, "# %s\n# rules: %s\n# %s\n# ysp_response %s; keyboard: %s\n", meta, rules_out, line, yrsp_version(),
             sim ? "synthetic (tier SIM)" : "SDL through yscr_event_input");
     if (have_font) { ylay_stamp(L, NULL, line, sizeof line); fprintf(out, "# layout: %s\n", line); }
-    fprintf(out, "trial_index,block,stimulus,ink,congruent,answer,response,rt,correct,feedback,"
+    fprintf(out, "trial_index,block,stimulus,ink,congruent,answer,response,rt_s,correct,feedback,"
                  "onset_tier,onset_src,rsp_tier,rsp_flags,n_anticipations\n");
 
     ygfx_prime(&gfx);   /* the text program's first draw now (ygfx_open_screen() primed the rest; docs/gfx.md) */

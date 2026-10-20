@@ -19,8 +19,8 @@
  *
  * Two data files. The trial file (--out) has one row per trial:
  * trial_index, reference, start_value, final_value (jsPsych's names),
- * error_px, n_steps, rt; then onset_tier, onset_src, rsp_tier, rsp_flags.
- * The trajectory file (--traj) has one row per step: trial_index, t (from
+ * error_px, n_steps, rt_s; then onset_tier, onset_src, rsp_tier, rsp_flags.
+ * The trajectory file (--traj) has one row per step: trial_index, t_s (from
  * the bars' onset), key, repeat (1 for an OS repeat), value. Times in
  * seconds. Shift+Esc stops the session; the rows so far are kept.
  *
@@ -213,9 +213,9 @@ int main(int argc, char** argv) {
     yscr_describe(&scr, line, sizeof line);
     fprintf(out, "# %s\n# %s\n# ysp_response %s; keyboard: %s; step %.2f, length 40 + 280 x value px\n", meta, line,
             yrsp_version(), sim ? "synthetic (tier SIM)" : "SDL through yscr_event_input", STEP);
-    fprintf(out, "trial_index,reference,start_value,final_value,error_px,n_steps,rt,onset_tier,onset_src,rsp_tier,"
+    fprintf(out, "trial_index,reference,start_value,final_value,error_px,n_steps,rt_s,onset_tier,onset_src,rsp_tier,"
                  "rsp_flags\n");
-    fprintf(traj, "trial_index,t,key,repeat,value\n");
+    fprintf(traj, "trial_index,t_s,key,repeat,value\n");
     printf("%s\n", line);
 
     for (;;) {
