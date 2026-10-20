@@ -111,6 +111,15 @@ follows.
   `ysp.trials` jitter's `ns` beside `s`, and `ysp.rdk`'s `Step.ns` beside
   `Step.t`.
   Text for a person (describe lines, CSV columns) keeps its units.
+  A data-file column that holds a time in seconds ends in `_s` (`rt_s`,
+  `onset_residual_s`, a jitter `iti_s`); a column in another unit ends
+  in that unit (`onset_ns`, `diff_us`). jsPsych writes `rt` in
+  milliseconds and PsychoPy in seconds, so a bare `rt` read with the
+  wrong habit is off by 1000 with nothing to flag it (the user's
+  decision, 2026-10-20). Experiment definitions have the same rule for
+  duration keys ([experiment_format.md](experiment_format.md), D4).
+  `ysp/trials.h`'s data writer refuses a time column or a jitter without
+  the suffix; a hand-written CSV follows the rule by review.
   Exceptions, each stated in its header:
   - `yin_event.unc_us` (`ysp/input.h`) stays a `uint16_t` in
     microseconds: the 48-byte event has no room for an `int64_t`.

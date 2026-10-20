@@ -661,3 +661,37 @@ test = "trials"
 why = "Every call on a handle that fails writes its message (README.md, Conventions)."
 find = '''ytr__dfail(w, "%s: the writer is not open", what);'''
 replace = '''(void)what;'''
+
+# --- v0.5: every column of seconds ends in _s ---------------------------
+
+[[mutant]]
+id = "d-26"
+name = "a TIME_NS column without _s is written"
+test = "trials"
+why = "A column of seconds named rt reads as ms to a jsPsych habit, off by 1000 with nothing to flag it; open() must refuse it by name."
+find = '''if (c->type == YTR_COL_TIME_NS && !ytr__dname_s(d->name, strlen(d->name)))'''
+replace = '''if (c->type == YTR_COL_TIME_NS && !ytr__dname_s(d->name, strlen(d->name)) && 0)'''
+
+[[mutant]]
+id = "d-27"
+name = "any trailing s is a unit"
+test = "trials"
+why = "rts or is ends in s but says no unit; only _s does."
+find = '''return n >= 2u && s[n - 2u] == '_' && s[n - 1u] == 's';'''
+replace = '''return n >= 1u && s[n - 1u] == 's';'''
+
+[[mutant]]
+id = "d-28"
+name = "a jitter column without _s is written"
+test = "trials"
+why = "A jitter's column holds seconds; a session whose jitter is named iti would write a column of seconds without its unit."
+find = '''if (!ytr__dname_s(jn, strlen(jn)))'''
+replace = '''if (!ytr__dname_s(jn, strlen(jn)) && 0)'''
+
+[[mutant]]
+id = "d-29"
+name = "_s alone is refused"
+test = "trials"
+why = "The rule is the suffix; a name that is only the suffix still says seconds, and ytr__dname_ns turns _ns into it."
+find = '''return n >= 2u && s[n - 2u] == '_' && s[n - 1u] == 's';'''
+replace = '''return n >= 3u && s[n - 2u] == '_' && s[n - 1u] == 's';'''

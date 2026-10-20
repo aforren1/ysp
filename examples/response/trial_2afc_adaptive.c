@@ -43,8 +43,8 @@
  * correct, method (stair or quest), intensity (the level the method
  * proposed), contrast_shown, scene_contrast (ysp/gfx.h's), code_peak,
  * code_trough, estimate (the track's threshold after the trial), then the
- * response's (YRSP_DATA_COLS: response, rt, onset_src, onset_tier,
- * landing_residual, onset_frame, rsp_tier, n_early and the rest). Times
+ * response's (YRSP_DATA_COLS: response, rt_s, onset_src, onset_tier,
+ * landing_residual_s, onset_frame, rsp_tier, n_early and the rest). Times
  * in seconds. FILE.meta has the session, the screen, the calibration and
  * the methods.
  *

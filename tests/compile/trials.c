@@ -61,7 +61,7 @@ int main(void) {
     static ytr_data w;
     ytr_data_desc dd;
     check_row r = { 1, 0.5, 250000000, "ab" };
-    ytr_jitter_desc j = g_trials_api.uniform("iti", YRT_MS(800), YRT_MS(1200));
+    ytr_jitter_desc j = g_trials_api.uniform("iti_s", YRT_MS(800), YRT_MS(1200));
     ytr_jitter_value v;
     if (g_trials_api.jitter_check(&j, NULL, 0) < 0) return 1;
     v = ytr_jitter_map(&j, 0.0);
@@ -84,5 +84,12 @@ int main(void) {
     if (g_trials_api.data_finish(&w) != 0) return 8;
     g_trials_api.data_close(&w);
     g_trials_api.data_close(&w);
+    {
+        /* v0.5: a TIME_NS column without _s or _ns is refused. */
+        static const ytr_col bare[] = { YTR_COL_SET("rt", YTR_COL_TIME_NS) };
+        dd.cols = bare;
+        dd.n_cols = 1;
+        if (g_trials_api.data_open(&w, &dd)) return 9;
+    }
     return 0;
 }

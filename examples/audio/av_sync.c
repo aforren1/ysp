@@ -46,8 +46,8 @@
  * after it) fed to the same matcher. It checks its own results and exits
  * 1 on a mismatch. Under a second: the virtual clock does not wait.
  *
- * CSV (--csv): one row per trial; planned in seconds on the ysp_rt clock,
- * every other time in seconds after planned.
+ * CSV (--csv): one row per trial; planned_s on the ysp_rt clock, every
+ * other time after planned_s; the columns of seconds end in _s.
  * Exit: 0, 1 when something did not open, a board was not running after
  * the warm-up, a trial had no edge or a --sim check failed, 2 usage.
  */
@@ -223,8 +223,8 @@ int main(int argc, char** argv) {
                 board ? board : (sim ? "synthetic (--sim)" : "none"), sound_board ? ", sound board " : "",
                 sound_board ? sound_board : "", (unsigned)light_dev, (unsigned)light_ch, (unsigned)sound_dev,
                 (unsigned)sound_ch);
-        fprintf(csv, "trial,frame,planned,flip_onset,flip_tier,flip_dropped,audio_onset,audio_tier,audio_flags,"
-                     "audio_minus_flip,light,sound,sound_minus_light\n");
+        fprintf(csv, "trial,frame,planned_s,flip_onset_s,flip_tier,flip_dropped,audio_onset_s,audio_tier,audio_flags,"
+                     "audio_minus_flip_s,light_s,sound_s,sound_minus_light_s\n");
     }
     (void)yrt_thread_elevate(NULL);
 

@@ -268,10 +268,10 @@ static const int64_t g_soa[4] = { YRT_MS(100), YRT_MS(200), YRT_MS(300), YRT_MS(
 
 /* Four jitters, one of each kind, two snapped to 60000/1001 Hz frames. */
 static void add_jitters(ytr_desc* d) {
-    d->jitters[0] = ytr_frames(ytr_uniform("iti", YRT_MS(800), YRT_MS(1200)), 60000, 1001);
-    d->jitters[1] = ytr_frames(ytr_exponential("fp", YRT_MS(500), YRT_MS(2000), YRT_MS(400)), 60000, 1001);
-    d->jitters[2] = ytr_exponential("fp2", YRT_MS(500), YRT_MS(2000), YRT_MS(400));
-    d->jitters[3] = ytr_choice("soa", g_soa, 4);
+    d->jitters[0] = ytr_frames(ytr_uniform("iti_s", YRT_MS(800), YRT_MS(1200)), 60000, 1001);
+    d->jitters[1] = ytr_frames(ytr_exponential("fp_s", YRT_MS(500), YRT_MS(2000), YRT_MS(400)), 60000, 1001);
+    d->jitters[2] = ytr_exponential("fp2_s", YRT_MS(500), YRT_MS(2000), YRT_MS(400));
+    d->jitters[3] = ytr_choice("soa_s", g_soa, 4);
     d->n_jitters = 4;
 }
 
@@ -330,7 +330,7 @@ static void bench_draw(void) {
             v[r] = (now_ms() - t0) * 1e6 / 100000.0;
         }
         st = stats(v, g_rounds);
-        printf("  %-4s %s: min %.1f ns, median %.1f ns, max %.1f ns\n", d.jitters[k].name,
+        printf("  %-5s %s: min %.1f ns, median %.1f ns, max %.1f ns\n", d.jitters[k].name,
                k == 0 ? "uniform, frames    " : k == 1 ? "exponential, frames" : k == 2 ? "exponential        "
                                                                                        : "choice of 4        ",
                st.min, st.med, st.max);

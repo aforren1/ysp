@@ -96,7 +96,7 @@ int main(int argc, char** argv) {
     d.reps = 10;
     d.order = YTR_ORDER_FULL_RANDOM;
     d.n_practice = 2;
-    d.jitters[0] = ytr_uniform("iti", YRT_MS(500), YRT_S(1));
+    d.jitters[0] = ytr_uniform("iti_s", YRT_MS(500), YRT_S(1));
     d.n_jitters = 1;
     d.rng = ytr_splitmix;
     d.rng_ctx = &seed;
@@ -176,7 +176,7 @@ int main(int argc, char** argv) {
     {
         int c_index = ytb_col(&back, "index"), c_target = ytb_col(&back, "target");
         int c_rt = ytb_col(&back, "rt_s"), c_resp = ytb_col(&back, "response");
-        int c_note = ytb_col(&back, "note"), c_iti = ytb_col(&back, "iti");
+        int c_note = ytb_col(&back, "note"), c_iti = ytb_col(&back, "iti_s");
         int c_part = ytb_col(&back, "participant");
         for (i = 0; i < n; i++) {
             int k = (int)ytb_int(&back, i, c_index);

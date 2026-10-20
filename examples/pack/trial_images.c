@@ -36,7 +36,7 @@
  *
  * The data file has one row per trial (ysp/trials.h's data writer):
  * trial_index, block, stimulus, ori, kind, answer, correct (jsPsych-style
- * names first), then the response's (YRSP_DATA_COLS: response, rt,
+ * names first), then the response's (YRSP_DATA_COLS: response, rt_s,
  * onset_src, onset_tier, the residuals, onset_frame, rsp_tier, rsp_flags,
  * n_anticipations, n_early). No session columns: the table's block column
  * (navon, rotation) has the name of the session's block number. Times in

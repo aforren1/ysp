@@ -697,14 +697,15 @@ already.
 seconds drawn per trial from the session's generator, logged in
 `format_row` and reproduced by `restore` and `load`. `lo`, `hi` and `scale`
 may be a table column's name; `rate` is `NUM` or `[NUM DEN]` Hz and snaps the
-draws to whole frames.
+draws to whole frames. A jitter's column holds seconds, so its name ends
+in `_s`, as ysp/trials.h's data writer requires.
 
 ```matlab
-d.jitters = [ysp_trials('exponential', 'fp', 0.5, 2.0, 0.4, [60000 1001]), ...
-             ysp_trials('uniform', 'iti', 0.8, 1.2)];
+d.jitters = [ysp_trials('exponential', 'fp_s', 0.5, 2.0, 0.4, [60000 1001]), ...
+             ysp_trials('uniform', 'iti_s', 0.8, 1.2)];
 h = ysp_trials('open', d);
 ti = ysp_trials('next', h);
-fp = ysp_trials('jitter', h, ti.index, 'fp');   % fp.s, fp.ns (int64), fp.frames
+fp = ysp_trials('jitter', h, ti.index, 'fp_s'); % fp.s, fp.ns (int64), fp.frames
 ```
 
 **Constraints** come from module commands. Put them in `desc.constraints`

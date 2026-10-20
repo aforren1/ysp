@@ -494,5 +494,23 @@ id = "fl-08"
 name = "landing_residual from the final onset"
 test = "response"
 why = "landing_residual is the plan's residual; the final onset's is onset_residual."
-find = '    YRSP__DSET("landing_residual", ytr_data_set_time_ns(w, col, r->plan_residual))'
-replace = '    YRSP__DSET("landing_residual", ytr_data_set_time_ns(w, col, r->onset_residual))'
+find = '    YRSP__DSET("landing_residual_s", ytr_data_set_time_ns(w, col, r->plan_residual))'
+replace = '    YRSP__DSET("landing_residual_s", ytr_data_set_time_ns(w, col, r->onset_residual))'
+
+# v0.5.0: the columns of seconds end in _s.
+
+[[mutant]]
+id = "fl-09"
+name = "rt set under its old name"
+test = "response"
+why = "yrsp_data_set() finds the columns by name; looking for rt finds no column, so the row's rt_s stays empty."
+find = '    YRSP__DSET("rt_s", ytr_data_set_time_ns(w, col, r->rt_ns))'
+replace = '    YRSP__DSET("rt", ytr_data_set_time_ns(w, col, r->rt_ns))'
+
+[[mutant]]
+id = "fl-10"
+name = "onset_residual declared without _s"
+test = "response"
+why = "A column of seconds without _s reads as ms to a jsPsych habit; ysp/trials.h refuses it at open."
+find = '    YTR_COL_SET("onset_residual_s", YTR_COL_TIME_NS), \'
+replace = '    YTR_COL_SET("onset_residual", YTR_COL_TIME_NS), \'

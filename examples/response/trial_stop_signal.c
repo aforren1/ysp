@@ -18,14 +18,14 @@
  * go stimulus is not used: a frame loop that falls behind plans a later
  * vblank, and the tone came one period early (measured in --sim under
  * load, 4 of 10 runs). The data row
- * has the SSD as shown (ssd_actual: the tone's onset record minus the go
+ * has the SSD as shown (ssd_actual_s: the tone's onset record minus the go
  * stimulus's flip onset), and the staircase records that value. RT runs
  * from the go stimulus's flip onset.
  *
  * The data file has one row per trial (ysp/trials.h's data writer): the
  * session's columns (index, ..., stimulus, key_answer, signal: go or
- * stop), then trial_index, correct, ssd, ssd_actual, stopped, tone_tier,
- * then the response's (YRSP_DATA_COLS: response, rt, onset_tier and the
+ * stop), then trial_index, correct, ssd_s, ssd_actual_s, stopped, tone_tier,
+ * then the response's (YRSP_DATA_COLS: response, rt_s, onset_tier and the
  * rest for the go stimulus). Times in seconds; the settings go to
  * FILE.meta. The run
  * ends with p(respond | signal), the mean SSD, the mean go RT and the
@@ -128,10 +128,10 @@ static ygfx_stim shape(ygfx_shape_kind kind, float w, float p0, float c) {
 /* The program's columns, after the session's; then YRSP_DATA_COLS. The
  * SSDs are the staircase's seconds; NaN and YTR_MISSING_INT are empty on a
  * go trial. */
-typedef struct row { int trial_index, stopped, tone_tier; bool correct; double ssd, ssd_actual; } row;
+typedef struct row { int trial_index, stopped, tone_tier; bool correct; double ssd_s, ssd_actual_s; } row;
 static const ytr_col cols[] = {
     YTR_COL(row, trial_index, YTR_COL_INT), YTR_COL(row, correct, YTR_COL_BOOL),
-    YTR_COL_D(row, ssd, YTR_COL_DOUBLE, 9), YTR_COL_D(row, ssd_actual, YTR_COL_DOUBLE, 9),
+    YTR_COL_D(row, ssd_s, YTR_COL_DOUBLE, 9), YTR_COL_D(row, ssd_actual_s, YTR_COL_DOUBLE, 9),
     YTR_COL(row, stopped, YTR_COL_INT), YTR_COL(row, tone_tier, YTR_COL_INT), YRSP_DATA_COLS,
 };
 
@@ -351,18 +351,18 @@ int main(int argc, char** argv) {
                 responded = (res.flags & YRSP_R_RESPONDED) != 0;
                 r.trial_index = ti.index;
                 r.correct = stop ? !responded : responded && !strcmp(res.response_name, key_answer);
-                r.ssd = ssd;
-                r.ssd_actual = NAN;
+                r.ssd_s = ssd;
+                r.ssd_actual_s = NAN;
                 r.stopped = r.tone_tier = YTR_MISSING_INT;
                 if (stop) {
-                    r.ssd_actual = (double)(rec.onset - res.t_onset) / 1e9;
+                    r.ssd_actual_s = (double)(rec.onset - res.t_onset) / 1e9;
                     r.stopped = !responded;
                     r.tone_tier = rec.tier;
-                    yst_update(&stair, r.ssd_actual, r.stopped);
-                    if (n_stop < 2) { sim_stopped[n_stop] = r.stopped; sim_ssd[n_stop] = ssd; sim_ssd_actual[n_stop] = r.ssd_actual; }
+                    yst_update(&stair, r.ssd_actual_s, r.stopped);
+                    if (n_stop < 2) { sim_stopped[n_stop] = r.stopped; sim_ssd[n_stop] = ssd; sim_ssd_actual[n_stop] = r.ssd_actual_s; }
                     n_stop++;
                     n_respond += responded;
-                    sum_ssd += r.ssd_actual;
+                    sum_ssd += r.ssd_actual_s;
                 } else if (r.correct) {
                     sum_go_rt += YRT_TO_S(res.rt_ns);
                     n_go_rt++;
@@ -375,7 +375,7 @@ int main(int argc, char** argv) {
                 }
                 if (stop)
                     printf("trial %2d %-6s stop ssd %.3f s (shown %.6f s), %s\n", ti.index,
-                           ytb_text(&tab, ti.condition, stim_col), ssd, r.ssd_actual, r.stopped ? "stopped" : "failed stop");
+                           ytb_text(&tab, ti.condition, stim_col), ssd, r.ssd_actual_s, r.stopped ? "stopped" : "failed stop");
                 else
                     printf("trial %2d %-6s go, %s\n", ti.index, ytb_text(&tab, ti.condition, stim_col),
                            r.correct ? "correct" : responded ? "wrong" : "miss");

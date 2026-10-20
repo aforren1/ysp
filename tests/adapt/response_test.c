@@ -1583,7 +1583,7 @@ static void check_frame_loop(void) {
     dd.cols = cols;
     dd.n_cols = (int)(sizeof cols / sizeof cols[0]);
     CHECK(ytr_data_open(&w, &dd));
-    CHECK_S(mo.buf, "trial,response,rt,rt_key_duration,onset_src,onset_tier,onset_residual,landing_residual,"
+    CHECK_S(mo.buf, "trial,response,rt_s,rt_key_duration_s,onset_src,onset_tier,onset_residual_s,landing_residual_s,"
                     "onset_frame,rsp_tier,rsp_flags,n_anticipations,n_early\n");
     yrsp_arm(&g_c, 0);
     yrsp_set_landing(&g_c, fired, 3, 2);

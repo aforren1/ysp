@@ -25,14 +25,15 @@
  *                timing or its unaccelerated shape matters.
  *
  * Two data files. The trial file (--out) has one row per trial:
- * trial_index, color, answer, response, correct, init_time (movement
- * onset from the disc's flip onset), rt (the response click from the
+ * trial_index, color, answer, response, correct, init_time_s (movement
+ * onset from the disc's flip onset), rt_s (the response click from the
  * same onset), max_deviation (px from the straight line, start to click),
  * n_samples; then onset_tier, onset_src, init_tier, rsp_flags, early_move
  * (1 when the pointer moved 10 px before the disc's onset: that crossing
  * is EARLY, and the next one needs a return to within 10 px of the start,
- * so init_time is empty). The trajectory file (--traj) has one row per sample: trial_index, t (from
- * the onset), x, y (px from the window's top-left). The header lines give
+ * so init_time_s is empty). The trajectory file (--traj) has one row per
+ * sample: trial_index, t_s (from the onset), x, y (px from the window's
+ * top-left). The header lines give
  * the targets' boxes and the pointer path. Times in seconds. Shift+Esc
  * stops the session; the rows so far are kept.
  *
@@ -319,9 +320,9 @@ int main(int argc, char** argv) {
         fprintf(out, "# target %s: x %.0f..%.0f, y %.0f..%.0f px\n", i == 0 ? "left" : i == 1 ? "right" : "start", x0, x1,
                 y0, y1);
     }
-    fprintf(out, "trial_index,color,answer,response,correct,init_time,rt,max_deviation,n_samples,onset_tier,onset_src,"
+    fprintf(out, "trial_index,color,answer,response,correct,init_time_s,rt_s,max_deviation,n_samples,onset_tier,onset_src,"
                  "init_tier,rsp_flags,early_move\n");
-    fprintf(traj, "trial_index,t,x,y\n");
+    fprintf(traj, "trial_index,t_s,x,y\n");
     printf("%s\n", line);
 
     for (;;) {

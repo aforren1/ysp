@@ -65,23 +65,24 @@ complete trials stay in the file.
 ### 3. Read the data
 
 Open `trial_keyboard.csv` in a spreadsheet, R or pandas. Each row is one
-trial. Times are in seconds. An empty field means "none": no response,
-or no onset.
+trial. Times are in seconds, in the columns whose names end in `_s`
+(jsPsych writes `rt` in milliseconds; the suffix prevents a 1000x
+error). An empty field means "none": no response, or no onset.
 
 | Column | Meaning |
 |---|---|
 | `index` to `outcome` | The session's columns from `ysp/trials.h`: the trial number, the block, the condition row, and the outcome |
 | `stimulus`, `key_answer` | The condition, from the conditions table |
-| `iti` | The inter-trial interval that `ysp/trials.h` drew |
+| `iti_s` | The inter-trial interval that `ysp/trials.h` drew |
 | `trial_index`, `correct` | The trial number again, and 1 when `response` is `key_answer` |
 | `n_duplicates` | Second key reports that the input bridge dropped during the trial |
 | `response` | The key's name |
-| `rt` | From the stimulus's onset to the press |
-| `rt_key_duration` | From the press to the release |
+| `rt_s` | From the stimulus's onset to the press |
+| `rt_key_duration_s` | From the press to the release |
 | `onset_src` | Where the onset came from: 1 a flip record, 3 a plan only |
 | `onset_tier` | How good the onset is: 1 an OS-observed vblank, 2 a composed path, 4 the simulated display |
-| `onset_residual` | How late the stimulus's frame appeared: the flip record's onset minus its planned onset |
-| `landing_residual` | How far the stimulus's frame is from the time in the sequence |
+| `onset_residual_s` | How late the stimulus's frame appeared: the flip record's onset minus its planned onset |
+| `landing_residual_s` | How far the stimulus's frame is from the time in the sequence |
 | `onset_frame` | The frame the stimulus appeared on |
 | `rsp_tier`, `rsp_flags` | The press's stamp tier, and the `YRSP_R_*` flags of the result |
 | `n_anticipations`, `n_early` | Presses before 0.1 s, and presses before the stimulus |
@@ -398,8 +399,8 @@ jsPsych option to ysp field:
 | `minimum_valid_rt` | `desc.min_rt_ns` | Earlier presses are logged as anticipations, not dropped |
 | `allow_held_key` | `desc.allow_held_key` | Same rule; held responses are flagged |
 | `wait_for_key_release` | `desc.wait_for_key_release`, `desc.max_hold_ns` | Gives up after `max_hold_ns` |
-| `rt` | `result.rt_ns` | ns; from the flip onset, with its tier; `YRSP_NO_TIME` for null |
-| `rt_key_duration` | `result.rt_key_duration_ns` | ns; from the response's press |
+| `rt` | `result.rt_ns`; data column `rt_s` | ns in C, seconds in the file (jsPsych writes ms); from the flip onset, with its tier; `YRSP_NO_TIME` for null |
+| `rt_key_duration` | `result.rt_key_duration_ns`; data column `rt_key_duration_s` | ns in C, seconds in the file; from the response's press |
 
 ## Decisions
 
@@ -516,7 +517,7 @@ SDL 3.4 keeps one key state for all keyboards. While keyboard A holds F,
 keyboard B's press of F arrives marked as a repeat, and B's release ends
 SDL's state, so SDL drops A's release later. The collector takes B's
 "repeat" for B's first press, because only A holds the key; A's press
-then has no release (`rt_key_duration` empty).
+then has no release (`rt_key_duration_s` empty).
 
 `ysp/screen.h` merged abort presses within 30 ms. One of the 518
 measured gaps (34.2 ms) is longer, so two Shift+Esc presses through a
@@ -895,6 +896,30 @@ SDL events, docs/gfx.md "v0.15"), a
 key pressed by hand, Linux and macOS (CI runs the tests and the
 `--sim` runs there; without DejaVu Sans or Liberation Sans the
 instruction screen of `trial_keyboard` is blank and says so).
+
+## Columns of seconds end in `_s` (v0.5.0)
+
+jsPsych writes `rt` in milliseconds and PsychoPy in seconds. A ysp file
+read with the wrong habit is off by 1000, and nothing in the file flags
+it. The user decided on 2026-10-20 that every data-file column that
+holds seconds ends in `_s` ([conventions.md](conventions.md), Units).
+`YRSP_DATA_COLS` now writes `rt_s`, `rt_key_duration_s`,
+`onset_residual_s` and `landing_residual_s`; `yrsp_data_set()` finds
+them by those names. `ysp/trials.h` v0.5.0 refuses a `TIME_NS` column
+without the suffix, so a file that declares `rt` with `YTR_COL_SET`
+fails at open with a message that names it. The C result keeps its
+fields (`rt_ns` and the others).
+
+The hand-written CSVs of the examples follow the same rule
+(`trial_srt`, `trial_stroop`, `trial_adjustment`,
+`trial_mouse_tracking`, `trial_two_keyboards` and their trajectory
+files).
+
+Checked on 2026-10-20: `tests/adapt/response_test.c` (20,644 checks;
+20,709 with `YRSP_TEST_SDL`) with MSVC 19.44 and MinGW-w64 gcc 16.1, and
+on Linux (WSL2); `fl-08` (anchor moved), `fl-09` and `fl-10` caught, 3
+of 3; the CI `--sim` lists pass, and their files' headers have the
+suffix.
 
 ## Verification
 

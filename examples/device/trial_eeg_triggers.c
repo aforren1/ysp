@@ -38,11 +38,12 @@
  *
  * The data file has one row per trial (ysp/trials.h's data writer): the
  * session's columns (index, ..., side, key_answer), then trial_index,
- * correct, stim_code, stim_write (write start minus the disc's flip onset),
- * stim_late (write start minus the trigger's deadline, the worker's wake),
- * stim_dur (the write's length), resp_code, resp_write (write start minus
- * the key's stamp), resp_dur, end_code, end_write (minus the last flip's
- * onset), end_dur, writes_failed, then the response's (YRSP_DATA_COLS).
+ * correct, stim_code, stim_write_s (write start minus the disc's flip
+ * onset), stim_late_s (write start minus the trigger's deadline, the
+ * worker's wake), stim_dur_s (the write's length), resp_code, resp_write_s
+ * (write start minus the key's stamp), resp_dur_s, end_code, end_write_s
+ * (minus the last flip's onset), end_dur_s, writes_failed, then the
+ * response's (YRSP_DATA_COLS).
  * Times in seconds; empty where no write was made. FILE.meta has the
  * screen, the output, the codes and the rig profile's hash.
  *

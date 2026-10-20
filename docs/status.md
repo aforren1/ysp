@@ -136,6 +136,7 @@ Purpose: Trial sequencing above the adaptive methods: conditions and repetitions
 
 Status:
 
+- v0.5.0: every column of seconds ends in `_s` (the user's decision, 2026-10-20: jsPsych writes `rt` in ms, PsychoPy in s). `ytr_data_open()` refuses, by name, a `TIME_NS` column without `_s` or `_ns` and a session jitter without `_s`; 6 new refusals tested, 4 of 4 new mutations caught. [Design notes](trials.md#v05-columns-of-seconds-end-in-_s).
 - v0.4.1: builds under -std=c11 when a system header comes before it (fileno() for YTR_FLUSH_SYNC on glibc).
 - v0.4.0 (the data writer, on the [Conventions](conventions.md): `ytr_data_finish()` and a void `ytr_data_close()`, a `TIME_NS` column `x_ns` written `x_s`; every type, missing value and 400 random strings with commas, quotes, line breaks and bad UTF-8 read back by ysp/table.h, 2000 random doubles bit for bit; 25 of 25 mutations caught; a 26-column row costs 4.2 / 1.9 us to format, 15 / 14 us with the write to the OS, 1.7 ms with a sync to disk, gcc / MSVC).
 - v0.3.0 (the [Conventions](conventions.md): jitters in `int64_t` ns with `_ns` desc fields, seconds kept in rules, tables and bindings with every pinned draw unchanged; `ytr_open_saved()`, `ytr_close()`, messages from the loop calls).
@@ -268,6 +269,7 @@ Purpose: The response of a trial from any input device: a device-neutral event (
 
 Status:
 
+- v0.5.0: `YRSP_DATA_COLS` names its columns of seconds with `_s` (`rt_s`, `rt_key_duration_s`, `onset_residual_s`, `landing_residual_s`), as ysp/trials.h v0.5.0 requires; 2 of 2 new mutations caught.
 - v0.4.0: helpers for the frame loop (`yrsp_update_frame()`: the stimulus frame's flip record as the final onset, then the deadline; `yrsp_feed_screen()`; `yrsp_set_landing()`) and the data file (`YRSP_DATA_COLS`, `yrsp_data_set()`: the onset's source, tier, residual and the landing residual in every row), inline where ysp/screen.h, ysp/timeline.h and ysp/trials.h came first; `result.plan_residual`. `trial_keyboard.c` went from 256 to 184 lines of code without `--sim` and moved no flip in a window or fullscreen; 8 of 8 new mutants caught. [The first trial](response.md#the-first-trial-v040).
 - v0.3.0: times in `int64_t` ns (`duration_ns`, `min_rt_ns`, `max_hold_ns`, `rt_ns`, `rt_key_duration_ns` with `YRSP_NO_TIME` for none, `stamp_lo_ns`), `yrsp_open()` and `yrsp_close()`, every failing call writes `yrsp_error()`; 2 of 2 new mutants caught.
 - v0.2.0 (a trim: the second-report rule moved to ysp/screen.h v0.4.1's input bridge, so every consumer gets it; the CSV row and `settle` removed).
