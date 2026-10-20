@@ -1,0 +1,5 @@
+{"format": "ysp-pack-source", "version": 1, "resources": [
+  {"kind": "video", "name": "video/movie.mpg", "source": "jwpIntro.mp4",
+   "ffmpeg": ["-an", "-vf", "fps=30000/1001", "-c:v", "mpeg1video", "-q:v", "3", "-g", "15", "-bf", "0",
+              "-pix_fmt", "yuv420p", "-f", "mpeg"]}
+]}

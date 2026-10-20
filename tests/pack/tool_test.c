@@ -1033,14 +1033,35 @@ static void test_resample(void) {
 }
 
 /* The author's thread settings in an ffmpeg step are refused (decided
- * 2026-10-14): the tool sets them. No ffmpeg needed. */
+ * 2026-10-14, kept 2026-10-20): the tool sets the count, from "threads" or
+ * the machine, and records it. No ffmpeg needed. */
 static void test_ffmpeg_refusals(void) {
+    expect_refusal("threads without ffmpeg", "{\"kind\": \"video\", \"name\": \"v.mpg\", \"source\": \"readme.txt\", \"threads\": 4}",
+                   "'threads' needs 'ffmpeg'", 0);
+    expect_refusal("threads 0", "{\"kind\": \"video\", \"name\": \"v.mpg\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-q:v\", \"3\"], \"threads\": 0}",
+                   "'threads' is 0; it is 1 to 64", 0);
+    expect_refusal("threads 65", "{\"kind\": \"video\", \"name\": \"v.mpg\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-q:v\", \"3\"], \"threads\": 65}",
+                   "'threads' is 65; it is 1 to 64", 0);
+    expect_refusal("threads text", "{\"kind\": \"video\", \"name\": \"v.mpg\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-q:v\", \"3\"], \"threads\": \"4\"}",
+                   "'threads' must be an integer", 0);
     expect_refusal("ffmpeg threads", "{\"kind\": \"video\", \"name\": \"v.mpg\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-threads\", \"4\"]}",
                    "remove the thread setting from 'ffmpeg' (-threads)", 0);
     expect_refusal("x264 threads", "{\"kind\": \"video\", \"name\": \"v.mp4\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-x264-params\", \"bframes=0:threads=8\"]}",
                    "(-x264-params bframes=0:threads=8)", 0);
     expect_refusal("x265 pools", "{\"kind\": \"video\", \"name\": \"v.mp4\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-x265-params\", \"pools=4\"]}",
                    "(-x265-params pools=4)", 0);
+    /* the CPU-independence flags (decided 2026-10-20): the author's
+     * contrary settings refused, the encoder found by name or by default */
+    expect_refusal("x265 info", "{\"kind\": \"video\", \"name\": \"v.mp4\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-c:v\", \"libx265\", \"-x265-params\", \"bframes=0:info=1\"]}",
+                   "remove info from 'ffmpeg' (-x265-params bframes=0:info=1)", 0);
+    expect_refusal("x265 bare info", "{\"kind\": \"video\", \"name\": \"v.mp4\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-c:v\", \"libx265\", \"-x265-params\", \"info\"]}",
+                   "remove info from 'ffmpeg'", 0);
+    expect_refusal("mpeg dct", "{\"kind\": \"video\", \"name\": \"v.mpg\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-c:v\", \"mpeg2video\", \"-dct\", \"fastint\"]}",
+                   "remove '-dct fastint' from 'ffmpeg'", 0);
+    expect_refusal("mpeg default encoder idct", "{\"kind\": \"video\", \"name\": \"v.mpg\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-idct:v\", \"auto\"]}",
+                   "remove '-idct:v auto' from 'ffmpeg'", 0);
+    expect_refusal("mpeg bitexact off", "{\"kind\": \"video\", \"name\": \"v.mpg\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-c:v\", \"mpeg1video\", \"-flags\", \"+cgop-bitexact\"]}",
+                   "remove '-flags +cgop-bitexact' from 'ffmpeg'", 0);
 }
 
 /* VIDEO and VIDEO_INDEX through the ffmpeg step, when ffmpeg runs here: a
@@ -1055,7 +1076,8 @@ static void test_video(void) {
         "{\"format\": \"ysp-pack-source\", \"version\": 1, \"resources\": [\n"
         "  {\"kind\": \"video\", \"name\": \"video/clip.mpg\", \"source\": \"video/raw.gray\",\n"
         "   \"ffmpeg_input\": [\"-f\", \"rawvideo\", \"-pix_fmt\", \"gray\", \"-s\", \"64x48\", \"-framerate\", \"30\"],\n"
-        "   \"ffmpeg\": [\"-c:v\", \"mpeg1video\", \"-q:v\", \"3\", \"-g\", \"10\", \"-bf\", \"0\", \"-pix_fmt\", \"yuv420p\", \"-f\", \"mpeg\"]}"
+        "   \"ffmpeg\": [\"-c:v\", \"mpeg1video\", \"-q:v\", \"3\", \"-flags\", \"+psnr\", \"-g\", \"10\", \"-bf\", \"0\", \"-pix_fmt\", \"yuv420p\", \"-f\", \"mpeg\"],\n"
+        "   \"threads\": 3}"
 #if defined(_WIN32)
         ",\n  {\"kind\": \"video\", \"name\": \"video/clip.mp4\", \"source\": \"video/raw.gray\",\n"
         "   \"ffmpeg_input\": [\"-f\", \"rawvideo\", \"-pix_fmt\", \"gray\", \"-s\", \"64x48\", \"-framerate\", \"30\"],\n"
@@ -1134,7 +1156,11 @@ static void test_video(void) {
               "video rebuild without ffmpeg takes the recorded output: %s", err);
         free(text);
     }
-    /* the forced single thread (decided 2026-10-14), in the recorded command */
+    /* the thread count (decided 2026-10-20) in the command and as a
+     * parameter: the author's 3 for MPEG-1, the machine's for H.264. The
+     * rebuild above was identical, so it ran with the recorded 3, not the
+     * machine's count (on a machine with 3 logical processors that check
+     * would not tell). */
     {
         ypak_pack p;
         ypak_desc d;
@@ -1147,7 +1173,20 @@ static void test_video(void) {
             if (m && z) {
                 memcpy(z, m, (size_t)e.size);
                 z[e.size] = 0;
-                CHECK(strstr(z, "-f mpeg -threads 1 {output}") != NULL, "the recorded command ends with -threads 1");
+                CHECK(strstr(z, "-flags +psnr+bitexact -g 10") != NULL && strstr(z, "-f mpeg -dct int -idct simple -threads 3 {output}") != NULL && strstr(z, "\"threads\": 3\n") != NULL,
+                      "MPEG-1: bitexact merged into the author's -flags, the DCTs and the author's count in the command, the count in the derivation");
+#if defined(_WIN32)
+                {
+                    /* the logical processors, as GetActiveProcessorCount() counts them on a machine of one group */
+                    const char* np = getenv("NUMBER_OF_PROCESSORS");
+                    int mt = np ? atoi(np) : 0;
+                    char want[64], want2[64];
+                    if (mt > 64) mt = 64;
+                    snprintf(want, sizeof want, "-an -threads %d {output}", mt);
+                    snprintf(want2, sizeof want2, "\"threads\": %d\n", mt);
+                    CHECK(mt > 0 && strstr(z, want) != NULL && strstr(z, want2) != NULL, "H.264: the machine's count (%d) in the command and the derivation", mt);
+                }
+#endif
             }
             free(z);
             ypak_close(&p);
@@ -1164,7 +1203,7 @@ static void test_video(void) {
             "   \"ffmpeg_input\": [\"-f\", \"rawvideo\", \"-pix_fmt\", \"gray\", \"-s\", \"64x48\", \"-framerate\", \"30\"],\n"
             "   \"ffmpeg\": [\"-c:v\", \"libx265\", \"-crf\", \"24\", \"-pix_fmt\", \"yuv420p\", \"-x265-params\",\n"
             "               \"bframes=0:keyint=10:min-keyint=10:scenecut=0:log-level=error:colorprim=bt709:transfer=bt709:colormatrix=bt709:range=limited\",\n"
-            "               \"-video_track_timescale\", \"30\", \"-an\"],\n"
+            "               \"-video_track_timescale\", \"30\", \"-an\"], \"threads\": 4,\n"
             "   \"color\": {\"matrix\": \"bt709\", \"range\": \"limited\", \"transfer\": \"bt1886\", \"primaries\": \"bt709\", \"siting\": \"left\"}}]}\n";
         rc = build_text(t5, W "/video265.ysppak", err, sizeof err);
         if (rc == 0) {
@@ -1179,8 +1218,8 @@ static void test_video(void) {
                 if (m && z) {
                     memcpy(z, m, (size_t)e.size);
                     z[e.size] = 0;
-                    CHECK(strstr(z, "range=limited:pools=1:frame-threads=1 -video_track_timescale") && strstr(z, "-an -threads 1 {output}"),
-                          "libx265: pools and frame threads forced in the recorded command");
+                    CHECK(strstr(z, "range=limited:pools=4:frame-threads=2:info=0 -video_track_timescale") && strstr(z, "-an -threads 4 {output}"),
+                          "libx265: the pool, its frame threads and info=0 in the author's x265-params, in the recorded command");
                 }
                 free(z);
                 ypak_close(&p);
