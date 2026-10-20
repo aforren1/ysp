@@ -769,9 +769,31 @@ file. Parameters:
   `frame-threads=`, `lookahead-threads=` in `-x264-params`,
   `-x265-params` or `-x264opts`) is refused by name: `threads` is the
   only way to set the count. Tool v0.4.0 encoded on one thread (decided
-  2026-10-14), 3 to 4 times slower at 1080p than 16 threads (14). Input options in
-  `ffmpeg_input` are not touched: decoding gives the same frames on any
-  thread count. `ffmpeg_input`: input options, before
+  2026-10-14), 3 to 4 times slower at 1080p than 16 threads (14).
+
+  The tool also adds the flags that keep an encoder's bytes the same on
+  another CPU and another build of the same ffmpeg version (decided
+  2026-10-20, open question 12): `info=0` in libx265's `-x265-params`
+  (x265's info message names the build's OS and compiler and the CPU
+  flags it found), and `-flags +bitexact -dct int -idct simple` for
+  mpeg1video and mpeg2video (their SIMD DCTs give other bytes than the C
+  ones). `+bitexact` is appended to the author's `-flags` when there is
+  one. The encoder is the last `-c:v` (or `-vcodec`, `-codec:v`, `-c`,
+  `-codec`); without one, ffmpeg's default for the form: mpeg1video for
+  `.mpg`. The author's `info` in `-x265-params`, and `-dct`, `-idct` or a
+  `-flags` value with `-bitexact` for an MPEG encoder, are refused by
+  name. The command records the flags.
+
+  **libx264 has no such flag.** A libx264 entry rebuilds byte for byte
+  only on a CPU on which x264 takes the same instruction-set path: its
+  AVX2 code and its AVX code gave different bytes (9.1, 2026-10-20), at
+  every thread count, and no x264 option removes the difference. A
+  rebuild on another CPU fails and names the first entry that differs.
+  An author who needs a pack that any machine rebuilds encodes with
+  mpeg1video (an `.mpg` entry) or libx265 (an `.mp4` entry).
+
+  Input options in `ffmpeg_input` are not touched: decoding gives the
+  same frames on any thread count. `ffmpeg_input`: input options, before
   `-i` (a raw source: `-f rawvideo -pix_fmt gray -s 64x48 -framerate
   30`). The derivation's `by` is the first line of `ffmpeg -version`, and
   `command` is the vector with `{source}` and `{output}` for the paths, so
@@ -1024,12 +1046,14 @@ processor count (4.10). What makes it so:
   (4.10, decided 2026-10-20). With a fixed count, the bytes did not change
   with the CPU affinity or between Windows and Linux builds of one ffmpeg
   version (9.1, 2026-10-20). They can change with the CPU's instruction
-  set, at any thread count, one included: libx264 at the AVX2 level gave
-  other bytes than at the AVX level, and mpeg1video and mpeg2video gave
-  other bytes with every SIMD path off. libx265 gave one set of bytes at
-  every level, but its info message holds the build's OS, compiler and
-  CPU flags unless the author sets `info=0` (open question 12). A rebuild
-  with another ffmpeg takes the recorded output (5.3).
+  set, at any thread count, one included. The tool adds `info=0` for
+  libx265 and `-flags +bitexact -dct int -idct simple` for mpeg1video and
+  mpeg2video (4.10), and with them the tool's output was the same at
+  every SIMD level and on Windows and Linux (9.1, section 14). libx264
+  has no such flag: its AVX2 and AVX code gave other bytes, so a libx264
+  entry rebuilds the same only on a CPU with the same instruction-set
+  path (4.10). A rebuild with another ffmpeg takes the recorded output
+  (5.3).
 
 ## 8. Costs: targets and measurements
 
@@ -1387,7 +1411,34 @@ What this shows:
   forward DCT and IDCT are not the C ones. `-flags +bitexact -dct int
   -idct simple` gave one file at every level, 0 included.
 
-Open question 12 holds what the tool does about the last three.
+Decided by the user the same day (open question 12): the tool adds
+`info=0` and the three MPEG flags itself (4.10); libx264 stays as it is,
+documented.
+
+**2026-10-20: the tool's own output with the forced flags** (tool v0.5.0,
+the same ffmpeg builds and sources; the 1080p source as a lossless FFV1
+file). `ypak build` of mpeg1video (`-q:v 3 -g 15 -bf 0`) and libx265
+(`-preset medium -crf 20`, no B-frames, a fixed GOP) entries with
+`"threads"` 4 and 16, each 3 times; the same with every SIMD path off
+(`"-cpuflags", "0"` in `ffmpeg_input`, and `asm=0` in libx265's
+parameters), whose video entry (`ypak cat`) was compared with the
+first's; then `ypak rebuild` of each first pack 3 times on WSL2 with the
+Linux builds of ypak (gcc 11.4) and ffmpeg, 8 logical processors against
+the recorded 4 and 16:
+
+| Entry | N | Windows, 3 builds | SIMD off, 3 builds | WSL2 rebuild, 3 times |
+|---|---|---|---|---|
+| mpeg1video, the movie | 4, 16 | one file per N | the same files | `identical` |
+| mpeg1video, 1080p | 4, 16 | one file per N | the same files | `identical` |
+| libx265, the movie | 4, 16 | one file (N = 4 and 16 code alike) | the same file | `identical` |
+| libx265, 1080p | 4, 16 | one file (likewise) | the same file | `identical` |
+
+mpeg2video could not be packed: its output is not MPEG-1, and the
+index (pl_mpeg) misreads it ("GOP length changes").
+Its flags stand on the ffmpeg-level measurement above (one file at every
+SIMD level and on WSL2, at every N). The hand test of section 14 also
+passed again with these flags (`identical` for its MPEG-1, libx264 and
+libx265 packs on WSL2).
 
 **Phase 3: resampling.** A 997 Hz sine at 44.1 kHz (float, amplitude
 0.5) through `"resample": "sinc_best"` to 48 kHz: 48,000 frames, the
@@ -1583,8 +1634,9 @@ one function in the tool.
     in ysp/gfx.h v0.10.5 (the user, 2026-10-09): v0.10.4 binds `stim.tex`
     as `ysp_tex0`, and a body that samples it reads garbage on a contract-1
     player. No pack existed outside the repository.
-12. **ffmpeg's bytes on another CPU. Default: nothing forced; the user
-    decides.** Found 2026-10-20 (9.1) while measuring the thread count:
+12. **ffmpeg's bytes on another CPU. Decided 2026-10-20 (user): option
+    (b), and libx264 documented** (4.10; built in tool v0.5.0, section
+    14). Found 2026-10-20 (9.1) while measuring the thread count:
     with the thread count and the ffmpeg build fixed, the bytes can still
     change with the instruction set that the encoder uses, at one thread
     too. libx264 gave other bytes with its AVX2 code off, and it has no
@@ -1596,14 +1648,16 @@ one function in the tool.
     pictures at every level, but its info message (an SEI) holds the
     build's OS, compiler and the CPU flags x265 detected, so a pack from
     Windows does not rebuild on Linux unless the author sets `info=0`.
-    Options: (a) leave the author's arguments alone and document it (in
-    force); (b) the tool adds `info=0` for libx265 and `-flags +bitexact
+    Options: (a) leave the author's arguments alone and document it; (b,
+    chosen) the tool adds `info=0` for libx265 and `-flags +bitexact
     -dct int -idct simple` for mpeg1video and mpeg2video, and records them
     in the command; (c) for libx264, also limit `asm=` to one level that
     every rig has. (c) costs speed and is not proven: x264's AVX-512 code
     (AMD Zen 4 and 5, recent Intel Xeons) and differences between vendors
-    could not be measured on this machine. The hand test of section 14
-    answers it for the user's AMD rig.
+    could not be measured on this machine, so (c) was not taken: a libx264
+    entry rebuilds the same only on a CPU with the same instruction-set
+    path, and the hand test of section 14 shows whether the user's AMD rig
+    is one.
 
 ## 11. Phase 2: what was built
 
@@ -1761,14 +1815,19 @@ thread count, passes it, records it, and `ypak rebuild` runs ffmpeg with
 the recorded count. The decision waited on one measurement: does a fixed
 count give the same bytes on any machine? It does, for every encoder
 measured (9.1, 2026-10-20). The same measurement found that the bytes
-can depend on the CPU's instruction set at any count, one included (open
-question 12).
+can depend on the CPU's instruction set at any count, one included.
+Decided by the user the same day (open question 12): the tool adds
+`info=0` for libx265 and `-flags +bitexact -dct int -idct simple` for
+mpeg1video and mpeg2video, refuses the author's contrary settings, and
+records the flags in the command; libx264, which has no such flag,
+rebuilds the same only on a CPU with the same instruction-set path, and
+4.10 says so.
 
 | File | Version | What |
 |---|---|---|
-| `pack/ysp/pack_tool.h`, `pack/pack_tool.c` | 0.5.0 | `threads` (4.10): `-threads N`, libx265's `pools=N:frame-threads=F`, `"threads": N` in the derivation, which a rebuild takes back; ffmpeg's version line refused past 255 bytes instead of cut |
+| `pack/ysp/pack_tool.h`, `pack/pack_tool.c` | 0.5.0 | `threads` (4.10): `-threads N`, libx265's `pools=N:frame-threads=F`, `"threads": N` in the derivation, which a rebuild takes back; `info=0` for libx265 and `-flags +bitexact -dct int -idct simple` for mpeg1video and mpeg2video (merged into the author's `-flags`), the author's `info`, `-dct`, `-idct` and `-bitexact` refused; ffmpeg's version line refused past 255 bytes instead of cut |
 | `pack/ypak.c` | 0.5.0 | unchanged but for the version |
-| `tests/pack/tool_test.c` | | 4 refusals of `threads`; the author's 3 for MPEG-1 and the machine's count for H.264 in the command and the derivation; libx265's pool and frame threads for `"threads": 4`; the rebuild with the recorded 3 |
+| `tests/pack/tool_test.c` | | 4 refusals of `threads` and 5 of the flags (x265 `info=1` and a bare `info`, `-dct`, `-idct:v` with the default encoder of `.mpg`, `-flags +cgop-bitexact`); the author's 3 for MPEG-1 and the machine's count for H.264 in the command and the derivation; `+bitexact` merged into the author's `-flags +psnr` and the DCTs for MPEG-1; libx265's pool, frame threads and `info=0` for `"threads": 4`; the rebuild with the recorded 3 |
 | `tests/pack/rebuild_threads/` | | The hand test below: three descriptions and `run.sh` |
 
 Every entry of the test corpus but the manifest is byte-identical to
@@ -1794,10 +1853,18 @@ n9.0.2-28-g669f5ab083 (Windows), the encode alone as the tool runs it
 | the same | mpeg2video, q 3 | 1.18 s (1.16 to 1.20) | 0.66 s (0.64 to 0.67) | 0.59 s (0.56 to 0.60) | 2.0 |
 | the hand test's `x264.json`, the whole `ypak build` (encode, index, hashes, write) | libx264 | 1.60 s (1.50 to 1.62) | | 0.94 s (0.89 to 1.03) | 1.7 |
 
-The open question 12 flags for mpeg1video and mpeg2video (`-flags
-+bitexact -dct int -idct simple`) in the same session: 1.59 s and 1.77 s
-at 1080p on one thread, 0.74 s and 0.98 s on 16, 1.3 to 1.7 times the
-default flags' time.
+The forced flags of mpeg1video and mpeg2video (`-flags +bitexact -dct
+int -idct simple`) in the same session, against the default flags:
+
+| Source | Encoder | 1 thread | 16 threads |
+|---|---|---|---|
+| the movie | mpeg1video | 0.32 s against 0.25 s (1.3 times) | 0.23 s against 0.21 s (1.1 times) |
+| the movie | mpeg2video | 0.38 s against 0.24 s (1.6 times) | 0.24 s against 0.20 s (1.2 times) |
+| 1080p | mpeg1video | 1.59 s against 1.21 s (1.3 times) | 0.74 s against 0.68 s (1.1 times) |
+| 1080p | mpeg2video | 1.77 s against 1.18 s (1.5 times) | 0.98 s against 0.59 s (1.7 times) |
+
+At most 0.4 s on 10 s of 1080p film here; `info=0` costs nothing (it
+drops one SEI).
 
 The ranges are wide at 1080p (libx264 on one thread 12 to 25 s; one round
 of libx265 on 8 and on 16 threads 2.2 times its median): this laptop
@@ -1808,20 +1875,24 @@ itself), so its ratios of 10.2 and 5.5 are not this table's 3.9 and 3.1.
 At 1080p, 16 threads cut the encode to a quarter (libx264) or a third
 (libx265); 8 threads did as well as 16 on this machine of 4 P-cores.
 
-Tests, 2026-10-20: MSVC 19.44 `/W4 /WX`, core build, 255 checks, 0
+Tests, 2026-10-20: MSVC 19.44 `/W4 /WX`, core build, 265 checks, 0
 failed (MPEG-1, H.264 and HEVC through ffmpeg N-122953); Linux gcc 11.4
-(WSL2), Release and ASan with UBSan, core build, 250 checks, 0 failed
+(WSL2), Release and ASan with UBSan, core build, 260 checks, 0 failed
 each (MPEG-1 through ffmpeg 4.4.2); MinGW gcc 16.1 compiles
 `pack/pack_tool.c` with CI's warnings and `-Werror`.
 
 Mutants by hand (the runner cannot build the tool), MSVC 19.44,
-`test_pack_tool`, 10 of 10 killed: no `-threads N` (3 checks); the count
+`test_pack_tool`, 17 of 17 killed: no `-threads N` (3 checks); the count
 not recorded (4); the author's count ignored (2); 1 as the default
 instead of the machine's count (1); a rebuild that drops the recorded
 count (2); libx265's pool as a second `-x265-params` (1: B-frames return,
 the index refuses them); libx265's frame threads equal to N (1); no range
 check (2); `threads` without `ffmpeg` taken (1); the author's thread
-settings taken (3).
+and flag settings taken (8); `info=0` not added (1); the MPEG flags not
+added (1); `+bitexact` as a second `-flags` (1: it replaces the author's);
+the author's `info` taken (2); the author's `-dct` or `-idct` taken (3);
+no MPEG default for `.mpg` without `-c:v` (1); a bare `info` not seen as a
+setting (1).
 
 The hand test below, run with WSL2 standing in for the second machine
 (the Linux build of ypak at gcc 11.4, 8 logical processors, the packs'
@@ -1831,7 +1902,8 @@ recorded 16): `identical` for all three packs.
 
 The question it answers: does a pack built on the Windows laptop with 16
 threads rebuild byte for byte on the AMD rig, with the same ffmpeg
-version? It also answers open question 12 for that rig's CPU.
+version? It also shows whether libx264 takes the same instruction-set
+path on that rig's CPU (4.10).
 
 1. Get one BtbN FFmpeg-Builds release (github.com/BtbN/FFmpeg-Builds,
    one `autobuild-...` tag): its `win64-gpl` build for Windows and its
@@ -1862,13 +1934,15 @@ version? It also answers open question 12 for that rig's CPU.
 
 5. Expected: `identical` three times, and exit 0. The MP4 indexes come
    from the packs (a `note:` line says so): there is no MP4 index off
-   Windows. If `x264` differs and the script prints `AVX-512: yes`, that
-   is the instruction-set dependence of 9.1 (open question 12), not the
-   thread count: `mpeg1` and `x265` passing shows the count is used.
-   Record the outcome and the CPU line in 9.1.
+   Windows. `mpeg1` and `x265` must be `identical` on any x86-64 CPU
+   (the tool's flags, 4.10). `x264` is `identical` only when x264 takes
+   the same instruction-set path as on the laptop (AVX2, no AVX-512); if
+   it differs and the script prints `AVX-512: yes`, that is the libx264
+   limit of 4.10, not the thread count. Record the outcome and the CPU
+   line in 9.1.
 
 ### Left
 
-- Open question 12: what the tool forces, if anything, so that a pack
-  rebuilds on a CPU with another instruction set.
 - The hand test on the AMD rig.
+- ARM (macOS, a Raspberry Pi): the flags were measured with every x86
+  SIMD path off as the proxy, not on an ARM CPU.

@@ -1050,6 +1050,18 @@ static void test_ffmpeg_refusals(void) {
                    "(-x264-params bframes=0:threads=8)", 0);
     expect_refusal("x265 pools", "{\"kind\": \"video\", \"name\": \"v.mp4\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-x265-params\", \"pools=4\"]}",
                    "(-x265-params pools=4)", 0);
+    /* the CPU-independence flags (decided 2026-10-20): the author's
+     * contrary settings refused, the encoder found by name or by default */
+    expect_refusal("x265 info", "{\"kind\": \"video\", \"name\": \"v.mp4\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-c:v\", \"libx265\", \"-x265-params\", \"bframes=0:info=1\"]}",
+                   "remove info from 'ffmpeg' (-x265-params bframes=0:info=1)", 0);
+    expect_refusal("x265 bare info", "{\"kind\": \"video\", \"name\": \"v.mp4\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-c:v\", \"libx265\", \"-x265-params\", \"info\"]}",
+                   "remove info from 'ffmpeg'", 0);
+    expect_refusal("mpeg dct", "{\"kind\": \"video\", \"name\": \"v.mpg\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-c:v\", \"mpeg2video\", \"-dct\", \"fastint\"]}",
+                   "remove '-dct fastint' from 'ffmpeg'", 0);
+    expect_refusal("mpeg default encoder idct", "{\"kind\": \"video\", \"name\": \"v.mpg\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-idct:v\", \"auto\"]}",
+                   "remove '-idct:v auto' from 'ffmpeg'", 0);
+    expect_refusal("mpeg bitexact off", "{\"kind\": \"video\", \"name\": \"v.mpg\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-c:v\", \"mpeg1video\", \"-flags\", \"+cgop-bitexact\"]}",
+                   "remove '-flags +cgop-bitexact' from 'ffmpeg'", 0);
 }
 
 /* VIDEO and VIDEO_INDEX through the ffmpeg step, when ffmpeg runs here: a
@@ -1064,7 +1076,7 @@ static void test_video(void) {
         "{\"format\": \"ysp-pack-source\", \"version\": 1, \"resources\": [\n"
         "  {\"kind\": \"video\", \"name\": \"video/clip.mpg\", \"source\": \"video/raw.gray\",\n"
         "   \"ffmpeg_input\": [\"-f\", \"rawvideo\", \"-pix_fmt\", \"gray\", \"-s\", \"64x48\", \"-framerate\", \"30\"],\n"
-        "   \"ffmpeg\": [\"-c:v\", \"mpeg1video\", \"-q:v\", \"3\", \"-g\", \"10\", \"-bf\", \"0\", \"-pix_fmt\", \"yuv420p\", \"-f\", \"mpeg\"],\n"
+        "   \"ffmpeg\": [\"-c:v\", \"mpeg1video\", \"-q:v\", \"3\", \"-flags\", \"+psnr\", \"-g\", \"10\", \"-bf\", \"0\", \"-pix_fmt\", \"yuv420p\", \"-f\", \"mpeg\"],\n"
         "   \"threads\": 3}"
 #if defined(_WIN32)
         ",\n  {\"kind\": \"video\", \"name\": \"video/clip.mp4\", \"source\": \"video/raw.gray\",\n"
@@ -1161,8 +1173,8 @@ static void test_video(void) {
             if (m && z) {
                 memcpy(z, m, (size_t)e.size);
                 z[e.size] = 0;
-                CHECK(strstr(z, "-f mpeg -threads 3 {output}") != NULL && strstr(z, "\"threads\": 3\n") != NULL,
-                      "MPEG-1: the author's count in the command and the derivation");
+                CHECK(strstr(z, "-flags +psnr+bitexact -g 10") != NULL && strstr(z, "-f mpeg -dct int -idct simple -threads 3 {output}") != NULL && strstr(z, "\"threads\": 3\n") != NULL,
+                      "MPEG-1: bitexact merged into the author's -flags, the DCTs and the author's count in the command, the count in the derivation");
 #if defined(_WIN32)
                 {
                     /* the logical processors, as GetActiveProcessorCount() counts them on a machine of one group */
@@ -1206,8 +1218,8 @@ static void test_video(void) {
                 if (m && z) {
                     memcpy(z, m, (size_t)e.size);
                     z[e.size] = 0;
-                    CHECK(strstr(z, "range=limited:pools=4:frame-threads=2 -video_track_timescale") && strstr(z, "-an -threads 4 {output}"),
-                          "libx265: the pool and its frame threads in the author's x265-params, in the recorded command");
+                    CHECK(strstr(z, "range=limited:pools=4:frame-threads=2:info=0 -video_track_timescale") && strstr(z, "-an -threads 4 {output}"),
+                          "libx265: the pool, its frame threads and info=0 in the author's x265-params, in the recorded command");
                 }
                 free(z);
                 ypak_close(&p);

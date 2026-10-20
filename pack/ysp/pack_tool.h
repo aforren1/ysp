@@ -60,6 +60,11 @@
  *   recorded in the derivation, and used again by `ypak rebuild`. With N
  *   fixed, each encoder gave the same bytes under every CPU affinity and
  *   on Windows and Linux. The author's own thread settings stay refused.
+ *   The tool also adds info=0 for libx265 and -flags +bitexact -dct int
+ *   -idct simple for mpeg1video and mpeg2video, so their bytes do not
+ *   depend on the CPU or the build (the user's decision of 2026-10-20),
+ *   and refuses the author's contrary settings; libx264 has no such flag
+ *   and rebuilds the same only on a CPU with its instruction-set path.
  *   A video entry made by ffmpeg differs from v0.4.0's (its command and
  *   the count); every other entry of the test corpus is byte-identical.
  *   ffmpeg's version line is refused, not cut, past 255 bytes (gcc's

@@ -2,7 +2,7 @@
   {"kind": "video", "name": "video/movie.mp4", "source": "jwpIntro.mp4",
    "ffmpeg": ["-an", "-vf", "fps=30000/1001", "-c:v", "libx265", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
               "-x265-params",
-              "bframes=0:keyint=30:min-keyint=30:scenecut=0:info=0:log-level=error:colorprim=bt709:transfer=bt709:colormatrix=bt709:range=limited",
+              "bframes=0:keyint=30:min-keyint=30:scenecut=0:log-level=error:colorprim=bt709:transfer=bt709:colormatrix=bt709:range=limited",
               "-video_track_timescale", "30000"],
    "color": {"matrix": "bt709", "range": "limited", "transfer": "bt1886", "primaries": "bt709", "siting": "left"}}
 ]}

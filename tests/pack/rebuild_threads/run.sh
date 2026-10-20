@@ -12,8 +12,9 @@
 #                                          all three print `identical`
 #
 # MOVIE is PsychoPy's psychopy/demos/coder/stimuli/jwpIntro.mp4 (the clip
-# of docs/pack.md 9.1). The x265 description sets info=0: x265's info
-# message holds the build's OS, compiler and CPU flags (9.1, 2026-10-20).
+# of docs/pack.md 9.1). The tool adds info=0 for libx265 and -flags
+# +bitexact -dct int -idct simple for mpeg1video itself (2026-10-20);
+# libx264 rebuilds the same only on a CPU with the same SIMD path.
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 case ${1:-} in
