@@ -1,4 +1,4 @@
-/* ysp/pack_tool.h - v0.5.0 - the pack tool as a library (prefix ypt_)
+/* ysp/pack_tool.h - v0.5.1 - the pack tool as a library (prefix ypt_)
  *
  *   Builds, verifies, lists, extracts, rebuilds and appends ysp packs
  *   (docs/pack.md). The CLI `ypak` (pack/ypak.c) is a thin layer over these
@@ -53,6 +53,11 @@
  *   and pl_mpeg, so every pack ID differs from v0.3.0's; every other entry
  *   of the v0.3.0 test corpus is byte-identical.
  *
+ *   v0.5.1 (2026-10-20): an ffmpeg step with mpeg2video is refused
+ *   before it runs (the user's decision): the video index (pl_mpeg) reads
+ *   MPEG-1 only and misread mpeg2video's output, so the step failed after
+ *   the encode.
+ *
  *   v0.5.0 (2026-10-20): the ffmpeg step runs on N threads, not one (the
  *   user's decision of 2026-10-20, docs/pack.md 14): N is the resource's
  *   "threads" (1 to 64) or the machine's logical processors, passed as
@@ -91,7 +96,7 @@
 extern "C" {
 #endif
 
-#define YPT_VERSION_STRING "0.5.0"
+#define YPT_VERSION_STRING "0.5.1"
 
 typedef struct ypt_options {
     const char* sources;   /* the sources' folder; NULL: the description's folder */

@@ -212,7 +212,7 @@ int main(int argc, char** argv) {
     if (csv) {
         out = fopen(csv, "w");
         if (!out) { fprintf(stderr, "video_play: cannot write %s\n", csv); return 1; }
-        fprintf(out, "display,vblank,onset,decision,why,frame,movie_t,update_ns,last_index,last_onset,last_dropped,last_flags,n_done\n");
+        fprintf(out, "display,vblank,onset_ns,decision,why,frame,movie_t_ns,update_ns,last_index,last_onset_ns,last_dropped,last_flags,n_done\n");
     }
     yvid_play_at(&mv, YVID_ASAP);
 

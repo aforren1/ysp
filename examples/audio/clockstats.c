@@ -431,7 +431,7 @@ int main(int argc, char** argv) {
         snprintf(path, sizeof path, "%s_ticks.csv", csv);
         ft = fopen(path, "w");
         if (ft) {
-            fprintf(ft, "t_entry,pos,pos_t,w,getpos_ns,render_ns\n");
+            fprintf(ft, "t_entry_ns,pos,pos_t_ns,w,getpos_ns,render_ns\n");
             for (i = 0; i < n; i++)
                 fprintf(ft, "%lld,%lld,%lld,%lld,%lld,%lld\n", (long long)g_ticks[i].t_entry,
                         (long long)g_ticks[i].pos, (long long)g_ticks[i].pos_t, (long long)g_ticks[i].w,

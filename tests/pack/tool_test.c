@@ -1056,8 +1056,10 @@ static void test_ffmpeg_refusals(void) {
                    "remove info from 'ffmpeg' (-x265-params bframes=0:info=1)", 0);
     expect_refusal("x265 bare info", "{\"kind\": \"video\", \"name\": \"v.mp4\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-c:v\", \"libx265\", \"-x265-params\", \"info\"]}",
                    "remove info from 'ffmpeg'", 0);
-    expect_refusal("mpeg dct", "{\"kind\": \"video\", \"name\": \"v.mpg\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-c:v\", \"mpeg2video\", \"-dct\", \"fastint\"]}",
+    expect_refusal("mpeg dct", "{\"kind\": \"video\", \"name\": \"v.mpg\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-c:v\", \"mpeg1video\", \"-dct\", \"fastint\"]}",
                    "remove '-dct fastint' from 'ffmpeg'", 0);
+    expect_refusal("mpeg2video", "{\"kind\": \"video\", \"name\": \"v.mpg\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-c:v\", \"mpeg2video\"]}",
+                   "mpeg2video cannot be packed", 0);
     expect_refusal("mpeg default encoder idct", "{\"kind\": \"video\", \"name\": \"v.mpg\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-idct:v\", \"auto\"]}",
                    "remove '-idct:v auto' from 'ffmpeg'", 0);
     expect_refusal("mpeg bitexact off", "{\"kind\": \"video\", \"name\": \"v.mpg\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-c:v\", \"mpeg1video\", \"-flags\", \"+cgop-bitexact\"]}",
