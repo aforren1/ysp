@@ -782,7 +782,11 @@ file. Parameters:
   `-codec`); without one, ffmpeg's default for the form: mpeg1video for
   `.mpg`. The author's `info` in `-x265-params`, and `-dct`, `-idct` or a
   `-flags` value with `-bitexact` for an MPEG encoder, are refused by
-  name. The command records the flags.
+  name. The command records the flags. mpeg2video is refused before the
+  encode runs (decided 2026-10-20, tool v0.5.1): the video index
+  (pl_mpeg) reads MPEG-1 only and misread mpeg2video's output ("GOP
+  length changes"), so the step failed after the encode. Use mpeg1video
+  for `.mpg`, or libx264 or libx265 for `.mp4`.
 
   **libx264 has no such flag.** A libx264 entry rebuilds byte for byte
   only on a CPU on which x264 takes the same instruction-set path: its
@@ -1047,8 +1051,8 @@ processor count (4.10). What makes it so:
   with the CPU affinity or between Windows and Linux builds of one ffmpeg
   version (9.1, 2026-10-20). They can change with the CPU's instruction
   set, at any thread count, one included. The tool adds `info=0` for
-  libx265 and `-flags +bitexact -dct int -idct simple` for mpeg1video and
-  mpeg2video (4.10), and with them the tool's output was the same at
+  libx265 and `-flags +bitexact -dct int -idct simple` for mpeg1video
+  (4.10; mpeg2video is refused), and with them the tool's output was the same at
   every SIMD level and on Windows and Linux (9.1, section 14). libx264
   has no such flag: its AVX2 and AVX code gave other bytes, so a libx264
   entry rebuilds the same only on a CPU with the same instruction-set
@@ -1434,7 +1438,8 @@ the recorded 4 and 16:
 | libx265, 1080p | 4, 16 | one file (likewise) | the same file | `identical` |
 
 mpeg2video could not be packed: its output is not MPEG-1, and the
-index (pl_mpeg) misreads it ("GOP length changes").
+index (pl_mpeg) misreads it ("GOP length changes"). Tool v0.5.1 refuses
+it before the encode (4.10).
 Its flags stand on the ffmpeg-level measurement above (one file at every
 SIMD level and on WSL2, at every N). The hand test of section 14 also
 passed again with these flags (`identical` for its MPEG-1, libx264 and

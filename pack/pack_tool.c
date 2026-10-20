@@ -1574,7 +1574,7 @@ static int x265_frame_threads(int n) { return n >= 32 ? 5 : n >= 16 ? 4 : n >= 8
  * mpeg2video use SIMD DCTs whose results differ from the C ones; with
  * these flags they gave one set at every level, SIMD off included. libx264
  * has no such switch (its AVX2 and AVX code give other bytes). */
-enum { ENC_OTHER, ENC_X265, ENC_MPEG };
+enum { ENC_OTHER, ENC_X265, ENC_MPEG, ENC_MPEG2 };
 
 /* The video encoder the arguments select (the last one, as ffmpeg takes
  * it); without one, ffmpeg's default for the output's form: mpeg1video
@@ -1588,7 +1588,8 @@ static int encoder_of(const jv* ff, int is_mp4) {
             if (!strcmp(jat(ff, i)->u.s, opts[k])) c = jat(ff, i + 1)->u.s;
     if (!c) return is_mp4 ? ENC_OTHER : ENC_MPEG;
     if (!strcmp(c, "libx265")) return ENC_X265;
-    if (!strcmp(c, "mpeg1video") || !strcmp(c, "mpeg2video")) return ENC_MPEG;
+    if (!strcmp(c, "mpeg1video")) return ENC_MPEG;
+    if (!strcmp(c, "mpeg2video")) return ENC_MPEG2;
     return ENC_OTHER;
 }
 
@@ -1621,6 +1622,12 @@ static int is_opt(const char* a, const char* name) {
  * flag that turns bitexact off. */
 static int ffmpeg_args_ok(B* b, E* e, const jv* ff, int enc) {
     int i;
+    /* Refused here, not at the index: pl_mpeg reads MPEG-1 only and
+     * misreads mpeg2video's output ("GOP length changes"), so the encode
+     * would run, then fail (decided 2026-10-20). */
+    if (enc == ENC_MPEG2)
+        return cfail(b->c, YPAK_ERR_FORMAT, "'%s': mpeg2video cannot be packed: the video index reads MPEG-1 only; use mpeg1video "
+                     "for .mpg, or libx264 or libx265 for .mp4", e->name);
     for (i = 0; i < jn(ff); i++) {
         const char* a = jat(ff, i)->u.s;
         const char* v = i + 1 < jn(ff) ? jat(ff, i + 1)->u.s : "";

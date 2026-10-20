@@ -271,7 +271,7 @@ int main(int argc, char** argv) {
         snprintf(path, sizeof path, "%s_blocks.csv", csv);
         f = fopen(path, "w");
         if (f) {
-            fprintf(f, "t_entry,frames,frame,pos,pos_t,cost_ns\n");
+            fprintf(f, "t_entry_ns,frames,frame,pos,pos_t_ns,cost_ns\n");
             for (i = 0; i < n; i++)
                 fprintf(f, "%lld,%d,%lld,%lld,%lld,%lld\n", (long long)g_blk[i].t_entry, (int)g_blk[i].n,
                         (long long)g_blk[i].f, (long long)g_blk[i].pos, (long long)g_blk[i].pos_t,
