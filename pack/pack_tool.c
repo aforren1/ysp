@@ -1526,18 +1526,45 @@ static int ffmpeg_version(const char* prog, char* out, size_t cap) {
     cp = strstr(text, " Copyright");
     if (cp) *cp = 0;
     if (strncmp(text, "ffmpeg version ", 15) != 0) return -1;
-    snprintf(out, cap, "%s", text);
+    /* a cut line could equal another version's: refused, not truncated
+     * (gcc's -Wformat-truncation stopped the Linux Release build here) */
+    {
+        size_t n = strlen(text);
+        if (n >= cap) return -1;
+        memcpy(out, text, n + 1);
+    }
     return 0;
 }
 
-/* Decided 2026-10-14 (docs/pack.md 13): every encoder measured gives other
- * bytes with another thread count (libx264, libx265, mpeg1video,
- * mpeg2video), and ffmpeg's default count is the machine's core count, so
- * the tool encodes on one thread itself: `-threads 1` before the output,
- * and for libx265, whose own thread pool also changes the bytes,
- * `pools=1:frame-threads=1` in its x265-params. A thread setting of the
- * author's is refused, so these cannot be overridden by accident. */
-static const char* const forced_x265 = "pools=1:frame-threads=1";
+/* Every encoder measured gives other bytes with another thread count
+ * (libx264, libx265, mpeg1video, mpeg2video), and ffmpeg's default count
+ * is the machine's, so the tool sets the count and records it. Decided
+ * 2026-10-20 (docs/pack.md 4.10, 9.1), replacing one thread for every
+ * encode (2026-10-14), 3 to 4 times slower at 1080p than 16 threads: with the count
+ * fixed, each encoder gave one set of bytes under every CPU affinity and
+ * on Windows and Linux, so the count is a parameter like any other, and a
+ * rebuild runs ffmpeg with the recorded one. libx265 needs its pool and
+ * frame threads set too: ffmpeg's -threads sets only its frame threads,
+ * and the pool's size changes the bytes. A thread setting of the author's
+ * is refused, so the recorded count is the only one. */
+#define YPT_MAX_THREADS 64
+
+/* The default count: the logical processors, as ffmpeg's own default. */
+static int machine_threads(void) {
+#if defined(_WIN32)
+    long n = (long)GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+#elif !defined(__EMSCRIPTEN__)
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+#else
+    long n = 1;
+#endif
+    if (n < 1) n = 1;
+    return n > YPT_MAX_THREADS ? YPT_MAX_THREADS : (int)n;
+}
+
+/* x265's own rule for a pool of n threads (encoder.cpp, measured with
+ * pools=1, 4, 8 and 16), written out so the command states it. */
+static int x265_frame_threads(int n) { return n >= 32 ? 5 : n >= 16 ? 4 : n >= 8 ? 3 : n >= 4 ? 2 : 1; }
 
 static int thread_setting(const char* a) {
     static const char* const keys[] = { "threads=", "pools=", "frame-threads=", "lookahead-threads=", NULL };
@@ -1555,9 +1582,9 @@ static int ffmpeg_threads_ok(B* b, E* e, const jv* ff) {
         const char* a = jat(ff, i)->u.s;
         int params = !strcmp(a, "-x264-params") || !strcmp(a, "-x265-params") || !strcmp(a, "-x264opts");
         if (!strncmp(a, "-threads", 8) || (params && i + 1 < jn(ff) && thread_setting(jat(ff, i + 1)->u.s)))
-            return cfail(b->c, YPAK_ERR_FORMAT, "'%s': remove the thread setting from 'ffmpeg' (%s%s%s): the tool encodes on one thread itself "
-                         "(-threads 1, and %s for libx265), because the bytes change with the thread count and a pack must rebuild the same "
-                         "on any machine", e->name, a, params ? " " : "", params ? jat(ff, i + 1)->u.s : "", forced_x265);
+            return cfail(b->c, YPAK_ERR_FORMAT, "'%s': remove the thread setting from 'ffmpeg' (%s%s%s): the tool sets the thread count "
+                         "itself (-threads N, and pools=N with its frame threads for libx265) and records it, because the bytes change with "
+                         "the count; give \"threads\": N to choose it", e->name, a, params ? " " : "", params ? jat(ff, i + 1)->u.s : "");
     }
     return 0;
 }
@@ -1634,9 +1661,10 @@ static int video_color(B* b, E* e, const jv* col, yvid_index_desc* d) {
 }
 
 static int build_video(B* b, E* e) {
-    static const char* const keys[] = { "name", "kind", "source", "license", "ffmpeg", "ffmpeg_input", "color", NULL };
+    static const char* const keys[] = { "name", "kind", "source", "license", "ffmpeg", "ffmpeg_input", "threads", "color", NULL };
     const char* src = str_of(e->res, "source", NULL);
     jv* ff = jget(e->res, "ffmpeg");
+    jv* tv = jget(e->res, "threads");
     jv* fin = jget(e->res, "ffmpeg_input");
     jv* col = jget(e->res, "color");
     E* ix = e->idx;
@@ -1645,13 +1673,20 @@ static int build_video(B* b, E* e) {
     yvid_info info;
     char media[2300], idxp[2300], srcpath[2100], by[300], msg[512];
     sb note;
-    int is_mp4, rc = 0, made_media = 0, k, vi = 0;
+    int is_mp4, rc = 0, made_media = 0, k, vi = 0, threads = 0;
     int64_t frames, n;
     const char* prog = b->ffmpeg ? b->ffmpeg : "ffmpeg";
     if (keys_ok(b->c, e->res, keys, e->name) || want_type(b->c, e->res, "ffmpeg", J_ARR, e->name) ||
-        want_type(b->c, e->res, "ffmpeg_input", J_ARR, e->name) || want_type(b->c, e->res, "color", J_OBJ, e->name))
+        want_type(b->c, e->res, "ffmpeg_input", J_ARR, e->name) || want_type(b->c, e->res, "color", J_OBJ, e->name) ||
+        want_type(b->c, e->res, "threads", J_INT, e->name))
         return YPAK_ERR_FORMAT;
     if (fin && !ff) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': 'ffmpeg_input' needs 'ffmpeg'", e->name);
+    if (tv && !ff) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': 'threads' needs 'ffmpeg'", e->name);
+    if (tv && (tv->i < 1 || tv->i > YPT_MAX_THREADS))
+        return cfail(b->c, YPAK_ERR_FORMAT, "'%s': 'threads' is %lld; it is 1 to %d", e->name, (long long)tv->i, YPT_MAX_THREADS);
+    /* A rebuild takes the count from the manifest: it is a resource key, so
+     * it comes back as tv. */
+    if (ff) threads = tv ? (int)tv->i : machine_threads();
     if (!src) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': no 'source' (an MPEG-1 or MP4 file, or ffmpeg's input)", e->name);
     is_mp4 = ends_with_i(e->name, ".mp4");
     if (!is_mp4 && !ends_with_i(e->name, ".mpg") && !ends_with_i(e->name, ".mpeg"))
@@ -1668,6 +1703,7 @@ static int build_video(B* b, E* e) {
         const char* rec_by = rec ? str_of(rec, "by", NULL) : NULL;
         char have[256];
         int hv = ffmpeg_version(prog, have, sizeof have);
+        char tn[16], pools[64];
         const char** argv;
         int na = jn(ff), ni = fin ? jn(fin) : 0, i, at_src;
         if (!na) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': 'ffmpeg' lists no arguments", e->name);
@@ -1688,27 +1724,30 @@ static int build_video(B* b, E* e) {
         argv[k++] = "-i";
         at_src = k;
         argv[k++] = srcpath;
+        snprintf(tn, sizeof tn, "%d", threads);
+        snprintf(pools, sizeof pools, "pools=%d:frame-threads=%d", threads, x265_frame_threads(threads));
         {
             int x265 = 0, merged = 0;
             for (i = 0; i < na; i++) x265 |= !strcmp(jat(ff, i)->u.s, "libx265");
             for (i = 0; i < na; i++) {
                 const char* a = jat(ff, i)->u.s;
                 if (x265 && i > 0 && !strcmp(jat(ff, i - 1)->u.s, "-x265-params")) {
-                    /* the author's x265-params with the forced pools appended */
-                    size_t al = strlen(a);
-                    char* m = (char*)calloc_c(b->c, al + strlen(forced_x265) + 2);
+                    /* the author's x265-params with the pool appended: a
+                     * second -x265-params would replace the author's */
+                    size_t al = strlen(a), pl = strlen(pools);
+                    char* m = (char*)calloc_c(b->c, al + pl + 2);
                     if (!m) return cfail(b->c, YPAK_ERR_NOMEM, "out of memory");
                     memcpy(m, a, al);
                     m[al] = ':';
-                    memcpy(m + al + 1, forced_x265, strlen(forced_x265));
+                    memcpy(m + al + 1, pools, pl);
                     a = m;
                     merged = 1;
                 }
                 argv[k++] = a;
             }
-            if (x265 && !merged) { argv[k++] = "-x265-params"; argv[k++] = forced_x265; }
+            if (x265 && !merged) { argv[k++] = "-x265-params"; argv[k++] = pools; }
             argv[k++] = "-threads";
-            argv[k++] = "1";
+            argv[k++] = tn;
         }
         argv[k++] = media;
         argv[k] = NULL;
@@ -1799,6 +1838,7 @@ static int build_video(B* b, E* e) {
     if (ff) {
         jset(b->c, e->deriv, "ffmpeg", jcopy(b->c, ff));
         if (fin) jset(b->c, e->deriv, "ffmpeg_input", jcopy(b->c, fin));
+        jset(b->c, e->deriv, "threads", jint(b->c, threads));
         jset(b->c, e->deriv, "command", jstrz(b->c, xd.note ? xd.note : ""));
     }
     if (col) jset(b->c, e->deriv, "color", jcopy(b->c, col));

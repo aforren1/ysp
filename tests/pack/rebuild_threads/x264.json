@@ -1,0 +1,7 @@
+{"format": "ysp-pack-source", "version": 1, "resources": [
+  {"kind": "video", "name": "video/movie.mp4", "source": "jwpIntro.mp4",
+   "ffmpeg": ["-an", "-vf", "fps=30000/1001", "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
+              "-bf", "0", "-g", "30", "-keyint_min", "30", "-sc_threshold", "0", "-x264-params",
+              "bframes=0:scenecut=0:open-gop=0:colorprim=bt709:transfer=bt709:colormatrix=bt709:range=tv:chromaloc=0",
+              "-video_track_timescale", "30000"]}
+]}

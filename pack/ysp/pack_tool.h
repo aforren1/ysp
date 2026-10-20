@@ -1,4 +1,4 @@
-/* ysp/pack_tool.h - v0.4.0 - the pack tool as a library (prefix ypt_)
+/* ysp/pack_tool.h - v0.5.0 - the pack tool as a library (prefix ypt_)
  *
  *   Builds, verifies, lists, extracts, rebuilds and appends ysp packs
  *   (docs/pack.md). The CLI `ypak` (pack/ypak.c) is a thin layer over these
@@ -53,6 +53,18 @@
  *   and pl_mpeg, so every pack ID differs from v0.3.0's; every other entry
  *   of the v0.3.0 test corpus is byte-identical.
  *
+ *   v0.5.0 (2026-10-20): the ffmpeg step runs on N threads, not one (the
+ *   user's decision of 2026-10-20, docs/pack.md 14): N is the resource's
+ *   "threads" (1 to 64) or the machine's logical processors, passed as
+ *   `-threads N` (libx265: pools=N and x265's frame threads for N),
+ *   recorded in the derivation, and used again by `ypak rebuild`. With N
+ *   fixed, each encoder gave the same bytes under every CPU affinity and
+ *   on Windows and Linux. The author's own thread settings stay refused.
+ *   A video entry made by ffmpeg differs from v0.4.0's (its command and
+ *   the count); every other entry of the test corpus is byte-identical.
+ *   ffmpeg's version line is refused, not cut, past 255 bytes (gcc's
+ *   -Wformat-truncation stopped the Linux Release build).
+ *
  *   Every call returns 0 or a negative code (ysp/pack.h's YPAK_ERR_*
  *   values) and writes one line into err: what failed, where, and what to
  *   do. Reports (verify, rebuild, list) go to the FILE* given; NULL is
@@ -74,7 +86,7 @@
 extern "C" {
 #endif
 
-#define YPT_VERSION_STRING "0.4.0"
+#define YPT_VERSION_STRING "0.5.0"
 
 typedef struct ypt_options {
     const char* sources;   /* the sources' folder; NULL: the description's folder */
