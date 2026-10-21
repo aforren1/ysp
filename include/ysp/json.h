@@ -1,4 +1,4 @@
-/* ysp/json.h - v0.2.0 - public domain single-header strict JSON reader and canonical writer
+/* ysp/json.h - v0.2.1 - public domain single-header strict JSON reader and canonical writer
  *
  *   One JSON reader for every ysp program that reads JSON at run time or in
  *   a tool: the rig profile (ysp/rigfile.h), the pack tool's source
@@ -168,6 +168,10 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.2.1 - builds under gcc -O3 -Werror (MinGW gcc 16.1, CMake's Release):
+ *          gcc flagged (-Wnonnull, -Wstringop-overread) a path that cannot
+ *          run, the empty second piece of yjs_format_double(); the piece is
+ *          now "" and its count clamped. No byte changed.
  *   v0.2.0 - canonical numbers (docs/experiment_format.md, gap G7): the
  *          writer writes every number's exact value in one spelling
  *          (CANONICAL NUMBERS), not its source text; yjs_format_double()
@@ -207,8 +211,8 @@
 
 #define YJS_VERSION_MAJOR 0
 #define YJS_VERSION_MINOR 2
-#define YJS_VERSION_PATCH 0
-#define YJS_VERSION_STRING "0.2.0"
+#define YJS_VERSION_PATCH 1
+#define YJS_VERSION_STRING "0.2.1"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -1074,10 +1078,13 @@ static void yjs__spell(yjs__emit_fn emit, void* ctx, bool neg, const char* d1, s
         emit(ctx, d1 + at, n1 - at);
         emit(ctx, d2, n2);
     } else {
+        /* at < k, so a2 <= n2 already; the clamp only lets gcc -O3 see it
+         * (-Wstringop-overread on an empty second piece) */
+        size_t a2 = at - n1 < n2 ? at - n1 : n2;
         emit(ctx, d1, n1);
-        emit(ctx, d2, at - n1);
+        emit(ctx, d2, a2);
         emit(ctx, ".", 1);
-        emit(ctx, d2 + (at - n1), n2 - (at - n1));
+        emit(ctx, d2 + a2, n2 - a2);
     }
     if (sci) {
         char buf[24];
@@ -1347,7 +1354,9 @@ YJS_API int yjs_format_double(double x, char* buf, size_t cap) {
         char* s;
         yjs__ryu(bits, &digits, &e);
         s = yjs__utoa(digits, end);
-        yjs__spell(yjs__sbuf_emit, &sb, (bits >> 63) != 0, s, (size_t)(end - s), NULL, 0,
+        /* "" not NULL: gcc -O3 cannot see that an empty second piece is
+         * never copied, and warns (-Wnonnull) */
+        yjs__spell(yjs__sbuf_emit, &sb, (bits >> 63) != 0, s, (size_t)(end - s), "", 0,
                    (int64_t)e + (int64_t)(end - s) - 1);
     }
     if (buf && sb.n < cap) {
