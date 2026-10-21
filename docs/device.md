@@ -346,6 +346,33 @@ moved anchor of `dev-25`.
 | A trigger channel | Its start is taken on the screen's trigger worker, right before that worker's write | The worker's wake delays the pulse and does not shorten it |
 | Device-timed families | Unchanged: XID (`mp`, `mh`), the line board (`p <code> <us>`), BioSemi and the MMBT-S at P | The device times the end; no host deadline |
 
+### Parameter tables (v0.4.0)
+
+A definition's devices-by-role block and the rig profile set fields of
+`ydev_desc`. The loader and the designer check them against one source
+([rig_spec.md](rig_spec.md), principle 8; gap G6 of
+[experiment_format.md](experiment_format.md)).
+
+| Question | Decision | Why |
+|---|---|---|
+| One call per family, or one call that takes the family | One call: `ydev_params(family, &n)`, NULL and `n` 0 for a value that is not a `YBOX_` family | The families share one desc. A new family is a new case, not a new function, and a loader iterates `YBOX_XID` to `YBOX_FAMILY_LAST` with `ybox_family_name()` |
+| Which rows a family has | Only the fields it reads: `kind` and `silent_ns` for input families; `probe_ns`, `max_width_ns` and `no_identify` for the families that answer queries (XID, LINE); `baud` for every serial family; `pulse_ns` for output families; `latched` for the MMBT-S; `min_hold_ns` for host-timed outputs and the MMBT-S | A key that the family ignores is a mistake in a profile, so the loader can refuse it. The test derives the expected rows from `ybox_caps()`, so a family's rows follow its capabilities |
+| The defaults | The family's own, as `ydev_open()` resolves them: `baud` 9600 for the MMBT-S and 115200 for the rest, `max_width_ns` 20 ms for XID and 1.3 ms for LINE, `kind` SYNC for PHOTO and BOX for the rest, `min_hold_ns` 0.25 ms and 0 on the parallel port | This is why the table is per family: one table could not state one default |
+| A zero `baud` in the handle | `ydev_open()` writes the family's baud into the handle's desc | The table's default and the handle then agree, and the handle states the rate it opens. The serial transport opened at that rate before, so nothing on the wire changed |
+| `kind` values | `mouse=1` to `user=8`, without `keyboard=0` | A zero `kind` is the family's kind, so a desc cannot choose the keyboard |
+| The shape | `name`, `type`, `min`, `max`, `def`, `unit`, `doc`, `values`: the shape of every new ysp table | The tables of response, device, the methods and the timeline read alike |
+| Not in the tables | `device`, `sink`, `ring`, `transport`, `manual`, `now`, `roles` | The program sets them, not a profile or a role. LSL roles (`family lsl` in the rig profile) are ysp/net.h's |
+| Upper bounds | Times to 1e6 s; `pulse_ns` to 10 s (the rig profile's bound), 9 ms on BioSemi; `baud` to 10,000,000 (the profile's bound) | A range for the designer's input, not a limit that `ydev_open()` enforces |
+
+The test opens a manual instance of each family with zero fields and
+compares every row's default with the handle's desc, checks that every
+row names a field and that the rows match the family's capabilities, and
+checks the `kind` values against `yin_kind` with a `switch` without a
+`default` (gcc and clang `-Wall -Werror` stop when a kind is added).
+Checked on 2026-10-21 with MinGW-w64 gcc 16.1, MSVC 19.44 (`msvc-full`)
+and gcc 11.4 on WSL2: 8 families, 71 rows; mutants `dp-01` to `dp-07`
+caught, 7 of 7.
+
 ## Results
 
 On 2026-10-08, MSVC 19.44 and MinGW-w64 gcc 16.1 on Windows 11, gcc 11.4

@@ -1,4 +1,4 @@
-/* ysp/device.h - v0.3.1 - public domain single-header device layer
+/* ysp/device.h - v0.4.0 - public domain single-header device layer
  *
  *   A response box, a trigger box or a microcontroller board as a producer
  *   of ysp/input.h events with times on the ysp_rt clock, and as a target
@@ -264,8 +264,29 @@
  *   open or close runs.
  *
  *   ---------------------------------------------------------------------
+ *   PARAMETERS
+ *   ---------------------------------------------------------------------
+ *   ydev_params(family, &n) lists the desc fields that a rig profile or a
+ *   definition's role sets for one YBOX_ family: only the fields that
+ *   family reads, each with the value a zero field means for it (baud
+ *   9600 for the MMBT-S, max_width_ns 20 ms for XID, kind SYNC for PHOTO,
+ *   no min_hold_ns on the parallel port), so a loader checks a role's
+ *   keys and a designer builds its panel from one source
+ *   (docs/rig_spec.md, principle 8). NULL and *n 0 for another family.
+ *   Each row: the field's name, its type ("enum", "bool", "u32", "i64",
+ *   "str"), the inclusive range, the default, the unit ("ns" for int64
+ *   ns: a profile's x_s for x_ns), a line of doc, and for an enum its
+ *   names and values. Not in it: the program's fields (device, sink,
+ *   ring, transport, manual, now, roles). ybox_family_name() names the
+ *   family.
+ *
+ *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.4.0 - PARAMETERS: ydev_params() and ydev_param, a table per family
+ *          of the desc fields it reads, with that family's defaults.
+ *          ydev_open() writes the family's baud into the handle's desc
+ *          for a desc.baud of 0 (the rate opened is unchanged).
  *   v0.3.1 - A host-timed pulse's width runs from the START of the leading
  *          write, not from its return: the trailing 0 is written at
  *          yser_pulse_off_at_ns() (ysp/serial.h v0.6.1), at least the new
@@ -325,9 +346,9 @@
 #define YSP_DEVICE_H_INCLUDED
 
 #define YDEV_VERSION_MAJOR 0
-#define YDEV_VERSION_MINOR 3
-#define YDEV_VERSION_PATCH 1
-#define YDEV_VERSION_STRING "0.3.1"
+#define YDEV_VERSION_MINOR 4
+#define YDEV_VERSION_PATCH 0
+#define YDEV_VERSION_STRING "0.4.0"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -612,6 +633,25 @@ YDEV_API int  ydev_role_index(const ydev_roles* r, const char* name);
 /* The running instance of a role, or NULL. */
 YDEV_API ydev_device* ydev_role_device(const ydev_roles* r, int index);
 YDEV_API const char*  ydev_role_name(const ydev_roles* r, int index);
+
+/* --- parameters (PARAMETERS) --------------------------------------------------- */
+
+/* v0.4: one desc field a family reads. The shape of every ysp parameter
+ * table. */
+typedef struct ydev_param {
+    const char* name;     /* the desc field                                 */
+    const char* type;     /* "enum", "bool", "u32", "i64", "str"            */
+    double      min, max; /* inclusive                                      */
+    double      def;      /* the value a zero field means for this family   */
+    const char* unit;     /* "", "ns", "baud"                               */
+    const char* doc;      /* one line                                       */
+    const char* values;   /* enum: "name=value" pairs joined by ',', in
+                           * value order; NULL for other types              */
+} ydev_param;
+
+/* The fields family (a YBOX_ family) reads; *n gets the count. NULL and
+ * *n 0 for anything else. */
+YDEV_API const ydev_param* ydev_params(int family, int* n);
 
 #ifdef __cplusplus
 }
@@ -1323,6 +1363,85 @@ YDEV_API const char* ydev_role_name(const ydev_roles* r, int index) {
     return r->name[index - 1];
 }
 
+/* --- parameters --------------------------------------------------------------------- */
+
+/* Rows in ydev_desc's order; each family takes the rows it reads, with its
+ * own defaults (ydev_open()'s). Upper bounds of times are a sanity range
+ * (1e6 s), not a limit of the header; a pulse's 10 s is the rig profile's. */
+#define YDEV__P_ROLE { "role", "str", 0, 0, 0, "", "the experiment's name for the device; required, < 32 characters", NULL }
+#define YDEV__P_KEY  { "key", "str", 0, 0, 0, "", "the match key (MATCH KEYS); required, < 160 characters", NULL }
+#define YDEV__P_KIND(def) { "kind", "enum", 1, 15, def, "", "yin_event.kind of its events; 0 = the family's; 8 to 15 are the user's", \
+    "mouse=1,touch=2,pen=3,gamepad=4,box=5,eye=6,sync=7,user=8" }
+#define YDEV__P_BAUD(def) { "baud", "u32", 1, 10000000, def, "baud", "the serial rate; 0 = the family's", NULL }
+#define YDEV__P_PROBE { "probe_ns", "i64", -1, 1e15, 1e8, "ns", "timer queries this far apart; < 0 = none", NULL }
+#define YDEV__P_RETRY { "retry_ns", "i64", 1, 1e15, 1e9, "ns", "reopen by key this often while OPENING or LOST", NULL }
+#define YDEV__P_SILENT { "silent_ns", "i64", -1, 1e15, 2e9, "ns", "LOST after this long with no byte; < 0 = never", NULL }
+#define YDEV__P_WIDTH(def) { "max_width_ns", "i64", 1, 1e15, def, "ns", "clock pairs from wider query brackets are refused", NULL }
+#define YDEV__P_READ { "read_timeout_ns", "i64", 1, 1e15, 2e7, "ns", "the reader's longest read", NULL }
+#define YDEV__P_NO_ID { "no_identify", "bool", 0, 1, 0, "", "skip the identity query (IDENTIFY)", NULL }
+#define YDEV__P_NO_EL { "no_elevate", "bool", 0, 1, 0, "", "the reader and the pulse worker keep normal priority", NULL }
+#define YDEV__P_PULSE(max, doc) { "pulse_ns", "i64", 0, max, 0, "ns", doc, NULL }
+#define YDEV__P_LATCH { "latched", "bool", 0, 1, 0, "", "the switch is at S: a byte holds (default P: 8 ms pulses)", NULL }
+#define YDEV__P_HOLD(min, def) { "min_hold_ns", "i64", min, 1e15, def, "ns", \
+    "a host-timed trailing write starts no sooner after the leading one returned", NULL }
+#define YDEV__PULSE_DOC "ydev_out_mark() and trigger channels: a pulse this wide; 0 = a set"
+
+static const ydev_param ydev__params_xid[] = {
+    YDEV__P_ROLE, YDEV__P_KEY, YDEV__P_KIND(YIN_KIND_BOX), YDEV__P_BAUD(115200), YDEV__P_PROBE, YDEV__P_RETRY,
+    YDEV__P_SILENT, YDEV__P_WIDTH(2e7), YDEV__P_READ, YDEV__P_NO_ID, YDEV__P_NO_EL,
+    YDEV__P_PULSE(1e10, YDEV__PULSE_DOC "; the box times it in whole ms"),
+};
+static const ydev_param ydev__params_line[] = {
+    YDEV__P_ROLE, YDEV__P_KEY, YDEV__P_KIND(YIN_KIND_BOX), YDEV__P_BAUD(115200), YDEV__P_PROBE, YDEV__P_RETRY,
+    YDEV__P_SILENT, YDEV__P_WIDTH(1.3e6), YDEV__P_READ, YDEV__P_NO_ID, YDEV__P_NO_EL,
+    YDEV__P_PULSE(1e10, YDEV__PULSE_DOC "; the board times it in us"),
+};
+static const ydev_param ydev__params_photo[] = {
+    YDEV__P_ROLE, YDEV__P_KEY, YDEV__P_KIND(YIN_KIND_SYNC), YDEV__P_BAUD(115200), YDEV__P_RETRY, YDEV__P_SILENT,
+    YDEV__P_READ, YDEV__P_NO_EL,
+};
+static const ydev_param ydev__params_triggerbox[] = {
+    YDEV__P_ROLE, YDEV__P_KEY, YDEV__P_BAUD(115200), YDEV__P_RETRY, YDEV__P_READ, YDEV__P_NO_EL,
+    YDEV__P_PULSE(1e10, YDEV__PULSE_DOC), YDEV__P_HOLD(1, 250000),
+};
+static const ydev_param ydev__params_biosemi[] = {
+    YDEV__P_ROLE, YDEV__P_KEY, YDEV__P_BAUD(115200), YDEV__P_RETRY, YDEV__P_READ, YDEV__P_NO_EL,
+    YDEV__P_PULSE(9e6, "0, or 7 to 9 ms: the interface ends every code after 8 ms"),
+};
+static const ydev_param ydev__params_mmbts[] = {
+    YDEV__P_ROLE, YDEV__P_KEY, YDEV__P_BAUD(9600), YDEV__P_RETRY, YDEV__P_READ, YDEV__P_NO_EL,
+    YDEV__P_PULSE(1e10, "switch P: 0, or 7 to 9 ms (the box ends every code after 8 ms); S: " YDEV__PULSE_DOC),
+    YDEV__P_LATCH, YDEV__P_HOLD(1, 250000),
+};
+static const ydev_param ydev__params_lines[] = {
+    YDEV__P_ROLE, YDEV__P_KEY, YDEV__P_BAUD(115200), YDEV__P_RETRY, YDEV__P_READ, YDEV__P_NO_EL,
+    YDEV__P_PULSE(1e10, YDEV__PULSE_DOC), YDEV__P_HOLD(1, 250000),
+};
+static const ydev_param ydev__params_parallel[] = {
+    YDEV__P_ROLE, YDEV__P_KEY, YDEV__P_RETRY, YDEV__P_READ, YDEV__P_NO_EL,
+    YDEV__P_PULSE(1e10, YDEV__PULSE_DOC), YDEV__P_HOLD(0, 0),
+};
+
+YDEV_API const ydev_param* ydev_params(int family, int* n) {
+#define YDEV__ROWS(a) t = a; k = (int)(sizeof a / sizeof a[0]); break
+    const ydev_param* t = NULL;
+    int k = 0;
+    switch (family) {
+    case YBOX_XID:        YDEV__ROWS(ydev__params_xid);
+    case YBOX_LINE:       YDEV__ROWS(ydev__params_line);
+    case YBOX_PHOTO:      YDEV__ROWS(ydev__params_photo);
+    case YBOX_TRIGGERBOX: YDEV__ROWS(ydev__params_triggerbox);
+    case YBOX_BIOSEMI:    YDEV__ROWS(ydev__params_biosemi);
+    case YBOX_MMBTS:      YDEV__ROWS(ydev__params_mmbts);
+    case YBOX_LINES:      YDEV__ROWS(ydev__params_lines);
+    case YBOX_PARALLEL:   YDEV__ROWS(ydev__params_parallel);
+    default: break;
+    }
+#undef YDEV__ROWS
+    if (n) *n = k;
+    return t;
+}
+
 /* --- the step ----------------------------------------------------------------------- */
 
 static void ydev__close_conn(ydev_device* dev) {
@@ -1588,6 +1707,8 @@ YDEV_API bool ydev_open(ydev_device* dev, const ydev_desc* desc) {
         dev->d.device = (uint32_t)i;
     }
     if (dev->d.kind == 0) dev->d.kind = dev->d.family == YBOX_PHOTO ? YIN_KIND_SYNC : YIN_KIND_BOX;
+    /* the handle states the rate it opens (PARAMETERS) */
+    if (dev->d.baud == 0 && dev->d.family != YBOX_PARALLEL) dev->d.baud = ybox_default_baud(dev->d.family);
     if (dev->d.probe_ns == 0) dev->d.probe_ns = 100000000;
     if (dev->d.retry_ns <= 0) dev->d.retry_ns = 1000000000;
     if (dev->d.silent_ns == 0) dev->d.silent_ns = 2000000000;

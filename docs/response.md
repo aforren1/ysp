@@ -921,6 +921,38 @@ on Linux (WSL2); `fl-08` (anchor moved), `fl-09` and `fl-10` caught, 3
 of 3; the CI `--sim` lists pass, and their files' headers have the
 suffix.
 
+## The parameter table (v0.6.0)
+
+The experiment loader checks the keys of a `response` block, and the
+designer builds its Response panel. Both need the fields of `yrsp_desc`
+from one source ([rig_spec.md](rig_spec.md), principle 8; gap G6 of
+[experiment_format.md](experiment_format.md)). `yrsp_params(&n)` gives
+21 rows: 11 desc fields and the 10 fields of a choice, named
+`choices.<field>`.
+
+| Decision | Why |
+|---|---|
+| The shape of every new ysp table: `name`, `type`, `min`, `max`, `def`, `unit`, `doc`, then `values` | The four headers that got tables in this round read alike. `values` is last, so the older tables (`yscr_param`, `yau_param`) are its prefix |
+| `values` for an enum: `"all=0,list=1,none=2"`, names lower case, the C enum's suffix | A definition writes the name; the loader finds the number in the same string that the designer shows |
+| `def` is the value a zero field means after `yrsp_open()`, not the zero itself | `kinds` 0 is the keyboard bit (1), `max_hold_ns` 0 is 2 s, `trace_kinds` 0 is every kind (65535). A designer shows the default that runs |
+| `yrsp_open()` now writes 65535 for a zero `trace_kinds` | The table and the handle then agree, as they already did for `kinds`. Nothing traced changes |
+| Durations keep their `_ns` names, unit `"ns"` | The player maps `x_ns` to the definition's `x_s` (D4) by the name |
+| Not in the table: `choices` and `n_choices` as such, `sources`, `trace` | They are the caller's arrays. `trace_cap` is in it: the player allocates the trace that the definition asks for |
+
+The test checks that every row names a field of `yrsp_desc` or
+`yrsp_choice` (by `offsetof`), that each field has one row, that the type
+matches the field's size, that the unit is `ns` exactly for the `_ns`
+fields, and that each default is the value the opened collector holds for
+a zero field. An enum row must list every value of its C enum. The test
+gets the names from a `switch` without a `default`, so gcc and clang
+(`-Wall -Werror`, as CI builds) stop when an enum gains a value, and the
+check then fails until the table lists it.
+
+Checked on 2026-10-21: `tests/adapt/response_test.c` (21,049 checks)
+with MinGW-w64 gcc 16.1 (`-Werror`), MSVC 19.44 through CMake
+(`msvc-full`, ctest 89 of 89), and gcc 11.4 on WSL2 (C99, C11); the CI
+`--sim` list passes; mutants `pm-01` to `pm-05` caught, 5 of 5.
+
 ## Verification
 
 All on 2026-10-07, Windows 11, the Iris Xe laptop of `ysp/screen.h`'s
