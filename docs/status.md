@@ -185,6 +185,7 @@ Purpose: The strict JSON reader and canonical writer of the repository (RFC 8259
 
 Status:
 
+- v0.2.1 (2026-10-21): builds under gcc -O3 -Werror (MinGW gcc 16.1, CMake's Release); no byte changed.
 - v0.2.0 (2026-10-21): canonical numbers, gap G7 of the [experiment format](experiment_format.md). The writer writes each number's exact value in one spelling (`1.50`, `1.5e0` and `15E-1` give `1.5`); `yjs_format_double()` gives a double's shortest round-trip decimal by Ryu with 780-byte tables, integer arithmetic only. 10 million doubles give Python's text, byte for byte, on MSVC, MinGW, WSL2 gcc (also with fused multiply-adds) and emcc under node; 2 million agree with V8. `yjs_new_int()` and `yjs_new_fixed()` bytes unchanged. 3.4 million fuzz inputs with no finding after the one fixed (a respelled exponent past 9 digits; the reader now limits it); 39 of 40 mutants killed, 1 equivalent. 69 ns a double (snprintf `%.17g`: 813 to 1615 ns). [Design notes](json.md#canonical-numbers-v020).
 - v0.1.1 (checked against the [Conventions](conventions.md); no code changed).
 - v0.1.0. 470 checks pass on MSVC, MinGW and WSL2 gcc (and ASan with UBSan); doubles equal to strtod bit for bit on 200,000 strings; the pack tool on it gives byte-identical packs; 14.2 million fuzz inputs, no finding; 28 of 28 mutations caught. Parse 351 to 604 MB/s, a typical profile in 4 to 5 us. [Design notes](json.md).
