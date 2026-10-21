@@ -76,6 +76,9 @@ values change from run to run.
 | `json.toml` | gcc | `gcc -std=c11 -O2 -w -I<copy> tests/adapt/json_test.c -lm` (`YJS_TEST_NUMBERS=50000`) |
 | `rigfile.toml` | gcc | `gcc -std=c11 -O2 -w -I<copy> tests/adapt/rigfile_test.c -lsetupapi -lm` (Windows) |
 | `net.toml` | gcc | `gcc -std=c11 -O2 -w -I<copy> tests/adapt/net_test.c -lsetupapi -lm` (Windows; `YNET_TEST_SECONDS=1`; a fake liblsl, none needed) |
+| `stair.toml` | gcc | `gcc -std=c99 -O2 -w -DYST_MAX_TRIALS=128 -DYST_MAX_REVERSALS=32 -I<copy> tests/adapt/stair_test.c -lm` |
+| `quest.toml` | gcc | `gcc -std=c11 -O2 -w -I<copy> tests/adapt/quest_test.c -lm` |
+| `aep.toml` | gcc | `gcc -std=c11 -O2 -w -I<copy> tests/adapt/aep_test.c -lm` (`YAEP_TEST_ONLY=params`: the parameter table and snapshot outcome checks only) |
 
 These are the compilers of the original runs. The runner finds gcc in
 this order: the `YSP_MUT_GCC` environment variable,
@@ -178,3 +181,6 @@ measurement lock.
 | `rt.toml` | 27 | 4 | 27 s (2026-10-08) |
 | `box.toml` | 13 | 4 | 4 s (2026-10-08) |
 | `device.toml` | 12 | 4 | 17 s (2026-10-08) |
+| `stair.toml` | 17 | 4 | 15 s (2026-10-21) |
+| `quest.toml` | 8 | 4 | 15 s (2026-10-21) |
+| `aep.toml` | 10 | 4 | 88 s (2026-10-21) |

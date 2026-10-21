@@ -104,6 +104,30 @@ function test_stair()
     thr = log10(ysp_stair('estimate', h));
     check(abs(thr + 1.45) < 0.3, 'stair 1-up-3-down estimate %.3f far from the 79%% point', thr);
     ysp_stair('close', h);
+
+    % Save after 9 trials, load, and finish: the same as the uninterrupted run.
+    resp = [1 1 1 0 1 1 1 1 0 0 1 1 1 0 1 1 1 1 1 0];
+    h1 = ysp_stair('open', d);
+    h2 = ysp_stair('open', d);
+    for t = 1:numel(resp)
+        ysp_stair('update', h1, ysp_stair('next', h1), resp(t));
+        if t <= 9, ysp_stair('update', h2, ysp_stair('next', h2), resp(t)); end
+    end
+    b = ysp_stair('save', h2);
+    check(isa(b, 'uint8') && isequal(char(b(1:4)), 'PSST'), 'stair snapshot bytes');
+    ysp_stair('close', h2);
+    h3 = ysp_stair('load', b, d);
+    for t = 10:numel(resp)
+        ysp_stair('update', h3, ysp_stair('next', h3), resp(t));
+    end
+    check(isequal(ysp_stair('save', h3), ysp_stair('save', h1)), 'stair resumed snapshot differs');
+    check(ysp_stair('next', h3) == ysp_stair('next', h1), 'stair resumed proposal differs');
+    d2 = d;
+    d2.stop_reversals = 15;
+    expect_error('ysp_stair:load', @() ysp_stair('load', b, d2));
+    expect_error('ysp_stair:load', @() ysp_stair('load', b(1:end-1), d));
+    ysp_stair('close', h1);
+    ysp_stair('close', h3);
     fprintf('ysp_stair: ok\n');
 end
 

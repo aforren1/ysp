@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ysp-aep"
-version = "0.15.0"  # tracks the ysp/aep.h version; keep the two in step
+version = "0.16.0"  # tracks the ysp/aep.h version; keep the two in step
 description = "Gaussian-process adaptive psychophysics (AEPsych-style) with no dependencies"
 readme = "README.md"
 requires-python = ">=3.8"

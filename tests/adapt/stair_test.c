@@ -890,6 +890,373 @@ static void test_simulation(void) {
              3000, 60, 0.01);
 }
 
+/* ------------------------------------------------- parameter table (v0.3) */
+
+#include "param_table_check.h"
+
+static void ptc_fail(int line, const char* what) { fail(line, what); }
+
+#define F(name, kind, n) { #name, offsetof(yst_desc, name), kind, n, NULL }
+#define FE(name, n, v) { #name, offsetof(yst_desc, name), 'e', n, v }
+static const ptc_field g_fields[] = {
+    F(start, 'd', 0), FE(rule, YST_RULE_ASA + 1, "updown=0,asa=1"), F(n_up, 'i', 0),
+    F(n_down, 'i', 0), FE(step_type, YST_STEP_DB + 1, "lin=0,log=1,db=2"), F(steps, 'D', 0),
+    F(n_steps, 'i', 0),
+    F(step_down_scale, 'd', 0), F(target_p, 'd', 0), F(min, 'd', 0), F(max, 'd', 0),
+    F(use_limits, 'b', 0), F(harder_is_up, 'b', 0), F(initial_rule, 'b', 0),
+    F(stop_reversals, 'i', 0), F(stop_trials, 'i', 0), F(stop_at_limit, 'i', 0),
+    F(est_reversals, 'i', 0), F(est_trials, 'i', 0),
+};
+#undef F
+#undef FE
+#define NF ((int)(sizeof g_fields / sizeof g_fields[0]))
+
+/* Proposals of a fixed response stream: what a field's value changes. */
+static void param_run(const yst_desc* d, double* out, int n) {
+    static yst_stair s;
+    int i;
+    for (i = 0; i < n; i++) out[i] = -1.0;
+    if (!yst_open(&s, d)) return;
+    for (i = 0; i < n; i++) {
+        out[i] = yst_next(&s);
+        if (yst_update(&s, out[i], (i * 7 + 3) % 5 < 3) < 0) break;
+    }
+    yst_close(&s);
+}
+
+static void test_params(void) {
+    static ptc_row rows[64];
+    static yst_stair s;
+    const yst_param* p;
+    yst_desc base, d;
+    int n = 0, i;
+    p = yst_params(&n);
+    CHECK(p != NULL);
+    CHECK(n == NF);
+    if (!p || n > 64) return;
+    for (i = 0; i < n; i++) PTC_ROW(rows[i], p[i]);
+    ptc_check_cover(rows, n, g_fields, NF);
+
+    /* A desc that opens with every field at its default, steps over a range
+     * that limits would bite, and has reversals for the estimates. */
+    memset(&base, 0, sizeof base);
+    base.start = 10.0;
+    base.steps[0] = 2.0;
+    base.steps[1] = 1.0;
+    base.n_steps = 2;
+    base.stop_trials = 40;
+    base.stop_reversals = 30;   /* either stop alone is enough, so zero each */
+
+    for (i = 0; i < n; i++) {
+        const ptc_field* f;
+        int k = ptc_check_row(&rows[i], g_fields, NF);
+        char msg[160];
+        if (k < 0) continue;
+        f = &g_fields[k];
+        if (f->kind == 'e') {
+            /* The list is the enum: one past its last value is refused. */
+            d = base;
+            ptc_set(&d, f, rows[i].max + 1.0);
+            CHECK(!yst_open(&s, &d));
+        }
+        if (!ptc_scalar(f)) continue;
+        /* A zero field opens and reads back as def, or the row says the field
+         * is required. */
+        d = base;
+        ptc_set(&d, f, 0.0);
+        if (!yst_open(&s, &d)) {
+            snprintf(msg, sizeof msg, "zero %s refused, but its doc does not say required", f->name);
+            if (!ptc_required(&rows[i])) fail(__LINE__, msg);
+            continue;
+        }
+        if (ptc_get(&s.desc, f) != rows[i].def) {
+            snprintf(msg, sizeof msg, "zero %s opens as %g, def is %g", f->name,
+                     ptc_get(&s.desc, f), rows[i].def);
+            fail(__LINE__, msg);
+        }
+        /* And def itself runs the same staircase as the zero. */
+        {
+            double a[40], b[40];
+            int t;
+            param_run(&d, a, 40);
+            ptc_set(&d, f, rows[i].def);
+            param_run(&d, b, 40);
+            for (t = 0; t < 40; t++)
+                if (a[t] != b[t]) {
+                    snprintf(msg, sizeof msg, "%s = 0 and %s = def differ at trial %d", f->name, f->name, t);
+                    fail(__LINE__, msg);
+                    break;
+                }
+        }
+    }
+    {
+        int m = -1;
+        CHECK(yst_params(NULL) == p);
+        yst_params(&m);
+        CHECK_I(m, n);
+    }
+}
+#undef NF
+
+/* ------------------------------------------------------- snapshots (v0.3) */
+
+/* A response for trial t of stream `seed`: a fixed, irregular pattern. */
+static int snap_resp(int seed, int t) {
+    unsigned x = (unsigned)(seed * 2654435761u) ^ (unsigned)(t * 40503u + 977u);
+    x ^= x >> 13;
+    x *= 0x5bd1e995u;
+    x ^= x >> 15;
+    return (x % 100u) < 62u;
+}
+
+/* The shown level is not always the proposal: every fifth trial shows a
+ * quantized one, which the snapshot must carry as recorded. */
+static double snap_shown(const yst_stair* s, int t) {
+    double x = yst_next(s);
+    return (t % 5 == 4) ? floor(x * 64.0 + 0.5) / 64.0 + 1.0 / 128.0 : x;
+}
+
+static void snap_run(yst_stair* s, int seed, int from, int to) {
+    int t;
+    for (t = from; t < to; t++) {
+        int rc = yst_update(s, snap_shown(s, t), snap_resp(seed, t));
+        if (rc < 0 && rc != YST_ERR_FULL) fail(__LINE__, yst_error(s));
+    }
+}
+
+static unsigned char g_snap_a[64 * 1024], g_snap_b[64 * 1024];
+
+static void snap_case(const char* name, const yst_desc* d, int seed, int n) {
+    static yst_stair ref, cut, res;
+    static const int cuts[] = { 0, 1, 2, 7, 23, 64, 127, 128, 200 };
+    int c, la, lb;
+    char msg[400];
+    if (!yst_open(&ref, d)) { fail(__LINE__, yst_error(&ref)); return; }
+    snap_run(&ref, seed, 0, n);
+    la = yst_save(&ref, g_snap_a, sizeof g_snap_a);
+    CHECK(la > 0 && (size_t)la == yst_save_size(&ref));
+    for (c = 0; c < (int)(sizeof cuts / sizeof cuts[0]); c++) {
+        int k = cuts[c], len, i;
+        if (k > n) continue;
+        if (!yst_open(&cut, d)) { fail(__LINE__, yst_error(&cut)); return; }
+        snap_run(&cut, seed, 0, k);
+        len = yst_save(&cut, g_snap_b, sizeof g_snap_b);
+        yst_close(&cut);
+        /* The resumed handle starts as garbage: a load owes nothing to what
+         * the handle held. */
+        memset(&res, 0xA5, sizeof res);
+        if (len < 0 || !yst_open_saved(&res, d, g_snap_b, (size_t)len)) {
+            snprintf(msg, sizeof msg, "%s: load at %d: %s", name, k, yst_error(&res));
+            fail(__LINE__, msg);
+            continue;
+        }
+        CHECK(yst_error(&res)[0] == '\0');
+        CHECK_I(yst_n_trials(&res), k < YST_MAX_TRIALS ? k : YST_MAX_TRIALS);
+        snap_run(&res, seed, k, n);
+        lb = yst_save(&res, g_snap_b, sizeof g_snap_b);
+        if (lb != la || memcmp(g_snap_a, g_snap_b, (size_t)la) != 0) {
+            snprintf(msg, sizeof msg, "%s: resumed at %d, the final snapshot differs", name, k);
+            fail(__LINE__, msg);
+        }
+        for (i = YST_EST_REVERSALS; i <= YST_EST_LAST; i++) {
+            double ea = yst_estimate(&ref, (yst_estimator)i), eb = yst_estimate(&res, (yst_estimator)i);
+            CHECK((is_nan(ea) && is_nan(eb)) || ea == eb);
+        }
+        CHECK(yst_next(&res) == yst_next(&ref));
+        CHECK(yst_stop_reason(&res) == yst_stop_reason(&ref));
+        /* The handles themselves, not only the bytes the same writer makes
+         * of them: a field the writer loses would be lost from both. */
+        {
+            int na = 0, nb = 0, t;
+            const yst_trial* ha = yst_history(&ref, &na);
+            const yst_trial* hb = yst_history(&res, &nb);
+            CHECK_I(nb, na);
+            for (t = 0; t < na && t < nb; t++)
+                if (ha[t].proposed != hb[t].proposed || ha[t].shown != hb[t].shown ||
+                    ha[t].response != hb[t].response || ha[t].reversal != hb[t].reversal ||
+                    ha[t].direction != hb[t].direction || ha[t].step_index != hb[t].step_index) {
+                    snprintf(msg, sizeof msg, "%s: resumed at %d, trial %d differs", name, k, t);
+                    fail(__LINE__, msg);
+                    break;
+                }
+            CHECK_I(yst_n_reversals(&res), yst_n_reversals(&ref));
+            for (t = 0; t < yst_n_reversals(&ref) && t < YST_MAX_REVERSALS; t++)
+                CHECK(yst_reversal_level(&res, t) == yst_reversal_level(&ref, t) &&
+                      yst_reversal_trial(&res, t) == yst_reversal_trial(&ref, t));
+            CHECK(res.level == ref.level && res.run_correct == ref.run_correct &&
+                  res.run_incorrect == ref.run_incorrect && res.direction == ref.direction &&
+                  res.step_index == ref.step_index && res.at_limit_run == ref.at_limit_run);
+        }
+        yst_close(&res);
+    }
+    yst_close(&ref);
+}
+
+static void test_snapshot_resume(void) {
+    yst_desc d;
+
+    /* 1-up-3-down in log10 units with a schedule, limits and the initial rule. */
+    memset(&d, 0, sizeof d);
+    d.start = 0.5;
+    d.n_down = 3;
+    d.step_type = YST_STEP_LOG;
+    d.steps[0] = 0.3; d.steps[1] = 0.15; d.steps[2] = 0.075;
+    d.n_steps = 3;
+    d.min = 0.01; d.max = 1.0;
+    d.initial_rule = true;
+    d.stop_reversals = 12;
+    snap_case("log 1u3d", &d, 1, 90);
+
+    /* Weighted 1-up-1-down in dB, harder is up. */
+    memset(&d, 0, sizeof d);
+    d.start = 2.0;
+    d.step_type = YST_STEP_DB;
+    d.steps[0] = 2.0;
+    d.n_steps = 1;
+    d.step_down_scale = yst_weighted_scale(0.75);
+    d.harder_is_up = true;
+    d.stop_trials = 60;
+    snap_case("weighted dB", &d, 2, 60);
+
+    /* ASA, linear. */
+    memset(&d, 0, sizeof d);
+    d.rule = YST_RULE_ASA;
+    d.start = 5.0;
+    d.steps[0] = 2.0;
+    d.n_steps = 1;
+    d.target_p = 0.8;
+    d.stop_trials = 50;
+    snap_case("asa", &d, 3, 50);
+
+    /* Past the reversal record and past the trial cap: 1-up-1-down at a
+     * real 0 bound, run beyond YST_MAX_TRIALS so the last cuts load a full
+     * staircase. */
+    memset(&d, 0, sizeof d);
+    d.start = 3.0;
+    d.steps[0] = 1.0;
+    d.n_steps = 1;
+    d.use_limits = true;
+    d.min = 0.0; d.max = 6.0;
+    d.stop_at_limit = 9;
+    d.stop_trials = YST_MAX_TRIALS;
+    snap_case("full", &d, 4, YST_MAX_TRIALS + 20);
+}
+
+/* Put a little-endian i32 at `at`. */
+static void put_i32_at(unsigned char* b, size_t at, int v) {
+    unsigned u = (unsigned)v;
+    b[at] = (unsigned char)u; b[at + 1] = (unsigned char)(u >> 8);
+    b[at + 2] = (unsigned char)(u >> 16); b[at + 3] = (unsigned char)(u >> 24);
+}
+
+static void expect_refused(int line, const yst_desc* d, const unsigned char* b, size_t len,
+                           const char* says) {
+    static yst_stair s;
+    if (yst_open_saved(&s, d, b, len)) { fail(line, "a bad snapshot loaded"); return; }
+    if (yst_is_open(&s)) fail(line, "a failed load left the handle open");
+    if (says && !strstr(yst_error(&s), says)) fail(line, yst_error(&s));
+}
+
+static void test_snapshot_refusals(void) {
+    static yst_stair s, t;
+    yst_desc d, e;
+    int len, i, loaded = 0, refused = 0;
+    size_t at_n;
+
+    base_desc(&d);
+    d.stop_trials = 30;
+    d.n_up = 1;             /* folds to the same as 0 */
+    CHECK(yst_save_size(&s) == 0);     /* zeroed */
+    CHECK_I(yst_save(&s, g_snap_a, sizeof g_snap_a), YST_ERR_CLOSED);
+    CHECK_I(yst_save(NULL, g_snap_a, sizeof g_snap_a), YST_ERR_ARG);
+    if (!yst_open(&s, &d)) { fail(__LINE__, yst_error(&s)); return; }
+    snap_run(&s, 9, 0, 20);
+    len = yst_save(&s, g_snap_a, sizeof g_snap_a);
+    CHECK(len > 0);
+    CHECK_I(len, 143 + 20 * 20 + 12 * yst_n_reversals(&s));   /* the manual's sizes */
+    CHECK_I(yst_save(&s, g_snap_b, (size_t)len - 1), YST_ERR_ARG);
+    CHECK_I(yst_save(&s, NULL, sizeof g_snap_b), YST_ERR_ARG);
+    CHECK_I(yst_save(&s, g_snap_b, (size_t)len), len);
+    if (len <= 0) return;
+
+    /* A desc that folds to the same staircase loads; one that does not is
+     * named. */
+    e = d;
+    e.n_up = 0;
+    CHECK(yst_open_saved(&t, &e, g_snap_a, (size_t)len));
+    e.stop_trials = 31;
+    expect_refused(__LINE__, &e, g_snap_a, (size_t)len, "desc.stop_trials does not match");
+    e = d;
+    e.steps[0] = 1.5;
+    expect_refused(__LINE__, &e, g_snap_a, (size_t)len, "desc.steps does not match");
+    expect_refused(__LINE__, NULL, g_snap_a, (size_t)len, "null desc");
+    expect_refused(__LINE__, &d, NULL, (size_t)len, "null snapshot");
+
+    /* Every truncation, and a byte past the end. */
+    for (i = 0; i < len; i++) expect_refused(__LINE__, &d, g_snap_a, (size_t)i, NULL);
+    memcpy(g_snap_b, g_snap_a, (size_t)len);
+    g_snap_b[len] = 0;
+    expect_refused(__LINE__, &d, g_snap_b, (size_t)len + 1, "after the snapshot's end");
+    g_snap_b[0] = 'X';
+    expect_refused(__LINE__, &d, g_snap_b, (size_t)len, "not a ysp_stair snapshot");
+    memcpy(g_snap_b, g_snap_a, (size_t)len);
+    g_snap_b[4] = 2;
+    expect_refused(__LINE__, &d, g_snap_b, (size_t)len, "format");
+
+    /* The counters sit right after the desc: 8 + the desc's bytes. */
+    at_n = 8 + 8 + 4 * 5 + 8 * (size_t)d.n_steps + 8 * 4 + 3 + 4 * 5;
+    memcpy(g_snap_b, g_snap_a, (size_t)len);
+    put_i32_at(g_snap_b, at_n, YST_MAX_TRIALS + 1);
+    expect_refused(__LINE__, &d, g_snap_b, (size_t)len, "YST_MAX_TRIALS");
+    memcpy(g_snap_b, g_snap_a, (size_t)len);
+    put_i32_at(g_snap_b, at_n + 4, 21);      /* more reversals than trials */
+    expect_refused(__LINE__, &d, g_snap_b, (size_t)len, "counters");
+    memcpy(g_snap_b, g_snap_a, (size_t)len);
+    put_i32_at(g_snap_b, at_n + 20, 1);      /* step_index past n_steps */
+    expect_refused(__LINE__, &d, g_snap_b, (size_t)len, "counters");
+    /* The level, then the first trial: proposed, shown, response, reversal,
+     * direction, step_index. */
+    memcpy(g_snap_b, g_snap_a, (size_t)len);
+    memset(g_snap_b + at_n + 32, 0xff, 8);   /* a NaN level */
+    expect_refused(__LINE__, &d, g_snap_b, (size_t)len, "counters");
+    memcpy(g_snap_b, g_snap_a, (size_t)len);
+    g_snap_b[at_n + 40 + 16] = 2;            /* a response of 2 */
+    expect_refused(__LINE__, &d, g_snap_b, (size_t)len, "history");
+    memcpy(g_snap_b, g_snap_a, (size_t)len);
+    g_snap_b[at_n + 40 + 18] = 2;            /* a direction of 2 */
+    expect_refused(__LINE__, &d, g_snap_b, (size_t)len, "history");
+    memcpy(g_snap_b, g_snap_a, (size_t)len);
+    memset(g_snap_b + at_n + 40 + 8, 0xff, 8); /* a NaN shown level */
+    expect_refused(__LINE__, &d, g_snap_b, (size_t)len, "history");
+    CHECK(yst_n_reversals(&s) > 0);
+    memcpy(g_snap_b, g_snap_a, (size_t)len);
+    put_i32_at(g_snap_b, at_n + 40 + 20 * (size_t)yst_n_trials(&s) + 4 + 8, yst_n_trials(&s));
+    expect_refused(__LINE__, &d, g_snap_b, (size_t)len, "reversals");   /* a trial past the end */
+    /* The reversal count field is the last i32 before the reversals. */
+    memcpy(g_snap_b, g_snap_a, (size_t)len);
+    put_i32_at(g_snap_b, at_n + 40 + 20 * (size_t)yst_n_trials(&s), yst_n_reversals(&s) + 1);
+    expect_refused(__LINE__, &d, g_snap_b, (size_t)len, "YST_MAX_REVERSALS");
+
+    /* Every single-bit flip either loads or is refused with the handle
+     * closed and a message; none may crash or leave a half-open handle. */
+    for (i = 0; i < len * 8; i++) {
+        memcpy(g_snap_b, g_snap_a, (size_t)len);
+        g_snap_b[i / 8] ^= (unsigned char)(1u << (i % 8));
+        if (yst_open_saved(&t, &d, g_snap_b, (size_t)len)) {
+            loaded++;
+            CHECK(yst_error(&t)[0] == '\0');
+            (void)yst_next(&t);
+            (void)yst_estimate(&t, YST_EST_MEDIAN_REV);
+        } else {
+            refused++;
+            CHECK(!yst_is_open(&t) && yst_error(&t)[0] != '\0');
+        }
+    }
+    CHECK(refused > 0 && loaded > 0);
+    yst_close(&s);
+    yst_close(&t);
+}
+
 /* -------------------------------------------------------------------- main */
 
 /* The version macros agree with each other and with the implementation. */
@@ -901,7 +1268,7 @@ static void test_version(void) {
     CHECK(strcmp(yst_version(), YST_VERSION_STRING) == 0);
     /* Pinned, and compared at run time: a constant condition is MSVC's C4127,
      * and the string from the implementation is the thing worth pinning. */
-    CHECK(strcmp(yst_version(), "0.2.0") == 0);
+    CHECK(strcmp(yst_version(), "0.3.0") == 0);
 }
 
 int main(void) {
@@ -921,6 +1288,9 @@ int main(void) {
     test_closed_and_bad_args();
     test_bad_descs();
     test_simulation();
+    test_params();
+    test_snapshot_resume();
+    test_snapshot_refusals();
 
     if (g_failures != 0) {
         fprintf(stderr, "stair_test: %d check(s) failed\n", g_failures);

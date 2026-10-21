@@ -1,0 +1,75 @@
+# ysp/quest.h mutants: the v0.7.0 parameter table (yqst_params). Mutant 00
+# is a control with no effect; it must survive.
+header = "ysp/quest.h"
+
+[test.quest]
+source = "tests/adapt/quest_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O2", "-w"]
+libs = ["-lm"]
+timeout = 300
+
+[[mutant]]
+id = "00"
+name = "control: no change (must pass)"
+test = "quest"
+expect = "survived"
+why = "Control: a change with no effect. The test must pass, so a failure here means the setup is wrong, not the header."
+find = '#define YQST_VERSION_PATCH  0'
+replace = '#define YQST_VERSION_PATCH  0 '
+
+[[mutant]]
+id = "01"
+name = "params: tie_tolerance's default 0"
+test = "quest"
+why = "A designer would show 0 bits, and a loader writing defaults would turn tie breaking off."
+find = '''    { "tie_tolerance", "f64", 0, DBL_MAX, 1e-9, "bit",'''
+replace = '''    { "tie_tolerance", "f64", 0, DBL_MAX, 0, "bit",'''
+
+[[mutant]]
+id = "02"
+name = "params: pf lists five of its six values"
+test = "quest"
+why = "A loader would refuse \"custom\", a model the header has."
+find = '"gumbel=0,weibull=1,logistic=2,normal=3,hypsec=4,custom=5" },'
+replace = '"gumbel=0,weibull=1,logistic=2,normal=3,hypsec=4" },'
+
+[[mutant]]
+id = "03"
+name = "params: tiebreak values out of order"
+test = "quest"
+why = "A definition's \"nearest\" would run the alternate rule."
+find = '"lowest=0,nearest=1,alternate=2,random=3" },'
+replace = '"lowest=0,alternate=1,nearest=2,random=3" },'
+
+[[mutant]]
+id = "04"
+name = "params: no_table has no row"
+test = "quest"
+why = "A loader that checks keys against the table would refuse a field the header has."
+find = '''    { "no_table", "bool", 0, 1, 0, "",'''
+replace = '''    { "no_tables", "bool", 0, 1, 0, "",'''
+
+[[mutant]]
+id = "05"
+name = "params: n_outcomes' default 0"
+test = "quest"
+why = "A built-in model has 2 outcomes; a designer would show 0."
+find = '''    { "n_outcomes", "i32", 0, YQST_MAX_OUTCOMES, 2, "",'''
+replace = '''    { "n_outcomes", "i32", 0, YQST_MAX_OUTCOMES, 0, "",'''
+
+[[mutant]]
+id = "06"
+name = "params: stim[].n not marked required"
+test = "quest"
+why = "A designer would offer 0 points, which open() refuses."
+find = '''"required: a stimulus axis's points; the product over axes is at most 2^31 - 1", NULL },'''
+replace = '''"a stimulus axis's points; the product over axes is at most 2^31 - 1", NULL },'''
+
+[[mutant]]
+id = "07"
+name = "params: select_quantile's default 0"
+test = "quest"
+why = "QUEST's placement is the posterior median by default; a designer would show 0."
+find = '''    { "select_quantile", "f64", 0, 1, 0.5, "",'''
+replace = '''    { "select_quantile", "f64", 0, 1, 0, "",'''

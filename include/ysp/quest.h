@@ -1,4 +1,4 @@
-/* ysp/quest.h - v0.6.0 - public domain single-header Bayesian adaptive library
+/* ysp/quest.h - v0.7.0 - public domain single-header Bayesian adaptive library
  *
  *   Parametric Bayesian adaptive estimation on a grid: QUEST+ (Watson 2017),
  *   which contains QUEST (Watson & Pelli 1983), the Psi method (Kontsevich
@@ -661,7 +661,7 @@
  *   LAYOUT, format 1. Every integer is little-endian two's complement, written
  *   and read one byte at a time, so a snapshot moves between compilers and
  *   platforms; an f64 is the IEEE 754 bit pattern as a u64.
- *     magic     4 bytes "YQST", then u32 format (1)
+ *     magic     4 bytes "PSYQ", then u32 format (1)
  *     desc      i32 n_stim; per stimulus axis i32 n and n f64 points;
  *               i32 n_param; per parameter axis i32 n, u8 nuisance and n
  *               f64 points; i32 pf, u8 model kind (0 built-in, 1 pf_fn,
@@ -684,6 +684,31 @@
  *   Under YQST_ASYNC the handle belongs to the thread between
  *   yqst_async_open() and yqst_async_close(), so save after the close, and
  *   open a new async session on the handle yqst_open_saved() rebuilt.
+ *
+ *   ---------------------------------------------------------------------
+ *   PARAMETERS
+ *   ---------------------------------------------------------------------
+ *   yqst_params() lists every yqst_desc field that an experiment definition
+ *   or a designer sets (rig_spec principle 8), in the shape ysp/stair.h and
+ *   ysp/aep.h use: name, type, inclusive range, the value a zero field
+ *   means, unit, a line of text, and an enum's values.
+ *     name    the desc field; "a.b" is member b of a, and "a[].b" is
+ *             member b of each element of the array a ("stim[].lo" is the
+ *             lo of every stimulus axis, n_stim of them)
+ *     type    "i32", "f64", "bool", "enum", or an array of one of them
+ *             ("f64[]"): an axis's explicit points and a parameter axis's
+ *             prior have n entries, joint_prior has one per point of the
+ *             parameter grid (P), in LAYOUT order
+ *     def     what a zero field means when every other field is at its
+ *             default; a required field has 0, which can be outside
+ *             [min, max], and its doc starts with "required"
+ *     values  for an "enum", "name=value" pairs joined by ',' in value
+ *             order, the C enum's suffix in lower case; NULL otherwise
+ *   The pointers that a definition cannot hold are not rows: pf_fn,
+ *   pf_batch and pf_ctx (a custom model is the program's), rng and rng_ctx
+ *   (the player's generator), memory and memory_size. A row's doc says when
+ *   a value needs one of them (YQST_PF_CUSTOM, YQST_TIE_RANDOM,
+ *   subset_size). The table is static and the same for every handle.
  *
  *   ---------------------------------------------------------------------
  *   ASYNC (YQST_ASYNC)
@@ -831,6 +856,11 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.7.0 - yqst_params(), the table of the desc's fields for a loader's
+ *          key check and a designer's panel (gap G6 of
+ *          docs/experiment_format.md); see PARAMETERS. Adds API; changes
+ *          none. SNAPSHOTS gave the magic as "YQST"; the code has always
+ *          written "PSYQ", and the manual now says so. No number changed.
  *   v0.6.0 - the repository conventions (README.md, Conventions). Breaks
  *          the API: yqst_async_start() / yqst_async_stop() are
  *          yqst_async_open() / yqst_async_close(), yqst_load() is
@@ -966,7 +996,8 @@
  *            - RETURN VALUES AND ERRORS now lists every desc open() refuses.
  *   v0.0 - specification. Declarations and the manual, no implementation.
  *
- *   STATUS: v0.6.0. Implemented and tested against an independent
+ *   STATUS: v0.7.0 (its check is at the end of this section). Implemented
+ *   and tested against an independent
  *   double-precision reference written from the definitions in
  *   tests/adapt/quest_test.c: 14770 checks over the posterior update, the
  *   expected-entropy selection (joint and marginalized over nuisance axes),
@@ -1014,6 +1045,17 @@
  *   handle-changing calls leave and yqst_close() on a zeroed handle, after a
  *   failed open and twice; the counts above are v0.5.2's.
  *
+ *   v0.7.0 on 2026-10-21 (MSVC 19.44 /W4 /WX as C and C++17 with and without
+ *   YQST_ASYNC, MinGW-w64 gcc 16.1 -Werror, WSL2 gcc 11.4 under
+ *   -fsanitize=address,undefined, emcc): 14833 checks without YQST_ASYNC
+ *   and 15184 with it (emcc). The new ones check every row of yqst_params()
+ *   against the desc field it names (by offsetof), each enum's values
+ *   against the C enum, and each zero field against def, as open() resolves
+ *   it and as a 20-trial run, under QUEST+ and under QUEST's quantile
+ *   placement; and the snapshot's magic. 7 of 7 mutants killed
+ *   (tests/mutate/quest.toml). tests/fuzz/adapt_fuzz.c now feeds the
+ *   snapshot reader; docs/adapt.md has its run.
+ *
  *   Clean under gcc 11.4 -fsanitize=address,undefined, and with YQST_ASYNC
  *   also under -fsanitize=thread. Compiles and runs warning-free as C99, C11
  *   and C++17 under gcc 11.4 with -Wall -Wextra -Wpedantic -Wshadow -Werror,
@@ -1057,9 +1099,9 @@
 /* The version of this header, for a log line or a compile-time check. The
  * string is the three numbers, and the test asserts that it stays so. */
 #define YQST_VERSION_MAJOR  0
-#define YQST_VERSION_MINOR  6
+#define YQST_VERSION_MINOR  7
 #define YQST_VERSION_PATCH  0
-#define YQST_VERSION_STRING "0.6.0"
+#define YQST_VERSION_STRING "0.7.0"
 
 /* The one optional dependency, and it comes FIRST: ysp/rt.h sets a
  * feature-test macro for the Linux clock calls and can only do that before the
@@ -1447,6 +1489,24 @@ YQST_API const yqst_trial* yqst_history(const yqst_quest* q, int* n);
 YQST_API size_t yqst_save_size(const yqst_quest* q);
 YQST_API int    yqst_save(const yqst_quest* q, void* buf, size_t cap);
 YQST_API bool   yqst_open_saved(yqst_quest* q, const yqst_desc* desc, const void* buf, size_t len);
+
+/* --- parameters -------------------------------------------------------- */
+
+/* One settable yqst_desc field. PARAMETERS in the manual gives the rules;
+ * ysp/stair.h and ysp/aep.h have tables of the same shape. */
+typedef struct yqst_param {
+    const char* name;    /* the desc field; "a.b" a member, "a[]" an array   */
+    const char* type;    /* "i32", "f64", "bool", "enum", "f64[]"            */
+    double      min, max;/* inclusive                                        */
+    double      def;     /* the value a zero field means                     */
+    const char* unit;    /* "bit", or "" for the caller's units or a count   */
+    const char* doc;
+    const char* values;  /* "enum": "name=value,..." in value order; NULL    */
+} yqst_param;
+
+/* The table of desc fields a definition or a designer sets; *n gets the
+ * count. Static: the pointer stays valid for the life of the program. */
+YQST_API const yqst_param* yqst_params(int* n);
 
 /* --- async ------------------------------------------------------------- *
  *  Compiled only under YQST_ASYNC. See ASYNC in the manual.
@@ -3488,6 +3548,82 @@ YQST_API bool yqst_open_saved(yqst_quest* q, const yqst_desc* desc, const void* 
     }
     q->error[0] = '\0';
     return true;
+}
+
+/* ======================================================================= *
+ *  PARAMETERS
+ *
+ *  The ranges are what yqst_open() accepts on its own; a field another
+ *  field bounds (select_param below n_param) gives the widest range and
+ *  says the rest in its doc.
+ * ======================================================================= */
+
+static const yqst_param yqst__params[] = {
+    { "n_stim", "i32", 1, YQST_MAX_STIM_DIMS, 0, "",
+      "required: stimulus dimensions, the entries of stim", NULL },
+    { "stim[].values", "f64[]", -DBL_MAX, DBL_MAX, 0, "",
+      "a stimulus axis's points, n of them, finite; empty = linspace(lo, hi, n)", NULL },
+    { "stim[].lo", "f64", -DBL_MAX, DBL_MAX, 0, "",
+      "first point of a linspace stimulus axis", NULL },
+    { "stim[].hi", "f64", -DBL_MAX, DBL_MAX, 0, "",
+      "last point of a linspace stimulus axis", NULL },
+    { "stim[].n", "i32", 1, 2147483647.0, 0, "",
+      "required: a stimulus axis's points; the product over axes is at most 2^31 - 1", NULL },
+    { "n_param", "i32", 1, YQST_MAX_PARAMS, 0, "",
+      "required: parameter dimensions, the entries of param; 4 for a built-in pf "
+      "(threshold, slope, guess, lapse)", NULL },
+    { "param[].values", "f64[]", -DBL_MAX, DBL_MAX, 0, "",
+      "a parameter axis's points, n of them, finite; empty = linspace(lo, hi, n)", NULL },
+    { "param[].lo", "f64", -DBL_MAX, DBL_MAX, 0, "",
+      "first point of a linspace parameter axis", NULL },
+    { "param[].hi", "f64", -DBL_MAX, DBL_MAX, 0, "",
+      "last point of a linspace parameter axis", NULL },
+    { "param[].n", "i32", 1, 2147483647.0, 0, "",
+      "required: a parameter axis's points; 1 fixes the parameter", NULL },
+    { "param[].prior", "f64[]", 0, DBL_MAX, 0, "",
+      "n unnormalized weights over the axis's points, not all 0; empty = uniform", NULL },
+    { "param[].nuisance", "bool", 0, 1, 0, "",
+      "marginalize the parameter out of the selection entropy and the stop criteria", NULL },
+    { "joint_prior", "f64[]", 0, DBL_MAX, 0, "",
+      "P unnormalized weights over the whole parameter grid in LAYOUT order, not "
+      "all 0; empty = the product of the axes' priors", NULL },
+    { "pf", "enum", 0, 5, 0, "",
+      "psychometric function; custom needs the program's pf_fn or pf_batch",
+      "gumbel=0,weibull=1,logistic=2,normal=3,hypsec=4,custom=5" },
+    { "n_outcomes", "i32", 0, YQST_MAX_OUTCOMES, 2, "",
+      "response outcomes; a built-in pf takes 0 or 2, a custom pf needs 2 or more", NULL },
+    { "select", "enum", 0, 3, 0, "",
+      "stimulus selection: minimum expected entropy (QUEST+), or the posterior "
+      "quantile (QUEST), mean or mode of parameter select_param",
+      "entropy=0,quantile=1,mean=2,mode=3" },
+    { "select_param", "i32", 0, YQST_MAX_PARAMS - 1, 0, "",
+      "the parameter quantile, mean and mode select on; below n_param", NULL },
+    { "select_quantile", "f64", 0, 1, 0.5, "",
+      "the posterior quantile the quantile rule places at, in (0, 1)", NULL },
+    { "tiebreak", "enum", 0, 3, 0, "",
+      "stimulus among scores within tie_tolerance; random needs the player's generator",
+      "lowest=0,nearest=1,alternate=2,random=3" },
+    { "tie_tolerance", "f64", 0, DBL_MAX, 1e-9, "bit",
+      "scores this close to the best are ties", NULL },
+    { "subset_size", "i32", 0, 2147483647.0, 0, "",
+      "score this many random stimuli a trial; 0 = all; needs the player's generator", NULL },
+    { "stop_trials", "i32", 0, 2147483647.0, 0, "",
+      "stop after this many trials; 0 = off (set a stop criterion)", NULL },
+    { "stop_entropy", "f64", 0, DBL_MAX, 0, "bit",
+      "stop when the posterior entropy is below this; 0 = off", NULL },
+    { "stop_sd", "f64", 0, DBL_MAX, 0, "",
+      "stop when the posterior sd of parameter stop_sd_param, in its units, is below "
+      "this; 0 = off", NULL },
+    { "stop_sd_param", "i32", 0, YQST_MAX_PARAMS - 1, 0, "",
+      "the parameter stop_sd watches; below n_param", NULL },
+    { "no_table", "bool", 0, 1, 0, "",
+      "evaluate the pf every trial instead of keeping its table: less memory, a "
+      "slower trial", NULL },
+};
+
+YQST_API const yqst_param* yqst_params(int* n) {
+    if (n) *n = (int)(sizeof yqst__params / sizeof yqst__params[0]);
+    return yqst__params;
 }
 
 /* ======================================================================= *

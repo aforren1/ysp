@@ -198,6 +198,7 @@ Purpose: Adaptive staircases: transformed and weighted up/down, accelerated stoc
 
 Status:
 
+- v0.3.0 (2026-10-21): `yst_save()` and `yst_open_saved()` ([experiment_format.md](experiment_format.md) gap G12) and `yst_params()` (G6). Sessions cut at up to nine points in four configurations resume to the uninterrupted runs byte for byte; every truncation and every crafted bad field refused; 16 of 16 mutations caught; 747,740 fuzz inputs over the three methods' readers, no finding in stair's. [Design notes](adapt.md#parameter-tables-and-the-staircase-snapshot-stair-v030-quest-v070-aep-v0160).
 - v0.2.0 (the [Conventions](conventions.md): `yst_close()`, a failed `yst_update()` leaves a message, C++17-clean USAGE).
 - v0.1.2. Hand-derived tracks and a simulated observer in [tests/adapt/](../tests/adapt/); gcc and MSVC, sanitizer clean; replays PsychoPy's StairHandler and Palamedes' PAL_AMUD trial for trial ([tests/compare/](../tests/compare/)). [Design notes](adapt.md), [comparison of the methods](adapt_comparison.md).
 
@@ -212,6 +213,7 @@ Purpose: QUEST+ on a grid, with QUEST, Psi and Psi-marginal as configurations; b
 
 Status:
 
+- v0.7.0 (2026-10-21): `yqst_params()` (gap G6), every row checked against the desc field it names and every zero against its default; 7 of 7 mutations caught; the snapshot reader fuzzed, no finding. The manual's snapshot magic corrected to `PSYQ`. [Design notes](adapt.md#parameter-tables-and-the-staircase-snapshot-stair-v030-quest-v070-aep-v0160).
 - v0.6.0 (the [Conventions](conventions.md): `yqst_async_open()`/`_close()`, `yqst_open_saved()`, an `int64_t` wait timeout, messages from the handle-changing calls).
 - v0.5.2. Snapshots the size of the posterior, byte-identical between gcc and MSVC; 14770 checks against an independent reference; a Psi-marginal selection in about 1 ms; gcc and MSVC, sanitizer and ThreadSanitizer clean; identical selections to questplus on 180 of 180 trials, to Watson's own QUEST+ notebook on all 17 of its saved runs, to mQUESTPlus on 424 of 424 (ties included) and to Palamedes' PAL_AMPM ([tests/compare/](../tests/compare/)). [Design notes](adapt.md), [comparison of the methods](adapt_comparison.md).
 
@@ -226,6 +228,7 @@ Purpose: Gaussian-process adaptive estimation (the AEPsych feature set and Keele
 
 Status:
 
+- v0.16.0 (2026-10-21): `yaep_params()` (gap G6), 363 zero-against-default session comparisons over 83 rows; `yaep_open_saved()` refuses a recorded outcome outside the likelihood's, which the new fuzz target found reading outside the cutpoints (747,740 inputs since, no finding); 9 of 9 mutations caught. [Design notes](adapt.md#parameter-tables-and-the-staircase-snapshot-stair-v030-quest-v070-aep-v0160).
 - v0.15.0 (the [Conventions](conventions.md): `yaep_async_open()`/`_close()`, `yaep_open_saved()`, an `int64_t` wait timeout, messages from the handle-changing calls).
 - v0.14.1. Two-latent psychometric model, optimization and pairwise acquisitions, mixed parameters, monotonic projection, conjugate-gradient updates past 512 trials and, opt-in, in the fits; runtime priors; snapshots. Numerics checked against dense references; the Owen et al. 2021 audiometric benchmark reproduced by [aep_audiometric](../examples/aep/audiometric.c) and run beside AEPsych on one response stream, where it matches or beats AEPsych's threshold error with EAVC and BALV and halves its field error ([tests/compare/](../tests/compare/)); gcc and MSVC, sanitizer clean. [Design notes](adapt.md), [comparison of the methods](adapt_comparison.md).
 

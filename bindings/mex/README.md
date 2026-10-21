@@ -432,6 +432,8 @@ schedule), `step_down_scale`, `target_p`, `min`, `max`, `use_limits`,
 | `'history', h` | struct of n x 1 columns | `proposed`, `shown`, `response`, `reversal`, `direction`, `step_index` (1-based into `steps`) |
 | `'reversal_level', h [, i]` | double or column | the level of reversal `i`, or of every recorded reversal |
 | `'reversal_trial', h [, i]` | double or column | the 1-based trial of reversal `i`, or of every one |
+| `'save', h` | `uint8` row | |
+| `'load', bytes, desc` | handle | resumes without replaying the updates |
 | `'close', h` | none | |
 | `'weighted_scale', p` | double | `(1 - p) / p` |
 | `'convergence_p', n_up, n_down [, scale]` | double | NaN when both counts are above 1 |
@@ -803,15 +805,12 @@ The resumed session makes the same proposals and has the same posterior as
 the session that was not interrupted. This is also true when a proposal was
 pending at the save. The desc must agree with the snapshot on every number.
 A mismatch raises `ysp_quest:load` with the header's message, which names
-the first field that differs. The same steps apply to `ysp_aep` and
-`ysp_trials`. With a function-handle generator, save and restore its state
-yourself.
+the first field that differs. The same steps apply to `ysp_stair`,
+`ysp_aep` and `ysp_trials`. A staircase has no generator. With a
+function-handle generator, save and restore its state yourself.
 
-A `ysp_trials` session with tracks also needs the state of each track.
-`ysp_stair` has no snapshot: open each staircase again with its desc, and
-replay its `history` (`shown`, `response`) through `update`. A staircase is
-deterministic, so the replay restores it exactly. `ysp_quest` and `ysp_aep`
-tracks have their own `save`.
+A `ysp_trials` session with tracks also needs the state of each track:
+`ysp_stair`, `ysp_quest` and `ysp_aep` tracks have their own `save`.
 
 With an async session, stop it first (`async_stop`), then save.
 

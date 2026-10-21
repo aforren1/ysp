@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ysp-stair"
-version = "0.2.0"  # must equal ysp/stair.h's YST_VERSION_STRING; tests/test_stair.py checks it
+version = "0.3.0"  # must equal ysp/stair.h's YST_VERSION_STRING; tests/test_stair.py checks it
 description = "Adaptive staircases (up/down, weighted, ASA) for psychophysics"
 readme = "README.md"
 requires-python = ">=3.8"

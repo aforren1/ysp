@@ -9,6 +9,9 @@
  *   cc -O2 -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Werror -Iinclude \
  *      -o aep_test tests/adapt/aep_test.c -lm && ./aep_test
  */
+#if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_WARNINGS)
+#define _CRT_SECURE_NO_WARNINGS   /* getenv, for YAEP_TEST_ONLY */
+#endif
 #define YSP_AEP_IMPLEMENTATION
 #include "ysp/aep.h"
 
@@ -137,8 +140,8 @@ static void test_version(void) {
     char buf[32];
     snprintf(buf, sizeof(buf), "%d.%d.%d", YAEP_VERSION_MAJOR,
              YAEP_VERSION_MINOR, YAEP_VERSION_PATCH);
-    CHECK(strcmp(yaep_version(), "0.15.0") == 0,
-          "yaep_version() is %s, expected 0.15.0", yaep_version());
+    CHECK(strcmp(yaep_version(), "0.16.0") == 0,
+          "yaep_version() is %s, expected 0.16.0", yaep_version());
     CHECK(strcmp(yaep_version(), YAEP_VERSION_STRING) == 0,
           "yaep_version() %s disagrees with YAEP_VERSION_STRING %s",
           yaep_version(), YAEP_VERSION_STRING);
@@ -4487,9 +4490,310 @@ static void test_memory_alignment(void) {
            "  every outcome slot written (%d differences, %d unwritten)\n", bad, unwritten);
 }
 
+/* --- parameter table (v0.16.0) ------------------------------------------- */
+
+#include "param_table_check.h"
+
+static void ptc_fail(int line, const char* what) {
+    printf("FAIL %s:%d: %s\n", __FILE__, line, what);
+    yaep_test_fails++;
+}
+
+#define PF(name, member, kind, n) { name, offsetof(yaep_desc, member), kind, n, NULL }
+#define PE(name, member, kind, n, v) { name, offsetof(yaep_desc, member), kind, n, v }
+#define PH(h, m, kind) PF(#h "." #m, h.m, kind, 0)
+#define PP(p) PF("priors." #p ".center", priors.p.center, 'd', 0), \
+              PF("priors." #p ".sd", priors.p.sd, 'd', 0)
+static const ptc_field g_afields[] = {
+    PF("n_dims", n_dims, 'i', 0), PF("lo", lo, 'D', 0), PF("hi", hi, 'D', 0),
+    PF("intensity_dim", intensity_dim, 'i', 0),
+    PE("lik", lik, 'e', YAEP_LIK_PAIRWISE + 1, "bernoulli=0,ordinal=1,categorical=2,gaussian=3,pairwise=4"),
+    PF("n_outcomes", n_outcomes, 'i', 0),
+    PE("kernel", kernel, 'e', YAEP_KERNEL_SEMIP + 1, "rbf=0,semip=1"),
+    PE("link", link, 'e', YAEP_LINK_LOGIT + 1, "probit=0,logit=1"),
+    PF("guess", guess, 'd', 0), PF("lapse", lapse, 'd', 0),
+#define PHYP(h) PH(h, lengthscale, 'D'), PH(h, outputscale, 'd'), PH(h, mean, 'd'),           \
+    PH(h, lengthscale_b, 'D'), PH(h, outputscale_b, 'd'), PH(h, cutpoint, 'D'),                \
+    PH(h, noise_sd, 'd'), PH(h, lengthscale_g, 'D'), PH(h, outputscale_g, 'd'), PH(h, mean_g, 'd')
+    PHYP(hyper),
+    PF("fit", fit, 'b', 0), PF("fit_every", fit_every, 'i', 0),
+    PF("no_hyper_prior", no_hyper_prior, 'b', 0), PF("refit_every", refit_every, 'i', 0),
+    PHYP(hyper_min), PHYP(hyper_max),
+#undef PHYP
+    PF("jitter", jitter, 'd', 0),
+    PE("acq", acq, 'e', YAEP_ACQ_THOMPSON + 1,
+       "lse=0,eavc=1,localmi=2,balv=3,bald=4,random=5,ucb=6,ei=7,thompson=8"),
+    PF("target_p", target_p, 'd', 0), PF("target_value", target_value, 'd', 0),
+    PF("target_outcome", target_outcome, 'i', 0), PF("acq_beta", acq_beta, 'd', 0),
+    PF("n_init", n_init, 'i', 0), PF("candidates", candidates, 'D', 0),
+    PF("n_candidates", n_candidates, 'i', 0), PF("grid", grid, 'I', 0),
+    PF("stop_trials", stop_trials, 'i', 0), PF("stop_threshold_sd", stop_threshold_sd, 'd', 0),
+    PF("stop_context", stop_context, 'D', 0), PF("max_trials", max_trials, 'i', 0),
+    PF("refine_steps", refine_steps, 'i', 0),
+    PE("model", model, 'e', YAEP_MODEL_PSYCHOMETRIC + 1, "gp=0,psychometric=1"),
+    PP(lengthscale), PP(outputscale), PP(outputscale_b), PP(outputscale_g), PP(mean), PP(mean_g),
+    PF("priors.mean_g.ceiling", priors.mean_g.ceiling, 'd', 0), PP(noise_sd),
+    PF("minimize", minimize, 'b', 0),
+    PE("dim_kind", dim_kind, 'E', YAEP_DIM_CATEGORICAL + 1, "continuous=0,integer=1,categorical=2"),
+    PF("dim_levels", dim_levels, 'I', 0),
+    PF("monotone_dims", monotone_dims, 'u', 0), PF("pcg_threshold", pcg_threshold, 'i', 0),
+    PF("fit_max_evals", fit_max_evals, 'i', 0), PF("fit_tol", fit_tol, 'd', 0),
+    PF("fit_pcg", fit_pcg, 'b', 0),
+};
+#undef PF
+#undef PE
+#undef PH
+#undef PP
+#define NAF ((int)(sizeof g_afields / sizeof g_afields[0]))
+
+/* The contexts a row's default is checked in: the default (the GP model,
+ * BERNOULLI, LSE) and one per likelihood, kernel and model a row can be
+ * about, each with desc.fit off and on. */
+enum { PCX_GP, PCX_UCB, PCX_GAUSS, PCX_ORD, PCX_SEMIP, PCX_PSY, PCX_N };
+
+static void pcx_desc(yaep_desc* d, int cx, bool fit) {
+    memset(d, 0, sizeof *d);
+    d->n_dims = 2;
+    d->lo[0] = 0.0; d->hi[0] = 1.0;
+    d->lo[1] = -1.0; d->hi[1] = 1.0;
+    d->target_p = 0.7;
+    d->stop_trials = 10;
+    d->stop_threshold_sd = 1e-9;   /* either stop alone is enough, so zero each */
+    d->n_candidates = 64;
+    d->fit = fit;
+    d->fit_every = fit ? 3 : 0;
+    switch (cx) {
+    case PCX_UCB:   d->acq = YAEP_ACQ_UCB; break;
+    case PCX_GAUSS: d->lik = YAEP_LIK_GAUSSIAN; d->target_value = 0.4; break;
+    case PCX_ORD:   d->lik = YAEP_LIK_ORDINAL; d->n_outcomes = 3; break;
+    case PCX_SEMIP: d->kernel = YAEP_KERNEL_SEMIP; break;
+    case PCX_PSY:   d->model = YAEP_MODEL_PSYCHOMETRIC; break;
+    default: break;
+    }
+}
+
+/* Ten trials of a fixed observer; on success g stays open and *len is the
+ * snapshot's length, the state in out[*start..*len). */
+static bool pcx_run(yaep_gp* g, const yaep_desc* d, unsigned char* out, size_t cap,
+                    int* start, int* len) {
+    double x[YAEP_MAX_DIMS];
+    yaep__w w;
+    int t;
+    if (!yaep_open(g, d)) return false;
+    for (t = 0; t < 10; t++) {
+        double v;
+        if (yaep_next(g, x) < -1) break;
+        v = x[0] - 0.4 - 0.2 * x[1] + ((t % 4 == 1) ? 0.3 : 0.0);
+        if (d->lik == YAEP_LIK_GAUSSIAN) yaep_update_real(g, x, v);
+        else if (d->lik == YAEP_LIK_ORDINAL) yaep_update(g, x, v < 0.0 ? 0 : v < 0.25 ? 1 : 2);
+        else yaep_update(g, x, v > 0.0);
+    }
+    memset(&w, 0, sizeof w);
+    yaep__put_desc(&w, &g->desc);
+    *start = 9 + (int)w.pos;
+    *len = yaep_save(g, out, cap);
+    return *len > *start;
+}
+
+/* The fit's bounds, which only show in the state when a fit reaches one. */
+static int pcx_bounds(const yaep_gp* g, double* lohi) {
+    yaep__param p[YAEP__NTHETA];
+    int np = yaep__params(g, p), i;
+    for (i = 0; i < np; i++) { lohi[2 * i] = p[i].lo; lohi[2 * i + 1] = p[i].hi; }
+    return np;
+}
+
+static unsigned char g_pa[1 << 20], g_pb[1 << 20];
+
+static void test_params(void) {
+    static ptc_row rows[160];
+    static yaep_gp ga, gb;
+    const yaep_param* p;
+    yaep_desc base, d;
+    int n = 0, i, cx, fit, compared = 0;
+    char msg[512];
+    p = yaep_params(&n);
+    CHECK(p && n == NAF && n <= 160, "yaep_params: %d rows, the test knows %d", n, NAF);
+    if (!p || n > 160) return;
+    for (i = 0; i < n; i++) PTC_ROW(rows[i], p[i]);
+    ptc_check_cover(rows, n, g_afields, NAF);
+    CHECK(yaep_params(NULL) == p, "the table is static");
+
+    /* Structure, enums refused one past their last value, and the zero of
+     * every scalar either opens or is documented as required, in the
+     * default context. */
+    pcx_desc(&base, PCX_GP, false);
+    for (i = 0; i < n; i++) {
+        int k = ptc_check_row(&rows[i], g_afields, NAF);
+        const ptc_field* f;
+        if (k < 0) continue;
+        f = &g_afields[k];
+        if (f->kind == 'e') {
+            d = base;
+            ptc_set(&d, f, rows[i].max + 1.0);
+            CHECK(!yaep_open(&ga, &d), "%s = %g opened", f->name, rows[i].max + 1.0);
+            yaep_close(&ga);
+        }
+        if (f->kind == 'E') {
+            d = base;
+            d.dim_kind[1] = (yaep_dim_kind)(int)(rows[i].max + 1.0);
+            CHECK(!yaep_open(&ga, &d), "dim_kind past its values opened");
+            yaep_close(&ga);
+        }
+        if (!ptc_scalar(f)) continue;
+        d = base;
+        ptc_set(&d, f, 0.0);
+        if (!yaep_open(&ga, &d))
+            CHECK(ptc_required(&rows[i]), "zero %s refused (%s), its doc does not say required",
+                  f->name, yaep_error(&ga));
+        yaep_close(&ga);
+    }
+
+    /* def is what a zero means: a zero field and the field at def give the
+     * same session, state byte for byte, the same resolved priors and the
+     * same fit bounds, in every context the row's doc does not name as an
+     * exception ("(psychometric: ...)") and every context it is about (a doc
+     * that starts "psychometric:", "gaussian:" or "ordinal:"). A hyper row is
+     * a fixed value only with the fit off, and its zero is a fit's free
+     * parameter, so its bounds list differs by design. */
+    for (cx = 0; cx < PCX_N; cx++) {
+        for (fit = 0; fit < 2; fit++) {
+            pcx_desc(&base, cx, fit != 0);
+            for (i = 0; i < n; i++) {
+                const ptc_field* f;
+                int k = ptc_find(g_afields, NAF, rows[i].name), sa, la, sb, lb, na, nb;
+                double ba[2 * YAEP__NTHETA], bb[2 * YAEP__NTHETA];
+                bool hyp;
+                const char* doc = rows[i].doc;
+                if (k < 0 || !ptc_scalar(&g_afields[k]) || rows[i].def == 0.0) continue;
+                f = &g_afields[k];
+                hyp = strncmp(f->name, "hyper.", 6) == 0;
+                if (fit && hyp) continue;
+                if (cx == PCX_PSY && strstr(doc, "(psychometric:")) continue;
+                if ((strncmp(doc, "psychometric:", 13) == 0 && cx != PCX_PSY) ||
+                    (strncmp(doc, "gaussian:", 9) == 0 && cx != PCX_GAUSS) ||
+                    (strncmp(doc, "ordinal:", 8) == 0 && cx != PCX_ORD))
+                    continue;
+                d = base;
+                ptc_set(&d, f, 0.0);
+                if (!pcx_run(&ga, &d, g_pa, sizeof g_pa, &sa, &la)) { yaep_close(&ga); continue; }
+                ptc_set(&d, f, rows[i].def);
+                if (!pcx_run(&gb, &d, g_pb, sizeof g_pb, &sb, &lb)) {
+                    snprintf(msg, sizeof msg, "context %d fit %d: %s = def does not run: %s",
+                             cx, fit, f->name, yaep_error(&gb));
+                    ptc_fail(__LINE__, msg);
+                } else {
+                    compared++;
+                    na = pcx_bounds(&ga, ba);
+                    nb = pcx_bounds(&gb, bb);
+                    if (hyp) na = nb = 0;
+                    if (la - sa != lb - sb || memcmp(g_pa + sa, g_pb + sb, (size_t)(la - sa)) != 0 ||
+                        memcmp(&ga.priors, &gb.priors, sizeof ga.priors) != 0 || na != nb ||
+                        memcmp(ba, bb, sizeof(double) * 2 * (size_t)na) != 0) {
+                        snprintf(msg, sizeof msg, "context %d fit %d: %s = 0 and %s = %g differ",
+                                 cx, fit, f->name, f->name, rows[i].def);
+                        ptc_fail(__LINE__, msg);
+                    }
+                }
+                yaep_close(&ga);
+                yaep_close(&gb);
+            }
+        }
+    }
+    CHECK(compared > 250, "only %d default comparisons ran", compared);
+
+    /* The rows whose zero is a rule, not a number: the doc's rule, checked
+     * against the handle. */
+    pcx_desc(&base, PCX_GP, false);
+    CHECK(yaep_open(&ga, &base), "open: %s", yaep_error(&ga));
+    CLOSE(ga.hyper.lengthscale[0], 0.25, 0.0, "hyper.lengthscale 0 = a quarter of the range");
+    CLOSE(ga.hyper.lengthscale[1], 0.5, 0.0, "hyper.lengthscale 0 = a quarter of the range");
+    CHECK(yaep__n_init(&ga) == 2 * 2 + 2, "n_init 0 = 2 n_dims + 2");
+    yaep_close(&ga);
+    pcx_desc(&base, PCX_GP, true);
+    CHECK(yaep_open(&ga, &base), "open: %s", yaep_error(&ga));
+    {
+        double lohi[2 * YAEP__NTHETA];
+        int np = pcx_bounds(&ga, lohi);
+        CHECK(np >= 2, "two lengthscales fitted");
+        CLOSE(lohi[0], log(0.05 * 1.0), 1e-15, "hyper_min.lengthscale 0 = 0.05 range");
+        CLOSE(lohi[1], log(2.0 * 1.0), 1e-15, "hyper_max.lengthscale 0 = 2 ranges");
+        CLOSE(lohi[3], log(2.0 * 2.0), 1e-15, "hyper_max.lengthscale 0 = 2 ranges, dim 1");
+    }
+    yaep_close(&ga);
+    pcx_desc(&base, PCX_ORD, false);
+    {
+        int sa, la, sb, lb;
+        CHECK(pcx_run(&ga, &base, g_pa, sizeof g_pa, &sa, &la), "ordinal run");
+        base.target_outcome = 1;
+        CHECK(pcx_run(&gb, &base, g_pb, sizeof g_pb, &sb, &lb), "ordinal run");
+        CHECK(la - sa == lb - sb && memcmp(g_pa + sa, g_pb + sb, (size_t)(la - sa)) == 0,
+              "ordinal target_outcome 0 = 1");
+        yaep_close(&ga);
+        yaep_close(&gb);
+    }
+    printf("  parameter table: %d rows, %d default comparisons\n", n, compared);
+}
+#undef NAF
+
+/* v0.16.0: a snapshot whose discrete outcome is not one of the outcomes is
+ * refused; one read back used to index the cutpoints with it (found by
+ * tests/fuzz/adapt_fuzz.c). The bad value is put in the handle and saved,
+ * since the writer copies whatever the handle holds. */
+static void test_snapshot_outcomes(void) {
+    static const double bad[] = { -1.0, 3.0, 0.5, 1e300, -2147483648.0 };
+    static yaep_gp g, h;
+    yaep_desc d;
+    int sa, la, i, which;
+    pcx_desc(&d, PCX_ORD, false);
+    for (which = 0; which < 2; which++)
+        for (i = 0; i < (int)(sizeof bad / sizeof bad[0]); i++) {
+            CHECK(pcx_run(&g, &d, g_pa, sizeof g_pa, &sa, &la), "ordinal run");
+            CHECK(yaep_open_saved(&h, &d, g_pa, (size_t)la), "a good snapshot: %s", yaep_error(&h));
+            yaep_close(&h);
+            if (which == 0) g.y[3] = bad[i];
+            else g.history[3].y = bad[i];
+            la = yaep_save(&g, g_pa, sizeof g_pa);
+            CHECK(!yaep_open_saved(&h, &d, g_pa, (size_t)la) && !yaep_is_open(&h) &&
+                  strstr(yaep_error(&h), "corrupt") != NULL,
+                  "outcome %g in %s loaded", bad[i], which ? "the history" : "y");
+            yaep_close(&g);
+        }
+    /* GAUSSIAN outcomes are values: any finite one loads, a NaN does not.
+     * GAUSSIAN needs the double build. */
+    if (!real_is_double) return;
+    pcx_desc(&d, PCX_GAUSS, false);
+    CHECK(pcx_run(&g, &d, g_pa, sizeof g_pa, &sa, &la), "gaussian run");
+    g.y[2] = 1e6;
+    g.history[2].y = 1e6;
+    la = yaep_save(&g, g_pa, sizeof g_pa);
+    CHECK(yaep_open_saved(&h, &d, g_pa, (size_t)la), "a large gaussian outcome: %s", yaep_error(&h));
+    yaep_close(&h);
+    g.y[2] = nan("");
+    la = yaep_save(&g, g_pa, sizeof g_pa);
+    CHECK(!yaep_open_saved(&h, &d, g_pa, (size_t)la), "a NaN gaussian outcome loaded");
+    yaep_close(&g);
+    yaep_close(&h);
+}
+
 int main(void) {
+    /* YAEP_TEST_ONLY=params runs the parameter table and snapshot outcome
+     * checks alone: seconds instead of minutes, for their mutants
+     * (tests/mutate/aep.toml). */
+    const char* only = getenv("YAEP_TEST_ONLY");
     setvbuf(stdout, NULL, _IONBF, 0);
     printf("ysp/aep.h tests\n");
+    if (only && strcmp(only, "params") == 0) {
+        test_version();
+        test_params();
+        test_snapshot_outcomes();
+        if (yaep_test_fails == 0) {
+            printf("all ysp/aep.h tests passed\n");
+            return 0;
+        }
+        printf("%d ysp/aep.h check(s) failed\n", yaep_test_fails);
+        return 1;
+    }
     test_version();
     test_chol();
     test_quad();
@@ -4558,6 +4862,8 @@ int main(void) {
     test_snapshot();
     test_fit_budget();
     test_fit_pcg();
+    test_params();
+    test_snapshot_outcomes();
 #ifdef YAEP_ASYNC
     printf("async layer (YAEP_ASYNC):\n");
     test_async();

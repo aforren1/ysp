@@ -1,4 +1,4 @@
-/* ysp/stair.h - v0.2.0 - public domain single-header adaptive staircase library
+/* ysp/stair.h - v0.3.0 - public domain single-header adaptive staircase library
  *
  *   Nonparametric adaptive procedures for psychophysics: transformed and
  *   weighted up/down staircases (Wetherill & Levitt 1965; Levitt 1971;
@@ -219,8 +219,10 @@
  *   ---------------------------------------------------------------------
  *   RETURN VALUES AND ERRORS
  *   ---------------------------------------------------------------------
- *   yst_open() returns bool and fills yst_error() on failure; it clears the
- *   message on entry. update() returns 0, or a positive YST_EVENT_* mask
+ *   yst_open() and yst_open_saved() return bool and fill yst_error() on
+ *   failure; they clear the message on entry. yst_save() takes a const
+ *   handle, as yqst_save() does, so it returns its code and writes no
+ *   message. update() returns 0, or a positive YST_EVENT_* mask
  *   for a step or a reversal, or a negative YST_ERR_*, and on a failure it
  *   also writes yst_error() (a null handle has nowhere to write).
  *   yst_strerror() names a code. The queries return a value and never write
@@ -252,7 +254,82 @@
  *   staircase, and interleaved staircases on one thread are just several
  *   handles. Every function is deterministic: the same desc and the same
  *   history give the same proposals, so a saved history (yst_history())
- *   replayed through yst_update() restores the state exactly.
+ *   replayed through yst_update() restores the state exactly. A snapshot
+ *   (SNAPSHOTS) restores it without the replay.
+ *
+ *   ---------------------------------------------------------------------
+ *   SNAPSHOTS
+ *   ---------------------------------------------------------------------
+ *   A staircase can be saved at any trial and resumed later, after a crash
+ *   or a break, in the form ysp/quest.h, ysp/aep.h and ysp/trials.h use:
+ *
+ *       size_t n = yst_save_size(&s);
+ *       yst_save(&s, buf, n);                     // write buf to disk
+ *       ...
+ *       yst_close(&s);
+ *       if (!yst_open_saved(&s, &desc, buf, n))   // s resumes where it was
+ *           fputs(yst_error(&s), stderr);
+ *
+ *   What is saved: the desc's numbers as open() resolved them, the
+ *   counters, the rule's level, the history and the recorded reversals. A
+ *   staircase has no pending proposal (yst_next() changes nothing), so a
+ *   cut anywhere resumes to the bit: the next proposal, every estimate and
+ *   every later update are the uninterrupted session's.
+ *
+ *   yst_open_saved() is yst_open() and then a restore. It takes the desc
+ *   so that a resume proves it runs the same staircase: the desc must agree
+ *   with the snapshot on every number after open() folds the defaults
+ *   (n_up 0 and 1 agree, so do step_down_scale 0 and 1, and use_limits is
+ *   compared as "limits in force"). A mismatch fails the load and names the
+ *   first field that differs.
+ *
+ *   LAYOUT, format 1. Every integer is little-endian two's complement,
+ *   written and read one byte at a time, so a snapshot moves between
+ *   compilers and platforms; an f64 is the IEEE 754 bit pattern as a u64.
+ *     magic     4 bytes "PSST", then u32 format (1)
+ *     desc      f64 start, i32 rule, n_up, n_down, step_type, n_steps,
+ *               n_steps f64 steps, f64 step_down_scale, target_p, min,
+ *               max, u8 use_limits, harder_is_up, initial_rule, i32
+ *               stop_reversals, stop_trials, stop_at_limit, est_reversals,
+ *               est_trials
+ *     state     i32 n_trials, n_reversals, run_correct, run_incorrect,
+ *               direction, step_index, at_limit_run, stop; f64 level (in
+ *               step units: log10 or dB under LOG and DB)
+ *     history   n_trials x (f64 proposed, f64 shown, u8 response, u8
+ *               reversal, i8 direction, u8 step_index)
+ *     reversals i32 R, the reversals recorded (n_reversals, at most
+ *               YST_MAX_REVERSALS), then R x (f64 level, i32 trial)
+ *   143 bytes with one step, 8 more a step, 20 a trial and 12 a reversal:
+ *   2,383 bytes after 100 trials with 20 reversals and one step.
+ *   Every number is range-checked as it is read, so a wrong, truncated or
+ *   corrupt snapshot fails the load with a message and leaves the handle
+ *   closed. A snapshot with more trials than this build's YST_MAX_TRIALS,
+ *   or saved by a build whose YST_MAX_REVERSALS recorded a different
+ *   number of reversals, is refused and the message says so. Nothing else
+ *   is checked: a snapshot edited to hold other in-range numbers loads, and
+ *   the session continues from them. The format number changes when this
+ *   layout does.
+ *
+ *   ---------------------------------------------------------------------
+ *   PARAMETERS
+ *   ---------------------------------------------------------------------
+ *   yst_params() lists every yst_desc field that an experiment definition
+ *   or a designer sets (rig_spec principle 8): its name, type, inclusive
+ *   range, the value a zero field means, unit and a line of text. The
+ *   shape is the one ysp/quest.h and ysp/aep.h use:
+ *     name    the desc field; "a.b" is member b of a, and "a[].b" is
+ *             member b of each element of the array a
+ *     type    "i32", "f64", "bool", "enum", or an array of one of them
+ *             ("f64[]"), whose length another row gives (steps has
+ *             n_steps entries)
+ *     def     what a zero field means when every other field is at its
+ *             default; a field without a default (a required one) has 0,
+ *             which can be outside [min, max], and its doc starts with
+ *             "required"
+ *     values  for an "enum", "name=value" pairs joined by ',' in value
+ *             order, the names the C enum's suffix in lower case
+ *             ("lin=0,log=1,db=2"); NULL for every other type
+ *   The table is static and the same for every handle.
  *
  *   ---------------------------------------------------------------------
  *   SIMULATION
@@ -277,6 +354,12 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.3.0 - snapshots: yst_save_size(), yst_save() and yst_open_saved(),
+ *          in the form of ysp/quest.h's, so a resumed session no longer
+ *          replays its updates (gap G12 of docs/experiment_format.md). And
+ *          yst_params(), the table of the desc's fields for a loader's key
+ *          check and a designer's panel (gap G6). Adds API; changes none.
+ *          No rule changed.
  *   v0.2.0 - the repository conventions (README.md, Conventions). Breaks
  *          the API: yst_close() is new (it zeroes the handle; every open
  *          has a close), and a failed yst_update() now writes yst_error()
@@ -303,7 +386,7 @@
  *          held by a limit still reports one.
  *   v0.0 - specification. Declarations and the manual, no implementation.
  *
- *   STATUS: v0.2.0. Built and run on Linux (WSL2) with gcc 11.4 as C11, C99 and
+ *   STATUS: v0.3.0. See the end of this section for v0.3.0. Built and run on Linux (WSL2) with gcc 11.4 as C11, C99 and
  *   C++17 under -Wall -Wextra -Wpedantic -Wshadow -Werror, and once under
  *   -fsanitize=address,undefined -fno-sanitize-recover=all with no
  *   diagnostic. Also built and run on Windows 11 with MSVC 14.51 under
@@ -344,6 +427,22 @@
  *   v0.2.0 on 2026-10-10 (Windows 11, MSVC 19.44 /W4 /WX, C and C++17, and
  *   MinGW-w64 gcc -Werror): the test adds yst_close() on a zeroed handle,
  *   after a failed open and twice, and the messages a failed update leaves.
+ *   v0.3.0 on 2026-10-21 (Windows 11, MSVC 19.44 /W4 /WX as C and C++17,
+ *   MinGW-w64 gcc 16.1 -Werror, WSL2 gcc 11.4 under
+ *   -fsanitize=address,undefined, emcc): the test checks every row of
+ *   yst_params() against the desc field it names (by offsetof), each enum's
+ *   values against the C enum, and each zero field against def, both as
+ *   open() resolves it and as a 40-trial run. Snapshots cut at up to nine
+ *   points in four configurations (LOG with a schedule, limits and the
+ *   initial rule; weighted dB; ASA; a run past YST_MAX_TRIALS with more
+ *   reversals than YST_MAX_REVERSALS) and resumed into a handle filled
+ *   with garbage give the uninterrupted run's history, reversals, counters,
+ *   estimates and final snapshot, byte for byte. Every truncation, a
+ *   trailing byte, a wrong magic or format, crafted counters, history and
+ *   reversals are refused with the handle closed; each of the 5,208
+ *   single-bit flips of a 651-byte snapshot loads or is refused, none
+ *   crashes. 16 of 16 mutants killed (tests/mutate/stair.toml).
+ *   tests/fuzz/adapt_fuzz.c: see docs/adapt.md for its run.
  *   What is NOT done here: nothing here is a timing measurement. No
  *   estimator is a fit and none carries a confidence interval. A
  *   -DYST_API=static build needs a translation unit that calls every
@@ -358,9 +457,9 @@
 /* The version of this header, for a log line or a compile-time check. The
  * string is the three numbers, and the test asserts that it stays so. */
 #define YST_VERSION_MAJOR  0
-#define YST_VERSION_MINOR  2
+#define YST_VERSION_MINOR  3
 #define YST_VERSION_PATCH  0
-#define YST_VERSION_STRING "0.2.0"
+#define YST_VERSION_STRING "0.3.0"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -580,6 +679,39 @@ YST_API const yst_trial* yst_history(const yst_stair* s, int* n);
 YST_API double yst_reversal_level(const yst_stair* s, int i);
 YST_API int    yst_reversal_trial(const yst_stair* s, int i);
 
+/* --- snapshot ---------------------------------------------------------- */
+
+/* Save a staircase and resume it later without replaying it.
+ * yst_save_size() is the bytes yst_save() writes (0 on a handle that is not
+ * open); yst_save() writes them and returns the count, or YST_ERR_ARG when
+ * `buf` is NULL or `cap` is too small, or YST_ERR_CLOSED. It writes no
+ * message (the handle is const). yst_open_saved() opens `s` from `desc`
+ * exactly as yst_open() would, checks that the desc agrees with the
+ * snapshot, and puts the counters, the level, the history and the
+ * reversals back. On any failure it returns false, leaves `s` closed, and
+ * says why in yst_error(). SNAPSHOTS in the manual gives the layout. */
+YST_API size_t yst_save_size(const yst_stair* s);
+YST_API int    yst_save(const yst_stair* s, void* buf, size_t cap);
+YST_API bool   yst_open_saved(yst_stair* s, const yst_desc* desc, const void* buf, size_t len);
+
+/* --- parameters -------------------------------------------------------- */
+
+/* One settable yst_desc field. PARAMETERS in the manual gives the rules;
+ * ysp/quest.h and ysp/aep.h have tables of the same shape. */
+typedef struct yst_param {
+    const char* name;    /* the desc field; "a.b" a member, "a[]" an array   */
+    const char* type;    /* "i32", "f64", "bool", "enum", "f64[]"            */
+    double      min, max;/* inclusive                                        */
+    double      def;     /* the value a zero field means                     */
+    const char* unit;    /* "" for the caller's units or a count             */
+    const char* doc;
+    const char* values;  /* "enum": "name=value,..." in value order; NULL    */
+} yst_param;
+
+/* The table of desc fields a definition or a designer sets; *n gets the
+ * count. Static: the pointer stays valid for the life of the program. */
+YST_API const yst_param* yst_params(int* n);
+
 /* --- simulation -------------------------------------------------------- */
 
 /* 1 when u < p_correct, else 0. `u` is a uniform variate in [0, 1) drawn by
@@ -599,6 +731,8 @@ YST_API int yst_simulate_response(double p_correct, double u);
 #ifndef YSP_STAIR_IMPLEMENTATION_GUARD
 #define YSP_STAIR_IMPLEMENTATION_GUARD
 
+#include <float.h>
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -1050,6 +1184,315 @@ YST_API int yst_reversal_trial(const yst_stair* s, int i) {
 
 YST_API int yst_simulate_response(double p_correct, double u) {
     return (u < p_correct) ? 1 : 0;
+}
+
+/* --- snapshot ----------------------------------------------------------
+ * In the shape of ysp/quest.h's: one writer does three jobs (count, write,
+ * compare), which is how yst_open_saved() checks the desc against the
+ * snapshot without a second description of the layout that could drift
+ * from the first. */
+
+#define YST__SNAP_FORMAT 1u
+
+typedef struct yst__w {
+    unsigned char*       out;
+    const unsigned char* cmp;
+    size_t               pos;
+    size_t               cap;
+    const char*          diff;   /* compare: the first field that differs */
+} yst__w;
+
+static void yst__put(yst__w* w, uint64_t v, int nbytes, const char* name) {
+    int i;
+    unsigned char b;
+    for (i = 0; i < nbytes; i++) {
+        b = (unsigned char)((v >> (8 * i)) & 0xffu);
+        if (w->out) {
+            if (w->pos < w->cap) w->out[w->pos] = b;
+        } else if (w->cmp && !w->diff) {
+            if (w->pos >= w->cap || w->cmp[w->pos] != b) w->diff = name;
+        }
+        w->pos++;
+    }
+}
+
+static void yst__put_i32(yst__w* w, int v, const char* name) {
+    yst__put(w, (uint64_t)(uint32_t)v, 4, name);
+}
+
+static void yst__put_f64(yst__w* w, double v, const char* name) {
+    uint64_t u;
+    memcpy(&u, &v, sizeof(u));
+    yst__put(w, u, 8, name);
+}
+
+/* The desc as open() resolved it, so two descs that open the same
+ * staircase compare equal. */
+static void yst__put_desc(yst__w* w, const yst_desc* d) {
+    int i;
+    yst__put_f64(w, d->start, "start");
+    yst__put_i32(w, (int)d->rule, "rule");
+    yst__put_i32(w, d->n_up, "n_up");
+    yst__put_i32(w, d->n_down, "n_down");
+    yst__put_i32(w, (int)d->step_type, "step_type");
+    yst__put_i32(w, d->n_steps, "n_steps");
+    for (i = 0; i < d->n_steps; i++) yst__put_f64(w, d->steps[i], "steps");
+    yst__put_f64(w, d->step_down_scale, "step_down_scale");
+    yst__put_f64(w, d->target_p, "target_p");
+    yst__put_f64(w, d->min, "min");
+    yst__put_f64(w, d->max, "max");
+    yst__put(w, d->use_limits ? 1u : 0u, 1, "use_limits");
+    yst__put(w, d->harder_is_up ? 1u : 0u, 1, "harder_is_up");
+    yst__put(w, d->initial_rule ? 1u : 0u, 1, "initial_rule");
+    yst__put_i32(w, d->stop_reversals, "stop_reversals");
+    yst__put_i32(w, d->stop_trials, "stop_trials");
+    yst__put_i32(w, d->stop_at_limit, "stop_at_limit");
+    yst__put_i32(w, d->est_reversals, "est_reversals");
+    yst__put_i32(w, d->est_trials, "est_trials");
+}
+
+static int yst__n_recorded(const yst_stair* s) {
+    return s->n_reversals < YST_MAX_REVERSALS ? s->n_reversals : YST_MAX_REVERSALS;
+}
+
+static void yst__put_all(yst__w* w, const yst_stair* s) {
+    int i, rec = yst__n_recorded(s);
+    yst__put(w, 'P', 1, "magic");
+    yst__put(w, 'S', 1, "magic");
+    yst__put(w, 'S', 1, "magic");
+    yst__put(w, 'T', 1, "magic");
+    yst__put(w, YST__SNAP_FORMAT, 4, "format");
+    yst__put_desc(w, &s->desc);
+    yst__put_i32(w, s->n_trials, "n_trials");
+    yst__put_i32(w, s->n_reversals, "n_reversals");
+    yst__put_i32(w, s->run_correct, "run_correct");
+    yst__put_i32(w, s->run_incorrect, "run_incorrect");
+    yst__put_i32(w, s->direction, "direction");
+    yst__put_i32(w, s->step_index, "step_index");
+    yst__put_i32(w, s->at_limit_run, "at_limit_run");
+    yst__put_i32(w, (int)s->stop, "stop");
+    yst__put_f64(w, s->level, "level");
+    for (i = 0; i < s->n_trials; i++) {
+        const yst_trial* t = &s->history[i];
+        yst__put_f64(w, t->proposed, "history.proposed");
+        yst__put_f64(w, t->shown, "history.shown");
+        yst__put(w, t->response, 1, "history.response");
+        yst__put(w, t->reversal, 1, "history.reversal");
+        yst__put(w, (uint64_t)(uint8_t)t->direction, 1, "history.direction");
+        yst__put(w, t->step_index, 1, "history.step_index");
+    }
+    yst__put_i32(w, rec, "reversals.n");
+    for (i = 0; i < rec; i++) {
+        yst__put_f64(w, s->reversals[i], "reversals.level");
+        yst__put_i32(w, s->reversal_trial[i], "reversals.trial");
+    }
+}
+
+YST_API size_t yst_save_size(const yst_stair* s) {
+    yst__w w;
+    if (!s || !s->open) return 0;
+    memset(&w, 0, sizeof(w));
+    yst__put_all(&w, s);
+    return w.pos;
+}
+
+YST_API int yst_save(const yst_stair* s, void* buf, size_t cap) {
+    yst__w w;
+    size_t need;
+    if (!s) return YST_ERR_ARG;
+    if (!s->open) return YST_ERR_CLOSED;
+    need = yst_save_size(s);
+    if (!buf || cap < need || need > 0x7fffffffu) return YST_ERR_ARG;
+    memset(&w, 0, sizeof(w));
+    w.out = (unsigned char*)buf;
+    w.cap = cap;
+    yst__put_all(&w, s);
+    return (int)w.pos;
+}
+
+typedef struct yst__r {
+    const unsigned char* in;
+    size_t               pos;
+    size_t               len;
+    bool                 bad;
+} yst__r;
+
+static uint64_t yst__get(yst__r* r, int nbytes) {
+    uint64_t v = 0;
+    int i;
+    if (r->bad || r->len - r->pos < (size_t)nbytes) {
+        r->bad = true;
+        return 0;
+    }
+    for (i = 0; i < nbytes; i++) v |= (uint64_t)r->in[r->pos + (size_t)i] << (8 * i);
+    r->pos += (size_t)nbytes;
+    return v;
+}
+
+static int yst__get_i32(yst__r* r) { return (int)(int32_t)(uint32_t)yst__get(r, 4); }
+
+static double yst__get_f64(yst__r* r) {
+    uint64_t u = yst__get(r, 8);
+    double v;
+    memcpy(&v, &u, sizeof(v));
+    return v;
+}
+
+/* Leave the handle closed and say why: a load either resumes the session or
+ * leaves nothing half-restored behind. */
+static bool yst__load_fail(yst_stair* s, const char* why) {
+    char msg[sizeof(s->error)];
+    snprintf(msg, sizeof(msg), "ysp_stair: yst_open_saved: %s", why);
+    yst_close(s);
+    memcpy(s->error, msg, sizeof(msg));
+    return false;
+}
+
+YST_API bool yst_open_saved(yst_stair* s, const yst_desc* desc, const void* buf, size_t len) {
+    const unsigned char* in = (const unsigned char*)buf;
+    yst__w w;
+    yst__r r;
+    int i, v, n, rec;
+    bool logs;
+
+    if (!s) return false;
+    if (!yst_open(s, desc)) return false;
+    if (!in) return yst__load_fail(s, "null snapshot");
+    if (len < 8 || in[0] != 'P' || in[1] != 'S' || in[2] != 'S' || in[3] != 'T')
+        return yst__load_fail(s, "not a ysp_stair snapshot");
+    memset(&r, 0, sizeof(r));
+    r.in = in;
+    r.len = len;
+    r.pos = 4;
+    if ((uint32_t)yst__get(&r, 4) != YST__SNAP_FORMAT)
+        return yst__load_fail(s, "the snapshot's format is not this header's");
+
+    memset(&w, 0, sizeof(w));
+    w.cmp = in;
+    w.cap = len;
+    w.pos = r.pos;
+    yst__put_desc(&w, &s->desc);
+    if (w.diff) {
+        char why[96];
+        snprintf(why, sizeof(why), "desc.%s does not match the snapshot", w.diff);
+        return yst__load_fail(s, why);
+    }
+    r.pos = w.pos;
+
+    n                = yst__get_i32(&r);
+    s->n_reversals   = yst__get_i32(&r);
+    s->run_correct   = yst__get_i32(&r);
+    s->run_incorrect = yst__get_i32(&r);
+    s->direction     = yst__get_i32(&r);
+    s->step_index    = yst__get_i32(&r);
+    s->at_limit_run  = yst__get_i32(&r);
+    v                = yst__get_i32(&r);
+    s->level         = yst__get_f64(&r);
+    if (!r.bad && n > YST_MAX_TRIALS)
+        return yst__load_fail(s, "the snapshot has more trials than this build's YST_MAX_TRIALS");
+    /* A reversal is at most one a trial, and a run or a pinned stretch is
+     * at most the whole history. */
+    if (r.bad || n < 0 || s->n_reversals < 0 || s->n_reversals > n ||
+        s->run_correct < 0 || s->run_correct > n ||
+        s->run_incorrect < 0 || s->run_incorrect > n ||
+        s->direction < -1 || s->direction > 1 ||
+        s->step_index < 0 || s->step_index >= s->desc.n_steps ||
+        s->at_limit_run < 0 || s->at_limit_run > n ||
+        v < (int)YST_STOP_NONE || v > (int)YST_STOP_FULL || !yst__finite(s->level))
+        return yst__load_fail(s, "the snapshot's counters are corrupt or truncated");
+    s->n_trials = n;
+    s->stop = (yst_stop)v;
+
+    /* update() refuses a shown level <= 0 under LOG and DB, so a history
+     * that holds one was not written by update(). */
+    logs = s->desc.step_type != YST_STEP_LIN;
+    for (i = 0; i < n && !r.bad; i++) {
+        yst_trial* t = &s->history[i];
+        int resp, rev, dir, si;
+        t->proposed = yst__get_f64(&r);
+        t->shown    = yst__get_f64(&r);
+        resp = (int)yst__get(&r, 1);
+        rev  = (int)yst__get(&r, 1);
+        dir  = (int)(int8_t)(uint8_t)yst__get(&r, 1);
+        si   = (int)yst__get(&r, 1);
+        if (!yst__finite(t->proposed) || !yst__finite(t->shown) ||
+            (logs && !(t->shown > 0.0)) || resp > 1 || rev > 1 ||
+            dir < -1 || dir > 1 || si >= s->desc.n_steps)
+            r.bad = true;
+        t->response   = (uint8_t)resp;
+        t->reversal   = (uint8_t)rev;
+        t->direction  = (int8_t)dir;
+        t->step_index = (uint8_t)si;
+    }
+    if (r.bad) return yst__load_fail(s, "the snapshot's history is corrupt or truncated");
+
+    rec = yst__get_i32(&r);
+    if (!r.bad && rec != yst__n_recorded(s))
+        return yst__load_fail(s, "the snapshot records another number of reversals "
+                                 "(a build with another YST_MAX_REVERSALS, or corrupt)");
+    for (i = 0; i < rec && !r.bad; i++) {
+        s->reversals[i] = yst__get_f64(&r);
+        s->reversal_trial[i] = yst__get_i32(&r);
+        if (!yst__finite(s->reversals[i]) || s->reversal_trial[i] < 0 ||
+            s->reversal_trial[i] >= n)
+            r.bad = true;
+    }
+    if (r.bad) return yst__load_fail(s, "the snapshot's reversals are corrupt or truncated");
+    if (r.pos != r.len) return yst__load_fail(s, "bytes after the snapshot's end");
+    s->error[0] = '\0';
+    return true;
+}
+
+/* --- parameters -------------------------------------------------------- */
+
+/* The ranges are what yst_open() accepts. */
+static const yst_param yst__params[] = {
+    { "start", "f64", -DBL_MAX, DBL_MAX, 0, "",
+      "first proposed level, in the caller's units; > 0 under a LOG or DB step", NULL },
+    { "rule", "enum", 0, 1, 0, "",
+      "transformed or weighted up/down, or accelerated stochastic approximation",
+      "updown=0,asa=1" },
+    { "n_up", "i32", 0, INT_MAX, 1, "",
+      "consecutive incorrect responses per easier step", NULL },
+    { "n_down", "i32", 0, INT_MAX, 1, "",
+      "consecutive correct responses per harder step", NULL },
+    { "step_type", "enum", 0, 2, 0, "",
+      "a step adds to the level, to its log10, or to 20 log10 (dB)",
+      "lin=0,log=1,db=2" },
+    { "steps", "f64[]", 0, DBL_MAX, 0, "",
+      "required: the step schedule, n_steps entries, each finite and > 0; entry k "
+      "holds from reversal k on, in the step's units", NULL },
+    { "n_steps", "i32", 1, YST_MAX_STEPS, 0, "",
+      "required: the entries in steps; 1 = a fixed step", NULL },
+    { "step_down_scale", "f64", 0, DBL_MAX, 1, "",
+      "the harder step is the step times this; not 1 makes a weighted staircase", NULL },
+    { "target_p", "f64", 0, 1, 0, "",
+      "required under the ASA rule: the proportion correct to converge on, in (0, 1)", NULL },
+    { "min", "f64", -DBL_MAX, DBL_MAX, 0, "",
+      "lower clamp on the proposal; min and max both 0 = no limits", NULL },
+    { "max", "f64", -DBL_MAX, DBL_MAX, 0, "",
+      "upper clamp on the proposal", NULL },
+    { "use_limits", "bool", 0, 1, 0, "",
+      "clamp to min and max even when both are 0", NULL },
+    { "harder_is_up", "bool", 0, 1, 0, "",
+      "a correct response raises the level", NULL },
+    { "initial_rule", "bool", 0, 1, 0, "",
+      "1-up-1-down until the first reversal", NULL },
+    { "stop_reversals", "i32", 0, YST_MAX_REVERSALS, 0, "",
+      "stop after this many reversals; 0 = off (set this or stop_trials)", NULL },
+    { "stop_trials", "i32", 0, YST_MAX_TRIALS, 0, "",
+      "stop after this many trials; 0 = off (set this or stop_reversals)", NULL },
+    { "stop_at_limit", "i32", 0, INT_MAX, 0, "",
+      "stop after this many consecutive proposals at min or max; 0 = never", NULL },
+    { "est_reversals", "i32", 0, INT_MAX, 0, "",
+      "reversals the reversal estimates average; 0 = all after the schedule ran out", NULL },
+    { "est_trials", "i32", 0, INT_MAX, 0, "",
+      "trials the trial estimate averages; 0 = all after the schedule ran out", NULL },
+};
+
+YST_API const yst_param* yst_params(int* n) {
+    if (n) *n = (int)(sizeof yst__params / sizeof yst__params[0]);
+    return yst__params;
 }
 
 #undef YST__FAIL

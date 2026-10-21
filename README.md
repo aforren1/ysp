@@ -16,9 +16,9 @@ C11 or C++17, and its top comment is its manual.
 | [table](docs/table.md) | `ytb_` | Typed tables and a bounded CSV parser | 0.2.0 | tested |
 | [pack](docs/pack.md) | `ypak_` | Read and verify ysp packs (store-only zip) | 0.2.0 | tested |
 | [json](docs/json.md) | `yjs_` | Strict JSON reader and canonical writer | 0.1.1 | tested |
-| [stair](docs/adapt.md) | `yst_` | Adaptive staircases | 0.2.0 | tested |
-| [quest](docs/adapt.md) | `yqst_` | QUEST+, QUEST, Psi and Psi-marginal on a grid | 0.6.0 | tested |
-| [aep](docs/adapt.md) | `yaep_` | Gaussian-process adaptive estimation (AEPsych features) | 0.15.0 | tested |
+| [stair](docs/adapt.md) | `yst_` | Adaptive staircases | 0.3.0 | tested |
+| [quest](docs/adapt.md) | `yqst_` | QUEST+, QUEST, Psi and Psi-marginal on a grid | 0.7.0 | tested |
+| [aep](docs/adapt.md) | `yaep_` | Gaussian-process adaptive estimation (AEPsych features) | 0.16.0 | tested |
 | [timeline](docs/timeline.md) | `ytl_` | Events, tracks and keyframes on the clock | 0.7.0 | tested |
 | [input](docs/input.md) | `yin_` | The input event that every device shares | 0.4.0 | 1 machine |
 | [response](docs/response.md) | `yrsp_` | Trial responses and RT from any input device | 0.5.0 | 1 machine |

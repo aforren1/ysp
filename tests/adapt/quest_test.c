@@ -2557,7 +2557,7 @@ static void test_version_and_axis_n(void) {
           "yqst_version() %s, macro %s", yqst_version(), YQST_VERSION_STRING);
     /* Pinned, and compared at run time: a constant condition is MSVC's C4127,
      * and the string from the implementation is the thing worth pinning. */
-    CHECK(strcmp(yqst_version(), "0.6.0") == 0, "version %s, want 0.6.0", yqst_version());
+    CHECK(strcmp(yqst_version(), "0.7.0") == 0, "version %s, want 0.7.0", yqst_version());
 
     memset(&d, 0, sizeof(d));
     d.pf = YQST_PF_GUMBEL;
@@ -2595,6 +2595,140 @@ static void test_version_and_axis_n(void) {
     yqst_close(&g_q);
 }
 
+/* --- parameter table (v0.7.0) --------------------------------------------- */
+
+#include "param_table_check.h"
+
+static void ptc_fail(int line, const char* what) {
+    g_checks++;
+    g_fail++;
+    fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, line, what);
+}
+
+#define PF(name, member, kind, n) { name, offsetof(yqst_desc, member), kind, n, NULL }
+#define PE(name, member, n, v) { name, offsetof(yqst_desc, member), 'e', n, v }
+static const ptc_field g_pfields[] = {
+    PF("n_stim", n_stim, 'i', 0),
+    PF("stim[].values", stim[0].values, 'D', 0),
+    PF("stim[].lo", stim[0].lo, 'd', 0),
+    PF("stim[].hi", stim[0].hi, 'd', 0),
+    PF("stim[].n", stim[0].n, 'i', 0),
+    PF("n_param", n_param, 'i', 0),
+    PF("param[].values", param[0].values, 'D', 0),
+    PF("param[].lo", param[0].lo, 'd', 0),
+    PF("param[].hi", param[0].hi, 'd', 0),
+    PF("param[].n", param[0].n, 'i', 0),
+    PF("param[].prior", param[0].prior, 'D', 0),
+    PF("param[].nuisance", param[0].nuisance, 'b', 0),
+    PF("joint_prior", joint_prior, 'D', 0),
+    PE("pf", pf, YQST_PF_CUSTOM + 1, "gumbel=0,weibull=1,logistic=2,normal=3,hypsec=4,custom=5"),
+    PF("n_outcomes", n_outcomes, 'i', 0),
+    PE("select", select, YQST_SELECT_MODE + 1, "entropy=0,quantile=1,mean=2,mode=3"),
+    PF("select_param", select_param, 'i', 0),
+    PF("select_quantile", select_quantile, 'd', 0),
+    PE("tiebreak", tiebreak, YQST_TIE_RANDOM + 1, "lowest=0,nearest=1,alternate=2,random=3"),
+    PF("tie_tolerance", tie_tolerance, 'd', 0),
+    PF("subset_size", subset_size, 'i', 0),
+    PF("stop_trials", stop_trials, 'i', 0),
+    PF("stop_entropy", stop_entropy, 'd', 0),
+    PF("stop_sd", stop_sd, 'd', 0),
+    PF("stop_sd_param", stop_sd_param, 'i', 0),
+    PF("no_table", no_table, 'b', 0),
+};
+#undef PF
+#undef PE
+#define NPF ((int)(sizeof g_pfields / sizeof g_pfields[0]))
+
+/* The stimuli a desc proposes over a fixed response stream. */
+static void param_run(const yqst_desc* d, int* out, int n) {
+    int i, s;
+    for (i = 0; i < n; i++) out[i] = -9;
+    if (!yqst_open(&g_q, d)) return;
+    for (i = 0; i < n; i++) {
+        s = yqst_next(&g_q);
+        out[i] = s;
+        if (s < 0 || yqst_update(&g_q, s, (i * 7 + 3) % 5 < 3) < 0) break;
+    }
+    yqst_close(&g_q);
+}
+
+static void test_params(void) {
+    static ptc_row rows[64];
+    static unsigned char snap[1 << 16];
+    const yqst_param* p;
+    yqst_desc base, d;
+    int n = 0, i, b, len;
+    char msg[200];
+    p = yqst_params(&n);
+    CHECK(p != NULL && n == NPF && n <= 64, "yqst_params: %d rows, the test knows %d", n, NPF);
+    if (!p || n > 64) return;
+    for (i = 0; i < n; i++) PTC_ROW(rows[i], p[i]);
+    ptc_check_cover(rows, n, g_pfields, NPF);
+
+    /* Two descs with every field at its default but the required ones: the
+     * QUEST+ default, and QUEST's quantile placement, where select_param and
+     * select_quantile matter. */
+    for (b = 0; b < 2; b++) {
+        memset(&base, 0, sizeof base);
+        base.stim[0] = yqst_linspace(-2.0, 0.0, 21);
+        base.n_stim = 1;
+        base.param[0] = yqst_linspace(-2.0, 0.0, 11);
+        base.param[1] = yqst_values(ref_beta, RB);
+        base.param[2] = yqst_fixed(0.5);
+        base.param[3] = yqst_fixed(0.02);
+        base.n_param = 4;
+        base.stop_trials = 20;
+        base.stop_entropy = 1e-6;   /* either stop alone is enough, so zero each */
+        if (b == 1) base.select = YQST_SELECT_QUANTILE;
+        for (i = 0; i < n; i++) {
+            const ptc_field* f;
+            int k = ptc_check_row(&rows[i], g_pfields, NPF), t;
+            double got;
+            if (k < 0) continue;
+            f = &g_pfields[k];
+            if (f->kind == 'e' && b == 0) {
+                d = base;
+                ptc_set(&d, f, rows[i].max + 1.0);
+                CHECK(!yqst_open(&g_q, &d), "%s = %g opened", f->name, rows[i].max + 1.0);
+            }
+            if (!ptc_scalar(f)) continue;
+            d = base;
+            ptc_set(&d, f, 0.0);
+            if (!yqst_open(&g_q, &d)) {
+                CHECK(ptc_required(&rows[i]), "zero %s refused (%s), its doc does not say required",
+                      f->name, yqst_error(&g_q));
+                continue;
+            }
+            /* open() writes the defaults into its copy of the desc; the outcome
+             * count is the one field it keeps elsewhere. */
+            got = strcmp(f->name, "n_outcomes") == 0 ? (double)yqst_n_outcomes(&g_q)
+                                                     : ptc_get(&g_q.desc, f);
+            CHECK(got == rows[i].def, "zero %s opens as %g, def is %g", f->name, got, rows[i].def);
+            yqst_close(&g_q);
+            {
+                int a[20], c[20];
+                param_run(&d, a, 20);
+                ptc_set(&d, f, rows[i].def);
+                param_run(&d, c, 20);
+                for (t = 0; t < 20; t++)
+                    if (a[t] != c[t]) {
+                        snprintf(msg, sizeof msg, "%s = 0 and = def propose differently at %d", f->name, t);
+                        ptc_fail(__LINE__, msg);
+                        break;
+                    }
+            }
+        }
+    }
+    CHECK(yqst_params(NULL) == p, "the table is static");
+
+    /* SNAPSHOTS names the magic; v0.7.0 corrected the text, not the bytes. */
+    CHECK(yqst_open(&g_q, &base), "open: %s", yqst_error(&g_q));
+    len = yqst_save(&g_q, snap, sizeof snap);
+    CHECK(len > 8 && memcmp(snap, "PSYQ", 4) == 0, "snapshot magic");
+    yqst_close(&g_q);
+}
+#undef NPF
+
 int main(void) {
     ref_build_axes();
     test_reference(false);
@@ -2621,6 +2755,7 @@ int main(void) {
     test_snapshot_resume();
     test_snapshot_stopped();
     test_snapshot_rejects();
+    test_params();
 #ifdef YQST_ASYNC
     test_async_matches();
     test_async_queue();
