@@ -832,6 +832,107 @@ pass with new checks for the messages and for close on a zeroed handle,
 after a failed open and twice. The compile checks name the open, close and
 wait calls by type.
 
+## Parameter tables and the staircase snapshot (stair v0.3.0, quest v0.7.0, aep v0.16.0)
+
+These versions close two gaps of the experiment definition
+([experiment_format.md](experiment_format.md), 1.4): G6, a parameter table
+for each method's desc, and G12, a snapshot for ysp/stair.h. No number
+changed in any of the three headers.
+
+### One table shape for the three headers
+
+`yst_params()`, `yqst_params()` and `yaep_params()` return a static array of
+rows with the fields of the existing tables (`name`, `type`, `min`, `max`,
+`def`, `unit`, `doc`) and one more, `values`, which an enum fills with
+`"name=value"` pairs in value order. The loader reads the key set and the
+enum names from the table, and the designer builds its panels from it, so
+the two cannot drift apart (rig_spec principle 8). The new tables of the
+other headers have the same shape, so a loader reads every table one way.
+
+Decisions:
+
+- **A row per field a definition sets, not per field of the struct.** The
+  pointers that a definition cannot hold are not rows: the custom model and
+  its context, the generator and its context, and the caller's memory. A
+  row's doc says when a value needs one of them (`pf` custom, `tiebreak`
+  random, `subset_size`, `acq` thompson).
+- **Arrays get a row that says so.** An axis's points, a prior, a
+  per-dimension bound and a candidate list do not fit one scalar. Their type
+  ends in `[]` (`"f64[]"`, `"i32[]"`, `"enum[]"`) and the doc names the
+  length (n, n_dims, n_outcomes - 1, P). Array-of-struct members are named
+  with `[]` (`stim[].lo`), struct members with a dot (`hyper_min.mean`,
+  `priors.mean_g.ceiling`). `dim_kind` is an `"enum[]"` with `values`; the
+  shared shape says `values` is for `"enum"`, and an array of enums needs
+  the same names.
+- **`def` is what a zero means when every other field is at its default.**
+  ysp/aep.h has zeros whose meaning depends on other fields (a lengthscale
+  is a quarter of its dimension's range; the psychometric model derives its
+  scales from the intensity axis). Those rows have `def` 0 and the rule in
+  the doc after "0 = ", and a doc that names an exception
+  ("(psychometric: ...)") marks the context where `def` does not hold. A
+  required field has `def` 0, which can be outside `[min, max]`, and its doc
+  starts with "required".
+- **The ranges are what open() accepts on its own.** A bound that another
+  field sets (`select_param` below `n_param`) gives the widest range and the
+  doc the rest.
+
+The tests check each table against a list of the desc's fields that the
+test writes by `offsetof`, so a row must name a real field of the right
+type, and every field must have exactly one row. Each enum's values must
+equal the text the test writes from the C enum, and one past the last value
+must make open() fail. Each scalar row is zeroed in a desc that opens. If
+open() refuses the zero, the row must say "required". If it opens, the
+zero must read back as `def` (stair and quest keep the resolved desc), and
+the zero and `def` must run the same session. For ysp/aep.h, which resolves
+its defaults where it uses them, "the same session" is 10 trials compared
+by their snapshot state bytes, the resolved priors and the fit's bounds. The
+comparison runs in six contexts (the default, UCB, GAUSSIAN, ORDINAL, the
+semiparametric kernel, the psychometric model), each with the fit off and
+on: 363 comparisons over the 83 rows.
+
+### The staircase snapshot
+
+`yst_save_size()`, `yst_save()` and `yst_open_saved()` have the form and
+the rules of `yqst_save()`: magic `"YSTR"` and a format number, every
+integer little-endian byte by byte, the desc as open() resolved it compared
+by the same writer that writes it (so a mismatch names its field), range
+checks on every number read, and a failed load that leaves the handle
+closed with the reason in `yst_error()`.
+
+The snapshot holds the state (counters, the rule's level, the history, the
+recorded reversals), not only the history to replay. A replay is the same
+on one build, but a LOG or DB staircase computes `log10()` and `pow()`,
+and two C libraries can differ in the last bit. The state moves between
+platforms as it is; a replay on another platform could resume one ulp away
+from the saved session.
+
+The header's capacities are not in the format. A snapshot with more trials
+than this build's `YST_MAX_TRIALS` is refused with a message that names the
+macro. The format writes the number of reversals it recorded, so a
+snapshot from a build with another `YST_MAX_REVERSALS` is refused instead
+of read past the arrays.
+
+Size: 143 bytes with a one-step schedule, 8 more for each further step, 20
+a trial and 12 a recorded reversal (2,383 bytes after 100 trials with 20
+reversals). The test checks the formula.
+
+### The fuzz target and what it found
+
+`tests/fuzz/adapt_fuzz.c` feeds untrusted bytes to all three readers:
+`yst_open_saved()`, and the existing `yqst_open_saved()` and
+`yaep_open_saved()`, which had no fuzz target. Its first 60 seconds found a
+read outside an array in ysp/aep.h: the reader took any finite recorded
+outcome, and the next ORDINAL update indexed the cutpoints with it. v0.16.0
+refuses an outcome that is not an integer in 0..K-1 (a non-finite one under
+GAUSSIAN). A staircase that loads must save back to exactly the bytes it
+read, and the target aborts if not.
+
+After the fix, 747,740 inputs over 27 minutes (libFuzzer with ASan, MSVC
+19.44, Windows 11, about 480 inputs a second from 28 seeds: real snapshots
+of seven descs cut at four points) found nothing more. The 1,304-input
+corpus replays clean under gcc 11.4 with `-fsanitize=address,undefined`
+(WSL2).
+
 ## Bindings
 
 In the shape of the transport bindings: one distribution per header under

@@ -106,6 +106,11 @@ An invalid desc raises `ArgumentError` with the library's message.
 | `history()` | a list of `Trial` named tuples: `(proposed, shown, response, reversal, direction, step_index)` |
 | `reversal_level(i)`, `reversal_trial(i)` | reversal `i`; `IndexError` out of range |
 | `reversals()` | a list of `(trial, level)` tuples |
+| `save()` | the snapshot as `bytes` (`yst_save()`) |
+| `Staircase.load(data, **desc)` | a new `Staircase` resumed from `save()`; the keywords are the constructor's and must open the same staircase. A mismatch or a bad snapshot raises `ArgumentError` with the library's message, which names the first field that differs. |
+
+A resumed staircase makes the same proposals and has the same history and
+estimates as one that was not interrupted, with no replay of the updates.
 
 ### Module functions
 

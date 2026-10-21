@@ -109,7 +109,10 @@ static int st_parse_steps(PyObject* obj, yst_desc* d) {
     return 0;
 }
 
-static int Stair_init(PyObject* self, PyObject* args, PyObject* kwds) {
+/* Build the desc from the keywords, then open, or load from `data` when it
+ * is not NULL. */
+static int st_setup(PyObject* self, PyObject* args, PyObject* kwds,
+                    const void* data, size_t len) {
     static char* kw[] = { "start", "rule", "n_up", "n_down", "step_type", "steps",
                           "step_down_scale", "target_p", "min", "max",
                           "use_limits", "harder_is_up", "initial_rule",
@@ -134,12 +137,54 @@ static int Stair_init(PyObject* self, PyObject* args, PyObject* kwds) {
     d.harder_is_up = harder_is_up ? true : false;
     d.initial_rule = initial_rule ? true : false;
 
-    if (!yst_open(AS_STAIR(self), &d)) {
-        /* Every yst_open() failure is a desc the manual lists as invalid. */
+    if (!(data ? yst_open_saved(AS_STAIR(self), &d, data, len) : yst_open(AS_STAIR(self), &d))) {
+        /* Every failure is a desc the manual lists as invalid, or a snapshot
+         * that does not belong to the desc or is corrupt. */
         PyErr_SetString(StArgumentError, yst_error(AS_STAIR(self)));
         return -1;
     }
     return 0;
+}
+
+static int Stair_init(PyObject* self, PyObject* args, PyObject* kwds) {
+    return st_setup(self, args, kwds, NULL, 0);
+}
+
+/* --- snapshots ------------------------------------------------------------ */
+
+static PyObject* Stair_save(PyObject* self, PyObject* Py_UNUSED(ignored)) {
+    size_t n;
+    PyObject* b;
+    int rc;
+    if (st_require_open(self) < 0) return NULL;
+    n = yst_save_size(AS_STAIR(self));
+    b = PyBytes_FromStringAndSize(NULL, (Py_ssize_t)n);
+    if (!b) return NULL;
+    rc = yst_save(AS_STAIR(self), PyBytes_AsString(b), n);
+    if (rc < 0) { Py_DECREF(b); return st_fail(rc); }
+    return b;
+}
+
+/* Staircase.load(data, **desc): a new Staircase resumed from save(). */
+static PyObject* Stair_load(PyObject* cls, PyObject* args, PyObject* kwds) {
+    PyObject *bytes, *self, *rest;
+    Py_ssize_t na = PyTuple_Size(args);
+    int rc;
+    if (na != 1) {
+        PyErr_SetString(PyExc_TypeError, "load(data, **desc) takes the snapshot bytes "
+                        "and the desc as keywords");
+        return NULL;
+    }
+    bytes = PyBytes_FromObject(PyTuple_GetItem(args, 0));
+    if (!bytes) return NULL;
+    rest = PyTuple_New(0);
+    self = rest ? PyObject_CallMethod(cls, "__new__", "O", cls) : NULL;
+    if (!self) { Py_XDECREF(rest); Py_DECREF(bytes); return NULL; }
+    rc = st_setup(self, rest, kwds, PyBytes_AsString(bytes), (size_t)PyBytes_Size(bytes));
+    Py_DECREF(rest);
+    Py_DECREF(bytes);
+    if (rc < 0) { Py_DECREF(self); return NULL; }
+    return self;
 }
 
 static void Stair_dealloc(PyObject* self) {
@@ -307,6 +352,14 @@ static PyMethodDef Stair_methods[] = {
       "reversal_trial(i) -> int: the trial index of reversal i." },
     { "reversals", Stair_reversals, METH_NOARGS,
       "reversals() -> list[(trial, level)]: every recorded reversal." },
+    { "save", Stair_save, METH_NOARGS,
+      "save() -> bytes: a snapshot of the staircase; load() resumes it without "
+      "replaying the updates." },
+    { "load", (PyCFunction)(void (*)(void))Stair_load, METH_VARARGS | METH_KEYWORDS | METH_CLASS,
+      "Staircase.load(data, **desc) -> Staircase: resume from save(). The desc "
+      "keywords are the constructor's and must open the same staircase; a "
+      "mismatch, or a corrupt or truncated snapshot, raises ArgumentError with "
+      "the library's message." },
     { NULL }
 };
 

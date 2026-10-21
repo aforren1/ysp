@@ -291,13 +291,13 @@ the header.
 | G3 | No logged and replayed categorical draw per trial: jitters are durations only, and the 2AFC side comes from the program's own generator. | ysp/trials.h (or player code, D8) | `vars` with `choice` | Small |
 | G4 | `weight COLUMN` sets `cond_reps` from the column; nothing multiplies it by `reps`. The Stroop program computes weight x reps in C. | ysp/trials.h | Stroop | Small |
 | G5 | No call maps a Michelson contrast in light to ysp/gfx.h's contrast and back to the contrast the output codes show (about 20 lines in trial_2afc_adaptive.c with `ycol_output_code()`). | ysp/color.h | `{"michelson": ...}` | Small |
-| G6 | Parameter tables (rig_spec 1, principle 8) exist for audio, color, gfx, outline, rdk, screen and video only. None for stair, quest or aep. Closed for the timeline: `ytl_op_params(kind, &n)` gives the rows of the fields each op kind reads (`YTL_OP_NONE` gives the `op` row, whose enum values name every kind), and `ytl_desc_params()` the desc's plain fields (ysp/timeline.h 0.8.0). Closed for response: `yrsp_params()` (ysp/response.h 0.6.0). Closed for the device families: `ydev_params(family, &n)`, the fields each family reads with its defaults (ysp/device.h 0.4.0). Closed for gfx's desc enums: `ygfx_enum_params()` lists `place`, `anchor`, `shape`, `aperture`, `edge`, `dist` and the rest with their kinds and values, and `ygfx_enum_set()` applies one (ysp/gfx.h 0.16.0). `ygfx_desc_params()` (the gfx's own desc) keeps its enum values in its doc text: `yscr_param` has no `values`. | those headers | The loader's key check and the designer's panels from one source | Medium |
+| G6 | Parameter tables (rig_spec 1, principle 8) exist for audio, color, gfx, outline, rdk, screen and video only. Closed for the methods: `yst_params()` (ysp/stair.h 0.3.0), `yqst_params()` (ysp/quest.h 0.7.0) and `yaep_params()` (ysp/aep.h 0.16.0) list every desc field a definition sets, with an enum's names and values. Closed for the timeline: `ytl_op_params(kind, &n)` gives the rows of the fields each op kind reads (`YTL_OP_NONE` gives the `op` row, whose enum values name every kind), and `ytl_desc_params()` the desc's plain fields (ysp/timeline.h 0.8.0). Closed for response: `yrsp_params()` (ysp/response.h 0.6.0). Closed for the device families: `ydev_params(family, &n)`, the fields each family reads with its defaults (ysp/device.h 0.4.0). Closed for gfx's desc enums: `ygfx_enum_params()` lists `place`, `anchor`, `shape`, `aperture`, `edge`, `dist` and the rest with their kinds and values, and `ygfx_enum_set()` applies one (ysp/gfx.h 0.16.0). `ygfx_desc_params()` (the gfx's own desc) keeps its enum values in its doc text: `yscr_param` has no `values`. | those headers | The loader's key check and the designer's panels from one source | Medium; closed, apart from `yscr_param`'s enum values |
 | G7 | The canonical writer writes a number's source text; only `yjs_new_fixed()` and `yjs_new_int()` make canonical numbers. No canonical decimal for other reals. The prerequisite for the experiment hash (D2). | ysp/json.h | D2 | Small |
 | G8 | A response-driven output waits for the frame loop to see the response, up to a frame after the press. No callback on the input's thread. | ysp/response.h, ysp/device.h | Response triggers (EEG) | Medium; measure the lag first |
 | G9 | Glyph-run blocks are listed by hand in the source description. Nothing derives them from a definition's texts and a table's levels. | pack tool | D14; Stroop | Small to medium |
 | G10 | A trial row has at most 64 columns (ysp/table.h's bound, kept by the writer). | ysp/trials.h, ysp/table.h | Templates with many recorded stimuli | Small; `record` limits columns meanwhile |
 | G11 | The jitter `rate=` takes a fixed number. Snapping to the rig's refresh needs the player to set `rate_num` and `rate_den` after `ytr_rules()`, and the text cannot say so. | ysp/trials.h | EEG example (`rate=display`) | Small |
-| G12 | ysp/stair.h has no save and open-saved (quest, aep and trials have them). A resume replays the staircase's updates meanwhile. | ysp/stair.h | Resume | Small |
+| G12 | Closed (2026-10-21): ysp/stair.h 0.3.0 has `yst_save()` and `yst_open_saved()`, in the form of quest's, aep's and trials' (versioned, checked, a mismatched desc refused, the error in the handle), so a resume no longer replays the staircase's updates. | ysp/stair.h | Resume | Small; closed |
 | G13 | The player's data set (D9) is not built. The trials writer's sidecar is key=value lines. | player | D9 | Medium |
 
 ## Part 2: Reference
@@ -465,7 +465,7 @@ steps in `streams/<name>.csv`, so `yrdk_replay()` regenerates every dot.
 | Key | Value |
 |---|---|
 | `type` | `"stair"`, `"quest"`, `"aep"` |
-| other keys | the fields of `yst_desc`, `yqst_desc` or `yaep_desc`; enums in lower case without the prefix (`"step_type": "log"`, `"pf": "gumbel"`); a `yqst_fixed(v)` grid is the number v |
+| other keys | the fields of `yst_desc`, `yqst_desc` or `yaep_desc`, as the rows of `yst_params()`, `yqst_params()` and `yaep_params()` name them; enums in lower case without the prefix, as the rows' values list them (`"step_type": "log"`, `"pf": "gumbel"`); a `yqst_fixed(v)` grid is the number v |
 | `scale` | `"linear"` (default) or `"log10"`: the method works in log10 of the stimulus value; `$level` and `method_value` are in stimulus units, and the player converts both ways. Grids and bounds are in the method's domain; a `gamut` value in them is converted to it |
 | `dims` | `aep` only: names for the dimensions, which become variables |
 | `estimate` | which estimate fills `$estimate` (`"reversals"`, `"trials"`, `"mean"`, `"mode"`) |
@@ -474,8 +474,8 @@ A method's stop fields end its track (`yst_done()`, `yqst_done()`).
 QUEST+ and AEP may compute the next proposal on the pump
 (`YQST_ASYNC`, `YAEP_ASYNC`); that is the player's choice, not the
 definition's. A resume restores the trials with `ytr_open_saved()`,
-QUEST+ and AEP with their saved states, and a staircase by replaying
-its updates (G12).
+and each method with its saved state: `yst_open_saved()`,
+`yqst_open_saved()`, `yaep_open_saved()`.
 
 ### 2.9 Devices
 

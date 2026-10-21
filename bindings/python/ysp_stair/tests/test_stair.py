@@ -192,3 +192,38 @@ def test_version_matches_pyproject():
         m = re.search(r'^version\s*=\s*"([^"]+)"', f.read(), re.M)
     assert m, "no version in pyproject.toml"
     assert yst.__version__ == m.group(1)
+
+
+def test_save_and_load_resume_without_replay():
+    desc = dict(start=0.5, n_down=3, step_type=yst.STEP_LOG, steps=[0.3, 0.15],
+                min=0.01, max=1.0, stop_reversals=8)
+    resp = [1, 1, 1, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0]
+    ref = yst.Staircase(**desc)
+    replay(ref, resp)
+    cut = yst.Staircase(**desc)
+    replay(cut, resp[:7])
+    snap = cut.save()
+    assert isinstance(snap, bytes) and snap[:4] == b"YSTR"
+    res = yst.Staircase.load(snap, **desc)
+    assert res.n_trials == 7
+    replay(res, resp[7:])
+    assert res.save() == ref.save()
+    assert res.next() == ref.next()
+    assert res.estimate() == ref.estimate()
+    assert res.history() == ref.history()
+
+
+def test_load_refuses_a_mismatched_desc_or_a_bad_snapshot():
+    s = yst.Staircase(start=10.0, steps=1.0, stop_trials=20)
+    replay(s, [1, 0, 1, 1])
+    snap = s.save()
+    # n_up 0 and 1 open the same staircase, so they agree.
+    assert yst.Staircase.load(snap, start=10.0, steps=1.0, stop_trials=20, n_up=1).n_trials == 4
+    with pytest.raises(yst.ArgumentError, match="stop_trials"):
+        yst.Staircase.load(snap, start=10.0, steps=1.0, stop_trials=21)
+    with pytest.raises(yst.ArgumentError, match="truncated"):
+        yst.Staircase.load(snap[:-3], start=10.0, steps=1.0, stop_trials=20)
+    with pytest.raises(yst.ArgumentError, match="not a ysp_stair snapshot"):
+        yst.Staircase.load(b"nope" + snap[4:], start=10.0, steps=1.0, stop_trials=20)
+    with pytest.raises(TypeError):
+        yst.Staircase.load(snap, 10.0)

@@ -11,7 +11,9 @@
  *         ysp_stair('update', h, x, run_trial(x));
  *     end
  *     thr = ysp_stair('estimate', h, 'reversals');
+ *     b = ysp_stair('save', h);             % uint8 snapshot
  *     ysp_stair('close', h);
+ *     h = ysp_stair('load', b, desc);       % resumes, no replay
  *
  * Build with build.m. See README.md for the command reference.
  *
@@ -111,18 +113,28 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     cmd = mxArrayToString(prhs[0]);
 
     /* ---- module commands: no handle ---- */
-    if (strcmp(cmd, "open") == 0) {
+    if (strcmp(cmd, "open") == 0 || strcmp(cmd, "load") == 0) {
         yst_desc d;
+        const uint8_t* bytes = NULL;
+        size_t len = 0;
+        bool load = cmd[0] == 'l', ok;
         memset(&d, 0, sizeof(d));
-        pm_nargs(nrhs, 2, "h = ysp_stair('open', desc)");
-        st_read_desc(prhs[1], &d);
+        if (load) {
+            pm_nargs(nrhs, 3, "h = ysp_stair('load', bytes, desc)");
+            bytes = pm_bytes_in(prhs[1], "bytes", &len);
+        } else {
+            pm_nargs(nrhs, 2, "h = ysp_stair('open', desc)");
+        }
+        /* Parse first: a parse error raises, and nothing malloc'd may be live. */
+        st_read_desc(prhs[load ? 2 : 1], &d);
         s = (yst_stair*)calloc(1, sizeof(*s));
         if (!s) pm_err("memory", "out of memory");
-        if (!yst_open(s, &d)) {
+        ok = load ? yst_open_saved(s, &d, bytes, len) : yst_open(s, &d);
+        if (!ok) {
             char msg[300];
             snprintf(msg, sizeof(msg), "%s", yst_error(s));
             free(s);
-            pm_err("open", "%s", msg);
+            pm_err(load ? "load" : "open", "%s", msg);
         }
         plhs[0] = pm_handle_out(pm_register(s));
         return;
@@ -196,6 +208,11 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
                 p[i] = want_level ? yst_reversal_level(s, i) : (double)(yst_reversal_trial(s, i) + 1);
             plhs[0] = a;
         }
+    } else if (strcmp(cmd, "save") == 0) {
+        size_t sz = yst_save_size(s);
+        mxArray* out = mxCreateNumericMatrix(1, sz, mxUINT8_CLASS, mxREAL);
+        st_check(yst_save(s, mxGetData(out), sz));
+        plhs[0] = out;
     } else if (strcmp(cmd, "close") == 0) {
         pm_unregister(s);
         free(s);

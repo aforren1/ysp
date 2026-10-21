@@ -11,15 +11,24 @@
 
 typedef struct stair_api {
     bool (*open)(yst_stair*, const yst_desc*);
+    bool (*open_saved)(yst_stair*, const yst_desc*, const void*, size_t);
     void (*close)(yst_stair*);
     const char* (*error)(const yst_stair*);
     int (*update)(yst_stair*, double, int);
+    size_t (*save_size)(const yst_stair*);
+    int (*save)(const yst_stair*, void*, size_t);
+    const yst_param* (*params)(int*);
 } stair_api;
 
-static const stair_api g_stair_api = { yst_open, yst_close, yst_error, yst_update };
+static const stair_api g_stair_api = {
+    yst_open, yst_open_saved, yst_close, yst_error, yst_update,
+    yst_save_size, yst_save, yst_params
+};
 
 int main(void) {
     static yst_stair s;
+    static unsigned char buf[512];
+    int n = 0, len;
     /* The zero-init rule (README, Conventions): { 0 } in C, {} in C++. */
 #ifdef __cplusplus
     yst_desc d = {};
@@ -32,6 +41,12 @@ int main(void) {
     d.stop_trials = 4;
     if (!g_stair_api.open(&s, &d)) return 1;
     if (g_stair_api.update(&s, yst_next(&s), 1) < 0) return 2;
+    if (g_stair_api.save_size(&s) > sizeof buf) return 4;
+    len = g_stair_api.save(&s, buf, sizeof buf);
+    if (len <= 0) return 5;
+    g_stair_api.close(&s);
+    if (!g_stair_api.open_saved(&s, &d, buf, (size_t)len)) return 6;
+    if (!g_stair_api.params(&n) || n < 1) return 7;
     g_stair_api.close(&s);
     g_stair_api.close(&s);
     return g_stair_api.error(&s)[0] == '\0' ? 0 : 3;
