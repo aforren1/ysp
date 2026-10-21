@@ -997,6 +997,21 @@ clock does not change. `test_virtual_inline` in `tests/adapt/video_test.c`
 opens a movie on the virtual clock with `desc.inline_decode` false and
 checks inline decoding and the describe line; mutant vi-01 is caught.
 
+## Enum values in the parameter table (v0.5.0)
+
+Every ysp parameter table has one row shape: `name`, `type`, `min`, `max`, `def`, `unit`, `doc`, `values` ([conventions.md](conventions.md), "Parameter tables"; gap G6 of [experiment_format.md](experiment_format.md)). `yvid_params()` returns `yscr_param`, which gained `values` in
+ysp/screen.h v0.9.0. `light` (`auto=0,codes=1,eotf=2`), `gpu_path`
+(`auto=0,upload=1,shared=2,gpu=3`; SHARED is not built), `hw_decode`
+(`auto=0,off=1,dxva=2`) and `chroma` (`sited=0,nearest=1`) list their C
+enums; their doc text listed upper-case names before. The other rows
+have NULL.
+
+The test (`test_params()` in `tests/adapt/video_test.c`) opens a movie on
+the scripted decoder with `ahead` 0 and compares the defaults with the
+movie's `info.ahead` (6) and `info.lead` (0.5), and `preroll` with what
+an ASAP start waits for (ahead). The other defaults are 0 or AUTO.
+2 of 2 new mutants killed (`tests/mutate/video.toml`, pv-).
+
 ## Needed from the other headers
 
 | Header | Request | Why |

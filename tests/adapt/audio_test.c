@@ -2626,6 +2626,102 @@ static void test_queue(void) {
 }
 #endif
 
+/* ------------------------------------------------- parameter table (v0.7) */
+
+#include "param_table_check.h"
+
+static void ptc_fail(int line, const char* what) { fail(line, what); }
+
+/* The C enums' names. No default, so -Wswitch (gcc and clang -Wall; CI's
+ * -Werror) stops the build when an enum gains a value; the values check
+ * then fails until the row lists it. */
+static const char* au_sample_name(int v) {
+    switch ((yau_sample)v) {
+    case YAU_F32: return "f32";
+    case YAU_S16: return "s16";
+    case YAU_S24: return "s24";
+    }
+    return NULL;
+}
+static const char* au_backend_name(int v) {
+    switch ((yau_backend)v) {
+    case YAU_BACKEND_AUTO: return "auto";
+    case YAU_BACKEND_WASAPI: return "wasapi";
+    case YAU_BACKEND_COREAUDIO: return "coreaudio";
+    case YAU_BACKEND_ALSA: return "alsa";
+    case YAU_BACKEND_PULSE: return "pulse";
+    case YAU_BACKEND_WEB: return "web";
+    case YAU_BACKEND_NULL: return "null";
+    case YAU_BACKEND_CUSTOM: return "custom";
+    }
+    return NULL;
+}
+
+#define AU_D(n, f, e) { n, offsetof(yau_desc, f), sizeof(((yau_desc*)0)->f), e }
+static const ptc_slot g_au_fields[] = {
+    AU_D("format.rate", format.rate, NULL), AU_D("format.channels", format.channels, NULL),
+    AU_D("format.sample", format.sample, au_sample_name), AU_D("backend", backend, au_backend_name),
+    AU_D("exclusive", exclusive, NULL), AU_D("period", period, NULL), AU_D("queue", queue, NULL),
+    AU_D("voices", voices, NULL), AU_D("device_index", device_index, NULL), AU_D("min_tier", min_tier, NULL),
+    AU_D("onset_offset_ns", onset_offset_ns, NULL),
+    /* a size_t: the row's u32 is the range open() takes, 4 bytes of it */
+    { "arena_bytes", offsetof(yau_desc, arena_bytes), 4, NULL },
+    { "stream.frames", offsetof(yau_stream_desc, frames), sizeof(((yau_stream_desc*)0)->frames), NULL },
+    { "stream.preroll", offsetof(yau_stream_desc, preroll), sizeof(((yau_stream_desc*)0)->preroll), NULL },
+    { "wav.loops", offsetof(yau_wav_desc, loops), sizeof(((yau_wav_desc*)0)->loops), NULL },
+};
+#undef AU_D
+#define AU_NF ((int)(sizeof g_au_fields / sizeof g_au_fields[0]))
+
+/* Every row is a real field with its C enum's values, and its default is
+ * what open() makes of a zero field: the resolved desc, the arena it
+ * allocates, the ring of a zero stream desc. */
+static void test_params(void) {
+    static ptc_row rows[64];
+    static yau_stream st;
+    sdev* s = &g_sd;
+    yau_desc d;
+    yau_stream_desc sd;
+    int n = -1, i, j, checked = 0;
+    const yau_param* p = yau_params(&n);
+    CHECK(p != NULL && n == AU_NF && yau_params(NULL) == p);
+    if (!p || n > 64) return;
+    for (i = 0; i < n; i++) PTC_ROW(rows[i], p[i]);
+    ptc_check_slots(rows, n, g_au_fields, AU_NF);
+    sd_default(s);
+    memset(&d, 0, sizeof d);
+    d.backend = YAU_BACKEND_CUSTOM;   /* the one field set: backend's own zero is AUTO */
+    d.dev = &g_dev;
+    d.dev_ctx = s;
+    CHECK(yau_open(&g_au, &d));
+    if (!yau_is_open(&g_au)) return;
+    memset(&sd, 0, sizeof sd);
+    memset(&st, 0, sizeof st);
+    CHECK(yau_stream_open(&g_au, &st, &sd));
+    for (i = 0; i < n; i++) {
+        const ptc_slot* f = NULL;
+        double got;
+        for (j = 0; j < AU_NF; j++)
+            if (!strcmp(rows[i].name, g_au_fields[j].name)) f = &g_au_fields[j];
+        if (!f || !strcmp(rows[i].name, "backend")) continue;
+        if (!strcmp(rows[i].name, "arena_bytes")) got = (double)g_au.arena_cap;
+        else if (!strcmp(rows[i].name, "stream.frames")) got = (double)st.cap_;
+        else if (!strcmp(rows[i].name, "stream.preroll")) got = (double)yau__stream_preroll(&st);
+        else if (!strncmp(rows[i].name, "stream.", 7) || !strncmp(rows[i].name, "wav.", 4)) got = 0.0;   /* kept as given */
+        else got = ptc_read(&g_au.desc, f, rows[i].type);
+        checked++;
+        if (got != rows[i].def) {
+            char msg[160];
+            snprintf(msg, sizeof msg, "row %s: a zero field is %.17g, the table says %.17g", rows[i].name, got, rows[i].def);
+            fail(__LINE__, msg);
+        }
+    }
+    CHECK_I(checked, n - 1);
+    yau_stream_close(&g_au, &st);
+    yau_close(&g_au);
+}
+#undef AU_NF
+
 static void test_misc(void) {
     int n = 0;
     const yau_param* p = yau_params(&n);
@@ -2710,6 +2806,7 @@ int main(int argc, char** argv) {
 #if YAU_VERSION_MINOR >= 6
     test_virtual_null();
 #endif
+    test_params();
     test_misc();
     free(g_tape);
     if (g_failures) { fprintf(stderr, "audio_test: %d failure(s)\n", g_failures); return 1; }

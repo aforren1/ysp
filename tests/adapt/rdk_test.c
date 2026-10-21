@@ -1350,6 +1350,41 @@ static void test_conventions(void) {
     CHECK(yrdk_update(&f, 2000) == YRDK_ERR_ARG);
 }
 
+/* v0.3.0: the parameter table in the shared row shape. */
+#include "param_table_check.h"
+
+static void ptc_fail(int line, const char* what) {
+    fprintf(stderr, "rdk_test [%s]: FAIL line %d: %s\n", g_where, line, what);
+    g_failures++;
+}
+
+#define RDK_F(f) { #f, offsetof(yrdk_field, f), sizeof(((yrdk_field*)0)->f), NULL }
+static const ptc_slot g_rdk_fields[] = { RDK_F(coherence), RDK_F(direction), RDK_F(speed) };
+#undef RDK_F
+
+/* Every row is a float of the field at its offset, with no values (no row
+ * is an enum), and its default is what open() puts there from a desc
+ * whose field is 0. */
+static void test_params(void) {
+    static yrdk_field f;
+    yrdk_desc d = base_desc();
+    ptc_row rows[3];
+    int n = -1, i;
+    const yrdk_param* p = yrdk_params(&n);
+    g_where = "params";
+    CHECK(p != NULL && n == 3 && yrdk_params(NULL) == p);
+    if (!p || n != 3) return;
+    for (i = 0; i < n; i++) PTC_ROW(rows[i], p[i]);
+    ptc_check_slots(rows, n, g_rdk_fields, 3);
+    d.w = 10; d.count = 50;   /* required; coherence, direction and speed stay 0 */
+    if (open_ok(&f, &d) < 0) return;
+    for (i = 0; i < n; i++) {
+        CHECK(p[i].offset == g_rdk_fields[i].off && !strcmp(p[i].name, g_rdk_fields[i].name));
+        CHECK(ptc_read(&f, &g_rdk_fields[i], p[i].type) == p[i].def);
+    }
+    yrdk_close(&f);
+}
+
 int main(void) {
     const char* v = getenv("YRDK_TEST_VERBOSE");
     g_verbose = v && *v && *v != '0';
@@ -1372,6 +1407,7 @@ int main(void) {
     test_edges();
     test_repro();
     test_outputs();
+    test_params();
     if (g_failures) { fprintf(stderr, "rdk_test: %d failures\n", g_failures); return 1; }
     printf("rdk_test: all checks passed\n");
     return 0;

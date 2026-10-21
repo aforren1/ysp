@@ -1,4 +1,4 @@
-/* ysp/color.h - v0.2.0 - public domain single-header color library for
+/* ysp/color.h - v0.3.0 - public domain single-header color library for
  *   calibrated displays
  *
  *   Color for psychophysics on a measured display: the display calibration
@@ -334,6 +334,13 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.3.0 - PARAMETERS: ycol_param gains a last field, values, after
+ *          offset: for an enum row the C enum's names and values
+ *          ("ss2=0,ss10=1"), NULL for every other row. cones and adapt
+ *          list them; the doc text no longer does. The first seven
+ *          fields are the shared row shape of every ysp table; offset
+ *          sits between doc and values, which a reader by field name does
+ *          not see. No conversion changed.
  *   v0.2.0 - The ysp conventions (README.md, Conventions); breaks the API.
  *          ycol_ctx_init(cx, d, err, cap) is bool ycol_ctx_open(cx, d):
  *          the message is in the context (ycol_ctx_error()) and the code
@@ -415,9 +422,9 @@ extern "C" {
 #endif
 
 #define YCOL_VERSION_MAJOR  0
-#define YCOL_VERSION_MINOR  2
+#define YCOL_VERSION_MINOR  3
 #define YCOL_VERSION_PATCH  0
-#define YCOL_VERSION_STRING "0.2.0"
+#define YCOL_VERSION_STRING "0.3.0"
 
 /* YCOL_VERSION_STRING, as compiled into the implementation. */
 YCOL_API const char* ycol_version(void);
@@ -901,9 +908,15 @@ typedef struct ycol_param {
     const char* unit;
     const char* doc;
     uint32_t    offset;          /* in ycol_ctx_desc                            */
+    const char* values;          /* v0.3, "enum": "name=value" pairs joined by
+                                  * ',', in value order; NULL otherwise. After
+                                  * offset, so the shared row shape's fields
+                                  * are name to doc and values                */
 } ycol_param;
 
-/* The desc fields a designer sets (the pointers are not in it). */
+/* The desc fields a designer sets (the pointers are not in it). An enum
+ * row's names are its C enum's suffixes in lower case ("ss10" is
+ * YCOL_CONES_SS10). */
 YCOL_API const ycol_param* ycol_desc_params(int* n);
 
 #ifdef __cplusplus
@@ -2905,15 +2918,17 @@ YCOL_API int ycol_format(ycol_color c, char* buf, size_t cap) {
 
 #define YCOL__P(f, i) (uint32_t)(offsetof(ycol_ctx_desc, f) + (i) * sizeof(double))
 static const ycol_param ycol__desc_params[] = {
-    { "background[0]", "f64", 0, 1, 0, "", "background, red: the zero of the contrast spaces", YCOL__P(background, 0) },
-    { "background[1]", "f64", 0, 1, 0, "", "background, green", YCOL__P(background, 1) },
-    { "background[2]", "f64", 0, 1, 0, "", "background, blue", YCOL__P(background, 2) },
-    { "cones", "enum", 0, 1, 0, "", "cone fundamentals: 0 SS2 (2 degree), 1 SS10 (10 degree)", (uint32_t)offsetof(ycol_ctx_desc, cones) },
-    { "adapt", "enum", 0, 1, 0, "", "D65 sources: 0 no adaptation, 1 Bradford to the display's white", (uint32_t)offsetof(ycol_ctx_desc, adapt) },
-    { "white[0]", "f64", 0, 1e6, 0, "cd/m2", "reference white X; all 0 = the display's white", YCOL__P(white, 0) },
-    { "white[1]", "f64", 0, 1e6, 0, "cd/m2", "reference white Y", YCOL__P(white, 1) },
-    { "white[2]", "f64", 0, 1e6, 0, "cd/m2", "reference white Z", YCOL__P(white, 2) },
-    { "src_white_Y", "f64", 0, 1e6, 0, "cd/m2", "a D65 source's white; 0 = relative to the display", (uint32_t)offsetof(ycol_ctx_desc, src_white_Y) },
+    { "background[0]", "f64", 0, 1, 0, "", "background, red: the zero of the contrast spaces", YCOL__P(background, 0), NULL },
+    { "background[1]", "f64", 0, 1, 0, "", "background, green", YCOL__P(background, 1), NULL },
+    { "background[2]", "f64", 0, 1, 0, "", "background, blue", YCOL__P(background, 2), NULL },
+    { "cones", "enum", 0, 1, 0, "", "cone fundamentals: Stockman and Sharpe 2 or 10 degree", (uint32_t)offsetof(ycol_ctx_desc, cones),
+      "ss2=0,ss10=1" },
+    { "adapt", "enum", 0, 1, 0, "", "D65 sources: none, or Bradford to the display's white", (uint32_t)offsetof(ycol_ctx_desc, adapt),
+      "none=0,bradford=1" },
+    { "white[0]", "f64", 0, 1e6, 0, "cd/m2", "reference white X; all 0 = the display's white", YCOL__P(white, 0), NULL },
+    { "white[1]", "f64", 0, 1e6, 0, "cd/m2", "reference white Y", YCOL__P(white, 1), NULL },
+    { "white[2]", "f64", 0, 1e6, 0, "cd/m2", "reference white Z", YCOL__P(white, 2), NULL },
+    { "src_white_Y", "f64", 0, 1e6, 0, "cd/m2", "a D65 source's white; 0 = relative to the display", (uint32_t)offsetof(ycol_ctx_desc, src_white_Y), NULL },
 };
 #undef YCOL__P
 

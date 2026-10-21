@@ -1951,19 +1951,163 @@ static void t11_allocs(void) {
 
 /* --- T12: parameter tables -------------------------------------------------------------- */
 
+#include "param_table_check.h"
+
+static void ptc_fail(int line, const char* what) {
+    g_checks++;
+    fprintf(stderr, "outline_test [%s]: FAIL line %d: %s\n", g_where, line, what);
+    g_failures++;
+}
+
+/* No default, so -Wswitch (gcc and clang -Wall; CI's -Werror) stops the
+ * build when an enum gains a value. */
+static const char* ol_join_name(int v) {
+    switch ((yol_join)v) {
+    case YOL_JOIN_ROUND: return "round";
+    case YOL_JOIN_MITER: return "miter";
+    case YOL_JOIN_BEVEL: return "bevel";
+    }
+    return NULL;
+}
+static const char* ol_cap_name(int v) {
+    switch ((yol_cap)v) {
+    case YOL_CAP_BUTT: return "butt";
+    case YOL_CAP_ROUND: return "round";
+    case YOL_CAP_SQUARE: return "square";
+    }
+    return NULL;
+}
+static const char* ol_mode_name(int v) {
+    switch ((yol_stroke_mode)v) {
+    case YOL_STROKE: return "stroke";
+    case YOL_BOLD: return "bold";
+    case YOL_INSET: return "inset";
+    }
+    return NULL;
+}
+static const char* ol_alpha_name(int v) {
+    switch ((yol_alpha)v) {
+    case YOL_ALPHA_U8: return "u8";
+    case YOL_ALPHA_U16: return "u16";
+    case YOL_ALPHA_F32: return "f32";
+    case YOL_ALPHA_F64: return "f64";
+    }
+    return NULL;
+}
+
+#define OL_F(T, f, e) { #f, offsetof(T, f), sizeof(((T*)0)->f), e }
+static const ptc_slot g_ol_stroke[] = {
+    OL_F(yol_stroke_desc, width, NULL), OL_F(yol_stroke_desc, join, ol_join_name),
+    OL_F(yol_stroke_desc, miter_limit, NULL), OL_F(yol_stroke_desc, cap, ol_cap_name),
+    OL_F(yol_stroke_desc, mode, ol_mode_name), OL_F(yol_stroke_desc, tol, NULL),
+};
+static const ptc_slot g_ol_raster[] = {
+    OL_F(yol_raster_desc, scale, NULL), OL_F(yol_raster_desc, x, NULL), OL_F(yol_raster_desc, y, NULL),
+    OL_F(yol_raster_desc, format, ol_alpha_name),
+};
+static const ptc_slot g_ol_cset[] = {
+    OL_F(yol_cset_desc, n_glyphs, NULL), OL_F(yol_cset_desc, nh, NULL), OL_F(yol_cset_desc, nv, NULL),
+    OL_F(yol_cset_desc, backward, NULL), OL_F(yol_cset_desc, keep_overlaps, NULL),
+};
+static const ptc_slot g_ol_glyph[] = {
+    OL_F(yol_glyph_desc, size, NULL), OL_F(yol_glyph_desc, x, NULL), OL_F(yol_glyph_desc, y, NULL),
+    OL_F(yol_glyph_desc, y_up, NULL), OL_F(yol_glyph_desc, tol, NULL),
+};
+#undef OL_F
+
+/* A table's rows against its fields; the default of every row.
+ * Returns the row whose name is want, or NULL. */
+static const yol_param* ol_table(const yol_param* (*get)(int*), const ptc_slot* f, int nf, const char* want) {
+    ptc_row rows[16];
+    const yol_param* hit = NULL;
+    int n = -1, i, j;
+    const yol_param* t = get(&n);
+    CHECK(t != NULL && n == nf && n <= 16);
+    if (!t || n > 16) return NULL;
+    for (i = 0; i < n; i++) PTC_ROW(rows[i], t[i]);
+    ptc_check_slots(rows, n, f, nf);
+    for (i = 0; i < n; i++) {
+        for (j = 0; j < nf; j++)
+            if (!strcmp(t[i].name, f[j].name)) CHECK(t[i].offset == f[j].off);
+        if (want && !strcmp(t[i].name, want)) hit = &t[i];
+    }
+    return hit;
+}
+
+static int ol_same(const yol_path* a, const yol_path* b) {
+    return a->n_pts == b->n_pts && a->n_contours == b->n_contours && a->n_pts > 0 &&
+           !memcmp(a->pts, b->pts, sizeof(double) * 2 * (size_t)a->n_pts) &&
+           !memcmp(a->contours, b->contours, sizeof(uint32_t) * (size_t)a->n_contours);
+}
+
+/* Every row is a real field at its offset, with its C enum's values, and
+ * the defaults that are not 0 give what a zero field gives: the same
+ * stroke, the same glyph outline. The other defaults are 0, kept as 0 (a
+ * value, or the sentinel the doc names: nh 0 is chosen per glyph). */
 static void t12_params(void) {
-    int n, i;
-    const yol_param* t;
+    const yol_param* r;
+    yol_path p, a, b;
+    yol_stroke_desc sd;
     g_where = "T12 params";
-    t = yol_stroke_params(&n);
-    CHECK(n == 6 && strcmp(t[0].name, "width") == 0 && t[0].offset == offsetof(yol_stroke_desc, width) && t[2].def == 4);
-    for (i = 0; i < n; i++) CHECK(t[i].offset < sizeof(yol_stroke_desc) && t[i].doc && t[i].min <= t[i].max);
-    t = yol_raster_params(&n);
-    CHECK(n == 4 && t[3].offset == offsetof(yol_raster_desc, format));
-    t = yol_cset_params(&n);
-    CHECK(n == 5 && t[4].offset == offsetof(yol_cset_desc, keep_overlaps) && t[1].offset == offsetof(yol_cset_desc, nh));
-    t = yol_glyph_params(&n);
-    CHECK(n == 5 && t[4].def == 1e-4 && t[3].offset == offsetof(yol_glyph_desc, y_up));
+    yol_path_init(&p, &g_cx); yol_path_init(&a, &g_cx); yol_path_init(&b, &g_cx);
+    /* stroke: two corners whose miter ratios (1 / sin(angle / 2)) are 3.9
+     * and 4.1, either side of the default limit, so a default above or
+     * below 4 changes one of them; then a quadratic, open */
+    {
+        double a1 = 2 * asin(1 / 3.9), a2 = 2 * asin(1 / 4.1);
+        double x2 = 1 - cos(a1), y2 = sin(a1);
+        yol_move(&p, 0, 0); yol_line(&p, 1, 0); yol_line(&p, x2, y2);
+        yol_line(&p, x2 + cos(a2 - a1), y2 + sin(a2 - a1));
+        yol_quad(&p, x2 + cos(a2 - a1) + 0.3, y2 + 0.5, x2 + 0.6, y2 + 0.9);
+    }
+    CHECK(yol_path_end(&p) == YOL_OK);
+    memset(&sd, 0, sizeof sd);
+    sd.width = 0.1; sd.join = YOL_JOIN_MITER;
+    CHECK(yol_stroke(&g_cx, &p, &a, &sd) == YOL_OK);
+    r = ol_table(yol_stroke_params, g_ol_stroke, 6, "miter_limit");
+    if (r) {
+        sd.miter_limit = r->def;
+        CHECK(yol_stroke(&g_cx, &p, &b, &sd) == YOL_OK && ol_same(&a, &b));
+        sd.miter_limit = 3;   /* below 3.9: a bevel, so the test sees the limit */
+        CHECK(yol_stroke(&g_cx, &p, &b, &sd) == YOL_OK && !ol_same(&a, &b));
+        sd.miter_limit = 5;   /* above 4.1: a miter */
+        CHECK(yol_stroke(&g_cx, &p, &b, &sd) == YOL_OK && !ol_same(&a, &b));
+        sd.miter_limit = 0;
+    }
+    r = ol_table(yol_stroke_params, g_ol_stroke, 6, "tol");
+    if (r) {   /* p.tol is 0, so a zero tol is 1e-4 */
+        sd.tol = r->def;
+        CHECK(yol_stroke(&g_cx, &p, &b, &sd) == YOL_OK && ol_same(&a, &b));
+        sd.tol = 1e-9;   /* tighter: more pieces, so the test sees the tolerance */
+        CHECK(yol_stroke(&g_cx, &p, &b, &sd) == YOL_OK && !ol_same(&a, &b));
+    }
+    (void)ol_table(yol_raster_params, g_ol_raster, 4, NULL);
+    (void)ol_table(yol_cset_params, g_ol_cset, 5, NULL);
+    {   /* glyph: a CFF glyph, whose cubics the tolerance flattens */
+        bb cf = { 0, 0, 0 };
+        yol_font f;
+        yol_glyph_desc gd;
+        char err[200];
+        const yol_param* rs;
+        make_cff(&cf, 0, 0);
+        CHECK(yol_font_view(&f, cf.d, cf.n, 0, err, sizeof err) == YOL_OK);
+        yol_path_clear(&a);
+        CHECK(yol_font_glyph(&g_cx, &f, 1, &a, NULL) == YOL_OK);
+        memset(&gd, 0, sizeof gd);
+        rs = ol_table(yol_glyph_params, g_ol_glyph, 5, "size");
+        r = ol_table(yol_glyph_params, g_ol_glyph, 5, "tol");
+        if (rs && r) {
+            gd.size = rs->def;
+            gd.tol = r->def;
+            yol_path_clear(&b);
+            CHECK(yol_font_glyph(&g_cx, &f, 1, &b, &gd) == YOL_OK && ol_same(&a, &b));
+            gd.size = 2;
+            yol_path_clear(&b);
+            CHECK(yol_font_glyph(&g_cx, &f, 1, &b, &gd) == YOL_OK && !ol_same(&a, &b));
+        }
+        free(cf.d);
+    }
+    yol_path_free(&p); yol_path_free(&a); yol_path_free(&b);
     CHECK(strcmp(yol_version(), YOL_VERSION_STRING) == 0 && strcmp(yol_strerror(YOL_ERR_NUMERIC), "numeric failure") == 0);
 }
 

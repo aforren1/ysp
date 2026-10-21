@@ -142,6 +142,12 @@ int main(void) {
         if (ygfx_enum_set(&gs, YGFX_E_EDGE, YGFX_EDGE_COSINE) != YGFX_OK || ygfx_enum_get(&gs, YGFX_E_EDGE) != 1 ||
             ygfx_enum_set(&gs, YGFX_E_JOIN, 0) != YGFX_ERR_ARG) return 28;
     }
+    {   /* v0.17: the desc table's values, on its enum rows only */
+        const yscr_param* dp = ygfx_desc_params(&m);
+        int e = 0;
+        for (i = 0; dp && i < m; i++) e += (dp[i].values != NULL) == !strcmp(dp[i].type, "enum");
+        if (!dp || e != m) return 29;
+    }
     return ygfx_params(&n) && n == YGFX_P_COUNT && ygfx_desc_params(&m) && m > 0 &&
            ygfx_group_params(&k) && k > 0 ? 0 : 8;
 }

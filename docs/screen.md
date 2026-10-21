@@ -2658,6 +2658,40 @@ message, and the refusal of a negative `panic_grace_ns`.
 Mutants cv-01 (a failure that writes nothing) and cv-02 (a success that
 drops the message) are caught.
 
+## Enum values in the parameter table (v0.9.0)
+
+Every ysp parameter table has one row shape: `name`, `type`, `min`, `max`, `def`, `unit`, `doc`, `values` ([conventions.md](conventions.md), "Parameter tables"; gap G6 of [experiment_format.md](experiment_format.md)). `yscr_param` gained `values` as its last field. ysp/gfx.h's
+`ygfx_desc_params()` and ysp/video.h's `yvid_params()` return
+`yscr_param` too, so their enum rows have values from gfx v0.17.0 and
+video v0.5.0.
+
+| Row | values |
+|---|---|
+| `backend` | `auto=0,dxgi_flip=1,composition=2,glx_oml=3,wayland=4,metal=5,web=6,sim=7,custom=8` |
+| `patch.corner` | `top_left=0,top_right=1,bottom_left=2,bottom_right=3` |
+| `settle` | `auto=0,strict=1,warn=2,off=3` |
+
+The doc text of `backend` listed 0, 1, 2, 7 and 8, and its range said 0
+to 8, so a reader could not tell whether 3 to 6 exist. They do: the C
+enum has them, and `open()` refuses the stubs (GLX_OML, WAYLAND, METAL)
+with a message and WEB outside Emscripten. `values` lists the C enum,
+not what opens here; the doc says which are stubs. `patch.corner` and
+`settle` are `YSCR_` macros, not a C enum, so the test's names of them
+need a case by review when a macro is added.
+
+`key_dedup_ns`'s default changed from 0 to 5e7: a zero field filters a
+key's second report within 50 ms, and a designer that showed 0 suggested
+no filter. The other zero defaults are the zero itself or a sentinel the
+doc names (`display` 0 is the primary display, `depth` 0 the path's).
+
+The test (`test_params()` in `tests/adapt/screen_test.c`) opens a SIM
+screen with a zero desc and compares each default with what the screen
+holds (`lead`, the patch size, the abort key and modifiers, the settle
+flips, minimum and cap, the SIM period) or with the constant open puts
+in where the screen keeps none (`window_w` 800, `window_h` 600,
+`refresh_den` 1, the panic presses, window and grace, the key filter's
+`YSCR__KEY_DEDUP_NS`). 4 of 4 new mutants killed; 2 more, run against `tests/adapt/param_tables_test.c`, show that the cross-header check sees a name twice and a default that is not a value (`tests/mutate/screen.toml`, pv-).
+
 ## SIM on a virtual clock (v0.8.0)
 
 `--sim` self-checks failed on loaded CI runners (macOS most often): the

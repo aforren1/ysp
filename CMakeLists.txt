@@ -599,6 +599,14 @@ if(TARGET SDL3::Headers AND YSP_BUILD_TESTS)
     target_link_libraries(test_input_sdl PRIVATE SDL3::Headers)
     add_test(NAME test_input_sdl COMMAND test_input_sdl)
 endif()
+# Every header's parameter table against the one row shape (name, type,
+# min, max, def, unit, doc, values; docs/experiment_format.md, G6): one
+# program that includes them all, as the player's loader will, without
+# SDL, miniaudio or pl_mpeg.
+if(YSP_BUILD_TESTS)
+    ysp_add_program(test_param_tables tests/adapt/param_tables_test.c core methods devices rig)
+    add_test(NAME test_param_tables COMMAND test_param_tables)
+endif()
 if(TARGET SDL3::SDL3 AND YSP_BUILD_EXAMPLES)
     # The jsPsych-style trials of examples/response/ (docs/response.md,
     # "What the examples show"); the two with a sound need miniaudio.

@@ -33,8 +33,8 @@ def s(ns):
 def test_version_matches_pyproject():
     text = open(os.path.join(os.path.dirname(HERE), "pyproject.toml")).read()
     assert re.search(r'^version = "([^"]+)"', text, re.M).group(1) == yrdk.__version__
-    # the fourth number counts changes to the binding alone
-    assert yrdk.__version__.startswith(yrdk.version() + ".")
+    # the header's version, and a fourth number for a change to the binding alone
+    assert yrdk.__version__ == yrdk.version() or yrdk.__version__.startswith(yrdk.version() + ".")
 
 
 def test_exact_pieces():

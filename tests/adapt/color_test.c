@@ -1088,6 +1088,74 @@ static void test_values(void) {
     }
 }
 
+/* --- the parameter table (v0.3) ------------------------------------------ */
+
+#include "param_table_check.h"
+
+static void ptc_fail(int line, const char* what) {
+    fprintf(stderr, "color_test [%s]: FAIL line %d: %s\n", g_where, line, what);
+    g_failures++;
+}
+
+/* No default, so -Wswitch (gcc and clang -Wall; CI's -Werror) stops the
+ * build when an enum gains a value. */
+static const char* col_cones_name(int v) {
+    switch ((ycol_cones)v) {
+    case YCOL_CONES_SS2: return "ss2";
+    case YCOL_CONES_SS10: return "ss10";
+    }
+    return NULL;
+}
+static const char* col_adapt_name(int v) {
+    switch ((ycol_adapt)v) {
+    case YCOL_ADAPT_NONE: return "none";
+    case YCOL_ADAPT_BRADFORD: return "bradford";
+    }
+    return NULL;
+}
+
+#define COL_D(n, f, e) { n, offsetof(ycol_ctx_desc, f), sizeof(((ycol_ctx_desc*)0)->f), e }
+static const ptc_slot g_col_fields[] = {
+    COL_D("background[0]", background[0], NULL), COL_D("background[1]", background[1], NULL),
+    COL_D("background[2]", background[2], NULL), COL_D("cones", cones, col_cones_name),
+    COL_D("adapt", adapt, col_adapt_name), COL_D("white[0]", white[0], NULL), COL_D("white[1]", white[1], NULL),
+    COL_D("white[2]", white[2], NULL), COL_D("src_white_Y", src_white_Y, NULL),
+};
+#undef COL_D
+#define COL_NF ((int)(sizeof g_col_fields / sizeof g_col_fields[0]))
+
+/* Every row is a real field at its offset, with its C enum's values; every
+ * default is 0, which the context keeps (a value, or the sentinel its doc
+ * names), and a context from the defaults is the zero desc's. */
+static void test_params(void) {
+    ptc_row rows[16];
+    ycol_ctx z, c;
+    ycol_ctx_desc d;
+    int n = -1, i, j;
+    const ycol_param* p = ycol_desc_params(&n);
+    g_where = "params";
+    CHECK(p != NULL && n == COL_NF && ycol_desc_params(NULL) == p);
+    if (!p || n > 16) return;
+    for (i = 0; i < n; i++) PTC_ROW(rows[i], p[i]);
+    ptc_check_slots(rows, n, g_col_fields, COL_NF);
+    memset(&d, 0, sizeof d);
+    d.cal = &cal_full;
+    CHECK(ycol_ctx_open(&z, &d));
+    for (i = 0; i < n; i++) {
+        for (j = 0; j < COL_NF; j++) {
+            if (strcmp(p[i].name, g_col_fields[j].name) != 0) continue;
+            CHECK(p[i].offset == g_col_fields[j].off);
+            CHECK(ptc_read(&z.desc, &g_col_fields[j], p[i].type) == p[i].def);
+            if (!strcmp(p[i].type, "enum")) { int32_t v = (int32_t)p[i].def; memcpy((char*)&d + p[i].offset, &v, 4); }
+            else { double v = p[i].def; memcpy((char*)&d + p[i].offset, &v, 8); }
+        }
+    }
+    CHECK(ycol_ctx_open(&c, &d) && c.id == z.id && c.can == z.can);
+    ycol_ctx_close(&c);
+    ycol_ctx_close(&z);
+}
+#undef COL_NF
+
 int main(void) {
     make_cals();
     test_cal_published();
@@ -1102,6 +1170,7 @@ int main(void) {
     test_raw_parity();
     test_refusals();
     test_values();
+    test_params();
     if (g_failures) {
         fprintf(stderr, "color_test: %d failure(s)\n", g_failures);
         return 1;

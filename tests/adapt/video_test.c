@@ -3224,6 +3224,93 @@ static void test_mf(void) {
 static void test_mf(void) { printf("video_test: Media Foundation cases skipped: not Windows, or YVID_NO_MF\n"); }
 #endif
 
+/* ------------------------------------------------- parameter table (v0.5) */
+
+#include "param_table_check.h"
+
+static void ptc_fail(int line, const char* what) { fail(line, what); }
+
+/* No default, so -Wswitch (gcc and clang -Wall; CI's -Werror) stops the
+ * build when an enum gains a value. */
+static const char* vid_light_name(int v) {
+    switch ((yvid_light)v) {
+    case YVID_LIGHT_AUTO: return "auto";
+    case YVID_LIGHT_CODES: return "codes";
+    case YVID_LIGHT_EOTF: return "eotf";
+    }
+    return NULL;
+}
+static const char* vid_path_name(int v) {
+    switch ((yvid_path)v) {
+    case YVID_PATH_AUTO: return "auto";
+    case YVID_PATH_UPLOAD: return "upload";
+    case YVID_PATH_SHARED: return "shared";
+    case YVID_PATH_GPU: return "gpu";
+    }
+    return NULL;
+}
+static const char* vid_hw_name(int v) {
+    switch ((yvid_hw)v) {
+    case YVID_HW_AUTO: return "auto";
+    case YVID_HW_OFF: return "off";
+    case YVID_HW_DXVA: return "dxva";
+    }
+    return NULL;
+}
+static const char* vid_chroma_name(int v) {
+    switch ((yvid_chroma)v) {
+    case YVID_CHROMA_SITED: return "sited";
+    case YVID_CHROMA_NEAREST: return "nearest";
+    }
+    return NULL;
+}
+
+#define VID_D(f, e) { #f, offsetof(yvid_desc, f), sizeof(((yvid_desc*)0)->f), e }
+static const ptc_slot g_vid_fields[] = {
+    VID_D(ahead, NULL), VID_D(preroll, NULL), VID_D(loop, NULL), VID_D(strict_cadence, NULL), VID_D(lead, NULL),
+    VID_D(light, vid_light_name), VID_D(gpu_path, vid_path_name), VID_D(hw_decode, vid_hw_name),
+    VID_D(chroma, vid_chroma_name), VID_D(base, NULL), VID_D(min_tier, NULL), VID_D(movie_index, NULL),
+    VID_D(pin_cpu, NULL),
+};
+#undef VID_D
+#define VID_NF ((int)(sizeof g_vid_fields / sizeof g_vid_fields[0]))
+
+/* Every row is a real field with its C enum's values, and its default is
+ * what open() makes of a zero field: ahead and lead from the movie's info,
+ * preroll from the rule that start applies. The other rows' zero stays 0
+ * (a value, or the AUTO their doc names). */
+static void test_params(void) {
+    static ptc_row rows[64];
+    yvid_desc vd;
+    int n = -1, i, checked = 0;
+    const yscr_param* p = yvid_params(&n);
+    g_case = "params";
+    CHECK(p != NULL && n == VID_NF && yvid_params(NULL) == p);
+    if (!p || n > 64) return;
+    for (i = 0; i < n; i++) PTC_ROW(rows[i], p[i]);
+    ptc_check_slots(rows, n, g_vid_fields, VID_NF);
+    rec_reset();
+    sd_default(&g_sd, 30, 1, 400, 1);
+    desc_default(&vd);
+    vd.ahead = 0;   /* the harness's 6, zeroed: the table's rows are all 0 now */
+    if (!open_mv(&vd)) return;
+    for (i = 0; i < n; i++) {
+        double want = 0;
+        if (!strcmp(p[i].name, "ahead")) want = g_mv.info.ahead;
+        else if (!strcmp(p[i].name, "preroll")) want = g_mv.d.preroll > 0 ? g_mv.d.preroll : g_mv.info.ahead;
+        else if (!strcmp(p[i].name, "lead")) want = g_mv.info.lead;
+        checked++;
+        if (want != p[i].def) {
+            char msg[160];
+            snprintf(msg, sizeof msg, "row %s: a zero field means %.17g, the table says %.17g", p[i].name, want, p[i].def);
+            fail(__LINE__, msg);
+        }
+    }
+    CHECK_I(checked, VID_NF);
+    yvid_close(&g_mv);
+}
+#undef VID_NF
+
 int main(void) {
     gfx_open();
     test_pure();
@@ -3242,6 +3329,7 @@ int main(void) {
     test_follow();
     test_records();
     test_open_refusals();
+    test_params();
     test_decoder_faults();
     test_replay_and_heap();
     test_seq();

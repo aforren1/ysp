@@ -1,4 +1,4 @@
-/* ysp/gfx.h - v0.16.0 - public domain single-header stimulus graphics library
+/* ysp/gfx.h - v0.17.0 - public domain single-header stimulus graphics library
  *   (with MIT-licensed parts: see below)
  *
  *   Stimuli on GL ES 3.0, on top of ysp/screen.h: signed-distance shapes
@@ -1062,7 +1062,9 @@
  *                          coverage, aliased, rays) and octaves
  *     ygfx_group_params(), ygfx_prim_params(), ygfx_fx_params(),
  *     ygfx_paint_params()  the float fields of the other structs
- *     ygfx_desc_params()   the gfx's own desc (yscr_param's shape)
+ *     ygfx_desc_params()   the gfx's own desc (yscr_param's shape; its
+ *                          enums units, dither, output, stereo and cones
+ *                          have values from v0.17)
  *   A row: name, type, inclusive range, the value a zero desc field gives,
  *   unit, a line of doc, the offset in its struct, kinds (bit 1 << kind
  *   for each kind that reads it) and values: for an enum the names and
@@ -1333,6 +1335,14 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.17.0 - PARAMETERS: ygfx_desc_params() fills yscr_param's new last
+ *          field, values (ysp/screen.h v0.9.0): units, dither, output,
+ *          stereo and cones list their C enum's names and values
+ *          ("px=0,deg=1"), every other row NULL. output and stereo list
+ *          every value, and their max is the last one (was 0); open()
+ *          still takes OUT_8 and MONO only. output's names keep "out_"
+ *          ("out_8"), because a name never starts with a digit. The doc
+ *          text no longer lists the values. Needs ysp/screen.h v0.9.0.
  *   v0.16.0 - PARAMETERS: ygfx_enum_params(), the stimulus fields that
  *          are not floats (place, anchor, shape, aperture, edge, square,
  *          dist, octaves, stroke_align, join, cap, blend, dash_snap and
@@ -1847,9 +1857,9 @@
 #define YSP_GFX_H_INCLUDED
 
 #define YGFX_VERSION_MAJOR 0
-#define YGFX_VERSION_MINOR 16
+#define YGFX_VERSION_MINOR 17
 #define YGFX_VERSION_PATCH 0
-#define YGFX_VERSION_STRING "0.16.0"
+#define YGFX_VERSION_STRING "0.17.0"
 
 #include "ysp/screen.h"
 #include "ysp/color.h"
@@ -11815,18 +11825,23 @@ YGFX_API int ygfx_apply(const ygfx_bind* b, int n, const float* values) {
 }
 
 static const yscr_param ygfx__desc_params[] = {
-    { "background.r", "f32", 0, 1, 0, "rgb", "background, linear device red" },
-    { "background.g", "f32", 0, 1, 0, "rgb", "background, linear device green" },
-    { "background.b", "f32", 0, 1, 0, "rgb", "background, linear device blue" },
-    { "units", "enum", 0, 1, 0, "", "0 pixels, 1 degrees (one scale factor at the screen center)" },
-    { "view.distance_mm", "f32", 0, 1e5, 0, "mm", "viewing distance, degrees only" },
-    { "view.width_mm", "f32", 0, 1e5, 0, "mm", "width of the drawable area, degrees only" },
-    { "dither", "enum", 0, 2, 0, "", "0 none (round), 1 ordered 8x8, 2 noise per frame" },
-    { "seed", "u32", 0, 4294967295.0, 0, "", "noise dither seed" },
-    { "output", "enum", 0, 0, 0, "", "0 8-bit (the only one in v0.1)" },
-    { "stereo", "enum", 0, 0, 0, "", "0 mono (the only one in v0.1)" },
-    { "max_draws", "i32", 0, 65536, 1024, "", "draws per frame" },
-    { "cones", "enum", 0, 1, 0, "", "cones for DKL paint and ygfx_color(): 0 2 degree (SS2), 1 10 degree (SS10)" },
+    { "background.r", "f32", 0, 1, 0, "rgb", "background, linear device red", NULL },
+    { "background.g", "f32", 0, 1, 0, "rgb", "background, linear device green", NULL },
+    { "background.b", "f32", 0, 1, 0, "rgb", "background, linear device blue", NULL },
+    { "units", "enum", 0, 1, 0, "", "pixels, or degrees (one scale factor at the screen center)",
+      "px=0,deg=1" },
+    { "view.distance_mm", "f32", 0, 1e5, 0, "mm", "viewing distance, degrees only", NULL },
+    { "view.width_mm", "f32", 0, 1e5, 0, "mm", "width of the drawable area, degrees only", NULL },
+    { "dither", "enum", 0, 2, 0, "", "none (round), ordered 8x8, or noise per frame",
+      "none=0,ordered=1,noise=2" },
+    { "seed", "u32", 0, 4294967295.0, 0, "", "noise dither seed", NULL },
+    { "output", "enum", 0, 3, 0, "", "the output stage; open() takes out_8 only",
+      "out_8=0,out_10=1,out_mono_pp=2,out_color_pp=3" },
+    { "stereo", "enum", 0, 3, 0, "", "the stereo mode; open() takes mono only",
+      "mono=0,side_by_side=1,row_interleaved=2,frame_sequential=3" },
+    { "max_draws", "i32", 0, 65536, 1024, "", "draws per frame", NULL },
+    { "cones", "enum", 0, 1, 0, "", "cones for DKL paint and ygfx_color(): 2 degree (SS2) or 10 degree (SS10)",
+      "ss2=0,ss10=1" },
 };
 
 YGFX_API const yscr_param* ygfx_desc_params(int* n) {

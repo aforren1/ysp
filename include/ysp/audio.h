@@ -1,4 +1,4 @@
-/* ysp/audio.h - v0.6.1 - public domain single-header audio library
+/* ysp/audio.h - v0.7.0 - public domain single-header audio library
  *
  *   Sound at a time on the ysp/rt.h clock. A buffer is played with
  *   yau_play_at(buf, t); the header plans its first sample on the device
@@ -913,6 +913,14 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.7.0 - PARAMETERS: yau_param gains a last field, values: for an enum
+ *          row the C enum's names and values ("f32=0,s16=1,s24=2"), NULL
+ *          for every other row. format.sample and backend list them; the
+ *          doc text no longer does. format.channels is "u16", the
+ *          field's type (was "u32"). stream.preroll's default is 12000,
+ *          a quarter of the default ring, as stream.frames's is that
+ *          ring (was 0). A positional initializer of a
+ *          yau_param gets values NULL.
  *   v0.6.1 - ONE CONTEXT on the AudioWorklet path too: the page keeps the
  *          AudioContext of its first output open, made in the user's tap,
  *          with one worklet scope and one AudioWorkletNode; a later open
@@ -1046,6 +1054,11 @@
  *          positions, miniaudio's null device, the device and source
  *          interfaces, synthesis, the records, the parameter table.
  *
+ *   STATUS: v0.7.0, 2026-10-21 (docs/audio.md, "Enum values in the
+ *   parameter table"): every row checked against its desc field and C
+ *   enum, every default against a scripted device opened with a zero desc
+ *   (MinGW-w64 gcc 16.1, MSVC 19.44, gcc 11.4 on WSL2, emcc); 4 of 4 new
+ *   mutants killed. No timing changed.
  *   STATUS: v0.6.1, 2026-10-21 (docs/audio.md, "One context on the
  *   AudioWorklet path"): av.html with a reopen after setup on both builds,
  *   the test laptop, emsdk 6.0.12, Chrome 155 and Firefox 158 headless,
@@ -1205,9 +1218,9 @@
 #define YSP_AUDIO_H_INCLUDED
 
 #define YAU_VERSION_MAJOR 0
-#define YAU_VERSION_MINOR 6
-#define YAU_VERSION_PATCH 1
-#define YAU_VERSION_STRING "0.6.1"
+#define YAU_VERSION_MINOR 7
+#define YAU_VERSION_PATCH 0
+#define YAU_VERSION_STRING "0.7.0"
 
 #include "ysp/rt.h"
 
@@ -1527,11 +1540,14 @@ typedef struct yau_caps {
 
 typedef struct yau_param {
     const char* name;
-    const char* type;           /* "u32", "i32", "i64", "f64", "bool", "enum" */
+    const char* type;           /* "u16", "u32", "i32", "i64", "f64", "bool",
+                                 * "enum"                                   */
     double      min, max;
     double      def;            /* the value a zero field means              */
     const char* unit;
     const char* doc;
+    const char* values;         /* v0.7, "enum": "name=value" pairs joined by
+                                 * ',', in value order; NULL otherwise      */
 } yau_param;
 
 typedef struct yau_tone_desc {
@@ -2275,7 +2291,8 @@ YAU_API int64_t     yau_wavw_write(yau_wavw* w, const float* x, int64_t frames);
 YAU_API void        yau_wavw_close(yau_wavw* w);
 YAU_API const char* yau_wavw_error(const yau_wavw* w);
 
-/* The table of desc fields a designer sets; *n gets the count. */
+/* The table of desc fields a designer sets; *n gets the count. An enum
+ * row's names are its C enum's suffixes in lower case ("s16" is YAU_S16). */
 YAU_API const yau_param* yau_params(int* n);
 
 #ifdef __cplusplus
@@ -7133,21 +7150,22 @@ YAU_API void yau_wavw_close(yau_wavw* w) {
 
 YAU_API const yau_param* yau_params(int* n) {
     static const yau_param table[] = {
-        { "format.rate",     "u32",  8000, 768000, 48000, "Hz",   "project sample rate; the device must run at it" },
-        { "format.channels", "u32",  1, YAU_MAX_CHANNELS, 2, "",  "project channel count; the device must have it" },
-        { "format.sample",   "enum", 0, 2, 0, "",                  "project resolution: 0 f32, 1 s16, 2 s24" },
-        { "backend",         "enum", 0, 7, 0, "",                  "0 auto, 1 wasapi, 2 coreaudio, 3 alsa, 4 pulse, 5 web, 6 null, 7 custom" },
-        { "exclusive",       "bool", 0, 1, 0, "",                  "WASAPI exclusive mode; silences every other program" },
-        { "period",          "i32",  0, 65536, 480, "frame",       "frames per callback; 0 = 10 ms" },
-        { "queue",           "i32",  0, 2, 2, "period",            "WASAPI shared: periods queued ahead of the engine; 1 saves a period of lead and a period of stall margin" },
-        { "voices",          "i32",  1, YAU_MAX_VOICES, 32, "",  "sounds playing or waiting at once" },
-        { "device_index",    "u32",  0, 7, 0, "",                  "device number in the records" },
-        { "min_tier",        "i32",  0, 3, 0, "",                  "flag onsets whose tier is worse; 0 = off" },
-        { "onset_offset_ns", "i64",  -1e9, 1e9, 0, "ns",           "added to every onset; from a line-in loopback test" },
-        { "arena_bytes",     "u32",  0, 4294967295.0, 8388608, "B", "synthesis arena when desc.arena is NULL" },
-        { "stream.frames",   "i64",  0, 1e9, 48000, "frame",       "ring capacity of a stream (yau_stream_desc); 0 = 1 s" },
-        { "stream.preroll",  "i64",  -1, 1e9, 0, "frame",          "frames a stream played at 0 waits for; 0 = a quarter ring, -1 = none" },
-        { "wav.loops",       "i32",  -1, 2147483647.0, 0, "",      "passes of a WAV stream after the first; -1 = forever" }
+        { "format.rate",     "u32",  8000, 768000, 48000, "Hz",   "project sample rate; the device must run at it", NULL },
+        { "format.channels", "u16",  1, YAU_MAX_CHANNELS, 2, "",  "project channel count; the device must have it", NULL },
+        { "format.sample",   "enum", 0, 2, 0, "",                  "project resolution", "f32=0,s16=1,s24=2" },
+        { "backend",         "enum", 0, 7, 0, "",                  "the audio API; web only in a browser",
+          "auto=0,wasapi=1,coreaudio=2,alsa=3,pulse=4,web=5,null=6,custom=7" },
+        { "exclusive",       "bool", 0, 1, 0, "",                  "WASAPI exclusive mode; silences every other program", NULL },
+        { "period",          "i32",  0, 65536, 480, "frame",       "frames per callback; 0 = 10 ms", NULL },
+        { "queue",           "i32",  0, 2, 2, "period",            "WASAPI shared: periods queued ahead of the engine; 1 saves a period of lead and a period of stall margin", NULL },
+        { "voices",          "i32",  1, YAU_MAX_VOICES, 32, "",  "sounds playing or waiting at once", NULL },
+        { "device_index",    "u32",  0, 7, 0, "",                  "device number in the records", NULL },
+        { "min_tier",        "i32",  0, 3, 0, "",                  "flag onsets whose tier is worse; 0 = off", NULL },
+        { "onset_offset_ns", "i64",  -1e9, 1e9, 0, "ns",           "added to every onset; from a line-in loopback test", NULL },
+        { "arena_bytes",     "u32",  0, 4294967295.0, 8388608, "B", "synthesis arena when desc.arena is NULL", NULL },
+        { "stream.frames",   "i64",  0, 1e9, 48000, "frame",       "ring capacity of a stream (yau_stream_desc); 0 = 1 s", NULL },
+        { "stream.preroll",  "i64",  -1, 1e9, 12000, "frame",      "frames a stream played at 0 waits for; 0 = a quarter ring, -1 = none", NULL },
+        { "wav.loops",       "i32",  -1, 2147483647.0, 0, "",      "passes of a WAV stream after the first; -1 = forever", NULL }
     };
     if (n) *n = (int)(sizeof table / sizeof table[0]);
     return table;

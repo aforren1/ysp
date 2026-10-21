@@ -2098,6 +2098,32 @@ mutant reaches them. CI compiles the header with
 path, 0 silent, 1 context made a page (`summary.py`'s last line;
 `--from` lists where the contexts were made).
 
+## Enum values in the parameter table (v0.7.0)
+
+Every ysp parameter table has one row shape: `name`, `type`, `min`, `max`, `def`, `unit`, `doc`, `values` ([conventions.md](conventions.md), "Parameter tables"; gap G6 of [experiment_format.md](experiment_format.md)). `yau_param` gained `values` as its last field. `format.sample`
+lists `f32=0,s16=1,s24=2` and `backend` lists every `yau_backend`, from
+`auto=0` to `custom=7`. Before, the names were in the doc text only, in
+a style of their own. Every other row has `values` NULL.
+
+The test (`test_params()` in `tests/adapt/audio_test.c`) found two rows
+that did not match their fields, and both changed:
+
+| Row | Was | Now | Why |
+|---|---|---|---|
+| `format.channels` | `u32` | `u16` | The field is a `uint16_t` |
+| `stream.preroll` default | 0 | 12000 | A zero preroll waits for a quarter of the ring; at the default ring (48000 frames, as `stream.frames` says) that is 12000 frames |
+
+`min_tier` stays `i32`: it is an ordinal (0 off, 1 to 3), compared with
+"worse than", and its 0 is not `YAU_TIER_UNKNOWN`'s meaning.
+
+The test opens the scripted device with a zero desc (backend CUSTOM, the
+one field it must set) and compares every row's default with the
+resolved desc, the arena that open allocates (`arena_bytes`) and the
+ring of a zero stream desc (`stream.frames`, `stream.preroll`). Each
+enum row's values come from a `switch` on the C enum without a
+`default`, so gcc and clang `-Wall -Werror` stop the build when the enum
+gains a value. 4 of 4 new mutants killed (`tests/mutate/audio.toml`, pv-).
+
 ## Not measured
 
 - Latency to sound by cable (an acoustic loop is in "Capture"). No

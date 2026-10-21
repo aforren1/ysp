@@ -269,3 +269,21 @@ test = "video"
 why = "v0.4.0: a decode thread on real time falls behind a frame loop that never waits; on the virtual clock the movie must decode inline."
 find = "    mv->inline_mode = desc->inline_decode || yrt_is_virtual() ? 1 : 0;"
 replace = "    mv->inline_mode = desc->inline_decode ? 1 : 0;"
+
+# v0.5.0: the parameter table's values and defaults (test_params).
+
+[[mutant]]
+id = "pv-01"
+name = "hw_decode names swapped"
+test = "video"
+why = "v0.5.0: \"off\" must be YVID_HW_OFF; swapped, a definition asking for software decoding gets DXVA."
+find = '"auto=0,off=1,dxva=2" },'
+replace = '"auto=0,dxva=1,off=2" },'
+
+[[mutant]]
+id = "pv-02"
+name = "ahead's default 4"
+test = "video"
+why = "v0.5.0: a zero ahead decodes 6 frames ahead; a designer writing 4 would shorten the stall margin."
+find = '{ "ahead", "i32", 0, YVID_MAX_SLOTS - 2, 6, "frame",'
+replace = '{ "ahead", "i32", 0, YVID_MAX_SLOTS - 2, 4, "frame",'

@@ -1340,3 +1340,23 @@ env = { YGFX_TEST_PARTS = "none" }
 why = "Each bool row writes its own flag."
 find = '    YGFX_STIM_MODULATION, YGFX_STIM_LINEAR, YGFX_STIM_ADD,'
 replace = '    YGFX_STIM_LINEAR, YGFX_STIM_MODULATION, YGFX_STIM_ADD,'
+
+# v0.17.0: the desc table's values and defaults (test_desc_params, CPU only).
+
+[[mutant]]
+id = "pv-01"
+name = "output without the Bits# modes"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none", YGFX_TEST_DEVICES = "none" }
+why = "v0.17.0: the values are the C enum; open() refusing a value does not take it out of the list."
+find = '"out_8=0,out_10=1,out_mono_pp=2,out_color_pp=3" },'
+replace = '"out_8=0,out_10=1" },'
+
+[[mutant]]
+id = "pv-02"
+name = "max_draws's default 512"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none", YGFX_TEST_DEVICES = "none" }
+why = "v0.17.0: a zero max_draws is 1024 draws a frame; a designer writing 512 would refuse half of them."
+find = '{ "max_draws", "i32", 0, 65536, 1024, "",'
+replace = '{ "max_draws", "i32", 0, 65536, 512, "",'

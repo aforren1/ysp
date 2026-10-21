@@ -61,8 +61,8 @@ A Python distribution's version is its header's version. A change to the
 binding alone adds a fourth number, which counts such changes and goes away
 when the header's version moves: `ysp-serial` 0.5.0.1 is `ysp/serial.h`
 v0.5.0 with the change to seconds, and `ysp-parallel` 0.4.0.1 is
-`ysp/parallel.h` v0.4.0 with the same change, and so is `ysp-rdk`
-0.2.0.1 for `ysp/rdk.h` v0.2.0. `ysp-serial` 0.5.0.2 is the second
+`ysp/parallel.h` v0.4.0 with the same change, and so was `ysp-rdk`
+0.2.0.1 for `ysp/rdk.h` v0.2.0 (now 0.3.0, the header's v0.3.0). `ysp-serial` 0.5.0.2 is the second
 binding-only change to `ysp/serial.h` v0.5.0: the async reader. `ysp-serial`
 0.5.1 is `ysp/serial.h` v0.5.1 (a comment change) without a fourth number,
 and has the API of 0.5.0.2; 0.6.0 is `ysp/serial.h` v0.6.0 (`pulse_async`

@@ -405,6 +405,17 @@ as the committed `tests/c_trial.bin`. The USAGE blocks compile as C99 and
 C++17. Mutants `conv-01` (no message from a failing write) and `conv-02`
 (a negative `lifetime_ns` accepted) are caught; control `00` survives.
 
+## The shared row shape (v0.3.0)
+
+Every ysp parameter table has one row shape: `name`, `type`, `min`, `max`, `def`, `unit`, `doc`, `values` ([conventions.md](conventions.md), "Parameter tables"; gap G6 of [experiment_format.md](experiment_format.md)). `yrdk_param` gained `values` after `offset`. No row is an enum,
+so it is NULL in all three; the field is there so one reader reads every
+table. The rules and the digests do not change. The test
+(`test_params()` in `tests/adapt/rdk_test.c`) checks the three rows
+against the `yrdk_field` floats at their offsets and their defaults
+against a field opened with them at 0. 1 of 1 new mutant killed (`tests/mutate/rdk.toml`, pv-01). The Python binding's
+version is 0.3.0 (the header's; the fourth number went with the header's
+move).
+
 ## Bindings
 
 The API is made for a binding: plain structs, no callbacks, caller memory

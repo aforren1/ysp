@@ -585,6 +585,24 @@ compile checks and `test_gfx` on Linux are the test. It has no mutant:
 on Windows, where the mutants of this list run, the macro changes
 nothing.
 
+## v0.4.0: enum values in the parameter tables
+
+Every ysp parameter table has one row shape: `name`, `type`, `min`, `max`, `def`, `unit`, `doc`, `values` ([conventions.md](conventions.md), "Parameter tables"; gap G6 of [experiment_format.md](experiment_format.md)). `yol_param` gained `values` after `offset`, as `ycol_param`
+did: `join` (`round=0,miter=1,bevel=2`), `cap` (`butt=0,round=1,square=2`),
+`mode` (`stroke=0,bold=1,inset=2`, the suffixes of `YOL_STROKE`,
+`YOL_BOLD`, `YOL_INSET`) and `format` (`u8=0,u16=1,f32=2,f64=3`). Every
+other row has NULL.
+
+`t12_params()` in `tests/adapt/outline_test.c` checks the four tables
+against their desc fields and offsets and the enum rows against
+`switch`es without a `default`. A default that is not 0 must give what a
+zero field gives: a stroke with `miter_limit` 0 and 4 (two corners whose
+miter ratios are 3.9 and 4.1) and with `tol` 0 and 1e-4 are the same paths,
+byte for byte, and a CFF glyph with `size` 0 and 1 and `tol` 0 and 1e-4
+is the same outline. The checks are not empty: a limit of 3 bevels the
+first corner and a limit of 5 miters the second, a tolerance of 1e-9 splits the curve further, and a size of 2
+changes the outline. 3 of 3 new mutants killed (`tests/mutate/outline.toml`, pv-); the first `miter_limit` mutant (default 3) survived a 60 degree corner, whose miter ratio 2 is under both limits, so the test now strokes the two corners either side of 4. No output changed.
+
 ## Next
 
 1. The Latin stroke bar (Cost): the sweep's per-strip positions are what

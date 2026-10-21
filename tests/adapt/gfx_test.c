@@ -768,6 +768,104 @@ static void test_tables(void) {
     }
 }
 
+/* v0.17: the gfx's own desc table (yscr_param's shape, with values). */
+#include "param_table_check.h"
+
+static void ptc_fail(int line, const char* what) {
+    fprintf(stderr, "gfx_test [%s]: FAIL line %d: %s\n", g_where, line, what);
+    g_failures++;
+}
+
+/* No default, so -Wswitch (CI's -Werror) stops the build when an enum
+ * gains a value. cones is ysp/color.h's. */
+static const char* desc_units_name(int v) {
+    switch ((ygfx_units)v) {
+    case YGFX_PX: return "px";
+    case YGFX_DEG: return "deg";
+    }
+    return NULL;
+}
+static const char* desc_dither_name(int v) {
+    switch ((ygfx_dither)v) {
+    case YGFX_DITHER_NONE: return "none";
+    case YGFX_DITHER_ORDERED: return "ordered";
+    case YGFX_DITHER_NOISE: return "noise";
+    }
+    return NULL;
+}
+static const char* desc_output_name(int v) {
+    switch ((ygfx_output)v) {
+    case YGFX_OUT_8: return "out_8";
+    case YGFX_OUT_10: return "out_10";
+    case YGFX_OUT_MONO_PP: return "out_mono_pp";
+    case YGFX_OUT_COLOR_PP: return "out_color_pp";
+    }
+    return NULL;
+}
+static const char* desc_stereo_name(int v) {
+    switch ((ygfx_stereo)v) {
+    case YGFX_MONO: return "mono";
+    case YGFX_SIDE_BY_SIDE: return "side_by_side";
+    case YGFX_ROW_INTERLEAVED: return "row_interleaved";
+    case YGFX_FRAME_SEQUENTIAL: return "frame_sequential";
+    }
+    return NULL;
+}
+static const char* desc_cones_name(int v) {
+    switch ((ycol_cones)v) {
+    case YCOL_CONES_SS2: return "ss2";
+    case YCOL_CONES_SS10: return "ss10";
+    }
+    return NULL;
+}
+
+#define GD_F(n, f, e) { n, offsetof(ygfx_desc, f), sizeof(((ygfx_desc*)0)->f), e }
+static const ptc_slot g_gd_fields[] = {
+    GD_F("background.r", background[0], NULL), GD_F("background.g", background[1], NULL),
+    GD_F("background.b", background[2], NULL), GD_F("units", units, desc_units_name),
+    GD_F("view.distance_mm", view.distance_mm, NULL), GD_F("view.width_mm", view.width_mm, NULL),
+    GD_F("dither", dither, desc_dither_name), GD_F("seed", seed, NULL), GD_F("output", output, desc_output_name),
+    GD_F("stereo", stereo, desc_stereo_name), GD_F("max_draws", max_draws, NULL), GD_F("cones", cones, desc_cones_name),
+};
+#undef GD_F
+#define GD_NF ((int)(sizeof g_gd_fields / sizeof g_gd_fields[0]))
+
+/* Every row is a real field with its C enum's values, and its default is
+ * what open() makes of a zero field: max_draws from the open gfx (a SIM
+ * screen and the null backend); every other zero stays 0. */
+static void test_desc_params(void) {
+    static yscr_screen scr;
+    static ygfx_gfx g;
+    ptc_row rows[16];
+    yscr_desc d;
+    ygfx_desc gd;
+    int n = -1, i;
+    const yscr_param* p = ygfx_desc_params(&n);
+    g_where = "desc_params";
+    CHECK(p != NULL && n == GD_NF && ygfx_desc_params(NULL) == p);
+    if (!p || n > 16) return;
+    for (i = 0; i < n; i++) PTC_ROW(rows[i], p[i]);
+    ptc_check_slots(rows, n, g_gd_fields, GD_NF);
+    memset(&d, 0, sizeof d);
+    d.backend = YSCR_BACKEND_SIM;
+    d.sim_period_ns = 1000000;
+    CHECK(yscr_open(&scr, &d));
+    memset(&gd, 0, sizeof gd);
+    gd.screen = &scr;
+    CHECK(ygfx_open(&g, &gd));
+    for (i = 0; i < n; i++) {
+        double want = !strcmp(p[i].name, "max_draws") ? (double)g.max_draws : 0.0;
+        if (want != p[i].def) {
+            fprintf(stderr, "gfx_test [%s]: FAIL: row %s: a zero field means %g, the table says %g\n", g_where, p[i].name,
+                    want, p[i].def);
+            g_failures++;
+        }
+    }
+    ygfx_close(&g);
+    yscr_close(&scr);
+}
+#undef GD_NF
+
 /* The transform, without GL: a 800 x 600 simulated screen and the null backend. */
 static void test_coordinates(void) {
     static yscr_screen scr;
@@ -8837,6 +8935,7 @@ int main(void) {
     test_cones_dkl();
     test_tables();
     test_enum_params();
+    test_desc_params();
     test_coordinates();
     test_null_and_ring();
     test_v12_capture_cpu();

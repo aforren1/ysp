@@ -2968,22 +2968,128 @@ static void test_mode_multiple(void) {
     CHECK_I(yscr_mode_multiple_in(NULL, 6, 60, 1, 0, 0, 0, &out, &ppm), YSCR_ERR_ARG);
 }
 
+#include "param_table_check.h"
+
+static void ptc_fail(int line, const char* what) { fail(line, what); }
+
+/* The names of the enum rows' values. backend's switch has no default, so
+ * -Wswitch (gcc and clang -Wall; CI's -Werror) stops the build when
+ * yscr_backend gains a value. corner and settle are YSCR_ macros, not a C
+ * enum: a new macro needs a case here by review. */
+static const char* scr_backend_name(int v) {
+    switch ((yscr_backend)v) {
+    case YSCR_BACKEND_AUTO: return "auto";
+    case YSCR_BACKEND_DXGI_FLIP: return "dxgi_flip";
+    case YSCR_BACKEND_COMPOSITION: return "composition";
+    case YSCR_BACKEND_GLX_OML: return "glx_oml";
+    case YSCR_BACKEND_WAYLAND: return "wayland";
+    case YSCR_BACKEND_METAL: return "metal";
+    case YSCR_BACKEND_WEB: return "web";
+    case YSCR_BACKEND_SIM: return "sim";
+    case YSCR_BACKEND_CUSTOM: return "custom";
+    }
+    return NULL;
+}
+static const char* scr_corner_name(int v) {
+    switch (v) {
+    case YSCR_TOP_LEFT: return "top_left";
+    case YSCR_TOP_RIGHT: return "top_right";
+    case YSCR_BOTTOM_LEFT: return "bottom_left";
+    case YSCR_BOTTOM_RIGHT: return "bottom_right";
+    default: return NULL;
+    }
+}
+static const char* scr_settle_name(int v) {
+    switch (v) {
+    case YSCR_SETTLE_AUTO: return "auto";
+    case YSCR_SETTLE_STRICT: return "strict";
+    case YSCR_SETTLE_WARN: return "warn";
+    case YSCR_SETTLE_OFF: return "off";
+    default: return NULL;
+    }
+}
+
+#define SCR_D(n, f, e) { n, offsetof(yscr_desc, f), sizeof(((yscr_desc*)0)->f), e }
+static const ptc_slot g_scr_fields[] = {
+    SCR_D("display", display, NULL), SCR_D("mode.w", mode.w, NULL), SCR_D("mode.h", mode.h, NULL),
+    SCR_D("mode.refresh_num", mode.refresh_num, NULL), SCR_D("mode.refresh_den", mode.refresh_den, NULL),
+    SCR_D("windowed", windowed, NULL), SCR_D("window_w", window_w, NULL), SCR_D("window_h", window_h, NULL),
+    SCR_D("backend", backend, scr_backend_name), SCR_D("lead", lead, NULL), SCR_D("display_index", display_index, NULL),
+    SCR_D("patch.on", patch.on, NULL), SCR_D("patch.size", patch.size, NULL),
+    SCR_D("patch.corner", patch.corner, scr_corner_name), SCR_D("show_cursor", show_cursor, NULL),
+    SCR_D("abort_keys.off", abort_keys.off, NULL), SCR_D("abort_keys.key", abort_keys.key, NULL),
+    SCR_D("abort_keys.mods", abort_keys.mods, NULL), SCR_D("panic", panic, NULL),
+    SCR_D("panic_presses", panic_presses, NULL), SCR_D("panic_window_ns", panic_window_ns, NULL),
+    SCR_D("panic_grace_ns", panic_grace_ns, NULL), SCR_D("icon_sdl", icon_sdl, NULL),
+    SCR_D("d3d11_video", d3d11_video, NULL), SCR_D("gamepads", gamepads, NULL), SCR_D("raw_mice", raw_mice, NULL),
+    SCR_D("key_dedup_ns", key_dedup_ns, NULL), SCR_D("onset_offset_ns", onset_offset_ns, NULL),
+    SCR_D("min_tier", min_tier, NULL), SCR_D("depth", depth, NULL), SCR_D("depth_learn", depth_learn, NULL),
+    SCR_D("settle", settle, scr_settle_name), SCR_D("settle_flips", settle_flips, NULL),
+    SCR_D("settle_min_ns", settle_min_ns, NULL), SCR_D("settle_max_ns", settle_max_ns, NULL),
+    SCR_D("sim_period_ns", sim_period_ns, NULL),
+};
+#undef SCR_D
+#define SCR_NF ((int)(sizeof g_scr_fields / sizeof g_scr_fields[0]))
+
+/* Every row is a real field with its values, and its default is what a
+ * zero field means: from a SIM screen opened with a zero desc where the
+ * screen keeps the value, else from the constant that open() puts in.
+ * Every other row's zero stays 0 (a value, or a sentinel such as display
+ * 0, the primary display). */
 static void test_params(void) {
-    int n = 0, i, j, gamepads = 0;
+    static ptc_row rows[64];
+    static yscr_screen s;
+    yscr_desc d;
+    int n = 0, i, gamepads = 0, checked = 0;
     const yscr_param* p = yscr_params(&n);
-    CHECK(p != NULL);
-    CHECK(n >= 15);
+    CHECK(p != NULL && n == SCR_NF && yscr_params(NULL) == p);
+    if (!p || n > 64) return;
     for (i = 0; i < n; i++)   /* v0.3.3: off by default */
         if (!strcmp(p[i].name, "gamepads")) gamepads += p[i].def == 0 && !strcmp(p[i].type, "bool");
     CHECK_I(gamepads, 1);
+    for (i = 0; i < n; i++) PTC_ROW(rows[i], p[i]);
+    ptc_check_slots(rows, n, g_scr_fields, SCR_NF);
+    memset(&s, 0, sizeof s);
+    memset(&d, 0, sizeof d);
+    d.backend = YSCR_BACKEND_SIM;   /* backend's own zero is AUTO */
+    CHECK(yscr_open(&s, &d));
+    if (!yscr_is_open(&s)) { fprintf(stderr, "screen_test: %s\n", yscr_error(&s)); return; }
     for (i = 0; i < n; i++) {
-        CHECK(p[i].name && p[i].type && p[i].unit && p[i].doc);
-        CHECK(p[i].min <= p[i].def && p[i].def <= p[i].max);
-        for (j = 0; j < i; j++) CHECK(strcmp(p[i].name, p[j].name) != 0);
+        const char* m = rows[i].name;
+        double want;
+        int x, y, size;
+        if (!strcmp(m, "backend")) continue;
+        if (!strcmp(m, "lead")) want = s.lead;
+        else if (!strcmp(m, "patch.size")) { yscr__patch_rect(&s, &x, &y, &size); want = size; }
+        else if (!strcmp(m, "abort_keys.key")) want = yscr__ab.key;
+        else if (!strcmp(m, "abort_keys.mods")) want = yscr__ab.mods;
+        else if (!strcmp(m, "settle_flips")) want = s.st_need;
+        else if (!strcmp(m, "settle_min_ns")) want = (double)s.st_min;   /* fullscreen: none */
+        else if (!strcmp(m, "settle_max_ns")) want = (double)s.st_max;
+        else if (!strcmp(m, "sim_period_ns")) want = s.period_f;
+        else if (!strcmp(m, "key_dedup_ns")) want = YSCR__KEY_DEDUP_NS;
+        /* the literals of open(), which the screen does not keep */
+        else if (!strcmp(m, "mode.refresh_den")) want = 1;
+        else if (!strcmp(m, "window_w")) want = 800;
+        else if (!strcmp(m, "window_h")) want = 600;
+        else if (!strcmp(m, "panic_presses")) want = 3;
+        else if (!strcmp(m, "panic_window_ns")) want = 2e9;
+        else if (!strcmp(m, "panic_grace_ns")) want = 1e10;
+        else want = 0;
+        checked++;
+        if (want != rows[i].def) {
+            char msg[160];
+            snprintf(msg, sizeof msg, "row %s: a zero field means %.17g, the table says %.17g", m, want, rows[i].def);
+            fail(__LINE__, msg);
+        }
+    }
+    CHECK_I(checked, n - 1);
+    yscr_close(&s);
+    for (i = 0; i < n; i++)
         CHECK(strcmp(p[i].name, "presenter") != 0 && strcmp(p[i].name, "ring") != 0 &&
               strcmp(p[i].name, "angle_dir") != 0);
-    }
 }
+#undef SCR_NF
 
 /* Smoke test: the simulated backend in real time, the one test here that
  * the host's scheduling can touch. Its bounds hold on a loaded runner:
