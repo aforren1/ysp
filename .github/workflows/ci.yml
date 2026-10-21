@@ -423,6 +423,11 @@ jobs:
           curl -sL -o miniaudio.h https://raw.githubusercontent.com/mackron/miniaudio/0.11.25/miniaudio.h
           echo "ac7af4de748b7e26b777f37e01cee313a308a7296a3eb080e2906b320cc55c89  miniaudio.h" | sha256sum -c -
           emcc -O2 -std=gnu11 -Wall -Wextra -Wpedantic -Wshadow -Wfloat-conversion -Werror -Iinclude -I. -c -o compile_audio.o tests/compile/audio.c
+          # the AudioWorklet path's own code (ONE CONTEXT, v0.6.1), as C and C++
+          emcc -O2 -std=gnu11 -Wall -Wextra -Wpedantic -Wshadow -Wfloat-conversion -Werror -Iinclude -I. -pthread \
+               -DMA_ENABLE_AUDIO_WORKLETS -c -o compile_audio_wl.o tests/compile/audio.c
+          em++ -O2 -std=gnu++17 -x c++ -Wall -Wextra -Wshadow -Werror -Iinclude -I. -pthread \
+               -DMA_ENABLE_AUDIO_WORKLETS -c -o compile_audio_wl_cxx.o tests/compile/audio.c
           # ysp/gfx.h without SDL: the compile check on the simulated display
           # and the test's CPU half run; node has no GL, so its GL half says so.
           emcc $W -DYSCR_NO_SDL -o compile_gfx.js tests/compile/gfx.c && node compile_gfx.js

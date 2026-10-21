@@ -139,11 +139,15 @@ sets no COOP or COEP headers, so `coi-serviceworker.js` isolates the pages
    setup, close the sound and open it again: a main-thread stall of
    seconds with a ScriptProcessorNode running left its timing wrong (see
    [Audio](#audio-what-the-records-say)). The second open does not make
-   a new AudioContext: `ysp/audio.h` (v0.5.2) keeps the one the tap
-   started, suspends it at `yau_close()` and resumes it at the next
-   `yau_open()`, so the reopen needs no second tap. Do not make an
-   AudioContext of your own after the tap: iOS Safari may keep it
-   suspended.
+   a new AudioContext: `ysp/audio.h` keeps the one the tap started,
+   suspends it at `yau_close()` and resumes it at the next `yau_open()`
+   at the same rate and channel count, so the reopen needs no second
+   tap. This holds on both paths from v0.6.1 (the ScriptProcessorNode
+   path from v0.5.2). The describe line says `context=reused` for such an
+   open. Do not make an AudioContext of your own after the tap: iOS
+   Safari may keep it suspended. A DUPLEX device, a capture and a second
+   output open at the same time each make a context of their own
+   (`context=own`).
 4. Plan each sound at least `yau_lead_ns()` ahead (about 60 ms on the
    AudioWorklet path, 140 to 170 ms on the ScriptProcessorNode path in
    Chrome on the laptop below) with `yau_play_at()`, call `yau_update()`
@@ -187,8 +191,7 @@ real device. On each device, open the site over HTTPS (GitHub Pages) and:
    session log has a `viewport ... during the run` line.
 4. Run `av.html` with silent mode off: the status line names the audio
    path, the click is heard, and the summary has 20 trials with tier 5.
-   On iOS Safari, if no sound plays, tap the page once more (miniaudio
-   resumes its AudioContext on the next tap). Where the device has element
+   If no sound plays, do the sound check below. Where the device has element
    fullscreen, the run stays fullscreen to the end. Switch to another app
    and back during a run: if the browser left fullscreen, the stage says
    so, and one tap brings it back without a response.
@@ -211,8 +214,10 @@ sh tests/probe/web_audio/run.sh web_site 30
 ```
 
 It opens `av.html` 30 times in each browser on each audio path, with a
-real click on Start, and prints the silent opens and the counts (design
-notes: [audio.md](audio.md#web-envelope-v052)). Add `--headed` to see the
+real click on Start, and prints the silent opens, the AudioContexts made
+a page (1 from v0.6.1) and the sound's range against its plan (design
+notes: [audio.md](audio.md#web-envelope-v052) and
+[audio.md](audio.md#one-context-on-the-audioworklet-path-v061)). Add `--headed` to see the
 windows. Run nothing else while it counts: the ScriptProcessorNode path
 shares the main thread with the page.
 
@@ -231,27 +236,53 @@ By hand, on each phone, tablet or desktop browser:
 6. For each silent open, download the session log, and write down the
    browser, its version, the device and the path.
 
-On iOS Safari (and iPadOS Safari), WebKit starts audio only from a tap,
-and the ScriptProcessorNode path opens the sound twice: in the Start tap,
-and again after the screen's setup, about 2 s later and outside the tap.
-The second open resumes the context of the first (v0.5.2). Check that
-on each iPhone or iPad:
+On iOS and iPadOS, WebKit starts audio only from a tap. `av.html` opens
+the sound twice on both paths: in the Start tap, and again after the
+screen's setup, about 2 s later and outside the tap. The second open
+resumes the context of the first (v0.5.2 on the ScriptProcessorNode path,
+v0.6.1 on the AudioWorklet path); before v0.6.1 the AudioWorklet path made
+a new context at each open. This check is for that rule. Do it on each
+iPhone and iPad you have.
 
-1. Turn off silent mode (the switch or Control Center) and Low Power
-   Mode, and set the volume to about half.
-2. Open `av.html` in a private tab, so that the status line says
+Before you start:
+
+1. Set the volume to about half and turn off Low Power Mode.
+2. iPhone: turn off Silent mode with the Ring/Silent switch, or on a
+   model with an Action button, with that button or Control Center
+   ([Apple](https://support.apple.com/105103)). Silent mode mutes Web
+   Audio but not `<audio>` or `<video>`: WebKit puts an AudioContext's
+   output in the "ambient" audio session by default, which Silent mode
+   mutes ([WebKit bug 237322](https://bugs.webkit.org/show_bug.cgi?id=237322),
+   [251532](https://bugs.webkit.org/show_bug.cgi?id=251532)). A silent
+   run with Silent mode on says nothing about the context.
+3. iPad: no source found here says whether the iPad's silent setting
+   mutes Web Audio. Turn it off. Safari on iPadOS asks for the desktop
+   site by default (Safari's settings, Request Desktop Website), so the
+   page sees a Macintosh user agent
+   ([MacStories, iPadOS 13](https://www.macstories.net/stories/ios-and-ipados-13-the-macstories-review/8/),
+   [Apple Developer Forums](https://developer.apple.com/forums/thread/119186)).
+   The session log then names macOS Safari; write down the iPad model and
+   the iPadOS version by hand. Leave the setting as it is: it is what a
+   participant's iPad does.
+
+Then, on each device:
+
+1. Open `av.html` in a private tab, so that the status line says
    `ScriptProcessorNode (no threads)`.
-3. Tap Start once. Do not touch the screen again until the results show.
-4. Listen for a click with each flash. After the run, the summary's first
-   row must not say `no audio opened`, and the trials table must have an
-   audio onset for each trial.
-5. Do steps 3 and 4 ten times (reload the page each time), then ten times
-   in a normal tab (`AudioWorklet (threads)`).
+2. Tap Start once. Do not touch the screen again until the results show.
+3. Listen for a click with each flash. After the run, the summary's first
+   row must not say `no audio opened`, the trials table must have an
+   audio onset for each trial, and the `audio` row must say
+   `context=reused`.
+4. Do steps 2 and 3 ten times (reload the page each time).
+5. Do steps 2 to 4 in a normal tab, where the status line says
+   `AudioWorklet (threads)` after the one reload. If it does not, write
+   down what it says.
 6. If a run is silent, do it once more and tap the page once while it
    says `Preparing...` (the second open waits up to 5 s for its first
    callback). Write down whether the clicks then play. A context that
    waits for a tap is the WebKit rule this check looks for. Download the
-   session log and send it with the iOS version.
+   session log and send it with the device, the OS version and the path.
 
 ## Reference
 
@@ -291,7 +322,8 @@ reference. In short:
 | Callback clock | `Date.now()`, 1 ms (the worklet has no `performance.now()`) | `performance.now()` |
 | Position reports | `getOutputTimestamp()`, read every 10 ms on the main thread | the same, and in each callback |
 | Tier | `YAU_TIER_WEB` (5), confirmed or not | the same |
-| Describe line | `path=`, `reports=`, `base_latency=`, `output_latency=`, `block_moves=` | the same |
+| AudioContext | one a page, made in the Start tap; each later open at the same rate and channel count resumes it and its one AudioWorkletNode (v0.6.1) | one a page, made in the Start tap; each later open at the same rate resumes it with a new ScriptProcessorNode (v0.5.2) |
+| Describe line | `path=`, `context=` (`kept`, `reused`, `own`), `reports=`, `base_latency=`, `output_latency=`, `block_moves=` | the same |
 | Capture (`yau_capture`, v0.5.0) | compiled, never run; its callback times would read 0 | compiled, never run |
 
 ### The demos
@@ -698,7 +730,8 @@ never measured here.
 
 iOS specifics the pages rely on: an AudioContext starts only from a user
 gesture (the Start tap, which runs the program's audio open inside it;
-miniaudio resumes a suspended context on the next tap); iPhone Safari has
+a later open resumes that context; miniaudio resumes a suspended context
+on the next tap); iPhone Safari has
 no element fullscreen (iPad Safari has `webkitRequestFullscreen`), so the
 stage covers the viewport less the safe areas instead; `touch-action:
 none` and the `gesturestart` handler stop pinch zoom during a run, and the

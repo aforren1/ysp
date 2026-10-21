@@ -252,7 +252,8 @@ replace = '''    } else {'''
 
 # v0.5.2: open()'s warm-up limit (docs/audio.md, "Web envelope"). The
 # envelope and the kept context are the web device's JavaScript, which only
-# a browser runs (tests/probe/web_audio).
+# a browser runs (tests/probe/web_audio). So is v0.6.1's AudioWorklet half
+# of ONE CONTEXT (the kept node's slot and its trampoline): no mutant here.
 
 [[mutant]]
 id = "warm-01"

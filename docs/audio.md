@@ -1878,8 +1878,9 @@ queries in the same init get the same context, and the kept context's
 next `yau_open()` resumes it with a new ScriptProcessorNode. No API
 changed; a program that reopens needs no change. A second output open at
 the same time, another rate, a DUPLEX device and the AudioWorklet path
-(whose worklet module a context registers once) make their own context,
-as before.
+(whose worklet module a context registers once) made their own context.
+v0.6.1 brings the AudioWorklet path in: see
+[One context on the AudioWorklet path](#one-context-on-the-audioworklet-path-v061).
 
 ### The warm-up limit
 
@@ -1952,6 +1953,150 @@ screen's record, not the sound's, and it is not a timing figure.
 The envelope is JavaScript in the device; it runs only in a browser, so
 no native test or mutant reaches it. `tests/probe/web_audio/run.sh` is
 the check: 30 opens per browser and path, 0 silent.
+
+## One context on the AudioWorklet path (v0.6.1)
+
+The problem: iOS Safari starts audio only in a context made or resumed
+inside a user gesture, and v0.6.0 kept the page's AudioContext only on the
+ScriptProcessorNode path. On the AudioWorklet path each `yau_open()` made
+new contexts, so a reopen after the Start tap (`av_sync.c` closes and
+opens its sound after the screen's setup) asked for audio from a context
+made outside the gesture. Conditions below: the laptop of this note,
+2026-10-21, Windows 11, Realtek speakers, Chrome 155 and Firefox 158,
+headless unless a row says headed, emsdk 6.0.12, miniaudio 0.11.25,
+`av.html --n 4`, `tests/probe/web_audio/run.sh` under the measurement
+lock.
+
+### Where the 3 contexts came from
+
+`probe.js` now records the first stack frames at each
+`new AudioContext()`. A build with `--profiling-funcs` names the C
+functions. One AudioWorklet open, in both browsers, made:
+
+| Context | Made by | Life |
+|---|---|---|
+| 1 | Emscripten's `emscripten_create_audio_context()` (`libwebaudio.js`), from miniaudio's `ma_device_init__webaudio()` | the device's; suspended, never closed, at `yau_close()` (`emscripten_destroy_audio_context()` only suspends) |
+| 2 | miniaudio's `ma_context_get_device_info__webaudio()`, an `EM_ASM` that makes a context to read `sampleRate` and closes it, called through `ma_device_get_info()` for the device name in `ma_device_init()` | closed at once |
+| 3 | the same function through `ma_device_get_name()`, from the "Log device information" block at the end of `ma_device_init()`; the log level does not gate the call | closed at once |
+
+None came from `ysp/audio.h`'s own code, the page glue or the probe.
+v0.5.2's wrapper had given 2 and 3 the device's context on the
+ScriptProcessorNode path only, so that path made 1. Each reopen made 3
+more: 6 a page with `av_sync.c`'s reopen.
+
+### What blocked one context
+
+The wrapper alone does not do: a context's worklet scope boots once.
+miniaudio's init calls `emscripten_start_wasm_audio_worklet_thread_async()`
+at each open, which adds Emscripten's module to the context's
+`audioWorklet`, posts a boot message that instantiates the Wasm module in
+the scope, and registers the processor `miniaudio`. On a context that
+booted, the second boot would instantiate the module again in the same
+scope, and `registerProcessor()` throws for a name the scope has.
+
+A node per open does not do either. An `AudioWorkletNode` whose
+`process()` returns true stays alive after `disconnect()`
+([MDN, return value](https://developer.mozilla.org/en-US/docs/Web/API/AudioWorkletProcessor/process#return_value)).
+Measured with a page that counts a processor's calls: after
+`disconnect()` it was called 379 times in 1 s in Chrome 155 and 383 in
+Firefox 158 (48 kHz, 375 render quanta a second). Emscripten's processor
+returns what miniaudio's callback returns, always true. Its processor holds the device pointer of its
+open. After a close and a reopen of the same handle the pointer is the
+new device's, so 2 processors would call miniaudio's callback for one
+device, and the stream would advance twice a quantum. On a new handle
+the old processor would call a device that is gone.
+
+Three options were weighed. Keeping miniaudio's device across opens
+needs the device outside the handle, and every use of it in the backend
+changed. Owning the worklet setup in the header means its own copy of
+miniaudio's backend. Both are larger than the third, which was chosen:
+`yau__web_hold()` wraps two constructors during the device init. The
+reasoning, not a measurement, decided it.
+
+### The fix
+
+- The `AudioContext` wrapper (v0.5.2) now runs on both paths. On a kept
+  context that booted, it puts a stand-in `audioWorklet` on the context
+  object: `addModule()` resolves, the boot message is dropped, and the
+  processor's registration is answered as the scope answers it (a
+  `_wsc` message with success). Emscripten's own message names are
+  read from emsdk 6.0.12's `libwebaudio.js` and `audio_worklet.js`.
+- An `AudioWorkletNode` wrapper gives the kept context one node for the
+  page's life. The node calls a trampoline in the header with a slot
+  that holds miniaudio's callback and the open device. `yau_close()`
+  sets the device to 0 and waits out a call in flight; between opens the
+  node writes silence. A reopen gets the same node, connected again.
+- miniaudio's 2 sample-rate queries get the device's context, or, when
+  that context is not kept, a stand-in with its `sampleRate`. Every
+  output open makes 1 context or none.
+- A context is reused at the same rate and, on the AudioWorklet path,
+  the same channel count (the node's output count is fixed). Another
+  rate or count makes a new kept context, and the old one is closed.
+  A second output open at the same time, a DUPLEX device and a capture
+  make their own context, as before (`context=own` on the describe
+  line, which now says `kept`, `reused` or `own`).
+
+miniaudio 0.11.25 never stores the worklet stack it allocates
+(`pDevice->webaudio.pStackBuffer` stays 0, so `ma_device_uninit()`
+frees nothing): 128 KB leak at each open, before and after this change.
+The kept scope runs on its first open's stack, so the header clears that
+field before the uninit: a later miniaudio that frees it must not free
+the kept one.
+
+### Measurements
+
+The v0.6.0 and v0.6.1 headers with the same `av_sync.c`, which now
+reopens on both builds. One batch of 30 per cell.
+
+| | Opens | Silent | Contexts made a page, v0.6.0 | v0.6.1 | Sound after the reopen, v0.6.1 |
+|---|---|---|---|---|---|
+| Chrome, AudioWorklet | 30, 30 | 0, 0 | 6 (2 used) | 1 | 30 of 30 |
+| Chrome, ScriptProcessorNode | 30, 30 | 0, 0 | 1 | 1 | 30 of 30 |
+| Firefox, AudioWorklet | 30, 30 | 0, 0 | 6 (2 used) | 1 | 30 of 30 |
+| Firefox, ScriptProcessorNode | 30, 30 | 0, 0 | 1 | 1 | 30 of 30 |
+
+Every v0.6.1 open's describe line said `context=reused`. The reopen's
+`resume()` came 3.1 to 5.2 s (Chrome) and 5.1 to 6.2 s (Firefox) after
+the tap. Firefox reported no transient user activation at that call in
+60 of 60 opens; headless Chrome under the driver reported one in all,
+as in v0.5.2, so Chrome's runs do not show the case without one. v0.6.0
+also played after its reopen in Chrome and Firefox: these browsers start
+a context made after the tap once the page had a user activation. The
+case this fixes is WebKit's, which no run here reached.
+
+Sound minus plan (the browser's estimates, 120 trials a cell), v0.6.0
+against v0.6.1, headless:
+
+| | v0.6.0 | v0.6.1 |
+|---|---|---|
+| Chrome, AudioWorklet | -0.010 to +0.051 ms | -0.363 to +0.015 ms |
+| Chrome, ScriptProcessorNode | -0.010 to +0.033 ms | -0.019 to +0.520 ms |
+| Firefox, AudioWorklet | -1.72 to +1.61 ms, p5 to p95 -0.66 to +0.28 | -1.87 to +2.12 ms, p5 to p95 -0.49 to +0.65 |
+| Firefox, ScriptProcessorNode | -1.06 to +0.72 ms, p5 to p95 -0.77 to +0.40 | -1.21 to +1.17 ms, p5 to p95 -0.55 to +0.66 |
+
+Headed Firefox, the two builds alternated in batches of 5 opens:
+
+| | v0.6.0 | v0.6.1 |
+|---|---|---|
+| AudioWorklet, 30 opens each | -1.30 to +1.71 ms, p5 to p95 -0.79 to +0.54, 11 of 120 beyond 0.8 ms | -1.67 to +2.07 ms, p5 to p95 -0.75 to +0.54, 11 of 120 |
+| ScriptProcessorNode, 15 opens each | -0.78 to +1.02 ms, 4 of 60 beyond 0.8 ms | -0.75 to +1.44 ms, 1 of 60 |
+
+No difference that these counts can show. The v0.5.2 note's -0.74 to
++0.82 ms was 15 headed Firefox 157 ScriptProcessorNode opens; Firefox 158
+here gives a few trials beyond 0.8 ms in both versions, on both paths.
+0 silent opens in the headed runs; 1 context a page with v0.6.1, 6 with
+v0.6.0 on the AudioWorklet path. XRUN records (`yau_caps.xruns`), over
+every run above: 0 to 9 an open on the AudioWorklet path with v0.6.0, 0
+to 4 with v0.6.1, 0 on the ScriptProcessorNode path.
+
+### Tests
+
+The wrappers and the trampoline run only in a browser: no native test or
+mutant reaches them. CI compiles the header with
+`-DMA_ENABLE_AUDIO_WORKLETS -pthread` as C and C++.
+`tests/probe/web_audio/run.sh` is the check: 30 opens per browser and
+path, 0 silent, 1 context made a page (`summary.py`'s last line;
+`--from` lists where the contexts were made).
 
 ## Not measured
 
