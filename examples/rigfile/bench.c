@@ -14,6 +14,11 @@
  *                check)
  *   yjs_parse    a 1 MB manifest-like document, in MB/s
  *   yjs_write    its canonical text, in MB/s
+ *   yjs_format_double  the canonical text of a double, per call, for
+ *                random bit patterns (17 digits, most of them) and for
+ *                k/1000 (the short reals of a definition); snprintf %.17g
+ *                beside each for scale
+ *   yjs_write    100000 reals ("0.2500"), per number: the respelling
  */
 #if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_WARNINGS)
 #define _CRT_SECURE_NO_WARNINGS
@@ -185,5 +190,63 @@ int main(int argc, char** argv) {
         printf("arena for the 1 MB document: %u bytes\n", (unsigned)a.used);
     }
     free(big);
+
+    /* canonical numbers (ysp/json.h v0.2.0): per call, over 4096 doubles of
+     * each kind; snprintf %.17g (not canonical, not shortest) for scale */
+    {
+        static double xs[2][4096];
+        static const char* const fmt_name[2] = { "yjs_format_double, random bits", "yjs_format_double, 3 digits" };
+        static const char* const ref_name[2] = { "snprintf %.17g, random bits", "snprintf %.17g, 3 digits" };
+        uint64_t s = 0x9E3779B97F4A7C15ULL;
+        int kd;
+        char t[64];
+        for (i = 0; i < 4096; i++) {
+            uint64_t b;
+            do {
+                s ^= s << 13; s ^= s >> 7; s ^= s << 17;
+                b = s;
+            } while (((b >> 52) & 0x7FF) == 0x7FF);
+            memcpy(&xs[0][i], &b, sizeof b);
+            xs[1][i] = (double)(s % 1000u) / 1000.0;
+        }
+        for (kd = 0; kd < 2; kd++) {
+            for (r = 0; r < rounds; r++) {
+                int64_t t0 = yrt_now_ns();
+                for (i = 0; i < 4096; i++) g_sink += (size_t)yjs_format_double(xs[kd][i], t, sizeof t);
+                v[r] = (double)(yrt_now_ns() - t0) / 4096.0;
+            }
+            report(fmt_name[kd], v, rounds, "ns");
+            for (r = 0; r < rounds; r++) {
+                int64_t t0 = yrt_now_ns();
+                for (i = 0; i < 4096; i++) g_sink += (size_t)snprintf(t, sizeof t, "%.17g", xs[kd][i]);
+                v[r] = (double)(yrt_now_ns() - t0) / 4096.0;
+            }
+            report(ref_name[kd], v, rounds, "ns");
+        }
+    }
+    /* the writer's respelling of parsed numbers: 100000 reals written as
+     * "0.250"-like text, per number */
+    {
+        size_t cap = 2u << 20, p = 0;
+        char* t = (char*)malloc(cap);
+        yjs_arena a;
+        yjs_value* root;
+        uint64_t s = 0x2545F4914F6CDD1DULL;
+        t[p++] = '[';
+        for (i = 0; i < 100000; i++) {
+            s ^= s << 13; s ^= s >> 7; s ^= s << 17;
+            p += (size_t)snprintf(t + p, cap - p, "%s0.%03u0", i ? "," : "", (unsigned)(s % 1000u));
+        }
+        t[p++] = ']';
+        yjs_arena_init(&a, g_mem, sizeof g_mem);
+        if (yjs_parse(&a, t, p, NULL, &root, NULL) != YJS_OK) return 1;
+        for (r = 0; r < rounds; r++) {
+            int64_t t0 = yrt_now_ns();
+            g_sink += yjs_write_mem(root, YJS_WRITE_COMPACT, g_out, sizeof g_out);
+            v[r] = (double)(yrt_now_ns() - t0) / 100000.0;
+        }
+        report("yjs_write, 100000 reals, per number", v, rounds, "ns");
+        free(t);
+    }
     return 0;
 }

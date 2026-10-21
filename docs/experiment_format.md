@@ -73,13 +73,16 @@ that structure; it does not invent a new one.
 - Evidence: the manifest uses strings because its tool refuses a
   fraction, and people rarely edit it. A definition has many reals
   (contrast, colors, durations); `"contrast": "0.5"` invites type
-  errors in hand edits. ysp/json.h keeps a number's text and writes it
-  back unchanged, so `0.50` and `0.5` hash differently (gap G7). The rig
-  profile writes seconds as the exact decimal of the nanoseconds.
+  errors in hand edits. ysp/json.h v0.1 kept a number's text and wrote it
+  back unchanged, so `0.50` and `0.5` hashed differently (gap G7, closed
+  in v0.2.0). The rig profile writes seconds as the exact decimal of the
+  nanoseconds.
 - Decision: (a). A duration is read with `yjs_fixed(v, 9, &ns)`
   and written as the exact decimal of its nanoseconds. Another real is
-  written as the shortest exact decimal of its source text (no exponent,
-  no trailing zeros, `-0` as `0`). A key at its default is left out. The
+  written as the exact decimal of its source text, in ysp/json.h's
+  canonical spelling (json.md, Canonical numbers): no trailing zeros,
+  `-0` as `0`, no exponent from 10^-18 to below 10^21, `d.ddde+E` or
+  `d.ddde-E` outside that range. A key at its default is left out. The
   defaults are the format's, listed in this page per version, not the
   headers': the loader fills every desc field, so a header that changes
   a default does not change an experiment. The experiment ID is the
@@ -87,9 +90,16 @@ that structure; it does not invent a new one.
   bytes into the pack and records `"op": "canonical"` in the entry's
   derivation, so the entry's SHA-256 in the manifest is the experiment
   ID.
-- Prerequisite: gap G7. ysp/json.h has no canonical form for a
-  non-integer number other than fixed point, so the experiment hash
-  cannot be computed as decided until G7 is closed.
+- Prerequisite: gap G7, closed by ysp/json.h v0.2.0 (2026-10-21). Its
+  writer writes every number as its exact value in one spelling, so
+  `0.50`, `0.5` and `5e-1` give the same bytes, and every accessor reads
+  the canonical bytes as it read the source. `yjs_new_double()` gives the
+  shortest decimal that reads back to a double, the same bytes on every
+  compiler. Open: two texts of one double that differ past its 17th
+  digit (`0.1` and `0.1000000000000000055`) still hash differently. A
+  loader that writes each real back through `yjs_double()` and
+  `yjs_new_double()` makes them one; the experiment ID then depends on
+  the double, not the text.
 
 **D3. Named sets are objects; order is in arrays. DECIDED (2026-10-14).**
 - Evidence: the canonical form sorts keys, so order in an object is
@@ -292,7 +302,7 @@ the header.
 | G4 | `weight COLUMN` sets `cond_reps` from the column; nothing multiplies it by `reps`. The Stroop program computes weight x reps in C. | ysp/trials.h | Stroop | Small |
 | G5 | No call maps a Michelson contrast in light to ysp/gfx.h's contrast and back to the contrast the output codes show (about 20 lines in trial_2afc_adaptive.c with `ycol_output_code()`). | ysp/color.h | `{"michelson": ...}` | Small |
 | G6 | Parameter tables (rig_spec 1, principle 8) exist for audio, color, gfx, outline, rdk, screen and video only. Closed for the methods: `yst_params()` (ysp/stair.h 0.3.0), `yqst_params()` (ysp/quest.h 0.7.0) and `yaep_params()` (ysp/aep.h 0.16.0) list every desc field a definition sets, with an enum's names and values. Closed for the timeline: `ytl_op_params(kind, &n)` gives the rows of the fields each op kind reads (`YTL_OP_NONE` gives the `op` row, whose enum values name every kind), and `ytl_desc_params()` the desc's plain fields (ysp/timeline.h 0.8.0). Closed for response: `yrsp_params()` (ysp/response.h 0.6.0). Closed for the device families: `ydev_params(family, &n)`, the fields each family reads with its defaults (ysp/device.h 0.4.0). Closed for gfx's desc enums: `ygfx_enum_params()` lists `place`, `anchor`, `shape`, `aperture`, `edge`, `dist` and the rest with their kinds and values, and `ygfx_enum_set()` applies one (ysp/gfx.h 0.16.0). `ygfx_desc_params()` (the gfx's own desc) keeps its enum values in its doc text: `yscr_param` has no `values`. | those headers | The loader's key check and the designer's panels from one source | Medium; closed, apart from `yscr_param`'s enum values |
-| G7 | The canonical writer writes a number's source text; only `yjs_new_fixed()` and `yjs_new_int()` make canonical numbers. No canonical decimal for other reals. The prerequisite for the experiment hash (D2). | ysp/json.h | D2 | Small |
+| G7 | CLOSED in ysp/json.h v0.2.0 (2026-10-21). Was: the canonical writer wrote a number's source text; only `yjs_new_fixed()` and `yjs_new_int()` made canonical numbers. Now every number is written as its exact value in one spelling, and `yjs_format_double()` gives a double's shortest round-trip decimal, the same bytes on MSVC, MinGW, gcc and emcc (json.md). | ysp/json.h | D2 | Done |
 | G8 | A response-driven output waits for the frame loop to see the response, up to a frame after the press. No callback on the input's thread. | ysp/response.h, ysp/device.h | Response triggers (EEG) | Medium; measure the lag first |
 | G9 | Glyph-run blocks are listed by hand in the source description. Nothing derives them from a definition's texts and a table's levels. | pack tool | D14; Stroop | Small to medium |
 | G10 | A trial row has at most 64 columns (ysp/table.h's bound, kept by the writer). | ysp/trials.h, ysp/table.h | Templates with many recorded stimuli | Small; `record` limits columns meanwhile |

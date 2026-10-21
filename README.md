@@ -15,7 +15,7 @@ C11 or C++17, and its top comment is its manual.
 | [trials](docs/trials.md) | `ytr_` | Trial orders, blocks, adaptive tracks, jitter, replay, a CSV row per trial | 0.5.1 | tested |
 | [table](docs/table.md) | `ytb_` | Typed tables and a bounded CSV parser | 0.2.0 | tested |
 | [pack](docs/pack.md) | `ypak_` | Read and verify ysp packs (store-only zip) | 0.2.0 | tested |
-| [json](docs/json.md) | `yjs_` | Strict JSON reader and canonical writer | 0.1.1 | tested |
+| [json](docs/json.md) | `yjs_` | Strict JSON reader and canonical writer | 0.2.0 | tested |
 | [stair](docs/adapt.md) | `yst_` | Adaptive staircases | 0.3.0 | tested |
 | [quest](docs/adapt.md) | `yqst_` | QUEST+, QUEST, Psi and Psi-marginal on a grid | 0.7.0 | tested |
 | [aep](docs/adapt.md) | `yaep_` | Gaussian-process adaptive estimation (AEPsych features) | 0.16.0 | tested |
@@ -117,4 +117,6 @@ return values, errors, units, threads) are in
 ## License
 
 MIT-0 (public domain equivalent). See [LICENSE](LICENSE) and the end of each
-header.
+header. One exception: the shortest-double section of `ysp/json.h`
+(`yjs_format_double()`) may derive from Ryu and is under the Boost Software
+License 1.0; the header marks it and carries the license text.

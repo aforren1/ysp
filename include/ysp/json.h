@@ -1,4 +1,4 @@
-/* ysp/json.h - v0.1.1 - public domain single-header strict JSON reader and canonical writer
+/* ysp/json.h - v0.2.0 - public domain single-header strict JSON reader and canonical writer
  *
  *   One JSON reader for every ysp program that reads JSON at run time or in
  *   a tool: the rig profile (ysp/rigfile.h), the pack tool's source
@@ -45,7 +45,10 @@
  *   a string, an unknown escape, a lone or reversed surrogate, invalid
  *   UTF-8 (overlong forms, surrogates, above U+10FFFF), \u0000 (so every
  *   string is also a C string), a duplicate key in one object, text after
- *   the value, nesting deeper than opts.max_depth (64), input longer than
+ *   the value, a nonzero number whose first significant digit is past
+ *   10^999999999 or below 10^-999999999 (a limit RFC 8259 section 9
+ *   allows; it keeps a canonical exponent to 9 digits, and a double needs
+ *   3), nesting deeper than opts.max_depth (64), input longer than
  *   opts.max_bytes (64 MiB; never more than 4 GiB - 1, since positions are
  *   32-bit). The result is YJS_OK or a YJS_ERR_* code and, in the error,
  *   the byte offset, the line and the column (both from 1; the column
@@ -71,7 +74,8 @@
  *   order. So lookups are binary searches and the writer needs no sort.
  *   The order of the source text is not kept; pos and each member's
  *   key_pos still point into it for messages.
- *   NUMBERS keep their text exactly as written. flags has YJS_NUM_INT
+ *   NUMBERS keep their text exactly as written; the writer respells it
+ *   (CANONICAL NUMBERS). flags has YJS_NUM_INT
  *   when the text has no fraction and no exponent, and YJS_NUM_I64 when it
  *   is also within int64, with the value in i. yjs_int64() takes integer
  *   text only ("1.0" and "1e3" are YJS_ERR_TYPE); yjs_double() converts
@@ -90,8 +94,8 @@
  *   yjs_new() (null, booleans, empty containers), yjs_new_int(),
  *   yjs_new_fixed() (exact decimal text of v / 10^d, trailing zeros
  *   dropped: 1500000 with d = 9 is "0.0015"), yjs_new_double() (the
- *   shortest of %.15g, %.16g, %.17g that reads back to the same double, in
- *   any locale), yjs_new_number() (text checked against the grammar),
+ *   double's canonical text, yjs_format_double(); NULL for NaN and
+ *   infinity), yjs_new_number() (text checked against the grammar),
  *   yjs_new_string() (checked UTF-8, no NUL), yjs_push(), yjs_set()
  *   (replaces the value of an existing key), yjs_copy() (deep). Each
  *   returns NULL or a YJS_ERR_* on a refusal or a full arena. Values are
@@ -112,8 +116,41 @@
  *   when empty, LF only, no newline after the value. YJS_WRITE_COMPACT:
  *   the same order with no whitespace. Strings: '"' and '\' escaped with
  *   a backslash, other bytes below 0x20 as \u00XX (lowercase hex), all
- *   else as raw UTF-8. Numbers: an int64 integer in plain decimal (so
- *   "-0" is written "0"), any other number as its text.
+ *   else as raw UTF-8. Numbers: each in its canonical spelling.
+ *
+ *   ---------------------------------------------------------------------
+ *   CANONICAL NUMBERS
+ *   ---------------------------------------------------------------------
+ *   One spelling for each value, so that the same value gives the same
+ *   bytes and hash. The writer writes a number's exact decimal value,
+ *   never a rounded one: "1.50", "1.5e0", "15E-1" and "0.15e+1" are all
+ *   written 1.5, and "-0", "-0.0" and "0e7" are 0. The spelling of a
+ *   value D x 10^(E - k + 1) (D its k significant digits, no leading or
+ *   trailing zero; E the exponent of the first digit):
+ *     zero                   0 (no sign, no point)
+ *     YJS_PLAIN_MIN <= E <= YJS_PLAIN_MAX (-18 and 20):
+ *                            plain decimal, a '-' if negative, a '.' only
+ *                            before fraction digits, "0." before a value
+ *                            below 1: 100, 1.5, 0.0015, 0.000000001,
+ *                            100000000000000000000
+ *     else                   the first digit, '.' and the others if any,
+ *                            'e', a '+' or '-', E without leading zeros:
+ *                            1e+21, 1.5e-19, -5e-324
+ *   So every int64 integer is plain decimal (as before), every
+ *   yjs_new_fixed() text is unchanged (|value| >= 10^-18), and a double
+ *   is written as JavaScript's String(x) writes it except from 10^-18 to
+ *   below 10^-6, where JavaScript uses an exponent. Integer text
+ *   stays integer text, and every accessor (yjs_int64() of integer text,
+ *   yjs_double(), yjs_fixed()) reads the canonical text as it read the
+ *   source. A value with more digits than a double holds keeps them: the
+ *   writer does not round through a double.
+ *   yjs_format_double(x) gives a double's canonical text: the shortest
+ *   decimal that reads back to x (the nearest such, ties to even), so
+ *   yjs_double() of it is x again. -0.0 is written 0. The digits come from
+ *   Ryu (Ulf Adams, PLDI 2018) with small tables (780 bytes) and integer
+ *   arithmetic only: no printf, no strtod, no FPU mode, so every compiler
+ *   and platform gives the same bytes. The tables and a reference are in
+ *   tests/adapt/json_dtoa_ref.py.
  *
  *   ---------------------------------------------------------------------
  *   THE ARENA
@@ -131,6 +168,18 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.2.0 - canonical numbers (docs/experiment_format.md, gap G7): the
+ *          writer writes every number's exact value in one spelling
+ *          (CANONICAL NUMBERS), not its source text; yjs_format_double()
+ *          and yjs_new_double() give the shortest decimal that reads back
+ *          (Ryu, integer only), not snprintf's. The reader refuses a
+ *          number whose first digit is past 10^+-999999999. Changed bytes:
+ *          a parsed number that was not already canonical ("1.50", "1E5",
+ *          "-0.0"), and yjs_new_double() text (1e300 was "1e300", now
+ *          "1e+300"; -5e-324 was "-4.94065645841247e-324"). yjs_new_int()
+ *          and yjs_new_fixed() text and every int64 integer are unchanged.
+ *          The shortest-double code is the RYU SECTION, under the Boost
+ *          Software License 1.0 (the rest stays MIT-0).
  *   v0.1.1 - documentation only: checked against the repository
  *          conventions (README.md, Conventions), which it already met (the
  *          arena is init and _free, a parse writes its message into the
@@ -141,20 +190,25 @@
  *          (docs/pack.md 3) made a header, with numbers as text, the
  *          arena, sorted objects, the builder and the accessors.
  *
- *   STATUS: v0.1.1 (2026-10-10, MSVC 19.44 and MinGW-w64 gcc: the test
+ *   STATUS: v0.2.0 (2026-10-21): 10 million doubles give the reference's
+ *   text byte for byte on MSVC 19.44, MinGW-w64 gcc 16.1, WSL2 gcc 11.4
+ *   (also -ffp-contract=fast) and emcc under node; about 69 ns a double.
+ *   v0.1.1 (2026-10-10, MSVC 19.44 and MinGW-w64 gcc: the test
  *   passes unchanged); v0.1.0, 2026-10-09. docs/json.md has the measurements and the
  *   test counts.
  *
  *   ---------------------------------------------------------------------
- *   LICENSE: public domain / MIT-0, see end of file.
+ *   LICENSE: public domain / MIT-0, except the RYU SECTION (the shortest
+ *   double, yjs_format_double()), which is under the Boost Software
+ *   License 1.0; both texts are at the end of the file.
  */
 #ifndef YSP_JSON_H_INCLUDED
 #define YSP_JSON_H_INCLUDED
 
 #define YJS_VERSION_MAJOR 0
-#define YJS_VERSION_MINOR 1
-#define YJS_VERSION_PATCH 1
-#define YJS_VERSION_STRING "0.1.1"
+#define YJS_VERSION_MINOR 2
+#define YJS_VERSION_PATCH 0
+#define YJS_VERSION_STRING "0.2.0"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -258,6 +312,13 @@ typedef int (*yjs_write_fn)(void* ctx, const char* bytes, size_t n);
 #define YJS_WRITE_PRETTY  0   /* the canonical form                        */
 #define YJS_WRITE_COMPACT 1   /* the same order, no whitespace             */
 
+/* Canonical numbers: plain decimal when the first significant digit's
+ * exponent E is in [YJS_PLAIN_MIN, YJS_PLAIN_MAX], else d.ddde+E / d.ddde-E. */
+#define YJS_PLAIN_MIN   (-18)
+#define YJS_PLAIN_MAX   20
+#define YJS_DOUBLE_TEXT 40    /* bytes that always hold yjs_format_double()'s
+                               * text (at most 37) and its NUL              */
+
 YJS_API const char* yjs_version(void);
 
 /* --- the arena -------------------------------------------------------------- */
@@ -293,6 +354,11 @@ YJS_API int    yjs_bool(const yjs_value* v, bool* out);
 /* The number grammar on raw text (s need not end in NUL); decimals 0..18. */
 YJS_API int    yjs_parse_fixed(const char* s, size_t n, int decimals, int64_t* out);
 YJS_API int    yjs_parse_double(const char* s, size_t n, double* out);
+/* The canonical text of a finite double: the shortest decimal that reads
+ * back to it (the nearest such, ties to even), spelled as the writer spells
+ * numbers; -0.0 is "0". The length (no NUL); the text and a NUL when it fits
+ * in cap (YJS_DOUBLE_TEXT always does); YJS_ERR_RANGE for NaN or infinity. */
+YJS_API int    yjs_format_double(double x, char* buf, size_t cap);
 /* Whether s[0..n) is one JSON number; *flags gets YJS_NUM_INT. */
 YJS_API bool   yjs_number_ok(const char* s, size_t n, unsigned* flags);
 /* Whether s[0..n) is valid UTF-8 without NUL. */
@@ -510,8 +576,10 @@ YJS_API bool yjs_utf8_ok(const char* s, size_t n) {
 
 /* The JSON number at s[0..n): its length (0 = no number) and flags. */
 static size_t yjs__number_len(const unsigned char* s, size_t n, unsigned* flags, const char** why) {
-    size_t i = 0;
+    size_t i = 0, ni = 0, lead = 0;
     unsigned f = YJS_NUM_INT;
+    bool nonzero = false;
+    int64_t x = 0;
     *why = "not a number";
     if (i < n && s[i] == '-') i++;
     if (i >= n || s[i] < '0' || s[i] > '9') { *why = "a number has no digits"; return 0; }
@@ -519,20 +587,36 @@ static size_t yjs__number_len(const unsigned char* s, size_t n, unsigned* flags,
         i++;
         if (i < n && s[i] >= '0' && s[i] <= '9') { *why = "a leading zero"; return 0; }
     } else {
+        size_t i0 = i;
+        nonzero = true;
         while (i < n && s[i] >= '0' && s[i] <= '9') i++;
+        ni = i - i0;
     }
     if (i < n && s[i] == '.') {
         i++;
         f = 0;
         if (i >= n || s[i] < '0' || s[i] > '9') { *why = "no digit after '.'"; return 0; }
-        while (i < n && s[i] >= '0' && s[i] <= '9') i++;
+        for (; i < n && s[i] >= '0' && s[i] <= '9'; i++) {
+            if (nonzero) continue;
+            if (s[i] == '0') lead++;
+            else nonzero = true;
+        }
     }
     if (i < n && (s[i] == 'e' || s[i] == 'E')) {
+        bool eneg = false;
         i++;
         f = 0;
-        if (i < n && (s[i] == '+' || s[i] == '-')) i++;
+        if (i < n && (s[i] == '+' || s[i] == '-')) eneg = s[i++] == '-';
         if (i >= n || s[i] < '0' || s[i] > '9') { *why = "no digit in an exponent"; return 0; }
-        while (i < n && s[i] >= '0' && s[i] <= '9') i++;
+        for (; i < n && s[i] >= '0' && s[i] <= '9'; i++) if (x < 100000000000) x = x * 10 + (s[i] - '0');
+        if (eneg) x = -x;
+    }
+    /* A limit RFC 8259 (section 9) allows: the first significant digit's
+     * exponent is within +-999999999, so the canonical writer's exponent has
+     * at most 9 digits and reads back. No double needs more than 3. */
+    if (nonzero) {
+        int64_t e = (ni ? (int64_t)ni - 1 : -1 - (int64_t)lead) + x;
+        if (e > 999999999 || e < -999999999) { *why = "an exponent past 999999999"; return 0; }
     }
     *flags = f;
     return i;
@@ -948,6 +1032,331 @@ YJS_API int yjs_parse_double(const char* s, size_t n, double* out) {
     *out = neg ? -v : v;
     return YJS_OK;
 }
+
+/* --- the canonical spelling of a decimal ---------------------------------------- */
+
+typedef void (*yjs__emit_fn)(void* ctx, const char* s, size_t n);
+
+/* Decimal digits of m, written backwards into the end of buf; the start. */
+static char* yjs__utoa(uint64_t m, char* end) {
+    do { *--end = (char)('0' + (int)(m % 10u)); m /= 10u; } while (m);
+    return end;
+}
+
+/* D x 10^(E - k + 1), D the k digits d1 d2 (two pieces, so that a number's
+ * text is read in place around its '.'), no leading or trailing zero. */
+static void yjs__spell(yjs__emit_fn emit, void* ctx, bool neg, const char* d1, size_t n1, const char* d2, size_t n2,
+                       int64_t E) {
+    static const char zeros[] = "00000000000000000000";
+    size_t k = n1 + n2, at = 1;
+    bool sci = E < YJS_PLAIN_MIN || E > YJS_PLAIN_MAX;
+    if (neg) emit(ctx, "-", 1);
+    if (!sci) {
+        if (E >= (int64_t)k - 1) {
+            emit(ctx, d1, n1);
+            emit(ctx, d2, n2);
+            emit(ctx, zeros, (size_t)(E - (int64_t)k + 1));
+            return;
+        }
+        if (E < 0) {
+            emit(ctx, "0.", 2);
+            emit(ctx, zeros, (size_t)(-E - 1));
+            emit(ctx, d1, n1);
+            emit(ctx, d2, n2);
+            return;
+        }
+        at = (size_t)E + 1;              /* digits before the point, fewer than k */
+    }
+    /* `at` digits, then the point when more follow */
+    if (at <= n1) {
+        emit(ctx, d1, at);
+        if (k > at) emit(ctx, ".", 1);
+        emit(ctx, d1 + at, n1 - at);
+        emit(ctx, d2, n2);
+    } else {
+        emit(ctx, d1, n1);
+        emit(ctx, d2, at - n1);
+        emit(ctx, ".", 1);
+        emit(ctx, d2 + (at - n1), n2 - (at - n1));
+    }
+    if (sci) {
+        char buf[24];
+        char* e = buf + sizeof buf;
+        char* s = yjs__utoa(E < 0 ? (uint64_t)0 - (uint64_t)E : (uint64_t)E, e);
+        *--s = E < 0 ? '-' : '+';
+        *--s = 'e';
+        emit(ctx, s, (size_t)(e - s));
+    }
+}
+
+/* The canonical text of a JSON number's text: its exact value, respelled.
+ * The grammar bounds E to +-999999999, so the exponent text reads back. */
+static void yjs__canon_number(yjs__emit_fn emit, void* ctx, const char* s, size_t n) {
+    size_t i = 0, ip, ni, nf = 0, fp = 0, a, b, nc;
+    int64_t x = 0;
+    bool neg = false;
+    if (i < n && s[i] == '-') { neg = true; i++; }
+    ip = i;
+    while (i < n && s[i] >= '0' && s[i] <= '9') i++;
+    ni = i - ip;
+    if (i < n && s[i] == '.') {
+        fp = ++i;
+        while (i < n && s[i] >= '0' && s[i] <= '9') i++;
+        nf = i - fp;
+    }
+    if (i < n) {                         /* 'e' or 'E' */
+        bool eneg = false;
+        i++;
+        if (s[i] == '+' || s[i] == '-') eneg = s[i++] == '-';
+        for (; i < n; i++) if (x < 100000000000) x = x * 10 + (s[i] - '0');   /* past it only for a zero */
+        if (eneg) x = -x;
+    }
+    /* the digits C = integer part, then fraction; C[t] is s[ip + t] or s[fp + t - ni] */
+    nc = ni + nf;
+    for (a = 0; a < nc && (a < ni ? s[ip + a] : s[fp + a - ni]) == '0'; a++) {}
+    if (a == nc) { emit(ctx, "0", 1); return; }
+    for (b = nc; (b - 1 < ni ? s[ip + b - 1] : s[fp + b - 1 - ni]) == '0'; b--) {}
+    /* significant digits C[a..b), the first at 10^(ni - 1 - a) x 10^x */
+    if (b <= ni) yjs__spell(emit, ctx, neg, s + ip + a, b - a, NULL, 0, (int64_t)ni - 1 - (int64_t)a + x);
+    else if (a >= ni) yjs__spell(emit, ctx, neg, s + fp + (a - ni), b - a, NULL, 0, (int64_t)ni - 1 - (int64_t)a + x);
+    else yjs__spell(emit, ctx, neg, s + ip + a, ni - a, s + fp, b - ni, (int64_t)ni - 1 - (int64_t)a + x);
+}
+
+/* --- RYU SECTION: from here to END RYU SECTION ------------------------------------
+ * This section may derive from Ryu, Copyright 2018 Ulf Adams, and is used
+ * under the Boost Software License 1.0, whose text is at the end of this
+ * file. Keep this notice and that text with any copy of this section. */
+
+/* --- double to the shortest decimal that reads back to it ------------------------
+ * Ryu (Ulf Adams, "Ryu: fast float-to-string conversion", PLDI 2018) in the
+ * variant with small tables: a 125-bit multiplier for 5^i or 5^-i is one of
+ * 13 stored ones times a power of 5 below 5^26, plus a correction of 0 to
+ * 2. Integer arithmetic only, so the digits do not depend on the compiler,
+ * the FPU or the C library. The tables and their check are
+ * tests/adapt/json_dtoa_ref.py's; json_test.c compares every multiplier. */
+
+/* tests/adapt/json_dtoa_ref.py tables: i <= 325, q <= 290 */
+static const uint64_t yjs__p5[26] = {
+    1u, 5u, 25u, 125u,
+    625u, 3125u, 15625u, 78125u,
+    390625u, 1953125u, 9765625u, 48828125u,
+    244140625u, 1220703125u, 6103515625u, 30517578125u,
+    152587890625u, 762939453125u, 3814697265625u, 19073486328125u,
+    95367431640625u, 476837158203125u, 2384185791015625u, 11920928955078125u,
+    59604644775390625u, 298023223876953125u,
+};
+static const uint64_t yjs__p5_split[13][2] = {
+    { 0x0000000000000000u, 0x1000000000000000u },
+    { 0x0000000000000000u, 0x14adf4b7320334b9u },
+    { 0x0e549208b31adb10u, 0x1aba4714957d300du },
+    { 0x6dc6ad264d8f0866u, 0x1145b7e285bf98f5u },
+    { 0xeb1dbd923d8596cau, 0x1652efdc6018a1fcu },
+    { 0xb4c1b80b22ae923cu, 0x1cda62055b2d9d83u },
+    { 0x5bb28b4e8f7e4c30u, 0x12a5568b9f52f416u },
+    { 0xf08aed437682d4fbu, 0x1819651531f9e78fu },
+    { 0xb4ee134ad99bf150u, 0x1f25c186a6f04c28u },
+    { 0x16499ecb70c25f03u, 0x1420eb449c8842e6u },
+    { 0x85a56ead360865b0u, 0x1a03fde214caf085u },
+    { 0x093db1d57999890bu, 0x10cfeb353a97dad8u },
+    { 0xcf38bb735e3f36acu, 0x15baaf44fa52673eu },
+};
+static const uint64_t yjs__p5_inv[13][2] = {
+    { 0x0000000000000000u, 0x2000000000000000u },
+    { 0x52a6c95fc0655033u, 0x18c240c4aecb13bbu },
+    { 0x7ca8d50071dfc805u, 0x1327fc58da0f6ff5u },
+    { 0x6520247d3556476du, 0x1da48ce468e7c702u },
+    { 0x6139cdd76802e6e8u, 0x16ef5b40c2fc7779u },
+    { 0xf951a7ff43de8c78u, 0x11bebdf578b2f391u },
+    { 0x7be8bee8d6e957e7u, 0x1b758d848fac54b0u },
+    { 0x8bd3f9e999a423e9u, 0x153eda614071a3b7u },
+    { 0x0848f973cb3ee3cdu, 0x10701bd527b4978cu },
+    { 0x153285ebb9efbfa1u, 0x196fbb9bb44db44du },
+    { 0xadeee7f86c07b695u, 0x13ae3591f5b4d936u },
+    { 0x4d686a4eaf182221u, 0x1e74404f3daada91u },
+    { 0x98c0a106e09ebd9eu, 0x17900ea4fda7c257u },
+};
+static const uint8_t yjs__p5_corr[82] = {
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 64, 149, 89, 105, 89, 85, 85, 84, 85, 21, 85, 85, 86,
+    4, 5, 21, 65, 16, 84, 85, 64, 69, 81, 85, 68, 64, 69, 80, 68,
+    80, 85, 85, 69, 0, 64, 0, 64, 64, 4, 68, 150, 101, 85, 86, 85,
+    69, 64, 69, 84, 81, 65, 21, 64, 85, 145, 85, 85, 85, 85, 64, 81,
+    5, 1,
+};
+static const uint8_t yjs__p5_inv_corr[73] = {
+    84, 69, 84, 84, 69, 85, 5, 4, 0, 16, 4, 16, 20, 4, 64, 0,
+    0, 0, 1, 64, 85, 85, 21, 65, 84, 4, 0, 0, 68, 0, 1, 0,
+    0, 0, 0, 64, 65, 0, 0, 68, 80, 68, 69, 80, 84, 0, 85, 85,
+    84, 85, 101, 81, 0, 64, 0, 64, 1, 0, 0, 1, 0, 5, 1, 0,
+    17, 84, 81, 81, 84, 85, 85, 5, 0,
+};
+
+/* bits of 5^e, 0 <= e <= 3528 */
+static uint32_t yjs__pow5bits(uint32_t e) { return ((e * 1217359u) >> 19) + 1u; }
+
+/* (m x (hi:lo)) >> s, 1 <= s <= 63, kept to 128 bits */
+static void yjs__mulshr(uint64_t m, const uint64_t* v, uint32_t s, uint64_t* lo, uint64_t* hi) {
+    uint64_t h0, l0, h2, l2, rl, rh;
+    yjs__mul64(m, v[0], &h0, &l0);
+    yjs__mul64(m, v[1], &h2, &l2);
+    rl = (l0 >> s) | (h0 << (64 - s));
+    rh = h0 >> s;
+    *lo = rl + (l2 << (64 - s));
+    *hi = rh + ((h2 << (64 - s)) | (l2 >> s)) + (*lo < rl);
+}
+
+static void yjs__add_small(uint64_t* lo, uint64_t* hi, uint64_t c) {
+    *lo += c;
+    *hi += *lo < c;
+}
+
+/* 5^i to 125 bits, i <= 325 */
+static void yjs__pow5(uint32_t i, uint64_t* lo, uint64_t* hi) {
+    uint32_t b = i / 26u, o = i - b * 26u;
+    if (o == 0) { *lo = yjs__p5_split[b][0]; *hi = yjs__p5_split[b][1]; return; }
+    yjs__mulshr(yjs__p5[o], yjs__p5_split[b], yjs__pow5bits(i) - yjs__pow5bits(b * 26u), lo, hi);
+    yjs__add_small(lo, hi, (uint64_t)((yjs__p5_corr[i >> 2] >> ((i & 3u) * 2u)) & 3u));
+}
+
+/* floor(2^(bits of 5^q - 1 + 125) / 5^q) + 1, q <= 290 */
+static void yjs__pow5_inv(uint32_t q, uint64_t* lo, uint64_t* hi) {
+    uint32_t b = (q + 25u) / 26u, o = b * 26u - q;
+    if (o == 0) {
+        *lo = yjs__p5_inv[b][0];
+        *hi = yjs__p5_inv[b][1];
+        yjs__add_small(lo, hi, 1u);
+        return;
+    }
+    yjs__mulshr(yjs__p5[o], yjs__p5_inv[b], yjs__pow5bits(b * 26u) - yjs__pow5bits(q), lo, hi);
+    yjs__add_small(lo, hi, 1u + (uint64_t)((yjs__p5_inv_corr[q >> 2] >> ((q & 3u) * 2u)) & 3u));
+}
+
+/* (m x (hi:lo)) >> j, 118 <= j <= 125: the result fits 64 bits */
+static uint64_t yjs__mulshift(uint64_t m, uint64_t lo, uint64_t hi, uint32_t j) {
+    uint64_t h0, l0, h2, l2, sl, sh;
+    uint32_t s = j - 64u;
+    yjs__mul64(m, lo, &h0, &l0);
+    yjs__mul64(m, hi, &h2, &l2);
+    sl = l2 + h0;
+    sh = h2 + (sl < h0);
+    return (sh << (64 - s)) | (sl >> s);
+}
+
+static uint32_t yjs__pow5_factor(uint64_t v) {
+    uint32_t k = 0;
+    while (v && v % 5u == 0) { v /= 5u; k++; }
+    return k;
+}
+
+/* A finite nonzero double's bits to D x 10^e, D the shortest digits that read
+ * back to the same double, the nearest such, ties to even. */
+static void yjs__ryu(uint64_t bits, uint64_t* digits, int32_t* exp10) {
+    uint64_t ieee_m = bits & (((uint64_t)1 << 52) - 1u), m2, mv, vr, vp, vm, lo, hi, out;
+    uint32_t ieee_e = (uint32_t)((bits >> 52) & 0x7FFu), mmshift, q;
+    int32_t e2, e10, removed = 0;
+    bool even, vm_tz = false, vr_tz = false;
+    unsigned last = 0;
+    if (ieee_e == 0) { e2 = 1 - 1023 - 52 - 2; m2 = ieee_m; }
+    else { e2 = (int32_t)ieee_e - 1023 - 52 - 2; m2 = ((uint64_t)1 << 52) | ieee_m; }
+    even = (m2 & 1u) == 0;
+    mv = 4u * m2;
+    /* the gap below a power of two is half the gap above it */
+    mmshift = ieee_m != 0 || ieee_e <= 1;
+    if (e2 >= 0) {
+        q = (((uint32_t)e2 * 78913u) >> 18) - (e2 > 3);
+        e10 = (int32_t)q;
+        yjs__pow5_inv(q, &lo, &hi);
+        {
+            uint32_t j = (uint32_t)(-e2 + (int32_t)q + 125 + (int32_t)yjs__pow5bits(q) - 1);
+            vr = yjs__mulshift(mv, lo, hi, j);
+            vp = yjs__mulshift(mv + 2u, lo, hi, j);
+            vm = yjs__mulshift(mv - 1u - mmshift, lo, hi, j);
+        }
+        if (q <= 21) {
+            /* at most one of mv - 2, mv, mv + 2 is a multiple of 5 */
+            if (mv % 5u == 0) vr_tz = yjs__pow5_factor(mv) >= q;
+            else if (even) vm_tz = yjs__pow5_factor(mv - 1u - mmshift) >= q;
+            else vp -= yjs__pow5_factor(mv + 2u) >= q;
+        }
+    } else {
+        uint32_t i;
+        q = (((uint32_t)-e2 * 732923u) >> 20) - (-e2 > 1);
+        e10 = (int32_t)q + e2;
+        i = (uint32_t)(-e2 - (int32_t)q);
+        yjs__pow5(i, &lo, &hi);
+        {
+            uint32_t j = (uint32_t)((int32_t)q - ((int32_t)yjs__pow5bits(i) - 125));
+            vr = yjs__mulshift(mv, lo, hi, j);
+            vp = yjs__mulshift(mv + 2u, lo, hi, j);
+            vm = yjs__mulshift(mv - 1u - mmshift, lo, hi, j);
+        }
+        if (q <= 1) {
+            /* mv has two trailing zero bits, mv + 2 one */
+            vr_tz = true;
+            if (even) vm_tz = mmshift == 1;
+            else vp--;
+        } else if (q < 63) {
+            vr_tz = (mv & (((uint64_t)1 << q) - 1u)) == 0;
+        }
+    }
+    /* drop digits while the interval (vm, vp) still holds a shorter decimal */
+    while (vp / 10u > vm / 10u) {
+        vm_tz = vm_tz && vm % 10u == 0;
+        vr_tz = vr_tz && last == 0;
+        last = (unsigned)(vr % 10u);
+        vr /= 10u; vp /= 10u; vm /= 10u;
+        removed++;
+    }
+    if (vm_tz) {
+        while (vm % 10u == 0) {
+            vr_tz = vr_tz && last == 0;
+            last = (unsigned)(vr % 10u);
+            vr /= 10u; vp /= 10u; vm /= 10u;
+            removed++;
+        }
+    }
+    /* an exact tie rounds to even */
+    if (vr_tz && last == 5 && vr % 2u == 0) last = 4;
+    out = vr + ((vr == vm && (!even || !vm_tz)) || last >= 5);
+    *digits = out;
+    *exp10 = e10 + removed;
+}
+
+typedef struct yjs__sbuf { char* p; size_t n; } yjs__sbuf;
+static void yjs__sbuf_emit(void* ctx, const char* s, size_t n) {
+    yjs__sbuf* b = (yjs__sbuf*)ctx;
+    if (!n) return;                      /* s may be NULL then */
+    memcpy(b->p + b->n, s, n);
+    b->n += n;
+}
+
+YJS_API int yjs_format_double(double x, char* buf, size_t cap) {
+    char t[YJS_DOUBLE_TEXT];
+    char d[24];
+    yjs__sbuf sb;
+    uint64_t bits, digits;
+    int32_t e;
+    memcpy(&bits, &x, sizeof bits);
+    if (((bits >> 52) & 0x7FFu) == 0x7FFu) return YJS_ERR_RANGE;
+    sb.p = t;
+    sb.n = 0;
+    if ((bits << 1) == 0) {
+        t[sb.n++] = '0';                 /* -0.0 too */
+    } else {
+        char* end = d + sizeof d;
+        char* s;
+        yjs__ryu(bits, &digits, &e);
+        s = yjs__utoa(digits, end);
+        yjs__spell(yjs__sbuf_emit, &sb, (bits >> 63) != 0, s, (size_t)(end - s), NULL, 0,
+                   (int64_t)e + (int64_t)(end - s) - 1);
+    }
+    if (buf && sb.n < cap) {
+        memcpy(buf, t, sb.n);
+        buf[sb.n] = '\0';
+    }
+    return (int)sb.n;
+}
+/* --- END RYU SECTION (Boost Software License 1.0) ------------------------------- */
 
 /* ======================================================================= *
  *  READER
@@ -1391,12 +1800,6 @@ static yjs_value* yjs__num_text(yjs_arena* a, const char* t, size_t n, unsigned 
     return v;
 }
 
-/* Decimal digits of m, written backwards into the end of buf; the start. */
-static char* yjs__utoa(uint64_t m, char* end) {
-    do { *--end = (char)('0' + (int)(m % 10u)); m /= 10u; } while (m);
-    return end;
-}
-
 YJS_API yjs_value* yjs_new_int(yjs_arena* a, int64_t x) {
     char buf[24];
     char* e = buf + sizeof buf;
@@ -1429,37 +1832,11 @@ YJS_API yjs_value* yjs_new_fixed(yjs_arena* a, int64_t x, int decimals) {
 }
 
 YJS_API yjs_value* yjs_new_double(yjs_arena* a, double x) {
-    char t[40];
-    int prec;
-    if (!(x == x) || x > 1.7976931348623157e308 || x < -1.7976931348623157e308) return NULL;
-    if (x == 0.0) return yjs__num_text(a, "0", 1, YJS_NUM_INT);
-    for (prec = 15; prec <= 17; prec++) {
-        double back = 0.0;
-        unsigned f = 0;
-        size_t n, k;
-        int w = snprintf(t, sizeof t, "%.*g", prec, x);
-        if (w <= 0 || (size_t)w >= sizeof t) return NULL;
-        n = (size_t)w;
-        /* any locale's decimal point, and the exponent's '+' and leading
-         * zeros, into the JSON grammar */
-        for (k = 0; k < n; k++) if (t[k] != '-' && t[k] != 'e' && t[k] != '+' && (t[k] < '0' || t[k] > '9')) t[k] = '.';
-        {
-            char* ep = strchr(t, 'e');
-            if (ep) {
-                char* q = ep + 1;
-                char* r;
-                if (*q == '+') { memmove(q, q + 1, strlen(q)); }
-                if (*q == '-') q++;
-                r = q;
-                while (r[0] == '0' && r[1]) r++;
-                if (r != q) memmove(q, r, strlen(r) + 1);
-                n = strlen(t);
-            }
-        }
-        if (!yjs_number_ok(t, n, &f)) return NULL;
-        if (prec == 17 || (yjs_parse_double(t, n, &back) == YJS_OK && back == x)) return yjs__num_text(a, t, n, f);
-    }
-    return NULL;
+    char t[YJS_DOUBLE_TEXT];
+    unsigned f = 0;
+    int n = yjs_format_double(x, t, sizeof t);
+    if (n < 0 || !yjs_number_ok(t, (size_t)n, &f)) return NULL;
+    return yjs__num_text(a, t, (size_t)n, f);
 }
 
 YJS_API yjs_value* yjs_new_number(yjs_arena* a, const char* text, size_t n) {
@@ -1604,6 +1981,10 @@ static void yjs__out(yjs__w* w, const char* s, size_t n) {
     w->n += n;
 }
 
+static void yjs__w_emit(void* ctx, const char* s, size_t n) {
+    if (n) yjs__out((yjs__w*)ctx, s, n);
+}
+
 static void yjs__indent(yjs__w* w, int n) {
     static const char sp[] = "                                                                ";
     while (n > 0) {
@@ -1655,7 +2036,7 @@ static void yjs__wval(yjs__w* w, const yjs_value* v, int ind, int depth) {
             if (v->i < 0) *--s = '-';
             yjs__out(w, s, (size_t)(e - s));
         } else {
-            yjs__out(w, v->u.s, v->n);
+            yjs__canon_number(yjs__w_emit, w, v->u.s, v->n);
         }
         break;
     case YJS_STRING: yjs__wstr(w, v->u.s, v->n); break;
@@ -1760,4 +2141,33 @@ YJS_API size_t yjs_write_mem(const yjs_value* v, int flags, char* buf, size_t ca
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
  * AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY.
+ * ------------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------------
+ * The RYU SECTION above (Copyright 2018 Ulf Adams) is available under the
+ * Boost Software License 1.0:
+ *
+ * Boost Software License - Version 1.0 - August 17th, 2003
+ *
+ * Permission is hereby granted, free of charge, to any person or organization
+ * obtaining a copy of the software and accompanying documentation covered by
+ * this license (the "Software") to use, reproduce, display, distribute,
+ * execute, and transmit the Software, and to prepare derivative works of the
+ * Software, and to permit third-parties to whom the Software is furnished to
+ * do so, all subject to the following:
+ *
+ * The copyright notices in the Software and this entire statement, including
+ * the above license grant, this restriction and the following disclaimer,
+ * must be included in all copies of the Software, in whole or in part, and
+ * all derivative works of the Software, unless such copies or derivative
+ * works are solely in the form of machine-executable object code generated by
+ * a source language processor.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, TITLE AND NON-INFRINGEMENT. IN NO EVENT
+ * SHALL THE COPYRIGHT HOLDERS OR ANYONE DISTRIBUTING THE SOFTWARE BE LIABLE
+ * FOR ANY DAMAGES OR OTHER LIABILITY, WHETHER IN CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ * DEALINGS IN THE SOFTWARE.
  * ------------------------------------------------------------------------ */
