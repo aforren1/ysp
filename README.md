@@ -117,4 +117,6 @@ return values, errors, units, threads) are in
 ## License
 
 MIT-0 (public domain equivalent). See [LICENSE](LICENSE) and the end of each
-header.
+header. One exception: the shortest-double section of `ysp/json.h`
+(`yjs_format_double()`) may derive from Ryu and is under the Boost Software
+License 1.0; the header marks it and carries the license text.
