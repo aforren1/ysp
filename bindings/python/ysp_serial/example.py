@@ -12,17 +12,17 @@ ysp/serial.h):
 """
 import sys
 import threading
-import ysp.serial as ps
+import ysp.serial as yser
 
 
 def listener(port, stop):
     """Reader thread: one reader and one writer may share a Port."""
     while not stop.is_set():
         try:
-            data = port.read(64, ps.TIMEOUT_INFINITE)
-        except ps.Interrupted:
+            data = port.read(64, yser.TIMEOUT_INFINITE)
+        except yser.Interrupted:
             return                      # shutdown, not an error
-        except ps.Disconnected:
+        except yser.Disconnected:
             print("device disconnected", file=sys.stderr)
             return
         if data:
@@ -36,11 +36,11 @@ def main():
     device = sys.argv[1]
     code = int(sys.argv[2], 0) if len(sys.argv) > 2 else 0x01
 
-    for info in ps.list_ports():
+    for info in yser.list_ports():
         print(f"  {info['name']}  {info['description']}  "
               f"{info['vid']:04X}:{info['pid']:04X}")
 
-    with ps.Port(device, baud=115200, low_latency=True) as port:
+    with yser.Port(device, baud=115200, low_latency=True) as port:
         print(f"open: {port.device} at {port.baud} baud "
               f"(low latency {port.low_latency}, async policy {port.async_policy})")
 
@@ -67,7 +67,7 @@ def main():
         # The async reader: a C thread reads and stamps each line when it
         # arrives, without the GIL. Writes stay allowed while it runs.
         port.async_start(terminator=b"\n", capacity=4096)
-        t0 = ps.now()
+        t0 = yser.now()
         port.write_byte(code)
         if port.async_wait(0.5):
             for line, t in port.async_read():
@@ -79,6 +79,6 @@ def main():
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except ps.Error as e:
+    except yser.Error as e:
         print(f"ysp.serial error: {e}", file=sys.stderr)
         sys.exit(1)

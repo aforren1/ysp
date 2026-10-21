@@ -47,12 +47,12 @@ no other header of the collection.
 ## How to run the method of constant stimuli
 
 ```python
-import ysp.trials as pt
+import ysp.trials as ytr
 
-t = pt.Trials(factors=[("orientation", 2), ("contrast", 5)],   # 10 conditions
+t = ytr.Trials(factors=[("orientation", 2), ("contrast", 5)],   # 10 conditions
               reps=20,                                           # 200 trials
-              order=pt.ORDER_CONSTRAINED,
-              constraints=[pt.max_run("orientation", pt.ANY_LEVEL, 3)],
+              order=ytr.ORDER_CONSTRAINED,
+              constraints=[ytr.max_run("orientation", ytr.ANY_LEVEL, 3)],
               rng=20260923)                                      # log the seed
 
 while (ti := t.next()) is not None:
@@ -72,11 +72,11 @@ the header's message, not at trial 190.
 ## How to run a conditions file
 
 ```python
-import ysp.trials as pt
+import ysp.trials as ytr
 
 with open("conditions.csv", encoding="utf-8") as f:
-    tab = pt.Table(f.read())               # the binding reads; the header does not
-t = pt.Trials(table=tab, participant=7, rng=20261007, rules="""
+    tab = ytr.Table(f.read())               # the binding reads; the header does not
+t = ytr.Trials(table=tab, participant=7, rng=20261007, rules="""
     order constrained
     reps 4
     where list=@participant
@@ -90,7 +90,7 @@ print(t.format_rules())                    # the settings, as rules text
 ```
 
 A table's rows are the conditions and its columns the factors. A constraint
-names a column and a level by value (`pt.max_run("target", "catch", 1)`). The
+names a column and a level by value (`ytr.max_run("target", "catch", 1)`). The
 rules text is the header's (ysp/trials.h, GRAMMAR); `format_rules()` writes a
 session's settings in it, so a logged session pastes back in. A CSV fault
 raises `ArgumentError` with the line, the row and the column. A `Table` keeps
@@ -100,9 +100,9 @@ its own copy of the block; `to_bytes()` is the block a pack stores, and
 ## How to jitter a foreperiod and an ITI
 
 ```python
-t = pt.Trials(n_conditions=4, reps=25, order=pt.ORDER_FULL_RANDOM, rng=20261007,
-              jitters=[pt.exponential("fp_s", 0.5, 2.0, 0.4, rate=(60000, 1001)),  # non-aging
-                       pt.uniform("iti_s", 0.8, 1.2)])
+t = ytr.Trials(n_conditions=4, reps=25, order=ytr.ORDER_FULL_RANDOM, rng=20261007,
+              jitters=[ytr.exponential("fp_s", 0.5, 2.0, 0.4, rate=(60000, 1001)),  # non-aging
+                       ytr.uniform("iti_s", 0.8, 1.2)])
 while (ti := t.next()) is not None:
     fp = t.jitter(ti.index, "fp_s")           # Jitter(s, ns, frames)
     show_cue(); wait_frames(fp.frames); t.update(run_target(ti.condition))
@@ -114,22 +114,22 @@ trial in a fixed order, so `restore()` and `load()` reproduce them, and
 `format_row()` logs each in its own column (seconds to the nanosecond), so name
 a jitter with `_s` at the end, as ysp/trials.h's data writer requires. A
 jitter's `lo`, `hi` and `scale` can name table columns, for an interval per
-condition: `pt.uniform("fp_s", "fp_lo_s", "fp_hi_s")`. The rules text takes
-`jitter fp_s exponential 0.5 2.0 0.4 rate=60000/1001`. `pt.jitter_map(spec, u)`
+condition: `ytr.uniform("fp_s", "fp_lo_s", "fp_hi_s")`. The rules text takes
+`jitter fp_s exponential 0.5 2.0 0.4 rate=60000/1001`. `ytr.jitter_map(spec, u)`
 maps a variate of your own with no session, and nothing replays it.
 
 ## How to interleave adaptive tracks
 
 ```python
 import struct
-import ysp.stair as st
+import ysp.stair as yst
 
-stairs = [st.Staircase(start=0.3, n_down=k, step_type=st.STEP_LOG,
+stairs = [yst.Staircase(start=0.3, n_down=k, step_type=yst.STEP_LOG,
                        steps=[0.2, 0.1], min=0.001, max=1.0, stop_reversals=8)
           for k in (2, 3, 4)]
-t = pt.Trials(n_conditions=1, reps=10,                 # a catch condition
-              order=pt.ORDER_CONSTRAINED,
-              constraints=[pt.min_gap(pt.CONDITION, 0, 1)],
+t = ytr.Trials(n_conditions=1, reps=10,                 # a catch condition
+              order=ytr.ORDER_CONSTRAINED,
+              constraints=[ytr.min_gap(ytr.CONDITION, 0, 1)],
               tracks=stairs, track_rate=0.9, rng=seed, record_size=8)
 
 while (ti := t.next()) is not None:
@@ -153,7 +153,7 @@ ask your own handle for the level. See [example.py](example.py).
 ```python
 snap, state = t.save(), t.rng_state          # write both to disk
 ...
-t = pt.Trials.load(snap, rng=state, **same_desc)
+t = ytr.Trials.load(snap, rng=state, **same_desc)
 ```
 
 `load` needs the same desc as the saved session (every number is checked, and

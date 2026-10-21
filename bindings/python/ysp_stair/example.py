@@ -14,7 +14,7 @@ import math
 import random
 import sys
 
-import ysp.stair as st
+import ysp.stair as yst
 
 THRESHOLD = 0.05   # the observer's 2AFC threshold, contrast
 SLOPE = 3.5
@@ -29,19 +29,19 @@ def main():
     seed = int(sys.argv[1]) if len(sys.argv) > 1 else 1
     rng = random.Random(seed)   # the header has no generator; this is ours
 
-    s = st.Staircase(start=0.5, n_down=3, step_type=st.STEP_LOG,
+    s = yst.Staircase(start=0.5, n_down=3, step_type=yst.STEP_LOG,
                      steps=[0.3, 0.15, 0.075], min=0.001, max=1.0,
                      stop_reversals=12)
     while not s.done:
         level = s.next()
-        response = st.simulate_response(p_correct(level), rng.random())
+        response = yst.simulate_response(p_correct(level), rng.random())
         events = s.update(level, response)
-        mark = " reversal" if events & st.Event.REVERSAL else ""
+        mark = " reversal" if events & yst.Event.REVERSAL else ""
         print(f"trial {s.n_trials:3d}  level {level:8.5f}  response {response}{mark}")
 
-    est = s.estimate(st.EST_REVERSALS)
-    n = s.estimate_count(st.EST_REVERSALS)
-    p = st.convergence_p(1, 3)
+    est = s.estimate(yst.EST_REVERSALS)
+    n = s.estimate_count(yst.EST_REVERSALS)
+    p = yst.convergence_p(1, 3)
     print(f"stopped: {s.stop_reason.name} after {s.n_trials} trials")
     print(f"estimate: {est:.5f} (geometric mean of {n} reversals); the rule "
           f"converges on p = {p:.3f}, where the observer's level is "

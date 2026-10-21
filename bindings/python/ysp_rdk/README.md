@@ -1,6 +1,6 @@
 # ysp.rdk Python binding
 
-A CPython extension for the [ysp/rdk.h](../../../include/ysp/rdk.h) single-header
+A CPython extension for the [ysp/yrdk.h](../../../include/ysp/yrdk.h) single-header
 library: random dot kinematograms whose dots regenerate bit for bit from
 a seed and the logged inputs of each update. Use it in an analysis to get
 back the exact dots a participant saw, for reverse correlation, motion
@@ -10,7 +10,7 @@ the rig (C, MSVC) and the analysis (Python, any platform) compute the same
 bits.
 
 The extension uses the **Limited API / stable ABI**
-(`Py_LIMITED_API = 0x03080000`), so one `ysp/rdk.abi3.so` works on
+(`Py_LIMITED_API = 0x03080000`), so one `ysp/yrdk.abi3.so` works on
 CPython 3.8 and later. It needs NumPy at run time: the outputs are NumPy
 arrays (`numpy.frombuffer` over bytes that the C code fills, with no
 Python work per dot).
@@ -28,29 +28,29 @@ From this directory:
 uv pip install .                    # build and install an abi3 wheel
 ```
 
-In a development tree, setup.py finds `ysp/rdk.h` in the repository's
+In a development tree, setup.py finds `ysp/yrdk.h` in the repository's
 `include/` directory.
 An isolated build (an sdist or a cibuildwheel run) sees only this
 directory. Copy the header into `include/ysp/` next to `setup.py` first:
 
 ```sh
-mkdir -p include/ysp && cp ../../../include/ysp/rdk.h include/ysp/
+mkdir -p include/ysp && cp ../../../include/ysp/yrdk.h include/ysp/
 uv build --sdist
 ```
 
 ## How to regenerate a logged trial
 
 The rig logs what the header's manual lists (REPRODUCIBILITY): the
-version, the desc, the seed, the time of `yrdk_start()`, and `rdk.last`
+version, the desc, the seed, the time of `yrdk_start()`, and `yrdk.last`
 after each update (t, coherence, direction, speed). The C header logs its
 times as integer ns; give them to the binding as seconds, `ns / 1e9`.
 Open a field with the same desc as keyword arguments, then replay:
 
 ```python
-import ysp.rdk as rdk
+import ysp.rdk as yrdk
 
-f = rdk.Field(algorithm="MN", w=10, count=100, coherence=0.256, speed=5)
-steps = [(t_ns / 1e9, c, d, s) for t_ns, c, d, s in log]   # rdk.last of each update
+f = yrdk.Field(algorithm="MN", w=10, count=100, coherence=0.256, speed=5)
+steps = [(t_ns / 1e9, c, d, s) for t_ns, c, d, s in log]   # yrdk.last of each update
 xy, direction, signal = f.trajectory(seed, t0_ns / 1e9, steps)
 # xy: (updates, n, 2) float32, units from the center, y down
 # direction: (updates, n) float32, degrees, clockwise on the screen
@@ -68,7 +68,7 @@ set, ns), as `Field.last` gives it, uses its `ns`; its `t` must then be
 ## How to run a field step by step
 
 ```python
-f = rdk.Field(w=10, count=200, coherence=0.5, direction=0, speed=7.5)
+f = yrdk.Field(w=10, count=200, coherence=0.5, direction=0, speed=7.5)
 f.start(seed, t0)                    # seconds; every dot placed from the seed
 for t in onsets:                     # seconds, the frames' predicted onsets
     f.coherence = 0.5                # read at each update, as float32
@@ -139,10 +139,10 @@ on Linux, macOS arm64 and Windows.
 
 ## Version
 
-0.2.0.1 is `ysp/rdk.h` v0.2.0 with the change to seconds (2026-10-11).
+0.2.0.1 is `ysp/yrdk.h` v0.2.0 with the change to seconds (2026-10-11).
 The first three numbers are the header's version; a fourth counts
 changes to the binding alone and goes away when the header's version
-changes. `rdk.__version__` gives the same string, and `rdk.version()`
+changes. `yrdk.__version__` gives the same string, and `yrdk.version()`
 gives the header's.
 
 0.2.0.1 breaks the API of 0.2.0: `start()`, `update()`, `replay()` and

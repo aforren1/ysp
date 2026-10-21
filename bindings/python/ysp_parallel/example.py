@@ -10,7 +10,7 @@ Run (Linux ppdev needs device access; see the BACKENDS section of ysp/parallel.h
     python example.py 0x2A
 """
 import sys
-import ysp.parallel as pp
+import ysp.parallel as ypar
 
 
 def main():
@@ -18,8 +18,8 @@ def main():
 
     # Defaults: ppdev /dev/parport0 on Linux, inpout @ LPT1 on Windows.
     # For raw x86 port I/O instead (root):
-    #     pp.Port(backend=pp.BACKEND_DIRECT, base_addr=pp.LPT1)
-    with pp.Port() as port:
+    #     ypar.Port(backend=ypar.BACKEND_DIRECT, base_addr=ypar.LPT1)
+    with ypar.Port() as port:
         print(f"port open (backend {port.backend}, base 0x{port.base_addr:X})")
 
         port.pulse(code, width=0.002)          # blocking 2 ms trigger (seconds)
@@ -31,17 +31,17 @@ def main():
         status = port.read_status()
         print(
             f"status = 0x{status:02X}  "
-            f"busy={bool(status & pp.STATUS_BUSY)} "
-            f"ack={bool(status & pp.STATUS_ACK)} "
-            f"paper={bool(status & pp.STATUS_PAPER)} "
-            f"select={bool(status & pp.STATUS_SELECT)} "
-            f"error={bool(status & pp.STATUS_ERROR)}"
+            f"busy={bool(status & ypar.STATUS_BUSY)} "
+            f"ack={bool(status & ypar.STATUS_ACK)} "
+            f"paper={bool(status & ypar.STATUS_PAPER)} "
+            f"select={bool(status & ypar.STATUS_SELECT)} "
+            f"error={bool(status & ypar.STATUS_ERROR)}"
         )
 
 
 if __name__ == "__main__":
     try:
         main()
-    except pp.Error as e:
+    except ypar.Error as e:
         print(f"ysp_parallel error: {e}", file=sys.stderr)
         sys.exit(1)

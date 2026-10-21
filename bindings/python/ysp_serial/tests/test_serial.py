@@ -8,13 +8,13 @@ import time
 
 import pytest
 
-import ysp.serial as ps
+import ysp.serial as yser
 
 
 def unopened():
     # __new__ without __init__: a zeroed handle, which the library treats as
     # closed.
-    return ps.Port.__new__(ps.Port)
+    return yser.Port.__new__(yser.Port)
 
 
 def test_version_matches_pyproject():
@@ -24,33 +24,33 @@ def test_version_matches_pyproject():
     with open(path, encoding="utf-8") as f:
         m = re.search(r'^version\s*=\s*"([^"]+)"', f.read(), re.M)
     assert m, "no version in pyproject.toml"
-    assert ps.__version__ == m.group(1)
+    assert yser.__version__ == m.group(1)
 
 
 def test_now_is_seconds_on_one_clock():
-    t0 = ps.now()
+    t0 = yser.now()
     time.sleep(0.05)
-    t1 = ps.now()
+    t1 = yser.now()
     assert isinstance(t0, float)
     # 50 ms of sleep is 0.05 s, not 50 000 (us) or 5e7 (ns).
     assert 0.04 < t1 - t0 < 1.0
-    assert not hasattr(ps, "now_us")
+    assert not hasattr(yser, "now_us")
 
 
 def test_constants_are_seconds():
-    assert ps.TIMEOUT_INFINITE == math.inf
-    assert ps.DEFAULT_WRITE_TIMEOUT == 1.0
-    assert ps.DEFAULT_RT_RUNTIME == pytest.approx(0.001)
-    assert ps.DEFAULT_RT_DEADLINE == pytest.approx(0.010)
-    assert ps.DEFAULT_RT_PERIOD == pytest.approx(0.010)
+    assert yser.TIMEOUT_INFINITE == math.inf
+    assert yser.DEFAULT_WRITE_TIMEOUT == 1.0
+    assert yser.DEFAULT_RT_RUNTIME == pytest.approx(0.001)
+    assert yser.DEFAULT_RT_DEADLINE == pytest.approx(0.010)
+    assert yser.DEFAULT_RT_PERIOD == pytest.approx(0.010)
     for old in ("DEFAULT_WRITE_TIMEOUT_MS", "DEFAULT_RT_RUNTIME_NS",
                 "DEFAULT_RT_DEADLINE_NS", "DEFAULT_RT_PERIOD_NS"):
-        assert not hasattr(ps, old)
+        assert not hasattr(yser, old)
 
 
 def test_open_fails_without_a_device():
-    with pytest.raises(ps.Error):
-        ps.Port("/dev/ysp-nothing" if os.name != "nt" else "COM250")
+    with pytest.raises(yser.Error):
+        yser.Port("/dev/ysp-nothing" if os.name != "nt" else "COM250")
 
 
 @pytest.mark.parametrize("kw, exc", [
@@ -67,7 +67,7 @@ def test_open_fails_without_a_device():
 def test_open_refuses_bad_times_before_the_device(kw, exc):
     # The device does not exist; the argument error must come first.
     with pytest.raises(exc):
-        ps.Port("/dev/ysp-nothing" if os.name != "nt" else "COM250", **kw)
+        yser.Port("/dev/ysp-nothing" if os.name != "nt" else "COM250", **kw)
 
 
 @pytest.mark.parametrize("kw", [
@@ -77,13 +77,13 @@ def test_open_refuses_bad_times_before_the_device(kw, exc):
 ])
 def test_open_accepts_good_times(kw):
     # Accepted arguments reach the open, which fails for the missing device.
-    with pytest.raises(ps.Error):
-        ps.Port("/dev/ysp-nothing" if os.name != "nt" else "COM250", **kw)
+    with pytest.raises(yser.Error):
+        yser.Port("/dev/ysp-nothing" if os.name != "nt" else "COM250", **kw)
 
 
-@pytest.mark.parametrize("timeout", [0, 0.0, 0.001, 1e-12, 2, math.inf, ps.TIMEOUT_INFINITE])
+@pytest.mark.parametrize("timeout", [0, 0.0, 0.001, 1e-12, 2, math.inf, yser.TIMEOUT_INFINITE])
 def test_read_accepts_seconds(timeout):
-    with pytest.raises(ps.Closed):
+    with pytest.raises(yser.Closed):
         unopened().read(1, timeout)
 
 
@@ -98,7 +98,7 @@ def test_read_refuses(timeout, exc):
 
 
 def test_read_keyword_is_timeout():
-    with pytest.raises(ps.Closed):
+    with pytest.raises(yser.Closed):
         unopened().read(4, timeout=0.5, all=True)
     with pytest.raises(TypeError):
         unopened().read(4, timeout_ms=500)
@@ -107,9 +107,9 @@ def test_read_keyword_is_timeout():
 @pytest.mark.parametrize("call", ["pulse", "pulse_async"])
 def test_pulse_width_in_seconds(call):
     p = unopened()
-    with pytest.raises(ps.Closed):
+    with pytest.raises(yser.Closed):
         getattr(p, call)(0x55, 0x00, 0.002)
-    with pytest.raises(ps.Closed):
+    with pytest.raises(yser.Closed):
         getattr(p, call)(0x55, 0x00, width=0)
     for bad, exc in ((-0.001, ValueError), (math.inf, ValueError),
                      (math.nan, ValueError), (1e10, OverflowError)):
@@ -122,19 +122,19 @@ def test_pulse_width_in_seconds(call):
 
 
 def test_min_hold_in_seconds():
-    assert ps.DEFAULT_MIN_HOLD == 0.00025
+    assert yser.DEFAULT_MIN_HOLD == 0.00025
     assert unopened().min_hold == 0.0
     # Checked before the open, so the bad value is what raises.
     for bad, exc in ((-0.001, ValueError), (math.nan, ValueError), (math.inf, ValueError)):
         with pytest.raises(exc):
-            ps.Port("ysp-test-no-such-port", min_hold=bad)
-    with pytest.raises(ps.Error):
-        ps.Port("ysp-test-no-such-port", min_hold=0.001)
+            yser.Port("ysp-test-no-such-port", min_hold=bad)
+    with pytest.raises(yser.Error):
+        yser.Port("ysp-test-no-such-port", min_hold=0.001)
 
 
 def test_send_break_in_seconds():
     p = unopened()
-    with pytest.raises(ps.Closed):
+    with pytest.raises(yser.Closed):
         p.send_break(0.01)
     with pytest.raises(ValueError):
         p.send_break(-0.01)
@@ -157,7 +157,7 @@ def test_driver_of_an_unopened_port():
 
 
 def test_list_ports_has_driver():
-    for info in ps.list_ports():
+    for info in yser.list_ports():
         assert isinstance(info["driver"], str)
 
 
@@ -166,11 +166,11 @@ def test_list_ports_has_driver():
 def test_async_on_a_never_opened_port_raises_closed():
     p = unopened()
     assert p.async_stats is None
-    with pytest.raises(ps.Closed):
+    with pytest.raises(yser.Closed):
         p.async_start()
-    with pytest.raises(ps.Closed):
+    with pytest.raises(yser.Closed):
         p.async_read()
-    with pytest.raises(ps.Closed):
+    with pytest.raises(yser.Closed):
         p.async_wait(0)
     assert p.async_stats is None            # the failed start left nothing
 
@@ -186,9 +186,9 @@ def test_async_stop_is_idempotent():
 def test_async_on_a_closed_port_raises_closed():
     p = unopened()
     p.close()
-    with pytest.raises(ps.Closed):
+    with pytest.raises(yser.Closed):
         p.async_start(terminator=b"\n")
-    with pytest.raises(ps.Closed):
+    with pytest.raises(yser.Closed):
         p.async_wait(math.inf)
 
 
@@ -214,7 +214,7 @@ def test_async_start_refuses_bad_arguments_before_the_port(kw, exc):
     {"capacity": 1, "max_len": 1},
 ])
 def test_async_start_accepts_good_arguments(kw):
-    with pytest.raises(ps.Closed):
+    with pytest.raises(yser.Closed):
         unopened().async_start(**kw)
 
 
