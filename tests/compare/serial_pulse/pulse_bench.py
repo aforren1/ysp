@@ -36,14 +36,14 @@ MODES = ["ysp_py_pulse", "ysp_py_pulse_async", "ysp_py_dtr", "ysp_py_rts",
 
 class YspPort:
     def __init__(self, dev):
-        import ysp.serial as ys
-        self.ys = ys
-        self.p = ys.Port(device=dev)
-        names = {getattr(ys, k): k[6:] for k in dir(ys) if k.startswith("ASYNC_")}
+        import ysp.serial as yser
+        self.yser = yser
+        self.p = yser.Port(device=dev)
+        names = {getattr(yser, k): k[6:] for k in dir(yser) if k.startswith("ASYNC_")}
         self.policy = names.get(self.p.async_policy, str(self.p.async_policy))
 
     def now(self):
-        return round(self.ys.now() * 1e9)
+        return round(self.yser.now() * 1e9)
 
     def write(self, b):
         return self.p.write(b)

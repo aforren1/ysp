@@ -7,7 +7,7 @@ import re
 
 import pytest
 
-import ysp.color as pc
+import ysp.color as ycol
 
 SRGB_XY = [(0.64, 0.33), (0.30, 0.60), (0.15, 0.06), (0.3127, 0.3290)]
 
@@ -24,7 +24,7 @@ def gaussian_spectra():
 
 @pytest.fixture(scope="module")
 def cal():
-    c = pc.Calibration.nominal(SRGB_XY, 80.0, 2.2)
+    c = ycol.Calibration.nominal(SRGB_XY, 80.0, 2.2)
     c.set_spectra(380, 1, *gaussian_spectra(), nominal=True)
     c.derive()
     return c
@@ -32,65 +32,65 @@ def cal():
 
 @pytest.fixture(scope="module")
 def cx(cal):
-    return pc.Context(cal, (0.5, 0.5, 0.5))
+    return ycol.Context(cal, (0.5, 0.5, 0.5))
 
 
 def test_version_matches_pyproject():
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     text = open(os.path.join(here, "pyproject.toml")).read()
-    assert re.search(r'^version = "([^"]+)"', text, re.M).group(1) == pc.__version__ == pc.version()
+    assert re.search(r'^version = "([^"]+)"', text, re.M).group(1) == ycol.__version__ == ycol.version()
 
 
 def test_calibration_round_trip(cal):
     data = cal.save()
     assert len(data) == 62528
-    back = pc.Calibration.load(data)
+    back = ycol.Calibration.load(data)
     assert back.save() == data and back.crc == cal.crc
-    assert back.flags & pc.CAL_NOMINAL and back.flags & pc.CAL_SPECTRA_NOMINAL
+    assert back.flags & ycol.CAL_NOMINAL and back.flags & ycol.CAL_SPECTRA_NOMINAL
     assert "NOMINAL" in back.describe()
     bad = bytearray(data)
     bad[1000] ^= 1
-    with pytest.raises(pc.FormatError, match="CRC"):
-        pc.Calibration.load(bytes(bad))
+    with pytest.raises(ycol.FormatError, match="CRC"):
+        ycol.Calibration.load(bytes(bad))
     lut = cal.lut
     assert lut.format == "f" and len(lut) == 3 * 4096 and lut[0] == 0.0 and lut[4095] == 1.0
 
 
 def test_readings_refused():
-    c = pc.Calibration()
-    c.add(pc.GUN_BLACK, 0, 0.5)
+    c = ycol.Calibration()
+    c.add(ycol.GUN_BLACK, 0, 0.5)
     for gun in range(3):
         c.add(gun, 0.5, 10)
         c.add(gun, 0.75, 9)
         c.add(gun, 1.0, 30)
-    with pytest.raises(pc.RangeError, match="0.75"):
+    with pytest.raises(ycol.RangeError, match="0.75"):
         c.derive()
 
 
 def test_conversions_and_gamut(cx):
-    c = pc.dkl(elev=0, azim=90, contrast=0.1)
-    assert c == pc.Color("dkl", 0.0, 90.0, 0.1)
+    c = ycol.dkl(elev=0, azim=90, contrast=0.1)
+    assert c == ycol.Color("dkl", 0.0, 90.0, 0.1)
     rgb, g = cx.to_rgb(c)
     assert g.status == 0 and g.in_gamut
     back = cx.from_rgb(rgb, "dkl")
     assert back.space == "dkl" and abs(back.c - 0.1) < 1e-12 and abs(back.b - 90) < 1e-9
-    d, g = cx.to_dir(pc.dkl(azim=0, contrast=0.05))
+    d, g = cx.to_dir(ycol.dkl(azim=0, contrast=0.05))
     assert all(abs(d[k] - (rgb[k] - 0.5)) < 1 for k in range(3))
-    k = cx.max_scale(pc.dkl(azim=90, contrast=1), symmetric=True)
-    _, g = cx.to_dir(pc.dkl(azim=90, contrast=k * 0.999))
+    k = cx.max_scale(ycol.dkl(azim=90, contrast=1), symmetric=True)
+    _, g = cx.to_dir(ycol.dkl(azim=90, contrast=k * 0.999))
     assert g.in_gamut
-    _, g = cx.to_dir(pc.dkl(azim=90, contrast=k * 1.01))
+    _, g = cx.to_dir(ycol.dkl(azim=90, contrast=k * 1.01))
     assert not g.in_gamut and g.distance > 0
-    lab, g, flags = cx.convert(pc.hex("#3366cc"), "cielab")
+    lab, g, flags = cx.convert(ycol.hex("#3366cc"), "cielab")
     assert lab.space == "cielab" and 40 < lab.a < 50
-    assert pc.hex_format(cx.convert(pc.hex("#3366cc"), "srgb")[0]) == "#3366cc"
-    _, _, flags = cx.convert(pc.xyz(30, 30, 30), "lms")
-    assert flags & pc.F_VIA_DEVICE
+    assert ycol.hex_format(cx.convert(ycol.hex("#3366cc"), "srgb")[0]) == "#3366cc"
+    _, _, flags = cx.convert(ycol.xyz(30, 30, 30), "lms")
+    assert flags & ycol.F_VIA_DEVICE
 
 
 def test_srgb_primaries_in_gamut_on_nominal(cx):
     for h in ("#ff0000", "#00ff00", "#0000ff", "#ffffff", "#ff8800"):
-        _, g = cx.to_rgb(pc.hex(h))
+        _, g = cx.to_rgb(ycol.hex(h))
         assert g.in_gamut, h
 
 
@@ -99,41 +99,41 @@ def test_convert_n_matches_single(cx):
     out, flags = cx.convert_n(vals, "rgb", "oklch")
     assert out.format == "d" and len(out) == 9 and len(flags) == 3
     for i in range(3):
-        one, _, _ = cx.convert(pc.rgb(*vals[3 * i:3 * i + 3]), "oklch")
+        one, _, _ = cx.convert(ycol.rgb(*vals[3 * i:3 * i + 3]), "oklch")
         assert list(out[3 * i:3 * i + 3]) == [one.a, one.b, one.c]
     out, flags = cx.convert_n([(2.0, 0, 0)], "device", "rgb")
     assert flags[0] == 2 and math.isnan(out[0])
 
 
 def test_refusals():
-    lumo = pc.Calibration()
-    lumo.add(pc.GUN_BLACK, 0, 0.2)
+    lumo = ycol.Calibration()
+    lumo.add(ycol.GUN_BLACK, 0, 0.2)
     for gun in range(3):
         for k in range(1, 9):
             lumo.add(gun, k / 8, 0.2 + 60 * (k / 8) ** 2.2)
     lumo.derive()
-    cx = pc.Context(lumo, (0.5, 0.5, 0.5))
-    with pytest.raises(pc.RefusedError, match="chromaticities"):
-        cx.to_rgb(pc.cielab(50, 0, 0))
-    with pytest.raises(pc.RefusedError, match="spectra"):
-        cx.to_rgb(pc.dkl(azim=90, contrast=0.1))
-    with pytest.raises(pc.ArgumentError):
-        pc.hex("#12345")
-    with pytest.raises(pc.ArgumentError):
+    cx = ycol.Context(lumo, (0.5, 0.5, 0.5))
+    with pytest.raises(ycol.RefusedError, match="chromaticities"):
+        cx.to_rgb(ycol.cielab(50, 0, 0))
+    with pytest.raises(ycol.RefusedError, match="spectra"):
+        cx.to_rgb(ycol.dkl(azim=90, contrast=0.1))
+    with pytest.raises(ycol.ArgumentError):
+        ycol.hex("#12345")
+    with pytest.raises(ycol.ArgumentError):
         cx.to_rgb(("lab", 50, 0, 0))   # "cielab", not CSS's "lab"
-    assert isinstance(pc.RefusedError("x"), ValueError)
+    assert isinstance(ycol.RefusedError("x"), ValueError)
 
 
 def test_map_and_ring(cx):
-    rgb, g = cx.map(pc.oklch(0.7, 0.3, 150), "chroma_oklch")
+    rgb, g = cx.map(ycol.oklch(0.7, 0.3, 150), "chroma_oklch")
     assert not g.in_gamut and 0 < g.kept < 1
-    _, g2 = cx.to_rgb(pc.rgb(*rgb))
+    _, g2 = cx.to_rgb(ycol.rgb(*rgb))
     assert g2.in_gamut
-    with pytest.raises(pc.RangeError, match="gray"):
-        cx.map(pc.oklch(1.3, 0.1, 30), "chroma_oklch")
+    with pytest.raises(ycol.RangeError, match="gray"):
+        cx.map(ycol.oklch(1.3, 0.1, 30), "chroma_oklch")
     ring = cx.ring("dkl", 0.0, 8, symmetric=True)
     assert len(ring) == 8 and abs(ring[0] - ring[4]) < 1e-12
-    assert ring[2] == cx.max_scale(pc.dkl(azim=90, contrast=1), symmetric=True)
+    assert ring[2] == cx.max_scale(ycol.dkl(azim=90, contrast=1), symmetric=True)
 
 
 def test_lum_fit(cal, cx):
@@ -144,30 +144,30 @@ def test_lum_fit(cal, cx):
     mv = [sum(m[3 * i + j] * v[j] for j in range(3)) for i in range(3)]
     t = -sum(w_true[i] * mu[i] for i in range(3)) / sum(w_true[i] * mv[i] for i in range(3))
     d = [u[k] + t * v[k] for k in range(3)]
-    lum = pc.Lum(participant="P01", method="hfp", freq_hz=15)
+    lum = ycol.Lum(participant="P01", method="hfp", freq_hz=15)
     lum.add([0.5 + x for x in d], [0.5 - x for x in d], bg=(0.5, 0.5, 0.5), sd=0.01, n=5)
     lum.derive(cal)
     n1 = math.sqrt(sum(x * x for x in lum.w))
     n2 = math.sqrt(sum(x * x for x in w_true))
     assert all(abs(lum.w[k] / n1 - w_true[k] / n2) < 1e-9 for k in range(3))
-    back = pc.Lum.load(lum.save())
+    back = ycol.Lum.load(lum.save())
     back.check(cal)
     assert back.participant == "P01" and "HFP" in back.describe()
-    c2 = pc.Context(cal, (0.5, 0.5, 0.5), lum=lum)
+    c2 = ycol.Context(cal, (0.5, 0.5, 0.5), lum=lum)
     assert c2.id != cx.id and "P01" in c2.describe()
     a, b = c2.lum_pair(0, 10, 0.05)
     assert all(abs((a[k] - 0.5) + (b[k] - 0.5)) < 1e-15 for k in range(3))
-    with pytest.raises(pc.RefusedError, match="SS10"):
-        pc.Context(cal, (0.5, 0.5, 0.5), lum=pc.Lum.stated((0.7, 0.33, 0), cones="ss10"))
+    with pytest.raises(ycol.RefusedError, match="SS10"):
+        ycol.Context(cal, (0.5, 0.5, 0.5), lum=ycol.Lum.stated((0.7, 0.33, 0), cones="ss10"))
 
 
 def test_tables_and_helpers(cal):
-    spaces = pc.spaces()
+    spaces = ycol.spaces()
     assert [s["name"] for s in spaces][:3] == ["rgb", "device", "xyz"]
-    assert pc.SPACE_DKL == 16 and pc.SPACE_DISPLAY_P3 == 12
-    assert pc.format(pc.dkl(0, 90, 0.1)) == "dkl(0 90 0.10000000000000001)"
-    assert pc.cone_luminance("ss10")[:2] == (0.69283932, 0.34967567)
-    l, m, s = pc.cone_fundamentals(440)
+    assert ycol.SPACE_DKL == 16 and ycol.SPACE_DISPLAY_P3 == 12
+    assert ycol.format(ycol.dkl(0, 90, 0.1)) == "dkl(0 90 0.10000000000000001)"
+    assert ycol.cone_luminance("ss10")[:2] == (0.69283932, 0.34967567)
+    l, m, s = ycol.cone_fundamentals(440)
     assert abs(l / 4.02563e-2 - 1) < 1e-7
-    assert pc.output_code(cal, (0.0, 1.0, 2.0)) == (0, 255, 255)
-    assert pc.GAMUT_EPS == 2.0 ** -20
+    assert ycol.output_code(cal, (0.0, 1.0, 2.0)) == (0, 255, 255)
+    assert ycol.GAMUT_EPS == 2.0 ** -20

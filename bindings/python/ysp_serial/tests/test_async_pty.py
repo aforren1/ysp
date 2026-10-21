@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-import ysp.serial as ps
+import ysp.serial as yser
 
 pytestmark = pytest.mark.skipif(not sys.platform.startswith("linux"),
                                 reason="pty pair: Linux only")
@@ -19,7 +19,7 @@ pytestmark = pytest.mark.skipif(not sys.platform.startswith("linux"),
 @pytest.fixture
 def pair():
     master, slave = os.openpty()
-    port = ps.Port(os.ttyname(slave))
+    port = yser.Port(os.ttyname(slave))
     yield port, master
     port.close()
     os.close(slave)
@@ -36,40 +36,40 @@ def settle(port, lines, timeout=2.0):
 def test_lifecycle(pair):
     port, master = pair
     port.async_start()
-    with pytest.raises(ps.Error, match="already running"):
+    with pytest.raises(yser.Error, match="already running"):
         port.async_start()
     for call in (lambda: port.read(1, 0), port.available, port.interrupt,
                  lambda: port.purge(rx=True)):
-        with pytest.raises(ps.Error, match="owns the input"):
+        with pytest.raises(yser.Error, match="owns the input"):
             call()
     st = port.async_stop()
     assert st["running"] is False and st["error"] is None
     assert port.async_stop() is None
-    with pytest.raises(ps.Error, match="not running"):
+    with pytest.raises(yser.Error, match="not running"):
         port.async_read()
     os.write(master, b"q")
     assert port.read(1, 1.0) == b"q"            # the reader role is back
     port.async_start()
     port.close()                                # stops the reader
     assert port.async_stats["running"] is False
-    with pytest.raises(ps.Closed):
+    with pytest.raises(yser.Closed):
         port.async_wait(0)
 
 
 def test_lines_are_stamped_on_arrival(pair):
     port, master = pair
     port.async_start(terminator=b"\n")
-    t0 = ps.now()
+    t0 = yser.now()
     os.write(master, b"a\nbb\nccc\npartial")
     settle(port, 3)
-    t1 = ps.now()
+    t1 = yser.now()
     recs = port.async_read(first=True)
     assert [r[0] for r in recs] == [b"a\n", b"bb\n", b"ccc\n"]
     assert all(t0 <= r[2] <= r[1] <= t1 for r in recs)
     assert port.async_read() == []
     os.write(master, b"!\n")
     assert port.async_wait(2.0) == 1
-    assert port.async_read() == [(b"partial!\n", pytest.approx(ps.now(), abs=1.0))]
+    assert port.async_read() == [(b"partial!\n", pytest.approx(yser.now(), abs=1.0))]
     st = port.async_stop()
     assert st["lines"] == 4 and st["bytes"] == 18 and st["overflows"] == 0
 
@@ -119,15 +119,15 @@ def test_overflow_is_counted_not_blocking(pair):
 def test_wait_times_out_and_is_interrupted(pair):
     port, master = pair
     port.async_start()
-    t = ps.now()
+    t = yser.now()
     assert port.async_wait(0.05) == 0
-    assert 0.045 <= ps.now() - t < 1.0
+    assert 0.045 <= yser.now() - t < 1.0
     caught = []
 
     def waiter():
         try:
             port.async_wait(math.inf)
-        except ps.Interrupted as e:
+        except yser.Interrupted as e:
             caught.append(e)
 
     th = threading.Thread(target=waiter)
@@ -146,7 +146,7 @@ def test_close_from_another_thread_ends_a_wait(pair):
     def waiter():
         try:
             port.async_wait(math.inf)
-        except ps.Interrupted as e:
+        except yser.Interrupted as e:
             caught.append(e)
 
     th = threading.Thread(target=waiter)
@@ -160,9 +160,9 @@ def test_close_from_another_thread_ends_a_wait(pair):
 def test_write_while_the_reader_runs(pair):
     port, master = pair
     port.async_start()
-    t = ps.now()
+    t = yser.now()
     assert port.write(b"hello") == 5
-    assert ps.now() - t < 0.05
+    assert yser.now() - t < 0.05
     assert os.read(master, 16) == b"hello"
     os.write(master, b"back\n")
     assert port.async_wait(2.0) == 1
@@ -171,7 +171,7 @@ def test_write_while_the_reader_runs(pair):
 
 def test_reader_error_is_raised_after_the_records():
     master, slave = os.openpty()
-    port = ps.Port(os.ttyname(slave))
+    port = yser.Port(os.ttyname(slave))
     os.close(slave)
     try:
         port.async_start()
@@ -185,9 +185,9 @@ def test_reader_error_is_raised_after_the_records():
         st = port.async_stats
         assert not st["running"] and st["error"]
         assert port.async_read()[0][0] == b"last\n"
-        with pytest.raises(ps.Disconnected):
+        with pytest.raises(yser.Disconnected):
             port.async_read()
-        with pytest.raises(ps.Disconnected):
+        with pytest.raises(yser.Disconnected):
             port.async_wait(1.0)
         assert port.async_stop()["error"] == st["error"]
     finally:

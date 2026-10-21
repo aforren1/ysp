@@ -42,9 +42,9 @@ ysp/rt.h, so no other header is necessary.
 ## How to run a staircase
 
 ```python
-import ysp.stair as st
+import ysp.stair as yst
 
-s = st.Staircase(start=0.5, n_down=3, step_type=st.STEP_LOG,
+s = yst.Staircase(start=0.5, n_down=3, step_type=yst.STEP_LOG,
                  steps=[0.3, 0.15, 0.075], min=0.001, max=1.0,
                  stop_reversals=10)
 
@@ -53,7 +53,7 @@ while not s.done:
     shown = display.quantize(level)  # what you can show
     s.update(shown, run_trial(shown))
 
-print(s.estimate(st.EST_REVERSALS), s.estimate_count(st.EST_REVERSALS))
+print(s.estimate(yst.EST_REVERSALS), s.estimate_count(yst.EST_REVERSALS))
 ```
 
 Give `update()` the level that you showed. The rule steps from its own
@@ -65,7 +65,7 @@ To simulate an observer, draw `u` from your own generator:
 ```python
 import random
 rng = random.Random(1)
-r = st.simulate_response(p_correct, rng.random())
+r = yst.simulate_response(p_correct, rng.random())
 ```
 
 See [example.py](example.py) for a complete simulated run.

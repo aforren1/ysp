@@ -8,14 +8,14 @@ import struct
 
 import pytest
 
-import ysp.trials as pt
+import ysp.trials as ytr
 
 try:
-    import ysp.stair as st
+    import ysp.stair as yst
 except ImportError:  # ysp-stair is a separate distribution
-    st = None
+    yst = None
 
-needs_stair = pytest.mark.skipif(st is None, reason="ysp-stair is not installed")
+needs_stair = pytest.mark.skipif(yst is None, reason="ysp-stair is not installed")
 
 
 def run_all(t, outcome=1):
@@ -27,46 +27,46 @@ def run_all(t, outcome=1):
 
 
 def test_splitmix_matches_the_reference():
-    u, s = pt.splitmix(0)
+    u, s = ytr.splitmix(0)
     assert u == (0xE220A8397B1DCDAF >> 11) / 9007199254740992.0
-    u, s = pt.splitmix(s)
+    u, s = ytr.splitmix(s)
     assert u == (0x6E789E6AA1B965F4 >> 11) / 9007199254740992.0
     assert s == (2 * 0x9E3779B97F4A7C15) % 2 ** 64
 
 
 def test_factorial_round_trip():
-    t = pt.Trials(factors=[("a", 2), ("b", 3), (None, 4)], reps=1)
+    t = ytr.Trials(factors=[("a", 2), ("b", 3), (None, 4)], reps=1)
     assert t.n_conditions == 24 and t.n_factors == 3
     for c in range(24):
         lv = t.levels(c)
         assert lv == (c // 12, (c // 4) % 3, c % 4)          # last factor fastest
         assert t.condition_from_levels(list(lv)) == c
-        assert t.level(c, pt.CONDITION) == c
+        assert t.level(c, ytr.CONDITION) == c
 
 
 def test_sequential_is_repetition_major():
-    t = pt.Trials(n_conditions=4, reps=3)
+    t = ytr.Trials(n_conditions=4, reps=3)
     assert run_all(t) == [0, 1, 2, 3] * 3
-    t = pt.Trials(n_conditions=3, cond_reps=[1, 3, 2])
+    t = ytr.Trials(n_conditions=3, cond_reps=[1, 3, 2])
     assert run_all(t) == [0, 1, 2, 1, 2, 1]
 
 
 @pytest.mark.parametrize("seed", range(50))
 def test_random_orders(seed):
-    t = pt.Trials(n_conditions=5, reps=4, order=pt.ORDER_RANDOM, rng=seed)
+    t = ytr.Trials(n_conditions=5, reps=4, order=ytr.ORDER_RANDOM, rng=seed)
     order = t.schedule()
     for r in range(4):
         assert sorted(order[5 * r:5 * r + 5]) == list(range(5))
-    t = pt.Trials(n_conditions=5, cond_reps=[1, 2, 3, 0, 6], order=pt.ORDER_FULL_RANDOM,
+    t = ytr.Trials(n_conditions=5, cond_reps=[1, 2, 3, 0, 6], order=ytr.ORDER_FULL_RANDOM,
                   rng=seed)
     assert collections.Counter(t.schedule()) == {0: 1, 1: 2, 2: 3, 4: 6}
 
 
 def test_fisher_yates_draw_order():
     # u = 0: for i = 3..1 swap i and 0: [0 1 2 3] -> [1 2 3 0].
-    t = pt.Trials(n_conditions=4, reps=1, order=pt.ORDER_FULL_RANDOM, rng=lambda: 0.0)
+    t = ytr.Trials(n_conditions=4, reps=1, order=ytr.ORDER_FULL_RANDOM, rng=lambda: 0.0)
     assert t.schedule() == [1, 2, 3, 0]
-    t = pt.Trials(n_conditions=4, reps=1, order=pt.ORDER_FULL_RANDOM,
+    t = ytr.Trials(n_conditions=4, reps=1, order=ytr.ORDER_FULL_RANDOM,
                   rng=lambda: 1.0 - 2 ** -53)
     assert t.schedule() == [0, 1, 2, 3]
     calls = []
@@ -74,7 +74,7 @@ def test_fisher_yates_draw_order():
     def counting():
         calls.append(1)
         return 0.5
-    pt.Trials(n_conditions=10, reps=1, order=pt.ORDER_FULL_RANDOM, n_practice=3, rng=counting)
+    ytr.Trials(n_conditions=10, reps=1, order=ytr.ORDER_FULL_RANDOM, n_practice=3, rng=counting)
     assert len(calls) == 3 + 9
 
 
@@ -82,10 +82,10 @@ def test_int_seed_equals_splitmix_callable():
     state = [12345]
 
     def rng():
-        u, state[0] = pt.splitmix(state[0])
+        u, state[0] = ytr.splitmix(state[0])
         return u
-    a = pt.Trials(n_conditions=6, reps=5, order=pt.ORDER_FULL_RANDOM, rng=12345)
-    b = pt.Trials(n_conditions=6, reps=5, order=pt.ORDER_FULL_RANDOM, rng=rng)
+    a = ytr.Trials(n_conditions=6, reps=5, order=ytr.ORDER_FULL_RANDOM, rng=12345)
+    b = ytr.Trials(n_conditions=6, reps=5, order=ytr.ORDER_FULL_RANDOM, rng=rng)
     assert a.schedule() == b.schedule() and a.rng_state == state[0]
 
 
@@ -102,11 +102,11 @@ def max_run_ok(seq, key, n):
 
 @pytest.mark.parametrize("seed", range(30))
 def test_constraints_hold_on_every_trial(seed):
-    t = pt.Trials(factors=[("orientation", 2), ("contrast", 5)], reps=10,
-                  order=pt.ORDER_CONSTRAINED,
-                  constraints=[pt.max_run("orientation", pt.ANY_LEVEL, 3),
-                               pt.no_transition(pt.CONDITION, 3, 3),
-                               pt.first_not(1, 0)],
+    t = ytr.Trials(factors=[("orientation", 2), ("contrast", 5)], reps=10,
+                  order=ytr.ORDER_CONSTRAINED,
+                  constraints=[ytr.max_run("orientation", ytr.ANY_LEVEL, 3),
+                               ytr.no_transition(ytr.CONDITION, 3, 3),
+                               ytr.first_not(1, 0)],
                   rng=seed)
     order = run_all(t)
     assert len(order) == 100
@@ -118,9 +118,9 @@ def test_constraints_hold_on_every_trial(seed):
 
 
 def test_min_gap_and_window():
-    t = pt.Trials(n_conditions=4, cond_reps=[6, 14, 14, 14], order=pt.ORDER_CONSTRAINED,
-                  constraints=[pt.min_gap(pt.CONDITION, 0, 2),
-                               pt.max_in_window(pt.CONDITION, 1, 5, 2)], rng=9)
+    t = ytr.Trials(n_conditions=4, cond_reps=[6, 14, 14, 14], order=ytr.ORDER_CONSTRAINED,
+                  constraints=[ytr.min_gap(ytr.CONDITION, 0, 2),
+                               ytr.max_in_window(ytr.CONDITION, 1, 5, 2)], rng=9)
     order = run_all(t)
     zeros = [i for i, c in enumerate(order) if c == 0]
     assert all(b - a > 2 for a, b in zip(zeros, zeros[1:]))
@@ -128,26 +128,26 @@ def test_min_gap_and_window():
 
 
 def test_impossible_design_is_error_with_the_header_message():
-    with pytest.raises(pt.Error, match=r"constraint 0, max_run\(cond,any,1\).*after 10 swaps") as e:
-        pt.Trials(n_conditions=2, cond_reps=[3, 5], order=pt.ORDER_CONSTRAINED,
-                  constraints=[pt.max_run(pt.CONDITION, pt.ANY_LEVEL, 1)], max_swaps=10, rng=5)
-    assert not isinstance(e.value, pt.ArgumentError)
+    with pytest.raises(ytr.Error, match=r"constraint 0, max_run\(cond,any,1\).*after 10 swaps") as e:
+        ytr.Trials(n_conditions=2, cond_reps=[3, 5], order=ytr.ORDER_CONSTRAINED,
+                  constraints=[ytr.max_run(ytr.CONDITION, ytr.ANY_LEVEL, 1)], max_swaps=10, rng=5)
+    assert not isinstance(e.value, ytr.ArgumentError)
 
 
 def test_bad_descs_are_argument_errors():
-    with pytest.raises(pt.ArgumentError):
-        pt.Trials()                                             # nothing to run
-    with pytest.raises(pt.ArgumentError, match="rng"):
-        pt.Trials(n_conditions=3, reps=1, order=pt.ORDER_RANDOM)
-    with pytest.raises(pt.ArgumentError):
-        pt.Trials(n_conditions=3, reps=1, constraints=[pt.max_run(pt.CONDITION, 0, 1)])
-    with pytest.raises(pt.ArgumentError, match="cond_reps has 2"):
-        pt.Trials(n_conditions=3, cond_reps=[1, 1])
-    with pytest.raises(pt.ArgumentError, match="factor 'size'"):
-        pt.Trials(factors=[("a", 2)], reps=1, order=pt.ORDER_CONSTRAINED, rng=1,
-                  constraints=[pt.max_run("size", 0, 1)])
+    with pytest.raises(ytr.ArgumentError):
+        ytr.Trials()                                             # nothing to run
+    with pytest.raises(ytr.ArgumentError, match="rng"):
+        ytr.Trials(n_conditions=3, reps=1, order=ytr.ORDER_RANDOM)
+    with pytest.raises(ytr.ArgumentError):
+        ytr.Trials(n_conditions=3, reps=1, constraints=[ytr.max_run(ytr.CONDITION, 0, 1)])
+    with pytest.raises(ytr.ArgumentError, match="cond_reps has 2"):
+        ytr.Trials(n_conditions=3, cond_reps=[1, 1])
+    with pytest.raises(ytr.ArgumentError, match="factor 'size'"):
+        ytr.Trials(factors=[("a", 2)], reps=1, order=ytr.ORDER_CONSTRAINED, rng=1,
+                  constraints=[ytr.max_run("size", 0, 1)])
     with pytest.raises(TypeError):
-        pt.Trials(n_conditions=1, reps=1, tracks=[object()], track_rate=0.5)
+        ytr.Trials(n_conditions=1, reps=1, tracks=[object()], track_rate=0.5)
 
 
 class CountingTrack:
@@ -161,7 +161,7 @@ class CountingTrack:
 
 def test_tracks_round_robin_and_finished_never_asked():
     tr = [CountingTrack(2), CountingTrack(3)]
-    t = pt.Trials(tracks=tr, interleave=pt.INTERLEAVE_ROUND_ROBIN)
+    t = ytr.Trials(tracks=tr, interleave=ytr.INTERLEAVE_ROUND_ROBIN)
     seq = []
     while (ti := t.next()) is not None:
         seq.append(ti.track)
@@ -175,9 +175,9 @@ def test_tracks_round_robin_and_finished_never_asked():
 
 @needs_stair
 def test_interleaved_staircases_with_catch_trials():
-    stairs = [st.Staircase(start=10.0 + i, steps=1.0, stop_trials=8) for i in range(3)]
-    t = pt.Trials(n_conditions=1, reps=6, order=pt.ORDER_CONSTRAINED,
-                  constraints=[pt.min_gap(pt.CONDITION, 0, 1)],
+    stairs = [yst.Staircase(start=10.0 + i, steps=1.0, stop_trials=8) for i in range(3)]
+    t = ytr.Trials(n_conditions=1, reps=6, order=ytr.ORDER_CONSTRAINED,
+                  constraints=[ytr.min_gap(ytr.CONDITION, 0, 1)],
                   tracks=stairs, track_rate=0.9, rng=20260923, record_size=8)
     while (ti := t.next()) is not None:
         if ti.track >= 0:
@@ -202,7 +202,7 @@ def test_interleaved_staircases_with_catch_trials():
 
 
 def test_requeue_and_tallies():
-    t = pt.Trials(n_conditions=2, reps=2)
+    t = ytr.Trials(n_conditions=2, reps=2)
     t.next()
     t.requeue()                                  # condition 0 goes to the end
     outcomes = []
@@ -210,22 +210,22 @@ def test_requeue_and_tallies():
         t.update(ti.condition)                   # outcome = the row, for the tally
         outcomes.append(ti.condition)
     h = t.history()
-    assert h[0].outcome == pt.REQUEUE and h[-1].requeued and h[-1].condition == 0
-    assert t.n_valid(0) == 2 and t.count(0, pt.REQUEUE) == 1
-    assert t.proportion(1, 1) == 1.0 and math.isnan(t.proportion(0, pt.INVALID))
-    with pytest.raises(pt.OutOfOrder):
+    assert h[0].outcome == ytr.REQUEUE and h[-1].requeued and h[-1].condition == 0
+    assert t.n_valid(0) == 2 and t.count(0, ytr.REQUEUE) == 1
+    assert t.proportion(1, 1) == 1.0 and math.isnan(t.proportion(0, ytr.INVALID))
+    with pytest.raises(ytr.OutOfOrder):
         t.update(1)
-    t = pt.Trials(tracks=[CountingTrack(1)])
+    t = ytr.Trials(tracks=[CountingTrack(1)])
     t.next()
-    with pytest.raises(pt.ArgumentError):
+    with pytest.raises(ytr.ArgumentError):
         t.requeue()                              # the track decides, not the sequencer
-    with pytest.raises(pt.ArgumentError):
+    with pytest.raises(ytr.ArgumentError):
         t.update(-3)                             # below INVALID
 
 
 def _session(rng, tracks=None):
-    return pt.Trials(factors=[("side", 2), ("size", 3)], reps=6, order=pt.ORDER_CONSTRAINED,
-                     constraints=[pt.max_run("side", pt.ANY_LEVEL, 2)], block_size=12,
+    return ytr.Trials(factors=[("side", 2), ("size", 3)], reps=6, order=ytr.ORDER_CONSTRAINED,
+                     constraints=[ytr.max_run("side", ytr.ANY_LEVEL, 2)], block_size=12,
                      n_practice=2, n_warmup=1, requeue_gap=3, rng=rng, record_size=4)
 
 
@@ -248,22 +248,22 @@ def test_save_load_round_trip():
         a = _session(77)
         _drive(a, cut)
         snap, state = a.save(), a.rng_state
-        b = pt.Trials.load(snap, factors=[("side", 2), ("size", 3)], reps=6,
-                           order=pt.ORDER_CONSTRAINED,
-                           constraints=[pt.max_run("side", pt.ANY_LEVEL, 2)], block_size=12,
+        b = ytr.Trials.load(snap, factors=[("side", 2), ("size", 3)], reps=6,
+                           order=ytr.ORDER_CONSTRAINED,
+                           constraints=[ytr.max_run("side", ytr.ANY_LEVEL, 2)], block_size=12,
                            n_practice=2, n_warmup=1, requeue_gap=3, rng=state, record_size=4)
         assert b.save() == snap
         _drive(b, 1000, cut)
         assert b.history() == ref.history()
         assert [b.record(i) for i in range(b.n_run)] == [ref.record(i) for i in range(ref.n_run)]
         assert b.save() == ref.save()
-    with pytest.raises(pt.Error, match="reps"):
-        pt.Trials.load(ref.save(), factors=[("side", 2), ("size", 3)], reps=5,
-                       order=pt.ORDER_CONSTRAINED,
-                       constraints=[pt.max_run("side", pt.ANY_LEVEL, 2)], block_size=12,
+    with pytest.raises(ytr.Error, match="reps"):
+        ytr.Trials.load(ref.save(), factors=[("side", 2), ("size", 3)], reps=5,
+                       order=ytr.ORDER_CONSTRAINED,
+                       constraints=[ytr.max_run("side", ytr.ANY_LEVEL, 2)], block_size=12,
                        n_practice=2, n_warmup=1, requeue_gap=3, rng=1, record_size=4)
-    with pytest.raises(pt.Error):
-        pt.Trials.load(b"PSTR garbage", n_conditions=1, reps=1)
+    with pytest.raises(ytr.Error):
+        ytr.Trials.load(b"PSTR garbage", n_conditions=1, reps=1)
 
 
 def test_restore_reproduces_the_run():
@@ -275,13 +275,13 @@ def test_restore_reproduces_the_run():
     t.restore([x.outcome for x in h], recs)
     assert t.history() == h and t.rng_state == ref.rng_state
     assert t.save() == ref.save()
-    with pytest.raises(pt.OutOfOrder):
+    with pytest.raises(ytr.OutOfOrder):
         t.restore([1])
 
 
 def test_format_functions():
     tr = CountingTrack(1)
-    t = pt.Trials(factors=[("orientation", 2), (None, 3), ('a,"b"', 1)], reps=1,
+    t = ytr.Trials(factors=[("orientation", 2), (None, 3), ('a,"b"', 1)], reps=1,
                   n_practice=1, tracks=[tr], track_rate=1.0, record_size=8)
     assert t.format_header() == ("index,block,rep,condition,track,practice,warmup,requeued,"
                                  "after_break,outcome,orientation,factor1,\"a,\"\"b\"\"\"\n")
@@ -291,10 +291,10 @@ def test_format_functions():
     assert t.format_row(0) == "0,-1,-1,0,-1,1,0,0,0,1,0,0,0\n"
     t.next()
     tr.left = 0
-    t.update(pt.INVALID)
+    t.update(ytr.INVALID)
     assert t.format_row(1) == "1,0,-1,-1,0,0,0,0,0,-1,,,\n"
-    assert t.format_meta().startswith("ysp_trials=" + pt.__version__ + " conditions=6 factors=3 levels=2x3x1")
-    with pytest.raises(pt.ArgumentError):
+    assert t.format_meta().startswith("ysp_trials=" + ytr.__version__ + " conditions=6 factors=3 levels=2x3x1")
+    with pytest.raises(ytr.ArgumentError):
         t.format_row(9)
 
 
@@ -302,14 +302,14 @@ def test_callback_exceptions_propagate():
     class Broken:
         def is_done(self):
             raise RuntimeError("track failed")
-    t = pt.Trials(tracks=[Broken()])
+    t = ytr.Trials(tracks=[Broken()])
     with pytest.raises(RuntimeError, match="track failed"):
         t.next()
 
     def bad_rng():
         raise KeyError("rng failed")
     with pytest.raises(KeyError):
-        pt.Trials(n_conditions=3, reps=2, order=pt.ORDER_FULL_RANDOM, rng=bad_rng)
+        ytr.Trials(n_conditions=3, reps=2, order=ytr.ORDER_FULL_RANDOM, rng=bad_rng)
 
 
 def test_version_matches_pyproject():
@@ -321,7 +321,7 @@ def test_version_matches_pyproject():
     with open(path, encoding="utf-8") as f:
         m = re.search(r'^version\s*=\s*"([^"]+)"', f.read(), re.M)
     assert m, "no version in pyproject.toml"
-    assert pt.__version__ == m.group(1)
+    assert ytr.__version__ == m.group(1)
 
 
 # --------------------------------------------------------------------- v0.2
@@ -342,7 +342,7 @@ COND_CSV = (
 
 
 def test_table_basics_and_bytes():
-    tab = pt.Table(COND_CSV)
+    tab = ytr.Table(COND_CSV)
     assert tab.columns == ["target", "contrast", "word", "list", "n"]
     assert tab.types == ["string", "number", "string", "integer", "integer"]
     assert len(tab) == tab.n_rows == 6
@@ -353,16 +353,16 @@ def test_table_basics_and_bytes():
     assert tab.row(4) == {"target": "catch", "contrast": 0.0, "word": "emu", "list": 1, "n": 1}
     b = tab.to_bytes()
     assert b[:4] == b"PSTB" and len(b) % 8 == 0
-    t2 = pt.Table.from_bytes(b)
+    t2 = ytr.Table.from_bytes(b)
     assert t2.hash == tab.hash and t2.row(2) == tab.row(2)
     bad = bytearray(b)
     bad[60] ^= 1
-    with pytest.raises(pt.ArgumentError, match="hash"):
-        pt.Table.from_bytes(bytes(bad))
-    with pytest.raises(pt.ArgumentError,
+    with pytest.raises(ytr.ArgumentError, match="hash"):
+        ytr.Table.from_bytes(bytes(bad))
+    with pytest.raises(ytr.ArgumentError,
                        match="line 3, row 2, column 'x' \\(1\\): '0,5' is not a number; the decimal"):
-        pt.Table('x,y\n1,a\n"0,5",b\n', types={"x": "number"})
-    t3 = pt.Table("code\n007\n7\n", types={"code": "string"})
+        ytr.Table('x,y\n1,a\n"0,5",b\n', types={"x": "number"})
+    t3 = ytr.Table("code\n007\n7\n", types={"code": "string"})
     assert t3.levels("code") == ["007", "7"]
 
 
@@ -387,7 +387,7 @@ def test_csv_against_the_csv_module(seed):
     text = buf.getvalue()
     if rng.random() < 0.3:
         text = "﻿" + text                         # a byte order mark
-    tab = pt.Table(text, types={"c%d" % i: "string" for i in range(ncol)})
+    tab = ytr.Table(text, types={"c%d" % i: "string" for i in range(ncol)})
     want = list(csv.reader(io.StringIO(text.lstrip("﻿"), newline="")))[1:]
     assert tab.n_rows == len(want)
     for r, row in enumerate(want):
@@ -419,55 +419,55 @@ def test_numbers_against_float(seed):
             continue                                   # range errors are tested in C
         vals.append((s, v))
     text = "v\n" + "\n".join(s for s, _ in vals) + "\n"
-    tab = pt.Table(text, types={"v": "number"})
+    tab = ytr.Table(text, types={"v": "number"})
     for r, (s, v) in enumerate(vals):
         got = tab.value(r, 0)
         assert got == v and math.copysign(1, got) == math.copysign(1, v), s
 
 
 def test_table_conditions_and_names():
-    tab = pt.Table(COND_CSV)
-    t = pt.Trials(table=tab, reps=4, order=pt.ORDER_CONSTRAINED, rng=3,
-                  constraints=[pt.max_run("target", pt.ANY_LEVEL, 1),
-                               pt.max_in_window("target", "catch", 2, 1)])
+    tab = ytr.Table(COND_CSV)
+    t = ytr.Trials(table=tab, reps=4, order=ytr.ORDER_CONSTRAINED, rng=3,
+                  constraints=[ytr.max_run("target", ytr.ANY_LEVEL, 1),
+                               ytr.max_in_window("target", "catch", 2, 1)])
     assert t.n_conditions == 6 and t.n_factors == 5 and t.table is tab
     s = t.schedule()
     lv = [tab.level(c, "target") for c in s]
     assert all(a != b for a, b in zip(lv, lv[1:]))
     assert t.values(2)["word"] == "new york"
     assert t.format_header().endswith("target,contrast,word,list,n\n")
-    with pytest.raises(pt.ArgumentError, match="no level 'd'"):
-        pt.Trials(table=tab, reps=2, order=pt.ORDER_CONSTRAINED, rng=1,
-                  constraints=[pt.max_run("target", "d", 1)])
+    with pytest.raises(ytr.ArgumentError, match="no level 'd'"):
+        ytr.Trials(table=tab, reps=2, order=ytr.ORDER_CONSTRAINED, rng=1,
+                  constraints=[ytr.max_run("target", "d", 1)])
 
 
 def test_rules_give_the_c_schedule():
-    tab = pt.Table(COND_CSV)
-    a = pt.Trials(table=tab, reps=6, order=pt.ORDER_CONSTRAINED, rng=99, block_size=12,
-                  constraints=[pt.max_run("target", pt.ANY_LEVEL, 2),
-                               pt.max_in_window("target", "catch", 2, 1),
-                               pt.first_not("target", "catch"),
-                               pt.min_gap("word", "new york", 3)])
+    tab = ytr.Table(COND_CSV)
+    a = ytr.Trials(table=tab, reps=6, order=ytr.ORDER_CONSTRAINED, rng=99, block_size=12,
+                  constraints=[ytr.max_run("target", ytr.ANY_LEVEL, 2),
+                               ytr.max_in_window("target", "catch", 2, 1),
+                               ytr.first_not("target", "catch"),
+                               ytr.min_gap("word", "new york", 3)])
     rules = ("order constrained\nreps 6\nmax_run target 2\nmax_in_window target=catch 2 1\n"
              "first_not target=catch\nmin_gap word=\"new york\" 3\nblock_size 12\n")
-    b = pt.Trials(table=tab, rules=rules, rng=99)
+    b = ytr.Trials(table=tab, rules=rules, rng=99)
     assert a.schedule() == b.schedule()
-    c = pt.Trials(table=tab, rules=b.format_rules(), rng=99)
+    c = ytr.Trials(table=tab, rules=b.format_rules(), rng=99)
     assert c.schedule() == b.schedule()
-    with pytest.raises(pt.ArgumentError, match="rules line 2.*did you mean 'max_run'"):
-        pt.Trials(table=tab, rules="reps 2\nmax_runn target 2\n", rng=1)
-    with pytest.raises(pt.ArgumentError, match="the statement here is 'min_gap'"):
-        pt.Trials(table=tab, rules="mindist target 2\n", rng=1)
+    with pytest.raises(ytr.ArgumentError, match="rules line 2.*did you mean 'max_run'"):
+        ytr.Trials(table=tab, rules="reps 2\nmax_runn target 2\n", rng=1)
+    with pytest.raises(ytr.ArgumentError, match="the statement here is 'min_gap'"):
+        ytr.Trials(table=tab, rules="mindist target 2\n", rng=1)
 
 
 def test_list_draws_subset():
-    t = pt.Trials(n_conditions=4, order=pt.ORDER_LIST, order_list=[3, 0, 0, 2])
+    t = ytr.Trials(n_conditions=4, order=ytr.ORDER_LIST, order_list=[3, 0, 0, 2])
     assert t.schedule() == [3, 0, 0, 2]
-    t = pt.Trials(n_conditions=3, order=pt.ORDER_WITH_REPLACEMENT, draws=3000,
+    t = ytr.Trials(n_conditions=3, order=ytr.ORDER_WITH_REPLACEMENT, draws=3000,
                   weights=[1, 0, 3], rng=5)
     s = t.schedule()
     assert s.count(1) == 0 and abs(s.count(2) / 3000 - 0.75) < 0.04
-    t = pt.Trials(n_conditions=10, reps=1, subset=4, rng=8)
+    t = ytr.Trials(n_conditions=10, reps=1, subset=4, rng=8)
     s = t.schedule()
     assert len(s) == 4 and s == sorted(s)
 
@@ -475,24 +475,24 @@ def test_list_draws_subset():
 def test_latin():
     for n in range(1, 13):
         for bal in (False, True):
-            rows = pt.latin_rows(n, bal)
+            rows = ytr.latin_rows(n, bal)
             seen = collections.Counter()
             for r in range(rows):
-                row = pt.latin(n, r, bal)
+                row = ytr.latin(n, r, bal)
                 assert sorted(row) == list(range(n))
                 if bal:
                     seen.update(zip(row, row[1:]))
             if bal:
                 want = 2 if n % 2 else 1
                 assert all(seen[(a, b)] == want for a in range(n) for b in range(n) if a != b)
-    assert pt.latin(4, 0, True) == [0, 1, 3, 2]
+    assert ytr.latin(4, 0, True) == [0, 1, 3, 2]
 
 
 def test_groups_and_units():
-    tab = pt.Table("block,kind\nA,prime\nA,target\nA,fill\nB,prime\nB,target\nB,fill\n")
-    t = pt.Trials(table=tab, reps=3, order=pt.ORDER_CONSTRAINED, rng=4,
-                  groups=pt.groups("block", "blocked", "balanced_latin", participant=1),
-                  constraints=[pt.followed_by("kind", "prime", "target")])
+    tab = ytr.Table("block,kind\nA,prime\nA,target\nA,fill\nB,prime\nB,target\nB,fill\n")
+    t = ytr.Trials(table=tab, reps=3, order=ytr.ORDER_CONSTRAINED, rng=4,
+                  groups=ytr.groups("block", "blocked", "balanced_latin", participant=1),
+                  constraints=[ytr.followed_by("kind", "prime", "target")])
     s = t.schedule()
     blocks = [tab.value(c, "block") for c in s]
     assert blocks == ["B"] * 9 + ["A"] * 9
@@ -503,9 +503,9 @@ def test_groups_and_units():
 
 
 def test_balance_pairs_and_leadin():
-    tab = pt.Table("lvl\nA\nB\nC\n")
-    t = pt.Trials(table=tab, reps=6, order=pt.ORDER_CONSTRAINED, rng=12,
-                  constraints=[pt.balance("lvl")])
+    tab = ytr.Table("lvl\nA\nB\nC\n")
+    t = ytr.Trials(table=tab, reps=6, order=ytr.ORDER_CONSTRAINED, rng=12,
+                  constraints=[ytr.balance("lvl")])
     s = t.schedule()
     assert len(s) == 19
     pairs = collections.Counter(zip(s, s[1:]))
@@ -513,8 +513,8 @@ def test_balance_pairs_and_leadin():
     run_all(t)
     h = t.history()
     assert h[0].leadin and h[0].rep == -1 and not any(x.leadin for x in h[1:])
-    t = pt.Trials(table=tab, reps=4, order=pt.ORDER_CONSTRAINED, rng=12,
-                  constraints=[pt.balance("lvl", no_repeat=True, no_leadin=True)])
+    t = ytr.Trials(table=tab, reps=4, order=ytr.ORDER_CONSTRAINED, rng=12,
+                  constraints=[ytr.balance("lvl", no_repeat=True, no_leadin=True)])
     s = t.schedule()
     assert len(s) == 12 and all(a != b for a, b in zip(s, s[1:]))
 
@@ -524,10 +524,10 @@ def test_balance_pairs_and_leadin():
 # the data line, reproduced by a replay.
 
 def test_jitter_values_and_log():
-    t = pt.Trials(n_conditions=3, reps=4, order=pt.ORDER_FULL_RANDOM, rng=31,
-                  jitters=[pt.uniform("iti", 0.8, 1.2, rate=(60000, 1001)),
-                           pt.exponential("fp", 0.5, 2.0, 0.4),
-                           pt.choice("soa", [0.1, 0.2, 0.4])])
+    t = ytr.Trials(n_conditions=3, reps=4, order=ytr.ORDER_FULL_RANDOM, rng=31,
+                  jitters=[ytr.uniform("iti", 0.8, 1.2, rate=(60000, 1001)),
+                           ytr.exponential("fp", 0.5, 2.0, 0.4),
+                           ytr.choice("soa", [0.1, 0.2, 0.4])])
     assert t.jitters == ["iti", "fp", "soa"]
     rows = []
     while (ti := t.next()) is not None:
@@ -544,39 +544,39 @@ def test_jitter_values_and_log():
     assert int(round(float(last[-2]) * 1e9)) == t.jitter(len(rows) - 1, "fp").ns
     assert "jitter iti uniform 0.8 1.2 rate=60000/1001" in t.format_rules()
     # A replay from the same seed and outcomes gives the same durations.
-    u = pt.Trials(n_conditions=3, reps=4, order=pt.ORDER_FULL_RANDOM, rng=31,
-                  jitters=[pt.uniform("iti", 0.8, 1.2, rate=(60000, 1001)),
-                           pt.exponential("fp", 0.5, 2.0, 0.4),
-                           pt.choice("soa", [0.1, 0.2, 0.4])])
+    u = ytr.Trials(n_conditions=3, reps=4, order=ytr.ORDER_FULL_RANDOM, rng=31,
+                  jitters=[ytr.uniform("iti", 0.8, 1.2, rate=(60000, 1001)),
+                           ytr.exponential("fp", 0.5, 2.0, 0.4),
+                           ytr.choice("soa", [0.1, 0.2, 0.4])])
     u.restore([1] * len(rows))
     assert [u.format_row(i) for i in range(len(rows))] == rows
     with pytest.raises(IndexError):
         t.jitter(0, 3)
-    with pytest.raises(pt.ArgumentError):
+    with pytest.raises(ytr.ArgumentError):
         t.jitter(0, "nope")
 
 
 def test_jitter_columns_rules_and_errors():
-    tab = pt.Table("target,fp_lo,fp_hi\na,0.5,0.7\nb,1.0,1.5\n")
-    t = pt.Trials(table=tab, reps=5, order=pt.ORDER_FULL_RANDOM, rng=2,
-                  jitters=[pt.uniform("fp", "fp_lo", "fp_hi")])
+    tab = ytr.Table("target,fp_lo,fp_hi\na,0.5,0.7\nb,1.0,1.5\n")
+    t = ytr.Trials(table=tab, reps=5, order=ytr.ORDER_FULL_RANDOM, rng=2,
+                  jitters=[ytr.uniform("fp", "fp_lo", "fp_hi")])
     while (ti := t.next()) is not None:
         lo, hi = tab.value(ti.condition, "fp_lo"), tab.value(ti.condition, "fp_hi")
         assert lo <= t.jitter(ti.index, "fp").s <= hi
         t.update(0)
-    r = pt.Trials(table=tab, rng=2, rules="order full_random\nreps 5\njitter fp uniform fp_lo fp_hi\n")
-    s = pt.Trials(table=tab, reps=5, order=pt.ORDER_FULL_RANDOM, rng=2,
-                  jitters=[pt.uniform("fp", "fp_lo", "fp_hi")])
+    r = ytr.Trials(table=tab, rng=2, rules="order full_random\nreps 5\njitter fp uniform fp_lo fp_hi\n")
+    s = ytr.Trials(table=tab, reps=5, order=ytr.ORDER_FULL_RANDOM, rng=2,
+                  jitters=[ytr.uniform("fp", "fp_lo", "fp_hi")])
     for i in range(10):
         r.next(); s.next()
         assert r.jitter(i, 0) == s.jitter(i, 0)
         r.update(1); s.update(1)
-    with pytest.raises(pt.ArgumentError, match="no whole frame of 60/1 Hz"):
-        pt.Trials(n_conditions=1, reps=1, rng=1, jitters=[pt.uniform("x", 0.801, 0.81, rate=60)])
-    with pytest.raises(pt.ArgumentError, match="desc.rng is required for jitter draws"):
-        pt.Trials(n_conditions=1, reps=1, jitters=[pt.uniform("x", 0.1, 0.2)])
-    with pytest.raises(pt.ArgumentError, match="rules line 1"):
-        pt.Trials(table=tab, rng=1, rules="jitter fp gaussian 1 2\n")
+    with pytest.raises(ytr.ArgumentError, match="no whole frame of 60/1 Hz"):
+        ytr.Trials(n_conditions=1, reps=1, rng=1, jitters=[ytr.uniform("x", 0.801, 0.81, rate=60)])
+    with pytest.raises(ytr.ArgumentError, match="desc.rng is required for jitter draws"):
+        ytr.Trials(n_conditions=1, reps=1, jitters=[ytr.uniform("x", 0.1, 0.2)])
+    with pytest.raises(ytr.ArgumentError, match="rules line 1"):
+        ytr.Trials(table=tab, rng=1, rules="jitter fp gaussian 1 2\n")
 
 
 def test_jitter_map_against_numpy_free_oracles():
@@ -585,33 +585,33 @@ def test_jitter_map_against_numpy_free_oracles():
     # [lo, hi) modulo hi - lo (exactly the truncated exponential).
     u_list = [0.0, 0.1, 0.37, 0.5, 0.9, 0.999999]
     for u in u_list:
-        v = pt.jitter_map(pt.uniform("u", 0.8, 1.2), u)
+        v = ytr.jitter_map(ytr.uniform("u", 0.8, 1.2), u)
         assert v.ns == 800000000 + int(u * 2**53) * 400000001 // 2**53
         assert v.s == v.ns / 1e9
         e_ns = 0.4e9 * -math.log1p(-u)
         want = 500000000 + math.fmod(e_ns, 1.5e9)
-        assert abs(pt.jitter_map(pt.exponential("e", 0.5, 2.0, 0.4), u).ns - want) <= 1.0
-    v = pt.jitter_map(pt.uniform("f", 0.8, 1.2, rate=(60000, 1001)), 0.0)
+        assert abs(ytr.jitter_map(ytr.exponential("e", 0.5, 2.0, 0.4), u).ns - want) <= 1.0
+    v = ytr.jitter_map(ytr.uniform("f", 0.8, 1.2, rate=(60000, 1001)), 0.0)
     assert v.frames == 48 and v.ns == 800800000
-    with pytest.raises(pt.ArgumentError, match="lo <= hi"):
-        pt.jitter_map(pt.uniform("u", 1.2, 0.8), 0.5)
+    with pytest.raises(ytr.ArgumentError, match="lo <= hi"):
+        ytr.jitter_map(ytr.uniform("u", 1.2, 0.8), 0.5)
 
 
 def test_jitter_golden_digests_match_c():
     # tests/adapt/trials_jitter_golden.h: the same 200000 draws per
     # distribution must give the same digests here as in every C build.
     vals = [0.1, 0.25, 0.333333333333, 0.5]
-    specs = [pt.uniform("a", 0.8, 1.2), pt.uniform("b", 0.8, 1.2, rate=(60000, 1001)),
-             pt.choice("c", vals), pt.choice("d", vals, rate=60),
-             pt.exponential("e", 0.5, 2.0, 0.4), pt.exponential("f", 0.5, 2.0, 0.4, rate=(60000, 1001))]
+    specs = [ytr.uniform("a", 0.8, 1.2), ytr.uniform("b", 0.8, 1.2, rate=(60000, 1001)),
+             ytr.choice("c", vals), ytr.choice("d", vals, rate=60),
+             ytr.exponential("e", 0.5, 2.0, 0.4), ytr.exponential("f", 0.5, 2.0, 0.4, rate=(60000, 1001))]
     want = [0xd2e231de82a90abc, 0xfa91de69b65221e5, 0xc4d62850f9f90fd5,
             0xd74230f52068797a, 0xf4a23384d974cceb, 0xc2c66e03f8a80f1a]
     mask = (1 << 64) - 1
     for spec, w in zip(specs, want):
         st, h = 2026, 0xCBF29CE484222325
         for _ in range(200000):
-            u, st = pt.splitmix(st)
-            v = pt.jitter_map(spec, u)
+            u, st = ytr.splitmix(st)
+            v = ytr.jitter_map(spec, u)
             h = ((h ^ (v.ns & mask)) * 0x100000001B3) & mask
             h = ((h ^ (v.frames & mask)) * 0x100000001B3) & mask
         assert h == w, spec["name"]

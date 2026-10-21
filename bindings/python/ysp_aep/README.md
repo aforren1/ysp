@@ -79,12 +79,12 @@ On Linux and macOS the build links `-pthread` (for the async thread) and
 ## How to run an adaptive session
 
 ```python
-import ysp.aep as pg
+import ysp.aep as yaep
 
-gp = pg.GP(
+gp = yaep.GP(
     lo=[0.0, -3.0], hi=[1.5, 0.0],     # log10 spatial frequency, log10 contrast
     intensity_dim=1,                   # thresholds are along contrast
-    acq=pg.ACQ_EAVC,                   # or "eavc"
+    acq=yaep.ACQ_EAVC,                   # or "eavc"
     target_p=0.75,
     grid=[15, 25],                     # candidate grid, 375 points
     n_init=10,                         # Halton trials first
@@ -108,11 +108,11 @@ The other likelihoods:
 
 ```python
 # a four-point confidence rating; the level set is "rated 2 or above"
-pg.GP(..., lik="ordinal", n_outcomes=4, target_outcome=2, target_p=0.5)
+yaep.GP(..., lik="ordinal", n_outcomes=4, target_outcome=2, target_p=0.5)
 # which of three intervals (softmax over three latent GPs)
-pg.GP(..., lik="categorical", n_outcomes=3, target_outcome=1, target_p=0.5)
+yaep.GP(..., lik="categorical", n_outcomes=3, target_outcome=1, target_p=0.5)
 # a continuous setting; use update_real(x, y)
-pg.GP(..., lik="gaussian", acq="balv", target_value=0.5)
+yaep.GP(..., lik="gaussian", acq="balv", target_value=0.5)
 ```
 
 A candidate grid quantizes every proposal: on an 11 x 21 grid over 140 dB,
@@ -132,7 +132,7 @@ axis, so it cannot hold a rise that is narrow against the box.
 ## How to find the best stimulus instead of a threshold
 
 ```python
-gp = pg.GP(lo=[0, 0], hi=[1, 1], lik="gaussian", acq="ucb", grid=[21, 21],
+gp = yaep.GP(lo=[0, 0], hi=[1, 1], lik="gaussian", acq="ucb", grid=[21, 21],
            n_init=8, fit=True, fit_every=10, stop_trials=40)
 while not gp.done:
     _, x = gp.next()
@@ -150,7 +150,7 @@ the favorite stimulus.
 
 ```python
 data = gp.save()                     # bytes; store it with your data
-gp = pg.GP.load(data, **desc)        # the same desc; the session continues
+gp = yaep.GP.load(data, **desc)        # the same desc; the session continues
 ```
 
 The resumed session proposes, updates and estimates exactly as the
@@ -183,8 +183,8 @@ at 60 Hz. `ysp.aep.Async` runs `update`, `next` and `threshold` on a C thread,
 so a PsychoPy frame loop only polls:
 
 ```python
-gp = pg.GP(**desc)
-with pg.Async(gp, context=[0.5], fit_in_idle=True, below_normal=True) as a:
+gp = yaep.GP(**desc)
+with yaep.Async(gp, context=[0.5], fit_in_idle=True, below_normal=True) as a:
     seq, snap = a.poll()                  # seq 0: the first stimulus is ready
     while not snap.done:
         k = run_trial_frames(snap.x)      # your win.flip() loop

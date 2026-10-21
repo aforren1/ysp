@@ -35,18 +35,18 @@ uv build --sdist
 ## How to convert a color
 
 ```python
-import ysp.color as pc
+import ysp.color as ycol
 
-cal = pc.Calibration.load(open("rig.yspcal", "rb").read())
-cx = pc.Context(cal, (0.5, 0.5, 0.5))          # the background
+cal = ycol.Calibration.load(open("rig.yspcal", "rb").read())
+cx = ycol.Context(cal, (0.5, 0.5, 0.5))          # the background
 
-rgb, g = cx.to_rgb(pc.dkl(elev=0, azim=90, contrast=0.1))
+rgb, g = cx.to_rgb(ycol.dkl(elev=0, azim=90, contrast=0.1))
 if not g.in_gamut:
     print("out by", g.distance, "; at most", g.scale, "of it fits")
 
-d, g = cx.to_dir(pc.dkl(azim=0, contrast=0.05))   # a grating's direction
-k = cx.max_scale(pc.dkl(azim=90, contrast=1), symmetric=True)
-lab, g, flags = cx.convert(pc.hex("#3366cc"), "cielab")
+d, g = cx.to_dir(ycol.dkl(azim=0, contrast=0.05))   # a grating's direction
+k = cx.max_scale(ycol.dkl(azim=90, contrast=1), symmetric=True)
+lab, g, flags = cx.convert(ycol.hex("#3366cc"), "cielab")
 values, flags = cx.convert_n(rgb_array, "rgb", "oklch")   # N x 3 in, memoryview('d') out
 ```
 
@@ -66,12 +66,12 @@ error: the result is unclipped, and `Gamut` says by how much.
 ## How to measure a participant's luminance
 
 ```python
-lum = pc.Lum(participant="P01", method="hfp", freq_hz=15)
+lum = ycol.Lum(participant="P01", method="hfp", freq_hz=15)
 a, b = cx.lum_pair(azim=0, elev=elev_at_null, contrast=0.1)
 lum.add(a, b, bg=(0.5, 0.5, 0.5), sd=0.8, n=6)
 lum.derive(cal)
 open("P01.ysplum", "wb").write(lum.save())
-cx_p01 = pc.Context(cal, (0.5, 0.5, 0.5), lum=lum)   # DKL with P01's isoluminance
+cx_p01 = ycol.Context(cal, (0.5, 0.5, 0.5), lum=lum)   # DKL with P01's isoluminance
 ```
 
 ## Reference

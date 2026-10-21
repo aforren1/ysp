@@ -48,16 +48,16 @@ compiled directly into the extension. On Linux/macOS the build links
 ## Use
 
 ```python
-import ysp.serial as ps
+import ysp.serial as yser
 
-for info in ps.list_ports():            # enumerate without opening
+for info in yser.list_ports():            # enumerate without opening
     print(info)   # {'name': '/dev/ttyUSB0', 'description': ..., 'vid': 1027, ...}
 
 # Find a box by USB id instead of hard-coding the port name.
-match = ps.find_ports(vid=0x0403, pid=0x6001)     # FTDI FT232R
+match = yser.find_ports(vid=0x0403, pid=0x6001)     # FTDI FT232R
 device = match[0]["name"] if match else "/dev/ttyUSB0"
 
-with ps.Port(device, baud=115200) as port:
+with yser.Port(device, baud=115200) as port:
     port.write_byte(0x55)                   # raise a trigger
     port.pulse(0x55, 0x00, 0.002)           # 0x55, hold 2 ms, then 0x00
     port.pulse_async(0x55, 0x00, 0.002)     # same, without blocking
@@ -90,9 +90,9 @@ Timestamp a trigger against the library's own clock, so your numbers and its
 deadlines share one base:
 
 ```python
-t0 = ps.now()                   # monotonic seconds, a float
+t0 = yser.now()                   # monotonic seconds, a float
 port.write_byte(0x55)
-t1 = ps.now()
+t1 = yser.now()
 ```
 
 The physical onset lies after `t0` and, over USB, after the next frame
@@ -129,10 +129,10 @@ stop_reading = False
 def listener(port):
     while not stop_reading:
         try:
-            data = port.read(64, ps.TIMEOUT_INFINITE)
-        except ps.Interrupted:
+            data = port.read(64, yser.TIMEOUT_INFINITE)
+        except yser.Interrupted:
             return                      # shutdown, not an error
-        except ps.Disconnected:
+        except yser.Disconnected:
             return                      # the box was unplugged
         handle(data)
 
@@ -148,9 +148,9 @@ port.close()            # now it is safe
 ## Async reader
 
 A Python thread blocked in `read()` gets its bytes only when the interpreter
-runs it, so `ps.now()` after the read is late by the GIL and by whatever
+runs it, so `yser.now()` after the read is late by the GIL and by whatever
 else the program does. The async reader (0.5.0.2) is a C thread that reads
-the port, stamps each read with the `ps.now()` clock when the read returns,
+the port, stamps each read with the `yser.now()` clock when the read returns,
 cuts the bytes into records and keeps them in a ring. It never takes the
 GIL. The MATLAB binding (`ysp_serial('async_start', ...)`) and
 `ysp/device.h` use the same design.
@@ -161,7 +161,7 @@ port.write(b"go\n")                                  # writes stay allowed
 while running:
     if port.async_wait(0.5):                         # releases the GIL
         for line, t in port.async_read():            # oldest first
-            handle(line, t)                          # t: ps.now() seconds
+            handle(line, t)                          # t: yser.now() seconds
 stats = port.async_stop()                            # close() also stops it
 ```
 
@@ -179,14 +179,14 @@ Rules:
   `overflows`. It never waits for Python. Size `capacity` for the longest
   time your program does not call `async_read()`.
 - The thread owns the reader role. `read`, `available`, `interrupt` and
-  `purge(rx=True)` raise `ps.Error` until `async_stop()`. The writer role
+  `purge(rx=True)` raise `yser.Error` until `async_stop()`. The writer role
   stays yours: `write`, `pulse` and the others work while the thread runs.
 - If the device goes away, the thread stops. `async_read()` returns the
-  records it collected, then raises the error (`ps.Disconnected`).
+  records it collected, then raises the error (`yser.Disconnected`).
 - `async_stop()` or `close()` from another thread ends an `async_wait()` in
-  progress with `ps.Interrupted`. One thread at a time may call
-  `async_read()`; a second one at the same time raises `ps.Error`.
-- `async_start()` on a running reader raises `ps.Error`. `async_stop()` is
+  progress with `yser.Interrupted`. One thread at a time may call
+  `async_read()`; a second one at the same time raises `yser.Error`.
+- `async_start()` on a running reader raises `yser.Error`. `async_stop()` is
   idempotent.
 
 What it measured on a Teensy 4.0 echo board at 1000 lines per second
@@ -199,10 +199,10 @@ write beside the running reader cost within 34 us of a write without one.
 
 | | |
 |---|---|
-| `ps.now() -> float` | monotonic seconds from the clock the library times its own deadlines against |
-| `ps.list_ports() -> list[dict]` | enumerate ports (`name`, `description`, `serial_number`, `location`, `driver`, `vid`, `pid`) |
-| `ps.find_ports(vid=0, pid=0, serial_number=None, location=None, description=None, name=None) -> list[dict]` | the matching subset; zero/`None` matches anything |
-| `ps.Port(device, baud=0, data_bits=0, parity=PARITY_NONE, stop_bits=STOP_BITS_1, flow=FLOW_NONE, write_timeout=DEFAULT_WRITE_TIMEOUT, exclusive=False, low_latency=False, dtr_low_on_open=False, rts_low_on_open=False, keep_dtr_on_close=False, rt_runtime=0, rt_deadline=0, rt_period=0, min_hold=0)` | open a port; `device` is required, times are seconds, a zero field means the library default |
+| `yser.now() -> float` | monotonic seconds from the clock the library times its own deadlines against |
+| `yser.list_ports() -> list[dict]` | enumerate ports (`name`, `description`, `serial_number`, `location`, `driver`, `vid`, `pid`) |
+| `yser.find_ports(vid=0, pid=0, serial_number=None, location=None, description=None, name=None) -> list[dict]` | the matching subset; zero/`None` matches anything |
+| `yser.Port(device, baud=0, data_bits=0, parity=PARITY_NONE, stop_bits=STOP_BITS_1, flow=FLOW_NONE, write_timeout=DEFAULT_WRITE_TIMEOUT, exclusive=False, low_latency=False, dtr_low_on_open=False, rts_low_on_open=False, keep_dtr_on_close=False, rt_runtime=0, rt_deadline=0, rt_period=0, min_hold=0)` | open a port; `device` is required, times are seconds, a zero field means the library default |
 | `port.read(n, timeout, all=False) -> bytes` | read; `timeout` in seconds, 0 polls, `math.inf` waits forever; `all=True` waits for the full `n` |
 | `port.write(data) -> int` | write a bytes-like object, or any iterable of ints 0..255; returns the count accepted |
 | `port.write_byte(value) -> int` | write one byte; returns 1 |
@@ -239,20 +239,20 @@ Tune the async-pulse worker's real-time reservation (Linux
 [SCHED_DEADLINE](https://www.kernel.org/doc/html/latest/scheduler/sched-deadline.html); seconds):
 
 ```python
-port = ps.Port(device, rt_runtime=0.001, rt_deadline=0.010, rt_period=0.010)
+port = yser.Port(device, rt_runtime=0.001, rt_deadline=0.010, rt_period=0.010)
 ```
 
 The rule is `0 < runtime <= deadline <= period`; a zero period means "same as
-deadline". Invalid combinations raise `ps.Error` at construction.
+deadline". Invalid combinations raise `yser.Error` at construction.
 
 ## Errors
 
 | Exception | Raised when |
 |---|---|
-| `ps.Error` | base class; also a failed open, a bad argument or an OS error |
-| `ps.Disconnected` | the device went away (USB unplug); close the port |
-| `ps.Interrupted` | `interrupt()` or `close()` woke a blocked `read()`; `async_stop()` or `close()` ended an `async_wait()` |
-| `ps.Closed` | the port is not open |
+| `yser.Error` | base class; also a failed open, a bad argument or an OS error |
+| `yser.Disconnected` | the device went away (USB unplug); close the port |
+| `yser.Interrupted` | `interrupt()` or `close()` woke a blocked `read()`; `async_stop()` or `close()` ended an `async_wait()` |
+| `yser.Closed` | the port is not open |
 
 The message is the library's `yser_strerror()` text plus the OS error number
 from the slot that belongs to the failing role (`rd_oserr`, `wr_oserr` or
@@ -277,7 +277,7 @@ write. On Windows, `set_rts` now reaches a USB CDC device under
 API of 0.5.0.2. The first three numbers are
 the header's version; a fourth counts changes to the binding alone and goes
 away when the header's version changes: 0.5.0.1 changed every time to
-seconds, 0.5.0.2 added the async reader. `ps.__version__` gives the same
+seconds, 0.5.0.2 added the async reader. `yser.__version__` gives the same
 string. 0.5.0.2 adds calls and does not change the API of 0.5.0.1.
 
 0.5.0.1 breaks the API of 0.5.0. Replace `now_us()` with `now()` (seconds),

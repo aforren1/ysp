@@ -1,4 +1,4 @@
-"""Tests for ysp.rdk: the binding regenerates ysp/rdk.h's fields bit for bit.
+"""Tests for ysp.rdk: the binding regenerates ysp/yrdk.h's fields bit for bit.
 
 tests/adapt/rdk_test.c checks the header itself. Here: the 8 golden
 digests (the same numbers as the C test and tests/compare/rdk_ref.py), a
@@ -16,7 +16,7 @@ import struct
 import numpy as np
 import pytest
 
-import ysp.rdk as rdk
+import ysp.rdk as yrdk
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # The schedules are integer ns, as the C test's; the binding takes seconds,
@@ -32,20 +32,20 @@ def s(ns):
 
 def test_version_matches_pyproject():
     text = open(os.path.join(os.path.dirname(HERE), "pyproject.toml")).read()
-    assert re.search(r'^version = "([^"]+)"', text, re.M).group(1) == rdk.__version__
+    assert re.search(r'^version = "([^"]+)"', text, re.M).group(1) == yrdk.__version__
     # the fourth number counts changes to the binding alone
-    assert rdk.__version__.startswith(rdk.version() + ".")
+    assert yrdk.__version__.startswith(yrdk.version() + ".")
 
 
 def test_exact_pieces():
     # Random123's known answers for philox4x32 10
-    assert rdk.philox(0, (0, 0, 0, 0)) == (0x6627E8D5, 0xE169C58D, 0xBC57AC4C, 0x9B00DBD8)
-    assert rdk.philox(0x299F31D0A4093822, (0x243F6A88, 0x85A308D3, 0x13198A2E, 0x03707344)) == (
+    assert yrdk.philox(0, (0, 0, 0, 0)) == (0x6627E8D5, 0xE169C58D, 0xBC57AC4C, 0x9B00DBD8)
+    assert yrdk.philox(0x299F31D0A4093822, (0x243F6A88, 0x85A308D3, 0x13198A2E, 0x03707344)) == (
         0xD16CFE09, 0x94FDCCEB, 0x5001E420, 0x24126EA1)
-    assert rdk.angle(90) == 0x40000000
-    assert rdk.angle(-90) == 0xC0000000
-    assert rdk.angle(1) == 11930465
-    assert rdk.sincos(0x40000000) == (1 << 30, 0)
+    assert yrdk.angle(90) == 0x40000000
+    assert yrdk.angle(-90) == 0xC0000000
+    assert yrdk.angle(1) == 11930465
+    assert yrdk.sincos(0x40000000) == (1 << 30, 0)
 
 
 # --- the golden digests ---------------------------------------------------------
@@ -106,7 +106,7 @@ def golden_steps(g):
 @pytest.mark.parametrize("g", GOLDEN, ids=[g[0] for g in GOLDEN])
 def test_golden_digest_by_updates(g):
     name, d, seed, _, _, _, _, digest = g
-    f = rdk.Field(**d)
+    f = yrdk.Field(**d)
     f.start(seed, s(T0))
     for t, c, dr, sp in golden_steps(g):
         f.coherence, f.direction, f.speed = c, dr, sp
@@ -117,7 +117,7 @@ def test_golden_digest_by_updates(g):
 @pytest.mark.parametrize("g", GOLDEN, ids=[g[0] for g in GOLDEN])
 def test_golden_digest_by_replay(g):
     name, d, seed, _, _, _, _, digest = g
-    f = rdk.Field(**d)
+    f = yrdk.Field(**d)
     f.replay(seed, s(T0), golden_steps(g))
     assert f.digest() == digest
     xy, _, _ = f.trajectory(seed, s(T0), golden_steps(g))
@@ -151,7 +151,7 @@ def load_c_trial():
 
 def test_c_trial_replays_to_identical_arrays():
     seed, t0, steps, xy, dirs, sig, digest = load_c_trial()
-    f = rdk.Field(**C_DESC)
+    f = yrdk.Field(**C_DESC)
     rows = [(s(int(r["t"])), float(r["coherence"]), float(r["direction"]), float(r["speed"])) for r in steps]
     gxy, gdir, gsig = f.trajectory(seed, s(t0), rows)
     assert f.digest() == digest
@@ -169,7 +169,7 @@ def test_c_trial_replays_to_identical_arrays():
     assert f.digest() == digest
     # the log of a live run (Field.last) replays to the same digest, and its
     # ns column is the C log's t
-    g = rdk.Field(**C_DESC)
+    g = yrdk.Field(**C_DESC)
     g.start(seed, s(t0))
     log = []
     for r in rows:
@@ -180,7 +180,7 @@ def test_c_trial_replays_to_identical_arrays():
     assert np.array_equal(g.xy().view(np.uint32), xy[-1].view(np.uint32))
     assert [x.ns for x in log] == [int(r["t"]) for r in steps]
     assert all(x.t == x.ns / 1e9 for x in log)
-    h = rdk.Field(**C_DESC)
+    h = yrdk.Field(**C_DESC)
     h.replay(seed, s(t0), log)
     assert h.digest() == digest
     # the log without its ns column (seconds only) replays the same
@@ -192,8 +192,8 @@ def test_c_trial_replays_to_identical_arrays():
 
 @pytest.mark.parametrize("noise", ["position", "walk", "direction"])
 def test_frozen_noise_across_coherence(noise):
-    a = rdk.Field(w=10, count=500, signal="different", noise=noise, coherence=0.2, speed=3, direction=10)
-    b = rdk.Field(w=10, count=500, signal="different", noise=noise, coherence=0.55, speed=3, direction=10)
+    a = yrdk.Field(w=10, count=500, signal="different", noise=noise, coherence=0.2, speed=3, direction=10)
+    b = yrdk.Field(w=10, count=500, signal="different", noise=noise, coherence=0.55, speed=3, direction=10)
     steps = [(s(T0 + k * P), 0.0, 10.0, 3.0) for k in range(1, 201)]
     sa = [(t, 0.2, d, s) for t, _, d, s in steps]
     sb = [(t, 0.55, d, s) for t, _, d, s in steps]
@@ -211,7 +211,7 @@ def test_frozen_noise_across_coherence(noise):
 # --- snapshots, outputs, refusals -----------------------------------------------
 
 def test_snapshot_restore():
-    f = rdk.Field(algorithm="WN", w=8, count=100, coherence=0.5, speed=5, lifetime=0.3)
+    f = yrdk.Field(algorithm="WN", w=8, count=100, coherence=0.5, speed=5, lifetime=0.3)
     f.start(7, s(T0))
     for k in range(1, 31):
         f.update(s(T0 + k * P))
@@ -219,18 +219,18 @@ def test_snapshot_restore():
     for k in range(31, 91):
         f.update(s(T0 + k * P))
     want, want_xy = f.digest(), f.xy()
-    g = rdk.Field(algorithm="WN", w=8, count=100, coherence=0.5, speed=5, lifetime=0.3)
+    g = yrdk.Field(algorithm="WN", w=8, count=100, coherence=0.5, speed=5, lifetime=0.3)
     g.restore(snap)
     for k in range(31, 91):
         g.update(s(T0 + k * P))
     assert g.digest() == want
     assert np.array_equal(g.xy(), want_xy)
-    with pytest.raises(rdk.ArgumentError):
-        rdk.Field(w=8, count=101).restore(snap)
+    with pytest.raises(yrdk.ArgumentError):
+        yrdk.Field(w=8, count=101).restore(snap)
 
 
 def test_outputs():
-    f = rdk.Field(w=10, count=50, coherence=0.5, speed=2, direction=-45, lifetime=0.5)
+    f = yrdk.Field(w=10, count=50, coherence=0.5, speed=2, direction=-45, lifetime=0.5)
     f.start(90, s(T0))
     for k in range(1, 21):
         f.update(s(T0 + k * P))
@@ -239,29 +239,29 @@ def test_outputs():
     assert d.shape == a.shape == (50,) and d.dtype == a.dtype == np.float32
     assert sg.dtype == e.dtype == np.uint8
     assert int(sg.sum()) == 25
-    assert np.all(sg == (e & rdk.EV_SIGNAL))
+    assert np.all(sg == (e & yrdk.EV_SIGNAL))
     assert np.allclose(d[sg == 1], 315.0)
     assert np.all((a >= 0) & (a <= 0.5 + 1e-6))
     assert np.all(np.hypot(xy[:, 0], xy[:, 1]) <= 5.0 + 1e-5)
     assert f.n == 50 and f.total == 50
     assert f.last.ns == T0 + 20 * P and f.last.t == s(T0 + 20 * P) and f.last.set == 0
     assert f.stats["updates"] == 20
-    m = rdk.Field(algorithm=rdk.MN, w=10, count=30)
+    m = yrdk.Field(algorithm=yrdk.MN, w=10, count=30)
     assert m.n == 30 and m.total == 90
 
 
 def test_refusals():
-    with pytest.raises(rdk.ArgumentError, match="w"):
-        rdk.Field(count=10)
-    with pytest.raises(rdk.ArgumentError, match="preset"):
-        rdk.Field(algorithm="MN", noise="walk", w=10, count=10)
-    with pytest.raises(rdk.ArgumentError, match="noise"):
-        rdk.Field(noise="sideways", w=10, count=10)
-    f = rdk.Field(w=10, count=10)
-    with pytest.raises(rdk.OrderError):
+    with pytest.raises(yrdk.ArgumentError, match="w"):
+        yrdk.Field(count=10)
+    with pytest.raises(yrdk.ArgumentError, match="preset"):
+        yrdk.Field(algorithm="MN", noise="walk", w=10, count=10)
+    with pytest.raises(yrdk.ArgumentError, match="noise"):
+        yrdk.Field(noise="sideways", w=10, count=10)
+    f = yrdk.Field(w=10, count=10)
+    with pytest.raises(yrdk.OrderError):
         f.update(0)
     f.start(1, s(100))
-    with pytest.raises(rdk.OrderError):
+    with pytest.raises(yrdk.OrderError):
         f.update(s(99))
     assert f.update(s(100)) == 10
 
@@ -287,7 +287,7 @@ def magnitudes():
 
 
 def test_seconds_in_ns_out_exact():
-    f = rdk.Field(w=10, count=10)
+    f = yrdk.Field(w=10, count=10)
     bad = []
     for ns in magnitudes():
         f.start(1, ns / 1e9)
@@ -296,8 +296,8 @@ def test_seconds_in_ns_out_exact():
             bad.append((ns, f.last.ns))
     assert not bad, bad[:5]
     # frame_period crosses the same way: 0.016666667 s is 16,666,667 ns
-    g = rdk.Field(w=10, count=10, clock="frames", frame_period=s(P), lifetime_frames=18)
-    h = rdk.Field(w=10, count=10, clock="frames", frame_period=0.016666667, lifetime_frames=18)
+    g = yrdk.Field(w=10, count=10, clock="frames", frame_period=s(P), lifetime_frames=18)
+    h = yrdk.Field(w=10, count=10, clock="frames", frame_period=0.016666667, lifetime_frames=18)
     for x in (g, h):
         x.start(5, s(T0))
         for k in range(1, 40):
@@ -309,7 +309,7 @@ def test_logged_trial_replays_through_seconds():
     # a live run in seconds, its Field.last log, and the replay from it: the
     # same digest and positions, near 1e14 ns as near 1e9 ns
     for base in (T0, 10**14 + 12345):
-        f = rdk.Field(algorithm="WN", w=8, count=100, coherence=0.5, speed=5, lifetime=0.3)
+        f = yrdk.Field(algorithm="WN", w=8, count=100, coherence=0.5, speed=5, lifetime=0.3)
         f.start(11, s(base))
         log = []
         for k in range(1, 121):
@@ -317,7 +317,7 @@ def test_logged_trial_replays_through_seconds():
             f.update(s(base + k * P + (k * 7919) % 101))
             log.append(f.last)
         want, want_xy = f.digest(), f.xy()
-        g = rdk.Field(algorithm="WN", w=8, count=100, coherence=0.5, speed=5, lifetime=0.3)
+        g = yrdk.Field(algorithm="WN", w=8, count=100, coherence=0.5, speed=5, lifetime=0.3)
         xy, _, _ = g.trajectory(11, s(base), log)
         assert g.digest() == want
         assert np.array_equal(xy[-1].view(np.uint32), want_xy.view(np.uint32))
@@ -325,19 +325,19 @@ def test_logged_trial_replays_through_seconds():
 
 
 def test_seconds_refusals():
-    f = rdk.Field(w=10, count=10)
+    f = yrdk.Field(w=10, count=10)
     for bad in (-1e-9, float("nan"), float("inf"), float(1 << 23), 1e9):
-        with pytest.raises(rdk.ArgumentError, match="seconds"):
+        with pytest.raises(yrdk.ArgumentError, match="seconds"):
             f.start(1, bad)
     f.start(1, 1.0)
-    with pytest.raises(rdk.ArgumentError, match="seconds"):
+    with pytest.raises(yrdk.ArgumentError, match="seconds"):
         f.update(1_000_000_000_000)          # an old ns integer read as seconds
-    with pytest.raises(rdk.ArgumentError, match="step 0"):
+    with pytest.raises(yrdk.ArgumentError, match="step 0"):
         f.replay(1, 1.0, [(T0 + P, 0.5, 0.0, 1.0)])
     # a row whose seconds and ns disagree is refused
-    with pytest.raises(rdk.ArgumentError, match="ns / 1e9"):
+    with pytest.raises(yrdk.ArgumentError, match="ns / 1e9"):
         f.replay(1, 1.0, [(1.5, 0.5, 0.0, 1.0, 0, 1_500_000_001)])
-    with pytest.raises(rdk.ArgumentError, match="frame_period"):
-        rdk.Field(w=10, count=10, clock="frames", frame_period=-0.01)
+    with pytest.raises(yrdk.ArgumentError, match="frame_period"):
+        yrdk.Field(w=10, count=10, clock="frames", frame_period=-0.01)
     with pytest.raises(TypeError):
-        rdk.Field(w=10, count=10, frame_ns=P)
+        yrdk.Field(w=10, count=10, frame_ns=P)

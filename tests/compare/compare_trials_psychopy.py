@@ -33,7 +33,7 @@ Exits 1 when any property fails on either side.
 import collections
 import sys
 
-import ysp.trials as pt
+import ysp.trials as ytr
 
 try:
     from psychopy import logging as pp_logging
@@ -70,7 +70,7 @@ def our_order(n, reps, order, seed, cond_reps=None):
         kw["reps"] = reps
     else:
         kw["cond_reps"] = cond_reps
-    t = pt.Trials(**kw)
+    t = ytr.Trials(**kw)
     seq, blocks = [], []
     while (ti := t.next()) is not None:
         seq.append(ti.condition)
@@ -97,13 +97,13 @@ def main():
                      "-" if theirs is None else f"{theirs}/{n_seeds}", "ok" if ok else "FAIL", note))
 
     for name, n, reps in DESIGNS:
-        same = sum(our_order(n, reps, pt.ORDER_SEQUENTIAL, s)[0] == pp_order(n, reps, "sequential", s)
+        same = sum(our_order(n, reps, ytr.ORDER_SEQUENTIAL, s)[0] == pp_order(n, reps, "sequential", s)
                    for s in SEEDS)
         add("sequential: identical order", name, same, same)
 
         ours = theirs = 0
         for s in SEEDS:
-            seq, rep = our_order(n, reps, pt.ORDER_RANDOM, s)
+            seq, rep = our_order(n, reps, ytr.ORDER_RANDOM, s)
             # The rep of every trial in block k is k: blocks in repetition order.
             ours += blocks_ok(seq, n, reps) and rep == [k for k in range(reps) for _ in range(n)]
             theirs += blocks_ok(pp_order(n, reps, "random", s), n, reps)
@@ -113,7 +113,7 @@ def main():
         first_ours, first_pp = collections.Counter(), collections.Counter()
         want = {c: reps for c in range(n)}
         for s in SEEDS:
-            seq = our_order(n, reps, pt.ORDER_FULL_RANDOM, s)[0]
+            seq = our_order(n, reps, ytr.ORDER_FULL_RANDOM, s)[0]
             pp = pp_order(n, reps, "fullRandom", s)
             ours += collections.Counter(seq) == want
             theirs += collections.Counter(pp) == want
@@ -131,17 +131,17 @@ def main():
         want = {c: cond_reps[c] for c in range(len(w))}
         ours = theirs = 0
         for s in SEEDS:
-            ours += collections.Counter(our_order(len(w), 0, pt.ORDER_FULL_RANDOM, s, cond_reps)[0]) == want
+            ours += collections.Counter(our_order(len(w), 0, ytr.ORDER_FULL_RANDOM, s, cond_reps)[0]) == want
             theirs += collections.Counter(pp_order(len(w), reps, "fullRandom", s, w)) == want
         add("weights: exact counts (fullRandom)", name, ours, theirs)
-        seq = our_order(len(w), 0, pt.ORDER_SEQUENTIAL, 0, cond_reps)[0]
+        seq = our_order(len(w), 0, ytr.ORDER_SEQUENTIAL, 0, cond_reps)[0]
         pp = pp_order(len(w), reps, "sequential", 0, w)
         same_counts = collections.Counter(seq) == collections.Counter(pp) == want
         add("weights: sequential counts", name, len(SEEDS) if same_counts else 0, None,
             "order " + ("identical" if seq == pp else "differs by design") +
             f": ours {''.join(map(str, seq[:12]))}..., psychopy {''.join(map(str, pp[:12]))}...")
 
-    print(f"ysp.trials {pt.__version__} vs psychopy.data.TrialHandler / TrialHandlerExt, "
+    print(f"ysp.trials {ytr.__version__} vs psychopy.data.TrialHandler / TrialHandlerExt, "
           f"{len(SEEDS)} seeds per row")
     print()
     hdr = f"{'property':38s} {'design':18s} {'ysp.trials':>10s} {'psychopy':>9s} {'result':>6s}  note"

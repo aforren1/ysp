@@ -47,46 +47,46 @@ compiled directly into the extension. On Linux/macOS the build links
 ## Use
 
 ```python
-import ysp.parallel as pp
+import ysp.parallel as ypar
 
-for info in pp.list_ports():            # enumerate without opening
+for info in ypar.list_ports():            # enumerate without opening
     print(info)                         # {'name': '/dev/parport0', 'backend': 1, 'base_addr': 0}
 
 # Defaults: ppdev /dev/parport0 (Linux), inpout @ LPT1 (Windows).
-with pp.Port() as port:                 # or pp.Port(device="/dev/parport1")
+with ypar.Port() as port:                 # or ypar.Port(device="/dev/parport1")
     port.write_data(0x55)               # latch a trigger byte
     port.pulse(0x55, width=0.002)       # blocking: 0x55 for 2 ms, then 0
     port.pulse_async(0x55, width=0.002) # returns immediately; worker drops it
     s = port.read_status()
-    print(hex(s), port.get_status_bit(pp.STATUS_BUSY))
+    print(hex(s), port.get_status_bit(ypar.STATUS_BUSY))
 ```
 
 Other backends:
 
 ```python
-pp.Port(backend=pp.BACKEND_DIRECT, base_addr=pp.LPT1)   # Linux raw I/O (root)
-pp.Port(backend=pp.BACKEND_INPOUT, base_addr=0x378)     # Windows inpout
+ypar.Port(backend=ypar.BACKEND_DIRECT, base_addr=ypar.LPT1)   # Linux raw I/O (root)
+ypar.Port(backend=ypar.BACKEND_INPOUT, base_addr=0x378)     # Windows inpout
 ```
 
 Tune the async-pulse worker's real-time reservation (Linux
 [SCHED_DEADLINE](https://www.kernel.org/doc/html/latest/scheduler/sched-deadline.html); seconds):
 
 ```python
-port = pp.Port(rt_runtime=0.0005, rt_deadline=0.002, rt_period=0.002)
+port = ypar.Port(rt_runtime=0.0005, rt_deadline=0.002, rt_period=0.002)
 print(port.sched)   # {'runtime': 0.0005, 'deadline': 0.002, 'period': 0.002}
 ```
 
 Omit `rt_period` (or leave it 0) and it defaults to the deadline. Leave all
 three unset for the library defaults. Invalid combinations (the rule is
-`0 < runtime <= deadline <= period`) raise `pp.Error` at construction.
+`0 < runtime <= deadline <= period`) raise `ypar.Error` at construction.
 
 Timestamp a trigger against the library's own clock, so your numbers and its
 deadlines share one base:
 
 ```python
-t0 = pp.now()                   # monotonic seconds, a float
+t0 = ypar.now()                   # monotonic seconds, a float
 port.write_data(0x55)
-t1 = pp.now()                   # the onset lies after t0; t1 - t0 bounds it
+t1 = ypar.now()                   # the onset lies after t0; t1 - t0 bounds it
 ```
 
 `ysp.serial.now()` reads the same clock: both libraries build on
@@ -127,9 +127,9 @@ See DIRECT IS PER-THREAD in [ysp/parallel.h](../../../include/ysp/parallel.h).
 
 | | |
 |---|---|
-| `pp.now() -> float` | monotonic seconds from the clock the library times its own deadlines against |
-| `pp.list_ports() -> list[dict]` | enumerate ports (`name`, `backend`, `base_addr`) |
-| `pp.Port(device=None, backend=BACKEND_DEFAULT, base_addr=0, exclusive=False, rt_runtime=0, rt_deadline=0, rt_period=0)` | open a port; the `rt_*` times are seconds |
+| `ypar.now() -> float` | monotonic seconds from the clock the library times its own deadlines against |
+| `ypar.list_ports() -> list[dict]` | enumerate ports (`name`, `backend`, `base_addr`) |
+| `ypar.Port(device=None, backend=BACKEND_DEFAULT, base_addr=0, exclusive=False, rt_runtime=0, rt_deadline=0, rt_period=0)` | open a port; the `rt_*` times are seconds |
 | `port.write_data(value)` / `port.read_data()` | data register |
 | `port.set_data_dir(input)` | data-line direction (bidirectional ports) |
 | `port.pulse(value, width)` | blocking pulse, `width` in seconds (releases the GIL while waiting) |
@@ -142,16 +142,16 @@ The `ASYNC_*` values come from `ysp/rt.h` and mean the same thing in
 `ysp.serial`. `ASYNC_TIME_CONSTRAINT` is the macOS rung, which this library
 never returns.
 
-Errors raise `pp.Error`. Constants: `BACKEND_*`, `ASYNC_*`, `LPT1/2/3`, `STATUS_*`,
+Errors raise `ypar.Error`. Constants: `BACKEND_*`, `ASYNC_*`, `LPT1/2/3`, `STATUS_*`,
 `CONTROL_*`, `DEFAULT_RT_{RUNTIME,DEADLINE,PERIOD}` (seconds). `Port` is a
-context manager (`with pp.Port() as port:`).
+context manager (`with ypar.Port() as port:`).
 
 ## Version
 
 `ysp-parallel` 0.4.0.1 is `ysp/parallel.h` v0.4.0 with binding revision 1,
 the change to seconds. The first three numbers are the header's version; a
 fourth counts changes to the binding alone and goes away when the header's
-version changes. `pp.__version__` gives the same string.
+version changes. `ypar.__version__` gives the same string.
 
 0.4.0.1 breaks the API of 0.4.0. Replace `now_us()` with `now()` (seconds),
 `usec` with `width`, and the `rt_*_ns` arguments with `rt_*`, all in

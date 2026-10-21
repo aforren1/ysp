@@ -215,20 +215,20 @@ def piecewise_curve(ctx, thr):
 
 
 def stair_estimate(s):
-    import ysp.stair as st
-    v = s.estimate(st.EST_REVERSALS)
-    return v if v == v else s.estimate(st.EST_LAST)
+    import ysp.stair as yst
+    v = s.estimate(yst.EST_REVERSALS)
+    return v if v == v else s.estimate(yst.EST_LAST)
 
 
 def run_stair2d(fd, rep, n_trials=N2D, every=5):
     """Interleaved weighted 1-up-1-down staircases at fixed contexts, round
     robin, one per context, as aep_audiometric.c. Scored through the informed
     model (Field2D.shifted)."""
-    import ysp.stair as st
+    import ysp.stair as yst
     u = stream(fd.prob_id, rep, n_trials)
     nc = len(fd.stair_ctx)
-    ss = [st.Staircase(start=fd.stair_start, n_up=1, n_down=1, step_type=st.STEP_LIN,
-                       steps=fd.stair_steps, step_down_scale=st.weighted_scale(fd.target_p),
+    ss = [yst.Staircase(start=fd.stair_start, n_up=1, n_down=1, step_type=yst.STEP_LIN,
+                       steps=fd.stair_steps, step_down_scale=yst.weighted_scale(fd.target_p),
                        min=fd.lo[1], max=fd.hi[1], use_limits=True,
                        stop_trials=n_trials // nc + 2) for _ in range(nc)]
     rows, spent = [], 0.0
@@ -252,10 +252,10 @@ def run_stair2d(fd, rep, n_trials=N2D, every=5):
 
 def run_gp2d(fd, rep, model, acq, n_trials=N2D, every=5, grid=(11, 21), refine=2,
              fit_every=20):
-    import ysp.aep as pg
+    import ysp.aep as yaep
     u = stream(fd.prob_id, rep, n_trials)
     init = fd.lo + (fd.hi - fd.lo) * sobol_init(fd.prob_id, rep, 2, N_INIT)
-    g = pg.GP(lo=list(fd.lo), hi=list(fd.hi), intensity_dim=1, acq=acq,
+    g = yaep.GP(lo=list(fd.lo), hi=list(fd.hi), intensity_dim=1, acq=acq,
               target_p=fd.target_p, grid=list(grid), n_init=N_INIT, fit=True,
               fit_every=fit_every, stop_trials=n_trials, max_trials=n_trials,
               refine_steps=refine, model=model, guess=fd.guess, lapse=fd.lapse)
@@ -268,7 +268,7 @@ def run_gp2d(fd, rep, model, acq, n_trials=N2D, every=5, grid=(11, 21), refine=2
         t0 = time.perf_counter()
         try:
             g.update(x, y)
-        except pg.Numeric:
+        except yaep.Numeric:
             numeric += 1
         spent += time.perf_counter() - t0
         n = t + 1
@@ -396,26 +396,26 @@ def watson_problems():
 
 
 def quest_axes(prob, cfg):
-    import ysp.quest as pq
+    import ysp.quest as yqst
     out = []
     for a in cfg["params"]:
         if isinstance(a, str) and a == "nuis":
-            out.append(pq.values(LAPSES, nuisance=True))
+            out.append(yqst.values(LAPSES, nuisance=True))
         elif isinstance(a, list):
-            out.append(pq.values(a))
+            out.append(yqst.values(a))
         else:
             out.append(float(a))
     return out
 
 
 def make_quest1d(prob, cfg, stop):
-    import ysp.quest as pq
+    import ysp.quest as yqst
     kw = dict(stop_trials=stop)
     if cfg.get("custom"):
         kw.update(pf_batch=normal_batch)
     else:
-        kw.update(pf=pq.PF_GUMBEL)
-    return pq.Quest([prob.stim], quest_axes(prob, cfg), **kw)
+        kw.update(pf=yqst.PF_GUMBEL)
+    return yqst.Quest([prob.stim], quest_axes(prob, cfg), **kw)
 
 
 def slope_scale(prob, cfg):
@@ -423,7 +423,7 @@ def slope_scale(prob, cfg):
 
 
 def run_quest1d(prob, rep, name):
-    import ysp.quest as pq
+    import ysp.quest as yqst
     cfg = prob.quest_cfgs[name]
     q = make_quest1d(prob, cfg, prob.n_trials)
     u = stream(prob.prob_id, rep, prob.n_trials)
@@ -436,8 +436,8 @@ def run_quest1d(prob, rep, name):
         t0 = time.perf_counter()
         q.update(i, k)
         spent += time.perf_counter() - t0
-        mean = q.estimate(pq.EST_MEAN)
-        mode = q.estimate(pq.EST_MODE)
+        mean = q.estimate(yqst.EST_MEAN)
+        mode = q.estimate(yqst.EST_MODE)
         s = cfg["slope"]
         sc = slope_scale(prob, cfg)
         rows.append((t + 1, mean[0], mean[s] * sc if s else float("nan"),
@@ -455,14 +455,14 @@ STAIR_RULES = {
 def run_stair1d(prob, rep, name):
     """Scored against the true level at the rule's own convergence p (for the
     weighted rule that is the threshold)."""
-    import ysp.stair as st
+    import ysp.stair as yst
     r = STAIR_RULES[name]
     kw = dict(start=prob.stair_start, n_up=r["n_up"], n_down=r["n_down"],
-              step_type=st.STEP_LIN, steps=prob.stair_steps, min=prob.lo, max=prob.hi,
+              step_type=yst.STEP_LIN, steps=prob.stair_steps, min=prob.lo, max=prob.hi,
               use_limits=True, stop_trials=prob.n_trials)
     if r.get("weighted"):
-        kw["step_down_scale"] = st.weighted_scale(prob.target_p)
-    s = st.Staircase(**kw)
+        kw["step_down_scale"] = yst.weighted_scale(prob.target_p)
+    s = yst.Staircase(**kw)
     u = stream(prob.prob_id, rep, prob.n_trials)
     rows, spent = [], 0.0
     for t in range(prob.n_trials):
@@ -482,8 +482,8 @@ def stair_truth(prob, name):
     r = STAIR_RULES[name]
     if r.get("weighted"):
         return prob.thr_true
-    import ysp.stair as st
-    return prob.x_at(st.convergence_p(r["n_up"], r["n_down"]))
+    import ysp.stair as yst
+    return prob.x_at(yst.convergence_p(r["n_up"], r["n_down"]))
 
 
 # The slope the psychometric model's probit implies, in the paper's units:
@@ -502,10 +502,10 @@ def equiv_slope(prob, k):
 
 
 def run_gp1d(prob, rep, model, acq, fit_every=10, grid=81):
-    import ysp.aep as pg
+    import ysp.aep as yaep
     u = stream(prob.prob_id, rep, prob.n_trials)
     init = prob.lo + (prob.hi - prob.lo) * sobol_init(prob.prob_id, rep, 1, N_INIT)
-    g = pg.GP(lo=[prob.lo], hi=[prob.hi], acq=acq, target_p=prob.target_p,
+    g = yaep.GP(lo=[prob.lo], hi=[prob.hi], acq=acq, target_p=prob.target_p,
               guess=prob.guess, lapse=prob.lapse, grid=[grid], n_init=N_INIT, fit=True,
               fit_every=fit_every, stop_trials=prob.n_trials, max_trials=prob.n_trials,
               model=model)
@@ -518,12 +518,12 @@ def run_gp1d(prob, rep, model, acq, fit_every=10, grid=81):
         t0 = time.perf_counter()
         try:
             g.update(x, y)
-        except pg.Numeric:
+        except yaep.Numeric:
             numeric += 1
         spent += time.perf_counter() - t0
         try:
             thr = g.threshold()[0]
-        except pg.NoCross:
+        except yaep.NoCross:
             thr = float("nan")
             nocross += 1
         slope = float("nan")
@@ -795,9 +795,9 @@ def notebook_runs(path):
 
 
 def replay_run(cfg_name, est, trials):
-    import ysp.quest as pq
+    import ysp.quest as yqst
     kind, stim_axes, par_axes, K = WATSON_CONFIGS[cfg_name]
-    q = pq.Quest([pq.values(a) for a in stim_axes], [pq.values(a) for a in par_axes],
+    q = yqst.Quest([yqst.values(a) for a in stim_axes], [yqst.values(a) for a in par_axes],
                  pf_batch=pf_watson(kind), n_outcomes=K, stop_trials=100000)
     same = tie = diff = 0
     first_diff = None
@@ -817,7 +817,7 @@ def replay_run(cfg_name, est, trials):
                 first_diff = (t + 1, q.stim_values(i), list(x),
                               q.expected_entropy(i) - q.expected_entropy(j))
         q.update(j, int(k) - 1)
-    mode = q.estimate(pq.EST_MODE)
+    mode = q.estimate(yqst.EST_MODE)
     ok_mode = bool(np.allclose(mode, est, atol=1e-6))
     return dict(n=len(trials), same=same, tie=tie, diff=diff, first_diff=first_diff,
                 mode=mode, est=est, ok_mode=ok_mode, tie_max=tie_max)
@@ -870,9 +870,9 @@ def csf_field(prob_id):
 
 def run_quest_csf(fd, rep, n_trials=N2D, every=5):
     """Watson's spatial CSF example: his grids, his model, entropy selection."""
-    import ysp.quest as pq
-    q = pq.Quest([pq.values(_rng(0, 40, 2)), pq.values(_rng(-50, 0, 2))],
-                 [pq.values(CSF_T), pq.values(CSF_C0), pq.values(CSF_CF)],
+    import ysp.quest as yqst
+    q = yqst.Quest([yqst.values(_rng(0, 40, 2)), yqst.values(_rng(-50, 0, 2))],
+                 [yqst.values(CSF_T), yqst.values(CSF_C0), yqst.values(CSF_CF)],
                  pf_batch=pf_watson("scsf"), stop_trials=n_trials)
     u = stream(fd.prob_id, rep, n_trials)
     rows, spent, params = [], 0.0, {}
@@ -887,8 +887,8 @@ def run_quest_csf(fd, rep, n_trials=N2D, every=5):
         spent += time.perf_counter() - t0
         n = t + 1
         if n % every == 0 or n in fd.marks:
-            mean = q.estimate(pq.EST_MEAN)
-            mode = q.estimate(pq.EST_MODE)
+            mean = q.estimate(yqst.EST_MEAN)
+            mode = q.estimate(yqst.EST_MODE)
             est = lambda cc, e=mean: np.maximum(e[0], e[1] + e[2] * np.asarray(cc))
             mp = fd.shifted(fd.xs, est)
             band = fd.band_mae(fd.shifted(fd.xs_f, est)) if n in fd.marks else float("nan")
@@ -912,9 +912,9 @@ def circ_truth_table():
 
 
 def run_quest_circ(rep):
-    import ysp.quest as pq
+    import ysp.quest as yqst
     kind, stim_axes, par_axes, K = WATSON_CONFIGS["circular categorization"]
-    q = pq.Quest([pq.values(a) for a in stim_axes], [pq.values(a) for a in par_axes],
+    q = yqst.Quest([yqst.values(a) for a in stim_axes], [yqst.values(a) for a in par_axes],
                  pf_batch=pf_watson(kind), n_outcomes=K, stop_trials=CIRC_N)
     truth = circ_truth_table()
     u = stream(CIRC_PROB_ID, rep, CIRC_N)
@@ -929,7 +929,7 @@ def run_quest_circ(rep):
         spent += time.perf_counter() - t0
         n = t + 1
         if n % 4 == 0 or n in CIRC_MARKS:
-            mode = q.estimate(pq.EST_MODE)
+            mode = q.estimate(yqst.EST_MODE)
             # c1 is circular: its marginal mean is not meaningful, the mode is.
             model = np.vstack([circular_p(x, np.array([mode]))[0] for x in CIRC_EVAL])
             dc1 = (mode[1] - CIRC_TRUTH[1] + math.pi) % (2 * math.pi) - math.pi
@@ -939,11 +939,11 @@ def run_quest_circ(rep):
 
 
 def run_gp_circ(rep, acq):
-    import ysp.aep as pg
+    import ysp.aep as yaep
     truth = circ_truth_table()
     u = stream(CIRC_PROB_ID, rep, CIRC_N)
     init = 2 * math.pi * sobol_init(CIRC_PROB_ID, rep, 1, N_INIT)
-    g = pg.GP(lo=[0.0], hi=[2 * math.pi], lik="categorical", n_outcomes=3, acq=acq,
+    g = yaep.GP(lo=[0.0], hi=[2 * math.pi], lik="categorical", n_outcomes=3, acq=acq,
               target_outcome=0, target_p=0.5, candidates=[[x] for x in PI9], n_init=N_INIT,
               fit=True, fit_every=10, stop_trials=CIRC_N, max_trials=CIRC_N)
     rows, spent, numeric = [], 0.0, 0
@@ -955,7 +955,7 @@ def run_gp_circ(rep, acq):
         t0 = time.perf_counter()
         try:
             g.update(x, y)
-        except pg.Numeric:
+        except yaep.Numeric:
             numeric += 1
         spent += time.perf_counter() - t0
         n = t + 1
@@ -1085,14 +1085,14 @@ def build_truth_yaep(x, y, max_n=None):
     """ysp.aep's GP model (RBF ARD, probit), fitted to the trials until the fit
     stops. The binding holds at most MAX_TRIALS trials, so a longer data set is
     cut to its first MAX_TRIALS rows."""
-    import ysp.aep as pg
-    n = min(len(y), max_n or pg.MAX_TRIALS)
-    g = pg.GP(lo=list(CSF6_LO), hi=list(CSF6_HI), intensity_dim=0, target_p=CSF6_TARGET,
+    import ysp.aep as yaep
+    n = min(len(y), max_n or yaep.MAX_TRIALS)
+    g = yaep.GP(lo=list(CSF6_LO), hi=list(CSF6_HI), intensity_dim=0, target_p=CSF6_TARGET,
               n_candidates=64, n_init=0, fit=True, fit_every=0, stop_trials=n, max_trials=n)
     for xi, yi in zip(x[:n], y[:n]):
         try:
             g.update(list(xi), int(yi))
-        except pg.Numeric:
+        except yaep.Numeric:
             pass
     for _ in range(20):
         before = g.log_marginal
@@ -1107,8 +1107,8 @@ def build_truth_yaep(x, y, max_n=None):
     chk = CSF6_LO + (CSF6_HI - CSF6_LO) * qmc.Sobol(6, scramble=True, seed=1).random(512)
     ref = np.frombuffer(g.predict_f_many(chk)[0])
     t["check"] = float(np.max(np.abs(rbf_expansion_mu(chk, t) - ref)))
-    t["source"] = (f"ysp.aep {pg.__version__} GP model, RBF ARD, probit, fitted to the first "
-                   f"{n} of {len(y)} trials (MAX_TRIALS {pg.MAX_TRIALS}); log marginal "
+    t["source"] = (f"ysp.aep {yaep.__version__} GP model, RBF ARD, probit, fitted to the first "
+                   f"{n} of {len(y)} trials (MAX_TRIALS {yaep.MAX_TRIALS}); log marginal "
                    f"{g.log_marginal:.1f}; lengthscales {np.round(h['lengthscale'][:6], 3).tolist()}, "
                    f"outputscale {h['outputscale']:.3f}, mean {h['mean']:.3f}")
     return t
@@ -1214,7 +1214,7 @@ def _predict_chunked(g, xs, chunk=2000):
 
 
 def run_csf6(rep, model, acq, n_trials, cache, truth_kind, n_cand=1000, fit_every=20):
-    import ysp.aep as pg
+    import ysp.aep as yaep
     key = (cache, truth_kind)
     if key not in CSF6_STATE:
         CSF6_STATE[key] = CSF6(csf6_truth(truth_kind, cache))
@@ -1222,7 +1222,7 @@ def run_csf6(rep, model, acq, n_trials, cache, truth_kind, n_cand=1000, fit_ever
     u = stream(CSF6_PROB_ID, rep, n_trials)
     sob = CSF6_LO + (CSF6_HI - CSF6_LO) * sobol_init(CSF6_PROB_ID, rep, 6, 2 ** int(
         math.ceil(math.log2(max(n_trials, 2)))))[:n_trials]
-    g = pg.GP(lo=list(CSF6_LO), hi=list(CSF6_HI), intensity_dim=0, target_p=CSF6_TARGET,
+    g = yaep.GP(lo=list(CSF6_LO), hi=list(CSF6_HI), intensity_dim=0, target_p=CSF6_TARGET,
               acq="lse" if acq == "sobol" else acq, n_candidates=n_cand, n_init=CSF6_N_INIT,
               fit=True, fit_every=fit_every, stop_trials=n_trials, max_trials=n_trials,
               refine_steps=2, model=model, guess=0.5)
@@ -1235,7 +1235,7 @@ def run_csf6(rep, model, acq, n_trials, cache, truth_kind, n_cand=1000, fit_ever
         t0 = time.perf_counter()
         try:
             g.update(x, y)
-        except pg.Numeric:
+        except yaep.Numeric:
             numeric += 1
         spent += time.perf_counter() - t0
         n = t + 1

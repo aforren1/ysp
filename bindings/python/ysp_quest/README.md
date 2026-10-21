@@ -41,9 +41,9 @@ stale copy cannot shadow a newer header. On Linux and macOS the build links
 ## How to run a Psi experiment
 
 ```python
-import ysp.quest as pq
+import ysp.quest as yqst
 
-q = pq.Quest(
+q = yqst.Quest(
     stim=[(-3.0, 0.0, 31)],                    # log10 contrast, 31 points
     params=[(-3.0, 0.0, 61),                   # threshold
             (0.5, 6.0, 12),                    # slope
@@ -56,7 +56,7 @@ while not q.done:
     correct = run_trial(10 ** q.stim_value(i))
     q.update(i, correct)
 
-print(q.estimate(pq.EST_MEAN), q.sd(0))
+print(q.estimate(yqst.EST_MEAN), q.sd(0))
 ```
 
 An axis is one of these:
@@ -74,17 +74,17 @@ For Psi-marginal, give the guess and lapse axes a few points and flag them:
 
 ```python
 params = [(-3.0, 0.0, 61), (0.5, 6.0, 12),
-          pq.values([0.45, 0.475, 0.5, 0.525, 0.55], nuisance=True),
-          pq.values([0.0, 0.015, 0.03, 0.045, 0.06], nuisance=True)]
+          yqst.values([0.45, 0.475, 0.5, 0.525, 0.55], nuisance=True),
+          yqst.values([0.0, 0.015, 0.03, 0.045, 0.06], nuisance=True)]
 ```
 
 For a QUEST prior on the threshold:
 
 ```python
-thr = pq.linspace(-3.0, 0.0, 61)
-params = [pq.linspace(-3.0, 0.0, 61, prior=pq.prior_normal(thr, -1.5, 0.5)),
+thr = yqst.linspace(-3.0, 0.0, 61)
+params = [yqst.linspace(-3.0, 0.0, 61, prior=yqst.prior_normal(thr, -1.5, 0.5)),
           3.5, 0.5, 0.01]
-q = pq.Quest([(-3.0, 0.0, 31)], params, select=pq.SELECT_QUANTILE, stop_trials=40)
+q = yqst.Quest([(-3.0, 0.0, 31)], params, select=yqst.SELECT_QUANTILE, stop_trials=40)
 ```
 
 ## How to use a custom model
@@ -101,7 +101,7 @@ def weibull_batch(stim, params):
     p1 = P[:, 2] + (1 - P[:, 2] - P[:, 3]) * (1 - np.exp(-10.0 ** (P[:, 1] * (x - P[:, 0]))))
     return np.stack([1 - p1, p1], axis=1)   # P*K values, row i outcome k at i*K + k
 
-q = pq.Quest([(-3.0, 0.0, 31)], [(-3.0, 0.0, 61), (0.5, 6.0, 12), 0.5, 0.02],
+q = yqst.Quest([(-3.0, 0.0, 31)], [(-3.0, 0.0, 61), (0.5, 6.0, 12), 0.5, 0.02],
              pf_batch=weibull_batch, stop_trials=60)
 ```
 
@@ -131,9 +131,9 @@ return a neutral value and the handle stays usable.
 ## How to run the inference on a thread
 
 ```python
-q = pq.Quest([(-3.0, 0.0, 31)], params, stop_trials=60)
+q = yqst.Quest([(-3.0, 0.0, 31)], params, stop_trials=60)
 
-with pq.Async(q) as a:                    # start(); stop() on exit
+with yqst.Async(q) as a:                    # start(); stop() on exit
     seq, snap = a.poll()                  # seq 0: the first proposal
     while not snap.done:
         k = run_trial(snap.stim[0])       # your frames
@@ -155,13 +155,13 @@ next frame. See [example.py](example.py).
 import random
 
 gen = random.Random(seed)
-q = pq.Quest(stim, params, rng=gen.random, subset_size=8, stop_trials=100)
+q = yqst.Quest(stim, params, rng=gen.random, subset_size=8, stop_trials=100)
 ...
 snap, gen_state = q.save(), gen.getstate()     # write both to disk
 ...
 gen = random.Random()
 gen.setstate(gen_state)
-q = pq.Quest.load(snap, stim, params, rng=gen.random, subset_size=8, stop_trials=100)
+q = yqst.Quest.load(snap, stim, params, rng=gen.random, subset_size=8, stop_trials=100)
 ```
 
 The resumed session makes the same proposals, and has the same posterior

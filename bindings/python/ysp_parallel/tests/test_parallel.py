@@ -9,13 +9,13 @@ import time
 
 import pytest
 
-import ysp.parallel as pp
+import ysp.parallel as ypar
 
 
 def unopened():
     # __new__ without __init__: a zeroed handle, which the library treats as
     # closed.
-    return pp.Port.__new__(pp.Port)
+    return ypar.Port.__new__(ypar.Port)
 
 
 def test_version_matches_pyproject():
@@ -25,24 +25,24 @@ def test_version_matches_pyproject():
     with open(path, encoding="utf-8") as f:
         m = re.search(r'^version\s*=\s*"([^"]+)"', f.read(), re.M)
     assert m, "no version in pyproject.toml"
-    assert pp.__version__ == m.group(1)
+    assert ypar.__version__ == m.group(1)
 
 
 def test_now_is_seconds_on_one_clock():
-    t0 = pp.now()
+    t0 = ypar.now()
     time.sleep(0.05)
-    t1 = pp.now()
+    t1 = ypar.now()
     assert isinstance(t0, float)
     assert 0.04 < t1 - t0 < 1.0
-    assert not hasattr(pp, "now_us")
+    assert not hasattr(ypar, "now_us")
 
 
 def test_constants_are_seconds():
-    assert pp.DEFAULT_RT_RUNTIME == pytest.approx(0.001)
-    assert pp.DEFAULT_RT_DEADLINE == pytest.approx(0.010)
-    assert pp.DEFAULT_RT_PERIOD == pytest.approx(0.010)
+    assert ypar.DEFAULT_RT_RUNTIME == pytest.approx(0.001)
+    assert ypar.DEFAULT_RT_DEADLINE == pytest.approx(0.010)
+    assert ypar.DEFAULT_RT_PERIOD == pytest.approx(0.010)
     for old in ("DEFAULT_RT_RUNTIME_NS", "DEFAULT_RT_DEADLINE_NS", "DEFAULT_RT_PERIOD_NS"):
-        assert not hasattr(pp, old)
+        assert not hasattr(ypar, old)
 
 
 @pytest.mark.parametrize("kw, exc", [
@@ -54,15 +54,15 @@ def test_constants_are_seconds():
 ])
 def test_open_refuses_bad_times(kw, exc):
     with pytest.raises(exc):
-        pp.Port(**kw)
+        ypar.Port(**kw)
 
 
 @pytest.mark.parametrize("call", ["pulse", "pulse_async"])
 def test_pulse_width_in_seconds(call):
     p = unopened()
-    with pytest.raises(pp.Error):
+    with pytest.raises(ypar.Error):
         getattr(p, call)(0x55, 0.002)
-    with pytest.raises(pp.Error):
+    with pytest.raises(ypar.Error):
         getattr(p, call)(0x55, width=0)
     for bad, exc in ((-0.001, ValueError), (math.inf, ValueError),
                      (math.nan, ValueError), (1e10, OverflowError),
@@ -83,8 +83,8 @@ def test_open_without_a_port():
     # No parallel port on a CI runner or on most machines. With one present
     # the open succeeds, and the effective reservation reads back in seconds.
     try:
-        port = pp.Port(rt_runtime=0.0005, rt_deadline=0.002, rt_period=0.002)
-    except pp.Error:
+        port = ypar.Port(rt_runtime=0.0005, rt_deadline=0.002, rt_period=0.002)
+    except ypar.Error:
         return
     with port:
         s = port.sched

@@ -21,7 +21,7 @@ import random
 import struct
 import sys
 
-import ysp.trials as pt
+import ysp.trials as ytr
 
 CONTRASTS = [0.01, 0.02, 0.04, 0.08, 0.16]
 
@@ -32,9 +32,9 @@ def p_correct(contrast, threshold=0.04, slope=3.0):
 
 
 def constant_stimuli(seed, rng):
-    t = pt.Trials(factors=[("orientation", 2), ("contrast", len(CONTRASTS))], reps=20,
-                  order=pt.ORDER_CONSTRAINED,
-                  constraints=[pt.max_run("orientation", pt.ANY_LEVEL, 3)],
+    t = ytr.Trials(factors=[("orientation", 2), ("contrast", len(CONTRASTS))], reps=20,
+                  order=ytr.ORDER_CONSTRAINED,
+                  constraints=[ytr.max_run("orientation", ytr.ANY_LEVEL, 3)],
                   rng=seed)               # the header's splitmix64; log the seed
     print(t.format_meta(), end="")
     while (ti := t.next()) is not None:
@@ -48,16 +48,16 @@ def constant_stimuli(seed, rng):
 
 def interleaved(seed, rng):
     try:
-        import ysp.stair as st
+        import ysp.stair as yst
     except ImportError:
         print("ysp-stair is not installed; skipping the interleaved example")
         return
-    stairs = [st.Staircase(start=0.3, n_down=n_down, step_type=st.STEP_LOG, steps=[0.2, 0.1],
+    stairs = [yst.Staircase(start=0.3, n_down=n_down, step_type=yst.STEP_LOG, steps=[0.2, 0.1],
                            min=0.001, max=1.0, stop_reversals=8)
               for n_down in (2, 3, 4)]   # 70.7%, 79.4%, 84.1% correct
-    t = pt.Trials(n_conditions=1, reps=10,            # the catch trial
-                  order=pt.ORDER_CONSTRAINED,
-                  constraints=[pt.min_gap(pt.CONDITION, 0, 1)],
+    t = ytr.Trials(n_conditions=1, reps=10,            # the catch trial
+                  order=ytr.ORDER_CONSTRAINED,
+                  constraints=[ytr.min_gap(ytr.CONDITION, 0, 1)],
                   tracks=stairs,                      # a Staircase is a track as is
                   track_rate=0.9, rng=seed, record_size=8)
     print()
@@ -92,6 +92,6 @@ def main():
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except pt.Error as e:
+    except ytr.Error as e:
         print(f"ysp.trials error: {e}", file=sys.stderr)
         sys.exit(1)
