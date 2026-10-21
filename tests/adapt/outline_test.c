@@ -1872,11 +1872,14 @@ static void t11_allocs(void) {
     yol_close(&c);
     /* a fixed arena: no heap; too small is YOL_ERR_FULL, with the size */
     {
-        static double arena[1 << 16];
+        /* yol_open() wants 16-byte alignment, which a double array does
+         * not promise (macOS arm64 CI placed it at 8 mod 16) */
+        static unsigned char raw[(1 << 19) + 16];
+        void* arena = (void*)(((uintptr_t)raw + 15u) & ~(uintptr_t)15u);
         yol_path q;
         int rc;
         memset(&cd, 0, sizeof cd);
-        cd.mem = arena; cd.mem_size = sizeof arena;
+        cd.mem = arena; cd.mem_size = (size_t)1 << 19;
         CHECK(yol_open(&c, &cd));
         yol_path_init(&q, &c);
         CHECK(yol_font_glyph(&c, &f, 2, &q, NULL) == YOL_OK);
