@@ -20,5 +20,8 @@ int main(void) {
     if (yjs_parse(&a, text, sizeof text - 1, NULL, &v, &e) != YJS_OK) return 1;
     if (yjs_int64(yjs_at(yjs_get(v, "b"), 0), &one) != YJS_OK || one != 1) return 2;
     if (yjs_write_mem(v, YJS_WRITE_COMPACT, out, sizeof out) != 21) return 3;
-    return strcmp(out, "{\"a\":\"x\",\"b\":[1,2.5]}") == 0 ? 0 : 4;
+    if (strcmp(out, "{\"a\":\"x\",\"b\":[1,2.5]}") != 0) return 4;
+    /* v0.2.0: a double's canonical text, integer arithmetic only */
+    if (yjs_format_double(0.1 + 0.2, out, YJS_DOUBLE_TEXT) != 19 || strcmp(out, "0.30000000000000004") != 0) return 5;
+    return 0;
 }

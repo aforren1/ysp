@@ -210,13 +210,11 @@ replace = '''        if (c == '"' || c == '\\') {'''
 
 [[mutant]]
 id = "j-24"
-name = "integers written as their text"
+name = "a negative int64 written without its sign"
 test = "json"
-why = "-0 and 0 are one value; the canonical form writes it one way."
-find = '''        if (v->flags & YJS_NUM_I64) {
-            char buf[24];'''
-replace = '''        if (0) {
-            char buf[24];'''
+why = "The int64 path is a fast path beside the respelling (v0.2.0); it must spell what the respelling spells. (Until v0.1.1 this mutant skipped the path, which since v0.2.0 changes no byte.)"
+find = '''            if (v->i < 0) *--s = '-';'''
+replace = '''            (void)s;'''
 
 [[mutant]]
 id = "j-25"
@@ -249,3 +247,108 @@ test = "json"
 why = "max_bytes refuses input before any work."
 find = '''    if (n > max_bytes || n > 0xFFFFFFFEu) return yjs__fail(&p, YJS_ERR_LIMIT, 0, "longer than the size limit");'''
 replace = '''    if (n > 0xFFFFFFFEu) return yjs__fail(&p, YJS_ERR_LIMIT, 0, "longer than the size limit");'''
+
+# --- canonical numbers (v0.2.0) -----------------------------------------------------
+
+[[mutant]]
+id = "j-29"
+name = "the writer writes a number's source text"
+test = "json"
+why = "1.50 and 1.5 would hash differently: the gap (G7) this version closes."
+find = '''            yjs__canon_number(yjs__w_emit, w, v->u.s, v->n);'''
+replace = '''            yjs__out(w, v->u.s, v->n);'''
+
+[[mutant]]
+id = "j-30"
+name = "trailing zeros of a number's text kept"
+test = "json"
+why = "0.0012300 and 0.00123 are one value and need one spelling."
+find = '''    for (b = nc; (b - 1 < ni ? s[ip + b - 1] : s[fp + b - 1 - ni]) == '0'; b--) {}'''
+replace = '''    for (b = nc; b > nc; b--) {}'''
+
+[[mutant]]
+id = "j-31"
+name = "plain form one exponent too far"
+test = "json"
+why = "The switch to an exponent is part of the spelling; 1e21 is 1e+21, not 22 digits."
+find = '''    bool sci = E < YJS_PLAIN_MIN || E > YJS_PLAIN_MAX;'''
+replace = '''    bool sci = E < YJS_PLAIN_MIN || E > YJS_PLAIN_MAX + 1;'''
+
+[[mutant]]
+id = "j-32"
+name = "no '+' in a positive exponent"
+test = "json"
+why = "1e+21 and 1e21 are one value; the spelling fixes one of them."
+find = '''        *--s = E < 0 ? '-' : '+';'''
+replace = '''        if (E < 0) *--s = '-';'''
+
+[[mutant]]
+id = "j-33"
+name = "an exact tie rounds up"
+test = "json"
+why = "Shortest digits halfway between two candidates go to the even one, as Python, V8 and Ryu do."
+find = '''    if (vr_tz && last == 5 && vr % 2u == 0) last = 4;'''
+replace = '''    if (0) last = 4;'''
+
+[[mutant]]
+id = "j-34"
+name = "the half gap below a power of two ignored"
+test = "json"
+why = "Below 2^k the doubles are twice as dense, so fewer digits are wrong there."
+find = '''    mmshift = ieee_m != 0 || ieee_e <= 1;'''
+replace = '''    mmshift = 1;'''
+
+[[mutant]]
+id = "j-35"
+name = "a multiplier's correction dropped"
+test = "json"
+why = "The small tables rebuild each 5^i to 125 bits only with the stored correction."
+find = '''    yjs__add_small(lo, hi, (uint64_t)((yjs__p5_corr[i >> 2] >> ((i & 3u) * 2u)) & 3u));'''
+replace = '''    yjs__add_small(lo, hi, 0u);'''
+
+[[mutant]]
+id = "j-36"
+name = "an inverse multiplier one too small"
+test = "json"
+why = "The inverse powers are rounded up; one less loses digits near the interval's ends."
+find = '''    yjs__add_small(lo, hi, 1u + (uint64_t)((yjs__p5_inv_corr[q >> 2] >> ((q & 3u) * 2u)) & 3u));'''
+replace = '''    yjs__add_small(lo, hi, (uint64_t)((yjs__p5_inv_corr[q >> 2] >> ((q & 3u) * 2u)) & 3u));'''
+
+[[mutant]]
+id = "j-37"
+name = "an odd mantissa's upper bound kept"
+test = "json"
+why = "A decimal on the upper midpoint of an odd mantissa reads back to the next double (ties to even)."
+expect = "survived"
+note = "Equivalent for doubles. The branch runs for e2 in -1..-3 (2^51 to 2^54), where the upper midpoint is v + 1/4, v + 1/2 or v + 1; worked through, the excluded and the included bound give the same quotients by 10 at every step, so the digits do not change. Measured 2026-10-21: the mutant gave Python's text for 300,000 random odd mantissas at biased exponents 1073 to 1077. Ryu keeps the line for its proof; this list keeps it as a control."
+find = '''            else vp--;'''
+replace = '''            else {}'''
+
+[[mutant]]
+id = "j-38"
+name = "the lower bound's trailing zeros not followed"
+test = "json"
+why = "With an even mantissa the lower midpoint itself reads back; skipping it loses shorter digits."
+find = '''    if (vm_tz) {
+        while (vm % 10u == 0) {'''
+replace = '''    if (0) {
+        while (vm % 10u == 0) {'''
+
+[[mutant]]
+id = "j-39"
+name = "exponent limit one past"
+test = "json"
+why = "A canonical exponent of 10 digits would not read back; the reader's limit and the writer's must agree."
+find = '''        if (e > 999999999 || e < -999999999) { *why = "an exponent past 999999999"; return 0; }'''
+replace = '''        if (e > 1000000000 || e < -999999999) { *why = "an exponent past 999999999"; return 0; }'''
+
+[[mutant]]
+id = "j-40"
+name = "-0.0 written with its sign"
+test = "json"
+why = "0 has one spelling; the hash must not depend on how a zero was computed."
+find = '''    if ((bits << 1) == 0) {
+        t[sb.n++] = '0';                 /* -0.0 too */'''
+replace = '''    if ((bits << 1) == 0) {
+        if (bits >> 63) t[sb.n++] = '-';
+        t[sb.n++] = '0';                 /* -0.0 too */'''
