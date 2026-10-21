@@ -628,3 +628,29 @@ test = "outline"
 why = "v0.3.1: moving the piece that continues past the line, not the one that ends there, shifts its next run: a sliver of area along a whole stem."
 find = '        if (ea != eb) v = ea ? b->xb : a->xb;'
 replace = '        if (ea != eb) v = ea ? a->xb : b->xb;'
+
+# v0.4.0: the parameter tables' values and defaults (T12).
+
+[[mutant]]
+id = "pv-01"
+name = "stroke mode values off by one"
+test = "outline"
+why = "v0.4.0: \"inset\" must be YOL_INSET (2); a loader would ask for a mode that does not exist."
+find = '"stroke=0,bold=1,inset=2" },'
+replace = '"stroke=0,bold=1,inset=3" },'
+
+[[mutant]]
+id = "pv-02"
+name = "miter_limit's default 3"
+test = "outline"
+why = "v0.4.0: a zero miter_limit is 4 (SVG's); a designer writing 3 would bevel corners that a zero field miters."
+find = '{ "miter_limit", "f64", 1, 1e9, 4, "",'
+replace = '{ "miter_limit", "f64", 1, 1e9, 3, "",'
+
+[[mutant]]
+id = "pv-03"
+name = "format without values"
+test = "outline"
+why = "v0.4.0: an enum row without values leaves the names in the doc text only."
+find = '"u8=0,u16=1,f32=2,f64=3" },'
+replace = 'NULL },'

@@ -95,5 +95,11 @@ int main(void) {
     ygfx_close(&g);
     yscr_close(&s);
     remove(path);
+    {   /* v0.5.0: values on the enum rows only */
+        const yscr_param* t = yvid_params(&n);
+        int r, k = 0;
+        for (r = 0; t && r < n; r++) k += (t[r].values != NULL) == !strcmp(t[r].type, "enum");
+        if (!t || k != n) return 15;
+    }
     return yvid_params(&n) && n > 0 && yvid_xxh64("", 0, 0) == UINT64_C(0xEF46DB3751D8E999) ? 0 : 14;
 }

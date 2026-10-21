@@ -1,4 +1,4 @@
-/* ysp/screen.h - v0.8.0 - public domain single-header display library
+/* ysp/screen.h - v0.9.0 - public domain single-header display library
  *
  *   The window, the GL ES 3.0 context, the display mode and the swap path
  *   of a stimulus display, with flip at a time: each frame learns the
@@ -1278,8 +1278,11 @@
  *   PARAMETERS
  *   ---------------------------------------------------------------------
  *   yscr_params() returns a table of the desc fields a designer sets:
- *   name, type, range, the value a zero field means, unit and one line of
- *   text.
+ *   name, type, range, the value a zero field means, unit, one line of
+ *   text and, for an enum, its values: "name=value" pairs joined by ',',
+ *   in value order. A name is the C constant's suffix in lower case
+ *   ("dxgi_flip" is YSCR_BACKEND_DXGI_FLIP, "top_left" YSCR_TOP_LEFT).
+ *   backend lists every yscr_backend; open() refuses the stubs (BACKENDS).
  *
  *   ---------------------------------------------------------------------
  *   MEMORY AND THREADS
@@ -1331,6 +1334,15 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.9.0 - PARAMETERS: yscr_param gains a last field, values: for an
+ *          enum row the names and values of its C enum or YSCR_ macro set
+ *          ("top_left=0,top_right=1,..."), NULL for every other row.
+ *          backend, patch.corner and settle list them, and backend lists
+ *          every yscr_backend (min and max cannot say which values exist).
+ *          The doc text no longer lists them. key_dedup_ns's default
+ *          is 5e7 (50 ms, what a zero field means; was 0). ysp/gfx.h's and
+ *          ysp/video.h's tables are yscr_param too. A positional
+ *          initializer of a yscr_param gets values NULL.
  *   v0.8.0 - BACKENDS, SIM on ysp/rt.h's virtual clock (rt.h v0.9.0): the
  *          presenter's sleep to a vblank jumps the clock there, so a
  *          --sim run drops no frame and gives the same records on every
@@ -1794,9 +1806,9 @@
 #define YSP_SCREEN_H_INCLUDED
 
 #define YSCR_VERSION_MAJOR 0
-#define YSCR_VERSION_MINOR 8
+#define YSCR_VERSION_MINOR 9
 #define YSCR_VERSION_PATCH 0
-#define YSCR_VERSION_STRING "0.8.0"
+#define YSCR_VERSION_STRING "0.9.0"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -2944,6 +2956,8 @@ typedef struct yscr_param {
     double      def;      /* the value a zero field means                   */
     const char* unit;     /* "", "px", "ns", "ms", "Hz", "frame"            */
     const char* doc;      /* one line                                       */
+    const char* values;   /* v0.9, "enum": "name=value" pairs joined by ',',
+                           * in value order; NULL for the other types       */
 } yscr_param;
 
 /* The table of desc fields a designer sets; *n gets the count. The pointer,
@@ -10007,42 +10021,44 @@ YSCR_API int yscr_text_input(yscr_screen* s, bool on, int x, int y, int w, int h
 
 YSCR_API const yscr_param* yscr_params(int* n) {
     static const yscr_param table[] = {
-        { "display",         "u32",  0, 4294967295.0, 0, "",      "SDL display id; 0 = the primary display" },
-        { "mode.w",          "i32",  0, 65535, 0, "px",           "mode width; 0 = the desktop mode" },
-        { "mode.h",          "i32",  0, 65535, 0, "px",           "mode height; 0 = the desktop mode" },
-        { "mode.refresh_num","i32",  0, 2147483647.0, 0, "Hz",    "refresh numerator; 0 = the desktop mode" },
-        { "mode.refresh_den","i32",  0, 2147483647.0, 1, "",      "refresh denominator" },
-        { "windowed",        "bool", 0, 1, 0, "",                 "a window instead of borderless fullscreen" },
-        { "window_w",        "i32",  0, 65535, 800, "px",         "window width" },
-        { "window_h",        "i32",  0, 65535, 600, "px",         "window height" },
-        { "backend",         "enum", 0, 8, 0, "",                 "0 auto, 1 dxgi_flip, 2 composition, 7 sim, 8 custom" },
-        { "lead",            "f64", -1, 0.999, 0.5, "frame",      "snap window; -1 = never before the target" },
-        { "display_index",   "u32",  0, 4294967295.0, 0, "",      "display number in the flip records" },
-        { "patch.on",        "bool", 0, 1, 0, "",                 "draw the photodiode patch" },
-        { "patch.size",      "i32",  0, 4096, YSCR_PATCH_DEFAULT_SIZE, "px", "patch side" },
-        { "patch.corner",    "enum", 0, 3, 0, "",                 "0 top left, 1 top right, 2 bottom left, 3 bottom right" },
-        { "show_cursor",     "bool", 0, 1, 0, "",                 "keep the cursor visible in fullscreen" },
-        { "abort_keys.off",  "bool", 0, 1, 0, "",                 "no key combination aborts the frame loop" },
-        { "abort_keys.key",  "u32",  0, 4294967295.0, 27, "",     "SDL keycode of the abort combination; 0 = Esc" },
-        { "abort_keys.mods", "u32",  0, 255, 1, "",               "modifiers held: 1 shift, 2 ctrl, 4 alt, 8 gui, 128 none; 0 = shift" },
-        { "panic",           "bool", 0, 1, 0, "",                 "arm the panic watchdog in fullscreen (Windows)" },
-        { "panic_presses",   "i32",  0, 16, 3, "",                "abort presses that end a hung program" },
-        { "panic_window_ns", "i64",  0, 6e10, 2e9, "ns",          "the time those presses must fall in" },
-        { "panic_grace_ns",  "i64",  0, 6e11, 1e10, "ns",         "no panic this long after the frame loop reported an abort" },
-        { "icon_sdl",        "bool", 0, 1, 0, "",                 "keep SDL's window icon instead of the header's" },
-        { "d3d11_video",     "bool", 0, 1, 0, "",                 "D3D11 device with video support and multithread protection" },
-        { "gamepads",        "bool", 0, 1, 0, "",                 "start SDL's gamepad subsystem and open every gamepad" },
-        { "raw_mice",        "bool", 0, 1, 0, "",                 "read each mouse's Raw Input on a thread: per device, raw-timed (Windows)" },
-        { "key_dedup_ns",    "i64", -1, 1e9, 0, "ns",             "drop a key's second report within this time; 0 = 50 ms, -1 = off" },
-        { "onset_offset_ns", "i64", -1e9, 1e9, 0, "ns",           "added to every onset; from the photodiode test" },
-        { "min_tier",        "i32",  0, 3, 0, "",                 "flag flips whose tier is worse; 0 = off" },
-        { "depth",           "i32",  0, 8, 0, "vblank",           "vblanks from a present to its flip; 0 = from the path, else pinned" },
-        { "depth_learn",     "bool", 0, 1, 0, "",                 "let misses raise the depth (adds latency; not with a pin)" },
-        { "settle",          "enum", 0, 3, 0, "",                 "settling at open: 0 auto (strict fullscreen, warn window), 1 strict, 2 warn, 3 off" },
-        { "settle_flips",    "i32",  0, 64, 6, "frame",           "clean flips in a row that settle the start" },
-        { "settle_min_ns",   "i64", -1, 6e10, 0, "ns",            "settle no sooner; 0 = 2.5 s in a window, none fullscreen; -1 = none" },
-        { "settle_max_ns",   "i64",  0, 6e10, 3000000000.0, "ns", "the settle cap from the open() call; 0 = 3 s fullscreen, 4 s window" },
-        { "sim_period_ns",   "i64",  0, 1e10, 16666667, "ns",     "frame period of the simulated display" }
+        { "display",         "u32",  0, 4294967295.0, 0, "",      "SDL display id; 0 = the primary display", NULL },
+        { "mode.w",          "i32",  0, 65535, 0, "px",           "mode width; 0 = the desktop mode", NULL },
+        { "mode.h",          "i32",  0, 65535, 0, "px",           "mode height; 0 = the desktop mode", NULL },
+        { "mode.refresh_num","i32",  0, 2147483647.0, 0, "Hz",    "refresh numerator; 0 = the desktop mode", NULL },
+        { "mode.refresh_den","i32",  0, 2147483647.0, 1, "",      "refresh denominator", NULL },
+        { "windowed",        "bool", 0, 1, 0, "",                 "a window instead of borderless fullscreen", NULL },
+        { "window_w",        "i32",  0, 65535, 800, "px",         "window width", NULL },
+        { "window_h",        "i32",  0, 65535, 600, "px",         "window height", NULL },
+        { "backend",         "enum", 0, 8, 0, "",                 "the presenting path; open() refuses the stubs glx_oml, wayland, metal",
+          "auto=0,dxgi_flip=1,composition=2,glx_oml=3,wayland=4,metal=5,web=6,sim=7,custom=8" },
+        { "lead",            "f64", -1, 0.999, 0.5, "frame",      "snap window; -1 = never before the target", NULL },
+        { "display_index",   "u32",  0, 4294967295.0, 0, "",      "display number in the flip records", NULL },
+        { "patch.on",        "bool", 0, 1, 0, "",                 "draw the photodiode patch", NULL },
+        { "patch.size",      "i32",  0, 4096, YSCR_PATCH_DEFAULT_SIZE, "px", "patch side", NULL },
+        { "patch.corner",    "enum", 0, 3, 0, "",                 "the patch's corner", "top_left=0,top_right=1,bottom_left=2,bottom_right=3" },
+        { "show_cursor",     "bool", 0, 1, 0, "",                 "keep the cursor visible in fullscreen", NULL },
+        { "abort_keys.off",  "bool", 0, 1, 0, "",                 "no key combination aborts the frame loop", NULL },
+        { "abort_keys.key",  "u32",  0, 4294967295.0, 27, "",     "SDL keycode of the abort combination; 0 = Esc", NULL },
+        { "abort_keys.mods", "u32",  0, 255, 1, "",               "modifiers held: 1 shift, 2 ctrl, 4 alt, 8 gui, 128 none; 0 = shift", NULL },
+        { "panic",           "bool", 0, 1, 0, "",                 "arm the panic watchdog in fullscreen (Windows)", NULL },
+        { "panic_presses",   "i32",  0, 16, 3, "",                "abort presses that end a hung program", NULL },
+        { "panic_window_ns", "i64",  0, 6e10, 2e9, "ns",          "the time those presses must fall in", NULL },
+        { "panic_grace_ns",  "i64",  0, 6e11, 1e10, "ns",         "no panic this long after the frame loop reported an abort", NULL },
+        { "icon_sdl",        "bool", 0, 1, 0, "",                 "keep SDL's window icon instead of the header's", NULL },
+        { "d3d11_video",     "bool", 0, 1, 0, "",                 "D3D11 device with video support and multithread protection", NULL },
+        { "gamepads",        "bool", 0, 1, 0, "",                 "start SDL's gamepad subsystem and open every gamepad", NULL },
+        { "raw_mice",        "bool", 0, 1, 0, "",                 "read each mouse's Raw Input on a thread: per device, raw-timed (Windows)", NULL },
+        { "key_dedup_ns",    "i64", -1, 1e9, 5e7, "ns",           "drop a key's second report within this time; 0 = 50 ms, -1 = off", NULL },
+        { "onset_offset_ns", "i64", -1e9, 1e9, 0, "ns",           "added to every onset; from the photodiode test", NULL },
+        { "min_tier",        "i32",  0, 3, 0, "",                 "flag flips whose tier is worse; 0 = off", NULL },
+        { "depth",           "i32",  0, 8, 0, "vblank",           "vblanks from a present to its flip; 0 = from the path, else pinned", NULL },
+        { "depth_learn",     "bool", 0, 1, 0, "",                 "let misses raise the depth (adds latency; not with a pin)", NULL },
+        { "settle",          "enum", 0, 3, 0, "",                 "settling at open; auto: strict fullscreen, warn in a window",
+          "auto=0,strict=1,warn=2,off=3" },
+        { "settle_flips",    "i32",  0, 64, 6, "frame",           "clean flips in a row that settle the start", NULL },
+        { "settle_min_ns",   "i64", -1, 6e10, 0, "ns",            "settle no sooner; 0 = 2.5 s in a window, none fullscreen; -1 = none", NULL },
+        { "settle_max_ns",   "i64",  0, 6e10, 3000000000.0, "ns", "the settle cap from the open() call; 0 = 3 s fullscreen, 4 s window", NULL },
+        { "sim_period_ns",   "i64",  0, 1e10, 16666667, "ns",     "frame period of the simulated display", NULL }
     };
     if (n) *n = (int)(sizeof table / sizeof table[0]);
     return table;

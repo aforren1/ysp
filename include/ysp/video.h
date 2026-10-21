@@ -1,4 +1,4 @@
-/* ysp/video.h - v0.4.0 - public domain single-header video playback library
+/* ysp/video.h - v0.5.0 - public domain single-header video playback library
  *
  *   A movie as a stimulus. On each display frame the header takes the
  *   frame's PREDICTED ONSET, asks the movie clock for the movie time at
@@ -431,6 +431,11 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.5.0 - PARAMETERS: yvid_params() fills yscr_param's new last field,
+ *          values (ysp/screen.h v0.9.0): light, gpu_path, hw_decode and
+ *          chroma list their C enum's names and values
+ *          ("auto=0,upload=1,shared=2,gpu=3"); every other row has NULL.
+ *          The doc text no longer lists them. Needs ysp/screen.h v0.9.0.
  *   v0.4.0 - VIRTUAL CLOCK: on ysp/rt.h's virtual clock (yrt_virtual_begin,
  *          rt.h v0.9.0) a movie decodes inline, as with
  *          desc.inline_decode: a decode thread on real time fell behind a
@@ -535,9 +540,9 @@
 #define YSP_VIDEO_H_INCLUDED
 
 #define YVID_VERSION_MAJOR 0
-#define YVID_VERSION_MINOR 4
+#define YVID_VERSION_MINOR 5
 #define YVID_VERSION_PATCH 0
-#define YVID_VERSION_STRING "0.4.0"
+#define YVID_VERSION_STRING "0.5.0"
 
 #include "ysp/gfx.h"
 #include "ysp/timeline.h"
@@ -1134,6 +1139,9 @@ YVID_API int      yvid_yuv_to_rgba(const yvid_planes* p, int32_t format, int32_t
 YVID_API size_t   yvid_yuv_rows_bytes(int32_t w);
 YVID_API uint64_t yvid_heap_calls(void);
 
+/* The desc fields a designer sets (yscr_param's shape); *n gets the count.
+ * An enum row's names are its C enum's suffixes in lower case ("dxva" is
+ * YVID_HW_DXVA). */
 YVID_API const yscr_param* yvid_params(int* n);
 
 #ifdef __cplusplus
@@ -5914,19 +5922,23 @@ YVID_API int yvid_describe(const yvid_movie* mv, char* buf, size_t cap) {
 
 YVID_API const yscr_param* yvid_params(int* n) {
     static const yscr_param p[] = {
-        { "ahead", "i32", 0, YVID_MAX_SLOTS - 2, 6, "frame", "frames decoded ahead" },
-        { "preroll", "i32", 0, YVID_MAX_SLOTS - 2, 6, "frame", "frames ready before an ASAP start; 0 = ahead" },
-        { "loop", "bool", 0, 1, 0, "", "frame 0 follows the last; annotations fire again" },
-        { "strict_cadence", "bool", 0, 1, 0, "", "refuse a refresh that is not a multiple of the rate" },
-        { "lead", "f64", -1, 0.999, 0.5, "frame", "the due rule's lead; -1 = never early" },
-        { "light", "enum", 0, 2, 0, "", "AUTO, CODES, EOTF" },
-        { "gpu_path", "enum", 0, 3, 0, "", "AUTO, UPLOAD, SHARED (not built), GPU" },
-        { "hw_decode", "enum", 0, 2, 0, "", "Media Foundation's decoder: AUTO, OFF, DXVA" },
-        { "chroma", "enum", 0, 1, 0, "", "SITED, NEAREST" },
-        { "base", "i32", 0, 7, 0, "", "the movie base on the timeline" },
-        { "min_tier", "i32", 0, 4, 0, "", "flag frames worse than this tier" },
-        { "movie_index", "u32", 0, 4294967295.0, 0, "", "aux of every record" },
-        { "pin_cpu", "i32", 0, 1024, 0, "", "decode thread's CPU; 0 = no pin" },
+        { "ahead", "i32", 0, YVID_MAX_SLOTS - 2, 6, "frame", "frames decoded ahead", NULL },
+        { "preroll", "i32", 0, YVID_MAX_SLOTS - 2, 6, "frame", "frames ready before an ASAP start; 0 = ahead", NULL },
+        { "loop", "bool", 0, 1, 0, "", "frame 0 follows the last; annotations fire again", NULL },
+        { "strict_cadence", "bool", 0, 1, 0, "", "refuse a refresh that is not a multiple of the rate", NULL },
+        { "lead", "f64", -1, 0.999, 0.5, "frame", "the due rule's lead; -1 = never early", NULL },
+        { "light", "enum", 0, 2, 0, "", "how a frame's values reach the screen",
+          "auto=0,codes=1,eotf=2" },
+        { "gpu_path", "enum", 0, 3, 0, "", "how a frame reaches a texture; shared is not built",
+          "auto=0,upload=1,shared=2,gpu=3" },
+        { "hw_decode", "enum", 0, 2, 0, "", "Media Foundation's decoder",
+          "auto=0,off=1,dxva=2" },
+        { "chroma", "enum", 0, 1, 0, "", "4:2:0 chroma upsampling: weighted at the stream's siting, or replicated",
+          "sited=0,nearest=1" },
+        { "base", "i32", 0, 7, 0, "", "the movie base on the timeline", NULL },
+        { "min_tier", "i32", 0, 4, 0, "", "flag frames worse than this tier", NULL },
+        { "movie_index", "u32", 0, 4294967295.0, 0, "", "aux of every record", NULL },
+        { "pin_cpu", "i32", 0, 1024, 0, "", "decode thread's CPU; 0 = no pin", NULL },
     };
     if (n) *n = (int)(sizeof p / sizeof p[0]);
     return p;

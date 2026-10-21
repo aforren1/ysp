@@ -125,7 +125,7 @@ Log both. A row with `ns` replays from it at any magnitude.
 
 ```sh
 uv build --wheel -o dist
-uv run --no-project --with pytest --with numpy --with dist/ysp_rdk-0.2.0.1-cp38-abi3-<platform>.whl pytest tests
+uv run --no-project --with pytest --with numpy --with dist/ysp_rdk-0.3.0-cp38-abi3-<platform>.whl pytest tests
 ```
 
 The tests check the 8 golden digests of `tests/adapt/rdk_test.c` and
@@ -139,10 +139,11 @@ on Linux, macOS arm64 and Windows.
 
 ## Version
 
-0.2.0.1 is `ysp/yrdk.h` v0.2.0 with the change to seconds (2026-10-11).
-The first three numbers are the header's version; a fourth counts
-changes to the binding alone and goes away when the header's version
-changes. `yrdk.__version__` gives the same string, and `yrdk.version()`
+0.3.0 is `ysp/rdk.h` v0.3.0 (2026-10-21: the parameter table's row
+shape; the binding did not change). 0.2.0.1 was `ysp/rdk.h` v0.2.0 with
+the change to seconds (2026-10-11). The first three numbers are the
+header's version; a fourth counts changes to the binding alone and goes
+away when the header's version changes. `yrdk.__version__` gives the same string, and `yrdk.version()`
 gives the header's.
 
 0.2.0.1 breaks the API of 0.2.0: `start()`, `update()`, `replay()` and

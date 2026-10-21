@@ -26,13 +26,13 @@ C11 or C++17, and its top comment is its manual.
 | [device](docs/device.md) | `ydev_` | Boxes and boards on the rig clock, with outputs | 0.4.0 | 1 machine |
 | [rigfile](docs/device.md#how-to-keep-a-rigs-devices-and-latencies-in-its-rig-profile) | `yrig_` | Rig profile: devices per role, loopback results | 0.4.0 | no device |
 | [net](docs/net.md) | `ynet_` | Lab Streaming Layer markers and streams | 0.3.0 | no device |
-| [color](docs/color.md) | `ycol_` | Display calibration and color space conversions | 0.2.0 | tested |
-| [rdk](docs/rdk.md) | `yrdk_` | Random dot kinematograms, reproducible bit for bit | 0.2.0 | tested |
-| [outline](docs/outline.md) | `yol_` | Paths, font glyphs and SVG into curve sets | 0.3.2 | tested |
-| [screen](docs/screen.md) | `yscr_` | Stimulus window, flip at a time, flip records; a web backend | 0.8.0 | 1 machine |
-| [audio](docs/audio.md) | `yau_` | Sound at a time and its capture on the rig clock; Web Audio in a browser | 0.6.1 | 1 machine |
-| [gfx](docs/gfx.md) | `ygfx_` | GL ES 3.0 stimuli: shapes, gratings, gabors, text, frame capture | 0.16.0 | 1 machine |
-| [video](docs/video.md) | `yvid_` | Movies as stimuli, frame by predicted onset | 0.4.0 | 1 machine |
+| [color](docs/color.md) | `ycol_` | Display calibration and color space conversions | 0.3.0 | tested |
+| [rdk](docs/rdk.md) | `yrdk_` | Random dot kinematograms, reproducible bit for bit | 0.3.0 | tested |
+| [outline](docs/outline.md) | `yol_` | Paths, font glyphs and SVG into curve sets | 0.4.0 | tested |
+| [screen](docs/screen.md) | `yscr_` | Stimulus window, flip at a time, flip records; a web backend | 0.9.0 | 1 machine |
+| [audio](docs/audio.md) | `yau_` | Sound at a time and its capture on the rig clock; Web Audio in a browser | 0.7.0 | 1 machine |
+| [gfx](docs/gfx.md) | `ygfx_` | GL ES 3.0 stimuli: shapes, gratings, gabors, text, frame capture | 0.17.0 | 1 machine |
+| [video](docs/video.md) | `yvid_` | Movies as stimuli, frame by predicted onset | 0.5.0 | 1 machine |
 
 Each header is `include/ysp/<name>.h`; macros use the uppercase prefix
 (`YRT_`). Status: **tested** is pure computation, checked by tests;

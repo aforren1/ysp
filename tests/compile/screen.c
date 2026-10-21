@@ -85,5 +85,11 @@ int main(void) {
     d.backend = YSCR_BACKEND_WEB;   /* Emscripten only: refused with a message */
     if (yscr_open(&s, &d) || !strstr(yscr_error(&s), "not implemented")) return 14;
 #endif
+    {   /* v0.9.0: values, the last field; set on the enum rows only */
+        const yscr_param* t = yscr_params(&n);
+        int r, k = 0;
+        for (r = 0; t && r < n; r++) k += (t[r].values != NULL) == !strcmp(t[r].type, "enum");
+        if (!t || k != n) return 15;
+    }
     return yscr_params(&n) && n > 0 ? 0 : 4;
 }

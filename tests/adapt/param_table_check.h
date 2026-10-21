@@ -1,15 +1,24 @@
-/* param_table_check.h - the checks that the parameter tables of ysp/stair.h,
- * ysp/quest.h and ysp/aep.h share (yst_params(), yqst_params(),
- * yaep_params()). The three tables have one shape; a test copies each row
- * into a ptc_row and gives the list of desc fields it expects, by offset, so
- * a row is checked against a real field and not against its own text.
+/* param_table_check.h - the checks that the parameter tables of the ysp
+ * headers share. Every table has one row shape (name, type, min, max, def,
+ * unit, doc, values); a test copies each row into a ptc_row and gives the
+ * list of fields it expects, by offset, so a row is checked against a real
+ * field and not against its own text.
  *
- * Included by tests/adapt/stair_test.c, quest_test.c and aep_test.c after
- * their header. The caller supplies ptc_fail(line, message).
+ * The adaptive headers (yst_params(), yqst_params(), yaep_params()) use
+ * ptc_field and ptc_check_row(), whose enums run 0, 1, 2, ... The rig
+ * headers (audio, screen, color, outline, video, rdk, gfx's desc) use
+ * ptc_slot and ptc_check_slots(), which take any field width. Both check
+ * an enum row's values against the test's own names of the C enum.
+ * ptc_values_parse() is the rule for the values of every table, and
+ * tests/adapt/param_tables_test.c applies it to all of them.
+ *
+ * Included by the tests after their header. The caller supplies
+ * ptc_fail(line, message).
  */
 #ifndef YSP_PARAM_TABLE_CHECK_H
 #define YSP_PARAM_TABLE_CHECK_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
@@ -186,6 +195,175 @@ PTC_INLINE void ptc_set(void* base, const ptc_field* f, double v) {
 
 PTC_INLINE int ptc_scalar(const ptc_field* f) {
     return f->kind == 'd' || f->kind == 'i' || f->kind == 'u' || f->kind == 'b' || f->kind == 'e';
+}
+
+/* --- the values text, for every table ------------------------------------ */
+
+/* "name=value,name=value,...": a name is [a-z][a-z0-9_]* (never a number,
+ * so a loader can tell a name from a value), no name twice, the values
+ * integers in increasing order. v gets up to cap values. Returns the
+ * count, or -1 and *why when the text breaks the rule. */
+PTC_INLINE int ptc_values_parse(const char* text, long* v, int cap, const char** why) {
+    const char* s = text;
+    int k = 0;
+    long prev = 0;
+    *why = "";
+    if (!s || !*s) { *why = "empty"; return -1; }
+    for (;;) {
+        const char* name = s;
+        const char* q;
+        size_t len;
+        long n = 0;
+        int neg = 0, digits = 0;
+        if (!(*s >= 'a' && *s <= 'z')) { *why = "a name starts with a lower-case letter"; return -1; }
+        while ((*s >= 'a' && *s <= 'z') || (*s >= '0' && *s <= '9') || *s == '_') s++;
+        len = (size_t)(s - name);
+        if (*s != '=') { *why = "a name is [a-z][a-z0-9_]* and then '='"; return -1; }
+        s++;
+        if (*s == '-') { neg = 1; s++; }
+        while (*s >= '0' && *s <= '9') { n = n * 10 + (*s - '0'); s++; digits++; }
+        if (!digits || digits > 9) { *why = "a value is an integer"; return -1; }
+        if (neg) n = -n;
+        if (k > 0 && n <= prev) { *why = "the values are not increasing"; return -1; }
+        /* no name twice: the earlier pairs are well formed, so walk them */
+        for (q = text; q < name;) {
+            const char* e = q;
+            while (*e != '=') e++;
+            if ((size_t)(e - q) == len && memcmp(q, name, len) == 0) { *why = "a name twice"; return -1; }
+            while (*e != ',') e++;
+            q = e + 1;
+        }
+        if (k < cap) v[k] = n;
+        prev = n;
+        k++;
+        if (*s == '\0') return k;
+        if (*s != ',') { *why = "pairs are joined by ','"; return -1; }
+        s++;
+    }
+}
+
+/* The text is name_of's enum: every value 0..63 that name_of names is
+ * listed under that name, and nothing else is. name_of is a switch on the
+ * C enum without a default, so gcc and clang -Wall -Werror stop the build
+ * when the enum gains a value. */
+PTC_INLINE int ptc_values_are(const char* text, const char* (*name_of)(int)) {
+    long v[64];
+    const char* why;
+    const char* s = text;
+    int k = ptc_values_parse(text, v, 64, &why), i, want = 0;
+    if (k < 0 || k > 64) return 0;
+    for (i = 0; i < 64; i++) want += name_of(i) != NULL;
+    if (want != k) return 0;
+    for (i = 0; i < k; i++) {
+        const char* eq = strchr(s, '=');
+        const char* nm = v[i] >= 0 && v[i] < 64 ? name_of((int)v[i]) : NULL;
+        if (!nm || strlen(nm) != (size_t)(eq - s) || memcmp(nm, s, (size_t)(eq - s)) != 0) return 0;
+        s = strchr(eq, ',');
+        s = s ? s + 1 : eq;
+    }
+    return 1;
+}
+
+/* --- rows of any field width (the rig headers) --------------------------- */
+
+/* A field the test knows: the row name, the field's place in its struct,
+ * and for an enum the test's names of the C enum's values. */
+typedef struct ptc_slot {
+    const char* name;
+    size_t      off, size;
+    const char* (*name_of)(int);
+} ptc_slot;
+
+/* Whether a field of size bytes holds the type; an enum is a C enum or an
+ * integer field that holds one: 1, 2 or 4 bytes. */
+PTC_INLINE int ptc_type_fits(const char* type, size_t size) {
+    if (!type) return 0;
+    if (!strcmp(type, "bool")) return size == sizeof(bool);
+    if (!strcmp(type, "u8") || !strcmp(type, "i8")) return size == 1;
+    if (!strcmp(type, "u16") || !strcmp(type, "i16")) return size == 2;
+    if (!strcmp(type, "u32") || !strcmp(type, "i32") || !strcmp(type, "f32")) return size == 4;
+    if (!strcmp(type, "u64") || !strcmp(type, "i64") || !strcmp(type, "f64")) return size == 8;
+    if (!strcmp(type, "enum")) return size == 1 || size == 2 || size == 4;
+    if (!strcmp(type, "str")) return size == sizeof(const char*);
+    return 0;
+}
+
+/* Every row names one field the test lists, of the row's type, with its
+ * text and an ordered range around the default; it has values exactly when
+ * it is an enum, and then they are the C enum's, with min and max the
+ * first and last value. Every field has one row. */
+PTC_INLINE void ptc_check_slots(const ptc_row* rows, int n, const ptc_slot* f, int nf) {
+    char msg[256];
+    int i, j, seen;
+    for (i = 0; i < n; i++) {
+        const ptc_row* r = &rows[i];
+        const ptc_slot* s = NULL;
+        int is_enum = r->type && strcmp(r->type, "enum") == 0;
+        for (j = 0; j < nf; j++)
+            if (r->name && strcmp(f[j].name, r->name) == 0) s = &f[j];
+        if (!s) {
+            snprintf(msg, sizeof msg, "row %s names no field", r->name ? r->name : "(null)");
+            ptc_fail(__LINE__, msg);
+            continue;
+        }
+        if (!ptc_type_fits(r->type, s->size)) {
+            snprintf(msg, sizeof msg, "row %s: type %s, the field has %d bytes", r->name,
+                     r->type ? r->type : "(null)", (int)s->size);
+            ptc_fail(__LINE__, msg);
+        }
+        if (!r->unit || !r->doc || !r->doc[0]) {
+            snprintf(msg, sizeof msg, "row %s: unit or doc missing", r->name);
+            ptc_fail(__LINE__, msg);
+        }
+        if (!(r->min <= r->def && r->def <= r->max)) {
+            snprintf(msg, sizeof msg, "row %s: min %g, def %g, max %g", r->name, r->min, r->def, r->max);
+            ptc_fail(__LINE__, msg);
+        }
+        if (is_enum != (s->name_of != NULL)) {
+            snprintf(msg, sizeof msg, "row %s: type %s, but the test %s the field an enum", r->name,
+                     r->type ? r->type : "(null)", s->name_of ? "calls" : "does not call");
+            ptc_fail(__LINE__, msg);
+        } else if (is_enum) {
+            long v[64];
+            const char* why;
+            int k = ptc_values_parse(r->values, v, 64, &why);
+            if (k < 1 || k > 64 || !ptc_values_are(r->values, s->name_of) || r->min != (double)v[0] ||
+                r->max != (double)v[k - 1]) {
+                snprintf(msg, sizeof msg, "row %s: values \"%s\" are not its enum's, or min %g and max %g are not their ends",
+                         r->name, r->values ? r->values : "(null)", r->min, r->max);
+                ptc_fail(__LINE__, msg);
+            }
+        } else if (r->values) {
+            snprintf(msg, sizeof msg, "row %s: values set on a %s", r->name, r->type ? r->type : "(null)");
+            ptc_fail(__LINE__, msg);
+        }
+    }
+    for (j = 0; j < nf; j++) {
+        seen = 0;
+        for (i = 0; i < n; i++)
+            if (rows[i].name && strcmp(rows[i].name, f[j].name) == 0) seen++;
+        if (seen != 1) {
+            snprintf(msg, sizeof msg, "field %s has %d rows", f[j].name, seen);
+            ptc_fail(__LINE__, msg);
+        }
+    }
+}
+
+/* A field as a double, read by the row's type: what open made of a zero
+ * field. */
+PTC_INLINE double ptc_read(const void* base, const ptc_slot* s, const char* type) {
+    const unsigned char* b = (const unsigned char*)base + s->off;
+    if (!strcmp(type, "f32")) { float x; memcpy(&x, b, 4); return x; }
+    if (!strcmp(type, "f64")) { double x; memcpy(&x, b, 8); return x; }
+    if (!strcmp(type, "bool")) { bool x; memcpy(&x, b, sizeof x); return x ? 1.0 : 0.0; }
+    if (s->size == 1) return *b;
+    if (s->size == 2) { unsigned short x; memcpy(&x, b, 2); return x; }
+    if (s->size == 4) {
+        if (!strcmp(type, "u32")) { unsigned int x; memcpy(&x, b, 4); return x; }
+        { int x; memcpy(&x, b, 4); return x; }
+    }
+    if (!strcmp(type, "u64")) { unsigned long long x; memcpy(&x, b, 8); return (double)x; }
+    { long long x; memcpy(&x, b, 8); return (double)x; }
 }
 
 #endif

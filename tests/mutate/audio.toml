@@ -561,3 +561,37 @@ test = "audio"
 why = "In DUPLEX each block hands the input its frames first; without it the input's frame count stands still."
 find = '''    if (v->cap_host) yau_capture_block(v->cap_host, v->buf, v->period, &tk);'''
 replace = '''    (void)0;'''
+
+# v0.7.0: the parameter table's values (test_params).
+
+[[mutant]]
+id = "pv-01"
+name = "backend lists seven of its eight values"
+test = "audio"
+why = "v0.7.0: a loader would refuse \"custom\", a backend the header has."
+find = '"auto=0,wasapi=1,coreaudio=2,alsa=3,pulse=4,web=5,null=6,custom=7" },'
+replace = '"auto=0,wasapi=1,coreaudio=2,alsa=3,pulse=4,web=5,null=6" },'
+
+[[mutant]]
+id = "pv-02"
+name = "format.sample without values"
+test = "audio"
+why = "v0.7.0: an enum row without values leaves the names in the doc text only, where no loader reads them."
+find = '"project resolution", "f32=0,s16=1,s24=2" },'
+replace = '"project resolution", NULL },'
+
+[[mutant]]
+id = "pv-03"
+name = "stream.preroll's default 0"
+test = "audio"
+why = "v0.7.0: a zero preroll waits for a quarter of the ring; a designer would show 0 frames."
+find = '{ "stream.preroll",  "i64",  -1, 1e9, 12000, "frame",'
+replace = '{ "stream.preroll",  "i64",  -1, 1e9, 0, "frame",'
+
+[[mutant]]
+id = "pv-04"
+name = "values on a bool"
+test = "audio"
+why = "v0.7.0: values belong to enum rows only; a loader would take names for a bool."
+find = '"WASAPI exclusive mode; silences every other program", NULL },'
+replace = '"WASAPI exclusive mode; silences every other program", "off=0,on=1" },'

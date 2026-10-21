@@ -1153,3 +1153,60 @@ test = "screen"
 why = "v0.8.0: a log must say its records are on the virtual clock, or a dry run reads as a measurement."
 find = '''                    yrt_is_virtual() ? " clock=virtual" : "", s->caps.mode.w, s->caps.mode.h,'''
 replace = '''                    "", s->caps.mode.w, s->caps.mode.h,'''
+
+# v0.9.0: the parameter table's values (test_params), and the table across
+# every header (param_tables_test.c).
+
+[test.tables]
+source = "tests/adapt/param_tables_test.c"
+compiler = "msvc"
+flags = ["/O1", "/W3", "/D_CRT_SECURE_NO_WARNINGS"]
+timeout = 120
+
+[[mutant]]
+id = "pv-01"
+name = "backend without its stubs"
+test = "screen"
+why = "v0.9.0: the values are the C enum; min and max cannot show that 3 to 6 exist, so the list must."
+find = '"auto=0,dxgi_flip=1,composition=2,glx_oml=3,wayland=4,metal=5,web=6,sim=7,custom=8" },'
+replace = '"auto=0,dxgi_flip=1,composition=2,web=6,sim=7,custom=8" },'
+
+[[mutant]]
+id = "pv-02"
+name = "corner names swapped"
+test = "screen"
+why = "v0.9.0: \"top_right\" must be YSCR_TOP_RIGHT, or the patch lands in the corner the photodiode is not on."
+find = '"top_left=0,top_right=1,bottom_left=2,bottom_right=3" },'
+replace = '"top_left=0,bottom_left=1,top_right=2,bottom_right=3" },'
+
+[[mutant]]
+id = "pv-03"
+name = "key_dedup_ns's default 0"
+test = "screen"
+why = "v0.9.0: a zero field filters key repeats within 50 ms; a designer showing 0 would suggest no filter."
+find = '{ "key_dedup_ns",    "i64", -1, 1e9, 5e7, "ns",'
+replace = '{ "key_dedup_ns",    "i64", -1, 1e9, 0, "ns",'
+
+[[mutant]]
+id = "pv-04"
+name = "settle without off"
+test = "screen"
+why = "v0.9.0: a loader would refuse \"off\", which YSCR_SETTLE_OFF has."
+find = '"auto=0,strict=1,warn=2,off=3" },'
+replace = '"auto=0,strict=1,warn=2" },'
+
+[[mutant]]
+id = "pv-05"
+name = "a backend name twice"
+test = "tables"
+why = "v0.9.0: the rule across every table: a name maps to one value, or a loader picks either."
+find = '"auto=0,dxgi_flip=1,composition=2,glx_oml=3,wayland=4,metal=5,web=6,sim=7,custom=8" },'
+replace = '"auto=0,dxgi_flip=1,composition=2,glx_oml=3,wayland=4,metal=5,web=6,web=7,custom=8" },'
+
+[[mutant]]
+id = "pv-06"
+name = "settle's default not a value"
+test = "tables"
+why = "v0.9.0: the rule across every table: an enum's default is one of its values."
+find = '''        { "settle",          "enum", 0, 3, 0, "",'''
+replace = '''        { "settle",          "enum", 0, 3, 0.5, "",'''

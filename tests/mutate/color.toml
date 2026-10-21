@@ -298,3 +298,21 @@ test = "color"
 why = "v0.2: ycol_ctx_close() empties the context, so a closed context refuses conversions instead of using stale matrices."
 find = '    if (cx) memset(cx, 0, sizeof *cx);'
 replace = '    (void)cx;'
+
+# v0.3.0: the parameter table's values (test_params).
+
+[[mutant]]
+id = "pv-01"
+name = "cones lists one of its two values"
+test = "color"
+why = "v0.3.0: a loader would refuse \"ss10\", cone fundamentals the header has."
+find = '"ss2=0,ss10=1" },'
+replace = '"ss2=0" },'
+
+[[mutant]]
+id = "pv-02"
+name = "adapt without values"
+test = "color"
+why = "v0.3.0: an enum row without values leaves the names in the doc text only."
+find = '"none=0,bradford=1" },'
+replace = 'NULL },'

@@ -3949,11 +3949,9 @@ floats, and nothing listed them or their values.
 | **`values` added as the last field of `ygfx_param`, and a new table `ygfx_enum_params()` of that type** (chosen) | One row type for every gfx table, with `offset` and `kinds`. `values` is last, as in the shared shape, so its first seven fields are the shared shape's. Code that reads the tables compiles unchanged. The float tables keep their indices and their meaning | `ygfx_param` grew 8 bytes (an ABI change, so a minor version). A positional initializer of a `ygfx_param` outside the header gets `values` NULL, and g++ `-Wextra` warns about it; none exists in the repository |
 
 `ygfx_desc_params()` (the gfx's own desc: `units`, `dither`, `output`,
-`stereo`, `cones`) returns `yscr_param`, ysp/screen.h's struct, which has
-no `values`. Its enum values stay in the doc text. Giving them a `values`
-string needs `yscr_param` to grow the field (ysp/screen.h's decision) or a
-second gfx call; neither is in this version. That desc is the rig's, not a
-stimulus's, so a definition does not set it.
+`stereo`, `cones`) returns `yscr_param`, ysp/screen.h's struct, which had
+no `values` in this version, so its enum values stayed in the doc text.
+v0.17.0 gives them `values` (below).
 
 ### The rows
 
@@ -4015,3 +4013,30 @@ Checked on 2026-10-21: 21 rows, 46 row and kind pairs, with MinGW-w64
 gcc 16.1 (`-Werror`), MSVC 19.44 (`msvc-full`, ctest 89 of 89) and gcc
 11.4 on WSL2; the CI `--sim` list passes. Mutants `en-01` to `en-08`
 (CPU half only, `YGFX_TEST_PARTS=none`) caught, 8 of 8.
+
+## v0.17.0: values in the desc table
+
+Every ysp parameter table has one row shape: `name`, `type`, `min`, `max`, `def`, `unit`, `doc`, `values` ([conventions.md](conventions.md), "Parameter tables"; gap G6 of [experiment_format.md](experiment_format.md)). ysp/screen.h v0.9.0 gave `yscr_param` its `values`, so
+`ygfx_desc_params()` fills it:
+
+| Row | values |
+|---|---|
+| `units` | `px=0,deg=1` |
+| `dither` | `none=0,ordered=1,noise=2` |
+| `output` | `out_8=0,out_10=1,out_mono_pp=2,out_color_pp=3` |
+| `stereo` | `mono=0,side_by_side=1,row_interleaved=2,frame_sequential=3` |
+| `cones` | `ss2=0,ss10=1` (ysp/color.h's `ycol_cones`) |
+
+`output` and `stereo` listed 0 only, with `max` 0, because `open()`
+takes `OUT_8` and `MONO` only. Now they list every value of the C enum
+and `max` is the last one; the doc says what opens. The list follows the
+C enum, as `backend`'s in ysp/screen.h does.
+`output`'s names keep `out_`: the enum's suffix after `OUT_` is `8` or
+`10`, and a name never starts with a digit, so that a loader can tell a
+name from a number.
+
+`test_desc_params()` in the CPU half of `tests/adapt/gfx_test.c` checks
+each row against its `ygfx_desc` field and the names against `switch`es
+without a `default`, and opens a gfx on a SIM screen with the null
+backend and a zero desc: `max_draws` is 1024 there, the other defaults
+are 0. 2 of 2 new mutants killed (`tests/mutate/gfx.toml`, pv-).

@@ -143,5 +143,33 @@ follows.
   and comparisons: why a header looks the way it does and how it measured
   against other toolboxes, never what the header already says. Code comments
   say why, not how.
+- **Parameter tables.** A header whose desc a definition or a designer
+  sets exports a table of its fields (`y<x>_params()`; rig_spec.md,
+  principle 8). The player's loader checks a definition's keys and values
+  against it, and the designer builds its panels from it. Every row has
+  one shape, read by field name:
+
+  | Field | Meaning |
+  |---|---|
+  | `name` | The field, dotted for a nested one (`patch.corner`), with an index for an array element (`white[0]`) |
+  | `type` | `bool`, `u8` to `u64`, `i8` to `i64`, `f32`, `f64`, `str` or `enum`, or one of them with `[]` for an array |
+  | `min`, `max` | The inclusive range |
+  | `def` | The value that a zero field means, with every other field at its default (`key_dedup_ns` 5e7: a zero filters 50 ms) |
+  | `unit`, `doc` | The unit (`""` for none) and one line of text |
+  | `values` | For `enum` and `enum[]`: "name=value" pairs joined by `,`, in value order (`"auto=0,strict=1,warn=2,off=3"`). NULL for every other type |
+
+  A name in `values` is the C constant's suffix in lower case
+  (`YSCR_BACKEND_DXGI_FLIP` is `dxgi_flip`), starts with a letter (so a
+  loader can tell a name from a number: ysp/gfx.h's `out_8`), and occurs
+  once; the values increase, `def` is one of them, and each is inside
+  `min` and `max`. `values` lists every value of the C enum, also a value
+  that `open()` refuses on this platform or in this version (a stub
+  backend, a Bits# output): min and max cannot show the holes, and the
+  doc says what opens. Some tables have more fields (`offset`, `kinds`);
+  `values` is then after them, which a reader by field name does not see.
+  Each header's test checks its rows against its desc fields and its C
+  enums (a `switch` without `default`, so `-Wall -Werror` stops the build
+  when an enum gains a value), and `tests/adapt/param_tables_test.c`
+  checks every table against this rule.
 - **Timing.** Anything that claims a latency number measures it. Each header
   says how.

@@ -37,5 +37,11 @@ int main(void) {
     memset(&s, 0, sizeof s);
     g_api.cset_close(&s);   /* safe on zeroed handles */
     g_api.close(&c);
+    {   /* v0.4.0: values, after offset; set on the enum rows only */
+        int n = 0, i, k = 0;
+        const yol_param* t = yol_stroke_params(&n);
+        for (i = 0; t && i < n; i++) k += (t[i].values != NULL) == !strcmp(t[i].type, "enum");
+        if (!t || k != n || !t[1].values) return 2;
+    }
     return yol_version()[0] == '0' && g_api.error(&c)[0] == '\0' ? 0 : 1;
 }

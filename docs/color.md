@@ -555,6 +555,23 @@ per-frame one.
 | colour-science | `source_to_target` names; an explicit white; one `convert` entry; its data and functions as the test reference | path-finding through a conversion graph with hidden adaptation defaults; a global domain-range scale |
 | Color.js, culori | gamut mapping named by space and channel; `inGamut` and `displayable` as plain queries; the hex constructor | CSS Color 4's final clip; CSS `lab()`'s D50 white |
 
+## Enum values in the parameter table (v0.3.0)
+
+Every ysp parameter table has one row shape: `name`, `type`, `min`, `max`, `def`, `unit`, `doc`, `values` ([conventions.md](conventions.md), "Parameter tables"; gap G6 of [experiment_format.md](experiment_format.md)). `ycol_param` gained `values` after `offset`: `cones` lists
+`ss2=0,ss10=1` and `adapt` lists `none=0,bradford=1`; the other rows have
+NULL. The first seven fields are the shared shape's, and a reader by
+field name does not see that `offset` sits between `doc` and `values`.
+Moving `offset` to the end instead would change it for every reader
+that knows it, for no gain.
+
+The test (`test_params()` in `tests/adapt/color_test.c`) checks every
+row against the `ycol_ctx_desc` field at its offset, the names against
+`switch`es on `ycol_cones` and `ycol_adapt` without a `default`, every
+default (all 0: a value, or the display's white and the relative D65
+scale the doc names) against a context opened with a zero desc, and that
+a context opened with the defaults written in has the zero desc's id.
+2 of 2 new mutants killed (`tests/mutate/color.toml`, pv-). No conversion changed.
+
 ## Bindings
 
 ### Python: `ysp-color`, module `ysp.color`

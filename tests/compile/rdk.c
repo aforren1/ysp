@@ -43,5 +43,10 @@ int main(void) {
     if (g_api.write(&f, &o) != 50 || !(age[0] >= 0.0f)) return 1;
     g_api.close(&f);
     g_api.close(&f);
+    {   /* v0.3.0: values, after offset; no enum row, so NULL in each */
+        int n = 0;
+        const yrdk_param* t = yrdk_params(&n);
+        if (!t || n != 3 || t[0].values || t[1].values || t[2].values) return 1;
+    }
     return yrdk_version()[0] == '0' ? 0 : 1;
 }

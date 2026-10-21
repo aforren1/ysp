@@ -1,4 +1,4 @@
-/* ysp/outline.h - v0.3.2 - public domain single-header outline builder:
+/* ysp/outline.h - v0.4.0 - public domain single-header outline builder:
  *   paths, font outlines, overlap removal, strokes, exact alpha and curve
  *   sets for ysp/gfx.h
  *
@@ -307,6 +307,13 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.4.0 - Parameter tables: yol_param gains a last field, values, after
+ *          offset: for an enum row the C enum's names and values
+ *          ("round=0,miter=1,bevel=2"), NULL for every other row. join,
+ *          cap, mode and format list them; the doc text no longer does.
+ *          The first seven fields are the shared row shape of every ysp
+ *          table; offset sits between doc and values, which a reader by
+ *          field name does not see. No output changed.
  *   v0.3.2 - Fixed on Linux: this header sets ysp/rt.h's feature-test
  *          macro (_DEFAULT_SOURCE, unless a feature macro is set) before
  *          its system headers. Included before ysp/gfx.h, as gfx's TEXT
@@ -414,9 +421,9 @@ extern "C" {
 #endif
 
 #define YOL_VERSION_MAJOR  0
-#define YOL_VERSION_MINOR  3
-#define YOL_VERSION_PATCH  2
-#define YOL_VERSION_STRING "0.3.2"
+#define YOL_VERSION_MINOR  4
+#define YOL_VERSION_PATCH  0
+#define YOL_VERSION_STRING "0.4.0"
 
 /* YOL_VERSION_STRING, as compiled into the implementation. */
 YOL_API const char* yol_version(void);
@@ -743,8 +750,14 @@ typedef struct yol_param {
     const char* unit;
     const char* doc;
     uint32_t    offset;       /* in the desc                                     */
+    const char* values;       /* v0.4, "enum": "name=value" pairs joined by ',',
+                               * in value order; NULL otherwise. After offset,
+                               * so the shared row shape's fields are name to
+                               * doc and values                                */
 } yol_param;
 
+/* An enum row's names are its C enum's suffixes in lower case ("miter" is
+ * YOL_JOIN_MITER, "bold" YOL_BOLD, "f32" YOL_ALPHA_F32). */
 YOL_API const yol_param* yol_stroke_params(int* n);
 YOL_API const yol_param* yol_raster_params(int* n);
 YOL_API const yol_param* yol_cset_params(int* n);
@@ -4530,32 +4543,36 @@ static int yol__cset_add_font(yol_cset* s, const yol_font* f, const uint32_t* gl
 /* --- parameter tables -------------------------------------------------------- */
 
 static const yol_param yol__stroke_params[] = {
-    { "width", "f64", 0, 1e9, 0, "path units", "stroke width, > 0 (a glyph path is in em)", (uint32_t)offsetof(yol_stroke_desc, width) },
-    { "join", "enum", 0, 2, 0, "", "0 round, 1 miter, 2 bevel", (uint32_t)offsetof(yol_stroke_desc, join) },
-    { "miter_limit", "f64", 1, 1e9, 4, "", "miter length over width past which a miter is a bevel", (uint32_t)offsetof(yol_stroke_desc, miter_limit) },
-    { "cap", "enum", 0, 2, 0, "", "open contours: 0 butt, 1 round, 2 square", (uint32_t)offsetof(yol_stroke_desc, cap) },
-    { "mode", "enum", 0, 2, 0, "", "0 the stroke, 1 fill and stroke (faux bold), 2 fill minus stroke", (uint32_t)offsetof(yol_stroke_desc, mode) },
-    { "tol", "f64", 0, 1e9, 1e-4, "path units", "largest distance of the expanded outline from the exact one", (uint32_t)offsetof(yol_stroke_desc, tol) },
+    { "width", "f64", 0, 1e9, 0, "path units", "stroke width, > 0 (a glyph path is in em)", (uint32_t)offsetof(yol_stroke_desc, width), NULL },
+    { "join", "enum", 0, 2, 0, "", "the corners of a contour", (uint32_t)offsetof(yol_stroke_desc, join),
+      "round=0,miter=1,bevel=2" },
+    { "miter_limit", "f64", 1, 1e9, 4, "", "miter length over width past which a miter is a bevel", (uint32_t)offsetof(yol_stroke_desc, miter_limit), NULL },
+    { "cap", "enum", 0, 2, 0, "", "the ends of an open contour", (uint32_t)offsetof(yol_stroke_desc, cap),
+      "butt=0,round=1,square=2" },
+    { "mode", "enum", 0, 2, 0, "", "the stroke alone, the fill and the stroke (faux bold), or the fill minus the stroke", (uint32_t)offsetof(yol_stroke_desc, mode),
+      "stroke=0,bold=1,inset=2" },
+    { "tol", "f64", 0, 1e9, 1e-4, "path units", "largest distance of the expanded outline from the exact one", (uint32_t)offsetof(yol_stroke_desc, tol), NULL },
 };
 static const yol_param yol__raster_params[] = {
-    { "scale", "f64", 0, 1e6, 0, "px per path unit", "the font size in px per em for a glyph; > 0", (uint32_t)offsetof(yol_raster_desc, scale) },
-    { "x", "f64", -1e9, 1e9, 0, "px", "where path x = 0 lands in the image", (uint32_t)offsetof(yol_raster_desc, x) },
-    { "y", "f64", -1e9, 1e9, 0, "px", "where path y = 0 lands in the image", (uint32_t)offsetof(yol_raster_desc, y) },
-    { "format", "enum", 0, 3, 0, "", "0 u8, 1 u16, 2 f32, 3 f64", (uint32_t)offsetof(yol_raster_desc, format) },
+    { "scale", "f64", 0, 1e6, 0, "px per path unit", "the font size in px per em for a glyph; > 0", (uint32_t)offsetof(yol_raster_desc, scale), NULL },
+    { "x", "f64", -1e9, 1e9, 0, "px", "where path x = 0 lands in the image", (uint32_t)offsetof(yol_raster_desc, x), NULL },
+    { "y", "f64", -1e9, 1e9, 0, "px", "where path y = 0 lands in the image", (uint32_t)offsetof(yol_raster_desc, y), NULL },
+    { "format", "enum", 0, 3, 0, "", "the type of each alpha value", (uint32_t)offsetof(yol_raster_desc, format),
+      "u8=0,u16=1,f32=2,f64=3" },
 };
 static const yol_param yol__cset_params[] = {
-    { "n_glyphs", "u32", 0, 16777215, 0, "", "the glyph table size", (uint32_t)offsetof(yol_cset_desc, n_glyphs) },
-    { "nh", "i32", 0, 65535, 0, "", "horizontal bands per glyph; 0: clamp(round(sqrt(curves)), 1, 16)", (uint32_t)offsetof(yol_cset_desc, nh) },
-    { "nv", "i32", 0, 65535, 0, "", "vertical bands per glyph; 0: as nh", (uint32_t)offsetof(yol_cset_desc, nv) },
-    { "backward", "bool", 0, 1, 0, "", "write backward lists (flag bit 1)", (uint32_t)offsetof(yol_cset_desc, backward) },
-    { "keep_overlaps", "bool", 0, 1, 0, "", "do not resolve glyphs (no RESOLVED flag)", (uint32_t)offsetof(yol_cset_desc, keep_overlaps) },
+    { "n_glyphs", "u32", 0, 16777215, 0, "", "the glyph table size", (uint32_t)offsetof(yol_cset_desc, n_glyphs), NULL },
+    { "nh", "i32", 0, 65535, 0, "", "horizontal bands per glyph; 0: clamp(round(sqrt(curves)), 1, 16)", (uint32_t)offsetof(yol_cset_desc, nh), NULL },
+    { "nv", "i32", 0, 65535, 0, "", "vertical bands per glyph; 0: as nh", (uint32_t)offsetof(yol_cset_desc, nv), NULL },
+    { "backward", "bool", 0, 1, 0, "", "write backward lists (flag bit 1)", (uint32_t)offsetof(yol_cset_desc, backward), NULL },
+    { "keep_overlaps", "bool", 0, 1, 0, "", "do not resolve glyphs (no RESOLVED flag)", (uint32_t)offsetof(yol_cset_desc, keep_overlaps), NULL },
 };
 static const yol_param yol__glyph_params[] = {
-    { "size", "f64", 0, 1e9, 1, "path units per em", "0: em units", (uint32_t)offsetof(yol_glyph_desc, size) },
-    { "x", "f64", -1e9, 1e9, 0, "path units", "pen x", (uint32_t)offsetof(yol_glyph_desc, x) },
-    { "y", "f64", -1e9, 1e9, 0, "path units", "pen y (the baseline)", (uint32_t)offsetof(yol_glyph_desc, y) },
-    { "y_up", "bool", 0, 1, 0, "", "y up as in the font; default y down", (uint32_t)offsetof(yol_glyph_desc, y_up) },
-    { "tol", "f64", 0, 1, 1e-4, "em", "CFF cubic to quadratic tolerance", (uint32_t)offsetof(yol_glyph_desc, tol) },
+    { "size", "f64", 0, 1e9, 1, "path units per em", "0: em units", (uint32_t)offsetof(yol_glyph_desc, size), NULL },
+    { "x", "f64", -1e9, 1e9, 0, "path units", "pen x", (uint32_t)offsetof(yol_glyph_desc, x), NULL },
+    { "y", "f64", -1e9, 1e9, 0, "path units", "pen y (the baseline)", (uint32_t)offsetof(yol_glyph_desc, y), NULL },
+    { "y_up", "bool", 0, 1, 0, "", "y up as in the font; default y down", (uint32_t)offsetof(yol_glyph_desc, y_up), NULL },
+    { "tol", "f64", 0, 1, 1e-4, "em", "CFF cubic to quadratic tolerance", (uint32_t)offsetof(yol_glyph_desc, tol), NULL },
 };
 
 #define YOL__TABLE(fn, t) YOL_API const yol_param* fn(int* n) { if (n) *n = (int)(sizeof t / sizeof t[0]); return t; }

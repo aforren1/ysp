@@ -36,11 +36,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* The distribution's version is the header's, plus a fourth number that
- * counts changes to this binding alone (0.2.0.1: times in seconds). When the
- * header's version moves, drop the suffix here and in pyproject.toml;
- * tests/test_rdk.py checks that the two agree. */
-#define RDK_VERSION YRDK_VERSION_STRING ".1"
+/* The distribution's version is the header's. A change to this binding
+ * alone adds a fourth number (0.2.0.1 was times in seconds), which goes
+ * when the header's version moves; tests/test_rdk.py checks that this and
+ * pyproject.toml agree. */
+#define RDK_VERSION YRDK_VERSION_STRING
 
 /* The largest time in seconds that converts back to its ns exactly. With
  * s the double nearest n / 1e9, |s 1e9 - n| <= 1e9 ulp(s) / 2, which is

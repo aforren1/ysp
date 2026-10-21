@@ -140,6 +140,12 @@ int main(void) {
         if (yau_capture_is_open(&cap)) { free(au); return 16; }
     }
     free(au);
+    {   /* v0.7.0: values, the last field; set on the enum rows only */
+        const yau_param* t = yau_params(&n);
+        int i, k = 0;
+        for (i = 0; t && i < n; i++) k += (t[i].values != NULL) == !strcmp(t[i].type, "enum");
+        if (!t || k != n) return 17;
+    }
     return yau_params(&n) && n > 0 ? 0 : 7;
 #endif
 }

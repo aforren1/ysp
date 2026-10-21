@@ -316,3 +316,13 @@ env = { YRDK_TEST_NO_GOLDEN = "1" }
 why = "lifetime_ns is checked at open: a negative one is refused with a message."
 find = '        if (d->lifetime_ns < 0 || d->lifetime_ns > (int64_t)1000000000 * 1000000000)'
 replace = '        if (d->lifetime_ns > (int64_t)1000000000 * 1000000000)'
+
+# v0.3.0: the parameter table in the shared row shape (test_params).
+
+[[mutant]]
+id = "pv-01"
+name = "values on a float"
+test = "rdk"
+why = "v0.3.0: values belong to enum rows only; a loader would take names for the speed."
+find = '(uint32_t)offsetof(yrdk_field, speed), NULL },'
+replace = '(uint32_t)offsetof(yrdk_field, speed), "fast=1" },'

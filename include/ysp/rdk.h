@@ -1,4 +1,4 @@
-/* ysp/rdk.h - v0.2.0 - public domain single-header random dot kinematograms
+/* ysp/rdk.h - v0.3.0 - public domain single-header random dot kinematograms
  *
  *   The motion of a random dot kinematogram (RDK) on the CPU: coherence,
  *   direction, speed, density, dot lifetime, the noise rule and the signal
@@ -376,6 +376,12 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.3.0 - yrdk_param gains a last field, values, after offset: NULL in
+ *          each of the three rows (none is an enum). Every ysp parameter
+ *          table has one row shape: name, type, min, max, def, unit, doc
+ *          and values; offset sits between doc and values, which a reader
+ *          by field name does not see. The rules and the digests do not
+ *          change.
  *   v0.2.0 - the repository conventions (README.md). Breaks the API:
  *          yrdk_open() returns bool (the message was already in
  *          yrdk_error()); desc.lifetime (float seconds) is int64_t
@@ -388,6 +394,10 @@
  *          (C, { 0 }); the CHANGELOG moved to the end of this comment.
  *   v0.1.0 - first version.
  *
+ *   STATUS: v0.3.0, 2026-10-21: the parameter table's rows checked against
+ *   the field's floats and a field opened with them at 0; the golden
+ *   digests unchanged; 1 of 1 new mutant killed (docs/rdk.md, "The shared
+ *   row shape").
  *   STATUS: v0.2.0, 2026-10-10: the test passes with its golden digests and
  *   new checks of close and the messages (MinGW-w64 gcc 16.1, MSVC 19.44);
  *   the Python binding's C trial is the same bytes; the USAGE blocks
@@ -433,9 +443,9 @@
 #define YSP_RDK_H_INCLUDED
 
 #define YRDK_VERSION_MAJOR 0
-#define YRDK_VERSION_MINOR 2
+#define YRDK_VERSION_MINOR 3
 #define YRDK_VERSION_PATCH 0
-#define YRDK_VERSION_STRING "0.2.0"
+#define YRDK_VERSION_STRING "0.3.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -588,6 +598,10 @@ typedef struct yrdk_param {
     double      min, max, def;
     const char* unit, *doc;
     uint32_t    offset;                  /* in yrdk_field                    */
+    const char* values;                  /* v0.3, an enum's "name=value"
+                                          * pairs; NULL here (no enum row).
+                                          * After offset: the shared row
+                                          * shape is name to doc, values   */
 } yrdk_param;
 
 YRDK_API const char* yrdk_version(void);
@@ -1736,11 +1750,11 @@ YRDK_API int yrdk_restore(yrdk_field* f, const void* in, size_t len) {
 
 YRDK_API const yrdk_param* yrdk_params(int* n) {
     static const yrdk_param p[3] = {
-        { "coherence", "f32", 0, 1, 0, "", "the signal fraction, read at each update", (uint32_t)offsetof(yrdk_field, coherence) },
+        { "coherence", "f32", 0, 1, 0, "", "the signal fraction, read at each update", (uint32_t)offsetof(yrdk_field, coherence), NULL },
         { "direction", "f32", -1e30, 1e30, 0, "deg", "the signal direction, +x toward +y (clockwise on the screen)",
-          (uint32_t)offsetof(yrdk_field, direction) },
+          (uint32_t)offsetof(yrdk_field, direction), NULL },
         { "speed", "f32", -1e30, 1e30, 0, "u/s", "units per second; negative moves the other way",
-          (uint32_t)offsetof(yrdk_field, speed) },
+          (uint32_t)offsetof(yrdk_field, speed), NULL },
     };
     if (n) *n = 3;
     return p;
