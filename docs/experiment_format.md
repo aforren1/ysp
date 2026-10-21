@@ -286,12 +286,12 @@ the header.
 
 | Id | Gap | Header | Needed by | Size |
 |---|---|---|---|---|
-| G1 | `ytl_trigger()` and `YTL_OP_TRIGGER` take a code only; the builder writes target 0, so an op table cannot say which trigger channel (role) fires. `ytl_event.target` is free for TRIGGER. | ysp/timeline.h | EEG example, two output roles | Small: TRIGGER takes `ch` as its target |
+| G1 | CLOSED in ysp/timeline.h v0.8.0: a TRIGGER op's `ch` is its trigger channel and the fired event's `target` (`YTL_TRIGGER_CH(ch, code)`, `ytl_trigger_ch()`); `ytl_trigger()` and `YTL_TRIGGER()` give channel 0. Was: `ytl_trigger()` and `YTL_OP_TRIGGER` took a code only; the builder wrote target 0, so an op table could not say which trigger channel (role) fires. | ysp/timeline.h | EEG example, two output roles | Small: TRIGGER takes `ch` as its target |
 | G2 | The rig profile has no viewing geometry (`ygfx_view`: `distance_mm`, `width_mm`). The 2AFC program hard-codes `PPD_DISTANCE_MM` and `PPD_MM_PER_PX`. | ysp/rigfile.h | Every `deg` definition | Small |
 | G3 | No logged and replayed categorical draw per trial: jitters are durations only, and the 2AFC side comes from the program's own generator. | ysp/trials.h (or player code, D8) | `vars` with `choice` | Small |
 | G4 | `weight COLUMN` sets `cond_reps` from the column; nothing multiplies it by `reps`. The Stroop program computes weight x reps in C. | ysp/trials.h | Stroop | Small |
 | G5 | No call maps a Michelson contrast in light to ysp/gfx.h's contrast and back to the contrast the output codes show (about 20 lines in trial_2afc_adaptive.c with `ycol_output_code()`). | ysp/color.h | `{"michelson": ...}` | Small |
-| G6 | Parameter tables (rig_spec 1, principle 8) exist for audio, color, gfx, outline, rdk, screen and video only. None for stair, quest, aep, response, the device families or the timeline ops. `ygfx_params()` lists the bindable floats, not the desc enums (`shape`, `edge`, `aperture`, `place`). | those headers | The loader's key check and the designer's panels from one source | Medium |
+| G6 | Parameter tables (rig_spec 1, principle 8) exist for audio, color, gfx, outline, rdk, screen and video only. None for stair, quest, aep, response, the device families or the timeline ops. The timeline part is CLOSED in ysp/timeline.h v0.8.0: `ytl_op_params(kind, &n)` gives the rows of the fields each op kind reads (`YTL_OP_NONE` gives the `op` row, whose enum values name every kind), and `ytl_desc_params()` the desc's plain fields. `ygfx_params()` lists the bindable floats, not the desc enums (`shape`, `edge`, `aperture`, `place`). | those headers | The loader's key check and the designer's panels from one source | Medium |
 | G7 | The canonical writer writes a number's source text; only `yjs_new_fixed()` and `yjs_new_int()` make canonical numbers. No canonical decimal for other reals. The prerequisite for the experiment hash (D2). | ysp/json.h | D2 | Small |
 | G8 | A response-driven output waits for the frame loop to see the response, up to a frame after the press. No callback on the input's thread. | ysp/response.h, ysp/device.h | Response triggers (EEG) | Medium; measure the lag first |
 | G9 | Glyph-run blocks are listed by hand in the source description. Nothing derives them from a definition's texts and a table's levels. | pack tool | D14; Stroop | Small to medium |
@@ -411,7 +411,7 @@ Steps:
 | `{"set": S, "props": {P: v}}` | `YTL_SET_VALUE` on S.P's channel |
 | `{"to": S, "props": {P: v}, "duration_s": d, "ease": e, "delay_s": d}` | `YTL_TO` per property, `ytl_tween_desc` |
 | `{"then": ...}` | `YTL_THEN`: as `to`, then the cursor moves to its end |
-| `{"trigger": CODE, "role": R}` | `YTL_TRIGGER`; when it fires, `yscr_trigger(&scr, channel(R), code)` writes at the flip's planned vblank (G1) |
+| `{"trigger": CODE, "role": R}` | `YTL_TRIGGER_CH(channel(R), CODE)`; when it fires, `yscr_trigger(&scr, e.target, e.code)` writes at the flip's planned vblank (G1, closed in ysp/timeline.h v0.8.0) |
 | `{"mark": NAME}` | `YTL_MARK`, code = NAME's index |
 | `{"if": "$bool", "steps": [...]}`, `{"unless": ...}` | the steps go in the table when the variable is true (false) as the table is built |
 
@@ -764,7 +764,7 @@ TEXTURE entry name), `type`, `code` and `answer`.
 | Field | In the C examples |
 |---|---|
 | `trig` role | `ydev_desc.role = "trig"`, `pulse_ns`; the rig profile gives family and key (`yrig_open_device()`) |
-| Trigger step | `ydev_trigger_channel()` in `yscr_desc.triggers`; `yscr_trigger(&scr, 0, code)` between begin and flip writes at the planned vblank plus `onset_offset_ns`. The step names the role: G1 |
+| Trigger step | `ydev_trigger_channel()` in `yscr_desc.triggers`; `yscr_trigger(&scr, 0, code)` between begin and flip writes at the planned vblank plus `onset_offset_ns`. The step names the role; its channel is the TRIGGER op's `ch` and the fired event's `target` (G1, closed in ysp/timeline.h v0.8.0) |
 | `<role>_lag_max`, `events.csv` | The program's table from `YDEV_REC_OUT` ring records: deadline, write start, write length, trailing edge |
 | `resp` with `buttons` | devices_spec 11.1; device events reach `yrsp_feed_screen()` through the input bridge |
 | `response.trigger` | `ydev_out_pulse()` when the frame loop sees the response: G8 |

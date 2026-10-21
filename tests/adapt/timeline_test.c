@@ -5874,6 +5874,9 @@ static void sm_gen(int n) {
         o->value = (float)rnd_int(32) / 4.0f;
         o->code = (int32_t)rnd_range(-1000, 1000);
         o->user = sm64();
+        /* v0.8.0: a trigger's ch is its trigger channel; sometimes a
+         * negative one, from the code so the random stream stays. */
+        if (o->op == YTL_OP_TRIGGER && o->code % 29 == 0) o->ch = -1 - o->ch;
         if (o->op == YTL_OP_WAIT) o->t_ns = rnd_range(0, YRT_MS(200));
         if (o->op == YTL_OP_AT) o->t_ns = rnd_range(0, YRT_MS(1500));
         if (tw) {
@@ -5945,6 +5948,7 @@ static int sm_model_op(ytl_timeline* h, const float* init, const ytl_op* o, int*
         ytl_event e;
         bool drives = o->op == YTL_OP_ON || o->op == YTL_OP_OFF || o->op == YTL_OP_SET_VALUE;
         if (drives && (o->ch < 0 || o->ch >= SM_NCH)) return YTL_ERR_ARG;
+        if (o->op == YTL_OP_TRIGGER && o->ch < 0) return YTL_ERR_ARG;
         if (drives && kind[o->ch] == 2) return YTL_ERR_BOUND;
         memset(&e, 0, sizeof e);
         e.time_ns = t;
@@ -5952,7 +5956,7 @@ static int sm_model_op(ytl_timeline* h, const float* init, const ytl_op* o, int*
         e.kind = (uint8_t)(o->op == YTL_OP_ON ? YTL_ONSET : o->op == YTL_OP_OFF ? YTL_OFFSET
                            : o->op == YTL_OP_SET_VALUE ? YTL_SET
                            : o->op == YTL_OP_TRIGGER ? YTL_TRIGGER : YTL_MARK);
-        if (drives) e.target = o->ch;
+        if (drives || o->op == YTL_OP_TRIGGER) e.target = o->ch;
         if (o->op == YTL_OP_SET_VALUE) e.value = o->value;
         if (o->op == YTL_OP_TRIGGER || o->op == YTL_OP_MARK) e.code = o->code;
         if (o->op == YTL_OP_MARK) e.user = o->user;
@@ -6031,7 +6035,10 @@ static void sm_builder(ytl_seq* q, int n) {
         case YTL_OP_ON: ytl_on(q, o->ch); break;
         case YTL_OP_OFF: ytl_off(q, o->ch); break;
         case YTL_OP_SET_VALUE: ytl_set_value(q, o->ch, o->value); break;
-        case YTL_OP_TRIGGER: ytl_trigger(q, o->code); break;
+        case YTL_OP_TRIGGER:
+            if (o->ch == 0) ytl_trigger(q, o->code);
+            else ytl_trigger_ch(q, o->ch, o->code);
+            break;
         case YTL_OP_MARK: ytl_mark(q, o->code, o->user); break;
         case YTL_OP_WAIT: ytl_wait(q, o->t_ns); break;
         case YTL_OP_AT: ytl_at(q, o->t_ns); break;
@@ -7224,6 +7231,380 @@ static void test_close_messages(void) {
     ytl_close(&g_tl);
 }
 
+/* ------------------------------------- 11e. TRIGGER CHANNELS (v0.8.0) */
+
+static void test_trigger_ch(void) {
+    static const ytl_op tab[] = { YTL_TRIGGER(16), YTL_TRIGGER_CH(5, 17) };
+    static const ytl_op bad_tab[] = { YTL_TRIGGER(1), YTL_TRIGGER_CH(-1, 2) };
+    static const int want_ch[] = { 0, 3, INT32_MAX, 0, 5 };
+    static const int32_t want_code[] = { 12, 13, 14, 16, 17 };
+    ytl_event fired[8], peek[8];
+    ytl_seq q;
+    int n, i, bad = 99;
+    CHECK(seq_open(&g_tl, g_store, 64, g_ka, 64, SQ_NCH, NULL));
+    q = ytl_seq_on(&g_tl, 1);
+    ytl_wait(&q, YRT_MS(10));
+    ytl_trigger(&q, 12);
+    ytl_trigger_ch(&q, 3, 13);
+    ytl_trigger_ch(&q, INT32_MAX, 14);
+    CHECK_I(ytl_run(&q, tab, YTL_COUNT(tab)), 0);
+    CHECK_I(q.err, 0);
+    CHECK_I(ytl_anchor(&g_tl, 1, T0, 0), 0);
+    /* the look-ahead and the report both carry the channel */
+    CHECK_I(ytl_peek(&g_tl, 1, T0, T0 + YRT_MS(20), peek, 8), 5);
+    CHECK_I(eval_at(&g_tl, T0 + YRT_MS(10), YRT_MS(16), 1, fired, 8), 5);
+    for (i = 0; i < 5; i++) {
+        CHECK_I(fired[i].kind, YTL_TRIGGER);
+        CHECK_I(fired[i].target, want_ch[i]);
+        CHECK_I(fired[i].code, want_code[i]);
+        CHECK_I(peek[i].target, want_ch[i]);
+    }
+    /* a negative trigger channel: the call, the table, the check */
+    CHECK(seq_open(&g_tl, g_store, 64, g_ka, 64, SQ_NCH, NULL));
+    q = ytl_seq_on(&g_tl, 1);
+    ytl_trigger(&q, 1);
+    ytl_trigger_ch(&q, -1, 2);
+    CHECK_I(q.err, YTL_ERR_ARG);
+    CHECK_I(q.err_call, 1);
+    CHECK_I(n_events(&g_tl, 1), 1);
+    CHECK(seq_open(&g_tl, g_store, 64, g_ka, 64, SQ_NCH, NULL));
+    CHECK_I(ytl_check_ops(&g_tl, 1, bad_tab, 2, &bad), YTL_ERR_ARG);
+    CHECK_I(bad, 1);
+    {
+        ytl_op ops[2];
+        memcpy(ops, bad_tab, sizeof ops);
+        seq_run_fail(__LINE__, ops, 2, YTL_ERR_ARG, 1, 64, 64);
+    }
+    /* a trigger channel is not a timeline channel: past n_channels is
+     * fine, and it binds nothing, so a tween can use the same number */
+    CHECK(seq_open(&g_tl, g_store, 64, g_ka, 64, SQ_NCH, NULL));
+    {
+        ytl_op ops[2];
+        memset(ops, 0, sizeof ops);
+        ops[0].op = YTL_OP_TRIGGER; ops[0].ch = SQ_NCH + 7;
+        ops[1].op = YTL_OP_TO; ops[1].ch = SQ_CONTRAST; ops[1].tween = sq_tw(1.0f, YRT_MS(10), 0);
+        CHECK_I(ytl_check_ops(&g_tl, 1, ops, 2, &bad), 0);
+        ops[0].ch = SQ_CONTRAST;
+        CHECK_I(ytl_check_ops(&g_tl, 1, ops, 2, &bad), 0);
+    }
+    /* ytl_add keeps any target of a TRIGGER, as before v0.8.0 */
+    {
+        ytl_event e;
+        memset(&e, 0, sizeof e);
+        e.kind = YTL_TRIGGER;
+        e.target = -5;
+        CHECK(ytl_add(&g_tl, &e) >= 0);
+    }
+    n = 0;
+    CHECK(ytl_op_params(YTL_OP_TRIGGER, &n) != NULL && n == 2);
+}
+
+/* ------------------------------------------- 11f. PARAMETERS (v0.8.0) */
+
+typedef struct tp_field { const char* name; size_t off; const char* type; } tp_field;
+#define TP_TW(f) (offsetof(ytl_op, tween) + offsetof(ytl_tween_desc, f))
+#define TP_CV(f) (offsetof(ytl_op, tween) + offsetof(ytl_tween_desc, curve) + offsetof(ytl_curve, f))
+/* Every field of ytl_op, written here from the declarations. */
+static const tp_field tp_op[] = {
+    { "op", offsetof(ytl_op, op), "enum" },          { "ch", offsetof(ytl_op, ch), "i32" },
+    { "t_ns", offsetof(ytl_op, t_ns), "i64" },       { "code", offsetof(ytl_op, code), "i32" },
+    { "value", offsetof(ytl_op, value), "f32" },     { "user", offsetof(ytl_op, user), "u64" },
+    { "tween.to", TP_TW(to), "f32" },                { "tween.from", TP_TW(from), "f32" },
+    { "tween.duration_ns", TP_TW(duration_ns), "i64" }, { "tween.start_ns", TP_TW(start_ns), "i64" },
+    { "tween.delay_ns", TP_TW(delay_ns), "i64" },
+    { "tween.curve.x1", TP_CV(x1), "f32" }, { "tween.curve.y1", TP_CV(y1), "f32" },
+    { "tween.curve.x2", TP_CV(x2), "f32" }, { "tween.curve.y2", TP_CV(y2), "f32" },
+    { "tween.ease", TP_TW(ease), "enum" },           { "tween.cycles", TP_TW(cycles), "i32" },
+    { "tween.from_set", TP_TW(from_set), "bool" },   { "tween.start_set", TP_TW(start_set), "bool" },
+    { "tween.yoyo", TP_TW(yoyo), "bool" },           { "tween.keep_velocity", TP_TW(keep_velocity), "bool" },
+};
+static const tp_field tp_desc[] = {
+    { "event_capacity", offsetof(ytl_desc, event_capacity), "i32" },
+    { "n_channels", offsetof(ytl_desc, n_channels), "i32" },
+    { "lead", offsetof(ytl_desc, lead), "f64" },
+    { "key_capacity", offsetof(ytl_desc, key_capacity), "i32" },
+    { "target_capacity", offsetof(ytl_desc, target_capacity), "i32" },
+    { "tween_capacity", offsetof(ytl_desc, tween_capacity), "i32" },
+};
+#define TP_TWEEN "ch tween.to tween.from tween.duration_ns tween.delay_ns tween.curve.x1 tween.curve.y1 " \
+                 "tween.curve.x2 tween.curve.y2 tween.ease tween.cycles tween.from_set tween.yoyo tween.keep_velocity"
+/* What each kind reads, from the manual, in ytl_op order. A tween's
+ * start_ns and start_set are read only to be refused, so they are no row. */
+static const char* const tp_reads[10] = {
+    "op", "ch", "ch", "ch value", "ch code", "code user", "t_ns", "t_ns", TP_TWEEN, TP_TWEEN };
+
+static const tp_field* tp_find(const tp_field* f, int n, const char* name) {
+    int i;
+    for (i = 0; i < n; i++) if (strcmp(f[i].name, name) == 0) return &f[i];
+    return NULL;
+}
+
+static void tp_write(void* base, const tp_field* f, double v) {
+    char* p = (char*)base + f->off;
+    if (strcmp(f->type, "i64") == 0) { int64_t x = (int64_t)v; memcpy(p, &x, sizeof x); }
+    else if (strcmp(f->type, "u64") == 0) { uint64_t x = (uint64_t)v; memcpy(p, &x, sizeof x); }
+    else if (strcmp(f->type, "f32") == 0) { float x = (float)v; memcpy(p, &x, sizeof x); }
+    else if (strcmp(f->type, "f64") == 0) memcpy(p, &v, sizeof v);
+    else if (strcmp(f->type, "bool") == 0) { bool x = v != 0.0; memcpy(p, &x, sizeof x); }
+    else { int32_t x = (int32_t)v; memcpy(p, &x, sizeof x); }   /* i32, enum: int */
+}
+
+/* "name=value,..." in value order, names lower case, values contiguous
+ * from min to max. Returns the pair count, or -1. */
+static int tp_values(const char* s, double min, double max, const char* const* names, const int* nums, int nn) {
+    int k = 0, j;
+    while (s && *s) {
+        char name[32];
+        int len = 0;
+        long v;
+        char* end;
+        while (*s && *s != '=') {
+            if (!((*s >= 'a' && *s <= 'z') || (*s >= '0' && *s <= '9') || *s == '_') || len >= 31) return -1;
+            name[len++] = *s++;
+        }
+        name[len] = 0;
+        if (*s++ != '=' || len == 0) return -1;
+        v = strtol(s, &end, 10);
+        if (end == s || (double)v != min + k) return -1;
+        for (j = 0; j < nn; j++)
+            if (strcmp(names[j], name) == 0 && nums[j] != (int)v) return -1;
+        s = end;
+        if (*s == ',') s++;
+        else if (*s) return -1;
+        k++;
+    }
+    return (double)(k - 1) == max - min ? k : -1;
+}
+
+/* A valid op of `kind` for the row `name`: the field at its bounds must
+ * pass what the other fields allow. */
+static ytl_op tp_base(int kind, const char* name) {
+    ytl_op o;
+    memset(&o, 0, sizeof o);
+    o.op = kind;
+    switch (kind) {
+    case YTL_OP_ON: case YTL_OP_OFF: o.ch = 2; break;
+    case YTL_OP_SET_VALUE: o.ch = 2; o.value = 0.25f; break;
+    case YTL_OP_TRIGGER: o.ch = 1; o.code = 12; break;
+    case YTL_OP_MARK: o.code = 3; o.user = 5; break;
+    case YTL_OP_WAIT: o.t_ns = YRT_MS(20); break;
+    case YTL_OP_AT: o.t_ns = YRT_MS(40); break;
+    default:
+        o.ch = 2;
+        o.tween.to = 0.5f;
+        if (strcmp(name, "tween.yoyo") == 0 || strcmp(name, "tween.cycles") == 0 ||
+            strcmp(name, "tween.keep_velocity") == 0 || strcmp(name, "ch") == 0)
+            o.tween.duration_ns = YRT_MS(100);
+        if (strncmp(name, "tween.curve.", 12) == 0) o.tween.ease = YTL_EASE_BEZIER;
+        if (strcmp(name, "tween.from") == 0) o.tween.from_set = true;
+        break;
+    }
+    return o;
+}
+
+/* One op on a new sequence at 10 ms, then 40 frames: the storage, the
+ * arena and every value, into *out. */
+typedef struct tp_run { int rc; int n; ytl_event ev[8]; ytl_key keys[64]; float v[40][4]; } tp_run;
+static void tp_apply(const ytl_op* o, tp_run* r) {
+    static ytl_event st[8];
+    static ytl_key ka[64];
+    const ytl_event* e;
+    ytl_seq q;
+    int i;
+    memset(r, 0, sizeof *r);
+    if (!seq_open(&g_tl3, st, 8, ka, 64, 4, NULL)) { r->rc = -100; return; }
+    q = ytl_seq_on(&g_tl3, 1);
+    ytl_wait(&q, YRT_MS(10));
+    r->rc = ytl_run(&q, o, 1);
+    (void)ytl_anchor(&g_tl3, 1, T0, 0);
+    for (i = 0; i < 40; i++) {
+        (void)eval_at(&g_tl3, T0 + (int64_t)i * YRT_MS(5), YRT_MS(5), i, NULL, 0);
+        memcpy(r->v[i], ytl_values(&g_tl3), sizeof r->v[i]);
+    }
+    e = ytl_events(&g_tl3, YTL_ALL_BASES, &r->n);
+    if (r->n > 0 && r->n <= 8) memcpy(r->ev, e, (size_t)r->n * sizeof *e);
+    memcpy(r->keys, ka, sizeof ka);
+}
+
+static int tp_check1(const ytl_op* o) {
+    static ytl_event st[8];
+    int bad;
+    if (!seq_open(&g_tl3, st, 8, g_kb, SQ_ARENA, YTL_MAX_CHANNELS, NULL)) return -100;
+    return ytl_check_ops(&g_tl3, 1, o, 1, &bad);
+}
+
+static void test_params(void) {
+    static tp_run ra, rb;
+    static const char* const op_names[] = { "none", "on", "off", "set_value", "trigger", "mark", "wait", "at", "to", "then" };
+    static const int op_nums[] = { YTL_OP_NONE, YTL_OP_ON, YTL_OP_OFF, YTL_OP_SET_VALUE, YTL_OP_TRIGGER,
+                                   YTL_OP_MARK, YTL_OP_WAIT, YTL_OP_AT, YTL_OP_TO, YTL_OP_THEN };
+    static const char* const ease_names[] = { "linear", "step", "cosine", "quad_in", "quad_out", "log", "bezier",
+                                              "quad_in_out", "cubic_in", "cubic_out", "cubic_in_out" };
+    static const int ease_nums[] = { YTL_EASE_LINEAR, YTL_EASE_STEP, YTL_EASE_COSINE, YTL_EASE_QUAD_IN,
+                                     YTL_EASE_QUAD_OUT, YTL_EASE_LOG, YTL_EASE_BEZIER, YTL_EASE_QUAD_IN_OUT,
+                                     YTL_EASE_CUBIC_IN, YTL_EASE_CUBIC_OUT, YTL_EASE_CUBIC_IN_OUT };
+    const int64_t LIM = INT64_C(1) << 62;
+    const ytl_param* t;
+    int kind, i, j, n;
+    n = 7;
+    CHECK(ytl_op_params(YTL_OP_THEN + 1, &n) == NULL && n == 0);
+    n = 7;
+    CHECK(ytl_op_params(-1, &n) == NULL && n == 0);
+    CHECK(ytl_op_params(YTL_OP_ON, NULL) != NULL);
+    for (kind = YTL_OP_NONE; kind <= YTL_OP_THEN; kind++) {
+        const char* s;
+        size_t prev_off = 0;
+        t = ytl_op_params(kind, &n);
+        CHECK(t != NULL && n > 0);
+        if (!t) continue;
+        /* the rows are exactly the fields the kind reads, in ytl_op order */
+        for (i = 0, s = tp_reads[kind]; *s; i++) {
+            size_t len = strcspn(s, " ");
+            if (i >= n || strlen(t[i].name) != len || strncmp(t[i].name, s, len) != 0)
+                fail_s(__LINE__, "op row", i < n ? t[i].name : "(none)", s);
+            s += len;
+            if (*s == ' ') s++;
+        }
+        CHECK_I(n, i);
+        for (i = 0; i < n; i++) {
+            const tp_field* f = tp_find(tp_op, YTL_COUNT(tp_op), t[i].name);
+            size_t L = strlen(t[i].name);
+            bool ns = L > 3 && strcmp(t[i].name + L - 3, "_ns") == 0;
+            CHECK(f != NULL);
+            if (!f) continue;
+            CHECK_S(t[i].type, f->type);
+            CHECK(i == 0 || f->off > prev_off);
+            prev_off = f->off;
+            CHECK(t[i].min <= t[i].def && t[i].def <= t[i].max);
+            CHECK(t[i].unit && t[i].doc && t[i].doc[0]);
+            CHECK(strcmp(t[i].unit, ns ? "ns" : "") == 0);
+            CHECK((t[i].values != NULL) == (strcmp(t[i].type, "enum") == 0));
+            if (strcmp(t[i].type, "bool") == 0) CHECK(t[i].min == 0 && t[i].max == 1);
+            for (j = 0; j < i; j++) CHECK(strcmp(t[i].name, t[j].name) != 0);
+            if (strcmp(t[i].name, "op") == 0)
+                CHECK_I(tp_values(t[i].values, t[i].min, t[i].max, op_names, op_nums, 10), 10);
+            if (strcmp(t[i].name, "tween.ease") == 0)
+                CHECK_I(tp_values(t[i].values, t[i].min, t[i].max, ease_names, ease_nums, 11), 11);
+        }
+        if (kind == YTL_OP_NONE) continue;
+        /* def is what a zero field means: the field at 0 and at def give
+         * the same storage, arena and values */
+        for (i = 0; i < n; i++) {
+            const tp_field* f = tp_find(tp_op, YTL_COUNT(tp_op), t[i].name);
+            ytl_op a = tp_base(kind, "ch"), b;   /* "ch": a tween with a duration */
+            if (!f) continue;
+            tp_write(&a, f, 0.0);
+            b = a;
+            tp_write(&b, f, t[i].def);
+            tp_apply(&a, &ra);
+            tp_apply(&b, &rb);
+            if (ra.rc != 0 || memcmp(&ra, &rb, sizeof ra) != 0)
+                fail_s(__LINE__, "zero and def differ", tp_reads[kind], t[i].name);
+            if (strcmp(t[i].name, "tween.cycles") == 0) {
+                /* def is the count in use, not another spelling of 0:
+                 * the tween ends after def plays */
+                ytl_seq q;
+                CHECK(seq_open(&g_tl3, g_store3, 8, g_kb, 64, 4, NULL));
+                q = ytl_seq_on(&g_tl3, 1);
+                CHECK_I(ytl_to(&q, a.ch, &a.tween), (int64_t)t[i].def * a.tween.duration_ns);
+            }
+        }
+        /* the fields that are no row change nothing (start_set excepted:
+         * it is read to be refused) */
+        {
+            ytl_op a = tp_base(kind, ""), b = a;
+            for (j = 0; j < YTL_COUNT(tp_op); j++) {
+                const tp_field* f = &tp_op[j];
+                double junk = strcmp(f->type, "bool") == 0 ? 1.0 : strcmp(f->type, "i64") == 0 ? (double)YRT_MS(3) : 3.0;
+                bool row = false;
+                for (i = 0; i < n; i++) if (strcmp(t[i].name, f->name) == 0) row = true;
+                if (row || strcmp(f->name, "op") == 0 || strcmp(f->name, "tween.start_set") == 0) continue;
+                tp_write(&b, f, junk);
+            }
+            tp_apply(&a, &ra);
+            tp_apply(&b, &rb);
+            if (ra.rc != 0 || memcmp(&ra, &rb, sizeof ra) != 0) fail_s(__LINE__, "a field that is no row changed the op", tp_reads[kind], "");
+        }
+        /* min and max pass as far as the field goes; past them is refused */
+        for (i = 0; i < n; i++) {
+            const tp_field* f = tp_find(tp_op, YTL_COUNT(tp_op), t[i].name);
+            ytl_op o;
+            int rc;
+            if (!f || strcmp(t[i].type, "bool") == 0) continue;
+            o = tp_base(kind, t[i].name); tp_write(&o, f, t[i].min);
+            rc = tp_check1(&o);
+            if (rc == YTL_ERR_ARG) fail_s(__LINE__, "min refused", tp_reads[kind], t[i].name);
+            o = tp_base(kind, t[i].name); tp_write(&o, f, t[i].max);
+            rc = tp_check1(&o);
+            if (rc == YTL_ERR_ARG) fail_s(__LINE__, "max refused", tp_reads[kind], t[i].name);
+            if (strcmp(t[i].type, "i64") == 0) {
+                int64_t x;
+                o = tp_base(kind, t[i].name); x = t[i].min == 0 ? -1 : -LIM;
+                memcpy((char*)&o + f->off, &x, sizeof x);
+                if (tp_check1(&o) >= 0) fail_s(__LINE__, "below min passed", tp_reads[kind], t[i].name);
+                o = tp_base(kind, t[i].name); x = LIM;
+                memcpy((char*)&o + f->off, &x, sizeof x);
+                if (tp_check1(&o) >= 0) fail_s(__LINE__, "above max passed", tp_reads[kind], t[i].name);
+            } else if (strcmp(t[i].type, "i32") == 0 || strcmp(t[i].type, "enum") == 0) {
+                if (t[i].min > -2147483648.0) {
+                    o = tp_base(kind, t[i].name); tp_write(&o, f, t[i].min - 1);
+                    if (tp_check1(&o) >= 0) fail_s(__LINE__, "below min passed", tp_reads[kind], t[i].name);
+                }
+                if (t[i].max < 2147483647.0) {
+                    o = tp_base(kind, t[i].name); tp_write(&o, f, t[i].max + 1);
+                    if (tp_check1(&o) >= 0) fail_s(__LINE__, "above max passed", tp_reads[kind], t[i].name);
+                }
+            } else if (strcmp(t[i].type, "f32") == 0) {
+                o = tp_base(kind, t[i].name);
+                tp_write(&o, f, t[i].max < 1e30 ? t[i].max + 0.25 : make_inf());
+                if (tp_check1(&o) >= 0) fail_s(__LINE__, "above max passed", tp_reads[kind], t[i].name);
+                o = tp_base(kind, t[i].name);
+                tp_write(&o, f, t[i].min > -1e30 ? t[i].min - 0.25 : -make_inf());
+                if (tp_check1(&o) >= 0) fail_s(__LINE__, "below min passed", tp_reads[kind], t[i].name);
+            }
+        }
+    }
+    /* the desc */
+    t = ytl_desc_params(&n);
+    CHECK_I(n, YTL_COUNT(tp_desc));
+    for (i = 0; i < n; i++) {
+        const tp_field* f = tp_find(tp_desc, YTL_COUNT(tp_desc), t[i].name);
+        ytl_desc a, b;
+        CHECK(f != NULL);
+        if (!f) continue;
+        CHECK_S(t[i].type, f->type);
+        CHECK(f == &tp_desc[i]);   /* in ytl_desc order */
+        CHECK(t[i].min <= t[i].def && t[i].def <= t[i].max && t[i].values == NULL && t[i].doc && t[i].unit);
+        memset(&a, 0, sizeof a);
+        b = a;
+        tp_write(&b, f, t[i].def);
+        CHECK(ytl_open(&g_tl, &a) && ytl_open(&g_tl3, &b));
+        CHECK(memcmp(&g_tl, &g_tl3, TL_STATE) == 0);
+        /* and the value in use is def itself, not another spelling of 0 */
+        if (strcmp(t[i].name, "lead") == 0) CHECK_F(ytl_lead(&g_tl), t[i].def, 0.0);
+        memset(&a, 0, sizeof a);
+        tp_write(&a, f, t[i].min);
+        CHECK(ytl_open(&g_tl, &a));
+        tp_write(&a, f, t[i].min - (strcmp(f->type, "f64") == 0 ? 0.5 : 1.0));
+        CHECK(!ytl_open(&g_tl, &a));
+    }
+    {   /* the bounds that need no storage behind them */
+        ytl_desc d;
+        memset(&d, 0, sizeof d);
+        d.lead = 0.99999999999999989;
+        CHECK(ytl_open(&g_tl, &d));
+        d.lead = 1.0;
+        CHECK(!ytl_open(&g_tl, &d));
+        d.lead = YTL_LEAD_NONE;   /* the sentinel the doc names */
+        CHECK(ytl_open(&g_tl, &d));
+        d.lead = 0;
+        d.n_channels = YTL_MAX_CHANNELS;
+        CHECK(ytl_open(&g_tl, &d));
+        d.n_channels = YTL_MAX_CHANNELS + 1;
+        CHECK(!ytl_open(&g_tl, &d));
+    }
+}
+
 #include "timeline_test_targets.h"
 
 /* ------------------------------------------------------------------- main */
@@ -7309,6 +7690,8 @@ int main(void) {
     test_seq_on_n();
     test_seq_cross_base();
     test_seq_model();
+    test_trigger_ch();
+    test_params();
     test_targets();
     test_model();
     if (m_stat_promo < 100 || m_stat_kv < 20 || m_stat_xbase < 20 || m_stat_twnow < 50 || m_stat_twrej < 20)

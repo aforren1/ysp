@@ -11,7 +11,7 @@
 static const ytl_op trial[] = {
     YTL_ON(0),
     YTL_WAIT(YRT_MS(500)),
-    YTL_OFF(0), YTL_SET_VALUE(1, 2.0f), YTL_TRIGGER(12), YTL_MARK(3, 7),
+    YTL_OFF(0), YTL_SET_VALUE(1, 2.0f), YTL_TRIGGER(12), YTL_TRIGGER_CH(1, 13), YTL_MARK(3, 7),
     YTL_TO(2, .to = 0.5f, .duration_ns = YRT_MS(100), .ease = YTL_EASE_COSINE),
     YTL_WAIT(YRT_MS(600)),
     YTL_THEN(2, .to = 0.0f, .duration_ns = YRT_MS(100), .ease = YTL_EASE_COSINE),

@@ -1278,6 +1278,153 @@ hash, the other five differ.
 The compile check `tests/compile/timeline.c` reads the set's record and
 calls `ytl_prune()` and `ytl_horizon()`, as C99 and as C++17.
 
+## Trigger channels and parameter tables (v0.8.0)
+
+v0.8.0 closes two gaps that block the player
+([experiment_format.md](experiment_format.md) 1.4, G1 and the timeline
+part of G6).
+
+### A trigger names its channel
+
+Until v0.7.0, `ytl_trigger()` and `YTL_OP_TRIGGER` took a code only, and
+the builder wrote target 0. A definition with two output roles (an EEG
+amplifier and a second marker line) could not say in an op table which
+role fires. The fired event had no field that told the frame loop where
+to send the code.
+
+Decisions:
+
+- **The op's `ch` is the trigger channel.** `ytl_op` already has `ch`, and
+  a TRIGGER did not read it. The event's `target` was free for a TRIGGER
+  ("the caller's"). So the builder copies `ch` to `target`, and the report
+  carries it unchanged: `yscr_trigger(&scr, e.target, e.code)`. No new op
+  kind, no new field, and `ytl_op` stays 96 bytes.
+- **A trigger channel is not a timeline channel.** It indexes the caller's
+  outputs (`yscr_trigger()`'s channel, a role), so it drives no value, binds
+  nothing and has no bound at `desc.n_channels`. A tween and a trigger can
+  use the same number. Its range is 0 to `INT32_MAX`. The player checks it
+  against its own roles.
+- **Existing callers keep channel 0.** `ytl_trigger(&q, code)` and
+  `YTL_TRIGGER(code)` are unchanged and give 0. The new forms are
+  `ytl_trigger_ch(&q, ch, code)` and `YTL_TRIGGER_CH(ch, code)`. C has no
+  default arguments, so a second name is the cost of not breaking the
+  callers.
+- **Negative is refused in sequences, not in `ytl_add()`.** The sequence
+  calls, `ytl_run()` and `ytl_check_ops()` return `YTL_ERR_ARG` for a
+  negative channel, so the table's `min` is a bound the check enforces.
+  `ytl_add()` keeps any target for a TRIGGER, as before: the blind test's
+  model adds TRIGGERs with targets from -1000 to 1000, and a caller of the
+  raw event API can have done the same. One behavior changes: an op table
+  that set a nonzero `ch` on a TRIGGER ran with target 0 before, and now
+  carries `ch` (or is refused when `ch` is negative). No caller in the
+  repository set it.
+
+### One table per op kind
+
+rig_spec.md principle 8 asks for a table of every parameter a designer
+sets. For the timeline, that is the fields of an op table (4.5.1, "The
+same sequence as data"), which a definition's `events` and `after` steps
+lower to (experiment_format.md 2.5), and the plain fields of `ytl_desc`.
+
+The row is the older tables' row (`name`, `type`, `min`, `max`, `def`,
+`unit`, `doc`) plus `values`, the names and numbers of an enum. Every
+new table of this round uses it, so the tables read alike. Three
+choices:
+
+- **`ytl_op_params(kind, &n)`, not one flat table.** A kind reads a subset
+  of `ytl_op`: WAIT reads `t_ns` only, TRIGGER `ch` and `code`. A flat
+  table would need a kind mask in every row, a field the shared shape does
+  not have. Per-kind tables give the loader its key check directly ("is
+  this key a row of this kind?") and give the designer one panel per kind.
+  TO and THEN share a table, and so do ON and OFF, and WAIT and AT have
+  the same field with two docs.
+- **The list of kinds is a row, not a second struct.** `YTL_OP_NONE` (0,
+  which the op enum did not name before) gives one row, `op`, of type
+  `enum` with values `none=0,on=1,...,then=9`. So the kinds' names and
+  numbers come from the same row shape as every other enum (the ease's
+  values), and a loader parses one format. The names are the C suffixes
+  in lower case (`set_value`), not the definition's step keys (`set`):
+  the mapping from a step to an op is the player's (one step can give
+  several ops), and the shared rule keeps names the same in every header.
+- **`def` is the value in use for a zero field, not another spelling of
+  zero.** `tween.cycles` 0 plays once, so `def` is 1; `lead` 0 is half a
+  frame, so `def` is 0.5. The test checks both ways: the field at 0 and at
+  `def` give the same bytes, and for these two the value in use (the
+  tween's end, `ytl_lead()`) equals `def`.
+
+What is not a row: a tween's `start_ns` and `start_set` (a sequence
+refuses `start_set`, and `start_ns` is unused without it), the desc's
+pointers, and targets (`ytl_anim`), which have no op form because a
+pack's table cannot hold an address.
+
+Bounds are inclusive and are the checks of `ytl_check_ops()` and
+`ytl_open()`, field by field. Three details:
+
+- A time's bound is 2^62 - 512, the largest double below 2^62. 2^62 - 1
+  rounds to 2^62 as a double, which the check refuses, so that bound
+  would lie. The 511 ns below 2^62 pass the check and are outside the
+  table.
+- `lead` is [0, 1) in the table. `YTL_LEAD_NONE` (-1) is a sentinel
+  outside it, named in the row's doc.
+- A rule that joins fields (a tween's end below 2^62, LOG with a positive
+  `from`, a channel below `desc.n_channels`, `keep_velocity` only on a
+  channel's first tween) is in the row's doc, not in `min` and `max`.
+
+### Verification
+
+The writer of the implementation also wrote the checks, in
+`tests/adapt/timeline_test.c` (11e and 11f):
+
+- **Trigger channels.** Channels 0, 3, `INT32_MAX`, 0 and 5 from
+  `ytl_trigger()`, `ytl_trigger_ch()`, `YTL_TRIGGER()` and
+  `YTL_TRIGGER_CH()` come back in the report's `target` and in
+  `ytl_peek()`'s. A negative channel is refused by the call (sticky, the
+  calls before it kept), by `ytl_check_ops()` and by `ytl_run()` with the
+  handle, storage and arena unchanged. A channel past `n_channels`, and
+  one equal to a tweened channel, pass. `ytl_add()` still takes target -5.
+  The random sequence model now gives a TRIGGER's `ch` as its target and
+  draws a negative channel for about 1 trigger in 29 (from the drawn code,
+  so the random stream is unchanged): the builder, `ytl_run()` and the
+  hand-built events agree on 600 tables.
+- **Tables.** For every kind: the rows are exactly the fields the manual
+  says the kind reads, in `ytl_op` order; every name is a field of
+  `ytl_op` (a map written in the test from the declarations, with
+  `offsetof`) and its `type` is the field's; `min` <= `def` <= `max`; `unit`
+  is `"ns"` exactly for the `_ns` fields; `values` is set exactly for
+  enums, in value order, contiguous from `min` to `max`, and each name
+  gives its C constant (`trigger=4` is `YTL_OP_TRIGGER`, `bezier=6` is
+  `YTL_EASE_BEZIER`). The field at 0 and at `def` give the same storage,
+  arena and 40 frames of values. Every field that is not a row, set to a
+  nonzero value, changes nothing. Each field at `min` and at `max` passes
+  `ytl_check_ops()` (or fails for another reason than `YTL_ERR_ARG`:
+  `tween.cycles` at its max fills the arena), and just past them is
+  refused (integers: min - 1 and max + 1; times: +-2^62; floats: 0.25 past
+  a finite bound, or an infinity). The desc: the same, by `ytl_open()`,
+  and the handles from a zero field and from `def` are the same bytes.
+
+Mutations of the new code, one at a time: 14, all caught (`v08-00` to
+`v08-13` in [tests/mutate/timeline.toml](../tests/mutate/timeline.toml)):
+a trigger that loses its channel (op and call), a negative channel taken
+(call and check), a trigger channel checked against `n_channels`, a MARK
+that reads `ch`, `def` 0 for `tween.cycles` and `lead`, and five wrong
+rows (a channel's max, the ease's max, two kind names swapped, THEN with
+no rows, a negative duration's min, a time bound of 2^62). A comparison
+of a zero field with `def` alone cannot catch the two `def` mutants (0
+and 1 cycles both play once), so the test also checks the value in use. The anchors of the whole list
+(106) match; the earlier 92 were not run again this round.
+
+Built and run on 2026-10-21: MinGW-w64 gcc 16.1 (the test at C11 with
+`-Wall -Wextra -Wpedantic -Wshadow -Wfloat-conversion -Werror`; the
+compile checks as C99, C++17 and, for the op macros, C++20); the `msvc`
+preset (MSVC, no warning): the timeline, video and response tests, the
+compile checks (C, C++17, C++20), `timeline_trial`, `timeline_tracking`
+and `timeline_bench 500`; and the `msvc-full` preset (no warning): every
+program of CI's "Run examples (simulated display)" step, with its
+expected exit code, `screen_hello`, `gfx_trial` and `trial_eeg_triggers`
+included. The sequence model now reports 600
+tables: 164 clean, 394 refused with `YTL_ERR_ARG` and 42 with
+`YTL_ERR_BOUND`.
+
 ## Animate a stimulus field
 
 This how-to animates the fields of ysp/gfx.h stimuli with targets. The
@@ -1663,6 +1810,11 @@ clean on MinGW gcc 16.1, MSVC 19.44 (C++20) and gcc 11.4.
 
 ## Not done
 
+- Parameter tables (v0.8.0): the names are the C fields. The map from a
+  definition's step keys to ops and rows (`set` to `set_value`, `wait_s`
+  to WAIT's `t_ns`, a role to a trigger channel) is the player's, and
+  nothing checks it yet. The tables do not list a target tween's fields,
+  a track (`ytl_track`) or a key (`ytl_key`): none is a step.
 - No snapshot format. The storage is the record. A resume after a crash
   adds the events again and anchors again.
 - One timeline is for one display. A second display that flips on its own
