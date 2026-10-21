@@ -31,7 +31,10 @@ static void vn_one(vn_run* r) {
     yau_get_caps(&g_vn, &c);
     CHECK_I(c.period, 480);
     CHECK_I(c.buffer, 1440);
-    CHECK(c.drift_ppm == 0.0 && c.fit_spread_ns == 0.0);
+    /* The slope is exact; the spread is not 0 where the compiler fuses
+     * multiply-adds (Apple arm64 clang by default; gcc -march=native
+     * -ffp-contract=fast measured 1.5e-8 ns), so it gets 1e-6 ns. */
+    CHECK(c.drift_ppm == 0.0 && c.fit_spread_ns < 1e-6);
     /* the device starts inside open: stream frame 0 plays at the open's time */
     CHECK(llabs(yau_time_of(&g_vn, 0) - t_open) <= 1);
     yau_describe(&g_vn, line, sizeof line);
