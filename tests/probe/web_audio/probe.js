@@ -5,6 +5,9 @@
 // (T transient, S sticky), and the ScriptProcessorNode's callbacks. Every
 // connection to a destination is also tapped by an AnalyserNode, which a
 // timer reads every 100 ms: a read with a sample above 0.005 is sound.
+// Each context also keeps where it was made: the first frames of the stack
+// at new AudioContext() outside this file (function names; a build with
+// --profiling-funcs names the C functions too).
 // window.__probe.summary() gives one record per context.
 (function () {
   'use strict';
@@ -33,13 +36,16 @@
     } catch (e) { log('tap error ' + e); }
     return r;
   };
+  const caller = () => (new Error().stack || '').split('\n').slice(1)
+    .filter((l) => l.indexOf('probe.js') < 0 && /\S/.test(l))
+    .slice(0, 8).map((l) => ((l.trim().match(/^(?:at )?([^@( ]*)/) || [])[1] || '?').replace(/^.*\//, '')).join('<');
   function Wrapped(opts) {
     const c = opts === undefined ? new AC() : new AC(opts);
     const id = P.ctx.length;
-    const rec = { id, c, t_new: now(), rate: c.sampleRate, states: [[now(), c.state]], procs: 0, first_proc: null,
+    const rec = { id, c, from: caller(), t_new: now(), rate: c.sampleRate, states: [[now(), c.state]], procs: 0, first_proc: null,
                   polls: 0, loud: 0, first_loud: null, max: 0, t_running: c.state === 'running' ? now() : null, closed: false };
     P.ctx.push(rec);
-    log('ctx' + id + ' new state=' + c.state + ' rate=' + c.sampleRate + ' opts=' + JSON.stringify(opts || {}));
+    log('ctx' + id + ' new state=' + c.state + ' rate=' + c.sampleRate + ' opts=' + JSON.stringify(opts || {}) + ' from ' + rec.from);
     c.addEventListener('statechange', () => {
       rec.states.push([now(), c.state]);
       if (c.state === 'running' && rec.t_running === null) rec.t_running = now();
@@ -78,7 +84,7 @@
   window.AudioContext = Wrapped;
   if (window.webkitAudioContext) window.webkitAudioContext = Wrapped;
   P.summary = function () {
-    return P.ctx.map((r) => ({ id: r.id, t_new: r.t_new, rate: r.rate, state: r.c.state,
+    return P.ctx.map((r) => ({ id: r.id, from: r.from, t_new: r.t_new, rate: r.rate, state: r.c.state,
       states: r.states.map((s) => s[0] + ':' + s[1]).join(' '), t_running: r.t_running, procs: r.procs,
       first_proc: r.first_proc, polls: r.polls, loud: r.loud, first_loud: r.first_loud, max: +r.max.toFixed(4) }));
   };

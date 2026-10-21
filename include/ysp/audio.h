@@ -1,4 +1,4 @@
-/* ysp/audio.h - v0.6.0 - public domain single-header audio library
+/* ysp/audio.h - v0.6.1 - public domain single-header audio library
  *
  *   Sound at a time on the ysp/rt.h clock. A buffer is played with
  *   yau_play_at(buf, t); the header plans its first sample on the device
@@ -752,13 +752,23 @@
  *     after a user gesture (a tap or click on the page; on iOS Safari the
  *     gesture must come first): open from the gesture's handler, or the
  *     context waits for miniaudio's next tap.
- *     ONE CONTEXT (v0.5.2): on the ScriptProcessorNode path the page keeps
- *     the first output's AudioContext. yau_close() suspends it (its
- *     close() does nothing), and a later yau_open() at the same rate
- *     resumes it with a new ScriptProcessorNode, so a reopen after the
- *     gesture needs no new gesture. A second output open at the same time,
- *     or another rate, gets a context of its own. The AudioWorklet path
- *     and a DUPLEX device make a new context at each open, as before.
+ *     ONE CONTEXT (v0.5.2; AudioWorklet path v0.6.1): the page keeps the
+ *     first output's AudioContext. yau_close() suspends it (its close()
+ *     does nothing), and a later yau_open() at the same rate (and, on the
+ *     AudioWorklet path, the same channel count) resumes it, so a reopen
+ *     after the gesture needs no new gesture. The ScriptProcessorNode path
+ *     attaches a new ScriptProcessorNode; the AudioWorklet path keeps its
+ *     one worklet scope and AudioWorkletNode and points the node at the
+ *     new open (a scope boots once per context, and an old node's
+ *     processor runs on after a disconnect). An output open makes one
+ *     context or none: miniaudio's two sample-rate queries get the
+ *     device's (they made 2 more an open before v0.6.1). A second output
+ *     open at the same time gets a context of its own, kept by nobody;
+ *     another rate or channel count gets a new context that the page then
+ *     keeps (the old one is closed). A DUPLEX device or a capture makes
+ *     its own context and miniaudio's query contexts at each open, as
+ *     before. The describe line says which: context=kept (the page's,
+ *     made by this open), reused, or own.
  *     Positions: a timer on the main thread reads getOutputTimestamp()
  *     every 10 ms (and the ScriptProcessorNode's handler each block):
  *     contextTime, the context frame the browser says is at the output,
@@ -903,6 +913,17 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.6.1 - ONE CONTEXT on the AudioWorklet path too: the page keeps the
+ *          AudioContext of its first output open, made in the user's tap,
+ *          with one worklet scope and one AudioWorkletNode; a later open
+ *          at the same rate and channel count resumes it and points the
+ *          node at the new device (was: 3 contexts an open, the device's
+ *          and 2 of miniaudio's sample-rate queries, so a reopen asked a
+ *          context made after the tap for sound, which iOS Safari may
+ *          keep suspended). The queries get the device's context on both
+ *          paths. The describe line says context=kept, reused or own.
+ *          A failed init frees only its own context (was: the kept one,
+ *          also when another open held it).
  *   v0.6.0 - VIRTUAL CLOCK (ysp/rt.h v0.9.0): BACKEND_NULL on the virtual
  *          clock is a device of the header's own, its blocks on a virtual
  *          timer at their own times, for output, capture and DUPLEX; every
@@ -1025,6 +1046,15 @@
  *          positions, miniaudio's null device, the device and source
  *          interfaces, synthesis, the records, the parameter table.
  *
+ *   STATUS: v0.6.1, 2026-10-21 (docs/audio.md, "One context on the
+ *   AudioWorklet path"): av.html with a reopen after setup on both builds,
+ *   the test laptop, emsdk 6.0.12, Chrome 155 and Firefox 158 headless,
+ *   30 opens a cell under the measurement lock: 0 silent; AudioContexts
+ *   made a page 6 (v0.6.0) against 1 on the AudioWorklet path, 1 and 1 on
+ *   the ScriptProcessorNode path; sound after the reopen 120 of 120,
+ *   context=reused in all. Headed Firefox, AudioWorklet, 30 opens each:
+ *   sound minus plan p5 to p95 -0.79 to +0.54 ms (v0.6.0), -0.75 to
+ *   +0.54 ms (v0.6.1). Not run in Safari or on a phone.
  *   STATUS: v0.5.2, 2026-10-14 (docs/audio.md, "Web envelope"): av.html
  *   on the test laptop, emsdk 6.0.12, Firefox 157 and Chrome 155, each
  *   open a new browser and a trusted click, batches under the
@@ -1176,8 +1206,8 @@
 
 #define YAU_VERSION_MAJOR 0
 #define YAU_VERSION_MINOR 6
-#define YAU_VERSION_PATCH 0
-#define YAU_VERSION_STRING "0.6.0"
+#define YAU_VERSION_PATCH 1
+#define YAU_VERSION_STRING "0.6.1"
 
 #include "ysp/rt.h"
 
@@ -2315,6 +2345,13 @@ YAU_API const yau_param* yau_params(int* n);
      * wasapi.pAudioClientPlayback), so the minor version is pinned. */
     #if MA_VERSION_MAJOR != 0 || MA_VERSION_MINOR != 11 || MA_VERSION_REVISION < 25
         #error "ysp_audio: needs miniaudio 0.11.25 or a later 0.11 release"
+    #endif
+    /* miniaudio's AudioWorklet path (BACKENDS, WEB). MA_USE_AUDIO_WORKLETS
+     * is set only where miniaudio's implementation is compiled, so not
+     * under YAU_MINIAUDIO_EXTERNAL; the build's own macro is. */
+    #if defined(MA_HAS_WEBAUDIO) && defined(MA_ENABLE_AUDIO_WORKLETS)
+        #define YAU__WEB_WORKLET 1
+        #include <emscripten/webaudio.h>
     #endif
 #endif
 
@@ -3545,6 +3582,10 @@ typedef struct yau__ma {
     double     web_date_off;/* Date.now() minus performance.now(), ms       */
     uint32_t   web_moves;   /* times web_c0 moved: blocks the context skipped */
     int        web_idx, web_worklet, web_reports;
+    int        web_kept;    /* 0 the open's own context, 1 the page's kept one made now, 2 reused */
+#if defined(YAU__WEB_WORKLET)
+    struct yau__web_slot* web_slot;   /* the kept node's slot; NULL = none */
+#endif
 #endif
 } yau__ma;
 typedef char yau__ma_fits[sizeof(yau__ma) <= sizeof(((yau_audio*)0)->backend_mem) ? 1 : -1];
@@ -3580,7 +3621,9 @@ static void yau__ma_gate(yau__ma* m, ma_device* d) {
  * getOutputTimestamp() and writes the pairs on its lower envelope into
  * *pub; the ScriptProcessorNode's handler also keeps the block's
  * playbackTime. Returns -1 when the device is not there, else (1 when
- * getOutputTimestamp exists) | (2 on the AudioWorklet path).
+ * getOutputTimestamp exists) | (2 on the AudioWorklet path) | (4 when the
+ * context is the page's kept one, ONE CONTEXT) | (8 when an earlier open
+ * made it).
  * The envelope is kept here, over every read, not in the callback: a
  * ScriptProcessorNode's callback sees only the pair its own handler read,
  * at a phase locked to the browser's audio callback. In Firefox 157
@@ -3634,7 +3677,7 @@ EM_JS(int, yau__web_attach, (int idx, void* pub), {
         d.scriptNode.onaudioprocess = function(e) { d.yauPT = e.playbackTime; publish(); f(e); };
     }
     d.yauTimer = setInterval(publish, 10);
-    return (ok ? 1 : 0) | (d.scriptNode ? 0 : 2);
+    return (ok ? 1 : 0) | (d.scriptNode ? 0 : 2) | (ctx.yauKept ? 4 : 0) | (ctx.yauOpens > 1 ? 8 : 0);
 })
 
 EM_JS(void, yau__web_detach, (int idx), {
@@ -3644,51 +3687,153 @@ EM_JS(void, yau__web_detach, (int idx), {
     if (d && d.webaudio && d.webaudio.yauKept) d.webaudio.yauBusy = 0;
 })
 
-/* ONE CONTEXT (v0.5.2): around miniaudio's ScriptProcessorNode device init
- * (playback only), the first AudioContext made is the device's: the
- * page's kept context when it is free, open and at that rate, else a new
- * one, which is kept. Later ones in the same init (miniaudio's sample-rate
- * queries) get the device's context too. A kept context's close() does
- * nothing: yau_close() suspends it and the next yau_open() resumes it.
- * So only the first open makes a context, inside the user's tap; a new
- * context made after the tap may stay suspended on iOS Safari (WebKit
- * starts audio only from a gesture; not tested here). on = 0 puts
- * the page's AudioContext back; 2 does that and frees the kept context
- * (the init failed). */
-EM_JS(void, yau__web_hold, (int on), {
+/* ONE CONTEXT (v0.5.2; AudioWorklet path v0.6.1): around miniaudio's
+ * device init (playback only), the first AudioContext made is the
+ * device's: the page's kept context when it is free, open, at that rate
+ * and (AudioWorklet) at that channel count, else a new one, which is kept
+ * when the kept one is free. Later ones in the same init are miniaudio's
+ * sample-rate queries (3 contexts an open before, call sites traced in
+ * docs/audio.md); they get the device's context, or a stand-in with its
+ * sampleRate when it is not kept. A kept context's close() does nothing:
+ * yau_close() suspends it and the next yau_open() resumes it. So only the
+ * first open makes a context, inside the user's tap; a new context made
+ * after the tap may stay suspended on iOS Safari (WebKit starts audio only
+ * from a gesture).
+ * AudioWorklet path (tramp != 0): a context's worklet scope boots once
+ * (Emscripten's module, miniaudio's "miniaudio" processor), and a second
+ * boot on the same context would instantiate the module again and
+ * register the processor name twice, which throws. So a reused context
+ * gets a stand-in audioWorklet: addModule() resolves, the boot message is
+ * dropped, and the processor's registration is answered as the scope
+ * answers it. The kept context also keeps its one AudioWorkletNode: its
+ * processor keeps running after a disconnect (process() returns true), so
+ * a node per open would leave an old processor calling miniaudio with the
+ * device pointer of a closed open, the same address when the handle is
+ * reopened. The node calls tramp (yau__web_node_cb) with a slot, and the
+ * slot holds miniaudio's callback and the open device, or 0 between opens.
+ * slots: 2 slots of 16 bytes; a new kept context takes the one the last
+ * did not. on = 0 puts the page's constructors back; 2 does that and
+ * frees this init's context (the init failed). */
+EM_JS(void, yau__web_hold, (int on, int ch, int tramp, void* slots), {
     if (typeof window === 'undefined') return;
     var w = window, AC = w.yauRealAC || w.AudioContext || w.webkitAudioContext, dev = null;
+    var AWN = w.yauRealAWN || w.AudioWorkletNode;
     if (!AC) return;
     if (on !== 1) {
-        if (on === 2 && w.yauCtx) w.yauCtx.yauBusy = 0;
+        dev = w.yauDev;
+        if (on === 2 && dev && dev.yauKept) {
+            dev.yauBusy = 0;
+            if (dev.yauSlot) Atomics.store(HEAP32, (dev.yauSlot >> 2) + 1, 0);
+            /* a worklet scope that may be half booted is not reused */
+            if (tramp && !dev.yauNode) { w.yauCtx = null; dev.yauClose(); }
+        }
         if (w.yauRealAC) { w.AudioContext = w.yauRealAC; if (w.yauRealWAC) w.webkitAudioContext = w.yauRealWAC; }
-        w.yauRealAC = w.yauRealWAC = null;
+        if (w.yauRealAWN) w.AudioWorkletNode = w.yauRealAWN;
+        w.yauRealAC = w.yauRealWAC = w.yauRealAWN = w.yauDev = null;
         return;
     }
     w.yauRealAC = w.AudioContext || AC;
     w.yauRealWAC = w.webkitAudioContext || null;
+    w.yauDev = null;
+    function quiet(k) {
+        var onm = null, port = { postMessage: function(d) {
+            if (d && d['_wpn']) Promise.resolve().then(function() {
+                if (onm) onm({ data: { '_wsc': d['callback'], 'args': [d['contextHandle'], 1, d['userData']] } });
+            });
+        } };
+        Object.defineProperty(port, 'onmessage', { get: function() { return onm; }, set: function(f) { onm = f; } });
+        Object.defineProperty(k, 'audioWorklet', { configurable: true,
+            value: { addModule: function() { return Promise.resolve(); }, port: port } });
+        k.yauQuiet = 1;
+    }
     function held(opts) {
         var k = w.yauCtx, rate = opts && opts.sampleRate;
-        if (dev) return dev.yauKept ? dev : (opts === undefined ? new AC() : new AC(opts));
-        if (k && !k.yauBusy && k.state !== 'closed' && (!rate || k.sampleRate === rate)) {
+        if (dev) return dev.yauKept ? dev : { sampleRate: dev.sampleRate, close: function() { return Promise.resolve(); } };
+        if (k && !k.yauBusy && k.state !== 'closed' && (!rate || k.sampleRate === rate)
+            && (!k.yauNode || k.yauNodeCh === ch)) {
             dev = k;
+            if (k.yauNode && !k.yauQuiet) quiet(k);
+            k.audioWorkletInitialized = 0;   /* an ASSERTIONS build checks it */
+            k.yauOpens++;
         } else {
             dev = opts === undefined ? new AC() : new AC(opts);
             if (!k || !k.yauBusy) {
                 if (k && k.state !== 'closed') k.yauClose();
                 dev.yauKept = 1;
+                dev.yauOpens = 1;
                 dev.yauClose = dev.close;
                 dev.close = function() { return Promise.resolve(); };
                 w.yauCtx = dev;
             }
         }
         dev.yauBusy = 1;
+        w.yauDev = dev;
         return dev;
     }
     held.prototype = AC.prototype;
     w.AudioContext = held;
     if (w.yauRealWAC) w.webkitAudioContext = held;
+    if (!tramp || !AWN) return;
+    w.yauRealAWN = AWN;
+    function node(c, name, o) {
+        var po = o && o.processorOptions, s;
+        if (!(c === dev && c.yauKept && po && name === 'miniaudio')) return new AWN(c, name, o);
+        if (!c.yauNode) {
+            s = c.yauSlot = w.yauSlotLast === slots ? slots + 16 : slots;
+            w.yauSlotLast = s;
+        }
+        s = c.yauSlot;
+        Atomics.store(HEAP32, s >> 2, po.callback | 0);
+        Atomics.store(HEAP32, (s >> 2) + 1, po.userData | 0);
+        if (c.yauNode) return c.yauNode;
+        po.callback = tramp;
+        po.userData = s;
+        c.yauNode = new AWN(c, name, o);
+        c.yauNodeCh = ch;
+        return c.yauNode;
+    }
+    node.prototype = AWN.prototype;
+    w.AudioWorkletNode = node;
 })
+
+#if defined(YAU__WEB_WORKLET)
+/* ONE CONTEXT, AudioWorklet path: the kept node's processor calls this on
+ * the audio thread (yau__web_hold). fn is miniaudio's process callback and
+ * dev its device, written by the main thread; dev 0 between opens gives
+ * silence. busy lets yau__ma_close() wait out a call in flight before the
+ * device goes away. */
+typedef struct yau__web_slot { uint32_t fn, dev, busy, pad_; } yau__web_slot;
+#if defined(MA_SUPPORT_AUDIO_WORKLETS_VARIABLE_BUFFER_SIZE)
+#define YAU__WEB_QUANTUM(f) ((size_t)(f).samplesPerChannel)
+#else
+#define YAU__WEB_QUANTUM(f) ((size_t)128)   /* Emscripten before 3.1.70 */
+#endif
+static yau__web_slot yau__web_slots[2];
+
+static bool yau__web_node_cb(int n_in, const AudioSampleFrame* in, int n_out, AudioSampleFrame* out,
+                             int n_par, const AudioParamFrame* par, void* ud) {
+    yau__web_slot* s = (yau__web_slot*)ud;
+    uint32_t dev, fn;
+    int i;
+    /* seq_cst both sides: either close sees busy, or this call sees dev 0 */
+    __atomic_store_n(&s->busy, 1u, __ATOMIC_SEQ_CST);
+    dev = __atomic_load_n(&s->dev, __ATOMIC_SEQ_CST);
+    fn = __atomic_load_n(&s->fn, __ATOMIC_SEQ_CST);
+    if (dev && fn) {
+        ((EmscriptenWorkletNodeProcessCallback)(uintptr_t)fn)(n_in, in, n_out, out, n_par, par, (void*)(uintptr_t)dev);
+    } else {
+        for (i = 0; i < n_out; i++)
+            memset(out[i].data, 0, (size_t)out[i].numberOfChannels * YAU__WEB_QUANTUM(out[i]) * sizeof(float));
+    }
+    __atomic_store_n(&s->busy, 0u, __ATOMIC_SEQ_CST);
+    return true;   /* the node is the page's, for every later open */
+}
+#define YAU__WEB_TRAMP ((int)(uintptr_t)&yau__web_node_cb)
+#define YAU__WEB_SLOTS ((void*)yau__web_slots)
+#else
+#define YAU__WEB_TRAMP 0
+#define YAU__WEB_SLOTS NULL
+#endif
 
 /* The context frame the block now rendered plays at: the AudioWorklet's
  * currentFrame in its own scope, or the ScriptProcessorNode block's
@@ -3908,11 +4053,13 @@ static int yau__ma_open(void* ctx, const yau_device_open* in, yau_device_caps* c
      * p99 callback interval error under load, with no underrun in any
      * (docs/audio.md) */
     dc.wasapi.usage = ma_wasapi_usage_pro_audio;
-#if defined(MA_HAS_WEBAUDIO) && !defined(MA_USE_AUDIO_WORKLETS)
-    /* ONE CONTEXT: the ScriptProcessorNode path reuses the page's context */
-    if (m->backend == ma_backend_webaudio && !m->cap) yau__web_hold(1);
+#if defined(MA_HAS_WEBAUDIO)
+    /* ONE CONTEXT: an output reuses the page's context */
+    if (m->backend == ma_backend_webaudio && !m->cap)
+        yau__web_hold(1, (int)in->format->channels, YAU__WEB_TRAMP, YAU__WEB_SLOTS);
     r = ma_device_init(&m->ctx, &dc, &m->dev);
-    if (m->backend == ma_backend_webaudio && !m->cap) yau__web_hold(r == MA_SUCCESS ? 0 : 2);
+    if (m->backend == ma_backend_webaudio && !m->cap)
+        yau__web_hold(r == MA_SUCCESS ? 0 : 2, 0, YAU__WEB_TRAMP, YAU__WEB_SLOTS);
 #else
     r = ma_device_init(&m->ctx, &dc, &m->dev);
 #endif
@@ -3923,6 +4070,13 @@ static int yau__ma_open(void* ctx, const yau_device_open* in, yau_device_caps* c
         return r == MA_BUSY || r == MA_ACCESS_DENIED ? YAU_ERR_LOST : YAU_ERR_FORMAT;
     }
     m->dev_up = 1;
+#if defined(YAU__WEB_WORKLET)
+    if (m->backend == ma_backend_webaudio) {   /* the kept node's slot, which the init pointed here */
+        int s;
+        for (s = 0; s < 2; s++)
+            if (yau__ld32(&yau__web_slots[s].dev) == (uint32_t)(uintptr_t)&m->dev) m->web_slot = &yau__web_slots[s];
+    }
+#endif
     memset(caps, 0, sizeof *caps);
     caps->rate = m->dev.playback.internalSampleRate;
     caps->channels = (uint16_t)m->dev.playback.internalChannels;
@@ -3968,6 +4122,7 @@ static int yau__ma_open(void* ctx, const yau_device_open* in, yau_device_caps* c
         a = yau__web_attach(m->web_idx, &m->pub);
         m->web_reports = a > 0 && (a & 1);
         m->web_worklet = a > 0 && (a & 2);
+        m->web_kept = a > 0 ? (a & 4 ? 1 : 0) + (a & 8 ? 1 : 0) : 0;
         caps->tier = YAU_TIER_WEB;
         caps->buffer = caps->period;
         if (m->web_reports) {
@@ -4087,6 +4242,19 @@ static void yau__ma_close(void* ctx) {
 #if defined(MA_HAS_WEBAUDIO)
     if (m->dev_up && m->backend == ma_backend_webaudio) yau__web_detach(m->web_idx);
 #endif
+#if defined(YAU__WEB_WORKLET)
+    if (m->web_slot) {   /* the kept node goes silent before the device goes */
+        int k;
+        __atomic_store_n(&m->web_slot->dev, 0u, __ATOMIC_SEQ_CST);
+        for (k = 0; k < 1000000 && __atomic_load_n(&m->web_slot->busy, __ATOMIC_SEQ_CST); k++) { }
+        m->web_slot = NULL;
+        /* The kept context's worklet scope runs on the stack its first
+         * open gave it. miniaudio 0.11.25 never stores that stack (it
+         * leaks it, 128 KB an open); a release that frees it must not
+         * free the kept one. */
+        m->dev.webaudio.pStackBuffer = NULL;
+    }
+#endif
     if (m->dev_up) { ma_device_uninit(&m->dev); m->dev_up = 0; }
     if (m->ctx_up) { ma_context_uninit(&m->ctx); m->ctx_up = 0; }
 }
@@ -4096,11 +4264,13 @@ static int yau__ma_describe(void* ctx, char* buf, size_t cap) {
 #if defined(MA_HAS_WEBAUDIO)
     if (m->backend == ma_backend_webaudio) {
         double base = m->pub.base_s, lat = m->pub.out_s;
-        return snprintf(buf, cap, "%s path=%s reports=%s(%d,%u passed) base_latency=%.1fms output_latency=%.1fms "
-                        "block_moves=%u",
+        static const char* const kept[3] = { "own", "kept", "reused" };
+        return snprintf(buf, cap, "%s path=%s context=%s reports=%s(%d,%u passed) base_latency=%.1fms "
+                        "output_latency=%.1fms block_moves=%u",
                         ma_get_backend_name(m->backend), m->web_worklet ? "audioworklet" : "scriptprocessor",
-                        m->web_reports ? "getOutputTimestamp" : "none", (int)m->web_n_off, (unsigned)yau__ld32(&m->pub.passed),
-                        base >= 0 ? base * 1e3 : -1.0, lat >= 0 ? lat * 1e3 : -1.0, (unsigned)m->web_moves);
+                        kept[m->web_kept], m->web_reports ? "getOutputTimestamp" : "none", (int)m->web_n_off,
+                        (unsigned)yau__ld32(&m->pub.passed), base >= 0 ? base * 1e3 : -1.0, lat >= 0 ? lat * 1e3 : -1.0,
+                        (unsigned)m->web_moves);
     }
 #endif
     return snprintf(buf, cap, "%s", ma_get_backend_name(m->backend));

@@ -40,6 +40,7 @@ try {
     if (r) {
       o.have_audio = r.have_audio; o.callbacks = r.callbacks; o.reports = r.reports; o.xruns = r.xruns;
       o.audio_ok = r.trials.filter((t) => t.audio_minus_plan_ms > -1e8).length; o.trials = r.trials.length;
+      o.amp = r.trials.map((t) => t.audio_minus_plan_ms).filter((v) => v > -1e8);
       o.path = ((r.audio || '').match(/path=(\S+)/) || [null, null])[1];
       o.describe = r.audio;
     } else o.log_tail = s.slice(-800);
