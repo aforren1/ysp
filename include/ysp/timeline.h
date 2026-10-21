@@ -1,4 +1,4 @@
-/* ysp/timeline.h - v0.7.0 - public domain single-header timeline library
+/* ysp/timeline.h - v0.8.0 - public domain single-header timeline library
  *
  *   What a frame shows, as a function of when the frame appears. Events
  *   (onsets, offsets, value changes, triggers, annotations) at times on a
@@ -58,7 +58,7 @@
  *       ytl_add(&tl, &e);
  *       e.kind = YTL_ONSET;   e.target = GRATING_ON;
  *       ytl_add(&tl, &e);
- *       e.kind = YTL_TRIGGER; e.code = 12;     // a TRIGGER's target is the caller's
+ *       e.kind = YTL_TRIGGER; e.code = 12;     // target: its trigger channel, 0
  *       ytl_add(&tl, &e);
  *       e.kind = YTL_OFFSET;  e.code = 0;      e.time_ns = YRT_MS(1200);
  *       ytl_add(&tl, &e);
@@ -103,7 +103,8 @@
  *           const float* v = ytl_values(&tl);
  *           draw(v[FIX_ON], v[GRATING_ON], v[CONTRAST]);
  *           for (int i = 0; i < n && i < 8; i++)
- *               if (fired[i].kind == YTL_TRIGGER) arm_trigger(fired[i].code);
+ *               if (fired[i].kind == YTL_TRIGGER)  // target: which output
+ *                   arm_trigger(fired[i].target, fired[i].code);
  *           flip_at(next_onset_ns);   // and log fired[] with the flip record
  *           ...
  *       }
@@ -214,7 +215,9 @@
  *   EVENTS (ytl_event, ytl_add, ytl_add_n)
  *     An event has a time on its base, a kind, and the caller's payload:
  *       YTL_MARK     reported only; an annotation, a coroutine to resume
- *       YTL_TRIGGER  reported only; `code` is the value for the port
+ *       YTL_TRIGGER  reported only; `code` is the value for the port and
+ *                    `target` the trigger channel: which output writes it,
+ *                    a role of the caller (v0.8.0; ytl_trigger() gives 0)
  *       YTL_ONSET    channel `target` becomes 1 when it fires
  *       YTL_OFFSET   channel `target` becomes 0
  *       YTL_SET      channel `target` becomes `value`
@@ -226,7 +229,8 @@
  *     A zeroed event is a MARK at time 0 on the RT base. `code`, `user` and
  *     (for the reported-only kinds) `target` are the caller's and come back
  *     unchanged in the report. Kinds 5 to 15 are the header's, and an add
- *     rejects them.
+ *     rejects them. ytl_add() keeps any target of a TRIGGER, as before
+ *     v0.8.0; the sequence calls and op tables take a channel >= 0.
  *     ytl_add() copies the event into the storage the desc gave, pending
  *     (flags 0, frame -1, onset 0, residual 0), assigns it an id (0, 1, 2, ... in add order; ytl_open() restarts it) and
  *     returns the id. ytl_add_n() adds n events, all or none, and returns
@@ -680,7 +684,9 @@
  *       ytl_on, ytl_off, ytl_set_value   .set(): ONSET, OFFSET or SET
  *                                              of a channel at the cursor
  *       ytl_trigger, ytl_mark(q, code, user)  .call(): a TRIGGER or a
- *                                              MARK at the cursor
+ *                                              MARK at the cursor;
+ *                                              ytl_trigger_ch(q, ch, code)
+ *                                              names the trigger channel
  *       ytl_wait(q, dt_ns), ytl_at(q, t_ns)  "+=dt" and an absolute
  *                                              position; q.t is the cursor,
  *                                              so a variable is a label
@@ -746,7 +752,7 @@
  *     for one more copy of the largest block.
  *     OP TABLES: a ytl_op is one call as data, 96 bytes, built with
  *       YTL_ON(ch) YTL_OFF(ch) YTL_SET_VALUE(ch, v) YTL_TRIGGER(code)
- *       YTL_MARK(code, user) YTL_WAIT(dt) YTL_AT(t)
+ *       YTL_TRIGGER_CH(ch, code) YTL_MARK(code, user) YTL_WAIT(dt) YTL_AT(t)
  *       YTL_TO(ch, desc fields...) YTL_THEN(ch, desc fields...)
  *     which are designated initializers: C99, or C++20 in the fields' order
  *     (g++ wants -Wno-missing-field-initializers). A table can be static
@@ -762,6 +768,39 @@
  *     arena with room for one more copy of the largest block, so a table
  *     that passes cannot run out of room part way. What it cannot know is
  *     the run-time takeover value.
+ *     TRIGGER CHANNELS (v0.8.0): a TRIGGER op's `ch` is its trigger
+ *     channel, an index the caller gives meaning to (an output role, such
+ *     as yscr_trigger()'s channel), not a timeline channel: it drives no
+ *     value and binds nothing. The event's `target` carries it to the
+ *     report, so a player with two outputs routes each fired trigger by it.
+ *     It is 0 to INT32_MAX; a negative one is YTL_ERR_ARG. YTL_TRIGGER(code)
+ *     and ytl_trigger() give channel 0, as before.
+ *
+ *   PARAMETERS (ytl_param, ytl_op_params, ytl_desc_params)
+ *     The fields an op table's ops read, and the plain fields of ytl_desc,
+ *     as tables of ytl_param rows (name, type, min, max, def, unit, doc,
+ *     values), the shape of the other headers' tables. A player's loader
+ *     checks a step's keys against them, and a designer builds its panels
+ *     from them: one source, so the two cannot disagree.
+ *       ytl_op_params(YTL_OP_NONE, &n)  one row, "op": an enum whose values
+ *                                       name every kind ("none=0,on=1,...")
+ *       ytl_op_params(YTL_OP_TO, &n)    the rows of the fields TO reads, in
+ *                                       ytl_op order ("ch", "tween.to", ...)
+ *       ytl_desc_params(&n)             lead, n_channels and the capacities
+ *     A name is the field's, dotted when nested ("tween.duration_ns"). A
+ *     field in ns has unit "ns" (a definition writes it in seconds, as
+ *     x_s). type is "i32", "i64", "u64", "f32", "f64", "bool" or "enum";
+ *     an enum's values are "name=value" pairs, joined by ',', in value
+ *     order, names in lower case. min and max are inclusive: a value in
+ *     them passes ytl_check_ops() (or ytl_open()) as far as that field
+ *     goes, and one outside is refused, but for a time's last 511 ns below
+ *     2^62 (a double cannot hold 2^62 - 1). A sentinel outside them (lead's
+ *     YTL_LEAD_NONE) and a check that depends on other fields (a tween's
+ *     end in range, LOG with a positive from, a channel below
+ *     desc.n_channels) are in doc. def is what a zero field means
+ *     (tween.cycles: 1). The tables are static: no handle, no
+ *     allocation. A tween's start_ns and start_set are not rows: a
+ *     sequence refuses them. TARGETS have no op form and no rows.
  *
  *   TARGETS (ytl_anim, ytl_animate, ytl_tween_to, ytl_kill, desc.targets)
  *     A target tween writes a field of the caller: n floats (YTL_F32) or n
@@ -989,6 +1028,15 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.8.0 - trigger channels and parameter tables (SEQUENCES,
+ *          PARAMETERS). A TRIGGER op's `ch` is its trigger channel and
+ *          becomes the event's `target`, so the report says which output
+ *          fires: ytl_trigger_ch() and YTL_TRIGGER_CH(); ytl_trigger() and
+ *          YTL_TRIGGER() give channel 0, as their events did. ytl_run() and
+ *          ytl_check_ops() refuse a negative trigger channel (an op table
+ *          that set one was run with channel 0 before). YTL_OP_NONE (0),
+ *          ytl_param, ytl_op_params() and ytl_desc_params(). Nothing else
+ *          changes: the same calls give the same values and bytes.
  *   v0.7.0 - three changes to tweens (TWEENS, TARGETS, REMOVING). Yoyo:
  *          the return leg is the forward leg played backward in time, as
  *          in GSAP, for channel, sequence and target tweens alike: the
@@ -1092,7 +1140,20 @@
  *          prune, remove and clear; the record of where every event
  *          landed.
  *
- *   STATUS: v0.7.0. Yoyo, records and prune, tested by the writer of the
+ *   STATUS: v0.8.0. Trigger channels and parameter tables, tested by the
+ *   writer of the implementation (tests/adapt/timeline_test.c, 11e and
+ *   11f): channels from the calls and the macros in the report and in a
+ *   peek, negative ones refused all or none, the sequence model giving a
+ *   trigger's ch as its target over 600 random tables; every table row
+ *   against the ytl_op or ytl_desc field it names (type, order, unit,
+ *   enum values against the C constants), its default against a zero
+ *   field (same bytes, and the value in use for cycles and lead), the
+ *   fields that are no row changing nothing, and each bound against
+ *   ytl_check_ops() or ytl_open(). 14 of 14 new mutants caught. MinGW gcc
+ *   16.1 (C11 -Werror test; compile checks C99, C++17, C++20) and MSVC
+ *   (C, C++17, C++20); CI's examples on the simulated display pass
+ *   (docs/timeline.md).
+ *   v0.7.0. Yoyo, records and prune, tested by the writer of the
  *   implementation: every non-STEP ease as a channel, a sequence and a
  *   target yoyo, the same bits on the three paths, each within 2e-6 of
  *   the forward leg read at the mirrored time, the mirror within 1 float
@@ -1224,9 +1285,9 @@
 
 /* The version of this header, for a log line or a compile-time check. */
 #define YTL_VERSION_MAJOR 0
-#define YTL_VERSION_MINOR 7
+#define YTL_VERSION_MINOR 8
 #define YTL_VERSION_PATCH 0
-#define YTL_VERSION_STRING "0.7.0"
+#define YTL_VERSION_STRING "0.8.0"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -1295,7 +1356,8 @@ YTL_API int64_t ytl_ns(double seconds);
 
 typedef enum ytl_kind {
     YTL_MARK      = 0,   /* reported only                                */
-    YTL_TRIGGER   = 1,   /* reported only; code is the port value        */
+    YTL_TRIGGER   = 1,   /* reported only; code is the port value, target
+                          * the trigger channel (v0.8.0)                 */
     YTL_ONSET     = 2,   /* channel target := 1                          */
     YTL_OFFSET    = 3,   /* channel target := 0                          */
     YTL_SET       = 4,   /* channel target := value                      */
@@ -1318,7 +1380,8 @@ typedef enum ytl_kind {
 typedef struct ytl_event {
     int64_t  time_ns;   /* on its base                                      */
     int32_t  target;    /* the channel for ONSET, OFFSET and SET; the
-                         * caller's for the other kinds                     */
+                         * trigger channel for TRIGGER; the caller's for
+                         * the other kinds                                  */
     float    value;     /* SET's value; must be finite                      */
     int32_t  code;      /* the caller's: a trigger value, an annotation row */
     uint8_t  base;      /* 0 .. YTL_MAX_BASES-1                           */
@@ -1649,10 +1712,11 @@ typedef struct ytl_seq {
 /* An op of a sequence table, for ytl_run(). Zero is no op: a zeroed
  * entry is YTL_ERR_ARG. Build them with the YTL_ON() ... macros. */
 enum {
+    YTL_OP_NONE = 0,   /* v0.8.0: named for the parameter tables; refused  */
     YTL_OP_ON = 1,     /* ch                                              */
     YTL_OP_OFF,        /* ch                                              */
     YTL_OP_SET_VALUE,  /* ch, value                                       */
-    YTL_OP_TRIGGER,    /* code                                            */
+    YTL_OP_TRIGGER,    /* ch: the trigger channel (v0.8.0), code          */
     YTL_OP_MARK,       /* code, user                                      */
     YTL_OP_WAIT,       /* t: a duration                                   */
     YTL_OP_AT,         /* t: a base time                                  */
@@ -1662,7 +1726,7 @@ enum {
 
 typedef struct ytl_op {
     int              op;
-    int              ch;
+    int              ch;       /* TRIGGER: the trigger channel          */
     int64_t          t_ns;     /* WAIT: a duration; AT: a base time */
     int32_t          code;
     float            value;
@@ -1676,6 +1740,7 @@ typedef struct ytl_op {
 #define YTL_OFF(c)           { .op = YTL_OP_OFF, .ch = (c) }
 #define YTL_SET_VALUE(c, v)  { .op = YTL_OP_SET_VALUE, .ch = (c), .value = (v) }
 #define YTL_TRIGGER(k)       { .op = YTL_OP_TRIGGER, .code = (k) }
+#define YTL_TRIGGER_CH(c, k) { .op = YTL_OP_TRIGGER, .ch = (c), .code = (k) }
 #define YTL_MARK(k, u)       { .op = YTL_OP_MARK, .code = (k), .user = (u) }
 #define YTL_WAIT(dt)         { .op = YTL_OP_WAIT, .t_ns = (dt) }
 #define YTL_AT(bt)           { .op = YTL_OP_AT, .t_ns = (bt) }
@@ -1842,6 +1907,10 @@ YTL_API void ytl_set_value(ytl_seq* q, int ch, float value);
 YTL_API void ytl_trigger(ytl_seq* q, int32_t code);
 YTL_API void ytl_mark(ytl_seq* q, int32_t code, uint64_t user);
 
+/* A TRIGGER at the cursor on trigger channel `ch` (>= 0; SEQUENCES), the
+ * fired event's target. ytl_trigger() is this with channel 0. */
+YTL_API void ytl_trigger_ch(ytl_seq* q, int ch, int32_t code);
+
 /* ONSET on chans[i] at the cursor + i x stagger_ns, all or none. */
 YTL_API void ytl_on_n(ytl_seq* q, const int* chans, int n, int64_t stagger_ns);
 
@@ -1868,6 +1937,30 @@ YTL_API int ytl_run(ytl_seq* q, const ytl_op* ops, int n);
  * loads. Returns 0, or the first error with *bad set to its op's index. */
 YTL_API int ytl_check_ops(ytl_timeline* tl, int base, const ytl_op* ops,
                               int n, int* bad);
+
+/* --- parameters (PARAMETERS) ------------------------------------------- */
+
+/* One field a designer sets: the other ysp tables' row, plus `values`, so
+ * the tables read alike. */
+typedef struct ytl_param {
+    const char* name;     /* the field, dotted when nested: "tween.to"    */
+    const char* type;     /* "i32", "i64", "u64", "f32", "f64", "bool",
+                           * "enum"                                       */
+    double      min, max; /* inclusive                                    */
+    double      def;      /* the value a zero field means                 */
+    const char* unit;     /* "ns" for an int64 ns field; "" for none      */
+    const char* doc;
+    const char* values;   /* "enum": "name=value" pairs joined by ',' in
+                           * value order; NULL for the other types        */
+} ytl_param;
+
+/* The fields op kind `op` reads, in ytl_op order, and their count in *n.
+ * YTL_OP_NONE gives the one row "op", whose values name every kind. NULL
+ * and *n = 0 for a number that is not a kind. */
+YTL_API const ytl_param* ytl_op_params(int op, int* n);
+
+/* The plain fields of ytl_desc: lead, n_channels and the capacities. */
+YTL_API const ytl_param* ytl_desc_params(int* n);
 
 /* Undo what the sequence added: every event of its base with an id at or
  * past the sequence's first, and the arena blocks it built (SEQUENCES).
@@ -3715,6 +3808,11 @@ YTL_API void ytl_trigger(ytl_seq* q, int32_t code) {
     if (ytl__seq_go(q)) ytl__seq_fail(q, ytl__seq_ev(q, YTL_TRIGGER, 0, 0.0f, code, 0));
 }
 
+YTL_API void ytl_trigger_ch(ytl_seq* q, int ch, int32_t code) {
+    if (ytl__seq_go(q))
+        ytl__seq_fail(q, ch < 0 ? YTL_ERR_ARG : ytl__seq_ev(q, YTL_TRIGGER, ch, 0.0f, code, 0));
+}
+
 YTL_API void ytl_mark(ytl_seq* q, int32_t code, uint64_t user) {
     if (ytl__seq_go(q)) ytl__seq_fail(q, ytl__seq_ev(q, YTL_MARK, 0, 0.0f, code, user));
 }
@@ -3845,6 +3943,7 @@ static int ytl__check_ops(const ytl_timeline* tl, int base, int64_t cursor, uint
             /* fall through */
         case YTL_OP_TRIGGER:
         case YTL_OP_MARK:
+            if (o->op == YTL_OP_TRIGGER && o->ch < 0) return YTL_ERR_ARG;
             n_ev++;
             if (n_ev > tl->capacity - tl->n_events || n_ev > INT32_MAX - tl->next_id) return YTL_ERR_FULL;
             break;
@@ -3886,6 +3985,103 @@ YTL_API int ytl_check_ops(ytl_timeline* tl, int base, const ytl_op* ops, int n, 
     return rc;
 }
 
+/* --- parameter tables (PARAMETERS) ------------------------------------- */
+
+/* The largest double below 2^62: 2^62 - 1 rounds up to 2^62, which a time
+ * check refuses, so a bound written as it would lie. */
+#define YTL__P_T    4611686018427387392.0
+#define YTL__P_F32  3.4028234663852886e38    /* FLT_MAX, without <float.h> */
+#define YTL__P_I32  2147483647.0
+#define YTL__P_U64  18446744073709549568.0   /* the largest double below 2^64 */
+#define YTL__P_CH   { "ch", "i32", 0, YTL_MAX_CHANNELS - 1, 0, "", \
+                      "the channel; below desc.n_channels", NULL }
+
+YTL_API const ytl_param* ytl_op_params(int op, int* n) {
+    static const ytl_param none[] = {
+        { "op", "enum", 0, YTL_OP_THEN, 0, "", "the op's kind; none (0) is refused",
+          "none=0,on=1,off=2,set_value=3,trigger=4,mark=5,wait=6,at=7,to=8,then=9" },
+    };
+    static const ytl_param chan[] = { YTL__P_CH };
+    static const ytl_param set[] = {
+        YTL__P_CH,
+        { "value", "f32", -YTL__P_F32, YTL__P_F32, 0, "", "the channel's value from the cursor on; finite", NULL },
+    };
+    static const ytl_param trig[] = {
+        { "ch", "i32", 0, YTL__P_I32, 0, "",
+          "the trigger channel: which output writes the code (an output role, yscr_trigger()'s channel); "
+          "the fired event's target. Not a timeline channel", NULL },
+        { "code", "i32", -YTL__P_I32 - 1.0, YTL__P_I32, 0, "",
+          "the value the output writes; the output checks its own range", NULL },
+    };
+    static const ytl_param mark[] = {
+        { "code", "i32", -YTL__P_I32 - 1.0, YTL__P_I32, 0, "", "the caller's: an annotation, a row", NULL },
+        { "user", "u64", 0, YTL__P_U64, 0, "", "the caller's: a pointer, a string id", NULL },
+    };
+    static const ytl_param wait[] = {
+        { "t_ns", "i64", -YTL__P_T, YTL__P_T, 0, "ns", "moves the cursor by this; the cursor stays inside +-2^62", NULL },
+    };
+    static const ytl_param at[] = {
+        { "t_ns", "i64", -YTL__P_T, YTL__P_T, 0, "ns", "moves the cursor to this base time", NULL },
+    };
+    static const ytl_param tween[] = {
+        YTL__P_CH,
+        { "tween.to", "f32", -YTL__P_F32, YTL__P_F32, 0, "", "the end value; finite", NULL },
+        { "tween.from", "f32", -YTL__P_F32, YTL__P_F32, 0, "",
+          "the start value, with from_set; else the value at the start; finite", NULL },
+        { "tween.duration_ns", "i64", 0, YTL__P_T, 0, "ns",
+          "0 jumps; more than 0 with cycles above 1 or yoyo; the end stays below 2^62", NULL },
+        { "tween.delay_ns", "i64", -YTL__P_T, YTL__P_T, 0, "ns",
+          "the start is the cursor plus this, at or after the end of the channel's last tween in the sequence", NULL },
+        { "tween.curve.x1", "f32", 0, 1, 0, "", "BEZIER only: the first control point's x", NULL },
+        { "tween.curve.y1", "f32", -YTL__P_F32, YTL__P_F32, 0, "", "BEZIER only: the first control point's y; finite", NULL },
+        { "tween.curve.x2", "f32", 0, 1, 0, "", "BEZIER only: the second control point's x", NULL },
+        { "tween.curve.y2", "f32", -YTL__P_F32, YTL__P_F32, 0, "", "BEZIER only: the second control point's y; finite", NULL },
+        { "tween.ease", "enum", 0, YTL__EASE_LAST, 0, "", "LOG needs from_set and from and to above 0",
+          "linear=0,step=1,cosine=2,quad_in=3,quad_out=4,log=5,bezier=6,quad_in_out=7,cubic_in=8,cubic_out=9,cubic_in_out=10" },
+        { "tween.cycles", "i32", 0, (double)(INT32_MAX / 4), 1, "",
+          "plays of the tween; 0 is 1; YTL_FOREVER is refused in a sequence, and the key arena bounds it", NULL },
+        { "tween.from_set", "bool", 0, 1, 0, "", "from is the start value", NULL },
+        { "tween.yoyo", "bool", 0, 1, 0, "", "a cycle goes to `to` and back; needs a duration", NULL },
+        { "tween.keep_velocity", "bool", 0, 1, 0, "",
+          "start at the channel's slope and end at rest; LINEAR, one cycle, no from_set, no yoyo, a duration, "
+          "and the channel's first tween in the sequence", NULL },
+    };
+    const ytl_param* t = NULL;
+    int k = 0;
+#define YTL__P_SET(a) do { t = (a); k = (int)(sizeof(a) / sizeof((a)[0])); } while (0)
+    switch (op) {
+    case YTL_OP_NONE:      YTL__P_SET(none); break;
+    case YTL_OP_ON:
+    case YTL_OP_OFF:       YTL__P_SET(chan); break;
+    case YTL_OP_SET_VALUE: YTL__P_SET(set); break;
+    case YTL_OP_TRIGGER:   YTL__P_SET(trig); break;
+    case YTL_OP_MARK:      YTL__P_SET(mark); break;
+    case YTL_OP_WAIT:      YTL__P_SET(wait); break;
+    case YTL_OP_AT:        YTL__P_SET(at); break;
+    case YTL_OP_TO:
+    case YTL_OP_THEN:      YTL__P_SET(tween); break;
+    default:               break;
+    }
+#undef YTL__P_SET
+    if (n) *n = k;
+    return t;
+}
+
+YTL_API const ytl_param* ytl_desc_params(int* n) {
+    static const ytl_param table[] = {
+        { "event_capacity", "i32", 0, YTL__P_I32, 0, "event", "entries of desc.events, the event storage", NULL },
+        { "n_channels", "i32", 0, YTL_MAX_CHANNELS, 0, "", "float channels", NULL },
+        { "lead", "f64", 0, 0.99999999999999989, 0.5, "period",
+          "the fraction of a frame period an event may land early; 0 is 0.5, the nearest frame; "
+          "YTL_LEAD_NONE (-1): never early", NULL },
+        { "key_capacity", "i32", 0, YTL__P_I32, 0, "key", "entries of desc.keys, the key arena of the sequences' tweens", NULL },
+        { "target_capacity", "i32", 0, YTL__P_I32, 0, "target", "entries of desc.targets, the target pool", NULL },
+        { "tween_capacity", "i32", 0, YTL__P_I32, 0, "tween", "entries of desc.tweens, the target tween pool", NULL },
+    };
+    if (n) *n = (int)(sizeof table / sizeof table[0]);
+    return table;
+}
+
 static int ytl__seq_op(ytl_seq* q, const ytl_op* o) {
     int64_t end = 0;
     int rc;
@@ -3893,7 +4089,7 @@ static int ytl__seq_op(ytl_seq* q, const ytl_op* o) {
     case YTL_OP_ON:        return ytl__seq_ev(q, YTL_ONSET, o->ch, 0.0f, 0, 0);
     case YTL_OP_OFF:       return ytl__seq_ev(q, YTL_OFFSET, o->ch, 0.0f, 0, 0);
     case YTL_OP_SET_VALUE: return ytl__seq_ev(q, YTL_SET, o->ch, o->value, 0, 0);
-    case YTL_OP_TRIGGER:   return ytl__seq_ev(q, YTL_TRIGGER, 0, 0.0f, o->code, 0);
+    case YTL_OP_TRIGGER:   return ytl__seq_ev(q, YTL_TRIGGER, o->ch, 0.0f, o->code, 0);
     case YTL_OP_MARK:      return ytl__seq_ev(q, YTL_MARK, 0, 0.0f, o->code, o->user);
     case YTL_OP_WAIT:      return ytl__seq_wait(q, o->t_ns);
     case YTL_OP_AT:        return ytl__seq_at(q, o->t_ns);

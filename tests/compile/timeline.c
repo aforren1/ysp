@@ -5,7 +5,8 @@
  * to prove it links, and that a sequence built by calls and one built from
  * an op table both apply. v0.6.0: target tweens on a stimulus's fields,
  * written as a caller writes them, with no cast in C++. v0.7.0: a set's
- * record, a prune and the horizon. */
+ * record, a prune and the horizon. v0.8.0: a trigger on a channel, by
+ * call and by op, and the parameter tables. */
 #define YSP_TIMELINE_IMPLEMENTATION
 #include "ysp/timeline.h"
 
@@ -23,11 +24,29 @@ typedef struct tl_api {
     void (*wait)(ytl_seq*, int64_t);
     int64_t (*ns)(double);
     bool (*horizon)(const ytl_timeline*, int, int64_t*);   /* v0.7.0 */
+    void (*trigger_ch)(ytl_seq*, int, int32_t);             /* v0.8.0 */
+    const ytl_param* (*op_params)(int, int*);
+    const ytl_param* (*desc_params)(int*);
 } tl_api;
 
 static const tl_api g_api = {
-    ytl_open, ytl_close, ytl_error, ytl_peek, ytl_clamped, ytl_check_ops, ytl_wait, ytl_ns, ytl_horizon
+    ytl_open, ytl_close, ytl_error, ytl_peek, ytl_clamped, ytl_check_ops, ytl_wait, ytl_ns, ytl_horizon,
+    ytl_trigger_ch, ytl_op_params, ytl_desc_params
 };
+
+/* A designer's panel from the tables: every kind's rows, by name. */
+static int params(void) {
+    int k, n, total = 0;
+    const ytl_param* p = g_api.op_params(YTL_OP_NONE, &n);
+    if (n != 1 || !p[0].values) return 1;
+    for (k = YTL_OP_ON; k <= YTL_OP_THEN; k++) {
+        p = g_api.op_params(k, &n);
+        if (!p || !p[0].name || !p[0].type || !p[0].unit || !p[0].doc) return 1;
+        total += n;
+    }
+    p = g_api.desc_params(&n);
+    return total > 0 && n > 0 && p[0].min <= p[0].def && p[0].def <= p[0].max ? 0 : 1;
+}
 
 /* The unit macros are constant expressions: a static initializer. */
 static const int64_t g_units[4] = { YRT_S(1), YRT_MS(1), YRT_US(1), YRT_NS(1) };
@@ -155,7 +174,7 @@ int main(void) {
     ytl_tween_desc up;
     ytl_seq q;
     if (g_units[0] != INT64_C(1000000000) || g_units[1] != INT64_C(1000000)
-        || g_units[2] != 1000 || g_units[3] != 1 || g_api.ns(0.5) != YRT_MS(500) || names())
+        || g_units[2] != 1000 || g_units[3] != 1 || g_api.ns(0.5) != YRT_MS(500) || names() || params())
         return 1;
     g_api.close(&tl);
     g_api.close(&tl);
@@ -172,6 +191,7 @@ int main(void) {
     ytl_wait(&q, YRT_MS(500));
     ytl_off(&q, 0);
     ytl_trigger(&q, 12);
+    g_api.trigger_ch(&q, 1, 13);
     ytl_to(&q, 2, &up);
     ytl_wait(&q, YRT_MS(600));
     up.to = 0.0f;
@@ -185,7 +205,7 @@ int main(void) {
         static const ytl_op trial[] = {
             YTL_ON(0),
             YTL_WAIT(YRT_MS(500)),
-            YTL_OFF(0), YTL_SET_VALUE(1, 2.0f), YTL_TRIGGER(12), YTL_MARK(3, 7),
+            YTL_OFF(0), YTL_SET_VALUE(1, 2.0f), YTL_TRIGGER(12), YTL_TRIGGER_CH(1, 13), YTL_MARK(3, 7),
             YTL_TO(2, .to = 0.5f, .duration_ns = YRT_MS(100), .ease = YTL_EASE_COSINE),
             YTL_WAIT(YRT_MS(600)),
             YTL_THEN(2, .to = 0.0f, .duration_ns = YRT_MS(100), .ease = YTL_EASE_COSINE),

@@ -2,7 +2,8 @@
 # ysp/timeline.h mutants: RATE (v0.4.0), the sequence code (ytl_seq) and
 # TARGETS (v0.6.0). docs/timeline.md: 24 RATE mutants, 21 caught and 3
 # equivalent; 19 sequence mutants, all caught; 20 target mutants (tgt-*),
-# all caught; 26 v0.7.0 mutants (v07-*: yoyo, records, prune), all caught.
+# all caught; 26 v0.7.0 mutants (v07-*: yoyo, records, prune), all caught;
+# 14 v0.8.0 mutants (v08-*: trigger channels, parameter tables), all caught.
 # The v0.3.0 list (23) was not kept.
 header = "ysp/timeline.h"
 
@@ -887,3 +888,118 @@ test = "timeline"
 why = "After a clear nothing pruned remains, and every time replays."
 find = '        if (base == YTL_ALL_BASES || base == i) tl->bases[i].pruned = 0;'
 replace = ''
+
+# v0.8.0: trigger channels and the parameter tables (v08-*).
+
+[[mutant]]
+id = "v08-00"
+name = "an op table's trigger loses its channel"
+test = "timeline"
+why = "A TRIGGER op's ch is the fired event's target, so a player routes it to its output."
+find = '    case YTL_OP_TRIGGER:   return ytl__seq_ev(q, YTL_TRIGGER, o->ch, 0.0f, o->code, 0);'
+replace = '    case YTL_OP_TRIGGER:   return ytl__seq_ev(q, YTL_TRIGGER, 0, 0.0f, o->code, 0);'
+
+[[mutant]]
+id = "v08-01"
+name = "ytl_trigger_ch() loses its channel"
+test = "timeline"
+why = "The call and the op give the same event: ch is its target."
+find = '        ytl__seq_fail(q, ch < 0 ? YTL_ERR_ARG : ytl__seq_ev(q, YTL_TRIGGER, ch, 0.0f, code, 0));'
+replace = '        ytl__seq_fail(q, ch < 0 ? YTL_ERR_ARG : ytl__seq_ev(q, YTL_TRIGGER, 0, 0.0f, code, 0));'
+
+[[mutant]]
+id = "v08-02"
+name = "ytl_trigger_ch() takes a negative channel"
+test = "timeline"
+why = "The table's min is 0, and the call refuses what the check refuses."
+find = '        ytl__seq_fail(q, ch < 0 ? YTL_ERR_ARG : ytl__seq_ev(q, YTL_TRIGGER, ch, 0.0f, code, 0));'
+replace = '        ytl__seq_fail(q, ytl__seq_ev(q, YTL_TRIGGER, ch, 0.0f, code, 0));'
+
+[[mutant]]
+id = "v08-03"
+name = "the check takes a negative trigger channel"
+test = "timeline"
+why = "A table that passes ytl_check_ops() must hold no channel below the table's min."
+find = '            if (o->op == YTL_OP_TRIGGER && o->ch < 0) return YTL_ERR_ARG;'
+replace = ''
+
+[[mutant]]
+id = "v08-04"
+name = "a trigger channel checked as a timeline channel"
+test = "timeline"
+why = "A trigger channel names an output, not a channel below desc.n_channels."
+find = '            if (o->op == YTL_OP_TRIGGER && o->ch < 0) return YTL_ERR_ARG;'
+replace = '            if (o->op == YTL_OP_TRIGGER && (o->ch < 0 || o->ch >= tl->n_channels)) return YTL_ERR_ARG;'
+
+[[mutant]]
+id = "v08-05"
+name = "a MARK reads ch"
+test = "timeline"
+why = "A field that is no row of the kind's table changes nothing."
+find = '    case YTL_OP_MARK:      return ytl__seq_ev(q, YTL_MARK, 0, 0.0f, o->code, o->user);'
+replace = '    case YTL_OP_MARK:      return ytl__seq_ev(q, YTL_MARK, o->ch, 0.0f, o->code, o->user);'
+
+[[mutant]]
+id = "v08-06"
+name = "the cycles row's default is 0"
+test = "timeline"
+why = "def is the value in use for a zero field: one play."
+find = '''        { "tween.cycles", "i32", 0, (double)(INT32_MAX / 4), 1, "",'''
+replace = '''        { "tween.cycles", "i32", 0, (double)(INT32_MAX / 4), 0, "",'''
+
+[[mutant]]
+id = "v08-07"
+name = "the lead row's default is 0"
+test = "timeline"
+why = "A zero lead means half a frame, and def says so."
+find = '''        { "lead", "f64", 0, 0.99999999999999989, 0.5, "period",'''
+replace = '''        { "lead", "f64", 0, 0.99999999999999989, 0, "period",'''
+
+[[mutant]]
+id = "v08-08"
+name = "a channel row's max is n_channels"
+test = "timeline"
+why = "Channels count from 0, so the last is YTL_MAX_CHANNELS - 1."
+find = '''#define YTL__P_CH   { "ch", "i32", 0, YTL_MAX_CHANNELS - 1, 0, "", \'''
+replace = '''#define YTL__P_CH   { "ch", "i32", 0, YTL_MAX_CHANNELS, 0, "", \'''
+
+[[mutant]]
+id = "v08-09"
+name = "the ease row stops before CUBIC_IN_OUT"
+test = "timeline"
+why = "The enum's max and its values name every ease."
+find = '''        { "tween.ease", "enum", 0, YTL__EASE_LAST, 0, "", "LOG needs from_set and from and to above 0",'''
+replace = '''        { "tween.ease", "enum", 0, YTL__EASE_LAST - 1, 0, "", "LOG needs from_set and from and to above 0",'''
+
+[[mutant]]
+id = "v08-10"
+name = "two kinds swapped in the op names"
+test = "timeline"
+why = "A loader maps a step's kind by these names, so each must give its YTL_OP_ number."
+find = '"none=0,on=1,off=2,set_value=3,trigger=4,mark=5,wait=6,at=7,to=8,then=9"'
+replace = '"none=0,on=1,off=2,set_value=3,mark=4,trigger=5,wait=6,at=7,to=8,then=9"'
+
+[[mutant]]
+id = "v08-11"
+name = "THEN has no rows"
+test = "timeline"
+why = "Every kind from ON to THEN has its table."
+find = '''    case YTL_OP_TO:
+    case YTL_OP_THEN:      YTL__P_SET(tween); break;'''
+replace = '''    case YTL_OP_TO:        YTL__P_SET(tween); break;'''
+
+[[mutant]]
+id = "v08-12"
+name = "the duration row allows a negative duration"
+test = "timeline"
+why = "min is a bound the check enforces; a negative duration is refused."
+find = '''        { "tween.duration_ns", "i64", 0, YTL__P_T, 0, "ns",'''
+replace = '''        { "tween.duration_ns", "i64", -1, YTL__P_T, 0, "ns",'''
+
+[[mutant]]
+id = "v08-13"
+name = "a time bound of 2^62"
+test = "timeline"
+why = "2^62 is refused, so a bound written as 2^62 - 1 (which rounds to 2^62) would lie."
+find = '#define YTL__P_T    4611686018427387392.0'
+replace = '#define YTL__P_T    4611686018427387904.0'
