@@ -263,7 +263,7 @@ def test_save_load_round_trip():
                        constraints=[ytr.max_run("side", ytr.ANY_LEVEL, 2)], block_size=12,
                        n_practice=2, n_warmup=1, requeue_gap=3, rng=1, record_size=4)
     with pytest.raises(ytr.Error):
-        ytr.Trials.load(b"PSTR garbage", n_conditions=1, reps=1)
+        ytr.Trials.load(b"YTRL garbage", n_conditions=1, reps=1)
 
 
 def test_restore_reproduces_the_run():

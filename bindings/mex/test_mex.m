@@ -114,7 +114,7 @@ function test_stair()
         if t <= 9, ysp_stair('update', h2, ysp_stair('next', h2), resp(t)); end
     end
     b = ysp_stair('save', h2);
-    check(isa(b, 'uint8') && isequal(char(b(1:4)), 'PSST'), 'stair snapshot bytes');
+    check(isa(b, 'uint8') && isequal(char(b(1:4)), 'YSTR'), 'stair snapshot bytes');
     ysp_stair('close', h2);
     h3 = ysp_stair('load', b, d);
     for t = 10:numel(resp)

@@ -59,6 +59,14 @@ static unsigned char pin_records[8 * YTR_MAX_TRIALS];
 static unsigned char pin_snap[1 << 18];
 static char pin_line[4096];
 
+/* The pins predate the psy-era magic "PSTR" becoming "YTRL" (v0.5.1): the
+ * snapshot is hashed under the old magic, so the pins still prove that no
+ * other byte changed. */
+static uint64_t pin_snap_fnv(uint64_t h, size_t sz) {
+    if (sz >= 4 && memcmp(pin_snap, "YTRL", 4) == 0) memcpy(pin_snap, "PSTR", 4);
+    return pin_fnv(h, pin_snap, sz);
+}
+
 static const int pin_cond_reps_a[6] = { 1, 4, 0, 2, 3, 2 };
 static const int pin_cond_reps_b[4] = { 6, 2, 2, 6 };
 static const int pin_warm_list[3] = { 0, 2, 3 };
@@ -238,7 +246,7 @@ static uint64_t pin_run_with(pin_design_fn fill, int k, int s) {
         if (i == mid) {
             sz = ytr_save_size(&pin_t);
             if (sz <= sizeof(pin_snap) && ytr_save(&pin_t, pin_snap, sizeof(pin_snap)) == (int)sz)
-                h = pin_fnv(h, pin_snap, sz);
+                h = pin_snap_fnv(h, sz);
             h = pin_int(h, (long)sz);
         }
     }
@@ -269,7 +277,7 @@ static uint64_t pin_run_with(pin_design_fn fill, int k, int s) {
     }
     sz = ytr_save_size(&pin_t);
     if (sz <= sizeof(pin_snap) && ytr_save(&pin_t, pin_snap, sizeof(pin_snap)) == (int)sz)
-        h = pin_fnv(h, pin_snap, sz);
+        h = pin_snap_fnv(h, sz);
     return pin_int(h, (long)sz);
 }
 

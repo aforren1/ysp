@@ -136,6 +136,7 @@ Purpose: Trial sequencing above the adaptive methods: conditions and repetitions
 
 Status:
 
+- v0.5.1: the snapshot magic is `YTRL` (was the psy-era `PSTR`, now refused; no saved data existed).
 - v0.5.0: every column of seconds ends in `_s` (the user's decision, 2026-10-20: jsPsych writes `rt` in ms, PsychoPy in s). `ytr_data_open()` refuses, by name, a `TIME_NS` column without `_s` or `_ns` and a session jitter without `_s`; 6 new refusals tested, 4 of 4 new mutations caught. [Design notes](trials.md#v05-columns-of-seconds-end-in-_s).
 - v0.4.1: builds under -std=c11 when a system header comes before it (fileno() for YTR_FLUSH_SYNC on glibc).
 - v0.4.0 (the data writer, on the [Conventions](conventions.md): `ytr_data_finish()` and a void `ytr_data_close()`, a `TIME_NS` column `x_ns` written `x_s`; every type, missing value and 400 random strings with commas, quotes, line breaks and bad UTF-8 read back by ysp/table.h, 2000 random doubles bit for bit; 25 of 25 mutations caught; a 26-column row costs 4.2 / 1.9 us to format, 15 / 14 us with the write to the OS, 1.7 ms with a sync to disk, gcc / MSVC).
@@ -213,7 +214,7 @@ Purpose: QUEST+ on a grid, with QUEST, Psi and Psi-marginal as configurations; b
 
 Status:
 
-- v0.7.0 (2026-10-21): `yqst_params()` (gap G6), every row checked against the desc field it names and every zero against its default; 7 of 7 mutations caught; the snapshot reader fuzzed, no finding. The manual's snapshot magic corrected to `PSYQ`. [Design notes](adapt.md#parameter-tables-and-the-staircase-snapshot-stair-v030-quest-v070-aep-v0160).
+- v0.7.0 (2026-10-21): `yqst_params()` (gap G6), every row checked against the desc field it names and every zero against its default; 7 of 7 mutations caught; the snapshot reader fuzzed, no finding. The snapshot magic is `YQST` (was the psy-era `PSYQ`, now refused). [Design notes](adapt.md#parameter-tables-and-the-staircase-snapshot-stair-v030-quest-v070-aep-v0160).
 - v0.6.0 (the [Conventions](conventions.md): `yqst_async_open()`/`_close()`, `yqst_open_saved()`, an `int64_t` wait timeout, messages from the handle-changing calls).
 - v0.5.2. Snapshots the size of the posterior, byte-identical between gcc and MSVC; 14770 checks against an independent reference; a Psi-marginal selection in about 1 ms; gcc and MSVC, sanitizer and ThreadSanitizer clean; identical selections to questplus on 180 of 180 trials, to Watson's own QUEST+ notebook on all 17 of its saved runs, to mQUESTPlus on 424 of 424 (ties included) and to Palamedes' PAL_AMPM ([tests/compare/](../tests/compare/)). [Design notes](adapt.md), [comparison of the methods](adapt_comparison.md).
 
@@ -228,7 +229,7 @@ Purpose: Gaussian-process adaptive estimation (the AEPsych feature set and Keele
 
 Status:
 
-- v0.16.0 (2026-10-21): `yaep_params()` (gap G6), 363 zero-against-default session comparisons over 83 rows; `yaep_open_saved()` refuses a recorded outcome outside the likelihood's, which the new fuzz target found reading outside the cutpoints (747,740 inputs since, no finding); 9 of 9 mutations caught. [Design notes](adapt.md#parameter-tables-and-the-staircase-snapshot-stair-v030-quest-v070-aep-v0160).
+- v0.16.0 (2026-10-21): `yaep_params()` (gap G6), 363 zero-against-default session comparisons over 83 rows; `yaep_open_saved()` refuses a recorded outcome outside the likelihood's, which the new fuzz target found reading outside the cutpoints (747,740 inputs since, no finding); 9 of 9 mutations caught. [Design notes](adapt.md#parameter-tables-and-the-staircase-snapshot-stair-v030-quest-v070-aep-v0160). The snapshot magic is `YAEP` (was the psy-era `PSGP`, now refused).
 - v0.15.0 (the [Conventions](conventions.md): `yaep_async_open()`/`_close()`, `yaep_open_saved()`, an `int64_t` wait timeout, messages from the handle-changing calls).
 - v0.14.1. Two-latent psychometric model, optimization and pairwise acquisitions, mixed parameters, monotonic projection, conjugate-gradient updates past 512 trials and, opt-in, in the fits; runtime priors; snapshots. Numerics checked against dense references; the Owen et al. 2021 audiometric benchmark reproduced by [aep_audiometric](../examples/aep/audiometric.c) and run beside AEPsych on one response stream, where it matches or beats AEPsych's threshold error with EAVC and BALV and halves its field error ([tests/compare/](../tests/compare/)); gcc and MSVC, sanitizer clean. [Design notes](adapt.md), [comparison of the methods](adapt_comparison.md).
 

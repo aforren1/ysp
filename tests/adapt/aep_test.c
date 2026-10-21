@@ -4152,7 +4152,7 @@ static void test_snapshot(void) {
         CHECK(!yaep_open_saved(&g, &d, buf, len - 3), "a truncated snapshot is refused");
         buf[2] = 'T';
         CHECK(!yaep_open_saved(&g, &d, buf, len), "a foreign snapshot is refused");
-        buf[2] = 'G';
+        buf[2] = 'E';
         CHECK(yaep_open_saved(&g, &d, buf, len), "the snapshot itself loads: %s", yaep_error(&g));
         yaep_close(&g);
         free(buf);

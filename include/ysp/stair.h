@@ -286,7 +286,7 @@
  *   LAYOUT, format 1. Every integer is little-endian two's complement,
  *   written and read one byte at a time, so a snapshot moves between
  *   compilers and platforms; an f64 is the IEEE 754 bit pattern as a u64.
- *     magic     4 bytes "PSST", then u32 format (1)
+ *     magic     4 bytes "YSTR", then u32 format (1)
  *     desc      f64 start, i32 rule, n_up, n_down, step_type, n_steps,
  *               n_steps f64 steps, f64 step_down_scale, target_p, min,
  *               max, u8 use_limits, harder_is_up, initial_rule, i32
@@ -1257,10 +1257,10 @@ static int yst__n_recorded(const yst_stair* s) {
 
 static void yst__put_all(yst__w* w, const yst_stair* s) {
     int i, rec = yst__n_recorded(s);
-    yst__put(w, 'P', 1, "magic");
-    yst__put(w, 'S', 1, "magic");
+    yst__put(w, 'Y', 1, "magic");
     yst__put(w, 'S', 1, "magic");
     yst__put(w, 'T', 1, "magic");
+    yst__put(w, 'R', 1, "magic");
     yst__put(w, YST__SNAP_FORMAT, 4, "format");
     yst__put_desc(w, &s->desc);
     yst__put_i32(w, s->n_trials, "n_trials");
@@ -1358,7 +1358,7 @@ YST_API bool yst_open_saved(yst_stair* s, const yst_desc* desc, const void* buf,
     if (!s) return false;
     if (!yst_open(s, desc)) return false;
     if (!in) return yst__load_fail(s, "null snapshot");
-    if (len < 8 || in[0] != 'P' || in[1] != 'S' || in[2] != 'S' || in[3] != 'T')
+    if (len < 8 || in[0] != 'Y' || in[1] != 'S' || in[2] != 'T' || in[3] != 'R')
         return yst__load_fail(s, "not a ysp_stair snapshot");
     memset(&r, 0, sizeof(r));
     r.in = in;

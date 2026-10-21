@@ -893,7 +893,7 @@ on: 363 comparisons over the 83 rows.
 ### The staircase snapshot
 
 `yst_save_size()`, `yst_save()` and `yst_open_saved()` have the form and
-the rules of `yqst_save()`: magic `"PSST"` and a format number, every
+the rules of `yqst_save()`: magic `"YSTR"` and a format number, every
 integer little-endian byte by byte, the desc as open() resolved it compared
 by the same writer that writes it (so a mismatch names its field), range
 checks on every number read, and a failed load that leaves the handle

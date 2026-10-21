@@ -1,4 +1,4 @@
-/* ysp/trials.h - v0.5.0 - public domain single-header trial sequencing library
+/* ysp/trials.h - v0.5.1 - public domain single-header trial sequencing library
  *
  *   The layer above the adaptive methods: which trial comes next, and what
  *   happened on it. Conditions and repetitions (the method of constant
@@ -727,7 +727,7 @@
  *     between compilers and platforms; an f64 is the IEEE 754 bit pattern
  *     as a u64. Defaults are written resolved (max_swaps 0 as 100000,
  *     weight 0 as 1, track_rate as used).
- *       magic     4 bytes "PSTR", then u32 format (1)
+ *       magic     4 bytes "YTRL", then u32 format (1)
  *       desc      i32 n_conditions, i32 n_factors, i32 n_levels per
  *                 factor, i32 reps, u8 has_cond_reps and then i32 per
  *                 condition when set, i32 order, i32 n_constraints and
@@ -1083,6 +1083,8 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.5.1 - the snapshot magic is "YTRL"; the psy-era "PSTR" is refused
+ *          as not a snapshot (no saved data existed). No number changed.
  *   v0.5.0 - every column of seconds ends in _s (user decision,
  *          2026-10-20): jsPsych writes rt in ms and PsychoPy in s, and a
  *          file read with the wrong habit is off by 1000 with nothing to
@@ -1430,8 +1432,8 @@
  * string is the three numbers, and the test asserts that it stays so. */
 #define YTR_VERSION_MAJOR 0
 #define YTR_VERSION_MINOR 5
-#define YTR_VERSION_PATCH 0
-#define YTR_VERSION_STRING "0.5.0"
+#define YTR_VERSION_PATCH 1
+#define YTR_VERSION_STRING "0.5.1"
 
 /* fsync() and fileno() for YTR_FLUSH_SYNC under -std=c11: the feature-test
  * macro of ysp/rt.h and ysp/pack.h, set before the first system header
@@ -6453,10 +6455,10 @@ static void ytr__put_all(ytr__w* w, const ytr_trials* t) {
     const unsigned char* rec;
     size_t k, nrec;
 
-    ytr__put(w, 'P', 1, "magic");
-    ytr__put(w, 'S', 1, "magic");
+    ytr__put(w, 'Y', 1, "magic");
     ytr__put(w, 'T', 1, "magic");
     ytr__put(w, 'R', 1, "magic");
+    ytr__put(w, 'L', 1, "magic");
     ytr__put(w, ytr__snap_format(t), 4, "format");
     ytr__put_desc(w, t);
 
@@ -6567,7 +6569,7 @@ YTR_API bool ytr_open_saved(ytr_trials* t, const ytr_desc* desc, const void* buf
     if (!t) return false;
     if (!ytr__setup(t, desc)) return false;
     if (!in) return ytr__fail(t, "ytr_open_saved: null snapshot");
-    if (len < 8 || in[0] != 'P' || in[1] != 'S' || in[2] != 'T' || in[3] != 'R')
+    if (len < 8 || in[0] != 'Y' || in[1] != 'T' || in[2] != 'R' || in[3] != 'L')
         return ytr__fail(t, "ytr_open_saved: not a ysp_trials snapshot");
     memset(&r, 0, sizeof(r));
     r.in = in;

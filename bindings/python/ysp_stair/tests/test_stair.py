@@ -203,7 +203,7 @@ def test_save_and_load_resume_without_replay():
     cut = yst.Staircase(**desc)
     replay(cut, resp[:7])
     snap = cut.save()
-    assert isinstance(snap, bytes) and snap[:4] == b"PSST"
+    assert isinstance(snap, bytes) and snap[:4] == b"YSTR"
     res = yst.Staircase.load(snap, **desc)
     assert res.n_trials == 7
     replay(res, resp[7:])

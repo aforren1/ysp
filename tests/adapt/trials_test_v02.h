@@ -1215,6 +1215,8 @@ static uint64_t dg_session(uint64_t h, ytr_desc* d, uint64_t seed) {
         h = dg_fnv(h, body, strlen(body));
     }
     len = ytr_save(&g_t, snap, sizeof(snap));
+    /* hashed under the psy-era magic, as the pins are (trials_pins_run.h) */
+    if (len >= 4 && memcmp(snap, "YTRL", 4) == 0) memcpy(snap, "PSTR", 4);
     if (len > 0) h = dg_fnv(h, snap, (size_t)len);
     return dg_int(h, len);
 }

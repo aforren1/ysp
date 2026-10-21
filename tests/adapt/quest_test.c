@@ -2724,7 +2724,7 @@ static void test_params(void) {
     /* SNAPSHOTS names the magic; v0.7.0 corrected the text, not the bytes. */
     CHECK(yqst_open(&g_q, &base), "open: %s", yqst_error(&g_q));
     len = yqst_save(&g_q, snap, sizeof snap);
-    CHECK(len > 8 && memcmp(snap, "PSYQ", 4) == 0, "snapshot magic");
+    CHECK(len > 8 && memcmp(snap, "YQST", 4) == 0, "snapshot magic");
     yqst_close(&g_q);
 }
 #undef NPF

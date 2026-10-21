@@ -1513,7 +1513,7 @@
  *     compilers and platforms of the same YAEP_REAL; an f64 is the IEEE 754
  *     bit pattern as a u64, and a yaep_real is its own bit pattern (8 bytes,
  *     or 4 in a float build).
- *       magic     4 bytes "PSGP", then u32 format (1), u8 sizeof(yaep_real)
+ *       magic     4 bytes "YAEP", then u32 format (1), u8 sizeof(yaep_real)
  *       desc      every number of yaep_desc in field order, arrays to
  *                 n_dims (hyper, hyper_min and hyper_max each as
  *                 lengthscale, outputscale, mean, lengthscale_b,
@@ -1806,7 +1806,9 @@
  *          whose recorded outcome is not one of the likelihood's outcomes
  *          (or, under GAUSSIAN, not finite): the next update indexed the
  *          cutpoints with it and read outside them. Found by the new fuzz
- *          target, tests/fuzz/adapt_fuzz.c. No number changed.
+ *          target, tests/fuzz/adapt_fuzz.c. The snapshot magic is "YAEP";
+ *          the psy-era "PSGP" is refused as not a snapshot (no saved data
+ *          existed). No number changed.
  *   v0.15.0 - the repository conventions (README.md, Conventions). Breaks
  *          the API: yaep_async_start() / yaep_async_stop() are
  *          yaep_async_open() / yaep_async_close(), yaep_load() is
@@ -9017,9 +9019,9 @@ static void yaep__put_state(yaep__w* w, const yaep_gp* g) {
 }
 
 static void yaep__put_all(yaep__w* w, const yaep_gp* g) {
-    yaep__put(w, 'P', 1, "magic");
-    yaep__put(w, 'S', 1, "magic");
-    yaep__put(w, 'G', 1, "magic");
+    yaep__put(w, 'Y', 1, "magic");
+    yaep__put(w, 'A', 1, "magic");
+    yaep__put(w, 'E', 1, "magic");
     yaep__put(w, 'P', 1, "magic");
     yaep__put(w, YAEP__SNAP_FORMAT, 4, "format");
     yaep__put(w, (uint64_t)sizeof(yaep_real), 1, "YAEP_REAL");
@@ -9147,7 +9149,7 @@ YAEP_API bool yaep_open_saved(yaep_gp* g, const yaep_desc* desc, const void* buf
     if (!yaep_open(g, desc)) return false;
     if (!in)
         return yaep__load_fail(g, "yaep_open_saved: null snapshot", NULL);
-    if (len < 9 || in[0] != 'P' || in[1] != 'S' || in[2] != 'G' || in[3] != 'P')
+    if (len < 9 || in[0] != 'Y' || in[1] != 'A' || in[2] != 'E' || in[3] != 'P')
         return yaep__load_fail(g, "yaep_open_saved: not a ysp_aep snapshot", NULL);
     memset(&r, 0, sizeof(r));
     r.in = in;

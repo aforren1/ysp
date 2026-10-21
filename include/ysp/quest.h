@@ -661,7 +661,7 @@
  *   LAYOUT, format 1. Every integer is little-endian two's complement, written
  *   and read one byte at a time, so a snapshot moves between compilers and
  *   platforms; an f64 is the IEEE 754 bit pattern as a u64.
- *     magic     4 bytes "PSYQ", then u32 format (1)
+ *     magic     4 bytes "YQST", then u32 format (1)
  *     desc      i32 n_stim; per stimulus axis i32 n and n f64 points;
  *               i32 n_param; per parameter axis i32 n, u8 nuisance and n
  *               f64 points; i32 pf, u8 model kind (0 built-in, 1 pf_fn,
@@ -858,9 +858,10 @@
  *   ---------------------------------------------------------------------
  *   v0.7.0 - yqst_params(), the table of the desc's fields for a loader's
  *          key check and a designer's panel (gap G6 of
- *          docs/experiment_format.md); see PARAMETERS. Adds API; changes
- *          none. SNAPSHOTS gave the magic as "YQST"; the code has always
- *          written "PSYQ", and the manual now says so. No number changed.
+ *          docs/experiment_format.md); see PARAMETERS. Adds API. The
+ *          snapshot magic is "YQST", as SNAPSHOTS said; the code wrote the
+ *          psy-era "PSYQ", which is now refused as not a snapshot (no
+ *          saved data existed). No number changed.
  *   v0.6.0 - the repository conventions (README.md, Conventions). Breaks
  *          the API: yqst_async_start() / yqst_async_stop() are
  *          yqst_async_open() / yqst_async_close(), yqst_load() is
@@ -3348,10 +3349,10 @@ static void yqst__put_desc(yqst__w* w, const yqst_quest* q) {
 static void yqst__put_all(yqst__w* w, const yqst_quest* q) {
     const double* post;
     int i, j;
-    yqst__put(w, 'P', 1, "magic");
-    yqst__put(w, 'S', 1, "magic");
     yqst__put(w, 'Y', 1, "magic");
     yqst__put(w, 'Q', 1, "magic");
+    yqst__put(w, 'S', 1, "magic");
+    yqst__put(w, 'T', 1, "magic");
     yqst__put(w, YQST__SNAP_FORMAT, 4, "format");
     yqst__put_desc(w, q);
     yqst__put_i32(w, q->n_trials, "n_trials");
@@ -3459,7 +3460,7 @@ YQST_API bool yqst_open_saved(yqst_quest* q, const yqst_desc* desc, const void* 
 
     if (!q) return false;
     /* The cheap checks first: the open that follows rebuilds the table. */
-    if (!in || len < 8 || in[0] != 'P' || in[1] != 'S' || in[2] != 'Y' || in[3] != 'Q') {
+    if (!in || len < 8 || in[0] != 'Y' || in[1] != 'Q' || in[2] != 'S' || in[3] != 'T') {
         memset(q->error, 0, sizeof(q->error));
         snprintf(q->error, sizeof(q->error), "ysp_quest: yqst_open_saved: not a ysp_quest snapshot");
         q->open = false;
