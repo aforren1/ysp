@@ -1266,3 +1266,77 @@ env = { YGFX_TEST_PARTS = "v0.15 first", YGFX_TEST_DEVICES = "hardware" }
 why = "Each line is centered in the block, as an instruction screen's lines are."
 find = '        float pen = 0.5f * (block_w - line_w[k]);'
 replace = '        float pen = 0;'
+
+# --- en-: v0.16.0 the enum table (CPU half only) ------------------------------
+
+[[mutant]]
+id = "en-01"
+name = "dot field aperture default RECT"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none" }
+why = "A zero dots desc gives NO_APERTURE; the row's default is what a zero field gives."
+find = 'YGFX__E("aperture", "enum", 0, 6, 6,'
+replace = 'YGFX__E("aperture", "enum", 0, 6, 0,'
+
+[[mutant]]
+id = "en-02"
+name = "set ignores the kind"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none" }
+why = "A loader relies on set refusing a key the stimulus's kind does not read."
+find = '    if (!ygfx__enum_row(s, e) || !ygfx__enum_takes(e, value)) return YGFX_ERR_ARG;'
+replace = '    if (!s || e < 0 || e >= YGFX_E_COUNT || !ygfx__enum_takes(e, value)) return YGFX_ERR_ARG;'
+
+[[mutant]]
+id = "en-03"
+name = "enum values by range only"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none" }
+why = "A dot field takes RECT, CIRCLE and NO_APERTURE only: the values list, not min..max, decides."
+find = '    if (!s) return v >= p->min && v <= p->max;'
+replace = '    return v >= p->min && v <= p->max;'
+
+[[mutant]]
+id = "en-04"
+name = "a flag set to 0 stays set"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none" }
+why = "Setting a bool row to 0 clears its flag."
+find = '        else s->flags &= ~ygfx__enum_flags[e - YGFX_E_MODULATION];'
+replace = '        else s->flags |= 0u;'
+
+[[mutant]]
+id = "en-05"
+name = "anchor read from ax alone"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none" }
+why = "Three of the nine points share each ax: get must match ax and ay."
+find = '            if (s->ax == ygfx__align_fx[i] && s->ay == ygfx__align_fy[i]) v = i;'
+replace = '            if (s->ax == ygfx__align_fx[i]) v = i;'
+
+[[mutant]]
+id = "en-06"
+name = "shape values without compound"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none" }
+why = "The shape row lists every ygfx_shape_kind."
+find = '            "compound=17"),'
+replace = '            ""),'
+
+[[mutant]]
+id = "en-07"
+name = "blend not on text"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none" }
+why = "ygfx_crun_desc has blend: a TEXT stimulus reads the row."
+find = 'YGFX__K(YGFX_SHAPE) | YGFX__TXT, "over=0,add=1,multiply=2"),'
+replace = 'YGFX__K(YGFX_SHAPE), "over=0,add=1,multiply=2"),'
+
+[[mutant]]
+id = "en-08"
+name = "two flags swapped"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none" }
+why = "Each bool row writes its own flag."
+find = '    YGFX_STIM_MODULATION, YGFX_STIM_LINEAR, YGFX_STIM_ADD,'
+replace = '    YGFX_STIM_LINEAR, YGFX_STIM_MODULATION, YGFX_STIM_ADD,'

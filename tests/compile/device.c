@@ -33,6 +33,7 @@ typedef struct device_api {
     int  (*role_index)(const ydev_roles*, const char*);
     ydev_device* (*role_device)(const ydev_roles*, int);
     const char* (*role_name)(const ydev_roles*, int);
+    const ydev_param* (*params)(int, int*);       /* v0.4 */
 } device_api;
 
 static const device_api g_api = {
@@ -40,7 +41,7 @@ static const device_api g_api = {
     ydev_state, ydev_get_stats, ydev_error, ydev_strerror, ydev_state_name,
     ydev_source, ydev_port_key, ydev_key_match, ydev_serial_transport,
     ydev_out_set, ydev_out_pulse, ydev_out_mark, ydev_out_trigger,
-    ydev_out_last, ydev_role_index, ydev_role_device, ydev_role_name
+    ydev_out_last, ydev_role_index, ydev_role_device, ydev_role_name, ydev_params
 };
 
 /* The transport's read takes the timeout in ns. */
@@ -74,5 +75,12 @@ int main(void) {
     memcpy(key, "port:x", sizeof "port:x");
     d.min_hold_ns = -1;                /* v0.3.1: ns, >= 0 */
     ok = ok && !g_api.open(&dev, &d) && strstr(g_api.error(&dev), "min_hold_ns") != NULL;
+    {   /* v0.4: a table per family; the MMBT-S's own baud */
+        int n = 0, i;
+        const ydev_param* p = g_api.params(YBOX_MMBTS, &n);
+        for (i = 0; p && i < n; i++)
+            if (!strcmp(p[i].name, "baud")) ok = ok && p[i].def == 9600 && p[i].values == NULL;
+        ok = ok && n > 0 && g_api.params(YBOX_NONE, &n) == NULL && n == 0;
+    }
     return ok && g_api.state(&dev) == YDEV_CLOSED && g_api.key_match("serial:16C0::", "serial:16c0:0483:1:A") ? 0 : 1;
 }

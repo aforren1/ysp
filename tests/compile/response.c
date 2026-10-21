@@ -23,9 +23,10 @@ typedef struct rsp_api {
     const char* (*error)(const yrsp_collector*);
     void (*arm)(yrsp_collector*, int64_t);
     int (*update)(yrsp_collector*, int64_t);
+    const yrsp_param* (*params)(int*);   /* v0.6 */
 } rsp_api;
 
-static const rsp_api g_api = { yrsp_open, yrsp_close, yrsp_error, yrsp_arm, yrsp_update };
+static const rsp_api g_api = { yrsp_open, yrsp_close, yrsp_error, yrsp_arm, yrsp_update, yrsp_params };
 
 /* The unit macros are constant expressions. */
 static const int64_t g_window[2] = { YRT_MS(100), YRT_S(1.5) };
@@ -79,6 +80,11 @@ int main(void) {
     }
     g_api.close(&c);
     if (g_api.update(&c, 0) != YRSP_ERR_STATE) return 1;
+    {   /* v0.6: the first row is the mode enum */
+        int n = 0;
+        const yrsp_param* p = g_api.params(&n);
+        if (!p || n < 1 || strcmp(p[0].name, "mode") != 0 || strcmp(p[0].values, "all=0,list=1,none=2") != 0) return 1;
+    }
     return r.t_response == in.t && r.rt_ns == YRT_MS(200) && r.rt_key_duration_ns == YRSP_NO_TIME
                && r.stamp_lo_ns == 0 && o.residual_ns == 0 && o.uncertainty_ns == 0 ? 0 : 1;
 }

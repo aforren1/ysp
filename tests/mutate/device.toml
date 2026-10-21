@@ -305,3 +305,65 @@ file = "ysp/serial.h"
 why = "The hold is a floor: the later of the two times."
 find = '''    return a > b ? a : b;'''
 replace = '''    return a < b ? a : b;'''
+
+# --- the parameter tables (v0.4.0) -------------------------------------------
+
+[[mutant]]
+id = "dp-01"
+name = "baud 0 left as 0 in the handle"
+test = "device"
+why = "The table says a zero baud is the family's rate; the handle states the rate it opens."
+find = '''    if (dev->d.baud == 0 && dev->d.family != YBOX_PARALLEL) dev->d.baud = ybox_default_baud(dev->d.family);'''
+replace = '''    (void)0;'''
+
+[[mutant]]
+id = "dp-02"
+name = "MMBT-S baud default 115200"
+test = "device"
+why = "The MMBT-S's firmware fixes 9600; a profile checked against 115200 would open it wrong."
+find = '''YDEV__P_BAUD(9600)'''
+replace = '''YDEV__P_BAUD(115200)'''
+
+[[mutant]]
+id = "dp-03"
+name = "XID bracket default 1.3 ms"
+test = "device"
+why = "XID answers wait in the FTDI latency timer: open makes its max_width_ns 20 ms."
+find = '''YDEV__P_WIDTH(2e7)'''
+replace = '''YDEV__P_WIDTH(1.3e6)'''
+
+[[mutant]]
+id = "dp-04"
+name = "parallel table without min_hold_ns"
+test = "device"
+why = "The parallel port's pulses are host-timed: the family reads min_hold_ns."
+find = '''    YDEV__P_PULSE(1e10, YDEV__PULSE_DOC), YDEV__P_HOLD(0, 0),'''
+replace = '''    YDEV__P_PULSE(1e10, YDEV__PULSE_DOC),'''
+
+[[mutant]]
+id = "dp-05"
+name = "a table for no family"
+test = "device"
+why = "ydev_params() gives NULL for what is not a YBOX_ family, so a loader refuses it."
+find = '''    default: break;
+    }
+#undef YDEV__ROWS'''
+replace = '''    default: YDEV__ROWS(ydev__params_xid);
+    }
+#undef YDEV__ROWS'''
+
+[[mutant]]
+id = "dp-06"
+name = "kind values without user"
+test = "device"
+why = "The kind row lists every yin_kind a desc can name (all but keyboard, which 0 cannot be)."
+find = '''"mouse=1,touch=2,pen=3,gamepad=4,box=5,eye=6,sync=7,user=8" }'''
+replace = '''"mouse=1,touch=2,pen=3,gamepad=4,box=5,eye=6,sync=7" }'''
+
+[[mutant]]
+id = "dp-07"
+name = "photodiode kind default BOX"
+test = "device"
+why = "A zero kind on PHOTO is SYNC: a photodiode edge is no response."
+find = '''YDEV__P_KIND(YIN_KIND_SYNC)'''
+replace = '''YDEV__P_KIND(YIN_KIND_BOX)'''

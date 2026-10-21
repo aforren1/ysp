@@ -291,7 +291,7 @@ the header.
 | G3 | No logged and replayed categorical draw per trial: jitters are durations only, and the 2AFC side comes from the program's own generator. | ysp/trials.h (or player code, D8) | `vars` with `choice` | Small |
 | G4 | `weight COLUMN` sets `cond_reps` from the column; nothing multiplies it by `reps`. The Stroop program computes weight x reps in C. | ysp/trials.h | Stroop | Small |
 | G5 | No call maps a Michelson contrast in light to ysp/gfx.h's contrast and back to the contrast the output codes show (about 20 lines in trial_2afc_adaptive.c with `ycol_output_code()`). | ysp/color.h | `{"michelson": ...}` | Small |
-| G6 | Parameter tables (rig_spec 1, principle 8) exist for audio, color, gfx, outline, rdk, screen and video only. None for stair, quest, aep, response, the device families or the timeline ops. The timeline part is CLOSED in ysp/timeline.h v0.8.0: `ytl_op_params(kind, &n)` gives the rows of the fields each op kind reads (`YTL_OP_NONE` gives the `op` row, whose enum values name every kind), and `ytl_desc_params()` the desc's plain fields. `ygfx_params()` lists the bindable floats, not the desc enums (`shape`, `edge`, `aperture`, `place`). | those headers | The loader's key check and the designer's panels from one source | Medium |
+| G6 | Parameter tables (rig_spec 1, principle 8) exist for audio, color, gfx, outline, rdk, screen and video only. None for stair, quest or aep. Closed for the timeline: `ytl_op_params(kind, &n)` gives the rows of the fields each op kind reads (`YTL_OP_NONE` gives the `op` row, whose enum values name every kind), and `ytl_desc_params()` the desc's plain fields (ysp/timeline.h 0.8.0). Closed for response: `yrsp_params()` (ysp/response.h 0.6.0). Closed for the device families: `ydev_params(family, &n)`, the fields each family reads with its defaults (ysp/device.h 0.4.0). Closed for gfx's desc enums: `ygfx_enum_params()` lists `place`, `anchor`, `shape`, `aperture`, `edge`, `dist` and the rest with their kinds and values, and `ygfx_enum_set()` applies one (ysp/gfx.h 0.16.0). `ygfx_desc_params()` (the gfx's own desc) keeps its enum values in its doc text: `yscr_param` has no `values`. | those headers | The loader's key check and the designer's panels from one source | Medium |
 | G7 | The canonical writer writes a number's source text; only `yjs_new_fixed()` and `yjs_new_int()` make canonical numbers. No canonical decimal for other reals. The prerequisite for the experiment hash (D2). | ysp/json.h | D2 | Small |
 | G8 | A response-driven output waits for the frame loop to see the response, up to a frame after the press. No callback on the input's thread. | ysp/response.h, ysp/device.h | Response triggers (EEG) | Medium; measure the lag first |
 | G9 | Glyph-run blocks are listed by hand in the source description. Nothing derives them from a definition's texts and a table's levels. | pack tool | D14; Stroop | Small to medium |
@@ -451,7 +451,8 @@ session.
 Every other key is a property: a name from the kind's parameter table
 (`ygfx_params()`, `yrdk_params()`, ...) in the table's unit, or a desc
 field (`shape`, `edge`, `aperture`, `place`, `signal`, `noise`, in lower
-case). `color` is `[r, g, b]` for `color_r`, `color_g`, `color_b`.
+case; gfx's are the rows of `ygfx_enum_params()` that read the kind, and
+their values are the names in the row's `values`). `color` is `[r, g, b]` for `color_r`, `color_g`, `color_b`.
 `layer` sets the draw order (D3). A property that references a variable
 is set when its variable is known: at trial start (as the C programs
 set `gabor.contrast` and `rdk.coherence` before the first frame), or
@@ -480,7 +481,9 @@ its updates (G12).
 
 A role has the keys of devices_spec 11.1: `direction`, `family` (an
 array; the first that the rig has binds), `required`, `min_tier`,
-`buttons`, `pulse_s` (seconds), `kind`, `map`. The player binds roles from
+`buttons`, `pulse_s` (seconds), `kind`, `map`. `ydev_params(family, &n)`
+lists the desc fields each family reads, with its defaults, for the
+role's keys and the profile's options. The player binds roles from
 the rig profile (`yrig_load()`, `yrig_open_device()`) and refuses to
 start when a required role is unbound, fails identify, or is below
 `min_tier`, naming the role. An output role becomes a screen trigger

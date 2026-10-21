@@ -272,6 +272,7 @@ Purpose: The response of a trial from any input device: a device-neutral event (
 
 Status:
 
+- v0.6.0: `yrsp_params()`, the parameter table of the desc and choice fields a definition sets, with enum values (gap G6); a zero `trace_kinds` reads 65535 in the handle. Every row names a field, its default is what the opened collector holds for a zero field, and each enum row lists every value of its C enum; 5 of 5 new mutants caught. [The parameter table](response.md#the-parameter-table-v060).
 - v0.5.0: `YRSP_DATA_COLS` names its columns of seconds with `_s` (`rt_s`, `rt_key_duration_s`, `onset_residual_s`, `landing_residual_s`), as ysp/trials.h v0.5.0 requires; 2 of 2 new mutations caught.
 - v0.4.0: helpers for the frame loop (`yrsp_update_frame()`: the stimulus frame's flip record as the final onset, then the deadline; `yrsp_feed_screen()`; `yrsp_set_landing()`) and the data file (`YRSP_DATA_COLS`, `yrsp_data_set()`: the onset's source, tier, residual and the landing residual in every row), inline where ysp/screen.h, ysp/timeline.h and ysp/trials.h came first; `result.plan_residual`. `trial_keyboard.c` went from 256 to 184 lines of code without `--sim` and moved no flip in a window or fullscreen; 8 of 8 new mutants caught. [The first trial](response.md#the-first-trial-v040).
 - v0.3.0: times in `int64_t` ns (`duration_ns`, `min_rt_ns`, `max_hold_ns`, `rt_ns`, `rt_key_duration_ns` with `YRSP_NO_TIME` for none, `stamp_lo_ns`), `yrsp_open()` and `yrsp_close()`, every failing call writes `yrsp_error()`; 2 of 2 new mutants caught.
@@ -304,6 +305,7 @@ Purpose: A response box, a trigger interface or a microcontroller board on the y
 
 Status:
 
+- v0.4.0: `ydev_params(family, &n)`, a parameter table per family of the desc fields it reads, with that family's defaults, for a role's keys and the rig profile (gap G6); `ydev_open()` writes the family's baud into the handle for a zero `desc.baud`. Each family's rows follow its `ybox_caps()`, and each default is the opened handle's; 7 of 7 new mutants caught. [Parameter tables](device.md#parameter-tables-v040).
 - v0.3.1: a host-timed pulse's width runs from the start of the leading write, at least the new `desc.min_hold_ns` (0.25 ms; none on the parallel port) after its return (`yser_pulse_off_at_ns()`, ysp/serial.h 0.6.1). On a Teensy 4.0 echo board over `usbser.sys` (TriggerBox byte path, DTR, RTS; 1 and 5 ms; 0 of 2400 missed): width error -65 to -16 us median, against +350 to +401 us with v0.3.0. 7 mutants added (6 new, 1 moved), all caught. No vendor box, parallel port or FTDI bridge. [Host-timed width](device.md#host-timed-width-v031), [results](device.md#host-timed-pulses-on-a-teensy-40-v031).
 - v0.3.0 (the [Conventions](conventions.md): `ydev_open()`/`ydev_close()`, `ydev_wait_running()` before the first output, key and role copied into the handle, `int64_t` ns timeouts; 3 mutants added, all caught).
 - v0.2.1 (builds with YRT_NO_THREADS again; host-timed pulses end in ydev_poll() there).
@@ -450,6 +452,7 @@ Purpose: Stimuli on GL ES 3.0 over ysp/screen.h: signed-distance shapes with a s
 
 Status:
 
+- v0.16.0: `ygfx_enum_params()`, the stimulus fields that are not floats (place, anchor, shape, aperture, edge, dist, stroke_align, join, cap, blend, square, octaves, dash_snap and the IMAGE and TEXT flags), with kinds and enum values (gap G6); `ygfx_enum_get()` and `ygfx_enum_set()` apply a row by index; `ygfx_param` has a last field, `values`; 8 of 8 new mutants caught. [Every stimulus field in a table](gfx.md#v0160-every-stimulus-field-in-a-table).
 - v0.15.1: the program cache's open and store times and a text's build time read the real clock (`yrt_real_ns()`), so they are costs also on ysp/rt.h's virtual clock, where they read 0 before. No other change.
 - v0.15.0: `ygfx_open_screen()` (the screen and the gfx with OPEN START's overlap, then primed, in one call), `ygfx_show_until_key()` (an instruction or break screen), and with ysp/outline.h first `ygfx_text_make()` (text by advances, wrapped and centered, its program primed: the text's first frame 0.8 to 1.3 ms of CPU against 10.1 to 11.0 ms unprimed on the Iris Xe); 5 of 5 new mutants caught.
 - v0.14.0: capture writes PPM only (the user, 2026-10-10): `YGFX_IMAGE_PNG`, `YGFX_IMAGE_PPM`, `ygfx_capture_desc.format` and the `format` argument of `ygfx_image_write()` removed, with the stored-PNG writer and its CRC-32 and Adler-32; the PPM writer's two-line comment tested; PNG's 3 mutants removed, 1 added.

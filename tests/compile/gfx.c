@@ -135,6 +135,13 @@ int main(void) {
     ygfx_close(&g);
     yscr_close(&s);
     if (ygfx_sdf_from_mask(sdf, mask, 2, 2, 1) != YGFX_OK) return 12;
+    {   /* v0.16: the enum rows, by index, on a stimulus */
+        ygfx_stim gs = ygfx_grating(NULL);
+        const ygfx_param* ep = ygfx_enum_params(&n);
+        if (!ep || n != YGFX_E_COUNT || !ep[YGFX_E_EDGE].values) return 27;
+        if (ygfx_enum_set(&gs, YGFX_E_EDGE, YGFX_EDGE_COSINE) != YGFX_OK || ygfx_enum_get(&gs, YGFX_E_EDGE) != 1 ||
+            ygfx_enum_set(&gs, YGFX_E_JOIN, 0) != YGFX_ERR_ARG) return 28;
+    }
     return ygfx_params(&n) && n == YGFX_P_COUNT && ygfx_desc_params(&m) && m > 0 &&
            ygfx_group_params(&k) && k > 0 ? 0 : 8;
 }

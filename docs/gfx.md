@@ -3930,3 +3930,88 @@ build time read 0 in a `--sim` run. They are costs, so they read
 then prints 5 ms for Segoe UI's 95 glyphs and 171 ms for Microsoft YaHei's
 1728 (Windows 11 test laptop, MSVC 19.44 Release, 2026-10-14). Shader time
 stays on `yrt_now_ns()`: it is a stimulus time.
+
+## v0.16.0: every stimulus field in a table
+
+The experiment loader checks a stimulus's keys and the designer builds
+its panels from the parameter tables ([rig_spec.md](rig_spec.md),
+principle 8; gap G6 of [experiment_format.md](experiment_format.md)).
+`ygfx_params()` listed the bindable floats only. A definition also sets
+`shape`, `edge`, `aperture`, `place` and the other fields that are not
+floats, and nothing listed them or their values.
+
+### Decision: the `values` field on `ygfx_param`, and a second table
+
+| Option | For | Against |
+|---|---|---|
+| A new struct in the shared shape (`name` to `doc`, then `values`) for an enum table | The exact shape of the new tables | No `offset` and no `kinds`. The loader needs `kinds` to know that `aperture` is a key of a grating and not of a gabor; the float table has it and the new one would not |
+| Enum rows appended to `ygfx_params()` | One table | `YGFX_P_COUNT`, the `YGFX_P_*` indices and `ygfx_apply()` assume every row is a float. A binding to an enum row would write a float into a `uint16_t` |
+| **`values` added as the last field of `ygfx_param`, and a new table `ygfx_enum_params()` of that type** (chosen) | One row type for every gfx table, with `offset` and `kinds`. `values` is last, as in the shared shape, so its first seven fields are the shared shape's. Code that reads the tables compiles unchanged. The float tables keep their indices and their meaning | `ygfx_param` grew 8 bytes (an ABI change, so a minor version). A positional initializer of a `ygfx_param` outside the header gets `values` NULL, and g++ `-Wextra` warns about it; none exists in the repository |
+
+`ygfx_desc_params()` (the gfx's own desc: `units`, `dither`, `output`,
+`stereo`, `cones`) returns `yscr_param`, ysp/screen.h's struct, which has
+no `values`. Its enum values stay in the doc text. Giving them a `values`
+string needs `yscr_param` to grow the field (ysp/screen.h's decision) or a
+second gfx call; neither is in this version. That desc is the rig's, not a
+stimulus's, so a definition does not set it.
+
+### The rows
+
+21 rows, indexed by `YGFX_E_*`:
+
+| Rows | Type | Field |
+|---|---|---|
+| `place`, `anchor` | enum, `center=0` to `bottom_right=8` | `place`; `anchor` sets `ax` and `ay` |
+| `shape` | enum, all 18 `ygfx_shape_kind` values | `shape`, SHAPE |
+| `aperture` | enum, `rect=0` to `mask_tex=7` (the apertures of v0.1) | `shape`, GRATING, NOISE, USER |
+| `aperture` | enum, `rect=0,circle=1,no_aperture=6`, default `no_aperture` | `shape`, DOTS |
+| `edge`, `stroke_align` | enum | `edge`, `stroke_align` |
+| `join`, `cap`, `blend` | enum | SHAPE; `blend` also TEXT |
+| `square`, `dist` | bool, enum | both `wave`: GRATING, NOISE |
+| `octaves` | i32, 1 to 8 | `gn_octaves` |
+| `dash_snap` | bool | `dash_snap` |
+| `modulation`, `linear`, `add`, `premultiplied`, `coverage`, `aliased`, `rays` | bool | a `YGFX_STIM_*` flag: IMAGE, and TEXT for the last two |
+
+Names are the desc fields, so `aperture` and `square` are the keys a
+definition writes, not the stimulus fields (`shape`, `wave`) that hold
+them. `aperture` has two rows because a dot field takes three apertures
+and has another default. No kind reads two rows of one name; a loader
+looks a key up with the stimulus's kind.
+
+`ygfx_enum_get()` and `ygfx_enum_set()` read and write a row on a
+stimulus. The loader then needs no knowledge of the field widths, the
+flag bits or the nine anchor points: it finds the row by name and kind,
+the value by name in `values`, and calls `ygfx_enum_set()`, which refuses
+a kind that the row does not take and a value that it does not list. The
+`offset` of a flag row is that of `flags` and of `anchor` that of `ax`;
+the doc names the flag.
+
+Not in a table: the desc pointers (`fx`, `paint`, `prims`, `path`,
+`palette`, `items`, `vertices`) and the enums of the structs they point to
+(`ygfx_paint.kind` and `.space`, `ygfx_prim.shape` and `.op`). The
+definition format (version 1) has no key for them.
+
+### Tests
+
+`test_enum_params()` in the CPU half of `tests/adapt/gfx_test.c`:
+
+- Each row's `offset` and `kinds` equal the test's own list, taken from
+  the descs that have the field.
+- For each kind that reads a row, the stimulus from a zero desc
+  (`ygfx_shape()` to `ygfx_user()`, `ygfx_crun()` without a gfx) holds the
+  row's default, read by `ygfx_enum_get()` and by the test from the field.
+- Every value from min - 1 to max + 1: a listed value lands in the field
+  and is read back, and setting the default again gives the zero desc's
+  stimulus byte for byte; any other value, and every kind the row does not
+  take, is refused and changes nothing.
+- An enum row lists every value of its C enum (the aperture rows: their
+  stated sets), in order, with the enum's own names, and its `max` is the
+  last value. The names come from a `switch` without a `default` in the
+  test, so gcc and clang (`-Wall -Werror`, as CI builds) stop when an enum
+  gains a value, and the check fails until the row lists it.
+- The float tables: `values` NULL and type `f32` in every row.
+
+Checked on 2026-10-21: 21 rows, 46 row and kind pairs, with MinGW-w64
+gcc 16.1 (`-Werror`), MSVC 19.44 (`msvc-full`, ctest 89 of 89) and gcc
+11.4 on WSL2; the CI `--sim` list passes. Mutants `en-01` to `en-08`
+(CPU half only, `YGFX_TEST_PARTS=none`) caught, 8 of 8.

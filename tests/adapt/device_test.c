@@ -1225,6 +1225,152 @@ static void test_roles(void) {
     printf("  roles: indexes 1 and 2, kept across a restart, one instance each: ok\n");
 }
 
+/* v0.4: the parameter tables. kind_name() has no default, so -Wswitch
+ * (CI's -Wall -Werror) stops the build when yin_kind gains a value, and the
+ * value check then fails until the kind row lists it. */
+static const char* kind_name(int v) {
+    switch ((yin_kind)v) {
+    case YIN_KIND_KEYBOARD: return "keyboard";
+    case YIN_KIND_MOUSE: return "mouse";
+    case YIN_KIND_TOUCH: return "touch";
+    case YIN_KIND_PEN: return "pen";
+    case YIN_KIND_GAMEPAD: return "gamepad";
+    case YIN_KIND_BOX: return "box";
+    case YIN_KIND_EYE: return "eye";
+    case YIN_KIND_SYNC: return "sync";
+    case YIN_KIND_USER: return "user";
+    }
+    return NULL;
+}
+
+/* An enum row's "name=value" list: values rising, each the C enum's name,
+ * inside min..max, and every value of the enum but skip listed. */
+static bool values_ok(const ydev_param* p, const char* (*name_of)(int), int skip) {
+    const char* s = p->values;
+    int prev = -1, seen[64], v;
+    memset(seen, 0, sizeof seen);
+    if (!s) return false;
+    while (*s) {
+        const char* eq = strchr(s, '=');
+        const char* end = strchr(s, ',');
+        char name[48];
+        if (!end) end = s + strlen(s);
+        if (!eq || eq > end || (size_t)(eq - s) >= sizeof name) return false;
+        memcpy(name, s, (size_t)(eq - s));
+        name[eq - s] = '\0';
+        v = atoi(eq + 1);
+        if (v <= prev || v >= 64 || v < p->min || v > p->max || !name_of(v) || strcmp(name_of(v), name)) return false;
+        seen[v] = 1;
+        prev = v;
+        s = *end ? end + 1 : end;
+    }
+    for (v = 0; v < 64; v++)
+        if (v != skip && name_of(v) && !seen[v]) return false;
+    return true;
+}
+
+typedef struct dev_field { const char* name; size_t off, size; } dev_field;
+#define DEV_F(f) { #f, offsetof(ydev_desc, f), sizeof(((ydev_desc*)0)->f) }
+static const dev_field g_dev_fields[] = {
+    DEV_F(role), DEV_F(key), DEV_F(kind), DEV_F(baud), DEV_F(probe_ns), DEV_F(retry_ns), DEV_F(silent_ns),
+    DEV_F(max_width_ns), DEV_F(read_timeout_ns), DEV_F(no_identify), DEV_F(no_elevate), DEV_F(pulse_ns),
+    DEV_F(latched), DEV_F(min_hold_ns),
+};
+
+/* Whether family reads the field, from its capabilities: the rows must
+ * follow them. */
+static bool dev_reads(int family, const char* name) {
+    uint32_t c = ybox_caps(family);
+    bool host = (c & YBOX_CAP_OUT) && !(c & YBOX_CAP_PULSE) && !(c & YBOX_CAP_FIXED);
+    if (!strcmp(name, "kind") || !strcmp(name, "silent_ns")) return (c & YBOX_CAP_IN) != 0;
+    if (!strcmp(name, "probe_ns") || !strcmp(name, "max_width_ns") || !strcmp(name, "no_identify"))
+        return (c & YBOX_CAP_IDENT) != 0;
+    if (!strcmp(name, "baud")) return family != YBOX_PARALLEL;
+    if (!strcmp(name, "pulse_ns")) return (c & YBOX_CAP_OUT) != 0;
+    if (!strcmp(name, "latched")) return family == YBOX_MMBTS;
+    if (!strcmp(name, "min_hold_ns")) return host || family == YBOX_MMBTS;
+    return true;
+}
+
+static void test_params(void) {
+    static ydev_device dev;
+    const int nf = (int)(sizeof g_dev_fields / sizeof g_dev_fields[0]);
+    int f, i, j, k, n = -1, rows = 0;
+    CHECK(ydev_params(YBOX_NONE, &n) == NULL && n == 0);
+    CHECK(ydev_params(YBOX_FAMILY_LAST + 1, &n) == NULL && n == 0);
+    CHECK(ydev_params(YBOX_XID, NULL) != NULL);
+    /* every family has a table: a new family fails here until it has one */
+    for (f = YBOX_XID; f <= YBOX_FAMILY_LAST; f++) {
+        const ydev_param* p = ydev_params(f, &n);
+        int seen[sizeof g_dev_fields / sizeof g_dev_fields[0]];
+        ydev_desc d;
+        memset(seen, 0, sizeof seen);
+        CHECK(p != NULL && n > 0);
+        if (!p) continue;
+        /* zero fields: what open makes of them */
+        memset(&d, 0, sizeof d);
+        d.role = "p";
+        d.family = f;
+        d.key = "serial:0403:6001::";
+        d.device = 7;
+        d.transport = ofake(true);
+        d.manual = true;
+        d.now = now_fn;
+        CHECK(ydev_open(&dev, &d));
+        for (i = 0; i < n; i++) {
+            const dev_field* fl = NULL;
+            size_t want = 0;
+            rows++;
+            for (j = 0; j < nf; j++)
+                if (!strcmp(p[i].name, g_dev_fields[j].name)) { fl = &g_dev_fields[j]; seen[j]++; }
+            g_checks++;
+            if (!fl) {
+                fprintf(stderr, "device_test: FAIL: %s row %s names no field\n", ybox_family_name(f), p[i].name);
+                g_failures++;
+                continue;
+            }
+            CHECK(p[i].type && p[i].unit && p[i].doc && p[i].doc[0]);
+            CHECK(p[i].min <= p[i].def && p[i].def <= p[i].max);
+            for (k = 0; k < i; k++) CHECK(strcmp(p[i].name, p[k].name) != 0);
+            CHECK((strcmp(p[i].unit, "ns") == 0) == (strstr(p[i].name, "_ns") != NULL));
+            if (!strcmp(p[i].type, "bool")) want = sizeof(bool);
+            else if (!strcmp(p[i].type, "u32") || !strcmp(p[i].type, "enum")) want = 4;
+            else if (!strcmp(p[i].type, "i64")) want = 8;
+            else if (!strcmp(p[i].type, "str")) want = sizeof(const char*);
+            CHECK_I(fl->size, want);
+            CHECK((p[i].values != NULL) == (strcmp(p[i].type, "enum") == 0));
+            /* 0 is the family's kind, so keyboard cannot be chosen */
+            if (!strcmp(p[i].name, "kind")) CHECK(values_ok(&p[i], kind_name, YIN_KIND_KEYBOARD));
+            if (!strcmp(p[i].type, "str")) continue;
+            {
+                const unsigned char* b = (const unsigned char*)&dev.d + fl->off;
+                double got;
+                if (fl->size == 1) got = *b;
+                else if (fl->size == 4 && !strcmp(p[i].type, "u32")) { uint32_t x; memcpy(&x, b, 4); got = x; }
+                else if (fl->size == 4) { int32_t x; memcpy(&x, b, 4); got = x; }
+                else { int64_t x; memcpy(&x, b, 8); got = (double)x; }
+                g_checks++;
+                if (got != p[i].def) {
+                    fprintf(stderr, "device_test: FAIL: %s row %s: a zero field is %.17g, the table says %.17g\n",
+                            ybox_family_name(f), p[i].name, got, p[i].def);
+                    g_failures++;
+                }
+            }
+        }
+        for (j = 0; j < nf; j++) {
+            g_checks++;
+            if (seen[j] != (dev_reads(f, g_dev_fields[j].name) ? 1 : 0)) {
+                fprintf(stderr, "device_test: FAIL: %s has %d rows of %s\n", ybox_family_name(f), seen[j],
+                        g_dev_fields[j].name);
+                g_failures++;
+            }
+        }
+        ydev_close(&dev);
+    }
+    printf("  parameters: %d families, %d rows, each a field the family reads with its default: ok\n",
+           YBOX_FAMILY_LAST, rows);
+}
+
 static int cmp_i64(const void* x, const void* y) {
     int64_t a = *(const int64_t*)x, b = *(const int64_t*)y;
     return a < b ? -1 : a > b;
@@ -1332,6 +1478,7 @@ int main(void) {
     test_out_hold();
     test_out_report();
     test_roles();
+    test_params();
     test_out_timing();
     if (g_failures) {
         fprintf(stderr, "device_test: %d of %d checks FAILED\n", g_failures, g_checks);

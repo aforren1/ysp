@@ -1,4 +1,4 @@
-/* ysp/gfx.h - v0.15.1 - public domain single-header stimulus graphics library
+/* ysp/gfx.h - v0.16.0 - public domain single-header stimulus graphics library
  *   (with MIT-licensed parts: see below)
  *
  *   Stimuli on GL ES 3.0, on top of ysp/screen.h: signed-distance shapes
@@ -1047,6 +1047,40 @@
  *   and cos are coarse): within 4.4e-7 of double.
  *
  *   ---------------------------------------------------------------------
+ *   PARAMETERS
+ *   ---------------------------------------------------------------------
+ *   Every stimulus field a definition or a designer sets is in a table
+ *   (docs/rig_spec.md, principle 8), so a loader checks its keys and a
+ *   designer builds its panels from one source:
+ *     ygfx_params()        the float fields of ygfx_stim, YGFX_P_*: the
+ *                          ones ygfx_apply() binds to timeline channels
+ *     ygfx_enum_params()   v0.16: the rest, YGFX_E_*: enums (place,
+ *                          anchor, shape, aperture, edge, dist,
+ *                          stroke_align, join, cap, blend), bools (square,
+ *                          dash_snap, and the desc bools that are flags:
+ *                          modulation, linear, add, premultiplied,
+ *                          coverage, aliased, rays) and octaves
+ *     ygfx_group_params(), ygfx_prim_params(), ygfx_fx_params(),
+ *     ygfx_paint_params()  the float fields of the other structs
+ *     ygfx_desc_params()   the gfx's own desc (yscr_param's shape)
+ *   A row: name, type, inclusive range, the value a zero desc field gives,
+ *   unit, a line of doc, the offset in its struct, kinds (bit 1 << kind
+ *   for each kind that reads it) and values: for an enum the names and
+ *   values ("hard=0,cosine=1,gaussian=2"), NULL for the rest. An enum row
+ *   is named by the desc field: aperture is the shape field of GRATING,
+ *   NOISE, DOTS and USER, so it has two rows, one for DOTS (which take
+ *   RECT, CIRCLE or NO_APERTURE, and NO_APERTURE by default) and one for
+ *   the rest; look a name up with the stimulus's kind. Its offset is the
+ *   ygfx_stim field it sets: flags for a flag (the bit is in its doc),
+ *   ax for anchor (ax and ay). ygfx_enum_get(s, e) and ygfx_enum_set(s, e,
+ *   v) read and write row e on a stimulus, so a loader needs no layout:
+ *   set refuses (YGFX_ERR_ARG) a kind the row does not take and a value it
+ *   does not list; get gives YGFX_ERR_ARG for those, and for an anchor that
+ *   is none of the nine points. The desc pointers (fx, paint, prims, path,
+ *   palette, items) and the enums of the structs they point to are not in
+ *   the tables.
+ *
+ *   ---------------------------------------------------------------------
  *   OUTPUT STAGE
  *   ---------------------------------------------------------------------
  *   CLUT     n entries per channel from linear to device value (2 to
@@ -1299,6 +1333,14 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.16.0 - PARAMETERS: ygfx_enum_params(), the stimulus fields that
+ *          are not floats (place, anchor, shape, aperture, edge, square,
+ *          dist, octaves, stroke_align, join, cap, blend, dash_snap and
+ *          the IMAGE and TEXT flags), with their kinds and enum values;
+ *          YGFX_E_* indices; ygfx_enum_get() and ygfx_enum_set().
+ *          ygfx_param has a last field, values (NULL in the float
+ *          tables): code that reads the tables compiles unchanged; one
+ *          that initializes a ygfx_param by position gets values NULL.
  *   v0.15.1 - The program cache's open and store times and a text's build
  *          time read yrt_real_ns() (ysp/rt.h v0.9.0): on the virtual clock
  *          yrt_now_ns() stands still between waits, so they read 0. Shader
@@ -1805,9 +1847,9 @@
 #define YSP_GFX_H_INCLUDED
 
 #define YGFX_VERSION_MAJOR 0
-#define YGFX_VERSION_MINOR 15
-#define YGFX_VERSION_PATCH 1
-#define YGFX_VERSION_STRING "0.15.1"
+#define YGFX_VERSION_MINOR 16
+#define YGFX_VERSION_PATCH 0
+#define YGFX_VERSION_STRING "0.16.0"
 
 #include "ysp/screen.h"
 #include "ysp/color.h"
@@ -2640,6 +2682,16 @@ enum {
     YGFX_P_COUNT
 };
 
+/* v0.16: indices into ygfx_enum_params() (PARAMETERS): the stimulus
+ * fields that are not floats. */
+enum {
+    YGFX_E_PLACE, YGFX_E_ANCHOR, YGFX_E_SHAPE, YGFX_E_APERTURE, YGFX_E_DOTS_APERTURE, YGFX_E_EDGE,
+    YGFX_E_SQUARE, YGFX_E_DIST, YGFX_E_OCTAVES, YGFX_E_STROKE_ALIGN, YGFX_E_JOIN, YGFX_E_CAP,
+    YGFX_E_BLEND, YGFX_E_DASH_SNAP, YGFX_E_MODULATION, YGFX_E_LINEAR, YGFX_E_ADD,
+    YGFX_E_PREMULTIPLIED, YGFX_E_COVERAGE, YGFX_E_ALIASED, YGFX_E_RAYS,
+    YGFX_E_COUNT
+};
+
 typedef struct ygfx_bind {
     ygfx_stim*  stim;
     uint16_t      param;    /* YGFX_P_*, or YGFX_G_* with group              */
@@ -2660,6 +2712,8 @@ typedef struct ygfx_param {
     const char* doc;
     uint32_t    offset;   /* in ygfx_stim                                      */
     uint32_t    kinds;    /* bit (1 << ygfx_kind) for each kind that reads it  */
+    const char* values;   /* v0.16, enum rows: "name=value" pairs joined by
+                           * ',', in value order; NULL for other types       */
 } ygfx_param;
 
 /* --- backend (the gfx backend interface) ------------------------------------ */
@@ -3268,6 +3322,13 @@ YGFX_API const ygfx_param* ygfx_fx_params(int* n);
 YGFX_API const ygfx_param* ygfx_paint_params(int* n);
 /* The desc fields a designer sets (yscr_param's shape). */
 YGFX_API const yscr_param* ygfx_desc_params(int* n);
+/* v0.16 (PARAMETERS): the stimulus fields that are not floats; *n gets
+ * YGFX_E_COUNT. Row e of a stimulus: get returns its value, set writes
+ * value and returns YGFX_OK; both YGFX_ERR_ARG for a kind the row does not
+ * take or a value it does not list (get: an anchor between the points). */
+YGFX_API const ygfx_param* ygfx_enum_params(int* n);
+YGFX_API int ygfx_enum_get(const ygfx_stim* s, int e);
+YGFX_API int ygfx_enum_set(ygfx_stim* s, int e, int value);
 
 /* Noise, bit for bit what the NOISE stimulus draws for check (cx, cy) from
  * its top-left corner. ygfx_noise_fill() writes w x h checks, rows top
@@ -6794,14 +6855,16 @@ static void ygfx__stim_defaults(ygfx_stim* s, int kind) {
 
 static void ygfx__copy3(float* dst, const float* src) { dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2]; }
 
+/* The nine points of ygfx_align as fractions of a box. */
+static const float ygfx__align_fx[9] = { 0.5f, 0.0f, 0.5f, 1.0f, 0.0f, 1.0f, 0.0f, 0.5f, 1.0f };
+static const float ygfx__align_fy[9] = { 0.5f, 0.0f, 0.0f, 0.0f, 0.5f, 0.5f, 1.0f, 1.0f, 1.0f };
+
 /* A desc's place and anchor into the stimulus. */
 static void ygfx__align(ygfx_stim* s, ygfx_align place, ygfx_align anchor) {
-    static const float fx[9] = { 0.5f, 0.0f, 0.5f, 1.0f, 0.0f, 1.0f, 0.0f, 0.5f, 1.0f };
-    static const float fy[9] = { 0.5f, 0.0f, 0.0f, 0.0f, 0.5f, 0.5f, 1.0f, 1.0f, 1.0f };
     int a = (int)anchor >= 0 && (int)anchor < 9 ? (int)anchor : 0;
     s->place = (uint8_t)((int)place >= 0 && (int)place < 9 ? (int)place : 0);
-    s->ax = fx[a];
-    s->ay = fy[a];
+    s->ax = ygfx__align_fx[a];
+    s->ay = ygfx__align_fy[a];
 }
 
 YGFX_API ygfx_stim ygfx_shape(const ygfx_shape_desc* d) {
@@ -6998,14 +7061,12 @@ YGFX_API ygfx_stim ygfx_user(const ygfx_user_desc* d) {
 }
 
 YGFX_API ygfx_group ygfx_group_make(const ygfx_group_desc* d) {
-    static const float fx[9] = { 0.5f, 0.0f, 0.5f, 1.0f, 0.0f, 1.0f, 0.0f, 0.5f, 1.0f };
-    static const float fy[9] = { 0.5f, 0.0f, 0.0f, 0.0f, 0.5f, 0.5f, 1.0f, 1.0f, 1.0f };
     ygfx_group gr;
     memset(&gr, 0, sizeof gr);
     gr.visible = 1.0f; gr.ax = 0.5f; gr.ay = 0.5f; gr.scale = 1.0f; gr.opacity = 1.0f;
     if (!d) return gr;
     gr.place = (uint8_t)((int)d->place >= 0 && (int)d->place < 9 ? (int)d->place : 0);
-    if ((int)d->anchor > 0 && (int)d->anchor < 9) { gr.ax = fx[d->anchor]; gr.ay = fy[d->anchor]; }
+    if ((int)d->anchor > 0 && (int)d->anchor < 9) { gr.ax = ygfx__align_fx[d->anchor]; gr.ay = ygfx__align_fy[d->anchor]; }
     gr.x = d->x; gr.y = d->y; gr.w = d->w; gr.h = d->h; gr.ori = d->ori;
     if (d->scale != 0.0f) gr.scale = d->scale;
     if (d->opacity != 0.0f) gr.opacity = d->opacity;
@@ -11550,7 +11611,7 @@ static int ygfx__vpack(const ygfx_gfx* g, const ygfx_stim* s, float* b, double e
 #define YGFX__APT  (YGFX__K(YGFX_SHAPE) | YGFX__K(YGFX_GRATING) | YGFX__K(YGFX_NOISE) | \
                       YGFX__K(YGFX_USER) | YGFX__K(YGFX_DOTS))
 #define YGFX__F(name, field, lo, hi, def, unit, doc, kinds) \
-    { name, "f32", lo, hi, def, unit, doc, (uint32_t)offsetof(ygfx_stim, field), kinds }
+    { name, "f32", lo, hi, def, unit, doc, (uint32_t)offsetof(ygfx_stim, field), kinds, NULL }
 #define YGFX__P(i) YGFX__F("p" #i, p[i], -1e30, 1e30, 0, "", "user parameter; POLYGON vertex coordinate", \
                                YGFX__K(YGFX_USER) | YGFX__K(YGFX_SHAPE))
 
@@ -11612,7 +11673,7 @@ static const ygfx_param ygfx__params[YGFX_P_COUNT] = {
 };
 
 #define YGFX__GF(name, field, lo, hi, def, unit, doc) \
-    { name, "f32", lo, hi, def, unit, doc, (uint32_t)offsetof(ygfx_group, field), 0u }
+    { name, "f32", lo, hi, def, unit, doc, (uint32_t)offsetof(ygfx_group, field), 0u, NULL }
 static const ygfx_param ygfx__group_params[YGFX_G_COUNT] = {
     YGFX__GF("visible", visible, 0, 1, 1, "", "members drawn when 0.5 or more"),
     YGFX__GF("x", x, -1e6, 1e6, 0, "u", "anchor offset from the place point, +x right"),
@@ -11627,7 +11688,7 @@ static const ygfx_param ygfx__group_params[YGFX_G_COUNT] = {
 };
 
 #define YGFX__XF(T, name, field, lo, hi, def, unit, doc) \
-    { name, "f32", lo, hi, def, unit, doc, (uint32_t)offsetof(T, field), 0u }
+    { name, "f32", lo, hi, def, unit, doc, (uint32_t)offsetof(T, field), 0u, NULL }
 static const ygfx_param ygfx__prim_params[] = {
     YGFX__XF(ygfx_prim, "x", x, -1e6, 1e6, 0, "u", "center in the compound's box frame, +x right"),
     YGFX__XF(ygfx_prim, "y", y, -1e6, 1e6, 0, "u", "center, +y down"),
@@ -11771,6 +11832,132 @@ static const yscr_param ygfx__desc_params[] = {
 YGFX_API const yscr_param* ygfx_desc_params(int* n) {
     if (n) *n = (int)(sizeof ygfx__desc_params / sizeof ygfx__desc_params[0]);
     return ygfx__desc_params;
+}
+
+/* The enums' names are their C suffixes, lower case, so a definition's
+ * "top_left" is YGFX_TOP_LEFT. */
+#define YGFX__V_ALIGN "center=0,top_left=1,top=2,top_right=3,left=4,right=5,bottom_left=6,bottom=7,bottom_right=8"
+#define YGFX__V_APERTURE "rect=0,circle=1,annulus=2,line=3,polygon=4,cross=5,no_aperture=6,mask_tex=7"
+#define YGFX__E(name, type, lo, hi, def, doc, field, kinds, values) \
+    { name, type, lo, hi, def, "", doc, (uint32_t)offsetof(ygfx_stim, field), kinds, values }
+#define YGFX__TXT YGFX__K(YGFX_TEXT)
+#define YGFX__IMG YGFX__K(YGFX_IMAGE)
+static const ygfx_param ygfx__enum_params[YGFX_E_COUNT] = {
+    YGFX__E("place", "enum", 0, 8, 0, "the screen's point that x, y are from", place, YGFX__ALL, YGFX__V_ALIGN),
+    YGFX__E("anchor", "enum", 0, 8, 0, "the box's point at x, y: sets ax and ay", ax, YGFX__ALL, YGFX__V_ALIGN),
+    YGFX__E("shape", "enum", 0, 17, 0, "the SDF shape", shape, YGFX__K(YGFX_SHAPE),
+            YGFX__V_APERTURE ",rrect=8,arc=9,pie=10,capsule=11,ngon=12,star=13,ellipse=14,qbezier=15,polyline=16,"
+            "compound=17"),
+    YGFX__E("aperture", "enum", 0, 7, 0, "the carrier's SDF aperture (the shape field)", shape,
+            YGFX__K(YGFX_GRATING) | YGFX__K(YGFX_NOISE) | YGFX__K(YGFX_USER), YGFX__V_APERTURE),
+    YGFX__E("aperture", "enum", 0, 6, 6, "the dot field's aperture (the shape field); RECT needs a box", shape,
+            YGFX__K(YGFX_DOTS), "rect=0,circle=1,no_aperture=6"),
+    YGFX__E("edge", "enum", 0, 2, 0, "the edge profile; edge_width is its width", edge, YGFX__APT,
+            "hard=0,cosine=1,gaussian=2"),
+    YGFX__E("square", "bool", 0, 1, 0, "a square wave, not a sine (the wave field)", wave, YGFX__K(YGFX_GRATING), NULL),
+    YGFX__E("dist", "enum", 0, 3, 0, "the noise's distribution (the wave field)", wave, YGFX__K(YGFX_NOISE),
+            "uniform=0,binary=1,gaussian=2,simplex=3"),
+    YGFX__E("octaves", "i32", 1, 8, 1, "SIMPLEX: octaves of the fBm", gn_octaves, YGFX__K(YGFX_NOISE), NULL),
+    YGFX__E("stroke_align", "enum", 0, 2, 0, "where the stroke band lies about the boundary", stroke_align, YGFX__APT,
+            "center=0,inside=1,outside=2"),
+    YGFX__E("join", "enum", 0, 2, 0, "a stroke's corners", join, YGFX__K(YGFX_SHAPE), "round=0,miter=1,bevel=2"),
+    YGFX__E("cap", "enum", 0, 2, 0, "the ends of dashes, trims and open paths", cap, YGFX__K(YGFX_SHAPE),
+            "butt=0,round=1,square=2"),
+    YGFX__E("blend", "enum", 0, 2, 0, "how the color meets the scene, in linear light", blend,
+            YGFX__K(YGFX_SHAPE) | YGFX__TXT, "over=0,add=1,multiply=2"),
+    YGFX__E("dash_snap", "bool", 0, 1, 0, "closed boundaries: a whole number of dash periods", dash_snap,
+            YGFX__K(YGFX_SHAPE), NULL),
+    YGFX__E("modulation", "bool", 0, 1, 0, "the red channel modulates along dir (flag YGFX_STIM_MODULATION)", flags,
+            YGFX__IMG, NULL),
+    YGFX__E("linear", "bool", 0, 1, 0, "bilinear sampling (flag YGFX_STIM_LINEAR)", flags, YGFX__IMG, NULL),
+    YGFX__E("add", "bool", 0, 1, 0, "add the texels to the scene (flag YGFX_STIM_ADD)", flags, YGFX__IMG, NULL),
+    YGFX__E("premultiplied", "bool", 0, 1, 0, "rgb is times alpha; a target's image sets it (flag "
+            "YGFX_STIM_PREMULTIPLIED)", flags, YGFX__IMG, NULL),
+    YGFX__E("coverage", "bool", 0, 1, 0, "red is coverage of the tint (flag YGFX_STIM_COVERAGE)", flags, YGFX__IMG,
+            NULL),
+    YGFX__E("aliased", "bool", 0, 1, 0, "coverage 0 or 1 at the pixel center (flag YGFX_STIM_ALIASED)", flags,
+            YGFX__TXT, NULL),
+    YGFX__E("rays", "bool", 0, 1, 0, "the rays program also where the exact area applies (flag YGFX_STIM_RAYS)",
+            flags, YGFX__TXT, NULL),
+};
+#undef YGFX__E
+#undef YGFX__TXT
+#undef YGFX__IMG
+
+/* The flag of each bool row from YGFX_E_MODULATION on. */
+static const uint32_t ygfx__enum_flags[YGFX_E_COUNT - YGFX_E_MODULATION] = {
+    YGFX_STIM_MODULATION, YGFX_STIM_LINEAR, YGFX_STIM_ADD, YGFX_STIM_PREMULTIPLIED, YGFX_STIM_COVERAGE,
+    YGFX_STIM_ALIASED, YGFX_STIM_RAYS
+};
+
+YGFX_API const ygfx_param* ygfx_enum_params(int* n) {
+    if (n) *n = YGFX_E_COUNT;
+    return ygfx__enum_params;
+}
+
+/* Whether row e takes v: an enum's listed values, else min..max. */
+static bool ygfx__enum_takes(int e, int v) {
+    const ygfx_param* p = &ygfx__enum_params[e];
+    const char* s = p->values;
+    if (!s) return v >= p->min && v <= p->max;
+    while ((s = strchr(s, '=')) != NULL) {
+        char* end;
+        long x = strtol(s + 1, &end, 10);
+        if (x == v) return true;
+        s = end;
+    }
+    return false;
+}
+
+/* Whether row e exists and s's kind reads it. */
+static bool ygfx__enum_row(const ygfx_stim* s, int e) {
+    return s && e >= 0 && e < YGFX_E_COUNT && s->kind < YGFX_KIND_COUNT &&
+           (ygfx__enum_params[e].kinds & (1u << s->kind)) != 0;
+}
+
+YGFX_API int ygfx_enum_get(const ygfx_stim* s, int e) {
+    int v = -1, i;
+    if (!ygfx__enum_row(s, e)) return YGFX_ERR_ARG;
+    switch (e) {
+    case YGFX_E_PLACE: v = s->place; break;
+    case YGFX_E_ANCHOR:
+        for (i = 0; i < 9; i++)
+            if (s->ax == ygfx__align_fx[i] && s->ay == ygfx__align_fy[i]) v = i;
+        break;
+    case YGFX_E_SHAPE: case YGFX_E_APERTURE: case YGFX_E_DOTS_APERTURE: v = s->shape; break;
+    case YGFX_E_EDGE: v = s->edge; break;
+    case YGFX_E_SQUARE: case YGFX_E_DIST: v = s->wave; break;
+    case YGFX_E_OCTAVES: v = s->gn_octaves; break;
+    case YGFX_E_STROKE_ALIGN: v = s->stroke_align; break;
+    case YGFX_E_JOIN: v = s->join; break;
+    case YGFX_E_CAP: v = s->cap; break;
+    case YGFX_E_BLEND: v = s->blend; break;
+    case YGFX_E_DASH_SNAP: v = s->dash_snap; break;
+    default: v = (s->flags & ygfx__enum_flags[e - YGFX_E_MODULATION]) ? 1 : 0; break;
+    }
+    return ygfx__enum_takes(e, v) ? v : YGFX_ERR_ARG;
+}
+
+YGFX_API int ygfx_enum_set(ygfx_stim* s, int e, int value) {
+    if (!ygfx__enum_row(s, e) || !ygfx__enum_takes(e, value)) return YGFX_ERR_ARG;
+    switch (e) {
+    case YGFX_E_PLACE: s->place = (uint8_t)value; break;
+    case YGFX_E_ANCHOR: s->ax = ygfx__align_fx[value]; s->ay = ygfx__align_fy[value]; break;
+    case YGFX_E_SHAPE: case YGFX_E_APERTURE: case YGFX_E_DOTS_APERTURE: s->shape = (uint16_t)value; break;
+    case YGFX_E_EDGE: s->edge = (uint16_t)value; break;
+    case YGFX_E_SQUARE: case YGFX_E_DIST: s->wave = (uint16_t)value; break;
+    case YGFX_E_OCTAVES: s->gn_octaves = value; break;
+    case YGFX_E_STROKE_ALIGN: s->stroke_align = (uint8_t)value; break;
+    case YGFX_E_JOIN: s->join = (uint8_t)value; break;
+    case YGFX_E_CAP: s->cap = (uint8_t)value; break;
+    case YGFX_E_BLEND: s->blend = (uint8_t)value; break;
+    case YGFX_E_DASH_SNAP: s->dash_snap = (uint8_t)value; break;
+    default:
+        if (value) s->flags |= ygfx__enum_flags[e - YGFX_E_MODULATION];
+        else s->flags &= ~ygfx__enum_flags[e - YGFX_E_MODULATION];
+        break;
+    }
+    return YGFX_OK;
 }
 
 /* --- the calls on a gfx: a failure always leaves a message ------------------ */

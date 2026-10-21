@@ -1,4 +1,4 @@
-/* ysp/response.h - v0.5.0 - public domain single-header response collector
+/* ysp/response.h - v0.6.0 - public domain single-header response collector
  *
  *   Turns timestamped input events from any device into the response of a
  *   trial: which key or button, when, measured from the stimulus onset that
@@ -386,6 +386,20 @@
  *   it is safe on a zeroed collector, after a failed open, and twice.
  *
  *   ---------------------------------------------------------------------
+ *   PARAMETERS
+ *   ---------------------------------------------------------------------
+ *   yrsp_params(&n) lists the fields of yrsp_desc and of a yrsp_choice
+ *   that a definition or a designer sets, so a loader checks its keys and
+ *   a designer builds its panel from one source (docs/rig_spec.md,
+ *   principle 8). Each row: the field's name (a choice's is
+ *   "choices.<field>"), its type ("enum", "bool", "u16", "u32", "i32",
+ *   "i64", "f32", "str"), the inclusive range, the value a zero field
+ *   means, the unit ("ns" for int64 ns: a definition's x_s for x_ns), a
+ *   line of doc, and for an enum its names and values ("all=0,list=1,
+ *   none=2"). Not in it: the caller's arrays and their counts (choices
+ *   and n_choices as such, sources, trace).
+ *
+ *   ---------------------------------------------------------------------
  *   NOT DONE
  *   ---------------------------------------------------------------------
  *   Output to a ysp/rt.h ring (v0.2); stimulus boxes at each flip for
@@ -402,6 +416,9 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.6.0 - PARAMETERS: yrsp_params() and yrsp_param, the table of the
+ *          desc and choice fields a definition sets, with enum values.
+ *          No rule changed.
  *   v0.5.0 - DATA: the columns of seconds end in _s (user decision,
  *          2026-10-20; ysp/trials.h v0.5.0 refuses a TIME_NS column
  *          without it): rt_s, rt_key_duration_s, onset_residual_s,
@@ -506,9 +523,9 @@
 #define YSP_RESPONSE_H_INCLUDED
 
 #define YRSP_VERSION_MAJOR 0
-#define YRSP_VERSION_MINOR 5
+#define YRSP_VERSION_MINOR 6
 #define YRSP_VERSION_PATCH 0
-#define YRSP_VERSION_STRING "0.5.0"
+#define YRSP_VERSION_STRING "0.6.0"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -856,6 +873,23 @@ YRSP_API int64_t yrsp_plan_frame(const yrsp_collector* c);
 YRSP_API int         yrsp_scancode(const char* name);
 YRSP_API const char* yrsp_key_name(uint32_t scancode);
 
+/* v0.6: one field of yrsp_desc or of a yrsp_choice that a definition sets
+ * (PARAMETERS). The shape of every ysp parameter table. */
+typedef struct yrsp_param {
+    const char* name;     /* the desc field; "choices.key" for a choice's   */
+    const char* type;     /* "enum", "bool", "u16", "u32", "i32", "i64",
+                           * "f32", "str"                                   */
+    double      min, max; /* inclusive                                      */
+    double      def;      /* the value a zero field means                   */
+    const char* unit;     /* "", "ns"                                       */
+    const char* doc;      /* one line                                       */
+    const char* values;   /* enum: "name=value" pairs joined by ',', in
+                           * value order; NULL for other types              */
+} yrsp_param;
+
+/* The table; *n gets its row count. */
+YRSP_API const yrsp_param* yrsp_params(int* n);
+
 /* --- helpers for the other headers, inline, when they came first ----- */
 
 #if defined(YSP_SCREEN_H_INCLUDED)
@@ -1131,6 +1165,43 @@ YRSP_API const char* yrsp_key_name(uint32_t sc) {
     return NULL;
 }
 
+/* --- parameters ------------------------------------------------------------ */
+
+YRSP_API const yrsp_param* yrsp_params(int* n) {
+    /* durations: yrsp_open() refuses more than 1e6 s */
+    static const yrsp_param table[] = {
+        { "mode", "enum", 0, 2, 0, "", "which presses count: kinds (all), choices (list), none; choices make it list",
+          "all=0,list=1,none=2" },
+        { "kinds", "u16", 0, 65535, 1, "", "all mode: bits 1 << yin_kind; 0 = the keyboard only; 65535 = all but sync",
+          NULL },
+        { "min_rt_ns", "i64", 0, 1e15, 0, "ns", "earlier from the onset is an anticipation, logged (minimum_valid_rt)",
+          NULL },
+        { "duration_ns", "i64", 0, 1e15, 0, "ns", "the deadline from the onset; 0 = none (trial_duration)", NULL },
+        { "persist", "bool", 0, 1, 0, "", "a response does not end the window (response_ends_trial false)", NULL },
+        { "max_responses", "i32", 0, 2147483647.0, 0, "", "with persist: end after this many; 0 = never", NULL },
+        { "allow_held_key", "bool", 0, 1, 0, "", "a held key's press can count (allow_held_key)", NULL },
+        { "wait_for_key_release", "bool", 0, 1, 0, "", "the window ends at the response's release", NULL },
+        { "max_hold_ns", "i64", 0, 1e15, 2e9, "ns", "wait_for_key_release gives up after this; 0 = 2 s", NULL },
+        { "trace_cap", "i32", 0, 2147483647.0, 0, "", "inputs kept in the caller's trace array; 0 = no trace", NULL },
+        { "trace_kinds", "u16", 0, 65535, 65535, "", "bits 1 << yin_kind of the traced inputs; 0 = every kind", NULL },
+        { "choices.key", "str", 0, 0, 0, "", "a key name (CHOICES); sets control, or code with match keycode", NULL },
+        { "choices.name", "str", 0, 0, 0, "", "the response's name in the data; NULL = key", NULL },
+        { "choices.kind", "enum", 0, 15, 0, "", "the input's kind; 8 to 15 are the user's",
+          "keyboard=0,mouse=1,touch=2,pen=3,gamepad=4,box=5,eye=6,sync=7,user=8" },
+        { "choices.match", "enum", 0, 1, 0, "", "a key by its position (scancode) or by the layout's key (keycode)",
+          "scancode=0,keycode=1" },
+        { "choices.cross", "enum", 0, 3, 0, "", "none: a press; else a threshold crossing on an analog channel",
+          "none=0,rising=1,falling=2,distance=3" },
+        { "choices.device", "u32", 0, 4294967295.0, 0, "", "yin_event.device; 0 = any", NULL },
+        { "choices.control", "u32", 0, 4294967295.0, 0, "", "scancode, button or axis", NULL },
+        { "choices.code", "u32", 0, 4294967295.0, 0, "", "keycode, with match keycode", NULL },
+        { "choices.level", "f32", -3.4e38, 3.4e38, 0, "", "crossings: the threshold; distance: above 0", NULL },
+        { "choices.hysteresis", "f32", 0, 3.4e38, 0, "", "crossings: re-arm this far back", NULL },
+    };
+    if (n) *n = (int)(sizeof table / sizeof table[0]);
+    return table;
+}
+
 /* --- init ---------------------------------------------------------------- */
 
 /* 1e6 s bounds a duration so that onset + duration cannot overflow. */
@@ -1161,6 +1232,7 @@ YRSP_API bool yrsp_open(yrsp_collector* c, const yrsp_desc* d) {
     /* "every kind" means every response: a scanner pulse arriving in an
      * ALL_KEYS trial must not end it. Only an explicit mask takes SYNC. */
     if (c->d.kinds == YRSP_KINDS_ALL) c->d.kinds = (uint16_t)(c->d.kinds & ~YRSP_KIND_BIT(YRSP_KIND_SYNC));
+    if (c->d.trace_kinds == 0) c->d.trace_kinds = YRSP_KINDS_ALL;
     for (i = 0; i < d->n_choices; i++) {
         yrsp_choice* h = &c->ch[i];
         *h = d->choices[i];

@@ -443,6 +443,271 @@ static void test_cones_dkl(void) {
     }
 }
 
+/* v0.16: the enum table. The name switches have no default, so -Wswitch
+ * (gcc and clang -Wall; CI's -Werror) stops the build when an enum gains a
+ * value, and the value check then fails until its row lists it. */
+static const char* align_name(int v) {
+    switch ((ygfx_align)v) {
+    case YGFX_CENTER: return "center";
+    case YGFX_TOP_LEFT: return "top_left";
+    case YGFX_TOP: return "top";
+    case YGFX_TOP_RIGHT: return "top_right";
+    case YGFX_LEFT: return "left";
+    case YGFX_RIGHT: return "right";
+    case YGFX_BOTTOM_LEFT: return "bottom_left";
+    case YGFX_BOTTOM: return "bottom";
+    case YGFX_BOTTOM_RIGHT: return "bottom_right";
+    }
+    return NULL;
+}
+static const char* shape_name(int v) {
+    switch ((ygfx_shape_kind)v) {
+    case YGFX_RECT: return "rect";
+    case YGFX_CIRCLE: return "circle";
+    case YGFX_ANNULUS: return "annulus";
+    case YGFX_LINE: return "line";
+    case YGFX_POLYGON: return "polygon";
+    case YGFX_CROSS: return "cross";
+    case YGFX_NO_APERTURE: return "no_aperture";
+    case YGFX_MASK_TEX: return "mask_tex";
+    case YGFX_RRECT: return "rrect";
+    case YGFX_ARC: return "arc";
+    case YGFX_PIE: return "pie";
+    case YGFX_CAPSULE: return "capsule";
+    case YGFX_NGON: return "ngon";
+    case YGFX_STAR: return "star";
+    case YGFX_ELLIPSE: return "ellipse";
+    case YGFX_QBEZIER: return "qbezier";
+    case YGFX_POLYLINE: return "polyline";
+    case YGFX_COMPOUND: return "compound";
+    }
+    return NULL;
+}
+static const char* edge_name(int v) {
+    switch ((ygfx_edge)v) {
+    case YGFX_EDGE_HARD: return "hard";
+    case YGFX_EDGE_COSINE: return "cosine";
+    case YGFX_EDGE_GAUSSIAN: return "gaussian";
+    }
+    return NULL;
+}
+static const char* dist_name(int v) {
+    switch ((ygfx_noise_dist)v) {
+    case YGFX_UNIFORM: return "uniform";
+    case YGFX_BINARY: return "binary";
+    case YGFX_GAUSSIAN: return "gaussian";
+    case YGFX_SIMPLEX: return "simplex";
+    }
+    return NULL;
+}
+static const char* stroke_align_name(int v) {
+    switch ((ygfx_stroke_align)v) {
+    case YGFX_STROKE_CENTER: return "center";
+    case YGFX_STROKE_INSIDE: return "inside";
+    case YGFX_STROKE_OUTSIDE: return "outside";
+    }
+    return NULL;
+}
+static const char* join_name(int v) {
+    switch ((ygfx_join)v) {
+    case YGFX_JOIN_ROUND: return "round";
+    case YGFX_JOIN_MITER: return "miter";
+    case YGFX_JOIN_BEVEL: return "bevel";
+    }
+    return NULL;
+}
+static const char* cap_name(int v) {
+    switch ((ygfx_cap)v) {
+    case YGFX_CAP_BUTT: return "butt";
+    case YGFX_CAP_ROUND: return "round";
+    case YGFX_CAP_SQUARE: return "square";
+    }
+    return NULL;
+}
+static const char* blend_name(int v) {
+    switch ((ygfx_blend_mode)v) {
+    case YGFX_BLEND_MODE_OVER: return "over";
+    case YGFX_BLEND_MODE_ADD: return "add";
+    case YGFX_BLEND_MODE_MULTIPLY: return "multiply";
+    }
+    return NULL;
+}
+
+/* A row's "name=value" list: rising, each the C enum's name, the values in
+ * want (bit v) and nothing else. want 0: every value name_of knows. */
+static int enum_values_ok(const ygfx_param* p, const char* (*name_of)(int), uint64_t want) {
+    const char* s = p->values;
+    uint64_t seen = 0;
+    int prev = -1, v;
+    if (!want)
+        for (v = 0; v < 64; v++)
+            if (name_of(v)) want |= 1ull << v;
+    if (!s) return 0;
+    while (*s) {
+        const char* eq = strchr(s, '=');
+        const char* end = strchr(s, ',');
+        char name[48];
+        if (!end) end = s + strlen(s);
+        if (!eq || eq > end || (size_t)(eq - s) >= sizeof name) return 0;
+        memcpy(name, s, (size_t)(eq - s));
+        name[eq - s] = '\0';
+        v = atoi(eq + 1);
+        if (v <= prev || v >= 64 || v < p->min || v > p->max || !name_of(v) || strcmp(name_of(v), name)) return 0;
+        seen |= 1ull << v;
+        prev = v;
+        s = *end ? end + 1 : end;
+    }
+    return seen == want && prev == (int)p->max;
+}
+
+/* What row e must name: its ygfx_stim field and, for a flag, the bit; the
+ * kinds whose descs have the field. */
+typedef struct enum_field {
+    size_t off; uint32_t flag; const char* (*name_of)(int); uint64_t want; uint32_t kinds;
+} enum_field;
+
+static int enum_read(const ygfx_stim* s, int e, uint32_t flag) {
+    switch (e) {
+    case YGFX_E_PLACE: return s->place;
+    case YGFX_E_ANCHOR: {
+        int i;
+        for (i = 0; i < 9; i++) {
+            ygfx_stim t;
+            ygfx_shape_desc sd;
+            memset(&sd, 0, sizeof sd);
+            sd.anchor = (ygfx_align)i;
+            t = ygfx_shape(&sd);
+            if (t.ax == s->ax && t.ay == s->ay) return i;
+        }
+        return -1;
+    }
+    case YGFX_E_SHAPE: case YGFX_E_APERTURE: case YGFX_E_DOTS_APERTURE: return s->shape;
+    case YGFX_E_EDGE: return s->edge;
+    case YGFX_E_SQUARE: case YGFX_E_DIST: return s->wave;
+    case YGFX_E_OCTAVES: return s->gn_octaves;
+    case YGFX_E_STROKE_ALIGN: return s->stroke_align;
+    case YGFX_E_JOIN: return s->join;
+    case YGFX_E_CAP: return s->cap;
+    case YGFX_E_BLEND: return s->blend;
+    case YGFX_E_DASH_SNAP: return s->dash_snap;
+    default: return (s->flags & flag) != 0;
+    }
+}
+
+static void test_enum_params(void) {
+#define EK(k) (1u << (k))
+#define EK_APT (EK(YGFX_SHAPE) | EK(YGFX_GRATING) | EK(YGFX_NOISE) | EK(YGFX_DOTS) | EK(YGFX_USER))
+    static const enum_field want[YGFX_E_COUNT] = {
+        { offsetof(ygfx_stim, place), 0, align_name, 0, 0x1FEu },
+        { offsetof(ygfx_stim, ax), 0, align_name, 0, 0x1FEu },
+        { offsetof(ygfx_stim, shape), 0, shape_name, 0, EK(YGFX_SHAPE) },
+        { offsetof(ygfx_stim, shape), 0, shape_name, 0xFFull,   /* RECT to MASK_TEX: v0.1's apertures */
+          EK(YGFX_GRATING) | EK(YGFX_NOISE) | EK(YGFX_USER) },
+        { offsetof(ygfx_stim, shape), 0, shape_name, (1ull << YGFX_RECT) | (1ull << YGFX_CIRCLE) | (1ull << YGFX_NO_APERTURE),
+          EK(YGFX_DOTS) },
+        { offsetof(ygfx_stim, edge), 0, edge_name, 0, EK_APT },
+        { offsetof(ygfx_stim, wave), 0, NULL, 0, EK(YGFX_GRATING) },
+        { offsetof(ygfx_stim, wave), 0, dist_name, 0, EK(YGFX_NOISE) },
+        { offsetof(ygfx_stim, gn_octaves), 0, NULL, 0, EK(YGFX_NOISE) },
+        { offsetof(ygfx_stim, stroke_align), 0, stroke_align_name, 0, EK_APT },
+        { offsetof(ygfx_stim, join), 0, join_name, 0, EK(YGFX_SHAPE) },
+        { offsetof(ygfx_stim, cap), 0, cap_name, 0, EK(YGFX_SHAPE) },
+        { offsetof(ygfx_stim, blend), 0, blend_name, 0, EK(YGFX_SHAPE) | EK(YGFX_TEXT) },
+        { offsetof(ygfx_stim, dash_snap), 0, NULL, 0, EK(YGFX_SHAPE) },
+        { offsetof(ygfx_stim, flags), YGFX_STIM_MODULATION, NULL, 0, EK(YGFX_IMAGE) },
+        { offsetof(ygfx_stim, flags), YGFX_STIM_LINEAR, NULL, 0, EK(YGFX_IMAGE) },
+        { offsetof(ygfx_stim, flags), YGFX_STIM_ADD, NULL, 0, EK(YGFX_IMAGE) },
+        { offsetof(ygfx_stim, flags), YGFX_STIM_PREMULTIPLIED, NULL, 0, EK(YGFX_IMAGE) },
+        { offsetof(ygfx_stim, flags), YGFX_STIM_COVERAGE, NULL, 0, EK(YGFX_IMAGE) },
+        { offsetof(ygfx_stim, flags), YGFX_STIM_ALIASED, NULL, 0, EK(YGFX_TEXT) },
+        { offsetof(ygfx_stim, flags), YGFX_STIM_RAYS, NULL, 0, EK(YGFX_TEXT) },
+    };
+#undef EK
+#undef EK_APT
+    ygfx_stim zero[YGFX_KIND_COUNT];
+    int n = -1, e, k, j, v, rows = 0;
+    const ygfx_param* p = ygfx_enum_params(&n);
+    g_where = "enum_params";
+    CHECK(p != NULL && n == YGFX_E_COUNT && ygfx_enum_params(NULL) == p);
+    /* each kind's stimulus from a zero desc: what a zero field gives */
+    memset(zero, 0, sizeof zero);
+    {
+        ygfx_shape_desc a; ygfx_grating_desc b; ygfx_gabor_desc c; ygfx_dots_desc d; ygfx_image_desc i;
+        ygfx_noise_desc o; ygfx_crun_desc t; ygfx_user_desc u;
+        memset(&a, 0, sizeof a); memset(&b, 0, sizeof b); memset(&c, 0, sizeof c); memset(&d, 0, sizeof d);
+        memset(&i, 0, sizeof i); memset(&o, 0, sizeof o); memset(&t, 0, sizeof t); memset(&u, 0, sizeof u);
+        zero[YGFX_SHAPE] = ygfx_shape(&a);
+        zero[YGFX_GRATING] = ygfx_grating(&b);
+        zero[YGFX_GABOR] = ygfx_gabor(&c);
+        zero[YGFX_DOTS] = ygfx_dots(&d);
+        zero[YGFX_IMAGE] = ygfx_image(NULL, &i);
+        zero[YGFX_NOISE] = ygfx_noise(&o);
+        zero[YGFX_TEXT] = ygfx_crun(NULL, &t);
+        zero[YGFX_USER] = ygfx_user(&u);
+    }
+    for (k = 1; k < YGFX_KIND_COUNT; k++) CHECK(zero[k].kind == k);
+    CHECK(ygfx_enum_get(NULL, 0) == YGFX_ERR_ARG && ygfx_enum_set(NULL, 0, 0) == YGFX_ERR_ARG);
+    CHECK(ygfx_enum_get(&zero[YGFX_SHAPE], -1) == YGFX_ERR_ARG && ygfx_enum_get(&zero[YGFX_SHAPE], YGFX_E_COUNT) == YGFX_ERR_ARG);
+    for (e = 0; e < n; e++) {
+        const ygfx_param* r = &p[e];
+        int is_enum = !strcmp(r->type, "enum");
+        CHECK(r->name && r->type && r->unit && r->doc && r->doc[0]);
+        CHECK(r->min <= r->def && r->def <= r->max);
+        CHECK(r->offset == want[e].off);
+        CHECK(r->kinds == want[e].kinds);
+        CHECK(is_enum || !strcmp(r->type, "bool") || !strcmp(r->type, "i32"));
+        CHECK(is_enum == (r->values != NULL) && is_enum == (want[e].name_of != NULL));
+        if (is_enum && !enum_values_ok(r, want[e].name_of, want[e].want)) {
+            fprintf(stderr, "gfx_test [%s]: FAIL: %s's values [%s] are not its enum's\n", g_where, r->name, r->values);
+            g_failures++;
+        }
+        /* no kind reads two rows of one name */
+        for (j = 0; j < e; j++) CHECK(strcmp(p[j].name, r->name) != 0 || (p[j].kinds & r->kinds) == 0);
+        for (k = 1; k < YGFX_KIND_COUNT; k++) {
+            ygfx_stim s = zero[k];
+            if (!(r->kinds & (1u << k))) {
+                CHECK(ygfx_enum_get(&s, e) == YGFX_ERR_ARG && ygfx_enum_set(&s, e, (int)r->def) == YGFX_ERR_ARG);
+                continue;
+            }
+            rows++;
+            /* the default is what a zero desc field gives */
+            if (ygfx_enum_get(&s, e) != (int)r->def || enum_read(&s, e, want[e].flag) != (int)r->def) {
+                fprintf(stderr, "gfx_test [%s]: FAIL: %s on kind %d: a zero field gives %d, the table says %g\n",
+                        g_where, r->name, k, enum_read(&s, e, want[e].flag), r->def);
+                g_failures++;
+            }
+            /* every value it takes lands in its field, and nothing else */
+            for (v = (int)r->min - 1; v <= (int)r->max + 1; v++) {
+                int takes = v >= r->min && v <= r->max;
+                if (is_enum) {
+                    char key[16];
+                    snprintf(key, sizeof key, "=%d", v);
+                    takes = 0;
+                    {
+                        const char* f = r->values;
+                        size_t kl = strlen(key);
+                        while ((f = strstr(f, key)) != NULL) {
+                            if (f[kl] == ',' || f[kl] == '\0') takes = 1;
+                            f += kl;
+                        }
+                    }
+                }
+                s = zero[k];
+                if (!takes) { CHECK(ygfx_enum_set(&s, e, v) == YGFX_ERR_ARG && !memcmp(&s, &zero[k], sizeof s)); continue; }
+                CHECK(ygfx_enum_set(&s, e, v) == YGFX_OK);
+                CHECK(ygfx_enum_get(&s, e) == v && enum_read(&s, e, want[e].flag) == v);
+                CHECK(ygfx_enum_set(&s, e, (int)r->def) == YGFX_OK && !memcmp(&s, &zero[k], sizeof s));
+            }
+        }
+    }
+    {   /* an anchor between the nine points is no value */
+        ygfx_stim s = zero[YGFX_SHAPE];
+        s.ax = 0.25f;
+        CHECK(ygfx_enum_get(&s, YGFX_E_ANCHOR) == YGFX_ERR_ARG);
+    }
+    printf("enum params: %d rows, %d row-kind pairs: ok\n", n, rows);
+}
+
 static void test_tables(void) {
     int n = 0, m = 0, i, j;
     const ygfx_param* p = ygfx_params(&n);
@@ -454,6 +719,7 @@ static void test_tables(void) {
     CHECK(n == YGFX_P_COUNT && m > 5 && d);
     for (i = 0; i < n; i++) {
         CHECK(p[i].offset + sizeof(float) <= sizeof(ygfx_stim));
+        CHECK(p[i].values == NULL && !strcmp(p[i].type, "f32"));   /* v0.16: floats only */
         CHECK(p[i].min <= p[i].def && p[i].def <= p[i].max);
         for (j = 0; j < i; j++) CHECK(strcmp(p[i].name, p[j].name) != 0);
     }
@@ -8570,6 +8836,7 @@ int main(void) {
     test_cal_srgb();
     test_cones_dkl();
     test_tables();
+    test_enum_params();
     test_coordinates();
     test_null_and_ring();
     test_v12_capture_cpu();

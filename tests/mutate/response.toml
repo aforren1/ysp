@@ -514,3 +514,45 @@ test = "response"
 why = "A column of seconds without _s reads as ms to a jsPsych habit; ysp/trials.h refuses it at open."
 find = '    YTR_COL_SET("onset_residual_s", YTR_COL_TIME_NS), \'
 replace = '    YTR_COL_SET("onset_residual", YTR_COL_TIME_NS), \'
+
+# --- the parameter table (v0.6.0) -------------------------------------------
+
+[[mutant]]
+id = "pm-01"
+name = "trace_kinds 0 left as 0"
+test = "response"
+why = "The table says a zero trace_kinds is every kind; the handle must say so too, as kinds does."
+find = '    if (c->d.trace_kinds == 0) c->d.trace_kinds = YRSP_KINDS_ALL;'
+replace = '    /* trace_kinds kept */'
+
+[[mutant]]
+id = "pm-02"
+name = "max_hold_ns default 1 s"
+test = "response"
+why = "A row's default is what a zero field means: open makes it 2 s."
+find = '{ "max_hold_ns", "i64", 0, 1e15, 2e9, "ns",'
+replace = '{ "max_hold_ns", "i64", 0, 1e15, 1e9, "ns",'
+
+[[mutant]]
+id = "pm-03"
+name = "cross values without distance"
+test = "response"
+why = "An enum row lists every value of its C enum; a loader would refuse a distance crossing."
+find = '"none=0,rising=1,falling=2,distance=3"'
+replace = '"none=0,rising=1,falling=2"'
+
+[[mutant]]
+id = "pm-04"
+name = "kinds default 0"
+test = "response"
+why = "A zero kinds is the keyboard bit after open, not no kind."
+find = '{ "kinds", "u16", 0, 65535, 1, "",'
+replace = '{ "kinds", "u16", 0, 65535, 0, "",'
+
+[[mutant]]
+id = "pm-05"
+name = "choice kinds without user"
+test = "response"
+why = "The kind row lists every yin_kind."
+find = '"keyboard=0,mouse=1,touch=2,pen=3,gamepad=4,box=5,eye=6,sync=7,user=8"'
+replace = '"keyboard=0,mouse=1,touch=2,pen=3,gamepad=4,box=5,eye=6,sync=7"'
