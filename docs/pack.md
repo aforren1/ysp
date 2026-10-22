@@ -12,7 +12,9 @@ textures from JPEG files; the reader did not change. Tool v0.5.0
 instead of one thread. Tool v0.6.0 (2026-10-21, section 15) lays out
 the texts of the experiment definition's text stimuli itself, so a
 description lists no glyph runs for them (gap G9 of
-experiment_format.md). Where the build
+experiment_format.md). Tool v0.7.0 (2026-10-22, section 16) stores a
+definition's canonical bytes (D2) and refuses a lookup whose map lacks a
+level of its `by`. Where the build
 changed the design, the text says so. When this page and rig_spec 5
 disagree, this page is newer.
 
@@ -435,7 +437,9 @@ Rules:
   `ysp/chunks` included. `size`, `sha256`, `xxh64`, `crc32` and `stream`
   equal the container's (`ypak verify`).
 - `sources`: each input file, by its path relative to the source
-  description, `/` separators, and its SHA-256. `from`: entries of this
+  description, `/` separators, and its SHA-256. For a definition, the
+  SHA-256 of its canonical bytes, which is the entry's too (4.12; tool
+  v0.7.0). `from`: entries of this
   pack that the entry is made from (a curve set's font, glyph runs' fonts;
   for the experiment's glyph runs also the experiment entry and the
   tables whose levels gave texts, 4.5).
@@ -919,10 +923,16 @@ refuses `"kind": "alpha"` with that reason (tool v0.4.0).
 
 ### 4.12 EXPERIMENT and FILE
 
-Bytes, unchanged. The experiment comes from the description's top-level
-`"experiment": {"entry", "source", "media_type"}`. A definition
-(`"format": "ysp-experiment"`) also gives the experiment's glyph runs
-(4.5).
+A FILE entry holds its source's bytes, unchanged. The experiment comes
+from the description's top-level `"experiment": {"entry", "source",
+"media_type"}`. When the source is a definition (JSON with `"format":
+"ysp-experiment"`, experiment_format.md), the entry holds its canonical
+bytes (tool v0.7.0): ysp/json.h's canonical form (json.md) and one LF
+after it, with the derivation `{"op": "canonical", "by": "ysp/json.h
+VERSION"}`. The entry's SHA-256 is then the experiment ID (D2). Other
+experiment bytes stay as they are (`"op": "copy"`). A definition also
+gives the experiment's glyph runs (4.5), and the tool checks its lookups
+(section 16).
 
 ## 5. Reference: the tool
 
@@ -978,7 +988,7 @@ Sizes and build times: section 8.1.
 
 | Command | What it does |
 |---|---|
-| `ypak build SRC.json -o OUT.ysppak [--ffmpeg PATH]` | Builds a pack from a source description |
+| `ypak build SRC.json -o OUT.ysppak [--ffmpeg PATH]` | Builds a pack from a source description. Warnings (`warning: ...`, from tool v0.7.0) go to standard error and do not stop the build |
 | `ypak verify PACK` | Every check: structure, canonical container, CRC-32, XXH64 tree, SHA-256 per entry against the manifest, the manifest against the 0x7379 records, the pack ID. Exit 0 only when all pass |
 | `ypak list PACK` | Name, kind, size, data offset, flags |
 | `ypak info PACK` | Pack ID, format, tool, experiment, project audio |
@@ -1042,7 +1052,8 @@ A methods section cites the pack ID. A reviewer checks it:
 1. Get the sources and the `ypak` release that the manifest names
    (`tool.version`, `tool.build`).
 2. `ypak rebuild PACK --sources DIR`. The tool reads the manifest, checks
-   the SHA-256 of each source and names the first that differs, runs every
+   the SHA-256 of each source (of a definition: of its canonical bytes,
+   section 16) and names the first that differs, runs every
    derivation again, writes a new pack, and compares it with the original
    byte for byte. It prints `identical` or the first entry and offset that
    differ, and exits 0 only on `identical`.
@@ -1103,6 +1114,11 @@ processor count (4.10). What makes it so:
   spelling of the definition do not change the entry (tested, section
   15), nor does the order of the definition's members (ysp/json.h sorts
   each object when it parses it).
+- **The definition** (tool v0.7.0): stored as its canonical bytes, and
+  its source's SHA-256 in the manifest is the canonical bytes'. So the
+  whitespace, key order, number spelling and string escapes of the source
+  change neither the entry, nor the experiment ID, nor (for one source
+  path) the pack ID (tested, section 16).
 - **Numbers in, bits out**: decimal text is parsed by ysp/table.h's
   correctly rounded parser, never `strtod` (locale) or `printf("%f")`.
 - **Pinned code**: the manifest records every library version, the
@@ -2135,8 +2151,99 @@ texts.
 - Text that a script shows, when the script layer exists: the player
   lays it out at run time (D14); the tool will skip a script's text
   instead of refusing it.
-- The loader's check that a lookup's map has every level its `by` can
-  take (experiment_format.md 2.2): the tool lays out every map value,
-  but does not check the keys.
-- The tool copies the definition's bytes; writing its canonical bytes
-  (D2, `"op": "canonical"`) is not built.
+- Closed in tool v0.7.0 (section 16): the check that a lookup's map has
+  every level its `by` can take, and the definition's canonical bytes.
+
+## 16. Tool v0.7.0: the definition's canonical bytes and its lookups (2026-10-22)
+
+Two gaps that tool v0.6.0 left (section 15, Left). The tool copied the
+definition's bytes, so two definitions that differ only in layout had
+two experiment IDs and two pack IDs, against D2. And nothing checked
+that a lookup's map has a key for every level its `by` can take
+(experiment_format.md 2.2), so a missing key stopped the session that
+met it.
+
+### Decisions (the user to confirm)
+
+| Question | Options | Choice and why |
+|---|---|---|
+| What the pack stores | (a) the source's bytes (v0.6.0); (b) the canonical bytes; (c) both, the source text in a second entry | (b). D2: "The pack tool writes the canonical bytes into the pack and records `"op": "canonical"` in the entry's derivation, so the entry's SHA-256 in the manifest is the experiment ID." (c) puts the source's hash in the manifest, so the pack ID depends on the layout again. The canonical form loses no value: JSON has no comments (D1: ysp/json.h refuses them, and `note` is a value, which the form keeps), object order has no meaning (D3), and the writer keeps each number's exact value and each string's code points (json.md). What it drops is layout, key order, number spelling and escapes. The author's text stays in the sources folder, which `ypak rebuild` reads; a diff of canonical bytes (one member per line, keys in a fixed order) shows changes of value only |
+| The last byte | none (`yjs_write()`'s output); one LF | One LF, as the manifest, the rig profile (`yrig_write()`) and `session.json` end. The experiment ID covers it; a loader that hashes `yjs_write()`'s output adds the LF |
+| The source's SHA-256 in the manifest | (a) the file's; (b) its canonical bytes' | (b). With (a) a reformatted source gives another manifest, so another pack ID, which the task and D2 rule out. The cost: `sha256sum` of the source file matches the manifest only when the source is canonical, as the designer writes it (experiment_format.md 2.12). `ypak rebuild` hashes the canonical bytes of a source whose entry has `"op": "canonical"`, and its message says so |
+| Which experiment bytes | (a) every experiment entry; (b) definitions only | (b): JSON whose `format` is `"ysp-experiment"`, any version. Other media types stay opaque (rig_spec 6), so the test corpus's `main.json` and its pin do not change. A definition of another version is still refused by the derivation of its texts (4.5) |
+| A key at its default (D2: "left out") | (a) the tool drops it; (b) kept | (b), for now. Dropping a default needs the format's defaults per version, which the loader will hold; the tool has no such table. Open |
+| A level without a key | (a) a warning; (b) an error | (b). 2.2: "The loader checks that `map` has every level that `by` can take"; section 15's rule: what would stop a session in its middle is refused at build. The player meets the level with no value to draw |
+| A key no level reaches | (a) nothing; (b) a warning; (c) an error | (b). The key is never read, so the session runs, and a key can be there on purpose: one map pasted into two stimuli of different tables, or a level a pilot's table dropped. But it is often a typo (`"gren"`); then the error names the level (`"green"`) and the warning the key, so the author sees both halves |
+| Where the levels come from | (a) every table any node names, as for the texts (4.5); (b) each leaf's own scope | (b). Per leaf node: its tables and `vars` and its ancestors' (the nearest first), its template's response, the leaf's `tracks`; checked in its template, the stimuli that template names (steps, also inside `if`; the response's `from`; `record`), and the `vars` and `data` of its nodes. (a) would refuse a definition whose two leaves share a column name but not its levels. The texts stay wide: an extra block costs bytes, a refused build costs the author |
+| Which `by` has known levels | | `"$name"` of a table column, a number as its canonical text (`0.50` is the key `"0.5"`, `007` is `"7"`, as a `vars` choice's values, 2.4); a `vars` value or choice, through variables and lookups; the boolean built-ins (`"false"`, and `"true"` when the leaf can make it: below); `outcome` (`"correct"`, `"wrong"`, and `"timeout"` when the response has a `duration_s` that is not 0); `response` (each choice's `key`, 2.3); `method` (the leaf's tracks); a literal. Not checked: a session field, a jitter, another built-in, a name that is nothing (the loader's to refuse); their values exist only at run time |
+| A boolean built-in (the user's decision of 2026-10-22) | (a) `"false"` and `"true"` always; (b) the values the leaf's rules can make | (b). A key is required only for a value some trial can take; a key for a value the rules never make is a key no level reaches (a warning). From the leaf's own `rules` (the leaf opens the `ytr_trials`), read as `ytr_rules()` splits them (blanks and tabs, `#` comments, quotes, several lines in one element), per trials.h BLOCKS, BREAKS, PRACTICE, WARMUP: `practice` is true only with `practice N`, N above 0; `warmup` only with `warmup N`, N above 0; `after_break` only with `block_size N`, N above 0, or `groups COLUMN blocked`. Without them each is `"false"` only. Rules this cannot read (not an array of strings, a count that is not digits, `groups` without its mode) keep both values. `first_in_block` (true on every first trial; false needs a block of two trials, which the tool does not count), `responded` and `correct` keep both |
+| Where a warning goes | | One line per lookup on `ypt_options.warn` (new, NULL: quiet); `ypak build` and `ypak rebuild` give standard error. The error is the build's message, as every refusal |
+
+### What the tool says
+
+| Case | Message (after `ypak: experiment 'NAME': `) |
+|---|---|
+| A level without a key (error) | `stimulus 'word': 'text': the lookup's map has no key for "blue", which '$word' can take in node 'main'; a lookup needs a key for every level of its 'by'` (at most 8 levels, then `and N more`) |
+| A key no level reaches (warning) | `warning: experiment 'experiment/stroop.json': stimulus 'word': 'text': no level of '$word' reaches the map's key "purple"; a typo, or a level the trials no longer have?` |
+
+The place is `stimulus 'S'`, `template 'T'` or `node 'a/b'`, and the
+key is its path inside (`text`, `columns.feedback`,
+`response.trigger.code`, `events[1].props.x`, `x.map.false` for a lookup
+inside a map). A control byte in a name, key or level prints as `?`, so
+a message stays one line.
+
+### Built
+
+| File | Version | What |
+|---|---|---|
+| `pack/ysp/pack_tool.h`, `pack/pack_tool.c` | 0.7.0 | The experiment entry of a definition as its canonical bytes and one LF (`"op": "canonical"`, by ysp/json.h); the source's SHA-256 is the canonical bytes'; `ypak rebuild` checks such a source the same way. `ypt_options.warn`. The lookup check before the texts' derivation, in the core tool too |
+| `pack/derive.c` | | `ypt_check_lookups()`: every lookup of the stimuli, templates and nodes against the levels its `by` takes in each leaf that reaches it |
+| `pack/ypak.c` | 0.7.0 | Warnings to standard error in `build` and `rebuild` |
+| `include/ysp/pack.h` | 0.3.0 | Unchanged |
+| `tests/adapt/derive_test.c` | | Every source of levels, each boolean built-in with and without the rules that make it true (comments, quotes, tabs, lines, counts of 0, unreadable rules, a container's rules, two leaves), scope per leaf (two leaves, a container's table and vars, the nearest first, 31 nodes deep), each refusal and warning by its whole message, control bytes, repeated levels, loops of vars, the work bound |
+| `tests/pack/tool_test.c` | | The Stroop entry against the canonical bytes the test computes; the entry's and the source's SHA-256 in the manifest; the player's keys from the stored definition; a respelled definition (compact, keys reordered, `7.2e1`, `RED`) at the same path gives the same pack file; a rebuild from it is identical, and from another value is refused by name; a missing level, a missing `"timeout"`, the warning to a file in a build and a rebuild, in both tools |
+| `tests/fuzz/derive_fuzz.c` | | The lookup check on every input: a refusal has a message, a warning is one non-empty line |
+| `tests/mutate/derive.toml` | | 47 mutants of the check (lk-01 to lk-47; lk-32 to lk-47 for the booleans' rules) |
+
+### Hashes that moved
+
+- `tests/pack/corpus.sha256`: none. The corpus's experiment is opaque,
+  so `experiment/main.json` keeps its bytes; every other entry is
+  byte-identical to v0.6.0's. The manifest differs by the tool version,
+  as in every version (it is not pinned).
+- A pack with a definition: its experiment entry (now the canonical
+  bytes), the source's SHA-256 in the manifest, so its pack ID. The
+  Stroop pack of the tool test: `9305c394073a20e4...` with v0.6.0 (built at a6c7ef1),
+  `d3f9ad80a8f13f74...` with v0.7.0 (SHA-256 of the file). Its glyph runs and
+  curve set entries are byte-identical to v0.6.0's: the derivation reads
+  the same values from the canonical bytes.
+
+### Results
+
+On 2026-10-22, Windows 11 on the i7-1360P laptop, and WSL2 Ubuntu 22.04
+on the same machine.
+
+| Check | Result |
+|---|---|
+| `tests/adapt/derive_test.c` | 284 checks, 0 failed (168 in v0.6.0): MSVC 19.44 (Release), MinGW gcc 16.1 (`-O1 -Wall -Wextra -Wshadow`, and the mingw preset), Linux gcc 11.4 (Release, and ASan with UBSan) |
+| `tests/pack/tool_test.c` | MSVC, full tool: 346 checks, 0 failed (331 in v0.6.0). Linux gcc, full tool: 341, 0 failed, Release and ASan with UBSan. MinGW, core tool: 277, 0 failed (the lookups checked and the warning written before the core tool refuses the runs) |
+| The whole tree | MSVC `msvc-full` with the pack tool: 93 of 93 ctest tests. MinGW `mingw` preset with the pack tool: 81 of 82 under load from two other jobs; the one, `test_audio`, passed alone (8.8 s against 40 s under the load) |
+| CI's lines | `ypak verify` of the corpus and core packs, `list`, the bogus command refused, `trial_images --sim`, `gfx_layout --sim` and `trial_stroop --sim` (every trial as scripted) on the MSVC build |
+| Canonical bytes | The Stroop entry (3572 bytes; the source is 2729) is the test's own canonical bytes of the source; its SHA-256 is the entry's and the source's in the manifest. A respelled source at the same path (compact, keys in another order, `7.2e1` for `72`, `\u0052ED` for `RED`) gives the same pack file, so the same pack ID, and `ypak rebuild` from it says `identical`; a source with another value is refused, the message naming its canonical bytes |
+| Against v0.6.0 | The same Stroop description: every entry but the experiment byte-identical to v0.6.0's (glyph runs, curve set, font, table); the manifest differs in the experiment's record and the tool version |
+| Determinism | MSVC and Linux gcc (Release and ASan) give the same files: Stroop `d3f9ad80a8f13f74...`, union `3c18cde932f73810...`, two fonts `a8b338aca8eb78b9...`, shared style `7b894fdb4ef1a9a2...`, fallback `e2158f8cbae45ff3...` (SHA-256 of the files). MinGW builds the core tool, whose texts are refused; its corpus and core packs match the pin as before |
+| Mutants of `pack/derive.c` (`tests/mutate/derive.toml`) | 82 of 82 killed: the 35 of v0.6.0 and 47 new (lk-01 to lk-47); lk-17, no nesting bound, by a stack overflow. Seven code spellings changed so the old anchors stay unique |
+| Hand mutants of `pack/pack_tool.c` | 10 of 10 killed with MSVC: a definition copied; no LF; the source's hash of the file; the rebuild hashing the file; the derivation `copy`; no lookup check; build warnings dropped; rebuild warnings dropped; `warn_line` silent; the compact form |
+| Fuzzing (`tests/fuzz/derive_fuzz.c`) | MSVC libFuzzer with ASan, 6 seeds (the four worked examples, the Stroop example, one on the fixed tables): 1,095,940 inputs in 601 s, 2623 new units, no finding. The 506 files replayed under Linux gcc ASan and UBSan, no report |
+| Cost | Not measured: build time, never on the frame path. The check parses the definition once more and walks each leaf's template and stimuli; the work bound is 5,000,000 steps |
+
+### Left
+
+- A key at its default left out of the canonical bytes (D2): needs the
+  format's defaults table, which the loader will have.
+- D2's open case: two texts of one double past its 17th digit still
+  give two IDs; that is the loader's choice, not the tool's.
+- `$response` on a timeout, a session field and the other built-ins are
+  not checked; the player has their values at run time only.
+- A lookup in a stimulus that no template names is not checked (no leaf
+  reaches it).

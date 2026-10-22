@@ -71,6 +71,7 @@ typedef struct C {
     void** blk;
     size_t nb, cb;
     FILE*  log;
+    FILE*  warn;       /* warnings, one line each; NULL: quiet             */
     const char* base;
     yjs_arena ja;      /* the JSON values (jar())                          */
     int    jfail;      /* a JSON builder failed: no manifest from this call */
@@ -529,6 +530,62 @@ static int build_copy(B* b, E* e, const char* by) {
     e->data = load_source(b, e, src, &e->size);
     if (!e->data) return YPAK_ERR_IO;
     e->deriv = deriv_new(b, "copy", by);
+    return 0;
+}
+
+/* An experiment definition (docs/experiment_format.md D2) as its
+ * canonical bytes: ysp/json.h's canonical form and one LF, as the manifest,
+ * the rig profile and session.json end. Its SHA-256 is the experiment ID,
+ * so it must depend on the values alone, not on whitespace, key order,
+ * number spelling or escapes. The form drops nothing a reader sees: JSON
+ * has no comments (a note is a value, D1), object order has no meaning
+ * (D3) and a number keeps its exact value. 1 with the bytes in *out (the
+ * call's memory), 0 when the bytes are not a definition (opaque, copied;
+ * ypt_derive_texts() refuses a definition that does not parse), < 0 on an
+ * error. */
+static int exp_canonical(C* c, const uint8_t* d, int64_t n, uint8_t** out, int64_t* on) {
+    yjs_arena a;
+    yjs_value* root;
+    yjs_error je;
+    const yjs_value* fmt;
+    int rc = 0;
+    yjs_arena_init_heap(&a, 0);
+    if (yjs_parse(&a, (const char*)d, (size_t)n, NULL, &root, &je) == YJS_OK && (fmt = yjs_get(root, "format")) != NULL &&
+        fmt->type == YJS_STRING && !strcmp(fmt->u.s, "ysp-experiment")) {
+        size_t k = yjs_write_mem(root, YJS_WRITE_PRETTY, NULL, 0);
+        uint8_t* b = k ? (uint8_t*)calloc_c(c, k + 2) : NULL;
+        if (!b || yjs_write_mem(root, YJS_WRITE_PRETTY, (char*)b, k + 2) != k) {
+            rc = cfail(c, YPAK_ERR_NOMEM, "out of memory writing the definition's canonical bytes");
+        } else {
+            b[k] = '\n';
+            *out = b;
+            *on = (int64_t)k + 1;
+            rc = 1;
+        }
+    }
+    yjs_arena_free(&a);
+    return rc;
+}
+
+/* The experiment entry: a definition's canonical bytes, other bytes as
+ * they are. The source's SHA-256 in the manifest is the canonical bytes'
+ * too, so the pack ID does not depend on the source's layout either;
+ * `ypak rebuild` checks the source the same way. */
+static int build_experiment(B* b, E* e) {
+    uint8_t* canon = NULL;
+    int64_t cn = 0;
+    uint8_t sha[32];
+    char hx[65];
+    int rc = build_copy(b, e, "ypak " YPT_VERSION_STRING);
+    if (rc) return rc;
+    rc = exp_canonical(b->c, e->data, e->size, &canon, &cn);
+    if (rc <= 0) return rc;
+    e->data = canon;
+    e->size = cn;
+    e->deriv = deriv_new(b, "canonical", "ysp/json.h " YJS_VERSION_STRING);
+    ypak_sha256(canon, (size_t)cn, sha);
+    hex(sha, 32, hx);
+    jset(b->c, jat(e->sources, jn(e->sources) - 1), "sha256", jstrz(b->c, hx));
     return 0;
 }
 
@@ -2042,6 +2099,11 @@ static const void* table_bytes(void* ctx, const char* name, size_t* n) {
     return t->data;
 }
 
+static void warn_line(void* ctx, const char* line) {
+    B* b = (B*)ctx;
+    if (b->c->warn) fprintf(b->c->warn, "warning: experiment '%s': %s\n", b->exp->name, line);
+}
+
 static int derive_runs(B* b) {
     char msg[600], name[1100];
     const char* dot;
@@ -2050,6 +2112,9 @@ static int derive_runs(B* b) {
     E* e;
     int i, rc;
     if (!b->exp || !b->exp->data) return 0;
+    /* a lookup without a key for a level stops the session that meets it */
+    rc = ypt_check_lookups(b->exp->data, (size_t)b->exp->size, table_bytes, b, warn_line, b, msg, sizeof msg);
+    if (rc) return cfail(b->c, rc, "experiment '%s': %s", b->exp->name, msg);
     rc = ypt_derive_texts(b->exp->data, (size_t)b->exp->size, table_bytes, b, &b->tx, msg, sizeof msg);
     if (rc) return cfail(b->c, rc, "experiment '%s': %s", b->exp->name, msg);
     if (!b->tx.n_texts) return 0;
@@ -2829,7 +2894,7 @@ static int build_desc(C* c, jv* desc, const char* base_dir, const bopt* bo, sink
             if (pass == 2 && k != YPAK_KIND_CURVESET) continue;
             e->sources = jnew(c, J_ARR);
             switch (k) {
-            case YPAK_KIND_EXPERIMENT: rc = build_copy(&b, e, "ypak " YPT_VERSION_STRING); break;
+            case YPAK_KIND_EXPERIMENT: rc = build_experiment(&b, e); break;
             case YPAK_KIND_FILE: {
                 static const char* const keys[] = { "name", "kind", "source", "license", NULL };
                 rc = keys_ok(c, e->res, keys, e->name);
@@ -2938,6 +3003,7 @@ static int build_text_ex(const char* json, size_t n, const char* base_dir, const
     c.cap = cap;
     if (err && cap) err[0] = 0;
     c.log = o ? o->log : NULL;
+    c.warn = o ? o->warn : NULL;
     desc = jparse(&c, json, n, "the source description");
     if (!desc) { cfree_all(&c); return YPAK_ERR_FORMAT; }
     memset(&s, 0, sizeof s);
@@ -3334,15 +3400,20 @@ int ypt_rebuild_ex(const char* pack_path, const char* sources_dir, const char* o
                 uint8_t sha[32];
                 int64_t n;
                 uint8_t* d;
+                int canon;
                 snprintf(path, sizeof path, "%s/%s", sources_dir, rel);
                 d = read_file(&c, path, &n);
                 if (!d) { ypak_close(&p); rc = c.err && c.err[0] ? YPAK_ERR_IO : cfail(&c, YPAK_ERR_IO, "cannot read '%s'", path); cfree_all(&c); return rc; }
+                /* a definition's source is its canonical bytes (build_experiment) */
+                canon = !strcmp(str_of(jget(jat(ents, i), "derivation"), "op", ""), "canonical");
+                if (canon && exp_canonical(&c, d, n, &d, &n) < 0) { ypak_close(&p); cfree_all(&c); return YPAK_ERR_NOMEM; }
                 ypak_sha256(d, (size_t)n, sha);
                 hex(sha, 32, hx);
                 if (strcmp(hx, str_of(jat(src, k), "sha256", ""))) {
                     ypak_close(&p);
-                    rc = cfail(&c, YPAK_ERR_CORRUPT, "source '%s' of '%s' is not the one the pack was built from (SHA-256 %s, the "
-                               "manifest says %s)", rel, str_of(jat(ents, i), "name", ""), hx, str_of(jat(src, k), "sha256", ""));
+                    rc = cfail(&c, YPAK_ERR_CORRUPT, "source '%s' of '%s' is not the one the pack was built from (SHA-256 %s%s, the "
+                               "manifest says %s)", rel, str_of(jat(ents, i), "name", ""), hx, canon ? " of its canonical bytes" : "",
+                               str_of(jat(src, k), "sha256", ""));
                     if (report) fprintf(report, "%s\n", err);
                     cfree_all(&c);
                     return rc;
@@ -3359,6 +3430,7 @@ int ypt_rebuild_ex(const char* pack_path, const char* sources_dir, const char* o
     else snprintf(tmp, sizeof tmp, "%s.rebuild", pack_path);
     memset(&bo, 0, sizeof bo);
     bo.ffmpeg = o ? o->ffmpeg : NULL;
+    bo.warn = o ? o->warn : NULL;
     rc = build_text_ex(text.p, text.n, sources_dir, tmp, &bo, &p, m, report, err, cap);
     free(text.p);
     if (rc) { ypak_close(&p); cfree_all(&c); return rc; }

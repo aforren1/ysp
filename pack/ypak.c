@@ -59,6 +59,7 @@ int main(int argc, char** argv) {
         o.sources = opt(argc, argv, "--sources");
         o.ffmpeg = opt(argc, argv, "--ffmpeg");
         o.log = flag(argc, argv, "-v") ? stdout : NULL;
+        o.warn = stderr;
         rc = ypt_build(argv[2], out, &o, err, sizeof err);
         if (rc == 0) printf("ypak: wrote %s\n", out);
     } else if (!strcmp(cmd, "verify")) {
@@ -90,6 +91,7 @@ int main(int argc, char** argv) {
         if (!src) return usage();
         memset(&o, 0, sizeof o);
         o.ffmpeg = opt(argc, argv, "--ffmpeg");
+        o.warn = stderr;
         rc = ypt_rebuild_ex(argv[2], src, opt(argc, argv, "-o"), &o, stdout, err, sizeof err);
     } else if (!strcmp(cmd, "append")) {
         const char* out = opt(argc, argv, "-o");

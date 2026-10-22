@@ -1507,8 +1507,9 @@ static void test_stroop_pack(void) {
              " \"experiment\": {\"media_type\": \"application/vnd.ysp.experiment\", \"source\": \"stroop.json\", \"entry\": \"experiment/stroop.json\"}}\n");
     CHECK(ypt_build(WS "/pack_rev.json", WS "/stroop_rev.ysppak", NULL, err, sizeof err) == 0 && same_file(WS "/stroop.ysppak", WS "/stroop_rev.ysppak"),
           "Stroop pack from a reordered description: same bytes (%s)", err);
-    /* the definition respelled (other whitespace, 72.0 for 72): the
-     * experiment entry differs, its glyph runs do not */
+    /* the definition respelled (other whitespace, 72.0 for 72) at another
+     * source path: the manifest names the path, so the packs differ; the
+     * glyph runs do not */
     {
         char* def = text_file(WS "/stroop.json");
         char* at = def ? strstr(def, "\"size\": 72,") : NULL;
@@ -1532,6 +1533,104 @@ static void test_stroop_pack(void) {
             free(r1); free(r2); free(re);
         }
         free(def);
+    }
+    /* the definition respelled: compact, its keys in another order, 72 as
+     * 7.2e1 and RED as \u0052ED. Its canonical bytes are the same, so the
+     * experiment entry, the experiment ID and the pack ID are too (D2), and
+     * a rebuild from it is identical */
+    {
+        size_t dn = 0, n1 = 0, n2 = 0;
+        char* def = text_file(WS "/stroop.json");
+        yjs_arena a;
+        yjs_value* root = NULL;
+        yjs_error je;
+        char* canon = NULL;
+        char* re = NULL;
+        yjs_arena_init_heap(&a, 0);
+        if (def) dn = strlen(def);
+        if (def && yjs_parse(&a, def, dn, NULL, &root, &je) == YJS_OK) {
+            size_t k = yjs_write_mem(root, YJS_WRITE_PRETTY, NULL, 0), rn = yjs_write_mem(root, YJS_WRITE_COMPACT, NULL, 0);
+            canon = (char*)malloc(k + 2);
+            re = (char*)malloc(rn + 64);
+            yjs_write_mem(root, YJS_WRITE_PRETTY, canon, k + 1);
+            canon[k] = '\n';
+            canon[k + 1] = 0;
+            yjs_write_mem(root, YJS_WRITE_COMPACT, re, rn + 1);
+        }
+        CHECK(canon && re, "the Stroop definition parses");
+        if (canon && re) {
+            uint8_t* x = entry_bytes(WS "/stroop.ysppak", "experiment/stroop.json", &n1);
+            uint8_t* m = entry_bytes(WS "/stroop.ysppak", "ysp/manifest.json", &n2);
+            uint8_t sha[32];
+            char hx[65];
+            const char* at;
+            int k, seen = 0;
+            ypak_sha256(canon, strlen(canon), sha);
+            for (k = 0; k < 32; k++) snprintf(hx + 2 * k, 3, "%02x", sha[k]);
+            CHECK(x && n1 == strlen(canon) && !memcmp(x, canon, n1) && memcmp(x, def, dn < n1 ? dn : n1),
+                  "the experiment entry is the definition's canonical bytes, not its source's");
+            for (at = m ? strstr((char*)m, hx) : NULL; at; at = strstr(at + 1, hx)) seen++;
+            CHECK(m && strstr((char*)m, "\"op\": \"canonical\"") && strstr((char*)m, "\"by\": \"ysp/json.h " YJS_VERSION_STRING "\"") && seen == 2,
+                  "the manifest: op canonical by ysp/json.h, and the entry's and the source's SHA-256 are the canonical bytes' (%d of 2)", seen);
+            /* the player's key from the stored definition */
+            if (x) {
+                uint32_t nb;
+                int mt;
+                write_file(WS "/stroop_entry.json", x, n1);
+                mt = player_matches(WS "/stroop.ysppak", "experiment/stroop.ysprun", WS "/stroop_entry.json", &nb);
+                CHECK(nb == 9 && mt == 9, "the player's key from the pack's definition matches every block (%d of %u)", mt, nb);
+            }
+            free(x);
+            free(m);
+            {
+                char* p72 = strstr(re, "\"size\":72,");
+                char* pred = strstr(re, "\"RED\"");
+                CHECK(p72 && pred && p72 < pred, "the compact definition has size 72 before RED");
+                if (p72 && pred && p72 < pred) {
+                    char* re2 = (char*)malloc(strlen(re) + 64);
+                    sprintf(re2, "\n%.*s\"size\":7.2e1,%.*s\"\\u0052ED\"%s\n", (int)(p72 - re), re, (int)(pred - (p72 + 10)), p72 + 10, pred + 5);
+                    MKDIR(WS "/re"); MKDIR(WS "/re/fonts");
+                    put_text(WS "/re/stroop.json", re2);
+                    free(re2);
+                    {
+                        static const char* const files[3] = { "stroop.csv", "pack.json", "fonts/NotoSans-Regular.ttf" };
+                        int fi;
+                        for (fi = 0; fi < 3; fi++) {
+                            char a1[256], a2[256];
+                            size_t fn;
+                            uint8_t* fd;
+                            snprintf(a1, sizeof a1, WS "/%s", files[fi]);
+                            snprintf(a2, sizeof a2, WS "/re/%s", files[fi]);
+                            fd = read_all(a1, &fn);
+                            if (fd) { write_file(a2, fd, fn); free(fd); }
+                        }
+                    }
+                    rc = ypt_build(WS "/re/pack.json", WS "/stroop_re.ysppak", NULL, err, sizeof err);
+                    CHECK(rc == 0 && same_file(WS "/stroop.ysppak", WS "/stroop_re.ysppak"),
+                          "a respelled definition gives the same pack, byte for byte (the same pack ID): %s", err);
+                    rc = ypt_rebuild(WS "/stroop.ysppak", WS "/re", WS "/stroop_rebuilt_re.ysppak", NULL, err, sizeof err);
+                    CHECK(rc == 0 && same_file(WS "/stroop.ysppak", WS "/stroop_rebuilt_re.ysppak"),
+                          "a rebuild from the respelled source is identical: %s", err);
+                    /* another value is another source */
+                    {
+                        char* other = text_file(WS "/re/stroop.json");
+                        char* p = other ? strstr(other, "7.2e1") : NULL;
+                        if (p) {
+                            p[2] = '3';
+                            put_text(WS "/re/stroop.json", other);
+                            rc = ypt_rebuild(WS "/stroop.ysppak", WS "/re", NULL, NULL, err, sizeof err);
+                            CHECK(rc < 0 && strstr(err, "source 'stroop.json' of 'experiment/stroop.json' is not the one") &&
+                                  strstr(err, "of its canonical bytes"), "a changed definition: the rebuild names it: %s", err);
+                        } else CHECK(0, "the respelled definition has 7.2e1");
+                        free(other);
+                    }
+                }
+            }
+        }
+        free(canon);
+        free(re);
+        free(def);
+        yjs_arena_free(&a);
     }
     /* union: a glyphruns resource of the experiment's runs name adds blocks
      * and fallback fonts; a rebuild takes it back */
@@ -1720,6 +1819,84 @@ static void test_stroop_pack(void) {
 #endif
 }
 
+/* --- the lookups' keys at build (ypt_check_lookups) ---------------------------
+ * The Stroop definition with a level missing from a map, and with a key no
+ * level reaches. Both tools check, before any layout. */
+
+/* WS/defs/NAME.json: the Stroop definition with one text replaced; a
+ * description for it at WS/NAME.desc.json. */
+static int stroop_variant(const char* name, const char* find, const char* repl, const ypt_options* o, char* err, size_t cap) {
+    size_t n;
+    uint8_t* d = read_all(WS "/stroop.json", &n);
+    char* at;
+    char path[256], desc[2048];
+    char* out;
+    int rc;
+    if (!d) { CHECK(0, "%s: no Stroop definition", name); return -1; }
+    d[n] = 0;
+    at = strstr((char*)d, find);
+    if (!at) { CHECK(0, "%s: the Stroop definition has '%s'", name, find); free(d); return -1; }
+    out = (char*)malloc(n + strlen(repl) + 1);
+    sprintf(out, "%.*s%s%s", (int)(at - (char*)d), (char*)d, repl, at + strlen(find));
+    snprintf(path, sizeof path, WS "/defs/%s.json", name);
+    put_text(path, out);
+    free(out);
+    free(d);
+    snprintf(desc, sizeof desc,
+             "{\"format\": \"ysp-pack-source\", \"version\": 1,\n"
+             " \"experiment\": {\"entry\": \"experiment/stroop.json\", \"source\": \"defs/%s.json\"},\n"
+             " \"resources\": [{\"name\": \"stroop.pstb\", \"kind\": \"table\", \"source\": \"stroop.csv\"},\n"
+             "  {\"kind\": \"font\", \"source\": \"fonts/NotoSans-Regular.ttf\"}, {\"kind\": \"curveset\", \"from\": \"fonts/NotoSans-Regular.ttf\"}]}\n",
+             name);
+    rc = ypt_build_text(desc, strlen(desc), WS, WS "/variant.ysppak", o, err, cap);
+    return rc;
+}
+
+static void test_lookup_pack(void) {
+    char err[1024];
+    ypt_options o;
+    FILE* wf;
+    size_t n;
+    uint8_t* w;
+    int rc;
+    remove(WS "/variant.ysppak");
+    rc = stroop_variant("nomap", ", \"blue\": \"BLUE\"", "", NULL, err, sizeof err);
+    CHECK(rc < 0 && strstr(err, "experiment 'experiment/stroop.json': stimulus 'word': 'text': the lookup's map has no key for \"blue\", "
+                                "which '$word' can take in node 'main'"), "a map without a level: %s", err);
+    CHECK(fopen(WS "/variant.ysppak", "rb") == NULL, "a map without a level left a pack");
+    rc = stroop_variant("nooutcome", "\"timeout\": \"Too slow\"", "\"slow\": \"Too slow\"", NULL, err, sizeof err);
+    CHECK(rc < 0 && strstr(err, "stimulus 'feedback': 'text': the lookup's map has no key for \"timeout\""), "outcome without timeout: %s", err);
+    /* a key no level reaches: a warning, and the pack builds */
+    memset(&o, 0, sizeof o);
+    wf = fopen(WS "/warn.txt", "wb");
+    o.warn = wf;
+    rc = stroop_variant("purple", "\"blue\": \"BLUE\"", "\"blue\": \"BLUE\", \"purple\": \"PURPLE\"", &o, err, sizeof err);
+    if (wf) fclose(wf);
+    w = read_all(WS "/warn.txt", &n);
+    if (w) w[n] = 0;
+    CHECK(w && !strcmp((char*)w, "warning: experiment 'experiment/stroop.json': stimulus 'word': 'text': no level of '$word' reaches the "
+                                 "map's key \"purple\"; a typo, or a level the trials no longer have?\n"), "the warning: '%s'", w ? (char*)w : "");
+    free(w);
+#ifdef YPT_NO_LAYOUT
+    CHECK(rc < 0 && strstr(err, "glyph runs need the layout library"), "the core tool: the lookups first, then the runs: %s", err);
+#else
+    CHECK(rc == 0, "a key no level reaches builds: %s", err);
+    /* a rebuild checks again, and says so */
+    wf = fopen(WS "/warn2.txt", "wb");
+    o.warn = wf;
+    rc = ypt_rebuild_ex(WS "/variant.ysppak", WS, NULL, &o, NULL, err, sizeof err);
+    if (wf) fclose(wf);
+    w = read_all(WS "/warn2.txt", &n);
+    if (w) w[n] = 0;
+    CHECK(rc == 0 && w && strstr((char*)w, "warning: experiment 'experiment/stroop.json': stimulus 'word': 'text': no level of '$word' reaches"),
+          "the rebuild's warning: %s '%s'", err, w ? (char*)w : "");
+    free(w);
+    /* quiet without a warn file */
+    rc = stroop_variant("purple", "\"blue\": \"BLUE\"", "\"blue\": \"BLUE\", \"purple\": \"PURPLE\"", NULL, err, sizeof err);
+    CHECK(rc == 0, "a key no level reaches, no warn file: %s", err);
+#endif
+}
+
 /* The pack both builds make: the core and the full tool must give the same
  * bytes, which needs a manifest that names no layout library. */
 static void test_core_pack(void) {
@@ -1894,6 +2071,7 @@ int main(void) {
     }
     test_core_pack();
     test_stroop_pack();
+    test_lookup_pack();
     test_resample();
     test_ffmpeg_refusals();
     test_video();

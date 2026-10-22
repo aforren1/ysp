@@ -8,7 +8,9 @@
  * a message and leave nothing to free; an accepted definition must give
  * keys in strictly ascending order, each ypak_runs_key() of its style and
  * text (the player's key), every field set, its stimuli sorted, and only
- * tables the callback knows.
+ * tables the callback knows. The same input goes through the lookup check
+ * (ypt_check_lookups, pack tool v0.7.0): a refusal must carry a message,
+ * and every warning must be one non-empty line.
  *
  * One translation unit: it includes pack/derive.c and the json and table
  * implementations, so no CMake target is needed.
@@ -71,11 +73,18 @@ static const void* table_of(void* ctx, const char* name, size_t* n) {
     return NULL;
 }
 
+static void warn_line(void* ctx, const char* line) {
+    (void)ctx;
+    if (!line[0] || strchr(line, '\n')) abort();
+}
+
 static void one(const uint8_t* data, size_t size) {
     ypt_texts t;
     char err[512];
     int rc, i;
     if (!g_ready) tables();
+    rc = ypt_check_lookups(data, size, table_of, NULL, warn_line, NULL, err, sizeof err);
+    if (rc > 0 || (rc < 0 && !err[0]) || (rc == 0 && err[0])) abort();
     rc = ypt_derive_texts(data, size, table_of, NULL, &t, err, sizeof err);
     if (rc) {
         if (rc > 0 || !err[0] || t.mem_ || t.n_texts) abort();
@@ -110,6 +119,10 @@ static const char* const seeds[] = {
     "\"timeline\": [{\"timeline_variables\": \"t.pstb\"}]}",
     "{\"format\": \"ysp-experiment\", \"version\": 1, \"stimuli\": {\"s\": {\"kind\": \"text\", \"font\": \"f\", \"size\": 3, \"text\": \"$a\"}}, "
     "\"timeline\": [{\"vars\": {\"a\": \"$b\", \"b\": \"$a\"}}]}",
+    "{\"format\": \"ysp-experiment\", \"version\": 1, \"stimuli\": {\"s\": {\"x\": {\"by\": \"$word\", \"map\": {\"red\": 1, \"z\": 2}}}}, "
+    "\"trials\": {\"t\": {\"events\": [{\"on\": \"s\"}], \"response\": {\"choices\": [\"a\"], \"duration_s\": 1}, \"columns\": "
+    "{\"c\": {\"by\": \"$outcome\", \"map\": {\"correct\": 1}}}}}, \"timeline\": [{\"name\": \"b\", \"timeline_variables\": \"t.pstb\", "
+    "\"timeline\": [{\"name\": \"l\", \"trial\": \"t\", \"vars\": {\"v\": {\"choice\": [1, true]}}}]}]}",
     "{\"trials\": \"x\"}", "not json", "",
 };
 

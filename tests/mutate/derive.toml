@@ -298,3 +298,383 @@ test = "derive"
 why = "The record and the key must spell a number as yjs_format_double() does, the player's spelling."
 find = "n = (size_t)yjs_format_double(x, buf, sizeof buf);"
 replace = "n = yjs_write_mem(v, YJS_WRITE_COMPACT, buf, sizeof buf);"
+
+# --- the lookups' keys (ypt_check_lookups, tool v0.7.0) -----------------------------
+
+[[mutant]]
+id = "lk-01"
+name = "a missing level not refused"
+test = "derive"
+why = "A level without a key stops the session that meets it; the build must stop instead."
+find = "if (nmiss) {"
+replace = "if (0) {"
+
+[[mutant]]
+id = "lk-02"
+name = "the map's keys read the wrong way round"
+test = "derive"
+why = "A level that has a key is not missing."
+find = "if (!yjs_get(map, lc->tmp[i])) lc->tmp[nmiss++] = lc->tmp[i];"
+replace = "if (yjs_get(map, lc->tmp[i])) lc->tmp[nmiss++] = lc->tmp[i];"
+
+[[mutant]]
+id = "lk-03"
+name = "practice not a boolean built-in"
+test = "derive"
+why = "$practice takes true and false; the Stroop banner maps both."
+find = '{ "practice", "warmup", "after_break", "first_in_block", "responded", "correct", NULL }'
+replace = '{ "warmup", "after_break", "first_in_block", "responded", "correct", NULL }'
+
+[[mutant]]
+id = "lk-04"
+name = "a boolean built-in without false"
+test = "derive"
+why = "Both values of a boolean reach the map."
+find = 'if ((rc = lpush_level(lc, "false")) != 0) return rc;'
+replace = 'if (0) return rc;'
+
+[[mutant]]
+id = "lk-05"
+name = "no timeout with a deadline"
+test = "derive"
+why = "A response with a deadline can time out; the Stroop feedback maps \"timeout\"."
+find = 'dur = yjs_get(resp, "duration_s");'
+replace = "dur = NULL;"
+
+[[mutant]]
+id = "lk-06"
+name = "a timeout without a deadline"
+test = "derive"
+why = "duration_s 0 means no deadline (experiment_format.md 2.6), so no timeout; its key is one no level reaches."
+find = "&& x == 0)"
+replace = "&& x == 1)"
+
+[[mutant]]
+id = "lk-07"
+name = "response by the choice's name"
+test = "derive"
+why = "$response is the choice's key (2.3), which key_answer compares."
+find = 'if (c->type == YJS_OBJECT) c = yjs_get(c, "key");'
+replace = 'if (c->type == YJS_OBJECT) c = yjs_get(c, "name");'
+
+[[mutant]]
+id = "lk-08"
+name = "method's levels not known"
+test = "derive"
+why = "$method takes the names of the leaf's tracks."
+find = 'if (!strcmp(name, "method")) {'
+replace = "if (0) {"
+
+[[mutant]]
+id = "lk-09"
+name = "a number level as the table wrote it"
+test = "derive"
+why = "A number's key is its canonical text: 0.50 is the key \"0.5\", 007 is \"7\"."
+find = "if (ty != YTB_STRING) {"
+replace = "if (0) {"
+
+[[mutant]]
+id = "lk-10"
+name = "a choice as its first item only"
+test = "derive"
+why = "Every item of a choice is a level."
+find = "if ((rc = lvalue(lc, cv->u.items[k], depth)) < 0) return rc;"
+replace = "if ((rc = lvalue(lc, cv->u.items[0], depth)) < 0) return rc;"
+
+[[mutant]]
+id = "lk-11"
+name = "a variable that is a lookup not followed"
+test = "derive"
+why = "A vars value that is a lookup takes each value of its map."
+find = "        if (is_lookup(v)) {"
+replace = "        if (0) {"
+
+[[mutant]]
+id = "lk-12"
+name = "no warning for an unreached key"
+test = "derive"
+why = "A key no level reaches is often a typo; the author hears of it."
+find = "if (nx) {"
+replace = "if (0) {"
+
+[[mutant]]
+id = "lk-13"
+name = "levels not kept across leaves"
+test = "derive"
+why = "Without them every key looks unreached."
+find = "else if ((rc = lpush(lc, &r->lv, &r->nlv, &r->clv, lc->tmp[i])) != 0) return rc;"
+replace = "else if (0) return rc;"
+
+[[mutant]]
+id = "lk-14"
+name = "an unknown level set still warns"
+test = "derive"
+why = "When a leaf cannot list by's levels, no key can be called unreached."
+find = "if (rc == 0) { r->unknown = 1; return 0; }"
+replace = "if (rc == 0) return 0;"
+
+[[mutant]]
+id = "lk-15"
+name = "a reached lookup marked unreached"
+test = "derive"
+why = "The reverse check runs on lookups a leaf reaches."
+find = "r->reached = 1;"
+replace = "r->reached = 0;"
+
+[[mutant]]
+id = "lk-16"
+name = "no work bound"
+test = "derive"
+why = "Choices of choices multiply; the bound stops a hostile definition."
+find = "if (++lc->steps <= YPT_LOOKUP_STEPS) return 0;"
+replace = "return 0;"
+
+[[mutant]]
+id = "lk-17"
+name = "no nesting bound on variables"
+test = "derive"
+why = "Two vars that name each other recurse until the stack overflows."
+find = "if (YPT_DERIVE_DEPTH < depth) return 0;"
+replace = "if (0) return 0;"
+
+[[mutant]]
+id = "lk-18"
+name = "the response's from not a stimulus of the template"
+test = "derive"
+why = "A stimulus that only starts the response's clock is still shown."
+find = "if (from && from->type == YJS_STRING &&"
+replace = "if (0 && from &&"
+
+[[mutant]]
+id = "lk-19"
+name = "record not a stimulus of the template"
+test = "derive"
+why = "A recorded stimulus is shown by the template."
+find = "if (rec && rec->type == YJS_ARRAY)"
+replace = "if (0)"
+
+[[mutant]]
+id = "lk-20"
+name = "an if's steps not read"
+test = "derive"
+why = "The Stroop banner and feedback are shown only inside if steps."
+find = 'if ((rc = lnames(lc, yjs_get(s, "steps"))) != 0) return rc;'
+replace = ""
+
+[[mutant]]
+id = "lk-21"
+name = "a list of stimuli in a step not read"
+test = "derive"
+why = "{\"on\": [\"banner\", \"keys\"]} names two stimuli."
+find = "if (x->type == YJS_ARRAY)"
+replace = "if (0)"
+
+[[mutant]]
+id = "lk-22"
+name = "repeated levels named twice"
+test = "derive"
+why = "The message lists each missing level once."
+find = "if (strcmp(v[i], v[k])) v[++k] = v[i];"
+replace = "v[++k] = v[i];"
+
+[[mutant]]
+id = "lk-23"
+name = "the count past 8 missing levels dropped"
+test = "derive"
+why = "The message says how many more levels lack a key."
+find = "if (n > 8 && at < cap)"
+replace = "if (0)"
+
+[[mutant]]
+id = "lk-24"
+name = "array positions from 1"
+test = "derive"
+why = "The path names a step by its index in the array, from 0."
+find = '"[%u]", (unsigned)k);'
+replace = '"[%u]", (unsigned)(k + 1));'
+
+[[mutant]]
+id = "lk-25"
+name = "control bytes kept in a message"
+test = "derive"
+why = "A key with a line break would split the log line."
+find = "*s = '?';"
+replace = "(void)s;"
+
+[[mutant]]
+id = "lk-26"
+name = "an escaped dollar keeps both dollars"
+test = "derive"
+why = "\"$$5\" is the level \"$5\"."
+find = "return (rc = lpush_level(lc, sv + 1)) != 0 ? rc : 1;"
+replace = "return (rc = lpush_level(lc, sv)) != 0 ? rc : 1;"
+
+[[mutant]]
+id = "lk-27"
+name = "the farthest table first"
+test = "derive"
+why = "A leaf's own table shadows its container's column of the same name."
+find = 'const yjs_value* tv = yjs_get(lc->chain[i], "timeline_variables");'
+replace = 'const yjs_value* tv = yjs_get(lc->chain[lc->depth - i], "timeline_variables");'
+
+[[mutant]]
+id = "lk-28"
+name = "the farthest vars first"
+test = "derive"
+why = "A leaf's own vars shadow its container's."
+find = 'const yjs_value* vars = yjs_get(lc->chain[i], "vars");'
+replace = 'const yjs_value* vars = yjs_get(lc->chain[lc->depth - i], "vars");'
+
+[[mutant]]
+id = "lk-29"
+name = "a child node's leaves not seen"
+test = "derive"
+why = "Leaves inside containers reach lookups too."
+find = 'if ((rc = lleaves(lc, yjs_get(node, "timeline"), path)) != 0) return rc;'
+replace = ""
+
+[[mutant]]
+id = "lk-30"
+name = "a true choice item not a level"
+test = "derive"
+why = "A bool's key is \"true\" or \"false\" (2.2)."
+find = 'case YJS_TRUE: return (rc = lpush_level(lc, "true")) != 0 ? rc : 1;'
+replace = 'case YJS_TRUE: return (rc = lpush_level(lc, "false")) != 0 ? rc : 1;'
+
+[[mutant]]
+id = "lk-31"
+name = "warnings only where the levels are unknown"
+test = "derive"
+why = "The reverse check skips a lookup with unknown levels only."
+find = "if (!r->reached || r->unknown) continue;"
+replace = "if (!r->reached || !r->unknown) continue;"
+
+# --- which boolean values the leaf's rules can make -------------------------------
+
+[[mutant]]
+id = "lk-32"
+name = "the rules not read: every boolean both"
+test = "derive"
+why = "Without practice N, $practice is false on every trial; a key for true is one no level reaches."
+find = "if ((i >= 3 || lc->rt[i]) && (rc = lpush_level(lc, \"true\")) != 0) return rc;"
+replace = "if ((rc = lpush_level(lc, \"true\")) != 0) return rc;"
+
+[[mutant]]
+id = "lk-33"
+name = "first_in_block taken from the rules"
+test = "derive"
+why = "Only practice, warmup and after_break depend on the rules; first_in_block is true on every first trial."
+find = "if ((i >= 3 || lc->rt[i]) && (rc"
+replace = "if ((i >= 4 || lc->rt[i < 3 ? i : 2]) && (rc"
+
+[[mutant]]
+id = "lk-34"
+name = "the leaf's rules not computed"
+test = "derive"
+why = "A leaf with practice N makes $practice true."
+find = "            lrules(lc, node);\n"
+replace = "            lc->rt[0] = lc->rt[1] = lc->rt[2] = 0;\n"
+
+[[mutant]]
+id = "lk-35"
+name = "a count of 0 taken as trials"
+test = "derive"
+why = "practice 0 makes no practice trial."
+find = "if (c != 0) lc->rt[k] = 1;"
+replace = "lc->rt[k] = 1;"
+
+[[mutant]]
+id = "lk-36"
+name = "an unreadable count taken as 0"
+test = "derive"
+why = "Rules this cannot read keep both values, so no level is refused that the session could reach."
+find = "if (c != 0) lc->rt[k] = 1;"
+replace = "if (c > 0) lc->rt[k] = 1;"
+
+[[mutant]]
+id = "lk-37"
+name = "warmup read as practice"
+test = "derive"
+why = "Each verb sets its own flag."
+find = "int k = w[0][0] == 'p' ? 0 : w[0][0] == 'w' ? 1 : 2;"
+replace = "int k = w[0][0] == 'p' ? 0 : w[0][0] == 'w' ? 0 : 2;"
+
+[[mutant]]
+id = "lk-38"
+name = "block_size not a break"
+test = "derive"
+why = "Every block after the first starts with after_break."
+find = "if (!strcmp(w[0], \"practice\") || !strcmp(w[0], \"warmup\") || !strcmp(w[0], \"block_size\")) {"
+replace = "if (!strcmp(w[0], \"practice\") || !strcmp(w[0], \"warmup\")) {"
+
+[[mutant]]
+id = "lk-39"
+name = "alternating groups taken as blocks"
+test = "derive"
+why = "Only blocked groups are blocks; alternate interleaves them."
+find = "if (nw < 3 || strcmp(w[2], \"alternate\")) lc->rt[2] = 1;"
+replace = "lc->rt[2] = 1;"
+
+[[mutant]]
+id = "lk-40"
+name = "blocked groups not a break"
+test = "derive"
+why = "Each group of a blocked design is a block, with after_break on its first trial."
+find = "} else if (!strcmp(w[0], \"groups\")) {"
+replace = "} else if (0) {"
+
+[[mutant]]
+id = "lk-41"
+name = "comments read as rules"
+test = "derive"
+why = "A '#' outside quotes starts a comment, as in ytr_rules()."
+find = "if (!*p || *p == '\\n' || *p == '#') break;"
+replace = "if (!*p || *p == '\\n') break;"
+
+[[mutant]]
+id = "lk-42"
+name = "one line per element"
+test = "derive"
+why = "An element may hold several lines; ytr_rules() reads each."
+find = "*pp = *p ? p + 1 : p;"
+replace = "*pp = p + strlen(p);"
+
+[[mutant]]
+id = "lk-43"
+name = "a tab not a blank"
+test = "derive"
+why = "Words are separated by blanks, tabs included."
+find = "for (; *p && *p != ' ' && *p != '\\t' &&"
+replace = "for (; *p && *p != ' ' &&"
+
+[[mutant]]
+id = "lk-44"
+name = "a quoted token keeps its quotes"
+test = "derive"
+why = "\"practice\" is the word practice."
+find = "if (*p == '\"') {\n            for (p++;"
+replace = "if (0) {\n            for (p++;"
+
+[[mutant]]
+id = "lk-45"
+name = "rules that are not text taken as none"
+test = "derive"
+why = "Rules this cannot read keep both values."
+find = "if (r->u.items[i]->type != YJS_STRING) { lc->rt[0] = lc->rt[1] = lc->rt[2] = 1; return; }"
+replace = "if (r->u.items[i]->type != YJS_STRING) continue;"
+
+[[mutant]]
+id = "lk-46"
+name = "rules not an array taken as none"
+test = "derive"
+why = "Rules this cannot read keep both values."
+find = "if (r->type != YJS_ARRAY) { lc->rt[0] = lc->rt[1] = lc->rt[2] = 1; return; }"
+replace = "if (r->type != YJS_ARRAY) return;"
+
+[[mutant]]
+id = "lk-47"
+name = "the flags kept from the leaf before"
+test = "derive"
+why = "Each leaf has its own rules; a leaf without practice N makes $practice false only."
+find = "    lc->rt[0] = lc->rt[1] = lc->rt[2] = 0;\n    if (!r) return;"
+replace = "    if (!r) return;"
