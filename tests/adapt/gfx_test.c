@@ -8926,6 +8926,119 @@ static int wanted(const char* name, int ran) {
     return cs_full() || ran == 0;
 }
 
+/* v0.17.1: ygfx_text_make()'s font paths, on the null backend. A path
+ * longer than its 511-byte buffer is not opened: cut, it named another
+ * file, here one whose name is 1 byte shorter (not a font, so the old code
+ * said YGFX_ERR_FORMAT, not YGFX_ERR_IO). The error marks a path it cuts
+ * with "..."; it showed a cut path as a whole one. gcc 11.4 and 16.1 at
+ * -O1 warned about the cut (-Wformat-truncation). */
+#if defined(_WIN32)
+static int v17_wide(const char* p, wchar_t* w) { return MultiByteToWideChar(CP_UTF8, 0, p, -1, w, 600) > 0; }
+static int v17_mkdir(const char* p) { wchar_t w[600]; return v17_wide(p, w) && CreateDirectoryW(w, NULL); }
+static void v17_rmdir(const char* p) { wchar_t w[600]; if (v17_wide(p, w)) RemoveDirectoryW(w); }
+static void v17_unlink(const char* p) { wchar_t w[600]; if (v17_wide(p, w)) DeleteFileW(w); }
+static FILE* v17_create(const char* p) { return ygfx__wopen(p, L"wb"); }
+#else
+#include <sys/stat.h>
+static int v17_mkdir(const char* p) { return mkdir(p, 0700) == 0; }
+static void v17_rmdir(const char* p) { rmdir(p); }
+static void v17_unlink(const char* p) { unlink(p); }
+static FILE* v17_create(const char* p) { return fopen(p, "wb"); }
+#endif
+
+static void test_v17_text_paths_cpu(void) {
+    static yscr_screen scr;
+    static ygfx_gfx g;
+    static char p[600];
+    size_t ends[8];   /* each folder's length, to remove them */
+    int nd = 0, made = 1, filed = 0, i;
+    size_t k, n;
+    yscr_desc d;
+    ygfx_desc gd;
+    ygfx_text t;
+    ygfx_text_desc td;
+    const char* e;
+    FILE* fp;
+#if defined(_WIN32)
+    const char* base = getenv("TEMP");
+    const char sep = '\\';
+    unsigned long pid = (unsigned long)GetCurrentProcessId();
+#else
+    const char* base = getenv("TMPDIR");
+    const char sep = '/';
+    unsigned long pid = (unsigned long)getpid();
+#endif
+    g_where = "cpu v0.17.1 text paths";
+    memset(&d, 0, sizeof d);
+    d.backend = YSCR_BACKEND_SIM;
+    d.sim_period_ns = 1000000;
+    CHECK(yscr_open(&scr, &d));
+    memset(&gd, 0, sizeof gd);
+    gd.screen = &scr;
+    CHECK(ygfx_open(&g, &gd));
+    memset(&td, 0, sizeof td);
+    td.text = "Ab";
+
+    /* a missing font of 450 bytes: named, cut, marked */
+    memcpy(p, "no/such/", 8);
+    for (k = 8; k < 450; k++) p[k] = 'a';
+    p[450] = '\0';
+    td.font = p;
+    CHECK(ygfx_text_make(&g, &t, &td) == YGFX_ERR_IO);
+    e = ygfx_error(&g);
+    CHECK(strstr(e, "no/such/aaaa") != NULL && strstr(e, "a...)") != NULL && strstr(e, p) == NULL);
+    ygfx_text_free(&g, &t);
+
+    /* a file whose path is 511 bytes, in folders of 200 (an extended-length
+     * path on Windows, past MAX_PATH) */
+#if defined(_WIN32)
+    snprintf(p, sizeof p, "\\\\?\\%s%cysp_gfx_v17_%lu", base ? base : "C:\\Windows\\Temp", sep, pid);
+    for (k = 4; p[k]; k++) if (p[k] == '/') p[k] = '\\';
+#else
+    snprintf(p, sizeof p, "%s%cysp_gfx_v17_%lu", base && base[0] ? base : "/tmp", sep, pid);
+#endif
+    n = strlen(p);
+    if (n > 250 || !v17_mkdir(p)) made = 0;
+    else ends[nd++] = n;
+    while (made && 511 - n - 1 > 250) {
+        p[n++] = sep;
+        for (k = 0; k < 200; k++) p[n++] = 'd';
+        p[n] = '\0';
+        if (!v17_mkdir(p)) { made = 0; break; }
+        ends[nd++] = n;
+    }
+    if (made) {
+        p[n++] = sep;
+        while (n < 511) p[n++] = 'f';
+        p[n] = '\0';
+        fp = v17_create(p);
+        filed = fp != NULL;
+        if (!fp || fputs("not a font", fp) < 0) made = 0;
+        if (fp && fclose(fp) != 0) made = 0;
+    }
+    td.font = p;
+    if (!made) {
+        printf("  v0.17.1 text paths: no file made at 511 bytes: the long-path check did not run\n");
+    } else if (ygfx_text_make(&g, &t, &td) != YGFX_ERR_FORMAT) {
+        fprintf(stderr, "gfx_test [%s]: FAIL line %d: the file at 511 bytes: %s\n", g_where, __LINE__, ygfx_error(&g));
+        g_failures++;
+    } else {
+        ygfx_text_free(&g, &t);
+        p[511] = 'f';
+        p[512] = '\0';
+        CHECK(ygfx_text_make(&g, &t, &td) == YGFX_ERR_IO);   /* cut, it opened the file above */
+        CHECK(strstr(ygfx_error(&g), "...)") != NULL);
+        ygfx_text_free(&g, &t);
+        p[511] = '\0';
+        printf("  v0.17.1 text paths: a file at 511 bytes opens; 512 bytes are refused\n");
+    }
+    if (filed) v17_unlink(p);
+    for (i = nd - 1; i >= 0; i--) { p[ends[i]] = '\0'; v17_rmdir(p); }
+    ygfx_close(&g);
+    yscr_close(&scr);
+    g_where = "cpu";
+}
+
 int main(void) {
     int ran = 0;
     const char* req = getenv("YGFX_TEST_REQUIRE_GL");
@@ -8946,6 +9059,7 @@ int main(void) {
     test_v04_inst_cpu();
     test_v06_cset_cpu();
     test_v10_simplex_cpu();
+    test_v17_text_paths_cpu();
     printf("v0.4 instances: the shader's cosine and sine of degrees, -720 to 720, against double: max %.2e\n", S6.csd_err);
     printf("v0.7 ellipse: the quarter perimeter against Simpson's rule, aspect 1 to 20: max relative %.2e\n", S4.ell_quarter);
     R = (rig*)calloc(1, sizeof *R);

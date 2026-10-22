@@ -413,6 +413,7 @@ Purpose: The outline builder, the CPU side of text and artwork: paths of quadrat
 
 Status:
 
+- v0.4.1 (2026-10-22): builds under gcc 11.4 -O1 `-Werror` (Ubuntu 22.04): a `-Wmaybe-uninitialized` false positive on a CFF DICT operand; the number reader now writes it on every path. gcc 16.1 and clang 11 did not warn. No output changed. [Design notes](outline.md#v041-gcc-11-at--o1).
 - v0.4.0 (2026-10-21): `yol_param.values`, after `offset` (the shared row shape of gap G6): `join`, `cap`, `mode` and `format` list their C enums. Every default that is not 0 gives the same stroke or glyph outline, byte for byte, as a zero field; 3 of 3 new mutants killed. No output changed. [Design notes](outline.md#v040-enum-values-in-the-parameter-tables).
 - v0.3.2: fixed on Linux: the header sets `_DEFAULT_SOURCE` (unless a feature macro is set) before its system headers, so ysp/gfx.h's TEXT, which wants it first, does not leave ysp/rt.h without `clock_gettime()` under `-std=c11` (gcc 11.4 and clang 11 did not compile `test_gfx`).
 - v0.3.1: fixed `yol_resolve()` refusing ("the boundary does not close") strokes that cross an edge a few float ulps from horizontal; found by `test_gfx` under Ubuntu 22.04's gcc 11.4 -O3, which drops the caller's `(float)` casts before the inlined `yol_line()`. The resolve now resolves 100 of 100 such grids (v0.3.0: 8) within 2.8e-16 of the reference area, on every compiler; 3 mutants added, caught.
@@ -486,6 +487,7 @@ Purpose: Stimuli on GL ES 3.0 over ysp/screen.h: signed-distance shapes with a s
 
 Status:
 
+- v0.17.1 (2026-10-22): fixed: `ygfx_text_make()` cut a font path of 512 bytes or more to 511 and opened that, another file; now YGFX_ERR_IO. The error's list of paths tried marks a cut path with "...". Found by gcc's `-Wformat-truncation` at -O1, -Os and -Og (gcc 11.4 and 16.1), which broke `-Werror` builds. 2 of 2 new mutants killed. [Design notes](gfx.md#v0171-font-paths-that-do-not-fit).
 - v0.17.0 (2026-10-21): `ygfx_desc_params()` fills `yscr_param.values` (ysp/screen.h v0.9.0): `units`, `dither`, `output`, `stereo` and `cones`; `output` and `stereo` list every value of their enums, with `max` the last (was 0), and `open()` still takes `OUT_8` and `MONO` only. Every row checked against its field and enum, and `max_draws` against an opened gfx; 2 of 2 new mutants killed. [Design notes](gfx.md#v0170-values-in-the-desc-table).
 - v0.16.0: `ygfx_enum_params()`, the stimulus fields that are not floats (place, anchor, shape, aperture, edge, dist, stroke_align, join, cap, blend, square, octaves, dash_snap and the IMAGE and TEXT flags), with kinds and enum values (gap G6); `ygfx_enum_get()` and `ygfx_enum_set()` apply a row by index; `ygfx_param` has a last field, `values`; 8 of 8 new mutants caught. [Every stimulus field in a table](gfx.md#v0160-every-stimulus-field-in-a-table).
 - v0.15.1: the program cache's open and store times and a text's build time read the real clock (`yrt_real_ns()`), so they are costs also on ysp/rt.h's virtual clock, where they read 0 before. No other change.
