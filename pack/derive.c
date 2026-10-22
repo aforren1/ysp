@@ -12,6 +12,10 @@
  * values, whichever keys the trials can reach; an unused block costs a few
  * hundred bytes, a missing one stops a session.
  *
+ * ypt_check_lookups() checks the other side of a lookup (tool v0.7.0):
+ * its map has a key for every level its "by" can take, in each leaf that
+ * reaches it. That check is exact, not wide: a missing key is an error.
+ *
  * Needs ysp/json.h and ysp/table.h (their implementations come from
  * pack/pack_impl.c, or from the test or fuzz target that includes this
  * file). No layout here, so the core tool derives too and can name what
@@ -452,4 +456,640 @@ int ypt_derive_texts(const void* def, size_t n, ypt_table_fn table, void* ctx, y
     out->tables = m->tab;
     out->n_tables = m->ntab;
     return 0;
+}
+
+/* --- lookups: a key for every level (docs/experiment_format.md 2.2) -------------
+ *
+ * A lookup's map must have a key for every level its "by" can take, or the
+ * player meets a level without a value in the middle of a session. The
+ * levels are worked out per leaf node, in the leaf's own scope: its tables
+ * and vars and its ancestors' (the nearest first), its template, and the
+ * stimuli that template names. Wider (every table any node names, as the
+ * texts take) would refuse a definition whose two leaves share a column
+ * name but not its levels. A "by" whose levels are not known here (a
+ * session field, a number the trial computes, a jitter) is not checked:
+ * the player has those only at run time. */
+
+/* Values visited and levels compared, in all: leaves times the size of
+ * their templates and stimuli. A real definition needs thousands. */
+#define YPT_LOOKUP_STEPS 5000000L
+
+typedef struct ypt__lk {          /* one lookup, over every leaf that reaches it */
+    const yjs_value* v;
+    const char*      where;       /* "stimulus 'word'", "template 't'", "node 'a/b'" */
+    const char*      path;        /* the key inside it: "text", "columns.feedback"  */
+    size_t           seq;         /* order in the definition, for the warnings     */
+    int              reached, unknown;
+    const char**     lv;          /* the levels of every leaf that reaches it      */
+    size_t           nlv, clv;
+} ypt__lk;
+
+typedef struct ypt__ltab { const char* name; ytb_table* t; } ypt__ltab;
+
+typedef struct ypt__lc {
+    yjs_arena        a;
+    const yjs_value* stimuli;
+    const yjs_value* trials;
+    ypt_table_fn     table;
+    void*            ctx;
+    ypt__lk*         lk;   size_t nlk, clk;      /* sorted by v after the first pass */
+    ypt__ltab*       tab;  size_t ntab, ctab;
+    const yjs_value* chain[66];  int depth;      /* the leaf's nodes, root first    */
+    const char*      node_path;                  /* "a/b"                           */
+    const yjs_value* tmpl;                       /* the leaf's template, or NULL    */
+    const char**     tmp;  size_t ntmp, ctmp;    /* the levels of one "by"          */
+    const char**     nm;   size_t nnm, cnm;      /* the stimuli a template names    */
+    long             steps;
+    char             path[512];
+    char*            err;
+    size_t           cap;
+} ypt__lc;
+
+/* One line: a name, key or level may hold control bytes (JSON escapes),
+ * and a message is one line of a log. */
+static void lflat(char* s) {
+    for (; *s; s++)
+        if ((unsigned char)*s < 0x20) *s = '?';
+}
+
+static int lfail(ypt__lc* lc, int code, const char* fmt, ...) {
+    va_list ap;
+    if (lc->err && lc->cap && !lc->err[0]) {
+        va_start(ap, fmt);
+        vsnprintf(lc->err, lc->cap, fmt, ap);
+        va_end(ap);
+        lflat(lc->err);
+    }
+    return code;
+}
+
+static int lstep(ypt__lc* lc) {
+    if (++lc->steps <= YPT_LOOKUP_STEPS) return 0;
+    return lfail(lc, YPAK_ERR_FORMAT, "the definition's lookups take more than %ld steps to check; do many leaves share large templates, "
+                 "or do 'vars' choices refer to each other?", YPT_LOOKUP_STEPS);
+}
+
+/* Grows a pointer list by one; 0 or YPAK_ERR_NOMEM. */
+static int lpush(ypt__lc* lc, const char*** list, size_t* n, size_t* c, const char* s) {
+    if (*n == *c) {
+        size_t nc = *c ? 2 * *c : 16;
+        const char** q = (const char**)realloc((void*)*list, nc * sizeof(char*));
+        if (!q) return lfail(lc, YPAK_ERR_NOMEM, "out of memory");
+        *list = q;
+        *c = nc;
+    }
+    (*list)[(*n)++] = s;
+    return 0;
+}
+
+static int is_lookup(const yjs_value* v) {
+    const yjs_value* map;
+    if (v->type != YJS_OBJECT || !yjs_get(v, "by")) return 0;
+    map = yjs_get(v, "map");
+    return map && map->type == YJS_OBJECT;
+}
+
+static int lk_cmp(const void* a, const void* b) {
+    const ypt__lk* x = (const ypt__lk*)a;
+    const ypt__lk* y = (const ypt__lk*)b;
+    return x->v < y->v ? -1 : x->v > y->v;
+}
+static int lk_seq_cmp(const void* a, const void* b) {
+    const ypt__lk* x = (const ypt__lk*)a;
+    const ypt__lk* y = (const ypt__lk*)b;
+    return x->seq < y->seq ? -1 : x->seq > y->seq;
+}
+
+/* First pass: every lookup, with the place a message names. */
+static int lcollect(ypt__lc* lc, const yjs_value* v, const char* where, size_t pn);
+
+static int lcollect_member(ypt__lc* lc, const yjs_value* o, size_t k, const char* where, size_t pn) {
+    const char* key = o->u.members[k].key;
+    size_t kn = strlen(key);
+    if (pn + 1 + kn < sizeof lc->path) {
+        if (pn) lc->path[pn++] = '.';
+        memcpy(lc->path + pn, key, kn + 1);
+        pn += kn;
+    }
+    return lcollect(lc, o->u.members[k].value, where, pn);
+}
+
+static int lcollect(ypt__lc* lc, const yjs_value* v, const char* where, size_t pn) {
+    size_t k;
+    int rc;
+    if ((rc = lstep(lc)) != 0) return rc;
+    lc->path[pn] = 0;
+    if (is_lookup(v)) {
+        ypt__lk* r;
+        char* p;
+        if (lc->nlk == lc->clk) {
+            size_t nc = lc->clk ? 2 * lc->clk : 16;
+            ypt__lk* q = (ypt__lk*)realloc(lc->lk, nc * sizeof(ypt__lk));
+            if (!q) return lfail(lc, YPAK_ERR_NOMEM, "out of memory");
+            lc->lk = q;
+            lc->clk = nc;
+        }
+        p = (char*)yjs_alloc(&lc->a, pn + 1);
+        if (!p) return lfail(lc, YPAK_ERR_NOMEM, "out of memory");
+        memcpy(p, lc->path, pn + 1);
+        r = &lc->lk[lc->nlk];
+        memset(r, 0, sizeof *r);
+        r->v = v;
+        r->where = where;
+        r->path = p;
+        r->seq = lc->nlk++;
+    }
+    if (v->type == YJS_OBJECT) {
+        for (k = 0; k < v->n; k++)
+            if ((rc = lcollect_member(lc, v, k, where, pn)) != 0) return rc;
+    } else if (v->type == YJS_ARRAY) {
+        for (k = 0; k < v->n; k++) {
+            size_t q = pn;
+            int w = snprintf(lc->path + pn, sizeof lc->path - pn, "[%u]", (unsigned)k);
+            if (w > 0 && pn + (size_t)w < sizeof lc->path) q = pn + (size_t)w;
+            if ((rc = lcollect(lc, v->u.items[k], where, q)) != 0) return rc;
+        }
+    }
+    return 0;
+}
+
+/* A set of names (vars, data, columns): each member's value, never the
+ * set itself, so variables named "by" and "map" are not a lookup. */
+static int lcollect_names(ypt__lc* lc, const yjs_value* o, const char* where, const char* prefix) {
+    size_t k, pn = strlen(prefix);
+    int rc;
+    if (!o || o->type != YJS_OBJECT) return 0;
+    for (k = 0; k < o->n; k++) {
+        memcpy(lc->path, prefix, pn + 1);
+        if ((rc = lcollect_member(lc, o, k, where, pn)) != 0) return rc;
+    }
+    return 0;
+}
+
+static char* lwhere(ypt__lc* lc, const char* kind, const char* name) {
+    size_t n = strlen(kind) + strlen(name) + 4;
+    char* p = (char*)yjs_alloc(&lc->a, n);
+    if (p) snprintf(p, n, "%s '%s'", kind, name);
+    return p;
+}
+
+static int lcollect_template(ypt__lc* lc, const yjs_value* t, const char* where) {
+    size_t k;
+    int rc;
+    if (t->type != YJS_OBJECT) return 0;
+    for (k = 0; k < t->n; k++) {
+        if (!strcmp(t->u.members[k].key, "columns")) rc = lcollect_names(lc, t->u.members[k].value, where, "columns");
+        else rc = lcollect_member(lc, t, k, where, 0);
+        if (rc) return rc;
+    }
+    return 0;
+}
+
+/* The nodes: "a/b" names a node by its path, as the data does (2.4). */
+static int lcollect_nodes(ypt__lc* lc, const yjs_value* arr, const char* parent, int depth) {
+    size_t i;
+    int rc;
+    if (!arr || arr->type != YJS_ARRAY) return 0;
+    /* ysp/json.h's default depth (64) stops a tree at 31 nodes; this keeps
+     * chain[] in bounds should a caller parse deeper */
+    if (depth > 64) return lfail(lc, YPAK_ERR_FORMAT, "the timeline nests more than 64 deep");
+    for (i = 0; i < arr->n; i++) {
+        const yjs_value* node = arr->u.items[i];
+        const yjs_value* nmv;
+        char* path;
+        char* where;
+        size_t n;
+        if (node->type != YJS_OBJECT) continue;
+        nmv = yjs_get(node, "name");
+        n = strlen(parent) + (nmv && nmv->type == YJS_STRING ? strlen(nmv->u.s) : 0) + 2;
+        path = (char*)yjs_alloc(&lc->a, n);
+        if (!path) return lfail(lc, YPAK_ERR_NOMEM, "out of memory");
+        snprintf(path, n, "%s%s%s", parent, parent[0] ? "/" : "", nmv && nmv->type == YJS_STRING ? nmv->u.s : "");
+        where = lwhere(lc, "node", path);
+        if (!where) return lfail(lc, YPAK_ERR_NOMEM, "out of memory");
+        if ((rc = lcollect_names(lc, yjs_get(node, "vars"), where, "vars")) != 0 ||
+            (rc = lcollect_names(lc, yjs_get(node, "data"), where, "data")) != 0 ||
+            (rc = lcollect_nodes(lc, yjs_get(node, "timeline"), path, depth + 1)) != 0)
+            return rc;
+    }
+    return 0;
+}
+
+static int lpush_level(ypt__lc* lc, const char* s) {
+    int rc = lstep(lc);
+    return rc ? rc : lpush(lc, &lc->tmp, &lc->ntmp, &lc->ctmp, s);
+}
+
+static ytb_table* ltable(ypt__lc* lc, const char* name, const char* node) {
+    size_t i, n = 0;
+    const void* bytes;
+    ytb_table* t;
+    for (i = 0; i < lc->ntab; i++)
+        if (!strcmp(lc->tab[i].name, name)) return lc->tab[i].t;
+    bytes = lc->table(lc->ctx, name, &n);
+    if (!bytes) {
+        lfail(lc, YPAK_ERR_FORMAT, "node '%s': 'timeline_variables' is '%s', which is not a table entry of this pack", node, name);
+        return NULL;
+    }
+    t = (ytb_table*)yjs_alloc(&lc->a, sizeof(ytb_table));
+    if (!t) { lfail(lc, YPAK_ERR_NOMEM, "out of memory"); return NULL; }
+    if (!ytb_open_view(t, bytes, n)) { lfail(lc, YPAK_ERR_FORMAT, "'%s': %s", name, ytb_error(t)); return NULL; }
+    if (lc->ntab == lc->ctab) {
+        size_t nc = lc->ctab ? 2 * lc->ctab : 8;
+        ypt__ltab* q = (ypt__ltab*)realloc(lc->tab, nc * sizeof(ypt__ltab));
+        if (!q) { lfail(lc, YPAK_ERR_NOMEM, "out of memory"); return NULL; }
+        lc->tab = q;
+        lc->ctab = nc;
+    }
+    lc->tab[lc->ntab].name = name;
+    lc->tab[lc->ntab++].t = t;
+    return t;
+}
+
+static int lvalue(ypt__lc* lc, const yjs_value* v, int depth);
+
+/* The levels "$name" takes in the current leaf: 1 known (pushed), 0 not
+ * known here, < 0 an error. */
+static int lvar(ypt__lc* lc, const char* name, int depth) {
+    static const char* const bools[] = { "practice", "warmup", "first_in_block", "after_break", "responded", "correct", NULL };
+    const yjs_value* resp = lc->tmpl ? yjs_get(lc->tmpl, "response") : NULL;
+    int i, rc;
+    if (YPT_DERIVE_DEPTH < depth) return 0;   /* a loop of vars: the loader's to refuse */
+    if (resp && resp->type != YJS_OBJECT) resp = NULL;
+    for (i = 0; bools[i]; i++)
+        if (!strcmp(name, bools[i])) {
+            if ((rc = lpush_level(lc, "false")) != 0 || (rc = lpush_level(lc, "true")) != 0) return rc;
+            return 1;
+        }
+    if (!strcmp(name, "outcome")) {
+        const yjs_value* dur;
+        double x = 0;
+        if (!resp) return 0;
+        if ((rc = lpush_level(lc, "correct")) != 0 || (rc = lpush_level(lc, "wrong")) != 0) return rc;
+        /* a timeout needs a deadline; duration_s 0, or none, has none (2.6) */
+        dur = yjs_get(resp, "duration_s");
+        if (dur && !(dur->type == YJS_NUMBER && yjs_double(dur, &x) == YJS_OK && x == 0) && (rc = lpush_level(lc, "timeout")) != 0) return rc;
+        return 1;
+    }
+    if (!strcmp(name, "response")) {
+        /* the choice's key (2.3), which key_answer compares */
+        const yjs_value* ch = resp ? yjs_get(resp, "choices") : NULL;
+        size_t k;
+        if (!ch || ch->type != YJS_ARRAY || !ch->n) return 0;
+        for (k = 0; k < ch->n; k++) {
+            const yjs_value* c = ch->u.items[k];
+            if (c->type == YJS_OBJECT) c = yjs_get(c, "key");
+            if (!c || c->type != YJS_STRING) return 0;
+            if ((rc = lpush_level(lc, c->u.s)) != 0) return rc;
+        }
+        return 1;
+    }
+    if (!strcmp(name, "method")) {
+        for (i = lc->depth; i >= 0; i--) {
+            const yjs_value* tr = yjs_get(lc->chain[i], "tracks");
+            size_t k;
+            if (!tr) continue;
+            if (tr->type != YJS_ARRAY || !tr->n) return 0;
+            for (k = 0; k < tr->n; k++) {
+                if (tr->u.items[k]->type != YJS_STRING) return 0;
+                if ((rc = lpush_level(lc, tr->u.items[k]->u.s)) != 0) return rc;
+            }
+            return 1;
+        }
+        return 0;
+    }
+    if (is_builtin(name) != 0) return 0;
+    for (i = lc->depth; i >= 0; i--) {
+        const yjs_value* vars = yjs_get(lc->chain[i], "vars");
+        const yjs_value* x = vars && vars->type == YJS_OBJECT ? yjs_get(vars, name) : NULL;
+        if (x) return lvalue(lc, x, depth);
+    }
+    for (i = lc->depth; i >= 0; i--) {
+        const yjs_value* tv = yjs_get(lc->chain[i], "timeline_variables");
+        const yjs_value* nm = yjs_get(lc->chain[i], "name");
+        ytb_table* t;
+        int col, lv, nl;
+        ytb_type ty;
+        if (!tv || tv->type != YJS_STRING) continue;
+        t = ltable(lc, tv->u.s, nm && nm->type == YJS_STRING ? nm->u.s : "");
+        if (!t) return YPAK_ERR_FORMAT;
+        col = ytb_col(t, name);
+        if (col == -1) continue;
+        ty = ytb_col_type(t, col);
+        nl = ytb_n_levels(t, col);
+        for (lv = 0; lv < nl; lv++) {
+            const char* x = ytb_level_text(t, col, lv);
+            if (!x) return lfail(lc, YPAK_ERR_FORMAT, "'%s': column '%s' has no level %d", tv->u.s, name, lv);
+            if (ty != YTB_STRING) {
+                /* a number's key is its canonical text, as a vars value's;
+                 * an empty cell (NaN) is "" */
+                char buf[YJS_DOUBLE_TEXT];
+                double d = ytb_level_num(t, col, lv);
+                int bn = d == d ? yjs_format_double(d, buf, sizeof buf) : 0;
+                char* p;
+                if (bn < 0) bn = 0;
+                p = (char*)yjs_alloc(&lc->a, (size_t)bn + 1);
+                if (!p) return lfail(lc, YPAK_ERR_NOMEM, "out of memory");
+                memcpy(p, buf, (size_t)bn);
+                p[bn] = 0;
+                x = p;
+            }
+            if ((rc = lpush_level(lc, x)) != 0) return rc;
+        }
+        return 1;
+    }
+    return 0;   /* a session field, a jitter, a name the loader refuses */
+}
+
+/* The texts a value can give as a key: 1 known, 0 not, < 0 an error. */
+static int lvalue(ypt__lc* lc, const yjs_value* v, int depth) {
+    int rc;
+    if ((rc = lstep(lc)) != 0) return rc;
+    switch (v->type) {
+    case YJS_STRING: {
+        const char* sv = v->u.s;
+        if (sv[0] == '$' && sv[1] == '$') return (rc = lpush_level(lc, sv + 1)) != 0 ? rc : 1;   /* "$$5" is "$5" */
+        if (sv[0] == '$') return lvar(lc, sv + 1, depth + 1);
+        return (rc = lpush_level(lc, sv)) != 0 ? rc : 1;
+    }
+    case YJS_TRUE: return (rc = lpush_level(lc, "true")) != 0 ? rc : 1;
+    case YJS_FALSE: return (rc = lpush_level(lc, "false")) != 0 ? rc : 1;
+    case YJS_NUMBER: {
+        size_t n = yjs_write_mem(v, YJS_WRITE_COMPACT, NULL, 0);
+        char* p = (char*)yjs_alloc(&lc->a, n + 1);
+        if (!p) return lfail(lc, YPAK_ERR_NOMEM, "out of memory");
+        yjs_write_mem(v, YJS_WRITE_COMPACT, p, n + 1);
+        return (rc = lpush_level(lc, p)) != 0 ? rc : 1;
+    }
+    case YJS_OBJECT: {
+        const yjs_value* cv = yjs_get(v, "choice");
+        size_t k;
+        int all = 1;
+        if (cv && cv->type == YJS_ARRAY) {
+            for (k = 0; k < cv->n; k++) {
+                if ((rc = lvalue(lc, cv->u.items[k], depth)) < 0) return rc;
+                all &= rc;
+            }
+            return all;
+        }
+        if (is_lookup(v)) {
+            const yjs_value* mp = yjs_get(v, "map");
+            for (k = 0; k < mp->n; k++) {
+                if ((rc = lvalue(lc, mp->u.members[k].value, depth)) < 0) return rc;
+                all &= rc;
+            }
+            return all;
+        }
+        return 0;
+    }
+    default: return 0;
+    }
+}
+
+/* Sorts a list and drops repeats; the new count. */
+static size_t lunique(const char** v, size_t n) {
+    size_t i, k = 0;
+    if (!n) return 0;
+    qsort((void*)v, n, sizeof(char*), str_cmp);
+    for (i = 1; i < n; i++)
+        if (strcmp(v[i], v[k])) v[++k] = v[i];
+    return k + 1;
+}
+
+/* "a", "b" and "c", at most 8, then how many more. */
+static void llist(char* out, size_t cap, const char* const* v, size_t n) {
+    size_t i, at = 0;
+    out[0] = 0;
+    for (i = 0; i < n && i < 8 && at < cap; i++) {
+        int w = snprintf(out + at, cap - at, "%s\"%s\"", i == 0 ? "" : i + 1 == n ? " and " : ", ", v[i]);
+        if (w < 0) break;
+        at += (size_t)w;
+    }
+    if (n > 8 && at < cap) snprintf(out + at, cap - at, " and %u more", (unsigned)(n - 8));
+}
+
+/* by's text for a message: the variable, or the value in short. */
+static void lby(const yjs_value* by, char* out, size_t cap) {
+    size_t n;
+    if (by->type == YJS_STRING) { snprintf(out, cap, "%s", by->u.s); return; }
+    n = yjs_write_mem(by, YJS_WRITE_COMPACT, out, cap);
+    if (n >= cap && cap > 4) memcpy(out + cap - 4, "...", 4);
+}
+
+/* One lookup in the current leaf: refuse a level without a key; keep the
+ * levels for the reverse check. */
+static int lcheck(ypt__lc* lc, const yjs_value* v) {
+    ypt__lk key;
+    ypt__lk* r;
+    const yjs_value* map = yjs_get(v, "map");
+    size_t i, nmiss = 0;
+    int rc;
+    key.v = v;
+    r = (ypt__lk*)bsearch(&key, lc->lk, lc->nlk, sizeof(ypt__lk), lk_cmp);
+    if (!r) return 0;   /* outside the parts the first pass reads */
+    r->reached = 1;
+    lc->ntmp = 0;
+    rc = lvalue(lc, yjs_get(v, "by"), 0);
+    if (rc < 0) return rc;
+    if (rc == 0) { r->unknown = 1; return 0; }
+    lc->ntmp = lunique(lc->tmp, lc->ntmp);
+    for (i = 0; i < lc->ntmp; i++) {
+        if ((rc = lstep(lc)) != 0) return rc;
+        if (!yjs_get(map, lc->tmp[i])) lc->tmp[nmiss++] = lc->tmp[i];
+        else if ((rc = lpush(lc, &r->lv, &r->nlv, &r->clv, lc->tmp[i])) != 0) return rc;
+    }
+    if (nmiss) {
+        char list[400], by[80];
+        llist(list, sizeof list, lc->tmp, nmiss);
+        lby(yjs_get(v, "by"), by, sizeof by);
+        return lfail(lc, YPAK_ERR_FORMAT, "%s: '%s': the lookup's map has no key for %s, which '%s' can take in node '%s'; a lookup needs a key "
+                     "for every level of its 'by'", r->where, r->path, list, by, lc->node_path);
+    }
+    return 0;
+}
+
+static int lwalk(ypt__lc* lc, const yjs_value* v) {
+    size_t k;
+    int rc;
+    if ((rc = lstep(lc)) != 0) return rc;
+    if (is_lookup(v) && (rc = lcheck(lc, v)) != 0) return rc;
+    if (v->type == YJS_OBJECT || v->type == YJS_ARRAY)
+        for (k = 0; k < v->n; k++)
+            if ((rc = lwalk(lc, v->type == YJS_OBJECT ? v->u.members[k].value : v->u.items[k])) != 0) return rc;
+    return 0;
+}
+
+static int lwalk_names(ypt__lc* lc, const yjs_value* o) {
+    size_t k;
+    int rc;
+    if (!o || o->type != YJS_OBJECT) return 0;
+    for (k = 0; k < o->n; k++)
+        if ((rc = lwalk(lc, o->u.members[k].value)) != 0) return rc;
+    return 0;
+}
+
+/* The stimuli a template's steps name: on, off, set, to, then, and the
+ * steps of an if or an unless. */
+static int lnames(ypt__lc* lc, const yjs_value* steps) {
+    static const char* const keys[] = { "on", "off", "set", "to", "then", NULL };
+    size_t i, k;
+    int j, rc;
+    if (!steps || steps->type != YJS_ARRAY) return 0;
+    for (i = 0; i < steps->n; i++) {
+        const yjs_value* s = steps->u.items[i];
+        if (s->type != YJS_OBJECT) continue;
+        if ((rc = lstep(lc)) != 0) return rc;
+        for (j = 0; keys[j]; j++) {
+            const yjs_value* x = yjs_get(s, keys[j]);
+            if (!x) continue;
+            if (x->type == YJS_STRING && (rc = lpush(lc, &lc->nm, &lc->nnm, &lc->cnm, x->u.s)) != 0) return rc;
+            if (x->type == YJS_ARRAY)
+                for (k = 0; k < x->n; k++)
+                    if (x->u.items[k]->type == YJS_STRING && (rc = lpush(lc, &lc->nm, &lc->nnm, &lc->cnm, x->u.items[k]->u.s)) != 0) return rc;
+        }
+        if ((rc = lnames(lc, yjs_get(s, "steps"))) != 0) return rc;
+    }
+    return 0;
+}
+
+/* One leaf: the vars and data of its chain, its template, and the stimuli
+ * the template names (steps, the response's from, record). */
+static int lleaf(ypt__lc* lc) {
+    const yjs_value* t = lc->tmpl;
+    const yjs_value* resp;
+    const yjs_value* from;
+    const yjs_value* rec;
+    size_t k;
+    int i, rc;
+    for (i = 0; i <= lc->depth; i++)
+        if ((rc = lwalk_names(lc, yjs_get(lc->chain[i], "vars"))) != 0 || (rc = lwalk_names(lc, yjs_get(lc->chain[i], "data"))) != 0) return rc;
+    if (!t) return 0;
+    for (k = 0; k < t->n; k++) {
+        const yjs_value* x = t->u.members[k].value;
+        if ((rc = !strcmp(t->u.members[k].key, "columns") ? lwalk_names(lc, x) : lwalk(lc, x)) != 0) return rc;
+    }
+    lc->nnm = 0;
+    if ((rc = lnames(lc, yjs_get(t, "events"))) != 0 || (rc = lnames(lc, yjs_get(t, "after"))) != 0) return rc;
+    resp = yjs_get(t, "response");
+    from = resp && resp->type == YJS_OBJECT ? yjs_get(resp, "from") : NULL;
+    rec = yjs_get(t, "record");
+    if (from && from->type == YJS_STRING && (rc = lpush(lc, &lc->nm, &lc->nnm, &lc->cnm, from->u.s)) != 0) return rc;
+    if (rec && rec->type == YJS_ARRAY)
+        for (k = 0; k < rec->n; k++)
+            if (rec->u.items[k]->type == YJS_STRING && (rc = lpush(lc, &lc->nm, &lc->nnm, &lc->cnm, rec->u.items[k]->u.s)) != 0) return rc;
+    lc->nnm = lunique(lc->nm, lc->nnm);
+    for (k = 0; k < lc->nnm; k++) {
+        const yjs_value* s = lc->stimuli && lc->stimuli->type == YJS_OBJECT ? yjs_get(lc->stimuli, lc->nm[k]) : NULL;
+        if (s && (rc = lwalk(lc, s)) != 0) return rc;
+    }
+    return 0;
+}
+
+/* Every leaf, in tree order, with its chain of nodes. */
+static int lleaves(ypt__lc* lc, const yjs_value* arr, const char* parent) {
+    size_t i;
+    int rc;
+    if (!arr || arr->type != YJS_ARRAY) return 0;
+    for (i = 0; i < arr->n; i++) {
+        const yjs_value* node = arr->u.items[i];
+        const yjs_value* nmv;
+        const yjs_value* tr;
+        char* path;
+        size_t n;
+        if (node->type != YJS_OBJECT) continue;
+        nmv = yjs_get(node, "name");
+        n = strlen(parent) + (nmv && nmv->type == YJS_STRING ? strlen(nmv->u.s) : 0) + 2;
+        path = (char*)yjs_alloc(&lc->a, n);
+        if (!path) return lfail(lc, YPAK_ERR_NOMEM, "out of memory");
+        snprintf(path, n, "%s%s%s", parent, parent[0] ? "/" : "", nmv && nmv->type == YJS_STRING ? nmv->u.s : "");
+        lc->chain[++lc->depth] = node;   /* at most 65 deep: the first pass refused more */
+        tr = yjs_get(node, "trial");
+        if (tr && tr->type == YJS_STRING) {
+            const yjs_value* t = lc->trials && lc->trials->type == YJS_OBJECT ? yjs_get(lc->trials, tr->u.s) : NULL;
+            lc->tmpl = t && t->type == YJS_OBJECT ? t : NULL;
+            lc->node_path = path;
+            if ((rc = lleaf(lc)) != 0) return rc;
+        }
+        if ((rc = lleaves(lc, yjs_get(node, "timeline"), path)) != 0) return rc;
+        lc->depth--;
+    }
+    return 0;
+}
+
+int ypt_check_lookups(const void* def, size_t n, ypt_table_fn table, void* ctx, ypt_warn_fn warn, void* wctx, char* err, size_t cap) {
+    ypt__lc lc;
+    yjs_value* root;
+    yjs_error je;
+    const yjs_value* fmt;
+    const yjs_value* ver;
+    size_t i, k;
+    int rc = 0;
+    if (err && cap) err[0] = 0;
+    if (!def || !table) return YPAK_ERR_ARG;
+    memset(&lc, 0, sizeof lc);
+    lc.err = err;
+    lc.cap = cap;
+    lc.table = table;
+    lc.ctx = ctx;
+    lc.depth = -1;
+    yjs_arena_init_heap(&lc.a, 0);
+    /* not a definition this tool reads: ypt_derive_texts() says why, or
+     * the bytes are opaque */
+    if (yjs_parse(&lc.a, (const char*)def, n, NULL, &root, &je) != YJS_OK) goto done;
+    fmt = yjs_get(root, "format");
+    ver = yjs_get(root, "version");
+    if (!fmt || fmt->type != YJS_STRING || strcmp(fmt->u.s, "ysp-experiment") || !ver || !(ver->flags & YJS_NUM_I64) || 1 != ver->i) goto done;
+    lc.stimuli = yjs_get(root, "stimuli");
+    lc.trials = yjs_get(root, "trials");
+    if (lc.stimuli && lc.stimuli->type == YJS_OBJECT)
+        for (k = 0; k < lc.stimuli->n && !rc; k++) {
+            char* w = lwhere(&lc, "stimulus", lc.stimuli->u.members[k].key);
+            if (!w) { rc = lfail(&lc, YPAK_ERR_NOMEM, "out of memory"); break; }
+            rc = lcollect(&lc, lc.stimuli->u.members[k].value, w, 0);
+        }
+    if (!rc && lc.trials && lc.trials->type == YJS_OBJECT)
+        for (k = 0; k < lc.trials->n && !rc; k++) {
+            char* w = lwhere(&lc, "template", lc.trials->u.members[k].key);
+            if (!w) { rc = lfail(&lc, YPAK_ERR_NOMEM, "out of memory"); break; }
+            rc = lcollect_template(&lc, lc.trials->u.members[k].value, w);
+        }
+    if (!rc) rc = lcollect_nodes(&lc, yjs_get(root, "timeline"), "", 0);
+    if (rc || !lc.nlk) goto done;
+    qsort(lc.lk, lc.nlk, sizeof(ypt__lk), lk_cmp);
+    rc = lleaves(&lc, yjs_get(root, "timeline"), "");
+    if (rc || !warn) goto done;
+    /* keys no level reaches: harmless to the session, so a warning, not a
+     * refusal; often a typo, whose real level the check above refused */
+    qsort(lc.lk, lc.nlk, sizeof(ypt__lk), lk_seq_cmp);
+    for (i = 0; i < lc.nlk; i++) {
+        ypt__lk* r = &lc.lk[i];
+        const yjs_value* keys = yjs_get(r->v, "map");
+        size_t nx = 0;
+        if (!r->reached || r->unknown) continue;
+        r->nlv = lunique(r->lv, r->nlv);
+        lc.ntmp = 0;
+        for (k = 0; k < keys->n; k++) {
+            const char* key = keys->u.members[k].key;
+            if (r->nlv && bsearch(&key, (const void*)r->lv, r->nlv, sizeof(char*), str_cmp)) continue;
+            if ((rc = lpush(&lc, &lc.tmp, &lc.ntmp, &lc.ctmp, key)) != 0) goto done;
+            nx++;
+        }
+        if (nx) {
+            char list[400], by[80], line[1200];
+            llist(list, sizeof list, lc.tmp, nx);
+            lby(yjs_get(r->v, "by"), by, sizeof by);
+            snprintf(line, sizeof line, "%s: '%s': no level of '%s' reaches the map's key%s %s; a typo, or a level the trials no longer have?",
+                     r->where, r->path, by, nx > 1 ? "s" : "", list);
+            lflat(line);
+            warn(wctx, line);
+        }
+    }
+done:
+    for (i = 0; i < lc.nlk; i++) free((void*)lc.lk[i].lv);
+    free(lc.lk);
+    free(lc.tab);
+    free((void*)lc.tmp);
+    free((void*)lc.nm);
+    yjs_arena_free(&lc.a);
+    return rc;
 }

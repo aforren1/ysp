@@ -2,7 +2,10 @@
  * an experiment definition (pack/derive.c, ypt_derive_texts; gap G9 of
  * docs/experiment_format.md). Every form that gives texts, every form that
  * is refused (each by its message), the order and uniqueness of the keys,
- * the canonical numbers, and the bounds on nesting and work. No layout and
+ * the canonical numbers, and the bounds on nesting and work; and the
+ * lookups' keys against their levels (ypt_check_lookups): every source of
+ * levels, the scope of a leaf, each refusal and warning by its message, and
+ * the bounds. No layout and
  * no pack: tables are made here with ysp/table.h. No framework: it returns
  * 0 when every check passed and 1 after printing each failure.
  *
@@ -33,7 +36,7 @@ static int g_fail, g_checks;
 /* --- tables, by entry name ------------------------------------------------- */
 
 typedef struct tab { const char* name; ytb_table t; uint64_t arena[2048]; } tab;
-static tab g_tabs[3];
+static tab g_tabs[8];
 static int g_ntabs, g_calls;
 
 static void make_table(const char* name, const char* csv) {
@@ -360,12 +363,239 @@ static void test_refusals(void) {
     expect_refused("257 vars", "\"size\": 3, \"text\": \"x\"", nodes, "more than 256 nodes have 'vars'");
 }
 
+/* --- lookups: a key for every level (ypt_check_lookups) ------------------------ */
+
+static char g_warn[4096];
+static int g_nwarn;
+
+static void warn_of(void* ctx, const char* line) {
+    size_t at = strlen(g_warn);
+    (void)ctx;
+    g_nwarn++;
+    snprintf(g_warn + at, sizeof g_warn - at, "%s%s", at ? "\n" : "", line);
+}
+
+/* A definition of these stimuli, templates and nodes, checked. */
+static int lookups(const char* stimuli, const char* trials, const char* timeline, char* err, size_t cap) {
+    char def[20000];
+    snprintf(def, sizeof def,
+             "{\"format\": \"ysp-experiment\", \"version\": 1, \"session\": {\"fields\": {\"group\": {\"type\": \"string\"}}},\n"
+             " \"stimuli\": {%s},\n \"trials\": {%s},\n \"timeline\": [%s]}\n", stimuli, trials, timeline);
+    g_warn[0] = 0;
+    g_nwarn = 0;
+    return ypt_check_lookups(def, strlen(def), table_of, NULL, warn_of, NULL, err, cap);
+}
+
+static void lk_ok(const char* label, const char* stimuli, const char* trials, const char* timeline, const char* warn) {
+    char err[1024];
+    int rc = lookups(stimuli, trials, timeline, err, sizeof err);
+    CHECK(rc == 0 && !err[0], "%s: rc %d, '%s'", label, rc, err);
+    CHECK(!strcmp(g_warn, warn), "%s: warnings\n'%s'\nwanted\n'%s'", label, g_warn, warn);
+}
+
+static void lk_refused(const char* label, const char* stimuli, const char* trials, const char* timeline, const char* says) {
+    char err[1024];
+    int rc = lookups(stimuli, trials, timeline, err, sizeof err);
+    CHECK(rc == YPAK_ERR_FORMAT && strstr(err, says) != NULL, "%s: rc %d, '%s' (wanted '%s')", label, rc, err, says);
+}
+
+/* One stimulus "s" with this property, shown by template "t". */
+#define LK_STIM(prop) "\"s\": {\"kind\": \"shape\", \"x\": " prop "}"
+#define LK_T "\"t\": {\"events\": [{\"on\": \"s\"}]}"
+#define LK_LEAF(extra) "{\"name\": \"main\", \"trial\": \"t\"" extra "}"
+
+static void test_lookups(void) {
+    /* the Stroop definition of experiment_format.md 2.14, with its table */
+    static const char stroop_stim[] =
+        "\"fix\": {\"kind\": \"shape\"},\n"
+        "\"word\": {\"kind\": \"text\", \"font\": \"f.ttf\", \"size\": 72,\n"
+        "  \"text\": {\"by\": \"$word\", \"map\": {\"red\": \"RED\", \"green\": \"GREEN\", \"blue\": \"BLUE\"}},\n"
+        "  \"color\": {\"by\": \"$ink\", \"map\": {\"red\": [0.7, 0.04, 0.03], \"green\": [0.04, 0.42, 0.05], \"blue\": [0.07, 0.15, 0.85]}}},\n"
+        "\"banner\": {\"kind\": \"text\", \"font\": \"f.ttf\", \"size\": 30,\n"
+        "  \"text\": {\"by\": \"$practice\", \"map\": {\"true\": \"Practice.\", \"false\": \"Test.\"}}},\n"
+        "\"keys\": {\"kind\": \"text\", \"font\": \"f.ttf\", \"size\": 22, \"text\": \"R red\"},\n"
+        "\"feedback\": {\"kind\": \"text\", \"font\": \"f.ttf\", \"size\": 32,\n"
+        "  \"text\": {\"by\": \"$outcome\", \"map\": {\"correct\": \"Correct\", \"wrong\": \"Wrong\", \"timeout\": \"Too slow\"}}}";
+    static const char stroop_t[] =
+        "\"stroop\": {\"events\": [{\"if\": \"$first_in_block\", \"steps\": [{\"on\": [\"banner\", \"keys\"]}, {\"wait_s\": 1.5},\n"
+        "  {\"off\": [\"banner\", \"keys\"]}]}, {\"on\": \"fix\"}, {\"wait_s\": 0.5}, {\"off\": \"fix\"}, {\"on\": \"word\"}],\n"
+        " \"response\": {\"role\": \"resp\", \"from\": \"word\", \"duration_s\": 2, \"choices\": [{\"key\": \"r\", \"name\": \"red\"},\n"
+        "  {\"key\": \"g\", \"name\": \"green\"}, {\"key\": \"b\", \"name\": \"blue\"}], \"key_answer\": \"$answer\"},\n"
+        " \"after\": [{\"off\": \"word\"}, {\"if\": \"$practice\", \"steps\": [{\"on\": \"feedback\"}, {\"wait_s\": 0.6}, {\"off\": \"feedback\"}]}],\n"
+        " \"columns\": {\"feedback\": {\"by\": \"$practice\", \"map\": {\"true\": \"$outcome\", \"false\": \"\"}}}}";
+    static const char stroop_node[] = "{\"name\": \"main\", \"timeline_variables\": \"stroop.pstb\", \"trial\": \"stroop\"}";
+    char err[1024], buf[4096];
+    int rc;
+    make_table("stroop.pstb", "word,ink,congruent,answer,weight\nred,red,1,r,2\nred,green,0,g,1\nred,blue,0,b,1\ngreen,red,0,r,1\n"
+                              "green,green,1,g,2\ngreen,blue,0,b,1\nblue,red,0,r,1\nblue,green,0,g,1\nblue,blue,1,b,2\n");
+    lk_ok("Stroop", stroop_stim, stroop_t, stroop_node, "");
+
+    /* a table column: each missing level named, sorted, in the leaf */
+    lk_refused("column, one missing", LK_STIM("{\"by\": \"$word\", \"map\": {\"red\": 1, \"green\": 2}}"), LK_T,
+               LK_LEAF(", \"timeline_variables\": \"stroop.pstb\""),
+               "stimulus 's': 'x': the lookup's map has no key for \"blue\", which '$word' can take in node 'main'; a lookup needs a key for "
+               "every level of its 'by'");
+    lk_refused("column, two missing", LK_STIM("{\"by\": \"$word\", \"map\": {\"red\": 1}}"), LK_T,
+               LK_LEAF(", \"timeline_variables\": \"stroop.pstb\""), "no key for \"blue\" and \"green\", which");
+    lk_refused("a typo is a missing level", LK_STIM("{\"by\": \"$word\", \"map\": {\"red\": 1, \"gren\": 2, \"blue\": 3}}"), LK_T,
+               LK_LEAF(", \"timeline_variables\": \"stroop.pstb\""), "no key for \"green\"");
+    lk_ok("a key no level reaches", LK_STIM("{\"by\": \"$word\", \"map\": {\"red\": 1, \"green\": 2, \"blue\": 3, \"purple\": 4}}"), LK_T,
+          LK_LEAF(", \"timeline_variables\": \"stroop.pstb\""),
+          "stimulus 's': 'x': no level of '$word' reaches the map's key \"purple\"; a typo, or a level the trials no longer have?");
+    lk_ok("two keys no level reaches", LK_STIM("{\"by\": \"$word\", \"map\": {\"red\": 1, \"green\": 2, \"blue\": 3, \"pink\": 4, \"aqua\": 5}}"),
+          LK_T, LK_LEAF(", \"timeline_variables\": \"stroop.pstb\""),
+          "stimulus 's': 'x': no level of '$word' reaches the map's keys \"aqua\" and \"pink\"; a typo, or a level the trials no longer have?");
+    make_table("many.pstb", "k\na\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\n");
+    lk_refused("more than 8 missing", LK_STIM("{\"by\": \"$k\", \"map\": {\"z\": 1}}"), LK_T, LK_LEAF(", \"timeline_variables\": \"many.pstb\""),
+               "no key for \"a\", \"b\", \"c\", \"d\", \"e\", \"f\", \"g\", \"h\" and 3 more, which '$k'");
+    /* numbers: the canonical text of the level's value */
+    make_table("nums.pstb", "n,x\n1,0.50\n2,0.25\n007,1\n1,1.0\n");
+    lk_ok("number and integer columns", LK_STIM("{\"by\": \"$x\", \"map\": {\"0.5\": 1, \"0.25\": 2, \"1\": 3}}"),
+          "\"t\": {\"events\": [{\"on\": \"s\"}], \"columns\": {\"c\": {\"by\": \"$n\", \"map\": {\"1\": 1, \"2\": 2, \"7\": 3}}}}",
+          LK_LEAF(", \"timeline_variables\": \"nums.pstb\""), "");
+    lk_refused("a number key as written in the table", LK_STIM("{\"by\": \"$x\", \"map\": {\"0.50\": 1, \"0.25\": 2, \"1\": 3}}"), LK_T,
+               LK_LEAF(", \"timeline_variables\": \"nums.pstb\""), "no key for \"0.5\"");
+    lk_refused("an integer key with zeros", "", "\"t\": {\"columns\": {\"c\": {\"by\": \"$n\", \"map\": {\"1\": 1, \"2\": 2, \"007\": 3}}}}",
+               LK_LEAF(", \"timeline_variables\": \"nums.pstb\""), "template 't': 'columns.c': the lookup's map has no key for \"7\"");
+
+    /* vars: a choice, a value, a variable of a variable, a lookup */
+    lk_refused("vars choice", LK_STIM("{\"by\": \"$side\", \"map\": {\"left\": -5}}"), LK_T,
+               LK_LEAF(", \"vars\": {\"side\": {\"choice\": [\"left\", \"right\"]}}"), "no key for \"right\", which '$side' can take");
+    lk_ok("vars choice, numbers and bools", LK_STIM("{\"by\": \"$v\", \"map\": {\"0.5\": 1, \"2\": 2, \"true\": 3, \"x\": 4}}"), LK_T,
+          LK_LEAF(", \"vars\": {\"v\": {\"choice\": [0.50, 2.0, true, \"x\"]}}"), "");
+    lk_refused("vars value", LK_STIM("{\"by\": \"$v\", \"map\": {\"Stop\": 1}}"), LK_T, LK_LEAF(", \"vars\": {\"v\": \"Go\"}"),
+               "no key for \"Go\"");
+    lk_ok("vars of vars, and $$", LK_STIM("{\"by\": \"$a\", \"map\": {\"$5\": 1, \"red\": 2, \"green\": 3, \"blue\": 4}}"), LK_T,
+          LK_LEAF(", \"timeline_variables\": \"stroop.pstb\", \"vars\": {\"a\": {\"choice\": [\"$$5\", \"$b\"]}, \"b\": \"$word\"}"), "");
+    lk_refused("a lookup var", LK_STIM("{\"by\": \"$a\", \"map\": {\"x\": 1}}"), LK_T,
+               LK_LEAF(", \"vars\": {\"a\": {\"by\": \"$practice\", \"map\": {\"true\": \"x\", \"false\": \"y\"}}}"), "no key for \"y\"");
+    lk_ok("vars named by and map are not a lookup", LK_STIM("1"), LK_T, LK_LEAF(", \"vars\": {\"by\": \"$practice\", \"map\": {\"a\": 1}}"), "");
+    lk_ok("a key with a line break: one line", LK_STIM("{\"by\": \"$v\", \"map\": {\"x\": 1, \"a\\nb\": 2}}"), LK_T,
+          LK_LEAF(", \"vars\": {\"v\": \"x\"}"),
+          "stimulus 's': 'x': no level of '$v' reaches the map's key \"a?b\"; a typo, or a level the trials no longer have?");
+    lk_refused("a level with a line break: one line", LK_STIM("{\"by\": \"$v\", \"map\": {\"x\": 1}}"), LK_T,
+               LK_LEAF(", \"vars\": {\"v\": {\"choice\": [\"x\", \"a\\tb\"]}}"), "no key for \"a?b\", which");
+    lk_refused("repeated levels named once", LK_STIM("{\"by\": \"$v\", \"map\": {}}"), LK_T,
+               LK_LEAF(", \"vars\": {\"v\": {\"choice\": [\"b\", \"b\", \"a\", \"$w\"]}, \"w\": \"a\"}"),
+               "the lookup's map has no key for \"a\" and \"b\", which '$v' can take");
+    lk_ok("vars that name each other: the loader's to refuse", LK_STIM("{\"by\": \"$a\", \"map\": {\"x\": 1}}"), LK_T,
+          LK_LEAF(", \"vars\": {\"a\": \"$b\", \"b\": \"$a\"}"), "");
+    lk_ok("a literal by", LK_STIM("{\"by\": \"b\", \"map\": {\"a\": 1, \"b\": 2}}"), LK_T, LK_LEAF(""),
+          "stimulus 's': 'x': no level of 'b' reaches the map's key \"a\"; a typo, or a level the trials no longer have?");
+
+    /* built-ins with levels the definition fixes */
+    lk_refused("practice", LK_STIM("{\"by\": \"$practice\", \"map\": {\"true\": 1}}"), LK_T, LK_LEAF(""), "no key for \"false\"");
+    lk_refused("correct", LK_STIM("{\"by\": \"$correct\", \"map\": {\"false\": 1}}"), LK_T, LK_LEAF(""), "no key for \"true\"");
+    lk_refused("outcome with a deadline", LK_STIM("{\"by\": \"$outcome\", \"map\": {\"correct\": 1, \"wrong\": 2}}"),
+               "\"t\": {\"response\": {\"from\": \"s\", \"duration_s\": 1.5, \"choices\": [\"a\"]}}", LK_LEAF(""), "no key for \"timeout\"");
+    lk_refused("outcome, a deadline from a variable", LK_STIM("{\"by\": \"$outcome\", \"map\": {\"correct\": 1, \"wrong\": 2}}"),
+               "\"t\": {\"response\": {\"from\": \"s\", \"duration_s\": \"$d_s\", \"choices\": [\"a\"]}}", LK_LEAF(""), "no key for \"timeout\"");
+    lk_ok("outcome without a deadline", LK_STIM("{\"by\": \"$outcome\", \"map\": {\"correct\": 1, \"wrong\": 2}}"),
+          "\"t\": {\"response\": {\"from\": \"s\", \"choices\": [\"a\"]}}", LK_LEAF(""), "");
+    lk_ok("a timeout key without a deadline", LK_STIM("{\"by\": \"$outcome\", \"map\": {\"correct\": 1, \"wrong\": 2, \"timeout\": 3}}"),
+          "\"t\": {\"response\": {\"from\": \"s\", \"duration_s\": 0, \"choices\": [\"a\"]}}", LK_LEAF(""),
+          "stimulus 's': 'x': no level of '$outcome' reaches the map's key \"timeout\"; a typo, or a level the trials no longer have?");
+    lk_ok("outcome without a response: not known", LK_STIM("{\"by\": \"$outcome\", \"map\": {\"x\": 1}}"), LK_T, LK_LEAF(""), "");
+    lk_refused("response: the choices' keys, not names", "",
+               "\"t\": {\"response\": {\"choices\": [{\"key\": \"r\", \"name\": \"red\"}, \"left\"],\n"
+               " \"trigger\": {\"role\": \"trig\", \"code\": {\"by\": \"$response\", \"map\": {\"red\": 101, \"left\": 102}}}}}",
+               LK_LEAF(""), "template 't': 'response.trigger.code': the lookup's map has no key for \"r\", which '$response' can take");
+    lk_ok("response", "", "\"t\": {\"response\": {\"choices\": [\"left\", \"right\"], \"trigger\": {\"role\": \"trig\", "
+                          "\"code\": {\"by\": \"$response\", \"map\": {\"left\": 101, \"right\": 102}}}}}", LK_LEAF(""), "");
+    lk_refused("method: the leaf's tracks", LK_STIM("{\"by\": \"$method\", \"map\": {\"stair\": 1}}"), LK_T,
+               LK_LEAF(", \"tracks\": [\"stair\", \"quest\"]"), "no key for \"quest\"");
+    lk_ok("not known at build: a session field, a jitter, a level",
+          LK_STIM("[{\"by\": \"$group\", \"map\": {\"A\": 1}}, {\"by\": \"$soa_s\", \"map\": {}}, {\"by\": \"$level\", \"map\": {}},"
+                  " {\"by\": \"$nothing\", \"map\": {}}, {\"by\": [1], \"map\": {}}]"), LK_T, LK_LEAF(""), "");
+
+    /* scope: the leaf's tables, its template and the stimuli it names */
+    make_table("colors.pstb", "word\ncyan\nmagenta\n");
+    lk_ok("two leaves, one column name, two stimuli",
+          "\"a\": {\"kind\": \"shape\", \"x\": {\"by\": \"$word\", \"map\": {\"red\": 1, \"green\": 2, \"blue\": 3}}},"
+          " \"b\": {\"kind\": \"shape\", \"x\": {\"by\": \"$word\", \"map\": {\"cyan\": 1, \"magenta\": 2}}}",
+          "\"ta\": {\"events\": [{\"on\": \"a\"}]}, \"tb\": {\"after\": [{\"if\": \"$practice\", \"steps\": [{\"to\": \"b\"}]}]}",
+          "{\"name\": \"one\", \"timeline_variables\": \"stroop.pstb\", \"trial\": \"ta\"},"
+          " {\"name\": \"two\", \"timeline_variables\": \"colors.pstb\", \"trial\": \"tb\"}", "");
+    lk_refused("a stimulus of two leaves", "\"a\": {\"kind\": \"shape\", \"x\": {\"by\": \"$word\", \"map\": {\"red\": 1, \"green\": 2, \"blue\": 3}}}",
+               "\"ta\": {\"record\": [\"a\"]}",
+               "{\"name\": \"one\", \"timeline_variables\": \"stroop.pstb\", \"trial\": \"ta\"},"
+               " {\"name\": \"blk\", \"timeline\": [{\"name\": \"two\", \"timeline_variables\": \"colors.pstb\", \"trial\": \"ta\"}]}",
+               "stimulus 'a': 'x': the lookup's map has no key for \"cyan\" and \"magenta\", which '$word' can take in node 'blk/two'");
+    lk_ok("the union of two leaves reaches every key",
+          "\"a\": {\"kind\": \"shape\", \"x\": {\"by\": \"$v\", \"map\": {\"p\": 1, \"q\": 2}}}", "\"ta\": {\"response\": {\"from\": \"a\"}}",
+          "{\"name\": \"one\", \"vars\": {\"v\": \"p\"}, \"trial\": \"ta\"}, {\"name\": \"two\", \"vars\": {\"v\": \"q\"}, \"trial\": \"ta\"}", "");
+    lk_refused("a stimulus in an if's steps, in a list", LK_STIM("{\"by\": \"$practice\", \"map\": {\"true\": 1}}"),
+               "\"t\": {\"events\": [{\"wait_s\": 1}, {\"if\": \"$warmup\", \"steps\": [{\"on\": [\"q\", \"s\"]}]}]}", LK_LEAF(""),
+               "stimulus 's': 'x': the lookup's map has no key for \"false\"");
+    lk_ok("the nearest vars", LK_STIM("{\"by\": \"$v\", \"map\": {\"q\": 1}}"), LK_T,
+          "{\"name\": \"blk\", \"vars\": {\"v\": \"p\"}, \"timeline\": [" LK_LEAF(", \"vars\": {\"v\": \"q\"}") "]}", "");
+    lk_ok("a stimulus no template names is not checked", LK_STIM("{\"by\": \"$practice\", \"map\": {}}"), "\"t\": {}", LK_LEAF(""), "");
+    lk_ok("a container's table; the leaf's own comes first",
+          LK_STIM("{\"by\": \"$word\", \"map\": {\"cyan\": 1, \"magenta\": 2}}"), LK_T,
+          "{\"name\": \"blk\", \"timeline_variables\": \"stroop.pstb\", \"timeline\": [" LK_LEAF(", \"timeline_variables\": \"colors.pstb\"") "]}", "");
+    lk_refused("a container's table is inherited", LK_STIM("{\"by\": \"$word\", \"map\": {\"cyan\": 1, \"magenta\": 2}}"), LK_T,
+               "{\"name\": \"blk\", \"timeline_variables\": \"stroop.pstb\", \"timeline\": [" LK_LEAF("") "]}",
+               "no key for \"blue\", \"green\" and \"red\", which '$word' can take in node 'blk/main'");
+    lk_refused("a container's data", "", "\"t\": {}",
+               "{\"name\": \"blk\", \"data\": {\"c\": {\"by\": \"$practice\", \"map\": {\"true\": 1}}}, \"timeline\": [" LK_LEAF("") "]}",
+               "node 'blk': 'data.c': the lookup's map has no key for \"false\", which '$practice' can take in node 'blk/main'");
+    lk_refused("a step's value", LK_STIM("0"), "\"t\": {\"events\": [{\"on\": \"s\"}, {\"set\": \"s\", \"props\": {\"x\": "
+                                               "{\"by\": \"$practice\", \"map\": {\"false\": 1}}}}]}", LK_LEAF(""),
+               "template 't': 'events[1].props.x': the lookup's map has no key for \"true\"");
+    lk_refused("a lookup in a map value", LK_STIM("{\"by\": \"$practice\", \"map\": {\"true\": 1, \"false\": {\"by\": \"$correct\", \"map\": "
+                                                  "{\"true\": 2}}}}"), LK_T, LK_LEAF(""),
+               "stimulus 's': 'x.map.false': the lookup's map has no key for \"false\"");
+    lk_refused("a missing table", LK_STIM("{\"by\": \"$word\", \"map\": {}}"), LK_T, LK_LEAF(", \"timeline_variables\": \"nothing.pstb\""),
+               "node 'main': 'timeline_variables' is 'nothing.pstb', which is not a table entry of this pack");
+
+    /* not a definition this check reads */
+    {
+        static const char* const other[] = { "not json", "{\"format\": \"other\"}", "{\"format\": \"ysp-experiment\", \"version\": 2}", "" };
+        int i;
+        for (i = 0; i < 4; i++) {
+            rc = ypt_check_lookups(other[i], strlen(other[i]), table_of, NULL, warn_of, NULL, err, sizeof err);
+            CHECK(rc == 0 && !err[0], "not checked %d: rc %d, %s", i, rc, err);
+        }
+        CHECK(ypt_check_lookups(NULL, 0, table_of, NULL, NULL, NULL, err, sizeof err) == YPAK_ERR_ARG, "NULL definition");
+        CHECK(ypt_check_lookups("{}", 2, NULL, NULL, NULL, NULL, err, sizeof err) == YPAK_ERR_ARG, "NULL table function");
+    }
+    /* no warn function: the same refusals, no warnings computed */
+    {
+        static const char d[] = "{\"format\": \"ysp-experiment\", \"version\": 1, \"stimuli\": {\"s\": {\"x\": {\"by\": \"$practice\", "
+                                "\"map\": {\"true\": 1, \"false\": 2, \"maybe\": 3}}}}, \"trials\": {\"t\": {\"record\": [\"s\"]}}, "
+                                "\"timeline\": [{\"trial\": \"t\"}]}";
+        rc = ypt_check_lookups(d, strlen(d), table_of, NULL, NULL, NULL, err, sizeof err);
+        CHECK(rc == 0, "no warn function: rc %d, %s", rc, err);
+    }
+    /* the deepest tree the parser takes (JSON depth 64: 31 nodes), its
+     * table at the top; then the work bound */
+    {
+        int i, at = snprintf(buf, sizeof buf, "{\"name\": \"a\", \"timeline_variables\": \"colors.pstb\", \"timeline\": [");
+        for (i = 0; i < 29; i++) at += snprintf(buf + at, sizeof buf - (size_t)at, "{\"name\": \"a\", \"timeline\": [");
+        at += snprintf(buf + at, sizeof buf - (size_t)at, "{\"name\": \"z\", \"trial\": \"t\"}");
+        for (i = 0; i < 30; i++) at += snprintf(buf + at, sizeof buf - (size_t)at, "]}");
+        lk_refused("31 nodes deep", LK_STIM("{\"by\": \"$word\", \"map\": {\"cyan\": 1}}"), LK_T, buf,
+                   "no key for \"magenta\", which '$word' can take in node 'a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/z'");
+        at = snprintf(buf, sizeof buf, ", \"vars\": {");
+        for (i = 0; i < 7; i++)
+            at += snprintf(buf + at, sizeof buf - (size_t)at, "\"v%d\": {\"choice\": [\"$v%d\", \"$v%d\", \"$v%d\", \"$v%d\", \"$v%d\", \"$v%d\", "
+                           "\"$v%d\", \"$v%d\", \"$v%d\", \"$v%d\"]}, ", i, i + 1, i + 1, i + 1, i + 1, i + 1, i + 1, i + 1, i + 1, i + 1, i + 1);
+        snprintf(buf + at, sizeof buf - (size_t)at, "\"v7\": \"end\"}}");
+        {
+            char node[8192];
+            snprintf(node, sizeof node, "{\"name\": \"main\", \"trial\": \"t\"%s", buf);
+            lk_refused("work bound", LK_STIM("{\"by\": \"$v0\", \"map\": {\"end\": 1}}"), LK_T, node, "steps to check");
+        }
+    }
+}
+
 int main(void) {
     test_stroop();
     test_shared();
     test_forms();
     test_opaque();
     test_refusals();
+    test_lookups();
     printf("derive_test: %d checks, %d failed\n", g_checks, g_fail);
     return g_fail ? 1 : 0;
 }

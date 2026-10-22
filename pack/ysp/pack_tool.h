@@ -1,4 +1,4 @@
-/* ysp/pack_tool.h - v0.6.0 - the pack tool as a library (prefix ypt_)
+/* ysp/pack_tool.h - v0.7.0 - the pack tool as a library (prefix ypt_)
  *
  *   Builds, verifies, lists, extracts, rebuilds and appends ysp packs
  *   (docs/pack.md). The CLI `ypak` (pack/ypak.c) is a thin layer over these
@@ -69,6 +69,23 @@
  *   corpus is byte-identical to v0.5.1's; its manifest differs by the
  *   tool version.
  *
+ *   v0.7.0 (2026-10-22): the definition's canonical bytes and its lookups
+ *   (docs/pack.md 16). An experiment entry that is a definition ("format":
+ *   "ysp-experiment") is stored as ysp/json.h's canonical form with one
+ *   LF after it, derivation {"op": "canonical"} (experiment_format.md
+ *   D2), not as the source's bytes; so definitions that differ only in
+ *   whitespace, key order, number spelling or string escapes give one
+ *   entry, one experiment ID and one pack ID. The source's "sha256" in the
+ *   manifest is that of its canonical bytes too, and `ypak rebuild` checks
+ *   a source so. Other experiment bytes are copied as before. A lookup
+ *   whose map lacks a level its "by" can take (a table column's levels, a
+ *   vars value or choice, a boolean built-in, outcome, response, method)
+ *   is refused, naming the place, the key and the levels; map keys that
+ *   no level reaches are a warning (ypt_options.warn;
+ *   ypt_check_lookups()). Every entry of the test corpus is
+ *   byte-identical to v0.6.0's (its experiment is opaque); a pack with a
+ *   definition has a new experiment entry and pack ID.
+ *
  *   v0.5.1 (2026-10-20): an ffmpeg step with mpeg2video is refused
  *   before it runs (the user's decision): the video index (pl_mpeg) reads
  *   MPEG-1 only and misread mpeg2video's output, so the step failed after
@@ -113,12 +130,13 @@
 extern "C" {
 #endif
 
-#define YPT_VERSION_STRING "0.6.0"
+#define YPT_VERSION_STRING "0.7.0"
 
 typedef struct ypt_options {
     const char* sources;   /* the sources' folder; NULL: the description's folder */
     FILE*       log;       /* one line per entry built; NULL: quiet               */
     const char* ffmpeg;    /* the ffmpeg program; NULL: "ffmpeg" on the PATH     */
+    FILE*       warn;      /* one line per warning ("warning: ..."); NULL: quiet */
 } ypt_options;
 
 /* Builds the pack that a source description (JSON, docs/pack.md 5.2)
@@ -250,6 +268,22 @@ typedef const void* (*ypt_table_fn)(void* ctx, const char* name, size_t* n);
  * ypt_texts_free() after a 0. */
 int  ypt_derive_texts(const void* def, size_t n, ypt_table_fn table, void* ctx, ypt_texts* out, char* err, size_t cap);
 void ypt_texts_free(ypt_texts* t);
+
+/* One warning line, without a newline. */
+typedef void (*ypt_warn_fn)(void* ctx, const char* line);
+
+/* Every lookup {"by", "map"} in the definition's stimuli, templates and
+ * nodes' vars and data against the levels its "by" can take in each leaf
+ * node that reaches it (docs/experiment_format.md 2.2): a table column's
+ * levels (a number as its canonical text), a vars value or each choice, a
+ * boolean built-in ("false", "true"), outcome ("correct", "wrong", and
+ * "timeout" when the response has a deadline), response (the choices'
+ * keys), method (the tracks). A level without a key gives YPAK_ERR_FORMAT,
+ * with err naming the stimulus, template or node, the key, the levels and
+ * the leaf. Keys that no level reaches go to warn (NULL: not computed),
+ * one line per lookup. A "by" whose levels are known only at run time is
+ * not checked. Bytes that are not a version 1 definition give 0. */
+int  ypt_check_lookups(const void* def, size_t n, ypt_table_fn table, void* ctx, ypt_warn_fn warn, void* wctx, char* err, size_t cap);
 
 #ifdef __cplusplus
 }

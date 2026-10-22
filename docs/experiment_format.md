@@ -100,6 +100,16 @@ that structure; it does not invent a new one.
   loader that writes each real back through `yjs_double()` and
   `yjs_new_double()` makes them one; the experiment ID then depends on
   the double, not the text.
+- Built (pack tool v0.7.0, 2026-10-22; pack.md 16): the tool stores a
+  definition as ysp/json.h's canonical bytes with one LF after the value,
+  as the manifest and the rig profile end, and records `"op":
+  "canonical"`. The source's SHA-256 in the manifest is the canonical
+  bytes' too, so two sources that differ only in whitespace, key order,
+  number spelling or escapes give one entry, one experiment ID and, at
+  one source path, one pack ID. The pack does not keep the source text:
+  JSON has no comments (D1), so the canonical form drops no value. Not
+  built: "a key at its default is left out", which needs the defaults
+  table of the loader.
 
 **D3. Named sets are objects; order is in arrays. DECIDED (2026-10-14).**
 - Evidence: the canonical form sorts keys, so order in an object is
@@ -358,7 +368,7 @@ writer's column rule). A pack entry is named by its exact pack name
 |---|---|
 | A number, a string, a bool, an array of numbers | The value |
 | `"$name"` | A variable (2.3). A literal text that starts with `$` is written `"$$..."` |
-| `{"by": VALUE, "map": {KEY: VALUE, ...}}` | A lookup. KEY is the text of `by`'s value; a bool is `"true"` or `"false"`. The loader checks that `map` has every level that `by` can take (table levels, `choice` lists, outcomes) |
+| `{"by": VALUE, "map": {KEY: VALUE, ...}}` | A lookup. KEY is the text of `by`'s value; a bool is `"true"` or `"false"`; a number is its canonical text (`0.50` is `"0.5"`). The loader checks that `map` has every level that `by` can take (table levels, `choice` lists, outcomes). The pack tool does it at build (v0.7.0, pack.md 16), in each leaf that reaches the lookup: a level without a key is an error that names the stimulus, the key and the levels; a key no level reaches is a warning |
 | `{"linspace": [lo, hi, n]}` | n values from lo to hi (`yqst_linspace()`) |
 | `{"gamut": "stimulus.property"}` | The largest value of the property inside the display's gamut (`ycol_max_scale()`; for a `michelson` contrast, `ycol_michelson()`'s `max`) |
 | `{"michelson": VALUE}` | Only for `contrast`: a Michelson contrast in light through the calibration; defines `$contrast_shown` (`ycol_michelson()`: `scene` is the stimulus's contrast, `shown` is `$contrast_shown`) |
