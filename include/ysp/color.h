@@ -1,4 +1,4 @@
-/* ysp/color.h - v0.3.0 - public domain single-header color library for
+/* ysp/color.h - v0.4.0 - public domain single-header color library for
  *   calibrated displays
  *
  *   Color for psychophysics on a measured display: the display calibration
@@ -9,7 +9,9 @@
  *   Rec. 2020, cone excitations, cone contrast, DKL and MacLeod-Boynton,
  *   gamut questions (in gamut by how much, the largest contrast along a
  *   direction, the gamut boundary in a plane), gamut mapping by a stated
- *   method, and a participant's luminance from flicker photometry.
+ *   method, a Michelson contrast in light as ysp/gfx.h's contrast and as
+ *   the output codes show it, and a participant's luminance from flicker
+ *   photometry.
  *
  *   Three rules hold for every call. A conversion goes through a
  *   calibration: measured, or nominal and flagged, never an assumed sRGB
@@ -214,6 +216,39 @@
  *   hue is one interval from 0, true for every display tested.
  *
  *   ---------------------------------------------------------------------
+ *   MICHELSON
+ *   ---------------------------------------------------------------------
+ *   A contrast threshold is a statement about light: (Ymax - Ymin) /
+ *   (Ymax + Ymin) in cd/m2, the display's black included. ysp/gfx.h's
+ *   contrast is about linear device RGB, which starts at the black: with
+ *   dir 0, L = Lbg (1 + contrast g). The two differ by the black's share
+ *   of the background, and the 8-bit codes the output stage writes show a
+ *   third value. ycol_michelson(cx, m, dir, bits, &r) gives all three:
+ *       ycol_shown r;
+ *       ycol_rgb gray = { 0, 0, 0 };               // dir 0: the background
+ *       if (ycol_michelson(&cx, 0.03, gray, 8, &r) < 0) fail(r.why);
+ *       gabor.contrast = (float)r.scene;           // ysp/gfx.h's contrast
+ *       method_update(r.shown, correct);           // what the codes showed
+ *       if (!r.gamut.in) ...                       // r.max is the edge
+ *   With w the luminance of each gun at level 1 less the black's, and Y_bg
+ *   the background's luminance: gain = (w . dir) / Y_bg, scene = m / gain,
+ *   max = gain times the largest scene contrast with bg + scene dir and bg
+ *   - scene dir both in the cube. The peak's and the trough's codes are
+ *   ycol_output_code()'s; their light is each code's device value through
+ *   the CLUT's inverse (as YCOL_SPACE_DEVICE), and shown is the Michelson
+ *   contrast of that light. A contrast below about half a code step shows
+ *   as 0; one past max shows what the clamped codes give, while scene and
+ *   gamut report the request unclipped. A negative m is the opposite
+ *   phase: scene, peak and trough swap, shown is negated. Only the
+ *   readings' Y is used, so a calibration from a photometer (no
+ *   chromaticities) is enough. Refused: a background with no light, a
+ *   dir with no luminance (w . dir = 0, isoluminant), bits outside 8..16.
+ *   The peak and trough are the carrier's nominal extremes; a gabor's
+ *   envelope and the pixel grid leave its drawn extremes at or inside
+ *   them, and an RGBA16F scene rounds a value before the output stage
+ *   (EXACTNESS).
+ *
+ *   ---------------------------------------------------------------------
  *   CALIBRATION
  *   ---------------------------------------------------------------------
  *   ycol_cal is the canonical form, in memory and on disk (62528 bytes,
@@ -334,6 +369,11 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.4.0 - ycol_michelson() and ycol_shown (MICHELSON): a Michelson
+ *          contrast in light as ysp/gfx.h's contrast along a direction,
+ *          the largest one in gamut, the output codes of the peak and the
+ *          trough, and the Michelson contrast of their light. Closes gap
+ *          G5 of docs/experiment_format.md. Nothing else changed.
  *   v0.3.0 - PARAMETERS: ycol_param gains a last field, values, after
  *          offset: for an enum row the C enum's names and values
  *          ("ss2=0,ss10=1"), NULL for every other row. cones and adapt
@@ -362,7 +402,9 @@
  *          fundamentals, the participant luminance record (ycol_lum,
  *          the .ysplum file) and nominal spectra.
  *
- *   STATUS: v0.2.0: the v0.1.0 checks below pass unchanged, and the test
+ *   STATUS: v0.4.0: the checks below pass unchanged, and test_michelson
+ *   checks ycol_michelson() (docs/color.md, "Michelson contrast").
+ *   v0.2.0: the v0.1.0 checks below pass unchanged, and the test
  *   checks the context's message, code and close. v0.1.0: built and run with MSVC 19.44 (/W4 /WX, the default
  *   C dialect and C++17), MinGW-w64 gcc 14.3 (C99, C11, C++17) and gcc
  *   11.4 on Linux under ASan and UBSan; the value macros as C++20 on MSVC
@@ -422,9 +464,9 @@ extern "C" {
 #endif
 
 #define YCOL_VERSION_MAJOR  0
-#define YCOL_VERSION_MINOR  3
+#define YCOL_VERSION_MINOR  4
 #define YCOL_VERSION_PATCH  0
-#define YCOL_VERSION_STRING "0.3.0"
+#define YCOL_VERSION_STRING "0.4.0"
 
 /* YCOL_VERSION_STRING, as compiled into the implementation. */
 YCOL_API const char* ycol_version(void);
@@ -862,6 +904,40 @@ YCOL_API ycol_rgb ycol_map(const ycol_ctx* cx, ycol_color c, int method, ycol_ga
  * NONE: the stored CLUT interpolated in float, floor(v * max + 0.5), max =
  * 2^bits - 1, bits 8 to 16. */
 YCOL_API int ycol_output_code(const ycol_cal* cal, ycol_rgb rgb, int bits, uint32_t code[3]);
+
+/* --- Michelson contrast in light ----------------------------------------- */
+
+/* ycol_michelson()'s result (MICHELSON). Light is the photometric
+ * luminance Y of the readings, the display's black included. */
+typedef struct ycol_shown {
+    int32_t     status;          /* YCOL_OK, or the refusal: then every double
+                                  * is NaN and every code 0                     */
+    double      gain;            /* Michelson contrast per unit of ysp/gfx.h's
+                                  * contrast along dir: (w . dir) / Y_bg        */
+    double      scene;           /* ysp/gfx.h's contrast for the Michelson
+                                  * contrast asked: michelson / gain; never
+                                  * clipped                                     */
+    double      max;             /* the largest Michelson contrast whose peak
+                                  * and trough are both in the cube             */
+    double      shown;           /* the Michelson contrast of the light of the
+                                  * peak's and the trough's output codes         */
+    double      Y_bg;            /* cd/m2 of the background's scene value      */
+    double      Y_peak, Y_trough;   /* cd/m2 of the two output codes          */
+    uint32_t    peak[3];         /* output codes of bg + scene dir              */
+    uint32_t    trough[3];       /* output codes of bg - scene dir              */
+    ycol_gamut  gamut;           /* bg + scene dir and bg - scene dir, as
+                                  * ycol_to_dir() checks them                   */
+    const char* why;             /* static text when status < 0                 */
+} ycol_shown;
+
+/* A Michelson luminance contrast in light as ysp/gfx.h's contrast of a
+ * modulation along dir (linear device RGB per unit contrast; all 0 = the
+ * background, as for ysp/gfx.h), and the contrast that the output codes
+ * then show at `bits` (8 to 16, dither NONE). The context's background is
+ * the stimulus's background. A contrast outside the gamut is not an error:
+ * scene is not clipped, gamut.in is 0, and shown is what the output stage
+ * gives after its clamp. Returns out->status. */
+YCOL_API int ycol_michelson(const ycol_ctx* cx, double michelson, ycol_rgb dir, int bits, ycol_shown* out);
 
 /* --- standard primaries ----------------------------------------------------- */
 
@@ -2819,6 +2895,82 @@ YCOL_API int ycol_output_code(const ycol_cal* cal, ycol_rgb rgb, int bits, uint3
         k = k < 0.0f ? 0.0f : (k > mx ? mx : k);
         code[c] = (uint32_t)k;
     }
+    return YCOL_OK;
+}
+
+/* --- Michelson contrast in light ----------------------------------------- */
+
+/* The luminance of linear RGB, Y = yk + w . rgb, from the readings alone:
+ * a photometer's calibration (no chromaticities) has it too. With
+ * chromaticities, w and yk equal row 1 of rgb_to_xyz and black_xyz[1]. */
+static void ycol__lum_row(const ycol_cal* c, double w[3], double* yk) {
+    double y1[3] = { 0.0, 0.0, 0.0 };
+    int i;
+    *yk = 0.0;
+    for (i = 0; i < c->n_readings; i++) {
+        const ycol_cal_reading* r = &c->readings[i];
+        if (r->gun == YCOL_GUN_BLACK) *yk = r->Y;
+        else if (r->gun >= 0 && r->gun <= 2 && r->level == 1.0f) y1[r->gun] = r->Y;
+    }
+    for (i = 0; i < 3; i++) w[i] = y1[i] - *yk;
+}
+
+/* The light of output codes: each code's device value through the CLUT's
+ * inverse, as YCOL_SPACE_DEVICE takes it. */
+static double ycol__code_Y(const ycol_cal* c, const uint32_t code[3], double mx, const double w[3], double yk) {
+    double y = yk;
+    int k;
+    for (k = 0; k < 3; k++) y += w[k] * ycol__lut_inv(c, k, (double)code[k] / mx);
+    return y;
+}
+
+static int ycol__shown_refuse(ycol_shown* o, int rc, const char* why) {
+    double t[3];
+    double q = ycol__nan();
+    memset(o, 0, sizeof *o);
+    o->status = rc;
+    o->why = why;
+    o->gain = o->scene = o->max = o->shown = o->Y_bg = o->Y_peak = o->Y_trough = q;
+    ycol__refuse(&o->gamut, rc, why, t);
+    return rc;
+}
+
+YCOL_API int ycol_michelson(const ycol_ctx* cx, double michelson, ycol_rgb dir, int bits, ycol_shown* out) {
+    const ycol_cal* c;
+    double d[3], w[3], s[3], yk, wd, mx, sum;
+    ycol_rgb pk, tr;
+    int k;
+    if (!out) return YCOL_ERR_ARG;
+    if (!cx || !cx->desc.cal) return ycol__shown_refuse(out, YCOL_ERR_ARG, "NULL context");
+    if (bits < 8 || bits > 16) return ycol__shown_refuse(out, YCOL_ERR_ARG, "bits: 8 to 16");
+    d[0] = dir.r; d[1] = dir.g; d[2] = dir.b;
+    if (!ycol__finite(michelson) || !ycol__finite3(d)) return ycol__shown_refuse(out, YCOL_ERR_ARG, "a value is not finite");
+    /* ysp/gfx.h's dir 0 is the background: L = Lbg (1 + contrast g) */
+    if (d[0] == 0.0 && d[1] == 0.0 && d[2] == 0.0) memcpy(d, cx->bg, sizeof d);
+    c = cx->desc.cal;
+    ycol__lum_row(c, w, &yk);
+    memset(out, 0, sizeof *out);
+    out->Y_bg = yk + w[0] * cx->bg[0] + w[1] * cx->bg[1] + w[2] * cx->bg[2];
+    wd = w[0] * d[0] + w[1] * d[1] + w[2] * d[2];
+    if (!(out->Y_bg > 0.0)) return ycol__shown_refuse(out, YCOL_ERR_RANGE, "the background gives no light: no Michelson contrast");
+    if (wd == 0.0) return ycol__shown_refuse(out, YCOL_ERR_RANGE, "dir has no luminance: its Michelson contrast is 0 at any scene contrast");
+    out->gain = wd / out->Y_bg;
+    out->scene = michelson / out->gain;
+    if (!ycol__finite(out->scene)) return ycol__shown_refuse(out, YCOL_ERR_RANGE, "the scene contrast is not finite");
+    out->max = ycol__k(cx, d, YCOL_SYMMETRIC) * fabs(out->gain);
+    for (k = 0; k < 3; k++) s[k] = out->scene * d[k];
+    ycol__gamut(cx, s, s, 1, &out->gamut);
+    pk.r = cx->bg[0] + s[0]; pk.g = cx->bg[1] + s[1]; pk.b = cx->bg[2] + s[2];
+    tr.r = cx->bg[0] - s[0]; tr.g = cx->bg[1] - s[1]; tr.b = cx->bg[2] - s[2];
+    if (ycol_output_code(c, pk, bits, out->peak) < 0 || ycol_output_code(c, tr, bits, out->trough) < 0)
+        return ycol__shown_refuse(out, YCOL_ERR_FORMAT, "the calibration's CLUT size is outside 2..4096");
+    mx = (double)((1u << bits) - 1u);
+    out->Y_peak = ycol__code_Y(c, out->peak, mx, w, yk);
+    out->Y_trough = ycol__code_Y(c, out->trough, mx, w, yk);
+    sum = out->Y_peak + out->Y_trough;
+    /* both codes black on a display with no black light: no light, no contrast */
+    out->shown = sum > 0.0 ? (out->Y_peak - out->Y_trough) / sum : 0.0;
+    out->status = YCOL_OK;
     return YCOL_OK;
 }
 

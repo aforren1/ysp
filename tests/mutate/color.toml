@@ -316,3 +316,85 @@ test = "color"
 why = "v0.3.0: an enum row without values leaves the names in the doc text only."
 find = '"none=0,bradford=1" },'
 replace = 'NULL },'
+
+# v0.4.0: ycol_michelson() (test_michelson).
+
+[[mutant]]
+id = "mi-01"
+name = "dir 0 is not the background"
+test = "color"
+why = "v0.4.0: ysp/gfx.h's dir 0 modulates the background; without the swap every gray contrast is refused as isoluminant."
+find = '''    if (d[0] == 0.0 && d[1] == 0.0 && d[2] == 0.0) memcpy(d, cx->bg, sizeof d);'''
+replace = '''    (void)0;'''
+
+[[mutant]]
+id = "mi-02"
+name = "gun luminance with the black in it"
+test = "color"
+why = "v0.4.0: linear RGB starts at the black; counting the black in each gun overstates every scene contrast's light."
+find = '''    for (i = 0; i < 3; i++) w[i] = y1[i] - *yk;'''
+replace = '''    for (i = 0; i < 3; i++) w[i] = y1[i];'''
+
+[[mutant]]
+id = "mi-03"
+name = "the background's light without the black"
+test = "color"
+why = "v0.4.0: the black is the difference between ysp/gfx.h's contrast and a contrast in light; leaving it out makes them equal."
+find = '''    out->Y_bg = yk + w[0] * cx->bg[0]'''
+replace = '''    out->Y_bg = w[0] * cx->bg[0]'''
+
+[[mutant]]
+id = "mi-04"
+name = "max on one side"
+test = "color"
+why = "v0.4.0: a grating swings both ways; the one-sided room of a dark background lets the trough leave the gamut."
+find = '''    out->max = ycol__k(cx, d, YCOL_SYMMETRIC) * fabs(out->gain);'''
+replace = '''    out->max = ycol__k(cx, d, YCOL_ONE_SIDED) * fabs(out->gain);'''
+
+[[mutant]]
+id = "mi-05"
+name = "code light at 8 bits always"
+test = "color"
+why = "v0.4.0: a 10- or 16-bit code divided by 255 is not its device value."
+find = '''    for (k = 0; k < 3; k++) y += w[k] * ycol__lut_inv(c, k, (double)code[k] / mx);'''
+replace = '''    for (k = 0; k < 3; k++) y += w[k] * ycol__lut_inv(c, k, (double)code[k] / 255.0);'''
+
+[[mutant]]
+id = "mi-06"
+name = "shown with the trough first"
+test = "color"
+why = "v0.4.0: the contrast shown would have the opposite sign of the one asked."
+find = '''    out->shown = sum > 0.0 ? (out->Y_peak - out->Y_trough) / sum : 0.0;'''
+replace = '''    out->shown = sum > 0.0 ? (out->Y_trough - out->Y_peak) / sum : 0.0;'''
+
+[[mutant]]
+id = "mi-07"
+name = "gamut of the offset as a color"
+test = "color"
+why = "v0.4.0: the gamut is of bg + s and bg - s; checking s itself as a color reports a small contrast as below 0."
+find = '''    ycol__gamut(cx, s, s, 1, &out->gamut);'''
+replace = '''    ycol__gamut(cx, s, s, 0, &out->gamut);'''
+
+[[mutant]]
+id = "mi-08"
+name = "a background with no light"
+test = "color"
+why = "v0.4.0: with no light at the background, gain divides by 0 and a colored dir gives scene 0 instead of a refusal."
+find = '''    if (!(out->Y_bg > 0.0)) return ycol__shown_refuse'''
+replace = '''    if (0) return ycol__shown_refuse'''
+
+[[mutant]]
+id = "mi-09"
+name = "bits not checked"
+test = "color"
+why = "v0.4.0: bits 7 must be an argument error, not a calibration one."
+find = '''    if (bits < 8 || bits > 16) return ycol__shown_refuse(out, YCOL_ERR_ARG, "bits: 8 to 16");'''
+replace = '''    if (bits > 16) return ycol__shown_refuse(out, YCOL_ERR_ARG, "bits: 8 to 16");'''
+
+[[mutant]]
+id = "mi-10"
+name = "scene from the asked contrast"
+test = "color"
+why = "v0.4.0: ysp/gfx.h's contrast is the Michelson contrast over the gain; skipping the gain is the error G5 names."
+find = '''    out->scene = michelson / out->gain;'''
+replace = '''    out->scene = michelson;'''

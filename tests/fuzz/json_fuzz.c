@@ -253,6 +253,9 @@ int main(int argc, char** argv) {
         "{\"display\": {\"latency\": {\"date\": \"2026-10-13T10:05:00Z\", \"max_s\": 0.013, \"median_s\": 0.0123, \"n\": 1180, "
         "\"p5_s\": 0.01201, \"p95_s\": 0.01261, \"sha256\": \"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"}, "
         "\"onset_offset_s\": 0.0123}, \"format\": \"ysp-rig 1\", \"rig\": \"v04\", \"roles\": {}, \"written\": \"2026-10-13T10:05:00Z\"}";
+    static const char profile5[] =   /* ysp/rigfile.h v0.5.0: the viewing geometry */
+        "{\"format\": \"ysp-rig 1\", \"rig\": \"v05\", \"roles\": {}, \"view\": {\"distance_mm\": 570, \"width_mm\": 518.4, "
+        "\"width_px\": 1920}, \"written\": \"2026-10-21T10:00:00Z\"}";
     static const char bnd[] = "format ysp-in-bounds 1\ndate 2026-10-13T10:00:00Z\nn 398\nlo_s -0.000312000\nhi_s 0.001104000\n";
     static const char ons[] = "format ysp-display-onset 1\ndate 2026-10-13T10:05:00Z\nn 1180\np5_s 0.012010000\nmedian_s 0.012300000\n"
                               "p95_s 0.012610000\nmax_s 0.013000000\nonset_offset_s 0.012300000\n";
@@ -276,7 +279,8 @@ int main(int argc, char** argv) {
     put(argv[1], "profile4", 2, 0, profile4);
     put(argv[1], "bounds", 3, 9, bnd);
     put(argv[1], "onset", 3, 9, ons);
-    printf("json_fuzz: wrote %u seeds to %s\n", (unsigned)(2 * (sizeof docs / sizeof docs[0]) + 9), argv[1]);
+    put(argv[1], "profile5", 2, 0, profile5);
+    printf("json_fuzz: wrote %u seeds to %s\n", (unsigned)(2 * (sizeof docs / sizeof docs[0]) + 10), argv[1]);
     return 0;
 }
 #elif defined(YSP_FUZZ_REPLAY)

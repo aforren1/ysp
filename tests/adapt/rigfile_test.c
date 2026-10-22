@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #if defined(_WIN32)
 #include <direct.h>
 #define getcwd _getcwd
@@ -1238,6 +1239,115 @@ static void check_v04(void) {
     printf("  bounds and display onset files (v0.4.0): ok\n");
 }
 
+/* ------------------------------------------- the viewing geometry (v0.5.0) */
+
+static const char VIEW_BLOCK[] =
+    "  \"view\": {\n"
+    "    \"distance_mm\": 570,\n"
+    "    \"width_mm\": 518.4,\n"
+    "    \"width_px\": 1920\n"
+    "  },\n"
+    "  \"written\": \"2026-10-09T14:03:00Z\"\n"
+    "}\n";
+
+static void check_view(void) {
+    size_t n;
+    char h0[65], h1[65], h2[65], want[65];
+    const char* at;
+    double ppd;
+    /* GOLDEN has no view: its bytes and hash are v0.4.0's */
+    build_golden(&g_p);
+    CHECK(!g_p.view.set);
+    CHECK_I(yrig_hash(&g_p, h0), YRIG_OK);
+    sha_hex(GOLDEN, sizeof GOLDEN - 1, want);
+    CHECK_S(h0, want);
+    CHECK(yrig_ppd(&g_p) == 0.0);
+    CHECK(yrig_ppd(NULL) == 0.0);
+    /* with a view: the block before written, numbers in their shortest form */
+    g_p.view.set = true;
+    g_p.view.distance_mm = 570.0;
+    g_p.view.width_mm = 518.4;
+    g_p.view.width_px = 1920;
+    n = yrig_write(&g_p, g_buf, sizeof g_buf);
+    at = strstr(g_buf, "  \"view\"");
+    CHECK(at != NULL && strcmp(at, VIEW_BLOCK) == 0);
+    CHECK(n == sizeof GOLDEN - 1 + strlen("  \"view\": {\n    \"distance_mm\": 570,\n    \"width_mm\": 518.4,\n    \"width_px\": 1920\n  },\n"));
+    CHECK_I(yrig_hash(&g_p, h1), YRIG_OK);
+    CHECK(strcmp(h1, h0) != 0);
+    /* parse back: the same values, bytes and hash */
+    CHECK_I(yrig_parse(&g_q, g_buf, n, NULL, g_err, sizeof g_err), YRIG_OK);
+    CHECK(g_q.view.set && g_q.view.distance_mm == 570.0 && g_q.view.width_mm == 518.4 && g_q.view.width_px == 1920);
+    CHECK_I(yrig_hash(&g_q, h2), YRIG_OK);
+    CHECK_S(h2, h1);
+    /* pixels per degree: 0.27 mm a pixel at 570 mm, the 2AFC example's old
+     * constants, and ysp/gfx.h's expression */
+    ppd = yrig_ppd(&g_q);
+    CHECK(fabs(ppd - 570.0 * tan(3.14159265358979323846 / 180.0) / 0.27) < 1e-12);
+    CHECK(fabs(ppd - 36.84958) < 1e-5);
+    CHECK(ppd == (double)1920 / 518.4 * 570.0 * tan(3.14159265358979323846 / 180.0));
+    /* a hand edit in another spelling: the same canonical bytes */
+    {
+        static char t[1 << 16];
+        static const char hand[] = "  \"view\": {\"width_px\": 1920, \"width_mm\": 518.40, \"distance_mm\": 5.7e2},\n"
+                                   "  \"written\": \"2026-10-09T14:03:00Z\"\n}\n";
+        size_t pre = (size_t)(strstr(GOLDEN, "  \"written\"") - GOLDEN);
+        memcpy(t, GOLDEN, pre);
+        strcpy(t + pre, hand);
+        CHECK_I(yrig_parse(&g_q, t, strlen(t), NULL, g_err, sizeof g_err), YRIG_OK);
+        CHECK_I(yrig_hash(&g_q, h2), YRIG_OK);
+        CHECK_S(h2, h1);
+    }
+    /* view alone, without display or roles */
+    {
+        static const char t[] = "{\"format\":\"ysp-rig 1\",\"rig\":\"r\",\"written\":\"2026-01-01T00:00:00Z\",\"roles\":{},"
+                                "\"view\":{\"distance_mm\":600,\"width_mm\":600,\"width_px\":2400}}";
+        CHECK_I(yrig_parse(&g_q, t, sizeof t - 1, NULL, g_err, sizeof g_err), YRIG_OK);
+        CHECK(!g_q.display.set && g_q.view.set && g_q.view.width_px == 2400);
+        CHECK(fabs(yrig_ppd(&g_q) - 4.0 * 600.0 * tan(3.14159265358979323846 / 180.0)) < 1e-12);
+    }
+    /* refusals, by field */
+    yrig_write(&g_p, g_buf, sizeof g_buf);
+    refuse_in(__LINE__, g_buf, "\"distance_mm\": 570,\n", "", YRIG_ERR_FORMAT, "view.distance_mm: is missing");
+    refuse_in(__LINE__, g_buf, "    \"width_mm\": 518.4,\n", "", YRIG_ERR_FORMAT, "view.width_mm: is missing");
+    refuse_in(__LINE__, g_buf, ",\n    \"width_px\": 1920", "", YRIG_ERR_FORMAT, "view.width_px: is missing");
+    refuse_in(__LINE__, g_buf, "\"distance_mm\": 570", "\"distance_mm\": 0", YRIG_ERR_FORMAT, "view.distance_mm: 0 is out of range");
+    refuse_in(__LINE__, g_buf, "\"distance_mm\": 570", "\"distance_mm\": -570", YRIG_ERR_FORMAT, "view.distance_mm: -570 is out of range");
+    refuse_in(__LINE__, g_buf, "\"distance_mm\": 570", "\"distance_mm\": 100000.5", YRIG_ERR_FORMAT,
+              "view.distance_mm: 100000.5 is out of range");
+    refuse_in(__LINE__, g_buf, "\"distance_mm\": 570", "\"distance_mm\": 100000", YRIG_OK, "");
+    refuse_in(__LINE__, g_buf, "\"distance_mm\": 570", "\"distance_mm\": \"570\"", YRIG_ERR_FORMAT, "view.distance_mm: must be a number (mm)");
+    refuse_in(__LINE__, g_buf, "\"width_mm\": 518.4", "\"width_mm\": 0", YRIG_ERR_FORMAT, "view.width_mm: 0 is out of range");
+    refuse_in(__LINE__, g_buf, "\"width_mm\": 518.4", "\"width_mm\": 1e400", YRIG_ERR_FORMAT, "view.width_mm");
+    refuse_in(__LINE__, g_buf, "\"width_mm\": 518.4", "\"width_mm\": null", YRIG_ERR_FORMAT, "view.width_mm: must be a number (mm)");
+    refuse_in(__LINE__, g_buf, "\"width_px\": 1920", "\"width_px\": 0", YRIG_ERR_FORMAT, "view.width_px: 0 is out of range");
+    refuse_in(__LINE__, g_buf, "\"width_px\": 1920", "\"width_px\": 100001", YRIG_ERR_FORMAT, "view.width_px: 100001 is out of range");
+    refuse_in(__LINE__, g_buf, "\"width_px\": 1920", "\"width_px\": 1920.5", YRIG_ERR_FORMAT, "view.width_px: must be an integer");
+    refuse_in(__LINE__, g_buf, "\"width_px\": 1920", "\"width_px\": 1920, \"height_px\": 1080", YRIG_ERR_FORMAT,
+              "view: unknown key \"height_px\"");
+    refuse_in(__LINE__, g_buf, "\"view\": {", "\"view\": [], \"v2\": {", YRIG_ERR_FORMAT, "unknown key \"v2\"");
+    refuse_in(__LINE__, g_buf, "  \"view\": {\n    \"distance_mm\": 570,\n    \"width_mm\": 518.4,\n    \"width_px\": 1920\n  },\n",
+              "  \"view\": 570,\n", YRIG_ERR_FORMAT, "view: must be an object");
+    /* a view in memory that the format cannot hold is not written or hashed */
+    g_q = g_p;
+    g_q.view.distance_mm = -1.0;
+    CHECK_I(yrig_hash(&g_q, h2), YRIG_ERR_FORMAT);
+    g_q.view.distance_mm = 570.0;
+    g_q.view.width_px = 0;
+    CHECK_I(yrig_hash(&g_q, h2), YRIG_ERR_FORMAT);
+    CHECK(yrig_ppd(&g_q) == 0.0);
+    g_q.view.width_px = 1920;
+    g_q.view.width_mm = HUGE_VAL - HUGE_VAL;   /* NaN */
+    CHECK_I(yrig_write(&g_q, g_buf, sizeof g_buf), 0);
+    CHECK_I(yrig_hash(&g_q, h2), YRIG_ERR_FORMAT);
+    CHECK(yrig_ppd(&g_q) == 0.0);
+    /* unset again: the v0.4.0 bytes */
+    g_p.view.set = false;
+    CHECK(yrig_ppd(&g_p) == 0.0);   /* the numbers are still there; unset is unset */
+    CHECK_I(yrig_hash(&g_p, h2), YRIG_OK);
+    CHECK_S(h2, h0);
+    printf("  viewing geometry (v0.5.0): %.5f px/deg\n", ppd);
+}
+
 int main(void) {
     printf("ysp_rig %s (ysp_json %s, ysp_device %s)\n", yrig_version(), yjs_version(), ydev_version());
     CHECK_S(yrig_version(), YRIG_VERSION_STRING);
@@ -1251,6 +1361,7 @@ int main(void) {
     check_lsl();
     check_v04();
     check_damage();
+    check_view();
     if (g_failures) {
         fprintf(stderr, "rigfile_test: %d of %d checks FAILED\n", g_failures, g_checks);
         return 1;

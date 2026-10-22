@@ -318,3 +318,70 @@ test = "rig"
 why = "out_latency's --store would take a bounds file's numbers as an output's latency."
 find = '''            if (want && k != want)'''
 replace = '''            if (0)'''
+
+# v0.5.0: the viewing geometry (check_view).
+
+[[mutant]]
+id = "rig-38"
+name = "view is an unknown key"
+test = "rig"
+why = "v0.5.0: a profile with the geometry would be refused, so no program gets degrees from it."
+find = '''    static const char* const keys[] = { "format", "rig", "written", "roles", "display", "view", NULL };'''
+replace = '''    static const char* const keys[] = { "format", "rig", "written", "roles", "display", NULL };'''
+
+[[mutant]]
+id = "rig-39"
+name = "view not read"
+test = "rig"
+why = "v0.5.0: the geometry would load as absent, and a deg definition would run on nominal numbers."
+find = '''    if (rc == YRIG_OK && (v = yjs_get(root, "view")) != NULL) rc = yrig__view(&r, v, &p->view);'''
+replace = '''    if (rc == YRIG_OK && (v = yjs_get(root, "view")) != NULL) rc = YRIG_OK;'''
+
+[[mutant]]
+id = "rig-40"
+name = "view not written"
+test = "rig"
+why = "v0.5.0: a profile saved by a tool would lose its geometry, and its hash would not cover it."
+find = '''    if (ok && p->view.set) {'''
+replace = '''    if (ok && p->view.set && 0) {'''
+
+[[mutant]]
+id = "rig-41"
+name = "a length of 0 mm"
+test = "rig"
+why = "v0.5.0: width_mm 0 divides by 0 in the pixels per degree."
+find = '''    if (!(*out > 0.0 && *out <= 100000.0)) return yrig__bad'''
+replace = '''    if (!(*out >= 0.0 && *out <= 100000.0)) return yrig__bad'''
+
+[[mutant]]
+id = "rig-42"
+name = "width_px 0"
+test = "rig"
+why = "v0.5.0: a pitch from 0 pixels is no pitch."
+find = '''&px, 1, 100000, true)'''
+replace = '''&px, 0, 100000, true)'''
+
+[[mutant]]
+id = "rig-43"
+name = "pixels per degree from the pitch upside down"
+test = "rig"
+why = "v0.5.0: mm per pixel where pixels per mm belongs gives every size in degrees wrong by the square of the pitch."
+find = '''    return (double)p->view.width_px / p->view.width_mm * p->view.distance_mm * tan('''
+replace = '''    return p->view.width_mm / (double)p->view.width_px * p->view.distance_mm * tan('''
+
+[[mutant]]
+id = "rig-44"
+name = "yrig_ppd() ignores set"
+test = "rig"
+why = "v0.5.0: a view a caller cleared would still give degrees."
+find = '''    if (!p || !p->view.set || !(p->view.width_mm > 0.0)'''
+replace = '''    if (!p || !(p->view.width_mm > 0.0)'''
+
+[[mutant]]
+id = "rig-45"
+name = "a parsed view not marked set"
+test = "rig"
+why = "v0.5.0: the geometry read from the file would be dropped on the next write and give no degrees."
+find = '''    w->width_px = (int32_t)px;
+    w->set = true;'''
+replace = '''    w->width_px = (int32_t)px;'''

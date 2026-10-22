@@ -920,6 +920,15 @@ jobs:
           # or an estimate is off (about 35 s).
           expect 0 "$bin/trial_2afc_adaptive" --sim --out "$RUNNER_TEMP/trial_2afc_adaptive.csv"
           expect 2 "$bin/trial_2afc_adaptive" --method bogus
+          # The same with a rig profile's view (ysp/rigfile.h v0.5.0): the sizes in deg and the
+          # profile's hash come from the profile; a named folder without one is an error.
+          mkdir -p "$RUNNER_TEMP/rig2afc"
+          printf '{"format": "ysp-rig 1", "rig": "ci", "roles": {}, "view": {"distance_mm": 570, "width_mm": 518.4, "width_px": 1920}, "written": "2026-10-21T00:00:00Z"}\n' > "$RUNNER_TEMP/rig2afc/profile.json"
+          expect 0 "$bin/trial_2afc_adaptive" --sim --rig-dir "$RUNNER_TEMP/rig2afc" --out "$RUNNER_TEMP/trial_2afc_rig.csv"
+          expect 0 grep -q "^view=rig profile ci: 570 mm away, 518.4 mm across 1920 px" "$RUNNER_TEMP/trial_2afc_rig.csv.meta"
+          expect 0 cmp "$RUNNER_TEMP/trial_2afc_adaptive.csv" "$RUNNER_TEMP/trial_2afc_rig.csv"
+          expect 1 "$bin/trial_2afc_adaptive" --sim --rig-dir "$RUNNER_TEMP/no-such-rig"
+          expect 2 "$bin/trial_2afc_adaptive" --no-rig --rig ci
           # PsychoPy's dots.py as a trial; 1 if a row is off or a replay from the steps file differs (about 15 s).
           expect 0 "$bin/trial_rdk" --sim --out "$RUNNER_TEMP/trial_rdk.csv" --steps "$RUNNER_TEMP/trial_rdk_steps.csv"
           # PsychoPy's movie demos: RT from a video frame's flip record, pause and seek by keys, the soundtrack on

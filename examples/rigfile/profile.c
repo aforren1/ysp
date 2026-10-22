@@ -18,6 +18,11 @@
  *       the keys of the serial ports. FAMILY lsl binds ROLE to a Lab
  *       Streaming Layer stream (ysp/net.h); net_stream_view --list gives
  *       the keys of the streams.
+ *   rigfile_profile --view DISTANCE_MM WIDTH_MM WIDTH_PX [--rig NAME | --file PATH] [--dir DIR]
+ *       Sets the viewing geometry (ysp/rigfile.h v0.5.0, VIEWING
+ *       GEOMETRY): the eye to the screen's center, the lit image's width,
+ *       and the pixels across it, from a tape or a ruler; writes the
+ *       profile and prints the pixels per degree.
  *   --dir DIR is a rig folder other than the user's (yrig_dir()).
  *
  * Exit code 0 when the profile is valid and every file it names checks; 3
@@ -44,7 +49,8 @@ static void usage(void) {
     fprintf(stderr, "usage: rigfile_profile [--rig NAME | --file PATH] [--dir DIR] [--canonical]\n"
                     "       rigfile_profile --list [--dir DIR]\n"
                     "       rigfile_profile --new RIGNAME [--rig NAME | --file PATH] [--dir DIR]\n"
-                    "       rigfile_profile --bind ROLE FAMILY KEY [--rig NAME | --file PATH] [--dir DIR]\n");
+                    "       rigfile_profile --bind ROLE FAMILY KEY [--rig NAME | --file PATH] [--dir DIR]\n"
+                    "       rigfile_profile --view DISTANCE_MM WIDTH_MM WIDTH_PX [--rig NAME | --file PATH] [--dir DIR]\n");
 }
 
 static int list(const char* dir) {
@@ -140,6 +146,9 @@ static int show(const yrig_profile* p, const char* path) {
             if (l->check != YRIG_CHECK_OK) bad = 1;
         }
     }
+    if (p->view.set)
+        printf("view: %g mm away, %g mm across %d px: %.4f px/deg\n", p->view.distance_mm, p->view.width_mm, (int)p->view.width_px,
+               yrig_ppd(p));
     for (i = 0; i < p->n_notes; i++) printf("note: %s\n", p->notes[i]);
     if (yrig_hash(p, hash) == YRIG_OK) printf("sha256 %s\n", hash);
     return bad ? 3 : 0;
@@ -151,6 +160,7 @@ int main(int argc, char** argv) {
     const char* dir_arg = NULL;
     const char* new_rig = NULL;
     const char* bind[3] = { NULL, NULL, NULL };
+    const char* view[3] = { NULL, NULL, NULL };
     int i, do_list = 0, canonical = 0, rc;
     char dir[600], path[700], err[512];
     for (i = 1; i < argc; i++) {
@@ -163,9 +173,14 @@ int main(int argc, char** argv) {
         else if (strcmp(a, "--canonical") == 0) canonical = 1;
         else if (strcmp(a, "--new") == 0 && v) { new_rig = v; i++; }
         else if (strcmp(a, "--bind") == 0 && i + 3 < argc) { bind[0] = argv[i + 1]; bind[1] = argv[i + 2]; bind[2] = argv[i + 3]; i += 3; }
+        else if (strcmp(a, "--view") == 0 && i + 3 < argc) { view[0] = argv[i + 1]; view[1] = argv[i + 2]; view[2] = argv[i + 3]; i += 3; }
         else { usage(); return 2; }
     }
-    if ((name && file) || (new_rig && bind[0]) || (do_list && (file || new_rig || bind[0]))) { usage(); return 2; }
+    if ((name && file) || (new_rig && (bind[0] || view[0])) || (bind[0] && view[0]) ||
+        (do_list && (file || new_rig || bind[0] || view[0]))) {
+        usage();
+        return 2;
+    }
     if (dir_arg) snprintf(dir, sizeof dir, "%s", dir_arg);
     else if (!file && yrig_dir(dir, sizeof dir) != YRIG_OK) {
         fprintf(stderr, "rigfile_profile: no rig folder: the config folder is missing, or another user can write it\n");
@@ -207,7 +222,22 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
-    if (new_rig || bind[0]) {
+    if (view[0]) {
+        /* the same ranges as the file's, so a typo is refused here, not at the next load */
+        char* e[3];
+        double d = strtod(view[0], &e[0]), w = strtod(view[1], &e[1]);
+        long px = strtol(view[2], &e[2], 10);
+        if (*e[0] || *e[1] || *e[2] || !(d > 0.0 && d <= 100000.0) || !(w > 0.0 && w <= 100000.0) || px < 1 || px > 100000) {
+            fprintf(stderr, "rigfile_profile: --view takes DISTANCE_MM and WIDTH_MM above 0 and at most 100000, "
+                            "and WIDTH_PX 1 to 100000\n");
+            return 2;
+        }
+        g_p.view.set = true;
+        g_p.view.distance_mm = d;
+        g_p.view.width_mm = w;
+        g_p.view.width_px = (int32_t)px;
+    }
+    if (new_rig || bind[0] || view[0]) {
         if (yrig_save_file(&g_p, path, err, sizeof err) != YRIG_OK) {
             fprintf(stderr, "rigfile_profile: %s\n", err);
             return 1;

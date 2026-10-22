@@ -37,6 +37,7 @@ typedef struct rigfile_api {
     bool (*open_device)(ydev_device*, const yrig_profile*, const char*, const ydev_desc*);
     yin_source (*source)(const yrig_profile*, const ydev_device*);
     yin_source (*source_role)(const yrig_profile*, const char*, yin_source);
+    double (*ppd)(const yrig_profile*);
 } rigfile_api;
 
 static const rigfile_api g_api = {
@@ -44,7 +45,7 @@ static const rigfile_api g_api = {
     yrig_parse, yrig_save, yrig_save_file, yrig_init, yrig_write, yrig_hash,
     yrig_find, yrig_add, yrig_remove, yrig_bind, yrig_store_loopback,
     yrig_read_latency, yrig_read_loopback, yrig_sha256, yrig_desc, yrig_open_device, yrig_source,
-    yrig_source_role
+    yrig_source_role, yrig_ppd
 };
 
 static yrig_profile g_prof;
@@ -59,6 +60,7 @@ int main(void) {
     int ok;
     if (g_api.parse(&g_prof, text, sizeof text - 1, NULL, err, sizeof err) != YRIG_OK) return 1;
     if (g_api.write(&g_prof, out, sizeof out) == 0 || g_api.hash(&g_prof, hash) != YRIG_OK) return 2;
+    if (g_api.ppd(&g_prof) != 0.0) return 6;   /* v0.5.0: no view, no degrees */
     {
         static const char bounds[] = "format ysp-in-bounds 1\nn 1\nlo_s -0.0001\nhi_s 0.0002\ndate 2026-10-13T00:00:00Z\n";
         yrig_loopback lb;
