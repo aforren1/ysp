@@ -741,8 +741,9 @@ is text, so all 64 bits read back; `ysp_trials('table', ...)` reads it as a
 string column. `seed` is a `uint64`, or a double that holds an integer
 below 2^53.
 The binding converts the values and the rules text to UTF-8, as it does a
-table. `var` returns a value through `mxCreateString`: a value that is not
-ASCII comes back intact in Octave (tested), but MATLAB was not tested.
+table. Text that is not ASCII (values, table levels, rules, error messages)
+comes back intact in Octave 10.1 and in MATLAB R2023a, also with MATLAB's
+`DefaultCharacterSet` set to windows-1252 (2026-10-22, Windows).
 
 **Constraints** come from module commands. Put them in `desc.constraints`
 as a struct array (`[c1 c2]`) or as a cell. A factor is a 1-based index, a

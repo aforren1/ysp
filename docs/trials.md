@@ -969,8 +969,9 @@ Checked on 2026-10-21 (Windows 11 with MSVC 19.44 and MinGW-w64 gcc
   seeds, replay by `restore`, a format-5 snapshot loaded in the middle of a
   session and refused under another seed, the `var` statement's round
   trip, `rate` `'display'` against the same fixed rate, and a 256-column
-  table (257 refused). It passes in Octave 10.1 on Windows; MATLAB did not
-  run it.
+  table (257 refused), and non-ASCII values, levels, rules and error
+  text in and out. It passes in Octave 10.1 and MATLAB R2023a (MSVC 2022)
+  on Windows.
 
 - Mutations: 21 new in `tests/mutate/trials.toml` (x-01 to x-21: the
   stream's key and outputs, the value mapping, the refusals, quoting, the

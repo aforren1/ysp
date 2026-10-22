@@ -656,8 +656,8 @@ Errors carry `ysp_color:arg`, `:refused`, `:format`, `:range`, `:handle`.
 `bindings/mex/test_mex_color.m` passes in MATLAB R2023a and Octave 10.1
 (Windows); CI runs it on Octave 7.3 and MATLAB. Its `michelson` checks
 (v0.4.0, the Python test's cases, and the codes against `output_code`;
-70 checks in all, 53 before) passed in Octave 10.1 on Windows on
-2026-10-22; MATLAB did not run them.
+70 checks in all, 53 before) passed in Octave 10.1 and MATLAB R2023a
+(MSVC 2022) on Windows on 2026-10-22.
 
 ### Against Psychtoolbox
 

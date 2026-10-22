@@ -755,16 +755,38 @@ function test_trials_v06()
     expect_error('ysp_trials:arg', @() ysp_trials('open', struct('n_conditions', 1, 'reps', 1, ...
         'vars', struct('name', 'side', 'values', {{'left', 2}}))));
     expect_error('ysp_trials:arg', @() ysp_trials('open', struct('n_conditions', 1, 'reps', 1, 'seed', -1)));
+    % non-ASCII text in and out: Octave's char arrays hold UTF-8 bytes,
+    % MATLAB's UTF-16 code units; the header holds UTF-8 either way
     if exist('OCTAVE_VERSION', 'builtin')
-        % Octave's char arrays hold UTF-8 bytes, the header's encoding
-        ete = char([195 169 116 195 169]);
-        h = ysp_trials('open', struct('n_conditions', 1, 'reps', 4, 'rng', 1, 'seed', 3, ...
-            'vars', ysp_trials('var_choice', 'v', {ete, 'b'})));
-        run_out(h);
-        got = arrayfun(@(i) ysp_trials('var', h, i, 'v'), 1:4, 'UniformOutput', false);
-        check(all(strcmp(got, ete) | strcmp(got, 'b')) && any(strcmp(got, ete)), 'a UTF-8 value round trip');
-        ysp_trials('close', h);
+        ete = char([195 169 116 195 169]);   % U+00E9 t U+00E9
+        snow = char([226 152 131]);          % U+2603, outside Latin-1
+    else
+        ete = char([233 116 233]);
+        snow = char(9731);
     end
+    h = ysp_trials('open', struct('n_conditions', 1, 'reps', 6, 'rng', 1, 'seed', 3, ...
+        'vars', ysp_trials('var_choice', 'v', {ete, snow})));
+    run_out(h);
+    got = arrayfun(@(i) ysp_trials('var', h, i, 'v'), 1:6, 'UniformOutput', false);
+    check(all(strcmp(got, ete) | strcmp(got, snow)) && any(strcmp(got, ete)) && any(strcmp(got, snow)), ...
+          'non-ASCII values round trip');
+    k = find(strcmp(got, snow), 1);
+    check(~isempty(strfind(ysp_trials('format_row', h, k), [',' snow ','])), 'non-ASCII value in the data line');
+    ysp_trials('close', h);
+    csv = sprintf('w,n\n%s,1\n%s,2\n', ete, snow);
+    tb = ysp_trials('table', csv);
+    check(strcmp(tb.levels{1}{1}, ete) && strcmp(tb.values{2, 1}, snow), 'non-ASCII table levels');
+    h = ysp_trials('open', struct('table', csv, 'reps', 1, 'rng', 1, ...
+        'rules', sprintf('order constrained\nfirst_not w=%s\n', ete)));
+    check(ysp_trials('condition_at', h, 1) == 2 && ends_with(ysp_trials('format_rules', h), ['first_not w=' ete char(10)]), ...
+          'non-ASCII level in rules text');
+    ysp_trials('close', h);
+    h = ysp_trials('open', struct('table', csv, 'reps', 1, 'rng', 1, 'order', 'constrained', ...
+        'constraints', ysp_trials('first_not', 'w', snow)));
+    check(ysp_trials('condition_at', h, 1) == 1, 'non-ASCII level in a constraint');
+    ysp_trials('close', h);
+    expect_error_msg('ysp_trials:arg', ['''' snow 'x'''], @() ysp_trials('open', struct('table', csv, ...
+        'reps', 1, 'rng', 1, 'order', 'constrained', 'constraints', ysp_trials('first_not', 'w', [snow 'x']))));
 
     % rate 'display': the same draws as the same fixed rate
     kw = struct('n_conditions', 2, 'reps', 10, 'order', 'random', 'rng', 6);
