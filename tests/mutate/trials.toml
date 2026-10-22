@@ -369,8 +369,8 @@ id = "j-12"
 name = "jitter snapshot of a v0.1 desc saved as format 1"
 test = "trials"
 why = "Format 4 marks the jitter sections; a v0.1 desc with jitters must not claim format 1."
-find = 'return t->n_jit > 0 ? YTR__SNAP_FORMAT4 : t->v2 ? YTR__SNAP_FORMAT2 : YTR__SNAP_FORMAT;'
-replace = 'return (t->n_jit > 0 && t->v2) ? YTR__SNAP_FORMAT4 : t->v2 ? YTR__SNAP_FORMAT2 : YTR__SNAP_FORMAT;'
+find = 'return t->v6 ? YTR__SNAP_FORMAT5 : t->n_jit > 0 ? YTR__SNAP_FORMAT4'
+replace = 'return t->v6 ? YTR__SNAP_FORMAT5 : (t->n_jit > 0 && t->v2) ? YTR__SNAP_FORMAT4'
 
 [[mutant]]
 id = "j-13"
@@ -386,8 +386,10 @@ id = "j-14"
 name = "duplicate jitter names accepted"
 test = "trials"
 why = "Two data-line columns of one name cannot be told apart."
-find = 'if (strcmp(t->jit[k].name, s->name) == 0)'
-replace = 'if (false)'
+find = '''        if (strcmp(t->jit[k].name, s->name) == 0)
+            return ytr__fail(t, "desc.jitters[%d] and [%d] are both named '%s'", k, j, s->name);'''
+replace = '''        if (false)
+            return ytr__fail(t, "desc.jitters[%d] and [%d] are both named '%s'", k, j, s->name);'''
 
 [[mutant]]
 id = "j-15"
@@ -579,8 +581,8 @@ id = "d-16"
 name = "duplicate names accepted"
 test = "trials"
 why = "ysp/table.h refuses a header with a name twice; a caller's 'outcome' would collide with the session's."
-find = '''            if (strcmp(names[i], names[j]) == 0)'''
-replace = '''            if (strcmp(names[i], names[j]) == 0 && i < 0)'''
+find = '''            if (strcmp(w->name[i], w->name[j]) == 0)'''
+replace = '''            if (strcmp(w->name[i], w->name[j]) == 0 && i < 0)'''
 
 [[mutant]]
 id = "d-17"
@@ -651,8 +653,8 @@ id = "d-24"
 name = "a TIME_NS column keeps _ns"
 test = "trials"
 why = "The file holds seconds; a column named rt_ns would tell an analyst the wrong unit."
-find = '''if (c->type == YTR_COL_TIME_NS && ytr__dname_ns(d->name, k)) {'''
-replace = '''if (c->type == YTR_COL_TIME_NS && ytr__dname_ns(d->name, k) && 0) {'''
+find = '''if (c->type == YTR_COL_TIME_NS && ytr__dname_ns(dn, k)) {'''
+replace = '''if (c->type == YTR_COL_TIME_NS && ytr__dname_ns(dn, k) && 0) {'''
 
 [[mutant]]
 id = "d-25"
@@ -669,8 +671,8 @@ id = "d-26"
 name = "a TIME_NS column without _s is written"
 test = "trials"
 why = "A column of seconds named rt reads as ms to a jsPsych habit, off by 1000 with nothing to flag it; open() must refuse it by name."
-find = '''if (c->type == YTR_COL_TIME_NS && !ytr__dname_s(d->name, strlen(d->name)))'''
-replace = '''if (c->type == YTR_COL_TIME_NS && !ytr__dname_s(d->name, strlen(d->name)) && 0)'''
+find = '''if (c->type == YTR_COL_TIME_NS && !ytr__dname_s(dn, strlen(dn)))'''
+replace = '''if (c->type == YTR_COL_TIME_NS && !ytr__dname_s(dn, strlen(dn)) && 0)'''
 
 [[mutant]]
 id = "d-27"
@@ -695,3 +697,184 @@ test = "trials"
 why = "The rule is the suffix; a name that is only the suffix still says seconds, and ytr__dname_ns turns _ns into it."
 find = '''return n >= 2u && s[n - 2u] == '_' && s[n - 1u] == 's';'''
 replace = '''return n >= 3u && s[n - 2u] == '_' && s[n - 1u] == 's';'''
+
+# --- v0.6: variables and their stream (G3), weight x reps (G4), the
+# display's rate (G11), 256 columns (G10) --------------------------------
+
+[[mutant]]
+id = "x-01"
+name = "stream without its key"
+test = "trials"
+why = "Without the key a trial's stream state is the session generator's own output when the caller seeds both with one number; the pinned values move."
+find = 'ytr__mix64((seed ^ YTR__STREAM_KEY) + '
+replace = 'ytr__mix64(seed + '
+
+[[mutant]]
+id = "x-02"
+name = "variable 0 takes the trial seed's output"
+test = "trials"
+why = "Output 0 is $trial_seed; a variable drawn from it would equal a stimulus generator's seed bits."
+find = 'uint64_t u53 = ytr__stream(t->desc.seed, i, 1 + j) >> 11;'
+replace = 'uint64_t u53 = ytr__stream(t->desc.seed, i, j) >> 11;'
+
+[[mutant]]
+id = "x-03"
+name = "value index by modulo"
+test = "trials"
+why = "u53 mod n is not the manual's floor(u53 n / 2^53); a binding that follows the manual draws other values."
+find = 'return (int)((u53 * (uint64_t)t->var[j].n_values) >> 53);'
+replace = 'return (int)(u53 % (uint64_t)t->var[j].n_values);'
+
+[[mutant]]
+id = "x-04"
+name = "a variable may share a jitter's name"
+test = "trials"
+why = "Two data-line columns of one name cannot be told apart, and the writer would refuse the session late."
+find = '''        if (strcmp(t->jit[k].name, s->name) == 0)
+            return ytr__fail(t, "desc.vars[%d] and desc.jitters[%d]'''
+replace = '''        if (false)
+            return ytr__fail(t, "desc.vars[%d] and desc.jitters[%d]'''
+
+[[mutant]]
+id = "x-05"
+name = "a value's UTF-8 not checked"
+test = "trials"
+why = "A value goes into the data line as written; bad UTF-8 there makes the file unreadable to ysp/table.h."
+find = 'm = ytr__u8((const unsigned char*)v + i, n - i);'
+replace = 'm = 1;'
+
+[[mutant]]
+id = "x-06"
+name = "a value written unquoted"
+test = "trials"
+why = "A value with a comma splits the data line's columns."
+find = 'ytr__csv_name(&s, ytr_var_text(t, i, f), f);'
+replace = 'ytr__cat(&s, "%s", ytr_var_text(t, i, f));'
+
+[[mutant]]
+id = "x-07"
+name = "the seed not in the snapshot"
+test = "trials"
+why = "A resume under another seed would draw other values and trial seeds for the rest of the session."
+find = 'ytr__put(w, d->seed, 8, "seed");'
+replace = '(void)0;'
+
+[[mutant]]
+id = "x-08"
+name = "a seed alone keeps format 4"
+test = "trials"
+why = "Trial seeds depend on desc.seed with no variable; the snapshot must check it."
+find = 't->v6 = d->n_vars > 0 || d->seed != 0;'
+replace = 't->v6 = d->n_vars > 0;'
+
+[[mutant]]
+id = "x-09"
+name = "weight not multiplied by reps"
+test = "trials"
+why = "G4: the Stroop program had to multiply in C; reps beside weight was silently ignored."
+find = '} else if (rl.weighted && d->reps > 1) {'
+replace = '} else if (rl.weighted && d->reps > 1 && 0) {'
+
+[[mutant]]
+id = "x-10"
+name = "reps after cond_reps accepted"
+test = "trials"
+why = "cond_reps is each row's whole count; a reps beside it would be ignored with no word."
+find = 'if (rl->first[YTR__O_CREPS] && !rl->weighted)'
+replace = 'if (0)'
+
+[[mutant]]
+id = "x-11"
+name = "cond_reps counts as weight"
+test = "trials"
+why = "Only weight is per repetition; cond_reps marked weighted would be multiplied or let reps pass."
+find = 'rl->weighted = w;'
+replace = 'rl->weighted = true;'
+
+[[mutant]]
+id = "x-12"
+name = "rate=display snaps to 60 Hz"
+test = "trials"
+why = "G11: the rate must be the caller's (the rig's refresh), not a guess."
+find = 'p.num = d->display_rate_num;'
+replace = 'p.num = 60;'
+
+[[mutant]]
+id = "x-13"
+name = "rate=display keeps rate_den 0"
+test = "trials"
+why = "den 0 means 1 everywhere a rate is given; left 0 the frame arithmetic divides by zero."
+find = 'p.den = d->display_rate_den ? d->display_rate_den : 1;'
+replace = 'p.den = d->display_rate_den;'
+
+[[mutant]]
+id = "x-14"
+name = "format_rules writes the drawn rate for display"
+test = "trials"
+why = "A logged session pasted onto another rig would keep this rig's refresh."
+find = '''if (q->display && sep == ' ') ytr__cat(s, "%crate=display", sep);'''
+replace = '''if (0) ytr__cat(s, "%crate=display", sep);'''
+
+[[mutant]]
+id = "x-15"
+name = "rate=display not read"
+test = "trials"
+why = "The rules text would refuse the form the experiment definition uses."
+find = 'if (ytr__rl_eq(v2, vn, a[na - 1].vq, "display")) {'
+replace = 'if (0) {'
+
+[[mutant]]
+id = "x-16"
+name = "one column past the writer's bound"
+test = "trials"
+why = "G10: the bound is ysp/table.h's; a 257th column would be written past the name array."
+find = '''            if (n_names >= YTR_DATA_MAX_COLS)
+                return ytr__dfail(w, "ytr_data_open: more than %d columns", YTR_DATA_MAX_COLS);
+            if (!ytr__dname_ok(nm, k))'''
+replace = '''            if (n_names > YTR_DATA_MAX_COLS)
+                return ytr__dfail(w, "ytr_data_open: more than %d columns", YTR_DATA_MAX_COLS);
+            if (!ytr__dname_ok(nm, k))'''
+
+[[mutant]]
+id = "x-17"
+name = "the header line from the row buffer"
+test = "trials"
+why = "G10: before v0.6 the header went through the 8 KB buffer; 256 long names must still all be written."
+find = '''    for (i = 0; i < n_names; i++) {
+        if (i > 0) ytr__dputc(w, ',');'''
+replace = '''    for (i = 0; i < n_names && i < 100; i++) {
+        if (i > 0) ytr__dputc(w, ',');'''
+
+# --- v0.6: the trial seed in the data line --------------------------------
+
+[[mutant]]
+id = "x-18"
+name = "no trial_seed in the data line"
+test = "trials"
+why = "A data file must give each trial's stimulus seed without the D8 hash re-run (the user, 2026-10-21)."
+find = 'if (t->v6) ytr__cat(&s, ",x%016llx", (unsigned long long)ytr_trial_seed(t, i));'
+replace = 'if (0) ytr__cat(&s, ",x%016llx", (unsigned long long)ytr_trial_seed(t, i));'
+
+[[mutant]]
+id = "x-19"
+name = "trial seed without leading zeros"
+test = "trials"
+why = "A fixed 16 digits keeps the column's width and shows the bits as they are; a shorter text of a seed below 2^60 differs from the manual's form."
+find = 'if (t->v6) ytr__cat(&s, ",x%016llx", (unsigned long long)ytr_trial_seed(t, i));'
+replace = 'if (t->v6) ytr__cat(&s, ",x%llx", (unsigned long long)ytr_trial_seed(t, i));'
+
+[[mutant]]
+id = "x-20"
+name = "trial seed as a decimal"
+test = "trials"
+why = "Twenty decimal digits: ysp/table.h refuses the cell and R's double rounds it."
+find = 'if (t->v6) ytr__cat(&s, ",x%016llx", (unsigned long long)ytr_trial_seed(t, i));'
+replace = 'if (t->v6) ytr__cat(&s, ",%llu", (unsigned long long)ytr_trial_seed(t, i));'
+
+[[mutant]]
+id = "x-21"
+name = "header without trial_seed"
+test = "trials"
+why = "The header and the rows would have different column counts."
+find = 'if (k == 0 && t->v6) return "trial_seed";'
+replace = 'if (0) return "trial_seed";'

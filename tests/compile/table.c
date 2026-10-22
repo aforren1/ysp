@@ -22,6 +22,9 @@ static const table_api g_table_api = {
     ytb_open_csv, ytb_open_csv_file, ytb_open_view, ytb_close, ytb_parse_number
 };
 
+/* v0.3.0: 256 columns, the bound a trial row needs (was 64). */
+typedef char ytb_check_columns[YTB_MAX_COLUMNS == 256 ? 1 : -1];
+
 int main(void) {
     static uint64_t arena[1024];
     ytb_table t, v;

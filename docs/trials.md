@@ -1,6 +1,11 @@
 # ysp/trials.h design
 
-Status: **v0.4.0, implemented, 2026-10-10.** v0.4.0 adds the data writer:
+Status: **v0.6.0, implemented, 2026-10-21.** v0.6.0 adds variables drawn
+per trial from the trial's own stream, `weight` times `reps` in the rules
+text, jitters snapped to the display's rate, and 256 columns (see "v0.6:
+variables, weight x reps, the display's rate, 256 columns"). v0.5 named
+every column of seconds with `_s`.
+v0.4.0 adds the data writer:
 one CSV row per trial with the session's columns and the caller's, read
 back as written by ysp/table.h (see "Save one row per trial", "Data file
 reference", "v0.4: the data writer" and "Verification and cost (v0.4)").
@@ -171,13 +176,47 @@ complete program that does it.
 For an experiment without `ytr_trials` (a staircase alone, for example),
 set `dd.trials` to NULL. The file then has your columns only.
 
+## Draw a side per trial
+
+This procedure draws a categorical value per trial (the side of a 2AFC
+target) that the data file logs and a resume gives back.
+`examples/response/trial_2afc_adaptive.c` does it.
+
+1. Give the session a variable and a seed. Set the seed before the
+   generator moves it:
+
+   ```c
+   static const char* const sides[] = { "left", "right" };
+   d.vars[0] = ytr_var_choice("side", sides, 2);
+   d.n_vars = 1;
+   d.seed = seed;
+   d.rng = ytr_splitmix;
+   d.rng_ctx = &seed;
+   ```
+
+   The rules text gives the same with `var side choice left right`.
+
+2. Read the value for each trial after `ytr_next()`:
+
+   ```c
+   int side = ytr_var(&t, ti.index, 0);   /* 0 left, 1 right */
+   ```
+
+3. Log `d.seed` with the session (the sidecar's `meta`). The data line
+   has a `side` column and a `trial_seed` column, and `ytr_restore()` or `ytr_open_saved()` gives
+   every value again.
+
+To snap a jitter to the display's frames, write `rate=display` in the
+rules text and set `d.display_rate_num` and `d.display_rate_den` from the
+screen's refresh after `ytr_rules()` and before `ytr_open()`.
+
 ## Data file reference
 
 The header's DATA FILE section is the full reference. A summary:
 
 | Item | Rule |
 |---|---|
-| Columns | The session's (`ytr_format_header()`'s names), then `desc.cols` in order. At most 64 in all. A name is `[A-Za-z_][A-Za-z0-9_]*`, at most 63 bytes, unique. |
+| Columns | The session's (`ytr_format_header()`'s names), then `desc.cols` in order. At most 256 in all (`YTR_DATA_MAX_COLS`, ysp/table.h's bound; 64 before v0.6). A name is `[A-Za-z_][A-Za-z0-9_]*`, at most 63 bytes, unique. |
 | Columns of seconds | The name ends in `_s` (v0.5). The open refuses, by name, a `YTR_COL_TIME_NS` column without `_s` or `_ns` and a session whose jitter's name does not end in `_s`. A `YTR_COL_DOUBLE` or text column of seconds is the caller's to name. |
 | `YTR_COL_INT`, `YTR_COL_INT64` | Decimal. `YTR_MISSING_INT` (`INT_MIN`) or `YTR_MISSING_I64` (`INT64_MIN`) gives an empty field. |
 | `YTR_COL_DOUBLE` | `decimals` 0: the fewest of 15 to 17 significant digits that read back as the same double. 1 to 17: that many fixed decimals. NaN and the infinities give an empty field. |
@@ -538,7 +577,7 @@ differs, so a snapshot cannot resume under a changed table or list.
 | A new subset per repetition | one handle per block does it |
 | Trees deeper than one group level, run-time nodes | experiment definition, above this header |
 | OpenSesame's table edits (slice, sort, roll) | the caller edits the table before open |
-| More than 32767 rows or 64 columns | ysp/table.h bounds; refused by name |
+| More than 32767 rows or 256 columns (64 before v0.6) | ysp/table.h bounds; refused by name |
 
 ### v0.2: bindings
 
@@ -795,6 +834,182 @@ Not done:
   `d-26` to `d-29` caught, 4 of 4, and `d-24` still caught. The examples
   that write through the data writer or by hand were renamed, and the
   CI `--sim` lists pass.
+
+## v0.6: variables, weight x reps, the display's rate, 256 columns
+
+v0.6.0 closes four gaps of the experiment definition
+([experiment_format.md](experiment_format.md) 1.4): G3, G4, G10 and G11.
+
+### Variables from the trial's own stream (G3)
+
+- Problem: the 2AFC program drew its side from a second generator of its
+  own. The side was not in the session's data line, `ytr_restore()` did
+  not give it back, and a draw from the session's generator between
+  next() and update() would have moved every later draw.
+- Options: (a) draw from the session's generator after the jitters, as
+  jitters do, and store the value per trial; (b) a stream per trial from
+  a seed and the trial index (the experiment definition's D8).
+- Decision: (b), as D8 decided. `desc.vars[]` of `ytr_var_choice(name,
+  values, n)`; `desc.seed`; `ytr_var()`, `ytr_var_text()`,
+  `ytr_var_index()`, `ytr_trial_seed()`; the rules statement `var NAME
+  choice V V ...`. Reasons: (a) moves every jitter and schedule draw of a
+  session when a variable is added, and stores 8 bytes per trial; (b)
+  takes nothing from the session's generator and stores nothing per
+  trial, since a value is a function of the seed and the trial index. A
+  re-queued copy is a new trial and draws new values; a track trial has
+  values like any other.
+- The hash (pinned; the header's VARIABLES section): trial i's stream is
+  splitmix64 from the state mix64((seed XOR K) + (i + 1) G), with G
+  0x9E3779B97F4A7C15 and K 0x6A09E667F3BCC909 (the first 64 bits of the
+  fraction of the square root of 2). Output 0 is the trial's seed, output
+  1 + j variable j, whose index is floor((output >> 11) n / 2^53), the
+  jitters' CHOICE mapping. K: a caller who seeds a splitmix64 session
+  generator and `desc.seed` with one number would otherwise get trial
+  streams whose states are that generator's outputs.
+- Output 0 for the trial seed and not a variable's output: a stimulus
+  generator seeded with `ytr_trial_seed()` and stepped as splitmix64
+  draws mix64(seed + G), which is not any variable's output, so a noise
+  field and a 2AFC side drawn for one trial are not the same bits.
+- Values are texts, 1 to 63 bytes of valid UTF-8, because the data line
+  writes them; the definition gives a number as its canonical text.
+- The data line has a `trial_seed` column whenever trial seeds are defined
+  (variables, or a nonzero seed), so a data file gives each trial's
+  stimulus seed with no re-run of the hash (the user, 2026-10-21). A desc
+  with neither has no column, so the pinned format lines do not move.
+  The spelling is `x` and 16 lowercase hex digits (`x00f3a9c4e2b7d158`),
+  chosen by measurement: ten seeds (0, 2^53 + 1, 2^63 - 1, 2^63, 2^64 - 1,
+  one of all decimal digits, and others) in a file each spelling, and a
+  one-row file of the all-digit seed, read with each tool's defaults
+  (pandas 3.0.6, R 4.6.1 `read.csv` on WSL2, ysp/table.h 0.3.0):
+
+  | Spelling | pandas | R `read.csv` | ysp/table.h |
+  |---|---|---|---|
+  | decimal | exact (uint64; int64 for one row) | numeric, rounded (81985529205302085 reads 81985529205302080) | refused: 20 significant digits |
+  | `0x` + 16 hex | exact (text) | numeric, rounded: R reads hex | exact (text) |
+  | 16 hex | exact (text); a one-row all-digit file reads as an integer and loses its leading zero | text; the one-row file reads as a number | text; the one-row file reads as a number |
+  | `x` + 16 hex | exact (text) | exact (text) | exact (text) |
+
+  `int(s[1:], 16)` (Python) or `strtoull(s + 1, NULL, 16)` (C) gives the
+  seed back; R holds it exactly only as text, since a double has 53 bits.
+- Snapshot format 5 for a desc with variables or a nonzero seed: format 4
+  plus the seed and the variables. A seed alone counts, because the trial
+  seeds depend on it.
+
+### `weight` is per repetition (G4)
+
+- Problem: `weight COLUMN` set `cond_reps` from the column, and `reps`
+  beside it was ignored with no message, so the Stroop program
+  multiplied the weight by `--reps` in C.
+- Decision: a weight is each row's count per repetition, as OpenSesame's
+  weight is per cycle, and `reps` (from the text or the desc) multiplies
+  it. `cond_reps N N ...` stays each row's whole count, and the text now
+  refuses `reps` beside it, the same silent loss. Breaking for a rules
+  text that gave `weight` and `reps`: it now has reps times the trials.
+  No logged session is affected: `ytr_format_rules()` writes `cond_reps`
+  with the products, never `weight`.
+
+### `rate=display` (G11)
+
+- Problem: the EEG example snaps its SOA to the rig's refresh. The rules
+  text could name a fixed rate only, so the player had to set `rate_num`
+  and `rate_den` after `ytr_rules()` with nothing in the text to say so.
+- Decision: `rate=display` is `YTR_RATE_DISPLAY` (-1) in `rate_num`;
+  open() takes `desc.display_rate_num / display_rate_den` and refuses,
+  naming the jitter, without it. From open() the jitter is one at that
+  rate: the same draws, data line and snapshot bytes as a fixed rate of
+  the same numbers, so a session resumes under either desc.
+  `ytr_format_rules()` writes `rate=display`, so a logged session pastes
+  onto another rig; `ytr_format_meta()` writes the rate drawn on.
+
+### 256 columns (G10)
+
+- Problem: a trial row of the definition (2.10) has seven columns per
+  recorded stimulus beside the others, so 64 columns (ysp/table.h's
+  bound, which the writer kept) is short. The session's header line was
+  also built in the 8 KB row buffer.
+- Options: remove the bound (column state from the caller, or in the
+  rules arena's way); raise it.
+- Decision: raise both to 256 (ysp/table.h 0.3.0, `YTR_DATA_MAX_COLS`).
+  A removed bound needs storage the caller gives per column, a second
+  API for a case no template reaches yet. The writer's names moved out of
+  the per-column struct, so a row's pass reads 40 bytes per column, not
+  112; the header line goes out in pieces after the file opens, so 256
+  names of 63 bytes (16 KB) do not hit the row buffer. `YTR_DATA_MAX_COLS`
+  may be defined lower to save 104 bytes a column.
+
+### Verification and cost (v0.6)
+
+Checked on 2026-10-21 (Windows 11 with MSVC 19.44 and MinGW-w64 gcc
+16.1, WSL2 gcc 11.4, emcc):
+
+- `tests/adapt/trials_test_vars.h`, part of `trials_test.c`: every value
+  and trial seed of a session against a second implementation of the
+  hash written from the manual, three outputs pinned by value; a session
+  with variables draws the same schedule, jitters and generator position
+  as without; 300,000 trials of the stream, values chi-square 4.01 on 2
+  df and pairs of two variables 4.77 on 5 df; `ytr_restore()` and save
+  and load (format 5) at every fifth cut give every data line again; a
+  desc with another seed, another value or fewer variables is refused by
+  name; 13 refusals at open; the rules statement and its round trip
+  through `ytr_format_rules()`, 8 messages; weight x reps against the C
+  product (the same schedule), in either order, from the desc's reps,
+  with `where`, and the two refusals; `rate=display` against
+  `rate=60000/1001` (the same draws and snapshot bytes), its refusals and
+  the call level's; the variables in a written file read back.
+- `tests/adapt/trials_test_data.h`: 256 columns of 63-byte names open,
+  write a row and read it back (the header is over 8 KB); 257 with a
+  session are refused; the session's columns plus the caller's up to 256
+  open.
+- The 600 v0.1.1 and 320 v0.2.0 pins, the jitter golden digests and the
+  v0.2 digest are unchanged.
+
+- Mutations: 21 new in `tests/mutate/trials.toml` (x-01 to x-21: the
+  stream's key and outputs, the value mapping, the refusals, quoting, the
+  seed in the snapshot and its format, weight x reps and its two
+  refusals, the display's rate and its rules text, the writer's bound and
+  its header line, the trial_seed column and its spelling), all killed;
+  99 of 99 in the file, MinGW gcc 16.1.
+  x-16 (one name past the bound) survived its first run: a session alone
+  could pass 256 names unchecked, so the test now opens a writer on a
+  247-column table. ysp/table.h: b-01 and b-02, 27 of 28 in the file, the
+  survivor the known equivalent n-08.
+- Fuzzing: `tests/fuzz/trials_fuzz.c` reads every variable and trial seed
+  and sets a display rate; two new seeds (`var`, `rate=display`, `weight`
+  with `reps`). MSVC 19.44 libFuzzer with ASan, 601 s from its 20 seeds:
+  3,205,678 inputs, 8260 coverage features, 1352 corpus files, no crash;
+  the corpus replayed on WSL2 gcc 11.4 under ASan and UBSan, no report.
+
+The data writer's cost (G10), `tests/compare/trials_data_cols.c` (a session of 18 columns:
+ten integers, four table texts, four jitters; then the caller's columns,
+cycling int, bool, time, shortest double, fixed double, string), 4000 rows
+of a FULL_RANDOM session, the same program built against the v0.5.1
+header (f2fb5f3) and this one. Iris Xe laptop, AC, measurement lock held,
+CPU load 0 % when it was taken (59 % at the end of the second round, from
+other workers' builds; the table gives the first round). Per row, median
+(p99):
+
+| Columns | Path | gcc 16.1 -O2, v0.5.1 | gcc, v0.6.0 | MSVC 19.44 /O2, v0.5.1 | MSVC, v0.6.0 |
+|---|---|---|---|---|---|
+| 26 | memory | 4.8 us (8.2) | 4.8 us (7.3) | 2.9 us (4.5) | 2.8 us (4.9) |
+| 64 | memory | 25.0 us (40.0) | 25.2 us (47.2) | 12.3 us (16.1) | 12.1 us (19.5) |
+| 256 | memory | refused | 116.8 us (225.0) | refused | 54.9 us (92.7) |
+| 26 | file, `YTR_FLUSH_ROW` | 21.4 us (63.7) | 19.2 us (49.9) | 15.1 us (35.2) | 16.7 us (42.9) |
+| 64 | file | 46.0 us (124.7) | 38.0 us (90.1) | 27.0 us (81.6) | 25.4 us (50.1) |
+| 256 | file | refused | 131.6 us (254.7) | refused | 77.3 us (199.6) |
+
+- Time: the same per row at 26 and 64 columns within the spread of the
+  second round (gcc 26 columns in memory: 5.6 and 5.2 us). 256 columns
+  cost 0.46 us (gcc) and 0.21 us (MSVC) per column in memory, about what
+  64 do: the cost is per column, between trials.
+- Allocations: none in `ytr_open()`, none in the 4000 writes, one at
+  `ytr_data_open()` (the C library's FILE), before and after. Counted on
+  WSL2 gcc 11.4 by replacing glibc's malloc, calloc and realloc, which the
+  C library's own calls go through.
+- Memory: `ytr_data` 18,760 to 38,224 bytes (x64): 104 bytes per column
+  of the bound, of which a row reads 40 (the names, 64 each, live apart;
+  v0.5.1 read 112 per column). `ytr_trials` 243,344 to 253,376 bytes
+  (variables 8 KB, the table's level pointers 1.5 KB); 251,960 under
+  emcc. `ytb_csv_desc` 1072 to 4144 bytes.
 
 ## Verification (v0.2)
 
