@@ -322,16 +322,16 @@ id = "lk-03"
 name = "practice not a boolean built-in"
 test = "derive"
 why = "$practice takes true and false; the Stroop banner maps both."
-find = '{ "practice", "warmup", "first_in_block", "after_break", "responded", "correct", NULL }'
-replace = '{ "warmup", "first_in_block", "after_break", "responded", "correct", NULL }'
+find = '{ "practice", "warmup", "after_break", "first_in_block", "responded", "correct", NULL }'
+replace = '{ "warmup", "after_break", "first_in_block", "responded", "correct", NULL }'
 
 [[mutant]]
 id = "lk-04"
 name = "a boolean built-in without false"
 test = "derive"
 why = "Both values of a boolean reach the map."
-find = 'if ((rc = lpush_level(lc, "false")) != 0 || (rc = lpush_level(lc, "true")) != 0) return rc;'
-replace = 'if ((rc = lpush_level(lc, "true")) != 0) return rc;'
+find = 'if ((rc = lpush_level(lc, "false")) != 0) return rc;'
+replace = 'if (0) return rc;'
 
 [[mutant]]
 id = "lk-05"
@@ -548,3 +548,133 @@ test = "derive"
 why = "The reverse check skips a lookup with unknown levels only."
 find = "if (!r->reached || r->unknown) continue;"
 replace = "if (!r->reached || !r->unknown) continue;"
+
+# --- which boolean values the leaf's rules can make -------------------------------
+
+[[mutant]]
+id = "lk-32"
+name = "the rules not read: every boolean both"
+test = "derive"
+why = "Without practice N, $practice is false on every trial; a key for true is one no level reaches."
+find = "if ((i >= 3 || lc->rt[i]) && (rc = lpush_level(lc, \"true\")) != 0) return rc;"
+replace = "if ((rc = lpush_level(lc, \"true\")) != 0) return rc;"
+
+[[mutant]]
+id = "lk-33"
+name = "first_in_block taken from the rules"
+test = "derive"
+why = "Only practice, warmup and after_break depend on the rules; first_in_block is true on every first trial."
+find = "if ((i >= 3 || lc->rt[i]) && (rc"
+replace = "if ((i >= 4 || lc->rt[i < 3 ? i : 2]) && (rc"
+
+[[mutant]]
+id = "lk-34"
+name = "the leaf's rules not computed"
+test = "derive"
+why = "A leaf with practice N makes $practice true."
+find = "            lrules(lc, node);\n"
+replace = "            lc->rt[0] = lc->rt[1] = lc->rt[2] = 0;\n"
+
+[[mutant]]
+id = "lk-35"
+name = "a count of 0 taken as trials"
+test = "derive"
+why = "practice 0 makes no practice trial."
+find = "if (c != 0) lc->rt[k] = 1;"
+replace = "lc->rt[k] = 1;"
+
+[[mutant]]
+id = "lk-36"
+name = "an unreadable count taken as 0"
+test = "derive"
+why = "Rules this cannot read keep both values, so no level is refused that the session could reach."
+find = "if (c != 0) lc->rt[k] = 1;"
+replace = "if (c > 0) lc->rt[k] = 1;"
+
+[[mutant]]
+id = "lk-37"
+name = "warmup read as practice"
+test = "derive"
+why = "Each verb sets its own flag."
+find = "int k = w[0][0] == 'p' ? 0 : w[0][0] == 'w' ? 1 : 2;"
+replace = "int k = w[0][0] == 'p' ? 0 : w[0][0] == 'w' ? 0 : 2;"
+
+[[mutant]]
+id = "lk-38"
+name = "block_size not a break"
+test = "derive"
+why = "Every block after the first starts with after_break."
+find = "if (!strcmp(w[0], \"practice\") || !strcmp(w[0], \"warmup\") || !strcmp(w[0], \"block_size\")) {"
+replace = "if (!strcmp(w[0], \"practice\") || !strcmp(w[0], \"warmup\")) {"
+
+[[mutant]]
+id = "lk-39"
+name = "alternating groups taken as blocks"
+test = "derive"
+why = "Only blocked groups are blocks; alternate interleaves them."
+find = "if (nw < 3 || strcmp(w[2], \"alternate\")) lc->rt[2] = 1;"
+replace = "lc->rt[2] = 1;"
+
+[[mutant]]
+id = "lk-40"
+name = "blocked groups not a break"
+test = "derive"
+why = "Each group of a blocked design is a block, with after_break on its first trial."
+find = "} else if (!strcmp(w[0], \"groups\")) {"
+replace = "} else if (0) {"
+
+[[mutant]]
+id = "lk-41"
+name = "comments read as rules"
+test = "derive"
+why = "A '#' outside quotes starts a comment, as in ytr_rules()."
+find = "if (!*p || *p == '\\n' || *p == '#') break;"
+replace = "if (!*p || *p == '\\n') break;"
+
+[[mutant]]
+id = "lk-42"
+name = "one line per element"
+test = "derive"
+why = "An element may hold several lines; ytr_rules() reads each."
+find = "*pp = *p ? p + 1 : p;"
+replace = "*pp = p + strlen(p);"
+
+[[mutant]]
+id = "lk-43"
+name = "a tab not a blank"
+test = "derive"
+why = "Words are separated by blanks, tabs included."
+find = "for (; *p && *p != ' ' && *p != '\\t' &&"
+replace = "for (; *p && *p != ' ' &&"
+
+[[mutant]]
+id = "lk-44"
+name = "a quoted token keeps its quotes"
+test = "derive"
+why = "\"practice\" is the word practice."
+find = "if (*p == '\"') {\n            for (p++;"
+replace = "if (0) {\n            for (p++;"
+
+[[mutant]]
+id = "lk-45"
+name = "rules that are not text taken as none"
+test = "derive"
+why = "Rules this cannot read keep both values."
+find = "if (r->u.items[i]->type != YJS_STRING) { lc->rt[0] = lc->rt[1] = lc->rt[2] = 1; return; }"
+replace = "if (r->u.items[i]->type != YJS_STRING) continue;"
+
+[[mutant]]
+id = "lk-46"
+name = "rules not an array taken as none"
+test = "derive"
+why = "Rules this cannot read keep both values."
+find = "if (r->type != YJS_ARRAY) { lc->rt[0] = lc->rt[1] = lc->rt[2] = 1; return; }"
+replace = "if (r->type != YJS_ARRAY) return;"
+
+[[mutant]]
+id = "lk-47"
+name = "the flags kept from the leaf before"
+test = "derive"
+why = "Each leaf has its own rules; a leaf without practice N makes $practice false only."
+find = "    lc->rt[0] = lc->rt[1] = lc->rt[2] = 0;\n    if (!r) return;"
+replace = "    if (!r) return;"

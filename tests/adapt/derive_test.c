@@ -423,7 +423,8 @@ static void test_lookups(void) {
         "  {\"key\": \"g\", \"name\": \"green\"}, {\"key\": \"b\", \"name\": \"blue\"}], \"key_answer\": \"$answer\"},\n"
         " \"after\": [{\"off\": \"word\"}, {\"if\": \"$practice\", \"steps\": [{\"on\": \"feedback\"}, {\"wait_s\": 0.6}, {\"off\": \"feedback\"}]}],\n"
         " \"columns\": {\"feedback\": {\"by\": \"$practice\", \"map\": {\"true\": \"$outcome\", \"false\": \"\"}}}}";
-    static const char stroop_node[] = "{\"name\": \"main\", \"timeline_variables\": \"stroop.pstb\", \"trial\": \"stroop\"}";
+    static const char stroop_node[] = "{\"name\": \"main\", \"timeline_variables\": \"stroop.pstb\", \"trial\": \"stroop\","
+                                      " \"rules\": [\"order constrained\", \"weight weight\", \"practice 4\"]}";
     char err[1024], buf[4096];
     int rc;
     make_table("stroop.pstb", "word,ink,congruent,answer,weight\nred,red,1,r,2\nred,green,0,g,1\nred,blue,0,b,1\ngreen,red,0,r,1\n"
@@ -485,6 +486,60 @@ static void test_lookups(void) {
 
     /* built-ins with levels the definition fixes */
     lk_refused("practice", LK_STIM("{\"by\": \"$practice\", \"map\": {\"true\": 1}}"), LK_T, LK_LEAF(""), "no key for \"false\"");
+    /* practice, warmup and after_break: true only when the leaf's rules
+     * make such trials; a key for a value they cannot make is a warning */
+#define LK_BOOL(var) LK_STIM("{\"by\": \"$" var "\", \"map\": {\"false\": 1}}")
+#define LK_BOTH(var) LK_STIM("{\"by\": \"$" var "\", \"map\": {\"false\": 1, \"true\": 2}}")
+#define LK_TRUE_UNREACHED(var) "stimulus 's': 'x': no level of '$" var "' reaches the map's key \"true\"; a typo, or a level the trials no longer have?"
+    lk_ok("practice without rules: false only", LK_BOOL("practice"), LK_T, LK_LEAF(""), "");
+    lk_ok("practice without a practice rule", LK_BOTH("practice"), LK_T, LK_LEAF(", \"rules\": [\"order random\", \"reps 3\"]"),
+          LK_TRUE_UNREACHED("practice"));
+    lk_refused("practice 4", LK_BOOL("practice"), LK_T, LK_LEAF(", \"rules\": [\"order random\", \"practice 4 from cue=valid\"]"),
+               "no key for \"true\", which '$practice' can take");
+    lk_ok("practice 4: both", LK_BOTH("practice"), LK_T, LK_LEAF(", \"rules\": [\"practice 4\"]"), "");
+    lk_ok("practice 0", LK_BOTH("practice"), LK_T, LK_LEAF(", \"rules\": [\"practice 00\"]"), LK_TRUE_UNREACHED("practice"));
+    lk_ok("practice in a comment", LK_BOTH("practice"), LK_T, LK_LEAF(", \"rules\": [\"# practice 4\", \"order random  # practice 4\"]"),
+          LK_TRUE_UNREACHED("practice"));
+    lk_refused("practice in the second line of an element", LK_BOOL("practice"), LK_T,
+               LK_LEAF(", \"rules\": [\"order random\\n  practice\\t2 # two\"]"), "no key for \"true\"");
+    lk_refused("practice quoted", LK_BOOL("practice"), LK_T, LK_LEAF(", \"rules\": [\"\\\"practice\\\" \\\"3\\\"\"]"), "no key for \"true\"");
+    lk_refused("practice unreadable: both", LK_BOOL("practice"), LK_T, LK_LEAF(", \"rules\": [\"practice many\"]"), "no key for \"true\"");
+    lk_refused("rules not text: both", LK_BOOL("practice"), LK_T, LK_LEAF(", \"rules\": [5]"), "no key for \"true\"");
+    lk_refused("rules not an array: both", LK_BOOL("after_break"), LK_T, LK_LEAF(", \"rules\": \"practice 2\""), "no key for \"true\"");
+    lk_ok("a container's rules are not the leaf's", LK_BOOL("practice"), LK_T,
+          "{\"name\": \"blk\", \"rules\": [\"practice 2\"], \"timeline\": [" LK_LEAF("") "]}", "");
+    lk_ok("warmup without a warmup rule", LK_BOTH("warmup"), LK_T, LK_LEAF(", \"rules\": [\"practice 2\", \"block_size 10\"]"),
+          LK_TRUE_UNREACHED("warmup"));
+    lk_refused("warmup 2", LK_BOOL("warmup"), LK_T, LK_LEAF(", \"rules\": [\"block_size 10\", \"warmup 2\"]"),
+               "no key for \"true\", which '$warmup' can take");
+    lk_ok("warmup 2: both", LK_BOTH("warmup"), LK_T, LK_LEAF(", \"rules\": [\"block_size 10\", \"warmup 2\"]"), "");
+    lk_ok("after_break without blocks", LK_BOTH("after_break"), LK_T, LK_LEAF(", \"rules\": [\"practice 2\", \"warmup 1\"]"),
+          LK_TRUE_UNREACHED("after_break"));
+    lk_refused("after_break with block_size", LK_BOOL("after_break"), LK_T, LK_LEAF(", \"rules\": [\"block_size 12\"]"),
+               "no key for \"true\", which '$after_break' can take");
+    lk_refused("after_break with blocked groups", LK_BOOL("after_break"), LK_T, LK_LEAF(", \"rules\": [\"groups cue blocked random\"]"),
+               "no key for \"true\"");
+    lk_ok("after_break with alternating groups", LK_BOTH("after_break"), LK_T, LK_LEAF(", \"rules\": [\"groups cue alternate\"]"),
+          LK_TRUE_UNREACHED("after_break"));
+    lk_ok("after_break with block_size 0", LK_BOTH("after_break"), LK_T, LK_LEAF(", \"rules\": [\"block_size 0\"]"),
+          LK_TRUE_UNREACHED("after_break"));
+    /* first_in_block, responded, correct: both, whatever the rules */
+    lk_refused("first_in_block without rules", LK_BOOL("first_in_block"), LK_T, LK_LEAF(""), "no key for \"true\"");
+    lk_refused("responded", LK_BOOL("responded"), LK_T, LK_LEAF(""), "no key for \"true\"");
+    lk_ok("first_in_block, responded, correct: both", LK_STIM("[{\"by\": \"$first_in_block\", \"map\": {\"false\": 1, \"true\": 2}}, "
+          "{\"by\": \"$responded\", \"map\": {\"false\": 1, \"true\": 2}}, {\"by\": \"$correct\", \"map\": {\"false\": 1, \"true\": 2}}]"),
+          LK_T, LK_LEAF(""), "");
+    /* each leaf its own rules: the union reaches both keys */
+    lk_ok("two leaves, practice in one", LK_BOTH("practice"), LK_T,
+          LK_LEAF(", \"rules\": [\"practice 3\"]") ", {\"name\": \"main2\", \"trial\": \"t\"}", "");
+    lk_ok("the next leaf without practice", "\"a\": {\"x\": {\"by\": \"$practice\", \"map\": {\"false\": 1, \"true\": 2}}},"
+          " \"b\": {\"x\": {\"by\": \"$practice\", \"map\": {\"false\": 1, \"true\": 2}}}",
+          "\"ta\": {\"record\": [\"a\"]}, \"tb\": {\"record\": [\"b\"]}",
+          "{\"name\": \"one\", \"trial\": \"ta\", \"rules\": [\"practice 3\"]}, {\"name\": \"two\", \"trial\": \"tb\"}",
+          "stimulus 'b': 'x': no level of '$practice' reaches the map's key \"true\"; a typo, or a level the trials no longer have?");
+#undef LK_BOOL
+#undef LK_BOTH
+#undef LK_TRUE_UNREACHED
     lk_refused("correct", LK_STIM("{\"by\": \"$correct\", \"map\": {\"false\": 1}}"), LK_T, LK_LEAF(""), "no key for \"true\"");
     lk_refused("outcome with a deadline", LK_STIM("{\"by\": \"$outcome\", \"map\": {\"correct\": 1, \"wrong\": 2}}"),
                "\"t\": {\"response\": {\"from\": \"s\", \"duration_s\": 1.5, \"choices\": [\"a\"]}}", LK_LEAF(""), "no key for \"timeout\"");
@@ -540,7 +595,7 @@ static void test_lookups(void) {
                "{\"name\": \"blk\", \"data\": {\"c\": {\"by\": \"$practice\", \"map\": {\"true\": 1}}}, \"timeline\": [" LK_LEAF("") "]}",
                "node 'blk': 'data.c': the lookup's map has no key for \"false\", which '$practice' can take in node 'blk/main'");
     lk_refused("a step's value", LK_STIM("0"), "\"t\": {\"events\": [{\"on\": \"s\"}, {\"set\": \"s\", \"props\": {\"x\": "
-                                               "{\"by\": \"$practice\", \"map\": {\"false\": 1}}}}]}", LK_LEAF(""),
+                                               "{\"by\": \"$first_in_block\", \"map\": {\"false\": 1}}}}]}", LK_LEAF(""),
                "template 't': 'events[1].props.x': the lookup's map has no key for \"true\"");
     lk_refused("a lookup in a map value", LK_STIM("{\"by\": \"$practice\", \"map\": {\"true\": 1, \"false\": {\"by\": \"$correct\", \"map\": "
                                                   "{\"true\": 2}}}}"), LK_T, LK_LEAF(""),

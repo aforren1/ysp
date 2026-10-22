@@ -496,6 +496,8 @@ typedef struct ypt__lc {
     ypt__ltab*       tab;  size_t ntab, ctab;
     const yjs_value* chain[66];  int depth;      /* the leaf's nodes, root first    */
     const char*      node_path;                  /* "a/b"                           */
+    int              rt[3];                      /* the leaf's rules can make practice,
+                                                    warmup, after_break true (lrules) */
     const yjs_value* tmpl;                       /* the leaf's template, or NULL    */
     const char**     tmp;  size_t ntmp, ctmp;    /* the levels of one "by"          */
     const char**     nm;   size_t nnm, cnm;      /* the stimuli a template names    */
@@ -708,17 +710,92 @@ static ytb_table* ltable(ypt__lc* lc, const char* name, const char* node) {
 
 static int lvalue(ypt__lc* lc, const yjs_value* v, int depth);
 
+/* The first three tokens of one line of rules text, as ytr_rules() splits
+ * it (trials.h GRAMMAR): blanks between words, '#' outside quotes starts
+ * a comment, "a b" is one token and "" in it a quote. A token longer than
+ * its slot is cut, which no verb or count this reads needs. Moves *pp past
+ * the line's LF. */
+static int lline(const char** pp, char w[3][24]) {
+    const char* p = *pp;
+    int nw = 0;
+    for (;;) {
+        size_t k = 0;
+        while (*p == ' ' || *p == '\t' || *p == '\r') p++;
+        if (!*p || *p == '\n' || *p == '#') break;
+        if (*p == '"') {
+            for (p++; *p && *p != '\n'; p++) {
+                if (*p == '"' && p[1] != '"') { p++; break; }
+                if (*p == '"') p++;
+                if (nw < 3 && k < 23) w[nw][k++] = *p;
+            }
+        } else {
+            for (; *p && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n' && *p != '#'; p++)
+                if (nw < 3 && k < 23) w[nw][k++] = *p;
+        }
+        if (nw < 3) w[nw][k] = 0;
+        nw++;
+    }
+    while (*p && *p != '\n') p++;
+    *pp = *p ? p + 1 : p;
+    return nw;
+}
+
+/* A count of the rules text: 1 above 0, 0 for 0, -1 when it is not one. */
+static int lcount(const char* t) {
+    int any = 0;
+    if (!*t) return -1;
+    for (; *t; t++) {
+        if (*t < '0' || *t > '9') return -1;
+        if (*t != '0') any = 1;
+    }
+    return any;
+}
+
+/* Whether the leaf's rules can make practice, warmup and after_break true
+ * (trials.h BLOCKS, BREAKS, PRACTICE, WARMUP): practice trials come from
+ * `practice N`, warmup trials from `warmup N`, and a block after the first
+ * (`block_size N`, or `groups COLUMN blocked`) starts with after_break.
+ * The rules are the leaf's own, since the leaf opens the ytr_trials. A
+ * value the rules cannot make is a key no level reaches; rules this
+ * cannot read keep both values. */
+static void lrules(ypt__lc* lc, const yjs_value* leaf) {
+    const yjs_value* r = yjs_get(leaf, "rules");
+    size_t i;
+    lc->rt[0] = lc->rt[1] = lc->rt[2] = 0;
+    if (!r) return;
+    if (r->type != YJS_ARRAY) { lc->rt[0] = lc->rt[1] = lc->rt[2] = 1; return; }
+    for (i = 0; i < r->n; i++) {
+        const char* p;
+        if (r->u.items[i]->type != YJS_STRING) { lc->rt[0] = lc->rt[1] = lc->rt[2] = 1; return; }
+        for (p = r->u.items[i]->u.s; *p;) {
+            char w[3][24];
+            int nw = lline(&p, w), c;
+            if (nw < 1) continue;
+            if (!strcmp(w[0], "practice") || !strcmp(w[0], "warmup") || !strcmp(w[0], "block_size")) {
+                int k = w[0][0] == 'p' ? 0 : w[0][0] == 'w' ? 1 : 2;
+                c = nw >= 2 ? lcount(w[1]) : -1;
+                if (c != 0) lc->rt[k] = 1;   /* above 0, or unreadable */
+            } else if (!strcmp(w[0], "groups")) {
+                if (nw < 3 || strcmp(w[2], "alternate")) lc->rt[2] = 1;   /* blocked, or unreadable */
+            }
+        }
+    }
+}
+
 /* The levels "$name" takes in the current leaf: 1 known (pushed), 0 not
  * known here, < 0 an error. */
 static int lvar(ypt__lc* lc, const char* name, int depth) {
-    static const char* const bools[] = { "practice", "warmup", "first_in_block", "after_break", "responded", "correct", NULL };
+    static const char* const bools[] = { "practice", "warmup", "after_break", "first_in_block", "responded", "correct", NULL };
     const yjs_value* resp = lc->tmpl ? yjs_get(lc->tmpl, "response") : NULL;
     int i, rc;
     if (YPT_DERIVE_DEPTH < depth) return 0;   /* a loop of vars: the loader's to refuse */
     if (resp && resp->type != YJS_OBJECT) resp = NULL;
     for (i = 0; bools[i]; i++)
         if (!strcmp(name, bools[i])) {
-            if ((rc = lpush_level(lc, "false")) != 0 || (rc = lpush_level(lc, "true")) != 0) return rc;
+            /* the first three are true only on trials the rules make;
+             * first_in_block, responded and correct can be either */
+            if ((rc = lpush_level(lc, "false")) != 0) return rc;
+            if ((i >= 3 || lc->rt[i]) && (rc = lpush_level(lc, "true")) != 0) return rc;
             return 1;
         }
     if (!strcmp(name, "outcome")) {
@@ -1008,6 +1085,7 @@ static int lleaves(ypt__lc* lc, const yjs_value* arr, const char* parent) {
             const yjs_value* t = lc->trials && lc->trials->type == YJS_OBJECT ? yjs_get(lc->trials, tr->u.s) : NULL;
             lc->tmpl = t && t->type == YJS_OBJECT ? t : NULL;
             lc->node_path = path;
+            lrules(lc, node);
             if ((rc = lleaf(lc)) != 0) return rc;
         }
         if ((rc = lleaves(lc, yjs_get(node, "timeline"), path)) != 0) return rc;

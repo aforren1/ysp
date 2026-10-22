@@ -79,7 +79,8 @@
  *   manifest is that of its canonical bytes too, and `ypak rebuild` checks
  *   a source so. Other experiment bytes are copied as before. A lookup
  *   whose map lacks a level its "by" can take (a table column's levels, a
- *   vars value or choice, a boolean built-in, outcome, response, method)
+ *   vars value or choice, a boolean built-in as far as the leaf's rules
+ *   can make it true, outcome, response, method)
  *   is refused, naming the place, the key and the levels; map keys that
  *   no level reaches are a warning (ypt_options.warn;
  *   ypt_check_lookups()). Every entry of the test corpus is
@@ -276,7 +277,8 @@ typedef void (*ypt_warn_fn)(void* ctx, const char* line);
  * nodes' vars and data against the levels its "by" can take in each leaf
  * node that reaches it (docs/experiment_format.md 2.2): a table column's
  * levels (a number as its canonical text), a vars value or each choice, a
- * boolean built-in ("false", "true"), outcome ("correct", "wrong", and
+ * boolean built-in ("false"; "true" too, except for practice, warmup and
+ * after_break when the leaf's rules make no such trial), outcome ("correct", "wrong", and
  * "timeout" when the response has a deadline), response (the choices'
  * keys), method (the tracks). A level without a key gives YPAK_ERR_FORMAT,
  * with err naming the stimulus, template or node, the key, the levels and
