@@ -329,3 +329,69 @@ why = "A claim held after a failure would silence every later message on the pac
 find = '    YPAK__UNCLAIM(p);'
 replace = ''
 
+# --- ypak_runs_key(): the block key the tool and the player share (v0.3.0) -------
+
+[[mutant]]
+id = "rk-01"
+name = "one separator for every field"
+test = "pack"
+why = "docs/pack.md 4.5 fixes '#' after the font; a web player builds the same bytes."
+find = "if (i < 8) buf[at++] = i == 0 ? '#' : '|';"
+replace = "if (i < 8) buf[at++] = '|';"
+
+[[mutant]]
+id = "rk-02"
+name = "numbers by printf"
+test = "pack"
+why = "%.17g spells 0.8 as 0.80000000000000004; the key takes the shortest round trip."
+find = "nn[k] = yjs_format_double(x[k], num[k], sizeof num[k]);"
+replace = "nn[k] = snprintf(num[k], sizeof num[k], \"%.17g\", x[k]);"
+
+[[mutant]]
+id = "rk-03"
+name = "any lang"
+test = "pack"
+why = "A '|' in lang would move every later field."
+find = "if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-')) return YPAK_ERR_ARG;"
+replace = "(void)c;"
+
+[[mutant]]
+id = "rk-04"
+name = "a font name with '#'"
+test = "pack"
+why = "'#' ends the font field."
+find = "|| strchr(st->font, '#') ||"
+replace = "||"
+
+[[mutant]]
+id = "rk-05"
+name = "a NUL in the text"
+test = "pack"
+why = "The key is a C string in the pool; a NUL would cut it."
+find = "if (n && memchr(text, 0, n)) return YPAK_ERR_ARG;"
+replace = ""
+
+[[mutant]]
+id = "rk-06"
+name = "the NUL written past cap"
+test = "pack"
+why = "With cap equal to the length the caller's buffer has no room for the NUL."
+find = "if (buf && total < cap) {"
+replace = "if (buf && total <= cap) {"
+
+[[mutant]]
+id = "rk-07"
+name = "align 3 read past the names"
+test = "pack"
+why = "An out-of-range align would read past the table of names."
+find = "st->align < 0 || st->align > 2"
+replace = "st->align < 0 || st->align > 3"
+
+[[mutant]]
+id = "rk-08"
+name = "a size of 0 taken"
+test = "pack"
+why = "Layout needs a size above 0."
+find = "!(x[0] > 0 && x[0] <= 1.7976931348623157e308)"
+replace = "!(x[0] >= 0 && x[0] <= 1.7976931348623157e308)"
+

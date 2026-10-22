@@ -25,6 +25,7 @@
 #endif
 #include "ysp/pack_tool.h"
 #include "ysp/pack.h"
+#include "ysp/json.h"
 #include "ysp/table.h"
 #include "ysp/gfx.h"
 #include "ysp/color.h"
@@ -98,32 +99,32 @@ static void copy_in(const char* rel) {
 static const uint32_t font_ranges[][2] = { { 0x21, 0x3f }, { 0x41, 0x5f }, { 0x61, 0x7e }, { 0x05b0, 0x05ea } };
 #define N_RANGES 4
 
-static void make_font(bb* out, int fs_type) {
+static void make_font_r(bb* out, int fs_type, const uint32_t (*rg)[2], uint32_t nr) {
     bb t[8];
     static const char* tags[8] = { "OS/2", "cmap", "glyf", "head", "hhea", "hmtx", "loca", "maxp" };
     uint32_t ng = 2, g, i, r, nt = fs_type >= 0 ? 8 : 7, first = fs_type >= 0 ? 0 : 1;
     size_t dir;
     memset(t, 0, sizeof t);
-    for (r = 0; r < N_RANGES; r++) ng += font_ranges[r][1] - font_ranges[r][0] + 1;
+    for (r = 0; r < nr; r++) ng += rg[r][1] - rg[r][0] + 1;
     for (i = 0; i < 78; i++) b8(&t[0], 0);
     if (fs_type >= 0) { t[0].d[8] = (uint8_t)(fs_type >> 8); t[0].d[9] = (uint8_t)fs_type; }
     {
         bb* c = &t[1];
-        uint32_t nseg = N_RANGES + 2, base = 2, sr = 1, es = 0;
+        uint32_t nseg = nr + 2, base = 2, sr = 1, es = 0;
         while (sr * 2 <= nseg) { sr *= 2; es++; }
         b16(c, 0); b16(c, 1); b16(c, 3); b16(c, 1); b32(c, 12);
         b16(c, 4); b16(c, 16 + 8 * nseg); b16(c, 0);
         b16(c, 2 * nseg); b16(c, 2 * sr); b16(c, es); b16(c, 2 * nseg - 2 * sr);
         b16(c, 0x20);
-        for (r = 0; r < N_RANGES; r++) b16(c, font_ranges[r][1]);
+        for (r = 0; r < nr; r++) b16(c, rg[r][1]);
         b16(c, 0xffff); b16(c, 0);
         b16(c, 0x20);
-        for (r = 0; r < N_RANGES; r++) b16(c, font_ranges[r][0]);
+        for (r = 0; r < nr; r++) b16(c, rg[r][0]);
         b16(c, 0xffff);
         b16(c, (1 - 0x20) & 0xffff);
-        for (r = 0; r < N_RANGES; r++) {
-            b16(c, (base - font_ranges[r][0]) & 0xffff);
-            base += font_ranges[r][1] - font_ranges[r][0] + 1;
+        for (r = 0; r < nr; r++) {
+            b16(c, (base - rg[r][0]) & 0xffff);
+            base += rg[r][1] - rg[r][0] + 1;
         }
         b16(c, 1);
         for (i = 0; i < nseg; i++) b16(c, 0);
@@ -171,6 +172,8 @@ static void make_font(bb* out, int fs_type) {
     for (i = 0; i < 8; i++) free(t[i].d);
     bpad4(out);
 }
+
+static void make_font(bb* out, int fs_type) { make_font_r(out, fs_type, font_ranges, N_RANGES); }
 
 /* --- WAV and PNG files ------------------------------------------------------- */
 
@@ -909,6 +912,10 @@ static void test_refusals(void) {
     expect_refusal("runs without set",
                    "{\"kind\": \"font\", \"source\": \"fonts/box.ttf\"}, {\"kind\": \"glyphruns\", \"name\": \"t.ysprun\", \"fonts\": [\"fonts/box.ttf\"], "
                    "\"blocks\": [{\"key\": \"a\", \"text\": \"hi\", \"size\": \"10\"}]}", "no curveset entry", 0);
+    expect_refusal("block without size",
+                   "{\"kind\": \"font\", \"source\": \"fonts/box.ttf\"}, {\"kind\": \"curveset\", \"from\": \"fonts/box.ttf\"}, {\"kind\": \"glyphruns\", "
+                   "\"name\": \"t.ysprun\", \"fonts\": [\"fonts/box.ttf\"], \"blocks\": [{\"key\": \"a\", \"text\": \"hi\"}]}",
+                   "block 0 needs 'key', 'text' and 'size'", 0);
     expect_refusal("missing glyph",
                    "{\"kind\": \"font\", \"source\": \"fonts/box.ttf\"}, {\"kind\": \"curveset\", \"from\": \"fonts/box.ttf\"}, {\"kind\": \"glyphruns\", "
                    "\"name\": \"t.ysprun\", \"fonts\": [\"fonts/box.ttf\"], \"blocks\": [{\"key\": \"a\", \"text\": \"mail@example\", \"size\": \"10\"}]}",
@@ -1238,6 +1245,481 @@ static void test_video(void) {
 #endif
 }
 
+/* --- glyph runs from the experiment's texts (gap G9) ----------------------------
+ * The Stroop example's pack source (examples/pack/stroop) with the box font
+ * standing in for Noto Sans: the test needs the texts' glyphs, not the
+ * design. Its description lists no glyph runs; the tool derives them. */
+
+#ifndef YPT_STROOP_DIR
+#define YPT_STROOP_DIR "examples/pack/stroop"
+#endif
+#define WS W "/stroop"
+
+static void put_text(const char* path, const char* text) { write_file(path, text, strlen(text)); }
+
+static int build_ws(const char* desc, const char* out, char* err, size_t cap) {
+    return ypt_build_text(desc, strlen(desc), WS, out, NULL, err, cap);
+}
+
+#ifndef YPT_NO_LAYOUT   /* the core tool refuses the runs before these are needed */
+static char* text_file(const char* path) {
+    size_t n;
+    uint8_t* d = read_all(path, &n);
+    if (d) d[n] = 0;
+    return (char*)d;
+}
+
+/* The bytes of one entry of a pack, malloc'd. */
+static uint8_t* entry_bytes(const char* pack, const char* name, size_t* n) {
+    ypak_pack p;
+    ypak_desc d;
+    ypak_entry e;
+    uint8_t* r = NULL;
+    memset(&d, 0, sizeof d);
+    d.path = pack;
+    if (!ypak_open(&p, &d)) return NULL;
+    if (ypak_find(&p, name, &e) == 0) {
+        const void* x = ypak_data(&p, &e);
+        r = (uint8_t*)malloc((size_t)e.size + 1);
+        if (r && x) { memcpy(r, x, (size_t)e.size); r[e.size] = 0; *n = (size_t)e.size; }
+        else { free(r); r = NULL; }
+    }
+    ypak_close(&p);
+    return r;
+}
+
+#define STROOP_DESC(extra) \
+    "{\"format\": \"ysp-pack-source\", \"version\": 1,\n" \
+    " \"experiment\": {\"entry\": \"experiment/stroop.json\", \"source\": \"stroop.json\", \"media_type\": \"application/vnd.ysp.experiment\"},\n" \
+    " \"resources\": [\n" \
+    "  {\"name\": \"stroop.pstb\", \"kind\": \"table\", \"source\": \"stroop.csv\"},\n" \
+    "  {\"kind\": \"font\", \"source\": \"fonts/NotoSans-Regular.ttf\", \"license\": \"OFL-1.1\"},\n" \
+    "  {\"kind\": \"curveset\", \"from\": \"fonts/NotoSans-Regular.ttf\", \"glyphs\": \"used\"}" extra "]}\n"
+
+/* A one-stimulus definition in WS/defs/NAME.json and a description for it. */
+static int build_def(const char* name, const char* text_stim, const char* extra_resources, const char* out, char* err, size_t cap) {
+    char path[256], def[2048], desc[2048];
+    snprintf(path, sizeof path, WS "/defs/%s.json", name);
+    snprintf(def, sizeof def,
+             "{\"format\": \"ysp-experiment\", \"version\": 1, \"stimuli\": {%s}, \"trials\": {\"t\": {}},\n"
+             " \"timeline\": [{\"name\": \"main\", \"timeline_variables\": \"stroop.pstb\", \"trial\": \"t\"}]}\n", text_stim);
+    put_text(path, def);
+    snprintf(desc, sizeof desc,
+             "{\"format\": \"ysp-pack-source\", \"version\": 1, \"experiment\": {\"entry\": \"exp/%s.json\", \"source\": \"defs/%s.json\"},\n"
+             " \"resources\": [{\"name\": \"stroop.pstb\", \"kind\": \"table\", \"source\": \"stroop.csv\"},\n"
+             "  {\"kind\": \"font\", \"source\": \"fonts/NotoSans-Regular.ttf\"}, {\"kind\": \"curveset\", \"from\": \"fonts/NotoSans-Regular.ttf\"}%s]}\n",
+             name, name, extra_resources);
+    return build_ws(desc, out, err, cap);
+}
+
+/* The box font's glyph of a printable ASCII character (make_font's cmap). */
+static int box_glyph(int c) {
+    int r, base = 2;
+    for (r = 0; r < N_RANGES; r++) {
+        if (c >= (int)font_ranges[r][0] && c <= (int)font_ranges[r][1]) return base + c - (int)font_ranges[r][0];
+        base += (int)(font_ranges[r][1] - font_ranges[r][0] + 1);
+    }
+    return c == ' ' ? 1 : 0;
+}
+#endif
+
+#ifndef YPT_NO_LAYOUT
+/* The key of a derived block for a stimulus of this font, size and width
+ * (the other keys at their defaults), from ysp/pack.h as the player builds
+ * it. Four buffers in turn, so a call can use a few at once. */
+static const char* skey(const char* font, double size, double width, const char* text) {
+    static char buf[4][512];
+    static int at;
+    ypak_text_style st;
+    char* b = buf[at++ & 3];
+    memset(&st, 0, sizeof st);
+    st.font = font;
+    st.size = size;
+    st.width = width;
+    if (ypak_runs_key(&st, text, strlen(text), b, sizeof buf[0]) < 0) b[0] = 0;
+    return b;
+}
+
+/* The player's side of the key: read the definition's text stimuli as a
+ * loader would (ysp/json.h, doubles), and for every block of the entry
+ * find the stimulus whose ypak_runs_key() of the block's text is the
+ * block's key. Returns the blocks matched; *n_blocks gets the count. */
+static int player_matches(const char* pack, const char* runs_name, const char* def_path, uint32_t* n_blocks) {
+    size_t n, dn;
+    uint8_t* x = entry_bytes(pack, runs_name, &n);
+    char* def = text_file(def_path);
+    yjs_arena a;
+    yjs_value* root = NULL;
+    yjs_error je;
+    ypak_runs r;
+    int matched = 0;
+    uint32_t i;
+    *n_blocks = 0;
+    yjs_arena_init_heap(&a, 0);
+    memset(&r, 0, sizeof r);
+    dn = def ? strlen(def) : 0;
+    if (x && def && yjs_parse(&a, def, dn, NULL, &root, &je) == YJS_OK && ypak_runs_view(x, (int64_t)n, &r, NULL, 0) == 0) {
+        const yjs_value* stim = yjs_get(root, "stimuli");
+        *n_blocks = r.n_blocks;
+        for (i = 0; i < r.n_blocks; i++) {
+            const char* key = ypak_runs_str(&r, r.blocks[i].key_off);
+            const char* text = ypak_runs_str(&r, r.blocks[i].text_off);
+            uint32_t k;
+            for (k = 0; stim && k < stim->n; k++) {
+                const yjs_value* o = stim->u.members[k].value;
+                const yjs_value* v;
+                ypak_text_style st;
+                char kb[1024];
+                const char* s;
+                if (!yjs_get(o, "kind") || strcmp(yjs_get(o, "kind")->u.s, "text")) continue;
+                memset(&st, 0, sizeof st);
+                st.font = yjs_get(o, "font")->u.s;
+                yjs_double(yjs_get(o, "size"), &st.size);
+                if ((v = yjs_get(o, "width")) != NULL) yjs_double(v, &st.width);
+                if ((v = yjs_get(o, "line_height")) != NULL) yjs_double(v, &st.line_height);
+                s = (v = yjs_get(o, "align")) != NULL ? v->u.s : "start";
+                st.align = !strcmp(s, "end") ? YPAK_ALIGN_END : !strcmp(s, "center") ? YPAK_ALIGN_CENTER : YPAK_ALIGN_START;
+                s = (v = yjs_get(o, "dir")) != NULL ? v->u.s : "auto";
+                st.dir = !strcmp(s, "ltr") ? YPAK_DIR_LTR : !strcmp(s, "rtl") ? YPAK_DIR_RTL : YPAK_DIR_AUTO;
+                st.lang = (v = yjs_get(o, "lang")) != NULL ? v->u.s : "";
+                if (ypak_runs_key(&st, text, strlen(text), kb, sizeof kb) > 0 && !strcmp(kb, key)) { matched++; break; }
+            }
+        }
+    }
+    yjs_arena_free(&a);
+    free(x);
+    free(def);
+    return matched;
+}
+
+#endif
+
+static void test_stroop_pack(void) {
+    static const char* const texts[9] = { "R red     G green     B blue", "Practice. Name the ink color, not the word.",
+                                          "Test. No feedback from here on.", "Correct", "Too slow", "Wrong", "BLUE", "GREEN", "RED" };
+    static const float sizes[9] = { 22, 30, 30, 32, 32, 32, 72, 72, 72 };
+    char err[1024];
+    int rc, i;
+    bb f;
+    MKDIR(WS); MKDIR(WS "/fonts"); MKDIR(WS "/defs");
+    {
+        static const char* const files[3] = { "stroop.json", "stroop.csv", "pack.json" };
+        for (i = 0; i < 3; i++) {
+            char a[1024], b2[256];
+            size_t n;
+            uint8_t* d;
+            snprintf(a, sizeof a, "%s/%s", YPT_STROOP_DIR, files[i]);
+            snprintf(b2, sizeof b2, WS "/%s", files[i]);
+            d = read_all(a, &n);
+            CHECK(d != NULL, "Stroop example file %s", a);
+            if (d) { write_file(b2, d, n); free(d); }
+        }
+    }
+    memset(&f, 0, sizeof f);
+    make_font(&f, -1);
+    write_file(WS "/fonts/NotoSans-Regular.ttf", f.d, f.n);
+    make_font(&f, 8);
+    write_file(WS "/fonts/other.ttf", f.d, f.n);
+    {
+        static const uint32_t at_only[2][2] = { { 0x40, 0x5a }, { 0x61, 0x7a } };   /* with '@', which the box font lacks */
+        make_font_r(&f, -1, at_only, 2);
+        write_file(WS "/fonts/at.ttf", f.d, f.n);
+    }
+    free(f.d);
+    rc = ypt_build(WS "/pack.json", WS "/stroop.ysppak", NULL, err, sizeof err);
+#ifdef YPT_NO_LAYOUT
+    CHECK(rc < 0 && strstr(err, "'experiment/stroop.ysprun': the experiment's texts need glyph runs, and glyph runs need the layout library"),
+          "the core tool refuses the Stroop pack by name: %s", err);
+    /* a definition without text stimuli still builds in the core tool */
+    put_text(WS "/defs/notext.json", "{\"format\": \"ysp-experiment\", \"version\": 1, \"stimuli\": {\"dot\": {\"kind\": \"shape\"}}}\n");
+    rc = build_ws("{\"format\": \"ysp-pack-source\", \"version\": 1, \"experiment\": {\"entry\": \"exp/notext.json\", \"source\": \"defs/notext.json\"},"
+                  " \"resources\": []}", WS "/notext.ysppak", err, sizeof err);
+    CHECK(rc == 0, "core tool, a definition without texts: %s", err);
+    (void)texts;
+    (void)sizes;
+    return;
+#else
+    CHECK(rc == 0, "the Stroop pack, its runs derived: %s", err);
+    if (rc) return;
+    {
+        ypak_pack p;
+        ypak_desc d;
+        ypak_entry e;
+        const void* x;
+        memset(&d, 0, sizeof d);
+        d.path = WS "/stroop.ysppak";
+        d.verify = YPAK_VERIFY_OPEN;
+        if (!ypak_open(&p, &d)) { CHECK(0, "Stroop pack opens: %s", ypak_error(&p)); return; }
+        if ((x = entry(&p, "experiment/stroop.ysprun", &e)) != NULL) {
+            ypak_runs r;
+            memset(&r, 0, sizeof r);
+            CHECK(e.kind == YPAK_KIND_GLYPHRUNS && ypak_runs_view(x, e.size, &r, err, sizeof err) == 0 && r.n_blocks == 9 && r.n_fonts == 1,
+                  "Stroop runs: %s (%u blocks)", err, r.n_blocks);
+            for (i = 0; i < 9 && r.n_blocks == 9; i++) {
+                const char* key = skey("fonts/NotoSans-Regular.ttf", sizes[i], 1000, texts[i]);
+                int k = ypak_runs_find(&r, key);
+                CHECK(k == i && !strcmp(ypak_runs_str(&r, r.blocks[k].text_off), texts[i]) && r.blocks[k].size == sizes[i] &&
+                      r.blocks[k].width == 1000.0f && r.blocks[k].n_items == (uint32_t)strlen(texts[i]) && r.blocks[k].n_lines >= 1,
+                      "Stroop block %s: index %d", key, k);
+            }
+            CHECK(!strcmp(ypak_runs_str(&r, r.fonts[0].cset_off), "fonts/NotoSans-Regular.yspcset") &&
+                  !strcmp(ypak_runs_str(&r, r.fonts[0].font_off), "fonts/NotoSans-Regular.ttf"), "Stroop runs name the font and its set");
+        }
+        /* "glyphs": "used" holds the glyphs of the derived texts and no other */
+        if ((x = entry(&p, "fonts/NotoSans-Regular.yspcset", &e)) != NULL) {
+            ypak_cset s;
+            if (ypak_cset_view(x, e.size, &s, err, sizeof err) == 0) {
+                /* glyph of a printable ASCII character in the box font */
+                int gz = box_glyph('z'), gR = box_glyph('R'), ga = box_glyph('a');
+                CHECK(!(s.flags & YPAK_CSET_ALL) && s.words[8 + gR] && s.words[8 + ga] && !s.words[8 + gz],
+                      "Stroop set: R and a present, z absent (%u %u %u)", s.words[8 + gR], s.words[8 + ga], s.words[8 + gz]);
+            } else CHECK(0, "Stroop cset view: %s", err);
+        }
+        ypak_close(&p);
+    }
+    {
+        size_t n;
+        uint8_t* m = entry_bytes(WS "/stroop.ysppak", "ysp/manifest.json", &n);
+        CHECK(m && strstr((char*)m, "\"experiment\": \"experiment/stroop.json\"") && strstr((char*)m, "\"stimuli\": [\"word\"]") &&
+              strstr((char*)m, "\"key\": \"fonts/NotoSans-Regular.ttf#0|72|1000|0|start|auto||RED\"") && strstr((char*)m, "\"derived\": ["),
+              "the manifest records the derived blocks and their experiment");
+        CHECK(m && strstr((char*)m, "\"from\": [\"fonts/NotoSans-Regular.ttf\", \"experiment/stroop.json\"]"),
+              "the runs' 'from': the font and the experiment (no table: the Stroop texts come from lookups)");
+        free(m);
+    }
+    {
+        uint32_t nb;
+        int m = player_matches(WS "/stroop.ysppak", "experiment/stroop.ysprun", WS "/stroop.json", &nb);
+        CHECK(nb == 9 && m == 9, "Stroop: the player's key, from the definition's values, matches every block (%d of %u)", m, nb);
+    }
+    /* deterministic: again, verified, rebuilt from the manifest */
+    CHECK(ypt_build(WS "/pack.json", WS "/stroop_again.ysppak", NULL, err, sizeof err) == 0 && same_file(WS "/stroop.ysppak", WS "/stroop_again.ysppak"),
+          "Stroop pack twice: same bytes (%s)", err);
+    CHECK(ypt_verify(WS "/stroop.ysppak", NULL, err, sizeof err) == 0, "Stroop pack verifies: %s", err);
+    rc = ypt_rebuild(WS "/stroop.ysppak", WS, WS "/stroop_rebuilt.ysppak", NULL, err, sizeof err);
+    CHECK(rc == 0 && same_file(WS "/stroop.ysppak", WS "/stroop_rebuilt.ysppak"), "Stroop rebuild: %s", err);
+    /* the resources in another order: the same pack */
+    put_text(WS "/pack_rev.json",
+             "{\"format\": \"ysp-pack-source\", \"version\": 1, \"resources\": [\n"
+             "  {\"kind\": \"curveset\", \"from\": \"fonts/NotoSans-Regular.ttf\", \"glyphs\": \"used\"},\n"
+             "  {\"kind\": \"font\", \"source\": \"fonts/NotoSans-Regular.ttf\", \"license\": \"OFL-1.1\"},\n"
+             "  {\"name\": \"stroop.pstb\", \"kind\": \"table\", \"source\": \"stroop.csv\"}],\n"
+             " \"experiment\": {\"media_type\": \"application/vnd.ysp.experiment\", \"source\": \"stroop.json\", \"entry\": \"experiment/stroop.json\"}}\n");
+    CHECK(ypt_build(WS "/pack_rev.json", WS "/stroop_rev.ysppak", NULL, err, sizeof err) == 0 && same_file(WS "/stroop.ysppak", WS "/stroop_rev.ysppak"),
+          "Stroop pack from a reordered description: same bytes (%s)", err);
+    /* the definition respelled (other whitespace, 72.0 for 72): the
+     * experiment entry differs, its glyph runs do not */
+    {
+        char* def = text_file(WS "/stroop.json");
+        char* at = def ? strstr(def, "\"size\": 72,") : NULL;
+        CHECK(at != NULL, "the Stroop definition has \"size\": 72,");
+        if (at) {
+            char* re = (char*)malloc(strlen(def) + 64);
+            char d2[2048];
+            size_t n1 = 0, n2 = 0;
+            uint8_t* r1;
+            uint8_t* r2;
+            const char* desc = STROOP_DESC("");
+            const char* src = strstr(desc, "\"source\": \"stroop.json\"");
+            sprintf(re, "\n  %.*s\"size\": 72.0,%s", (int)(at - def), def, at + 11);
+            put_text(WS "/stroop_respelled.json", re);
+            snprintf(d2, sizeof d2, "%.*s\"source\": \"stroop_respelled.json\"%s", (int)(src - desc), desc, src + 23);
+            rc = build_ws(d2, WS "/stroop_respelled.ysppak", err, sizeof err);
+            r1 = entry_bytes(WS "/stroop.ysppak", "experiment/stroop.ysprun", &n1);
+            r2 = entry_bytes(WS "/stroop_respelled.ysppak", "experiment/stroop.ysprun", &n2);
+            CHECK(rc == 0 && r1 && r2 && n1 == n2 && !memcmp(r1, r2, n1) && !same_file(WS "/stroop.ysppak", WS "/stroop_respelled.ysppak"),
+                  "a respelled definition gives the same glyph runs: %s", err);
+            free(r1); free(r2); free(re);
+        }
+        free(def);
+    }
+    /* union: a glyphruns resource of the experiment's runs name adds blocks
+     * and fallback fonts; a rebuild takes it back */
+    rc = build_ws(STROOP_DESC(",\n  {\"kind\": \"font\", \"source\": \"fonts/other.ttf\"}, {\"kind\": \"curveset\", \"from\": \"fonts/other.ttf\"},\n"
+                              "  {\"kind\": \"glyphruns\", \"name\": \"experiment/stroop.ysprun\", \"fonts\": [\"fonts/other.ttf\"],\n"
+                              "   \"blocks\": [{\"key\": \"pause\", \"text\": \"Take a break.\", \"size\": \"30\"}]}"),
+                  WS "/union.ysppak", err, sizeof err);
+    CHECK(rc == 0, "union with a listed block: %s", err);
+    if (rc == 0) {
+        size_t n;
+        uint8_t* x = entry_bytes(WS "/union.ysppak", "experiment/stroop.ysprun", &n);
+        ypak_runs r;
+        memset(&r, 0, sizeof r);
+        if (x && ypak_runs_view(x, (int64_t)n, &r, err, sizeof err) == 0) {
+            int kp = ypak_runs_find(&r, "pause"), kw = ypak_runs_find(&r, skey("fonts/NotoSans-Regular.ttf", 72, 1000, "RED"));
+            CHECK(r.n_blocks == 10 && r.n_fonts == 2 && kp >= 0 && kw >= 0, "union: %u blocks, %u fonts", r.n_blocks, r.n_fonts);
+            /* entry fonts: the listed one first, then the stimuli's; each
+             * block's runs name the font that shaped it */
+            CHECK(!strcmp(ypak_runs_str(&r, r.fonts[0].font_off), "fonts/other.ttf") &&
+                  !strcmp(ypak_runs_str(&r, r.fonts[1].font_off), "fonts/NotoSans-Regular.ttf"), "union: font order");
+            if (kp >= 0 && kw >= 0)
+                CHECK(r.runs[r.blocks[kp].run_first].font == 0 && r.runs[r.blocks[kw].run_first].font == 1,
+                      "union: the listed block in its font, the derived one in its stimulus's (%u, %u)", r.runs[r.blocks[kp].run_first].font,
+                      r.runs[r.blocks[kw].run_first].font);
+        } else CHECK(0, "union runs view: %s", err);
+        free(x);
+        rc = ypt_rebuild(WS "/union.ysppak", WS, WS "/union_rebuilt.ysppak", NULL, err, sizeof err);
+        CHECK(rc == 0 && same_file(WS "/union.ysppak", WS "/union_rebuilt.ysppak"), "union rebuild: %s", err);
+        {
+            uint32_t nb;
+            int m = player_matches(WS "/union.ysppak", "experiment/stroop.ysprun", WS "/stroop.json", &nb);
+            CHECK(nb == 10 && m == 9, "union: the player's key matches the 9 derived blocks (%d of %u)", m, nb);
+        }
+        /* the layout stamp names every font of the entry, in its order */
+        x = entry_bytes(WS "/union.ysppak", "ysp/manifest.json", &n);
+        {
+            char want[160], hx[65];
+            uint8_t sha[32];
+            size_t fn;
+            uint8_t* fb = read_all(WS "/fonts/NotoSans-Regular.ttf", &fn);
+            const char* a = x ? strstr((char*)x, " fonts=fonts/other.ttf#0=") : NULL;
+            const char* q = a ? strchr(a, '"') : NULL;
+            const char* b2;
+            int k;
+            if (fb) ypak_sha256(fb, fn, sha);
+            for (k = 0; k < 32; k++) snprintf(hx + 2 * k, 3, "%02x", sha[k]);
+            snprintf(want, sizeof want, ",fonts/NotoSans-Regular.ttf#0=%s", hx);
+            b2 = a ? strstr(a, want) : NULL;
+            CHECK(fb && a && q && b2 && b2 < q, "union: the stamp lists both fonts in the entry's order, each with its own SHA-256");
+            free(fb);
+        }
+        free(x);
+        /* the glyphs a derived text uses are marked in its own font's set */
+        x = entry_bytes(WS "/union.ysppak", "fonts/NotoSans-Regular.yspcset", &n);
+        {
+            ypak_cset s;
+            CHECK(x && ypak_cset_view(x, (int64_t)n, &s, err, sizeof err) == 0 && s.words[8 + box_glyph('R')] && s.words[8 + box_glyph('G')],
+                  "union: the Stroop words' glyphs are in the stimulus font's set");
+        }
+        free(x);
+    }
+    /* two stimuli in two fonts: each shaped in its own (one library each) */
+    rc = build_def("twofonts",
+                   "\"a\": {\"kind\": \"text\", \"font\": \"fonts/other.ttf\", \"size\": 20, \"text\": \"$word\"},"
+                   " \"b\": {\"kind\": \"text\", \"font\": \"fonts/NotoSans-Regular.ttf\", \"size\": 20, \"text\": \"$word\"}",
+                   ", {\"kind\": \"font\", \"source\": \"fonts/other.ttf\"}, {\"kind\": \"curveset\", \"from\": \"fonts/other.ttf\"}",
+                   WS "/twofonts.ysppak", err, sizeof err);
+    CHECK(rc == 0, "two fonts: %s", err);
+    if (rc == 0) {
+        size_t n;
+        uint8_t* x = entry_bytes(WS "/twofonts.ysppak", "exp/twofonts.ysprun", &n);
+        ypak_runs r;
+        memset(&r, 0, sizeof r);
+        if (x && ypak_runs_view(x, (int64_t)n, &r, err, sizeof err) == 0) {
+            static const char* const w[3] = { "blue", "green", "red" };
+            int k, ok = r.n_blocks == 6 && r.n_fonts == 2 && !strcmp(ypak_runs_str(&r, r.fonts[0].font_off), "fonts/NotoSans-Regular.ttf");
+            for (k = 0; ok && k < 3; k++) {
+                int ia = ypak_runs_find(&r, skey("fonts/other.ttf", 20, 0, w[k]));
+                int ib = ypak_runs_find(&r, skey("fonts/NotoSans-Regular.ttf", 20, 0, w[k]));
+                ok = ia >= 0 && ib >= 0 && r.runs[r.blocks[ia].run_first].font == 1 && r.runs[r.blocks[ib].run_first].font == 0;
+            }
+            CHECK(ok, "two fonts: the levels of $word per stimulus, each in its stimulus's font (%u blocks)", r.n_blocks);
+        } else CHECK(0, "two fonts runs view: %s", err);
+        free(x);
+        rc = ypt_rebuild(WS "/twofonts.ysppak", WS, WS "/twofonts_rebuilt.ysppak", NULL, err, sizeof err);
+        CHECK(rc == 0 && same_file(WS "/twofonts.ysppak", WS "/twofonts_rebuilt.ysppak"), "two fonts rebuild: %s", err);
+        {
+            uint32_t nb;
+            int m = player_matches(WS "/twofonts.ysppak", "exp/twofonts.ysprun", WS "/defs/twofonts.json", &nb);
+            CHECK(nb == 6 && m == 6, "two fonts: the player's key matches all %u blocks (%d)", nb, m);
+        }
+    }
+    /* two stimuli of one style that show one text share its block */
+    rc = build_def("shared",
+                   "\"a\": {\"kind\": \"text\", \"font\": \"fonts/NotoSans-Regular.ttf\", \"size\": 20, \"text\": \"$word\"},"
+                   " \"b\": {\"kind\": \"text\", \"font\": \"fonts/NotoSans-Regular.ttf\", \"size\": 20.0, \"x\": 9, \"text\": \"$word\"},"
+                   " \"c\": {\"kind\": \"text\", \"font\": \"fonts/NotoSans-Regular.ttf\", \"size\": 24, \"text\": \"red\"}", "",
+                   WS "/shared.ysppak", err, sizeof err);
+    CHECK(rc == 0, "shared style: %s", err);
+    if (rc == 0) {
+        uint32_t nb;
+        size_t n;
+        int m = player_matches(WS "/shared.ysppak", "exp/shared.ysprun", WS "/defs/shared.json", &nb);
+        uint8_t* x = entry_bytes(WS "/shared.ysppak", "ysp/manifest.json", &n);
+        CHECK(nb == 4 && m == 4, "shared style: 3 blocks for a and b, 1 for c, every key the player's (%u blocks, %d matched)", nb, m);
+        CHECK(x && strstr((char*)x, "\"stimuli\": [\"a\", \"b\"]") && strstr((char*)x, "\"stimuli\": [\"c\"]"),
+              "shared style: the record names both stimuli of a shared block");
+        free(x);
+        rc = ypt_rebuild(WS "/shared.ysppak", WS, WS "/shared_rebuilt.ysppak", NULL, err, sizeof err);
+        CHECK(rc == 0 && same_file(WS "/shared.ysppak", WS "/shared_rebuilt.ysppak"), "shared style rebuild: %s", err);
+    }
+    /* a fallback from the description's 'fonts': '@' from at.ttf after the
+     * stimulus's font, in one block of two runs */
+    rc = build_def("fallback", "\"s\": {\"kind\": \"text\", \"font\": \"fonts/NotoSans-Regular.ttf\", \"size\": 20, \"text\": \"mail@example\"}",
+                   ", {\"kind\": \"font\", \"source\": \"fonts/at.ttf\"}, {\"kind\": \"curveset\", \"from\": \"fonts/at.ttf\"},"
+                   " {\"kind\": \"glyphruns\", \"name\": \"exp/fallback.ysprun\", \"fonts\": [\"fonts/at.ttf\"]}",
+                   WS "/fallback.ysppak", err, sizeof err);
+    CHECK(rc == 0, "a fallback font for a derived text: %s", err);
+    if (rc == 0) {
+        size_t n;
+        uint8_t* x = entry_bytes(WS "/fallback.ysppak", "exp/fallback.ysprun", &n);
+        ypak_runs r;
+        memset(&r, 0, sizeof r);
+        if (x && ypak_runs_view(x, (int64_t)n, &r, err, sizeof err) == 0 && r.n_blocks == 1) {
+            /* the font of each character, by its cluster; Skribidi may keep
+             * the fallback after '@', so only 'm' and '@' are pinned */
+            int font_of[12], k2;
+            uint32_t k, i2;
+            const ypak_runs_block_rec* bk = &r.blocks[0];
+            for (k2 = 0; k2 < 12; k2++) font_of[k2] = -1;
+            for (k = 0; k < bk->n_runs; k++) {
+                const ypak_runs_run* ru = &r.runs[bk->run_first + k];
+                for (i2 = 0; i2 < ru->n; i2++) {
+                    uint32_t cl = r.clusters[bk->item_first + ru->first + i2];
+                    if (cl < 12) font_of[cl] = (int)ru->font;
+                }
+            }
+            CHECK(r.n_fonts == 2 && !strcmp(ypak_runs_str(&r, r.fonts[0].font_off), "fonts/at.ttf") && font_of[0] == 1 && font_of[4] == 0,
+                  "fallback: 'm' in the stimulus's font (%d), '@' in the listed fallback (%d)", font_of[0], font_of[4]);
+        } else CHECK(0, "fallback runs view: %s", err);
+        free(x);
+    }
+    /* refusals, each by its message; none may leave a pack (a file from
+     * an earlier run is removed first, so the last check sees this run) */
+    remove(WS "/x.ysppak");
+    {
+        char desc[4096], says[256];
+        const char* k = skey("fonts/NotoSans-Regular.ttf", 72, 1000, "RED");
+        snprintf(desc, sizeof desc, STROOP_DESC(",\n  {\"kind\": \"glyphruns\", \"name\": \"experiment/stroop.ysprun\", \"fonts\": [\"fonts/NotoSans-Regular.ttf\"],\n"
+                                                "   \"blocks\": [{\"key\": \"%s\", \"text\": \"Red\", \"size\": \"30\"}]}"), k);
+        snprintf(says, sizeof says, "key '%s' is a text of stimulus 'word', derived from the experiment", k);
+        CHECK(build_ws(desc, WS "/x.ysppak", err, sizeof err) < 0 && strstr(err, says), "a listed block with a derived key: %s", err);
+    }
+    CHECK(build_ws(STROOP_DESC(",\n  {\"kind\": \"glyphruns\", \"name\": \"experiment/stroop.ysprun\", \"blocks\": [{\"key\": \"p\", \"text\": \"P\", \"size\": \"30\"}]}"),
+                   WS "/x.ysppak", err, sizeof err) < 0 && strstr(err, "'fonts' lists 1 to 64 font entries"),
+          "listed blocks without listed fonts: %s", err);
+    CHECK(build_ws(STROOP_DESC(",\n  {\"kind\": \"file\", \"name\": \"experiment/stroop.ysprun\", \"source\": \"stroop.csv\"}"), WS "/x.ysppak", err,
+                   sizeof err) < 0 && strstr(err, "'experiment/stroop.ysprun': the experiment's glyph runs take this name; give the file another"),
+          "a resource on the runs' name: %s", err);
+    CHECK(build_ws(STROOP_DESC(",\n  {\"kind\": \"file\", \"name\": \"experiment/Stroop.ysprun\", \"source\": \"stroop.csv\"}"), WS "/x.ysppak", err,
+                   sizeof err) < 0 && strstr(err, "the experiment's glyph runs: the same name without regard to case"),
+          "a resource on the runs' name in another case: %s", err);
+    {
+        char desc[2048];
+        snprintf(desc, sizeof desc, "%s", STROOP_DESC(""));
+        *strstr(desc, ",\n  {\"kind\": \"curveset\"") = 0;
+        strcat(desc, "]}\n");
+        CHECK(build_ws(desc, WS "/x.ysppak", err, sizeof err) < 0 && strstr(err, "no curveset entry is made from 'fonts/NotoSans-Regular.ttf' face 0"),
+              "no curve set for the stimuli's font: %s", err);
+        *strstr(desc, ",\n  {\"kind\": \"font\"") = 0;
+        strcat(desc, "]}\n");
+        CHECK(build_ws(desc, WS "/x.ysppak", err, sizeof err) < 0 &&
+              strstr(err, "experiment 'experiment/stroop.json': stimulus 'keys': font 'fonts/NotoSans-Regular.ttf' is not a font entry"),
+              "no font entry for the stimuli's font: %s", err);
+    }
+    CHECK(build_def("builtin", "\"s\": {\"kind\": \"text\", \"font\": \"fonts/NotoSans-Regular.ttf\", \"size\": 20, \"text\": \"$trial_index\"}", "",
+                    WS "/x.ysppak", err, sizeof err) < 0 &&
+          strstr(err, "experiment 'exp/builtin.json': stimulus 's': '$trial_index' is a built-in variable"), "a built-in as text: %s", err);
+    CHECK(build_def("number_column", "\"s\": {\"kind\": \"text\", \"font\": \"fonts/NotoSans-Regular.ttf\", \"size\": 20, \"text\": \"$weight\"}", "",
+                    WS "/x.ysppak", err, sizeof err) < 0 && strstr(err, "'$weight' is a column of 'stroop.pstb' of type integer"),
+          "a number column as text: %s", err);
+    CHECK(build_def("missing", "\"s\": {\"kind\": \"text\", \"font\": \"fonts/NotoSans-Regular.ttf\", \"size\": 20, \"text\": \"mail@example\"}", "",
+                    WS "/x.ysppak", err, sizeof err) < 0 && strstr(err, "'exp/missing.ysprun' block 'fonts/NotoSans-Regular.ttf#0|20|0|0|start|auto||mail@example': 1 characters no font maps") &&
+          strstr(err, "a fallback in 'fonts'"), "a derived text the font lacks: %s", err);
+    CHECK(fopen(WS "/x.ysppak", "rb") == NULL, "a refused build left a file");
+#endif
+}
+
 /* The pack both builds make: the core and the full tool must give the same
  * bytes, which needs a manifest that names no layout library. */
 static void test_core_pack(void) {
@@ -1411,6 +1893,7 @@ int main(void) {
         }
     }
     test_core_pack();
+    test_stroop_pack();
     test_resample();
     test_ffmpeg_refusals();
     test_video();

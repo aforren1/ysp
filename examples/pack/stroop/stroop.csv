@@ -1,0 +1,10 @@
+word,ink,congruent,answer,weight
+red,red,1,r,2
+red,green,0,g,1
+red,blue,0,b,1
+green,red,0,r,1
+green,green,1,g,2
+green,blue,0,b,1
+blue,red,0,r,1
+blue,green,0,g,1
+blue,blue,1,b,2

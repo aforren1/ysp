@@ -365,8 +365,8 @@ jobs:
         run: |
           set -eu
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DYSP_BUILD_PACK=ON -DYSP_BUILD_EXAMPLES=OFF
-          cmake --build build --config Release --target ypak test_pack_tool test_pack_import
-          ctest --test-dir build -C Release -R "pack_tool|pack_import" --output-on-failure
+          cmake --build build --config Release --target ypak test_pack_tool test_pack_import test_pack_derive
+          ctest --test-dir build -C Release -R "pack_tool|pack_import|pack_derive" --output-on-failure
           if [ "$RUNNER_OS" = Windows ]; then bin=build/pack/Release; else bin=build/pack; fi
           "$bin/ypak" verify build/pack/pack_tool_work/corpus.ysppak
           "$bin/ypak" verify build/pack/pack_tool_work/core.ysppak
@@ -1032,8 +1032,8 @@ jobs:
         shell: bash
         run: |
           set -eu
-          cmake --build build --config Release --target test_pack_tool test_pack_import ypak trial_images
-          ctest --test-dir build -C Release -R "pack_tool|pack_import" --output-on-failure
+          cmake --build build --config Release --target test_pack_tool test_pack_import test_pack_derive ypak trial_images
+          ctest --test-dir build -C Release -R "pack_tool|pack_import|pack_derive" --output-on-failure
           if [ "$RUNNER_OS" = Windows ]; then bin=build/pack/Release; else bin=build/pack; fi
           "$bin/ypak" verify build/pack/pack_tool_work/corpus.ysppak
           "$bin/ypak" list build/pack/pack_tool_work/corpus.ysppak > /dev/null
@@ -1052,8 +1052,8 @@ jobs:
         run: |
           set -eu
           cmake -B build-core -DCMAKE_BUILD_TYPE=Release -DYSP_BUILD_PACK=ON -DYSP_BUILD_EXAMPLES=OFF
-          cmake --build build-core --config Release --target ypak test_pack_tool test_pack_import
-          ctest --test-dir build-core -C Release -R "pack_tool|pack_import" --output-on-failure
+          cmake --build build-core --config Release --target ypak test_pack_tool test_pack_import test_pack_derive
+          ctest --test-dir build-core -C Release -R "pack_tool|pack_import|pack_derive" --output-on-failure
           if [ "$RUNNER_OS" = Windows ]; then full=build/pack/Release core=build-core/pack/Release; else full=build/pack core=build-core/pack; fi
           cmp build/pack/pack_tool_work/core.ysppak build-core/pack/pack_tool_work/core.ysppak
           "$full/ypak" verify build-core/pack/pack_tool_work/corpus.ysppak

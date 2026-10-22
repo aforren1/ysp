@@ -429,6 +429,9 @@ typedef struct B {     /* a build */
     ypak_pack*  prior;      /* rebuild: the pack, for outputs of steps that  */
     jv*         prior_man;  /* cannot run again here, and its manifest       */
     FILE*       report;
+    E*          exp;        /* the experiment entry, or NULL                 */
+    ypt_texts   tx;         /* the texts its text stimuli can show           */
+    E*          runs;       /* the glyph runs that hold them, or NULL        */
 } B;
 
 static E* add_entry(B* b) {
@@ -2026,87 +2029,233 @@ static int build_frameseq(B* b, E* e) {
     return 0;
 }
 
+/* The texts of the experiment's text stimuli (docs/experiment_format.md
+ * D14, gap G9) go into one GLYPHRUNS entry named after the experiment
+ * entry: "experiment/main.json" gives "experiment/main.ysprun". The player
+ * finds it by that rule and a text by ypak_runs_key() of its style and text, so
+ * neither needs a list in the description. A glyph runs resource of that
+ * name adds its blocks and its fonts (fallbacks after each stimulus's font). */
+static const void* table_bytes(void* ctx, const char* name, size_t* n) {
+    E* t = find_entry((B*)ctx, name);
+    if (!t || t->kind != YPAK_KIND_TABLE || !t->data) return NULL;
+    *n = (size_t)t->size;
+    return t->data;
+}
+
+static int derive_runs(B* b) {
+    char msg[600], name[1100];
+    const char* dot;
+    const char* sl;
+    size_t stem;
+    E* e;
+    int i, rc;
+    if (!b->exp || !b->exp->data) return 0;
+    rc = ypt_derive_texts(b->exp->data, (size_t)b->exp->size, table_bytes, b, &b->tx, msg, sizeof msg);
+    if (rc) return cfail(b->c, rc, "experiment '%s': %s", b->exp->name, msg);
+    if (!b->tx.n_texts) return 0;
+    dot = strrchr(b->exp->name, '.');
+    sl = strrchr(b->exp->name, '/');
+    stem = dot && (!sl || dot > sl) ? (size_t)(dot - b->exp->name) : b->exp->nl;
+    snprintf(name, sizeof name, "%.*s.ysprun", (int)stem, b->exp->name);
+    e = find_entry(b, name);
+    if (e && e->kind != YPAK_KIND_GLYPHRUNS)
+        return cfail(b->c, YPAK_ERR_FORMAT, "'%s': the experiment's glyph runs take this name; give the %s another", name, ypak_kind_name(e->kind));
+    if (!e) {
+        if (!ypt_name_ok(name, strlen(name)))
+            return cfail(b->c, YPAK_ERR_FORMAT, "'%s', the experiment's glyph runs: not a portable entry name", name);
+        for (i = 0; i < b->n; i++)
+            if (!name_icmp(name, strlen(name), b->e[i]->name, b->e[i]->nl))
+                return cfail(b->c, YPAK_ERR_FORMAT, "'%s' and '%s', the experiment's glyph runs: the same name without regard to case",
+                             b->e[i]->name, name);
+        e = add_entry(b);
+        if (!e) return cfail(b->c, YPAK_ERR_NOMEM, "out of memory");
+        e->name = cdup(b->c, name, strlen(name));
+        e->nl = strlen(name);
+        e->kind = YPAK_KIND_GLYPHRUNS;
+    }
+    b->runs = e;
+    return 0;
+}
+
 #ifdef YPT_NO_LAYOUT
 /* The core tool: glyph runs need the layout stack (HarfBuzz and Skribidi,
  * about 8 MB of sources), which a pack of tables, sounds and images should
  * not have to build. Refused by name, so a rebuild says what to install. */
 static int build_glyphruns(B* b, E* e) {
-    return cfail(b->c, YPAK_ERR_FORMAT, "'%s': glyph runs need the layout library; this ypak was built without it "
-                 "(configure with -DYSP_BUILD_LAYOUT=ON)", e->name);
+    return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %sglyph runs need the layout library; this ypak was built without it "
+                 "(configure with -DYSP_BUILD_LAYOUT=ON)", e->name, e == b->runs ? "the experiment's texts need glyph runs, and " : "");
 }
 #else
-typedef struct blk { const char* key; jv* v; } blk;
+/* A block to lay out: from the description (derived 0) or from the
+ * experiment (derived 1, with its stimulus). Reals are decimal text. */
+typedef struct blk {
+    const char* key; const char* text; const char* size; const char* width; const char* lh; const char* color;
+    const char* dir; const char* align; const char* lang;
+    const char* stim; const char* font;
+    const ypt_text* t;   /* derived: the text, for its stimuli */
+    int lib, derived;
+} blk;
 static int blk_cmp(const void* a, const void* b2) {
     const blk* x = (const blk*)a;
     const blk* y = (const blk*)b2;
     return strcmp(x->key, y->key);
 }
 
+/* A layout library over a fallback list of the entry's fonts. */
+typedef struct runlib { int font[65]; int n; ylay_lib* L; } runlib;
+
+static int real_text(B* b, const E* e, const blk* k, const char* field, const char* s, double* out) {
+    if (ytb_parse_number(s, strlen(s), out) != YTB_NUM_OK)
+        return cfail(b->c, YPAK_ERR_FORMAT, "'%s' block '%s': '%s' is \"%s\", not a decimal number", e->name, k->key, field, s);
+    return 0;
+}
+
 static int build_glyphruns(B* b, E* e) {
     static const char* const keys[] = { "name", "kind", "license", "fonts", "blocks", NULL };
     static const char* const bkeys[] = { "key", "text", "size", "width", "line_height", "dir", "align", "lang", "color", NULL };
-    jv* fonts = jget(e->res, "fonts");
-    jv* blocks = jget(e->res, "blocks");
-    ylay_lib* L = NULL;
-    ylay_desc ld;
+    const ypt_texts* tx = e == b->runs ? &b->tx : NULL;
+    jv* fonts = e->res ? jget(e->res, "fonts") : NULL;
+    jv* blocks = e->res ? jget(e->res, "blocks") : NULL;
     ylay_block lb;
     E* fe[64];
     E* ce[64];
-    int ff[64], nf, i, rc = 0;
+    int ff[64], nf = 0, nh, nhb, nd, nb, i, rc = 0, nl = 0, L0 = -1;
+    runlib lib[65];
     blk* bl;
     sb pool, runs, items, clus, lines, brec;
     uint32_t n_runs = 0, n_items = 0, n_lines = 0;
-    char stamp[2048];
-    if (keys_ok(b->c, e->res, keys, e->name) || want_type(b->c, e->res, "fonts", J_ARR, e->name) ||
-        want_type(b->c, e->res, "blocks", J_ARR, e->name))
+    char stamp[8192];
+    if (e->res && (keys_ok(b->c, e->res, keys, e->name) || want_type(b->c, e->res, "fonts", J_ARR, e->name) ||
+                   want_type(b->c, e->res, "blocks", J_ARR, e->name)))
         return YPAK_ERR_FORMAT;
-    if (!fonts || !jn(fonts) || jn(fonts) > 64) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': 'fonts' lists 1 to 64 font entries", e->name);
-    if (!blocks || !jn(blocks)) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': 'blocks' is empty", e->name);
-    nf = jn(fonts);
+    nh = fonts ? jn(fonts) : 0;
+    nhb = blocks ? jn(blocks) : 0;
+    nd = tx ? tx->n_texts : 0;
+    /* derived texts need no list; listed blocks need listed fonts */
+    if (nh > 64 || ((nhb || !nd) && !nh)) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': 'fonts' lists 1 to 64 font entries", e->name);
+    if (!nd && !nhb) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': 'blocks' is empty", e->name);
     e->from = jnew(b->c, J_ARR);
-    for (i = 0; i < nf; i++) {
-        const jv* f = jat(fonts, i);
-        const char* fname = f->type == J_STR ? f->u.s : str_of(f, "font", NULL);
-        jv* fv = f->type == J_OBJ ? jget(f, "face") : NULL;
-        int face = fv && fv->type == J_INT ? (int)fv->i : 0, k;
-        if (!fname) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': a font is a name or {\"font\", \"face\"}", e->name);
-        fe[i] = find_entry(b, fname);
-        if (!fe[i] || fe[i]->kind != YPAK_KIND_FONT) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': '%s' is not a font entry of this pack", e->name, fname);
-        if (face < 0 || face >= fe[i]->faces) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': '%s' has no face %d", e->name, fname, face);
-        ff[i] = face;
-        ce[i] = NULL;
+    /* the entry's fonts: the description's in its order, then each derived
+     * stimulus's font that it lacks, by name */
+    for (i = 0; i < nh + nd; i++) {
+        const char* fname;
+        int face = 0, k;
+        if (i < nh) {
+            const jv* f = jat(fonts, i);
+            jv* fv = f->type == J_OBJ ? jget(f, "face") : NULL;
+            fname = f->type == J_STR ? f->u.s : str_of(f, "font", NULL);
+            face = fv && fv->type == J_INT ? (int)fv->i : 0;
+            if (!fname) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': a font is a name or {\"font\", \"face\"}", e->name);
+        } else {
+            const char* best = NULL;
+            /* the smallest derived font name not in the list yet */
+            for (k = 0; k < nd; k++) {
+                const char* fn = tx->texts[k].font;
+                int have = 0, j;
+                for (j = 0; j < nf; j++) if (ff[j] == 0 && !strcmp(fe[j]->name, fn)) have = 1;
+                if (!have && (!best || strcmp(fn, best) < 0)) best = fn;
+            }
+            if (!best) break;
+            fname = best;
+        }
+        if (nf == 64) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': more than 64 fonts", e->name);
+        fe[nf] = find_entry(b, fname);
+        if (!fe[nf] || fe[nf]->kind != YPAK_KIND_FONT) {
+            if (i >= nh) {
+                for (k = 0; k < nd && strcmp(tx->texts[k].font, fname); k++) {}
+                return cfail(b->c, YPAK_ERR_FORMAT, "experiment '%s': stimulus '%s': font '%s' is not a font entry of this pack", b->exp->name,
+                             tx->texts[k].stimulus, fname);
+            }
+            return cfail(b->c, YPAK_ERR_FORMAT, "'%s': '%s' is not a font entry of this pack", e->name, fname);
+        }
+        if (face < 0 || face >= fe[nf]->faces) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': '%s' has no face %d", e->name, fname, face);
+        ff[nf] = face;
+        ce[nf] = NULL;
         for (k = 0; k < b->n; k++) {
             E* q = b->e[k];
             jv* qf;
             if (q->kind != YPAK_KIND_CURVESET) continue;
             qf = jget(q->res, "face");
-            if (!strcmp(str_of(q->res, "from", ""), fname) && (qf && qf->type == J_INT ? (int)qf->i : 0) == face) { ce[i] = q; break; }
+            if (!strcmp(str_of(q->res, "from", ""), fname) && (qf && qf->type == J_INT ? (int)qf->i : 0) == face) { ce[nf] = q; break; }
         }
-        if (!ce[i]) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': no curveset entry is made from '%s' face %d; add one", e->name, fname, face);
+        if (!ce[nf]) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': no curveset entry is made from '%s' face %d; add one", e->name, fname, face);
         jpush(b->c, e->from, jstrz(b->c, fname));
+        nf++;
     }
-    memset(&ld, 0, sizeof ld);
-    ld.ol = &b->ol;
-    if (ylay_create(&L, &ld) < 0) return cfail(b->c, YPAK_ERR_NOMEM, "'%s': ylay_create failed", e->name);
-    for (i = 0; i < nf; i++)
-        if (ylay_add_font(L, fe[i]->data, (size_t)fe[i]->size, ff[i], fe[i]->name) < 0) {
-            rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s", e->name, ylay_error(L));
-            ylay_destroy(L);
-            return rc;
-        }
-    bl = (blk*)calloc_c(b->c, sizeof(blk) * (size_t)jn(blocks));
-    for (i = 0; bl && i < jn(blocks); i++) {
-        if (keys_ok(b->c, jat(blocks, i), bkeys, e->name) || !str_of(jat(blocks, i), "key", NULL) || !str_of(jat(blocks, i), "text", NULL)) {
-            ylay_destroy(L);
-            return cfail(b->c, YPAK_ERR_FORMAT, "'%s': block %d needs 'key' and 'text'", e->name, i);
-        }
-        bl[i].key = str_of(jat(blocks, i), "key", "");
-        bl[i].v = jat(blocks, i);
+    if (tx) {
+        jpush(b->c, e->from, jstrz(b->c, b->exp->name));
+        for (i = 0; i < tx->n_tables; i++) jpush(b->c, e->from, jstrz(b->c, tx->tables[i]));
     }
-    if (!bl) { ylay_destroy(L); return cfail(b->c, YPAK_ERR_NOMEM, "out of memory"); }
-    qsort(bl, (size_t)jn(blocks), sizeof(blk), blk_cmp);
-    for (i = 1; i < jn(blocks); i++)
-        if (!strcmp(bl[i].key, bl[i - 1].key)) { ylay_destroy(L); return cfail(b->c, YPAK_ERR_FORMAT, "'%s': key '%s' twice", e->name, bl[i].key); }
+    /* one library per fallback list: the description's list for its blocks;
+     * a stimulus's font, then the description's others, for derived ones */
+    nb = nhb + nd;
+    bl = (blk*)calloc_c(b->c, sizeof(blk) * (size_t)(nb ? nb : 1));
+    if (!bl) return cfail(b->c, YPAK_ERR_NOMEM, "out of memory");
+    for (i = 0; i < nhb; i++) {
+        const jv* v = jat(blocks, i);
+        if (keys_ok(b->c, v, bkeys, e->name)) return YPAK_ERR_FORMAT;
+        if (want_type(b->c, v, "size", J_STR, e->name) || want_type(b->c, v, "width", J_STR, e->name) ||
+            want_type(b->c, v, "line_height", J_STR, e->name) || want_type(b->c, v, "color", J_STR, e->name))
+            return YPAK_ERR_FORMAT;
+        if (!str_of(v, "key", NULL) || !str_of(v, "text", NULL) || !str_of(v, "size", NULL))
+            return cfail(b->c, YPAK_ERR_FORMAT, "'%s': block %d needs 'key', 'text' and 'size'", e->name, i);
+        bl[i].key = str_of(v, "key", ""); bl[i].text = str_of(v, "text", ""); bl[i].size = str_of(v, "size", "");
+        bl[i].width = str_of(v, "width", "0"); bl[i].lh = str_of(v, "line_height", "0"); bl[i].color = str_of(v, "color", "0");
+        bl[i].dir = str_of(v, "dir", "auto"); bl[i].align = str_of(v, "align", "start"); bl[i].lang = str_of(v, "lang", "");
+        bl[i].lib = 0;
+    }
+    for (i = 0; i < nd; i++) {
+        const ypt_text* t = &tx->texts[i];
+        blk* k = &bl[nhb + i];
+        k->key = t->key; k->text = t->text; k->size = t->size; k->width = t->width; k->lh = t->line_height; k->color = "0";
+        k->dir = t->dir; k->align = t->align; k->lang = t->lang; k->stim = t->stimulus; k->font = t->font; k->t = t; k->derived = 1;
+    }
+    memset(lib, 0, sizeof lib);
+    if (nhb) {
+        for (i = 0; i < nh; i++) lib[0].font[i] = i;
+        lib[0].n = nh;
+        nl = 1;
+        L0 = 0;
+    }
+    for (i = nhb; i < nb; i++) {
+        int j, f = -1, li;
+        for (j = nh; j < nf; j++) if (!strcmp(fe[j]->name, bl[i].font)) f = j;
+        for (j = 0; f < 0 && j < nh; j++) if (ff[j] == 0 && !strcmp(fe[j]->name, bl[i].font)) f = j;
+        for (li = 0; li < nl; li++) if (li != L0 && lib[li].font[0] == f) break;
+        if (li == nl) {
+            lib[nl].font[lib[nl].n++] = f;
+            for (j = 0; j < nh; j++) if (j != f) lib[nl].font[lib[nl].n++] = j;
+            nl++;
+        }
+        bl[i].lib = li;
+    }
+    for (i = 0; i < nl; i++) {
+        ylay_desc ld;
+        int j;
+        memset(&ld, 0, sizeof ld);
+        ld.ol = &b->ol;
+        if (ylay_create(&lib[i].L, &ld) < 0) { rc = cfail(b->c, YPAK_ERR_NOMEM, "'%s': ylay_create failed", e->name); break; }
+        for (j = 0; rc == 0 && j < lib[i].n; j++) {
+            int f = lib[i].font[j];
+            if (ylay_add_font(lib[i].L, fe[f]->data, (size_t)fe[f]->size, ff[f], fe[f]->name) < 0)
+                rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s", e->name, ylay_error(lib[i].L));
+        }
+    }
+    if (rc == 0) {
+        qsort(bl, (size_t)nb, sizeof(blk), blk_cmp);
+        for (i = 1; rc == 0 && i < nb; i++)
+            if (!strcmp(bl[i].key, bl[i - 1].key)) {
+                const blk* d = bl[i].derived ? &bl[i] : &bl[i - 1];
+                if (d->derived && !(bl[i].derived && bl[i - 1].derived))
+                    rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s': key '%s' is a text of stimulus '%s', derived from the experiment; give the "
+                               "hand-listed block another key", e->name, bl[i].key, d->stim);
+                else rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s': key '%s' twice", e->name, bl[i].key);
+            }
+    }
+    if (rc) {
+        for (i = 0; i < nl; i++) if (lib[i].L) ylay_destroy(lib[i].L);
+        return rc;
+    }
     memset(&pool, 0, sizeof pool); memset(&runs, 0, sizeof runs); memset(&items, 0, sizeof items);
     memset(&clus, 0, sizeof clus); memset(&lines, 0, sizeof lines); memset(&brec, 0, sizeof brec);
     sb_put(&pool, "", 0);
@@ -2122,25 +2271,31 @@ static int build_glyphruns(B* b, E* e) {
         sb_put(&brec, fr, (size_t)16 * (size_t)nf);   /* parked in brec's head; moved below */
     }
     memset(&lb, 0, sizeof lb);
-    for (i = 0; rc == 0 && i < jn(blocks); i++) {
-        const jv* v = bl[i].v;
+    for (i = 0; rc == 0 && i < nb; i++) {
+        const blk* v = &bl[i];
+        const runlib* rl = &lib[v->lib];
+        ylay_lib* L = rl->L;
         ylay_style s;
         double size, width, lh, color;
-        const char* dir = str_of(v, "dir", "auto");
-        const char* align = str_of(v, "align", "start");
-        const char* lang = str_of(v, "lang", "");
-        const char* text = str_of(v, "text", "");
+        const char* dir = v->dir;
+        const char* align = v->align;
+        const char* lang = v->lang;
+        const char* text = v->text;
         uint8_t r[96];
         uint32_t k;
         memset(&s, 0, sizeof s);
-        if (real_of(b->c, v, "size", NULL, &size, e->name) || real_of(b->c, v, "width", "0", &width, e->name) ||
-            real_of(b->c, v, "line_height", "0", &lh, e->name) || real_of(b->c, v, "color", "0", &color, e->name)) { rc = YPAK_ERR_FORMAT; break; }
+        if (real_text(b, e, v, "size", v->size, &size) || real_text(b, e, v, "width", v->width, &width) ||
+            real_text(b, e, v, "line_height", v->lh, &lh) || real_text(b, e, v, "color", v->color, &color)) { rc = YPAK_ERR_FORMAT; break; }
         s.size = (float)size; s.width = (float)width; s.line_height = (float)lh; s.color = (float)color; s.lang = lang;
         s.dir = !strcmp(dir, "ltr") ? YLAY_DIR_LTR : !strcmp(dir, "rtl") ? YLAY_DIR_RTL : !strcmp(dir, "auto") ? YLAY_DIR_AUTO : -1;
         s.align = !strcmp(align, "start") ? YLAY_ALIGN_START : !strcmp(align, "end") ? YLAY_ALIGN_END : !strcmp(align, "center") ? YLAY_ALIGN_CENTER : -1;
         if (s.dir < 0 || s.align < 0) { rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s' block '%s': dir is auto, ltr or rtl; align is start, end or center", e->name, bl[i].key); break; }
         if (ylay_layout(L, text, -1, &s, NULL, 0, &lb) < 0) { rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s' block '%s': %s", e->name, bl[i].key, ylay_error(L)); break; }
-        if (lb.n_missing) { rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s' block '%s': %u characters no font maps; add a font that has them", e->name, bl[i].key, lb.n_missing); break; }
+        if (lb.n_missing) {
+            rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s' block '%s': %u characters no font maps; add a font that has them%s", e->name, bl[i].key,
+                       lb.n_missing, v->derived ? " (a fallback in 'fonts' of a glyphruns resource of this name)" : "");
+            break;
+        }
         memset(r, 0, sizeof r);
         w32(r, (uint32_t)pool.n); w32(r + 4, (uint32_t)strlen(bl[i].key)); sb_puts(&pool, bl[i].key); sb_put(&pool, "\0", 1);
         w32(r + 8, (uint32_t)pool.n); w32(r + 12, (uint32_t)strlen(text)); sb_puts(&pool, text); sb_put(&pool, "\0", 1);
@@ -2153,7 +2308,7 @@ static int build_glyphruns(B* b, E* e) {
         for (k = 0; k < lb.n_runs; k++) {
             uint8_t q[16];
             const ylay_run* ru = &lb.runs[k];
-            w32(q, (uint32_t)ru->font); memcpy(q + 4, &ru->size, 4); w32(q + 8, ru->first); w32(q + 12, ru->n);
+            w32(q, (uint32_t)rl->font[ru->font]); memcpy(q + 4, &ru->size, 4); w32(q + 8, ru->first); w32(q + 12, ru->n);
             sb_put(&runs, q, 16);
         }
         for (k = 0; k < lb.n_items; k++) {
@@ -2164,7 +2319,7 @@ static int build_glyphruns(B* b, E* e) {
             w32(cl, lb.cluster[k]);
             sb_put(&clus, cl, 4);
             for (rr = 0; rr < lb.n_runs; rr++)
-                if (k >= lb.runs[rr].first && k < lb.runs[rr].first + lb.runs[rr].n) fi = (uint32_t)lb.runs[rr].font;
+                if (k >= lb.runs[rr].first && k < lb.runs[rr].first + lb.runs[rr].n) fi = (uint32_t)rl->font[lb.runs[rr].font];
             if (fi < (uint32_t)nf) {
                 E* f = fe[fi];
                 int face = ff[fi];
@@ -2184,25 +2339,44 @@ static int build_glyphruns(B* b, E* e) {
         n_items += lb.n_items;
         n_lines += lb.n_lines;
     }
-    ylay_stamp(L, NULL, stamp, sizeof stamp);
+    /* ylay_stamp()'s line over the entry's fonts in entry order: the
+     * versions from one library, each font's hash from one that has it */
+    {
+        size_t at;
+        char* f;
+        ylay_stamp(lib[0].L, NULL, stamp, sizeof stamp);
+        f = strstr(stamp, " fonts=");
+        at = f ? (size_t)(f - stamp) + 7 : strlen(stamp);
+        for (i = 0; i < nf; i++) {
+            ylay_font_info fi;
+            int li, j, got = 0;
+            memset(&fi, 0, sizeof fi);
+            for (li = 0; li < nl && !got; li++)
+                for (j = 0; j < lib[li].n && !got; j++)
+                    if (lib[li].font[j] == i && ylay_font(lib[li].L, j, &fi) == 0) got = 1;
+            if (got && at < sizeof stamp)
+                at += (size_t)snprintf(stamp + at, sizeof stamp - at, "%s%s#%d=%s", i ? "," : "", fe[i]->name, ff[i], fi.sha256);
+        }
+        if (at >= sizeof stamp) rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s': the layout stamp of %d fonts is past %d bytes", e->name, nf, (int)sizeof stamp);
+    }
     ylay_block_free(&lb);
-    ylay_destroy(L);
+    for (i = 0; i < nl; i++) ylay_destroy(lib[i].L);
     if (rc == 0 && (pool.bad || runs.bad || items.bad || clus.bad || lines.bad || brec.bad)) rc = cfail(b->c, YPAK_ERR_NOMEM, "out of memory");
     if (rc == 0) {
 #define A16(x) (((x) + 15u) & ~(uint64_t)15u)
-        uint64_t fo = 112, bo = A16(fo + 16u * (uint64_t)nf), ro = A16(bo + 96u * (uint64_t)jn(blocks)), io = A16(ro + 16u * n_runs);
+        uint64_t fo = 112, bo = A16(fo + 16u * (uint64_t)nf), ro = A16(bo + 96u * (uint64_t)nb), io = A16(ro + 16u * n_runs);
         uint64_t co = A16(io + 32u * (uint64_t)n_items), lo = A16(co + 4u * (uint64_t)n_items), po = A16(lo + 32u * (uint64_t)n_lines);
         uint64_t total = A16(po + pool.n);
         uint8_t* d = (uint8_t*)calloc_c(b->c, (size_t)total + 16);
         if (!d) rc = cfail(b->c, YPAK_ERR_NOMEM, "out of memory");
         else {
             memcpy(d, "YSPGRUN1", 8);
-            w32(d + 8, 1); w32(d + 12, 112); w32(d + 16, (uint32_t)nf); w32(d + 20, (uint32_t)jn(blocks)); w32(d + 24, n_runs);
+            w32(d + 8, 1); w32(d + 12, 112); w32(d + 16, (uint32_t)nf); w32(d + 20, (uint32_t)nb); w32(d + 24, n_runs);
             w32(d + 28, n_items); w32(d + 32, n_lines);
             w64(d + 40, fo); w64(d + 48, bo); w64(d + 56, ro); w64(d + 64, io); w64(d + 72, co); w64(d + 80, lo); w64(d + 88, po);
             w64(d + 96, pool.n);
             memcpy(d + fo, brec.p, (size_t)16 * (size_t)nf);
-            memcpy(d + bo, brec.p + 16 * nf, (size_t)96 * (size_t)jn(blocks));
+            memcpy(d + bo, brec.p + 16 * nf, (size_t)96 * (size_t)nb);
             if (runs.n) memcpy(d + ro, runs.p, runs.n);
             if (items.n) memcpy(d + io, items.p, items.n);
             if (clus.n) memcpy(d + co, clus.p, clus.n);
@@ -2216,25 +2390,40 @@ static int build_glyphruns(B* b, E* e) {
     free(pool.p); free(runs.p); free(items.p); free(clus.p); free(lines.p); free(brec.p);
     if (rc) return rc;
     {
-        /* the stamp without the font list: the fonts are this entry's 'from' */
+        /* the description's blocks, which a rebuild takes back; the
+         * derived ones are a record: a rebuild derives them again */
         jv* bs = jnew(b->c, J_ARR);
+        jv* ds = jnew(b->c, J_ARR);
         e->deriv = deriv_new(b, "layout", stamp);
-        jset(b->c, e->deriv, "fonts", jcopy(b->c, fonts));
-        for (i = 0; i < jn(blocks); i++) {
-            const jv* v = bl[i].v;
+        jset(b->c, e->deriv, "fonts", fonts ? jcopy(b->c, fonts) : jnew(b->c, J_ARR));
+        for (i = 0; i < nb; i++) {
+            const blk* v = &bl[i];
             jv* o = jnew(b->c, J_OBJ);
-            jset(b->c, o, "key", jstrz(b->c, bl[i].key));
-            jset(b->c, o, "text", jstrz(b->c, str_of(v, "text", "")));
-            jset(b->c, o, "size", jstrz(b->c, str_of(v, "size", "")));
-            jset(b->c, o, "width", jstrz(b->c, str_of(v, "width", "0")));
-            jset(b->c, o, "line_height", jstrz(b->c, str_of(v, "line_height", "0")));
-            jset(b->c, o, "dir", jstrz(b->c, str_of(v, "dir", "auto")));
-            jset(b->c, o, "align", jstrz(b->c, str_of(v, "align", "start")));
-            jset(b->c, o, "lang", jstrz(b->c, str_of(v, "lang", "")));
-            jset(b->c, o, "color", jstrz(b->c, str_of(v, "color", "0")));
-            jpush(b->c, bs, o);
+            jset(b->c, o, "key", jstrz(b->c, v->key));
+            jset(b->c, o, "text", jstrz(b->c, v->text));
+            jset(b->c, o, "size", jstrz(b->c, v->size));
+            jset(b->c, o, "width", jstrz(b->c, v->width));
+            jset(b->c, o, "line_height", jstrz(b->c, v->lh));
+            jset(b->c, o, "dir", jstrz(b->c, v->dir));
+            jset(b->c, o, "align", jstrz(b->c, v->align));
+            jset(b->c, o, "lang", jstrz(b->c, v->lang));
+            if (v->derived) {
+                jv* sa = jnew(b->c, J_ARR);
+                int q;
+                for (q = 0; q < v->t->n_stimuli; q++) jpush(b->c, sa, jstrz(b->c, v->t->stimuli[q]));
+                jset(b->c, o, "stimuli", sa);
+                jset(b->c, o, "font", jstrz(b->c, v->font));
+                jpush(b->c, ds, o);
+            } else {
+                jset(b->c, o, "color", jstrz(b->c, v->color));
+                jpush(b->c, bs, o);
+            }
         }
         jset(b->c, e->deriv, "blocks", bs);
+        if (tx) {
+            jset(b->c, e->deriv, "experiment", jstrz(b->c, b->exp->name));
+            jset(b->c, e->deriv, "derived", ds);
+        }
     }
     return 0;
 }
@@ -2542,8 +2731,10 @@ static int build_desc(C* c, jv* desc, const char* base_dir, const bopt* bo, sink
             goto done;
         }
         e = add_entry(&b);
+        if (!e) { rc = cfail(c, YPAK_ERR_NOMEM, "out of memory"); goto done; }
         e->res = ex;
         e->kind = YPAK_KIND_EXPERIMENT;
+        b.exp = e;
         e->name = cdup(c, str_of(ex, "entry", ""), strlen(str_of(ex, "entry", "")));
         e->nl = strlen(e->name);
     }
@@ -2626,8 +2817,10 @@ static int build_desc(C* c, jv* desc, const char* base_dir, const bopt* bo, sink
                 goto done;
             }
     }
-    /* build in dependency order: fonts before glyph runs before curve sets */
+    /* build in dependency order: fonts, tables and the experiment before
+     * glyph runs (which the experiment's texts may add) before curve sets */
     for (pass = 0; pass < 3 && rc == 0; pass++) {
+        if (pass == 1) rc = derive_runs(&b);
         for (i = 0; i < b.n && rc == 0; i++) {
             E* e = b.e[i];
             uint32_t k = e->kind;
@@ -2710,6 +2903,7 @@ static int build_desc(C* c, jv* desc, const char* base_dir, const bopt* bo, sink
     if (rc == 0) rc = write_pack(c, out, all, b.n + 2, 0, 0);
 done:
     if (b.ol_ok) yol_close(&b.ol);
+    ypt_texts_free(&b.tx);
     return rc;
 }
 
@@ -3078,6 +3272,7 @@ static jv* manifest_to_desc(C* c, const jv* m) {
             if ((!strcmp(kind, "font") && (!strcmp(key, "faces") || !strcmp(key, "fs_type"))) ||
                 (!strcmp(kind, "calibration") && !strcmp(key, "role")) ||
                 (!strcmp(kind, "curveset") && (!strcmp(key, "resolve") || !strcmp(key, "backward"))) ||
+                (!strcmp(kind, "glyphruns") && (!strcmp(key, "experiment") || !strcmp(key, "derived"))) ||
                 (!strcmp(kind, "shader") && (!strcmp(key, "contract") || !strcmp(key, "validated"))) ||
                 (!strcmp(kind, "audio") && (!strcmp(key, "convert") || !strcmp(key, "from_rate") || !strcmp(key, "clipped"))) ||
                 (!strcmp(kind, "table") && (!strcmp(key, "formulas") || !strcmp(key, "text_columns"))) ||

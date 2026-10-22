@@ -279,6 +279,11 @@ that structure; it does not invent a new one.
   value a `map` or a table column can give a text stimulus, keyed by
   text and style (gap G9). The player looks up runs; it lays out text at
   run time only for a script.
+- Built (pack tool v0.6.0, 2026-10-21; G9): the style is the font,
+  face, size, width, line height, alignment, direction and language;
+  two stimuli of one style that show one text share one block. The
+  player builds the key with the tool's function, `ypak_runs_key()` in
+  ysp/pack.h (pack.md 4.5, "The block key").
 
 **D15. Web runs. DECIDED (2026-10-14).**
 - Evidence: rig_spec 6: on a participant's machine timing is measured
@@ -305,7 +310,7 @@ the header.
 | G6 | CLOSED (2026-10-21). Every header that has a desc a definition sets exports its table, and every table has one row shape: `name, type, min, max, def, unit, doc, values`, where `values` is the "name=value" pairs of an `enum` or `enum[]` row (lower-case C suffixes, in value order) and NULL for any other type. The methods: `yst_params()` (ysp/stair.h 0.3.0), `yqst_params()` (ysp/quest.h 0.7.0), `yaep_params()` (ysp/aep.h 0.16.0). The timeline: `ytl_op_params(kind, &n)` and `ytl_desc_params()` (ysp/timeline.h 0.8.0). Response: `yrsp_params()` (ysp/response.h 0.6.0). The device families: `ydev_params(family, &n)` (ysp/device.h 0.4.0). gfx's stimulus fields: `ygfx_params()`, `ygfx_enum_params()` and the others (ysp/gfx.h 0.16.0). The rest gained `values` on 2026-10-21: `yscr_params()` (ysp/screen.h 0.9.0), `yau_params()` (ysp/audio.h 0.7.0), `ycol_desc_params()` (ysp/color.h 0.3.0), `yol_*_params()` (ysp/outline.h 0.4.0), `yvid_params()` (ysp/video.h 0.5.0), `yrdk_params()` (ysp/rdk.h 0.3.0) and `ygfx_desc_params()` (ysp/gfx.h 0.17.0). Each header's test checks its rows against its desc and its C enums; `tests/adapt/param_tables_test.c` checks every table against the shared rule (conventions.md, "Parameter tables"). | those headers | The loader's key check and the designer's panels from one source | Done |
 | G7 | CLOSED in ysp/json.h v0.2.0 (2026-10-21). Was: the canonical writer wrote a number's source text; only `yjs_new_fixed()` and `yjs_new_int()` made canonical numbers. Now every number is written as its exact value in one spelling, and `yjs_format_double()` gives a double's shortest round-trip decimal, the same bytes on MSVC, MinGW, gcc and emcc (json.md). | ysp/json.h | D2 | Done |
 | G8 | CLOSED in ysp/device.h v0.5.0 and ysp/response.h v0.7.0 (2026-10-21): a response rule (`ydev_rule`, the box's `desc.rule`) writes the response's code on the input's reader thread, its window and choices from the collector (`yrsp_rule_arm()`, `yrsp_rule_window()`, `yrsp_rule_choices()`); the record has `YDEV_OUT_RULE` and the press's t. A code that the final response does not match (an anticipation once the final onset came, a late press, another choice, a press the collector refused, a response without its code) sets `YRSP_R_SENT_MISMATCH` in the row's `rsp_flags` (`yrsp_rule_sent()`). Measured (`examples/device/response_lag.c`, in-process box and output, Windows 11, i7-1360P, the timing guard): press stamp to write start p50 8.8 ms, max 16.7 ms through a 60 Hz frame loop before; p50 5.2 us, p99 19.3 us, max 38.7 us through the rule (600 presses each). A real box adds its USB delivery and write on both paths. Was: a response-driven output waited for the frame loop to see the response, up to a frame after the press. | ysp/response.h, ysp/device.h | Response triggers (EEG) | Done |
-| G9 | Glyph-run blocks are listed by hand in the source description. Nothing derives them from a definition's texts and a table's levels. | pack tool | D14; Stroop | Small to medium |
+| G9 | CLOSED in the pack tool v0.6.0 (2026-10-21). The tool reads the experiment entry; when it is a version 1 definition, every text its `text` stimuli can show goes into one GLYPHRUNS entry named after the experiment entry (`experiment/main.json` gives `experiment/main.ysprun`), one block per text and style (font, size, width, line height, alignment, direction, language), keyed by both through `ypak_runs_key()` in ysp/pack.h, which the player calls too; stimuli of one style that show one text share the block. A text is a literal, the levels of a string column of any table a node names, a node's `vars` value or choices, or every value of a lookup's map. A glyph runs resource of the same name adds its blocks and fallback fonts. A text known only at run time (a built-in or a session field used directly, a script, a number column, a layout key from a variable) is refused at build by name (pack.md 4.5 and 15). Was: glyph-run blocks were listed by hand in the source description; nothing derived them. | pack tool | D14; Stroop | Done |
 | G10 | A trial row has at most 64 columns (ysp/table.h's bound, kept by the writer). | ysp/trials.h, ysp/table.h | Templates with many recorded stimuli | Small; `record` limits columns meanwhile |
 | G11 | The jitter `rate=` takes a fixed number. Snapping to the rig's refresh needs the player to set `rate_num` and `rate_den` after `ytr_rules()`, and the text cannot say so. | ysp/trials.h | EEG example (`rate=display`) | Small |
 | G12 | Closed (2026-10-21): ysp/stair.h 0.3.0 has `yst_save()` and `yst_open_saved()`, in the form of quest's, aep's and trials' (versioned, checked, a mismatched desc refused, the error in the handle), so a resume no longer replays the staircase's updates. | ysp/stair.h | Resume | Small; closed |
@@ -453,7 +458,7 @@ session.
 |---|---|---|
 | `shape`, `grating`, `gabor`, `noise` | `ygfx_shape()`, `ygfx_grating()`, `ygfx_gabor()`, `ygfx_noise()` | none |
 | `image` | `ygfx_image()` | `texture`: a TEXTURE entry, or a variable whose levels are entries |
-| `text` | `ygfx_crun()` per run of a GLYPHRUNS block (D14) | `font`: a FONT entry; `text`; `size`; `width` |
+| `text` | `ygfx_crun()` per run of the block whose key `ypak_runs_key()` gives for the stimulus's style and text, in the experiment's GLYPHRUNS entry (D14; pack.md 4.5) | `font`: a FONT entry; `text`; `size`; `width`; `line_height`, `align`, `dir`, `lang` as in a glyph-run block. Each is a literal, not a variable: the pack tool lays the text out |
 | `artwork` | `ygfx_crun()` over an ARTWORK entry | `artwork` |
 | `rdk` | `yrdk_open()` and `ygfx_dots()`; `yrdk_start(&f, $trial_seed, 0)` on its first visible frame, `yrdk_update(&f, onset - first onset)` each frame | none |
 | `sound` | `yau_wav_load()`, `yau_play_at()` | `audio`: an AUDIO entry |
@@ -676,7 +681,9 @@ named.
 
 `stroop.pstb` is the program's CSV (`word`, `ink`, `congruent`,
 `answer`, `weight`; 9 rows). Every text is in the pack's glyph runs
-(D14).
+(D14). The definition, the CSV and the pack's source description are
+`examples/pack/stroop/`; the description lists no glyph runs, and the
+pack tool derives the 9 blocks from the four text stimuli (G9).
 
 ```json
 {
@@ -730,7 +737,7 @@ named.
 | `timeline_variables` | `ytb_open_csv()` on the same text; the pack stores the same PSTB bytes (table.md) |
 | `rules` | Same text as the program's `rules` plus `weight weight`; the program multiplies the weight by `--reps` 3 in C: G4 |
 | `word.text`, `word.color` | The program upper-cases the ink names and copies `ink_rgb[ink]` into the runs; the lookups do both |
-| Text stimuli | `ylay_layout()` at setup and `ygfx_crun()` per run: D14, G9. The font is a pack FONT entry, not a system path |
+| Text stimuli | `ylay_layout()` at setup and `ygfx_crun()` per run: D14, G9 (closed: the pack tool lays out the same 9 texts into `experiment/stroop.ysprun`). The font is a pack FONT entry, not a system path |
 | `if: $first_in_block`, `if: $practice` | Same: `ti.first_in_block`, `ti.practice` |
 | `key_answer` against the key | Same: `strcmp(keys[r].key, answer)` |
 | `feedback` from `$outcome` | Same: correct, wrong, too slow |
