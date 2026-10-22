@@ -595,3 +595,45 @@ test = "audio"
 why = "v0.7.0: values belong to enum rows only; a loader would take names for a bool."
 find = '"WASAPI exclusive mode; silences every other program", NULL },'
 replace = '"WASAPI exclusive mode; silences every other program", "off=0,on=1" },'
+
+# The real-thread cases on a loaded machine (2026-10-22): their waits count
+# the other thread's progress, not wall time. These mutants check that each
+# case still sees its faults, and that a wait that cannot end fails at the
+# wait instead of hanging.
+
+[[mutant]]
+id = "ld-01"
+name = "a seek leaves the WAV read position"
+test = "audio"
+why = "The stream restarts at the seek but the file is read from where it was: every frame of the play is wrong."
+find = '''    w->pos_ = sample;
+    yau__st64(&w->seek_, -1);'''
+replace = '''    yau__st64(&w->seek_, -1);'''
+
+[[mutant]]
+id = "ld-02"
+name = "the pump's message ignores a seek"
+test = "audio"
+why = "A seek through yau_wav_on_msg must reach the stream; the wav pump case waits for it and fails at the wait."
+find = '''        yau__st64(&w->seek_, m.seek);
+        (void)yau__wav_seek_now(w, m.seek);'''
+replace = ''
+
+[[mutant]]
+id = "ld-03"
+name = "a reset keeps the old first sample"
+test = "audio"
+why = "A play must start at the sample of the last reset or seek, which yau_stream_get_info reports as first."
+find = '''    yau__st64(&st->first_, first);
+    yau__st64(&st->id_, 0);'''
+replace = '''    yau__st64(&st->id_, 0);'''
+
+[[mutant]]
+id = "ld-04"
+name = "a stream play's sample is one late"
+test = "audio"
+why = "Each play of the wav pump case must record the sample it started at: its seek."
+find = '''    if (yau__is_stream(v) && v->start < 0) return -1;
+    return v->first;'''
+replace = '''    if (yau__is_stream(v) && v->start < 0) return -1;
+    return yau__is_stream(v) ? v->first + 1 : v->first;'''

@@ -226,10 +226,26 @@ static void* t_open(void* user, const char* key, char* found, size_t cap) {
     return b;
 }
 
+/* t_read calls on the real clock: the reader thread's progress, which
+ * bounds test_thread's wait instead of the wall clock. */
+static volatile long g_tcalls;
+static long tcalls(void) {
+#if defined(_WIN32)
+    return InterlockedCompareExchange(&g_tcalls, 0, 0);
+#else
+    return __atomic_load_n(&g_tcalls, __ATOMIC_ACQUIRE);
+#endif
+}
+
 static int t_read(void* conn, uint8_t* buf, int cap, int64_t timeout_ns) {
     board* b = (board*)conn;
     int64_t t = now_fn(NULL), end = t + timeout_ns;
     int n = 0;
+#if defined(_WIN32)
+    if (g_real) InterlockedIncrement(&g_tcalls);
+#else
+    if (g_real) __atomic_fetch_add(&g_tcalls, 1, __ATOMIC_RELEASE);
+#endif
     if (b_gone(b, t)) { b->open = false; return -1; }
     b_run(b, g_real ? t : end);
     /* the first chunk readable by end: the clock jumps to it */
@@ -601,9 +617,31 @@ static void test_thread(void) {
     /* the reader thread opens and identifies; the wait polls ydev_state() */
     CHECK_I(ydev_wait_running(&g_dev, YRT_S(3)), YDEV_RUNNING);
     (void)yrt_sleep_ns(1200000000);
+    /* Then wait on the reader's progress, not the wall clock: with 128 busy
+     * threads on 16 cores the reader had fewer than 15 events and 8 probes
+     * after 1.2 s (2026-10-22). 5000 more reads are at least 5 s of the
+     * reader's time, 50 probes. The wall-clock limit only stops a hang. */
+    {
+        long c0 = tcalls();
+        int64_t t1 = yrt_now_ns();
+        ydev_get_stats(&g_dev, &st);
+        while (st.events < 15 || st.probes < 8) {
+            /* not running: no read will come, so the checks below say it */
+            if (st.state != YDEV_RUNNING) break;
+            if (tcalls() - c0 > 5000 || yrt_now_ns() - t1 > YRT_S(300)) {
+                fprintf(stderr, "device_test: FAIL at line %d: thread: %llu events and %llu probes after %ld more "
+                        "reads\n", __LINE__, (unsigned long long)st.events, (unsigned long long)st.probes,
+                        tcalls() - c0);
+                g_failures++;
+                break;
+            }
+            (void)yrt_sleep_ns(10000000);
+            ydev_get_stats(&g_dev, &st);
+        }
+    }
     ydev_close(&g_dev);         /* joins: g_ev is ours again */
     ydev_get_stats(&g_dev, &st);
-    printf("  thread: %d events in 1.2 s, %llu probes, state %s after stop\n", g_nev,
+    printf("  thread: %d events, %llu probes, state %s after stop\n", g_nev,
            (unsigned long long)st.probes, ydev_state_name(st.state));
     CHECK(g_nev >= 15);
     CHECK(st.probes >= 8);

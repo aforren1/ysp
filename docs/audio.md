@@ -2124,6 +2124,60 @@ enum row's values come from a `switch` on the C enum without a
 `default`, so gcc and clang `-Wall -Werror` stop the build when the enum
 gains a value. 4 of 4 new mutants killed (`tests/mutate/audio.toml`, pv-).
 
+## Real-thread tests under load (2026-10-22)
+
+Three cases in `tests/adapt/audio_test.c` run the scripted device on a
+real thread: `test_threads`, `test_stream_threads` and `test_wav_pump`.
+Their waits counted sleeps of 1 ms. On a loaded machine one sleep takes
+much longer, and the device thread can miss many sleeps of the frame
+thread in a row. The header had no fault.
+
+### The failure
+
+`test_wav_pump` failed with "play did not start at its seek (got -1)":
+
+1. The test played the stream and stopped it after 30 sleeps of 1 ms.
+2. Under load the device thread rendered no block in those 30 sleeps, so
+   the play was still QUEUED at the stop.
+3. The header canceled the play, which is correct. A CANCELED record has
+   sample -1 and no end frame.
+4. The result wait (3000 sleeps) waited for an end frame that did not
+   come. It ran out, and the test then compared sample -1 with the seek.
+
+The test was instrumented to fail at each wait. In 7 failed runs of 10,
+every failure was "not started at the stop" with the state QUEUED. The
+readiness wait before the play did not run out in any run, so the first
+guess (that wait ran out) was wrong.
+
+### The fix
+
+Each wait counts the steps of the thread that it waits for: device
+blocks, producer loops, or pump steps (on_msg and on_idle calls, through
+wrappers). A wait fails at the wait, with its own message, only after
+that thread made enough steps without the event. A wall-clock limit of
+300 s stops a hang and is not a pass condition. `test_wav_pump` waits
+for the play to start before it stops it, and plays 30 device blocks,
+not 30 ms. A CANCELED play there is a failure. The readiness wait also
+fails when the pump ran every message and the WAV wants nothing, because
+then no further step comes.
+
+### Measurements
+
+Windows 11, 16 logical processors. Load: 128 threads that spin at normal
+priority. MinGW gcc 16.1 -O2 build of the test.
+
+| Build | Runs | Failed |
+|---|---|---|
+| Before | 10 | 5 |
+| Before, waits instrumented | 10 | 7 |
+| After | 20 | 0 |
+| After, MSVC Debug under ctest | 10 | 0 |
+
+With 32 busy threads, the test before the fix did not fail in 10 runs.
+Mutants `ld-01` to `ld-04` in `tests/mutate/audio.toml` check that the
+three cases still see a wrong read position, a lost seek, a wrong first
+sample and a wrong recorded sample.
+
 ## Not measured
 
 - Latency to sound by cable (an acoustic loop is in "Capture"). No

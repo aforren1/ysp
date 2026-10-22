@@ -13,6 +13,13 @@ flags = ["-std=c11", "-O2", "-w", "-DYRT_TEST_FIT_ONLY"]
 libs = ["-lm"]
 timeout = 120
 
+[test.rt]
+source = "tests/adapt/rt_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O2", "-w"]
+libs = ["-lm"]
+timeout = 600
+
 [[mutant]]
 id = "fit-01"
 name = "upper hull"
@@ -376,3 +383,35 @@ test = "fit"
 why = "A cost read on the virtual clock must be real: through yrt_now_ns() a draw takes 0 and a wait the jump."
 find = '''int64_t yrt_real_ns(void) { return (int64_t)yrt__now(); }'''
 replace = '''int64_t yrt_real_ns(void) { return yrt__clock(); }'''
+
+# The clock correlation's edge mode (2026-10-22). Its test case lost its
+# wall-clock upper bound, which a loaded machine broke; these check that
+# the lower bounds and the edge count still see a fault. Test "rt" is the
+# whole test (about 6 s alone, 70 to 130 s with 128 busy threads on 16
+# logical processors).
+
+[[mutant]]
+id = "corr-01"
+name = "edge mode takes 3 edges by default"
+test = "rt"
+why = "The default is 4 edges, the tightest kept; the test's rc check sees the count."
+find = '''    tries = d->tries > 0 ? d->tries : (d->edge ? 4 : 16);'''
+replace = '''    tries = d->tries > 0 ? d->tries : (d->edge ? 3 : 16);'''
+
+[[mutant]]
+id = "corr-02"
+name = "edge mode's default timeout 10 ms"
+test = "rt"
+why = "The default timeout is 100 ms; a frozen clock must take that long to give up."
+find = '''        uint64_t timeout = d->timeout_ns > 0 ? (uint64_t)d->timeout_ns : 100000000ull;'''
+replace = '''        uint64_t timeout = d->timeout_ns > 0 ? (uint64_t)d->timeout_ns : 10000000ull;'''
+
+[[mutant]]
+id = "corr-03"
+name = "edge mode counts a read that did not change"
+test = "rt"
+why = "An edge is a change of the value; 4 reads of one tick take far less than 3 ms."
+find = '''            if (v != v_old) {
+                w = b - a_old;'''
+replace = '''            if (1) {
+                w = b - a_old;'''

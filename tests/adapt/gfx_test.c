@@ -1239,28 +1239,40 @@ static void test_v12_capture_cpu(void) {
 
 #if !defined(YRT_NO_THREADS) && (!defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__))
     /* the writer thread: every frame, 3 slots, each copy done after 2 polls;
-     * no files. Every chosen frame is written or counted as dropped. */
+     * no files. Every chosen frame is written or counted as dropped. Frames
+     * 0 to 2 fill the slots and frame 3 drops, whatever the writer does. How
+     * many the writer gets through depends on the scheduler: 15 of 40 when
+     * it keeps up, 8 with 128 busy threads on 16 cores (2026-10-22). So the
+     * frames run on until 10 are written, and a writer that never frees a
+     * slot fails at 4000 frames. */
     ygfx__test_cap_delay = 2;
     memset(&seen, 0, sizeof seen);
     memset(&cd, 0, sizeof cd);
     cd.every = 1; cd.slots = 3;
     cd.on_frame = cap_on_frame; cd.ctx = &seen;
     CHECK(ygfx_capture_start(&g, &cd) == YGFX_OK);
-    for (i = 0; i < 40; i++) {
+    memset(&st, 0, sizeof st);
+    for (i = 0; i < 40 || (st.written < 10 && i < 4000); i++) {
         CHECK(yscr_begin(&scr, &f) == YSCR_OK);
         CHECK(ygfx_begin(&g, &f) == YGFX_OK);
         CHECK(ygfx_end(&g) == YGFX_OK);
         CHECK(yscr_flip(&scr) == YSCR_OK);
+        ygfx_capture_get_stats(&g, &st);
+    }
+    if (st.written < 10) {
+        fprintf(stderr, "gfx_test [%s]: FAIL line %d: the capture writer wrote %llu frames in %d\n", g_where, __LINE__,
+                (unsigned long long)st.written, i);
+        g_failures++;
     }
     k = ygfx_capture_stop(&g, &st);
     CHECK(k == (int)st.written);
-    CHECK(st.manual == 0 && st.chosen == 40 && st.written + st.dropped == 40 && st.failed == 0);
-    CHECK(st.written >= 10 && st.dropped >= 1 && st.busy_max == 3);
+    CHECK(st.manual == 0 && st.chosen == (uint64_t)i && st.written + st.dropped == (uint64_t)i && st.failed == 0);
+    CHECK(st.dropped >= 1 && st.busy_max == 3);
     CHECK(seen.n == (int)st.written && seen.bad_order == 0 && seen.rec_mismatch == 0);
     CHECK(st.no_record <= 3 && seen.with_record == seen.n - (int)st.no_record);
-    printf("v0.12 capture on SIM, every frame, 3 slots, copies done after 2 polls: %llu written, %llu dropped, %llu without a record; "
+    printf("v0.12 capture on SIM, every frame, 3 slots, copies done after 2 polls: %d frames, %llu written, %llu dropped, %llu without a record; "
            "the capture's state %u bytes\n",
-           (unsigned long long)st.written, (unsigned long long)st.dropped, (unsigned long long)st.no_record, (unsigned)sizeof(ygfx__cap));
+           i, (unsigned long long)st.written, (unsigned long long)st.dropped, (unsigned long long)st.no_record, (unsigned)sizeof(ygfx__cap));
 #endif
     ygfx__test_cap_delay = 0;
     ygfx__test_cap_fill = 0;

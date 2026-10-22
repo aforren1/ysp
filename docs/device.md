@@ -505,6 +505,20 @@ of the simulated edge.
 | `photodiode_check --list` (`examples/device/photodiode_check.c`) on the development laptop | "no serial ports" (none attached) |
 | Mutants (`tests/mutate/device.toml`) | 11 of 12 caught; `dev-11` (an answer matched to any query) is equivalent here, because the simulated boards answer each query before the next. The first run missed `dev-10` (no clamp; `test_clamp` added) and `dev-12` (the uncertainty bound was too loose) |
 
+On 2026-10-22 the reader-thread case (`test_thread`) failed in 1 of 10
+runs with 128 busy threads on 16 logical processors: after 1.2 s the
+reader had fewer than 15 events and 8 queries. The header was right. The
+case now waits after the 1.2 s until it has 15 events and 8 queries. The
+reader's calls to the simulated board bound the wait: it fails, with its
+own message, after 5000 more calls, which are at least 5 s of the
+reader's time. Mutant `ld-01` (no queries by default) checks it.
+After the change: 0 of 30 runs failed under the same load (MSVC Debug,
+ctest). The wait also ends when the device is not running, so a mutant
+that never opens fails at once (`dev-09` timed out at 120 s before).
+The rule race case (`test_rule_race`) did not fail in 18 runs under the
+same load. It made 515 to 599 arms in its 600 ms, against a limit of 51,
+so it did not change.
+
 ### Outputs (v0.2.0)
 
 On 2026-10-08, MSVC 19.44 (Release) on Windows 11 for the numbers, under

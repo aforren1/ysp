@@ -3301,6 +3301,17 @@ index) survived the first run: SIM's records came before a newer copy
 waited, so no record could go astray. A frame with another frame's record
 in its `done` list now checks it.
 
+On 2026-10-22 the threaded case (every frame, 3 slots) failed under load
+with no fault in the header. It ran 40 frames and wanted 10 written, but
+the writer is a normal thread: it wrote 15 of 40 when it kept up and 8
+or 9 with 128 busy threads on 16 logical processors (6 of 20 runs
+failed). Now the frames run on until 10 are written, and the case fails
+at 4000 frames. Frames 0 to 2 fill the 3 slots and frame 3 drops whatever
+the writer does, so `dropped >= 1` and `busy_max == 3` stay exact. Under
+the same load: 0 of 20 runs failed, 40 to 105 frames. Mutants `cp-18`
+(no slot comes back from the writer) and `cp-19` (a slot comes back
+before the writer is done) check the case.
+
 ### Builds
 
 MSVC 19.44 (msvc-full: the test, the compile checks as C11 and C++17, the

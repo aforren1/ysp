@@ -521,3 +521,14 @@ file = "ysp/response.h"
 why = "A failed write must reach the collector as not written."
 find = '''        s[k].written = (uint8_t)(f[k].result == YDEV_OK || f[k].result == YDEV_RULE_PENDING);'''
 replace = '''        s[k].written = 1;'''
+
+# test_thread waits on the reader's progress, not on 1.2 s of wall time
+# (2026-10-22). Its checks must still see a reader that never queries.
+
+[[mutant]]
+id = "ld-01"
+name = "no timer queries by default"
+test = "device"
+why = "probe_ns 0 means 100 ms; with no queries the box clock is never fitted. test_thread fails at its wait."
+find = '''    if (dev->d.probe_ns == 0) dev->d.probe_ns = 100000000;'''
+replace = '''    if (dev->d.probe_ns == 0) dev->d.probe_ns = -1;'''
