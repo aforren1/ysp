@@ -7,6 +7,8 @@
 2. Three staircases interleaved with catch trials: a catch condition on about
    one trial in ten, never two in a row, and each staircase's level stored as
    the trial record.
+3. A 2AFC side drawn per trial from the trial's own stream (a variable), so a
+   replay gives the same sides.
 
 Install first (from this directory; part 2 also needs ysp-stair):
     uv pip install . ../ysp_stair
@@ -81,12 +83,27 @@ def interleaved(seed, rng):
           f"{violations} ran against the gap rule (only possible once the staircases end)")
 
 
+def sides(seed):
+    desc = dict(n_conditions=len(CONTRASTS), reps=4, order=ytr.ORDER_RANDOM, rng=seed, seed=seed,
+                vars=[ytr.var_choice("side", ["left", "right"])])
+    t = ytr.Trials(**desc)
+    print()
+    while (ti := t.next()) is not None:
+        t.update(1)
+    print("sides:", " ".join(t.var(i, "side")[0] for i in range(t.n_run)))
+    again = ytr.Trials(**desc)
+    again.restore([h.outcome for h in t.history()])
+    same = all(again.var(i, "side") == t.var(i, "side") for i in range(t.n_run))
+    print(f"replayed: {'the same sides' if same else 'DIFFERENT SIDES'}")
+    return 0 if same else 1
+
+
 def main():
     seed = int(sys.argv[1]) if len(sys.argv) > 1 else 20260923
     rng = random.Random(seed)      # the simulated observer's generator
     constant_stimuli(seed, rng)
     interleaved(seed, rng)
-    return 0
+    return sides(seed)
 
 
 if __name__ == "__main__":

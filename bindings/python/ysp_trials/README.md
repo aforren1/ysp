@@ -118,6 +118,31 @@ condition: `ytr.uniform("fp_s", "fp_lo_s", "fp_hi_s")`. The rules text takes
 `jitter fp_s exponential 0.5 2.0 0.4 rate=60000/1001`. `ytr.jitter_map(spec, u)`
 maps a variate of your own with no session, and nothing replays it.
 
+To snap a jitter to the rig's refresh, give `rate="display"` (rules text:
+`rate=display`) and set the rate the screen reports with
+`display_rate=(num, den)`, for example `(60000, 1001)`. Without
+`display_rate` the session refuses to open. `format_rules()` keeps
+`rate=display`; `format_meta()` gives the rate the draws used.
+
+## How to draw a category per trial (v0.6)
+
+```python
+t = ytr.Trials(tracks=[stair], rng=20261021, seed=20261021,
+              vars=[ytr.var_choice("side", ["left", "right"])])
+while (ti := t.next()) is not None:
+    side = t.var(ti.index, "side")            # "left" or "right"
+    noise_seed = t.trial_seed(ti.index)       # for a stimulus generator
+    ...
+```
+
+A variable's value comes from the trial's own stream, which `seed` and the
+trial index make. It draws nothing from `rng`, so adding a variable does not
+change the schedule. `restore()` and `load()` give every value again, and
+`format_row()` logs it in a column named for the variable. Each value is
+equally likely; repeat a value to weight it. The rules text takes `var side
+choice left right`. In the rules text, `weight COLUMN` with `reps N` gives
+each row the column's count times N.
+
 ## How to interleave adaptive tracks
 
 ```python
@@ -198,6 +223,9 @@ default.
 | `rules` | rules text, applied after the other arguments (v0.2) |
 | `participant` | the participant number for `@participant` and the Latin orders (v0.2) |
 | `jitters` | from `uniform()`, `choice()` and `exponential()`: a duration drawn per trial (v0.2.1) |
+| `seed` | an int in [0, 2^64): the seed of the trial streams that `vars` and `trial_seed()` use (v0.6) |
+| `vars` | from `var_choice()`: a category drawn per trial from the trial's stream (v0.6) |
+| `display_rate` | an int or `(num, den)` Hz: the rate a jitter with `rate="display"` snaps to (v0.6) |
 
 | Method or property | Returns |
 |---|---|
@@ -215,6 +243,8 @@ default.
 | `format_rules()` | the session's settings as rules text (v0.2) |
 | `values(c)`, `table` | condition `c`'s table row as a dict; the `Table` or None (v0.2) |
 | `jitter(i, j)`, `jitters` | trial `i`'s draw of jitter `j` (index or name) as `Jitter(s, ns, frames)`; the names (v0.2.1) |
+| `var(i, j)`, `var_index(i, j)`, `vars` | trial `i`'s value of variable `j` (index or name) as str, and its index in the values; the names (v0.6) |
+| `trial_seed(i)` | trial `i`'s 64-bit seed, a function of `seed` and `i` only (v0.6) |
 | `save()`, `Trials.load(data, **desc)`, `restore(outcomes, records=None)` | snapshot, resume, replay. `records` is one bytes object or a list of records. |
 | `rng_state` | the splitmix state for an int seed (read and write); None for a callable |
 | `n_conditions`, `n_factors`, `n_run`, `n_done`, `swaps`, `is_open`, `record_size` | counts and state |
@@ -248,9 +278,13 @@ odd n).
 `uniform(name, lo, hi, *, rate=None)`, `choice(name, values, *, rate=None)` and
 `exponential(name, lo, hi, scale, *, rate=None)` make the `jitters` entries
 (v0.2.1): seconds, or a table column's name for `lo`, `hi` or `scale`; `rate`
-is an int or `(num, den)` Hz that snaps the draws to whole frames. `frames` is
--1 for a jitter that does not snap. `jitter_map(spec, u)` maps a variate in
-[0, 1) with no session.
+is an int or `(num, den)` Hz that snaps the draws to whole frames, or
+`"display"` for the session's `display_rate` (v0.6). `frames` is -1 for a
+jitter that does not snap. `jitter_map(spec, u)` maps a variate in [0, 1)
+with no session.
+
+`var_choice(name, values)` makes a `vars` entry (v0.6): 1 to 32 str values of
+1 to 63 bytes each.
 
 `Table(csv, *, types=None, delimiter=',', allow_empty=False)` parses CSV text
 (str or bytes); `types` maps column names to `'integer'`, `'number'` or
@@ -263,7 +297,7 @@ generator. `strerror(code)` names an `ERR_*` code. Enums (standard-library
 `IntEnum`): `Order`, `Interleave`, `Rule`, also as `ORDER_*`, `INTERLEAVE_*`,
 `RULE_*`. Constants: `INVALID` (-1), `REQUEUE` (-2), `CONDITION`,
 `ANY_LEVEL`, `FLAG_*`, `ERR_*`, `MAX_TRIALS` (4096), `MAX_CONDITIONS`,
-`MAX_FACTORS`, `MAX_CONSTRAINTS`, `MAX_TRACKS`.
+`MAX_FACTORS`, `MAX_CONSTRAINTS`, `MAX_TRACKS`, `MAX_VARS`.
 
 `__version__` is `ytr_version()` from the compiled header, and the tests
 check that `pyproject.toml` carries the same string.
@@ -319,3 +353,8 @@ gives the same schedule as the equivalent arguments and survives a round
 trip through `format_rules()`. The 0.2.1 tests draw jitters in a session and
 replay them, read per-condition intervals from a table, and check
 `jitter_map()` against the inverse CDFs written from their definitions.
+The 0.6 tests check each variable's value and each trial seed against the
+stream written in Python from the manual, the data line, replay by
+`restore()`, a snapshot refused under another seed, the `var` statement's
+round trip, `weight` times `reps`, and `rate="display"` against the same
+fixed rate.

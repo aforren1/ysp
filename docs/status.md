@@ -136,6 +136,7 @@ Purpose: Trial sequencing above the adaptive methods: conditions and repetitions
 
 Status:
 
+- v0.6.0: four gaps of the [experiment definition](experiment_format.md) closed. G3: variables drawn per trial (`desc.vars[]`, `ytr_var_choice()`, rules `var NAME choice ...`) from the trial's own stream of `desc.seed` and the trial index, logged in the data line, replayed by restore and snapshot (format 5), no draw from the session's generator; `ytr_trial_seed()`. G4: `weight COLUMN` times `reps`. G11: `rate=display` (`YTR_RATE_DISPLAY`, `desc.display_rate_num`). G10: 256 columns in a data file. Pins unchanged; 17 of 17 new mutations caught. [Design notes](trials.md#v06-variables-weight-x-reps-the-displays-rate-256-columns).
 - v0.5.1: the snapshot magic is `YTRL` (was the psy-era `PSTR`, now refused; no saved data existed).
 - v0.5.0: every column of seconds ends in `_s` (the user's decision, 2026-10-20: jsPsych writes `rt` in ms, PsychoPy in s). `ytr_data_open()` refuses, by name, a `TIME_NS` column without `_s` or `_ns` and a session jitter without `_s`; 6 new refusals tested, 4 of 4 new mutations caught. [Design notes](trials.md#v05-columns-of-seconds-end-in-_s).
 - v0.4.1: builds under -std=c11 when a system header comes before it (fileno() for YTR_FLUSH_SYNC on glibc).
@@ -150,10 +151,11 @@ Status:
 - Platforms: any
 - Needs: nothing
 
-Purpose: Typed tables as one position-independent, hashed block: an RFC 4180 CSV parser with hard bounds (32767 rows, 64 columns, 4096-byte fields), errors that name the line, row and column, int32, number and string columns with levels, and a correctly rounded number syntax no locale can change. The pack stores the same block, and a view checks it in place. No heap; file I/O only with `YTB_STDIO`.
+Purpose: Typed tables as one position-independent, hashed block: an RFC 4180 CSV parser with hard bounds (32767 rows, 256 columns, 4096-byte fields), errors that name the line, row and column, int32, number and string columns with levels, and a correctly rounded number syntax no locale can change. The pack stores the same block, and a view checks it in place. No heap; file I/O only with `YTB_STDIO`.
 
 Status:
 
+- v0.3.0: 256 columns (was 64), for a trial row with many recorded stimuli; the block format and hash are unchanged; 2 of 2 new mutations caught. [Design notes](table.md#256-columns-v030).
 - v0.2.0 (the [Conventions](conventions.md): `ytb_open_csv()`, `ytb_open_csv_file()`, `ytb_open_view()`, `ytb_close()`, negative number reasons).
 - v0.1.0. Numbers equal to strtod bit for bit on 10 million strings per compiler; every single-bit flip of a block refused; 5.9 million fuzz inputs; 24 of 25 mutations caught, the other equivalent. Parse 97 to 218 MB/s. [Design notes](table.md).
 
@@ -518,5 +520,5 @@ Purpose: The pack's EXPERIMENT entry: a JSON file, read by ysp/json.h, that name
 
 Status:
 
-- Design decided, 2026-10-14: all 15 decisions accepted; D4 changed (durations are plain numbers in seconds, and every duration key and variable ends in `_s`); D11 records flagged frames only, and a requeue, if ever added, is an explicit rule in the definition. G7 (a canonical form for non-integer numbers, the prerequisite for the experiment hash) is closed by ysp/json.h v0.2.0 (2026-10-21). No loader, no player, no test.
+- Design decided, 2026-10-14: all 15 decisions accepted; D4 changed (durations are plain numbers in seconds, and every duration key and variable ends in `_s`); D11 records flagged frames only, and a requeue, if ever added, is an explicit rule in the definition. G7 (a canonical form for non-integer numbers, the prerequisite for the experiment hash) is closed by ysp/json.h v0.2.0 (2026-10-21). G3 (variables from a per-trial stream), G4 (weight x reps), G10 (256 columns) and G11 (`rate=display`) are closed by ysp/trials.h v0.6.0 and ysp/table.h v0.3.0 (2026-10-21). No loader, no player, no test.
 - Proposal, 2026-10-13. Four worked examples (2AFC staircase, RDK, Stroop from a CSV, EEG trigger) were mapped to the C examples field by field; 13 gaps in the C APIs are listed.

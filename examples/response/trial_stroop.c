@@ -19,8 +19,9 @@
  *
  * The conditions are 9 rows (word x ink) with a weight column: the 3
  * congruent rows count twice, so half of the test trials are congruent.
- * The rules text sets the rest: a constrained order with at most 3
- * congruent trials in a row, and 4 practice trials drawn from all rows.
+ * The rules text sets the rest: each row weight x --reps times (`weight
+ * weight` and `reps N`), a constrained order with at most 3 congruent
+ * trials in a row, and 4 practice trials drawn from all rows.
  * Words and messages are laid out once at setup; the frame loop draws
  * runs and allocates nothing. Colors are linear device RGB, uncalibrated.
  *
@@ -100,8 +101,11 @@ static const char conditions_csv[] =
     "blue,green,0,g,1\n"
     "blue,blue,1,b,2\n";
 
-static const char rules[] =
+/* %d is --reps; the weight column's repetitions are per rep. */
+static const char rules_fmt[] =
     "order constrained\n"
+    "weight weight\n"
+    "reps %d\n"
     "max_run congruent=1 3\n"
     "practice 4\n";
 
@@ -199,9 +203,9 @@ int main(int argc, char** argv) {
     yrsp_result res, sim_res[SIM_TRIALS];
     int64_t sim_plan[SIM_TRIALS] = { 0 };   /* where the script's times start */
     yrsp_input sim_ev[4];
-    int sim_cong[SIM_TRIALS], sim_correct[SIM_TRIALS], sim_fb[SIM_TRIALS], sim_prac[SIM_TRIALS], cond_reps[64];
+    int sim_cong[SIM_TRIALS], sim_correct[SIM_TRIALS], sim_fb[SIM_TRIALS], sim_prac[SIM_TRIALS];
     FILE* out;
-    char line[1024], meta[2048], err[300], rules_out[512];
+    char line[1024], meta[2048], err[300], rules_out[512], rules[256];
     const char* out_path = "trial_stroop.csv";
     const char* font_path = DEFAULT_FONT;
     const char* cond_path = NULL;
@@ -231,7 +235,7 @@ int main(int argc, char** argv) {
     if (reps == 0) reps = sim ? 1 : 3;
     if (reps < 1 || reps > 20) { fprintf(stderr, "trial_stroop: --reps takes 1..20\n"); return 2; }
 
-    /* The conditions: rows, columns by name, and the weight as repetitions. */
+    /* The conditions: rows and columns by name. */
     memset(&cd, 0, sizeof cd);
     cd.text = conditions_csv;
     cd.len = sizeof conditions_csv - 1;
@@ -243,20 +247,19 @@ int main(int argc, char** argv) {
     }
     word_col = ytb_col(&tab, "word"); ink_col = ytb_col(&tab, "ink"); cong_col = ytb_col(&tab, "congruent");
     answer_col = ytb_col(&tab, "answer"); weight_col = ytb_col(&tab, "weight");
-    if (word_col < 0 || ink_col < 0 || cong_col < 0 || answer_col < 0 || weight_col < 0 || tab.n_rows > 64) {
-        fprintf(stderr, "trial_stroop: the conditions need word, ink, congruent, answer and weight, at most 64 rows\n");
+    if (word_col < 0 || ink_col < 0 || cong_col < 0 || answer_col < 0 || weight_col < 0) {
+        fprintf(stderr, "trial_stroop: the conditions need word, ink, congruent, answer and weight\n");
         return 1;
     }
-    for (i = 0; i < tab.n_rows; i++) cond_reps[i] = ytb_int(&tab, i, weight_col) * reps;
     memset(&rd, 0, sizeof rd);
     rd.table = &tab;
     rd.rng = ytr_splitmix;
     rd.rng_ctx = &seed;
     memset(&rr, 0, sizeof rr);
-    rr.text = rules; rr.len = sizeof rules - 1; rr.table = &tab;
+    snprintf(rules, sizeof rules, rules_fmt, reps);
+    rr.text = rules; rr.len = strlen(rules); rr.table = &tab;
     rr.arena = rules_arena; rr.arena_size = sizeof rules_arena;
     if (ytr_rules(&rd, &rr, err, sizeof err) != 0) { fprintf(stderr, "trial_stroop: %s\n", err); return 1; }
-    rd.cond_reps = cond_reps;
     if (!ytr_open(&trials, &rd)) { fprintf(stderr, "trial_stroop: %s\n", ytr_error(&trials)); return 1; }
 
     /* the display and the graphics, opened together and primed */
