@@ -40,7 +40,7 @@
  *       yjs_set(&a, s, "experiment", yjs_new_stringz(&a, experiment_id));
  *       yjs_set(&a, s, "seed", yjs_new_int(&a, seed));
  *
- *       static yds_dataset ds;                           // about 380 KB
+ *       static yds_dataset ds;                           // about 770 KB, zero pages
  *       yds_desc d = { 0 };
  *       d.dir = "data/P07_20261021T140312Z";             // must not exist
  *       d.session = s;                                   // copied
@@ -155,7 +155,14 @@
  *   trials.csv and streams/<name>.csv take ytr_col lists as
  *   ytr_data_desc.cols does. yds_trials_writer() and yds_stream_writer()
  *   give the ytr_data for ytr_data_col(), the ytr_data_set_*() setters and
- *   yrsp_data_set(). A stream's name follows the column rule
+ *   yrsp_data_set(). trials.csv has no session part (ytr_data_desc.trials
+ *   NULL, as experiment_format.md 2.10 says: a tree has several
+ *   ytr_trials), so the player writes ysp/trials.h v0.6's data-line
+ *   columns as its own: each variable as a STRING column of
+ *   ytr_var_text(), and trial_seed as a YTR_COL_CHARS field of
+ *   YDS_SEED_TEXT bytes filled by yds_seed_text(ytr_trial_seed()), the
+ *   same "x" and 16 hex digits as trials' own line, which ysp/table.h,
+ *   pandas and R read as text with all 64 bits. A stream's name follows the column rule
  *   ([A-Za-z_][A-Za-z0-9_]*, at most 63 bytes) and differs from every
  *   other stream's in more than case (Windows folders ignore case).
  *   ADAPTERS. Inline, when their header was included before this one:
@@ -196,10 +203,17 @@
  *   ---------------------------------------------------------------------
  *   MEMORY AND THREADS
  *   ---------------------------------------------------------------------
- *   The handle holds a ytr_data per table (about 18.8 KB each: 4 plus
- *   YDS_MAX_STREAMS, 16 by default) and the stream names: about 380 KB on
- *   a 64-bit ABI; static storage, or define YDS_MAX_STREAMS smaller
- *   before the include. session.json's values live in a ysp/json.h heap
+ *   The handle holds a ytr_data per table (about 38 KB each with
+ *   ysp/trials.h v0.6's 256 columns: 4 plus YDS_MAX_STREAMS, 16 by
+ *   default) and the stream names: about 770 KB on a 64-bit ABI. Give it
+ *   static storage or calloc(): the open zeroes the four tables and the
+ *   rest, and a stream's writer only when yds_stream() makes it, so the
+ *   pages of unused streams are never touched (MinGW, Windows 11: the
+ *   working set grows 340 to 352 KB at the open and about 40 KB per
+ *   stream; 936 to 948 KB when the open zeroed the whole handle). Define
+ *   YDS_MAX_STREAMS smaller before the include to shrink the address
+ *   space too. Do not define YTR_DATA_MAX_COLS for this header: it is
+ *   ysp/trials.h's, and must match every include of it. session.json's values live in a ysp/json.h heap
  *   arena from the open to the close (a few KB; each set copies its value
  *   in). A row write allocates nothing and makes one write call; the C
  *   library allocates each FILE at its open. yds_zip() allocates its
@@ -211,7 +225,8 @@
  *   v0.1.0 - first version (docs/experiment_format.md gap G13): the
  *          folder, session.json with the atomic rewrite, the four tables
  *          and the streams on ysp/trials.h's writer, the adapters, the
- *          stored zip.
+ *          stored zip. On ysp/trials.h v0.6 (256 columns, a 38 KB writer):
+ *          yds_seed_text() for a trial_seed column in trials' spelling.
  *
  *   STATUS: v0.1.0, 2026-10-21: MSVC 19.44, MinGW-w64 gcc 16.1, WSL2 gcc
  *   11.4 (ASan, UBSan), emcc. On an i7-1360P laptop's SSD (NTFS, MSVC
@@ -406,6 +421,12 @@ YDS_API int yds_session_set(yds_dataset* ds, const char* key, const yjs_value* v
 YDS_API int yds_session_push(yds_dataset* ds, const char* key, const yjs_value* v);
 /* session.json as it is now, for a read; NULL when not open. */
 YDS_API const yjs_value* yds_session(const yds_dataset* ds);
+
+/* A trial seed (ytr_trial_seed()) in ysp/trials.h's data-line spelling,
+ * "x" and 16 lowercase hex digits, for a trial_seed column of
+ * YTR_COL_CHARS[YDS_SEED_TEXT] in trials.csv (THE TABLES). */
+#define YDS_SEED_TEXT 18
+YDS_API void yds_seed_text(uint64_t seed, char out[YDS_SEED_TEXT]);
 
 /* Rows written to a table: 0 trials, 1 frames, 2 events, 3 clock, 4 + id a
  * stream; 0 when not open. */
@@ -960,7 +981,11 @@ YDS_API bool yds_open(yds_dataset* ds, const yds_desc* desc) {
     /* An open data set's files would be lost to the memset below. */
     if (ds->open) return yds__ofail(ds, "yds_open: this handle holds an open data set; close it first");
     if (ds->arena_live) yjs_arena_free(&ds->arena);
-    memset(ds, 0, sizeof *ds);
+    /* Not the streams: each is zeroed when yds_stream() makes it, so a
+     * static or calloc'd handle keeps the pages of unused streams
+     * untouched (16 x 38 KB with ysp/trials.h v0.6). */
+    memset(ds, 0, offsetof(yds_dataset, stream));
+    memset(ds->error, 0, sizeof ds->error);
     if (!desc) return yds__ofail(ds, "yds_open: null desc");
     if (!desc->dir || !desc->dir[0]) return yds__ofail(ds, "yds_open: no dir");
     n = strlen(desc->dir);
@@ -1103,6 +1128,14 @@ YDS_API ytr_data* yds_stream_writer(yds_dataset* ds, int id) {
 }
 
 YDS_API const yjs_value* yds_session(const yds_dataset* ds) { return ds && ds->open ? ds->root : NULL; }
+
+YDS_API void yds_seed_text(uint64_t seed, char out[YDS_SEED_TEXT]) {
+    static const char hx[] = "0123456789abcdef";
+    int i;
+    out[0] = 'x';
+    for (i = 0; i < 16; i++) out[1 + i] = hx[(seed >> (60 - 4 * i)) & 15u];
+    out[17] = '\0';
+}
 
 YDS_API int64_t yds_rows(const yds_dataset* ds, int table) {
     if (!ds || !ds->open) return 0;

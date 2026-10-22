@@ -12,7 +12,7 @@ nothing wrote that folder. The player does not exist yet, so the writer
 is library code with tests now, and the player's later work is to call
 it.
 
-### Where it lives (a decision for the user)
+### Where it lives (the user confirmed the name and the prefix, 2026-10-21)
 
 No document placed the writer. rig_spec 6 and experiment_format.md 2.10
 say only "the player" writes each file. trials.md (v0.4) gave the trial
@@ -39,7 +39,7 @@ whose writer it uses.
    `YTR_COL_SET`, `YTR_COL_TEXT`), then open:
 
    ```c
-   static yds_dataset ds;                 /* about 380 KB: static storage */
+   static yds_dataset ds;                 /* about 770 KB: static storage */
    yds_desc d = { 0 };
    d.dir = "data/P07_20261021T140312Z";   /* must not exist; its parent must */
    d.session = session;                   /* copied */
@@ -116,7 +116,8 @@ download the bytes that `write` gets, or give a path. The zip is stored
 | Missing values in frames, events, clock | `_init()` sets each field to the trials writer's missing value; the caller sets what the row has | A zeroed struct would write 0, a value, in every field the caller did not set |
 | Stream names | The column rule and unique in more than case | Each name is a file name; on Windows `dots.csv` and `DOTS.csv` are one file |
 | The zip | Stored, CRC-32, UTF-8 names (bit 11), every date 1980-01-01, the folder's name as the top folder; no zip64 | The pack tool's zip knowledge (`pack/pack_tool.c`), without its alignment and private records. Fixed dates make the bytes depend on the files only (the test pins a digest). A data set of 4 GiB or more does not fit wasm32's memory; on a rig the folder is the data set |
-| Memory | A `ytr_data` per table in the handle (16 streams: about 380 KB); `session.json`'s values in a heap arena | No allocation per row. The arena grows by the values set, which happens at the open, per live change and at the finish |
+| Memory | A `ytr_data` per table in the handle (16 streams: about 770 KB with ysp/trials.h v0.6, 380 KB with v0.5); `session.json`'s values in a heap arena | No allocation per row. The arena grows by the values set, which happens at the open, per live change and at the finish |
+| The handle's size on trials v0.6 | Accepted (option c), with the open zeroing a stream's writer only when `yds_stream()` makes it | trials v0.6 doubled `ytr_data` (256 columns: 18,760 to 38,224 bytes) and the handle (377,496 to 766,776). Measured below: no row, open or close got slower; the cost was the working set, because the open zeroed the whole handle. Zeroing the used parts only brings the open's working set from 936 to 948 KB down to 340 to 352 KB, below v0.5's 564 KB, with no API change. A lower YDS_MAX_STREAMS default would cut capacity for nothing the lazy zeroing does not already save. Caller storage for `ytr_data`'s columns (a trials API change) saves address space only, which a static handle does not spend |
 
 ## Results
 
@@ -125,13 +126,35 @@ WSL2 Ubuntu 22.04 gcc 11.4, emcc under node 24.19.
 
 | Check | Result |
 |---|---|
-| `tests/adapt/dataset_test.c` | 478 checks pass on MSVC (Release, C) and MinGW (C11), in ctest with every other test (76 of 76 and 81 of 81); 472 on WSL2 gcc at -O2 and at -O1 with ASan and UBSan (no Windows lock checks); 453 under emcc and node (no child process). The compile checks build as C99, C11, C11 -O3 and C++17 with warnings as errors on gcc, and with a system header before the header under -std=c11 |
+| `tests/adapt/dataset_test.c` | On ysp/trials.h v0.6.0: 561 checks pass on MSVC (Release, C) and MinGW (C11), in ctest with every other test (76 of 76 and 81 of 81); 555 on WSL2 gcc at -O2 and at -O1 with ASan and UBSan (no Windows lock checks); 536 under emcc and node (no child process). The ysp_trials Python binding's 163 tests pass on the merged tree. The compile checks build as C99, C11, C11 -O3 and C++17 with warnings as errors on gcc, and with a system header before the header under -std=c11 |
 | The golden session | `session.json` at the open and at the finish, the four tables and a stream, byte for byte (`tests/adapt/dataset_golden.h`); every CSV read back by `ysp/table.h`; `session.json` parses and is its own canonical form |
 | Crash | A child process writes rows and a live change, then leaves with `_Exit()` (no finish, no stdio flush): `session.json` parses with `"closed": false` and no `rows`, no temporary file, every row of every file reads back. The same in-process while the data set is open |
 | Atomic rewrite | A folder in the place of `session.json.tmp`: the rewrite fails, the old file stays byte for byte. On Windows, `session.json` held without FILE_SHARE_DELETE: `YDS_ERR_IO` after the 5 tries, the old file whole, no temporary file; the value is written by the next rewrite |
 | The zip | Parsed entry by entry in the test (names, sizes, CRC-32, offsets, modes), the same bytes to a file and to memory, the golden digest; Python's `zipfile` (`testzip()`), Info-ZIP `unzip` and PowerShell's `Expand-Archive` extract the golden zip to the same files |
 | pandas | pandas 2 reads every golden file with its defaults, the quoted line break included |
-| Mutants (`tests/mutate/dataset.toml`) | 32 in all, MinGW gcc 16.1: 31 killed on the first run; ds-09 (no sync before the rename) survives as expected, since only a power cut shows it |
+| trials v0.6's data-line columns | A session with a variable and a seed: each row's variable text and `trial_seed` (`yds_seed_text()`) equal the trials writer's own data line (`ytr_format_row()`), and read back from trials.csv as text |
+| Mutants (`tests/mutate/dataset.toml`) | 33 in all, MinGW gcc 16.1: 32 killed; ds-09 (no sync before the rename) survives as expected, since only a power cut shows it |
+
+The handle's size on ysp/trials.h v0.6 (2026-10-21): the same laptop,
+MinGW-w64 gcc 16.1 -O2, under the measurement lock (load 1 %), A and B
+alternating, three rounds each; A on trials v0.5.1 (handle 377,496
+bytes), B on v0.6.0 (766,776 bytes); medians of each round:
+
+| Call | A | B |
+|---|---|---|
+| Frame row | 11.9, 11.7, 11.6 us | 11.7, 9.0, 9.5 us |
+| Event row | 12.9, 11.7, 11.9 us | 11.7, 11.9, 11.7 us |
+| Trial row | 9.7, 8.4, 9.2 us | 8.9, 8.9, 10.4 us |
+| Open, empty data set (n = 20) | 12.9, 11.9, 12.2 ms | 13.3, 15.4, 13.6 ms |
+| Close, empty data set (n = 20) | 10.8, 9.4, 9.7 ms | 11.0, 11.8, 10.2 ms |
+| session.json rewrite (n = 200) | 9.5, 8.1, 8.5 ms | 8.4, 8.5, 8.2 ms |
+
+The open and the close are the syncs of `session.json` to the disk;
+their spread between rounds (1 to 3 ms) is larger than any difference
+between A and B. The working set that the open adds (a static handle,
+`GetProcessMemoryInfo()`, three runs): 936 to 948 KB with B zeroing the
+whole handle, 340 to 352 KB with B zeroing the used parts (the fix), 564
+KB with A.
 
 Costs (`examples/dataset/bench.c`, 2026-10-21): the Iris Xe laptop
 (i7-1360P) on AC, Windows 11, its internal SSD (NTFS), MSVC 19.44 /O2,

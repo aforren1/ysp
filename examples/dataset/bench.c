@@ -180,6 +180,23 @@ int main(int argc, char** argv) {
            (double)zbytes / 1e6 / ((double)(t1 - t0) / 1e9));
     yds_close(&ds);
 
+    /* Open and close of an empty data set: the handle's memset, the
+     * folder, session.json twice, five files. */
+    printf("handle             %lu bytes (ytr_data %lu)\n", (unsigned long)sizeof ds,
+           (unsigned long)sizeof(ytr_data));
+    n = 20;
+    for (i = 0; i < n; i++) {
+        snprintf(dir, sizeof dir, "%s_oc%02d", name, i);
+        t0 = yrt_now_ns();
+        if (!open_set(&ds, dir, YTR_FLUSH_ROW)) return 1;
+        t1 = yrt_now_ns();
+        yds_close(&ds);
+        t[i] = t1 - t0;
+        t[n + i] = yrt_now_ns() - t1;
+    }
+    report("open (empty)", t, n);
+    report("close (empty)", t + n, n);
+
     snprintf(dir, sizeof dir, "%s_sync", name);
     if (!open_set(&ds, dir, YTR_FLUSH_SYNC)) return 1;
     n = rows / 20;

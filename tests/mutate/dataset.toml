@@ -287,3 +287,11 @@ test = "dataset"
 why = "The memset would drop the first data set's open files: its rows stop and it never closes."
 find = '''    if (ds->open) return yds__ofail(ds, "yds_open: this handle holds an open data set; close it first");'''
 replace = '''    if (0) return yds__ofail(ds, "yds_open: this handle holds an open data set; close it first");'''
+
+[[mutant]]
+id = "ds-33"
+name = "trial seed digits shifted"
+test = "dataset"
+why = "trials.csv's trial_seed must be the trials writer's spelling of the same 64 bits."
+find = '''    for (i = 0; i < 16; i++) out[1 + i] = hx[(seed >> (60 - 4 * i)) & 15u];'''
+replace = '''    for (i = 0; i < 16; i++) out[1 + i] = hx[(seed >> (56 - 4 * i)) & 15u];'''

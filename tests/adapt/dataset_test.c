@@ -989,6 +989,98 @@ static void test_variants(void) {
     yds_close(&g_ds);
 }
 
+/* ysp/trials.h v0.6's data-line columns in a player's trials.csv: the
+ * variable's text and trial_seed in the trials writer's own spelling. */
+typedef struct vrow {
+    int         trial_index;
+    const char* side;
+    char        trial_seed[YDS_SEED_TEXT];
+} vrow;
+
+static const ytr_col g_vrow_cols[] = {
+    YTR_COL(vrow, trial_index, YTR_COL_INT),
+    YTR_COL(vrow, side, YTR_COL_STRING),
+    YTR_COL(vrow, trial_seed, YTR_COL_CHARS),
+};
+
+/* Field k of a CSV line without quotes. */
+static void field(const char* line, int k, char* out, size_t cap) {
+    size_t n = 0;
+    while (k > 0 && *line) if (*line++ == ',') k--;
+    while (*line && *line != ',' && *line != '\n' && n + 1 < cap) out[n++] = *line++;
+    out[n] = 0;
+}
+
+static ytr_trials g_tr;
+static void test_trials_v06(void) {
+    static const char* const sides[] = { "left", "right" };
+    static uint64_t rng_seed = 99;
+    ytr_desc d;
+    ytr_trial_info ti;
+    yds_desc dd;
+    vrow rows[12];
+    char head[4096], line[4096], f[64], p[512];
+    int k_seed = -1, k_side = -1, k, n = 0, i;
+    const char* s;
+    char x[YDS_SEED_TEXT];
+    yds_seed_text(0x00f3a9c4e2b7d158ULL, x);
+    CHECK_S(x, "x00f3a9c4e2b7d158");
+    yds_seed_text(UINT64_MAX, x);
+    CHECK_S(x, "xffffffffffffffff");
+
+    memset(&d, 0, sizeof d);
+    d.factors[0] = ytr_factor("contrast", 3);
+    d.n_factors = 1;
+    d.reps = 4;
+    d.order = YTR_ORDER_RANDOM;
+    d.rng = ytr_splitmix;
+    d.rng_ctx = &rng_seed;
+    d.seed = 0x5eedULL;
+    d.vars[0] = ytr_var_choice("side", sides, 2);
+    d.n_vars = 1;
+    CHECK(ytr_open(&g_tr, &d));
+    CHECK(ytr_format_header(&g_tr, head, sizeof head) > 0);
+    for (k = 0; k < 64; k++) {
+        field(head, k, f, sizeof f);
+        if (!f[0]) break;
+        if (strcmp(f, "trial_seed") == 0) k_seed = k;
+        if (strcmp(f, "side") == 0) k_side = k;
+    }
+    CHECK(k_seed >= 0 && k_side >= 0);
+
+    memset(&dd, 0, sizeof dd);
+    dd.dir = WORK "/v06";
+    dd.trial_cols = g_vrow_cols;
+    dd.n_trial_cols = 3;
+    CHECK(yds_open(&g_ds, &dd));
+    while (n < 12 && ytr_next(&g_tr, &ti) >= 0) {
+        ytr_update(&g_tr, 1, NULL);
+        rows[n].trial_index = ti.index;
+        rows[n].side = ytr_var_text(&g_tr, ti.index, 0);
+        yds_seed_text(ytr_trial_seed(&g_tr, ti.index), rows[n].trial_seed);
+        CHECK_I(yds_write_trial(&g_ds, &rows[n]), 0);
+        /* The same texts as the trials writer's own data line. */
+        CHECK(ytr_format_row(&g_tr, ti.index, line, sizeof line) > 0);
+        field(line, k_seed, f, sizeof f);
+        CHECK_S(rows[n].trial_seed, f);
+        field(line, k_side, f, sizeof f);
+        CHECK_S(rows[n].side, f);
+        n++;
+    }
+    CHECK_I(n, 12);
+    CHECK_I(yds_finish(&g_ds), 0);
+    yds_close(&g_ds);
+    s = read_file(1, path_in(p, sizeof p, WORK "/v06", "trials.csv"));
+    CHECK(s && read_csv(s, strlen(s)));
+    CHECK_I(g_tab.n_rows, 12);
+    CHECK_I(ytb_col_type(&g_tab, ytb_col(&g_tab, "trial_seed")), YTB_STRING);
+    for (i = 0; i < n && i < g_tab.n_rows; i++) {
+        CHECK_S(ytb_text(&g_tab, i, ytb_col(&g_tab, "trial_seed")), rows[i].trial_seed);
+        CHECK_S(ytb_text(&g_tab, i, ytb_col(&g_tab, "side")), rows[i].side);
+    }
+    ytr_close(&g_tr);
+}
+
 int main(int argc, char** argv) {
     bool print = argc > 1 && strcmp(argv[1], "--golden") == 0;
     if (argc > 2 && strcmp(argv[1], "--crash-child") == 0) return crash_child(argv[2]);
@@ -1001,6 +1093,7 @@ int main(int argc, char** argv) {
     test_refusals();
     test_atomic();
     test_variants();
+    test_trials_v06();
     if (g_failures == 0) rm_tree(WORK);
     yjs_arena_free(&g_a);
     printf("dataset_test: %d checks, %d failed\n", g_checks, g_failures);
