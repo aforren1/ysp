@@ -1,0 +1,297 @@
+# ysp/dataset.h mutants: the folder rule, session.json's closed flag and
+# its atomic rewrite, the writer's keys, the tables' counts and failures,
+# stream names, the adapters' missing values and the zip. docs/dataset.md
+# lists the results. The Windows-only checks (a session.json held open)
+# run with MinGW gcc; on POSIX ds-06 and ds-07 survive.
+header = "ysp/dataset.h"
+
+[test.dataset]
+source = "tests/adapt/dataset_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O2", "-w"]
+libs = ["-lm"]
+timeout = 120
+
+# --- the folder -----------------------------------------------------------
+
+[[mutant]]
+id = "ds-01"
+name = "an existing folder written into"
+test = "dataset"
+why = "A second session with the same folder name would overwrite the first one's files."
+find = '''    if ((e = yds__mkdir(ds->dir, &exists)) != 0) {'''
+replace = '''    if ((e = yds__mkdir(ds->dir, &exists)) != 0 && !exists) {'''
+
+[[mutant]]
+id = "ds-02"
+name = "no column check before the folder"
+test = "dataset"
+why = "A refused trial column must leave nothing behind and say which column."
+find = '''    if (yds__check_cols(ds, &ds->trials, desc->trial_cols, desc->n_trial_cols, "yds_open: trial_cols") < 0)
+        return false;'''
+replace = '''    (void)yds__check_cols;'''
+
+[[mutant]]
+id = "ds-03"
+name = "trailing separator kept"
+test = "dataset"
+why = "dir/ gives an empty folder name, so the zip has no top folder."
+find = '''    while (n > 1 && (ds->dir[n - 1] == '/' || ds->dir[n - 1] == '\\')) ds->dir[--n] = '\0';'''
+replace = '''    while (0) ds->dir[--n] = '\0';'''
+
+# --- session.json -----------------------------------------------------------
+
+[[mutant]]
+id = "ds-04"
+name = "closed true at the open"
+test = "dataset"
+why = "An unfinished session must say so; this is D9's one signal."
+find = '''    if (rc == YJS_OK) rc = yjs_set(&ds->arena, ds->root, "closed", yjs_new(&ds->arena, YJS_FALSE));'''
+replace = '''    if (rc == YJS_OK) rc = yjs_set(&ds->arena, ds->root, "closed", yjs_new(&ds->arena, YJS_TRUE));'''
+
+[[mutant]]
+id = "ds-05"
+name = "closed stays false at the finish"
+test = "dataset"
+why = "A finished session would read as one cut short."
+find = '''    yjs_set(&ds->arena, ds->root, "closed", yjs_new(&ds->arena, YJS_TRUE));'''
+replace = '''    yjs_set(&ds->arena, ds->root, "closed", yjs_new(&ds->arena, YJS_FALSE));'''
+
+[[mutant]]
+id = "ds-06"
+name = "a failed rename leaves the temporary file"
+test = "dataset"
+why = "A stale session.json.tmp beside the real file confuses a reader and the next rewrite."
+find = '''    if ((e = yds__replace(tmp, path, ds->dir)) != 0) {
+        yds__remove(tmp);'''
+replace = '''    if ((e = yds__replace(tmp, path, ds->dir)) != 0) {'''
+
+[[mutant]]
+id = "ds-07"
+name = "no retry when session.json is held"
+test = "dataset"
+why = "A virus scanner holds a new file for milliseconds; one try loses the rewrite."
+find = '''    for (tries = 0; tries < 5; tries++) {'''
+replace = '''    for (tries = 0; tries < 1; tries++) {'''
+
+[[mutant]]
+id = "ds-08"
+name = "written in place, no temporary file"
+test = "dataset"
+why = "A crash during the write would leave half a session.json."
+find = '''    yds__path(tmp, sizeof tmp, ds->dir, "session.json.tmp");'''
+replace = '''    yds__path(tmp, sizeof tmp, ds->dir, "session.json");'''
+
+[[mutant]]
+id = "ds-09"
+name = "no sync before the rename"
+test = "dataset"
+expect = "survived"
+why = "After a power cut the renamed file could be empty on some file systems."
+note = "Only a power cut shows it; no test can. Kept as a record that the sync is deliberate."
+find = '''    ok = ok && yds__sync(f);'''
+replace = '''    ok = ok && f;'''
+
+[[mutant]]
+id = "ds-10"
+name = "no LF after the JSON"
+test = "dataset"
+why = "A text file ends in LF; the golden bytes pin it."
+find = '''    ok = ok && fputc('\n', f) != EOF;'''
+replace = '''    ok = ok && f;'''
+
+[[mutant]]
+id = "ds-11"
+name = "the caller's format key accepted"
+test = "dataset"
+why = "The caller could forge closed, format or rows."
+find = '''            if (yds__reserved_key(desc->session->u.members[i].key))'''
+replace = '''            if (0)'''
+
+[[mutant]]
+id = "ds-12"
+name = "session_set may set closed"
+test = "dataset"
+why = "A live change could mark an unfinished session closed."
+find = '''    if (yds__reserved_key(key)) return yds__fail(ds, YDS_ERR_ARG, "%s: '%s' is the writer's key", what, key);'''
+replace = '''    if (0) return yds__fail(ds, YDS_ERR_ARG, "%s: '%s' is the writer's key", what, key);'''
+
+[[mutant]]
+id = "ds-13"
+name = "start_utc replaced"
+test = "dataset"
+why = "A start time the caller gave (a resume, a test) must stay."
+find = '''    if (rc == YJS_OK && !yjs_get(ds->root, "start_utc")) {'''
+replace = '''    if (rc == YJS_OK) {'''
+
+[[mutant]]
+id = "ds-14"
+name = "push replaces the array"
+test = "dataset"
+why = "Each live change must be kept, not only the last."
+find = '''    arr = yjs_get(ds->root, key);'''
+replace = '''    arr = NULL;'''
+
+# --- the finish -------------------------------------------------------------
+
+[[mutant]]
+id = "ds-15"
+name = "rows read after the finish"
+test = "dataset"
+why = "ytr_data_rows() is 0 on a closed writer; every count would be 0."
+find = '''    int64_t n = ytr_data_rows(w);
+    bool ok = ytr_data_finish(w) == 0;'''
+replace = '''    bool ok = ytr_data_finish(w) == 0;
+    int64_t n = ytr_data_rows(w);'''
+
+[[mutant]]
+id = "ds-16"
+name = "write_errors dropped"
+test = "dataset"
+why = "A data set with a hole must say which file has it."
+find = '''    if (errs->n) yjs_set(&ds->arena, ds->root, "write_errors", errs);'''
+replace = '''    if (0) yjs_set(&ds->arena, ds->root, "write_errors", errs);'''
+
+[[mutant]]
+id = "ds-17"
+name = "finish succeeds after a failed write"
+test = "dataset"
+why = "The caller must learn that a table lost rows."
+find = '''    if (!ok)
+        return yds__fail(ds, YDS_ERR_IO, "yds_finish: %s"'''
+replace = '''    if (0)
+        return yds__fail(ds, YDS_ERR_IO, "yds_finish: %s"'''
+
+[[mutant]]
+id = "ds-18"
+name = "stream counts left out"
+test = "dataset"
+why = "rows.streams is the check that each stream's file is whole."
+find = '''    yjs_set(&ds->arena, rows, "streams", streams);'''
+replace = '''    (void)streams;'''
+
+[[mutant]]
+id = "ds-19"
+name = "close does not finish"
+test = "dataset"
+why = "A cleanup path that only closes must still end the files and session.json."
+find = '''    if (ds->open) (void)yds_finish(ds);'''
+replace = '''    if (0) (void)yds_finish(ds);'''
+
+# --- streams ------------------------------------------------------------------
+
+[[mutant]]
+id = "ds-20"
+name = "stream names differ by case only"
+test = "dataset"
+why = "On Windows dots.csv and DOTS.csv are one file: the second open truncates the first."
+find = '''        if (yds__same_ci(ds->stream_name[i], name))'''
+replace = '''        if (strcmp(ds->stream_name[i], name) == 0)'''
+
+[[mutant]]
+id = "ds-21"
+name = "a stream name may start with a digit"
+test = "dataset"
+why = "The name rule is the column rule; 1x is refused there."
+find = '''        if (!letter && !(i > 0 && c >= '0' && c <= '9')) return false;'''
+replace = '''        if (!letter && !(c >= '0' && c <= '9')) return false;'''
+
+[[mutant]]
+id = "ds-22"
+name = "one stream too many"
+test = "dataset"
+why = "The 17th stream would write past the handle's array."
+find = '''    if (ds->n_streams >= YDS_MAX_STREAMS)'''
+replace = '''    if (ds->n_streams > YDS_MAX_STREAMS)'''
+
+# --- the adapters and the row defaults ------------------------------------------
+
+[[mutant]]
+id = "ds-23"
+name = "a frame never shown gets onset 0"
+test = "dataset"
+why = "Onset 0 reads as a time; a frame not shown has none."
+find = '''    f->onset_ns = r->onset ? r->onset : YTR_MISSING_NS;   /* 0: never shown */'''
+replace = '''    f->onset_ns = r->onset;'''
+
+[[mutant]]
+id = "ds-24"
+name = "an unknown phase written as a duration"
+test = "dataset"
+why = "YSCR_PHASE_UNKNOWN is a marker, not 4.29 s."
+find = '''    return ns == YSCR_PHASE_UNKNOWN ? YTR_MISSING_NS : (int64_t)ns;'''
+replace = '''    return (int64_t)ns;'''
+
+[[mutant]]
+id = "ds-25"
+name = "device ticks without YIN_DEVTICKS"
+test = "dataset"
+why = "Without the flag ticks holds nothing of the device's clock."
+find = '''    if (in->flags & YIN_DEVTICKS) e->ticks = in->ticks;'''
+replace = '''    e->ticks = in->ticks;'''
+
+[[mutant]]
+id = "ds-26"
+name = "a landing that never fired gets frame -1"
+test = "dataset"
+why = "-1 is the timeline's pending marker, not a frame index."
+find = '''    e->frame = ev->frame >= 0 ? ev->frame : YTR_MISSING_I64;'''
+replace = '''    e->frame = ev->frame;'''
+
+[[mutant]]
+id = "ds-27"
+name = "event init leaves integers at 0"
+test = "dataset"
+why = "A zero tier or type in every row that did not set one is a false value."
+find = '''    e->trial_index = e->type = e->tier = e->flags = YTR_MISSING_INT;'''
+replace = '''    e->trial_index = YTR_MISSING_INT;'''
+
+# --- the zip ----------------------------------------------------------------------
+
+[[mutant]]
+id = "ds-28"
+name = "zip of an open data set"
+test = "dataset"
+why = "The files still grow; the CRC and the copy would disagree."
+find = '''    if (ds->open || !ds->finished)'''
+replace = '''    if (0)'''
+
+[[mutant]]
+id = "ds-29"
+name = "CRC-32 wrong"
+test = "dataset"
+why = "Every unzip checks the CRC and refuses the entry."
+find = '''        for (i = 0; i < k; i++) c = z->crc_table[(c ^ buf[i]) & 0xFFu] ^ (c >> 8);'''
+replace = '''        for (i = 0; i < k; i++) c = z->crc_table[(c ^ buf[i]) & 0x7Fu] ^ (c >> 8);'''
+
+[[mutant]]
+id = "ds-30"
+name = "local header offset off by one"
+test = "dataset"
+why = "The central directory would point one byte past each entry."
+find = '''        off[i] = z.at;'''
+replace = '''        off[i] = z.at + 1;'''
+
+[[mutant]]
+id = "ds-31"
+name = "names without the UTF-8 flag"
+test = "dataset"
+why = "A folder named déjà_vu would unzip under another name."
+find = '''        yds__w16(h + 8, 0x0800u);'''
+replace = '''        yds__w16(h + 8, 0);'''
+
+[[mutant]]
+id = "ds-32"
+name = "a second open over an open data set"
+test = "dataset"
+why = "The memset would drop the first data set's open files: its rows stop and it never closes."
+find = '''    if (ds->open) return yds__ofail(ds, "yds_open: this handle holds an open data set; close it first");'''
+replace = '''    if (0) return yds__ofail(ds, "yds_open: this handle holds an open data set; close it first");'''
+
+[[mutant]]
+id = "ds-33"
+name = "trial seed digits shifted"
+test = "dataset"
+why = "trials.csv's trial_seed must be the trials writer's spelling of the same 64 bits."
+find = '''    for (i = 0; i < 16; i++) out[1 + i] = hx[(seed >> (60 - 4 * i)) & 15u];'''
+replace = '''    for (i = 0; i < 16; i++) out[1 + i] = hx[(seed >> (56 - 4 * i)) & 15u];'''

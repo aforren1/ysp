@@ -615,3 +615,146 @@ def test_jitter_golden_digests_match_c():
             h = ((h ^ (v.ns & mask)) * 0x100000001B3) & mask
             h = ((h ^ (v.frames & mask)) * 0x100000001B3) & mask
         assert h == w, spec["name"]
+
+
+# --- v0.6: variables, the trial streams, weight x reps, rate='display' -----
+
+_M64 = (1 << 64) - 1
+_G = 0x9E3779B97F4A7C15
+
+
+def _mix64(z):
+    z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & _M64
+    z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & _M64
+    return z ^ (z >> 31)
+
+
+def _stream(seed, i, k):
+    # The manual's VARIABLES, written apart from the header.
+    s = _mix64(((seed ^ 0x6A09E667F3BCC909) + (i + 1) * _G) & _M64)
+    return _mix64((s + (k + 1) * _G) & _M64)
+
+
+def _var_index(seed, i, j, n):
+    return ((_stream(seed, i, 1 + j) >> 11) * n) >> 53
+
+
+def test_vars_equal_an_independent_stream():
+    assert _stream(0, 0, 0) == 0x96DCB1D7126A6EBA     # pinned in trials_test_vars.h
+    assert _stream(20261021, 999, 2) == 0xB1F2FA923152EA67
+    odd = ["a b", "c,d", "été"]
+    seed = 2**64 - 5
+    t = ytr.Trials(n_conditions=3, reps=6, order=ytr.ORDER_FULL_RANDOM, rng=5, seed=seed,
+                   vars=[ytr.var_choice("side", ["left", "right"]), ytr.var_choice("odd", odd)])
+    assert t.vars == ["side", "odd"]
+    n = 0
+    while (ti := t.next()) is not None:
+        i = ti.index
+        assert t.var(i, "side") == ["left", "right"][_var_index(seed, i, 0, 2)]
+        assert t.var(i, 1) == odd[_var_index(seed, i, 1, 3)]
+        assert t.var_index(i, "odd") == _var_index(seed, i, 1, 3)
+        assert t.trial_seed(i) == _stream(seed, i, 0)
+        t.update(1)
+        n += 1
+    assert n == 18
+    with pytest.raises(IndexError):
+        t.var(n, 0)
+    with pytest.raises(ytr.ArgumentError, match="no var of that name"):
+        t.var(0, "nope")
+    # vars draw nothing from the session's generator: same schedule
+    u = ytr.Trials(n_conditions=3, reps=6, order=ytr.ORDER_FULL_RANDOM, rng=5)
+    assert run_all(u) == [h.condition for h in t.history()]
+
+
+def test_vars_in_the_data_line_and_replay():
+    t = ytr.Trials(n_conditions=2, reps=5, order=ytr.ORDER_RANDOM, rng=3, seed=9,
+                   vars=[ytr.var_choice("side", ["left", "right"]), ytr.var_choice("w", ["x,y", "z"])])
+    run_all(t)
+    assert t.format_header().endswith(",outcome,side,w,trial_seed\n")
+    for i in range(t.n_run):
+        w = t.var(i, "w")
+        assert t.format_row(i).endswith("," + t.var(i, "side") + "," + ('"x,y"' if w == "x,y" else w) +
+                                        ",x%016x\n" % t.trial_seed(i))
+    r = ytr.Trials(n_conditions=2, reps=5, order=ytr.ORDER_RANDOM, rng=3, seed=9,
+                   vars=[ytr.var_choice("side", ["left", "right"]), ytr.var_choice("w", ["x,y", "z"])])
+    r.restore([h.outcome for h in t.history()])
+    assert [r.format_row(i) for i in range(r.n_run)] == [t.format_row(i) for i in range(t.n_run)]
+    snap = t.save()
+    assert snap[4] == 5
+    with pytest.raises(ytr.Error, match="desc.seed does not match"):
+        ytr.Trials.load(snap, n_conditions=2, reps=5, order=ytr.ORDER_RANDOM, rng=3, seed=10,
+                        vars=[ytr.var_choice("side", ["left", "right"]), ytr.var_choice("w", ["x,y", "z"])])
+
+
+def test_trial_seed_column_round_trips():
+    # "x" and 16 hex digits: text in ysp/table.h, the csv module and pandas by
+    # their defaults, so every bit comes back; a seed of 0 and seeds whose top
+    # nibble is 0 keep their 16 digits.
+    seeds = []
+    for seed in (0, 1, 2**63, 2**64 - 1):
+        t = ytr.Trials(n_conditions=2, reps=8, order=ytr.ORDER_RANDOM, rng=7, seed=seed,
+                       vars=[ytr.var_choice("side", ["left", "right"])])
+        run_all(t)
+        text = t.format_header() + "".join(t.format_row(i) for i in range(t.n_run))
+        want = [t.trial_seed(i) for i in range(t.n_run)]
+        seeds += want
+        tab = ytr.Table(text)
+        assert tab.types[tab.columns.index("trial_seed")] == "string"
+        got = [tab.value(i, "trial_seed") for i in range(len(tab))]
+        assert got == ["x%016x" % v for v in want]
+        assert [int(s[1:], 16) for s in got] == want
+        assert [r["trial_seed"] for r in csv.DictReader(io.StringIO(text))] == got
+        try:
+            import pandas as pd
+        except ImportError:   # optional: the CSV and table checks above stand
+            pd = None
+        if pd is not None:
+            col = pd.read_csv(io.StringIO(text))["trial_seed"]
+            assert list(col) == got
+    assert any(v >> 60 == 0 for v in seeds)
+
+
+def test_vars_rules_round_trip_and_errors():
+    t = ytr.Trials(n_conditions=2, rng=4, seed=11,
+                   rules="order random\nreps 3\nvar side choice left right\nvar q choice \"a b\" c\n")
+    assert t.vars == ["side", "q"]
+    assert "\nvar side choice left right\nvar q choice \"a b\" c\n" in t.format_rules()
+    run_all(t)
+    u = ytr.Trials(n_conditions=2, rng=4, seed=11, rules=t.format_rules())
+    run_all(u)
+    assert [u.var(i, "q") for i in range(u.n_run)] == [t.var(i, "q") for i in range(t.n_run)]
+    with pytest.raises(ytr.ArgumentError, match="expected: var NAME choice"):
+        ytr.Trials(n_conditions=2, rng=4, rules="reps 1\nvar side left right\n")
+    with pytest.raises(ytr.ArgumentError, match=r"desc.vars\[0\] \(side\) needs 1 to 32 values"):
+        ytr.Trials(n_conditions=2, reps=1, rng=4, vars=[ytr.var_choice("side", [])])
+
+
+def test_weight_times_reps():
+    tab = ytr.Table(COND_CSV)
+    t = ytr.Trials(table=tab, rng=1, rules="order random\nweight n\nreps 3\n")
+    assert t.n_scheduled == 3 * 8
+    assert "\ncond_reps 6 3 6 3 3 3\n" in t.format_rules()
+    t2 = ytr.Trials(table=tab, rng=1, rules="order random\nweight n\n")
+    assert t2.n_scheduled == 8
+    with pytest.raises(ytr.ArgumentError, match="reps with cond_reps"):
+        ytr.Trials(table=tab, rng=1, rules="cond_reps 1 1 1 1 1 1\nreps 2\n")
+
+
+def test_rate_display():
+    kw = dict(n_conditions=2, reps=10, order=ytr.ORDER_RANDOM, rng=6)
+    with pytest.raises(ytr.ArgumentError, match="snaps to the display's rate"):
+        ytr.Trials(jitters=[ytr.uniform("soa_s", 0.8, 1.2, rate="display")], **kw)
+    d = ytr.Trials(jitters=[ytr.uniform("soa_s", 0.8, 1.2, rate="display")], display_rate=(60000, 1001), **kw)
+    f = ytr.Trials(jitters=[ytr.uniform("soa_s", 0.8, 1.2, rate=(60000, 1001))], **kw)
+    run_all(d)
+    run_all(f)
+    assert [d.jitter(i, 0) for i in range(d.n_run)] == [f.jitter(i, 0) for i in range(f.n_run)]
+    assert "jitter soa_s uniform 0.8 1.2 rate=display" in d.format_rules()
+    assert " display_rate=60000/1001" in d.format_meta()
+    r = ytr.Trials(display_rate=60, rules="order random\nreps 10\njitter soa_s uniform 0.8 1.2 rate=display\n",
+                   **{k: v for k, v in kw.items() if k not in ("reps", "order")})
+    assert r.jitter(r.next().index, 0).frames in range(48, 73)
+    with pytest.raises(ytr.ArgumentError, match="rate is an int"):
+        ytr.Trials(jitters=[ytr.uniform("soa_s", 0.8, 1.2, rate="screen")], display_rate=60, **kw)
+    with pytest.raises(ytr.ArgumentError, match="YTR_RATE_DISPLAY needs a session"):
+        ytr.jitter_map(ytr.uniform("soa_s", 0.8, 1.2, rate="display"), 0.5)

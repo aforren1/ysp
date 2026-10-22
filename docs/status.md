@@ -37,6 +37,7 @@ renderers, in tests and CI.
 | rigfile | none | Binds through a fake transport | docs/device.md |
 | color | not applicable (pure computation) | No number is a measurement of light | color.h; docs/color.md |
 | stair, quest, aep, trials, table, json, pack, timeline, rdk, outline | not applicable (pure computation) | | |
+| dataset | not applicable (files only): NTFS on Windows 11, ext4 on WSL2, Emscripten's in-memory file system | A power cut; macOS | docs/dataset.md |
 
 ## Files to copy
 
@@ -52,6 +53,7 @@ unless your file already did.
 | stair, table, json, pack, timeline, input, color, rdk, outline | | the header | none |
 | quest, aep | rt.h with `YQST_ASYNC`, `YAEP_ASYNC` only | the header (+ rt.h for the async layer) | none |
 | trials | table.h | trials.h, table.h | none |
+| dataset | trials.h, json.h | dataset.h, trials.h, table.h, json.h | none |
 | parallel | rt.h | parallel.h, rt.h | InpOut driver on Windows |
 | serial | rt.h | serial.h, rt.h | none |
 | response | input.h | response.h, input.h | none |
@@ -136,12 +138,26 @@ Purpose: Trial sequencing above the adaptive methods: conditions and repetitions
 
 Status:
 
+- v0.6.0: four gaps of the [experiment definition](experiment_format.md) closed. G3: variables drawn per trial (`desc.vars[]`, `ytr_var_choice()`, rules `var NAME choice ...`) from the trial's own stream of `desc.seed` and the trial index, logged in the data line, replayed by restore and snapshot (format 5), no draw from the session's generator; `ytr_trial_seed()`. G4: `weight COLUMN` times `reps`. G11: `rate=display` (`YTR_RATE_DISPLAY`, `desc.display_rate_num`). G10: 256 columns in a data file. The data line has a `trial_seed` column (`x` and 16 hex digits, text in pandas, R and ysp/table.h). Pins unchanged; 21 of 21 new mutations caught. [Design notes](trials.md#v06-variables-weight-x-reps-the-displays-rate-256-columns).
 - v0.5.1: the snapshot magic is `YTRL` (was the psy-era `PSTR`, now refused; no saved data existed).
 - v0.5.0: every column of seconds ends in `_s` (the user's decision, 2026-10-20: jsPsych writes `rt` in ms, PsychoPy in s). `ytr_data_open()` refuses, by name, a `TIME_NS` column without `_s` or `_ns` and a session jitter without `_s`; 6 new refusals tested, 4 of 4 new mutations caught. [Design notes](trials.md#v05-columns-of-seconds-end-in-_s).
 - v0.4.1: builds under -std=c11 when a system header comes before it (fileno() for YTR_FLUSH_SYNC on glibc).
 - v0.4.0 (the data writer, on the [Conventions](conventions.md): `ytr_data_finish()` and a void `ytr_data_close()`, a `TIME_NS` column `x_ns` written `x_s`; every type, missing value and 400 random strings with commas, quotes, line breaks and bad UTF-8 read back by ysp/table.h, 2000 random doubles bit for bit; 25 of 25 mutations caught; a 26-column row costs 4.2 / 1.9 us to format, 15 / 14 us with the write to the OS, 1.7 ms with a sync to disk, gcc / MSVC).
 - v0.3.0 (the [Conventions](conventions.md): jitters in `int64_t` ns with `_ns` desc fields, seconds kept in rules, tables and bindings with every pinned draw unchanged; `ytr_open_saved()`, `ytr_close()`, messages from the loop calls).
 - v0.2.1. The hashes of 600 v0.1.1 and 320 v0.2.0 sessions match on gcc, MSVC and Linux; jitter distributions checked against their CDFs, the draws integer-only with golden digests that match under every compiler and flag set tried (-Ofast and /fp:fast included), and the snapped exponential's hazard measured; each v0.2 order checked by chi-square against its stated distribution, units and balance uniform over every valid order of small designs; 22.9 million fuzz inputs and 47 of 47 mutations caught; gcc and MSVC, sanitizer clean. Sequential order identical to PsychoPy's TrialHandler and the random orders' block properties matched over 100 seeds ([tests/compare/](../tests/compare/)). open() of a 10,000-trial design 0.02 to 7 ms. [Design notes](trials.md).
+
+### ysp/dataset.h
+
+- Header: [ysp/dataset.h](../include/ysp/dataset.h)
+- Prefix: `yds_`, `YDS_`
+- Platforms: Windows, Linux, macOS (not run), Emscripten (its in-memory file system)
+- Needs: ysp/trials.h (and so ysp/table.h), ysp/json.h
+
+Purpose: A session's data set (experiment_format.md D9 and 2.10, gap G13): a folder with `session.json` (canonical JSON, format "ysp-session" 1, `"closed": false` until the finish, every rewrite atomic: a synced temporary file renamed over), `trials.csv` (the caller's columns), `frames.csv` (flip records), `events.csv` (landings, inputs, responses, outputs), `clock.csv` (clock pairs and fits) and `streams/<name>.csv`, each row in the OS when its write returns, through ysp/trials.h's writer. Inline adapters from `yscr_record`, `yin_event`, `ytl_event` and `yrt_fit_info`. A stored zip of the finished folder for the web. A folder that exists is refused.
+
+Status:
+
+- v0.1.0 (2026-10-21): the first version (gap G13). A synthetic session against golden bytes (session.json at the open and at the finish, four tables, a stream, the zip's digest), a crash in a child process (every file reads, `"closed": false`), the atomic rewrite against a blocked temporary file and a held session.json, refusals before the folder exists: on ysp/trials.h v0.6.0 (`trial_seed` in trials' spelling through `yds_seed_text()`): 561 checks on MSVC and MinGW, 555 on WSL2 gcc with ASan and UBSan, 536 under emcc; the zip opened by Python's zipfile, unzip and Expand-Archive, every CSV by pandas. 32 of 33 mutants killed (one survivor expected: the sync before the rename). On trials v0.6 the handle is 767 KB; the open leaves the pages of unused streams untouched, so its working set grows 340 to 352 KB (was 936 to 948). On the Iris Xe laptop's SSD: 12 us a frame or event row, 8.2 ms an atomic rewrite of session.json. [Design notes](dataset.md).
 
 ### ysp/table.h
 
@@ -150,10 +166,11 @@ Status:
 - Platforms: any
 - Needs: nothing
 
-Purpose: Typed tables as one position-independent, hashed block: an RFC 4180 CSV parser with hard bounds (32767 rows, 64 columns, 4096-byte fields), errors that name the line, row and column, int32, number and string columns with levels, and a correctly rounded number syntax no locale can change. The pack stores the same block, and a view checks it in place. No heap; file I/O only with `YTB_STDIO`.
+Purpose: Typed tables as one position-independent, hashed block: an RFC 4180 CSV parser with hard bounds (32767 rows, 256 columns, 4096-byte fields), errors that name the line, row and column, int32, number and string columns with levels, and a correctly rounded number syntax no locale can change. The pack stores the same block, and a view checks it in place. No heap; file I/O only with `YTB_STDIO`.
 
 Status:
 
+- v0.3.0: 256 columns (was 64), for a trial row with many recorded stimuli; the block format and hash are unchanged; 2 of 2 new mutations caught. [Design notes](table.md#256-columns-v030).
 - v0.2.0 (the [Conventions](conventions.md): `ytb_open_csv()`, `ytb_open_csv_file()`, `ytb_open_view()`, `ytb_close()`, negative number reasons).
 - v0.1.0. Numbers equal to strtod bit for bit on 10 million strings per compiler; every single-bit flip of a block refused; 5.9 million fuzz inputs; 24 of 25 mutations caught, the other equivalent. Parse 97 to 218 MB/s. [Design notes](table.md).
 
@@ -524,5 +541,6 @@ Purpose: The pack's EXPERIMENT entry: a JSON file, read by ysp/json.h, that name
 
 Status:
 
-- Design decided, 2026-10-14: all 15 decisions accepted; D4 changed (durations are plain numbers in seconds, and every duration key and variable ends in `_s`); D11 records flagged frames only, and a requeue, if ever added, is an explicit rule in the definition. G7 (a canonical form for non-integer numbers, the prerequisite for the experiment hash) is closed by ysp/json.h v0.2.0 (2026-10-21). G9 (glyph runs from the definition's texts) is closed by the pack tool v0.6.0 (2026-10-21; `examples/pack/stroop/` is the Stroop example's pack source, with no listed glyph runs). No loader, no player.
+- 2026-10-21: the data set's writer is built, ysp/dataset.h v0.1.0 (gap G13).
+- Design decided, 2026-10-14: all 15 decisions accepted; D4 changed (durations are plain numbers in seconds, and every duration key and variable ends in `_s`); D11 records flagged frames only, and a requeue, if ever added, is an explicit rule in the definition. G7 (a canonical form for non-integer numbers, the prerequisite for the experiment hash) is closed by ysp/json.h v0.2.0 (2026-10-21). G9 (glyph runs from the definition's texts) is closed by the pack tool v0.6.0 (2026-10-21; `examples/pack/stroop/` is the Stroop example's pack source, with no listed glyph runs). G3 (variables from a per-trial stream), G4 (weight x reps), G10 (256 columns) and G11 (`rate=display`) are closed by ysp/trials.h v0.6.0 and ysp/table.h v0.3.0 (2026-10-21). No loader, no player.
 - Proposal, 2026-10-13. Four worked examples (2AFC staircase, RDK, Stroop from a CSV, EEG trigger) were mapped to the C examples field by field; 13 gaps in the C APIs are listed.

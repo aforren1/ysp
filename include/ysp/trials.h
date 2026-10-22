@@ -1,4 +1,4 @@
-/* ysp/trials.h - v0.5.1 - public domain single-header trial sequencing library
+/* ysp/trials.h - v0.6.0 - public domain single-header trial sequencing library
  *
  *   The layer above the adaptive methods: which trial comes next, and what
  *   happened on it. Conditions and repetitions (the method of constant
@@ -134,7 +134,7 @@
  *       dd.trials = &t;
  *       dd.cols = cols;
  *       dd.n_cols = 4;
- *       static ytr_data w;                        // about 18 KB
+ *       static ytr_data w;                        // about 38 KB
  *       if (!ytr_data_open(&w, &dd)) { fputs(ytr_data_error(&w), stderr); return 1; }
  *       while (ytr_next(&t, &ti) >= 0) {
  *           row r = run_trial(&ti);
@@ -453,9 +453,14 @@
  *       order latin|balanced_latin       ORDER_LIST, a row of the square over
  *                                        the rows, row = participant
  *       reps N                           desc.reps
- *       cond_reps N N ...                desc.cond_reps (one per row)
+ *       cond_reps N N ...                desc.cond_reps (one per row), each
+ *                                        row's whole count: refused beside
+ *                                        reps, which it would hide (v0.6)
  *       weight COLUMN                    desc.cond_reps from an integer
- *                                        column (OpenSesame's weight)
+ *                                        column: each row's count per
+ *                                        repetition (OpenSesame's weight),
+ *                                        times reps (the text's or the
+ *                                        desc's) from v0.6
  *       where SELECTOR                   rows that do not match get no
  *                                        trials (repeatable, all must hold)
  *       subset K                         desc.subset
@@ -483,7 +488,12 @@
  *       jitter NAME uniform LO HI [rate=NUM[/DEN]]          desc.jitters[]
  *       jitter NAME choice V V ... [rate=NUM[/DEN]]         (v0.2.1); LO, HI
  *       jitter NAME exponential LO HI SCALE [rate=NUM[/DEN]] and SCALE are
- *                                        seconds or a numeric column
+ *                                        seconds or a numeric column;
+ *                                        rate=display (v0.6) is
+ *                                        YTR_RATE_DISPLAY (JITTER)
+ *       var NAME choice V V ...          desc.vars[] (v0.6; VARIABLES); a
+ *                                        value with a blank, '#' or '=' is
+ *                                        quoted ("a b"; "" is a quote)
  *     A statement that sets one field may come once (a second names the
  *     first's line); where, list and the rules accumulate (rules are
  *     appended after any the desc holds). The participant number is
@@ -525,6 +535,12 @@
  *       ytr_frames(j, num, den)            j snapped to whole frames of
  *                                            num/den Hz (ysp/timeline.h's
  *                                            rates; den 0 means 1)
+ *       ytr_frames(j, YTR_RATE_DISPLAY, 0) j snapped to the display's
+ *                                            frames (v0.6): open() takes the
+ *                                            rate from desc.display_rate_num
+ *                                            / display_rate_den (den 0 means
+ *                                            1), and refuses the session,
+ *                                            naming the jitter, without one
  *     0 <= lo <= hi <= YTR_JITTER_MAX_NS (1e6 s), 1 ns <= s <= 1e6 s,
  *     values in [0, 1e6] s. The name heads the jitter's data-line column:
  *     1 to 31 of [A-Za-z0-9_], not starting with a digit, unique in the
@@ -556,6 +572,15 @@
  *     test measures it (STATUS). When no whole frame lies in [lo, hi],
  *     open() and ytr_jitter_check() refuse and name the rate and the
  *     interval.
+ *     THE DISPLAY'S RATE (v0.6). The rules text cannot know the rig's
+ *     refresh, so `rate=display` leaves it to the caller (the player sets
+ *     desc.display_rate_num and display_rate_den from the screen after
+ *     ytr_rules(), before open()). From open() on the jitter is one at that
+ *     rate: the same draws, data line and snapshot bytes as `rate=NUM/DEN`
+ *     with the same numbers. ytr_format_rules() writes rate=display, so a
+ *     logged session pastes onto another rig; ytr_format_meta() writes the
+ *     rate drawn on and display_rate=NUM/DEN. The call level has no
+ *     session, so ytr_jitter_check() refuses YTR_RATE_DISPLAY.
  *     PER CONDITION. With desc.table, lo_column, hi_column and (for
  *     EXPONENTIAL) scale_column name numeric columns whose cells (seconds,
  *     as data are) replace lo, hi and s for a trial of that row; open()
@@ -598,6 +623,46 @@
  *     generator between next() and update() moves every later draw, and
  *     restore() would not repeat it. Use desc.jitters (replayed and
  *     logged), or a generator of the caller's own that the caller logs.
+ *
+ *   VARIABLES (desc.vars[], desc.n_vars, desc.seed; v0.6)
+ *     A variable is a categorical value drawn for every trial (the side of
+ *     a 2AFC target, a cue's validity): ytr_var_choice(name, values, n),
+ *     one of n texts (1 to YTR_MAX_VAR_VALUES, 32; each 1 to 63 bytes of
+ *     UTF-8), each 1/n likely; repeat a value to weight it. At most
+ *     YTR_MAX_VARS (4). The name follows a jitter's rule and may not be a
+ *     jitter's or a table column's. The data line has one column per
+ *     variable, after the jitters, with the value's text (CSV-quoted when
+ *     needed), then a `trial_seed` column whenever trial seeds are defined
+ *     (variables, or a nonzero seed): the seed as "x" and 16 lowercase hex
+ *     digits (x00f3a9c4e2b7d158), so a file gives each trial's stimulus
+ *     seed without the hash below. That spelling is text in ysp/table.h,
+ *     pandas and R's read.csv with their defaults, so all 64 bits read
+ *     back; a decimal has 20 digits, which ysp/table.h refuses and R's
+ *     double rounds, R reads "0x..." as a double, and bare hex reads as a
+ *     number when every digit happens to be decimal. A variable may not be
+ *     named trial_seed. ytr_var(t, i, j) gives trial i's value index,
+ *     ytr_var_text() its text, ytr_var_index() finds j by name. open()
+ *     copies the texts.
+ *     THE TRIAL'S STREAM. A variable draws nothing from desc.rng: each
+ *     trial has a stream of its own, a function of desc.seed and the trial
+ *     index only, so a variable added or removed moves no other draw (the
+ *     schedule, the tracks, the jitters), and ytr_restore() and a snapshot
+ *     give every value again without storing one. With G =
+ *     0x9E3779B97F4A7C15, K = 0x6A09E667F3BCC909 and mix64 splitmix64's
+ *     output function (ytr_splitmix):
+ *       state(i)        = mix64((seed ^ K) + (i + 1) G)        (mod 2^64)
+ *       output(i, k)    = mix64(state(i) + (k + 1) G)
+ *       ytr_trial_seed  = output(i, 0): the seed of a stimulus generator
+ *                         of the trial's own (an RDK field, a noise image)
+ *       variable j      = floor((output(i, 1 + j) >> 11) n / 2^53)
+ *     K keeps the streams apart from a splitmix64 session generator that
+ *     the caller seeds with the same number. The hash is pinned: the test
+ *     checks values computed from these lines. A re-queued trial is a new
+ *     trial with a new index, so it draws new values; a trial handed out
+ *     again (next() before update()) keeps its own. desc.seed is the
+ *     caller's to log, as the generator's seed is (ytr_format_meta()
+ *     writes it); the player gives each node its own (the experiment
+ *     definition's D8).
  *
  *   TRACKS (desc.tracks[], desc.n_tracks, desc.interleave, desc.track_rate)
  *     A track is {ctx, is_done(ctx), weight}. While a track is not done and
@@ -757,6 +822,12 @@
  *     end of the state section i32 blk, i32 blk_next, u8 units, u8
  *     has_leadin. schedule_flags then also carry the unit, block-start and
  *     lead-in marks of each slot.
+ *     SNAPSHOT LAYOUT, format 5 (v0.6), for a desc with variables or a
+ *     nonzero seed: format 4 (with n_jitters 0 when it has none) with, at
+ *     the end of the desc section, u64 seed, i32 n_vars and per variable u8
+ *     name length and the name's bytes, i32 n_values, and per value u8
+ *     length and its bytes. No draw is stored: each is a function of the
+ *     seed and the trial index (VARIABLES).
  *     SNAPSHOT LAYOUT, format 4 (v0.3.0), for a desc with jitters: format
  *     2 (its desc and state sections whether or not a v0.2 field is used)
  *     with, at the end of the desc section, i32 n_jitters and per jitter u8
@@ -801,8 +872,11 @@
  *     COLUMNS. Declared once, at open; open() copies them, so the array may
  *     go away. A name is [A-Za-z_][A-Za-z0-9_]*, at most 63 bytes, unique
  *     among all the file's columns (a session's included), and the file
- *     has at most YTR_DATA_MAX_COLS (64): ysp/table.h's header rules, so
- *     the file reads back. A column gets its value one of three ways:
+ *     has at most YTR_DATA_MAX_COLS (256 from v0.6, ysp/table.h's
+ *     YTB_MAX_COLUMNS; define it lower to save 104 bytes a column):
+ *     ysp/table.h's header rules, so the file reads back. The header line
+ *     goes out in pieces, so its length is not bounded by YTR_DATA_BUF;
+ *     a session's part of a row still is (open() says so). A column gets its value one of three ways:
  *       YTR_COL(T, field, type)     from the field of the struct of type T
  *                                     that ytr_data_write() is given; the
  *                                     name is the field's. open() checks
@@ -974,6 +1048,8 @@
  *     above for it, one raw draw per jitter in jitter order. open() draws
  *     none, so the schedule is the one without jitters; next() returning
  *     the pending trial again draws none.
+ *     v0.6. Variables draw nothing from desc.rng (VARIABLES), so a desc with
+ *     variables draws exactly as the same desc without them.
  *     Nothing else draws: not update(), mark_break(), load(), done(), the
  *     format functions or the tallies.
  *
@@ -1038,7 +1114,9 @@
  *   unit moves (2 x 2 bytes per trial), the group order (2 bytes per
  *   condition) and the table's level pointers: 110528 bytes; v0.2.1 adds
  *   8 bytes per trial per YTR_MAX_JITTERS (4) for the draws and 1.7 KB
- *   for the jitters' settings: 243344 bytes (YTR_MAX_JITTERS 1: 143744).
+ *   for the jitters' settings: 243344 bytes (YTR_MAX_JITTERS 1: 143744);
+ *   v0.6 adds 2 KB per YTR_MAX_VARS (4) and the table's level pointers for
+ *   256 columns: 253376 bytes. A variable costs nothing per trial.
  *   Nothing allocates. The caller's per-trial
  *   records live in desc.records, a buffer of at least record_size x
  *   YTR_MAX_TRIALS bytes the caller provides. Define YTR_MAX_TRIALS or
@@ -1047,7 +1125,9 @@
  *   A handle is not thread-safe; one thread runs one session.
  *   The data writer's handle (v0.4) holds the column list, the CONST
  *   texts and the row buffer: 18,856 bytes on a 64-bit ABI at the
- *   defaults (YTR_DATA_BUF 8192). ytr_data_write() allocates nothing and
+ *   defaults (YTR_DATA_BUF 8192) in v0.4; 38,224 in v0.6 (256 columns
+ *   of 104 bytes: a 64-byte name, kept apart, and 40 bytes that a row
+ *   reads). ytr_data_write() allocates nothing and
  *   makes one write call per row; the C library allocates the FILE at
  *   open, and the file has no stdio buffer to allocate. One thread writes
  *   one file.
@@ -1083,6 +1163,35 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.6.0 - three gaps of the experiment definition (docs/
+ *          experiment_format.md 1.4) and the column bound:
+ *          - G3: variables (VARIABLES): desc.vars[] of ytr_var_choice(), a
+ *            categorical value per trial from the trial's own stream of
+ *            desc.seed and the trial index, logged in the data line,
+ *            replayed by restore() and a snapshot; ytr_var(),
+ *            ytr_var_text(), ytr_var_index(), ytr_trial_seed(); the rules
+ *            statement `var NAME choice V V ...`. Nothing is drawn from
+ *            desc.rng for them, so no other draw moves. The data line ends
+ *            with a trial_seed column ("x" and 16 hex digits) whenever
+ *            trial seeds are defined.
+ *          - G4: `weight COLUMN` is each row's count per repetition, times
+ *            reps (the text's or the desc's). BREAKING for rules that gave
+ *            both: such a session now has reps times the trials. `cond_reps`
+ *            beside `reps` is refused, since reps was ignored there.
+ *          - G11: YTR_RATE_DISPLAY and `rate=display`: a jitter snapped to
+ *            desc.display_rate_num / display_rate_den, which the caller
+ *            sets from the screen after ytr_rules().
+ *          - G10: a data file holds YTR_DATA_MAX_COLS (256, was 64)
+ *            columns, ysp/table.h 0.3.0's bound; the header line goes out
+ *            in pieces, so long names do not hit YTR_DATA_BUF; the writer's
+ *            column names live apart from the 40 bytes a row reads.
+ *            ytr_data grew from 18,856 to 38,224 bytes.
+ *          - Snapshot format 5 for a desc with variables or a seed. Every
+ *            other desc gives the same schedule, draws, history, records,
+ *            tallies, format lines (but the version token) and snapshot
+ *            bytes: the 600 v0.1.1 and 320 v0.2.0 pins still match.
+ *          - The handle grew by 10 KB (variables, 256 table columns):
+ *            253376 bytes at the defaults.
  *   v0.5.1 - the snapshot magic is "YTRL"; the psy-era "PSTR" is refused
  *          as not a snapshot (no saved data existed). No number changed.
  *   v0.5.0 - every column of seconds ends in _s (user decision,
@@ -1246,6 +1355,26 @@
  *          - ytr_condition_at() indexes the practice slots too.
  *   v0.0 - specification. Declarations and the manual, no implementation.
  *
+ *   STATUS: v0.6.0, 2026-10-21. tests/adapt/trials_test_vars.h: every
+ *   variable value and trial seed against a second implementation of the
+ *   stream, three outputs pinned; a session with variables draws as one
+ *   without; 300,000 trials of the stream, values chi-square 4.01 on 2 df,
+ *   two variables' pairs 4.77 on 5 df; restore() and save/load (format 5)
+ *   give every data line again; refusals by name; the `var` statement and
+ *   its round trip; weight x reps against the C product; rate=display
+ *   against a fixed rate (the same draws and snapshot bytes). 256 columns
+ *   written and read back, 257 refused. The 600 v0.1.1 and 320 v0.2.0
+ *   pins, the jitter digests and the v0.2 digest are unchanged. MSVC 19.44
+ *   (ctest, 89 of 89), MinGW-w64 gcc 16.1, WSL2 gcc 11.4 under ASan and
+ *   UBSan (C11; C++17 without -Wpedantic, which the test's own compound
+ *   literals fail), YTR_MAX_TRIALS 256, YTR_MAX_JITTERS 1, C99, emcc.
+ *   Mutations: 21 new (x-01 to x-21), 99 of 99 in tests/mutate/
+ *   trials.toml killed. Fuzzed (vars and rate=display seeds) under MSVC
+ *   libFuzzer with ASan: 3,205,678 inputs in 601 s, no crash; the corpus
+ *   replayed on Linux under ASan and UBSan. The writer's cost per row is
+ *   unchanged at 26 and 64 columns; 256 columns cost 117 / 55 us to
+ *   format (gcc / MSVC, Iris Xe laptop, measurement lock); no allocation
+ *   in a write. docs/trials.md has the table.
  *   STATUS: v0.5.0, 2026-10-20. The refusal of a column of seconds
  *   without _s: 6 new refusals in tests/adapt/trials_test_data.h (40 in
  *   all), the compile check refuses a TIME_NS column named rt; d-26 to
@@ -1431,9 +1560,9 @@
 /* The version of this header, for a log line or a compile-time check. The
  * string is the three numbers, and the test asserts that it stays so. */
 #define YTR_VERSION_MAJOR 0
-#define YTR_VERSION_MINOR 5
-#define YTR_VERSION_PATCH 1
-#define YTR_VERSION_STRING "0.5.1"
+#define YTR_VERSION_MINOR 6
+#define YTR_VERSION_PATCH 0
+#define YTR_VERSION_STRING "0.6.0"
 
 /* fsync() and fileno() for YTR_FLUSH_SYNC under -std=c11: the feature-test
  * macro of ysp/rt.h and ysp/pack.h, set before the first system header
@@ -1488,6 +1617,15 @@ extern "C" {
 #define YTR_MAX_JITTER_VALUES 32   /* values of one CHOICE jitter        */
 #define YTR_MAX_JITTER_NAME   31   /* bytes of a jitter's name           */
 #define YTR_JITTER_MAX_NS ((int64_t)1000000000000000)  /* 1e6 s, the longest duration */
+/* A jitter's rate_num that means "the session's display rate" (v0.6):
+ * desc.display_rate_num / display_rate_den, which the caller sets from the
+ * screen after ytr_rules() (rules text: rate=display). */
+#define YTR_RATE_DISPLAY    (-1)
+/* Variables drawn per trial (v0.6): each costs 2 KB in the handle and
+ * nothing per trial, since a draw is a function of the seed and the trial. */
+#define YTR_MAX_VARS          4
+#define YTR_MAX_VAR_VALUES   32    /* values of one variable              */
+#define YTR_MAX_VAR_TEXT     63    /* bytes of one value's text           */
 
 /* The history and the schedule store trial and condition numbers in 16
  * bits to keep the handle small. */
@@ -1675,6 +1813,20 @@ YTR_API ytr_jitter_value ytr_jitter_map(const ytr_jitter_desc* j, double u);
 /* One call of rng(ctx), then ytr_jitter_map(). */
 YTR_API ytr_jitter_value ytr_jitter_draw(const ytr_jitter_desc* j, ytr_rng_fn rng, void* ctx);
 
+/* --- variables (v0.6) --------------------------------------------------- */
+
+/* A categorical value drawn per trial from the trial's own stream
+ * (VARIABLES): one of n_values texts, each equally likely; repeat a value to
+ * weight it. Zero-initialize, or use ytr_var_choice(). */
+typedef struct ytr_var_desc {
+    const char*        name;      /* data-line column; [A-Za-z_][A-Za-z0-9_]* */
+    const char* const* values;    /* 1 to YTR_MAX_VAR_VALUES UTF-8 texts      */
+    int                n_values;
+} ytr_var_desc;
+
+/* ytr_var_choice("side", sides, 2) with sides = { "left", "right" }. */
+YTR_API ytr_var_desc ytr_var_choice(const char* name, const char* const* values, int n);
+
 /* Is the track finished? Called on the caller's handle; TRACKS says when. */
 typedef bool (*ytr_done_fn)(void* ctx);
 
@@ -1742,6 +1894,12 @@ typedef struct ytr_desc {
     /* v0.2.1: a duration drawn per trial for each (JITTER). */
     ytr_jitter_desc jitters[YTR_MAX_JITTERS];
     int               n_jitters;
+    /* v0.6. Zero is "not used" for each. */
+    uint64_t          seed;          /* the trial streams' seed (VARIABLES)  */
+    ytr_var_desc      vars[YTR_MAX_VARS]; /* a value drawn per trial for each */
+    int               n_vars;
+    int               display_rate_num; /* the display's refresh, num / den Hz, */
+    int               display_rate_den; /* for a jitter at YTR_RATE_DISPLAY    */
 } ytr_desc;
 
 /* --- handle ------------------------------------------------------------ */
@@ -1789,7 +1947,15 @@ typedef struct ytr__jit {
     int     col[3];                       /* lo, hi, scale column           */
     int64_t lo, hi, scale;                /* ns                             */
     int64_t values[YTR_MAX_JITTER_VALUES];
+    bool    display;                      /* rate from desc.display_rate_* */
 } ytr__jit;
+
+/* A variable as the handle keeps it: name and texts copied. Internal. */
+typedef struct ytr__var {
+    char    name[YTR_MAX_JITTER_NAME + 1];
+    int     n_values;
+    char    text[YTR_MAX_VAR_VALUES][YTR_MAX_VAR_TEXT + 1];
+} ytr__var;
 
 /* Handle. The caller allocates it and treats every field as opaque.
  * ytr_open() and ytr_open_saved() reset it, so it may be reused. Sized by
@@ -1849,6 +2015,10 @@ typedef struct ytr_trials {
     int64_t     jit_raw[YTR_MAX_TRIALS][YTR_MAX_JITTERS]; /* per trial:
                                                * nanoseconds, or the frame
                                                * count when the jitter snaps */
+    /* v0.6: variables and the trial streams' seed (desc.seed) */
+    bool        v6;                           /* vars or a seed: format 5   */
+    int         n_var;
+    ytr__var    var[YTR_MAX_VARS];
 } ytr_trials;
 
 /* --- lifecycle --------------------------------------------------------- */
@@ -2004,6 +2174,21 @@ YTR_API ytr_jitter_value ytr_jitter(const ytr_trials* t, int i, int j);
 /* The index of the jitter named `name`, or -1. */
 YTR_API int ytr_jitter_index(const ytr_trials* t, const char* name);
 
+/* --- variables and trial streams (v0.6) -------------------------------- */
+
+/* Variable j of trial i (ytr_trial_info.index): the index of its value in
+ * desc.vars[j].values, or YTR_ERR_ARG / YTR_ERR_CLOSED. Defined once next()
+ * has handed trial i out. */
+YTR_API int ytr_var(const ytr_trials* t, int i, int j);
+/* The same value's text, or NULL. The pointer is into the handle. */
+YTR_API const char* ytr_var_text(const ytr_trials* t, int i, int j);
+/* The index of the variable named `name`, or -1. */
+YTR_API int ytr_var_index(const ytr_trials* t, const char* name);
+/* Trial i's 64-bit seed, for a stimulus generator of the trial's own (an
+ * RDK field, a noise texture): a function of desc.seed and i only
+ * (VARIABLES). 0 for a closed handle or a trial not handed out. */
+YTR_API uint64_t ytr_trial_seed(const ytr_trials* t, int i);
+
 /* --- data file (v0.4.0) ------------------------------------------------ */
 
 /* A column's type: the C type it reads and how it is written (DATA FILE). */
@@ -2076,21 +2261,29 @@ typedef struct ytr_data_desc {
 #ifndef YTR_DATA_BUF
 #define YTR_DATA_BUF 8192         /* the row buffer: rows longer are split  */
 #endif
-#define YTR_DATA_MAX_COLS 64      /* all columns: ysp/table.h reads 64       */
+/* All columns of a file, the session's included (v0.6: 256, was 64). Each
+ * costs 104 bytes in the writer; a build that needs fewer may define it
+ * lower. Above ysp/table.h's bound the file would not read back. */
+#ifndef YTR_DATA_MAX_COLS
+#define YTR_DATA_MAX_COLS YTB_MAX_COLUMNS
+#endif
+#if YTR_DATA_MAX_COLS < 1 || YTR_DATA_MAX_COLS > YTB_MAX_COLUMNS
+#error "YTR_DATA_MAX_COLS must be in [1, YTB_MAX_COLUMNS]"
+#endif
 #define YTR_DATA_POOL     2048    /* bytes of the CONST columns' text        */
 
-/* A column as the writer keeps it. Internal. */
+/* A caller column as the writer keeps it. Internal. The names live apart
+ * (ytr_data.name), so a row's pass over the columns reads 40 bytes each. */
 typedef struct ytr__dcol {
-    char     name[64];
-    int      type, decimals;
     size_t   offset, size;
-    int      text_off, text_len;  /* CONST: its CSV text in the pool         */
-    bool     set;                  /* a value is set for this row            */
     union { int64_t i; double d; const char* s; } v;
+    int      text_off, text_len;  /* CONST: its CSV text in the pool         */
+    uint8_t  type, decimals;
+    bool     set;                  /* a value is set for this row            */
 } ytr__dcol;
 
-/* The data writer. The caller allocates it (about 18 KB: static or on
- * the heap) and treats every field as opaque. */
+/* The data writer. The caller allocates it (about 38 KB at the defaults:
+ * static or on the heap) and treats every field as opaque. */
 typedef struct ytr_data {
     bool               open;
     bool               io_failed;
@@ -2100,12 +2293,14 @@ typedef struct ytr_data {
     void*              write_ctx;
     const ytr_trials* trials;
     int                next_trial; /* the first trial not yet written        */
-    int                n_cols;
+    int                n_cols;     /* the caller's columns                   */
+    int                n_names;    /* every column: the session's, then cols */
     int64_t            rows;
     size_t             len;        /* bytes in buf                           */
     size_t             pool_len;
     char               meta_path[1024];
     ytr__dcol        col[YTR_DATA_MAX_COLS];
+    char               name[YTR_DATA_MAX_COLS][YTB_MAX_NAME + 1];
     char               pool[YTR_DATA_POOL];
     char               buf[YTR_DATA_BUF];
     char               error[256];
@@ -2205,6 +2400,8 @@ extern int fileno(FILE* f);
 #define YTR__SNAP_FORMAT4  4u   /* a desc with jitters (v0.3.0): format 2
                                    * plus the jitters (ns) and their draws.
                                    * Format 3 was v0.2.1's, in f64 seconds. */
+#define YTR__SNAP_FORMAT5  5u   /* a desc with variables or a seed (v0.6):
+                                   * format 4 plus the seed and the variables */
 
 /* break_pending bits: the flag goes on the next trial of any kind, the
  * segment starts at the next MAIN trial, and those can differ when the next
@@ -2351,6 +2548,33 @@ YTR_API ytr_jitter_desc ytr_frames(ytr_jitter_desc j, int rate_num, int rate_den
     j.rate_num = rate_num;
     j.rate_den = rate_den;
     return j;
+}
+
+/* --- variables and trial streams (v0.6) ---------------------------------- */
+
+YTR_API ytr_var_desc ytr_var_choice(const char* name, const char* const* values, int n) {
+    ytr_var_desc v;
+    v.name = name;
+    v.values = values;
+    v.n_values = n;
+    return v;
+}
+
+/* splitmix64's output function. */
+static uint64_t ytr__mix64(uint64_t z) {
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+}
+
+/* Output k of trial i's stream (VARIABLES): splitmix64 from the state
+ * mix64((seed ^ K) + (i + 1) G). K keeps the streams apart from a
+ * splitmix64 session generator that a caller seeds with the same number. */
+#define YTR__GOLDEN     0x9E3779B97F4A7C15ULL
+#define YTR__STREAM_KEY 0x6A09E667F3BCC909ULL
+static uint64_t ytr__stream(uint64_t seed, int i, int k) {
+    uint64_t s = ytr__mix64((seed ^ YTR__STREAM_KEY) + ((uint64_t)(unsigned)i + 1u) * YTR__GOLDEN);
+    return ytr__mix64(s + ((uint64_t)(unsigned)k + 1u) * YTR__GOLDEN);
 }
 
 /* The numbers one draw needs: a jitter's own, or with a row's columns. */
@@ -2753,6 +2977,11 @@ YTR_API int ytr_jitter_check(const ytr_jitter_desc* j, char* err, size_t cap) {
     }
     if (j->lo_column || j->hi_column || j->scale_column) {
         if (err && cap) snprintf(err, cap, "ysp_trials: jitter: columns need a session with a table (desc.jitters)");
+        return YTR_ERR_ARG;
+    }
+    if (j->rate_num == YTR_RATE_DISPLAY) {
+        if (err && cap)
+            snprintf(err, cap, "ysp_trials: jitter: YTR_RATE_DISPLAY needs a session's desc.display_rate_num");
         return YTR_ERR_ARG;
     }
     ytr__jit_from_desc(j, &p);
@@ -4040,6 +4269,20 @@ static bool ytr__jit_setup(ytr_trials* t, const ytr_desc* d, int j, int n_cond) 
     memcpy(q->name, s->name, strlen(s->name) + 1);
     snprintf(who, sizeof(who), "desc.jitters[%d] (%s)", j, q->name);
     ytr__jit_from_desc(s, &p);
+    if (s->rate_num == YTR_RATE_DISPLAY) {
+        /* The rig's refresh, known to the player and not to the rules text;
+         * from here on the jitter is one at that fixed rate. */
+        if (s->rate_den != 0)
+            return ytr__fail(t, "%s: YTR_RATE_DISPLAY takes rate_den 0 (the display's rate is "
+                                "desc.display_rate_num / display_rate_den)", who);
+        if (d->display_rate_num <= 0 || d->display_rate_den < 0)
+            return ytr__fail(t, "%s: snaps to the display's rate (rate=display), so desc.display_rate_num "
+                                "must be the refresh rate (num / den Hz, den 0 = 1), set from the screen",
+                             who);
+        p.num = d->display_rate_num;
+        p.den = d->display_rate_den ? d->display_rate_den : 1;
+        q->display = true;
+    }
     q->dist = p.dist;
     q->rate_num = p.num;
     q->rate_den = p.den;
@@ -4079,6 +4322,55 @@ static bool ytr__jit_setup(ytr_trials* t, const ytr_desc* d, int j, int n_cond) 
         }
     }
     return true;
+}
+
+static size_t ytr__u8(const unsigned char* p, size_t n);
+
+/* Copy desc.vars[j] into the handle. A value's text goes into the data line,
+ * so it must be valid UTF-8 (ysp/table.h reads it back) and not empty (an
+ * empty field is a missing value). */
+static bool ytr__var_setup(ytr_trials* t, const ytr_desc* d, int j) {
+    const ytr_var_desc* s = &d->vars[j];
+    ytr__var* q = &t->var[j];
+    int k;
+    if (!ytr__jit_name_ok(s->name))
+        return ytr__fail(t, "desc.vars[%d].name must be 1 to %d of [A-Za-z0-9_], not starting with a digit",
+                         j, YTR_MAX_JITTER_NAME);
+    for (k = 0; k < j; k++)
+        if (strcmp(t->var[k].name, s->name) == 0)
+            return ytr__fail(t, "desc.vars[%d] and [%d] are both named '%s'", k, j, s->name);
+    for (k = 0; k < t->n_jit && k < YTR_MAX_JITTERS; k++)
+        if (strcmp(t->jit[k].name, s->name) == 0)
+            return ytr__fail(t, "desc.vars[%d] and desc.jitters[%d] are both named '%s'", j, k, s->name);
+    if (d->table && ytb_col(d->table, s->name) >= 0)
+        return ytr__fail(t, "desc.vars[%d] is named '%s', as a table column is", j, s->name);
+    if (strcmp(s->name, "trial_seed") == 0)
+        return ytr__fail(t, "desc.vars[%d] is named 'trial_seed', the data line's column of trial seeds", j);
+    if (!s->values || s->n_values < 1 || s->n_values > YTR_MAX_VAR_VALUES)
+        return ytr__fail(t, "desc.vars[%d] (%s) needs 1 to %d values", j, s->name, YTR_MAX_VAR_VALUES);
+    memcpy(q->name, s->name, strlen(s->name) + 1);
+    for (k = 0; k < s->n_values; k++) {
+        const char* v = s->values[k];
+        size_t n = v ? strlen(v) : 0, i = 0, m;
+        if (n < 1 || n > YTR_MAX_VAR_TEXT)
+            return ytr__fail(t, "desc.vars[%d] (%s): value %d must be 1 to %d bytes", j, s->name, k,
+                             YTR_MAX_VAR_TEXT);
+        while (i < n) {
+            m = ytr__u8((const unsigned char*)v + i, n - i);
+            if (m == 0) return ytr__fail(t, "desc.vars[%d] (%s): value %d is not valid UTF-8", j, s->name, k);
+            i += m;
+        }
+        memcpy(q->text[k], v, n + 1);
+    }
+    q->n_values = s->n_values;
+    return true;
+}
+
+/* Value index of variable j for trial i: the top 53 bits of the stream's
+ * output 1 + j, times the value count, over 2^53. */
+static int ytr__var_draw(const ytr_trials* t, int i, int j) {
+    uint64_t u53 = ytr__stream(t->desc.seed, i, 1 + j) >> 11;
+    return (int)((u53 * (uint64_t)t->var[j].n_values) >> 53);
 }
 
 /* One variate per jitter, in jitter order, for the trial just pushed. */
@@ -4380,8 +4672,15 @@ static bool ytr__setup(ytr_trials* t, const ytr_desc* d) {
         return ytr__fail(t, "desc.record_size needs desc.records");
     if (d->n_jitters < 0 || d->n_jitters > YTR_MAX_JITTERS)
         return ytr__fail(t, "desc.n_jitters must be in [0, YTR_MAX_JITTERS (%d)]", YTR_MAX_JITTERS);
+    if (d->display_rate_num < 0 || d->display_rate_den < 0)
+        return ytr__fail(t, "desc.display_rate_num and display_rate_den must not be negative");
     for (i = 0; i < d->n_jitters && i < YTR_MAX_JITTERS; i++)
         if (!ytr__jit_setup(t, d, i, n_cond)) return false;
+    t->n_jit = d->n_jitters;
+    if (d->n_vars < 0 || d->n_vars > YTR_MAX_VARS)
+        return ytr__fail(t, "desc.n_vars must be in [0, YTR_MAX_VARS (%d)]", YTR_MAX_VARS);
+    for (i = 0; i < d->n_vars && i < YTR_MAX_VARS; i++)
+        if (!ytr__var_setup(t, d, i)) return false;
 
     /* Practice and warmup draw only under an order other than SEQUENTIAL,
      * and they need conditions, so the first test covers them. */
@@ -4426,9 +4725,13 @@ static bool ytr__setup(ytr_trials* t, const ytr_desc* d) {
     t->desc.warmup_conditions = NULL;
     t->desc.order_list = NULL;
     t->desc.groups.list = NULL;
-    /* Jitters live in t->jit; the desc's copies would dangle. */
+    /* Jitters and variables live in t->jit and t->var; the desc's copies
+     * would dangle. */
     memset(t->desc.jitters, 0, sizeof(t->desc.jitters));
+    memset(t->desc.vars, 0, sizeof(t->desc.vars));
     t->n_jit = d->n_jitters;
+    t->n_var = d->n_vars;
+    t->v6 = d->n_vars > 0 || d->seed != 0;
     t->aux_hash = h;
     t->had_weights = d->weights != NULL;
     t->v2 = ytr__is_v2(d);
@@ -5164,6 +5467,32 @@ YTR_API int ytr_jitter_index(const ytr_trials* t, const char* name) {
     return -1;
 }
 
+YTR_API int ytr_var(const ytr_trials* t, int i, int j) {
+    if (!t) return YTR_ERR_ARG;
+    if (!t->open) return YTR_ERR_CLOSED;
+    if (i < 0 || i >= t->n_run || j < 0 || j >= t->n_var || j >= YTR_MAX_VARS) return YTR_ERR_ARG;
+    return ytr__var_draw(t, i, j);
+}
+
+YTR_API const char* ytr_var_text(const ytr_trials* t, int i, int j) {
+    int k = ytr_var(t, i, j);
+    if (k < 0 || k >= YTR_MAX_VAR_VALUES) return NULL;
+    return t->var[j].text[k];
+}
+
+YTR_API int ytr_var_index(const ytr_trials* t, const char* name) {
+    int j;
+    if (!t || !t->open || !name) return -1;
+    for (j = 0; j < t->n_var && j < YTR_MAX_VARS; j++)
+        if (strcmp(t->var[j].name, name) == 0) return j;
+    return -1;
+}
+
+YTR_API uint64_t ytr_trial_seed(const ytr_trials* t, int i) {
+    if (!t || !t->open || i < 0 || i >= t->n_run) return 0;
+    return ytr__stream(t->desc.seed, i, 0);
+}
+
 /* A CSV field, quoted when it would otherwise split or break the line. */
 static void ytr__csv_name(ytr__str* s, const char* name, int f) {
     const char* p;
@@ -5186,21 +5515,45 @@ static void ytr__csv_name(ytr__str* s, const char* name, int f) {
     ytr__cat(s, "\"");
 }
 
+/* Column k of the session's data line, unquoted: the fixed columns, the
+ * factors (factor<f> for one without a name, written into tmp), the
+ * jitters, the variables; NULL past the last. One list for
+ * ytr_format_header() and the data writer, so the two cannot differ. */
+static const char* ytr__sess_col(const ytr_trials* t, int k, char tmp[24]) {
+    static const char* const fixed[] = { "index", "block", "rep", "condition", "track", "practice",
+                                         "warmup", "requeued", "after_break", "leadin", "outcome" };
+    int nfx = t->has_leadin ? 11 : 10;
+    if (k < 0) return NULL;
+    if (k < nfx) return (!t->has_leadin && k == 9) ? "outcome" : fixed[k];
+    k -= nfx;
+    if (k < ytr__nfe(t)) {
+        const char* nm = t->desc.table ? ytb_col_name(t->desc.table, k)
+                         : k < YTR_MAX_FACTORS ? t->desc.factors[k].name : NULL;
+        if (nm) return nm;
+        snprintf(tmp, 24, "factor%d", k);
+        return tmp;
+    }
+    k -= ytr__nfe(t);
+    if (k < t->n_jit && k < YTR_MAX_JITTERS) return t->jit[k].name;
+    k -= t->n_jit;
+    if (k < t->n_var && k < YTR_MAX_VARS) return t->var[k].name;
+    k -= t->n_var;
+    if (k == 0 && t->v6) return "trial_seed";
+    return NULL;
+}
+
 YTR_API int ytr_format_header(const ytr_trials* t, char* buf, size_t cap) {
     ytr__str s;
-    int f;
+    const char* nm;
+    char tmp[24];
+    int k;
     if (!t) return YTR_ERR_ARG;
     if (!t->open) return YTR_ERR_CLOSED;
     ytr__str_init(&s, buf, cap);
-    ytr__cat(&s, "index,block,rep,condition,track,practice,warmup,requeued,after_break,");
-    if (t->has_leadin) ytr__cat(&s, "leadin,");
-    ytr__cat(&s, "outcome");
-    for (f = 0; f < ytr__nfe(t); f++) {
-        ytr__cat(&s, ",");
-        if (t->desc.table) ytr__cat(&s, "%s", ytb_col_name(t->desc.table, f));
-        else ytr__csv_name(&s, t->desc.factors[f].name, f);
+    for (k = 0; (nm = ytr__sess_col(t, k, tmp)) != NULL; k++) {
+        if (k) ytr__cat(&s, ",");
+        ytr__csv_name(&s, nm, 0);
     }
-    for (f = 0; f < t->n_jit && f < YTR_MAX_JITTERS; f++) ytr__cat(&s, ",%s", t->jit[f].name);
     ytr__cat(&s, "\n");
     return ytr__str_done(&s);
 }
@@ -5239,11 +5592,21 @@ YTR_API int ytr_format_row(const ytr_trials* t, int i, char* buf, size_t cap) {
         ytr_jitter_value v = ytr_jitter(t, i, f);
         ytr__cat(&s, ",%lld.%09lld", (long long)(v.ns / 1000000000), (long long)(v.ns % 1000000000));
     }
+    for (f = 0; f < t->n_var && f < YTR_MAX_VARS; f++) {
+        ytr__cat(&s, ",");
+        ytr__csv_name(&s, ytr_var_text(t, i, f), f);
+    }
+    /* "x" and 16 hex digits: the 64 bits exactly, and text in pandas, R
+     * and ysp/table.h by their defaults. A decimal has 20 digits, which
+     * ysp/table.h refuses and R's double rounds; R reads "0x..." as a
+     * double too; bare hex reads as a number when every digit is decimal. */
+    if (t->v6) ytr__cat(&s, ",x%016llx", (unsigned long long)ytr_trial_seed(t, i));
     ytr__cat(&s, "\n");
     return ytr__str_done(&s);
 }
 
 static void ytr__fr_factor(ytr__str* s, const ytr_trials* t, int f);
+static void ytr__fr_tok(ytr__str* s, const char* txt, bool meta);
 
 /* Nanoseconds as seconds in the fewest digits that read back as the same
  * nanoseconds: the exact decimal, trailing zeros dropped. */
@@ -5281,7 +5644,10 @@ static void ytr__fr_jitter(ytr__str* s, const ytr_trials* t, int j, char sep) {
             else ytr__cat_ns(s, num[k]);
         }
     }
-    if (q->rate_num > 0) ytr__cat(s, "%crate=%d/%d", sep, q->rate_num, q->rate_den);
+    /* The rules text keeps "the display's rate", so a logged session pastes
+     * back onto another rig; the meta line gives the rate drawn on. */
+    if (q->display && sep == ' ') ytr__cat(s, "%crate=display", sep);
+    else if (q->rate_num > 0) ytr__cat(s, "%crate=%d/%d", sep, q->rate_num, q->rate_den);
 }
 
 YTR_API int ytr_format_meta(const ytr_trials* t, char* buf, size_t cap) {
@@ -5336,6 +5702,24 @@ YTR_API int ytr_format_meta(const ytr_trials* t, char* buf, size_t cap) {
             if (i) ytr__cat(&s, ";");
             ytr__fr_jitter(&s, t, i, ':');
         }
+        for (i = 0; i < t->n_jit && i < YTR_MAX_JITTERS; i++)
+            if (t->jit[i].display) {
+                ytr__cat(&s, " display_rate=%d/%d", t->jit[i].rate_num, t->jit[i].rate_den);
+                break;
+            }
+    }
+    if (t->v6) {
+        int k;
+        ytr__cat(&s, " seed=%llu", (unsigned long long)d->seed);
+        if (t->n_var > 0) ytr__cat(&s, " vars=");
+        for (i = 0; i < t->n_var && i < YTR_MAX_VARS; i++) {
+            if (i) ytr__cat(&s, ";");
+            ytr__cat(&s, "%s:choice", t->var[i].name);
+            for (k = 0; k < t->var[i].n_values && k < YTR_MAX_VAR_VALUES; k++) {
+                ytr__cat(&s, ":");
+                ytr__fr_tok(&s, t->var[i].text[k], true);
+            }
+        }
     }
     ytr__cat(&s, "\n");
     return ytr__str_done(&s);
@@ -5360,19 +5744,28 @@ static void ytr__fr_factor(ytr__str* s, const ytr_trials* t, int f) {
 
 /* A level in rules text: the table's text (quoted when it holds a blank,
  * a quote, '#', '=' or is empty), else the level number. */
-static void ytr__fr_value(ytr__str* s, const ytr_trials* t, int f, int level) {
-    const char* txt, *p;
-    bool q = false;
-    if (!t->desc.table || f == YTR_CONDITION) { ytr__cat(s, "%d", level); return; }
-    txt = ytb_level_text(t->desc.table, f, level);
-    if (!txt) { ytr__cat(s, "%d", level); return; }
-    if (!*txt) q = true;
+/* A text as one rules token: quoted when it is empty or holds a blank, a
+ * quote, '#', '=' or a line break. `meta` also quotes ':' and ';', the
+ * meta line's separators. */
+static void ytr__fr_tok(ytr__str* s, const char* txt, bool meta) {
+    const char* p;
+    bool q = !*txt;
     for (p = txt; *p; p++)
-        if (*p == ' ' || *p == '\t' || *p == '"' || *p == '#' || *p == '=' || *p == '\r' || *p == '\n') q = true;
+        if (*p == ' ' || *p == '\t' || *p == '"' || *p == '#' || *p == '=' || *p == '\r' || *p == '\n' ||
+            (meta && (*p == ':' || *p == ';')))
+            q = true;
     if (!q) { ytr__cat(s, "%s", txt); return; }
     ytr__cat(s, "\"");
     for (p = txt; *p; p++) ytr__cat(s, *p == '"' ? "\"\"" : "%c", *p);
     ytr__cat(s, "\"");
+}
+
+static void ytr__fr_value(ytr__str* s, const ytr_trials* t, int f, int level) {
+    const char* txt;
+    if (!t->desc.table || f == YTR_CONDITION) { ytr__cat(s, "%d", level); return; }
+    txt = ytb_level_text(t->desc.table, f, level);
+    if (!txt) { ytr__cat(s, "%d", level); return; }
+    ytr__fr_tok(s, txt, false);
 }
 
 static void ytr__fr_sel(ytr__str* s, const ytr_trials* t, int f, int level) {
@@ -5495,6 +5888,15 @@ YTR_API int ytr_format_rules(const ytr_trials* t, char* buf, size_t cap) {
         ytr__fr_jitter(&s, t, i, ' ');
         ytr__cat(&s, "\n");
     }
+    for (i = 0; i < t->n_var && i < YTR_MAX_VARS; i++) {
+        int k;
+        ytr__cat(&s, "var %s choice", t->var[i].name);
+        for (k = 0; k < t->var[i].n_values && k < YTR_MAX_VAR_VALUES; k++) {
+            ytr__cat(&s, " ");
+            ytr__fr_tok(&s, t->var[i].text[k], false);
+        }
+        ytr__cat(&s, "\n");
+    }
     return ytr__str_done(&s);
 }
 
@@ -5530,6 +5932,7 @@ typedef struct ytr__rl {
     unsigned char*          mask;           /* where: rows kept                  */
     int*                    list;
     int                     n_list;
+    bool                    weighted;       /* cond_reps from `weight`: x reps   */
     bool                    failed;
 } ytr__rl;
 
@@ -5731,7 +6134,7 @@ static const char* const ytr__rl_verbs[] = {
     "order", "reps", "cond_reps", "weight", "where", "subset", "draws", "list", "groups",
     "block_size", "practice", "warmup", "warmup_conditions", "requeue_gap", "max_swaps", "span_blocks",
     "max_run", "max_in_window", "min_gap", "no_transition", "first_not", "followed_by", "preceded_by",
-    "chunk", "balance", "constrain", "shuffle", "jitter"
+    "chunk", "balance", "constrain", "shuffle", "jitter", "var"
 };
 
 /* Spellings from other tools that mean a statement here. */
@@ -5896,6 +6299,10 @@ static bool ytr__rl_stmt(ytr__rl* rl, ytr__arg* a, int na) {
     if (VERB("reps")) {
         if (!ytr__rl_args(rl, na, 1, 1, "reps N")) return false;
         if (!ytr__rl_once(rl, YTR__O_REPS, "reps")) return false;
+        if (rl->first[YTR__O_CREPS] && !rl->weighted)
+            return ytr__rl_fail(rl, 0, "reps with cond_reps (line %d): cond_reps is each row's whole count, "
+                                "so reps would be ignored; weight COLUMN is the per-row count that reps "
+                                "multiplies", rl->first[YTR__O_CREPS]), false;
         return ytr__rl_cnt(rl, &a[1], 1, &d->reps);
     }
     if (VERB("cond_reps") || VERB("weight")) {
@@ -5910,7 +6317,12 @@ static bool ytr__rl_stmt(ytr__rl* rl, ytr__arg* a, int na) {
                 return ytr__rl_fail(rl, a[1].col, "weight needs an integer table column"), false;
         } else if (!ytr__rl_args(rl, na, rl->n_cond, rl->n_cond, "cond_reps N N ... (one per row)")) {
             return false;
+        } else if (rl->first[YTR__O_REPS]) {
+            return ytr__rl_fail(rl, 0, "cond_reps with reps (line %d): cond_reps is each row's whole count, "
+                                "so reps would be ignored; weight COLUMN is the per-row count that reps "
+                                "multiplies", rl->first[YTR__O_REPS]), false;
         }
+        rl->weighted = w;
         cr = ytr__rl_creps(rl);
         if (!cr) return false;
         for (c = 0; c < rl->n_cond; c++) {
@@ -6156,7 +6568,7 @@ static bool ytr__rl_stmt(ytr__rl* rl, ytr__arg* a, int na) {
     }
     if (VERB("jitter")) {
         static const char* const form =
-            "jitter NAME uniform LO HI | choice V V ... | exponential LO HI SCALE, then [rate=NUM[/DEN]]";
+            "jitter NAME uniform LO HI | choice V V ... | exponential LO HI SCALE, then [rate=NUM[/DEN]|display]";
         ytr_jitter_desc* jd;
         char* nm;
         char tok[64];
@@ -6177,17 +6589,26 @@ static bool ytr__rl_stmt(ytr__rl* rl, ytr__arg* a, int na) {
         if (a[na - 1].v && !a[na - 1].kq && a[na - 1].kn == 4 && memcmp(a[na - 1].k, "rate", 4) == 0) {
             const char* v2 = a[na - 1].v;
             size_t vn = a[na - 1].vn, sl;
-            for (sl = 0; sl < vn && v2[sl] != '/'; sl++) {}
-            rn = ytr__rl_count(v2, sl, a[na - 1].vq);
-            rd = sl < vn ? ytr__rl_count(v2 + sl + 1, vn - sl - 1, a[na - 1].vq) : 1;
-            if (rn < 1 || rd < 1) return ytr__rl_fail(rl, a[na - 1].col, "expected rate=NUM or rate=NUM/DEN (positive counts)"), false;
+            if (ytr__rl_eq(v2, vn, a[na - 1].vq, "display")) {
+                /* The rig's refresh: the caller sets desc.display_rate_num
+                 * from the screen, since the text cannot know it. */
+                rn = YTR_RATE_DISPLAY;
+                rd = 0;
+            } else {
+                for (sl = 0; sl < vn && v2[sl] != '/'; sl++) {}
+                rn = ytr__rl_count(v2, sl, a[na - 1].vq);
+                rd = sl < vn ? ytr__rl_count(v2 + sl + 1, vn - sl - 1, a[na - 1].vq) : 1;
+                if (rn < 1 || rd < 1)
+                    return ytr__rl_fail(rl, a[na - 1].col, "expected rate=NUM or rate=NUM/DEN (positive counts), "
+                                        "or rate=display"), false;
+            }
             last = na - 1;
         }
         np = last - 3;
-        if (kind == YTR_JITTER_UNIFORM && np != 2) return ytr__rl_fail(rl, 0, "expected: jitter NAME uniform LO HI [rate=NUM[/DEN]]"), false;
-        if (kind == YTR_JITTER_EXPONENTIAL && np != 3) return ytr__rl_fail(rl, 0, "expected: jitter NAME exponential LO HI SCALE [rate=NUM[/DEN]]"), false;
+        if (kind == YTR_JITTER_UNIFORM && np != 2) return ytr__rl_fail(rl, 0, "expected: jitter NAME uniform LO HI [rate=NUM[/DEN]|display]"), false;
+        if (kind == YTR_JITTER_EXPONENTIAL && np != 3) return ytr__rl_fail(rl, 0, "expected: jitter NAME exponential LO HI SCALE [rate=NUM[/DEN]|display]"), false;
         if (kind == YTR_JITTER_CHOICE && (np < 1 || np > YTR_MAX_JITTER_VALUES))
-            return ytr__rl_fail(rl, 0, "expected: jitter NAME choice V V ... (1 to %d values) [rate=NUM[/DEN]]", YTR_MAX_JITTER_VALUES), false;
+            return ytr__rl_fail(rl, 0, "expected: jitter NAME choice V V ... (1 to %d values) [rate=NUM[/DEN]|display]", YTR_MAX_JITTER_VALUES), false;
         if (kind == YTR_JITTER_CHOICE) {
             vals = (int64_t*)ytr__rl_alloc(rl, sizeof(int64_t) * (size_t)np);
             if (!vals) return false;
@@ -6231,6 +6652,48 @@ static bool ytr__rl_stmt(ytr__rl* rl, ytr__arg* a, int na) {
         jd->n_values = vals ? np : 0;
         jd->rate_num = rn;
         jd->rate_den = rd;
+        return true;
+    }
+    if (VERB("var")) {
+        /* var NAME choice V V ...: a value drawn per trial from the trial's
+         * stream (VARIABLES); the texts are copied into the arena. */
+        ytr_var_desc* vd;
+        const char** vals;
+        char* nm;
+        int np = na - 3;
+        if (na < 4 || !ytr__rl_word(&a[2], "choice"))
+            return ytr__rl_fail(rl, na >= 3 ? a[2].col : 0, "expected: var NAME choice V V ... (1 to %d values)",
+                                YTR_MAX_VAR_VALUES), false;
+        if (d->n_vars < 0 || d->n_vars >= YTR_MAX_VARS)
+            return ytr__rl_fail(rl, 0, "more than %d variables (YTR_MAX_VARS)", YTR_MAX_VARS), false;
+        if (a[1].v || a[1].kq || a[1].kn < 1 || a[1].kn > YTR_MAX_JITTER_NAME)
+            return ytr__rl_fail(rl, a[1].col, "a variable's name is a word of 1 to %d characters", YTR_MAX_JITTER_NAME), false;
+        if (np > YTR_MAX_VAR_VALUES)
+            return ytr__rl_fail(rl, a[3 + YTR_MAX_VAR_VALUES].col, "more than %d values", YTR_MAX_VAR_VALUES), false;
+        vals = (const char**)ytr__rl_alloc(rl, sizeof(const char*) * (size_t)np);
+        nm = (char*)ytr__rl_alloc(rl, a[1].kn + 1);
+        if (!vals || !nm) return false;
+        memcpy(nm, a[1].k, a[1].kn);
+        nm[a[1].kn] = '\0';
+        for (k = 0; k < np; k++) {
+            const ytr__arg* g = &a[3 + k];
+            char* tx;
+            size_t i2, o = 0;
+            if (g->v) return ytr__rl_fail(rl, g->col, "a value with '=' is quoted (\"a=b\")"), false;
+            if (g->kn < 1 || g->kn > (g->kq ? 2u * YTR_MAX_VAR_TEXT : YTR_MAX_VAR_TEXT))
+                return ytr__rl_fail(rl, g->col, "a value is 1 to %d bytes", YTR_MAX_VAR_TEXT), false;
+            tx = (char*)ytr__rl_alloc(rl, g->kn + 1);
+            if (!tx) return false;
+            /* A quoted token keeps "" for a quote. */
+            for (i2 = 0; i2 < g->kn; i2++) {
+                tx[o++] = g->k[i2];
+                if (g->kq && g->k[i2] == '"') i2++;
+            }
+            tx[o] = '\0';
+            vals[k] = tx;
+        }
+        vd = &d->vars[d->n_vars++];
+        *vd = ytr_var_choice(nm, vals, np);
         return true;
     }
 #undef VERB
@@ -6311,7 +6774,8 @@ YTR_API int ytr_rules(ytr_desc* d, const ytr_rules_desc* r, char* err, size_t ca
         if (i < n) i++;
     }
     if (rl.failed) return rl.line;
-    /* Finish: where, cond_reps, the list. */
+    /* Finish: where, cond_reps, the list. A weight is the row's count per
+     * repetition, as OpenSesame's is per cycle, so reps multiplies it. */
     rl.line = 0;
     if (rl.cond_reps || rl.mask) {
         int* cr = ytr__rl_creps(&rl);
@@ -6320,6 +6784,12 @@ YTR_API int ytr_rules(ytr_desc* d, const ytr_rules_desc* r, char* err, size_t ca
             if (cr[c] < 0) {
                 if (d->reps < 1) return ytr__rl_fail(&rl, 0, "where needs reps (or weight, or cond_reps)");
                 cr[c] = d->reps;
+            } else if (rl.weighted && d->reps > 1) {
+                rl.line = rl.first[YTR__O_CREPS];
+                if ((long)cr[c] * d->reps > YTR_MAX_TRIALS)
+                    return ytr__rl_fail(&rl, 0, "weight x reps for row %d is %ld, above YTR_MAX_TRIALS (%d)", c,
+                                        (long)cr[c] * d->reps, YTR_MAX_TRIALS);
+                cr[c] *= d->reps;
             }
             if (rl.mask && !rl.mask[c]) cr[c] = 0;
         }
@@ -6371,7 +6841,8 @@ static void ytr__put_f64(ytr__w* w, double v, const char* name) {
 
 /* The snapshot format a session saves and loads. */
 static uint32_t ytr__snap_format(const ytr_trials* t) {
-    return t->n_jit > 0 ? YTR__SNAP_FORMAT4 : t->v2 ? YTR__SNAP_FORMAT2 : YTR__SNAP_FORMAT;
+    return t->v6 ? YTR__SNAP_FORMAT5 : t->n_jit > 0 ? YTR__SNAP_FORMAT4
+         : t->v2 ? YTR__SNAP_FORMAT2 : YTR__SNAP_FORMAT;
 }
 
 static void ytr__put_desc(ytr__w* w, const ytr_trials* t) {
@@ -6409,7 +6880,7 @@ static void ytr__put_desc(ytr__w* w, const ytr_trials* t) {
         ytr__put_i32(w, t->warm_list[i], "warmup_conditions[]");
     ytr__put_i32(w, d->requeue_gap, "requeue_gap");
     ytr__put(w, (uint64_t)d->record_size, 8, "record_size");
-    if (t->v2 || t->n_jit > 0) {
+    if (ytr__snap_format(t) >= YTR__SNAP_FORMAT2) {
         /* Format 2: what v0.2 added. The arrays the handle does not keep
          * (weights, the order list, the group list) are checked by hash. */
         ytr__put(w, d->table ? ytb_hash(d->table) : 0u, 8, "table");
@@ -6425,7 +6896,7 @@ static void ytr__put_desc(ytr__w* w, const ytr_trials* t) {
         ytr__put_i32(w, d->groups.n_list, "groups.n_list");
         ytr__put(w, t->aux_hash, 8, "order_list, weights or groups.list");
     }
-    if (t->n_jit > 0) {
+    if (ytr__snap_format(t) >= YTR__SNAP_FORMAT4) {
         size_t n, k;
         ytr__put_i32(w, t->n_jit, "n_jitters");
         for (i = 0; i < t->n_jit && i < YTR_MAX_JITTERS; i++) {
@@ -6445,6 +6916,26 @@ static void ytr__put_desc(ytr__w* w, const ytr_trials* t) {
             ytr__put_i32(w, q->col[0], "jitters[].lo_column");
             ytr__put_i32(w, q->col[1], "jitters[].hi_column");
             ytr__put_i32(w, q->col[2], "jitters[].scale_column");
+        }
+    }
+    if (t->v6) {
+        /* Format 5: the trial streams' seed and the variables. A draw is a
+         * function of these and the trial index, so no draw is stored. */
+        size_t n, k;
+        int v;
+        ytr__put(w, d->seed, 8, "seed");
+        ytr__put_i32(w, t->n_var, "n_vars");
+        for (i = 0; i < t->n_var && i < YTR_MAX_VARS; i++) {
+            const ytr__var* q = &t->var[i];
+            n = strlen(q->name);
+            ytr__put(w, (uint64_t)n, 1, "vars[].name");
+            for (k = 0; k < n; k++) ytr__put(w, (unsigned char)q->name[k], 1, "vars[].name");
+            ytr__put_i32(w, q->n_values, "vars[].n_values");
+            for (v = 0; v < q->n_values && v < YTR_MAX_VAR_VALUES; v++) {
+                n = strlen(q->text[v]);
+                ytr__put(w, (uint64_t)n, 1, "vars[].values");
+                for (k = 0; k < n; k++) ytr__put(w, (unsigned char)q->text[v][k], 1, "vars[].values");
+            }
         }
     }
 }
@@ -6475,7 +6966,7 @@ static void ytr__put_all(ytr__w* w, const ytr_trials* t) {
     ytr__put_i32(w, t->warm_block, "warm_block");
     ytr__put_i32(w, t->warm_done, "warm_done");
     ytr__put_i32(w, t->swaps, "swaps");
-    if (t->v2 || t->n_jit > 0) {
+    if (ytr__snap_format(t) >= YTR__SNAP_FORMAT2) {
         ytr__put_i32(w, t->blk, "blk");
         ytr__put_i32(w, t->blk_next, "blk_next");
         ytr__put(w, t->units ? 1u : 0u, 1, "units");
@@ -6600,7 +7091,7 @@ YTR_API bool ytr_open_saved(ytr_trials* t, const ytr_desc* desc, const void* buf
     t->warm_block   = ytr__get_i32(&r);
     t->warm_done    = ytr__get_i32(&r);
     t->swaps        = ytr__get_i32(&r);
-    if (t->v2 || t->n_jit > 0) {
+    if (ytr__snap_format(t) >= YTR__SNAP_FORMAT2) {
         t->blk        = ytr__get_i32(&r);
         t->blk_next   = ytr__get_i32(&r);
         t->units      = ytr__get(&r, 1) != 0;
@@ -6957,6 +7448,8 @@ static size_t ytr__row_bound(const ytr_trials* t) {
             n += 12u;
         }
     }
+    /* a variable's text quoted, every byte a quote at worst; the seed */
+    n += (2u * YTR_MAX_VAR_TEXT + 3u) * (size_t)(t->n_var > 0 ? t->n_var : 0) + (t->v6 ? 18u : 0u);
     return n + 24u * (size_t)(t->n_jit > 0 ? t->n_jit : 0) + 2u;
 }
 
@@ -7019,7 +7512,6 @@ static int ytr__dtype_size(int type) {
 YTR_API bool ytr_data_open(ytr_data* w, const ytr_data_desc* desc) {
     static const char* const tnames[] = { "?", "INT", "INT64", "DOUBLE", "BOOL", "STRING",
                                           "CHARS", "TIME_NS", "CONST" };
-    char names[YTR_DATA_MAX_COLS][YTB_MAX_NAME + 1];
     int n_names = 0, i, j;
     if (!w) return false;
     memset(w, 0, sizeof(*w));
@@ -7034,31 +7526,26 @@ YTR_API bool ytr_data_open(ytr_data* w, const ytr_data_desc* desc) {
         return ytr__dfail(w, "ytr_data_open: meta_path is longer than %d bytes",
                             (int)sizeof(w->meta_path) - 1);
 
-    /* The session's names, from its header line. */
+    /* The session's names, from the list ytr_format_header() writes. The
+     * header line itself goes out once the file is open, so its length is
+     * not bounded by the row buffer. */
     if (desc->trials) {
-        int len;
-        char* p;
+        const char* nm;
+        char tmp[24];
         if (!ytr_is_open(desc->trials)) return ytr__dfail(w, "ytr_data_open: the session is not open");
         if (ytr__row_bound(desc->trials) >= sizeof(w->buf))
             return ytr__dfail(w, "ytr_data_open: a trial's columns can take %lu bytes, more than "
                                    "YTR_DATA_BUF (%d); define it larger",
                                 (unsigned long)ytr__row_bound(desc->trials), YTR_DATA_BUF);
-        len = ytr_format_header(desc->trials, w->buf, sizeof(w->buf));
-        if (len <= 0 || (size_t)len >= sizeof(w->buf))
-            return ytr__dfail(w, "ytr_data_open: the session's header does not fit YTR_DATA_BUF");
-        p = w->buf;
-        while (*p && *p != '\n') {
-            size_t k = strcspn(p, ",\n");
+        for (i = 0; (nm = ytr__sess_col(desc->trials, i, tmp)) != NULL; i++) {
+            size_t k = strlen(nm);
             if (n_names >= YTR_DATA_MAX_COLS)
                 return ytr__dfail(w, "ytr_data_open: more than %d columns", YTR_DATA_MAX_COLS);
-            if (!ytr__dname_ok(p, k))
+            if (!ytr__dname_ok(nm, k))
                 return ytr__dfail(w, "ytr_data_open: the session's column '%.*s' is not a name "
                                        "ysp/table.h reads ([A-Za-z_][A-Za-z0-9_]*, at most %d bytes)",
-                                    (int)(k > 80 ? 80 : k), p, YTB_MAX_NAME);
-            memcpy(names[n_names], p, k);
-            names[n_names++][k] = '\0';
-            p += k;
-            if (*p == ',') p++;
+                                    (int)(k > 80 ? 80 : k), nm, YTB_MAX_NAME);
+            memcpy(w->name[n_names++], nm, k + 1u);
         }
         for (j = 0; j < desc->trials->n_jit && j < YTR_MAX_JITTERS; j++) {
             const char* jn = desc->trials->jit[j].name;
@@ -7066,7 +7553,6 @@ YTR_API bool ytr_data_open(ytr_data* w, const ytr_data_desc* desc) {
                 return ytr__dfail(w, "ytr_data_open: the jitter column '%s' holds seconds, so its name "
                                        "ends in _s ('%s_s')", jn, jn);
         }
-        w->len = (size_t)len - 1u;  /* the header line, without its newline */
         w->trials = desc->trials;
         w->next_trial = ytr_n_done(desc->trials);
     }
@@ -7074,6 +7560,7 @@ YTR_API bool ytr_data_open(ytr_data* w, const ytr_data_desc* desc) {
     for (i = 0; i < desc->n_cols; i++) {
         const ytr_col* c = &desc->cols[i];
         ytr__dcol* d = &w->col[i];
+        char* dn;
         int tsz;
         size_t k = c->name ? strlen(c->name) : 0;
         if (!c->name || !ytr__dname_ok(c->name, k))
@@ -7085,22 +7572,21 @@ YTR_API bool ytr_data_open(ytr_data* w, const ytr_data_desc* desc) {
                                 (int)c->type);
         if (n_names >= YTR_DATA_MAX_COLS)
             return ytr__dfail(w, "ytr_data_open: more than %d columns", YTR_DATA_MAX_COLS);
-        memcpy(d->name, c->name, k + 1u);
+        dn = w->name[n_names++];
+        memcpy(dn, c->name, k + 1u);
         /* The file holds seconds, and a column's name says its unit
          * (README.md, Conventions): field rt_ns is column rt_s. */
-        if (c->type == YTR_COL_TIME_NS && ytr__dname_ns(d->name, k)) {
-            d->name[k - 2u] = 's';
-            d->name[k - 1u] = '\0';
+        if (c->type == YTR_COL_TIME_NS && ytr__dname_ns(dn, k)) {
+            dn[k - 2u] = 's';
+            dn[k - 1u] = '\0';
         }
-        if (c->type == YTR_COL_TIME_NS && !ytr__dname_s(d->name, strlen(d->name)))
+        if (c->type == YTR_COL_TIME_NS && !ytr__dname_s(dn, strlen(dn)))
             return ytr__dfail(w, "ytr_data_open: column '%s' is TIME_NS, written in seconds, so its name "
                                    "ends in _s or _ns ('%s_s')", c->name, c->name);
-        memcpy(names[n_names], d->name, strlen(d->name) + 1u);
-        n_names++;
-        d->type = (int)c->type;
+        d->type = (uint8_t)c->type;
         d->offset = c->offset;
         d->size = c->size;
-        d->decimals = c->decimals;
+        d->decimals = (uint8_t)(c->decimals >= 0 && c->decimals <= 17 ? c->decimals : 0);
         tsz = ytr__dtype_size(d->type);
         if (c->type == YTR_COL_CONST) {
             size_t tl;
@@ -7139,11 +7625,12 @@ YTR_API bool ytr_data_open(ytr_data* w, const ytr_data_desc* desc) {
         if (d->size == 0) d->size = (size_t)tsz;
     }
     w->n_cols = desc->n_cols;
+    w->n_names = n_names;
     if (n_names == 0) return ytr__dfail(w, "ytr_data_open: no columns (no session and no cols)");
     for (i = 0; i < n_names; i++)
         for (j = 0; j < i; j++)
-            if (strcmp(names[i], names[j]) == 0)
-                return ytr__dfail(w, "ytr_data_open: two columns are named '%s'", names[i]);
+            if (strcmp(w->name[i], w->name[j]) == 0)
+                return ytr__dfail(w, "ytr_data_open: two columns are named '%s'", w->name[i]);
 
     if (desc->path) {
         FILE* f = ytr__fopen(desc->path, false);
@@ -7160,10 +7647,10 @@ YTR_API bool ytr_data_open(ytr_data* w, const ytr_data_desc* desc) {
         w->write_ctx = desc->write_ctx;
     }
     w->flush = desc->flush;
-    /* The header line; a session's columns are in the buffer already. */
-    for (i = 0; i < w->n_cols; i++) {
-        if (i > 0 || w->trials) ytr__dputc(w, ',');
-        ytr__dput(w, w->col[i].name, strlen(w->col[i].name));
+    /* The header line: the session's names, then the caller's. */
+    for (i = 0; i < n_names; i++) {
+        if (i > 0) ytr__dputc(w, ',');
+        ytr__dput(w, w->name[i], strlen(w->name[i]));
     }
     ytr__dputc(w, '\n');
     ytr__dspill(w);
@@ -7217,10 +7704,12 @@ YTR_API int ytr_data_col(const ytr_data* w, const char* name) {
     n = strlen(name);
     for (i = 0; i < w->n_cols && i < YTR_DATA_MAX_COLS; i++) {
         const ytr__dcol* d = &w->col[i];
-        if (strcmp(d->name, name) == 0) return i;
+        int k = w->n_names - w->n_cols + i;
+        const char* dn = (k >= 0 && k < YTR_DATA_MAX_COLS) ? w->name[k] : "";
+        if (strcmp(dn, name) == 0) return i;
         /* The name as declared: rt_ns for the column written as rt_s. */
-        if (d->type == YTR_COL_TIME_NS && ytr__dname_ns(name, n) && strlen(d->name) == n - 1u &&
-            memcmp(d->name, name, n - 2u) == 0)
+        if (d->type == YTR_COL_TIME_NS && ytr__dname_ns(name, n) && strlen(dn) == n - 1u &&
+            memcmp(dn, name, n - 2u) == 0)
             return i;
     }
     return -1;
@@ -7246,7 +7735,8 @@ static ytr__dcol* ytr__dset(ytr_data* w, int col, int type_a, int type_b, int* r
     d = &w->col[col];
     if (d->offset != YTR_UNBOUND || (d->type != type_a && d->type != type_b)) {
         *rc = YTR_ERR_ARG;
-        ytr__dfail(w, "%s: column '%s' is not a YTR_COL_SET column of this type", what, d->name);
+        ytr__dfail(w, "%s: column '%s' is not a YTR_COL_SET column of this type", what,
+                   w->name[w->n_names - w->n_cols + col]);
         return NULL;
     }
     d->set = true;

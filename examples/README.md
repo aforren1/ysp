@@ -220,6 +220,13 @@ The X11 display-timing probe for the GLX backend is in `tests/probe/screen_x11/`
 | `trials_interleave` | Three staircases and catch trials, interleaved | trials, stair | `trials_interleave` (CI) | nothing |
 | `trials_bench` | CSV parse rate, block views, open and next() costs | rt, trials | `trials_bench` | nothing |
 
+## dataset
+
+| Program | Shows | Headers | Run | Needs |
+|---|---|---|---|---|
+| `dataset_session` | A simulated 2AFC session's data set: session.json, trial, frame, event, clock and stream tables, the zip; trials.csv read back with ysp/table.h; a folder that exists is refused | dataset, trials, table, json | `dataset_session --out DIR` (CI) | nothing |
+| `dataset_bench` | The cost of a row of each table (flushed to the OS, or to the disk), of session.json's atomic rewrite, of the finish and the zip | rt, dataset | `dataset_bench NAME` | nothing |
+
 ## video
 
 | Program | Shows | Headers | Run | Needs |

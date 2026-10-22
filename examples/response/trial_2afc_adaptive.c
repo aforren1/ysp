@@ -46,8 +46,12 @@
  * (QUEST+ with threshold and slope free, guess 0.5, lapse 0.02: the Psi
  * method), or both (the default), interleaved at random by ysp/trials.h.
  *
+ * The side is the session's variable `side` (ysp/trials.h, VARIABLES):
+ * drawn per trial from the trial's own stream of the seed, so it is in the
+ * session's columns and ytr_restore() or a snapshot gives it again.
+ *
  * Columns (ysp/trials.h's data writer): the session's (index, ..., track
- * as a number), then trial_index, stimulus (left or right), key_answer,
+ * as a number, side), then trial_index, stimulus (left or right), key_answer,
  * correct, method (stair or quest), intensity (the level the method
  * proposed), contrast_shown, scene_contrast (ysp/gfx.h's), code_peak,
  * code_trough, estimate (the track's threshold after the trial), then the
@@ -203,7 +207,7 @@ int main(int argc, char** argv) {
     const char* rig_name = NULL;
     const char* rig_dir = NULL;
     const char* method = "both";
-    uint64_t seed = 20261009, rng_side, rng_obs;
+    uint64_t seed = 20261009, rng_obs;
     int i, n, sim = 0, n_trials = 0, fullscreen = 0, no_rig = 0, aborted = 0, failed = 0, rows = 0, sim_bad = 0;
     int in_trial = 0, responding = 0, n_sim_ev = 0, sim_next = 0, side = 0, track = 0;
     int64_t fix_ns, iti_ns, sim_frame = -1;   /* --sim: the gabor's landing frame, until its record */
@@ -237,7 +241,6 @@ int main(int argc, char** argv) {
     if (n_trials < 5 || n_trials > MAX_TRIALS / 2) { fprintf(stderr, "trial_2afc_adaptive: --trials takes 5..512\n"); return 2; }
     fix_ns = YRT_S(sim ? 0.1 : 0.5);
     iti_ns = YRT_S(sim ? 0.05 : 0.5);
-    rng_side = seed ^ 0x5157u;
     rng_obs = seed ^ 0x0b5u;
 
     /* the calibration: measured, or nominal and flagged */
@@ -309,6 +312,9 @@ int main(int argc, char** argv) {
     if (strcmp(method, "quest")) rd.tracks[rd.n_tracks++] = ytr_track(&stair, stair_done);
     if (strcmp(method, "stair")) rd.tracks[rd.n_tracks++] = ytr_track(&quest, quest_done);
     rd.interleave = YTR_INTERLEAVE_RANDOM;
+    rd.vars[0] = ytr_var_choice("side", side_name, 2);   /* index 0 left, 1 right */
+    rd.n_vars = 1;
+    rd.seed = seed;            /* before the generator below moves it */
     rd.rng = ytr_splitmix;
     rd.rng_ctx = &seed;
     if (!ytr_open(&trials, &rd)) { fprintf(stderr, "trial_2afc_adaptive: %s\n", ytr_error(&trials)); return 1; }
@@ -388,7 +394,7 @@ int main(int argc, char** argv) {
                 failed = 1;
                 break;
             }
-            side = ytr_splitmix(&rng_side) < 0.5 ? 0 : 1;
+            side = ytr_var(&trials, ti.index, 0);
             gabor.x = (float)((side ? 5.0 : -5.0) * ppd);
             gabor.contrast = (float)sh.scene;
             ytl_clear(&tl, TRIAL);

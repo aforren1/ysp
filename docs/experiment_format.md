@@ -202,6 +202,15 @@ that structure; it does not invent a new one.
   stream per trial, from the node's seed and the trial index, serves
   `vars` draws and `$trial_seed` (a stimulus generator's seed). Version 1
   pins the hash.
+- Built (2026-10-21): ysp/trials.h v0.6.0 has the second stream
+  (`desc.seed`, `desc.vars[]`, `ytr_trial_seed()`; the header's VARIABLES
+  section). Trial i's stream is splitmix64 from the state
+  mix64((seed XOR 0x6A09E667F3BCC909) + (i + 1) x 0x9E3779B97F4A7C15);
+  output 0 is `$trial_seed` and output 1 + j is variable j. A variable
+  takes nothing from the node's generator, so adding one moves no other
+  draw. The data line records each trial's seed in a `trial_seed` column
+  (`x` and 16 hex digits, text in pandas, R and ysp/table.h; trials.md,
+  v0.6), so a data file gives it without a re-run of the hash.
 
 **D9. The data set. DECIDED (2026-10-14): a folder of CSV files and `session.json`.**
 - Options: (a) a folder: `trials.csv`, `frames.csv`, `events.csv`,
@@ -224,8 +233,8 @@ that structure; it does not invent a new one.
   flags), a count of dropped vblanks over the motion frames (RDK), the
   RDK seed, update count and digest, and the method's level, the
   contrast shown and the estimate (2AFC). jsPsych writes every timeline
-  variable by default (`save_timeline_variables`). The writer takes at
-  most 64 columns (gap G10).
+  variable by default (`save_timeline_variables`). The writer takes up
+  to 256 columns (ysp/trials.h v0.6.0; was 64, gap G10).
 - Decision: 2.10 lists the columns. Per-stimulus landing columns
   are written for the stimuli in the template's `record` list (default:
   the response's `from` and any stimulus with a trigger at its onset);
@@ -304,17 +313,17 @@ the header.
 |---|---|---|---|---|
 | G1 | CLOSED in ysp/timeline.h v0.8.0: a TRIGGER op's `ch` is its trigger channel and the fired event's `target` (`YTL_TRIGGER_CH(ch, code)`, `ytl_trigger_ch()`); `ytl_trigger()` and `YTL_TRIGGER()` give channel 0. Was: `ytl_trigger()` and `YTL_OP_TRIGGER` took a code only; the builder wrote target 0, so an op table could not say which trigger channel (role) fires. | ysp/timeline.h | EEG example, two output roles | Small: TRIGGER takes `ch` as its target |
 | G2 | CLOSED in ysp/rigfile.h v0.5.0 (2026-10-21): the profile's `view` (`distance_mm`, `width_mm`, `width_px`: the eye to the screen's center, the lit image's width and the pixels across it) and `yrig_ppd()`, the pixels per degree at the center by ysp/gfx.h's YGFX_DEG expression. A `ygfx_view` for a drawable w pixels wide has `width_mm` = w * `width_mm` / `width_px`, so a window gets the degrees of the full screen. A profile without `view` writes and hashes as before; adding or changing one changes `yrig_hash()`. `rigfile_profile --view` writes it. The 2AFC program reads it (`--rig NAME`, `--rig-dir DIR`) and falls back to nominal geometry flagged in its meta. Was: the rig profile had no viewing geometry, and the 2AFC program hard-coded `PPD_DISTANCE_MM` and `PPD_MM_PER_PX`. | ysp/rigfile.h | Every `deg` definition | Done |
-| G3 | No logged and replayed categorical draw per trial: jitters are durations only, and the 2AFC side comes from the program's own generator. | ysp/trials.h (or player code, D8) | `vars` with `choice` | Small |
-| G4 | `weight COLUMN` sets `cond_reps` from the column; nothing multiplies it by `reps`. The Stroop program computes weight x reps in C. | ysp/trials.h | Stroop | Small |
+| G3 | CLOSED in ysp/trials.h v0.6.0 (2026-10-21): `desc.vars[]` of `ytr_var_choice(name, values, n)` draws one of n texts per trial from the trial's own stream of `desc.seed` and the trial index (D8; the hash is pinned and checked against a second implementation), writes it in the data line, and `ytr_restore()` and a snapshot (format 5) give it again; `ytr_var()`, `ytr_var_text()`, `ytr_trial_seed()`; rules text `var NAME choice V V ...`. A variable takes no draw from the session's generator, so no other draw moves. The 2AFC program draws its side this way. Was: jitters were durations only, and the 2AFC side came from the program's own generator. | ysp/trials.h | `vars` with `choice` | Done |
+| G4 | CLOSED in ysp/trials.h v0.6.0 (2026-10-21): `weight COLUMN` is each row's count per repetition, times `reps` (the text's or the desc's), as OpenSesame's weight is per cycle; `cond_reps` beside `reps` is refused, since reps was ignored there. The Stroop program's rules say `weight weight` and `reps N`, and its C product is gone. Was: nothing multiplied the weight by `reps`. | ysp/trials.h | Stroop | Done |
 | G5 | CLOSED in ysp/color.h v0.4.0 (2026-10-21): `ycol_michelson(cx, m, dir, bits, &r)` gives ysp/gfx.h's contrast for a Michelson contrast in light (`r.scene`), the largest one in gamut (`r.max`), the output codes of the peak and the trough (`r.peak`, `r.trough`) and the Michelson contrast of their light (`r.shown`). A contrast past the gamut is reported (`r.gamut`), not clipped. Luminance comes from the readings alone, so a photometer's calibration is enough. The 2AFC program uses it; against its old arithmetic, 0 of 2406 codes differ and every value is within 1.1e-16. Was: no call did this; the 2AFC program had about 20 lines with `ycol_output_code()`. | ysp/color.h | `{"michelson": ...}` | Done |
 | G6 | CLOSED (2026-10-21). Every header that has a desc a definition sets exports its table, and every table has one row shape: `name, type, min, max, def, unit, doc, values`, where `values` is the "name=value" pairs of an `enum` or `enum[]` row (lower-case C suffixes, in value order) and NULL for any other type. The methods: `yst_params()` (ysp/stair.h 0.3.0), `yqst_params()` (ysp/quest.h 0.7.0), `yaep_params()` (ysp/aep.h 0.16.0). The timeline: `ytl_op_params(kind, &n)` and `ytl_desc_params()` (ysp/timeline.h 0.8.0). Response: `yrsp_params()` (ysp/response.h 0.6.0). The device families: `ydev_params(family, &n)` (ysp/device.h 0.4.0). gfx's stimulus fields: `ygfx_params()`, `ygfx_enum_params()` and the others (ysp/gfx.h 0.16.0). The rest gained `values` on 2026-10-21: `yscr_params()` (ysp/screen.h 0.9.0), `yau_params()` (ysp/audio.h 0.7.0), `ycol_desc_params()` (ysp/color.h 0.3.0), `yol_*_params()` (ysp/outline.h 0.4.0), `yvid_params()` (ysp/video.h 0.5.0), `yrdk_params()` (ysp/rdk.h 0.3.0) and `ygfx_desc_params()` (ysp/gfx.h 0.17.0). Each header's test checks its rows against its desc and its C enums; `tests/adapt/param_tables_test.c` checks every table against the shared rule (conventions.md, "Parameter tables"). | those headers | The loader's key check and the designer's panels from one source | Done |
 | G7 | CLOSED in ysp/json.h v0.2.0 (2026-10-21). Was: the canonical writer wrote a number's source text; only `yjs_new_fixed()` and `yjs_new_int()` made canonical numbers. Now every number is written as its exact value in one spelling, and `yjs_format_double()` gives a double's shortest round-trip decimal, the same bytes on MSVC, MinGW, gcc and emcc (json.md). | ysp/json.h | D2 | Done |
 | G8 | CLOSED in ysp/device.h v0.5.0 and ysp/response.h v0.7.0 (2026-10-21): a response rule (`ydev_rule`, the box's `desc.rule`) writes the response's code on the input's reader thread, its window and choices from the collector (`yrsp_rule_arm()`, `yrsp_rule_window()`, `yrsp_rule_choices()`); the record has `YDEV_OUT_RULE` and the press's t. A code that the final response does not match (an anticipation once the final onset came, a late press, another choice, a press the collector refused, a response without its code) sets `YRSP_R_SENT_MISMATCH` in the row's `rsp_flags` (`yrsp_rule_sent()`). Measured (`examples/device/response_lag.c`, in-process box and output, Windows 11, i7-1360P, the timing guard): press stamp to write start p50 8.8 ms, max 16.7 ms through a 60 Hz frame loop before; p50 5.2 us, p99 19.3 us, max 38.7 us through the rule (600 presses each). A real box adds its USB delivery and write on both paths. Was: a response-driven output waited for the frame loop to see the response, up to a frame after the press. | ysp/response.h, ysp/device.h | Response triggers (EEG) | Done |
 | G9 | CLOSED in the pack tool v0.6.0 (2026-10-21). The tool reads the experiment entry; when it is a version 1 definition, every text its `text` stimuli can show goes into one GLYPHRUNS entry named after the experiment entry (`experiment/main.json` gives `experiment/main.ysprun`), one block per text and style (font, size, width, line height, alignment, direction, language), keyed by both through `ypak_runs_key()` in ysp/pack.h, which the player calls too; stimuli of one style that show one text share the block. A text is a literal, the levels of a string column of any table a node names, a node's `vars` value or choices, or every value of a lookup's map. A glyph runs resource of the same name adds its blocks and fallback fonts. A text known only at run time (a built-in or a session field used directly, a script, a number column, a layout key from a variable) is refused at build by name (pack.md 4.5 and 15). Was: glyph-run blocks were listed by hand in the source description; nothing derived them. | pack tool | D14; Stroop | Done |
-| G10 | A trial row has at most 64 columns (ysp/table.h's bound, kept by the writer). | ysp/trials.h, ysp/table.h | Templates with many recorded stimuli | Small; `record` limits columns meanwhile |
-| G11 | The jitter `rate=` takes a fixed number. Snapping to the rig's refresh needs the player to set `rate_num` and `rate_den` after `ytr_rules()`, and the text cannot say so. | ysp/trials.h | EEG example (`rate=display`) | Small |
+| G10 | CLOSED in ysp/table.h v0.3.0 and ysp/trials.h v0.6.0 (2026-10-21): a table and a data file hold 256 columns (`YTB_MAX_COLUMNS`, `YTR_DATA_MAX_COLS`); the header line goes out in pieces, so long names do not hit the row buffer. No allocation in a write, as before; the writer is 38,224 bytes (was 18,760) and a row costs the same per column (docs/trials.md, v0.6). Was: at most 64 columns. | ysp/trials.h, ysp/table.h | Templates with many recorded stimuli | Done |
+| G11 | CLOSED in ysp/trials.h v0.6.0 (2026-10-21): `rate=display` in the rules text (`YTR_RATE_DISPLAY` in C) snaps a jitter to `desc.display_rate_num / display_rate_den`, which the player sets from the screen after `ytr_rules()`; open() refuses the session, naming the jitter, without it. `ytr_format_rules()` writes `rate=display` back; the meta line gives the rate drawn on. Was: `rate=` took a fixed number only. | ysp/trials.h | EEG example (`rate=display`) | Done |
 | G12 | Closed (2026-10-21): ysp/stair.h 0.3.0 has `yst_save()` and `yst_open_saved()`, in the form of quest's, aep's and trials' (versioned, checked, a mismatched desc refused, the error in the handle), so a resume no longer replays the staircase's updates. | ysp/stair.h | Resume | Small; closed |
-| G13 | The player's data set (D9) is not built. The trials writer's sidecar is key=value lines. | player | D9 | Medium |
+| G13 | CLOSED in ysp/dataset.h v0.1.0 (2026-10-21; docs/dataset.md). The folder, `session.json` (canonical, `"closed": false` until the finish, each rewrite atomic), the four tables and `streams/` through the trials writer, adapters from flip records, inputs, timeline events and clock fits, and the zip for the web. Left to the player: what it puts in `session.json` and which rows it drains from the event ring and the device records. Was: the player's data set (D9) was not built; the trials writer's sidecar is key=value lines. | ysp/dataset.h | D9 | Done |
 
 ## Part 2: Reference
 
@@ -368,7 +377,7 @@ when its sequence is built (2.5).
 | a session field | session start | the operator's value |
 | `trial_index`, `block`, `rep`, `condition` | trial start | `ytr_trial_info` |
 | `practice`, `warmup`, `first_in_block`, `after_break` | trial start | `ytr_trial_info` flags |
-| `trial_seed` | trial start | the trial stream's 64-bit seed (D8) |
+| `trial_seed` | trial start | the trial stream's 64-bit seed (D8): `ytr_trial_seed()` |
 | `method`, `level`, `estimate` | trial start (`estimate`: after the update) | the track's name, its proposal in stimulus units, its estimate |
 | `response`, `rt_s`, `responded` | `after` | `yrsp_result`: the choice's key, `rt_ns` in seconds, `YRSP_R_RESPONDED` |
 | `correct` | `after` | the response's key equals `key_answer` |
@@ -391,7 +400,7 @@ A node has `timeline` (a container) or `trial` (a leaf), not both.
 | `rules` | array of rules statements, joined with LF | `ytr_rules()`, the node's participant from the session field `participant`; errors name the element and the column |
 | `tracks` | array of method names | `ytr_desc.tracks[]` = `ytr_track(&method, done)` |
 | `interleave`, `track_rate` | `"random"`, `"round_robin"`; a number | `ytr_desc.interleave`, `track_rate` |
-| `vars` | NAME to a value, or `{"choice": [v, ...]}` drawn per trial | the trial stream (D8; G3) |
+| `vars` | NAME to a value, or `{"choice": [v, ...]}` drawn per trial | a value: a constant column; a choice: `ytr_desc.vars[]` = `ytr_var_choice()`, values as their canonical text, `desc.seed` = the node's seed (D8) |
 | `data` | column to value: constant columns, inherited by children | trial row columns |
 | `repetitions` | containers: run the children N times | the player's loop; iteration in the seed |
 | `if`, `unless` | `"$bool"`, read when the node starts | jsPsych's `conditional_function` |
@@ -510,12 +519,15 @@ order of the role names.
 
 | File | Content | Written by |
 |---|---|---|
-| `session.json` | format `"ysp-session"` 1; experiment ID (stored and migrated, D12), pack ID, rig profile hash (`yrig_hash()`), device rows (devices_spec 11.4), describe lines of the screen, color context and audio, session fields, the seed, the player's and each header's version, start date (UTC), applied live changes, `closed` | the player, at start and at close |
+| `session.json` | format `"ysp-session"` 1; experiment ID (stored and migrated, D12), pack ID, rig profile hash (`yrig_hash()`), device rows (devices_spec 11.4), describe lines of the screen, color context and audio, session fields, the seed, the player's and each header's version, start date (UTC), applied live changes, `closed` | the player, at start and at close (`yds_open()`, `yds_session_push()`, `yds_finish()`) |
 | `trials.csv` | one row per trial (below) | `ytr_data_open()` with `dd.trials` NULL and the player's columns, since a tree has several `ytr_trials` |
-| `frames.csv` | one row per `yscr_record`: index, target_s, planned_s, onset_s, residual_s, dropped, path, tier, flags, phase durations (`_s`) | the player, from `f.done` |
-| `events.csv` | timeline landings (kind, stimulus, planned_s, frame, onset_s, residual_s), responses, device events, outputs (`YDEV_REC_OUT`: code, deadline_s, write start and end in `_s`, flags), marks | the player, from the event ring |
-| `streams/` | one table per stream and per `rdk` stimulus | the player |
-| `clock.csv` | thinned clock pairs and every fit | the player |
+| `frames.csv` | one row per `yscr_record`: frame (the record's index; the name joins `events.csv`'s `frame`), trial_index, target_s, planned_s, onset_s, residual_s, dropped, path, tier, flags, code_risk, phase durations (`_s`) | the player, from `f.done` (`yds_frame_from_screen()`) |
+| `events.csv` | timeline landings (kind, stimulus, planned_s, frame, onset as t_s, residual_s), responses, device events, outputs (`YDEV_REC_OUT`: code, deadline_s, write start as t_s and end as end_s, flags), marks; one table with a `kind` column (ysp/dataset.h, THE TABLES) | the player, from the event ring |
+| `streams/` | one table per stream and per `rdk` stimulus | the player (`yds_stream()`) |
+| `clock.csv` | thinned clock pairs and every fit | the player (`yds_clock_from_fit()`) |
+
+Every file is ysp/dataset.h's (gap G13); the trial rows go through
+`yds_trials_writer()`, which is the `ytr_data` above.
 
 Times are seconds on the ysp_rt clock (rig_spec 1, principle 1), in
 columns whose names end in `_s` (D4; conventions.md, Units); RT is
@@ -524,7 +536,8 @@ relative to its onset. A trial row has, in order:
 1. Session fields, as constant columns (the trials writer's rule).
 2. `node`, `trial_type` (the template), `trial_index`, `time_elapsed_s`,
    and the `ytr_trial_info` fields.
-3. Every table column of the row, the `vars`, the jitters (`soa_s`) and the
+3. Every table column of the row, the `vars`, the jitters (`soa_s`),
+   `trial_seed` (`x` and 16 hex digits, from `ytr_format_row()`) and the
    inherited `data`.
 4. For each method trial: `method`, `level`, `estimate`.
 5. For each stimulus in `record`: `<s>_onset_s`, `<s>_offset_s`,
@@ -568,8 +581,10 @@ the runner protocol, apply between trials, and are logged in
 - `deg` units need the size procedure (rig_spec 14.7, rank 10). Until it
   exists, a `deg` definition is refused on the web.
 - Session fields from the URL query.
-- The data set as a zip through the trials writer's `desc.write`, posted
-  over the runner protocol or downloaded.
+- The data set as a zip, posted over the runner protocol or downloaded:
+  ysp/dataset.h writes the folder in Emscripten's in-memory file system
+  and `yds_zip()` gives its stored zip to a write function (2026-10-21;
+  was: through the trials writer's `desc.write`).
 - The self-test values (refresh, clock resolution, cross-origin
   isolation, fullscreen) in `session.json`; every visibility change in
   `events.csv`; tier WEB on every frame.
@@ -625,7 +640,7 @@ named.
 | `display.units` `deg` | `ppd` is `yrig_ppd()` of the rig profile's `view` (`--rig`, `--rig-dir`); without one, nominal geometry flagged NOMINAL. The definition has no nominal geometry: its degrees need the rig's `view` (D4) |
 | `calibration` `required` | `--cal`, else a nominal calibration flagged NOMINAL. The definition refuses instead (the rig's `.yspcal`, devices_spec 11.2) |
 | `fix`, `gabor` fields | Same: `ygfx_shape_desc`, `ygfx_gabor_desc` |
-| `x` by `$side`; `vars.side` | `gabor.x = (side ? 5 : -5) * ppd`, side from `rng_side`: G3 |
+| `x` by `$side`; `vars.side` | Same: `ytr_var_choice("side", ...)` and `ytr_var()`, `gabor.x = (side ? 5 : -5) * ppd` (G3, closed in ysp/trials.h v0.6.0) |
 | `{"michelson": "$level"}`, `$contrast_shown` | Same: `ycol_michelson()`; `scene` to `gabor.contrast`, `shown` to the methods |
 | `methods.stair` | Same `yst_desc` fields; `{"gamut": ...}` is `ycol_michelson()`'s `max` |
 | `methods.quest` | Same `yqst_desc`; `scale` `log10` is the program's `pow(10, ...)` and `log10(x)` |
@@ -727,7 +742,7 @@ pack tool derives the 9 blocks from the four text stimuli (G9).
   },
   "timeline": [
     { "name": "main", "timeline_variables": "stroop.pstb", "trial": "stroop",
-      "rules": ["order constrained", "weight weight", "max_run congruent=1 3", "practice 4"] }
+      "rules": ["order constrained", "weight weight", "reps 3", "max_run congruent=1 3", "practice 4"] }
   ]
 }
 ```
@@ -735,7 +750,7 @@ pack tool derives the 9 blocks from the four text stimuli (G9).
 | Field | In the program |
 |---|---|
 | `timeline_variables` | `ytb_open_csv()` on the same text; the pack stores the same PSTB bytes (table.md) |
-| `rules` | Same text as the program's `rules` plus `weight weight`; the program multiplies the weight by `--reps` 3 in C: G4 |
+| `rules` | Same text as the program's rules with `--reps` 3: `weight weight` and `reps 3` give each row weight x 3 trials (G4, closed in ysp/trials.h v0.6.0) |
 | `word.text`, `word.color` | The program upper-cases the ink names and copies `ink_rgb[ink]` into the runs; the lookups do both |
 | Text stimuli | `ylay_layout()` at setup and `ygfx_crun()` per run: D14, G9 (closed: the pack tool lays out the same 9 texts into `experiment/stroop.ysprun`). The font is a pack FONT entry, not a system path |
 | `if: $first_in_block`, `if: $practice` | Same: `ti.first_in_block`, `ti.practice` |
@@ -792,5 +807,5 @@ TEXTURE entry name), `type`, `code` and `answer`.
 | `resp` with `buttons` | devices_spec 11.1; device events reach `yrsp_feed_screen()` through the input bridge |
 | `response.trigger` | A response rule on `trig` in `resp`'s `desc.rule` (ysp/device.h RESPONSE RULES; G8, closed): the code leaves on the box's reader thread. The example's keys come from SDL, so it sends from the frame loop |
 | `light` | `photodiode_check.c`: edges of a line board on the input bridge, recorded in `events.csv` for the analysis to match to flips |
-| `rate=display` | G11 |
+| `rate=display` | `YTR_RATE_DISPLAY`: the player sets `desc.display_rate_num` and `display_rate_den` from the screen after `ytr_rules()` (G11, closed in ysp/trials.h v0.6.0) |
 | `min_tier` 1 | `yscr_desc.min_tier`; below it, frames carry `YSCR_FLIP_BELOW_TIER` (D11) |

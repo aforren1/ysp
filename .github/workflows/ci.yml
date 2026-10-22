@@ -142,6 +142,11 @@ jobs:
           expect 0 "$bin/trials_mocs"
           expect 0 "$bin/trials_interleave"
           expect 0 "$bin/trials_save_rows" --sim   # writes its data file and reads it back
+          # The session data set: a simulated session's folder, its zip, the
+          # read-back; the same folder again is refused (it exists).
+          expect 0 "$bin/dataset_session" --out "$RUNNER_TEMP/ds_session"
+          expect 1 "$bin/dataset_session" --out "$RUNNER_TEMP/ds_session"
+          expect 2 "$bin/dataset_session" --bogus
           # The timeline's examples simulate their display.
           expect 0 "$bin/timeline_trial"
           expect 0 "$bin/timeline_tracking"    # checks its own errors
@@ -293,6 +298,7 @@ jobs:
           expect 0 build/trials_mocs
           expect 0 build/trials_interleave
           expect 0 build/trials_save_rows --sim
+          expect 0 build/dataset_session --out dataset_session_ci
           expect 0 build/timeline_trial
           expect 0 build/timeline_tracking
           expect 0 build/color_convert
@@ -375,7 +381,7 @@ jobs:
 
   # --------------------------------------------------------------------- #
   # WebAssembly: the computation headers (stair, quest, aep, trials,       #
-  # timeline, color, pack, json)                                           #
+  # dataset, timeline, color, pack, json)                                  #
   # claim to need nothing but libm, and ysp/rt.h claims a platform branch  #
   # is all wasm needs. Compile the compile checks with emcc, threads off,  #
   # and run them under node. Nothing here is a timing claim.               #
@@ -409,7 +415,7 @@ jobs:
           emcc $W $T -o rt_test.js tests/adapt/rt_test.c && node rt_test.js
           emcc $W $T -o rt_pump.js examples/rt/pump.c && node rt_pump.js 40
           emcc $W $T -o rt_ring_csv.js examples/rt/ring_csv.c && node rt_ring_csv.js 30 > /dev/null
-          for h in stair quest aep table json pack trials timeline color; do
+          for h in stair quest aep table json pack trials dataset timeline color; do
             emcc $W -o "compile_$h.js" "tests/compile/$h.c" && node "compile_$h.js"
             emcc $W -o "test_$h.js" "tests/adapt/${h}_test.c" && node "test_$h.js"
           done
