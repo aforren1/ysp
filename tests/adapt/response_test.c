@@ -2041,6 +2041,186 @@ static void check_close_messages(void) {
     CHECK_S(yrsp_error(&g_c), "ysp_response: yrsp_update: the collector is not open");
 }
 
+/* v0.7, CODES SENT: a code sent at the press (ysp/device.h's rule) against
+ * the final responses. */
+static yrsp_sent sent_for(int64_t t, uint32_t sc, int choice, int written) {
+    yrsp_sent x;
+    memset(&x, 0, sizeof x);
+    x.t = t;
+    x.kind = YRSP_KIND_KEYBOARD;
+    x.control = sc;
+    x.choice = (int16_t)choice;
+    x.written = (uint8_t)written;
+    return x;
+}
+
+/* One window: plan onset at 1 s, a press at press_t of sc, the given codes
+ * sent, the final onset (0 = none), then the result's flags. */
+static uint32_t sent_case(int64_t press_t, uint32_t sc, const yrsp_sent* x, int n, int total, int64_t final_onset,
+                          int32_t* n_sent) {
+    yrsp_result r;
+    yrsp_arm(&g_c, 0);
+    onset(MS(1000), 0);
+    if (press_t) key(press_t, sc, 1);
+    CHECK_I(yrsp_set_sent(&g_c, x, n, total), 0);
+    if (final_onset) onset(final_onset, 1);
+    yrsp_update(&g_c, MS(5000));
+    r = finish();
+    if (press_t) key(press_t + MS(50), sc, 0);
+    if (n_sent) *n_sent = r.n_sent;
+    return r.flags;
+}
+
+static void check_sent(void) {
+    yrsp_desc d = fj_desc(1.0, 0.1);
+    yrsp_sent x[3];
+    int32_t ns = -1;
+    uint32_t fl;
+    CHECK(yrsp_open(&g_c, &d));
+    /* agree: the code for F at 1.2 s, F the response */
+    x[0] = sent_for(MS(1200), SC_F, 0, 1);
+    fl = sent_case(MS(1200), SC_F, x, 1, 1, MS(1017), &ns);
+    CHECK(!(fl & YRSP_R_SENT_MISMATCH) && (fl & YRSP_R_RESPONDED));
+    CHECK_I(ns, 1);
+    /* no codes told: no check */
+    yrsp_arm(&g_c, 0);
+    onset(MS(1000), 1);
+    key(MS(1200), SC_F, 1);
+    {
+        yrsp_result r = finish();
+        CHECK(!(r.flags & YRSP_R_SENT_MISMATCH) && r.n_sent == 0);
+    }
+    key(MS(1250), SC_F, 0);
+    /* an anticipation once the final onset came: fired at 1.15 s on the
+     * plan (150 ms), 90 ms from the final onset */
+    x[0] = sent_for(MS(1150), SC_F, 0, 1);
+    fl = sent_case(MS(1150), SC_F, x, 1, 1, MS(1060), NULL);
+    CHECK((fl & YRSP_R_SENT_MISMATCH) && !(fl & YRSP_R_RESPONDED));
+    /* late: 1.0 s from the onset */
+    x[0] = sent_for(MS(2000), SC_F, 0, 1);
+    fl = sent_case(MS(2000), SC_F, x, 1, 1, 0, NULL);
+    CHECK((fl & YRSP_R_SENT_MISMATCH) && !(fl & YRSP_R_RESPONDED));
+    /* early: before the onset */
+    x[0] = sent_for(MS(900), SC_F, 0, 1);
+    fl = sent_case(MS(900), SC_F, x, 1, 1, 0, NULL);
+    CHECK(fl & YRSP_R_SENT_MISMATCH);
+    /* another choice's code: J's code for an F press */
+    x[0] = sent_for(MS(1200), SC_F, 1, 1);
+    fl = sent_case(MS(1200), SC_F, x, 1, 1, 0, NULL);
+    CHECK((fl & YRSP_R_SENT_MISMATCH) && (fl & YRSP_R_RESPONDED));
+    /* a press that is no choice */
+    x[0] = sent_for(MS(1200), SC_K, 0, 1);
+    fl = sent_case(MS(1200), SC_K, x, 1, 1, 0, NULL);
+    CHECK(fl & YRSP_R_SENT_MISMATCH);
+    /* a press the collector never got */
+    x[0] = sent_for(MS(1300), SC_F, 0, 1);
+    fl = sent_case(MS(1200), SC_F, x, 1, 1, 0, NULL);
+    CHECK((fl & YRSP_R_SENT_MISMATCH) && (fl & YRSP_R_RESPONDED));
+    /* the response's code and one for a press the collector never got */
+    x[0] = sent_for(MS(1200), SC_F, 0, 1);
+    x[1] = sent_for(MS(1300), SC_F, 0, 1);
+    fl = sent_case(MS(1200), SC_F, x, 2, 2, 0, NULL);
+    CHECK(fl & YRSP_R_SENT_MISMATCH);
+    /* the response without its code: none sent, or its write failed */
+    fl = sent_case(MS(1200), SC_F, NULL, 0, 0, 0, &ns);
+    CHECK((fl & YRSP_R_SENT_MISMATCH) && ns == 0);
+    x[0] = sent_for(MS(1200), SC_F, 0, 0);
+    fl = sent_case(MS(1200), SC_F, x, 1, 1, 0, &ns);
+    CHECK((fl & YRSP_R_SENT_MISMATCH) && ns == 0);
+    /* no response and no code: agree */
+    fl = sent_case(0, SC_F, NULL, 0, 0, 0, NULL);
+    CHECK(!(fl & YRSP_R_SENT_MISMATCH) && (fl & YRSP_R_TIMEOUT));
+    /* a code not kept cannot be checked */
+    x[0] = sent_for(MS(1200), SC_F, 0, 1);
+    fl = sent_case(MS(1200), SC_F, x, 1, 2, 0, NULL);
+    CHECK(fl & YRSP_R_SENT_MISMATCH);
+    /* the collector refused the fired press: an earlier-stamped J arrived
+     * after the F the code went out for, and J is the response */
+    yrsp_arm(&g_c, 0);
+    onset(MS(1000), 1);
+    key(MS(1300), SC_F, 1);
+    key(MS(1250), SC_J, 1);
+    x[0] = sent_for(MS(1300), SC_F, 0, 1);
+    CHECK_I(yrsp_set_sent(&g_c, x, 1, 1), 0);
+    {
+        yrsp_result r = finish();
+        CHECK(r.response == 1 && (r.flags & YRSP_R_SENT_MISMATCH));
+    }
+    /* both coded: F's code marks a press that is not the response */
+    x[1] = sent_for(MS(1250), SC_J, 1, 1);
+    CHECK_I(yrsp_set_sent(&g_c, x, 2, 2), 0);
+    {
+        yrsp_result r = finish();
+        CHECK(r.response == 1 && r.n_responses == 2 && (r.flags & YRSP_R_SENT_MISMATCH));
+    }
+    key(MS(1400), SC_F, 0);
+    key(MS(1400), SC_J, 0);
+    /* two codes for one press */
+    x[0] = x[1] = sent_for(MS(1200), SC_F, 0, 1);
+    fl = sent_case(MS(1200), SC_F, x, 2, 2, 0, &ns);
+    CHECK((fl & YRSP_R_SENT_MISMATCH) && ns == 2);
+    /* arm clears the codes: a window with no set_sent is not checked */
+    yrsp_arm(&g_c, 0);
+    onset(MS(1000), 1);
+    key(MS(1200), SC_F, 1);
+    {
+        yrsp_result r = finish();
+        CHECK(!(r.flags & YRSP_R_SENT_MISMATCH) && r.n_sent == 0);
+    }
+    key(MS(1250), SC_F, 0);
+    /* arguments */
+    CHECK_I(yrsp_set_sent(&g_c, x, -1, 0), YRSP_ERR_ARG);
+    CHECK_I(yrsp_set_sent(&g_c, x, 2, 1), YRSP_ERR_ARG);
+    CHECK_I(yrsp_set_sent(&g_c, NULL, 1, 1), YRSP_ERR_ARG);
+    CHECK_HAS(yrsp_error(&g_c), "yrsp_set_sent");
+    yrsp_close(&g_c);
+    CHECK_I(yrsp_set_sent(&g_c, x, 1, 1), YRSP_ERR_STATE);
+    /* ALL mode has no choice index: the code's choice is not compared */
+    {
+        yrsp_desc all = d;
+        all.choices = NULL;
+        all.n_choices = 0;
+        CHECK(yrsp_open(&g_c, &all));
+        x[0] = sent_for(MS(1200), SC_K, 0, 1);
+        fl = sent_case(MS(1200), SC_K, x, 1, 1, 0, NULL);
+        CHECK(!(fl & YRSP_R_SENT_MISMATCH) && (fl & YRSP_R_RESPONDED));
+        yrsp_close(&g_c);
+    }
+    /* persist: every response needs its code, and only responses */
+    d.persist = true;
+    CHECK(yrsp_open(&g_c, &d));
+    yrsp_arm(&g_c, 0);
+    onset(MS(1000), 1);
+    key(MS(1200), SC_F, 1);
+    key(MS(1250), SC_F, 0);
+    key(MS(1400), SC_J, 1);
+    key(MS(1450), SC_J, 0);
+    x[0] = sent_for(MS(1200), SC_F, 0, 1);
+    x[1] = sent_for(MS(1400), SC_J, 1, 1);
+    CHECK_I(yrsp_set_sent(&g_c, x, 2, 2), 0);
+    {
+        yrsp_result r = finish();
+        CHECK(r.n_responses == 2 && !(r.flags & YRSP_R_SENT_MISMATCH) && r.n_sent == 2);
+    }
+    /* persist: a code for an anticipation beside the two responses' */
+    key(MS(1050), SC_F, 1);
+    key(MS(1060), SC_F, 0);
+    x[2] = sent_for(MS(1050), SC_F, 0, 1);
+    CHECK_I(yrsp_set_sent(&g_c, x, 3, 3), 0);
+    {
+        yrsp_result r = finish();
+        CHECK(r.n_anticipations == 1 && (r.flags & YRSP_R_SENT_MISMATCH));
+    }
+    CHECK_I(yrsp_set_sent(&g_c, x, 1, 1), 0);    /* J's code missing */
+    {
+        yrsp_result r = finish();
+        CHECK(r.flags & YRSP_R_SENT_MISMATCH);
+    }
+    yrsp_close(&g_c);
+    printf("  codes sent: agree, anticipation, late, early, other choice, not a choice, unseen, missing, failed, "
+           "refused, doubled, persist: ok\n");
+}
+
 int main(void) {
     printf("ysp_response %s\n", yrsp_version());
     check_names();
@@ -2066,6 +2246,7 @@ int main(void) {
     check_params();
     check_helpers();
     check_frame_loop();
+    check_sent();
 #if defined(YRSP_TEST_SDL)
     check_sdl();
 #endif

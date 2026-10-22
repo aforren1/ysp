@@ -1,6 +1,7 @@
 # ysp/response.h
 
-Status: v0.4.0, 2026-10-10. v0.4.0 adds helpers for the frame loop
+Status: v0.7.0, 2026-10-21. v0.7.0 adds the helpers for `ysp/device.h`'s
+response rule ("Response triggers (v0.7.0)"). v0.4.0, 2026-10-10, adds helpers for the frame loop
 (`yrsp_update_frame()`, `yrsp_feed_screen()`, `yrsp_set_landing()`) and
 the data file (`YRSP_DATA_COLS`, `yrsp_data_set()`); "The first trial
 (v0.4.0)" has the decisions and the measurements. v0.3.0 moved every time
@@ -84,7 +85,7 @@ error). An empty field means "none": no response, or no onset.
 | `onset_residual_s` | How late the stimulus's frame appeared: the flip record's onset minus its planned onset |
 | `landing_residual_s` | How far the stimulus's frame is from the time in the sequence |
 | `onset_frame` | The frame the stimulus appeared on |
-| `rsp_tier`, `rsp_flags` | The press's stamp tier, and the `YRSP_R_*` flags of the result |
+| `rsp_tier`, `rsp_flags` | The press's stamp tier, and the `YRSP_R_*` flags of the result (0x400: a response code sent at the press disagrees with the final response, [Codes sent](#codes-sent-v070)) |
 | `n_anticipations`, `n_early` | Presses before 0.1 s, and presses before the stimulus |
 
 A row with `onset_src` 3 has an RT from a prediction, not from a flip
@@ -193,6 +194,17 @@ yrsp_feed(&rsp, &in);
   tier 1 only after a loopback test checks the map.
 - Read the port on another thread if you must, but queue the events: only
   the frame thread calls `yrsp_feed()`.
+
+### Send a trigger code at the response
+
+A code that the frame loop sends goes out up to a frame after the press.
+For a response box on `ysp/device.h`, a response rule sends it from the
+box's reader thread instead. Include this header after `ysp/device.h`;
+then `yrsp_rule_choices()` makes the rule's choices from the collector's,
+`yrsp_rule_arm()` follows `yrsp_arm()`, `yrsp_rule_window()` follows
+each change of the onset, and `yrsp_rule_sent()` before `yrsp_finish()`
+flags a row whose code and response disagree. [device.md](device.md#how-to-send-a-code-at-the-response)
+has the steps.
 
 ### Keep key stamps honest when a GUI library runs
 
@@ -952,6 +964,57 @@ Checked on 2026-10-21: `tests/adapt/response_test.c` (21,049 checks)
 with MinGW-w64 gcc 16.1 (`-Werror`), MSVC 19.44 through CMake
 (`msvc-full`, ctest 89 of 89), and gcc 11.4 on WSL2 (C99, C11); the CI
 `--sim` list passes; mutants `pm-01` to `pm-05` caught, 5 of 5.
+
+## Response triggers (v0.7.0)
+
+Gap G8 of [experiment_format.md](experiment_format.md). The rule itself is
+`ysp/device.h`'s ([decisions](device.md#response-rules-v050)); this
+header has the three inline helpers that keep it in step with a
+collector.
+
+| Decision | Why |
+|---|---|
+| The helpers here, not in `ysp/device.h` | They read the collector's onset, window and state; this header owns them. This header stays pure: the helpers call `ysp/device.h` only where a program included it |
+| Outside the include guard, keyed on `YSP_DEVICE_H_INCLUDED` | A program that included this header first includes it again after `ysp/device.h`, as `ysp/device.h` does for `ysp/screen.h` |
+| The window: `[onset + min_rt_ns, onset + duration_ns)` | The same bounds as VALID, so the rule and the collector give one class to a press with the onset they both have |
+| Closed after a response ended the window; open at a deadline end | AFTER_END presses are no responses. A press stamped before the deadline and fed after it still counts, so its code goes too |
+| `yrsp_rule_choices()` refuses crossings, KEYCODE matches, ALL and NONE | The rule matches a press's kind, device and control. A crossing is a SAMPLE level, and a keycode is not a control |
+
+### Codes sent (v0.7.0)
+
+The rule decides on the window it has at the press. A code can then go
+out for a press that the final classification does not count: a final
+onset a frame later makes it an anticipation, or an earlier-stamped
+press arrives later and becomes the response. The EEG has the code, so
+the trial's row must show it (user decision, 2026-10-21).
+
+| Decision | Why |
+|---|---|
+| A result flag, `YRSP_R_SENT_MISMATCH` (0x400), in the `rsp_flags` column, and `n_sent` in the result | The row already has the result's flags; a flag adds no column to the data files. An analysis finds the trials with `rsp_flags & 0x400` |
+| The rule: the presses with a written code are exactly the presses the result counts as responses (the response; with persist, every VALID press), each code for its press's choice | One rule covers every way the two can disagree: an anticipation, an early or a late press, a press that is no choice, a VALID press that is not the response, another choice's code, two codes for one press, a press the collector never got, a response without a code |
+| A failed write is no code | The EEG does not have it. A write still running counts as sent |
+| The choice is compared in LIST mode only | ALL mode has no choice index |
+| More than 8 codes in a window (`YRSP_MAX_SENT`): flagged | A code that is not kept cannot be checked; the flag must not claim agreement |
+| `yrsp_set_sent()` is plain data, not a call into `ysp/device.h` | The collector stays pure; another producer of early codes uses the same call |
+| No `yrsp_set_sent()` since the arm: not compared | A program without a rule gets no flag |
+
+`tests/adapt/response_test.c` checks the agreeing case and each
+disagreement on the virtual clock; `tests/adapt/device_test.c` checks the
+same through a rule (a fire on the plan that the final onset makes an
+anticipation, a failed write). Mutants `sent-01` to `sent-10` (in
+`tests/mutate/response.toml`) and `rule-16` to `rule-18` (in
+`tests/mutate/device.toml`) caught, 13 of 13. The first run left
+`sent-01`, `sent-02` and `sent-05` alive: other checks flagged the same
+cases. Three cases were added in which only the mutated check sees the
+disagreement.
+
+`tests/adapt/device_test.c` checks the helpers (it includes this header
+after `ysp/device.h`): the window closed with no onset, from the plan and
+then from the final onset, its two bounds, closed after the response that
+ended the window, open after a deadline end, closed after `finish()`, and
+the refused choices. Mutants `rule-12` to `rule-15` (in
+`tests/mutate/device.toml`, on this header) caught, 4 of 4. No rule of
+the collector changed.
 
 ## Verification
 

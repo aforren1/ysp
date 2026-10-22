@@ -1,4 +1,4 @@
-/* ysp/response.h - v0.6.0 - public domain single-header response collector
+/* ysp/response.h - v0.7.0 - public domain single-header response collector
  *
  *   Turns timestamped input events from any device into the response of a
  *   trial: which key or button, when, measured from the stimulus onset that
@@ -16,8 +16,9 @@
  *   are int64 ns on the ysp/rt.h clock, passed in. Needs only the C
  *   standard library. C99 is the floor: it builds as C99, C11 and C++17,
  *   and in the C dialect MSVC compiles by default. Small inline helpers
- *   appear when ysp/screen.h, ysp/audio.h, ysp/timeline.h, ysp/trials.h or
- *   SDL3's SDL_events.h was included before it (THE FRAME LOOP, DATA).
+ *   appear when ysp/screen.h, ysp/audio.h, ysp/timeline.h, ysp/trials.h,
+ *   ysp/device.h or SDL3's SDL_events.h was included before it (THE FRAME
+ *   LOOP, DATA, RESPONSE TRIGGERS).
  *
  *   ---------------------------------------------------------------------
  *   USAGE
@@ -232,6 +233,61 @@
  *   name with YTR_COL_SET; yrsp_data_set() finds the columns by name.
  *
  *   ---------------------------------------------------------------------
+ *   RESPONSE TRIGGERS (v0.7)
+ *   ---------------------------------------------------------------------
+ *   A code at the response (an EEG trigger per button) sent from the frame
+ *   loop goes out up to a frame after the press. ysp/device.h's response
+ *   rule (RESPONSE RULES there) sends it from the box's reader thread.
+ *   With ysp/device.h included first (or this header included again after
+ *   it), three inline helpers keep the rule and this collector in step:
+ *     yrsp_rule_choices(c, codes, out, cap)   the rule's choices from a
+ *         LIST collector's: choice i fires codes[i]; -1 for a crossing, a
+ *         KEYCODE match, ALL or NONE mode, or too small a cap
+ *     yrsp_rule_arm(r, c)                       after yrsp_arm(): a new
+ *         window for the rule, its fire count 0
+ *     yrsp_rule_window(r, c)                    each frame after the onset
+ *         can move: the rule's window follows it
+ *   The window is [onset + min_rt_ns, onset + duration_ns), from the plan
+ *   until the final onset comes (the press's class, THE WINDOW AND RT),
+ *   open-ended without a duration, closed without an onset, after
+ *   finish(), and once the window ended on a response. A deadline does not
+ *   close it: a press stamped before the deadline still counts here, so
+ *   its code still goes. The rule fires for each press it sees as a
+ *   response, at most max_fires per arm (set it from persist and
+ *   max_responses). What it cannot see: a press it took for a response
+ *   that a later final onset reclassifies (a frame shown late), and the
+ *   earliest-stamp rule when two devices' presses arrive out of order.
+ *   CODES SENT records those in the trial's row:
+ *     yrsp_rule_sent(r, c)                      before yrsp_finish(): the
+ *         rule's fires of this arm (ydev_rule_fires()) become the
+ *         collector's codes sent (yrsp_set_sent()), each for the choice
+ *         of the same index
+ *
+ *   ---------------------------------------------------------------------
+ *   CODES SENT (v0.7)
+ *   ---------------------------------------------------------------------
+ *   yrsp_set_sent(c, s, n, total) tells the collector which presses of
+ *   this window got a code before it classified them (yrsp_sent: the
+ *   press's t, kind, device, control, the choice the code stands for, and
+ *   whether the write went out). yrsp_arm() clears them; each call
+ *   replaces the last. finish() then compares: the presses with a written
+ *   code must be exactly the presses the result counts as responses (the
+ *   response; with persist, every VALID press), each code for its press's
+ *   choice (LIST mode; ALL mode has no choice index). Otherwise the result
+ *   has YRSP_R_SENT_MISMATCH, which the rsp_flags column carries:
+ *     - a code for a press that is no response: an anticipation, an
+ *       early or a late press (a final onset that moved the window), or
+ *       a press that is no choice
+ *     - a code for a VALID press that is not the response (an earlier
+ *       stamp arrived later and won), a code for another choice, two
+ *       codes for one press, a code for a press the collector never got
+ *       or lost from a full log
+ *     - a response without a code, or whose write failed
+ *     - more codes than YRSP_MAX_SENT (8): they cannot be checked
+ *   result.n_sent counts the written codes. Without yrsp_set_sent() since
+ *   the arm, nothing is compared.
+ *
+ *   ---------------------------------------------------------------------
  *   REPEATS, HELD KEYS AND DOUBLE REPORTS
  *   ---------------------------------------------------------------------
  *     R1  A PRESS with YRSP_IN_REPEAT is not a new press, unless only
@@ -377,7 +433,9 @@
  *   as down (per device). The collector is about 6 KB, caller-allocated;
  *   nothing is allocated. One thread: a
  *   reader thread (a serial port, an eye tracker) queues its events, and
- *   the frame thread feeds them.
+ *   the frame thread feeds them. A code that must not wait for the frame
+ *   thread goes from the reader through a ysp/device.h rule (RESPONSE
+ *   TRIGGERS).
  *   Errors: yrsp_open() clears the message, and a failed open leaves one.
  *   Every other call that returns an error code (set_onset, feed, update,
  *   finish) writes the message before it returns ("ysp_response:
@@ -416,6 +474,13 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.7.0 - RESPONSE TRIGGERS: yrsp_rule_choices(), yrsp_rule_arm(),
+ *          yrsp_rule_window() and yrsp_rule_sent(), inline where
+ *          ysp/device.h came first (or with this header included again
+ *          after it), for ysp/device.h v0.5's response rule. CODES SENT:
+ *          yrsp_set_sent(), yrsp_sent, YRSP_R_SENT_MISMATCH and
+ *          result.n_sent (the result and the collector grew 4 and 136
+ *          bytes). No rule of the collector changed.
  *   v0.6.0 - PARAMETERS: yrsp_params() and yrsp_param, the table of the
  *          desc and choice fields a definition sets, with enum values.
  *          No rule changed.
@@ -481,6 +546,12 @@
  *          releases, the trace, the result and its CSV row, the SDL3
  *          adapter.
  *
+ *   STATUS: v0.7.0, 2026-10-21: CODES SENT checked in the test (21,119
+ *   checks: agreeing, each disagreement, persist, ALL mode, arguments);
+ *   the rule glue in tests/adapt/device_test.c (which includes this
+ *   header after ysp/device.h); MSVC 19.44, MinGW-w64 gcc 16.1 and gcc
+ *   11.4 on WSL2; sent-01 to sent-10, rule-12 to rule-15 and rule-18
+ *   caught.
  *   STATUS: v0.5.0, 2026-10-20: the column names only. The test (20,644
  *   checks; 20,709 with the SDL adapter) passes with MSVC 19.44 and
  *   MinGW-w64 gcc 16.1, on Linux (WSL2) and under emcc; fl-08 to fl-10
@@ -523,9 +594,9 @@
 #define YSP_RESPONSE_H_INCLUDED
 
 #define YRSP_VERSION_MAJOR 0
-#define YRSP_VERSION_MINOR 6
+#define YRSP_VERSION_MINOR 7
 #define YRSP_VERSION_PATCH 0
-#define YRSP_VERSION_STRING "0.6.0"
+#define YRSP_VERSION_STRING "0.7.0"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -764,6 +835,9 @@ typedef struct yrsp_entry {
 #define YRSP_R_RECLASSIFIED 0x0080u
 #define YRSP_R_HELD_AT_OPEN 0x0100u /* a choice was down at arm()        */
 #define YRSP_R_HOLD_TIMEOUT 0x0200u /* wait_for_key_release gave up      */
+#define YRSP_R_SENT_MISMATCH 0x0400u /* v0.7: the codes sent at the presses
+                                      * and the final responses disagree
+                                      * (CODES SENT)                       */
 
 typedef struct yrsp_result {
     int64_t     rt_ns;              /* YRSP_NO_TIME = none                 */
@@ -790,7 +864,20 @@ typedef struct yrsp_result {
                                      * YRSP_NO_TIME = no plan came         */
     int32_t     n_responses, n_early, n_anticipations, n_late, n_after_end,
                 n_not_choice, n_held, n_entries, n_lost, n_trace;
+    int32_t     n_sent;             /* v0.7: codes written (CODES SENT)    */
 } yrsp_result;
+
+/* v0.7, CODES SENT: a code an output sent when a press came, before the
+ * frame thread classified the press (ysp/device.h's response rule). */
+#define YRSP_MAX_SENT 8
+typedef struct yrsp_sent {
+    int64_t  t;                     /* the press's t                       */
+    uint32_t device, control;
+    uint8_t  kind;
+    uint8_t  written;               /* 1: the code went out, or its write
+                                     * is still running; 0: it failed      */
+    int16_t  choice;                /* the choice it stands for; -1 none   */
+} yrsp_sent;
 
 /* Private state, sized for no allocation. */
 typedef struct yrsp__chan { float v, x, y, rx, ry; uint8_t has, armed, has_ref, reserved_; } yrsp__chan;
@@ -816,6 +903,8 @@ typedef struct yrsp_collector {
     yrsp_entry   log[YRSP_LOG_CAP];
     int32_t        n_log, n_trace, n_lost, n_lost_trace, n_held, n_stray;
     uint32_t       held_at_open;
+    yrsp_sent      sent[YRSP_MAX_SENT];   /* v0.7: CODES SENT             */
+    int32_t        n_sent, n_sent_total, have_sent;
     char           error[160];
 } yrsp_collector;
 
@@ -845,6 +934,11 @@ YRSP_API int  yrsp_set_onset(yrsp_collector* c, const yrsp_onset* o);
 /* One input, armed or not. Returns the status, or YRSP_ERR_ARG for a
  * type or kind out of range. */
 YRSP_API int  yrsp_feed(yrsp_collector* c, const yrsp_input* in);
+/* v0.7, CODES SENT: the codes sent for presses of this window: s[0 ..
+ * n - 1] of total (total > n: some were not kept and cannot be checked).
+ * Each call replaces the last; yrsp_arm() clears them. Returns 0, or
+ * YRSP_ERR_ARG / YRSP_ERR_STATE with the message. */
+YRSP_API int  yrsp_set_sent(yrsp_collector* c, const yrsp_sent* s, int n, int total);
 
 /* The clock without input: ENDED at onset + duration_ns, or at the
  * press + max_hold_ns while waiting for a release. Call it once a frame
@@ -1046,6 +1140,74 @@ static inline int yrsp_data_set(ytr_data* w, const yrsp_result* r) {
 #endif
 
 #endif /* YSP_RESPONSE_H_INCLUDED */
+
+/* Outside the include guard: including this header again after
+ * ysp/device.h adds the glue (RESPONSE TRIGGERS). */
+#if defined(YSP_DEVICE_H_INCLUDED) && !defined(YRSP__DEVICE_GLUE)
+#define YRSP__DEVICE_GLUE
+/* v0.7, RESPONSE TRIGGERS: the press window of a ysp/device.h response
+ * rule, from the collector: [onset + min_rt, onset + duration) while it is
+ * armed with an onset (the plan or the final one), the end open without a
+ * duration; closed with no onset, after finish(), and after the window
+ * ended on a response. A deadline does not close it: a press stamped
+ * before the deadline and read after it still fires, as it still counts
+ * here. */
+static inline void yrsp__rule_bounds(const yrsp_collector* c, int64_t* from, int64_t* until) {
+    *from = *until = YDEV_RULE_NEVER;
+    if (!c->ok || !c->armed || c->finished || !c->have_onset) return;
+    if (c->status == YRSP_ENDED && c->ended_by != 2) return;
+    *from = c->onset.t_ns + c->min_rt_ns;
+    if (c->duration_ns > 0) *until = c->onset.t_ns + c->duration_ns;
+}
+/* After yrsp_arm(): a new window for the rule, its fire count 0. */
+static inline void yrsp_rule_arm(ydev_rule* r, const yrsp_collector* c) {
+    int64_t from, until;
+    yrsp__rule_bounds(c, &from, &until);
+    ydev_rule_arm(r, from, until);
+}
+/* Before yrsp_finish() (CODES SENT): the rule's fires of this arm become
+ * the collector's codes sent, each for the collector's choice of the same
+ * index (choices made by yrsp_rule_choices()), so the result flags
+ * YRSP_R_SENT_MISMATCH where they and the final responses disagree. */
+static inline int yrsp_rule_sent(ydev_rule* r, yrsp_collector* c) {
+    ydev_rule_fire f[YDEV_RULE_FIRES];
+    yrsp_sent s[YDEV_RULE_FIRES];
+    int n = ydev_rule_fires(r, f, YDEV_RULE_FIRES), k, m = n < YDEV_RULE_FIRES ? n : YDEV_RULE_FIRES;
+    for (k = 0; k < m; k++) {
+        s[k].t = f[k].t;
+        s[k].device = f[k].device;
+        s[k].control = f[k].control;
+        s[k].kind = f[k].kind;
+        s[k].written = (uint8_t)(f[k].result == YDEV_OK || f[k].result == YDEV_RULE_PENDING);
+        s[k].choice = (int16_t)f[k].choice;
+    }
+    return yrsp_set_sent(c, s, m, n);
+}
+/* Each frame after the onset can move (yrsp_set_landing(),
+ * yrsp_update_frame(), yrsp_set_onset()): the window follows the onset. */
+static inline void yrsp_rule_window(ydev_rule* r, const yrsp_collector* c) {
+    int64_t from, until;
+    yrsp__rule_bounds(c, &from, &until);
+    ydev_rule_window(r, from, until);
+}
+/* The rule's choices from a LIST collector's: choice i fires codes[i].
+ * Returns the count, or -1 when a choice is a crossing or matches by
+ * keycode (the rule reads controls), or the collector is not LIST. */
+static inline int yrsp_rule_choices(const yrsp_collector* c, const uint32_t* codes, ydev_rule_choice* out, int cap) {
+    int i;
+    if (!c->ok || c->d.mode != YRSP_CHOICES_LIST || !codes || !out || c->d.n_choices > cap) return -1;
+    for (i = 0; i < c->d.n_choices; i++) {
+        const yrsp_choice* h = &c->ch[i];
+        if (h->cross || h->match != YRSP_MATCH_SCANCODE) return -1;
+        out[i].kind = h->kind;
+        out[i].reserved_[0] = out[i].reserved_[1] = out[i].reserved_[2] = 0;
+        out[i].device = h->device;
+        out[i].control = h->control;
+        out[i].code = codes[i];
+    }
+    return c->d.n_choices;
+}
+#endif
 
 /* =======================================================================
  *
@@ -1576,6 +1738,7 @@ YRSP_API void yrsp_arm(yrsp_collector* c, int64_t t_ns) {
     c->closing = 0;
     c->n_log = c->n_trace = c->n_lost = c->n_lost_trace = c->n_held = c->n_stray = 0;
     c->held_at_open = 0;
+    c->n_sent = c->n_sent_total = c->have_sent = 0;
     for (i = 0; i < c->d.n_choices; i++) {
         const yrsp_choice* h = &c->ch[i];
         yrsp__chan* ch = &c->chan[i];
@@ -1655,6 +1818,46 @@ YRSP_API int yrsp_update(yrsp_collector* c, int64_t now_ns) {
     return c->status;
 }
 
+YRSP_API int yrsp_set_sent(yrsp_collector* c, const yrsp_sent* s, int n, int total) {
+    int i;
+    if (!c || !c->ok) return yrsp__err(c, YRSP_ERR_STATE, "yrsp_set_sent");
+    if (n < 0 || total < n || (n > 0 && !s)) return yrsp__err(c, YRSP_ERR_ARG, "yrsp_set_sent");
+    c->n_sent = n < YRSP_MAX_SENT ? n : YRSP_MAX_SENT;
+    for (i = 0; i < c->n_sent; i++) c->sent[i] = s[i];
+    c->n_sent_total = total;
+    c->have_sent = 1;
+    return 0;
+}
+
+/* CODES SENT: the presses with a written code must be exactly the presses
+ * the result counts as responses (the response; with persist, every VALID
+ * press), each code for its press's own choice (LIST mode: ALL has no
+ * choice index). Counts the written codes into r->n_sent. */
+static int yrsp__sent_mismatch(const yrsp_collector* c, yrsp_result* r, int best) {
+    unsigned char coded[YRSP_LOG_CAP];
+    int m, k, bad = c->n_sent_total > c->n_sent;   /* a code not kept cannot be checked */
+    memset(coded, 0, sizeof coded);
+    for (m = 0; m < c->n_sent; m++) {
+        const yrsp_sent* s = &c->sent[m];
+        if (!s->written) continue;
+        r->n_sent++;
+        for (k = 0; k < c->n_log; k++) {
+            const yrsp_entry* e = &c->log[k];
+            if (e->t == s->t && e->kind == s->kind && e->device == s->device && e->control == s->control &&
+                !(e->flags & YRSP_E_CROSSING))
+                break;
+        }
+        if (k == c->n_log) { bad = 1; continue; }        /* never fed, or lost from a full log */
+        if (!(c->log[k].flags & YRSP_E_VALID) || (!c->d.persist && k != best) ||
+            (c->d.mode == YRSP_CHOICES_LIST && c->log[k].choice != s->choice) || coded[k])
+            bad = 1;
+        coded[k] = 1;
+    }
+    for (k = 0; k < c->n_log; k++)                       /* a response without its code */
+        if ((c->log[k].flags & YRSP_E_VALID) && (c->d.persist || k == best) && !coded[k]) bad = 1;
+    return bad;
+}
+
 YRSP_API int yrsp_finish(yrsp_collector* c, yrsp_result* r) {
     int i, best = -1;
     if (!c || !c->ok) return yrsp__err(c, YRSP_ERR_STATE, "yrsp_finish");
@@ -1730,6 +1933,7 @@ YRSP_API int yrsp_finish(yrsp_collector* c, yrsp_result* r) {
     } else if (c->duration_ns > 0) {
         r->flags |= YRSP_R_TIMEOUT;
     }
+    if (c->have_sent && yrsp__sent_mismatch(c, r, best)) r->flags |= YRSP_R_SENT_MISMATCH;
     return YRSP_ENDED;
 }
 

@@ -304,7 +304,7 @@ the header.
 | G5 | CLOSED in ysp/color.h v0.4.0 (2026-10-21): `ycol_michelson(cx, m, dir, bits, &r)` gives ysp/gfx.h's contrast for a Michelson contrast in light (`r.scene`), the largest one in gamut (`r.max`), the output codes of the peak and the trough (`r.peak`, `r.trough`) and the Michelson contrast of their light (`r.shown`). A contrast past the gamut is reported (`r.gamut`), not clipped. Luminance comes from the readings alone, so a photometer's calibration is enough. The 2AFC program uses it; against its old arithmetic, 0 of 2406 codes differ and every value is within 1.1e-16. Was: no call did this; the 2AFC program had about 20 lines with `ycol_output_code()`. | ysp/color.h | `{"michelson": ...}` | Done |
 | G6 | CLOSED (2026-10-21). Every header that has a desc a definition sets exports its table, and every table has one row shape: `name, type, min, max, def, unit, doc, values`, where `values` is the "name=value" pairs of an `enum` or `enum[]` row (lower-case C suffixes, in value order) and NULL for any other type. The methods: `yst_params()` (ysp/stair.h 0.3.0), `yqst_params()` (ysp/quest.h 0.7.0), `yaep_params()` (ysp/aep.h 0.16.0). The timeline: `ytl_op_params(kind, &n)` and `ytl_desc_params()` (ysp/timeline.h 0.8.0). Response: `yrsp_params()` (ysp/response.h 0.6.0). The device families: `ydev_params(family, &n)` (ysp/device.h 0.4.0). gfx's stimulus fields: `ygfx_params()`, `ygfx_enum_params()` and the others (ysp/gfx.h 0.16.0). The rest gained `values` on 2026-10-21: `yscr_params()` (ysp/screen.h 0.9.0), `yau_params()` (ysp/audio.h 0.7.0), `ycol_desc_params()` (ysp/color.h 0.3.0), `yol_*_params()` (ysp/outline.h 0.4.0), `yvid_params()` (ysp/video.h 0.5.0), `yrdk_params()` (ysp/rdk.h 0.3.0) and `ygfx_desc_params()` (ysp/gfx.h 0.17.0). Each header's test checks its rows against its desc and its C enums; `tests/adapt/param_tables_test.c` checks every table against the shared rule (conventions.md, "Parameter tables"). | those headers | The loader's key check and the designer's panels from one source | Done |
 | G7 | CLOSED in ysp/json.h v0.2.0 (2026-10-21). Was: the canonical writer wrote a number's source text; only `yjs_new_fixed()` and `yjs_new_int()` made canonical numbers. Now every number is written as its exact value in one spelling, and `yjs_format_double()` gives a double's shortest round-trip decimal, the same bytes on MSVC, MinGW, gcc and emcc (json.md). | ysp/json.h | D2 | Done |
-| G8 | A response-driven output waits for the frame loop to see the response, up to a frame after the press. No callback on the input's thread. | ysp/response.h, ysp/device.h | Response triggers (EEG) | Medium; measure the lag first |
+| G8 | CLOSED in ysp/device.h v0.5.0 and ysp/response.h v0.7.0 (2026-10-21): a response rule (`ydev_rule`, the box's `desc.rule`) writes the response's code on the input's reader thread, its window and choices from the collector (`yrsp_rule_arm()`, `yrsp_rule_window()`, `yrsp_rule_choices()`); the record has `YDEV_OUT_RULE` and the press's t. A code that the final response does not match (an anticipation once the final onset came, a late press, another choice, a press the collector refused, a response without its code) sets `YRSP_R_SENT_MISMATCH` in the row's `rsp_flags` (`yrsp_rule_sent()`). Measured (`examples/device/response_lag.c`, in-process box and output, Windows 11, i7-1360P, the timing guard): press stamp to write start p50 8.8 ms, max 16.7 ms through a 60 Hz frame loop before; p50 5.2 us, p99 19.3 us, max 38.7 us through the rule (600 presses each). A real box adds its USB delivery and write on both paths. Was: a response-driven output waited for the frame loop to see the response, up to a frame after the press. | ysp/response.h, ysp/device.h | Response triggers (EEG) | Done |
 | G9 | Glyph-run blocks are listed by hand in the source description. Nothing derives them from a definition's texts and a table's levels. | pack tool | D14; Stroop | Small to medium |
 | G10 | A trial row has at most 64 columns (ysp/table.h's bound, kept by the writer). | ysp/trials.h, ysp/table.h | Templates with many recorded stimuli | Small; `record` limits columns meanwhile |
 | G11 | The jitter `rate=` takes a fixed number. Snapping to the rig's refresh needs the player to set `rate_num` and `rate_den` after `ytr_rules()`, and the text cannot say so. | ysp/trials.h | EEG example (`rate=display`) | Small |
@@ -445,7 +445,7 @@ session.
 | `key_answer` | `$correct`: the response's key equals this value |
 | `response_ends_trial` | true (default): `after` starts at the response; false: at the window's end |
 | `persist`, `max_responses`, `allow_held_key`, `wait_for_key_release` | the `yrsp_desc` fields |
-| `trigger` | `{"role": R, "code": VALUE}`: `ydev_out_pulse()` when the response is seen (G8) |
+| `trigger` | `{"role": R, "code": VALUE}`: a response rule on the role's output (`ydev_rule`; G8, closed): `yrsp_rule_choices()` with a code per choice, the rule in the response role's `desc.rule`, `yrsp_rule_arm()` and `yrsp_rule_window()` each trial, `yrsp_rule_sent()` before `yrsp_finish()`: `rsp_flags` has `YRSP_R_SENT_MISMATCH` (0x400) when a code went out that the final response does not match (an anticipation after the final onset, a late press, another choice, a press the collector refused) or a response has no code. A keyboard role has no reader thread of ysp/device.h: `ydev_out_pulse()` when the frame loop sees the response |
 
 ### 2.7 Stimuli
 
@@ -530,7 +530,9 @@ relative to its onset. A trial row has, in order:
    `flip_flags`.
 7. For each output role: `<role>_n`, `<role>_failed`, `<role>_lag_max_s`
    (write start minus deadline).
-8. `YRSP_DATA_COLS` (`yrsp_data_set()`), `correct`, `outcome`.
+8. `YRSP_DATA_COLS` (`yrsp_data_set()`), `correct`, `outcome`. With a
+   response `trigger`, `rsp_flags` & 0x400 marks a trial whose code and
+   final response disagree (2.6).
 9. The template's `columns`.
 
 ### 2.11 Versions
@@ -781,7 +783,7 @@ TEXTURE entry name), `type`, `code` and `answer`.
 | Trigger step | `ydev_trigger_channel()` in `yscr_desc.triggers`; `yscr_trigger(&scr, 0, code)` between begin and flip writes at the planned vblank plus `onset_offset_ns`. The step names the role; its channel is the TRIGGER op's `ch` and the fired event's `target` (G1, closed in ysp/timeline.h v0.8.0) |
 | `<role>_lag_max`, `events.csv` | The program's table from `YDEV_REC_OUT` ring records: deadline, write start, write length, trailing edge |
 | `resp` with `buttons` | devices_spec 11.1; device events reach `yrsp_feed_screen()` through the input bridge |
-| `response.trigger` | `ydev_out_pulse()` when the frame loop sees the response: G8 |
+| `response.trigger` | A response rule on `trig` in `resp`'s `desc.rule` (ysp/device.h RESPONSE RULES; G8, closed): the code leaves on the box's reader thread. The example's keys come from SDL, so it sends from the frame loop |
 | `light` | `photodiode_check.c`: edges of a line board on the input bridge, recorded in `events.csv` for the analysis to match to flips |
 | `rate=display` | G11 |
 | `min_tier` 1 | `yscr_desc.min_tier`; below it, frames carry `YSCR_FLIP_BELOW_TIER` (D11) |

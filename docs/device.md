@@ -1,6 +1,6 @@
 # ysp/device.h
 
-Status: v0.3.0, 2026-10-10 (v0.2.0, 2026-10-08, for the outputs); the rig profile, `ysp/rigfile.h` v0.2.0,
+Status: v0.5.0, 2026-10-21 (response rules); v0.3.0, 2026-10-10 (v0.2.0, 2026-10-08, for the outputs); the rig profile, `ysp/rigfile.h` v0.2.0,
 2026-10-09 (v0.2.0 adds roles bound to LSL streams, docs/net.md; v0.3.0,
 2026-10-10, opens the device with `yrig_open_device()`; v0.4.0, 2026-10-13,
 adds the photodiode run behind the display's onset offset and the input
@@ -84,6 +84,56 @@ set `d.transport = ydev_parallel_transport(&port)` with a zeroed
    vblank. Its OUT record has the FLIP flag and the deadline in `i64[3]`.
 
 `examples/device/trigger_flip.c` does this on the simulated display.
+
+## How-to: send a code at the response
+
+A code sent from the frame loop goes out up to a frame after the press.
+A response rule sends it from the response box's reader thread.
+
+1. Open the output and wait until it runs ([send a trigger code](#how-to-send-a-trigger-code)).
+2. Include `ysp/response.h` after `ysp/device.h` (or include it again
+   after `ysp/device.h`), so that its rule helpers exist.
+3. Make the rule's choices from the collector's choices, one code for
+   each, and open the rule on the output:
+
+   ```c
+   static const uint32_t codes[2] = { 101, 102 };   /* choice 0, choice 1 */
+   ydev_rule_choice ch[2];
+   ydev_rule_desc rd = { 0 };
+   static ydev_rule rule;
+   if (yrsp_rule_choices(&rsp, codes, ch, 2) < 0) die("a choice the rule cannot read");
+   rd.out = &trig;
+   rd.choices = ch;
+   rd.n_choices = 2;
+   if (!ydev_rule_open(&rule, &rd)) die(ydev_rule_error(&rule));
+   ```
+
+4. Give the rule to the response box: `d.rule = &rule;` before
+   `ydev_open()`.
+5. In each trial, on the frame thread:
+
+   ```c
+   yrsp_arm(&rsp, f.onset);
+   yrsp_rule_arm(&rule, &rsp);          /* a new window, no fire yet */
+   ...                                  /* every frame: */
+   yrsp_set_landing(&rsp, fired, n, STIM_ON);
+   yrsp_update_frame(&rsp, &f);
+   yrsp_rule_window(&rule, &rsp);       /* the window follows the onset */
+   ```
+
+6. At the end of the trial, before `yrsp_finish()`, call
+   `yrsp_rule_sent(&rule, &rsp)`. The result then has
+   `YRSP_R_SENT_MISMATCH` (in the `rsp_flags` column) when a code went
+   out that the final responses do not match, or a response has no code
+   ([response.md](response.md#codes-sent-v070)). `ydev_rule_get(&rule,
+   &info)` gives the last fire's `code`, `t_event` (the press) and
+   `t_before` (the write's start) for the row.
+7. At the end of the session, close the response box, then the rule,
+   then the output.
+
+The output's record of the write has the `YDEV_OUT_RULE` flag and the
+press's time in `i64[3]`. `examples/device/response_lag.c` does this and
+measures both paths.
 
 ## How-to: measure an output's write-to-edge latency
 
@@ -413,6 +463,28 @@ Checked on 2026-10-21 with MinGW-w64 gcc 16.1, MSVC 19.44 (`msvc-full`)
 and gcc 11.4 on WSL2: 8 families, 71 rows; mutants `dp-01` to `dp-07`
 caught, 7 of 7.
 
+### Response rules (v0.5.0)
+
+Gap G8 of [experiment_format.md](experiment_format.md): a definition's
+`response.trigger` sends a code when the response comes, and the frame
+loop saw a press up to a frame after it. The lag was measured first
+([Results](#response-rules-the-lag-v050)).
+
+| Question | Decision | Why |
+|---|---|---|
+| A callback or a rule | A rule: choices with a code each, a window, a fire count; armed by the frame thread, tried by the reader thread | A rule is data that the player lowers from the definition and `ydev_rule_open()` checks. A callback is user code on an elevated thread that holds the device's next read. A program that needs more calls `ydev_rule_input()` from a sink of its own |
+| Where it lives | `ysp/device.h`; the glue to the collector (`yrsp_rule_*`) in `ysp/response.h`, outside its include guard | `ysp/response.h` is pure computation (no threads, no OS calls); the rule needs a lock and writes to an output. `ysp/device.h` has the reader thread, the output's lock and the records. The glue reads the collector's state, so the collector's header owns it, as `ysp/device.h` owns its `ysp/screen.h` glue |
+| Where it runs | On the reader thread, after the event's time is mapped and before the sink | The sink only queues (`yscr_push_input()` 1.9 to 2.6 us); the code is the write that the gap is about |
+| Write on the reader or hand it to a worker | On the reader | A worker adds its wake: most of `ydev_out_pulse()`'s 5.3 to 8.7 us (p50, v0.2.0) was the worker's wake. The reader's next read waits for the write (about 0.4 ms over USB); the events keep their device times |
+| The lock | One lock per rule. The fire is claimed under it; the write is made outside it, under the output's lock | No lock is taken inside another, so the rule cannot deadlock with the screen's trigger worker or the frame loop's own writes. The fire count stays exact with two producers (a box and a sink of your own). Atomics would save about 100 ns beside a 0.4 ms USB write |
+| Which time | The event's t (the device's mapped time), against `[from, until)` | The collector classifies a press by its t; the same comparison gives the same class. A report read late keeps its time |
+| Which presses | A PRESS without REPEAT; the first choice that matches; at most `max_fires` per arm (0 = 1) | jsPsych's default: the first response ends the trial. ysp/response.h's R1. R2 (a press of a control already down) is not repeated: a box sends no repeats, and the fire count bounds the codes |
+| Window from the collector | `[onset + min_rt, onset + duration)`, from the plan until the final onset; closed after a response ended the collector's window, not at its deadline | The collector counts a press stamped before the deadline and read after it, so its code goes too. A plan is known before the frame is shown, so the window is open before any valid press |
+| The record | `YDEV_REC_OUT` with `YDEV_OUT_RULE`, the press's t in `i64[3]` | The payload has no free field. A RULE write has no flip deadline and no board ticks, the other uses of `i64[3]`. Write start minus press is `i64[0] - i64[3]`, as deadline to write is for FLIP |
+| A code that the final classification does not match (user decision, 2026-10-21) | `ydev_rule_fires()` keeps each fire of the arm; `yrsp_rule_sent()` gives them to the collector, and the result flags `YRSP_R_SENT_MISMATCH` | The rule decides on the window it has at the press; a final onset a frame later can make that press an anticipation. The code is in the EEG, so the trial's row must say so. A flag in `rsp_flags`, not a new column: the row already has the result's flags, and the files' columns stay the same |
+| Info for the frame thread | `ydev_rule_get()`: the arm's fire count, the last fire's press, code, result and write times; a write that ends after a re-arm does not touch the new arm's info | The data row needs the code and its lag; a late write belongs to the trial before |
+| Keys and raw mice | Not hooked | SDL's raw keyboard thread and the raw-mouse reader are `ysp/screen.h`'s. A keyboard is not a response box (ysp/screen.h, INPUT) |
+
 ## Results
 
 On 2026-10-08, MSVC 19.44 and MinGW-w64 gcc 16.1 on Windows 11, gcc 11.4
@@ -509,6 +581,58 @@ call makes the leading write itself.
   device-timed families (XID, line board, BioSemi, MMBT-S at P) do not
   use the rule.
 
+### Response rules: the lag (v0.5.0)
+
+`examples/device/response_lag.c` (`device_response_lag`), MSVC 19.44 /O2
+(`msvc-full`, Release), Windows 11, i7-1360P, AC power, under
+`psy-guard.sh time` (load 7 % before, 1 % after), 2026-10-21. No serial
+device was attached, so both ends are in-process: a line-protocol box on a
+fake transport, read by a `ysp/device.h` reader thread, presses every 80
+to 180 ms; two in-process TriggerBoxes take the codes. The input reaches
+the frame loop through `ysp/screen.h`'s input bridge (a 320 x 200 window
+open for it), and the loop runs on the simulated 60 Hz display (16.667 ms
+between `yscr_begin()` returns, p5 to p95). Before: the tool's first
+version built on main (f2fb5f3), frame loop only. After: this version,
+both paths for each press.
+
+Press stamp to write start, in microseconds:
+
+| Path | n | min | p5 | p50 | p95 | p99 | max | mean |
+|---|---|---|---|---|---|---|---|---|
+| Frame loop, before | 600 | 21 | 977 | 8785 | 15898 | 16618 | 16667 | 8706 |
+| Frame loop, after | 600 | 54 | 1054 | 8713 | 15962 | 16588 | 16680 | 8601 |
+| Rule, after | 600 | 1.9 | 2.7 | 5.2 | 15.4 | 19.3 | 38.7 | 7.1 |
+
+- The frame loop's lag is the press's phase in the frame: flat from 0
+  to one period. It did not change with the rule beside it (a run
+  without the rule: p50 8059 us, max 16659 us).
+- The rule's lag is the decode, the rule's lock, the output's lock and
+  the clock reads. A real box adds its USB delivery before the stamp (a
+  board's own time, mapped, is earlier still) and the write itself after
+  the start (about 0.4 ms over USB CDC, the code arriving about 0.2 ms
+  after the start: [Host-timed pulses](#host-timed-pulses-on-a-teensy-40-v031));
+  both are the same on either path.
+- The bridge's own part: the stamp to the frame's `yscr_begin()` return
+  was within 15 us of the frame loop's total in every row.
+- With the window's own pacing (`--pace window`; the window was in the
+  background, not the foreground, and Windows ran it at about 15 Hz:
+  61.5 ms between frames, p50), the frame loop's lag was p50 32.9 ms, max
+  74.5 ms (300 presses), and the rule's p50 5.1 us, max 19.0 us. A
+  frame loop that stalls takes the frame-loop path's codes with it; the
+  rule does not wait for it.
+- Not measured: a real response box or trigger output on this path, and
+  a keyboard (SDL's reader is not hooked).
+
+Checks: `tests/adapt/device_test.c` 1951 checks pass (1819 before) with MinGW-w64 gcc
+16.1 (`-Werror`), MSVC 19.44 (`msvc-full`), and gcc 11.4 on WSL2, also
+under ThreadSanitizer (the race part: about 570 arms, 1140 fires from 4
+threads, each fire one RULE record, records in write order, never more
+than 2 fires an arm); `tests/compile/device.c` names every new entry point
+and the glue by type, as C99, C11 and C++17; `response_lag --sim` checks
+one write per press on each path, the RULE records, and no row with
+`YRSP_R_SENT_MISMATCH`. Mutants `rule-01` to `rule-18` caught, 18 of 18,
+and `dev-22`, whose anchor moved.
+
 ### The rig profile (v0.1.0)
 
 On 2026-10-09, MSVC 19.44 and MinGW-w64 gcc 16.1 on Windows 11, gcc 11.4
@@ -579,6 +703,7 @@ only.
 | The USB-serial adapter and a Teensy or Pico with `firmware/ysp_line/` | DTR as an output; write to edge for the adapter on this laptop | Wire the adapter's DTR to the board's pin 2 and the grounds together (3.3 V TTL adapter only). `device_out_latency --list`, then `device_out_latency --out lines:<adapter key> --in <board key>` |
 | A Teensy, Pico or Arduino board alone | The board's outputs (`o`, `p`, `O`) and its own write-to-edge | Upload the new `firmware/ysp_line/`, wire pin 3 to pin 2, run `device_out_latency --out line:<board key>`. A classic Arduino (ATmega, USB-serial chip) works too, but its USB bridge adds its own latency |
 | A trigger box at a flip | The trigger channel with a real output | `device_trigger_flip --out lines:<adapter key>` (simulated display; a windowed program sets only `sd.backend`) |
+| A line board's button (or a Cedrus box) and a trigger output | The response rule on real USB: press to code at the output, against the frame loop's path | Wire the output to a second line board, give the box `desc.rule` as in [send a code at the response](#how-to-send-a-code-at-the-response); compare each RULE record's write start, and the second board's edge, with the press's stamp |
 | A trigger box during a trial | Stimulus, response and end codes from the rig profile's role, at the box and in the EEG recording | `rigfile_profile --bind trig <family> <key>`, then `trial_eeg_triggers`; compare each code's time in the recording with the row's write offsets |
 | A line board on a scanner's TTL output | Pulses as SYNC events through the role `scanner`, the anchor, each onset's volume | `rigfile_profile --bind scanner line <board key>`, then `trial_scanner_sync --sync board --tr <TR>` during a scan, or with a pulse generator on pin 2 |
 | A Cedrus box (XID) | The decoder on real bytes, `_c1` and `_d` answers, the 1 ms byte gap, brackets behind the FTDI latency timer | `photodiode_check --family xid --key serial:0403:6001:<serial>: --monitor 30`, pressing buttons |
