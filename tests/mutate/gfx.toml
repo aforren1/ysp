@@ -1,7 +1,8 @@
 
 # ysp/gfx.h mutants: the v0.4 list (docs/gfx.md, "v0.4 mutations"), then
 # later lists by prefix (pr-: v0.11 prime; os-: v0.11.1 open start; cv-:
-# v0.12.0 messages; cp-: v0.13.0 capture; ft-: v0.15.0 first trial).
+# v0.12.0 messages; cp-: v0.13.0 capture; ft-: v0.15.0 first trial; tp-:
+# v0.17.1 text paths).
 # The v0.3 list (mutate03.py) was lost; docs/gfx.md keeps its table.
 # YGFX_TEST_PARTS limits a run to the parts that can see the fault, and
 # "none" runs the CPU half alone. YGFX_TEST_DEVICES=hardware is the GPU
@@ -1360,3 +1361,23 @@ env = { YGFX_TEST_PARTS = "none", YGFX_TEST_DEVICES = "none" }
 why = "v0.17.0: a zero max_draws is 1024 draws a frame; a designer writing 512 would refuse half of them."
 find = '{ "max_draws", "i32", 0, 65536, 1024, "",'
 replace = '{ "max_draws", "i32", 0, 65536, 512, "",'
+
+# v0.17.1: text_make()'s font paths (test_v17_text_paths_cpu, CPU only).
+
+[[mutant]]
+id = "tp-01"
+name = "a cut font path opened"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none", YGFX_TEST_DEVICES = "none" }
+why = "v0.17.1: a path cut to its 511-byte buffer names another file, which must not open."
+find = 'if (pn > 0 && (size_t)pn < sizeof path) bytes = ygfx__read_file(path, &nbytes);'
+replace = 'bytes = ygfx__read_file(path, &nbytes);'
+
+[[mutant]]
+id = "tp-02"
+name = "a cut tried path not marked"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none", YGFX_TEST_DEVICES = "none" }
+why = "v0.17.1: the error must not show a cut path as a whole one."
+find = '        memcpy(list + u + m, "...", 4);'
+replace = '        list[u + m] = 0;'

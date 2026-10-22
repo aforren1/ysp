@@ -603,6 +603,38 @@ is the same outline. The checks are not empty: a limit of 3 bevels the
 first corner and a limit of 5 miters the second, a tolerance of 1e-9 splits the curve further, and a size of 2
 changes the outline. 3 of 3 new mutants killed (`tests/mutate/outline.toml`, pv-); the first `miter_limit` mutant (default 3) survived a 60 degree corner, whose miter ratio 2 is under both limits, so the test now strokes the two corners either side of 4. No output changed.
 
+## v0.4.1: gcc 11 at -O1
+
+The compile checks and `outline_test.c` did not build with Ubuntu
+22.04's gcc 11.4 at -O1 with the CI warning set (`-Wall -Wextra
+-Wpedantic -Wshadow -Wfloat-conversion -Werror`):
+
+    include/ysp/outline.h:1465:21: error: 'v' may be used uninitialized
+    in this function [-Werror=maybe-uninitialized]
+                 st[n++] = v;
+
+In `yol__dict_get()`, `v` is the operand that `yol__dict_num()` reads.
+That function writes `*v` on every path that returns 0, and the caller
+stores `v` only after a 0. A false positive: at -O1 gcc 11.4 inlines the
+reader (called once) and loses that link. Measured on the same file:
+
+| Compiler | -O0 | -O1 | -O2 | -O3 | -Os | -Og |
+|---|---|---|---|---|---|---|
+| gcc 11.4 (WSL2, Ubuntu 22.04), C99, C11, C++17 | clean | warns | clean | clean | clean | clean |
+| MinGW-w64 gcc 16.1, C11 | | clean | clean | clean | clean | clean |
+| clang 11 (WSL2), C99, C11, C++17 | clean | clean | clean | clean | clean | |
+
+The reader now writes 0 to `*v` first, so every path writes it. No
+pragma: the change states the contract in code and costs one store per
+DICT number. No output changed: the resolve, alpha and SVG goldens and
+`outline_test.c` give the same results. There is no mutant, because the
+change has no behavior to remove.
+
+CI's Release build is -O3 and its Debug builds are -O0, so neither saw
+this. The `linux-extra` job has a `gcc-O1` entry now: the whole tree,
+Debug with `-O1`. With gcc 11.4 on WSL2 it builds and passes ctest (79
+of 79).
+
 ## Next
 
 1. The Latin stroke bar (Cost): the sweep's per-strip positions are what

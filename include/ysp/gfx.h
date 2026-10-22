@@ -1,4 +1,4 @@
-/* ysp/gfx.h - v0.17.0 - public domain single-header stimulus graphics library
+/* ysp/gfx.h - v0.17.1 - public domain single-header stimulus graphics library
  *   (with MIT-licensed parts: see below)
  *
  *   Stimuli on GL ES 3.0, on top of ysp/screen.h: signed-distance shapes
@@ -1335,6 +1335,13 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.17.1 - Fixed: ygfx_text_make() cut a font path longer than 511
+ *          bytes to 511 and opened that, another file; it now does not
+ *          open it (YGFX_ERR_IO). The error's list of the paths tried
+ *          ends a path it cuts with "..." (it showed a cut path as a
+ *          whole one). Found by gcc's -Wformat-truncation at -O1, -Os
+ *          and -Og (gcc 11.4 and 16.1), which broke -Werror builds. No
+ *          change for a path that fits.
  *   v0.17.0 - PARAMETERS: ygfx_desc_params() fills yscr_param's new last
  *          field, values (ysp/screen.h v0.9.0): units, dither, output,
  *          stereo and cones list their C enum's names and values
@@ -1858,8 +1865,8 @@
 
 #define YGFX_VERSION_MAJOR 0
 #define YGFX_VERSION_MINOR 17
-#define YGFX_VERSION_PATCH 0
-#define YGFX_VERSION_STRING "0.17.0"
+#define YGFX_VERSION_PATCH 1
+#define YGFX_VERSION_STRING "0.17.1"
 
 #include "ysp/screen.h"
 #include "ysp/color.h"
@@ -3410,7 +3417,8 @@ extern "C" {
 /* A block of text. A zero field is the default. */
 typedef struct ygfx_text_desc {
     const char* text;          /* UTF-8; a newline ends a line; required */
-    const char* font;          /* a TrueType or CFF font file (face 0);
+    const char* font;          /* a TrueType or CFF font file (face 0), a
+                                * UTF-8 path of 511 bytes or fewer;
                                 * NULL: the system's sans font (TEXT)      */
     float       size;          /* px per em; 0 = 32                        */
     float       max_w;         /* wrap width, px; 0 = 0.8 x screen width   */
@@ -3439,8 +3447,9 @@ typedef struct ygfx_text {
  * ysp/outline.h, uploads it, and makes the run. When that made the text
  * program, it calls ygfx_prime(), so the text's first frame does not pay
  * for it. Setup work: it reads a file and allocates. YGFX_OK, or a code
- * with ygfx_error() set: YGFX_ERR_IO when no font file opens (the message
- * names the paths tried), YGFX_ERR_FORMAT when the font is refused. */
+ * with ygfx_error() set: YGFX_ERR_IO when no font file opens or the path
+ * is longer than 511 bytes (the message names the paths tried, a long one
+ * cut and ended with "..."), YGFX_ERR_FORMAT when the font is refused. */
 YGFX_API int  ygfx_text_make(ygfx_gfx* g, ygfx_text* t, const ygfx_text_desc* d);
 /* Frees the set and the items. Safe on a zeroed text and twice. */
 YGFX_API void ygfx_text_free(ygfx_gfx* g, ygfx_text* t);
@@ -12309,6 +12318,23 @@ static uint8_t* ygfx__read_file(const char* path, size_t* n) {
     return b;
 }
 
+/* The error's list of the font paths tried: a path that does not fit is
+ * cut and ends in "...", so the message never shows a cut path as a whole
+ * one (v0.17.1). */
+static void ygfx__tried_add(char* list, size_t cap, const char* s) {
+    size_t u = strlen(list), m = strlen(s), sep = u ? 2 : 0;
+    if (u + sep + 4 > cap) return;   /* not even "..." fits */
+    memcpy(list + u, ", ", sep);
+    u += sep;
+    if (u + m >= cap) {
+        m = cap - u - 4;
+        memcpy(list + u + m, "...", 4);
+    } else {
+        list[u + m] = '\0';
+    }
+    memcpy(list + u, s, m);
+}
+
 /* One code point; a malformed byte is U+FFFD, one byte at a time. */
 static uint32_t ygfx__utf8(const unsigned char** p) {
     const unsigned char* s = *p;
@@ -12357,21 +12383,20 @@ static int ygfx__text_make(ygfx_gfx* g, ygfx_text* t, const ygfx_text_desc* d) {
     path[0] = '\0';
     for (k = 0; !bytes && (d->font ? k < 1 : ygfx__text_fonts[k] != NULL); k++) {
         const char* f = d->font ? d->font : ygfx__text_fonts[k];
+        int pn;
         if (!strncmp(f, "%WINDIR%", 8)) {
             char w[260] = "C:/Windows";
 #if defined(_WIN32)
             DWORD wn = GetEnvironmentVariableA("WINDIR", w, (DWORD)sizeof w);
             if (wn == 0 || wn >= sizeof w) snprintf(w, sizeof w, "C:/Windows");
 #endif
-            snprintf(path, sizeof path, "%s%s", w, f + 8);
+            pn = snprintf(path, sizeof path, "%s%s", w, f + 8);
         } else {
-            snprintf(path, sizeof path, "%s", f);
+            pn = snprintf(path, sizeof path, "%s", f);
         }
-        bytes = ygfx__read_file(path, &nbytes);
-        if (!bytes) {
-            size_t u = strlen(tried);
-            snprintf(tried + u, sizeof tried - u, "%s%s", u ? ", " : "", path);
-        }
+        /* a path cut to fit names another file, which must not open (v0.17.1) */
+        if (pn > 0 && (size_t)pn < sizeof path) bytes = ygfx__read_file(path, &nbytes);
+        if (!bytes) ygfx__tried_add(tried, sizeof tried, path);
     }
     if (!bytes) {
         ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: text_make: no font file opened (%s)", tried);

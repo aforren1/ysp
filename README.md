@@ -29,10 +29,10 @@ C11 or C++17, and its top comment is its manual.
 | [net](docs/net.md) | `ynet_` | Lab Streaming Layer markers and streams | 0.3.0 | no device |
 | [color](docs/color.md) | `ycol_` | Display calibration and color space conversions | 0.4.0 | tested |
 | [rdk](docs/rdk.md) | `yrdk_` | Random dot kinematograms, reproducible bit for bit | 0.3.0 | tested |
-| [outline](docs/outline.md) | `yol_` | Paths, font glyphs and SVG into curve sets | 0.4.0 | tested |
+| [outline](docs/outline.md) | `yol_` | Paths, font glyphs and SVG into curve sets | 0.4.1 | tested |
 | [screen](docs/screen.md) | `yscr_` | Stimulus window, flip at a time, flip records; a web backend | 0.9.0 | 1 machine |
 | [audio](docs/audio.md) | `yau_` | Sound at a time and its capture on the rig clock; Web Audio in a browser | 0.7.0 | 1 machine |
-| [gfx](docs/gfx.md) | `ygfx_` | GL ES 3.0 stimuli: shapes, gratings, gabors, text, frame capture | 0.17.0 | 1 machine |
+| [gfx](docs/gfx.md) | `ygfx_` | GL ES 3.0 stimuli: shapes, gratings, gabors, text, frame capture | 0.17.1 | 1 machine |
 | [video](docs/video.md) | `yvid_` | Movies as stimuli, frame by predicted onset | 0.5.0 | 1 machine |
 
 Each header is `include/ysp/<name>.h`; macros use the uppercase prefix

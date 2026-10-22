@@ -1,4 +1,4 @@
-/* ysp/outline.h - v0.4.0 - public domain single-header outline builder:
+/* ysp/outline.h - v0.4.1 - public domain single-header outline builder:
  *   paths, font outlines, overlap removal, strokes, exact alpha and curve
  *   sets for ysp/gfx.h
  *
@@ -307,6 +307,11 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.4.1 - Builds under gcc 11.4 -O1 -Werror (Ubuntu 22.04): gcc
+ *          flagged (-Wmaybe-uninitialized) a CFF DICT operand that the
+ *          number reader always writes before it returns 0; the reader
+ *          now writes 0 first, on the refusals too. A false positive
+ *          (gcc 16.1 and clang 11 do not warn). No output changed.
  *   v0.4.0 - Parameter tables: yol_param gains a last field, values, after
  *          offset: for an enum row the C enum's names and values
  *          ("round=0,miter=1,bevel=2"), NULL for every other row. join,
@@ -422,8 +427,8 @@ extern "C" {
 
 #define YOL_VERSION_MAJOR  0
 #define YOL_VERSION_MINOR  4
-#define YOL_VERSION_PATCH  0
-#define YOL_VERSION_STRING "0.4.0"
+#define YOL_VERSION_PATCH  1
+#define YOL_VERSION_STRING "0.4.1"
 
 /* YOL_VERSION_STRING, as compiled into the implementation. */
 YOL_API const char* yol_version(void);
@@ -1403,9 +1408,13 @@ static int yol__index_item(const yol_font* f, const yol__idx* ix, uint32_t i, ui
     return 0;
 }
 
-/* A CFF DICT number at d[*i] (b0 already checked as an operand). */
+/* A CFF DICT number at d[*i] (b0 already checked as an operand). *v is
+ * written on every path, the refusals too: gcc 11 at -O1 inlines this into
+ * yol__dict_get() and does not see that every 0 return set it
+ * (-Wmaybe-uninitialized). */
 static int yol__dict_num(const uint8_t* d, uint32_t* i, uint32_t end, double* v) {
     uint32_t b0 = d[*i];
+    *v = 0;
     if (b0 >= 32 && b0 <= 246) { *v = (double)b0 - 139; *i += 1; return 0; }
     if (b0 >= 247 && b0 <= 250) { if (*i + 2 > end) return -1; *v = ((double)b0 - 247) * 256 + d[*i + 1] + 108; *i += 2; return 0; }
     if (b0 >= 251 && b0 <= 254) { if (*i + 2 > end) return -1; *v = -((double)b0 - 251) * 256 - d[*i + 1] - 108; *i += 2; return 0; }

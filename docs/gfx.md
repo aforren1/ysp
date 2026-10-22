@@ -4040,3 +4040,48 @@ each row against its `ygfx_desc` field and the names against `switch`es
 without a `default`, and opens a gfx on a SIM screen with the null
 backend and a zero desc: `max_draws` is 1024 there, the other defaults
 are 0. 2 of 2 new mutants killed (`tests/mutate/gfx.toml`, pv-).
+
+## v0.17.1: font paths that do not fit
+
+gcc refused `ygfx_text_make()` under `-Werror` at -O1, -Os and -Og:
+
+    include/ysp/gfx.h:12373:54: error: '%s' directive output may be
+    truncated writing up to 511 bytes into a region of size between 398
+    and 400 [-Werror=format-truncation=]
+        snprintf(tried + u, sizeof tried - u, "%s%s", u ? ", " : "", path);
+
+| Compiler | -O0 | -O1 | -O2 | -O3 | -Os | -Og |
+|---|---|---|---|---|---|---|
+| gcc 11.4 (WSL2, Ubuntu 22.04), C99, C11, C++17 | clean | warns | clean | clean | warns | warns |
+| MinGW-w64 gcc 16.1, C11 | | warns | clean | clean | warns | warns |
+| MinGW-w64 gcc 16.1, C11, `-D_FORTIFY_SOURCE=2` | | clean | clean | clean | clean | clean |
+| clang 11 (WSL2), C99, C11, C++17 | clean | clean | clean | clean | clean | |
+
+The warning is right: the error message's list of the paths tried
+(`tried`, 400 bytes) cut a path of 398 bytes or more without a mark.
+Next to it was a real defect that no compiler named. The path itself
+was cut to 511 bytes by `snprintf()` and then opened, so a path of 512
+bytes or more opened another file, its first 511 bytes.
+
+The fix:
+
+- A path that does not fit its 511 bytes is not opened (YGFX_ERR_IO,
+  "no font file opened").
+- `ygfx__tried_add()` appends to the list by length and `memcpy()`. A
+  path that does not fit is cut and ends in "...". gcc sees the lengths,
+  so it has nothing to warn about. No pragma.
+
+A path that fits gives the same bytes as before, error messages
+included.
+
+`test_v17_text_paths_cpu()` in the CPU half of `tests/adapt/gfx_test.c`
+runs on a SIM screen with the null backend. A missing font of 450 bytes
+gives YGFX_ERR_IO, and the message has its start and "...". It makes a
+file (not a font) whose path is exactly 511 bytes, in folders of 200
+bytes under the temporary folder. On Windows the path is extended-length
+(`\\?\`), past MAX_PATH. That path gives YGFX_ERR_FORMAT, so it opens.
+The same path with 1 more byte gives YGFX_ERR_IO, where v0.17.0 opened
+the 511-byte file and gave YGFX_ERR_FORMAT. Then the test removes the file
+and the folders. 2 of 2 new mutants killed on MSVC (`tests/mutate/gfx.toml`,
+tp-). CI's new `gcc-O1` entry (`linux-extra`) builds the tree at -O1, where
+the warning showed.

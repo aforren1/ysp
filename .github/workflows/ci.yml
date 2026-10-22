@@ -224,6 +224,11 @@ jobs:
   #                  command-line define reaches ysp/rt.h first in the     #
   #                  compile check that includes it directly, so name all  #
   #                  three: define both of a pair, or neither.             #
+  #   gcc-O1       - gcc's flow warnings (-Wmaybe-uninitialized,          #
+  #                  -Wformat-truncation) differ by -O level: ysp/gfx.h    #
+  #                  0.17.0 and ysp/outline.h 0.4.0 failed -Werror at -O1  #
+  #                  (gfx also -Os, -Og; gcc 11.4, 16.1), which Release    #
+  #                  (-O3) and Debug (-O0) both miss.                      #
   # --------------------------------------------------------------------- #
   linux-extra:
     name: Linux ${{ matrix.name }}
@@ -247,6 +252,11 @@ jobs:
             cxx: g++
             cflags: ""
             cxxflags: "-DYSER_NO_THREADS -DYPAR_NO_THREADS -DYRT_NO_THREADS"
+          - name: gcc-O1
+            cc: gcc
+            cxx: g++
+            cflags: "-O1"
+            cxxflags: "-O1"
     env:
       CC: ${{ matrix.cc }}
       CXX: ${{ matrix.cxx }}
