@@ -24,7 +24,8 @@
  *       No window, for CI: the simulated display, and the box in manual
  *       mode (ydev_poll() on the frame thread, which is then also the
  *       box's reader). Checks that each press gives one write on each path,
- *       with its code, the RULE flag and the press's t in the record.
+ *       with its code, the RULE flag and the press's t in the record, and
+ *       no row with YRSP_R_SENT_MISMATCH.
  *
  * Why a fake box: the lag under test is the host's, from the event's stamp
  * on the reader thread to the write call. A real box adds its own USB
@@ -180,7 +181,7 @@ static int open_box(ydev_device* d, const char* role, uint32_t device, yrt_ring*
 
 int main(int argc, char** argv) {
     const char* csv = NULL;
-    int n = 600, i, got = 0, rgot = 0, rc, frames, pace_window = 0, sim = 0, use_rule = 1, bad = 0;
+    int n = 600, i, got = 0, rgot = 0, rc, frames, pace_window = 0, sim = 0, use_rule = 1, bad = 0, mismatch = 0;
     yscr_screen* pace = &g_sim;
     ydev_desc id;
     yscr_desc sd;
@@ -299,7 +300,9 @@ int main(int argc, char** argv) {
             ydev_out_info oi;
             rc = ydev_out_pulse(&g_out, CODE_LOOP, YRT_MS(5));
             ydev_out_last(&g_out, &oi);
+            if (use_rule) (void)yrsp_rule_sent(&g_rule, &g_rsp);   /* CODES SENT: flag a disagreement */
             (void)yrsp_finish(&g_rsp, &res);
+            if (res.flags & YRSP_R_SENT_MISMATCH) mismatch++;
             if (rc == YDEV_OK && res.t_response) {
                 g_t[got] = res.t_response;
                 g_loop[got] = oi.t_before - res.t_response;
@@ -374,5 +377,6 @@ int main(int argc, char** argv) {
     summary("frame loop: begin() minus stamp", g_begin, got);
     summary("frame loop: write minus stamp", g_loop, got);
     if (use_rule) summary("rule: write minus stamp", g_rlag, rgot);
-    return got == n && g_btn.n == n && (!use_rule || rgot == n) && !bad ? 0 : 1;
+    if (use_rule) printf("response_lag: %d rows with YRSP_R_SENT_MISMATCH\n", mismatch);
+    return got == n && g_btn.n == n && (!use_rule || rgot == n) && !bad && !mismatch ? 0 : 1;
 }

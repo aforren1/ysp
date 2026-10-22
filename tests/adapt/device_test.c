@@ -1560,6 +1560,63 @@ static void test_rule_glue(void) {
     }
     yrsp_rule_window(&r, &c);
     CHECK_I(ydev_rule_input(&r, &e), 0);
+    /* CODES SENT: the rule's fires against the final responses */
+    {
+        ydev_rule_fire fl[YDEV_RULE_FIRES];
+        yrsp_result res;
+        yrsp_onset plan = on;
+        plan.t_ns = O;
+        plan.final = 0;
+        plan.src = YRSP_ONSET_PLAN;
+        e.type = YIN_RELEASE;                               /* the earlier press ends */
+        e.t = O + YRT_S(3);
+        (void)yrsp_feed(&c, &e);
+        /* agree: the code at 200 ms on the plan; the final onset a frame
+         * later keeps it a response */
+        yrsp_arm(&c, T);
+        yrsp_rule_arm(&r, &c);
+        CHECK(yrsp_set_onset(&c, &plan) >= 0);
+        yrsp_rule_window(&r, &c);
+        e = press_at(O + YRT_MS(200), YIN_KIND_BOX, 1, 2);
+        CHECK_I(ydev_rule_input(&r, &e), 1);
+        CHECK_I(ydev_rule_fires(&r, fl, YDEV_RULE_FIRES), 1);
+        CHECK(fl[0].t == e.t && fl[0].choice == 1 && fl[0].code == 22 && fl[0].result == YDEV_OK);
+        CHECK_I(yrsp_feed(&c, &e), YRSP_ENDED);
+        CHECK(yrsp_set_onset(&c, &on) >= 0);              /* final: O + 17 ms */
+        CHECK_I(yrsp_rule_sent(&r, &c), 0);
+        (void)yrsp_finish(&c, &res);
+        CHECK(!(res.flags & YRSP_R_SENT_MISMATCH) && res.n_sent == 1 && res.response == 1);
+        e.type = YIN_RELEASE; e.t += YRT_MS(50); (void)yrsp_feed(&c, &e); e.type = YIN_PRESS;
+        /* the same press at 110 ms on the plan: the final onset makes it
+         * an anticipation (93 ms), and the code is already out */
+        yrsp_arm(&c, T);
+        yrsp_rule_arm(&r, &c);
+        CHECK_I(ydev_rule_fires(&r, fl, YDEV_RULE_FIRES), 0);   /* an arm clears them */
+        CHECK(yrsp_set_onset(&c, &plan) >= 0);
+        yrsp_rule_window(&r, &c);
+        e.t = O + YRT_MS(110);
+        CHECK_I(ydev_rule_input(&r, &e), 1);
+        (void)yrsp_feed(&c, &e);
+        CHECK(yrsp_set_onset(&c, &on) >= 0);
+        CHECK_I(yrsp_rule_sent(&r, &c), 0);
+        (void)yrsp_update(&c, O + YRT_S(2));
+        (void)yrsp_finish(&c, &res);
+        CHECK((res.flags & YRSP_R_SENT_MISMATCH) && res.n_anticipations == 1 && res.n_sent == 1);
+        e.type = YIN_RELEASE; e.t += YRT_MS(50); (void)yrsp_feed(&c, &e); e.type = YIN_PRESS;
+        /* a fire whose write failed is no code sent */
+        yrsp_arm(&c, T);
+        yrsp_rule_arm(&r, &c);
+        CHECK(yrsp_set_onset(&c, &on) >= 0);
+        yrsp_rule_window(&r, &c);
+        g_o.fail = true;
+        e.t = O + YRT_MS(300);
+        CHECK_I(ydev_rule_input(&r, &e), YDEV_ERR_IO);
+        g_o.fail = false;
+        (void)yrsp_feed(&c, &e);
+        CHECK_I(yrsp_rule_sent(&r, &c), 0);
+        (void)yrsp_finish(&c, &res);
+        CHECK((res.flags & YRSP_R_SENT_MISMATCH) && res.n_sent == 0 && res.response == 1);
+    }
     /* choices the rule cannot read */
     {
         static yrsp_collector c2;

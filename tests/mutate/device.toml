@@ -457,9 +457,9 @@ name = "an old fire's info in a new arm"
 test = "device"
 why = "The frame thread reads the info for the trial it armed; a write that ends after a re-arm belongs to the trial before."
 find = '''    if (arm == r->arms) {
-        r->info.result = rc;'''
+        if (slot < YDEV_RULE_FIRES) r->fires[slot].result = rc;'''
 replace = '''    if (arm) {
-        r->info.result = rc;'''
+        if (slot < YDEV_RULE_FIRES) r->fires[slot].result = rc;'''
 
 [[mutant]]
 id = "rule-12"
@@ -496,3 +496,28 @@ file = "ysp/response.h"
 why = "A press stamped before the deadline and read after it counts in the collector, so its code still goes."
 find = '''    if (c->status == YRSP_ENDED && c->ended_by != 2) return;'''
 replace = '''    if (c->status == YRSP_ENDED) return;'''
+
+[[mutant]]
+id = "rule-16"
+name = "a fire keeps choice 0"
+test = "device"
+why = "The collector checks the code's choice against the response's."
+find = '''                f->choice = k;'''
+replace = '''                f->choice = 0;'''
+
+[[mutant]]
+id = "rule-17"
+name = "a fire's result stays pending"
+test = "device"
+why = "A failed write is no code in the EEG; pending counts as sent."
+find = '''        if (slot < YDEV_RULE_FIRES) r->fires[slot].result = rc;'''
+replace = '''        (void)0;'''
+
+[[mutant]]
+id = "rule-18"
+name = "glue: every fire written"
+test = "device"
+file = "ysp/response.h"
+why = "A failed write must reach the collector as not written."
+find = '''        s[k].written = (uint8_t)(f[k].result == YDEV_OK || f[k].result == YDEV_RULE_PENDING);'''
+replace = '''        s[k].written = 1;'''

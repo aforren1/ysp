@@ -556,3 +556,87 @@ test = "response"
 why = "The kind row lists every yin_kind."
 find = '"keyboard=0,mouse=1,touch=2,pen=3,gamepad=4,box=5,eye=6,sync=7,user=8"'
 replace = '"keyboard=0,mouse=1,touch=2,pen=3,gamepad=4,box=5,eye=6,sync=7"'
+
+# --- codes sent (v0.7.0): a code sent at the press against the final responses ---
+
+[[mutant]]
+id = "sent-01"
+name = "a code for a press that is no response agrees"
+test = "response"
+why = "An anticipation, a late or an early press with a code in the EEG is the case the flag is for."
+find = '''        if (!(c->log[k].flags & YRSP_E_VALID) || (!c->d.persist && k != best) ||'''
+replace = '''        if ((!c->d.persist && k != best) ||'''
+
+[[mutant]]
+id = "sent-02"
+name = "a code for a VALID press that is not the response agrees"
+test = "response"
+why = "Without persist only the earliest VALID press is the response; a code for a later-stamped one marks the wrong press."
+find = '''        if (!(c->log[k].flags & YRSP_E_VALID) || (!c->d.persist && k != best) ||'''
+replace = '''        if (!(c->log[k].flags & YRSP_E_VALID) ||'''
+
+[[mutant]]
+id = "sent-03"
+name = "another choice's code agrees"
+test = "response"
+why = "The EEG would say left where the data says right."
+find = '''(c->d.mode == YRSP_CHOICES_LIST && c->log[k].choice != s->choice) ||'''
+replace = '''(0) ||'''
+
+[[mutant]]
+id = "sent-04"
+name = "two codes for one press agree"
+test = "response"
+why = "A second code is a second response in the EEG."
+find = '''s->choice) || coded[k])
+            bad = 1;'''
+replace = '''s->choice) || 0)
+            bad = 1;'''
+
+[[mutant]]
+id = "sent-05"
+name = "a code for a press the collector never got agrees"
+test = "response"
+why = "A press lost from a full log, or never fed, cannot be checked."
+find = '''        if (k == c->n_log) { bad = 1; continue; }'''
+replace = '''        if (k == c->n_log) continue;'''
+
+[[mutant]]
+id = "sent-06"
+name = "a response without its code agrees"
+test = "response"
+why = "The EEG lacks the code the data's response implies."
+find = '''        if ((c->log[k].flags & YRSP_E_VALID) && (c->d.persist || k == best) && !coded[k]) bad = 1;'''
+replace = '''        (void)0;'''
+
+[[mutant]]
+id = "sent-07"
+name = "a failed write counts as sent"
+test = "response"
+why = "A code whose write failed is not in the EEG."
+find = '''        if (!s->written) continue;'''
+replace = '''        (void)0;'''
+
+[[mutant]]
+id = "sent-08"
+name = "codes not kept are ignored"
+test = "response"
+why = "An unchecked code may disagree; the row must not claim agreement."
+find = '''bad = c->n_sent_total > c->n_sent;'''
+replace = '''bad = 0;'''
+
+[[mutant]]
+id = "sent-09"
+name = "an arm keeps the last window's codes"
+test = "response"
+why = "A window with no codes told would be checked against the last trial's."
+find = '''    c->n_sent = c->n_sent_total = c->have_sent = 0;'''
+replace = '''    c->n_sent = c->n_sent_total = 0;'''
+
+[[mutant]]
+id = "sent-10"
+name = "persist: only the first response needs a code"
+test = "response"
+why = "With persist every VALID press is a response, and each needs its code."
+find = '''(c->d.persist || k == best) && !coded[k]) bad = 1;'''
+replace = '''(k == best) && !coded[k]) bad = 1;'''

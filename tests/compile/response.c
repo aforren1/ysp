@@ -24,9 +24,10 @@ typedef struct rsp_api {
     void (*arm)(yrsp_collector*, int64_t);
     int (*update)(yrsp_collector*, int64_t);
     const yrsp_param* (*params)(int*);   /* v0.6 */
+    int (*set_sent)(yrsp_collector*, const yrsp_sent*, int, int);   /* v0.7 */
 } rsp_api;
 
-static const rsp_api g_api = { yrsp_open, yrsp_close, yrsp_error, yrsp_arm, yrsp_update, yrsp_params };
+static const rsp_api g_api = { yrsp_open, yrsp_close, yrsp_error, yrsp_arm, yrsp_update, yrsp_params, yrsp_set_sent };
 
 /* The unit macros are constant expressions. */
 static const int64_t g_window[2] = { YRT_MS(100), YRT_S(1.5) };

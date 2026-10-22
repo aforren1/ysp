@@ -46,10 +46,12 @@ typedef struct device_api {
     void (*rule_disarm)(ydev_rule*);
     int  (*rule_input)(ydev_rule*, const yin_event*);
     void (*rule_get)(ydev_rule*, ydev_rule_info*);
+    int  (*rule_fires)(ydev_rule*, ydev_rule_fire*, int);
     /* ysp/response.h's glue */
     void (*rsp_rule_arm)(ydev_rule*, const yrsp_collector*);
     void (*rsp_rule_window)(ydev_rule*, const yrsp_collector*);
     int  (*rsp_rule_choices)(const yrsp_collector*, const uint32_t*, ydev_rule_choice*, int);
+    int  (*rsp_rule_sent)(ydev_rule*, yrsp_collector*);
 } device_api;
 
 static const device_api g_api = {
@@ -59,8 +61,8 @@ static const device_api g_api = {
     ydev_out_set, ydev_out_pulse, ydev_out_mark, ydev_out_trigger,
     ydev_out_last, ydev_role_index, ydev_role_device, ydev_role_name, ydev_params,
     ydev_rule_open, ydev_rule_close, ydev_rule_error, ydev_rule_arm, ydev_rule_window,
-    ydev_rule_disarm, ydev_rule_input, ydev_rule_get,
-    yrsp_rule_arm, yrsp_rule_window, yrsp_rule_choices
+    ydev_rule_disarm, ydev_rule_input, ydev_rule_get, ydev_rule_fires,
+    yrsp_rule_arm, yrsp_rule_window, yrsp_rule_choices, yrsp_rule_sent
 };
 
 /* The transport's read takes the timeout in ns. */
@@ -141,6 +143,7 @@ int main(void) {
             ok = ok && yrsp_open(&c, &cd) && g_api.rsp_rule_choices(&c, codes, out, 2) == 1 && out[0].code == 9;
             g_api.rsp_rule_arm(&r, &c);      /* a closed rule: nothing */
             g_api.rsp_rule_window(&r, &c);
+            ok = ok && g_api.rule_fires(&r, NULL, 0) == 0 && g_api.rsp_rule_sent(&r, &c) == 0;
             yrsp_close(&c);
         }
     }

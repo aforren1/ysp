@@ -272,10 +272,16 @@
  *       ydev_rule_arm(&rule, onset + min_rt, onset + duration);
  *       ... ydev_rule_window(&rule, from, until);   // the onset moved
  *       ydev_rule_get(&rule, &info);       // the fire, for the data row
+ *       ydev_rule_fires(&rule, f, 8);      // or each fire of the arm
  *       // at the end: close the box, then the rule, then the output
  *   ysp/response.h, included after this header, sets the window from a
  *   collector (yrsp_rule_arm(), yrsp_rule_window()) and the choices from
- *   its choices (yrsp_rule_choices()), so the rule and the collector agree.
+ *   its choices (yrsp_rule_choices()), so the rule and the collector agree;
+ *   yrsp_rule_sent() hands the fires to the collector, whose result flags
+ *   a code that its final responses do not match (its CODES SENT).
+ *   ydev_rule_fires() gives each fire of the arm (YDEV_RULE_FIRES, 8,
+ *   kept; more counted): the press, the code, the choice and the write's
+ *   result (YDEV_RULE_PENDING while it runs).
  *   The rule: a PRESS, not a REPEAT, of a choice (kind exact, device and
  *   control 0 = any; the first choice that matches gives the code), whose
  *   t is in [from, until), while the arm has fires left (desc.max_fires:
@@ -344,7 +350,7 @@
  *   CHANGELOG
  *   ---------------------------------------------------------------------
  *   v0.5.0 - RESPONSE RULES: ydev_rule, ydev_rule_open() and the others,
- *          desc.rule, YDEV_OUT_RULE: a response's code written on the
+ *          ydev_rule_fires() and ydev_rule_fire, desc.rule, YDEV_OUT_RULE: a response's code written on the
  *          input's reader thread, not a frame later from the frame loop
  *          (docs/experiment_format.md, gap G8).
  *   v0.4.0 - PARAMETERS: ydev_params() and ydev_param, a table per family
@@ -388,7 +394,7 @@
  *   clock (window bounds, fire counts, choices, repeats, a re-arm during a
  *   write, the reader's hook, the response.h glue) and on the real clock
  *   with 4 producer threads against arms, window moves and the frame
- *   loop's own pulses, also under ThreadSanitizer on WSL2; 15 new mutants
+ *   loop's own pulses, also under ThreadSanitizer on WSL2; 18 new mutants
  *   caught. Lag measured on in-process devices only (RESPONSE RULES).
  *   STATUS: v0.2.0, 2026-10-08. Built with MSVC 19.44 (/W4 /WX, C11 and
  *   C++17), MinGW-w64 gcc 16.1 and gcc 11.4 on WSL2 (C99, C11, C++17,
@@ -745,10 +751,24 @@ typedef struct ydev_rule_info {
     int      choice;        /* the choice's index; -1 = no fire yet       */
 } ydev_rule_info;
 
+/* One fire of the current arm (ydev_rule_fires()). */
+#define YDEV_RULE_FIRES   8   /* fires an arm keeps; more are counted    */
+#define YDEV_RULE_PENDING 1   /* result: the write is still running      */
+typedef struct ydev_rule_fire {
+    int64_t  t;             /* the press's t                              */
+    uint32_t device, control;
+    uint32_t code;
+    uint8_t  kind;
+    uint8_t  reserved_[3];
+    int      choice;        /* the rule's choice index                    */
+    int      result;        /* YDEV_OK, a YDEV_ERR_*, or YDEV_RULE_PENDING */
+} ydev_rule_fire;
+
 /* Caller-allocated; every field is private. */
 typedef struct ydev_rule {
     ydev_rule_desc   d;
     ydev_rule_choice ch[YDEV_RULE_CHOICES];
+    ydev_rule_fire   fires[YDEV_RULE_FIRES];   /* this arm's, under the lock */
     int64_t          from, until;   /* the window, under the lock          */
     uint32_t         arms;          /* each arm's number                   */
     int              open;
@@ -777,6 +797,10 @@ YDEV_API void ydev_rule_disarm(ydev_rule* r);
  * the output's lock for the write; never allocates. */
 YDEV_API int  ydev_rule_input(ydev_rule* r, const yin_event* e);
 YDEV_API void ydev_rule_get(ydev_rule* r, ydev_rule_info* out);
+/* The current arm's fires in claim order, at most cap of them (and at most
+ * YDEV_RULE_FIRES: an arm keeps that many). Returns the arm's fire count,
+ * which can be larger. A disarm keeps them; an arm clears them. */
+YDEV_API int  ydev_rule_fires(ydev_rule* r, ydev_rule_fire* out, int cap);
 
 /* --- roles (ROLES) ------------------------------------------------------------ */
 
@@ -1533,7 +1557,7 @@ YDEV_API void ydev_rule_disarm(ydev_rule* r) {
 }
 
 YDEV_API int ydev_rule_input(ydev_rule* r, const yin_event* e) {
-    int i, k = -1, rc;
+    int i, k = -1, rc, slot = 0;
     uint32_t arm = 0;
     ydev_device* out;
     ydev_out_info oi;
@@ -1550,8 +1574,19 @@ YDEV_API int ydev_rule_input(ydev_rule* r, const yin_event* e) {
     ydev__lock(ydev__rmx(r));
     if (r->info.armed && e->t >= r->from && e->t < r->until) {
         if (r->d.max_fires < 0 || r->info.fired < (r->d.max_fires ? r->d.max_fires : 1)) {
-            r->info.fired++;
+            slot = r->info.fired++;
             arm = r->arms;
+            if (slot < YDEV_RULE_FIRES) {
+                ydev_rule_fire* f = &r->fires[slot];
+                memset(f, 0, sizeof *f);
+                f->t = e->t;
+                f->device = e->device;
+                f->control = e->control;
+                f->code = r->ch[k].code;
+                f->kind = e->kind;
+                f->choice = k;
+                f->result = YDEV_RULE_PENDING;
+            }
         } else {
             r->info.over++;
         }
@@ -1565,6 +1600,7 @@ YDEV_API int ydev_rule_input(ydev_rule* r, const yin_event* e) {
     rc = ydev__out(out, r->ch[k].code, w, YDEV_OUT_RULE, e->t, &oi);
     ydev__lock(ydev__rmx(r));
     if (arm == r->arms) {
+        if (slot < YDEV_RULE_FIRES) r->fires[slot].result = rc;
         r->info.result = rc;
         r->info.t_event = e->t;
         r->info.t_before = oi.t_before;
@@ -1577,6 +1613,16 @@ YDEV_API int ydev_rule_input(ydev_rule* r, const yin_event* e) {
     }
     ydev__unlock(ydev__rmx(r));
     return rc == YDEV_OK ? 1 : rc;
+}
+
+YDEV_API int ydev_rule_fires(ydev_rule* r, ydev_rule_fire* out, int cap) {
+    int n, i;
+    if (!r || !r->open) return 0;
+    ydev__lock(ydev__rmx(r));
+    n = r->info.fired;
+    for (i = 0; out && i < cap && i < n && i < YDEV_RULE_FIRES; i++) out[i] = r->fires[i];
+    ydev__unlock(ydev__rmx(r));
+    return n;
 }
 
 YDEV_API void ydev_rule_get(ydev_rule* r, ydev_rule_info* out) {

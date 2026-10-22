@@ -120,9 +120,13 @@ A response rule sends it from the response box's reader thread.
    yrsp_rule_window(&rule, &rsp);       /* the window follows the onset */
    ```
 
-6. At the end of the trial, read the fire for the data row:
-   `ydev_rule_get(&rule, &info)` gives `fired`, `code`, `t_event` (the
-   press) and `t_before` (the write's start).
+6. At the end of the trial, before `yrsp_finish()`, call
+   `yrsp_rule_sent(&rule, &rsp)`. The result then has
+   `YRSP_R_SENT_MISMATCH` (in the `rsp_flags` column) when a code went
+   out that the final responses do not match, or a response has no code
+   ([response.md](response.md#codes-sent-v070)). `ydev_rule_get(&rule,
+   &info)` gives the last fire's `code`, `t_event` (the press) and
+   `t_before` (the write's start) for the row.
 7. At the end of the session, close the response box, then the rule,
    then the output.
 
@@ -437,6 +441,7 @@ loop saw a press up to a frame after it. The lag was measured first
 | Which presses | A PRESS without REPEAT; the first choice that matches; at most `max_fires` per arm (0 = 1) | jsPsych's default: the first response ends the trial. ysp/response.h's R1. R2 (a press of a control already down) is not repeated: a box sends no repeats, and the fire count bounds the codes |
 | Window from the collector | `[onset + min_rt, onset + duration)`, from the plan until the final onset; closed after a response ended the collector's window, not at its deadline | The collector counts a press stamped before the deadline and read after it, so its code goes too. A plan is known before the frame is shown, so the window is open before any valid press |
 | The record | `YDEV_REC_OUT` with `YDEV_OUT_RULE`, the press's t in `i64[3]` | The payload has no free field. A RULE write has no flip deadline and no board ticks, the other uses of `i64[3]`. Write start minus press is `i64[0] - i64[3]`, as deadline to write is for FLIP |
+| A code that the final classification does not match (user decision, 2026-10-21) | `ydev_rule_fires()` keeps each fire of the arm; `yrsp_rule_sent()` gives them to the collector, and the result flags `YRSP_R_SENT_MISMATCH` | The rule decides on the window it has at the press; a final onset a frame later can make that press an anticipation. The code is in the EEG, so the trial's row must say so. A flag in `rsp_flags`, not a new column: the row already has the result's flags, and the files' columns stay the same |
 | Info for the frame thread | `ydev_rule_get()`: the arm's fire count, the last fire's press, code, result and write times; a write that ends after a re-arm does not touch the new arm's info | The data row needs the code and its lag; a late write belongs to the trial before |
 | Keys and raw mice | Not hooked | SDL's raw keyboard thread and the raw-mouse reader are `ysp/screen.h`'s. A keyboard is not a response box (ysp/screen.h, INPUT) |
 
@@ -578,14 +583,15 @@ Press stamp to write start, in microseconds:
 - Not measured: a real response box or trigger output on this path, and
   a keyboard (SDL's reader is not hooked).
 
-Checks: `tests/adapt/device_test.c` 1933 checks pass with MinGW-w64 gcc
+Checks: `tests/adapt/device_test.c` 1951 checks pass (1819 before) with MinGW-w64 gcc
 16.1 (`-Werror`), MSVC 19.44 (`msvc-full`), and gcc 11.4 on WSL2, also
 under ThreadSanitizer (the race part: about 570 arms, 1140 fires from 4
 threads, each fire one RULE record, records in write order, never more
 than 2 fires an arm); `tests/compile/device.c` names every new entry point
 and the glue by type, as C99, C11 and C++17; `response_lag --sim` checks
-one write per press on each path and the RULE records. Mutants `rule-01`
-to `rule-15` caught, 15 of 15, and `dev-22`, whose anchor moved.
+one write per press on each path, the RULE records, and no row with
+`YRSP_R_SENT_MISMATCH`. Mutants `rule-01` to `rule-18` caught, 18 of 18,
+and `dev-22`, whose anchor moved.
 
 ### The rig profile (v0.1.0)
 
