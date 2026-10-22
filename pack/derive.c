@@ -91,11 +91,14 @@ static int is_builtin(const char* name) {
     return 0;
 }
 
+/* One text of a stimulus, keyed by ypak_runs_key(): the player builds the
+ * same key from the stimulus's style and the text it resolves. */
 static int add_text(ypt__d* d, const ypt__stim* s, const char* text, size_t n) {
     ypt__dmem* m = d->m;
     ypt_text* t;
-    size_t sn = strlen(s->name);
+    int64_t kn = ypak_runs_key(&s->proto.style, text, n, NULL, 0);
     char* key;
+    if (kn < 0) return dfail(d, YPAK_ERR_FORMAT, "stimulus '%s': a text with a NUL byte, or a style ypak_runs_key() refuses", s->name);
     if (m->nt == m->ct) {
         int c = m->ct ? 2 * m->ct : 32;
         ypt_text* q = (ypt_text*)realloc(m->t, (size_t)c * sizeof(ypt_text));
@@ -103,16 +106,13 @@ static int add_text(ypt__d* d, const ypt__stim* s, const char* text, size_t n) {
         m->t = q;
         m->ct = c;
     }
-    key = (char*)yjs_alloc(&m->a, sn + 1 + n + 1);
+    key = (char*)yjs_alloc(&m->a, (size_t)kn + 1);
     if (!key) return dfail(d, YPAK_ERR_NOMEM, "out of memory");
-    memcpy(key, s->name, sn);
-    key[sn] = '/';
-    if (n) memcpy(key + sn + 1, text, n);
-    key[sn + 1 + n] = 0;
+    ypak_runs_key(&s->proto.style, text, n, key, (size_t)kn + 1);
     t = &m->t[m->nt++];
     *t = s->proto;
     t->key = key;
-    t->text = key + sn + 1;
+    t->text = key + (size_t)kn - n;
     return 0;
 }
 
@@ -233,13 +233,15 @@ static int resolve(ypt__d* d, const ypt__stim* s, const yjs_value* v, int depth)
                  "is none of them", s->name);
 }
 
-/* A layout key: a JSON number, as its canonical text. */
-static int num_key(ypt__d* d, const ypt__stim* s, const yjs_value* o, const char* key, double lo, int lo_open, const char** out) {
+/* A layout key: a JSON number, as a double and in yjs_format_double()'s
+ * spelling, which ypak_runs_key() puts in the key. */
+static int num_key(ypt__d* d, const ypt__stim* s, const yjs_value* o, const char* key, double lo, int lo_open, double* val,
+                   const char** out) {
     const yjs_value* v = yjs_get(o, key);
     char buf[64];
     size_t n;
     double x;
-    if (!v) { *out = "0"; return 0; }
+    if (!v) { *val = 0; *out = "0"; return 0; }
     if (v->type != YJS_NUMBER)
         return dfail(d, YPAK_ERR_FORMAT, "stimulus '%s': '%s' must be a number: glyph runs are laid out at pack build (D14), so a text's font, "
                      "size, width, line_height, align, dir and lang are literal values", s->name, key);
@@ -247,6 +249,8 @@ static int num_key(ypt__d* d, const ypt__stim* s, const yjs_value* o, const char
     if (n == 0 || n >= sizeof buf || yjs_double(v, &x) != YJS_OK || x != x || (lo_open ? !(x > lo) : !(x >= lo)) || x > 1e9)
         return dfail(d, YPAK_ERR_FORMAT, "stimulus '%s': '%s' is %.*s; it is %s %g and at most 1e9", s->name, key, (int)(n < sizeof buf ? n : 0), buf,
                      lo_open ? "above" : "at least", lo);
+    *val = x;
+    n = (size_t)yjs_format_double(x, buf, sizeof buf);
     *out = dstr(d, buf, n);
     return *out ? 0 : dfail(d, YPAK_ERR_NOMEM, "out of memory");
 }
@@ -275,19 +279,34 @@ static int text_stim(ypt__d* d, const char* name, const yjs_value* o) {
     static const char* const dirs[] = { "auto", "ltr", "rtl", NULL };
     ypt__stim s;
     const yjs_value* tv = yjs_get(o, "text");
+    ypt_text* p = &s.proto;
+    size_t k;
     int rc;
     memset(&s, 0, sizeof s);
     s.name = name;
     s.proto.stimulus = name;
     if (!yjs_get(o, "font") || !yjs_get(o, "size") || !tv)
         return dfail(d, YPAK_ERR_FORMAT, "stimulus '%s': a text needs 'font' (a FONT entry of the pack), 'size' and 'text'", name);
-    if ((rc = word_key(d, &s, o, "font", NULL, &s.proto.font)) != 0 || (rc = num_key(d, &s, o, "size", 0, 1, &s.proto.size)) != 0 ||
-        (rc = num_key(d, &s, o, "width", 0, 0, &s.proto.width)) != 0 ||
-        (rc = num_key(d, &s, o, "line_height", 0, 0, &s.proto.line_height)) != 0 ||
-        (rc = word_key(d, &s, o, "align", aligns, &s.proto.align)) != 0 || (rc = word_key(d, &s, o, "dir", dirs, &s.proto.dir)) != 0 ||
-        (rc = word_key(d, &s, o, "lang", NULL, &s.proto.lang)) != 0)
+    if ((rc = word_key(d, &s, o, "font", NULL, &p->font)) != 0 ||
+        (rc = num_key(d, &s, o, "size", 0, 1, &p->style.size, &p->size)) != 0 ||
+        (rc = num_key(d, &s, o, "width", 0, 0, &p->style.width, &p->width)) != 0 ||
+        (rc = num_key(d, &s, o, "line_height", 0, 0, &p->style.line_height, &p->line_height)) != 0 ||
+        (rc = word_key(d, &s, o, "align", aligns, &p->align)) != 0 || (rc = word_key(d, &s, o, "dir", dirs, &p->dir)) != 0 ||
+        (rc = word_key(d, &s, o, "lang", NULL, &p->lang)) != 0)
         return rc;
-    if (!s.proto.font[0]) return dfail(d, YPAK_ERR_FORMAT, "stimulus '%s': 'font' is empty", name);
+    if (!p->font[0]) return dfail(d, YPAK_ERR_FORMAT, "stimulus '%s': 'font' is empty", name);
+    if (strchr(p->font, '#') || strchr(p->font, '|') || !ypak_name_ok(p->font, strlen(p->font)))
+        return dfail(d, YPAK_ERR_FORMAT, "stimulus '%s': 'font' is \"%s\", which is not a pack entry name", name, p->font);
+    for (k = 0; p->lang[k]; k++) {
+        char c = p->lang[k];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-'))
+            return dfail(d, YPAK_ERR_FORMAT, "stimulus '%s': 'lang' is \"%s\"; a BCP 47 tag has letters, digits and '-' only", name, p->lang);
+    }
+    p->style.font = p->font;
+    p->style.face = 0;
+    p->style.lang = p->lang;
+    p->style.align = !strcmp(p->align, "end") ? YPAK_ALIGN_END : !strcmp(p->align, "center") ? YPAK_ALIGN_CENTER : YPAK_ALIGN_START;
+    p->style.dir = !strcmp(p->dir, "ltr") ? YPAK_DIR_LTR : !strcmp(p->dir, "rtl") ? YPAK_DIR_RTL : YPAK_DIR_AUTO;
     return resolve(d, &s, tv, 0);
 }
 
@@ -325,7 +344,12 @@ static int walk(ypt__d* d, const yjs_value* arr, int depth) {
     return 0;
 }
 
-static int text_cmp(const void* a, const void* b) { return strcmp(((const ypt_text*)a)->key, ((const ypt_text*)b)->key); }
+static int text_cmp(const void* a, const void* b) {
+    const ypt_text* x = (const ypt_text*)a;
+    const ypt_text* y = (const ypt_text*)b;
+    int c = strcmp(x->key, y->key);
+    return c ? c : strcmp(x->stimulus, y->stimulus);
+}
 static int str_cmp(const void* a, const void* b) { return strcmp(*(const char* const*)a, *(const char* const*)b); }
 
 void ypt_texts_free(ypt_texts* t) {
@@ -404,10 +428,23 @@ int ypt_derive_texts(const void* def, size_t n, ypt_table_fn table, void* ctx, y
         if (rc == 0) rc = text_stim(&d, s->key, s->value);
     }
     if (rc) { ypt_texts_free(out); return rc; }
-    /* sorted by key, each key once: the block order of a GLYPHRUNS entry */
+    /* sorted by key, each key once: the block order of a GLYPHRUNS entry;
+     * stimuli of one style that show one text share its block */
     if (m->nt) qsort(m->t, (size_t)m->nt, sizeof(ypt_text), text_cmp);
-    for (i = 0, k = 0; i < m->nt; i++)
-        if (k == 0 || strcmp(m->t[k - 1].key, m->t[i].key)) m->t[k++] = m->t[i];
+    for (i = 0, k = 0; i < m->nt;) {
+        int j = i, ns = 0, q;
+        const char** names;
+        while (j < m->nt && !strcmp(m->t[j].key, m->t[i].key)) j++;
+        names = (const char**)yjs_alloc(&m->a, sizeof(char*) * (size_t)(j - i));
+        if (!names) { rc = dfail(&d, YPAK_ERR_NOMEM, "out of memory"); ypt_texts_free(out); return rc; }
+        for (q = i; q < j; q++)
+            if (!ns || strcmp(names[ns - 1], m->t[q].stimulus)) names[ns++] = m->t[q].stimulus;
+        m->t[k] = m->t[i];
+        m->t[k].stimuli = names;
+        m->t[k].n_stimuli = ns;
+        k++;
+        i = j;
+    }
     m->nt = k;
     if (m->ntab) qsort((void*)m->tab, (size_t)m->ntab, sizeof(char*), str_cmp);
     out->texts = m->t;

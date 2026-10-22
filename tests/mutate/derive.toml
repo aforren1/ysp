@@ -79,19 +79,11 @@ replace = "if (0) return 0;"
 
 [[mutant]]
 id = "d-09"
-name = "the key's separator"
+name = "the text taken as the whole key"
 test = "derive"
-why = "The player looks a text up as \"<stimulus>/<text>\"."
-find = "key[sn] = '/';"
-replace = "key[sn] = ':';"
-
-[[mutant]]
-id = "d-10"
-name = "numbers as their source text"
-test = "derive"
-why = "2.50 and 2.5 are one size; the record and the block take the canonical text."
-find = "n = yjs_write_mem(v, YJS_WRITE_COMPACT, buf, sizeof buf);"
-replace = "n = v->n < sizeof buf ? v->n : 0; if (n) memcpy(buf, v->u.s, n);"
+why = "The text is the key's last field; the rest is the style."
+find = "t->text = key + (size_t)kn - n;"
+replace = "t->text = key;"
 
 # --- order --------------------------------------------------------------------------
 
@@ -105,11 +97,11 @@ replace = "if (0) qsort(m->t,"
 
 [[mutant]]
 id = "d-12"
-name = "duplicate texts kept"
+name = "one text per stimulus, not per style"
 test = "derive"
-why = "Two blocks with one key: the tool refuses them, and the player finds either."
-find = "if (k == 0 || strcmp(m->t[k - 1].key, m->t[i].key)) m->t[k++] = m->t[i];"
-replace = "m->t[k++] = m->t[i];"
+why = "Two stimuli of one style that show one text share a block; two blocks of one key are refused by the tool."
+find = "while (j < m->nt && !strcmp(m->t[j].key, m->t[i].key)) j++;"
+replace = "j = i + 1;"
 
 [[mutant]]
 id = "d-13"
@@ -174,16 +166,16 @@ id = "d-20"
 name = "a size of 0 taken"
 test = "derive"
 why = "Layout needs a size above 0."
-find = "num_key(d, &s, o, \"size\", 0, 1, &s.proto.size)"
-replace = "num_key(d, &s, o, \"size\", 0, 0, &s.proto.size)"
+find = "num_key(d, &s, o, \"size\", 0, 1, &p->style.size, &p->size)"
+replace = "num_key(d, &s, o, \"size\", 0, 0, &p->style.size, &p->size)"
 
 [[mutant]]
 id = "d-21"
 name = "a negative width taken"
 test = "derive"
 why = "A width below 0 is not a box."
-find = "num_key(d, &s, o, \"width\", 0, 0, &s.proto.width)"
-replace = "num_key(d, &s, o, \"width\", -1e9, 0, &s.proto.width)"
+find = "num_key(d, &s, o, \"width\", 0, 0, &p->style.width, &p->width)"
+replace = "num_key(d, &s, o, \"width\", -1e9, 0, &p->style.width, &p->width)"
 
 [[mutant]]
 id = "d-22"
@@ -222,7 +214,7 @@ id = "d-26"
 name = "an empty font taken"
 test = "derive"
 why = "\"\" names no FONT entry."
-find = "if (!s.proto.font[0]) return dfail"
+find = "if (!p->font[0]) return dfail"
 replace = "if (0) return dfail"
 
 [[mutant]]
@@ -256,3 +248,53 @@ test = "derive"
 why = "The 257th table would be written past the array."
 find = "if (d->ntv == 256)"
 replace = "if (d->ntv == 257)"
+
+# --- the key by text and style (the user's decision, 2026-10-21) ----------------
+
+[[mutant]]
+id = "d-31"
+name = "a stimulus named twice in a shared block"
+test = "derive"
+why = "A stimulus that gives one text twice (two lookup values) is one stimulus of the block."
+find = "if (!ns || strcmp(names[ns - 1], m->t[q].stimulus)) names[ns++] = m->t[q].stimulus;"
+replace = "names[ns++] = m->t[q].stimulus;"
+
+[[mutant]]
+id = "d-32"
+name = "align not in the style"
+test = "derive"
+why = "A centered text lays out otherwise than a left-aligned one; the key must tell them apart."
+find = "p->style.align = !strcmp(p->align, \"end\") ? YPAK_ALIGN_END : !strcmp(p->align, \"center\") ? YPAK_ALIGN_CENTER : YPAK_ALIGN_START;"
+replace = "p->style.align = YPAK_ALIGN_START;"
+
+[[mutant]]
+id = "d-33"
+name = "lang not in the style"
+test = "derive"
+why = "The language changes line breaking and shaping."
+find = "p->style.lang = p->lang;"
+replace = "p->style.lang = \"\";"
+
+[[mutant]]
+id = "d-34"
+name = "a lang that is not BCP 47 taken here"
+test = "derive"
+why = "The key refuses it later with a message that names no field; this check names the field."
+find = "if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-'))"
+replace = "if (0)"
+
+[[mutant]]
+id = "d-35"
+name = "a font name with '#' taken here"
+test = "derive"
+why = "'#' ends the font field of the key; the message must name the font."
+find = "if (strchr(p->font, '#') || strchr(p->font, '|') || !ypak_name_ok(p->font, strlen(p->font)))"
+replace = "if (0)"
+
+[[mutant]]
+id = "d-36"
+name = "numbers as their exact decimal, not the double's"
+test = "derive"
+why = "The record and the key must spell a number as yjs_format_double() does, the player's spelling."
+find = "n = (size_t)yjs_format_double(x, buf, sizeof buf);"
+replace = "n = yjs_write_mem(v, YJS_WRITE_COMPACT, buf, sizeof buf);"

@@ -6,8 +6,9 @@
  * "u.pstb": one string column), so a `$name` can reach table levels.
  * Every input must return without a sanitizer report. A refusal must carry
  * a message and leave nothing to free; an accepted definition must give
- * keys in strictly ascending order, each "<stimulus>/<text>" with every
- * field set, and only tables the callback knows.
+ * keys in strictly ascending order, each ypak_runs_key() of its style and
+ * text (the player's key), every field set, its stimuli sorted, and only
+ * tables the callback knows.
  *
  * One translation unit: it includes pack/derive.c and the json and table
  * implementations, so no CMake target is needed.
@@ -32,6 +33,9 @@
 #include "ysp/json.h"
 #define YSP_TABLE_IMPLEMENTATION
 #include "ysp/table.h"
+#define YSP_PACK_IMPLEMENTATION
+#define YPAK_NO_FILE
+#include "ysp/pack.h"
 #include "derive.c"
 
 #include <stdio.h>
@@ -80,12 +84,16 @@ static void one(const uint8_t* data, size_t size) {
     if (err[0] || (!t.definition && (t.n_texts || t.n_tables))) abort();
     for (i = 0; i < t.n_texts; i++) {
         const ypt_text* x = &t.texts[i];
-        size_t sn;
+        static char kb[1 << 16];
+        int64_t kn;
+        int q;
         if (!x->key || !x->stimulus || !x->text || !x->font || !x->size || !x->width || !x->line_height || !x->align || !x->dir ||
-            !x->lang || !x->font[0])
+            !x->lang || !x->font[0] || x->n_stimuli < 1 || strcmp(x->stimuli[0], x->stimulus))
             abort();
-        sn = strlen(x->stimulus);
-        if (strncmp(x->key, x->stimulus, sn) || x->key[sn] != '/' || x->text != x->key + sn + 1) abort();
+        for (q = 1; q < x->n_stimuli; q++)
+            if (strcmp(x->stimuli[q - 1], x->stimuli[q]) >= 0) abort();
+        kn = ypak_runs_key(&x->style, x->text, strlen(x->text), kb, sizeof kb);
+        if (kn < 0 || (size_t)kn >= sizeof kb || strcmp(kb, x->key) || x->text != x->key + kn - (int64_t)strlen(x->text)) abort();
         if (i && strcmp(t.texts[i - 1].key, x->key) >= 0) abort();
     }
     for (i = 0; i < t.n_tables; i++)

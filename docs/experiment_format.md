@@ -278,12 +278,11 @@ that structure; it does not invent a new one.
   value a `map` or a table column can give a text stimulus, keyed by
   text and style (gap G9). The player looks up runs; it lays out text at
   run time only for a script.
-- Built (pack tool v0.6.0, 2026-10-21; G9): the key is
-  `<stimulus>/<text>`, and the block records the stimulus's style. A
-  stimulus has one style, so its name stands for the style, and the
-  player computes the key from the name and the resolved text without
-  spelling a number. Two stimuli with one style and one text give two
-  blocks of the same layout (pack.md 15).
+- Built (pack tool v0.6.0, 2026-10-21; G9): the style is the font,
+  face, size, width, line height, alignment, direction and language;
+  two stimuli of one style that show one text share one block. The
+  player builds the key with the tool's function, `ypak_runs_key()` in
+  ysp/pack.h (pack.md 4.5, "The block key").
 
 **D15. Web runs. DECIDED (2026-10-14).**
 - Evidence: rig_spec 6: on a participant's machine timing is measured
@@ -310,7 +309,7 @@ the header.
 | G6 | CLOSED (2026-10-21). Every header that has a desc a definition sets exports its table, and every table has one row shape: `name, type, min, max, def, unit, doc, values`, where `values` is the "name=value" pairs of an `enum` or `enum[]` row (lower-case C suffixes, in value order) and NULL for any other type. The methods: `yst_params()` (ysp/stair.h 0.3.0), `yqst_params()` (ysp/quest.h 0.7.0), `yaep_params()` (ysp/aep.h 0.16.0). The timeline: `ytl_op_params(kind, &n)` and `ytl_desc_params()` (ysp/timeline.h 0.8.0). Response: `yrsp_params()` (ysp/response.h 0.6.0). The device families: `ydev_params(family, &n)` (ysp/device.h 0.4.0). gfx's stimulus fields: `ygfx_params()`, `ygfx_enum_params()` and the others (ysp/gfx.h 0.16.0). The rest gained `values` on 2026-10-21: `yscr_params()` (ysp/screen.h 0.9.0), `yau_params()` (ysp/audio.h 0.7.0), `ycol_desc_params()` (ysp/color.h 0.3.0), `yol_*_params()` (ysp/outline.h 0.4.0), `yvid_params()` (ysp/video.h 0.5.0), `yrdk_params()` (ysp/rdk.h 0.3.0) and `ygfx_desc_params()` (ysp/gfx.h 0.17.0). Each header's test checks its rows against its desc and its C enums; `tests/adapt/param_tables_test.c` checks every table against the shared rule (conventions.md, "Parameter tables"). | those headers | The loader's key check and the designer's panels from one source | Done |
 | G7 | CLOSED in ysp/json.h v0.2.0 (2026-10-21). Was: the canonical writer wrote a number's source text; only `yjs_new_fixed()` and `yjs_new_int()` made canonical numbers. Now every number is written as its exact value in one spelling, and `yjs_format_double()` gives a double's shortest round-trip decimal, the same bytes on MSVC, MinGW, gcc and emcc (json.md). | ysp/json.h | D2 | Done |
 | G8 | A response-driven output waits for the frame loop to see the response, up to a frame after the press. No callback on the input's thread. | ysp/response.h, ysp/device.h | Response triggers (EEG) | Medium; measure the lag first |
-| G9 | CLOSED in the pack tool v0.6.0 (2026-10-21). The tool reads the experiment entry; when it is a version 1 definition, every text its `text` stimuli can show goes into one GLYPHRUNS entry named after the experiment entry (`experiment/main.json` gives `experiment/main.ysprun`), one block per text, keyed `<stimulus>/<text>`, laid out in the stimulus's font, size, width, line height, alignment, direction and language. A text is a literal, the levels of a string column of any table a node names, a node's `vars` value or choices, or every value of a lookup's map. A glyph runs resource of the same name adds its blocks and fallback fonts. A text known only at run time (a built-in or a session field used directly, a script, a number column, a layout key from a variable) is refused at build by name (pack.md 4.5 and 15). Was: glyph-run blocks were listed by hand in the source description; nothing derived them. | pack tool | D14; Stroop | Done |
+| G9 | CLOSED in the pack tool v0.6.0 (2026-10-21). The tool reads the experiment entry; when it is a version 1 definition, every text its `text` stimuli can show goes into one GLYPHRUNS entry named after the experiment entry (`experiment/main.json` gives `experiment/main.ysprun`), one block per text and style (font, size, width, line height, alignment, direction, language), keyed by both through `ypak_runs_key()` in ysp/pack.h, which the player calls too; stimuli of one style that show one text share the block. A text is a literal, the levels of a string column of any table a node names, a node's `vars` value or choices, or every value of a lookup's map. A glyph runs resource of the same name adds its blocks and fallback fonts. A text known only at run time (a built-in or a session field used directly, a script, a number column, a layout key from a variable) is refused at build by name (pack.md 4.5 and 15). Was: glyph-run blocks were listed by hand in the source description; nothing derived them. | pack tool | D14; Stroop | Done |
 | G10 | A trial row has at most 64 columns (ysp/table.h's bound, kept by the writer). | ysp/trials.h, ysp/table.h | Templates with many recorded stimuli | Small; `record` limits columns meanwhile |
 | G11 | The jitter `rate=` takes a fixed number. Snapping to the rig's refresh needs the player to set `rate_num` and `rate_den` after `ytr_rules()`, and the text cannot say so. | ysp/trials.h | EEG example (`rate=display`) | Small |
 | G12 | Closed (2026-10-21): ysp/stair.h 0.3.0 has `yst_save()` and `yst_open_saved()`, in the form of quest's, aep's and trials' (versioned, checked, a mismatched desc refused, the error in the handle), so a resume no longer replays the staircase's updates. | ysp/stair.h | Resume | Small; closed |
@@ -458,7 +457,7 @@ session.
 |---|---|---|
 | `shape`, `grating`, `gabor`, `noise` | `ygfx_shape()`, `ygfx_grating()`, `ygfx_gabor()`, `ygfx_noise()` | none |
 | `image` | `ygfx_image()` | `texture`: a TEXTURE entry, or a variable whose levels are entries |
-| `text` | `ygfx_crun()` per run of the block `<stimulus>/<text>` in the experiment's GLYPHRUNS entry (D14; pack.md 4.5) | `font`: a FONT entry; `text`; `size`; `width`; `line_height`, `align`, `dir`, `lang` as in a glyph-run block. Each is a literal, not a variable: the pack tool lays the text out |
+| `text` | `ygfx_crun()` per run of the block whose key `ypak_runs_key()` gives for the stimulus's style and text, in the experiment's GLYPHRUNS entry (D14; pack.md 4.5) | `font`: a FONT entry; `text`; `size`; `width`; `line_height`, `align`, `dir`, `lang` as in a glyph-run block. Each is a literal, not a variable: the pack tool lays the text out |
 | `artwork` | `ygfx_crun()` over an ARTWORK entry | `artwork` |
 | `rdk` | `yrdk_open()` and `ygfx_dots()`; `yrdk_start(&f, $trial_seed, 0)` on its first visible frame, `yrdk_update(&f, onset - first onset)` each frame | none |
 | `sound` | `yau_wav_load()`, `yau_play_at()` | `audio`: an AUDIO entry |

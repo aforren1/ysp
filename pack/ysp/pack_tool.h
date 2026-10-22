@@ -59,8 +59,9 @@
  *   stimuli can show (literals, string-column levels of every table a node
  *   names, vars values and choices, every value of a lookup's map) is laid
  *   out into one GLYPHRUNS entry named after the experiment entry
- *   ("experiment/main.json" gives "experiment/main.ysprun"), keyed
- *   "<stimulus>/<text>", each in its stimulus's font and style; a
+ *   ("experiment/main.json" gives "experiment/main.ysprun"), keyed by
+ *   text and style with ysp/pack.h's ypak_runs_key(), which the player
+ *   calls too, each in its stimulus's font and style; a
  *   description lists no glyph runs for them. A glyph runs resource of that
  *   name adds its blocks and fallback fonts. A text known only at run time
  *   is refused by name (pack/derive.c, ypt_derive_texts()). A listed block
@@ -106,6 +107,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include "ysp/pack.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -211,11 +213,14 @@ int ypt_icc_srgb(const void* data, size_t n, char* why, size_t cap);
  * (ysp/json.h), as a glyph-run block takes them. Every string stays valid
  * until ypt_texts_free(). */
 typedef struct ypt_text {
-    const char* key;           /* "<stimulus>/<text>": the block's key          */
-    const char* stimulus;
-    const char* text;          /* points into key                               */
-    const char* font;          /* a FONT entry of the pack, face 0              */
-    const char* size;          /* above 0                                       */
+    const char* key;           /* ypak_runs_key() of style and text             */
+    const char* text;          /* the key's last field                          */
+    const char* stimulus;      /* the first stimulus, bytewise, that shows it   */
+    const char* const* stimuli;  /* every one that does, sorted, each once      */
+    int         n_stimuli;
+    ypak_text_style style;     /* font (face 0), numbers, align, dir, lang      */
+    const char* font;          /* style.font                                    */
+    const char* size;          /* the key's spelling of style.size: above 0     */
     const char* width;         /* "0": no wrapping                              */
     const char* line_height;   /* "0": the font's own line                      */
     const char* align;         /* "start", "end" or "center"                    */
@@ -237,7 +242,8 @@ typedef const void* (*ypt_table_fn)(void* ctx, const char* name, size_t* n);
 
 /* Every text the definition's text stimuli can show (docs/experiment_format.md
  * D14, gap G9): a literal, a table column's levels, a node's vars, every
- * value of a lookup's map. Bytes that are not JSON, or JSON whose "format"
+ * value of a lookup's map. Two stimuli of one style and one text give one
+ * text, with both in stimuli. Bytes that are not JSON, or JSON whose "format"
  * is not "ysp-experiment", give 0 and definition 0. A text known only at run
  * time (a built-in or a session field named directly, a script, a variable
  * layout key) is refused, with err naming the stimulus. Call

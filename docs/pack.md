@@ -602,12 +602,16 @@ its `text` stimuli can show. Nothing in the description asks for it.
 - Entry: one GLYPHRUNS entry, the experiment entry's name with
   `.ysprun` for its extension: `experiment/main.json` gives
   `experiment/main.ysprun`. No entry when no stimulus is a text.
-- Block key: `<stimulus>/<text>`, for example `word/RED`. The player
-  finds a text's block from the stimulus name and the text it resolved.
+- Block key: the text and its style (D14), built by `ypak_runs_key()`
+  in ysp/pack.h, which the tool and the player both call (below). Two
+  stimuli of one style that show one text share one block.
 - Style: the stimulus's `font` (face 0), `size`, `width`,
   `line_height`, `align`, `dir` and `lang`; defaults as for a listed
-  block; color 0. Numbers are JSON numbers in their canonical spelling
-  (ysp/json.h): `72.0` and `72` give one block.
+  block; color 0. These are every input of a block's layout that can
+  differ between blocks of one entry. Not in the key: the entry's
+  fallback fonts (one list for the whole entry), color (the palette
+  position, 0 in every derived block), and the draw properties (`x`,
+  `y`, `layer`, the color the stimulus draws in).
 - Texts: a literal string (`"$$..."` is the literal `"$..."`); the
   levels of a string column of every table any node's
   `timeline_variables` names (`"$word"`); a node's `vars` value or each
@@ -624,13 +628,40 @@ its `text` stimuli can show. Nothing in the description asks for it.
   order, then the stimuli's by name.
 - `derivation`: `fonts` and `blocks` as listed (a rebuild takes them
   back), `experiment`, and `derived`, each derived block with its
-  `stimulus` and `font` (records: a rebuild derives them again and the
-  byte comparison checks them).
+  `stimuli` (every stimulus that shows it, sorted) and `font` (records:
+  a rebuild derives them again and the byte comparison checks them).
 - A text that the tool cannot know is refused, with the stimulus's
   name (section 15 lists each form and its message). A definition of
   another version is refused; bytes that are not JSON, or JSON of
   another format, stay opaque, but bytes that name `"ysp-experiment"`
   and do not parse are refused with the line and column.
+
+##### The block key
+
+`ypak_runs_key(&style, text, n, buf, cap)` (ysp/pack.h v0.3.0) gives
+the key's bytes; this is their exact format, so a player in another
+language (the web) can build the same bytes:
+
+```
+FONT#FACE|SIZE|WIDTH|LINE_HEIGHT|ALIGN|DIR|LANG|TEXT
+```
+
+| Field | Bytes |
+|---|---|
+| FONT | the FONT entry's name, as in the pack (writer rule, 2.7); it has no `#` and no `|` |
+| FACE | the face in decimal, no sign, no leading zeros (`0`) |
+| SIZE, WIDTH, LINE_HEIGHT | the double's shortest decimal that reads back to it, as `yjs_format_double()` writes it (json.md, Canonical numbers): `72`, `0.8`, `0.30000000000000004`; plain from 10^-18 to below 10^21, else `d.ddde+E` or `d.ddde-E`; `-0` and `0` are `0`. WIDTH and LINE_HEIGHT are `0` when the stimulus omits them |
+| ALIGN | `start`, `end` or `center` |
+| DIR | `auto`, `ltr` or `rtl` |
+| LANG | the BCP 47 tag as written (`A`-`Z`, `a`-`z`, `0`-`9`, `-`), or empty |
+| TEXT | the text's UTF-8 bytes, unchanged, to the end of the key (no NUL); it may hold `|` and `#`, since every field before it is free of them |
+
+The separators are `#` (0x23) after FONT and `|` (0x7C) after every
+other field but TEXT. A loader reads the numbers as doubles (ysp/json.h
+`yjs_double()`), so `72`, `72.0` and `7.2e1` give one key. Example, the
+Stroop word RED: `fonts/NotoSans-Regular.ttf#0|72|1000|0|start|auto||RED`.
+Blocks are in bytewise order of their keys, so `ypak_runs_find()` finds
+one by binary search.
 
 ### 4.6 ARTWORK
 
@@ -2025,7 +2056,7 @@ the decisions and the results.
 |---|---|---|
 | How a description asks for the runs | (a) a `"derive": true` resource; (b) always, for a definition with text stimuli | (b). The player needs the runs whenever a stimulus is a text, so a switch could only be set wrong. A description without a definition (the test corpus's opaque `main.json`) is unchanged |
 | Where they go | (a) one entry per font; (b) one entry, its name from the experiment entry's | (b): `experiment/main.ysprun`. The player finds it by a rule, with no list. One ylay library per fallback list keeps each stimulus in its own font (4.5); a run's font index is the entry's |
-| The block key | (a) text and style, as D14 says (`fonts/x.ttf#0/72/1000/.../RED`); (b) `<stimulus>/<text>` | (b). A stimulus has one style, so its name stands for it, and the player builds the key without spelling a number canonically. Cost: two stimuli of one style and one text give two blocks; none of the four worked examples has one |
+| The block key | (a) text and style, as D14 says; (b) `<stimulus>/<text>` | (a), the user's decision of 2026-10-21 (the first build had (b)). Two stimuli of one style and one text share one block. One function builds the key, `ypak_runs_key()` in ysp/pack.h, for the tool and the player; its numbers come from `yjs_format_double()`, so ysp/pack.h v0.3.0 requires ysp/json.h. The byte format is in 4.5 |
 | Listed blocks | (a) union with the derived ones; (b) an explicit override that turns derivation off | (a). A GLYPHRUNS resource with the derived entry's name adds blocks (for example a text a future script shows) and fallback fonts; a listed block may not take a derived key, so neither can replace the other unseen. Listed GLYPHRUNS resources of other names are unchanged |
 | A text the tool cannot know | (a) a warning, and the player lays it out at run time; (b) an error at build | (b). D14: the player lays out text at run time only for a script, and version 1 has no scripts. A warning would let a pack build that stops at load or mid-session; every refusal names the stimulus and the way out |
 | A layout key from a variable (`"size": "$size"`) | (a) lay out the cross product of its values and the texts; (b) refuse | (b), for now: no worked example needs it, and the key would have to carry the style. Open |
@@ -2058,14 +2089,16 @@ builds one without.
 
 | File | Version | What |
 |---|---|---|
-| `pack/derive.c` | new | `ypt_derive_texts()`: the definition's texts, no layout (the core tool runs it too) |
+| `include/ysp/pack.h` | 0.3.0 | `ypak_runs_key()` and `ypak_text_style`: the block key, for the tool and the player (4.5); the header now requires ysp/json.h |
+| `pack/derive.c` | new | `ypt_derive_texts()`: the definition's texts, keyed by `ypak_runs_key()`, no layout (the core tool runs it too) |
 | `pack/ysp/pack_tool.h`, `pack/pack_tool.c` | 0.6.0 | The experiment's GLYPHRUNS entry; one ylay library per fallback list; the stamp over the entry's fonts in entry order; a listed block without `size` is refused by name (v0.5.1 crashed: a NULL string to `strlen`) |
 | `pack/ypak.c` | 0.6.0 | unchanged; it prints the library's version |
 | `examples/pack/stroop/` | | The Stroop definition of experiment_format.md 2.14, its CSV, and a description with no glyph runs |
-| `tests/adapt/derive_test.c` | | The texts on their own: every form, every refusal, order, canonical numbers, the bounds |
-| `tests/pack/tool_test.c` | | The Stroop pack end to end; union, fallback and two-font packs; 10 refusals; the core tool's refusal |
+| `tests/adapt/derive_test.c` | | The texts on their own: every form, every refusal, order, keys, shared styles, the bounds |
+| `tests/adapt/pack_test.c`, `tests/mutate/pack.toml` | | `ypak_runs_key()`: the format, the refusals, 8 mutants |
+| `tests/pack/tool_test.c` | | The Stroop pack end to end; union, fallback, two-font and shared-style packs; the player's key for every derived block; 11 refusals; the core tool's refusal |
 | `tests/fuzz/derive_fuzz.c` | | libFuzzer: a definition against two fixed tables |
-| `tests/mutate/derive.toml` | | 30 mutants of `pack/derive.c` |
+| `tests/mutate/derive.toml` | | 35 mutants of `pack/derive.c` |
 
 Every entry of the test corpus is byte-identical to v0.5.1's; the
 manifest differs by the tool version only (`ypak rebuild` of the
@@ -2076,18 +2109,23 @@ unchanged.
 ### Results
 
 On 2026-10-21, Windows 11 on the i7-1360P laptop, and WSL2 Ubuntu 22.04
-on the same machine.
+on the same machine. These are the results with the key by text and
+style (`ypak_runs_key()`, ysp/pack.h 0.3.0); the cost was measured with
+the first build's `<stimulus>/<text>` keys, which lay out the same 9
+texts.
 
 | Check | Result |
 |---|---|
-| `tests/adapt/derive_test.c` | 155 checks, 0 failed: MSVC 19.44 (Release), MinGW gcc 16.1 (`-O1 -Wall -Wextra -Wshadow`; CI's `-Werror` build of the mingw preset), Linux gcc 11.4 (Release, and ASan with UBSan) |
-| `tests/pack/tool_test.c` | MSVC, full tool: 324 checks, 0 failed (276 before v0.6.0). Linux gcc, full tool: 319, 0 failed, Release and ASan with UBSan (no sanitizer report; fewer checks: no MP4 or HEVC off Windows). MinGW, core tool: 272, 0 failed (the Stroop pack refused by name, a definition without texts built) |
-| The whole tree | MSVC `msvc-full` with the pack tool: 90 of 90 ctest tests. MinGW `mingw` preset with the pack tool: 79 of 79 (`test_audio` failed once in a run beside two other builds, at its play-at-seek check, and passed alone; ysp/audio.h is unchanged) |
-| Determinism | The Stroop pack (`examples/pack/stroop`, the box font standing in for Noto Sans) built 3 times by MSVC's `ypak` and by Linux gcc's: SHA-256 `444a8d71b211d2ec...` each time. The union and two-font packs are the same bytes from MSVC and Linux gcc too. A reordered description gives the same pack; a definition with other whitespace and `72.0` for `72` gives the same glyph runs entry. `ypak rebuild` gives `identical` for the Stroop, union and two-font packs |
-| Before and after | ypak 0.5.1 builds the same Stroop description into 6 entries: no glyph runs, and the `"used"` curve set holds .notdef only (752 bytes). 0.6.0: 7 entries, `experiment/stroop.ysprun` with 9 blocks (6672 bytes), and a curve set of the texts' glyphs (8704 bytes) |
-| Mutants of `pack/derive.c` (`tests/mutate/derive.toml`) | 30 of 30 killed on the first run (d-18, no nesting bound, by a stack overflow: the step bound comes too late for recursion) |
-| Hand mutants of `pack/pack_tool.c` (the runner cannot build the tool) | 14 of 14 killed with MSVC: a run's font index not remapped; used glyphs marked in the library's slot; no fallbacks after a stimulus's font; the record keys taken back by a rebuild; a listed block on a derived key not named; the experiment not in `from`; a font's hash from the wrong library slot; derived fonts not by name; listed blocks without listed fonts; no derivation; the runs keeping the experiment's extension; the runs' name not checked without case; another kind on the runs' name; one library for every derived font. A mutant that made the rebuild skip an auto-made entry's resource was equivalent, so that code was deleted |
-| Fuzzing (`tests/fuzz/derive_fuzz.c`) | MSVC libFuzzer with ASan, 4 seeds: 362,488 inputs in 600 s, 2022 new units, no finding; the 345-file corpus replayed under Linux gcc ASan and UBSan, no report |
+| `tests/adapt/derive_test.c` | 168 checks, 0 failed: MSVC 19.44 (Release), MinGW gcc 16.1 (`-O1 -Wall -Wextra -Wshadow`, and the mingw preset with CI's `-Werror`), Linux gcc 11.4 (Release, and ASan with UBSan). Each derived text's key is checked against `ypak_runs_key()` of its style; two stimuli of one style share a text, with both named |
+| `tests/adapt/pack_test.c` | 468 checks, 0 failed (MSVC, MinGW); quick mode under Linux ASan and UBSan, 456. The key's byte format, shortest doubles, the refusals, sizing with cap 0 and a short buffer |
+| `tests/pack/tool_test.c` | MSVC, full tool: 331 checks, 0 failed (276 before v0.6.0). Linux gcc, full tool: 326, 0 failed, Release and ASan with UBSan (no sanitizer report; fewer checks: no MP4 or HEVC off Windows). MinGW, core tool: 272, 0 failed (the Stroop pack refused by name, a definition without texts built). The player's side: for the Stroop, union, two-font and shared-style packs, a loader's reading of the definition (`yjs_double()`) and `ypak_runs_key()` give the key of every derived block (9 of 9, 9 of 10 with the listed block, 6 of 6, 4 of 4) |
+| The whole tree | MSVC `msvc-full` with the pack tool: 90 of 90 ctest tests. MinGW `mingw` preset with the pack tool: 79 of 79 |
+| Determinism | MSVC and Linux gcc give the same bytes: Stroop pack `c413cb38de6f3b41...`, union `de45e4b81328be8c...`, two fonts `1052c75e30f4c0ef...`, shared style `48b21e7315fc5660...` (SHA-256 of the files). The Stroop pack built 3 times: the same bytes. A reordered description gives the same pack; a definition with other whitespace and `72.0` for `72` gives the same glyph runs entry. `ypak rebuild` gives `identical` for all four |
+| Before and after | ypak 0.5.1 builds the same Stroop description into 6 entries: no glyph runs, and the `"used"` curve set holds .notdef only (752 bytes). 0.6.0: 7 entries, `experiment/stroop.ysprun` with 9 blocks (7072 bytes), and a curve set of the texts' glyphs (8704 bytes) |
+| Mutants of `pack/derive.c` (`tests/mutate/derive.toml`) | 35 of 35 killed (d-18, no nesting bound, by a stack overflow: the step bound comes too late for recursion). The first build's d-10 became equivalent with the key change (the number's text now comes from the double) and was removed |
+| Mutants of `ypak_runs_key()` (`tests/mutate/pack.toml`, rk-01 to rk-08) | 8 of 8 killed |
+| Hand mutants of `pack/pack_tool.c` (the runner cannot build the tool) | 15 of 15 killed with MSVC: a run's font index not remapped; used glyphs marked in the library's slot; no fallbacks after a stimulus's font; the record keys taken back by a rebuild; a listed block on a derived key not named; the experiment not in `from`; a font's hash from the wrong library slot; derived fonts not by name; listed blocks without listed fonts; no derivation; the runs keeping the experiment's extension; the runs' name not checked without case; another kind on the runs' name; one library for every derived font (these 14 with the first build's keys); one stimulus recorded per shared block. A mutant that made the rebuild skip an auto-made entry's resource was equivalent, so that code was deleted |
+| Fuzzing (`tests/fuzz/derive_fuzz.c`) | MSVC libFuzzer with ASan, 4 seeds: 362,488 inputs in 600 s, 2022 new units, no finding (the first build's keys). With the key change the target also checks each key against `ypak_runs_key()`; the 345-file corpus replayed with MinGW and under Linux gcc ASan and UBSan, no report |
 | `trial_stroop --sim` (CI's step) | Every trial as scripted; the program does not read packs and did not change |
 | Cost | The whole `ypak build` of the Stroop description with Arial (1 MB) as the font, MSVC builds, under the measurement lock (load 0 % at its start, AC), the two versions interleaved, 21 rounds: 0.6.0 61.8 ms median (56.6 to 96.1), 0.5.1 52.9 ms (49.5 to 70.2). The 9 ms buys the derivation, the 9 layouts and the glyphs they use; 0.5.1 made a curve set of .notdef only. Build time, never on the frame path: the player looks the blocks up |
 

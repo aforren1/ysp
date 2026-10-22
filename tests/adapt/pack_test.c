@@ -1145,6 +1145,55 @@ static void* claim_thread(void* arg) { claim_run((int)(intptr_t)arg); return NUL
 #define CLAIM_THREADS 1
 #endif
 
+/* ypak_runs_key(): the byte format of docs/pack.md 4.5, the canonical
+ * numbers, the refusals, and sizing with cap 0 or a short buffer. */
+static void test_runs_key(void) {
+    ypak_text_style st;
+    char buf[256];
+    int64_t n;
+    memset(&st, 0, sizeof st);
+    st.font = "fonts/NotoSans-Regular.ttf";
+    st.size = 72.0;
+    st.width = 1000.0;
+    n = ypak_runs_key(&st, "RED", 3, buf, sizeof buf);
+    CHECK(n == 54 && !strcmp(buf, "fonts/NotoSans-Regular.ttf#0|72|1000|0|start|auto||RED"), "key: %lld '%s'", (long long)n, buf);
+    st.face = 2; st.size = 0.1 + 0.2; st.width = 1e21; st.line_height = 1.25; st.align = YPAK_ALIGN_CENTER; st.dir = YPAK_DIR_RTL;
+    st.lang = "he-IL";
+    n = ypak_runs_key(&st, "a|b#c", 5, buf, sizeof buf);
+    CHECK(n > 0 && !strcmp(buf, "fonts/NotoSans-Regular.ttf#2|0.30000000000000004|1e+21|1.25|center|rtl|he-IL|a|b#c"),
+          "key with shortest doubles, an exponent and separators in the text: '%s'", buf);
+    st.align = YPAK_ALIGN_END; st.dir = YPAK_DIR_LTR; st.size = 0.8; st.width = -0.0; st.line_height = 0; st.lang = NULL;
+    n = ypak_runs_key(&st, "", 0, buf, sizeof buf);
+    CHECK(n > 0 && !strcmp(buf, "fonts/NotoSans-Regular.ttf#2|0.8|0|0|end|ltr||"), "empty text, -0 as 0, NULL lang: '%s'", buf);
+    /* sizing: cap 0 and a short buffer give the length and write nothing whole */
+    memset(buf, 'x', sizeof buf);
+    CHECK(ypak_runs_key(&st, "", 0, NULL, 0) == n && ypak_runs_key(&st, "", 0, buf, (size_t)n) == n && buf[0] == 'x' && buf[n] == 'x',
+          "sizing: cap 0, and a buffer of n bytes left untouched");
+    memset(buf, 'x', sizeof buf);
+    CHECK(ypak_runs_key(&st, "", 0, buf, (size_t)n + 1) == n && buf[n] == 0, "a buffer of n + 1 holds the key and its NUL");
+    /* refusals */
+    {
+        ypak_text_style b = st;
+        volatile double zero = 0;   /* NaN and infinity at run time, not as constants */
+        static const char* const fonts[4] = { "", "a#b.ttf", "a|b.ttf", "/abs.ttf" };
+        int k;
+        for (k = 0; k < 4; k++) { b = st; b.font = fonts[k]; CHECK(ypak_runs_key(&b, "x", 1, buf, sizeof buf) == YPAK_ERR_ARG, "font '%s'", fonts[k]); }
+        b = st; b.font = NULL; CHECK(ypak_runs_key(&b, "x", 1, buf, sizeof buf) == YPAK_ERR_ARG, "no font");
+        b = st; b.face = -1; CHECK(ypak_runs_key(&b, "x", 1, buf, sizeof buf) == YPAK_ERR_ARG, "face -1");
+        b = st; b.size = 0; CHECK(ypak_runs_key(&b, "x", 1, buf, sizeof buf) == YPAK_ERR_ARG, "size 0");
+        b = st; b.size = zero / zero; CHECK(ypak_runs_key(&b, "x", 1, buf, sizeof buf) == YPAK_ERR_ARG, "size NaN");
+        b = st; b.width = -1; CHECK(ypak_runs_key(&b, "x", 1, buf, sizeof buf) == YPAK_ERR_ARG, "width -1");
+        b = st; b.line_height = 1.0 / zero; CHECK(ypak_runs_key(&b, "x", 1, buf, sizeof buf) == YPAK_ERR_ARG, "line height inf");
+        b = st; b.align = 3; CHECK(ypak_runs_key(&b, "x", 1, buf, sizeof buf) == YPAK_ERR_ARG, "align 3");
+        b = st; b.dir = -1; CHECK(ypak_runs_key(&b, "x", 1, buf, sizeof buf) == YPAK_ERR_ARG, "dir -1");
+        b = st; b.lang = "en|x"; CHECK(ypak_runs_key(&b, "x", 1, buf, sizeof buf) == YPAK_ERR_ARG, "lang with '|'");
+        b = st; b.lang = "en_US"; CHECK(ypak_runs_key(&b, "x", 1, buf, sizeof buf) == YPAK_ERR_ARG, "lang with '_'");
+        CHECK(ypak_runs_key(&st, "a\0b", 3, buf, sizeof buf) == YPAK_ERR_ARG, "a NUL in the text");
+        CHECK(ypak_runs_key(NULL, "x", 1, buf, sizeof buf) == YPAK_ERR_ARG && ypak_runs_key(&st, NULL, 1, buf, sizeof buf) == YPAK_ERR_ARG,
+              "NULL style or text");
+    }
+}
+
 static void test_claim(void) {
     vfile f;
     uint8_t* m;
@@ -1209,6 +1258,7 @@ int main(void) {
     test_faults();
     test_views();
     test_claim();
+    test_runs_key();
     if (full) {
         test_flips();
         test_big();

@@ -2032,7 +2032,7 @@ static int build_frameseq(B* b, E* e) {
 /* The texts of the experiment's text stimuli (docs/experiment_format.md
  * D14, gap G9) go into one GLYPHRUNS entry named after the experiment
  * entry: "experiment/main.json" gives "experiment/main.ysprun". The player
- * finds it by that rule and a text by its key "<stimulus>/<text>", so
+ * finds it by that rule and a text by ypak_runs_key() of its style and text, so
  * neither needs a list in the description. A glyph runs resource of that
  * name adds its blocks and its fonts (fallbacks after each stimulus's font). */
 static const void* table_bytes(void* ctx, const char* name, size_t* n) {
@@ -2092,6 +2092,7 @@ typedef struct blk {
     const char* key; const char* text; const char* size; const char* width; const char* lh; const char* color;
     const char* dir; const char* align; const char* lang;
     const char* stim; const char* font;
+    const ypt_text* t;   /* derived: the text, for its stimuli */
     int lib, derived;
 } blk;
 static int blk_cmp(const void* a, const void* b2) {
@@ -2207,7 +2208,7 @@ static int build_glyphruns(B* b, E* e) {
         const ypt_text* t = &tx->texts[i];
         blk* k = &bl[nhb + i];
         k->key = t->key; k->text = t->text; k->size = t->size; k->width = t->width; k->lh = t->line_height; k->color = "0";
-        k->dir = t->dir; k->align = t->align; k->lang = t->lang; k->stim = t->stimulus; k->font = t->font; k->derived = 1;
+        k->dir = t->dir; k->align = t->align; k->lang = t->lang; k->stim = t->stimulus; k->font = t->font; k->t = t; k->derived = 1;
     }
     memset(lib, 0, sizeof lib);
     if (nhb) {
@@ -2407,7 +2408,10 @@ static int build_glyphruns(B* b, E* e) {
             jset(b->c, o, "align", jstrz(b->c, v->align));
             jset(b->c, o, "lang", jstrz(b->c, v->lang));
             if (v->derived) {
-                jset(b->c, o, "stimulus", jstrz(b->c, v->stim));
+                jv* sa = jnew(b->c, J_ARR);
+                int q;
+                for (q = 0; q < v->t->n_stimuli; q++) jpush(b->c, sa, jstrz(b->c, v->t->stimuli[q]));
+                jset(b->c, o, "stimuli", sa);
                 jset(b->c, o, "font", jstrz(b->c, v->font));
                 jpush(b->c, ds, o);
             } else {

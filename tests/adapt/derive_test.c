@@ -18,6 +18,9 @@
 #include "ysp/json.h"
 #define YSP_TABLE_IMPLEMENTATION
 #include "ysp/table.h"
+#define YSP_PACK_IMPLEMENTATION
+#define YPAK_NO_FILE
+#include "ysp/pack.h"
 #include "derive.c"
 
 #include <stdio.h>
@@ -73,8 +76,8 @@ static void texts_line(const ypt_texts* t, char* out, size_t cap) {
     out[0] = 0;
     for (i = 0; i < t->n_texts && at < cap; i++) {
         const ypt_text* x = &t->texts[i];
-        at += (size_t)snprintf(out + at, cap - at, "%s%s|%s|%s|%s|%s|%s|%s", i ? "\n" : "", x->key, x->size, x->width, x->line_height,
-                               x->align, x->dir, x->lang);
+        at += (size_t)snprintf(out + at, cap - at, "%s%s/%s|%s|%s|%s|%s|%s|%s", i ? "\n" : "", x->stimulus, x->text, x->size, x->width,
+                               x->line_height, x->align, x->dir, x->lang);
     }
 }
 
@@ -93,9 +96,11 @@ static void expect_texts(const char* label, const char* stim_keys, const char* n
     CHECK(!strcmp(tl, tables), "%s: tables '%s', wanted '%s'", label, tl, tables);
     for (i = 0; i < t.n_texts; i++) {
         const ypt_text* x = &t.texts[i];
-        size_t sn = strlen(x->stimulus);
-        CHECK(!strncmp(x->key, x->stimulus, sn) && x->key[sn] == '/' && x->text == x->key + sn + 1 && !strcmp(x->font, "f.ttf"),
-              "%s: text %d: key, stimulus, text and font agree", label, i);
+        char k2[1024];
+        size_t tn = strlen(x->text);
+        int64_t kn = ypak_runs_key(&x->style, x->text, tn, k2, sizeof k2);
+        CHECK(kn > 0 && !strcmp(k2, x->key) && x->text == x->key + kn - (int64_t)tn && !strcmp(x->font, "f.ttf") && x->n_stimuli == 1 &&
+              !strcmp(x->stimuli[0], x->stimulus), "%s: text %d: the key is ypak_runs_key() of its style and text", label, i);
         if (i) CHECK(strcmp(t.texts[i - 1].key, x->key) < 0, "%s: keys strictly ascending at %d", label, i);
     }
     ypt_texts_free(&t);
@@ -134,10 +139,15 @@ static void test_stroop(void) {
         " \"trials\": {\"stroop\": {\"columns\": {\"feedback\": {\"by\": \"$practice\", \"map\": {\"true\": \"$outcome\", \"false\": \"\"}}}}},\n"
         " \"timeline\": [{\"name\": \"main\", \"timeline_variables\": \"stroop.pstb\", \"trial\": \"stroop\",\n"
         "               \"rules\": [\"order constrained\", \"weight weight\"]}]}\n";
+#define NOTO "fonts/NotoSans-Regular.ttf#0|"
     static const char* const want[9][2] = {
-        { "banner/Practice. Name the ink color, not the word.", "30" }, { "banner/Test. No feedback from here on.", "30" },
-        { "feedback/Correct", "32" }, { "feedback/Too slow", "32" }, { "feedback/Wrong", "32" },
-        { "keys/R red     G green     B blue", "22" }, { "word/BLUE", "72" }, { "word/GREEN", "72" }, { "word/RED", "72" } };
+        { NOTO "22|1000|0|start|auto||R red     G green     B blue", "22" },
+        { NOTO "30|1000|0|start|auto||Practice. Name the ink color, not the word.", "30" },
+        { NOTO "30|1000|0|start|auto||Test. No feedback from here on.", "30" },
+        { NOTO "32|1000|0|start|auto||Correct", "32" }, { NOTO "32|1000|0|start|auto||Too slow", "32" },
+        { NOTO "32|1000|0|start|auto||Wrong", "32" }, { NOTO "72|1000|0|start|auto||BLUE", "72" },
+        { NOTO "72|1000|0|start|auto||GREEN", "72" }, { NOTO "72|1000|0|start|auto||RED", "72" } };
+#undef NOTO
     ypt_texts t;
     char err[512];
     int rc = derive(def, &t, err, sizeof err), i;
@@ -150,6 +160,38 @@ static void test_stroop(void) {
     CHECK(g_calls == 0, "stroop: no table read for lookups (%d calls)", g_calls);
     if (rc == 0) ypt_texts_free(&t);
     ypt_texts_free(&t);   /* twice: safe */
+}
+
+/* --- one block per style and text --------------------------------------------- */
+
+/* Two stimuli of one style that show one text share its block; a stimulus
+ * of another size, another font or another lang gets its own. 72.0 and 72
+ * are one size. */
+static void test_shared(void) {
+    static const char def[] =
+        "{\"format\": \"ysp-experiment\", \"version\": 1, \"stimuli\": {\n"
+        " \"b\": {\"kind\": \"text\", \"font\": \"f.ttf\", \"size\": 72.0, \"width\": 1000, \"text\": \"Hi\"},\n"
+        " \"a\": {\"kind\": \"text\", \"font\": \"f.ttf\", \"size\": 72, \"width\": 1e3, \"x\": 5, \"color\": [1, 0, 0],"
+        " \"text\": {\"by\": \"$q\", \"map\": {\"1\": \"Hi\", \"2\": \"Bye\"}}},\n"
+        " \"c\": {\"kind\": \"text\", \"font\": \"f.ttf\", \"size\": 36, \"width\": 1000, \"text\": \"Hi\"},\n"
+        " \"d\": {\"kind\": \"text\", \"font\": \"g.ttf\", \"size\": 72, \"width\": 1000, \"text\": \"Hi\"},\n"
+        " \"e\": {\"kind\": \"text\", \"font\": \"f.ttf\", \"size\": 72, \"width\": 1000, \"lang\": \"en\", \"text\": \"Hi\"}}}";
+    static const char* const want[5] = { "f.ttf#0|36|1000|0|start|auto||Hi", "f.ttf#0|72|1000|0|start|auto|en|Hi",
+                                         "f.ttf#0|72|1000|0|start|auto||Bye", "f.ttf#0|72|1000|0|start|auto||Hi",
+                                         "g.ttf#0|72|1000|0|start|auto||Hi" };
+    static const char* const stim[5] = { "c", "e", "a", "a,b", "d" };
+    ypt_texts t;
+    char err[512];
+    int rc = derive(def, &t, err, sizeof err), i;
+    CHECK(rc == 0 && t.n_texts == 5, "shared: rc %d, %d texts: %s", rc, t.n_texts, err);
+    for (i = 0; rc == 0 && i < 5 && i < t.n_texts; i++) {
+        char names[64] = "";
+        int k;
+        for (k = 0; k < t.texts[i].n_stimuli; k++) { strcat(names, k ? "," : ""); strcat(names, t.texts[i].stimuli[k]); }
+        CHECK(!strcmp(t.texts[i].key, want[i]) && !strcmp(names, stim[i]) && !strcmp(t.texts[i].stimulus, t.texts[i].stimuli[0]),
+              "shared text %d: '%s' of %s", i, t.texts[i].key, names);
+    }
+    if (rc == 0) ypt_texts_free(&t);
 }
 
 /* --- the forms that give texts ------------------------------------------------ */
@@ -186,6 +228,19 @@ static void test_forms(void) {
     expect_texts("layout keys, canonical numbers",
                  "\"size\": 2.50, \"width\": 1e3, \"line_height\": 1.20, \"align\": \"center\", \"dir\": \"rtl\", \"lang\": \"he\", \"text\": \"x\"",
                  LEAF, "s/x|2.5|1000|1.2|center|rtl|he", "");
+    {
+        /* the key itself: every layout key in its field */
+        char def[1024], err[256];
+        ypt_texts t;
+        def_with(def, sizeof def, "\"size\": 2.50, \"width\": 1e3, \"line_height\": 1.20, \"align\": \"center\", \"dir\": \"rtl\", "
+                                  "\"lang\": \"he\", \"text\": \"x|y\"", LEAF);
+        CHECK(derive(def, &t, err, sizeof err) == 0 && t.n_texts == 1 && !strcmp(t.texts[0].key, "f.ttf#0|2.5|1000|1.2|center|rtl|he|x|y"),
+              "the key of every layout key: '%s'", t.n_texts ? t.texts[0].key : err);
+        ypt_texts_free(&t);
+    }
+    /* the double's shortest decimal, not the source's exact one: the player
+     * reads a double and spells it with yjs_format_double() */
+    expect_texts("a double's spelling", "\"size\": 0.1000000000000000055, \"text\": \"x\"", LEAF, "s/x|0.1|0|0|start|auto|", "");
     expect_texts("size in degrees", "\"size\": 0.8, \"width\": 0, \"text\": \"x\"", LEAF, "s/x|0.8|0|0|start|auto|", "");
     expect_texts("UTF-8 and control bytes in a text", "\"size\": 10, \"text\": \"\\u05e9\\u05dc\\u05d5\\u05dd\\nline\"", LEAF,
                  "s/\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d\nline|10|0|0|start|auto|", "");
@@ -269,6 +324,8 @@ static void test_refusals(void) {
     expect_refused("dir", "\"size\": 3, \"dir\": \"ttb\", \"text\": \"x\"", LEAF, "'dir' is \"ttb\"; it is auto, ltr or rtl");
     expect_refused("lang variable", "\"size\": 3, \"lang\": \"$lang\", \"text\": \"x\"", LEAF, "'lang' is a variable");
     expect_refused("lang number", "\"size\": 3, \"lang\": 5, \"text\": \"x\"", LEAF, "'lang' must be a string");
+    expect_refused("lang not BCP 47", "\"size\": 3, \"lang\": \"en_US\", \"text\": \"x\"", LEAF,
+                   "'lang' is \"en_US\"; a BCP 47 tag has letters, digits and '-' only");
     expect_refused("loop", "\"size\": 3, \"text\": \"$a\"", "{\"name\": \"m\", \"vars\": {\"a\": \"$b\", \"b\": \"$a\"}}",
                    "variables nest more than 8 deep");
     /* the font variable: its own message */
@@ -281,6 +338,9 @@ static void test_refusals(void) {
         CHECK(derive(d2, &t, err, sizeof err) == YPAK_ERR_FORMAT && strstr(err, "'font' is a variable"), "font variable: %s", err);
         snprintf(d2, sizeof d2, "%.*s\"\"%s", (int)(f - def), def, f + 7);
         CHECK(derive(d2, &t, err, sizeof err) == YPAK_ERR_FORMAT && strstr(err, "'font' is empty"), "empty font: %s", err);
+        snprintf(d2, sizeof d2, "%.*s\"a#b.ttf\"%s", (int)(f - def), def, f + 7);
+        CHECK(derive(d2, &t, err, sizeof err) == YPAK_ERR_FORMAT && strstr(err, "'font' is \"a#b.ttf\", which is not a pack entry name"),
+              "a font name with '#': %s", err);
     }
     /* the work bound: v0 to v6 each defined in 9 nodes as the next, v7 a
      * text: 9^7 lookups without the bound */
@@ -302,6 +362,7 @@ static void test_refusals(void) {
 
 int main(void) {
     test_stroop();
+    test_shared();
     test_forms();
     test_opaque();
     test_refusals();
