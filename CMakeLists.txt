@@ -204,6 +204,7 @@ set(YSP_EXAMPLES_ACROSS
     pack/trial_images.c        -
     pack/trial_images_assets.c -
     device/photodiode_check.c  -
+    device/response_lag.c      -
     net/labstreamer_flip.c     -
     audio/av_sync.c            -
     response/trial_two_keyboards.c -
@@ -654,6 +655,9 @@ if(TARGET SDL3::SDL3 AND YSP_BUILD_EXAMPLES)
     # The MCU photodiode on ysp/device.h, its events over ysp/screen.h's
     # input bridge: the first real device's hand test.
     ysp_add_program(photodiode_check examples/device/photodiode_check.c rig devices)
+    # A response box's press to its trigger's write (docs/experiment_format.md,
+    # G8): the measurement behind the input-thread rule.
+    ysp_add_program(response_lag examples/device/response_lag.c rig devices)
     # The LabStreamer against flip records over LSL (docs/net.md): the hand
     # test of ysp/net.h.
     ysp_add_program(net_labstreamer_flip examples/net/labstreamer_flip.c rig devices)

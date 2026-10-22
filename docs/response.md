@@ -1,6 +1,7 @@
 # ysp/response.h
 
-Status: v0.4.0, 2026-10-10. v0.4.0 adds helpers for the frame loop
+Status: v0.7.0, 2026-10-21. v0.7.0 adds the helpers for `ysp/device.h`'s
+response rule ("Response triggers (v0.7.0)"). v0.4.0, 2026-10-10, adds helpers for the frame loop
 (`yrsp_update_frame()`, `yrsp_feed_screen()`, `yrsp_set_landing()`) and
 the data file (`YRSP_DATA_COLS`, `yrsp_data_set()`); "The first trial
 (v0.4.0)" has the decisions and the measurements. v0.3.0 moved every time
@@ -193,6 +194,16 @@ yrsp_feed(&rsp, &in);
   tier 1 only after a loopback test checks the map.
 - Read the port on another thread if you must, but queue the events: only
   the frame thread calls `yrsp_feed()`.
+
+### Send a trigger code at the response
+
+A code that the frame loop sends goes out up to a frame after the press.
+For a response box on `ysp/device.h`, a response rule sends it from the
+box's reader thread instead. Include this header after `ysp/device.h`;
+then `yrsp_rule_choices()` makes the rule's choices from the collector's,
+`yrsp_rule_arm()` follows `yrsp_arm()`, and `yrsp_rule_window()` follows
+each change of the onset. [device.md](device.md#how-to-send-a-code-at-the-response)
+has the steps.
 
 ### Keep key stamps honest when a GUI library runs
 
@@ -952,6 +963,29 @@ Checked on 2026-10-21: `tests/adapt/response_test.c` (21,049 checks)
 with MinGW-w64 gcc 16.1 (`-Werror`), MSVC 19.44 through CMake
 (`msvc-full`, ctest 89 of 89), and gcc 11.4 on WSL2 (C99, C11); the CI
 `--sim` list passes; mutants `pm-01` to `pm-05` caught, 5 of 5.
+
+## Response triggers (v0.7.0)
+
+Gap G8 of [experiment_format.md](experiment_format.md). The rule itself is
+`ysp/device.h`'s ([decisions](device.md#response-rules-v050)); this
+header has the three inline helpers that keep it in step with a
+collector.
+
+| Decision | Why |
+|---|---|
+| The helpers here, not in `ysp/device.h` | They read the collector's onset, window and state; this header owns them. This header stays pure: the helpers call `ysp/device.h` only where a program included it |
+| Outside the include guard, keyed on `YSP_DEVICE_H_INCLUDED` | A program that included this header first includes it again after `ysp/device.h`, as `ysp/device.h` does for `ysp/screen.h` |
+| The window: `[onset + min_rt_ns, onset + duration_ns)` | The same bounds as VALID, so the rule and the collector give one class to a press with the onset they both have |
+| Closed after a response ended the window; open at a deadline end | AFTER_END presses are no responses. A press stamped before the deadline and fed after it still counts, so its code goes too |
+| `yrsp_rule_choices()` refuses crossings, KEYCODE matches, ALL and NONE | The rule matches a press's kind, device and control. A crossing is a SAMPLE level, and a keycode is not a control |
+
+`tests/adapt/device_test.c` checks the helpers (it includes this header
+after `ysp/device.h`): the window closed with no onset, from the plan and
+then from the final onset, its two bounds, closed after the response that
+ended the window, open after a deadline end, closed after `finish()`, and
+the refused choices. Mutants `rule-12` to `rule-15` (in
+`tests/mutate/device.toml`, on this header) caught, 4 of 4. No rule of
+the collector changed: `tests/adapt/response_test.c` is unchanged.
 
 ## Verification
 

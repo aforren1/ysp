@@ -201,8 +201,8 @@ id = "dev-22"
 name = "the flip deadline not recorded"
 test = "device"
 why = "Deadline to write is the trigger's lateness; without it the log cannot show it."
-find = '''                     YDEV_OUT_FLIP, deadline_ns);'''
-replace = '''                     YDEV_OUT_FLIP, 0);'''
+find = '''                     YDEV_OUT_FLIP, deadline_ns, NULL);'''
+replace = '''                     YDEV_OUT_FLIP, 0, NULL);'''
 
 [[mutant]]
 id = "dev-23"
@@ -367,3 +367,132 @@ test = "device"
 why = "A zero kind on PHOTO is SYNC: a photodiode edge is no response."
 find = '''YDEV__P_KIND(YIN_KIND_SYNC)'''
 replace = '''YDEV__P_KIND(YIN_KIND_BOX)'''
+
+# --- response rules (v0.5) --------------------------------------------------
+
+[[mutant]]
+id = "rule-01"
+name = "window start exclusive"
+test = "device"
+why = "A press at onset + min_rt is a response in ysp/response.h; the rule must fire for it too."
+find = '''    if (r->info.armed && e->t >= r->from && e->t < r->until) {'''
+replace = '''    if (r->info.armed && e->t > r->from && e->t < r->until) {'''
+
+[[mutant]]
+id = "rule-02"
+name = "window end inclusive"
+test = "device"
+why = "A press at onset + duration is LATE in ysp/response.h; a code for it would mark a response the data does not have."
+find = '''    if (r->info.armed && e->t >= r->from && e->t < r->until) {'''
+replace = '''    if (r->info.armed && e->t >= r->from && e->t <= r->until) {'''
+
+[[mutant]]
+id = "rule-03"
+name = "no fire limit"
+test = "device"
+why = "The first response ends a trial: a second press must not put a second response code in the EEG."
+find = '''        if (r->d.max_fires < 0 || r->info.fired < (r->d.max_fires ? r->d.max_fires : 1)) {'''
+replace = '''        if (1) {'''
+
+[[mutant]]
+id = "rule-04"
+name = "max_fires 0 means two"
+test = "device"
+why = "0 is the jsPsych default, one response per trial."
+find = '''(r->d.max_fires ? r->d.max_fires : 1)'''
+replace = '''(r->d.max_fires ? r->d.max_fires : 2)'''
+
+[[mutant]]
+id = "rule-05"
+name = "repeats fire"
+test = "device"
+why = "An OS key repeat is a held key, not a press (ysp/response.h R1)."
+find = '''e->type != YIN_PRESS || (e->flags & YIN_REPEAT)) return 0;'''
+replace = '''e->type != YIN_PRESS) return 0;'''
+
+[[mutant]]
+id = "rule-06"
+name = "any device"
+test = "device"
+why = "Two participants' boxes, or a box and a keyboard, are different choices."
+find = '''(!c->device || c->device == e->device)'''
+replace = '''(1)'''
+
+[[mutant]]
+id = "rule-07"
+name = "an arm keeps the count"
+test = "device"
+why = "Each trial gets its own response code; a count kept across arms would send none after the first trial."
+find = '''        r->info.fired = 0;
+        r->info.over = 0;'''
+replace = '''        r->info.over = 0;'''
+
+[[mutant]]
+id = "rule-08"
+name = "window arms"
+test = "device"
+why = "A disarmed rule stays quiet until the next arm: the frame loop moves the window every frame, also between trials."
+find = '''    if (r->info.armed) { r->from = from; r->until = until; }'''
+replace = '''    r->info.armed = 1; r->from = from; r->until = until;'''
+
+[[mutant]]
+id = "rule-09"
+name = "record without the press's t"
+test = "device"
+why = "i64[3] is what the data file subtracts: write start minus the press is the trigger's lag."
+find = '''    rc = ydev__out(out, r->ch[k].code, w, YDEV_OUT_RULE, e->t, &oi);'''
+replace = '''    rc = ydev__out(out, r->ch[k].code, w, YDEV_OUT_RULE, 0, &oi);'''
+
+[[mutant]]
+id = "rule-10"
+name = "the reader skips the rule"
+test = "device"
+why = "desc.rule is the input-thread path; without the call the code waits for the frame loop again."
+find = '''            if (dev->d.rule) (void)ydev_rule_input(dev->d.rule, e);'''
+replace = '''            (void)0;'''
+
+[[mutant]]
+id = "rule-11"
+name = "an old fire's info in a new arm"
+test = "device"
+why = "The frame thread reads the info for the trial it armed; a write that ends after a re-arm belongs to the trial before."
+find = '''    if (arm == r->arms) {
+        r->info.result = rc;'''
+replace = '''    if (arm) {
+        r->info.result = rc;'''
+
+[[mutant]]
+id = "rule-12"
+name = "glue: no minimum RT"
+test = "device"
+file = "ysp/response.h"
+why = "A press before minimum_valid_rt is an anticipation in the collector: no response code."
+find = '''    *from = c->onset.t_ns + c->min_rt_ns;'''
+replace = '''    *from = c->onset.t_ns;'''
+
+[[mutant]]
+id = "rule-13"
+name = "glue: no deadline"
+test = "device"
+file = "ysp/response.h"
+why = "A press at or after onset + duration is LATE in the collector."
+find = '''    if (c->duration_ns > 0) *until = c->onset.t_ns + c->duration_ns;'''
+replace = '''    (void)0;'''
+
+[[mutant]]
+id = "rule-14"
+name = "glue: open after a response ended it"
+test = "device"
+file = "ysp/response.h"
+why = "After the response that ends the window, presses are AFTER_END: with persist or a lost fire, the rule must not send a code for them."
+find = '''    if (c->status == YRSP_ENDED && c->ended_by != 2) return;'''
+replace = '''    if (c->status == YRSP_ENDED && c->ended_by == 99) return;'''
+
+[[mutant]]
+id = "rule-15"
+name = "glue: closed at the deadline"
+test = "device"
+file = "ysp/response.h"
+why = "A press stamped before the deadline and read after it counts in the collector, so its code still goes."
+find = '''    if (c->status == YRSP_ENDED && c->ended_by != 2) return;'''
+replace = '''    if (c->status == YRSP_ENDED) return;'''

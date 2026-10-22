@@ -22,6 +22,9 @@
 #include "ysp/screen.h"
 #define YSP_DEVICE_IMPLEMENTATION
 #include "ysp/device.h"
+/* after ysp/device.h: the response rule's glue (yrsp_rule_*) */
+#define YSP_RESPONSE_IMPLEMENTATION
+#include "ysp/response.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -740,6 +743,8 @@ typedef struct obox {
 } obox;
 
 static obox g_o;
+/* Called inside each write: the frame thread acting while a write runs. */
+static void (*g_write_hook)(void);
 
 static void* o_open(void* user, const char* key, char* found, size_t cap) {
     obox* o = (obox*)user;
@@ -761,6 +766,7 @@ static int o_write(void* conn, const uint8_t* buf, int n) {
     obox* o = (obox*)conn;
     int64_t t = now_fn(NULL);
     if (o->fail) return -1;
+    if (g_write_hook) g_write_hook();
     if (o->nw < 16384) { o->wt[o->nw] = t; o->wfirst[o->nw] = o->nbytes; o->wn[o->nw++] = n; }
     if (o->nbytes + n <= (int)sizeof o->bytes) { memcpy(o->bytes + o->nbytes, buf, (size_t)n); o->nbytes += n; }
     if (!g_real) g_now += o->wcost;
@@ -1225,6 +1231,472 @@ static void test_roles(void) {
     printf("  roles: indexes 1 and 2, kept across a restart, one instance each: ok\n");
 }
 
+/* --- response rules (v0.5) ------------------------------------------------------ */
+
+static yin_event press_at(int64_t t, int kind, uint32_t device, uint32_t control) {
+    yin_event e;
+    memset(&e, 0, sizeof e);
+    e.t = t;
+    e.kind = (uint8_t)kind;
+    e.type = YIN_PRESS;
+    e.device = device;
+    e.control = control;
+    return e;
+}
+
+/* The OUT records with the RULE flag since the last drain. */
+static int rule_records(void) {
+    int i, n = 0;
+    for (i = 0; i < g_nout; i++)
+        if (g_outrec[i].u.u16[18] & YDEV_OUT_RULE) n++;
+    return n;
+}
+
+static ydev_rule g_hook_rule;
+static void rearm_hook(void) { ydev_rule_arm(&g_hook_rule, 0, YDEV_RULE_NEVER); }
+
+static void test_rule(void) {
+    static ydev_rule r, r2;
+    static ydev_device zero;
+    ydev_rule_desc rd;
+    ydev_rule_info ri;
+    ydev_rule_choice ch[3];
+    ydev_desc d = odesc(YBOX_TRIGGERBOX);
+    yin_event e;
+    int64_t T;
+    d.pulse_ns = YRT_MS(2);
+    ostart(&d);
+    odrain();
+
+    memset(ch, 0, sizeof ch);
+    ch[0].kind = YIN_KIND_BOX; ch[0].control = 1; ch[0].code = 11;
+    ch[1].kind = YIN_KIND_BOX; ch[1].device = 7; ch[1].control = 2; ch[1].code = 12;
+    ch[2].kind = YIN_KIND_KEYBOARD; ch[2].code = 13;              /* any key */
+    memset(&rd, 0, sizeof rd);
+    rd.out = &g_out;
+    rd.choices = ch;
+    rd.n_choices = 3;
+
+    /* refusals, each with a message; close is safe after any of them */
+    CHECK(!ydev_rule_open(&r, NULL) && strstr(ydev_rule_error(&r), "NULL desc"));
+    { ydev_rule_desc x = rd; x.out = NULL; CHECK(!ydev_rule_open(&r, &x) && strstr(ydev_rule_error(&r), "out is required")); }
+    { ydev_rule_desc x = rd; x.out = &zero; CHECK(!ydev_rule_open(&r, &x) && strstr(ydev_rule_error(&r), "no outputs")); }
+    { ydev_rule_desc x = rd; x.n_choices = 0; CHECK(!ydev_rule_open(&r, &x) && strstr(ydev_rule_error(&r), "choices")); }
+    { ydev_rule_desc x = rd; x.n_choices = YDEV_RULE_CHOICES + 1; CHECK(!ydev_rule_open(&r, &x)); }
+    { ydev_rule_desc x = rd; x.width_ns = -1; CHECK(!ydev_rule_open(&r, &x) && strstr(ydev_rule_error(&r), "width")); }
+    {
+        ydev_rule_choice big = ch[0];
+        ydev_rule_desc x = rd;
+        big.code = 256;                                            /* a TriggerBox code is a byte */
+        x.choices = &big; x.n_choices = 1;
+        CHECK(!ydev_rule_open(&r, &x) && strstr(ydev_rule_error(&r), "ybox_code_max"));
+        big.code = 3; big.kind = 16;
+        CHECK(!ydev_rule_open(&r, &x) && strstr(ydev_rule_error(&r), "yin_kind"));
+    }
+    ydev_rule_close(&r);
+    ydev_rule_close(&r);
+    e = press_at(g_now, YIN_KIND_BOX, 3, 1);
+    CHECK_I(ydev_rule_input(&r, &e), 0);                           /* a closed rule fires nothing */
+
+    CHECK(ydev_rule_open(&r, &rd));
+    ch[0].code = 99;                                               /* copied at open */
+    T = g_now + YRT_S(1);
+    e = press_at(T, YIN_KIND_BOX, 3, 1);
+    CHECK_I(ydev_rule_input(&r, &e), 0);                           /* not armed */
+    ydev_rule_get(&r, &ri);
+    CHECK(!ri.armed && ri.fired == 0 && ri.choice == -1);
+
+    /* the window is [from, until) on the press's t; one fire per arm */
+    ydev_rule_arm(&r, T, T + YRT_MS(500));
+    e.t = T - 1;          CHECK_I(ydev_rule_input(&r, &e), 0);
+    e.t = T + YRT_MS(500); CHECK_I(ydev_rule_input(&r, &e), 0);
+    e.t = T;              CHECK_I(ydev_rule_input(&r, &e), 1);
+    e.t = T + 5;          CHECK_I(ydev_rule_input(&r, &e), 0);    /* the arm's fire is spent */
+    ydev_rule_get(&r, &ri);
+    CHECK(ri.armed && ri.fired == 1 && ri.over == 1 && ri.result == YDEV_OK && ri.t_event == T);
+    CHECK(ri.code == 11 && ri.control == 1 && ri.device == 3 && ri.choice == 0 && ri.t_after >= ri.t_before);
+    odrain();
+    CHECK_I(rule_records(), 1);
+    CHECK_I(g_nout, 1);
+    if (g_nout == 1) {
+        const yrt_event* q = &g_outrec[0];
+        CHECK(q->u.u32[8] == 11 && q->u.i64[3] == T && q->u.i64[2] == YRT_MS(2) && q->aux == 5);
+        CHECK_I(q->u.u16[18], YDEV_OUT_RULE | YDEV_OUT_PULSE);
+        CHECK(q->u.i64[0] == ri.t_before && q->u.u16[19] == (uint16_t)ri.seq);
+    }
+    CHECK(g_o.nbytes == 2 && g_o.bytes[1] == 11);                  /* the open's 0, then 11 */
+    orun_until(g_now + YRT_MS(3));                                 /* its trailing 0 */
+    odrain();
+    CHECK(g_nout == 1 && (g_outrec[0].u.u16[18] & YDEV_OUT_TRAILING) && !(g_outrec[0].u.u16[18] & YDEV_OUT_RULE));
+
+    /* a new arm: device, kind, type and repeats */
+    ydev_rule_arm(&r, T, YDEV_RULE_NEVER);
+    e = press_at(T + 1, YIN_KIND_BOX, 3, 2);  CHECK_I(ydev_rule_input(&r, &e), 0);   /* choice 1 is device 7 */
+    e = press_at(T + 1, YIN_KIND_MOUSE, 3, 1); CHECK_I(ydev_rule_input(&r, &e), 0);
+    e = press_at(T + 1, YIN_KIND_BOX, 3, 1); e.type = YIN_RELEASE; CHECK_I(ydev_rule_input(&r, &e), 0);
+    e.type = YIN_SAMPLE;                      CHECK_I(ydev_rule_input(&r, &e), 0);
+    e.type = YIN_PRESS; e.flags = YIN_REPEAT; CHECK_I(ydev_rule_input(&r, &e), 0);
+    CHECK_I(ydev_rule_input(&r, NULL), 0);
+    CHECK_I(ydev_rule_input(NULL, &e), 0);
+    e = press_at(T + YRT_S(100), YIN_KIND_BOX, 7, 2); CHECK_I(ydev_rule_input(&r, &e), 1);   /* no end */
+    ydev_rule_get(&r, &ri);
+    CHECK(ri.fired == 1 && ri.over == 0 && ri.code == 12 && ri.choice == 1);
+
+    /* any key; a closed window opened by window(), whose count stays */
+    ydev_rule_arm(&r, YDEV_RULE_NEVER, YDEV_RULE_NEVER);
+    e = press_at(T, YIN_KIND_KEYBOARD, 0, 77);
+    CHECK_I(ydev_rule_input(&r, &e), 0);
+    ydev_rule_window(&r, T - 10, T + 10);
+    CHECK_I(ydev_rule_input(&r, &e), 1);
+    ydev_rule_window(&r, T - 20, T + 20);
+    CHECK_I(ydev_rule_input(&r, &e), 0);
+    ydev_rule_get(&r, &ri);
+    CHECK(ri.fired == 1 && ri.over == 1 && ri.code == 13 && ri.control == 77);
+
+    /* disarm: nothing fires, the info stays; window() does not arm */
+    ydev_rule_disarm(&r);
+    ydev_rule_window(&r, T - 10, T + 10);
+    CHECK_I(ydev_rule_input(&r, &e), 0);
+    ydev_rule_get(&r, &ri);
+    CHECK(!ri.armed && ri.fired == 1 && ri.code == 13);
+
+    /* max_fires 2, no limit, a width of its own, and a set */
+    {
+        ydev_rule_desc x = rd;
+        int k, fires = 0;
+        x.max_fires = 2;
+        x.width_ns = YRT_MS(3);
+        CHECK(ydev_rule_open(&r2, &x));
+        ydev_rule_arm(&r2, 0, YDEV_RULE_NEVER);
+        for (k = 0; k < 3; k++) { e = press_at(T + k, YIN_KIND_BOX, 1, 1); fires += ydev_rule_input(&r2, &e) == 1; }
+        ydev_rule_get(&r2, &ri);
+        CHECK(fires == 2 && ri.fired == 2 && ri.over == 1 && ri.t_event == T + 1);
+        odrain();
+        CHECK(g_nout >= 1 && g_outrec[g_nout - 1].u.i64[2] == YRT_MS(3));
+        ydev_rule_close(&r2);
+        x.max_fires = -1;
+        CHECK(ydev_rule_open(&r2, &x));
+        ydev_rule_arm(&r2, 0, YDEV_RULE_NEVER);
+        for (k = fires = 0; k < 5; k++) { e = press_at(T + k, YIN_KIND_BOX, 1, 1); fires += ydev_rule_input(&r2, &e) == 1; }
+        CHECK_I(fires, 5);
+        ydev_rule_close(&r2);
+    }
+    /* an arm while a fire's write runs: the new arm's info is not the old fire's */
+    {
+        ydev_rule_desc x = rd;
+        x.n_choices = 1;
+        CHECK(ydev_rule_open(&g_hook_rule, &x));
+        ydev_rule_arm(&g_hook_rule, 0, YDEV_RULE_NEVER);
+        g_write_hook = rearm_hook;
+        e = press_at(T, YIN_KIND_BOX, 1, 1);
+        CHECK_I(ydev_rule_input(&g_hook_rule, &e), 1);
+        g_write_hook = NULL;
+        ydev_rule_get(&g_hook_rule, &ri);
+        CHECK(ri.armed && ri.fired == 0 && ri.choice == -1 && ri.t_event == 0);
+        CHECK_I(ydev_rule_input(&g_hook_rule, &e), 1);                /* the new arm's own fire */
+        ydev_rule_close(&g_hook_rule);
+    }
+    orun_until(g_now + YRT_MS(5));
+    ydev_close(&g_out);
+    d.pulse_ns = 0;                                                /* the output holds: a set */
+    ostart(&d);
+    odrain();
+    {
+        ydev_rule_desc x = rd;
+        x.n_choices = 1;
+        CHECK(ydev_rule_open(&r2, &x));
+        ydev_rule_arm(&r2, 0, YDEV_RULE_NEVER);
+        e = press_at(T, YIN_KIND_BOX, 1, 1);
+        CHECK_I(ydev_rule_input(&r2, &e), 1);
+        odrain();
+        CHECK(g_nout == 1 && g_outrec[0].u.u16[18] == YDEV_OUT_RULE && g_outrec[0].u.i64[2] == 0);
+        /* the output closed under it: a failed write, in the info */
+        ydev_close(&g_out);
+        ydev_rule_arm(&r2, 0, YDEV_RULE_NEVER);
+        CHECK_I(ydev_rule_input(&r2, &e), YDEV_ERR_STATE);
+        ydev_rule_get(&r2, &ri);
+        CHECK(ri.fired == 1 && ri.result == YDEV_ERR_STATE);
+        ydev_rule_close(&r2);
+    }
+    ydev_rule_close(&r);
+    printf("  rule: window, one fire per arm, choices by kind, device and control, repeats and releases ignored: ok\n");
+}
+
+/* desc.rule on the reader: a line board's press fires before the sink sees
+ * it, and the record has the press's mapped t. */
+static void test_rule_reader(void) {
+    static ydev_rule r;
+    static ydev_device in;
+    ydev_rule_desc rd;
+    ydev_rule_choice ch;
+    ydev_rule_info ri;
+    ydev_desc d = odesc(YBOX_TRIGGERBOX), id;
+    int64_t t_edge;
+    int k, presses = 0;
+    d.pulse_ns = YRT_MS(2);
+    ostart(&d);
+    odrain();
+    memset(&ch, 0, sizeof ch);
+    ch.kind = YIN_KIND_BOX;
+    ch.control = 1;
+    ch.code = 21;
+    memset(&rd, 0, sizeof rd);
+    rd.out = &g_out;
+    rd.choices = &ch;
+    rd.n_choices = 1;
+    rd.max_fires = -1;
+    CHECK(ydev_rule_open(&r, &rd));
+    ydev_rule_arm(&r, 0, YDEV_RULE_NEVER);
+
+    g_nev = 0;
+    board_init(YBOX_LINE, 20.0, 125000.0, 50000.0);
+    t_edge = g_now + YRT_S(3);
+    schedule_edges(t_edge, t_edge + YRT_S(2), YRT_MS(100), 0);    /* 10 presses, 10 releases */
+    id = desc_for(YBOX_LINE);
+    id.kind = YIN_KIND_BOX;
+    id.rule = &r;
+    CHECK(ydev_open(&in, &id));
+    while (g_now < t_edge + YRT_S(3)) {
+        int64_t before = g_now;
+        (void)ydev_poll(&in, YRT_MS(20));
+        (void)ydev_poll(&g_out, 0);
+        if (g_now == before) g_now += 20000000;
+    }
+    ydev_close(&in);
+    odrain();
+    for (k = 0; k < g_nev; k++) if (g_ev[k].type == YIN_PRESS) presses++;
+    ydev_rule_get(&r, &ri);
+    CHECK_I(presses, 10);
+    CHECK_I(ri.fired, 10);
+    CHECK_I(rule_records(), 10);
+    {
+        /* each RULE record carries its press's t, as the sink got it */
+        int j = 0;
+        for (k = 0; k < g_nout && j < g_nev; k++) {
+            if (!(g_outrec[k].u.u16[18] & YDEV_OUT_RULE)) continue;
+            while (j < g_nev && g_ev[j].type != YIN_PRESS) j++;
+            if (j < g_nev) { CHECK(g_outrec[k].u.i64[3] == g_ev[j].t && g_outrec[k].u.u32[8] == 21); j++; }
+        }
+    }
+    ydev_rule_close(&r);
+    ydev_close(&g_out);
+    printf("  rule on the reader: 10 presses, 10 writes, each with its press's t: ok\n");
+}
+
+/* The glue of ysp/response.h: the window follows the collector's onset,
+ * and closes when the collector ended on a response, not at its deadline. */
+static void test_rule_glue(void) {
+    static ydev_rule r;
+    static yrsp_collector c;
+    ydev_rule_desc rd;
+    ydev_rule_choice rc[4];
+    yrsp_desc cd;
+    yrsp_choice cc[2];
+    yrsp_onset on;
+    yin_event e;
+    static const uint32_t codes[2] = { 21, 22 };
+    ydev_desc d = odesc(YBOX_TRIGGERBOX);
+    int64_t T = g_now + YRT_S(10), O = T + YRT_S(1);
+    d.pulse_ns = YRT_MS(2);
+    ostart(&d);
+    memset(cc, 0, sizeof cc);
+    cc[0].key = "f";
+    cc[1].kind = YRSP_KIND_BOX; cc[1].control = 2;
+    memset(&cd, 0, sizeof cd);
+    cd.choices = cc;
+    cd.n_choices = 2;
+    cd.min_rt_ns = YRT_MS(100);
+    cd.duration_ns = YRT_MS(1500);
+    CHECK(yrsp_open(&c, &cd));
+    CHECK_I(yrsp_rule_choices(&c, codes, rc, 1), -1);                        /* no room */
+    CHECK_I(yrsp_rule_choices(&c, codes, rc, 4), 2);
+    CHECK(rc[0].kind == YIN_KIND_KEYBOARD && rc[0].control == (uint32_t)yrsp_scancode("f") && rc[0].code == 21);
+    CHECK(rc[1].kind == YIN_KIND_BOX && rc[1].control == 2 && rc[1].device == 0 && rc[1].code == 22);
+    memset(&rd, 0, sizeof rd);
+    rd.out = &g_out;
+    rd.choices = rc;
+    rd.n_choices = 2;
+    rd.max_fires = -1;          /* so only the window can stop a fire */
+    CHECK(ydev_rule_open(&r, &rd));
+
+    /* armed with no onset: closed */
+    yrsp_arm(&c, T);
+    yrsp_rule_arm(&r, &c);
+    e = press_at(O + YRT_MS(200), YIN_KIND_BOX, 1, 2);
+    CHECK_I(ydev_rule_input(&r, &e), 0);
+    /* the plan: [onset + min_rt, onset + duration) */
+    memset(&on, 0, sizeof on);
+    on.t_ns = O;
+    on.frame = -1;
+    on.src = YRSP_ONSET_PLAN;
+    CHECK(yrsp_set_onset(&c, &on) >= 0);
+    yrsp_rule_window(&r, &c);
+    e.t = O + YRT_MS(100) - 1;  CHECK_I(ydev_rule_input(&r, &e), 0);   /* an anticipation */
+    e.t = O + YRT_MS(1500);     CHECK_I(ydev_rule_input(&r, &e), 0);   /* late */
+    e.t = O + YRT_MS(100);      CHECK_I(ydev_rule_input(&r, &e), 1);
+    /* the final onset a frame later moves the window */
+    on.t_ns = O + YRT_MS(17);
+    on.final = 1;
+    on.src = YRSP_ONSET_FLIP;
+    CHECK(yrsp_set_onset(&c, &on) >= 0);
+    yrsp_rule_window(&r, &c);
+    e.t = O + YRT_MS(110);      CHECK_I(ydev_rule_input(&r, &e), 0);
+    e.t = O + YRT_MS(117);      CHECK_I(ydev_rule_input(&r, &e), 1);
+    /* the collector ends on that press: the window closes */
+    CHECK_I(yrsp_feed(&c, &e), YRSP_ENDED);
+    yrsp_rule_window(&r, &c);
+    e.t = O + YRT_MS(200);      CHECK_I(ydev_rule_input(&r, &e), 0);
+    /* ended at the deadline: a press stamped before it still fires */
+    yrsp_arm(&c, T);
+    CHECK(yrsp_set_onset(&c, &on) >= 0);
+    yrsp_rule_arm(&r, &c);
+    CHECK_I(yrsp_update(&c, O + YRT_S(2)), YRSP_ENDED);
+    yrsp_rule_window(&r, &c);
+    e.t = O + YRT_MS(17) + YRT_MS(1500) - 1;  CHECK_I(ydev_rule_input(&r, &e), 1);
+    /* after finish(): closed */
+    {
+        yrsp_result res;
+        (void)yrsp_finish(&c, &res);
+    }
+    yrsp_rule_window(&r, &c);
+    CHECK_I(ydev_rule_input(&r, &e), 0);
+    /* choices the rule cannot read */
+    {
+        static yrsp_collector c2;
+        yrsp_desc x = cd;
+        yrsp_choice k = cc[1];
+        k.cross = YRSP_CROSS_RISING;
+        k.level = 0.5f;
+        x.choices = &k;
+        x.n_choices = 1;
+        CHECK(yrsp_open(&c2, &x));
+        CHECK_I(yrsp_rule_choices(&c2, codes, rc, 4), -1);
+        memset(&x, 0, sizeof x);                                             /* ALL mode */
+        CHECK(yrsp_open(&c2, &x));
+        CHECK_I(yrsp_rule_choices(&c2, codes, rc, 4), -1);
+    }
+    ydev_rule_close(&r);
+    yrsp_close(&c);
+    ydev_close(&g_out);
+    printf("  rule glue: the window from the collector's plan and final onset, closed on a response: ok\n");
+}
+
+/* Races, on the real clock: producer threads press while the frame thread
+ * arms, moves the window and pulses the same output itself. Each arm fires
+ * at most max_fires; every fire is one RULE record; records are in write
+ * order. ThreadSanitizer runs this on WSL2. */
+#define RACE_THREADS 4
+static ydev_rule g_race_rule;
+static volatile int g_race_stop;
+static int g_race_fires[RACE_THREADS];
+#if defined(_WIN32)
+static DWORD WINAPI race_main(LPVOID arg)
+#else
+static void* race_main(void* arg)
+#endif
+{
+    int id = (int)(intptr_t)arg;
+    for (;;) {
+        yin_event e = press_at(yrt_now_ns(), YIN_KIND_BOX, (uint32_t)id + 1, 1);
+#if defined(_WIN32)
+        if (InterlockedCompareExchange((volatile LONG*)&g_race_stop, 0, 0)) break;
+#else
+        if (__atomic_load_n(&g_race_stop, __ATOMIC_ACQUIRE)) break;
+#endif
+        if (ydev_rule_input(&g_race_rule, &e) == 1) g_race_fires[id]++;
+        (void)yrt_sleep_ns(50000);
+    }
+    return 0;
+}
+
+static void test_rule_race(void) {
+    ydev_desc d = odesc(YBOX_TRIGGERBOX);
+    ydev_rule_desc rd;
+    ydev_rule_choice ch;
+    ydev_rule_info ri;
+    int arms = 0, k, total = 0, over_max = 0, nrule = 0, seq_bad = 0, own = 0;
+    int64_t end;
+#if defined(_WIN32)
+    HANDLE th[RACE_THREADS];
+#else
+    pthread_t th[RACE_THREADS];
+#endif
+    g_real = true;
+    d.manual = false;
+    d.now = NULL;
+    d.no_elevate = true;
+    d.pulse_ns = YRT_MS(1);
+    memset(&g_o, 0, sizeof g_o);
+    ring_reset();
+    CHECK(ydev_open(&g_out, &d));
+    CHECK_I(ydev_wait_running(&g_out, YRT_S(2)), YDEV_RUNNING);
+    odrain();
+    memset(&ch, 0, sizeof ch);
+    ch.kind = YIN_KIND_BOX;
+    ch.code = 31;
+    memset(&rd, 0, sizeof rd);
+    rd.out = &g_out;
+    rd.choices = &ch;
+    rd.n_choices = 1;
+    rd.max_fires = 2;
+    CHECK(ydev_rule_open(&g_race_rule, &rd));
+    g_race_stop = 0;
+    memset(g_race_fires, 0, sizeof g_race_fires);
+    for (k = 0; k < RACE_THREADS; k++) {
+#if defined(_WIN32)
+        th[k] = CreateThread(NULL, 0, race_main, (LPVOID)(intptr_t)k, 0, NULL);
+#else
+        pthread_create(&th[k], NULL, race_main, (void*)(intptr_t)k);
+#endif
+    }
+    end = yrt_now_ns() + YRT_MS(600);
+    while (yrt_now_ns() < end) {
+        int64_t now = yrt_now_ns();
+        ydev_rule_arm(&g_race_rule, now, YDEV_RULE_NEVER);
+        arms++;
+        (void)yrt_sleep_ns(500000);
+        ydev_rule_window(&g_race_rule, now - YRT_MS(1), YDEV_RULE_NEVER);
+        ydev_rule_get(&g_race_rule, &ri);
+        if (ri.fired > 2) over_max++;
+        if (arms % 4 == 0 && ydev_out_pulse(&g_out, 77, YRT_MS(1)) == YDEV_OK) own++;   /* the frame loop's own */
+        (void)yrt_sleep_ns(500000);
+    }
+#if defined(_WIN32)
+    InterlockedExchange((volatile LONG*)&g_race_stop, 1);
+    for (k = 0; k < RACE_THREADS; k++) { WaitForSingleObject(th[k], INFINITE); CloseHandle(th[k]); }
+#else
+    __atomic_store_n(&g_race_stop, 1, __ATOMIC_RELEASE);
+    for (k = 0; k < RACE_THREADS; k++) pthread_join(th[k], NULL);
+#endif
+    ydev_close(&g_out);
+    ydev_rule_close(&g_race_rule);
+    for (k = 0; k < RACE_THREADS; k++) total += g_race_fires[k];
+    odrain();
+    {
+        uint16_t last = 0;
+        int first = 1;
+        for (k = 0; k < g_nout; k++) {
+            const yrt_event* q = &g_outrec[k];
+            if (q->u.u16[18] & YDEV_OUT_RULE) {
+                nrule++;
+                if (q->u.u32[8] != 31 || (q->u.u16[18] & YDEV_OUT_FAILED)) seq_bad++;
+            }
+            if (q->u.u16[18] & YDEV_OUT_TRAILING) continue;   /* shares its pulse's number */
+            if (!first && q->u.u16[19] != (uint16_t)(last + 1)) seq_bad++;
+            last = q->u.u16[19];
+            first = 0;
+        }
+    }
+    printf("  rule race: %d arms, %d fires from %d threads, %d own pulses, %d RULE records\n", arms, total,
+           RACE_THREADS, own, nrule);
+    CHECK(arms > 50);
+    CHECK(total > 0 && total <= 2 * arms);
+    CHECK_I(over_max, 0);
+    CHECK_I(nrule, total);
+    CHECK_I(seq_bad, 0);
+    g_real = false;
+}
+
 /* v0.4: the parameter tables. kind_name() has no default, so -Wswitch
  * (CI's -Wall -Werror) stops the build when yin_kind gains a value, and the
  * value check then fails until the kind row lists it. */
@@ -1478,6 +1950,10 @@ int main(void) {
     test_out_hold();
     test_out_report();
     test_roles();
+    test_rule();
+    test_rule_reader();
+    test_rule_glue();
+    test_rule_race();
     test_params();
     test_out_timing();
     if (g_failures) {

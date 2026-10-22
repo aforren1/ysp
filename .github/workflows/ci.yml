@@ -867,7 +867,7 @@ jobs:
       # out of this list is compiled nowhere on CI. ctest below runs every
       # test that matches its pattern, built or not.
       - name: Build
-        run: cmake --build build --config Release --target compile_screen_c compile_screen_cxx compile_screen_com test_screen screen_hello screen_flipstats screen_input screen_abort screen_gamma screen_sync_check screen_loopback compile_gfx_c compile_gfx_cxx test_gfx gfx_hello gfx_trial gfx_load gfx_calib gfx_bench gfx_gallery gfx_text gfx_gratings gfx_luminance_bits gfx_clut_sync gfx_filtered_noise gfx_gaze_contingent gfx_capture gfx_rdk gfx_rdk_bench trial_rdk compile_video_c compile_video_cxx compile_video_com test_video video_play video_bench video_check test_response_sdl test_input_sdl trial_keyboard trial_same_different trial_srt trial_adjustment trial_mouse_tracking trial_audio_keyboard trial_stop_signal trial_sternberg trial_2afc_adaptive trial_two_keyboards trial_eeg_triggers trial_scanner_sync gfx_gamma_null trial_movie color_patch audio_av_sync web_tutorial web_rdk_staircase web_selftest web_av_sync
+        run: cmake --build build --config Release --target compile_screen_c compile_screen_cxx compile_screen_com test_screen screen_hello screen_flipstats screen_input screen_abort screen_gamma screen_sync_check screen_loopback compile_gfx_c compile_gfx_cxx test_gfx gfx_hello gfx_trial gfx_load gfx_calib gfx_bench gfx_gallery gfx_text gfx_gratings gfx_luminance_bits gfx_clut_sync gfx_filtered_noise gfx_gaze_contingent gfx_capture gfx_rdk gfx_rdk_bench trial_rdk compile_video_c compile_video_cxx compile_video_com test_video video_play video_bench video_check test_response_sdl test_input_sdl trial_keyboard trial_same_different trial_srt trial_adjustment trial_mouse_tracking trial_audio_keyboard trial_stop_signal trial_sternberg trial_2afc_adaptive trial_two_keyboards trial_eeg_triggers response_lag trial_scanner_sync gfx_gamma_null trial_movie color_patch audio_av_sync web_tutorial web_rdk_staircase web_selftest web_av_sync
 
       # ysp/gfx.h's pixel checks must run where software GL exists; macOS has
       # no EGL, so its test runs the CPU checks only.
@@ -935,6 +935,10 @@ jobs:
           # a write's deadline or a byte is off (virtual clock).
           expect 0 "$bin/trial_eeg_triggers" --sim --out "$RUNNER_TEMP/trial_eeg_triggers.csv"
           expect 2 "$bin/trial_eeg_triggers" --pulse 0
+          # A response's code from the frame loop and from ysp/device.h's response rule: one write per press
+          # on each path, the rule's record with the press's t (no window, real clock: about 3 s).
+          expect 0 "$bin/response_lag" --sim
+          expect 2 "$bin/response_lag" --sim --pace window
           # PsychoPy's fMRI demos: trials on a base anchored at a scripted or emulated scanner pulse; 1 if an
           # onset, a volume or a pulse is off (virtual clock).
           expect 0 "$bin/trial_scanner_sync" --sim --out "$RUNNER_TEMP/trial_scanner_sync.csv" --pulses "$RUNNER_TEMP/trial_scanner_sync_pulses.csv"

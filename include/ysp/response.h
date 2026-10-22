@@ -1,4 +1,4 @@
-/* ysp/response.h - v0.6.0 - public domain single-header response collector
+/* ysp/response.h - v0.7.0 - public domain single-header response collector
  *
  *   Turns timestamped input events from any device into the response of a
  *   trial: which key or button, when, measured from the stimulus onset that
@@ -16,8 +16,9 @@
  *   are int64 ns on the ysp/rt.h clock, passed in. Needs only the C
  *   standard library. C99 is the floor: it builds as C99, C11 and C++17,
  *   and in the C dialect MSVC compiles by default. Small inline helpers
- *   appear when ysp/screen.h, ysp/audio.h, ysp/timeline.h, ysp/trials.h or
- *   SDL3's SDL_events.h was included before it (THE FRAME LOOP, DATA).
+ *   appear when ysp/screen.h, ysp/audio.h, ysp/timeline.h, ysp/trials.h,
+ *   ysp/device.h or SDL3's SDL_events.h was included before it (THE FRAME
+ *   LOOP, DATA, RESPONSE TRIGGERS).
  *
  *   ---------------------------------------------------------------------
  *   USAGE
@@ -232,6 +233,34 @@
  *   name with YTR_COL_SET; yrsp_data_set() finds the columns by name.
  *
  *   ---------------------------------------------------------------------
+ *   RESPONSE TRIGGERS (v0.7)
+ *   ---------------------------------------------------------------------
+ *   A code at the response (an EEG trigger per button) sent from the frame
+ *   loop goes out up to a frame after the press. ysp/device.h's response
+ *   rule (RESPONSE RULES there) sends it from the box's reader thread.
+ *   With ysp/device.h included first (or this header included again after
+ *   it), three inline helpers keep the rule and this collector in step:
+ *     yrsp_rule_choices(c, codes, out, cap)   the rule's choices from a
+ *         LIST collector's: choice i fires codes[i]; -1 for a crossing, a
+ *         KEYCODE match, ALL or NONE mode, or too small a cap
+ *     yrsp_rule_arm(r, c)                       after yrsp_arm(): a new
+ *         window for the rule, its fire count 0
+ *     yrsp_rule_window(r, c)                    each frame after the onset
+ *         can move: the rule's window follows it
+ *   The window is [onset + min_rt_ns, onset + duration_ns), from the plan
+ *   until the final onset comes (the press's class, THE WINDOW AND RT),
+ *   open-ended without a duration, closed without an onset, after
+ *   finish(), and once the window ended on a response. A deadline does not
+ *   close it: a press stamped before the deadline still counts here, so
+ *   its code still goes. The rule fires for each press it sees as a
+ *   response, at most max_fires per arm (set it from persist and
+ *   max_responses). What it cannot see: a press it took for a response
+ *   that a later final onset reclassifies (a frame shown late), and the
+ *   earliest-stamp rule when two devices' presses arrive out of order;
+ *   its info (ydev_rule_get()) gives the press it fired for, to compare
+ *   with the result.
+ *
+ *   ---------------------------------------------------------------------
  *   REPEATS, HELD KEYS AND DOUBLE REPORTS
  *   ---------------------------------------------------------------------
  *     R1  A PRESS with YRSP_IN_REPEAT is not a new press, unless only
@@ -377,7 +406,9 @@
  *   as down (per device). The collector is about 6 KB, caller-allocated;
  *   nothing is allocated. One thread: a
  *   reader thread (a serial port, an eye tracker) queues its events, and
- *   the frame thread feeds them.
+ *   the frame thread feeds them. A code that must not wait for the frame
+ *   thread goes from the reader through a ysp/device.h rule (RESPONSE
+ *   TRIGGERS).
  *   Errors: yrsp_open() clears the message, and a failed open leaves one.
  *   Every other call that returns an error code (set_onset, feed, update,
  *   finish) writes the message before it returns ("ysp_response:
@@ -416,6 +447,10 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.7.0 - RESPONSE TRIGGERS: yrsp_rule_choices(), yrsp_rule_arm() and
+ *          yrsp_rule_window(), inline where ysp/device.h came first (or
+ *          with this header included again after it), for ysp/device.h
+ *          v0.5's response rule. No rule of the collector changed.
  *   v0.6.0 - PARAMETERS: yrsp_params() and yrsp_param, the table of the
  *          desc and choice fields a definition sets, with enum values.
  *          No rule changed.
@@ -481,6 +516,10 @@
  *          releases, the trace, the result and its CSV row, the SDL3
  *          adapter.
  *
+ *   STATUS: v0.7.0, 2026-10-21: the rule glue only, checked by
+ *   tests/adapt/device_test.c (which includes this header after
+ *   ysp/device.h) with MSVC 19.44, MinGW-w64 gcc 16.1 and gcc 11.4 on
+ *   WSL2; rule-12 to rule-15 caught. response_test.c is unchanged.
  *   STATUS: v0.5.0, 2026-10-20: the column names only. The test (20,644
  *   checks; 20,709 with the SDL adapter) passes with MSVC 19.44 and
  *   MinGW-w64 gcc 16.1, on Linux (WSL2) and under emcc; fl-08 to fl-10
@@ -523,9 +562,9 @@
 #define YSP_RESPONSE_H_INCLUDED
 
 #define YRSP_VERSION_MAJOR 0
-#define YRSP_VERSION_MINOR 6
+#define YRSP_VERSION_MINOR 7
 #define YRSP_VERSION_PATCH 0
-#define YRSP_VERSION_STRING "0.6.0"
+#define YRSP_VERSION_STRING "0.7.0"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -1046,6 +1085,56 @@ static inline int yrsp_data_set(ytr_data* w, const yrsp_result* r) {
 #endif
 
 #endif /* YSP_RESPONSE_H_INCLUDED */
+
+/* Outside the include guard: including this header again after
+ * ysp/device.h adds the glue (RESPONSE TRIGGERS). */
+#if defined(YSP_DEVICE_H_INCLUDED) && !defined(YRSP__DEVICE_GLUE)
+#define YRSP__DEVICE_GLUE
+/* v0.7, RESPONSE TRIGGERS: the press window of a ysp/device.h response
+ * rule, from the collector: [onset + min_rt, onset + duration) while it is
+ * armed with an onset (the plan or the final one), the end open without a
+ * duration; closed with no onset, after finish(), and after the window
+ * ended on a response. A deadline does not close it: a press stamped
+ * before the deadline and read after it still fires, as it still counts
+ * here. */
+static inline void yrsp__rule_bounds(const yrsp_collector* c, int64_t* from, int64_t* until) {
+    *from = *until = YDEV_RULE_NEVER;
+    if (!c->ok || !c->armed || c->finished || !c->have_onset) return;
+    if (c->status == YRSP_ENDED && c->ended_by != 2) return;
+    *from = c->onset.t_ns + c->min_rt_ns;
+    if (c->duration_ns > 0) *until = c->onset.t_ns + c->duration_ns;
+}
+/* After yrsp_arm(): a new window for the rule, its fire count 0. */
+static inline void yrsp_rule_arm(ydev_rule* r, const yrsp_collector* c) {
+    int64_t from, until;
+    yrsp__rule_bounds(c, &from, &until);
+    ydev_rule_arm(r, from, until);
+}
+/* Each frame after the onset can move (yrsp_set_landing(),
+ * yrsp_update_frame(), yrsp_set_onset()): the window follows the onset. */
+static inline void yrsp_rule_window(ydev_rule* r, const yrsp_collector* c) {
+    int64_t from, until;
+    yrsp__rule_bounds(c, &from, &until);
+    ydev_rule_window(r, from, until);
+}
+/* The rule's choices from a LIST collector's: choice i fires codes[i].
+ * Returns the count, or -1 when a choice is a crossing or matches by
+ * keycode (the rule reads controls), or the collector is not LIST. */
+static inline int yrsp_rule_choices(const yrsp_collector* c, const uint32_t* codes, ydev_rule_choice* out, int cap) {
+    int i;
+    if (!c->ok || c->d.mode != YRSP_CHOICES_LIST || !codes || !out || c->d.n_choices > cap) return -1;
+    for (i = 0; i < c->d.n_choices; i++) {
+        const yrsp_choice* h = &c->ch[i];
+        if (h->cross || h->match != YRSP_MATCH_SCANCODE) return -1;
+        out[i].kind = h->kind;
+        out[i].reserved_[0] = out[i].reserved_[1] = out[i].reserved_[2] = 0;
+        out[i].device = h->device;
+        out[i].control = h->control;
+        out[i].code = codes[i];
+    }
+    return c->d.n_choices;
+}
+#endif
 
 /* =======================================================================
  *

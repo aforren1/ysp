@@ -34,7 +34,11 @@
  * The row says how late each write was, so an analysis can shift the
  * epochs: the code's own time is the write's start, which over USB is
  * where the code reaches the device (docs/serial.md, Pulses), plus the
- * output's write-to-edge latency from the rig profile's loopback.
+ * output's write-to-edge latency from the rig profile's loopback. A
+ * response box on ysp/device.h does not wait for the frame loop: its
+ * reader thread writes the code through a response rule (ysp/device.h,
+ * RESPONSE RULES; examples/device/response_lag.c measures both paths).
+ * The keys here come from SDL, which has no such hook.
  *
  * The data file has one row per trial (ysp/trials.h's data writer): the
  * session's columns (index, ..., side, key_answer), then trial_index,
