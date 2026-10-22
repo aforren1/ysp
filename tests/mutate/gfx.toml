@@ -1381,3 +1381,21 @@ env = { YGFX_TEST_PARTS = "none", YGFX_TEST_DEVICES = "none" }
 why = "v0.17.1: the error must not show a cut path as a whole one."
 find = '        memcpy(list + u + m, "...", 4);'
 replace = '        list[u + m] = 0;'
+
+[[mutant]]
+id = "cp-18"
+name = "the writer's frames are never reclaimed"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none", YGFX_TEST_DEVICES = "none" }
+why = "2026-10-22: the threaded capture case runs frames until 10 are written; slots the writer finished must come back, or it fails at 4000 frames."
+find = '    done = yrt_pump_done_seq(&c->pump);'
+replace = '    done = 0;'
+
+[[mutant]]
+id = "cp-19"
+name = "a slot reclaimed before the writer is done"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "none", YGFX_TEST_DEVICES = "none" }
+why = "2026-10-22: a slot freed while the writer still has it is copied over; the frames written must match the frames retired."
+find = '        if (s->state == YGFX__CS_QUEUED && done >= s->seq) ygfx__cap_retire(g, c, i, s->result, gl_ok);'
+replace = '        if (s->state == YGFX__CS_QUEUED) ygfx__cap_retire(g, c, i, s->result, gl_ok);'

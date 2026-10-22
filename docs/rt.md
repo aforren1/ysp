@@ -164,6 +164,18 @@ Edge mode spins until the other clock changes. GetTickCount64 changes every
 15.6 ms at the default Windows tick, so 16 edges would spin for 250 ms. The
 default is 4 edges, which measured 62 ms per call.
 
+The edge-mode timeout (100 ms by default) is wall-clock time. On
+2026-10-22 the test's case on a 1 ms clock failed in 2 of 10 runs with
+128 busy threads on 16 logical processors: the timeout ran out after 3
+edges, or the 4 edges took more than its 50 ms limit. The header was
+right; the test was not. That case now sets a 30 s timeout and checks a
+lower bound only (4 edges of a 1 ms clock take at least 3 ms). A frozen
+clock with the default timeout checks that the call gives up after at
+least 100 ms. Mutants `corr-01` to `corr-03` in `tests/mutate/rt.toml`
+check the edge count, the default timeout and the edge rule.
+After the change: 0 of 30 runs failed under the same load (MSVC Debug,
+ctest).
+
 `yrt_ticks_to_ns()` exists so that a QPC value from another API (DXGI's
 SyncQPCTime) needs no correlation at all. It is the function
 `yrt_now_ns()` uses, and the test checks it against a 128-bit reference.

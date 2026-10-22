@@ -1198,6 +1198,7 @@ static void test_synthesis(void) {
 /* The device on a real thread against the frame thread: plays, cancels and
  * updates race with renders. ThreadSanitizer checks the two queues. */
 static uint32_t g_thr_stop = 0;   /* atomic: the header's own helpers */
+static int64_t g_thr_blocks = 0;  /* atomic: blocks the device thread rendered */
 #if defined(_WIN32)
 static unsigned __stdcall thr_main(void* p)
 #else
@@ -1216,6 +1217,7 @@ static void* thr_main(void* p)
         if (s->tape && s->W + s->period <= TAPE_FRAMES)
             memcpy(s->tape + s->W * 2, s->out_mem, sizeof(float) * 2 * (size_t)s->period);
         s->W += s->period;
+        yau__st64(&g_thr_blocks, yau__ld64(&g_thr_blocks) + 1);
         yrt_sleep_until(yrt_now_ns() + 1000000, 0);
     }
 #if defined(_WIN32)
@@ -1223,6 +1225,29 @@ static void* thr_main(void* p)
 #else
     return NULL;
 #endif
+}
+
+/* A wait on another thread's progress, not on the wall clock. With 128
+ * busy threads on 16 cores, a 1 ms sleep took about 27 ms and the device
+ * thread missed 30 of them in a row: a play was stopped before the device
+ * had taken it, and the test failed with no fault in the header (2026-10-22).
+ * A wait fails, at the wait and with what it waited for, only after the
+ * thread made `steps` steps (the device: blocks) without the event; the
+ * wall-clock limit only stops a hang. */
+typedef struct { const int64_t* ctr; int64_t b0, t0; } prog_wait;
+#define PROG_HANG_NS 300000000000LL   /* 300 s */
+static void prog_start(prog_wait* w, const int64_t* ctr) { w->ctr = ctr; w->b0 = yau__ld64(ctr); w->t0 = yrt_now_ns(); }
+/* True to wait on (after a 1 ms sleep); false after the failure is printed. */
+static int prog_more(const prog_wait* w, int64_t steps, int line, const char* what) {
+    int64_t b = yau__ld64(w->ctr) - w->b0;
+    if (b >= steps || yrt_now_ns() - w->t0 > PROG_HANG_NS) {
+        fprintf(stderr, "audio_test: FAIL at line %d: %s, after %lld steps of the thread and %.1f s\n", line, what,
+                (long long)b, (double)(yrt_now_ns() - w->t0) / 1e9);
+        g_failures++;
+        return 0;
+    }
+    yrt_sleep_until(yrt_now_ns() + 1000000, 0);
+    return 1;
 }
 
 static void test_threads(void) {
@@ -1253,15 +1278,18 @@ static void test_threads(void) {
             if (i % 50 == 0) (void)yau_stop_at(&g_au, 0, 0, 0);
             (void)yau_update(&g_au);
         }
-        for (i = 0; i < 2000 && done < n; i++) {
-            int j;
-            yrt_sleep_until(yrt_now_ns() + 1000000, 0);
-            done = 0;
-            for (j = 0; j < n; j++) {
-                yau_onset r = { 0 };
-                int rc = yau_result(&g_au, ids[j], &r);
-                if (rc == YAU_OK || rc == YAU_ERR_NOT_FOUND) done++;
-            }
+        {
+            prog_wait w;
+            prog_start(&w, &g_thr_blocks);
+            do {
+                int j;
+                done = 0;
+                for (j = 0; j < n; j++) {
+                    yau_onset r = { 0 };
+                    int rc = yau_result(&g_au, ids[j], &r);
+                    if (rc == YAU_OK || rc == YAU_ERR_NOT_FOUND) done++;
+                }
+            } while (done < n && prog_more(&w, 10000, __LINE__, "threads: not every sound completed"));
         }
         yau__st32(&g_thr_stop, 1);
 #if defined(_WIN32)
@@ -2058,6 +2086,7 @@ static void test_stream_gap_storm(void) {
  * producer resets it between plays. Checked after the run from the tape
  * and each play's record. ThreadSanitizer checks the ring and the state. */
 static uint32_t g_prod_stop = 0, g_prod_reset = 0;
+static int64_t g_prod_steps = 0;   /* atomic: the producer's loops */
 static uint64_t g_prod_rng = 99;
 static double prod_rand(void) {
     g_prod_rng = g_prod_rng * 6364136223846793005ull + 1442695040888963407ull;
@@ -2075,11 +2104,13 @@ static void* prod_main(void* p)
         if (yau__ld32(&g_prod_reset)) {
             if (yau_stream_reset(st, 0) == 0) { next = 0; yau__st32(&g_prod_reset, 0); }
             yrt_sleep_until(yrt_now_ns() + 200000, 0);
+            yau__st64(&g_prod_steps, yau__ld64(&g_prod_steps) + 1);
             continue;
         }
         (void)feed(st, &next, 1 + (int64_t)(prod_rand() * 3000.0), 2);
         if (prod_rand() < 0.1) yrt_sleep_until(yrt_now_ns() + (int64_t)(prod_rand() * 40e6), 0);
         else yrt_sleep_until(yrt_now_ns() + 2000000, 0);
+        yau__st64(&g_prod_steps, yau__ld64(&g_prod_steps) + 1);
     }
 #if defined(_WIN32)
     return 0;
@@ -2114,22 +2145,21 @@ static void test_stream_threads(void) {
         for (i = 0; i < n; i++) {
             yau_stream_info in;
             yau_id id;
-            int k, rc = YAU_PENDING;
+            int rc = YAU_PENDING;
+            prog_wait w;
             memset(&recs[i], 0, sizeof recs[i]);
-            for (k = 0; k < 2000; k++) {
-                yau_stream_get_info(&g_st, &in);
-                if (in.state == YAU_STREAM_IDLE && !yau__ld32(&g_prod_reset)) break;
-                yrt_sleep_until(yrt_now_ns() + 1000000, 0);
-            }
+            prog_start(&w, &g_prod_steps);
+            do yau_stream_get_info(&g_st, &in);
+            while (!(in.state == YAU_STREAM_IDLE && !yau__ld32(&g_prod_reset))
+                   && prog_more(&w, 1000, __LINE__, "stream threads: the producer did not reset the stream"));
             id = yau_play_stream(&g_au, &g_st, 0);
             if (id <= 0) { fail_i(__LINE__, "stream play refused", id, 1); break; }
             yrt_sleep_until(yrt_now_ns() + 20000000 + (int64_t)(sd_rand(s) * 30e6), 0);
             CHECK(yau_stop_at(&g_au, id, 0, 0) == 0);
-            for (k = 0; k < 2000; k++) {
-                rc = yau_result(&g_au, id, &recs[i]);
-                if (rc == YAU_OK && (recs[i].end_frame > 0 || (recs[i].flags & YAU_ONSET_CANCELED))) break;
-                yrt_sleep_until(yrt_now_ns() + 1000000, 0);
-            }
+            prog_start(&w, &g_thr_blocks);
+            do rc = yau_result(&g_au, id, &recs[i]);
+            while (!(rc == YAU_OK && (recs[i].end_frame > 0 || (recs[i].flags & YAU_ONSET_CANCELED)))
+                   && prog_more(&w, 5000, __LINE__, "stream threads: the stopped play did not end"));
             CHECK_I(rc, YAU_OK);
             if (rc == YAU_OK) done++;
             yau__st32(&g_prod_reset, 1);
@@ -2490,7 +2520,18 @@ static void test_wav(void) {
 #if !defined(YRT_NO_THREADS)
 /* A WAV on a real yrt_pump (yau_wav_step and yau_wav_on_msg), the
  * device on a real thread, the frame thread waking the pump and seeking
- * through messages between plays. ThreadSanitizer checks the lot. */
+ * through messages between plays. ThreadSanitizer checks the lot. The
+ * wrappers count the pump's steps, for the waits on its progress. */
+static int64_t g_pump_steps = 0;   /* atomic */
+static void wp_on_msg(void* w, const void* msg, uint32_t seq) {
+    yau_wav_on_msg(w, msg, seq);
+    yau__st64(&g_pump_steps, yau__ld64(&g_pump_steps) + 1);
+}
+static bool wp_step(void* w) {
+    bool more = yau_wav_step(w);
+    yau__st64(&g_pump_steps, yau__ld64(&g_pump_steps) + 1);
+    return more;
+}
 static void test_wav_pump(void) {
     sdev* s = &g_sd;
     static yrt_pump pump;
@@ -2508,7 +2549,7 @@ static void test_wav_pump(void) {
     CHECK(yau_wav_open(&g_au, &g_wav, &(yau_wav_desc){ .data = g_wavmem, .size = n, .loops = YAU_FOREVER, .ring = 1920, .memory = g_ring_c }));
     memset(&pump, 0, sizeof pump);
     CHECK(yrt_pump_open(&pump, &(yrt_pump_desc){ .msg_size = sizeof(yau_wav_msg), .capacity = 8,
-                                                      .on_msg = yau_wav_on_msg, .on_idle = yau_wav_step, .ctx = &g_wav }));
+                                                      .on_msg = wp_on_msg, .on_idle = wp_step, .ctx = &g_wav }));
     yau__st32(&g_thr_stop, 0);
     {
 #if defined(_WIN32)
@@ -2520,31 +2561,52 @@ static void test_wav_pump(void) {
         for (i = 0; i < nplay; i++) {
             yau_wav_msg m;
             yau_id id;
-            int k, rc = YAU_PENDING;
+            int rc = YAU_PENDING, sq, last, idle = 0;
             yau_stream_info in;
+            prog_wait w;
             seeks[i] = (int64_t)(sd_rand(s) * 20000.0);
             m.seek = seeks[i];
-            while (yrt_pump_submit(&pump, &m) < 0) yrt_sleep_until(yrt_now_ns() + 1000000, 0);
-            for (k = 0; k < 3000; k++) {
+            while ((sq = yrt_pump_submit(&pump, &m)) < 0) yrt_sleep_until(yrt_now_ns() + 1000000, 0);
+            last = sq;
+            prog_start(&w, &g_pump_steps);
+            for (;;) {
                 yau_stream_get_info(&g_wav.stream, &in);
                 if (in.state == YAU_STREAM_IDLE && in.first == seeks[i] && in.ready) break;
                 m.seek = -1;
-                if (yau_wav_wants(&g_wav)) (void)yrt_pump_submit(&pump, &m);
-                yrt_sleep_until(yrt_now_ns() + 1000000, 0);
+                if (yau_wav_wants(&g_wav)) {
+                    if ((sq = yrt_pump_submit(&pump, &m)) > 0) last = sq;
+                } else if (yrt_pump_done_seq(&pump) >= (uint32_t)last && ++idle >= 1000) {
+                    /* every message ran and the WAV wants nothing: no step will come */
+                    fail(__LINE__, "wav pump: the pump is idle and the ring is not ready at the seek");
+                    break;
+                }
+                if (!prog_more(&w, 1000, __LINE__, "wav pump: the seek was not applied or the ring not filled")) break;
             }
             id = yau_play_stream(&g_au, &g_wav.stream, 0);
             if (id <= 0) { fail_i(__LINE__, "wav play refused", id, 1); break; }
-            for (k = 0; k < 30; k++) {
+            /* The play must start before the stop, or it is CANCELED with
+             * no sample: under load the stop once came before the device
+             * had taken the play at all. Then 30 blocks of device time. */
+            prog_start(&w, &g_thr_blocks);
+            for (;;) {
+                yau_stream_get_info(&g_wav.stream, &in);
+                if (in.started && in.frames_to_start <= 0) break;
+                m.seek = -1;
+                if (yau_wav_wants(&g_wav)) (void)yrt_pump_submit(&pump, &m);
+                if (!prog_more(&w, 5000, __LINE__, "wav pump: the play did not start")) break;
+            }
+            prog_start(&w, &g_thr_blocks);
+            while (yau__ld64(&g_thr_blocks) - w.b0 < 30 && yrt_now_ns() - w.t0 < PROG_HANG_NS) {
                 m.seek = -1;
                 if (yau_wav_wants(&g_wav)) (void)yrt_pump_submit(&pump, &m);
                 yrt_sleep_until(yrt_now_ns() + 1000000, 0);
             }
             CHECK(yau_stop_at(&g_au, id, 0, 0) == 0);
-            for (k = 0; k < 3000; k++) {
-                rc = yau_result(&g_au, id, &recs[i]);
-                if (rc == YAU_OK && recs[i].end_frame > 0) break;
-                yrt_sleep_until(yrt_now_ns() + 1000000, 0);
-            }
+            prog_start(&w, &g_thr_blocks);
+            do rc = yau_result(&g_au, id, &recs[i]);
+            while (!(rc == YAU_OK && (recs[i].end_frame > 0 || (recs[i].flags & YAU_ONSET_CANCELED)))
+                   && prog_more(&w, 5000, __LINE__, "wav pump: the stopped play did not end"));
+            if (recs[i].flags & YAU_ONSET_CANCELED) fail_i(__LINE__, "wav pump: a started play was canceled", i, -1);
             CHECK_I(rc, YAU_OK);
             if (rc == YAU_OK) done++;
         }
