@@ -4,7 +4,8 @@ Status: v0.3.0, 2026-10-10 (v0.2.0, 2026-10-08, for the outputs); the rig profil
 2026-10-09 (v0.2.0 adds roles bound to LSL streams, docs/net.md; v0.3.0,
 2026-10-10, opens the device with `yrig_open_device()`; v0.4.0, 2026-10-13,
 adds the photodiode run behind the display's onset offset and the input
-bounds file, with the tools `rigfile_bounds` and `rigfile_onset`). The headers' manuals are the reference (OUTPUTS, AT THE FLIP
+bounds file, with the tools `rigfile_bounds` and `rigfile_onset`; v0.5.0,
+2026-10-21, adds the viewing geometry, `view`). The headers' manuals are the reference (OUTPUTS, AT THE FLIP
 and ROLES of `ysp/device.h`; THE FILE, CHECKS AT LOAD and BINDING of
 `ysp/rigfile.h`). This page records the decisions the plan
 (`docs/devices_spec.md`, steps 2 and 3 of section 14.2, and 11.2) left
@@ -194,6 +195,29 @@ virtual clock and prints the model's truth beside the measurement.
    `rigfile_profile` shows the run with its check; a changed or missing
    file, or an offset edited by hand, gives a note.
 
+## How-to: set the rig's viewing geometry
+
+Sizes in degrees of visual angle need the distance from the eye to the
+screen and the size of a pixel on it. The rig profile keeps them in
+`view` (ysp/rigfile.h v0.5.0, VIEWING GEOMETRY).
+
+1. Set the display to the mode the experiments use, full screen.
+2. Measure the distance from the eye to the screen's center along the
+   line of sight, in mm (the chin rest's position).
+3. Measure the width of the lit image on the screen, in mm, edge to edge,
+   and read the mode's width in pixels.
+4. Run `rigfile_profile --view DISTANCE_MM WIDTH_MM WIDTH_PX`, for example
+   `rigfile_profile --view 570 518.4 1920`. It writes the profile and
+   prints the pixels per degree at the center (36.8496 for that example).
+5. Give the profile to the program: `trial_2afc_adaptive --rig NAME` (or
+   the default profile). In C, `yrig_ppd(&prof)` gives the pixels per
+   degree; for ysp/gfx.h's `ygfx_view` of a drawable w pixels wide, use
+   `distance_mm` and `w * width_mm / width_px`.
+
+The hash of the profile changes with `view`, so a data file's header
+names the geometry its degrees came from. Change the chin rest or the
+mode, and measure again.
+
 ## How-to: open a role's device from the profile
 
 ```c
@@ -307,6 +331,22 @@ which statistic it stores, or what the reference is. These are the choices.
 | Where the run goes in the profile | `display.latency`, in a role latency's shape; `display.onset_offset_s` must equal the file's `onset_offset_s` | 11.2 lists only `onset_offset_s` for the display; without the run's hash, the offset could not be checked as a role's latency is. An offset edited by hand with a genuine file gives DIFFERS |
 | Shared code | Only the readers of the two new formats, in `ysp/rigfile.h` (`yrig_read_loopback()`); the statistics and the CSV parser stay in the tools | The player needs the readers for the DIFFERS check at load; it never computes a distribution |
 | Bounds files at load | Compared with the profile's summary like latency files (they were checked by hash only); a file of another kind DIFFERS | A hand-edited bound would otherwise give tier 1 to a range nobody measured. A file with no format line is still checked by hash only, so hand-made files of v0.3 profiles keep their check |
+
+### The viewing geometry (`ysp/rigfile.h` v0.5.0, 2026-10-21)
+
+Gap G2 of [experiment_format.md](experiment_format.md): D4 says a
+definition's degrees come from the rig, never the pack, and the profile
+had no geometry. The 2AFC example hard-coded a distance and a pixel pitch.
+
+| Question | Decision | Why |
+|---|---|---|
+| Where in the file | A top-level `view` object, beside `display` | `display` requires `onset_offset_s`, a photodiode result; a rig with a ruler and no photodiode must still have degrees, and making the offset optional would change what `display.set` means for every reader. The distance is the chin rest's, not the display's. If a rig gets two displays, each gets its own geometry then |
+| The fields | `distance_mm`, `width_mm`, `width_px`, all required | ysp/gfx.h's `ygfx_view` has the first two, and its `width_mm` is the drawable's. A window is narrower than the screen, so the screen's mm alone give a wrong scale in a window; `width_px` gives the pitch (`width_mm / width_px`), which a window shares. It also says which mode the width was measured in |
+| Numbers | mm as doubles, written as the shortest decimal that reads back the same (ysp/json.h v0.2.0); `width_px` an integer, 1 to 100000; each mm above 0 and at most 100000 (ysp/gfx.h's table's bound) | A hand edit (570.0, 5.7e2) gives the same bytes and hash. Seconds are fixed-point because a duration must be exact to the ns; no length needs that |
+| The hash | A profile without `view` writes the bytes, and so the hash, of v0.4.0; `view` is in the hash once set | The geometry changes every size in degrees, so the data file's `yrig_hash()` must change with it. Existing profiles keep their hash |
+| The helper | `yrig_ppd()`: width_px / width_mm * distance_mm * tan(1 deg), ysp/gfx.h's YGFX_DEG expression, 0 without a view | ysp/rigfile.h does not include ysp/gfx.h; the manual gives the two lines that fill a `ygfx_view` |
+| No view | `yrig_ppd()` gives 0; the program decides. The 2AFC example falls back to nominal numbers (570 mm, 0.27 mm a pixel), flagged NOMINAL in its meta, as it does for the calibration; the definition has no fallback (experiment_format.md 2.14) | An example must run on CI with no profile; a definition's degrees are a claim |
+| A full-screen mode of another width | Not converted; the 2AFC example prints the ratio and flags MODE in its meta | The panel may scale, letterbox or center the image: no rule fits every display, so the user measures in the mode used |
 
 ### Open, close and the wait for RUNNING (v0.3.0)
 
@@ -515,6 +555,20 @@ only.
 | `rigfile_bounds --sim --role photo --n 50 --warmup 2 --store`, then `rigfile_onset run.csv --store` on a generated 300-row CSV, then `rigfile_profile` | Both stored and both checks `ok` (the CI steps); a CSV with two paths refused (exit 1) and kept with `--path`; a CSV with a wrong header refused (exit 2); fewer edges than `--min-n` refused (exit 1) |
 | Fuzzing (`tests/fuzz/json_fuzz.c`, target 3 now also `yrig_read_loopback()`, which must agree with `yrig_read_latency()` on an output latency file; 3 new seeds) | MSVC libFuzzer with ASan, all four targets from the 15 seeds: 7,533,408 inputs in 901 s, no crash, no broken round trip, no disagreement; the 1297 corpus files replayed on WSL2 gcc under ASan and UBSan with no report |
 | Mutants (`tests/mutate/rigfile.toml`) | 37 of 37 caught; `rig-30` to `rig-37` new, the anchors of `rig-10` and `rig-24` moved |
+
+### The viewing geometry (v0.5.0)
+
+On 2026-10-21, MinGW-w64 gcc 16.1 (`-std=c11 -Wall -Wextra -Wpedantic
+-Wshadow -Werror`) and MSVC 19.44 through ctest. Arithmetic and files
+only.
+
+| Check | Result |
+|---|---|
+| `tests/adapt/rigfile_test.c` (`check_view()`) | 552 checks pass on MinGW (501 before), 560 on WSL2 gcc 11.4 under ASan and UBSan with the planted-folder checks. GOLDEN (no view) keeps the v0.4.0 bytes and hash; with a view, the block's exact bytes and a new hash, parsed back to the same values and hash; another spelling (`518.40`, `5.7e2`, keys in another order) gives the same hash; `yrig_ppd()` equals 570 mm * tan(1 deg) / 0.27 mm within 1e-12 (36.84958) and ysp/gfx.h's expression bit for bit; a view without display or roles; 16 refusals by field (missing, 0, negative, above 100000, not a number, `1e400`, `width_px` 0, 100001 and 1920.5, an unknown key, not an object); a view in memory with a negative distance, `width_px` 0 or a NaN is not written or hashed; cleared again, the v0.4.0 hash |
+| `rigfile_profile --view 570 518.4 1920` | Written, shown with 36.8496 px/deg, canonical bytes as above; `--view 0 518.4 1920` refused (exit 2) |
+| `trial_2afc_adaptive --sim --rig-dir DIR` with that profile (the CI steps, run locally on MSVC) | The view's numbers and the profile's hash in the meta; the data file byte for byte the same as without a profile (NOMINAL, the same 0.27 mm a pixel) and as the program before the change; a named folder with no profile exits 1 |
+| Fuzzing | A seed with `view` added to target 2 of `tests/fuzz/json_fuzz.c`; the 18 seeds replayed on WSL2 gcc 11.4 under ASan and UBSan with no report. No libFuzzer run yet |
+| Mutants (`tests/mutate/rigfile.toml`) | `rig-38` to `rig-45`: 8 of 8 killed |
 
 ## What needs the user's hardware
 

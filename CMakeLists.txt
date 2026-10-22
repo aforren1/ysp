@@ -610,9 +610,12 @@ endif()
 if(TARGET SDL3::SDL3 AND YSP_BUILD_EXAMPLES)
     # The jsPsych-style trials of examples/response/ (docs/response.md,
     # "What the examples show"); the two with a sound need miniaudio.
-    foreach(_t keyboard same_different srt adjustment mouse_tracking 2afc_adaptive two_keyboards)
+    foreach(_t keyboard same_different srt adjustment mouse_tracking two_keyboards)
         ysp_add_program(trial_${_t} examples/response/trial_${_t}.c rig methods)
     endforeach()
+    # The 2AFC staircase reads its viewing geometry from the rig profile
+    # (ysp/rigfile.h), which brings ysp/device.h.
+    ysp_add_program(trial_2afc_adaptive examples/response/trial_2afc_adaptive.c rig methods devices)
     # PsychoPy's dots.py as a trial (docs/rig_spec.md 15.5): RDK direction
     # discrimination, each row with the field's replay digest.
     ysp_add_program(trial_rdk examples/rdk/trial_rdk.c rig methods)

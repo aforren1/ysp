@@ -1,7 +1,9 @@
 /* trial_2afc_adaptive.c - a spatial two-alternative forced-choice (2AFC)
  * contrast detection task: a staircase (ysp/stair.h) and QUEST+
  * (ysp/quest.h) interleaved by ysp/trials.h, the contrast set through the
- * display calibration (ysp/color.h), the response from ysp/response.h.
+ * display calibration (ysp/color.h), sizes in degrees from the rig
+ * profile's viewing geometry (ysp/rigfile.h), the response from
+ * ysp/response.h.
  *
  * It does what PsychoPy's Builder demos psychophysicsStaircase/ and
  * psychophysicsStairsInterleaved/ and the Coder demo
@@ -17,21 +19,27 @@
  *
  * The level is the Michelson luminance contrast of the gabor's peak and
  * trough, in light: Y in cd/m2 from the calibration, the display's black
- * included. ysp/gfx.h's contrast is about the background in linear device
- * RGB, which leaves the black out, so the example scales it by
- * Y_bg / (Y_bg - Y_black). The output stage writes 8-bit codes (no
- * dither), so the contrast shown is that of the two codes the peak and
- * trough get (ycol_output_code(), the output stage's arithmetic on the
- * CPU). The methods get the contrast shown, not the one asked for: on a
- * gamma 2.2 display at a mid-gray background one code step is a
- * contrast of about 0.006, so below about 0.02 the levels are coarse.
- * The gamut check (ycol_max_scale()) sets the highest level.
+ * included. ycol_michelson() (ysp/color.h, MICHELSON) gives ysp/gfx.h's
+ * contrast for it (about the background in linear device RGB, which
+ * leaves the black out), the 8-bit codes the peak and trough get (no
+ * dither), and the contrast those codes show. The methods get the
+ * contrast shown, not the one asked for: on a gamma 2.2 display at a
+ * mid-gray background one code step is a contrast of about 0.006, so
+ * below about 0.02 the levels are coarse. The largest contrast in gamut
+ * (the same call's max) sets the highest level.
  *
  * HARDWARE: without --cal the calibration is nominal (sRGB primaries,
  * gamma 2.2, 100 cd/m2, no black), flagged NOMINAL in FILE.meta: no
  * contrast in the file is then a statement about light. A claim about
- * contrast needs a photometer and a .yspcal from it (docs/color.md). Sizes
- * in deg use PPD_DISTANCE_MM and PPD_MM_PER_PX below: measure both.
+ * contrast needs a photometer and a .yspcal from it (docs/color.md).
+ * Sizes in deg come from the rig profile's view (ysp/rigfile.h, VIEWING
+ * GEOMETRY; rigfile_profile --view DISTANCE_MM WIDTH_MM WIDTH_PX writes
+ * it): the user's profile.json, NAME.json with --rig NAME, or a profile in
+ * --rig-dir DIR. Without a profile or a view (and under --sim unless
+ * --rig or --rig-dir names one, or with --no-rig) the geometry is nominal
+ * (570 mm, 0.27 mm a pixel), flagged NOMINAL in FILE.meta: no size in the
+ * file is then a visual angle. Full screen in a mode of another width than
+ * the view's width_px scales the image, so the program says so.
  *
  * --method: stair (1-up-3-down on log10 contrast, steps 0.2, 0.1, 0.05,
  * the 1-up-1-down rule until the first reversal: 79.4 % correct), quest
@@ -46,7 +54,7 @@
  * response's (YRSP_DATA_COLS: response, rt_s, onset_src, onset_tier,
  * landing_residual_s, onset_frame, rsp_tier, n_early and the rest). Times
  * in seconds. FILE.meta has the session, the screen, the calibration and
- * the methods.
+ * the methods, the viewing geometry and the rig profile's hash.
  *
  * --sim: the simulated display and a simulated observer, a Weibull on the
  * contrast shown (threshold 0.03 at 81.6 % correct, slope 3.5, lapse
@@ -61,7 +69,8 @@
  * Exits 1 on a mismatch.
  *
  * Usage: trial_2afc_adaptive [--sim] [--fullscreen] [--method stair|quest|both]
- *          [--trials N] [--seed N] [--cal FILE] [--out FILE]
+ *          [--trials N] [--seed N] [--cal FILE] [--rig NAME] [--rig-dir DIR]
+ *          [--no-rig] [--out FILE]
  *   --trials N  trials per track (default 60; --sim: 40)
  * Exit code: 0 (also after Shift+Esc), 1 when something did not open or a
  * --sim check failed, 2 for a bad argument.
@@ -81,6 +90,8 @@
 #include "ysp/quest.h"
 #define YSP_RESPONSE_IMPLEMENTATION
 #include "ysp/response.h"
+#define YSP_RIGFILE_IMPLEMENTATION
+#include "ysp/rigfile.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -92,8 +103,8 @@ enum { TRIAL = 1 };
 enum { END_OF_TRIAL = 1 };
 enum { STAIR, QUEST };
 
-#define PPD_DISTANCE_MM 570.0     /* viewing distance: measure it */
-#define PPD_MM_PER_PX   0.27      /* pixel pitch: measure it */
+#define NOMINAL_DISTANCE_MM 570.0   /* without the rig's view: NOMINAL */
+#define NOMINAL_MM_PER_PX   0.27
 #define STIM_S      0.2
 #define RESPONSE_S  2.5
 #define OBS_ALPHA   0.03          /* the simulated observer */
@@ -116,38 +127,15 @@ static yst_stair stair;
 static yqst_quest quest;
 static ycol_cal cal;
 static ycol_ctx cx;
+static yrig_profile prof;
 static ygfx_stim fix, gabor;
 static const ygfx_bind binds[] = {
     { .stim = &fix,   .param = YGFX_P_VISIBLE, .channel = FIX_ON },
     { .stim = &gabor, .param = YGFX_P_VISIBLE, .channel = GABOR_ON },
 };
-static double bg_scale;           /* Y_bg / (Y_bg - Y_black) */
 
 static bool stair_done(void* c) { return yst_done((const yst_stair*)c); }
 static bool quest_done(void* c) { return yqst_done((const yqst_quest*)c); }
-
-static double luminance(ycol_rgb v) { return ycol_from_rgb(&cx, v, YCOL_SPACE_XYY, NULL).u.xyy.Y; }
-static double code_luminance(uint32_t code) {
-    double d = code / 255.0;
-    return luminance(ycol_to_rgb(&cx, ycol_make(YCOL_SPACE_DEVICE, d, d, d), NULL));
-}
-
-/* The level as ysp/gfx.h's contrast, and the contrast its codes show. */
-static double shown_contrast(double level, double* scene, uint32_t code[2]) {
-    uint32_t q[3];
-    double c = level * bg_scale, yp, yt;
-    ycol_rgb v;
-    *scene = c;
-    v.r = v.g = v.b = 0.5 * (1.0 + c);
-    ycol_output_code(&cal, v, 8, q);
-    code[0] = q[0];
-    v.r = v.g = v.b = 0.5 * (1.0 - c);
-    ycol_output_code(&cal, v, 8, q);
-    code[1] = q[0];
-    yp = code_luminance(code[0]);
-    yt = code_luminance(code[1]);
-    return (yp - yt) / (yp + yt);
-}
 
 static double obs_p(double c) {
     return c <= 0 ? 0.5 : 0.5 + (0.5 - OBS_LAPSE) * (1.0 - exp(-pow(c / OBS_ALPHA, OBS_BETA)));
@@ -207,17 +195,19 @@ int main(int argc, char** argv) {
     yrsp_result res;
     yrsp_input sim_ev[2];
     row r = { 0 };
-    char line[1024], cline[1024], meta[3072], meta_path[1100];
+    ycol_shown sh;                         /* this trial's contrast: asked, scene, codes, shown */
+    const ycol_rgb gray = { 0.0, 0.0, 0.0 };   /* ysp/gfx.h's dir 0: the background's */
+    char line[1024], cline[1024], meta[3072], meta_path[1100], err[256], view_note[256], hash[65] = "none";
     const char* out_path = "trial_2afc_adaptive.csv";
     const char* cal_path = NULL;
+    const char* rig_name = NULL;
+    const char* rig_dir = NULL;
     const char* method = "both";
     uint64_t seed = 20261009, rng_side, rng_obs;
-    int i, n, sim = 0, n_trials = 0, fullscreen = 0, aborted = 0, failed = 0, rows = 0, sim_bad = 0;
+    int i, n, sim = 0, n_trials = 0, fullscreen = 0, no_rig = 0, aborted = 0, failed = 0, rows = 0, sim_bad = 0;
     int in_trial = 0, responding = 0, n_sim_ev = 0, sim_next = 0, side = 0, track = 0;
     int64_t fix_ns, iti_ns, sim_frame = -1;   /* --sim: the gabor's landing frame, until its record */
-    double ppd, level = 0, shown = 0, scene = 0, level_max, y_bg, y_black;
-    uint32_t codes[2] = { 0, 0 };
-    ycol_rgb v;
+    double ppd = 0.0, level = 0, level_max;
 
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--sim")) sim = 1;
@@ -226,13 +216,17 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--trials") && i + 1 < argc) n_trials = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--seed") && i + 1 < argc) seed = (uint64_t)strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--cal") && i + 1 < argc) cal_path = argv[++i];
+        else if (!strcmp(argv[i], "--rig") && i + 1 < argc) rig_name = argv[++i];
+        else if (!strcmp(argv[i], "--rig-dir") && i + 1 < argc) rig_dir = argv[++i];
+        else if (!strcmp(argv[i], "--no-rig")) no_rig = 1;
         else if (!strcmp(argv[i], "--out") && i + 1 < argc) out_path = argv[++i];
         else {
             fprintf(stderr, "usage: trial_2afc_adaptive [--sim] [--fullscreen] [--method stair|quest|both] "
-                            "[--trials N] [--seed N] [--cal FILE] [--out FILE]\n");
+                            "[--trials N] [--seed N] [--cal FILE] [--rig NAME] [--rig-dir DIR] [--no-rig] [--out FILE]\n");
             return 2;
         }
     }
+    if (no_rig && (rig_name || rig_dir)) { fprintf(stderr, "trial_2afc_adaptive: --rig or --rig-dir, or --no-rig\n"); return 2; }
     /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
     if (sim) yrt_virtual_begin(0);
     if (strcmp(method, "stair") && strcmp(method, "quest") && strcmp(method, "both")) {
@@ -255,14 +249,37 @@ int main(int argc, char** argv) {
     cxd.cal = &cal;
     cxd.background[0] = cxd.background[1] = cxd.background[2] = 0.5;
     if (!ycol_ctx_open(&cx, &cxd)) { fprintf(stderr, "trial_2afc_adaptive: %s\n", ycol_ctx_error(&cx)); return 1; }
-    v.r = v.g = v.b = 0.5;
-    y_bg = luminance(v);
-    v.r = v.g = v.b = 0.0;
-    y_black = luminance(v);
-    bg_scale = y_bg / (y_bg - y_black);
-    v.r = v.g = v.b = 1.0;   /* a scene contrast of 1: the gamut's limit along the gray axis */
-    level_max = ycol_max_scale(&cx, ycol_make(YCOL_SPACE_RGB, v.r, v.g, v.b), YCOL_SYMMETRIC) / bg_scale;
-    if (level_max > 1.0) level_max = 1.0;
+    if (ycol_michelson(&cx, 0.0, gray, 8, &sh) < 0) { fprintf(stderr, "trial_2afc_adaptive: %s\n", sh.why); return 1; }
+    level_max = sh.max < 1.0 ? sh.max : 1.0;   /* the gamut's limit along the gray axis */
+
+    /* the viewing geometry: the rig profile's view, or nominal and flagged */
+    if (!no_rig && (!sim || rig_name || rig_dir)) {
+        int rc;
+        if (rig_dir) {
+            char path[1100];
+            rc = yrig_path(rig_dir, rig_name, path, sizeof path);
+            if (rc == YRIG_OK) rc = yrig_load_file(&prof, path, err, sizeof err);
+            else snprintf(err, sizeof err, "\"%s\" is not a profile name", rig_name ? rig_name : "");
+        } else rc = yrig_load(&prof, rig_name, err, sizeof err);
+        if (rc != YRIG_OK && (rc != YRIG_ERR_MISSING || rig_name || rig_dir)) {
+            fprintf(stderr, "trial_2afc_adaptive: %s\n", err);
+            return 1;
+        }
+        if (rc == YRIG_OK) {
+            for (i = 0; i < prof.n_notes; i++) printf("rig profile: %s\n", prof.notes[i]);
+            if (yrig_hash(&prof, hash) != YRIG_OK) snprintf(hash, sizeof hash, "none");
+            ppd = yrig_ppd(&prof);
+            if (ppd > 0.0)
+                snprintf(view_note, sizeof view_note, "rig profile %s: %g mm away, %g mm across %d px", prof.rig,
+                         prof.view.distance_mm, prof.view.width_mm, (int)prof.view.width_px);
+            else printf("trial_2afc_adaptive: the rig profile has no view (rigfile_profile --view); nominal geometry\n");
+        } else printf("trial_2afc_adaptive: no rig profile; nominal geometry\n");
+    }
+    if (ppd <= 0.0) {
+        ppd = NOMINAL_DISTANCE_MM * tan(3.14159265358979323846 / 180.0) / NOMINAL_MM_PER_PX;
+        snprintf(view_note, sizeof view_note, "NOMINAL (%g mm away, %g mm a pixel): sizes in deg are not visual angles",
+                 NOMINAL_DISTANCE_MM, NOMINAL_MM_PER_PX);
+    }
 
     /* the methods: each one a track of ysp/trials.h */
     memset(&sdesc, 0, sizeof sdesc);
@@ -303,7 +320,13 @@ int main(int argc, char** argv) {
         return 1;
     }
     yscr_get_caps(&scr, &caps);
-    ppd = PPD_DISTANCE_MM * tan(3.14159265358979323846 / 180.0) / PPD_MM_PER_PX;
+    if (fullscreen && prof.view.set && caps.mode.w > 0 && caps.mode.w != prof.view.width_px) {
+        /* the view's pitch holds in its own mode; another full-screen width scales the image */
+        size_t k = strlen(view_note);
+        printf("trial_2afc_adaptive: the mode is %d px wide, the view's %d: sizes in deg are off by %.3f\n", (int)caps.mode.w,
+               (int)prof.view.width_px, (double)caps.mode.w / prof.view.width_px);
+        snprintf(view_note + k, sizeof view_note - k, "; MODE %d px, not %d", (int)caps.mode.w, (int)prof.view.width_px);
+    }
     {
         ygfx_shape_desc s;
         memset(&s, 0, sizeof s);
@@ -338,9 +361,9 @@ int main(int argc, char** argv) {
     printf("%s\n%s\n", line, cline);
     snprintf(meta, sizeof meta, "screen=%s\ncolor=%s\nmethod=%s; stair 1-up-3-down log10 steps 0.2 0.1 0.05, initial "
              "rule; quest Gumbel, threshold and slope free, guess 0.5, lapse %.2f; %d trials a track; level_max %.4f; "
-             "%.2f px/deg\nysp_stair=%s\nysp_quest=%s\nysp_response=%s\nkeyboard=%s\n", line, cline, method, OBS_LAPSE,
-             n_trials, level_max, ppd, yst_version(), yqst_version(), yrsp_version(),
-             sim ? "synthetic (tier SIM)" : source.note);
+             "%.4f px/deg\nview=%s\nrig_profile_sha256=%s\nysp_stair=%s\nysp_quest=%s\nysp_response=%s\nkeyboard=%s\n",
+             line, cline, method, OBS_LAPSE, n_trials, level_max, ppd, view_note, hash, yst_version(), yqst_version(),
+             yrsp_version(), sim ? "synthetic (tier SIM)" : source.note);
     snprintf(meta_path, sizeof meta_path, "%s.meta", out_path);
     if (!ytr_data_open(&data, &(ytr_data_desc){ .path = out_path, .trials = &trials, .cols = cols,
             .n_cols = (int)(sizeof cols / sizeof cols[0]), .meta_path = meta_path, .meta = meta })) {
@@ -360,10 +383,14 @@ int main(int argc, char** argv) {
             if (ytr_next(&trials, &ti) < 0) break;
             track = rd.tracks[ti.track].ctx == (void*)&stair ? STAIR : QUEST;
             level = track == STAIR ? yst_next(&stair) : pow(10.0, yqst_stim_value(&quest, yqst_next(&quest), 0));
-            shown = shown_contrast(level, &scene, codes);
+            if (ycol_michelson(&cx, level, gray, 8, &sh) < 0) {
+                fprintf(stderr, "trial_2afc_adaptive: %s\n", sh.why);
+                failed = 1;
+                break;
+            }
             side = ytr_splitmix(&rng_side) < 0.5 ? 0 : 1;
             gabor.x = (float)((side ? 5.0 : -5.0) * ppd);
-            gabor.contrast = (float)scene;
+            gabor.contrast = (float)sh.scene;
             ytl_clear(&tl, TRIAL);
             ytl_anchor(&tl, TRIAL, f.onset, 0);
             q = ytl_seq_on(&tl, TRIAL);
@@ -412,7 +439,7 @@ int main(int argc, char** argv) {
                 yrsp_set_landing(&rsp, &fired[i], 1, GABOR_ON);   /* the gabor landed: its planned onset */
                 if (sim && ti.index < MAX_TRIALS) {
                     /* the observer: correct with the Weibull's p at the contrast shown */
-                    int correct = ytr_splitmix(&rng_obs) < obs_p(shown);
+                    int correct = ytr_splitmix(&rng_obs) < obs_p(sh.shown);
                     uint32_t sc;
                     for (; sim_next < n_sim_ev; sim_next++) yrsp_feed(&rsp, &sim_ev[sim_next]);   /* a late release */
                     sim_rt[ti.index] = 0.15 + 0.1 * ytr_splitmix(&rng_obs);
@@ -438,7 +465,7 @@ int main(int argc, char** argv) {
                 r.correct = responded && res.response == side;
                 if (responded) {
                     /* the method hears the contrast shown */
-                    double x = shown > 1e-4 ? shown : 1e-4;
+                    double x = sh.shown > 1e-4 ? sh.shown : 1e-4;
                     if (track == STAIR) yst_update(&stair, x, r.correct);
                     else { x = log10(x); yqst_update_values(&quest, &x, r.correct); }
                 }
@@ -447,16 +474,16 @@ int main(int argc, char** argv) {
                 r.stimulus = r.key_answer = side_name[side];
                 r.method = track_name[track];
                 r.intensity = level;
-                r.contrast_shown = shown;
-                r.scene_contrast = scene;
-                r.code_peak = (int)codes[0];
-                r.code_trough = (int)codes[1];
+                r.contrast_shown = sh.shown;
+                r.scene_contrast = sh.scene;
+                r.code_peak = (int)sh.peak[0];
+                r.code_trough = (int)sh.trough[0];
                 r.estimate = estimate(track);
                 if (yrsp_data_set(&data, &res) < 0 || ytr_data_write(&data, &r) < 0) {
                     fprintf(stderr, "trial_2afc_adaptive: %s\n", ytr_data_error(&data));
                     failed = 1;
                 }
-                printf("trial %3d %-5s level %.4f shown %.4f %-5s %s\n", ti.index, track_name[track], level, shown,
+                printf("trial %3d %-5s level %.4f shown %.4f %-5s %s\n", ti.index, track_name[track], level, sh.shown,
                        side_name[side], !responded ? "(no response)" : r.correct ? "correct" : "wrong");
                 if (ti.index < MAX_TRIALS) sim_res[ti.index] = res;
                 rows++;

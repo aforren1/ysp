@@ -12,9 +12,11 @@
  *     rgb, g = cx.to_rgb(pc.dkl(elev=0, azim=90, contrast=0.1))
  *     lab = cx.from_rgb(rgb, "cielab")
  *     k = cx.max_scale(pc.dkl(azim=90, contrast=1), symmetric=True)
+ *     sh = cx.michelson(0.03)          # gfx's contrast, codes, contrast shown
  *
  * A Color is a namedtuple (space, a, b, c): the space's name ("dkl") and
- * its three values in the header's order. A Gamut is a namedtuple too.
+ * its three values in the header's order. A Gamut and a Shown are
+ * namedtuples too.
  *
  * THREADING: none. Every call is arithmetic on objects the GIL guards; a
  * Context holds references to its Calibration and Lum, so the pointers the
@@ -38,6 +40,7 @@ static PyObject* ColFormatError;
 static PyObject* ColRangeError;
 static PyObject* ColorType;   /* namedtuple Color(space, a, b, c) */
 static PyObject* GamutType;   /* namedtuple Gamut(...) */
+static PyObject* ShownType;   /* namedtuple Shown(...) */
 static PyObject* CalType;
 static PyObject* LumType;
 
@@ -724,6 +727,24 @@ static PyObject* Ctx_map(PyObject* self, PyObject* args) {
     return col_rgb_gamut(r, &g);
 }
 
+static PyObject* Ctx_michelson(PyObject* self, PyObject* args, PyObject* kwds) {
+    static char* kw[] = { "michelson", "dir", "bits", NULL };
+    PyObject *dir_o = NULL, *gg;
+    double m, d[3] = { 0.0, 0.0, 0.0 };
+    ycol_rgb dir;
+    ycol_shown r;
+    int bits = 8;
+    if (col_ready(self) < 0 || !PyArg_ParseTupleAndKeywords(args, kwds, "d|Oi", kw, &m, &dir_o, &bits)) return NULL;
+    if (dir_o && dir_o != Py_None && col_triple(dir_o, d, "dir") < 0) return NULL;
+    dir.r = d[0]; dir.g = d[1]; dir.b = d[2];
+    if (ycol_michelson(AS_CTX(self), m, dir, bits, &r) < 0) return col_fail(r.status, r.why);
+    gg = col_gamut(&r.gamut);
+    if (!gg) return NULL;
+    return PyObject_CallFunction(ShownType, "ddddddd(kkk)(kkk)N", r.gain, r.scene, r.max, r.shown, r.Y_bg, r.Y_peak, r.Y_trough,
+                                 (unsigned long)r.peak[0], (unsigned long)r.peak[1], (unsigned long)r.peak[2],
+                                 (unsigned long)r.trough[0], (unsigned long)r.trough[1], (unsigned long)r.trough[2], gg);
+}
+
 static PyObject* Ctx_set_background(PyObject* self, PyObject* arg) {
     double bg[3];
     int rc;
@@ -781,6 +802,9 @@ static PyMethodDef Ctx_methods[] = {
     { "ring", (PyCFunction)(void (*)(void))Ctx_ring, METH_VARARGS | METH_KEYWORDS,
       "ring(plane, fixed, n, symmetric=False) -> tuple of n radii: the gamut boundary in a plane." },
     { "map", Ctx_map, METH_VARARGS, "map(color, method) -> ((r, g, b), Gamut): the color brought inside by a stated method." },
+    { "michelson", (PyCFunction)(void (*)(void))Ctx_michelson, METH_VARARGS | METH_KEYWORDS,
+      "michelson(michelson, dir=(0, 0, 0), bits=8) -> Shown: a Michelson contrast in light as ysp/gfx.h's contrast "
+      "along dir (0 = the background), the output codes of the peak and trough, and the contrast they show." },
     { "set_background", Ctx_set_background, METH_O, "set_background((r, g, b))." },
     { "lum_pair", (PyCFunction)(void (*)(void))Ctx_lum_pair, METH_VARARGS | METH_KEYWORDS,
       "lum_pair(azim, elev, contrast) -> (a, b): the two lights of a flicker probe." },
@@ -1003,6 +1027,7 @@ PyMODINIT_FUNC PyInit_color(void) {
     if (!ColArgumentError || !ColRefusedError || !ColFormatError || !ColRangeError) goto fail;
     if (!(ColorType = col_namedtuple(m, "Color", "space a b c"))) goto fail;
     if (!(GamutType = col_namedtuple(m, "Gamut", "status in_gamut below above margin distance scale kept why"))) goto fail;
+    if (!(ShownType = col_namedtuple(m, "Shown", "gain scene max shown Y_bg Y_peak Y_trough peak trough gamut"))) goto fail;
     if (PyModule_AddStringConstant(m, "__version__", ycol_version()) < 0) goto fail;
     si = ycol_spaces(&n);
     for (i = 0; i < n; i++) {   /* SPACE_DKL = 16 and so on, as the header */

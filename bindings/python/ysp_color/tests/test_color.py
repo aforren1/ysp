@@ -171,3 +171,39 @@ def test_tables_and_helpers(cal):
     assert abs(l / 4.02563e-2 - 1) < 1e-7
     assert ycol.output_code(cal, (0.0, 1.0, 2.0)) == (0, 255, 255)
     assert ycol.GAMUT_EPS == 2.0 ** -20
+
+
+def test_michelson():
+    # ysp/color.h v0.4.0: a Michelson contrast in light, gfx's contrast and
+    # the codes; a nominal display at 100 cd/m2 with a black of 0.5 cd/m2
+    cal = ycol.Calibration()
+    cal.add(ycol.GUN_BLACK, 0, 0.5)
+    for gun in range(3):
+        for k in range(1, 17):
+            cal.add(gun, k / 16, 0.5 + 33.0 * (k / 16) ** 2.2)
+    cal.derive()
+    cx = ycol.Context(cal, (0.5, 0.5, 0.5))
+    y_bg = 0.5 + 0.5 * 3 * 33.0
+    sh = cx.michelson(0.05)
+    assert isinstance(sh, ycol.Shown) and sh.gamut.in_gamut
+    assert abs(sh.Y_bg - y_bg) < 1e-4
+    assert abs(sh.gain - (y_bg - 0.5) / y_bg) < 1e-6
+    assert abs(sh.scene - 0.05 / sh.gain) < 1e-15
+    assert abs(sh.shown - (sh.Y_peak - sh.Y_trough) / (sh.Y_peak + sh.Y_trough)) < 1e-15
+    assert abs(sh.shown - 0.05) < 0.007 and sh.peak[0] > sh.trough[0] and len(sh.trough) == 3
+    # past the gamut: not clipped, reported; the clamped codes show the edge
+    past = cx.michelson(sh.max * 1.5)
+    assert not past.gamut.in_gamut and past.peak == (255, 255, 255) and past.trough == (0, 0, 0)
+    assert abs(past.scene - 1.5) < 1e-12 and abs(past.shown - sh.max) < 1e-12
+    # 0 shows 0; 16 bits; the opposite phase
+    assert cx.michelson(0.0).shown == 0.0
+    assert cx.michelson(0.05, bits=16).peak[0] > 255
+    neg = cx.michelson(-0.05)
+    assert neg.shown == -sh.shown and neg.peak == sh.trough
+    # a colored dir, and an isoluminant one refused
+    red = cx.michelson(0.02, dir=(0.2, 0, 0))
+    assert red.peak[1] == red.trough[1] and red.gain < sh.gain
+    with pytest.raises(ycol.RangeError, match="no luminance"):
+        cx.michelson(0.02, dir=(1, -1, 0))
+    with pytest.raises(ycol.ArgumentError, match="bits"):
+        cx.michelson(0.02, bits=7)

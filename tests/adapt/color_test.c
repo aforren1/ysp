@@ -852,6 +852,184 @@ static void test_device(void) {
     }
 }
 
+/* ycol_michelson() (v0.4.0): the 2AFC example's own arithmetic as the
+ * reference, then the edges a method meets: 0, below a code, the gamut's
+ * edge and past it, the opposite phase, a colored and an isoluminant dir,
+ * a photometer's calibration, 10 and 16 bits, the refusals. */
+static double mich_lum(const ycol_ctx* cx, ycol_rgb v) {
+    return ycol_from_rgb(cx, v, YCOL_SPACE_XYY, NULL).u.xyy.Y;
+}
+
+/* The light of output codes the long way: device values, the context's
+ * DEVICE space, xyY. */
+static double mich_code_lum(const ycol_ctx* cx, const uint32_t q[3], double mx) {
+    return mich_lum(cx, ycol_to_rgb(cx, YCOL_DEVICE(q[0] / mx, q[1] / mx, q[2] / mx), NULL));
+}
+
+static void test_michelson(void) {
+    static ycol_cal cal_xyk;   /* chromaticities and a black with light */
+    const ycol_rgb zero = { 0.0, 0.0, 0.0 };
+    ycol_ctx cx;
+    ycol_shown r, r2;
+    char err[200];
+    int i, k, gun, nbad = 0, mono_bad = 0;
+    double worst8 = 0.0, worst16 = 0.0, prev = -2.0;
+    g_where = "michelson";
+    ycol_cal_init(&cal_xyk);
+    ycol_cal_add(&cal_xyk, YCOL_GUN_BLACK, 0, 0.4f, 0.3127f, 0.3290f);
+    for (gun = 0; gun < 3; gun++)
+        for (k = 1; k <= 16; k++)
+            ycol_cal_add(&cal_xyk, gun, k / 16.0f, (float)(0.4 + (gun == 1 ? 60.0 : 20.0) * pow(k / 16.0, 2.2)), SRGB_XY[gun][0],
+                         SRGB_XY[gun][1]);
+    CHECK(ycol_cal_derive(&cal_xyk, err, sizeof err) == YCOL_OK);
+    CHECK(ctx_on(&cx, &cal_xyk, 0.5) == YCOL_OK);
+    CHECK(cx.can & YCOL_CAN_XYZ);
+
+    /* the example's v0.3 code: Y from xyY, the scale Y_bg / (Y_bg -
+     * Y_black), the codes of 0.5 (1 +- c), their light through DEVICE */
+    {
+        ycol_rgb v;
+        double y_bg, y_k, scale, level_max, dmax = 0.0;
+        v.r = v.g = v.b = 0.5;
+        y_bg = mich_lum(&cx, v);
+        y_k = mich_lum(&cx, zero);
+        scale = y_bg / (y_bg - y_k);
+        level_max = ycol_max_scale(&cx, YCOL_RGB(1, 1, 1), YCOL_SYMMETRIC) / scale;
+        for (i = 0; i <= 400; i++) {
+            double m = 0.0005 * i, c = m * scale, yp, yt, shown;
+            uint32_t qp[3], qt[3];
+            v.r = v.g = v.b = 0.5 * (1.0 + c);
+            ycol_output_code(&cal_xyk, v, 8, qp);
+            v.r = v.g = v.b = 0.5 * (1.0 - c);
+            ycol_output_code(&cal_xyk, v, 8, qt);
+            yp = mich_code_lum(&cx, qp, 255.0);
+            yt = mich_code_lum(&cx, qt, 255.0);
+            shown = (yp - yt) / (yp + yt);
+            CHECK(ycol_michelson(&cx, m, zero, 8, &r) == YCOL_OK && r.status == YCOL_OK && r.why == NULL);
+            for (k = 0; k < 3; k++) nbad += r.peak[k] != qp[k] || r.trough[k] != qt[k];
+            dmax = maxd(dmax, fabs(r.scene - c));
+            dmax = maxd(dmax, fabs(r.shown - shown));
+            dmax = maxd(dmax, fabs(r.max - level_max));
+            dmax = maxd(dmax, fabs(r.Y_bg - y_bg) / y_bg);
+            dmax = maxd(dmax, fabs(r.Y_peak - yp) / yp + fabs(r.Y_trough - yt) / yt);
+            if (r.shown < prev) mono_bad++;
+            prev = r.shown;
+            if (m <= level_max) worst8 = maxd(worst8, fabs(r.shown - m));
+        }
+        printf("  michelson against the 2AFC example's arithmetic: codes %d of 2406 differ, values within %.2g\n", nbad, dmax);
+        CHECK(nbad == 0);
+        CHECK_LE(dmax, 1e-12);
+        CHECK(mono_bad == 0);
+        CHECK_LE(fabs(level_max - (y_bg - y_k) / y_bg), 1e-15);
+    }
+
+    /* 0: the background's code twice, no contrast */
+    CHECK(ycol_michelson(&cx, 0.0, zero, 8, &r) == YCOL_OK);
+    CHECK(r.scene == 0.0 && r.shown == 0.0 && r.peak[0] == r.trough[0] && r.gamut.in && r.Y_peak == r.Y_trough);
+    /* below about half a code step at mid gray: shown 0, scene not 0 */
+    CHECK(ycol_michelson(&cx, 0.0005, zero, 8, &r) == YCOL_OK);
+    CHECK(r.scene > 0.0 && r.shown == 0.0 && r.peak[1] == r.trough[1]);
+    /* the quantization error in gamut: 8 bits within a code step's
+     * contrast at mid gray (about 0.0067 here), 16 bits within 1/100 of it */
+    for (i = 1; i <= 2000; i++) {
+        double m = 0.0005 * i;
+        CHECK(ycol_michelson(&cx, m, zero, 16, &r) == YCOL_OK);
+        if (r.gamut.in) worst16 = maxd(worst16, fabs(r.shown - m));
+    }
+    printf("  michelson shown minus asked, in gamut: 8 bits %.3g, 16 bits %.3g\n", worst8, worst16);
+    CHECK_LE(worst8, 0.0067);
+    CHECK_LE(worst16, 0.0067 / 100.0);
+    CHECK(worst16 > 0.0);
+    /* 10 bits: codes up to 1023 */
+    CHECK(ycol_michelson(&cx, 0.0, zero, 10, &r2) == YCOL_OK);
+    CHECK(ycol_michelson(&cx, r2.max, zero, 10, &r) == YCOL_OK);
+    CHECK(r.peak[0] == 1023 && r.peak[1] == 1023 && r.trough[2] == 0 && r.gamut.in);
+
+    /* the gamut's edge: max is in gamut and shows itself; past it the scene
+     * is not clipped, gamut says so, and the clamped codes show max */
+    CHECK(ycol_michelson(&cx, 0.0, zero, 8, &r2) == YCOL_OK);
+    CHECK(ycol_michelson(&cx, r2.max, zero, 8, &r) == YCOL_OK);
+    CHECK(r.gamut.in && fabs(r.scene - 1.0) < 1e-15 && r.peak[0] == 255 && r.trough[0] == 0);
+    CHECK_LE(fabs(r.shown - r2.max), 1e-15);
+    CHECK(ycol_michelson(&cx, r2.max * 1.25, zero, 8, &r) == YCOL_OK);
+    CHECK(!r.gamut.in && r.gamut.below == 7u && r.gamut.above == 7u && fabs(r.scene - 1.25) < 1e-15);
+    CHECK(fabs(r.gamut.scale - 0.8) < 1e-15 && fabs(r.gamut.distance - 0.125) < 1e-15);
+    CHECK(r.peak[0] == 255 && r.trough[0] == 0 && fabs(r.shown - r2.max) < 1e-15 && r.max == r2.max);
+    CHECK(ycol_michelson(&cx, 1.5, zero, 8, &r) == YCOL_OK && !r.gamut.in && r.shown < 1.5);
+
+    /* the opposite phase: codes swap, shown negated */
+    CHECK(ycol_michelson(&cx, 0.07, zero, 8, &r) == YCOL_OK);
+    CHECK(ycol_michelson(&cx, -0.07, zero, 8, &r2) == YCOL_OK);
+    CHECK(r2.scene == -r.scene && r2.shown == -r.shown && r2.peak[0] == r.trough[0] && r2.trough[2] == r.peak[2]);
+    CHECK(r.shown > 0.06 && r.shown < 0.08);
+
+    /* a colored dir, the red gun only: gain = w_r dir_r / Y_bg; max from
+     * the red channel's room, 0.5 / 0.25 */
+    {
+        ycol_rgb red = { 0.25, 0.0, 0.0 };
+        double y_bg = 0.4 + 0.5 * (20.0 + 60.0 + 20.0);
+        CHECK(ycol_michelson(&cx, 0.05, red, 8, &r) == YCOL_OK);
+        CHECK(fabs(r.gain - 0.25 * 20.0 / y_bg) < 1e-6 && fabs(r.Y_bg - y_bg) < 1e-4);
+        CHECK(fabs(r.max - 2.0 * r.gain) < 1e-15);
+        CHECK(r.peak[1] == r.trough[1] && r.peak[2] == r.trough[2] && r.peak[0] > r.trough[0]);
+        CHECK_LE(fabs(r.shown - (mich_code_lum(&cx, r.peak, 255.0) - mich_code_lum(&cx, r.trough, 255.0)) /
+                                    (mich_code_lum(&cx, r.peak, 255.0) + mich_code_lum(&cx, r.trough, 255.0))), 1e-12);
+        CHECK_LE(fabs(r.shown - 0.05), 0.01);
+        /* the gray axis moves all three guns: more light per unit contrast */
+        CHECK(ycol_michelson(&cx, 0.05, zero, 16, &r2) == YCOL_OK && r2.gain > r.gain);
+    }
+    ycol_ctx_close(&cx);
+
+    /* a photometer's calibration (no chromaticities): Y from the readings */
+    CHECK(ctx_on(&cx, &cal_lumo, 0.5) == YCOL_OK);
+    CHECK(!(cx.can & YCOL_CAN_XYZ));
+    CHECK(ycol_michelson(&cx, 0.1, zero, 8, &r) == YCOL_OK);
+    {
+        double yk = (double)0.2f, y1 = (double)(float)(0.2 + 60.0), y_bg = yk + 0.5 * 3.0 * (y1 - yk);
+        CHECK_LE(fabs(r.Y_bg - y_bg) / y_bg, 1e-12);
+        CHECK_LE(fabs(r.gain - (y_bg - yk) / y_bg), 1e-12);
+        CHECK_LE(fabs(r.shown - 0.1), 0.01);
+    }
+    /* an isoluminant dir (w . dir = 0; the three guns' readings are equal
+     * here) is refused, not divided by 0 */
+    {
+        ycol_rgb iso = { 1.0, -1.0, 0.0 };
+        CHECK(ycol_michelson(&cx, 0.05, iso, 8, &r) == YCOL_ERR_RANGE && r.status == YCOL_ERR_RANGE && r.why != NULL);
+        CHECK(r.scene != r.scene && r.shown != r.shown && r.gamut.status == YCOL_ERR_RANGE && r.peak[0] == 0);
+    }
+    ycol_ctx_close(&cx);
+
+    /* no black light: a black background has no light and is refused; at
+     * 0.2 the trough of contrast 1 is code 0, which shows 1 */
+    CHECK(ctx_on(&cx, &cal_srgb, 0.0) == YCOL_OK);
+    CHECK(ycol_michelson(&cx, 0.1, zero, 8, &r) == YCOL_ERR_RANGE && r.why != NULL);
+    {
+        ycol_rgb up = { 0.1, 0.1, 0.1 };   /* light along dir, none at the background */
+        CHECK(ycol_michelson(&cx, 0.1, up, 8, &r) == YCOL_ERR_RANGE && r.why != NULL && strstr(r.why, "no light") != NULL);
+    }
+    ycol_ctx_close(&cx);
+    CHECK(ctx_on(&cx, &cal_srgb, 0.2) == YCOL_OK);
+    CHECK(ycol_michelson(&cx, 0.0, zero, 8, &r2) == YCOL_OK && fabs(r2.gain - 1.0) < 1e-15 && fabs(r2.max - 1.0) < 1e-15);
+    CHECK(ycol_michelson(&cx, 1.0, zero, 8, &r) == YCOL_OK && r.trough[0] == 0 && r.shown == 1.0 && r.gamut.in);
+    ycol_ctx_close(&cx);
+
+    /* refusals */
+    CHECK(ctx_on(&cx, &cal_srgb, 0.5) == YCOL_OK);
+    CHECK(ycol_michelson(&cx, 0.1, zero, 8, NULL) == YCOL_ERR_ARG);
+    CHECK(ycol_michelson(NULL, 0.1, zero, 8, &r) == YCOL_ERR_ARG && r.status == YCOL_ERR_ARG && r.why != NULL);
+    CHECK(ycol_michelson(&cx, 0.1, zero, 7, &r) == YCOL_ERR_ARG && r.shown != r.shown);
+    CHECK(ycol_michelson(&cx, 0.1, zero, 17, &r) == YCOL_ERR_ARG);
+    CHECK(ycol_michelson(&cx, 0.1, zero, 16, &r) == YCOL_OK);
+    CHECK(ycol_michelson(&cx, HUGE_VAL, zero, 8, &r) == YCOL_ERR_ARG);
+    {
+        ycol_rgb bad = { 0.0, 0.0, 0.0 };
+        bad.g = HUGE_VAL;
+        CHECK(ycol_michelson(&cx, 0.1, bad, 8, &r) == YCOL_ERR_ARG);
+    }
+    ycol_ctx_close(&cx);
+    CHECK(ycol_michelson(&cx, 0.1, zero, 8, &r) == YCOL_ERR_ARG);   /* closed: no calibration */
+}
+
 static void test_lum(void) {
     static ycol_lum l, l2;
     static unsigned char bytes[sizeof(ycol_lum)];
@@ -1166,6 +1344,7 @@ int main(void) {
     test_gamut();
     test_map();
     test_device();
+    test_michelson();
     test_lum();
     test_raw_parity();
     test_refusals();

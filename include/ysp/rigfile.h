@@ -1,13 +1,13 @@
-/* ysp/rigfile.h - v0.4.0 - public domain single-header rig profile
+/* ysp/rigfile.h - v0.5.0 - public domain single-header rig profile
  *
  *   The file on a rig that says which device plays each role and what the
  *   rig's loopbacks measured, kept outside every pack (docs/devices_spec.md
  *   11.2, decided 2026-10-09): "ysp-rig 1", JSON in one canonical form,
  *   in the user's config folder. Load it with errors that name the field,
  *   check every loopback file it names by SHA-256, give a role's desc for
- *   ysp/device.h and open the instance, change a binding, store a
- *   loopback result, write it back canonically, and give its hash for the
- *   data file header.
+ *   ysp/device.h and open the instance, give the viewing geometry,
+ *   change a binding, store a loopback result, write it back canonically,
+ *   and give its hash for the data file header.
  *
  *   REQUIRES ysp/device.h (and so ysp/rt.h, ysp/input.h, ysp/box.h,
  *   ysp/serial.h) and ysp/json.h beside it; this header includes them, and
@@ -50,6 +50,8 @@
  *     roles     { NAME: role, ... }, at most 32; NAME is 1 to 31 of
  *               A-Z a-z 0-9 _ . - (the ydev_roles name)         required
  *     display   { onset_offset_s, latency, calibration: { file, sha256 } }
+ *     view      { distance_mm, width_mm, width_px }, all required
+ *               (v0.5.0, VIEWING GEOMETRY)
  *   A role:
  *     family    a ysp/box.h family name: xid, line, photo, triggerbox,
  *               biosemi, mmbts, lines, parallel; or lsl, a Lab
@@ -80,10 +82,32 @@
  *   CANONICAL FORM. yrig_write() gives the bytes: ysp/json.h's
  *   YJS_WRITE_PRETTY (keys in bytewise order, two spaces, LF) and one
  *   final LF; seconds as exact decimals of the nanoseconds with no
- *   trailing zeros (0.000577, 2); a default is left out (options with no
- *   option, latched false, an unset pulse, an empty button map). The
- *   profile's hash, yrig_hash(), is the SHA-256 of these bytes, so it does
- *   not change with the whitespace or number spelling of a hand edit.
+ *   trailing zeros (0.000577, 2); millimeters as the shortest decimal that
+ *   reads back as the same double (570, 518.4); a default is left out
+ *   (options with no option, latched false, an unset pulse, an empty
+ *   button map, no view). The profile's hash, yrig_hash(), is the SHA-256
+ *   of these bytes, so it does not change with the whitespace or number
+ *   spelling of a hand edit. A profile without view has the bytes, and so
+ *   the hash, that v0.4.0 gave it; adding or changing view changes the
+ *   hash, as it changes every size in degrees.
+ *
+ *   ---------------------------------------------------------------------
+ *   VIEWING GEOMETRY
+ *   ---------------------------------------------------------------------
+ *   view says what a degree of visual angle is on this rig: distance_mm
+ *   from the eye to the screen's center (the chin rest), width_mm the
+ *   width of the lit image on the screen, and width_px the pixels across
+ *   it (the mode it was measured in), each from a tape or a ruler. Each mm
+ *   value is above 0 and at most 100000; width_px is 1 to 100000.
+ *   yrig_ppd() gives the pixels per degree at the center, width_px /
+ *   width_mm * distance_mm * tan(1 deg), the scale ysp/gfx.h's YGFX_DEG
+ *   uses. For ysp/gfx.h's ygfx_view of a drawable w pixels wide:
+ *       view.distance_mm = p.view.distance_mm;
+ *       view.width_mm    = w * p.view.width_mm / p.view.width_px;
+ *   which holds for a window too, because the pitch, width_mm / width_px,
+ *   does not change with the window. A full-screen mode of another width
+ *   scales the image: measure again in that mode. The geometry is the
+ *   rig's, never a pack's (docs/experiment_format.md, D4).
  *
  *   ---------------------------------------------------------------------
  *   LOOPBACK FILES
@@ -160,6 +184,11 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.5.0 - view: the viewing geometry (distance_mm, width_mm, width_px;
+ *          yrig_view, VIEWING GEOMETRY) and yrig_ppd(). A profile without
+ *          view writes and hashes as in v0.4.0; a v0.4.0 reader refuses
+ *          view (an unknown key). Closes gap G2 of
+ *          docs/experiment_format.md.
  *   v0.4.0 - display.latency: the photodiode run behind onset_offset_s,
  *          checked at load like a role's latency (yrig_display.latency).
  *          yrig_read_loopback() reads the three LOOPBACK FILES formats:
@@ -185,7 +214,7 @@
  *   v0.1.0 - first version: the "ysp-rig 1" format, load, check, write,
  *          hash, bind, store a loopback result.
  *
- *   STATUS: v0.4.0, 2026-10-13. docs/device.md ("The rig profile") has the
+ *   STATUS: v0.5.0, 2026-10-21. docs/device.md ("The rig profile") has the
  *   how-to, the reference and the test counts.
  *
  *   ---------------------------------------------------------------------
@@ -195,9 +224,9 @@
 #define YSP_RIGFILE_H_INCLUDED
 
 #define YRIG_VERSION_MAJOR 0
-#define YRIG_VERSION_MINOR 4
+#define YRIG_VERSION_MINOR 5
 #define YRIG_VERSION_PATCH 0
-#define YRIG_VERSION_STRING "0.4.0"
+#define YRIG_VERSION_STRING "0.5.0"
 
 #include "ysp/device.h"
 #include "ysp/json.h"
@@ -291,12 +320,23 @@ typedef struct yrig_display {
     int      check;              /* the calibration file's                   */
 } yrig_display;
 
+/* The viewing geometry (v0.5.0): what degrees of visual angle are on this
+ * rig. width_px is the pixel count across width_mm, so the pixel pitch
+ * holds for a window as for the full screen. */
+typedef struct yrig_view {
+    bool     set;
+    double   distance_mm;        /* eye to screen, at the screen's center     */
+    double   width_mm;           /* the image's width on the screen           */
+    int32_t  width_px;           /* the pixels across width_mm                */
+} yrig_view;
+
 typedef struct yrig_profile {
     char         rig[64];
     char         written[24];
     int          n_roles;
     yrig_role    role[YRIG_MAX_ROLES];
     yrig_display display;
+    yrig_view    view;           /* v0.5.0                                    */
     char         dir[512];       /* the folder of loopback/; "" = none       */
     int          n_notes;
     char         notes[YRIG_MAX_NOTES][160];   /* what the checks found      */
@@ -332,6 +372,9 @@ YRIG_API yrig_role* yrig_add(yrig_profile* p, const char* role);
 YRIG_API bool yrig_remove(yrig_profile* p, const char* role);
 /* Binds role to a device: family, key; clears its latency and bounds. */
 YRIG_API int  yrig_bind(yrig_profile* p, const char* role, int family, const char* key);
+/* Pixels per degree of visual angle at the screen's center, from view;
+ * 0 when the profile has none (VIEWING GEOMETRY). */
+YRIG_API double yrig_ppd(const yrig_profile* p);
 
 /* --- loopback files ------------------------------------------------------------ */
 /* Writes data to dir/loopback/<sha256>.txt; sha_hex gets the name. */
@@ -385,6 +428,7 @@ YRIG_API yin_source yrig_source_role(const yrig_profile* p, const char* role, yi
 #include <stdlib.h>
 #include <stdarg.h>
 #include <errno.h>
+#include <math.h>
 #include <time.h>
 
 #if defined(_WIN32)
@@ -920,6 +964,29 @@ static int yrig__display(yrig__rd* r, const yjs_value* o, yrig_display* d) {
     return YRIG_OK;
 }
 
+/* A length in mm, above 0 and at most 100 m: a double, so a hand edit's
+ * spelling (570.0, 5.7e2) gives the same canonical bytes. */
+static int yrig__mm(yrig__rd* r, const yjs_value* o, const char* key, const char* field, double* out) {
+    const yjs_value* v = yjs_get(o, key);
+    if (!v) return yrig__bad(r, o, field, "is missing");
+    if (v->type != YJS_NUMBER || yjs_double(v, out) != YJS_OK) return yrig__bad(r, v, field, "must be a number (mm)");
+    if (!(*out > 0.0 && *out <= 100000.0)) return yrig__bad(r, v, field, "%s is out of range (above 0, at most 100000)", v->u.s);
+    return YRIG_OK;
+}
+
+static int yrig__view(yrig__rd* r, const yjs_value* o, yrig_view* w) {
+    static const char* const keys[] = { "distance_mm", "width_mm", "width_px", NULL };
+    int64_t px = 0;
+    int rc;
+    if ((rc = yrig__keys(r, o, "view", keys)) != YRIG_OK) return rc;
+    if ((rc = yrig__mm(r, o, "distance_mm", "view.distance_mm", &w->distance_mm)) != YRIG_OK) return rc;
+    if ((rc = yrig__mm(r, o, "width_mm", "view.width_mm", &w->width_mm)) != YRIG_OK) return rc;
+    if ((rc = yrig__int(r, o, "width_px", "view.width_px", &px, 1, 100000, true)) != YRIG_OK) return rc;
+    w->width_px = (int32_t)px;
+    w->set = true;
+    return YRIG_OK;
+}
+
 static void yrig__note(yrig_profile* p, const char* fmt, ...) {
     va_list ap;
     if (p->n_notes >= YRIG_MAX_NOTES) return;
@@ -1094,7 +1161,7 @@ static void yrig__checks(yrig_profile* p, const char* dir) {
 }
 
 static int yrig__parse(yrig_profile* p, const char* text, size_t n, const char* dir, const char* what, char* err, size_t cap) {
-    static const char* const keys[] = { "format", "rig", "written", "roles", "display", NULL };
+    static const char* const keys[] = { "format", "rig", "written", "roles", "display", "view", NULL };
     yjs_arena a;
     yjs_value* root;
     yjs_error e;
@@ -1139,6 +1206,7 @@ static int yrig__parse(yrig_profile* p, const char* text, size_t n, const char* 
         if (rc == YRIG_OK) p->n_roles = (int)v->n;
     }
     if (rc == YRIG_OK && (v = yjs_get(root, "display")) != NULL) rc = yrig__display(&r, v, &p->display);
+    if (rc == YRIG_OK && (v = yjs_get(root, "view")) != NULL) rc = yrig__view(&r, v, &p->view);
     yjs_arena_free(&a);
     if (rc != YRIG_OK) {
         memset(p, 0, sizeof *p);
@@ -1254,6 +1322,12 @@ static yjs_value* yrig__json(yjs_arena* a, const yrig_profile* p) {
         }
         if (ok && p->display.latency.set) ok = yjs_set(a, d, "latency", yrig__lb_json(a, &p->display.latency, true)) == YJS_OK;
         if (ok) ok = yjs_set(a, root, "display", d) == YJS_OK;
+    }
+    if (ok && p->view.set) {
+        yjs_value* w = yjs_new(a, YJS_OBJECT);
+        ok = w && yjs_set(a, w, "distance_mm", yjs_new_double(a, p->view.distance_mm)) == YJS_OK &&
+             yjs_set(a, w, "width_mm", yjs_new_double(a, p->view.width_mm)) == YJS_OK &&
+             yjs_set(a, w, "width_px", yjs_new_int(a, p->view.width_px)) == YJS_OK && yjs_set(a, root, "view", w) == YJS_OK;
     }
     return ok ? root : NULL;
 }
@@ -1417,6 +1491,13 @@ YRIG_API int yrig_bind(yrig_profile* p, const char* role, int family, const char
     memset(&r->latency, 0, sizeof r->latency);   /* measured on the old device */
     memset(&r->bounds, 0, sizeof r->bounds);
     return YRIG_OK;
+}
+
+YRIG_API double yrig_ppd(const yrig_profile* p) {
+    if (!p || !p->view.set || !(p->view.width_mm > 0.0) || !(p->view.distance_mm > 0.0) || p->view.width_px < 1) return 0.0;
+    /* ysp/gfx.h's YGFX_DEG scale, the same expression: one factor, exact
+     * at the center, where a degree spans distance * tan(1 deg) mm */
+    return (double)p->view.width_px / p->view.width_mm * p->view.distance_mm * tan(3.14159265358979323846 / 180.0);
 }
 
 YRIG_API int yrig_store_loopback(const char* dir, const void* data, size_t n, char sha_hex[65], char* err, size_t cap) {
