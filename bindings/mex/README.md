@@ -28,7 +28,7 @@ argument helpers; a copy of one of those sources needs that file beside it.
 
 [test_mex.m](test_mex.m) runs the key checks of the four adaptive modules and
 of `ysp_serial` and the time units of `ysp_parallel` (no port needed) in
-MATLAB or Octave and prints `PASS`. Without a port it checks `ysp_serial`'s
+MATLAB or Octave and prints `PASS` with the number of checks. Without a port it checks `ysp_serial`'s
 arguments and handles only; with the environment variable
 `YSP_TEST_ECHO_PORT` set to the port of an echo board (`firmware/ysp_echo`)
 it also runs the async reader on a 2000-line stream.
@@ -664,7 +664,7 @@ or an n x 2 cell), `reps`, `cond_reps`, `order` (`'sequential'`,
 `n_warmup`, `warmup_conditions` (1-based), `requeue_gap`, `rng`,
 `record_size`, and from v0.2: `table`, `order_list` (1-based), `draws`,
 `weights`, `subset`, `groups`, `rules` and `participant`; from v0.2.1,
-`jitters`. `order` also
+`jitters`; from v0.6, `seed`, `vars` and `display_rate`. `order` also
 takes `'list'` and `'with_replacement'`.
 
 **Tables and rules (v0.2).** `desc.table` is CSV text, or
@@ -702,6 +702,12 @@ may be a table column's name; `rate` is `NUM` or `[NUM DEN]` Hz and snaps the
 draws to whole frames. A jitter's column holds seconds, so its name ends
 in `_s`, as ysp/trials.h's data writer requires.
 
+To snap a jitter to the rig's refresh, give `rate` as `'display'` (rules
+text: `rate=display`), and set `desc.display_rate` to the rate that the
+screen reports, `NUM` or `[NUM DEN]` Hz, for example `[60000 1001]`. Without
+`display_rate` the session does not open. `format_rules` keeps
+`rate=display`; `format_meta` gives the rate of the draws (v0.6).
+
 ```matlab
 d.jitters = [ysp_trials('exponential', 'fp_s', 0.5, 2.0, 0.4, [60000 1001]), ...
              ysp_trials('uniform', 'iti_s', 0.8, 1.2)];
@@ -709,6 +715,34 @@ h = ysp_trials('open', d);
 ti = ysp_trials('next', h);
 fp = ysp_trials('jitter', h, ti.index, 'fp_s'); % fp.s, fp.ns (int64), fp.frames
 ```
+
+**Variables (v0.6).** A variable is a category drawn per trial, for
+example the side of a 2AFC target:
+
+```matlab
+d.seed = uint64(20261021);                  % the trial streams' seed
+d.vars = ysp_trials('var_choice', 'side', {'left', 'right'});
+h = ysp_trials('open', d);
+ti = ysp_trials('next', h);
+side = ysp_trials('var', h, ti.index, 'side');     % 'left' or 'right'
+noise_seed = ysp_trials('trial_seed', h, ti.index); % uint64, for a stimulus generator
+```
+
+A value comes from the trial's own stream, which `seed` and the trial index
+make. It draws nothing from `rng`, so a variable that you add or remove does
+not change the schedule or the jitters. `restore` and `load` give every
+value again. Each value is equally likely; repeat a value to weight it.
+`desc.vars` is a struct array (`[v1 v2]`) of at most 4 variables, each with
+1 to 32 values of 1 to 63 bytes. The rules text takes `var side choice left
+right`. `format_row` writes one column per variable, after the jitters, and
+then `trial_seed` when the session has variables or a nonzero `seed`: the
+seed as `x` and 16 lowercase hex digits (`x00f3a9c4e2b7d158`). That column
+is text, so all 64 bits read back; `ysp_trials('table', ...)` reads it as a
+string column. `seed` is a `uint64`, or a double that holds an integer
+below 2^53.
+The binding converts the values and the rules text to UTF-8, as it does a
+table. `var` returns a value through `mxCreateString`: a value that is not
+ASCII comes back intact in Octave (tested), but MATLAB was not tested.
 
 **Constraints** come from module commands. Put them in `desc.constraints`
 as a struct array (`[c1 c2]`) or as a cell. A factor is a 1-based index, a
@@ -774,9 +808,13 @@ level = typecast(ysp_trials('record', h, i), 'double');
 | `'close', h` | none | |
 | `'format_rules', h` | string | the session's settings as rules text (v0.2) |
 | `'jitter', h, i, j`, `'jitter_names', h` | struct, cell | trial `i`'s draw of jitter `j` (1-based, or a name): `s`, `ns` (int64), `frames` (-1 unless snapped); the names (v0.2.1) |
-| `'uniform'`, `'choice'`, `'exponential'`, `'jitter_map', j, u` | struct | a jitter for `desc.jitters`; a variate mapped with no session (v0.2.1) |
+| `'uniform'`, `'choice'`, `'exponential'`, `'jitter_map', j, u` | struct | a jitter for `desc.jitters`; a variate mapped with no session (v0.2.1). `rate` may be `'display'` (v0.6); `jitter_map` refuses it, because only a session has a display rate |
+| `'var', h, i, j`, `'var_index', h, i, j`, `'var_names', h` | string, double, cell | trial `i`'s value of variable `j` (1-based, or a name); the 1-based index of that value in the variable's values; the names (v0.6) |
+| `'trial_seed', h, i` | `uint64` | trial `i`'s 64-bit seed, a function of `desc.seed` and `i` only, for a stimulus generator of the trial's own (v0.6) |
+| `'var_choice', name, values` | struct | a variable for `desc.vars`; `values` is a cell of strings (v0.6) |
+| `'limits'` | struct | the build's bounds: `max_trials`, `max_conditions`, `max_factors`, `max_constraints`, `max_tracks`, `max_jitters`, `max_jitter_values`, `max_vars`, `max_var_values`, `max_var_text`, `max_columns` (256 from v0.6) |
 | `'values', h, c` | struct | condition `c`'s table row, one field per column (v0.2) |
-| `'table_info', h`, `'table', csv` | struct | `columns`, `types`, `n_rows`, `n_skipped`, `levels`, `values` (a cell), `hash` (v0.2) |
+| `'table_info', h`, `'table', csv` | struct | `columns`, `types`, `n_rows`, `n_skipped`, `levels`, `values` (a cell), `hash` (v0.2). At most 256 columns (64 before v0.6) |
 | `'latin', n, row [, balanced]` | `[items, rows]` | row `row` (0-based, taken modulo `rows`) of a cyclic or Williams square, 1-based items (v0.2) |
 | `'splitmix', state` | `[u, state]` | one step of the seed generator |
 | `'version'`, `'strerror', code` | string | |

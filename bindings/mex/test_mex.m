@@ -15,8 +15,9 @@ function test_mex()
 
     here = fileparts(mfilename('fullpath'));
     addpath(here);
-    global YSP_TEST_STATE %#ok<GVMIS>
+    global YSP_TEST_STATE YSP_TEST_CHECKS %#ok<GVMIS>
     YSP_TEST_STATE = uint64(20260923);
+    YSP_TEST_CHECKS = 0;
 
     fprintf('ysp_stair %s, ysp_quest %s, ysp_aep %s, ysp_trials %s\n', ...
         ysp_stair('version'), ysp_quest('version'), ysp_aep('version'), ysp_trials('version'));
@@ -27,9 +28,10 @@ function test_mex()
     test_trials();
     test_trials_v02();
     test_trials_jitter();
+    test_trials_v06();
     test_serial();
     test_parallel();
-    fprintf('PASS\n');
+    fprintf('PASS (%d checks)\n', YSP_TEST_CHECKS);
 end
 
 % ---------------------------------------------------------------------------
@@ -40,6 +42,8 @@ function u = urand()
 end
 
 function check(cond, msg, varargin)
+    global YSP_TEST_CHECKS %#ok<GVMIS>
+    YSP_TEST_CHECKS = YSP_TEST_CHECKS + 1;
     if ~cond
         error('test_mex:fail', ['FAIL: ' msg], varargin{:});
     end
@@ -505,6 +509,318 @@ function test_trials_jitter()
     expect_error('ysp_trials:open', @() ysp_trials('open', struct('n_conditions', 1, 'reps', 1, ...
         'jitters', ysp_trials('uniform', 'x', 0.801, 0.81, 60))));
     fprintf('ysp_trials v0.2.1 jitter: ok\n');
+end
+
+% ---------------------------------------------------------------------------
+% trials v0.6: variables, the trial streams, rate 'display', 256 columns.
+% The stream is written here from the manual's VARIABLES, apart from the
+% header. MATLAB and Octave saturate uint64 arithmetic, so the products and
+% sums mod 2^64 go through 16-bit limbs held in doubles (exact below 2^53).
+
+function v = u64_hex(h)
+    % 16 hex digits, as two exact 32-bit halves
+    v = bitor(bitshift(uint64(hex2dec(h(1:8))), 32), uint64(hex2dec(h(9:16))));
+end
+
+function h = hex_u64(v)
+    h = sprintf('%08x%08x', double(bitshift(v, -32)), double(bitand(v, uint64(4294967295))));
+end
+
+function l = u64_limbs(a)
+    l = zeros(1, 4);
+    for k = 1:4
+        l(k) = double(bitand(bitshift(a, -16 * (k - 1)), uint64(65535)));
+    end
+end
+
+function z = u64_join(r)
+    z = uint64(0);
+    for k = 1:4
+        z = bitor(z, bitshift(uint64(r(k)), 16 * (k - 1)));
+    end
+end
+
+function r = u64_carry(r)
+    c = 0;
+    for k = 1:4
+        v = r(k) + c;
+        r(k) = mod(v, 65536);
+        c = floor(v / 65536);
+    end
+end
+
+function z = u64_add(a, b)
+    z = u64_join(u64_carry(u64_limbs(a) + u64_limbs(b)));
+end
+
+function z = u64_mul(a, b)
+    la = u64_limbs(a);
+    lb = u64_limbs(b);
+    r = zeros(1, 4);
+    for i = 1:4
+        for j = 1:5 - i
+            r(i + j - 1) = r(i + j - 1) + la(i) * lb(j);
+        end
+    end
+    z = u64_join(u64_carry(r));
+end
+
+function z = mix64(z)
+    z = u64_mul(bitxor(z, bitshift(z, -30)), u64_hex('BF58476D1CE4E5B9'));
+    z = u64_mul(bitxor(z, bitshift(z, -27)), u64_hex('94D049BB133111EB'));
+    z = bitxor(z, bitshift(z, -31));
+end
+
+function z = trial_stream(seed, i, k)
+    % output(i, k) of the manual, i the 0-based trial index
+    g = u64_hex('9E3779B97F4A7C15');
+    st = mix64(u64_add(bitxor(uint64(seed), u64_hex('6A09E667F3BCC909')), u64_mul(uint64(i + 1), g)));
+    z = mix64(u64_add(st, u64_mul(uint64(k + 1), g)));
+end
+
+function q = var_draw(seed, i, j, n)
+    % floor((output(i, 1 + j) >> 11) n / 2^53), 0-based, in exact steps
+    x = double(bitshift(trial_stream(seed, i, 1 + j), -11));
+    xh = floor(x / 2^26);
+    xl = x - xh * 2^26;
+    q = floor((xh * n + floor(xl * n / 2^26)) / 2^27);
+end
+
+function tf = ends_with(s, tail)
+    tf = numel(s) >= numel(tail) && strcmp(s(end - numel(tail) + 1:end), tail);
+end
+
+function expect_error_msg(id, pat, f)
+    try
+        f();
+    catch e
+        check(strcmp(e.identifier, id), 'expected error %s, got %s (%s)', id, e.identifier, e.message);
+        check(~isempty(strfind(e.message, pat)), 'error %s: "%s" not in "%s"', id, pat, e.message);
+        return;
+    end
+    error('test_mex:fail', 'FAIL: expected error %s, got none', id);
+end
+
+function n = run_out(h)
+    n = 0;
+    ti = ysp_trials('next', h);
+    while ~isempty(ti)
+        n = n + 1;
+        ysp_trials('update', h, 1);
+        ti = ysp_trials('next', h);
+    end
+end
+
+function test_trials_v06()
+    lim = ysp_trials('limits');
+    check(lim.max_vars == 4 && lim.max_var_values == 32 && lim.max_columns == 256 && lim.max_trials == 4096, ...
+          'limits');
+
+    % the stream as the manual writes it; the pins of tests/adapt/trials_test_vars.h
+    check(strcmp(hex_u64(trial_stream(uint64(0), 0, 0)), '96dcb1d7126a6eba'), 'stream pin 1');
+    check(strcmp(hex_u64(trial_stream(uint64(20261021), 999, 2)), 'b1f2fa923152ea67'), 'stream pin 2');
+
+    % every value and trial seed against that stream
+    seed = intmax('uint64') - 4;                         % 2^64 - 5
+    sides = {'left', 'right'};
+    odd = {'a b', 'c,d', 'e'};
+    d = struct('n_conditions', 3, 'reps', 6, 'order', 'full_random', 'rng', 5, 'seed', seed);
+    d.vars = [ysp_trials('var_choice', 'side', sides), ysp_trials('var_choice', 'odd', odd)];
+    h = ysp_trials('open', d);
+    check(isequal(ysp_trials('var_names', h), {'side', 'odd'}), 'var names');
+    n = 0;
+    ti = ysp_trials('next', h);
+    while ~isempty(ti)
+        n = n + 1;
+        i0 = ti.index - 1;
+        check(strcmp(ysp_trials('var', h, ti.index, 'side'), sides{var_draw(seed, i0, 0, 2) + 1}), 'var side, trial %d', n);
+        check(strcmp(ysp_trials('var', h, ti.index, 2), odd{var_draw(seed, i0, 1, 3) + 1}), 'var odd, trial %d', n);
+        check(ysp_trials('var_index', h, ti.index, 'odd') == var_draw(seed, i0, 1, 3) + 1, 'var_index, trial %d', n);
+        s = ysp_trials('trial_seed', h, ti.index);
+        check(isa(s, 'uint64') && s == trial_stream(seed, i0, 0), 'trial_seed, trial %d', n);
+        ysp_trials('update', h, 1);
+        ti = ysp_trials('next', h);
+    end
+    check(n == 18, 'v0.6 session length %d', n);
+    expect_error('ysp_trials:arg', @() ysp_trials('var', h, 19, 1));
+    expect_error_msg('ysp_trials:arg', 'no variable of that name', @() ysp_trials('var', h, 1, 'nope'));
+    expect_error('ysp_trials:arg', @() ysp_trials('var_index', h, 1, 3));
+    expect_error('ysp_trials:arg', @() ysp_trials('trial_seed', h, 0));
+    % variables draw nothing from the session's generator: the same schedule
+    u = ysp_trials('open', struct('n_conditions', 3, 'reps', 6, 'order', 'full_random', 'rng', 5));
+    run_out(u);
+    hu = ysp_trials('history', u);
+    hh = ysp_trials('history', h);
+    check(isequal(hu.condition, hh.condition), 'vars move no draw of the schedule');
+    check(isempty(strfind(ysp_trials('format_header', u), 'trial_seed')), 'no trial_seed column without a seed');
+    check(isempty(ysp_trials('var_names', u)), 'no var names');
+    ysp_trials('close', u);
+    ysp_trials('close', h);
+
+    % the data line, replay by restore, a snapshot and its refusal
+    d = struct('n_conditions', 2, 'reps', 5, 'order', 'random', 'rng', 3, 'seed', 9);
+    d.vars = [ysp_trials('var_choice', 'side', {'left', 'right'}), ysp_trials('var_choice', 'w', {'x,y', 'z'})];
+    h = ysp_trials('open', d);
+    run_out(h);
+    check(ends_with(ysp_trials('format_header', h), sprintf(',outcome,side,w,trial_seed\n')), 'v0.6 header');
+    for i = 1:10
+        w = ysp_trials('var', h, i, 'w');
+        if strcmp(w, 'x,y'), w = '"x,y"'; end
+        want = sprintf(',%s,%s,x%s\n', ysp_trials('var', h, i, 'side'), w, hex_u64(ysp_trials('trial_seed', h, i)));
+        check(ends_with(ysp_trials('format_row', h, i), want), 'v0.6 row %d', i);
+    end
+    r = ysp_trials('open', d);
+    hist = ysp_trials('history', h);
+    ysp_trials('restore', r, hist.outcome);
+    for i = 1:10
+        check(strcmp(ysp_trials('format_row', r, i), ysp_trials('format_row', h, i)), 'v0.6 replay row %d', i);
+    end
+    ysp_trials('close', r);
+    % a snapshot in the middle: format 5, the same values after load
+    p = ysp_trials('open', d);
+    for i = 1:4
+        ysp_trials('next', p);
+        ysp_trials('update', p, 1);
+    end
+    snap = ysp_trials('save', p);
+    check(snap(5) == 5, 'snapshot format 5');
+    q = ysp_trials('load', snap, d);
+    for i = 1:4
+        check(strcmp(ysp_trials('var', q, i, 'w'), ysp_trials('var', p, i, 'w')) && ...
+              ysp_trials('trial_seed', q, i) == ysp_trials('trial_seed', p, i), 'loaded var, trial %d', i);
+    end
+    run_out(p);
+    run_out(q);
+    for i = 1:10
+        check(strcmp(ysp_trials('format_row', q, i), ysp_trials('format_row', h, i)), 'loaded session row %d', i);
+    end
+    d2 = d;
+    d2.seed = 10;
+    expect_error_msg('ysp_trials:load', 'desc.seed does not match', @() ysp_trials('load', snap, d2));
+    ysp_trials('close', p); ysp_trials('close', q); ysp_trials('close', h);
+
+    % a seed without variables still logs trial seeds
+    h = ysp_trials('open', struct('n_conditions', 2, 'reps', 2, 'rng', 1, 'seed', 77));
+    run_out(h);
+    check(ends_with(ysp_trials('format_header', h), sprintf(',outcome,trial_seed\n')), 'seed-only header');
+    check(ends_with(ysp_trials('format_row', h, 3), sprintf(',x%s\n', hex_u64(trial_stream(uint64(77), 2, 0)))), ...
+          'seed-only row');
+    ysp_trials('close', h);
+
+    % the trial_seed column reads back as text, all 64 bits
+    top0 = false;
+    seeds = {uint64(0), uint64(1), bitshift(uint64(1), 63), intmax('uint64')};
+    for m = 1:numel(seeds)
+        d = struct('n_conditions', 2, 'reps', 8, 'order', 'random', 'rng', 7, 'seed', seeds{m});
+        d.vars = ysp_trials('var_choice', 'side', {'left', 'right'});
+        h = ysp_trials('open', d);
+        run_out(h);
+        txt = ysp_trials('format_header', h);
+        for i = 1:16, txt = [txt ysp_trials('format_row', h, i)]; end %#ok<AGROW>
+        tb = ysp_trials('table', txt);
+        c = find(strcmp(tb.columns, 'trial_seed'));
+        check(numel(c) == 1 && strcmp(tb.types{c}, 'string'), 'trial_seed is a string column');
+        for i = 1:16
+            v = tb.values{i, c};
+            s = ysp_trials('trial_seed', h, i);
+            check(numel(v) == 17 && v(1) == 'x' && u64_hex(v(2:end)) == s, 'trial_seed round trip');
+            top0 = top0 || bitshift(s, -60) == 0;
+        end
+        ysp_trials('close', h);
+    end
+    check(top0, 'a seed with a leading zero digit was seen');
+
+    % the var statement, its round trip through format_rules, and errors
+    rules = sprintf('order random\nreps 3\nvar side choice left right\nvar q choice "a b" c\n');
+    d = struct('n_conditions', 2, 'rng', 4, 'seed', 11, 'rules', rules);
+    h = ysp_trials('open', d);
+    check(isequal(ysp_trials('var_names', h), {'side', 'q'}), 'rules vars');
+    fr = ysp_trials('format_rules', h);
+    check(~isempty(strfind(fr, sprintf('\nvar side choice left right\nvar q choice "a b" c\n'))), 'format_rules var');
+    run_out(h);
+    d.rules = fr;
+    g = ysp_trials('open', d);
+    run_out(g);
+    for i = 1:6
+        check(strcmp(ysp_trials('var', g, i, 'q'), ysp_trials('var', h, i, 'q')), 'rules round trip %d', i);
+    end
+    ysp_trials('close', g); ysp_trials('close', h);
+    expect_error_msg('ysp_trials:rules', 'expected: var NAME choice', @() ysp_trials('open', ...
+        struct('n_conditions', 2, 'rng', 4, 'rules', sprintf('reps 1\nvar side left right\n'))));
+    expect_error_msg('ysp_trials:open', 'needs 1 to 32 values', @() ysp_trials('open', ...
+        struct('n_conditions', 2, 'reps', 1, 'rng', 4, 'vars', ysp_trials('var_choice', 'side', {}))));
+    v5 = ysp_trials('var_choice', 'a', {'x'});
+    expect_error('ysp_trials:arg', @() ysp_trials('open', struct('n_conditions', 1, 'reps', 1, 'vars', [v5 v5 v5 v5 v5])));
+    expect_error('ysp_trials:arg', @() ysp_trials('var_choice', 'side', 'left'));
+    expect_error('ysp_trials:arg', @() ysp_trials('open', struct('n_conditions', 1, 'reps', 1, ...
+        'vars', struct('name', 'side', 'values', {{'left', 2}}))));
+    expect_error('ysp_trials:arg', @() ysp_trials('open', struct('n_conditions', 1, 'reps', 1, 'seed', -1)));
+    if exist('OCTAVE_VERSION', 'builtin')
+        % Octave's char arrays hold UTF-8 bytes, the header's encoding
+        ete = char([195 169 116 195 169]);
+        h = ysp_trials('open', struct('n_conditions', 1, 'reps', 4, 'rng', 1, 'seed', 3, ...
+            'vars', ysp_trials('var_choice', 'v', {ete, 'b'})));
+        run_out(h);
+        got = arrayfun(@(i) ysp_trials('var', h, i, 'v'), 1:4, 'UniformOutput', false);
+        check(all(strcmp(got, ete) | strcmp(got, 'b')) && any(strcmp(got, ete)), 'a UTF-8 value round trip');
+        ysp_trials('close', h);
+    end
+
+    % rate 'display': the same draws as the same fixed rate
+    kw = struct('n_conditions', 2, 'reps', 10, 'order', 'random', 'rng', 6);
+    d = kw;
+    d.jitters = ysp_trials('uniform', 'soa_s', 0.8, 1.2, 'display');
+    expect_error_msg('ysp_trials:open', 'snaps to the display''s rate', @() ysp_trials('open', d));
+    d.display_rate = [60000 1001];
+    hd = ysp_trials('open', d);
+    f = kw;
+    f.jitters = ysp_trials('uniform', 'soa_s', 0.8, 1.2, [60000 1001]);
+    hf = ysp_trials('open', f);
+    run_out(hd);
+    run_out(hf);
+    for i = 1:20
+        check(isequal(ysp_trials('jitter', hd, i, 1), ysp_trials('jitter', hf, i, 1)), 'rate display draw %d', i);
+    end
+    check(~isempty(strfind(ysp_trials('format_rules', hd), 'jitter soa_s uniform 0.8 1.2 rate=display')), ...
+          'format_rules keeps rate=display');
+    check(~isempty(strfind(ysp_trials('format_meta', hd), ' display_rate=60000/1001')), 'format_meta display_rate');
+    ysp_trials('close', hd); ysp_trials('close', hf);
+    h = ysp_trials('open', struct('n_conditions', 2, 'rng', 6, 'display_rate', 60, 'rules', ...
+        sprintf('order random\nreps 10\njitter soa_s uniform 0.8 1.2 rate=display\n')));
+    ti = ysp_trials('next', h);
+    v = ysp_trials('jitter', h, ti.index, 1);
+    check(v.frames >= 48 && v.frames <= 72 && v.ns == int64(round(double(v.frames) * 1e9 / 60)), 'rules rate=display');
+    ysp_trials('close', h);
+    d.jitters = ysp_trials('uniform', 'soa_s', 0.8, 1.2, 'screen');
+    expect_error_msg('ysp_trials:arg', 'display', @() ysp_trials('open', d));
+    d.jitters = ysp_trials('uniform', 'soa_s', 0.8, 1.2);
+    d.display_rate = 59.94;
+    expect_error('ysp_trials:arg', @() ysp_trials('open', d));
+    d.display_rate = [0 1];
+    expect_error('ysp_trials:arg', @() ysp_trials('open', d));
+    expect_error_msg('ysp_trials:arg', 'YTR_RATE_DISPLAY needs a session', ...
+        @() ysp_trials('jitter_map', ysp_trials('uniform', 'soa_s', 0.8, 1.2, 'display'), 0.5));
+
+    % 256 columns (table.h 0.3.0); 257 refused
+    nc = 256;
+    names = cell(1, nc + 1);
+    for k = 1:nc + 1, names{k} = sprintf('c%d', k); end
+    nl = sprintf('\n');
+    csv = [strjoin(names(1:nc), ',') nl strjoin(repmat({'1'}, 1, nc), ',') nl strjoin(repmat({'2'}, 1, nc), ',') nl];
+    tb = ysp_trials('table', csv);
+    check(numel(tb.columns) == nc && tb.n_rows == 2, '256-column table');
+    h = ysp_trials('open', struct('table', csv, 'reps', 1, 'rng', 1));
+    check(ysp_trials('n_factors', h) == nc && ysp_trials('n_conditions', h) == 2, '256 factors');
+    ti = ysp_trials('next', h);
+    check(numel(ti.levels) == nc && isfield(ysp_trials('values', h, ti.condition), 'c256'), '256 levels');
+    ysp_trials('update', h, 1);
+    hdr = ysp_trials('format_header', h);
+    row1 = ysp_trials('format_row', h, 1);
+    check(ends_with(hdr, [',c255,c256' nl]) && sum(hdr == ',') == sum(row1 == ','), '256-column data line');
+    ysp_trials('close', h);
+    csv = [strjoin(names, ',') nl strjoin(repmat({'1'}, 1, nc + 1), ',') nl];
+    expect_error('ysp_trials:table', @() ysp_trials('table', csv));
+    fprintf('ysp_trials v0.6: ok\n');
 end
 
 % ---------------------------------------------------------------------------
