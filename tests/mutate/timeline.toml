@@ -3,7 +3,9 @@
 # TARGETS (v0.6.0). docs/timeline.md: 24 RATE mutants, 21 caught and 3
 # equivalent; 19 sequence mutants, all caught; 20 target mutants (tgt-*),
 # all caught; 26 v0.7.0 mutants (v07-*: yoyo, records, prune), all caught;
-# 14 v0.8.0 mutants (v08-*: trigger channels, parameter tables), all caught.
+# 14 v0.8.0 mutants (v08-*: trigger channels, parameter tables), all caught;
+# v08-02 (ytl_trigger_ch()'s own negative check) went in v0.8.1, when the
+# check moved into ytl_add() (v081-*, 4 mutants).
 # The v0.3.0 list (23) was not kept.
 header = "ysp/timeline.h"
 
@@ -904,16 +906,8 @@ id = "v08-01"
 name = "ytl_trigger_ch() loses its channel"
 test = "timeline"
 why = "The call and the op give the same event: ch is its target."
-find = '        ytl__seq_fail(q, ch < 0 ? YTL_ERR_ARG : ytl__seq_ev(q, YTL_TRIGGER, ch, 0.0f, code, 0));'
-replace = '        ytl__seq_fail(q, ch < 0 ? YTL_ERR_ARG : ytl__seq_ev(q, YTL_TRIGGER, 0, 0.0f, code, 0));'
-
-[[mutant]]
-id = "v08-02"
-name = "ytl_trigger_ch() takes a negative channel"
-test = "timeline"
-why = "The table's min is 0, and the call refuses what the check refuses."
-find = '        ytl__seq_fail(q, ch < 0 ? YTL_ERR_ARG : ytl__seq_ev(q, YTL_TRIGGER, ch, 0.0f, code, 0));'
-replace = '        ytl__seq_fail(q, ytl__seq_ev(q, YTL_TRIGGER, ch, 0.0f, code, 0));'
+find = '    if (ytl__seq_go(q)) ytl__seq_fail(q, ytl__seq_ev(q, YTL_TRIGGER, ch, 0.0f, code, 0));'
+replace = '    if (ytl__seq_go(q)) ytl__seq_fail(q, ytl__seq_ev(q, YTL_TRIGGER, 0, 0.0f, code, 0));'
 
 [[mutant]]
 id = "v08-03"
@@ -1003,3 +997,35 @@ test = "timeline"
 why = "2^62 is refused, so a bound written as 2^62 - 1 (which rounds to 2^62) would lie."
 find = '#define YTL__P_T    4611686018427387392.0'
 replace = '#define YTL__P_T    4611686018427387904.0'
+
+[[mutant]]
+id = "v081-00"
+name = "ytl_add() takes a negative trigger channel"
+test = "timeline"
+why = "Every path refuses what the op table's min refuses: the add, the sequence call and the run."
+find = '    if (e->kind == YTL_TRIGGER && e->target < 0) return YTL_ERR_ARG;'
+replace = ''
+
+[[mutant]]
+id = "v081-01"
+name = "ytl_add() takes trigger channel -1"
+test = "timeline"
+why = "The range starts at 0, as the table's min."
+find = '    if (e->kind == YTL_TRIGGER && e->target < 0) return YTL_ERR_ARG;'
+replace = '    if (e->kind == YTL_TRIGGER && e->target < -1) return YTL_ERR_ARG;'
+
+[[mutant]]
+id = "v081-02"
+name = "ytl_add() refuses trigger channel 0"
+test = "timeline"
+why = "0 is the channel ytl_trigger() and YTL_TRIGGER() give."
+find = '    if (e->kind == YTL_TRIGGER && e->target < 0) return YTL_ERR_ARG;'
+replace = '    if (e->kind == YTL_TRIGGER && e->target <= 0) return YTL_ERR_ARG;'
+
+[[mutant]]
+id = "v081-03"
+name = "a MARK's negative target refused too"
+test = "timeline"
+why = "Only a TRIGGER's target is a channel; a MARK's and a user kind's are the caller's, any value."
+find = '    if (e->kind == YTL_TRIGGER && e->target < 0) return YTL_ERR_ARG;'
+replace = '    if (e->kind <= YTL_TRIGGER && e->target < 0) return YTL_ERR_ARG;'

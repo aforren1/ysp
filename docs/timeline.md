@@ -1314,7 +1314,9 @@ Decisions:
   negative channel, so the table's `min` is a bound the check enforces.
   `ytl_add()` keeps any target for a TRIGGER, as before: the blind test's
   model adds TRIGGERs with targets from -1000 to 1000, and a caller of the
-  raw event API can have done the same. One behavior changes: an op table
+  raw event API can have done the same. (v0.8.1 reverses this: see
+  [the next section](#ytl_add-refuses-a-negative-trigger-channel-v081).)
+  One behavior changes: an op table
   that set a nonzero `ch` on a TRIGGER ran with target 0 before, and now
   carries `ch` (or is refused when `ch` is negative). No caller in the
   repository set it.
@@ -1381,7 +1383,8 @@ The writer of the implementation also wrote the checks, in
   `ytl_peek()`'s. A negative channel is refused by the call (sticky, the
   calls before it kept), by `ytl_check_ops()` and by `ytl_run()` with the
   handle, storage and arena unchanged. A channel past `n_channels`, and
-  one equal to a tweened channel, pass. `ytl_add()` still takes target -5.
+  one equal to a tweened channel, pass. `ytl_add()` still takes target -5
+  (until v0.8.1).
   The random sequence model now gives a TRIGGER's `ch` as its target and
   draws a negative channel for about 1 trigger in 29 (from the drawn code,
   so the random stream is unchanged): the builder, `ytl_run()` and the
@@ -1424,6 +1427,76 @@ expected exit code, `screen_hello`, `gfx_trial` and `trial_eeg_triggers`
 included. The sequence model now reports 600
 tables: 164 clean, 394 refused with `YTL_ERR_ARG` and 42 with
 `YTL_ERR_BOUND`.
+
+## ytl_add() refuses a negative trigger channel (v0.8.1)
+
+v0.8.0 refused a negative trigger channel in the sequence calls and the op
+tables, but `ytl_add()` and `ytl_add_n()` still took one. So a fired
+TRIGGER's `target` was a channel of 0 to `INT32_MAX` or any value,
+depending on the path that added it. A frame loop that indexes its outputs
+with `target` had to check for a negative value that most paths could not
+give.
+
+Decisions:
+
+- **`ytl_add()` refuses it as the other paths do.** A TRIGGER with a
+  negative `target` is `YTL_ERR_ARG`, with the message, and `ytl_add_n()`
+  adds none of the batch. The check is in the one function that checks
+  every event, so `ytl_trigger_ch()` lost its own copy of it: the call
+  gives the same error, call index and message through `ytl_add()`.
+- **No upper bound below `INT32_MAX`.** A trigger channel indexes the
+  caller's outputs, and the timeline does not know how many there are
+  (`yscr_trigger()` has 8, a player maps roles to several devices). The
+  op table's row has `max` `INT32_MAX`, and the player checks a channel
+  against its own roles (v0.8.0). A bound here would be a second, wrong
+  copy of the player's.
+- **The other reported-only kinds keep any target.** A MARK's and a user
+  kind's `target` are the caller's.
+
+Callers checked: every `YTL_TRIGGER` event and call in `examples/`,
+`tests/` and `bindings/` gives channel 0 or a positive one.
+`yds_event_from_timeline()` (ysp/dataset.h) copies `target` to
+`control` and reads no sign; ysp/response.h reads `target` of ONSET
+events only; ysp/screen.h, ysp/video.h and ysp/device.h read no
+timeline event's target. Two places in the timeline test relied on the
+old behavior: the v0.8.0 check that `ytl_add()` takes target -5, now a
+check that it refuses it, and the random model, whose TRIGGERs drew
+targets from -1000 to 1000. The model now flips a negative draw to
+positive for 7 triggers in 8 (from the drawn code, so the random stream
+is the same) and predicts `YTL_ERR_ARG` for the rest: its rejected adds
+go from 1431 to 1491, every one predicted.
+
+### Verification
+
+In `tests/adapt/timeline_test.c` (4 and 11e): `ytl_add()` refuses
+channels -1, -5 and `INT32_MIN` with `YTL_ERR_ARG` and the message
+`ysp_timeline: ytl_add: invalid argument`; `ytl_add_n()` refuses a batch
+with one such event and adds nothing; channels 0, 999 and `INT32_MAX`
+pass; a MARK keeps targets -7 and -5. The v0.8.0 checks of the sequence
+call (refused, sticky, call index 1, the call before it kept) pass with
+the call's own check gone.
+
+Mutations of the new check, one at a time: 4, all caught (`v081-00` to
+`v081-03` in [tests/mutate/timeline.toml](../tests/mutate/timeline.toml)):
+the check removed, -1 taken, 0 refused, and a MARK's negative target
+refused. `v08-02`, the call's own check removed, went with that check.
+
+The whole list ran again on 2026-10-22, MinGW-w64 gcc 16.1, `-O2`, 4 jobs,
+on the Windows development machine with other workers building (CPU load
+sampled every 20 s: median 99 %, mean 86 %, 1 to 5 builds live):
+109 mutants, 106 caught and the 3 known equivalents (`rate-01`,
+`rate-03`, `rate-15`) survived, no timeout, 609 s. The 3 survivors, run
+again alone under the timing guard (load 1 %, AC), pass every check, as
+does the unmutated test: they are equivalents, not load artifacts.
+
+Built and run on 2026-10-22: the `msvc` preset (76 of 76 tests) and
+`msvc-full` with `YSP_BUILD_PACK=ON` and layout off (92 of 92; GitHub was
+unreachable, so Skribidi and HarfBuzz could not be fetched), no warning;
+every program of CI's "Run examples (simulated display)" step on
+`msvc-full`, 78 of 78 with the expected exit code; the `mingw` preset
+with pack (82 of 82); WSL Ubuntu gcc 11.4 (`linux` preset, the Tracy
+check off for the same reason; 79 of 79); and the timeline's compile
+check and test under emscripten (CI's wasm flags) in node.
 
 ## Animate a stimulus field
 

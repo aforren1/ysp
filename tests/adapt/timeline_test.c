@@ -1137,7 +1137,8 @@ static void test_channels(void) {
     CHECK_I(add1(&g_tl, 0, 0, YTL_SET, 3, (float)make_inf()), YTL_ERR_ARG);
     CHECK_I(add1(&g_tl, YTL_MAX_BASES, 0, YTL_MARK, 0, 0.0f), YTL_ERR_ARG);
     CHECK_I(add1(&g_tl, 255, 0, YTL_MARK, 0, 0.0f), YTL_ERR_ARG);
-    CHECK_I(add1(&g_tl, 0, 1000, YTL_TRIGGER, 999, 0.0f), 10);   /* target is the caller's */
+    CHECK_I(add1(&g_tl, 0, 1000, YTL_TRIGGER, 999, 0.0f), 10);   /* any trigger channel >= 0 */
+    CHECK_I(add1(&g_tl, 0, 1000, YTL_TRIGGER, -1, 0.0f), YTL_ERR_ARG); /* v0.8.1 */
 
     /* Binding: two bases, events vs keys both ways. */
     CHECK_I(add1(&g_tl, 1, 0, YTL_ONSET, 0, 0.0f), YTL_ERR_BOUND);
@@ -6465,7 +6466,12 @@ static ytl_event m_rand_event(void) {
     e.onset = 88;
     e.residual = 99;
     if (r < 15) e.kind = YTL_MARK;
-    else if (r < 25) e.kind = YTL_TRIGGER;
+    else if (r < 25) {
+        /* v0.8.1 refuses a negative trigger channel; keep about 1 in 16
+         * negative (from the drawn code, so the random stream is the same) */
+        e.kind = YTL_TRIGGER;
+        if (e.target < 0 && (e.code & 7) != 0) e.target = -e.target;
+    }
     else if (r < 45) { e.kind = YTL_ONSET; e.target = rnd_int(M_EVCH); }
     else if (r < 60) { e.kind = YTL_OFFSET; e.target = rnd_int(M_EVCH); }
     else if (r < 85) { e.kind = YTL_SET; e.target = rnd_int(M_EVCH); }
@@ -6492,6 +6498,7 @@ static int m_predict(const ytl_event* es, int n, int* classes) {
         const ytl_event* e = &es[i];
         int bad = 0;
         if (e->base >= YTL_MAX_BASES || (e->kind >= 5 && e->kind <= 15)) { arg = 1; bad = 1; }
+        if (e->kind == YTL_TRIGGER && e->target < 0) { arg = 1; bad = 1; }
         if (is_chan_kind(e->kind)) {
             if (e->target < 0 || e->target >= M_NCH) { arg = 1; continue; }
             if (e->kind == YTL_SET && !(fabs((double)e->value) <= 3.4e38)) { arg = 1; bad = 1; }
@@ -7287,13 +7294,27 @@ static void test_trigger_ch(void) {
         ops[0].ch = SQ_CONTRAST;
         CHECK_I(ytl_check_ops(&g_tl, 1, ops, 2, &bad), 0);
     }
-    /* ytl_add keeps any target of a TRIGGER, as before v0.8.0 */
+    /* v0.8.1: ytl_add() and ytl_add_n() refuse a negative trigger channel
+     * too, all or none, with the message; 0 and INT32_MAX pass, and the
+     * other reported-only kinds keep any target */
     {
-        ytl_event e;
-        memset(&e, 0, sizeof e);
-        e.kind = YTL_TRIGGER;
-        e.target = -5;
-        CHECK(ytl_add(&g_tl, &e) >= 0);
+        ytl_event e[3];
+        int before = n_events(&g_tl, 0);
+        memset(e, 0, sizeof e);
+        e[0].kind = YTL_TRIGGER;
+        e[0].target = INT32_MAX;
+        e[1].kind = YTL_TRIGGER;
+        e[1].target = -5;
+        e[2].kind = YTL_MARK;
+        e[2].target = -5;
+        CHECK_I(ytl_add(&g_tl, &e[1]), YTL_ERR_ARG);
+        CHECK_S(ytl_error(&g_tl), "ysp_timeline: ytl_add: invalid argument");
+        e[1].target = INT32_MIN;
+        CHECK_I(ytl_add_n(&g_tl, e, 3), YTL_ERR_ARG);
+        CHECK_I(n_events(&g_tl, 0), before);
+        e[1].target = 0;
+        CHECK(ytl_add_n(&g_tl, e, 3) >= 0);
+        CHECK_I(n_events(&g_tl, 0), before + 3);
     }
     n = 0;
     CHECK(ytl_op_params(YTL_OP_TRIGGER, &n) != NULL && n == 2);

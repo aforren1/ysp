@@ -1,4 +1,4 @@
-/* ysp/timeline.h - v0.8.0 - public domain single-header timeline library
+/* ysp/timeline.h - v0.8.1 - public domain single-header timeline library
  *
  *   What a frame shows, as a function of when the frame appears. Events
  *   (onsets, offsets, value changes, triggers, annotations) at times on a
@@ -229,8 +229,9 @@
  *     A zeroed event is a MARK at time 0 on the RT base. `code`, `user` and
  *     (for the reported-only kinds) `target` are the caller's and come back
  *     unchanged in the report. Kinds 5 to 15 are the header's, and an add
- *     rejects them. ytl_add() keeps any target of a TRIGGER, as before
- *     v0.8.0; the sequence calls and op tables take a channel >= 0.
+ *     rejects them. A TRIGGER's target is its trigger channel, 0 to
+ *     INT32_MAX: ytl_add(), the sequence calls and the op tables refuse a
+ *     negative one (v0.8.1; ytl_add() took any target before).
  *     ytl_add() copies the event into the storage the desc gave, pending
  *     (flags 0, frame -1, onset 0, residual 0), assigns it an id (0, 1, 2, ... in add order; ytl_open() restarts it) and
  *     returns the id. ytl_add_n() adds n events, all or none, and returns
@@ -1028,6 +1029,11 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.8.1 - ytl_add() and ytl_add_n() refuse a TRIGGER with a negative
+ *          target (YTL_ERR_ARG, nothing added), as the sequence calls and
+ *          op tables have since v0.8.0, so every path gives a fired
+ *          trigger a channel of 0 to INT32_MAX. No caller in the
+ *          repository added one. Nothing else changes.
  *   v0.8.0 - trigger channels and parameter tables (SEQUENCES,
  *          PARAMETERS). A TRIGGER op's `ch` is its trigger channel and
  *          becomes the event's `target`, so the report says which output
@@ -1286,8 +1292,8 @@
 /* The version of this header, for a log line or a compile-time check. */
 #define YTL_VERSION_MAJOR 0
 #define YTL_VERSION_MINOR 8
-#define YTL_VERSION_PATCH 0
-#define YTL_VERSION_STRING "0.8.0"
+#define YTL_VERSION_PATCH 1
+#define YTL_VERSION_STRING "0.8.1"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -1838,7 +1844,7 @@ YTL_API int ytl_clamped(ytl_timeline* tl, int base);
 /* --- events ------------------------------------------------------------ */
 
 /* Add one event (EVENTS). Returns its id (>= 0) or YTL_ERR_ARG (bad base,
- * kind, channel or value), YTL_ERR_BOUND, YTL_ERR_FULL. */
+ * kind, channel, trigger channel or value), YTL_ERR_BOUND, YTL_ERR_FULL. */
 YTL_API int ytl_add(ytl_timeline* tl, const ytl_event* e);
 
 /* Add n events, all or none. Returns the first id (the others follow), or
@@ -2844,6 +2850,9 @@ static int ytl__check(const ytl_timeline* tl, const ytl_event* e) {
     if (e->base >= YTL_MAX_BASES) return YTL_ERR_ARG;
     if (e->kind > YTL_SET && e->kind < YTL_KIND_USER) return YTL_ERR_ARG;
     if (e->time_ns >= YTL__LIMIT || e->time_ns <= -YTL__LIMIT) return YTL_ERR_ARG;
+    /* The op tables' check refuses it too, so the frame loop sees one
+     * range of trigger channels whatever path added the event. */
+    if (e->kind == YTL_TRIGGER && e->target < 0) return YTL_ERR_ARG;
     if (ytl__drives(e->kind)) {
         const ytl__chan* c;
         if (e->target < 0 || e->target >= tl->n_channels) return YTL_ERR_ARG;
@@ -3809,8 +3818,7 @@ YTL_API void ytl_trigger(ytl_seq* q, int32_t code) {
 }
 
 YTL_API void ytl_trigger_ch(ytl_seq* q, int ch, int32_t code) {
-    if (ytl__seq_go(q))
-        ytl__seq_fail(q, ch < 0 ? YTL_ERR_ARG : ytl__seq_ev(q, YTL_TRIGGER, ch, 0.0f, code, 0));
+    if (ytl__seq_go(q)) ytl__seq_fail(q, ytl__seq_ev(q, YTL_TRIGGER, ch, 0.0f, code, 0));
 }
 
 YTL_API void ytl_mark(ytl_seq* q, int32_t code, uint64_t user) {
