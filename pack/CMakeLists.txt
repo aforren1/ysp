@@ -107,7 +107,7 @@ if(YSP_BUILD_PACK)
         set(_lsr_pin "${_lsr_pin},tree-differs")
     endif()
 
-    add_library(ysp_pack_tool STATIC pack_tool.c pack_impl.c import.c ysp/pack_tool.h)
+    add_library(ysp_pack_tool STATIC pack_tool.c pack_impl.c import.c derive.c ysp/pack_tool.h)
     target_include_directories(ysp_pack_tool PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     target_include_directories(ysp_pack_tool SYSTEM PRIVATE ${_plm})
     target_link_libraries(ysp_pack_tool PRIVATE ysp_stb_image ysp_samplerate)
@@ -138,6 +138,7 @@ if(YSP_BUILD_PACK)
         set_target_properties(test_pack_tool PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
         set(YSP_PACK_TEST_FONTS "C:/Windows/Fonts" CACHE PATH "Font folder of the tool test's system-font cases (YSP_FONTS_DIR overrides it)")
         target_compile_definitions(test_pack_tool PRIVATE YPT_TEST_DIR="${PROJECT_SOURCE_DIR}/tests/pack"
+            YPT_STROOP_DIR="${PROJECT_SOURCE_DIR}/examples/pack/stroop"
             YPT_TEST_FONTS="${YSP_PACK_TEST_FONTS}")
         add_test(NAME test_pack_tool COMMAND test_pack_tool WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
         # The readers of other formats (pack/import.c) on their own: the test
@@ -149,6 +150,14 @@ if(YSP_BUILD_PACK)
         target_compile_options(test_pack_import PRIVATE ${YSP_WARNINGS})
         set_target_properties(test_pack_import PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
         add_test(NAME test_pack_import COMMAND test_pack_import)
+        # The texts of an experiment definition (pack/derive.c) on their own,
+        # compiled into the test as import.c is (tests/mutate/derive.toml).
+        add_executable(test_pack_derive ${PROJECT_SOURCE_DIR}/tests/adapt/derive_test.c)
+        target_include_directories(test_pack_derive PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+        target_link_libraries(test_pack_derive PRIVATE ysp::core)
+        target_compile_options(test_pack_derive PRIVATE ${YSP_WARNINGS})
+        set_target_properties(test_pack_derive PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+        add_test(NAME test_pack_derive COMMAND test_pack_derive)
     endif()
 
     # trial_images (docs/rig_spec.md 15.5), the pack path end to end. Its

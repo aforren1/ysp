@@ -1,0 +1,258 @@
+# pack/derive.c mutants: the texts the pack tool takes from an experiment
+# definition for its glyph runs (gap G9). The test compiles the mutated
+# file into itself (tests/adapt/derive_test.c), with ysp/json.h and
+# ysp/table.h. docs/pack.md lists the results.
+header = "derive.c"
+
+[test.derive]
+source = "tests/adapt/derive_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O1", "-w"]
+libs = ["-lm"]
+timeout = 60
+
+# --- what gives texts --------------------------------------------------------------
+
+[[mutant]]
+id = "d-01"
+name = "no $$ escape"
+test = "derive"
+why = "\"$$5 prize\" is the literal \"$5 prize\"; read as a variable it names nothing."
+find = "if (x[0] == '$' && x[1] == '$')"
+replace = "if (0)"
+
+[[mutant]]
+id = "d-02"
+name = "the escape keeps both dollars"
+test = "derive"
+why = "The block would hold \"$$5 prize\", which the player never asks for."
+find = "return add_text(d, s, x + 1, v->n - 1);"
+replace = "return add_text(d, s, x, v->n);"
+
+[[mutant]]
+id = "d-03"
+name = "the first map value dropped"
+test = "derive"
+why = "Every value of a lookup must have a block, whichever key the trials reach."
+find = "for (k = 0; k < map->n; k++) {"
+replace = "for (k = 1; k < map->n; k++) {"
+
+[[mutant]]
+id = "d-04"
+name = "a vars choice taken as one value"
+test = "derive"
+why = "A {\"choice\": [...]} is each of its items, not an object."
+find = "if (ch && ch->type == YJS_ARRAY) {"
+replace = "if (0) {"
+
+[[mutant]]
+id = "d-05"
+name = "a column only in the first table that has it"
+test = "derive"
+why = "A column's levels come from every table a node names; stopping at a table without the column misses the next."
+find = "if (col < 0) continue;"
+replace = "if (col < 0) break;"
+
+[[mutant]]
+id = "d-06"
+name = "a child node's tables not seen"
+test = "derive"
+why = "A container's children name tables too."
+find = "rc = walk(d, yjs_get(node, \"timeline\"), depth + 1);"
+replace = "rc = 0;"
+
+[[mutant]]
+id = "d-07"
+name = "a table opened for every lookup"
+test = "derive"
+why = "Each lookup would check the whole table block again: one view per table."
+find = "d->tvt[i] = t;"
+replace = "(void)0;"
+
+[[mutant]]
+id = "d-08"
+name = "a table recorded once per lookup"
+test = "derive"
+why = "The runs' 'from' lists each table once."
+find = "if (!strcmp(m->tab[i], name)) return 0;"
+replace = "if (0) return 0;"
+
+[[mutant]]
+id = "d-09"
+name = "the key's separator"
+test = "derive"
+why = "The player looks a text up as \"<stimulus>/<text>\"."
+find = "key[sn] = '/';"
+replace = "key[sn] = ':';"
+
+[[mutant]]
+id = "d-10"
+name = "numbers as their source text"
+test = "derive"
+why = "2.50 and 2.5 are one size; the record and the block take the canonical text."
+find = "n = yjs_write_mem(v, YJS_WRITE_COMPACT, buf, sizeof buf);"
+replace = "n = v->n < sizeof buf ? v->n : 0; if (n) memcpy(buf, v->u.s, n);"
+
+# --- order --------------------------------------------------------------------------
+
+[[mutant]]
+id = "d-11"
+name = "texts not sorted"
+test = "derive"
+why = "Blocks are sorted by key; the player's lookup is a binary search."
+find = "if (m->nt) qsort(m->t,"
+replace = "if (0) qsort(m->t,"
+
+[[mutant]]
+id = "d-12"
+name = "duplicate texts kept"
+test = "derive"
+why = "Two blocks with one key: the tool refuses them, and the player finds either."
+find = "if (k == 0 || strcmp(m->t[k - 1].key, m->t[i].key)) m->t[k++] = m->t[i];"
+replace = "m->t[k++] = m->t[i];"
+
+[[mutant]]
+id = "d-13"
+name = "tables in the order found"
+test = "derive"
+why = "The manifest must not depend on the tree's order."
+find = "if (m->ntab) qsort((void*)m->tab,"
+replace = "if (0) qsort((void*)m->tab,"
+
+# --- what is refused ----------------------------------------------------------------
+
+[[mutant]]
+id = "d-14"
+name = "a built-in taken as a variable"
+test = "derive"
+why = "$outcome is known only at run time; the message must say to use a lookup."
+find = "if (is_builtin(name))"
+replace = "if (0)"
+
+[[mutant]]
+id = "d-15"
+name = "a session field not named"
+test = "derive"
+why = "The operator gives $participant at start; the message must say why it cannot be laid out."
+find = "if (!strcmp(name, \"participant\") || (fields && fields->type == YJS_OBJECT && yjs_get(fields, name)))"
+replace = "if (0)"
+
+[[mutant]]
+id = "d-16"
+name = "a number column taken as text"
+test = "derive"
+why = "The player would format the number its own way; a block with the table's text would not match."
+find = "if (ytb_col_type(t, col) != YTB_STRING)"
+replace = "if (0)"
+
+[[mutant]]
+id = "d-17"
+name = "a script not named"
+test = "derive"
+why = "Text from a script is the player's at run time; the message must say so."
+find = "if (yjs_get(v, \"lua\"))"
+replace = "if (0)"
+
+[[mutant]]
+id = "d-18"
+name = "no bound on nesting"
+test = "derive"
+why = "vars that name each other would recurse until the step bound."
+find = "if (depth > YPT_DERIVE_DEPTH)"
+replace = "if (0)"
+
+[[mutant]]
+id = "d-19"
+name = "no bound on work"
+test = "derive"
+why = "vars defined in many nodes, each naming the next, multiply the lookups (9^8 in the test)."
+find = "if (++d->steps > YPT_DERIVE_STEPS)"
+replace = "if (0)"
+
+[[mutant]]
+id = "d-20"
+name = "a size of 0 taken"
+test = "derive"
+why = "Layout needs a size above 0."
+find = "num_key(d, &s, o, \"size\", 0, 1, &s.proto.size)"
+replace = "num_key(d, &s, o, \"size\", 0, 0, &s.proto.size)"
+
+[[mutant]]
+id = "d-21"
+name = "a negative width taken"
+test = "derive"
+why = "A width below 0 is not a box."
+find = "num_key(d, &s, o, \"width\", 0, 0, &s.proto.width)"
+replace = "num_key(d, &s, o, \"width\", -1e9, 0, &s.proto.width)"
+
+[[mutant]]
+id = "d-22"
+name = "no upper bound on a layout number"
+test = "derive"
+why = "A float of 1e10 units lays out nothing useful and overflows the line math."
+find = "|| x > 1e9)"
+replace = ")"
+
+[[mutant]]
+id = "d-23"
+name = "a size not required"
+test = "derive"
+why = "Without a size the text would be laid out at 0."
+find = "if (!yjs_get(o, \"font\") || !yjs_get(o, \"size\") || !tv)"
+replace = "if (!yjs_get(o, \"font\") || !tv)"
+
+[[mutant]]
+id = "d-24"
+name = "any align taken"
+test = "derive"
+why = "The block's align is start, end or center."
+find = "        return dfail(d, YPAK_ERR_FORMAT, \"stimulus '%s': '%s' is \\\"%s\\\"; it is %s, %s or %s\","
+replace = "        *out = v->u.s; return 0; (void)dfail(d, YPAK_ERR_FORMAT, \"stimulus '%s': '%s' is \\\"%s\\\"; it is %s, %s or %s\","
+
+[[mutant]]
+id = "d-25"
+name = "a variable font taken"
+test = "derive"
+why = "The font is laid out at pack build; \"$font\" names no FONT entry."
+find = "if (v->u.s[0] == '$')"
+replace = "if (0)"
+
+[[mutant]]
+id = "d-26"
+name = "an empty font taken"
+test = "derive"
+why = "\"\" names no FONT entry."
+find = "if (!s.proto.font[0]) return dfail"
+replace = "if (0) return dfail"
+
+[[mutant]]
+id = "d-27"
+name = "another format taken as a definition"
+test = "derive"
+why = "Opaque experiments (another format) keep their bytes and get no runs."
+find = "if (!fmt || fmt->type != YJS_STRING || strcmp(fmt->u.s, \"ysp-experiment\")) return 0;"
+replace = "if (!fmt || fmt->type != YJS_STRING) return 0;"
+
+[[mutant]]
+id = "d-28"
+name = "a later version taken"
+test = "derive"
+why = "Version 2 may have texts this tool cannot see."
+find = "ver->i != 1)"
+replace = "ver->i < 1)"
+
+[[mutant]]
+id = "d-29"
+name = "a broken definition taken as opaque"
+test = "derive"
+why = "A typo would silently drop every glyph run."
+find = "if (p[k2] == '\"' && !memcmp(p + k2, tag, sizeof tag - 1)) {"
+replace = "if (0) {"
+
+[[mutant]]
+id = "d-30"
+name = "the 256-node bound off by one"
+test = "derive"
+why = "The 257th table would be written past the array."
+find = "if (d->ntv == 256)"
+replace = "if (d->ntv == 257)"

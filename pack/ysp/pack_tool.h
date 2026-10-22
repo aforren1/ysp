@@ -1,4 +1,4 @@
-/* ysp/pack_tool.h - v0.5.1 - the pack tool as a library (prefix ypt_)
+/* ysp/pack_tool.h - v0.6.0 - the pack tool as a library (prefix ypt_)
  *
  *   Builds, verifies, lists, extracts, rebuilds and appends ysp packs
  *   (docs/pack.md). The CLI `ypak` (pack/ypak.c) is a thin layer over these
@@ -53,6 +53,21 @@
  *   and pl_mpeg, so every pack ID differs from v0.3.0's; every other entry
  *   of the v0.3.0 test corpus is byte-identical.
  *
+ *   v0.6.0 (2026-10-21): the experiment's glyph runs (gap G9 of
+ *   docs/experiment_format.md; docs/pack.md 4.5 and 15). When the
+ *   experiment entry is a version 1 definition, every text its text
+ *   stimuli can show (literals, string-column levels of every table a node
+ *   names, vars values and choices, every value of a lookup's map) is laid
+ *   out into one GLYPHRUNS entry named after the experiment entry
+ *   ("experiment/main.json" gives "experiment/main.ysprun"), keyed
+ *   "<stimulus>/<text>", each in its stimulus's font and style; a
+ *   description lists no glyph runs for them. A glyph runs resource of that
+ *   name adds its blocks and fallback fonts. A text known only at run time
+ *   is refused by name (pack/derive.c, ypt_derive_texts()). A listed block
+ *   without "size" is refused (v0.5.1 crashed). Every entry of the test
+ *   corpus is byte-identical to v0.5.1's; its manifest differs by the
+ *   tool version.
+ *
  *   v0.5.1 (2026-10-20): an ffmpeg step with mpeg2video is refused
  *   before it runs (the user's decision): the video index (pl_mpeg) reads
  *   MPEG-1 only and misread mpeg2video's output, so the step failed after
@@ -96,7 +111,7 @@
 extern "C" {
 #endif
 
-#define YPT_VERSION_STRING "0.5.1"
+#define YPT_VERSION_STRING "0.6.0"
 
 typedef struct ypt_options {
     const char* sources;   /* the sources' folder; NULL: the description's folder */
@@ -187,6 +202,48 @@ void ypt_jpeg_free(ypt_jpeg* j);
  * within half a code of 255 of sRGB's at every code), 0 when it is another
  * (why says how), < 0 when it is damaged. */
 int ypt_icc_srgb(const void* data, size_t n, char* why, size_t cap);
+
+/* --- the texts of an experiment definition (pack/derive.c), public for the
+ * fuzz target and tests; the build calls it for the experiment entry --- */
+
+/* One text that a `text` stimulus can show, and the stimulus's layout keys
+ * (docs/pack.md 4.5). Numbers are their canonical decimal text
+ * (ysp/json.h), as a glyph-run block takes them. Every string stays valid
+ * until ypt_texts_free(). */
+typedef struct ypt_text {
+    const char* key;           /* "<stimulus>/<text>": the block's key          */
+    const char* stimulus;
+    const char* text;          /* points into key                               */
+    const char* font;          /* a FONT entry of the pack, face 0              */
+    const char* size;          /* above 0                                       */
+    const char* width;         /* "0": no wrapping                              */
+    const char* line_height;   /* "0": the font's own line                      */
+    const char* align;         /* "start", "end" or "center"                    */
+    const char* dir;           /* "auto", "ltr" or "rtl"                        */
+    const char* lang;          /* BCP 47, or ""                                 */
+} ypt_text;
+
+typedef struct ypt_texts {
+    int          definition;   /* 1: the bytes are a "ysp-experiment" definition */
+    ypt_text*    texts;        /* sorted by key, each key once                   */
+    int          n_texts;
+    const char** tables;       /* the TABLE entries whose levels gave a text, sorted */
+    int          n_tables;
+    void*        mem_;
+} ypt_texts;
+
+/* The bytes of the pack's TABLE entry `name`, or NULL when there is none. */
+typedef const void* (*ypt_table_fn)(void* ctx, const char* name, size_t* n);
+
+/* Every text the definition's text stimuli can show (docs/experiment_format.md
+ * D14, gap G9): a literal, a table column's levels, a node's vars, every
+ * value of a lookup's map. Bytes that are not JSON, or JSON whose "format"
+ * is not "ysp-experiment", give 0 and definition 0. A text known only at run
+ * time (a built-in or a session field named directly, a script, a variable
+ * layout key) is refused, with err naming the stimulus. Call
+ * ypt_texts_free() after a 0. */
+int  ypt_derive_texts(const void* def, size_t n, ypt_table_fn table, void* ctx, ypt_texts* out, char* err, size_t cap);
+void ypt_texts_free(ypt_texts* t);
 
 #ifdef __cplusplus
 }
