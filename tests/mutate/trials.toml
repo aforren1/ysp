@@ -844,3 +844,37 @@ find = '''    for (i = 0; i < n_names; i++) {
         if (i > 0) ytr__dputc(w, ',');'''
 replace = '''    for (i = 0; i < n_names && i < 100; i++) {
         if (i > 0) ytr__dputc(w, ',');'''
+
+# --- v0.6: the trial seed in the data line --------------------------------
+
+[[mutant]]
+id = "x-18"
+name = "no trial_seed in the data line"
+test = "trials"
+why = "A data file must give each trial's stimulus seed without the D8 hash re-run (the user, 2026-10-21)."
+find = 'if (t->v6) ytr__cat(&s, ",x%016llx", (unsigned long long)ytr_trial_seed(t, i));'
+replace = 'if (0) ytr__cat(&s, ",x%016llx", (unsigned long long)ytr_trial_seed(t, i));'
+
+[[mutant]]
+id = "x-19"
+name = "trial seed without leading zeros"
+test = "trials"
+why = "A fixed 16 digits keeps the column's width and shows the bits as they are; a shorter text of a seed below 2^60 differs from the manual's form."
+find = 'if (t->v6) ytr__cat(&s, ",x%016llx", (unsigned long long)ytr_trial_seed(t, i));'
+replace = 'if (t->v6) ytr__cat(&s, ",x%llx", (unsigned long long)ytr_trial_seed(t, i));'
+
+[[mutant]]
+id = "x-20"
+name = "trial seed as a decimal"
+test = "trials"
+why = "Twenty decimal digits: ysp/table.h refuses the cell and R's double rounds it."
+find = 'if (t->v6) ytr__cat(&s, ",x%016llx", (unsigned long long)ytr_trial_seed(t, i));'
+replace = 'if (t->v6) ytr__cat(&s, ",%llu", (unsigned long long)ytr_trial_seed(t, i));'
+
+[[mutant]]
+id = "x-21"
+name = "header without trial_seed"
+test = "trials"
+why = "The header and the rows would have different column counts."
+find = 'if (k == 0 && t->v6) return "trial_seed";'
+replace = 'if (0) return "trial_seed";'

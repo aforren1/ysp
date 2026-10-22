@@ -151,12 +151,31 @@ static void test_vars_replay(void) {
         CHECK_I(ytr_var(&g_u, i, 1), ytr_var(&g_t, i, 1));
     }
     /* The data line ends with the jitter, then the variables, quoted where
-     * CSV needs it. */
+     * CSV needs it, then the trial seed as "x" and 16 hex digits, leading
+     * zeros kept. */
     ytr_format_header(&g_t, a, sizeof(a));
-    CHECK_HAS(a, ",outcome,iti_s,side,odd\n");
+    CHECK_HAS(a, ",outcome,iti_s,side,odd,trial_seed\n");
     for (i = 0; i < n; i++) {
         ytr_format_row(&g_t, i, a, sizeof(a));
-        if (ytr_var(&g_t, i, 1) == 1) { CHECK_HAS(a, ",\"c,d\"\n"); break; }
+        if (ytr_var(&g_t, i, 1) == 1) { CHECK_HAS(a, ",\"c,d\",x"); break; }
+    }
+    for (i = 0; i < n; i++) {
+        char want[24];
+        ytr_format_row(&g_t, i, a, sizeof(a));
+        snprintf(want, sizeof(want), ",x%016llx\n", (unsigned long long)vt_out(d.seed, i, 0));
+        CHECK_HAS(a, want);
+    }
+    {   /* a seed whose top nibble is 0 still writes 16 digits */
+        uint64_t sd;
+        g_t.desc.seed = 0;
+        for (sd = 0; sd < 1000 && (vt_out(sd, 0, 0) >> 60) != 0; sd++) {}
+        CHECK(sd < 1000);
+        g_t.desc.seed = sd;
+        ytr_format_row(&g_t, 0, a, sizeof(a));
+        snprintf(b, sizeof(b), ",x%016llx\n", (unsigned long long)vt_out(sd, 0, 0));
+        CHECK_HAS(a, b);
+        CHECK(b[2] == '0');
+        g_t.desc.seed = d.seed;
     }
 
     /* save at cut points, load into a fresh handle, finish: the same. */
@@ -264,6 +283,7 @@ static void test_vars_refusals(void) {
     CHECK(csv_table(&g_tab, g_cond_csv));
     d.table = &g_tab;
     d.vars[1].name = "word";           VREJ("desc.vars[1] is named 'word', as a table column is");
+    d.vars[1].name = "trial_seed";     VREJ("desc.vars[1] is named 'trial_seed', the data line's column");
 #undef VREJ
     ytr_close(&g_t);
 }
@@ -482,7 +502,8 @@ static void test_vars_data(void) {
     ytr_data_desc dd;
     ytr_col c = YTR_COL_SET("x", YTR_COL_INT);
     uint64_t s = 2;
-    int i, col_side, col_odd;
+    int i, col_side, col_odd, col_seed;
+    char want[24];
     vt_desc(&d, &s, true);
     CHECK(ytr_open(&g_t, &d));
     memset(&dd, 0, sizeof(dd));
@@ -501,11 +522,16 @@ static void test_vars_data(void) {
     if (read_back(g_sink, g_sink_len, false)) {
         col_side = ytb_col(&g_back, "side");
         col_odd = ytb_col(&g_back, "odd");
-        CHECK(col_side >= 0 && col_odd == col_side + 1);
+        col_seed = ytb_col(&g_back, "trial_seed");
+        CHECK(col_side >= 0 && col_odd == col_side + 1 && col_seed == col_odd + 1);
+        /* ysp/table.h reads the seeds as text, every bit kept */
+        CHECK(col_seed >= 0 && ytb_col_type(&g_back, col_seed) == YTB_STRING);
         CHECK_I(g_back.n_rows, 10);
         for (i = 0; i < 10 && col_side >= 0; i++) {
             CHECK_S(ytb_text(&g_back, i, col_side), ytr_var_text(&g_t, i, 0));
             CHECK_S(ytb_text(&g_back, i, col_odd), ytr_var_text(&g_t, i, 1));
+            snprintf(want, sizeof(want), "x%016llx", (unsigned long long)ytr_trial_seed(&g_t, i));
+            if (col_seed >= 0) CHECK_S(ytb_text(&g_back, i, col_seed), want);
         }
     } else {
         CHECK(0);

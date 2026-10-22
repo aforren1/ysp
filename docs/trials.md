@@ -203,7 +203,7 @@ target) that the data file logs and a resume gives back.
    ```
 
 3. Log `d.seed` with the session (the sidecar's `meta`). The data line
-   has a `side` column, and `ytr_restore()` or `ytr_open_saved()` gives
+   has a `side` column and a `trial_seed` column, and `ytr_restore()` or `ytr_open_saved()` gives
    every value again.
 
 To snap a jitter to the display's frames, write `rate=display` in the
@@ -869,6 +869,25 @@ v0.6.0 closes four gaps of the experiment definition
   field and a 2AFC side drawn for one trial are not the same bits.
 - Values are texts, 1 to 63 bytes of valid UTF-8, because the data line
   writes them; the definition gives a number as its canonical text.
+- The data line has a `trial_seed` column whenever trial seeds are defined
+  (variables, or a nonzero seed), so a data file gives each trial's
+  stimulus seed with no re-run of the hash (the user, 2026-10-21). A desc
+  with neither has no column, so the pinned format lines do not move.
+  The spelling is `x` and 16 lowercase hex digits (`x00f3a9c4e2b7d158`),
+  chosen by measurement: ten seeds (0, 2^53 + 1, 2^63 - 1, 2^63, 2^64 - 1,
+  one of all decimal digits, and others) in a file each spelling, and a
+  one-row file of the all-digit seed, read with each tool's defaults
+  (pandas 3.0.6, R 4.6.1 `read.csv` on WSL2, ysp/table.h 0.3.0):
+
+  | Spelling | pandas | R `read.csv` | ysp/table.h |
+  |---|---|---|---|
+  | decimal | exact (uint64; int64 for one row) | numeric, rounded (81985529205302085 reads 81985529205302080) | refused: 20 significant digits |
+  | `0x` + 16 hex | exact (text) | numeric, rounded: R reads hex | exact (text) |
+  | 16 hex | exact (text); a one-row all-digit file reads as an integer and loses its leading zero | text; the one-row file reads as a number | text; the one-row file reads as a number |
+  | `x` + 16 hex | exact (text) | exact (text) | exact (text) |
+
+  `int(s[1:], 16)` (Python) or `strtoull(s + 1, NULL, 16)` (C) gives the
+  seed back; R holds it exactly only as text, since a double has 53 bits.
 - Snapshot format 5 for a desc with variables or a nonzero seed: format 4
   plus the seed and the variables. A seed alone counts, because the trial
   seeds depend on it.
@@ -941,11 +960,12 @@ Checked on 2026-10-21 (Windows 11 with MSVC 19.44 and MinGW-w64 gcc
 - The 600 v0.1.1 and 320 v0.2.0 pins, the jitter golden digests and the
   v0.2 digest are unchanged.
 
-- Mutations: 17 new in `tests/mutate/trials.toml` (x-01 to x-17: the
+- Mutations: 21 new in `tests/mutate/trials.toml` (x-01 to x-21: the
   stream's key and outputs, the value mapping, the refusals, quoting, the
   seed in the snapshot and its format, weight x reps and its two
   refusals, the display's rate and its rules text, the writer's bound and
-  its header line), all killed; 95 of 95 in the file, MinGW gcc 16.1.
+  its header line, the trial_seed column and its spelling), all killed;
+  99 of 99 in the file, MinGW gcc 16.1.
   x-16 (one name past the bound) survived its first run: a session alone
   could pass 256 names unchecked, so the test now opens a writer on a
   247-column table. ysp/table.h: b-01 and b-02, 27 of 28 in the file, the

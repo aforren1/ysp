@@ -670,10 +670,11 @@ def test_vars_in_the_data_line_and_replay():
     t = ytr.Trials(n_conditions=2, reps=5, order=ytr.ORDER_RANDOM, rng=3, seed=9,
                    vars=[ytr.var_choice("side", ["left", "right"]), ytr.var_choice("w", ["x,y", "z"])])
     run_all(t)
-    assert t.format_header().endswith(",outcome,side,w\n")
+    assert t.format_header().endswith(",outcome,side,w,trial_seed\n")
     for i in range(t.n_run):
         w = t.var(i, "w")
-        assert t.format_row(i).endswith("," + t.var(i, "side") + "," + ('"x,y"' if w == "x,y" else w) + "\n")
+        assert t.format_row(i).endswith("," + t.var(i, "side") + "," + ('"x,y"' if w == "x,y" else w) +
+                                        ",x%016x\n" % t.trial_seed(i))
     r = ytr.Trials(n_conditions=2, reps=5, order=ytr.ORDER_RANDOM, rng=3, seed=9,
                    vars=[ytr.var_choice("side", ["left", "right"]), ytr.var_choice("w", ["x,y", "z"])])
     r.restore([h.outcome for h in t.history()])
@@ -683,6 +684,34 @@ def test_vars_in_the_data_line_and_replay():
     with pytest.raises(ytr.Error, match="desc.seed does not match"):
         ytr.Trials.load(snap, n_conditions=2, reps=5, order=ytr.ORDER_RANDOM, rng=3, seed=10,
                         vars=[ytr.var_choice("side", ["left", "right"]), ytr.var_choice("w", ["x,y", "z"])])
+
+
+def test_trial_seed_column_round_trips():
+    # "x" and 16 hex digits: text in ysp/table.h, the csv module and pandas by
+    # their defaults, so every bit comes back; a seed of 0 and seeds whose top
+    # nibble is 0 keep their 16 digits.
+    seeds = []
+    for seed in (0, 1, 2**63, 2**64 - 1):
+        t = ytr.Trials(n_conditions=2, reps=8, order=ytr.ORDER_RANDOM, rng=7, seed=seed,
+                       vars=[ytr.var_choice("side", ["left", "right"])])
+        run_all(t)
+        text = t.format_header() + "".join(t.format_row(i) for i in range(t.n_run))
+        want = [t.trial_seed(i) for i in range(t.n_run)]
+        seeds += want
+        tab = ytr.Table(text)
+        assert tab.types[tab.columns.index("trial_seed")] == "string"
+        got = [tab.value(i, "trial_seed") for i in range(len(tab))]
+        assert got == ["x%016x" % v for v in want]
+        assert [int(s[1:], 16) for s in got] == want
+        assert [r["trial_seed"] for r in csv.DictReader(io.StringIO(text))] == got
+        try:
+            import pandas as pd
+        except ImportError:   # optional: the CSV and table checks above stand
+            pd = None
+        if pd is not None:
+            col = pd.read_csv(io.StringIO(text))["trial_seed"]
+            assert list(col) == got
+    assert any(v >> 60 == 0 for v in seeds)
 
 
 def test_vars_rules_round_trip_and_errors():

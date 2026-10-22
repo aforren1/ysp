@@ -207,7 +207,9 @@ that structure; it does not invent a new one.
   mix64((seed XOR 0x6A09E667F3BCC909) + (i + 1) x 0x9E3779B97F4A7C15);
   output 0 is `$trial_seed` and output 1 + j is variable j. A variable
   takes nothing from the node's generator, so adding one moves no other
-  draw.
+  draw. The data line records each trial's seed in a `trial_seed` column
+  (`x` and 16 hex digits, text in pandas, R and ysp/table.h; trials.md,
+  v0.6), so a data file gives it without a re-run of the hash.
 
 **D9. The data set. DECIDED (2026-10-14): a folder of CSV files and `session.json`.**
 - Options: (a) a folder: `trials.csv`, `frames.csv`, `events.csv`,
@@ -525,7 +527,8 @@ relative to its onset. A trial row has, in order:
 1. Session fields, as constant columns (the trials writer's rule).
 2. `node`, `trial_type` (the template), `trial_index`, `time_elapsed_s`,
    and the `ytr_trial_info` fields.
-3. Every table column of the row, the `vars`, the jitters (`soa_s`) and the
+3. Every table column of the row, the `vars`, the jitters (`soa_s`),
+   `trial_seed` (`x` and 16 hex digits, from `ytr_format_row()`) and the
    inherited `data`.
 4. For each method trial: `method`, `level`, `estimate`.
 5. For each stimulus in `record`: `<s>_onset_s`, `<s>_offset_s`,

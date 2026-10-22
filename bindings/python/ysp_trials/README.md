@@ -244,7 +244,7 @@ default.
 | `values(c)`, `table` | condition `c`'s table row as a dict; the `Table` or None (v0.2) |
 | `jitter(i, j)`, `jitters` | trial `i`'s draw of jitter `j` (index or name) as `Jitter(s, ns, frames)`; the names (v0.2.1) |
 | `var(i, j)`, `var_index(i, j)`, `vars` | trial `i`'s value of variable `j` (index or name) as str, and its index in the values; the names (v0.6) |
-| `trial_seed(i)` | trial `i`'s 64-bit seed, a function of `seed` and `i` only (v0.6) |
+| `trial_seed(i)` | trial `i`'s 64-bit seed, a function of `seed` and `i` only (v0.6). The data line's `trial_seed` column writes it as `x` and 16 hex digits; `int(s[1:], 16)` gives it back |
 | `save()`, `Trials.load(data, **desc)`, `restore(outcomes, records=None)` | snapshot, resume, replay. `records` is one bytes object or a list of records. |
 | `rng_state` | the splitmix state for an int seed (read and write); None for a callable |
 | `n_conditions`, `n_factors`, `n_run`, `n_done`, `swaps`, `is_open`, `record_size` | counts and state |

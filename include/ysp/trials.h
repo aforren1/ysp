@@ -632,8 +632,17 @@
  *     YTR_MAX_VARS (4). The name follows a jitter's rule and may not be a
  *     jitter's or a table column's. The data line has one column per
  *     variable, after the jitters, with the value's text (CSV-quoted when
- *     needed); ytr_var(t, i, j) gives trial i's value index, ytr_var_text()
- *     its text, ytr_var_index() finds j by name. open() copies the texts.
+ *     needed), then a `trial_seed` column whenever trial seeds are defined
+ *     (variables, or a nonzero seed): the seed as "x" and 16 lowercase hex
+ *     digits (x00f3a9c4e2b7d158), so a file gives each trial's stimulus
+ *     seed without the hash below. That spelling is text in ysp/table.h,
+ *     pandas and R's read.csv with their defaults, so all 64 bits read
+ *     back; a decimal has 20 digits, which ysp/table.h refuses and R's
+ *     double rounds, R reads "0x..." as a double, and bare hex reads as a
+ *     number when every digit happens to be decimal. A variable may not be
+ *     named trial_seed. ytr_var(t, i, j) gives trial i's value index,
+ *     ytr_var_text() its text, ytr_var_index() finds j by name. open()
+ *     copies the texts.
  *     THE TRIAL'S STREAM. A variable draws nothing from desc.rng: each
  *     trial has a stream of its own, a function of desc.seed and the trial
  *     index only, so a variable added or removed moves no other draw (the
@@ -1162,7 +1171,9 @@
  *            replayed by restore() and a snapshot; ytr_var(),
  *            ytr_var_text(), ytr_var_index(), ytr_trial_seed(); the rules
  *            statement `var NAME choice V V ...`. Nothing is drawn from
- *            desc.rng for them, so no other draw moves.
+ *            desc.rng for them, so no other draw moves. The data line ends
+ *            with a trial_seed column ("x" and 16 hex digits) whenever
+ *            trial seeds are defined.
  *          - G4: `weight COLUMN` is each row's count per repetition, times
  *            reps (the text's or the desc's). BREAKING for rules that gave
  *            both: such a session now has reps times the trials. `cond_reps`
@@ -1357,7 +1368,7 @@
  *   (ctest, 89 of 89), MinGW-w64 gcc 16.1, WSL2 gcc 11.4 under ASan and
  *   UBSan (C11; C++17 without -Wpedantic, which the test's own compound
  *   literals fail), YTR_MAX_TRIALS 256, YTR_MAX_JITTERS 1, C99, emcc.
- *   Mutations: 17 new (x-01 to x-17), 95 of 95 in tests/mutate/
+ *   Mutations: 21 new (x-01 to x-21), 99 of 99 in tests/mutate/
  *   trials.toml killed. Fuzzed (vars and rate=display seeds) under MSVC
  *   libFuzzer with ASan: 3,205,678 inputs in 601 s, no crash; the corpus
  *   replayed on Linux under ASan and UBSan. The writer's cost per row is
@@ -4333,6 +4344,8 @@ static bool ytr__var_setup(ytr_trials* t, const ytr_desc* d, int j) {
             return ytr__fail(t, "desc.vars[%d] and desc.jitters[%d] are both named '%s'", j, k, s->name);
     if (d->table && ytb_col(d->table, s->name) >= 0)
         return ytr__fail(t, "desc.vars[%d] is named '%s', as a table column is", j, s->name);
+    if (strcmp(s->name, "trial_seed") == 0)
+        return ytr__fail(t, "desc.vars[%d] is named 'trial_seed', the data line's column of trial seeds", j);
     if (!s->values || s->n_values < 1 || s->n_values > YTR_MAX_VAR_VALUES)
         return ytr__fail(t, "desc.vars[%d] (%s) needs 1 to %d values", j, s->name, YTR_MAX_VAR_VALUES);
     memcpy(q->name, s->name, strlen(s->name) + 1);
@@ -5524,6 +5537,8 @@ static const char* ytr__sess_col(const ytr_trials* t, int k, char tmp[24]) {
     if (k < t->n_jit && k < YTR_MAX_JITTERS) return t->jit[k].name;
     k -= t->n_jit;
     if (k < t->n_var && k < YTR_MAX_VARS) return t->var[k].name;
+    k -= t->n_var;
+    if (k == 0 && t->v6) return "trial_seed";
     return NULL;
 }
 
@@ -5581,6 +5596,11 @@ YTR_API int ytr_format_row(const ytr_trials* t, int i, char* buf, size_t cap) {
         ytr__cat(&s, ",");
         ytr__csv_name(&s, ytr_var_text(t, i, f), f);
     }
+    /* "x" and 16 hex digits: the 64 bits exactly, and text in pandas, R
+     * and ysp/table.h by their defaults. A decimal has 20 digits, which
+     * ysp/table.h refuses and R's double rounds; R reads "0x..." as a
+     * double too; bare hex reads as a number when every digit is decimal. */
+    if (t->v6) ytr__cat(&s, ",x%016llx", (unsigned long long)ytr_trial_seed(t, i));
     ytr__cat(&s, "\n");
     return ytr__str_done(&s);
 }
@@ -7428,6 +7448,8 @@ static size_t ytr__row_bound(const ytr_trials* t) {
             n += 12u;
         }
     }
+    /* a variable's text quoted, every byte a quote at worst; the seed */
+    n += (2u * YTR_MAX_VAR_TEXT + 3u) * (size_t)(t->n_var > 0 ? t->n_var : 0) + (t->v6 ? 18u : 0u);
     return n + 24u * (size_t)(t->n_jit > 0 ? t->n_jit : 0) + 2u;
 }
 
