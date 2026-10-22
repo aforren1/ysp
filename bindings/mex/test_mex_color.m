@@ -5,6 +5,8 @@ function test_mex_color()
 %   test_mex_color. tests/compare/color_ptb.m compares it with
 %   Psychtoolbox.
 
+    global YSP_COLOR_CHECKS %#ok<GVMIS>
+    YSP_COLOR_CHECKS = 0;
     here = fileparts(mfilename('fullpath'));
     addpath(here);
     fprintf('ysp_color %s\n', ysp_color('version'));
@@ -84,17 +86,68 @@ function test_mex_color()
     codes = ysp_color('output_code', cal, [0 0.5 1; -1 2 0.25]);
     check(isequal(codes(1, [1 3]), [0 255]) && isequal(codes(2, 1:2), [0 255]), 'output_code');
     ysp_color('close', h);
+    test_michelson();
     expect_error('ysp_color:handle', @() ysp_color('describe', h));
-    fprintf('PASS\n');
+    fprintf('PASS (%d checks)\n', YSP_COLOR_CHECKS);
+end
+
+function test_michelson()
+    % ysp/color.h v0.4.0: a Michelson contrast in light as ysp/gfx.h's
+    % contrast, and the codes. A display at 100 cd/m2 with a black of 0.5
+    % cd/m2, luminance readings only.
+    rd = [-1 0 0.5 0 0];
+    for gun = 0:2
+        for k = 1:16
+            rd(end + 1, :) = [gun, k / 16, 0.5 + 33 * (k / 16)^2.2, 0, 0]; %#ok<AGROW>
+        end
+    end
+    cal = ysp_color('cal_derive', rd);
+    h = ysp_color('open', struct('cal', cal, 'background', [0.5 0.5 0.5]));
+    ybg = 0.5 + 0.5 * 3 * 33;
+    sh = ysp_color('michelson', h, 0.05);
+    check(isstruct(sh) && sh.gamut.in && abs(sh.Y_bg - ybg) < 1e-4, 'michelson: background light');
+    check(abs(sh.gain - (ybg - 0.5) / ybg) < 1e-6, 'michelson: gain');
+    check(abs(sh.scene - 0.05 / sh.gain) < 1e-15, 'michelson: scene');
+    check(abs(sh.shown - (sh.Y_peak - sh.Y_trough) / (sh.Y_peak + sh.Y_trough)) < 1e-15, 'michelson: shown');
+    check(abs(sh.shown - 0.05) < 0.007 && sh.peak(1) > sh.trough(1) && isequal(size(sh.trough), [1 3]), ...
+          'michelson: codes');
+    % the codes are output_code's for bg +- scene bg
+    pk = ysp_color('output_code', cal, 0.5 + sh.scene * [0.5 0.5 0.5; -0.5 -0.5 -0.5]);
+    check(isequal(pk(1, :), sh.peak) && isequal(pk(2, :), sh.trough), 'michelson: codes against output_code');
+    % dir [0 0 0] and bits 8 are the defaults
+    check(isequal(ysp_color('michelson', h, 0.05, [0 0 0], 8), sh), 'michelson: defaults');
+    % past the gamut: not clipped, reported; the clamped codes show the edge
+    past = ysp_color('michelson', h, sh.max * 1.5);
+    check(~past.gamut.in && isequal(past.peak, [255 255 255]) && isequal(past.trough, [0 0 0]), ...
+          'michelson: past the gamut');
+    check(abs(past.scene - 1.5) < 1e-12 && abs(past.shown - sh.max) < 1e-12, 'michelson: the gamut edge');
+    % 0 shows 0; 16 bits; the opposite phase
+    check(ysp_color('michelson', h, 0).shown == 0, 'michelson: zero');
+    s16 = ysp_color('michelson', h, 0.05, [], 16);
+    check(s16.peak(1) > 255, 'michelson: 16 bits');
+    neg = ysp_color('michelson', h, -0.05);
+    check(neg.shown == -sh.shown && isequal(neg.peak, sh.trough), 'michelson: opposite phase');
+    % a colored dir, and an isoluminant one refused
+    red = ysp_color('michelson', h, 0.02, [0.2 0 0]);
+    check(red.peak(2) == red.trough(2) && red.gain < sh.gain, 'michelson: colored dir');
+    expect_error('ysp_color:range', @() ysp_color('michelson', h, 0.02, [1 -1 0]));
+    expect_error('ysp_color:arg', @() ysp_color('michelson', h, 0.02, [], 7));
+    expect_error('ysp_color:arg', @() ysp_color('michelson', h, NaN));
+    expect_error('ysp_color:arg', @() ysp_color('michelson', h, 0.02, [1 0]));
+    ysp_color('close', h);
 end
 
 function check(cond, msg, varargin)
+    global YSP_COLOR_CHECKS %#ok<GVMIS>
+    YSP_COLOR_CHECKS = YSP_COLOR_CHECKS + 1;
     if ~cond
         error('test_mex_color:fail', ['FAIL: ' msg], varargin{:});
     end
 end
 
 function expect_error(id, f)
+    global YSP_COLOR_CHECKS %#ok<GVMIS>
+    YSP_COLOR_CHECKS = YSP_COLOR_CHECKS + 1;
     try
         f();
     catch e

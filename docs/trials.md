@@ -962,6 +962,16 @@ Checked on 2026-10-21 (Windows 11 with MSVC 19.44 and MinGW-w64 gcc
   open.
 - The 600 v0.1.1 and 320 v0.2.0 pins, the jitter golden digests and the
   v0.2 digest are unchanged.
+- MEX binding (2026-10-22): `test_mex.m`'s v0.6 part checks every value
+  and trial seed against the stream written in MATLAB from the manual (two
+  pins of `trials_test_vars.h` included), the data line and its
+  `trial_seed` column read back through `ysp_trials('table', ...)` for four
+  seeds, replay by `restore`, a format-5 snapshot loaded in the middle of a
+  session and refused under another seed, the `var` statement's round
+  trip, `rate` `'display'` against the same fixed rate, and a 256-column
+  table (257 refused), and non-ASCII values, levels, rules and error
+  text in and out. It passes in Octave 10.1 and MATLAB R2023a (MSVC 2022)
+  on Windows.
 
 - Mutations: 21 new in `tests/mutate/trials.toml` (x-01 to x-21: the
   stream's key and outputs, the value mapping, the refusals, quoting, the

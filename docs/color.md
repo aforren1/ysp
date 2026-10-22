@@ -648,12 +648,16 @@ Calibrations and luminance records travel as their canonical bytes.
 | `r = ysp_color('ring', h, plane, fixed, n, sides)` | 'dkl', 'cone', 'oklch', 'cielch' |
 | `[rgb, g] = ysp_color('map', h, space, X, method)` | 'scale', 'chroma_oklch', 'chroma_cielch', 'chroma_dkl', 'clip' |
 | `lum = ysp_color('lum_derive', settings, cal, opts)`, `ysp_color('lum_stated', w, cones)`, `ysp_color('lum_info', lum)` | settings N x 6 (a, b) |
+| `sh = ysp_color('michelson', h, m, [dir], [bits])` | a Michelson contrast in light (v0.4.0): a struct with `gain`, `scene` (ysp/gfx.h's contrast), `max`, `shown`, `Y_bg`, `Y_peak`, `Y_trough`, `peak` and `trough` (1 x 3 output codes) and `gamut` (as `to_dir`'s). `dir` defaults to `[0 0 0]` (the background), `bits` to 8. Past the gamut it is reported, not clipped; a `dir` with no luminance raises `ysp_color:range` |
 | `ysp_color('lum_pair', h, azim, elev, contrast)`, `'info'`, `'describe'`, `'set_background'`, `'close'` | the rest |
 | `ysp_color('output_code', cal, RGB, bits)`, `ysp_color('cone_fundamentals', nm, cones)`, `ysp_color('version')` | without a handle |
 
 Errors carry `ysp_color:arg`, `:refused`, `:format`, `:range`, `:handle`.
 `bindings/mex/test_mex_color.m` passes in MATLAB R2023a and Octave 10.1
-(Windows); CI runs it on Octave 7.3 and MATLAB.
+(Windows); CI runs it on Octave 7.3 and MATLAB. Its `michelson` checks
+(v0.4.0, the Python test's cases, and the codes against `output_code`;
+70 checks in all, 53 before) passed in Octave 10.1 and MATLAB R2023a
+(MSVC 2022) on Windows on 2026-10-22.
 
 ### Against Psychtoolbox
 
