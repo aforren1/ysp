@@ -747,6 +747,9 @@ Decisions, each with its reason:
   tables. That format is not designed yet; this writer gives its trial
   table, and the sidecar can carry the device summary and the rig
   profile's hash (`yrig_hash`) until the player defines the rest.
+  (2026-10-21: the format is D9 of experiment_format.md; `ysp/dataset.h`
+  writes it, with this writer for each table and `session.json` in place
+  of the sidecar.)
 - **Constant columns repeat per row.** `YTR_COL_TEXT` writes the
   participant or session in every row, as PsychoPy writes its session
   fields. It costs bytes and makes files from many sessions concatenate

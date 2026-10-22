@@ -4,7 +4,7 @@ project(ysp LANGUAGES C CXX)
 # Consumers: add_subdirectory(ysp), then link the group whose headers the
 # program includes:
 #   ysp::core     rt, timeline, table, json, pack
-#   ysp::methods  stair, quest, aep, trials
+#   ysp::methods  stair, quest, aep, trials, dataset
 #   ysp::devices  serial, parallel, input, response, box, device, rigfile, net
 #   ysp::rig      screen, gfx, color, outline, rdk, video, audio
 # or ysp::ysp, all four. Each group carries the include path, the groups its
@@ -175,7 +175,7 @@ endif()
 # program registered with ctest too, and one with YSP_ASYNC_<name> ON gets
 # the compile check and that test built a second time with
 # Y<X>_ASYNC defined, which is the opt-in layer that pulls in ysp/rt.h.
-set(YSP_LIBS rt parallel serial stair quest aep table json pack trials timeline input response box device rigfile net color rdk outline screen audio gfx video)
+set(YSP_LIBS rt parallel serial stair quest aep table json pack trials dataset timeline input response box device rigfile net color rdk outline screen audio gfx video)
 
 # Examples that sit in the folder of the header they mainly show but need
 # another header's build: path, program name (the file's own name, kept from
@@ -273,6 +273,14 @@ set(YSP_PREFIX_trials      YTR)
 set(YSP_GROUP_trials       methods)
 set(YSP_PLATFORMS_trials   Windows Linux Darwin)
 set(YSP_THREADS_trials     OFF)
+
+# The session data set (docs/experiment_format.md D9) writes its tables
+# through ysp/trials.h and session.json through ysp/json.h, so it sits with
+# the trial sequencer. Folders and renames are the OS's (kernel32, libc).
+set(YSP_PREFIX_dataset     YDS)
+set(YSP_GROUP_dataset      methods)
+set(YSP_PLATFORMS_dataset  Windows Linux Darwin)
+set(YSP_THREADS_dataset    OFF)
 
 # The input event: types and inline adapters only, nothing to link. Its test
 # reads ysp/screen.h's raw mouse struct and needs none of its deps.

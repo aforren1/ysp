@@ -37,6 +37,7 @@ renderers, in tests and CI.
 | rigfile | none | Binds through a fake transport | docs/device.md |
 | color | not applicable (pure computation) | No number is a measurement of light | color.h; docs/color.md |
 | stair, quest, aep, trials, table, json, pack, timeline, rdk, outline | not applicable (pure computation) | | |
+| dataset | not applicable (files only): NTFS on Windows 11, ext4 on WSL2, Emscripten's in-memory file system | A power cut; macOS | docs/dataset.md |
 
 ## Files to copy
 
@@ -52,6 +53,7 @@ unless your file already did.
 | stair, table, json, pack, timeline, input, color, rdk, outline | | the header | none |
 | quest, aep | rt.h with `YQST_ASYNC`, `YAEP_ASYNC` only | the header (+ rt.h for the async layer) | none |
 | trials | table.h | trials.h, table.h | none |
+| dataset | trials.h, json.h | dataset.h, trials.h, table.h, json.h | none |
 | parallel | rt.h | parallel.h, rt.h | InpOut driver on Windows |
 | serial | rt.h | serial.h, rt.h | none |
 | response | input.h | response.h, input.h | none |
@@ -142,6 +144,19 @@ Status:
 - v0.4.0 (the data writer, on the [Conventions](conventions.md): `ytr_data_finish()` and a void `ytr_data_close()`, a `TIME_NS` column `x_ns` written `x_s`; every type, missing value and 400 random strings with commas, quotes, line breaks and bad UTF-8 read back by ysp/table.h, 2000 random doubles bit for bit; 25 of 25 mutations caught; a 26-column row costs 4.2 / 1.9 us to format, 15 / 14 us with the write to the OS, 1.7 ms with a sync to disk, gcc / MSVC).
 - v0.3.0 (the [Conventions](conventions.md): jitters in `int64_t` ns with `_ns` desc fields, seconds kept in rules, tables and bindings with every pinned draw unchanged; `ytr_open_saved()`, `ytr_close()`, messages from the loop calls).
 - v0.2.1. The hashes of 600 v0.1.1 and 320 v0.2.0 sessions match on gcc, MSVC and Linux; jitter distributions checked against their CDFs, the draws integer-only with golden digests that match under every compiler and flag set tried (-Ofast and /fp:fast included), and the snapped exponential's hazard measured; each v0.2 order checked by chi-square against its stated distribution, units and balance uniform over every valid order of small designs; 22.9 million fuzz inputs and 47 of 47 mutations caught; gcc and MSVC, sanitizer clean. Sequential order identical to PsychoPy's TrialHandler and the random orders' block properties matched over 100 seeds ([tests/compare/](../tests/compare/)). open() of a 10,000-trial design 0.02 to 7 ms. [Design notes](trials.md).
+
+### ysp/dataset.h
+
+- Header: [ysp/dataset.h](../include/ysp/dataset.h)
+- Prefix: `yds_`, `YDS_`
+- Platforms: Windows, Linux, macOS (not run), Emscripten (its in-memory file system)
+- Needs: ysp/trials.h (and so ysp/table.h), ysp/json.h
+
+Purpose: A session's data set (experiment_format.md D9 and 2.10, gap G13): a folder with `session.json` (canonical JSON, format "ysp-session" 1, `"closed": false` until the finish, every rewrite atomic: a synced temporary file renamed over), `trials.csv` (the caller's columns), `frames.csv` (flip records), `events.csv` (landings, inputs, responses, outputs), `clock.csv` (clock pairs and fits) and `streams/<name>.csv`, each row in the OS when its write returns, through ysp/trials.h's writer. Inline adapters from `yscr_record`, `yin_event`, `ytl_event` and `yrt_fit_info`. A stored zip of the finished folder for the web. A folder that exists is refused.
+
+Status:
+
+- v0.1.0 (2026-10-21): the first version (gap G13). A synthetic session against golden bytes (session.json at the open and at the finish, four tables, a stream, the zip's digest), a crash in a child process (every file reads, `"closed": false`), the atomic rewrite against a blocked temporary file and a held session.json, refusals before the folder exists: 478 checks on MSVC and MinGW, 472 on WSL2 gcc with ASan and UBSan, 453 under emcc; the zip opened by Python's zipfile, unzip and Expand-Archive, every CSV by pandas. 31 of 32 mutants killed (one survivor expected: the sync before the rename). On the Iris Xe laptop's SSD: 12 us a frame or event row, 8.2 ms an atomic rewrite of session.json. [Design notes](dataset.md).
 
 ### ysp/table.h
 
@@ -518,5 +533,6 @@ Purpose: The pack's EXPERIMENT entry: a JSON file, read by ysp/json.h, that name
 
 Status:
 
+- 2026-10-21: the data set's writer is built, ysp/dataset.h v0.1.0 (gap G13).
 - Design decided, 2026-10-14: all 15 decisions accepted; D4 changed (durations are plain numbers in seconds, and every duration key and variable ends in `_s`); D11 records flagged frames only, and a requeue, if ever added, is an explicit rule in the definition. G7 (a canonical form for non-integer numbers, the prerequisite for the experiment hash) is closed by ysp/json.h v0.2.0 (2026-10-21). No loader, no player, no test.
 - Proposal, 2026-10-13. Four worked examples (2AFC staircase, RDK, Stroop from a CSV, EEG trigger) were mapped to the C examples field by field; 13 gaps in the C APIs are listed.

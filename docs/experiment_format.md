@@ -308,7 +308,7 @@ the header.
 | G10 | A trial row has at most 64 columns (ysp/table.h's bound, kept by the writer). | ysp/trials.h, ysp/table.h | Templates with many recorded stimuli | Small; `record` limits columns meanwhile |
 | G11 | The jitter `rate=` takes a fixed number. Snapping to the rig's refresh needs the player to set `rate_num` and `rate_den` after `ytr_rules()`, and the text cannot say so. | ysp/trials.h | EEG example (`rate=display`) | Small |
 | G12 | Closed (2026-10-21): ysp/stair.h 0.3.0 has `yst_save()` and `yst_open_saved()`, in the form of quest's, aep's and trials' (versioned, checked, a mismatched desc refused, the error in the handle), so a resume no longer replays the staircase's updates. | ysp/stair.h | Resume | Small; closed |
-| G13 | The player's data set (D9) is not built. The trials writer's sidecar is key=value lines. | player | D9 | Medium |
+| G13 | CLOSED in ysp/dataset.h v0.1.0 (2026-10-21; its name and place await the user's confirmation, docs/dataset.md). The folder, `session.json` (canonical, `"closed": false` until the finish, each rewrite atomic), the four tables and `streams/` through the trials writer, adapters from flip records, inputs, timeline events and clock fits, and the zip for the web. Left to the player: what it puts in `session.json` and which rows it drains from the event ring and the device records. Was: the player's data set (D9) was not built; the trials writer's sidecar is key=value lines. | ysp/dataset.h | D9 | Done |
 
 ## Part 2: Reference
 
@@ -504,12 +504,15 @@ order of the role names.
 
 | File | Content | Written by |
 |---|---|---|
-| `session.json` | format `"ysp-session"` 1; experiment ID (stored and migrated, D12), pack ID, rig profile hash (`yrig_hash()`), device rows (devices_spec 11.4), describe lines of the screen, color context and audio, session fields, the seed, the player's and each header's version, start date (UTC), applied live changes, `closed` | the player, at start and at close |
+| `session.json` | format `"ysp-session"` 1; experiment ID (stored and migrated, D12), pack ID, rig profile hash (`yrig_hash()`), device rows (devices_spec 11.4), describe lines of the screen, color context and audio, session fields, the seed, the player's and each header's version, start date (UTC), applied live changes, `closed` | the player, at start and at close (`yds_open()`, `yds_session_push()`, `yds_finish()`) |
 | `trials.csv` | one row per trial (below) | `ytr_data_open()` with `dd.trials` NULL and the player's columns, since a tree has several `ytr_trials` |
-| `frames.csv` | one row per `yscr_record`: index, target_s, planned_s, onset_s, residual_s, dropped, path, tier, flags, phase durations (`_s`) | the player, from `f.done` |
-| `events.csv` | timeline landings (kind, stimulus, planned_s, frame, onset_s, residual_s), responses, device events, outputs (`YDEV_REC_OUT`: code, deadline_s, write start and end in `_s`, flags), marks | the player, from the event ring |
-| `streams/` | one table per stream and per `rdk` stimulus | the player |
-| `clock.csv` | thinned clock pairs and every fit | the player |
+| `frames.csv` | one row per `yscr_record`: frame (the record's index; the name joins `events.csv`'s `frame`), trial_index, target_s, planned_s, onset_s, residual_s, dropped, path, tier, flags, code_risk, phase durations (`_s`) | the player, from `f.done` (`yds_frame_from_screen()`) |
+| `events.csv` | timeline landings (kind, stimulus, planned_s, frame, onset as t_s, residual_s), responses, device events, outputs (`YDEV_REC_OUT`: code, deadline_s, write start as t_s and end as end_s, flags), marks; one table with a `kind` column (ysp/dataset.h, THE TABLES) | the player, from the event ring |
+| `streams/` | one table per stream and per `rdk` stimulus | the player (`yds_stream()`) |
+| `clock.csv` | thinned clock pairs and every fit | the player (`yds_clock_from_fit()`) |
+
+Every file is ysp/dataset.h's (gap G13); the trial rows go through
+`yds_trials_writer()`, which is the `ytr_data` above.
 
 Times are seconds on the ysp_rt clock (rig_spec 1, principle 1), in
 columns whose names end in `_s` (D4; conventions.md, Units); RT is
@@ -560,8 +563,10 @@ the runner protocol, apply between trials, and are logged in
 - `deg` units need the size procedure (rig_spec 14.7, rank 10). Until it
   exists, a `deg` definition is refused on the web.
 - Session fields from the URL query.
-- The data set as a zip through the trials writer's `desc.write`, posted
-  over the runner protocol or downloaded.
+- The data set as a zip, posted over the runner protocol or downloaded:
+  ysp/dataset.h writes the folder in Emscripten's in-memory file system
+  and `yds_zip()` gives its stored zip to a write function (2026-10-21;
+  was: through the trials writer's `desc.write`).
 - The self-test values (refresh, clock resolution, cross-origin
   isolation, fullscreen) in `session.json`; every visibility change in
   `events.csv`; tier WEB on every frame.
