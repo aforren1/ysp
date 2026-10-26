@@ -2247,3 +2247,115 @@ on the same machine.
   not checked; the player has their values at run time only.
 - A lookup in a stimulus that no template names is not checked (no leaf
   reaches it).
+
+## 17. Bindings (2026-10-25)
+
+`ysp-pack` (Python, `import ysp.pack`) and the MEX function `ysp_pack`
+bind the reader for an analysis or lab script: open a pack, list it, read
+an entry, read the manifest and the experiment definition, verify the pack
+or one entry. The header does not change. Both compile ysp/pack.h and the
+ysp/json.h it requires; neither needs a library.
+
+### What is bound
+
+| Need | Python | MATLAB and Octave |
+|---|---|---|
+| Open | `Pack(path, verify="use")`, `Pack.from_bytes(data)` | `ysp_pack('open', path_or_uint8 [, verify])` |
+| List | `entries()`, `names()`, `entry(name)`, `len`, `in` | `'list'`, `'entry'`, `'has'` |
+| Read | `read(name, offset=0, size=-1)`, `pk[name]` | `'read', h, name [, offset, n]` |
+| Manifest, definition | `manifest()` (a dict), `definition()`, `experiment` | `'manifest'`, `'definition'` (char), `'info'` |
+| Verify | `verify()`, `verify(name)` | `'verify', h [, name]`, raising or `[ok, msg]` |
+| Describe | `id`, `describe()`, `policy`, `hashed_bytes`, ... | `'info'` |
+| Hashes | `xxh64()`, `entry_hash()` | `'xxh64'`, `'entry_hash'` |
+
+The whole entry goes through `ypak_data()`, so the policy hashes it on
+first use; a range goes through a cursor, which hashes only the 1 MiB
+chunks it touches. `verify()` is `ypak_verify_all()`. `verify(name)` is
+`ypak_data()` and is refused under `"none"`: no header call hashes one
+entry under that policy (Left).
+
+### Copies and lifetime
+
+Both bindings return copies: Python `bytes`, MATLAB a `uint8` column. The
+copy is one `memcpy` from the mapping into the new object, and the result
+outlives `close`. A zero-copy `memoryview` of the mapping was rejected:
+the Limited API before 3.11 has no buffer export that keeps the `Pack`
+alive, and `memoryview.release()` does not reach a slice or a NumPy array
+made from the view, which would then read unmapped memory after `close`.
+`Pack.from_bytes()` keeps a `bytes` object (copying it once only when its
+data is not 8-byte aligned, which the header needs); a `bytearray` or a
+`memoryview` is copied once. The MEX `'open'` of a `uint8` array copies it
+once, because a MEX function cannot keep the caller's array.
+
+### Threads
+
+The Python calls that hash or copy entry data (open, `read`, `verify`,
+`definition`, `manifest`, the hashes) release the GIL; the header lets
+several threads read one pack. A `close()` while such a call runs on
+another thread marks the pack closed, and the last running call unmaps
+it. An error's text is the header's message when `pk.error_code` is this
+failure's code; when another thread's failure holds the message claim, it
+is the code's name (`ypak_strerror()`). The MEX function is one thread.
+
+### Not bound, and why
+
+- The range-reader and incremental sources: a browser's (the designer's
+  WebAssembly build reads the header directly). A script reads files.
+- The views of the pack's own forms (curve sets, artwork, glyph runs,
+  shaders, textures, QOI) and `ypak_runs_key()`: the player's and the
+  tool's. `read()` gives their bytes.
+- SHA-256 and CRC-32: `hashlib` and `zlib` have them; MATLAB scripts that
+  need SHA-256 have Java's `MessageDigest`. XXH64 and the entry hash are
+  bound, because the manifest's `"xxh64"` needs them and the standard
+  libraries do not have them.
+- The arena (`desc.arena`): open allocates once, and a script does not
+  care where.
+- A file-like stream over an entry: `read(name, offset, size)` covers it.
+
+### Tests
+
+The fixture is `tests/pack/fixtures/small.ysppak` (21,113 bytes), which
+`ypak` 0.7.0 (core build) made from `tests/pack/fixtures/small/` (a table,
+a file, and a definition stored as its canonical bytes). The Python tests
+also build packs with `tests/packwriter.py`, a writer independent of the
+tool (docs/pack.md 2, as tests/adapt/pack_test.c's), for a three-chunk
+entry, an appended pack and a format-2 comment.
+
+| Test | Result |
+|---|---|
+| `bindings/python/ysp_pack/tests` | 16 of 16 pass on Windows 11 (CPython 3.14.3, MSVC 14.51; the extension also compiles clean at `/W4`) and on WSL2 Ubuntu 22.04 (CPython 3.12.14, gcc 11.4; `-std=c99 -Wall -Wextra -Wshadow -Werror` clean), the tool test's 5.3 MB corpus pack included (`YSP_PACK_CORPUS`) |
+| Truncations | every length of a 25,296-byte writer pack refused at open, and six lengths of the file through the mapping |
+| Flipped bytes | every byte of the writer pack and of the tool fixture, each with bit 0 and bit 7: 50,592 and 42,226 damaged packs; 20,460 and 22,834 refused at open, 30,132 and 19,392 at a read or at `verify()`, 0 read different bytes |
+| Policies | a damaged entry: `"use"` reads the others and refuses it by name; `"open"` refuses the pack; `"none"` reads the damage and `verify()` still refuses it. A damaged chunk: ranges in the other chunks read, the chunk is refused as "chunk 1" |
+| Threads | four readers and a `verify()` on one pack; `close()` during a 48 MiB `verify()`: the call finished and the pack closed after it in 20 of 20 runs (a separate run of the test's case) |
+| `bindings/mex/test_mex_pack.m` | PASS, 60 checks, in MATLAB R2023a (MSVC 2022) and Octave 10.1 (its MinGW) on Windows 11; `example_pack.m` runs in both |
+
+### Measured
+
+One 256 MiB entry in a file in the page cache, `ysp.pack` on CPython
+3.14.3 (MSVC 14.51 build), Windows 11, i7-1360P laptop on AC, through
+the measurement guard (`psy-guard.sh time`), 7 runs each, median (min to
+max). Each read allocates a new `bytes` object, so its page faults are in
+the number.
+
+| Call | Time | Rate |
+|---|---|---|
+| `Pack(path)` (5 entries) | 0.36 ms (0.30 to 0.85) | |
+| `read(name, 100 MiB, 1 MiB)`, first | 0.86 ms (0.75 to 1.40) | 1.22 GB/s (one chunk hashed and copied) |
+| `read(name)`, first | 220 ms (167 to 280) | 1.22 GB/s (hash and copy) |
+| `read(name)`, again | 75 ms (61 to 97) | 3.58 GB/s (copy only) |
+| `verify()`, first | 125 ms (105 to 190) | 2.15 GB/s (hash only) |
+
+The copy costs about a third of a first read. A script reads at load
+time, so the copy stays; a range read of a long entry costs only its
+chunks.
+
+### Left
+
+- No header call verifies one entry under `"none"` (a `ypak_verify_entry()`
+  would give `verify(name)` there). Not needed by the bindings' users,
+  who open with the default `"use"`.
+- A pack file that another process truncates while it is mapped: by
+  POSIX mmap rules a read of a lost page raises SIGBUS, in C as in the
+  bindings. Not tested.
+- macOS and CPython 3.8 to 3.13 not run here; CI builds the abi3 wheels.
