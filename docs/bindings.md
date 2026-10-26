@@ -21,7 +21,7 @@ This page is reference: the language bindings of the headers.
   `ysp-parallel` on macOS, which its header does not support.
 - **MATLAB / Octave**: [bindings/mex/](../bindings/mex/), one MEX function per
   library (`ysp_parallel`, `ysp_serial`, `ysp_stair`, `ysp_quest`,
-  `ysp_aep`, `ysp_trials`, `ysp_color`) with ppdev-mex-style command dispatch, built and
+  `ysp_aep`, `ysp_trials`, `ysp_color`, `ysp_timeline`) with ppdev-mex-style command dispatch, built and
   tested in MATLAB R2023a and Octave 10. `tests/compare/` runs `ysp_quest`
   beside mQUESTPlus and Palamedes' PAL_AMPM, and `ysp_stair` beside
   PAL_AMUD, on one response stream; the MEX README has the results.
@@ -33,6 +33,16 @@ This page is reference: the language bindings of the headers.
   `ysp.serial` has the same reader since 0.5.0.2 (`async_start`,
   `async_read`, `async_wait`, `async_stop`, `async_stats`): a C thread that
   never takes the GIL.
+- **Timeline**: `ysp-timeline` gives `ysp.timeline`, and the MEX
+  `ysp_timeline` the same calls by command, for a PsychoPy or Psychtoolbox
+  experiment that draws its own stimuli and takes its timing from
+  `ysp/timeline.h`: a trial built as a sequence (events, channel tweens,
+  keyframes, op tables) and fields that target tweens write, evaluated at
+  each frame's predicted onset. The binding owns the fields' memory, and
+  the frame loop reads the channel values and the fields as float32 views
+  (Python) or matrices (MEX), with the landing record of every event that
+  fired. Both compile the header with `YTL_MAX_CHANNELS` 1024
+  ([timeline.md](timeline.md#bindings)).
 
 ## Units
 
@@ -54,6 +64,7 @@ call can poll. [Conventions](conventions.md) lists the exceptions.
 | `ysp.quest`, `ysp.aep` and their MEX | `Async.wait(seq, timeout_s)` |
 | `ysp.trials` and its MEX | the jitter bounds; a drawn jitter gives `s`, and its exact `ns` beside it |
 | `ysp.rdk` | `start(seed, t)`, `update(t)`, the `t0` and step rows of `replay()` and `trajectory()`, `Field.last` (`t`, and its exact `ns` beside it), `Field(lifetime=, frame_period=)`, `ages()`; exact to the ns below 2^23 s (about 97 days) |
+| `ysp.timeline` and `ysp_timeline` (MEX) | every time argument (`evaluate(onset, period)`, `anchor`, `skip`, `rate`, `wait`, `at`, the tween options `duration`, `delay`, `start`, `stagger`, key and event times, track `t0` and `period`, `peek`'s window) and result (`base_time`, `rt_time`, `window`, `next_due`, `horizon`, a sequence's cursor); a landing record gives `time`, `onset` and `residual` in seconds and `time_ns`, `onset_ns` and `residual_ns` exactly |
 
 ## Versions
 

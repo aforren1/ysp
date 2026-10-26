@@ -519,7 +519,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        package: [ysp_parallel, ysp_serial, ysp_stair, ysp_quest, ysp_aep, ysp_trials, ysp_color, ysp_rdk]
+        package: [ysp_parallel, ysp_serial, ysp_stair, ysp_quest, ysp_aep, ysp_trials, ysp_color, ysp_rdk, ysp_timeline]
         exclude:
           - os: macos-latest      # ysp/parallel.h #errors on macOS
             package: ysp_parallel
@@ -642,6 +642,10 @@ jobs:
         working-directory: bindings/mex
         run: octave-cli -q --eval "test_mex_color"
 
+      - name: Timeline binding test (test_mex_timeline.m)
+        working-directory: bindings/mex
+        run: octave-cli -q --eval "test_mex_timeline"
+
       - uses: actions/upload-artifact@v7
         with:
           name: octave-mex-bookworm
@@ -732,6 +736,11 @@ jobs:
         uses: matlab-actions/run-command@v3
         with:
           command: cd('bindings/mex'); test_mex_color
+
+      - name: Timeline binding test (test_mex_timeline.m)
+        uses: matlab-actions/run-command@v3
+        with:
+          command: cd('bindings/mex'); test_mex_timeline
 
       - uses: actions/upload-artifact@v7
         with:
