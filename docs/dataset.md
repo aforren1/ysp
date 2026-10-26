@@ -181,6 +181,101 @@ rewrite of `session.json` costs 8 ms (the sync to the disk and the
 rename), so it belongs between trials, never in a trial's frames; a
 session has a few (the open, the live changes, the finish).
 
+## Bindings
+
+Python `ysp-dataset` 0.1.0 (`ysp.dataset`,
+[bindings/python/ysp_dataset](../bindings/python/ysp_dataset/README.md))
+and the MEX `ysp_dataset`
+([bindings/mex/README.md](../bindings/mex/README.md#ysp_dataset)), added
+2026-10-25. Their user is a PsychoPy or Psychtoolbox experiment that
+writes its session in this format, so the analysis of a player session
+reads it too.
+
+Bound: the open (folder, trial columns, session keys, `sync` for
+`YTR_FLUSH_SYNC`), a row of each of the four tables, streams, the
+session's set and push, the row counts, the finish, the close and the zip
+(bytes or a file), `yds_seed_text()`. A row is a dict or keywords in
+Python, a struct or name-value pairs in MATLAB and Octave; the keys are
+the CSV's column names (`onset_s`, not `onset_ns`). Times are seconds,
+rounded to the nearest ns with `fma()` (ysp.rdk's method), so ns -> s ->
+ns holds below 2^23 s. A time may be negative (a residual, an SOA), and
+`None`, `[]` and `NaN` are a missing value: in a data file NaN is
+pandas' and MATLAB's own missing value, so the bindings take it as one
+instead of refusing it as an argument.
+
+| Question | Decision | Why |
+|---|---|---|
+| Rows from `ysp.trials` / `ysp_trials` | Generic rows; the caller writes the sequencer's columns as its own | The header opens trials.csv with `desc.trials` NULL (THE TABLES: a tree has several `ytr_trials`), so it takes no session to share. Two extensions (two MEX files) are two shared libraries, each with its own copy of ysp/trials.h; passing a `ytr_trials*` across them is not clean. The tests write each trial's columns from `history()`, `var()`, `jitter().s` and `seed_text(trial_seed())` and check them against `format_row()`, text for text |
+| A column's value | Every trials.csv and stream column is a `YTR_COL_SET` column (`YTR_COL_TEXT` for const) | A bound struct field has no missing `bool`; a set column not set is empty for every type. The fixed tables fill the header's structs after their `_init()` |
+| The fixed tables' fields | From the header's own `yds__frame_cols`, `yds__event_cols`, `yds__clock_cols`, compiled into the binding | A field the header adds is bound without an edit; the names cannot drift from the files' |
+| A refused value | Every value of a row is converted before any is set | A refused row leaves nothing in the writer for the next row |
+| Text without allocation | A scratch buffer per handle; Python reads code points with `PyUnicode_ReadChar()`, MATLAB reads `mxChar` (UTF-16; bytes in Octave); the MEX command into a stack buffer | `PyUnicode_AsUTF8()` is Limited API only from 3.10; `PyUnicode_AsUTF8String()` and `mxArrayToString()` allocate per value |
+| A `time` column named `_ns` | Refused by the bindings (the header accepts it and writes `_s`) | Every binding value is seconds; the name says so as the file does |
+| The GIL | Released in the open, `session_set()`, `session_push()`, `finish()`, `close()` and `zip()`; kept in row writes; a busy flag refuses a second call meanwhile | The syncs cost milliseconds; a row costs microseconds, and getting the GIL back can wait for another thread's switch interval (5 ms) |
+| `yds_open()`'s failure class | Read from its message (`' exists;'`, `cannot make`, ...) | `yds_open()` returns bool and a message only. A code (a `yds_open_code()`, or the code kept in the handle) would remove the string match; an open question for the header |
+
+Not bound: the adapters (`yds_frame_from_screen()` and the others take
+structs of headers that have no binding; the row keywords are their
+fields), `yds_trials_writer()` and `yds_stream_writer()` (used inside
+every row), bound and `CHARS` columns, `yds_session()` (read
+session.json), and a reader (the header has none; pandas, R and
+`readtable` read every file).
+
+Tests, 2026-10-25, i7-1360P laptop, Windows 11:
+
+| Run | Result |
+|---|---|
+| Python 3.14.3, MSVC build, NTFS | 22 passed, 1 skipped (the POSIX rename test); with `ysp.trials` and pandas installed |
+| WSL2 Ubuntu 22.04, gcc 11.4, Python 3.10, ext4 | 22 passed, 1 skipped (the Windows lock test); `-Wall -Wextra` clean but CPython's own `PyModuleDef` initializer warning |
+| MATLAB R2023a (MSVC 2022) | `test_mex_dataset`: PASS (81 checks) |
+| Octave 10.1 (MinGW) | `test_mex_dataset`: PASS (81 checks) |
+
+The tests cover: every column type and its missing values, text with
+commas, quotes, line breaks, non-BMP and lone surrogates (U+FFFD), the
+refusals and that a refused row writes nothing, the fixed tables' full
+rows, streams by id and by name, the 17th stream, session values (nested,
+big integers, `uint64`), the writer's keys refused, the finish and the
+calls after it, the zip (Python's `zipfile.testzip()`, names, stored,
+1980 dates, the same bytes twice and to a file), the folder that exists
+and the missing parent, a refused open that leaves nothing, `close()`,
+`with` and garbage collection finishing the data set,
+`sync`, the files read while open. A crash: a child process (Python's
+`os._exit()`; a second MATLAB or Octave killed with `taskkill /F` or
+`kill -9`) writes frames, an event, trials, a live change and a stream
+row: `session.json` parses with `"closed": false` and no `rows`, no
+temporary file, every row reads. The atomic rewrite: on Windows,
+`session.json` held open by Python (no `FILE_SHARE_DELETE`) makes
+`session_set()` raise `WriteError` after the header's 5 tries, the old
+file stays byte for byte, no temporary file, and the next rewrite writes
+the value that failed; on WSL2 the rename replaces the held file and the
+reader keeps the old one whole. Python checks that the live interpreter
+blocks do not grow over 6000 rows.
+
+Costs, 2026-10-25, the same i7-1360P laptop on AC, Windows 11, its
+internal SSD (NTFS, the user's temporary folder), each run alone under
+the measurement lock (load 20 % and 0 % at the start), 10000 calls after
+200 to warm up, median (p99, max):
+
+| Call | Cost |
+|---|---|
+| Python 3.14.3, a no-op function with 4 keywords (the interpreter alone) | 0.3 us (0.6, 13) |
+| Python `write_frame()`, 4 keywords | 8.6 us (22.4, 252) |
+| Python `write_event()`, 5 keywords, 2 of them text | 10.1 us (45.6, 805) |
+| Python `write_trial()`, 6 columns | 8.4 us (24.0, 224) |
+| Python `session_set()`, the atomic rewrite (n = 100) | 8.3 ms (15.6, 15.6) |
+| MATLAB R2023a `'write_frame'`, 4 name-value pairs (`tic`/`toc`) | 20.1 us (81.6, 3444) |
+| MATLAB `'write_event'`, 5 pairs, 2 of them text | 22.1 us (95.6, 2131) |
+| MATLAB `'write_trial'`, 6 pairs | 19.4 us (98.9, 341) |
+
+A Python row costs what the header's row costs in C (12 us in the table
+above, another day): the write call dominates, and the binding adds no
+measurable time over the interpreter's call. A MATLAB row costs about
+twice that: the MEX call and `tic`/`toc` add the rest. Both are below
+0.2 % of a 16.7 ms frame at the median; the worst cases (0.8 ms in
+Python, 3.4 ms in MATLAB, one call in 10000 each) are write calls the OS
+held, as in C. Write rows from the frame loop only with that in the
+budget, and keep `session_set()` and `sync=True` between trials.
+
 ## Not done
 
 - No fuzz target: the header parses no input. `session.json`'s values
