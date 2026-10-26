@@ -16,6 +16,7 @@ never reused, so a handle kept past its `close` always raises
 | `ysp_aep.c` | [ysp/aep.h](../../include/ysp/aep.h) | [example_aep.m](example_aep.m) |
 | `ysp_trials.c` | [ysp/trials.h](../../include/ysp/trials.h) | [example_trials.m](example_trials.m) |
 | `ysp_color.c` | [ysp/color.h](../../include/ysp/color.h) | [test_mex_color.m](test_mex_color.m); the command reference is in [docs/color.md](../../docs/color.md) |
+| `ysp_response.c` | [ysp/response.h](../../include/ysp/response.h) | [example_response.m](example_response.m) |
 
 The two transport headers build on the shared [ysp/rt.h](../../include/ysp/rt.h), so
 both MEX functions compile it too. `ysp_quest.c` and `ysp_aep.c` define
@@ -902,6 +903,79 @@ handle whose `rng` is a function handle (use an integer seed), and
 `ysp_quest` also refuses a MATLAB `pf_batch` under `no_table`.
 `async_submit_values` refuses a MATLAB `pf_batch`. A MATLAB `pf_batch` with
 a table is permitted, because the table is built before the thread starts.
+
+## ysp_response
+
+The response of a trial from any input device (ysp/response.h, with the
+ysp/input.h it includes; nothing else is compiled). Every time is
+seconds; Psychtoolbox's `GetSecs`, `Screen('Flip')` and
+`KbQueueGetEvent` times go in as they are.
+
+```matlab
+h = ysp_response('open', struct('choices', {{'f', 'j'}}, 'duration', 1.5, 'min_rt', 0.1));
+ysp_response('arm', h, tFixation);
+ysp_response('set_onset', h, tStim, struct('src', 'flip'));    % the stimulus's flip
+% each frame:
+[evt, n] = KbQueueGetEvent;                                     % or a ysp_box / ysp_device read
+if n > 0, ysp_response('key', h, evt.Time, KbName(evt.Keycode), evt.Pressed); end
+if ysp_response('update', h, GetSecs) == 2, ... end            % 2: ended
+[r, row] = ysp_response('finish', h);   % r.response, r.rt (NaN: none), r.onset_tier; row: the data columns
+ysp_response('close', h);
+```
+
+KbName's names are not all the header's (`'LeftArrow'` is `'left'`
+here). To skip the names, use Psychtoolbox's key codes on both sides:
+a choice `struct('name', 'left', 'control', KbName('f'))` and events whose
+`control` is the event's `Keycode`. The collector compares the numbers.
+
+**Desc** (`open`): `choices` (a cell of key names, or a struct array with
+the header's choice fields `key`, `name`, `kind`, `match`, `cross`,
+`device`, `control`, `code`, `level`, `hysteresis`), `mode` (`'all'`,
+`'list'`, `'none'`), `kinds` (a mask, `'all'`, or a cell of kinds),
+`min_rt`, `duration` (`Inf`: no deadline), `persist`, `max_responses`,
+`allow_held_key`, `wait_for_key_release`, `max_hold`, `sources` (a struct
+array: `kind`, `device`, `tier`, `partial`, `lo`, `hi`, `note`),
+`trace_cap`, `trace_kinds`. An enum takes its name or its number. An
+unknown field raises `ysp_response:arg`.
+
+**Events** are struct arrays with the fields of `yin_event`: `t`
+(seconds), `t_ns` (int64), `device`, `control`, `code`, `mods`, `kind`,
+`type`, `flags`, `stamp`, `unc` (seconds), `x`, `y`, `value`, `aux`,
+`ticks`, the layout of the `ysp_box` and `ysp_device` events. `'feed'`
+reads a missing field as 0, `t_ns` before `t`, and a key name as a
+keyboard's `control`. Give it every event of a frame in one call: it reads
+them in place.
+
+### Commands
+
+| Command | Does |
+|---|---|
+| `h = ysp_response('open', desc)` | `yrsp_open()` |
+| `ysp_response('close', h)` | |
+| `ysp_response('arm', h, t)` | Starts a window |
+| `st = ysp_response('set_onset', h, t, [opts])` | `opts`: `final` (default true), `src` (`'flip'`, `'audio'`, `'plan'`, `'other'`), `tier`, `residual`, `uncertainty`, `frame`. `t` may be an int64 ns |
+| `st = ysp_response('feed', h, events)` | Input events, in order |
+| `st = ysp_response('key', h, t, key, [down], [device])` | One keyboard event; `key` is a name or a scancode |
+| `st = ysp_response('update', h, now)` | The deadline; 0 idle, 1 open, 2 ended |
+| `[r, row] = ysp_response('finish', h)` | The result and its data columns (`YRSP_DATA_COLS`, NaN or `''` for an empty field) |
+| `[r, row] = ysp_response('score', h, events, onset, [opts])` | Offline: one logged trial. `opts` also takes `arm` (default: the onset) and `end`. Events stamped before `arm` at the start are fed before the arm |
+| `e = ysp_response('entries', h)` | Every press of the window |
+| `ev = ysp_response('trace', h)` | The traced events up to the last finish |
+| `ysp_response('set_sent', h, sent, [total])` | Codes sent at presses: a struct array (`t`, `kind`, `device`, `control`, `choice`, `written`) |
+| `row = ysp_response('data_row', h)` | The last finish's data columns |
+| `k = ysp_response('plan_frame', h)` | `[]` when the onset is final or not tied to a frame |
+| `msg = ysp_response('error', h)` | The last failure's message |
+| `ev = ysp_response('event', s)` | A full event struct from some of its fields (type PRESS by default) |
+| `ysp_response('scancode', name)`, `ysp_response('key_name', sc)` | Key names |
+| `K = ysp_response('constants')` | `KIND_*`, `PRESS`, `TIER_*`, `E_*`, `R_*` and the others |
+| `[v, vin] = ysp_response('version')` | ysp/response.h's and ysp/input.h's versions |
+
+The result's `choice` and `entry`, and an entry's `choice`, are 1-based,
+0 for none. A missing time is `NaN` in seconds and `intmin('int64')`
+(`YRSP_NO_TIME`) in its `_ns` field. [test_mex_response.m](test_mex_response.m)
+runs the key checks in MATLAB or Octave and prints `PASS` with the number
+of checks. The binding's scope and what is left out are in
+[docs/response.md](../../docs/response.md#bindings).
 
 ## Verification
 

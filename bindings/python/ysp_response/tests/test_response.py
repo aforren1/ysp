@@ -104,6 +104,37 @@ def test_feed_takes_tuples_attributes_and_other_packages_events():
     assert "yrsp_feed" in c.error
 
 
+def test_feed_reads_properties_and_slots():
+    class Prop:                                   # fields from the class, none in the instance dict
+        def __init__(self, t):
+            self._t = t
+
+        @property
+        def t(self):
+            return self._t
+
+        type = yr.PRESS
+        control = 13
+
+    class Slots:
+        __slots__ = ("t_ns", "type", "control")
+
+        def __init__(self, t_ns):
+            self.t_ns, self.type, self.control = t_ns, yr.PRESS, 9
+
+    c = yr.Collector(["f", "j"])
+    c.arm(1.0)
+    c.set_onset(1.0)
+    assert c.feed(Prop(1.3)) == yr.ENDED
+    assert c.finish().response == "j"
+    c.feed(yr.event(1.31, type=yr.RELEASE, control="j"))
+    c.arm(2.0)
+    c.set_onset(2.0)
+    assert c.feed(Slots(2200000000)) == yr.ENDED
+    r = c.finish()
+    assert r.response == "f" and r.rt_ns == 200000000
+
+
 def test_feed_allocates_nothing_per_event():
     c = yr.Collector(["f", "j"], kinds=yr.KINDS_ALL)
     ev = yr.event(1.0, control="space")
@@ -335,6 +366,17 @@ def test_seconds_round_to_the_nearest_ns():
     c.key(86400.4000000004, "f")
     r = c.finish()
     assert r.t_response_ns == 86400400000000 and r.t_onset_ns == 86400000000001 and r.rt_ns == 399999999
+
+
+def test_seconds_give_back_their_ns_below_2_23_s():
+    # t = ns / 1e9 (the nearest double) converts back to ns: the whole
+    # seconds exactly, the fraction scaled alone
+    import random
+    rng = random.Random(20261025)
+    vals = [rng.randrange(0, 2 ** 23 * 10 ** 9) for _ in range(20000)]
+    vals += [rng.randrange(10 ** 14, 10 ** 15) for _ in range(2000)] + [0, 1, 999999999, 2 ** 23 * 10 ** 9 - 1]
+    for ns in vals:
+        assert yr.event(ns / 1e9).t_ns == ns, ns
 
 
 def test_errors_and_state():

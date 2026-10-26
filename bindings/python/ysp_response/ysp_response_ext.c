@@ -181,6 +181,40 @@ static const char onset_src_values[] = "other=0,flip=1,audio=2,plan=3";
 
 /* --- the event --------------------------------------------------------------- */
 
+/* The event fields an object's class defines (bit i: ev_names[i]), from its
+ * MRO's dicts, cached for the last class seen: a frame's events are of one
+ * class. A class changed after its first event is not seen again. */
+static PyObject* dict_attr;
+static PyObject* mro_attr;
+static PyObject* cls_cache;   /* strong reference */
+static unsigned cls_cache_mask;
+
+static unsigned rsp_class_fields(PyObject* o) {
+    PyObject* tp = (PyObject*)Py_TYPE(o);
+    PyObject* mro;
+    unsigned mask = 0;
+    Py_ssize_t k, n;
+    int i;
+    if (tp == cls_cache) return cls_cache_mask;
+    mro = PyObject_GetAttr(tp, mro_attr);
+    if (!mro || !PyTuple_Check(mro)) { PyErr_Clear(); Py_XDECREF(mro); return 0xFFFFu; }
+    n = PyTuple_Size(mro);
+    for (k = 0; k < n; k++) {
+        PyObject* d = PyObject_GetAttr(PyTuple_GetItem(mro, k), dict_attr);   /* a mappingproxy */
+        if (!d) { PyErr_Clear(); continue; }
+        for (i = 0; i < EV_NFIELDS; i++) {
+            int has = PyMapping_HasKey(d, ev_attr[i]);
+            if (has > 0) mask |= 1u << i;
+        }
+        Py_DECREF(d);
+    }
+    Py_DECREF(mro);
+    Py_INCREF(tp);
+    { PyObject* old = cls_cache; cls_cache = tp; Py_XDECREF(old); }
+    cls_cache_mask = mask;
+    return mask;
+}
+
 /* One event from a 16-tuple in Event's order (an Event of this or another
  * ysp package) or an object with Event's attributes (a missing one is 0).
  * t_ns wins over t when it is an int. No allocation on the tuple path; the
@@ -197,16 +231,40 @@ static int rsp_event_in(PyObject* o, yin_event* e) {
         }
         for (i = 0; i < EV_NFIELDS; i++) f[i] = PyTuple_GetItem(o, i);
     } else {
+        /* An instance dict (a SimpleNamespace, a plain object) first, so a
+         * field the object lacks costs no AttributeError: each one
+         * allocates, and 10 missing fields took 3.9 us per event. A field
+         * that the dict lacks and the class defines (a property, a slot)
+         * goes through getattr. */
+        PyObject* dict = PyObject_GetAttr(o, dict_attr);
+        unsigned cls;
+        if (!dict) PyErr_Clear();
+        else if (!PyDict_Check(dict)) Py_CLEAR(dict);
+        cls = dict ? rsp_class_fields(o) : 0xFFFFu;
         owned = 1;
         for (i = 0; i < EV_NFIELDS; i++) {
+            if (dict && (f[i] = PyDict_GetItem(dict, ev_attr[i])) != NULL) {
+                Py_INCREF(f[i]);
+                continue;
+            }
+            if (!(cls & (1u << i))) {
+                Py_INCREF(Py_None);
+                f[i] = Py_None;
+                continue;
+            }
             f[i] = PyObject_GetAttr(o, ev_attr[i]);
             if (!f[i]) {
-                if (!PyErr_ExceptionMatches(PyExc_AttributeError)) { while (i-- > 0) Py_DECREF(f[i]); return -1; }
+                if (!PyErr_ExceptionMatches(PyExc_AttributeError)) {
+                    while (i-- > 0) Py_DECREF(f[i]);
+                    Py_XDECREF(dict);
+                    return -1;
+                }
                 PyErr_Clear();
                 Py_INCREF(Py_None);
                 f[i] = Py_None;
             }
         }
+        Py_XDECREF(dict);
     }
     memset(e, 0, sizeof *e);
     if (f[F_TNS] != Py_None) {
@@ -1175,6 +1233,8 @@ PyMODINIT_FUNC PyInit_response(void) {
         ev_fields[i].doc = i == F_T ? "seconds" : i == F_TNS ? "exact ns" : i == F_UNC ? "seconds (from unc_us)" : "";
         if (!ev_attr[i] && !(ev_attr[i] = PyUnicode_InternFromString(ev_names[i]))) goto fail;
     }
+    if (!dict_attr && !(dict_attr = PyUnicode_InternFromString("__dict__"))) goto fail;
+    if (!mro_attr && !(mro_attr = PyUnicode_InternFromString("__mro__"))) goto fail;
     ev_fields[EV_NFIELDS].name = NULL;
     ev_fields[EV_NFIELDS].doc = NULL;
     if (!(EventType = rsp_structseq(m, "Event", "ysp.response.Event", "One input event (ysp/input.h yin_event), times in seconds.",
