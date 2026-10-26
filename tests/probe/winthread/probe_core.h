@@ -572,6 +572,13 @@ static DWORD WINAPI pv_key_main(void* arg) {
     Sleep((DWORD)pv->key_delay_ms);
     for (i = 0; i < pv->key_presses; i++) {
         HWND fg = GetForegroundWindow();
+        int k;
+        /* another program took the foreground for a moment in some runs of
+         * 2026-10-26 (keys skipped): wait up to 5 s for it to come back */
+        for (k = 0; k < 100 && !(fg == h || (pv_is_ghost(fg) && IsHungAppWindow(h))); k++) {
+            Sleep(50);
+            fg = GetForegroundWindow();
+        }
         if (fg == h || (pv_is_ghost(fg) && IsHungAppWindow(h))) {
             pv_send_shift_esc();
             InterlockedIncrement(&pv->keys_sent);
@@ -601,8 +608,9 @@ static void pv_keys_join(void) {
 
 static int pv_wt_state(char* out, size_t cap) {
     HWND h = pv && pv->open ? pv_hwnd() : NULL;
-    return snprintf(out, cap, "wt=%d released=%ld iconic=%d hung=%d wt_alive=%d wt_cpu_ms=%.1f over_s=%.1f",
-                    pv ? (int)pv->scr.wt : -1, (long)yscr__wt.released, h ? IsIconic(h) != 0 : -1,
+    return snprintf(out, cap, "wt=%d released=%ld release_ms=%.1f iconic=%d hung=%d wt_alive=%d wt_cpu_ms=%.1f over_s=%.1f",
+                    pv ? (int)pv->scr.wt : -1, (long)yscr__wt.released,
+                    yscr__wt.released ? (yscr__wt.t_release - yscr__wd.t_panic) * 1e-6 : -1.0, h ? IsIconic(h) != 0 : -1,
                     h ? IsHungAppWindow(h) != 0 : -1, yscr__wt_alive(1000000000LL), pv_wt_cpu_ns * 1e-6,
                     pv_wt_life_ns * 1e-9);
 }

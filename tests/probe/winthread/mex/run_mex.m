@@ -55,7 +55,7 @@ function body(av, o)
         if o.panic
             fprintf('hanging the interpreter for 10 s; 3 presses follow\n');
             pause(10);
-            fprintf('panic did not end the process: %s', av('wt_state')); fprintf('%c', 10);
+            fprintf('panic did not end the process: %s keys %s', av('wt_state'), mat2str(av('keys_status'))); fprintf('%c', 10);
             [ok, s] = frames(s, Inf, av('now') + 2);
             fprintf('after the panic: loop ended by abort: %d abort_info %s', ~ok, mat2str(av('abort_info'))); fprintf('%c', 10);
         else

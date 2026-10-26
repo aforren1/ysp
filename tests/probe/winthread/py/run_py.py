@@ -96,7 +96,7 @@ try:
         if a.panic:
             print("hanging the interpreter for 10 s; 3 presses follow", flush=True)
             time.sleep(10)
-            print("panic did not end the process:", av.wt_state(), flush=True)
+            print("panic did not end the process:", av.wt_state(), "keys", av.keys_status(), flush=True)
             ok = frames(until=av.now() + 2)
             print("after the panic: loop ended by abort:", not ok, "abort_info", av.abort_info())
         else:
