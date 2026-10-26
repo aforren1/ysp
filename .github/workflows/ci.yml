@@ -521,6 +521,7 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         package: [ysp_parallel, ysp_serial, ysp_stair, ysp_quest, ysp_aep, ysp_trials, ysp_color, ysp_rdk, ysp_box]
         package: [ysp_parallel, ysp_serial, ysp_stair, ysp_quest, ysp_aep, ysp_trials, ysp_color, ysp_rdk, ysp_pack]
+        package: [ysp_parallel, ysp_serial, ysp_stair, ysp_quest, ysp_aep, ysp_trials, ysp_color, ysp_rdk, ysp_rt]
         exclude:
           - os: macos-latest      # ysp/parallel.h #errors on macOS
             package: ysp_parallel
@@ -544,6 +545,13 @@ jobs:
       - name: Stage headers into the package (isolated build needs them locally)
         shell: bash
         run: p=${{ matrix.package }} && d=bindings/python/$p/include/ysp && mkdir -p $d && cp include/ysp/${p#ysp_}.h include/ysp/rt.h include/ysp/table.h include/ysp/json.h $d/
+      # includes. A package gets the ones it never reads; staging them
+      # unconditionally keeps this step one line. Two cp calls, because for
+      # ysp_rt the package's header is rt.h, and GNU cp refuses to copy one
+      # file twice to the same place in one call.
+      - name: Stage headers into the package (isolated build needs them locally)
+        shell: bash
+        run: p=${{ matrix.package }} && d=bindings/python/$p/include/ysp && mkdir -p $d && cp include/ysp/${p#ysp_}.h $d/ && cp include/ysp/rt.h include/ysp/table.h $d/
 
       - name: Build & test wheels
         uses: pypa/cibuildwheel@v4.1.0
@@ -660,6 +668,9 @@ jobs:
       - name: Pack binding test (test_mex_pack.m)
         working-directory: bindings/mex
         run: octave-cli -q --eval "test_mex_pack"
+      - name: Clock binding test (test_mex_rt.m)
+        working-directory: bindings/mex
+        run: octave-cli -q --eval "test_mex_rt"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -765,6 +776,10 @@ jobs:
         uses: matlab-actions/run-command@v3
         with:
           command: cd('bindings/mex'); test_mex_pack
+      - name: Clock binding test (test_mex_rt.m)
+        uses: matlab-actions/run-command@v3
+        with:
+          command: cd('bindings/mex'); test_mex_rt
 
       - uses: actions/upload-artifact@v7
         with:

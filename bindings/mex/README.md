@@ -19,6 +19,7 @@ never reused, so a handle kept past its `close` always raises
 | `ysp_box.c` | [ysp/box.h](../../include/ysp/box.h) | [example_box.m](example_box.m), [test_mex_box.m](test_mex_box.m) |
 | `ysp_rdk.c` | [ysp/rdk.h](../../include/ysp/rdk.h) | [example_rdk.m](example_rdk.m), [test_mex_rdk.m](test_mex_rdk.m) |
 | `ysp_pack.c` | [ysp/pack.h](../../include/ysp/pack.h) | [example_pack.m](example_pack.m), [test_mex_pack.m](test_mex_pack.m) |
+| `ysp_rt.c` | [ysp/rt.h](../../include/ysp/rt.h) | [example_rt.m](example_rt.m) |
 
 The two transport headers build on the shared [ysp/rt.h](../../include/ysp/rt.h), so
 both MEX functions compile it too. `ysp_quest.c` and `ysp_aep.c` define
@@ -39,6 +40,8 @@ it also runs the async reader on a 2000-line stream.
 the same for `ysp_color` (compiles nothing but ysp/color.h and
 `ysp_mex_util.h`); `tests/compare/color_ptb.m` compares it with
 Psychtoolbox's colorimetric code.
+[test_mex_rt.m](test_mex_rt.m) does the same for `ysp_rt` (compiles
+ysp/rt.h and `ysp_mex_util.h`); it needs no device.
 
 ## Build
 
@@ -345,6 +348,75 @@ The Python binding has no async reader yet.
 Device naming, USB latency, DTR-driven board resets and what a serial trigger
 is worth in timing terms are documented in the header:
 [ysp/serial.h](../../include/ysp/serial.h).
+
+## ysp_rt
+
+```matlab
+t    = ysp_rt('now');                          % seconds on the ysp clock
+tn   = ysp_rt('now_ns');                       % the same, exact int64 ns
+late = ysp_rt('sleep_until', t + 0.5);         % seconds late
+late = ysp_rt('sleep_until', t + 0.5, 0);      % no spin: the OS wait only
+c    = ysp_rt('correlate', @GetSecs);          % GetSecs on the ysp clock
+
+h = ysp_rt('fit_open', struct('mode', 'late', 'tick', 1e-6, 'bits', 32));
+flags = ysp_rt('fit_add', h, us, t);           % pairs: counters and their times
+[s, ns] = ysp_rt('fit_map', h, event_us);      % events on the ysp clock
+info = ysp_rt('fit_info', h);                  % ppm, spread, points, epoch, ...
+ysp_rt('fit_close', h);
+```
+
+`ysp_rt` wraps the clock that every ysp time is on. `ysp_rt('now')`,
+`ysp_serial('now')` and `ysp_parallel('now')` read one counter: each MEX
+file compiles its own copy of `ysp/rt.h`, and `test_mex_rt.m` checks that a
+read of the other two lies between two reads of `ysp_rt('now_ns')`. On the
+Windows development machine, Psychtoolbox's `GetSecs` read between two
+reads of `ysp_rt('now')` in every try, so it is the same counter there; on
+another machine, check with `'correlate'`.
+
+A wait blocks MATLAB or Octave for its whole length, and Ctrl+C does not
+end it. `'sleep_until'` gives the OS the wait up to the spin window before
+the deadline and spins the rest. The default window is the `default_spin`
+field of `ysp_rt('constants')`: 1.2 ms on Windows, 0.2 ms elsewhere.
+
+`'correlate'` calls the clock function between two reads of the ysp clock
+and keeps the tightest bracket: the true ysp time of `c.other` is within
+`c.width / 2` of `c.t`. A function that returns an integer class is a
+counter, and `c.other` is a `uint64`; one that returns a double is seconds.
+The width includes the cost of the call back into MATLAB: 16 us for
+`GetSecs` on the development machine. An error in the function is raised
+with its own identifier after the header's loop ends.
+
+`'fit_add'`, `'fit_map'` and `'fit_unwrap'` take vectors and keep their
+shape. Counters are `uint64`, or doubles that hold integers below 2^53.
+`'fit_add'` checks every value before the first pair goes in.
+
+The virtual clock (`'virtual_begin'`) is in `ysp_rt`'s copy of `ysp/rt.h`
+only: `ysp_serial('now')` keeps the real clock.
+
+### Commands
+
+| Command | Returns | Notes |
+|---|---|---|
+| `'version'` | binding version, and the header's as a second output | `'1.0.0'`, `'0.9.0'` |
+| `'now'`, `'now_ns'` | seconds; `int64` ns | the ysp clock |
+| `'real_now'` | seconds | the real clock, also on the virtual clock |
+| `'sleep_until', t [, spin]` | lateness, seconds | `spin` defaults to `default_spin` |
+| `'sleep', duration [, spin]` | lateness, seconds | the deadline is taken on entry |
+| `'spin_until', t` | lateness, seconds | spins the whole time |
+| `'clock_info'` | struct | `resolution` (seconds), `hires_timer` |
+| `'constants'` | struct | `default_spin`, `virtual_t0`, `fit_points`, the `fit_*` flag bits |
+| `'describe'` | char | the `yrt_describe()` line; log it beside timing data |
+| `'virtual_begin' [, t0]`, `'virtual_end'`, `'is_virtual'` | now; none; logical | `ysp_rt:state` when already virtual |
+| `'correlate', fn [, struct('edge', 'tries', 'timeout')]` | struct `t`, `other`, `width`, `tries`, `t_ns` | `ysp_rt:timeout` when an edge never came |
+| `'user_dir', 'cache' or 'config' [, subdir]` | char | `''` means "use no folder" |
+| `'fit_open', struct` | `uint64` handle | fields `mode` (`'late'`, `'bracket'`, `'unbiased'`), `tick` (seconds, required), `bits`, `bucket`, `slope_span`, `restart`, `restart_hold`, `max_width` |
+| `'fit_add', h, ticks, t [, width]` | flags | `width` is one value or one per pair |
+| `'fit_map', h, ticks` | seconds, and `int64` ns | `ysp_rt:state` before the first pair |
+| `'fit_unwrap', h, ticks` | `uint64` | |
+| `'fit_info', h` | struct | `t0`, `t0_ns`, `ticks0`, `tick`, `ppm`, `spread`, `width`, `span`, `points`, `pairs`, `epoch`, `rejected`, `pending`, `ready`, `slope` |
+| `'fit_close', h` | none | |
+
+Not bound, and why: [docs/rt.md](../../docs/rt.md#bindings).
 
 ## Adaptive methods: common rules
 

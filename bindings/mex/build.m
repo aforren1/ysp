@@ -4,6 +4,7 @@ function build(name)
 %   build()             builds every ysp_*.c in this directory
 %   build('parallel')   builds only ysp_parallel.c
 %   build('quest')      builds only ysp_quest.c
+%   build('rt')         builds only ysp_rt.c
 %
 %   Run it from any directory:  run('.../bindings/mex/build.m')
 %   Each MEX file is written next to its source as ysp_<name>.<mexext>.
@@ -33,6 +34,8 @@ function build(name)
     % compile ysp/rt.h and need only the thread library below.
     % ysp_pack.c compiles ysp/pack.h and the ysp/json.h it requires; it maps
     % files through the OS (Windows, POSIX) and needs no library.
+    % compile ysp/rt.h and need only the thread library below. ysp_rt.c
+    % (ysp/rt.h itself) is the same: no gate, the thread library only.
     unsupported = {'ysp_parallel.c', ismac};
 
     % mex writes its output to the current directory; build next to the
@@ -59,8 +62,9 @@ function build(name)
                 args(end+1:end+2) = {'-lsetupapi', '-ladvapi32'};   %#ok<AGROW>
             end
         else
-            % The async-pulse workers, and the async inference threads of
-            % ysp_quest.c and ysp_aep.c, use pthreads on Linux/macOS.
+            % The async-pulse workers, the async inference threads of
+            % ysp_quest.c and ysp_aep.c, and ysp/rt.h's worker and pump in
+            % ysp_rt.c use pthreads on Linux/macOS.
             args{end+1} = '-lpthread';   %#ok<AGROW>
         end
         mex(args{:});

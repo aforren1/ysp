@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ysp-rt"
+version = "0.9.0"  # must equal ysp/rt.h's YRT_VERSION_STRING; tests/test_rt.py checks it
+description = "The ysp clock, deadline waits, clock correlation and device clock fit"
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT-0"
+
+# The C extension is declared in setup.py (Extension) as ysp.rt; this file
+# just pins the build backend so `pip install .` works. `ysp` is a PEP 420
+# implicit namespace package: no __init__.py is shipped, so the other ysp-*
+# distributions install next to this one without either owning the namespace.
+
+[tool.cibuildwheel]
+# abi3 (Limited API): setup.py forces a cp38-abi3 wheel tag, so one build per
+# platform serves every supported CPython. cibuildwheel >= 4 has no cp38 build
+# interpreter, so build on cp39; the wheel is still cp38-abi3.
+build = "cp39-*"
+skip = "*-musllinux_*"
+# The tests need no device. The checks against ysp.serial and ysp.parallel
+# skip when those distributions are not installed, as here.
+test-requires = ["pytest"]
+test-command = "pytest {package}/tests -q"
+
+[tool.cibuildwheel.macos]
+archs = ["universal2"]

@@ -15,13 +15,17 @@ This page is reference: the language bindings of the headers.
   never sees, and `ysp.trials` taking any of the three as a track.
   `ysp-color` gives `ysp.color` (calibration, conversions, gamut, a
   participant's luminance). `ysp-rdk` gives `ysp.rdk` (the dots of a trial
-  again, bit for bit, from its seed and log); it needs NumPy at run time. `tests/compare/`
+  again, bit for bit, from its seed and log); it needs NumPy at run time.
+  `ysp-rt` gives `ysp.rt`: the clock of every ysp stamp, deadline waits that
+  release the GIL, the clock correlation and the device clock fit, so a
+  PsychoPy experiment can put its own stamps on the ysp clock and analysis
+  code can map a device's clock to it. `tests/compare/`
   runs them beside PsychoPy, questplus and AEPsych on one response stream.
   CI builds the wheels with cibuildwheel on Linux, Windows and macOS, except
   `ysp-parallel` on macOS, which its header does not support.
 - **MATLAB / Octave**: [bindings/mex/](../bindings/mex/), one MEX function per
   library (`ysp_parallel`, `ysp_serial`, `ysp_stair`, `ysp_quest`,
-  `ysp_aep`, `ysp_trials`, `ysp_color`) with ppdev-mex-style command dispatch, built and
+  `ysp_aep`, `ysp_trials`, `ysp_color`, `ysp_rt`) with ppdev-mex-style command dispatch, built and
   tested in MATLAB R2023a and Octave 10. `tests/compare/` runs `ysp_quest`
   beside mQUESTPlus and Palamedes' PAL_AMPM, and `ysp_stair` beside
   PAL_AMUD, on one response stream; the MEX README has the results.
@@ -77,6 +81,7 @@ call can poll. [Conventions](conventions.md) lists the exceptions.
 | `ysp_box` (MEX) | the `'decode'` read time, the events' `t` (with `t_ns`, int64) and `unc`, the `'encode'` width, `'family'` (`fixed_pulse`, `tick`), `'constants'` (`SLOW_WRITE`, `UNC_MAX`) |
 | `ysp_rdk` (MEX) | as `ysp.rdk`: `'start'`, `'update'`, the `t0` and steps of `'replay'` and `'trajectory'`, `'get'` (`last.t`, with `last.ns` beside it), the desc's `lifetime` and `frame_period`, `'ages'` |
 | `ysp.pack` and its MEX | none: sizes and offsets are bytes |
+| `ysp.rt` and `ysp_rt` (MEX) | `now()` (and `now_ns()`, exact), `real_now()`, `sleep_until(t, spin)`, `sleep(duration, spin)`, `spin_until(t)` and their lateness, `DEFAULT_SPIN`, `VIRTUAL_T0`, `virtual_begin(t0)`, `clock_info()` resolution, `correlate()`'s `t`, `width`, `timeout` (and `other` when the clock returns seconds; `t_ns` exact), `Fit(tick=, bucket=, slope_span=, restart=, restart_hold=, max_width=)`, `Fit.add(ticks, t, width)`, `Fit.map()` (and `map_ns()`, exact), `Fit.info()` times; exact to the ns below 2^23 s (about 97 days) |
 | `ysp.rdk` | `start(seed, t)`, `update(t)`, the `t0` and step rows of `replay()` and `trajectory()`, `Field.last` (`t`, and its exact `ns` beside it), `Field(lifetime=, frame_period=)`, `ages()`; exact to the ns below 2^23 s (about 97 days) |
 
 ## Versions
@@ -104,4 +109,5 @@ seconds and the async reader; v1 took milliseconds and microseconds and had
 `now_us`; 2.1.0, 2026-10-12: the `min_hold` setting; 2.2.0, 2026-10-12:
 `driver` and `rts_via_dtr` in `'info'`, `driver` in `'list'` and
 `'find'`), and its second output is the version of `ysp/serial.h` in the
-build.
+build. `ysp_rt('version')` returns 1.0.0 (2026-10-25, the first), and
+its second output is the version of `ysp/rt.h`.
