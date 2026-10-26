@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ysp-dataset"
+version = "0.1.0"  # must equal ysp/dataset.h's YDS_VERSION_STRING; tests/test_dataset.py checks it
+description = "A session's data set for psychophysics: session.json, trial, frame, event, clock and stream tables, a zip"
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT-0"
+
+# The C extension is declared in setup.py (Extension) as ysp.dataset; this file
+# just pins the build backend so `pip install .` works. `ysp` is a PEP 420
+# implicit namespace package: no __init__.py is shipped, so the other ysp-*
+# distributions install next to this one without either owning the namespace.
+
+[tool.cibuildwheel]
+# abi3 (Limited API): setup.py forces a cp38-abi3 wheel tag, so one build per
+# platform serves every supported CPython. cibuildwheel >= 4 has no cp38 build
+# interpreter, so build on cp39; the wheel is still cp38-abi3.
+build = "cp39-*"
+skip = "*-musllinux_*"
+test-command = "python -c \"import os, tempfile, ysp.dataset as yds; d = os.path.join(tempfile.mkdtemp(), 's'); ds = yds.Dataset(d, [('x', 'int')]); ds.write_trial(x=1); print('ok', ds.finish(), len(ds.zip()))\""
+
+[tool.cibuildwheel.macos]
+archs = ["universal2"]

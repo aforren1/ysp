@@ -19,6 +19,12 @@ This page is reference: the language bindings of the headers.
   runs them beside PsychoPy, questplus and AEPsych on one response stream.
   CI builds the wheels with cibuildwheel on Linux, Windows and macOS, except
   `ysp-parallel` on macOS, which its header does not support.
+  `ysp-dataset` gives `ysp.dataset`: a PsychoPy (or any Python) session
+  written as a ysp data set (`session.json`, the trial, frame, event,
+  clock and stream tables, the zip), so the player's analysis reads it. It
+  compiles ysp/dataset.h with ysp/trials.h, ysp/table.h and ysp/json.h, so
+  CI stages those two more headers for it. A row is a `dict` or keywords;
+  `None` and `NaN` are an empty cell.
 - **MATLAB / Octave**: [bindings/mex/](../bindings/mex/), one MEX function per
   library (`ysp_parallel`, `ysp_serial`, `ysp_stair`, `ysp_quest`,
   `ysp_aep`, `ysp_trials`, `ysp_color`) with ppdev-mex-style command dispatch, built and
@@ -32,7 +38,9 @@ This page is reference: the language bindings of the headers.
   `serialport` and Psychtoolbox's `IOPort` (docs/serial.md). The Python
   `ysp.serial` has the same reader since 0.5.0.2 (`async_start`,
   `async_read`, `async_wait`, `async_stop`, `async_stats`): a C thread that
-  never takes the GIL.
+  never takes the GIL. `ysp_dataset` writes a Psychtoolbox session as a
+  ysp data set, as `ysp.dataset` does; a row is a struct or name-value
+  pairs, and `[]` and `NaN` are an empty cell.
 
 ## Units
 
@@ -53,6 +61,7 @@ call can poll. [Conventions](conventions.md) lists the exceptions.
 | `ysp_parallel` (MEX) | `'now'`, `'pulse'` and `'pulseasync'` widths, the RT struct and `'sched'` (`runtime`, `deadline`, `period`) |
 | `ysp.quest`, `ysp.aep` and their MEX | `Async.wait(seq, timeout_s)` |
 | `ysp.trials` and its MEX | the jitter bounds; a drawn jitter gives `s`, and its exact `ns` beside it |
+| `ysp.dataset` and its MEX | every `time` column of trials.csv and of a stream, and every `_s` column of frames.csv, events.csv and clock.csv; rounded to the nearest ns, so ns -> s -> ns holds below 2^23 s. A data value may be negative (a residual, an SOA), and `NaN` is missing, not refused |
 | `ysp.rdk` | `start(seed, t)`, `update(t)`, the `t0` and step rows of `replay()` and `trajectory()`, `Field.last` (`t`, and its exact `ns` beside it), `Field(lifetime=, frame_period=)`, `ages()`; exact to the ns below 2^23 s (about 97 days) |
 
 ## Versions
