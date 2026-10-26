@@ -321,6 +321,7 @@ Status:
 
 - v0.3.0 (the [Conventions](conventions.md): `ybox_init()` returns 0 or `YBOX_ERR_ARG`, `ybox_encode()` takes `int64_t` ns; no byte changed; 2 mutants added, both caught).
 - v0.2.0 (outputs: encoders and capabilities for eight families, each byte pinned to the vendor's documentation, pyxid2 or an open-source driver; StimTracker 2 frames). Decoders checked on generated streams split at every byte, with garbage, broken frames and full outputs, and on random bytes; encoders checked byte for byte; 24 of 24 mutants caught. No byte from or to a vendor device yet. [Design notes](box.md).
+- Bindings: `ysp-box` 0.3.0 (Python) and the MEX `ysp_box` decode captured bytes into events (the shared `Event` fields, times in seconds with the exact ns beside them) and clock pairs, and give the query and output bytes; random bytes and bad arguments refused cleanly; one header limit found (two identity lines in one decode call keep the second only). [Design notes](box.md#bindings).
 
 ### ysp/device.h
 
@@ -400,7 +401,7 @@ Purpose: Random dot kinematograms: coherence, direction, speed, density, dot lif
 Status:
 
 - v0.3.0 (2026-10-21): `yrdk_param.values`, after `offset`, NULL in each row (the shared row shape of gap G6); 1 of 1 new mutant killed. The rules and the digests do not change; the Python binding is 0.3.0. [Design notes](rdk.md#the-shared-row-shape-v030).
-- Bindings: `ysp-rdk` 0.2.0.1 (Python) takes and returns every time in seconds, with the exact ns beside the seconds in `Field.last`; exact to the ns below 2^23 s (about 97 days); the golden digests and the C-logged replay unchanged. [Design notes](rdk.md#bindings).
+- Bindings: `ysp-rdk` 0.2.0.1 (Python) takes and returns every time in seconds, with the exact ns beside the seconds in `Field.last`; exact to the ns below 2^23 s (about 97 days); the golden digests and the C-logged replay unchanged. The MEX `ysp_rdk` (2026-10-25) has the same surface and replays the golden digests and the C-logged trial bit for bit in MATLAB R2023a and Octave 10.1. [Design notes](rdk.md#bindings).
 - v0.2.0: `yrdk_open()` returns bool, `desc.lifetime_ns` (was float seconds), `yrdk_out.age_s` (float seconds, a GPU attribute), every failing call writes `yrdk_error()`; the golden digests and the Python binding unchanged; 2 of 2 new mutants caught.
 - v0.1.0. Statistical tests: the realized coherence from the dots' displacements, density by chi-square in equal-area cells and along the edge (36 configurations), lifetimes, displacement against speed x elapsed time with dropped frames, the noise rules' distributions, frozen noise; 8 golden digests reproduced by an independent Python model and by MSVC, MinGW, gcc (-Ofast too, ASan, UBSan); 26 of 26 non-equivalent mutations caught. 10,000 dots: 102 to 443 us of CPU a frame by rule; with ysp/gfx.h 0.3 ms of CPU and 0.32 to 0.38 ms of GPU. The Python binding `ysp.rdk` replays a C-logged trial into equal NumPy arrays bit for bit. [Design notes](rdk.md).
 

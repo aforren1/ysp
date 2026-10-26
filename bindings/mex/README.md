@@ -16,6 +16,8 @@ never reused, so a handle kept past its `close` always raises
 | `ysp_aep.c` | [ysp/aep.h](../../include/ysp/aep.h) | [example_aep.m](example_aep.m) |
 | `ysp_trials.c` | [ysp/trials.h](../../include/ysp/trials.h) | [example_trials.m](example_trials.m) |
 | `ysp_color.c` | [ysp/color.h](../../include/ysp/color.h) | [test_mex_color.m](test_mex_color.m); the command reference is in [docs/color.md](../../docs/color.md) |
+| `ysp_box.c` | [ysp/box.h](../../include/ysp/box.h) | [example_box.m](example_box.m), [test_mex_box.m](test_mex_box.m) |
+| `ysp_rdk.c` | [ysp/rdk.h](../../include/ysp/rdk.h) | [example_rdk.m](example_rdk.m), [test_mex_rdk.m](test_mex_rdk.m) |
 
 The two transport headers build on the shared [ysp/rt.h](../../include/ysp/rt.h), so
 both MEX functions compile it too. `ysp_quest.c` and `ysp_aep.c` define
@@ -902,6 +904,73 @@ handle whose `rng` is a function handle (use an integer seed), and
 `ysp_quest` also refuses a MATLAB `pf_batch` under `no_table`.
 `async_submit_values` refuses a MATLAB `pf_batch`. A MATLAB `pf_batch` with
 a table is permitted, because the table is built before the thread starts.
+
+## ysp_box
+
+Decode a response box's, a trigger box's or a line board's captured bytes
+into events and clock pairs, without a port or a thread; and get the bytes
+of queries and trigger codes. It compiles `ysp/box.h` and `ysp/input.h`.
+
+```matlab
+c = ysp_box('constants');                         % KIND_BOX, PRESS, DEVTICKS, ...
+h = ysp_box('open', 'xid', c.KIND_BOX, 1);        % family, kind, device
+[ev, pairs, info] = ysp_box('decode', h, bytes, t_read);   % bytes: uint8, t_read: s
+[ev, pairs] = ysp_box('decode', 'line', fread(fid, Inf, '*uint8'));  % one shot
+s = ysp_box('stats', h);                          % frames, garbage, pending
+ysp_box('reset', h);  ysp_box('close', h);
+
+b = ysp_box('encode', 'triggerbox', 'set', 12);   % uint8 row: write it to the port
+b = ysp_box('encode', 'xid', 'pulse', 3, 0.002);  % the box ends the pulse
+q = ysp_box('probe', 'line', 7);  i = ysp_box('identify', 'xid');
+f = ysp_box('family', 'mmbts');                   % name, caps, code_max, fixed_pulse, baud, tick, slow_write
+```
+
+`ev` is an N x 1 struct array. Its fields are those of `yin_event`, in the
+order every ysp binding uses: `t` (seconds), `t_ns` (int64), `device`,
+`control`, `code`, `mods`, `kind`, `type`, `flags`, `stamp`, `unc`
+(seconds), `x`, `y`, `value`, `aux`, `ticks`. Each `t` is the read time
+given; `ticks` is the low 32 bits of the device's clock. `pairs` has the
+columns `ticks` (uint64, the whole device time) and `probe` (0, or the
+number of the timer query answered). `info` has `garbage` (bytes that fit
+no frame), `text` (a cell of identity lines) and `outputs` (columns
+`ticks` and `code`, a line board's `O` reports). A frame split across two
+calls waits in the decoder. A family is a name (`'xid'`, `'line'`,
+`'photo'`, `'triggerbox'`, `'biosemi'`, `'mmbts'`, `'lines'`,
+`'parallel'`) or its number. A negative, NaN or Inf time, a value out of
+range, a fraction where an integer is needed and bytes that are not uint8
+raise `ysp_box:arg`. [docs/box.md](../../docs/box.md) has the tests.
+
+## ysp_rdk
+
+The analysis side of `ysp/rdk.h`, as the Python `ysp.rdk`: open a field
+with the rig's desc, replay a logged trial, and get the dots a participant
+saw, bit for bit.
+
+```matlab
+h = ysp_rdk('open', struct('algorithm', 'LL', 'aperture', 'rect', 'w', 8, 'h', 6, ...
+            'count', 60, 'lifetime', 0.3, 'coherence', 0.5, 'speed', 4));
+[xy, dir, sig] = ysp_rdk('trajectory', h, seed, t0, steps);
+%   xy n x 2 x K single, dir n x K single (deg), sig n x K uint8
+ysp_rdk('replay', h, seed, t0, steps);  d = ysp_rdk('digest', h);   % uint64
+
+ysp_rdk('start', h, seed, t0);                    % a live run
+ysp_rdk('set', h, 'coherence', 0.25, 'direction', 90);
+n = ysp_rdk('update', h, t);
+s = ysp_rdk('get', h);                            % coherence ... last (t, ns), stats
+xy = ysp_rdk('xy', h);                            % also 'directions', 'ages', 'signals', 'events'
+b = ysp_rdk('snapshot', h);  ysp_rdk('restore', h, b);
+ysp_rdk('close', h);
+```
+
+The desc fields are the keyword names of `ysp.rdk.Field`; an enum takes
+its name or its value. `seed` is a uint64 (a double only below 2^53).
+`steps` is a K x 4 double matrix `[t coherence direction speed]`, or a
+struct array such as the `last` of `'get'` after each update; a row with
+`ns` replays from it. Every time is seconds, below 2^23 s (about 97 days):
+the conversion is exact there, as in `ysp.rdk` ([docs/rdk.md](../../docs/rdk.md),
+"Bindings"). `'philox'`, `'angle'` and `'sincos'` are the exact pieces.
+Errors: `ysp_rdk:arg`, `ysp_rdk:order` (a time before the last update, or
+an output before `'start'`), `ysp_rdk:handle`, `ysp_rdk:usage`.
 
 ## Verification
 
