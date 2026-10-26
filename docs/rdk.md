@@ -474,3 +474,29 @@ Its test (`bindings/python/ysp_rdk/tests/test_rdk.py`) checks:
 
 The wheel's NumPy dependency is the one cost: the outputs are
 `numpy.frombuffer` views of bytes that the C code fills.
+
+### MATLAB and Octave (`ysp_rdk`)
+
+The MEX function `ysp_rdk` (`bindings/mex/ysp_rdk.c`, added 2026-10-25)
+has the surface of `ysp.rdk` in command form. `'open'` takes the desc as
+a struct with the keyword names of `Field()` (`lifetime` and
+`frame_period` in seconds; an enum by name or value), and
+`'trajectory'` gives `xy` as n x 2 x K `single`, the directions as n x K
+`single` and the signal flags as n x K `uint8`. The steps are a K x 4
+double matrix `[t coherence direction speed]` with `t` in seconds, or a
+struct array such as the `last` field of `'get'` after each update, which
+has `ns` (int64) beside `t`. The time conversion, its bound (2^23 s) and
+the rounding of `lifetime` to float32 first are the Python binding's, so
+one desc gives one field in both. `'set'` and `'get'` take the place of
+the Python attributes. Not bound: `yrdk_params()` (a designer's table, not
+an analysis call) and caller memory (`desc.mem`).
+
+`bindings/mex/test_mex_rdk.m` (57 checks; MATLAB R2023a with MSVC 19.44 and
+Octave 10.1 with MinGW-w64 on Windows 11, 2026-10-25) checks:
+
+| Check | Result |
+|---|---|
+| the 8 golden digests, by `'update'`, by `'replay'` and by `'trajectory'` | equal to the C test's |
+| `tests/c_trial.bin` (in `bindings/python/ysp_rdk/tests/`) replayed by `'trajectory'` | x, y, direction and signal equal bit for bit on all 150 updates; the digest equal |
+| a live run's `'get'` log | `last.ns` equal to the C log's ns and `last.t == ns / 1e9`; the log replays to the digest with and without `ns` |
+| the exact pieces, snapshot and restore, outputs, the refusals and their ids (`ysp_rdk:arg`, `:order`, `:handle`, `:usage`) | as the header |

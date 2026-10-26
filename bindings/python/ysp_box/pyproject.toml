@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ysp-box"
+version = "0.3.0"  # ysp/box.h v0.3.0; tests/test_box.py checks it against __version__
+description = "Response and trigger box protocols: captured bytes to input events and clock pairs, and output bytes"
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT-0"
+
+# The C extension is declared in setup.py (Extension) as ysp.box; this file
+# just pins the build backend so `pip install .` works. `ysp` is a PEP 420
+# implicit namespace package: no __init__.py is shipped, so the other ysp-*
+# distributions install next to this one without either owning the namespace.
+
+[tool.cibuildwheel]
+# abi3 (Limited API): setup.py forces a cp38-abi3 wheel tag, so one build per
+# platform serves every supported CPython. cibuildwheel >= 4 has no cp38 build
+# interpreter, so build on cp39; the wheel is still cp38-abi3.
+build = "cp39-*"
+skip = "*-musllinux_*"
+# The decoder takes untrusted bytes, so the whole test (random bytes and
+# refused arguments among it) runs on every platform.
+test-requires = ["pytest"]
+test-command = "pytest {package}/tests -q"
+
+[tool.cibuildwheel.macos]
+archs = ["universal2"]

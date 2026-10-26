@@ -34,6 +34,17 @@ This page is reference: the language bindings of the headers.
   `async_read`, `async_wait`, `async_stop`, `async_stats`): a C thread that
   never takes the GIL.
 
+`ysp-box` gives `ysp.box`, and the MEX function `ysp_box` the same in
+MATLAB and Octave: a response box's or a line board's captured bytes to
+events and clock pairs, without the device layer, and the bytes of queries
+and trigger codes. Both compile `ysp/box.h` and the `ysp/input.h` it
+includes. An event is `Event` in Python (a structseq) and an N x 1 struct
+array in MATLAB, with the fields of `yin_event` in one order:
+`t`, `t_ns`, `device`, `control`, `code`, `mods`, `kind`, `type`, `flags`,
+`stamp`, `unc`, `x`, `y`, `value`, `aux`, `ticks` (docs/box.md,
+"Bindings"). The MEX function `ysp_rdk` has the surface of `ysp.rdk` and
+replays a C-logged trial bit for bit (docs/rdk.md, "Bindings").
+
 ## Units
 
 Every time in a binding is seconds, as a `double`: the arguments, the
@@ -53,6 +64,9 @@ call can poll. [Conventions](conventions.md) lists the exceptions.
 | `ysp_parallel` (MEX) | `'now'`, `'pulse'` and `'pulseasync'` widths, the RT struct and `'sched'` (`runtime`, `deadline`, `period`) |
 | `ysp.quest`, `ysp.aep` and their MEX | `Async.wait(seq, timeout_s)` |
 | `ysp.trials` and its MEX | the jitter bounds; a drawn jitter gives `s`, and its exact `ns` beside it |
+| `ysp.box` | the read time `t` of `decode()`, `Event.t` (with the exact `t_ns` beside it), `Event.unc`, the `width` of `encode()`, `fixed_pulse()`, `tick()`, `SLOW_WRITE`, `UNC_MAX` |
+| `ysp_box` (MEX) | the `'decode'` read time, the events' `t` (with `t_ns`, int64) and `unc`, the `'encode'` width, `'family'` (`fixed_pulse`, `tick`), `'constants'` (`SLOW_WRITE`, `UNC_MAX`) |
+| `ysp_rdk` (MEX) | as `ysp.rdk`: `'start'`, `'update'`, the `t0` and steps of `'replay'` and `'trajectory'`, `'get'` (`last.t`, with `last.ns` beside it), the desc's `lifetime` and `frame_period`, `'ages'` |
 | `ysp.rdk` | `start(seed, t)`, `update(t)`, the `t0` and step rows of `replay()` and `trajectory()`, `Field.last` (`t`, and its exact `ns` beside it), `Field(lifetime=, frame_period=)`, `ages()`; exact to the ns below 2^23 s (about 97 days) |
 
 ## Versions
