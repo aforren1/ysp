@@ -103,7 +103,7 @@ early. A channel argument is an int or a name.
 | `tween(ch, to, *, base, duration, start, delay, from_, ease, cycles, yoyo, keep_velocity)` | A channel tween from "now", taking over from the channel's value. |
 | `seq(base, now=False)` | A `Seq`. |
 | `check_ops(base, ops)` | Check an op table as `Seq.run()` would, changing nothing. |
-| `field(value=0, *, n, int=False)`, `fields(count, value)` | A `Field` (1 to 4 float32 or int32 components); `fields` makes adjacent ones for a stagger. |
+| `field(value=0, *, n, int=False)`, `fields(count, value)` | A `Field` (1 to 4 float32 or int32 components); `fields` makes adjacent ones for a stagger. A `Field` has `value`, `index`, `n`, `kill()` and `free()`. |
 | `field_values` | A float32 memoryview of every field slot, 4 words each. |
 | `kill(field)`, `kill_tween(id)`, `tween_count()` | GSAP's `killTweensOf()` and `kill()`. |
 | `bind(obj, attr, source, component=-1)`, `unbind(obj=None)` | After each evaluate, `setattr(obj, attr, value)` from a channel or a field. |
@@ -148,15 +148,15 @@ frame.
   same values with the checks.
 - `ytl_op_params()` and `ytl_desc_params()`: they serve a player's loader
   and a designer, not an experiment.
-- `ytl_seq_now()` on the RT base for a script, `ytl_is_open()` and
-  `ytl_values()`: they are `seq(0, now=True)`, `is_open` and `values`.
 - Negative times: the binding refuses them (docs/bindings.md), so
   `wait(-0.1)` and a negative `stagger` are refused. Use `at(q.t - 0.1)`.
 - A Python object as a mark's payload: `user` is a 64-bit integer, as in
   C. Keep a dict from `code` or `user` to the object.
 
-A `Field` and its `Timeline` refer to each other through `bind()` and the
-callbacks; `close()` drops those references.
+The Timeline keeps every `Field` it made until `field.free()` or
+`close()`, so a field whose variable goes out of scope keeps its tweens.
+`free()` kills its tweens and gives the slot back. `field_values` reads
+every slot as float32; read an `int=True` field with `.value`.
 
 ## Tests
 

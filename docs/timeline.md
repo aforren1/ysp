@@ -1881,6 +1881,133 @@ sequence by calls and by an op table, and `timeline_ops.cpp`, the
 table as C++20 (with `-Wno-missing-field-initializers` on g++). Both are
 clean on MinGW gcc 16.1, MSVC 19.44 (C++20) and gcc 11.4.
 
+## Bindings
+
+`ysp-timeline` 0.8.1 (`import ysp.timeline`) and the MEX `ysp_timeline`
+1.0.0 bind this header for a PsychoPy or Psychtoolbox experiment that draws
+its own stimuli. The reference is in
+[bindings/python/ysp_timeline/README.md](../bindings/python/ysp_timeline/README.md)
+and [bindings/mex/README.md](../bindings/mex/README.md#ysp_timeline).
+
+What is bound: the time bases (anchor, pause, resume, stop, skip, rate and
+the queries), events (add, remove, prune, clear, the record, peek), tracks
+(keys with Bezier eases, samples, repeats), channel tweens, sequences with
+every builder call, op tables (`run`, `check_ops`), and target tweens (to,
+from, fromTo, set, animate with stagger, overwrite and callbacks, kill).
+`evaluate()` returns the events that fired with their landing records.
+
+Decisions:
+
+- **The binding owns the fields.** A target tween writes C memory, and a
+  Python attribute or a MATLAB variable has no fixed address. So the
+  binding allocates the field slots at open, 4 words each, and a `Field`
+  (or a MEX field index) names one. The frame loop reads them as one
+  float32 view (`field_values`) or a 4 x slots matrix, or one at a time.
+  The Python Timeline keeps every Field alive until `free()` or
+  `close()`: the first version freed a slot when its Field object died,
+  and a trial built in a function lost its tweens when the function
+  returned (the seek test found it).
+- **Times are seconds,** rounded to the nearest ns at the call, and a
+  negative or NaN time is refused (docs/bindings.md). A record gives the
+  exact ns beside the seconds. A replay gets the same ns from the same
+  seconds; a time past 2^23 s (97 days of a clock that counts from boot)
+  no longer holds every ns as a double, so pass the logged `onset_ns / 1e9`
+  only below that.
+- **`YTL_MAX_CHANNELS` is 1024** in both builds, not 256: a Python
+  experiment with a channel per dot or grid element needs more. The handle
+  grows to about 270 KB; an evaluate scans only `n_channels`.
+- **The report is never cut.** The binding gives `ytl_evaluate()` a report
+  buffer as large as the event storage, allocated at open, so every fired
+  event comes back and a frame with none allocates nothing in Python.
+- **Callbacks.** Python takes a callable (called with no arguments after
+  the frame's fields are written) or `True` (the event only). MEX takes a
+  logical only: the event in the report serves the frame loop, and a call
+  into the interpreter from inside the evaluate would cost more than the
+  frame's work. An exception in a Python callback is raised after the
+  evaluate, with the frame already in the record.
+- **`bind(obj, attr, source)`** sets a Python attribute from a channel or
+  a field after each evaluate. It stays because it costs little: 18 ns per
+  attribute at 1000, against 30 ns for `tolist()` and the same loop in
+  Python (below). With
+  PsychoPy, whose attribute setters run Python code, the setter dominates
+  either way.
+- Channels and fields are 0-based in Python and 1-based in MEX
+  (bindings/mex/ysp_mex_util.h). A base keeps its number in both, and so
+  does a trigger channel, which names an output of the caller.
+
+Not bound: `ytl_sample()`, which does not validate its track, so a bad
+track reads out of bounds (a spare timeline gives the same values with the
+checks); the parameter tables, which serve a player's loader and a
+designer; a negative wait or stagger (refused as negative times; use
+`at(t - dt)` or reverse the field list); a Python object as a mark's
+payload (`user` is a 64-bit integer, as in C).
+
+### Measured cost
+
+The per-frame cost through the binding of an evaluate and a read of N
+values, every value a CUBIC_OUT tween over 1000 s, so in progress on each
+frame. Machine: Intel i7-1360P, Windows 11, on AC power, through the
+measurement lock (load 20% or less at the start), 2026-10-25. Python:
+CPython 3.14.3, the abi3 wheel built by MSVC 19.51 (Visual Studio 18), each
+frame timed with `perf_counter_ns` (100 ns resolution on Windows), 20,000
+frames per cell, the smallest median of 3 interleaved rounds:
+
+| N | evaluate only | + `values.tolist()` | + `v[i]` per value | + `setattr` in Python | `bind()` | fields + `field_values.tolist()` | fields + `f.value` each |
+|---|---|---|---|---|---|---|---|
+| 0 | 0.1 | 0.2 | 0.2 | 0.3 | 0.1 | 0.2 | 0.2 |
+| 10 | 0.2 | 0.3 | 0.6 | 0.6 | 0.4 | 0.6 | 0.6 |
+| 100 | 0.9 | 1.6 | 4.0 | 4.2 | 3.1 | 5.5 | 4.5 |
+| 1000 | 9.3 | 20.4 | 42.0 | 39.7 | 27.5 | 57.3 | 42.9 |
+
+Median us per frame. The p99 of the 1000 rows is 31 to 215 us, the
+worst `fields_tolist` (it reads all 4 words of every slot). MEX: the mean
+per frame over blocks of 100 frames (Octave's `tic` and `toc` on Windows
+step in 0.5 ms, too coarse for one frame), the median block of 100, the
+smallest of 3 rounds; `values` asks for the value row only, `+ events`
+also for the event struct, `fields` for the 4 x slots matrix too:
+
+| N | MATLAB R2023a values | + events | fields | Octave 10.1 values | + events | fields |
+|---|---|---|---|---|---|---|
+| 0 | 1.0 | 1.9 | 2.0 | 10.8 | 23.2 | 25.1 |
+| 10 | 1.0 | 2.0 | 2.3 | 10.8 | 23.6 | 23.4 |
+| 100 | 1.9 | 2.7 | 3.6 | 11.2 | 23.5 | 26.1 |
+| 1000 | 9.5 | 10.5 | 15.3 | 17.7 | 31.0 | 33.7 |
+
+What the tables show:
+
+- **1000 values cost 9.5 to 34 us a frame**, at most 0.2% of a 16.7 ms
+  frame and 1.7% of a 2 ms frame at 500 Hz, on every path but the
+  per-value loops in Python (40 to 57 us). At 10 or 100 values the binding costs under 5 us
+  in Python and MATLAB.
+- The C evaluate is most of the 1000-value cost in Python and MATLAB: 9.3
+  us, the 8 ns per tween of "Targets". Reading the view with `tolist()`
+  adds 11 us; a Python loop over the values adds 30 us.
+- Octave's MEX call costs about 11 us, and an output struct (the events,
+  even with none) about 12 us more. In Octave, ask for the events output
+  only on the frames that need it, or use `'events'` after the trial.
+
+### Verification
+
+- Python, `tests/test_timeline.py`, 23 tests: the manual's trial by calls
+  and as an op table (the same values and records on 90 frames), landing
+  frames and residuals against the quantization rule, every ease against
+  its formula, a rewind that replays 100 frames bit for bit (values,
+  fields and records), seeks to 6 frames that give continuous play, two
+  timelines given the same calls, fields (to, from, fromTo, set with its
+  record, int32, stagger, overwrite, kill, free), callbacks (order, rewind,
+  an exception), keyed, Bezier, sampled and repeating tracks, the takeover
+  of a channel tween, times in seconds and their refusals, every error
+  class, late events, peek, rate, pause, prune with the callback sweep,
+  `bind()`. Pass on Windows 11 with CPython 3.14.3 and 3.9 (MSVC) and in
+  WSL2 Ubuntu 22.04 with CPython 3.10.12 (gcc 11.4, which also builds the
+  extension with `-Wall -Wextra` and no warning but `-Wpedantic`'s on the
+  Python slot casts).
+- MEX, `test_mex_timeline.m`, 44 checks of the same kinds: pass in MATLAB
+  R2023a (MSVC) and Octave 10.1 (MinGW gcc).
+- The Linux build first failed two queries: `tl_time_out(call(&out), out)`
+  read `out` before the call wrote it under gcc. MSVC evaluated the call
+  first. Both bindings now make the call in its own statement.
+
 ## Not done
 
 - Parameter tables (v0.8.0): the names are the C fields. The map from a
@@ -1908,7 +2035,7 @@ clean on MinGW gcc 16.1, MSVC 19.44 (C++20) and gcc 11.4.
     until a kill; `YTL_OVERWRITE_ALL` is the way to retarget there.
   - A set changes a field and leaves no landing record. A mark or a
     trigger at the same time gives one.
-  - No target form of the op tables, and no binding from Python, MATLAB
-    or a script layer.
+  - No target form of the op tables, and no binding from a script layer.
+    Python and MATLAB have one since 2026-10-25 (see "Bindings").
   - Not run on clang or emscripten. This round ran MinGW gcc 16.1, MSVC
     19.44 and gcc 11.4 under WSL2 (ASan and UBSan).

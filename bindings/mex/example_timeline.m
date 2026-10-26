@@ -37,7 +37,7 @@ for first = [0 200]
             fprintf('frame %3d  contrast %.4f  dot x %.2f\n', i, v(CONTRAST), f(1, dot));
         end
     end
-    fprintf('-- the same trial again, anchored at frame 200 --\n');
+    if first == 0, fprintf('-- the same trial again, anchored at frame 200 --\n'); end
 end
 ev = ysp_timeline('events', h, TRIAL);
 fprintf('%d events in the record\n', numel(ev));
