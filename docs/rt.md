@@ -788,3 +788,158 @@ full rig's load of about 100 records a frame.
 | Zone, trace ring attached, at most 150 ns | Met natively (52 to 95 ns; one run 149 ns). Missed under node (471 ns). |
 | Default macros cost nothing | Met: the same as an empty loop, and the compile check proves no argument is evaluated. |
 | Correlation width at most 1 us, call at most 20 us | Met everywhere. |
+
+## Bindings
+
+`ysp-rt` (Python, `import ysp.rt`) and `ysp_rt` (MATLAB and Octave, MEX
+1.0.0) give a PsychoPy or Psychtoolbox experiment the clock of the ysp data
+and devices, and give analysis code the device clock fit. Times are seconds;
+`now_ns()`, `Corr.t_ns`, `Fit.map_ns()` and their MEX equivalents give the
+exact ns. The reference is in
+[bindings/python/ysp_rt/README.md](../bindings/python/ysp_rt/README.md) and
+[bindings/mex/README.md](../bindings/mex/README.md#ysp_rt).
+
+### What is bound
+
+| Part | Python | MEX |
+|---|---|---|
+| Clock | `now()`, `now_ns()`, `real_now()`, `clock_info()`, `describe()` | `'now'`, `'now_ns'`, `'real_now'`, `'clock_info'`, `'describe'`, `'constants'` |
+| Waits | `sleep_until(t, spin)`, `sleep(duration, spin)`, `spin_until(t)`, `thread_cleanup()` | `'sleep_until'`, `'sleep'`, `'spin_until'` |
+| Correlation | `correlate(read, edge=, tries=, timeout=)`, `read` a Python callable | `'correlate', fn, opts`, `fn` a function handle |
+| Device clock fit | `Fit(mode, tick=, bits=, ...)`: `add()`, `map()`, `map_ns()`, `unwrap()`, `info()` | `'fit_open'`, `'fit_add'`, `'fit_map'`, `'fit_unwrap'`, `'fit_info'`, `'fit_close'`; vectors |
+| Virtual clock | `virtual_begin(t0)`, `virtual_end()`, `is_virtual()` | `'virtual_begin'`, `'virtual_end'`, `'is_virtual'` |
+| Per-user folders | `user_dir(kind, subdir)` | `'user_dir'` |
+
+Decisions:
+
+- **One counter, separate copies.** Each extension and each MEX file
+  compiles its own copy of `ysp/rt.h`. The copies read one counter, so
+  `ysp.rt.now()`, `ysp.serial.now()` and `ysp.parallel.now()` agree: the
+  tests check that a read of the other module lies between two reads of
+  `ysp.rt.now_ns()`, 2000 times (Python) and 500 times (MEX). The virtual
+  clock is the exception: it is a flag in one copy, so
+  `ysp.rt.virtual_begin()` moves `ysp.rt.now()` and its waits only. The
+  tests check that `ysp.serial.now()` stays real.
+- **Host clocks are not assumed.** On the Windows development machine,
+  `time.perf_counter_ns()` read the same counter as `now_ns()` (no offset)
+  in CPython 3.12.11 and 3.14.3, and had a process-start origin in 3.9.25.
+  `time.monotonic_ns()` was the same counter in 3.14.3 only; in 3.9 and
+  3.12 it was offset by tens of ms. PsychoPy 2026.1.2's `core.getTime()`
+  has a process-start origin. Psychtoolbox 3.0.22's `GetSecs` read between
+  two reads of `ysp_rt('now')` in every try. In WSL2, `perf_counter_ns()`
+  and `monotonic_ns()` both read `CLOCK_MONOTONIC`, as `now_ns()` does. So
+  the manuals say: map a host clock with `correlate()`, once, and keep the
+  offset. `correlate(core.getTime)` gave a 5.7 us bracket in PsychoPy's
+  Python 3.10 (the abi3 extension loads there), and `'correlate',
+  @GetSecs` a 16 us bracket in MATLAB. The call back into the interpreter
+  is most of each.
+- **A Python wait releases the GIL**, so other Python threads run while one
+  waits. The test proves it on the virtual clock: a second thread's wait
+  blocks until the driver moves the clock, so a wait that kept the GIL would
+  hang the driver. A wait longer than 200 ms (plus the spin) goes to the OS
+  in 100 ms slices with the signal handlers run between them, so Ctrl+C
+  ends it. The last 100 to 200 ms are one `yrt_sleep_until()` call with the
+  caller's spin, so the lateness is the header's. A MEX wait cannot be
+  ended with Ctrl+C: the MEX API has no documented way to see the key.
+- **`map()` before the first pair raises** (`ysp.rt.Error`,
+  `ysp_rt:state`). The C call returns 0, which a host caller would take
+  for a time.
+- **`correlate()` takes an int or a float clock.** An int is the clock's
+  own counter. A float is seconds, carried as ns, and `other` comes back as
+  seconds. An exception in the callable cannot leave the header's loop. It
+  is kept, the remaining reads return a changing dummy value so edge mode
+  ends at once, and the exception is raised after the call with its own
+  type (Python) or identifier (MEX).
+- **The MEX dispatch reads the command into a stack buffer**
+  (`mxGetString`), not `mxArrayToString`, so `'now'` allocates nothing in
+  the binding. It costs 0.38 to 0.40 us against `ysp_serial('now')`'s 0.48
+  to 0.49 us (below).
+
+### What is not bound, and why
+
+| Part | Why |
+|---|---|
+| Worker (`yrt_worker_*`) | It runs a C callback at a deadline on an elevated thread. A Python or MATLAB callback would have to take the GIL or the MATLAB thread there, and that is what makes a wake late. The transports already use the worker inside `pulse_async`. |
+| Pump (`yrt_pump_*`) | Background compute in C. `ysp.quest.Async` and `ysp.aep.Async` use it for their inference. Python has `threading`, and a pump that calls Python holds the GIL against the frame loop. |
+| Event ring (`yrt_ring_*`), instrumentation, `yrt_trace_*` | The ring holds 64-byte records that C producers push and a C writer drains. No ysp Python or MEX API takes a ring, so a host-side ring would connect to nothing. A host log is a list. |
+| Scheduling ladder (`yrt_thread_elevate`, `_pin`, `_set_timer_slack`, `yrt_process_lock_memory`, `yrt_timer_resolution_*`, `yrt_cpu_core_type`) | Not safe from an interpreter. Elevation is not undone. On Linux the DEADLINE rung caps the thread at its reservation (1 ms in 10 ms by default), which a Python or MATLAB frame loop exceeds, and the kernel then throttles it. A FIFO interpreter thread that busy-waits holds a core. `mlockall(MCL_FUTURE)` makes the interpreter's later allocations fail at the limit. PsychoPy (`core.rush()`) and Psychtoolbox (`Priority()`) have their own controls for the host thread; `describe()` reports what the thread has. |
+| Virtual timers (`yrt_virtual_timer`) | A host test drives its own events between waits on the virtual clock. A timer would call back into the interpreter from inside a wait. |
+| `yrt_ticks_to_ns`, `yrt_interrupt_time_100ns`, `yrt_thread_id`, `yrt_sched_normalize` | For C code that holds a raw QPC value, a window-message time or a desc. A host user gets other clocks through `correlate()`. |
+
+### Tests
+
+| Platform | Result |
+|---|---|
+| Windows 11, CPython 3.14.3, MSVC 19.44 | 27 passed with `ysp-serial` and `ysp-parallel` installed; 25 passed and 2 skipped (the agreement checks) alone |
+| WSL2 Ubuntu 22.04, CPython 3.12.14, gcc 11.4 | The same: 27 passed; 25 passed and 2 skipped alone. `-Wall -Wextra -Wconversion` clean on the extension |
+| MATLAB R2023a Update 6 (MSVC 2022), `test_mex_rt.m` | PASS (73 checks) |
+| Octave 10.1.0 (MinGW), `test_mex_rt.m` | PASS (73 checks) |
+
+Not run: macOS; MATLAB and Octave on Linux (CI runs both); the
+cibuildwheel jobs.
+
+### Measured: the cost of `now()` and the lateness of a wait
+
+2026-10-25, the Windows 11 test laptop (i7-1360P, 16 logical CPUs, build
+26200, AC power), under the shared timing guard (no build or test process,
+CPU load at most 20 %). Two rounds, each one C, Python, MATLAB and Octave
+in turn. Every thread at normal priority, not pinned, nothing elevated:
+`describe()` gave `policy=NONE ... timer_throttle=on ecoqos=on cores=any`.
+C is MSVC 19.44 `/O2`; the Python extension is MSVC 19.44 for CPython
+3.14.3; MATLAB R2023a's MEX is MSVC 2022; Octave 10.1.0's is MinGW gcc.
+
+`now()` per call, the minimum over 7 runs (1e6 calls in Python, 2e5 in
+MATLAB and Octave), rounds 1 and 2:
+
+| Call | ns |
+|---|---|
+| `ysp.rt.now()` | 35.7, 36.7 |
+| `ysp.rt.now_ns()` | 40.7, 38.3 |
+| `time.perf_counter()` (reference) | 36.9, 37.4 |
+| `ysp.serial.now()` (reference) | 37.4, 38.1 |
+| `ysp_rt('now')`, MATLAB | 382, 404 |
+| `ysp_serial('now')`, MATLAB | 493, 481 |
+| `GetSecs`, MATLAB (reference) | 5789, 4737 |
+| `ysp_rt('now')`, Octave | 2972, 2854 |
+| `ysp_serial('now')`, Octave | 2880, 2571 |
+
+In C, `yrt_now_ns()` is about 25 ns ([Cost on the real
+clock](#cost-on-the-real-clock)). A Python `now()` costs what
+`time.perf_counter()` costs.
+
+Lateness of 3000 waits, each to `now() + 1 ms + 4 ms * frac(i * 0.618...)`,
+the same schedule in every language (scratch benches, not kept). "Returned"
+is the value the wait returns, read in C at the wake. "Observed" is `now()`
+read by the host code after the call returns, minus the deadline: what the
+experiment's next line sees. Median / p99 / max, us, rounds 1 and 2:
+
+| Language | Spin | Returned | Observed |
+|---|---|---|---|
+| C | 1.2 ms (default) | 0.1 / 13.0 / 889; 0.1 / 17.5 / 341 | 0.5 / 17.1 / 890; 0.5 / 18.8 / 342 |
+| Python | 1.2 ms | 0.1 / 39.3 / 4362; 0.1 / 13.1 / 1374 | 8.0 / 80.0 / 4375; 7.8 / 32.1 / 1383 |
+| MATLAB | 1.2 ms | 0.1 / 41.7 / 5573; 0.1 / 12.7 / 1743 | 39.5 / 156 / 5718; 36.9 / 118 / 1795 |
+| Octave | 1.2 ms | 0.1 / 38.5 / 2259; 0.1 / 38.4 / 2176 | 65.2 / 195 / 2351; 65.9 / 219 / 2777 |
+| C | 0 | 398 / 831 / 1372; 399 / 843 / 3901 | 398 / 832 / 1374; 399 / 843 / 3901 |
+| Python | 0 | 383 / 845 / 2316; 424 / 857 / 3514 | 397 / 856 / 2329; 436 / 867 / 3527 |
+| MATLAB | 0 | 406 / 858 / 2145; 405 / 881 / 1242 | 452 / 932 / 2781; 455 / 929 / 1361 |
+| Octave | 0 | 402 / 803 / 1413; 397 / 836 / 3502 | 479 / 884 / 1483; 484 / 938 / 3594 |
+
+What the numbers say:
+
+- The binding does not change the header's wait. The returned lateness
+  has the same median in every language (0.1 us with the default spin,
+  about 400 us without). The p99 with the spin was 13 to 18 us in C and
+  13 to 42 us in the bindings; it was near 40 us in one Python round, one
+  MATLAB round and both Octave rounds. The maxima are single preemptions of
+  a normal-priority thread, in C too.
+- The host's own return comes on top: about 8 us at the median in Python
+  (the GIL taken back, the float made, the next call), 37 to 40 us in
+  MATLAB and 65 us in Octave. That is the observed column, and it is the
+  number the next line of a script sees. A wait that must be tighter than
+  that belongs in C: the transports' pulses, ysp/screen.h's flips.
+- Without a spin, the OS timer woke 0.4 ms late at the median and 0.8 to
+  0.9 ms at p99, in C as in the bindings. `time.sleep()` and `WaitSecs`
+  were not measured here.
+
+Not measured: WSL2 or any Linux host, battery power, an elevated or loaded
+machine, Python 3.8 to 3.13.
