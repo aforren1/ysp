@@ -104,7 +104,14 @@ function test_mex_pack()
     h = ysp_pack('open', bad, 'none');
     got = ysp_pack('read', h, 'readme.txt');
     check(isequal(got, bad(L(4).data_off + (1:L(4).size))), 'none: the damage reads through');
-    expect_error('ysp_pack:arg', @() ysp_pack('verify', h, 'readme.txt'), 'none');
+    expect_error('ysp_pack:corrupt', @() ysp_pack('verify', h, 'readme.txt'), 'readme.txt');
+    [ok, msg] = ysp_pack('verify', h, 'readme.txt');
+    check(~ok && ~isempty(strfind(msg, 'readme.txt')), 'none: verify of one entry hashes it');
+    ysp_pack('verify', h, 'conditions.pstb');
+    info = ysp_pack('info', h);
+    ysp_pack('verify', h, 'conditions.pstb');
+    info2 = ysp_pack('info', h);
+    check(info2.hashed_bytes == info.hashed_bytes, 'none: an entry is hashed once');
     expect_error('ysp_pack:corrupt', @() ysp_pack('verify', h));
     ysp_pack('close', h);
 

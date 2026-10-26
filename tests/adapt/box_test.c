@@ -48,6 +48,8 @@ typedef struct expect {
     uint32_t probe;
     int      is_out;         /* LINE "O": has_out with this code and ticks */
     uint32_t out_code;
+    int      is_text;        /* LINE "I": has_text "board <text_id>", no pair */
+    uint32_t text_id;
 } expect;
 
 #define MAXF 4096
@@ -123,7 +125,7 @@ static void gen_line(int frames, int garbage) {
     for (i = 0; i < frames; i++) {
         expect* e = &g_exp[g_nexp++];
         char s[128];
-        int n = 0, k, what = (int)rnd(6);
+        int n = 0, k, what = (int)rnd(7);
         memset(e, 0, sizeof *e);
         e->ticks = ((uint64_t)rnd(0xFFFFFFFFu) << (rnd(2) ? 20 : 0)) + rnd(1000);
         if (garbage) {
@@ -139,6 +141,12 @@ static void gen_line(int frames, int garbage) {
         case 1:
             e->probe = 1 + rnd(0xFFFFFFFEu);
             n = snprintf(s, sizeof s, "Q %lu %llu\r\n", (unsigned long)e->probe, (unsigned long long)e->ticks);
+            break;
+        case 6:
+            /* an identity line; about 1 in 7, so a call meets several */
+            e->is_text = 1;
+            e->text_id = rnd(1000000);
+            n = snprintf(s, sizeof s, "I board %lu\n", (unsigned long)e->text_id);
             break;
         case 5:
             e->is_out = 1;
@@ -203,6 +211,8 @@ static uint64_t g_garbage;
 static uint32_t g_out_code[MAXF];
 static uint64_t g_out_ticks[MAXF];
 static int g_nout;
+static char g_text[MAXF][96];
+static int g_ntext;
 
 /* chunk 0: whole; 1: a byte at a time; 2: random sizes. cap: the output
  * arrays' size per call; the decoder must never write past it. */
@@ -212,7 +222,7 @@ static void decode_all(int family, int chunk, int cap) {
     ybox_pair pr[64];
     ybox_out o;
     size_t at = 0;
-    g_nev = g_npair = g_nout = 0;
+    g_nev = g_npair = g_nout = g_ntext = 0;
     g_garbage = 0;
     CHECK_I(ybox_init(&d, family, YIN_KIND_BOX, 7), 0);
     memset(&o, 0, sizeof o);
@@ -235,6 +245,7 @@ static void decode_all(int family, int chunk, int cap) {
                 g_out_code[g_nout] = o.out_code;
                 g_out_ticks[g_nout++] = o.out_ticks;
             }
+            if (o.has_text && g_ntext < MAXF) memcpy(g_text[g_ntext++], o.text, sizeof o.text);
             g_garbage += o.garbage;
         }
         at += n;
@@ -244,9 +255,16 @@ static void decode_all(int family, int chunk, int cap) {
 
 /* Every expected frame in order, every field. */
 static void compare(int family, const char* what) {
-    int i, ie = 0, ip = 0, io = 0, bad = 0;
+    int i, ie = 0, ip = 0, io = 0, it = 0, bad = 0;
     for (i = 0; i < g_nexp; i++) {
         const expect* e = &g_exp[i];
+        if (e->is_text) {
+            char want[32];
+            snprintf(want, sizeof want, "board %lu", (unsigned long)e->text_id);
+            if (it >= g_ntext || strcmp(g_text[it], want) != 0) bad++;
+            it++;
+            continue;
+        }
         if (ip >= g_npair || g_pair[ip].ticks != e->ticks || g_pair[ip].probe != e->probe) bad++;
         ip++;
         if (e->is_out) {
@@ -263,7 +281,7 @@ static void compare(int family, const char* what) {
                 bad++;
         }
     }
-    if (ie != g_nev || ip != g_npair || io != g_nout) bad++;
+    if (ie != g_nev || ip != g_npair || io != g_nout || it != g_ntext) bad++;
     if (bad) fprintf(stderr, "box_test: %s %s: %d frames wrong (%d events, %d pairs decoded)\n",
                      ybox_family_name(family), what, bad, g_nev, g_npair);
     CHECK_I(bad, 0);
@@ -366,13 +384,20 @@ static void test_line_rules(void) {
     yin_event ev[16];
     ybox_pair pr[16];
     ybox_out o;
+    size_t u;
     char longline[300];
     memset(&o, 0, sizeof o);
     o.ev = ev; o.ev_cap = 16; o.pair = pr; o.pair_cap = 16;
     ybox_init(&d, YBOX_LINE, YIN_KIND_SYNC, 3);
     ybox_out_clear(&o);
-    CHECK_I(ybox_decode(&d, (const uint8_t*)good, sizeof good - 1, 9, &o), sizeof good - 1);
+    /* the call ends after the identity line (v0.3.1) */
+    u = ybox_decode(&d, (const uint8_t*)good, sizeof good - 1, 9, &o);
+    CHECK_I(u, strstr(good, "A 5") - good);
     CHECK(o.has_text && strcmp(o.text, "ysp-line 1 teensy41 photodiode") == 0);
+    CHECK_I(o.n_ev, 0);
+    ybox_out_clear(&o);
+    CHECK_I(ybox_decode(&d, (const uint8_t*)good + u, sizeof good - 1 - u, 9, &o), sizeof good - 1 - u);
+    CHECK(!o.has_text);
     CHECK(o.n_ev == 2 && ev[0].type == YIN_SAMPLE && fabsf(ev[0].value + 1.5e-3f) < 1e-7f && ev[0].control == 2);
     CHECK(o.n_ev == 2 && ev[1].ticks == 0xFFFFFFFFu && ev[1].control == 255 && ev[1].kind == YIN_KIND_SYNC);
     CHECK(o.n_pair == 2 && pr[1].ticks == 18446744073709551615ull);
@@ -539,6 +564,44 @@ static void test_line_out(void) {
     printf("  line O reports: ok\n");
 }
 
+/* LINE "I": one per call, as "O" (v0.3.1). Before, a second identity line
+ * in one call replaced the first. */
+static void test_line_ident(void) {
+    static const char three[] = "I first\nI second\nI\nS 300\n";
+    static const char mixed[] = "O 5 1\nI x\n";
+    ybox_decoder d;
+    yin_event ev[4];
+    ybox_pair pr[4];
+    ybox_out o;
+    size_t u;
+    memset(&o, 0, sizeof o);
+    o.ev = ev; o.ev_cap = 4; o.pair = pr; o.pair_cap = 4;
+    ybox_init(&d, YBOX_LINE, YIN_KIND_BOX, 1);
+    ybox_out_clear(&o);
+    u = ybox_decode(&d, (const uint8_t*)three, sizeof three - 1, 0, &o);
+    CHECK_I(u, 8);
+    CHECK(o.has_text && strcmp(o.text, "first") == 0 && o.n_pair == 0);
+    ybox_out_clear(&o);
+    u += ybox_decode(&d, (const uint8_t*)three + u, sizeof three - 1 - u, 0, &o);
+    CHECK_I(u, 17);
+    CHECK(o.has_text && strcmp(o.text, "second") == 0);
+    ybox_out_clear(&o);
+    u += ybox_decode(&d, (const uint8_t*)three + u, sizeof three - 1 - u, 0, &o);
+    CHECK_I(u, 19);
+    CHECK(o.has_text && o.text[0] == '\0');   /* a bare "I": an empty identity */
+    ybox_out_clear(&o);
+    u += ybox_decode(&d, (const uint8_t*)three + u, sizeof three - 1 - u, 0, &o);
+    CHECK(!o.has_text && o.n_pair == 1 && pr[0].ticks == 300 && u == sizeof three - 1);
+    /* an O report, then an identity line: each ends its own call */
+    ybox_out_clear(&o);
+    u = ybox_decode(&d, (const uint8_t*)mixed, sizeof mixed - 1, 0, &o);
+    CHECK(u == 6 && o.has_out && !o.has_text);
+    ybox_out_clear(&o);
+    u += ybox_decode(&d, (const uint8_t*)mixed + u, sizeof mixed - 1 - u, 0, &o);
+    CHECK(u == sizeof mixed - 1 && !o.has_out && o.has_text && strcmp(o.text, "x") == 0);
+    printf("  line I lines: ok\n");
+}
+
 static void test_fuzz(void) {
     int family;
     for (family = YBOX_XID; family <= YBOX_FAMILY_LAST; family++) {
@@ -568,6 +631,7 @@ int main(void) {
     test_queries();
     test_encoders();
     test_line_out();
+    test_line_ident();
     test_fuzz();
     if (g_failures) {
         fprintf(stderr, "box_test: %d of %d checks FAILED\n", g_failures, g_checks);

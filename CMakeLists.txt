@@ -684,6 +684,26 @@ if(NOT TARGET ysp::pl_mpeg)
         endif()
     endforeach()
 endif()
+
+# ysp/audio.h, ysp/screen.h and ysp/video.h implemented in one translation
+# unit, audio first and screen first, as C and as C++: their Windows headers
+# must not redefine each other's macros under /WX (audio.h 0.7.1, C4005 on
+# CLSCTX_ALL). Each header's own checks have one header per unit.
+if(YSP_BUILD_TESTS AND TARGET SDL3::SDL3 AND TARGET ysp::miniaudio
+   AND CMAKE_SYSTEM_NAME IN_LIST YSP_PLATFORMS_video)
+    foreach(lang c cxx)
+        if(lang STREQUAL "c")
+            set(_src tests/compile/order_audio_screen.c)
+        else()
+            set(_src tests/compile/order_audio_screen.cpp)
+        endif()
+        ysp_add_program(compile_order_audio_screen_${lang} ${_src} rig)
+        add_test(NAME compile_order_audio_screen_${lang} COMMAND compile_order_audio_screen_${lang})
+        ysp_add_program(compile_order_screen_audio_${lang} ${_src} rig)
+        target_compile_definitions(compile_order_screen_audio_${lang} PRIVATE YSP_TEST_SCREEN_FIRST)
+        add_test(NAME compile_order_screen_audio_${lang} COMMAND compile_order_screen_audio_${lang})
+    endforeach()
+endif()
 if(TARGET test_video AND YSP_QOI_DIR)
     target_include_directories(test_video PRIVATE ${YSP_QOI_DIR})
     target_compile_definitions(test_video PRIVATE YVID_TEST_QOI_REF)

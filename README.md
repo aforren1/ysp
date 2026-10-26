@@ -15,7 +15,7 @@ C11 or C++17, and its top comment is its manual.
 | [trials](docs/trials.md) | `ytr_` | Trial orders, blocks, adaptive tracks, jitter, variables per trial, replay, a CSV row per trial | 0.6.0 | tested |
 | [dataset](docs/dataset.md) | `yds_` | A session's data set: session.json, trial, frame, event, clock and stream tables, a zip for the web | 0.2.0 | tested |
 | [table](docs/table.md) | `ytb_` | Typed tables and a bounded CSV parser | 0.3.0 | tested |
-| [pack](docs/pack.md) | `ypak_` | Read and verify ysp packs (store-only zip) | 0.3.0 | tested |
+| [pack](docs/pack.md) | `ypak_` | Read and verify ysp packs (store-only zip) | 0.4.0 | tested |
 | [json](docs/json.md) | `yjs_` | Strict JSON reader and canonical writer | 0.2.1 | tested |
 | [stair](docs/adapt.md) | `yst_` | Adaptive staircases | 0.3.0 | tested |
 | [quest](docs/adapt.md) | `yqst_` | QUEST+, QUEST, Psi and Psi-marginal on a grid | 0.7.0 | tested |
@@ -23,7 +23,7 @@ C11 or C++17, and its top comment is its manual.
 | [timeline](docs/timeline.md) | `ytl_` | Events, tracks and keyframes on the clock | 0.8.1 | tested |
 | [input](docs/input.md) | `yin_` | The input event that every device shares | 0.4.0 | 1 machine |
 | [response](docs/response.md) | `yrsp_` | Trial responses and RT from any input device | 0.7.0 | 1 machine |
-| [box](docs/box.md) | `ybox_` | Response and trigger box protocols, bytes to events | 0.3.0 | no device |
+| [box](docs/box.md) | `ybox_` | Response and trigger box protocols, bytes to events | 0.3.1 | no device |
 | [device](docs/device.md) | `ydev_` | Boxes and boards on the rig clock, with outputs and response rules | 0.5.0 | 1 machine |
 | [rigfile](docs/device.md#how-to-keep-a-rigs-devices-and-latencies-in-its-rig-profile) | `yrig_` | Rig profile: devices per role, loopback results, viewing geometry | 0.5.0 | no device |
 | [net](docs/net.md) | `ynet_` | Lab Streaming Layer markers and streams | 0.3.0 | no device |
@@ -31,7 +31,7 @@ C11 or C++17, and its top comment is its manual.
 | [rdk](docs/rdk.md) | `yrdk_` | Random dot kinematograms, reproducible bit for bit | 0.3.0 | tested |
 | [outline](docs/outline.md) | `yol_` | Paths, font glyphs and SVG into curve sets | 0.4.1 | tested |
 | [screen](docs/screen.md) | `yscr_` | Stimulus window, flip at a time, flip records; a web backend | 0.9.0 | 1 machine |
-| [audio](docs/audio.md) | `yau_` | Sound at a time and its capture on the rig clock; Web Audio in a browser | 0.7.0 | 1 machine |
+| [audio](docs/audio.md) | `yau_` | Sound at a time and its capture on the rig clock; Web Audio in a browser | 0.7.1 | 1 machine |
 | [gfx](docs/gfx.md) | `ygfx_` | GL ES 3.0 stimuli: shapes, gratings, gabors, text, frame capture | 0.17.1 | 1 machine |
 | [video](docs/video.md) | `yvid_` | Movies as stimuli, frame by predicted onset | 0.5.0 | 1 machine |
 

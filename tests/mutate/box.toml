@@ -98,8 +98,8 @@ id = "box-11"
 name = "one past the output"
 test = "box"
 why = "The caller's arrays have cap entries; one more is a write past them."
-find = '''        if (out->n_ev >= out->ev_cap || out->n_pair >= out->pair_cap || out->has_out) break;'''
-replace = '''        if (out->n_ev > out->ev_cap || out->n_pair > out->pair_cap || out->has_out) break;'''
+find = '''        if (out->n_ev >= out->ev_cap || out->n_pair >= out->pair_cap || out->has_out || out->has_text) break;'''
+replace = '''        if (out->n_ev > out->ev_cap || out->n_pair > out->pair_cap || out->has_out || out->has_text) break;'''
 
 [[mutant]]
 id = "box-12"
@@ -175,8 +175,8 @@ id = "box-20"
 name = "decoding goes on after an O report"
 test = "box"
 why = "ybox_out holds one report: a second O line in the same call would overwrite the first."
-find = '''        if (out->n_ev >= out->ev_cap || out->n_pair >= out->pair_cap || out->has_out) break;'''
-replace = '''        if (out->n_ev >= out->ev_cap || out->n_pair >= out->pair_cap) break;'''
+find = '''        if (out->n_ev >= out->ev_cap || out->n_pair >= out->pair_cap || out->has_out || out->has_text) break;'''
+replace = '''        if (out->n_ev >= out->ev_cap || out->n_pair >= out->pair_cap || out->has_text) break;'''
 
 [[mutant]]
 id = "box-21"
@@ -232,3 +232,11 @@ test = "box"
 why = "width_ns goes to the board's whole microseconds, rounded to the nearest: rounding up makes 499 ns a 1 us pulse instead of an error."
 find = '''            int64_t us = (width_ns + 500) / 1000;'''
 replace = '''            int64_t us = width_ns / 1000 + (width_ns % 1000 != 0);'''
+
+[[mutant]]
+id = "box-27"
+name = "decoding goes on after an identity line (v0.3.1)"
+test = "box"
+why = "ybox_out holds one identity line: a second I line in the same call would overwrite the first, as before v0.3.1."
+find = '''        if (out->n_ev >= out->ev_cap || out->n_pair >= out->pair_cap || out->has_out || out->has_text) break;'''
+replace = '''        if (out->n_ev >= out->ev_cap || out->n_pair >= out->pair_cap || out->has_out) break;'''

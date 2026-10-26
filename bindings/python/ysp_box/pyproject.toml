@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ysp-box"
-version = "0.3.0"  # ysp/box.h v0.3.0; tests/test_box.py checks it against __version__
+version = "0.3.1"  # ysp/box.h v0.3.1; tests/test_box.py checks it against __version__
 description = "Response and trigger box protocols: captured bytes to input events and clock pairs, and output bytes"
 readme = "README.md"
 requires-python = ">=3.8"

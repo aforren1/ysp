@@ -1369,12 +1369,12 @@ ysp_pack('close', h);
 | `'entry', h, name` | struct | one entry, the fields of `'list'` |
 | `'has', h, name` | logical | names are case-sensitive |
 | `'read', h, name [, offset, n]` | `uint8` column | the entry, or `n` bytes (`Inf`: to the end) from the 0-based byte `offset`; a range hashes only the 1 MiB chunks it touches |
-| `'verify', h [, name]` | none, or `[ok, msg]` | every entry (whatever the policy), or one (`'use'` and `'open'` only). With no output a mismatch raises `ysp_pack:corrupt`; with outputs it returns `false` and the message |
+| `'verify', h [, name]` | none, or `[ok, msg]` | every entry, or one, whatever the policy. With no output a mismatch raises `ysp_pack:corrupt`; with outputs it returns `false` and the message |
 | `'manifest', h` | char | `ysp/manifest.json`; `jsondecode` reads it |
 | `'definition', h` | char | the EXPERIMENT entry (a definition's canonical bytes), or `''` |
 | `'xxh64', bytes [, seed]` | `uint64` | opens nothing |
 | `'entry_hash', bytes` | `uint64` | the pack's entry hash, the manifest's `"xxh64"`; opens nothing |
-| `'version'` | char, char | this MEX function's version (1.0.0) and ysp/pack.h's |
+| `'version'` | char, char | this MEX function's version (1.1.0; 1.0.0 refused `'verify'` of one entry under `'none'`) and ysp/pack.h's |
 
 Error ids: `ysp_pack:arg`, `:io` (the file cannot be opened or mapped),
 `:format`, `:corrupt`, `:version` (another pack format), `:not_found`,

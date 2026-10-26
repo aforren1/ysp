@@ -2,7 +2,8 @@
  * target, the rest is its input:
  *   0  a pack in memory (8-byte aligned copy), VERIFY_USE: every lookup,
  *      every entry whole, through a cursor in odd pieces, then every view
- *      on every entry whatever its kind
+ *      on every entry whatever its kind; ypak_verify_entry() before the
+ *      data of every other entry, so it hashes first there
  *   1  the same pack opened incrementally: a tail of a length the second
  *      byte picks, then each range asked for, from the input when it is
  *      there; then ypak_check() on every entry
@@ -86,6 +87,7 @@ static void sweep(ypak_pack* pk, int with_data, uint8_t* scratch, size_t cap) {
         ypak_cursor c;
         if (ypak_at(pk, i, &e) != 0) continue;
         g_sink += (unsigned)ypak_find_n(pk, e.name, e.name_len, &e);
+        if (i & 1) g_sink += (unsigned)ypak_verify_entry(pk, &e);
         if (with_data) {
             const void* d = ypak_data(pk, &e);
             if (d) {

@@ -130,10 +130,12 @@ def test_output_only_families_count_every_byte_as_garbage(fam):
     assert r.events == [] and r.pairs == [] and r.garbage == 1024 and d.garbage == 1024
 
 
-@pytest.mark.xfail(strict=True, reason="ybox_out holds one identity line per ybox_decode() call; a second "
-                                       "in the same call replaces the first (reported, header unchanged)")
 def test_two_identity_lines_in_one_call():
+    # ysp/box.h v0.3.1: ybox_decode() returns after each identity line
     assert box.decode("line", b"I first\nI second\n").text == ["first", "second"]
+    r = box.decode("line", b"I a\nS 5\nI b\nO 7 1\nI\n")
+    assert r.text == ["a", "b", ""]
+    assert [p.ticks for p in r.pairs] == [5, 7] and len(r.outputs) == 1
 
 
 # --- streams split anywhere -------------------------------------------------------

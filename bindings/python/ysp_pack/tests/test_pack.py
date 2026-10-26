@@ -177,8 +177,16 @@ def test_corrupt_entry(small):
     with yp.Pack.from_bytes(bad, verify="none") as pk:   # no hashes after open: the damage reads through
         assert pk.read("readme.txt") == b"hallo\n"
         assert "NOT VERIFIED" in pk.describe()
-        with pytest.raises(yp.ArgumentError, match="none"):
-            pk.verify("readme.txt")
+        h0 = pk.hashed_bytes
+        with pytest.raises(yp.CorruptError, match=r"'readme\.txt'.*corrupt"):
+            pk.verify("readme.txt")   # ypak_verify_entry hashes whatever the policy
+        assert pk.hashed_bytes > h0
+        with pytest.raises(yp.CorruptError, match="readme.txt"):
+            pk.verify("readme.txt")   # a failure sets no verified flag
+        pk.verify("conditions.pstb")
+        h1 = pk.hashed_bytes
+        pk.verify("conditions.pstb")  # hashed once per open pack
+        assert pk.hashed_bytes == h1
         with pytest.raises(yp.CorruptError, match="readme.txt"):
             pk.verify()   # verify_all hashes whatever the policy
 

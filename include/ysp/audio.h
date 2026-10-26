@@ -1,4 +1,4 @@
-/* ysp/audio.h - v0.7.0 - public domain single-header audio library
+/* ysp/audio.h - v0.7.1 - public domain single-header audio library
  *
  *   Sound at a time on the ysp/rt.h clock. A buffer is played with
  *   yau_play_at(buf, t); the header plans its first sample on the device
@@ -902,7 +902,10 @@
  *   -ldl -lpthread -lm on Linux. Windows links nothing: miniaudio loads its
  *   DLLs at run time. Define YAU_NO_MINIAUDIO to build the core with
  *   YAU_BACKEND_CUSTOM only. Include ysp/audio.h (or ysp/rt.h) before
- *   any system header in the implementation file. Define YAU_API to
+ *   any system header in the implementation file. On Windows the
+ *   implementation includes <windows.h> (WIN32_LEAN_AND_MEAN) and
+ *   <objbase.h>, so the other ysp headers' COM headers may come before or
+ *   after it. Define YAU_API to
  *   change the linkage of every function.
  *   Hot paths carry ysp/rt.h's instrumentation macros: zones yau.render,
  *   yau.mix, yau.fit, yau.capture, yau.cap.fit; a plot of the queue depth in
@@ -913,6 +916,13 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.7.1 - On Windows the implementation includes <objbase.h> before
+ *          miniaudio.h. Under WIN32_LEAN_AND_MEAN miniaudio defined
+ *          CLSCTX_ALL itself, and a COM header later in the same
+ *          translation unit (ysp/screen.h's D3D11, ysp/video.h's Media
+ *          Foundation) redefined it: MSVC C4005, an error under /WX, so
+ *          audio.h before screen.h (the order ysp/video.h asks for) did
+ *          not build. No API or behavior change.
  *   v0.7.0 - PARAMETERS: yau_param gains a last field, values: for an enum
  *          row the C enum's names and values ("f32=0,s16=1,s24=2"), NULL
  *          for every other row. format.sample and backend list them; the
@@ -1054,6 +1064,11 @@
  *          positions, miniaudio's null device, the device and source
  *          interfaces, synthesis, the records, the parameter table.
  *
+ *   STATUS: v0.7.1, 2026-10-26 (docs/audio.md, "Windows headers in one
+ *   translation unit"): tests/compile/order_audio_screen.c builds the
+ *   audio, screen and video implementations in one unit in both orders,
+ *   C11 and C++17, warnings as errors, with MSVC 19.44 and MinGW-w64 gcc
+ *   16.1; it failed before the fix on MSVC (audio first), not on MinGW.
  *   STATUS: v0.7.0, 2026-10-21 (docs/audio.md, "Enum values in the
  *   parameter table"): every row checked against its desc field and C
  *   enum, every default against a scripted device opened with a zero desc
@@ -1219,8 +1234,8 @@
 
 #define YAU_VERSION_MAJOR 0
 #define YAU_VERSION_MINOR 7
-#define YAU_VERSION_PATCH 0
-#define YAU_VERSION_STRING "0.7.0"
+#define YAU_VERSION_PATCH 1
+#define YAU_VERSION_STRING "0.7.1"
 
 #include "ysp/rt.h"
 
@@ -2325,6 +2340,12 @@ YAU_API const yau_param* yau_params(int* n);
             #define WIN32_LEAN_AND_MEAN
         #endif
         #include <windows.h>
+        /* Under WIN32_LEAN_AND_MEAN, <windows.h> leaves out COM, so
+         * miniaudio defines CLSCTX_ALL itself as 23; a COM header later in
+         * the translation unit (ysp/screen.h's D3D11, ysp/video.h's Media
+         * Foundation) then redefines it, which MSVC's C4005 reports and /WX
+         * fails. With the SDK's definition first, miniaudio keeps it. */
+        #include <objbase.h>
     #endif
     #if !defined(YAU_MINIAUDIO_EXTERNAL) && !defined(MINIAUDIO_IMPLEMENTATION)
         #define MINIAUDIO_IMPLEMENTATION
