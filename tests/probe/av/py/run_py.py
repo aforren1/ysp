@@ -30,6 +30,7 @@ ap.add_argument("--audio")
 ap.add_argument("--angle-dir")
 ap.add_argument("--preload")
 ap.add_argument("--modules", action="store_true")
+ap.add_argument("--noghost", action="store_true", help="DisableProcessWindowsGhosting() before open")
 ap.add_argument("--heap", type=int, default=100000, help="trial dicts made at setup")
 a = ap.parse_args()
 
@@ -45,6 +46,8 @@ if a.modules:
 trials = [{"trial": i, "cond": i % 8, "ori": float(i % 180), "rt": None, "resp": None} for i in range(a.heap)]
 
 av.elevate()
+if a.noghost:
+    av.noghost()
 print(av.open(windowed=a.windowed, angle_dir=a.angle_dir, panic=a.panic))
 log = []          # every record, kept as a user's script would keep it
 try:

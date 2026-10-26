@@ -245,6 +245,12 @@ static PyObject* m_audio_open(PyObject* self, PyObject* args) {
     return PyUnicode_FromString(buf);
 }
 
+static PyObject* m_noghost(PyObject* self, PyObject* noargs) {
+    (void)self; (void)noargs;
+    pv_noghost();
+    Py_RETURN_NONE;
+}
+
 static PyObject* m_now(PyObject* self, PyObject* noargs) {
     (void)self; (void)noargs;
     return PyFloat_FromDouble(S(yrt_now_ns()));
@@ -276,6 +282,7 @@ static PyMethodDef methods[] = {
     { "keys", m_keys, METH_VARARGS, "keys(presses, delay_ms, gap_ms): Shift+Esc from a thread" },
     { "keys_status", m_keys_status, METH_NOARGS, "(sent, skipped)" },
     { "audio_open", m_audio_open, METH_VARARGS, "audio_open(null=True)" },
+    { "noghost", m_noghost, METH_NOARGS, "DisableProcessWindowsGhosting()" },
     { "now", m_now, METH_NOARGS, "the ysp_rt clock, seconds" },
     { NULL, NULL, 0, NULL }
 };

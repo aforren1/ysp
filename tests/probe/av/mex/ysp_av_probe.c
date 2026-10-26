@@ -161,6 +161,8 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         if (!pv || !pv->open) fail("ysp_av_probe:closed", "not open");
         if (pv_audio_open(num(nrhs, prhs, 1, 1) != 0, buf, sizeof buf) < 0) fail("ysp_av_probe:audio", buf);
         plhs[0] = mxCreateString(buf);
+    } else if (!strcmp(cmd, "noghost")) {
+        pv_noghost();
     } else if (!strcmp(cmd, "now")) {
         plhs[0] = mxCreateDoubleScalar(S(yrt_now_ns()));
     } else if (!strcmp(cmd, "elevate")) {

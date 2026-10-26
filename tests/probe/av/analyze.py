@@ -1,6 +1,7 @@
 """Summarizes the probe's per-frame CSVs (docs/av_probe.md).
 
     uv run --no-project python analyze.py CSV...
+    uv run --no-project python analyze.py --after CSV FIRST
 
 One row per file: frames; missed (records with dropped > 0, and the
 vblanks dropped); late targets (the caller's lateness); residual p50 /
@@ -23,15 +24,7 @@ def pct(v, p):
 
 
 def summarize(path):
-    tag, rows = "", []
-    with open(path, newline="") as f:
-        for line in f:
-            if line.startswith("#"):
-                tag = line[1:].strip()
-                continue
-            if line.startswith("index"):
-                continue
-            rows.append([int(x) for x in line.split(",")])
+    tag, rows = load(path)
     rec = [r for r in rows if r[8] != 0 or r[13] & NEVER]
     missed = [r for r in rec if r[10] > 0]
     late = [r for r in rec if r[13] & LATE]
@@ -55,7 +48,32 @@ def summarize(path):
     }
 
 
+def after(path, first, k=6):
+    """The frames around FIRST (the first frame after an idle gap)."""
+    out = []
+    for r in load(path)[1]:
+        if first - 1 <= r[0] < first + k:
+            out.append("%d: wait %.1f ms, res %.2f ms, drop %d, %s, tier %d, flags 0x%x" % (
+                r[0], r[1] / 1e6, r[9] / 1e6, r[10], PATHS.get(r[11], r[11]), r[12], r[13]))
+    return out
+
+
+def load(path):
+    tag, rows = "", []
+    with open(path, newline="") as f:
+        for line in f:
+            if line.startswith("#"):
+                tag = line[1:].strip()
+            elif not line.startswith("index"):
+                rows.append([int(x) for x in line.split(",")])
+    return tag, rows
+
+
 def main():
+    if sys.argv[1] == "--after":
+        for line in after(sys.argv[2], int(sys.argv[3])):
+            print(line)
+        return
     print("| run | frames | records | missed (vblanks) | late target | estimated | residual us p50/p99/max "
           "| work ms p50/p99/max | > 16.7 ms | outside ms p99/max | path | tier |")
     print("|---|---|---|---|---|---|---|---|---|---|---|---|")

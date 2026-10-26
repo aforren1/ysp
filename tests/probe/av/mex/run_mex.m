@@ -8,7 +8,7 @@ function run_mex(bundle, varargin)
 %   idle_mode: 'pause' (pause(s)) or 'java' (java.lang.Thread.sleep).
     o = struct('windowed', 0, 'n', 1, 'seconds', 5, 'csv', '', 'idle', 0, 'idle_mode', 'pause', ...
                'abort', 0, 'panic', 0, 'audio', '', 'angle_dir', '', 'preload', '', 'modules', 0, ...
-               'heap', 100000);
+               'heap', 100000, 'noghost', 0, 'prompt', 0);
     for k = 1:2:numel(varargin)
         o.(varargin{k}) = varargin{k + 1};
     end
@@ -24,6 +24,9 @@ function run_mex(bundle, varargin)
     trials = struct('trial', num2cell(1:o.heap), 'cond', 0, 'ori', 0, 'rt', [], 'resp', []); %#ok<NASGU>
 
     av('elevate');
+    if o.noghost
+        av('noghost');
+    end
     fprintf('%s\n', av('open', o.windowed, o.angle_dir, o.panic));
     % try/catch, not onCleanup: in the Octave 10 smoke test an onCleanup
     % did not run at the end of this function and the window stayed open.
