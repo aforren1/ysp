@@ -23,7 +23,7 @@ ap.add_argument("--seconds", type=float, default=5)
 ap.add_argument("--gc", choices=["on", "off", "freeze"], default="on")
 ap.add_argument("--csv")
 ap.add_argument("--idle", type=float, default=0)
-ap.add_argument("--idle-mode", choices=["sleep", "input"], default="sleep")
+ap.add_argument("--idle-mode", choices=["sleep", "input", "pump"], default="sleep")
 ap.add_argument("--abort", action="store_true")
 ap.add_argument("--panic", action="store_true")
 ap.add_argument("--audio")
@@ -103,6 +103,12 @@ try:
         av.watch_start()
         if a.idle_mode == "sleep":
             time.sleep(a.idle)
+        elif a.idle_mode == "pump":
+            # what a binding's wait() would do: pump every 50 ms
+            end = time.monotonic() + a.idle
+            while time.monotonic() < end:
+                av.pump()
+                time.sleep(0.05)
         else:
             input("idle: press Enter\n")
         print("idle %.1f s (%s), watcher:\n%s" % (a.idle, a.idle_mode, av.watch_stop()))

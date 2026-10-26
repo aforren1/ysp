@@ -154,6 +154,16 @@ static int pv_modules(char* out, size_t cap, int all) {
  * The header does not call it (docs/screen.md); the probe measures it. */
 static void pv_noghost(void) { DisableProcessWindowsGhosting(); }
 
+/* Pumps the window's messages between frames, as a binding's idle wait
+ * would; the events are dropped (the probe reads none). */
+static int pv_pump(void) {
+    SDL_Event ev;
+    int n = 0;
+    if (!pv || !pv->open) return -1;
+    while (yscr_poll(&pv->scr, &ev, NULL)) n++;
+    return n;
+}
+
 static void* pv_preload(const char* path) {
     wchar_t w[MAX_PATH];
     if (!MultiByteToWideChar(CP_UTF8, 0, path, -1, w, MAX_PATH)) return NULL;

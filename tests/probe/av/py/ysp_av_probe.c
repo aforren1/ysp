@@ -251,6 +251,11 @@ static PyObject* m_noghost(PyObject* self, PyObject* noargs) {
     Py_RETURN_NONE;
 }
 
+static PyObject* m_pump(PyObject* self, PyObject* noargs) {
+    (void)self; (void)noargs;
+    return PyLong_FromLong(pv_pump());
+}
+
 static PyObject* m_now(PyObject* self, PyObject* noargs) {
     (void)self; (void)noargs;
     return PyFloat_FromDouble(S(yrt_now_ns()));
@@ -283,6 +288,7 @@ static PyMethodDef methods[] = {
     { "keys_status", m_keys_status, METH_NOARGS, "(sent, skipped)" },
     { "audio_open", m_audio_open, METH_VARARGS, "audio_open(null=True)" },
     { "noghost", m_noghost, METH_NOARGS, "DisableProcessWindowsGhosting()" },
+    { "pump", m_pump, METH_NOARGS, "pump the window's messages between frames" },
     { "now", m_now, METH_NOARGS, "the ysp_rt clock, seconds" },
     { NULL, NULL, 0, NULL }
 };

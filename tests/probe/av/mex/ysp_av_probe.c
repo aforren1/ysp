@@ -163,6 +163,8 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         plhs[0] = mxCreateString(buf);
     } else if (!strcmp(cmd, "noghost")) {
         pv_noghost();
+    } else if (!strcmp(cmd, "pump")) {
+        plhs[0] = mxCreateDoubleScalar(pv_pump());
     } else if (!strcmp(cmd, "now")) {
         plhs[0] = mxCreateDoubleScalar(S(yrt_now_ns()));
     } else if (!strcmp(cmd, "elevate")) {
