@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ysp-device"
+version = "0.5.0"  # must equal ysp/device.h's YDEV_VERSION_STRING; tests/test_device.py checks it
+description = "Response boxes, trigger boxes and boards as events on the ysp_rt clock, and trigger outputs"
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT-0"
+
+# The C extension is declared in setup.py as ysp.device. `ysp` is a PEP 420
+# implicit namespace package: no __init__.py is shipped, so the other ysp-*
+# distributions install next to this one.
+
+[tool.cibuildwheel]
+# abi3: one cp38-abi3 wheel per platform, built on cp39.
+build = "cp39-*"
+skip = "*-musllinux_*"
+# The tests run on simulated boards (ysp.device.Sim): no hardware.
+test-requires = ["pytest"]
+test-command = "pytest {package}/tests -q"
+
+[tool.cibuildwheel.macos]
+archs = ["universal2"]
