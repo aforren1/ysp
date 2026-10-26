@@ -18,3 +18,4 @@ include ysp_device_ext.c
 include ysp_device_bind.h
 include example.py
 recursive-include tests *.py
+include bench.py

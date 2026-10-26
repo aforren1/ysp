@@ -16,6 +16,8 @@ never reused, so a handle kept past its `close` always raises
 | `ysp_aep.c` | [ysp/aep.h](../../include/ysp/aep.h) | [example_aep.m](example_aep.m) |
 | `ysp_trials.c` | [ysp/trials.h](../../include/ysp/trials.h) | [example_trials.m](example_trials.m) |
 | `ysp_color.c` | [ysp/color.h](../../include/ysp/color.h) | [test_mex_color.m](test_mex_color.m); the command reference is in [docs/color.md](../../docs/color.md) |
+| `ysp_device.c` | [ysp/device.h](../../include/ysp/device.h) | [example_device.m](example_device.m) |
+| `ysp_rigfile.c` | [ysp/rigfile.h](../../include/ysp/rigfile.h) | [example_rigfile.m](example_rigfile.m) |
 
 The two transport headers build on the shared [ysp/rt.h](../../include/ysp/rt.h), so
 both MEX functions compile it too. `ysp_quest.c` and `ysp_aep.c` define
@@ -36,6 +38,9 @@ it also runs the async reader on a 2000-line stream.
 the same for `ysp_color` (compiles nothing but ysp/color.h and
 `ysp_mex_util.h`); `tests/compare/color_ptb.m` compares it with
 Psychtoolbox's colorimetric code.
+[test_mex_device.m](test_mex_device.m) checks `ysp_device` and
+`ysp_rigfile` together on simulated boards (no hardware) and prints `PASS`
+with the number of checks.
 
 ## Build
 
@@ -342,6 +347,90 @@ The Python binding has no async reader yet.
 Device naming, USB latency, DTR-driven board resets and what a serial trigger
 is worth in timing terms are documented in the header:
 [ysp/serial.h](../../include/ysp/serial.h).
+
+## ysp_device and ysp_rigfile
+
+`ysp_device` wraps [ysp/device.h](../../include/ysp/device.h): response
+boxes, trigger boxes and boards as events on the ysp_rt clock, and outputs
+for trigger codes. `ysp_rigfile` wraps
+[ysp/rigfile.h](../../include/ysp/rigfile.h): the rig profile, which says
+the device of each role, what the rig's loopbacks measured, and the
+viewing geometry. `ysp_rigfile('desc', p, role)` gives the struct that
+`ysp_device('open', ...)` takes, so the two MEX files stay apart, as the
+headers' Python distributions do. Both compile `ysp/serial.h` and the
+headers under it, and include `ysp_mex_util.h`. `ysp_device.c` also
+includes `../python/ysp_device/ysp_device_bind.h` (the event queue and the
+simulated boards, shared with the Python binding) and, except on macOS,
+compiles `ysp/parallel.h` for the parallel-port transport.
+
+### How-to: read a box and send triggers from the rig profile
+
+```matlab
+p = ysp_rigfile('load');                      % the user's profile.json
+info = ysp_rigfile('info', p);
+for i = 1:numel(info.notes), fprintf('rig profile: %s\n', info.notes{i}); end
+box = ysp_device('open', ysp_rigfile('desc', p, 'resp'));
+trig = ysp_device('open', ysp_rigfile('desc', p, 'trig'));
+if ~ysp_device('wait_running', box, 3), error(ysp_device('error', box)); end
+if ~ysp_device('wait_running', trig, 3), error(ysp_device('error', trig)); end
+src = ysp_rigfile('source', p, ysp_device('info', box));   % tier 1 only when checked
+
+ysp_device('pulse', trig, 12, 0.002);         % 12 for 2 ms, then 0
+onset = ysp_device('now');
+ev = ysp_device('wait', box, 2.0);            % struct array, oldest first
+if ~isempty(ev), fprintf('button %d, rt %.4f s\n', ev(1).control, ev(1).t - onset); end
+ysp_device('close', box); ysp_device('close', trig); ysp_rigfile('close', p);
+```
+
+Without a profile, give the desc yourself:
+`struct('role', 'resp', 'family', 'xid', 'key', 'serial:0403:6001:FT4ABC12:')`.
+`ysp_device('list')` gives each serial port's match key.
+
+### ysp_device commands
+
+| Command | Returns | Notes |
+|---|---|---|
+| `'open', desc` | handle | `desc`: `role`, `family` (a name or a number), `key` (required); `device`, `kind`, `baud`, `pulse`, `latched`, `min_hold`, `probe`, `retry`, `silent`, `max_width`, `no_identify`, `no_elevate`, `queue`, `rule`, `sim`. Times in seconds; `probe` and `silent` take `Inf` for none. An unknown field raises `ysp_device:arg`. `device` 0 takes the role's index from the module's role table |
+| `'wait_running', h, timeout` | logical | Call it before the first output. `ysp_device:failed` when the device ends FAILED |
+| `'poll', h [, max]`, `'wait', h, timeout [, max]` | struct array | Events, oldest first: `t` (s), `t_ns` (int64), `device`, `control`, `code`, `mods`, `kind`, `type`, `flags`, `stamp`, `unc` (s), `x`, `y`, `value`, `aux`, `ticks`. A 1x0 struct with these fields when there is none |
+| `'pending', h`, `'clear', h` | double | The events queued; drop them |
+| `'set', h, code`, `'pulse', h, code, width`, `'mark', h, code [, text]` | none | `ysp_device:state` before RUNNING, `:arg` for a code or width the family cannot give, `:family` without outputs, `:io` |
+| `'last_out', h` | struct | `t_before`, `t_after`, `width`, `code`, `seq`, `flags`, `result` |
+| `'stats', h`, `'state', h`, `'source', h`, `'info', h`, `'error', h` | struct, `[state, name]`, struct, struct, string | `info` has `role`, `family` and the rest of the opened desc, for `ysp_rigfile('source', ...)` |
+| `'close', h` | none | `ysp_device:order` while an open rule writes to the device |
+| `'rule_open', out, choices [, opts]` | handle | `choices`: a struct array with `kind` (default 5, a box), `device`, `control`, `code`. `opts`: `width` (s), `max_fires` (`Inf`: no limit; default 1) |
+| `'rule_arm', r, start [, until]`, `'rule_window', ...`, `'rule_disarm', r` | none | The window `[start, until)` in seconds on `'now'`; `until` defaults to `Inf` |
+| `'rule_info', r`, `'rule_fires', r`, `'rule_close', r` | struct, struct array, none | `choice` is 1-based, `[]` before the first fire |
+| `'sim_open', family [, opts]` | handle | A simulated board for `desc.sim`: `ppm`, `frame`, `tail`, `key`, `identify` |
+| `'sim_edge', s, t, level [, ch]`, `'sim_press', s, t, duration [, ch]`, `'sim_unplug', s, start, stop` | none | The board's input and faults, at times on `'now'` |
+| `'sim_writes', s`, `'sim_lines', s`, `'sim_key', s`, `'sim_opens', s`, `'sim_close', s` | | What the host wrote; the board's key |
+| `'now'`, `'list'`, `'key_match', p, k`, `'family', f`, `'roles'`, `'constants'`, `'version'` | | `constants` has the families, the states, `ERR_*`, `OUT_*`, `KIND_*`, `PRESS`, `RELEASE`, the flags and `TIER_*` |
+
+Close in this order: the input that a rule watches, the rule, then the
+output. `clear ysp_device` and interpreter exit close the rest in that
+order. The reader threads never call into MATLAB or Octave. The events
+wait in a C ring of `queue` events (default 1024); a full ring drops new
+events and counts them (`stats.queue_dropped`). A MEX call owns the
+interpreter, so Ctrl+C cannot interrupt a `'wait'`: give a finite timeout
+and loop.
+
+### ysp_rigfile commands
+
+| Command | Returns | Notes |
+|---|---|---|
+| `'load' [, name]`, `'load_file', path`, `'parse', text [, dir]`, `'new' [, rig]` | handle | `ysp_rigfile:missing` (no file), `:folder` (no rig folder, or one that another user can write), `:json`, `:format` (the message names the field) |
+| `'info', p` | struct | `rig`, `written`, `dir`, `notes` (cell), `hash`, `ppd`, `view`, `display`, `roles` (a struct array; times in seconds, `[]` for none) |
+| `'role', p, name`, `'desc', p, role` | struct | `desc` is the struct for `ysp_device('open', ...)`. It raises `:format` for an unbound or `lsl` role |
+| `'source', p, role_or_info` | struct | The tier rule by role name, or for `ysp_device('info', h)` |
+| `'text', p`, `'hash', p` | string | The canonical JSON and its SHA-256 |
+| `'bind', p, role, family, key`, `'remove', p, role`, `'set_view', p, dist_mm, width_mm, width_px`, `'clear_view', p` | none, logical | Changes in memory |
+| `'save', p [, name]`, `'save_file', p, path`, `'close', p` | none | |
+| `'dir'`, `'path' [, name]`, `'check_name', c`, `'version'` | string | |
+
+Under Octave, `clear` runs the exit hook of a MEX file but keeps the
+library loaded. Since 2026-10-25 `ysp_mex_util.h` hooks again after a
+clear. Before, the handles opened after a clear stayed open, and their
+threads crashed Octave at exit.
 
 ## Adaptive methods: common rules
 
