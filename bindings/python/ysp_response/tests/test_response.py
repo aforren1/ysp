@@ -52,7 +52,6 @@ def test_constants_match_the_headers():
 
 
 def test_event_layout_and_units():
-    assert yr.Event._fields if hasattr(yr.Event, "_fields") else True
     e = yr.event(12.3456789014, control="f", unc=0.0004, stamp=yr.TIER_1)
     assert e.t_ns == 12345678901 and e.t == e.t_ns / 1e9
     assert e.kind == yr.KIND_KEYBOARD and e.type == yr.PRESS and e.control == yr.scancode("f") == 9
