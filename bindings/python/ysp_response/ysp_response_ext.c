@@ -202,6 +202,10 @@ static unsigned rsp_class_fields(PyObject* o) {
     for (k = 0; k < n; k++) {
         PyObject* d = PyObject_GetAttr(PyTuple_GetItem(mro, k), dict_attr);   /* a mappingproxy */
         if (!d) { PyErr_Clear(); continue; }
+        /* A __getattr__ can give any field the dicts do not name, so
+         * every field goes through getattr for such a class. object
+         * itself has no __getattr__ (only __getattribute__). */
+        if (PyMapping_HasKeyString(d, "__getattr__") > 0) mask = 0xFFFFu;
         for (i = 0; i < EV_NFIELDS; i++) {
             int has = PyMapping_HasKey(d, ev_attr[i]);
             if (has > 0) mask |= 1u << i;

@@ -627,7 +627,7 @@ threads crashed Octave at exit.
 | `'abandon', h` | none | an abnormal end: closes the files, leaves `session.json` `"closed": false`, frees the handle |
 | `'columns', 'frames' \| 'events' \| 'clock'` | cell of names | the fixed tables' columns |
 | `'seed_text', seed` | char | a `uint64` seed as `x` and 16 hex digits |
-| `'version'` | char | ysp/dataset.h's version |
+| `'version'` | char | the MEX function's version (1.0.0); the second output is ysp/dataset.h's |
 
 Error ids: `ysp_dataset:arg`, `:exists` (the folder is there), `:io` (a
 file could not be made, written or renamed), `:closed`, `:order` (`'zip'`
@@ -1293,7 +1293,7 @@ q = ysp_box('probe', 'line', 7);  i = ysp_box('identify', 'xid');
 f = ysp_box('family', 'mmbts');                   % name, caps, code_max, fixed_pulse, baud, tick, slow_write
 ```
 
-`ev` is an N x 1 struct array. Its fields are those of `yin_event`, in the
+`ev` is a 1 x N struct array (as in `ysp_device` and `ysp_response`). Its fields are those of `yin_event`, in the
 order every ysp binding uses: `t` (seconds), `t_ns` (int64), `device`,
 `control`, `code`, `mods`, `kind`, `type`, `flags`, `stamp`, `unc`
 (seconds), `x`, `y`, `value`, `aux`, `ticks`. Each `t` is the read time
@@ -1455,7 +1455,7 @@ them in place.
 | `ev = ysp_response('event', s)` | A full event struct from some of its fields (type PRESS by default) |
 | `ysp_response('scancode', name)`, `ysp_response('key_name', sc)` | Key names |
 | `K = ysp_response('constants')` | `KIND_*`, `PRESS`, `TIER_*`, `E_*`, `R_*` and the others |
-| `[v, vin] = ysp_response('version')` | ysp/response.h's and ysp/input.h's versions |
+| `[v, vh] = ysp_response('version')` | the MEX function's version (1.0.0) and ysp/response.h's |
 
 The result's `choice` and `entry`, and an entry's `choice`, are 1-based,
 0 for none. A missing time is `NaN` in seconds and `intmin('int64')`

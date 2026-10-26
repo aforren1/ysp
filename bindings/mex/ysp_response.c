@@ -28,6 +28,10 @@
 #define PM_MOD "ysp_response"
 #include "ysp_mex_util.h"
 
+/* The MEX function's own version (docs/bindings.md, Versions); the
+ * header's is the second output of 'version'. */
+#define MEX_BINDING_VERSION "1.0.0"
+
 #define YSP_RESPONSE_IMPLEMENTATION
 #include "ysp/response.h"
 
@@ -579,8 +583,8 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
 
     /* ---- commands without a handle ---- */
     if (strcmp(cmd, "version") == 0) {
-        plhs[0] = mxCreateString(yrsp_version());
-        if (nlhs > 1) plhs[1] = mxCreateString(YIN_VERSION_STRING);
+        plhs[0] = mxCreateString(MEX_BINDING_VERSION);
+        if (nlhs > 1) plhs[1] = mxCreateString(yrsp_version());
         return;
     }
     if (strcmp(cmd, "constants") == 0) { plhs[0] = rsp_constants(); return; }

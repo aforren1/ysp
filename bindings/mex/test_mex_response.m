@@ -11,7 +11,7 @@ function test_mex_response()
     here = fileparts(mfilename('fullpath'));
     addpath(here);
     [v, vin] = ysp_response('version');
-    fprintf('ysp_response %s (ysp/input.h %s)\n', v, vin);
+    fprintf('ysp_response %s (ysp/response.h %s)\n', v, vin);
     K = ysp_response('constants');
     check(K.ENDED == 2 && K.KIND_BOX == 5 && K.R_SENT_MISMATCH == 1024 && K.UNC_MAX_US == 65535, 'constants');
     check(ysp_response('scancode', 'F') == 9 && isempty(ysp_response('scancode', 'nokey')), 'scancode');

@@ -519,13 +519,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        package: [ysp_parallel, ysp_serial, ysp_stair, ysp_quest, ysp_aep, ysp_trials, ysp_color, ysp_rdk, ysp_box]
-        package: [ysp_parallel, ysp_serial, ysp_stair, ysp_quest, ysp_aep, ysp_trials, ysp_color, ysp_rdk, ysp_pack]
-        package: [ysp_parallel, ysp_serial, ysp_stair, ysp_quest, ysp_aep, ysp_trials, ysp_color, ysp_rdk, ysp_rt]
-        package: [ysp_parallel, ysp_serial, ysp_stair, ysp_quest, ysp_aep, ysp_trials, ysp_color, ysp_rdk, ysp_device, ysp_rigfile]
-        package: [ysp_parallel, ysp_serial, ysp_stair, ysp_quest, ysp_aep, ysp_trials, ysp_color, ysp_rdk, ysp_response]
-        package: [ysp_parallel, ysp_serial, ysp_stair, ysp_quest, ysp_aep, ysp_trials, ysp_color, ysp_rdk, ysp_timeline]
-        package: [ysp_parallel, ysp_serial, ysp_stair, ysp_quest, ysp_aep, ysp_trials, ysp_color, ysp_rdk, ysp_dataset]
+        package: [ysp_parallel, ysp_serial, ysp_stair, ysp_quest, ysp_aep, ysp_trials, ysp_color, ysp_rdk,
+                  ysp_box, ysp_pack, ysp_rt, ysp_device, ysp_rigfile, ysp_response, ysp_timeline, ysp_dataset]
         exclude:
           - os: macos-latest      # ysp/parallel.h #errors on macOS
             package: ysp_parallel
@@ -534,47 +529,14 @@ jobs:
       - uses: actions/checkout@v7
 
       # cibuildwheel builds from the package directory alone, so every header
-      # the extension compiles must sit in include/ysp/ next to setup.py: the package's header
-      # and ysp/rt.h, which the transport headers include and the adaptive
-      # headers' async layers include, and ysp/table.h, which ysp/trials.h
-      # includes, and ysp/input.h, which ysp/box.h includes. A package gets
-      # the ones it never reads; staging them unconditionally keeps this
-      # includes, and ysp/input.h, which ysp/response.h includes. A package
-      # gets the ones it never reads; staging them unconditionally keeps this
-      # step one line.
+      # the extension compiles must sit in include/ysp/ next to setup.py. The
+      # packages now include from up to seven headers (ysp/device.h: input,
+      # box, serial, parallel, rt), so every header is staged: one rule that
+      # cannot fall behind an #include, and one copy of each file (cp refuses
+      # a source named twice, which ysp_rt hit with rt.h).
       - name: Stage headers into the package (isolated build needs them locally)
         shell: bash
-        run: p=${{ matrix.package }} && d=bindings/python/$p/include/ysp && mkdir -p $d && cp include/ysp/${p#ysp_}.h include/ysp/rt.h include/ysp/table.h include/ysp/input.h $d/
-      # includes, and ysp/json.h, which ysp/pack.h includes. A package gets
-      # the ones it never reads; staging them unconditionally keeps this step
-      # one line.
-      - name: Stage headers into the package (isolated build needs them locally)
-        shell: bash
-        run: p=${{ matrix.package }} && d=bindings/python/$p/include/ysp && mkdir -p $d && cp include/ysp/${p#ysp_}.h include/ysp/rt.h include/ysp/table.h include/ysp/json.h $d/
-      # includes. A package gets the ones it never reads; staging them
-      # unconditionally keeps this step one line. Two cp calls, because for
-      # ysp_rt the package's header is rt.h, and GNU cp refuses to copy one
-      # file twice to the same place in one call.
-      - name: Stage headers into the package (isolated build needs them locally)
-        shell: bash
-        run: p=${{ matrix.package }} && d=bindings/python/$p/include/ysp && mkdir -p $d && cp include/ysp/${p#ysp_}.h $d/ && cp include/ysp/rt.h include/ysp/table.h $d/
-
-      # ysp/device.h includes ysp/input.h, ysp/box.h and ysp/serial.h, and the
-      # extension compiles ysp/parallel.h for the parallel-port transport;
-      # ysp/rigfile.h adds ysp/device.h and ysp/json.h.
-      - name: Stage the device headers (ysp_device, ysp_rigfile)
-        if: matrix.package == 'ysp_device' || matrix.package == 'ysp_rigfile'
-        shell: bash
-        run: d=bindings/python/${{ matrix.package }}/include/ysp && cp include/ysp/device.h include/ysp/json.h include/ysp/input.h include/ysp/box.h include/ysp/serial.h include/ysp/parallel.h $d/
-      # includes. A package gets the ones it never reads; staging them
-      # unconditionally keeps this step short. ysp/dataset.h also includes
-      # ysp/trials.h and ysp/json.h (named apart: cp refuses a source twice).
-      - name: Stage headers into the package (isolated build needs them locally)
-        shell: bash
-        run: |
-          p=${{ matrix.package }} && d=bindings/python/$p/include/ysp && mkdir -p $d
-          cp include/ysp/${p#ysp_}.h include/ysp/rt.h include/ysp/table.h $d/
-          if [ $p = ysp_dataset ]; then cp include/ysp/trials.h include/ysp/json.h $d/; fi
+        run: d=bindings/python/${{ matrix.package }}/include/ysp && mkdir -p $d && cp include/ysp/*.h $d/
 
       - name: Build & test wheels
         uses: pypa/cibuildwheel@v4.1.0

@@ -31,11 +31,10 @@ function build(name)
     % The adaptive-method sources (ysp_stair.c, ysp_quest.c, ysp_aep.c,
     % ysp_trials.c) are pure computation and build everywhere; ysp_quest.c
     % and ysp_aep.c define YQST_ASYNC / YAEP_ASYNC themselves, so they
-    % compile ysp/rt.h and need only the thread library below.
-    % ysp_pack.c compiles ysp/pack.h and the ysp/json.h it requires; it maps
-    % files through the OS (Windows, POSIX) and needs no library.
     % compile ysp/rt.h and need only the thread library below. ysp_rt.c
     % (ysp/rt.h itself) is the same: no gate, the thread library only.
+    % ysp_pack.c compiles ysp/pack.h and the ysp/json.h it requires; it maps
+    % files through the OS (Windows, POSIX) and needs no library.
     % ysp_response.c (ysp/response.h with ysp/input.h) is pure computation
     % too and needs no library.
     unsupported = {'ysp_parallel.c', ismac};

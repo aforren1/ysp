@@ -134,6 +134,25 @@ def test_feed_reads_properties_and_slots():
     assert r.response == "f" and r.rt_ns == 200000000
 
 
+def test_feed_reads_fields_a_getattr_gives():
+    class Wrapped:                                # a wrapper that forwards to a dict
+        def __init__(self, **kw):
+            self._kw = kw
+
+        def __getattr__(self, name):
+            try:
+                return self._kw[name]
+            except KeyError:
+                raise AttributeError(name)
+
+    c = yr.Collector(["f", "j"])
+    c.arm(1.0)
+    c.set_onset(1.0)
+    assert c.feed(Wrapped(t=1.25, type=yr.PRESS, control=13)) == yr.ENDED
+    r = c.finish()
+    assert r.response == "j" and r.rt_ns == 250000000
+
+
 def test_feed_allocates_nothing_per_event():
     c = yr.Collector(["f", "j"], kinds=yr.KINDS_ALL)
     ev = yr.event(1.0, control="space")

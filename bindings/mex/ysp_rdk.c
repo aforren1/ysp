@@ -25,6 +25,10 @@
 #define PM_MOD "ysp_rdk"
 #include "ysp_mex_util.h"
 
+/* The MEX function's own version (docs/bindings.md, Versions); the
+ * header's is the second output of 'version'. */
+#define MEX_BINDING_VERSION "1.0.0"
+
 #define YSP_RDK_IMPLEMENTATION
 #include "ysp/rdk.h"
 
@@ -351,7 +355,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     if (nrhs < 1 || !mxIsChar(prhs[0])) pm_err("usage", "usage: ysp_rdk(command, ...); see README.md");
     if (mxGetString(prhs[0], cmd, sizeof cmd)) pm_err("usage", "unknown command");
 
-    if (strcmp(cmd, "version") == 0) { plhs[0] = mxCreateString(yrdk_version()); return; }
+    if (strcmp(cmd, "version") == 0) { plhs[0] = mxCreateString(MEX_BINDING_VERSION); if (nlhs > 1) plhs[1] = mxCreateString(yrdk_version()); return; }
     if (strcmp(cmd, "constants") == 0) { plhs[0] = rdk_constants(); return; }
     if (strcmp(cmd, "open") == 0) { rdk_open(nlhs, plhs, nrhs, prhs); return; }
     if (strcmp(cmd, "philox") == 0) {

@@ -13,7 +13,7 @@
  *     c = ysp_box('constants');                       % KIND_BOX, PRESS, ...
  *     ysp_box('close', h);
  *
- * ev is an N x 1 struct array with the fields of ysp/input.h's event in
+ * ev is an 1 x N struct array with the fields of ysp/input.h's event in
  * the order every ysp binding uses: t (seconds), t_ns (int64), device,
  * control, code, mods, kind, type, flags, stamp, unc (seconds), x, y,
  * value, aux, ticks. pairs is a struct of columns: ticks (uint64), probe.
@@ -22,6 +22,10 @@
  */
 #define PM_MOD "ysp_box"
 #include "ysp_mex_util.h"
+
+/* The MEX function's own version (docs/bindings.md, Versions); the
+ * header's is the second output of 'version'. */
+#define MEX_BINDING_VERSION "1.0.0"
 
 #define YSP_BOX_IMPLEMENTATION
 #include "ysp/box.h"
@@ -109,7 +113,7 @@ static mxArray* box_int64(int64_t v) {
 }
 
 static mxArray* box_events_out(const yin_event* ev, size_t n) {
-    mxArray* s = mxCreateStructMatrix(n, 1, 16, box_ev_fields);
+    mxArray* s = mxCreateStructMatrix(1, n, 16, box_ev_fields);
     size_t i;
     for (i = 0; i < n; i++) {
         const yin_event* e = &ev[i];
@@ -264,7 +268,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     if (nrhs < 1 || !mxIsChar(prhs[0])) pm_err("usage", "usage: ysp_box(command, ...); see README.md");
     if (mxGetString(prhs[0], cmd, sizeof cmd)) pm_err("usage", "unknown command");
 
-    if (strcmp(cmd, "version") == 0) { plhs[0] = mxCreateString(ybox_version()); return; }
+    if (strcmp(cmd, "version") == 0) { plhs[0] = mxCreateString(MEX_BINDING_VERSION); if (nlhs > 1) plhs[1] = mxCreateString(ybox_version()); return; }
     if (strcmp(cmd, "constants") == 0) { plhs[0] = box_constants(); return; }
     if (strcmp(cmd, "family") == 0) {
         pm_nargs(nrhs, 2, "info = ysp_box('family', family)");

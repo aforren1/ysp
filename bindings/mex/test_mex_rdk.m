@@ -13,7 +13,8 @@ function test_mex_rdk()
     YSP_RDK_CHECKS = 0;
     here = fileparts(mfilename('fullpath'));
     addpath(here);
-    fprintf('ysp_rdk %s\n', ysp_rdk('version'));
+    [v, vh] = ysp_rdk('version');
+    fprintf('ysp_rdk %s (ysp/rdk.h %s)\n', v, vh);
 
     % the exact pieces: Random123's known answers for philox4x32 10
     check(isequal(ysp_rdk('philox', 0, [0 0 0 0]), uint32([hex2dec('6627E8D5') hex2dec('E169C58D') ...

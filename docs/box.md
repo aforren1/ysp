@@ -186,7 +186,7 @@ The analysis side decodes a raw capture without the device layer
   `flags`, `stamp`, `unc` (s), `x`, `y`, `value`, `aux`, `ticks`.
 - **MATLAB and Octave**: the MEX function `ysp_box`
   (`bindings/mex/ysp_box.c`). `'decode'` on a handle or on a family name
-  returns the events as an N x 1 struct array with the same field names,
+  returns the events as a 1 x N struct array with the same field names,
   the pairs as `uint64` and double columns, and the identity lines, the
   output reports and the garbage count.
 

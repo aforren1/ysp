@@ -9,7 +9,8 @@ function test_mex_dataset()
     YSP_DS_CHECKS = 0;
     here = fileparts(mfilename('fullpath'));
     addpath(here);
-    fprintf('ysp_dataset %s\n', ysp_dataset('version'));
+    [v, vh] = ysp_dataset('version');
+    fprintf('ysp_dataset %s (ysp/dataset.h %s)\n', v, vh);
     root = tempname();
     mkdir(root);
     cleanup = onCleanup(@() rmdir(root, 's')); %#ok<NASGU>

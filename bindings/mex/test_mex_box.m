@@ -14,7 +14,8 @@ function test_mex_box()
     YSP_BOX_CHECKS = 0;
     here = fileparts(mfilename('fullpath'));
     addpath(here);
-    fprintf('ysp_box %s\n', ysp_box('version'));
+    [v, vh] = ysp_box('version');
+    fprintf('ysp_box %s (ysp/box.h %s)\n', v, vh);
     rand('state', 7); %#ok<RAND> the same call in MATLAB and Octave
 
     c = ysp_box('constants');
@@ -27,7 +28,7 @@ function test_mex_box()
     % ---- frames to fields -------------------------------------------------------
     h = ysp_box('open', 'xid', c.KIND_BOX, 7);
     [ev, pr, info] = ysp_box('decode', h, [xid_key(1, 3, 1, 1234), xid_key(0, 8, 0, 4294967295)], 2.5);
-    check(isequal(fieldnames(ev)', fields) && isequal(size(ev), [2 1]), 'event fields in the shared order');
+    check(isequal(fieldnames(ev)', fields) && isequal(size(ev), [1 2]), 'event fields in the shared order');
     e = ev(1);
     check(e.t == 2.5 && isa(e.t_ns, 'int64') && e.t_ns == 2500000000 && e.device == 7 && e.control == 3 && ...
           e.code == 1 && e.kind == c.KIND_BOX && e.type == c.PRESS && e.flags == c.DEVTICKS && e.value == 1 && ...
@@ -232,7 +233,7 @@ function [ev, pr, n] = chunked(fam, data, sizes)
     for s = sizes
         if i >= numel(data), break; end
         [e, p, info] = ysp_box('decode', h, data(i + 1:min(i + s, numel(data))), 1);
-        if isempty(ev), ev = e; else, ev = [ev; e]; end %#ok<AGROW>
+        if isempty(ev), ev = e; else, ev = [ev, e]; end %#ok<AGROW>
         pr.ticks = [pr.ticks; p.ticks];
         pr.probe = [pr.probe; p.probe];
         n.garbage = n.garbage + info.garbage;

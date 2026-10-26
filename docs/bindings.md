@@ -5,9 +5,9 @@ This page is reference: the language bindings of the headers.
 - **Python**: one distribution per library under
   [bindings/python/](../bindings/python/), each a dependency-free CPython
   extension on the Limited API (one abi3 wheel per platform for CPython
-  3.8+). Each one compiles its header into the extension, plus `ysp/rt.h`
-  where the header uses it. They share the `ysp` namespace (PEP 420, no `__init__.py`), so
-  `pip install ysp-parallel ysp-serial` gives `import ysp.parallel` and
+  3.8+). Each one compiles its header into the extension, with the headers
+  it includes. They share the `ysp` namespace (PEP 420, no `__init__.py`),
+  so `pip install ysp-parallel ysp-serial` gives `import ysp.parallel` and
   `import ysp.serial`, and either installs alone. The adaptive headers have
   the same: `ysp-stair`, `ysp-quest`, `ysp-aep` and `ysp-trials` give
   `ysp.stair`, `ysp.quest`, `ysp.aep` and `ysp.trials`, with an `Async`
@@ -16,101 +16,115 @@ This page is reference: the language bindings of the headers.
   `ysp-color` gives `ysp.color` (calibration, conversions, gamut, a
   participant's luminance). `ysp-rdk` gives `ysp.rdk` (the dots of a trial
   again, bit for bit, from its seed and log); it needs NumPy at run time.
-  `ysp-rt` gives `ysp.rt`: the clock of every ysp stamp, deadline waits that
-  release the GIL, the clock correlation and the device clock fit, so a
-  PsychoPy experiment can put its own stamps on the ysp clock and analysis
-  code can map a device's clock to it. `tests/compare/`
-  runs them beside PsychoPy, questplus and AEPsych on one response stream.
-  CI builds the wheels with cibuildwheel on Linux, Windows and macOS, except
+  The bindings of 2026-10-25 are `ysp-rt`, `ysp-box`, `ysp-device`,
+  `ysp-rigfile`, `ysp-response`, `ysp-timeline`, `ysp-dataset` and
+  `ysp-pack` (sections below). `tests/compare/` runs the adaptive bindings
+  beside PsychoPy, questplus and AEPsych on one response stream. CI builds
+  the wheels with cibuildwheel on Linux, Windows and macOS, except
   `ysp-parallel` on macOS, which its header does not support.
-  `ysp-dataset` gives `ysp.dataset`: a PsychoPy (or any Python) session
-  written as a ysp data set (`session.json`, the trial, frame, event,
-  clock and stream tables, the zip), so the player's analysis reads it. It
-  compiles ysp/dataset.h with ysp/trials.h, ysp/table.h and ysp/json.h, so
-  CI stages those two more headers for it. A row is a `dict` or keywords;
-  `None` and `NaN` are an empty cell. An exception through `with`,
-  `abandon()` and the teardown of a data set never closed leave
-  `"closed": false`.
-- **MATLAB / Octave**: [bindings/mex/](../bindings/mex/), one MEX function per
-  library (`ysp_parallel`, `ysp_serial`, `ysp_stair`, `ysp_quest`,
-  `ysp_aep`, `ysp_trials`, `ysp_color`, `ysp_rt`) with ppdev-mex-style command dispatch, built and
-  `ysp_aep`, `ysp_trials`, `ysp_color`, `ysp_response`) with ppdev-mex-style command dispatch, built and
-  `ysp_aep`, `ysp_trials`, `ysp_color`, `ysp_timeline`) with ppdev-mex-style command dispatch, built and
-  tested in MATLAB R2023a and Octave 10. `tests/compare/` runs `ysp_quest`
-  beside mQUESTPlus and Palamedes' PAL_AMPM, and `ysp_stair` beside
-  PAL_AMUD, on one response stream; the MEX README has the results.
+- **MATLAB / Octave**: [bindings/mex/](../bindings/mex/), one MEX function
+  per library (`ysp_parallel`, `ysp_serial`, `ysp_stair`, `ysp_quest`,
+  `ysp_aep`, `ysp_trials`, `ysp_color`, `ysp_rdk`, `ysp_rt`, `ysp_box`,
+  `ysp_device`, `ysp_rigfile`, `ysp_response`, `ysp_timeline`,
+  `ysp_dataset`, `ysp_pack`) with ppdev-mex-style command dispatch, built
+  and tested in MATLAB R2023a and Octave 10. `tests/compare/` runs
+  `ysp_quest` beside mQUESTPlus and Palamedes' PAL_AMPM, and `ysp_stair`
+  beside PAL_AMUD, on one response stream; the MEX README has the results.
   `tests/compare/color_ptb.m` runs `ysp_color` beside Psychtoolbox's
   colorimetric code (docs/color.md). `ysp_serial` has an async reader
   (`async_start`, `async_read`, `async_stop`): a C thread that stamps each
-  line when it arrives. `tests/compare/serial_bench/` runs it beside MATLAB's
-  `serialport` and Psychtoolbox's `IOPort` (docs/serial.md). The Python
-  `ysp.serial` has the same reader since 0.5.0.2 (`async_start`,
+  line when it arrives. `tests/compare/serial_bench/` runs it beside
+  MATLAB's `serialport` and Psychtoolbox's `IOPort` (docs/serial.md). The
+  Python `ysp.serial` has the same reader since 0.5.0.2 (`async_start`,
   `async_read`, `async_wait`, `async_stop`, `async_stats`): a C thread that
   never takes the GIL.
-- **Packs**: `ysp-pack` gives `ysp.pack`, and `bindings/mex/ysp_pack.c`
-  the MEX `ysp_pack`: they open a pack (a file, mapped, or bytes in
-  memory), list its entries, read an entry or a range of it as a copy
-  (bytes, or a `uint8` column), read the manifest and the experiment
-  definition, and verify the whole pack or one entry. A failure raises the
-  header's message (`ysp.pack.CorruptError`, `ysp_pack:corrupt`, ...).
-  The Python calls that hash or copy entry data release the GIL.
-  [docs/pack.md](pack.md#17-bindings-2026-10-25) has what is not bound and
-  why.
 
-`ysp-box` gives `ysp.box`, and the MEX function `ysp_box` the same in
-MATLAB and Octave: a response box's or a line board's captured bytes to
-events and clock pairs, without the device layer, and the bytes of queries
-and trigger codes. Both compile `ysp/box.h` and the `ysp/input.h` it
-includes. An event is `Event` in Python (a structseq) and an N x 1 struct
-array in MATLAB, with the fields of `yin_event` in one order:
-`t`, `t_ns`, `device`, `control`, `code`, `mods`, `kind`, `type`, `flags`,
-`stamp`, `unc`, `x`, `y`, `value`, `aux`, `ticks` (docs/box.md,
-"Bindings"). The MEX function `ysp_rdk` has the surface of `ysp.rdk` and
-replays a C-logged trial bit for bit (docs/rdk.md, "Bindings").
+Not bound, by decision: `ysp/table.h` and `ysp/json.h` (Python and MATLAB
+read CSV and JSON; `ysp.trials` already takes a table), `ysp/net.h`
+(pylsl and liblsl-Matlab exist), `ysp/outline.h` (an offline asset tool),
+and `ysp/screen.h`, `ysp/gfx.h`, `ysp/audio.h` and `ysp/video.h` (the
+binding form of the rendering stack is open; docs/rig_spec.md).
 
-The device headers have two distributions: `ysp-device` gives `ysp.device`
-([ysp/device.h](../include/ysp/device.h): boxes, trigger interfaces and
-boards, their events on the ysp_rt clock, outputs and response rules) and
-`ysp-rigfile` gives `ysp.rigfile` ([ysp/rigfile.h](../include/ysp/rigfile.h):
-the rig profile). `Profile.desc(role)` gives the keyword arguments of
-`ysp.device.Device`, so a role opens with `Device(**profile.desc(role))`
-and neither extension links the other. The reader threads never take the
-GIL: events wait in a C ring that `Device.poll()` and `Device.wait()`
-empty. Both packages test on simulated boards (`ysp.device.Sim`, the board
-of `tests/adapt/device_test.c` on the real clock), so CI needs no hardware.
-The MEX functions `ysp_device` and `ysp_rigfile` have the same split
-(`ysp_device('open', ysp_rigfile('desc', p, role))`). The event is the same
-in every binding of a header that gives ysp/input.h events: a structseq
-`Event` in Python (`t` and `unc` in seconds, `t_ns` exact) and a struct
-array with the same field names in MATLAB and Octave.
+### The input event
+
+`ysp.box`, `ysp.device` and `ysp.response` and their MEX functions give
+`ysp/input.h`'s `yin_event` in one layout: in Python a structseq `Event`,
+in MATLAB and Octave a 1 x N struct array, with the fields `t`, `t_ns`,
+`device`, `control`, `code`, `mods`, `kind`, `type`, `flags`, `stamp`,
+`unc`, `x`, `y`, `value`, `aux`, `ticks`. `t` and `unc` are seconds; `t_ns`
+is the exact ns (an `int64` in MATLAB). `ysp.response` takes any 16-tuple
+in that order or any object with those attributes, so the other packages'
+events need no import. The constants have the C name without `YIN_`
+(`KIND_BOX`, `PRESS`, `REPEAT`, `TIER_1`).
+
+### Clock: ysp.rt, ysp_rt
+
+The clock of every ysp stamp, deadline waits that release the GIL, the
+clock correlation and the device clock fit, so a PsychoPy or Psychtoolbox
+experiment can put its own stamps on the ysp clock and analysis code can
+map a device's clock to it. [docs/rt.md](rt.md#bindings) has what is not
+bound (worker, pump, ring, the scheduling ladder) and why.
+
+### Boxes: ysp.box, ysp_box; ysp_rdk
+
+A response box's or a line board's captured bytes to events and clock
+pairs, without the device layer, and the bytes of queries and trigger
+codes (docs/box.md, "Bindings"). The MEX function `ysp_rdk` has the surface
+of `ysp.rdk` and replays a C-logged trial bit for bit (docs/rdk.md,
+"Bindings").
+
+### Devices: ysp.device, ysp.rigfile and their MEX
+
+Two distributions: `ysp-device` ([ysp/device.h](../include/ysp/device.h):
+boxes, trigger interfaces and boards, their events on the ysp_rt clock,
+outputs and response rules) and `ysp-rigfile`
+([ysp/rigfile.h](../include/ysp/rigfile.h): the rig profile).
+`Profile.desc(role)` gives the keyword arguments of `ysp.device.Device`, so
+a role opens with `Device(**profile.desc(role))` and neither extension
+links the other; in MEX, `ysp_device('open', ysp_rigfile('desc', p,
+role))`. The reader threads never take the GIL: events wait in a C ring
+that `Device.poll()` and `Device.wait()` empty. Both test on simulated
+boards (`ysp.device.Sim`), so CI needs no hardware.
 [docs/device.md](device.md#bindings) lists what is bound and what is not.
-- **Response collection**: `ysp-response` gives `ysp.response`, and the MEX
-  `ysp_response` the same commands: a trial's response rules
-  (`ysp/response.h`), fed with input events from a PsychoPy or
-  Psychtoolbox key loop, from `ysp.box` or `ysp.device`, or from a log,
-  giving the response, the RT from the stimulus onset and the timing
-  quality of both. The input event (`ysp/input.h`'s `yin_event`) is one
-  layout in the three bindings: in Python a structseq `Event` (`t`, `t_ns`,
-  `device`, `control`, `code`, `mods`, `kind`, `type`, `flags`, `stamp`,
-  `unc`, `x`, `y`, `value`, `aux`, `ticks`), and `ysp.response` takes any
-  16-tuple in that order or any object with those attributes, so the other
-  packages' events need no import; in MATLAB and Octave a struct array
-  with the same field names. Feeding an event allocates nothing.
-  [docs/response.md](response.md#bindings) has what is bound and what is
-  not.
-- **Timeline**: `ysp-timeline` gives `ysp.timeline`, and the MEX
-  `ysp_timeline` the same calls by command, for a PsychoPy or Psychtoolbox
-  experiment that draws its own stimuli and takes its timing from
-  `ysp/timeline.h`: a trial built as a sequence (events, channel tweens,
-  keyframes, op tables) and fields that target tweens write, evaluated at
-  each frame's predicted onset. The binding owns the fields' memory, and
-  the frame loop reads the channel values and the fields as float32 views
-  (Python) or matrices (MEX), with the landing record of every event that
-  fired. Both compile the header with `YTL_MAX_CHANNELS` 1024
-  ([timeline.md](timeline.md#bindings)).
-  never takes the GIL. `ysp_dataset` writes a Psychtoolbox session as a
-  ysp data set, as `ysp.dataset` does; a row is a struct or name-value
-  pairs, and `[]` and `NaN` are an empty cell.
+
+### Responses: ysp.response, ysp_response
+
+A trial's response rules (`ysp/response.h`), fed with input events from a
+PsychoPy or Psychtoolbox key loop, from `ysp.box` or `ysp.device`, or from
+a log, giving the response, the RT from the stimulus onset and the timing
+quality of both. Feeding an event allocates nothing.
+[docs/response.md](response.md#bindings) has what is bound and what is not.
+
+### Timeline: ysp.timeline, ysp_timeline
+
+For an experiment that draws its own stimuli and takes its timing from
+`ysp/timeline.h`: a trial built as a sequence (events, channel tweens,
+keyframes, op tables) and fields that target tweens write, evaluated at
+each frame's predicted onset. The binding owns the fields' memory; the
+frame loop reads the channel values and the fields as float32 views
+(Python; a view keeps its memory alive) or matrices (MEX), with the landing
+record of every event that fired. Both compile the header with
+`YTL_MAX_CHANNELS` 1024 ([timeline.md](timeline.md#bindings)).
+
+### Data sets: ysp.dataset, ysp_dataset
+
+A PsychoPy or Psychtoolbox session written as a ysp data set
+(`session.json`, the trial, frame, event, clock and stream tables, the
+zip), so the player's analysis reads it. A row is a `dict` or keywords (a
+struct or name-value pairs in MEX); `None`, `[]` and `NaN` are an empty
+cell. An exception through `with`, `abandon()` (`'abandon'`) and the
+teardown of a data set never closed leave `"closed": false`
+([dataset.md](dataset.md#bindings)).
+
+### Packs: ysp.pack, ysp_pack
+
+Open a pack (a file, mapped, or bytes in memory), list its entries, read
+an entry or a range of it as a copy (bytes, or a `uint8` column), read the
+manifest and the experiment definition, and verify the whole pack or one
+entry. A failure raises the header's message (`ysp.pack.CorruptError`,
+`ysp_pack:corrupt`, ...). The Python calls that hash or copy entry data
+release the GIL. [docs/pack.md](pack.md#17-bindings-2026-10-25) has what is
+not bound and why.
 
 ## Units
 
@@ -169,5 +183,9 @@ seconds and the async reader; v1 took milliseconds and microseconds and had
 `now_us`; 2.1.0, 2026-10-12: the `min_hold` setting; 2.2.0, 2026-10-12:
 `driver` and `rts_via_dtr` in `'info'`, `driver` in `'list'` and
 `'find'`), and its second output is the version of `ysp/serial.h` in the
-build. `ysp_rt('version')` returns 1.0.0 (2026-10-25, the first), and
-its second output is the version of `ysp/rt.h`.
+build. The MEX functions of 2026-10-25 (`ysp_rt`, `ysp_box`, `ysp_rdk`,
+`ysp_device`, `ysp_rigfile`, `ysp_response`, `ysp_timeline`,
+`ysp_dataset`, `ysp_pack`) do the same: `'version'` returns 1.0.0, and
+its second output is the version of the header. The adaptive MEX
+functions and `ysp_color` have no number of their own: `'version'`
+returns the header's.
