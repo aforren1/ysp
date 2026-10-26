@@ -102,7 +102,7 @@ Why:
 
 | Question | Decision | Why |
 |---|---|---|
-| Output | The caller's arrays of events and pairs; the decoder stops when one is full, and after one LINE `O` report, and returns the bytes it used | No allocation, and a bounded output per call. A byte finishes at most one frame (a broken frame shows by its ninth byte at the latest, and the eight bytes fed again hold at most one frame of 6 bytes or more), so arrays of one entry suffice; mutant `box-11` writes one past them and the test catches it |
+| Output | The caller's arrays of events and pairs; the decoder stops when one is full, and after one LINE `O` report or `I` identity line (v0.3.1), and returns the bytes it used | No allocation, and a bounded output per call. A byte finishes at most one frame (a broken frame shows by its ninth byte at the latest, and the eight bytes fed again hold at most one frame of 6 bytes or more), so arrays of one entry suffice; mutant `box-11` writes one past them and the test catches it |
 | A broken frame | Drop its first byte and feed the rest again | A frame that starts inside a broken one is still found. XID frames with port bits 2 or 3 set are broken, as pyxid2 says |
 | Garbage | Counted per call and in total, never an event | A misaligned stream must not give a press. The device layer logs the total at most once a second |
 | Event time | The read time given; `ticks` the device time with `YIN_DEVTICKS` | The decoder reads no clock; the device layer maps `ticks` through the fit |
@@ -144,6 +144,47 @@ every entry point by type, MSVC 19.44 (/W4 /WX) and MinGW-w64 gcc 16.1
 (-Werror). Mutants `box-25` (no width range check) and `box-26` (a line
 pulse rounded up instead of to the nearest microsecond) are new; both were
 caught, and so were the moved anchors `box-15`, `box-16` and `box-23`.
+
+## One identity line per call (v0.3.1)
+
+`ybox_out` holds one identity line (`has_text`, `text`) and one `O`
+report (`has_out`). Up to v0.3.0, `ybox_decode()` stopped after an `O`
+report but not after an `I` line, so a second `I` line in the same call
+replaced the first. The Python binding's test found it:
+`ysp.box.decode("line", b"I first\nI second\n").text` was `["second"]`.
+
+v0.3.1 stops the call after an identity line too and returns the bytes it
+used, up to and including that line's newline. A caller that loops while
+bytes remain (USAGE in the header) gets every line. No byte is decoded
+differently.
+
+Callers in this repository:
+
+- `ysp/device.h` identifies a line board by decoding its answer in a loop
+  and stops at the first identity line; the reader thread loops over each
+  read until every byte is used and ignores identity lines. Neither
+  changes. `tests/adapt/device_test.c` passes.
+- `ysp.box` and the MEX `ysp_box` already loop and gather every identity
+  line, so they now return both. The binding tests check two and three
+  identity lines in one decode: `ysp-box` 0.3.1, 88 tests pass (CPython
+  3.14.3 with MSVC on Windows 11, CPython 3.12.14 with gcc 11.4 on WSL2);
+  `test_mex_box.m` PASS, 71 checks, in MATLAB R2023a and Octave 10.1.
+  `test_mex_device.m` PASS, 59 checks, in both.
+
+Tests: `tests/adapt/box_test.c` puts identity lines (`I board <n>`) in
+about 1 of 7 frames of every generated line stream and compares each, in
+order, whole, byte by byte, in random chunks, one entry per call and with
+garbage. `test_line_ident()` checks the bytes each call uses for three
+identity lines (one bare `I`), then a pair, and an `O` report followed by
+an identity line. 256 checks pass (MSVC 19.44, MinGW-w64 gcc 16.1, gcc
+11.4 on WSL2 with ASan and UBSan); `device_test` passes its 1,951 checks
+on all three. Against v0.3.0 the generated streams
+fail: 128 to 156 frames wrong per pass. Mutant `box-27` (no stop after an
+identity line) is new and caught; `box-11` and `box-20` moved with the
+line and are caught; 27 of 27 in all.
+
+There is no fuzz target for this header: `box_test.c` decodes 200,000
+random bytes per family against a counting model instead.
 
 ## Verification
 
@@ -215,7 +256,7 @@ Tests (2026-10-25, Windows 11, i7-1360P):
 
 | Test | Platforms | Result |
 |---|---|---|
-| `bindings/python/ysp_box/tests/test_box.py`: each family's frames to fields; a stream of 2,000 frames whole, byte by byte and in random chunks; 200,000 random bytes per family in random chunks (the line protocol's from random lines of random fields); encoder bytes; 49 refused calls and 25,000 calls with random arguments | CPython 3.14 and 3.9 with MSVC 19.44; CPython 3.10 with gcc 11.4 on WSL2 (`-Wall -Wextra -Wshadow -Werror` clean) | 87 pass, 1 expected failure (below) |
+| `bindings/python/ysp_box/tests/test_box.py`: each family's frames to fields; a stream of 2,000 frames whole, byte by byte and in random chunks; 200,000 random bytes per family in random chunks (the line protocol's from random lines of random fields); encoder bytes; 49 refused calls and 25,000 calls with random arguments | CPython 3.14 and 3.9 with MSVC 19.44; CPython 3.10 with gcc 11.4 on WSL2 (`-Wall -Wextra -Wshadow -Werror` clean) | 87 pass, 1 expected failure (fixed in v0.3.1, below) |
 | `bindings/mex/test_mex_box.m`: the same groups, 600-frame streams, 1,000 read times | MATLAB R2023a (MSVC 19.44), Octave 10.1 (MinGW-w64) | 69 checks pass |
 
 Cost of `ysp.box` (CPython 3.14, Windows 11, i7-1360P on AC power, the
@@ -226,9 +267,7 @@ ms in 64-byte reads. That is 0.22 to 0.46 us per event or pair, almost
 all of it in making the Python objects. Not measured: the MEX function's
 cost.
 
-The expected failure is a limit of the header: `ybox_out` holds one
-identity line. Two `I` lines in one `ybox_decode()` call keep only the
-second, because the decoder does not stop after an identity line as it
-does after an `O` report. Repro: `ysp.box.decode("line", b"I first\nI
-second\n").text` is `["second"]`. The test is marked `xfail(strict=True)`,
-so it fails when the header changes.
+The expected failure was a limit of the header up to v0.3.0: two `I`
+lines in one `ybox_decode()` call kept only the second. v0.3.1 fixed it
+([One identity line per call](#one-identity-line-per-call-v031)); the
+test is now a normal one, and the MEX test has the same check.

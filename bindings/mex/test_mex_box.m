@@ -52,6 +52,10 @@ function test_mex_box()
           ev(2).value == -1.5, 'line events');
     check(isequal(info.text, {'ysp-line 1 teensy41 left'}) && info.garbage == numel('X nonsense') + 1 && ...
           isequal(info.outputs.ticks, uint64(5)) && info.outputs.code == 9, 'line identity, garbage, outputs');
+    [~, pr, info] = ysp_box('decode', 'line', uint8(sprintf('I first\nI second\nS 5\nI\n')));
+    check(isequal(info.text, {'first'; 'second'; ''}), ...
+          'every identity line comes back (ysp/box.h 0.3.1)');
+    check(isequal(pr.ticks, uint64(5)), 'the pair after the identity lines');
     [~, pr, info] = ysp_box('decode', 'line', uint8(sprintf('O %d %d\n', [1000:1049; 0:49])));
     check(numel(pr.ticks) == 50 && isequal(info.outputs.code, (0:49)'), 'every O report comes back');
     [ev, pr] = ysp_box('decode', 'photo', [photo(1, 10), photo_sync(20), photo(0, 30)]);

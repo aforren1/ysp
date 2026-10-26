@@ -327,7 +327,8 @@ Status:
 
 - v0.3.0 (the [Conventions](conventions.md): `ybox_init()` returns 0 or `YBOX_ERR_ARG`, `ybox_encode()` takes `int64_t` ns; no byte changed; 2 mutants added, both caught).
 - v0.2.0 (outputs: encoders and capabilities for eight families, each byte pinned to the vendor's documentation, pyxid2 or an open-source driver; StimTracker 2 frames). Decoders checked on generated streams split at every byte, with garbage, broken frames and full outputs, and on random bytes; encoders checked byte for byte; 24 of 24 mutants caught. No byte from or to a vendor device yet. [Design notes](box.md).
-- Bindings: `ysp-box` 0.3.0 (Python) and the MEX `ysp_box` decode captured bytes into events (the shared `Event` fields, times in seconds with the exact ns beside them) and clock pairs, and give the query and output bytes; random bytes and bad arguments refused cleanly; one header limit found (two identity lines in one decode call keep the second only). [Design notes](box.md#bindings).
+- v0.3.1 (2026-10-26): `ybox_decode()` returns after a line board's identity line (`I ...`), as after an `O` report; two identity lines in one call kept only the second before. Identity lines in every generated line stream; 1 mutant added, 27 of 27 caught. [One identity line per call](box.md#one-identity-line-per-call-v031).
+- Bindings: `ysp-box` 0.3.1 (Python) and the MEX `ysp_box` decode captured bytes into events (the shared `Event` fields, times in seconds with the exact ns beside them) and clock pairs, and give the query and output bytes; random bytes and bad arguments refused cleanly. The header limit they found (two identity lines in one decode call kept the second only) is fixed in v0.3.1. [Design notes](box.md#bindings).
 
 ### ysp/device.h
 
