@@ -213,11 +213,15 @@ def test_user_folder(tmp_path, monkeypatch):
             yr.load()
         p = yr.Profile("booth-2")
         p.bind("resp", "xid", "serial:0403:6001:FT4ABC12:")
+        # save() stamps `written` (whole seconds, in the hash): two saves can
+        # straddle a second, so each file is compared with its own save's hash
         p.save()
+        h1 = p.hash
         p.save("booth2")
+        h2 = p.hash
         q = yr.load()
-        assert q.dir == d and q.roles == ["resp"] and q.hash == p.hash
-        assert yr.load("booth2").hash == p.hash
+        assert q.dir == d and q.roles == ["resp"] and q.hash == h1
+        assert yr.load("booth2").hash == h2
         with pytest.raises(yr.Missing):
             yr.load("booth3")
     finally:
