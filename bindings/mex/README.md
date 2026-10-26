@@ -23,6 +23,7 @@ never reused, so a handle kept past its `close` always raises
 | `ysp_device.c` | [ysp/device.h](../../include/ysp/device.h) | [example_device.m](example_device.m) |
 | `ysp_rigfile.c` | [ysp/rigfile.h](../../include/ysp/rigfile.h) | [example_rigfile.m](example_rigfile.m) |
 | `ysp_response.c` | [ysp/response.h](../../include/ysp/response.h) | [example_response.m](example_response.m) |
+| `ysp_timeline.c` | [ysp/timeline.h](../../include/ysp/timeline.h) | [example_timeline.m](example_timeline.m) |
 
 The two transport headers build on the shared [ysp/rt.h](../../include/ysp/rt.h), so
 both MEX functions compile it too. `ysp_quest.c` and `ysp_aep.c` define
@@ -983,6 +984,76 @@ level = typecast(ysp_trials('record', h, i), 'double');
 | `'latin', n, row [, balanced]` | `[items, rows]` | row `row` (0-based, taken modulo `rows`) of a cyclic or Williams square, 1-based items (v0.2) |
 | `'splitmix', state` | `[u, state]` | one step of the seed generator |
 | `'version'`, `'strerror', code` | string | |
+
+## ysp_timeline
+
+Events, tracks and tweens on a frame clock, for a Psychtoolbox script that
+draws its own stimuli: build a trial, then on each frame evaluate it at the
+frame's predicted onset (`vbl + ifi`) and read the channel values, the
+fields and the events that landed. The timeline reads no clock. Every time
+is seconds; a landing record also gives the exact ns as `int64`.
+[example_timeline.m](example_timeline.m) runs a trial and a rewind;
+[test_mex_timeline.m](test_mex_timeline.m) prints `PASS` with the number
+of checks. [docs/timeline.md](../../docs/timeline.md#bindings) has the
+per-frame cost.
+
+```matlab
+h = ysp_timeline('open', struct('channels', 3));        % FIX, GRATING, CONTRAST
+q = ysp_timeline('seq', h, 1);                           % base 1, cursor at 0
+ysp_timeline('on', q, 1); ysp_timeline('wait', q, 0.5); ysp_timeline('off', q, 1);
+ysp_timeline('on', q, 2); ysp_timeline('trigger', q, 12);
+ysp_timeline('to', q, 3, 0.5, 'duration', 0.1, 'ease', 'cosine');
+ysp_timeline('anchor', h, 1, vbl + ifi);                 % trial time 0
+[v, ev] = ysp_timeline('evaluate', h, vbl + ifi, ifi);   % each frame
+```
+
+Channels and fields are 1-based. A base keeps the header's number (0 is
+the RT clock, 1 to 7 are yours), and a trigger channel keeps its value (0
+by default), because it names one of your outputs. A sequence is a handle
+of its own; `close` of the timeline also closes its sequences.
+
+| Command | Returns | Notes |
+|---|---|---|
+| `'open' [, opts]` | `uint64` handle | `channels`, `initial`, `events` (1024), `keys` (1024), `fields` (64), `tweens` (256), `lead` (a fraction of a period, or `'none'`) |
+| `'evaluate', h, onset [, period [, index]]` | `[values, events, fields]` | `values` 1 x channels; `events` a struct column (`id`, `kind`, `kind_name`, `base`, `time`, `target`, `value`, `code`, `user`, `flags`, `frame`, `onset`, `residual`, `time_ns`, `onset_ns`, `residual_ns`); `fields` 4 x slots. `index` defaults to the count of evaluates |
+| `'values', h`, `'field_values', h` | matrix | the last evaluate's |
+| `'anchor', h, base, rt [, bt]`, `'pause'`/`'resume', h, base, rt`, `'stop', h, base` | none | base clocks; an anchor at or before the furthest evaluated time rewinds |
+| `'skip', h, base, rt, bt` | count | a seek; the events passed over never fire |
+| `'rate', h, base, rt, num [, den]`, `'get_rate', h, base` | none, `[num den]` | an exact rational rate |
+| `'base_time'`, `'rt_time'`, `'window'`, `'next_due'`, `'horizon'`, `'clamped'`, `'lead'` | seconds, or `[]` | queries |
+| `'add', h, events` | first id | a struct (array), all or none: `time`, `kind` (name or number), `base`, `target`, `value`, `code`, `user` |
+| `'remove', h, id`, `'prune', h [, base]`, `'clear', h [, base]` | none, count | |
+| `'events', h [, base]`, `'find', h, id`, `'peek', h, base, from, to` | struct column | the record; the pending events of an RT window |
+| `'set_keys', h, ch, base, K [, curves]` | none | `K` is N x 2..4 `[t value ease curve]`, `curve` a 1-based row of `curves` (M x 4) for BEZIER; `[]` removes |
+| `'set_track', h, ch, base [, track]` | none | `keys`, `curves`, `samples`, `t0`, `rate`, `interp`, `period`, `repeats`; none removes |
+| `'tween', h, ch, base, to, name, value, ...` | none | a channel tween from "now": `duration`, `start`, `delay`, `from`, `ease`, `curve`, `cycles`, `yoyo`, `keep_velocity` |
+| `'seq', h, base [, 'now']` | `uint64` sequence | a cursor on the base |
+| `'on'`, `'off', q, ch`; `'set', q, ch, v`; `'trigger', q, code [, ch]`; `'mark', q, code [, user]` | none | events at the cursor |
+| `'wait', q, dt`, `'at', q, t`, `'cursor', q` | none, struct | `cursor`: `t`, `prev_start`, `prev_end`, `t_ns`, `base`, `err`, `err_call` |
+| `'to'`, `'then', q, ch, value, name, value, ...` | end time | a channel tween; `then` also moves the cursor to its end |
+| `'keyframes', q, ch, values, offsets [, ease]`, `'on_n', q, chs [, stagger]` | none | |
+| `'run', q, ops`, `'check_ops', h, base, ops` | none | an op table, all or none: `{{'on', 1}, {'wait', 0.5}, {'to', 3, 0.5, 'duration', 0.1}}`; an error names the op (1-based) |
+| `'cancel', q`, `'release', q` | count, none | undo what the sequence added; drop the sequence handle |
+| `'field', h [, value [, 'int']]`, `'fields', h, count [, value [, 'int']]` | index, indices | a value target tweens write, 1 to 4 components; `fields` makes adjacent ones for a stagger |
+| `'field_value', h, f [, value]`, `'field_free', h, f` | value | |
+| `'tween_to', q, f, to, dur [, ease]`, `'tween_from'`, `'tween_from_to', q, f, from, to, dur [, ease]`, `'tween_set', q, f, v` | tween id | GSAP's `to()`, `from()`, `fromTo()`, `set()` |
+| `'animate', q, f, name, value, ...` | tween id | `to`, `from`, `to_current`, `duration`, `delay`, `stagger`, `ease`, `curve`, `cycles`, `yoyo`, `keep_velocity`, `immediate`, `overwrite`, `on_start`, `on_complete` (logical: the event goes in the report), `user` |
+| `'kill', h, f`, `'kill_tween', h, id`, `'tween_count', h` | count | |
+| `'error', h`, `'version'` | string | `version`: the binding's (1.0.0), and the header's as a second output |
+| `'close', h` | none | |
+
+An ease is a name (`'linear'`, `'step'`, `'cosine'`, `'quad_in'`,
+`'quad_out'`, `'quad_in_out'`, `'cubic_in'`, `'cubic_out'`,
+`'cubic_in_out'`, `'log'`, `'bezier'` with `'curve'`), its number, or
+`[x1 y1 x2 y2]`. Errors are `ysp_timeline:arg`, `:closed`, `:order`,
+`:full`, `:bound`, `:not_found`, `:handle` and `:usage`, with the
+header's message.
+
+Not bound: a MATLAB function as `on_start` or `on_complete` (the events in
+the report serve the frame loop, and a call into the interpreter from
+inside the evaluate would cost more than the frame's work), `ytl_sample()`
+(no validation), the parameter tables (for a player's loader), and
+negative times (refused, as in every binding).
 
 ## How to save and resume a session
 

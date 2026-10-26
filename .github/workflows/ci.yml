@@ -524,6 +524,7 @@ jobs:
         package: [ysp_parallel, ysp_serial, ysp_stair, ysp_quest, ysp_aep, ysp_trials, ysp_color, ysp_rdk, ysp_rt]
         package: [ysp_parallel, ysp_serial, ysp_stair, ysp_quest, ysp_aep, ysp_trials, ysp_color, ysp_rdk, ysp_device, ysp_rigfile]
         package: [ysp_parallel, ysp_serial, ysp_stair, ysp_quest, ysp_aep, ysp_trials, ysp_color, ysp_rdk, ysp_response]
+        package: [ysp_parallel, ysp_serial, ysp_stair, ysp_quest, ysp_aep, ysp_trials, ysp_color, ysp_rdk, ysp_timeline]
         exclude:
           - os: macos-latest      # ysp/parallel.h #errors on macOS
             package: ysp_parallel
@@ -690,6 +691,9 @@ jobs:
       - name: Response binding test (test_mex_response.m)
         working-directory: bindings/mex
         run: octave-cli -q --eval "test_mex_response"
+      - name: Timeline binding test (test_mex_timeline.m)
+        working-directory: bindings/mex
+        run: octave-cli -q --eval "test_mex_timeline"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -807,6 +811,10 @@ jobs:
         uses: matlab-actions/run-command@v3
         with:
           command: cd('bindings/mex'); test_mex_response
+      - name: Timeline binding test (test_mex_timeline.m)
+        uses: matlab-actions/run-command@v3
+        with:
+          command: cd('bindings/mex'); test_mex_timeline
 
       - uses: actions/upload-artifact@v7
         with:

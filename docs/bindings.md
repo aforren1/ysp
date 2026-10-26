@@ -27,6 +27,7 @@ This page is reference: the language bindings of the headers.
   library (`ysp_parallel`, `ysp_serial`, `ysp_stair`, `ysp_quest`,
   `ysp_aep`, `ysp_trials`, `ysp_color`, `ysp_rt`) with ppdev-mex-style command dispatch, built and
   `ysp_aep`, `ysp_trials`, `ysp_color`, `ysp_response`) with ppdev-mex-style command dispatch, built and
+  `ysp_aep`, `ysp_trials`, `ysp_color`, `ysp_timeline`) with ppdev-mex-style command dispatch, built and
   tested in MATLAB R2023a and Octave 10. `tests/compare/` runs `ysp_quest`
   beside mQUESTPlus and Palamedes' PAL_AMPM, and `ysp_stair` beside
   PAL_AMUD, on one response stream; the MEX README has the results.
@@ -89,6 +90,16 @@ array with the same field names in MATLAB and Octave.
   with the same field names. Feeding an event allocates nothing.
   [docs/response.md](response.md#bindings) has what is bound and what is
   not.
+- **Timeline**: `ysp-timeline` gives `ysp.timeline`, and the MEX
+  `ysp_timeline` the same calls by command, for a PsychoPy or Psychtoolbox
+  experiment that draws its own stimuli and takes its timing from
+  `ysp/timeline.h`: a trial built as a sequence (events, channel tweens,
+  keyframes, op tables) and fields that target tweens write, evaluated at
+  each frame's predicted onset. The binding owns the fields' memory, and
+  the frame loop reads the channel values and the fields as float32 views
+  (Python) or matrices (MEX), with the landing record of every event that
+  fired. Both compile the header with `YTL_MAX_CHANNELS` 1024
+  ([timeline.md](timeline.md#bindings)).
 
 ## Units
 
@@ -119,6 +130,7 @@ call can poll. [Conventions](conventions.md) lists the exceptions.
 | `ysp.rigfile` | a role's `pulse`, `ftdi_latency`, `latency` (`p5`, `median`, `p95`, `max`) and `bounds` (`lo`, `hi`; `lo_ns` and `hi_ns` exact), `display` (`onset_offset`, `onset_offset_ns` exact), `source()` (`lo`, `hi`), `desc()['pulse']`; lengths in mm |
 | `ysp_device`, `ysp_rigfile` (MEX) | the same, with `Inf` for `math.inf`; an event's `t_ns` is `int64` |
 | `ysp.response` and its MEX | `arm(t)`, `set_onset(t, residual=, uncertainty=)`, `update(now)`, `key(t, ...)`, `score(events, onset, arm=, end=)`, the desc's `min_rt`, `duration` (`math.inf`/`Inf`: no deadline) and `max_hold`, a source's `lo` and `hi`, the event's `t` and `unc` (from `unc_us`), and every time of the result and the entries; the exact ns beside each absolute time and the RT (`t_ns`, `rt_ns`, `t_onset_ns`, `t_response_ns`); exact to the ns below 2^23 s |
+| `ysp.timeline` and `ysp_timeline` (MEX) | every time argument (`evaluate(onset, period)`, `anchor`, `skip`, `rate`, `wait`, `at`, the tween options `duration`, `delay`, `start`, `stagger`, key and event times, track `t0` and `period`, `peek`'s window) and result (`base_time`, `rt_time`, `window`, `next_due`, `horizon`, a sequence's cursor); a landing record gives `time`, `onset` and `residual` in seconds and `time_ns`, `onset_ns` and `residual_ns` exactly |
 
 ## Versions
 

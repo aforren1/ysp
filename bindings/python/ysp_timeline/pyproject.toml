@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ysp-timeline"
+version = "0.8.1"  # ysp/timeline.h v0.8.1; tests/test_timeline.py checks it against __version__
+description = "Events, tracks and tweens on a frame clock (ysp/timeline.h): what each frame shows, with landing records"
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT-0"
+
+# The C extension is declared in setup.py (Extension) as ysp.timeline; this
+# file just pins the build backend so `pip install .` works. `ysp` is a PEP 420
+# implicit namespace package: no __init__.py is shipped, so the other ysp-*
+# distributions install next to this one without either owning the namespace.
+
+[tool.cibuildwheel]
+# abi3 (Limited API): setup.py forces a cp38-abi3 wheel tag, so one build per
+# platform serves every supported CPython. cibuildwheel >= 4 has no cp38 build
+# interpreter, so build on cp39; the wheel is still cp38-abi3.
+build = "cp39-*"
+skip = "*-musllinux_*"
+# The whole test runs on every platform: a replay that differs on one of
+# them is a bug, not a tolerance.
+test-requires = ["pytest"]
+test-command = "pytest {package}/tests -q"
+
+[tool.cibuildwheel.macos]
+archs = ["universal2"]
