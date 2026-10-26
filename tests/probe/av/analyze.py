@@ -12,7 +12,7 @@ two calls (the host's loop overhead) p99 and max in ms.
 import sys
 
 PATHS = {0: "unknown", 1: "composed", 2: "overlay", 3: "independent", 4: "sim", 5: "browser"}
-LATE, EST, NEVER = 0x004, 0x002, 0x040 | 0x080
+LATE, EST, OCC, NEVER = 0x004, 0x002, 0x008, 0x040 | 0x080
 
 
 def pct(v, p):
@@ -29,6 +29,12 @@ def summarize(path):
     missed = [r for r in rec if r[10] > 0]
     late = [r for r in rec if r[13] & LATE]
     est = [r for r in rec if r[13] & EST]
+    occ = [r[0] for r in rec if r[13] & OCC]
+    # misses within 120 frames of an OCCLUDED record: another window covered ours
+    near = set()
+    for i in occ:
+        near.update(range(i - 120, i + 121))
+    missed_clear = [r for r in missed if r[0] not in near]
     resid = [abs(r[9]) / 1e3 for r in rec if r[8] != 0]
     work = [r[2] / 1e6 for r in rows if r[2] > 0]
     outside = [r[4] / 1e6 for r in rows if r[4] > 0]
@@ -39,7 +45,7 @@ def summarize(path):
     over = sum(1 for w in work if w > 16.7)
     return {
         "tag": tag, "frames": len(rows), "records": len(rec),
-        "missed": len(missed), "dropped": sum(r[10] for r in missed), "late": len(late), "est": len(est),
+        "missed": len(missed), "occ": len(occ), "missed_clear": len(missed_clear), "dropped": sum(r[10] for r in missed), "late": len(late), "est": len(est),
         "res": (pct(resid, 50), pct(resid, 99), max(resid) if resid else float("nan")),
         "work": (pct(work, 50), pct(work, 99), max(work) if work else float("nan")), "over": over,
         "out": (pct(outside, 99), max(outside) if outside else float("nan")),
@@ -74,13 +80,13 @@ def main():
         for line in after(sys.argv[2], int(sys.argv[3])):
             print(line)
         return
-    print("| run | frames | records | missed (vblanks) | late target | estimated | residual us p50/p99/max "
+    print("| run | frames | missed (vblanks) | missed away from occlusion | late target | occluded | residual us p50/p99/max "
           "| work ms p50/p99/max | > 16.7 ms | outside ms p99/max | path | tier |")
     print("|---|---|---|---|---|---|---|---|---|---|---|---|")
     for p in sys.argv[1:]:
         s = summarize(p)
-        print("| %s | %d | %d | %d (%d) | %d | %d | %.1f / %.1f / %.1f | %.3f / %.3f / %.3f | %d | %.3f / %.3f | %s | %s |" % (
-            s["tag"], s["frames"], s["records"], s["missed"], s["dropped"], s["late"], s["est"],
+        print("| %s | %d | %d (%d) | %d | %d | %d | %.1f / %.1f / %.1f | %.3f / %.3f / %.3f | %d | %.3f / %.3f | %s | %s |" % (
+            s["tag"], s["frames"], s["missed"], s["dropped"], s["missed_clear"], s["late"], s["occ"],
             *s["res"], *s["work"], s["over"], *s["out"],
             " ".join("%s %d" % kv for kv in sorted(s["paths"].items())),
             " ".join("%s:%d" % kv for kv in sorted(s["tiers"].items()))))

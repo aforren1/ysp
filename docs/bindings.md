@@ -43,7 +43,10 @@ Not bound, by decision: `ysp/table.h` and `ysp/json.h` (Python and MATLAB
 read CSV and JSON; `ysp.trials` already takes a table), `ysp/net.h`
 (pylsl and liblsl-Matlab exist), `ysp/outline.h` (an offline asset tool),
 and `ysp/screen.h`, `ysp/gfx.h`, `ysp/audio.h` and `ysp/video.h` (the
-binding form of the rendering stack is open; docs/rig_spec.md).
+binding form of the rendering stack is open; docs/rig_spec.md). The
+rendering stack is planned as one module, ysp-av; its host probe (frame
+loops in Python, MATLAB and Octave, DLL loading, idle windows) is
+[av_probe.md](av_probe.md).
 
 ### The input event
 

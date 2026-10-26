@@ -62,7 +62,9 @@ uv run --no-project python tests/probe/av/analyze.py *.csv
 ```
 
 Other options, the same in each host: `--idle S` (an idle gap after 120
-frames, with the window watched), `--abort` (one Shift+Esc from a helper
+frames, with the window watched; Python also takes `--idle-mode
+sleep|input|pump` and `--noghost`, MATLAB `prompt_idle.m` for the idle at
+its prompt), `--abort` (one Shift+Esc from a helper
 thread), `--panic` (the interpreter hangs, then 3 presses; the process
 must end with exit code 99), `--audio null|default`, `--angle-dir DIR`,
 `--preload DLL`, `--modules`. In MATLAB and Octave the options are
