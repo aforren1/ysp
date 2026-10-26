@@ -2124,6 +2124,64 @@ enum row's values come from a `switch` on the C enum without a
 `default`, so gcc and clang `-Wall -Werror` stop the build when the enum
 gains a value. 4 of 4 new mutants killed (`tests/mutate/audio.toml`, pv-).
 
+## Windows headers in one translation unit (v0.7.1)
+
+`examples/audio/av_sync.c` implements ysp/audio.h and then ysp/screen.h
+in one file, the order ysp/video.h asks for. With miniaudio found, MSVC
+stopped the build under `/W4 /WX`:
+
+```
+combaseapi.h(287): warning C4005: 'CLSCTX_ALL': macro redefinition
+miniaudio.h(11584): note: see previous definition of 'CLSCTX_ALL'
+```
+
+### The cause
+
+Both headers include `<windows.h>` with `WIN32_LEAN_AND_MEAN`, which
+leaves out the COM headers. miniaudio then defines `CLSCTX_ALL` as `23`
+when no header has. ysp/screen.h's `<d3d11_4.h>` (and ysp/video.h's
+Media Foundation headers) include `<combaseapi.h>`, which defines it
+again as an expression. The two have the same value but not the same
+tokens, so MSVC warns. With ysp/screen.h first, the SDK's definition
+comes first and miniaudio keeps it: no warning. MinGW-w64 gcc does not
+warn in either order, because the second definition is in a system
+header.
+
+### The fix
+
+On Windows, the implementation includes `<objbase.h>` after
+`<windows.h>` and before miniaudio.h. miniaudio then finds the SDK's
+`CLSCTX_ALL` (and `STGM_READ`) and defines neither. This holds for any
+order of the ysp headers and for a user's own COM headers. A
+`#undef` after miniaudio was the other option; it would also remove the
+SDK's definition when a user's COM header came first.
+
+### Tests
+
+`tests/compile/order_audio_screen.c` (and its `.cpp`) implements
+ysp/audio.h, ysp/screen.h and ysp/video.h in one translation unit:
+audio first, and screen first with `YSP_TEST_SCREEN_FIRST`. CMake builds
+the four programs (`compile_order_audio_screen_c`, `_cxx`,
+`compile_order_screen_audio_c`, `_cxx`) when SDL3 and miniaudio are
+found, with the project's warnings as errors. CI builds them in the
+Screen job with MSVC and with MinGW-w64.
+
+| Compiler | Audio first, v0.7.0 | Audio first, v0.7.1 | Screen first |
+|---|---|---|---|
+| MSVC 19.44 `/W4 /WX` | C4005, fails | builds, runs | builds, runs |
+| MinGW-w64 gcc 16.1 `-Wall -Wextra -Wpedantic -Werror` | builds, runs | builds, runs | builds, runs |
+
+With the fix, the `msvc-full-local` build (SDL3 3.4.0, miniaudio 0.11.25,
+`/W4 /WX`) builds `examples/audio/av_sync.c` and every other target, and
+ctest passes 97 of 97, the four order checks included; `audio_av_sync
+--sim` passes. gcc 11.4 on WSL2 compiles both orders as C11 and C++17
+with `-Werror` (compiled, not linked: no SDL3 install there for CMake).
+
+The fix has no mutant in `tests/mutate/audio.toml`: removing the
+include breaks the build of the compile check, and the mutation runner
+counts a build that fails as a bad mutant, not as a kill. The table's
+v0.7.0 column is that mutant, run by hand.
+
 ## Real-thread tests under load (2026-10-22)
 
 Three cases in `tests/adapt/audio_test.c` run the scripted device on a

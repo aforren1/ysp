@@ -947,7 +947,7 @@ jobs:
       # out of this list is compiled nowhere on CI. ctest below runs every
       # test that matches its pattern, built or not.
       - name: Build
-        run: cmake --build build --config Release --target compile_screen_c compile_screen_cxx compile_screen_com test_screen screen_hello screen_flipstats screen_input screen_abort screen_gamma screen_sync_check screen_loopback compile_gfx_c compile_gfx_cxx test_gfx gfx_hello gfx_trial gfx_load gfx_calib gfx_bench gfx_gallery gfx_text gfx_gratings gfx_luminance_bits gfx_clut_sync gfx_filtered_noise gfx_gaze_contingent gfx_capture gfx_rdk gfx_rdk_bench trial_rdk compile_video_c compile_video_cxx compile_video_com test_video video_play video_bench video_check test_response_sdl test_input_sdl trial_keyboard trial_same_different trial_srt trial_adjustment trial_mouse_tracking trial_audio_keyboard trial_stop_signal trial_sternberg trial_2afc_adaptive trial_two_keyboards trial_eeg_triggers response_lag trial_scanner_sync gfx_gamma_null trial_movie color_patch audio_av_sync web_tutorial web_rdk_staircase web_selftest web_av_sync
+        run: cmake --build build --config Release --target compile_screen_c compile_screen_cxx compile_screen_com test_screen screen_hello screen_flipstats screen_input screen_abort screen_gamma screen_sync_check screen_loopback compile_gfx_c compile_gfx_cxx test_gfx gfx_hello gfx_trial gfx_load gfx_calib gfx_bench gfx_gallery gfx_text gfx_gratings gfx_luminance_bits gfx_clut_sync gfx_filtered_noise gfx_gaze_contingent gfx_capture gfx_rdk gfx_rdk_bench trial_rdk compile_video_c compile_video_cxx compile_video_com compile_order_audio_screen_c compile_order_audio_screen_cxx compile_order_screen_audio_c compile_order_screen_audio_cxx test_video video_play video_bench video_check test_response_sdl test_input_sdl trial_keyboard trial_same_different trial_srt trial_adjustment trial_mouse_tracking trial_audio_keyboard trial_stop_signal trial_sternberg trial_2afc_adaptive trial_two_keyboards trial_eeg_triggers response_lag trial_scanner_sync gfx_gamma_null trial_movie color_patch audio_av_sync web_tutorial web_rdk_staircase web_selftest web_av_sync
 
       # ysp/gfx.h's pixel checks must run where software GL exists; macOS has
       # no EGL, so its test runs the CPU checks only.
@@ -1168,3 +1168,10 @@ jobs:
           gcc -std=c11 $W -o mingw_video_test.exe tests/adapt/video_test.c
           g++ -std=c++17 $W -o mingw_video_com.exe tests/compile/video_com.cpp -L"$SDL3_MINGW/lib" -lSDL3
           ./mingw_video_c.exe; ./mingw_video_cxx.exe; ./mingw_video_test.exe; ./mingw_video_com.exe
+          # audio.h, screen.h and video.h in one unit, both orders (miniaudio from the configure's fetch)
+          MA="-Ibuild/_deps/miniaudio-src"
+          gcc -std=c11 $W $MA -o mingw_order_as_c.exe tests/compile/order_audio_screen.c -L"$SDL3_MINGW/lib" -lSDL3
+          g++ -std=c++17 $W $MA -o mingw_order_as_cxx.exe tests/compile/order_audio_screen.cpp -L"$SDL3_MINGW/lib" -lSDL3
+          gcc -std=c11 $W $MA -DYSP_TEST_SCREEN_FIRST -o mingw_order_sa_c.exe tests/compile/order_audio_screen.c -L"$SDL3_MINGW/lib" -lSDL3
+          g++ -std=c++17 $W $MA -DYSP_TEST_SCREEN_FIRST -o mingw_order_sa_cxx.exe tests/compile/order_audio_screen.cpp -L"$SDL3_MINGW/lib" -lSDL3
+          ./mingw_order_as_c.exe; ./mingw_order_as_cxx.exe; ./mingw_order_sa_c.exe; ./mingw_order_sa_cxx.exe

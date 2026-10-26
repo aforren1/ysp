@@ -52,6 +52,11 @@ find = '''    rc = yau__wav_scan(&src, info, err, cap);
 replace = '''    rc = yau__wav_scan(&src, info, err, cap);
     return rc;'''
 
+# v0.7.1: <objbase.h> before miniaudio.h on Windows. No mutant: without
+# it, tests/compile/order_audio_screen.c fails to build under MSVC /WX,
+# and this runner counts a build failure as a bad mutant (docs/audio.md,
+# "Windows headers in one translation unit").
+
 # v0.3.0: the WASAPI shared queue (docs/audio.md, "Periods and buffers").
 # The gate's wait on the WASAPI event and the exclusive one-period buffer
 # run only on hardware; audio_clockstats --queue and --exclusive measure
