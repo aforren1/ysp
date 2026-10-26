@@ -1016,6 +1016,79 @@ the refused choices. Mutants `rule-12` to `rule-15` (in
 `tests/mutate/device.toml`, on this header) caught, 4 of 4. No rule of
 the collector changed.
 
+## Bindings
+
+`ysp-response` 0.7.0 (Python, `bindings/python/ysp_response`, the module
+`ysp.response`) and the MEX `ysp_response` (`bindings/mex/ysp_response.c`)
+bind the collector for a PsychoPy or Psychtoolbox experiment and for an
+analysis script. Each compiles this header and `ysp/input.h`, nothing
+else. The Python README and the MEX README have the reference; this
+section has the decisions.
+
+| Decision | Why |
+|---|---|
+| Every time is seconds; the exact ns is beside each absolute time and the RT (`t_ns`, `rt_ns`, `t_onset_ns`, `t_response_ns`) | The binding rule (docs/bindings.md). A clock time of a day keeps its ns: the whole seconds convert exactly and only the fraction is scaled; the test gives back every ns of 22,004 values `ns / 1e9` below 2^23 s |
+| The event is one layout in `ysp.response`, `ysp.box` and `ysp.device`: a structseq `Event` (`t`, `t_ns`, `device`, `control`, `code`, `mods`, `kind`, `type`, `flags`, `stamp`, `unc`, `x`, `y`, `value`, `aux`, `ticks`); in MATLAB a struct array with those fields | `feed()` takes any 16-tuple in that order (a structseq is a tuple) or any object with those attributes, so the other packages' events go in without an import, and a log read back into a namedtuple or a `SimpleNamespace` goes in too |
+| `t_ns` wins over `t` when it is an int | A log keeps the exact ns; the seconds are for a person |
+| `unc` is seconds, `unc_us / 1e6`; 0.065535 means "65.5 ms or more" | The one non-ns time in ysp (docs/conventions.md); the binding keeps its range and states its cap |
+| No allocation per fed event | A tuple's items are borrowed; an object's attributes are looked up with names interned once; the status is a small int. `tracemalloc` shows no growth over 4,000 feeds of each form. A MEX `feed` reads a struct array in place, so one call per frame takes every event of the frame |
+| The result's "none" is `None` in Python; in MATLAB `NaN` in seconds and `intmin('int64')` (`YRSP_NO_TIME`) in ns, and an index 0 | A vector of RTs over trials keeps its rows in MATLAB; `None` is Python's null |
+| `Result.response` is the choice's name; `choice` its index | The data column `response` is the name (`YRSP_DATA_COLS`), as jsPsych's is |
+| `score(events, onset, arm=, end=)`: one trial from a log | Rescoring under other rules is an analysis's task. It is a sequence of this header's calls: the events stamped before `arm` at the start of the list go in before `yrsp_arm()` (a key held from before the window stays held), the rest after the arm and the onset; then `update(end)` when given, and `finish()`. The test checks that it gives the live loop's result |
+| `data_row()` (Python) and the second output of `finish` (MEX): the `YRSP_DATA_COLS` columns by `yrsp_data_set()`'s rules | `yrsp_data_set()` writes into a `ysp/trials.h` writer, which a PsychoPy experiment does not have; the twelve columns, with the onset's tier and source in every row, are what a row needs. The Python test reads the names from this header's `YRSP_DATA_COLS` |
+| An enum takes its name from `yrsp_params()`'s `values` (`"box"`, `"keycode"`, `"rising"`, `"list"`) or its number | One source for the names, as the loader uses |
+| A choice or desc field that the header does not have is refused | A typo would leave a default in force without a word |
+
+Not bound, and why:
+
+- The frame-loop and data helpers (`yrsp_update_frame()`,
+  `yrsp_feed_screen()`, `yrsp_set_landing()`, `yrsp_onset_flip()`,
+  `yrsp_onset_audio()`, `yrsp_onset_landing()`, `YRSP_DATA_COLS` and
+  `yrsp_data_set()`): they read structs of `ysp/screen.h`, `ysp/audio.h`,
+  `ysp/timeline.h` and `ysp/trials.h`, which no binding gives today.
+  `set_onset()` takes the same values (`src`, `tier`, `residual`,
+  `frame`), and `data_row()` gives the columns.
+- The response-trigger glue (`yrsp_rule_choices()`, `yrsp_rule_arm()`,
+  `yrsp_rule_window()`, `yrsp_rule_sent()`): it needs `ysp/device.h` in
+  the same translation unit, and it reads the collector's state. A binding
+  that compiles both headers is the place for it. `set_sent()` takes the
+  rule's fires (`t`, `kind`, `device`, `control`, `choice`, `written`), so
+  the mismatch flag works across the two packages.
+- `yrsp_cursor`, `yrsp_from_sdl()`, `yrsp_from_mouse()` and the source
+  entries of SDL and raw mice: a PsychoPy, Psychtoolbox or analysis user
+  has no SDL events or raw mouse reports.
+- `yrsp_params()`: the loader's and the designer's table, in ns.
+- A clock: the header has none, so the binding has none. Give every time
+  on one clock (PsychoPy's `win.flip()` and `tDown`, Psychtoolbox's
+  `GetSecs`, or ysp's clock for `ysp.box` and `ysp.device` events).
+
+Checked on 2026-10-25:
+
+| Check | Result |
+|---|---|
+| `bindings/python/ysp_response/tests/test_response.py` (21 tests: the event's layout and units, the three input forms, no allocation per feed, each rule once, sources, trace, codes sent, `score()` against the live loop, the ns round trip, the refusals, the constants and `DATA_COLS` against this header) | Windows 11, MSVC 19.44: CPython 3.14.3, and 3.8.20 with the cp38-abi3 wheel, 21 of 21. WSL2 (gcc 11.4, CPython 3.12.14, built from a copy with the staged headers, as CI does): 20 of 20, the header test skipped (no `include/`) |
+| `bindings/mex/test_mex_response.m` | MATLAB R2023a (MSVC 2022) and Octave 10.1 (MinGW-w64), PASS (54 checks) each |
+| `example.py`, `example_response.m` | Run; the output as scripted |
+
+The cost of a fed event, measured on 2026-10-25 under the timing guard
+(Windows 11, i7-1360P, AC; median of 15 runs of 200,000 events: a press
+and a release of a key that is no choice, into an open window):
+
+| Call | Per event |
+|---|---|
+| Python `feed(Event)`, `feed(16-tuple)` | 220 ns, 213 ns |
+| Python `feed()` of a `SimpleNamespace` with 6 fields, with 16 | 324 ns, 376 ns |
+| Python `key(t, scancode)` | 197 ns |
+| Python `feed_many()` of a 10-event list | 304 ns |
+| MATLAB `ysp_response('feed', h, s)`, `s` 2 events, 10 events | 2.7 us, 4.8 us per call |
+| MATLAB `ysp_response('key', ...)` | 1.0 us per call |
+
+A frame with 10 events takes under 5 us in either language. The first
+form of the attribute path called `getattr` for each field: 10 missing
+fields raised 10 `AttributeError`s, 3.9 us per event. It now reads the
+instance dict first (a field the dict lacks costs a lookup in a per-class
+cache, not an exception): 324 ns.
+
 ## Verification
 
 All on 2026-10-07, Windows 11, the Iris Xe laptop of `ysp/screen.h`'s

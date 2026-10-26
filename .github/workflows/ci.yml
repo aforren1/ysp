@@ -523,6 +523,7 @@ jobs:
         package: [ysp_parallel, ysp_serial, ysp_stair, ysp_quest, ysp_aep, ysp_trials, ysp_color, ysp_rdk, ysp_pack]
         package: [ysp_parallel, ysp_serial, ysp_stair, ysp_quest, ysp_aep, ysp_trials, ysp_color, ysp_rdk, ysp_rt]
         package: [ysp_parallel, ysp_serial, ysp_stair, ysp_quest, ysp_aep, ysp_trials, ysp_color, ysp_rdk, ysp_device, ysp_rigfile]
+        package: [ysp_parallel, ysp_serial, ysp_stair, ysp_quest, ysp_aep, ysp_trials, ysp_color, ysp_rdk, ysp_response]
         exclude:
           - os: macos-latest      # ysp/parallel.h #errors on macOS
             package: ysp_parallel
@@ -536,6 +537,8 @@ jobs:
       # headers' async layers include, and ysp/table.h, which ysp/trials.h
       # includes, and ysp/input.h, which ysp/box.h includes. A package gets
       # the ones it never reads; staging them unconditionally keeps this
+      # includes, and ysp/input.h, which ysp/response.h includes. A package
+      # gets the ones it never reads; staging them unconditionally keeps this
       # step one line.
       - name: Stage headers into the package (isolated build needs them locally)
         shell: bash
@@ -684,6 +687,9 @@ jobs:
       - name: Device and rig profile binding test (test_mex_device.m)
         working-directory: bindings/mex
         run: octave-cli -q --eval "test_mex_device"
+      - name: Response binding test (test_mex_response.m)
+        working-directory: bindings/mex
+        run: octave-cli -q --eval "test_mex_response"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -797,6 +803,10 @@ jobs:
         uses: matlab-actions/run-command@v3
         with:
           command: cd('bindings/mex'); test_mex_device
+      - name: Response binding test (test_mex_response.m)
+        uses: matlab-actions/run-command@v3
+        with:
+          command: cd('bindings/mex'); test_mex_response
 
       - uses: actions/upload-artifact@v7
         with:

@@ -309,6 +309,7 @@ Status:
 - v0.2.0 (a trim: the second-report rule moved to ysp/screen.h v0.4.1's input bridge, so every consumer gets it; the CSV row and `settle` removed).
 - v0.1.4: ALL mode excludes SYNC events.
 - v0.1.3: the event moved to ysp/input.h. Every rule checked on synthetic streams (20,576 checks, 20,000 random streams); 43 of 43 mutations caught; gcc, MinGW, MSVC. `examples/response/` has ten trials as small experiments (keyboard, same-different, serial RT, adjustment, mouse tracking, audio-keyboard, stop-signal, two keyboards, a 2AFC staircase and QUEST+, Stroop), each with a self-checking `--sim` run; what they show about the header is in the design notes. Not measured: a key pressed by hand, mouse, touch, pen and gamepad timing. [Tutorial, how-to guides and design notes](response.md).
+- Bindings: `ysp-response` 0.7.0 (Python) and the MEX `ysp_response`: the collector, the shared input event, an offline rescore and the data columns, every time in seconds with the exact ns beside the absolute times; feeding an event allocates nothing. [Bindings](response.md#bindings).
 
 ### ysp/box.h
 

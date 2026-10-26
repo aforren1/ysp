@@ -36,6 +36,8 @@ function build(name)
     % files through the OS (Windows, POSIX) and needs no library.
     % compile ysp/rt.h and need only the thread library below. ysp_rt.c
     % (ysp/rt.h itself) is the same: no gate, the thread library only.
+    % ysp_response.c (ysp/response.h with ysp/input.h) is pure computation
+    % too and needs no library.
     unsupported = {'ysp_parallel.c', ismac};
 
     % mex writes its output to the current directory; build next to the
