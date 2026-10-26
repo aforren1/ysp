@@ -18,6 +18,7 @@ never reused, so a handle kept past its `close` always raises
 | `ysp_color.c` | [ysp/color.h](../../include/ysp/color.h) | [test_mex_color.m](test_mex_color.m); the command reference is in [docs/color.md](../../docs/color.md) |
 | `ysp_box.c` | [ysp/box.h](../../include/ysp/box.h) | [example_box.m](example_box.m), [test_mex_box.m](test_mex_box.m) |
 | `ysp_rdk.c` | [ysp/rdk.h](../../include/ysp/rdk.h) | [example_rdk.m](example_rdk.m), [test_mex_rdk.m](test_mex_rdk.m) |
+| `ysp_pack.c` | [ysp/pack.h](../../include/ysp/pack.h) | [example_pack.m](example_pack.m), [test_mex_pack.m](test_mex_pack.m) |
 
 The two transport headers build on the shared [ysp/rt.h](../../include/ysp/rt.h), so
 both MEX functions compile it too. `ysp_quest.c` and `ysp_aep.c` define
@@ -971,6 +972,58 @@ the conversion is exact there, as in `ysp.rdk` ([docs/rdk.md](../../docs/rdk.md)
 "Bindings"). `'philox'`, `'angle'` and `'sincos'` are the exact pieces.
 Errors: `ysp_rdk:arg`, `ysp_rdk:order` (a time before the last update, or
 an output before `'start'`), `ysp_rdk:handle`, `ysp_rdk:usage`.
+## ysp_pack
+
+Reads and verifies a ysp pack ([docs/pack.md](../../docs/pack.md)): one
+store-only zip file, entries aligned to 4096 bytes, XXH64 hashes over
+1 MiB chunks, a SHA-256 manifest. `ysp_pack.c` compiles ysp/pack.h and the
+[ysp/json.h](../../include/ysp/json.h) it requires, and needs no library.
+A pack is untrusted input: the header checks every byte before it uses
+it, and each refusal raises `ysp_pack:<what>` with the header's message,
+which names the rule, the entry and the chunk.
+
+```matlab
+h = ysp_pack('open', 'study.ysppak');        % mapped read-only
+L = ysp_pack('list', h);                      % one struct per entry
+t = ysp_pack('read', h, 'conditions.pstb');   % uint8 column, hashed first
+d = jsondecode(ysp_pack('definition', h));    % the experiment definition
+[ok, msg] = ysp_pack('verify', h);            % every entry, now
+ysp_pack('close', h);
+```
+
+### Commands
+
+| Command | Returns | Notes |
+|---|---|---|
+| `'open', path [, verify]` | `uint64` handle | `path` is a char (UTF-8 on every platform), or the pack's bytes as `uint8` (copied once). `verify`: `'use'` (default: an entry is hashed when it is first read), `'open'` (every entry at open) or `'none'` |
+| `'close', h` | none | unmaps the file; results already returned stay valid |
+| `'info', h` | struct | `id` (`'sha256:...'`, the pack ID), `format`, `entries`, `chunks`, `file_size`, `zip_start`, `experiment` (the EXPERIMENT entry's name, or `''`), `policy`, `hashed_bytes`, `describe` (one line for a log) |
+| `'list', h` | N x 1 struct | `name`, `index` (1-based), `kind` (`'table'`, ...), `size`, `stream`, `flags`, `header_off`, `data_off` (0-based byte offsets in the file), `xxh64` (`uint64`), `crc32` (`uint32`); the manifest is first |
+| `'entry', h, name` | struct | one entry, the fields of `'list'` |
+| `'has', h, name` | logical | names are case-sensitive |
+| `'read', h, name [, offset, n]` | `uint8` column | the entry, or `n` bytes (`Inf`: to the end) from the 0-based byte `offset`; a range hashes only the 1 MiB chunks it touches |
+| `'verify', h [, name]` | none, or `[ok, msg]` | every entry (whatever the policy), or one (`'use'` and `'open'` only). With no output a mismatch raises `ysp_pack:corrupt`; with outputs it returns `false` and the message |
+| `'manifest', h` | char | `ysp/manifest.json`; `jsondecode` reads it |
+| `'definition', h` | char | the EXPERIMENT entry (a definition's canonical bytes), or `''` |
+| `'xxh64', bytes [, seed]` | `uint64` | opens nothing |
+| `'entry_hash', bytes` | `uint64` | the pack's entry hash, the manifest's `"xxh64"`; opens nothing |
+| `'version'` | char, char | this MEX function's version (1.0.0) and ysp/pack.h's |
+
+Error ids: `ysp_pack:arg`, `:io` (the file cannot be opened or mapped),
+`:format`, `:corrupt`, `:version` (another pack format), `:not_found`,
+`:nomem`, `:handle`, `:usage`.
+
+`'read'` copies the entry once, from the mapping into the new array, so
+the array stays valid after `'close'`. The text commands decode UTF-8 into
+MATLAB's UTF-16 `char`; Octave's `char` holds UTF-8, so there the bytes
+are copied. A byte that starts no valid UTF-8 sequence (a damaged or
+hostile manifest) becomes U+FFFD in MATLAB.
+
+[test_mex_pack.m](test_mex_pack.m) reads
+`tests/pack/fixtures/small.ysppak`, which the pack tool built from
+`tests/pack/fixtures/small/`, and damaged copies of it: a flipped data
+byte under each policy, truncations, and a flipped byte every 7 bytes. It
+prints `PASS` with the number of checks.
 
 ## Verification
 

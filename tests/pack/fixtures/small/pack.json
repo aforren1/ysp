@@ -1,0 +1,10 @@
+{
+  "format": "ysp-pack-source",
+  "version": 1,
+  "experiment": { "entry": "experiment/main.json", "source": "definition.json",
+                  "media_type": "application/vnd.ysp.experiment" },
+  "resources": [
+    { "name": "conditions.pstb", "kind": "table", "source": "conditions.csv" },
+    { "name": "readme.txt", "kind": "file", "source": "readme.txt", "license": "CC0-1.0" }
+  ]
+}

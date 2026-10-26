@@ -33,6 +33,15 @@ This page is reference: the language bindings of the headers.
   `ysp.serial` has the same reader since 0.5.0.2 (`async_start`,
   `async_read`, `async_wait`, `async_stop`, `async_stats`): a C thread that
   never takes the GIL.
+- **Packs**: `ysp-pack` gives `ysp.pack`, and `bindings/mex/ysp_pack.c`
+  the MEX `ysp_pack`: they open a pack (a file, mapped, or bytes in
+  memory), list its entries, read an entry or a range of it as a copy
+  (bytes, or a `uint8` column), read the manifest and the experiment
+  definition, and verify the whole pack or one entry. A failure raises the
+  header's message (`ysp.pack.CorruptError`, `ysp_pack:corrupt`, ...).
+  The Python calls that hash or copy entry data release the GIL.
+  [docs/pack.md](pack.md#17-bindings-2026-10-25) has what is not bound and
+  why.
 
 `ysp-box` gives `ysp.box`, and the MEX function `ysp_box` the same in
 MATLAB and Octave: a response box's or a line board's captured bytes to
@@ -67,6 +76,7 @@ call can poll. [Conventions](conventions.md) lists the exceptions.
 | `ysp.box` | the read time `t` of `decode()`, `Event.t` (with the exact `t_ns` beside it), `Event.unc`, the `width` of `encode()`, `fixed_pulse()`, `tick()`, `SLOW_WRITE`, `UNC_MAX` |
 | `ysp_box` (MEX) | the `'decode'` read time, the events' `t` (with `t_ns`, int64) and `unc`, the `'encode'` width, `'family'` (`fixed_pulse`, `tick`), `'constants'` (`SLOW_WRITE`, `UNC_MAX`) |
 | `ysp_rdk` (MEX) | as `ysp.rdk`: `'start'`, `'update'`, the `t0` and steps of `'replay'` and `'trajectory'`, `'get'` (`last.t`, with `last.ns` beside it), the desc's `lifetime` and `frame_period`, `'ages'` |
+| `ysp.pack` and its MEX | none: sizes and offsets are bytes |
 | `ysp.rdk` | `start(seed, t)`, `update(t)`, the `t0` and step rows of `replay()` and `trajectory()`, `Field.last` (`t`, and its exact `ns` beside it), `Field(lifetime=, frame_period=)`, `ages()`; exact to the ns below 2^23 s (about 97 days) |
 
 ## Versions
