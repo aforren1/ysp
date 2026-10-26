@@ -64,6 +64,32 @@ def after(path, first, k=6):
     return out
 
 
+def gap(path, first):
+    """The frames after an idle gap: frame FIRST's record, then the bad
+    frames (those before the first 10 in a row with tier 1, no drop and no
+    flag) and the span of their predicted onsets, as docs/av_probe.md."""
+    rows = [r for r in load(path)[1] if r[0] >= first]
+    run, bad_end = 0, None
+    for k, r in enumerate(rows):
+        good = r[12] == 1 and r[10] == 0 and r[13] == 0
+        run = run + 1 if good else 0
+        if run == 10:
+            bad_end = k - 9
+            break
+    if bad_end is None:
+        bad_end = len(rows)
+    r = rows[0]
+    head = "frame %d: wait %.1f ms, drop %d, %s, tier %d, flags 0x%x" % (
+        r[0], r[1] / 1e6, r[10], PATHS.get(r[11], r[11]), r[12], r[13])
+    span = (rows[bad_end - 1][5] - rows[0][5]) / 1e6 + 16.7 if bad_end else 0.0
+    worst = max((x[1] for x in rows[:bad_end]), default=0) / 1e6
+    flags = 0
+    for x in rows[:bad_end]:
+        flags |= x[13]
+    return "%s; bad %d (%.0f ms), max begin wait %.1f ms, flags 0x%x, drops %d" % (
+        head, bad_end, span, worst, flags, sum(x[10] for x in rows[:bad_end]))
+
+
 def load(path):
     tag, rows = "", []
     with open(path, newline="") as f:
@@ -76,6 +102,10 @@ def load(path):
 
 
 def main():
+    if sys.argv[1] == "--gap":
+        for p in sys.argv[3:]:
+            print(p.replace("\\", "/").split("/")[-1], gap(p, int(sys.argv[2])))
+        return
     if sys.argv[1] == "--after":
         for line in after(sys.argv[2], int(sys.argv[3])):
             print(line)

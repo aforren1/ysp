@@ -135,4 +135,5 @@ finally:
             sys.version_info[0], sys.version_info[1], a.gc, a.n, a.windowed, a.seconds)
         print("dumped", av.dump(a.csv, tag), "frames to", a.csv)
     print("frames %d records %d lost %d; records in the log %d" % (av.counts() + (len(log),)))
+    print(av.wt_state())
     av.free()

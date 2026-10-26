@@ -90,9 +90,12 @@ int main(int argc, char** argv) {
                    pv->f.abort_presses, (long)pv->keys_sent, (long)pv->keys_skipped);
         }
     } else if (lat >= 0) {
+        int64_t mx = 0, med;
         run_frames(60, 0);
         pv_latency(lat, lat_n, lat_frames, buf, sizeof buf);
         printf("%s", buf);
+        med = pv_wt_roundtrip(1000, &mx);
+        if (med >= 0) printf("window thread command round trip: median %.1f us, max %.1f us (1000)\n", med * 1e-3, mx * 1e-3);
     } else if (idle > 0) {
         int64_t first;
         run_frames(120, 0);
@@ -116,6 +119,8 @@ int main(int argc, char** argv) {
         snprintf(tag, sizeof tag, "host=C n=%d windowed=%d seconds=%.0f", n, o.windowed, seconds);
         printf("dumped %d frames to %s\n", pv_dump(csv, tag), csv);
     }
+    pv_wt_state(buf, sizeof buf);
+    printf("%s\n", buf);
     printf("frames %lld records %lld lost %lld\n", (long long)pv->n_frames, (long long)pv->n_recs, (long long)pv->lost);
     pv_free();
     return 0;

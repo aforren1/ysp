@@ -92,6 +92,7 @@ typedef struct pv_state {
 } pv_state;
 
 static pv_state* pv;   /* one per process, as screen.h keeps per-process state */
+static int64_t pv_open_t;     /* when the screen opened (the window thread's CPU share) */
 
 typedef struct pv_opts {
     int windowed;
@@ -277,6 +278,7 @@ static int pv_open(const pv_opts* o) {
     }
     yscr_on_flip(&pv->scr, pv_on_flip, NULL);
     pv->open = 1;
+    pv_open_t = yrt_now_ns();
     return 1;
 }
 
@@ -429,8 +431,19 @@ static int pv_describe(char* out, size_t cap) {
     return snprintf(out, cap, "%s\n%s\n%s\nangle_dir=%s window_thread=%d", a, b, gl, pv->angle_dir, (int)pv->scr.wt);
 }
 
+/* The window thread's CPU time over the screen's life (winthread probe). */
+static int64_t pv_wt_cpu_ns = -1, pv_wt_life_ns;
+static void pv_wt_cpu(void) {
+    FILETIME c, e, k, u;
+    if (!pv || !pv->scr.wt || !yscr__wt.thread || !GetThreadTimes(yscr__wt.thread, &c, &e, &k, &u)) return;
+    pv_wt_cpu_ns = (int64_t)((((uint64_t)k.dwHighDateTime << 32) | k.dwLowDateTime) +
+                             (((uint64_t)u.dwHighDateTime << 32) | u.dwLowDateTime)) * 100;
+    pv_wt_life_ns = yrt_now_ns() - pv_open_t;
+}
+
 static void pv_close(void) {
     if (!pv) return;
+    pv_wt_cpu();
     pv_watch_stop_();
     pv_keys_join();
 #ifndef PV_NO_AUDIO
@@ -588,9 +601,31 @@ static void pv_keys_join(void) {
 
 static int pv_wt_state(char* out, size_t cap) {
     HWND h = pv && pv->open ? pv_hwnd() : NULL;
-    return snprintf(out, cap, "wt=%d released=%ld iconic=%d hung=%d wt_alive=%d", pv ? (int)pv->scr.wt : -1,
-                    (long)yscr__wt.released, h ? IsIconic(h) != 0 : -1, h ? IsHungAppWindow(h) != 0 : -1,
-                    yscr__wt_alive(1000000000LL));
+    return snprintf(out, cap, "wt=%d released=%ld iconic=%d hung=%d wt_alive=%d wt_cpu_ms=%.1f over_s=%.1f",
+                    pv ? (int)pv->scr.wt : -1, (long)yscr__wt.released, h ? IsIconic(h) != 0 : -1,
+                    h ? IsHungAppWindow(h) != 0 : -1, yscr__wt_alive(1000000000LL), pv_wt_cpu_ns * 1e-6,
+                    pv_wt_life_ns * 1e-9);
+}
+
+/* The cost of one synchronous command to the window thread (a text input
+ * toggle, a gamepad open): n no-op round trips, the median in ns. */
+static void pv_noop(void* p) { (void)p; }
+static int pv_lat_cmp_(const void* a, const void* b) {
+    int64_t x = *(const int64_t*)a, y = *(const int64_t*)b;
+    return x < y ? -1 : x > y;
+}
+static int64_t pv_wt_roundtrip(int n, int64_t* max_ns) {
+    static int64_t v[1000];
+    int i;
+    if (!yscr__wt.thread || n <= 0 || n > 1000) return -1;
+    for (i = 0; i < n; i++) {
+        int64_t t = yrt_now_ns();
+        yscr__wt_run(pv_noop, NULL);
+        v[i] = yrt_now_ns() - t;
+    }
+    qsort(v, (size_t)n, sizeof *v, pv_lat_cmp_);
+    *max_ns = v[n - 1];
+    return v[n / 2];
 }
 
 #define PV_LAT_MAX 2000
@@ -672,7 +707,7 @@ static int pv_latency(int kind, int n, int in_frames, char* out, size_t cap) {
     while (yscr_poll(&pv->scr, &ev, NULL)) { }
     th = CreateThread(NULL, 0, pv_lat_main, NULL, 0, NULL);
     for (i = 0; i < n; i++) {
-        int64_t end = yrt_now_ns() + YRT_S(3);
+        int64_t end = yrt_now_ns() + YRT_S(20);
         int found = 0;
         InterlockedExchange(&pv_l.armed, 1);
         while (!found && yrt_now_ns() < end) {
