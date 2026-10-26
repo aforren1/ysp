@@ -326,6 +326,7 @@ allocated after open. The header's manual is the reference; in short:
 | `ypak_check(&pk, &e, bytes, n)` | Checks bytes the caller fetched: exactly `[header_off, data_off + size)` |
 | `ypak_cursor_init`, `ypak_cursor_read` | A stream: `ypak_cursor_read` has the signature of `yau_reader.read` and `yvid_reader.read`; verifies each 1 MiB chunk on its first read |
 | `ypak_verify_all` | Every entry now (a preflight) |
+| `ypak_verify_entry(&pk, &e)` | One entry now, whatever the policy (v0.4.0); `YPAK_ERR_ARG` for an incremental pack |
 | `ypak_id`, `ypak_describe` | `sha256:<hex>`, and one log line that names the policy |
 | `ypak_xxh64*`, `ypak_entry_hash`, `ypak_sha256*`, `ypak_crc32` | The hashes, for the tool and for callers |
 | `ypak_cset_view`, `ypak_art_view`, `ypak_runs_view` (`ypak_runs_find`, `ypak_runs_str`), `ypak_shader_view`, `ypak_texture_view`, `ypak_qoi_decode`, `ypak_qoi_encode` | The pack's own forms (section 4): bounds of their headers only |
@@ -2253,7 +2254,7 @@ on the same machine.
 `ysp-pack` (Python, `import ysp.pack`) and the MEX function `ysp_pack`
 bind the reader for an analysis or lab script: open a pack, list it, read
 an entry, read the manifest and the experiment definition, verify the pack
-or one entry. The header does not change. Both compile ysp/pack.h and the
+or one entry. Both compile ysp/pack.h and the
 ysp/json.h it requires; neither needs a library.
 
 ### What is bound
@@ -2271,8 +2272,9 @@ ysp/json.h it requires; neither needs a library.
 The whole entry goes through `ypak_data()`, so the policy hashes it on
 first use; a range goes through a cursor, which hashes only the 1 MiB
 chunks it touches. `verify()` is `ypak_verify_all()`. `verify(name)` is
-`ypak_data()` and is refused under `"none"`: no header call hashes one
-entry under that policy (Left).
+`ypak_verify_entry()` (header 0.4.0), which hashes the entry under every
+policy, `"none"` included. Up to header 0.3.0 it was `ypak_data()` and was
+refused under `"none"`, because no header call hashed one entry there.
 
 ### Copies and lifetime
 
@@ -2326,7 +2328,7 @@ entry, an appended pack and a format-2 comment.
 | `bindings/python/ysp_pack/tests` | 16 of 16 pass on Windows 11 (CPython 3.14.3 and 3.9.25, MSVC 14.51; the extension also compiles clean at `/W4`) and on WSL2 Ubuntu 22.04 (CPython 3.12.14, gcc 11.4; `-std=c99 -Wall -Wextra -Wshadow -Werror` clean), the tool test's 5.3 MB corpus pack included (`YSP_PACK_CORPUS`) |
 | Truncations | every length of a 25,296-byte writer pack refused at open, and six lengths of the file through the mapping |
 | Flipped bytes | every byte of the writer pack and of the tool fixture, each with bit 0 and bit 7: 50,592 and 42,226 damaged packs; 20,460 and 22,834 refused at open, 30,132 and 19,392 at a read or at `verify()`, 0 read different bytes |
-| Policies | a damaged entry: `"use"` reads the others and refuses it by name; `"open"` refuses the pack; `"none"` reads the damage and `verify()` still refuses it. A damaged chunk: ranges in the other chunks read, the chunk is refused as "chunk 1" |
+| Policies | a damaged entry: `"use"` reads the others and refuses it by name; `"open"` refuses the pack; `"none"` reads the damage, and `verify()` and `verify(name)` still refuse it (`verify(name)` since 0.4.0; an entry that passes is hashed once). A damaged chunk: ranges in the other chunks read, the chunk is refused as "chunk 1" |
 | Threads | four readers and a `verify()` on one pack; `close()` during a 48 MiB `verify()`: the call finished and the pack closed after it in 20 of 20 runs (a separate run of the test's case) |
 | `bindings/mex/test_mex_pack.m` | PASS, 60 checks, in MATLAB R2023a (MSVC 2022) and Octave 10.1 (its MinGW) on Windows 11; `example_pack.m` runs in both |
 
@@ -2350,11 +2352,44 @@ The copy costs about a third of a first read. A script reads at load
 time, so the copy stays; a range read of a long entry costs only its
 chunks.
 
+### ypak_verify_entry() (header 0.4.0, 2026-10-26)
+
+Under `YPAK_VERIFY_NONE`, `ypak_data()` checks the local header and
+skips the hash, and `ypak_check()` returns 0 after the header. Only
+`ypak_verify_all()` hashed under that policy, and it hashes every entry.
+`ypak_verify_entry(pk, e)` hashes one: the local header against the
+central record, each chunk against the chunk table, and the entry hash,
+from the mapping, the memory or the range reader. An incremental pack has
+no bytes of its own, so there it returns `YPAK_ERR_ARG` and names
+`ypak_check()`. An entry already hashed in this open pack returns 0
+without a second hash, as `ypak_verify_all()` does: the verified flag is
+set only on success, so a damaged entry is refused at every call.
+
+Threads (THREADS AND COST in the header): several threads may call it on
+one pack. Two threads that verify one entry may both hash it and both
+store the same flag; a failure writes the message under the claim.
+
+Tests: `test_verify_entry()` and `test_verify_threads()` in
+`tests/adapt/pack_test.c`. Under each policy an undamaged entry passes and
+is hashed once (`hashed_bytes`); under `"none"`, from memory and from a
+range reader, a damaged one-chunk entry and a damaged chunk 1 are
+`YPAK_ERR_CORRUPT` by name and chunk; a damaged local header is
+`YPAK_ERR_FORMAT`; an incremental pack is `YPAK_ERR_ARG`; two threads
+verify a damaged entry each and a shared good one 200 times, every result
+right and the message one failure's, whole. `pack_test` passes 515
+checks with MSVC 19.44, MinGW-w64 gcc 16.1 and gcc 11.4 on WSL2 under ASan
+and UBSan (full mode, the bit flips included). The bindings: `ysp-pack`
+0.4.0, 15 tests pass and the corpus test skips (no `YSP_PACK_CORPUS`), on
+CPython 3.14.3 (Windows 11, MSVC) and 3.12.14 (WSL2, gcc 11.4);
+`test_mex_pack.m` PASS, 62 checks, in MATLAB R2023a and Octave 10.1.
+`tests/fuzz/pack_fuzz.c` target 0 calls `ypak_verify_entry()` on every
+other entry before its data; its seeds from the fixture replay clean
+(MinGW gcc 16.1); libFuzzer was not run. Mutants `ve-01` to `ve-04`
+in `tests/mutate/pack.toml` (the policy followed, a second hash, the
+header skipped, the incremental refusal removed): 4 of 4 caught.
+
 ### Left
 
-- No header call verifies one entry under `"none"` (a `ypak_verify_entry()`
-  would give `verify(name)` there). Not needed by the bindings' users,
-  who open with the default `"use"`.
 - A pack file that another process truncates while it is mapped: by
   POSIX mmap rules a read of a lost page raises SIGBUS, in C as in the
   bindings. Not tested.

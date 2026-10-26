@@ -395,3 +395,50 @@ why = "Layout needs a size above 0."
 find = "!(x[0] > 0 && x[0] <= 1.7976931348623157e308)"
 replace = "!(x[0] >= 0 && x[0] <= 1.7976931348623157e308)"
 
+
+# --- v0.4.0: ypak_verify_entry() ---------------------------------------------------
+
+[[mutant]]
+id = "ve-01"
+name = "verify_entry follows the policy"
+test = "pack"
+why = "Under VERIFY_NONE, ypak_data() skips the hash; ypak_verify_entry() is the one call that hashes one entry whatever the policy."
+find = '''    rc = ypak__header_from(p, i, &w);
+    if (rc == 0 && !(YPAK__LOAD(&p->ok_[i]) & 2))
+        rc = ypak__hash('''
+replace = '''    rc = ypak__header_from(p, i, &w);
+    if (rc == 0 && p->verify_ != YPAK_VERIFY_NONE && !(YPAK__LOAD(&p->ok_[i]) & 2))
+        rc = ypak__hash('''
+
+[[mutant]]
+id = "ve-02"
+name = "verify_entry hashes an entry again"
+test = "pack"
+why = "An entry is hashed once per open pack; a second verify, or ypak_data() after one, must not read it again."
+find = '''    rc = ypak__header_from(p, i, &w);
+    if (rc == 0 && !(YPAK__LOAD(&p->ok_[i]) & 2))
+        rc = ypak__hash('''
+replace = '''    rc = ypak__header_from(p, i, &w);
+    if (rc == 0)
+        rc = ypak__hash('''
+
+[[mutant]]
+id = "ve-03"
+name = "verify_entry skips the local header"
+test = "pack"
+why = "The local header is checked against the central record on first access in every policy; a verify of the entry is an access."
+find = '''    rc = ypak__header_from(p, i, &w);
+    if (rc == 0 && !(YPAK__LOAD(&p->ok_[i]) & 2))
+        rc = ypak__hash('''
+replace = '''    rc = 0;
+    if (rc == 0 && !(YPAK__LOAD(&p->ok_[i]) & 2))
+        rc = ypak__hash('''
+
+[[mutant]]
+id = "ve-04"
+name = "verify_entry reads an incremental pack"
+test = "pack"
+why = "An incremental pack has no bytes of its own; the call must say to use ypak_check(), not fail as a read error."
+find = '''    if (!p->base_ && !p->rd_)
+        return ypak__fail(p, YPAK_ERR_ARG, "ypak_verify_entry: an incremental pack has no bytes to read; use ypak_check()");'''
+replace = ''

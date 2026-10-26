@@ -744,6 +744,119 @@ static void test_sources(void) {
     vf_free(&f);
 }
 
+/* v0.4.0: ypak_verify_entry() hashes one entry whatever the policy. Under
+ * VERIFY_NONE, ypak_data() gives damaged bytes unhashed and ypak_check()
+ * returns 0 after the header, so this is the only check of one entry. */
+typedef struct memsrc { const uint8_t* m; int64_t size; } memsrc;
+
+static int64_t mem_read(void* ctx, int64_t off, void* buf, int64_t n) {
+    const memsrc* ms = (const memsrc*)ctx;
+    if (off < 0 || n < 0 || off + n > ms->size) return -1;
+    memcpy(buf, ms->m + off, (size_t)n);
+    return n;
+}
+
+static void test_verify_entry(void) {
+    vfile f;
+    uint8_t* m;
+    ypak_pack pk;
+    ypak_entry ce, fe, te;
+    ypak_desc d;
+    ypak_reader rd;
+    memsrc ms;
+    int rc, src;
+    uint64_t h0;
+    memset(&ce, 0, sizeof ce);
+    memset(&fe, 0, sizeof fe);
+    memset(&te, 0, sizeof te);
+    build(&f, g_basic, N_BASIC, F_NONE, 0, 0);
+    m = vf_flat(&f);
+    /* undamaged, each policy: 0, and an entry is hashed once per open pack */
+    for (rc = 0; rc < 3; rc++) {
+        static const ypak_verify pol[3] = { YPAK_VERIFY_USE, YPAK_VERIFY_OPEN, YPAK_VERIFY_NONE };
+        if (open_mem(&pk, m, f.size, pol[rc]) != 0) { CHECK(0, "open policy %d: %s", rc, ypak_error(&pk)); continue; }
+        CHECK(ypak_find(&pk, "video/film.mpg", &fe) == 0, "film entry");
+        h0 = pk.hashed_bytes;
+        CHECK(ypak_verify_entry(&pk, &fe) == 0, "verify_entry, policy %d: %s", rc, ypak_error(&pk));
+        CHECK(pk.hashed_bytes - h0 == (pol[rc] == YPAK_VERIFY_OPEN ? 0u : (uint64_t)fe.size),
+              "policy %d: hashed %llu bytes", rc, (unsigned long long)(pk.hashed_bytes - h0));
+        h0 = pk.hashed_bytes;
+        CHECK(ypak_verify_entry(&pk, &fe) == 0 && pk.hashed_bytes == h0, "a second verify_entry hashes nothing");
+        CHECK(ypak_data(&pk, &fe) != NULL && pk.hashed_bytes == h0, "ypak_data after verify_entry hashes nothing");
+        CHECK(ypak_find(&pk, "empty.bin", &te) == 0 && ypak_verify_entry(&pk, &te) == 0, "an empty entry verifies");
+        CHECK(ypak_verify_entry(&pk, NULL) == YPAK_ERR_ARG && pk.error_code == YPAK_ERR_ARG, "NULL entry");
+        te = fe;
+        te.index = pk.n;
+        CHECK(ypak_verify_entry(&pk, &te) == YPAK_ERR_ARG, "index past the pack");
+        ypak_close(&pk);
+        CHECK(ypak_verify_entry(&pk, &fe) == YPAK_ERR_ARG, "closed pack");
+    }
+    CHECK(ypak_verify_entry(NULL, NULL) == YPAK_ERR_ARG, "NULL pack");
+    /* damaged: a byte of a one-chunk entry and of chunk 1 of the film */
+    {
+        ypak_pack tmp;
+        if (open_mem(&tmp, m, f.size, YPAK_VERIFY_NONE) == 0) {
+            ypak_find(&tmp, "conditions.pstb", &ce);
+            ypak_find(&tmp, "video/film.mpg", &fe);
+            ypak_find(&tmp, "audio/tone.wav", &te);
+            ypak_close(&tmp);
+        }
+    }
+    m[ce.data_off + 7] ^= 0x10;
+    m[fe.data_off + YPAK_CHUNK + 9] ^= 0x01;
+    ms.m = m;
+    ms.size = f.size;
+    rd.read = mem_read;
+    rd.size = f.size;
+    for (src = 0; src < 2; src++) {
+        const char* what = src ? "reader" : "memory";
+        memset(&d, 0, sizeof(d));
+        d.verify = YPAK_VERIFY_NONE;
+        if (src) { d.reader = &rd; d.reader_ctx = &ms; }
+        else { d.data = m; d.size = (size_t)f.size; }
+        rc = open_rc(&pk, &d);
+        CHECK(rc == 0, "%s, VERIFY_NONE, damaged: %s", what, ypak_error(&pk));
+        if (rc != 0) continue;
+        if (!src) CHECK(ypak_data(&pk, &ce) != NULL, "VERIFY_NONE: ypak_data gives the damaged entry");
+        rc = ypak_verify_entry(&pk, &ce);
+        CHECK(rc == YPAK_ERR_CORRUPT && pk.error_code == YPAK_ERR_CORRUPT && strstr(ypak_error(&pk), "conditions.pstb"),
+              "%s: the damaged entry: %d %s", what, rc, ypak_error(&pk));
+        CHECK(ypak_verify_entry(&pk, &ce) == YPAK_ERR_CORRUPT, "%s: refused again (no flag set on a failure)", what);
+        rc = ypak_verify_entry(&pk, &fe);
+        CHECK(rc == YPAK_ERR_CORRUPT && strstr(ypak_error(&pk), "chunk 1"), "%s: the damaged chunk: %d %s", what, rc, ypak_error(&pk));
+        CHECK(ypak_verify_entry(&pk, &te) == 0, "%s: an undamaged entry: %s", what, ypak_error(&pk));
+        CHECK(ypak_verify_all(&pk) == YPAK_ERR_CORRUPT, "%s: verify_all agrees", what);
+        ypak_close(&pk);
+    }
+    m[ce.data_off + 7] ^= 0x10;
+    m[fe.data_off + YPAK_CHUNK + 9] ^= 0x01;
+    /* a damaged local header (its time field must be 0), data intact */
+    m[te.header_off + 10] ^= 0x01;
+    if (open_mem(&pk, m, f.size, YPAK_VERIFY_NONE) == 0) {
+        rc = ypak_verify_entry(&pk, &te);
+        CHECK(rc == YPAK_ERR_FORMAT && strstr(ypak_error(&pk), "local header"), "the local header: %d %s", rc, ypak_error(&pk));
+        ypak_close(&pk);
+    } else {
+        CHECK(0, "a damaged local header is not seen at open: %s", ypak_error(&pk));
+    }
+    m[te.header_off + 10] ^= 0x01;
+    /* incremental: no bytes of its own; ypak_check() is the call */
+    memset(&d, 0, sizeof(d));
+    d.tail = m;
+    d.tail_size = (size_t)f.size;
+    d.file_size = f.size;
+    d.verify = YPAK_VERIFY_NONE;
+    rc = open_rc(&pk, &d);
+    CHECK(rc == 0, "incremental open: %s", ypak_error(&pk));
+    if (rc == 0) {
+        ypak_find(&pk, "conditions.pstb", &ce);
+        CHECK(ypak_verify_entry(&pk, &ce) == YPAK_ERR_ARG && strstr(ypak_error(&pk), "ypak_check"), "incremental: %s", ypak_error(&pk));
+        ypak_close(&pk);
+    }
+    free(m);
+    vf_free(&f);
+}
+
 static void test_appended(void) {
     int absolute;
     for (absolute = 0; absolute < 2; absolute++) {
@@ -1246,6 +1359,77 @@ static void test_claim(void) {
     vf_free(&f);
 }
 
+/* v0.4.0: ypak_verify_entry() on two threads at once (THREADS AND COST):
+ * each thread's damaged entry is refused every time, the shared undamaged
+ * entry passes every time, and the message is one failure's, whole. */
+static ypak_pack g_ve_pk;
+static ypak_entry g_ve_bad[2], g_ve_good;
+static int g_ve_wrong[2];
+
+static void ve_run(int k) {
+    int i;
+    for (i = 0; i < 200; i++) {
+        if (ypak_verify_entry(&g_ve_pk, &g_ve_bad[k]) != YPAK_ERR_CORRUPT) g_ve_wrong[k]++;
+        if (ypak_verify_entry(&g_ve_pk, &g_ve_good) != 0) g_ve_wrong[k]++;
+    }
+}
+
+#if defined(CLAIM_THREADS)
+#if defined(_WIN32)
+static DWORD WINAPI ve_thread(LPVOID arg) { ve_run((int)(intptr_t)arg); return 0; }
+#else
+static void* ve_thread(void* arg) { ve_run((int)(intptr_t)arg); return NULL; }
+#endif
+#endif
+
+static void test_verify_threads(void) {
+    static const char* const names[2] = { "conditions.pstb", "Gesichter/M\xC3\xBCller.bin" };
+    vfile f;
+    uint8_t* m;
+    char want[2][160];
+    int k;
+    build(&f, g_basic, N_BASIC, F_NONE, 0, 0);
+    m = vf_flat(&f);
+    if (open_mem(&g_ve_pk, m, f.size, YPAK_VERIFY_NONE) != 0) {
+        CHECK(0, "verify threads: open: %s", ypak_error(&g_ve_pk));
+        free(m);
+        vf_free(&f);
+        return;
+    }
+    for (k = 0; k < 2; k++) ypak_find(&g_ve_pk, names[k], &g_ve_bad[k]);
+    ypak_find(&g_ve_pk, "video/film.mpg", &g_ve_good);
+    ypak_close(&g_ve_pk);
+    for (k = 0; k < 2; k++) {
+        m[g_ve_bad[k].data_off + 3] ^= 0x40;
+        snprintf(want[k], sizeof(want[k]), "ysp_pack: '%s': does not match its entry hash (corrupt)", names[k]);
+    }
+    if (open_mem(&g_ve_pk, m, f.size, YPAK_VERIFY_NONE) == 0) {
+#if defined(CLAIM_THREADS)
+#if defined(_WIN32)
+        HANDLE th[2];
+        for (k = 0; k < 2; k++) th[k] = CreateThread(NULL, 0, ve_thread, (LPVOID)(intptr_t)k, 0, NULL);
+        for (k = 0; k < 2; k++) if (th[k]) { WaitForSingleObject(th[k], INFINITE); CloseHandle(th[k]); }
+#else
+        pthread_t th[2];
+        for (k = 0; k < 2; k++) pthread_create(&th[k], NULL, ve_thread, (void*)(intptr_t)k);
+        for (k = 0; k < 2; k++) pthread_join(th[k], NULL);
+#endif
+#else
+        ve_run(0);
+        ve_run(1);
+#endif
+        CHECK(g_ve_wrong[0] == 0 && g_ve_wrong[1] == 0, "verify threads: %d and %d wrong results", g_ve_wrong[0], g_ve_wrong[1]);
+        CHECK(strcmp(ypak_error(&g_ve_pk), want[0]) == 0 || strcmp(ypak_error(&g_ve_pk), want[1]) == 0,
+              "verify threads: the message is one failure's, whole: %s", ypak_error(&g_ve_pk));
+        CHECK(g_ve_pk.error_code == YPAK_ERR_CORRUPT && g_ve_pk.err_claim_ == 0, "verify threads: code, released");
+        ypak_close(&g_ve_pk);
+    } else {
+        CHECK(0, "verify threads: open damaged: %s", ypak_error(&g_ve_pk));
+    }
+    free(m);
+    vf_free(&f);
+}
+
 int main(void) {
     const char* quick = getenv("YPAK_TEST_QUICK");
     int full = !(quick && quick[0] == '1');
@@ -1254,10 +1438,12 @@ int main(void) {
     test_names();
     test_basic();
     test_sources();
+    test_verify_entry();
     test_appended();
     test_faults();
     test_views();
     test_claim();
+    test_verify_threads();
     test_runs_key();
     if (full) {
         test_flips();

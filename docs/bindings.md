@@ -186,6 +186,8 @@ seconds and the async reader; v1 took milliseconds and microseconds and had
 build. The MEX functions of 2026-10-25 (`ysp_rt`, `ysp_box`, `ysp_rdk`,
 `ysp_device`, `ysp_rigfile`, `ysp_response`, `ysp_timeline`,
 `ysp_dataset`, `ysp_pack`) do the same: `'version'` returns 1.0.0, and
-its second output is the version of the header. The adaptive MEX
+its second output is the version of the header. `ysp_pack` is 1.1.0 since
+2026-10-26: `'verify'` of one entry hashes it under `'none'` too
+(`ypak_verify_entry()`, ysp/pack.h 0.4.0). The adaptive MEX
 functions and `ysp_color` have no number of their own: `'version'`
 returns the header's.

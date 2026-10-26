@@ -15,7 +15,7 @@ C11 or C++17, and its top comment is its manual.
 | [trials](docs/trials.md) | `ytr_` | Trial orders, blocks, adaptive tracks, jitter, variables per trial, replay, a CSV row per trial | 0.6.0 | tested |
 | [dataset](docs/dataset.md) | `yds_` | A session's data set: session.json, trial, frame, event, clock and stream tables, a zip for the web | 0.2.0 | tested |
 | [table](docs/table.md) | `ytb_` | Typed tables and a bounded CSV parser | 0.3.0 | tested |
-| [pack](docs/pack.md) | `ypak_` | Read and verify ysp packs (store-only zip) | 0.3.0 | tested |
+| [pack](docs/pack.md) | `ypak_` | Read and verify ysp packs (store-only zip) | 0.4.0 | tested |
 | [json](docs/json.md) | `yjs_` | Strict JSON reader and canonical writer | 0.2.1 | tested |
 | [stair](docs/adapt.md) | `yst_` | Adaptive staircases | 0.3.0 | tested |
 | [quest](docs/adapt.md) | `yqst_` | QUEST+, QUEST, Psi and Psi-marginal on a grid | 0.7.0 | tested |

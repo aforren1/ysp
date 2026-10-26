@@ -29,7 +29,7 @@
 #include "ysp/pack.h"
 
 /* This MEX function's own version (docs/bindings.md, Versions). */
-#define PK_MEX_VERSION "1.0.0"
+#define PK_MEX_VERSION "1.1.0"   /* 1.1.0: verify of one entry under 'none' */
 
 typedef struct pk_handle {
     ypak_pack pk;
@@ -368,14 +368,10 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         ypak_entry e;
         int rc = 0;
         h = pk_get(nrhs, prhs, "[ok, msg] = ysp_pack('verify', h [, name])");
+        /* both hash whatever the policy, 'none' included (ysp/pack.h 0.4.0) */
         if (nrhs > 2) {
             pk_find(h, prhs[2], &e);
-            /* ypak_data() hashes one entry under 'use' and 'open'; under
-             * 'none' no header call hashes one entry, so refuse rather than
-             * report a check that did not run. */
-            if (h->policy == YPAK_VERIFY_NONE)
-                pm_err("arg", "the pack was opened with verify 'none': verify of the whole pack hashes every entry; one entry needs 'use' or 'open'");
-            if (!ypak_data(&h->pk, &e)) rc = h->pk.error_code ? h->pk.error_code : YPAK_ERR_ARG;
+            rc = ypak_verify_entry(&h->pk, &e);
         } else {
             rc = ypak_verify_all(&h->pk);
         }

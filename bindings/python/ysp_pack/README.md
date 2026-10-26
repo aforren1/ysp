@@ -61,7 +61,7 @@ except yp.CorruptError as ex:
     print(ex)    # ysp_pack: 'readme.txt': does not match its entry hash (corrupt)
 
 pk.verify()                 # every entry now, whatever the policy
-pk.verify("data.bin")       # one entry ("use" and "open" only)
+pk.verify("data.bin")       # one entry now, whatever the policy
 ```
 
 Each failure raises a subclass of `ysp.pack.Error` with the header's
@@ -85,15 +85,15 @@ signature: they find corruption, not forgery.
 
 `Pack(path, verify="use")` and `Pack.from_bytes(data, verify="use")`.
 `verify` is `"use"` (an entry is hashed when it is first read), `"open"`
-(every entry at open) or `"none"` (no hashes after open; `verify()` still
-hashes everything).
+(every entry at open) or `"none"` (no hashes after open; `verify()` and
+`verify(name)` still hash).
 
 | Member | What it gives |
 |---|---|
 | `entries()`, `names()` | Every entry, or its name, in pack order; the manifest is first |
 | `entry(name)` | An `Entry`: `name`, `index`, `kind` (`"table"`, ...), `size`, `stream`, `flags`, `header_off`, `data_off`, `xxh64`, `crc32` |
 | `read(name, offset=0, size=-1)`, `pk[name]` | The bytes, a copy. `name` can be an `Entry` |
-| `verify(name=None)` | Hashes every entry, or one; raises on a mismatch |
+| `verify(name=None)` | Hashes every entry, or one, whatever the policy; raises on a mismatch |
 | `definition()`, `experiment` | The EXPERIMENT entry's bytes and its `Entry`, or `None` |
 | `manifest()` | The manifest, parsed by the standard library's `json` |
 | `id`, `format`, `file_size`, `zip_start`, `n_chunks`, `policy`, `hashed_bytes`, `closed` | The pack's properties |

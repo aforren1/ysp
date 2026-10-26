@@ -1,4 +1,4 @@
-/* ysp/pack.h - v0.3.0 - public domain single-header pack reader
+/* ysp/pack.h - v0.4.0 - public domain single-header pack reader
  *
  *   Reads a ysp pack (docs/pack.md): one zip file in store-only mode, every
  *   entry's data aligned to 4096 bytes, a JSON manifest first, a private
@@ -83,6 +83,9 @@
  *                       when ypak_check() gets it.
  *     YPAK_VERIFY_OPEN  every entry at open: the whole pack is read.
  *     YPAK_VERIFY_NONE  no data hashes after open; ypak_describe() says so.
+ *   Whatever the policy, ypak_verify_all() hashes every entry now and
+ *   ypak_verify_entry() one entry (from the mapping, memory or range
+ *   reader; an incremental pack has no bytes of its own to hash).
  *   Each entry's local header is checked against its central record (and
  *   its padding against zeros) on first access in every policy. An entry
  *   or chunk is hashed once per open pack. A mismatch is YPAK_ERR_CORRUPT
@@ -93,9 +96,10 @@
  *   THREADS AND COST
  *   ---------------------------------------------------------------------
  *   After open, any number of threads may call the lookups, ypak_data(),
- *   ypak_check() and their own cursors; verified flags are bytes stored
- *   with release semantics, so two threads that verify one chunk both
- *   store 1. A cursor belongs to one thread.
+ *   ypak_check(), ypak_verify_entry(), ypak_verify_all() and their own
+ *   cursors; verified flags are bytes stored with release semantics, so
+ *   two threads that verify one chunk or one entry both store the same
+ *   value (each may hash it). A cursor belongs to one thread.
  *   MESSAGES are the exception README.md (Conventions) names for this
  *   header: every failing call writes ypak_error() and pk.error_code, also
  *   the calls that several threads may make at once. Each write first takes
@@ -131,6 +135,13 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.4.0 - ypak_verify_entry(): hashes and checks one entry whatever the
+ *          policy. Under YPAK_VERIFY_NONE, ypak_data() skips the hash and
+ *          ypak_check() returns 0 after the header, so before this no call
+ *          verified a single entry (only ypak_verify_all(), every entry).
+ *          An entry already hashed in this open pack is not hashed again,
+ *          as in ypak_verify_all(). No format change; every other call is
+ *          unchanged.
  *   v0.3.0 - ypak_runs_key() and ypak_text_style: the key of a glyph-run
  *          block the pack tool derives from a text stimulus, built here so
  *          the tool and the player agree byte for byte (docs/pack.md 4.5;
@@ -156,7 +167,12 @@
  *          set, artwork, glyph runs, shader, texture, QOI), XXH64,
  *          SHA-256 and CRC-32.
  *
- *   STATUS: v0.3.0 on 2026-10-21: tests/adapt/pack_test.c checks
+ *   STATUS: v0.4.0 on 2026-10-26: tests/adapt/pack_test.c checks
+ *   ypak_verify_entry() under each policy and source and on two threads
+ *   (515 checks with MSVC 19.44, MinGW gcc 16.1 and Linux gcc 11.4 under
+ *   ASan and UBSan); 4 of 4 new mutations caught; the Python and MEX
+ *   bindings verify one entry with it (docs/pack.md section 17).
+ *   v0.3.0 on 2026-10-21: tests/adapt/pack_test.c checks
  *   ypak_runs_key() (468 checks with MSVC 19.44 and MinGW gcc 16.1; quick
  *   mode under Linux gcc ASan and UBSan); 8 of 8 new mutations caught;
  *   the pack tool's test builds every derived key with it on MSVC and
@@ -197,9 +213,9 @@
 #define YSP_PACK_H_INCLUDED
 
 #define YPAK_VERSION_MAJOR 0
-#define YPAK_VERSION_MINOR 3
+#define YPAK_VERSION_MINOR 4
 #define YPAK_VERSION_PATCH 0
-#define YPAK_VERSION_STRING "0.3.0"
+#define YPAK_VERSION_STRING "0.4.0"
 
 /* The file source's mmap(), open() and fstat() under -std=c11: the same
  * feature-test macro, for the same reasons, as ysp/rt.h's (set before the
@@ -382,6 +398,12 @@ YPAK_API const void* ypak_data(ypak_pack* p, const ypak_entry* e);
 YPAK_API int ypak_check(ypak_pack* p, const ypak_entry* e, const void* bytes, size_t n);
 /* Verifies every entry now (a preflight), whatever the policy. */
 YPAK_API int ypak_verify_all(ypak_pack* p);
+/* Verifies one entry now, whatever the policy: its local header and its
+ * hashes (each chunk's and the entry hash), from the mapping, memory or
+ * range reader. 0, YPAK_ERR_CORRUPT or another YPAK_ERR_*; YPAK_ERR_ARG for
+ * an incremental pack (fetch the bytes and ypak_check() them). An entry
+ * already hashed in this open pack returns 0 without a second hash. */
+YPAK_API int ypak_verify_entry(ypak_pack* p, const ypak_entry* e);
 
 typedef struct ypak_cursor {
     ypak_pack* p;
@@ -1850,6 +1872,21 @@ YPAK_API int ypak_verify_all(ypak_pack* p) {
         if (rc) return rc;
     }
     return 0;
+}
+
+YPAK_API int ypak_verify_entry(ypak_pack* p, const ypak_entry* e) {
+    uint32_t i;
+    ypak__src w;
+    int rc;
+    if (!ypak__valid_entry(p, e)) return p ? ypak__fail(p, YPAK_ERR_ARG, "ypak_verify_entry: not an entry of this open pack") : YPAK_ERR_ARG;
+    if (!p->base_ && !p->rd_)
+        return ypak__fail(p, YPAK_ERR_ARG, "ypak_verify_entry: an incremental pack has no bytes to read; use ypak_check()");
+    i = e->index;
+    memset(&w, 0, sizeof(w));
+    rc = ypak__header_from(p, i, &w);
+    if (rc == 0 && !(YPAK__LOAD(&p->ok_[i]) & 2))
+        rc = ypak__hash(p, i, &w, p->base_ ? p->base_ + p->ent_[i].data : NULL, NULL, 0, ypak_chunk_count(p->ent_[i].size));
+    return rc;
 }
 
 /* --- cursors --------------------------------------------------------------- */

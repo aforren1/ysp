@@ -428,20 +428,12 @@ static PyObject* Pack_verify(PyObject* self, PyObject* args, PyObject* kwds) {
     int rc = 0;
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O", kw, &name)) return NULL;
     if (!pk_usable(s)) return NULL;
-    if (name != Py_None) {
-        if (pk_lookup(s, name, &e) < 0) return NULL;
-        /* ypak_data() hashes an entry under "use" and "open"; under "none"
-         * the header has no call that hashes one entry (verify_all hashes
-         * them all), so refuse rather than report a check that did not run. */
-        if (s->policy == YPAK_VERIFY_NONE) {
-            PyErr_SetString(PkArgumentError, "the pack was opened with verify=\"none\": verify() of the whole pack hashes every entry; one entry needs \"use\" or \"open\"");
-            return NULL;
-        }
-    }
+    if (name != Py_None && pk_lookup(s, name, &e) < 0) return NULL;
     pk_enter(s);
     Py_BEGIN_ALLOW_THREADS
+    /* both hash whatever the policy, "none" included (ysp/pack.h 0.4.0) */
     if (name == Py_None) rc = ypak_verify_all(&s->pk);
-    else if (!ypak_data(&s->pk, &e)) rc = s->pk.error_code ? s->pk.error_code : YPAK_ERR_ARG;
+    else rc = ypak_verify_entry(&s->pk, &e);
     Py_END_ALLOW_THREADS
     if (rc < 0) { pk_fail(&s->pk, rc); pk_leave(s); return NULL; }
     pk_leave(s);
@@ -529,7 +521,8 @@ static PyMethodDef Pack_methods[] = {
       "read(name, offset=0, size=-1) -> bytes. The whole entry is hashed on first use (verify=\"use\"); "
       "a range hashes the 1 MiB chunks it touches. CorruptError names the entry and the chunk." },
     { "verify", (PyCFunction)(void (*)(void))Pack_verify, METH_VARARGS | METH_KEYWORDS,
-      "verify(name=None) -> None. Hashes every entry now (ypak_verify_all), or one entry; raises on a mismatch." },
+      "verify(name=None) -> None. Hashes every entry now (ypak_verify_all), or one (ypak_verify_entry), "
+      "whatever the policy; raises on a mismatch." },
     { "definition", Pack_definition, METH_NOARGS,
       "definition() -> the EXPERIMENT entry's bytes (a definition's canonical bytes), or None." },
     { "manifest", Pack_manifest, METH_NOARGS, "manifest() -> ysp/manifest.json parsed with the json module." },
