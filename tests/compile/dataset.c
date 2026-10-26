@@ -33,13 +33,14 @@ typedef struct dataset_api {
     int64_t (*rows)(const yds_dataset*, int);
     int (*finish)(yds_dataset*);
     void (*close)(yds_dataset*);
+    void (*abandon)(yds_dataset*);
     int (*zip)(yds_dataset*, const char*, ytr_write_fn, void*);
 } dataset_api;
 
 static const dataset_api g_api = {
     yds_open, yds_error, yds_write_trial, yds_write_frame, yds_write_event, yds_write_clock,
     yds_stream, yds_write_stream, yds_trials_writer, yds_stream_writer, yds_session_set,
-    yds_session_push, yds_session, yds_rows, yds_finish, yds_close, yds_zip
+    yds_session_push, yds_session, yds_rows, yds_finish, yds_close, yds_abandon, yds_zip
 };
 
 typedef struct check_row {
@@ -67,13 +68,15 @@ int main(void) {
     d.trial_cols = check_cols;
     d.n_trial_cols = (int)(sizeof(check_cols) / sizeof(check_cols[0]));
     if (g_api.open(&ds, &d)) return 1;                  /* no dir */
-    if (g_api.error(&ds)[0] == '\0') return 2;
+    if (g_api.error(&ds)[0] == '\0' || ds.error_code != YDS_ERR_ARG) return 2;
     if (g_api.write_trial(&ds, NULL) != YDS_ERR_CLOSED) return 3;
     if (g_api.zip(&ds, "x.zip", NULL, NULL) != YDS_ERR_ORDER) return 4;
     if (g_api.trials_writer(&ds) || g_api.stream_writer(&ds, 0) || g_api.session(&ds)) return 5;
     if (g_api.rows(&ds, YDS_TABLE_FRAMES) != 0) return 6;
     g_api.close(&ds);
     g_api.close(&ds);
+    g_api.abandon(&ds);
+    g_api.abandon(&ds);
     (void)g_api.write_frame; (void)g_api.write_event; (void)g_api.write_clock; (void)g_api.stream;
     (void)g_api.write_stream; (void)g_api.session_set; (void)g_api.session_push; (void)g_api.finish;
 

@@ -23,6 +23,14 @@ This page is reference: the language bindings of the headers.
   runs them beside PsychoPy, questplus and AEPsych on one response stream.
   CI builds the wheels with cibuildwheel on Linux, Windows and macOS, except
   `ysp-parallel` on macOS, which its header does not support.
+  `ysp-dataset` gives `ysp.dataset`: a PsychoPy (or any Python) session
+  written as a ysp data set (`session.json`, the trial, frame, event,
+  clock and stream tables, the zip), so the player's analysis reads it. It
+  compiles ysp/dataset.h with ysp/trials.h, ysp/table.h and ysp/json.h, so
+  CI stages those two more headers for it. A row is a `dict` or keywords;
+  `None` and `NaN` are an empty cell. An exception through `with`,
+  `abandon()` and the teardown of a data set never closed leave
+  `"closed": false`.
 - **MATLAB / Octave**: [bindings/mex/](../bindings/mex/), one MEX function per
   library (`ysp_parallel`, `ysp_serial`, `ysp_stair`, `ysp_quest`,
   `ysp_aep`, `ysp_trials`, `ysp_color`, `ysp_rt`) with ppdev-mex-style command dispatch, built and
@@ -100,6 +108,9 @@ array with the same field names in MATLAB and Octave.
   (Python) or matrices (MEX), with the landing record of every event that
   fired. Both compile the header with `YTL_MAX_CHANNELS` 1024
   ([timeline.md](timeline.md#bindings)).
+  never takes the GIL. `ysp_dataset` writes a Psychtoolbox session as a
+  ysp data set, as `ysp.dataset` does; a row is a struct or name-value
+  pairs, and `[]` and `NaN` are an empty cell.
 
 ## Units
 
@@ -125,6 +136,7 @@ call can poll. [Conventions](conventions.md) lists the exceptions.
 | `ysp_rdk` (MEX) | as `ysp.rdk`: `'start'`, `'update'`, the `t0` and steps of `'replay'` and `'trajectory'`, `'get'` (`last.t`, with `last.ns` beside it), the desc's `lifetime` and `frame_period`, `'ages'` |
 | `ysp.pack` and its MEX | none: sizes and offsets are bytes |
 | `ysp.rt` and `ysp_rt` (MEX) | `now()` (and `now_ns()`, exact), `real_now()`, `sleep_until(t, spin)`, `sleep(duration, spin)`, `spin_until(t)` and their lateness, `DEFAULT_SPIN`, `VIRTUAL_T0`, `virtual_begin(t0)`, `clock_info()` resolution, `correlate()`'s `t`, `width`, `timeout` (and `other` when the clock returns seconds; `t_ns` exact), `Fit(tick=, bucket=, slope_span=, restart=, restart_hold=, max_width=)`, `Fit.add(ticks, t, width)`, `Fit.map()` (and `map_ns()`, exact), `Fit.info()` times; exact to the ns below 2^23 s (about 97 days) |
+| `ysp.dataset` and its MEX | every `time` column of trials.csv and of a stream, and every `_s` column of frames.csv, events.csv and clock.csv; rounded to the nearest ns, so ns -> s -> ns holds below 2^23 s. A data value may be negative (a residual, an SOA), and `NaN` is missing, not refused |
 | `ysp.rdk` | `start(seed, t)`, `update(t)`, the `t0` and step rows of `replay()` and `trajectory()`, `Field.last` (`t`, and its exact `ns` beside it), `Field(lifetime=, frame_period=)`, `ages()`; exact to the ns below 2^23 s (about 97 days) |
 | `ysp.device` | `now()`, the events' `t` and `unc` (`t_ns` exact beside `t`), `Device(pulse=, min_hold=, probe=, retry=, silent=, max_width=)` (`probe` and `silent` take `math.inf` for none), `wait_running(timeout)`, `wait(timeout)`, `pulse(code, width)`, `last_out()`, `stats()` (`last_rx` and the fit's times), `source()` (`lo`, `hi`), `Rule(width=)`, `Rule.arm(start, until)` and `window()` (`math.inf`: no end), `Rule.info()` and `fires()`, `Sim(frame=, tail=)`, `Sim.edge(t)`, `press(t, duration)`, `unplug(start, stop)`, the `writes()` and `lines()` stamps |
 | `ysp.rigfile` | a role's `pulse`, `ftdi_latency`, `latency` (`p5`, `median`, `p95`, `max`) and `bounds` (`lo`, `hi`; `lo_ns` and `hi_ns` exact), `display` (`onset_offset`, `onset_offset_ns` exact), `source()` (`lo`, `hi`), `desc()['pulse']`; lengths in mm |

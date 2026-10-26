@@ -1,0 +1,22 @@
+# An sdist must carry everything the build needs. setup.py compiles
+# ysp/dataset.h straight into the extension, and the header lives in
+# include/ysp/ under the repository root, which an sdist cannot reach, so
+# stage a copy in include/ysp/ next to setup.py first. ysp/dataset.h
+# includes ysp/trials.h (which includes ysp/table.h) and ysp/json.h, so all
+# four are staged:
+#
+#     mkdir -p include/ysp
+#     cp ../../../include/ysp/{dataset,trials,table,json}.h include/ysp/
+#     uv build --sdist
+#
+# The staged copies are gitignored; setup.py prefers the repository root when
+# it is present, so a copy cannot shadow a newer header in a development tree.
+include include/ysp/dataset.h
+include include/ysp/trials.h
+include include/ysp/table.h
+include include/ysp/json.h
+# setup.py names the extension source by absolute path, which sdist does not
+# pick up on its own.
+include ysp_dataset_ext.c
+include example.py
+recursive-include tests *.py

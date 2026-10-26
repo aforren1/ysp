@@ -525,6 +525,7 @@ jobs:
         package: [ysp_parallel, ysp_serial, ysp_stair, ysp_quest, ysp_aep, ysp_trials, ysp_color, ysp_rdk, ysp_device, ysp_rigfile]
         package: [ysp_parallel, ysp_serial, ysp_stair, ysp_quest, ysp_aep, ysp_trials, ysp_color, ysp_rdk, ysp_response]
         package: [ysp_parallel, ysp_serial, ysp_stair, ysp_quest, ysp_aep, ysp_trials, ysp_color, ysp_rdk, ysp_timeline]
+        package: [ysp_parallel, ysp_serial, ysp_stair, ysp_quest, ysp_aep, ysp_trials, ysp_color, ysp_rdk, ysp_dataset]
         exclude:
           - os: macos-latest      # ysp/parallel.h #errors on macOS
             package: ysp_parallel
@@ -565,6 +566,15 @@ jobs:
         if: matrix.package == 'ysp_device' || matrix.package == 'ysp_rigfile'
         shell: bash
         run: d=bindings/python/${{ matrix.package }}/include/ysp && cp include/ysp/device.h include/ysp/json.h include/ysp/input.h include/ysp/box.h include/ysp/serial.h include/ysp/parallel.h $d/
+      # includes. A package gets the ones it never reads; staging them
+      # unconditionally keeps this step short. ysp/dataset.h also includes
+      # ysp/trials.h and ysp/json.h (named apart: cp refuses a source twice).
+      - name: Stage headers into the package (isolated build needs them locally)
+        shell: bash
+        run: |
+          p=${{ matrix.package }} && d=bindings/python/$p/include/ysp && mkdir -p $d
+          cp include/ysp/${p#ysp_}.h include/ysp/rt.h include/ysp/table.h $d/
+          if [ $p = ysp_dataset ]; then cp include/ysp/trials.h include/ysp/json.h $d/; fi
 
       - name: Build & test wheels
         uses: pypa/cibuildwheel@v4.1.0
@@ -694,6 +704,11 @@ jobs:
       - name: Timeline binding test (test_mex_timeline.m)
         working-directory: bindings/mex
         run: octave-cli -q --eval "test_mex_timeline"
+      # Writes a data set in a temporary folder; its crash check starts a
+      # second octave-cli and kills it.
+      - name: Data set binding test (test_mex_dataset.m)
+        working-directory: bindings/mex
+        run: octave-cli -q --eval "test_mex_dataset"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -815,6 +830,10 @@ jobs:
         uses: matlab-actions/run-command@v3
         with:
           command: cd('bindings/mex'); test_mex_timeline
+      - name: Data set binding test (test_mex_dataset.m)
+        uses: matlab-actions/run-command@v3
+        with:
+          command: cd('bindings/mex'); test_mex_dataset
 
       - uses: actions/upload-artifact@v7
         with:

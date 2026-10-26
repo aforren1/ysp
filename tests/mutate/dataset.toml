@@ -1,8 +1,9 @@
 # ysp/dataset.h mutants: the folder rule, session.json's closed flag and
 # its atomic rewrite, the writer's keys, the tables' counts and failures,
-# stream names, the adapters' missing values and the zip. docs/dataset.md
-# lists the results. The Windows-only checks (a session.json held open)
-# run with MinGW gcc; on POSIX ds-06 and ds-07 survive.
+# stream names, the adapters' missing values, the zip, and (v0.2) the
+# abandon and the error code. docs/dataset.md lists the results. The
+# Windows-only checks (a session.json held open, a table file still held)
+# run with MinGW gcc; on POSIX ds-06, ds-07 and ds-35 survive.
 header = "ysp/dataset.h"
 
 [test.dataset]
@@ -285,8 +286,8 @@ id = "ds-32"
 name = "a second open over an open data set"
 test = "dataset"
 why = "The memset would drop the first data set's open files: its rows stop and it never closes."
-find = '''    if (ds->open) return yds__ofail(ds, "yds_open: this handle holds an open data set; close it first");'''
-replace = '''    if (0) return yds__ofail(ds, "yds_open: this handle holds an open data set; close it first");'''
+find = '''    if (ds->open) return yds__ofail(ds, YDS_ERR_ARG, "yds_open: this handle holds an open data set; close it first");'''
+replace = '''    if (0) return yds__ofail(ds, YDS_ERR_ARG, "yds_open: this handle holds an open data set; close it first");'''
 
 [[mutant]]
 id = "ds-33"
@@ -295,3 +296,69 @@ test = "dataset"
 why = "trials.csv's trial_seed must be the trials writer's spelling of the same 64 bits."
 find = '''    for (i = 0; i < 16; i++) out[1 + i] = hx[(seed >> (60 - 4 * i)) & 15u];'''
 replace = '''    for (i = 0; i < 16; i++) out[1 + i] = hx[(seed >> (56 - 4 * i)) & 15u];'''
+
+# --- v0.2: the abandon and the error code ------------------------------------
+
+[[mutant]]
+id = "ds-34"
+name = "the abandon finishes"
+test = "dataset"
+why = "An abnormal end would say \"closed\": true, the mark of a session that ended normally."
+find = '''         * it keeps "closed": false. */
+        ytr_data_close(&ds->trials);'''
+replace = '''         * it keeps "closed": false. */
+        (void)yds_finish(ds);
+        ytr_data_close(&ds->trials);'''
+
+[[mutant]]
+id = "ds-35"
+name = "the abandon leaves the streams' files open"
+test = "dataset"
+why = "A stream's file would stay held (on Windows locked against writers) until the process ends."
+find = '''        for (i = 0; i < ds->n_streams; i++) ytr_data_close(&ds->stream[i]);
+        ds->open = false;
+    }
+    if (ds->arena_live) yjs_arena_free(&ds->arena);'''
+replace = '''        (void)i;
+        ds->open = false;
+    }
+    if (ds->arena_live) yjs_arena_free(&ds->arena);'''
+
+[[mutant]]
+id = "ds-36"
+name = "the abandon leaves the handle open"
+test = "dataset"
+why = "Rows written after it would go to closed files, and a later close would finish the data set."
+find = '''        for (i = 0; i < ds->n_streams; i++) ytr_data_close(&ds->stream[i]);
+        ds->open = false;
+    }
+    if (ds->arena_live) yjs_arena_free(&ds->arena);'''
+replace = '''        for (i = 0; i < ds->n_streams; i++) ytr_data_close(&ds->stream[i]);
+    }
+    if (ds->arena_live) yjs_arena_free(&ds->arena);'''
+
+[[mutant]]
+id = "ds-37"
+name = "an existing folder reported as an I/O failure"
+test = "dataset"
+why = "A binding maps the open's failure by code: the folder that is there must be YDS_ERR_EXISTS."
+find = '''            return yds__ofail(ds, YDS_ERR_EXISTS, "yds_open:'''
+replace = '''            return yds__ofail(ds, YDS_ERR_IO, "yds_open:'''
+
+[[mutant]]
+id = "ds-38"
+name = "the open keeps the last failure's code"
+test = "dataset"
+why = "error_code is the last failure's; an open that succeeds must not carry an earlier one."
+find = '''    memset(ds->error, 0, sizeof ds->error);
+    ds->error_code = 0;'''
+replace = '''    memset(ds->error, 0, sizeof ds->error);'''
+
+[[mutant]]
+id = "ds-39"
+name = "a call's failure leaves no code"
+test = "dataset"
+why = "Every failing call writes the code beside the message (the conventions' errors in the handle)."
+find = '''    if (!ds) return code;
+    ds->error_code = code;'''
+replace = '''    if (!ds) return code;'''

@@ -24,6 +24,7 @@ never reused, so a handle kept past its `close` always raises
 | `ysp_rigfile.c` | [ysp/rigfile.h](../../include/ysp/rigfile.h) | [example_rigfile.m](example_rigfile.m) |
 | `ysp_response.c` | [ysp/response.h](../../include/ysp/response.h) | [example_response.m](example_response.m) |
 | `ysp_timeline.c` | [ysp/timeline.h](../../include/ysp/timeline.h) | [example_timeline.m](example_timeline.m) |
+| `ysp_dataset.c` | [ysp/dataset.h](../../include/ysp/dataset.h) | [example_dataset.m](example_dataset.m) |
 
 The two transport headers build on the shared [ysp/rt.h](../../include/ysp/rt.h), so
 both MEX functions compile it too. `ysp_quest.c` and `ysp_aep.c` define
@@ -49,6 +50,10 @@ ysp/rt.h and `ysp_mex_util.h`); it needs no device.
 [test_mex_device.m](test_mex_device.m) checks `ysp_device` and
 `ysp_rigfile` together on simulated boards (no hardware) and prints `PASS`
 with the number of checks.
+[test_mex_dataset.m](test_mex_dataset.m) does the same for `ysp_dataset`
+(compiles ysp/dataset.h with the ysp/trials.h, ysp/table.h and
+ysp/json.h it includes, and `ysp_mex_util.h`). Its crash check starts a
+second MATLAB or Octave, which writes rows and is then killed.
 
 ## Build
 
@@ -399,6 +404,104 @@ shape. Counters are `uint64`, or doubles that hold integers below 2^53.
 
 The virtual clock (`'virtual_begin'`) is in `ysp_rt`'s copy of `ysp/rt.h`
 only: `ysp_serial('now')` keeps the real clock.
+## ysp_dataset
+
+Writes a session's data set from a Psychtoolbox script: the folder of
+`session.json`, `trials.csv`, `frames.csv`, `events.csv`, `clock.csv` and
+`streams/<name>.csv` that the ysp player writes, and a zip of it, so that
+the same analysis reads a Psychtoolbox session and a player session. The
+header's manual (THE FOLDER, SESSION.JSON, THE TABLES, THE ZIP) and
+[docs/dataset.md](../../docs/dataset.md) are the reference for the files.
+
+### How to write a session
+
+```matlab
+d.dir = fullfile('data', 'P07_20261021T140312Z');      % must not exist; its parent must
+d.trial_cols = {'participant', 'const', 'P07';           % the same text on every row
+                'trial_index', 'int',    [];
+                'response',    'string', [];
+                'correct',     'bool',   [];
+                'rt_s',        'time',   []};             % seconds; the name ends in _s
+d.session = struct('experiment', 'gabor-2afc', 'seed', 20261021);
+h = ysp_dataset('open', d);
+for trial = 0:n - 1
+    for k = 1:n_frames
+        vbl = Screen('Flip', win);
+        ysp_dataset('write_frame', h, 'frame', frame, 'trial_index', trial, 'onset_s', vbl);
+    end
+    [t_key, key] = wait_key();                           % yours, on GetSecs
+    ysp_dataset('write_event', h, 't_s', t_key, 'trial_index', trial, 'kind', 'keyboard', 'text', key);
+    ysp_dataset('write_trial', h, struct('trial_index', trial, 'response', key, ...
+                'correct', strcmp(key, answer), 'rt_s', t_key - t_onset));
+end
+rows = ysp_dataset('finish', h);                         % session.json: "closed": true
+ysp_dataset('zip', h, [d.dir '.zip']);                   % or z = ysp_dataset('zip', h)
+ysp_dataset('close', h);
+```
+
+A row is a 1x1 struct of column names and values, or name-value pairs. A
+column that the row does not name is an empty cell, and so are `[]` and
+`NaN`. Times are seconds on one clock of yours (`GetSecs`); the binding
+rounds each to the nearest nanosecond, and the file holds it as seconds
+with 9 decimals. A time may be negative (a residual, an SOA). The binding
+checks every value of a row before it sets one, so a refused row writes
+nothing.
+
+`trials.csv` has no part that the sequencer writes itself (the header
+opens it with `desc.trials` NULL), and two MEX files share no C state. To
+log `ysp_trials` columns, declare them as your own and fill them from
+`ysp_trials('format_row', ...)`, `'var'` and `'trial_seed'`;
+`ysp_dataset('seed_text', seed)` writes a seed as `x` and 16 hex digits,
+as the trials writer does. The test checks that the rows equal
+`ysp_trials`' data line, text for text.
+
+`'finish'` and `'close'` mark the session `"closed": true`, the mark of
+a normal end. A session that fails is abandoned instead: every table file
+closes, every row written stays, and `session.json` keeps
+`"closed": false` and no row counts, as after a crash. Call `'abandon'`
+from your own catch block:
+
+```matlab
+h = ysp_dataset('open', d);
+try
+    run_experiment(h);
+catch err
+    ysp_dataset('abandon', h);              % "closed": false; the handle goes
+    rethrow(err);
+end
+ysp_dataset('finish', h);                   % "closed": true
+ysp_dataset('close', h);
+```
+
+A handle that is still open when the MEX file is cleared (`clear mex`,
+`clear ysp_dataset`) or when MATLAB or Octave exits is abandoned too, so a
+script that stopped on an error and was never closed does not read as a
+normal end. A process that is killed leaves the same files.
+
+### Open
+
+`h = ysp_dataset('open', d)`; the struct `d` has:
+
+| Field | Values |
+|---|---|
+| `dir` | the folder, a char row (UTF-8 on every OS); required. It must not exist; its parent must |
+| `trial_cols` | an N x 2 or N x 3 cell, one row per column: `{name, type}`, `{name, type, decimals}` or `{name, 'const', text}`; required |
+| `session` | a 1x1 struct of your keys for `session.json`; not `format`, `version`, `closed`, `rows` or `write_errors` |
+| `sync` | `true`: every row of every table also waits for the disk (milliseconds a row). Default `false`: each row reaches the OS when the call returns |
+
+| Column type | Value | Missing |
+|---|---|---|
+| `'int'`, `'int64'` | an integer-valued number; `int64` and `uint64` exactly | `[]`, `NaN` |
+| `'double'` | a number; decimals 0 (the shortest exact) or 1..17 | `[]`, `NaN` |
+| `'bool'` (`'logical'`) | `true`, `false`, 0 or 1 | `[]`, `NaN` |
+| `'string'` (`'char'`) | a char row, or a string scalar | `[]`, `''` |
+| `'time'` | seconds; decimals 0 (9, exact) or 1..9; the name ends in `_s` | `[]`, `NaN` |
+| `'const'` | none: the text is the third cell | |
+
+A `session` value (and a `'session_set'` value) becomes JSON: a 1x1 struct
+an object, a struct array or a cell an array, a char row a string, a
+numeric or logical scalar a number or a bool, a vector an array, a matrix
+an array of its rows, `[]` null. JSON has no NaN or Inf.
 
 ### Commands
 
@@ -507,6 +610,38 @@ Under Octave, `clear` runs the exit hook of a MEX file but keeps the
 library loaded. Since 2026-10-25 `ysp_mex_util.h` hooks again after a
 clear. Before, the handles opened after a clear stayed open, and their
 threads crashed Octave at exit.
+| `'open', d` | `uint64` handle | makes the folder; `session.json` says `"closed": false` |
+| `'write_trial', h, row` | none | one row of `trials.csv`; `row` is a struct or name-value pairs |
+| `'write_frame', h, row` | none | one row of `frames.csv` (`'columns', 'frames'`) |
+| `'write_event', h, row` | none | one row of `events.csv` (`'columns', 'events'`) |
+| `'write_clock', h, row` | none | one row of `clock.csv` (`'columns', 'clock'`) |
+| `'stream', h, name, cols` | id (1-based) | makes `streams/<name>.csv`; `cols` as `trial_cols` |
+| `'write_stream', h, id or name, row` | none | one row of a stream |
+| `'session_set', h, key, value` | none | `session.json`'s key; one atomic rewrite (milliseconds: between trials) |
+| `'session_push', h, key, value` | none | appends to the array at key (made when absent); one atomic rewrite |
+| `'rows', h` | struct | `trials`, `frames`, `events`, `clock`, `streams.<name>`: rows written |
+| `'finish', h` | struct | as `'rows'`; closes the tables, `session.json` says `"closed": true` |
+| `'zip', h [, path]` | `uint8` row, or none | the finished folder as one stored zip |
+| `'info', h` | struct | `dir`, `is_open`, `finished`, `streams`, `trial_cols` |
+| `'close', h` | none | finishes a data set that is open, then frees the handle |
+| `'abandon', h` | none | an abnormal end: closes the files, leaves `session.json` `"closed": false`, frees the handle |
+| `'columns', 'frames' \| 'events' \| 'clock'` | cell of names | the fixed tables' columns |
+| `'seed_text', seed` | char | a `uint64` seed as `x` and 16 hex digits |
+| `'version'` | char | ysp/dataset.h's version |
+
+Error ids: `ysp_dataset:arg`, `:exists` (the folder is there), `:io` (a
+file could not be made, written or renamed), `:closed`, `:order` (`'zip'`
+before the finish), `:full` (16 streams), `:range` (a zip of 4 GiB or
+more), `:memory`, `:usage`, `:handle`.
+
+A row costs one write call, about 12 us in C (docs/dataset.md); the
+binding allocates nothing per row once its text buffer has grown to the
+longest row. Not bound: the header's adapters (`yds_frame_from_screen()`
+and the others take structs of headers with no MEX binding; the fields of
+`'write_frame'`, `'write_event'` and `'write_clock'` are theirs), struct
+field (bound) and `CHARS` columns (every column is set per row, which also
+gives a missing `bool`), and a reader (the header has none; use
+`readtable`).
 
 ## Adaptive methods: common rules
 
