@@ -72,6 +72,12 @@ PM_FN void pm_cleanup(void) {
     pm_node* n = pm_list;
     pm_oct_free();
     pm_list = NULL;
+    /* Octave runs this hook on `clear` but keeps the library loaded, so the
+     * statics survive: the next pm_register() must hook again, or the
+     * handles opened after the clear are never closed, and a thread they
+     * started runs on while Octave unloads the library at exit (a crash,
+     * measured 2 of 3 exits). */
+    pm_atexit_done = 0;
     while (n) {
         pm_node* next = n->next;
         if (n->obj && pm_destroy) pm_destroy(n->obj);
