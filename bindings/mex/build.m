@@ -58,7 +58,8 @@ function build(name)
             % link with undefined SetupDi*. mex takes -l<name> on both
             % toolchains (it becomes <name>.lib for MSVC), so one spelling
             % covers them.
-            if strcmp(srcs{i}, 'ysp_serial.c')
+            % ysp_device.c and ysp_rigfile.c compile ysp/serial.h too.
+            if any(strcmp(srcs{i}, {'ysp_serial.c', 'ysp_device.c', 'ysp_rigfile.c'}))
                 args(end+1:end+2) = {'-lsetupapi', '-ladvapi32'};   %#ok<AGROW>
             end
         else

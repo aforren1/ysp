@@ -708,6 +708,91 @@ only.
 | Fuzzing | A seed with `view` added to target 2 of `tests/fuzz/json_fuzz.c`; the 18 seeds replayed on WSL2 gcc 11.4 under ASan and UBSan with no report. No libFuzzer run yet |
 | Mutants (`tests/mutate/rigfile.toml`) | `rig-38` to `rig-45`: 8 of 8 killed |
 
+## Bindings
+
+`ysp/device.h` and `ysp/rigfile.h` have Python and MATLAB/Octave bindings
+(2026-10-25): the distributions `ysp-device` 0.5.0 (`ysp.device`) and
+`ysp-rigfile` 0.5.0 (`ysp.rigfile`), and the MEX functions `ysp_device`
+and `ysp_rigfile` 1.0.0. The user is a PsychoPy or Psychtoolbox experiment:
+it loads the rig profile, opens a role's device, reads its events on the
+ysp_rt clock, sends trigger codes, reads the device's status, and logs the
+profile's notes and the tiers. The packages' READMEs
+([ysp.device](../bindings/python/ysp_device/README.md),
+[ysp.rigfile](../bindings/python/ysp_rigfile/README.md),
+[MEX](../bindings/mex/README.md#ysp_device-and-ysp_rigfile)) are the
+reference.
+
+### What is bound
+
+| Binding | Surface |
+|---|---|
+| `ysp.device` | `Device` (open, `wait_running`, `poll`, `wait`, `clear`, `pending`, `set`, `pulse`, `mark`, `last_out`, `stats`, `source`, `state`, `error`, `close`), `Rule` (`arm`, `window`, `disarm`, `info`, `fires`, `close`), `Sim`, `Event`, `now`, `list_ports`, `key_match`, `family`, `roles`, and the constants of ysp/device.h, ysp/box.h's families and ysp/input.h |
+| `ysp.rigfile` | `load`, `load_file`, `parse`, `dir`, `path`, `Profile` (`notes`, `roles`, `role`, `desc`, `source`, `display`, `view`, `ppd`, `text`, `hash`, `bind`, `remove`, `set_view`, `clear_view`, `save`, `save_file`) |
+| `ysp_device`, `ysp_rigfile` (MEX) | The same commands, with handles; `ysp_rigfile('desc', p, role)` is the struct that `ysp_device('open', ...)` takes |
+
+### Decisions
+
+| Question | Decision | Why |
+|---|---|---|
+| One distribution or two | Two: `ysp-device` and `ysp-rigfile`. `Profile.desc(role)` gives the keyword arguments of `Device` (`yrig_desc()`), so a role opens with `Device(**prof.desc(role))`; `Profile.source(device)` reads the device's `role`, `family`, `kind` and `device` | `yrig_open_device()` is `yrig_desc()`, `ydev_open()` and a prefix on the message, so nothing forces one module. With two, a script that only reads the profile (an analysis, a log line) needs no device layer, and a rig without a profile opens devices with no profile code. Each extension compiles its own copy of the device layer; `ysp.rigfile`'s copy never opens a device. `yrig_source()` gets a zeroed `ydev_device` with the four fields that `ydev_source()` reads, so the tier rule (the device's family must be the role's) is the header's own |
+| The sink | A C ring per device (`queue` events, 1024 by default) behind a lock and a condition variable; the reader thread copies each event in and wakes waiters; a full ring drops the new event and counts it | The reader thread must never wait for the interpreter or take the GIL. `ysp.serial`'s async reader has the same rule |
+| The test transport | `Sim`: the simulated boards of `tests/adapt/device_test.c` (line board, XID box, photodiode board, an output-only box) behind `desc.transport`, on the real clock, in the extension | A transport written in Python would run on the reader thread and take the GIL. On the real clock the sim sleeps until its next byte is due, so a read is late by the sleep's error, not by a poll period |
+| The role table | One per process (a module static), used when `device=0` | A role keeps its index (`yin_event.device`) across a close and an open, as `ydev_roles` promises; the C table is the caller's, and in Python the caller is the process |
+| Close order | `close()` of an output raises while an open `Rule` writes to it; `Rule.close()` raises while an open `Device` feeds it. A `Device` holds its `Rule`, a `Rule` its output, so the garbage collector closes them in the header's order. The MEX `clear` closes inputs with rules, then rules, then the rest | `ydev_rule_input()` on a closed output would take a freed lock. The header's contract is "close the box, then the rule, then the output" |
+| Calls during `close()` | A call that takes the handle's locks counts itself; `close()` waits for those calls, then closes. After it, the state, the stats and the error stay readable | Outputs come from any thread, and `ydev_close()` frees the locks they take |
+| Errors | `Error` with `args == (message, code)`; `Closed` for a closed handle; `wait_running()` returns `False` on a timeout | The output calls return a code and write no message (README.md, Conventions); the code is in the exception |
+| MEX versions | `ysp_device` and `ysp_rigfile` 1.0.0, their own numbers; the second output of `'version'` is the header's | As `ysp_serial` |
+
+### What is not bound, and why
+
+| C | Why not |
+|---|---|
+| `desc.ring` and the records (`YDEV_REC_*`, the fit's records) | The ring is ysp/rt.h's (`yrt_ring`). `last_out()` gives the last write's times, and `stats()` the counters. A binding of the ring belongs with ysp/rt.h's |
+| `desc.transport` (your own transport) | A transport in Python or MATLAB would run on the reader thread and call into the interpreter. `Sim` is the transport for tests |
+| `desc.manual`, `desc.now`, `ydev_poll()` | Manual mode on a virtual clock is for the C tests and replays. The binding runs the reader thread on the real clock |
+| `ydev_out_trigger()`, `ydev_trigger_fn()`, `ydev_trigger_channel()` | They need a ysp/screen.h screen in the same process; a PsychoPy or Psychtoolbox flip is not one. Send `pulse()` after the flip, a frame late, or use a response rule for responses |
+| `ydev_params()` | The loader's and the designer's table, not a script's |
+| `desc.read_timeout_ns`, `ydev_serial_transport()`, `ydev_role_device()` | Tuning and C plumbing |
+| `yrig_open_device()` | `Device(**prof.desc(role))` is the same call (above) |
+| `yrig_store_loopback()`, `yrig_read_loopback()`, `yrig_read_latency()`, `yrig_sha256()`, `yrig_add()`, the display's setters | The loopback tools (`device_out_latency`, `rigfile_bounds`, `rigfile_onset`, `rigfile_profile`) write the measured fields; a script reads them |
+
+### Tests
+
+| Where | What ran | Result |
+|---|---|---|
+| Windows 11, MSVC 14.51, CPython 3.14.3 | `pytest` on `ysp_device/tests` (21 tests) and `ysp_rigfile/tests` (10) | 30 pass, 1 skipped (the planted-folder test is POSIX only); 25 runs in a row passed after one fix (the stats' snapshot is published after the step that called the sink, so the test waits for it) |
+| WSL2 Ubuntu 22.04, gcc 11.4, CPython 3.12.14 | The same, 10 runs; both extensions with `gcc -std=c99 -Wall -Wextra -Wshadow -Wfloat-conversion -Werror`; a C harness of `ysp_device_bind.h` (a simulated line board into the queue with a rule, a consumer thread, an output thread, an unplug, the closes) under ThreadSanitizer (3 runs) and ASan with UBSan | 31 pass in each run, the planted-folder refusal included; no warning; TSan, ASan and UBSan clean |
+| MATLAB R2023a (MSVC), Octave 10.1 (MinGW) on Windows 11 | `test_mex_device.m`, both MEX files on simulated boards, 5 runs in one session each | PASS (59 checks) every run |
+| Hardware | none | `list_ports()` listed no port on the development machine: no board was attached, so no device on this binding has run on hardware |
+
+The Octave runs found a fault in `bindings/mex/ysp_mex_util.h`: Octave runs
+a MEX file's exit hook on `clear` but keeps the library loaded, so the
+hook flag stayed set, the handles opened after a `clear` were never closed,
+and their reader threads crashed Octave at exit (2 of 3 exits after two
+test runs in one session). `pm_cleanup()` now clears the flag; 0 of 6
+exits crashed after the fix.
+
+### Results: the binding's own costs
+
+On 2026-10-25, Windows 11, i7-1360P, CPython 3.14.3, under
+`psy-guard.sh time`, simulated boards
+([bench.py](../bindings/python/ysp_device/bench.py)), two runs (the
+ranges are the two runs):
+
+| Measure | n per run | p50 | p95 | p99 | max |
+|---|---|---|---|---|---|
+| `poll()` per event, 2000 events a call | 10 calls | 0.22 to 0.26 us | 0.26 to 0.48 us | 0.26 to 0.48 us | 0.26 to 0.48 us |
+| An event's `t` to `wait()` returning it (the sim's delivery delay set to about 0) | 300 | 126 to 154 us | 216 to 240 us | 0.95 to 2.0 ms | 1.9 to 2.1 ms |
+| `pulse()` on a simulated TriggerBox, the call from Python | 600 | 27 us | 70 to 73 us | 294 to 404 us | 1.1 ms |
+
+The `wait()` path is the reader's read, the map, the queue, the wake of a
+thread blocked on a condition variable, and the GIL. It is a cost on top of
+a real device's USB delivery, and it does not change the event's `t`, which
+the reader stamped. The C call `ydev_out_pulse()` measured 5.3 to 8.7 us at
+p50 (v0.2.0); the rest of `pulse()` is the Python call, the binding's lock
+and the GIL. A Psychtoolbox or PsychoPy flip and the ysp_rt clock were not
+compared: pair a reading of each clock before you mix their times.
+
 ## What needs the user's hardware
 
 | Hardware | Checks | How |

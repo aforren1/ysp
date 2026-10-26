@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ysp-rigfile"
+version = "0.5.0"  # must equal ysp/rigfile.h's YRIG_VERSION_STRING; tests/test_rigfile.py checks it
+description = "The rig profile: the device of each role, loopback results, viewing geometry"
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT-0"
+
+# The C extension is declared in setup.py as ysp.rigfile. ysp-device opens a
+# role's device (ysp.device.Device(**profile.desc(role))); this distribution
+# does not need it to read, check and write a profile.
+
+[tool.cibuildwheel]
+build = "cp39-*"
+skip = "*-musllinux_*"
+test-requires = ["pytest"]
+test-command = "pytest {package}/tests -q"
+
+[tool.cibuildwheel.macos]
+archs = ["universal2"]

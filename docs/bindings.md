@@ -58,6 +58,23 @@ array in MATLAB, with the fields of `yin_event` in one order:
 "Bindings"). The MEX function `ysp_rdk` has the surface of `ysp.rdk` and
 replays a C-logged trial bit for bit (docs/rdk.md, "Bindings").
 
+The device headers have two distributions: `ysp-device` gives `ysp.device`
+([ysp/device.h](../include/ysp/device.h): boxes, trigger interfaces and
+boards, their events on the ysp_rt clock, outputs and response rules) and
+`ysp-rigfile` gives `ysp.rigfile` ([ysp/rigfile.h](../include/ysp/rigfile.h):
+the rig profile). `Profile.desc(role)` gives the keyword arguments of
+`ysp.device.Device`, so a role opens with `Device(**profile.desc(role))`
+and neither extension links the other. The reader threads never take the
+GIL: events wait in a C ring that `Device.poll()` and `Device.wait()`
+empty. Both packages test on simulated boards (`ysp.device.Sim`, the board
+of `tests/adapt/device_test.c` on the real clock), so CI needs no hardware.
+The MEX functions `ysp_device` and `ysp_rigfile` have the same split
+(`ysp_device('open', ysp_rigfile('desc', p, role))`). The event is the same
+in every binding of a header that gives ysp/input.h events: a structseq
+`Event` in Python (`t` and `unc` in seconds, `t_ns` exact) and a struct
+array with the same field names in MATLAB and Octave.
+[docs/device.md](device.md#bindings) lists what is bound and what is not.
+
 ## Units
 
 Every time in a binding is seconds, as a `double`: the arguments, the
@@ -83,6 +100,9 @@ call can poll. [Conventions](conventions.md) lists the exceptions.
 | `ysp.pack` and its MEX | none: sizes and offsets are bytes |
 | `ysp.rt` and `ysp_rt` (MEX) | `now()` (and `now_ns()`, exact), `real_now()`, `sleep_until(t, spin)`, `sleep(duration, spin)`, `spin_until(t)` and their lateness, `DEFAULT_SPIN`, `VIRTUAL_T0`, `virtual_begin(t0)`, `clock_info()` resolution, `correlate()`'s `t`, `width`, `timeout` (and `other` when the clock returns seconds; `t_ns` exact), `Fit(tick=, bucket=, slope_span=, restart=, restart_hold=, max_width=)`, `Fit.add(ticks, t, width)`, `Fit.map()` (and `map_ns()`, exact), `Fit.info()` times; exact to the ns below 2^23 s (about 97 days) |
 | `ysp.rdk` | `start(seed, t)`, `update(t)`, the `t0` and step rows of `replay()` and `trajectory()`, `Field.last` (`t`, and its exact `ns` beside it), `Field(lifetime=, frame_period=)`, `ages()`; exact to the ns below 2^23 s (about 97 days) |
+| `ysp.device` | `now()`, the events' `t` and `unc` (`t_ns` exact beside `t`), `Device(pulse=, min_hold=, probe=, retry=, silent=, max_width=)` (`probe` and `silent` take `math.inf` for none), `wait_running(timeout)`, `wait(timeout)`, `pulse(code, width)`, `last_out()`, `stats()` (`last_rx` and the fit's times), `source()` (`lo`, `hi`), `Rule(width=)`, `Rule.arm(start, until)` and `window()` (`math.inf`: no end), `Rule.info()` and `fires()`, `Sim(frame=, tail=)`, `Sim.edge(t)`, `press(t, duration)`, `unplug(start, stop)`, the `writes()` and `lines()` stamps |
+| `ysp.rigfile` | a role's `pulse`, `ftdi_latency`, `latency` (`p5`, `median`, `p95`, `max`) and `bounds` (`lo`, `hi`; `lo_ns` and `hi_ns` exact), `display` (`onset_offset`, `onset_offset_ns` exact), `source()` (`lo`, `hi`), `desc()['pulse']`; lengths in mm |
+| `ysp_device`, `ysp_rigfile` (MEX) | the same, with `Inf` for `math.inf`; an event's `t_ns` is `int64` |
 
 ## Versions
 
