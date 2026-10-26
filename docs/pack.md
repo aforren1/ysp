@@ -2323,7 +2323,7 @@ entry, an appended pack and a format-2 comment.
 
 | Test | Result |
 |---|---|
-| `bindings/python/ysp_pack/tests` | 16 of 16 pass on Windows 11 (CPython 3.14.3, MSVC 14.51; the extension also compiles clean at `/W4`) and on WSL2 Ubuntu 22.04 (CPython 3.12.14, gcc 11.4; `-std=c99 -Wall -Wextra -Wshadow -Werror` clean), the tool test's 5.3 MB corpus pack included (`YSP_PACK_CORPUS`) |
+| `bindings/python/ysp_pack/tests` | 16 of 16 pass on Windows 11 (CPython 3.14.3 and 3.9.25, MSVC 14.51; the extension also compiles clean at `/W4`) and on WSL2 Ubuntu 22.04 (CPython 3.12.14, gcc 11.4; `-std=c99 -Wall -Wextra -Wshadow -Werror` clean), the tool test's 5.3 MB corpus pack included (`YSP_PACK_CORPUS`) |
 | Truncations | every length of a 25,296-byte writer pack refused at open, and six lengths of the file through the mapping |
 | Flipped bytes | every byte of the writer pack and of the tool fixture, each with bit 0 and bit 7: 50,592 and 42,226 damaged packs; 20,460 and 22,834 refused at open, 30,132 and 19,392 at a read or at `verify()`, 0 read different bytes |
 | Policies | a damaged entry: `"use"` reads the others and refuses it by name; `"open"` refuses the pack; `"none"` reads the damage and `verify()` still refuses it. A damaged chunk: ranges in the other chunks read, the chunk is refused as "chunk 1" |
