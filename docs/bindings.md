@@ -21,7 +21,7 @@ This page is reference: the language bindings of the headers.
   `ysp-parallel` on macOS, which its header does not support.
 - **MATLAB / Octave**: [bindings/mex/](../bindings/mex/), one MEX function per
   library (`ysp_parallel`, `ysp_serial`, `ysp_stair`, `ysp_quest`,
-  `ysp_aep`, `ysp_trials`, `ysp_color`) with ppdev-mex-style command dispatch, built and
+  `ysp_aep`, `ysp_trials`, `ysp_color`, `ysp_response`) with ppdev-mex-style command dispatch, built and
   tested in MATLAB R2023a and Octave 10. `tests/compare/` runs `ysp_quest`
   beside mQUESTPlus and Palamedes' PAL_AMPM, and `ysp_stair` beside
   PAL_AMUD, on one response stream; the MEX README has the results.
@@ -33,6 +33,20 @@ This page is reference: the language bindings of the headers.
   `ysp.serial` has the same reader since 0.5.0.2 (`async_start`,
   `async_read`, `async_wait`, `async_stop`, `async_stats`): a C thread that
   never takes the GIL.
+- **Response collection**: `ysp-response` gives `ysp.response`, and the MEX
+  `ysp_response` the same commands: a trial's response rules
+  (`ysp/response.h`), fed with input events from a PsychoPy or
+  Psychtoolbox key loop, from `ysp.box` or `ysp.device`, or from a log,
+  giving the response, the RT from the stimulus onset and the timing
+  quality of both. The input event (`ysp/input.h`'s `yin_event`) is one
+  layout in the three bindings: in Python a structseq `Event` (`t`, `t_ns`,
+  `device`, `control`, `code`, `mods`, `kind`, `type`, `flags`, `stamp`,
+  `unc`, `x`, `y`, `value`, `aux`, `ticks`), and `ysp.response` takes any
+  16-tuple in that order or any object with those attributes, so the other
+  packages' events need no import; in MATLAB and Octave a struct array
+  with the same field names. Feeding an event allocates nothing.
+  [docs/response.md](response.md#bindings) has what is bound and what is
+  not.
 
 ## Units
 
@@ -54,6 +68,7 @@ call can poll. [Conventions](conventions.md) lists the exceptions.
 | `ysp.quest`, `ysp.aep` and their MEX | `Async.wait(seq, timeout_s)` |
 | `ysp.trials` and its MEX | the jitter bounds; a drawn jitter gives `s`, and its exact `ns` beside it |
 | `ysp.rdk` | `start(seed, t)`, `update(t)`, the `t0` and step rows of `replay()` and `trajectory()`, `Field.last` (`t`, and its exact `ns` beside it), `Field(lifetime=, frame_period=)`, `ages()`; exact to the ns below 2^23 s (about 97 days) |
+| `ysp.response` and its MEX | `arm(t)`, `set_onset(t, residual=, uncertainty=)`, `update(now)`, `key(t, ...)`, `score(events, onset, arm=, end=)`, the desc's `min_rt`, `duration` (`math.inf`/`Inf`: no deadline) and `max_hold`, a source's `lo` and `hi`, the event's `t` and `unc` (from `unc_us`), and every time of the result and the entries; the exact ns beside each absolute time and the RT (`t_ns`, `rt_ns`, `t_onset_ns`, `t_response_ns`); exact to the ns below 2^23 s |
 
 ## Versions
 

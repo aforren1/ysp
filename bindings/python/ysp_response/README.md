@@ -93,7 +93,10 @@ queued. An `Event` has these fields, in this order (`ysp/input.h`'s
 `ysp.device` goes in as it is. It also takes any object with those
 attributes; a missing attribute is 0. `yr.event(t, kind=..., ...)` makes
 one, with a key name as `control` for a keyboard. Neither form allocates
-for each event it reads (the tests check it with `tracemalloc`).
+for each event it reads (the tests check it with `tracemalloc`): an
+object's instance dict is read first, so a field it lacks raises no
+`AttributeError` inside the binding. A field that only a property or a
+slot gives goes through `getattr`.
 
 ```python
 box = yr.Collector([{"name": "left", "kind": "box", "control": 1},
