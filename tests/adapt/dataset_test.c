@@ -13,6 +13,11 @@
  *   - a crash: a child process (this program with --crash-child) writes
  *     rows and leaves with _Exit(), no finish; every file reads, session.json
  *     says "closed": false; the same while a data set is open in-process;
+ *   - yds_abandon() (v0.2): the same files as the crash, the table files
+ *     closed, the handle refused by every write, the finish and the zip,
+ *     safe on a zeroed handle, after a failed open, after the finish, twice;
+ *   - ds.error_code (v0.2): the open's failures by code, a write's, 0 again
+ *     after an open that succeeds;
  *   - refusals at the open (each before the folder exists), at the writes,
  *     the streams and the session keys, each by code and message;
  *   - the atomic rewrite: a blocked temporary file, and on Windows a
@@ -696,6 +701,76 @@ static void test_crash(const char* self) {
 #endif
 }
 
+/* A file no writer holds: on Windows the writer's handle denies others
+ * write access (_SH_DENYWR), so an append open fails while it is open. */
+static bool can_append(const char* path) {
+    FILE* f = xopen(path, "ab");
+    if (!f) return false;
+    fclose(f);
+    return true;
+}
+
+static void test_abandon(void) {
+    static yds_dataset z;   /* zeroed */
+    int dots;
+    char p[512];
+    const char* s;
+    yds_desc d;
+    membuf m;
+    /* A zeroed handle, twice. */
+    yds_abandon(&z);
+    yds_abandon(&z);
+    yds_abandon(NULL);
+    CHECK(!z.open && !z.arena_live);
+
+    CHECK(open_set(&g_ds, WORK "/abandon", true, YTR_FLUSH_ROW));
+    write_rows(&g_ds, &dots, 2);
+    session_changes(&g_ds);
+    yds_abandon(&g_ds);
+    CHECK(!g_ds.open && !g_ds.finished && !g_ds.arena_live && yds_session(&g_ds) == NULL);
+    check_unfinished(WORK "/abandon", 2);
+    CHECK(can_append(path_in(p, sizeof p, WORK "/abandon", "trials.csv")));
+    CHECK(can_append(path_in(p, sizeof p, WORK "/abandon", "streams/dots.csv")));
+    /* Closed and not finished: every write, the finish and the zip refuse. */
+    CHECK_I(yds_write_trial(&g_ds, NULL), YDS_ERR_CLOSED);
+    CHECK_I(g_ds.error_code, YDS_ERR_CLOSED);
+    CHECK_I(yds_session_set(&g_ds, "x", yjs_new_int(&g_a, 1)), YDS_ERR_CLOSED);
+    CHECK_I(yds_finish(&g_ds), YDS_ERR_CLOSED);
+    m.p = g_zip;
+    m.n = 0;
+    m.cap = sizeof g_zip;
+    m.fail_after = false;
+    m.limit = 0;
+    CHECK_I(yds_zip(&g_ds, NULL, mem_write, &m), YDS_ERR_ORDER);
+    CHECK_I(g_ds.error_code, YDS_ERR_ORDER);
+    /* A second abandon and a close change nothing on disk. */
+    yds_abandon(&g_ds);
+    yds_close(&g_ds);
+    check_unfinished(WORK "/abandon", 2);
+
+    /* After the finish: nothing changes, "closed": true stays. */
+    CHECK(open_set(&g_ds, WORK "/abandon2", true, YTR_FLUSH_ROW));
+    write_rows(&g_ds, &dots, 1);
+    CHECK_I(yds_finish(&g_ds), 0);
+    yds_abandon(&g_ds);
+    s = read_file(0, path_in(p, sizeof p, WORK "/abandon2", "session.json"));
+    CHECK_HAS(s, "\"closed\": true");
+    CHECK_HAS(s, "\"trials\": 1");
+    CHECK(g_ds.finished);
+    m.n = 0;
+    CHECK_I(yds_zip(&g_ds, NULL, mem_write, &m), 0);   /* the finished folder still zips */
+    yds_close(&g_ds);
+
+    /* After a failed open: nothing to close, nothing made. */
+    memset(&d, 0, sizeof d);
+    d.dir = WORK "/abandon3";
+    CHECK(!yds_open(&g_ds, &d));
+    CHECK_I(g_ds.error_code, YDS_ERR_ARG);
+    yds_abandon(&g_ds);
+    yds_abandon(&g_ds);
+    CHECK(!exists(WORK "/abandon3"));
+}
+
 static void test_refusals(void) {
     yds_desc d;
     char longdir[YDS_MAX_DIR + 8];
@@ -707,8 +782,10 @@ static void test_refusals(void) {
     memset(&d, 0, sizeof d);
     CHECK(!yds_open(&g_ds, NULL));
     CHECK_HAS(yds_error(&g_ds), "null desc");
+    CHECK_I(g_ds.error_code, YDS_ERR_ARG);
     CHECK(!yds_open(&g_ds, &d));
     CHECK_HAS(yds_error(&g_ds), "no dir");
+    CHECK_I(g_ds.error_code, YDS_ERR_ARG);
     d.dir = WORK "/r1";
     CHECK(!yds_open(&g_ds, &d));
     CHECK_HAS(yds_error(&g_ds), "no trial_cols");
@@ -717,6 +794,7 @@ static void test_refusals(void) {
     CHECK(!yds_open(&g_ds, &d));
     CHECK_HAS(yds_error(&g_ds), "trial_cols");
     CHECK_HAS(yds_error(&g_ds), "rt_s");
+    CHECK_I(g_ds.error_code, YDS_ERR_ARG);
     CHECK(!exists(WORK "/r1"));
     d.trial_cols = g_trial_cols;
     d.n_trial_cols = N_TRIAL_COLS;
@@ -733,6 +811,7 @@ static void test_refusals(void) {
     d.session = s;
     CHECK(!yds_open(&g_ds, &d));
     CHECK_HAS(yds_error(&g_ds), "'closed'");
+    CHECK_I(g_ds.error_code, YDS_ERR_ARG);
     s = session_value(true);
     yjs_set(&g_a, s, "format", yjs_new_stringz(&g_a, "x"));
     d.session = s;
@@ -748,16 +827,19 @@ static void test_refusals(void) {
     d.dir = WORK "/no_parent/r2";
     CHECK(!yds_open(&g_ds, &d));
     CHECK_HAS(yds_error(&g_ds), "parent");
+    CHECK_I(g_ds.error_code, YDS_ERR_IO);
     CHECK(!exists(WORK "/no_parent"));
     d.dir = WORK "/bad\xff";
     CHECK(!yds_open(&g_ds, &d));
     CHECK_HAS(yds_error(&g_ds), "not UTF-8");
+    CHECK_I(g_ds.error_code, YDS_ERR_ARG);
 
     /* A folder that is there: refused, untouched. */
     make_dir(WORK "/there");
     d.dir = WORK "/there";
     CHECK(!yds_open(&g_ds, &d));
     CHECK_HAS(yds_error(&g_ds), "exists");
+    CHECK_I(g_ds.error_code, YDS_ERR_EXISTS);
     CHECK(!exists(WORK "/there/session.json"));
     CHECK(!exists(WORK "/there/streams"));
     yds_close(&g_ds);
@@ -766,9 +848,11 @@ static void test_refusals(void) {
     /* No session given: the writer's keys and a start time. */
     d.dir = WORK "/plain";
     CHECK(yds_open(&g_ds, &d));
+    CHECK_I(g_ds.error_code, 0);                    /* cleared by the open */
     d.dir = WORK "/plain2";
     CHECK(!yds_open(&g_ds, &d));                    /* still open: refused, kept */
     CHECK_HAS(yds_error(&g_ds), "close it first");
+    CHECK_I(g_ds.error_code, YDS_ERR_ARG);
     CHECK(!exists(WORK "/plain2"));
     CHECK(yds_session(&g_ds) != NULL);
     {
@@ -786,6 +870,7 @@ static void test_refusals(void) {
     CHECK_I(yds_session_set(&g_ds, "rows", s), YDS_ERR_ARG);
     CHECK_I(yds_session_push(&g_ds, "write_errors", s), YDS_ERR_ARG);
     CHECK_HAS(yds_error(&g_ds), "writer's key");
+    CHECK_I(g_ds.error_code, YDS_ERR_ARG);
     CHECK_I(yds_session_set(&g_ds, NULL, s), YDS_ERR_ARG);
     CHECK_I(yds_session_set(&g_ds, "x", NULL), YDS_ERR_ARG);
     CHECK_I(yds_session_set(&g_ds, "n", s), 0);
@@ -1090,6 +1175,7 @@ int main(int argc, char** argv) {
     test_golden(print);
     if (print) return 0;
     test_crash(argv[0]);
+    test_abandon();
     test_refusals();
     test_atomic();
     test_variants();

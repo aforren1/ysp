@@ -1,6 +1,6 @@
 # ysp/dataset.h
 
-Status: v0.1.0, 2026-10-21. The header's manual is the reference (THE
+Status: v0.2.0, 2026-10-25 (v0.1.0, 2026-10-21). The header's manual is the reference (THE
 FOLDER, SESSION.JSON, THE TABLES, THE ZIP). This page records why the
 header exists, where it lives, the decisions, and the results.
 
@@ -75,6 +75,10 @@ whose writer it uses.
 
    `yds_close()` alone also finishes, so a cleanup path that only closes
    still marks the data set closed.
+6. If the session fails (an error path, an exception, a binding's
+   teardown of a data set nobody closed), call `yds_abandon(&ds)`
+   instead (v0.2). The files close, and `session.json` keeps
+   `"closed": false`, as after a crash.
 
 `examples/dataset/session.c` is a complete program that does this for a
 simulated session.
@@ -117,6 +121,8 @@ download the bytes that `write` gets, or give a path. The zip is stored
 | Stream names | The column rule and unique in more than case | Each name is a file name; on Windows `dots.csv` and `DOTS.csv` are one file |
 | The zip | Stored, CRC-32, UTF-8 names (bit 11), every date 1980-01-01, the folder's name as the top folder; no zip64 | The pack tool's zip knowledge (`pack/pack_tool.c`), without its alignment and private records. Fixed dates make the bytes depend on the files only (the test pins a digest). A data set of 4 GiB or more does not fit wasm32's memory; on a rig the folder is the data set |
 | Memory | A `ytr_data` per table in the handle (16 streams: about 770 KB with ysp/trials.h v0.6, 380 KB with v0.5); `session.json`'s values in a heap arena | No allocation per row. The arena grows by the values set, which happens at the open, per live change and at the finish |
+| An abnormal end (v0.2, 2026-10-25) | `yds_abandon()`: close every table file, free the arena, leave session.json as it is | `"closed": true` must mean that the session ended normally. In v0.1 the only end was `yds_close()`, which finishes, so a binding's teardown after an exception (Python's garbage collector, `clear mex`, the exit of MATLAB) wrote `"closed": true` and the row counts for a session that failed (found in the binding review). A crash leaves `"closed": false` already; the abandon gives a cleanup path the same result on purpose |
+| The open's failure code (v0.2) | `ds.error_code`, the `YDS_ERR_*` of the last failure, set by every failing call and by `yds_open()` (`YDS_ERR_EXISTS`, `YDS_ERR_IO`, `YDS_ERR_ARG`, `YDS_ERR_NOMEM`) | The conventions keep errors in the handle; `ysp/pack.h` and `ysp/audio.h` keep the code as `error_code`. `yds_open()` returns bool, so without the code the bindings told a folder that exists from one that cannot be made by matching the message text |
 | The handle's size on trials v0.6 | Accepted (option c), with the open zeroing a stream's writer only when `yds_stream()` makes it | trials v0.6 doubled `ytr_data` (256 columns: 18,760 to 38,224 bytes) and the handle (377,496 to 766,776). Measured below: no row, open or close got slower; the cost was the working set, because the open zeroed the whole handle. Zeroing the used parts only brings the open's working set from 936 to 948 KB down to 340 to 352 KB, below v0.5's 564 KB, with no API change. A lower YDS_MAX_STREAMS default would cut capacity for nothing the lazy zeroing does not already save. Caller storage for `ytr_data`'s columns (a trials API change) saves address space only, which a static handle does not spend |
 
 ## Results
@@ -126,14 +132,15 @@ WSL2 Ubuntu 22.04 gcc 11.4, emcc under node 24.19.
 
 | Check | Result |
 |---|---|
-| `tests/adapt/dataset_test.c` | On ysp/trials.h v0.6.0: 561 checks pass on MSVC (Release, C) and MinGW (C11), in ctest with every other test (76 of 76 and 81 of 81); 555 on WSL2 gcc at -O2 and at -O1 with ASan and UBSan (no Windows lock checks); 536 under emcc and node (no child process). The ysp_trials Python binding's 163 tests pass on the merged tree. The compile checks build as C99, C11, C11 -O3 and C++17 with warnings as errors on gcc, and with a system header before the header under -std=c11 |
+| `tests/adapt/dataset_test.c`, v0.2.0 (2026-10-25) | 662 checks pass on MSVC 19.44 (/O2 /W4 /WX, C) and MinGW gcc 16.1 (C11 -O2, warnings as errors); 656 on WSL2 gcc 11.4 at -O2 and at -O1 with ASan and UBSan (no Windows lock check). New: `yds_abandon()` after rows, a stream and a live change (the files of the crash test, the table files no longer held, every write, the finish and the zip refused, a second abandon and a close change nothing), on a zeroed handle, after a failed open and after the finish (`"closed": true` stays, the zip works); `ds.error_code` for the open's failures by kind, a write's, and 0 after an open that succeeds. The compile checks build as C99, C11 -O3 and C++17 with warnings as errors on MinGW gcc, WSL2 gcc and MSVC. emcc was not run for v0.2 |
+| `tests/adapt/dataset_test.c`, v0.1.0 | On ysp/trials.h v0.6.0: 561 checks pass on MSVC (Release, C) and MinGW (C11), in ctest with every other test (76 of 76 and 81 of 81); 555 on WSL2 gcc at -O2 and at -O1 with ASan and UBSan (no Windows lock checks); 536 under emcc and node (no child process). The ysp_trials Python binding's 163 tests pass on the merged tree. The compile checks build as C99, C11, C11 -O3 and C++17 with warnings as errors on gcc, and with a system header before the header under -std=c11 |
 | The golden session | `session.json` at the open and at the finish, the four tables and a stream, byte for byte (`tests/adapt/dataset_golden.h`); every CSV read back by `ysp/table.h`; `session.json` parses and is its own canonical form |
 | Crash | A child process writes rows and a live change, then leaves with `_Exit()` (no finish, no stdio flush): `session.json` parses with `"closed": false` and no `rows`, no temporary file, every row of every file reads back. The same in-process while the data set is open |
 | Atomic rewrite | A folder in the place of `session.json.tmp`: the rewrite fails, the old file stays byte for byte. On Windows, `session.json` held without FILE_SHARE_DELETE: `YDS_ERR_IO` after the 5 tries, the old file whole, no temporary file; the value is written by the next rewrite |
 | The zip | Parsed entry by entry in the test (names, sizes, CRC-32, offsets, modes), the same bytes to a file and to memory, the golden digest; Python's `zipfile` (`testzip()`), Info-ZIP `unzip` and PowerShell's `Expand-Archive` extract the golden zip to the same files |
 | pandas | pandas 2 reads every golden file with its defaults, the quoted line break included |
 | trials v0.6's data-line columns | A session with a variable and a seed: each row's variable text and `trial_seed` (`yds_seed_text()`) equal the trials writer's own data line (`ytr_format_row()`), and read back from trials.csv as text |
-| Mutants (`tests/mutate/dataset.toml`) | 33 in all, MinGW gcc 16.1: 32 killed; ds-09 (no sync before the rename) survives as expected, since only a power cut shows it |
+| Mutants (`tests/mutate/dataset.toml`) | v0.2.0: 39 in all, MinGW gcc 16.1: 38 killed, among them the 6 new ones (ds-34 to ds-39: the abandon finishes, leaves the streams' files open, leaves the handle open; the existing folder reported as I/O; the open keeps an earlier code; a failure without a code). ds-35 needs Windows (a held file refuses a writer); on POSIX it survives. v0.1.0: 33 in all, 32 killed; ds-09 (no sync before the rename) survives as expected, since only a power cut shows it |
 
 The handle's size on ysp/trials.h v0.6 (2026-10-21): the same laptop,
 MinGW-w64 gcc 16.1 -O2, under the measurement lock (load 1 %), A and B
@@ -183,7 +190,7 @@ session has a few (the open, the live changes, the finish).
 
 ## Bindings
 
-Python `ysp-dataset` 0.1.0 (`ysp.dataset`,
+Python `ysp-dataset` 0.2.0 (`ysp.dataset`,
 [bindings/python/ysp_dataset](../bindings/python/ysp_dataset/README.md))
 and the MEX `ysp_dataset`
 ([bindings/mex/README.md](../bindings/mex/README.md#ysp_dataset)), added
@@ -194,7 +201,7 @@ reads it too.
 Bound: the open (folder, trial columns, session keys, `sync` for
 `YTR_FLUSH_SYNC`), a row of each of the four tables, streams, the
 session's set and push, the row counts, the finish, the close and the zip
-(bytes or a file), `yds_seed_text()`. A row is a dict or keywords in
+(bytes or a file), `yds_abandon()`, `yds_seed_text()`. A row is a dict or keywords in
 Python, a struct or name-value pairs in MATLAB and Octave; the keys are
 the CSV's column names (`onset_s`, not `onset_ns`). Times are seconds,
 rounded to the nearest ns with `fma()` (ysp.rdk's method), so ns -> s ->
@@ -212,7 +219,8 @@ instead of refusing it as an argument.
 | Text without allocation | A scratch buffer per handle; Python reads code points with `PyUnicode_ReadChar()`, MATLAB reads `mxChar` (UTF-16; bytes in Octave); the MEX command into a stack buffer | `PyUnicode_AsUTF8()` is Limited API only from 3.10; `PyUnicode_AsUTF8String()` and `mxArrayToString()` allocate per value |
 | A `time` column named `_ns` | Refused by the bindings (the header accepts it and writes `_s`) | Every binding value is seconds; the name says so as the file does |
 | The GIL | Released in the open, `session_set()`, `session_push()`, `finish()`, `close()` and `zip()`; kept in row writes; a busy flag refuses a second call meanwhile | The syncs cost milliseconds; a row costs microseconds, and getting the GIL back can wait for another thread's switch interval (5 ms) |
-| `yds_open()`'s failure class | Read from its message (`' exists;'`, `cannot make`, ...) | `yds_open()` returns bool and a message only. A code (a `yds_open_code()`, or the code kept in the handle) would remove the string match; an open question for the header |
+| `yds_open()`'s failure class | `ds.error_code` (v0.2) | 0.1.0 matched the message text; the header now keeps the code |
+| An abnormal end (0.2.0) | Python: a `with` block left by an exception, `abandon()`, and the teardown of a `Dataset` never finished or closed (with a `ResourceWarning`, as an unclosed file) call `yds_abandon()`; `finish()`, `close()` and a `with` block that ends normally finish. MEX: `'abandon'`, and the end of a handle still open at `clear mex` or at the exit of MATLAB or Octave, abandon; `'finish'` and `'close'` finish | `"closed": true` means a normal end. 0.1.0 finished the data set on every teardown, so a script that failed at trial 40 left `"closed": true` |
 
 Not bound: the adapters (`yds_frame_from_screen()` and the others take
 structs of headers that have no binding; the row keywords are their
@@ -225,10 +233,10 @@ Tests, 2026-10-25, i7-1360P laptop, Windows 11:
 
 | Run | Result |
 |---|---|
-| Python 3.14.3, MSVC build, NTFS | 22 passed, 1 skipped (the POSIX rename test); with `ysp.trials` and pandas installed |
-| WSL2 Ubuntu 22.04, gcc 11.4, Python 3.10, ext4 | 22 passed, 1 skipped (the Windows lock test); `-Wall -Wextra` clean but CPython's own `PyModuleDef` initializer warning |
-| MATLAB R2023a (MSVC 2022) | `test_mex_dataset`: PASS (81 checks) |
-| Octave 10.1 (MinGW) | `test_mex_dataset`: PASS (81 checks) |
+| Python 3.14.3, MSVC build, NTFS | 0.2.0: 23 passed, 1 skipped (the POSIX rename test); with `ysp.trials` and pandas installed (0.1.0: 22 passed) |
+| WSL2 Ubuntu 22.04, gcc 11.4, Python 3.10, ext4 | 0.2.0: 23 passed, 1 skipped (the Windows lock test); `-Wall -Wextra` clean but CPython's own `PyModuleDef` initializer warning |
+| MATLAB R2023a (MSVC 2022) | `test_mex_dataset`: PASS (93 checks; 0.1.0: 81) |
+| Octave 10.1 (MinGW) | `test_mex_dataset`: PASS (93 checks; 0.1.0: 81) |
 
 The tests cover: every column type and its missing values, text with
 commas, quotes, line breaks, non-BMP and lone surrogates (U+FFFD), the
@@ -238,7 +246,7 @@ big integers, `uint64`), the writer's keys refused, the finish and the
 calls after it, the zip (Python's `zipfile.testzip()`, names, stored,
 1980 dates, the same bytes twice and to a file), the folder that exists
 and the missing parent, a refused open that leaves nothing, `close()`,
-`with` and garbage collection finishing the data set,
+`with` and `close()` finishing the data set; an exception through `with`, `abandon()`, a `Dataset` deleted while open (its `ResourceWarning`), a MATLAB catch block's `'abandon'` and `clear ysp_dataset` with a handle open each leaving `"closed": false`, no `rows` and every row (0.2.0),
 `sync`, the files read while open. A crash: a child process (Python's
 `os._exit()`; a second MATLAB or Octave killed with `taskkill /F` or
 `kill -9`) writes frames, an event, trials, a live change and a stream

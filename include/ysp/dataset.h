@@ -1,4 +1,4 @@
-/* ysp/dataset.h - v0.1.0 - public domain single-header session data set writer
+/* ysp/dataset.h - v0.2.0 - public domain single-header session data set writer
  *
  *   The folder a session's data goes into (docs/experiment_format.md D9 and
  *   2.10): session.json (canonical JSON, format "ysp-session" 1, written at
@@ -187,11 +187,14 @@
  *   ---------------------------------------------------------------------
  *   ERRORS AND RETURN VALUES
  *   ---------------------------------------------------------------------
- *   yds_open() returns bool, clears yds_error() on entry and fills it on
- *   failure; it refuses a handle that holds an open data set (close it
- *   first), so a second open cannot lose the first one's files. Every
- *   other call that can fail returns 0 (or a stream id)
- *   or a negative YDS_ERR_* and fills yds_error(): a write's message
+ *   yds_open() returns bool, clears yds_error() and ds.error_code on
+ *   entry and fills both on failure (YDS_ERR_ARG, YDS_ERR_EXISTS for a
+ *   folder that is there, YDS_ERR_IO for one that cannot be made or
+ *   written, YDS_ERR_NOMEM); it refuses a handle that holds an open data
+ *   set (close it first), so a second open cannot lose the first one's
+ *   files. Every other call that can fail returns 0 (or a stream id)
+ *   or a negative YDS_ERR_* and fills yds_error() and ds.error_code, the
+ *   code of the last failure (0 when there is none): a write's message
  *   names the file and holds ysp/trials.h's message. After a write
  *   failure a table refuses every later row (YDS_ERR_IO), so a file never
  *   has a row after a hole; the other tables go on. yds_finish() returns
@@ -199,6 +202,16 @@
  *   session.json with "closed": true and "write_errors". yds_close()
  *   returns nothing, finishes a data set that is open, and is safe on a
  *   zeroed handle, after a failed open and twice.
+ *   AN ABNORMAL END. yds_abandon() closes every table file (each row is
+ *   in the OS already) and frees the arena, and leaves session.json as it
+ *   is: "closed": false, no "rows", as a crash leaves it. Call it from a
+ *   cleanup path that runs because the session failed (an exception, an
+ *   error handler, a binding's teardown of a data set the script never
+ *   closed), so "closed": true keeps meaning that the session ended
+ *   normally. After it the handle is closed and not finished: the writes,
+ *   yds_finish() and yds_zip() refuse it; yds_close() and a second
+ *   yds_abandon() do nothing. It is safe on a zeroed handle, after a
+ *   failed open and after the finish (where it changes nothing on disk).
  *
  *   ---------------------------------------------------------------------
  *   MEMORY AND THREADS
@@ -222,14 +235,18 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.2.0 - yds_abandon(): an abnormal end that leaves "closed": false
+ *          (a binding's teardown of a data set never closed, an exception
+ *          path); ds.error_code, the YDS_ERR_* of the last failure, set by
+ *          yds_open() too, so a caller maps an open's failure by code.
  *   v0.1.0 - first version (docs/experiment_format.md gap G13): the
  *          folder, session.json with the atomic rewrite, the four tables
  *          and the streams on ysp/trials.h's writer, the adapters, the
  *          stored zip. On ysp/trials.h v0.6 (256 columns, a 38 KB writer):
  *          yds_seed_text() for a trial_seed column in trials' spelling.
  *
- *   STATUS: v0.1.0, 2026-10-21: MSVC 19.44, MinGW-w64 gcc 16.1, WSL2 gcc
- *   11.4 (ASan, UBSan), emcc. On an i7-1360P laptop's SSD (NTFS, MSVC
+ *   STATUS: v0.2.0, 2026-10-25: MSVC 19.44, MinGW-w64 gcc 16.1, WSL2 gcc
+ *   11.4 (ASan, UBSan); v0.1.0 (2026-10-21) also under emcc. On an i7-1360P laptop's SSD (NTFS, MSVC
  *   /O2), median (p99): a frame or event row 12 us (25), a row with
  *   YTR_FLUSH_SYNC 2.9 ms (7.8), an atomic rewrite of session.json 8.2 ms
  *   (13.1): between trials, never in a trial's frames. docs/dataset.md has
@@ -242,9 +259,9 @@
 #define YSP_DATASET_H_INCLUDED
 
 #define YDS_VERSION_MAJOR 0
-#define YDS_VERSION_MINOR 1
+#define YDS_VERSION_MINOR 2
 #define YDS_VERSION_PATCH 0
-#define YDS_VERSION_STRING "0.1.0"
+#define YDS_VERSION_STRING "0.2.0"
 
 /* mkdir(), fsync() and fileno() under -std=c11: the feature-test macro of
  * ysp/rt.h and ysp/trials.h, set before the first system header (Linux and
@@ -378,6 +395,7 @@ typedef struct yds_dataset {
     ytr_data   trials, frames, events, clock;
     ytr_data   stream[YDS_MAX_STREAMS];
     char       error[384];
+    int32_t    error_code;  /* YDS_ERR_* of the last failure, 0 if none (v0.2) */
 } yds_dataset;
 
 YDS_API const char* yds_version(void);
@@ -443,6 +461,10 @@ YDS_API int yds_finish(yds_dataset* ds);
 /* Finish a data set that is open; free the arena. Safe on a zeroed handle,
  * after a failed open and twice. */
 YDS_API void yds_close(yds_dataset* ds);
+/* An abnormal end (v0.2): close every table file and free the arena, and
+ * leave session.json as it is ("closed": false, no "rows"). Safe on a
+ * zeroed handle, after a failed open, after the finish and twice. */
+YDS_API void yds_abandon(yds_dataset* ds);
 
 /* The finished folder as one stored zip (THE ZIP): to `path` (created or
  * truncated) or, with path NULL, to write(ctx, bytes, n). Works after
@@ -676,6 +698,7 @@ static void yds__vfail(yds_dataset* ds, const char* fmt, va_list ap) {
 static int yds__fail(yds_dataset* ds, int code, const char* fmt, ...) {
     va_list ap;
     if (!ds) return code;
+    ds->error_code = code;
     va_start(ap, fmt);
     yds__vfail(ds, fmt, ap);
     va_end(ap);
@@ -683,8 +706,9 @@ static int yds__fail(yds_dataset* ds, int code, const char* fmt, ...) {
 }
 
 /* For open(), which returns bool. */
-static bool yds__ofail(yds_dataset* ds, const char* fmt, ...) {
+static bool yds__ofail(yds_dataset* ds, int code, const char* fmt, ...) {
     va_list ap;
+    ds->error_code = code;
     va_start(ap, fmt);
     yds__vfail(ds, fmt, ap);
     va_end(ap);
@@ -979,32 +1003,33 @@ YDS_API bool yds_open(yds_dataset* ds, const yds_desc* desc) {
     char p[YDS_MAX_DIR + 32];
     if (!ds) return false;
     /* An open data set's files would be lost to the memset below. */
-    if (ds->open) return yds__ofail(ds, "yds_open: this handle holds an open data set; close it first");
+    if (ds->open) return yds__ofail(ds, YDS_ERR_ARG, "yds_open: this handle holds an open data set; close it first");
     if (ds->arena_live) yjs_arena_free(&ds->arena);
     /* Not the streams: each is zeroed when yds_stream() makes it, so a
      * static or calloc'd handle keeps the pages of unused streams
      * untouched (16 x 38 KB with ysp/trials.h v0.6). */
     memset(ds, 0, offsetof(yds_dataset, stream));
     memset(ds->error, 0, sizeof ds->error);
-    if (!desc) return yds__ofail(ds, "yds_open: null desc");
-    if (!desc->dir || !desc->dir[0]) return yds__ofail(ds, "yds_open: no dir");
+    ds->error_code = 0;
+    if (!desc) return yds__ofail(ds, YDS_ERR_ARG, "yds_open: null desc");
+    if (!desc->dir || !desc->dir[0]) return yds__ofail(ds, YDS_ERR_ARG, "yds_open: no dir");
     n = strlen(desc->dir);
-    if (n > YDS_MAX_DIR) return yds__ofail(ds, "yds_open: dir is longer than %d bytes", YDS_MAX_DIR);
+    if (n > YDS_MAX_DIR) return yds__ofail(ds, YDS_ERR_ARG, "yds_open: dir is longer than %d bytes", YDS_MAX_DIR);
     memcpy(ds->dir, desc->dir, n + 1);
     /* A trailing separator would double in every path and empty the zip's
      * folder name. */
     while (n > 1 && (ds->dir[n - 1] == '/' || ds->dir[n - 1] == '\\')) ds->dir[--n] = '\0';
-    if (!yjs_utf8_ok(ds->dir, n)) return yds__ofail(ds, "yds_open: dir is not UTF-8");
+    if (!yjs_utf8_ok(ds->dir, n)) return yds__ofail(ds, YDS_ERR_ARG, "yds_open: dir is not UTF-8");
     if ((int)desc->flush < (int)YTR_FLUSH_ROW || (int)desc->flush > (int)YTR_FLUSH_SYNC)
-        return yds__ofail(ds, "yds_open: flush %d is not a ytr_flush", (int)desc->flush);
+        return yds__ofail(ds, YDS_ERR_ARG, "yds_open: flush %d is not a ytr_flush", (int)desc->flush);
     ds->flush = desc->flush;
     if (!desc->trial_cols || desc->n_trial_cols <= 0)
-        return yds__ofail(ds, "yds_open: no trial_cols (trials.csv needs a column)");
+        return yds__ofail(ds, YDS_ERR_ARG, "yds_open: no trial_cols (trials.csv needs a column)");
     if (desc->session) {
-        if (desc->session->type != YJS_OBJECT) return yds__ofail(ds, "yds_open: session is not an object");
+        if (desc->session->type != YJS_OBJECT) return yds__ofail(ds, YDS_ERR_ARG, "yds_open: session is not an object");
         for (i = 0; i < desc->session->n; i++)
             if (yds__reserved_key(desc->session->u.members[i].key))
-                return yds__ofail(ds, "yds_open: session has '%s', which the writer sets",
+                return yds__ofail(ds, YDS_ERR_ARG, "yds_open: session has '%s', which the writer sets",
                                   desc->session->u.members[i].key);
     }
     if (yds__check_cols(ds, &ds->trials, desc->trial_cols, desc->n_trial_cols, "yds_open: trial_cols") < 0)
@@ -1024,21 +1049,21 @@ YDS_API bool yds_open(yds_dataset* ds, const yds_desc* desc) {
     }
     if (rc != YJS_OK) {
         yds__undo(ds, false);
-        return yds__ofail(ds, "yds_open: session.json's values: %s",
+        return yds__ofail(ds, rc == YJS_ERR_NOMEM ? YDS_ERR_NOMEM : YDS_ERR_IO, "yds_open: session.json's values: %s",
                           rc == YJS_ERR_NOMEM ? "out of memory" : "no UTC time from the C library");
     }
 
     if ((e = yds__mkdir(ds->dir, &exists)) != 0) {
         yds__undo(ds, false);
         if (exists)
-            return yds__ofail(ds, "yds_open: '%s' exists; a data set never goes into a folder that is "
+            return yds__ofail(ds, YDS_ERR_EXISTS, "yds_open: '%s' exists; a data set never goes into a folder that is "
                               "there already", ds->dir);
-        return yds__ofail(ds, "yds_open: cannot make '%s' (error %d; does its parent exist?)", ds->dir, e);
+        return yds__ofail(ds, YDS_ERR_IO, "yds_open: cannot make '%s' (error %d; does its parent exist?)", ds->dir, e);
     }
     yds__path(p, sizeof p, ds->dir, "streams");
     if ((e = yds__mkdir(p, &exists)) != 0) {
         yds__undo(ds, true);
-        return yds__ofail(ds, "yds_open: cannot make '%s' (error %d)", p, e);
+        return yds__ofail(ds, YDS_ERR_IO, "yds_open: cannot make '%s' (error %d)", p, e);
     }
     rc = yds__write_session(ds, "yds_open");
     if (rc == YDS_OK)
@@ -1250,6 +1275,25 @@ YDS_API int yds_finish(yds_dataset* ds) {
 YDS_API void yds_close(yds_dataset* ds) {
     if (!ds) return;
     if (ds->open) (void)yds_finish(ds);
+    if (ds->arena_live) yjs_arena_free(&ds->arena);
+    ds->arena_live = false;
+    ds->root = NULL;
+}
+
+YDS_API void yds_abandon(yds_dataset* ds) {
+    int i;
+    if (!ds) return;
+    if (ds->open) {
+        /* A table writer's finish only closes its file (no sidecar here):
+         * every row is in the OS already. session.json is not touched, so
+         * it keeps "closed": false. */
+        ytr_data_close(&ds->trials);
+        ytr_data_close(&ds->frames);
+        ytr_data_close(&ds->events);
+        ytr_data_close(&ds->clock);
+        for (i = 0; i < ds->n_streams; i++) ytr_data_close(&ds->stream[i]);
+        ds->open = false;
+    }
     if (ds->arena_live) yjs_arena_free(&ds->arena);
     ds->arena_live = false;
     ds->root = NULL;

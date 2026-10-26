@@ -32,6 +32,12 @@
  * a bytes object per value), so a row allocates nothing in the binding
  * once the buffer has grown to the longest row.
  *
+ * AN ABNORMAL END. finish(), close() and the end of a with block mark the
+ * session "closed": true. A with block left by an exception, abandon(), and
+ * the teardown of a Dataset never finished or closed (with a
+ * ResourceWarning) call yds_abandon(): the files close and session.json
+ * keeps "closed": false, as after a crash.
+ *
  * THREADS. The header has none. The calls that sync the disk (the open,
  * session_set(), session_push(), finish(), close(), zip()) release the GIL;
  * a busy flag refuses a second call on the same object meanwhile, since the
@@ -678,12 +684,7 @@ static int Ds_init(PyObject* o, PyObject* args, PyObject* kw) {
     Py_END_ALLOW_THREADS
     self->busy = 0;
     if (!ok) {
-        /* yds_open() returns bool; its message says which failure. */
-        const char* e = yds_error(self->ds);
-        int code = strstr(e, "' exists;") ? YDS_ERR_EXISTS
-                 : strstr(e, "cannot make") || strstr(e, "cannot create") || strstr(e, "cannot write") ||
-                           strstr(e, "cannot rename") ? YDS_ERR_IO : YDS_ERR_ARG;
-        ds_fail(code, e);
+        ds_fail(self->ds->error_code, yds_error(self->ds));
         free(self->ds);
         self->ds = NULL;
         goto fail;
@@ -701,12 +702,25 @@ fail:
     return -1;
 }
 
+/* The teardown of a data set the script never finished or closed is an
+ * abnormal end (an exception unwound past it, the interpreter is exiting):
+ * abandon it, so session.json keeps "closed": false, and warn as an
+ * unclosed file does. */
 static void Ds_release(DsObject* self) {
     int i;
     if (self->ds) {
         yds_dataset* ds = self->ds;
+        if (ds->open) {
+            PyObject *et, *ev, *tb;
+            PyErr_Fetch(&et, &ev, &tb);
+            if (PyErr_WarnFormat(PyExc_ResourceWarning, 1,
+                                 "ysp.dataset.Dataset('%s') was never finished or closed; abandoned: "
+                                 "session.json says \"closed\": false", ds->dir) < 0)
+                PyErr_WriteUnraisable(NULL);
+            PyErr_Restore(et, ev, tb);
+        }
         Py_BEGIN_ALLOW_THREADS
-        yds_close(ds);   /* finishes an open data set: "closed": true */
+        yds_abandon(ds);   /* frees the arena of a finished one too */
         Py_END_ALLOW_THREADS
         free(ds);
         self->ds = NULL;
@@ -958,10 +972,30 @@ static PyObject* Ds_enter(PyObject* o, PyObject* unused) {
     return o;
 }
 
+static PyObject* Ds_abandon(PyObject* o, PyObject* unused) {
+    DsObject* self = (DsObject*)o;
+    yds_dataset* ds = self->ds;
+    (void)unused;
+    if (!ds) Py_RETURN_NONE;
+    if (self->busy) {
+        PyErr_SetString(DsError, "the Dataset is in use by another thread (one thread writes one data set)");
+        return NULL;
+    }
+    self->busy = 1;
+    Py_BEGIN_ALLOW_THREADS
+    yds_abandon(ds);
+    Py_END_ALLOW_THREADS
+    self->busy = 0;
+    Py_RETURN_NONE;
+}
+
+/* A with block that ends by an exception is an abnormal end: abandon, so
+ * session.json keeps "closed": false, and let the exception go on. */
 static PyObject* Ds_exit(PyObject* o, PyObject* args) {
     PyObject* r;
-    (void)args;
-    r = ds_end((DsObject*)o, 1);
+    PyObject* et = PyTuple_Size(args) > 0 ? PyTuple_GetItem(args, 0) : Py_None;
+    if (et && et != Py_None) r = Ds_abandon(o, NULL);
+    else r = ds_end((DsObject*)o, 1);
     if (!r) return NULL;
     Py_DECREF(r);
     Py_RETURN_FALSE;
@@ -1026,6 +1060,7 @@ static PyMethodDef Ds_methods[] = {
     { "rows", Ds_rows, METH_NOARGS, "rows() -> dict: rows written per table, as session.json's \"rows\" at the finish." },
     { "finish", Ds_finish, METH_NOARGS, "finish() -> rows: close every table; session.json says \"closed\": true." },
     { "close", Ds_close, METH_NOARGS, "close(): finish an open data set; safe twice." },
+    { "abandon", Ds_abandon, METH_NOARGS, "abandon(): an abnormal end: close the files, leave session.json \"closed\": false." },
     { "zip", KWF(Ds_zip), "zip(path=None) -> bytes or None: the finished folder as one stored zip." },
     { "__enter__", Ds_enter, METH_NOARGS, NULL },
     { "__exit__", Ds_exit, METH_VARARGS, NULL },

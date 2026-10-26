@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ysp-dataset"
-version = "0.1.0"  # must equal ysp/dataset.h's YDS_VERSION_STRING; tests/test_dataset.py checks it
+version = "0.2.0"  # must equal ysp/dataset.h's YDS_VERSION_STRING; tests/test_dataset.py checks it
 description = "A session's data set for psychophysics: session.json, trial, frame, event, clock and stream tables, a zip"
 readme = "README.md"
 requires-python = ">=3.8"

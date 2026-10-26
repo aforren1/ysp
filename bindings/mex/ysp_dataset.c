@@ -18,6 +18,12 @@
  *     z = ysp_dataset('zip', h);                         % uint8, or ('zip', h, path)
  *     ysp_dataset('close', h);
  *
+ * AN ABNORMAL END. 'finish' and 'close' mark the session "closed": true.
+ * 'abandon' (for a script's catch block), and the end of a handle still
+ * open at `clear mex` or at the exit of MATLAB or Octave, call
+ * yds_abandon(): the files close and session.json keeps "closed": false,
+ * as after a crash.
+ *
  * TIMES are seconds as doubles, rounded to the nearest ns for the header,
  * which writes them back as seconds. A data value may be negative (a
  * residual, an SOA). [] and NaN are a missing value (an empty cell).
@@ -92,10 +98,14 @@ static void ds_table_free(ds_table* t) {
     memset(t, 0, sizeof *t);
 }
 
+/* The handle's end. 'close' finishes the data set before this; anything
+ * else that ends a handle still open (clear mex, the exit of MATLAB or
+ * Octave after a script failed, 'abandon') is an abnormal end: abandon it,
+ * so session.json keeps "closed": false. */
 static void ds_destroy(void* obj) {
     ds_handle* h = (ds_handle*)obj;
     int i;
-    yds_close(&h->ds);   /* finishes an open data set: "closed": true */
+    yds_abandon(&h->ds);
     ds_table_free(&h->trials);
     for (i = 0; i < YDS_MAX_STREAMS; i++) ds_table_free(&h->stream[i]);
     free(h->sbuf);
@@ -697,16 +707,12 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
             pm_err("memory", "out of memory (%d bytes for the data set)", (int)sizeof *h);
         }
         if (!yds_open(&h->ds, &desc)) {
-            char msg[sizeof h->ds.error];
+            static yds_dataset failed;   /* the code and the message, past the free */
             yjs_arena_free(&a);
-            snprintf(msg, sizeof msg, "%s", yds_error(&h->ds));
+            memcpy(failed.error, h->ds.error, sizeof failed.error);
+            failed.error_code = h->ds.error_code;
             ds_destroy(h);
-            /* yds_open() returns bool; its message says which failure. */
-            if (strstr(msg, "' exists;")) pm_err("exists", "%s", msg);
-            if (strstr(msg, "cannot make") || strstr(msg, "cannot create") || strstr(msg, "cannot write") ||
-                strstr(msg, "cannot rename"))
-                pm_err("io", "%s", msg);
-            pm_err("arg", "%s", msg);
+            ds_check(failed.error_code < 0 ? failed.error_code : YDS_ERR_ARG, &failed);
         }
         yjs_arena_free(&a);
         plhs[0] = pm_handle_out(pm_register(h));
@@ -816,6 +822,11 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         mxSetField(s, 0, "streams", st);
         mxSetField(s, 0, "trial_cols", ds_names_out(h->trials.col, h->trials.n));
         plhs[0] = s;
+    } else if (strcmp(cmd, "abandon") == 0) {
+        /* An abnormal end, for a script's catch block: the files close,
+         * session.json keeps "closed": false, the handle goes. */
+        pm_unregister(h);
+        ds_destroy(h);
     } else if (strcmp(cmd, "close") == 0) {
         /* yds_finish() first, so a write that failed reaches the caller;
          * the handle goes either way. */

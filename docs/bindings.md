@@ -24,7 +24,9 @@ This page is reference: the language bindings of the headers.
   clock and stream tables, the zip), so the player's analysis reads it. It
   compiles ysp/dataset.h with ysp/trials.h, ysp/table.h and ysp/json.h, so
   CI stages those two more headers for it. A row is a `dict` or keywords;
-  `None` and `NaN` are an empty cell.
+  `None` and `NaN` are an empty cell. An exception through `with`,
+  `abandon()` and the teardown of a data set never closed leave
+  `"closed": false`.
 - **MATLAB / Octave**: [bindings/mex/](../bindings/mex/), one MEX function per
   library (`ysp_parallel`, `ysp_serial`, `ysp_stair`, `ysp_quest`,
   `ysp_aep`, `ysp_trials`, `ysp_color`) with ppdev-mex-style command dispatch, built and

@@ -22,7 +22,29 @@ function example_dataset(base)
     session = struct('experiment', 'gabor-2afc', 'seed', 20261021, ...
                      'fields', struct('participant', 'P07', 'age', 31));
     h = ysp_dataset('open', struct('dir', folder, 'trial_cols', {cols}, 'session', session));
-    cleanup = onCleanup(@() close_quietly(h));   % an error still finishes the data set
+    try
+        run_session(h);
+    catch err
+        % An abnormal end: the files close, session.json keeps
+        % "closed": false, and the error goes on.
+        ysp_dataset('abandon', h);
+        rethrow(err);
+    end
+    rows = ysp_dataset('finish', h);                   % "closed": true
+    ysp_dataset('zip', h, [folder '.zip']);
+    ysp_dataset('close', h);
+    fprintf('wrote %s: %d trials, %d frames, %d events, %d dots rows\n', folder, rows.trials, rows.frames, ...
+            rows.events, rows.streams.dots);
+    if exist('readtable') %#ok<EXIST>   MATLAB; Octave has no readtable
+        T = readtable(fullfile(folder, 'trials.csv'));
+        disp(T(1:3, :));
+    else
+        L = strsplit(fileread(fullfile(folder, 'trials.csv')), char(10));
+        fprintf('%s\n', L{1:4});
+    end
+end
+
+function run_session(h)
 
     dots = ysp_dataset('stream', h, 'dots', {'t_s', 'time', []; 'coherence', 'double', 3});
     ysp_dataset('write_clock', h, 'role', 'box', 'kind', 'pair', 't_s', 100, 'ticks', 123456789, 'width_s', 0.00002);
@@ -55,23 +77,5 @@ function example_dataset(base)
         if trial == 4                                  % a live change, between trials
             ysp_dataset('session_push', h, 'changes', struct('trial_index', trial, 'key', 'contrast_step', 'value', 0.5));
         end
-    end
-    rows = ysp_dataset('finish', h);
-    ysp_dataset('zip', h, [folder '.zip']);
-    fprintf('wrote %s: %d trials, %d frames, %d events, %d dots rows\n', folder, rows.trials, rows.frames, ...
-            rows.events, rows.streams.dots);
-    if exist('readtable') %#ok<EXIST>   MATLAB; Octave has no readtable
-        T = readtable(fullfile(folder, 'trials.csv'));
-        disp(T(1:3, :));
-    else
-        L = strsplit(fileread(fullfile(folder, 'trials.csv')), char(10));
-        fprintf('%s\n', L{1:4});
-    end
-end
-
-function close_quietly(h)
-    try
-        ysp_dataset('close', h);
-    catch
     end
 end

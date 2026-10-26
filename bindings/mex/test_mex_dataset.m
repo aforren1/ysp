@@ -172,6 +172,23 @@ function test_mex_dataset()
     s = session(fullfile(root, 'b'));
     check(isequal(s.closed, true) && s.rows.trials == 1, 'close alone finishes');
 
+    % ---- 'abandon': an abnormal end, for a script's catch block
+    d = fullfile(root, 'ab');
+    h = ysp_dataset('open', struct('dir', d, 'trial_cols', {{'x', 'int'}}, 'session', struct('experiment', 'ab')));
+    try
+        ysp_dataset('write_trial', h, 'x', 1);
+        ysp_dataset('write_trial', h, 'x', 2);
+        error('test_mex_dataset:experiment', 'the experiment failed');
+    catch err
+        ysp_dataset('abandon', h);
+    end
+    check(strcmp(err.identifier, 'test_mex_dataset:experiment'), 'the catch block ran');
+    unfinished(d, {'x', '1', '2'});
+    expect_error('ysp_dataset:handle', @() ysp_dataset('rows', h));
+    fid = fopen(fullfile(d, 'trials.csv'), 'a');
+    check(fid >= 0, 'abandon closed the table files');
+    if fid >= 0, fclose(fid); end
+
     % ---- seed_text
     check(strcmp(ysp_dataset('seed_text', uint64(18446744073709551615)), 'xffffffffffffffff'), 'seed_text max');
     check(strcmp(ysp_dataset('seed_text', 255), 'x00000000000000ff'), 'seed_text');
@@ -181,6 +198,14 @@ function test_mex_dataset()
 
     % ---- trial rows from ysp_trials, when it is built
     trials_check(root);
+
+    % ---- clear ysp_dataset with a handle open: abandoned, not finished
+    d = fullfile(root, 'cleared');
+    h = ysp_dataset('open', struct('dir', d, 'trial_cols', {{'x', 'int'}}));
+    ysp_dataset('write_trial', h, 'x', 7);
+    clear ysp_dataset
+    unfinished(d, {'x', '7'});
+    expect_error('ysp_dataset:handle', @() ysp_dataset('rows', h));   % a new table after the reload
 
     fprintf('PASS (%d checks)\n', YSP_DS_CHECKS);
 end
@@ -286,6 +311,14 @@ function trials_check(root)
     ysp_trials('close', t);
     got = lines(fullfile(root, 'tr', 'trials.csv'));
     check(isequal(got(2:end), want), 'trials.csv rows equal ysp_trials'' data line');
+end
+
+function unfinished(d, want)
+    % What an abnormal end leaves: "closed": false, no rows, every row.
+    s = session(d);
+    check(isequal(s.closed, false) && ~isfield(s, 'rows'), 'an abnormal end leaves "closed": false (%s)', d);
+    check(exist(fullfile(d, 'session.json.tmp'), 'file') == 0, 'no temporary file (%s)', d);
+    check(isequal(lines(fullfile(d, 'trials.csv')), want), 'every row reads back (%s)', d);
 end
 
 function s = session(d)

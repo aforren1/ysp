@@ -76,14 +76,37 @@ ds.finish()
    that the row does not name is an empty cell. `None` is an empty cell
    in every column, and `NaN` in a number or time column.
 3. `finish()` closes every table and writes `session.json` again with
-   `"closed": true` and the row counts. `close()`, the end of a `with`
-   block and the garbage collector also finish a data set that is open.
+   `"closed": true` and the row counts. `close()` and the normal end of a
+   `with` block also finish a data set that is open. A session that fails
+   does not finish: see the next section.
 4. Times are seconds as floats, on one clock of yours (the clock of
    `win.flip()`'s time stamps, for example). The binding rounds each
    time to the nearest nanosecond, and the file holds it as seconds with
    9 decimals. A time may be negative (a residual, an SOA).
 
 `example.py` is a complete simulated session.
+
+## How to end a session that failed
+
+`"closed": true` means that the session ended normally. When it does not,
+the data set is abandoned: every table file closes, every row written stays,
+and `session.json` keeps `"closed": false` and no row counts, as after a
+crash. This happens when:
+
+- an exception leaves a `with` block (the exception goes on);
+- you call `abandon()`, for example in your own `except` block;
+- a `Dataset` that was never finished or closed is deleted (at the end of
+  the script, or by the garbage collector). Python then also emits a
+  `ResourceWarning`, as for a file that was never closed.
+
+```python
+with yds.Dataset(folder, cols, session=info) as ds:
+    run_experiment(ds)          # an exception here: "closed": false
+                                # the normal end of the block: "closed": true
+```
+
+After `abandon()` the writes, `finish()` and `zip()` refuse the data set;
+`close()` and a second `abandon()` do nothing.
 
 ## How to add trial rows from ysp.trials
 
@@ -188,6 +211,7 @@ the files are the rows written before the end.
 | `rows()` | `{"trials": n, "frames": n, "events": n, "clock": n, "streams": {name: n}}` |
 | `finish()` | finishes the data set and returns `rows()` |
 | `close()` | finishes a data set that is open; safe twice |
+| `abandon()` | an abnormal end: closes the files, leaves `session.json` `"closed": false`; safe twice |
 | `zip(path=None)` | the finished folder as one zip: `bytes`, or written to `path` |
 | `dir`, `is_open`, `finished`, `streams`, `trial_columns` | state |
 
@@ -224,7 +248,8 @@ keyword `dict`. `sync=True` and `session_set()` cost milliseconds: keep
 them out of a trial's frames.
 
 The calls that sync the disk (the open, `session_set()`,
-`session_push()`, `finish()`, `close()`, `zip()`) release the GIL. Row
+`session_push()`, `finish()`, `close()`, `abandon()`, `zip()`) release the
+GIL. Row
 writes keep it: a row takes microseconds, and getting the GIL back after a
 release can wait for another thread's switch interval. One thread writes
 one data set; a second call while the GIL is released raises `Error`.

@@ -399,10 +399,28 @@ log `ysp_trials` columns, declare them as your own and fill them from
 as the trials writer does. The test checks that the rows equal
 `ysp_trials`' data line, text for text.
 
-`'close'` (and `clear mex`, and the exit of MATLAB or Octave) finishes a
-data set that is open, so a cleanup path that only closes still marks it
-closed. A process that is killed leaves `"closed": false`, and every row
-written before the kill reads.
+`'finish'` and `'close'` mark the session `"closed": true`, the mark of
+a normal end. A session that fails is abandoned instead: every table file
+closes, every row written stays, and `session.json` keeps
+`"closed": false` and no row counts, as after a crash. Call `'abandon'`
+from your own catch block:
+
+```matlab
+h = ysp_dataset('open', d);
+try
+    run_experiment(h);
+catch err
+    ysp_dataset('abandon', h);              % "closed": false; the handle goes
+    rethrow(err);
+end
+ysp_dataset('finish', h);                   % "closed": true
+ysp_dataset('close', h);
+```
+
+A handle that is still open when the MEX file is cleared (`clear mex`,
+`clear ysp_dataset`) or when MATLAB or Octave exits is abandoned too, so a
+script that stopped on an error and was never closed does not read as a
+normal end. A process that is killed leaves the same files.
 
 ### Open
 
@@ -447,6 +465,7 @@ an array of its rows, `[]` null. JSON has no NaN or Inf.
 | `'zip', h [, path]` | `uint8` row, or none | the finished folder as one stored zip |
 | `'info', h` | struct | `dir`, `is_open`, `finished`, `streams`, `trial_cols` |
 | `'close', h` | none | finishes a data set that is open, then frees the handle |
+| `'abandon', h` | none | an abnormal end: closes the files, leaves `session.json` `"closed": false`, frees the handle |
 | `'columns', 'frames' \| 'events' \| 'clock'` | cell of names | the fixed tables' columns |
 | `'seed_text', seed` | char | a `uint64` seed as `x` and 16 hex digits |
 | `'version'` | char | ysp/dataset.h's version |

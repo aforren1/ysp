@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import sys
+import warnings
 import zipfile
 
 import pytest
@@ -316,21 +317,83 @@ def test_zip(ds, tmp_path):
     assert ds.zip() == b   # the same files give the same bytes
 
 
+def unfinished(d, trials):
+    """What an abnormal end leaves: "closed": false, no rows, every row."""
+    s = session(d)
+    assert s["closed"] is False and "rows" not in s
+    assert not (d / "session.json.tmp").exists()
+    assert len(read_csv(d / "trials.csv")) == trials + 1
+    return s
+
+
 def test_context_manager_and_dealloc(tmp_path):
     with yds.Dataset(str(tmp_path / "a"), [("x", "int")]) as ds:
         ds.write_trial(x=1)
     assert session(tmp_path / "a")["closed"] is True and not ds.is_open
-    with pytest.raises(RuntimeError):
+    # An exception through the with block is an abnormal end: abandoned.
+    with pytest.raises(RuntimeError, match="the experiment failed"):
         with yds.Dataset(str(tmp_path / "b"), [("x", "int")]) as ds:
             ds.write_trial(x=1)
+            ds.write_frame(frame=0)
             raise RuntimeError("the experiment failed")
-    s = session(tmp_path / "b")
-    assert s["closed"] is True and s["rows"]["trials"] == 1   # the cleanup path closes, as yds_close()
+    unfinished(tmp_path / "b", 1)
+    assert not ds.is_open and not ds.finished
+    with pytest.raises(yds.OrderError):
+        ds.zip()
+    # A Dataset never finished or closed: abandoned, with a ResourceWarning.
     ds = yds.Dataset(str(tmp_path / "c"), [("x", "int")])
     ds.write_trial(x=2)
-    del ds
-    gc.collect()
-    assert session(tmp_path / "c")["closed"] is True
+    with pytest.warns(ResourceWarning, match="never finished or closed"):
+        del ds
+        gc.collect()
+    unfinished(tmp_path / "c", 1)
+    # A finished one goes quietly.
+    ds = yds.Dataset(str(tmp_path / "d"), [("x", "int")])
+    ds.finish()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        del ds
+        gc.collect()
+    assert session(tmp_path / "d")["closed"] is True
+
+
+def test_abandon(tmp_path):
+    d = tmp_path / "ab"
+    ds = yds.Dataset(str(d), [("x", "int")], session={"experiment": "ab"})
+    s = ds.stream("dots", [("t_s", "time")])
+    ds.write_trial(x=1)
+    ds.write_trial(x=2)
+    ds.write_stream(s, t_s=0.5)
+    ds.session_push("changes", {"k": 1})
+    ds.abandon()
+    assert not ds.is_open and not ds.finished
+    st = unfinished(d, 2)
+    assert st["changes"] == [{"k": 1}] and st["experiment"] == "ab"
+    assert read_csv(d / "streams" / "dots.csv") == [["t_s"], ["0.500000000"]]
+    with open(d / "trials.csv", "ab"):   # the writer no longer holds the file
+        pass
+    with pytest.raises(yds.ClosedError):
+        ds.write_trial(x=3)
+    with pytest.raises(yds.ClosedError):
+        ds.finish()
+    with pytest.raises(yds.OrderError):
+        ds.zip()
+    ds.abandon()
+    ds.close()   # nothing to finish: still "closed": false
+    unfinished(d, 2)
+    # After a finish it changes nothing.
+    ds = yds.Dataset(str(tmp_path / "fin"), [("x", "int")])
+    ds.finish()
+    ds.abandon()
+    assert session(tmp_path / "fin")["closed"] is True and len(ds.zip()) > 0
+    # In a script's own except block.
+    try:
+        ds = yds.Dataset(str(tmp_path / "exc"), [("x", "int")])
+        ds.write_trial(x=1)
+        raise KeyboardInterrupt
+    except KeyboardInterrupt:
+        ds.abandon()
+    unfinished(tmp_path / "exc", 1)
 
 
 def test_sync_flush(tmp_path):
