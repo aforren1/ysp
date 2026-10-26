@@ -1,0 +1,21 @@
+# An sdist must carry everything the build needs. setup.py compiles
+# ysp/device.h into the extension with the headers it includes; they live in
+# include/ysp/ under the repository root, which an sdist cannot reach, so
+# stage copies in include/ysp/ next to setup.py first:
+#
+#     mkdir -p include/ysp && cp ../../../include/ysp/{device,rt,input,box,serial,parallel}.h include/ysp/
+#     uv build --sdist
+#
+# CI stages the same headers in .github/workflows/ci.yml. The copies are
+# gitignored; setup.py prefers the repository root when it is present.
+include include/ysp/device.h
+include include/ysp/rt.h
+include include/ysp/input.h
+include include/ysp/box.h
+include include/ysp/serial.h
+include include/ysp/parallel.h
+include ysp_device_ext.c
+include ysp_device_bind.h
+include example.py
+recursive-include tests *.py
+include bench.py

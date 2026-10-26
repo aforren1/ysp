@@ -4,6 +4,7 @@ function build(name)
 %   build()             builds every ysp_*.c in this directory
 %   build('parallel')   builds only ysp_parallel.c
 %   build('quest')      builds only ysp_quest.c
+%   build('rt')         builds only ysp_rt.c
 %
 %   Run it from any directory:  run('.../bindings/mex/build.m')
 %   Each MEX file is written next to its source as ysp_<name>.<mexext>.
@@ -30,7 +31,12 @@ function build(name)
     % The adaptive-method sources (ysp_stair.c, ysp_quest.c, ysp_aep.c,
     % ysp_trials.c) are pure computation and build everywhere; ysp_quest.c
     % and ysp_aep.c define YQST_ASYNC / YAEP_ASYNC themselves, so they
-    % compile ysp/rt.h and need only the thread library below.
+    % compile ysp/rt.h and need only the thread library below. ysp_rt.c
+    % (ysp/rt.h itself) is the same: no gate, the thread library only.
+    % ysp_pack.c compiles ysp/pack.h and the ysp/json.h it requires; it maps
+    % files through the OS (Windows, POSIX) and needs no library.
+    % ysp_response.c (ysp/response.h with ysp/input.h) is pure computation
+    % too and needs no library.
     unsupported = {'ysp_parallel.c', ismac};
 
     % mex writes its output to the current directory; build next to the
@@ -53,12 +59,14 @@ function build(name)
             % link with undefined SetupDi*. mex takes -l<name> on both
             % toolchains (it becomes <name>.lib for MSVC), so one spelling
             % covers them.
-            if strcmp(srcs{i}, 'ysp_serial.c')
+            % ysp_device.c and ysp_rigfile.c compile ysp/serial.h too.
+            if any(strcmp(srcs{i}, {'ysp_serial.c', 'ysp_device.c', 'ysp_rigfile.c'}))
                 args(end+1:end+2) = {'-lsetupapi', '-ladvapi32'};   %#ok<AGROW>
             end
         else
-            % The async-pulse workers, and the async inference threads of
-            % ysp_quest.c and ysp_aep.c, use pthreads on Linux/macOS.
+            % The async-pulse workers, the async inference threads of
+            % ysp_quest.c and ysp_aep.c, and ysp/rt.h's worker and pump in
+            % ysp_rt.c use pthreads on Linux/macOS.
             args{end+1} = '-lpthread';   %#ok<AGROW>
         end
         mex(args{:});

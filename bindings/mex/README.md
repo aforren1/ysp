@@ -16,6 +16,15 @@ never reused, so a handle kept past its `close` always raises
 | `ysp_aep.c` | [ysp/aep.h](../../include/ysp/aep.h) | [example_aep.m](example_aep.m) |
 | `ysp_trials.c` | [ysp/trials.h](../../include/ysp/trials.h) | [example_trials.m](example_trials.m) |
 | `ysp_color.c` | [ysp/color.h](../../include/ysp/color.h) | [test_mex_color.m](test_mex_color.m); the command reference is in [docs/color.md](../../docs/color.md) |
+| `ysp_box.c` | [ysp/box.h](../../include/ysp/box.h) | [example_box.m](example_box.m), [test_mex_box.m](test_mex_box.m) |
+| `ysp_rdk.c` | [ysp/rdk.h](../../include/ysp/rdk.h) | [example_rdk.m](example_rdk.m), [test_mex_rdk.m](test_mex_rdk.m) |
+| `ysp_pack.c` | [ysp/pack.h](../../include/ysp/pack.h) | [example_pack.m](example_pack.m), [test_mex_pack.m](test_mex_pack.m) |
+| `ysp_rt.c` | [ysp/rt.h](../../include/ysp/rt.h) | [example_rt.m](example_rt.m) |
+| `ysp_device.c` | [ysp/device.h](../../include/ysp/device.h) | [example_device.m](example_device.m) |
+| `ysp_rigfile.c` | [ysp/rigfile.h](../../include/ysp/rigfile.h) | [example_rigfile.m](example_rigfile.m) |
+| `ysp_response.c` | [ysp/response.h](../../include/ysp/response.h) | [example_response.m](example_response.m) |
+| `ysp_timeline.c` | [ysp/timeline.h](../../include/ysp/timeline.h) | [example_timeline.m](example_timeline.m) |
+| `ysp_dataset.c` | [ysp/dataset.h](../../include/ysp/dataset.h) | [example_dataset.m](example_dataset.m) |
 
 The two transport headers build on the shared [ysp/rt.h](../../include/ysp/rt.h), so
 both MEX functions compile it too. `ysp_quest.c` and `ysp_aep.c` define
@@ -36,6 +45,15 @@ it also runs the async reader on a 2000-line stream.
 the same for `ysp_color` (compiles nothing but ysp/color.h and
 `ysp_mex_util.h`); `tests/compare/color_ptb.m` compares it with
 Psychtoolbox's colorimetric code.
+[test_mex_rt.m](test_mex_rt.m) does the same for `ysp_rt` (compiles
+ysp/rt.h and `ysp_mex_util.h`); it needs no device.
+[test_mex_device.m](test_mex_device.m) checks `ysp_device` and
+`ysp_rigfile` together on simulated boards (no hardware) and prints `PASS`
+with the number of checks.
+[test_mex_dataset.m](test_mex_dataset.m) does the same for `ysp_dataset`
+(compiles ysp/dataset.h with the ysp/trials.h, ysp/table.h and
+ysp/json.h it includes, and `ysp_mex_util.h`). Its crash check starts a
+second MATLAB or Octave, which writes rows and is then killed.
 
 ## Build
 
@@ -342,6 +360,288 @@ The Python binding has no async reader yet.
 Device naming, USB latency, DTR-driven board resets and what a serial trigger
 is worth in timing terms are documented in the header:
 [ysp/serial.h](../../include/ysp/serial.h).
+
+## ysp_rt
+
+```matlab
+t    = ysp_rt('now');                          % seconds on the ysp clock
+tn   = ysp_rt('now_ns');                       % the same, exact int64 ns
+late = ysp_rt('sleep_until', t + 0.5);         % seconds late
+late = ysp_rt('sleep_until', t + 0.5, 0);      % no spin: the OS wait only
+c    = ysp_rt('correlate', @GetSecs);          % GetSecs on the ysp clock
+
+h = ysp_rt('fit_open', struct('mode', 'late', 'tick', 1e-6, 'bits', 32));
+flags = ysp_rt('fit_add', h, us, t);           % pairs: counters and their times
+[s, ns] = ysp_rt('fit_map', h, event_us);      % events on the ysp clock
+info = ysp_rt('fit_info', h);                  % ppm, spread, points, epoch, ...
+ysp_rt('fit_close', h);
+```
+
+`ysp_rt` wraps the clock that every ysp time is on. `ysp_rt('now')`,
+`ysp_serial('now')` and `ysp_parallel('now')` read one counter: each MEX
+file compiles its own copy of `ysp/rt.h`, and `test_mex_rt.m` checks that a
+read of the other two lies between two reads of `ysp_rt('now_ns')`. On the
+Windows development machine, Psychtoolbox's `GetSecs` read between two
+reads of `ysp_rt('now')` in every try, so it is the same counter there; on
+another machine, check with `'correlate'`.
+
+A wait blocks MATLAB or Octave for its whole length, and Ctrl+C does not
+end it. `'sleep_until'` gives the OS the wait up to the spin window before
+the deadline and spins the rest. The default window is the `default_spin`
+field of `ysp_rt('constants')`: 1.2 ms on Windows, 0.2 ms elsewhere.
+
+`'correlate'` calls the clock function between two reads of the ysp clock
+and keeps the tightest bracket: the true ysp time of `c.other` is within
+`c.width / 2` of `c.t`. A function that returns an integer class is a
+counter, and `c.other` is a `uint64`; one that returns a double is seconds.
+The width includes the cost of the call back into MATLAB: 16 us for
+`GetSecs` on the development machine. An error in the function is raised
+with its own identifier after the header's loop ends.
+
+`'fit_add'`, `'fit_map'` and `'fit_unwrap'` take vectors and keep their
+shape. Counters are `uint64`, or doubles that hold integers below 2^53.
+`'fit_add'` checks every value before the first pair goes in.
+
+The virtual clock (`'virtual_begin'`) is in `ysp_rt`'s copy of `ysp/rt.h`
+only: `ysp_serial('now')` keeps the real clock.
+## ysp_dataset
+
+Writes a session's data set from a Psychtoolbox script: the folder of
+`session.json`, `trials.csv`, `frames.csv`, `events.csv`, `clock.csv` and
+`streams/<name>.csv` that the ysp player writes, and a zip of it, so that
+the same analysis reads a Psychtoolbox session and a player session. The
+header's manual (THE FOLDER, SESSION.JSON, THE TABLES, THE ZIP) and
+[docs/dataset.md](../../docs/dataset.md) are the reference for the files.
+
+### How to write a session
+
+```matlab
+d.dir = fullfile('data', 'P07_20261021T140312Z');      % must not exist; its parent must
+d.trial_cols = {'participant', 'const', 'P07';           % the same text on every row
+                'trial_index', 'int',    [];
+                'response',    'string', [];
+                'correct',     'bool',   [];
+                'rt_s',        'time',   []};             % seconds; the name ends in _s
+d.session = struct('experiment', 'gabor-2afc', 'seed', 20261021);
+h = ysp_dataset('open', d);
+for trial = 0:n - 1
+    for k = 1:n_frames
+        vbl = Screen('Flip', win);
+        ysp_dataset('write_frame', h, 'frame', frame, 'trial_index', trial, 'onset_s', vbl);
+    end
+    [t_key, key] = wait_key();                           % yours, on GetSecs
+    ysp_dataset('write_event', h, 't_s', t_key, 'trial_index', trial, 'kind', 'keyboard', 'text', key);
+    ysp_dataset('write_trial', h, struct('trial_index', trial, 'response', key, ...
+                'correct', strcmp(key, answer), 'rt_s', t_key - t_onset));
+end
+rows = ysp_dataset('finish', h);                         % session.json: "closed": true
+ysp_dataset('zip', h, [d.dir '.zip']);                   % or z = ysp_dataset('zip', h)
+ysp_dataset('close', h);
+```
+
+A row is a 1x1 struct of column names and values, or name-value pairs. A
+column that the row does not name is an empty cell, and so are `[]` and
+`NaN`. Times are seconds on one clock of yours (`GetSecs`); the binding
+rounds each to the nearest nanosecond, and the file holds it as seconds
+with 9 decimals. A time may be negative (a residual, an SOA). The binding
+checks every value of a row before it sets one, so a refused row writes
+nothing.
+
+`trials.csv` has no part that the sequencer writes itself (the header
+opens it with `desc.trials` NULL), and two MEX files share no C state. To
+log `ysp_trials` columns, declare them as your own and fill them from
+`ysp_trials('format_row', ...)`, `'var'` and `'trial_seed'`;
+`ysp_dataset('seed_text', seed)` writes a seed as `x` and 16 hex digits,
+as the trials writer does. The test checks that the rows equal
+`ysp_trials`' data line, text for text.
+
+`'finish'` and `'close'` mark the session `"closed": true`, the mark of
+a normal end. A session that fails is abandoned instead: every table file
+closes, every row written stays, and `session.json` keeps
+`"closed": false` and no row counts, as after a crash. Call `'abandon'`
+from your own catch block:
+
+```matlab
+h = ysp_dataset('open', d);
+try
+    run_experiment(h);
+catch err
+    ysp_dataset('abandon', h);              % "closed": false; the handle goes
+    rethrow(err);
+end
+ysp_dataset('finish', h);                   % "closed": true
+ysp_dataset('close', h);
+```
+
+A handle that is still open when the MEX file is cleared (`clear mex`,
+`clear ysp_dataset`) or when MATLAB or Octave exits is abandoned too, so a
+script that stopped on an error and was never closed does not read as a
+normal end. A process that is killed leaves the same files.
+
+### Open
+
+`h = ysp_dataset('open', d)`; the struct `d` has:
+
+| Field | Values |
+|---|---|
+| `dir` | the folder, a char row (UTF-8 on every OS); required. It must not exist; its parent must |
+| `trial_cols` | an N x 2 or N x 3 cell, one row per column: `{name, type}`, `{name, type, decimals}` or `{name, 'const', text}`; required |
+| `session` | a 1x1 struct of your keys for `session.json`; not `format`, `version`, `closed`, `rows` or `write_errors` |
+| `sync` | `true`: every row of every table also waits for the disk (milliseconds a row). Default `false`: each row reaches the OS when the call returns |
+
+| Column type | Value | Missing |
+|---|---|---|
+| `'int'`, `'int64'` | an integer-valued number; `int64` and `uint64` exactly | `[]`, `NaN` |
+| `'double'` | a number; decimals 0 (the shortest exact) or 1..17 | `[]`, `NaN` |
+| `'bool'` (`'logical'`) | `true`, `false`, 0 or 1 | `[]`, `NaN` |
+| `'string'` (`'char'`) | a char row, or a string scalar | `[]`, `''` |
+| `'time'` | seconds; decimals 0 (9, exact) or 1..9; the name ends in `_s` | `[]`, `NaN` |
+| `'const'` | none: the text is the third cell | |
+
+A `session` value (and a `'session_set'` value) becomes JSON: a 1x1 struct
+an object, a struct array or a cell an array, a char row a string, a
+numeric or logical scalar a number or a bool, a vector an array, a matrix
+an array of its rows, `[]` null. JSON has no NaN or Inf.
+
+### Commands
+
+| Command | Returns | Notes |
+|---|---|---|
+| `'version'` | binding version, and the header's as a second output | `'1.0.0'`, `'0.9.0'` |
+| `'now'`, `'now_ns'` | seconds; `int64` ns | the ysp clock |
+| `'real_now'` | seconds | the real clock, also on the virtual clock |
+| `'sleep_until', t [, spin]` | lateness, seconds | `spin` defaults to `default_spin` |
+| `'sleep', duration [, spin]` | lateness, seconds | the deadline is taken on entry |
+| `'spin_until', t` | lateness, seconds | spins the whole time |
+| `'clock_info'` | struct | `resolution` (seconds), `hires_timer` |
+| `'constants'` | struct | `default_spin`, `virtual_t0`, `fit_points`, the `fit_*` flag bits |
+| `'describe'` | char | the `yrt_describe()` line; log it beside timing data |
+| `'virtual_begin' [, t0]`, `'virtual_end'`, `'is_virtual'` | now; none; logical | `ysp_rt:state` when already virtual |
+| `'correlate', fn [, struct('edge', 'tries', 'timeout')]` | struct `t`, `other`, `width`, `tries`, `t_ns` | `ysp_rt:timeout` when an edge never came |
+| `'user_dir', 'cache' or 'config' [, subdir]` | char | `''` means "use no folder" |
+| `'fit_open', struct` | `uint64` handle | fields `mode` (`'late'`, `'bracket'`, `'unbiased'`), `tick` (seconds, required), `bits`, `bucket`, `slope_span`, `restart`, `restart_hold`, `max_width` |
+| `'fit_add', h, ticks, t [, width]` | flags | `width` is one value or one per pair |
+| `'fit_map', h, ticks` | seconds, and `int64` ns | `ysp_rt:state` before the first pair |
+| `'fit_unwrap', h, ticks` | `uint64` | |
+| `'fit_info', h` | struct | `t0`, `t0_ns`, `ticks0`, `tick`, `ppm`, `spread`, `width`, `span`, `points`, `pairs`, `epoch`, `rejected`, `pending`, `ready`, `slope` |
+| `'fit_close', h` | none | |
+
+Not bound, and why: [docs/rt.md](../../docs/rt.md#bindings).
+## ysp_device and ysp_rigfile
+
+`ysp_device` wraps [ysp/device.h](../../include/ysp/device.h): response
+boxes, trigger boxes and boards as events on the ysp_rt clock, and outputs
+for trigger codes. `ysp_rigfile` wraps
+[ysp/rigfile.h](../../include/ysp/rigfile.h): the rig profile, which says
+the device of each role, what the rig's loopbacks measured, and the
+viewing geometry. `ysp_rigfile('desc', p, role)` gives the struct that
+`ysp_device('open', ...)` takes, so the two MEX files stay apart, as the
+headers' Python distributions do. Both compile `ysp/serial.h` and the
+headers under it, and include `ysp_mex_util.h`. `ysp_device.c` also
+includes `../python/ysp_device/ysp_device_bind.h` (the event queue and the
+simulated boards, shared with the Python binding) and, except on macOS,
+compiles `ysp/parallel.h` for the parallel-port transport.
+
+### How-to: read a box and send triggers from the rig profile
+
+```matlab
+p = ysp_rigfile('load');                      % the user's profile.json
+info = ysp_rigfile('info', p);
+for i = 1:numel(info.notes), fprintf('rig profile: %s\n', info.notes{i}); end
+box = ysp_device('open', ysp_rigfile('desc', p, 'resp'));
+trig = ysp_device('open', ysp_rigfile('desc', p, 'trig'));
+if ~ysp_device('wait_running', box, 3), error(ysp_device('error', box)); end
+if ~ysp_device('wait_running', trig, 3), error(ysp_device('error', trig)); end
+src = ysp_rigfile('source', p, ysp_device('info', box));   % tier 1 only when checked
+
+ysp_device('pulse', trig, 12, 0.002);         % 12 for 2 ms, then 0
+onset = ysp_device('now');
+ev = ysp_device('wait', box, 2.0);            % struct array, oldest first
+if ~isempty(ev), fprintf('button %d, rt %.4f s\n', ev(1).control, ev(1).t - onset); end
+ysp_device('close', box); ysp_device('close', trig); ysp_rigfile('close', p);
+```
+
+Without a profile, give the desc yourself:
+`struct('role', 'resp', 'family', 'xid', 'key', 'serial:0403:6001:FT4ABC12:')`.
+`ysp_device('list')` gives each serial port's match key.
+
+### ysp_device commands
+
+| Command | Returns | Notes |
+|---|---|---|
+| `'open', desc` | handle | `desc`: `role`, `family` (a name or a number), `key` (required); `device`, `kind`, `baud`, `pulse`, `latched`, `min_hold`, `probe`, `retry`, `silent`, `max_width`, `no_identify`, `no_elevate`, `queue`, `rule`, `sim`. Times in seconds; `probe` and `silent` take `Inf` for none. An unknown field raises `ysp_device:arg`. `device` 0 takes the role's index from the module's role table |
+| `'wait_running', h, timeout` | logical | Call it before the first output. `ysp_device:failed` when the device ends FAILED |
+| `'poll', h [, max]`, `'wait', h, timeout [, max]` | struct array | Events, oldest first: `t` (s), `t_ns` (int64), `device`, `control`, `code`, `mods`, `kind`, `type`, `flags`, `stamp`, `unc` (s), `x`, `y`, `value`, `aux`, `ticks`. A 1x0 struct with these fields when there is none |
+| `'pending', h`, `'clear', h` | double | The events queued; drop them |
+| `'set', h, code`, `'pulse', h, code, width`, `'mark', h, code [, text]` | none | `ysp_device:state` before RUNNING, `:arg` for a code or width the family cannot give, `:family` without outputs, `:io` |
+| `'last_out', h` | struct | `t_before`, `t_after`, `width`, `code`, `seq`, `flags`, `result` |
+| `'stats', h`, `'state', h`, `'source', h`, `'info', h`, `'error', h` | struct, `[state, name]`, struct, struct, string | `info` has `role`, `family` and the rest of the opened desc, for `ysp_rigfile('source', ...)` |
+| `'close', h` | none | `ysp_device:order` while an open rule writes to the device |
+| `'rule_open', out, choices [, opts]` | handle | `choices`: a struct array with `kind` (default 5, a box), `device`, `control`, `code`. `opts`: `width` (s), `max_fires` (`Inf`: no limit; default 1) |
+| `'rule_arm', r, start [, until]`, `'rule_window', ...`, `'rule_disarm', r` | none | The window `[start, until)` in seconds on `'now'`; `until` defaults to `Inf` |
+| `'rule_info', r`, `'rule_fires', r`, `'rule_close', r` | struct, struct array, none | `choice` is 1-based, `[]` before the first fire |
+| `'sim_open', family [, opts]` | handle | A simulated board for `desc.sim`: `ppm`, `frame`, `tail`, `key`, `identify` |
+| `'sim_edge', s, t, level [, ch]`, `'sim_press', s, t, duration [, ch]`, `'sim_unplug', s, start, stop` | none | The board's input and faults, at times on `'now'` |
+| `'sim_writes', s`, `'sim_lines', s`, `'sim_key', s`, `'sim_opens', s`, `'sim_close', s` | | What the host wrote; the board's key |
+| `'now'`, `'list'`, `'key_match', p, k`, `'family', f`, `'roles'`, `'constants'`, `'version'` | | `constants` has the families, the states, `ERR_*`, `OUT_*`, `KIND_*`, `PRESS`, `RELEASE`, the flags and `TIER_*` |
+
+Close in this order: the input that a rule watches, the rule, then the
+output. `clear ysp_device` and interpreter exit close the rest in that
+order. The reader threads never call into MATLAB or Octave. The events
+wait in a C ring of `queue` events (default 1024); a full ring drops new
+events and counts them (`stats.queue_dropped`). A MEX call owns the
+interpreter, so Ctrl+C cannot interrupt a `'wait'`: give a finite timeout
+and loop.
+
+### ysp_rigfile commands
+
+| Command | Returns | Notes |
+|---|---|---|
+| `'load' [, name]`, `'load_file', path`, `'parse', text [, dir]`, `'new' [, rig]` | handle | `ysp_rigfile:missing` (no file), `:folder` (no rig folder, or one that another user can write), `:json`, `:format` (the message names the field) |
+| `'info', p` | struct | `rig`, `written`, `dir`, `notes` (cell), `hash`, `ppd`, `view`, `display`, `roles` (a struct array; times in seconds, `[]` for none) |
+| `'role', p, name`, `'desc', p, role` | struct | `desc` is the struct for `ysp_device('open', ...)`. It raises `:format` for an unbound or `lsl` role |
+| `'source', p, role_or_info` | struct | The tier rule by role name, or for `ysp_device('info', h)` |
+| `'text', p`, `'hash', p` | string | The canonical JSON and its SHA-256 |
+| `'bind', p, role, family, key`, `'remove', p, role`, `'set_view', p, dist_mm, width_mm, width_px`, `'clear_view', p` | none, logical | Changes in memory |
+| `'save', p [, name]`, `'save_file', p, path`, `'close', p` | none | |
+| `'dir'`, `'path' [, name]`, `'check_name', c`, `'version'` | string | |
+
+Under Octave, `clear` runs the exit hook of a MEX file but keeps the
+library loaded. Since 2026-10-25 `ysp_mex_util.h` hooks again after a
+clear. Before, the handles opened after a clear stayed open, and their
+threads crashed Octave at exit.
+| `'open', d` | `uint64` handle | makes the folder; `session.json` says `"closed": false` |
+| `'write_trial', h, row` | none | one row of `trials.csv`; `row` is a struct or name-value pairs |
+| `'write_frame', h, row` | none | one row of `frames.csv` (`'columns', 'frames'`) |
+| `'write_event', h, row` | none | one row of `events.csv` (`'columns', 'events'`) |
+| `'write_clock', h, row` | none | one row of `clock.csv` (`'columns', 'clock'`) |
+| `'stream', h, name, cols` | id (1-based) | makes `streams/<name>.csv`; `cols` as `trial_cols` |
+| `'write_stream', h, id or name, row` | none | one row of a stream |
+| `'session_set', h, key, value` | none | `session.json`'s key; one atomic rewrite (milliseconds: between trials) |
+| `'session_push', h, key, value` | none | appends to the array at key (made when absent); one atomic rewrite |
+| `'rows', h` | struct | `trials`, `frames`, `events`, `clock`, `streams.<name>`: rows written |
+| `'finish', h` | struct | as `'rows'`; closes the tables, `session.json` says `"closed": true` |
+| `'zip', h [, path]` | `uint8` row, or none | the finished folder as one stored zip |
+| `'info', h` | struct | `dir`, `is_open`, `finished`, `streams`, `trial_cols` |
+| `'close', h` | none | finishes a data set that is open, then frees the handle |
+| `'abandon', h` | none | an abnormal end: closes the files, leaves `session.json` `"closed": false`, frees the handle |
+| `'columns', 'frames' \| 'events' \| 'clock'` | cell of names | the fixed tables' columns |
+| `'seed_text', seed` | char | a `uint64` seed as `x` and 16 hex digits |
+| `'version'` | char | the MEX function's version (1.0.0); the second output is ysp/dataset.h's |
+
+Error ids: `ysp_dataset:arg`, `:exists` (the folder is there), `:io` (a
+file could not be made, written or renamed), `:closed`, `:order` (`'zip'`
+before the finish), `:full` (16 streams), `:range` (a zip of 4 GiB or
+more), `:memory`, `:usage`, `:handle`.
+
+A row costs one write call, about 12 us in C (docs/dataset.md); the
+binding allocates nothing per row once its text buffer has grown to the
+longest row. Not bound: the header's adapters (`yds_frame_from_screen()`
+and the others take structs of headers with no MEX binding; the fields of
+`'write_frame'`, `'write_event'` and `'write_clock'` are theirs), struct
+field (bound) and `CHARS` columns (every column is set per row, which also
+gives a missing `bool`), and a reader (the header has none; use
+`readtable`).
 
 ## Adaptive methods: common rules
 
@@ -820,6 +1120,76 @@ level = typecast(ysp_trials('record', h, i), 'double');
 | `'splitmix', state` | `[u, state]` | one step of the seed generator |
 | `'version'`, `'strerror', code` | string | |
 
+## ysp_timeline
+
+Events, tracks and tweens on a frame clock, for a Psychtoolbox script that
+draws its own stimuli: build a trial, then on each frame evaluate it at the
+frame's predicted onset (`vbl + ifi`) and read the channel values, the
+fields and the events that landed. The timeline reads no clock. Every time
+is seconds; a landing record also gives the exact ns as `int64`.
+[example_timeline.m](example_timeline.m) runs a trial and a rewind;
+[test_mex_timeline.m](test_mex_timeline.m) prints `PASS` with the number
+of checks. [docs/timeline.md](../../docs/timeline.md#bindings) has the
+per-frame cost.
+
+```matlab
+h = ysp_timeline('open', struct('channels', 3));        % FIX, GRATING, CONTRAST
+q = ysp_timeline('seq', h, 1);                           % base 1, cursor at 0
+ysp_timeline('on', q, 1); ysp_timeline('wait', q, 0.5); ysp_timeline('off', q, 1);
+ysp_timeline('on', q, 2); ysp_timeline('trigger', q, 12);
+ysp_timeline('to', q, 3, 0.5, 'duration', 0.1, 'ease', 'cosine');
+ysp_timeline('anchor', h, 1, vbl + ifi);                 % trial time 0
+[v, ev] = ysp_timeline('evaluate', h, vbl + ifi, ifi);   % each frame
+```
+
+Channels and fields are 1-based. A base keeps the header's number (0 is
+the RT clock, 1 to 7 are yours), and a trigger channel keeps its value (0
+by default), because it names one of your outputs. A sequence is a handle
+of its own; `close` of the timeline also closes its sequences.
+
+| Command | Returns | Notes |
+|---|---|---|
+| `'open' [, opts]` | `uint64` handle | `channels`, `initial`, `events` (1024), `keys` (1024), `fields` (64), `tweens` (256), `lead` (a fraction of a period, or `'none'`) |
+| `'evaluate', h, onset [, period [, index]]` | `[values, events, fields]` | `values` 1 x channels; `events` a struct column (`id`, `kind`, `kind_name`, `base`, `time`, `target`, `value`, `code`, `user`, `flags`, `frame`, `onset`, `residual`, `time_ns`, `onset_ns`, `residual_ns`); `fields` 4 x slots. `index` defaults to the count of evaluates |
+| `'values', h`, `'field_values', h` | matrix | the last evaluate's |
+| `'anchor', h, base, rt [, bt]`, `'pause'`/`'resume', h, base, rt`, `'stop', h, base` | none | base clocks; an anchor at or before the furthest evaluated time rewinds |
+| `'skip', h, base, rt, bt` | count | a seek; the events passed over never fire |
+| `'rate', h, base, rt, num [, den]`, `'get_rate', h, base` | none, `[num den]` | an exact rational rate |
+| `'base_time'`, `'rt_time'`, `'window'`, `'next_due'`, `'horizon'`, `'clamped'`, `'lead'` | seconds, or `[]` | queries |
+| `'add', h, events` | first id | a struct (array), all or none: `time`, `kind` (name or number), `base`, `target`, `value`, `code`, `user` |
+| `'remove', h, id`, `'prune', h [, base]`, `'clear', h [, base]` | none, count | |
+| `'events', h [, base]`, `'find', h, id`, `'peek', h, base, from, to` | struct column | the record; the pending events of an RT window |
+| `'set_keys', h, ch, base, K [, curves]` | none | `K` is N x 2..4 `[t value ease curve]`, `curve` a 1-based row of `curves` (M x 4) for BEZIER; `[]` removes |
+| `'set_track', h, ch, base [, track]` | none | `keys`, `curves`, `samples`, `t0`, `rate`, `interp`, `period`, `repeats`; none removes |
+| `'tween', h, ch, base, to, name, value, ...` | none | a channel tween from "now": `duration`, `start`, `delay`, `from`, `ease`, `curve`, `cycles`, `yoyo`, `keep_velocity` |
+| `'seq', h, base [, 'now']` | `uint64` sequence | a cursor on the base |
+| `'on'`, `'off', q, ch`; `'set', q, ch, v`; `'trigger', q, code [, ch]`; `'mark', q, code [, user]` | none | events at the cursor |
+| `'wait', q, dt`, `'at', q, t`, `'cursor', q` | none, struct | `cursor`: `t`, `prev_start`, `prev_end`, `t_ns`, `base`, `err`, `err_call` |
+| `'to'`, `'then', q, ch, value, name, value, ...` | end time | a channel tween; `then` also moves the cursor to its end |
+| `'keyframes', q, ch, values, offsets [, ease]`, `'on_n', q, chs [, stagger]` | none | |
+| `'run', q, ops`, `'check_ops', h, base, ops` | none | an op table, all or none: `{{'on', 1}, {'wait', 0.5}, {'to', 3, 0.5, 'duration', 0.1}}`; an error names the op (1-based) |
+| `'cancel', q`, `'release', q` | count, none | undo what the sequence added; drop the sequence handle |
+| `'field', h [, value [, 'int']]`, `'fields', h, count [, value [, 'int']]` | index, indices | a value target tweens write, 1 to 4 components; `fields` makes adjacent ones for a stagger |
+| `'field_value', h, f [, value]`, `'field_free', h, f` | value | |
+| `'tween_to', q, f, to, dur [, ease]`, `'tween_from'`, `'tween_from_to', q, f, from, to, dur [, ease]`, `'tween_set', q, f, v` | tween id | GSAP's `to()`, `from()`, `fromTo()`, `set()` |
+| `'animate', q, f, name, value, ...` | tween id | `to`, `from`, `to_current`, `duration`, `delay`, `stagger`, `ease`, `curve`, `cycles`, `yoyo`, `keep_velocity`, `immediate`, `overwrite`, `on_start`, `on_complete` (logical: the event goes in the report), `user` |
+| `'kill', h, f`, `'kill_tween', h, id`, `'tween_count', h` | count | |
+| `'error', h`, `'version'` | string | `version`: the binding's (1.0.0), and the header's as a second output |
+| `'close', h` | none | |
+
+An ease is a name (`'linear'`, `'step'`, `'cosine'`, `'quad_in'`,
+`'quad_out'`, `'quad_in_out'`, `'cubic_in'`, `'cubic_out'`,
+`'cubic_in_out'`, `'log'`, `'bezier'` with `'curve'`), its number, or
+`[x1 y1 x2 y2]`. Errors are `ysp_timeline:arg`, `:closed`, `:order`,
+`:full`, `:bound`, `:not_found`, `:handle` and `:usage`, with the
+header's message.
+
+Not bound: a MATLAB function as `on_start` or `on_complete` (the events in
+the report serve the frame loop, and a call into the interpreter from
+inside the evaluate would cost more than the frame's work), `ytl_sample()`
+(no validation), the parameter tables (for a player's loader), and
+negative times (refused, as in every binding).
+
 ## How to save and resume a session
 
 1. Save the session. With an integer-seed `rng`, also save the generator
@@ -902,6 +1272,197 @@ handle whose `rng` is a function handle (use an integer seed), and
 `ysp_quest` also refuses a MATLAB `pf_batch` under `no_table`.
 `async_submit_values` refuses a MATLAB `pf_batch`. A MATLAB `pf_batch` with
 a table is permitted, because the table is built before the thread starts.
+
+## ysp_box
+
+Decode a response box's, a trigger box's or a line board's captured bytes
+into events and clock pairs, without a port or a thread; and get the bytes
+of queries and trigger codes. It compiles `ysp/box.h` and `ysp/input.h`.
+
+```matlab
+c = ysp_box('constants');                         % KIND_BOX, PRESS, DEVTICKS, ...
+h = ysp_box('open', 'xid', c.KIND_BOX, 1);        % family, kind, device
+[ev, pairs, info] = ysp_box('decode', h, bytes, t_read);   % bytes: uint8, t_read: s
+[ev, pairs] = ysp_box('decode', 'line', fread(fid, Inf, '*uint8'));  % one shot
+s = ysp_box('stats', h);                          % frames, garbage, pending
+ysp_box('reset', h);  ysp_box('close', h);
+
+b = ysp_box('encode', 'triggerbox', 'set', 12);   % uint8 row: write it to the port
+b = ysp_box('encode', 'xid', 'pulse', 3, 0.002);  % the box ends the pulse
+q = ysp_box('probe', 'line', 7);  i = ysp_box('identify', 'xid');
+f = ysp_box('family', 'mmbts');                   % name, caps, code_max, fixed_pulse, baud, tick, slow_write
+```
+
+`ev` is a 1 x N struct array (as in `ysp_device` and `ysp_response`). Its fields are those of `yin_event`, in the
+order every ysp binding uses: `t` (seconds), `t_ns` (int64), `device`,
+`control`, `code`, `mods`, `kind`, `type`, `flags`, `stamp`, `unc`
+(seconds), `x`, `y`, `value`, `aux`, `ticks`. Each `t` is the read time
+given; `ticks` is the low 32 bits of the device's clock. `pairs` has the
+columns `ticks` (uint64, the whole device time) and `probe` (0, or the
+number of the timer query answered). `info` has `garbage` (bytes that fit
+no frame), `text` (a cell of identity lines) and `outputs` (columns
+`ticks` and `code`, a line board's `O` reports). A frame split across two
+calls waits in the decoder. A family is a name (`'xid'`, `'line'`,
+`'photo'`, `'triggerbox'`, `'biosemi'`, `'mmbts'`, `'lines'`,
+`'parallel'`) or its number. A negative, NaN or Inf time, a value out of
+range, a fraction where an integer is needed and bytes that are not uint8
+raise `ysp_box:arg`. [docs/box.md](../../docs/box.md) has the tests.
+
+## ysp_rdk
+
+The analysis side of `ysp/rdk.h`, as the Python `ysp.rdk`: open a field
+with the rig's desc, replay a logged trial, and get the dots a participant
+saw, bit for bit.
+
+```matlab
+h = ysp_rdk('open', struct('algorithm', 'LL', 'aperture', 'rect', 'w', 8, 'h', 6, ...
+            'count', 60, 'lifetime', 0.3, 'coherence', 0.5, 'speed', 4));
+[xy, dir, sig] = ysp_rdk('trajectory', h, seed, t0, steps);
+%   xy n x 2 x K single, dir n x K single (deg), sig n x K uint8
+ysp_rdk('replay', h, seed, t0, steps);  d = ysp_rdk('digest', h);   % uint64
+
+ysp_rdk('start', h, seed, t0);                    % a live run
+ysp_rdk('set', h, 'coherence', 0.25, 'direction', 90);
+n = ysp_rdk('update', h, t);
+s = ysp_rdk('get', h);                            % coherence ... last (t, ns), stats
+xy = ysp_rdk('xy', h);                            % also 'directions', 'ages', 'signals', 'events'
+b = ysp_rdk('snapshot', h);  ysp_rdk('restore', h, b);
+ysp_rdk('close', h);
+```
+
+The desc fields are the keyword names of `ysp.rdk.Field`; an enum takes
+its name or its value. `seed` is a uint64 (a double only below 2^53).
+`steps` is a K x 4 double matrix `[t coherence direction speed]`, or a
+struct array such as the `last` of `'get'` after each update; a row with
+`ns` replays from it. Every time is seconds, below 2^23 s (about 97 days):
+the conversion is exact there, as in `ysp.rdk` ([docs/rdk.md](../../docs/rdk.md),
+"Bindings"). `'philox'`, `'angle'` and `'sincos'` are the exact pieces.
+Errors: `ysp_rdk:arg`, `ysp_rdk:order` (a time before the last update, or
+an output before `'start'`), `ysp_rdk:handle`, `ysp_rdk:usage`.
+## ysp_pack
+
+Reads and verifies a ysp pack ([docs/pack.md](../../docs/pack.md)): one
+store-only zip file, entries aligned to 4096 bytes, XXH64 hashes over
+1 MiB chunks, a SHA-256 manifest. `ysp_pack.c` compiles ysp/pack.h and the
+[ysp/json.h](../../include/ysp/json.h) it requires, and needs no library.
+A pack is untrusted input: the header checks every byte before it uses
+it, and each refusal raises `ysp_pack:<what>` with the header's message,
+which names the rule, the entry and the chunk.
+
+```matlab
+h = ysp_pack('open', 'study.ysppak');        % mapped read-only
+L = ysp_pack('list', h);                      % one struct per entry
+t = ysp_pack('read', h, 'conditions.pstb');   % uint8 column, hashed first
+d = jsondecode(ysp_pack('definition', h));    % the experiment definition
+[ok, msg] = ysp_pack('verify', h);            % every entry, now
+ysp_pack('close', h);
+```
+
+### Commands
+
+| Command | Returns | Notes |
+|---|---|---|
+| `'open', path [, verify]` | `uint64` handle | `path` is a char (UTF-8 on every platform), or the pack's bytes as `uint8` (copied once). `verify`: `'use'` (default: an entry is hashed when it is first read), `'open'` (every entry at open) or `'none'` |
+| `'close', h` | none | unmaps the file; results already returned stay valid |
+| `'info', h` | struct | `id` (`'sha256:...'`, the pack ID), `format`, `entries`, `chunks`, `file_size`, `zip_start`, `experiment` (the EXPERIMENT entry's name, or `''`), `policy`, `hashed_bytes`, `describe` (one line for a log) |
+| `'list', h` | N x 1 struct | `name`, `index` (1-based), `kind` (`'table'`, ...), `size`, `stream`, `flags`, `header_off`, `data_off` (0-based byte offsets in the file), `xxh64` (`uint64`), `crc32` (`uint32`); the manifest is first |
+| `'entry', h, name` | struct | one entry, the fields of `'list'` |
+| `'has', h, name` | logical | names are case-sensitive |
+| `'read', h, name [, offset, n]` | `uint8` column | the entry, or `n` bytes (`Inf`: to the end) from the 0-based byte `offset`; a range hashes only the 1 MiB chunks it touches |
+| `'verify', h [, name]` | none, or `[ok, msg]` | every entry (whatever the policy), or one (`'use'` and `'open'` only). With no output a mismatch raises `ysp_pack:corrupt`; with outputs it returns `false` and the message |
+| `'manifest', h` | char | `ysp/manifest.json`; `jsondecode` reads it |
+| `'definition', h` | char | the EXPERIMENT entry (a definition's canonical bytes), or `''` |
+| `'xxh64', bytes [, seed]` | `uint64` | opens nothing |
+| `'entry_hash', bytes` | `uint64` | the pack's entry hash, the manifest's `"xxh64"`; opens nothing |
+| `'version'` | char, char | this MEX function's version (1.0.0) and ysp/pack.h's |
+
+Error ids: `ysp_pack:arg`, `:io` (the file cannot be opened or mapped),
+`:format`, `:corrupt`, `:version` (another pack format), `:not_found`,
+`:nomem`, `:handle`, `:usage`.
+
+`'read'` copies the entry once, from the mapping into the new array, so
+the array stays valid after `'close'`. The text commands decode UTF-8 into
+MATLAB's UTF-16 `char`; Octave's `char` holds UTF-8, so there the bytes
+are copied. A byte that starts no valid UTF-8 sequence (a damaged or
+hostile manifest) becomes U+FFFD in MATLAB.
+
+[test_mex_pack.m](test_mex_pack.m) reads
+`tests/pack/fixtures/small.ysppak`, which the pack tool built from
+`tests/pack/fixtures/small/`, and damaged copies of it: a flipped data
+byte under each policy, truncations, and a flipped byte every 7 bytes. It
+prints `PASS` with the number of checks.
+## ysp_response
+
+The response of a trial from any input device (ysp/response.h, with the
+ysp/input.h it includes; nothing else is compiled). Every time is
+seconds; Psychtoolbox's `GetSecs`, `Screen('Flip')` and
+`KbQueueGetEvent` times go in as they are.
+
+```matlab
+h = ysp_response('open', struct('choices', {{'f', 'j'}}, 'duration', 1.5, 'min_rt', 0.1));
+ysp_response('arm', h, tFixation);
+ysp_response('set_onset', h, tStim, struct('src', 'flip'));    % the stimulus's flip
+% each frame:
+[evt, n] = KbQueueGetEvent;                                     % or a ysp_box / ysp_device read
+if n > 0, ysp_response('key', h, evt.Time, KbName(evt.Keycode), evt.Pressed); end
+if ysp_response('update', h, GetSecs) == 2, ... end            % 2: ended
+[r, row] = ysp_response('finish', h);   % r.response, r.rt (NaN: none), r.onset_tier; row: the data columns
+ysp_response('close', h);
+```
+
+KbName's names are not all the header's (`'LeftArrow'` is `'left'`
+here). To skip the names, use Psychtoolbox's key codes on both sides:
+a choice `struct('name', 'left', 'control', KbName('f'))` and events whose
+`control` is the event's `Keycode`. The collector compares the numbers.
+
+**Desc** (`open`): `choices` (a cell of key names, or a struct array with
+the header's choice fields `key`, `name`, `kind`, `match`, `cross`,
+`device`, `control`, `code`, `level`, `hysteresis`), `mode` (`'all'`,
+`'list'`, `'none'`), `kinds` (a mask, `'all'`, or a cell of kinds),
+`min_rt`, `duration` (`Inf`: no deadline), `persist`, `max_responses`,
+`allow_held_key`, `wait_for_key_release`, `max_hold`, `sources` (a struct
+array: `kind`, `device`, `tier`, `partial`, `lo`, `hi`, `note`),
+`trace_cap`, `trace_kinds`. An enum takes its name or its number. An
+unknown field raises `ysp_response:arg`.
+
+**Events** are struct arrays with the fields of `yin_event`: `t`
+(seconds), `t_ns` (int64), `device`, `control`, `code`, `mods`, `kind`,
+`type`, `flags`, `stamp`, `unc` (seconds), `x`, `y`, `value`, `aux`,
+`ticks`, the layout of the `ysp_box` and `ysp_device` events. `'feed'`
+reads a missing field as 0, `t_ns` before `t`, and a key name as a
+keyboard's `control`. Give it every event of a frame in one call: it reads
+them in place.
+
+### Commands
+
+| Command | Does |
+|---|---|
+| `h = ysp_response('open', desc)` | `yrsp_open()` |
+| `ysp_response('close', h)` | |
+| `ysp_response('arm', h, t)` | Starts a window |
+| `st = ysp_response('set_onset', h, t, [opts])` | `opts`: `final` (default true), `src` (`'flip'`, `'audio'`, `'plan'`, `'other'`), `tier`, `residual`, `uncertainty`, `frame`. `t` may be an int64 ns |
+| `st = ysp_response('feed', h, events)` | Input events, in order |
+| `st = ysp_response('key', h, t, key, [down], [device])` | One keyboard event; `key` is a name or a scancode |
+| `st = ysp_response('update', h, now)` | The deadline; 0 idle, 1 open, 2 ended |
+| `[r, row] = ysp_response('finish', h)` | The result and its data columns (`YRSP_DATA_COLS`, NaN or `''` for an empty field) |
+| `[r, row] = ysp_response('score', h, events, onset, [opts])` | Offline: one logged trial. `opts` also takes `arm` (default: the onset) and `end`. Events stamped before `arm` at the start are fed before the arm |
+| `e = ysp_response('entries', h)` | Every press of the window |
+| `ev = ysp_response('trace', h)` | The traced events up to the last finish |
+| `ysp_response('set_sent', h, sent, [total])` | Codes sent at presses: a struct array (`t`, `kind`, `device`, `control`, `choice`, `written`) |
+| `row = ysp_response('data_row', h)` | The last finish's data columns |
+| `k = ysp_response('plan_frame', h)` | `[]` when the onset is final or not tied to a frame |
+| `msg = ysp_response('error', h)` | The last failure's message |
+| `ev = ysp_response('event', s)` | A full event struct from some of its fields (type PRESS by default) |
+| `ysp_response('scancode', name)`, `ysp_response('key_name', sc)` | Key names |
+| `K = ysp_response('constants')` | `KIND_*`, `PRESS`, `TIER_*`, `E_*`, `R_*` and the others |
+| `[v, vh] = ysp_response('version')` | the MEX function's version (1.0.0) and ysp/response.h's |
+
+The result's `choice` and `entry`, and an entry's `choice`, are 1-based,
+0 for none. A missing time is `NaN` in seconds and `intmin('int64')`
+(`YRSP_NO_TIME`) in its `_ns` field. [test_mex_response.m](test_mex_response.m)
+runs the key checks in MATLAB or Octave and prints `PASS` with the number
+of checks. The binding's scope and what is left out are in
+[docs/response.md](../../docs/response.md#bindings).
 
 ## Verification
 

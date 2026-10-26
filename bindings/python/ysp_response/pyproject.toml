@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ysp-response"
+version = "0.7.0"  # must equal ysp/response.h's YRSP_VERSION_STRING; tests/test_response.py checks it
+description = "The response of a trial from any input device: choices, the window, RT from the stimulus onset and the timing quality of both"
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT-0"
+
+# The C extension is declared in setup.py (Extension) as ysp.response; this file
+# just pins the build backend so `pip install .` works. `ysp` is a PEP 420
+# implicit namespace package: no __init__.py is shipped, so the other ysp-*
+# distributions install next to this one without either owning the namespace.
+
+[tool.cibuildwheel]
+# abi3 (Limited API): setup.py forces a cp38-abi3 wheel tag, so one build per
+# platform serves every supported CPython. cibuildwheel >= 4 has no cp38 build
+# interpreter, so build on cp39; the wheel is still cp38-abi3.
+build = "cp39-*"
+skip = "*-musllinux_*"
+test-command = "python -c \"import ysp.response as yr; c = yr.Collector(['f', 'j'], duration=1.5); c.arm(1.0); c.set_onset(1.0); c.key(1.4, 'j'); print('ok', c.finish().rt)\""
+
+[tool.cibuildwheel.macos]
+archs = ["universal2"]
