@@ -527,3 +527,42 @@ def test_add_many_and_user_kinds():
     with pytest.raises(ytl.ArgumentError):
         tl.add_many([{"time": 0.3}, {"time": 0.4, "kind": 5}])   # header kinds are refused, all or none
     assert len(tl.events()) == 2
+
+
+def _played(n_fields=0):
+    tl = ytl.Timeline(4, fields=4)
+    f = tl.field(1.0) if n_fields else None
+    q = tl.seq(TRIAL)
+    q.to(0, 1.0, duration=1.0).set(1, 0.5)
+    if f is not None:
+        q.to(f, 5.0, duration=1.0)
+    tl.anchor(TRIAL, onset(0))
+    for i in range(20):
+        tl.evaluate(onset(i), s(P), i)
+    return tl, f
+
+
+@pytest.mark.parametrize("end", ["del", "close"])
+def test_views_outlive_the_timeline(end):
+    # A view the caller keeps holds the memory it shows: after the Timeline
+    # is gone it reads the last values, stale but valid, and a write through
+    # the field view lands in memory no tween reads.
+    import gc
+    tl, f = _played(n_fields=1)
+    v, fv = tl.values, tl.field_values
+    assert v.readonly and not fv.readonly
+    before, fbefore = list(v), list(fv)
+    assert before[1] == 0.5 and fbefore[0] == f.value
+    with pytest.raises(BufferError):
+        v.obj.extend(b"x")                     # the array under a view never moves
+    if end == "close":
+        tl.close()
+        with pytest.raises(ytl.ClosedError):
+            tl.evaluate(onset(20), s(P), 20)
+    del tl, f
+    gc.collect()
+    junk = [bytearray(64) for _ in range(20000)]
+    assert list(v) == before and list(fv) == fbefore
+    fv[0] = 123.0
+    assert fv[0] == 123.0
+    del junk

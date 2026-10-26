@@ -24,7 +24,9 @@
  * FIELDS: target tweens write C memory. The binding owns that memory: a
  * Field is a slot of four 32-bit words in an array that the Timeline
  * allocates once, so its address never moves, and Timeline.field_values is
- * a view of the whole array.
+ * a view of the whole array. That array and the handle (which holds the
+ * channel values) are bytearrays, so a view the caller keeps holds them
+ * alive after close() or the Timeline's end.
  *
  * THREADING: none. The header is pure computation and a frame costs
  * microseconds, so every call keeps the GIL (the callbacks need it).
@@ -50,12 +52,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* PyMemoryView_FromMemory is in the stable ABI since 3.3, but its flags are
- * in the Limited API headers only from 3.11; the values are part of the ABI. */
-#ifndef PyBUF_READ
-#define PyBUF_READ 0x100
-#define PyBUF_WRITE 0x200
-#endif
 
 /* The distribution's version is the header's; a change to this binding
  * alone adds a fourth number. tests/test_timeline.py checks this against
@@ -152,6 +148,8 @@ typedef struct TimelineObject {
     int8_t*          cbase;      /* the base each cbuf was set on */
     PyObject*        names;      /* dict name -> index, or NULL */
     PyObject*        names_t;    /* tuple of names, or NULL */
+    PyObject*        box_ba;     /* the bytearrays that hold the handle and the */
+    PyObject*        fields_ba;  /* field slots: a view keeps its array alive  */
     PyObject*        values_mv;
     PyObject*        fields_mv;
     PyObject*        callbacks;  /* dict tween id -> (on_start, on_complete) */
@@ -587,29 +585,60 @@ static void Timeline_dealloc(PyObject* self) {
     if (o->cbuf) for (i = 0; i < YTL_MAX_CHANNELS; i++) tl_free_cbuf(o, i);
     PyMem_Free(o->cbuf);
     PyMem_Free(o->cbase);
-    PyMem_Free(o->box);
+    /* The handle and the field slots live in bytearrays, so a view the
+     * caller kept reads them after this, stale but valid. */
+    if (o->box) o->box->owner = NULL;
     PyMem_Free(o->events);
     PyMem_Free(o->fired);
     PyMem_Free(o->arena);
     PyMem_Free(o->tg);
     PyMem_Free(o->tw);
-    PyMem_Free(o->fields);
     PyMem_Free(o->fused);
     PyMem_Free(o->binds);
     Py_XDECREF(o->names);
     Py_XDECREF(o->names_t);
     Py_XDECREF(o->values_mv);
     Py_XDECREF(o->fields_mv);
+    Py_XDECREF(o->box_ba);
+    Py_XDECREF(o->fields_ba);
     fr(self);
     Py_DECREF(tp);
 }
 
-static PyObject* tl_view(void* p, Py_ssize_t bytes, int flags) {
-    PyObject *mv = PyMemoryView_FromMemory((char*)p, bytes, flags), *c;
-    if (!mv) return NULL;
-    c = PyObject_CallMethod(mv, "cast", "s", "f");
+/* A bytearray of `bytes` bytes and a pointer into it aligned to 16 (the
+ * handle needs 8; a field slot is 16 bytes). The array is never resized:
+ * nothing else holds it until the views export it, and an export blocks a
+ * resize. Python cannot hand out a view of PyMem memory that keeps the
+ * memory alive (Py_bf_getbuffer is Limited API only from 3.11), so the
+ * memory a view shows must belong to a Python object. */
+static PyObject* tl_ba(size_t bytes, void** aligned, Py_ssize_t* off) {
+    PyObject* ba = PyByteArray_FromStringAndSize(NULL, (Py_ssize_t)(bytes + 16));
+    char* p;
+    if (!ba) return NULL;
+    p = PyByteArray_AsString(ba);
+    *off = (Py_ssize_t)((16u - ((uintptr_t)p & 15u)) & 15u);
+    *aligned = p + *off;
+    memset(*aligned, 0, bytes);
+    return ba;
+}
+
+/* A float32 view of ba[off:off + bytes], read-only unless `writable`. */
+static PyObject* tl_view(PyObject* ba, Py_ssize_t off, Py_ssize_t bytes, int writable) {
+    PyObject *mv, *a, *b, *sl, *part, *c, *r;
+    if (!(mv = PyMemoryView_FromObject(ba))) return NULL;
+    a = PyLong_FromSsize_t(off);
+    b = PyLong_FromSsize_t(off + bytes);
+    sl = a && b ? PySlice_New(a, b, NULL) : NULL;
+    part = sl ? PyObject_GetItem(mv, sl) : NULL;
+    Py_XDECREF(a); Py_XDECREF(b); Py_XDECREF(sl);
     Py_DECREF(mv);
-    return c;
+    if (!part) return NULL;
+    c = PyObject_CallMethod(part, "cast", "s", "f");
+    Py_DECREF(part);
+    if (!c || writable) return c;
+    r = PyObject_CallMethod(c, "toreadonly", NULL);
+    Py_DECREF(c);
+    return r;
 }
 
 static int Timeline_init(PyObject* self, PyObject* args, PyObject* kw) {
@@ -621,6 +650,7 @@ static int Timeline_init(PyObject* self, PyObject* args, PyObject* kw) {
     double lead = 0.0;
     float init[YTL_MAX_CHANNELS];
     ytl_desc d;
+    Py_ssize_t box_off = 0, fields_off = 0;
     if (o->box) { PyErr_SetString(TlError, "Timeline.__init__ called twice"); return -1; }
     Py_CLEAR(o->names);
     Py_CLEAR(o->names_t);
@@ -690,22 +720,21 @@ static int Timeline_init(PyObject* self, PyObject* args, PyObject* kw) {
             }
         }
     }
-    o->box = (tl_box*)PyMem_Malloc(sizeof(tl_box));
+    o->box_ba = tl_ba(sizeof(tl_box), (void**)&o->box, &box_off);
+    o->fields_ba = tl_ba(16 * (size_t)(fields ? fields : 1), (void**)&o->fields, &fields_off);
+    if (!o->box_ba || !o->fields_ba) return -1;
     o->events = (ytl_event*)PyMem_Malloc(sizeof(ytl_event) * (size_t)(events ? events : 1));
     o->fired = (ytl_event*)PyMem_Malloc(sizeof(ytl_event) * (size_t)(events ? events : 1));
     o->arena = (ytl_key*)PyMem_Malloc(sizeof(ytl_key) * (size_t)(keys ? keys : 1));
     o->tg = (ytl_target_slot*)PyMem_Malloc(sizeof(ytl_target_slot) * (size_t)(fields ? fields : 1));
     o->tw = (ytl_tween_slot*)PyMem_Malloc(sizeof(ytl_tween_slot) * (size_t)(tweens ? tweens : 1));
-    o->fields = (float*)PyMem_Malloc(16 * (size_t)(fields ? fields : 1));
     o->fused = (uint8_t*)PyMem_Malloc((size_t)(fields ? fields : 1));
     o->cbuf = (void**)PyMem_Malloc(sizeof(void*) * YTL_MAX_CHANNELS);
     o->cbase = (int8_t*)PyMem_Malloc(YTL_MAX_CHANNELS);
-    if (!o->box || !o->events || !o->fired || !o->arena || !o->tg || !o->tw || !o->fields || !o->fused || !o->cbuf || !o->cbase) {
+    if (!o->events || !o->fired || !o->arena || !o->tg || !o->tw || !o->fused || !o->cbuf || !o->cbase) {
         PyErr_NoMemory();
         return -1;
     }
-    memset(o->box, 0, sizeof *o->box);
-    memset(o->fields, 0, 16 * (size_t)(fields ? fields : 1));
     memset(o->fused, 0, (size_t)(fields ? fields : 1));
     memset(o->cbuf, 0, sizeof(void*) * YTL_MAX_CHANNELS);
     memset(o->cbase, 0, YTL_MAX_CHANNELS);
@@ -728,8 +757,9 @@ static int Timeline_init(PyObject* self, PyObject* args, PyObject* kw) {
     o->callbacks = PyDict_New();
     o->field_list = PyList_New(0);
     if (!o->callbacks || !o->field_list) return -1;
-    o->values_mv = tl_view(o->box->tl.values, (Py_ssize_t)nch * 4, PyBUF_READ);
-    o->fields_mv = tl_view(o->fields, (Py_ssize_t)fields * 16, PyBUF_WRITE);
+    o->values_mv = tl_view(o->box_ba, box_off + (Py_ssize_t)((char*)o->box->tl.values - (char*)o->box),
+                           (Py_ssize_t)nch * 4, 0);
+    o->fields_mv = tl_view(o->fields_ba, fields_off, (Py_ssize_t)fields * 16, 1);
     if (!o->values_mv || !o->fields_mv) return -1;
     return 0;
 }

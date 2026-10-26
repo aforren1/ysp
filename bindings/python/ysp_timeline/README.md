@@ -164,9 +164,9 @@ every slot as float32; read an `int=True` field with `.value`.
 uv run --no-project --isolated --with . --with pytest python -m pytest -q tests
 ```
 
-`tests/test_timeline.py` checks the manual's trial by calls and as an op
+`tests/test_timeline.py` (25 tests) checks the manual's trial by calls and as an op
 table, the landing records against the quantization rule, eases against
 their formulas, a rewind and a seek that replay a trial bit for bit, two
 timelines given the same calls, fields, callbacks, tracks, the times in
-seconds and the refusals. [docs/timeline.md](../../../docs/timeline.md#bindings)
+seconds, the refusals, and that a kept `values` or `field_values` view stays valid after `close()` or the Timeline's end. [docs/timeline.md](../../../docs/timeline.md#bindings)
 has the per-frame cost.

@@ -1907,6 +1907,16 @@ Decisions:
   `close()`: the first version freed a slot when its Field object died,
   and a trial built in a function lost its tweens when the function
   returned (the seek test found it).
+- **A view owns what it shows.** `values` and `field_values` are views of
+  bytearrays that hold the handle and the field slots, never resized, so
+  a view the caller keeps after `close()` or after the Timeline is gone
+  reads the last values, and a write through it lands in memory no tween
+  reads. The first version made the views with `PyMemoryView_FromMemory()`
+  over memory the Timeline freed, and a kept view read and wrote freed heap
+  (the coordinator's review found it; two tests now check both views after
+  `del` and after `close()`, and the old build fails them). A buffer
+  protocol on the Timeline would be cleaner, but `Py_bf_getbuffer` is in
+  the Limited API only from 3.11, and the wheel is cp38-abi3.
 - **Times are seconds,** rounded to the nearest ns at the call, and a
   negative or NaN time is refused (docs/bindings.md). A record gives the
   exact ns beside the seconds. A replay gets the same ns from the same
@@ -1988,7 +1998,7 @@ What the tables show:
 
 ### Verification
 
-- Python, `tests/test_timeline.py`, 23 tests: the manual's trial by calls
+- Python, `tests/test_timeline.py`, 23 tests (25 since the view fix): the manual's trial by calls
   and as an op table (the same values and records on 90 frames), landing
   frames and residuals against the quantization rule, every ease against
   its formula, a rewind that replays 100 frames bit for bit (values,
@@ -1998,10 +2008,17 @@ What the tables show:
   an exception), keyed, Bezier, sampled and repeating tracks, the takeover
   of a channel tween, times in seconds and their refusals, every error
   class, late events, peek, rate, pause, prune with the callback sweep,
-  `bind()`. Pass on Windows 11 with CPython 3.14.3 and 3.9 (MSVC) and in
+  `bind()`, and (since the view fix) the views after `del` and `close()`.
+  Pass on Windows 11 with CPython 3.14.3 and 3.9 (MSVC) and in
   WSL2 Ubuntu 22.04 with CPython 3.10.12 (gcc 11.4, which also builds the
   extension with `-Wall -Wextra` and no warning but `-Wpedantic`'s on the
   Python slot casts).
+- After the view fix: 25 tests (the 23 and the two view checks) pass on
+  Windows (CPython 3.14.3, `uv --no-cache`), in WSL2, and in WSL2 with the
+  extension built with gcc 11.4 `-fsanitize=address,undefined` (no
+  report). The bench again, same conditions: N = 1000, evaluate 7.4 us and
+  with `tolist()` 16.7 us (the table's run: 9.3 and 20.4), inside the
+  spread between runs, so the views did not add cost.
 - MEX, `test_mex_timeline.m`, 44 checks of the same kinds: pass in MATLAB
   R2023a (MSVC) and Octave 10.1 (MinGW gcc).
 - The Linux build first failed two queries: `tl_time_out(call(&out), out)`
