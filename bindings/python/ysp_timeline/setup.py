@@ -11,6 +11,10 @@ REPO_ROOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 # collection, so it is the only header staged.
 HEADER_DIR = os.path.join(REPO_ROOT, "include") if os.path.exists(os.path.join(REPO_ROOT, "include", "ysp", "timeline.h")) else os.path.join(HERE, "include")
 
+# The table the module exports for ysp-vis (bindings/share/ysp_timeline_api.h):
+# the same rule, staged in include/share/.
+SHARE_DIR = os.path.join(REPO_ROOT, "bindings", "share") if os.path.exists(os.path.join(REPO_ROOT, "bindings", "share", "ysp_timeline_api.h")) else os.path.join(HERE, "include", "share")
+
 # Target the CPython 3.8+ stable ABI (Limited API): one .abi3.so works across
 # Python versions. The macro must match Py_LIMITED_API in the C source.
 PY_LIMITED = 0x03080000
@@ -21,7 +25,7 @@ PY_LIMITED = 0x03080000
 ext = Extension(
     name="ysp.timeline",
     sources=["ysp_timeline_ext.c"],
-    include_dirs=[HEADER_DIR],
+    include_dirs=[HEADER_DIR, SHARE_DIR],
     define_macros=[("Py_LIMITED_API", hex(PY_LIMITED))],
     py_limited_api=True,
 )
