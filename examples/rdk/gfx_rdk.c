@@ -68,6 +68,9 @@
 #define S_NS YRT_S(1)
 
 static yscr_screen scr;
+/* SDL calls on the window go through yscr_window_call(): with the window
+ * thread (ysp/screen.h, WINDOW THREAD) another thread owns the window. */
+static void title_on_window(void* title) { SDL_SetWindowTitle(yscr_window(&scr), (const char*)title); }
 static ygfx_gfx gfx;
 static ytl_timeline tl;
 static ytl_event tl_events[16];
@@ -103,7 +106,7 @@ static void say(const char* what) {
     char line[256];
     snprintf(line, sizeof line, "gfx_rdk %d/%d: %s", page + 1, N_PAGES, what);
     printf("%s\n", line);
-    if (yscr_window(&scr)) SDL_SetWindowTitle(yscr_window(&scr), line);   /* may allocate: key presses only */
+    if (yscr_window(&scr)) yscr_window_call(&scr, title_on_window, line);   /* may allocate: key presses only */
 }
 
 static void describe_field(void) {

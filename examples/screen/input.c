@@ -67,6 +67,15 @@ static void row(const char* name, double* v, int n) {
 
 static double g_a[1000], g_b[1000];
 
+/* SDL_GetKeyboardFocus() belongs to SDL's main thread, which is the window
+ * thread when one runs (ysp/screen.h, WINDOW THREAD): ask it there. */
+static void focus_on_window(void* w) { *(SDL_Window**)w = SDL_GetKeyboardFocus(); }
+static int has_focus(yscr_screen* s) {
+    SDL_Window* w = NULL;
+    yscr_window_call(s, focus_on_window, &w);
+    return w != NULL && w == yscr_window(s);
+}
+
 #if defined(_WIN32)
 static void inject_f24(WORD flags) {
     INPUT in;
@@ -108,7 +117,7 @@ static int run_path(yscr_screen* s, int mode, int count) {
             }
         }
         if (waiting && yrt_now_ns() > give_up) waiting = 0;   /* lost: not counted */
-        if (!waiting && !quit && (mode == 2 || SDL_GetKeyboardFocus() == yscr_window(s))) {
+        if (!waiting && !quit && (mode == 2 || has_focus(s))) {
             /* a random phase inside the frame, so the frame loop is no clock */
             rng = rng * 1664525u + 1013904223u;
             yrt_sleep_until(yrt_now_ns() + (rng >> 8) % 8000000u, 0);
@@ -178,7 +187,7 @@ static int run_reports(yscr_screen* s, int scan, int hold_ms, int count, report_
             if (ev.type == SDL_EVENT_KEY_UP && ev.key.scancode == SDL_SCANCODE_F24) r->ups++;
         }
         now = yrt_now_ns();
-        if (state == 0 && r->presses < count && now >= t_next && SDL_GetKeyboardFocus() == yscr_window(s)) {
+        if (state == 0 && r->presses < count && now >= t_next && has_focus(s)) {
             downs_this = 0;
             inject_key(scan, 0);
             r->presses++;
@@ -470,12 +479,12 @@ int main(int argc, char** argv) {
             SendInput(1, &in, sizeof in);
             SetForegroundWindow(hw);
         }
-        while (SDL_GetKeyboardFocus() != yscr_window(&s) && yrt_now_ns() < until) {
+        while (!has_focus(&s) && yrt_now_ns() < until) {
             yscr_frame f;
             if (yscr_begin(&s, &f) != YSCR_OK) break;
             yscr_flip(&s);
         }
-        if (SDL_GetKeyboardFocus() == yscr_window(&s)) {
+        if (has_focus(&s)) {
             if (reports) reports_mode(&s, count < 200 ? count : 50);
             else if (panic) run_path(&s, 1, count);
             else if (!run_path(&s, 0, count)) run_path(&s, 1, count);
