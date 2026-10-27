@@ -46,7 +46,8 @@ read CSV and JSON; `ysp.trials` already takes a table), `ysp/net.h`
 tool). `ysp/screen.h`, `ysp/gfx.h` and `ysp/video.h` are one module,
 `ysp-vis` (Python `ysp.screen`, `ysp.gfx` and `ysp.video` from one
 extension; MEX `ysp_screen`, `ysp_gfx`, `ysp_video` on one core), phase A
-since 2026-10-27 and the gfx part of phase B since the same day
+since 2026-10-27, phase B (stimuli, movies) and phase C (text, laid out by
+pack/layout) since the same day
 ([ysp-vis](#display-stimuli-movies-ysp-vis), below). It
 takes audio and the timeline from `ysp.audio` and `ysp.timeline` through
 their tables (Sharing one implementation across modules, below). Its host
@@ -162,6 +163,21 @@ bindings to `ysp.timeline` channels that the gfx writes in C each frame,
 so a frame is three calls whatever the stimulus count
 ([gfx.md](gfx.md#bindings)).
 
+The text of phase C (2026-10-27, `ysp-vis` 0.10.1.2, MEX 1.2.0): `Gfx.font()`
+and `Gfx.text()` (`ysp_gfx('font')`, `('text')`) lay text out with
+pack/layout, the pinned and patched Skribidi with HarfBuzz of the pack
+tool and the player (scripts, bidi, line breaking, spans), and draw it as
+curve runs over curve sets built from the same font bytes. A text is a
+stimulus of its own kind: lists, bulk sets, timeline bindings and hit
+tests take it; it reports its glyph, word and line boxes in screen px; a
+change of its text lays it out again between frames. Two texts made
+through each host draw the C path's scenes bit for bit
+([gfx.md](gfx.md#text)). The layout stack is linked in, not a separate
+module: it adds 1.5 MB to the extension (0.66 MB to the wheel), against
+the 8.6 MB of ANGLE's DLLs, and a text must reach the gfx's curve sets,
+its object list and its lifetime, which a second module would take
+through another shared table.
+
 The movies of phase B (2026-10-27): `ysp.video` (`Movie`, `SeqWriter`,
 `probe()`, `make_index()`) and `ysp_video` play a frame sequence, MPEG-1
 (pl_mpeg, compiled in) or an MP4 (Media Foundation) on a gfx: each display
@@ -176,8 +192,10 @@ clock the binding's frames and decisions equal the C path's line by line
 ([video.md](video.md#bindings)).
 
 - **Install.** Make the natives once from the repository root:
-  `uv run --no-project python tools/vendor_vis.py --write --angle --pl-mpeg --sdl msvc`
-  (Python and MATLAB), and `--sdl mingw --mingw-bin <Octave>/mingw64/bin`
+  `uv run --no-project python tools/vendor_layout.py --write` (the text
+  layout's sources), then
+  `uv run --no-project python tools/vendor_vis.py --write --angle --pl-mpeg --sdl msvc --layout msvc`
+  (Python and MATLAB), and `--sdl mingw --layout mingw --mingw-bin <Octave>/mingw64/bin`
   for Octave. Then Python: `uv pip install ./bindings/python/ysp_audio
   ./bindings/python/ysp_timeline ./bindings/python/ysp_vis`; MATLAB or
   Octave: `build` in `bindings/mex/` (ysp_audio, ysp_timeline, ysp_vis,
@@ -201,7 +219,18 @@ clock the binding's frames and decisions equal the C path's line by line
   at the pin, so `ysp_vis-LICENSE.pl_mpeg.txt` carries the file's own
   notice (its SPDX line and author) and the MIT text. A download
   that breaks off resumes where it stopped (an HTTP range request, up to 8
-  attempts); only the whole file's SHA-256 decides.
+  attempts); only the whole file's SHA-256 decides. The text layout
+  (pack/layout.c, Skribidi, HarfBuzz 14.6.0, SheenBidi, libunibreak,
+  budouxc at the pins of [layout.md](layout.md)) is built as static
+  libraries by `tools/vis_layout/CMakeLists.txt`, with MSVC (`/MD`) or
+  Octave's MinGW gcc, from the trees `tools/vendor_layout.py` checks file
+  by file; HarfBuzz builds without exceptions and RTTI, so the module
+  imports no C++ runtime (`msvcp140.dll`, `libstdc++`). Their license files
+  are installed beside the module (`ysp_vis-LICENSE.Skribidi.txt`,
+  `.HarfBuzz.txt`, `.SheenBidi.txt`, `.libunibreak.txt`, `.budouxc.txt`).
+  No font file is bundled: the default is the system's Segoe UI (Arial
+  when it is missing), and a text's stamp records the SHA-256 of the
+  fonts it used.
 - **MATLAB and Octave layout.** `ysp_vis.<mexext>` is the core: the three
   headers, the static SDL3, the one handle table and every command. It is
   a MEX file too, so it sits beside the others with their extension and
@@ -226,13 +255,14 @@ clock the binding's frames and decisions equal the C path's line by line
   open, and the file finds its handles again when it loads again. Verified
   in MATLAB R2023a and Octave 10.1 (`test_mex_vis.m`,
   `test_mex_vis_gfx.m`; `test_mex_vis_window.m` with a window).
-- **Versions.** `ysp-vis` tracks `ysp/screen.h`'s version (0.10.1.1:
-  0.10.1 and phase B, gfx and movies, a binding-only change), and
+- **Versions.** `ysp-vis` tracks `ysp/screen.h`'s version (0.10.1.2:
+  0.10.1 with phase B, gfx and movies, and phase C, text: binding-only
+  changes), and
   `ysp.screen.HEADER_VERSION`, `ysp.gfx.HEADER_VERSION` and
   `ysp.video.HEADER_VERSION` give the three headers' own. A change to
   `ysp/gfx.h` or `ysp/video.h` alone that changes the binding adds the
   fourth number, as a binding-only change does. The MEX files have the
-  number 1.1.0 of their own (1.0.0 was phase A; 1.1.0 adds `ysp_gfx`'s stimuli and `ysp_video`'s movies); their `'version'` gives it
+  number 1.2.0 of their own (1.0.0 was phase A; 1.1.0 adds `ysp_gfx`'s stimuli and `ysp_video`'s movies; 1.2.0 the text); their `'version'` gives it
   and the header's as the second output. `ysp-audio` and `ysp-timeline` are dependencies
   of the same major.minor as the headers ysp-vis was built against
   (`>=0.7,<0.8` and `>=0.8.1,<0.9`), the rule of the tables (below).
@@ -445,7 +475,7 @@ call can poll. [Conventions](conventions.md) lists the exceptions.
 | `ysp.audio` and `ysp_audio` (MEX) | `now()` (`now_ns()` exact), every time argument (`play_at(t)`, `play(at=)`, `stop(at=, ramp=)`, `gain(at=, ramp=)`, `wait(timeout)`, the synthesis `duration`, `ramp`, `period`, `onset_offset`, a ring's and a preroll's length, `frame_at(t)`, `sample_at(t)`, a capture's `frame_at(t)` and `offset`) and result (`lead` with `lead_ns`, `caps()` and `info()` times, `time_of()` as `(s, ns)`); a record gives `target`, `onset`, `residual` and `rendered_at` in seconds and their `_ns` exactly. Frame and sample counts stay integers |
 | `ysp.timeline` and `ysp_timeline` (MEX) | every time argument (`evaluate(onset, period)`, `anchor`, `skip`, `rate`, `wait`, `at`, the tween options `duration`, `delay`, `start`, `stagger`, key and event times, track `t0` and `period`, `peek`'s window) and result (`base_time`, `rt_time`, `window`, `next_due`, `horizon`, a sequence's cursor); a landing record gives `time`, `onset` and `residual` in seconds and `time_ns`, `onset_ns` and `residual_ns` exactly |
 | `ysp.video` (ysp-vis) and `ysp_video` (MEX) | `play(at)`, `pause(at)`, `seek(t, resume)`, `seek_frame(i, resume)`, `movie_time(t)`, the soundtrack's `ramp` and `ring`; a record's `onset`, `due`, `residual` and `movie_t`, an event's `t` and its other times (`requested`, `target`, `length`), `info` and `probe()`'s `duration`; the exact ns beside each (`_ns`, `int64` in MEX). Frame counts and indexes stay integers |
-| `ysp.screen`, `ysp.gfx` (ysp-vis) and `ysp_screen`, `ysp_gfx` (MEX) | `flip_at(t)`, the options `onset_offset`, `sim_period`, `settle_min`, `settle_max`, `panic_window`, `panic_grace`, `key_dedup`; a frame's `onset` and `period`, a record's `target`, `planned`, `onset`, `residual` and `phases`, an event's `t` and `unc`, an abort's `t`, a mode's `period`, `caps()` and `settle()` times, `now()`; the exact ns beside each absolute time and the residual (`_ns`, `int64` in MEX) |
+| `ysp.screen`, `ysp.gfx` (ysp-vis) and `ysp_screen`, `ysp_gfx` (MEX) | `flip_at(t)`, the options `onset_offset`, `sim_period`, `settle_min`, `settle_max`, `panic_window`, `panic_grace`, `key_dedup`; a frame's `onset` and `period`, a record's `target`, `planned`, `onset`, `residual` and `phases`, an event's `t` and `unc`, an abort's `t`, a mode's `period`, `caps()` and `settle()` times, `now()`; the exact ns beside each absolute time and the residual (`_ns`, `int64` in MEX). A text's `layout_time`, `build_time` and `upload_time`, a font's `build_time` |
 
 ## Versions
 
@@ -490,11 +520,11 @@ v0.8.1), and `ysp-audio` is 0.7.2, the header's. The adaptive MEX
 functions and `ysp_color` have no number of their own: `'version'`
 returns the header's.
 
-`ysp-vis` is 0.10.1.1 (2026-10-27): one distribution for three headers,
+`ysp-vis` is 0.10.1.2 (2026-10-27): one distribution for three headers,
 so its version tracks `ysp/screen.h`'s, and a release for a change of
 `ysp/gfx.h` or `ysp/video.h` alone, or of the binding alone, adds the
 fourth number ([ysp-vis](#display-stimuli-movies-ysp-vis)); 0.10.1.1 is
-0.10.1 with phase B: the gfx and the movies. The MEX files of ysp-vis
-(`ysp_vis`, `ysp_screen`, `ysp_gfx`, `ysp_video`) are 1.1.0 (1.0.0 was
-phase A), one number for the four, because the thin files refuse a core
-of another build.
+0.10.1 with phase B (the gfx and the movies), 0.10.1.2 adds phase C (the
+text). The MEX files of ysp-vis (`ysp_vis`, `ysp_screen`, `ysp_gfx`,
+`ysp_video`) are 1.2.0 (1.0.0 was phase A, 1.1.0 phase B), one number for
+the four, because the thin files refuse a core of another build.

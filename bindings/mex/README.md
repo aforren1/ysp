@@ -26,7 +26,7 @@ never reused, so a handle kept past its `close` always raises
 | `ysp_timeline.c` | [ysp/timeline.h](../../include/ysp/timeline.h) | [example_timeline.m](example_timeline.m) |
 | `ysp_dataset.c` | [ysp/dataset.h](../../include/ysp/dataset.h) | [example_dataset.m](example_dataset.m) |
 | `ysp_audio.c` | [ysp/audio.h](../../include/ysp/audio.h) | [example_audio.m](example_audio.m), [test_mex_audio.m](test_mex_audio.m) |
-| `ysp_vis.c` (the core), `ysp_screen.c`, `ysp_gfx.c`, `ysp_video.c` | [ysp/screen.h](../../include/ysp/screen.h), [ysp/gfx.h](../../include/ysp/gfx.h), [ysp/video.h](../../include/ysp/video.h) (ysp-vis, Windows only) | [example_screen.m](example_screen.m), [example_gfx_2afc.m](example_gfx_2afc.m), [example_gfx_rsvp.m](example_gfx_rsvp.m), [test_mex_vis.m](test_mex_vis.m), [test_mex_vis_gfx.m](test_mex_vis_gfx.m), [test_mex_vis_window.m](test_mex_vis_window.m) |
+| `ysp_vis.c` (the core), `ysp_screen.c`, `ysp_gfx.c`, `ysp_video.c` | [ysp/screen.h](../../include/ysp/screen.h), [ysp/gfx.h](../../include/ysp/gfx.h), [ysp/video.h](../../include/ysp/video.h) (ysp-vis, Windows only) | [example_screen.m](example_screen.m), [example_gfx_2afc.m](example_gfx_2afc.m), [example_gfx_rsvp.m](example_gfx_rsvp.m), [example_gfx_stroop.m](example_gfx_stroop.m), [example_gfx_reading.m](example_gfx_reading.m), [test_mex_vis.m](test_mex_vis.m), [test_mex_vis_gfx.m](test_mex_vis_gfx.m), [test_mex_vis_text.m](test_mex_vis_text.m), [test_mex_vis_window.m](test_mex_vis_window.m) |
 
 The two transport headers build on the shared [ysp/rt.h](../../include/ysp/rt.h), so
 both MEX functions compile it too. `ysp_quest.c` and `ysp_aep.c` define
@@ -1561,16 +1561,20 @@ checks.
 The display, its frame loop and the record of every flip
 ([ysp/screen.h](../../include/ysp/screen.h)), and the stimuli, draw
 lists, groups, instances and timeline bindings of
-[ysp/gfx.h](../../include/ysp/gfx.h) (phase B, 2026-10-27). `ysp_video` plays
+[ysp/gfx.h](../../include/ysp/gfx.h) (phase B, 2026-10-27), and text laid
+out by pack/layout (phase C, MEX 1.2.0; Text in ysp_gfx, below). `ysp_video` plays
 movies (Movies: ysp_video, below; [example_video.m](example_video.m)). Windows only. [example_screen.m](example_screen.m) runs a
 3 s frame loop in a window; [example_gfx_2afc.m](example_gfx_2afc.m) a
 two-alternative grating trial; [example_gfx_rsvp.m](example_gfx_rsvp.m)
-an RSVP stream from an atlas. [test_mex_vis.m](test_mex_vis.m) and
-[test_mex_vis_gfx.m](test_mex_vis_gfx.m) run on the simulated display (no
+an RSVP stream from an atlas; [example_gfx_stroop.m](example_gfx_stroop.m)
+a Stroop block; [example_gfx_reading.m](example_gfx_reading.m) an RSVP
+sentence and its word boxes. [test_mex_vis.m](test_mex_vis.m),
+[test_mex_vis_gfx.m](test_mex_vis_gfx.m) and
+[test_mex_vis_text.m](test_mex_vis_text.m) run on the simulated display (no
 window) and print `PASS` with the number of checks;
 [test_mex_vis_window.m](test_mex_vis_window.m) opens a real window for
-about 20 s (local only) and checks five stimuli against the C path, bit
-for bit.
+about 25 s (local only) and checks five stimuli and two texts against the
+C path, bit for bit.
 
 ```matlab
 h = ysp_screen('open', 'gfx', struct('background', 0.5));   % fullscreen; the gfx compiles while it settles
@@ -1591,12 +1595,14 @@ r = ysp_screen('close', h);                      % the records not read yet; the
 ```
 
 **Build.** Make the natives once from the repository root:
-`uv run --no-project python tools/vendor_vis.py --write --angle --pl-mpeg --sdl msvc`
-for MATLAB, and `--sdl mingw --mingw-bin "<Octave>/mingw64/bin"` for
-Octave (the static SDL3 must come from Octave's own gcc). `build.m` then
-links `ysp_vis.c` against it, strips the Octave file (`-s`), and copies
-ANGLE's `libEGL.dll` and `libGLESv2.dll` and the license notices of SDL3
-and ANGLE into this directory. Without the natives it skips `ysp_vis.c`
+`uv run --no-project python tools/vendor_layout.py --write`, then
+`uv run --no-project python tools/vendor_vis.py --write --angle --pl-mpeg --sdl msvc --layout msvc`
+for MATLAB, and `--sdl mingw --layout mingw --mingw-bin "<Octave>/mingw64/bin"` for
+Octave (the static SDL3 and the text layout must come from Octave's own
+gcc). `build.m` then links `ysp_vis.c` against them, strips the Octave
+file (`-s`), and copies ANGLE's `libEGL.dll` and `libGLESv2.dll` and the
+license notices of SDL3, ANGLE, pl_mpeg and the text layout (Skribidi,
+HarfBuzz, SheenBidi, libunibreak, budouxc) into this directory. Without the natives it skips `ysp_vis.c`
 with a message. `ysp_audio` and `ysp_timeline` must be built here too.
 
 **Layout and lifetime.** `ysp_vis.<mexext>` is the core: the three
@@ -1611,7 +1617,7 @@ directory ANGLE is loaded from and the SDL version. Handles start at
 
 | Command | Returns | Notes |
 |---|---|---|
-| `ysp_screen('version')` | `'1.1.0'`, and the header's | the same for `ysp_gfx`, `ysp_video`, `ysp_vis`; 1.1.0 added `ysp_gfx`'s stimuli and `ysp_video`'s movies |
+| `ysp_screen('version')` | `'1.2.0'`, and the header's | the same for `ysp_gfx`, `ysp_video`, `ysp_vis`; 1.1.0 added `ysp_gfx`'s stimuli and `ysp_video`'s movies, 1.2.0 the text |
 | `'displays'`, `'modes' [, display]`, `'mode_multiple', num, den, [w h], tol_ppm, display` | struct rows; `[k, mode, err_ppm]` | `'open'` takes a display's `id` and a mode struct |
 | `'options'`, `'constants'` | struct | the options with a line each; `TIER_*`, `PATH_*`, `FLIP_*`, `ABORT_*`, `KIND_*`, `PRESS` ... |
 | `'open' [, opts]` | `uint64` handle | a struct or name-value pairs: `windowed`, `size`, `display`, `mode`, `backend` (`'auto'`, `'dxgi_flip'`, `'composition'`, `'sim'`), `window_thread`, `lead`, `onset_offset` (s), `depth`, `depth_learn`, `settle`, `settle_flips`, `settle_min`, `settle_max` (s), `foreground`, `panic`, `panic_presses`, `panic_window`, `panic_grace` (s), `patch`, `patch_size`, `patch_corner`, `show_cursor`, `keep_os_gamma`, `key_dedup` (s), `gamepads`, `min_tier`, `sim_period` (s). Settles: 0.5 to 0.8 s fullscreen, 2.5 s in a window. Two options of the binding: `gfx` (`true` or a struct of `ysp_gfx('open')` options: the gfx starts while the screen settles, and `ysp_gfx('open', h)` finishes it) and `frame` (`'struct'`, the default, or `'row'`: see `'begin'`) |
@@ -1665,9 +1671,54 @@ are 1-based.
 | `'capture_start', g, ...`, `'capture_mark'`, `'capture_pump'`, `'capture_stop'`, `'capture_stats'` | stats | chosen frames to PPM files off the frame thread |
 | `'prime', g`, `'read_scene', g, [x y w h]`, `'read_output', ...`, `'describe'`, `'info'`, `'params' [, kind]` | | the reads wait for the GPU: tests |
 
-Not bound: text (phase C), compounds, effects, paint, glyph runs and curve
-sets, user shaders, render targets, blur and video textures (ysp_video's);
-no image file reading (ysp/gfx.h has none: `imread`, then `'texture'`).
+Not bound: compounds, effects, paint, glyph runs, curve sets and runs as
+handles of their own (a text holds its own), user shaders, render
+targets, blur and video textures (ysp_video's); no image file reading
+(ysp/gfx.h has none: `imread`, then `'texture'`).
+
+### Text in ysp_gfx
+
+A text is laid out by pack/layout: Skribidi with HarfBuzz, pinned and
+patched ([docs/layout.md](../../docs/layout.md)), so it is shaped for its
+script, put in order by the Unicode bidirectional algorithm, kerned, and
+broken into lines; ysp/gfx.h draws its glyphs as curve runs from curve
+sets built from the same font bytes. A text handle is a stimulus handle:
+`'set'`, `'get'`, `'list'`, `'bind'`, `'hit'`, `'bounds'`, `'draw'` and
+`'frame'` take it. [example_gfx_stroop.m](example_gfx_stroop.m) changes one
+text's word and ink between trials.
+
+```matlab
+f = ysp_gfx('font', g, {fullfile(getenv('WINDIR'), 'Fonts', 'segoeui.ttf'), ...
+                        fullfile(getenv('WINDIR'), 'Fonts', 'msyh.ttc')});   % a fallback list
+t = ysp_gfx('text', g, 'RED', 'font', f, 'size', 64, 'color', [0.6 0.05 0.05]);
+ysp_gfx('set', t, 'text', 'GREEN', 'color', [0.05 0.45 0.05]);   % a new layout: between frames
+[W, words] = ysp_gfx('words', t);        % [first last line x0 y0 x1 y1], screen px; the strings
+```
+
+| Command | Returns | Notes |
+|---|---|---|
+| `'font', g, src, 'face', k, 'name', s` | handle | `src` a path, the uint8 bytes of a font file, or a cell of them: a fallback list, tried in order for each run of one script. `'face'`: one, or one per file (a .ttc's face) |
+| `'font_info', f` | struct row | per file `name`, `face`, `sha256`, `units_per_em`, `glyphs`, `ascender`, `descender`, `line_gap` (em), `built` (glyphs in its curve set), `build_time` (s) |
+| `'text', g, str, name, value, ...` | handle | `font` (a font handle, a path or a cell of paths, made once per gfx; none: Segoe UI, else Arial), `size` (units per em; 32 px or 1 deg), `width` (wrap width; 0 none), `align` (`'start'`, `'center'` (the default), `'end'`), `line_height` (times the fonts' line; 0 = 1), `dir` (`'auto'`, `'ltr'`, `'rtl'`), `lang` (BCP 47; `'ja'`, `'zh-Hans'`, `'zh-Hant'`, `'th'` break at BudouX phrases), `spans` (k x 6 `[first last r g b size]`, char indices, last included; `NaN` color: the text's, size 0: the text's; at most 15 colors), and any stimulus parameter: `place`, `anchor`, `x`, `y`, `ori`, `color`, `space`, `opacity`, `visible`, `gate`, `group`, `blend`, `rays`, `aliased` |
+| `'set', t, name, value, ...` | none | the text's own parameters (one layout; between frames, else `ysp_gfx:order`; a refused change leaves the text as it was) and the stimulus's |
+| `v = ('get', t, name)` | | the above, and `box` (`[w h]` units), `n_lines`, `n_glyphs`, `n_runs`, `n_chars`, `missing`, `resolved_dir`, `layout_time`, `build_time`, `upload_time` (s), `new_glyphs`, `stamp` (the layout's versions and the fonts' hashes, for a data file) |
+| `G = ('glyphs', t)` | n x 6 | `[char line x0 y0 x1 y1]`: each glyph's character, line and ink box (a space: its pen point) |
+| `[W, w] = ('words', t)` | n x 7, cell | `[first last line x0 y0 x1 y1]`: the runs of characters between white space, their glyphs' advances across and their line's box down; `w{i}` is `str(first:last)` |
+| `L = ('lines', t)` | n x 6 | `[first last x0 y0 x1 y1]`; a line's trailing space is in its box |
+| `'hit', t, x, y` | char index | the glyph's character there, 0 none; a list gives `[item char]` |
+| `'free', f` | none | `ysp_gfx:busy` while a text uses the font |
+
+Boxes are screen px from the top-left, axis-aligned (a turned text gives
+the bounds of the turned boxes). A text's box is its laid-out block (as
+wide as its widest line, or `width` when it wraps), placed by `place`
+and `anchor` as any stimulus's: centered on the screen by default.
+**Strings.** MATLAB's char is UTF-16: a non-ASCII string goes in and comes
+back as it was, and a character index is a MATLAB index (a character
+past U+FFFF, an emoji, takes two). Octave's char holds UTF-8 bytes, so
+there an index is a byte index; `strfind` gives the same numbers in both.
+Paths and `lang` go through the same conversion. Not bound: OpenType
+feature switches, a language per span, vertical text, justification,
+outlines, glow (blur) and color glyphs.
 ### Movies: ysp_video
 
 A movie on a gfx ([ysp/video.h](../../include/ysp/video.h)): each display

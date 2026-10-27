@@ -421,6 +421,17 @@ phrase-breaking blocks, the editor, every label) lays everything out and
 builds 286 glyphs of the main font list in 14 to 27 ms; a scripted undo in
 the editor costs 64 to 74 us, the rebuild of its runs included.
 
+## In the bindings
+
+`ysp-vis` (Python `ysp.gfx`, MEX `ysp_gfx`, 2026-10-27) links this
+library and the vendored stack as static libraries:
+`tools/vendor_vis.py --layout msvc` (or `mingw`) builds them with
+`tools/vis_layout/CMakeLists.txt` from the trees `tools/vendor_layout.py`
+checks. A binding's text is a `ylay_layout()` block per text and a
+`ylay_lib` per fallback list, its glyphs uploaded with `ygfx_cset_add()`
+as `examples/layout/gfx_layout.c` does. Its manual is
+[gfx.md](gfx.md#text), with the costs measured through each host.
+
 ## Not done
 
 - Vertical text (Skribidi has none), justification, explicit bidi

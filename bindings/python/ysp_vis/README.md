@@ -15,7 +15,8 @@ section 12.
 Status: `ysp.screen` binds the frame loop in full (phase A). `ysp.gfx`
 binds the stimuli, draw lists, groups, instances and timeline bindings of
 ysp/gfx.h (phase B, 2026-10-27; [Stimuli](#stimuli-yspgfx), below).
-`ysp.video` plays movies with a soundtrack (phase B). Text is phase C.
+`ysp.video` plays movies with a soundtrack (phase B). `ysp.gfx` lays out
+and draws text (phase C, 0.10.1.2; [Text](#text-yspgfx), below).
 
 Phase B, movies (0.10.1.1): `ysp.video` binds ysp/video.h's movies (frame
 sequences, MPEG-1 through pl_mpeg, MP4 through Media Foundation), their
@@ -34,6 +35,7 @@ The wheel is `cp38-abi3-win_amd64`: one build for CPython 3.8 and later.
 | `ysp/libEGL.dll`, `ysp/libGLESv2.dll` | ANGLE 2.1.25848 (git 85cc0e0b9cc3), from the Electron v38.8.6 release for win32-x64 |
 | `ysp/ysp_vis-LICENSE.SDL3.txt`, `ysp/ysp_vis-LICENSE.ANGLE.txt` | the license notices of SDL3 (zlib) and ANGLE (BSD) |
 | `ysp/ysp_vis-LICENSE.pl_mpeg.txt` | pl_mpeg's notice (MIT): its MPEG-1 decoder is compiled into the extension |
+| `ysp/ysp_vis-LICENSE.Skribidi.txt`, `.HarfBuzz.txt`, `.SheenBidi.txt`, `.libunibreak.txt`, `.budouxc.txt` | the license files of the text layout linked into the extension: Skribidi (MIT), HarfBuzz (Old MIT; its USE table MIT), SheenBidi (Apache-2.0), libunibreak (zlib), budouxc (MIT; BudouX's models Apache-2.0) |
 
 The extension always loads ANGLE from its own directory
 (`desc.angle_dir`), so another ANGLE in the process (MATLAB's, a Qt
@@ -57,7 +59,8 @@ From the repository root, make the natives once, then install the three
 packages:
 
 ```sh
-uv run --no-project python tools/vendor_vis.py --write --angle --sdl msvc --pl-mpeg
+uv run --no-project python tools/vendor_layout.py --write
+uv run --no-project python tools/vendor_vis.py --write --angle --sdl msvc --pl-mpeg --layout msvc
 uv pip install ./bindings/python/ysp_audio ./bindings/python/ysp_timeline ./bindings/python/ysp_vis
 ```
 
@@ -65,8 +68,12 @@ uv pip install ./bindings/python/ysp_audio ./bindings/python/ysp_timeline ./bind
 Electron zip, checks both by SHA-256, builds the static SDL3 with MSVC and
 takes the two ANGLE DLLs (also checked by SHA-256) into
 `third_party/vis/`; `--pl-mpeg` fetches pl_mpeg.h (commit c871f2b, checked
-by SHA-256), the MPEG-1 decoder compiled into the extension. A download
-that breaks off resumes where it stopped. setup.py takes the headers, the shared tables and the
+by SHA-256), the MPEG-1 decoder compiled into the extension. `--layout
+msvc` builds the text layout as static libraries (pack/layout.c with the
+Skribidi, HarfBuzz, SheenBidi, libunibreak and budouxc trees that
+`tools/vendor_layout.py` fetches by commit and checks file by file against
+`third_party/MANIFEST.sha256`), with CMake and MSVC, about a minute. A
+download that breaks off resumes where it stopped. setup.py takes the headers, the shared tables and the
 natives from the repository. An isolated build (an sdist, cibuildwheel)
 sees only this directory: stage the files first (MANIFEST.in lists them).
 
@@ -358,6 +365,110 @@ shows").
 `example_2afc.py` runs a two-alternative forced-choice grating trial;
 `example_rsvp.py` an RSVP stream of 20 atlas items at 10 per second (NumPy).
 
+## Text (ysp.gfx)
+
+`ysp.gfx` lays text out with pack/layout: Skribidi with HarfBuzz, pinned
+and patched ([docs/layout.md](../../../docs/layout.md)), the layout of
+the pack tool and the player. So a text is shaped for its script (Arabic,
+Hebrew, Devanagari, Thai, CJK: whatever its fonts hold), put in order by
+the Unicode bidirectional algorithm, kerned and ligated by HarfBuzz's
+default features, and broken into lines by UAX 14 (by BudouX phrases for
+Japanese, Chinese and Thai with `lang`). ysp/gfx.h draws the glyphs as
+curve runs from ysp/outline.h curve sets built from the same font bytes:
+the pixel's box-filter coverage at any size, turned or not.
+
+```python
+import ysp.screen as yscr, ysp.gfx as ygfx
+
+with yscr.Screen(gfx={"background": 0.5}) as s:
+    g = ygfx.Gfx(s)
+    fonts = g.font([r"C:\Windows\Fonts\segoeui.ttf", r"C:\Windows\Fonts\msyh.ttc"])   # a fallback list
+    word = g.text("RED", font=fonts, size=64, color=(0.6, 0.05, 0.05))
+    page = g.text(open("instructions.txt", encoding="utf-8").read(), font=fonts, size=24,
+                  width=900, align="start", line_height=1.3, y=-100)
+    word.set(text="GREEN", color=(0.05, 0.45, 0.05))   # a new layout: between frames
+    f = s.begin()
+    g.frame(word, page)
+    s.flip()
+    for w, start, end, line, x0, y0, x1, y1 in page.words():   # interest areas, screen px
+        ...
+```
+
+**Fonts.** `g.font(source, face=0, name=None)` makes a `Font`: a path, the
+bytes of a font file, or a list of them (or of `(source, face)` pairs) as a
+fallback list. For each run of one script, the files that support it are
+tried in order, and the first that has the character draws it. A text's
+`font=` is a `Font`, a path or a list of paths (made once per `Gfx` and
+kept), or none: the system's sans font, Segoe UI, else Arial. No font file
+is in the wheel: Segoe UI is on every Windows machine, the only platform,
+and a bundled file would be another pin and another license to carry; give
+a file to have the same glyphs on every machine. `f.info` gives each
+file's name, face, SHA-256 and metrics, and `t.stamp` (and `f.stamp()`)
+one line with the layout's versions and the hashes of the fonts a text
+used, for a data file. TrueType and CFF fonts; CFF2 and fonts without
+outlines are refused (ysp/outline.h reads the outlines; docs/layout.md).
+
+**Parameters.** `g.text(text="", **p)` returns a `Text`, a `Stim` with its
+own parameters:
+
+| Name | Value | Default |
+|---|---|---|
+| `text` | a str | `""` |
+| `font` | a `Font`, a path, a list of paths | the system's sans font |
+| `size` | units per em (px, or degrees with `units="deg"`) | 32 px, 1 deg |
+| `width` | the wrap width in units; 0: no wrapping | 0 |
+| `align` | `"start"`, `"center"` or `"end"` (start and end follow the direction) | `"center"` |
+| `line_height` | times the fonts' own line; 0: 1 | 0 |
+| `dir` | `"auto"` (the first strong character), `"ltr"` or `"rtl"` | `"auto"` |
+| `lang` | a BCP 47 tag; `"ja"`, `"zh-Hans"`, `"zh-Hant"` and `"th"` break at BudouX phrases | `""` |
+| `spans` | `[(start, end, color=None, size=0), ...]`: str indices, end excluded, sorted, not overlapping; at most 15 colors | none |
+
+A change of one of these lays the text out again, between frames
+(`OrderError` between `g.begin()` and `g.end()`); a refused change leaves
+the text as it was. A word or a sentence takes 3 to 35 us, a page of 520
+characters about 0.1 to 0.3 ms ([docs/gfx.md](../../../docs/gfx.md#text),
+measured). A glyph that no text of the font used before is built from the
+font's outline and uploaded in the same call (tens of us a glyph): lay out
+every word of an experiment once at setup and the trials build none.
+The rest are a stimulus's parameters, as for every `Stim`: `place`,
+`anchor`, `x`, `y`, `ori`, `color` (with `space=` or a hex color through
+a calibration), `opacity`, `visible`, `gate`, `group`, `blend`, `rays` and
+`aliased` (ysp/gfx.h CURVE RUNS). Edges, strokes, effects and paint are
+refused on text, as ysp/gfx.h refuses them on a run.
+
+**The box.** A text's box is its laid-out block: as wide as its widest
+line, or as `width` when it wraps, and from the first line's top to the
+last line's bottom. `place` and `anchor` put that box on the screen as
+they put any stimulus's: by default its center is the screen's center. So
+a word is centered by its line, ascender to descender, not by its ink.
+`t.box` is `(w, h)` in units; `t.bounds()` the screen px.
+
+**Reading the layout.** Screen px, axis-aligned (a turned text gives the
+bounds of the turned boxes):
+
+| Call | Gives |
+|---|---|
+| `t.glyphs()` | `[(index, line, x0, y0, x1, y1)]`: each glyph's character (str index), line, and ink box; a glyph with no ink (a space) gives its pen point |
+| `t.words()` | `[(word, start, end, line, x0, y0, x1, y1)]`: the runs of characters between white space (no-break spaces join), with their glyphs' advances across and their line's box down: an eye tracker's interest areas |
+| `t.lines()` | `[(start, end, x0, y0, x1, y1)]`: each line's characters and box; a line's trailing space is in its box and may hang past `width` |
+| `t.hit(x, y)`, `t.hit_index(x, y)` | whether a glyph's box holds the point, and the str index of the topmost one (-1: none); `L.hit_element(x, y)` gives `(item, index)` for a text in a list |
+| `t.n_lines`, `n_glyphs`, `n_runs`, `n_chars`, `missing`, `resolved_dir` | the layout's counts; `missing`: glyphs no font of the list has (drawn as the first font's .notdef box). A character no font supports at all can give no glyph: an emoji without an emoji font |
+| `t.layout_time`, `build_time`, `upload_time`, `new_glyphs` | the last layout's parts, in seconds, and the glyphs it built |
+
+**Lists and bindings.** A `Text` goes in a `DrawList` with any stimulus,
+and `L.set("color", ...)`, `L.set("y", ...)` work across texts. A timeline
+channel binds to a text's `x`, `y`, `ori`, `opacity`, `color`, `visible`,
+... as to any stimulus. `size`, `text` and the other own parameters do
+not bind (each change is a layout): animate the size with a group's
+`scale`.
+
+**Memory.** Making a font or a text, and each layout, allocate (Skribidi
+allocates inside every layout). Drawing a text allocates nothing.
+
+`example_stroop.py` runs a Stroop block (one `Text`, its word and ink
+changed between trials); `example_reading.py` an RSVP sentence (a `Text`
+per word, shown by a timeline) and the sentence's word boxes.
+
 ## Threads
 
 Use a `Screen`, its `Gfx` and the gfx's objects from one thread: the GL
@@ -386,6 +497,18 @@ made through `ysp.gfx` must draw the same scene, bit for bit, as the same
 stimuli made in C, and instances must match single stimuli. CI runs the
 simulated tests only.
 
+`test_text_sim.py` checks text on the simulated display: fonts by path,
+bytes and fallback list, bidi, wrapping, spans, a change of text between
+trials and its refusals, the glyph, word and line boxes and hit tests,
+texts in lists and bindings, degrees, and the lifetime rules. It uses
+Windows's Segoe UI, Arial and Microsoft YaHei, and skips what needs a
+missing one. `YSP_VIS_WINDOW=1 pytest .../test_text_window.py`: two texts
+made through `ysp.gfx` (Latin; and Latin, CJK and Arabic from a fallback
+list, wrapped, with a colored span, turned 20 degrees) draw the same scene,
+bit for bit, as the same texts made in C with pack/layout and
+`ygfx_crun()`; the ink drawn is inside the boxes `glyphs()` and `words()`
+give; a text changed and changed back draws its first scene again.
+
 `test_video_sim.py` makes its clips (frame sequences; MPEG-1 and an MP4
 with ffmpeg when it is on PATH) and checks each display frame of a run on
 the simulated display and the virtual clock against the due rule; with
@@ -406,11 +529,18 @@ sequence, MPEG-1 and an MP4 (DXVA and the software decoder) in a window.
 - `desc.abort_keys`: the combination stays Shift+Esc.
 - `desc.on_context` as a callback: `Screen(gfx={...})` uses it to start
   the gfx while the screen settles; no Python function runs there.
-- In ysp.gfx: text (phase C), compounds, effects (`fx`), paint
-  (gradients), MSDF glyph runs and curve sets, user shaders, render
-  targets, blur and video textures (ysp.video's). Each needs memory or
-  GL objects with a lifetime of its own; none was needed by the phase B
-  experiments. File loading: ysp/gfx.h reads no image file; make the
+- In ysp.gfx: compounds, effects (`fx`), paint (gradients), MSDF glyph
+  runs, curve sets and runs as objects of their own, user shaders, render
+  targets, blur and video textures (ysp.video's). Each needs memory or GL
+  objects with a lifetime of its own; text uses curve sets and runs
+  inside a `Text`, and none of the rest was needed by the experiments of
+  phases B and C. Text without blur has no glow or soft shadow; a hard
+  shadow is a second `Text` offset and recolored.
+- In text: OpenType feature switches (HarfBuzz's defaults apply: kerning,
+  ligatures, marks), a language per span, vertical text, justification,
+  outlines and faux bold (ysp/outline.h's strokes), color glyphs, and the
+  editor (pack/layout has Skribidi's: caret, selection, IME). pack/layout's
+  style takes none of the first two; the rest need a design of their own. File loading: ysp/gfx.h reads no image file; make the
   pixels with NumPy or an image library and give them to `texture()`.
 - ysp/video.h: the GPU path (`gpu_path`; it needs the screen's
   `d3d11_video` option, not bound, and UPLOAD has the shorter tail by

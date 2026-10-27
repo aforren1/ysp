@@ -33,6 +33,7 @@ CASES = [
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--reps", type=int, default=2000)
+ap.add_argument("--rounds", type=int, default=3)
 ap.add_argument("--csv", default="")
 a = ap.parse_args()
 
@@ -46,17 +47,26 @@ rows = []
 with yscr.Screen(backend="sim") as s:
     g = ygfx.Gfx(s)
     f = g.font(os.path.join(FONTS, "segoeui.ttf"))
+    texts = []
     for name, kw, s1, s2 in CASES:
         t = g.text(s1, font=f, **kw)
         t.text = s2                                     # both strings' glyphs built
-        call, lay = [], []
-        for i in range(a.reps):
-            x = s1 if i % 2 == 0 else s2
-            t0 = time.perf_counter()
-            t.text = x
-            call.append(time.perf_counter() - t0)
-            lay.append(t.layout_time)
-        rows.append((name, len(s1), t.n_lines, stats(call), stats(lay)))
+        texts.append(t)
+    # rounds interleaved over the cases, so a change of clock or core (the
+    # i7-1360P has P and E cores) lands on every case alike
+    calls = [[] for _ in CASES]
+    lays = [[] for _ in CASES]
+    for r in range(a.rounds):
+        for c, (name, kw, s1, s2) in enumerate(CASES):
+            t = texts[c]
+            for i in range(a.reps // a.rounds):
+                x = s1 if i % 2 == 0 else s2
+                t0 = time.perf_counter()
+                t.text = x
+                calls[c].append(time.perf_counter() - t0)
+                lays[c].append(t.layout_time)
+    for c, (name, kw, s1, s2) in enumerate(CASES):
+        rows.append((name, len(s1), texts[c].n_lines, stats(calls[c]), stats(lays[c])))
     # the first layout of a paragraph in a font with no glyph built yet
     f2 = g.font(os.path.join(FONTS, "arial.ttf"))
     t0 = time.perf_counter()
