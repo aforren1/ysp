@@ -192,7 +192,9 @@ static PyObject* vs_frame(const yscr_frame* f) {
             PyTuple_SetItem(done, i, r);
         }
     }
-    if (done && f->n_done > 0 && f->last == &f->done[f->n_done - 1]) {
+    /* f.last is the header's copy of done's final record: one object for both. */
+    if (done && f->n_done > 0 && f->last && f->last->index == f->done[f->n_done - 1].index &&
+        f->last->onset == f->done[f->n_done - 1].onset && f->last->flags == f->done[f->n_done - 1].flags) {
         last = PyTuple_GetItem(done, f->n_done - 1);
         Py_XINCREF(last);
     } else if (f->last) {
@@ -461,16 +463,21 @@ static PyObject* vs_abort(const yscr_frame* f) {
     PyOS_snprintf(msg, sizeof msg, "ysp_screen: abort 0x%x (%d press%s)%s", (unsigned)f->abort, (int)f->abort_presses,
                   f->abort_presses == 1 ? "" : "es",
                   panic ? ": the panic released the display; only close() is left" : "");
+    static const char* names[5] = { "reasons", "presses", "t", "t_ns", "panic" };
+    PyObject* v[5];
+    int i, bad = 0;
     e = PyObject_CallFunction(VsAbort, "s", msg);
     if (!e) return NULL;
-    if (PyObject_SetAttrString(e, "reasons", PyLong_FromUnsignedLong(f->abort)) < 0 ||
-        PyObject_SetAttrString(e, "presses", PyLong_FromLong(f->abort_presses)) < 0 ||
-        PyObject_SetAttrString(e, "t", PyFloat_FromDouble(yv_s(f->abort_ns))) < 0 ||
-        PyObject_SetAttrString(e, "t_ns", PyLong_FromLongLong(f->abort_ns)) < 0 ||
-        PyObject_SetAttrString(e, "panic", PyBool_FromLong(panic)) < 0) {
-        Py_DECREF(e);
-        return NULL;
+    v[0] = PyLong_FromUnsignedLong(f->abort);
+    v[1] = PyLong_FromLong(f->abort_presses);
+    v[2] = PyFloat_FromDouble(yv_s(f->abort_ns));
+    v[3] = PyLong_FromLongLong(f->abort_ns);
+    v[4] = PyBool_FromLong(panic);
+    for (i = 0; i < 5; i++) {
+        if (!v[i] || PyObject_SetAttrString(e, names[i], v[i]) < 0) bad = 1;
+        Py_XDECREF(v[i]);
     }
+    if (bad) { Py_DECREF(e); return NULL; }
     PyErr_SetObject(VsAbort, e);
     Py_DECREF(e);
     return NULL;

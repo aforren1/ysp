@@ -529,8 +529,8 @@ static void vx_screen_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, 
         plhs[0] = s;
         if (nlhs > 1) plhs[1] = vx_d((double)v->rec_lost);
     } else if (!strcmp(cmd, "poll")) {
+        static yin_event buf[YV_EVENTS];   /* one MATLAB thread: no allocation per poll */
         yv_screen* v;
-        yin_event* buf;
         int n, max = YV_EVENTS;
         vx_nargs(nrhs, 2, "e = ysp_screen('poll', h)");
         v = vx_scr(prhs[1]);
@@ -539,10 +539,8 @@ static void vx_screen_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, 
             if (m >= 1 && m < YV_EVENTS) max = (int)m;
         }
         yv_drain(v);
-        buf = (yin_event*)mxMalloc(sizeof(yin_event) * YV_EVENTS);
         n = yv_events(v, buf, max);
         plhs[0] = vx_events(buf, n);
-        mxFree(buf);
         if (nlhs > 1) plhs[1] = vx_d((double)v->ev_lost);
     } else if (!strcmp(cmd, "title")) {
         char t[512];
