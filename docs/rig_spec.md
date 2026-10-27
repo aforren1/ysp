@@ -1406,6 +1406,22 @@ extension implements one of these kinds, each a versioned C vtable:
   microphone at the speaker, and compare onset time and level. If a path
   gates, add an opt-in noise floor (dither near -90 dBFS) so that the sink
   never gets pure zeros; off by default, because it changes the signal.
+- A queue-ahead mode on COMPOSITION (added 2026-10-26, after
+  docs/winthread_probe.md). `ysp/screen.h` keeps one frame in flight, so
+  that each frame is drawn against a fresh prediction and fresh input
+  (ONE FRAME IN FLIGHT). The presentation manager accepts at least 7
+  presents ahead (above), so a host could submit K frames with target
+  times and then sleep: an RSVP stream, a fixed sequence. With the window
+  thread (`ysp/screen.h` 0.10.0) the window stays responsive while the
+  host sleeps, so the queued frames stay on independent flip; this would
+  also remove the host-caused misses of docs/av_probe.md (interpreter
+  pauses of 10 to 48 ms). To measure first: whether several queued
+  target times in a row land as exactly as one held frame (1800 of 1800
+  held 0 to 4 vblanks ahead); the cancel of queued presents on abort and
+  on the panic release; the texture count and memory for K frames (3
+  buffers today); how records and timeline events map to frames drawn
+  ahead. COMPOSITION only: DXGI_FLIP has no present time. Input cannot
+  change a frame that is already queued.
 
 ## 14. Coverage of jsPsych
 
