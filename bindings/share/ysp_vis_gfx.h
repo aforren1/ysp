@@ -49,10 +49,10 @@
 #define YV_MAX_DEFER   64    /* GL frees put off to the end of a frame      */
 #define YV_ERR_HOST    YSP_SHARE_ERR_HOST   /* the host's error is set     */
 
-enum { YV_O_STIM = 1, YV_O_LIST, YV_O_GROUP, YV_O_TEX };
+enum { YV_O_STIM = 1, YV_O_LIST, YV_O_GROUP, YV_O_TEX, YV_O_FONT };
 
 /* The stimulus kinds a host makes (ygfx_kind, plus instances). */
-enum { YV_K_SHAPE = 1, YV_K_GRATING, YV_K_GABOR, YV_K_NOISE, YV_K_IMAGE, YV_K_DOTS, YV_K_INSTANCES };
+enum { YV_K_SHAPE = 1, YV_K_GRATING, YV_K_GABOR, YV_K_NOISE, YV_K_IMAGE, YV_K_DOTS, YV_K_INSTANCES, YV_K_TEXT };
 
 struct yv_gfx;
 
@@ -86,7 +86,15 @@ typedef struct yv_stim {
     yv_tex*    tex;            /* IMAGE; users counted                          */
     uint32_t   dots_cap;       /* DOTS: x, y pairs the buffer holds             */
     int        bound;          /* bindings that write it                       */
+    void*      text;           /* TEXT: its yv_text (ysp_vis_text.h)            */
 } yv_stim;
+
+/* ysp_vis_text.h: a text draws, hits and frees through these. */
+struct yv_text;
+static int  yv_text_draw(struct yv_gfx* g, yv_stim* st);
+static int  yv_text_hit(const yv_stim* st, float px, float py);
+static void yv_text_free(struct yv_text* t);
+static int  yv_text_key(const char* name);
 
 typedef struct yv_list {
     yv_obj    o;
@@ -123,6 +131,8 @@ typedef struct yv_gfx {
     int             n_defer_tex, n_defer_buf;
     uint64_t        frames;
     struct yv_movie* movies;   /* ysp_vis_video.h: closed before the gfx */
+    int             text_ready;   /* a curve set was made (the text program) */
+    void*           ctext;        /* the C path's texts (ysp_vis_text.h), for the pixel tests */
 } yv_gfx;
 
 /* ---- errors ------------------------------------------------------------------ */
@@ -426,6 +436,8 @@ static bool yv_gfx_open(yv_gfx* g, yv_screen* v) {
 }
 
 static void yv_tl_release_all(yv_gfx* g);
+static void yv_font_lost(yv_obj* o);
+static void yv_ctext_free(yv_gfx* g);
 
 /* Closes the GL side; the objects stay, dead, until the host frees them. */
 static void yv_gfx_close(yv_gfx* g) {
@@ -433,16 +445,19 @@ static void yv_gfx_close(yv_gfx* g) {
     if (!g) return;
     yv_movies_close(g);   /* their textures and pins before the gfx (ysp_vis_video.h) */
     yv_tl_release_all(g);
+    yv_ctext_free(g);
     if (g->open || g->started) ygfx_close(&g->g);
     for (o = g->objs; o; o = o->next) {
         /* their GL objects went with ygfx_close() */
         if (o->type == YV_O_TEX) ((yv_tex*)o)->t.id = 0;
         else if (o->type == YV_O_STIM && ((yv_stim*)o)->vkind == YV_K_DOTS) ((yv_stim*)o)->s.buf.id = 0;
+        else if (o->type == YV_O_FONT) yv_font_lost(o);
     }
     g->n_defer_tex = g->n_defer_buf = 0;
     g->open = 0;
     g->started = 0;
     g->in_frame = 0;
+    g->text_ready = 0;
     if (g->scr && g->scr->gfx == g) g->scr->gfx = NULL;
     g->scr = NULL;
 }
@@ -698,6 +713,8 @@ static int yv_dots_positions(yv_stim* st, const double* v, int n, char* err, siz
 static int yv_set_kv(yv_stim* st, yv_kv* k, int space, char* err, size_t cap) {
     yv_attr a;
     int kind = st->s.kind, rc;
+    if (st->vkind == YV_K_TEXT && yv_text_key(k->name))
+        return yv_fail(err, cap, YGFX_ERR_ARG, "%s: a text's own parameter: set it on the text (it lays the text out again)", k->name);
     if (yv_attr_find(k->name, kind, st->s.shape, &a, err, cap) < 0) return YGFX_ERR_ARG;
     if (a.type == YV_A_SPECIAL) {
         if (!strcmp(k->name, "space")) return 0;   /* read by the caller */
@@ -835,6 +852,7 @@ static void yv_stim_free(yv_stim* st) {
     }
     yv_set_group(st, NULL);
     yv_set_tex(st, NULL);
+    yv_text_free((struct yv_text*)st->text);
     yv_unlink(&st->o);
     free(st->path);
     if (st->inst_owned) free(st->inst);
@@ -1101,8 +1119,8 @@ static yv_stim* yv_stim_copy(const yv_stim* src, int* code, char* err, size_t ca
     yv_stim* st;
     *code = YGFX_ERR_ARG;
     if (yv_live(&src->o, err, cap) < 0) { *code = YGFX_ERR_CLOSED; return NULL; }
-    if (src->vkind == YV_K_DOTS || src->vkind == YV_K_INSTANCES) {
-        yv_fail(err, cap, YGFX_ERR_ARG, "copy: not of dot fields and instances (they own GPU or element memory)");
+    if (src->vkind == YV_K_DOTS || src->vkind == YV_K_INSTANCES || src->vkind == YV_K_TEXT) {
+        yv_fail(err, cap, YGFX_ERR_ARG, "copy: not of dot fields, instances and texts (they own GPU, element or layout memory)");
         return NULL;
     }
     st = yv_stim_alloc(g, src->vkind);
@@ -1169,7 +1187,7 @@ static yv_stim* yv_inst_make(yv_stim* tmpl, int n, const char* fields, const dou
     int i;
     *code = YGFX_ERR_ARG;
     if (yv_live(&tmpl->o, err, cap) < 0) { *code = YGFX_ERR_CLOSED; return NULL; }
-    if (tmpl->vkind == YV_K_DOTS || tmpl->vkind == YV_K_INSTANCES) {
+    if (tmpl->vkind == YV_K_DOTS || tmpl->vkind == YV_K_INSTANCES || tmpl->vkind == YV_K_TEXT) {
         yv_fail(err, cap, YGFX_ERR_ARG, "instances: the template is a shape, grating, gabor, noise or image");
         return NULL;
     }
@@ -1439,6 +1457,9 @@ static int yv_list_set(yv_list* l, const char* name, const double* v, int count,
     int i, k = 0, last_kind = -1, last_shape = -1, all;
     if (yv_live(&l->o, err, cap) < 0) return YGFX_ERR_CLOSED;
     if (l->n == 0) return 0;
+    for (i = 0; i < l->n; i++)
+        if (l->it[i]->vkind == YV_K_TEXT && yv_text_key(name))
+            return yv_fail(err, cap, YGFX_ERR_ARG, "%s: a text's own parameter: set it text by text (it lays the text out again)", name);
     for (i = 0; i < l->n; i++) {
         yv_stim* st = l->it[i];
         if (st->s.kind != last_kind || st->s.shape != last_shape) {
@@ -1597,6 +1618,9 @@ static int yv_bind_params(const yv_stim* st, const char* name, int* p0, int* k, 
     };
     for (i = 0; i < (int)(sizeof vecs / sizeof vecs[0]); i++)
         if (!strcmp(name, vecs[i].name)) { *p0 = vecs[i].p; *k = vecs[i].k; return 0; }
+    if (st->vkind == YV_K_TEXT && yv_text_key(name))
+        return yv_fail(err, cap, YGFX_ERR_ARG, "bind: a text's %s lays it out again, between frames: bind a group's scale "
+                                               "to animate its size", name);
     t = ygfx_params(&n);
     for (i = 0; i < n; i++)
         if (!strcmp(name, t[i].name)) {
@@ -1796,13 +1820,15 @@ static int yv_gfx_draw(yv_gfx* g, yv_obj* o, int* bad, char* err, size_t cap) {
     if (!g->in_frame) return yv_fail(err, cap, YGFX_ERR_ORDER, "ysp_gfx: draw between begin() and end()");
     if (!o || o->g != g) return yv_fail(err, cap, YGFX_ERR_ARG, "draw: a stimulus or list of this gfx");
     if (o->type == YV_O_STIM) {
-        rc = ygfx_draw(&g->g, &((yv_stim*)o)->s);
+        yv_stim* st = (yv_stim*)o;
+        rc = st->vkind == YV_K_TEXT ? yv_text_draw(g, st) : ygfx_draw(&g->g, &st->s);
         return rc < 0 ? yv_gfx_err(g, rc, err, cap) : 0;
     }
     if (o->type == YV_O_LIST) {
         yv_list* l = (yv_list*)o;
         for (i = 0; i < l->n; i++) {
-            rc = ygfx_draw(&g->g, &l->it[i]->s);
+            yv_stim* st = l->it[i];
+            rc = st->vkind == YV_K_TEXT ? yv_text_draw(g, st) : ygfx_draw(&g->g, &st->s);
             if (rc < 0) { *bad = i; return yv_gfx_err(g, rc, err, cap); }
         }
         return 0;
@@ -1848,6 +1874,7 @@ static int yv_gfx_frame(yv_gfx* g, yv_obj* const* objs, int n, int* bad_obj, int
  * topmost element, else -1). */
 static int yv_stim_hit(const yv_stim* st, float px, float py) {
     if (st->vkind == YV_K_INSTANCES) return ygfx_hit_index(&st->o.g->g, &st->s, px, py);
+    if (st->vkind == YV_K_TEXT) return yv_text_hit(st, px, py);
     return ygfx_hit(&st->o.g->g, &st->s, px, py) ? 0 : -1;
 }
 
@@ -1861,7 +1888,7 @@ static int yv_list_hit(const yv_list* l, float px, float py, int* element) {
         if (st->s.visible < 0.5f) continue;
         if (st->s.group && st->s.group->visible < 0.5f) continue;
         e = yv_stim_hit(st, px, py);
-        if (e >= 0) { *element = st->vkind == YV_K_INSTANCES ? e : -1; return i; }
+        if (e >= 0) { *element = st->vkind == YV_K_INSTANCES || st->vkind == YV_K_TEXT ? e : -1; return i; }
     }
     return -1;
 }

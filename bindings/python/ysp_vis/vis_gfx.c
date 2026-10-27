@@ -25,6 +25,18 @@
 static PyObject *StimType, *ListType, *GroupType, *TexType;
 static PyObject* vs_add_type(PyObject* m, PyType_Spec* spec, const char* name);
 
+/* vis_text.c (included after this file): Font and Text. */
+static PyObject *FontType, *TextType;
+struct vg_arena;
+static int vt_spans(PyObject* v, struct vg_arena* a, const double** out, int* n);
+static int vt_font_paths(PyObject* v, struct vg_arena* a, const char** out);
+static yv_obj* vt_font_obj(PyObject* v);
+static PyObject* Gfx_font(PyObject* self, PyObject* args, PyObject* kw);
+static PyObject* Gfx_text(PyObject* self, PyObject* args, PyObject* kw);
+static PyObject* Gfx_c_text_setup(PyObject* self, PyObject* unused);
+static PyObject* Gfx_c_text(PyObject* self, PyObject* arg);
+static int vt_init(PyObject* m);
+
 /* A gray level or (r, g, b), linear 0..1 (phase A's rect and background). */
 static int vs_rgb(PyObject* o, float out[3], const char* what) {
     Py_ssize_t i;
@@ -299,6 +311,12 @@ static int vg_kv(const char* name, PyObject* v, yv_kv* k, vg_arena* a) {
     memset(k, 0, sizeof *k);
     k->name = name;
     if (v == Py_None) return 1;
+    if (FontType && PyObject_TypeCheck(v, (PyTypeObject*)FontType)) {
+        k->obj = vt_font_obj(v);
+        return k->obj ? 0 : -1;
+    }
+    if (!strcmp(name, "spans")) return vt_spans(v, a, &k->v, &k->n);
+    if (!strcmp(name, "font") && (PyList_Check(v) || PyTuple_Check(v))) return vt_font_paths(v, a, &k->s);
     if (PyObject_TypeCheck(v, (PyTypeObject*)GroupType)) {
         if (!GR_OF(v)->gr) { PyErr_SetString(VsClosedError, "the group is closed"); return -1; }
         k->obj = &GR_OF(v)->gr->o;
@@ -1287,6 +1305,13 @@ static PyMethodDef Gfx_methods[] = {
     { "instances", (PyCFunction)(void (*)(void))Gfx_instances, METH_VARARGS | METH_KEYWORDS,
       "instances(template, n, fields=('xy',), palette=None) -> Stim: n elements of the template in one draw; "
       "elements is a float32 (n, 8) view: x, y, ori, phase, contrast, scale, gate, color." },
+    { "font", (PyCFunction)(void (*)(void))Gfx_font, METH_VARARGS | METH_KEYWORDS,
+      "font(source, face=0, name=None) -> Font: a font file's path or bytes, or a list of them (a fallback list, in "
+      "order; an item may be (source, face))." },
+    { "text", (PyCFunction)(void (*)(void))Gfx_text, METH_VARARGS | METH_KEYWORDS,
+      "text(text='', font=None, size=32 px or 1 deg, width=0, align='center', line_height=0, dir='auto', lang='', "
+      "spans=None, **params) -> Text: laid out by Skribidi and HarfBuzz. font: a Font, a path or a list of paths "
+      "(made once per Gfx), or None for the system's sans font (Segoe UI, Arial)." },
     { "list", Gfx_list, METH_VARARGS, "list(items=()) -> DrawList: stimuli drawn in order by one call." },
     { "group", (PyCFunction)(void (*)(void))Gfx_group, METH_VARARGS | METH_KEYWORDS,
       "group(**fields) -> Group: place, anchor, x, y, w, h, ori, scale, opacity, visible; a stimulus joins with group=." },
@@ -1304,6 +1329,8 @@ static PyMethodDef Gfx_methods[] = {
     { "read_scene", Gfx_read_scene, METH_VARARGS, "read_scene(x, y, w, h) -> memoryview float32 (h, w, 4): linear scene values; waits for the GPU." },
     { "read_output", Gfx_read_output, METH_VARARGS, "read_output(x, y, w, h) -> memoryview uint8 (h, w, 4): the codes, after end() and before the flip." },
     { "_c_scene", Gfx_c_scene, METH_O, "test: draws scene k made by ysp/gfx.h's constructors in C." },
+    { "_c_text_setup", Gfx_c_text_setup, METH_NOARGS, "test: lays out the C path's two texts (pack/layout, ygfx_crun) outside a frame." },
+    { "_c_text", Gfx_c_text, METH_O, "test: draws the C path's text k (0 or 1)." },
     { "color", Gfx_color, METH_VARARGS, "color(space, a, b, c) -> (r, g, b): linear device RGB through the calibration." },
     { "dir", Gfx_dir, METH_VARARGS, "dir(space, a, b, c) -> (r, g, b): a modulation direction about the background." },
     { "capture_start", (PyCFunction)(void (*)(void))Gfx_capture_start, METH_VARARGS | METH_KEYWORDS,
@@ -1357,8 +1384,8 @@ static void Stim_dealloc(PyObject* self) {
 }
 
 static const char* vg_kind_name(const yv_stim* st) {
-    static const char* names[] = { "?", "shape", "grating", "gabor", "noise", "image", "dots", "instances" };
-    return st->vkind >= 1 && st->vkind <= 7 ? names[st->vkind] : "?";
+    static const char* names[] = { "?", "shape", "grating", "gabor", "noise", "image", "dots", "instances", "text" };
+    return st->vkind >= 1 && st->vkind <= 8 ? names[st->vkind] : "?";
 }
 
 /* A value as Python: one number, a tuple, or an enum's name. */
@@ -1652,7 +1679,8 @@ static PyType_Slot Stim_slots[] = {
     { Py_tp_methods, Stim_methods },
     { 0, NULL }
 };
-static PyType_Spec Stim_spec = { "ysp.gfx.Stim", sizeof(StimObject), 0, Py_TPFLAGS_DEFAULT, Stim_slots };
+/* BASETYPE: Text (vis_text.c) is a Stim. */
+static PyType_Spec Stim_spec = { "ysp.gfx.Stim", sizeof(StimObject), 0, Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE, Stim_slots };
 
 /* ---- DrawList ------------------------------------------------------------------------------ */
 
@@ -1995,6 +2023,7 @@ static int vg_init(PyObject* m) {
     if (!(ListType = vs_add_type(m, &List_spec, "DrawList"))) return -1;
     if (!(GroupType = vs_add_type(m, &Group_spec, "Group"))) return -1;
     if (!(TexType = vs_add_type(m, &Tex_spec, "Texture"))) return -1;
+    if (vt_init(m) < 0) return -1;
     if (PyModule_AddFunctions(m, vg_module_methods) < 0) return -1;
     return 0;
 }

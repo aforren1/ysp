@@ -20,7 +20,13 @@
  * elements and list items are 1-based, as in ysp_timeline.
  */
 
-enum { VX_STIM = 20, VX_LIST = 21, VX_GROUP = 22, VX_TEX = 23 };
+enum { VX_STIM = 20, VX_LIST = 21, VX_GROUP = 22, VX_TEX = 23, VX_FONT = 24 };
+
+/* ysp_vis_text.inc: the text commands; 0 when cmd is not one. */
+static int vx_text_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]);
+static void vx_text_set(yv_stim* st, int nrhs, const mxArray* prhs[]);
+static int vx_text_get(yv_stim* st, const char* name, mxArray** out);
+static uint32_t* vx_host_offsets(const char* s, size_t n, uint32_t* n_cp);
 
 static const char* vx_kind_name(int k) {
     switch (k) {
@@ -30,6 +36,7 @@ static const char* vx_kind_name(int k) {
     case VX_LIST: return "list";
     case VX_GROUP: return "group";
     case VX_TEX: return "texture";
+    case VX_FONT: return "font";
     default: return "object";
     }
 }
@@ -49,7 +56,7 @@ static vx_node* vx_node_of(const mxArray* a, const char* what) {
 static yv_obj* vx_gobj(const mxArray* a, int kind, const char* what) {
     vx_node* n = vx_node_of(a, what);
     if (kind && n->kind != kind) vx_err("handle", "%s: a %s handle is needed here, not a %s", what, vx_kind_name(kind), vx_kind_name(n->kind));
-    if (n->kind < VX_STIM) vx_err("handle", "%s: a stimulus, list, group or texture handle", what);
+    if (n->kind < VX_STIM) vx_err("handle", "%s: a stimulus, list, group, texture or font handle", what);
     return (yv_obj*)n->obj;
 }
 
@@ -63,7 +70,7 @@ static uint64_t vx_id_of(const void* obj) {
 static void vx_gfx_drop(yv_gfx* g) {
     vx_node** p = &vx_list;
     if (!g) return;
-    /* lists first: they point at stimuli; stimuli before groups and textures */
+    /* lists first: they point at stimuli; stimuli before groups, textures and fonts */
     {
         int pass;
         for (pass = 0; pass < 3; pass++) {
@@ -72,11 +79,13 @@ static void vx_gfx_drop(yv_gfx* g) {
                 vx_node* n = *p;
                 int k = n->kind;
                 if (k >= VX_STIM && ((yv_obj*)n->obj)->g == g &&
-                    ((pass == 0 && k == VX_LIST) || (pass == 1 && k == VX_STIM) || (pass == 2 && (k == VX_GROUP || k == VX_TEX)))) {
+                    ((pass == 0 && k == VX_LIST) || (pass == 1 && k == VX_STIM) ||
+                     (pass == 2 && (k == VX_GROUP || k == VX_TEX || k == VX_FONT)))) {
                     *p = n->next;
                     if (k == VX_LIST) yv_list_free((yv_list*)n->obj);
                     else if (k == VX_STIM) yv_stim_free((yv_stim*)n->obj);
                     else if (k == VX_GROUP) yv_group_free((yv_group*)n->obj);
+                    else if (k == VX_FONT) yv_font_free((yv_font*)n->obj);
                     else yv_tex_free((yv_tex*)n->obj);
                     free(n);
                 } else {
@@ -87,6 +96,7 @@ static void vx_gfx_drop(yv_gfx* g) {
     }
     vx_unregister(g);
     yv_gfx_close(g);
+    yv_gfx_free_fonts(g);   /* the fonts texts named by path: the gfx's own */
     free(g);
 }
 
@@ -409,6 +419,7 @@ static yv_obj* vx_new_handle(yv_obj* o, int kind, mxArray** out) {
         if (kind == VX_STIM) yv_stim_free((yv_stim*)o);
         else if (kind == VX_LIST) yv_list_free((yv_list*)o);
         else if (kind == VX_GROUP) yv_group_free((yv_group*)o);
+        else if (kind == VX_FONT) yv_font_free((yv_font*)o);
         else yv_tex_free((yv_tex*)o);
         vx_err("memory", "out of memory");
     }
@@ -729,8 +740,12 @@ static void vx_gfx_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, con
         int n, i;
         vx_nargs(nrhs, 4, "ysp_gfx('set', obj, name, value, ...)");
         nd = vx_node_of(prhs[1], "set");
-        if (nd->kind < VX_STIM || nd->kind == VX_TEX) vx_err("handle", "set: a stimulus, list or group handle");
+        if (nd->kind < VX_STIM || nd->kind == VX_TEX || nd->kind == VX_FONT) vx_err("handle", "set: a stimulus, list or group handle");
         if (yv_live((yv_obj*)nd->obj, err, sizeof err) < 0) vx_gfx_fail_msg(YGFX_ERR_CLOSED, err);
+        if (nd->kind == VX_STIM && ((yv_stim*)nd->obj)->vkind == YV_K_TEXT) {
+            vx_text_set((yv_stim*)nd->obj, nrhs, prhs);
+            return;
+        }
         n = vx_kvs(nrhs, prhs, 2, kv);
         if (nd->kind == VX_STIM) {
             rc = yv_set_rest((yv_stim*)nd->obj, kv, n, err, sizeof err);
@@ -760,7 +775,7 @@ static void vx_gfx_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, con
         char name[64];
         vx_nargs(nrhs, 2, "v = ysp_gfx('get', obj, name)");
         nd = vx_node_of(prhs[1], "get");
-        if (nd->kind < VX_STIM || nd->kind == VX_TEX) vx_err("handle", "get: a stimulus, list or group handle");
+        if (nd->kind < VX_STIM || nd->kind == VX_TEX || nd->kind == VX_FONT) vx_err("handle", "get: a stimulus, list or group handle");
         if (yv_live((yv_obj*)nd->obj, err, sizeof err) < 0) vx_gfx_fail_msg(YGFX_ERR_CLOSED, err);
         if (nrhs < 3) {
             if (nd->kind != VX_STIM) vx_err("usage", "v = ysp_gfx('get', obj, name)");
@@ -768,11 +783,13 @@ static void vx_gfx_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, con
             return;
         }
         vx_string(prhs[2], name, sizeof name, "get: a name");
-        if (nd->kind == VX_STIM) {
+        if (nd->kind == VX_STIM && ((yv_stim*)nd->obj)->vkind == YV_K_TEXT && vx_text_get((yv_stim*)nd->obj, name, &plhs[0])) {
+            return;
+        } else if (nd->kind == VX_STIM) {
             yv_stim* st = (yv_stim*)nd->obj;
             yv_attr a;
             if (!strcmp(name, "kind")) {
-                static const char* kn[] = { "?", "shape", "grating", "gabor", "noise", "image", "dots", "instances" };
+                static const char* kn[] = { "?", "shape", "grating", "gabor", "noise", "image", "dots", "instances", "text" };
                 plhs[0] = mxCreateString(kn[st->vkind]);
             } else if (!strcmp(name, "shape") && st->s.kind == YGFX_SHAPE) {
                 char buf[32];
@@ -829,7 +846,7 @@ static void vx_gfx_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, con
         nd = vx_node_of(prhs[1], "free");
         if (nd->kind < VX_STIM) vx_err("handle", "free: a stimulus, list, group or texture handle (ysp_gfx('close', g) for a gfx)");
         o = (yv_obj*)nd->obj;
-        /* a list's own users are none; a stimulus in a list, a group or texture a stimulus uses: refused */
+        /* a list's own users are none; a stimulus in a list, a group, texture or font a stimulus uses: refused */
         if (nd->kind != VX_LIST) {
             int bound = o->g ? vx_binds_of(o->g, o) : 0;   /* bindings go with it */
             if (o->users - bound > 0)
@@ -839,6 +856,7 @@ static void vx_gfx_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, con
         if (nd->kind == VX_STIM) yv_stim_free((yv_stim*)o);
         else if (nd->kind == VX_LIST) yv_list_free((yv_list*)o);
         else if (nd->kind == VX_GROUP) yv_group_free((yv_group*)o);
+        else if (nd->kind == VX_FONT) yv_font_free((yv_font*)o);
         else yv_tex_free((yv_tex*)o);
     } else if (!strcmp(cmd, "bind")) {
         /* ysp_gfx('bind', g, target, name, tl, channels, first_element) */
@@ -851,7 +869,7 @@ static void vx_gfx_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, con
         vx_nargs(nrhs, 6, "ysp_gfx('bind', g, target, name, timeline, channels, element)");
         g = vx_gfx(prhs[1]);
         t = vx_gobj(prhs[2], 0, "bind: target");
-        if (t->type == YV_O_TEX) vx_err("handle", "bind: a stimulus, list or group");
+        if (t->type == YV_O_TEX || t->type == YV_O_FONT) vx_err("handle", "bind: a stimulus, list or group");
         vx_string(prhs[3], name, sizeof name, "bind: a parameter name");
         cv = vx_doubles(prhs[5], &nc, "bind: channels");
         if (nc < 1) vx_err("arg", "bind: one channel or more");
@@ -906,7 +924,14 @@ static void vx_gfx_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, con
         if (nd->kind == VX_STIM) {
             yv_stim* st = (yv_stim*)nd->obj;
             int e = yv_stim_hit(st, (float)x, (float)y);
-            plhs[0] = st->vkind == YV_K_INSTANCES ? vx_d(e + 1) : mxCreateLogicalScalar(e >= 0);
+            if (st->vkind == YV_K_TEXT) {   /* the char index of the glyph there (1-based), 0 none */
+                const yv_text* t = (const yv_text*)st->text;
+                uint32_t ncp, *h = vx_host_offsets(t->utf8, t->n_bytes, &ncp);
+                plhs[0] = vx_d(e >= 0 && (uint32_t)e <= ncp ? h[e] + 1.0 : 0.0);
+                mxFree(h);
+            } else {
+                plhs[0] = st->vkind == YV_K_INSTANCES ? vx_d(e + 1) : mxCreateLogicalScalar(e >= 0);
+            }
         } else {
             int e, i = yv_list_hit((yv_list*)nd->obj, (float)x, (float)y, &e);
             plhs[0] = mxCreateDoubleMatrix(1, 2, mxREAL);
@@ -1092,7 +1117,7 @@ static void vx_gfx_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, con
         static const char* f[] = { "name", "type", "min", "max", "default", "unit", "doc", "values" };
         static const struct { const char* n; int k; } kinds[] = {
             { "shape", YGFX_SHAPE }, { "grating", YGFX_GRATING }, { "gabor", YGFX_GABOR }, { "dots", YGFX_DOTS },
-            { "image", YGFX_IMAGE }, { "noise", YGFX_NOISE } };
+            { "image", YGFX_IMAGE }, { "noise", YGFX_NOISE }, { "text", YGFX_TEXT } };
         uint32_t mask = 0xFFFFFFFFu;
         const ygfx_param* t;
         int n, i, pass, k = 0, total = 0;
@@ -1100,8 +1125,8 @@ static void vx_gfx_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, con
         if (nrhs > 1) {
             char kn[16];
             vx_string(prhs[1], kn, sizeof kn, "params: a kind");
-            for (i = 0; i < 6 && strcmp(kn, kinds[i].n); i++) {}
-            if (i == 6) vx_err("arg", "params: shape, grating, gabor, dots, image or noise");
+            for (i = 0; i < 7 && strcmp(kn, kinds[i].n); i++) {}
+            if (i == 7) vx_err("arg", "params: shape, grating, gabor, dots, image, noise or text");
             mask = YV_KB(kinds[i].k);
         }
         for (pass = 0; pass < 2; pass++) {
@@ -1125,7 +1150,7 @@ static void vx_gfx_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, con
             }
         }
         plhs[0] = s;
-    } else {
+    } else if (!vx_text_cmd(cmd, nlhs, plhs, nrhs, prhs)) {
         vx_err("usage", "unknown command '%s'", cmd);
     }
 }
