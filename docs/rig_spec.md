@@ -1287,6 +1287,61 @@ extension implements one of these kinds, each a versioned C vtable:
   each module's license beside its hash. A lab that distributes a
   player with a GPL module distributes under the GPL.
 
+### Host-language bindings (Python, MATLAB, Octave)
+
+Decided with the user on 2026-10-26 and 2026-10-27. The bindings of the
+other headers are in docs/bindings.md. This part is about the rendering
+stack: `ysp/screen.h`, `ysp/gfx.h`, `ysp/video.h` and `ysp/audio.h`.
+The measurements are in docs/av_probe.md and docs/winthread_probe.md.
+
+- **ysp owns the window.** A Python, MATLAB or Octave experiment opens a
+  ysp screen, draws ysp stimuli and gets ysp flip records. ysp does not
+  draw into a PsychoPy, pyglet, Psychtoolbox or MATLAB window: gfx is
+  GL ES 3.0 and those hosts use desktop GL, and the timing claim would
+  end at the host's flip (Presenter, above).
+- **One module for screen, gfx and video: `ysp-vis`.** Their handles
+  point at each other, and screen keeps state per process (EGL, abort,
+  Raw Input). So one compiled extension (`ysp._vis`) implements them,
+  and three thin modules give the imports that match the headers:
+  `ysp.screen`, `ysp.gfx`, `ysp.video`. In MATLAB and Octave the plan is
+  one core library and three thin MEX files, `ysp_screen`, `ysp_gfx` and
+  `ysp_video`, that call into it (to verify).
+- **One implementation of audio and of timeline.** `ysp-audio` and
+  `ysp-timeline` own them. Each exports a table of its C functions (a
+  capsule in Python, an exported function in a MEX file), and `ysp-vis`
+  calls video's audio functions and gfx's timeline functions through
+  forwarders (`bindings/share/`). So a `ysp.audio` device is a movie's
+  soundtrack, and a `ysp.timeline` Timeline drives gfx bindings. A
+  forwarded call costs about 1 ns. A consumer accepts another patch
+  version and refuses another major.minor, ABI, layout setting or struct
+  size; a change to a struct's layout or to a table's function bumps at
+  least the minor version (CLAUDE.md). nanobind's shared types were
+  rejected: a C++ dependency, the stable ABI only from CPython 3.12, the
+  same version coupling, and no help for MEX. `ysp-audio` alone, without
+  SDL3 or ANGLE, serves a PsychoPy or Psychtoolbox experiment that needs
+  only sound at a time.
+- **The window has a thread of its own** (`ysp/screen.h` 0.10.0). A host
+  may wait between trials for any time (`time.sleep`, `input`, `pause`)
+  without a hung window, so the bindings need no pumping wait. A panic
+  releases the screen and the program can then only close it.
+- **Natives in the package.** SDL3 is linked statically, because a
+  `SDL3.dll` binds to the first copy in the process. The ANGLE DLLs
+  (`libEGL.dll`, `libGLESv2.dll`, about 9 MB) ship beside the module,
+  and the binding always passes `desc.angle_dir`, because without it
+  `libEGL.dll` binds to whichever copy is loaded (MATLAB ships an older
+  one). `d3dcompiler_47.dll` is not needed on Windows 10 and 11.
+- **Calls.** The cost is per call: about 1.1 us in Python, 3.7 us in
+  MATLAB and 8.9 us in Octave. So the API takes many stimuli in one call
+  (a draw list, a bound group), and a frame is a few calls. The docs
+  advise `gc.freeze()` after setup in Python. No binding runs a host
+  callback on a C thread (triggers, the audio source, the capture
+  writer, the panic function).
+- **Platforms.** Windows first: the other screen backends are stubs.
+  Octave is a target through the MEX source; a native `.oct` interface
+  is not planned unless a measurement shows that it removes Octave's
+  host stalls (13 to 48 ms, docs/av_probe.md).
+- **Open:** a queue-ahead mode for hosts (section 13).
+
 ## 13. Open questions, to be measured or verified, not decided
 
 - Does SDL3 create an EGL context on Cocoa against ANGLE's Metal
@@ -1406,6 +1461,22 @@ extension implements one of these kinds, each a versioned C vtable:
   microphone at the speaker, and compare onset time and level. If a path
   gates, add an opt-in noise floor (dither near -90 dBFS) so that the sink
   never gets pure zeros; off by default, because it changes the signal.
+- A queue-ahead mode on COMPOSITION (added 2026-10-26, after
+  docs/winthread_probe.md). `ysp/screen.h` keeps one frame in flight, so
+  that each frame is drawn against a fresh prediction and fresh input
+  (ONE FRAME IN FLIGHT). The presentation manager accepts at least 7
+  presents ahead (above), so a host could submit K frames with target
+  times and then sleep: an RSVP stream, a fixed sequence. With the window
+  thread (`ysp/screen.h` 0.10.0) the window stays responsive while the
+  host sleeps, so the queued frames stay on independent flip; this would
+  also remove the host-caused misses of docs/av_probe.md (interpreter
+  pauses of 10 to 48 ms). To measure first: whether several queued
+  target times in a row land as exactly as one held frame (1800 of 1800
+  held 0 to 4 vblanks ahead); the cancel of queued presents on abort and
+  on the panic release; the texture count and memory for K frames (3
+  buffers today); how records and timeline events map to frames drawn
+  ahead. COMPOSITION only: DXGI_FLIP has no present time. Input cannot
+  change a frame that is already queued.
 
 ## 14. Coverage of jsPsych
 

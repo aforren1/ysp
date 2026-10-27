@@ -49,7 +49,9 @@ are planned as one module, `ysp-vis` (Python `ysp.screen`, `ysp.gfx` and
 It takes audio and the timeline from `ysp.audio` and `ysp.timeline`
 through their tables (Sharing one implementation across modules, below).
 Its host probe (frame loops in Python, MATLAB and Octave, DLL loading,
-idle windows) is [av_probe.md](av_probe.md).
+idle windows) is [av_probe.md](av_probe.md); the decisions and their
+reasons are in [rig_spec.md](rig_spec.md#host-language-bindings-python-matlab-octave),
+section 12.
 
 ### The input event
 
