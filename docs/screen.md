@@ -2831,6 +2831,295 @@ design decisions that touch the core.
   after the create. Evidence and the page's side are in
   [web.md](web.md#fullscreen).
 
+## The window thread (v0.10.0)
+
+A host that waits between trials leaves the window without a message
+pump: Python's `time.sleep()` and `input()`, Octave's `pause`, C's
+`Sleep()`. Windows marks such a window hung after 4.2 to 4.6 s and puts a
+"Ghost" window in front of it 50 ms later, and the first 2 to 20 frames
+after the wait go wrong (`docs/av_probe.md`). The window-thread probe
+(`docs/winthread_probe.md`, branch `probe-winthread`) gave the window, its
+messages and every SDL video call to a thread of the header's own, kept
+the D3D11 device, the swap path and ANGLE on the frame thread, and found
+no hung window, no ghost, and no cost in the frame loop. v0.10.0 lands it.
+The user decided the shape on 2026-10-26: a desc field with AUTO on,
+a public window call, and a panic that releases the display while the
+window thread answers.
+
+### What the window thread owns
+
+| On the window thread | On the frame thread | Any thread |
+|---|---|---|
+| `SDL_InitSubSystem(VIDEO)` and its quit, gamepads, the window, the mode switch, the icon, the raise, the cursor, text input, the device lists at open, gamepad hot-plug, `yscr_displays()` and `yscr_modes()` | the D3D11 device, DXGI_FLIP's swapchain or COMPOSITION's target on the window's HWND, ANGLE, `begin()`, `flip_at()`, settling, records, the grid | SDL's queue (`SDL_PeepEvents`, `SDL_PushEvent`), the abort watch (it runs on the thread that queues the event), the panic watchdog, the raw mouse reader, the idle-wake waiter, the trigger worker, SDL's raw keyboard thread |
+| the pump: `SDL_PumpEvents()` | `yscr_poll()` with `SDL_PeepEvents()`: no pump | the gamma ramp (GDI, by the display's name) |
+| the program's window calls (`yscr_window_call()`) | two window flags read each frame (below) | |
+
+The thread waits in `MsgWaitForMultipleObjectsEx` on its command event
+and on any message for its windows (`QS_ALLINPUT`), at most 100 ms (4 ms
+while a screen has gamepads, because SDL polls XInput in its pump), then
+runs a waiting command, a waiting release, and `SDL_PumpEvents()`. The
+100 ms wake is the heartbeat the panic reads. When the thread ends it
+calls `SDL_CleanupTLS()`, so a thread per session leaves no SDL memory.
+
+### Decisions
+
+Each item below was open after the probe (its section 5 and its open
+questions); the reason is the one that decided it.
+
+1. **`desc.window_thread`: AUTO (0), ON, OFF.** AUTO is ON for DXGI_FLIP
+   and COMPOSITION (user, 2026-10-26: the bindings need it, and C
+   programs route their few SDL calls). AUTO is OFF where the thread
+   cannot run or should not: the web and `YRT_NO_THREADS` (one thread), a
+   custom presenter (it may call SDL on the window from the frame
+   thread), and a program that started SDL's video on its own thread
+   before the first open (SDL made that thread its main thread, and
+   `SDL_IsMainThread()` would be false on ours). ON fails `open()` with a
+   message where it cannot run. OFF is v0.9.0's path, line for line: the
+   window code moved into two functions that both paths call.
+2. **One mode per process, while screens with a window are open.** SDL
+   has one main thread. An OFF window beside the window thread would be
+   pumped by no thread, and an ON window beside an OFF one would put SDL's
+   video calls on two threads. So `open()` refuses an ON or OFF that
+   differs from the open screens', and AUTO takes theirs, except that a
+   custom presenter's AUTO beside the window thread fails (AUTO would be
+   OFF for it; the message says to set ON and route its SDL calls).
+3. **`yscr_window_call(s, fn, ctx)` is public** (user, 2026-10-26). It is
+   the one door for SDL calls on `yscr_window()`, so the header does not
+   grow a wrapper per SDL call (title, cursor, grab, a console window,
+   Dear ImGui). Without a window thread it runs `fn` at once, so code
+   written for the thread runs on every backend and platform. A call
+   from inside `fn` runs at once (the window thread would wait on
+   itself). Any thread may call it; calls run one at a time under one
+   lock.
+4. **The time limit on a command.** A command the window thread has not
+   taken in 5 s is withdrawn before it runs, and the call fails
+   (`YSCR_ERR_TIMEOUT`). Why 5 s: Windows calls a window hung after 5 s
+   without a message read, so a window thread that takes no command in
+   that time is hung by the OS's own rule. Once taken:
+   - `open()`'s command and a window call run to their end. Both use the
+     caller's memory (the desc, the handle, `ctx`); returning while the
+     window thread still writes there would corrupt it. A driver call
+     that never returns hangs v0.9.0's `open()` the same way.
+   - `close()`'s command works on a copy of what it needs (the window,
+     the icons, the gamepads, the flags), held by the header. `close()`
+     waits at most 5 s more and then returns: the window stays until the
+     process ends, `yscr_error()` says "the window thread did not answer
+     in 5 s", and the thread is left behind. Why 5 s: the destroy of a
+     fullscreen window in a switched mode put the desktop mode back in 1.2
+     s (measured, v0.3.1). Close must not hang the host.
+   - After a thread is left behind, `open()` refuses a window: SDL's
+     video belongs to that thread, and no other thread may take it.
+5. **The display lists run on the window thread while it runs.**
+   `yscr_displays()`, `yscr_modes()` and `yscr_mode_multiple()` call
+   SDL's video functions; without a window thread they bring SDL's video
+   up for the call on the calling thread, as before. Measured with the
+   thread: the same displays and modes as before the open.
+6. **`begin()` no longer pumps; `yscr_poll()` takes events with
+   `SDL_PeepEvents()`**, which any thread may call. `SDL_PollEvent()`
+   pumps, and SDL 3.4.0 asserts in debug builds that the pump runs on
+   its main thread (`SDL_PumpEventsInternal`). Events come into SDL's
+   queue as the window thread reads messages, also while the host waits.
+7. **SDL's strings for the frame thread.** SDL keeps the string of a
+   text, IME, drop or clipboard event in the memory of the thread that
+   takes the event, and frees it at that thread's next pump
+   (`SDL_FreeTemporaryMemory()` in `SDL_PumpEventsInternal`, SDL 3.4.0
+   `src/events/SDL_events.c`). The frame thread never pumps, so nothing
+   freed them. Measured with `tests/adapt/screen_window_test.c --only
+   text` (500 characters typed with `SendInput` as UTF-16 into a window
+   with text input on, each polled; SDL's allocations counted through
+   `SDL_SetMemoryFunctions`): without a fix 2.00 SDL allocations stayed
+   per character (the string and its list entry), with the fix 0.01.
+   The fix: `yscr_poll()` notes when it returned such an event, and the
+   next `begin()` or `close()` calls `SDL_CleanupTLS()` on that thread.
+   It also frees the strings SDL returned before on that thread
+   (`SDL_GetKeyName()` and the like); the manual says to copy them. A
+   rewrite of the event's pointer in an event watch, to a copy the
+   header holds, was considered and not taken: it relies on SDL linking
+   the memory by pointer value, and a full copy store needs a size limit
+   that a long drop of files can exceed.
+8. **One window thread per process, with a user count.** The first
+   `open()` that needs it starts it, the last `close()` stops it; each
+   screen's window is on it. A per-screen thread would put SDL's video
+   calls on several threads.
+9. **Two flags stay on the frame thread.** `flip_at()` reads
+   `SDL_TextInputActive()` and the raw mouse guard reads
+   `SDL_GetWindowRelativeMouseMode()` on every frame. Both are field
+   reads after SDL's object check in SDL 3.4.0 (`SDL_video.c`); a window
+   call cost 6.5 and 11.4 us at the median and 27 and 44 us at p99 in two
+   runs of 1000 (`screen_window_test --only call`, a 480 x 300 window),
+   too much for each frame. The HWND and the window's pixel size (read
+   at open with `GetClientRect` inside SDL) also stay. Everything that
+   changes a window goes to the window thread.
+
+### The panic's release
+
+Before v0.10.0, three presses with no abort reported for the grace time
+ended the process (exit code 99). With the window thread a host that
+only waits never hangs its window, so the rule would end a MATLAB
+session in `pause` (the av probe saw it). Decided (user, 2026-10-26):
+keep the trigger, change what it does by who answers.
+
+- **The window thread answers** (its heartbeat is newer than 1 s): the
+  watchdog asks it for a release and waits up to 1 s. The window thread
+  minimizes every window it owns and shows the cursor; the watchdog puts
+  back the gamma ramps, writes `YSCR_EV_PANIC` with `u.u32[1]` 1 and adds
+  an abort with the new reason `YSCR_ABORT_PANIC` (0x20). The next
+  `begin()` reports it with the presses (0x21), and every `begin()` after
+  that returns `YSCR_QUIT` with `YSCR_ABORT_PANIC`. The program may only
+  close; `open()` refuses a window until every screen has closed.
+  `panic_fn` does not run: the process lives and saves after its next
+  `begin()`.
+- **The window thread does not answer** (no heartbeat for 1 s, or the
+  release not done in 1 s): the process ends as before.
+
+No call gets a released session back (user, 2026-10-26): a released
+window would have to be restored, made fullscreen again and settled, and
+a program that wants that can close and open.
+
+Measured (`examples/screen/abort.c`, keys by `SendInput`, a 320 x 200
+window with the watchdog armed through its test seam, AC): with the
+window thread ON and the host in `Sleep(4000)`, the release ran 7.7 ms
+after the panic began, the window was minimized, the child lived, its
+next `begin()` returned 0x21 with 3 presses and the following ones 0x20,
+and it exited 0 after close. With the window thread blocked by an 8 s
+window call, the third press ended the child (exit code 99) after 1.1 s:
+the heartbeat was 0.9 s old at the panic, so the watchdog asked for a
+release, waited the 1 s and then ended the process. With the thread OFF,
+"hang" and "ghost" ended the child 51 to 52 ms after the third press, as
+in v0.3.1. `tests/adapt/screen_window_test.c` calls the panic as the
+watchdog does: release 9.9 ms, and a child whose window thread is blocked
+ended with exit code 99 after 2.4 s.
+
+### Dear ImGui
+
+Dear ImGui's SDL3 backend calls SDL's window, mouse, cursor, gamepad,
+text input and clipboard functions from the thread that runs it, and
+ImGui calls the backend's platform callbacks (`Platform_SetImeDataFn`,
+the clipboard, `Platform_OpenInShellFn`) from `ImGui::EndFrame()` and its
+text widgets. With the window thread all of them must run there. The
+pattern, in C through cimgui:
+
+```c
+static yscr_screen scr;
+static SDL_Event im_ev[256];
+static int im_n;
+
+/* the frame's events and NewFrame, in one call per frame */
+static void im_frame(void* u) {
+    (void)u;
+    for (int i = 0; i < im_n; i++) ImGui_ImplSDL3_ProcessEvent(&im_ev[i]);
+    im_n = 0;
+    ImGui_ImplSDL3_NewFrame();
+}
+
+/* each platform callback through the window call */
+static void (*ime_fn)(ImGuiContext*, ImGuiViewport*, ImGuiPlatformImeData*);
+typedef struct { ImGuiContext* c; ImGuiViewport* v; ImGuiPlatformImeData* d; } ime_arg;
+static void ime_cb(void* p) { ime_arg* a = p; ime_fn(a->c, a->v, a->d); }
+static void ime_routed(ImGuiContext* c, ImGuiViewport* v, ImGuiPlatformImeData* d) {
+    ime_arg a = { c, v, d };
+    yscr_window_call(&scr, ime_cb, &a);
+}
+/* the same for Platform_GetClipboardTextFn, _SetClipboardTextFn, _OpenInShellFn */
+
+/* at setup, after ImGui_ImplSDL3_InitForOther() ran in a window call: */
+ImGuiPlatformIO* pio = igGetPlatformIO_Nil();
+ime_fn = pio->Platform_SetImeDataFn;
+pio->Platform_SetImeDataFn = ime_routed;
+
+/* each frame */
+while (yscr_poll(&scr, &ev, NULL)) if (im_n < 256) im_ev[im_n++] = ev;
+ImGui_ImplOpenGL3_NewFrame();          /* GL: the frame thread */
+yscr_window_call(&scr, im_frame, NULL);
+igNewFrame();
+/* ... the panels ... */
+igRender();                            /* may call ime_routed */
+```
+
+`ImGui_ImplSDL3_InitForOther()` and `ImGui_ImplSDL3_Shutdown()` go
+through the window call too. An operator console in a second SDL window
+(docs/imgui_probe.md, configuration a) is made and destroyed in a window
+call, so the window thread reads its messages; its D3D11 device,
+swapchain and ANGLE context stay on the frame thread. The GL renderer
+(`ImGui_ImplOpenGL3_*`) stays on the frame thread with the context.
+
+The ImGui probe of docs/imgui_probe.md (`C:\tmp\psy-work\imgui`, not in
+the repository) was ported to the ysp names and routed this way
+(scratch copy of the window-thread worker, `imgui-wt`). On this laptop,
+COMPOSITION, a 800 x 600 timed window, AC, 2026-10-26 (through the
+build guard, not the timing guard: the costs are a first look):
+
+| Mode | Window thread | Frames | Long intervals | ImGui frame on the frame thread, mean / p99 us | Window calls |
+|---|---|---|---|---|---|
+| console, 12 s | ON | 839 | 0 of 718 | 225 / 582 | 842 |
+| console, 12 s | OFF | 839 | 0 of 718 | 141 / 324 | 844 (inline) |
+| overlay, 8 s | ON | 599 | 0 of 478 | 237 / 564 | 604 |
+| overlay, 8 s | OFF | 599 | 0 of 478 | 147 / 290 | 604 (inline) |
+
+The ImGui frame (events, NewFrame, the panels, Render) took 80 to 90 us
+more with the window thread: two window calls a frame (`im_frame` and
+the IME callback in `Render()`), each a wake of the window thread. One
+call a frame, with the IME data applied at the next frame's call, would
+save one. The probe's input test (console mode, F24 by `SendInput`)
+gave the same routing as on v0.3.2: with the stock IME callback, an
+active ImGui text field turned on text input on the timed window once it
+had the focus (keys off the raw path); with the probe's routed IME
+callback it stayed off. Both with the window thread ON and OFF.
+
+### Tests
+
+- `tests/adapt/screen_test.c`, `test_window_thread()`, without SDL: the
+  mode rule in every case (AUTO on, off for each reason, AUTO following
+  the open screens, ON and OFF refused), `desc.window_thread`'s range,
+  the window call without a thread (inline; a NULL `fn` fails with a
+  message), and a released screen: the release's abort once (0x21), then
+  0x20 from every `begin()`, a group with a released member begins no
+  member, and a screen the thread does not own sees the abort once.
+- `tests/adapt/screen_window_test.c` (new; Windows, a display; CMake
+  builds `test_screen_window` and does not run it, because CI has no
+  display) runs the thread on real windows: `idle` (5 s of `Sleep()`
+  with no pump: not hung, no ghost, AUTO's describe token), `call` (a
+  title through the window call, a nested call, 600 calls from 3 threads
+  each run once, the round trip, the thread gone after close),
+  `displays`, `mixed` (one mode per process), `text` (above), `release`
+  (the panic called as the watchdog calls it while the host sleeps),
+  `kill` (a child with a blocked window thread: exit code 99), `two`
+  (two screens, a group, one closed first), `cycles` (10 opens and
+  closes OFF, then ON: handles, threads, SDL allocations), `fullscreen`
+  (fullscreen off and on again through window calls while frames run),
+  `gamepads` (beside a screen without), `mice` (raw mice: 20 moves by
+  `SendInput`, 20 events), `triggers` (60 of 60 fired), and with
+  `--mode` a display-mode switch at open (1920 x 1200 to 1680 x 1050 and
+  back after close). 43 of 43 checks passed on 2026-10-26, `--mode`
+  included.
+- `examples/screen/abort.c` sends the keys: `live` (AUTO, so the window
+  thread), `hang`, `ghost` and `held` with the thread OFF (the process
+  ends, as in v0.3.1), `release` and `kill` with it ON, and with
+  `--mode-test` the mode case OFF and ON.
+- Mutants `wt-01` to `wt-09` (the core test) and `wt-20` to `wt-29`
+  (`tests/adapt/screen_window_test.c`, one case each through
+  `YSCR_WINDOW_TEST_ONLY`): 19 of 19 killed. The whole list of 160
+  mutants ran again (`-j 4`): 159 killed and 1 timeout (st-11), all as
+  expected.
+
+### Findings that are not the window thread's
+
+- **5 handles per open and close.** `screen_window_test --only cycles`:
+  from the second cycle to the tenth the process gained 40 handles, 5 a
+  cycle, with the window thread OFF and the same with it ON
+  (COMPOSITION, 480 x 300 window, settling off). No thread and no SDL
+  allocation was left. The handles are not the window thread's; whose
+  they are was not traced (ANGLE, D3D11 or DComp are candidates).
+- **SDL's display ids change with each start of SDL's video.** A
+  `yscr_displays()` before the first open returned id 1 for the panel;
+  with a screen open, id 3. SDL numbers displays anew at each video
+  init, and `yscr_displays()` without a screen starts and stops video
+  for the call. So a `desc.display` taken from `yscr_displays()` before
+  the first open does not name a display at that open (v0.9.0 too; one
+  display here, so `desc.display` 0 was used throughout). With the
+  window thread running, the ids stay valid between opens. Not fixed:
+  a fix would match displays by name or bounds; to be decided.
+
 ## Not measured
 
 - Light. No photodiode was attached. `tests/loopback/screen_loopback.c`

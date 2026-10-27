@@ -5,7 +5,7 @@
 # v0.3.5's 5 (raw mice; the 2 on its queue went with the queue),
 # v0.4.0's 6 (the input bridge), v0.4.1's 15 (the key filter, kd-) and
 # v0.4.2's 3 (kd-16 to kd-18, the key-up fix) and 13 (the sync guard,
-# sg-), v0.4.3's 9 (eg-, held frames), v0.4.4's 20 (dp-, the depth policy, the guessed grid, early flips), v0.5.0's 20 (st-, settling at open), v0.5.1's 7 (fg-, the foreground and the slot held after settling), v0.5.2's 7 (ch-, the context hook; ch-06 runs the gfx test), v0.6.0's 2 (cv-, the messages). The 29 earlier mutants (docs/screen.md,
+# sg-), v0.4.3's 9 (eg-, held frames), v0.4.4's 20 (dp-, the depth policy, the guessed grid, early flips), v0.5.0's 20 (st-, settling at open), v0.5.1's 7 (fg-, the foreground and the slot held after settling), v0.5.2's 7 (ch-, the context hook; ch-06 runs the gfx test), v0.6.0's 2 (cv-, the messages), v0.10.0's 19 (wt-, the window thread; wt-20 on run tests/adapt/screen_window_test.c on real windows). The 29 earlier mutants (docs/screen.md,
 # "Mutations") were run from scripts that were not kept.
 header = "ysp/screen.h"
 
@@ -23,6 +23,18 @@ compiler = "msvc"
 flags = ["/O1", "/W3", "/D_CRT_SECURE_NO_WARNINGS"]
 timeout = 600
 env_default = { YSCR_ANGLE_DIR = "C:/Program Files/Docker/Docker/frontend" }
+
+# The window thread on real windows (wt-20 on): this machine's SDL3 VC
+# package, ANGLE and display; Windows only. PATH holds SDL3.dll's
+# directory and the system's, nothing else.
+[test.window]
+source = "tests/adapt/screen_window_test.c"
+compiler = "msvc"
+flags = ["/O1", "/W3", "/D_CRT_SECURE_NO_WARNINGS", "/IC:/sdk/SDL3-3.4.0/include"]
+libs = ["C:/sdk/SDL3-3.4.0/lib/x64/SDL3.lib", "user32.lib"]
+timeout = 300
+env_default = { YSCR_ANGLE_DIR = "C:/Program Files/Docker/Docker/frontend" }
+env = { PATH = "C:/sdk/SDL3-3.4.0/lib/x64;C:/Windows/System32;C:/Windows" }
 
 [[mutant]]
 id = "abort-00"
@@ -55,7 +67,7 @@ id = "abort-03"
 name = "group begins member 0 first"
 test = "screen"
 why = "A group's begin must report an abort pending on any member, not only the first."
-find = '    for (i = 0; i < n && !yscr__abort_pending(s[i]); i++) { }'
+find = '    for (i = 0; i < n && !yscr__abort_pending(s[i]) && !yscr__released_on(s[i]); i++) { }'
 replace = '    i = n;'
 
 [[mutant]]
@@ -994,8 +1006,8 @@ id = "fg-03"
 name = "no warning when refused"
 test = "screen"
 why = "A refused foreground is in the describe line, which goes into every data file."
-find = '''                    s->fg == YSCR_FG_REFUSED ? " WARNING=not-foreground" : "");'''
-replace = '''                    "");'''
+find = '''                    s->fg == YSCR_FG_REFUSED ? " WARNING=not-foreground" : "",'''
+replace = '''                    "",'''
 
 [[mutant]]
 id = "fg-04"
@@ -1210,3 +1222,183 @@ test = "tables"
 why = "v0.9.0: the rule across every table: an enum's default is one of its values."
 find = '''        { "settle",          "enum", 0, 3, 0, "",'''
 replace = '''        { "settle",          "enum", 0, 3, 0.5, "",'''
+
+# --- v0.10.0: the window thread (wt-). wt-01 to wt-09 run the core test;
+# wt-20 on run tests/adapt/screen_window_test.c on real windows (MSVC, the
+# SDL3 VC package, ANGLE and a display: this machine's paths), one case
+# each through YSCR_WINDOW_TEST_ONLY.
+
+[[mutant]]
+id = "wt-01"
+name = "AUTO on for any backend"
+test = "screen"
+why = "v0.10.0: AUTO is off for a custom presenter, which may call SDL on the window from the frame thread."
+find = '''    else if (!native) { natural = YSCR_WINDOW_THREAD_OFF; nwhy = YSCR__WT_WHY_BACKEND; }
+'''
+replace = ''
+
+[[mutant]]
+id = "wt-02"
+name = "AUTO ignores another SDL main thread"
+test = "screen"
+why = "v0.10.0: when the program's own thread started SDL's video, SDL made it the main thread; a window thread would call SDL off it."
+find = '''    else if (sdl_elsewhere) { natural = YSCR_WINDOW_THREAD_OFF; nwhy = YSCR__WT_WHY_SDL; }
+'''
+replace = ''
+
+[[mutant]]
+id = "wt-03"
+name = "ON without threads"
+test = "screen"
+why = "v0.10.0: ON on the web or with YRT_NO_THREADS must fail open(), not run the window on the frame thread silently."
+find = '''        if (!available) *err = "desc.window_thread ON needs'''
+replace = '''        if (0) *err = "desc.window_thread ON needs'''
+
+[[mutant]]
+id = "wt-04"
+name = "OFF beside ON"
+test = "screen"
+why = "v0.10.0: one mode per process: an OFF window beside the window thread would be pumped by no thread."
+find = '''    if (want == YSCR_WINDOW_THREAD_OFF) {
+        if (process == YSCR_WINDOW_THREAD_ON) *err'''
+replace = '''    if (want == YSCR_WINDOW_THREAD_OFF) {
+        if (0) *err'''
+
+[[mutant]]
+id = "wt-05"
+name = "a released screen begins again"
+test = "screen"
+why = "v0.10.0: after the panic's release the program may only close: every begin() returns YSCR_QUIT with YSCR_ABORT_PANIC."
+find = '''    if (yscr__released_on(s)) {   /* only close() is left */'''
+replace = '''    if (0) {   /* only close() is left */'''
+
+[[mutant]]
+id = "wt-06"
+name = "a group begins on a released screen"
+test = "screen"
+why = "v0.10.0: a group with a released member reports the panic and begins no member."
+find = '''    for (i = 0; i < n && !yscr__abort_pending(s[i]) && !yscr__released_on(s[i]); i++) { }'''
+replace = '''    for (i = 0; i < n && !yscr__abort_pending(s[i]); i++) { }'''
+
+[[mutant]]
+id = "wt-07"
+name = "every screen released"
+test = "screen"
+why = "v0.10.0: the release minimizes the window thread's windows only; a screen it does not own sees the panic's abort once."
+find = '''static int yscr__released_on(const yscr_screen* s) { return s->wt && yscr__a_load(&yscr__released); }'''
+replace = '''static int yscr__released_on(const yscr_screen* s) { (void)s; return yscr__a_load(&yscr__released); }'''
+
+[[mutant]]
+id = "wt-08"
+name = "desc.window_thread not checked"
+test = "screen"
+why = "v0.10.0: a value outside AUTO, ON and OFF fails open() with a message."
+find = '''    if (desc->window_thread < YSCR_WINDOW_THREAD_AUTO || desc->window_thread > YSCR_WINDOW_THREAD_OFF) {'''
+replace = '''    if (0) {'''
+
+[[mutant]]
+id = "wt-09"
+name = "window call without a function"
+test = "screen"
+why = "v0.10.0: a NULL fn is YSCR_ERR_ARG with a message, not a call through NULL."
+find = '''    if (!fn) rc = YSCR_ERR_ARG;
+    else if (s)'''
+replace = '''    if (0) rc = YSCR_ERR_ARG;
+    else if (s)'''
+
+[[mutant]]
+id = "wt-20"
+name = "the window thread never pumps"
+test = "window"
+why = "v0.10.0: the thread's pump is the point: without it the window is marked hung while the host sleeps."
+find = '''        if (yscr__wt.video > 0) SDL_PumpEvents();'''
+replace = ''
+env = { YSCR_WINDOW_TEST_ONLY = "idle" }
+
+[[mutant]]
+id = "wt-21"
+name = "the thread's video count not kept"
+test = "window"
+why = "v0.10.0: the thread pumps while it holds SDL's video for a screen; a count never raised leaves the window unpumped."
+find = '''        if (s->sdl_video) InterlockedIncrement(&yscr__wt.video);'''
+replace = ''
+env = { YSCR_WINDOW_TEST_ONLY = "idle" }
+
+[[mutant]]
+id = "wt-22"
+name = "the release never runs"
+test = "window"
+why = "v0.10.0: while the window thread answers, the panic releases the display and the process lives."
+find = '''        if (req != yscr__wt.release_done) yscr__wt_do_release(req);'''
+replace = ''
+env = { YSCR_WINDOW_TEST_ONLY = "release" }
+
+[[mutant]]
+id = "wt-23"
+name = "the release leaves the window"
+test = "window"
+why = "v0.10.0: the release gives the operator the desktop: the window is minimized."
+find = '''    for (i = 0; i < YSCR__SLOTS; i++) if (yscr__wt.wins[i]) SDL_MinimizeWindow(yscr__wt.wins[i]);'''
+replace = '''    (void)i;'''
+env = { YSCR_WINDOW_TEST_ONLY = "release" }
+
+[[mutant]]
+id = "wt-24"
+name = "a live thread counted as hung"
+test = "window"
+why = "v0.10.0: a heartbeat within 1 s means the thread answers: release, not end the process."
+find = '''    return yscr__wt.thread && !yscr__wt.stuck &&
+           yscr__now() - InterlockedCompareExchange64(&yscr__wt.beat, 0, 0) < YSCR__WT_ALIVE_NS;'''
+replace = '''    return 0;'''
+env = { YSCR_WINDOW_TEST_ONLY = "release" }
+
+[[mutant]]
+id = "wt-25"
+name = "text strings kept on the frame thread"
+test = "window"
+why = "v0.10.0: SDL frees a polled event's string only in a pump of the thread that took it; begin() frees them, or each typed character leaves 2 allocations (measured)."
+find = '''    if (yscr__tls_dirty && YSCR__TLS_CLEANUP) {
+        yscr__tls_dirty = 0;
+        SDL_CleanupTLS();
+    }
+    /* The window thread pumps'''
+replace = '''    /* The window thread pumps'''
+env = { YSCR_WINDOW_TEST_ONLY = "text" }
+
+[[mutant]]
+id = "wt-26"
+name = "the thread outlives the last screen"
+test = "window"
+why = "v0.10.0: the last close stops the window thread and quits SDL's video on it."
+find = '''    if (yscr__wt.users <= 0 || --yscr__wt.users > 0) return;
+    if (yscr__wt.stuck) return;'''
+replace = '''    if (yscr__wt.users <= 0 || --yscr__wt.users >= 0) return;
+    if (yscr__wt.stuck) return;'''
+env = { YSCR_WINDOW_TEST_ONLY = "call" }
+
+[[mutant]]
+id = "wt-27"
+name = "AUTO describes itself as named"
+test = "window"
+why = "v0.10.0: the describe line says on(auto) when AUTO chose the window thread, so a log shows the default ran."
+find = '''return s->wt_why == YSCR__WT_WHY_NAMED ? "on" : "on(auto)";'''
+replace = '''return "on";'''
+env = { YSCR_WINDOW_TEST_ONLY = "idle" }
+
+[[mutant]]
+id = "wt-28"
+name = "the window thread's windows forgotten"
+test = "window"
+why = "v0.10.0: the release minimizes the windows the thread listed at open."
+find = '''            if (!yscr__wt.wins[i]) { yscr__wt.wins[i] = s->window; break; }'''
+replace = '''            if (0) { yscr__wt.wins[i] = s->window; break; }'''
+env = { YSCR_WINDOW_TEST_ONLY = "release" }
+
+[[mutant]]
+id = "wt-29"
+name = "close leaves gamepads to SDL"
+test = "window"
+why = "v0.10.0: the thread wakes every 4 ms while a screen has gamepads, and returns to 100 ms at close."
+find = '''        if (c->gamepad) InterlockedDecrement(&yscr__wt.pads);'''
+replace = ''
+env = { YSCR_WINDOW_TEST_ONLY = "gamepads" }

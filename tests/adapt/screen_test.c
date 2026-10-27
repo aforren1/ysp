@@ -4275,6 +4275,128 @@ static void test_web_rules(void) {
     CHECK(!yscr__web_steady(&w));
 }
 
+/* v0.10.0 (WINDOW THREAD): the mode rule, desc.window_thread's check, the
+ * window call without a window thread, and a released screen. The thread
+ * itself needs SDL and a display: examples/screen/window_thread.c and
+ * examples/screen/abort.c run it. */
+static int g_wcalls;
+static void wcall(void* ctx) { g_wcalls += *(int*)ctx; }
+
+static void test_window_thread(void) {
+    static script c, c2;
+    static yscr_screen s, s2;
+    yscr_screen* sp[2];
+    static yscr_frame f, fg[2];
+    yscr_desc d;
+    const char* e;
+    int32_t why;
+    int one = 1;
+    char line[1024];
+    const int32_t A = YSCR_WINDOW_THREAD_AUTO, ON = YSCR_WINDOW_THREAD_ON, OFF = YSCR_WINDOW_THREAD_OFF;
+
+    /* AUTO: on for the native backends where the build has the thread */
+    CHECK_I(yscr__wt_decide(A, 1, 1, 0, 0, &why, &e), ON);
+    CHECK(e == NULL);
+    CHECK_I(why, YSCR__WT_WHY_NONE);
+    CHECK_I(yscr__wt_decide(A, 0, 1, 0, 0, &why, &e), OFF);   /* CUSTOM */
+    CHECK_I(why, YSCR__WT_WHY_BACKEND);
+    CHECK_I(yscr__wt_decide(A, 1, 0, 0, 0, &why, &e), OFF);   /* the web, YRT_NO_THREADS */
+    CHECK_I(why, YSCR__WT_WHY_PLATFORM);
+    CHECK_I(yscr__wt_decide(A, 1, 1, 0, 1, &why, &e), OFF);   /* SDL video is another thread's */
+    CHECK_I(why, YSCR__WT_WHY_SDL);
+    CHECK(e == NULL);
+    /* AUTO follows the open screens; it cannot put a CUSTOM window on the thread */
+    CHECK_I(yscr__wt_decide(A, 1, 1, OFF, 0, &why, &e), OFF);
+    CHECK_I(why, YSCR__WT_WHY_PROCESS);
+    CHECK_I(yscr__wt_decide(A, 1, 1, ON, 0, &why, &e), ON);
+    CHECK_I(why, YSCR__WT_WHY_NONE);
+    CHECK_I(yscr__wt_decide(A, 0, 1, ON, 0, &why, &e), 0);
+    CHECK(e && strstr(e, "yscr_window_call") != NULL);
+    CHECK_I(yscr__wt_decide(A, 0, 1, OFF, 0, &why, &e), OFF);
+    CHECK(e == NULL);
+    /* ON and OFF: as named, or open() fails */
+    CHECK_I(yscr__wt_decide(ON, 0, 1, 0, 0, &why, &e), ON);   /* CUSTOM may ask */
+    CHECK_I(why, YSCR__WT_WHY_NAMED);
+    CHECK_I(yscr__wt_decide(ON, 1, 0, 0, 0, &why, &e), 0);
+    CHECK(e && strstr(e, "YRT_NO_THREADS") != NULL);
+    CHECK_I(yscr__wt_decide(ON, 1, 1, OFF, 0, &why, &e), 0);
+    CHECK(e && strstr(e, "one mode per process") != NULL);
+    CHECK_I(yscr__wt_decide(ON, 1, 1, 0, 1, &why, &e), 0);
+    CHECK(e && strstr(e, "main thread") != NULL);
+    CHECK_I(yscr__wt_decide(ON, 1, 1, ON, 0, &why, &e), ON);
+    CHECK_I(yscr__wt_decide(OFF, 1, 1, 0, 1, &why, &e), OFF);
+    CHECK_I(why, YSCR__WT_WHY_NAMED);
+    CHECK_I(yscr__wt_decide(OFF, 1, 1, ON, 0, &why, &e), 0);
+    CHECK(e && strstr(e, "one mode per process") != NULL);
+
+    /* desc.window_thread is checked on every backend */
+    memset(&d, 0, sizeof d);
+    d.backend = YSCR_BACKEND_SIM;
+    d.window_thread = 3;
+    memset(&s, 0, sizeof s);
+    CHECK(!yscr_open(&s, &d));
+    CHECK(strstr(yscr_error(&s), "desc.window_thread") != NULL);
+    d.window_thread = -1;
+    CHECK(!yscr_open(&s, &d));
+    d.window_thread = ON;   /* no window on SIM: nothing to own */
+    CHECK(yscr_open(&s, &d));
+    yscr_describe(&s, line, sizeof line);
+    CHECK(strstr(line, " window_thread=n/a ") != NULL);
+    /* the window call runs here without a window thread */
+    g_wcalls = 0;
+    CHECK_I(yscr_window_call(&s, wcall, &one), YSCR_OK);
+    CHECK_I(yscr_window_call(NULL, wcall, &one), YSCR_OK);
+    CHECK_I(g_wcalls, 2);
+    CHECK_I(yscr_window_call(&s, NULL, NULL), YSCR_ERR_ARG);
+    CHECK(strcmp(yscr_error(&s), "ysp_screen: window_call: bad argument") == 0);
+    yscr_close(&s);
+
+    /* A released screen (PANIC): the abort that the release pushes, then
+     * YSCR_ABORT_PANIC from every begin() until close. A screen whose window
+     * the thread does not own reports the abort once, as any abort. */
+    memset(&c, 0, sizeof c);
+    c.depth = 1;
+    memset(&c2, 0, sizeof c2);
+    c2.depth = 1;
+    ring_reset();
+    CHECK(open_scripted(&s, &c, 0, 1));
+    CHECK(open_scripted(&s2, &c2, 0, 2));
+    CHECK_I(one_frame(&s, &f), YSCR_OK);
+    CHECK_I(one_frame(&s2, &f), YSCR_OK);
+    s.wt = 1;   /* as if the window thread owned its window */
+    vlose(400000000);
+    yscr__abort_key(YSCR_KEY_ESCAPE, YSCR_MOD_SHIFT, vnow(), YSCR__AB_HOOK);
+    yscr__abort_push(YSCR_ABORT_PANIC, YSCR__AB_HOOK, 0, 0, vnow());
+    yscr__a_store(&yscr__released, 1);
+    CHECK_I(yscr_begin(&s, &f), YSCR_QUIT);
+    CHECK_I(f.abort, YSCR_ABORT_KEY | YSCR_ABORT_PANIC);
+    CHECK_I(f.abort_presses, 1);
+    CHECK_I(yscr_begin(&s, &f), YSCR_QUIT);
+    CHECK_I(f.abort, YSCR_ABORT_PANIC);
+    CHECK_I(f.abort_presses, 0);
+    CHECK_I(f.index, 0);
+    CHECK_I(yscr_begin(&s, &f), YSCR_QUIT);
+    CHECK_I(f.abort, YSCR_ABORT_PANIC);
+    CHECK_I(yscr_flip(&s), YSCR_ERR_ORDER);
+    yscr_describe(&s, line, sizeof line);
+    CHECK(strstr(line, "WARNING=panic-released") != NULL);
+    CHECK_I(yscr_begin(&s2, &f), YSCR_QUIT);                  /* once */
+    CHECK_I(f.abort, YSCR_ABORT_KEY | YSCR_ABORT_PANIC);
+    CHECK_I(one_frame(&s2, &f), YSCR_OK);
+    yscr_describe(&s2, line, sizeof line);
+    CHECK(strstr(line, "panic-released") == NULL);
+    sp[0] = &s2; sp[1] = &s;   /* the released one last: no member may begin first */
+    CHECK_I(yscr_begin_group(sp, 2, fg), YSCR_QUIT);
+    CHECK_I(fg[0].abort, 0);
+    CHECK_I(fg[1].abort, YSCR_ABORT_PANIC);
+    CHECK(!s.begun && !s2.begun);
+    s.wt = 0;
+    yscr__a_store(&yscr__released, 0);
+    CHECK_I(one_frame(&s, &f), YSCR_OK);
+    yscr_close(&s);
+    yscr_close(&s2);
+}
+
 int main(void) {
     yrt_thread_elevate(NULL);
     test_web_rules();
@@ -4359,6 +4481,7 @@ int main(void) {
     test_foreground();
     test_stale_statistics();
     test_context_hook();
+    test_window_thread();
     /* no case but the forced-off ones fired the guard */
     CHECK_I(g_unsynced_fires, g_unsynced_want);
     if (g_failures) {

@@ -84,6 +84,13 @@ static const yrsp_choice moved[] = { { .name = "moved", .kind = YRSP_KIND_MOUSE,
                                        .control = YRSP_AXIS_POSITION, .level = ONSET_PX } };
 
 static yscr_screen scr;
+/* SDL calls on the window go through yscr_window_call(): with the window
+ * thread (ysp/screen.h, WINDOW THREAD) another thread owns the window. */
+static void grab_on_window(void* unused) {
+    (void)unused;
+    SDL_HideCursor();
+    SDL_SetWindowMouseGrab(yscr_window(&scr), true);
+}
 static ygfx_gfx gfx;
 static ytl_timeline tl;
 static ytl_event storage[64];
@@ -268,8 +275,7 @@ int main(int argc, char** argv) {
     if (raw && !sim) {
         /* the hidden system cursor still moves, with acceleration, and a
          * click goes to whatever window is under it: keep it in ours */
-        SDL_HideCursor();
-        SDL_SetWindowMouseGrab(yscr_window(&scr), true);
+        yscr_window_call(&scr, grab_on_window, NULL);
     }
 
     memset(&cd, 0, sizeof cd);
