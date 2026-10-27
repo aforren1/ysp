@@ -2993,9 +2993,10 @@ ended with exit code 99 after 2.4 s.
 
 ### Measured on v0.10.0: the window thread against v0.9.0's path
 
-The probe's harness (`tests/probe/winthread/` on branch
-`probe-winthread`: `probe_c`, the abi3 module for CPython 3.12.11, the
-MEX file) built against this header in place of the probe's copy, with
+The harness is [tests/probe/screen_winthread/](../tests/probe/screen_winthread/)
+(its README says how to build, run and make these tables): the
+window-thread probe's `probe_c`, abi3 module for CPython 3.12.11 and MEX
+file, built against this header in place of the probe's copy, with
 `desc.window_thread` from `YSCR_WINDOW_THREAD` in the environment, so
 each comparison is one binary per host; static SDL3 3.4.0 (MSVC 19.51
 `/MD` for C, Python and MATLAB; Octave 10.1's MinGW gcc 14.2 for
@@ -3250,8 +3251,9 @@ onsets of the flagged records are up to 1 ms late against the OS's times.
 
 ### The cause
 
-`gapdiag.c` (scratch of the window-thread worker, not in the repository)
-wraps a screen's presenter, so each OS vblank time is logged with the
+`gapdiag.c` ([tests/probe/screen_gap/](../tests/probe/screen_gap/); its
+README says how to build and run it and make these tables) wraps a
+screen's presenter, so each OS vblank time is logged with the
 grid's state before the core used it. It runs frames for a time, sleeps
 the gap with no call, and runs 120 frames. COMPOSITION, fullscreen,
 window thread ON, the laptop of this note, AC, 2026-10-26 23:2x to
@@ -3435,6 +3437,20 @@ blocked window thread) still ended the process, 1.1 s after the third
 press: the blocked thread never began the release.
 
 ## Not measured
+
+Open findings (v0.10.0, `tests/adapt/screen_window_test.c`; not fixed):
+
+- **5 handles leak per open and close**, with the window thread OFF and
+  ON alike: from the second to the tenth cycle the process gained 40 and
+  41 handles (COMPOSITION, a 480 x 300 window, settling off). Whose they
+  are (ANGLE, D3D11, DComp) was not traced.
+- **SDL's display ids change at each start of SDL's video.** A
+  `desc.display` taken from `yscr_displays()` before the first open does
+  not name the display at that open, because `yscr_displays()` without a
+  screen starts and stops SDL's video for the call and SDL numbers the
+  displays anew (id 1, then 3; v0.9.0 too). With a screen open the ids
+  stay valid. A fix would match displays by name or bounds.
+
 
 - The window thread (v0.10.0) with two displays, a display that turns
   off while a screen is open, MATLAB's desktop (only `-batch` ran), a MEX
