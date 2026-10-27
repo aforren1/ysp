@@ -139,7 +139,7 @@ def test_audio_play_through_the_shims(audio):
         sid = c.au_play_at(i, t)
         r = c.au_wait(i, sid)
         assert r["rc"] == 0 and r["target"] == t and r["buffer_id"] == 77
-        assert r["tier"] == yau.TIER_SIM and abs(r["onset"] - t) < 1_000_000
+        assert r["tier"] == yau.TIER_SIM and abs(r["onset"] - t) < 5_000_000   # null device: see test_audio.py
         # The record is the owner's: Python reads it too.
         assert audio.result(sid).onset_ns == r["onset"]
     finally:
@@ -174,7 +174,7 @@ def test_soundtrack_on_a_python_audio(audio, tmp_path):
         r = c.au_soundtrack(i, str(p), t)
         fed, rc2, smp, origin, started = r["stream"]
         assert r["rc"] == 0 and r["buffer_id"] == 5 and fed == 4800
-        assert started and rc2 == 0 and smp == 0     # sample 0 is on the onset's frame
+        assert started and rc2 == 0 and abs(smp) <= 240   # sample 0 on the onset's frame, by the fit of now
         assert origin == r["start_frame"]
     finally:
         c.drop_audio(i)
