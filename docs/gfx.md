@@ -4096,3 +4096,19 @@ the 511-byte file and gave YGFX_ERR_FORMAT. Then the test removes the file
 and the folders. 2 of 2 new mutants killed on MSVC (`tests/mutate/gfx.toml`,
 tp-). CI's new `gcc-O1` entry (`linux-extra`) builds the tree at -O1, where
 the warning showed.
+
+## Bindings
+
+`ysp/gfx.h` is bound in `ysp-vis` with `ysp/screen.h` and `ysp/video.h`
+(Python `ysp.gfx`, MEX `ysp_gfx`; [bindings.md](bindings.md#display-stimuli-movies-ysp-vis)).
+Phase A (2026-10-27) binds what a frame loop needs to show something: a
+gfx on a screen with a background, `begin`, filled rectangles (`rect`:
+the center from the screen's center in pixels, a gray level or linear
+device RGB) and `end`, one gfx per screen. The gfx opens after the screen
+settles, so its programs compile after the settling (`desc.on_context` is
+not bound yet). Not bound yet, for phase B: the stimuli and their
+descriptions, instances and groups, the timeline bindings through
+`ysp.timeline`'s table, textures, targets, text, the calibration and the
+output stage's options, capture. Tests: the simulated display's null
+backend (Python `test_screen_sim.py`, MEX `test_mex_vis.m`) and a real
+window (`test_window.py`, `test_mex_vis_window.m`, local only).
