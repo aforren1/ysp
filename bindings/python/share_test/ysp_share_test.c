@@ -216,17 +216,28 @@ static PyObject* check_table(PyObject* m, PyObject* args) {
     if (!PyArg_ParseTuple(args, "s", &what)) return NULL;
     if (what[0] == 'a') {
         ysp_audio_api a = *ysp_audio_api_ptr;
-        static char ver[16];
+        static char ver[32];
+        /* An owner of another version: the header's own numbers, one moved. */
+        int ma = YAU_VERSION_MAJOR, mi = YAU_VERSION_MINOR, pa = YAU_VERSION_PATCH;
         if (!strcmp(what, "a_abi")) a.head.abi += 1;
         else if (!strcmp(what, "a_size")) a.head.size -= 8;
         else if (!strcmp(what, "a_version")) { strcpy(ver, "0.0.1"); a.head.version = ver; }
+        else if (!strcmp(what, "a_patch")) { snprintf(ver, sizeof ver, "%d.%d.%d", ma, mi, pa + 1); a.head.version = ver; }
+        else if (!strcmp(what, "a_minor")) { snprintf(ver, sizeof ver, "%d.%d.%d", ma, mi + 1, pa); a.head.version = ver; }
+        else if (!strcmp(what, "a_major")) { snprintf(ver, sizeof ver, "%d.%d.%d", ma + 1, mi, pa); a.head.version = ver; }
+        else if (!strcmp(what, "a_junk")) { strcpy(ver, "seven"); a.head.version = ver; }
         else if (!strcmp(what, "a_sizeof")) a.sizeof_yau_wav += 8;
+        else if (!strcmp(what, "a_voices")) a.max_voices += 1;
         else if (!strcmp(what, "a_host")) a.head.host = YSP_SHARE_HOST_MEX;
         rc = ysp_audio_api_check(&a, YSP_SHARE_HOST_PYTHON, err, sizeof err);
     } else {
         ysp_timeline_api a = *ysp_timeline_api_ptr;
+        static char ver[32];
+        int ma = YTL_VERSION_MAJOR, mi = YTL_VERSION_MINOR, pa = YTL_VERSION_PATCH;
         if (!strcmp(what, "t_channels")) a.max_channels = 256;
         else if (!strcmp(what, "t_sizeof")) a.sizeof_ytl_timeline -= 64;
+        else if (!strcmp(what, "t_patch")) { snprintf(ver, sizeof ver, "%d.%d.%d", ma, mi, pa + 7); a.head.version = ver; }
+        else if (!strcmp(what, "t_minor")) { snprintf(ver, sizeof ver, "%d.%d.%d", ma, mi > 0 ? mi - 1 : mi + 1, pa); a.head.version = ver; }
         rc = ysp_timeline_api_check(&a, YSP_SHARE_HOST_PYTHON, err, sizeof err);
     }
     return Py_BuildValue("(is)", rc, err);

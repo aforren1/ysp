@@ -29,8 +29,11 @@ def test_capsules():
 
 @pytest.mark.parametrize("what, words", [
     ("a_abi", "ABI"), ("a_size", "older"), ("a_version", "0.0.1"),
-    ("a_sizeof", "sizeof(yau_wav)"), ("a_host", "host"),
+    ("a_minor", "major.minor versions must match"), ("a_major", "major.minor versions must match"),
+    ("a_junk", "ysp/audio.h seven"),
+    ("a_sizeof", "sizeof(yau_wav)"), ("a_voices", "YAU_MAX_VOICES"), ("a_host", "host"),
     ("t_channels", "YTL_MAX_CHANNELS"), ("t_sizeof", "sizeof(ytl_timeline)"),
+    ("t_minor", "major.minor versions must match"),
 ])
 def test_refuses_a_table_it_cannot_use(what, words):
     rc, err = c.check_table(what)
@@ -40,6 +43,12 @@ def test_refuses_a_table_it_cannot_use(what, words):
 def test_accepts_the_real_tables():
     assert c.check_table("a_none") == (0, "")
     assert c.check_table("t_none") == (0, "")
+
+
+def test_accepts_another_patch():
+    """A patch changes no layout and no function a table carries (docs/bindings.md)."""
+    assert c.check_table("a_patch") == (0, "")
+    assert c.check_table("t_patch") == (0, "")
 
 
 def test_wrong_objects_are_refused():

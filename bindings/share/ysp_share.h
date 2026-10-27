@@ -27,10 +27,14 @@
  *
  * VERSIONS. A consumer refuses a table whose abi differs from its
  * YSP_SHARE_ABI, whose host differs, whose size is smaller than its own
- * table, whose header version string is not the one the consumer compiled,
- * or whose struct sizes differ (a configuration macro such as
- * YTL_MAX_CHANNELS changes a size without changing the version). Entries
- * are only appended; a change to an existing entry bumps YSP_SHARE_ABI.
+ * table, whose header version has another major.minor than the one the
+ * consumer compiled, or whose configuration values or struct sizes differ
+ * (a configuration macro such as YTL_MAX_CHANNELS changes a size without
+ * changing the version). A different patch number is accepted: a change to
+ * a struct's layout or to a function a table carries bumps at least the
+ * header's minor version (CLAUDE.md, "Changing a header"), so a patch
+ * changes neither. Entries are only appended; a change to an existing
+ * entry bumps YSP_SHARE_ABI.
  *
  * LIFETIME. acquire() returns the C object and pins it: the owner refuses to
  * close a pinned object (Python: BusyError; MEX: <module>:busy), and in
@@ -104,6 +108,23 @@ typedef struct ysp_share_head {
 #define YSP_SHARE_FN static __inline
 #endif
 
+/* The major and minor numbers of a version string "major.minor.patch";
+ * 0, or -1 when v does not start with two numbers. */
+YSP_SHARE_FN int ysp_share_major_minor(const char* v, unsigned long* major, unsigned long* minor) {
+    unsigned long n[2] = { 0, 0 };
+    int i, digits;
+    if (!v) return -1;
+    for (i = 0; i < 2; i++) {
+        for (digits = 0; *v >= '0' && *v <= '9' && digits < 9; v++, digits++) n[i] = n[i] * 10 + (unsigned long)(*v - '0');
+        if (digits == 0 || (*v >= '0' && *v <= '9')) return -1;
+        if (i == 0 && *v++ != '.') return -1;
+    }
+    if (*v != '\0' && *v != '.') return -1;
+    *major = n[0];
+    *minor = n[1];
+    return 0;
+}
+
 /* The checks every consumer runs before it uses a table (VERSIONS). */
 YSP_SHARE_FN int ysp_share_check_head(const ysp_share_head* h, const char* library, const char* version,
                                       uint32_t host, size_t size, char* err, size_t cap) {
@@ -127,10 +148,16 @@ YSP_SHARE_FN int ysp_share_check_head(const ysp_share_head* h, const char* libra
                  library, (unsigned)h->size, (unsigned)size);
         return -1;
     }
-    if (!h->version || strcmp(h->version, version) != 0) {
-        snprintf(err, cap, "ysp_%s: the owner compiled ysp/%s.h %s, this module was built against %s: install matching versions",
-                 library, library, h->version ? h->version : "?", version);
-        return -1;
+    {
+        unsigned long oma, omi, mma, mmi;
+        if (ysp_share_major_minor(h->version, &oma, &omi) < 0 || ysp_share_major_minor(version, &mma, &mmi) < 0 ||
+            oma != mma || omi != mmi) {
+            snprintf(err, cap,
+                     "ysp_%s: the owner compiled ysp/%s.h %s, this module was built against %s: the major.minor "
+                     "versions must match (a patch may differ); install matching versions",
+                     library, library, h->version ? h->version : "?", version);
+            return -1;
+        }
     }
     return 0;
 }

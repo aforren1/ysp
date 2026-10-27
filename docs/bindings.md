@@ -175,7 +175,7 @@ forwarders (the shims).
 | `head.abi` | `YSP_SHARE_ABI` (1). An entry is only appended; a change to an entry raises it |
 | `head.size` | `sizeof` the owner's table; a consumer refuses a smaller one |
 | `head.host` | `YSP_SHARE_HOST_PYTHON` or `YSP_SHARE_HOST_MEX`: what `acquire()` takes |
-| `head.library`, `head.version` | `"audio"` and the header's version string as compiled (`YAU_VERSION_STRING`); a consumer refuses any other version |
+| `head.library`, `head.version` | `"audio"` and the header's version string as compiled (`YAU_VERSION_STRING`); a consumer refuses another major.minor and accepts another patch ([Versions of a table](#versions-of-a-table)) |
 | `head.acquire(ref, err, cap)` | a host object to its C pointer, pinned (Lifetime); NULL with a message in `err` for an object of another type, of another module, or closed |
 | `head.release(ptr)` | drops one pin |
 | `max_channels`, `max_voices` / `max_bases` | the configuration values that change a layout: `YAU_MAX_CHANNELS`, `YAU_MAX_VOICES`; `YTL_MAX_CHANNELS` (1024 in both timeline owners), `YTL_MAX_BASES` |
@@ -187,11 +187,32 @@ storage (the owner's memory: a consumer gives a stream or WAV ring its own
 memory), building a timeline, capture, the detectors and the WAV writer.
 
 `ysp_audio_api_check()` and `ysp_timeline_api_check()` run the checks: the
-ABI, the host, the size, the version string, each configuration value and
-each struct size. A configuration macro such as `YTL_MAX_CHANNELS` changes
-a struct without changing the version, so both are checked. A refusal names
-what differs (`ysp_timeline: sizeof(ytl_timeline) is ... in the owner and
-... here: the two were built with other settings`).
+ABI, the host, the size, the major and minor numbers of the version, each
+configuration value and each struct size. A configuration macro such as
+`YTL_MAX_CHANNELS` changes a struct without changing the version, so both
+are checked. A refusal names what differs (`ysp_timeline:
+sizeof(ytl_timeline) is ... in the owner and ... here: the two were built
+with other settings`; `ysp_audio: the owner compiled ysp/audio.h 0.8.2,
+this module was built against 0.7.2: the major.minor versions must match
+(a patch may differ); install matching versions`).
+
+### Versions of a table
+
+A consumer accepts an owner whose header has the same major and minor
+version and another patch number: `ysp-vis` built against ysp/audio.h
+0.7.2 loads `ysp.audio` 0.7.3. This relies on one rule for every header
+that a table carries (CLAUDE.md, "Changing a header"):
+
+- A change to the layout of a struct, or to a function that a table
+  carries (its signature or what it does with its arguments), bumps at
+  least the minor version.
+- A patch changes neither: a fix inside a function, a comment, a test.
+
+The struct sizes and configuration values are checked too, so a layout
+change that broke the rule and changed a size is still refused. A layout
+change that keeps every size (two fields swapped) is not found: the rule
+alone covers it. Before 2026-10-27 the check asked for the exact version
+string, so every patch of an owner needed a new build of each consumer.
 
 ### How a host finds the table
 
@@ -260,14 +281,16 @@ implementations (and defines `YSP_TIMELINE_IMPLEMENTATION_GUARD`, so that
 the header's does not compile, and a function the tables do not forward
 does not link. [tests/compile/share_shims.c](../tests/compile/share_shims.c)
 links `ysp/video.h`'s and `ysp/screen.h`'s implementations against the
-shims (MSVC 19.44 as C and C++17, MinGW-w64 gcc as C11, warnings as
-errors). It found one header limit: `ysp/video.h` 0.5.0 calls
-`YAU__NOW()` and `YAU__SLEEP_UNTIL()` (line 6044, `yvid__snd_close`),
-private macros of audio.h's implementation, so the check defines them
-itself. The test consumers are
-[bindings/python/share_test/](../bindings/python/share_test/) (17 tests) and
+shims, as C11 and C++17 with warnings as errors; CMake builds it
+(`compile_share_shims_c`, `_cxx`) wherever ysp/video.h builds. It found one
+header limit: `ysp/video.h` 0.5.0 called `YAU__NOW()` and
+`YAU__SLEEP_UNTIL()` in `yvid__snd_close`, private macros of audio.h's
+implementation, and the check defined them itself. ysp/video.h 0.5.1 uses
+its own clock and sleep there, and the check defines nothing. The test
+consumers are
+[bindings/python/share_test/](../bindings/python/share_test/) (23 tests) and
 [bindings/mex/tests/share_consumer.c](../bindings/mex/tests/share_consumer.c)
-([test_mex_share.m](../bindings/mex/test_mex_share.m), 22 checks).
+([test_mex_share.m](../bindings/mex/test_mex_share.m), 26 checks).
 
 ### Cost
 
@@ -349,10 +372,11 @@ build. The MEX functions of 2026-10-25 (`ysp_rt`, `ysp_box`, `ysp_rdk`,
 `ysp_dataset`, `ysp_pack`) do the same: `'version'` returns 1.0.0, and
 its second output is the version of the header. `ysp_pack` is 1.1.0 since
 2026-10-26: `'verify'` of one entry hashes it under `'none'` too
-(`ypak_verify_entry()`, ysp/pack.h 0.4.0). `ysp_audio` is 1.0.0
-(2026-10-26). `ysp_timeline` is 1.1.0 since 2026-10-26: the shared table,
+(`ypak_verify_entry()`, ysp/pack.h 0.4.0). `ysp_audio` is 1.0.1 since
+2026-10-27: `Inf` as the timeout of `'wait'` is `INT64_MAX` ns (ysp/audio.h
+0.7.2; 1.0.0 passed 2^62 ns). `ysp_timeline` is 1.1.0 since 2026-10-26: the shared table,
 `'pins'`, `ysp_timeline:busy`, and handles from `0x544C * 2^32 + 1`. The
 Python `ysp-timeline` of the same change is 0.8.1.1 (ysp/timeline.h
-v0.8.1), and `ysp-audio` is 0.7.1, the header's. The adaptive MEX
+v0.8.1), and `ysp-audio` is 0.7.2, the header's. The adaptive MEX
 functions and `ysp_color` have no number of their own: `'version'`
 returns the header's.

@@ -46,6 +46,8 @@ table (version, status word), its entry in `docs/status.md`, the tests,
 the compile checks, and its mutation list
 (`uv run tests/mutate/mutate.py tests/mutate/<name>.toml --check`, then
 run the mutants you add). Parsers of untrusted input get a fuzz target.
+A change to a struct's layout or to a function a bindings/share table
+carries bumps at least the minor version (consumers accept another patch).
 CI is `.github/workflows/ci.yml`.
 
 ## Building

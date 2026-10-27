@@ -29,14 +29,19 @@ function test_mex_share()
     [~, thv] = ysp_timeline('version');
     check(info.abi == 1 && strcmp(info.audio, ahv) && strcmp(info.timeline, thv) && info.channels == 1024, ...
           'import: both tables, the owners'' header versions');
-    cases = {'a_abi', 'ABI'; 'a_version', '0.0.1'; 'a_sizeof', 'sizeof(yau_audio)'; 'a_host', 'host'; ...
-             't_channels', 'YTL_MAX_CHANNELS'};
+    cases = {'a_abi', 'ABI'; 'a_version', '0.0.1'; 'a_minor', 'major.minor versions must match'; ...
+             'a_sizeof', 'sizeof(yau_audio)'; 'a_host', 'host'; ...
+             't_channels', 'YTL_MAX_CHANNELS'; 't_minor', 'major.minor versions must match'};
     for i = 1:size(cases, 1)
         [rc, err] = share_consumer('check', cases{i, 1});
         check(rc == -1 && ~isempty(strfind(err, cases{i, 2})), 'refuses %s: %s', cases{i, 1}, err);
     end
     [rc, err] = share_consumer('check', 'a_none');
     check(rc == 0 && isempty(err), 'accepts the real table');
+    for what = {'a_patch', 't_patch'}   % a patch changes no layout and no function a table carries
+        [rc, err] = share_consumer('check', what{1});
+        check(rc == 0 && isempty(err), 'accepts another patch (%s): %s', what{1}, err);
+    end
 
     % ---- an audio handle opened by ysp_audio, driven from the consumer
     h = ysp_audio('open', struct('backend', 'null'));
@@ -87,7 +92,7 @@ function test_mex_share()
     ysp_timeline('close', th);
 
     clear share_consumer;                    % its exit releases and unloads
-    fprintf('PASS: %d checks\n', YSP_SH_CHECKS);
+    fprintf('PASS (%d checks)\n', YSP_SH_CHECKS);
 end
 
 function check(cond, msg, varargin)
