@@ -8,7 +8,8 @@ function test_mex_vis_window()
 %   drawing, and the clear of the last thin file closes it. Then five
 %   stimuli made through ysp_gfx draw the same scene, bit for bit, as the
 %   same stimuli made in C with ysp/gfx.h's constructors, and instances
-%   match single stimuli. About 20 s. Prints PASS with the
+%   match single stimuli. The second window gets the foreground as the first
+%   did. About 20 s. Prints PASS with the
 %   number of checks.
 
     global YSP_VISW_CHECKS %#ok<GVMIS>
@@ -20,6 +21,7 @@ function test_mex_vis_window()
         g = ysp_gfx('open', h, 0.25);
         line = ysp_screen('describe', h);
         check(~isempty(strfind(line, '2.1.25848')), 'the bundled ANGLE: %s', line);
+        granted = ~isempty(strfind(line, 'foreground=granted'));
         ysp_screen('title', h, 'ysp-vis MEX test');
         ysp_screen('cursor', h, true);
         ysp_screen('grab', h, false);
@@ -49,7 +51,7 @@ function test_mex_vis_window()
     info = ysp_vis('info');
     check(info.users == 0 && info.screens == 0 && info.gfx == 0, 'the last clear closed the window');
     clear ysp_vis;
-    pixel_check();
+    pixel_check(granted);
     fprintf('PASS test_mex_vis_window (%d checks)\n', YSP_VISW_CHECKS);
 end
 
@@ -71,10 +73,20 @@ function check(cond, msg, varargin)
     end
 end
 
-function pixel_check()
+function pixel_check(granted)
+    % The second window of the process (v0.10.2): in front as the first was.
+    % Before, its raise was refused and its records were on no path.
     h = ysp_screen('open', 'windowed', true, 'size', [800 600]);
     try
         g = ysp_gfx('open', h, 'background', 0.5);
+        line = ysp_screen('describe', h);
+        fg = regexp(line, 'foreground=\S+', 'match', 'once');
+        check(~granted || strcmp(fg, 'foreground=granted'), 'the second window in front: %s', fg);
+        frames(h, g, 60, [1 1 1]);
+        ysp_screen('wait_flip', h);
+        r = ysp_screen('records', h);
+        check(~granted || all(ismember([r.path], [1 2 3])), 'the second window: records on a real path');
+        fprintf('second window: %s, paths %s\n', fg, mat2str(unique([r.path])));
         tw = [ysp_gfx('gabor', g, 'x', -100, 'y', 40, 'ori', 30, 'sf', 1 / 16, 'phase', 0.25, 'sigma', 12, 'contrast', 0.4), ...
               ysp_gfx('grating', g, 'x', 80, 'y', -30, 'w', 120, 'ori', -20, 'sf', 1 / 20, 'contrast', 0.3, ...
                       'aperture', 'circle', 'edge', 'cosine', 'edge_width', 6), ...
@@ -100,6 +112,10 @@ function pixel_check()
         I = ysp_gfx('instances', g, ysp_gfx('gabor', g, 'sf', 1 / 12, 'sigma', 8, 'contrast', 0.4), 3, 'fields', {'xy', 'ori'});
         ysp_gfx('elements', I, 'xy', xy);
         ysp_gfx('elements', I, 'ori', oris);
+        % On COMPOSITION a prime right after a flip waits until the flipped
+        % frame leaves the screen (docs/screen.md, "Not measured"); with the
+        % window in front (v0.10.2) that was more than 90 s.
+        ysp_screen('wait_flip', h);
         ysp_gfx('prime', g);
         a = scene(h, g, L);
         b = scene(h, g, I);

@@ -5,7 +5,7 @@
 # v0.3.5's 5 (raw mice; the 2 on its queue went with the queue),
 # v0.4.0's 6 (the input bridge), v0.4.1's 15 (the key filter, kd-) and
 # v0.4.2's 3 (kd-16 to kd-18, the key-up fix) and 13 (the sync guard,
-# sg-), v0.4.3's 9 (eg-, held frames), v0.4.4's 20 (dp-, the depth policy, the guessed grid, early flips), v0.5.0's 20 (st-, settling at open), v0.5.1's 7 (fg-, the foreground and the slot held after settling), v0.5.2's 7 (ch-, the context hook; ch-06 runs the gfx test), v0.6.0's 2 (cv-, the messages), v0.10.0's 19 (wt-, the window thread; wt-20 on run tests/adapt/screen_window_test.c on real windows), v0.10.1's 4 (gp-, the grid after a gap). The 29 earlier mutants (docs/screen.md,
+# sg-), v0.4.3's 9 (eg-, held frames), v0.4.4's 20 (dp-, the depth policy, the guessed grid, early flips), v0.5.0's 20 (st-, settling at open), v0.5.1's 7 (fg-, the foreground and the slot held after settling), v0.5.2's 7 (ch-, the context hook; ch-06 runs the gfx test), v0.6.0's 2 (cv-, the messages), v0.10.0's 19 (wt-, the window thread; wt-20 on run tests/adapt/screen_window_test.c on real windows), v0.10.1's 4 (gp-, the grid after a gap), v0.10.2's 1 (fg-08, the next screen's raise, on real windows). The 29 earlier mutants (docs/screen.md,
 # "Mutations") were run from scripts that were not kept.
 header = "ysp/screen.h"
 
@@ -1440,3 +1440,17 @@ test = "screen"
 why = "v0.10.1: one question per gap: a refused answer stands until an OS time anchors the grid (DwmGetCompositionTimingInfo is a call to DWM)."
 find = '''    if (s->gap_asked == s->vb_t) return;   /* once per gap: a refusal stands */'''
 replace = ''
+
+# --- v0.10.2: the next screen's raise (fg-), on real windows. The case
+# needs a process that may take the foreground: run mutate.py from a
+# terminal in front and give no input meanwhile, else it skips and the
+# mutant survives.
+
+[[mutant]]
+id = "fg-08"
+name = "the next window opens behind"
+test = "window"
+why = "v0.10.2: with the window thread the next open's window belongs to a new thread, whose raise Windows refused; close() keeps the right for the process while its window has the foreground."
+find = '''        yscr__win.allow_foreground(GetCurrentProcessId());'''
+replace = '''        (void)0;'''
+env = { YSCR_WINDOW_TEST_ONLY = "sequence" }
