@@ -47,8 +47,8 @@ Windows only.
    `user32 gdi32 winmm imm32 ole32 oleaut32 version uuid advapi32
    setupapi shell32 dinput8` (SDL's `sdl3.pc` lists them).
 
-No `SDL_main` is needed: SDL 3.4 needs it on Windows only for its own
-`SDL_main.h` entry point, which `ysp/screen.h` does not include.
+No `SDL_main` is needed: on Windows `SDL_main.h` makes SDL's entry point
+available, not required, and `ysp/screen.h` does not include it.
 
 ## Build the probe
 
