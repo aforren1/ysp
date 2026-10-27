@@ -704,6 +704,23 @@ if(YSP_BUILD_TESTS AND TARGET SDL3::SDL3 AND TARGET ysp::miniaudio
         add_test(NAME compile_order_screen_audio_${lang} COMMAND compile_order_screen_audio_${lang})
     endforeach()
 endif()
+# ysp/video.h's and ysp/screen.h's implementations linked against the
+# shims of bindings/share/ instead of audio.h's and timeline.h's, as
+# ysp-vis builds them: a call to a function the tables do not forward, or
+# a private name of audio.h's implementation (video.h 0.5.0), fails here.
+# With SDL3, as the other video checks; CI builds it in the Screen job.
+if(YSP_BUILD_TESTS AND TARGET SDL3::SDL3 AND CMAKE_SYSTEM_NAME IN_LIST YSP_PLATFORMS_video)
+    foreach(lang c cxx)
+        if(lang STREQUAL "c")
+            set(_src tests/compile/share_shims.c)
+        else()
+            set(_src tests/compile/share_shims.cpp)
+        endif()
+        ysp_add_program(compile_share_shims_${lang} ${_src} rig)
+        target_include_directories(compile_share_shims_${lang} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/bindings/share)
+        add_test(NAME compile_share_shims_${lang} COMMAND compile_share_shims_${lang})
+    endforeach()
+endif()
 if(TARGET test_video AND YSP_QOI_DIR)
     target_include_directories(test_video PRIVATE ${YSP_QOI_DIR})
     target_compile_definitions(test_video PRIVATE YVID_TEST_QOI_REF)

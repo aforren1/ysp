@@ -226,6 +226,18 @@ def test_refusals(au):
     au.wait(sid)
 
 
+def test_wait_forever(au):
+    """math.inf is INT64_MAX ns: ysp/audio.h 0.7.2 saturates now + timeout (the
+    sum overflowed in 0.7.1, and a wait without end timed out at once)."""
+    b = au.click(0.1)
+    for timeout in (math.inf, 4.6e9):                        # forever, and 2^62 ns less a little
+        t = yau.now() + 0.1
+        sid = au.play_at(b, t)
+        assert au.result(sid).pending
+        r = au.wait(sid, timeout=timeout)
+        check_record(r, t)
+
+
 def test_wait_releases_the_gil(au):
     b = au.click(0.1)
     sid = au.play_at(b, yau.now() + 0.3)

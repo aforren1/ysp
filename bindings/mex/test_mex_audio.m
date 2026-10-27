@@ -66,7 +66,7 @@ function test_mex_audio()
     id = ysp_audio('play_at', h, beep, t);
     r0 = ysp_audio('result', h, id);
     check(r0.pending && bitand(r0.flags, 1), 'pending before the onset');
-    r = ysp_audio('wait', h, id);
+    r = ysp_audio('wait', h, id, Inf);   % INT64_MAX ns: overflowed before ysp/audio.h 0.7.2
     check(~r.pending && r.tier == SIM && r.buffer_id == 4 && bitand(r.flags, UNCONFIRMED), 'the record: tier SIM, unconfirmed');
     check(isa(r.target_ns, 'int64') && abs(double(r.target_ns) - t * 1e9) <= 1, 'target, exact ns');
     check(r.residual_ns == r.onset_ns - r.target_ns && abs(double(r.residual_ns)) <= TOL && ~bitand(r.flags, LATE), 'on its time');
@@ -107,6 +107,8 @@ function test_mex_audio()
     id = ysp_audio('play_at', h, beep, ysp_audio('now') + 5);
     expect_error('ysp_audio:timeout', @() ysp_audio('wait', h, id, 0.02));
     ysp_audio('cancel', h, id);
+    r = ysp_audio('wait', h, id, Inf);
+    check(~r.pending && bitand(r.flags, CANCELED), 'wait with Inf on a canceled sound');
     ysp_audio('wait', h, id);
     ysp_audio('arena_reset', h);
     expect_error('ysp_audio:arg', @() ysp_audio('play_at', h, beep, 0));
@@ -162,7 +164,7 @@ function test_mex_audio()
     ysp_audio('capture_close', cp);
     expect_error('ysp_audio:handle', @() ysp_audio('capture_info', cp));
 
-    fprintf('PASS: %d checks\n', YSP_AU_CHECKS);
+    fprintf('PASS (%d checks)\n', YSP_AU_CHECKS);
 end
 
 function check(cond, msg, varargin)

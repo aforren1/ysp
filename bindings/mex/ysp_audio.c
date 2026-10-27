@@ -41,7 +41,7 @@
 
 /* The binding's own version (README.md, "Versions"); the second output of
  * 'version' is the header's. */
-#define AUM_VERSION "1.0.0"
+#define AUM_VERSION "1.0.1"
 #define AUM_S_MAX 4611686018.0
 
 enum { AUM_AUDIO = 1, AUM_BUFFER, AUM_STREAM, AUM_WAV, AUM_CAPTURE };
@@ -908,8 +908,7 @@ YSP_SHARE_MEX_ENTRY void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const 
         if (cmd[0] == 'r') rc = yau_result(&a->au, id, &r);
         else {
             double to = nrhs > 3 ? pm_scalar(prhs[3], "timeout") : INFINITY;
-            /* "Forever" is 2^62 ns: yau_wait() adds the timeout to now. */
-            rc = yau_wait(&a->au, id, to == INFINITY ? (int64_t)1 << 62 : aum_s_ns(to, "timeout"), &r);
+            rc = yau_wait(&a->au, id, to == INFINITY ? INT64_MAX : aum_s_ns(to, "timeout"), &r);   /* Inf: forever */
         }
         if (rc < 0) aum_fail(a, rc);
         plhs[0] = aum_onset(&r, rc == YAU_PENDING);

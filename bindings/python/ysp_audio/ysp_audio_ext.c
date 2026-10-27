@@ -866,9 +866,7 @@ static PyObject* Audio_wait(PyObject* self, PyObject* args, PyObject* kw) {
     int rc;
     if (!PyArg_ParseTupleAndKeywords(args, kw, "L|d", kwlist, &id, &timeout)) return NULL;
     if (!au_ready(o)) return NULL;
-    /* "Forever" is 2^62 ns (146 years): yau_wait() adds the timeout to now,
-     * and INT64_MAX would overflow there. */
-    if (timeout == INFINITY) tns = (int64_t)1 << 62;
+    if (timeout == INFINITY) tns = INT64_MAX;   /* yau_wait()'s "forever" */
     else if (au_s_to_ns(timeout, "timeout", &tns) < 0) return NULL;
     /* yau_wait() sleeps in 1 ms steps without the GIL; close() refuses
      * meanwhile (waiting), so no other thread closes the handle under it. */
