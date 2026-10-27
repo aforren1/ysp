@@ -250,6 +250,33 @@ static mxArray* vx_records(const yscr_record* r, int n) {
     return s;
 }
 
+/* Records as one n x 15 double matrix (the open option frame='row'): index,
+ * target, planned, onset, residual (s), dropped, path, tier, flags, then the
+ * six phases (s; NaN unknown). One array: a struct of records cost 3.5 us
+ * a record in MATLAB and 94 us in Octave (bench_frame.m, 2026-10-27). */
+#define VX_REC_COLS 15
+static mxArray* vx_records_matrix(const yscr_record* r, int n) {
+    mxArray* m = mxCreateDoubleMatrix((size_t)(n > 0 ? n : 0), VX_REC_COLS, mxREAL);
+    double* p = mxGetPr(m);
+    size_t N = (size_t)(n > 0 ? n : 0), i;
+    int k;
+    for (i = 0; i < N; i++) {
+        const yscr_record* x = &r[i];
+        p[i] = (double)x->index;
+        p[i + N] = yv_s(x->target);
+        p[i + 2 * N] = yv_s(x->planned);
+        p[i + 3 * N] = yv_s(x->onset);
+        p[i + 4 * N] = yv_s(x->residual);
+        p[i + 5 * N] = x->dropped;
+        p[i + 6 * N] = x->path;
+        p[i + 7 * N] = x->tier;
+        p[i + 8 * N] = x->flags;
+        for (k = 0; k < YSCR_N_PHASES; k++)
+            p[i + (size_t)(9 + k) * N] = x->phase_ns[k] == YSCR_PHASE_UNKNOWN ? mxGetNaN() : (double)x->phase_ns[k] / 1e9;
+    }
+    return m;
+}
+
 static mxArray* vx_frame(const yscr_frame* f) {
     static const char* fn[] = { "onset", "onset_ns", "period", "period_ns", "index", "vblank", "done", "last",
                                 "done_lost" };
@@ -547,24 +574,28 @@ static void vx_screen_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, 
                        (v->f.abort & YSCR_ABORT_PANIC) ? ": the panic released the display, only 'close' is left" : "");
             plhs[0] = mxCreateDoubleMatrix(0, 0, mxREAL);
             plhs[1] = vx_abort(&v->f);
-            if (nlhs > 2) plhs[2] = vx_records(v->f.done, v->f.n_done);
+            if (nlhs > 2) plhs[2] = v->frame_row ? vx_records_matrix(v->f.done, v->f.n_done) : vx_records(v->f.done, v->f.n_done);
             return;
         }
         if (rc < 0) vx_fail(v, rc);
         plhs[0] = v->frame_row ? vx_frame_row(&v->f) : vx_frame_slim(&v->f);
         if (nlhs > 1) plhs[1] = mxCreateDoubleMatrix(0, 0, mxREAL);
-        if (nlhs > 2) plhs[2] = vx_records(v->f.done, v->f.n_done);
+        if (nlhs > 2) plhs[2] = v->frame_row ? vx_records_matrix(v->f.done, v->f.n_done) : vx_records(v->f.done, v->f.n_done);
     } else if (!strcmp(cmd, "_frame")) {
         /* test: the last frame converted as form k, with no begin: what
          * each form of the result costs (0 phase A's struct with done and
-         * last, 1 the struct without records, 2 a row, 3 the records) */
+         * last, 1 the struct without records, 2 a row, 3 the records, 4 the
+         * records as a matrix) */
         yv_screen* v;
         int k;
         vx_nargs(nrhs, 3, "f = ysp_screen('_frame', h, k)");
         v = vx_scr(prhs[1]);
         k = (int)vx_scalar(prhs[2], "k");
-        plhs[0] = k == 0 ? vx_frame(&v->f) : k == 1 ? vx_frame_slim(&v->f) : k == 2 ? vx_frame_row(&v->f)
-                                                                           : vx_records(v->f.done, v->f.n_done);
+        plhs[0] = k == 0   ? vx_frame(&v->f)
+                  : k == 1 ? vx_frame_slim(&v->f)
+                  : k == 2 ? vx_frame_row(&v->f)
+                  : k == 4 ? vx_records_matrix(v->f.done, v->f.n_done)
+                  : vx_records(v->f.done, v->f.n_done);
     } else if (!strcmp(cmd, "flip") || !strcmp(cmd, "flip_at")) {
         yv_screen* v;
         int at = cmd[4] == '_', rc;
@@ -600,6 +631,15 @@ static void vx_screen_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, 
         vx_nargs(nrhs, 2, "r = ysp_screen('records', h)");
         v = (yv_screen*)vx_lookup(prhs[1], VX_SCREEN, "screen");
         n = (int)v->rec_n;
+        if (v->frame_row) {
+            /* a frame='row' screen: the records as one matrix */
+            yscr_record* buf = (yscr_record*)mxMalloc(sizeof(yscr_record) * (size_t)(n > 0 ? n : 1));
+            yv_records(v, buf, n);
+            plhs[0] = vx_records_matrix(buf, n);
+            mxFree(buf);
+            if (nlhs > 1) plhs[1] = vx_d((double)v->rec_lost);
+            return;
+        }
         s = mxCreateStructMatrix(1, (size_t)n, 17, vx_record_f);
         while (k < n) {
             yscr_record r;

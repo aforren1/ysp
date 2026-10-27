@@ -30,9 +30,14 @@ function test_mex_vis_gfx()
     ysp_screen('flip', h);
     ysp_screen('close', h);
     h = ysp_screen('open', sim{:}, 'frame', 'row');
-    r = ysp_screen('begin', h);
-    check(isa(r, 'double') && isequal(size(r), [1 6]) && abs(r(2) - P) < 1e-12 && r(3) == 0, 'frame row: [onset period index vblank n_done done_lost]');
+    for i = 1:3, ysp_screen('begin', h); ysp_screen('flip', h); end
+    [r, q, D] = ysp_screen('begin', h);
+    check(isa(r, 'double') && isequal(size(r), [1 6]) && abs(r(2) - P) < 1e-12 && r(3) == 3 && isempty(q), 'frame row: [onset period index vblank n_done done_lost]');
+    check(isa(D, 'double') && size(D, 2) == 15 && size(D, 1) == r(5), 'frame row: the records as an n x 15 matrix');
     ysp_screen('flip', h);
+    ysp_screen('wait_flip', h);
+    R = ysp_screen('records', h);
+    check(isa(R, 'double') && size(R, 2) == 15 && R(end, 1) == 3 && all(R(:, 7) == 4), 'frame row: records() as a matrix (index, ..., path 4: simulated)');
     ysp_screen('close', h);
     expect_error('ysp_screen:arg', @() ysp_screen('open', sim{:}, 'frame', 'table'));
 
