@@ -17,6 +17,11 @@ function test_mex_vis_text()
     segoe = fullfile(fonts, 'segoeui.ttf');
     arial = fullfile(fonts, 'arial.ttf');
     yahei = fullfile(fonts, 'msyh.ttc');
+    has_cjk = exist(yahei, 'file') == 2;   % a machine without YaHei: the fallback checks are skipped
+    if ~has_cjk
+        yahei = arial;
+        disp(['no ' fullfile(fonts, 'msyh.ttc') ': the CJK fallback checks are skipped']);
+    end
     is_octave = exist('OCTAVE_VERSION', 'builtin') ~= 0;
 
     h = ysp_screen('open', 'backend', 'sim', 'sim_period', 0.004);
@@ -104,7 +109,7 @@ function test_mex_vis_text()
     fl = ysp_gfx('font', g, {segoe, yahei});
     c = ysp_gfx('text', g, 'abc 中文', 'font', fl, 'size', 30);
     c2 = ysp_gfx('text', g, 'abc 中文', 'font', {segoe, yahei}, 'size', 30);
-    check(ysp_gfx('get', c, 'missing') == 0 && ysp_gfx('get', c, 'n_runs') == 2 && isequal(ysp_gfx('get', c2, 'box'), ysp_gfx('get', c, 'box')), ...
+    check(~has_cjk || (ysp_gfx('get', c, 'missing') == 0 && ysp_gfx('get', c, 'n_runs') == 2 && isequal(ysp_gfx('get', c2, 'box'), ysp_gfx('get', c, 'box'))), ...
           'a fallback list: a handle or a cell of paths');
     expect_error('ysp_gfx:error', @() ysp_gfx('font', g, 'C:/no/such/font.ttf'));
     expect_error('ysp_gfx:arg', @() ysp_gfx('font', g, uint8('not a font, only bytes')));
