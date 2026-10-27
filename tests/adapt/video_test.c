@@ -40,11 +40,12 @@ static long long g_vt = 1000000000000LL;
 static long long vnow(void);
 #define YVID__NOW() ((int64_t)vnow())
 #define YVID__COST_NOW() ((int64_t)vnow())   /* scripted decode times */
+static void vsleep_until(long long t);
+#define YVID__SLEEP_UNTIL(t) vsleep_until((long long)(t))   /* the soundtrack's close */
 
 /* ysp/audio.h first, on the same virtual clock, with no miniaudio: the
  * soundtrack's cases drive its scripted device */
 #define YAU_NO_MINIAUDIO
-static void vsleep_until(long long t);
 #define YAU__NOW() ((int64_t)vnow())
 #define YAU__SLEEP_UNTIL(t) vsleep_until((long long)(t))
 #define YSP_AUDIO_IMPLEMENTATION

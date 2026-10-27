@@ -540,6 +540,7 @@ Purpose: A movie as a stimulus: on each display frame the frame due at the predi
 
 Status:
 
+- v0.5.1 (2026-10-27): the soundtrack's close sleeps on this header's own clock seam (`YVID__NOW`, `YVID__SLEEP_UNTIL`) instead of ysp/audio.h's private `YAU__NOW` and `YAU__SLEEP_UNTIL`, so the implementation builds beside audio.h's declarations only (the `ysp-vis` build). `tests/compile/share_shims.c` no longer defines the macros; CMake builds it as C and C++ (MSVC 19.44, MinGW-w64 gcc 16.1, WSL2 gcc 11.4). No mutant: the core test does not depend on the sleep. [Design notes](video.md#the-soundtrack-on-audiohs-public-api-v051).
 - v0.5.0 (2026-10-21): `yvid_params()` fills `yscr_param.values` (ysp/screen.h v0.9.0): `light`, `gpu_path`, `hw_decode` and `chroma`. Every default checked against a movie opened with a zero `ahead`; 2 of 2 new mutants killed. [Design notes](video.md#enum-values-in-the-parameter-table-v050).
 - v0.4.0: on ysp/rt.h's virtual clock a movie decodes inline, and its decode and upload times stay real (`video_play --sim` showed 6 of 60 frames on a decode thread, a different count each run). 1 of 1 new mutant caught.
 - v0.3.1: pl_mpeg.h builds under `-Wfloat-conversion` (gcc and clang); no change to ysp code.

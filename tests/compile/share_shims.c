@@ -10,7 +10,8 @@
  * forward, and the compile fails when a shim's signature differs from the
  * header's. main() does not call a forwarder: no table is loaded.
  *
- * Build (repo root), for example:
+ * CMake builds it as compile_share_shims_c and _cxx (with SDL3). By hand,
+ * from the repo root, for example:
  *   gcc -std=c11 -Wall -Wextra -Werror -Iinclude -Ibindings/share -DYSCR_NO_SDL \
  *       tests/compile/share_shims.c -o share_shims -lm -lpthread -ldl
  *   cl /W4 /WX /Iinclude /Ibindings\share /DYSCR_NO_SDL tests\compile\share_shims.c
@@ -29,15 +30,9 @@
 #define YSP_TIMELINE_API_SHIMS
 #include "ysp_timeline_api.h"
 
-/* HEADER LIMIT (video.h 0.5.0, line 6044, yvid__snd_close): the soundtrack
- * part calls YAU__NOW() and YAU__SLEEP_UNTIL(), private macros of audio.h's
- * IMPLEMENTATION block, so it does not compile beside audio.h's
- * declarations alone. These are audio.h's own definitions off the web
- * (audio.h 2403, 2420); remove them when video.h stops using the macros. */
-#ifndef YAU__NOW
-#define YAU__NOW() (yrt_now_ns())
-#define YAU__SLEEP_UNTIL(t) yrt_sleep_until((int64_t)(t), 0)
-#endif
+/* No YAU__* macro here: video.h (from 0.5.1) calls audio.h's public
+ * functions only. A use of a private name of audio.h's implementation
+ * fails this compile. */
 
 #define YSP_SCREEN_IMPLEMENTATION
 #include "ysp/screen.h"

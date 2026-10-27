@@ -1,4 +1,4 @@
-/* ysp/video.h - v0.5.0 - public domain single-header video playback library
+/* ysp/video.h - v0.5.1 - public domain single-header video playback library
  *
  *   A movie as a stimulus. On each display frame the header takes the
  *   frame's PREDICTED ONSET, asks the movie clock for the movie time at
@@ -426,11 +426,21 @@
  *   decode thread that cannot start (wasm built without -pthread): the
  *   movie plays, each decode inside yvid_update() on the frame thread, and
  *   yvid_describe() says so.
+ *   With ysp/audio.h, the soundtrack calls audio.h's public functions
+ *   only, so audio.h's implementation may be in another module.
  *   Define YVID_API to change the linkage.
  *
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.5.1 - The soundtrack's close waits on this header's clock
+ *          (YVID__NOW) and a sleep of its own, not on ysp/audio.h's
+ *          private YAU__NOW and YAU__SLEEP_UNTIL, which only audio.h's
+ *          implementation defines. The soundtrack part now uses audio.h's
+ *          public functions only, so it builds beside audio.h's
+ *          declarations with the implementation in another module
+ *          (bindings/share, tests/compile/share_shims.c). No API or
+ *          behavior change.
  *   v0.5.0 - PARAMETERS: yvid_params() fills yscr_param's new last field,
  *          values (ysp/screen.h v0.9.0): light, gpu_path, hw_decode and
  *          chroma list their C enum's names and values
@@ -507,6 +517,9 @@
  *          ysp/gfx.h, I420 and NV12 converted to RGBA8 on the decode
  *          thread, manual mode, seek, loop, the records.
  *
+ *   STATUS: v0.5.1: tests/compile/share_shims.c builds this implementation
+ *   beside audio.h's declarations only (MSVC 19.44 C and C++17, MinGW-w64
+ *   gcc C11, warnings as errors); the core test passes as before.
  *   STATUS: v0.3.0: tests/adapt/video_test.c checks the writer's open,
  *   finish and close, yvid_probe()'s codes and the movie's messages; the
  *   rest is v0.2.0's. v0.2.0, on one Windows 11 laptop (i7-1360P, Iris Xe, ANGLE),
@@ -541,8 +554,8 @@
 
 #define YVID_VERSION_MAJOR 0
 #define YVID_VERSION_MINOR 5
-#define YVID_VERSION_PATCH 0
-#define YVID_VERSION_STRING "0.5.0"
+#define YVID_VERSION_PATCH 1
+#define YVID_VERSION_STRING "0.5.1"
 
 #include "ysp/gfx.h"
 #include "ysp/timeline.h"
@@ -5959,6 +5972,25 @@ YVID_API const yscr_param* yvid_params(int* n) {
 extern "C" {
 #endif
 
+/* The soundtrack's close sleeps in 1 ms steps while the device ends the
+ * stream. A test seam like YVID__NOW. On a browser's main thread the
+ * sleep yields, as ysp/audio.h's own waits do: without threads the device
+ * callbacks run there, so a blocking sleep would wait for nothing. */
+#ifndef YVID__SLEEP_UNTIL
+#if defined(__EMSCRIPTEN__)
+#include <emscripten/emscripten.h>
+#include <emscripten/threading.h>
+static void yvid__sleep_until(int64_t t) {
+    int64_t d = t - yrt_now_ns();
+    if (!emscripten_is_main_runtime_thread()) { yrt_sleep_until(t, 0); return; }
+    emscripten_sleep(d > 1000000 ? (unsigned)(d / 1000000) : 1u);
+}
+#define YVID__SLEEP_UNTIL(t) yvid__sleep_until((int64_t)(t))
+#else
+#define YVID__SLEEP_UNTIL(t) yrt_sleep_until((int64_t)(t), 0)
+#endif
+#endif
+
 /* --- the soundtrack -------------------------------------------------------------
  * A ysp/audio.h stream (a voice, placed, recorded and confirmed like any
  * sound) that the movie's decode thread fills from the source. The ring is
@@ -6041,7 +6073,7 @@ static void yvid__snd_close(void* v) {
             yau_update(s->au);
             if (yau_stream_get_info(&s->w.stream, &si) == YAU_OK &&
                 (si.state == YAU_STREAM_IDLE || si.state == YAU_STREAM_ENDED)) done = 1;
-            else YAU__SLEEP_UNTIL(YAU__NOW() + 1000000);
+            else YVID__SLEEP_UNTIL(YVID__NOW() + 1000000);
         }
         if (done) yau_wav_close(s->au, &s->w);
     }
