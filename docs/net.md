@@ -189,6 +189,30 @@ error -35.1 to +6.9 us (v0.1.0: -39 to +68 us). Mutant `net-20`
 (truncation, not rounding) is caught, and `net-16`, whose anchor moved,
 still is.
 
+### Times without end (v0.3.1)
+
+The sum that ysp/audio.h 0.7.2 fixed (a clock reading plus a duration,
+which overflows for `INT64_MAX`) was here too. `ynet__after()` saturates
+it at `INT64_MAX`, as in ysp/device.h 0.5.1:
+
+| Sum | What `INT64_MAX` did | Now |
+|---|---|---|
+| `ynet_inlet_wait_running()`: now + timeout | Timed out at the first look | Waits |
+| A resolve: now + `desc.retry_ns` (after a failed resolve, and after a loss) | A resolve at every poll | Never |
+| A correction: now + `desc.correct_ns` (at the open, and on the reader) | A correction at every poll | The open's correction, then none |
+
+Checked on 2026-10-27: `tests/adapt/net_test.c` (386 checks) waits with
+`INT64_MAX` and `INT64_MAX - 1 ms` on a stream the fake liblsl hides for
+300 ms, runs `retry_ns` of `INT64_MAX` after a failed resolve and after a
+loss (the outlet back before the next poll), `correct_ns` of `INT64_MAX`,
+and a caller's clock moved to 10 s before its end, where the reader's
+correction is due and the next one must not be (the fake gives a new
+estimate at every call for these). MSVC 19.44 Release, MinGW-w64 gcc
+16.1, WSL2 gcc 11.4 at -O2 and with ASan and UBSan. Mutants `ovf-01` to
+`ovf-06`: 6 of 6 killed (`ovf-05` and `ovf-06` survived until the fake
+gave a new estimate at every call: liblsl's cached estimate is not
+counted).
+
 ## The LabStreamer
 
 Read on 2026-10-09 from the vendor's manual,

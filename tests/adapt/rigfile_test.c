@@ -55,6 +55,22 @@ static uint64_t rnd64(void) {
 static int rnd(int n) { return (int)(rnd64() % (uint64_t)n); }
 
 static yrig_profile g_p, g_q;
+
+/* yrig_find() for a role the check needs: a missing role is a failure,
+ * and the check goes on with a scratch role instead of a NULL. A save that
+ * failed (YRIG_ERR_IO, a held file) then a load that found no file left
+ * g_q empty, and the next yrig_find(...)-> crashed the test (2026-10-27,
+ * MSVC ctest -j 4). */
+static yrig_role g_no_role;
+static yrig_role* role_at(yrig_profile* p, const char* name, int line) {
+    yrig_role* r = yrig_find(p, name);
+    if (r) return r;
+    fprintf(stderr, "rigfile_test: FAIL at line %d: no role \"%s\"\n", line, name ? name : "(null)");
+    g_failures++;
+    memset(&g_no_role, 0, sizeof g_no_role);
+    return &g_no_role;
+}
+#define ROLE(p, name) role_at((p), (name), __LINE__)
 static char g_buf[1 << 16];
 static char g_err[512];
 
@@ -124,7 +140,7 @@ static void build_golden(yrig_profile* p) {
     yrig_init(p, "booth-2 \xC3\xA9");
     strcpy(p->written, "2026-10-09T14:03:00Z");
     CHECK_I(yrig_bind(p, "trig", YBOX_TRIGGERBOX, "serial:0403:6001:TB0123:"), YRIG_OK);
-    r = yrig_find(p, "trig");
+    r = ROLE(p, "trig");
     r->pulse_ns = 2000000000;
     r->latency.set = true;
     r->latency.n = 200;
@@ -135,7 +151,7 @@ static void build_golden(yrig_profile* p) {
     strcpy(r->latency.date, "2026-10-09T13:58:12Z");
     strcpy(r->latency.sha256, C64);
     CHECK_I(yrig_bind(p, "resp", YBOX_XID, "serial:0403:6001:FT4ABC12:"), YRIG_OK);
-    r = yrig_find(p, "resp");
+    r = ROLE(p, "resp");
     r->baud = 115200;
     r->ftdi_latency_ns = 1000000;
     r->n_buttons = 2;
@@ -150,7 +166,7 @@ static void build_golden(yrig_profile* p) {
     strcpy(r->bounds.date, "2026-10-08T09:00:00Z");
     strcpy(r->bounds.sha256, B64);
     CHECK_I(yrig_bind(p, "mm", YBOX_MMBTS, "serial:2341:0043::"), YRIG_OK);
-    yrig_find(p, "mm")->latched = true;
+    ROLE(p, "mm")->latched = true;
     p->display.set = true;
     p->display.onset_offset_ns = 12300000;
     strcpy(p->display.calibration, "display.yspcal");
@@ -432,11 +448,11 @@ static void check_edit(void) {
     CHECK_I(yrig_bind(&g_q, "bad name", YBOX_LINE, "k"), YRIG_ERR_ARG);
     /* a binding clears what was measured on the old device */
     build_golden(&g_q);
-    r = yrig_find(&g_q, "mm");
+    r = ROLE(&g_q, "mm");
     CHECK(r && r->latched);
     CHECK_I(yrig_bind(&g_q, "mm", YBOX_LINES, "serial:0403:6001:AD1:"), YRIG_OK);
     CHECK(!r->latched);
-    r = yrig_find(&g_q, "trig");
+    r = ROLE(&g_q, "trig");
     CHECK(r->latency.set);
     CHECK_I(yrig_bind(&g_q, "trig", YBOX_TRIGGERBOX, "serial:0403:6001:TB9999:"), YRIG_OK);
     CHECK(!r->latency.set && r->pulse_ns == 2000000000);
@@ -519,9 +535,9 @@ static void check_files(void) {
     CHECK(write_text(path, "a calibration"));
     sha_hex("a calibration", 13, csha);
     build_golden(&g_p);
-    r = yrig_find(&g_p, "trig");
+    r = ROLE(&g_p, "trig");
     r->latency = lb;
-    r = yrig_find(&g_p, "resp");
+    r = ROLE(&g_p, "resp");
     strcpy(r->bounds.sha256, bsha);
     strcpy(g_p.display.calibration_sha256, csha);
     snprintf(path, sizeof path, "%s" YRIG__SEP "profile.json", g_dir);
@@ -530,9 +546,9 @@ static void check_files(void) {
     CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
     CHECK_S(g_q.dir, g_dir);
     CHECK_I(g_q.n_notes, 0);
-    CHECK_I(yrig_find(&g_q, "trig")->latency.check, YRIG_CHECK_OK);
-    CHECK_I(yrig_find(&g_q, "resp")->bounds.check, YRIG_CHECK_OK);
-    CHECK_I(yrig_find(&g_q, "mm")->latency.check, YRIG_CHECK_NONE);
+    CHECK_I(ROLE(&g_q, "trig")->latency.check, YRIG_CHECK_OK);
+    CHECK_I(ROLE(&g_q, "resp")->bounds.check, YRIG_CHECK_OK);
+    CHECK_I(ROLE(&g_q, "mm")->latency.check, YRIG_CHECK_NONE);
     CHECK_I(g_q.display.check, YRIG_CHECK_OK);
     /* the file holds the canonical bytes */
     {
@@ -548,19 +564,19 @@ static void check_files(void) {
         free(text);
     }
     /* the summary edited by hand: DIFFERS */
-    yrig_find(&g_p, "trig")->latency.median_ns = 578000;
+    ROLE(&g_p, "trig")->latency.median_ns = 578000;
     CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
     CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
-    CHECK_I(yrig_find(&g_q, "trig")->latency.check, YRIG_CHECK_DIFFERS);
+    CHECK_I(ROLE(&g_q, "trig")->latency.check, YRIG_CHECK_DIFFERS);
     CHECK_I(g_q.n_notes, 1);
     CHECK_HAS(g_q.notes[0], "roles.trig.latency");
     CHECK_HAS(g_q.notes[0], "does not match the profile's summary: the role's tier is UNKNOWN");
-    yrig_find(&g_p, "trig")->latency.median_ns = 577000;
+    ROLE(&g_p, "trig")->latency.median_ns = 577000;
     CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
     /* a loopback file changed: CHANGED */
     CHECK(write_text(lp, "format ysp-out-latency 1\nn 1\n"));
     CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
-    CHECK_I(yrig_find(&g_q, "trig")->latency.check, YRIG_CHECK_CHANGED);
+    CHECK_I(ROLE(&g_q, "trig")->latency.check, YRIG_CHECK_CHANGED);
     CHECK_HAS(g_q.notes[0], "has changed");
     /* removed: MISSING; the calibration too */
     CHECK(remove(lp) == 0);
@@ -568,8 +584,8 @@ static void check_files(void) {
     CHECK(write_text(path, "another calibration"));
     snprintf(path, sizeof path, "%s" YRIG__SEP "profile.json", g_dir);
     CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
-    CHECK_I(yrig_find(&g_q, "trig")->latency.check, YRIG_CHECK_MISSING);
-    CHECK_I(yrig_find(&g_q, "resp")->bounds.check, YRIG_CHECK_OK);
+    CHECK_I(ROLE(&g_q, "trig")->latency.check, YRIG_CHECK_MISSING);
+    CHECK_I(ROLE(&g_q, "resp")->bounds.check, YRIG_CHECK_OK);
     CHECK_I(g_q.display.check, YRIG_CHECK_CHANGED);
     CHECK_I(g_q.n_notes, 2);
     CHECK_HAS(g_q.notes[0], "is missing");
@@ -580,7 +596,7 @@ static void check_files(void) {
         size_t n;
         CHECK_I(yrig__read(path, YRIG_MAX_BYTES, &text, &n), YRIG_OK);
         CHECK_I(yrig_parse(&g_q, text, n, NULL, g_err, sizeof g_err), YRIG_OK);
-        CHECK_I(yrig_find(&g_q, "trig")->latency.check, YRIG_CHECK_NOT_RUN);
+        CHECK_I(ROLE(&g_q, "trig")->latency.check, YRIG_CHECK_NOT_RUN);
         CHECK_I(g_q.n_notes, 0);
         CHECK_S(g_q.dir, "");
         free(text);
@@ -592,7 +608,7 @@ static void check_files(void) {
             char name[8];
             sprintf(name, "r%d", k);
             CHECK_I(yrig_bind(&g_p, name, YBOX_XID, "k"), YRIG_OK);
-            r = yrig_find(&g_p, name);
+            r = ROLE(&g_p, name);
             r->bounds.set = true;
             r->bounds.n = 1;
             strcpy(r->bounds.date, "2026-10-09T00:00:00Z");
@@ -618,6 +634,106 @@ static void check_files(void) {
     CHECK_S(g_q.dir, ".");
     remove("rig_test_here.json");
     printf("  files and checks: ok\n");
+}
+
+/* ------------------------------------------------------------ held files */
+
+/* v0.5.1: another program holds the profile. Under MSVC ctest -j 4 a save
+ * failed with YRIG_ERR_IO in about 1 run of 150 (ERROR_ACCESS_DENIED from
+ * MoveFileExW; the holder is outside the test, likely a scanner), and the
+ * test crashed after it. Now the rename tries 5 times, 10 ms apart. */
+#if defined(_WIN32)
+static HANDLE g_held, g_releaser_up;
+static wchar_t g_held_tmp[900];
+
+/* Closes g_held 1 ms after the save's temporary file exists: by then the
+ * first rename has failed, and a later try must succeed. It runs at
+ * TIME_CRITICAL and spins, and the save starts only once it runs: with a
+ * Sleep() in it, it let go too late for the 40 ms of tries in 5 of 1200
+ * runs, 4 copies at a time beside ctest -j 4. */
+static DWORD WINAPI release_when_saving(LPVOID arg) {
+    LARGE_INTEGER t0, t, fq;
+    (void)arg;
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+    QueryPerformanceFrequency(&fq);
+    QueryPerformanceCounter(&t0);
+    SetEvent(g_releaser_up);
+    do QueryPerformanceCounter(&t);
+    while (GetFileAttributesW(g_held_tmp) == INVALID_FILE_ATTRIBUTES && t.QuadPart - t0.QuadPart < 2 * fq.QuadPart);
+    t0 = t;
+    do QueryPerformanceCounter(&t);
+    while ((t.QuadPart - t0.QuadPart) * 1000 < fq.QuadPart);
+    CloseHandle(g_held);
+    return 0;
+}
+
+static HANDLE hold(const char* path) {
+    wchar_t w[900];
+    MultiByteToWideChar(CP_UTF8, 0, path, -1, w, 900);
+    /* as a scanner or Python's open() does: no FILE_SHARE_DELETE */
+    return CreateFileW(w, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+                       FILE_ATTRIBUTE_NORMAL, NULL);
+}
+#endif
+
+static void check_held(void) {
+#if defined(_WIN32)
+    char path[900], tmp[920];
+    char* before;
+    char* after;
+    size_t nb, na;
+    LARGE_INTEGER t0, t1, fq;
+    HANDLE th;
+    int rc;
+    snprintf(path, sizeof path, "%s" YRIG__SEP "held.json", g_dir);
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    MultiByteToWideChar(CP_UTF8, 0, tmp, -1, g_held_tmp, 900);
+    build_golden(&g_p);
+    CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig__read(path, YRIG_MAX_BYTES, &before, &nb), YRIG_OK);
+    /* held for the whole save: the tries end, the old file stays, the
+     * temporary goes, and the message says why */
+    g_held = hold(path);
+    CHECK(g_held != INVALID_HANDLE_VALUE);
+    QueryPerformanceFrequency(&fq);
+    QueryPerformanceCounter(&t0);
+    CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_ERR_IO);
+    QueryPerformanceCounter(&t1);
+    CHECK_HAS(g_err, "cannot replace it (Windows error 5");
+    CHECK_HAS(g_err, "the old file stays");
+    CHECK((t1.QuadPart - t0.QuadPart) * 1000 / fq.QuadPart >= 35);   /* 5 tries, 4 waits of 10 ms */
+    /* a load meanwhile: a reader denies no one (v0.5.1; _wfopen_s did) */
+    CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
+    CloseHandle(g_held);
+    CHECK(!file_exists(tmp));
+    CHECK_I(yrig__read(path, YRIG_MAX_BYTES, &after, &na), YRIG_OK);
+    CHECK(before && after && na == nb && memcmp(before, after, nb) == 0);
+    free(after);
+    /* held, and let go during the save: a later try replaces it */
+    g_held = hold(path);
+    CHECK(g_held != INVALID_HANDLE_VALUE);
+    g_p.display.onset_offset_ns = 4500000;
+    g_releaser_up = CreateEventW(NULL, TRUE, FALSE, NULL);
+    th = CreateThread(NULL, 0, release_when_saving, NULL, 0, NULL);
+    CHECK(th != NULL && g_releaser_up != NULL);
+    if (th) WaitForSingleObject(g_releaser_up, INFINITE);
+    rc = yrig_save_file(&g_p, path, g_err, sizeof g_err);
+    CHECK_I(rc, YRIG_OK);
+    if (rc != YRIG_OK) fprintf(stderr, "rigfile_test: %s\n", g_err);
+    if (th) {
+        WaitForSingleObject(th, INFINITE);
+        CloseHandle(th);
+    }
+    if (g_releaser_up) CloseHandle(g_releaser_up);
+    CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(g_q.display.onset_offset_ns, 4500000);
+    CHECK(!file_exists(tmp));
+    free(before);
+    remove(path);
+    printf("  held files: the old file stays, a later try replaces it, a load reads it: ok\n");
+#else
+    printf("  held files: Windows only (POSIX rename replaces an open file)\n");
+#endif
 }
 
 /* --------------------------------------------------------- the user folder */
@@ -813,7 +929,7 @@ static void check_binding(void) {
     CHECK_I(yrig_desc(NULL, "trig", &d, g_err, sizeof g_err), YRIG_ERR_ARG);
     /* start the output from the profile: the key reaches the transport,
      * the role its index, and the box gets its bytes */
-    g_p.role[yrig_find(&g_p, "trig") - g_p.role].pulse_ns = 2000000;
+    ROLE(&g_p, "trig")->pulse_ns = 2000000;
     memset(&g_fb, 0, sizeof g_fb);
     CHECK(yrig_open_device(&dev, &g_p, "trig", &base));
     CHECK_I(ydev_wait_running(&dev, YRT_MS(5)), YDEV_RUNNING);
@@ -833,7 +949,7 @@ static void check_binding(void) {
     {
         /* bounds on an output family, checked: still no tier (tier 1 is a
          * device clock's, and a trigger box has none) */
-        yrig_role* tr = yrig_find(&g_p, "trig");
+        yrig_role* tr = ROLE(&g_p, "trig");
         tr->bounds.set = true;
         tr->bounds.check = YRIG_CHECK_OK;
         CHECK_I(yrig_source(&g_p, &dev).tier, YIN_TIER_UNKNOWN);
@@ -845,17 +961,17 @@ static void check_binding(void) {
     CHECK(yrig_open_device(&dev, &g_p, "resp", &base));
     s = yrig_source(&g_p, &dev);
     CHECK_I(s.tier, YIN_TIER_UNKNOWN);                  /* NOT_RUN: no folder */
-    yrig_find(&g_p, "resp")->bounds.check = YRIG_CHECK_OK;
+    ROLE(&g_p, "resp")->bounds.check = YRIG_CHECK_OK;
     s = yrig_source(&g_p, &dev);
     CHECK_I(s.tier, YIN_TIER_1);
     CHECK_I(s.lo_ns, -300000);
     CHECK_I(s.hi_ns, 1100000);
     CHECK_I(s.device, (int)dev.d.device);
     CHECK_HAS(s.note, "checked by SHA-256");
-    yrig_find(&g_p, "resp")->bounds.check = YRIG_CHECK_CHANGED;
+    ROLE(&g_p, "resp")->bounds.check = YRIG_CHECK_CHANGED;
     s = yrig_source(&g_p, &dev);
     CHECK(s.tier == YIN_TIER_UNKNOWN && s.lo_ns == 0 && s.hi_ns == 0);
-    yrig_find(&g_p, "resp")->bounds.check = YRIG_CHECK_OK;
+    ROLE(&g_p, "resp")->bounds.check = YRIG_CHECK_OK;
     CHECK_I(yrig_source(&g_q, &dev).tier, YIN_TIER_UNKNOWN);   /* another profile without the role */
     ydev_close(&dev);
     /* a start that the device layer refuses names the role */
@@ -967,8 +1083,8 @@ static void check_lsl(void) {
     /* read, written back to the same bytes */
     CHECK_I(yrig_parse(&g_q, T, strlen(T), NULL, g_err, sizeof g_err), YRIG_OK);
     CHECK_I(g_q.n_roles, 2);
-    CHECK_I(yrig_find(&g_q, "ref")->family_id, YRIG_FAMILY_LSL);
-    CHECK_S(yrig_find(&g_q, "ref")->family, "lsl");
+    CHECK_I(ROLE(&g_q, "ref")->family_id, YRIG_FAMILY_LSL);
+    CHECK_S(ROLE(&g_q, "ref")->family, "lsl");
     n = yrig_write(&g_q, g_buf, sizeof g_buf);
     CHECK(n == strlen(T) && memcmp(g_buf, T, n) == 0);
     /* the binding: refused for ysp/device.h, with the header to use */
@@ -982,7 +1098,7 @@ static void check_lsl(void) {
     s.tier = YIN_TIER_2;
     s.note = "the inlet's";
     CHECK_I(yrig_source_role(&g_q, "ref", s).tier, YIN_TIER_UNKNOWN);   /* NOT_RUN */
-    yrig_find(&g_q, "ref")->bounds.check = YRIG_CHECK_OK;
+    ROLE(&g_q, "ref")->bounds.check = YRIG_CHECK_OK;
     s = yrig_source_role(&g_q, "ref", s);
     CHECK(s.tier == YIN_TIER_1 && s.lo_ns == -100000 && s.hi_ns == 200000 && s.kind == YIN_KIND_SYNC);
     CHECK_I(yrig_source_role(&g_q, "lat", s).tier, YIN_TIER_UNKNOWN);   /* no bounds */
@@ -1012,16 +1128,16 @@ static void check_lsl(void) {
     /* bind: family and key must agree; a new lsl binding drops serial options */
     yrig_init(&g_q, "r");
     CHECK_I(yrig_bind(&g_q, "ref", YRIG_FAMILY_LSL, "lsl:Data::"), YRIG_OK);
-    CHECK_S(yrig_find(&g_q, "ref")->family, "lsl");
+    CHECK_S(ROLE(&g_q, "ref")->family, "lsl");
     CHECK_I(yrig_bind(&g_q, "ref", YRIG_FAMILY_LSL, "serial:0403:6001::"), YRIG_ERR_ARG);
     CHECK_I(yrig_bind(&g_q, "ref", YBOX_LINE, "lsl:Data::"), YRIG_ERR_ARG);
     CHECK_I(yrig_bind(&g_q, "ref", YRIG_FAMILY_LSL, "lsl:it's"), YRIG_ERR_ARG);
     CHECK_I(yrig_bind(&g_q, "ref", 63, "lsl:Data::"), YRIG_ERR_ARG);
     CHECK_I(yrig_bind(&g_q, "x", YBOX_XID, "serial:0403:6001:FT1:"), YRIG_OK);
-    yrig_find(&g_q, "x")->baud = 115200;
-    yrig_find(&g_q, "x")->pulse_ns = 2000000;
+    ROLE(&g_q, "x")->baud = 115200;
+    ROLE(&g_q, "x")->pulse_ns = 2000000;
     CHECK_I(yrig_bind(&g_q, "x", YRIG_FAMILY_LSL, "lsl:Markers"), YRIG_OK);
-    CHECK(yrig_find(&g_q, "x")->baud == 0 && yrig_find(&g_q, "x")->pulse_ns == -1);
+    CHECK(ROLE(&g_q, "x")->baud == 0 && ROLE(&g_q, "x")->pulse_ns == -1);
     n = yrig_write(&g_q, g_buf, sizeof g_buf);
     CHECK(n > 0 && yrig_parse(&g_p, g_buf, n, NULL, g_err, sizeof g_err) == YRIG_OK);
 }
@@ -1120,7 +1236,7 @@ static void check_v04(void) {
     CHECK_I(yrig_store_loopback(dir, LATFILE, strlen(LATFILE), lsha, g_err, sizeof g_err), YRIG_OK);
     yrig_init(&g_p, "v04");
     CHECK_I(yrig_bind(&g_p, "resp", YBOX_XID, "serial:0403:6001:FT4ABC12:"), YRIG_OK);
-    r = yrig_find(&g_p, "resp");
+    r = ROLE(&g_p, "resp");
     CHECK_I(yrig_read_loopback(BNDFILE, strlen(BNDFILE), &r->bounds, g_err, sizeof g_err), YRIG_FILE_IN_BOUNDS);
     g_p.display.set = true;
     g_p.display.onset_offset_ns = ob.offset_ns;
@@ -1129,7 +1245,7 @@ static void check_v04(void) {
     CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
     CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
     CHECK_I(g_q.n_notes, 0);
-    CHECK_I(yrig_find(&g_q, "resp")->bounds.check, YRIG_CHECK_OK);
+    CHECK_I(ROLE(&g_q, "resp")->bounds.check, YRIG_CHECK_OK);
     CHECK_I(g_q.display.latency.check, YRIG_CHECK_OK);
     CHECK(g_q.display.latency.set && g_q.display.latency.median_ns == 12300000 && g_q.display.latency.n == 1180);
     CHECK_S(g_q.display.latency.sha256, osha);
@@ -1146,25 +1262,25 @@ static void check_v04(void) {
     CHECK(s.tier == YIN_TIER_1 && s.lo_ns == -312000 && s.hi_ns == 1104000);
 
     /* a bounds summary edited by hand: DIFFERS, tier UNKNOWN */
-    yrig_find(&g_p, "resp")->bounds.hi_ns = 1000000;
+    ROLE(&g_p, "resp")->bounds.hi_ns = 1000000;
     CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
     CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
-    CHECK_I(yrig_find(&g_q, "resp")->bounds.check, YRIG_CHECK_DIFFERS);
+    CHECK_I(ROLE(&g_q, "resp")->bounds.check, YRIG_CHECK_DIFFERS);
     CHECK_I(g_q.n_notes, 1);
     CHECK_HAS(g_q.notes[0], "roles.resp.bounds: loopback/");
     CHECK_HAS(g_q.notes[0], "does not match the profile's summary: the role's tier is UNKNOWN");
     CHECK_I(yrig_source_role(&g_q, "resp", base).tier, YIN_TIER_UNKNOWN);
-    yrig_find(&g_p, "resp")->bounds.hi_ns = 1104000;
-    yrig_find(&g_p, "resp")->bounds.lo_ns = -300000;
+    ROLE(&g_p, "resp")->bounds.hi_ns = 1104000;
+    ROLE(&g_p, "resp")->bounds.lo_ns = -300000;
     CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
     CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
-    CHECK_I(yrig_find(&g_q, "resp")->bounds.check, YRIG_CHECK_DIFFERS);
-    yrig_find(&g_p, "resp")->bounds.lo_ns = -312000;
+    CHECK_I(ROLE(&g_q, "resp")->bounds.check, YRIG_CHECK_DIFFERS);
+    ROLE(&g_p, "resp")->bounds.lo_ns = -312000;
     /* the display's offset edited by hand, its file genuine: DIFFERS */
     g_p.display.onset_offset_ns = 12000000;
     CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
     CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
-    CHECK_I(yrig_find(&g_q, "resp")->bounds.check, YRIG_CHECK_OK);
+    CHECK_I(ROLE(&g_q, "resp")->bounds.check, YRIG_CHECK_OK);
     CHECK_I(g_q.display.latency.check, YRIG_CHECK_DIFFERS);
     CHECK_I(g_q.n_notes, 1);
     CHECK_HAS(g_q.notes[0], "display.latency: loopback/");
@@ -1183,19 +1299,19 @@ static void check_v04(void) {
     g_p.display.latency.date[3] = '6';
     /* a genuine file of the wrong kind: the onset file named as the bounds,
      * the bounds file as the display's, an output latency file as either */
-    r = yrig_find(&g_p, "resp");
+    r = ROLE(&g_p, "resp");
     strcpy(r->bounds.sha256, osha);
     strcpy(g_p.display.latency.sha256, bsha);
     CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
     CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
-    CHECK_I(yrig_find(&g_q, "resp")->bounds.check, YRIG_CHECK_DIFFERS);
+    CHECK_I(ROLE(&g_q, "resp")->bounds.check, YRIG_CHECK_DIFFERS);
     CHECK_I(g_q.display.latency.check, YRIG_CHECK_DIFFERS);
     CHECK_I(g_q.n_notes, 2);
     strcpy(r->bounds.sha256, lsha);
     strcpy(g_p.display.latency.sha256, lsha);
     CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
     CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
-    CHECK_I(yrig_find(&g_q, "resp")->bounds.check, YRIG_CHECK_DIFFERS);
+    CHECK_I(ROLE(&g_q, "resp")->bounds.check, YRIG_CHECK_DIFFERS);
     CHECK_I(g_q.display.latency.check, YRIG_CHECK_DIFFERS);
     strcpy(r->bounds.sha256, bsha);
     strcpy(g_p.display.latency.sha256, osha);
@@ -1204,11 +1320,11 @@ static void check_v04(void) {
          * same: only its kind tells it apart */
         yrig_role* t;
         CHECK_I(yrig_bind(&g_p, "trig", YBOX_TRIGGERBOX, "serial:0403:6001:TB0123:"), YRIG_OK);
-        t = yrig_find(&g_p, "trig");
+        t = ROLE(&g_p, "trig");
         t->latency = g_p.display.latency;
         CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
         CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
-        CHECK_I(yrig_find(&g_q, "trig")->latency.check, YRIG_CHECK_DIFFERS);
+        CHECK_I(ROLE(&g_q, "trig")->latency.check, YRIG_CHECK_DIFFERS);
         CHECK_I(g_q.display.latency.check, YRIG_CHECK_OK);
         CHECK(yrig_remove(&g_p, "trig"));
     }
@@ -1218,7 +1334,7 @@ static void check_v04(void) {
     CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
     CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
     CHECK_I(g_q.display.latency.check, YRIG_CHECK_MISSING);
-    CHECK_I(yrig_find(&g_q, "resp")->bounds.check, YRIG_CHECK_OK);
+    CHECK_I(ROLE(&g_q, "resp")->bounds.check, YRIG_CHECK_OK);
     CHECK_I(g_q.n_notes, 1);
     CHECK_HAS(g_q.notes[0], "is missing: the onset offset is not checked");
     {
@@ -1356,6 +1472,7 @@ int main(void) {
     check_refusals();
     check_edit();
     check_files();
+    check_held();
     check_user_folder();
     check_binding();
     check_lsl();

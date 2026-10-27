@@ -1,4 +1,4 @@
-/* ysp/device.h - v0.5.0 - public domain single-header device layer
+/* ysp/device.h - v0.5.1 - public domain single-header device layer
  *
  *   A response box, a trigger box or a microcontroller board as a producer
  *   of ysp/input.h events with times on the ysp_rt clock, and as a target
@@ -349,6 +349,17 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.5.1 - Times near INT64_MAX. ydev_wait_running() with INT64_MAX
+ *          ("forever", the bindings' inf) waits, and a desc.retry_ns or
+ *          desc.probe_ns near INT64_MAX is "never": now plus the time
+ *          saturates at INT64_MAX. The plain sum overflowed (undefined
+ *          behavior) and in practice gave a time in the past: the wait
+ *          timed out at once, and a reopen or a query came at every poll.
+ *          A host-timed pulse near INT64_MAX wide holds its code until the
+ *          next output (ysp/serial.h v0.6.2). XID's width is capped at
+ *          4294967 ms before it is rounded, and a device-timed width that
+ *          the wire refuses is not rounded: both sums overflowed. Needs
+ *          ysp/serial.h v0.6.2. No API change.
  *   v0.5.0 - RESPONSE RULES: ydev_rule, ydev_rule_open() and the others,
  *          ydev_rule_fires() and ydev_rule_fire, desc.rule, YDEV_OUT_RULE: a response's code written on the
  *          input's reader thread, not a frame later from the frame loop
@@ -390,6 +401,10 @@
  *          thread or manual polling, BRACKET fits with timer queries,
  *          match keys, identify, reconnect, records in a ysp/rt.h ring.
  *
+ *   STATUS: v0.5.1, 2026-10-27 (docs/device.md, "Times without end"):
+ *   tests/adapt/device_test.c waits with INT64_MAX and INT64_MAX - 1 ms,
+ *   and runs retry_ns, probe_ns and pulse widths of INT64_MAX; MSVC,
+ *   MinGW-w64, WSL2 gcc with ASan and UBSan.
  *   STATUS: v0.5.0, 2026-10-21: the response rule checked on a virtual
  *   clock (window bounds, fire counts, choices, repeats, a re-arm during a
  *   write, the reader's hook, the response.h glue) and on the real clock
@@ -423,17 +438,17 @@
 
 #define YDEV_VERSION_MAJOR 0
 #define YDEV_VERSION_MINOR 5
-#define YDEV_VERSION_PATCH 0
-#define YDEV_VERSION_STRING "0.5.0"
+#define YDEV_VERSION_PATCH 1
+#define YDEV_VERSION_STRING "0.5.1"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
 #include "ysp/box.h"
 #include "ysp/serial.h"
 
-/* yser_pulse_off_at_ns() came with v0.6.1 */
-#if YSER_VERSION_MAJOR == 0 && (YSER_VERSION_MINOR < 6 || (YSER_VERSION_MINOR == 6 && YSER_VERSION_PATCH < 1))
-#error "ysp/device.h v0.3.1 needs ysp/serial.h v0.6.1 or later"
+/* yser_pulse_off_at_ns() came with v0.6.1 and saturates since v0.6.2 */
+#if YSER_VERSION_MAJOR == 0 && (YSER_VERSION_MINOR < 6 || (YSER_VERSION_MINOR == 6 && YSER_VERSION_PATCH < 2))
+#error "ysp/device.h v0.5.1 needs ysp/serial.h v0.6.2 or later"
 #endif
 
 #include <stdint.h>
@@ -666,8 +681,8 @@ YDEV_API void ydev_close(ydev_device* dev);
  * state. */
 YDEV_API int  ydev_poll(ydev_device* dev, int64_t timeout_ns);
 
-/* Wait at most timeout_ns (ns; 0 or less: look once) for the instance to
- * be RUNNING (LIFECYCLE). Returns YDEV_RUNNING; YDEV_ERR_TIMEOUT; or
+/* Wait at most timeout_ns (ns; 0 or less: look once; INT64_MAX: without
+ * end) for the instance to be RUNNING (LIFECYCLE). Returns YDEV_RUNNING; YDEV_ERR_TIMEOUT; or
  * YDEV_ERR_STATE when it ends FAILED or CLOSED. On failure ydev_error()
  * says why. In manual mode it calls ydev_poll() itself; with desc.now it
  * gives up (YDEV_ERR_TIMEOUT) when a poll does not advance that clock,
@@ -960,6 +975,13 @@ YDEV_API const char* ydev_state_name(int state) {
 
 static int64_t ydev__now(const ydev_device* dev) {
     return dev->d.now ? dev->d.now(dev->d.now_ctx) : yrt_now_ns();
+}
+
+/* t + d for a d >= 0, saturated at INT64_MAX: INT64_MAX is a caller's
+ * "forever", and a desc time near it is "never". The plain sum overflowed
+ * (undefined behavior) and in practice gave a time in the past. */
+static int64_t ydev__after(int64_t t, int64_t d) {
+    return d > 0 && t > INT64_MAX - d ? INT64_MAX : t + d;
 }
 
 /* --- keys ---------------------------------------------------------------------- */
@@ -1291,7 +1313,9 @@ static bool ydev__host_pulse(const ydev_device* dev) {
 
 /* XID's mp is in whole ms and 0 means hold: a pulse is never 0 ms. */
 static uint32_t ydev__xid_ms(int64_t width_ns) {
-    int64_t ms = (width_ns + 500000) / 1000000;
+    int64_t ms;
+    if (width_ns >= (int64_t)4294967 * 1000000) return 4294967u;   /* and no overflow below */
+    ms = (width_ns + 500000) / 1000000;
     /* ybox_encode() takes at most 2^32 - 1 us: 4294967 ms */
     return ms < 1 ? 1u : ms > 4294967 ? 4294967u : (uint32_t)ms;
 }
@@ -1424,7 +1448,9 @@ static int ydev__out(ydev_device* dev, uint32_t code, int64_t width_ns, uint32_t
         flags |= YDEV_OUT_DEVICE_TIMED;
     } else if (pulse && !ydev__host_pulse(dev)) {
         rc = ydev__put(dev, code, width_ns, &t0, &t1);
-        w = dev->d.family == YBOX_XID ? (int64_t)ydev__xid_ms(width_ns) * 1000000 : (width_ns + 500) / 1000 * 1000;
+        /* a refused width (over 2^32 us) is not rounded: the sum could overflow */
+        w = dev->d.family == YBOX_XID ? (int64_t)ydev__xid_ms(width_ns) * 1000000
+            : rc == YDEV_OK ? (width_ns + 500) / 1000 * 1000 : width_ns;
         flags |= YDEV_OUT_DEVICE_TIMED;
     } else {
         rc = ydev__put(dev, code, 0, &t0, &t1);
@@ -1779,7 +1805,7 @@ static void ydev__lose(ydev_device* dev, uint32_t why) {
     ydev__close_conn(dev);
     dev->lost_at = dev->st.last_rx_ns ? dev->st.last_rx_ns : ydev__now(dev);
     ydev__set_state(dev, YDEV_LOST, why);
-    dev->next_try = ydev__now(dev) + dev->d.retry_ns;
+    dev->next_try = ydev__after(ydev__now(dev), dev->d.retry_ns);
 }
 
 static void ydev__fit_start(ydev_device* dev) {
@@ -1803,7 +1829,7 @@ static void ydev__try_open(ydev_device* dev) {
     int r;
     int64_t now = ydev__now(dev);
     if (now < dev->next_try) return;
-    dev->next_try = now + dev->d.retry_ns;
+    dev->next_try = ydev__after(now, dev->d.retry_ns);
     found[0] = '\0';
     c = dev->tr.open(dev->tr.user, dev->d.key, found, sizeof found);
     if (!c) return;
@@ -1846,7 +1872,7 @@ static void ydev__probe(ydev_device* dev) {
     int n;
     int64_t now = ydev__now(dev), t0 = 0;
     if (dev->d.probe_ns < 0 || now < dev->next_probe) return;
-    dev->next_probe = now + dev->d.probe_ns;
+    dev->next_probe = ydev__after(now, dev->d.probe_ns);
     if (++dev->probe_seq == 0) dev->probe_seq = 1;
     n = ybox_probe(dev->d.family, dev->probe_seq, q, (int)sizeof q);
     if (n <= 0) return;
@@ -2159,7 +2185,7 @@ YDEV_API int ydev_wait_running(ydev_device* dev, int64_t timeout_ns) {
         snprintf(dev->err, sizeof dev->err, "ysp_device: ydev_wait_running: not open");
         return YDEV_ERR_STATE;
     }
-    end = ydev__now(dev) + (timeout_ns > 0 ? timeout_ns : 0);
+    end = ydev__after(ydev__now(dev), timeout_ns > 0 ? timeout_ns : 0);
     for (;;) {
         int64_t before = ydev__now(dev), now;
         /* a poll (manual mode) steps the instance; its timeout only bounds

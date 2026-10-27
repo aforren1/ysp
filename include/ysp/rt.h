@@ -1,4 +1,4 @@
-/* ysp/rt.h - v0.9.0 - public domain single-header real-time timing library
+/* ysp/rt.h - v0.9.1 - public domain single-header real-time timing library
  *
  *   The clock, the waits, the scheduling ladder, the one-shot deadline
  *   worker, the background-compute pump, the event ring, the clock
@@ -1051,6 +1051,11 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.9.1 - yrt_sleep_ns() near INT64_MAX ("forever") on the virtual
+ *          clock waits to the clock's end: the deadline saturates at
+ *          INT64_MAX. The plain sum overflowed (undefined behavior) and
+ *          the wait returned at once. On the real clock the sum is
+ *          unsigned and cannot overflow. No API change.
  *   v0.9.0 - VIRTUAL CLOCK: yrt_virtual_begin(), yrt_virtual_end(),
  *          yrt_is_virtual(), yrt_virtual_timer(), yrt_virtual_cancel(),
  *          YRT_VIRTUAL_T0_NS, YRT_VIRTUAL_TIMERS and YRT_ERR_STATE;
@@ -1368,8 +1373,8 @@
  * The string always matches the three numbers. */
 #define YRT_VERSION_MAJOR  0
 #define YRT_VERSION_MINOR  9
-#define YRT_VERSION_PATCH  0
-#define YRT_VERSION_STRING "0.9.0"
+#define YRT_VERSION_PATCH  1
+#define YRT_VERSION_STRING "0.9.1"
 
 /* Feature-test macro for clock_nanosleep() and mlockall() in the Linux
  * implementation. Defined here, before the first system header, so it takes
@@ -3811,7 +3816,12 @@ int64_t yrt_spin_until(int64_t deadline_ns) {
 }
 
 int64_t yrt_sleep_ns(int64_t ns) {
-    if (yrt__rload(&yrt__v_on)) return yrt__v_wait(yrt__ld64(&yrt__v_now) + (ns > 0 ? ns : 0));
+    if (yrt__rload(&yrt__v_on)) {
+        /* Saturated: INT64_MAX is a caller's "forever", and the plain sum
+         * overflowed (undefined behavior) into a deadline in the past. */
+        int64_t now = yrt__ld64(&yrt__v_now);
+        return yrt__v_wait(ns > 0 && now > INT64_MAX - ns ? INT64_MAX : now + (ns > 0 ? ns : 0));
+    }
     /* The deadline is taken here, so the call's own overhead comes out of the
      * wait instead of being added to it. */
     return (int64_t)yrt__sleep_until(yrt__now() + yrt__unsigned(ns),

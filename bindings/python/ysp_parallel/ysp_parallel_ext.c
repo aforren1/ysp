@@ -46,7 +46,7 @@
  * a change gets a new version without naming a header that does not exist.
  * When the header's version moves, drop the suffix here and in
  * pyproject.toml; tests/test_parallel.py checks that the two agree. */
-#define PP_VERSION YPAR_VERSION_STRING ".1"
+#define PP_VERSION YPAR_VERSION_STRING
 
 /* An OS mutex, not PyThread_type_lock: the PyThread_* functions are listed
  * in the stable ABI, but python3.dll did not export them before CPython 3.10

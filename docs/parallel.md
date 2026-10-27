@@ -1,6 +1,6 @@
 # ysp/parallel.h design
 
-Status: **v0.4.0, implemented.** Linux (ppdev and direct port I/O) is
+Status: **v0.4.1, implemented.** Linux (ppdev and direct port I/O) is
 tested; the Windows InpOut backend compiles but has not run on a port. The
 header's top comment is the manual. This page records why the API looks the
 way it does. Until v0.4.0 the design notes lived only in the header.
@@ -62,3 +62,26 @@ Checked on 2026-10-10 on Windows 11: `tests/compile/parallel.c` (C11, C++17,
 handle (codes, message, close twice). MSVC 19.44 (/W4 /WX) and MinGW-w64 gcc
 16.1 (-Werror) build the tree, `examples/parallel/trigger.c` included. No port
 was opened: this machine has no parallel port.
+
+## A pulse without end (v0.4.1)
+
+Both pulse calls took the trailing edge's deadline as `yrt_now_ns() +
+width_ns`. The width has no upper bound, so a width near `INT64_MAX`
+overflowed (undefined behavior in C) into a deadline in the past, and the
+0 came at once. `ypar__off_at()` saturates the sum at `INT64_MAX`:
+`ypar_pulse_async()` holds the value until the next write or
+`ypar_close()`, and `ypar_pulse()` waits without end, as asked. A
+refusal was the other choice; the contract refuses only a negative width,
+and a caller who wants "hold until I write again" gets it. The bindings
+refuse a width of 9223372036 s or more, so they did not reach it.
+
+`tests/adapt/parallel_test.c` is new: the deadline on every platform, and
+on Windows a handle filled as `ypar_open()` fills it, with stand-in
+`Out32` and `Inp32` functions that keep each write, so both pulse calls
+run without a port or a driver. `ypar_pulse_async()` with `INT64_MAX` and
+`INT64_MAX - 1 ms` holds 0x55 for 50 ms; `ypar_pulse()` with both, on the
+virtual clock, moves the clock to its end and writes the 0 there. 31
+checks on MSVC 19.44 and MinGW-w64 gcc 16.1 (2026-10-27), 7 on WSL2 gcc
+11.4 (the deadline only; a ppdev or I/O port write cannot be faked), also
+with ASan and UBSan. Mutants (`tests/mutate/parallel.toml`, new): 4 of 4
+killed.

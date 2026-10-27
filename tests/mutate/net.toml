@@ -192,3 +192,53 @@ test = "net"
 why = "v0.3.0: the offset and the round trip are rounded to the nearest ns at the liblsl call; truncation moves a negative offset toward 0."
 find = 'static int64_t ynet__ns(double s) { return (int64_t)llround(s * 1e9); }'
 replace = 'static int64_t ynet__ns(double s) { return (int64_t)(s * 1e9); }'
+
+# v0.3.1: times near INT64_MAX (docs/net.md, "Times without end").
+
+[[mutant]]
+id = "ovf-01"
+name = "the wait's deadline is the plain sum"
+test = "net"
+why = "now + INT64_MAX overflows: the wait for RUNNING with INT64_MAX timed out at the first look."
+find = '''    end = ynet__after(ynet__inow(in), timeout_ns > 0 ? timeout_ns : 0);'''
+replace = '''    end = ynet__inow(in) + (timeout_ns > 0 ? timeout_ns : 0);'''
+
+[[mutant]]
+id = "ovf-02"
+name = "only INT64_MAX itself saturates"
+test = "net"
+why = "Any sum past INT64_MAX saturates: the test waits with INT64_MAX - 1 ms too."
+find = '''    return d > 0 && t > INT64_MAX - d ? INT64_MAX : t + d;'''
+replace = '''    return d == INT64_MAX ? INT64_MAX : t + d;'''
+
+[[mutant]]
+id = "ovf-03"
+name = "a loss's retry is the plain sum"
+test = "net"
+why = "retry_ns INT64_MAX is never: after a loss the outlet is back at once, and the plain sum resolved it again."
+find = '''    in->next_try = ynet__after(ynet__inow(in), in->d.retry_ns);'''
+replace = '''    in->next_try = ynet__inow(in) + in->d.retry_ns;'''
+
+[[mutant]]
+id = "ovf-04"
+name = "a resolve's retry is the plain sum"
+test = "net"
+why = "retry_ns INT64_MAX is never: a resolve that found nothing ran again at every poll."
+find = '''    in->next_try = ynet__after(t, in->d.retry_ns);'''
+replace = '''    in->next_try = t + in->d.retry_ns;'''
+
+[[mutant]]
+id = "ovf-05"
+name = "the open's next correction is the plain sum"
+test = "net"
+why = "correct_ns INT64_MAX: the open's correction, then none; the plain sum corrected at every poll."
+find = '''    in->next_corr = ynet__after(ynet__inow(in), in->d.correct_ns);'''
+replace = '''    in->next_corr = ynet__inow(in) + in->d.correct_ns;'''
+
+[[mutant]]
+id = "ovf-06"
+name = "the reader's next correction is the plain sum"
+test = "net"
+why = "A caller's clock near its end: the reader's correction there must be the last, not one at every poll."
+find = '''            in->next_corr = ynet__after(t, in->d.correct_ns);'''
+replace = '''            in->next_corr = t + in->d.correct_ns;'''

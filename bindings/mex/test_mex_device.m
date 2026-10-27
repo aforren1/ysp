@@ -28,7 +28,8 @@ function test_mex_device()
     s = ysp_device('sim_open', 'line');
     h = ysp_device('open', struct('role', 'photo', 'family', 'line', 'key', 'serial:16C0:0483::', 'sim', s, ...
                                   'no_elevate', true));
-    check(ysp_device('wait_running', h, 3), 'line: RUNNING');
+    % Inf is INT64_MAX ns: ysp/device.h 0.5.0 timed out at once on it (now + INT64_MAX overflowed)
+    check(ysp_device('wait_running', h, Inf), 'line: RUNNING, waited with Inf');
     [st, sn] = ysp_device('state', h);
     check(st == c.RUNNING && strcmp(sn, 'running'), 'state');
     info = ysp_device('info', h);

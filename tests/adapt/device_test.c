@@ -83,6 +83,7 @@ typedef struct board {
     int64_t  mute_from, mute_until;   /* plugged, but it sends nothing     */
     bool     no_identity;             /* never answers "i" or "_c1"       */
     bool     reset_on_return;         /* its clock restarts after an unplug */
+    bool     fail_next_read;          /* one read fails; the board stays    */
     bool     open;
     int      opens;
     int64_t  generated_until;
@@ -246,7 +247,7 @@ static int t_read(void* conn, uint8_t* buf, int cap, int64_t timeout_ns) {
 #else
     if (g_real) __atomic_fetch_add(&g_tcalls, 1, __ATOMIC_RELEASE);
 #endif
-    if (b_gone(b, t)) { b->open = false; return -1; }
+    if (b_gone(b, t) || b->fail_next_read) { b->fail_next_read = false; b->open = false; return -1; }
     b_run(b, g_real ? t : end);
     /* the first chunk readable by end: the clock jumps to it */
     if (b->qh != b->qtail && b->qt[b->qh % QBYTES] <= end) {
@@ -1227,6 +1228,110 @@ static void test_out_report(void) {
 }
 
 /* Roles: indexes by name, kept across a restart, one instance per role. */
+/* v0.5.1: times near INT64_MAX. INT64_MAX is the bindings' "forever" (a
+ * wait) and "never" (a desc time); now + it overflowed into the past, so
+ * the wait timed out at once, a retry or a probe came every poll, and a
+ * pulse's 0 came at once. */
+static void test_forever(void) {
+    static const int64_t forever[2] = { INT64_MAX, INT64_MAX - YRT_MS(1) };
+    ydev_stats st;
+    ydev_out_info oi;
+    ydev_desc d;
+    int i;
+    /* the wait, on the real clock: the board comes 60 ms after the open,
+     * so the first look sees OPENING */
+    g_real = true;
+    for (i = 0; i < 2; i++) {
+        int64_t t0 = yrt_now_ns();
+        ring_reset();
+        board_init(YBOX_LINE, 0.0, 125000.0, 50000.0);
+        g_b.t0 = t0 - 1000000000;
+        g_b.gone_from = 0;
+        g_b.gone_until = t0 + YRT_MS(60);
+        d = desc_for(YBOX_LINE);
+        d.manual = false;
+        d.now = NULL;
+        d.no_elevate = true;
+        d.retry_ns = YRT_MS(10);
+        CHECK(ydev_open(&g_dev, &d));
+        CHECK_I(ydev_state(&g_dev), YDEV_OPENING);
+        CHECK_I(ydev_wait_running(&g_dev, forever[i]), YDEV_RUNNING);
+        CHECK(yrt_now_ns() - t0 >= YRT_MS(60));
+        ydev_close(&g_dev);
+    }
+    g_real = false;
+    /* retry_ns INT64_MAX: an open that failed is not tried again */
+    ring_reset();
+    board_init(YBOX_LINE, 0.0, 125000.0, 50000.0);
+    g_b.gone_from = 0;
+    g_b.gone_until = g_now + YRT_MS(100);
+    d = desc_for(YBOX_LINE);
+    d.retry_ns = INT64_MAX;
+    CHECK(ydev_open(&g_dev, &d));
+    run_until(g_now + YRT_S(2));
+    CHECK_I(ydev_state(&g_dev), YDEV_OPENING);
+    CHECK_I(g_b.opens, 0);
+    ydev_close(&g_dev);
+    /* nor after a loss: the board is there again at once */
+    ring_reset();
+    board_init(YBOX_LINE, 0.0, 125000.0, 50000.0);
+    d = desc_for(YBOX_LINE);
+    d.retry_ns = INT64_MAX;
+    CHECK(ydev_open(&g_dev, &d));
+    CHECK_I(ydev_wait_running(&g_dev, YRT_S(3)), YDEV_RUNNING);
+    g_b.fail_next_read = true;
+    run_until(g_now + YRT_S(2));
+    CHECK_I(ydev_state(&g_dev), YDEV_LOST);
+    CHECK_I(g_b.opens, 1);
+    ydev_close(&g_dev);
+    /* probe_ns INT64_MAX: the first query, then none */
+    ring_reset();
+    board_init(YBOX_LINE, 0.0, 125000.0, 50000.0);
+    d = desc_for(YBOX_LINE);
+    d.probe_ns = INT64_MAX;
+    CHECK(ydev_open(&g_dev, &d));
+    CHECK_I(ydev_wait_running(&g_dev, YRT_S(3)), YDEV_RUNNING);
+    run_until(g_now + YRT_S(2));
+    ydev_get_stats(&g_dev, &st);
+    CHECK_I(st.state, YDEV_RUNNING);
+    CHECK_I(st.probes, 1);
+    ydev_close(&g_dev);
+    /* a host-timed pulse INT64_MAX wide: no 0 until the next output
+     * (yser_pulse_off_at_ns(), ysp/serial.h v0.6.2) */
+    for (i = 0; i < 2; i++) {
+        int64_t t = YRT_S(1000);
+        CHECK(yser_pulse_off_at_ns(t, t + YRT_MS(1), forever[i], YRT_MS(1)) == INT64_MAX);
+        CHECK(yser_pulse_off_at_ns(t, t + YRT_MS(1), YRT_MS(2), forever[i]) == INT64_MAX);
+    }
+    CHECK(yser_pulse_off_at_ns(YRT_S(1000), YRT_S(1000) + 400000, YRT_MS(2), 500000) == YRT_S(1000) + YRT_MS(2));
+    CHECK(yser_pulse_off_at_ns(YRT_S(1000), YRT_S(1000) + YRT_MS(2), YRT_MS(2), 500000) == YRT_S(1000) + 2500000);
+    for (i = 0; i < 2; i++) {
+        d = odesc(YBOX_TRIGGERBOX);
+        ostart(&d);
+        CHECK_I(ydev_out_pulse(&g_out, 7, forever[i]), YDEV_OK);
+        orun_until(g_now + YRT_MS(50));
+        CHECK_I(g_o.nw, 2);                     /* the open's 0, then 7 */
+        CHECK(g_o.nbytes == 2 && g_o.bytes[1] == 7);
+        CHECK_I(ydev_out_set(&g_out, 0), YDEV_OK);
+        ydev_close(&g_out);
+    }
+    /* device-timed: XID's width stops at its 4294967 ms; the line
+     * protocol refuses a width over 2^32 us and keeps it unrounded */
+    d = odesc(YBOX_XID);
+    ostart(&d);
+    CHECK_I(ydev_out_pulse(&g_out, 1, INT64_MAX), YDEV_OK);
+    ydev_out_last(&g_out, &oi);
+    CHECK(oi.width_ns == (int64_t)4294967 * 1000000 && oi.result == YDEV_OK);
+    ydev_close(&g_out);
+    d = odesc(YBOX_LINE);
+    ostart(&d);
+    CHECK_I(ydev_out_pulse(&g_out, 1, INT64_MAX), YDEV_ERR_ARG);
+    ydev_out_last(&g_out, &oi);
+    CHECK(oi.width_ns == INT64_MAX && oi.result == YDEV_ERR_ARG);
+    ydev_close(&g_out);
+    printf("  times near INT64_MAX (forever, never): ok\n");
+}
+
 static void test_roles(void) {
     static ydev_device a, b;
     ydev_roles roles;
@@ -2044,6 +2149,7 @@ int main(void) {
     test_out_records();
     test_out_hold();
     test_out_report();
+    test_forever();
     test_roles();
     test_rule();
     test_rule_reader();

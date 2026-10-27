@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ysp-parallel"
-version = "0.4.0.1"  # ysp/parallel.h v0.4.0 plus binding revision 1 (times in seconds); tests/test_parallel.py checks it against __version__
+version = "0.4.1"  # ysp/parallel.h v0.4.1, no binding revision (0.4.0.1: times in seconds); tests/test_parallel.py checks it against __version__
 description = "Parallel-port access (data/status/control, blocking and async pulses)"
 readme = "README.md"
 requires-python = ">=3.8"

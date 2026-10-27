@@ -12,7 +12,7 @@ function test_mex_rt()
     addpath(here);
     [bv, hv] = ysp_rt('version');
     fprintf('ysp_rt %s (ysp/rt.h %s)\n', bv, hv);
-    check(strcmp(bv, '1.0.0') && strcmp(hv, '0.9.0'), 'versions');
+    check(strcmp(bv, '1.0.0') && strcmp(hv, '0.9.1'), 'versions');
 
     test_clock();
     test_waits();

@@ -1,0 +1,44 @@
+# ysp/parallel.h mutants: the trailing edge's deadline (v0.4.1). The test
+# runs ypar_pulse() and ypar_pulse_async() on a handle with stand-in Out32
+# and Inp32 functions, so it needs Windows (and no port); it takes about
+# a second. docs/parallel.md lists the results.
+header = "ysp/parallel.h"
+
+[test.parallel]
+source = "tests/adapt/parallel_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O2", "-w"]
+libs = ["-lm"]
+timeout = 120
+
+[[mutant]]
+id = "ovf-01"
+name = "the deadline is the plain sum"
+test = "parallel"
+why = "t + INT64_MAX overflows into the past: the 0 of a pulse without end came at once."
+find = '''    return t > INT64_MAX - width_ns ? INT64_MAX : t + width_ns;'''
+replace = '''    return t + width_ns;'''
+
+[[mutant]]
+id = "ovf-02"
+name = "only INT64_MAX itself saturates"
+test = "parallel"
+why = "Any sum past INT64_MAX saturates: the test pulses INT64_MAX - 1 ms wide too."
+find = '''    return t > INT64_MAX - width_ns ? INT64_MAX : t + width_ns;'''
+replace = '''    return width_ns == INT64_MAX ? INT64_MAX : t + width_ns;'''
+
+[[mutant]]
+id = "ovf-03"
+name = "the async deadline is the plain sum"
+test = "parallel"
+why = "ypar_pulse_async() with a width near INT64_MAX must hold the value, not write the 0 at once."
+find = '''    int64_t off_at = ypar__off_at(yrt_now_ns(), width_ns);'''
+replace = '''    int64_t off_at = yrt_now_ns() + width_ns;'''
+
+[[mutant]]
+id = "ovf-04"
+name = "the blocking deadline is the plain sum"
+test = "parallel"
+why = "ypar_pulse() with a width near INT64_MAX must wait to the clock's end, not return at once."
+find = '''        (void)yrt_sleep_until(ypar__off_at(yrt_now_ns(), width_ns), YRT_DEFAULT_SPIN_NS);'''
+replace = '''        (void)yrt_sleep_until(yrt_now_ns() + width_ns, YRT_DEFAULT_SPIN_NS);'''

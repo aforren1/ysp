@@ -432,6 +432,18 @@ the six calls by type and runs a timer. `yrt_real_ns()` moves 2 ms in 2 ms
 of real time while the virtual clock stands still, and a 10 s virtual wait
 takes under 1 s of it. Mutants vc-01 to vc-13 are caught (13 of 13).
 
+### A wait without end (v0.9.1)
+
+`yrt_sleep_ns()` on the virtual clock added `ns` to the virtual now as
+`int64_t`, so `INT64_MAX` overflowed (undefined behavior in C) and the
+wait returned at once. The sum now saturates at `INT64_MAX`, and the
+driver's wait moves the clock to its end. On the real clock the sum is
+`uint64_t` and below 2^64, and `yrt_pump_wait()` saturated already. Checked
+on 2026-10-27: `tests/adapt/rt_test_virtual.h` sleeps `INT64_MAX` and
+`INT64_MAX - 1 ms` from 1000 s and finds the clock at `INT64_MAX` (MSVC,
+MinGW-w64, WSL2 gcc with ASan and UBSan); mutants `ovf-01` and `ovf-02`
+in `tests/mutate/rt.toml`, 2 of 2 killed.
+
 ## Windows 11 power throttling
 
 Windows 11 can throttle a process when all its windows are minimized,

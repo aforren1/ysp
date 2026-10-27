@@ -325,6 +325,21 @@ one USB packet, and the device would see a pulse of 0 us. It is a desc
 field and not a constant because the right value depends on the receiver's
 sampling period, which only the caller knows.
 
+#### A pulse without end (v0.6.2)
+
+`yser_pulse_off_at_ns()` added the width to the start and the hold to the
+return. Neither has an upper bound, so a width near `INT64_MAX`
+overflowed (undefined behavior in C) into a deadline in the past, and
+`off` came at once. Both sums now saturate at `INT64_MAX`: `yser_pulse()`
+waits without end and `yser_pulse_async()` holds `on` until the next
+write, as asked. The contract refuses only a negative width. Checked by
+`tests/adapt/device_test.c`, which calls the function with both widths
+and runs host-timed pulses of `INT64_MAX` through ysp/device.h on a
+simulated trigger box (2026-10-27; MSVC, MinGW-w64, WSL2 gcc with ASan
+and UBSan); mutants `ovf-08` to `ovf-10` in `tests/mutate/device.toml`,
+3 of 3 killed. The other sums of a clock and a duration in this header
+add `uint64_t` microseconds of an `int` timeout, and cannot overflow.
+
 ### Async pulse
 
 `yser_pulse_async(p, on, off, width_ns)` queues the pulse and returns; a

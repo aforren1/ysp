@@ -50,6 +50,14 @@ def test_version_matches_pyproject():
     assert m and m.group(1) == yd.__version__
 
 
+def test_wait_running_forever():
+    # math.inf is INT64_MAX ns; ysp/device.h 0.5.1 waits on it (0.5.0's
+    # now + INT64_MAX overflowed; the binding's 50 ms slices hid that here)
+    sim = yd.Sim("line")
+    with yd.Device("photo", "line", "serial:16C0:0483::", sim=sim, no_elevate=True) as dev:
+        assert dev.wait_running(math.inf), dev.error
+
+
 def test_constants():
     assert (yd.XID, yd.LINE, yd.PHOTO, yd.TRIGGERBOX, yd.BIOSEMI, yd.MMBTS, yd.LINES, yd.PARALLEL) == tuple(range(1, 9))
     assert (yd.CLOSED, yd.OPENING, yd.RUNNING, yd.LOST, yd.FAILED) == (0, 1, 2, 3, 4)
