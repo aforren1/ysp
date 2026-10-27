@@ -159,7 +159,7 @@ static void vx_close_all(void) {
             vx_node* n = *p;
             if ((pass == 0 && n->kind == VX_GFX) || (pass == 1 && n->kind == VX_SCREEN)) {
                 *p = n->next;
-                if (n->kind == VX_GFX) { yv_gfx_close((yv_gfx*)n->obj); free(n->obj); }
+                if (n->kind == VX_GFX) { yv_gfx_close((yv_gfx*)n->obj); yv_gfx_free_fonts((yv_gfx*)n->obj); free(n->obj); }
                 else yv_free((yv_screen*)n->obj);
                 free(n);
             } else {
@@ -839,6 +839,7 @@ static void vx_screen_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, 
 /* ---- gfx commands: stimuli, lists, groups, textures, bindings (ysp_vis_gfx.inc) ---------- */
 
 #include "ysp_vis_gfx.inc"
+#include "ysp_vis_text.inc"    /* ysp_gfx's text: fonts, texts, glyph and word boxes */
 
 /* ---- video commands -------------------------------------------------------------------- */
 

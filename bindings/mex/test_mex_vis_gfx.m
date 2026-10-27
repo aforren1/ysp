@@ -20,7 +20,7 @@ function test_mex_vis_gfx()
 
     % ---- the frame: no records unless asked; the row form
     [bv, gv] = ysp_gfx('version');
-    check(strcmp(bv, '1.1.0') && ~isempty(regexp(gv, '^\d+\.\d+\.\d+$', 'once')), 'version: binding %s, gfx.h %s', bv, gv);
+    check(strcmp(bv, '1.2.0') && ~isempty(regexp(gv, '^\d+\.\d+\.\d+$', 'once')), 'version: binding %s, gfx.h %s', bv, gv);
     h = ysp_screen('open', sim{:});
     for i = 1:3, ysp_screen('begin', h); ysp_screen('flip', h); end
     [f, quit, done] = ysp_screen('begin', h);

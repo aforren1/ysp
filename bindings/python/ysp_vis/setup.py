@@ -2,11 +2,14 @@
 
 The natives come from tools/vendor_vis.py (docs/bindings.md, ysp-vis):
 
-    uv run --no-project python tools/vendor_vis.py --write --angle --sdl msvc --pl-mpeg
+    uv run --no-project python tools/vendor_layout.py --write
+    uv run --no-project python tools/vendor_vis.py --write --angle --sdl msvc --pl-mpeg --layout msvc
 
-A static SDL3 (third_party/vis/sdl3/msvc) is linked in, and ANGLE's
-libEGL.dll and libGLESv2.dll (third_party/vis/angle) go into the wheel beside
-the extension, with SDL's and ANGLE's license notices.
+A static SDL3 (third_party/vis/sdl3/msvc) and the static text layout
+(third_party/vis/layout/msvc: pack/layout.c, Skribidi, HarfBuzz, SheenBidi,
+libunibreak, budouxc) are linked in, and ANGLE's libEGL.dll and
+libGLESv2.dll (third_party/vis/angle) go into the wheel beside the
+extension, with every license notice.
 """
 import os
 import shutil
@@ -35,12 +38,18 @@ NATIVES = pick(os.path.join(REPO_ROOT, "third_party", "vis"), os.path.join(HERE,
 SDL = os.path.join(NATIVES, "sdl3", "msvc")
 ANGLE = os.path.join(NATIVES, "angle")
 PL_MPEG = os.path.join(NATIVES, "pl_mpeg")   # MPEG-1 for ysp/video.h
+LAYOUT = os.path.join(NATIVES, "layout")      # text: pack/layout and its stack, static
+LAYOUT_MSVC = os.path.join(LAYOUT, "msvc")
+# In link order (tools/vendor_vis.py, LAYOUT_LIBS).
+LAYOUT_LIBS = ["ysp_vis_layout", "ysp_skribidi", "ysp_harfbuzz", "ysp_sheenbidi", "ysp_unibreak", "ysp_budoux"]
+LAYOUT_LICENSES = ["Skribidi", "HarfBuzz", "SheenBidi", "libunibreak", "budouxc"]
 
 for need in (os.path.join(SDL, "lib", "SDL3-static.lib"), os.path.join(ANGLE, "libEGL.dll"),
-             os.path.join(ANGLE, "libGLESv2.dll"), os.path.join(PL_MPEG, "pl_mpeg.h")):
+             os.path.join(ANGLE, "libGLESv2.dll"), os.path.join(PL_MPEG, "pl_mpeg.h"),
+             os.path.join(LAYOUT_MSVC, "lib", "ysp_harfbuzz.lib")):
     if not os.path.exists(need):
-        sys.exit("ysp-vis: %s is missing: run tools/vendor_vis.py --write --angle --sdl msvc --pl-mpeg "
-                 "(from the repository root)" % need)
+        sys.exit("ysp-vis: %s is missing: run tools/vendor_layout.py --write, then tools/vendor_vis.py --write "
+                 "--angle --sdl msvc --pl-mpeg --layout msvc (from the repository root)" % need)
 
 # The system libraries SDL3.dll imports itself (tools/vendor_vis.py, SDL_SYSTEM_LIBS).
 SDL_SYSTEM_LIBS = ["user32", "gdi32", "winmm", "imm32", "ole32", "oleaut32", "version", "uuid", "advapi32",
@@ -55,7 +64,7 @@ NATIVE_FILES = [
     (os.path.join(ANGLE, "LICENSE.ANGLE.txt"), "ysp_vis-LICENSE.ANGLE.txt"),
     (os.path.join(NATIVES, "sdl3", "LICENSE.txt"), "ysp_vis-LICENSE.SDL3.txt"),
     (os.path.join(PL_MPEG, "LICENSE.txt"), "ysp_vis-LICENSE.pl_mpeg.txt"),
-]
+] + [(os.path.join(LAYOUT, "LICENSE.%s.txt" % n), "ysp_vis-LICENSE.%s.txt" % n) for n in LAYOUT_LICENSES]
 
 
 class BuildExt(build_ext):
@@ -70,12 +79,12 @@ class BuildExt(build_ext):
 ext = Extension(
     name="ysp._vis",
     sources=["ysp_vis_ext.c"],
-    depends=["vis_gfx.c", "vis_video.c"],   # ysp.gfx and ysp.video, included by ysp_vis_ext.c
-    include_dirs=[HEADER_DIR, SHARE_DIR, os.path.join(SDL, "include"), PL_MPEG],
+    depends=["vis_gfx.c", "vis_text.c", "vis_video.c"],   # ysp.gfx and ysp.video, included by ysp_vis_ext.c
+    include_dirs=[HEADER_DIR, SHARE_DIR, os.path.join(SDL, "include"), PL_MPEG, os.path.join(LAYOUT_MSVC, "include")],
     define_macros=[("Py_LIMITED_API", "0x03080000")],
     py_limited_api=True,
-    library_dirs=[os.path.join(SDL, "lib")],
-    libraries=["SDL3-static"] + SDL_SYSTEM_LIBS,
+    library_dirs=[os.path.join(SDL, "lib"), os.path.join(LAYOUT_MSVC, "lib")],
+    libraries=LAYOUT_LIBS + ["SDL3-static"] + SDL_SYSTEM_LIBS,
 )
 
 # Metadata lives in pyproject.toml; this call carries the extension, the

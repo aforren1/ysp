@@ -28,7 +28,7 @@ point (the screen's center by default), y down, ori clockwise. Every time is
 seconds. The implementation is ysp._vis.
 """
 from ysp import _vis
-from ysp._vis import DrawList, Gfx, Group, Stim, Texture  # noqa: F401
+from ysp._vis import DrawList, Font, Gfx, Group, Stim, Text, Texture  # noqa: F401
 
 __version__ = _vis.__version__        # the ysp-vis distribution's
 HEADER_VERSION = _vis.GFX_VERSION     # ysp/gfx.h's

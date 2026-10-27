@@ -9,8 +9,10 @@ function test_mex_vis_window()
 %   stimuli made through ysp_gfx draw the same scene, bit for bit, as the
 %   same stimuli made in C with ysp/gfx.h's constructors, and instances
 %   match single stimuli. The second window gets the foreground as the first
-%   did. About 20 s. Prints PASS with the
-%   number of checks.
+%   did. Two texts made through ysp_gfx draw the same scene, bit for bit,
+%   as the same texts made in C with pack/layout and ygfx_crun() (needs
+%   Segoe UI and Microsoft YaHei). About 25 s. Prints PASS with the number
+%   of checks. This file is UTF-8.
 
     global YSP_VISW_CHECKS %#ok<GVMIS>
     YSP_VISW_CHECKS = 0;
@@ -52,6 +54,7 @@ function test_mex_vis_window()
     check(info.users == 0 && info.screens == 0 && info.gfx == 0, 'the last clear closed the window');
     clear ysp_vis;
     pixel_check(granted);
+    text_check();
     fprintf('PASS test_mex_vis_window (%d checks)\n', YSP_VISW_CHECKS);
 end
 
@@ -136,6 +139,45 @@ function P = scene(h, g, what)
         ysp_gfx('draw', g, what);
     elseif ~isempty(what)
         ysp_gfx('_c_scene', g, -what);
+    end
+    ysp_gfx('end', g);
+    P = ysp_gfx('read_scene', g, [0 0 800 600]);
+    ysp_screen('flip', h);
+end
+
+% The texts of the C path (yv_ctext_setup() in bindings/share/ysp_vis_text.h)
+% made through ysp_gfx, compared scene by scene.
+function text_check()
+    fonts = fullfile(getenv('WINDIR'), 'Fonts');
+    h = ysp_screen('open', 'windowed', true, 'size', [800 600]);
+    try
+        g = ysp_gfx('open', h, 'background', 0.25);
+        ysp_gfx('_c_text_setup', g);
+        f = ysp_gfx('font', g, {fullfile(fonts, 'segoeui.ttf'), fullfile(fonts, 'msyh.ttc')});
+        tw = [ysp_gfx('text', g, 'Hello, world', 'size', 40, 'x', -120, 'y', -80, 'color', [0.9 0.6 0.2]), ...
+              ysp_gfx('text', g, 'Ab 中文 مرحبا 12', 'font', f, 'size', 36, 'width', 220, 'align', 'start', ...
+                      'line_height', 1.2, 'spans', [1 2 0.1 0.8 0.2 0], 'color', [0.8 0.8 0.8], 'ori', 20, ...
+                      'place', 'top_left', 'anchor', 'top_left', 'x', 60, 'y', 300)];
+        empty = text_scene(h, g, []);
+        for k = 1:numel(tw)
+            c = text_scene(h, g, k - 1);
+            b = text_scene(h, g, tw(k));
+            check(~isequal(b, empty) && isequal(b, c), 'text %d: the same scene, bit for bit, as the C path', k);
+        end
+    catch e
+        try, ysp_screen('close', h); catch, end
+        rethrow(e);
+    end
+    ysp_screen('close', h);
+end
+
+function P = text_scene(h, g, what)
+    ysp_screen('begin', h);
+    ysp_gfx('begin', g);
+    if isa(what, 'uint64')
+        ysp_gfx('draw', g, what);
+    elseif ~isempty(what)
+        ysp_gfx('_c_text', g, what);
     end
     ysp_gfx('end', g);
     P = ysp_gfx('read_scene', g, [0 0 800 600]);

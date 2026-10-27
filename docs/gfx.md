@@ -4167,7 +4167,8 @@ so a second gfx would draw over the first. Nothing needed more.
 
 ### What is not bound, and why
 
-- Text and curve sets: phase C.
+- Text: bound in phase C ([Text](#text), below). Curve sets and curve runs
+  as objects of their own are not: a text makes and holds its own.
 - Compounds, effects (`fx`), paint (gradients), MSDF glyph runs, user
   shaders, render targets, setup passes, blur and the LUT: each needs
   memory or GL objects with a lifetime of its own (a primitive array, a
@@ -4287,3 +4288,219 @@ run on a machine) the two do not differ beyond the spread. A window took
 4.2 to 4.4 s warm, against the 2.5 s of settling the screen states; the
 rest was not traced. The 14 programs came from the cache in every warm
 open.
+
+### Text
+
+Phase C (2026-10-27, `ysp-vis` 0.10.2.1, MEX 1.2.0) binds text:
+`Gfx.font()` and `Gfx.text()` in Python, `ysp_gfx('font')` and
+`('text')` in MATLAB and Octave. The host-independent part is
+`bindings/share/ysp_vis_text.h`; `bindings/python/ysp_vis/vis_text.c` and
+`bindings/mex/ysp_vis_text.inc` turn host values into it. The references
+are [the Python README](../bindings/python/ysp_vis/README.md#text-yspgfx)
+and [the MEX README](../bindings/mex/README.md#text-in-ysp_gfx).
+
+**The layout is pack/layout's, not `ygfx_text_make()`'s.** The header's
+own text lays out by advances (no shaping, no kerning, no bidi) and makes a
+curve set per text; the binding takes the layout that the pack tool and the
+player use ([layout.md](layout.md): Skribidi with HarfBuzz 14.6.0, pinned
+and patched), so a text in Python or MATLAB is shaped, ordered and broken
+as the same text in a pack, and every script the fonts hold works. The
+glue (`ylay_`) gives each block as curve-run items over ysp/outline.h
+curve sets; the binding uploads new glyphs with `ygfx_cset_add()` after
+each layout, as `examples/layout/gfx_layout.c` does.
+
+**One module, the layout linked in.** The layout stack is built as static
+libraries by `tools/vendor_vis.py --layout` (`tools/vis_layout/CMakeLists.txt`,
+MSVC `/MD` for the wheel and MATLAB, Octave's MinGW gcc for Octave) and
+linked into the core. HarfBuzz builds without exceptions and RTTI, so
+neither module imports a C++ runtime (`dumpbin /dependents`: no
+`msvcp140.dll`; the Octave file links without `-lstdc++`). The cost in
+size, against phase B's build (MSVC 19.44, MinGW gcc of Octave 10.1):
+
+| File | Phase B | With text | Added |
+|---|---|---|---|
+| `ysp/_vis.pyd` (Python, abi3) | 3,376,128 | 4,874,752 | 1.50 MB |
+| the wheel (compressed) | 5,101,792 | 5,759,470 | 0.66 MB (13 %) |
+| `ysp_vis.mexw64` (MATLAB) | 3,332,608 | 4,830,720 | 1.50 MB |
+| `ysp_vis.mex` (Octave, stripped) | 4,525,568 | 6,501,888 | 1.98 MB |
+
+ANGLE's two DLLs are 8.6 MB beside these. Text as a separate optional
+module was not built: it would save at most these 1.5 to 2 MB, and a text
+must reach the gfx's curve sets, its object list, its lifetime and the
+frame's draw path, which a second module would take through another
+shared table (Sharing one implementation, [bindings.md](bindings.md)).
+The vendored sources are not in the wheel; `tools/vendor_layout.py`
+fetches them by commit and checks them file by file. Their license files
+ship beside the module.
+
+**No bundled font.** The default is the system's sans font (Segoe UI,
+else Arial: the files `ygfx_text_make()` takes on Windows, the only
+platform). A bundled file (Noto Sans and DejaVu Sans allow it) would be
+another pin and another license for a default that every Windows machine
+has; a text's `stamp` records the SHA-256 of the fonts it used, so a data
+file says which glyphs a participant saw.
+
+**A text is a stimulus.** A text is a `yv_stim` of its own kind whose
+`ygfx_stim` is its first run (one font at one size); a text with more
+runs (a fallback font, a span of another size) draws the others as copies
+of it with their run's set, items and size. Every run has the block's
+box, so they stay in register whatever the transform, and lists, bulk
+sets, timeline bindings (`x`, `y`, `ori`, `opacity`, `color`, `visible`,
+...) and hit tests take a text unchanged. Its own parameters (`text`,
+`font`, `size`, `width`, `align`, `line_height`, `dir`, `lang`, `spans`)
+lay it out again: between frames, never bound to a channel; a refused
+change restores the old parameters and layout. The box is the laid-out
+block, or the wrap box when `width` is set, placed by `place` and
+`anchor`. Spans with a color use the run's palette (`YGFX_I_COLOR`):
+entry 0 is the text's color, synced at each draw, so binding `color`
+still works.
+
+**Boxes for reading experiments.** `glyphs()` gives each glyph's
+character index, line and ink box (the curve set's glyph box times the
+size, at the pen); `words()` the runs of characters between white space,
+across from the leftmost glyph's pen to the next pen on the line to the
+right of its last glyph (the layout's advance, kerning included), down
+the line's box; `lines()` each line. All are screen px, axis-aligned,
+through the inverse of `ygfx_local()`. In a real window the drawn ink lay
+inside the glyph and word boxes (`test_text_window.py`).
+
+**Two limits found.**
+
+- `ygfx_prime()` right after a flip: in a window (composition) and
+  fullscreen (independent flip), on the Iris Xe with ANGLE 2.1.25848,
+  `Gfx.prime()` called after `Screen.flip()` and before the next
+  `begin()` or `wait_flip()` blocked for 18.4 s, 19.6 s, 40.8 s and 51.4 s
+  in four windowed runs, and for more than 300 s (ended by a timer) in one
+  windowed and one fullscreen run; after `wait_flip()`, or before any
+  frame, it took 1 to 3 ms, and a second prime after a slow one 2 to 3 ms.
+  Repro: open a screen, draw one frame, flip, sleep 1 s (or draw 60 more
+  frames), then `g.prime()`. The cause was not traced (the pixel
+  `ygfx__prime()` reads back waits on the GPU while the flip is pending).
+  The binding primes the text program after its first curve set, so it
+  calls `yscr_wait_flip()` first (at most one frame, once per gfx). Other
+  calls that read back between frames (`read_scene()` after a flip, not
+  before) would meet the same; the phase B tests read before the flip.
+- `YGFX_MAX_CSETS` is 8 in the header, and a binding's text needs a set
+  per font file of each fallback list. The core defines it as 32 before
+  it includes ysp/gfx.h (the header allows it: `#ifndef`); 32 sets cost
+  an array of 32 small records in `ygfx_gfx`.
+
+Neither is a change of the header.
+
+### Text: what is not bound, and why
+
+- OpenType feature switches and a language per span: `ylay_style` and
+  `ylay_span` take neither (pack/layout v0.1.0); HarfBuzz's defaults
+  apply (kerning, ligatures, marks).
+- Vertical text, justification, color glyphs, Skribidi's editor (caret,
+  selection, IME): pack/layout has the editor; a typed response in a
+  host needs `yscr_text_input()` and a design of its own.
+- Outlines and faux bold (ysp/outline.h's strokes into a set of their
+  own), glow and soft shadows (BLUR: a render target and passes in the
+  frame), MSDF glyph runs, curve sets and runs as objects of their own:
+  not needed by the Stroop and reading examples; a hard shadow is a
+  second text, offset and recolored.
+- Curve-run fields per letter (`YGFX_I_*` for `y`, `gate`, `ori` per
+  glyph, GSAP-style staggers): a text's items are the layout's; a
+  per-letter animation needs a run of its own items, which the binding
+  does not expose.
+
+### Text: tests
+
+On the simulated display, in CI: `tests/test_text_sim.py` (13 tests) and
+`test_mex_vis_text.m` (53 checks in MATLAB R2023a, 52 in Octave 10.1,
+which has no UTF-16 surrogate check). They check fonts by path, bytes and
+fallback list (the SHA-256 against Python's hashlib; CJK missing in Segoe
+UI and present with YaHei after it), Arabic right to left, wrapping at a
+width (every word inside, the lines in order), spans and their refusals, a
+change of text between trials (no glyph built again), the refusal inside
+a frame and the restore after a refused change, glyph, word and line
+boxes inside the bounds, hit tests at each glyph's ink center (turned 90
+degrees too), lists, bulk sets and bindings of texts (`size` refused),
+degrees, empty text and newlines, non-ASCII strings in and out of MATLAB
+(UTF-16, an emoji as a surrogate pair) and Octave (UTF-8 bytes), with
+`strfind` giving the same indices as `words()`, and the lifetime rules (a
+Font outlives the texts that hold it; after the gfx or the screen closes,
+`ClosedError` and `ysp_gfx:handle`; `free` refuses a font in use).
+
+In a real window, local only (`YSP_VIS_WINDOW=1 pytest
+tests/test_text_window.py`, `test_mex_vis_window.m`): two texts made
+through the binding draw the same scene, bit for bit, as the same texts
+made in C with pack/layout and `ygfx_crun()` (`yv_ctext_setup()`): "Hello,
+world" in Segoe UI at 40 px; and Latin, CJK and Arabic from a Segoe UI
+and YaHei list, wrapped at 220 px, line height 1.2, a green span, turned
+20 degrees about its top-left. The ink drawn lies inside the boxes of
+`glyphs()` and `words()`; a text changed and changed back draws its first
+scene again.
+
+### Text: measured
+
+The laptop of [av_probe.md](av_probe.md) (i7-1360P, 4 P and 8 E cores,
+Iris Xe, internal panel 1920 x 1200 at 60 Hz, Windows 11 26200, AC),
+every run through the timing guard (load 0 to 20 % at its start),
+ysp-vis 0.10.1.2 (CPython 3.12) and MEX 1.2.0 (MATLAB R2023a, Octave
+10.1), 2026-10-27, 16:34 to 17:06. No photodiode: every tier is the
+record's. No timing tier is claimed for text.
+
+**A layout** (`tests/probe/vis/text_cost.py`, `text_cost_mex.m`, on the
+simulated display: CPU time). One text set alternately to two strings of
+its class whose glyphs are built, Segoe UI: the call (`t.text = s`;
+`ysp_gfx('set', t, 'text', s)`) and the layout's own `layout_time`
+(Skribidi and the conversion into runs). Python: per call, 3000 calls in
+3 rounds interleaved over the cases; MATLAB and Octave: the mean of 2000
+calls in one tic and toc (Octave's toc on Windows resolves about 1 ms),
+and `layout_time` per call from the C clock. Microseconds:
+
+| Text | Python call p50 / p90 | MATLAB call mean | Octave call mean | `layout_time` p50, Python / MATLAB / Octave |
+|---|---|---|---|---|
+| a word, 5 characters, 64 px | 2.6 / 2.7 | 9.8 | 13.3 | 2.0 / 4.6 / 6.3 |
+| a sentence, 44 characters, 32 px | 8.0 / 8.8 | 16.0 | 16.3 | 7.4 / 12.9 / 6.9 |
+| a paragraph, 520 characters, 20 px, wrapped at 600 px (8 lines) | 73.9 / 77.1 | 129.7 | 61.5 | 72.7 / 93.6 / 59.4 |
+| an Arabic sentence, 34 characters | 10.7 / 11.0 | 14.6 | 14.5 | 9.9 / 11.8 / 8.7 |
+
+The largest single call: 22 to 499 us for a word, 168 to 871 us for the
+paragraph. The same C work spread by up to 2 times between the runs (the
+first Python run, not interleaved: word 12.0 us, paragraph 78.2 us at the
+median), which this machine's P and E cores and clocks can explain; the
+cause was not traced. What it means: a word or sentence changed between
+trials costs 3 to 16 us of a 16.7 ms frame, a page 0.06 to 0.13 ms. The
+first layout of the paragraph in a font with no glyph built took 0.92 ms:
+0.26 ms layout, 0.55 ms building 29 glyphs, 0.07 ms uploading them.
+
+**Texts in a frame** (`tests/probe/vis/text_loop.py`, `text_loop_mex.m`,
+`text_run.sh`): 60 s fullscreen, AUTO (an independent flip), a frame is
+the screen's begin, `frame(scene)`, the screen's flip; work is the DRAW
+phase (the host's time from begin's return to the flip call). `words`:
+N one-word texts (6 to 9 letters, 28 px, Segoe UI) in one DrawList;
+`page`: one text of 520 characters, 20 px, wrapped at 600 px; `label`: 10
+words and a label laid out again every frame ("frame 123", inside the
+work).
+
+| Scene | Host | Records | Missed (vblanks) | Work ms p50 / p99 / max | Tier |
+|---|---|---|---|---|---|
+| 100 words | Python 3.12 | 3601 | 1 (1) | 0.99 / 2.29 / 2.74 | t1 all |
+| 100 words | MATLAB R2023a | 3601 | 1 (1) | 1.22 / 2.67 / 6.46 | t1 all |
+| 100 words | Octave 10.1 | 3602 | 0 (0) | 1.31 / 2.89 / 5.10 | t1 all |
+| 500 words | Python 3.12 | 3446 | 156 (156) | 3.65 / 8.43 / 12.03 | t1 all |
+| 500 words | MATLAB R2023a | 3426 | 176 (176) | 4.21 / 8.94 / 11.91 | t1 all |
+| 500 words | Octave 10.1 | 3357 | 244 (244) | 4.72 / 9.59 / 26.37 | t1 all |
+| a page | Python 3.12 | 3601 | 1 (1) | 0.39 / 0.92 / 1.49 | t1 all |
+| a page | MATLAB R2023a | 3602 | 0 (0) | 0.51 / 1.26 / 3.82 | t1 all |
+| a page | Octave 10.1 | 3602 | 0 (0) | 0.63 / 1.38 / 1.76 | t1 all |
+| label + 10 words | Python 3.12 | 3602 | 0 (0) | 0.51 / 1.23 / 3.52 | t1 all |
+| label + 10 words | MATLAB R2023a | 3602 | 0 (0) | 0.72 / 1.69 / 3.01 | t1 all |
+| label + 10 words | Octave 10.1 | 3602 | 0 (0) | 0.79 / 1.75 / 2.95 | t1 all |
+
+- 100 words, a page, and a label laid out every frame fit the frame in
+  every host: work p99 under 3 ms, at most one missed frame a minute.
+- 500 words missed 4 to 7 % of the frames in every host, with the
+  host's work at p99 8.4 to 9.6 ms: the CPU part fits; the misses were not
+  traced (the GPU's time per frame was not measured here). 500 texts are
+  500 runs, 1500 of the gfx's draw blocks: past 341 a frame, `max_draws`
+  must be raised (`Gfx(max_draws=4096)`; the default 1024 refused item
+  341, "pool or frame full"). Text that does not move belongs in one
+  text (the page: 0.39 to 0.63 ms) or, static, in a target drawn once
+  (ysp/gfx.h CURVE RUNS: 0.5 ms a page), which the binding does not
+  expose.
+- The host's share is the difference between the hosts: MATLAB 0.1 to 0.6
+  ms and Octave 0.2 to 1.1 ms over Python at the median.

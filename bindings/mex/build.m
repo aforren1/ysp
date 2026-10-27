@@ -49,19 +49,25 @@ function build(name)
     % backends are stubs.
     unsupported = {'ysp_parallel.c', ismac; 'ysp_vis.c', ~ispc; 'ysp_screen.c', ~ispc; ...
                    'ysp_gfx.c', ~ispc; 'ysp_video.c', ~ispc};
-    % ysp_vis.c links a static SDL3 3.4.0 and gets ANGLE's libEGL.dll and
-    % libGLESv2.dll beside it, all from third_party/vis/, which
-    % tools/vendor_vis.py makes: --sdl msvc for MATLAB, --sdl mingw with
-    % Octave's own gcc for Octave.
+    % ysp_vis.c links a static SDL3 3.4.0 and the static text layout
+    % (pack/layout.c, Skribidi, HarfBuzz, SheenBidi, libunibreak, budouxc),
+    % and gets ANGLE's libEGL.dll and libGLESv2.dll beside it, all from
+    % third_party/vis/, which tools/vendor_vis.py makes (after
+    % tools/vendor_layout.py --write): --sdl msvc --layout msvc for MATLAB,
+    % --sdl mingw --layout mingw with Octave's own gcc for Octave.
     vis = fullfile(here, '..', '..', 'third_party', 'vis');
     is_octave = exist('OCTAVE_VERSION', 'builtin') ~= 0;
     if is_octave
         vis_sdl = fullfile(vis, 'sdl3', 'mingw');
         vis_lib = 'libSDL3.a';
+        vis_lay = fullfile(vis, 'layout', 'mingw');
+        vis_lay_lib = 'libysp_harfbuzz.a';
         vis_tc = 'mingw --mingw-bin <Octave>/mingw64/bin';
     else
         vis_sdl = fullfile(vis, 'sdl3', 'msvc');
         vis_lib = 'SDL3-static.lib';
+        vis_lay = fullfile(vis, 'layout', 'msvc');
+        vis_lay_lib = 'ysp_harfbuzz.lib';
         vis_tc = 'msvc';
     end
 
@@ -78,8 +84,10 @@ function build(name)
         end
         if strcmp(srcs{i}, 'ysp_vis.c') && (~exist(fullfile(vis_sdl, 'lib', vis_lib), 'file') || ...
                                             ~exist(fullfile(vis, 'angle', 'libEGL.dll'), 'file') || ...
-                                            ~exist(fullfile(vis, 'pl_mpeg', 'pl_mpeg.h'), 'file'))
-            fprintf('skipping ysp_vis.c: no static SDL3, ANGLE or pl_mpeg in %s (tools/vendor_vis.py --write --angle --pl-mpeg --sdl %s)\n', vis, vis_tc);
+                                            ~exist(fullfile(vis, 'pl_mpeg', 'pl_mpeg.h'), 'file') || ...
+                                            ~exist(fullfile(vis_lay, 'lib', vis_lay_lib), 'file'))
+            fprintf('skipping ysp_vis.c: no static SDL3, ANGLE, pl_mpeg or text layout in %s (tools/vendor_layout.py --write, then tools/vendor_vis.py --write --angle --pl-mpeg --sdl %s --layout %s)\n', ...
+                    vis, vis_tc, strtok(vis_tc));
             continue;
         end
         if strcmp(srcs{i}, 'ysp_audio.c') && ~exist(fullfile(ma, 'miniaudio.h'), 'file')
@@ -116,12 +124,15 @@ function build(name)
             % The system libraries SDL3.dll imports itself (tools/vendor_vis.py).
             sys = {'-luser32', '-lgdi32', '-lwinmm', '-limm32', '-lole32', '-loleaut32', '-lversion', ...
                    '-luuid', '-ladvapi32', '-lsetupapi', '-lshell32', '-ldinput8'};
-            args = [args, {['-I' fullfile(vis_sdl, 'include')], ['-I' fullfile(vis, 'pl_mpeg')], ['-L' fullfile(vis_sdl, 'lib')]}];   %#ok<AGROW>
+            args = [args, {['-I' fullfile(vis_sdl, 'include')], ['-I' fullfile(vis, 'pl_mpeg')], ['-L' fullfile(vis_sdl, 'lib')], ...
+                           ['-I' fullfile(vis_lay, 'include')], ['-L' fullfile(vis_lay, 'lib')]}];   %#ok<AGROW>
+            % The text layout, in link order (tools/vendor_vis.py, LAYOUT_LIBS).
+            lay = {'-lysp_vis_layout', '-lysp_skribidi', '-lysp_harfbuzz', '-lysp_sheenbidi', '-lysp_unibreak', '-lysp_budoux'};
             if is_octave
                 % Stripped: about 10 MB to 5 MB (docs/winthread_probe.md, section 6).
-                args = [args, {'-lSDL3'}, sys, {'-s'}];   %#ok<AGROW>
+                args = [args, lay, {'-lSDL3'}, sys, {'-s'}];   %#ok<AGROW>
             else
-                args = [args, {'-lSDL3-static'}, sys];   %#ok<AGROW>
+                args = [args, lay, {'-lSDL3-static'}, sys];   %#ok<AGROW>
             end
             % Beside the core: ysp/screen.h loads libEGL.dll from the core's own
             % directory (desc.angle_dir), and libEGL loads libGLESv2.dll from its own.
@@ -130,6 +141,10 @@ function build(name)
             copyfile(fullfile(vis, 'angle', 'LICENSE.ANGLE.txt'), fullfile(here, 'ysp_vis-LICENSE.ANGLE.txt'));
             copyfile(fullfile(vis, 'sdl3', 'LICENSE.txt'), fullfile(here, 'ysp_vis-LICENSE.SDL3.txt'));
             copyfile(fullfile(vis, 'pl_mpeg', 'LICENSE.txt'), fullfile(here, 'ysp_vis-LICENSE.pl_mpeg.txt'));
+            lic = {'Skribidi', 'HarfBuzz', 'SheenBidi', 'libunibreak', 'budouxc'};
+            for k = 1:numel(lic)
+                copyfile(fullfile(vis, 'layout', ['LICENSE.' lic{k} '.txt']), fullfile(here, ['ysp_vis-LICENSE.' lic{k} '.txt']));
+            end
         end
         if ispc
             % Windows async-pulse workers use Win32 threads, so no thread

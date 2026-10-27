@@ -16,6 +16,9 @@ without a call into the module. Windows only.
 | `table.py` | The table of the CSVs, with av_probe.md's columns; `--after 120 CSV` gives the records after the gap |
 | `movie.py` | A movie (phase B, `ysp.video`): each frame `begin()`, `Movie.update()` (timed), `Gfx.begin()`, `Movie.draw()`, `Gfx.end()`, `flip()`; `--wav` adds the soundtrack on the default output. Writes PREFIX.frames.csv (FRAME records), .flips.csv (flip records with the DRAW, SWAP and UPLOAD phases), .update.csv and .txt |
 | `movie_mex.m` | The same in MATLAB and Octave |
+| `text_cost.py`, `text_cost_mex.m` | Text (phase C): a layout's cost on the simulated display, a word, a sentence, a paragraph and an Arabic sentence set alternately to two strings ([gfx.md](../../../docs/gfx.md#text-measured)) |
+| `text_loop.py`, `text_loop_mex.m` | Text: N one-word texts, a page, or words and a label laid out again each frame; one CSV row per flip record (`table.py`) |
+| `text_run.sh` | One text run: the host, the mode (`words`, `page`, `label`, `cost`) and N |
 | `movie_table.py` | The table of movie runs: frame decisions, drops, missed flips, work, `update()`, the A/V error the records report, the sound's start ([video.md](../../../docs/video.md#bindings)) |
 
 "Work" is a record's DRAW phase: the time from the return of
@@ -52,3 +55,12 @@ $PY tests/probe/vis/movie_table.py OUT/py30 OUT/ml30
 ```
 
 `window` in place of `full` runs a 1280 x 720 window. Shift+Esc ends a run.
+
+The text runs of [gfx.md](../../../docs/gfx.md#text-measured), 60 s each:
+
+```sh
+$G vis_text_cost_py bash tests/probe/vis/text_run.sh py cost 3000 OUT/cost_py      # OUT/cost_py.txt
+$G vis_text_words_py bash tests/probe/vis/text_run.sh py words 100 OUT/words100_py
+$G vis_text_page_octave bash tests/probe/vis/text_run.sh octave page 1 OUT/page_octave
+$PY tests/probe/vis/table.py OUT/words100_py.csv OUT/page_octave.csv
+```

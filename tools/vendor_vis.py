@@ -6,6 +6,8 @@
     uv run --no-project python tools/vendor_vis.py --write --sdl msvc       # static SDL3, MSVC
     uv run --no-project python tools/vendor_vis.py --write --sdl mingw --mingw-bin DIR
     uv run --no-project python tools/vendor_vis.py --write --pl-mpeg        # pl_mpeg.h (MPEG-1)
+    uv run --no-project python tools/vendor_vis.py --write --layout msvc    # text layout, MSVC
+    uv run --no-project python tools/vendor_vis.py --write --layout mingw --mingw-bin DIR
     ... --cache DIR       keep the downloads between runs (CI)
 
 What it makes, Windows only (the other screen backends are stubs):
@@ -20,6 +22,14 @@ What it makes, Windows only (the other screen backends are stubs):
     third_party/vis/pl_mpeg/      pl_mpeg.h (MIT, its license in the file):
                                   ysp/video.h's MPEG-1 decoder, the pin of
                                   CMakeLists.txt's YSP_FETCH_PL_MPEG
+    third_party/vis/layout/msvc/  lib/ (static, /MD) and include/ysp/layout.h:
+                                  pack/layout.c with Skribidi, HarfBuzz,
+                                  SheenBidi, libunibreak and budouxc, built by
+                                  tools/vis_layout/CMakeLists.txt from the
+                                  trees tools/vendor_layout.py writes (run it
+                                  first): the text of ysp.gfx and ysp_gfx
+    third_party/vis/layout/mingw/ the same with Octave's gcc
+    third_party/vis/layout/LICENSE.*.txt   their license files
 
 Why static SDL3: a module that imports SDL3.dll binds to any SDL3.dll
 already loaded in the process (docs/av_probe.md, section 5). Why ANGLE from
@@ -280,7 +290,7 @@ def run(cmds, env=None, vcvars=None):
         finally:
             os.remove(bat)
         if r.returncode:
-            sys.exit("error: the SDL3 build failed (exit %d)" % r.returncode)
+            sys.exit("error: the build failed (exit %d)" % r.returncode)
         return
     for c in cmds:
         r = subprocess.run(c, env=env)
@@ -344,6 +354,87 @@ def write_sdl(toolchain, cache, mingw_bin, jobs):
     print("ok: static SDL3 %s (%s) in %s" % (SDL_VERSION, toolchain, os.path.relpath(prefix, ROOT)))
 
 
+# ---- text layout (pack/layout.c and third_party/'s layout stack) -------------
+
+# The license files of the layout stack (third_party/README.md), shipped
+# beside the module as ysp_vis-LICENSE.<name>.txt.
+LAYOUT_LICENSES = [
+    ("Skribidi", ["skribidi/LICENSE"]),
+    ("HarfBuzz", ["harfbuzz/COPYING", "harfbuzz/src/ms-use/COPYING"]),
+    ("SheenBidi", ["sheenbidi/LICENSE"]),
+    ("libunibreak", ["libunibreak/LICENCE"]),
+    ("budouxc", ["budouxc/LICENSE", "budouxc/LICENSE-BudouX"]),
+]
+# In link order (MinGW's ld resolves left to right).
+LAYOUT_LIBS = ["ysp_vis_layout", "ysp_skribidi", "ysp_harfbuzz", "ysp_sheenbidi", "ysp_unibreak", "ysp_budoux"]
+
+
+def layout_source_hash():
+    """The SHA-256 of third_party/MANIFEST.sha256 and the patches: what the
+    libraries were built from (the stamp records it; verify compares)."""
+    tp = os.path.join(ROOT, "third_party")
+    h = hashlib.sha256()
+    names = ["MANIFEST.sha256"] + sorted("patches/" + n for n in os.listdir(os.path.join(tp, "patches")))
+    for n in names:
+        with open(os.path.join(tp, n), "rb") as f:
+            h.update(n.encode() + b"\0" + f.read())
+    return h.hexdigest()
+
+
+def write_layout(toolchain, mingw_bin, jobs):
+    tp = os.path.join(ROOT, "third_party")
+    if not os.path.exists(os.path.join(tp, "harfbuzz", "src", "harfbuzz.cc")):
+        sys.exit("error: third_party/ has no layout sources: run tools/vendor_layout.py --write first")
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "vendor_layout.py")], capture_output=True, text=True)
+    if r.returncode:
+        sys.exit("error: tools/vendor_layout.py does not verify third_party/:\n%s%s" % (r.stdout, r.stderr))
+    prefix = os.path.join(OUT, "layout", toolchain)
+    work = tempfile.mkdtemp(prefix="ysp-layout-%s-" % toolchain)
+    try:
+        ninja = find_ninja()
+        if not ninja:
+            sys.exit("error: ninja not found (PATH, or Visual Studio's CMake extension)")
+        cfg = ["cmake", "-S", os.path.join(ROOT, "tools", "vis_layout"), "-B", work, "-G", "Ninja",
+               "-DCMAKE_MAKE_PROGRAM=" + ninja, "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_INSTALL_PREFIX=" + prefix]
+        bld = ["cmake", "--build", work, "-j", str(jobs)]
+        ins = ["cmake", "--install", work]
+        env = dict(os.environ)
+        if os.path.isdir(prefix):
+            shutil.rmtree(prefix)
+        if toolchain == "msvc":
+            cfg += ["-DCMAKE_C_COMPILER=cl", "-DCMAKE_CXX_COMPILER=cl"]
+            vcvars = None if shutil.which("cl") else find_vcvars()
+            if not shutil.which("cl") and not vcvars:
+                sys.exit("error: no MSVC: run from a developer prompt or install Visual Studio's C++ tools")
+            run([cfg, bld, ins], env=env, vcvars=vcvars)
+            cc = "msvc"
+        else:
+            if not mingw_bin:
+                sys.exit("error: --mingw-bin DIR: the mingw64/bin of the gcc that builds the MEX files "
+                         "(Octave's own, for Octave)")
+            env["PATH"] = mingw_bin + os.pathsep + env.get("PATH", "")
+            mb = mingw_bin.replace("\\", "/")
+            cfg += ["-DCMAKE_C_COMPILER=%s/gcc.exe" % mb, "-DCMAKE_CXX_COMPILER=%s/g++.exe" % mb]
+            run([cfg, bld, ins], env=env)
+            cc = subprocess.run([os.path.join(mingw_bin, "gcc.exe"), "-dumpfullversion"], capture_output=True,
+                                text=True, env=env).stdout.strip()
+        with open(os.path.join(prefix, "STAMP.txt"), "w", newline="\n") as f:
+            f.write("ysp-vis text layout, static, %s\nthird_party sha256 %s\ncompiler %s\nlink, in order: %s\n" % (
+                toolchain, layout_source_hash(), cc, " ".join(LAYOUT_LIBS)))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    lic = os.path.join(OUT, "layout")
+    for name, files in LAYOUT_LICENSES:
+        parts = []
+        for rel in files:
+            with open(os.path.join(tp, rel), "r", encoding="utf-8", errors="replace") as f:
+                parts.append("---- third_party/%s ----\n\n%s" % (rel, f.read().replace("\r\n", "\n")))
+        with open(os.path.join(lic, "LICENSE.%s.txt" % name), "w", encoding="utf-8", newline="\n") as f:
+            f.write("%s, compiled into the text layout of ysp-vis (third_party/README.md has the pin).\n\n%s" % (
+                name, "\n".join(parts)))
+    print("ok: text layout (%s) in %s" % (toolchain, os.path.relpath(prefix, ROOT)))
+
+
 # ---- verify ------------------------------------------------------------------
 
 def verify():
@@ -383,6 +474,20 @@ def verify():
                 bad += 1
                 continue
         print("ok: %s" % os.path.relpath(p, ROOT))
+    for tc, lib in (("msvc", "ysp_harfbuzz.lib"), ("mingw", "libysp_harfbuzz.a")):
+        p = os.path.join(OUT, "layout", tc, "lib", lib)
+        stamp = os.path.join(OUT, "layout", tc, "STAMP.txt")
+        if not os.path.exists(p):
+            print("missing: %s (--write --layout %s)" % (os.path.relpath(p, ROOT), tc))
+            continue   # one toolchain is enough for one host
+        if os.path.exists(os.path.join(ROOT, "third_party", "MANIFEST.sha256")):
+            with open(stamp) as f:
+                if layout_source_hash() not in f.read():
+                    print("stale: %s was built from another third_party/ (MANIFEST.sha256 or patches/)"
+                          % os.path.relpath(p, ROOT))
+                    bad += 1
+                    continue
+        print("ok: %s" % os.path.relpath(p, ROOT))
     return bad
 
 
@@ -392,6 +497,8 @@ def main():
     ap.add_argument("--angle", action="store_true", help="with --write: ANGLE's DLLs from the Electron zip")
     ap.add_argument("--sdl", default="", help="with --write: msvc, mingw or msvc,mingw")
     ap.add_argument("--pl-mpeg", action="store_true", help="with --write: pl_mpeg.h, the MPEG-1 decoder")
+    ap.add_argument("--layout", default="", help="with --write: the text layout, msvc, mingw or msvc,mingw "
+                                                 "(after tools/vendor_layout.py --write)")
     ap.add_argument("--mingw-bin", help="the mingw64/bin whose gcc builds the Octave MEX files")
     ap.add_argument("--cache", help="a folder that keeps the downloads between runs")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
@@ -407,6 +514,10 @@ def main():
             if tc not in ("msvc", "mingw"):
                 sys.exit("error: --sdl takes msvc, mingw or both")
             write_sdl(tc, a.cache, a.mingw_bin, a.jobs)
+        for tc in [t for t in a.layout.split(",") if t]:
+            if tc not in ("msvc", "mingw"):
+                sys.exit("error: --layout takes msvc, mingw or both")
+            write_layout(tc, a.mingw_bin, a.jobs)
     return 1 if verify() else 0
 
 
