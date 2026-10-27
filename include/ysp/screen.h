@@ -1,4 +1,4 @@
-/* ysp/screen.h - v0.10.1 - public domain single-header display library
+/* ysp/screen.h - v0.10.2 - public domain single-header display library
  *
  *   The window, the GL ES 3.0 context, the display mode and the swap path
  *   of a stimulus display, with flip at a time: each frame learns the
@@ -255,6 +255,13 @@
  *     the raise was forced and the screen still has the foreground. A
  *     refused foreground does not fail open(); settling decides that.
  *     Other platforms and a screen without a window report n/a.
+ *     The next screen of the process (v0.10.2): a close() while the
+ *     screen has the foreground keeps the right for the process
+ *     (AllowSetForegroundWindow), so the next open() gets the foreground
+ *     as this one did. With the window thread each run of screens has a
+ *     new thread, and Windows had refused the raise of every screen after
+ *     the first one in a window (docs/screen.md, "The next screen's
+ *     raise").
  *
  *   CONTEXT HOOK (v0.5.2)
  *     open() settles for 0.5 to 0.8 s fullscreen and 2.5 s in a window.
@@ -1482,6 +1489,16 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.10.2 - FOREGROUND, the next screen: with the window thread, the
+ *          second and later screens that one process opened after a
+ *          close got no foreground in a window (refused: the window opened
+ *          behind, and where another window covered it every record was
+ *          OCCLUDED at tier 3), and fullscreen only by a forced raise.
+ *          Windows let the thread that had the foreground window raise
+ *          the next one, and the window thread ends at the last close.
+ *          close() now calls AllowSetForegroundWindow for its own process
+ *          while the screen has the foreground. Measured: STATUS.
+ *          Found by the ysp-vis real-window tests.
  *   v0.10.1 - THE GRID after a gap: when no OS time came for 0.5 s, the
  *          first begin() anchors the grid on DWM's vblank time, so the
  *          records after a wait between trials are not GRID_UNSTABLE.
@@ -1791,7 +1808,15 @@
  *          groups, input restamping, mode lists and the parameter table.
  *          The other swap paths are stubs that refuse to open.
  *
- *   STATUS: v0.10.1 (the grid after a gap; docs/screen.md, "The grid
+ *   STATUS: v0.10.2 (the next screen's raise; docs/screen.md, "The next
+ *   screen's raise"): on the laptop below, AC, screens one after another
+ *   in one process with the window thread ON, every screen after the first
+ *   was refused in a window before (7 of 7 in C, every record OCCLUDED; 4
+ *   of 4 in Python) and granted after (8 of 8 in C, 6 of 6 in Python, no
+ *   OCCLUDED or PATH_UNKNOWN record); OFF was granted before and after.
+ *   tests/adapt/screen_window_test.c --only sequence: 17 checks (windowed,
+ *   fullscreen, two at once); 1 new mutant, killed (11 checks fail).
+ *   v0.10.1 (the grid after a gap; docs/screen.md, "The grid
  *   after a gap"): 60 runs with a gap of 5 to 60 s on the laptop below,
  *   AC, both backends, window thread ON and OFF; the core test plays a
  *   0.5 ms move during a 30 s gap with and without the system's vblank,
@@ -2008,8 +2033,8 @@
 
 #define YSCR_VERSION_MAJOR 0
 #define YSCR_VERSION_MINOR 10
-#define YSCR_VERSION_PATCH 1
-#define YSCR_VERSION_STRING "0.10.1"
+#define YSCR_VERSION_PATCH 2
+#define YSCR_VERSION_STRING "0.10.2"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -6342,6 +6367,7 @@ typedef BOOL (WINAPI *yscr__PostThreadMessageW_fn)(DWORD, UINT, WPARAM, LPARAM);
 typedef SHORT (WINAPI *yscr__GetAsyncKeyState_fn)(int);
 typedef HWND (WINAPI *yscr__GetForegroundWindow_fn)(void);
 typedef BOOL (WINAPI *yscr__SetForegroundWindow_fn)(HWND);
+typedef BOOL (WINAPI *yscr__AllowSetForegroundWindow_fn)(DWORD);
 typedef BOOL (WINAPI *yscr__IsWindow_fn)(HWND);
 typedef DWORD (WINAPI *yscr__GetWindowThreadProcessId_fn)(HWND, LPDWORD);
 typedef BOOL (WINAPI *yscr__IsHungAppWindow_fn)(HWND);
@@ -6377,6 +6403,7 @@ static struct yscr__winapi {
     yscr__GetAsyncKeyState_fn            key_state;
     yscr__GetForegroundWindow_fn         foreground;
     yscr__SetForegroundWindow_fn         set_foreground;
+    yscr__AllowSetForegroundWindow_fn    allow_foreground;
     yscr__IsWindow_fn                    is_window;
     yscr__GetWindowThreadProcessId_fn    window_pid;
     yscr__IsHungAppWindow_fn             is_hung;
@@ -6424,6 +6451,7 @@ static void yscr__win_load(void) {
         yscr__win.key_state = (yscr__GetAsyncKeyState_fn)(yscr_proc)GetProcAddress(u, "GetAsyncKeyState");
         yscr__win.foreground = (yscr__GetForegroundWindow_fn)(yscr_proc)GetProcAddress(u, "GetForegroundWindow");
         yscr__win.set_foreground = (yscr__SetForegroundWindow_fn)(yscr_proc)GetProcAddress(u, "SetForegroundWindow");
+        yscr__win.allow_foreground = (yscr__AllowSetForegroundWindow_fn)(yscr_proc)GetProcAddress(u, "AllowSetForegroundWindow");
         yscr__win.is_window = (yscr__IsWindow_fn)(yscr_proc)GetProcAddress(u, "IsWindow");
         yscr__win.window_pid = (yscr__GetWindowThreadProcessId_fn)(yscr_proc)GetProcAddress(u, "GetWindowThreadProcessId");
         yscr__win.is_hung = (yscr__IsHungAppWindow_fn)(yscr_proc)GetProcAddress(u, "IsHungAppWindow");
@@ -9782,6 +9810,15 @@ YSCR_API void yscr_close(yscr_screen* s) {
     yscr__wd_disarm(s);
     yscr__win_gamma_release(s);
     yscr__wake_stop(s);
+    /* The next screen's raise (v0.10.2): Windows let the thread that had the
+     * foreground window raise the next one, and with the window thread the
+     * next open's window belongs to a new thread, so its raise was refused
+     * and the window opened behind (runs 2 and 3 of 3 in a window: every
+     * record OCCLUDED, tier 3). While this window has the foreground, the
+     * process keeps the right for its next window; as before, input
+     * the user gives another program takes it away. */
+    if (s->hwnd && yscr__win.foreground && yscr__win.allow_foreground && yscr__win.foreground() == (HWND)s->hwnd)
+        yscr__win.allow_foreground(GetCurrentProcessId());
     /* A forced raise took the foreground from another window: give it back
      * while this one still has it (measured: else the system picked a
      * third program in 9 of 9 forced opens). */
