@@ -518,7 +518,7 @@ an array of its rows, `[]` null. JSON has no NaN or Inf.
 
 | Command | Returns | Notes |
 |---|---|---|
-| `'version'` | binding version, and the header's as a second output | `'1.0.0'`, `'0.9.0'` |
+| `'version'` | binding version, and the header's as a second output | `'1.0.0'`, `'0.9.1'` |
 | `'now'`, `'now_ns'` | seconds; `int64` ns | the ysp clock |
 | `'real_now'` | seconds | the real clock, also on the virtual clock |
 | `'sleep_until', t [, spin]` | lateness, seconds | `spin` defaults to `default_spin` |
@@ -581,7 +581,7 @@ Without a profile, give the desc yourself:
 | Command | Returns | Notes |
 |---|---|---|
 | `'open', desc` | handle | `desc`: `role`, `family` (a name or a number), `key` (required); `device`, `kind`, `baud`, `pulse`, `latched`, `min_hold`, `probe`, `retry`, `silent`, `max_width`, `no_identify`, `no_elevate`, `queue`, `rule`, `sim`. Times in seconds; `probe` and `silent` take `Inf` for none. An unknown field raises `ysp_device:arg`. `device` 0 takes the role's index from the module's role table |
-| `'wait_running', h, timeout` | logical | Call it before the first output. `ysp_device:failed` when the device ends FAILED |
+| `'wait_running', h, timeout` | logical | Call it before the first output. `Inf` waits without end (1.0.1). `ysp_device:failed` when the device ends FAILED |
 | `'poll', h [, max]`, `'wait', h, timeout [, max]` | struct array | Events, oldest first: `t` (s), `t_ns` (int64), `device`, `control`, `code`, `mods`, `kind`, `type`, `flags`, `stamp`, `unc` (s), `x`, `y`, `value`, `aux`, `ticks`. A 1x0 struct with these fields when there is none |
 | `'pending', h`, `'clear', h` | double | The events queued; drop them |
 | `'set', h, code`, `'pulse', h, code, width`, `'mark', h, code [, text]` | none | `ysp_device:state` before RUNNING, `:arg` for a code or width the family cannot give, `:family` without outputs, `:io` |

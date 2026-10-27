@@ -360,6 +360,43 @@ outliving the profile); `tests/compile/rigfile.c` names every entry point by
 type. Its mutation list's anchors all match; mutant `rig-29` (a refused
 role's message not in `ydev_error()`) is new and was caught.
 
+### A held profile (`ysp/rigfile.h` v0.5.1, 2026-10-27)
+
+Under MSVC `ctest -j 4` on 2026-10-27, `test_rigfile` saw
+`yrig_save_file()` return `YRIG_ERR_IO` (-2) and then crashed; a rerun
+passed. Two faults:
+
+- **The save.** `yrig__write_file()` renamed the temporary file over the
+  profile with one `MoveFileExW()`. 4 copies of the test at a time, each in
+  its own folder, 300 runs each (the header before the fix): 10 of 1200
+  runs (MSVC build) had a save fail. With the error number printed: 9 of
+  1200 (MSVC) and 20 of 1200 (MinGW-w64) runs saw `ERROR_ACCESS_DENIED`
+  (5) from `MoveFileExW()`, and no other failure. Another program had one
+  of the two files open without `FILE_SHARE_DELETE`; the test shares the
+  folder with nobody, so the holder is outside it (a scanner or an
+  indexer; not identified). A file opened by Python's `open()` (which does
+  not share delete) gave the same failure at once.
+- **The crash.** The test's. A failed save in an empty folder, then a
+  load that found no file, left `g_q` zeroed, and the next
+  `yrig_find(&g_q, "trig")->` read through NULL. The header failed
+  cleanly.
+
+| Question | Decision | Why |
+|---|---|---|
+| The rename | 5 tries, 10 ms apart, on `ERROR_ACCESS_DENIED`, `ERROR_SHARING_VIOLATION` and `ERROR_LOCK_VIOLATION`; then `YRIG_ERR_IO`, the old file kept and the temporary file removed | ysp/dataset.h does this for `session.json`. With the fix, the same stress (4 at a time, 300 runs each) gave no failure in 1200 runs (MSVC build; a MinGW-w64 build and its ctest -j 4 ran beside part of it) |
+| The message | The step that failed and the OS error: `<path>: cannot replace it (Windows error 5; another program has it open?); the old file stays` | "cannot write it" did not say which of three steps failed |
+| Opening files | `_wfsopen()`: a read denies no one, a write denies other writers, as ysp/dataset.h | MSVC builds used `_wfopen_s()`, which denies every other open: a load failed while another program, or a second rig program, had the profile open. MinGW builds used `_wfopen()`, which shares |
+| The test | `ROLE(p, name)` for every role a check reads: a missing role is a failure, and the check reads a zeroed scratch role | A failed save must not take the rest of the test with it |
+
+Checked on 2026-10-27: `tests/adapt/rigfile_test.c` holds `held.json`
+without `FILE_SHARE_DELETE` through a save (`YRIG_ERR_IO` after at least
+35 ms, the message, the old bytes kept, no `.tmp` left; a load meanwhile
+reads it), and holds it again with a thread that lets go once the save's
+temporary file exists (the save succeeds). Its first version slept between looks and let go after the tries had ended in 5 of 1200 stress runs; it now spins at TIME_CRITICAL, and the save starts once it runs. 572 checks on MSVC and
+MinGW-w64, 559 on WSL2 gcc 11.4 (also with ASan and UBSan), where a POSIX
+rename replaces an open file and the held-file case does not run. Mutants
+`rig-46` to `rig-51`: 6 of 6 killed.
+
 ### The rig profile tools (`ysp/rigfile.h` v0.4.0, 2026-10-13)
 
 devices_spec 11.2 names the fields (`bounds` per input, the display's
@@ -435,6 +472,39 @@ moved anchor of `dev-25`.
 | `desc.min_hold_ns` | 0 is 0.25 ms (`YSER_DEFAULT_MIN_HOLD_NS`) for every family but `YBOX_PARALLEL`, where 0 is none; the serial transport passes it to `yser_desc.min_hold_ns` | The hold keeps a width shorter than a stalled leading write from becoming no pulse at the device. An `outb` does not wait in a USB queue, so the parallel port keeps its width unless the caller asks for a hold |
 | A trigger channel | Its start is taken on the screen's trigger worker, right before that worker's write | The worker's wake delays the pulse and does not shorten it |
 | Device-timed families | Unchanged: XID (`mp`, `mh`), the line board (`p <code> <us>`), BioSemi and the MMBT-S at P | The device times the end; no host deadline |
+
+### Times without end (v0.5.1)
+
+On 2026-10-27 ysp/audio.h 0.7.2 fixed `yau_wait()`: it added the timeout
+to now, so `INT64_MAX`, the bindings' "forever", overflowed (undefined
+behavior in C) and the wait timed out at once. A search of every header
+for a clock reading plus a duration found the same sum here.
+
+| Sum | What `INT64_MAX` did | Now |
+|---|---|---|
+| `ydev_wait_running()`: now + timeout | Timed out at the first look. The MEX function passed `INT64_MAX / 2` for `Inf` to avoid it | Waits; the MEX function passes `INT64_MAX` |
+| A reopen: now + `desc.retry_ns` (after a failed open, and after a loss) | A reopen at every poll | Never |
+| A query: now + `desc.probe_ns` | A query at every poll | The first query, then none |
+| A host-timed pulse's end: `yser_pulse_off_at_ns()` (ysp/serial.h) | The 0 at once | The code holds until the next output |
+| XID's width: (width + 0.5 ms) / 1 ms | 1 ms (MSVC) | Capped at 4294967 ms before the sum, the most `mp` carries |
+| A device-timed width in the OUT record: (width + 500 ns) rounded to us | A negative width in the record of a refused pulse | A width the wire refuses (over 2^32 us) is kept as asked |
+
+| Question | Decision | Why |
+|---|---|---|
+| Saturate or refuse | Saturate at `INT64_MAX` (`ydev__after()`) | The contract refuses only a negative timeout or width; a time near `INT64_MAX` is a caller's "forever" or "never", and the desc fields have no upper bound in C (the parameter tables stop at 1e15 ns for the loader) |
+| A caller's clock (`desc.now`) | The same sum | A caller's clock may start anywhere; the sum saturates for any start |
+
+Checked on 2026-10-27: `tests/adapt/device_test.c` (2005 checks) waits
+for RUNNING with `INT64_MAX` and `INT64_MAX - 1 ms` on the real clock (the
+board comes 60 ms after the open), and runs `retry_ns` of `INT64_MAX`
+after a failed open and after a loss, `probe_ns` of `INT64_MAX`, host-timed
+pulses of both widths, an XID pulse and a refused line-board pulse of
+`INT64_MAX`, and `yser_pulse_off_at_ns()` with both. MSVC 19.44 Release,
+MinGW-w64 gcc 16.1, WSL2 gcc 11.4 at -O2 and with ASan and UBSan. Mutants
+`ovf-01` to `ovf-10` (`ovf-08` to `ovf-10` in ysp/serial.h): 9 killed.
+`ovf-06` (XID's sum before the cap) survives the runner's gcc -O2, which
+folds the overflowing sum into the comparison and gets the cap; built with
+MSVC the same mutant fails the test, and UBSan reports the overflow.
 
 ### Parameter tables (v0.4.0)
 
@@ -711,9 +781,9 @@ only.
 ## Bindings
 
 `ysp/device.h` and `ysp/rigfile.h` have Python and MATLAB/Octave bindings
-(2026-10-25): the distributions `ysp-device` 0.5.0 (`ysp.device`) and
-`ysp-rigfile` 0.5.0 (`ysp.rigfile`), and the MEX functions `ysp_device`
-and `ysp_rigfile` 1.0.0. The user is a PsychoPy or Psychtoolbox experiment:
+(2026-10-25): the distributions `ysp-device` 0.5.1 (`ysp.device`) and
+`ysp-rigfile` 0.5.1 (`ysp.rigfile`), and the MEX functions `ysp_device`
+1.0.1 and `ysp_rigfile` 1.0.0. The user is a PsychoPy or Psychtoolbox experiment:
 it loads the rig profile, opens a role's device, reads its events on the
 ysp_rt clock, sends trigger codes, reads the device's status, and logs the
 profile's notes and the tiers. The packages' READMEs
@@ -741,7 +811,7 @@ reference.
 | Close order | `close()` of an output raises while an open `Rule` writes to it; `Rule.close()` raises while an open `Device` feeds it. A `Device` holds its `Rule`, a `Rule` its output, so the garbage collector closes them in the header's order. The MEX `clear` closes inputs with rules, then rules, then the rest | `ydev_rule_input()` on a closed output would take a freed lock. The header's contract is "close the box, then the rule, then the output" |
 | Calls during `close()` | A call that takes the handle's locks counts itself; `close()` waits for those calls, then closes. After it, the state, the stats and the error stay readable | Outputs come from any thread, and `ydev_close()` frees the locks they take |
 | Errors | `Error` with `args == (message, code)`; `Closed` for a closed handle; `wait_running()` returns `False` on a timeout | The output calls return a code and write no message (README.md, Conventions); the code is in the exception |
-| MEX versions | `ysp_device` and `ysp_rigfile` 1.0.0, their own numbers; the second output of `'version'` is the header's | As `ysp_serial` |
+| MEX versions | `ysp_device` and `ysp_rigfile` 1.0.0, their own numbers; the second output of `'version'` is the header's. `ysp_device` 1.0.1 (2026-10-27) passes `Inf` to `'wait_running'` as `INT64_MAX` (1.0.0 passed `INT64_MAX / 2`, because ysp/device.h 0.5.0 overflowed on `INT64_MAX`) | As `ysp_serial` |
 
 ### What is not bound, and why
 

@@ -210,5 +210,17 @@ static void test_virtual(void) {
     t = yrt_now_ns();
     CHECK(llabs(t - (int64_t)yrt__now()) < YRT_MS(100), "yrt_now_ns() is the real clock again");
     CHECK_I(yrt_virtual_timer(vt_fn, &a, t), YRT_ERR_STATE, "no timer after end");
+
+    {   /* v0.9.1: yrt_sleep_ns() near INT64_MAX ("forever") on the virtual
+         * clock: now + ns overflowed into a past deadline, so the wait
+         * returned at once and the clock stood still. */
+        static const int64_t forever[2] = { INT64_MAX, INT64_MAX - YRT_MS(1) };
+        for (i = 0; i < 2; i++) {
+            CHECK_I(yrt_virtual_begin(YRT_S(1000)), 0, "begin for a wait without end");
+            CHECK_I(yrt_sleep_ns(forever[i]), 0, "a wait without end is on time");
+            CHECK(yrt_now_ns() == INT64_MAX, "a wait without end moves the clock to its end");
+            yrt_virtual_end();
+        }
+    }
     printf("  virtual clock: ok\n");
 }

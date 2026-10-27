@@ -1,4 +1,4 @@
-/* ysp/net.h - v0.3.0 - public domain single-header Lab Streaming Layer glue
+/* ysp/net.h - v0.3.1 - public domain single-header Lab Streaming Layer glue
  *
  *   Lab Streaming Layer (LSL) on the ysp_rt clock: marker outlets for a
  *   rig's event codes and text, numeric outlets, and inlets that resolve a
@@ -232,6 +232,13 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.3.1 - Times near INT64_MAX. ynet_inlet_wait_running() with
+ *          INT64_MAX ("forever") waits, and a desc.retry_ns or
+ *          desc.correct_ns near INT64_MAX is "never": now plus the time
+ *          saturates at INT64_MAX. The plain sum overflowed (undefined
+ *          behavior) and in practice gave a time in the past: the wait
+ *          timed out at once, and a resolve or a correction came at every
+ *          poll. No API change.
  *   v0.3.0 - ynet_stats.lsl_offset_s and lsl_rtt_s (double seconds) are
  *          lsl_offset_ns and lsl_rtt_ns (int64_t, rounded to the nearest
  *          ns at the liblsl call): every time in the C API is int64_t ns
@@ -257,6 +264,10 @@
  *          edge events, the stream ring; the ysp/screen.h trigger channel
  *          and the ysp/device.h role glue.
  *
+ *   STATUS: v0.3.1, 2026-10-27 (docs/net.md, "Times without end"):
+ *   tests/adapt/net_test.c waits with INT64_MAX and INT64_MAX - 1 ms, and
+ *   runs retry_ns and correct_ns of INT64_MAX and a caller's clock near
+ *   its end; MSVC, MinGW-w64, WSL2 gcc with ASan and UBSan.
  *   STATUS: v0.1.0, 2026-10-09. Built with MSVC 19.44 (/W4 /WX, C11 and
  *   C++17), MinGW-w64 gcc 16.1 and gcc 11.4 on WSL2 (C99, C11, C++17,
  *   -Werror). tests/adapt/net_test.c runs every path against a fake liblsl
@@ -278,8 +289,8 @@
 
 #define YNET_VERSION_MAJOR 0
 #define YNET_VERSION_MINOR 3
-#define YNET_VERSION_PATCH 0
-#define YNET_VERSION_STRING "0.3.0"
+#define YNET_VERSION_PATCH 1
+#define YNET_VERSION_STRING "0.3.1"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -621,7 +632,8 @@ YNET_API bool ynet_inlet_open(ynet_inlet* in, const ynet_inlet_desc* desc);
 YNET_API void ynet_inlet_close(ynet_inlet* in);
 /* Manual mode: one step, pulling for at most timeout_ns (ns). The state. */
 YNET_API int  ynet_inlet_poll(ynet_inlet* in, int64_t timeout_ns);
-/* Wait at most timeout_ns (ns; 0 or less: look once) for RUNNING (INLETS AND
+/* Wait at most timeout_ns (ns; 0 or less: look once; INT64_MAX: without
+ * end) for RUNNING (INLETS AND
  * THEIR LIFECYCLE): YNET_RUNNING, YNET_ERR_TIMEOUT, or YNET_ERR_STATE when
  * the inlet ends FAILED or CLOSED; on failure ynet_inlet_error() says why.
  * In manual mode it calls ynet_inlet_poll(); with desc.now it gives up when
@@ -1377,6 +1389,13 @@ YNET_API void ynet_out_last(ynet_outlet* o, ynet_out_info* out) {
 static ynet__mutex* ynet__imx(ynet_inlet* in) { return (ynet__mutex*)(void*)in->lock_mem.b; }
 static int64_t ynet__inow(const ynet_inlet* in) { return ynet__clock(in->d.now, in->d.now_ctx); }
 
+/* t + d for a d >= 0, saturated at INT64_MAX: INT64_MAX is a caller's
+ * "forever", and a desc time near it is "never". The plain sum overflowed
+ * (undefined behavior) and in practice gave a time in the past. */
+static int64_t ynet__after(int64_t t, int64_t d) {
+    return d > 0 && t > INT64_MAX - d ? INT64_MAX : t + d;
+}
+
 YNET_API const char* ynet_inlet_error(const ynet_inlet* in) { return in ? in->err : "ysp_net: NULL inlet"; }
 
 static void ynet__irec(ynet_inlet* in, uint16_t kind, int64_t t, const yrt_payload* u) {
@@ -1425,7 +1444,7 @@ static void ynet__drop_inlet(ynet_inlet* in) {
 static void ynet__lose(ynet_inlet* in, uint32_t why) {
     ynet__drop_inlet(in);
     in->lost_at = in->st.last_rx_ns;
-    in->next_try = ynet__inow(in) + in->d.retry_ns;
+    in->next_try = ynet__after(ynet__inow(in), in->d.retry_ns);
     ynet__set_state(in, YNET_LOST, why);
 }
 
@@ -1599,7 +1618,7 @@ static void ynet__try_open(ynet_inlet* in, int64_t t) {
     int32_t ec = 0;
     yrt_payload u;
     double rate;
-    in->next_try = t + in->d.retry_ns;
+    in->next_try = ynet__after(t, in->d.retry_ns);
     in->st.resolves++;
     /* minimum 2: wait the whole resolve so a second match shows up */
     n = in->d.lib->resolve_bypred(found, 4, in->pred, 2, (double)in->d.resolve_ns / 1e9);
@@ -1673,7 +1692,7 @@ static void ynet__try_open(ynet_inlet* in, int64_t t) {
     ynet__text(in->d.ring, in->d.device, t, "uid", in->st.uid);
     /* the first correction blocks until liblsl has one (several ms) */
     ynet__correct(in, 2.0);
-    in->next_corr = ynet__inow(in) + in->d.correct_ns;
+    in->next_corr = ynet__after(ynet__inow(in), in->d.correct_ns);
     if (in->state == YNET_LOST) {
         memset(&u, 0, sizeof u);
         u.i64[0] = in->lost_at;
@@ -1743,7 +1762,7 @@ static void ynet__step(ynet_inlet* in, int64_t timeout_ns) {
     } else if (in->state == YNET_RUNNING) {
         if (t >= in->next_corr) {
             ynet__correct(in, 0.1);
-            in->next_corr = t + in->d.correct_ns;
+            in->next_corr = ynet__after(t, in->d.correct_ns);
         }
         ynet__pull(in, timeout_ns);
         t = ynet__inow(in);
@@ -1909,7 +1928,7 @@ YNET_API int ynet_inlet_wait_running(ynet_inlet* in, int64_t timeout_ns) {
         snprintf(in->err, sizeof in->err, "ysp_net: ynet_inlet_wait_running: not open");
         return YNET_ERR_STATE;
     }
-    end = ynet__inow(in) + (timeout_ns > 0 ? timeout_ns : 0);
+    end = ynet__after(ynet__inow(in), timeout_ns > 0 ? timeout_ns : 0);
     for (;;) {
         int64_t before = ynet__inow(in), now;
         int s = in->d.manual ? ynet_inlet_poll(in, 0) : ynet_inlet_state(in);

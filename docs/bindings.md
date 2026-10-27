@@ -355,7 +355,9 @@ binding-only change to `ysp/serial.h` v0.5.0: the async reader. `ysp-serial`
 and has the API of 0.5.0.2; 0.6.0 is `ysp/serial.h` v0.6.0 (`pulse_async`
 without I/O, the width from the onset write's start, `min_hold`), and
 0.6.1 is `ysp/serial.h` v0.6.1 (`Port.driver`, `Port.rts_via_dtr`, the
-`driver` key of `list_ports`). PEP 440 accepts the fourth
+`driver` key of `list_ports`); 0.6.2 is `ysp/serial.h` v0.6.2 (a pulse
+width near `INT64_MAX` saturates). `ysp-parallel` is 0.4.1, `ysp/parallel.h`
+v0.4.1, without the fourth number. PEP 440 accepts the fourth
 number as a release segment, and 0.5.0.1 sorts after 0.5.0 and before
 0.5.1. A post-release (0.5.0.post1) was not used: it means "no code
 changed", and this change breaks the API. Each package's tests check that
@@ -374,7 +376,9 @@ its second output is the version of the header. `ysp_pack` is 1.1.0 since
 2026-10-26: `'verify'` of one entry hashes it under `'none'` too
 (`ypak_verify_entry()`, ysp/pack.h 0.4.0). `ysp_audio` is 1.0.1 since
 2026-10-27: `Inf` as the timeout of `'wait'` is `INT64_MAX` ns (ysp/audio.h
-0.7.2; 1.0.0 passed 2^62 ns). `ysp_timeline` is 1.1.0 since 2026-10-26: the shared table,
+0.7.2; 1.0.0 passed 2^62 ns). `ysp_device` is 1.0.1 since 2026-10-27:
+`Inf` as the timeout of `'wait_running'` is `INT64_MAX` ns (ysp/device.h
+0.5.1; 1.0.0 passed `INT64_MAX / 2`). `ysp_timeline` is 1.1.0 since 2026-10-26: the shared table,
 `'pins'`, `ysp_timeline:busy`, and handles from `0x544C * 2^32 + 1`. The
 Python `ysp-timeline` of the same change is 0.8.1.1 (ysp/timeline.h
 v0.8.1), and `ysp-audio` is 0.7.2, the header's. The adaptive MEX

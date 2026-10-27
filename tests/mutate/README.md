@@ -75,6 +75,7 @@ values change from run to run.
 | `video.toml` | gcc | `gcc -std=c11 -O2 -w -I<copy> tests/adapt/video_test.c -lm` |
 | `json.toml` | gcc | `gcc -std=c11 -O2 -w -I<copy> tests/adapt/json_test.c -lm` (`YJS_TEST_NUMBERS=50000`) |
 | `rigfile.toml` | gcc | `gcc -std=c11 -O2 -w -I<copy> tests/adapt/rigfile_test.c -lsetupapi -lm` (Windows) |
+| `parallel.toml` | gcc | `gcc -std=c11 -O2 -w -I<copy> tests/adapt/parallel_test.c -lm` (Windows: the pulses run on stand-in `Out32` and `Inp32`) |
 | `net.toml` | gcc | `gcc -std=c11 -O2 -w -I<copy> tests/adapt/net_test.c -lsetupapi -lm` (Windows; `YNET_TEST_SECONDS=1`; a fake liblsl, none needed) |
 | `stair.toml` | gcc | `gcc -std=c99 -O2 -w -DYST_MAX_TRIALS=128 -DYST_MAX_REVERSALS=32 -I<copy> tests/adapt/stair_test.c -lm` |
 | `quest.toml` | gcc | `gcc -std=c11 -O2 -w -I<copy> tests/adapt/quest_test.c -lm` |
