@@ -425,8 +425,8 @@ own parameters:
 
 A change of one of these lays the text out again, between frames
 (`OrderError` between `g.begin()` and `g.end()`); a refused change leaves
-the text as it was. A word or a sentence takes 3 to 35 us, a page of 520
-characters about 0.1 to 0.3 ms ([docs/gfx.md](../../../docs/gfx.md#text),
+the text as it was. A word or a sentence took 3 to 16 us a call, a page of 520
+characters 0.06 to 0.13 ms, in the three hosts ([docs/gfx.md](../../../docs/gfx.md#text-measured),
 measured). A glyph that no text of the font used before is built from the
 font's outline and uploaded in the same call (tens of us a glyph): lay out
 every word of an experiment once at setup and the trials build none.
@@ -460,7 +460,11 @@ and `L.set("color", ...)`, `L.set("y", ...)` work across texts. A timeline
 channel binds to a text's `x`, `y`, `ori`, `opacity`, `color`, `visible`,
 ... as to any stimulus. `size`, `text` and the other own parameters do
 not bind (each change is a layout): animate the size with a group's
-`scale`.
+`scale`. A text takes 3 of the gfx's `max_draws` blocks a frame per run
+(per font and size in it): past about 340 texts a frame, open the `Gfx`
+with a larger `max_draws`. Many words that do not move are cheaper as one
+text: 100 one-word texts cost 1.0 to 1.3 ms of host work a frame, a page
+of 520 characters as one text 0.4 to 0.6 ms (docs/gfx.md, Text: measured).
 
 **Memory.** Making a font or a text, and each layout, allocate (Skribidi
 allocates inside every layout). Drawing a text allocates nothing.

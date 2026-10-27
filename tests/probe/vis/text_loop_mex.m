@@ -15,9 +15,9 @@ function text_loop_mex(varargin)
                     'each fixation takes in a few letters to the left and more to the right. Long words are fixated more ' ...
                     'often, and frequent words are skipped. '], 1, 3);
     if o.windowed
-        h = ysp_screen('open', 'windowed', true, 'size', [1280 720], 'frame', 'row', 'gfx', struct('background', 0.5));
+        h = ysp_screen('open', 'windowed', true, 'size', [1280 720], 'frame', 'row', 'gfx', struct('background', 0.5, 'max_draws', 4096));   % a text run takes 3 blocks of max_draws
     else
-        h = ysp_screen('open', 'frame', 'row', 'gfx', struct('background', 0.5));
+        h = ysp_screen('open', 'frame', 'row', 'gfx', struct('background', 0.5, 'max_draws', 4096));   % a text run takes 3 blocks of max_draws
     end
     try
         g = ysp_gfx('open', h);
@@ -28,7 +28,7 @@ function text_loop_mex(varargin)
         items = zeros(1, 0, 'uint64');
         label = [];
         if any(strcmp(o.mode, {'words', 'label'}))
-            cols = 10;
+            cols = 10; if o.n > 100, cols = 20; end   % 500 words: 25 rows of 20, on the screen
             for i = 0:o.n - 1
                 items(end + 1) = ysp_gfx('text', g, words{mod(i, numel(words)) + 1}, 'font', font, 'size', 28, 'color', 0.1, ...
                                          'x', mod(i, cols) * (w / cols) - w / 2 + w / cols / 2, 'y', floor(i / cols) * 40 - hh / 2 + 40); %#ok<AGROW>

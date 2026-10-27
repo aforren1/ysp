@@ -34,13 +34,13 @@ a = ap.parse_args()
 
 opts = {"windowed": True, "size": (1280, 720)} if a.windowed else {}
 rows = []
-with yscr.Screen(gfx={"background": 0.5}, **opts) as s, ygfx.Gfx(s) as g:
+with yscr.Screen(gfx={"background": 0.5, "max_draws": 4096}, **opts) as s, ygfx.Gfx(s) as g:   # a text run takes 3 of the 1024 blocks by default
     s.title("ysp-vis text probe")
     font = g.font(os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts", "segoeui.ttf"))
     w, h = g.size
     items = []
     if a.mode in ("words", "label"):
-        cols = 10
+        cols = 10 if a.n <= 100 else 20     # 500 words: 25 rows of 20, on the screen
         for i in range(a.n):
             items.append(g.text(WORDS[i % len(WORDS)], font=font, size=28, color=0.1,
                                 x=(i % cols) * (w / cols) - w / 2 + w / cols / 2, y=(i // cols) * 40 - h / 2 + 40))

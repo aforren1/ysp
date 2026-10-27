@@ -1716,7 +1716,9 @@ and `anchor` as any stimulus's: centered on the screen by default.
 back as it was, and a character index is a MATLAB index (a character
 past U+FFFF, an emoji, takes two). Octave's char holds UTF-8 bytes, so
 there an index is a byte index; `strfind` gives the same numbers in both.
-Paths and `lang` go through the same conversion. Not bound: OpenType
+Paths and `lang` go through the same conversion. A text takes 3 of the
+gfx's `max_draws` blocks a frame per run: past about 340 texts a frame,
+open the gfx with a larger `'max_draws'`. Not bound: OpenType
 feature switches, a language per span, vertical text, justification,
 outlines, glow (blur) and color glyphs.
 ### Movies: ysp_video

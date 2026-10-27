@@ -667,19 +667,21 @@ static int yv_text_words(const yv_stim* st, double* out, int cap_words) {
     yv_frame fr;
     uint32_t i, n = t->b.n_items;
     float* right;
+    int* line;
     int nw = 0;
     if (n == 0) return 0;
-    right = (float*)malloc(sizeof(float) * n);
+    right = (float*)malloc((sizeof(float) + sizeof(int)) * n);
     if (!right) return -1;
+    line = (int*)(right + n);
+    for (i = 0; i < n; i++) line[i] = yv_text_line_of(t, t->b.cluster[i]);
     /* each item's right edge: the next pen to its right on its line */
     for (i = 0; i < n; i++) {
-        int li = yv_text_line_of(t, t->b.cluster[i]);
-        const ylay_line* l = &t->b.lines[li];
+        const ylay_line* l = &t->b.lines[line[i]];
         float x = t->b.items[i].x, best = l->x + l->width;
         uint32_t j;
         for (j = 0; j < n; j++) {
             float xj = t->b.items[j].x;
-            if (xj > x + 1e-6f && xj < best && yv_text_line_of(t, t->b.cluster[j]) == li) best = xj;
+            if (xj > x + 1e-6f && xj < best && line[j] == line[i]) best = xj;
         }
         right[i] = best;
     }
