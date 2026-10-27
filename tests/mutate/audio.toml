@@ -660,3 +660,26 @@ test = "audio"
 why = "Any timeout whose sum passes INT64_MAX saturates: the case waits with INT64_MAX - 1 ms too."
 find = '''    if (timeout_ns > 0 && now > INT64_MAX - timeout_ns) return INT64_MAX;'''
 replace = '''    if (timeout_ns == INT64_MAX) return INT64_MAX;'''
+
+# 2026-10-27: the lead on the null device (docs/audio.md, "The lead on the
+# null device"). The header did not change; these keep the lead's
+# definition under test.
+
+[[mutant]]
+id = "le-01"
+name = "the lead is clamped at 0"
+test = "audio"
+why = "A late callback makes the lead negative, and a sound at now + lead still starts on its frame: the late-callback case reads -2 ms."
+find = '''    w = yau__ld64(&au->w_pub);
+    return yau__fit_time(&au->fit_ft, w + au->dcaps.period) - YAU__NOW();'''
+replace = '''    w = yau__ld64(&au->w_pub);
+    w = yau__fit_time(&au->fit_ft, w + au->dcaps.period) - YAU__NOW();
+    return w < 0 ? 0 : w;'''
+
+[[mutant]]
+id = "le-02"
+name = "the lead has no period of margin"
+test = "audio"
+why = "The lead leaves one period for a callback that runs between the read and the handover: the late-callback case reads 10 ms just before an on-time callback."
+find = '''    return yau__fit_time(&au->fit_ft, w + au->dcaps.period) - YAU__NOW();'''
+replace = '''    return yau__fit_time(&au->fit_ft, w) - YAU__NOW();'''

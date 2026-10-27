@@ -2262,6 +2262,93 @@ without a sleep. The bindings' tests wait with `math.inf` and `Inf` on a
 pending sound. Mutants `wt-01` (the plain sum) and `wt-02` (only
 `INT64_MAX` itself saturates) in `tests/mutate/audio.toml` are killed.
 
+## The lead on the null device (2026-10-27)
+
+The binding test `test_open_caps` (`ysp-audio` 0.7.2, Python 3.12,
+Windows, null device) failed once: `lead` read -60 us just after the
+open. Three reruns passed. The test was wrong, not the header: the lead
+can be negative.
+
+### Why the lead can be negative
+
+`yau_lead_ns()` is the time of the frame after the next block, minus
+now (LEAD in the header):
+
+    lead = fit_time(w + period) - now
+
+`w` is the first frame of the next block. With callback times only, as
+on the null device, the fit is the lower envelope of the callback entry
+times, so `fit_time(w)` is the earliest time for the next callback. A
+callback that comes `late` after its envelope time makes the lead
+`period - late` just before it. Just after it, the lead is
+`2 * period - late`. Thus:
+
+- The lead is at most two periods (20 ms here). A refit that moves the
+  envelope can add a little: up to 0.15 ms was measured.
+- The lead is negative while the next callback is more than one period
+  late on the fit.
+
+A negative lead is still the shortest lead that can be met. The device
+is behind its fit, so a sound at `now + lead` starts on its frame. The
+period of margin in the lead covers one more callback between the read
+and the handover.
+
+miniaudio's null device (0.11.25, `ma_device_write__null()`) polls its
+timer and waits in `ma_sleep(10)` steps for each block of 10 ms. On
+Windows, `Sleep(10)` waits until the next timer tick: 15 ms at the
+default resolution of 15.6 ms, and 10 to 11.6 ms after
+`timeBeginPeriod(1)`. So its callbacks come up to 15 ms late, and the
+lead goes down to about -5 ms. `yau_open()` returns at its first check
+(every 10 ms) after the callback that completes the warm-up. A reading
+just after the open is thus `2 * period` minus that callback's lateness
+minus the check's delay, which is negative only when the two add up to
+more than 20 ms. Load makes both longer.
+
+### Measurements
+
+Windows 11 Enterprise (10.0.26200), Intel Core i7-1360P (16 logical
+processors), AC power, MSVC 19.44 Release and CPython 3.12.11, miniaudio
+0.11.25. "Load" is 16 busy loops at normal priority. Each open reads the
+lead at once, then reads it every 0.5 ms (C: 1 s per open, Python: 0.3 s
+per open). Lateness is the callback entry time minus `yau_time_of()` of
+the block's first frame at the end of the open. Source:
+`leadrepro.c` and `pyrepro.py`, outside the repository (not kept).
+
+| Run | Opens | Negative just after the open | Min just after the open | Sampled leads negative | Sampled min, median, max | Callback lateness p50, p99 |
+|---|---|---|---|---|---|---|
+| C, idle, default timer | 100 | 0 | 2.8 ms | 7.0 % | -5.5, 7.9, 20.0 ms | 7.5, 15.0 ms |
+| C, idle, `timeBeginPeriod(1)` | 100 | 0 | 1.3 ms | 0.17 % | -1.0, 9.8, 20.1 ms | 5.0, 10.4 ms |
+| Python, idle | 300 | 0 | 1.0 ms | 7.2 % | -5.6, 7.8, 20.0 ms | not measured |
+| C, load, default timer | 100 | 5 | -1.6 ms | 8.2 % | -5.3, 7.5, 20.0 ms | 7.6, 15.0 ms |
+| Python, load | 300 | 4 | -3.8 ms | 7.3 % | -11.6, 7.8, 20.1 ms | not measured |
+
+`Sleep(10)` in the same process took 14.6 to 16.3 ms at the default
+timer and 10.1 to 11.6 ms after `timeBeginPeriod(1)`. The header does
+not call `timeBeginPeriod()`, and neither does Python.
+
+With 500 more opens under load, the old check (`0 < lead < 0.5`) failed
+7 times and the new checks 0 times.
+
+### The fix
+
+The header does not change. The tests now check what the lead must be:
+
+- `bindings/python/ysp_audio/tests/test_audio.py` `test_open_caps` and
+  `bindings/mex/test_mex_audio.m` check that the lead is not 0 (the
+  fit exists), that its seconds equal its ns, and that it is between
+  -0.5 s and two periods plus 5 ms. A broken clock or fit is far
+  outside that range.
+- `tests/adapt/audio_test.c` `test_lead_late_callback` runs the scripted
+  device as the null device (callback times, tier SIM, no jitter). The
+  lead is 10 ms just before an on-time callback and -2 ms while that
+  callback is 12 ms late. A sound at `now + lead` handed over before the
+  late callback, and another one handed over between it and the next,
+  both start on frame `w + period`, not LATE. A third one handed over
+  after both is LATE. The scripted device has a new `late_ns`: a block
+  that comes late with no silence before it, as from a timer thread.
+- Mutants `le-01` (the lead clamped at 0) and `le-02` (the lead with no
+  period of margin) in `tests/mutate/audio.toml` are killed.
+
 ## Bindings
 
 `ysp-audio` 0.7.2 (Python `ysp.audio`) and the MEX function `ysp_audio`
@@ -2338,8 +2425,8 @@ On miniaudio's null device, so CI needs no sound card:
 |---|---|
 | Python 3.14, Windows 11, MSVC 19.44 | `ysp_audio` 22 tests, `share_test` 23 tests: pass (0.7.2) |
 | Python 3.12, Ubuntu 22.04 on WSL2, gcc 11.4 | the same 22 and 23: pass (0.7.2) |
-| MATLAB R2023a, Windows 11, MSVC 19.44 | `test_mex_audio` 55 checks, `test_mex_share` 26 checks: pass (1.0.1) |
-| Octave 10.1, Windows 11, MinGW-w64 gcc | the same 55 and 26: pass (1.0.1) |
+| MATLAB R2023a, Windows 11, MSVC 19.44 | `test_mex_audio` 56 checks, `test_mex_share` 26 checks: pass (1.0.1) |
+| Octave 10.1, Windows 11, MinGW-w64 gcc | the same 56 and 26: pass (1.0.1) |
 | Octave 6.4, Ubuntu 22.04 on WSL2 | 54 and 22 checks: pass (1.0.0; not run for 1.0.1) |
 
 One manual run on the default device (Speakers (Realtek(R) Audio), WASAPI

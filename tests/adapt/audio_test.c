@@ -106,6 +106,9 @@ typedef struct sdev {
     int64_t  k;             /* blocks rendered                                 */
     int64_t  W;
     int64_t  stall_ns;      /* the next block is this late                     */
+    int64_t  late_ns;       /* the next block is this late, and the device
+                               plays no silence for it (the null device: a
+                               timer thread with no hardware buffer)          */
     void*    host;
     yau_render_fn render;
     float*   tape;          /* channels floats per stream frame, or NULL       */
@@ -184,10 +187,11 @@ static void sd_block(sdev* s) {
     double kd = sd_kd(s);
     int64_t e = s->T0 + (int64_t)floor(((double)(s->k * s->period + s->L + s->g) - (double)s->L) * kd + 0.5);
     int64_t late = s->jitter_ns > 0 ? (int64_t)(-s->jitter_ns * log(sd_rand(s))) : 0;
-    int64_t t = e + late + s->stall_ns, pass;
+    int64_t t = e + late + s->stall_ns + s->late_ns, pass;
     int halted = 0;
     yau_tick tk;
     int64_t i;
+    s->late_ns = 0;
     if (s->halt_pipe > 0) {
         if (t < s->last_t) t = s->last_t;
         s->last_t = t;
@@ -865,6 +869,67 @@ static void test_callback_source(void) {
         CHECK(g_au.fit_ft.n >= n_before);
         yau_close(&g_au);
     }
+}
+
+/* The lead (LEAD) is negative while the next callback is more than a
+ * period late on the fit, and it is still the shortest lead that can be
+ * met. miniaudio's null device waits for each block in Sleep(10) steps,
+ * which a 15.6 ms Windows timer tick makes 15 ms: on an idle laptop 1 %
+ * of its callbacks came more than 15 ms late, and 7 % of the leads read
+ * were negative (docs/audio.md, "The lead on the null device"). A binding
+ * test that wanted a positive lead after open failed once in this way. */
+static void test_lead_late_callback(void) {
+    sdev* s = &g_sd;
+    yau_buf b;
+    yau_onset r[3];
+    yau_id id[3];
+    int64_t W, e, T, lead;
+    int i;
+    sd_default(s);
+    s->pos_source = YAU_POS_CALLBACK;
+    s->tier = YAU_TIER_SIM;
+    s->drift_ppm = 0;
+    s->jitter_ns = 0;
+    CHECK(open_dev(s, NULL));
+    sd_run_s(s, 2.0);
+    yau_update(&g_au);
+    W = s->W;
+    e = sd_event(s, W);                       /* block W's callback is due */
+    CHECK(llabs(yau_time_of(&g_au, W) - e) <= 1);
+    g_vt = e;
+    lead = yau_lead_ns(&g_au);
+    CHECK(llabs(lead - YRT_MS(10)) <= 1);     /* on time: one period */
+    g_vt = e + YRT_MS(12);                    /* the callback is 12 ms late */
+    lead = yau_lead_ns(&g_au);
+    CHECK(llabs(lead + YRT_MS(2)) <= 1);
+    CHECK(lead < 0);
+    /* A sound at now + lead, handed over before the late callback, between
+     * it and the next (which comes at once: the device catches up), and
+     * after both. The first two start on time, the third is LATE. */
+    memset(&b, 0, sizeof b);
+    b.frames = g_buf; b.n = 100; b.channels = 1;
+    T = g_vt + lead;
+    id[0] = yau_play_at(&g_au, b, T);
+    s->late_ns = YRT_MS(12);
+    sd_block(s);
+    CHECK_I(g_vt, e + YRT_MS(12));
+    id[1] = yau_play_at(&g_au, b, T);
+    s->late_ns = YRT_MS(2);
+    sd_block(s);
+    CHECK_I(g_vt, e + YRT_MS(12));
+    id[2] = yau_play_at(&g_au, b, T);
+    sd_run_s(s, 0.2);
+    yau_update(&g_au);
+    for (i = 0; i < 3; i++) {
+        memset(&r[i], 0, sizeof r[i]);
+        CHECK_I(yau_result(&g_au, id[i], &r[i]), YAU_OK);
+    }
+    CHECK(!(r[0].flags & YAU_ONSET_LATE) && !(r[1].flags & YAU_ONSET_LATE));
+    CHECK_I(r[0].start_frame, W + 480);
+    CHECK_I(r[1].start_frame, W + 480);
+    CHECK(r[2].flags & YAU_ONSET_LATE);
+    CHECK_I(r[2].start_frame, W + 960);
+    yau_close(&g_au);
 }
 
 /* v0.4.1: a browser's device (BACKENDS, WEB): tier WEB, a report in one
@@ -2834,6 +2899,7 @@ int main(int argc, char** argv) {
     test_xrun();
     test_halt();
     test_callback_source();
+    test_lead_late_callback();
     test_web_tier();
     test_report_less_start();
     test_ring();
