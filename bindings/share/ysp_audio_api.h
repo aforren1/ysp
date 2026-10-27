@@ -151,7 +151,14 @@ YSP_AUDIO_API_FUNCS(YSP_AUDIO_API_F_, YSP_AUDIO_API_FV_)
  * set. Call it from the consumer's module init. */
 static int ysp_audio_api_import_py(void) {
     char err[256];
-    const ysp_audio_api* a = (const ysp_audio_api*)PyCapsule_Import(YSP_AUDIO_API_CAPSULE, 0);
+    const ysp_audio_api* a;
+    /* PyCapsule_Import() imports "ysp" and then reads attributes, so in
+     * CPython 3.12 it failed for an owner not imported yet (found 2026-10-27,
+     * ysp-vis importing ysp.timeline). */
+    PyObject* owner = PyImport_ImportModule("ysp.audio");
+    if (!owner) return -1;
+    Py_DECREF(owner);
+    a = (const ysp_audio_api*)PyCapsule_Import(YSP_AUDIO_API_CAPSULE, 0);
     if (!a) return -1;
     if (ysp_audio_api_check(a, YSP_SHARE_HOST_PYTHON, err, sizeof err) < 0) {
         PyErr_SetString(PyExc_ImportError, err);

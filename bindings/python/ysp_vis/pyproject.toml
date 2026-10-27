@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ysp-vis"
+version = "0.10.1"  # tracks ysp/screen.h's YSCR_VERSION_STRING (docs/bindings.md, ysp-vis); tests/test_screen_sim.py checks it
+description = "A stimulus display with flip at a time and a record of every flip (ysp/screen.h), its stimuli (ysp/gfx.h) and movies (ysp/video.h)"
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT-0"
+# The one audio and the one timeline of the process: ysp-vis calls them
+# through their tables, which accept another patch and refuse another
+# major.minor (docs/bindings.md, "Versions of a table").
+dependencies = ["ysp-audio>=0.7,<0.8", "ysp-timeline>=0.8.1,<0.9"]
+classifiers = ["Operating System :: Microsoft :: Windows"]
+
+# The C extension is declared in setup.py as ysp._vis; ysp/screen.py, gfx.py
+# and video.py re-export from it. `ysp` is a PEP 420 namespace package: no
+# __init__.py is shipped. SDL3 is linked statically; ANGLE's two DLLs and the
+# license notices of SDL3 (zlib) and ANGLE (BSD) are installed beside the
+# extension (setup.py, BuildExt).
+
+[tool.cibuildwheel]
+build = "cp39-*"
+archs = ["AMD64"]
+# The dependencies are this repository's packages, not on an index yet.
+before-test = "pip install {project}/bindings/python/ysp_audio {project}/bindings/python/ysp_timeline"
+test-requires = ["pytest"]
+# The simulated display: no window, no GPU (tests/test_window.py is local only).
+test-command = "pytest {package}/tests -q"

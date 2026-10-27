@@ -1,0 +1,20 @@
+# An sdist must carry everything the build needs: the headers, the shared
+# tables and the natives. Stage them next to setup.py first, from the
+# repository root:
+#
+#     uv run --no-project python tools/vendor_vis.py --write --angle --sdl msvc
+#     d=bindings/python/ysp_vis
+#     mkdir -p $d/include/ysp $d/include/share $d/natives
+#     cp include/ysp/*.h $d/include/ysp/
+#     cp bindings/share/*.h $d/include/share/
+#     cp -r third_party/vis/angle third_party/vis/sdl3 $d/natives/
+#     uv build --sdist $d
+#
+# The staged copies are gitignored; setup.py prefers the repository's when it
+# is present, so a copy cannot shadow a newer one in a development tree.
+include include/ysp/*.h
+include include/share/*.h
+recursive-include natives *
+include ysp_vis_ext.c
+include example.py
+recursive-include tests *.py

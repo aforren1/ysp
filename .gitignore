@@ -39,6 +39,10 @@ wheelhouse/
 bindings/python/*/include/
 # miniaudio.h for the ysp_audio MEX build (build.m)
 bindings/mex/miniaudio/
+# ysp-vis natives staged for an isolated build, and the license notices
+# build.m copies beside the MEX files (tools/vendor_vis.py makes them)
+bindings/python/ysp_vis/natives/
+bindings/mex/ysp_vis-LICENSE.*.txt
 
 # logs and crash dumps
 logs/
@@ -54,7 +58,8 @@ CMakeUserPresets.json
 
 # vendored layout sources: fetched and verified by tools/vendor_layout.py
 # (third_party/README.md); the recipe (patches, manifest, CMake) is tracked.
-# Also lodepng (tools/vendor_pack.py) and liblsl (tools/vendor_lsl.py).
+# Also lodepng (tools/vendor_pack.py), liblsl (tools/vendor_lsl.py), and
+# ysp-vis's static SDL3 and ANGLE (tools/vendor_vis.py).
 /third_party/*/
 !/third_party/patches/
 # Probe output folders (tests/probe/beam_race, tests/probe/screen_x11)
