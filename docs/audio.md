@@ -2236,10 +2236,36 @@ Mutants `ld-01` to `ld-04` in `tests/mutate/audio.toml` check that the
 three cases still see a wrong read position, a lost seek, a wrong first
 sample and a wrong recorded sample.
 
+## A wait without end (v0.7.2)
+
+`yau_wait(au, id, timeout_ns, out)` computed its deadline as
+`YAU__NOW() + timeout_ns`. With `INT64_MAX`, the "forever" of the bindings'
+`math.inf` and `Inf`, the sum overflows: undefined behavior in C, and in
+practice a negative deadline, so the wait returned `YAU_ERR_TIMEOUT` at
+once. The bindings passed 2^62 ns (146 years) instead
+([Bindings](#bindings)).
+
+The deadline is now the sum saturated at `INT64_MAX`
+(`yau__deadline()`). The clock is never negative, so a negative timeout
+cannot overflow; it gives a past deadline and `YAU_ERR_TIMEOUT` at once,
+as before. The other sums of a time and a duration in the header add
+constants of at most 5 s to the clock (`yau_stream_close()`, the open's
+warm-up, the capture's start).
+
+`ysp-audio` 0.7.2 and `ysp_audio` 1.0.1 pass `INT64_MAX` for `Inf` again.
+
+Tests: the virtual null device case of `tests/adapt/audio_test.c` plays a
+sound 50 ms ahead and waits with `INT64_MAX`, then with
+`INT64_MAX - 1 ms`; both return `YAU_OK` with the onset on its plan
+within half a sample. A wait with `INT64_MIN` returns `YAU_ERR_TIMEOUT`
+without a sleep. The bindings' tests wait with `math.inf` and `Inf` on a
+pending sound. Mutants `wt-01` (the plain sum) and `wt-02` (only
+`INT64_MAX` itself saturates) in `tests/mutate/audio.toml` are killed.
+
 ## Bindings
 
-`ysp-audio` 0.7.1 (Python `ysp.audio`) and the MEX function `ysp_audio`
-1.0.0 bind this header for a PsychoPy or Psychtoolbox experiment, and own
+`ysp-audio` 0.7.2 (Python `ysp.audio`) and the MEX function `ysp_audio`
+1.0.1 bind this header for a PsychoPy or Psychtoolbox experiment, and own
 the one audio implementation that `ysp-vis` shares through a C table
 ([bindings.md](bindings.md#sharing-one-implementation-across-modules)).
 Both compile miniaudio 0.11.25 in. The Python reference is
@@ -2298,10 +2324,11 @@ the MEX commands are in [bindings/mex/README.md](../bindings/mex/README.md#ysp_a
 
 ### Header limit found
 
-`yau_wait()` adds the timeout to now, so `INT64_MAX` overflows and times
-out at once (audio.h 5036). The bindings pass 2^62 ns (146 years) for
-"forever" (`math.inf`, `Inf`). Repro: `yau_wait(&au, id, INT64_MAX, &r)` on
-a pending sound returns `YAU_ERR_TIMEOUT` at once.
+`yau_wait()` added the timeout to now, so `INT64_MAX` overflowed and timed
+out at once. `ysp-audio` 0.7.1 and `ysp_audio` 1.0.0 passed 2^62 ns (146
+years) for "forever" (`math.inf`, `Inf`). Fixed in v0.7.2
+([A wait without end](#a-wait-without-end-v072)); the bindings pass
+`INT64_MAX` again.
 
 ### Tests
 

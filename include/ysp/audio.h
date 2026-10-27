@@ -1,4 +1,4 @@
-/* ysp/audio.h - v0.7.1 - public domain single-header audio library
+/* ysp/audio.h - v0.7.2 - public domain single-header audio library
  *
  *   Sound at a time on the ysp/rt.h clock. A buffer is played with
  *   yau_play_at(buf, t); the header plans its first sample on the device
@@ -916,6 +916,10 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.7.2 - yau_wait() with a timeout near INT64_MAX ("forever") waits:
+ *          its deadline is now plus the timeout, saturated at INT64_MAX.
+ *          The plain sum overflowed (undefined behavior) and in practice
+ *          gave YAU_ERR_TIMEOUT at once. No API change.
  *   v0.7.1 - On Windows the implementation includes <objbase.h> before
  *          miniaudio.h. Under WIN32_LEAN_AND_MEAN miniaudio defined
  *          CLSCTX_ALL itself, and a COM header later in the same
@@ -1064,6 +1068,10 @@
  *          positions, miniaudio's null device, the device and source
  *          interfaces, synthesis, the records, the parameter table.
  *
+ *   STATUS: v0.7.2, 2026-10-27 (docs/audio.md, "A wait without end"):
+ *   tests/adapt/audio_test.c waits with INT64_MAX and INT64_MAX - 1 ms on
+ *   a pending sound of the virtual null device; MSVC, MinGW-w64, WSL2 gcc
+ *   with ASan and UBSan.
  *   STATUS: v0.7.1, 2026-10-26 (docs/audio.md, "Windows headers in one
  *   translation unit"): tests/compile/order_audio_screen.c builds the
  *   audio, screen and video implementations in one unit in both orders,
@@ -1234,8 +1242,8 @@
 
 #define YAU_VERSION_MAJOR 0
 #define YAU_VERSION_MINOR 7
-#define YAU_VERSION_PATCH 1
-#define YAU_VERSION_STRING "0.7.1"
+#define YAU_VERSION_PATCH 2
+#define YAU_VERSION_STRING "0.7.2"
 
 #include "ysp/rt.h"
 
@@ -2135,7 +2143,8 @@ YAU_API int  yau_update(yau_audio* au);
 YAU_API int  yau_result(yau_audio* au, yau_id id, yau_onset* out);
 
 /* yau_result() until it is not PENDING, for at most timeout_ns
- * (YAU_ERR_TIMEOUT). Sleeps on the ysp_rt clock in 1 ms steps. */
+ * (YAU_ERR_TIMEOUT); INT64_MAX waits without end. Sleeps on the ysp_rt
+ * clock in 1 ms steps. */
 YAU_API int  yau_wait(yau_audio* au, yau_id id, int64_t timeout_ns, yau_onset* out);
 
 /* The shortest lead a sound handed over now can still meet (LEAD); 0 before
@@ -5032,8 +5041,16 @@ static int yau__result_rc(yau_audio* au, yau_id id, yau_onset* out) {
     return r->used == 2 ? YAU_OK : YAU_PENDING;
 }
 
+/* now + timeout_ns, saturated: INT64_MAX is a caller's "forever", and the
+ * plain sum overflows. The clock is never negative, so a negative timeout
+ * cannot. */
+static int64_t yau__deadline(int64_t now, int64_t timeout_ns) {
+    if (timeout_ns > 0 && now > INT64_MAX - timeout_ns) return INT64_MAX;
+    return now + timeout_ns;
+}
+
 static int yau__wait_rc(yau_audio* au, yau_id id, int64_t timeout_ns, yau_onset* out) {
-    int64_t end = YAU__NOW() + timeout_ns;
+    int64_t end = yau__deadline(YAU__NOW(), timeout_ns);
     for (;;) {
         int rc = yau__result_rc(au, id, out);
         if (rc != YAU_PENDING) return rc;

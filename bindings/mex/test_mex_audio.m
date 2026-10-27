@@ -107,6 +107,11 @@ function test_mex_audio()
     id = ysp_audio('play_at', h, beep, ysp_audio('now') + 5);
     expect_error('ysp_audio:timeout', @() ysp_audio('wait', h, id, 0.02));
     ysp_audio('cancel', h, id);
+    r = ysp_audio('wait', h, id, Inf);   % INT64_MAX ns: overflowed before ysp/audio.h 0.7.2
+    check(~r.pending && bitand(r.flags, CANCELED), 'wait with Inf');
+    t = ysp_audio('now') + 0.1;
+    r = ysp_audio('wait', h, ysp_audio('play_at', h, beep, t), Inf);
+    check(~r.pending && abs(double(r.target_ns) - t * 1e9) <= 1, 'wait with Inf on a pending sound');
     ysp_audio('wait', h, id);
     ysp_audio('arena_reset', h);
     expect_error('ysp_audio:arg', @() ysp_audio('play_at', h, beep, 0));
@@ -162,7 +167,7 @@ function test_mex_audio()
     ysp_audio('capture_close', cp);
     expect_error('ysp_audio:handle', @() ysp_audio('capture_info', cp));
 
-    fprintf('PASS: %d checks\n', YSP_AU_CHECKS);
+    fprintf('PASS (%d checks)\n', YSP_AU_CHECKS);
 end
 
 function check(cond, msg, varargin)

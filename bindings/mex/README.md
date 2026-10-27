@@ -1509,7 +1509,7 @@ To put Screen's flips on this clock, use `ysp_rt('correlate', @GetSecs)`.
 
 | Command | Returns | Notes |
 |---|---|---|
-| `'version'`, `'now'`, `'db', x` | string, seconds (and `int64` ns), gain | `version`: the binding's (1.0.0) and the header's |
+| `'version'`, `'now'`, `'db', x` | string, seconds (and `int64` ns), gain | `version`: the binding's (1.0.1) and the header's |
 | `'devices' [, backend [, capture]]` | struct row (`name`, `default`, `backend`) | the names `'open'` matches |
 | `'wav_info', path` | struct | `rate`, `channels`, `format`, `frames`, `duration`, `rf64`, without a device |
 | `'open' [, opts]` | `uint64` handle | `device` (a part of a name), `backend` (`'auto'`, `'wasapi'`, `'coreaudio'`, `'alsa'`, `'pulse'`, `'null'`), `rate` (48000), `channels` (2), `sample`, `exclusive`, `period` (s), `voices`, `queue`, `min_tier`, `onset_offset` (s), `arena_bytes`, `device_index`. Refuses any format or rate conversion |
@@ -1523,7 +1523,7 @@ To put Screen's flips on this clock, use `ysp_rt('correlate', @GetSecs)`.
 | `'play_at', h, b, t` | id | 0: as soon as it can |
 | `'play', h, sound [, opts]` | id | `at`, `db`, `channels`, `offset`, `frames`, `loops` (-1: until stopped); `sound` is a buffer, stream or WAV handle |
 | `'cancel', h, id`, `'stop', h [, id [, at [, ramp]]]`, `'gain', h, id, db [, at [, ramp]]` | none | id 0 stops every sound |
-| `'update', h`, `'result', h, id`, `'wait', h, id [, timeout]` | count, record, record | the record: `id`, `target`, `onset`, `residual`, their `_ns`, `start_frame`, `end_frame`, `device_pos`, `rendered_at`, `buffer_id`, `flags`, `tier`, `sample`, `gap_frames`, `pending` |
+| `'update', h`, `'result', h, id`, `'wait', h, id [, timeout]` | count, record, record | `timeout` in seconds, `Inf` (the default) waits without end; the record: `id`, `target`, `onset`, `residual`, their `_ns`, `start_frame`, `end_frame`, `device_pos`, `rendered_at`, `buffer_id`, `flags`, `tier`, `sample`, `gap_frames`, `pending` |
 | `'stream_open', h [, opts]` | stream handle | `channels`, `ring` (s), `preroll` (s, or `'none'`), `first`, `id` |
 | `'stream_write', s, samples`, `'stream_end', s`, `'stream_reset', s [, first]`, `'stream_info', s`, `'stream_close', s` | frames taken, ... | |
 | `'sample_at', s, t`, `'stream_time_of', s, sample` | sample, `[s, ns]` | once the stream has started; `[]` before |
