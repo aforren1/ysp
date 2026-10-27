@@ -5,6 +5,7 @@
     uv run --no-project python tools/vendor_vis.py --write --angle          # ANGLE's two DLLs
     uv run --no-project python tools/vendor_vis.py --write --sdl msvc       # static SDL3, MSVC
     uv run --no-project python tools/vendor_vis.py --write --sdl mingw --mingw-bin DIR
+    uv run --no-project python tools/vendor_vis.py --write --pl-mpeg        # pl_mpeg.h (MPEG-1)
     ... --cache DIR       keep the downloads between runs (CI)
 
 What it makes, Windows only (the other screen backends are stubs):
@@ -16,6 +17,9 @@ What it makes, Windows only (the other screen backends are stubs):
                                   mingw64/bin of the Octave install)
     third_party/vis/sdl3/LICENSE.txt     SDL's license (zlib)
     third_party/vis/angle/        libEGL.dll, libGLESv2.dll, LICENSE.ANGLE.txt
+    third_party/vis/pl_mpeg/      pl_mpeg.h (MIT, its license in the file):
+                                  ysp/video.h's MPEG-1 decoder, the pin of
+                                  CMakeLists.txt's YSP_FETCH_PL_MPEG
 
 Why static SDL3: a module that imports SDL3.dll binds to any SDL3.dll
 already loaded in the process (docs/av_probe.md, section 5). Why ANGLE from
@@ -26,10 +30,17 @@ Every download is checked by SHA-256, and so is each DLL taken from the
 zip; nothing else is accepted. The SDL3 libraries are built here, so their
 bytes depend on the compiler: a stamp file beside each records the tarball
 hash and the compiler. Standard library only.
+
+A download that breaks off is resumed where it stopped (an HTTP range
+request), up to DOWNLOAD_ATTEMPTS times with a growing pause: the 136 MB
+Electron zip failed twice in a row on 2026-10-27 with IncompleteRead and a
+connection reset. The part file is kept in the cache folder, or in a
+temporary folder without --cache. Only the complete file's SHA-256 decides.
 """
 import argparse
 import hashlib
 import html
+import http.client
 import io
 import os
 import re
@@ -38,6 +49,8 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
+import urllib.error
 import urllib.request
 import zipfile
 
@@ -59,6 +72,16 @@ ANGLE_FILES = {
     "libGLESv2.dll": "e5d96fb54dfbbf676b0b37c7915bcd907ff28f2ba63b49a72736a43ba3939a4e",
 }
 
+# pl_mpeg has no release tags: the pin is a commit and the file's SHA-256,
+# the same as CMakeLists.txt's YSP_FETCH_PL_MPEG and tools/vendor_pack.py.
+PL_MPEG_COMMIT = "c871f2be022ece7ef4f64230b4fb8e1fb9eb6023"
+PL_MPEG_URL = "https://raw.githubusercontent.com/phoboslab/pl_mpeg/%s/pl_mpeg.h" % PL_MPEG_COMMIT
+PL_MPEG_SHA256 = "3a8cb30c83c2a1147719c30fe0c8b93da2987aa43140077c575b39aaa75fc2c9"
+
+DOWNLOAD_ATTEMPTS = 8
+DOWNLOAD_TIMEOUT = 60      # s without a byte before a read gives up
+DOWNLOAD_PAUSE_MAX = 30    # s between attempts, at most
+
 # The system libraries SDL3.dll imports itself (SDL's sdl3.pc, Libs.private):
 # a module that links the static library links these too.
 SDL_SYSTEM_LIBS = ["user32", "gdi32", "winmm", "imm32", "ole32", "oleaut32", "version", "uuid", "advapi32",
@@ -67,6 +90,61 @@ SDL_SYSTEM_LIBS = ["user32", "gdi32", "winmm", "imm32", "ole32", "oleaut32", "ve
 
 def sha256(data):
     return hashlib.sha256(data).hexdigest()
+
+
+def fetch_resumable(url, part, attempts=DOWNLOAD_ATTEMPTS, pause_max=DOWNLOAD_PAUSE_MAX):
+    """Downloads url into the file part, resuming what part already holds.
+
+    Each attempt asks for the bytes after those in part (Range); a server that
+    answers 200 instead of 206 sends the whole file, and part starts over.
+    Returns when the server's length is reached; exits after `attempts`
+    attempts that each broke off.
+    """
+    last = None
+    for attempt in range(1, attempts + 1):
+        have = os.path.getsize(part) if os.path.exists(part) else 0
+        headers = {"User-Agent": "ysp-vendor-vis"}
+        if have:
+            headers["Range"] = "bytes=%d-" % have
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=DOWNLOAD_TIMEOUT) as r:
+                total = None
+                if have and r.status == 206:
+                    m = re.match(r"bytes (\d+)-\d+/(\d+|\*)", r.headers.get("Content-Range", ""))
+                    if not m or int(m.group(1)) != have:
+                        have = 0   # not the range asked for: start over
+                    elif m.group(2) != "*":
+                        total = int(m.group(2))
+                else:
+                    have = 0       # 200: the whole file
+                if total is None and have == 0 and r.headers.get("Content-Length"):
+                    total = int(r.headers["Content-Length"])
+                with open(part, "ab" if have else "wb") as f:
+                    while True:
+                        b = r.read(1 << 20)
+                        if not b:
+                            break
+                        f.write(b)
+                got = os.path.getsize(part)
+                if total is not None and got < total:
+                    raise http.client.IncompleteRead(b"", total - got)
+                return
+        except urllib.error.HTTPError as e:
+            if e.code == 416 and have:
+                return     # part holds the whole file already: the hash decides
+            if e.code not in (408, 429) and e.code < 500:
+                sys.exit("error: %s: HTTP %d" % (url, e.code))
+            last = e
+        except (http.client.HTTPException, urllib.error.URLError, OSError) as e:
+            # IncompleteRead, a reset connection, a timeout
+            last = e
+        if attempt < attempts:
+            pause = min(2 ** attempt, pause_max)
+            print("  attempt %d of %d broke off at %d bytes (%s: %s); resuming in %d s"
+                  % (attempt, attempts, os.path.getsize(part) if os.path.exists(part) else 0,
+                     type(last).__name__, last, pause))
+            time.sleep(pause)
+    sys.exit("error: %s did not download in %d attempts (last: %s: %s)" % (url, attempts, type(last).__name__, last))
 
 
 def download(url, want, cache):
@@ -79,16 +157,34 @@ def download(url, want, cache):
             if sha256(data) == want:
                 return data
     print("downloading %s" % url)
-    with urllib.request.urlopen(url, timeout=600) as r:
-        data = r.read()
-    got = sha256(data)
-    if got != want:
-        sys.exit("error: %s has SHA-256 %s, expected %s; refused" % (url, got, want))
-    if cache:
-        os.makedirs(cache, exist_ok=True)
-        with open(os.path.join(cache, name), "wb") as f:
-            f.write(data)
+    work = cache or tempfile.mkdtemp(prefix="ysp-vendor-vis-")
+    os.makedirs(work, exist_ok=True)
+    part = os.path.join(work, name + ".part")
+    try:
+        fetch_resumable(url, part)
+        with open(part, "rb") as f:
+            data = f.read()
+        got = sha256(data)
+        if got != want:
+            os.remove(part)   # the next run starts over, not from these bytes
+            sys.exit("error: %s has SHA-256 %s, expected %s; refused" % (url, got, want))
+        if cache:
+            os.replace(part, os.path.join(cache, name))
+    finally:
+        if not cache:
+            shutil.rmtree(work, ignore_errors=True)
     return data
+
+
+# ---- pl_mpeg -------------------------------------------------------------------
+
+def write_pl_mpeg(cache):
+    data = download(PL_MPEG_URL, PL_MPEG_SHA256, cache)
+    dest = os.path.join(OUT, "pl_mpeg")
+    os.makedirs(dest, exist_ok=True)
+    with open(os.path.join(dest, "pl_mpeg.h"), "wb") as f:
+        f.write(data)
+    print("ok: pl_mpeg %s in %s" % (PL_MPEG_COMMIT[:7], os.path.relpath(dest, ROOT)))
 
 
 # ---- ANGLE ---------------------------------------------------------------------
@@ -245,6 +341,18 @@ def verify():
         if got != want:
             print("differs: %s has SHA-256 %s, expected %s" % (os.path.relpath(p, ROOT), got, want))
             bad += 1
+    p = os.path.join(OUT, "pl_mpeg", "pl_mpeg.h")
+    if not os.path.exists(p):
+        print("missing: %s (--write --pl-mpeg)" % os.path.relpath(p, ROOT))
+        bad += 1
+    else:
+        with open(p, "rb") as f:
+            got = sha256(f.read())
+        if got != PL_MPEG_SHA256:
+            print("differs: %s has SHA-256 %s, expected %s" % (os.path.relpath(p, ROOT), got, PL_MPEG_SHA256))
+            bad += 1
+        else:
+            print("ok: %s" % os.path.relpath(p, ROOT))
     for tc, lib in (("msvc", "SDL3-static.lib"), ("mingw", "libSDL3.a")):
         p = os.path.join(OUT, "sdl3", tc, "lib", lib)
         stamp = os.path.join(OUT, "sdl3", tc, "STAMP.txt")
@@ -265,6 +373,7 @@ def main():
     ap.add_argument("--write", action="store_true", help="fetch and build into third_party/vis/")
     ap.add_argument("--angle", action="store_true", help="with --write: ANGLE's DLLs from the Electron zip")
     ap.add_argument("--sdl", default="", help="with --write: msvc, mingw or msvc,mingw")
+    ap.add_argument("--pl-mpeg", action="store_true", help="with --write: pl_mpeg.h, the MPEG-1 decoder")
     ap.add_argument("--mingw-bin", help="the mingw64/bin whose gcc builds the Octave MEX files")
     ap.add_argument("--cache", help="a folder that keeps the downloads between runs")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
@@ -274,6 +383,8 @@ def main():
     if a.write:
         if a.angle:
             write_angle(a.cache)
+        if a.pl_mpeg:
+            write_pl_mpeg(a.cache)
         for tc in [t for t in a.sdl.split(",") if t]:
             if tc not in ("msvc", "mingw"):
                 sys.exit("error: --sdl takes msvc, mingw or both")
