@@ -18,4 +18,6 @@ recursive-include natives *
 include ysp_vis_ext.c
 include vis_gfx.c
 include example.py
+include example_2afc.py
+include example_rsvp.py
 recursive-include tests *.py

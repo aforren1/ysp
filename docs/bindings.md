@@ -223,8 +223,9 @@ so a frame is three calls whatever the stimulus count
   `'frame', 'row'` gives the frame as `[onset period index vblank n_done
   done_lost]` and the records as an n x 15 matrix. Measured per call on the
   simulated display (screen.md, "The frame in MATLAB and Octave"): phase
-  A's frame with one record cost 6.3 us in MATLAB and 120 us in Octave,
-  the struct without records 2.8 and 22 us, the row 0.65 and 5.1 us.
+  A's frame with one record cost 22.5 us in MATLAB and 191 us in Octave,
+  the struct without records 9.3 and 55 us, the row 3.8 and 13.5 us (a
+  bare call 3.7 and 3.6 us; medians of 3 runs).
 - **Between trials** a host waits as it likes (`time.sleep`, `input`,
   `pause`): the window belongs to ysp/screen.h's window thread and does
   not hang, and no pumping call is needed (measured:
