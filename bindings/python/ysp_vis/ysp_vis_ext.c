@@ -767,6 +767,10 @@ static PyType_Spec Screen_spec = { "ysp.screen.Screen", sizeof(ScreenObject), 0,
 
 #include "vis_gfx.c"
 
+/* --- ysp.video: Movie, SeqWriter, probe(), make_index() ---------------------------- */
+
+#include "vis_video.c"
+
 /* --- module functions ----------------------------------------------------------- */
 
 static PyObject* m_displays(PyObject* m, PyObject* unused) {
@@ -899,6 +903,7 @@ static PyMethodDef module_methods[] = {
     { "options", m_options, METH_NOARGS, "options() -> dict: Screen()'s keyword options and what each does." },
     { "_close_all", m_close_all, METH_NOARGS, "Closes every open Screen (atexit)." },
     { "_shared", m_shared, METH_NOARGS, "The versions of the shared tables and of the headers compiled here." },
+    VV_MODULE_METHODS
     { NULL, NULL, 0, NULL }
 };
 
@@ -995,6 +1000,7 @@ PyMODINIT_FUNC PyInit__vis(void) {
     if (!(VsBusyError = vs_add_exc(m, "ysp.screen.BusyError", "BusyError", VsError))) goto fail;
     /* Not an Error: the operator asked to stop. */
     if (!(VsAbort = vs_add_exc(m, "ysp.screen.Abort", "Abort", NULL))) goto fail;
+    if (vv_init(m) < 0) goto fail;
     for (i = 0; i < (int)(sizeof consts / sizeof consts[0]); i++)
         if (PyModule_AddIntConstant(m, consts[i].name, consts[i].v) < 0) goto fail;
     if (PyModule_AddStringConstant(m, "__version__", YV_VERSION) < 0) goto fail;

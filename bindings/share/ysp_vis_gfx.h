@@ -122,6 +122,7 @@ typedef struct yv_gfx {
     uint32_t        defer_tex[YV_MAX_DEFER], defer_buf[YV_MAX_DEFER];
     int             n_defer_tex, n_defer_buf;
     uint64_t        frames;
+    struct yv_movie* movies;   /* ysp_vis_video.h: closed before the gfx */
 } yv_gfx;
 
 /* ---- errors ------------------------------------------------------------------ */
@@ -430,6 +431,7 @@ static void yv_tl_release_all(yv_gfx* g);
 static void yv_gfx_close(yv_gfx* g) {
     yv_obj* o;
     if (!g) return;
+    yv_movies_close(g);   /* their textures and pins before the gfx (ysp_vis_video.h) */
     yv_tl_release_all(g);
     if (g->open || g->started) ygfx_close(&g->g);
     for (o = g->objs; o; o = o->next) {

@@ -615,12 +615,12 @@ jobs:
             third_party/vis
           key: vis-natives-${{ hashFiles('tools/vendor_vis.py') }}-v1
 
-      - name: Natives (static SDL3 with MSVC; ANGLE from the Electron zip)
+      - name: Natives (static SDL3 with MSVC; ANGLE from the Electron zip; pl_mpeg)
         if: steps.viscache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           PY=$(command -v python3 || command -v python)
-          "$PY" tools/vendor_vis.py --write --angle --sdl msvc --cache ~/ysp-vis-downloads
+          "$PY" tools/vendor_vis.py --write --angle --sdl msvc --pl-mpeg --cache ~/ysp-vis-downloads
 
       # The DLLs again by SHA-256, cached or not.
       - name: Natives check
@@ -644,7 +644,7 @@ jobs:
           curl -sSfL -o bindings/python/ysp_audio/include/miniaudio.h https://raw.githubusercontent.com/mackron/miniaudio/0.11.25/miniaudio.h
           echo "ac7af4de748b7e26b777f37e01cee313a308a7296a3eb080e2906b320cc55c89  bindings/python/ysp_audio/include/miniaudio.h" | sha256sum -c -
           mkdir -p bindings/mex/miniaudio && cp bindings/python/ysp_audio/include/miniaudio.h bindings/mex/miniaudio/
-          mkdir -p bindings/python/ysp_vis/natives && cp -r third_party/vis/angle third_party/vis/sdl3 bindings/python/ysp_vis/natives/
+          mkdir -p bindings/python/ysp_vis/natives && cp -r third_party/vis/angle third_party/vis/sdl3 third_party/vis/pl_mpeg bindings/python/ysp_vis/natives/
 
       - name: Build & test the wheel (simulated display)
         uses: pypa/cibuildwheel@v4.1.0
@@ -666,7 +666,7 @@ jobs:
           command: |
             cd('bindings/mex');
             build('audio'); build('timeline'); build('vis'); build('screen'); build('gfx'); build('video');
-            test_mex_vis; test_mex_vis_gfx
+            test_mex_vis; test_mex_vis_gfx; test_mex_video
 
       - uses: actions/upload-artifact@v7
         with:

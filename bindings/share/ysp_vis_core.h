@@ -40,10 +40,7 @@
 /* The owners compile ysp/timeline.h with 1024 channels; the check refuses
  * another value. */
 #define YTL_MAX_CHANNELS 1024
-/* Phase A: no MPEG-1 decoder yet (pl_mpeg is phase B's, with video). */
-#ifndef YVID_NO_PL_MPEG
-#define YVID_NO_PL_MPEG
-#endif
+/* pl_mpeg.h (MPEG-1) comes from third_party/vis/pl_mpeg (tools/vendor_vis.py). */
 
 /* Declarations only: the owners' modules hold the implementations. */
 #include "ysp/audio.h"
@@ -66,7 +63,7 @@
 
 /* The distribution's version tracks screen.h's, with a fourth number for a
  * change of the binding alone (docs/bindings.md, ysp-vis). */
-#define YV_VERSION YSCR_VERSION_STRING ".1"   /* .1: ysp.gfx phase B (a binding-only change, docs/bindings.md) */
+#define YV_VERSION YSCR_VERSION_STRING ".1"   /* .1: ysp.gfx and ysp.video, phase B */
 
 #define YV_RECORDS 4096   /* flip records kept between records() calls */
 #define YV_EVENTS  1024   /* input events kept between poll() calls    */
@@ -286,11 +283,17 @@ typedef struct yv_screen {
                                 * open option frame), not a struct        */
 } yv_screen;
 
+/* ysp_vis_video.h: the movies on a gfx get each flip record (their FRAME
+ * records), and close before the gfx does. */
+static void yv_movies_flip(struct yv_gfx* g, const yscr_record* r);
+static void yv_movies_close(struct yv_gfx* g);
+
 static void yv_on_flip(void* ctx, const yscr_record* r, const yscr_trigger_result* trig, int n_trig) {
     yv_screen* v = (yv_screen*)ctx;
     uint32_t i;
     (void)trig;
     (void)n_trig;
+    if (v->gfx) yv_movies_flip(v->gfx, r);
     if (!v->rec) return;
     i = (v->rec_head + v->rec_n) % YV_RECORDS;
     v->rec[i] = *r;
@@ -425,5 +428,7 @@ static int yv_window(yv_screen* v, void (*fn)(void*), const char* text, int on) 
 /* ---- gfx: ysp/gfx.h's stimuli, lists, groups, bindings (ysp_vis_gfx.h) ------ */
 
 #include "ysp_vis_gfx.h"
+
+#include "ysp_vis_video.h"   /* movies: ysp.video, ysp_video */
 
 #endif /* YSP_VIS_CORE_H */
