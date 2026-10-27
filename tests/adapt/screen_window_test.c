@@ -661,8 +661,15 @@ static void case_mode(void) {
     base_desc(&d, YSCR_WINDOW_THREAD_ON);
     d.windowed = false;
     d.mode = modes[pick];
+    d.settle = 0;   /* AUTO: strict fullscreen; the switched mode must settle */
+    if (getenv("YSCR_WINDOW_TEST_DXGI")) d.backend = YSCR_BACKEND_DXGI_FLIP;
     printf("  desktop %dx%d, switching to %dx%d\n", di.desktop.w, di.desktop.h, modes[pick].w, modes[pick].h);
-    if (!open_screen(&s, &d)) { check("open in the other mode", 0); return; }
+    if (!open_screen(&s, &d)) { check("open in the other mode, settled", 0); return; }
+    {
+        char line[1200];
+        yscr_describe(&s, line, sizeof line);
+        printf("  %s\n", line);
+    }
     memset(&during, 0, sizeof during); during.dmSize = sizeof during;
     EnumDisplaySettingsW(NULL, ENUM_CURRENT_SETTINGS, &during);
     yscr_get_caps(&s, &caps);

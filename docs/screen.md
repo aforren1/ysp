@@ -2960,7 +2960,7 @@ session in `pause` (the av probe saw it). Decided (user, 2026-10-26):
 keep the trigger, change what it does by who answers.
 
 - **The window thread answers** (its heartbeat is newer than 1 s): the
-  watchdog asks it for a release and waits up to 1 s. The window thread
+  watchdog asks it for a release and waits up to 5 s (v0.10.1; 1 s in v0.10.0, see below). The window thread
   minimizes every window it owns and shows the cursor; the watchdog puts
   back the gamma ramps, writes `YSCR_EV_PANIC` with `u.u32[1]` 1 and adds
   an abort with the new reason `YSCR_ABORT_PANIC` (0x20). The next
@@ -2970,7 +2970,8 @@ keep the trigger, change what it does by who answers.
   `panic_fn` does not run: the process lives and saves after its next
   `begin()`.
 - **The window thread does not answer** (no heartbeat for 1 s, or the
-  release not done in 1 s): the process ends as before.
+  release not begun in 1 s or not done in 5 s): the process ends as
+  before.
 
 No call gets a released session back (user, 2026-10-26): a released
 window would have to be restored, made fullscreen again and settled, and
@@ -2989,6 +2990,122 @@ release, waited the 1 s and then ended the process. With the thread OFF,
 in v0.3.1. `tests/adapt/screen_window_test.c` calls the panic as the
 watchdog does: release 9.9 ms, and a child whose window thread is blocked
 ended with exit code 99 after 2.4 s.
+
+### Measured on v0.10.0: the window thread against v0.9.0's path
+
+The probe's harness (`tests/probe/winthread/` on branch
+`probe-winthread`: `probe_c`, the abi3 module for CPython 3.12.11, the
+MEX file) built against this header in place of the probe's copy, with
+`desc.window_thread` from `YSCR_WINDOW_THREAD` in the environment, so
+each comparison is one binary per host; static SDL3 3.4.0 (MSVC 19.51
+`/MD` for C, Python and MATLAB; Octave 10.1's MinGW gcc 14.2 for
+Octave). The laptop and panel of the top of this note (Iris Xe, 1920 x
+1200 at 60.0008 Hz, one display), AUTO backend (COMPOSITION in every
+run), AC (the battery status read 2 at the start and end of the series),
+the Balanced plan. Every run went through `psy-guard.sh time`, one at a
+time; other workers built between runs. No photodiode: every tier is the
+record's. The scene is the av probe's: N stimuli, one parameter set and
+one draw each per frame. OFF ran first in each pair.
+
+**The frame loop, 10 minutes per run** (2026-10-26 21:55 to 2026-10-27
+02:39, and the four reruns of 05:11 to 05:53). Columns as in
+`docs/winthread_probe.md` section 3.1.
+
+| Host | N | Window | Design | Frames | Missed (vblanks) | Late target | Occluded | Residual us p50 / p99 | Work ms p50 / p99 / max | Path, tier | Window thread CPU |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| C | 10 | fullscreen | OFF | 36002 | 0 (0) | 0 | 0 | 0.7 / 2.5 | 0.24 / 0.61 / 1.0 | independent 36002; t1 36002 | - |
+| C | 10 | fullscreen | ON | 36002 | 0 (0) | 0 | 0 | 0.8 / 2.1 | 0.21 / 0.59 / 2.2 | independent 36002; t1 36002 | 266 ms in 600 s |
+| C | 100 | fullscreen | OFF | 35929 | 16 (20) | 0 | 18 | 0.7 / 60.1 | 0.47 / 1.69 / 2.8 | independent 35926, overlay 3; t1 35906, t2 2, t3 21 | - |
+| C | 100 | fullscreen | ON | 36001 | 1 (1) | 0 | 0 | 0.7 / 25.5 | 0.42 / 1.33 / 3.3 | independent 36001; t1 36001 | 297 ms in 600 s |
+| C | 10 | 1280 x 720 | OFF | 36002 | 0 (0) | 0 | 0 | 0.7 / 1.9 | 0.20 / 0.53 / 1.3 | independent 36002; t1 36002 | - |
+| C | 10 | 1280 x 720 | ON | 36001 | 1 (1) | 0 | 0 | 0.7 / 2.2 | 0.23 / 0.59 / 2.4 | independent 36001; t1 36001 | 359 ms in 600 s |
+| C | 100 | 1280 x 720 | OFF | 36000 | 2 (2) | 0 | 0 | 0.7 / 2.2 | 0.49 / 1.55 / 3.1 | independent 36000; t1 36000 | - |
+| C | 100 | 1280 x 720 | ON | 36002 | 0 (0) | 0 | 0 | 0.7 / 2.5 | 0.66 / 1.79 / 3.4 | independent 36002; t1 36002 | 484 ms in 600 s |
+| Python 3.12 | 10 | fullscreen | OFF | 35998 | 1 (1) | 0 | 1 | 0.7 / 2.2 | 0.28 / 0.71 / 2.3 | independent 35998; t1 35997, t3 1 | - |
+| Python 3.12 | 10 | fullscreen | ON | 36003 | 0 (0) | 0 | 0 | 1.0 / 86.3 | 0.28 / 0.74 / 1.3 | independent 36003; t1 35995, t2 8 | 406 ms in 600 s |
+| Python 3.12 | 100 | fullscreen | OFF | 36000 | 3 (3) | 0 | 0 | 0.7 / 2.0 | 0.73 / 2.34 / 6.0 | independent 36000; t1 36000 | - |
+| Python 3.12 | 100 | fullscreen | ON | 35939 | 44 (64) | 0 | 0 | 0.6 / 2.2 | 0.77 / 2.38 / 3.6 | independent 35939; t1 35939 | 469 ms in 600 s |
+| Python 3.12 | 10 | 1280 x 720 | OFF | 36000 | 2 (2) | 0 | 0 | 0.6 / 2.1 | 0.29 / 0.75 / 2.1 | independent 36000; t1 36000 | - |
+| Python 3.12 | 10 | 1280 x 720 | ON | 35999 | 3 (3) | 0 | 0 | 0.7 / 2.1 | 0.29 / 0.74 / 2.5 | independent 35999; t1 35999 | 391 ms in 600 s |
+| Python 3.12 | 100 | 1280 x 720 | OFF | 36002 | 0 (0) | 0 | 0 | 0.8 / 2.4 | 1.24 / 2.67 / 5.1 | independent 36002; t1 36002 | - |
+| Python 3.12 | 100 | 1280 x 720 | ON | 36002 | 0 (0) | 1 | 0 | 0.7 / 2.4 | 1.29 / 2.65 / 5.7 | independent 36002; t1 36002 | 531 ms in 600 s |
+| MATLAB R2023a | 10 | fullscreen | OFF | 36002 | 0 (0) | 0 | 0 | 1.0 / 95.8 | 0.51 / 1.00 / 5.8 | independent 36002; t1 35990, t2 12 | - |
+| MATLAB R2023a | 10 | fullscreen | ON | 36002 | 0 (0) | 1 | 0 | 1.2 / 104.2 | 0.50 / 0.99 / 3.2 | independent 36002; t1 35979, t2 23 | - |
+| Octave 10.1 | 10 | fullscreen | OFF | 36002 | 0 (0) | 1 | 0 | 1.4 / 106.1 | 0.79 / 1.59 / 3.4 | independent 36002; t1 35944, t2 58 | - |
+| Octave 10.1 | 10 | fullscreen | ON | 36002 | 0 (0) | 0 | 0 | 1.2 / 104.1 | 0.84 / 1.60 / 4.4 | independent 36002; t1 35973, t2 29 | - |
+
+Reruns of the fullscreen N = 100 pairs: the first C OFF run had 18
+OCCLUDED records (another window over ours for a while) and the first
+Python ON run 37 of its 44 misses between 529 and 578 s, with the work per
+frame up from 0.8 to 1.2 to 1.7 ms in the same stretch (the machine, not
+the screen). Again, 05:11 to 05:53:
+
+| C | 100 | fullscreen | OFF | 36001 | 1 (1) | 0 | 0 | 1.2 / 103.7 | 0.68 / 1.57 / 2.8 | independent 36001; t1 35962, t2 39 | - |
+| C | 100 | fullscreen | ON | 36003 | 0 (0) | 0 | 0 | 1.0 / 95.2 | 0.77 / 1.58 / 2.8 | independent 36003; t1 35972, t2 31 | - |
+| Python 3.12 | 100 | fullscreen | OFF | 36002 | 0 (0) | 0 | 0 | 0.9 / 88.0 | 1.22 / 2.61 / 7.1 | independent 36002; t1 35978, t2 24 | - |
+| Python 3.12 | 100 | fullscreen | ON | 36001 | 1 (1) | 1 | 0 | 1.3 / 108.0 | 1.33 / 2.63 / 5.4 | independent 36001; t1 35954, t2 47 | - |
+
+(Window thread CPU in the reruns: 328 and 344 ms in 600 s.) Reading the
+tables: no difference follows the design. Away from the two disturbed
+runs, 0 to 3 missed frames per 36,000 in either design; residual p99 2 to
+2.5 us in a window and 2 to 108 us fullscreen in both (the fullscreen
+tails are the grid-jitter stretches the probe described); every frame on
+independent flip; the host's work per frame within 0.2 ms at p50 and p99
+between the designs of a pair. MATLAB and Octave, 10 minutes each: no
+missed frame in either design. The window thread used 0.27 to 0.53 s of
+CPU in 600 s.
+
+**Idle gaps with no pump** (2026-10-27 03:24 to 04:57): 120
+frames, then no call for the gap (C `Sleep()`, Python `time.sleep()`),
+then 120 frames; N = 10; a thread polled `IsHungAppWindow()` and the
+foreground every 50 ms. "Bad" frames are those before the first 10 in a
+row with tier 1, no drop and no flag.
+
+| Gap | Window | Host | OFF: hung, ghost | OFF: frame 120; bad frames | ON: hung, ghost | ON: frame 120; bad frames |
+|---|---|---|---|---|---|---|
+| 5 s | fullscreen | C | 4.21 s, 4.26 s | frame 120: drop 1, overlay, tier 3, flags 0x100; bad 3 (133 ms), max begin wait 81.1 ms, flags 0x10a, drops 1 | never, never | frame 120: drop 0, independent, tier 1, flags 0x4; bad 1 (17 ms), max begin wait 0.1 ms, flags 0x4, drops 0 |
+| 5 s | fullscreen | Python | 4.26 s, 4.31 s | frame 120: drop 1, overlay, tier 3, flags 0x100; bad 3 (133 ms), max begin wait 80.1 ms, flags 0x10a, drops 1 | never, never | frame 120: drop 0, independent, tier 1, flags 0x0; bad 0 (0 ms), max begin wait 0.0 ms, flags 0x0, drops 0 |
+| 5 s | 1280 x 720 | C | 4.05 s, 4.10 s | frame 120: drop 1, overlay, tier 3, flags 0x100; bad 2 (50 ms), max begin wait 14.2 ms, flags 0x100, drops 1 | never, never | frame 120: drop 0, independent, tier 1, flags 0x0; bad 0 (0 ms), max begin wait 0.0 ms, flags 0x0, drops 0 |
+| 5 s | 1280 x 720 | Python | 4.46 s, 4.51 s | frame 120: drop 1, overlay, tier 3, flags 0x100; bad 3 (67 ms), max begin wait 16.7 ms, flags 0x100, drops 1 | never, never | frame 120: drop 0, independent, tier 2, flags 0x10; bad 17 (283 ms), max begin wait 15.8 ms, flags 0x10, drops 0 |
+| 10 s | fullscreen | C | 4.30 s, 4.36 s | frame 120: drop 1, overlay, tier 3, flags 0x100; bad 3 (133 ms), max begin wait 80.0 ms, flags 0x10a, drops 1 | never, never | frame 120: drop 0, independent, tier 2, flags 0x10; bad 17 (283 ms), max begin wait 16.3 ms, flags 0x10, drops 0 |
+| 10 s | fullscreen | Python | 4.26 s, 4.31 s | frame 120: drop 0, composed, tier 3, flags 0xe; bad 19 (467 ms), max begin wait 83.0 ms, flags 0x1e, drops 0 | never, never | frame 120: drop 0, independent, tier 2, flags 0x10; bad 17 (283 ms), max begin wait 16.8 ms, flags 0x10, drops 0 |
+| 10 s | 1280 x 720 | C | 4.04 s, 4.09 s | frame 120: drop 1, overlay, tier 3, flags 0x100; bad 3 (67 ms), max begin wait 17.7 ms, flags 0x100, drops 1 | never, never | frame 120: drop 0, independent, tier 1, flags 0x0; bad 0 (0 ms), max begin wait 0.0 ms, flags 0x0, drops 0 |
+| 10 s | 1280 x 720 | Python | 4.21 s, 4.26 s | frame 120: drop 1, overlay, tier 3, flags 0x110; bad 10 (183 ms), max begin wait 30.9 ms, flags 0x110, drops 1 | never, never | frame 120: drop 0, independent, tier 2, flags 0x10; bad 17 (283 ms), max begin wait 16.4 ms, flags 0x10, drops 0 |
+| 30 s | fullscreen | C | 4.31 s, 4.36 s | frame 120: drop 1, overlay, tier 3, flags 0x110; bad 19 (467 ms), max begin wait 81.8 ms, flags 0x11a, drops 1 | never, never | frame 120: drop 0, independent, tier 2, flags 0x10; bad 17 (283 ms), max begin wait 16.5 ms, flags 0x10, drops 0 |
+| 30 s | fullscreen | Python | 4.31 s, 4.36 s | frame 120: drop 0, composed, tier 3, flags 0xa; bad 19 (450 ms), max begin wait 81.5 ms, flags 0x1a, drops 0 | never, never | frame 120: drop 0, independent, tier 2, flags 0x10; bad 17 (283 ms), max begin wait 16.2 ms, flags 0x10, drops 0 |
+| 30 s | 1280 x 720 | C | 4.46 s, 4.51 s | frame 120: drop 1, overlay, tier 3, flags 0x110; bad 15 (267 ms), max begin wait 29.9 ms, flags 0x110, drops 1 | never, never | frame 120: drop 1, independent, tier 2, flags 0x10; bad 17 (300 ms), max begin wait 17.0 ms, flags 0x10, drops 1 |
+| 30 s | 1280 x 720 | Python | 4.41 s, 4.46 s | frame 120: drop 1, overlay, tier 3, flags 0x114; bad 16 (300 ms), max begin wait 28.7 ms, flags 0x114, drops 1 | never, never | frame 120: drop 0, independent, tier 2, flags 0x10; bad 17 (283 ms), max begin wait 16.5 ms, flags 0x10, drops 0 |
+
+With the thread OFF every window was marked hung after 4.04 to 4.46 s
+and a ghost took the foreground 50 ms later; the first frame after the
+gap dropped a vblank or went composed at tier 3, and `begin()` waited up
+to 82 ms. With the thread ON: never hung, no ghost, the first frame on
+independent flip with no drop (one 30 s window run dropped one vblank).
+The 17 bad frames ON after gaps of 10 s and more are GRID_UNSTABLE only:
+the grid after a gap, below (v0.10.1).
+
+**MATLAB R2023a and Octave 10.1** (MEX, static SDL3; `pause(30)` with no
+pump):
+
+| Case | MATLAB OFF | MATLAB ON | Octave OFF | Octave ON |
+|---|---|---|---|---|
+| hung, ghost (fullscreen; window) | never; never | never; never | 4.21 s, 4.26 s; 4.41 s, 4.46 s | never; never |
+| frame 120, fullscreen | dropped 1, independent, GRID_UNSTABLE | on time, independent, GRID_UNSTABLE | composed, tier 3, `begin()` waits up to 82 ms | on time, independent, GRID_UNSTABLE |
+| frame 120, window | dropped 1, independent | on time, independent | 2 dropped, overlay, tier 3 | on time, independent |
+| Shift+Esc in frames | | QUIT, 0x1 | | QUIT, 0x1 |
+| 3 presses during `pause(10)` | | lives; minimized; release 8.1 ms; next `begin()` 0x21, 3 presses | | lives; minimized; release 10.7 ms; 0x21, 3 presses |
+| open, 1 s of frames, close, 3 times in one session | | done, exit 0 | | done, exit 0 |
+
+MATLAB's `pause` pumps its main thread, so OFF did not hang there either
+(as the av probe found). C and Python with the thread ON: Shift+Esc in
+frames gave QUIT 0x1 with 1 press in both designs; 3 presses while the host
+slept 10 s released the display (8.7 and 9.5 ms) and the next `begin()`
+returned 0x21 with 3 presses.
+
+**Input and the command cost** (C, fullscreen, ON): 50 keys by scan
+code while the frame thread spun on `yscr_poll()`: available 0.48 ms
+after `SendInput()` at p50 and 0.90 ms at p99, stamped 0.48 and 0.89 ms;
+an empty window call: 6.3 us median, 30 us max over 1000.
 
 ### Dear ImGui
 
@@ -3046,18 +3163,19 @@ swapchain and ANGLE context stay on the frame thread. The GL renderer
 The ImGui probe of docs/imgui_probe.md (`C:\tmp\psy-work\imgui`, not in
 the repository) was ported to the ysp names and routed this way
 (scratch copy of the window-thread worker, `imgui-wt`). On this laptop,
-COMPOSITION, a 800 x 600 timed window, AC, 2026-10-26 (through the
-build guard, not the timing guard: the costs are a first look):
+COMPOSITION, a 800 x 600 timed window, AC, 2026-10-27 03:2x, each run
+through the timing guard (ON first in each pair):
 
 | Mode | Window thread | Frames | Long intervals | ImGui frame on the frame thread, mean / p99 us | Window calls |
 |---|---|---|---|---|---|
-| console, 12 s | ON | 839 | 0 of 718 | 225 / 582 | 842 |
-| console, 12 s | OFF | 839 | 0 of 718 | 141 / 324 | 844 (inline) |
-| overlay, 8 s | ON | 599 | 0 of 478 | 237 / 564 | 604 |
-| overlay, 8 s | OFF | 599 | 0 of 478 | 147 / 290 | 604 (inline) |
+| console, 12 s | ON | 839 | 0 of 718 | 275 / 712 | 843 |
+| console, 12 s | OFF | 839 | 0 of 718 | 217 / 522 | 843 (inline) |
+| overlay, 8 s | ON | 599 | 0 of 478 | 288 / 645 | 604 |
+| overlay, 8 s | OFF | 599 | 0 of 478 | 256 / 533 | 604 (inline) |
 
-The ImGui frame (events, NewFrame, the panels, Render) took 80 to 90 us
-more with the window thread: two window calls a frame (`im_frame` and
+The ImGui frame (events, NewFrame, the panels, Render) took 32 to 58 us
+more at the mean with the window thread (80 to 90 us in a first pair of
+runs on 2026-10-26 outside the timing guard): two window calls a frame (`im_frame` and
 the IME callback in `Render()`), each a wake of the window thread. One
 call a frame, with the IME data applied at the next frame's call, would
 save one. The probe's input test (console mode, F24 by `SendInput`)
@@ -3098,9 +3216,11 @@ callback it stayed off. Both with the window thread ON and OFF.
   `--mode-test` the mode case OFF and ON.
 - Mutants `wt-01` to `wt-09` (the core test) and `wt-20` to `wt-29`
   (`tests/adapt/screen_window_test.c`, one case each through
-  `YSCR_WINDOW_TEST_ONLY`): 19 of 19 killed. The whole list of 160
-  mutants ran again (`-j 4`): 159 killed and 1 timeout (st-11), all as
-  expected.
+  `YSCR_WINDOW_TEST_ONLY`): 19 of 19 killed. The whole list, 164 with
+  v0.10.1's, ran again with `-j 3`: 162 killed, 1 timeout (st-11), and
+  `wt-25` survived because its baseline failed (another test's window
+  had the foreground, so the typed keys missed); alone it was killed. Run
+  the window mutants one at a time.
 
 ### Findings that are not the window thread's
 
@@ -3120,8 +3240,208 @@ callback it stayed off. Both with the window thread ON and OFF.
   window thread running, the ids stay valid between opens. Not fixed:
   a fix would match displays by name or bounds; to be decided.
 
+## The grid after a gap (v0.10.1)
+
+The window-thread probe (`docs/winthread_probe.md` section 3.2) found,
+in both designs and with the av probe's pump: after a gap of 10 s or more
+without presents, the first 16 records carry `YSCR_FLIP_GRID_UNSTABLE` at
+tier 2, the 17th shows the grid moving to the OS's vblank times, and the
+onsets of the flagged records are up to 1 ms late against the OS's times.
+
+### The cause
+
+`gapdiag.c` (scratch of the window-thread worker, not in the repository)
+wraps a screen's presenter, so each OS vblank time is logged with the
+grid's state before the core used it. It runs frames for a time, sleeps
+the gap with no call, and runs 120 frames. COMPOSITION, fullscreen,
+window thread ON, the laptop of this note, AC, 2026-10-26 23:2x to
+2026-10-27 01:0x, through the timing guard:
+
+| Frames before the gap | Gap | The grid's period before the gap, against the mode | The first OS time after the gap, off the grid | GRID_UNSTABLE after |
+|---|---|---|---|---|
+| 2 s | 30 s | -17.1 ppm | +530 us | 17 |
+| 2 s | 10 s | +14.4 ppm | -154 us | 0 (within 1% of a period) |
+| 60 s | 30 s | -0.4 ppm | +3 us | 0 |
+| 2 s, DXGI_FLIP | 30 s | -12.0 ppm | +336 us | 17 |
+| 60 s, DXGI_FLIP | 30 s | -0.2 ppm | -16 us | 0 |
+
+The offset after the gap is the period's error times the gap. The grid
+fits its period from the OS's times since its anchor (THE GRID); over the
+first 2 s that fit was 1 to 41 ppm off the long-run rate, of either sign,
+in 60 runs. The OS's times themselves wander: least-squares periods over
+windows of the 60 s run (residuals 2 to 5 us within 1 s windows, 37 to 56
+us within 10 s windows):
+
+| Window of the run | Period against the mode |
+|---|---|
+| 0.0 to 1.0 s | -35.5 ppm |
+| 1.0 to 2.0 s | -5.2 ppm |
+| 2.0 to 3.0 s | +2.6 ppm |
+| 3.0 to 4.0 s | +50.7 ppm |
+| 4.0 to 5.0 s | +20.2 ppm |
+| 5.0 to 7.5 s | -14.9 ppm |
+| 7.5 to 10.0 s | +6.4 ppm |
+| 10.0 to 20.0 s | -3.1 ppm |
+| 20.0 to 30.0 s | -0.1 ppm |
+| 30.0 to 40.0 s | +4.0 ppm |
+| 40.0 to 50.0 s | +6.7 ppm |
+| 50.0 to 60.0 s | +3.2 ppm |
+
+So no fit over a few seconds predicts the vblanks 30 s later to the 1%
+of a period (167 us) that keeps a time on the grid, and the rule that
+protects the grid from DXGI's off-grid times (16 in a row before it
+moves, v0.4.3) then flags 16 records and moves on the 17th.
+
+### What the system knows during a gap
+
+The same runs logged two other vblank sources every 20 ms or at each
+vblank, from threads of the probe:
+
+- The idle-wake waiter's wakes (COMPOSITION's `D3DKMTWaitForVerticalBlankEvent`):
+  they track the vblanks through the gap, but each wake comes 7 to 173 us
+  after the vblank (p10 to p90 in frames) and with a different spread
+  while the host idles; a phase from them would need a latency model.
+- DWM's vblank time (`DwmGetCompositionTimingInfo(NULL)`, `qpcVBlank`):
+  within 4 us of the flip statistics' times before and after the gap on
+  both backends (p10 to p90: -4.3 to +4.7 us fullscreen, -19 to +20 us in
+  a window while the window was still composed, -8 to +7 us after), never
+  older than 2 periods in 6,682 samples, and moving with the vblanks
+  through the gap (the last sample of a gap within 1 to 19 us of the line
+  of the OS's times after it). `qpcVBlank` is the next vblank, up to a
+  period after the call (measured: 1 to 16 ms ahead), so the header takes
+  it back one `qpcRefreshPeriod`.
+
+### The fix
+
+The candidate (feed the idle-wake waiter's times into the grid during the
+gap) was not taken: the wakes carry a latency of tens of us that varies
+with the CPU's load, they exist on COMPOSITION only, and the grid would
+need a lock with the waiter's thread. DWM's time has no latency, works on
+both backends, and is read once, on the frame thread:
+
+- In `begin()`, after the completions and before the prediction, when the
+  grid's newest OS time is 0.5 s old or more (a gap: within 0.5 s the
+  grid holds to tens of us), the header reads DWM's vblank once for that
+  gap.
+- It takes it as an OS time (the anchor moves there, and the period's fit
+  gains the gap as baseline) when it is newer than the grid's newest,
+  at most 2 periods old, and within 1% of a period plus 100 ppm of the
+  gap of the grid's vblank, at most a quarter period. Else it counts as
+  refused and the grid extrapolates as before.
+- DWM's timing is the primary display's: a screen on another display, or
+  a refresh 0.5% off DWM's, does not ask. Two displays were not tried.
+- `gap_anchors=N(max ...us, refused M)` in the describe line.
+
+### Before and after
+
+`gapdiag` again, 2 s of frames, then the gap, then 120 frames; fullscreen
+unless stated; the before runs twice (0.10.0, and "(b)" from a build of
+the first fix, which never anchored: it took DWM's next vblank, ahead of
+now, as stale); 2026-10-27 02:4x to 06:09, through the timing guard, AC.
+
+| Backend | Window | Gap s | Window thread | Header | Period before the gap, ppm | First OS time after the gap, us off the grid | GRID_UNSTABLE records after | Largest onset error, us | Gap anchors (move) |
+|---|---|---|---|---|---|---|---|---|---|
+| COMPOSITION | fullscreen | 5 | OFF | 0.10.0 | +28.14 | -151 | 0 | 0 | 0 |
+| COMPOSITION | fullscreen | 5 | OFF | 0.10.0 (b) | +22.49 | -135 | 0 | 0 | 0 |
+| COMPOSITION | fullscreen | 5 | OFF | 0.10.1 | +41.04 | -0 | 0 | 0 | 1 (334 us) |
+| COMPOSITION | fullscreen | 5 | ON | 0.10.0 | +33.76 | -211 | 17 | 212 | 0 |
+| COMPOSITION | fullscreen | 5 | ON | 0.10.0 (b) | +35.20 | -210 | 17 | 219 | 0 |
+| COMPOSITION | fullscreen | 5 | ON | 0.10.1 | +24.96 | -0 | 0 | 0 | 1 (227 us) |
+| COMPOSITION | fullscreen | 10 | OFF | 0.10.0 | +19.17 | -239 | 17 | 268 | 0 |
+| COMPOSITION | fullscreen | 10 | OFF | 0.10.0 (b) | +18.92 | -197 | 17 | 197 | 0 |
+| COMPOSITION | fullscreen | 10 | OFF | 0.10.1 | +18.66 | -1 | 0 | 0 | 1 (201 us) |
+| COMPOSITION | fullscreen | 10 | ON | 0.10.0 | +22.02 | -245 | 17 | 253 | 0 |
+| COMPOSITION | fullscreen | 10 | ON | 0.10.0 (b) | +37.10 | -392 | 17 | 407 | 0 |
+| COMPOSITION | fullscreen | 10 | ON | 0.10.1 | +21.98 | -1 | 0 | 0 | 1 (220 us) |
+| COMPOSITION | fullscreen | 30 | OFF | 0.10.0 | +26.87 | -862 | 17 | 871 | 0 |
+| COMPOSITION | fullscreen | 30 | OFF | 0.10.0 (b) | +15.13 | -499 | 17 | 501 | 0 |
+| COMPOSITION | fullscreen | 30 | OFF | 0.10.1 | +28.44 | -0 | 0 | 0 | 1 (895 us) |
+| COMPOSITION | fullscreen | 30 | ON | 0.10.0 | +28.70 | -896 | 17 | 901 | 0 |
+| COMPOSITION | fullscreen | 30 | ON | 0.10.0 (b) | +19.72 | -675 | 17 | 682 | 0 |
+| COMPOSITION | fullscreen | 30 | ON | 0.10.1 | +15.64 | -1 | 0 | 0 | 1 (480 us) |
+| COMPOSITION | fullscreen | 30 (again) | ON | 0.10.0 | +8.74 | -274 | 17 | 291 | 0 |
+| COMPOSITION | fullscreen | 30 (again) | ON | 0.10.0 (b) | -1.43 | 15 | 0 | 0 | 0 |
+| COMPOSITION | fullscreen | 30 (again) | ON | 0.10.1 | +22.28 | 2 | 0 | 0 | 1 (726 us) |
+| COMPOSITION | fullscreen | 60 | OFF | 0.10.0 | +23.34 | -1495 | 17 | 1501 | 0 |
+| COMPOSITION | fullscreen | 60 | OFF | 0.10.0 (b) | +12.38 | -727 | 17 | 731 | 0 |
+| COMPOSITION | fullscreen | 60 | OFF | 0.10.1 | +16.02 | -0 | 0 | 0 | 1 (1036 us) |
+| COMPOSITION | fullscreen | 60 | ON | 0.10.0 | +15.89 | -1013 | 17 | 1024 | 0 |
+| COMPOSITION | fullscreen | 60 | ON | 0.10.0 (b) | +30.06 | -1904 | 17 | 1921 | 0 |
+| COMPOSITION | fullscreen | 60 | ON | 0.10.1 | +15.04 | 0 | 0 | 0 | 1 (991 us) |
+| COMPOSITION | 1280 x 720 | 30 | ON | 0.10.0 | +12.67 | -382 | 17 | 391 | 0 |
+| COMPOSITION | 1280 x 720 | 30 | ON | 0.10.0 (b) | +20.06 | -659 | 17 | 660 | 0 |
+| COMPOSITION | 1280 x 720 | 30 | ON | 0.10.1 | +5.93 | -0 | 0 | 0 | 1 (208 us) |
+| DXGI_FLIP | fullscreen | 5 | OFF | 0.10.0 | +24.08 | -132 | 0 | 0 | 0 |
+| DXGI_FLIP | fullscreen | 5 | OFF | 0.10.0 (b) | +33.93 | -214 | 17 | 225 | 0 |
+| DXGI_FLIP | fullscreen | 5 | OFF | 0.10.1 | +19.35 | 1 | 0 | 0 | 1 (125 us) |
+| DXGI_FLIP | fullscreen | 5 | ON | 0.10.0 | +20.45 | -126 | 0 | 0 | 0 |
+| DXGI_FLIP | fullscreen | 5 | ON | 0.10.0 (b) | +27.38 | -140 | 0 | 0 | 0 |
+| DXGI_FLIP | fullscreen | 5 | ON | 0.10.1 | +15.85 | 1 | 0 | 0 | 1 (89 us) |
+| DXGI_FLIP | fullscreen | 10 | OFF | 0.10.0 | +22.86 | -252 | 17 | 255 | 0 |
+| DXGI_FLIP | fullscreen | 10 | OFF | 0.10.0 (b) | +7.77 | -72 | 0 | 0 | 0 |
+| DXGI_FLIP | fullscreen | 10 | OFF | 0.10.1 | +13.10 | -1 | 0 | 0 | 1 (153 us) |
+| DXGI_FLIP | fullscreen | 10 | ON | 0.10.0 | +13.66 | -119 | 0 | 0 | 0 |
+| DXGI_FLIP | fullscreen | 10 | ON | 0.10.0 (b) | +25.31 | -328 | 17 | 331 | 0 |
+| DXGI_FLIP | fullscreen | 10 | ON | 0.10.1 | +28.78 | 0 | 0 | 0 | 1 (286 us) |
+| DXGI_FLIP | fullscreen | 30 | OFF | 0.10.0 | +19.86 | -594 | 17 | 595 | 0 |
+| DXGI_FLIP | fullscreen | 30 | OFF | 0.10.0 (b) | +24.97 | -766 | 17 | 774 | 0 |
+| DXGI_FLIP | fullscreen | 30 | OFF | 0.10.1 | +12.04 | 1 | 0 | 0 | 1 (412 us) |
+| DXGI_FLIP | fullscreen | 30 | ON | 0.10.0 | +37.52 | -1164 | 17 | 1184 | 0 |
+| DXGI_FLIP | fullscreen | 30 | ON | 0.10.0 (b) | +28.56 | -949 | 17 | 956 | 0 |
+| DXGI_FLIP | fullscreen | 30 | ON | 0.10.1 | +25.86 | -0 | 0 | 0 | 1 (766 us) |
+| DXGI_FLIP | fullscreen | 30 (again) | ON | 0.10.0 | -5.14 | 156 | 0 | 0 | 0 |
+| DXGI_FLIP | fullscreen | 30 (again) | ON | 0.10.0 (b) | -6.55 | 247 | 17 | 248 | 0 |
+| DXGI_FLIP | fullscreen | 30 (again) | ON | 0.10.1 | +30.89 | -1 | 0 | 0 | 1 (968 us) |
+| DXGI_FLIP | fullscreen | 60 | OFF | 0.10.0 | -23.96 | 1334 | 17 | 1334 | 0 |
+| DXGI_FLIP | fullscreen | 60 | OFF | 0.10.0 (b) | -4.64 | 228 | 17 | 228 | 0 |
+| DXGI_FLIP | fullscreen | 60 | OFF | 0.10.1 | +29.49 | -1 | 0 | 0 | 1 (1864 us) |
+| DXGI_FLIP | fullscreen | 60 | ON | 0.10.0 | +20.11 | -1213 | 17 | 1219 | 0 |
+| DXGI_FLIP | fullscreen | 60 | ON | 0.10.0 (b) | +30.72 | -1961 | 17 | 1981 | 0 |
+| DXGI_FLIP | fullscreen | 60 | ON | 0.10.1 | +23.58 | -2 | 0 | 0 | 1 (1431 us) |
+| DXGI_FLIP | 1280 x 720 | 30 | ON | 0.10.0 | +4.57 | -129 | 0 | 0 | 0 |
+| DXGI_FLIP | 1280 x 720 | 30 | ON | 0.10.0 (b) | -1.84 | 75 | 0 | 0 | 0 |
+| DXGI_FLIP | 1280 x 720 | 30 | ON | 0.10.1 | +8.61 | 1 | 0 | 0 | 1 (282 us) |
+
+Before: 17 GRID_UNSTABLE records after the gap in 29 of 40 runs, each
+run whose drift passed 167 us (3 of 8 at 5 s, 6 of 8 at 10 s, 12 of 16
+at 30 s, 8 of 8 at 60 s), onsets up to 1.98 ms late. After: none in 20 of 20; the first OS time
+after the gap 0 to 2 us off the grid; DWM's time moved the grid 89 us to
+1.86 ms. The fix lands.
+
+The core test plays it on its scripted display (`test_gap_anchor()`):
+the vblanks move 0.5 ms during a 30 s gap; without the system's vblank
+16 to 17 records are flagged, with it none and every onset a vblank; a
+system vblank 2 ms off is refused once; a 0.3 s gap does not ask. Mutants
+`gp-01` to `gp-04`, all killed.
+
+Not run: a second display (DWM's timing is the primary's), another
+refresh, a gap longer than 60 s (at 30 ppm the drift passes a quarter
+period after about 140 s and the anchor is refused), a display that
+turned off during the gap.
+
+### The release in a switched mode (fixed in v0.10.1)
+
+`examples/screen/abort.c --mode-test` on v0.10.0: fullscreen at 1680 x
+1050 on the 1920 x 1200 desktop, the window thread ON, the host in
+`Sleep()`: the panic ended the process (exit code 99) instead of the
+release. Minimizing a fullscreen window in a switched mode puts the
+desktop mode back first; that took 1.2 to 1.4 s, and the watchdog waited
+1 s for the release. Now it waits 1 s for the window thread to begin the
+release and 5 s for it to end, and reads the hook's messages meanwhile
+(the hook runs on the watchdog's thread). After, in two runs: the release
+took 1.43 and 1.49 s on the window thread, the child lived and exited 0,
+and the desktop mode was back 1.23 and 1.29 s after the third press. The `kill` case (a
+blocked window thread) still ended the process, 1.1 s after the third
+press: the blocked thread never began the release.
+
 ## Not measured
 
+- The window thread (v0.10.0) with two displays, a display that turns
+  off while a screen is open, MATLAB's desktop (only `-batch` ran), a MEX
+  file cleared with `clear mex` while a screen is open, a static SDL3
+  beside another package's SDL3 in one process, a gamepad (none was
+  attached), a custom presenter with ON, and Windows 10. The grid after a
+  gap (v0.10.1) on a second display (DWM's timing is the primary's).
 - Light. No photodiode was attached. `tests/loopback/screen_loopback.c`
   is built, not run. Every onset here is DXGI's vblank time.
 - Any refresh other than 60 Hz; any GPU other than the Iris Xe; Windows 10.

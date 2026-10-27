@@ -1,4 +1,4 @@
-/* ysp/screen.h - v0.10.0 - public domain single-header display library
+/* ysp/screen.h - v0.10.1 - public domain single-header display library
  *
  *   The window, the GL ES 3.0 context, the display mode and the swap path
  *   of a stimulus display, with flip at a time: each frame learns the
@@ -129,6 +129,20 @@
  *     grid follows each time and takes the OS's count, as before v0.4.3,
  *     until 16 of 64 or fewer are off it (DXGI's held frames: at most 34
  *     of 64).
+ *     After a gap (v0.10.1): when no OS time came for 0.5 s (the host
+ *     waited between trials), the first begin() reads DWM's vblank time
+ *     (DwmGetCompositionTimingInfo) and anchors the grid there, as an OS
+ *     time, when it is within 1% of a period plus 100 ppm of the gap of
+ *     the grid's vblank (at most a quarter period). Why: the OS's vblank
+ *     times wander by tens of us over seconds, so a period fitted over the
+ *     first seconds of a run was 1 to 41 ppm off, and across a gap of 10
+ *     to 60 s the grid ended 0.2 to 2 ms off the vblanks; the next 17
+ *     records were GRID_UNSTABLE with onsets that late. DWM's time sat
+ *     within 4 us of the flip statistics' and is never older than a
+ *     period (measured; docs/screen.md, "The grid after a gap"). The
+ *     primary display only, at the screen's refresh: elsewhere the grid
+ *     extrapolates as before. The describe line says
+ *     gap_anchors=N(max move, refused M).
  *
  *   DEPTH
  *     The depth is the number of vblanks from a present call to the flip
@@ -1254,7 +1268,7 @@
  *   (examples/screen/abort.c): the release took 7.7 ms on the window
  *   thread, the program lived, and its next begin() reported 0x21 with 3
  *   presses. When the window thread does not answer (no heartbeat for 1
- *   s, or the release not done within 1 s), the panic ends the process as
+ *   s, or the release not begun within 1 s or not done within 5 s), the panic ends the process as
  *   follows; tests/adapt/screen_window_test.c and abort.c's "kill" case
  *   block the window thread to run that path.
  *   The end of the process, on the watchdog thread: it removes the hook,
@@ -1468,6 +1482,20 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.10.1 - THE GRID after a gap: when no OS time came for 0.5 s, the
+ *          first begin() anchors the grid on DWM's vblank time, so the
+ *          records after a wait between trials are not GRID_UNSTABLE.
+ *          Measured (docs/screen.md, "The grid after a gap"): gaps of 5 to
+ *          60 s, COMPOSITION and DXGI_FLIP, window thread ON and OFF: 17
+ *          GRID_UNSTABLE records with onsets up to 1.98 ms late in 29 of 40
+ *          runs before, none in 20 of 20 after, the first OS time after
+ *          the gap within 2 us of the grid. The describe line's
+ *          gap_anchors=. Fixed (PANIC, with the window thread): a release
+ *          in a switched display mode ended the process, because
+ *          minimizing put the desktop mode back first (1.2 to 1.4 s,
+ *          measured) and the watchdog waited 1 s; it now waits 1 s for the
+ *          release to begin and 5 s for it to end, reading the hook's
+ *          messages meanwhile.
  *   v0.10.0 - The window thread (WINDOW THREAD; decided 2026-10-26 on
  *          docs/winthread_probe.md): on Windows a thread of the header's own
  *          makes the windows, reads their messages and makes every SDL
@@ -1763,7 +1791,14 @@
  *          groups, input restamping, mode lists and the parameter table.
  *          The other swap paths are stubs that refuse to open.
  *
- *   STATUS: v0.10.0 (the window thread; docs/screen.md, "The window
+ *   STATUS: v0.10.1 (the grid after a gap; docs/screen.md, "The grid
+ *   after a gap"): 60 runs with a gap of 5 to 60 s on the laptop below,
+ *   AC, both backends, window thread ON and OFF; the core test plays a
+ *   0.5 ms move during a 30 s gap with and without the system's vblank,
+ *   a vblank too far off, and a short gap; 4 new mutants, all killed.
+ *   examples/screen/abort.c --mode-test released a switched mode with the
+ *   window thread (1.4 to 1.5 s, the process alive).
+ *   v0.10.0 (the window thread; docs/screen.md, "The window
  *   thread"): measured on the laptop below, AC, no photodiode; the numbers
  *   and their conditions are in docs/screen.md. tests/adapt/screen_test.c
  *   checks the mode rule and a released screen without SDL;
@@ -1973,8 +2008,8 @@
 
 #define YSCR_VERSION_MAJOR 0
 #define YSCR_VERSION_MINOR 10
-#define YSCR_VERSION_PATCH 0
-#define YSCR_VERSION_STRING "0.10.0"
+#define YSCR_VERSION_PATCH 1
+#define YSCR_VERSION_STRING "0.10.1"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -2887,6 +2922,11 @@ typedef struct yscr_screen {
     int32_t                 wt_mode;      /* YSCR_WINDOW_THREAD_ON or _OFF as applied */
     int32_t                 wt_why;       /* AUTO's reason for off: YSCR__WT_WHY_* */
     int32_t                 wt_user;      /* holds the process's window-thread mode */
+    /* the grid after a gap (THE GRID) */
+    uint32_t                gap_anchors;  /* gaps the system's vblank closed */
+    uint32_t                gap_refused;  /* ... it was too far off the grid */
+    int64_t                 gap_shift_max;/* the largest move, ns            */
+    int64_t                 gap_asked;    /* vb_t when the system was asked  */
 } yscr_screen;
 
 /* --- API ----------------------------------------------------------------- */
@@ -3211,6 +3251,7 @@ YSCR_API const yscr_param* yscr_params(int* n);
     #include <windows.h>
     #include <d3d11_4.h>
     #include <dxgi1_5.h>
+    #include <dwmapi.h>   /* the types only: dwmapi.dll is loaded at run time */
     #if !defined(YRT_NO_THREADS)
         #define YSCR__WT 1   /* the window thread (WINDOW THREAD) */
     #endif
@@ -6686,6 +6727,7 @@ static struct {
     volatile LONG    pads;          /* screens with gamepads                      */
     volatile LONG64  beat;          /* the loop's last pass, rt ns                */
     volatile LONG    release_req;   /* panics that asked for a release            */
+    volatile LONG    release_start; /* ... the last one it began                  */
     volatile LONG    release_done;  /* ... the last one it served                 */
     volatile LONG64  t_release;     /* when the last release ran, rt ns           */
     volatile LONG    stuck;         /* a command or the stop timed out            */
@@ -6701,6 +6743,7 @@ static int yscr__wt_on_thread(void) { return yscr__wt.thread && GetCurrentThread
  * window is minimized, which puts back a switched mode. */
 static void yscr__wt_do_release(LONG req) {
     int i;
+    InterlockedExchange(&yscr__wt.release_start, req);
     for (i = 0; i < YSCR__SLOTS; i++) if (yscr__wt.wins[i]) SDL_MinimizeWindow(yscr__wt.wins[i]);
     SDL_ShowCursor();
     InterlockedExchange64(&yscr__wt.t_release, yscr__now());
@@ -6774,7 +6817,7 @@ static const char* yscr__wt_acquire(void) {
     yscr__wt.quit = 0;
     yscr__wt.state = YSCR__WTC_IDLE;
     yscr__wt.video = yscr__wt.pads = 0;
-    yscr__wt.release_req = yscr__wt.release_done = 0;
+    yscr__wt.release_req = yscr__wt.release_start = yscr__wt.release_done = 0;
     memset(yscr__wt.wins, 0, sizeof yscr__wt.wins);
     yscr__wt.thread = yscr__wt.cmd_ev && yscr__wt.done_ev ? CreateThread(NULL, 0, yscr__wt_main, NULL, 0, &yscr__wt.tid) : NULL;
     if (!yscr__wt.thread || WaitForSingleObject(yscr__wt.done_ev, YSCR__WT_TAKE_MS) != WAIT_OBJECT_0) {
@@ -6943,9 +6986,20 @@ static void yscr__panic(void) {
      * its next begin() and may only close. */
     if (yscr__wt_alive()) {
         LONG req = InterlockedIncrement(&yscr__wt.release_req);
-        int k;
+        int k, quit = 0;
         SetEvent(yscr__wt.cmd_ev);
-        for (k = 0; k < 100 && yscr__wt.release_done != req; k++) Sleep(10);
+        /* 1 s for the window thread to begin the release, then up to 5 s
+         * for it to end: minimizing a fullscreen window in a switched mode
+         * puts the desktop mode back first, which took 1.2 to 1.4 s
+         * (measured; v0.10.0's 1 s in all ended the process). The hook
+         * runs on this thread, so its messages are read meanwhile; a later
+         * press is the same panic. */
+        for (k = 0; k < 500 && yscr__wt.release_done != req && (k < 100 || yscr__wt.release_start == req); k++) {
+            MSG m;
+            while (yscr__win.peek_message(&m, NULL, 0, 0, PM_REMOVE)) if (m.message == WM_QUIT) quit = 1;
+            Sleep(10);
+        }
+        if (quit) yscr__win.post_thread(yscr__wd.tid, WM_QUIT, 0, 0);
         if (yscr__wt.release_done == req) {
             yscr__gamma_restore_all();
             yscr__panic_records(now, 1);
@@ -7543,6 +7597,88 @@ static void yscr__anchor(yscr_screen* s, int64_t t, int64_t count, int restart) 
         s->period_f = (double)(t - s->ref_t) / (double)(count - s->ref_count);
         yscr__update_lead(s);
     }
+}
+
+/* --- the grid after a gap (THE GRID, v0.10.1) ---------------------------------
+ * With no OS time for a while (the host waited between trials) the grid
+ * extrapolates its period across the gap. Measured on this laptop's panel
+ * (docs/screen.md, "The grid after a gap"): the period fitted over the
+ * first 2 s of a run was 1 to 41 ppm off the long-run rate, because the
+ * OS's vblank times wander by tens of us over seconds, so after a gap of
+ * 10 to 60 s the grid was 0.2 to 2 ms off the vblanks and the next 17
+ * records had GRID_UNSTABLE. DWM's vblank time (DwmGetCompositionTimingInfo)
+ * sat within 4 us of the flip statistics' times, before, during and after
+ * a gap, and is never older than a period. So the first begin() after a
+ * gap reads it and anchors the grid there, as an OS time: the phase
+ * follows the vblanks, and the period gains the gap as baseline. */
+#define YSCR__GAP_NS 500000000   /* no OS time for 0.5 s: a gap */
+
+/* DWM's last vblank, for the screen's display: 1 and *t, else 0. DWM's
+ * timing is the primary display's, so a screen elsewhere gets none, nor
+ * one whose display refreshes at another rate. */
+#if defined(YSCR__DXGI)
+typedef HRESULT (WINAPI *yscr__DwmGetCompositionTimingInfo_fn)(HWND, DWM_TIMING_INFO*);
+static int yscr__dwm_vblank(const yscr_screen* s, int64_t* t) {
+    static yscr__DwmGetCompositionTimingInfo_fn get;
+    static int tried;
+    DWM_TIMING_INFO ti;
+    MONITORINFO mi;
+    HMONITOR mon;
+    double p;
+    if (!tried) {
+        HMODULE m = LoadLibraryW(L"dwmapi.dll");
+        tried = 1;
+        get = m ? (yscr__DwmGetCompositionTimingInfo_fn)(yscr_proc)GetProcAddress(m, "DwmGetCompositionTimingInfo") : NULL;
+    }
+    yscr__win_load();
+    if (!get || !s->hwnd || !yscr__win.monitor_from_window || !yscr__win.monitor_info) return 0;
+    mon = yscr__win.monitor_from_window((HWND)s->hwnd, MONITOR_DEFAULTTONEAREST);
+    memset(&mi, 0, sizeof mi);
+    mi.cbSize = sizeof mi;
+    if (!mon || !yscr__win.monitor_info(mon, &mi) || !(mi.dwFlags & MONITORINFOF_PRIMARY)) return 0;
+    memset(&ti, 0, sizeof ti);
+    ti.cbSize = sizeof ti;
+    if (get(NULL, &ti) != S_OK || !ti.qpcVBlank || !ti.qpcRefreshPeriod) return 0;
+    p = (double)yrt_ticks_to_ns((int64_t)ti.qpcRefreshPeriod);
+    if (p < s->period_f * 0.995 || p > s->period_f * 1.005) return 0;
+    /* qpcVBlank is the next vblank's time, up to a period ahead (measured):
+     * the last one is a period before it */
+    *t = yrt_ticks_to_ns((int64_t)ti.qpcVBlank);
+    if (*t > yscr__now()) *t -= (int64_t)llround(p);
+    return 1;
+}
+#endif
+/* The system's last vblank time for the screen: 1 and *t, else 0. The core
+ * test replaces it. */
+#ifndef YSCR__SYS_VBLANK
+#if defined(YSCR__DXGI)
+#define YSCR__SYS_VBLANK(s, t) yscr__dwm_vblank((s), (t))
+#else
+#define YSCR__SYS_VBLANK(s, t) ((void)(s), (void)(t), 0)
+#endif
+#endif
+
+/* After a gap, before the prediction, once per gap: the system's vblank,
+ * when it is newer than the grid's, fresh (within 2 periods of now), and
+ * within what the period's error and the times' wander can explain (1% of
+ * a period, plus 100 ppm of the time since the grid's last OS time, at
+ * most a quarter period), becomes the grid's newest OS time. */
+static void yscr__gap_anchor(yscr_screen* s, int64_t now) {
+    int64_t t = 0, nc, off, span;
+    double bound;
+    if (!s->have_anchor || s->anchor_guessed || s->grid_follow || now - s->vb_t < YSCR__GAP_NS) return;
+    if (s->gap_asked == s->vb_t) return;   /* once per gap: a refusal stands */
+    s->gap_asked = s->vb_t;
+    if (!YSCR__SYS_VBLANK(s, &t) || t <= s->vb_t || t > now || now - t > (int64_t)(2 * s->period_f)) return;
+    span = t - s->vb_t;
+    nc = s->vb_count + (int64_t)llround((double)span / s->period_f);
+    off = t - yscr__time_of(s, nc);
+    bound = s->period_f / 100 + (double)span * 1e-4;
+    if (bound > s->period_f / 4) bound = s->period_f / 4;
+    if ((double)(off < 0 ? -off : off) > bound) { s->gap_refused++; return; }
+    s->gap_anchors++;
+    if ((off < 0 ? -off : off) > s->gap_shift_max) s->gap_shift_max = off < 0 ? -off : off;
+    yscr__anchor(s, t, nc, 0);
 }
 
 static int yscr__slack_bin(const yscr_screen* s, int64_t slack) {
@@ -9797,6 +9933,12 @@ YSCR_API int yscr_describe(const yscr_screen* s, char* buf, size_t cap) {
                      cpus, !s->trig_fence ? "off" : (s->pr->gpu_done ? "on" : "unavailable"));
         }
     }
+    if (s->gap_anchors || s->gap_refused) {   /* THE GRID: gaps the system's vblank closed */
+        size_t n = strlen(extra);
+        if (n < sizeof extra)
+            snprintf(extra + n, sizeof extra - n, " gap_anchors=%u(max %.0fus, refused %u)", (unsigned)s->gap_anchors,
+                     (double)s->gap_shift_max / 1e3, (unsigned)s->gap_refused);
+    }
     {   /* the abort combination, as an operator reads it */
         uint32_t k = yscr__ab.key;
         size_t n = 0;
@@ -9944,6 +10086,7 @@ static int yscr__begin(yscr_screen* s, yscr_frame* f) {
     if (s->window && t0 - s->sdl_corr_t > 10000000000LL) yscr__restamp_correlate(s);
 #endif
     now = yscr__now();
+    yscr__gap_anchor(s, now);
     prev_pred = s->pred_count;
     s->pred_count = yscr__count_at(s, now + s->margin_ns) + s->depth;
     if (s->pred_count <= s->prev_shown) s->pred_count = s->prev_shown + 1;

@@ -70,6 +70,13 @@ static int test_getenv(const char* name, char* out, int cap);
  * -1 = the header's own answer (n/a without a window). */
 static int g_fg = -1;
 #define YSCR__FOREGROUND(s) (g_fg >= 0 ? (uint32_t)g_fg : yscr__foreground(s))
+/* The system's last vblank time (DWM's on Windows), for the grid after a
+ * gap: 0 none, 1 the scripted display's newest vblank, 2 one 2 ms before
+ * it (too far off the grid). */
+static int g_sysvb_mode, g_sysvb_asked;
+static void* g_sysvb_script;
+static int test_sys_vblank(void* t);
+#define YSCR__SYS_VBLANK(s, t) ((void)(s), test_sys_vblank((void*)(t)))
 
 #define YSP_SCREEN_IMPLEMENTATION
 #include "ysp/screen.h"
@@ -390,6 +397,14 @@ static int sc_completions(void* ctx, yscr_vblank* out, int cap) {
         n++;
     }
     return n;
+}
+
+static int test_sys_vblank(void* t) {
+    script* c = (script*)g_sysvb_script;
+    g_sysvb_asked++;
+    if (!c || !g_sysvb_mode) return 0;
+    *(int64_t*)t = sc_vt(c, sc_count(c, now_ns())) - (g_sysvb_mode == 2 ? 2000000 : 0);
+    return 1;
 }
 
 static uint64_t sc_gpu_done(void* ctx) {
@@ -4397,6 +4412,75 @@ static void test_window_thread(void) {
     yscr_close(&s2);
 }
 
+/* v0.10.1 (THE GRID): the grid after a gap. The scripted vblanks move
+ * 0.5 ms later during a 30 s gap, as this laptop's moved against a period
+ * fitted over 2 s. Without the system's vblank the next 16 to 17 records
+ * are GRID_UNSTABLE with the grid's late onset; with it (the seam stands
+ * for DWM's last vblank) none is, and each onset is the vblank's time.
+ * mode: 0 no system vblank, 1 the true one, 2 one 1.5 ms off (refused),
+ * 3 a short gap (0.3 s: not consulted). */
+static void test_gap_anchor(int mode) {
+    static script c;
+    yscr_screen s;
+    static yscr_frame f;
+    int i, j, n, unstable = 0, checked = 0, asked;
+    const int pre = 100, post = 100;
+    int64_t gap = mode == 3 ? 300000000LL : 30000000000LL;
+    memset(&c, 0, sizeof c);
+    c.depth = 1;
+    c.path = YSCR_PATH_INDEPENDENT;
+    ring_reset();
+    g_sysvb_mode = 0;
+    CHECK(open_scripted(&s, &c, 0.5, 6));
+    if (!yscr_is_open(&s)) return;
+    for (i = 0; i < pre; i++) CHECK_I(one_frame(&s, &f), YSCR_OK);
+    CHECK_I(yscr_wait_flip(&s, NULL), YSCR_OK);
+    /* the gap: no call; the vblanks after it come 0.5 ms later (or 0.03 ms
+     * after a short gap, within the 1% that keeps a time on the grid) */
+    {
+        int64_t k0 = sc_count(&c, now_ns()) + 2;
+        for (i = (int)k0; i < MAX_ID; i++) c.vb_off[i] = mode == 3 ? 30000 : 500000;
+    }
+    vlose(gap);
+    g_sysvb_script = &c;
+    g_sysvb_mode = mode == 0 ? 0 : mode == 2 ? 2 : 1;
+    g_sysvb_asked = 0;
+    for (i = 0; i < post; i++) CHECK_I(one_frame(&s, &f), YSCR_OK);
+    asked = g_sysvb_asked;
+    CHECK_I(yscr_wait_flip(&s, NULL), YSCR_OK);
+    if (mode == 1) {
+        CHECK_I(s.gap_anchors, 1);
+        CHECK_I(s.gap_refused, 0);
+        CHECK(s.gap_shift_max >= 490000 && s.gap_shift_max <= 510000);
+    } else if (mode == 2) {
+        CHECK_I(s.gap_anchors, 0);
+        CHECK_I(s.gap_refused, 1);
+    } else {
+        CHECK_I(s.gap_anchors, 0);
+    }
+    if (mode == 3) CHECK_I(asked, 0);    /* a short gap: not consulted */
+    else if (mode != 0) CHECK(asked >= 1);
+    yscr_close(&s);
+    g_sysvb_mode = 0;
+    g_sysvb_script = NULL;
+    n = ring_drain();
+    for (j = 0; j < n; j++) {
+        const yrt_event* e = &g_ev[j];
+        uint32_t idx, flags;
+        if (e->source != YRT_SRC_SCREEN || e->kind != YSCR_EV_FLIP) continue;
+        idx = e->u.u32[9];
+        if ((int)idx < pre) continue;
+        flags = YSCR_EV_FLAGS_OF(e->u.u16[5]);
+        checked++;
+        if (flags & YSCR_FLIP_GRID_UNSTABLE) unstable++;
+        else CHECK_I(((int64_t)e->t_ns - c.t0 - (int64_t)c.vb_off[MAX_ID - 1]) % P_NS, 0);   /* on a vblank */
+        CHECK_I(e->u.u16[4], 0);   /* no drop */
+    }
+    CHECK(checked >= post - 2);
+    if (mode == 0 || mode == 2) CHECK(unstable >= 16 && unstable <= 17);
+    else CHECK_I(unstable, 0);
+}
+
 int main(void) {
     yrt_thread_elevate(NULL);
     test_web_rules();
@@ -4482,6 +4566,10 @@ int main(void) {
     test_stale_statistics();
     test_context_hook();
     test_window_thread();
+    test_gap_anchor(0);
+    test_gap_anchor(1);
+    test_gap_anchor(2);
+    test_gap_anchor(3);
     /* no case but the forced-off ones fired the guard */
     CHECK_I(g_unsynced_fires, g_unsynced_want);
     if (g_failures) {

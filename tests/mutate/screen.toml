@@ -5,7 +5,7 @@
 # v0.3.5's 5 (raw mice; the 2 on its queue went with the queue),
 # v0.4.0's 6 (the input bridge), v0.4.1's 15 (the key filter, kd-) and
 # v0.4.2's 3 (kd-16 to kd-18, the key-up fix) and 13 (the sync guard,
-# sg-), v0.4.3's 9 (eg-, held frames), v0.4.4's 20 (dp-, the depth policy, the guessed grid, early flips), v0.5.0's 20 (st-, settling at open), v0.5.1's 7 (fg-, the foreground and the slot held after settling), v0.5.2's 7 (ch-, the context hook; ch-06 runs the gfx test), v0.6.0's 2 (cv-, the messages), v0.10.0's 19 (wt-, the window thread; wt-20 on run tests/adapt/screen_window_test.c on real windows). The 29 earlier mutants (docs/screen.md,
+# sg-), v0.4.3's 9 (eg-, held frames), v0.4.4's 20 (dp-, the depth policy, the guessed grid, early flips), v0.5.0's 20 (st-, settling at open), v0.5.1's 7 (fg-, the foreground and the slot held after settling), v0.5.2's 7 (ch-, the context hook; ch-06 runs the gfx test), v0.6.0's 2 (cv-, the messages), v0.10.0's 19 (wt-, the window thread; wt-20 on run tests/adapt/screen_window_test.c on real windows), v0.10.1's 4 (gp-, the grid after a gap). The 29 earlier mutants (docs/screen.md,
 # "Mutations") were run from scripts that were not kept.
 header = "ysp/screen.h"
 
@@ -27,6 +27,8 @@ env_default = { YSCR_ANGLE_DIR = "C:/Program Files/Docker/Docker/frontend" }
 # The window thread on real windows (wt-20 on): this machine's SDL3 VC
 # package, ANGLE and display; Windows only. PATH holds SDL3.dll's
 # directory and the system's, nothing else.
+# Run these with -j 1: in parallel, one test's window takes the
+# foreground from another and the text case's keys miss it.
 [test.window]
 source = "tests/adapt/screen_window_test.c"
 compiler = "msvc"
@@ -1402,3 +1404,39 @@ why = "v0.10.0: the thread wakes every 4 ms while a screen has gamepads, and ret
 find = '''        if (c->gamepad) InterlockedDecrement(&yscr__wt.pads);'''
 replace = ''
 env = { YSCR_WINDOW_TEST_ONLY = "gamepads" }
+
+# --- v0.10.1: the grid after a gap (gp-), on the core test's scripted
+# display and its system-vblank seam.
+
+[[mutant]]
+id = "gp-01"
+name = "the gap is not closed"
+test = "screen"
+why = "v0.10.1: after a gap the system's vblank anchors the grid, or the next 16 to 17 records are GRID_UNSTABLE with onsets up to 1 ms late (measured)."
+find = '''    yscr__gap_anchor(s, now);
+'''
+replace = ''
+
+[[mutant]]
+id = "gp-02"
+name = "any system vblank accepted"
+test = "screen"
+why = "v0.10.1: a system vblank farther off the grid than the period's error and the wander explain is refused, not taken as the grid's phase."
+find = '''    if ((double)(off < 0 ? -off : off) > bound) { s->gap_refused++; return; }'''
+replace = ''
+
+[[mutant]]
+id = "gp-03"
+name = "asked without a gap"
+test = "screen"
+why = "v0.10.1: the system is asked only after 0.5 s without an OS time; within that the grid holds to tens of us."
+find = '''|| s->grid_follow || now - s->vb_t < YSCR__GAP_NS) return;'''
+replace = '''|| s->grid_follow) return;'''
+
+[[mutant]]
+id = "gp-04"
+name = "asked at every begin of a gap"
+test = "screen"
+why = "v0.10.1: one question per gap: a refused answer stands until an OS time anchors the grid (DwmGetCompositionTimingInfo is a call to DWM)."
+find = '''    if (s->gap_asked == s->vb_t) return;   /* once per gap: a refusal stands */'''
+replace = ''

@@ -545,6 +545,9 @@ static void case_mode(void) {
     /* the same mode with the window thread: released, not ended */
     snprintf(args, sizeof args, "idle --wt on --hang-ms 1500 --idle-ms 4000 --mode %d %d %d %d", modes[pick].w,
              modes[pick].h, modes[pick].refresh_num, modes[pick].refresh_den);
+    /* the panel takes a while after the mode came back: a switch at once
+     * gave no flip statistics for 3 s, and settling failed (2026-10-27) */
+    Sleep(3000);
     printf("mode-release: switching to %dx%d for about 3 s\n", modes[pick].w, modes[pick].h);
     case_release("mode-release", args, 1);
 }
