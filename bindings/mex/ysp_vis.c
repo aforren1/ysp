@@ -138,9 +138,13 @@ static mxArray* vx_handle_out(uint64_t id) {
     return h;
 }
 
-/* Closes and frees every object: gfx first, its GL objects before the context. */
+static void vx_video_close_all(void);   /* ysp_vis_video.inc */
+
+/* Closes and frees every object: movies, then gfx, its GL objects before
+ * the context, then screens. */
 static void vx_close_all(void) {
     int pass;
+    vx_video_close_all();
     for (pass = 0; pass < 2; pass++) {
         vx_node** p = &vx_list;
         while (*p) {
@@ -163,7 +167,7 @@ static void vx_detach(void) {
     if (vx_users > 0) vx_users--;
     if (vx_users > 0) return;
     vx_close_all();
-    /* No pins are held in phase A; give back the owners' modules. */
+    /* The movies gave back their pins above; give back the owners' modules. */
     ysp_share_mex_unload(ysp_audio_api_module);
     ysp_share_mex_unload(ysp_timeline_api_module);
     ysp_audio_api_module = ysp_timeline_api_module = NULL;
@@ -803,7 +807,7 @@ static void vx_gfx_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, con
     }
 }
 
-/* ---- video commands (a placeholder in phase A) ------------------------------------------ */
+/* ---- video commands -------------------------------------------------------------------- */
 
 static mxArray* vx_shared(void) {
     static const char* f[] = { "abi", "audio", "audio_built", "timeline", "timeline_built", "channels" };
@@ -821,18 +825,7 @@ static mxArray* vx_shared(void) {
     return s;
 }
 
-static void vx_video_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
-    (void)nrhs;
-    (void)prhs;
-    if (!strcmp(cmd, "version")) {
-        plhs[0] = mxCreateString(YV_MEX_VERSION);
-        if (nlhs > 1) plhs[1] = mxCreateString(YVID_VERSION_STRING);
-    } else if (!strcmp(cmd, "shared")) {
-        plhs[0] = vx_shared();
-    } else {
-        vx_err("usage", "unknown command '%s' (ysp_video is a placeholder until phase B: 'version', 'shared')", cmd);
-    }
-}
+#include "ysp_vis_video.inc"   /* ysp_video: movies, the index maker, frame sequences */
 
 /* ---- the core itself ------------------------------------------------------------- */
 
@@ -849,7 +842,7 @@ static void vx_vis_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, con
         vx_node* n;
         int ns = 0, ng = 0, v = SDL_GetVersion();
         char sdl[32];
-        for (n = vx_list; n; n = n->next) { if (n->kind == VX_SCREEN) ns++; else ng++; }
+        for (n = vx_list; n; n = n->next) { if (n->kind == VX_SCREEN) ns++; else if (n->kind == VX_GFX) ng++; }
         snprintf(sdl, sizeof sdl, "%d.%d.%d", SDL_VERSIONNUM_MAJOR(v), SDL_VERSIONNUM_MINOR(v), SDL_VERSIONNUM_MICRO(v));
         mxSetFieldByNumber(s, 0, 0, mxCreateString(YV_MEX_VERSION));
         mxSetFieldByNumber(s, 0, 1, vx_d(vx_users));

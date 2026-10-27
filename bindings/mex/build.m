@@ -77,8 +77,9 @@ function build(name)
             continue;
         end
         if strcmp(srcs{i}, 'ysp_vis.c') && (~exist(fullfile(vis_sdl, 'lib', vis_lib), 'file') || ...
-                                            ~exist(fullfile(vis, 'angle', 'libEGL.dll'), 'file'))
-            fprintf('skipping ysp_vis.c: no static SDL3 or ANGLE in %s (tools/vendor_vis.py --write --angle --sdl %s)\n', vis, vis_tc);
+                                            ~exist(fullfile(vis, 'angle', 'libEGL.dll'), 'file') || ...
+                                            ~exist(fullfile(vis, 'pl_mpeg', 'pl_mpeg.h'), 'file'))
+            fprintf('skipping ysp_vis.c: no static SDL3, ANGLE or pl_mpeg in %s (tools/vendor_vis.py --write --angle --pl-mpeg --sdl %s)\n', vis, vis_tc);
             continue;
         end
         if strcmp(srcs{i}, 'ysp_audio.c') && ~exist(fullfile(ma, 'miniaudio.h'), 'file')
@@ -115,7 +116,7 @@ function build(name)
             % The system libraries SDL3.dll imports itself (tools/vendor_vis.py).
             sys = {'-luser32', '-lgdi32', '-lwinmm', '-limm32', '-lole32', '-loleaut32', '-lversion', ...
                    '-luuid', '-ladvapi32', '-lsetupapi', '-lshell32', '-ldinput8'};
-            args = [args, {['-I' fullfile(vis_sdl, 'include')], ['-L' fullfile(vis_sdl, 'lib')]}];   %#ok<AGROW>
+            args = [args, {['-I' fullfile(vis_sdl, 'include')], ['-I' fullfile(vis, 'pl_mpeg')], ['-L' fullfile(vis_sdl, 'lib')]}];   %#ok<AGROW>
             if is_octave
                 % Stripped: about 10 MB to 5 MB (docs/winthread_probe.md, section 6).
                 args = [args, {'-lSDL3'}, sys, {'-s'}];   %#ok<AGROW>

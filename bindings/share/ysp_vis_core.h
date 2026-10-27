@@ -39,10 +39,7 @@
 /* The owners compile ysp/timeline.h with 1024 channels; the check refuses
  * another value. */
 #define YTL_MAX_CHANNELS 1024
-/* Phase A: no MPEG-1 decoder yet (pl_mpeg is phase B's, with video). */
-#ifndef YVID_NO_PL_MPEG
-#define YVID_NO_PL_MPEG
-#endif
+/* pl_mpeg.h (MPEG-1) comes from third_party/vis/pl_mpeg (tools/vendor_vis.py). */
 
 /* Declarations only: the owners' modules hold the implementations. */
 #include "ysp/audio.h"
@@ -279,11 +276,17 @@ typedef struct yv_screen {
     struct yv_gfx* gfx;        /* phase A: one gfx per screen             */
 } yv_screen;
 
+/* ysp_vis_video.h: the movies on a gfx get each flip record (their FRAME
+ * records), and close before the gfx does. */
+static void yv_movies_flip(struct yv_gfx* g, const yscr_record* r);
+static void yv_movies_close(struct yv_gfx* g);
+
 static void yv_on_flip(void* ctx, const yscr_record* r, const yscr_trigger_result* trig, int n_trig) {
     yv_screen* v = (yv_screen*)ctx;
     uint32_t i;
     (void)trig;
     (void)n_trig;
+    if (v->gfx) yv_movies_flip(v->gfx, r);
     if (!v->rec) return;
     i = (v->rec_head + v->rec_n) % YV_RECORDS;
     v->rec[i] = *r;
@@ -412,6 +415,7 @@ typedef struct yv_gfx {
     yv_screen* scr;
     int        open;
     int        in_frame;
+    struct yv_movie* movies;   /* ysp_vis_video.h */
 } yv_gfx;
 
 static bool yv_gfx_open(yv_gfx* g, yv_screen* v, const float background[3]) {
@@ -430,6 +434,7 @@ static bool yv_gfx_open(yv_gfx* g, yv_screen* v, const float background[3]) {
 
 static void yv_gfx_close(yv_gfx* g) {
     if (!g) return;
+    yv_movies_close(g);   /* their textures before the gfx */
     if (g->open) ygfx_close(&g->g);
     g->open = 0;
     g->in_frame = 0;
@@ -470,5 +475,7 @@ static int yv_gfx_end(yv_gfx* g) {
     g->in_frame = 0;
     return rc;
 }
+
+#include "ysp_vis_video.h"   /* movies: ysp.video, ysp_video */
 
 #endif /* YSP_VIS_CORE_H */
