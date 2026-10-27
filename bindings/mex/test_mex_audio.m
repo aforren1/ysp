@@ -34,7 +34,11 @@ function test_mex_audio()
     check(abs(c.period - 0.01) < 1e-12 && strcmp(c.pos_source, 'callback') && isempty(c.os_latency), 'caps in seconds, no claim');
     check(~isempty(strfind(ysp_audio('describe', h), 'backend=Null')), 'describe');
     [l, lns] = ysp_audio('lead', h);
-    check(l > 0 && l < 0.5 && isa(lns, 'int64'), 'lead');
+    % At most two periods, and below 0 while the next callback is more than
+    % a period late on the fit: the null device's callbacks wait in 10 ms
+    % sleeps (docs/audio.md, "The lead on the null device").
+    check(isa(lns, 'int64') && lns ~= 0 && l == double(lns) / 1e9, 'lead in seconds and int64 ns');
+    check(l > -0.5 && l <= 2 * c.period + TOL / 1e9, 'lead: at most two periods, maybe negative');
     expect_error('ysp_audio:open', @() ysp_audio('open', struct('device', 'no such device name')));
     expect_error('ysp_audio:arg', @() ysp_audio('open', struct('backend', 'null', 'chanels', 2)));
 
