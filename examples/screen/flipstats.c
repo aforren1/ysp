@@ -306,6 +306,15 @@ static void take_foreground(SDL_Window* w, int topmost) {
     SetForegroundWindow(h);
 }
 
+/* SDL and Win32 calls on the window go through yscr_window_call(): with the
+ * window thread (ysp/screen.h, WINDOW THREAD) another thread owns the
+ * window, and a window made here must belong to the thread that pumps. */
+typedef struct { SDL_Window* w; int topmost; HWND cover; } on_window_arg;
+static void take_foreground_on_window(void* p) {
+    on_window_arg* a = (on_window_arg*)p;
+    take_foreground(a->w, a->topmost);
+}
+
 static LRESULT CALLBACK cover_proc(HWND h, UINT m, WPARAM wp, LPARAM lp) { return DefWindowProcW(h, m, wp, lp); }
 static HWND cover_open(SDL_Window* w) {
     HWND h = (HWND)SDL_GetPointerProperty(SDL_GetWindowProperties(w), SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
@@ -323,9 +332,19 @@ static HWND cover_open(SDL_Window* w) {
 }
 #endif
 
-static int quit_requested(void) {
+#if defined(_WIN32)
+static void cover_open_on_window(void* p) {
+    on_window_arg* a = (on_window_arg*)p;
+    a->cover = cover_open(a->w);
+}
+static void cover_close_on_window(void* p) { DestroyWindow(((on_window_arg*)p)->cover); }
+#endif
+
+/* yscr_poll(), not SDL_PollEvent(): with the window thread the frame thread
+ * takes events without pumping. */
+static int quit_requested(yscr_screen* s) {
     SDL_Event ev;
-    while (SDL_PollEvent(&ev)) {
+    while (yscr_poll(s, &ev, NULL)) {
         if (ev.type == SDL_EVENT_QUIT || ev.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) return 1;
         if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_ESCAPE) return 1;
     }
@@ -465,7 +484,13 @@ int main(int argc, char** argv) {
         }
         load_gl(&scr[i], &gl[i]);
 #if defined(_WIN32)
-        if ((topmost || cover) && yscr_window(&scr[i])) take_foreground(yscr_window(&scr[i]), topmost && !cover);
+        if ((topmost || cover) && yscr_window(&scr[i])) {
+            on_window_arg a;
+            a.w = yscr_window(&scr[i]);
+            a.topmost = topmost && !cover;
+            a.cover = NULL;
+            yscr_window_call(&scr[i], take_foreground_on_window, &a);
+        }
 #endif
         if (trigger) yscr_on_flip(&scr[i], flip_fn, NULL);
         yscr_describe(&scr[i], line, sizeof line);
@@ -512,7 +537,14 @@ int main(int argc, char** argv) {
         int k, rc;
         g_count_allocs = allocs && i >= 30;
 #if defined(_WIN32)
-        if (cover && i == cover && yscr_window(&scr[0])) cover_window = cover_open(yscr_window(&scr[0]));
+        if (cover && i == cover && yscr_window(&scr[0])) {
+            on_window_arg a;
+            a.w = yscr_window(&scr[0]);
+            a.topmost = 0;
+            a.cover = NULL;
+            yscr_window_call(&scr[0], cover_open_on_window, &a);
+            cover_window = a.cover;
+        }
 
 #endif
         if (allocs == 2 && g_count_allocs) free(malloc(16));   /* --allocs-control: the hook must see this */
@@ -570,11 +602,15 @@ int main(int argc, char** argv) {
         ran++;
         g_count_allocs = 0;
         drain();
-        if (!sim && (i & 7) == 0 && quit_requested()) quit = 1;
+        if (!sim && (i & 7) == 0 && quit_requested(&scr[0])) quit = 1;
     }
     g_stop_load = 1;
 #if defined(_WIN32)
-    if (cover_window) DestroyWindow(cover_window);
+    if (cover_window) {   /* on the thread that made it, before the screen closes */
+        on_window_arg a;
+        a.cover = cover_window;
+        yscr_window_call(&scr[0], cover_close_on_window, &a);
+    }
 #endif
     code_risk = yscr_code_risk(&scr[0]);
     for (i = 0; i < n_screens; i++) {

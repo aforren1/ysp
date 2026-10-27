@@ -66,6 +66,11 @@
 #define MAXS 65536
 
 static yscr_screen scr;
+/* SDL calls on the window go through yscr_window_call(): with the window
+ * thread (ysp/screen.h, WINDOW THREAD) another thread owns the window. */
+#if defined(_WIN32)
+static void position_on_window(void* xy) { SDL_GetWindowPosition(yscr_window(&scr), (int*)xy, (int*)xy + 1); }
+#endif
 static ygfx_gfx gfx;
 static uint8_t sharp[WW * WH * 4], blurred[WW * WH * 4];
 static float tmp[WW * WH];
@@ -211,7 +216,12 @@ int main(int argc, char** argv) {
         zero.mi.dwFlags = MOUSEEVENTF_MOVE;
         SendInput(1, &zero, sizeof zero);
         SetForegroundWindow(hw);
-        SDL_GetWindowPosition(yscr_window(&scr), &inject_wx, &inject_wy);
+        {
+            int xy[2] = { 0, 0 };
+            yscr_window_call(&scr, position_on_window, xy);
+            inject_wx = xy[0];
+            inject_wy = xy[1];
+        }
         th = CreateThread(NULL, 0, inject_main, NULL, 0, NULL);
     }
 #endif
