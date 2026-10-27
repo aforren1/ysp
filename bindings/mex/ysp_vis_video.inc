@@ -593,6 +593,9 @@ static void vx_video_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, c
         int rc;
         vx_nargs(nrhs, 2, "i = ysp_video('probe', path, index)");
         vx_string(prhs[1], path, sizeof path, "probe: path");
+        /* yvid_probe() answers a missing file with REFUSED ("reads frame
+         * sequences and indexed ... files only"): found here first */
+        if (!yvv_exists(path)) vx_err("not_found", "cannot open %s", path);
         memset(&d, 0, sizeof d);
         d.path = path;
         if (nrhs > 2 && mxIsChar(prhs[2])) {

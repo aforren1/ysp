@@ -666,7 +666,7 @@ jobs:
           command: |
             cd('bindings/mex');
             build('audio'); build('timeline'); build('vis'); build('screen'); build('gfx'); build('video');
-            test_mex_vis
+            test_mex_vis; test_mex_video
 
       - uses: actions/upload-artifact@v7
         with:

@@ -113,7 +113,7 @@ static PyStructSequence_Field vv_record_fields[] = {
     { "decision", "SHOWN, REPEATED or DROPPED" },
     { "why", "WHY_DUE, WHY_CADENCE, WHY_DISPLAY_LATE, WHY_DECODE_LATE, WHY_DRIFT, WHY_SEEK, WHY_LOOP, WHY_MANUAL" },
     { "tier", "the flip's tier (ysp.screen.TIER_*)" },
-    { "path", "the flip's path (ysp.screen.PATH_*)" },
+    { "path", "the movie's path: PATH_UPLOAD or PATH_GPU" },
     { "flags", "F_* bits" },
     { "ahead", "frames decoded and ready after this one" },
     { "shows", "display frames this video frame has been on screen" },
@@ -987,6 +987,13 @@ static PyObject* vm_probe(PyObject* m, PyObject* args, PyObject* kw) {
         }
     }
     if ((d.path != NULL) == (d.data != NULL)) { Py_XDECREF(pb); free(owned); PyErr_SetString(VsArgumentError, "probe(path) or probe(data=bytes)"); return NULL; }
+    /* yvid_probe() answers a missing file with REFUSED: found here first */
+    if (d.path && !yvv_exists(d.path)) {
+        PyErr_Format(VvNotFoundError, "ysp_video: cannot open %s", d.path);
+        Py_XDECREF(pb);
+        free(owned);
+        return NULL;
+    }
     err[0] = 0;
     Py_BEGIN_ALLOW_THREADS
     rc = yvid_probe(&d, &i, err, sizeof err);
@@ -1097,6 +1104,7 @@ static int vv_init(PyObject* m) {
         { "F_PENDING", YVID_F_PENDING }, { "F_LATE", YVID_F_LATE }, { "F_ESTIMATED", YVID_F_ESTIMATED },
         { "F_BELOW_TIER", YVID_F_BELOW_TIER }, { "F_AUDIO_CLOCK", YVID_F_AUDIO_CLOCK }, { "F_TS_MISMATCH", YVID_F_TS_MISMATCH },
         { "F_HASH_MISMATCH", YVID_F_HASH_MISMATCH }, { "F_NOT_SHOWN", YVID_F_NOT_SHOWN },
+        { "PATH_UPLOAD", YVID_PATH_UPLOAD }, { "PATH_GPU", YVID_PATH_GPU },
     };
     PyObject* c;
     int i;
