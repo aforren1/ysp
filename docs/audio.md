@@ -2236,6 +2236,107 @@ Mutants `ld-01` to `ld-04` in `tests/mutate/audio.toml` check that the
 three cases still see a wrong read position, a lost seek, a wrong first
 sample and a wrong recorded sample.
 
+## Bindings
+
+`ysp-audio` 0.7.1 (Python `ysp.audio`) and the MEX function `ysp_audio`
+1.0.0 bind this header for a PsychoPy or Psychtoolbox experiment, and own
+the one audio implementation that `ysp-vis` shares through a C table
+([bindings.md](bindings.md#sharing-one-implementation-across-modules)).
+Both compile miniaudio 0.11.25 in. The Python reference is
+[bindings/python/ysp_audio/README.md](../bindings/python/ysp_audio/README.md);
+the MEX commands are in [bindings/mex/README.md](../bindings/mex/README.md#ysp_audio).
+
+### What is bound
+
+- The device: `Audio(...)` / `'open'` with every desc field a user sets
+  (device name part, backend, rate, channels, sample, exclusive, period in
+  seconds, voices, queue, min_tier, onset_offset, arena size,
+  device_index); `caps()`, `describe()`, `lead`, `frame_at()`,
+  `time_of()`, `update()`, `close()`. `devices()` lists the names the open
+  matches.
+- Buffers in the arena: `tone()`, `noise()`, `click()`, a host buffer
+  (float32 or float64; NumPy, `array.array`, a list; a MATLAB matrix of
+  frames x channels), `load_wav()`, `arena_reset()`; a buffer from before
+  a reset is refused.
+- Playing: `play_at(buffer, t)`, `play()` with gain, a channel list,
+  offset, frames and loops, `cancel()`, `stop()` with a ramp, `gain()`.
+- The record (`Onset`, a MEX struct): every field of `yau_onset`, times in
+  seconds with the exact ns beside them, the tier and the flags, and
+  `pending`. `wait()` releases the GIL; another thread's call on the same
+  `Audio` meanwhile raises `BusyError`, because the handle has one frame
+  thread.
+- Streams fed by the host (`Stream.write()`, `'stream_write'`) and WAV
+  files streamed (`Wav.feed()`, `'wav_feed'`): the producer is a host
+  thread or the frame loop, never the device thread. `sample_at()` and
+  `time_of()` give the lock of a started stream.
+- Capture: `Capture(...)` / `'capture_open'`, `read()` (frames x
+  channels and the capture frame of the first row), `time_of()` (an int
+  frame, or a float from a detector), `frame_at()`, `info()`.
+- `wav_info()` (`yau_wav_probe()`), `db()`, `now()`.
+
+### What is not bound, and why
+
+- `desc.source` and `desc.dev` (the Audio source and Audio device
+  extensions): their functions run on miniaudio's real-time thread, which
+  must not take the GIL or enter MATLAB ([rt.md](rt.md#bindings) set this
+  rule). A host producer fills a stream instead.
+- `desc.ring` and its records: the handle's records (`result()`, `wait()`)
+  carry the same fields, and a binding of `yrt_ring` is open in
+  [rt.md](rt.md#bindings).
+- DUPLEX (`desc.capture`): an `Audio` and a `Capture` open apart; one
+  duplex device would need a second owner of the capture handle.
+- The detectors (`yau_vkey`, `yau_edge`) and the WAV writer: pure
+  functions that NumPy, MATLAB's `audiowrite()` and the analysis already
+  do on the captured frames; `yau_capture_save()` needs the writer.
+- The arena given by the caller (`desc.arena`), `yau_alloc()` without
+  data, the mixing helpers (`yau_fill_tone()`, `yau_ramp()`, `yau_mix()`):
+  the buffer calls cover them.
+- The parameter table (`yau_params()`): for a player's loader.
+- No device list in the header: `devices()` calls miniaudio's
+  `ma_context_get_devices()` with the same backend, the list whose names
+  `desc.device` is matched against.
+
+### Header limit found
+
+`yau_wait()` adds the timeout to now, so `INT64_MAX` overflows and times
+out at once (audio.h 5036). The bindings pass 2^62 ns (146 years) for
+"forever" (`math.inf`, `Inf`). Repro: `yau_wait(&au, id, INT64_MAX, &r)` on
+a pending sound returns `YAU_ERR_TIMEOUT` at once.
+
+### Tests
+
+On miniaudio's null device, so CI needs no sound card:
+
+| Host | Result |
+|---|---|
+| Python 3.14, Windows 11, MSVC 19.44 | `ysp_audio` 21 tests, `share_test` 17 tests: pass |
+| Python 3.10, Ubuntu 22.04 on WSL2, gcc 11.4 | the same 21 and 17: pass |
+| MATLAB R2023a, Windows 11, MSVC 19.44 | `test_mex_audio` 54 checks, `test_mex_share` 22 checks: pass |
+| Octave 10.1, Windows 11, MinGW-w64 gcc | the same 54 and 22: pass |
+| Octave 6.4, Ubuntu 22.04 on WSL2 | the same 54 and 22: pass |
+
+One manual run on the default device (Speakers (Realtek(R) Audio), WASAPI
+shared, 48 kHz): `example.py --device` and the same tone from MATLAB
+R2023a gave confirmed onsets at tier 2, residuals 1.6 to 8.6 us, lead 47
+to 48 ms. Not run: CoreAudio, ALSA or PulseAudio hardware through the
+bindings, capture from a real input through the bindings, macOS.
+
+### Cost
+
+The i7-1360P laptop above, Windows 11, on AC, the measurement lock held
+(load 4 to 20 % at the start), miniaudio's null device, 200 batches of 60
+calls, a batch's mean per call:
+
+| Host | `play_at(buffer, t)` p50 / p99 | An empty call (`now`) p50 / p99 |
+|---|---|---|
+| Python 3.14 | 343 / 922 ns | 78 / 332 ns |
+| MATLAB R2023a | 5.9 / 11.1 us | 3.2 / 7.5 us |
+| Octave 10.1 | 15.4 / 27.8 us | 12.6 / 23.6 us |
+
+`play_at()` allocates nothing in the binding but the returned int (Python)
+or double (MEX). A forwarded call through the shared table costs about
+1 ns ([bindings.md](bindings.md#cost)).
+
 ## Not measured
 
 - Latency to sound by cable (an acoustic loop is in "Capture"). No
