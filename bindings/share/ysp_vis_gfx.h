@@ -805,9 +805,10 @@ static int yv_set_rest(yv_stim* st, yv_kv* kv, int n, char* err, size_t cap) {
         if (yv_space_id(sp->s, &space, err, cap) < 0) return YGFX_ERR_ARG;
     }
     for (i = 0; i < n; i++) {
+        int rc;
         if (kv[i].used) continue;
         kv[i].used = 1;
-        if (yv_set_kv(st, &kv[i], space, err, cap) < 0) return YGFX_ERR_ARG;
+        if ((rc = yv_set_kv(st, &kv[i], space, err, cap)) < 0) return rc;
     }
     return 0;
 }

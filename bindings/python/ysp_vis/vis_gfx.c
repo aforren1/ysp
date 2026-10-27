@@ -321,6 +321,16 @@ static int vg_kv(const char* name, PyObject* v, yv_kv* k, vg_arena* a) {
         k->n = 1;
         return 0;
     }
+    if ((!strcmp(name, "cal") || !strcmp(name, "lum")) && !PyBytes_Check(v) && !PyByteArray_Check(v) &&
+        PyObject_HasAttrString(v, "save")) {
+        /* a ysp.color Calibration or Lum: its canonical bytes */
+        PyObject* b = PyObject_CallMethod(v, "save", NULL);
+        int rc;
+        if (!b) return -1;
+        rc = vg_doubles(b, a, &k->v, &k->n, name);
+        Py_DECREF(b);
+        return rc;
+    }
     return vg_doubles(v, a, &k->v, &k->n, name);
 }
 
@@ -1466,26 +1476,20 @@ static int Stim_setattro(PyObject* self, PyObject* name, PyObject* v) {
     if (!v) { PyErr_SetString(PyExc_AttributeError, "a stimulus's parameters cannot be deleted"); return -1; }
     b = PyUnicode_AsUTF8String(name);
     if (!b) return -1;
+    if (ST_OF(self)->st) {
+        /* an unknown name is an AttributeError, as for any object */
+        yv_attr a;
+        char err[256];
+        const yv_stim* st = ST_OF(self)->st;
+        if (yv_attr_find(PyBytes_AsString(b), st->s.kind, st->s.shape, &a, err, sizeof err) < 0 &&
+            !strncmp(err, "no parameter", 12)) {
+            PyErr_Format(PyExc_AttributeError, "'%s' stimulus has no attribute '%s'", vg_kind_name(st), PyBytes_AsString(b));
+            Py_DECREF(b);
+            return -1;
+        }
+    }
     rc = vg_stim_set1(ST_OF(self), PyBytes_AsString(b), v);
     Py_DECREF(b);
-    if (rc < 0 && PyErr_ExceptionMatches(VsArgumentError)) {
-        /* an unknown name is an AttributeError, as for any object */
-        PyObject *t, *val, *tb;
-        PyErr_Fetch(&t, &val, &tb);
-        if (val && PyUnicode_Check(val)) {
-            PyObject* s = PyUnicode_AsUTF8String(val);
-            if (s && strncmp(PyBytes_AsString(s), "no parameter", 12) == 0) {
-                Py_DECREF(s);
-                Py_XDECREF(t);
-                Py_XDECREF(tb);
-                PyErr_SetObject(PyExc_AttributeError, val);
-                Py_DECREF(val);
-                return -1;
-            }
-            Py_XDECREF(s);
-        }
-        PyErr_Restore(t, val, tb);
-    }
     return rc;
 }
 

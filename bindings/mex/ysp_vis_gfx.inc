@@ -284,7 +284,12 @@ static mxArray* vx_stim_all(const yv_stim* st) {
                           strstr(nm, "src_") == nm || strstr(nm, "shape_p") == nm || strstr(nm, "trim_") == nm))
                 continue;
             for (j = 0; j < k; j++) if (!strcmp(names[j], nm)) dup = 1;
-            if (!dup) names[k++] = nm;
+            if (!dup) {
+                yv_attr a;
+                char err[64];
+                /* anchor is ax and ay, listed already */
+                if (yv_attr_find(nm, st->s.kind, st->s.shape, &a, err, sizeof err) == 0 && a.type != YV_A_SPECIAL) names[k++] = nm;
+            }
         }
     }
     s = mxCreateStructMatrix(1, 1, k, names);
@@ -1043,7 +1048,7 @@ static void vx_gfx_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, con
         vx_nargs(nrhs, 2, "s = ysp_gfx('capture_stop', g)");
         g = vx_gfx(prhs[1]);
         memset(&s, 0, sizeof s);
-        if (cmd[9] == 'o') {
+        if (!strcmp(cmd, "capture_stop")) {
             rc = ygfx_capture_stop(&g->g, &s);
             if (rc < 0) vx_gfx_fail(g, rc);
         } else {

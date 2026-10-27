@@ -63,8 +63,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* The distribution's version tracks screen.h's (docs/bindings.md, ysp-vis). */
-#define YV_VERSION YSCR_VERSION_STRING
+/* The distribution's version tracks screen.h's, with a fourth number for a
+ * change of the binding alone (docs/bindings.md, ysp-vis). */
+#define YV_VERSION YSCR_VERSION_STRING ".1"   /* .1: ysp.gfx phase B (a binding-only change, docs/bindings.md) */
 
 #define YV_RECORDS 4096   /* flip records kept between records() calls */
 #define YV_EVENTS  1024   /* input events kept between poll() calls    */
