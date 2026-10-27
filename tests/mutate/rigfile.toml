@@ -385,3 +385,63 @@ why = "v0.5.0: the geometry read from the file would be dropped on the next writ
 find = '''    w->width_px = (int32_t)px;
     w->set = true;'''
 replace = '''    w->width_px = (int32_t)px;'''
+
+# v0.5.1: held files (docs/device.md, "A held profile").
+
+[[mutant]]
+id = "rig-46"
+name = "the rename is tried once"
+test = "rig"
+why = "v0.5.1: a program that holds the profile for a moment failed a save (ERROR_ACCESS_DENIED, 1 run of 150 under ctest -j 4); the test lets go during the save."
+find = '''    for (tries = 0; tries < 5; tries++) {
+        if (tries) Sleep(10);'''
+replace = '''    for (tries = 0; tries < 1; tries++) {
+        if (tries) Sleep(10);'''
+
+[[mutant]]
+id = "rig-47"
+name = "no wait between tries"
+test = "rig"
+why = "v0.5.1: 5 tries at once are over before a scanner lets go; the test checks the tries take 35 ms or more."
+find = '''        if (tries) Sleep(10);'''
+replace = '''        if (tries) Sleep(0);'''
+
+[[mutant]]
+id = "rig-48"
+name = "an access error is not tried again"
+test = "rig"
+why = "v0.5.1: the held file gives ERROR_ACCESS_DENIED, the error the stress runs saw."
+find = '''        if (e != ERROR_ACCESS_DENIED && e != ERROR_SHARING_VIOLATION && e != ERROR_LOCK_VIOLATION) break;'''
+replace = '''        if (e != ERROR_SHARING_VIOLATION && e != ERROR_LOCK_VIOLATION) break;'''
+
+[[mutant]]
+id = "rig-49"
+name = "a failed save keeps its temporary file"
+test = "rig"
+why = "v0.5.1: the temporary file goes when the rename fails."
+find = '''        if (!ok) DeleteFileW(wt);'''
+replace = '''        (void)0;'''
+
+[[mutant]]
+id = "rig-50"
+name = "a load denies other readers"
+test = "rig"
+why = "v0.5.1: a load while another program has the profile open must read it (MSVC's _wfopen_s denied every other open)."
+find = '''    *f = _wfsopen(w, mode, mode[0] == L'r' ? _SH_DENYNO : _SH_DENYWR);'''
+replace = '''    *f = _wfsopen(w, mode, _SH_DENYRW);'''
+
+[[mutant]]
+id = "rig-51"
+name = "the message without the reason"
+test = "rig"
+why = "v0.5.1: a failed save says which step failed and the OS error."
+find = '''    if (rc != YRIG_OK) return yrig__err(err, cap, rc, "%s: %s", path, why[0] ? why : "cannot write it");
+    return YRIG_OK;
+}
+
+YRIG_API int yrig_save('''
+replace = '''    if (rc != YRIG_OK) return yrig__err(err, cap, rc, "%s: cannot write it", path);
+    return YRIG_OK;
+}
+
+YRIG_API int yrig_save('''

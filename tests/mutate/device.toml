@@ -294,8 +294,8 @@ name = "yser_pulse_off_at_ns() from the return (serial.h v0.6.1)"
 test = "device"
 file = "ysp/serial.h"
 why = "The rule both pulse calls and ysp/device.h share: from the onset write's start."
-find = '''    int64_t a = start_ns + width_ns, b = return_ns + min_hold_ns;'''
-replace = '''    int64_t a = return_ns + width_ns, b = return_ns + min_hold_ns;'''
+find = '''    int64_t a = yser__after(start_ns, width_ns), b = yser__after(return_ns, min_hold_ns);'''
+replace = '''    int64_t a = yser__after(return_ns, width_ns), b = yser__after(return_ns, min_hold_ns);'''
 
 [[mutant]]
 id = "dev-34"
@@ -532,3 +532,90 @@ test = "device"
 why = "probe_ns 0 means 100 ms; with no queries the box clock is never fitted. test_thread fails at its wait."
 find = '''    if (dev->d.probe_ns == 0) dev->d.probe_ns = 100000000;'''
 replace = '''    if (dev->d.probe_ns == 0) dev->d.probe_ns = -1;'''
+
+# v0.5.1: times near INT64_MAX (docs/device.md, "Times without end").
+
+[[mutant]]
+id = "ovf-01"
+name = "the wait's deadline is the plain sum"
+test = "device"
+why = "now + INT64_MAX overflows: the wait for RUNNING with INT64_MAX timed out at the first look."
+find = '''    end = ydev__after(ydev__now(dev), timeout_ns > 0 ? timeout_ns : 0);'''
+replace = '''    end = ydev__now(dev) + (timeout_ns > 0 ? timeout_ns : 0);'''
+
+[[mutant]]
+id = "ovf-02"
+name = "only INT64_MAX itself saturates"
+test = "device"
+why = "Any sum past INT64_MAX saturates: the test waits with INT64_MAX - 1 ms too."
+find = '''    return d > 0 && t > INT64_MAX - d ? INT64_MAX : t + d;'''
+replace = '''    return d == INT64_MAX ? INT64_MAX : t + d;'''
+
+[[mutant]]
+id = "ovf-03"
+name = "a loss's retry is the plain sum"
+test = "device"
+why = "retry_ns INT64_MAX is never: after a loss the board is back at once, and the plain sum reopened it."
+find = '''    dev->next_try = ydev__after(ydev__now(dev), dev->d.retry_ns);'''
+replace = '''    dev->next_try = ydev__now(dev) + dev->d.retry_ns;'''
+
+[[mutant]]
+id = "ovf-04"
+name = "an open's retry is the plain sum"
+test = "device"
+why = "retry_ns INT64_MAX is never: an open that failed was tried again at every poll."
+find = '''    dev->next_try = ydev__after(now, dev->d.retry_ns);'''
+replace = '''    dev->next_try = now + dev->d.retry_ns;'''
+
+[[mutant]]
+id = "ovf-05"
+name = "the next probe is the plain sum"
+test = "device"
+why = "probe_ns INT64_MAX: one query, then none; the plain sum queried at every poll."
+find = '''    dev->next_probe = ydev__after(now, dev->d.probe_ns);'''
+replace = '''    dev->next_probe = now + dev->d.probe_ns;'''
+
+[[mutant]]
+id = "ovf-06"
+name = "XID's width rounded before the cap"
+test = "device"
+why = "width_ns + 500000 overflows for INT64_MAX: the box got 1 ms, not its longest width. Survives here: gcc -O2 folds the overflowing sum into the comparison and gets the cap. MSVC wraps it, and the test fails there (checked 2026-10-27: 1 failing check); UBSan reports it."
+expect = "survived"
+find = '''    if (width_ns >= (int64_t)4294967 * 1000000) return 4294967u;   /* and no overflow below */
+'''
+replace = ''''''
+
+[[mutant]]
+id = "ovf-07"
+name = "a refused width rounded"
+test = "device"
+why = "width_ns + 500 overflows for INT64_MAX: the record of a refused pulse had a negative width."
+find = '''            : rc == YDEV_OK ? (width_ns + 500) / 1000 * 1000 : width_ns;'''
+replace = '''            : (width_ns + 500) / 1000 * 1000;'''
+
+[[mutant]]
+id = "ovf-08"
+name = "yser_pulse_off_at_ns() is the plain sum (serial.h v0.6.2)"
+test = "device"
+file = "ysp/serial.h"
+why = "start + INT64_MAX overflows into the past: the 0 of a host-timed pulse without end came at once."
+find = '''    return d > 0 && t > INT64_MAX - d ? INT64_MAX : t + d;'''
+replace = '''    return t + d;'''
+
+[[mutant]]
+id = "ovf-09"
+name = "yser_pulse_off_at_ns(): only INT64_MAX itself saturates (serial.h v0.6.2)"
+test = "device"
+file = "ysp/serial.h"
+why = "Any sum past INT64_MAX saturates: the test pulses INT64_MAX - 1 ms wide too."
+find = '''    return d > 0 && t > INT64_MAX - d ? INT64_MAX : t + d;'''
+replace = '''    return d == INT64_MAX ? INT64_MAX : t + d;'''
+
+[[mutant]]
+id = "ovf-10"
+name = "yser_pulse_off_at_ns(): the hold is the plain sum (serial.h v0.6.2)"
+test = "device"
+file = "ysp/serial.h"
+why = "min_hold_ns has no upper bound either: return + INT64_MAX must saturate too."
+find = '''    int64_t a = yser__after(start_ns, width_ns), b = yser__after(return_ns, min_hold_ns);'''
+replace = '''    int64_t a = yser__after(start_ns, width_ns), b = return_ns + min_hold_ns;'''

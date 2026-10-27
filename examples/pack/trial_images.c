@@ -111,6 +111,9 @@ static yrsp_input sim_ev[2];
 static int n_sim_ev, sim_next;
 
 static yscr_screen scr;
+/* SDL calls on the window go through yscr_window_call(): with the window
+ * thread (ysp/screen.h, WINDOW THREAD) another thread owns the window. */
+static void title_on_window(void* title) { SDL_SetWindowTitle(yscr_window(&scr), (const char*)title); }
 static ygfx_gfx gfx;
 static ypak_pack pk;
 static ytl_timeline tl;
@@ -313,7 +316,7 @@ int main(int argc, char** argv) {
                 const char* task = rotation ? "Rotation: F if the R is normal, J if it is mirrored"
                                             : "Navon: F if the large letter is H, J if it is S";
                 printf("%s\n", task);   /* SDL and printf may allocate: only here, between blocks */
-                if (yscr_window(&scr)) SDL_SetWindowTitle(yscr_window(&scr), task);
+                if (yscr_window(&scr)) yscr_window_call(&scr, title_on_window, (void*)(uintptr_t)task);
                 ytl_on(&q, CUE_ON);
                 ytl_wait(&q, YRT_S(CUE_S));
                 ytl_off(&q, CUE_ON);

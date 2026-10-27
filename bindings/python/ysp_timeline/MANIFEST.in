@@ -9,6 +9,7 @@
 # The staged copy is gitignored; setup.py prefers the repository root when it
 # is present, so a copy cannot shadow a newer header in a development tree.
 include include/ysp/timeline.h
+include include/share/*.h
 # setup.py names the extension source by absolute path, which sdist does not
 # pick up on its own.
 include ysp_timeline_ext.c

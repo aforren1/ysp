@@ -1012,6 +1012,39 @@ movie's `info.ahead` (6) and `info.lead` (0.5), and `preroll` with what
 an ASAP start waits for (ahead). The other defaults are 0 or AUTO.
 2 of 2 new mutants killed (`tests/mutate/video.toml`, pv-).
 
+## The soundtrack on audio.h's public API (v0.5.1)
+
+`ysp-vis` compiles ysp/video.h's implementation beside ysp/audio.h's
+declarations only, and calls audio.h through the table of `ysp.audio` or
+`ysp_audio` ([bindings.md](bindings.md#sharing-one-implementation-across-modules)).
+In v0.5.0 the soundtrack's close (`yvid__snd_close`) slept with
+`YAU__SLEEP_UNTIL(YAU__NOW() + 1 ms)`. These are private macros of
+audio.h's implementation block, so that build did not compile, and
+`tests/compile/share_shims.c` defined the macros itself.
+
+v0.5.1 uses this header's own clock, `YVID__NOW()`, and a sleep of its
+own, `YVID__SLEEP_UNTIL()`: `yrt_sleep_until()`, and on a browser's main
+thread `emscripten_sleep()`, as audio.h's own waits there. A blocking
+sleep on that thread would stop the device callbacks that end the stream.
+Both are test seams: `tests/adapt/video_test.c` puts them on its virtual
+clock, as it did with audio.h's. No other private name of another header
+is in ysp/video.h, ysp/gfx.h or ysp/screen.h (a search for `y<x>__` and
+`Y<X>__` names of other prefixes, and for fields that end in `_`).
+
+Tests:
+
+- `tests/compile/share_shims.c` defines no audio.h macro now. CMake
+  builds it as `compile_share_shims_c` and `_cxx` with SDL3, and CI's
+  Screen job runs it. The wasm job compiles it with emcc, which compiles
+  the sleep that yields (not run: node has no audio device).
+- The core test passes as before, with the seam on its virtual clock.
+
+No mutant: the mutation runner counts a build that fails as a bad mutant,
+not as a kill, and the core test's result does not depend on the sleep.
+Two mutants were run by hand and survived: the close without a sleep,
+and the close sleeping on the real clock (a test with a device that
+still plays at the close is not written).
+
 ## Needed from the other headers
 
 | Header | Request | Why |

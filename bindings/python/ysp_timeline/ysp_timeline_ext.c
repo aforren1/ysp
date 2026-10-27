@@ -34,6 +34,11 @@
  * MEMORY: no allocation per frame when nothing fires: evaluate() fills a
  * report buffer the Timeline allocated at open (one entry per event of the
  * storage, so the report is never cut) and returns the empty tuple.
+ *
+ * SHARING: the module's _C_API capsule holds a ysp_timeline_api table, so
+ * another extension (ysp-vis) drives a Timeline built here; acquire() pins
+ * it and close() refuses while it is pinned (BusyError). The table's
+ * ytl_evaluate is tl_api_evaluate(): Timeline.evaluate() without the report.
  */
 #ifndef Py_LIMITED_API
 #define Py_LIMITED_API 0x03080000
@@ -47,6 +52,9 @@
 #define YTL_MAX_CHANNELS 1024
 #define YSP_TIMELINE_IMPLEMENTATION
 #include "ysp/timeline.h"
+/* The table ysp-vis calls through (bindings/share/ysp_timeline_api.h). */
+#define YSP_TIMELINE_API_OWNER
+#include "ysp_timeline_api.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -56,7 +64,7 @@
 /* The distribution's version is the header's; a change to this binding
  * alone adds a fourth number. tests/test_timeline.py checks this against
  * pyproject.toml. */
-#define TL_VERSION YTL_VERSION_STRING
+#define TL_VERSION YTL_VERSION_STRING ".1"   /* .1: the shared table (_C_API), pins, BusyError */
 
 /* Seconds at or above this are refused: the header's range is |t| < 2^62
  * ns (TIME), and 4611686018 s is the largest whole second below it. */
@@ -69,6 +77,9 @@ static PyObject* TlOrderError;
 static PyObject* TlFullError;
 static PyObject* TlBoundError;
 static PyObject* TlNotFoundError;
+static PyObject* TlBusyError;
+static PyObject* TimelineType;
+static ysp_timeline_api g_api;
 static PyObject* EventType;   /* namedtuple Event(...) */
 static PyObject* SeqType;
 static PyObject* FieldType;
@@ -159,6 +170,7 @@ typedef struct TimelineObject {
     tl_bindrow*      binds;
     int              n_binds, binds_cap;
     int64_t          frames;     /* the default frame index */
+    int              pins;       /* acquire() calls not yet released (SHARING) */
 } TimelineObject;
 
 typedef struct SeqObject {
@@ -767,6 +779,10 @@ static int Timeline_init(PyObject* self, PyObject* args, PyObject* kw) {
 static PyObject* Timeline_close(PyObject* self, PyObject* unused) {
     TimelineObject* o = TL_OF(self);
     (void)unused;
+    if (o->pins > 0) {
+        PyErr_Format(TlBusyError, "ysp_timeline: %d other module object(s) use this Timeline (a movie?); close them first", o->pins);
+        return NULL;
+    }
     if (o->box) ytl_close(&o->box->tl);
     o->open = 0;
     tl_release(o);
@@ -1437,6 +1453,54 @@ static PyObject* Timeline_evaluate(PyObject* self, PyObject* args) {
     return t;
 }
 
+/* --- sharing (bindings/share/ysp_timeline_api.h) ------------------------------------------ */
+
+/* The table's ytl_evaluate: what Timeline.evaluate() does but the report.
+ * Tween callbacks are Python, so it takes the GIL (any thread may call it);
+ * a callback or a bind that raised returns YSP_SHARE_ERR_HOST with the
+ * exception set, for a caller that holds the GIL. */
+static int tl_api_evaluate(ytl_timeline* tl, const ytl_frame* f, ytl_event* fired, int cap) {
+    TimelineObject* o = tl ? ((tl_box*)(void*)tl)->owner : NULL;
+    PyGILState_STATE g;
+    int n;
+    if (!o) return ytl_evaluate(tl, f, fired, cap);
+    g = PyGILState_Ensure();
+    n = ytl_evaluate(tl, f, fired, cap);
+    if (o->cb_type) {
+        PyErr_Restore(o->cb_type, o->cb_value, o->cb_tb);
+        o->cb_type = o->cb_value = o->cb_tb = NULL;
+        n = YSP_SHARE_ERR_HOST;
+    } else if (n >= 0) {
+        o->frames = f->index + 1;
+        if (o->n_binds && tl_apply_binds(o) < 0) n = YSP_SHARE_ERR_HOST;
+    }
+    PyGILState_Release(g);
+    return n;
+}
+
+static void* tl_api_acquire(void* ref, char* err, size_t cap) {
+    PyObject* obj = (PyObject*)ref;
+    TimelineObject* o;
+    if (!obj || !PyObject_TypeCheck(obj, (PyTypeObject*)TimelineType)) {
+        PyOS_snprintf(err, cap, "ysp.timeline: a Timeline is needed here");
+        return NULL;
+    }
+    o = TL_OF(obj);
+    if (!o->open || !o->box) { PyOS_snprintf(err, cap, "ysp.timeline: the Timeline is closed"); return NULL; }
+    o->pins++;
+    Py_INCREF(obj);
+    return &o->box->tl;
+}
+
+static void tl_api_release(void* p) {
+    TimelineObject* o = p ? ((tl_box*)p)->owner : NULL;
+    if (!o) return;
+    o->pins--;
+    Py_DECREF((PyObject*)o);
+}
+
+static PyObject* Timeline_get_pins(PyObject* self, void* c) { (void)c; return PyLong_FromLong(TL_OF(self)->pins); }
+
 static PyObject* Timeline_value(PyObject* self, PyObject* arg) {
     TimelineObject* o = TL_OF(self);
     int ch;
@@ -1725,6 +1789,7 @@ static PyGetSetDef Timeline_getset[] = {
     { "error", Timeline_get_error, NULL, "the message of the last failure", NULL },
     { "is_open", Timeline_get_is_open, NULL, "False after close()", NULL },
     { "frames", Timeline_get_frames, NULL, "the next default frame index", NULL },
+    { "pins", Timeline_get_pins, NULL, "objects of other modules that hold this Timeline (SHARING)", NULL },
     { NULL }
 };
 
@@ -2307,7 +2372,7 @@ PyMODINIT_FUNC PyInit_timeline(void) {
     };
     m = PyModule_Create(&ysp_timeline_module);
     if (!m) return NULL;
-    if (!tl_add_type(m, &Timeline_spec, "Timeline")) goto fail;
+    if (!(TimelineType = tl_add_type(m, &Timeline_spec, "Timeline"))) goto fail;
     if (!(SeqType = tl_add_type(m, &Seq_spec, "Seq"))) goto fail;
     if (!(FieldType = tl_add_type(m, &Field_spec, "Field"))) goto fail;
     if (!(TlError = tl_add_exc(m, "ysp.timeline.Error", "Error", NULL))) goto fail;
@@ -2320,7 +2385,10 @@ PyMODINIT_FUNC PyInit_timeline(void) {
     TlFullError = tl_add_exc(m, "ysp.timeline.FullError", "FullError", TlError);
     TlBoundError = tl_add_exc(m, "ysp.timeline.BoundError", "BoundError", TlError);
     TlNotFoundError = tl_add_exc(m, "ysp.timeline.NotFoundError", "NotFoundError", TlError);
-    if (!TlArgumentError || !TlClosedError || !TlOrderError || !TlFullError || !TlBoundError || !TlNotFoundError) goto fail;
+    TlBusyError = tl_add_exc(m, "ysp.timeline.BusyError", "BusyError", TlError);
+    if (!TlArgumentError || !TlClosedError || !TlOrderError || !TlFullError || !TlBoundError || !TlNotFoundError ||
+        !TlBusyError)
+        goto fail;
     coll = PyImport_ImportModule("collections");
     if (!coll) goto fail;
     nt = PyObject_GetAttrString(coll, "namedtuple");
@@ -2336,6 +2404,12 @@ PyMODINIT_FUNC PyInit_timeline(void) {
         if (PyModule_AddIntConstant(m, consts[i].name, consts[i].v) < 0) goto fail;
     if (PyModule_AddObject(m, "LEAD_NONE", PyFloat_FromDouble(YTL_LEAD_NONE)) < 0) goto fail;
     if (PyModule_AddStringConstant(m, "__version__", TL_VERSION) < 0) goto fail;
+    ysp_timeline_api_fill(&g_api, YSP_SHARE_HOST_PYTHON, tl_api_acquire, tl_api_release);
+    g_api.ytl_evaluate = tl_api_evaluate;
+    {
+        PyObject* cap = PyCapsule_New(&g_api, YSP_TIMELINE_API_CAPSULE, NULL);
+        if (!cap || PyModule_AddObject(m, "_C_API", cap) < 0) { Py_XDECREF(cap); goto fail; }
+    }
     return m;
 fail:
     Py_DECREF(m);

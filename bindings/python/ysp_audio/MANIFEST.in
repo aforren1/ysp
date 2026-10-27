@@ -1,0 +1,19 @@
+# An sdist must carry everything the build needs. setup.py compiles
+# ysp/audio.h (with ysp/rt.h), the shared table and miniaudio.h into the
+# extension. Stage them next to setup.py first:
+#
+#     mkdir -p include/ysp include/share
+#     cp ../../../include/ysp/*.h include/ysp/
+#     cp ../../share/*.h include/share/
+#     cp <miniaudio 0.11.25>/miniaudio.h include/
+#     uv build --sdist
+#
+# The staged copies are gitignored; setup.py prefers the repository root when
+# it is present, so a copy cannot shadow a newer header in a development tree.
+include include/ysp/audio.h
+include include/ysp/rt.h
+include include/share/*.h
+include include/miniaudio.h
+include ysp_audio_ext.c
+include example.py
+recursive-include tests *.py

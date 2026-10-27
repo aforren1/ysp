@@ -14,6 +14,13 @@ function build(name)
 
     here = fileparts(mfilename('fullpath'));
     root = fullfile(here, '..', '..', 'include'); % include/ysp/ holds the headers
+    share = fullfile(here, '..', 'share');        % the shared tables (ysp_audio, ysp_timeline)
+    % ysp_audio.c needs miniaudio.h 0.11.25 (CMakeLists.txt's YSP_FETCH_MINIAUDIO
+    % pin): from YSP_MINIAUDIO_DIR, or in bindings/mex/miniaudio/.
+    ma = getenv('YSP_MINIAUDIO_DIR');
+    if isempty(ma) || ~exist(fullfile(ma, 'miniaudio.h'), 'file')
+        ma = fullfile(here, 'miniaudio');
+    end
 
     if nargin < 1
         d = dir(fullfile(here, 'ysp_*.c'));
@@ -50,7 +57,36 @@ function build(name)
             fprintf('skipping %s: not supported on this platform\n', srcs{i});
             continue;
         end
-        args = {['-I' root], srcs{i}};
+        if strcmp(srcs{i}, 'ysp_audio.c') && ~exist(fullfile(ma, 'miniaudio.h'), 'file')
+            fprintf('skipping ysp_audio.c: no miniaudio.h (set YSP_MINIAUDIO_DIR or put it in %s)\n', fullfile(here, 'miniaudio'));
+            continue;
+        end
+        args = {['-I' root], ['-I' share], srcs{i}};
+        % The owners of a shared table export ysp_<name>_api_table() too
+        % (docs/bindings.md, "Sharing one implementation across modules").
+        % MATLAB on Linux and macOS links a MEX file with a list that exports
+        % mexFunction alone; this list adds the table function.
+        if any(strcmp(srcs{i}, {'ysp_audio.c', 'ysp_timeline.c'})) && ~ispc && ~exist('OCTAVE_VERSION', 'builtin')
+            sym = [srcs{i}(1:end-2) '_api_table'];
+            lst = [tempname() '.map'];
+            fid = fopen(lst, 'w');
+            if ismac
+                fprintf(fid, '_mexFunction\n_mexfilerequiredapiversion\n_%s\n', sym);
+                flag = ['-Wl,-exported_symbols_list,' lst];
+            else
+                fprintf(fid, 'MEX { global: mexFunction; mexfilerequiredapiversion; %s; local: *; };\n', sym);
+                flag = ['-Wl,--version-script,' lst];
+            end
+            fclose(fid);
+            args(end+1:end+2) = {['LINKEXPORT=' flag], ['LINKEXPORTVER=' flag]};   %#ok<AGROW>
+        end
+        if strcmp(srcs{i}, 'ysp_audio.c')
+            args{end+1} = ['-I' ma];   %#ok<AGROW>
+            if ~ispc
+                % miniaudio loads its backends with dlopen.
+                args(end+1:end+2) = {'-ldl', '-lm'};   %#ok<AGROW>
+            end
+        end
         if ispc
             % Windows async-pulse workers use Win32 threads, so no thread
             % library. ysp/serial.h does need SetupAPI and the registry for

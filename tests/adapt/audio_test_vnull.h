@@ -134,6 +134,38 @@ static void test_virtual_null(void) {
         } else fprintf(stderr, "audio_test: %s\n", yau_error(&g_vn));
     }
 
+    {   /* v0.7.2: a timeout near INT64_MAX is "forever" (the bindings' Inf).
+         * now + timeout overflowed, and the wait gave TIMEOUT at once. */
+        static const int64_t forever[2] = { INT64_MAX, INT64_MAX - YRT_MS(1) };
+        yau_buf snd;
+        int64_t t;
+        memset(&d, 0, sizeof d);
+        d.backend = YAU_BACKEND_NULL;
+        d.arena_bytes = 1 << 20;
+        CHECK(yau_open(&g_vn, &d));
+        if (yau_is_open(&g_vn)) {
+            snd = yau_alloc(&g_vn, 96, 2);
+            for (i = 0; i < 2; i++) {
+                yau_onset o;
+                yau_id id;
+                memset(&o, 0, sizeof o);
+                t = yrt_now_ns();
+                CHECK(t > YRT_MS(1));   /* so the sum would overflow */
+                id = yau_play_at(&g_vn, snd, t + YRT_MS(50));
+                CHECK(id > 0);
+                CHECK_I(yau_result(&g_vn, id, NULL), YAU_PENDING);
+                CHECK_I(yau_wait(&g_vn, id, forever[i], &o), YAU_OK);
+                CHECK_I(o.id, id);
+                CHECK(llabs(o.onset - (t + YRT_MS(50))) <= 1000000000 / 48000 / 2 + 1);
+            }
+            /* the other end: a past deadline, TIMEOUT at once */
+            t = yrt_now_ns();
+            CHECK_I(yau_wait(&g_vn, yau_play_at(&g_vn, snd, t + YRT_MS(50)), INT64_MIN, NULL), YAU_ERR_TIMEOUT);
+            CHECK_I(yrt_now_ns(), t);
+            yau_close(&g_vn);
+        } else fprintf(stderr, "audio_test: %s\n", yau_error(&g_vn));
+    }
+
     yrt_virtual_end();
     g_virtual = 1;
 }

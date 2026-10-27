@@ -87,6 +87,7 @@ static void take_foreground(SDL_Window* w) {
     SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
     SetForegroundWindow(h);
 }
+static void take_foreground_on_window(void* w) { take_foreground((SDL_Window*)w); }
 #endif
 
 #define WIN_W 1200
@@ -96,6 +97,9 @@ static void take_foreground(SDL_Window* w) {
 #define SHOT_FRAMES 120
 
 static yscr_screen scr;
+/* SDL calls on the window go through yscr_window_call(): with the window
+ * thread (ysp/screen.h, WINDOW THREAD) another thread owns the window. */
+static void title_on_window(void* title) { SDL_SetWindowTitle(yscr_window(&scr), (const char*)title); }
 static ygfx_gfx gfx;
 static ycol_cal cal;
 
@@ -2509,7 +2513,7 @@ static void show_page(int p, const yscr_frame* f) {
     ytl_anchor(&tl, PAGE_BASE, f->onset, 0);   /* every animation restarts */
     /* SDL and printf may allocate: only here, on a page change */
     snprintf(title, sizeof title, "gfx_gallery %d/%d: %s", p + 1, N_PAGES, pages[p].name);
-    if (yscr_window(&scr)) SDL_SetWindowTitle(yscr_window(&scr), title);
+    if (yscr_window(&scr)) yscr_window_call(&scr, title_on_window, title);
     printf("page %d/%d: %s\n", p + 1, N_PAGES, pages[p].name);
     for (i = 0; i < pages[p].n; i++) {
         printf("  %2d  ", i + 1);
@@ -2591,7 +2595,7 @@ int main(int argc, char** argv) {
                ps.rejected, ps.stored, (double)ps.open_ns * 1e-6);
     }
 #if defined(_WIN32)
-    if (topmost && yscr_window(&scr)) take_foreground(yscr_window(&scr));
+    if (topmost && yscr_window(&scr)) yscr_window_call(&scr, take_foreground_on_window, yscr_window(&scr));
 #else
     if (topmost) printf("--topmost acts on Win32 windows; ignored here\n");
 #endif

@@ -1,4 +1,4 @@
-/* ysp/rigfile.h - v0.5.0 - public domain single-header rig profile
+/* ysp/rigfile.h - v0.5.1 - public domain single-header rig profile
  *
  *   The file on a rig that says which device plays each role and what the
  *   rig's loopbacks measured, kept outside every pack (docs/devices_spec.md
@@ -184,6 +184,16 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.5.1 - Held files. yrig_save_file(), yrig_save() and
+ *          yrig_store_loopback() try the rename 5 times, 10 ms apart, when
+ *          another program has the file open (ERROR_ACCESS_DENIED,
+ *          ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION), as
+ *          ysp/dataset.h does: under ctest -j 4 a save failed in about 1
+ *          run of 150 with ERROR_ACCESS_DENIED. The message names the step
+ *          that failed and the OS error. Files open shared as in
+ *          ysp/dataset.h, a reader denying no one: MSVC builds used
+ *          _wfopen_s, which denied every other open, so a load failed
+ *          while another program had the profile open. No API change.
  *   v0.5.0 - view: the viewing geometry (distance_mm, width_mm, width_px;
  *          yrig_view, VIEWING GEOMETRY) and yrig_ppd(). A profile without
  *          view writes and hashes as in v0.4.0; a v0.4.0 reader refuses
@@ -214,6 +224,10 @@
  *   v0.1.0 - first version: the "ysp-rig 1" format, load, check, write,
  *          hash, bind, store a loopback result.
  *
+ *   STATUS: v0.5.1, 2026-10-27 (docs/device.md, "A held profile"):
+ *   tests/adapt/rigfile_test.c holds the profile without
+ *   FILE_SHARE_DELETE during a save and lets go during another; 4 copies
+ *   at a time, 1200 runs each with MSVC and MinGW-w64.
  *   STATUS: v0.5.0, 2026-10-21. docs/device.md ("The rig profile") has the
  *   how-to, the reference and the test counts.
  *
@@ -225,8 +239,8 @@
 
 #define YRIG_VERSION_MAJOR 0
 #define YRIG_VERSION_MINOR 5
-#define YRIG_VERSION_PATCH 0
-#define YRIG_VERSION_STRING "0.5.0"
+#define YRIG_VERSION_PATCH 1
+#define YRIG_VERSION_STRING "0.5.1"
 
 #include "ysp/device.h"
 #include "ysp/json.h"
@@ -436,6 +450,7 @@ YRIG_API yin_source yrig_source_role(const yrig_profile* p, const char* role, yi
     #define WIN32_LEAN_AND_MEAN
     #endif
     #include <windows.h>
+    #include <share.h>     /* _SH_DENYNO, _SH_DENYWR */
 #else
     #include <sys/stat.h>
     #include <sys/types.h>
@@ -548,16 +563,30 @@ static void yrig__sha_hex(const void* data, size_t n, char hex[65]) {
 static bool yrig__wide(const char* s, wchar_t* w, int cap) {
     return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, w, cap) > 0;
 }
-/* 0, or the errno of the failure. */
+/* 0, or the errno of the failure. A read denies no one and a write denies
+ * other writers, as ysp/dataset.h opens its files. _wfopen_s (MSVC builds
+ * until v0.5.1) denied every other open, so a load failed while another
+ * program, or a second rig program loading the profile, had it open. */
 static int yrig__wopen(const wchar_t* w, const wchar_t* mode, FILE** f) {
-#if defined(_MSC_VER)
-    errno_t e = _wfopen_s(f, w, mode);
-    if (e) *f = NULL;
-    return (int)e;
-#else
-    *f = _wfopen(w, mode);
+    *f = _wfsopen(w, mode, mode[0] == L'r' ? _SH_DENYNO : _SH_DENYWR);
     return *f ? 0 : errno;
-#endif
+}
+
+/* MoveFileExW of tmp over path; 0 or the Windows error. A program that
+ * has either file open without FILE_SHARE_DELETE (a virus scanner, an
+ * indexer) makes it fail for a moment: 9 of 1200 runs of
+ * tests/adapt/rigfile_test.c, 4 at a time, saw ERROR_ACCESS_DENIED
+ * (2026-10-27). 5 tries, 10 ms apart, as ysp/dataset.h does. */
+static unsigned long yrig__replace(const wchar_t* wt, const wchar_t* w) {
+    int tries;
+    DWORD e = 0;
+    for (tries = 0; tries < 5; tries++) {
+        if (tries) Sleep(10);
+        if (MoveFileExW(wt, w, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) return 0;
+        e = GetLastError();
+        if (e != ERROR_ACCESS_DENIED && e != ERROR_SHARING_VIOLATION && e != ERROR_LOCK_VIOLATION) break;
+    }
+    return e ? (unsigned long)e : 1ul;
 }
 #endif
 
@@ -626,31 +655,49 @@ static bool yrig__mkdirs(const char* path) {
 }
 
 /* path through path.tmp and a rename, so a reader sees the old file or the
- * new one, never a part. */
-static int yrig__write_file(const char* path, const void* data, size_t n) {
+ * new one, never a part. On failure the old file stays, the temporary goes,
+ * and why says what failed (the OS error number in the message). */
+static int yrig__write_file(const char* path, const void* data, size_t n, char* why, size_t cap) {
     char tmp[1040];
     FILE* f;
     bool ok;
+    why[0] = '\0';
     if (strlen(path) + 5 >= sizeof tmp) return YRIG_ERR_ARG;
     snprintf(tmp, sizeof tmp, "%s.tmp", path);
 #if defined(_WIN32)
     {
         wchar_t w[1040], wt[1040];
+        unsigned long e;
+        int oe;
         if (!yrig__wide(path, w, 1040) || !yrig__wide(tmp, wt, 1040)) return YRIG_ERR_ARG;
-        if (yrig__wopen(wt, L"wb", &f) != 0 || !f) return YRIG_ERR_IO;
+        if ((oe = yrig__wopen(wt, L"wb", &f)) != 0 || !f) {
+            snprintf(why, cap, "cannot create its .tmp (errno %d)", oe);
+            return YRIG_ERR_IO;
+        }
         ok = fwrite(data, 1, n, f) == n;
         ok = fclose(f) == 0 && ok;
-        if (ok) ok = MoveFileExW(wt, w, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+        if (!ok) snprintf(why, cap, "cannot write its .tmp");
+        else if ((e = yrig__replace(wt, w)) != 0) {
+            ok = false;
+            snprintf(why, cap, "cannot replace it (Windows error %lu; another program has it open?); the old file stays", e);
+        }
         if (!ok) DeleteFileW(wt);
     }
 #else
     f = fopen(tmp, "wb");
-    if (!f) return YRIG_ERR_IO;
+    if (!f) {
+        snprintf(why, cap, "cannot create its .tmp (errno %d)", errno);
+        return YRIG_ERR_IO;
+    }
     ok = fwrite(data, 1, n, f) == n;
     ok = fflush(f) == 0 && ok;
     ok = fsync(fileno(f)) == 0 && ok;
     ok = fclose(f) == 0 && ok;
-    if (ok) ok = rename(tmp, path) == 0;
+    if (!ok) snprintf(why, cap, "cannot write its .tmp");
+    else if (rename(tmp, path) != 0) {
+        ok = false;
+        snprintf(why, cap, "cannot replace it (errno %d); the old file stays", errno);
+    }
     if (!ok) remove(tmp);
 #endif
     return ok ? YRIG_OK : YRIG_ERR_IO;
@@ -1408,7 +1455,7 @@ static void yrig__now_utc(char out[24]) {
 YRIG_API int yrig_save_file(yrig_profile* p, const char* path, char* err, size_t cap) {
     char* b;
     size_t n, k;
-    char dir[1024];
+    char dir[1024], why[160];
     int rc;
     if (!p || !path || !path[0]) return yrig__err(err, cap, YRIG_ERR_ARG, "yrig_save_file: no path");
     yrig__now_utc(p->written);
@@ -1422,9 +1469,9 @@ YRIG_API int yrig_save_file(yrig_profile* p, const char* path, char* err, size_t
         dir[k - 1] = '\0';
         if (!yrig__mkdirs(dir)) { free(b); return yrig__err(err, cap, YRIG_ERR_IO, "%s: cannot make the folder", dir); }
     }
-    rc = yrig__write_file(path, b, n);
+    rc = yrig__write_file(path, b, n, why, sizeof why);
     free(b);
-    if (rc != YRIG_OK) return yrig__err(err, cap, rc, "%s: cannot write it", path);
+    if (rc != YRIG_OK) return yrig__err(err, cap, rc, "%s: %s", path, why[0] ? why : "cannot write it");
     return YRIG_OK;
 }
 
@@ -1508,8 +1555,11 @@ YRIG_API int yrig_store_loopback(const char* dir, const void* data, size_t n, ch
     if (snprintf(sub, sizeof sub, "%s" YRIG__SEP "loopback", dir) >= (int)sizeof sub) return yrig__err(err, cap, YRIG_ERR_ARG, "path too long");
     if (!yrig__mkdirs(sub)) return yrig__err(err, cap, YRIG_ERR_IO, "%s: cannot make the folder", sub);
     snprintf(path, sizeof path, "%s" YRIG__SEP "%s.txt", sub, sha_hex);
-    rc = yrig__write_file(path, data, n);
-    if (rc != YRIG_OK) return yrig__err(err, cap, rc, "%s: cannot write it", path);
+    {
+        char why[160];
+        rc = yrig__write_file(path, data, n, why, sizeof why);
+        if (rc != YRIG_OK) return yrig__err(err, cap, rc, "%s: %s", path, why[0] ? why : "cannot write it");
+    }
     return YRIG_OK;
 }
 

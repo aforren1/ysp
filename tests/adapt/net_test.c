@@ -59,13 +59,15 @@ static int64_t now_fn(void* ctx) { (void)ctx; return host_now(); }
 
 /* This machine's LSL clock: the host clock plus 123.456789 s. */
 #define LOCAL_OFF_NS 123456789000LL
-static double local_of(int64_t h) { return (double)(h + LOCAL_OFF_NS) / 1e9; }
+/* in double: test_forever() runs the host clock near INT64_MAX */
+static double local_of(int64_t h) { return ((double)h + (double)LOCAL_OFF_NS) / 1e9; }
 
 /* A remote sender's clock: offset and rate error, set per test. */
 static int64_t g_roff = 0;       /* ns */
 static double  g_rppm = 0.0;
 static double  g_rtt_ns = 0.0;   /* the time corrections' round trip */
 static int     g_corr_fail = 0;  /* time corrections time out          */
+static int     g_corr_fresh = 0; /* a new estimate at every call       */
 static double remote_of(int64_t h) {
     return ((double)(h - 1000000000000LL) * (1.0 + g_rppm * 1e-6) + 1000000000000.0 + (double)g_roff) / 1e9;
 }
@@ -186,13 +188,14 @@ static int fk_pred_match(const char* pred, const fk_outlet* o) {
 
 static int g_resolve_calls;
 static double g_resolve_timeout;
+static int64_t g_hide_until;   /* a resolve finds nothing before this host time */
 static int32_t fk_resolve_bypred(void** buf, uint32_t n, const char* pred, int32_t minimum, double timeout) {
     int i, m = 0;
     (void)minimum;
     fk_lock();
     g_resolve_calls++;
     g_resolve_timeout = timeout;
-    for (i = 0; i < FK_OUTLETS && (uint32_t)m < n; i++)
+    for (i = 0; i < FK_OUTLETS && (uint32_t)m < n && host_now() >= g_hide_until; i++)
         if (g_out[i].used && g_out[i].alive && fk_pred_match(pred, &g_out[i])) buf[m++] = fk_info_new(i);
     fk_unlock();
     if (m == 0 && !g_real) g_now += (int64_t)(timeout * 1e9);   /* the resolve waited */
@@ -310,7 +313,7 @@ static double fk_time_correction_ex(void* p, double* remote, double* unc, double
     (void)timeout;
     if (g_corr_fail) { *ec = -1; return 0.0; }
     *ec = 0;
-    if (!in->last_corr || h - in->last_corr >= 2000000000) {
+    if (!in->last_corr || h - in->last_corr >= 2000000000 || g_corr_fresh) {
         double rtt = g_rtt_ns * (0.5 + u01());            /* round trips vary */
         double err = (u01() - 0.5) * rtt;                 /* within rtt / 2   */
         double r = o->remote ? remote_of(h) : local_of(h);
@@ -514,7 +517,8 @@ static void reset_fake(void) {
     memset(g_in, 0, sizeof g_in);
     g_nev = 0;
     memset(g_txt, 0, sizeof g_txt);
-    g_roff = 0; g_rppm = 0; g_rtt_ns = 100000; g_corr_fail = 0; g_delay_ns = 1000000;
+    g_roff = 0; g_rppm = 0; g_rtt_ns = 100000; g_corr_fail = 0; g_delay_ns = 1000000; g_hide_until = 0;
+    g_corr_fresh = 0;
     ring_open();
 }
 
@@ -1200,6 +1204,86 @@ static void test_wait(void) {
     printf("  the wait for RUNNING: running, closed, a wrong stream, nobody: ok\n");
 }
 
+/* v0.3.1: times near INT64_MAX. INT64_MAX is the bindings' "forever" (a
+ * wait) and "never" (a desc time); now + it overflowed into the past, so
+ * the wait timed out at once and a resolve or a correction came every
+ * poll. */
+static void test_forever(void) {
+    static const int64_t forever[2] = { INT64_MAX, INT64_MAX - YRT_MS(1) };
+    static ynet_inlet in;
+    ynet_inlet_desc id;
+    ynet_stats st;
+    int i, idx;
+    reset_fake();
+    idx = fk_remote_stream("Forever", "Markers", "fv1", YNET_STRING, 1, 0.0);
+    memset(&id, 0, sizeof id);
+    id.lib = &g_lib; id.role = "fv"; id.key = "lsl:Forever"; id.device = 6; id.manual = true; id.now = now_fn;
+    id.ring = &g_ring;
+    id.resolve_ns = YRT_MS(50);
+    /* the wait: the stream shows 300 ms after the open, a resolve every
+     * poll, so the first look sees OPENING */
+    for (i = 0; i < 2; i++) {
+        int64_t t0 = g_now;
+        id.retry_ns = 1;
+        g_hide_until = t0 + YRT_MS(300);
+        CHECK(ynet_inlet_open(&in, &id));
+        CHECK_I(ynet_inlet_wait_running(&in, forever[i]), YNET_RUNNING);
+        CHECK(g_now >= t0 + YRT_MS(300));
+        ynet_inlet_close(&in);
+    }
+    /* retry_ns INT64_MAX: a resolve that found nothing is not tried again */
+    id.retry_ns = INT64_MAX;
+    g_hide_until = g_now + YRT_MS(300);
+    CHECK(ynet_inlet_open(&in, &id));
+    poll_until(&in, g_now + YRT_S(2));
+    ynet_inlet_stats(&in, &st);
+    CHECK_I(ynet_inlet_state(&in), YNET_OPENING);
+    CHECK_I(st.resolves, 1);
+    ynet_inlet_close(&in);
+    /* nor after a loss: the outlet is back before the next poll */
+    g_hide_until = 0;
+    CHECK(ynet_inlet_open(&in, &id));
+    poll_until(&in, g_now + YRT_MS(100));
+    CHECK_I(ynet_inlet_state(&in), YNET_RUNNING);
+    g_out[idx].alive = 0;
+    while (ynet_inlet_state(&in) == YNET_RUNNING) ynet_inlet_poll(&in, YRT_MS(10));
+    CHECK_I(ynet_inlet_state(&in), YNET_LOST);
+    g_out[idx].alive = 1;
+    poll_until(&in, g_now + YRT_S(2));
+    ynet_inlet_stats(&in, &st);
+    CHECK_I(ynet_inlet_state(&in), YNET_LOST);
+    CHECK_I(st.resolves, 1);
+    ynet_inlet_close(&in);
+    /* correct_ns INT64_MAX: the open's correction, then none (the fake
+     * liblsl has a new estimate at every call, so each one counts) */
+    g_corr_fresh = 1;
+    id.retry_ns = 0;
+    id.correct_ns = INT64_MAX;
+    CHECK(ynet_inlet_open(&in, &id));
+    poll_until(&in, g_now + YRT_S(5));
+    ynet_inlet_stats(&in, &st);
+    CHECK_I(ynet_inlet_state(&in), YNET_RUNNING);
+    CHECK_I(st.corrections, 1);
+    ynet_inlet_close(&in);
+    /* a caller's clock near its end: the reader's next correction is due
+     * there, and the one after it is never */
+    id.correct_ns = INT64_MAX - YRT_S(1500);
+    CHECK(ynet_inlet_open(&in, &id));
+    poll_until(&in, g_now + YRT_MS(100));
+    CHECK_I(ynet_inlet_state(&in), YNET_RUNNING);
+    g_now = INT64_MAX - YRT_S(10);
+    poll_until(&in, g_now + YRT_S(2));
+    ynet_inlet_stats(&in, &st);
+    CHECK_I(ynet_inlet_state(&in), YNET_RUNNING);
+    CHECK_I(st.corrections, 2);
+    ynet_inlet_close(&in);
+    g_now = 1000000000000LL;
+    g_corr_fresh = 0;
+    CHECK_I(fk_infos_alive(), 0);
+    CHECK_I(fk_inlets_alive(), 0);
+    printf("  times near INT64_MAX (forever, never): ok\n");
+}
+
 /* A synthetic LabStreamer in this process: an outlet with the Data stream's
  * name, format, channels and rate; the inlet as the rig binds it. Also the
  * trigger channel and role glue. */
@@ -1486,6 +1570,7 @@ int main(void) {
     test_stream_ring();
     test_desc();
     test_wait();
+    test_forever();
     test_markers();
     test_remote_stream();
     test_lifecycle();

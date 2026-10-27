@@ -608,6 +608,13 @@ if(TARGET SDL3::Headers AND YSP_BUILD_TESTS)
     target_link_libraries(test_input_sdl PRIVATE SDL3::Headers)
     add_test(NAME test_input_sdl COMMAND test_input_sdl)
 endif()
+# ysp/screen.h's window thread on real windows (WINDOW THREAD): built with
+# the tests and not registered with ctest, because it needs a display; run
+# by hand and by tests/mutate/screen.toml's window test. Windows only: elsewhere
+# it says so and returns 0.
+if(TARGET SDL3::SDL3 AND YSP_BUILD_TESTS)
+    ysp_add_program(test_screen_window tests/adapt/screen_window_test.c rig)
+endif()
 # Every header's parameter table against the one row shape (name, type,
 # min, max, def, unit, doc, values; docs/experiment_format.md, G6): one
 # program that includes them all, as the player's loader will, without
@@ -702,6 +709,23 @@ if(YSP_BUILD_TESTS AND TARGET SDL3::SDL3 AND TARGET ysp::miniaudio
         ysp_add_program(compile_order_screen_audio_${lang} ${_src} rig)
         target_compile_definitions(compile_order_screen_audio_${lang} PRIVATE YSP_TEST_SCREEN_FIRST)
         add_test(NAME compile_order_screen_audio_${lang} COMMAND compile_order_screen_audio_${lang})
+    endforeach()
+endif()
+# ysp/video.h's and ysp/screen.h's implementations linked against the
+# shims of bindings/share/ instead of audio.h's and timeline.h's, as
+# ysp-vis builds them: a call to a function the tables do not forward, or
+# a private name of audio.h's implementation (video.h 0.5.0), fails here.
+# With SDL3, as the other video checks; CI builds it in the Screen job.
+if(YSP_BUILD_TESTS AND TARGET SDL3::SDL3 AND CMAKE_SYSTEM_NAME IN_LIST YSP_PLATFORMS_video)
+    foreach(lang c cxx)
+        if(lang STREQUAL "c")
+            set(_src tests/compile/share_shims.c)
+        else()
+            set(_src tests/compile/share_shims.cpp)
+        endif()
+        ysp_add_program(compile_share_shims_${lang} ${_src} rig)
+        target_include_directories(compile_share_shims_${lang} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/bindings/share)
+        add_test(NAME compile_share_shims_${lang} COMMAND compile_share_shims_${lang})
     endforeach()
 endif()
 if(TARGET test_video AND YSP_QOI_DIR)

@@ -37,7 +37,7 @@
 #include "../python/ysp_device/ysp_device_bind.h"
 
 /* The binding's own version; the second output of 'version' is the header's. */
-#define DM_BINDING_VERSION "1.0.0"
+#define DM_BINDING_VERSION "1.0.1"
 #define DM_QUEUE_DEFAULT 1024u
 #define DM_QUEUE_MAX (1u << 20)
 
@@ -734,7 +734,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         int rc;
         pm_nargs(nrhs, 3, "ok = ysp_device('wait_running', h, timeout)");
         timeout = dm_seconds(prhs[2], "timeout", DM_INF);
-        rc = ydev_wait_running(&d->dev, timeout == INT64_MAX ? INT64_MAX / 2 : timeout);
+        rc = ydev_wait_running(&d->dev, timeout);   /* Inf: INT64_MAX, which waits (ysp/device.h 0.5.1) */
         if (rc == YDEV_RUNNING) { plhs[0] = mxCreateLogicalScalar(true); return; }
         if (rc == YDEV_ERR_TIMEOUT) { plhs[0] = mxCreateLogicalScalar(false); return; }
         pm_err("failed", "%s", ydev_error(&d->dev));

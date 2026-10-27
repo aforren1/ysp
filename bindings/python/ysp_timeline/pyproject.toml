@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ysp-timeline"
-version = "0.8.1"  # ysp/timeline.h v0.8.1; tests/test_timeline.py checks it against __version__
+version = "0.8.1.1"  # ysp/timeline.h v0.8.1, binding change 1 (the shared table); tests/test_timeline.py checks it against __version__
 description = "Events, tracks and tweens on a frame clock (ysp/timeline.h): what each frame shows, with landing records"
 readme = "README.md"
 requires-python = ">=3.8"

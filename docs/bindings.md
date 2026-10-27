@@ -18,7 +18,8 @@ This page is reference: the language bindings of the headers.
   again, bit for bit, from its seed and log); it needs NumPy at run time.
   The bindings of 2026-10-25 are `ysp-rt`, `ysp-box`, `ysp-device`,
   `ysp-rigfile`, `ysp-response`, `ysp-timeline`, `ysp-dataset` and
-  `ysp-pack` (sections below). `tests/compare/` runs the adaptive bindings
+  `ysp-pack` (sections below), and `ysp-audio` is of 2026-10-26.
+  `tests/compare/` runs the adaptive bindings
   beside PsychoPy, questplus and AEPsych on one response stream. CI builds
   the wheels with cibuildwheel on Linux, Windows and macOS, except
   `ysp-parallel` on macOS, which its header does not support.
@@ -26,7 +27,7 @@ This page is reference: the language bindings of the headers.
   per library (`ysp_parallel`, `ysp_serial`, `ysp_stair`, `ysp_quest`,
   `ysp_aep`, `ysp_trials`, `ysp_color`, `ysp_rdk`, `ysp_rt`, `ysp_box`,
   `ysp_device`, `ysp_rigfile`, `ysp_response`, `ysp_timeline`,
-  `ysp_dataset`, `ysp_pack`) with ppdev-mex-style command dispatch, built
+  `ysp_dataset`, `ysp_pack`, `ysp_audio`) with ppdev-mex-style command dispatch, built
   and tested in MATLAB R2023a and Octave 10. `tests/compare/` runs
   `ysp_quest` beside mQUESTPlus and Palamedes' PAL_AMPM, and `ysp_stair`
   beside PAL_AMUD, on one response stream; the MEX README has the results.
@@ -41,12 +42,14 @@ This page is reference: the language bindings of the headers.
 
 Not bound, by decision: `ysp/table.h` and `ysp/json.h` (Python and MATLAB
 read CSV and JSON; `ysp.trials` already takes a table), `ysp/net.h`
-(pylsl and liblsl-Matlab exist), `ysp/outline.h` (an offline asset tool),
-and `ysp/screen.h`, `ysp/gfx.h`, `ysp/audio.h` and `ysp/video.h` (the
-binding form of the rendering stack is open; docs/rig_spec.md). The
-rendering stack is planned as one module, ysp-av; its host probe (frame
-loops in Python, MATLAB and Octave, DLL loading, idle windows) is
-[av_probe.md](av_probe.md).
+(pylsl and liblsl-Matlab exist) and `ysp/outline.h` (an offline asset
+tool). Not bound yet: `ysp/screen.h`, `ysp/gfx.h` and `ysp/video.h`, which
+are planned as one module, `ysp-vis` (Python `ysp.screen`, `ysp.gfx` and
+`ysp.video` from one extension; MEX `ysp_screen`, `ysp_gfx`, `ysp_video`).
+It takes audio and the timeline from `ysp.audio` and `ysp.timeline`
+through their tables (Sharing one implementation across modules, below).
+Its host probe (frame loops in Python, MATLAB and Octave, DLL loading,
+idle windows) is [av_probe.md](av_probe.md).
 
 ### The input event
 
@@ -109,6 +112,21 @@ frame loop reads the channel values and the fields as float32 views
 record of every event that fired. Both compile the header with
 `YTL_MAX_CHANNELS` 1024 ([timeline.md](timeline.md#bindings)).
 
+### Audio: ysp.audio, ysp_audio
+
+Sound at a time on the ysp_rt clock (`ysp/audio.h`, miniaudio 0.11.25
+compiled in): open a device by a part of its name (`devices()` lists the
+names) or miniaudio's null device for tests; buffers from tones, noise,
+clicks, host data (NumPy, `array.array`, a MATLAB matrix) or a WAV file;
+play at a time; cancel, stop with a ramp, change the gain; and the record
+of every sound: its onset (the device-clock fit's time, never an observed
+time), the residual, the stream frame and the tier. `wait()` blocks
+without the GIL. Streams fed from the host (`Stream.write()`) and WAV files
+streamed (`Wav.feed()`) are voices like buffers; an input on the same
+clock (`Capture`) gives its frames with their times. `ysp.audio` and
+`ysp_audio` own the one audio implementation that `ysp-vis` shares
+([audio.md](audio.md#bindings)).
+
 ### Data sets: ysp.dataset, ysp_dataset
 
 A PsychoPy or Psychtoolbox session written as a ysp data set
@@ -128,6 +146,168 @@ entry. A failure raises the header's message (`ysp.pack.CorruptError`,
 `ysp_pack:corrupt`, ...). The Python calls that hash or copy entry data
 release the GIL. [docs/pack.md](pack.md#17-bindings-2026-10-25) has what is
 not bound and why.
+
+## Sharing one implementation across modules
+
+This section is reference and explanation. `ysp/audio.h` and
+`ysp/timeline.h` keep state that more than one module must reach: a movie
+in `ysp-vis` plays its soundtrack on the `ysp.audio.Audio` of the
+experiment, and its clock follows a `ysp.timeline.Timeline` built in
+Python. A second copy of either implementation in `ysp-vis` would be a
+second device and a second timeline. So each header is compiled into one
+module, its owner (`ysp.audio` and `ysp_audio`; `ysp.timeline` and
+`ysp_timeline`), and the owner exports a table that other modules call
+through. This is NumPy's C-API pattern. nanobind was considered and not
+used: a C++ dependency, a stable ABI only from Python 3.12, the same
+version coupling, and no help for MEX.
+
+The files are in [bindings/share/](../bindings/share/):
+`ysp_share.h` (the table head, the checks, the MEX loader) and one file per
+owner, `ysp_audio_api.h` and `ysp_timeline_api.h`. Each lists its
+functions once, as an X-macro of the header's own signatures; that one list
+makes the table's struct, fills it in the owner, and makes the consumer's
+forwarders (the shims).
+
+### The table
+
+| Field | What it is |
+|---|---|
+| `head.abi` | `YSP_SHARE_ABI` (1). An entry is only appended; a change to an entry raises it |
+| `head.size` | `sizeof` the owner's table; a consumer refuses a smaller one |
+| `head.host` | `YSP_SHARE_HOST_PYTHON` or `YSP_SHARE_HOST_MEX`: what `acquire()` takes |
+| `head.library`, `head.version` | `"audio"` and the header's version string as compiled (`YAU_VERSION_STRING`); a consumer refuses another major.minor and accepts another patch ([Versions of a table](#versions-of-a-table)) |
+| `head.acquire(ref, err, cap)` | a host object to its C pointer, pinned (Lifetime); NULL with a message in `err` for an object of another type, of another module, or closed |
+| `head.release(ptr)` | drops one pin |
+| `max_channels`, `max_voices` / `max_bases` | the configuration values that change a layout: `YAU_MAX_CHANNELS`, `YAU_MAX_VOICES`; `YTL_MAX_CHANNELS` (1024 in both timeline owners), `YTL_MAX_BASES` |
+| `sizeof_<struct>` | of every struct a consumer shares with the owner: `yau_audio`, `yau_buf`, `yau_play_desc`, `yau_onset`, `yau_caps`, `yau_stream`, `yau_stream_desc`, `yau_stream_info`, `yau_wav`, `yau_wav_desc`, `yau_reader`; `ytl_timeline`, `ytl_frame`, `ytl_event` |
+| the functions | audio: 36, the output, stream and WAV functions (ysp/video.h calls 16 of them). Timeline: 24, the frame-time functions (ysp/video.h calls 9, a frame loop `ytl_evaluate` and `ytl_values`) |
+
+Not in the tables: open and close (the owner's), the arena and the event
+storage (the owner's memory: a consumer gives a stream or WAV ring its own
+memory), building a timeline, capture, the detectors and the WAV writer.
+
+`ysp_audio_api_check()` and `ysp_timeline_api_check()` run the checks: the
+ABI, the host, the size, the major and minor numbers of the version, each
+configuration value and each struct size. A configuration macro such as
+`YTL_MAX_CHANNELS` changes a struct without changing the version, so both
+are checked. A refusal names what differs (`ysp_timeline:
+sizeof(ytl_timeline) is ... in the owner and ... here: the two were built
+with other settings`; `ysp_audio: the owner compiled ysp/audio.h 0.8.2,
+this module was built against 0.7.2: the major.minor versions must match
+(a patch may differ); install matching versions`).
+
+### Versions of a table
+
+A consumer accepts an owner whose header has the same major and minor
+version and another patch number: `ysp-vis` built against ysp/audio.h
+0.7.2 loads `ysp.audio` 0.7.3. This relies on one rule for every header
+that a table carries (CLAUDE.md, "Changing a header"):
+
+- A change to the layout of a struct, or to a function that a table
+  carries (its signature or what it does with its arguments), bumps at
+  least the minor version.
+- A patch changes neither: a fix inside a function, a comment, a test.
+
+The struct sizes and configuration values are checked too, so a layout
+change that broke the rule and changed a size is still refused. A layout
+change that keeps every size (two fields swapped) is not found: the rule
+alone covers it. Before 2026-10-27 the check asked for the exact version
+string, so every patch of an owner needed a new build of each consumer.
+
+### How a host finds the table
+
+- **Python**: the owner module has an attribute `_C_API`, a capsule named
+  `ysp.audio._C_API` (`ysp.timeline._C_API`).
+  `ysp_audio_api_import_py()` (with `YSP_SHARE_PYTHON`) calls
+  `PyCapsule_Import()`, runs the checks, and raises `ImportError` with the
+  reason.
+- **MATLAB and Octave**: the owner MEX file exports
+  `ysp_audio_api_table()` (`ysp_timeline_api_table()`) besides
+  `mexFunction`. `ysp_audio_api_import_mex()` (with `YSP_SHARE_MEX`) finds
+  its own file's path (`GetModuleHandleEx`, `dladdr`), loads
+  `ysp_audio.<its own extension>` from that directory (`LoadLibraryExW`,
+  `dlopen`), and calls the export. For a path already loaded, Windows and
+  `dlopen()` return that module, so the consumer reaches the handle table
+  of the owner's own commands: verified in MATLAB R2023a and Octave 10.1 on
+  Windows 11 and in Octave 6.4 on Ubuntu 22.04 (WSL2), where a handle
+  opened by `ysp_audio('open')` is pinned and played through the consumer.
+  An owner on the MATLAB path in another directory than the consumer is
+  another module; its handles are refused. MinGW exports every symbol only
+  when none is marked for export, so the owners mark `mexFunction` too
+  (`YSP_SHARE_MEX_ENTRY`); MATLAB on Linux and macOS exports `mexFunction`
+  alone unless `build.m` gives the linker the list (not run here: CI's
+  MATLAB job does).
+
+### Lifetime
+
+`acquire()` pins the object; the pointer stays valid until the consumer
+calls `release()` with it.
+
+- Python: `acquire()` takes a strong reference to the owner's object, so
+  the object outlives its last Python name. While pinned, `close()` raises
+  `BusyError`. `release()` drops the reference; the last one frees the
+  object.
+- MEX: a handle is a counter in the owner's table, so the consumer keeps
+  the pointer, not the handle. While pinned, `'close'` raises
+  `ysp_<name>:busy`. `clear ysp_audio` (or `clear mex`, or the exit) runs
+  the owner's cleanup: a pinned device or timeline stays open, out of the
+  handle table, and the last `release()` closes and frees it. The consumer
+  keeps its `LoadLibrary`/`dlopen` reference until it has released every
+  pin (`ysp_share_mex_unload()` in its `mexAtExit` hook), so the owner's
+  code stays mapped. The handles of each owner start at a number of its
+  own (`0x4155 * 2^32 + 1` for audio, `0x544C * 2^32 + 1` for the
+  timeline), so `acquire()` does not take a handle of another module.
+
+### Threads
+
+The table's functions keep the header's thread rules: a consumer calls
+them on the thread that uses the handle, and the stream and WAV producer
+calls from one other thread. `acquire()` and `release()` run with the GIL
+held (Python) or on the MATLAB thread. In Python, the timeline table's
+`ytl_evaluate` is the binding's evaluate: tween callbacks run, it takes the
+GIL itself, `Timeline.bind()` targets are written, and a callback that
+raised returns `YSP_SHARE_ERR_HOST` (-1000) with the exception set for a
+caller that holds the GIL. ysp.rt's state (the virtual clock) is per
+module: each module compiles `ysp/rt.h`, and the real clock reads the same
+counter in all of them.
+
+### The consumer's build
+
+One translation unit defines `YSP_AUDIO_API_SHIMS` and
+`YSP_TIMELINE_API_SHIMS` after the headers' declarations, without their
+implementations (and defines `YSP_TIMELINE_IMPLEMENTATION_GUARD`, so that
+`ysp/video.h`'s implementation does not pull timeline.h's in). Each shim is
+`r name(params) { return api->name(args); }`; a signature that drifts from
+the header's does not compile, and a function the tables do not forward
+does not link. [tests/compile/share_shims.c](../tests/compile/share_shims.c)
+links `ysp/video.h`'s and `ysp/screen.h`'s implementations against the
+shims, as C11 and C++17 with warnings as errors; CMake builds it
+(`compile_share_shims_c`, `_cxx`) wherever ysp/video.h builds. It found one
+header limit: `ysp/video.h` 0.5.0 called `YAU__NOW()` and
+`YAU__SLEEP_UNTIL()` in `yvid__snd_close`, private macros of audio.h's
+implementation, and the check defined them itself. ysp/video.h 0.5.1 uses
+its own clock and sleep there, and the check defines nothing. The test
+consumers are
+[bindings/python/share_test/](../bindings/python/share_test/) (23 tests) and
+[bindings/mex/tests/share_consumer.c](../bindings/mex/tests/share_consumer.c)
+([test_mex_share.m](../bindings/mex/test_mex_share.m), 26 checks).
+
+### Cost
+
+The i7-1360P laptop of docs/audio.md, Windows 11, on AC, the measurement
+lock held, 21 runs of 3 x 2,000,000 calls of `ytl_value(tl, 0 or 1)` from
+the test consumer, medians of the best of 3:
+
+| Host | Through the shim | Through the table pointer | The read it replaces |
+|---|---|---|---|
+| Python 3.14 (MSVC 19.44 /O2) | 1.24 ns | 1.03 ns | 0.51 ns |
+| MATLAB R2023a (MSVC 19.44) | 1.03 ns | 1.25 ns | 0.52 ns |
+| Octave 10.1 (MinGW-w64 gcc) | 1.27 ns | 1.06 ns | 0.53 ns |
+
+So a forwarded call costs about 0.5 to 0.8 ns over the inline read: one
+indirect call. The shim and the table pointer do not differ beyond the
+run-to-run spread; the shim is in the consumer's own unit, where the
+compiler may inline it into its caller.
 
 ## Units
 
@@ -159,6 +339,7 @@ call can poll. [Conventions](conventions.md) lists the exceptions.
 | `ysp.rigfile` | a role's `pulse`, `ftdi_latency`, `latency` (`p5`, `median`, `p95`, `max`) and `bounds` (`lo`, `hi`; `lo_ns` and `hi_ns` exact), `display` (`onset_offset`, `onset_offset_ns` exact), `source()` (`lo`, `hi`), `desc()['pulse']`; lengths in mm |
 | `ysp_device`, `ysp_rigfile` (MEX) | the same, with `Inf` for `math.inf`; an event's `t_ns` is `int64` |
 | `ysp.response` and its MEX | `arm(t)`, `set_onset(t, residual=, uncertainty=)`, `update(now)`, `key(t, ...)`, `score(events, onset, arm=, end=)`, the desc's `min_rt`, `duration` (`math.inf`/`Inf`: no deadline) and `max_hold`, a source's `lo` and `hi`, the event's `t` and `unc` (from `unc_us`), and every time of the result and the entries; the exact ns beside each absolute time and the RT (`t_ns`, `rt_ns`, `t_onset_ns`, `t_response_ns`); exact to the ns below 2^23 s |
+| `ysp.audio` and `ysp_audio` (MEX) | `now()` (`now_ns()` exact), every time argument (`play_at(t)`, `play(at=)`, `stop(at=, ramp=)`, `gain(at=, ramp=)`, `wait(timeout)`, the synthesis `duration`, `ramp`, `period`, `onset_offset`, a ring's and a preroll's length, `frame_at(t)`, `sample_at(t)`, a capture's `frame_at(t)` and `offset`) and result (`lead` with `lead_ns`, `caps()` and `info()` times, `time_of()` as `(s, ns)`); a record gives `target`, `onset`, `residual` and `rendered_at` in seconds and their `_ns` exactly. Frame and sample counts stay integers |
 | `ysp.timeline` and `ysp_timeline` (MEX) | every time argument (`evaluate(onset, period)`, `anchor`, `skip`, `rate`, `wait`, `at`, the tween options `duration`, `delay`, `start`, `stagger`, key and event times, track `t0` and `period`, `peek`'s window) and result (`base_time`, `rt_time`, `window`, `next_due`, `horizon`, a sequence's cursor); a landing record gives `time`, `onset` and `residual` in seconds and `time_ns`, `onset_ns` and `residual_ns` exactly |
 
 ## Versions
@@ -174,7 +355,9 @@ binding-only change to `ysp/serial.h` v0.5.0: the async reader. `ysp-serial`
 and has the API of 0.5.0.2; 0.6.0 is `ysp/serial.h` v0.6.0 (`pulse_async`
 without I/O, the width from the onset write's start, `min_hold`), and
 0.6.1 is `ysp/serial.h` v0.6.1 (`Port.driver`, `Port.rts_via_dtr`, the
-`driver` key of `list_ports`). PEP 440 accepts the fourth
+`driver` key of `list_ports`); 0.6.2 is `ysp/serial.h` v0.6.2 (a pulse
+width near `INT64_MAX` saturates). `ysp-parallel` is 0.4.1, `ysp/parallel.h`
+v0.4.1, without the fourth number. PEP 440 accepts the fourth
 number as a release segment, and 0.5.0.1 sorts after 0.5.0 and before
 0.5.1. A post-release (0.5.0.post1) was not used: it means "no code
 changed", and this change breaks the API. Each package's tests check that
@@ -191,6 +374,13 @@ build. The MEX functions of 2026-10-25 (`ysp_rt`, `ysp_box`, `ysp_rdk`,
 `ysp_dataset`, `ysp_pack`) do the same: `'version'` returns 1.0.0, and
 its second output is the version of the header. `ysp_pack` is 1.1.0 since
 2026-10-26: `'verify'` of one entry hashes it under `'none'` too
-(`ypak_verify_entry()`, ysp/pack.h 0.4.0). The adaptive MEX
+(`ypak_verify_entry()`, ysp/pack.h 0.4.0). `ysp_audio` is 1.0.1 since
+2026-10-27: `Inf` as the timeout of `'wait'` is `INT64_MAX` ns (ysp/audio.h
+0.7.2; 1.0.0 passed 2^62 ns). `ysp_device` is 1.0.1 since 2026-10-27:
+`Inf` as the timeout of `'wait_running'` is `INT64_MAX` ns (ysp/device.h
+0.5.1; 1.0.0 passed `INT64_MAX / 2`). `ysp_timeline` is 1.1.0 since 2026-10-26: the shared table,
+`'pins'`, `ysp_timeline:busy`, and handles from `0x544C * 2^32 + 1`. The
+Python `ysp-timeline` of the same change is 0.8.1.1 (ysp/timeline.h
+v0.8.1), and `ysp-audio` is 0.7.2, the header's. The adaptive MEX
 functions and `ysp_color` have no number of their own: `'version'`
 returns the header's.

@@ -75,6 +75,9 @@
 #define COUNT(a) (int)(sizeof(a) / sizeof((a)[0]))
 
 static yscr_screen scr;
+/* SDL calls on the window go through yscr_window_call(): with the window
+ * thread (ysp/screen.h, WINDOW THREAD) another thread owns the window. */
+static void title_on_window(void* title) { SDL_SetWindowTitle(yscr_window(&scr), (const char*)title); }
 static ygfx_gfx gfx;
 static ycol_cal cal;
 static yol_ctx ol;
@@ -755,7 +758,7 @@ static void show_page(int p, int prev) {
     char title[160];
     /* SDL and printf may allocate: only here, on a page change */
     snprintf(title, sizeof title, "gfx_layout %d/%d: %s", p + 1, N_PAGES, page_names[p]);
-    if (yscr_window(&scr)) SDL_SetWindowTitle(yscr_window(&scr), title);
+    if (yscr_window(&scr)) yscr_window_call(&scr, title_on_window, title);
     printf("page %d/%d: %s\n", p + 1, N_PAGES, page_names[p]);
     fflush(stdout);
     if (prev == 3) yscr_text_input(&scr, false, 0, 0, 0, 0);

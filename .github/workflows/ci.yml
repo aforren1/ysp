@@ -453,6 +453,9 @@ jobs:
           emcc $W $T -DYSCR_NO_SDL -DYVID_NO_PL_MPEG -o compile_video.js tests/compile/video.c && node compile_video.js
           emcc $W -DYSCR_NO_SDL -DYVID_NO_PL_MPEG -o compile_video_inline.js tests/compile/video.c && node compile_video_inline.js
           emcc $W $T -o test_video.js tests/adapt/video_test.c && node test_video.js
+          # ysp/video.h's soundtrack beside audio.h's declarations only (the
+          # ysp-vis build): compiles the close's main-thread sleep that yields.
+          emcc -O2 -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wfloat-conversion -Werror -Iinclude -Ibindings/share -DYSCR_NO_SDL -c -o share_shims.o tests/compile/share_shims.c
           curl -sL -o pl_mpeg.h https://raw.githubusercontent.com/phoboslab/pl_mpeg/c871f2be022ece7ef4f64230b4fb8e1fb9eb6023/pl_mpeg.h
           echo "3a8cb30c83c2a1147719c30fe0c8b93da2987aa43140077c575b39aaa75fc2c9  pl_mpeg.h" | sha256sum -c -
           emcc -O2 -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wfloat-conversion -Werror -Iinclude -I. -DYSCR_NO_SDL -c -o compile_video_plm.o tests/compile/video.c
@@ -520,7 +523,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         package: [ysp_parallel, ysp_serial, ysp_stair, ysp_quest, ysp_aep, ysp_trials, ysp_color, ysp_rdk,
-                  ysp_box, ysp_pack, ysp_rt, ysp_device, ysp_rigfile, ysp_response, ysp_timeline, ysp_dataset]
+                  ysp_box, ysp_pack, ysp_rt, ysp_device, ysp_rigfile, ysp_response, ysp_timeline, ysp_dataset,
+                  ysp_audio]
         exclude:
           - os: macos-latest      # ysp/parallel.h #errors on macOS
             package: ysp_parallel
@@ -534,9 +538,17 @@ jobs:
       # box, serial, parallel, rt), so every header is staged: one rule that
       # cannot fall behind an #include, and one copy of each file (cp refuses
       # a source named twice, which ysp_rt hit with rt.h).
+      # The shared tables (bindings/share/) go to include/share/; ysp-audio
+      # also needs miniaudio.h 0.11.25 in include/, whose SHA-256 value
+      # setup.py checks.
       - name: Stage headers into the package (isolated build needs them locally)
         shell: bash
-        run: d=bindings/python/${{ matrix.package }}/include/ysp && mkdir -p $d && cp include/ysp/*.h $d/
+        run: |
+          d=bindings/python/${{ matrix.package }}/include
+          mkdir -p $d/ysp $d/share && cp include/ysp/*.h $d/ysp/ && cp bindings/share/*.h $d/share/
+          if [ "${{ matrix.package }}" = ysp_audio ]; then
+            curl -sSfL -o $d/miniaudio.h https://raw.githubusercontent.com/mackron/miniaudio/0.11.25/miniaudio.h
+          fi
 
       - name: Build & test wheels
         uses: pypa/cibuildwheel@v4.1.0
@@ -548,6 +560,31 @@ jobs:
         with:
           name: wheels-${{ matrix.package }}-${{ matrix.os }}
           path: wheelhouse/*.whl
+
+  # --------------------------------------------------------------------- #
+  # The shared C tables (docs/bindings.md, "Sharing one implementation   #
+  # across modules"): ysp-audio and ysp-timeline, and the test consumer   #
+  # bindings/python/share_test built against them, in one environment.    #
+  # --------------------------------------------------------------------- #
+  python-share:
+    name: Python shared tables (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Build and test (null device)
+        shell: bash
+        run: |
+          python -m pip install pytest
+          python -m pip install ./bindings/python/ysp_audio ./bindings/python/ysp_timeline
+          python -m pip install ./bindings/python/share_test
+          python -m pytest -q bindings/python/share_test/tests bindings/python/ysp_audio/tests
 
   # --------------------------------------------------------------------- #
   # Octave: build every MEX with mkoctfile and smoke-test.                #
@@ -571,6 +608,14 @@ jobs:
           octave-cli --version | head -1
 
       - uses: actions/checkout@v7
+
+      # ysp_audio.c needs miniaudio.h 0.11.25 (the pin of YSP_FETCH_MINIAUDIO).
+      - name: Fetch miniaudio.h
+        run: |
+          apt-get install -y --no-install-recommends curl
+          mkdir -p bindings/mex/miniaudio
+          curl -sSfL -o bindings/mex/miniaudio/miniaudio.h https://raw.githubusercontent.com/mackron/miniaudio/0.11.25/miniaudio.h
+          echo "ac7af4de748b7e26b777f37e01cee313a308a7296a3eb080e2906b320cc55c89  bindings/mex/miniaudio/miniaudio.h" | sha256sum -c -
 
       - name: Build MEX
         working-directory: bindings/mex
@@ -666,6 +711,15 @@ jobs:
       - name: Timeline binding test (test_mex_timeline.m)
         working-directory: bindings/mex
         run: octave-cli -q --eval "test_mex_timeline"
+      # miniaudio's null device: no sound hardware.
+      - name: Audio binding test (test_mex_audio.m)
+        working-directory: bindings/mex
+        run: octave-cli -q --eval "test_mex_audio"
+      # Builds tests/share_consumer.c and drives ysp_audio and ysp_timeline
+      # handles through their exported tables.
+      - name: Shared tables test (test_mex_share.m)
+        working-directory: bindings/mex
+        run: octave-cli -q --eval "test_mex_share"
       # Writes a data set in a temporary folder; its crash check starts a
       # second octave-cli and kills it.
       - name: Data set binding test (test_mex_dataset.m)
@@ -695,6 +749,12 @@ jobs:
 
       - name: Set up MATLAB
         uses: matlab-actions/setup-matlab@v3
+
+      - name: Fetch miniaudio.h
+        run: |
+          mkdir -p bindings/mex/miniaudio
+          curl -sSfL -o bindings/mex/miniaudio/miniaudio.h https://raw.githubusercontent.com/mackron/miniaudio/0.11.25/miniaudio.h
+          echo "ac7af4de748b7e26b777f37e01cee313a308a7296a3eb080e2906b320cc55c89  bindings/mex/miniaudio/miniaudio.h" | sha256sum -c -
 
       - name: Build MEX + smoke test
         uses: matlab-actions/run-command@v3
@@ -792,6 +852,14 @@ jobs:
         uses: matlab-actions/run-command@v3
         with:
           command: cd('bindings/mex'); test_mex_timeline
+      - name: Audio binding test (test_mex_audio.m)
+        uses: matlab-actions/run-command@v3
+        with:
+          command: cd('bindings/mex'); test_mex_audio
+      - name: Shared tables test (test_mex_share.m)
+        uses: matlab-actions/run-command@v3
+        with:
+          command: cd('bindings/mex'); test_mex_share
       - name: Data set binding test (test_mex_dataset.m)
         uses: matlab-actions/run-command@v3
         with:
@@ -947,7 +1015,7 @@ jobs:
       # out of this list is compiled nowhere on CI. ctest below runs every
       # test that matches its pattern, built or not.
       - name: Build
-        run: cmake --build build --config Release --target compile_screen_c compile_screen_cxx compile_screen_com test_screen screen_hello screen_flipstats screen_input screen_abort screen_gamma screen_sync_check screen_loopback compile_gfx_c compile_gfx_cxx test_gfx gfx_hello gfx_trial gfx_load gfx_calib gfx_bench gfx_gallery gfx_text gfx_gratings gfx_luminance_bits gfx_clut_sync gfx_filtered_noise gfx_gaze_contingent gfx_capture gfx_rdk gfx_rdk_bench trial_rdk compile_video_c compile_video_cxx compile_video_com compile_order_audio_screen_c compile_order_audio_screen_cxx compile_order_screen_audio_c compile_order_screen_audio_cxx test_video video_play video_bench video_check test_response_sdl test_input_sdl trial_keyboard trial_same_different trial_srt trial_adjustment trial_mouse_tracking trial_audio_keyboard trial_stop_signal trial_sternberg trial_2afc_adaptive trial_two_keyboards trial_eeg_triggers response_lag trial_scanner_sync gfx_gamma_null trial_movie color_patch audio_av_sync web_tutorial web_rdk_staircase web_selftest web_av_sync
+        run: cmake --build build --config Release --target compile_screen_c compile_screen_cxx compile_screen_com test_screen test_screen_window screen_hello screen_flipstats screen_input screen_abort screen_gamma screen_sync_check screen_loopback compile_gfx_c compile_gfx_cxx test_gfx gfx_hello gfx_trial gfx_load gfx_calib gfx_bench gfx_gallery gfx_text gfx_gratings gfx_luminance_bits gfx_clut_sync gfx_filtered_noise gfx_gaze_contingent gfx_capture gfx_rdk gfx_rdk_bench trial_rdk compile_video_c compile_video_cxx compile_video_com compile_order_audio_screen_c compile_order_audio_screen_cxx compile_order_screen_audio_c compile_order_screen_audio_cxx compile_share_shims_c compile_share_shims_cxx test_video video_play video_bench video_check test_response_sdl test_input_sdl trial_keyboard trial_same_different trial_srt trial_adjustment trial_mouse_tracking trial_audio_keyboard trial_stop_signal trial_sternberg trial_2afc_adaptive trial_two_keyboards trial_eeg_triggers response_lag trial_scanner_sync gfx_gamma_null trial_movie color_patch audio_av_sync web_tutorial web_rdk_staircase web_selftest web_av_sync
 
       # ysp/gfx.h's pixel checks must run where software GL exists; macOS has
       # no EGL, so its test runs the CPU checks only.
@@ -955,7 +1023,7 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" != macOS ]; then export YGFX_TEST_REQUIRE_GL=1; fi
-          ctest --test-dir build -C Release -R "screen|gfx|video|response_sdl|input_sdl" --output-on-failure
+          ctest --test-dir build -C Release -R "screen|gfx|video|share_shims|response_sdl|input_sdl" --output-on-failure
 
       - name: Run examples (simulated display)
         shell: bash

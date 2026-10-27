@@ -25,6 +25,7 @@ never reused, so a handle kept past its `close` always raises
 | `ysp_response.c` | [ysp/response.h](../../include/ysp/response.h) | [example_response.m](example_response.m) |
 | `ysp_timeline.c` | [ysp/timeline.h](../../include/ysp/timeline.h) | [example_timeline.m](example_timeline.m) |
 | `ysp_dataset.c` | [ysp/dataset.h](../../include/ysp/dataset.h) | [example_dataset.m](example_dataset.m) |
+| `ysp_audio.c` | [ysp/audio.h](../../include/ysp/audio.h) | [example_audio.m](example_audio.m), [test_mex_audio.m](test_mex_audio.m) |
 
 The two transport headers build on the shared [ysp/rt.h](../../include/ysp/rt.h), so
 both MEX functions compile it too. `ysp_quest.c` and `ysp_aep.c` define
@@ -81,6 +82,16 @@ MSVC only, so a MinGW toolchain (MinGW Octave, MATLAB's MinGW-w64 add-on)
 needs the libraries on the command line. `mex` accepts that spelling on both
 toolchains. The adaptive-method sources need no library but the thread
 library, which `ysp_quest.c` and `ysp_aep.c` use on Linux/macOS.
+
+`ysp_audio.c` compiles miniaudio 0.11.25 (one public-domain file, the pin
+of CMakeLists.txt's `YSP_FETCH_MINIAUDIO`). Put `miniaudio.h` in
+`bindings/mex/miniaudio/` (gitignored) or name its directory in the
+environment variable `YSP_MINIAUDIO_DIR`; without it, `build.m` skips
+`ysp_audio.c` with a message. It links `-ldl -lm` on Linux and nothing on
+Windows. `ysp_audio.c` and `ysp_timeline.c` also include the shared tables
+of `bindings/share/` (`build.m` adds `-I` for it) and export one function
+besides `mexFunction`; with MATLAB on Linux and macOS, `build.m` gives the
+linker a list of both.
 
 ## ysp_parallel
 
@@ -507,7 +518,7 @@ an array of its rows, `[]` null. JSON has no NaN or Inf.
 
 | Command | Returns | Notes |
 |---|---|---|
-| `'version'` | binding version, and the header's as a second output | `'1.0.0'`, `'0.9.0'` |
+| `'version'` | binding version, and the header's as a second output | `'1.0.0'`, `'0.9.1'` |
 | `'now'`, `'now_ns'` | seconds; `int64` ns | the ysp clock |
 | `'real_now'` | seconds | the real clock, also on the virtual clock |
 | `'sleep_until', t [, spin]` | lateness, seconds | `spin` defaults to `default_spin` |
@@ -570,7 +581,7 @@ Without a profile, give the desc yourself:
 | Command | Returns | Notes |
 |---|---|---|
 | `'open', desc` | handle | `desc`: `role`, `family` (a name or a number), `key` (required); `device`, `kind`, `baud`, `pulse`, `latched`, `min_hold`, `probe`, `retry`, `silent`, `max_width`, `no_identify`, `no_elevate`, `queue`, `rule`, `sim`. Times in seconds; `probe` and `silent` take `Inf` for none. An unknown field raises `ysp_device:arg`. `device` 0 takes the role's index from the module's role table |
-| `'wait_running', h, timeout` | logical | Call it before the first output. `ysp_device:failed` when the device ends FAILED |
+| `'wait_running', h, timeout` | logical | Call it before the first output. `Inf` waits without end (1.0.1). `ysp_device:failed` when the device ends FAILED |
 | `'poll', h [, max]`, `'wait', h, timeout [, max]` | struct array | Events, oldest first: `t` (s), `t_ns` (int64), `device`, `control`, `code`, `mods`, `kind`, `type`, `flags`, `stamp`, `unc` (s), `x`, `y`, `value`, `aux`, `ticks`. A 1x0 struct with these fields when there is none |
 | `'pending', h`, `'clear', h` | double | The events queued; drop them |
 | `'set', h, code`, `'pulse', h, code, width`, `'mark', h, code [, text]` | none | `ysp_device:state` before RUNNING, `:arg` for a code or width the family cannot give, `:family` without outputs, `:io` |
@@ -1174,8 +1185,13 @@ of its own; `close` of the timeline also closes its sequences.
 | `'tween_to', q, f, to, dur [, ease]`, `'tween_from'`, `'tween_from_to', q, f, from, to, dur [, ease]`, `'tween_set', q, f, v` | tween id | GSAP's `to()`, `from()`, `fromTo()`, `set()` |
 | `'animate', q, f, name, value, ...` | tween id | `to`, `from`, `to_current`, `duration`, `delay`, `stagger`, `ease`, `curve`, `cycles`, `yoyo`, `keep_velocity`, `immediate`, `overwrite`, `on_start`, `on_complete` (logical: the event goes in the report), `user` |
 | `'kill', h, f`, `'kill_tween', h, id`, `'tween_count', h` | count | |
-| `'error', h`, `'version'` | string | `version`: the binding's (1.0.0), and the header's as a second output |
-| `'close', h` | none | |
+| `'error', h`, `'version'` | string | `version`: the binding's (1.1.0), and the header's as a second output |
+| `'pins', h` | count | objects of other MEX files that hold the timeline (SHARING) |
+| `'close', h` | none | `ysp_timeline:busy` while another MEX file holds it |
+
+Since 1.1.0 the MEX file exports `ysp_timeline_api_table()` (see SHARING
+in the `ysp_audio` section), and a timeline handle is a number from
+`0x544C * 2^32 + 1` up.
 
 An ease is a name (`'linear'`, `'step'`, `'cosine'`, `'quad_in'`,
 `'quad_out'`, `'quad_in_out'`, `'cubic_in'`, `'cubic_out'`,
@@ -1463,6 +1479,81 @@ The result's `choice` and `entry`, and an entry's `choice`, are 1-based,
 runs the key checks in MATLAB or Octave and prints `PASS` with the number
 of checks. The binding's scope and what is left out are in
 [docs/response.md](../../docs/response.md#bindings).
+
+## ysp_audio
+
+Sound at a time on the ysp_rt clock for a Psychtoolbox experiment, with the
+record of where each sound landed: its onset (the device-clock fit's time,
+never an observed time), the residual from the time asked for, the stream
+frame, and a tier. [example_audio.m](example_audio.m) plays five tones;
+[test_mex_audio.m](test_mex_audio.m) runs on miniaudio's null device (no
+sound hardware) and prints `PASS` with the number of checks.
+[docs/audio.md](../../docs/audio.md#bindings) has what is not bound and
+the call costs.
+
+```matlab
+h = ysp_audio('open');                                    % the OS default output
+b = ysp_audio('tone', h, struct('hz', 1000, 'duration', 0.1, 'peak', ysp_audio('db', -30), 'ramp', 0.005));
+id = ysp_audio('play_at', h, b, t);                      % t: seconds, ysp_rt clock
+r = ysp_audio('wait', h, id);                            % r.onset, r.residual_ns, r.tier, r.flags
+ysp_audio('close', h);
+```
+
+Every time is seconds; a record gives the exact ns as `int64` beside each
+time (`onset_ns`, `target_ns`, `residual_ns`, `rendered_at_ns`). Samples
+are a frames x channels matrix (double or single), as `sound()` and
+`audiowrite()` take them; PsychPortAudio's channels x frames is the
+transpose. A row vector is one channel. Output channels in `'channels'`
+are 1-based; frame and sample numbers keep the header's (0 is the first).
+To put Screen's flips on this clock, use `ysp_rt('correlate', @GetSecs)`.
+
+| Command | Returns | Notes |
+|---|---|---|
+| `'version'`, `'now'`, `'db', x` | string, seconds (and `int64` ns), gain | `version`: the binding's (1.0.1) and the header's |
+| `'devices' [, backend [, capture]]` | struct row (`name`, `default`, `backend`) | the names `'open'` matches |
+| `'wav_info', path` | struct | `rate`, `channels`, `format`, `frames`, `duration`, `rf64`, without a device |
+| `'open' [, opts]` | `uint64` handle | `device` (a part of a name), `backend` (`'auto'`, `'wasapi'`, `'coreaudio'`, `'alsa'`, `'pulse'`, `'null'`), `rate` (48000), `channels` (2), `sample`, `exclusive`, `period` (s), `voices`, `queue`, `min_tier`, `onset_offset` (s), `arena_bytes`, `device_index`. Refuses any format or rate conversion |
+| `'caps', h`, `'describe', h`, `'lead', h`, `'is_open', h`, `'error', h`, `'pins', h` | struct, string, seconds, ... | |
+| `'frame_at', h, t`, `'time_of', h, frame` | frame, `[s, ns]` | from the fit; `[]` before it |
+| `'tone', h, s` | buffer handle | `hz`, `duration`, `peak`, `ramp`, `phase`, `channels`, `id` |
+| `'noise', h, s`, `'click', h, s` | buffer handle | `duration`, `rms`, `ramp`, `seed`, `dist` (`'gauss'`, `'uniform'`), `channels`, `id`; `peak`, `duration`, `id` |
+| `'buffer', h, samples [, id]`, `'load_wav', h, path [, id]` | buffer handle | copied into the device's arena |
+| `'samples', b` | single matrix | a copy |
+| `'arena_reset', h` | none | frees every buffer; `ysp_audio:busy` while one plays |
+| `'play_at', h, b, t` | id | 0: as soon as it can |
+| `'play', h, sound [, opts]` | id | `at`, `db`, `channels`, `offset`, `frames`, `loops` (-1: until stopped); `sound` is a buffer, stream or WAV handle |
+| `'cancel', h, id`, `'stop', h [, id [, at [, ramp]]]`, `'gain', h, id, db [, at [, ramp]]` | none | id 0 stops every sound |
+| `'update', h`, `'result', h, id`, `'wait', h, id [, timeout]` | count, record, record | `timeout` in seconds, `Inf` (the default) waits without end; the record: `id`, `target`, `onset`, `residual`, their `_ns`, `start_frame`, `end_frame`, `device_pos`, `rendered_at`, `buffer_id`, `flags`, `tier`, `sample`, `gap_frames`, `pending` |
+| `'stream_open', h [, opts]` | stream handle | `channels`, `ring` (s), `preroll` (s, or `'none'`), `first`, `id` |
+| `'stream_write', s, samples`, `'stream_end', s`, `'stream_reset', s [, first]`, `'stream_info', s`, `'stream_close', s` | frames taken, ... | |
+| `'sample_at', s, t`, `'stream_time_of', s, sample` | sample, `[s, ns]` | once the stream has started; `[]` before |
+| `'wav_open', h, path [, opts]` | WAV handle | `loops`, `start`, `ring` (s), `id`; a WAV handle is also a stream handle |
+| `'wav_feed', w [, max]`, `'wav_seek', w, sample`, `'wav_wants', w`, `'wav_close', w` | frames, ... | |
+| `'capture_open' [, opts]` | capture handle | `device`, `backend`, `rate`, `channels` (0: the device's), `sample`, `exclusive`, `period`, `ring` (s), `offset` (s), `device_index` |
+| `'capture_read', c [, max]` | `[samples, first]` | single frames x channels, and the capture frame of row 1 |
+| `'capture_time_of', c, frame`, `'capture_frame_at', c, t`, `'capture_info', c`, `'capture_describe', c`, `'capture_close', c` | | |
+| `'close', h` | none | `ysp_audio:busy` while another MEX file holds it |
+
+Errors are `ysp_audio:arg`, `:closed`, `:full`, `:format`, `:not_found`,
+`:lost`, `:busy`, `:timeout`, `:io`, `:open`, `:handle` and `:usage`, with
+the header's message. `'wait'` blocks MATLAB, and Ctrl+C does not end it.
+
+### SHARING: one implementation for every MEX file
+
+`ysp_audio` and `ysp_timeline` each export a table of their header's
+functions (`ysp_audio_api_table()`, `ysp_timeline_api_table()`), so a MEX
+file of another binding (ysp-vis: a movie's soundtrack, a timeline that
+drives the movie clock) uses the device and timeline handles that this
+MATLAB or Octave session opened. The consumer loads the owner's MEX file
+from its own directory; Windows and `dlopen()` return the copy MATLAB or
+Octave already loaded, so there is one handle table. A device or timeline
+that another MEX file holds refuses `'close'` (`:busy`), and
+`clear ysp_audio` leaves it open until that file lets it go. The handles of
+`ysp_audio` start at `0x4155 * 2^32 + 1`, so a handle of another module is
+not taken for one. [docs/bindings.md](../../docs/bindings.md#sharing-one-implementation-across-modules)
+has the rules; [test_mex_share.m](test_mex_share.m) builds the test
+consumer (`tests/share_consumer.c`) and prints `PASS` with the number of
+checks.
 
 ## Verification
 
