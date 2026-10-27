@@ -26,6 +26,7 @@ never reused, so a handle kept past its `close` always raises
 | `ysp_timeline.c` | [ysp/timeline.h](../../include/ysp/timeline.h) | [example_timeline.m](example_timeline.m) |
 | `ysp_dataset.c` | [ysp/dataset.h](../../include/ysp/dataset.h) | [example_dataset.m](example_dataset.m) |
 | `ysp_audio.c` | [ysp/audio.h](../../include/ysp/audio.h) | [example_audio.m](example_audio.m), [test_mex_audio.m](test_mex_audio.m) |
+| `ysp_vis.c` (the core), `ysp_screen.c`, `ysp_gfx.c`, `ysp_video.c` | [ysp/screen.h](../../include/ysp/screen.h), [ysp/gfx.h](../../include/ysp/gfx.h), [ysp/video.h](../../include/ysp/video.h) (ysp-vis, Windows only) | [example_screen.m](example_screen.m), [test_mex_vis.m](test_mex_vis.m), [test_mex_vis_window.m](test_mex_vis_window.m) |
 
 The two transport headers build on the shared [ysp/rt.h](../../include/ysp/rt.h), so
 both MEX functions compile it too. `ysp_quest.c` and `ysp_aep.c` define
@@ -1554,6 +1555,86 @@ not taken for one. [docs/bindings.md](../../docs/bindings.md#sharing-one-impleme
 has the rules; [test_mex_share.m](test_mex_share.m) builds the test
 consumer (`tests/share_consumer.c`) and prints `PASS` with the number of
 checks.
+
+## ysp_screen, ysp_gfx, ysp_video (ysp-vis)
+
+The display, its frame loop and the record of every flip
+([ysp/screen.h](../../include/ysp/screen.h)), and in phase A the draw path
+that shows something ([ysp/gfx.h](../../include/ysp/gfx.h): a background
+and filled rectangles). `ysp_video` is a placeholder until phase B. Windows
+only. [example_screen.m](example_screen.m) runs a 3 s frame loop in a
+window; [test_mex_vis.m](test_mex_vis.m) runs on the simulated display (no
+window) and prints `PASS` with the number of checks;
+[test_mex_vis_window.m](test_mex_vis_window.m) opens a real window for
+about 15 s (local only).
+
+```matlab
+h = ysp_screen('open');                          % fullscreen; 'windowed', true, 'size', [1280 720]
+g = ysp_gfx('open', h, 0.5);                     % background gray
+while true
+    [f, quit] = ysp_screen('begin', h);          % f.onset: when this frame shows
+    if ~isempty(quit), break; end                % Shift+Esc, the close button, Alt+F4
+    ysp_gfx('begin', g);
+    ysp_gfx('rect', g, [0 0 200 100], [1 1 1]);  % center x, y from the screen's center, pixels
+    ysp_gfx('end', g);
+    ysp_screen('flip', h);                       % at f.onset; 'flip_at', h, t for a later vblank
+end
+r = ysp_screen('close', h);                      % the records not read yet
+```
+
+**Build.** Make the natives once from the repository root:
+`uv run --no-project python tools/vendor_vis.py --write --angle --sdl msvc`
+for MATLAB, and `--sdl mingw --mingw-bin "<Octave>/mingw64/bin"` for
+Octave (the static SDL3 must come from Octave's own gcc). `build.m` then
+links `ysp_vis.c` against it, strips the Octave file (`-s`), and copies
+ANGLE's `libEGL.dll` and `libGLESv2.dll` and the license notices of SDL3
+and ANGLE into this directory. Without the natives it skips `ysp_vis.c`
+with a message. `ysp_audio` and `ysp_timeline` must be built here too.
+
+**Layout and lifetime.** `ysp_vis.<mexext>` is the core: the three
+headers, the static SDL3, the one handle table and every command. The thin
+`ysp_screen`, `ysp_gfx` and `ysp_video` load it from this directory and
+hand it each call, so a screen handle from `ysp_screen` opens a gfx in
+`ysp_gfx`. A clear of one thin file leaves every object open; the clear of
+the last one (or `clear mex`, or the exit) closes every gfx and screen.
+`ysp_vis('info')` gives the thin files attached, the open objects, the
+directory ANGLE is loaded from and the SDL version. Handles start at
+`0x5653 * 2^32 + 1`.
+
+| Command | Returns | Notes |
+|---|---|---|
+| `ysp_screen('version')` | `'1.0.0'`, and the header's | the same for `ysp_gfx`, `ysp_video`, `ysp_vis` |
+| `'displays'`, `'modes' [, display]`, `'mode_multiple', num, den, [w h], tol_ppm, display` | struct rows; `[k, mode, err_ppm]` | `'open'` takes a display's `id` and a mode struct |
+| `'options'`, `'constants'` | struct | the options with a line each; `TIER_*`, `PATH_*`, `FLIP_*`, `ABORT_*`, `KIND_*`, `PRESS` ... |
+| `'open' [, opts]` | `uint64` handle | a struct or name-value pairs: `windowed`, `size`, `display`, `mode`, `backend` (`'auto'`, `'dxgi_flip'`, `'composition'`, `'sim'`), `window_thread`, `lead`, `onset_offset` (s), `depth`, `depth_learn`, `settle`, `settle_flips`, `settle_min`, `settle_max` (s), `foreground`, `panic`, `panic_presses`, `panic_window`, `panic_grace` (s), `patch`, `patch_size`, `patch_corner`, `show_cursor`, `keep_os_gamma`, `key_dedup` (s), `gamepads`, `min_tier`, `sim_period` (s). Settles: 0.5 to 0.8 s fullscreen, 2.5 s in a window |
+| `'begin', h` | frame | `onset`, `period`, `index`, `vblank`, `done` (the records completed since the last begin), `last`, `done_lost`; `_ns` as `int64`. An abort raises `ysp_screen:abort`; `[f, quit] = ...` returns it in `quit` (`reasons`, `presses`, `t`, `t_ns`, `panic`) with `f` empty |
+| `'flip', h`, `'flip_at', h, t` | none | at the predicted onset, or at the vblank `t` snaps to |
+| `'wait_flip', h`, `'records', h` | record, record row | `records`: every record since the last call (4096 kept; the second output counts the overflow) |
+| `'mark', h, phase` | none | `'evaluate'`, `'script'`, `'draw'`, `'upload'` |
+| `'poll', h [, max]` | event row | the shared event layout of `ysp_device` and `ysp_response` |
+| `'title', h, text`, `'cursor', h, show`, `'grab', h, on` | none | through the window thread; `:not_implemented` on `'sim'` |
+| `'describe', h`, `'caps', h`, `'settle', h`, `'sync', h`, `'set_patch', h, v` | | |
+| `'request_abort'`, `'input_stats'`, `'now'`, `'now_ns'` | | |
+| `'close', h` | record row | lets the last flip complete; the gfx on it closes too |
+| `ysp_gfx('open', h [, background])`, `('begin', g)`, `('rect', g, [x y w h] [, color])`, `('end', g)`, `('describe', g)`, `('close', g)` | gfx handle, ... | one gfx per screen in phase A; color a gray level or `[r g b]`, linear 0..1 |
+| `ysp_video('shared')` | struct | loads `ysp_audio`'s and `ysp_timeline`'s tables and gives their versions |
+
+A record has `index`, `target`, `planned`, `onset`, `residual` (each with
+`_ns`, `int64`), `dropped`, `missed`, `late` (`FLIP_LATE_TARGET`), `path`,
+`tier`, `flags`, `phases` (1 x 6 seconds, `NaN` for the GPU phase) and
+`code_risk`. A frame number starts at 0, as the header's. Errors are
+`ysp_screen:arg`, `:closed`, `:order`, `:timeout`, `:lost`, `:refused`,
+`:not_implemented`, `:abort`, `:open`, `:handle` and `:usage` (and the same
+under `ysp_gfx:`). `'begin'` and `'wait_flip'` block MATLAB, and Ctrl+C
+does not end them; Shift+Esc does.
+
+Between trials, `pause` is fine in MATLAB and in Octave: the window
+belongs to ysp/screen.h's window thread and does not hang. With `'panic'`
+on (fullscreen; off by default), three Shift+Esc presses in 2 s while the
+frame loop does not call `'begin'` release the display: the next `'begin'` reports the abort with `panic`
+true, and only `'close'` is left. Close in `try`/`catch`, not in an
+`onCleanup`: Octave did not run one in the av probe
+([docs/av_probe.md](../../docs/av_probe.md), section 4).
 
 ## Verification
 

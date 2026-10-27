@@ -3436,6 +3436,95 @@ and the desktop mode was back 1.23 and 1.29 s after the third press. The `kill` 
 blocked window thread) still ended the process, 1.1 s after the third
 press: the blocked thread never began the release.
 
+## Bindings
+
+`ysp/screen.h` is bound in `ysp-vis` with `ysp/gfx.h` and `ysp/video.h`:
+Python `ysp.screen` (one extension, `ysp._vis`) and the MEX `ysp_screen`
+on the core `ysp_vis` ([bindings.md](bindings.md#display-stimuli-movies-ysp-vis)
+has the packaging, the natives and the lifetime rule). Windows only, phase
+A, 2026-10-27.
+
+Bound: the display and mode lists, `yscr_mode_multiple()`, open with every
+desc field a host sets (the option table of `bindings/share/ysp_vis_core.h`,
+one for both hosts, times in seconds), begin (the frame with its completed
+records), flip, flip at a time, wait_flip, marks, a ring of the last 4096
+records (`records()`), the input events of `yscr_event_input()` in the
+shared event layout (drained into a ring of 1024 at each begin, so a loop
+that never polls does not fill SDL's queue), aborts (Python `Abort`, MEX
+`ysp_screen:abort` or `[f, quit]`), the window's title, cursor and mouse
+grab through `yscr_window_call()`, describe, caps, settle, sync, the patch,
+`yscr_request_abort()`, the input bridge's counters. The window thread is
+on (AUTO). `desc.angle_dir` is always the module's own directory.
+
+Not bound, and why: triggers, `yscr_on_flip()`, `yscr_on_present()`,
+`desc.panic_fn` and `desc.on_context` run a callback on a C thread or
+inside the header's frame, and no binding runs a host function there
+(rig_spec.md, section 12); codes, text input, raw mice, groups, the native
+handles and `desc.abort_keys`: not needed by a phase A frame loop.
+
+Tests: 19 Python tests on the simulated display (CPython 3.12.11 and
+3.14.3, fresh `--no-cache` builds), `test_window.py` with a real window
+(both Pythons, local); 91 checks of `test_mex_vis.m` and 6 of
+`test_mex_vis_window.m` in MATLAB R2023a and Octave 10.1.
+
+### Measured on the binding: the minimal frame for 10 minutes
+
+The laptop of [av_probe.md](av_probe.md) (i7-1360P, Iris Xe, internal
+panel 1920 x 1200 at 60 Hz, Windows 11 26200), AUTO (COMPOSITION),
+fullscreen, ANGLE 2.1.25848 from the wheel or the MEX directory, static
+SDL3 3.4.0; every run through the timing guard; no photodiode, so every
+tier is the record's. Each frame: begin, gfx begin, one rect, gfx end,
+flip, and the frame's records kept as a script keeps its data
+(`tests/probe/vis/`). Work is the DRAW phase: from the return of
+`yscr_begin()` to the call of `yscr_flip()`, everything the host does in
+the frame through the binding. 2026-10-27, 07:34 to 08:30.
+
+| Host | Records | Missed (vblanks) | Late target | Occluded | Residual us p50 / p99 | Work ms p50 / p99 / max | Work > 8 ms | Path; tier |
+|---|---|---|---|---|---|---|---|---|
+| Python 3.12, AC | 36001 | 0 (0) | 1 | 0 | 3.9 / 116.4 | 0.25 / 0.57 / 4.78 | 0 | independent 36001; t1 35940, t2 61 |
+| Python 3.12, battery, final build | 35997 | 2 (3) | 2 | 0 | 0.8 / 79.7 | 0.24 / 0.69 / 22.42 | 1 | independent 35997; t1 35986, t2 11 |
+| MATLAB R2023a, AC | 36001 | 1 (1) | 0 | 0 | 2.0 / 113.0 | 0.49 / 1.01 / 6.25 | 0 | independent 36001; t1 35951, t2 50 |
+| Octave 10.1, AC | 36002 | 0 (0) | 0 | 0 | 0.8 / 85.1 | 0.98 / 1.92 / 5.36 | 0 | independent 36002; t1 35988, t2 14 |
+
+- **Against the probe** (av_probe.md, fullscreen, N = 1: work p50 / p99
+  0.14 to 0.24 / 0.31 to 0.58 ms in Python 3.12, 0.24 / 0.57 ms in MATLAB,
+  0.45 / 1.15 ms in Octave): Python's work is the probe's, MATLAB's and
+  Octave's about twice it, all under 2 ms at p99 against a 16.7 ms frame.
+  The difference is the frame the binding returns: a struct with its
+  records (`done` and `last`), where the probe returned two numbers.
+  Measured per call on the simulated display (battery, guard): a record
+  costs 0.35 us more than a bare call in Python (0.42 against 0.07 us), 4.5
+  us in MATLAB (6.1 against 1.7) and 45 us in Octave (49 against 4.4).
+- **Misses.** MATLAB's one miss was frame 0 (work 6.3 ms: first-use costs
+  while its planned vblank is the nearest, as in the probe); Python's late
+  target on AC was frame 0 too. The battery run (the laptop was off AC
+  for it) had 2 misses with work under 0.7 ms (the system's)
+  and one frame of 22.4 ms host work at 105 s (`gc.freeze()` was on; the
+  cause was not traced), flagged LATE_TARGET with no vblank dropped.
+- **Residual p99 of 80 to 116 us** come from stretches flagged
+  GRID_UNSTABLE (11 to 61 records a run), the OS's vblank jitter that the
+  probes saw too; the p50 differed by the hour (0.8 to 3.9 us).
+- The Python rows before and after the final build differ by one Record
+  object per frame (frame.last shared with done's last) and the power
+  source; the work did not change beyond the run-to-run spread.
+
+### Measured on the binding: 30 s without a call
+
+120 frames fullscreen, then 30 s with no call into the module (Python
+`time.sleep`, MATLAB and Octave `pause`), then 120 frames; a watcher process
+polled `IsHungAppWindow()` and the foreground window's class every 50 ms
+(about 674 polls a run).
+
+| Host | Hung | Ghost | Frame 120 (the first after the gap) | The 20 frames after it |
+|---|---|---|---|---|
+| Python 3.12 | never | never | on time, independent, tier 1, no flag | the same |
+| Octave 10.1 | never | never | on time, independent, tier 1, no flag | the same |
+| MATLAB R2023a | never | never | on time, independent, tier 1, no flag | the same |
+
+With the window thread no host needs a pumping wait, and with v0.10.1's
+anchor after a gap no record after it carried GRID_UNSTABLE (v0.10.0's
+17 flagged records, [The grid after a gap](#the-grid-after-a-gap-v0101)).
+
 ## Not measured
 
 Open findings (v0.10.0, `tests/adapt/screen_window_test.c`; not fixed):

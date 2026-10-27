@@ -1081,3 +1081,17 @@ still plays at the close is not written).
   decoder (a slow `next()`, not PENDING) on real media, which the same
   catch-up rule covers.
 - AVFoundation, FFmpeg, capture.
+
+## Bindings
+
+`ysp/video.h` is compiled into `ysp-vis` with `ysp/screen.h` and
+`ysp/gfx.h` (Python `ysp.video`, MEX `ysp_video`;
+[bindings.md](bindings.md#display-stimuli-movies-ysp-vis)). Its calls to
+`ysp/audio.h` and `ysp/timeline.h` go through the tables of `ysp.audio` and
+`ysp.timeline` (`ysp_audio`, `ysp_timeline`), so a movie's soundtrack is
+the experiment's audio device and its clock a timeline built in the host.
+Phase A (2026-10-27) only proves that path: the module links against the
+forwarders, Python imports both tables when it loads, and
+`ysp_video('shared')` loads them in MATLAB and Octave (checked by
+`test_mex_vis.m`). It is built without pl_mpeg (`YVID_NO_PL_MPEG`). The
+movie API comes in phase B.

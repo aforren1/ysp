@@ -134,7 +134,14 @@ YSP_TIMELINE_API_FUNCS(YSP_TIMELINE_API_F_, YSP_TIMELINE_API_FV_)
 #ifdef YSP_SHARE_PYTHON
 static int ysp_timeline_api_import_py(void) {
     char err[256];
-    const ysp_timeline_api* a = (const ysp_timeline_api*)PyCapsule_Import(YSP_TIMELINE_API_CAPSULE, 0);
+    const ysp_timeline_api* a;
+    /* PyCapsule_Import() imports "ysp" and then reads attributes, so in
+     * CPython 3.12 it failed for an owner not imported yet (found 2026-10-27,
+     * ysp-vis importing ysp.timeline). */
+    PyObject* owner = PyImport_ImportModule("ysp.timeline");
+    if (!owner) return -1;
+    Py_DECREF(owner);
+    a = (const ysp_timeline_api*)PyCapsule_Import(YSP_TIMELINE_API_CAPSULE, 0);
     if (!a) return -1;
     if (ysp_timeline_api_check(a, YSP_SHARE_HOST_PYTHON, err, sizeof err) < 0) {
         PyErr_SetString(PyExc_ImportError, err);
