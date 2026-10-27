@@ -25,7 +25,7 @@ classifiers = ["Operating System :: Microsoft :: Windows"]
 build = "cp39-*"
 archs = ["AMD64"]
 # The dependencies are this repository's packages, not on an index yet.
-before-test = "pip install {project}/bindings/python/ysp_audio {project}/bindings/python/ysp_timeline"
-test-requires = ["pytest"]
+before-test = "pip install {project}/bindings/python/ysp_audio {project}/bindings/python/ysp_timeline {project}/bindings/python/ysp_color"
+test-requires = ["pytest", "numpy"]   # numpy: test_gfx_sim.py's arrays; ysp-color (before-test): its calibration test
 # The simulated display: no window, no GPU (tests/test_window.py is local only).
 test-command = "pytest {package}/tests -q"

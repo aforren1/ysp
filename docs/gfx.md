@@ -4101,14 +4101,112 @@ the warning showed.
 
 `ysp/gfx.h` is bound in `ysp-vis` with `ysp/screen.h` and `ysp/video.h`
 (Python `ysp.gfx`, MEX `ysp_gfx`; [bindings.md](bindings.md#display-stimuli-movies-ysp-vis)).
-Phase A (2026-10-27) binds what a frame loop needs to show something: a
-gfx on a screen with a background, `begin`, filled rectangles (`rect`:
-the center from the screen's center in pixels, a gray level or linear
-device RGB) and `end`, one gfx per screen. The gfx opens after the screen
-settles, so its programs compile after the settling (`desc.on_context` is
-not bound yet). Not bound yet, for phase B: the stimuli and their
-descriptions, instances and groups, the timeline bindings through
-`ysp.timeline`'s table, textures, targets, text, the calibration and the
-output stage's options, capture. Tests: the simulated display's null
-backend (Python `test_screen_sim.py`, MEX `test_mex_vis.m`) and a real
-window (`test_window.py`, `test_mex_vis_window.m`, local only).
+Phase A (2026-10-27) bound a gfx with a background and filled rectangles.
+Phase B (2026-10-27, `ysp-vis` 0.10.1.1, MEX 1.1.0) binds the stimuli
+for a PsychoPy or Psychtoolbox user. The host-independent part is
+`bindings/share/ysp_vis_gfx.h`; `bindings/python/ysp_vis/vis_gfx.c` and
+`bindings/mex/ysp_vis_gfx.inc` turn host values into it. The references
+are [the Python README](../bindings/python/ysp_vis/README.md#stimuli-yspgfx)
+and [the MEX README](../bindings/mex/README.md#ysp_gfx).
+
+### What is bound
+
+- **Stimuli** as objects the binding owns: shapes (rect, circle, annulus,
+  line, polygon, cross, rrect, arc, pie, capsule, ngon, star, ellipse,
+  qbezier, polyline), gratings, gabors, noise (uniform, binary, Gaussian,
+  simplex), images of textures (from NumPy arrays or MATLAB matrices,
+  8-bit values linear or sRGB), dot fields and instances. A `ygfx_stim`
+  holds pointers (a path, the elements, a palette, a group) that must stay
+  valid while it is drawn; each one points into memory the binding owns.
+  A maker fills the constructor's desc with what the constructor reads
+  (the box, the shape and its parameters, the vertices, the path, the
+  texture), so what it derives is the C path's: `h` 0 is `w`, a polygon's
+  box is its vertices' extent, a star's inner ratio 0 is 0.5, a gabor's box
+  is 8 sigma. The rest is set by name after it, so `contrast=0` is 0, not
+  the desc's default 1.
+- **Parameters by name**, from the header's tables (`ygfx_params()`,
+  `ygfx_enum_params()`): every float field, the enums by their names
+  (`edge="gaussian"`), the vectors (`color`, `dir`, `tint`, `src`,
+  `shape_p`, `trim`), `anchor` as a name or `(ax, ay)`, and the shape
+  parameters by their meaning per kind (`radius`, `inner`, `sweep`,
+  `points`, ...). A name the kind does not read is refused, so a typo is
+  an error, not a field that nothing reads. `params(kind)` lists them.
+- **Units and color**: the gfx's units (`px`, or `deg` with the viewing
+  geometry); colors are linear device RGB, or any ysp/color.h space
+  through the gfx's color context (`space=`, a hex sRGB color,
+  `color()` and `dir()`), which needs a calibration (`cal=`, the bytes of a
+  .yspcal file or a `ysp.color.Calibration`).
+- **Batching**: draw lists (one call draws N stimuli in order), bulk sets
+  and gets of a list (`L.set("x", xs)`: one call for N values), groups,
+  and instances, whose elements are a float32 view in Python (NumPy writes
+  them, no call per element) and `'elements'` in MEX. `frame(*items)` is
+  begin, the bindings, the draws and end in one call, so a frame is three
+  calls (screen begin, gfx frame, screen flip) whatever the stimulus count.
+- **Timeline bindings** to channels of a `ysp.timeline.Timeline` (or a
+  `ysp_timeline` handle) through the owner's table: a stimulus's float
+  field (`color` takes three channels), a list (a channel per item or one
+  for all), a group's field, or elements of instances. The gfx writes them
+  with `ygfx_apply()` in its begin, so a tweened stimulus costs no host call
+  per frame; with `timeline(tl)` it also evaluates the timeline at the
+  screen frame's predicted onset. The gfx pins each timeline once and gives
+  the pin back when its last binding goes, at unbind, and at close.
+  Binding a field again replaces its binding.
+- **The open started while the screen settles**: `Screen(gfx={...})` and
+  `ysp_screen('open', ..., 'gfx', struct(...))` set the screen's
+  `desc.on_context` to a hook in C that calls `ygfx_open_start()`, so the
+  built-in programs compile during the settling (OPEN START); `Gfx(screen)`
+  finishes the open. The gfx primes its programs at open (`prime=False`
+  skips it) and uses the per-user program cache unless `cache=False`.
+- **Hit tests** (`ygfx_hit()`, `ygfx_hit_index()`; a list's topmost
+  visible item), bounds and anchors, **capture** to PPM files (no
+  callback: the writer is ysp/rt.h's thread, and nothing calls the host),
+  and the reads (`read_scene`, `read_output`) for tests.
+
+One gfx per screen stays: its output stage writes every pixel of the frame,
+so a second gfx would draw over the first. Nothing needed more.
+
+### What is not bound, and why
+
+- Text and curve sets: phase C.
+- Compounds, effects (`fx`), paint (gradients), MSDF glyph runs, user
+  shaders, render targets, setup passes, blur and the LUT: each needs
+  memory or GL objects with a lifetime of its own (a primitive array, a
+  pipeline, a target that a stimulus samples), and no phase B experiment
+  needed them.
+- Video textures, planes and imports: ysp.video's.
+- Image files: ysp/gfx.h reads none (and ysp/pack.h decodes none); a host
+  reads the file (PIL, `imread`) and gives the pixels to `texture()`.
+- `on_frame` of capture: a host function on the writer thread.
+
+### Lifetime
+
+A Python stimulus, list, group or texture holds its `Gfx`, so the C gfx
+outlives them; when the gfx or its screen closes, a set, a draw or a hit
+test raises `ClosedError`, and a read gives the last value. In MEX,
+closing a gfx (or its screen, or the last clear) frees its objects and
+their handles, so a kept handle is refused (`ysp_gfx:handle`). `free`
+refuses a stimulus a list holds, a group or texture a stimulus uses
+(`ysp_gfx:busy`); a binding goes with its object. GL frees inside a frame
+wait for its end. The instances' `elements` view owns its memory, as the
+timeline's views do (timeline.md, "A view owns what it shows").
+
+### Tests
+
+On the simulated display (gfx's null backend draws nothing), in CI:
+`tests/test_gfx_sim.py` (22 tests) and `test_mex_vis_gfx.m` (105 checks).
+They check every shape kind and what its constructor derives, parameters
+by name and their refusals, lists and bulk sets, groups and hit tests,
+instances and the element view after its stimulus is gone, dot fields,
+textures, a tween bound to a gabor's contrast and position (the stimulus
+follows the channels each frame; a rewind replays the values bit for bit
+and a seek gives the first run's value), list, group and element
+bindings, the pins given back, the open started while the screen
+settles, capture on the null backend, and the lifetime rules. In a real
+window, local only (`YSP_VIS_WINDOW=1 pytest tests/test_window.py`,
+`test_mex_vis_window.m`): five stimuli made through the binding (a gabor,
+a grating in a cosine-edged circle, a stroked rounded rect, a star placed
+by its corner, binary noise) draw the same scene, bit for bit, as the same
+stimuli made with the constructors in C (`yv_gfx_c_scene()`), and
+instances match the same gabors drawn one by one within 2e-5.
+
+

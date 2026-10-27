@@ -15,7 +15,8 @@
  *   - what both hosts do the same way: the module's own directory (always
  *     desc.angle_dir, docs/av_probe.md section 2), the open options, the
  *     ring of flip records, the input events of a frame, the window calls,
- *     seconds to ns, and the minimal draw path of phase A.
+ *     seconds to ns; and, in ysp_vis_gfx.h (included at the end), the gfx:
+ *     stimuli, lists, groups, textures, instances and timeline bindings.
  *
  * THREADS. A screen has one frame thread (the host's). The functions here
  * run on it; the host keeps a second thread out (Python: BusyError while a

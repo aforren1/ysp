@@ -3456,11 +3456,14 @@ grab through `yscr_window_call()`, describe, caps, settle, sync, the patch,
 `yscr_request_abort()`, the input bridge's counters. The window thread is
 on (AUTO). `desc.angle_dir` is always the module's own directory.
 
-Not bound, and why: triggers, `yscr_on_flip()`, `yscr_on_present()`,
-`desc.panic_fn` and `desc.on_context` run a callback on a C thread or
-inside the header's frame, and no binding runs a host function there
-(rig_spec.md, section 12); codes, text input, raw mice, groups, the native
-handles and `desc.abort_keys`: not needed by a phase A frame loop.
+Not bound, and why: triggers, `yscr_on_flip()`, `yscr_on_present()` and
+`desc.panic_fn` run a callback on a C thread or inside the header's frame,
+and no binding runs a host function there (rig_spec.md, section 12);
+codes, text input, raw mice, groups, the native handles and
+`desc.abort_keys`: not needed by a phase A frame loop. `desc.on_context`
+is not a host callback either: since phase B the binding sets it itself,
+to a C hook that starts the gfx while the screen settles (the open option
+`gfx`; [gfx.md](gfx.md#bindings)).
 
 Tests: 19 Python tests on the simulated display (CPython 3.12.11 and
 3.14.3, fresh `--no-cache` builds), `test_window.py` with a real window

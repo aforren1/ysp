@@ -16,8 +16,8 @@ parameter is written in C at each frame, so a tween costs no Python call::
         g.bind(gab, "contrast", tl, "contrast")          # applied in begin()
         g.timeline(tl)                                   # evaluated at each frame's onset
         f = s.begin()
-        tl.anchor(0, f.onset)
-        tl.tween("contrast", 0.5, duration=0.5)
+        tl.anchor(1, f.onset)                            # trial time 0 is this frame
+        tl.tween("contrast", 0.5, base=1, start=0.0, duration=0.5, from_=0.0)
         while True:
             g.frame(scene)                               # begin, bindings, draws, end
             s.flip()

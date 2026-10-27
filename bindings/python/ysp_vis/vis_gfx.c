@@ -723,11 +723,10 @@ static PyObject* Gfx_instances(PyObject* self, PyObject* args, PyObject* kw) {
     if (!ba) { vg_arena_free(&a); return NULL; }
     p = PyByteArray_AsString(ba);
     off = (Py_ssize_t)((16u - ((uintptr_t)p & 15u)) & 15u);
-    SC_OF(o->screen)->busy = 1;
-    Py_BEGIN_ALLOW_THREADS   /* the instanced program compiles now */
+    /* The instanced program compiles now, with the GIL held: the call links
+     * the stimulus into the gfx's object list, which a Stim freed on
+     * another thread would change too. Setup only. */
     st = yv_inst_make(ST_OF(tmpl)->st, n, fl, pv, npal, (ygfx_inst*)(void*)(p + off), &code, err, sizeof err);
-    Py_END_ALLOW_THREADS
-    SC_OF(o->screen)->busy = 0;
     vg_arena_free(&a);
     if (!st) { Py_DECREF(ba); return vg_raise(code, err); }
     r = vg_wrap_stim(self, st);
@@ -1070,11 +1069,9 @@ static PyObject* Gfx_prime(PyObject* self, PyObject* unused) {
     (void)unused;
     if (!gf_ready(o)) return NULL;
     if (o->g->in_frame) { PyErr_SetString(VsOrderError, "ysp_gfx: prime() outside a frame"); return NULL; }
-    SC_OF(o->screen)->busy = 1;
-    Py_BEGIN_ALLOW_THREADS
+    /* With the GIL: a texture freed on another thread meanwhile would make
+     * a GL call beside this one. About 70 ms, at setup. */
     rc = ygfx_prime(&o->g->g);
-    Py_END_ALLOW_THREADS
-    SC_OF(o->screen)->busy = 0;
     if (rc < 0) { char err[512]; yv_gfx_err(o->g, rc, err, sizeof err); return vg_raise(rc, err); }
     return PyLong_FromLong(rc);
 }
@@ -1204,11 +1201,9 @@ static PyObject* Gfx_capture_stop(PyObject* self, PyObject* unused) {
     (void)unused;
     if (!gf_ready(o)) return NULL;
     memset(&s, 0, sizeof s);
-    SC_OF(o->screen)->busy = 1;
-    Py_BEGIN_ALLOW_THREADS   /* waits for the copies and the writer */
+    /* With the GIL, as prime(): it waits for the copies and the writer's
+     * last files, about 10 ms a file, outside the trials. */
     rc = ygfx_capture_stop(&o->g->g, &s);
-    Py_END_ALLOW_THREADS
-    SC_OF(o->screen)->busy = 0;
     if (rc < 0) { char err[512]; yv_gfx_err(o->g, rc, err, sizeof err); return vg_raise(rc, err); }
     return vg_capture_stats(&s);
 }
@@ -1612,7 +1607,7 @@ static PyObject* Stim_length(PyObject* self, PyObject* unused) {
 
 static PyObject* Stim_dir(PyObject* self, PyObject* unused) {
     StimObject* o = ST_OF(self);
-    PyObject* l = PyList_New(0);
+    PyObject* l = PyObject_Dir((PyObject*)Py_TYPE(self));   /* the methods, then the parameters */
     const ygfx_param* t;
     int n, i;
     (void)unused;
