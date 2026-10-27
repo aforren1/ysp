@@ -2,7 +2,7 @@
 
 The natives come from tools/vendor_vis.py (docs/bindings.md, ysp-vis):
 
-    uv run --no-project python tools/vendor_vis.py --write --angle --sdl msvc
+    uv run --no-project python tools/vendor_vis.py --write --angle --sdl msvc --pl-mpeg
 
 A static SDL3 (third_party/vis/sdl3/msvc) is linked in, and ANGLE's
 libEGL.dll and libGLESv2.dll (third_party/vis/angle) go into the wheel beside
@@ -34,11 +34,12 @@ NATIVES = pick(os.path.join(REPO_ROOT, "third_party", "vis"), os.path.join(HERE,
                os.path.join("angle", "libEGL.dll"))
 SDL = os.path.join(NATIVES, "sdl3", "msvc")
 ANGLE = os.path.join(NATIVES, "angle")
+PL_MPEG = os.path.join(NATIVES, "pl_mpeg")   # MPEG-1 for ysp/video.h
 
 for need in (os.path.join(SDL, "lib", "SDL3-static.lib"), os.path.join(ANGLE, "libEGL.dll"),
-             os.path.join(ANGLE, "libGLESv2.dll")):
+             os.path.join(ANGLE, "libGLESv2.dll"), os.path.join(PL_MPEG, "pl_mpeg.h")):
     if not os.path.exists(need):
-        sys.exit("ysp-vis: %s is missing: run tools/vendor_vis.py --write --angle --sdl msvc "
+        sys.exit("ysp-vis: %s is missing: run tools/vendor_vis.py --write --angle --sdl msvc --pl-mpeg "
                  "(from the repository root)" % need)
 
 # The system libraries SDL3.dll imports itself (tools/vendor_vis.py, SDL_SYSTEM_LIBS).
@@ -53,6 +54,7 @@ NATIVE_FILES = [
     (os.path.join(ANGLE, "libGLESv2.dll"), "libGLESv2.dll"),
     (os.path.join(ANGLE, "LICENSE.ANGLE.txt"), "ysp_vis-LICENSE.ANGLE.txt"),
     (os.path.join(NATIVES, "sdl3", "LICENSE.txt"), "ysp_vis-LICENSE.SDL3.txt"),
+    (os.path.join(PL_MPEG, "LICENSE.txt"), "ysp_vis-LICENSE.pl_mpeg.txt"),
 ]
 
 
@@ -68,7 +70,8 @@ class BuildExt(build_ext):
 ext = Extension(
     name="ysp._vis",
     sources=["ysp_vis_ext.c"],
-    include_dirs=[HEADER_DIR, SHARE_DIR, os.path.join(SDL, "include")],
+    depends=["vis_gfx.c", "vis_video.c"],   # ysp.gfx and ysp.video, included by ysp_vis_ext.c
+    include_dirs=[HEADER_DIR, SHARE_DIR, os.path.join(SDL, "include"), PL_MPEG],
     define_macros=[("Py_LIMITED_API", "0x03080000")],
     py_limited_api=True,
     library_dirs=[os.path.join(SDL, "lib")],

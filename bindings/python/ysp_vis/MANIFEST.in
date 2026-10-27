@@ -2,12 +2,12 @@
 # tables and the natives. Stage them next to setup.py first, from the
 # repository root:
 #
-#     uv run --no-project python tools/vendor_vis.py --write --angle --sdl msvc
+#     uv run --no-project python tools/vendor_vis.py --write --angle --sdl msvc --pl-mpeg
 #     d=bindings/python/ysp_vis
 #     mkdir -p $d/include/ysp $d/include/share $d/natives
 #     cp include/ysp/*.h $d/include/ysp/
 #     cp bindings/share/*.h $d/include/share/
-#     cp -r third_party/vis/angle third_party/vis/sdl3 $d/natives/
+#     cp -r third_party/vis/angle third_party/vis/sdl3 third_party/vis/pl_mpeg $d/natives/
 #     uv build --sdist $d
 #
 # The staged copies are gitignored; setup.py prefers the repository's when it
@@ -16,5 +16,10 @@ include include/ysp/*.h
 include include/share/*.h
 recursive-include natives *
 include ysp_vis_ext.c
+include vis_gfx.c
+include vis_video.c
 include example.py
+include example_2afc.py
+include example_rsvp.py
+include example_video.py
 recursive-include tests *.py

@@ -15,7 +15,8 @@
  *   - what both hosts do the same way: the module's own directory (always
  *     desc.angle_dir, docs/av_probe.md section 2), the open options, the
  *     ring of flip records, the input events of a frame, the window calls,
- *     seconds to ns, and the minimal draw path of phase A.
+ *     seconds to ns; and, in ysp_vis_gfx.h (included at the end), the gfx:
+ *     stimuli, lists, groups, textures, instances and timeline bindings.
  *
  * THREADS. A screen has one frame thread (the host's). The functions here
  * run on it; the host keeps a second thread out (Python: BusyError while a
@@ -39,10 +40,7 @@
 /* The owners compile ysp/timeline.h with 1024 channels; the check refuses
  * another value. */
 #define YTL_MAX_CHANNELS 1024
-/* Phase A: no MPEG-1 decoder yet (pl_mpeg is phase B's, with video). */
-#ifndef YVID_NO_PL_MPEG
-#define YVID_NO_PL_MPEG
-#endif
+/* pl_mpeg.h (MPEG-1) comes from third_party/vis/pl_mpeg (tools/vendor_vis.py). */
 
 /* Declarations only: the owners' modules hold the implementations. */
 #include "ysp/audio.h"
@@ -63,8 +61,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* The distribution's version tracks screen.h's (docs/bindings.md, ysp-vis). */
-#define YV_VERSION YSCR_VERSION_STRING
+/* The distribution's version tracks screen.h's, with a fourth number for a
+ * change of the binding alone (docs/bindings.md, ysp-vis). */
+#define YV_VERSION YSCR_VERSION_STRING ".1"   /* .1: ysp.gfx and ysp.video, phase B */
 
 #define YV_RECORDS 4096   /* flip records kept between records() calls */
 #define YV_EVENTS  1024   /* input events kept between poll() calls    */
@@ -276,14 +275,25 @@ typedef struct yv_screen {
     yin_event    ev[YV_EVENTS];
     uint32_t     ev_head, ev_n;
     uint64_t     ev_lost;      /* events overwritten before poll()        */
-    struct yv_gfx* gfx;        /* phase A: one gfx per screen             */
+    struct yv_gfx* gfx;        /* the open gfx: one per screen (its output
+                                * stage writes every pixel of the frame)   */
+    struct yv_gfx* gstart;     /* a gfx started in on_context (the open
+                                * option gfx), until a host opens it      */
+    int            frame_row;  /* MEX: begin gives the frame as a row (the
+                                * open option frame), not a struct        */
 } yv_screen;
+
+/* ysp_vis_video.h: the movies on a gfx get each flip record (their FRAME
+ * records), and close before the gfx does. */
+static void yv_movies_flip(struct yv_gfx* g, const yscr_record* r);
+static void yv_movies_close(struct yv_gfx* g);
 
 static void yv_on_flip(void* ctx, const yscr_record* r, const yscr_trigger_result* trig, int n_trig) {
     yv_screen* v = (yv_screen*)ctx;
     uint32_t i;
     (void)trig;
     (void)n_trig;
+    if (v->gfx) yv_movies_flip(v->gfx, r);
     if (!v->rec) return;
     i = (v->rec_head + v->rec_n) % YV_RECORDS;
     v->rec[i] = *r;
@@ -329,12 +339,21 @@ static int yv_events(yv_screen* v, yin_event* out, int cap) {
     return n;
 }
 
+static void yv_gfx_on_context(void* ctx, yscr_screen* s);
+static void yv_gstart_drop(yv_screen* v);
+
 /* Opens the screen with the module's directory as angle_dir. true, or
- * false with yscr_error(). The caller has zeroed v. */
+ * false with yscr_error(). The caller has zeroed v, and set v->gstart when
+ * the gfx's programs are to compile while the screen settles (OPEN START
+ * in ysp/gfx.h). */
 static bool yv_open(yv_screen* v, yscr_desc* d) {
     v->rec = (yscr_record*)calloc(YV_RECORDS, sizeof(yscr_record));
     if (!v->rec) return false;
     d->angle_dir = yv_module_dir();
+    if (v->gstart) {
+        d->on_context = yv_gfx_on_context;
+        d->on_context_ctx = v->gstart;
+    }
     if (!yscr_open(&v->s, d)) return false;
     yscr_on_flip(&v->s, yv_on_flip, v);
     v->open = 1;
@@ -346,6 +365,7 @@ static void yv_gfx_close(struct yv_gfx* g);
 /* Closes the gfx on it first: its GL objects go before the context. */
 static void yv_close(yv_screen* v) {
     if (v->gfx) yv_gfx_close(v->gfx);
+    yv_gstart_drop(v);
     if (v->open) yscr_close(&v->s);
     v->open = 0;
     v->in_frame = 0;
@@ -405,70 +425,10 @@ static int yv_window(yv_screen* v, void (*fn)(void*), const char* text, int on) 
     return w.ok ? 0 : YSCR_ERR_LOST;
 }
 
-/* ---- gfx, phase A: what a frame loop needs to show something ----------------- */
+/* ---- gfx: ysp/gfx.h's stimuli, lists, groups, bindings (ysp_vis_gfx.h) ------ */
 
-typedef struct yv_gfx {
-    ygfx_gfx   g;
-    yv_screen* scr;
-    int        open;
-    int        in_frame;
-} yv_gfx;
+#include "ysp_vis_gfx.h"
 
-static bool yv_gfx_open(yv_gfx* g, yv_screen* v, const float background[3]) {
-    ygfx_desc d;
-    memset(&d, 0, sizeof d);
-    d.screen = &v->s;
-    d.background[0] = background[0];
-    d.background[1] = background[1];
-    d.background[2] = background[2];
-    if (!ygfx_open(&g->g, &d)) return false;
-    g->scr = v;
-    g->open = 1;
-    v->gfx = g;
-    return true;
-}
-
-static void yv_gfx_close(yv_gfx* g) {
-    if (!g) return;
-    if (g->open) ygfx_close(&g->g);
-    g->open = 0;
-    g->in_frame = 0;
-    if (g->scr && g->scr->gfx == g) g->scr->gfx = NULL;
-    g->scr = NULL;
-}
-
-/* The screen's current frame: call between the screen's begin() and flip(). */
-static int yv_gfx_begin(yv_gfx* g) {
-    int rc;
-    if (!g->open || !g->scr) return YGFX_ERR_CLOSED;
-    if (!g->scr->in_frame) return YGFX_ERR_ORDER;
-    rc = ygfx_begin(&g->g, &g->scr->f);
-    if (rc >= 0) g->in_frame = 1;
-    return rc;
-}
-
-/* A filled rectangle: x, y its center in pixels from the screen's center
- * (ysp/gfx.h's default place and anchor), color linear device RGB 0..1. */
-static int yv_gfx_rect(yv_gfx* g, float x, float y, float w, float h, const float color[3]) {
-    ygfx_shape_desc sd;
-    ygfx_stim st;
-    memset(&sd, 0, sizeof sd);
-    sd.shape = YGFX_RECT;
-    sd.x = x;
-    sd.y = y;
-    sd.w = w;
-    sd.h = h;
-    sd.color[0] = color[0];
-    sd.color[1] = color[1];
-    sd.color[2] = color[2];
-    st = ygfx_shape(&sd);
-    return ygfx_draw(&g->g, &st);
-}
-
-static int yv_gfx_end(yv_gfx* g) {
-    int rc = ygfx_end(&g->g);
-    g->in_frame = 0;
-    return rc;
-}
+#include "ysp_vis_video.h"   /* movies: ysp.video, ysp_video */
 
 #endif /* YSP_VIS_CORE_H */

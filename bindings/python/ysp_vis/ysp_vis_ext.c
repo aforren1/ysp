@@ -301,12 +301,6 @@ typedef struct ScreenObject {
     struct ScreenObject* next_open;
 } ScreenObject;
 
-typedef struct GfxObject {
-    PyObject_HEAD
-    yv_gfx*   g;
-    PyObject* screen;
-} GfxObject;
-
 #define SC_OF(o) ((ScreenObject*)(o))
 
 /* The open screens, for _close_all() at exit. */
@@ -410,22 +404,31 @@ static int sc_option(yscr_desc* d, const char* name, PyObject* val) {
     return 0;
 }
 
+static yv_gfx* vg_gstart(PyObject* opts);   /* vis_gfx.c */
+
 static int Screen_init(PyObject* self, PyObject* args, PyObject* kw) {
     ScreenObject* o = SC_OF(self);
     yscr_desc d;
     bool ok;
     Py_ssize_t pos = 0;
-    PyObject *k, *val;
+    PyObject *k, *val, *gfx = NULL;
     if (o->v) { PyErr_SetString(VsError, "Screen.__init__ called twice"); return -1; }
     if (PyTuple_Size(args) > 0) { PyErr_SetString(PyExc_TypeError, "Screen() takes keyword arguments only"); return -1; }
     memset(&d, 0, sizeof d);
     while (kw && PyDict_Next(kw, &pos, &k, &val)) {
         char name[64];
         if (vs_utf8(k, name, sizeof name) < 0) return -1;
+        /* gfx: the Gfx options; its programs compile while the screen
+         * settles, and Gfx(screen) then finishes the open */
+        if (!strcmp(name, "gfx")) { gfx = val; continue; }
         if (sc_option(&d, name, val) < 0) return -1;
     }
     o->v = (yv_screen*)calloc(1, sizeof(yv_screen));
     if (!o->v) { PyErr_NoMemory(); return -1; }
+    if (gfx && gfx != Py_None && gfx != Py_False) {
+        o->v->gstart = vg_gstart(gfx);
+        if (!o->v->gstart) { free(o->v); o->v = NULL; return -1; }
+    }
     o->busy = 1;
     Py_BEGIN_ALLOW_THREADS
     ok = yv_open(o->v, &d);
@@ -760,172 +763,13 @@ static PyType_Slot Screen_slots[] = {
 };
 static PyType_Spec Screen_spec = { "ysp.screen.Screen", sizeof(ScreenObject), 0, Py_TPFLAGS_DEFAULT, Screen_slots };
 
-/* --- Gfx (phase A: the minimal draw path) ----------------------------------------- */
+/* --- Gfx, Stim, DrawList, Group, Texture: ysp.gfx (vis_gfx.c) ------------------------------ */
 
-#define GF_OF(o) ((GfxObject*)(o))
+#include "vis_gfx.c"
 
-static int gf_ready(GfxObject* o) {
-    if (!o->g || !o->g->open) { PyErr_SetString(VsClosedError, "ysp_gfx: the gfx (or its screen) is closed"); return 0; }
-    if (SC_OF(o->screen)->busy) { PyErr_SetString(VsBusyError, "ysp_gfx: another thread is in a call on its Screen"); return 0; }
-    return 1;
-}
+/* --- ysp.video: Movie, SeqWriter, probe(), make_index() ---------------------------- */
 
-static PyObject* gf_fail(GfxObject* o, int code) {
-    const char* m = o->g ? ygfx_error(&o->g->g) : "";
-    PyErr_SetString(vs_gfx_exc(code), m && m[0] ? m : ygfx_strerror(code));
-    return NULL;
-}
-
-static void Gfx_dealloc(PyObject* self) {
-    GfxObject* o = GF_OF(self);
-    PyTypeObject* tp = Py_TYPE(self);
-    freefunc fr = (freefunc)PyType_GetSlot(tp, Py_tp_free);
-    if (o->g) { yv_gfx_close(o->g); free(o->g); o->g = NULL; }
-    Py_XDECREF(o->screen);
-    fr(self);
-    Py_DECREF(tp);
-}
-
-static int vs_rgb(PyObject* o, float out[3], const char* what) {
-    Py_ssize_t i;
-    if (!o) return 0;
-    if (PyFloat_Check(o) || PyLong_Check(o)) {
-        double x = PyFloat_AsDouble(o);
-        if (x == -1.0 && PyErr_Occurred()) return -1;
-        out[0] = out[1] = out[2] = (float)x;
-        return 0;
-    }
-    if (!PySequence_Check(o) || PySequence_Size(o) != 3) {
-        PyErr_Clear();
-        PyErr_Format(VsArgumentError, "%s: a gray level or (r, g, b), linear 0..1", what);
-        return -1;
-    }
-    for (i = 0; i < 3; i++) {
-        PyObject* it = PySequence_GetItem(o, i);
-        double x = it ? PyFloat_AsDouble(it) : -1.0;
-        Py_XDECREF(it);
-        if (x == -1.0 && PyErr_Occurred()) return -1;
-        out[i] = (float)x;
-    }
-    return 0;
-}
-
-static int Gfx_init(PyObject* self, PyObject* args, PyObject* kw) {
-    static char* kwlist[] = { "screen", "background", NULL };
-    GfxObject* o = GF_OF(self);
-    PyObject *scr, *bg = NULL;
-    float b[3] = { 0, 0, 0 };
-    ScreenObject* so;
-    if (o->g) { PyErr_SetString(VsError, "Gfx.__init__ called twice"); return -1; }
-    if (!PyArg_ParseTupleAndKeywords(args, kw, "O|O", kwlist, &scr, &bg)) return -1;
-    if (!PyObject_TypeCheck(scr, (PyTypeObject*)ScreenType)) { PyErr_SetString(PyExc_TypeError, "Gfx(screen): a ysp.screen.Screen"); return -1; }
-    if (vs_rgb(bg, b, "background") < 0) return -1;
-    so = SC_OF(scr);
-    if (!sc_ready(so)) return -1;
-    if (so->v->gfx) { PyErr_SetString(VsRefusedError, "ysp_gfx: the screen has a Gfx already (one per screen in this release)"); return -1; }
-    o->g = (yv_gfx*)calloc(1, sizeof(yv_gfx));
-    if (!o->g) { PyErr_NoMemory(); return -1; }
-    if (!yv_gfx_open(o->g, so->v, b)) {
-        PyErr_SetString(VsError, ygfx_error(&o->g->g));
-        free(o->g);
-        o->g = NULL;
-        return -1;
-    }
-    Py_INCREF(scr);
-    o->screen = scr;
-    return 0;
-}
-
-static PyObject* Gfx_close(PyObject* self, PyObject* unused) {
-    GfxObject* o = GF_OF(self);
-    (void)unused;
-    if (o->g) yv_gfx_close(o->g);
-    Py_RETURN_NONE;
-}
-static PyObject* Gfx_enter(PyObject* self, PyObject* unused) { (void)unused; Py_INCREF(self); return self; }
-static PyObject* Gfx_exit(PyObject* self, PyObject* args) { (void)args; return Gfx_close(self, NULL); }
-
-static PyObject* Gfx_begin(PyObject* self, PyObject* unused) {
-    GfxObject* o = GF_OF(self);
-    int rc;
-    (void)unused;
-    if (!gf_ready(o)) return NULL;
-    if (!o->g->scr->in_frame) { PyErr_SetString(VsOrderError, "ysp_gfx: begin() after the Screen's begin()"); return NULL; }
-    rc = yv_gfx_begin(o->g);
-    if (rc < 0) return gf_fail(o, rc);
-    Py_RETURN_NONE;
-}
-
-static PyObject* Gfx_rect(PyObject* self, PyObject* args, PyObject* kw) {
-    static char* kwlist[] = { "x", "y", "w", "h", "color", NULL };
-    GfxObject* o = GF_OF(self);
-    double x, y, w, h;
-    PyObject* col = NULL;
-    float c[3] = { 1, 1, 1 };
-    int rc;
-    if (!PyArg_ParseTupleAndKeywords(args, kw, "dddd|O", kwlist, &x, &y, &w, &h, &col)) return NULL;
-    if (vs_rgb(col, c, "color") < 0) return NULL;
-    if (!gf_ready(o)) return NULL;
-    rc = yv_gfx_rect(o->g, (float)x, (float)y, (float)w, (float)h, c);
-    if (rc < 0) return gf_fail(o, rc);
-    Py_RETURN_NONE;
-}
-
-static PyObject* Gfx_end(PyObject* self, PyObject* unused) {
-    GfxObject* o = GF_OF(self);
-    int rc;
-    (void)unused;
-    if (!gf_ready(o)) return NULL;
-    rc = yv_gfx_end(o->g);
-    if (rc < 0) return gf_fail(o, rc);
-    Py_RETURN_NONE;
-}
-
-static PyObject* Gfx_describe(PyObject* self, PyObject* unused) {
-    GfxObject* o = GF_OF(self);
-    char line[2048];
-    (void)unused;
-    if (!gf_ready(o)) return NULL;
-    ygfx_describe(&o->g->g, line, sizeof line);
-    return PyUnicode_FromString(line);
-}
-
-static PyObject* Gfx_get_open(PyObject* self, void* c) { (void)c; return PyBool_FromLong(GF_OF(self)->g && GF_OF(self)->g->open); }
-static PyObject* Gfx_get_screen(PyObject* self, void* c) {
-    PyObject* s = GF_OF(self)->screen ? GF_OF(self)->screen : Py_None;
-    (void)c;
-    Py_INCREF(s);
-    return s;
-}
-
-static PyMethodDef Gfx_methods[] = {
-    { "close", Gfx_close, METH_NOARGS, "close(): frees the GL objects; the Screen stays open." },
-    { "__enter__", Gfx_enter, METH_NOARGS, NULL },
-    { "__exit__", Gfx_exit, METH_VARARGS, NULL },
-    { "begin", Gfx_begin, METH_NOARGS, "begin(): starts drawing the Screen's current frame (after Screen.begin())." },
-    { "rect", (PyCFunction)(void (*)(void))Gfx_rect, METH_VARARGS | METH_KEYWORDS,
-      "rect(x, y, w, h, color=1.0): a filled rectangle, center x, y in pixels from the screen's center (y down); "
-      "color a gray level or (r, g, b), linear device RGB 0..1." },
-    { "end", Gfx_end, METH_NOARGS, "end(): draws the queue and the output stage into the back buffer; then Screen.flip()." },
-    { "describe", Gfx_describe, METH_NOARGS, "describe() -> str: the gfx's log line." },
-    { NULL, NULL, 0, NULL }
-};
-static PyGetSetDef Gfx_getset[] = {
-    { "open", Gfx_get_open, NULL, "True while open (a closed Screen closes its Gfx)", NULL },
-    { "screen", Gfx_get_screen, NULL, "the Screen it draws on", NULL },
-    { NULL, NULL, NULL, NULL, NULL }
-};
-static PyType_Slot Gfx_slots[] = {
-    { Py_tp_doc, "Gfx(screen, background=0.0): stimuli on a Screen (ysp/gfx.h). Phase A of ysp-vis: begin(), rect(), "
-                 "end(); the stimuli, groups and timeline bindings come in phase B." },
-    { Py_tp_new, PyType_GenericNew },
-    { Py_tp_init, Gfx_init },
-    { Py_tp_dealloc, Gfx_dealloc },
-    { Py_tp_methods, Gfx_methods },
-    { Py_tp_getset, Gfx_getset },
-    { 0, NULL }
-};
-static PyType_Spec Gfx_spec = { "ysp.gfx.Gfx", sizeof(GfxObject), 0, Py_TPFLAGS_DEFAULT, Gfx_slots };
+#include "vis_video.c"
 
 /* --- module functions ----------------------------------------------------------- */
 
@@ -1059,6 +903,7 @@ static PyMethodDef module_methods[] = {
     { "options", m_options, METH_NOARGS, "options() -> dict: Screen()'s keyword options and what each does." },
     { "_close_all", m_close_all, METH_NOARGS, "Closes every open Screen (atexit)." },
     { "_shared", m_shared, METH_NOARGS, "The versions of the shared tables and of the headers compiled here." },
+    VV_MODULE_METHODS
     { NULL, NULL, 0, NULL }
 };
 
@@ -1137,7 +982,7 @@ PyMODINIT_FUNC PyInit__vis(void) {
     m = PyModule_Create(&vis_module);
     if (!m) return NULL;
     if (!(ScreenType = vs_add_type(m, &Screen_spec, "Screen"))) goto fail;
-    if (!(GfxType = vs_add_type(m, &Gfx_spec, "Gfx"))) goto fail;
+    if (vg_init(m) < 0) goto fail;   /* ysp.gfx: Gfx, Stim, DrawList, Group, Texture */
     if (!(FrameType = vs_add_seq(m, &vs_frame_desc, "Frame"))) goto fail;
     if (!(RecordType = vs_add_seq(m, &vs_record_desc, "Record"))) goto fail;
     if (!(EventType = vs_add_seq(m, &vs_event_desc, "Event"))) goto fail;
@@ -1155,6 +1000,7 @@ PyMODINIT_FUNC PyInit__vis(void) {
     if (!(VsBusyError = vs_add_exc(m, "ysp.screen.BusyError", "BusyError", VsError))) goto fail;
     /* Not an Error: the operator asked to stop. */
     if (!(VsAbort = vs_add_exc(m, "ysp.screen.Abort", "Abort", NULL))) goto fail;
+    if (vv_init(m) < 0) goto fail;
     for (i = 0; i < (int)(sizeof consts / sizeof consts[0]); i++)
         if (PyModule_AddIntConstant(m, consts[i].name, consts[i].v) < 0) goto fail;
     if (PyModule_AddStringConstant(m, "__version__", YV_VERSION) < 0) goto fail;

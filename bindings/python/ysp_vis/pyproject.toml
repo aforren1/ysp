@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ysp-vis"
-version = "0.10.1"  # tracks ysp/screen.h's YSCR_VERSION_STRING (docs/bindings.md, ysp-vis); tests/test_screen_sim.py checks it
+version = "0.10.1.1"  # ysp/screen.h's YSCR_VERSION_STRING, .1: ysp.gfx and ysp.video, phase B (docs/bindings.md, ysp-vis); tests/test_screen_sim.py checks it
 description = "A stimulus display with flip at a time and a record of every flip (ysp/screen.h), its stimuli (ysp/gfx.h) and movies (ysp/video.h)"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -25,7 +25,7 @@ classifiers = ["Operating System :: Microsoft :: Windows"]
 build = "cp39-*"
 archs = ["AMD64"]
 # The dependencies are this repository's packages, not on an index yet.
-before-test = "pip install {project}/bindings/python/ysp_audio {project}/bindings/python/ysp_timeline"
-test-requires = ["pytest"]
+before-test = "pip install {project}/bindings/python/ysp_audio {project}/bindings/python/ysp_timeline {project}/bindings/python/ysp_color"
+test-requires = ["pytest", "numpy"]   # numpy: test_gfx_sim.py's arrays; ysp-color (before-test): its calibration test
 # The simulated display: no window, no GPU (tests/test_window.py is local only).
 test-command = "pytest {package}/tests -q"

@@ -24,12 +24,12 @@ function loop_mex(varargin)
         k = 0;
         t_end = [];
         while true
-            [f, quit] = ysp_screen('begin', h);
+            [f, quit, done] = ysp_screen('begin', h);   % done: the records, asked for
             if ~isempty(quit), fprintf('abort 0x%x\n', quit.reasons); break; end
             if isempty(t_end), t_end = f.onset + o.seconds + o.idle; end
-            for j = 1:numel(f.done)
+            for j = 1:numel(done)
                 k = k + 1;
-                R(k, :) = row(f.done(j));
+                R(k, :) = row(done(j));
             end
             if f.onset >= t_end
                 ysp_screen('flip', h);

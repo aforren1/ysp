@@ -4101,14 +4101,189 @@ the warning showed.
 
 `ysp/gfx.h` is bound in `ysp-vis` with `ysp/screen.h` and `ysp/video.h`
 (Python `ysp.gfx`, MEX `ysp_gfx`; [bindings.md](bindings.md#display-stimuli-movies-ysp-vis)).
-Phase A (2026-10-27) binds what a frame loop needs to show something: a
-gfx on a screen with a background, `begin`, filled rectangles (`rect`:
-the center from the screen's center in pixels, a gray level or linear
-device RGB) and `end`, one gfx per screen. The gfx opens after the screen
-settles, so its programs compile after the settling (`desc.on_context` is
-not bound yet). Not bound yet, for phase B: the stimuli and their
-descriptions, instances and groups, the timeline bindings through
-`ysp.timeline`'s table, textures, targets, text, the calibration and the
-output stage's options, capture. Tests: the simulated display's null
-backend (Python `test_screen_sim.py`, MEX `test_mex_vis.m`) and a real
-window (`test_window.py`, `test_mex_vis_window.m`, local only).
+Phase A (2026-10-27) bound a gfx with a background and filled rectangles.
+Phase B (2026-10-27, `ysp-vis` 0.10.1.1, MEX 1.1.0) binds the stimuli
+for a PsychoPy or Psychtoolbox user. The host-independent part is
+`bindings/share/ysp_vis_gfx.h`; `bindings/python/ysp_vis/vis_gfx.c` and
+`bindings/mex/ysp_vis_gfx.inc` turn host values into it. The references
+are [the Python README](../bindings/python/ysp_vis/README.md#stimuli-yspgfx)
+and [the MEX README](../bindings/mex/README.md#ysp_gfx).
+
+### What is bound
+
+- **Stimuli** as objects the binding owns: shapes (rect, circle, annulus,
+  line, polygon, cross, rrect, arc, pie, capsule, ngon, star, ellipse,
+  qbezier, polyline), gratings, gabors, noise (uniform, binary, Gaussian,
+  simplex), images of textures (from NumPy arrays or MATLAB matrices,
+  8-bit values linear or sRGB), dot fields and instances. A `ygfx_stim`
+  holds pointers (a path, the elements, a palette, a group) that must stay
+  valid while it is drawn; each one points into memory the binding owns.
+  A maker fills the constructor's desc with what the constructor reads
+  (the box, the shape and its parameters, the vertices, the path, the
+  texture), so what it derives is the C path's: `h` 0 is `w`, a polygon's
+  box is its vertices' extent, a star's inner ratio 0 is 0.5, a gabor's box
+  is 8 sigma. The rest is set by name after it, so `contrast=0` is 0, not
+  the desc's default 1.
+- **Parameters by name**, from the header's tables (`ygfx_params()`,
+  `ygfx_enum_params()`): every float field, the enums by their names
+  (`edge="gaussian"`), the vectors (`color`, `dir`, `tint`, `src`,
+  `shape_p`, `trim`), `anchor` as a name or `(ax, ay)`, and the shape
+  parameters by their meaning per kind (`radius`, `inner`, `sweep`,
+  `points`, ...). A name the kind does not read is refused, so a typo is
+  an error, not a field that nothing reads. `params(kind)` lists them.
+- **Units and color**: the gfx's units (`px`, or `deg` with the viewing
+  geometry); colors are linear device RGB, or any ysp/color.h space
+  through the gfx's color context (`space=`, a hex sRGB color,
+  `color()` and `dir()`), which needs a calibration (`cal=`, the bytes of a
+  .yspcal file or a `ysp.color.Calibration`).
+- **Batching**: draw lists (one call draws N stimuli in order), bulk sets
+  and gets of a list (`L.set("x", xs)`: one call for N values), groups,
+  and instances, whose elements are a float32 view in Python (NumPy writes
+  them, no call per element) and `'elements'` in MEX. `frame(*items)` is
+  begin, the bindings, the draws and end in one call, so a frame is three
+  calls (screen begin, gfx frame, screen flip) whatever the stimulus count.
+- **Timeline bindings** to channels of a `ysp.timeline.Timeline` (or a
+  `ysp_timeline` handle) through the owner's table: a stimulus's float
+  field (`color` takes three channels), a list (a channel per item or one
+  for all), a group's field, or elements of instances. The gfx writes them
+  with `ygfx_apply()` in its begin, so a tweened stimulus costs no host call
+  per frame; with `timeline(tl)` it also evaluates the timeline at the
+  screen frame's predicted onset. The gfx pins each timeline once and gives
+  the pin back when its last binding goes, at unbind, and at close.
+  Binding a field again replaces its binding.
+- **The open started while the screen settles**: `Screen(gfx={...})` and
+  `ysp_screen('open', ..., 'gfx', struct(...))` set the screen's
+  `desc.on_context` to a hook in C that calls `ygfx_open_start()`, so the
+  built-in programs compile during the settling (OPEN START); `Gfx(screen)`
+  finishes the open. The gfx primes its programs at open (`prime=False`
+  skips it) and uses the per-user program cache unless `cache=False`.
+- **Hit tests** (`ygfx_hit()`, `ygfx_hit_index()`; a list's topmost
+  visible item), bounds and anchors, **capture** to PPM files (no
+  callback: the writer is ysp/rt.h's thread, and nothing calls the host),
+  and the reads (`read_scene`, `read_output`) for tests.
+
+One gfx per screen stays: its output stage writes every pixel of the frame,
+so a second gfx would draw over the first. Nothing needed more.
+
+### What is not bound, and why
+
+- Text and curve sets: phase C.
+- Compounds, effects (`fx`), paint (gradients), MSDF glyph runs, user
+  shaders, render targets, setup passes, blur and the LUT: each needs
+  memory or GL objects with a lifetime of its own (a primitive array, a
+  pipeline, a target that a stimulus samples), and no phase B experiment
+  needed them.
+- Video textures, planes and imports: ysp.video's.
+- Image files: ysp/gfx.h reads none (and ysp/pack.h decodes none); a host
+  reads the file (PIL, `imread`) and gives the pixels to `texture()`.
+- `on_frame` of capture: a host function on the writer thread.
+
+### Lifetime
+
+A Python stimulus, list, group or texture holds its `Gfx`, so the C gfx
+outlives them; when the gfx or its screen closes, a set, a draw or a hit
+test raises `ClosedError`, and a read gives the last value. In MEX,
+closing a gfx (or its screen, or the last clear) frees its objects and
+their handles, so a kept handle is refused (`ysp_gfx:handle`). `free`
+refuses a stimulus a list holds, a group or texture a stimulus uses
+(`ysp_gfx:busy`); a binding goes with its object. GL frees inside a frame
+wait for its end. The instances' `elements` view owns its memory, as the
+timeline's views do (timeline.md, "A view owns what it shows").
+
+### Tests
+
+On the simulated display (gfx's null backend draws nothing), in CI:
+`tests/test_gfx_sim.py` (22 tests) and `test_mex_vis_gfx.m` (105 checks).
+They check every shape kind and what its constructor derives, parameters
+by name and their refusals, lists and bulk sets, groups and hit tests,
+instances and the element view after its stimulus is gone, dot fields,
+textures, a tween bound to a gabor's contrast and position (the stimulus
+follows the channels each frame; a rewind replays the values bit for bit
+and a seek gives the first run's value), list, group and element
+bindings, the pins given back, the open started while the screen
+settles, capture on the null backend, and the lifetime rules. In a real
+window, local only (`YSP_VIS_WINDOW=1 pytest tests/test_window.py`,
+`test_mex_vis_window.m`): five stimuli made through the binding (a gabor,
+a grating in a cosine-edged circle, a stroked rounded rect, a star placed
+by its corner, binary noise) draw the same scene, bit for bit, as the same
+stimuli made with the constructors in C (`yv_gfx_c_scene()`), and
+instances match the same gabors drawn one by one within 2e-5.
+
+### Measured on the binding: N gabors and a bound tween for 10 minutes
+
+`tests/probe/vis/gfx_loop.py` and `gfx_loop_mex.m` (`gfx_run.sh`): N
+gabors (sigma 6 px, 48 px across) on a grid over the screen, as one
+DrawList of N stimuli or one instances stimulus of N elements; a
+`ysp.timeline` Timeline (a `ysp_timeline` handle in MEX) drives every
+gabor's contrast (a yoyo tween, 0.1 to 0.5 in 1 s) and phase (1 cycle/s)
+through `bind()`, and the gfx evaluates it at each frame's predicted onset.
+A frame is three calls whatever N: the screen's begin, `frame(scene)`,
+the screen's flip. The records are kept for the run (Python `f.done`; MEX
+a `'frame', 'row'` screen and the records matrix). The laptop of
+[av_probe.md](av_probe.md) (i7-1360P, Iris Xe, internal panel 1920 x 1200
+at 60 Hz, Windows 11 26200), fullscreen, AUTO (COMPOSITION), AC, every run
+through the timing guard (load 0 to 15 % at its start), ysp-vis 0.10.1.1
+(CPython 3.12.11) and MEX 1.1.0 (MATLAB R2023a, Octave 10.1), 2026-10-27,
+11:50 to 14:32. No photodiode: every tier is the record's. Work is the
+DRAW phase: from the return of `yscr_begin()` to the call of
+`yscr_flip()`, everything the host does in the frame through the binding.
+
+| Host | N, as | Records | Missed (vblanks) | Late target | Residual us p50 / p99 | Work ms p50 / p99 / max | Path; tier |
+|---|---|---|---|---|---|---|---|
+| Python 3.12 | 100, list | 36001 | 0 (0) | 1 | 4.3 / 111.4 | 0.30 / 0.78 / 4.65 | independent; t1 35919, t2 82 |
+| MATLAB R2023a | 100, list | 36002 | 0 (0) | 0 | 2.0 / 113.6 | 0.43 / 1.03 / 14.74 | independent; t1 35944, t2 58 |
+| Octave 10.1 | 100, list | 36000 | 1 (2) | 0 | 1.1 / 100.3 | 0.54 / 1.26 / 2.53 | independent; t1 35973, t2 27 |
+| Python 3.12 | 1000, list | 35998 | 2 (2) | 2 | 1.0 / 89.7 | 1.08 / 1.89 / 12.82 | independent; t1 35990, t2 8 |
+| MATLAB R2023a | 1000, list | 36000 | 2 (2) | 0 | 1.9 / 108.8 | 1.30 / 2.30 / 4.15 | independent; t1 35962, t2 38 |
+| Octave 10.1 | 1000, list | 36001 | 1 (1) | 0 | 1.4 / 106.8 | 1.71 / 2.58 / 6.18 | independent; t1 35977, t2 24 |
+| Python 3.12 | 100, instances | 36002 | 0 (0) | 0 | 2.2 / 116.8 | 0.28 / 0.63 / 2.43 | independent; t1 35949, t2 53 |
+| MATLAB R2023a | 100, instances | 36002 | 0 (0) | 0 | 2.0 / 116.5 | 0.41 / 0.88 / 4.78 | independent; t1 35943, t2 59 |
+| Octave 10.1 | 100, instances | 36002 | 0 (0) | 0 | 2.6 / 113.8 | 0.54 / 1.07 / 3.10 | independent; t1 35955, t2 47 |
+| Python 3.12 | 1000, instances | 36002 | 0 (0) | 0 | 1.0 / 93.1 | 0.29 / 0.69 / 2.25 | independent; t1 35975, t2 27 |
+| MATLAB R2023a | 1000, instances | 36002 | 0 (0) | 0 | 1.5 / 108.6 | 0.45 / 0.97 / 3.18 | independent; t1 35971, t2 31 |
+| Octave 10.1 | 1000, instances | 36002 | 0 (0) | 0 | 1.2 / 102.1 | 0.62 / 1.18 / 2.45 | independent; t1 35961, t2 41 |
+
+No frame was occluded. What the table shows:
+
+- **The host is out of the per-stimulus work.** With the stimuli in a list
+  or in instances, a frame is three calls, and the work grows with what C
+  does, not with host calls: 1000 instances cost what 100 do (one draw,
+  one bound template), and 1000 list items cost 0.8 to 1.2 ms more than
+  100 at the median (1000 draws packed, 2000 bindings written) in every
+  host. The host's own share is the difference between the hosts: 0.1 to
+  0.2 ms in MATLAB and 0.25 to 0.65 ms in Octave over Python.
+- **Against av_probe.md** (N = 100, a call per stimulus, fullscreen: work
+  p99 1.4 to 2.5 ms in Python 3.12, 2.8 ms in MATLAB, 5.1 ms in Octave):
+  100 stimuli in a list here have p99 0.78, 1.03 and 1.26 ms, and 1000
+  stimuli in a list 1.89, 2.30 and 2.58 ms, under the probe's 100. Every
+  p99 is under 2.6 ms against a 16.7 ms frame.
+- **Misses.** 6 frames missed in 432,014 records, each with host work
+  under 1.8 ms: the system's (Octave's frame 492 had 0.44 ms). The two
+  frames with host work over 8 ms dropped no vblank: MATLAB's frame 0
+  (14.7 ms, first-use costs) and one Python frame (12.8 ms at frame
+  17432, with `gc.freeze()` on; the cause was not traced), which its record
+  flags LATE_TARGET. The other late targets were Python's frame 0 (1.9 ms)
+  and one frame of 1.6 ms.
+- **Residuals** as in screen.md's minimal frame: p50 1 to 4 us, p99 90 to
+  117 us from stretches flagged GRID_UNSTABLE.
+
+### Measured: the open started while the screen settles
+
+`tests/probe/vis/gfx_open.py`: the time from `Screen()` to the end of
+`Gfx()` (prime included), the gfx opened after the screen (phase A's way)
+or started in the screen's hook (`Screen(gfx=...)`), with a cold program
+cache (an empty folder) and a warm one (the same folder again); 3 rounds.
+The i7-1360P laptop, Iris Xe, Windows 11, AC, the measurement lock held,
+ysp-vis 0.10.1.1 in CPython 3.12, 2026-10-27.
+
+| s from Screen() to a Gfx that draws | after, cold | started, cold | after, warm | started, warm |
+|---|---|---|---|---|
+| fullscreen | 2.50, 3.15, 3.25 | 2.28, 2.41, 3.00 | 0.65, 0.74, 0.77 | 0.69, 0.70, 0.71 |
+| 1280 x 720 window | 4.93, 9.76, 10.67 | 6.10, 6.15, 7.45 | 4.25, 4.29, 4.30 | 4.28, 4.29, 4.36 |
+
+With a cold cache the start in the hook saved 0.7 s fullscreen and 3.6 s
+in a window at the median; with a warm cache (the default after the first
+run on a machine) the two do not differ beyond the spread. A window took
+4.2 to 4.4 s warm, against the 2.5 s of settling the screen states; the
+rest was not traced. The 14 programs came from the cache in every warm
+open.
