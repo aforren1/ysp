@@ -2336,11 +2336,11 @@ On miniaudio's null device, so CI needs no sound card:
 
 | Host | Result |
 |---|---|
-| Python 3.14, Windows 11, MSVC 19.44 | `ysp_audio` 21 tests, `share_test` 17 tests: pass |
-| Python 3.10, Ubuntu 22.04 on WSL2, gcc 11.4 | the same 21 and 17: pass |
-| MATLAB R2023a, Windows 11, MSVC 19.44 | `test_mex_audio` 54 checks, `test_mex_share` 22 checks: pass |
-| Octave 10.1, Windows 11, MinGW-w64 gcc | the same 54 and 22: pass |
-| Octave 6.4, Ubuntu 22.04 on WSL2 | the same 54 and 22: pass |
+| Python 3.14, Windows 11, MSVC 19.44 | `ysp_audio` 22 tests, `share_test` 23 tests: pass (0.7.2) |
+| Python 3.12, Ubuntu 22.04 on WSL2, gcc 11.4 | the same 22 and 23: pass (0.7.2) |
+| MATLAB R2023a, Windows 11, MSVC 19.44 | `test_mex_audio` 55 checks, `test_mex_share` 26 checks: pass (1.0.1) |
+| Octave 10.1, Windows 11, MinGW-w64 gcc | the same 55 and 26: pass (1.0.1) |
+| Octave 6.4, Ubuntu 22.04 on WSL2 | 54 and 22 checks: pass (1.0.0; not run for 1.0.1) |
 
 One manual run on the default device (Speakers (Realtek(R) Audio), WASAPI
 shared, 48 kHz): `example.py --device` and the same tone from MATLAB
