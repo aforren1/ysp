@@ -1,0 +1,128 @@
+"""Summarizes the probe's per-frame CSVs (docs/av_probe.md).
+
+    uv run --no-project python analyze.py CSV...
+    uv run --no-project python analyze.py --after CSV FIRST
+
+One row per file: frames; missed (records with dropped > 0, and the
+vblanks dropped); late targets (the caller's lateness); residual p50 /
+p99 / max in us; paths and tiers; the work between begin() and flip_at()
+p50 / p99 / max in ms and the frames over 16.7 ms; the time outside the
+two calls (the host's loop overhead) p99 and max in ms.
+"""
+import sys
+
+PATHS = {0: "unknown", 1: "composed", 2: "overlay", 3: "independent", 4: "sim", 5: "browser"}
+LATE, EST, OCC, NEVER = 0x004, 0x002, 0x008, 0x040 | 0x080
+
+
+def pct(v, p):
+    if not v:
+        return float("nan")
+    v = sorted(v)
+    k = min(len(v) - 1, max(0, int(round(p / 100.0 * (len(v) - 1)))))
+    return v[k]
+
+
+def summarize(path):
+    tag, rows = load(path)
+    rec = [r for r in rows if r[8] != 0 or r[13] & NEVER]
+    missed = [r for r in rec if r[10] > 0]
+    late = [r for r in rec if r[13] & LATE]
+    est = [r for r in rec if r[13] & EST]
+    occ = [r[0] for r in rec if r[13] & OCC]
+    # misses within 120 frames of an OCCLUDED record: another window covered ours
+    near = set()
+    for i in occ:
+        near.update(range(i - 120, i + 121))
+    missed_clear = [r for r in missed if r[0] not in near]
+    resid = [abs(r[9]) / 1e3 for r in rec if r[8] != 0]
+    work = [r[2] / 1e6 for r in rows if r[2] > 0]
+    outside = [r[4] / 1e6 for r in rows if r[4] > 0]
+    paths, tiers = {}, {}
+    for r in rec:
+        paths[PATHS.get(r[11], r[11])] = paths.get(PATHS.get(r[11], r[11]), 0) + 1
+        tiers[r[12]] = tiers.get(r[12], 0) + 1
+    over = sum(1 for w in work if w > 16.7)
+    return {
+        "tag": tag, "frames": len(rows), "records": len(rec),
+        "missed": len(missed), "occ": len(occ), "missed_clear": len(missed_clear), "dropped": sum(r[10] for r in missed), "late": len(late), "est": len(est),
+        "res": (pct(resid, 50), pct(resid, 99), max(resid) if resid else float("nan")),
+        "work": (pct(work, 50), pct(work, 99), max(work) if work else float("nan")), "over": over,
+        "out": (pct(outside, 99), max(outside) if outside else float("nan")),
+        "paths": paths, "tiers": tiers,
+        "late_idx": [r[0] for r in late][:10], "miss_idx": [r[0] for r in missed][:10],
+    }
+
+
+def after(path, first, k=6):
+    """The frames around FIRST (the first frame after an idle gap)."""
+    out = []
+    for r in load(path)[1]:
+        if first - 1 <= r[0] < first + k:
+            out.append("%d: wait %.1f ms, res %.2f ms, drop %d, %s, tier %d, flags 0x%x" % (
+                r[0], r[1] / 1e6, r[9] / 1e6, r[10], PATHS.get(r[11], r[11]), r[12], r[13]))
+    return out
+
+
+def gap(path, first):
+    """The frames after an idle gap: frame FIRST's record, then the bad
+    frames (those before the first 10 in a row with tier 1, no drop and no
+    flag) and the span of their predicted onsets, as docs/av_probe.md."""
+    rows = [r for r in load(path)[1] if r[0] >= first]
+    run, bad_end = 0, None
+    for k, r in enumerate(rows):
+        good = r[12] == 1 and r[10] == 0 and r[13] == 0
+        run = run + 1 if good else 0
+        if run == 10:
+            bad_end = k - 9
+            break
+    if bad_end is None:
+        bad_end = len(rows)
+    r = rows[0]
+    head = "frame %d: wait %.1f ms, drop %d, %s, tier %d, flags 0x%x" % (
+        r[0], r[1] / 1e6, r[10], PATHS.get(r[11], r[11]), r[12], r[13])
+    span = (rows[bad_end - 1][5] - rows[0][5]) / 1e6 + 16.7 if bad_end else 0.0
+    worst = max((x[1] for x in rows[:bad_end]), default=0) / 1e6
+    flags = 0
+    for x in rows[:bad_end]:
+        flags |= x[13]
+    return "%s; bad %d (%.0f ms), max begin wait %.1f ms, flags 0x%x, drops %d" % (
+        head, bad_end, span, worst, flags, sum(x[10] for x in rows[:bad_end]))
+
+
+def load(path):
+    tag, rows = "", []
+    with open(path, newline="") as f:
+        for line in f:
+            if line.startswith("#"):
+                tag = line[1:].strip()
+            elif not line.startswith("index"):
+                rows.append([int(x) for x in line.split(",")])
+    return tag, rows
+
+
+def main():
+    if sys.argv[1] == "--gap":
+        for p in sys.argv[3:]:
+            print(p.replace("\\", "/").split("/")[-1], gap(p, int(sys.argv[2])))
+        return
+    if sys.argv[1] == "--after":
+        for line in after(sys.argv[2], int(sys.argv[3])):
+            print(line)
+        return
+    print("| run | frames | missed (vblanks) | missed away from occlusion | late target | occluded | residual us p50/p99/max "
+          "| work ms p50/p99/max | > 16.7 ms | outside ms p99/max | path | tier |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|")
+    for p in sys.argv[1:]:
+        s = summarize(p)
+        print("| %s | %d | %d (%d) | %d | %d | %d | %.1f / %.1f / %.1f | %.3f / %.3f / %.3f | %d | %.3f / %.3f | %s | %s |" % (
+            s["tag"], s["frames"], s["missed"], s["dropped"], s["missed_clear"], s["late"], s["occ"],
+            *s["res"], *s["work"], s["over"], *s["out"],
+            " ".join("%s %d" % kv for kv in sorted(s["paths"].items())),
+            " ".join("%s:%d" % kv for kv in sorted(s["tiers"].items()))))
+        if s["late_idx"] or s["miss_idx"]:
+            print("<!-- %s late %s missed %s -->" % (p, s["late_idx"], s["miss_idx"]))
+
+
+if __name__ == "__main__":
+    main()
