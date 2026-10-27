@@ -54,6 +54,7 @@ NATIVE_FILES = [
     (os.path.join(ANGLE, "libGLESv2.dll"), "libGLESv2.dll"),
     (os.path.join(ANGLE, "LICENSE.ANGLE.txt"), "ysp_vis-LICENSE.ANGLE.txt"),
     (os.path.join(NATIVES, "sdl3", "LICENSE.txt"), "ysp_vis-LICENSE.SDL3.txt"),
+    (os.path.join(PL_MPEG, "LICENSE.txt"), "ysp_vis-LICENSE.pl_mpeg.txt"),
 ]
 
 

@@ -184,6 +184,24 @@ def write_pl_mpeg(cache):
     os.makedirs(dest, exist_ok=True)
     with open(os.path.join(dest, "pl_mpeg.h"), "wb") as f:
         f.write(data)
+    # The repository has no LICENSE file at the pin; the header's own lines
+    # are the notice, and the wheel and the MEX directory ship them.
+    head = data.decode("utf-8", "replace").split("\n")[1:5]
+    with open(os.path.join(dest, "LICENSE.txt"), "w", encoding="utf-8", newline="\n") as f:
+        f.write("pl_mpeg.h, commit %s (%s), compiled into ysp-vis.\nIts notice, as the file states it:\n\n%s\n\n"
+                "SPDX MIT: Permission is hereby granted, free of charge, to any person obtaining a copy of this\n"
+                "software and associated documentation files (the \"Software\"), to deal in the Software without\n"
+                "restriction, including without limitation the rights to use, copy, modify, merge, publish,\n"
+                "distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the\n"
+                "Software is furnished to do so, subject to the following conditions:\n\n"
+                "The above copyright notice and this permission notice shall be included in all copies or\n"
+                "substantial portions of the Software.\n\n"
+                "THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING\n"
+                "BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND\n"
+                "NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,\n"
+                "DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n"
+                "OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.\n"
+                % (PL_MPEG_COMMIT, PL_MPEG_URL, "\n".join(head).strip()))
     print("ok: pl_mpeg %s in %s" % (PL_MPEG_COMMIT[:7], os.path.relpath(dest, ROOT)))
 
 

@@ -193,8 +193,10 @@ clock the binding's frames and decisions equal the C path's line by line
   the process (MATLAB's 2.1.18846) is never the one used. The license
   notices of SDL3 (zlib) and ANGLE (BSD) are installed beside the DLLs
   (`ysp_vis-LICENSE.SDL3.txt`, `ysp_vis-LICENSE.ANGLE.txt`). pl_mpeg.h
-  (MIT, its license in the file) is compiled in: commit c871f2b, checked
-  by SHA-256, the pin of CMakeLists.txt's `YSP_FETCH_PL_MPEG`. A download
+  (MIT) is compiled in: commit c871f2b, checked by SHA-256, the pin of
+  CMakeLists.txt's `YSP_FETCH_PL_MPEG`. Its repository has no license file
+  at the pin, so `ysp_vis-LICENSE.pl_mpeg.txt` carries the file's own
+  notice (its SPDX line and author) and the MIT text. A download
   that breaks off resumes where it stopped (an HTTP range request, up to 8
   attempts); only the whole file's SHA-256 decides.
 - **MATLAB and Octave layout.** `ysp_vis.<mexext>` is the core: the three

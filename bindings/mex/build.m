@@ -129,6 +129,7 @@ function build(name)
             copyfile(fullfile(vis, 'angle', 'libGLESv2.dll'), here);
             copyfile(fullfile(vis, 'angle', 'LICENSE.ANGLE.txt'), fullfile(here, 'ysp_vis-LICENSE.ANGLE.txt'));
             copyfile(fullfile(vis, 'sdl3', 'LICENSE.txt'), fullfile(here, 'ysp_vis-LICENSE.SDL3.txt'));
+            copyfile(fullfile(vis, 'pl_mpeg', 'LICENSE.txt'), fullfile(here, 'ysp_vis-LICENSE.pl_mpeg.txt'));
         end
         if ispc
             % Windows async-pulse workers use Win32 threads, so no thread

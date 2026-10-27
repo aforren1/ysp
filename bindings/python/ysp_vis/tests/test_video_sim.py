@@ -123,6 +123,8 @@ def test_names_and_constants():
     for k in ("loop", "ahead", "lead", "light", "backend", "hw_decode", "timeline", "base", "index", "data", "records"):
         assert k in o
     assert yvid._vis._shared()["video"] == yvid.HEADER_VERSION
+    here = os.path.dirname(os.path.abspath(yvid._vis.__file__))
+    assert os.path.exists(os.path.join(here, "ysp_vis-LICENSE.pl_mpeg.txt"))   # MPEG-1 is compiled in
 
 
 # --- SeqWriter and probe ---------------------------------------------------------------

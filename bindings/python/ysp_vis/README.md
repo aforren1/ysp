@@ -33,6 +33,7 @@ The wheel is `cp38-abi3-win_amd64`: one build for CPython 3.8 and later.
 | `ysp/screen.py`, `ysp/gfx.py`, `ysp/video.py` | the thin modules |
 | `ysp/libEGL.dll`, `ysp/libGLESv2.dll` | ANGLE 2.1.25848 (git 85cc0e0b9cc3), from the Electron v38.8.6 release for win32-x64 |
 | `ysp/ysp_vis-LICENSE.SDL3.txt`, `ysp/ysp_vis-LICENSE.ANGLE.txt` | the license notices of SDL3 (zlib) and ANGLE (BSD) |
+| `ysp/ysp_vis-LICENSE.pl_mpeg.txt` | pl_mpeg's notice (MIT): its MPEG-1 decoder is compiled into the extension |
 
 The extension always loads ANGLE from its own directory
 (`desc.angle_dir`), so another ANGLE in the process (MATLAB's, a Qt
