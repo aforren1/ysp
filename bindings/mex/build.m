@@ -62,6 +62,24 @@ function build(name)
             continue;
         end
         args = {['-I' root], ['-I' share], srcs{i}};
+        % The owners of a shared table export ysp_<name>_api_table() too
+        % (docs/bindings.md, "Sharing one implementation across modules").
+        % MATLAB on Linux and macOS links a MEX file with a list that exports
+        % mexFunction alone; this list adds the table function.
+        if any(strcmp(srcs{i}, {'ysp_audio.c', 'ysp_timeline.c'})) && ~ispc && ~exist('OCTAVE_VERSION', 'builtin')
+            sym = [srcs{i}(1:end-2) '_api_table'];
+            lst = [tempname() '.map'];
+            fid = fopen(lst, 'w');
+            if ismac
+                fprintf(fid, '_mexFunction\n_mexfilerequiredapiversion\n_%s\n', sym);
+                flag = ['-Wl,-exported_symbols_list,' lst];
+            else
+                fprintf(fid, 'MEX { global: mexFunction; mexfilerequiredapiversion; %s; local: *; };\n', sym);
+                flag = ['-Wl,--version-script,' lst];
+            end
+            fclose(fid);
+            args(end+1:end+2) = {['LINKEXPORT=' flag], ['LINKEXPORTVER=' flag]};   %#ok<AGROW>
+        end
         if strcmp(srcs{i}, 'ysp_audio.c')
             args{end+1} = ['-I' ma];   %#ok<AGROW>
             if ~ispc

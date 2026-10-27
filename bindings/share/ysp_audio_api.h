@@ -15,7 +15,7 @@
  *             consumer's own directory.
  *
  * The list: the output, stream and WAV functions a consumer's objects call on
- * an audio handle it was given (ysp/video.h's soundtrack calls 18 of them).
+ * an audio handle it was given (ysp/video.h calls 16 of them).
  * Not in it: open and close (the owner's), the arena (the owner's memory:
  * a consumer gives a stream or WAV ring its own memory), capture, the
  * detectors and the WAV writer. The signatures are the header's own: the

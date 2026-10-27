@@ -1952,6 +1952,18 @@ designer; a negative wait or stagger (refused as negative times; use
 `at(t - dt)` or reverse the field list); a Python object as a mark's
 payload (`user` is a 64-bit integer, as in C).
 
+### Shared with other modules (2026-10-26)
+
+`ysp-timeline` 0.8.1.1 and the MEX `ysp_timeline` 1.1.0 export a C table
+(`ysp.timeline._C_API`, `ysp_timeline_api_table()`) with the frame-time
+functions, so `ysp-vis` drives a movie's clock and a frame loop from a
+timeline built here, with one copy of the implementation
+([bindings.md](bindings.md#sharing-one-implementation-across-modules)).
+While another module holds a timeline, `close` raises `BusyError`
+(`ysp_timeline:busy`). Through the Python table `ytl_evaluate` is the
+binding's evaluate: tween callbacks run and `bind()` targets are written.
+A MEX timeline handle is a number from `0x544C * 2^32 + 1` up.
+
 ### Measured cost
 
 The per-frame cost through the binding of an evaluate and a read of N

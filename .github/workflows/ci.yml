@@ -520,7 +520,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         package: [ysp_parallel, ysp_serial, ysp_stair, ysp_quest, ysp_aep, ysp_trials, ysp_color, ysp_rdk,
-                  ysp_box, ysp_pack, ysp_rt, ysp_device, ysp_rigfile, ysp_response, ysp_timeline, ysp_dataset]
+                  ysp_box, ysp_pack, ysp_rt, ysp_device, ysp_rigfile, ysp_response, ysp_timeline, ysp_dataset,
+                  ysp_audio]
         exclude:
           - os: macos-latest      # ysp/parallel.h #errors on macOS
             package: ysp_parallel
@@ -534,9 +535,17 @@ jobs:
       # box, serial, parallel, rt), so every header is staged: one rule that
       # cannot fall behind an #include, and one copy of each file (cp refuses
       # a source named twice, which ysp_rt hit with rt.h).
+      # The shared tables (bindings/share/) go to include/share/; ysp-audio
+      # also needs miniaudio.h 0.11.25 in include/, whose SHA-256 value
+      # setup.py checks.
       - name: Stage headers into the package (isolated build needs them locally)
         shell: bash
-        run: d=bindings/python/${{ matrix.package }}/include/ysp && mkdir -p $d && cp include/ysp/*.h $d/
+        run: |
+          d=bindings/python/${{ matrix.package }}/include
+          mkdir -p $d/ysp $d/share && cp include/ysp/*.h $d/ysp/ && cp bindings/share/*.h $d/share/
+          if [ "${{ matrix.package }}" = ysp_audio ]; then
+            curl -sSfL -o $d/miniaudio.h https://raw.githubusercontent.com/mackron/miniaudio/0.11.25/miniaudio.h
+          fi
 
       - name: Build & test wheels
         uses: pypa/cibuildwheel@v4.1.0
@@ -548,6 +557,31 @@ jobs:
         with:
           name: wheels-${{ matrix.package }}-${{ matrix.os }}
           path: wheelhouse/*.whl
+
+  # --------------------------------------------------------------------- #
+  # The shared C tables (docs/bindings.md, "Sharing one implementation   #
+  # across modules"): ysp-audio and ysp-timeline, and the test consumer   #
+  # bindings/python/share_test built against them, in one environment.    #
+  # --------------------------------------------------------------------- #
+  python-share:
+    name: Python shared tables (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Build and test (null device)
+        shell: bash
+        run: |
+          python -m pip install pytest
+          python -m pip install ./bindings/python/ysp_audio ./bindings/python/ysp_timeline
+          python -m pip install ./bindings/python/share_test
+          python -m pytest -q bindings/python/share_test/tests bindings/python/ysp_audio/tests
 
   # --------------------------------------------------------------------- #
   # Octave: build every MEX with mkoctfile and smoke-test.                #
@@ -571,6 +605,14 @@ jobs:
           octave-cli --version | head -1
 
       - uses: actions/checkout@v7
+
+      # ysp_audio.c needs miniaudio.h 0.11.25 (the pin of YSP_FETCH_MINIAUDIO).
+      - name: Fetch miniaudio.h
+        run: |
+          apt-get install -y --no-install-recommends curl
+          mkdir -p bindings/mex/miniaudio
+          curl -sSfL -o bindings/mex/miniaudio/miniaudio.h https://raw.githubusercontent.com/mackron/miniaudio/0.11.25/miniaudio.h
+          echo "ac7af4de748b7e26b777f37e01cee313a308a7296a3eb080e2906b320cc55c89  bindings/mex/miniaudio/miniaudio.h" | sha256sum -c -
 
       - name: Build MEX
         working-directory: bindings/mex
@@ -666,6 +708,15 @@ jobs:
       - name: Timeline binding test (test_mex_timeline.m)
         working-directory: bindings/mex
         run: octave-cli -q --eval "test_mex_timeline"
+      # miniaudio's null device: no sound hardware.
+      - name: Audio binding test (test_mex_audio.m)
+        working-directory: bindings/mex
+        run: octave-cli -q --eval "test_mex_audio"
+      # Builds tests/share_consumer.c and drives ysp_audio and ysp_timeline
+      # handles through their exported tables.
+      - name: Shared tables test (test_mex_share.m)
+        working-directory: bindings/mex
+        run: octave-cli -q --eval "test_mex_share"
       # Writes a data set in a temporary folder; its crash check starts a
       # second octave-cli and kills it.
       - name: Data set binding test (test_mex_dataset.m)
@@ -695,6 +746,12 @@ jobs:
 
       - name: Set up MATLAB
         uses: matlab-actions/setup-matlab@v3
+
+      - name: Fetch miniaudio.h
+        run: |
+          mkdir -p bindings/mex/miniaudio
+          curl -sSfL -o bindings/mex/miniaudio/miniaudio.h https://raw.githubusercontent.com/mackron/miniaudio/0.11.25/miniaudio.h
+          echo "ac7af4de748b7e26b777f37e01cee313a308a7296a3eb080e2906b320cc55c89  bindings/mex/miniaudio/miniaudio.h" | sha256sum -c -
 
       - name: Build MEX + smoke test
         uses: matlab-actions/run-command@v3
@@ -792,6 +849,14 @@ jobs:
         uses: matlab-actions/run-command@v3
         with:
           command: cd('bindings/mex'); test_mex_timeline
+      - name: Audio binding test (test_mex_audio.m)
+        uses: matlab-actions/run-command@v3
+        with:
+          command: cd('bindings/mex'); test_mex_audio
+      - name: Shared tables test (test_mex_share.m)
+        uses: matlab-actions/run-command@v3
+        with:
+          command: cd('bindings/mex'); test_mex_share
       - name: Data set binding test (test_mex_dataset.m)
         uses: matlab-actions/run-command@v3
         with:
