@@ -1629,9 +1629,9 @@ under `ysp_gfx:`). `'begin'` and `'wait_flip'` block MATLAB, and Ctrl+C
 does not end them; Shift+Esc does.
 
 Between trials, `pause` is fine in MATLAB and in Octave: the window
-belongs to ysp/screen.h's window thread and does not hang. Three Shift+Esc
-presses in 2 s while the frame loop does not run (`panic`, off by default)
-release the display: the next `'begin'` reports the abort with `panic`
+belongs to ysp/screen.h's window thread and does not hang. With `'panic'`
+on (fullscreen; off by default), three Shift+Esc presses in 2 s while the
+frame loop does not call `'begin'` release the display: the next `'begin'` reports the abort with `panic`
 true, and only `'close'` is left. Close in `try`/`catch`, not in an
 `onCleanup`: Octave did not run one in the av probe
 ([docs/av_probe.md](../../docs/av_probe.md), section 4).
