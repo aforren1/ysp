@@ -32,7 +32,7 @@
 
 /* The binding's own version (docs/bindings.md, Versions): the thin files and
  * the core must be the same build. */
-#define YV_MEX_VERSION "1.0.0"
+#define YV_MEX_VERSION "1.1.0"   /* 1.1.0: ysp_gfx stimuli, lists, groups, textures, bindings; the slim frame */
 #define YV_CORE_ABI 1
 #define YV_CORE_SYMBOL "ysp_vis_core"
 
