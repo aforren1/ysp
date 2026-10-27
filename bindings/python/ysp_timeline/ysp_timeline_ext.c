@@ -64,7 +64,7 @@
 /* The distribution's version is the header's; a change to this binding
  * alone adds a fourth number. tests/test_timeline.py checks this against
  * pyproject.toml. */
-#define TL_VERSION YTL_VERSION_STRING
+#define TL_VERSION YTL_VERSION_STRING ".1"   /* .1: the shared table (_C_API), pins, BusyError */
 
 /* Seconds at or above this are refused: the header's range is |t| < 2^62
  * ns (TIME), and 4611686018 s is the largest whole second below it. */

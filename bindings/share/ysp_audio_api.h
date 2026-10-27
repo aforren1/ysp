@@ -30,7 +30,7 @@
 #include "ysp_share.h"
 
 #define YSP_AUDIO_API_CAPSULE "ysp.audio._C_API"   /* Python                */
-#define YSP_AUDIO_API_SYMBOL  "ysp_audio_api"      /* MEX: the exported fn  */
+#define YSP_AUDIO_API_SYMBOL  "ysp_audio_api_table"   /* MEX: the exported fn */
 #define YSP_AUDIO_API_OWNER_MEX "ysp_audio"        /* MEX: the owner's file */
 
 /* X(return type, name, (parameters), (arguments)); XV for void returns. */

@@ -37,6 +37,8 @@ wheelhouse/
 
 # headers staged into a python binding for isolated/CI builds
 bindings/python/*/include/
+# miniaudio.h for the ysp_audio MEX build (build.m)
+bindings/mex/miniaudio/
 
 # logs and crash dumps
 logs/

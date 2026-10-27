@@ -14,6 +14,13 @@ function build(name)
 
     here = fileparts(mfilename('fullpath'));
     root = fullfile(here, '..', '..', 'include'); % include/ysp/ holds the headers
+    share = fullfile(here, '..', 'share');        % the shared tables (ysp_audio, ysp_timeline)
+    % ysp_audio.c needs miniaudio.h 0.11.25 (CMakeLists.txt's YSP_FETCH_MINIAUDIO
+    % pin): from YSP_MINIAUDIO_DIR, or in bindings/mex/miniaudio/.
+    ma = getenv('YSP_MINIAUDIO_DIR');
+    if isempty(ma) || ~exist(fullfile(ma, 'miniaudio.h'), 'file')
+        ma = fullfile(here, 'miniaudio');
+    end
 
     if nargin < 1
         d = dir(fullfile(here, 'ysp_*.c'));
@@ -50,7 +57,18 @@ function build(name)
             fprintf('skipping %s: not supported on this platform\n', srcs{i});
             continue;
         end
-        args = {['-I' root], srcs{i}};
+        if strcmp(srcs{i}, 'ysp_audio.c') && ~exist(fullfile(ma, 'miniaudio.h'), 'file')
+            fprintf('skipping ysp_audio.c: no miniaudio.h (set YSP_MINIAUDIO_DIR or put it in %s)\n', fullfile(here, 'miniaudio'));
+            continue;
+        end
+        args = {['-I' root], ['-I' share], srcs{i}};
+        if strcmp(srcs{i}, 'ysp_audio.c')
+            args{end+1} = ['-I' ma];   %#ok<AGROW>
+            if ~ispc
+                % miniaudio loads its backends with dlopen.
+                args(end+1:end+2) = {'-ldl', '-lm'};   %#ok<AGROW>
+            end
+        end
         if ispc
             % Windows async-pulse workers use Win32 threads, so no thread
             % library. ysp/serial.h does need SetupAPI and the registry for

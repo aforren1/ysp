@@ -18,8 +18,9 @@
  *   Python  the owner module has an attribute _C_API, a capsule named
  *           "<module>._C_API" holding a pointer to the table.
  *           PyCapsule_Import() imports the owner and returns the pointer.
- *   MEX     the owner MEX file exports one function (dllexport, or default
- *           visibility) that returns the table. The consumer loads the owner
+ *   MEX     the owner MEX file exports one function, ysp_<name>_api_table()
+ *           (dllexport, or default visibility), that returns the table.
+ *           The consumer loads the owner
  *           file from its own directory with LoadLibrary/dlopen, which
  *           returns the module MATLAB or Octave already loaded, so the
  *           handles the owner's own commands opened are the same objects.
@@ -84,6 +85,16 @@ typedef struct ysp_share_head {
 #define YSP_SHARE_EXPORT __declspec(dllexport)
 #else
 #define YSP_SHARE_EXPORT __attribute__((visibility("default")))
+#endif
+
+/* An owner MEX file's mexFunction. MinGW's linker exports every symbol only
+ * when no symbol is dllexport'd, and Octave's mkoctfile relies on that for
+ * mexFunction: with the table function exported, mexFunction must be too.
+ * MATLAB's MSVC link names mexFunction itself (/EXPORT). */
+#if defined(__MINGW32__)
+#define YSP_SHARE_MEX_ENTRY __declspec(dllexport)
+#else
+#define YSP_SHARE_MEX_ENTRY
 #endif
 
 /* Inline, so a unit that does not call one has no unused-function warning. */

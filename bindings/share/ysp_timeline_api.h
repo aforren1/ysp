@@ -30,7 +30,7 @@
 #include "ysp_share.h"
 
 #define YSP_TIMELINE_API_CAPSULE "ysp.timeline._C_API"
-#define YSP_TIMELINE_API_SYMBOL  "ysp_timeline_api"
+#define YSP_TIMELINE_API_SYMBOL  "ysp_timeline_api_table"
 #define YSP_TIMELINE_API_OWNER_MEX "ysp_timeline"
 #define YSP_TIMELINE_API_CHANNELS 1024   /* YTL_MAX_CHANNELS in both owners */
 

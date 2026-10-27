@@ -23,6 +23,12 @@
  * trigger channel keeps its value (0 by default): it names one of the
  * caller's outputs, as the header's report does.
  *
+ * SHARING: the exported function ysp_timeline_api_table() returns the table of
+ * bindings/share/ysp_timeline_api.h. Its acquire() takes a pointer to a
+ * timeline handle (uint64) and pins the timeline; 'close' refuses a pinned
+ * one (ysp_timeline:busy), and a cleared handle table leaves it in place
+ * until the last release().
+ *
  * Build with build.m. See README.md for the command reference.
  */
 #define PM_MOD "ysp_timeline"
@@ -33,10 +39,15 @@
 #define YTL_MAX_CHANNELS 1024
 #define YSP_TIMELINE_IMPLEMENTATION
 #include "ysp/timeline.h"
+/* The table ysp-vis calls through (bindings/share/ysp_timeline_api.h). */
+#define YSP_TIMELINE_API_OWNER
+#include "ysp_timeline_api.h"
+
+#include <stddef.h>
 
 /* The binding's own version (README.md, "Versions"); the second output of
  * 'version' is the header's. */
-#define TLM_VERSION "1.0.0"
+#define TLM_VERSION "1.1.0"   /* 1.1.0: the shared table, 'pins', busy */
 #define TLM_S_MAX 4611686018.0
 
 enum { TLM_TIMELINE = 1, TLM_SEQ = 2 };
@@ -56,6 +67,8 @@ typedef struct tlm_tl {
     void*            cbuf[YTL_MAX_CHANNELS];   /* the arrays a track points at */
     int8_t           cbase[YTL_MAX_CHANNELS];
     int64_t          frames;
+    int              pins;        /* acquire() calls not yet released */
+    int              orphan;      /* the table was cleared while pinned */
 } tlm_tl;
 
 typedef struct tlm_seq {
@@ -69,6 +82,8 @@ static void tlm_destroy(void* obj) {
     int i;
     tlm_tl* t = (tlm_tl*)obj;
     if (!obj) return;
+    /* A pinned timeline stays for the module that holds it (SHARING). */
+    if (t->kind == TLM_TIMELINE && t->pins > 0) { t->orphan = 1; return; }
     if (t->kind == TLM_TIMELINE) {
         ytl_close(&t->tl);
         for (i = 0; i < YTL_MAX_CHANNELS; i++) free(t->cbuf[i]);
@@ -92,6 +107,29 @@ static void* tlm_find(uint64_t id) {
     for (n = pm_list; n; n = n->next)
         if (n->id == id) return n->obj;
     return NULL;
+}
+
+/* ---- sharing ----------------------------------------------------------------- */
+
+static ysp_timeline_api g_api;
+
+static void* tlm_api_acquire(void* ref, char* err, size_t cap) {
+    tlm_tl* t = ref ? (tlm_tl*)tlm_find(*(const uint64_t*)ref) : NULL;
+    if (!t || t->kind != TLM_TIMELINE) { snprintf(err, cap, "ysp_timeline: not an open timeline handle"); return NULL; }
+    t->pins++;
+    return &t->tl;
+}
+
+static void tlm_api_release(void* p) {
+    tlm_tl* t;
+    if (!p) return;
+    t = (tlm_tl*)(void*)((char*)p - offsetof(tlm_tl, tl));
+    if (--t->pins == 0 && t->orphan) tlm_destroy(t);
+}
+
+YSP_SHARE_EXPORT const ysp_timeline_api* ysp_timeline_api_table(void) {
+    if (!g_api.head.abi) ysp_timeline_api_fill(&g_api, YSP_SHARE_HOST_MEX, tlm_api_acquire, tlm_api_release);
+    return &g_api;
 }
 
 static tlm_tl* tlm_get_tl(const mxArray* a) {
@@ -526,12 +564,16 @@ static void tlm_close_seqs(uint64_t id) {
     }
 }
 
-void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
+YSP_SHARE_MEX_ENTRY void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     char* cmd;
     tlm_tl* t;
     tlm_seq* s;
     int rc;
     pm_destroy = tlm_destroy;
+    /* Handles start at 0x544C << 32, so a handle of another module (whose
+     * counter starts at 1) is not taken for one of these by acquire(); still
+     * exact as a double. */
+    if (pm_next_id == 1) pm_next_id = ((uint64_t)0x544C << 32) + 1;
     if (nrhs < 1 || !mxIsChar(prhs[0])) pm_err("usage", "first argument must be a command string");
     cmd = mxArrayToString(prhs[0]);
 
@@ -785,6 +827,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     pm_nargs(nrhs, 2, "ysp_timeline(command, h, ...)");
     t = tlm_get_tl(prhs[1]);
     if (strcmp(cmd, "close") == 0) {
+        if (t->pins > 0) pm_err("busy", "%d other module object(s) use this timeline (a movie?); close them first", t->pins);
         tlm_close_seqs(tlm_id(prhs[1]));
         pm_unregister(t);
         tlm_destroy(t);
@@ -801,6 +844,8 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         plhs[0] = tlm_values_out(t);
         if (nlhs > 1) plhs[1] = tlm_events_out(t, t->fired, n < t->ecap ? n : t->ecap);
         if (nlhs > 2) plhs[2] = tlm_fields_out(t);
+    } else if (strcmp(cmd, "pins") == 0) {
+        plhs[0] = mxCreateDoubleScalar(t->pins);
     } else if (strcmp(cmd, "values") == 0) {
         plhs[0] = tlm_values_out(t);
     } else if (strcmp(cmd, "field_values") == 0) {
