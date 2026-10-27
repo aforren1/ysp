@@ -594,9 +594,9 @@ jobs:
   # zip of the screen job; every download checked by SHA-256), cached by  #
   # the script's hash. The wheel is built with cibuildwheel and its tests #
   # run on the simulated display; MATLAB builds the MEX files and runs    #
-  # test_mex_vis.m (simulated display too). Octave on Windows is not run  #
-  # here (local only: bindings/mex/README.md). Nothing here is a timing   #
-  # claim.                                                                #
+  # test_mex_vis.m and test_mex_vis_gfx.m (simulated display too). Octave #
+  # on Windows is not run here (local only: bindings/mex/README.md).      #
+  # Nothing here is a timing claim.                                       #
   # --------------------------------------------------------------------- #
   vis:
     name: ysp-vis (Windows)
@@ -637,7 +637,7 @@ jobs:
         shell: bash
         run: |
           set -eu
-          for p in ysp_vis ysp_audio ysp_timeline; do
+          for p in ysp_vis ysp_audio ysp_timeline ysp_color; do
             d=bindings/python/$p/include
             mkdir -p $d/ysp $d/share && cp include/ysp/*.h $d/ysp/ && cp bindings/share/*.h $d/share/
           done
@@ -666,7 +666,7 @@ jobs:
           command: |
             cd('bindings/mex');
             build('audio'); build('timeline'); build('vis'); build('screen'); build('gfx'); build('video');
-            test_mex_vis
+            test_mex_vis; test_mex_vis_gfx
 
       - uses: actions/upload-artifact@v7
         with:

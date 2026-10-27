@@ -46,7 +46,8 @@ read CSV and JSON; `ysp.trials` already takes a table), `ysp/net.h`
 tool). `ysp/screen.h`, `ysp/gfx.h` and `ysp/video.h` are one module,
 `ysp-vis` (Python `ysp.screen`, `ysp.gfx` and `ysp.video` from one
 extension; MEX `ysp_screen`, `ysp_gfx`, `ysp_video` on one core), phase A
-since 2026-10-27 ([ysp-vis](#display-stimuli-movies-ysp-vis), below). It
+since 2026-10-27 and the gfx part of phase B since the same day
+([ysp-vis](#display-stimuli-movies-ysp-vis), below). It
 takes audio and the timeline from `ysp.audio` and `ysp.timeline` through
 their tables (Sharing one implementation across modules, below). Its host
 probe (frame loops in Python, MATLAB and Octave, DLL loading, idle
@@ -153,11 +154,13 @@ not bound and why.
 ### Display, stimuli, movies: ysp-vis
 
 Windows only: the other screen backends of `ysp/screen.h` are stubs. Phase
-A (2026-10-27) binds the frame loop of `ysp/screen.h` in full and the draw
-path that shows something (`ysp/gfx.h`: a background and filled
-rectangles); `ysp.video` and `ysp_video` are placeholders. Phase B adds
-the stimuli, the timeline bindings and the movies.
-[screen.md](screen.md#bindings) lists what is bound and what is not.
+A (2026-10-27) binds the frame loop of `ysp/screen.h` in full
+([screen.md](screen.md#bindings)). Phase B's gfx part (2026-10-27) binds
+the stimuli of `ysp/gfx.h` as objects the binding owns, draw lists and
+bulk sets, groups, instances, textures, hit tests, capture, and timeline
+bindings to `ysp.timeline` channels that the gfx writes in C each frame,
+so a frame is three calls whatever the stimulus count
+([gfx.md](gfx.md#bindings)). `ysp.video` and `ysp_video` are placeholders.
 
 - **Install.** Make the natives once from the repository root:
   `uv run --no-project python tools/vendor_vis.py --write --angle --sdl msvc`
@@ -193,23 +196,36 @@ the stimuli, the timeline bindings and the movies.
 - **Lifetime.** Python: a `Screen` closes on `close()`, at the end of a
   `with` block, when it is freed, and at the interpreter's exit
   (`atexit`); a `Gfx` holds its `Screen`, and a closed `Screen` closes its
-  `Gfx` first. MATLAB and Octave: each thin file attaches to the core when
-  it loads it and detaches in its `mexAtExit` hook (`clear ysp_screen`,
-  `clear mex`, the exit). The core closes every gfx and screen, and gives
-  back `ysp_audio` and `ysp_timeline`, when the last thin file detaches;
-  until then a clear of one file leaves the objects open, and the file
-  finds its handles again when it loads again. Verified in MATLAB R2023a
-  and Octave 10.1 (`test_mex_vis.m`; `test_mex_vis_window.m` with a
-  window).
-- **Versions.** `ysp-vis` tracks `ysp/screen.h`'s version (0.10.1), and
+  `Gfx` first. A stimulus, list, group or texture holds its `Gfx`; after
+  the gfx closes, it raises `ClosedError`. MATLAB and Octave: closing a
+  gfx (or its screen) frees its objects and their handles, and gives back
+  its pins of `ysp_timeline` timelines. Each thin file attaches to the
+  core when it loads it and detaches in its `mexAtExit` hook (`clear
+  ysp_screen`, `clear mex`, the exit). The core closes every gfx and
+  screen, and gives back `ysp_audio` and `ysp_timeline`, when the last
+  thin file detaches; until then a clear of one file leaves the objects
+  open, and the file finds its handles again when it loads again. Verified
+  in MATLAB R2023a and Octave 10.1 (`test_mex_vis.m`,
+  `test_mex_vis_gfx.m`; `test_mex_vis_window.m` with a window).
+- **Versions.** `ysp-vis` tracks `ysp/screen.h`'s version (0.10.1.1:
+  0.10.1 and the gfx part of phase B, a binding-only change), and
   `ysp.screen.HEADER_VERSION`, `ysp.gfx.HEADER_VERSION` and
   `ysp.video.HEADER_VERSION` give the three headers' own. A change to
   `ysp/gfx.h` or `ysp/video.h` alone that changes the binding adds the
   fourth number, as a binding-only change does. The MEX files have the
-  number 1.0.0 of their own; their `'version'` gives it and the header's
-  as the second output. `ysp-audio` and `ysp-timeline` are dependencies
+  number 1.1.0 of their own (1.0.0 was phase A); their `'version'` gives it
+  and the header's as the second output. `ysp-audio` and `ysp-timeline` are dependencies
   of the same major.minor as the headers ysp-vis was built against
   (`>=0.7,<0.8` and `>=0.8.1,<0.9`), the rule of the tables (below).
+- **The frame in MATLAB and Octave.** Since 1.1.0 `ysp_screen('begin')`
+  returns the frame without its records; they come as a third output when
+  asked for, or from `'records'` per trial. A screen opened with
+  `'frame', 'row'` gives the frame as `[onset period index vblank n_done
+  done_lost]` and the records as an n x 15 matrix. Measured per call on the
+  simulated display (screen.md, "The frame in MATLAB and Octave"): phase
+  A's frame with one record cost 22.5 us in MATLAB and 191 us in Octave,
+  the struct without records 9.3 and 55 us, the row 3.8 and 13.5 us (a
+  bare call 3.7 and 3.6 us; medians of 3 runs).
 - **Between trials** a host waits as it likes (`time.sleep`, `input`,
   `pause`): the window belongs to ysp/screen.h's window thread and does
   not hang, and no pumping call is needed (measured:
@@ -409,7 +425,7 @@ call can poll. [Conventions](conventions.md) lists the exceptions.
 | `ysp.response` and its MEX | `arm(t)`, `set_onset(t, residual=, uncertainty=)`, `update(now)`, `key(t, ...)`, `score(events, onset, arm=, end=)`, the desc's `min_rt`, `duration` (`math.inf`/`Inf`: no deadline) and `max_hold`, a source's `lo` and `hi`, the event's `t` and `unc` (from `unc_us`), and every time of the result and the entries; the exact ns beside each absolute time and the RT (`t_ns`, `rt_ns`, `t_onset_ns`, `t_response_ns`); exact to the ns below 2^23 s |
 | `ysp.audio` and `ysp_audio` (MEX) | `now()` (`now_ns()` exact), every time argument (`play_at(t)`, `play(at=)`, `stop(at=, ramp=)`, `gain(at=, ramp=)`, `wait(timeout)`, the synthesis `duration`, `ramp`, `period`, `onset_offset`, a ring's and a preroll's length, `frame_at(t)`, `sample_at(t)`, a capture's `frame_at(t)` and `offset`) and result (`lead` with `lead_ns`, `caps()` and `info()` times, `time_of()` as `(s, ns)`); a record gives `target`, `onset`, `residual` and `rendered_at` in seconds and their `_ns` exactly. Frame and sample counts stay integers |
 | `ysp.timeline` and `ysp_timeline` (MEX) | every time argument (`evaluate(onset, period)`, `anchor`, `skip`, `rate`, `wait`, `at`, the tween options `duration`, `delay`, `start`, `stagger`, key and event times, track `t0` and `period`, `peek`'s window) and result (`base_time`, `rt_time`, `window`, `next_due`, `horizon`, a sequence's cursor); a landing record gives `time`, `onset` and `residual` in seconds and `time_ns`, `onset_ns` and `residual_ns` exactly |
-| `ysp.screen`, `ysp.gfx` (ysp-vis) and `ysp_screen`, `ysp_gfx` (MEX) | `flip_at(t)`, the options `onset_offset`, `sim_period`, `settle_min`, `settle_max`, `panic_window`, `panic_grace`, `key_dedup`; a frame's `onset` and `period`, a record's `target`, `planned`, `onset`, `residual` and `phases`, an event's `t` and `unc`, an abort's `t`, a mode's `period`, `caps()` and `settle()` times, `now()`; the exact ns beside each absolute time and the residual (`_ns`, `int64` in MEX) |
+| `ysp.screen`, `ysp.gfx` (ysp-vis) and `ysp_screen`, `ysp_gfx` (MEX) | `flip_at(t)`, the options `onset_offset`, `sim_period`, `settle_min`, `settle_max`, `panic_window`, `panic_grace`, `key_dedup`; a frame's `onset` and `period`, a record's `target`, `planned`, `onset`, `residual` and `phases`, an event's `t` and `unc`, an abort's `t`, a mode's `period`, `caps()` and `settle()` times, `now()`, `Gfx.programs()`' `open` and `store`; the exact ns beside each absolute time and the residual (`_ns`, `int64` in MEX; a `'frame', 'row'` screen's matrices give seconds only). A stimulus has no time: what moves it in time is a timeline channel bound to it |
 
 ## Versions
 
@@ -454,9 +470,11 @@ v0.8.1), and `ysp-audio` is 0.7.2, the header's. The adaptive MEX
 functions and `ysp_color` have no number of their own: `'version'`
 returns the header's.
 
-`ysp-vis` is 0.10.1 (2026-10-27): one distribution for three headers, so
-its version tracks `ysp/screen.h`'s, and a release for a change of
-`ysp/gfx.h` or `ysp/video.h` alone adds the fourth number
-([ysp-vis](#display-stimuli-movies-ysp-vis)). The MEX files of ysp-vis
-(`ysp_vis`, `ysp_screen`, `ysp_gfx`, `ysp_video`) are 1.0.0, one number
-for the four, because the thin files refuse a core of another build.
+`ysp-vis` is 0.10.1.1 (2026-10-27): one distribution for three headers,
+so its version tracks `ysp/screen.h`'s, and a release for a change of
+`ysp/gfx.h` or `ysp/video.h` alone, or of the binding alone, adds the
+fourth number ([ysp-vis](#display-stimuli-movies-ysp-vis)); 0.10.1.1 is
+0.10.1 with the gfx part of phase B. The MEX files of ysp-vis
+(`ysp_vis`, `ysp_screen`, `ysp_gfx`, `ysp_video`) are 1.1.0 (1.0.0 was
+phase A), one number for the four, because the thin files refuse a core
+of another build.

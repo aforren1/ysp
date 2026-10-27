@@ -68,6 +68,7 @@ class BuildExt(build_ext):
 ext = Extension(
     name="ysp._vis",
     sources=["ysp_vis_ext.c"],
+    depends=["vis_gfx.c"],   # ysp.gfx, included by ysp_vis_ext.c
     include_dirs=[HEADER_DIR, SHARE_DIR, os.path.join(SDL, "include")],
     define_macros=[("Py_LIMITED_API", "0x03080000")],
     py_limited_api=True,

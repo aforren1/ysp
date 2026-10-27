@@ -26,7 +26,7 @@ never reused, so a handle kept past its `close` always raises
 | `ysp_timeline.c` | [ysp/timeline.h](../../include/ysp/timeline.h) | [example_timeline.m](example_timeline.m) |
 | `ysp_dataset.c` | [ysp/dataset.h](../../include/ysp/dataset.h) | [example_dataset.m](example_dataset.m) |
 | `ysp_audio.c` | [ysp/audio.h](../../include/ysp/audio.h) | [example_audio.m](example_audio.m), [test_mex_audio.m](test_mex_audio.m) |
-| `ysp_vis.c` (the core), `ysp_screen.c`, `ysp_gfx.c`, `ysp_video.c` | [ysp/screen.h](../../include/ysp/screen.h), [ysp/gfx.h](../../include/ysp/gfx.h), [ysp/video.h](../../include/ysp/video.h) (ysp-vis, Windows only) | [example_screen.m](example_screen.m), [test_mex_vis.m](test_mex_vis.m), [test_mex_vis_window.m](test_mex_vis_window.m) |
+| `ysp_vis.c` (the core), `ysp_screen.c`, `ysp_gfx.c`, `ysp_video.c` | [ysp/screen.h](../../include/ysp/screen.h), [ysp/gfx.h](../../include/ysp/gfx.h), [ysp/video.h](../../include/ysp/video.h) (ysp-vis, Windows only) | [example_screen.m](example_screen.m), [example_gfx_2afc.m](example_gfx_2afc.m), [example_gfx_rsvp.m](example_gfx_rsvp.m), [test_mex_vis.m](test_mex_vis.m), [test_mex_vis_gfx.m](test_mex_vis_gfx.m), [test_mex_vis_window.m](test_mex_vis_window.m) |
 
 The two transport headers build on the shared [ysp/rt.h](../../include/ysp/rt.h), so
 both MEX functions compile it too. `ysp_quest.c` and `ysp_aep.c` define
@@ -1559,27 +1559,35 @@ checks.
 ## ysp_screen, ysp_gfx, ysp_video (ysp-vis)
 
 The display, its frame loop and the record of every flip
-([ysp/screen.h](../../include/ysp/screen.h)), and in phase A the draw path
-that shows something ([ysp/gfx.h](../../include/ysp/gfx.h): a background
-and filled rectangles). `ysp_video` is a placeholder until phase B. Windows
-only. [example_screen.m](example_screen.m) runs a 3 s frame loop in a
-window; [test_mex_vis.m](test_mex_vis.m) runs on the simulated display (no
-window) and prints `PASS` with the number of checks;
+([ysp/screen.h](../../include/ysp/screen.h)), and the stimuli, draw
+lists, groups, instances and timeline bindings of
+[ysp/gfx.h](../../include/ysp/gfx.h) (phase B, 2026-10-27). `ysp_video` is
+a placeholder. Windows only. [example_screen.m](example_screen.m) runs a
+3 s frame loop in a window; [example_gfx_2afc.m](example_gfx_2afc.m) a
+two-alternative grating trial; [example_gfx_rsvp.m](example_gfx_rsvp.m)
+an RSVP stream from an atlas. [test_mex_vis.m](test_mex_vis.m) and
+[test_mex_vis_gfx.m](test_mex_vis_gfx.m) run on the simulated display (no
+window) and print `PASS` with the number of checks;
 [test_mex_vis_window.m](test_mex_vis_window.m) opens a real window for
-about 15 s (local only).
+about 20 s (local only) and checks five stimuli against the C path, bit
+for bit.
 
 ```matlab
-h = ysp_screen('open');                          % fullscreen; 'windowed', true, 'size', [1280 720]
-g = ysp_gfx('open', h, 0.5);                     % background gray
+h = ysp_screen('open', 'gfx', struct('background', 0.5));   % fullscreen; the gfx compiles while it settles
+g = ysp_gfx('open', h);
+ga = ysp_gfx('gabor', g, 'sf', 1/32, 'sigma', 24, 'x', -200);
+fx = ysp_gfx('shape', g, 'circle', 'w', 8, 'color', 1);
+L = ysp_gfx('list', g, [ga fx]);                 % drawn in order by one call
+tl = ysp_timeline('open', struct('channels', 1));
+ysp_gfx('bind', g, ga, 'contrast', tl, 1);       % channel 1, written in C each frame
+ysp_gfx('timeline', g, tl, true);                % evaluated at each frame's onset
 while true
     [f, quit] = ysp_screen('begin', h);          % f.onset: when this frame shows
     if ~isempty(quit), break; end                % Shift+Esc, the close button, Alt+F4
-    ysp_gfx('begin', g);
-    ysp_gfx('rect', g, [0 0 200 100], [1 1 1]);  % center x, y from the screen's center, pixels
-    ysp_gfx('end', g);
+    ysp_gfx('frame', g, L);                      % begin, bindings, draws, end
     ysp_screen('flip', h);                       % at f.onset; 'flip_at', h, t for a later vblank
 end
-r = ysp_screen('close', h);                      % the records not read yet
+r = ysp_screen('close', h);                      % the records not read yet; the gfx goes too
 ```
 
 **Build.** Make the natives once from the repository root:
@@ -1603,20 +1611,21 @@ directory ANGLE is loaded from and the SDL version. Handles start at
 
 | Command | Returns | Notes |
 |---|---|---|
-| `ysp_screen('version')` | `'1.0.0'`, and the header's | the same for `ysp_gfx`, `ysp_video`, `ysp_vis` |
+| `ysp_screen('version')` | `'1.1.0'`, and the header's | the same for `ysp_gfx`, `ysp_video`, `ysp_vis` |
 | `'displays'`, `'modes' [, display]`, `'mode_multiple', num, den, [w h], tol_ppm, display` | struct rows; `[k, mode, err_ppm]` | `'open'` takes a display's `id` and a mode struct |
 | `'options'`, `'constants'` | struct | the options with a line each; `TIER_*`, `PATH_*`, `FLIP_*`, `ABORT_*`, `KIND_*`, `PRESS` ... |
-| `'open' [, opts]` | `uint64` handle | a struct or name-value pairs: `windowed`, `size`, `display`, `mode`, `backend` (`'auto'`, `'dxgi_flip'`, `'composition'`, `'sim'`), `window_thread`, `lead`, `onset_offset` (s), `depth`, `depth_learn`, `settle`, `settle_flips`, `settle_min`, `settle_max` (s), `foreground`, `panic`, `panic_presses`, `panic_window`, `panic_grace` (s), `patch`, `patch_size`, `patch_corner`, `show_cursor`, `keep_os_gamma`, `key_dedup` (s), `gamepads`, `min_tier`, `sim_period` (s). Settles: 0.5 to 0.8 s fullscreen, 2.5 s in a window |
-| `'begin', h` | frame | `onset`, `period`, `index`, `vblank`, `done` (the records completed since the last begin), `last`, `done_lost`; `_ns` as `int64`. An abort raises `ysp_screen:abort`; `[f, quit] = ...` returns it in `quit` (`reasons`, `presses`, `t`, `t_ns`, `panic`) with `f` empty |
+| `'open' [, opts]` | `uint64` handle | a struct or name-value pairs: `windowed`, `size`, `display`, `mode`, `backend` (`'auto'`, `'dxgi_flip'`, `'composition'`, `'sim'`), `window_thread`, `lead`, `onset_offset` (s), `depth`, `depth_learn`, `settle`, `settle_flips`, `settle_min`, `settle_max` (s), `foreground`, `panic`, `panic_presses`, `panic_window`, `panic_grace` (s), `patch`, `patch_size`, `patch_corner`, `show_cursor`, `keep_os_gamma`, `key_dedup` (s), `gamepads`, `min_tier`, `sim_period` (s). Settles: 0.5 to 0.8 s fullscreen, 2.5 s in a window. Two options of the binding: `gfx` (`true` or a struct of `ysp_gfx('open')` options: the gfx starts while the screen settles, and `ysp_gfx('open', h)` finishes it) and `frame` (`'struct'`, the default, or `'row'`: see `'begin'`) |
+| `[f, quit, done] = ('begin', h)` | frame | `f`: `onset`, `onset_ns`, `period`, `period_ns`, `index`, `vblank`, `n_done`, `done_lost` (`_ns` as `int64`); `done`: the records completed since the last begin, only when asked for (a third output). With `'frame', 'row'`: `f = [onset period index vblank n_done done_lost]` and `done` an n x 15 matrix (below). An abort raises `ysp_screen:abort`; `[f, quit] = ...` returns it in `quit` (`reasons`, `presses`, `t`, `t_ns`, `panic`) with `f` empty |
 | `'flip', h`, `'flip_at', h, t` | none | at the predicted onset, or at the vblank `t` snaps to |
-| `'wait_flip', h`, `'records', h` | record, record row | `records`: every record since the last call (4096 kept; the second output counts the overflow) |
+| `'wait_flip', h`, `'records', h` | record, record row | `records`: every record since the last call (4096 kept; the second output counts the overflow); an n x 15 matrix on a `'frame', 'row'` screen: `index target planned onset residual dropped path tier flags` and the six phases (seconds; `NaN` unknown) |
 | `'mark', h, phase` | none | `'evaluate'`, `'script'`, `'draw'`, `'upload'` |
 | `'poll', h [, max]` | event row | the shared event layout of `ysp_device` and `ysp_response` |
 | `'title', h, text`, `'cursor', h, show`, `'grab', h, on` | none | through the window thread; `:not_implemented` on `'sim'` |
 | `'describe', h`, `'caps', h`, `'settle', h`, `'sync', h`, `'set_patch', h, v` | | |
 | `'request_abort'`, `'input_stats'`, `'now'`, `'now_ns'` | | |
 | `'close', h` | record row | lets the last flip complete; the gfx on it closes too |
-| `ysp_gfx('open', h [, background])`, `('begin', g)`, `('rect', g, [x y w h] [, color])`, `('end', g)`, `('describe', g)`, `('close', g)` | gfx handle, ... | one gfx per screen in phase A; color a gray level or `[r g b]`, linear 0..1 |
+| `ysp_gfx('open', h, name, value, ...)` | gfx handle | `background`, `units` (`'px'`, `'deg'`), `view` (`[distance_mm width_mm]`), `dither`, `seed`, `cones`, `cal` and `lum` (the bytes of .yspcal and .ysplum files, uint8), `max_draws`, `max_instances`, `cache` (true: the per-user program cache, the default; false; or a folder), `prime`. One gfx per screen: its output stage writes every pixel. `ysp_gfx('open', h, 0.5)` (a background) works as in phase A |
+| `ysp_gfx(...)` | | the stimuli and the frame: [ysp_gfx](#ysp_gfx), below |
 | `ysp_video('shared')` | struct | loads `ysp_audio`'s and `ysp_timeline`'s tables and gives their versions |
 
 A record has `index`, `target`, `planned`, `onset`, `residual` (each with
@@ -1627,6 +1636,38 @@ A record has `index`, `target`, `planned`, `onset`, `residual` (each with
 `:not_implemented`, `:abort`, `:open`, `:handle` and `:usage` (and the same
 under `ysp_gfx:`). `'begin'` and `'wait_flip'` block MATLAB, and Ctrl+C
 does not end them; Shift+Esc does.
+
+### ysp_gfx
+
+Stimuli, draw lists, groups and textures are handles of the same table.
+Their parameters go by ysp/gfx.h's names (`ysp_gfx('params', kind)` lists
+them, with unit, range and default) as name-value pairs or a struct.
+Closing the gfx, or its screen, frees them and their handles: a handle
+kept after that gives `ysp_gfx:handle`. Element, channel and list indices
+are 1-based.
+
+| Command | Returns | Notes |
+|---|---|---|
+| `'shape', g, shape, ...` | handle | `'rect'` (`radius`), `'circle'`, `'annulus'` (`inner`), `'line'` (`width`), `'polygon'` (`vertices`, n x 2), `'cross'` (`width`), `'rrect'` (`radii`), `'arc'` (`sweep`, `thickness`, `start`), `'pie'`, `'capsule'` (`radii`), `'ngon'` (`sides`, `rounding`), `'star'` (`points`, `inner`, `rounding`), `'ellipse'`, `'qbezier'`, `'polyline'` (`path`, n x 2; `width`, `join`, `cap`); `color`, `opacity`, `edge`, `edge_width`, `stroke`, `stroke_align`, `offset`, `dash`, `gap`, `trim`, `blend`, ... |
+| `'grating'`, `'gabor'`, `'noise', g, ...` | handle | `sf`, `phase`, `sigma`, `size` (gabor; 0 = 8 sigma), `aperture`, `dist`, `check`, `seed`, `contrast`, `dir` |
+| `'texture', g, pixels, 'format', f, 'linear', l, 'srgb', s` | handle | H x W uint8 (1 to 4 channels), uint16, single or double; `'update', T, pixels [, [x y]]` between frames |
+| `'image', g, T, ...`, `'dots', g, 'n', n, 'positions', XY, ...` | handle | `src` (a sprite of an atlas), `modulation`, `tint`; dots: `'set', d, 'positions', XY` (n x 2) between frames |
+| `'instances', g, template, n, 'fields', {'xy', 'ori', ...}, 'palette', P` | handle | n elements in one draw; `'elements', I, name, values [, first]` sets a field (`x`, `y`, `xy` (n x 2), `ori`, `phase`, `contrast`, `scale`, `gate`, `color`); `E = ('elements', I)` gives them, 8 x n single |
+| `'list', g, [s1 s2 ...]`, `'add'`, `'remove'`, `'clear'`, `'count'` | handle | stimuli drawn in order by one call |
+| `'group', g, ...` | handle | `place`, `anchor`, `x`, `y`, `w`, `h`, `ori`, `scale`, `opacity`, `visible`; a stimulus joins with `'group', G` |
+| `'set', obj, name, value, ...`, `v = ('get', obj, name)`, `s = ('get', stim)` | | a stimulus, group or list; a list takes n values (n x k for a color) or one for all, and `'get'` gives n x k. `'space', 'dkl'` converts `color` and `dir` through the calibration; `'color', '#ff8000'` is sRGB |
+| `'copy', s`, `'free', obj` | handle, none | `'free'` refuses (`ysp_gfx:busy`) what a list or a stimulus still uses; a binding goes with its object |
+| `'begin', g`, `'draw', g, handles...`, `'end', g`, `'frame', g, handles...` | | `'frame'`: begin, the bindings, the draws and end in one call |
+| `'bind', g, target, name, tl, channels [, element]` | | a `ysp_timeline` channel writes the parameter in each `'begin'`: a stimulus (`color`: 3 channels), a list (one channel per item, or one), a group, or instances' elements from `element` |
+| `'timeline', g, tl, evaluate`, `n = ('unbind', g, target, name, tl)` | | evaluate `tl` at each frame's onset in `'begin'`; `[]` or `''` match all. The gfx pins each timeline once (`ysp_timeline('close')` gives `busy`) until its last binding goes |
+| `'hit', obj, x, y`, `'bounds', s`, `'resolve', s [, element]`, `'length', s` | | screen px from the top-left: a stimulus gives true or false, instances the element (0: none), a list `[item element]` |
+| `'color', g, space, [a b c]`, `'dir', ...` | `[r g b]` | through the calibration's ysp/color.h context |
+| `'capture_start', g, ...`, `'capture_mark'`, `'capture_pump'`, `'capture_stop'`, `'capture_stats'` | stats | chosen frames to PPM files off the frame thread |
+| `'prime', g`, `'read_scene', g, [x y w h]`, `'read_output', ...`, `'describe'`, `'info'`, `'params' [, kind]` | | the reads wait for the GPU: tests |
+
+Not bound: text (phase C), compounds, effects, paint, glyph runs and curve
+sets, user shaders, render targets, blur and video textures (ysp_video's);
+no image file reading (ysp/gfx.h has none: `imread`, then `'texture'`).
 
 Between trials, `pause` is fine in MATLAB and in Octave: the window
 belongs to ysp/screen.h's window thread and does not hang. With `'panic'`

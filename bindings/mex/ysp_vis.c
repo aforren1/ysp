@@ -138,9 +138,18 @@ static mxArray* vx_handle_out(uint64_t id) {
     return h;
 }
 
+static void vx_gfx_drop(struct yv_gfx* g);   /* ysp_vis_gfx.inc */
+
 /* Closes and frees every object: gfx first, its GL objects before the context. */
 static void vx_close_all(void) {
     int pass;
+    vx_node* g;
+    /* each gfx with its stimuli, lists, groups and textures (and their
+     * handles), and its timeline pins */
+    for (g = vx_list; g;) {
+        if (g->kind == VX_GFX) { vx_gfx_drop((yv_gfx*)g->obj); g = vx_list; }
+        else g = g->next;
+    }
     for (pass = 0; pass < 2; pass++) {
         vx_node** p = &vx_list;
         while (*p) {
@@ -163,7 +172,7 @@ static void vx_detach(void) {
     if (vx_users > 0) vx_users--;
     if (vx_users > 0) return;
     vx_close_all();
-    /* No pins are held in phase A; give back the owners' modules. */
+    /* The gfx gave back their timeline pins above; now the owners' modules. */
     ysp_share_mex_unload(ysp_audio_api_module);
     ysp_share_mex_unload(ysp_timeline_api_module);
     ysp_audio_api_module = ysp_timeline_api_module = NULL;
@@ -241,6 +250,33 @@ static mxArray* vx_records(const yscr_record* r, int n) {
     return s;
 }
 
+/* Records as one n x 15 double matrix (the open option frame='row'): index,
+ * target, planned, onset, residual (s), dropped, path, tier, flags, then the
+ * six phases (s; NaN unknown). One array: a struct of records cost 3.5 us
+ * a record in MATLAB and 94 us in Octave (bench_frame.m, 2026-10-27). */
+#define VX_REC_COLS 15
+static mxArray* vx_records_matrix(const yscr_record* r, int n) {
+    mxArray* m = mxCreateDoubleMatrix((size_t)(n > 0 ? n : 0), VX_REC_COLS, mxREAL);
+    double* p = mxGetPr(m);
+    size_t N = (size_t)(n > 0 ? n : 0), i;
+    int k;
+    for (i = 0; i < N; i++) {
+        const yscr_record* x = &r[i];
+        p[i] = (double)x->index;
+        p[i + N] = yv_s(x->target);
+        p[i + 2 * N] = yv_s(x->planned);
+        p[i + 3 * N] = yv_s(x->onset);
+        p[i + 4 * N] = yv_s(x->residual);
+        p[i + 5 * N] = x->dropped;
+        p[i + 6 * N] = x->path;
+        p[i + 7 * N] = x->tier;
+        p[i + 8 * N] = x->flags;
+        for (k = 0; k < YSCR_N_PHASES; k++)
+            p[i + (size_t)(9 + k) * N] = x->phase_ns[k] == YSCR_PHASE_UNKNOWN ? mxGetNaN() : (double)x->phase_ns[k] / 1e9;
+    }
+    return m;
+}
+
 static mxArray* vx_frame(const yscr_frame* f) {
     static const char* fn[] = { "onset", "onset_ns", "period", "period_ns", "index", "vblank", "done", "last",
                                 "done_lost" };
@@ -255,6 +291,34 @@ static mxArray* vx_frame(const yscr_frame* f) {
     mxSetFieldByNumber(s, 0, 7, f->last ? vx_records(f->last, 1) : mxCreateDoubleMatrix(0, 0, mxREAL));
     mxSetFieldByNumber(s, 0, 8, vx_d(f->done_lost));
     return s;
+}
+
+/* The frame without its records: one mxArray per scalar field. */
+static mxArray* vx_frame_slim(const yscr_frame* f) {
+    static const char* fn[] = { "onset", "onset_ns", "period", "period_ns", "index", "vblank", "n_done", "done_lost" };
+    mxArray* s = mxCreateStructMatrix(1, 1, 8, fn);
+    mxSetFieldByNumber(s, 0, 0, vx_d(yv_s(f->onset)));
+    mxSetFieldByNumber(s, 0, 1, vx_i64(f->onset));
+    mxSetFieldByNumber(s, 0, 2, vx_d(yv_s(f->period)));
+    mxSetFieldByNumber(s, 0, 3, vx_i64(f->period));
+    mxSetFieldByNumber(s, 0, 4, vx_d((double)f->index));
+    mxSetFieldByNumber(s, 0, 5, vx_d((double)f->vblank));
+    mxSetFieldByNumber(s, 0, 6, vx_d(f->n_done));
+    mxSetFieldByNumber(s, 0, 7, vx_d(f->done_lost));
+    return s;
+}
+
+/* The frame as one row: [onset period index vblank n_done done_lost]. */
+static mxArray* vx_frame_row(const yscr_frame* f) {
+    mxArray* r = mxCreateDoubleMatrix(1, 6, mxREAL);
+    double* p = mxGetPr(r);
+    p[0] = yv_s(f->onset);
+    p[1] = yv_s(f->period);
+    p[2] = (double)f->index;
+    p[3] = (double)f->vblank;
+    p[4] = f->n_done;
+    p[5] = f->done_lost;
+    return r;
 }
 
 static mxArray* vx_events(const yin_event* ev, int n) {
@@ -348,23 +412,47 @@ static void vx_option(yscr_desc* d, const char* name, const mxArray* v) {
     if (yv_opt_num(d, o, vx_scalar(v, name), err, sizeof err) < 0) vx_err("arg", "%s", err);
 }
 
-/* A struct, or name-value pairs, from prhs[first]. */
-static void vx_options(yscr_desc* d, int nrhs, const mxArray* prhs[], int first) {
+/* The open options that are not screen desc fields: gfx (the gfx options;
+ * its programs compile while the screen settles) and frame ('struct' or
+ * 'row': what begin returns). 1 when name is one of them. */
+static int vx_option_extra(const char* name, const mxArray* v, const mxArray** gfx, int* row) {
+    if (!strcmp(name, "gfx")) { *gfx = v; return 1; }
+    if (!strcmp(name, "frame")) {
+        char s[16];
+        vx_string(v, s, sizeof s, "frame");
+        if (!strcmp(s, "row")) *row = 1;
+        else if (!strcmp(s, "struct")) *row = 0;
+        else vx_err("arg", "frame: 'struct' (the default) or 'row' ([onset period index vblank n_done done_lost])");
+        return 1;
+    }
+    return 0;
+}
+
+/* A struct, or name-value pairs, from prhs[first] (vx_option_extra). */
+static void vx_options(yscr_desc* d, int nrhs, const mxArray* prhs[], int first, const mxArray** gfx, int* row) {
     char name[64];
     int i, k;
+    *gfx = NULL;
+    *row = 0;
     if (nrhs > first && mxIsStruct(prhs[first])) {
         if (mxGetNumberOfElements(prhs[first]) != 1) vx_err("arg", "open: a 1x1 struct of options");
         if (nrhs > first + 1) vx_err("usage", "open: a struct, or name-value pairs, not both");
-        for (k = 0; k < mxGetNumberOfFields(prhs[first]); k++)
-            vx_option(d, mxGetFieldNameByNumber(prhs[first], k), mxGetFieldByNumber(prhs[first], 0, k));
+        for (k = 0; k < mxGetNumberOfFields(prhs[first]); k++) {
+            const char* fn = mxGetFieldNameByNumber(prhs[first], k);
+            if (vx_option_extra(fn, mxGetFieldByNumber(prhs[first], 0, k), gfx, row)) continue;
+            vx_option(d, fn, mxGetFieldByNumber(prhs[first], 0, k));
+        }
         return;
     }
     if ((nrhs - first) % 2) vx_err("usage", "open: name-value pairs");
     for (i = first; i < nrhs; i += 2) {
         vx_string(prhs[i], name, sizeof name, "an option name");
+        if (vx_option_extra(name, prhs[i + 1], gfx, row)) continue;
         vx_option(d, name, prhs[i + 1]);
     }
 }
+
+static struct yv_gfx* vx_gstart(const mxArray* opts);   /* ysp_vis_gfx.inc */
 
 /* ---- screen commands -------------------------------------------------------------- */
 
@@ -431,10 +519,16 @@ static void vx_screen_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, 
         yscr_desc d;
         yv_screen* v;
         uint64_t id;
+        const mxArray* gfx;
+        struct yv_gfx* gs = NULL;
+        int row;
         memset(&d, 0, sizeof d);
-        vx_options(&d, nrhs, prhs, 1);
+        vx_options(&d, nrhs, prhs, 1, &gfx, &row);
+        if (gfx && !mxIsEmpty(gfx) && !(mxIsLogical(gfx) && !mxIsLogicalScalarTrue(gfx))) gs = vx_gstart(gfx);
         v = (yv_screen*)calloc(1, sizeof *v);
-        if (!v) vx_err("memory", "out of memory");
+        if (!v) { free(gs); vx_err("memory", "out of memory"); }
+        v->gstart = gs;
+        v->frame_row = row;
         if (!yv_open(v, &d)) {
             char msg[1024];
             snprintf(msg, sizeof msg, "%s", v->rec ? yscr_error(&v->s) : "out of memory");
@@ -448,12 +542,8 @@ static void vx_screen_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, 
         yv_screen* v;
         vx_nargs(nrhs, 2, "ysp_screen('close', h)");
         v = (yv_screen*)vx_lookup(prhs[1], VX_SCREEN, "screen");
-        if (v->gfx) {   /* the gfx on it closes with it; its handle goes too */
-            yv_gfx* g = v->gfx;
-            vx_unregister(g);
-            yv_gfx_close(g);
-            free(g);
-        }
+        /* the gfx on it closes with it; its handle and its objects' go too */
+        if (v->gfx) vx_gfx_drop(v->gfx);
         yv_close(v);
         /* The records not read yet, with those close() completed. */
         if (nlhs > 0) {
@@ -470,7 +560,11 @@ static void vx_screen_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, 
     } else if (!strcmp(cmd, "begin")) {
         yv_screen* v;
         int rc;
-        vx_nargs(nrhs, 2, "f = ysp_screen('begin', h)");
+        /* [f, quit, done] = ysp_screen('begin', h): f without records (a
+         * record cost 4.5 us in MATLAB and 45 us in Octave in phase A's
+         * frame); done, the records completed since the last begin, only
+         * when asked (a third output). */
+        vx_nargs(nrhs, 2, "[f, quit, done] = ysp_screen('begin', h)");
         v = vx_scr(prhs[1]);
         rc = yv_begin(v);
         if (rc == YSCR_QUIT) {
@@ -480,11 +574,28 @@ static void vx_screen_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, 
                        (v->f.abort & YSCR_ABORT_PANIC) ? ": the panic released the display, only 'close' is left" : "");
             plhs[0] = mxCreateDoubleMatrix(0, 0, mxREAL);
             plhs[1] = vx_abort(&v->f);
+            if (nlhs > 2) plhs[2] = v->frame_row ? vx_records_matrix(v->f.done, v->f.n_done) : vx_records(v->f.done, v->f.n_done);
             return;
         }
         if (rc < 0) vx_fail(v, rc);
-        plhs[0] = vx_frame(&v->f);
+        plhs[0] = v->frame_row ? vx_frame_row(&v->f) : vx_frame_slim(&v->f);
         if (nlhs > 1) plhs[1] = mxCreateDoubleMatrix(0, 0, mxREAL);
+        if (nlhs > 2) plhs[2] = v->frame_row ? vx_records_matrix(v->f.done, v->f.n_done) : vx_records(v->f.done, v->f.n_done);
+    } else if (!strcmp(cmd, "_frame")) {
+        /* test: the last frame converted as form k, with no begin: what
+         * each form of the result costs (0 phase A's struct with done and
+         * last, 1 the struct without records, 2 a row, 3 the records, 4 the
+         * records as a matrix) */
+        yv_screen* v;
+        int k;
+        vx_nargs(nrhs, 3, "f = ysp_screen('_frame', h, k)");
+        v = vx_scr(prhs[1]);
+        k = (int)vx_scalar(prhs[2], "k");
+        plhs[0] = k == 0   ? vx_frame(&v->f)
+                  : k == 1 ? vx_frame_slim(&v->f)
+                  : k == 2 ? vx_frame_row(&v->f)
+                  : k == 4 ? vx_records_matrix(v->f.done, v->f.n_done)
+                  : vx_records(v->f.done, v->f.n_done);
     } else if (!strcmp(cmd, "flip") || !strcmp(cmd, "flip_at")) {
         yv_screen* v;
         int at = cmd[4] == '_', rc;
@@ -520,6 +631,15 @@ static void vx_screen_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, 
         vx_nargs(nrhs, 2, "r = ysp_screen('records', h)");
         v = (yv_screen*)vx_lookup(prhs[1], VX_SCREEN, "screen");
         n = (int)v->rec_n;
+        if (v->frame_row) {
+            /* a frame='row' screen: the records as one matrix */
+            yscr_record* buf = (yscr_record*)mxMalloc(sizeof(yscr_record) * (size_t)(n > 0 ? n : 1));
+            yv_records(v, buf, n);
+            plhs[0] = vx_records_matrix(buf, n);
+            mxFree(buf);
+            if (nlhs > 1) plhs[1] = vx_d((double)v->rec_lost);
+            return;
+        }
         s = mxCreateStructMatrix(1, (size_t)n, 17, vx_record_f);
         while (k < n) {
             yscr_record r;
@@ -713,95 +833,9 @@ static void vx_screen_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, 
     }
 }
 
-/* ---- gfx commands (phase A) ----------------------------------------------------------- */
+/* ---- gfx commands: stimuli, lists, groups, textures, bindings (ysp_vis_gfx.inc) ---------- */
 
-static yv_gfx* vx_gfx(const mxArray* a) {
-    yv_gfx* g = (yv_gfx*)vx_lookup(a, VX_GFX, "gfx");
-    if (!g->open) vx_err("closed", "the gfx (or its screen) is closed");
-    return g;
-}
-
-static void vx_rgb(const mxArray* a, float out[3], const char* what) {
-    size_t n = mxGetNumberOfElements(a);
-    if (!mxIsDouble(a) || mxIsComplex(a) || (n != 1 && n != 3)) vx_err("arg", "%s: a gray level or [r g b], linear 0..1", what);
-    out[0] = (float)mxGetPr(a)[0];
-    out[1] = (float)mxGetPr(a)[n == 3 ? 1 : 0];
-    out[2] = (float)mxGetPr(a)[n == 3 ? 2 : 0];
-}
-
-static void vx_gfx_fail(yv_gfx* g, int rc) {
-    const char* m = ygfx_error(&g->g);
-    vx_err(vx_gfx_code(rc), "%s", m && m[0] ? m : ygfx_strerror(rc));
-}
-
-static void vx_gfx_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
-    if (!strcmp(cmd, "version")) {
-        plhs[0] = mxCreateString(YV_MEX_VERSION);
-        if (nlhs > 1) plhs[1] = mxCreateString(YGFX_VERSION_STRING);
-    } else if (!strcmp(cmd, "open")) {
-        yv_screen* v;
-        yv_gfx* g;
-        float bg[3] = { 0, 0, 0 };
-        uint64_t id;
-        vx_nargs(nrhs, 2, "g = ysp_gfx('open', screen, background)");
-        v = vx_scr(prhs[1]);
-        if (nrhs > 2) vx_rgb(prhs[2], bg, "background");
-        if (v->gfx) vx_err("refused", "the screen has a gfx already (one per screen in this release)");
-        g = (yv_gfx*)calloc(1, sizeof *g);
-        if (!g) vx_err("memory", "out of memory");
-        if (!yv_gfx_open(g, v, bg)) {
-            char msg[1024];
-            snprintf(msg, sizeof msg, "%s", ygfx_error(&g->g));
-            free(g);
-            vx_err("open", "%s", msg);
-        }
-        id = vx_register(VX_GFX, g);
-        if (!id) { yv_gfx_close(g); free(g); vx_err("memory", "out of memory"); }
-        plhs[0] = vx_handle_out(id);
-    } else if (!strcmp(cmd, "close")) {
-        yv_gfx* g;
-        vx_nargs(nrhs, 2, "ysp_gfx('close', g)");
-        g = (yv_gfx*)vx_lookup(prhs[1], VX_GFX, "gfx");
-        vx_unregister(g);
-        yv_gfx_close(g);
-        free(g);
-    } else if (!strcmp(cmd, "begin")) {
-        yv_gfx* g;
-        int rc;
-        vx_nargs(nrhs, 2, "ysp_gfx('begin', g)");
-        g = vx_gfx(prhs[1]);
-        if (!g->scr->in_frame) vx_err("order", "begin: after ysp_screen('begin', h)");
-        rc = yv_gfx_begin(g);
-        if (rc < 0) vx_gfx_fail(g, rc);
-    } else if (!strcmp(cmd, "rect")) {
-        yv_gfx* g;
-        float c[3] = { 1, 1, 1 };
-        const double* r;
-        int rc;
-        vx_nargs(nrhs, 3, "ysp_gfx('rect', g, [x y w h], color)");
-        g = vx_gfx(prhs[1]);
-        if (!mxIsDouble(prhs[2]) || mxIsComplex(prhs[2]) || mxGetNumberOfElements(prhs[2]) != 4)
-            vx_err("arg", "rect: [x y w h] in pixels, x, y the center from the screen's center");
-        r = mxGetPr(prhs[2]);
-        if (nrhs > 3) vx_rgb(prhs[3], c, "color");
-        rc = yv_gfx_rect(g, (float)r[0], (float)r[1], (float)r[2], (float)r[3], c);
-        if (rc < 0) vx_gfx_fail(g, rc);
-    } else if (!strcmp(cmd, "end")) {
-        yv_gfx* g;
-        int rc;
-        vx_nargs(nrhs, 2, "ysp_gfx('end', g)");
-        g = vx_gfx(prhs[1]);
-        rc = yv_gfx_end(g);
-        if (rc < 0) vx_gfx_fail(g, rc);
-    } else if (!strcmp(cmd, "describe")) {
-        char line[2048];
-        vx_nargs(nrhs, 2, "s = ysp_gfx('describe', g)");
-        ygfx_describe(&vx_gfx(prhs[1])->g, line, sizeof line);
-        plhs[0] = mxCreateString(line);
-    } else {
-        vx_err("usage", "unknown command '%s'", cmd);
-    }
-}
+#include "ysp_vis_gfx.inc"
 
 /* ---- video commands (a placeholder in phase A) ------------------------------------------ */
 
@@ -849,7 +883,7 @@ static void vx_vis_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, con
         vx_node* n;
         int ns = 0, ng = 0, v = SDL_GetVersion();
         char sdl[32];
-        for (n = vx_list; n; n = n->next) { if (n->kind == VX_SCREEN) ns++; else ng++; }
+        for (n = vx_list; n; n = n->next) { if (n->kind == VX_SCREEN) ns++; else if (n->kind == VX_GFX) ng++; }
         snprintf(sdl, sizeof sdl, "%d.%d.%d", SDL_VERSIONNUM_MAJOR(v), SDL_VERSIONNUM_MINOR(v), SDL_VERSIONNUM_MICRO(v));
         mxSetFieldByNumber(s, 0, 0, mxCreateString(YV_MEX_VERSION));
         mxSetFieldByNumber(s, 0, 1, vx_d(vx_users));

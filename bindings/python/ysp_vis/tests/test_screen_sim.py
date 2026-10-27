@@ -37,8 +37,9 @@ def test_version_matches_pyproject():
         v = re.search(r'^version = "([^"]+)"', f.read(), re.M).group(1)
     assert yscr.__version__ == v
     assert ygfx.__version__ == v and yvid.__version__ == v
-    # The distribution tracks screen.h's version (docs/bindings.md, ysp-vis).
-    assert yscr.HEADER_VERSION == v
+    # The distribution tracks screen.h's version, with a fourth number for a
+    # change of the binding alone (docs/bindings.md, ysp-vis).
+    assert v == yscr.HEADER_VERSION or v.startswith(yscr.HEADER_VERSION + ".")
 
 
 def test_headers_and_shared_tables():

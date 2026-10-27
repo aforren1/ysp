@@ -5,7 +5,10 @@ function test_mex_vis_window()
 %   pauses 6 s without a call (past the 4.1 to 4.6 s after which Windows
 %   marks a window that pumps nothing as hung), draws again, then checks the
 %   lifetime rule with a window open: a clear of ysp_gfx leaves the window
-%   drawing, and the clear of the last thin file closes it. About 15 s. Prints PASS with the
+%   drawing, and the clear of the last thin file closes it. Then five
+%   stimuli made through ysp_gfx draw the same scene, bit for bit, as the
+%   same stimuli made in C with ysp/gfx.h's constructors, and instances
+%   match single stimuli. About 20 s. Prints PASS with the
 %   number of checks.
 
     global YSP_VISW_CHECKS %#ok<GVMIS>
@@ -46,6 +49,7 @@ function test_mex_vis_window()
     info = ysp_vis('info');
     check(info.users == 0 && info.screens == 0 && info.gfx == 0, 'the last clear closed the window');
     clear ysp_vis;
+    pixel_check();
     fprintf('PASS test_mex_vis_window (%d checks)\n', YSP_VISW_CHECKS);
 end
 
@@ -65,4 +69,59 @@ function check(cond, msg, varargin)
     if ~cond
         error('test_mex_vis_window:fail', ['FAIL: ' msg], varargin{:});
     end
+end
+
+function pixel_check()
+    h = ysp_screen('open', 'windowed', true, 'size', [800 600]);
+    try
+        g = ysp_gfx('open', h, 'background', 0.5);
+        tw = [ysp_gfx('gabor', g, 'x', -100, 'y', 40, 'ori', 30, 'sf', 1 / 16, 'phase', 0.25, 'sigma', 12, 'contrast', 0.4), ...
+              ysp_gfx('grating', g, 'x', 80, 'y', -30, 'w', 120, 'ori', -20, 'sf', 1 / 20, 'contrast', 0.3, ...
+                      'aperture', 'circle', 'edge', 'cosine', 'edge_width', 6), ...
+              ysp_gfx('shape', g, 'rect', 'w', 160, 'h', 90, 'ori', 10, 'radius', 12, 'color', [0.9 0.2 0.1], ...
+                      'stroke', 4, 'stroke_align', 'inside', 'edge', 'gaussian', 'edge_width', 1), ...
+              ysp_gfx('shape', g, 'star', 'place', 'top_left', 'anchor', 'top_left', 'x', 20, 'y', 20, 'w', 100, ...
+                      'points', 5, 'inner', 0.4, 'color', [0.1 0.8 0.3], 'opacity', 0.75), ...
+              ysp_gfx('noise', g, 'x', 150, 'y', 60, 'w', 64, 'check', 4, 'seed', 7, 'dist', 'binary', ...
+                      'contrast', 0.25, 'aperture', 'circle')];
+        empty = scene(h, g, []);
+        for k = 1:numel(tw)
+            c = scene(h, g, -(k - 1));                 % C's scene k - 1
+            b = scene(h, g, tw(k));
+            check(~isequal(b, empty) && isequal(b, c), 'stimulus %d: the same scene, bit for bit, as the C path', k);
+        end
+        xy = [-150 -60; 0 0; 120 80];
+        oris = [0 30 75];
+        s3 = zeros(1, 3, 'uint64');
+        for k = 1:3
+            s3(k) = ysp_gfx('gabor', g, 'sf', 1 / 12, 'sigma', 8, 'x', xy(k, 1), 'y', xy(k, 2), 'ori', oris(k), 'contrast', 0.4);
+        end
+        L = ysp_gfx('list', g, s3);
+        I = ysp_gfx('instances', g, ysp_gfx('gabor', g, 'sf', 1 / 12, 'sigma', 8, 'contrast', 0.4), 3, 'fields', {'xy', 'ori'});
+        ysp_gfx('elements', I, 'xy', xy);
+        ysp_gfx('elements', I, 'ori', oris);
+        ysp_gfx('prime', g);
+        a = scene(h, g, L);
+        b = scene(h, g, I);
+        check(max(abs(a(:) - b(:))) < 2e-5 && max(abs(a(:) - 0.5)) > 0.1, 'instances match single stimuli (within 2e-5)');
+    catch e
+        try, ysp_screen('close', h); catch, end
+        rethrow(e);
+    end
+    ysp_screen('close', h);
+end
+
+% One frame's scene (h x w x 4 single): what draws it (handles), or C's
+% scene -k for k <= 0.
+function P = scene(h, g, what)
+    ysp_screen('begin', h);
+    ysp_gfx('begin', g);
+    if isa(what, 'uint64')
+        ysp_gfx('draw', g, what);
+    elseif ~isempty(what)
+        ysp_gfx('_c_scene', g, -what);
+    end
+    ysp_gfx('end', g);
+    P = ysp_gfx('read_scene', g, [0 0 800 600]);
+    ysp_screen('flip', h);
 end

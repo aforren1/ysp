@@ -3456,11 +3456,14 @@ grab through `yscr_window_call()`, describe, caps, settle, sync, the patch,
 `yscr_request_abort()`, the input bridge's counters. The window thread is
 on (AUTO). `desc.angle_dir` is always the module's own directory.
 
-Not bound, and why: triggers, `yscr_on_flip()`, `yscr_on_present()`,
-`desc.panic_fn` and `desc.on_context` run a callback on a C thread or
-inside the header's frame, and no binding runs a host function there
-(rig_spec.md, section 12); codes, text input, raw mice, groups, the native
-handles and `desc.abort_keys`: not needed by a phase A frame loop.
+Not bound, and why: triggers, `yscr_on_flip()`, `yscr_on_present()` and
+`desc.panic_fn` run a callback on a C thread or inside the header's frame,
+and no binding runs a host function there (rig_spec.md, section 12);
+codes, text input, raw mice, groups, the native handles and
+`desc.abort_keys`: not needed by a phase A frame loop. `desc.on_context`
+is not a host callback either: since phase B the binding sets it itself,
+to a C hook that starts the gfx while the screen settles (the open option
+`gfx`; [gfx.md](gfx.md#bindings)).
 
 Tests: 19 Python tests on the simulated display (CPython 3.12.11 and
 3.14.3, fresh `--no-cache` builds), `test_window.py` with a real window
@@ -3524,6 +3527,41 @@ polled `IsHungAppWindow()` and the foreground window's class every 50 ms
 With the window thread no host needs a pumping wait, and with v0.10.1's
 anchor after a gap no record after it carried GRID_UNSTABLE (v0.10.0's
 17 flagged records, [The grid after a gap](#the-grid-after-a-gap-v0101)).
+
+### The frame in MATLAB and Octave (MEX 1.1.0)
+
+Phase A's `'begin'` returned the frame as a struct with its records
+(`done`) and the newest record again (`last`). A record is a struct of 17
+fields, and each field is an array that MATLAB and Octave allocate. Since
+1.1.0 `'begin'` returns the frame without records; the records come as
+a third output when asked for (`[f, quit, done] = ...`) or from
+`'records'` once per trial. A screen opened with `'frame', 'row'` gives
+the frame as one row, `[onset period index vblank n_done done_lost]`, and
+the records (the third output and `'records'`) as one n x 15 double
+matrix. The exact ns are then not in the row or the matrix; seconds as
+doubles hold every ns below 2^53 ns (104 days of a clock that counts from
+boot).
+
+Measured per call with the hidden command `'_frame'` (the last frame
+converted by each form, no begin), a frame with one record, on the
+simulated display: the i7-1360P laptop, Windows 11, AC, the measurement
+lock held, 2026-10-27; best of 5 rounds of 20000 calls, the median of 3
+runs. `'now'` is a bare call for the scale.
+
+| us per call | `'now'` | phase A frame (`done`, `last`) | frame struct (1.1.0) | frame row | records struct | records matrix |
+|---|---|---|---|---|---|---|
+| MATLAB R2023a | 3.7 | 22.5 | 9.3 | 3.8 | 13.6 | 4.1 |
+| Octave 10.1 | 3.6 | 191.0 | 55.0 | 13.5 | 104.3 | 13.1 |
+
+So the default frame costs 2.4 (MATLAB) and 3.5 (Octave) times less than
+phase A's with one record a frame, and the row costs about a bare call
+in MATLAB and 10 us more in Octave. A first run the same day, under the
+lock too, gave MATLAB numbers 3.3 to 5.8 times smaller (`'now'` 0.67 us,
+phase A's frame 6.3, the struct 2.8, the row 0.65) and Octave numbers 1.1
+to 2.7 times smaller (phase A's frame 120, the struct 22, the row 5.1);
+the order of the forms held. The cause of the difference between the runs
+was not found. Python's `Frame` is
+unchanged: a record costs it 0.35 us (above).
 
 ## Not measured
 
