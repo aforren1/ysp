@@ -766,6 +766,7 @@ static PyType_Spec Screen_spec = { "ysp.screen.Screen", sizeof(ScreenObject), 0,
 /* --- Gfx, Stim, DrawList, Group, Texture: ysp.gfx (vis_gfx.c) ------------------------------ */
 
 #include "vis_gfx.c"
+#include "vis_text.c"   /* Font, Text */
 
 /* --- ysp.video: Movie, SeqWriter, probe(), make_index() ---------------------------- */
 

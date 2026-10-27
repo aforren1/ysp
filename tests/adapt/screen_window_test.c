@@ -7,7 +7,8 @@
  * runs, text input and the memory of its strings, the panic's release and
  * the end of a process whose window thread does not answer, two screens,
  * open and close cycles (handles, threads, memory), a fullscreen change
- * while open, gamepads, raw mice and triggers. It prints one line per
+ * while open, gamepads, raw mice and triggers, and screens one after
+ * another in one process (v0.10.2: each in front). It prints one line per
  * check and returns 0 when every check passed, 1 otherwise, 2 for a bad
  * argument. Windows are small and dark gray, in the top-left corner;
  * keys and mouse moves are sent with SendInput only while the test's own
@@ -19,7 +20,8 @@
  *                                     mode for about 2 s)
  *     test_screen_window --only NAME  one case: idle call displays mixed
  *                                     text release kill two cycles
- *                                     fullscreen gamepads mice triggers mode
+ *                                     fullscreen gamepads mice triggers
+ *                                     sequence mode
  *                                     (or YSCR_WINDOW_TEST_ONLY=NAME)
  *
  * Build: cl /W4 /Iinclude /I<SDL3>/include tests\adapt\screen_window_test.c
@@ -638,6 +640,97 @@ static void case_triggers(void) {
     yscr_close(&s);
 }
 
+/* Screens one after another in one process, and two at once (v0.10.2):
+ * each window gets the foreground and its flips their statistics. With the
+ * window thread the next open's window belongs to a new thread, and before
+ * v0.10.2 Windows refused its raise: the window opened behind, and every
+ * record was OCCLUDED at tier 3. Settling off, as a binding's quick run. */
+static int seq_frames(yscr_screen* s, int n, int* occluded) {
+    int i, rc = YSCR_OK;
+    for (i = 0; i < n; i++) {
+        int k;
+        yscr_frame f;
+        SDL_Event ev;
+        while (yscr_poll(s, &ev, NULL)) { }
+        if ((rc = yscr_begin(s, &f)) != YSCR_OK) return rc;
+        for (k = 0; k < f.n_done; k++) if (f.done[k].flags & YSCR_FLIP_OCCLUDED) (*occluded)++;
+        if (g_cc && g_cl) { g_cc(0.12f, 0.12f, 0.12f, 1.0f); g_cl(0x4000u); }
+        if ((rc = yscr_flip(s)) != YSCR_OK) return rc;
+    }
+    return yscr_wait_flip(s, NULL) < 0 ? -1 : YSCR_OK;
+}
+
+static int seq_in_front(yscr_screen* s, const char* what) {
+    char line[1200], msg[160];
+    yscr_describe(s, line, sizeof line);
+    snprintf(msg, sizeof msg, "%s: in front, not refused", what);
+    check(msg, strstr(line, "foreground=refused") == NULL && GetForegroundWindow() == hwnd_of(s));
+    return 1;
+}
+
+static void case_sequence(void) {
+    static yscr_screen s, s2;
+    yscr_desc d;
+    int run, fs, occ, front;
+    char what[96];
+    printf("sequence: 3 screens one after another (in a window, then fullscreen), then two at once\n");
+    /* The first window shows whether the process may take the foreground
+     * at all: not when a background process started it, or after input to
+     * another program within the lock time-out. A forced raise cannot
+     * prime it, because close gives the foreground back (FOREGROUND). */
+    base_desc(&d, YSCR_WINDOW_THREAD_ON);
+    d.settle = 0;
+    d.foreground = YSCR_FOREGROUND_AUTO;
+    if (!open_screen(&s, &d)) { check("the first", 0); return; }
+    {
+        char line[1200];
+        yscr_describe(&s, line, sizeof line);
+        front = strstr(line, "foreground=granted") != NULL && GetForegroundWindow() == hwnd_of(&s);
+    }
+    yscr_close(&s);
+    if (!front) {
+        printf("  skipped: the OS refused this process the foreground (started from the background, "
+               "or input to another program); start the test from a terminal in front, without input meanwhile\n");
+        return;
+    }
+    for (fs = 0; fs < 2; fs++) {
+        for (run = 0; run < 3; run++) {
+            base_desc(&d, YSCR_WINDOW_THREAD_ON);
+            d.settle = 0;
+            d.foreground = YSCR_FOREGROUND_AUTO;   /* HONOR in a window: no forced raise */
+            d.windowed = !fs;
+            snprintf(what, sizeof what, "%s, screen %d of 3", fs ? "fullscreen" : "window", run + 1);
+            if (!open_screen(&s, &d)) { check(what, 0); continue; }
+            occ = 0;
+            seq_in_front(&s, what);
+            snprintf(what, sizeof what, "%s, screen %d of 3: no OCCLUDED record", fs ? "fullscreen" : "window", run + 1);
+            check(what, seq_frames(&s, 60, &occ) == YSCR_OK && occ == 0);
+            yscr_close(&s);
+        }
+    }
+    /* two at once: a practice screen open while the main one opens */
+    base_desc(&d, YSCR_WINDOW_THREAD_ON);
+    d.settle = 0;
+    d.foreground = YSCR_FOREGROUND_AUTO;
+    if (!open_screen(&s, &d)) { check("two at once: the first", 0); return; }
+    seq_in_front(&s, "two at once: the first");
+    occ = 0;
+    seq_frames(&s, 30, &occ);
+    d.display_index = 1;
+    if (!open_screen(&s2, &d)) { check("two at once: the second", 0); yscr_close(&s); return; }
+    seq_in_front(&s2, "two at once: the second");
+    occ = 0;
+    check("two at once: the second, no OCCLUDED record", seq_frames(&s2, 60, &occ) == YSCR_OK && occ == 0);
+    yscr_close(&s);
+    yscr_close(&s2);
+    /* and one more after both closed */
+    if (!open_screen(&s, &d)) { check("after two: open", 0); return; }
+    seq_in_front(&s, "after two");
+    occ = 0;
+    check("after two: no OCCLUDED record", seq_frames(&s, 60, &occ) == YSCR_OK && occ == 0);
+    yscr_close(&s);
+}
+
 /* A display mode other than the desktop's, fullscreen, on the window thread. */
 static void case_mode(void) {
     static yscr_screen s;
@@ -692,7 +785,7 @@ static const test_case g_cases[] = {
     { "mixed", case_mixed, 1 }, { "text", case_text, 1 }, { "release", case_release, 1 },
     { "kill", case_kill, 1 }, { "two", case_two, 1 }, { "cycles", case_cycles, 1 },
     { "fullscreen", case_fullscreen, 1 }, { "gamepads", case_gamepads, 1 }, { "mice", case_mice, 1 },
-    { "triggers", case_triggers, 1 }, { "mode", case_mode, 0 }
+    { "triggers", case_triggers, 1 }, { "sequence", case_sequence, 1 }, { "mode", case_mode, 0 }
 };
 
 int main(int argc, char** argv) {

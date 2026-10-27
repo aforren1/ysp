@@ -51,10 +51,19 @@
 #define YSP_TIMELINE_API_SHIMS
 #include "ysp_timeline_api.h"
 
+/* Text: one curve set per font file of each fallback list (ysp_vis_text.h),
+ * so more than the header's 8; a set is a texture pair, made on first use. */
+#define YGFX_MAX_CSETS 32
+
 #define YSP_SCREEN_IMPLEMENTATION
 #include "ysp/screen.h"
 #define YSP_VIDEO_IMPLEMENTATION
 #include "ysp/video.h"   /* brings gfx.h's, color.h's and rt.h's */
+/* Text layout: pack/layout (Skribidi, HarfBuzz), linked as static libraries
+ * (tools/vendor_vis.py --layout); it calls ysp/outline.h, compiled here. */
+#define YSP_OUTLINE_IMPLEMENTATION
+#include "ysp/outline.h"
+#include "ysp/layout.h"
 
 #include <math.h>
 #include <stddef.h>
@@ -63,7 +72,7 @@
 
 /* The distribution's version tracks screen.h's, with a fourth number for a
  * change of the binding alone (docs/bindings.md, ysp-vis). */
-#define YV_VERSION YSCR_VERSION_STRING ".1"   /* .1: ysp.gfx and ysp.video, phase B */
+#define YV_VERSION YSCR_VERSION_STRING ".1"   /* .1: text, phase C (a binding-only change since 0.10.2) */
 
 #define YV_RECORDS 4096   /* flip records kept between records() calls */
 #define YV_EVENTS  1024   /* input events kept between poll() calls    */
@@ -428,6 +437,7 @@ static int yv_window(yv_screen* v, void (*fn)(void*), const char* text, int on) 
 /* ---- gfx: ysp/gfx.h's stimuli, lists, groups, bindings (ysp_vis_gfx.h) ------ */
 
 #include "ysp_vis_gfx.h"
+#include "ysp_vis_text.h"   /* text: fonts, layout, glyph and word boxes */
 
 #include "ysp_vis_video.h"   /* movies: ysp.video, ysp_video */
 

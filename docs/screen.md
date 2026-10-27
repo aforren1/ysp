@@ -3436,6 +3436,93 @@ and the desktop mode was back 1.23 and 1.29 s after the third press. The `kill` 
 blocked window thread) still ended the process, 1.1 s after the third
 press: the blocked thread never began the release.
 
+## The next screen's raise (v0.10.2)
+
+Found by the ysp-vis real-window tests (2026-10-27, main a0d3dcc): one
+Python process opened a 1280 x 720 window three times, one after
+another. With `window_thread` ON, the first window got
+`foreground=granted`, the second and the third `foreground=refused`, and
+each of their 120 records was `PATH_UNKNOWN`, `ESTIMATED|OCCLUDED`,
+tier 3. With OFF, all three were granted.
+
+### The cause
+
+Windows lets a thread that has the foreground window give the foreground
+to its next window. With the window thread OFF, the caller's thread
+makes every window, so the right goes from one screen to the next. With
+ON, the window thread ends at the last close, and the next open's window
+belongs to a new thread, which has no right of its own. The raise was
+refused, the window opened behind the other programs, and DWM gave its
+flips no statistics because another window covered it. Fullscreen
+(AUTO is FORCE there) the second and the third raise were refused too,
+and the forced raise took the foreground: `foreground=forced`, the
+records good.
+
+Two fixes, each measured with `seq.c` (not in the repository; three
+1280 x 720 windows, 120 frames each, the window thread ON), two runs
+each on this laptop, AC:
+
+| Header | Screen 1 | Screens 2 and 3 |
+|---|---|---|
+| v0.10.1 | granted | refused, 119 of 119 records OCCLUDED and PATH_UNKNOWN |
+| A: the window thread lives on after the last close | granted | granted, 0 OCCLUDED |
+| B: close() calls `AllowSetForegroundWindow` for its own process while its window has the foreground | granted | granted, 0 OCCLUDED |
+
+B is v0.10.2. A keeps a thread and a hidden window after the last
+screen, and a MEX file that a host unloads would have to stop it; B
+keeps no state, and the right belongs to the process, so it holds across
+a module unload. The right goes only from a screen that has the
+foreground: when the user gave input to another program, or a forced
+raise gave the foreground back at close (FOREGROUND), the next screen in
+a window is refused as before.
+
+### Before and after
+
+All runs on this laptop, AC, through the timing guard. Only runs whose
+first screen got the foreground count: the process has the right only
+when a program in front started it and no input went to another program
+since. Some runs came from the shell of the tool, which had it; the
+others from a launcher (not in the repository) that took the foreground
+and then started the program, as a terminal in front does. C: `seq.c`
+(three 1280 x 720 windows, 120 frames each) and `fgdbg.c` (four, 60
+frames each). Python: the ysp-vis repro (three 1280 x 720 windows with a
+gfx, 120 frames each), 0.10.1.1 from main against 0.10.2 from this
+branch, CPython 3.14.3.
+
+| Program | Header | Window thread | Runs | Screens 2 and later |
+|---|---|---|---|---|
+| C | v0.10.1 | ON | 3 | refused in 7 of 7; every record OCCLUDED (119 of 119, 59 of 59) |
+| C | v0.10.2 | ON | 3 | granted in 8 of 8; no OCCLUDED record |
+| C | v0.10.1 | OFF | 3 | granted in 7 of 7 |
+| C | v0.10.2 | OFF | 2 | granted in 5 of 5 (13 of 59 records OCCLUDED in one screen, which lost the foreground to another program's window during the run) |
+| Python | 0.10.1.1 | ON | 2 | refused in 4 of 4; 120 of 120 records PATH_UNKNOWN in 3 of them |
+| Python | 0.10.2 | ON | 3 | granted in 6 of 6; no PATH_UNKNOWN record |
+| Python | 0.10.1.1 | OFF | 5 | granted in 10 of 10 |
+| Python | 0.10.2 | OFF | 6 | granted in 8 of 12; refused, with no PATH_UNKNOWN record, in the other 4 (2 runs) |
+
+The two Python runs with OFF and refusals ran while another worker's
+window tests ran outside the guard; the three later runs, two from the
+launcher and one from the shell, and one before them were granted in every screen. The C
+runs with OFF and v0.10.2 do not show it.
+
+In MATLAB R2023a (`test_mex_vis_window.m`, ysp-vis MEX 1.1.0 on
+v0.10.2, from the launcher) the second window got `foreground=granted`
+and its records path 3, tier 1.
+
+Fullscreen with v0.10.1: screens 2 and 3 were `forced`, the records good;
+with v0.10.2 `granted`.
+
+### Tests
+
+`tests/adapt/screen_window_test.c --only sequence`: three screens in a
+window and three fullscreen, one after another, then two at once and one
+more after both closed; each screen is in front, not refused, and has no
+OCCLUDED record in 60 frames. The case is skipped when the OS refused the
+process the foreground at the first screen (a launch from the
+background, or input to another program). Mutant `fg-08` (the call
+removed) fails 11 of its 17 checks from the launcher. `bindings/mex/test_mex_vis_window.m`
+checks that its second window gets the foreground as the first did.
+
 ## Bindings
 
 `ysp/screen.h` is bound in `ysp-vis` with `ysp/gfx.h` and `ysp/video.h`:
@@ -3577,7 +3664,23 @@ Open findings (v0.10.0, `tests/adapt/screen_window_test.c`; not fixed):
   screen starts and stops SDL's video for the call and SDL numbers the
   displays anew (id 1, then 3; v0.9.0 too). With a screen open the ids
   stay valid. A fix would match displays by name or bounds.
-
+- **On COMPOSITION, a draw into framebuffer 0 between `flip()` and the
+  next `begin()` waits until the flipped frame leaves the screen**
+  (found 2026-10-27 by the text worker with `ygfx_prime()`; measured on
+  v0.10.2). After a present the presented buffer stays bound, and a
+  shown buffer is released only by a newer present or when the window is
+  covered. `ygfx_prime()` draws its output pass there. In front, one frame
+  then 1 s of sleep, then the prime: more than 90 s in 4 of 4 C runs
+  (window and fullscreen, window thread ON and OFF), 47 and 56 s in two
+  more until another window covered it; with `yscr_wait_flip()` first, or
+  DXGI_FLIP, or a covered window, 45 ms to 1.8 s. The text worker's Python
+  repro (ysp-vis 0.10.2): more than 90 s in 3 of 3 runs in front, 4 to
+  6 ms in 5 covered ones. `ygfx_read_scene()`,
+  `ygfx_read_output()` and `glFinish()` at the same point took 1.4 to
+  2.8 ms. An experiment that binds a free buffer right after the present
+  (as `acquire` does) removed it: 37 to 76 ms in 7 of 7 runs in front. Not
+  in v0.10.2; until then, call `yscr_wait_flip()` before a prime between
+  frames.
 
 - The window thread (v0.10.0) with two displays, a display that turns
   off while a screen is open, MATLAB's desktop (only `-batch` ran), a MEX

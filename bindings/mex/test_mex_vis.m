@@ -20,7 +20,7 @@ function test_mex_vis()
 
     % ---- versions and the core
     [bv, hv] = ysp_screen('version');
-    check(strcmp(bv, '1.1.0') && ~isempty(regexp(hv, '^\d+\.\d+\.\d+$', 'once')), 'version: binding %s, header %s', bv, hv);
+    check(strcmp(bv, '1.2.0') && ~isempty(regexp(hv, '^\d+\.\d+\.\d+$', 'once')), 'version: binding %s, header %s', bv, hv);
     [~, gv] = ysp_gfx('version');
     [~, vv] = ysp_video('version');
     info = ysp_vis('info');
