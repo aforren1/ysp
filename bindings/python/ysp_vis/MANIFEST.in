@@ -23,5 +23,7 @@ include vis_video.c
 include example.py
 include example_2afc.py
 include example_rsvp.py
+include example_stroop.py
+include example_reading.py
 include example_video.py
 recursive-include tests *.py
