@@ -214,7 +214,10 @@ def test_play_to_end(sim, clips):
         got = play_all(s, g, m)
         assert got[-1] is False and all(got[:-1])
         r = m.records()
-        assert len(r) == len(got) - 1                # the frame past the end has no record
+        # one record per display frame from the start (an ASAP start waits for
+        # the decode thread's first frames) to the last before the end
+        assert len(r) <= len(got) - 1 and [x.display for x in r] == list(range(r[0].display, r[0].display + len(r)))
+        assert r[-1].display == len(got) - 2         # a fresh screen: display index = loop index
         assert [x.frame for x in r if x.decision == yvid.SHOWN][:3] == [0, 1, 2]
         assert r[-1].frame == 89 and m.records() == []
         for x in r:
@@ -358,14 +361,14 @@ def test_loop(sim, clips, tmp_path):
 def test_close_with_gfx_and_screen(clips):
     with yscr.Screen(backend="sim", sim_period=PERIOD) as s:
         g = ygfx.Gfx(s)
-        m = yvid.Movie(g, clips["s30"])
+        m = yvid.Movie(g, clips["s30"], inline_decode=True)   # inline: the first frame is ready at once
         m.play()
-        play_all(s, g, m, limit=5)
+        play_all(s, g, m, limit=5)                   # its wait_flip() completes the fifth record
         g.close()                                    # its movies close first
         assert not m.open
         with pytest.raises(yvid.ClosedError):
             m.update()
-        assert len(m.records()) == 4                 # what was recorded stays readable
+        assert len(m.records()) == 5                 # what was recorded stays readable
         m.close()                                    # safe after
         g2 = ygfx.Gfx(s)
         m2 = yvid.Movie(g2, clips["s30"])

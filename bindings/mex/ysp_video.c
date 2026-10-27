@@ -1,4 +1,4 @@
-/* ysp_video.c - MEX ysp_video: ysp/video.h: a placeholder in phase A ('version', 'shared')
+/* ysp_video.c - MEX ysp_video: movies (ysp/video.h), the index maker and frame sequences
  *
  * A thin file: the commands are the core's (ysp_vis.c), which this file
  * loads from its own directory and calls (ysp_vis_mex.h, LIFETIME). Build

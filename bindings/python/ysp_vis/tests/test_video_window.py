@@ -96,9 +96,11 @@ def test_movie_in_window(win, clips, name, opts):
         s.wait_flip()
         r = m.records()
         info = m.info
-    assert r[-1].frame == 59
     shown = {x.frame for x in r if x.decision == yvid.SHOWN}
     dropped = info["dropped"]
-    assert len(shown) + dropped == 60
+    # every frame shown or dropped with a reason: a display that stalls
+    # (another window over it, a composed path) drops the last frames too
+    assert len(shown) + dropped == 60 and r[-1].frame == max(shown)
+    assert sum(info["drops_by"].values()) == dropped
     assert all(x.tier != yscr.TIER_SIM and x.onset_ns > 0 for x in r)
     assert info["ts_mismatch"] == 0 and info["hash_mismatch"] == 0

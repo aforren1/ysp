@@ -37,6 +37,7 @@ that a restart loses nothing.
 | Round 2: missed bars | DXVA's cold open at 1080p60 (259 to 308 ms, bar 300 ms; M3); the software decoder's seek (M4); 2 Media Foundation mutations not caught (why, in "Builds and mutations") |
 | Round 2: not built | `YVID_PATH_SHARED`; HEVC's VUI |
 | v0.2.1 (2026-10-08): recovery after a decoder outage | Fixed: after `YVID_PENDING` the decode thread slept until the next seek. Tested (a deterministic threaded case and the real-time one); 2 of 2 mutations caught. See "Recovery after a decoder outage" |
+| Bindings, phase B (2026-10-27) | Done: `ysp.video` and `ysp_video` in ysp-vis 0.10.1.1 (MEX 1.1.0); frames equal to the C path on the simulated display; 60 s fullscreen runs with sound in Python and MATLAB. See "Bindings" |
 | Not in this task | Capture, FFmpeg, AVFoundation |
 
 ## Decisions that changed the design
@@ -1090,8 +1091,170 @@ still plays at the close is not written).
 `ysp/audio.h` and `ysp/timeline.h` go through the tables of `ysp.audio` and
 `ysp.timeline` (`ysp_audio`, `ysp_timeline`), so a movie's soundtrack is
 the experiment's audio device and its clock a timeline built in the host.
-Phase A (2026-10-27) only proves that path: the module links against the
-forwarders, Python imports both tables when it loads, and
-`ysp_video('shared')` loads them in MATLAB and Octave (checked by
-`test_mex_vis.m`). It is built without pl_mpeg (`YVID_NO_PL_MPEG`). The
-movie API comes in phase B.
+Phase A (2026-10-27) proved that path. Phase B (2026-10-27, `ysp-vis`
+0.10.1.1, MEX 1.1.0) binds the movies. Windows only. MPEG-1 is in: pl_mpeg
+c871f2b, fetched and checked by SHA-256 (`tools/vendor_vis.py --pl-mpeg`);
+Media Foundation is loaded at run time, as the header does.
+
+### What is bound
+
+- A movie on a gfx: open from a path or from bytes (`data`, with the index
+  as bytes or a path; `ysp.video.from_pack()` reads both from a
+  `ysp.pack.Pack`), every desc field a host sets but the GPU path (below),
+  `info` (size, rate, frames, duration in seconds and ns, the form, the
+  cadence, the counts), `describe()`.
+- The frame: `update()` after the screen's `begin()` and before the gfx's
+  `begin()`, on the screen's current frame (`yv_screen.f`); `draw()` puts
+  the movie's IMAGE stimulus (`yvid_stim()`) in the frame with place,
+  anchor, size, orientation, opacity and filter. `update()` returns true
+  while playing and false from the first frame past the end. It never
+  waits, so it keeps the GIL.
+- The controls: play and pause at a time or as soon as possible, seek to
+  a movie time or a frame (resume as soon as ready, at a time, or paused),
+  `show()` (manual), `result()` of each control, `movie_time()`.
+- The records: `records()` gives the FRAME records (one per display frame,
+  times in seconds with the exact ns), `events()` the other kinds, `last()`
+  the newest update's. The movie's ring (`desc.ring`, 1024 records) is
+  drained into a FRAME buffer (`records`, 36000 by default: 10 min at 60
+  Hz) and a buffer of 1024 other records at every `update()`, so nothing
+  is lost between reads and no frame allocates. The screen's flip hook
+  (`yscr_on_flip`) passes each flip record to its movies
+  (`yvid_flip_done()`), so `wait_flip()` completes the last records.
+- The soundtrack (`yvid_soundtrack()`) on a `ysp.audio.Audio` or a
+  `ysp_audio` handle, and `yvid_follow_audio()`, called by `update()`
+  before `yvid_update()` when it is on (`follow=True` by default with a
+  soundtrack). A `ysp.timeline.Timeline` or `ysp_timeline` handle as
+  `desc.timeline` with `base`. Each is pinned through its owner's table
+  (`acquire()`) until the movie closes, so the owner's `close` raises
+  `BusyError` (`ysp_audio:busy`, `ysp_timeline:busy`) meanwhile.
+- `SeqWriter` (Python; MEX `'write_seq'` takes a whole movie as one array),
+  `probe()`, `make_index()`.
+
+Lifetime: a movie lives on its gfx. A gfx or screen that closes closes its
+movies first, while the GL objects exist; their records stay readable.
+The pins go back with the movie's close; in Python the screen closes
+without the GIL, so the release takes it (`PyGILState_Ensure`). The MEX
+core closes movies before gfx and screens when the last thin file
+detaches, then gives back the owners' modules.
+
+### Not bound, and why
+
+- The GPU path (`gpu_path`): it needs the screen's `d3d11_video` option,
+  which the screen binding does not have; UPLOAD is the default and has
+  the shorter tail (M7).
+- `desc.decoder`, `desc.reader` and `yvid_follow()`: each runs a host
+  callback on the decode thread or inside the frame. `data=` takes a whole
+  file in memory instead of a byte source, so a pack entry is read whole.
+- `desc.mem` (slot memory of the caller's), the pure functions
+  (`yvid_due()`, `yvid_frame_time()`, `yvid_lead_ns()`), the QOI and YUV
+  tools and `yvid_heap_calls()`: tools for C programs and tests.
+- `yvid_params()`: the designer's table; the host has `options()`.
+
+### Tests
+
+- Python: `test_video_sim.py`, 24 tests on the simulated display (CI): the
+  writer and its refusals, probe, open errors, play to the end with every
+  record's frame equal to the due frame of its movie time, the formats
+  (RAW, QOI, I420, 24000/1001 fps), bytes and `from_pack()`, the order
+  errors, the controls and their results, loop, the close with the gfx and
+  with the screen, the record buffer's overflow, MPEG-1 and an MP4 through
+  Media Foundation (with ffmpeg on PATH; skipped without), the soundtrack
+  on the null device with its pin, one on the default output
+  (`YSP_VIS_AUDIO=1`, local), the timeline base. `test_video_window.py`,
+  5 tests in a real window (local): RGBA8 and I420 frame sequences,
+  MPEG-1, the MP4 with DXVA and with the software decoder.
+- The C path: `video_sim_run.py` plays a clip on the simulated display and
+  ysp/rt.h's virtual clock (`_vis._virtual_clock`) with the loop of
+  `examples/video/play.c --sim`. The test checks every display frame's
+  frame, decision and reason against the due rule written out in Python,
+  and that two runs are equal. With `YSP_VIDEO_PLAY` set to `video_play`,
+  it compares the run with the C program's CSV: the display index, vblank,
+  onset ns, decision, reason, frame and movie time were equal on every line
+  for frame sequences at 30, 60, 25 and 24000/1001 fps (RAW, QOI, I420)
+  and MPEG-1 at 30 and 24000/1001 fps (2026-10-27, MSVC 19.51).
+- MEX: `test_mex_video.m`, 67 checks on the simulated display and the null
+  device, and `example_video.m`, in MATLAB R2023a and Octave 10.1
+  (MinGW-w64 gcc 14.2, the static SDL3 built with it).
+- Results (2026-10-27): CPython 3.12.11 and 3.14.3 (fresh `--no-cache`
+  builds) every test passed: 24 of 24 with `YSP_VIS_AUDIO=1` (23 and one skip without), 5 of 5 in a window, and the phase A tests beside them (44 on the simulated display, 1 in a window); the simulated suite passed three times in a row in each; MATLAB R2023a and Octave 10.1: 67 of 67 and
+  `test_mex_vis.m` 91 of 91.
+
+### Measured on the binding: 60 s movies with sound, fullscreen
+
+The laptop of [av_probe.md](av_probe.md) (i7-1360P, Iris Xe, the internal
+panel 1920 x 1200 at 60.0008 Hz, Windows 11 26200, AC), fullscreen on AUTO
+(COMPOSITION, the independent-flip path: tier 1), ANGLE 2.1.25848 from the
+wheel or the MEX directory; every run through the timing guard on a quiet
+machine. The clips are the 60 s measurement
+clips of `tests/media/make_video_clips.sh --long`: 1920 x 1080 H.264
+(testsrc2 with temporal noise, CRF 20, closed GOPs of 1 s) at 30 and 60
+fps, Media Foundation with DXVA (AUTO), UPLOAD of NV12, at 1:1 in the
+screen's center. The soundtrack: a 60 s 48 kHz 16-bit stereo WAV (a sine
+at about -30 dB) on the default output (Realtek speakers, WASAPI shared through
+miniaudio, period 480 frames), `follow=True`. The harness is
+`tests/probe/vis/movie.py` and `movie_mex.m`; `movie_table.py` makes the
+table. Python 3.12.11; MATLAB R2023a. Not run: Octave, a window, and the
+software decoder.
+
+| Host, clip | Display frames | Shown (on time) | Repeated (why) | Dropped (why) | Missed flips (vblanks) | Work p50 / p99 / max, ms | `update()` p50 / p99 / max, ms | A/V p1 / p50 / p99, ms | Sound start |
+|---|---|---|---|---|---|---|---|---|---|
+| Python, 30 fps | 3600 | 1800 (1800) | 1800 (due) | 0 | 1 (1) | 0.53 / 1.93 / 10.52 | 0.13 / 1.28 / 1.75 | -0.73 / -0.35 / +0.02 | -0.4 us |
+| Python, 60 fps | 3600 | 3600 (3600) | 0 | 0 | 1 (1) | 0.92 / 2.08 / 13.10 | 0.61 / 1.50 / 2.14 | -0.77 / -0.33 / +0.04 | +2.2 us |
+| MATLAB, 30 fps | 3586 | 1795 (1793) | 1791 (due) | 5 (display late) | 3 (4) | 0.63 / 1.94 / 28.04 | 0.15 / 1.13 / 6.34 | -0.79 / -0.44 / +0.00 | +3.6 us |
+| MATLAB, 60 fps | 3599 | 3599 (3598) | 0 | 1 (display late) | 1 (1) | 0.96 / 2.52 / 21.37 | 0.56 / 1.47 / 2.49 | -0.83 / -0.42 / +0.00 | -1.2 us |
+
+Video frames: the movie's; display frames: the FRAME records from the
+start (with the soundtrack, the start waits about 0.5 s for the frames and
+the sound's ring; the frames before it have no record). On time: SHOWN for
+its due time (why DUE) and not LATE. Work: the flip record's DRAW and
+UPLOAD phases, the host's time from the return of `begin()` to the flip
+call (`update()`, the draw, the binding). A/V: each shown frame's flip
+onset minus the frame's time on the audio clock (`residual` of the records
+with `F_AUDIO_CLOCK`), as the records report it: ysp/screen.h's onset
+against ysp/audio.h's fit of the device clock. No photodiode and no
+line-in were used, so this is not light against sound, and no timing tier
+is claimed. Sound start: the soundtrack's ONSET residual (ysp_audio).
+
+What the runs show:
+
+- Every run missed the flip of display frame 0: its draw is 10 to 22 ms
+  (the first use of the programs and the texture). The movie's first frame
+  was shown one vblank late, on time from the second.
+- MATLAB, 30 fps: twice `begin()` waited 167 and 106 ms for the swap path,
+  and the flip records before those waits say `FLIP_OCCLUDED`: something
+  covered the full screen for a moment (the records do not say what). The
+  movie dropped 5 frames with reason DISPLAY_LATE and went on from the
+  frame due; the movie time jumped with the display, as the due rule
+  says. MATLAB, 60 fps: one flip a vblank late after `begin()` had waited
+  23 ms (1.1 ms of work in that frame), 1 frame dropped (DISPLAY_LATE).
+  Python had no miss but frame 0's.
+- `update()` costs 0.13 to 0.15 ms at the median at 30 fps (half the
+  display frames repeat and upload nothing) and 0.56 to 0.61 ms at 60 fps
+  (a 1080p NV12 upload on every frame), p99 1.1 to 1.5 ms. The work of a
+  frame is within 2.6 ms at p99 in both hosts.
+- The flips are 0.33 to 0.44 ms ahead of the sound's clock at the median,
+  0.73 to 0.83 ms at p1, within 0.04 ms at p99. ysp/video.h's own run in a
+  composed window (Soundtrack, above) gave -0.02 to -0.15 ms at the median:
+  this is a different display path and day, and the offset was not
+  investigated further. Each soundtrack start was within 4 us of its
+  target on ysp_audio's fit.
+
+### Header limits found
+
+- `yvid_open()` returns false without a code, so the binding cannot tell a
+  file not in the canonical form from a bad option or a decoder failure
+  except by the message. The binding raises the base error class
+  (`ysp.screen.Error`, MEX `ysp_video:open`) with the header's message, and
+  finds a missing file itself first (`NotFoundError`, `:not_found`).
+- `yvid_probe()` answers a missing file with `YVID_ERR_REFUSED` ("reads
+  frame sequences and indexed MPEG-1 and MP4 files only"). The binding
+  checks the path first. Repro: `yvid_probe()` of a path that does not
+  exist.
+- Paths go to `fopen()` (`fopen_s()` under MSVC), so on Windows a path is
+  in the ANSI code page: a path with a character outside it cannot be
+  opened. The Python binding encodes paths as `mbcs` and refuses one it
+  cannot encode, with the hint to pass `data=`. Repro: a clip in a folder
+  named with a character outside the code page (Windows-1252 here), opened
+  by `yvid_open()` with its UTF-8 bytes.
+
+None of these blocked the binding; no header was changed.

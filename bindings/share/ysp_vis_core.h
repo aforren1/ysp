@@ -61,7 +61,7 @@
 #include <string.h>
 
 /* The distribution's version tracks screen.h's (docs/bindings.md, ysp-vis). */
-#define YV_VERSION YSCR_VERSION_STRING
+#define YV_VERSION YSCR_VERSION_STRING ".1"   /* .1: ysp.video's movies (phase B), a binding-only change */
 
 #define YV_RECORDS 4096   /* flip records kept between records() calls */
 #define YV_EVENTS  1024   /* input events kept between poll() calls    */

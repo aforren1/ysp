@@ -26,7 +26,7 @@ never reused, so a handle kept past its `close` always raises
 | `ysp_timeline.c` | [ysp/timeline.h](../../include/ysp/timeline.h) | [example_timeline.m](example_timeline.m) |
 | `ysp_dataset.c` | [ysp/dataset.h](../../include/ysp/dataset.h) | [example_dataset.m](example_dataset.m) |
 | `ysp_audio.c` | [ysp/audio.h](../../include/ysp/audio.h) | [example_audio.m](example_audio.m), [test_mex_audio.m](test_mex_audio.m) |
-| `ysp_vis.c` (the core), `ysp_screen.c`, `ysp_gfx.c`, `ysp_video.c` | [ysp/screen.h](../../include/ysp/screen.h), [ysp/gfx.h](../../include/ysp/gfx.h), [ysp/video.h](../../include/ysp/video.h) (ysp-vis, Windows only) | [example_screen.m](example_screen.m), [test_mex_vis.m](test_mex_vis.m), [test_mex_vis_window.m](test_mex_vis_window.m) |
+| `ysp_vis.c` (the core), `ysp_screen.c`, `ysp_gfx.c`, `ysp_video.c` | [ysp/screen.h](../../include/ysp/screen.h), [ysp/gfx.h](../../include/ysp/gfx.h), [ysp/video.h](../../include/ysp/video.h) (ysp-vis, Windows only) | [example_screen.m](example_screen.m), [example_video.m](example_video.m), [test_mex_vis.m](test_mex_vis.m), [test_mex_video.m](test_mex_video.m), [test_mex_vis_window.m](test_mex_vis_window.m) |
 
 The two transport headers build on the shared [ysp/rt.h](../../include/ysp/rt.h), so
 both MEX functions compile it too. `ysp_quest.c` and `ysp_aep.c` define
@@ -1561,7 +1561,7 @@ checks.
 The display, its frame loop and the record of every flip
 ([ysp/screen.h](../../include/ysp/screen.h)), and in phase A the draw path
 that shows something ([ysp/gfx.h](../../include/ysp/gfx.h): a background
-and filled rectangles). `ysp_video` is a placeholder until phase B. Windows
+and filled rectangles). `ysp_video` plays movies (phase B; Movies, below). Windows
 only. [example_screen.m](example_screen.m) runs a 3 s frame loop in a
 window; [test_mex_vis.m](test_mex_vis.m) runs on the simulated display (no
 window) and prints `PASS` with the number of checks;
@@ -1583,7 +1583,7 @@ r = ysp_screen('close', h);                      % the records not read yet
 ```
 
 **Build.** Make the natives once from the repository root:
-`uv run --no-project python tools/vendor_vis.py --write --angle --sdl msvc`
+`uv run --no-project python tools/vendor_vis.py --write --angle --pl-mpeg --sdl msvc`
 for MATLAB, and `--sdl mingw --mingw-bin "<Octave>/mingw64/bin"` for
 Octave (the static SDL3 must come from Octave's own gcc). `build.m` then
 links `ysp_vis.c` against it, strips the Octave file (`-s`), and copies
@@ -1603,7 +1603,7 @@ directory ANGLE is loaded from and the SDL version. Handles start at
 
 | Command | Returns | Notes |
 |---|---|---|
-| `ysp_screen('version')` | `'1.0.0'`, and the header's | the same for `ysp_gfx`, `ysp_video`, `ysp_vis` |
+| `ysp_screen('version')` | `'1.1.0'`, and the header's | the same for `ysp_gfx`, `ysp_video`, `ysp_vis`; 1.1.0 added `ysp_video`'s movies |
 | `'displays'`, `'modes' [, display]`, `'mode_multiple', num, den, [w h], tol_ppm, display` | struct rows; `[k, mode, err_ppm]` | `'open'` takes a display's `id` and a mode struct |
 | `'options'`, `'constants'` | struct | the options with a line each; `TIER_*`, `PATH_*`, `FLIP_*`, `ABORT_*`, `KIND_*`, `PRESS` ... |
 | `'open' [, opts]` | `uint64` handle | a struct or name-value pairs: `windowed`, `size`, `display`, `mode`, `backend` (`'auto'`, `'dxgi_flip'`, `'composition'`, `'sim'`), `window_thread`, `lead`, `onset_offset` (s), `depth`, `depth_learn`, `settle`, `settle_flips`, `settle_min`, `settle_max` (s), `foreground`, `panic`, `panic_presses`, `panic_window`, `panic_grace` (s), `patch`, `patch_size`, `patch_corner`, `show_cursor`, `keep_os_gamma`, `key_dedup` (s), `gamepads`, `min_tier`, `sim_period` (s). Settles: 0.5 to 0.8 s fullscreen, 2.5 s in a window |
@@ -1627,6 +1627,62 @@ A record has `index`, `target`, `planned`, `onset`, `residual` (each with
 `:not_implemented`, `:abort`, `:open`, `:handle` and `:usage` (and the same
 under `ysp_gfx:`). `'begin'` and `'wait_flip'` block MATLAB, and Ctrl+C
 does not end them; Shift+Esc does.
+
+### Movies: ysp_video
+
+A movie on a gfx ([ysp/video.h](../../include/ysp/video.h)): each display
+frame shows the frame due at the frame's predicted onset, and gets a record.
+[example_video.m](example_video.m) plays a movie it writes, with a
+soundtrack on the default output; [test_mex_video.m](test_mex_video.m)
+runs on the simulated display and the null audio device and prints `PASS`
+with the number of checks.
+
+```matlab
+m = ysp_video('open', g, 'clip.mp4');           % clip.mp4.yspvi beside it
+ysp_video('soundtrack', m, a, 'clip.wav');      % optional: a ysp_audio handle; the clock follows the sound
+ysp_video('play', m);
+while true
+    [f, quit] = ysp_screen('begin', h);
+    if ~isempty(quit), break; end
+    playing = ysp_video('update', m);           % after the screen's begin, before the gfx's
+    ysp_gfx('begin', g); ysp_video('draw', m); ysp_gfx('end', g);
+    ysp_screen('flip', h);
+    if ~playing, break; end                     % the first frame past the end
+end
+ysp_screen('wait_flip', h);                     % the last flips complete the records
+r = ysp_video('records', m);                    % one per display frame
+ysp_video('close', m);                          % gives the ysp_audio handle back
+```
+
+| Command | Returns | Notes |
+|---|---|---|
+| `'open', g, path [, opts]` | `uint64` handle | name-value pairs or a struct: `data` (uint8, with path `''`), `index` (a path or uint8; none = path + `.yspvi`), `timeline` (a `ysp_timeline` handle) with `base`, `records` (FRAME records kept, 36000), `loop`, `ahead`, `preroll`, `lead`, `light`, `chroma`, `backend`, `hw_decode`, `strict_cadence`, `inline_decode`, `inline_budget`, `refresh_num`, `refresh_den`, `movie_index`, `min_tier`, `pin_cpu` (`'options'` lists them) |
+| `'update', m` | logical | true while playing; `:order` out of turn or twice in a frame |
+| `'draw', m [, [x y w h], ori, opacity, linear]` | none | between the gfx's begin and end; `w`, `h` 0 = the frame's pixels |
+| `'play', m [, t]`, `'pause', m [, t]` | id | `t` on the ysp_rt clock; none or `[]` as soon as possible |
+| `'seek', m, t [, resume]`, `'seek_frame', m, i [, resume]` | id | resume `[]`, `'paused'` or a time |
+| `'show', m, i` | none | manual: this display frame shows frame `i`; before `'update'` |
+| `'result', m, id`, `'last', m` | struct or `[]` | the PLAY, PAUSE or SEEK record; the newest update's record |
+| `'records', m`, `'events', m` | struct row, cell row | the FRAME records since the last call (the second output counts the overflow); the other records as structs with `kind` |
+| `'soundtrack', m, audio, wav [, opts]` | none | wav a path or uint8; `db`, `channels`, `ramp`, `ring` (s), `follow` (true) |
+| `'follow_audio', m, audio` | none | `[]` stops it |
+| `'info', m`, `'describe', m`, `'movie_time', m, t`, `'close', m` | | `info`: size, rate, frames, `duration` (s, `duration_ns` int64), form, cadence, counts |
+| `'probe', path [, index]`, `'make_index', media, index [, opts]` | struct, frames | `make_index`: `''` writes `media.yspvi`; `matrix`, `range`, `transfer`, `primaries`, `siting`, `backend`, `hw`, `no_seek_check` |
+| `'write_seq', path, frames, fps [, 'qoi']` | frames | `[h w n]` or `[h w 4 n]`: uint8 (R8, RGBA8), uint16 (R16), single (R32F, RGBA32F); fps a number or `[num den]` |
+| `'options'`, `'constants'`, `'shared'` | struct | `F_*` flags; the owners' tables |
+
+A record has `display`, `frame`, `onset`, `due`, `residual` (`onset -
+due`: with the audio clock the frame's A/V error), `movie_t` (each with
+`_ns`, `int64`), `decision` (`'shown'`, `'repeated'`), `why` (`'due'`,
+`'cadence'`, `'display_late'`, `'decode_late'`, `'drift'`, `'seek'`,
+`'loop'`, `'manual'`), `tier`, `path`, `flags`, `ahead` and `shows`. A
+dropped frame has a `drop` event. Errors are `ysp_video:arg`, `:format`,
+`:closed`, `:order`, `:refused`, `:io`, `:not_found`, `:decoder`, `:open`,
+`:handle`, `:shared` and `:usage`. The `ysp_audio` handle of a soundtrack
+and a `ysp_timeline` handle are pinned through their owners' tables until
+the movie closes: `ysp_audio('close', a)` is `ysp_audio:busy` meanwhile.
+A closed gfx or screen closes its movies first; `'records'` still reads
+them, and `'close'` frees the handle.
 
 Between trials, `pause` is fine in MATLAB and in Octave: the window
 belongs to ysp/screen.h's window thread and does not hang. With `'panic'`

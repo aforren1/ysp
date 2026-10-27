@@ -14,6 +14,9 @@ without a call into the module. Windows only.
 | `watch_hung.py` | Polls the window by title every 50 ms: `IsHungAppWindow()`, and a "Ghost" window in front |
 | `run.sh` | One run: the host and, for the gap, the watcher |
 | `table.py` | The table of the CSVs, with av_probe.md's columns; `--after 120 CSV` gives the records after the gap |
+| `movie.py` | A movie (phase B, `ysp.video`): each frame `begin()`, `Movie.update()` (timed), `Gfx.begin()`, `Movie.draw()`, `Gfx.end()`, `flip()`; `--wav` adds the soundtrack on the default output. Writes PREFIX.frames.csv (FRAME records), .flips.csv (flip records with the DRAW, SWAP and UPLOAD phases), .update.csv and .txt |
+| `movie_mex.m` | The same in MATLAB and Octave |
+| `movie_table.py` | The table of movie runs: frame decisions, drops, missed flips, work, `update()`, the A/V error the records report, the sound's start ([video.md](../../../docs/video.md#bindings)) |
 
 "Work" is a record's DRAW phase: the time from the return of
 `yscr_begin()` to the call of `yscr_flip()`, so it holds everything the
@@ -36,6 +39,16 @@ $G vis_octave_idle bash tests/probe/vis/run.sh octave idle OUT/octave_idle
 $PY tests/probe/vis/table.py OUT/*_full.csv
 $PY tests/probe/vis/table.py --after 120 OUT/py_idle.csv
 cat OUT/py_idle.watch
+```
+
+The movies (the 60 s clips of `tests/media/make_video_clips.sh --long`,
+indexed with `ysp.video.make_index()`, and a 60 s WAV at the device's
+rate):
+
+```sh
+$G vis_movie_py_30 $PY tests/probe/vis/movie.py OUT/m_1080p30.mp4 --wav OUT/m_60s.wav --out OUT/py30
+$G vis_movie_matlab_30 matlab -batch "addpath('bindings/mex'); addpath('tests/probe/vis'); movie_mex('OUT/m_1080p30.mp4', 'wav', 'OUT/m_60s.wav', 'out', 'OUT/ml30')"
+$PY tests/probe/vis/movie_table.py OUT/py30 OUT/ml30
 ```
 
 `window` in place of `full` runs a 1280 x 720 window. Shift+Esc ends a run.

@@ -14,8 +14,13 @@ section 12.
 
 Status: phase A. `ysp.screen` binds the frame loop in full. `ysp.gfx` has
 the draw path that a frame loop needs to show something (a background and
-filled rectangles). `ysp.video` is a placeholder. Phase B adds the stimuli
+filled rectangles). Phase B adds the stimuli
 of ysp/gfx.h and the movies of ysp/video.h.
+
+Phase B, movies (0.10.1.1): `ysp.video` binds ysp/video.h's movies (frame
+sequences, MPEG-1 through pl_mpeg, MP4 through Media Foundation), their
+soundtrack on a `ysp.audio.Audio`, the frame sequence writer and the index
+maker (How to play a movie, below).
 
 **Windows only.** The other screen backends of ysp/screen.h are stubs.
 The wheel is `cp38-abi3-win_amd64`: one build for CPython 3.8 and later.
@@ -51,14 +56,16 @@ From the repository root, make the natives once, then install the three
 packages:
 
 ```sh
-uv run --no-project python tools/vendor_vis.py --write --angle --sdl msvc
+uv run --no-project python tools/vendor_vis.py --write --angle --sdl msvc --pl-mpeg
 uv pip install ./bindings/python/ysp_audio ./bindings/python/ysp_timeline ./bindings/python/ysp_vis
 ```
 
 `tools/vendor_vis.py` downloads the SDL3 3.4.0 release tarball and the
 Electron zip, checks both by SHA-256, builds the static SDL3 with MSVC and
 takes the two ANGLE DLLs (also checked by SHA-256) into
-`third_party/vis/`. setup.py takes the headers, the shared tables and the
+`third_party/vis/`; `--pl-mpeg` fetches pl_mpeg.h (commit c871f2b, checked
+by SHA-256), the MPEG-1 decoder compiled into the extension. A download
+that breaks off resumes where it stopped. setup.py takes the headers, the shared tables and the
 natives from the repository. An isolated build (an sdist, cibuildwheel)
 sees only this directory: stage the files first (MANIFEST.in lists them).
 
@@ -93,6 +100,101 @@ record of a flip arrives one frame later: in `f.done` of the next
 
 `example.py` is a complete loop: `python example.py` (a window),
 `--full`, or `--sim` (no window).
+
+## How to play a movie
+
+```python
+import ysp.audio as yau, ysp.gfx as ygfx, ysp.screen as yscr, ysp.video as yvid
+
+with yau.Audio() as au, yscr.Screen() as s, ygfx.Gfx(s, background=0.45) as g, \
+        yvid.Movie(g, "clip.mp4") as m:          # clip.mp4.yspvi beside it
+    print(m.info["duration"], m.describe())
+    m.soundtrack(au, "clip.wav")                 # optional; the movie clock follows the sound
+    m.play()                                     # as soon as the frames and the sound are ready
+    while True:
+        f = s.begin()
+        playing = m.update()                     # the frame due at f.onset; never waits
+        g.begin()
+        m.draw()                                 # 1:1 in the center; draw(x, y, w, h, ori, opacity, ...)
+        g.end()
+        s.flip()
+        if not playing:                          # the first frame past the movie's end
+            break
+    s.wait_flip()                                # the last flips' records
+    for r in m.records():                        # one per display frame
+        print(r.display, r.frame, yvid.DECISION_NAMES[r.decision], yvid.WHY_NAMES[r.why], r.residual)
+```
+
+`update()` goes between the screen's `begin()` and the gfx's `begin()`,
+once a display frame: it picks the frame due at the frame's predicted
+onset by ysp/video.h's rule (never a count of frames) and puts it in the
+texture. `draw()` goes between the gfx's `begin()` and `end()`. A file must
+be in the canonical form ([docs/video.md](../../../docs/video.md)): a frame
+sequence (`SeqWriter` writes one), MPEG-1 (pl_mpeg, built in) or an MP4
+with H.264 or HEVC (Windows Media Foundation), each MPEG-1 and MP4 file
+with its index beside it: `ysp.video.make_index("clip.mp4", matrix="bt709",
+range="limited", transfer="bt1886", primaries="bt709", siting="left")` (an
+MPEG-1 file needs no color arguments). A WAV soundtrack must be at the
+device's rate and channel count and last as long as the movie, to the
+sample. `example_video.py` plays a movie it makes, with sound: `python
+example_video.py` (a window and the default output), `--full`, or `--sim
+--null` (no window, no sound card).
+
+### ysp.video reference
+
+`Movie(gfx, path=None, *, data=None, index=None, timeline=None,
+records=36000, **options)`: `data` is the file in memory (bytes; from
+`ysp.pack.Pack.read()`, or `ysp.video.from_pack(gfx, pack, name)`), `index`
+a path or bytes (None: `path + ".yspvi"`), `timeline` a
+`ysp.timeline.Timeline` whose `base=` (1 to 7) is the movie clock. The
+options are the header's desc (`ysp.video.options()` lists them): `loop`,
+`ahead`, `preroll`, `lead`, `light` (`'auto'`, `'codes'`, `'eotf'`),
+`chroma`, `backend` (`'auto'`, `'seq'`, `'plmpeg'`, `'mf'`), `hw_decode`
+(`'auto'`, `'off'`, `'dxva'`), `strict_cadence`, `inline_decode`,
+`inline_budget`, `refresh_num`, `refresh_den`, `movie_index`, `min_tier`,
+`pin_cpu`. Opening releases the GIL.
+
+| Call | Result |
+|---|---|
+| `m.update()` | `True` while playing, `False` from the first frame past the end; `OrderError` out of turn |
+| `m.draw(x=0, y=0, w=0, h=0, ori=0, opacity=1, linear=False, place='center', anchor='center')` | the movie as a ysp/gfx.h IMAGE; `w`, `h` 0 = the frame's pixels |
+| `m.play(at=None)`, `m.pause(at=None)` | an id; `at` a time on the ysp_rt clock, None as soon as possible |
+| `m.seek(t, resume=None)`, `m.seek_frame(i, resume=None)` | an id; `t` a movie time; `resume` None, `'paused'` or a time |
+| `m.show(i)` | this display frame shows frame `i` (manual mode); before `update()` |
+| `m.result(id)` | the PLAY, PAUSE or SEEK record as a dict, or None before it happened |
+| `m.last()` | the `Record` of the newest `update()` (its onset predicted, `F_PENDING`), or None |
+| `m.records()` | `list[Record]`: the FRAME records completed since the last call (`records_lost`) |
+| `m.events()` | `list[dict]`: the other records (`kind` open, play, pause, seek, loop, end, drop, clock, decode, sound, rate) with their times in seconds and `_ns` |
+| `m.soundtrack(audio, path=None, *, data=None, db=0, channels=0, ramp=None, ring=None, follow=True)` | the WAV as a ysp/audio.h stream on a `ysp.audio.Audio`; before the first play. `follow`: the movie clock follows the sound |
+| `m.follow_audio(audio)` | each `update()` takes the movie time from the audio clock; None stops it |
+| `m.movie_time(t)`, `m.info`, `m.describe()`, `m.close()` | the movie time at `t`; size, rate, frames, duration (s and ns), form, cadence, counts; the log line |
+
+A `Record` has `display`, `frame`, `onset`, `due`, `residual` (`onset -
+due`; with the audio clock the frame's A/V error), `movie_t` (each with
+`_ns`), `decision` (`SHOWN`, `REPEATED`; a dropped frame has a `drop`
+event), `why` (`WHY_DUE`, `WHY_CADENCE`, `WHY_DISPLAY_LATE`,
+`WHY_DECODE_LATE`, `WHY_DRIFT`, `WHY_SEEK`, `WHY_LOOP`, `WHY_MANUAL`;
+`WHY_NAMES` gives the names), `tier`, `path` (`PATH_UPLOAD`), `flags`
+(`F_*`), `ahead` and `shows`. The screen's flip records complete them, so
+call `s.wait_flip()` before the last `records()`. A closed gfx or screen
+closes its movies first; their records stay readable.
+
+`SeqWriter(path, w, h, fps, format='rgba8', compression='raw', matrix,
+range, transfer, primaries, siting, max_frames=0)` writes a frame
+sequence, value-exact: `write(bytes)` (the planes tight, in order;
+`frame_bytes` says how many), `finish()`, `close()`, a context manager.
+`probe(path=None, *, data=None, index=None)` reads a movie's description
+without opening it. `make_index(media, index=None, *, matrix, range,
+transfer, primaries, siting, backend='auto', hw='off', note=None,
+no_seek_check=False)` decodes every frame and writes the index (GIL
+released). Errors: those of `ysp.screen`, and `ysp.video.FormatError` (an
+`ArgumentError`), `NotFoundError` (a `FileNotFoundError` too) and
+`IOError` (an `OSError` too). A path goes to the header's `fopen()` in the
+ANSI code page; a path outside it is refused (pass `data=`).
+
+The soundtrack's `Audio` is held through ysp.audio's table: its `close()`
+raises `BusyError` until the movie closes. A `Timeline` given to `Movie()`
+is held the same way.
 
 ## Between trials
 
@@ -179,6 +281,14 @@ YSP_VIS_WINDOW=1 pytest bindings/python/ysp_vis/tests/test_window.py   # a real 
 two seconds, idles 6 s without a call and draws again. CI runs the
 simulated tests only.
 
+`test_video_sim.py` makes its clips (frame sequences; MPEG-1 and an MP4
+with ffmpeg when it is on PATH) and checks each display frame of a run on
+the simulated display and the virtual clock against the due rule; with
+`YSP_VIDEO_PLAY` set to an `examples/video/play.c` executable, against the
+C path line by line. `YSP_VIS_AUDIO=1` adds one soundtrack on the default
+output. `YSP_VIS_WINDOW=1 pytest .../test_video_window.py` plays a frame
+sequence, MPEG-1 and an MP4 (DXVA and the software decoder) in a window.
+
 ## What is not bound
 
 - Triggers at onset and the after-flip and before-present hooks: each
@@ -192,3 +302,10 @@ simulated tests only.
 - `desc.on_context`: `Gfx()` opens after the screen settles, so its
   programs compile after the settling, not during it (phase B can open
   both in one call).
+- ysp/video.h: the GPU path (`gpu_path`; it needs the screen's
+  `d3d11_video` option, not bound, and UPLOAD has the shorter tail by
+  measurement), a decoder extension (`desc.decoder`: callbacks on the
+  decode thread), a byte source by range (`desc.reader`: the same; `data=`
+  takes the whole file), `yvid_follow()` with a host clock (a callback),
+  the pure functions (`yvid_due`, `yvid_frame_time`), the QOI and YUV
+  tools, and a movie's own event ring (records() and events() read it).

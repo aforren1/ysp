@@ -18,4 +18,5 @@ recursive-include natives *
 include ysp_vis_ext.c
 include vis_video.c
 include example.py
+include example_video.py
 recursive-include tests *.py
