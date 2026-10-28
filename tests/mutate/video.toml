@@ -287,3 +287,66 @@ test = "video"
 why = "v0.5.0: a zero ahead decodes 6 frames ahead; a designer writing 4 would shorten the stall margin."
 find = '{ "ahead", "i32", 0, YVID_MAX_SLOTS - 2, 6, "frame",'
 replace = '{ "ahead", "i32", 0, YVID_MAX_SLOTS - 2, 4, "frame",'
+
+# v0.6.0: UTF-8 paths, error_code, NOT_FOUND from the probe (test_paths and
+# test_open_refusals). v060-01 and v060-02 are caught on Windows only: on
+# POSIX fopen() takes the UTF-8 bytes as they are.
+
+[[mutant]]
+id = "v060-01"
+name = "paths through fopen() (the ANSI code page)"
+test = "video"
+why = "v0.6.0: a folder named outside the ANSI code page (U+03A9, a CJK ideograph, an emoji) must open; fopen() on Windows cannot name it."
+find = "        f = _wfsopen(w, m, mode[0] == 'r' ? _SH_DENYNO : _SH_DENYWR);"
+replace = "        (void)w; (void)m; f = fopen(path, mode);"
+
+[[mutant]]
+id = "v060-02"
+name = "the soundtrack's path to audio.h's own open"
+test = "video"
+why = "v0.6.0: ysp/audio.h opens a path with fopen(); the header opens the WAV itself and gives audio.h a reader, so the UTF-8 folder works."
+find = '''    if (d->path) {
+        rc = yvid__src_open(&s->file, d->path, NULL, 0, NULL, NULL);'''
+replace = '''    wd.path = d->path;
+    if (0) {
+        rc = yvid__src_open(&s->file, d->path, NULL, 0, NULL, NULL);'''
+
+[[mutant]]
+id = "v060-03"
+name = "yvid_open() sets no code"
+test = "video"
+why = "v0.6.0: yvid_open() returns bool; without mv.error_code a binding tells a missing file from a bad option only by the message."
+find = "    mv->error_code = (int32_t)code;"
+replace = "    (void)code;"
+
+[[mutant]]
+id = "v060-04"
+name = "a failing call sets no code"
+test = "video"
+why = "v0.6.0: every failing call on a movie or a writer sets error_code beside the message."
+find = "        *ec = (int32_t)rc;"
+replace = "        (void)ec;"
+
+[[mutant]]
+id = "v060-05"
+name = "probe of a missing file is REFUSED"
+test = "video"
+why = "v0.6.0: yvid_probe() of a file that is not there must say NOT_FOUND, not that it reads only three kinds of file."
+find = "    if (b < 0) { yvid__backend_why(d, b, err, cap); return b; }"
+replace = "    (void)&yvid__backend_why;"
+
+[[mutant]]
+id = "v060-06"
+name = "every failed open is IO"
+test = "video"
+why = "v0.6.0: a file that is not there (ENOENT, ENOTDIR) is NOT_FOUND; other failures are IO."
+find = "    if (!f) return errno == ENOENT || errno == ENOTDIR ? YVID_ERR_NOT_FOUND : YVID_ERR_IO;"
+replace = "    if (!f) return YVID_ERR_IO;"
+
+[[mutant]]
+id = "v060-07"
+name = "the writer's open sets no code"
+test = "video"
+why = "v0.6.0: yvid_seq_open() returns bool; w.error_code gives the reason (NOT_FOUND for a missing folder)."
+find = "    w->error_code = (int32_t)code;"
+replace = "    (void)code;"

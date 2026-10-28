@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ysp-vis"
-version = "0.10.3.1"  # ysp/screen.h v0.10.3, binding change 1 (the CPython 3.10 floor); a fourth number for a change of the binding, gfx.h or video.h alone (docs/bindings.md, ysp-vis); tests/test_screen_sim.py checks it against __version__
+version = "0.10.3.2"  # ysp/screen.h v0.10.3, binding changes 2: the CPython 3.10 floor, ysp/video.h 0.6.0; a fourth number for a change of the binding, gfx.h or video.h alone (docs/bindings.md, ysp-vis); tests/test_screen_sim.py checks it against __version__
 description = "A stimulus display with flip at a time and a record of every flip (ysp/screen.h), its stimuli (ysp/gfx.h) and movies (ysp/video.h)"
 readme = "README.md"
 requires-python = ">=3.10"

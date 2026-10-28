@@ -197,8 +197,11 @@ transfer, primaries, siting, backend='auto', hw='off', note=None,
 no_seek_check=False)` decodes every frame and writes the index (GIL
 released). Errors: those of `ysp.screen`, and `ysp.video.FormatError` (an
 `ArgumentError`), `NotFoundError` (a `FileNotFoundError` too) and
-`IOError` (an `OSError` too). A path goes to the header's `fopen()` in the
-ANSI code page; a path outside it is refused (pass `data=`).
+`IOError` (an `OSError` too), by the header's code: a file that is not
+there raises `NotFoundError` from `Movie()`, `probe()`, `SeqWriter()` and
+`soundtrack()`. A path (`str`, `bytes` or `os.PathLike`) goes to the
+header as UTF-8 (PEP 529 on Windows), so any folder name works
+(ysp/video.h 0.6.0).
 
 The soundtrack's `Audio` is held through ysp.audio's table: its `close()`
 raises `BusyError` until the movie closes. A `Timeline` given to `Movie()`

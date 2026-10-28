@@ -32,8 +32,9 @@
 
 /* The binding's own version (docs/bindings.md, Versions): the thin files and
  * the core must be the same build. */
-#define YV_MEX_VERSION "1.2.0"   /* 1.1.0: ysp_gfx stimuli, lists, groups, textures, bindings; the slim frame; ysp_video movies;
-                                  * 1.2.0: ysp_gfx text (fonts, texts laid out by Skribidi, glyph and word boxes) */
+#define YV_MEX_VERSION "1.2.1"   /* 1.1.0: ysp_gfx stimuli, lists, groups, textures, bindings; the slim frame; ysp_video movies;
+                                  * 1.2.0: ysp_gfx text (fonts, texts laid out by Skribidi, glyph and word boxes);
+                                  * 1.2.1: ysp_video paths in UTF-8 and error ids by the header's code (ysp/video.h 0.6.0) */
 #define YV_CORE_ABI 1
 #define YV_CORE_SYMBOL "ysp_vis_core"
 
