@@ -106,6 +106,11 @@ PQ_API void pq_size(int* w, int* h) {
 
 /* This process's GPU memory (DXGI's local segment; on an integrated GPU,
  * the shared system memory the driver counts as local). */
+static int64_t g_budget;
+PQ_API int pq_mem(int64_t* local, int64_t* nonlocal);
+/* the OS's budget for this process in DXGI's local segment (after pq_mem) */
+PQ_API int64_t pq_budget(void) { int64_t a = 0, b = 0; pq_mem(&a, &b); return g_budget; }
+
 PQ_API int pq_mem(int64_t* local, int64_t* nonlocal) {
     yscr_native_info ni;
     IDXGIDevice* dd = NULL;
@@ -119,6 +124,7 @@ PQ_API int pq_mem(int64_t* local, int64_t* nonlocal) {
         SUCCEEDED(IDXGIAdapter_QueryInterface(ad, &IID_IDXGIAdapter3, (void**)&a3))) {
         if (SUCCEEDED(IDXGIAdapter3_QueryVideoMemoryInfo(a3, 0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mi))) {
             *local = (int64_t)mi.CurrentUsage;
+            g_budget = (int64_t)mi.Budget;
             ok = 1;
         }
         if (SUCCEEDED(IDXGIAdapter3_QueryVideoMemoryInfo(a3, 0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &mi)))
@@ -148,13 +154,15 @@ PQ_API int64_t pq_private_now(void) { return pq_private(); }
 PQ_API int pq_alloc_test(int fmt, int n, int64_t* before, int64_t* after, int64_t* ns) {
     yscr_native_info ni;
     yscr__comp* c = (yscr__comp*)g_scr.pr_ctx;
-    ID3D11Texture2D* tex[130];
-    yscr__PBuffer* buf[130];
+    ID3D11Texture2D* tex[31];
+    yscr__PBuffer* buf[31];
     yscr__PManager* pm = NULL;
     D3D11_TEXTURE2D_DESC td;
     int i, made = 0;
     int64_t nl, t0;
-    if (n > 130 || yscr_native(&g_scr, &ni) != YSCR_OK) return -1;
+    /* 31 presentation buffers per manager is the documented maximum; 62
+     * here was part of a run that ended in bugcheck 0x133 */
+    if (n > 31 || yscr_native(&g_scr, &ni) != YSCR_OK) return -1;
     if (FAILED(YSCR__C(c->pf, CreatePresentationManager, (void**)&pm))) return -2;
     memset(&td, 0, sizeof td);
     td.Width = (UINT)c->w; td.Height = (UINT)c->h; td.MipLevels = 1; td.ArraySize = 1;

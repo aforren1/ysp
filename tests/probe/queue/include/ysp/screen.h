@@ -3143,8 +3143,9 @@ YSCR_API uint32_t yscr_gl_generation(const yscr_screen* s);
 YSCR_API int yscr_native(yscr_screen* s, yscr_native_info* out);
 
 /* Queue probe (tests/probe/queue; not in ysp/screen.h). COMPOSITION only.
- * yscr_queue_reserve(s, n): up to n presents in flight (1 to 128; 1 is
- * 0.10.3's one frame in flight), with n + 2 buffers; call between frames
+ * yscr_queue_reserve(s, n): up to n presents in flight (1 to 28; 1 is
+ * 0.10.3's one frame in flight), with n + 2 buffers and a black one (31
+ * at most: the documented limit per presentation manager); call between frames
  * on the frame thread. begin() then waits only while n are in flight.
  * yscr_queue_cancel(s, blank): from any thread, cancel every present not
  * yet shown; blank 1 then shows a black buffer at the next vblank.
@@ -5844,10 +5845,15 @@ typedef HRESULT (WINAPI *yscr__DCompositionCreateSurfaceHandle_fn)(DWORD access,
 
 /* Queue probe: 0.10.3 has 3 buffers and one present in flight. Here
  * yscr_queue_reserve() raises both: qmax presents in flight, qmax + 2
- * buffers (one shown, one drawn). The map and the done list hold every
- * present in flight. */
+ * buffers (one shown, one drawn), plus the black buffer a cancel shows.
+ * Microsoft documents at most 31 presentation buffers per
+ * IPresentationManager. Twice this laptop stopped with bugcheck 0x133
+ * (DPC_WATCHDOG_VIOLATION; 2026-10-27 and 2026-10-28) while the probe
+ * registered 62 to 122 buffers with one manager. So the probe stays at 31:
+ * qmax + 2 + 1 <= 31, qmax <= 28. */
 #define YSCR__COMP_BUFFERS 3
-#define YSCR__COMP_MAXBUF 130
+#define YSCR__COMP_MAXBUF 31
+#define YSCR__QUEUE_MAX (YSCR__COMP_MAXBUF - 3)
 #define YSCR__COMP_MAP 256
 #define YSCR__COMP_DONE 256
 
@@ -6487,7 +6493,7 @@ static int yscr__comp_reserve(yscr__comp* c, int n) {
     int want = n + 2, i;
     yscr__EGLint attrs[2];
     attrs[0] = YSCR__EGL_NONE;
-    if (want > YSCR__COMP_MAXBUF) return YSCR_ERR_ARG;
+    if (n > YSCR__QUEUE_MAX || want + 1 > YSCR__COMP_MAXBUF) return YSCR_ERR_ARG;   /* 31 per manager */
     for (i = c->nbuf; i < want; i++) {
         if (!yscr__comp_add_buffer(c, &c->tex[i], &c->buf[i]) ||
             FAILED(YSCR__C(c->buf[i], GetAvailableEvent, &c->avail[i])) ||
@@ -10044,7 +10050,8 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
 
 YSCR_API int yscr_queue_reserve(yscr_screen* s, int n) {
     int rc;
-    if (!s || n < 1 || n > YSCR__COMP_MAXBUF - 2) return YSCR_ERR_ARG;
+    /* 31 buffers per manager (documented; past it, two bugchecks here) */
+    if (!s || n < 1 || n > YSCR__QUEUE_MAX) return YSCR_ERR_ARG;
     if (!s->open) return YSCR_ERR_CLOSED;
     if (s->begun) return YSCR_ERR_ORDER;
 #if defined(YSCR__DXGI)

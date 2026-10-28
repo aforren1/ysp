@@ -5,7 +5,11 @@ calls is a real Python interpreter (time.sleep). One mode per run:
 
   uv run --no-project python tests/probe/queue/run_queue.py MODE BIN_DIR [--windowed] [--json OUT]
 
-MODE: land, far, many, cancel, panic, sleep, cost, smoke.
+MODE: land, far, cancel, panic, sleep, cost, smoke.
+
+At most 31 presentation buffers per manager (Microsoft's documented
+maximum): reserve(n) makes n + 2 buffers and a black one, so n <= 28.
+Runs that registered 62 to 122 buffers ended in bugcheck 0x133 twice.
 BIN_DIR holds probe_queue.dll and SDL3.dll; --angle DIR the ANGLE DLLs.
 """
 import argparse
@@ -21,6 +25,8 @@ FLAGS = {0x002: "ESTIMATED", 0x004: "LATE_TARGET", 0x008: "OCCLUDED", 0x010: "GR
          0x1000: "UNSYNCED"}
 PATHS = {0: "unknown", 1: "composed", 2: "overlay", 3: "independent"}
 QUIT = 1
+QMAX = 28          # the deepest queue: 28 + 2 + 1 black = 31 buffers
+QN = QMAX          # cancel, panic and sleep queue this many frames
 
 
 class Rec(C.Structure):
@@ -47,6 +53,8 @@ class Probe:
         d.pq_queue.argtypes = [i32, i32, i32, i32, p64, C.POINTER(C.c_uint32)]
         d.pq_reserve.argtypes = [i32, p64]
         d.pq_mem.argtypes = [p64, p64]
+        d.pq_budget.restype = i64
+        d.pq_size.argtypes = [C.POINTER(C.c_int), C.POINTER(C.c_int)]
         d.pq_alloc_test.argtypes = [i32, i32, p64, p64, p64]
         d.pq_alloc_private.argtypes = [p64, p64]
         d.pq_private_now.restype = i64
@@ -80,6 +88,16 @@ class Probe:
         return a.value, b.value
 
     def reserve(self, n):
+        if n > QMAX:
+            raise SystemExit("reserve %d: more than %d (31 buffers per presentation manager)" % (n, QMAX))
+        w, h = C.c_int(0), C.c_int(0)
+        self.d.pq_size(C.byref(w), C.byref(h))
+        need = (n + 3) * w.value * h.value * 4
+        budget = self.d.pq_budget()
+        print("reserve %d: %d buffers of %dx%d RGBA8 = %.0f MB; DXGI local budget %.0f MB, in use %.0f MB"
+              % (n, n + 3, w.value, h.value, need / 2**20, budget / 2**20, self.mem()[0] / 2**20), flush=True)
+        if budget and need > budget / 4:
+            raise SystemExit("reserve %d: %.0f MB is over a quarter of the budget" % (n, need / 2**20))
         ns = C.c_int64(0)
         rc = self.d.pq_reserve(n, C.byref(ns))
         if rc:
@@ -260,30 +278,9 @@ def mode_far(p, a, out):
     out["summary"] = res
 
 
-def mode_many(p, a, out):
-    """How many: reserve n, queue n frames ahead in a row."""
-    res = {}
-    for k in a.ks:
-        m0 = p.mem()
-        ns = p.reserve(k)
-        m1 = p.mem()
-        print("reserve %d: %.1f ms, local memory %.1f -> %.1f MB" % (k, ns / 1e6, m0[0] / 2**20, m1[0] / 2**20))
-        p.frames(30)
-        recs = []
-        for i in range(a.reps):
-            r, s, _, _ = run_queue_once(p, k, 1, 0)
-            recs += r
-            p.frames(10)
-        res["K%d" % k] = summarize(recs, "queue K=%d" % k)
-        res["K%d" % k]["reserve_ms"] = ns / 1e6
-        res["K%d" % k]["mem_mb"] = [m0[0] / 2**20, m1[0] / 2**20]
-        out["K%d_records" % k] = recs
-    out["summary"] = res
-
-
 def mode_cancel(p, a, out):
     """Abort (Shift+Esc) mid-queue; the abort hook cancels the queue."""
-    p.reserve(60)
+    p.reserve(QN)
     p.frames(60)
     bits = 1 | (4 if a.blank else 0)
     p.d.pq_cancel_on(bits)
@@ -293,9 +290,9 @@ def mode_cancel(p, a, out):
         n0 = p.cancel_info()[2]
         p.collect()
         p.d.pq_keys(1, a.delay_ms, 50, 1 if a.request else 0)
-        first, t0, ab = p.queue(60, 1, 0, 0)
+        first, t0, ab = p.queue(QN, 1, 0, 0)
         t_q = p.now()
-        time.sleep(1.3)   # the host sleeps; the queue would end within 1 s
+        time.sleep(1.3)   # the host sleeps past the queue's end
         keys, sent, skipped = p.keys_join()
         p.collect()
         rc, abort, presses, abort_ns = p.begin_abort()
@@ -327,14 +324,14 @@ def mode_cancel(p, a, out):
 
 def mode_panic(p, a, out):
     """Three presses while the host sleeps mid-queue: the panic's release."""
-    p.reserve(60)
+    p.reserve(QN)
     p.frames(60)
     p.d.pq_cancel_on(a.bits)
     p.d.pq_watch_start()
     p.collect()
     r0 = p.d.pq_nrec()
     p.d.pq_keys(3, a.delay_ms, 120, 0)
-    first, t0, ab = p.queue(60, 1, 0, 0)
+    first, t0, ab = p.queue(QN, 1, 0, 0)
     time.sleep(3.0)
     keys, sent, skipped = p.keys_join()
     w = p.watch_stop()
@@ -362,14 +359,14 @@ def mode_panic(p, a, out):
 
 
 def mode_sleep(p, a, out):
-    """An RSVP of 60 queued frames, then the host sleeps; then normal frames."""
-    p.reserve(60)
+    """An RSVP of QN queued frames, then the host sleeps; then normal frames."""
+    p.reserve(QN)
     p.frames(60)
     rows = []
     for s in a.sleeps:
         r0, s0 = p.d.pq_nrec(), p.d.pq_nsub()
         p.d.pq_watch_start()
-        first, t0, ab = p.queue(60, 1, 0, 0)
+        first, t0, ab = p.queue(QN, 1, 0, 0)
         t_sub = p.now()
         n_before = p.d.pq_nrec()
         time.sleep(s)
@@ -378,8 +375,8 @@ def mode_sleep(p, a, out):
         t_wake = p.now()
         p.collect()
         t_coll = p.now()
-        recs = [r for r in p.records(r0) if first <= r["index"] < first + 60]
-        st = summarize(recs, "RSVP 60, sleep %.1f s" % s)
+        recs = [r for r in p.records(r0) if first <= r["index"] < first + QN]
+        st = summarize(recs, "RSVP %d, sleep %.1f s" % (QN, s))
         # the frames right after: one in flight, each for f.onset
         r1 = p.d.pq_nrec()
         p.frames(120)
@@ -387,7 +384,7 @@ def mode_sleep(p, a, out):
         after = p.records(r1)
         st_after = summarize(after, "  then 120 frames, one in flight")
         first10 = summarize(after[:10], "  first 10 of them")
-        subs_after = p.subs(s0 + 60)
+        subs_after = p.subs(s0 + QN)
         row = {"sleep_s": s, "submit_ms": (t_sub - p.subs(s0)[0]["t_begin"]) / 1e6, "records_during_sleep": n_during,
                "collect_ms": (t_coll - t_wake) / 1e6, "arrive_after_onset_ms_p50":
                pct([(r["t_arrive"] - r["onset"]) / 1e6 for r in recs if r["onset"]], 50),
@@ -406,7 +403,13 @@ def mode_cost(p, a, out):
     print("back buffer %d x %d" % (w.value, h.value))
     res = {"w": w.value, "h": h.value}
     for fmt, name in ((28, "RGBA8"), (10, "RGBA16F")):
-        for n in (8, 32, 62):
+        for n in (8, 16, 31):   # 31: the documented maximum per manager
+            need = n * w.value * h.value * (8 if fmt == 10 else 4)
+            budget = p.d.pq_budget()
+            print("alloc %s n=%d: %.0f MB planned; DXGI local budget %.0f MB" % (name, n, need / 2**20, budget / 2**20), flush=True)
+            if budget and need > budget / 4:
+                print("  skipped: over a quarter of the budget", flush=True)
+                continue
             b, af, ns = C.c_int64(0), C.c_int64(0), C.c_int64(0)
             made = p.d.pq_alloc_test(fmt, n, C.byref(b), C.byref(af), C.byref(ns))
             mb = (af.value - b.value) / 2**20
@@ -463,7 +466,7 @@ def main():
     ap.add_argument("--windowed", action="store_true")
     ap.add_argument("--json")
     ap.add_argument("--reps", type=int, default=10)
-    ap.add_argument("--ks", type=lambda s: [int(x) for x in s.split(",")], default=[2, 4, 8, 16, 30, 60])
+    ap.add_argument("--ks", type=lambda s: [int(x) for x in s.split(",")], default=[2, 4, 8, 16, QMAX])
     ap.add_argument("--leads", type=lambda s: [int(x) for x in s.split(",")], default=[2, 10, 60, 300, 600])
     ap.add_argument("--sleeps", type=lambda s: [float(x) for x in s.split(",")], default=[1.5, 6.0])
     ap.add_argument("--delay-ms", type=int, default=300)

@@ -15,9 +15,12 @@ MSVC only.
 
 ## What the copy adds
 
-- `yscr_queue_reserve(s, n)`: up to n presents in flight (1 to 128; 1
-  is 0.10.3), with n + 2 buffers. Call it between frames on the frame
-  thread. `begin()` then waits only while n presents are in flight, so
+- `yscr_queue_reserve(s, n)`: up to n presents in flight (1 to 28; 1
+  is 0.10.3), with n + 2 buffers and one black buffer. Call it between
+  frames on the frame thread. It refuses n > 28, because Microsoft
+  documents at most 31 presentation buffers per presentation manager,
+  and two runs that registered 62 to 122 buffers stopped this laptop
+  with bugcheck 0x133 (DPC_WATCHDOG_VIOLATION). `begin()` then waits only while n presents are in flight, so
   n pairs of `begin()` and `flip_at()` return without a wait.
 - `yscr_queue_cancel(s, blank)`: from any thread, cancel every present
   not yet shown (`IPresentationManager::CancelPresentsFrom` from the
@@ -27,7 +30,7 @@ MSVC only.
   that saw it (the window thread for SDL's key, the watchdog's hook
   thread, the caller of `yscr_request_abort()`); 2 cancels at the
   panic's release, on the window thread; 4 adds the black buffer.
-- The core's limits for one frame in flight become limits for 128:
+- The core's limits for one frame in flight become limits for a queue:
   `YSCR__MAX_PEND` 160, the presenter's id map and done list 256, and
   `yscr__drain()` reads every completion, not 4. `wait_flip()` waits
   until the last planned vblank in flight.
@@ -59,12 +62,14 @@ bash /c/tmp/psy-guard.sh time NAME uv run --no-project python tests/probe/queue/
 | Mode | What it does |
 |---|---|
 | `smoke` | 4 frames queued, records printed. |
-| `land` | One held frame (0 to 4 vblanks ahead, one in flight) against queues of K = 2 to 60 frames, `--reps` each. |
+| `land` | One held frame (0 to 4 vblanks ahead, one in flight) against queues of K = 2 to 28 frames, `--reps` each. `--prime N` presents N frames one in flight after each reserve. |
 | `far` | K = 4 frames whose first target is `--leads` vblanks ahead. |
-| `many` | Queues of `--ks` frames, with the memory before and after each reserve. |
-| `cancel` | 60 frames queued; Shift+Esc from a helper thread after `--delay-ms`; the abort cancels the queue. `--blank` adds the black buffer. `--request` uses `yscr_request_abort()` when the window is not in front. |
-| `panic` | 60 frames queued, 3 presses of Shift+Esc 120 ms apart, panic armed with a 1 ms grace; `--bits` picks where the cancel runs. |
-| `sleep` | An RSVP of 60 queued frames, then `time.sleep(--sleeps)`, a watcher for a hung window, then 120 frames one in flight. |
-| `cost` | Memory of 8, 32 and 62 displayable buffers in RGBA8 and RGBA16F, CPU per frame one in flight and queued. |
+| `cancel` | 28 frames queued; Shift+Esc from a helper thread after `--delay-ms`; the abort cancels the queue. `--blank` adds the black buffer. `--request` uses `yscr_request_abort()` when the window is not in front. |
+| `panic` | 28 frames queued, 3 presses of Shift+Esc 120 ms apart, panic armed with a 1 ms grace; `--bits` picks where the cancel runs. |
+| `sleep` | An RSVP of 28 queued frames, then `time.sleep(--sleeps)`, a watcher for a hung window, then 120 frames one in flight. |
+| `cost` | Memory of 8, 16 and 31 displayable buffers in RGBA8 and RGBA16F, CPU per frame one in flight and queued. |
 
 Common options: `--windowed` (1280 x 800), `--json OUT` (every record).
+Before each reserve the driver prints the buffer memory it adds and the
+DXGI budget, and refuses more than a quarter of the budget. Run Python
+with `-u` and send the output to a file, so a crash leaves a partial log.
