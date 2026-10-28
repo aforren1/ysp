@@ -67,8 +67,10 @@ static void row(const char* name, double* v, int n) {
 
 static double g_a[1000], g_b[1000];
 
+#if defined(_WIN32)
 /* SDL_GetKeyboardFocus() belongs to SDL's main thread, which is the window
- * thread when one runs (ysp/screen.h, WINDOW THREAD): ask it there. */
+ * thread when one runs (ysp/screen.h, WINDOW THREAD): ask it there. Only the
+ * Windows key injection needs it. */
 static void focus_on_window(void* w) { *(SDL_Window**)w = SDL_GetKeyboardFocus(); }
 static int has_focus(yscr_screen* s) {
     SDL_Window* w = NULL;
@@ -76,7 +78,6 @@ static int has_focus(yscr_screen* s) {
     return w != NULL && w == yscr_window(s);
 }
 
-#if defined(_WIN32)
 static void inject_f24(WORD flags) {
     INPUT in;
     memset(&in, 0, sizeof in);
