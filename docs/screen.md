@@ -3724,7 +3724,7 @@ and release time) now go through one helper that uses
 refuses ARM64: its C declarations of the COM methods that return a
 struct by a hidden pointer were checked on x64 only
 (`tests/compile/screen_com.cpp`), and AUTO falls back to DXGI_FLIP.
-Checked with MSVC 19.50 x86 (vcvars32), `/W4 /WX`: `tests/compile/screen.c`
+Checked with MSVC 19.51 x86 (vcvars32), `/W4 /WX`: `tests/compile/screen.c`
 as C11 and with `YRT_NO_THREADS`, `screen.cpp` as C++17, and
 `tests/adapt/screen_test.c` built and run (all checks pass). No x86
 program opened a window: there is no x86 ANGLE here.
