@@ -8,7 +8,8 @@
  * the end of a process whose window thread does not answer, two screens,
  * open and close cycles (handles, threads, memory), a fullscreen change
  * while open, gamepads, raw mice and triggers, and screens one after
- * another in one process (v0.10.2: each in front). It prints one line per
+ * another in one process (v0.10.2: each in front), and GL between flip()
+ * and begin() in front (v0.10.3: no wait for the screen). It prints one line per
  * check and returns 0 when every check passed, 1 otherwise, 2 for a bad
  * argument. Windows are small and dark gray, in the top-left corner;
  * keys and mouse moves are sent with SendInput only while the test's own
@@ -21,7 +22,7 @@
  *     test_screen_window --only NAME  one case: idle call displays mixed
  *                                     text release kill two cycles
  *                                     fullscreen gamepads mice triggers
- *                                     sequence mode
+ *                                     sequence between mode
  *                                     (or YSCR_WINDOW_TEST_ONLY=NAME)
  *
  * Build: cl /W4 /Iinclude /I<SDL3>/include tests\adapt\screen_window_test.c
@@ -152,6 +153,16 @@ static int frames(yscr_screen* s, int n, int* drops, int* texts) {
 }
 
 static int in_front(yscr_screen* s) { return GetForegroundWindow() == hwnd_of(s); }
+
+/* Checks that need the window in front (keys, mice, the next screen's
+ * raise) skip when the OS did not give it; a run from a background shell
+ * then has no false failure and says what it left out. */
+static int g_skipped;
+static void skip_no_foreground(void) {
+    g_skipped++;
+    printf("  skipped: the OS refused this process the foreground (started from the background, "
+           "or input to another program); start the test from a terminal in front, without input meanwhile\n");
+}
 
 /* --- watching the window from another thread (hung, ghost) ------------------ */
 static struct { HWND h; volatile LONG stop, hung, ghost, lost_fg; HANDLE th; } g_w;
@@ -358,8 +369,11 @@ static void case_text(void) {
     printf("  sent %d characters, polled %d; SDL allocations outstanding after round 1: %ld, after round 5: %ld "
            "(%+.2f per character)\n", sent, got_total, (long)first, (long)last,
            sent > 100 ? (double)(last - first) / (sent - 100) : 0.0);
-    check("every typed character arrived as text", sent > 0 && got_total == sent);
-    if (YSCR__TLS_CLEANUP) check("no SDL allocation left per character (< 0.1)", sent == 500 && last - first < 40);
+    if (sent < 500) skip_no_foreground();   /* the window was not in front, or lost it */
+    else {
+        check("every typed character arrived as text", got_total == sent);
+        if (YSCR__TLS_CLEANUP) check("no SDL allocation left per character (< 0.1)", last - first < 40);
+    }
     check("text input off", yscr_text_input(&s, false, 0, 0, 0, 0) == YSCR_OK && !SDL_TextInputActive(yscr_window(&s)));
     yscr_close(&s);
 }
@@ -608,7 +622,8 @@ static void case_mice(void) {
         yscr_flip(&s);
     }
     printf("  sent %d moves, raw mouse events %d\n", i, raw);
-    check("raw mouse reports through the bridge", i == 20 && raw >= 20);
+    if (i < 20) skip_no_foreground();   /* moves go only to our own window in front */
+    else check("raw mouse reports through the bridge", raw >= 20);
     yscr_close(&s);
 }
 
@@ -689,8 +704,7 @@ static void case_sequence(void) {
     }
     yscr_close(&s);
     if (!front) {
-        printf("  skipped: the OS refused this process the foreground (started from the background, "
-               "or input to another program); start the test from a terminal in front, without input meanwhile\n");
+        skip_no_foreground();
         return;
     }
     for (fs = 0; fs < 2; fs++) {
@@ -779,17 +793,88 @@ static void case_mode(void) {
     if (after.dmPelsWidth != before.dmPelsWidth) ChangeDisplaySettingsExW(NULL, NULL, NULL, 0, NULL);
 }
 
+/* GL between flip() and the next begin(), in front (v0.10.3): a clear of
+ * framebuffer 0 and a pixel read, as ygfx_prime() does. Before v0.10.3 on
+ * COMPOSITION the presented buffer stayed bound, and the read waited until
+ * that frame left the screen: more than 90 s. A watchdog ends the process
+ * with a FAIL line after 10 s, so a regression fails instead of hanging. */
+typedef void (__stdcall *gl_read_fn)(int, int, int, int, unsigned int, unsigned int, void*);
+static volatile LONG g_between_armed;
+static DWORD WINAPI between_dog(void* p) {
+    int i;
+    (void)p;
+    for (i = 0; i < 1000; i++) {
+        Sleep(10);
+        if (!g_between_armed) return 0;
+    }
+    if (g_between_armed) {
+        printf("  GL between frames: no return in 10 s                     FAIL\n");
+        printf("screen_window_test: %d checks, %d failed\n", g_checks + 1, g_fail + 1);
+        fflush(stdout);
+        ExitProcess(1);
+    }
+    return 0;
+}
+
+static void case_between(void) {
+    static yscr_screen s;
+    yscr_desc d;
+    int wt, fs, be, gap;
+    static const char* gaps[] = { "at once", "after 1 s", "after wait_flip" };
+    printf("between: GL into framebuffer 0 between flip() and begin(), in front\n");
+    for (be = 0; be < 2; be++) for (wt = 0; wt < 2; wt++) for (fs = 0; fs < 2; fs++) {
+        unsigned char px[4];
+        char what[128];
+        int64_t t0, t1;
+        HANDLE th;
+        int drops = 0, front;
+        gl_read_fn rd;
+        if (be == 1 && wt == 1) continue;   /* DXGI_FLIP: once a size, OFF */
+        base_desc(&d, wt ? YSCR_WINDOW_THREAD_ON : YSCR_WINDOW_THREAD_OFF);
+        d.windowed = !fs;
+        d.backend = be ? YSCR_BACKEND_DXGI_FLIP : YSCR_BACKEND_AUTO;
+        if (!open_screen(&s, &d)) { check("between: open", 0); continue; }
+        rd = (gl_read_fn)yscr_gl_proc(&s, "glReadPixels");
+        for (gap = 0; gap < 3; gap++) {
+            frames(&s, 30, &drops, NULL);
+            if (gap == 1) Sleep(1000);
+            if (gap == 2) yscr_wait_flip(&s, NULL);
+            front = in_front(&s);
+            g_between_armed = 1;
+            th = CreateThread(NULL, 0, between_dog, NULL, 0, NULL);
+            t0 = yrt_now_ns();
+            if (gap == 1) yscr_bind(&s);   /* as ygfx_prime(); the other gaps draw on what is current */
+            g_cc(0.5f, 0.5f, 0.5f, 1.0f);
+            g_cl(0x4000u);
+            rd(0, 0, 1, 1, 0x1908u, 0x1401u, px);   /* GL_RGBA, GL_UNSIGNED_BYTE: waits for the GPU */
+            t1 = yrt_now_ns();
+            g_between_armed = 0;
+            WaitForSingleObject(th, INFINITE);
+            CloseHandle(th);
+            snprintf(what, sizeof what, "%s, %s, %s, %s: %.1f ms%s", be ? "DXGI_FLIP" : "AUTO",
+                     fs ? "fullscreen" : "window", wt ? "ON" : "OFF", gaps[gap], (double)(t1 - t0) / 1e6,
+                     front ? "" : " (not in front)");
+            check(what, t1 - t0 < 1000000000);
+        }
+        snprintf(what, sizeof what, "%s, %s, %s: frames after it", be ? "DXGI_FLIP" : "AUTO", fs ? "fullscreen" : "window",
+                 wt ? "ON" : "OFF");
+        check(what, frames(&s, 30, &drops, NULL) == YSCR_OK && yscr_wait_flip(&s, NULL) == YSCR_OK);
+        yscr_close(&s);
+    }
+}
+
 typedef struct { const char* name; void (*fn)(void); int default_on; } test_case;
 static const test_case g_cases[] = {
     { "idle", case_idle, 1 }, { "call", case_call, 1 }, { "displays", case_displays, 1 },
     { "mixed", case_mixed, 1 }, { "text", case_text, 1 }, { "release", case_release, 1 },
     { "kill", case_kill, 1 }, { "two", case_two, 1 }, { "cycles", case_cycles, 1 },
     { "fullscreen", case_fullscreen, 1 }, { "gamepads", case_gamepads, 1 }, { "mice", case_mice, 1 },
-    { "triggers", case_triggers, 1 }, { "sequence", case_sequence, 1 }, { "mode", case_mode, 0 }
+    { "triggers", case_triggers, 1 }, { "sequence", case_sequence, 1 }, { "between", case_between, 1 },
+    { "mode", case_mode, 0 }
 };
 
 int main(int argc, char** argv) {
-    int i, k, mode = 0;
+    int i, k, mode = 0, ran = 0;
     const char* only = NULL;
     SDL_GetOriginalMemoryFunctions(&g_m, &g_c, &g_r, &g_f);
     SDL_SetMemoryFunctions(c_malloc, c_calloc, c_realloc, c_free);
@@ -806,9 +891,10 @@ int main(int argc, char** argv) {
         const test_case* c = &g_cases[k];
         if (only ? strcmp(only, c->name) != 0 : !(c->default_on || mode)) continue;
         c->fn();
+        ran++;
     }
-    if (only && g_checks == 0) { fprintf(stderr, "test_screen_window: no case %s\n", only); return 2; }
-    printf("screen_window_test: %d checks, %d failed\n", g_checks, g_fail);
+    if (only && !ran) { fprintf(stderr, "test_screen_window: no case %s\n", only); return 2; }
+    printf("screen_window_test: %d checks, %d failed, %d groups skipped (no foreground)\n", g_checks, g_fail, g_skipped);
     return g_fail ? 1 : 0;
 }
 #endif
