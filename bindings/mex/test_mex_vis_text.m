@@ -174,6 +174,20 @@ function test_mex_vis_text()
     end
     frame(h, g, [t u a p ta tb m c c2 sp us r]);
 
+    % ---- 1024 texts a frame at the default max_draws: a text without a
+    % colored span is one block (ysp/gfx.h 0.17.2; 3 before, when the 342nd
+    % failed with "pool or frame full"); the 1025th is refused
+    TT = zeros(1, 1025, 'uint64');
+    for k = 1:1025
+        TT(k) = ysp_gfx('text', g, sprintf('word%d', mod(k, 10)), 'size', 12);
+    end
+    frame(h, g, ysp_gfx('list', g, TT(1:1024)));
+    check(true, '1024 texts in a frame');
+    LA = ysp_gfx('list', g, TT);
+    ysp_screen('begin', h);
+    expect_error('ysp_gfx:error', @() ysp_gfx('frame', g, LA));
+    ysp_screen('flip', h);
+
     % ---- deg units
     h2 = ysp_screen('open', 'backend', 'sim');
     g2 = ysp_gfx('open', h2, 'units', 'deg', 'view', [570 400], 'cache', false);

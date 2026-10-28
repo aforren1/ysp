@@ -2,7 +2,7 @@
 # ysp/gfx.h mutants: the v0.4 list (docs/gfx.md, "v0.4 mutations"), then
 # later lists by prefix (pr-: v0.11 prime; os-: v0.11.1 open start; cv-:
 # v0.12.0 messages; cp-: v0.13.0 capture; ft-: v0.15.0 first trial; tp-:
-# v0.17.1 text paths).
+# v0.17.1 text paths; tb-: v0.17.2 text batches).
 # The v0.3 list (mutate03.py) was lost; docs/gfx.md keeps its table.
 # YGFX_TEST_PARTS limits a run to the parts that can see the fault, and
 # "none" runs the CPU half alone. YGFX_TEST_DEVICES=hardware is the GPU
@@ -1399,3 +1399,67 @@ env = { YGFX_TEST_PARTS = "none", YGFX_TEST_DEVICES = "none" }
 why = "2026-10-22: a slot freed while the writer still has it is copied over; the frames written must match the frames retired."
 find = '        if (s->state == YGFX__CS_QUEUED && done >= s->seq) ygfx__cap_retire(g, c, i, s->result, gl_ok);'
 replace = '        if (s->state == YGFX__CS_QUEUED) ygfx__cap_retire(g, c, i, s->result, gl_ok);'
+
+[[mutant]]
+id = "tb-00"
+name = "a run's item count not in its block"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "v0.6 text", YGFX_TEST_DEVICES = "hardware" }
+why = "v0.17.2: the vertex stage finds each instance's run by the runs' item counts; without them it reads another block."
+find = 'b[19] = (float)s->count;'
+replace = 'b[19] = 0.0f;'
+
+[[mutant]]
+id = "tb-01"
+name = "a run without a palette takes 3 blocks"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "v0.6 text", YGFX_TEST_DEVICES = "hardware" }
+why = "v0.17.2: 1024 runs must fit the default max_draws, and only runs of one block batch."
+find = 'cmd->nblk = (f & YGFX_I_COLOR) ? 3u : 1u;'
+replace = 'cmd->nblk = 3u;'
+
+[[mutant]]
+id = "tb-02"
+name = "runs batched whose items are not one after another"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "v0.6 text", YGFX_TEST_DEVICES = "hardware" }
+why = "v0.17.2: a batch reads its items as one array; runs from a buffer with gaps must not share a draw."
+find = '            b->inst_off != p->inst_off + p->count * (uint32_t)sizeof(ygfx_citem) || memcmp'
+replace = '            memcmp'
+
+[[mutant]]
+id = "tb-03"
+name = "runs batched across the aliased flag"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "v0.6 text", YGFX_TEST_DEVICES = "hardware" }
+why = "v0.17.2: the fragment stage reads the aliased flag from the draw's first block; an aliased run after a smooth one must not share its draw."
+find = '''memcmp(a->tex, b->tex, sizeof a->tex) != 0 ||
+            bb[11] != ba[11])'''
+replace = '''memcmp(a->tex, b->tex, sizeof a->tex) != 0)'''
+
+[[mutant]]
+id = "tb-04"
+name = "a batch draws the first run's items only"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "v0.6 text", YGFX_TEST_DEVICES = "hardware" }
+why = "v0.17.2: a batch's instance count is every run's items."
+find = 'more ? (int)n_text : (c->inst'
+replace = '(c->inst'
+
+[[mutant]]
+id = "tb-05"
+name = "the vertex stage stays on the first run's block"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "v0.6 text", YGFX_TEST_DEVICES = "hardware" }
+why = "v0.17.2: each instance takes its own run's placement, size and color."
+find = '"        ii -= nj; r += 16;\n"'
+replace = '"        ii -= nj;\n"'
+
+[[mutant]]
+id = "tb-06"
+name = "a batch past 16 runs"
+test = "gfx"
+env = { YGFX_TEST_PARTS = "v0.6 text", YGFX_TEST_DEVICES = "hardware" }
+why = "v0.17.2: the stim range holds 16 blocks and the vertex stage searches 16 runs; max_batch 1 must also give one draw a run."
+find = 'int more = ygfx__text_batch(g, i, sg->end, g->max_batch, &n_text);'
+replace = 'int more = ygfx__text_batch(g, i, sg->end, 64, &n_text);'

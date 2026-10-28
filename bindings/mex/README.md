@@ -1716,9 +1716,12 @@ and `anchor` as any stimulus's: centered on the screen by default.
 back as it was, and a character index is a MATLAB index (a character
 past U+FFFF, an emoji, takes two). Octave's char holds UTF-8 bytes, so
 there an index is a byte index; `strfind` gives the same numbers in both.
-Paths and `lang` go through the same conversion. A text takes 3 of the
-gfx's `max_draws` blocks a frame per run: past about 340 texts a frame,
-open the gfx with a larger `'max_draws'`. Not bound: OpenType
+Paths and `lang` go through the same conversion. A text takes one of
+the gfx's `max_draws` blocks a frame per run (per font and size in it),
+three with a colored span: the default 1024 holds 1024 plain texts a
+frame (ysp/gfx.h 0.17.2; 3 blocks a run before). Texts drawn one after
+another share a draw, up to 16, so 500 one-word texts cost about as much
+as one text of the same words (docs/gfx.md, v0.17.2). Not bound: OpenType
 feature switches, a language per span, vertical text, justification,
 outlines, glow (blur) and color glyphs.
 ### Movies: ysp_video
