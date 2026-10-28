@@ -522,7 +522,9 @@ build. The MEX functions of 2026-10-25 (`ysp_rt`, `ysp_box`, `ysp_rdk`,
 `ysp_dataset`, `ysp_pack`) do the same: `'version'` returns 1.0.0, and
 its second output is the version of the header. `ysp_pack` is 1.1.0 since
 2026-10-26: `'verify'` of one entry hashes it under `'none'` too
-(`ypak_verify_entry()`, ysp/pack.h 0.4.0). `ysp_audio` is 1.0.1 since
+(`ypak_verify_entry()`, ysp/pack.h 0.4.0). `ysp_audio` is 1.0.2 since
+2026-10-27: WAV paths are passed as UTF-8 (`mxArrayToUTF8String()`;
+ysp/audio.h 0.7.3). It was 1.0.1 since
 2026-10-27: `Inf` as the timeout of `'wait'` is `INT64_MAX` ns (ysp/audio.h
 0.7.2; 1.0.0 passed 2^62 ns). `ysp_device` is 1.0.1 since 2026-10-27:
 `Inf` as the timeout of `'wait_running'` is `INT64_MAX` ns (ysp/device.h

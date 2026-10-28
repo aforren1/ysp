@@ -931,7 +931,13 @@
  *          is a compare-exchange loop on x86, which has no
  *          _InterlockedExchange64 (LNK2001 in the cp39-win32 wheel). LEAD
  *          and yau_lead_ns() say when the lead is negative or above two
- *          periods. No API or behavior change elsewhere.
+ *          periods. WAV paths (yau_wav_desc.path, yau_wavw_desc.path) are
+ *          UTF-8 on Windows too: converted to UTF-16 for _wfsopen(), read
+ *          sharing every access and a write denying other writers, as
+ *          ysp/dataset.h opens its files. fopen() read them in the ANSI
+ *          code page, so a folder named with Omega failed. A path that is
+ *          not UTF-8 is YAU_ERR_ARG; a missing file stays YAU_ERR_IO, now
+ *          with "no such file" in the message.
  *   v0.7.2 - yau_wait() with a timeout near INT64_MAX ("forever") waits:
  *          its deadline is now plus the timeout, saturated at INT64_MAX.
  *          The plain sum overflowed (undefined behavior) and in practice
@@ -1084,9 +1090,12 @@
  *          positions, miniaudio's null device, the device and source
  *          interfaces, synthesis, the records, the parameter table.
  *
- *   STATUS: v0.7.3, 2026-10-27 (docs/audio.md, "32-bit Windows"): the
- *   compile check, tests/adapt/audio_test.c and the ysp-audio wheel's
- *   tests build and pass with MSVC for x86 (Win32) and 32-bit CPython.
+ *   STATUS: v0.7.3, 2026-10-27 (docs/audio.md, "32-bit Windows" and
+ *   "UTF-8 paths"): the compile check, tests/adapt/audio_test.c and the
+ *   ysp-audio wheel's tests build and pass with MSVC for x86 (Win32) and
+ *   32-bit CPython. test_wav_paths writes and probes a WAV file in a
+ *   folder named with Omega, Zhe, a CJK ideograph and U+1F3AC (MSVC x64
+ *   and x86, MinGW-w64, WSL2 gcc and clang); mutants pa-01 to pa-03.
  *   STATUS: v0.7.2, 2026-10-27 (docs/audio.md, "A wait without end"):
  *   tests/adapt/audio_test.c waits with INT64_MAX and INT64_MAX - 1 ms on
  *   a pending sound of the virtual null device; MSVC, MinGW-w64, WSL2 gcc
@@ -1695,7 +1704,7 @@ typedef struct yau_reader {
 } yau_reader;
 
 typedef struct yau_wav_desc {
-    const char*         path;   /* a file; or                                */
+    const char*         path;   /* a file (UTF-8); or                        */
     const void*         data;   /* the file in memory, kept by you; or       */
     size_t              size;
     const yau_reader* reader; /* bytes by range (a pack entry)             */
@@ -1872,7 +1881,7 @@ typedef struct yau_edge {
 /* --- WAV writer (CAPTURE, v0.5.0) ------------------------------------------- */
 
 typedef struct yau_wavw_desc {
-    const char* path;           /* required                                  */
+    const char* path;           /* required, UTF-8                           */
     uint32_t    rate;           /* required                                  */
     uint16_t    channels;       /* required                                  */
     uint16_t    format;         /* YAU_WAV_F32 (0), YAU_WAV_S16, YAU_WAV_S24 */
@@ -2421,6 +2430,15 @@ YAU_API const yau_param* yau_params(int* n);
         #define YAU__WEB_WORKLET 1
         #include <emscripten/webaudio.h>
     #endif
+#endif
+
+#include <errno.h>
+#if defined(_WIN32)
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+    #endif
+    #include <windows.h>   /* MultiByteToWideChar: WAV paths are UTF-8 */
+    #include <share.h>     /* _SH_DENYNO, _SH_DENYWR */
 #endif
 
 #ifdef __cplusplus
@@ -5716,6 +5734,44 @@ static int yau__arena_reset_rc(yau_audio* au) {
 
 /* --- WAV files ---------------------------------------------------------------- */
 
+/* WAV paths are UTF-8 on every platform, as ysp/dataset.h and ysp/pack.h
+ * take them. Until v0.7.3 fopen() on Windows read them in the ANSI code
+ * page, so a folder named with a character outside it (U+03A9, omega, on
+ * Windows-1252) could not be opened. A read denies no one and a write
+ * denies other writers, as ysp/dataset.h opens its files. 0, YAU_ERR_ARG
+ * (not UTF-8, or longer than YAU__PATH_MAX - 1 UTF-16 units) or
+ * YAU_ERR_IO (no such file, or it could not be opened: the code a missing
+ * file always had); *why says which, for a message. */
+#define YAU__PATH_MAX 1024
+static int yau__fopen(FILE** out, const char* path, const char* mode, const char** why) {
+    FILE* f;
+    *out = NULL;
+    *why = "cannot open";
+#if defined(_WIN32)
+    {
+        wchar_t w[YAU__PATH_MAX], m[8];
+        int i;
+        if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, w, YAU__PATH_MAX) <= 0) {
+            *why = "the path is not valid UTF-8 or longer than 1023 characters";
+            return YAU_ERR_ARG;
+        }
+        for (i = 0; mode[i] && i < 7; i++) m[i] = (wchar_t)mode[i];
+        m[i] = 0;
+        errno = 0;
+        f = _wfsopen(w, m, mode[0] == 'r' ? _SH_DENYNO : _SH_DENYWR);
+    }
+#else
+    errno = 0;
+    f = fopen(path, mode);
+#endif
+    if (!f) {
+        if (errno == ENOENT || errno == ENOTDIR) *why = "no such file";
+        return YAU_ERR_IO;
+    }
+    *out = f;
+    return 0;
+}
+
 static int yau__wsrc_open(yau__wsrc* s, const yau_wav_desc* d, char* err, size_t cap) {
     int kinds = (d->path != NULL) + (d->data != NULL) + (d->reader != NULL);
     memset(s, 0, sizeof *s);
@@ -5733,12 +5789,9 @@ static int yau__wsrc_open(yau__wsrc* s, const yau_wav_desc* d, char* err, size_t
         s->size = d->reader->size;
     } else {
         FILE* f = NULL;
-#if defined(_MSC_VER)
-        if (fopen_s(&f, d->path, "rb") != 0) f = NULL;
-#else
-        f = fopen(d->path, "rb");
-#endif
-        if (!f) { snprintf(err, cap, "ysp_audio: cannot open '%s'", d->path); return YAU_ERR_IO; }
+        const char* why;
+        int rc = yau__fopen(&f, d->path, "rb", &why);
+        if (rc < 0) { snprintf(err, cap, "ysp_audio: '%s': %s", d->path, why); return rc; }
         /* No stdio buffer: the C runtime would allocate one on the first
          * read, on the producer thread. Reads go straight to the OS (which
          * still caches the file); they are 16 KB at a time. */
@@ -7132,12 +7185,13 @@ YAU_API bool yau_wavw_open(yau_wavw* w, const yau_wavw_desc* d) {
     w->rate_ = d->rate;
     w->ch_ = d->channels;
     w->format_ = d->format ? d->format : (uint16_t)YAU_WAV_F32;
-#if defined(_MSC_VER)
-    if (fopen_s(&f, d->path, "wb") != 0) f = NULL;
-#else
-    f = fopen(d->path, "wb");
-#endif
-    if (!f) { snprintf(w->error_, sizeof w->error_, "ysp_audio: cannot create '%s'", d->path); return false; }
+    {
+        const char* why;
+        if (yau__fopen(&f, d->path, "wb", &why) < 0) {
+            snprintf(w->error_, sizeof w->error_, "ysp_audio: cannot create '%s': %s", d->path, why);
+            return false;
+        }
+    }
     /* no stdio buffer: the C runtime would allocate one at the first write */
     setvbuf(f, NULL, _IONBF, 0);
     yau__wavw_header(w, h, 0);

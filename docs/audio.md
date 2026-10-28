@@ -2381,10 +2381,49 @@ Verification, Windows 11, MSVC 19.44 (Visual Studio 2022) for x86
 `test_audio` passes. CPython 3.10 for x86 builds the `ysp-audio` wheel
 and passes its tests.
 
+## UTF-8 paths (v0.7.3)
+
+A WAV path (`yau_wav_desc.path`, `yau_wavw_desc.path`) is UTF-8 on every
+platform, as ysp/dataset.h, ysp/pack.h and ysp/video.h 0.6.0 take paths.
+Before v0.7.3, `fopen()` on Windows read the path in the ANSI code page,
+so a folder named with a character outside it (Omega on Windows-1252)
+did not open. The video-paths work found this: ysp/video.h 0.6.0 opens
+a soundtrack's WAV file itself and hands this header a reader.
+
+On Windows the path is converted with `MultiByteToWideChar(CP_UTF8,
+MB_ERR_INVALID_CHARS)` and opened with `_wfsopen()`: a read shares every
+access, a write denies other writers, as ysp/dataset.h opens its files.
+Codes:
+
+- A path that is not UTF-8, or longer than 1023 UTF-16 units:
+  `YAU_ERR_ARG` (Windows only; a POSIX name is any bytes).
+- A missing file or folder: `YAU_ERR_IO`, as before, with "no such
+  file" in the message. ysp/video.h gives `YVID_ERR_NOT_FOUND` here, but
+  in this header `YAU_ERR_NOT_FOUND` means a sound id that is not among
+  the last 256, and a missing file always was `YAU_ERR_IO`.
+
+The bindings pass UTF-8: Python's `PyUnicode_FSConverter()` (UTF-8 on
+Windows, PEP 529), and the MEX `ysp_audio` 1.0.2 `mxArrayToUTF8String()`
+in MATLAB (1.0.1 used `mxArrayToString()`, the local code page; Octave
+keeps char as UTF-8).
+
+Tests: `test_wav_paths` in `tests/adapt/audio_test.c` writes a WAV file
+with `yau_wavw` in a folder named with Omega, Zhe, a CJK ideograph and
+U+1F3AC (a surrogate pair in UTF-16), probes it, and checks the codes and
+messages above. It passes with MSVC 19.44 x64 and x86, MinGW-w64 gcc
+(the mutation runner) and WSL2 gcc 11.4 and clang 11. Mutants `pa-01`
+(the path in the ANSI code page), `pa-02` (no "no such file") and
+`pa-03` (a path that is not UTF-8 tried as a file) are killed.
+`test_wav_utf8_path` (Python) and `test_mex_audio.m` (MATLAB, Octave)
+open a file in such a folder through the bindings. In Octave 10.1 the
+folder has Omega, Zhe and the CJK ideograph only: Octave's own `fopen`
+and `copyfile` fail on a character outside the BMP (`fopen` gives -1),
+so the test cannot make the file there.
+
 ## Bindings
 
-`ysp-audio` 0.7.2 (Python `ysp.audio`) and the MEX function `ysp_audio`
-1.0.1 bind this header for a PsychoPy or Psychtoolbox experiment, and own
+`ysp-audio` 0.7.3 (Python `ysp.audio`) and the MEX function `ysp_audio`
+1.0.2 bind this header for a PsychoPy or Psychtoolbox experiment, and own
 the one audio implementation that `ysp-vis` shares through a C table
 ([bindings.md](bindings.md#sharing-one-implementation-across-modules)).
 Both compile miniaudio 0.11.25 in. The Python reference is
@@ -2457,8 +2496,9 @@ On miniaudio's null device, so CI needs no sound card:
 |---|---|
 | Python 3.14, Windows 11, MSVC 19.44 | `ysp_audio` 22 tests, `share_test` 23 tests: pass (0.7.2) |
 | Python 3.12, Ubuntu 22.04 on WSL2, gcc 11.4 | the same 22 and 23: pass (0.7.2) |
-| MATLAB R2023a, Windows 11, MSVC 19.44 | `test_mex_audio` 56 checks, `test_mex_share` 26 checks: pass (1.0.1) |
-| Octave 10.1, Windows 11, MinGW-w64 gcc | the same 56 and 26: pass (1.0.1) |
+| Python 3.10.20 x64 and x86, Windows 11, MSVC 19.44 | `ysp_audio` 23 tests (x64; x86 ran 0.7.3 before `test_wav_utf8_path`: 22): pass (0.7.3) |
+| MATLAB R2023a, Windows 11, MSVC 19.44 | `test_mex_audio` 58 checks: pass (1.0.2); `test_mex_share` 26 checks: pass (1.0.1) |
+| Octave 10.1, Windows 11, MinGW-w64 gcc | `test_mex_audio` 58 checks: pass (1.0.2; its UTF-8 folder has no character outside the BMP, which Octave's `fopen` refuses); `test_mex_share` 26: pass (1.0.1) |
 | Octave 6.4, Ubuntu 22.04 on WSL2 | 54 and 22 checks: pass (1.0.0; not run for 1.0.1) |
 
 One manual run on the default device (Speakers (Realtek(R) Audio), WASAPI

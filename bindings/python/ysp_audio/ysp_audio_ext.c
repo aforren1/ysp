@@ -210,7 +210,8 @@ static const char* au_backend_name(int b) {
     return b == YAU_BACKEND_CUSTOM ? "custom" : "?";
 }
 
-/* A path as bytes in the file system encoding (str, bytes or os.PathLike). */
+/* A path as bytes in the file system encoding (str, bytes or os.PathLike):
+ * UTF-8 on Windows too (PEP 529), which ysp/audio.h takes from 0.7.3. */
 static PyObject* au_path(PyObject* o) {
     PyObject* b = NULL;
     if (!PyUnicode_FSConverter(o, &b)) return NULL;

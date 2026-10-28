@@ -36,6 +36,11 @@ static void vsleep_until(long long t);
 
 #define YSP_AUDIO_IMPLEMENTATION
 #include "ysp/audio.h"
+#include <errno.h>
+#if !defined(_WIN32)
+#include <sys/stat.h>   /* mkdir: test_wav_paths */
+#include <unistd.h>     /* rmdir */
+#endif
 
 static long long vnow(void) { return g_virtual ? g_vt : (long long)yrt_now_ns(); }
 static void vsleep_until(long long t) {
@@ -930,6 +935,74 @@ static void test_lead_late_callback(void) {
     CHECK(r[2].flags & YAU_ONSET_LATE);
     CHECK_I(r[2].start_frame, W + 960);
     yau_close(&g_au);
+}
+
+/* v0.7.3: WAV paths are UTF-8 (on Windows converted for _wfsopen), so a
+ * folder named outside the ANSI code page opens: a non-Latin name and a
+ * character outside the BMP (a surrogate pair in UTF-16). The writer
+ * creates a file there and the probe reads it back. A missing file stays
+ * YAU_ERR_IO, now with "no such file"; a path that is not UTF-8 is
+ * YAU_ERR_ARG on Windows (a POSIX name is any bytes). */
+#define TP_DIR "ysp_audio_test_\xCE\xA9_\xD0\x96_\xE6\x98\xA0_\xF0\x9F\x8E\xAC"   /* Omega, Zhe, a CJK ideograph, U+1F3AC */
+static int tp_mkdir(const char* p) {
+#if defined(_WIN32)
+    wchar_t w[512];
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, p, -1, w, 512) <= 0) return 0;
+    return CreateDirectoryW(w, NULL) || GetLastError() == ERROR_ALREADY_EXISTS;
+#else
+    return mkdir(p, 0777) == 0 || errno == EEXIST;
+#endif
+}
+static void tp_remove(const char* p) {
+#if defined(_WIN32)
+    wchar_t w[512];
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, p, -1, w, 512) > 0) DeleteFileW(w);
+#else
+    remove(p);
+#endif
+}
+static void tp_rmdir(const char* p) {
+#if defined(_WIN32)
+    wchar_t w[512];
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, p, -1, w, 512) > 0) RemoveDirectoryW(w);
+#else
+    rmdir(p);
+#endif
+}
+
+static yau_wavw g_wavw;
+
+static void test_wav_paths(void) {
+    static const char wav[] = TP_DIR "/sound.wav";
+    static const char missing[] = TP_DIR "/missing.wav";
+    static const char no_dir[] = TP_DIR "/no_such_folder/sound.wav";
+    static float x[2 * 100];
+    yau_wav_info pi;
+    char pe[300];
+    int i;
+    if (!tp_mkdir(TP_DIR)) { fail(__LINE__, "cannot make the test folder"); return; }
+    for (i = 0; i < 200; i++) x[i] = (float)(i % 50) / 100.0f;
+    memset(&g_wavw, 0, sizeof g_wavw);
+    CHECK(yau_wavw_open(&g_wavw, &(yau_wavw_desc){ .path = wav, .rate = 48000, .channels = 2 }));
+    CHECK_I(yau_wavw_write(&g_wavw, x, 100), 100);
+    yau_wavw_close(&g_wavw);
+    memset(&pi, 0, sizeof pi);
+    CHECK_I(yau_wav_probe(&(yau_wav_desc){ .path = wav }, &pi, pe, sizeof pe), 0);
+    CHECK(pi.rate == 48000 && pi.channels == 2 && pi.frames == 100);
+    pe[0] = '\0';
+    CHECK_I(yau_wav_probe(&(yau_wav_desc){ .path = missing }, &pi, pe, sizeof pe), YAU_ERR_IO);
+    CHECK(strstr(pe, "no such file") != NULL && strstr(pe, "missing.wav") != NULL);
+    memset(&g_wavw, 0, sizeof g_wavw);
+    CHECK(!yau_wavw_open(&g_wavw, &(yau_wavw_desc){ .path = no_dir, .rate = 48000, .channels = 2 }));
+    CHECK(strstr(yau_wavw_error(&g_wavw), "no such file") != NULL);
+    yau_wavw_close(&g_wavw);
+#if defined(_WIN32)
+    pe[0] = '\0';
+    CHECK_I(yau_wav_probe(&(yau_wav_desc){ .path = TP_DIR "/\xFF\xFE.wav" }, &pi, pe, sizeof pe), YAU_ERR_ARG);
+    CHECK(strstr(pe, "not valid UTF-8") != NULL);
+#endif
+    tp_remove(wav);
+    tp_rmdir(TP_DIR);
 }
 
 /* v0.7.3: the lead is above two periods while a callback the fit does not
@@ -2944,6 +3017,7 @@ int main(int argc, char** argv) {
     test_callback_source();
     test_lead_late_callback();
     test_lead_early_callback();
+    test_wav_paths();
     test_web_tier();
     test_report_less_start();
     test_ring();

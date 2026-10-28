@@ -150,6 +150,24 @@ function test_mex_audio()
     q = [tempname() '.wav'];
     audiowrite(q, zeros(441, 1), 44100);
     expect_error('ysp_audio:format', @() ysp_audio('wav_open', h, q));
+    % ysp/audio.h 0.7.3: paths are UTF-8, so a folder named outside the
+    % ANSI code page opens (Omega, Zhe, a CJK ideograph, U+1F3AC). Octave
+    % 10.1's copyfile and fopen fail on a character outside the BMP (fopen
+    % gives -1), so Octave's folder has the first three only.
+    if exist('OCTAVE_VERSION', 'builtin')
+        name = char(uint8([206 169 95 208 150 95 230 152 160]));
+    else
+        name = char([937 95 1046 95 26144 95 55356 57260]);
+    end
+    ud = fullfile(tempdir, ['ysp_audio_' name]);
+    mkdir(ud);
+    up = fullfile(ud, 'a.wav');
+    copyfile(p, up);
+    info = ysp_audio('wav_info', up);
+    check(info.frames == 4800, 'wav_info with a UTF-8 path');
+    lb2 = ysp_audio('load_wav', h, up, 3);
+    check(size(ysp_audio('samples', lb2), 1) == 4800, 'load_wav with a UTF-8 path');
+    delete(up); rmdir(ud);
     delete(p); delete(q);
 
     % ---- close

@@ -354,6 +354,22 @@ def write_wav(path, rate=48000, n=4800, ch=1, value=1000):
         w.writeframes(struct.pack("<%dh" % (n * ch), *([value] * (n * ch))))
 
 
+def test_wav_utf8_path(au, tmp_path):
+    # ysp/audio.h 0.7.3: paths are UTF-8, so a folder named outside the ANSI
+    # code page opens on Windows (Omega, Zhe, a CJK ideograph, U+1F3AC).
+    d = tmp_path / "\u03a9_\u0416_\u6620_\U0001f3ac"
+    d.mkdir()
+    p = d / "a.wav"
+    write_wav(p)
+    assert yau.wav_info(p)["frames"] == 4800
+    assert au.load_wav(p).frames == 4800
+    w = au.wav(p)
+    assert w.feed() == 4800
+    w.close()
+    with pytest.raises(yau.Error, match="no such file"):
+        yau.wav_info(d / "missing.wav")
+
+
 def test_wav_stream_and_load(au, tmp_path):
     p = tmp_path / "a.wav"
     write_wav(p)
