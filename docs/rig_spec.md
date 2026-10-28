@@ -1462,21 +1462,25 @@ The measurements are in docs/av_probe.md and docs/winthread_probe.md.
   gates, add an opt-in noise floor (dither near -90 dBFS) so that the sink
   never gets pure zeros; off by default, because it changes the signal.
 - A queue-ahead mode on COMPOSITION (added 2026-10-26, after
-  docs/winthread_probe.md). `ysp/screen.h` keeps one frame in flight, so
-  that each frame is drawn against a fresh prediction and fresh input
-  (ONE FRAME IN FLIGHT). The presentation manager accepts at least 7
-  presents ahead (above), so a host could submit K frames with target
-  times and then sleep: an RSVP stream, a fixed sequence. With the window
-  thread (`ysp/screen.h` 0.10.0) the window stays responsive while the
-  host sleeps, so the queued frames stay on independent flip; this would
-  also remove the host-caused misses of docs/av_probe.md (interpreter
-  pauses of 10 to 48 ms). To measure first: whether several queued
-  target times in a row land as exactly as one held frame (1800 of 1800
-  held 0 to 4 vblanks ahead); the cancel of queued presents on abort and
-  on the panic release; the texture count and memory for K frames (3
-  buffers today); how records and timeline events map to frames drawn
-  ahead. COMPOSITION only: DXGI_FLIP has no present time. Input cannot
-  change a frame that is already queued.
+  docs/winthread_probe.md). **Measured 2026-10-27 and 2026-10-28**
+  (docs/queue_probe.md; Iris Xe, driver 32.0.101.7088, 1920 x 1200 at
+  60 Hz, independent flip, no photodiode). Queues of 2 to 28 frames, each
+  for its own vblank, landed 580 of 580 fullscreen and 580 of 580 in a
+  window, all tier 1, as one held frame does (300 of 300); targets up to
+  10 s ahead landed. A Python host slept 1.5 and 6 s through a 28-frame
+  RSVP: all frames on time, no hung window, the records read after the
+  sleep. An abort cancels the queue 0.3 to 1.7 ms after the key; the
+  frame committed for the next vblank still shows, nothing after it. The
+  limit is Microsoft's 31 presentation buffers per manager: runs with 62
+  to 122 buffers stopped the laptop twice (bugcheck 0x133). Cost: 8.8 MB
+  per frame of depth at 1920 x 1200 RGBA8, 0.23 to 0.49 ms of CPU per
+  queued frame. **Recommendation:** build it in `ysp/screen.h` as an
+  opt-in on COMPOSITION (`desc.queue_max`, at most 28; buffers made at
+  open, because buffers added later spoiled the next queue), with the
+  cancel at each abort and at the panic's release plus a second cancel on
+  the frame thread (a present made just before the cancel escaped it in
+  3 of 40 runs). One frame in flight stays the default: a queued frame
+  cannot react to input. Not on DXGI_FLIP, which has no present time.
 
 ## 14. Coverage of jsPsych
 
