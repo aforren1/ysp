@@ -40,7 +40,7 @@ with yscr.Screen(**opts) as s, ygfx.Gfx(s, background=0.5) as g:
             g.end()
             s.flip()                  # presents at f.onset
     except yscr.Abort as a:
-        print("aborted: reasons 0x%x, %d press(es)" % (a.reasons, a.presses))
+        print(f"aborted: reasons 0x{a.reasons:x}, {a.presses:d} press(es)")
     s.wait_flip()
     records = s.records()             # every flip since open, oldest first
     missed = sum(r.missed for r in records)
@@ -49,5 +49,7 @@ with yscr.Screen(**opts) as s, ygfx.Gfx(s, background=0.5) as g:
     paths = {}
     for r in records:
         paths[r.path] = paths.get(r.path, 0) + 1
-    print("%d records, %d missed, %d late targets, residual p50 %.1f us, max %.1f us, paths %s"
-          % (len(records), missed, late, 1e6 * res[len(res) // 2] if res else 0, 1e6 * res[-1] if res else 0, paths))
+    p50 = 1e6 * res[len(res) // 2] if res else 0
+    worst = 1e6 * res[-1] if res else 0
+    print(f"{len(records):d} records, {missed:d} missed, {late:d} late targets, residual p50 {p50:.1f} us, "
+          f"max {worst:.1f} us, paths {paths}")

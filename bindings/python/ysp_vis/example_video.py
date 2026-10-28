@@ -87,17 +87,17 @@ def main():
             info = m.info
 
     counts = collections.Counter((yvid.DECISION_NAMES[r.decision], yvid.WHY_NAMES[r.why]) for r in frames)
-    print("display frames %d; video frames shown %d, repeated %d, dropped %d" % (
-        len(frames), info["shown"], info["repeated"], info["dropped"]))
+    print(f"display frames {len(frames):d}; video frames shown {info['shown']:d}, repeated {info['repeated']:d}, "
+          f"dropped {info['dropped']:d}")
     for (decision, why), n in sorted(counts.items()):
-        print("  %-8s %-12s %d" % (decision, why, n))
+        print(f"  {decision!s:<8} {why!s:<12} {n:d}")
     av = sorted(r.residual * 1e3 for r in frames if r.flags & yvid.F_AUDIO_CLOCK and r.decision == yvid.SHOWN)
     if av:
-        print("flip onset minus the frame's time on the audio clock, shown frames: p1 %.3f, p50 %.3f, p99 %.3f ms" % (
-            av[len(av) // 100], av[len(av) // 2], av[(len(av) * 99) // 100]))
+        p1, p50, p99 = av[len(av) // 100], av[len(av) // 2], av[(len(av) * 99) // 100]
+        print(f"flip onset minus the frame's time on the audio clock, shown frames: p1 {p1:.3f}, p50 {p50:.3f}, p99 {p99:.3f} ms")
     for e in events:
         if e["kind"] in ("play", "sound", "end"):
-            print("  %s at %.6f s" % (e["kind"], e["t"]))
+            print(f"  {e['kind']} at {e['t']:.6f} s")
 
 
 if __name__ == "__main__":

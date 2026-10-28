@@ -4,8 +4,8 @@ A CPython extension for the [ysp/stair.h](../../../include/ysp/stair.h)
 single-header library: transformed and weighted up/down staircases and
 accelerated stochastic approximation. It uses the plain CPython C API and has
 no dependencies. It is built against the **Limited API / stable ABI**
-(`Py_LIMITED_API = 0x03080000`), so one `ysp/stair.abi3.so` works on CPython
-3.8 and later.
+(`Py_LIMITED_API = 0x030A0000`), so one `ysp/stair.abi3.so` works on CPython
+3.10 and later.
 
 The distribution is `ysp-stair` and the module is `ysp.stair`. `ysp` is a
 [PEP 420](https://peps.python.org/pep-0420/) implicit namespace package (no

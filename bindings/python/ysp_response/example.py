@@ -38,8 +38,8 @@ while True:
     if rsp.update(t) == yr.ENDED:
         break
 r = rsp.finish()
-print("keyboard: response %s, rt %.3f s, held %.3f s, onset tier %d, %d anticipation(s)"
-      % (r.response, r.rt, r.rt_key_duration, r.onset_tier, r.n_anticipations))
+print(f"keyboard: response {r.response}, rt {r.rt:.3f} s, held {r.rt_key_duration:.3f} s, onset tier {r.onset_tier:d}, "
+      f"{r.n_anticipations:d} anticipation(s)")
 print("  data row:", rsp.data_row())
 
 # 2. A response box: events from ysp.box or ysp.device go to feed() as they are
@@ -55,13 +55,13 @@ events = [yr.event(20.6123, kind="box", control=2, unc=0.00004),
           yr.event(20.6890, kind="box", type=yr.RELEASE, control=2)]
 box.feed_many(events)                            # once per frame: everything the reader queued
 r = box.finish()
-print("box: response %s, rt %.4f s, stamp tier %d, bounds %+.4f..%+.4f s"
-      % (r.response, r.rt, r.stamp_tier, r.stamp_lo, r.stamp_hi))
+print(f"box: response {r.response}, rt {r.rt:.4f} s, stamp tier {r.stamp_tier:d}, "
+      f"bounds {r.stamp_lo:+.4f}..{r.stamp_hi:+.4f} s")
 
 # 3. Offline: the same logged events of a trial scored again under other rules.
 log = [yr.event(30.43, control="f"), yr.event(30.47, control="f", type=yr.RELEASE),
        yr.event(30.62, control="j"), yr.event(30.70, control="j", type=yr.RELEASE)]
 for min_rt in (0.02, 0.1, 0.25):
     r = yr.Collector(["f", "j"], duration=1.5, min_rt=min_rt).score(log, 30.4, arm=30.0)
-    print("rescore with min_rt %.2f s: response %s, rt %s s, %d anticipation(s)"
-          % (min_rt, r.response, "none" if r.rt is None else "%.3f" % r.rt, r.n_anticipations))
+    rt = "none" if r.rt is None else f"{r.rt:.3f}"
+    print(f"rescore with min_rt {min_rt:.2f} s: response {r.response}, rt {rt} s, {r.n_anticipations:d} anticipation(s)")

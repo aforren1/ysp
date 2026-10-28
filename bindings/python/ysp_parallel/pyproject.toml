@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ysp-parallel"
-version = "0.4.1"  # ysp/parallel.h v0.4.1, no binding revision (0.4.0.1: times in seconds); tests/test_parallel.py checks it against __version__
+version = "0.4.1.1"  # ysp/parallel.h v0.4.1, binding change 1 (the CPython 3.10 floor; 0.4.0.1 was times in seconds); tests/test_parallel.py checks it against __version__
 description = "Parallel-port access (data/status/control, blocking and async pulses)"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 license = "MIT-0"
 
 # The C extension is declared in setup.py (Extension) as ysp.parallel; this file
@@ -16,12 +16,11 @@ license = "MIT-0"
 # next to this distribution without either one owning the namespace.
 
 [tool.cibuildwheel]
-# The extension is abi3 (Limited API): setup.py forces a cp38-abi3 wheel tag
-# (py_limited_api="cp38"), so it installs on CPython 3.8+ regardless of which
-# interpreter builds it. We build on cp39 because cibuildwheel >=4 no longer
-# ships a cp38 build interpreter (3.8 is EOL); the resulting wheel is still
-# cp38-abi3. One build per platform serves every supported CPython.
-build = "cp39-*"
+# abi3 (Limited API): setup.py forces a cp310-abi3 wheel tag, so one build per
+# platform serves every supported CPython. The wheel is built on cp310 and
+# tested there and on cp314: cibuildwheel tests an abi3 wheel it has built on
+# the later versions it is asked for instead of building again.
+build = "cp310-* cp314-*"
 # macOS has no parallel port and the library #errors there; CI runs Linux + Windows.
 skip = "*-musllinux_*"
 # The tests need no port: the argument checks run before any device call.

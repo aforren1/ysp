@@ -24,9 +24,8 @@ with yau.Audio(backend=backend) as a:
     for k in range(5):
         sid = a.play_at(beep, t + 0.25 * k)
     r = a.wait(sid)                                    # the last one; GIL released
-    print("onset %.6f s, residual %d ns, tier %d, flags 0x%x"
-          % (r.onset, r.residual_ns, r.tier, r.flags))
+    print(f"onset {r.onset:.6f} s, residual {r.residual_ns:d} ns, tier {r.tier:d}, flags 0x{r.flags:x}")
     for k in range(sid - 4, sid + 1):
         r = a.result(k)
-        print("  play %d: start frame %d, residual %+6d ns%s"
-              % (k, r.start_frame, r.residual_ns, " LATE" if r.flags & yau.LATE else ""))
+        late = " LATE" if r.flags & yau.LATE else ""
+        print(f"  play {k:d}: start frame {r.start_frame:d}, residual {r.residual_ns:+6d} ns{late}")

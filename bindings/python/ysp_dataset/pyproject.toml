@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ysp-dataset"
-version = "0.2.0"  # must equal ysp/dataset.h's YDS_VERSION_STRING; tests/test_dataset.py checks it
+version = "0.2.0.1"  # ysp/dataset.h v0.2.0, binding change 1 (the CPython 3.10 floor); tests/test_dataset.py checks it against __version__
 description = "A session's data set for psychophysics: session.json, trial, frame, event, clock and stream tables, a zip"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 license = "MIT-0"
 
 # The C extension is declared in setup.py (Extension) as ysp.dataset; this file
@@ -16,10 +16,11 @@ license = "MIT-0"
 # distributions install next to this one without either owning the namespace.
 
 [tool.cibuildwheel]
-# abi3 (Limited API): setup.py forces a cp38-abi3 wheel tag, so one build per
-# platform serves every supported CPython. cibuildwheel >= 4 has no cp38 build
-# interpreter, so build on cp39; the wheel is still cp38-abi3.
-build = "cp39-*"
+# abi3 (Limited API): setup.py forces a cp310-abi3 wheel tag, so one build per
+# platform serves every supported CPython. The wheel is built on cp310 and
+# tested there and on cp314: cibuildwheel tests an abi3 wheel it has built on
+# the later versions it is asked for instead of building again.
+build = "cp310-* cp314-*"
 skip = "*-musllinux_*"
 test-command = "python -c \"import os, tempfile, ysp.dataset as yds; d = os.path.join(tempfile.mkdtemp(), 's'); ds = yds.Dataset(d, [('x', 'int')]); ds.write_trial(x=1); print('ok', ds.finish(), len(ds.zip()))\""
 

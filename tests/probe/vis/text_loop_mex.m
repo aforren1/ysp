@@ -15,9 +15,9 @@ function text_loop_mex(varargin)
                     'each fixation takes in a few letters to the left and more to the right. Long words are fixated more ' ...
                     'often, and frequent words are skipped. '], 1, 3);
     if o.windowed
-        h = ysp_screen('open', 'windowed', true, 'size', [1280 720], 'frame', 'row', 'gfx', struct('background', 0.5, 'max_draws', 4096));   % a text run takes 3 blocks of max_draws
+        h = ysp_screen('open', 'windowed', true, 'size', [1280 720], 'frame', 'row', 'gfx', struct('background', 0.5, 'max_draws', 4096));   % a text run took 3 blocks before ysp/gfx.h 0.17.2 (1 now); kept for comparison
     else
-        h = ysp_screen('open', 'frame', 'row', 'gfx', struct('background', 0.5, 'max_draws', 4096));   % a text run takes 3 blocks of max_draws
+        h = ysp_screen('open', 'frame', 'row', 'gfx', struct('background', 0.5, 'max_draws', 4096));   % a text run took 3 blocks before ysp/gfx.h 0.17.2 (1 now); kept for comparison
     end
     try
         g = ysp_gfx('open', h);

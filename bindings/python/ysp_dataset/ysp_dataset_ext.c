@@ -3,7 +3,7 @@
  * A thin, dependency-free binding: it needs only Python.h, and compiles the
  * header's implementation (with ysp/trials.h, ysp/table.h and ysp/json.h,
  * which it includes) into the module. Built against the stable ABI / Limited
- * API (CPython 3.8+), so the type is a heap type made with PyType_FromSpec.
+ * API (CPython 3.10+), so the type is a heap type made with PyType_FromSpec.
  *
  *     import ysp.dataset as yds
  *     ds = yds.Dataset("data/P07_20261021T140312Z",
@@ -46,7 +46,7 @@
  * another thread's switch interval (5 ms).
  */
 #ifndef Py_LIMITED_API
-#define Py_LIMITED_API 0x03080000
+#define Py_LIMITED_API 0x030A0000
 #endif
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
@@ -60,7 +60,7 @@
 
 /* The distribution's version is the header's (docs/bindings.md, Versions);
  * tests/test_dataset.py checks that this and pyproject.toml agree. */
-#define DS_VERSION YDS_VERSION_STRING
+#define DS_VERSION YDS_VERSION_STRING ".1"   /* .1: the CPython 3.10 floor (2026-10-27) */
 
 static PyObject* DsError;
 static PyObject* DsArgumentError;

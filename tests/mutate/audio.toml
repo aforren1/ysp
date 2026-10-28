@@ -683,3 +683,32 @@ test = "audio"
 why = "The lead leaves one period for a callback that runs between the read and the handover: the late-callback case reads 10 ms just before an on-time callback."
 find = '''    return yau__fit_time(&au->fit_ft, w + au->dcaps.period) - YAU__NOW();'''
 replace = '''    return yau__fit_time(&au->fit_ft, w) - YAU__NOW();'''
+
+# v0.7.3: WAV paths are UTF-8 (docs/audio.md, "UTF-8 paths").
+
+[[mutant]]
+id = "pa-01"
+name = "a WAV path in the ANSI code page"
+test = "audio"
+why = "fopen() on Windows reads the path in the ANSI code page: the writer and the probe must open a file in a folder named with Omega, Zhe, a CJK ideograph and U+1F3AC."
+find = '''        f = _wfsopen(w, m, mode[0] == 'r' ? _SH_DENYNO : _SH_DENYWR);'''
+replace = '''        (void)w; (void)m;
+        f = fopen(path, mode);'''
+
+[[mutant]]
+id = "pa-02"
+name = "a missing file is not named as one"
+test = "audio"
+why = "A missing WAV file says \"no such file\" in the message, from the probe and from the writer."
+find = '''        if (errno == ENOENT || errno == ENOTDIR) *why = "no such file";'''
+replace = '''        if (errno == ENOENT && errno == ENOTDIR) *why = "no such file";'''
+
+[[mutant]]
+id = "pa-03"
+name = "a path that is not UTF-8 is opened anyway"
+test = "audio"
+why = "On Windows a path that is not UTF-8 is refused with YAU_ERR_ARG, not tried as a file."
+find = '''            *why = "the path is not valid UTF-8 or longer than 1023 characters";
+            return YAU_ERR_ARG;'''
+replace = '''            *why = "cannot open";
+            return YAU_ERR_IO;'''

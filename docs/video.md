@@ -38,6 +38,7 @@ that a restart loses nothing.
 | Round 2: not built | `YVID_PATH_SHARED`; HEVC's VUI |
 | v0.2.1 (2026-10-08): recovery after a decoder outage | Fixed: after `YVID_PENDING` the decode thread slept until the next seek. Tested (a deterministic threaded case and the real-time one); 2 of 2 mutations caught. See "Recovery after a decoder outage" |
 | Bindings, phase B (2026-10-27) | Done: `ysp.video` and `ysp_video` in ysp-vis 0.10.1.1 (MEX 1.1.0); frames equal to the C path on the simulated display; 60 s fullscreen runs with sound in Python and MATLAB. See "Bindings" |
+| v0.6.0 (2026-10-27): UTF-8 paths, error codes | Done: every path is UTF-8 (`_wfsopen` on Windows); `mv.error_code` and `w.error_code`; a missing file is `YVID_ERR_NOT_FOUND` from the probe; x86 MSVC atomics. 7 of 7 mutants caught. ysp-vis 0.10.4, MEX 1.2.1. See "UTF-8 paths and error codes (v0.6.0)" |
 | Not in this task | Capture, FFmpeg, AVFoundation |
 
 ## Decisions that changed the design
@@ -1046,6 +1047,87 @@ Two mutants were run by hand and survived: the close without a sleep,
 and the close sleeping on the real clock (a test with a device that
 still plays at the close is not written).
 
+## UTF-8 paths and error codes (v0.6.0)
+
+The video binding found three limits (Bindings, "Header limits found"):
+
+- **Paths in the ANSI code page.** `fopen()` (`fopen_s()` under MSVC)
+  reads a path in the ANSI code page on Windows. A folder named with "é"
+  opened when the binding encoded the path as `mbcs`; a folder named with
+  U+03A9 (outside Windows-1252) did not open at all.
+- **`yvid_open()` returned false with no code.** A binding told a missing
+  file from a bad option or a decoder failure only by the message, and
+  checked for a missing file itself before the call.
+- **`yvid_probe()` answered a missing file with `YVID_ERR_REFUSED`.**
+  The message said the probe reads three kinds of file.
+
+The decisions:
+
+| Decision | Choice | Why |
+|---|---|---|
+| Path encoding | UTF-8 on every platform. On Windows, `MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS)` and `_wfsopen`; a read denies no one and a write denies other writers. At most 1023 UTF-16 units; a path that is not UTF-8 is `YVID_ERR_ARG` | The convention of ysp/dataset.h, ysp/rigfile.h and ysp/pack.h. Python gives UTF-8 bytes on Windows (PEP 529), MATLAB's UTF-16 converts to UTF-8 without loss, and Octave's char is UTF-8 already |
+| Which paths | The media file, the index beside it (`path + ".yspvi"`), the writer's file, `yvid_index_make()`'s files, pl_mpeg's file under `YVID_PL_MPEG_EXTERNAL` (`plm_create_with_file()` on a file this header opened; `plm_create_with_filename()` calls `fopen()`), and the soundtrack's WAV | Every path the header opens. Media Foundation never gets a path: the header gives it an IStream over its own byte source, so no URL is involved |
+| The soundtrack's WAV | The header opens it and gives ysp/audio.h a reader (`yau_reader`), unbuffered, as audio.h opens its own files | audio.h's own path open uses `fopen_s()` and has the same limit; this header must not depend on it. audio.h's limit is reported, not fixed here |
+| The code in the handle | `int32_t error_code` in `yvid_movie` and `yvid_seq`: the `YVID_ERR_*` of the last failure, beside the message. Set by every failing call (through the wrapper that writes the message) and by `yvid_open()` and `yvid_seq_open()`; an open that succeeds clears it | The conventions keep errors in the handle; ysp/dataset.h 0.2.0 and ysp/pack.h added `error_code` the same way |
+| A missing file | `YVID_ERR_NOT_FOUND` (errno `ENOENT` or `ENOTDIR`) from the probe, the open, the writer and the soundtrack; other open failures are `YVID_ERR_IO` | The soundtrack gave `YVID_ERR_IO` and the probe `YVID_ERR_REFUSED` before |
+| A file of none of the three kinds | `YVID_ERR_FORMAT` from the probe and the open | The probe said `YVID_ERR_REFUSED`, the open no code; one code for one cause |
+
+The open's codes: `ARG` for a bad desc field, `CLOSED` for a timeline
+that is not open, `NOT_IMPLEMENTED` for what is not built (the SHARED GPU
+path, Media Foundation without it, MPEG-1 without pl_mpeg), `FULL` for
+memory, `REFUSED` for a GPU path or light that cannot be had and a strict
+cadence that does not fit, `FORMAT` for a file not in the canonical form
+or an index that does not belong to it, `DECODER` for the decoder's own
+failure, and the backend's code otherwise.
+
+Breaking: a caller that passed a path in the ANSI code page with a byte
+above 127 that is not also UTF-8 gets `YVID_ERR_ARG`. The pack tool
+already passes UTF-8 (`pack/pack_tool.c` converts with `CP_UTF8`).
+
+Also fixed: `yvid_seq_open()` leaked its two buffers when the first write
+of the file failed.
+
+**x86 MSVC.** CI's 32-bit Windows builds failed: x86 MSVC has no
+`_InterlockedExchange64` or `_InterlockedIncrement64`, which `yvid__st64`
+and `yvid__inc64` used. On `_M_IX86` a `_InterlockedCompareExchange64`
+loop (cmpxchg8b) does both; x64 is unchanged. No other x86 gap: the COM
+table is `STDMETHODCALLTYPE` throughout, and `tests/compile/video_com.cpp`
+passes on x86 (GUIDs, `MFVideoArea` and the IStream table against the
+SDK). Not checked: ARM64 MSVC, where `yvid__ld32` and `yvid__st32` are a
+volatile access and a compiler barrier only (ysp/audio.h uses `__ldar32`
+and `__stlr32` there); no ARM64 toolchain is on the development machine.
+
+Tests (`tests/adapt/video_test.c`, `test_paths`, and each refusal of
+`test_open_refusals` with its code): a folder named
+`ysp_video_test_` + U+03A9, U+0416, U+6620 and U+1F3AC (non-Latin, CJK and a
+character outside the BMP, a surrogate pair in UTF-16) holds a frame
+sequence written, probed and played, a media file with its index beside
+it, and the soundtrack's WAV; a missing file is `NOT_FOUND` from the
+probe, the open, the writer (a missing folder) and the soundtrack; a path
+that is not UTF-8 and one of 1099 characters are `ARG` on Windows; a file
+of none of the three kinds is `FORMAT`; the next open clears the code; a
+later failing call (`show` out of range, `play_at` on a closed movie, a
+write after finish) sets it. `tests/compile/video.c` reads
+`mv.error_code` and `w.error_code` by type.
+
+Mutants (`tests/mutate/video.toml`, v060-01 to v060-07), 7 of 7 caught on
+MinGW-w64 gcc 16.1: paths through `fopen()`; the soundtrack's path to
+audio.h's own open; `yvid_open()` without the code; a failing call without
+the code; the probe's missing file as `REFUSED`; every failed open as
+`IO`; the writer's open without the code. v060-01 and v060-02 are caught on
+Windows only: on POSIX `fopen()` takes the UTF-8 bytes as they are.
+
+Builds (2026-10-27): the core test and the compile checks passed on MSVC
+19.44 x64 (C and C++17, `/W4 /WX`), MSVC 19.44 x86 (`vcvars32`: the
+compile checks as C and C++17, with and without pl_mpeg, the COM check;
+the core test as C and C++17 with a local copy of ysp/audio.h whose
+`yau__st64` had the same compare-exchange loop, since audio.h's own fix
+is another branch's), MinGW-w64 gcc 16.1 (C11, C++17; the compile checks
+C99, C11, C++17), WSL2 gcc 11.4 (C11 -O2; -O1 with ASan and UBSan; the
+compile checks C99 and C11 -O3 with ASan and UBSan, C++17), and emcc
+6.0.12 with node (the CI wasm job's video commands). Media Foundation's
+clips (`YVID_TEST_MEDIA`) were not run.
+
 ## Needed from the other headers
 
 | Header | Request | Why |
@@ -1175,6 +1257,23 @@ detaches, then gives back the owners' modules.
 - MEX: `test_mex_video.m`, 67 checks on the simulated display and the null
   device, and `example_video.m`, in MATLAB R2023a and Octave 10.1
   (MinGW-w64 gcc 14.2, the static SDL3 built with it).
+- v0.6.0 (ysp-vis 0.10.4, MEX 1.2.1, 2026-10-27): `test_unicode_paths`
+  in `test_video_sim.py` (now 25 tests): a folder named U+03A9, U+0416,
+  U+6620 and U+1F3AC holds a frame sequence written, probed (`str`,
+  `os.PathLike`, `bytes`) and played, an MPEG-1 file indexed there and
+  opened by path and as bytes with the index by path, and the soundtrack's
+  WAV; a missing file raises `NotFoundError` from `Movie()`, `probe()`,
+  `SeqWriter()` (a missing folder), an index by path and `soundtrack()`.
+  `test_mex_video.m` (now 78 checks in MATLAB, 75 in Octave, which skips
+  the soundtrack and MPEG-1 files in the folder, above): the same in MATLAB
+  and Octave; `'open'` with `'lead', 2` is `ysp_video:arg` (it was
+  `:open`). Results: CPython 3.14.3 (fresh `--no-cache` builds of every
+  package) 78 passed, 11 skipped (the window tests and the default output)
+  in ysp-vis; CPython 3.10.0 the same 78 (pytest 8.4: pytest 9.2 stopped
+  with an internal error on 3.10.0 in every package); MATLAB R2023a
+  `test_mex_video.m` 78 of 78, `test_mex_vis.m` 91 of 91,
+  `test_mex_vis_gfx.m` 105 of 105; Octave 10.1 75 of 75, 91 of 91, 105 of
+  105.
 - Results (2026-10-27): CPython 3.12.11 and 3.14.3 (fresh `--no-cache`
   builds) every test passed: 24 of 24 with `YSP_VIS_AUDIO=1` (23 and one skip without), 5 of 5 in a window, and the phase A tests beside them (44 on the simulated display, 1 in a window); the simulated suite passed three times in a row in each; MATLAB R2023a and Octave 10.1: 67 of 67 and
   `test_mex_vis.m` 91 of 91.
@@ -1241,20 +1340,23 @@ What the runs show:
 
 ### Header limits found
 
-- `yvid_open()` returns false without a code, so the binding cannot tell a
-  file not in the canonical form from a bad option or a decoder failure
-  except by the message. The binding raises the base error class
-  (`ysp.screen.Error`, MEX `ysp_video:open`) with the header's message, and
-  finds a missing file itself first (`NotFoundError`, `:not_found`).
-- `yvid_probe()` answers a missing file with `YVID_ERR_REFUSED` ("reads
-  frame sequences and indexed MPEG-1 and MP4 files only"). The binding
-  checks the path first. Repro: `yvid_probe()` of a path that does not
-  exist.
-- Paths go to `fopen()` (`fopen_s()` under MSVC), so on Windows a path is
-  in the ANSI code page: a path with a character outside it cannot be
-  opened. The Python binding encodes paths as `mbcs` and refuses one it
-  cannot encode, with the hint to pass `data=`. Repro: a clip in a folder
-  named with a character outside the code page (Windows-1252 here), opened
-  by `yvid_open()` with its UTF-8 bytes.
+Three limits, found by phase B and fixed in ysp/video.h 0.6.0 ("UTF-8
+paths and error codes (v0.6.0)"), with ysp-vis 0.10.4 and MEX 1.2.1:
 
-None of these blocked the binding; no header was changed.
+- `yvid_open()` returned false without a code. The binding raised the
+  base error class (`ysp.screen.Error`, MEX `ysp_video:open`) and checked
+  for a missing file itself. Now it raises by `mv.error_code`
+  (`NotFoundError`, `FormatError`, ...; MEX `ysp_video:not_found`,
+  `:format`, ...), and the binding's own check is gone.
+- `yvid_probe()` answered a missing file with `YVID_ERR_REFUSED`. Now
+  `YVID_ERR_NOT_FOUND`; the binding's own check is gone.
+- Paths went to `fopen()` in the ANSI code page. Now UTF-8: Python passes
+  `str`, `bytes` and `os.PathLike` through `PyUnicode_FSConverter` (no
+  more `mbcs`), MATLAB's char converts from UTF-16, Octave's char bytes go
+  as they are. The binding reads an index named by path (with `data=`)
+  through `_wfopen_s` too.
+
+Found while testing: Octave 10.1's own `fopen`, `copyfile`, `rmdir` and
+`system()` fail on a folder named with U+6620 and U+1F3AC (its `mkdir`
+works, and so does `fopen` on a folder named U+03A9 alone), so in Octave
+the MEX test puts only the binding's files in that folder.

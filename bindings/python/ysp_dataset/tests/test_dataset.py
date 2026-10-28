@@ -50,7 +50,8 @@ def test_version_matches_pyproject():
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     with open(os.path.join(here, "pyproject.toml"), encoding="utf-8") as f:
         text = f.read()
-    assert re.search(r'^version = "([^"]+)"', text, re.M).group(1) == yds.__version__ == yds.version()
+    assert re.search(r'^version = "([^"]+)"', text, re.M).group(1) == yds.__version__
+    assert yds.__version__.startswith(yds.version() + ".")
 
 
 def test_constants():

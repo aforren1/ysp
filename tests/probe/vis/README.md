@@ -19,6 +19,7 @@ without a call into the module. Windows only.
 | `text_cost.py`, `text_cost_mex.m` | Text (phase C): a layout's cost on the simulated display, a word, a sentence, a paragraph and an Arabic sentence set alternately to two strings ([gfx.md](../../../docs/gfx.md#text-measured)) |
 | `text_loop.py`, `text_loop_mex.m` | Text: N one-word texts, a page, or words and a label laid out again each frame; one CSV row per flip record (`table.py`) |
 | `text_run.sh` | One text run: the host, the mode (`words`, `page`, `label`, `cost`) and N |
+| `text_gpu.c`, `build_text_gpu.bat` | The words scene from C (ysp/gfx.h, no binding): N one-word runs, or the same glyphs as one run; `--gpu` a timer query around the frame's GPU work, `--finish` a timed glFinish after `ygfx_end()` (diagnostics both); one CSV row per flip record with `ygfx_end()`'s time ([gfx.md](../../../docs/gfx.md#v0172-text-runs-batched)) |
 | `movie_table.py` | The table of movie runs: frame decisions, drops, missed flips, work, `update()`, the A/V error the records report, the sound's start ([video.md](../../../docs/video.md#bindings)) |
 
 "Work" is a record's DRAW phase: the time from the return of
@@ -63,4 +64,14 @@ $G vis_text_cost_py bash tests/probe/vis/text_run.sh py cost 3000 OUT/cost_py   
 $G vis_text_words_py bash tests/probe/vis/text_run.sh py words 100 OUT/words100_py
 $G vis_text_page_octave bash tests/probe/vis/text_run.sh octave page 1 OUT/page_octave
 $PY tests/probe/vis/table.py OUT/words100_py.csv OUT/page_octave.csv
+```
+
+The C scene (built with `build_text_gpu.bat SDL3_ROOT third_party/vis/angle OUT`
+from a plain cmd), and `gfx_bench --only words` (examples/gfx/bench.c),
+headless, for the GPU's time with frames back to back:
+
+```sh
+$G vis_text_gpu bash -c "OUT/text_gpu.exe --mode runs --n 500 --seconds 60 --csv OUT/c_runs500.csv"
+$G vis_text_gpu_q bash -c "OUT/text_gpu.exe --mode runs --n 500 --seconds 30 --gpu --csv OUT/c_runs500_gpu.csv"
+$G gfx_bench_words build/msvc-full/Release/gfx_bench.exe --only words
 ```

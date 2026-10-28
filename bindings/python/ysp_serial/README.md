@@ -5,7 +5,7 @@ A small CPython extension wrapping the
 the shared [ysp/rt.h](../../../include/ysp/rt.h). It uses the plain CPython C API (no
 nanobind/pybind/Cython) to stay dependency-free, and is built against the
 **Limited API / stable ABI** (`Py_LIMITED_API =
-0x03080000`), so a single `ysp/serial.abi3.so` works on CPython 3.8+ without a
+0x030A0000`), so a single `ysp/serial.abi3.so` works on CPython 3.10+ without a
 rebuild per version.
 
 The distribution is `ysp-serial` and the module is `ysp.serial`. `ysp` is a
@@ -292,7 +292,7 @@ Most tests need no port:
 
 ```sh
 uv build --wheel -o dist
-uv run --no-project --with pytest --with dist/ysp_serial-0.6.1-cp38-abi3-<platform>.whl pytest tests
+uv run --no-project --with pytest --with dist/ysp_serial-0.6.1-cp310-abi3-<platform>.whl pytest tests
 ```
 
 On Linux, `tests/test_async_pty.py` runs the async reader on a
@@ -305,7 +305,7 @@ of a write while the reader runs. Add `-s` to see the numbers;
 `YSP_SERIAL_RESULTS=<dir>` also writes them to `<dir>/async_device.json`.
 
 ```sh
-YSP_SERIAL_PORT=COM3 uv run --no-project --with pytest --with dist/ysp_serial-0.6.1-cp38-abi3-<platform>.whl pytest tests -s
+YSP_SERIAL_PORT=COM3 uv run --no-project --with pytest --with dist/ysp_serial-0.6.1-cp310-abi3-<platform>.whl pytest tests -s
 ```
 
 Device naming, USB latency, DTR-driven board resets and what a serial trigger

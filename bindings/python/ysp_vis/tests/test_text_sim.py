@@ -362,3 +362,16 @@ def test_many_texts_and_fonts(sg):
     frame(s, g, *texts)
     # one curve set per font file of each list: 1 (the default) + 6, under the 32 the core allows
     assert all(t.missing == 0 for t in texts)
+
+
+def test_a_thousand_texts_a_frame(sg):
+    # A text without a colored span is one of the gfx's max_draws blocks
+    # (ysp/gfx.h 0.17.2; 3 before, when the 342nd text of a frame failed
+    # with "pool or frame full"): 1024 fit the default, the 1025th does not.
+    s, g = sg
+    texts = [g.text("word%d" % (i % 10), size=12) for i in range(1025)]
+    frame(s, g, g.list(texts[:1024]))
+    s.begin()
+    with pytest.raises(yscr.Error, match="full"):
+        g.frame(g.list(texts))
+    s.flip()

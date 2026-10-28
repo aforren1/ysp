@@ -41,8 +41,21 @@
 
 /* The binding's own version (README.md, "Versions"); the second output of
  * 'version' is the header's. */
-#define AUM_VERSION "1.0.1"
+#define AUM_VERSION "1.0.2"   /* 1.0.2: WAV paths as UTF-8 (ysp/audio.h 0.7.3) */
 #define AUM_S_MAX 4611686018.0
+
+/* A path as UTF-8, which ysp/audio.h takes from 0.7.3; mxMalloc'd for this
+ * call. mxArrayToString() gives MATLAB's local code page, where a folder
+ * named with Omega or a CJK ideograph is lost. Octave keeps char as UTF-8
+ * bytes and has no mxArrayToUTF8String(). */
+static char* aum_path(const mxArray* a) {
+    if (!mxIsChar(a)) pm_err("arg", "path must be a string");
+#ifdef HAVE_OCTAVE
+    return mxArrayToString(a);
+#else
+    return mxArrayToUTF8String(a);
+#endif
+}
 
 enum { AUM_AUDIO = 1, AUM_BUFFER, AUM_STREAM, AUM_WAV, AUM_CAPTURE };
 
@@ -627,7 +640,7 @@ YSP_SHARE_MEX_ENTRY void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const 
         int rc;
         pm_nargs(nrhs, 2, "info = ysp_audio('wav_info', path)");
         memset(&d, 0, sizeof d);
-        d.path = pm_string(prhs[1], "path");
+        d.path = aum_path(prhs[1]);
         if ((rc = yau_wav_probe(&d, &info, err, sizeof err)) < 0) pm_err(rc == YAU_ERR_IO ? "io" : "format", "%s", err[0] ? err : yau_strerror(rc));
         plhs[0] = mxCreateStructMatrix(1, 1, 6, (const char**)f);
         mxSetField(plhs[0], 0, "rate", mxCreateDoubleScalar(info.rate));
@@ -839,7 +852,7 @@ YSP_SHARE_MEX_ENTRY void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const 
         yau_buf b;
         pm_nargs(nrhs, 3, "b = ysp_audio('load_wav', h, path [, id])");
         memset(&d, 0, sizeof d);
-        d.path = pm_string(prhs[2], "path");
+        d.path = aum_path(prhs[2]);
         b = yau_wav_load(&a->au, &d);
         if (!b.frames) pm_err("format", "%s", yau_error(&a->au));
         plhs[0] = aum_buffer_out(a, b, nrhs > 3 ? (uint32_t)pm_scalar(prhs[3], "id") : 0);
@@ -949,7 +962,7 @@ YSP_SHARE_MEX_ENTRY void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const 
         if (o) pm_check_fields(o, allowed, 4, "wav_open");
         memset(&d, 0, sizeof d);
         c = aum_child_new(a, AUM_WAV, sizeof(yau_wav));
-        c->path = aum_strdup(pm_string(prhs[2], "path"));
+        c->path = aum_strdup(aum_path(prhs[2]));
         d.path = c->path;
         loops = aum_opt(o, "loops", 0);
         d.loops = loops < 0 || isinf(loops) ? YAU_FOREVER : (int32_t)loops;

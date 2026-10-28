@@ -19,12 +19,13 @@ path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(here, "..", "..", ".."
 try:
     pk = yp.Pack(path)
 except yp.Error as ex:   # the header's message: which rule, which entry
-    sys.exit("cannot open %s: %s" % (path, ex))
+    sys.exit(f"cannot open {path}: {ex}")
 
 with pk:
     print(pk.describe())
     for e in pk.entries():
-        print("  %-24s %-10s %8d bytes%s" % (e.name, e.kind, e.size, "  (stream)" if e.stream else ""))
+        stream = "  (stream)" if e.stream else ""
+        print(f"  {e.name!s:<24} {e.kind!s:<10} {e.size:8d} bytes{stream}")
 
     m = pk.manifest()
     if "tool" in m:
@@ -38,9 +39,9 @@ with pk:
     try:
         pk.verify()
     except yp.CorruptError as ex:
-        sys.exit("corrupt: %s" % ex)
+        sys.exit(f"corrupt: {ex}")
     for me in m["entries"]:
         data = pk.read(me["name"])
         ok = hashlib.sha256(data).hexdigest() == me["sha256"]
-        print("  sha256 %s %s" % ("ok " if ok else "BAD", me["name"]))
+        print(f"  sha256 {'ok ' if ok else 'BAD'} {me['name']}")
     print("pack ID", pk.id)

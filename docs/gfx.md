@@ -4097,6 +4097,153 @@ and the folders. 2 of 2 new mutants killed on MSVC (`tests/mutate/gfx.toml`,
 tp-). CI's new `gcc-O1` entry (`linux-extra`) builds the tree at -O1, where
 the warning showed.
 
+## v0.17.2: text runs batched
+
+The problem ([Text: measured](#text-measured)): 500 one-word texts a
+frame, fullscreen at 60 Hz, missed 4 to 7 % of the frames in Python,
+MATLAB and Octave, with the host's work at p99 8.4 to 9.6 ms. Each text
+also took 3 of the 1024 default draw blocks, so the 342nd text of a frame
+failed ("pool or frame full").
+
+### Conditions
+
+The laptop of [av_probe.md](av_probe.md): i7-1360P, Iris Xe, internal
+panel 1920 x 1200 at 60 Hz, Windows 11 26200, AC, the Balanced power
+plan. ANGLE 2.1.25848 (D3D11), AUTO: COMPOSITION on the independent-flip
+path, depth 1. 2026-10-27, every run through the timing guard. The scene
+is the words scene of `tests/probe/vis/text_loop.py`: 500 one-word texts,
+3668 glyphs, Segoe UI at 28 px, 20 a row, each text one curve run with its
+items copied at each draw. `tests/probe/vis/text_gpu.c` draws the same
+scene from C, ysp/gfx.h with no binding, and `gfx_bench --only words`
+(examples/gfx/bench.c) draws it headless at 1920 x 1200 with frames back
+to back. Work is the record's DRAW phase, as in Text: measured.
+
+### The cause
+
+Fullscreen, ysp/gfx.h 0.17.1:
+
+| Run | Records | Missed (vblanks) | Work p50 / p99, ms | `ygfx_end()` p50 / p99, ms |
+|---|---|---|---|---|
+| C, 500 runs, 60 s | 3459 | 140 (143), 4.0 % | 1.68 / 5.05 | 1.55 / 4.82 |
+| C, the 3668 glyphs as one run, 30 s | 1801 | 1 (1) | 0.40 / 0.96 | 0.36 / 0.87 |
+| Python, 500 texts, 60 s | 3433 | 164 (166), 4.8 % | 2.89 / 8.45 | |
+
+- C misses as the hosts do, so the binding is not the cause. Python's
+  work is 1.2 ms more at the median than C's.
+- The misses follow the time of `ygfx_end()`, which submits the frame's
+  draws through ANGLE. It took 1 to 2 ms in most frames and 4 to 5 ms in
+  13 % of them (a second mode, cause not traced). Frames whose `ygfx_end()`
+  took 4 ms or more missed 111 of 450 times; the others 29 of 3009.
+- The draws themselves (`ygfx_begin()` and 500 `ygfx_draw()` calls) took
+  0.10 ms at the median: the cost is in the submission, 500 instanced
+  draws, each with its own block range and item offset.
+- The same glyphs as one run missed 1 frame of 1801 (frame 0 to 29): the
+  glyphs' GPU work alone is not the cause. A timer query around the frame's GPU work (`--gpu`, a
+  diagnostic: GL_EXT_disjoint_timer_query, TIME_ELAPSED from
+  `ygfx_begin()` to `ygfx_end()`, read 4 frames later) gave 9.2 ms p50 for
+  500 runs, 9.9 ms for one run and 3.1 ms for 100 runs. With a timed
+  `glFinish()` after `ygfx_end()` (`--finish`), the GPU finished the
+  frame 9.7 ms p50 after `ygfx_end()` returned. So the GPU did most of the
+  frame's work after the CPU had submitted it, and the CPU's submission
+  and the GPU's work add up in the frame: a 4 to 5 ms submission plus
+  about 9 ms of GPU work plus the present call is near the 16.7 ms.
+- Headless with frames back to back, the GPU took less: 5.5 ms over an
+  empty frame for 500 runs, 2.7 ms for one run (below). Why the GPU took
+  about 9 ms on screen was not traced; its clock was not read.
+
+`gfx_bench --only words`, headless, 25 rounds of 12 frames interleaved;
+GPU and CPU over an empty frame, the median of the rounds:
+
+| Workload | 0.17.1 GPU, ms | 0.17.1 CPU, us | 0.17.2 GPU, ms | 0.17.2 CPU, us |
+|---|---|---|---|---|
+| 100 runs | 1.14 | 501 | 0.45 | 85 |
+| 500 runs | 5.50 | 2634 | 2.03 | 324 |
+| 500 runs of 1 glyph each | 3.66 | 2468 | 0.54 | 249 |
+| 500 runs off the screen (no fragment) | 2.84 | 2219 | 0.43 | 365 |
+| 500 runs, `.rays` | 4.68 | 2211 | 1.82 | 329 |
+| the 3668 glyphs as one run, items copied | 2.71 | 53 | 1.99 | 116 |
+| the same in a buffer | 2.67 | 30 | 1.79 | 35 |
+| the same as one run, `.rays` | 2.28 | 71 | 1.61 | 69 |
+
+Each 0.17.1 run cost about 4.4 us of CPU and 5.7 us of GPU as a draw of
+its own (500 runs off the screen: 2.2 ms and 2.8 ms, with no pixel
+drawn). The one-run rows differ between the two sessions (2.71 against
+1.99 ms) with no change to their path: compare within a column, not
+across. A first bench session the same day had empty frames 3 times as
+slow (1.90 ms against 0.59) and is not used. Paced by a `glFinish()`
+after each frame, 500 runs' `ygfx_end()` took 2.42 / 3.86 ms (p50 / p99)
+in 0.17.1 and 0.49 / 0.82 ms in 0.17.2; one run 0.30 / 0.43 and 0.36 /
+0.73 ms.
+
+### The fix
+
+- A run without YGFX_I_COLOR is one block. Blocks 2 and 3 hold the
+  palette only, so a run without one does not need them. The default
+  `max_draws` now holds 1024 such runs a frame.
+- Runs drawn one after another in a pass share one instanced draw, up to
+  16 (`ygfx__text_batch()` in `ygfx_end()`), when each is one block and
+  they have the same program, set, blend and aliased flag, and their
+  items follow each other in one buffer. Items copied at each draw always
+  do; runs from one buffer do when their ranges meet. A run's item count
+  is in its block (vec4 4, w). The vertex stage finds an instance's run
+  as the first whose count the instance index does not reach, at most 16
+  reads of the stim block. The fragment stage reads the set's texture
+  width, the cap, e and the aliased flag from the first block, which is
+  why those must agree.
+- The aliased flag is compared because two `.rays` runs, one aliased,
+  take the same program.
+- The reorder does not move a run, as before (an instanced draw's bounds
+  are the whole pass).
+- Not done: runs with a palette (3 blocks) stay a draw each; a text with
+  a colored span has one.
+
+After, fullscreen, ysp/gfx.h 0.17.2 (Python: ysp-vis built from this
+tree):
+
+| Run | Records | Missed (vblanks) | Of them in frames 0 to 29 | Work p50 / p99, ms | `ygfx_end()` p50 / p99, ms |
+|---|---|---|---|---|---|
+| C, 500 runs, 60 s | 3601 | 1 (1) | 1 | 0.57 / 1.43 | 0.47 / 1.16 |
+| Python 3.12, 500 texts, 60 s | 3586 | 15 (16), 0.4 % | 6 | 0.77 / 1.80 | |
+| Python 3.12, 100 texts, 60 s | 3601 | 1 (1) | 0 | 0.49 / 1.09 | |
+| MATLAB R2023a, 500 texts, 60 s | 3584 | 17 (18), 0.5 % | 14 | 0.95 / 2.08 | |
+| Octave 10.1, 500 texts, 60 s | 3589 | 12 (13), 0.3 % | 10 | 1.16 / 2.44 | |
+
+- Most misses that remain are at a run's start (frames 0 to 29). After
+  it, Python missed 9 frames in a minute, MATLAB 3 and Octave 2, each
+  with 0.6 to 2.4 ms of work; their cause was not traced. Before, 500
+  words missed 156 to 244 frames a minute in these hosts (Text:
+  measured, an earlier session).
+- The host's share: MATLAB 0.2 ms and Octave 0.4 ms over Python at the
+  median, Python 0.2 ms over C.
+- The timer query on 0.17.2's 500 runs gave 9.0 ms p50: the GPU's work
+  is the glyphs' and did not change. That is the budget left: on this
+  machine 500 one-word texts at 28 px take about 9 ms of GPU a frame on
+  screen. More text, larger text or another GPU can still miss; a page of
+  static text belongs in a target drawn once (CURVE RUNS).
+
+### Tests
+
+`gl_v06_text()` in `tests/adapt/gfx_test.c`, on ANGLE D3D11 on the Iris
+Xe (MSVC, and MinGW gcc 16.1 with CI's `-Werror` flags), ANGLE's WARP and
+SwiftShader, and Mesa llvmpipe (WSL2, gcc 11.4, `-Werror`):
+
+- 40 runs of one item each, each with its own opacity, against the same
+  40 items in one run with the opacity in their contrast: 0 difference,
+  batched (3 draws), one draw each (`max_batch` 1, 40 draws) and in call
+  order (reorder off), on the exact-area program and on `.rays`.
+- Runs from one buffer with gaps (every other item) against one run of
+  those items: 0. `.rays` runs aliased every other one, batched against
+  one draw each: 0.
+- 40 runs take 40 blocks; 1024 runs draw at the default `max_draws` and
+  the 1025th is refused.
+
+The bindings: `test_a_thousand_texts_a_frame` in
+`bindings/python/ysp_vis/tests/test_text_sim.py` (1024 texts in a frame,
+the 1025th refused; it fails on 0.17.1), and the same 2 checks in
+`bindings/mex/test_mex_vis_text.m` (55 checks in MATLAB R2023a, 54 in
+Octave 10.1). 7 new mutants (`tests/mutate/gfx.toml`, tb-): 7 of 7
+killed on the Iris Xe.
+
 ## Bindings
 
 `ysp/gfx.h` is bound in `ysp-vis` with `ysp/screen.h` and `ysp/video.h`
@@ -4494,13 +4641,18 @@ work).
 - 100 words, a page, and a label laid out every frame fit the frame in
   every host: work p99 under 3 ms, at most one missed frame a minute.
 - 500 words missed 4 to 7 % of the frames in every host, with the
-  host's work at p99 8.4 to 9.6 ms: the CPU part fits; the misses were not
-  traced (the GPU's time per frame was not measured here). 500 texts are
-  500 runs, 1500 of the gfx's draw blocks: past 341 a frame, `max_draws`
-  must be raised (`Gfx(max_draws=4096)`; the default 1024 refused item
-  341, "pool or frame full"). Text that does not move belongs in one
-  text (the page: 0.39 to 0.63 ms) or, static, in a target drawn once
-  (ysp/gfx.h CURVE RUNS: 0.5 ms a page), which the binding does not
-  expose.
+  host's work at p99 8.4 to 9.6 ms. The cause was ysp/gfx.h's: 500 runs
+  were 500 instanced draws, whose submission in `ygfx_end()` (1 to 5 ms)
+  came before most of the frame's GPU work (about 9 ms). 500 texts were
+  also 1500 of the gfx's draw blocks: past 341 a frame, `max_draws` had
+  to be raised (the default 1024 refused item 341, "pool or frame full").
+  ysp/gfx.h 0.17.2 makes a run without a palette one block and draws up
+  to 16 runs in one draw: 500 words then missed 0.3 to 0.5 % of the
+  frames in every host, most at the run's start, with work p99 1.8 to
+  2.4 ms; see
+  [v0.17.2](#v0172-text-runs-batched). Text that does not move can
+  still go in one text (the page: 0.39 to 0.63 ms) or, static, in a
+  target drawn once (ysp/gfx.h CURVE RUNS: 0.5 ms a page), which the
+  binding does not expose.
 - The host's share is the difference between the hosts: MATLAB 0.1 to 0.6
   ms and Octave 0.2 to 1.1 ms over Python at the median.

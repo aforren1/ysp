@@ -7,8 +7,9 @@ function test_mex_video()
 %   seek_frame, show) and their results, the order errors, a movie closed
 %   with its gfx, a movie from bytes, the soundtrack on a ysp_audio handle
 %   and its pin (ysp_audio('close') is ysp_audio:busy while the movie holds
-%   it), a ysp_timeline handle as the movie base, and MPEG-1 when ffmpeg is
-%   on the path. Build first (build.m: ysp_audio, ysp_timeline, ysp_vis,
+%   it), a ysp_timeline handle as the movie base, a folder named with
+%   U+03A9, a CJK ideograph and an emoji (UTF-8 paths, ysp/video.h 0.6.0),
+%   and MPEG-1 when ffmpeg is on the path. Build first (build.m: ysp_audio, ysp_timeline, ysp_vis,
 %   ysp_screen, ysp_gfx, ysp_video). Windows only. Prints PASS with the
 %   number of checks.
 
@@ -19,11 +20,11 @@ function test_mex_video()
     P = 0.004;                                   % a fast simulated display keeps the test short
     d = tempname();
     mkdir(d);
-    cleanup = onCleanup(@() rmdir(d, 's'));      %#ok<NASGU>
+    cleanup = onCleanup(@() rm_tree(d));         %#ok<NASGU>
 
     % ---- versions
     [bv, hv] = ysp_video('version');
-    check(strcmp(bv, '1.2.0') && ~isempty(regexp(hv, '^\d+\.\d+\.\d+$', 'once')), 'version: binding %s, header %s', bv, hv);
+    check(strcmp(bv, '1.2.1') && ~isempty(regexp(hv, '^\d+\.\d+\.\d+$', 'once')), 'version: binding %s, header %s', bv, hv);
     o = ysp_video('options');
     check(isfield(o, 'loop') && isfield(o, 'hw_decode') && isfield(o, 'timeline') && isfield(o, 'records'), 'options');
     c = ysp_video('constants');
@@ -57,7 +58,7 @@ function test_mex_video()
     expect_error('ysp_video:not_found', @() ysp_video('open', g, fullfile(d, 'missing.yspseq')));
     expect_error('ysp_video:arg', @() ysp_video('open', g, p30, 'light', 'nosuch'));
     expect_error('ysp_video:arg', @() ysp_video('open', g, p30, 'nosuch', 1));
-    expect_error('ysp_video:open', @() ysp_video('open', g, p30, 'lead', 2));
+    expect_error('ysp_video:arg', @() ysp_video('open', g, p30, 'lead', 2));   % the header's code (video.h 0.6.0)
     expect_error('ysp_video:handle', @() ysp_video('update', h));
     m = ysp_video('open', g, p30);
     check(isa(m, 'uint64'), 'open: a uint64 handle');
@@ -194,6 +195,43 @@ function test_mex_video()
     ysp_video('close', m);
     ysp_timeline('close', tl);
 
+    % ---- UTF-8 paths (ysp/video.h 0.6.0): a folder outside the ANSI code page
+    % Octave 10.1's own fopen, copyfile, rmdir and system() fail on this name
+    % (its mkdir works): in Octave only the binding's files go in the folder.
+    octave = exist('OCTAVE_VERSION', 'builtin') ~= 0;
+    if octave
+        uni = char([206 169 95 230 152 160 95 240 159 142 172]);   % Octave's char holds UTF-8 bytes
+    else
+        uni = char([937 95 26144 95 55356 57260]);                  % MATLAB's char is UTF-16 (a surrogate pair)
+    end
+    ud = fullfile(d, uni);
+    mkdir(ud);
+    up = fullfile(ud, 'clip.yspseq');
+    check(ysp_video('write_seq', up, fr(:, :, :, 1:10), 30) == 10, 'UTF-8: write_seq in the folder');
+    pr = ysp_video('probe', up);
+    check(pr.frames == 10, 'UTF-8: probe');
+    m = ysp_video('open', g, up);
+    ysp_video('play', m);
+    play_all(h, g, m, 10000);
+    r = ysp_video('records', m);
+    check(r(end).frame == 9, 'UTF-8: the movie in the folder played');
+    ysp_video('close', m);
+    expect_error('ysp_video:not_found', @() ysp_video('open', g, '', 'data', bytes, 'index', fullfile(ud, 'missing.yspvi')));
+    expect_error('ysp_video:not_found', @() ysp_video('open', g, fullfile(ud, 'missing.yspseq')));
+    expect_error('ysp_video:not_found', @() ysp_video('probe', fullfile(ud, 'missing.yspseq')));
+    expect_error('ysp_video:not_found', @() ysp_video('write_seq', fullfile(ud, 'no_folder', 'x.yspseq'), fr(:, :, :, 1:2), 30));
+    a = ysp_audio('open', struct('backend', 'null'));
+    m = ysp_video('open', g, up);
+    expect_error('ysp_video:not_found', @() ysp_video('soundtrack', m, a, fullfile(ud, 'missing.wav')));
+    if ~octave
+        uw = fullfile(ud, 's.wav');
+        audiowrite(uw, zeros(16000, 2), 48000);         % 10 frames at 30 fps
+        ysp_video('soundtrack', m, a, uw);
+        check(true, 'UTF-8: the soundtrack''s WAV in the folder');
+    end
+    ysp_video('close', m);
+    ysp_audio('close', a);
+
     % ---- MPEG-1, when ffmpeg is on the path
     [st, ~] = system('ffmpeg -version');
     if st == 0
@@ -211,12 +249,31 @@ function test_mex_video()
         in = ysp_video('info', m);
         check(r(end).frame == 59 && in.hash_mismatch == 0 && in.ts_mismatch == 0, 'MPEG-1: played, every hash the index''s');
         ysp_video('close', m);
+        % the index made and read in the UTF-8 folder
+        if ~octave
+            ump = fullfile(ud, 'm30.mpg');
+            fid = fopen(mp, 'r'); mb = fread(fid, Inf, '*uint8'); fclose(fid);
+            fid = fopen(ump, 'w'); fwrite(fid, mb, 'uint8'); fclose(fid);
+            check(ysp_video('make_index', ump) == 60, 'UTF-8: make_index in the folder');
+            m = ysp_video('open', g, ump);
+            in = ysp_video('info', m);
+            check(strcmp(in.backend, 'plmpeg') && in.frames == 60, 'UTF-8: MPEG-1 with its index in the folder');
+            ysp_video('close', m);
+        end
     else
         fprintf('skipped MPEG-1: ffmpeg is not on the path\n');
     end
 
     ysp_screen('close', h);
     fprintf('PASS test_mex_video (%d checks)\n', YSP_VV_CHECKS);
+end
+
+function rm_tree(d)
+    if exist('OCTAVE_VERSION', 'builtin')
+        system(sprintf('rmdir /s /q "%s"', d));   % the temp folder's name is ASCII
+    else
+        rmdir(d, 's');
+    end
 end
 
 function n = play_all(h, g, m, limit)

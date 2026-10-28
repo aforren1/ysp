@@ -5,7 +5,7 @@
  * out, with no device layer, thread or port. Also the bytes a host writes
  * (queries, output codes), for a script that drives a trigger box through
  * its own serial port. Built against the stable ABI / Limited API (CPython
- * 3.8+): the Decoder is a heap type made with PyType_FromSpec, and an event
+ * 3.10+): the Decoder is a heap type made with PyType_FromSpec, and an event
  * is a structseq made with PyStructSequence_NewType.
  *
  *     import ysp.box as box
@@ -23,7 +23,7 @@
  * the GIL; it never blocks.
  */
 #ifndef Py_LIMITED_API
-#define Py_LIMITED_API 0x03080000
+#define Py_LIMITED_API 0x030A0000
 #endif
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
@@ -37,7 +37,7 @@
 /* The distribution's version is the header's; a change to this binding
  * alone adds a fourth number. tests/test_box.py checks it against
  * pyproject.toml. */
-#define BOX_VERSION YBOX_VERSION_STRING
+#define BOX_VERSION YBOX_VERSION_STRING ".1"   /* .1: the CPython 3.10 floor (2026-10-27) */
 
 /* Entries the decoder fills per ybox_decode() call. The header needs 1;
  * more means fewer calls per chunk. 64 events are 3 KB in the object. */

@@ -81,7 +81,7 @@ ext = Extension(
     sources=["ysp_vis_ext.c"],
     depends=["vis_gfx.c", "vis_text.c", "vis_video.c"],   # ysp.gfx and ysp.video, included by ysp_vis_ext.c
     include_dirs=[HEADER_DIR, SHARE_DIR, os.path.join(SDL, "include"), PL_MPEG, os.path.join(LAYOUT_MSVC, "include")],
-    define_macros=[("Py_LIMITED_API", "0x03080000")],
+    define_macros=[("Py_LIMITED_API", "0x030A0000")],
     py_limited_api=True,
     library_dirs=[os.path.join(SDL, "lib"), os.path.join(LAYOUT_MSVC, "lib")],
     libraries=LAYOUT_LIBS + ["SDL3-static"] + SDL_SYSTEM_LIBS,
@@ -93,5 +93,5 @@ setup(
     ext_modules=[ext],
     packages=["ysp"],
     cmdclass={"build_ext": BuildExt},
-    options={"bdist_wheel": {"py_limited_api": "cp38"}},
+    options={"bdist_wheel": {"py_limited_api": "cp310"}},
 )

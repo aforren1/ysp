@@ -48,7 +48,8 @@ def big():
 
 def test_version_matches_pyproject():
     text = open(os.path.join(HERE, "..", "pyproject.toml")).read()
-    assert re.search(r'^version = "([^"]+)"', text, re.M).group(1) == yp.__version__ == yp.version()
+    assert re.search(r'^version = "([^"]+)"', text, re.M).group(1) == yp.__version__
+    assert yp.__version__.startswith(yp.version() + ".")
 
 
 def test_hashes():

@@ -3,8 +3,8 @@
  * A thin, dependency-free binding (no nanobind/pybind/Cython): it needs only
  * Python.h. The library implementation is compiled directly into this module.
  *
- * Built against the stable ABI / Limited API (Py_LIMITED_API 3.8), so one
- * compiled ysp/trials.abi3.so works across CPython >= 3.8; the Trials type is
+ * Built against the stable ABI / Limited API (Py_LIMITED_API 3.10), so one
+ * compiled ysp/trials.abi3.so works across CPython >= 3.10; the Trials type is
  * a heap type made with PyType_FromSpec.
  *
  *     import ysp.trials as pt
@@ -32,7 +32,7 @@
  * same call get a neutral answer (not done; u = 0).
  */
 #ifndef Py_LIMITED_API
-#define Py_LIMITED_API 0x03080000   /* target the CPython 3.8+ stable ABI */
+#define Py_LIMITED_API 0x030A0000   /* target the CPython 3.10+ stable ABI */
 #endif
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
@@ -1218,9 +1218,9 @@ static int t_build(TrialsObject* o, PyObject* args, PyObject* kwds, ytr_desc* d)
             PyErr_SetString(TArgumentError, "record_size is too large");
             return -1;
         }
-        /* Not PyMem_Calloc: it is in the stable ABI from 3.7, but 3.8 and
-         * 3.9 declare it only in cpython/pymem.h, which Py_LIMITED_API
-         * leaves out; PyMem_RawCalloc is Limited API only from 3.13. */
+        /* Malloc and memset because the 3.8 and 3.9 headers declared
+         * PyMem_Calloc outside the Limited API; the 3.10 floor's headers
+         * declare it, but this path needs no change. */
         o->records = (unsigned char*)PyMem_Malloc((size_t)YTR_MAX_TRIALS * (size_t)record_size);
         if (!o->records) { PyErr_NoMemory(); return -1; }
         memset(o->records, 0, (size_t)YTR_MAX_TRIALS * (size_t)record_size);
@@ -2419,7 +2419,7 @@ PyMODINIT_FUNC PyInit_trials(void) {
 
     /* From the compiled implementation, so it names the header actually built
      * in; the tests check pyproject.toml against it. */
-    if (PyModule_AddStringConstant(m, "__version__", ytr_version()) < 0) goto fail;
+    if (PyModule_AddStringConstant(m, "__version__", YTR_VERSION_STRING ".1") < 0) goto fail;   /* .1: the CPython 3.10 floor (2026-10-27) */
     PyModule_AddIntConstant(m, "DONE", YTR_DONE);
     PyModule_AddIntConstant(m, "ERR_ARG", YTR_ERR_ARG);
     PyModule_AddIntConstant(m, "ERR_CLOSED", YTR_ERR_CLOSED);

@@ -6063,6 +6063,9 @@ typedef struct stats8 {
     double mean[2][4];         /* rays, exact + rays: the mean edge error per size, worst rotation */
     double max_edge, off, exact, alone, buffer, target, added, jump, jump_ray, jump_corner, pal_frac, cpu;
     double rays_exact, rays_same;   /* .rays against the exact area; against the program without it */
+    double batch[2];                /* v0.17.2: runs of one block, batched, against one run: exact area, rays */
+    double batch_gap, batch_alias;  /* buffer runs with gaps against one run; rays runs, aliased every other, against max_batch 1 */
+    long   batch_draws[3], batch_blocks, batch_full;   /* draws batched, max_batch 1, reordered off; blocks; FULL at max_draws */
     double ol_exact, ol_same;       /* ysp/outline.h's set: against the exact coverage; against the test builder's */
     int    ol_ran;
     double cached[4];               /* a run cached in a target against drawn: RGBA16F over black, gray;
@@ -6581,6 +6584,21 @@ static int gl_suite(const char* name, ygfx_hl_device dev) {
         CHECK_LE(S8.off, 0.3);
         CHECK(S8.alone == 0.0);
         CHECK(S8.buffer == 0.0);
+        printf("  v0.17.2 curve runs of one block: 40 runs against one run %.2e (exact area), %.2e (rays); draws %ld batched, "
+               "%ld at max_batch 1, %ld in call order; %ld blocks; 1024 runs at the default max_draws: %s\n", S8.batch[0],
+               S8.batch[1], S8.batch_draws[0], S8.batch_draws[1], S8.batch_draws[2], S8.batch_blocks,
+               S8.batch_full == 0 ? "drawn, the 1025th refused" : "WRONG");
+        printf("  v0.17.2 curve runs: buffer runs with gaps against one run %.2e; rays runs aliased every other, batched against "
+               "one draw each %.2e\n", S8.batch_gap, S8.batch_alias);
+        CHECK(S8.batch[0] == 0.0);
+        CHECK(S8.batch[1] == 0.0);
+        CHECK(S8.batch_gap == 0.0);
+        CHECK(S8.batch_alias == 0.0);
+        CHECK(S8.batch_draws[0] == 3);    /* 16 + 16 + 8 */
+        CHECK(S8.batch_draws[1] == 40);
+        CHECK(S8.batch_draws[2] == 3);
+        CHECK(S8.batch_blocks == 40);
+        CHECK(S8.batch_full == 0);
         CHECK_LE(S8.target, 1e-3);   /* the target holds RGBA16F */
         CHECK(S8.added == 0.0);
         CHECK(S8.pal_bad == 0);
@@ -7595,6 +7613,106 @@ static void gl_v06_text(stats* st) {
         fromb = ygfx_crun(&R->g, &rd);
         gl_frame(&fromb, 1);
         S8.buffer = cs_rdiff(ref);
+        /* v0.17.2: a run without a palette is one block, and runs of one
+         * block batch, 16 a draw: 40 runs of one item each (the items over
+         * and over, so the order of the blending counts), each run with its
+         * own opacity, against the same 40 items in one run with that
+         * opacity in their contrast (a product either way: the same bits),
+         * batched, one draw each and in call order */
+        {
+            ygfx_citem it40[40], it40c[40];
+            ygfx_stim one40, many40[40];
+            ygfx_crun_desc bd;
+            int r;
+            for (k = 0; k < 40; k++) {
+                it40[k] = it[k % n];
+                it40c[k] = it40[k];
+                it40c[k].contrast = it40[k].contrast * (0.5f + 0.0625f * (float)(k % 5));
+            }
+            for (r = 0; r < 2; r++) {
+                int64_t d0;
+                bd = cs_rd(set, it40c, 40, 24);
+                bd.fields = YGFX_I_ORI | YGFX_I_SCALE | YGFX_I_CONTRAST;
+                bd.rays = r == 1;
+                one40 = ygfx_crun(&R->g, &bd);
+                gl_frame(&one40, 1);
+                cs_red(ref2);
+                for (k = 0; k < 40; k++) {
+                    bd.items = &it40[k]; bd.n = 1; bd.opacity = 0.5f + 0.0625f * (float)(k % 5);
+                    many40[k] = ygfx_crun(&R->g, &bd);
+                }
+                d0 = R->g.draws;
+                gl_frame(many40, 40);
+                if (r == 0) { S8.batch_draws[0] = (long)(R->g.draws - d0); S8.batch_blocks = R->g.n_blocks; }
+                S8.batch[r] = cs_rdiff(ref2);
+                R->g.max_batch = 1;
+                d0 = R->g.draws;
+                gl_frame(many40, 40);
+                if (r == 0) S8.batch_draws[1] = (long)(R->g.draws - d0);
+                S8.batch[r] = maxd(S8.batch[r], cs_rdiff(ref2));
+                R->g.max_batch = YGFX__BATCH;
+                R->g.no_reorder = 1;
+                d0 = R->g.draws;
+                gl_frame(many40, 40);
+                if (r == 0) S8.batch_draws[2] = (long)(R->g.draws - d0);
+                S8.batch[r] = maxd(S8.batch[r], cs_rdiff(ref2));
+                R->g.no_reorder = 0;
+            }
+            /* runs from one buffer whose items are not one after another
+             * (every other item) do not batch: against the same items in
+             * one run */
+            {
+                ygfx_citem odd[CS_N];
+                ygfx_stim gap[CS_N];
+                int m = 0;
+                for (k = 0; k < n; k += 2) {
+                    odd[m] = it[k];
+                    bd = cs_rd(set, it, 1, 24);
+                    bd.fields = YGFX_I_ORI | YGFX_I_SCALE | YGFX_I_CONTRAST;
+                    bd.items = NULL; bd.buf = b; bd.first = (uint32_t)k;
+                    gap[m++] = ygfx_crun(&R->g, &bd);
+                }
+                bd = cs_rd(set, odd, m, 24);
+                bd.fields = YGFX_I_ORI | YGFX_I_SCALE | YGFX_I_CONTRAST;
+                one40 = ygfx_crun(&R->g, &bd);
+                gl_frame(&one40, 1);
+                cs_red(ref2);
+                gl_frame(gap, m);
+                S8.batch_gap = cs_rdiff(ref2);
+            }
+            /* rays runs, every other one aliased: one program, but the
+             * fragment stage reads the flag from the draw's first block, so
+             * they must not share a draw. Against one draw each */
+            {
+                for (k = 0; k < 40; k++) {
+                    bd = cs_rd(set, &it40[k], 1, 24);
+                    bd.rays = true; bd.aliased = (k & 1) != 0;
+                    many40[k] = ygfx_crun(&R->g, &bd);
+                }
+                R->g.max_batch = 1;
+                gl_frame(many40, 40);
+                cs_red(ref2);
+                R->g.max_batch = YGFX__BATCH;
+                gl_frame(many40, 40);
+                S8.batch_alias = cs_rdiff(ref2);
+            }
+            /* max_draws counts blocks: the default 1024 takes 1024 such
+             * runs (each 3 blocks before 0.17.2) and refuses the next */
+            {
+                static ygfx_stim lots[1025];
+                int rc;
+                bd = cs_rd(set, it40, 1, 24);
+                for (k = 0; k < 1025; k++) lots[k] = ygfx_crun(&R->g, &bd);
+                CHECK(yscr_begin(&R->scr, &R->f) == YSCR_OK);
+                CHECK(ygfx_begin(&R->g, &R->f) == YGFX_OK);
+                rc = ygfx_draw_n(&R->g, lots, 1024);
+                S8.batch_full = rc == YGFX_OK ? 0 : 1;
+                rc = ygfx_draw(&R->g, &lots[1024]);
+                S8.batch_full += rc == YGFX_ERR_FULL ? 0 : 2;
+                CHECK(ygfx_end(&R->g) == YGFX_OK);
+                CHECK(yscr_flip(&R->scr) == YSCR_OK);
+            }
+        }
         /* the palette: an integer is its entry, bit for bit; a fraction mixes
          * two; contrast scales alpha. A rect glyph's interior over black. */
         {

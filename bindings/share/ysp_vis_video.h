@@ -87,29 +87,34 @@ static int yv_movie_take(yrt_event* buf, uint32_t cap, uint32_t* head, uint32_t*
     return 1;
 }
 
-/* Opens mv (zeroed) on g. true, or false with the reason in err; the
- * caller frees what mv holds with yv_movie_free() either way. */
-static bool yv_movie_open(yv_movie* mv, struct yv_gfx* g, yvid_desc* d, int64_t records, char* err, size_t cap) {
+/* Opens mv (zeroed) on g. 0, or a negative YVID_ERR_* with the reason in
+ * err: the header's own (mv->m.error_code, ysp/video.h 0.6.0) when
+ * yvid_open() refused. The caller frees what mv holds with yv_movie_free()
+ * either way. */
+static int yv_movie_open(yv_movie* mv, struct yv_gfx* g, yvid_desc* d, int64_t records, char* err, size_t cap) {
     yrt_ring_desc rd;
-    if (!g || !g->open) { snprintf(err, cap, "ysp_video: the gfx is closed"); return false; }
+    if (!g || !g->open) { snprintf(err, cap, "ysp_video: the gfx is closed"); return YVID_ERR_CLOSED; }
     if (records <= 0) records = YV_MOVIE_FRAMES;
-    if (records > 16777216) { snprintf(err, cap, "ysp_video: records: at most 16777216"); return false; }
+    if (records > 16777216) { snprintf(err, cap, "ysp_video: records: at most 16777216"); return YVID_ERR_ARG; }
     mv->ring_mem = calloc(1, YRT_RING_BYTES(YV_MOVIE_RING));
     mv->fr = (yrt_event*)calloc((size_t)records, sizeof(yrt_event));
     mv->ev = (yrt_event*)calloc(YV_MOVIE_EVENTS, sizeof(yrt_event));
-    if (!mv->ring_mem || !mv->fr || !mv->ev) { snprintf(err, cap, "ysp_video: out of memory for the records"); return false; }
+    if (!mv->ring_mem || !mv->fr || !mv->ev) { snprintf(err, cap, "ysp_video: out of memory for the records"); return YVID_ERR_FULL; }
     mv->fr_cap = (uint32_t)records;
     mv->ev_cap = YV_MOVIE_EVENTS;
     rd.memory = mv->ring_mem;
     rd.bytes = YRT_RING_BYTES(YV_MOVIE_RING);
-    if (!yrt_ring_open(&mv->ring, &rd)) { snprintf(err, cap, "ysp_video: %s", yrt_ring_error(&mv->ring)); return false; }
+    if (!yrt_ring_open(&mv->ring, &rd)) { snprintf(err, cap, "ysp_video: %s", yrt_ring_error(&mv->ring)); return YVID_ERR_ARG; }
     d->ring = &mv->ring;
-    if (!yvid_open(&mv->m, &g->g, d)) { snprintf(err, cap, "%s", yvid_error(&mv->m)); return false; }
+    if (!yvid_open(&mv->m, &g->g, d)) {
+        snprintf(err, cap, "%s", yvid_error(&mv->m));
+        return mv->m.error_code < 0 ? mv->m.error_code : YVID_ERR_ARG;
+    }
     mv->open = 1;
     mv->gfx = g;
     mv->next = g->movies;
     g->movies = mv;
-    return true;
+    return 0;
 }
 
 static void yv_movie_unlink(yv_movie* mv) {
@@ -331,40 +336,43 @@ static int yvv_lookup(const yv_name* t, const char* what, const char* s, int* ou
     return -1;
 }
 
-static int yvv_exists(const char* path) {
-    FILE* f = NULL;
-#if defined(_MSC_VER)
-    if (fopen_s(&f, path, "rb") != 0) f = NULL;
-#else
-    f = fopen(path, "rb");
-#endif
-    if (f) fclose(f);
-    return f != NULL;
-}
-
-/* A whole file into malloc'd memory (an index named by path). 0, or -1 with err. */
+/* A whole file into malloc'd memory: an index named by path when the movie
+ * is bytes (desc.index takes bytes only). The path is UTF-8, as
+ * ysp/video.h takes paths, so on Windows it goes to _wfopen_s as UTF-16.
+ * 0, or a negative YVID_ERR_* with err. */
 static int yvv_read_file(const char* path, void** out, size_t* n, char* err, size_t cap) {
     FILE* f = NULL;
     long len;
     void* b;
-#if defined(_MSC_VER)
-    if (fopen_s(&f, path, "rb") != 0) f = NULL;
+    int e;
+#if defined(_WIN32)
+    wchar_t w[1024];
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, w, 1024) <= 0) {
+        snprintf(err, cap, "ysp_video: the index path is not valid UTF-8 or longer than 1023 characters");
+        return YVID_ERR_ARG;
+    }
+    e = _wfopen_s(&f, w, L"rb");
+    if (e != 0) f = NULL;
 #else
     f = fopen(path, "rb");
+    e = f ? 0 : errno;
 #endif
-    if (!f) { snprintf(err, cap, "ysp_video: cannot open %s", path); return -1; }
+    if (!f) {
+        snprintf(err, cap, "ysp_video: cannot open %s", path);
+        return e == ENOENT || e == ENOTDIR ? YVID_ERR_NOT_FOUND : YVID_ERR_IO;
+    }
     if (fseek(f, 0, SEEK_END) != 0 || (len = ftell(f)) < 0 || fseek(f, 0, SEEK_SET) != 0) {
         fclose(f);
         snprintf(err, cap, "ysp_video: cannot read %s", path);
-        return -1;
+        return YVID_ERR_IO;
     }
     b = malloc(len > 0 ? (size_t)len : 1);
-    if (!b) { fclose(f); snprintf(err, cap, "ysp_video: out of memory for %s", path); return -1; }
+    if (!b) { fclose(f); snprintf(err, cap, "ysp_video: out of memory for %s", path); return YVID_ERR_FULL; }
     if (len > 0 && fread(b, 1, (size_t)len, f) != (size_t)len) {
         fclose(f);
         free(b);
         snprintf(err, cap, "ysp_video: cannot read %s", path);
-        return -1;
+        return YVID_ERR_IO;
     }
     fclose(f);
     *out = b;

@@ -4,12 +4,14 @@
  * The core test (screen_test.c) checks the window thread's rules without
  * SDL. This program runs the thread itself: windows it owns, a host that
  * sleeps between frames, yscr_window_call(), the display lists while it
- * runs, text input and the memory of its strings, the panic's release and
- * the end of a process whose window thread does not answer, two screens,
- * open and close cycles (handles, threads, memory), a fullscreen change
- * while open, gamepads, raw mice and triggers, and screens one after
- * another in one process (v0.10.2: each in front), and GL between flip()
- * and begin() in front (v0.10.3: no wait for the screen). It prints one line per
+ * runs (v0.10.4: and an id listed with no screen open), text input and
+ * the memory of its strings, the panic's release and the end of a process
+ * whose window thread does not answer, two screens, open and close cycles
+ * on both Windows backends (handles by type, threads, memory), a
+ * fullscreen change while open, gamepads, raw mice and triggers, and
+ * screens one after another in one process (v0.10.2: each in front), GL
+ * between flip() and begin() in front (v0.10.3: no wait for the screen),
+ * and no free buffer after a present (v0.10.4). It prints one line per
  * check and returns 0 when every check passed, 1 otherwise, 2 for a bad
  * argument. Windows are small and dark gray, in the top-left corner;
  * keys and mouse moves are sent with SendInput only while the test's own
@@ -22,7 +24,7 @@
  *     test_screen_window --only NAME  one case: idle call displays mixed
  *                                     text release kill two cycles
  *                                     fullscreen gamepads mice triggers
- *                                     sequence between mode
+ *                                     sequence between nofree mode
  *                                     (or YSCR_WINDOW_TEST_ONLY=NAME)
  *
  * Build: cl /W4 /Iinclude /I<SDL3>/include tests\adapt\screen_window_test.c
@@ -36,6 +38,15 @@
 /* The test seam of examples/screen/abort.c: arm the watchdog in a window,
  * for the kill case. */
 #define YSCR__PANIC_WINDOWED 1
+/* The nofree case: COMPOSITION's buffers all report busy while set, so a
+ * present finds none free, which never happened in testing. Windows only:
+ * elsewhere the test is a stub, and clang's -Wunused-variable would stop
+ * the build. */
+#if defined(_WIN32)
+static volatile long g_comp_busy;
+#define YSCR__COMP_IS_AVAILABLE(c, k, ok) \
+    (g_comp_busy ? (*(ok) = 0, (HRESULT)0) : YSCR__C((c)->buf[k], IsAvailable, (ok)))
+#endif
 #define YSP_SCREEN_IMPLEMENTATION
 #include "ysp/screen.h"
 
@@ -107,6 +118,73 @@ static void counts(proc_counts* c) {
     c->threads = (DWORD)threads_of_process();
     c->priv = pmi && pmi(GetCurrentProcess(), &m, sizeof m) ? m.priv : 0;
     c->sdl = g_sdl_allocs;
+}
+
+/* --- the process's handles with their types ------------------------------------
+ * A count says that handles leak, not whose they are; the types of the
+ * new ones name the object (v0.10.4 found 5 events a COMPOSITION open
+ * this way). ProcessHandleInformation (51) lists this process's handles
+ * only (Windows 8 and later). */
+typedef LONG (WINAPI *ntq_fn)(HANDLE, ULONG, void*, ULONG, ULONG*);
+typedef struct { HANDLE h; ULONG_PTR handle_count, pointer_count; ULONG access, type, attrs, reserved; } ph_entry;
+typedef struct { ULONG_PTR n, reserved; ph_entry e[1]; } ph_info;
+typedef struct { int n; HANDLE h[4096]; ULONG type[4096]; } handle_set;
+static int handles_of_process(handle_set* s) {
+    static unsigned char* buf;
+    static ULONG cap;
+    HMODULE nt = GetModuleHandleW(L"ntdll.dll");
+    ntq_fn q = (ntq_fn)(yscr_proc)GetProcAddress(nt, "NtQueryInformationProcess");
+    ULONG need = 0;
+    LONG st;
+    ULONG_PTR i;
+    const ph_info* p;
+    s->n = 0;
+    if (!q) return 0;
+    for (;;) {
+        st = q(GetCurrentProcess(), 51, buf, cap, &need);
+        if (st != (LONG)0xC0000004 && st != (LONG)0x80000005 && st != (LONG)0xC0000023) break;
+        cap = need + 65536;
+        free(buf);
+        buf = (unsigned char*)malloc(cap);
+        if (!buf) { cap = 0; return 0; }
+    }
+    if (st < 0 || !buf) return 0;
+    p = (const ph_info*)buf;
+    for (i = 0; i < p->n && s->n < 4096; i++, s->n++) { s->h[s->n] = p->e[i].h; s->type[s->n] = p->e[i].type; }
+    return 1;
+}
+static void type_name(HANDLE h, char* out, size_t cap) {
+    /* ObjectTypeInformation (2): a UNICODE_STRING first */
+    typedef struct { USHORT len, max; WCHAR* s; } ustr;
+    static union { ULONGLONG align; unsigned char b[1024]; } u8;
+    unsigned char* b = u8.b;
+    ntq_fn q = (ntq_fn)(yscr_proc)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryObject");
+    ULONG need = 0;
+    snprintf(out, cap, "?");
+    if (q && q(h, 2, b, sizeof u8.b, &need) >= 0) {
+        const ustr* u = (const ustr*)b;
+        WideCharToMultiByte(CP_UTF8, 0, u->s, u->len / 2, out, (int)cap - 1, NULL, NULL);
+        out[(int)cap - 1 < u->len / 2 ? (int)cap - 1 : u->len / 2] = '\0';
+    }
+}
+/* Prints the handles in b not in a, by type: "Event 5, Section 1". */
+static void print_new_handles(const char* what, const handle_set* a, const handle_set* b) {
+    struct { ULONG type; int n; HANDLE one; } t[32];
+    int nt = 0, i, j, k;
+    printf("  %s new handles:", what);
+    for (i = 0; i < b->n; i++) {
+        for (j = 0; j < a->n && !(a->h[j] == b->h[i] && a->type[j] == b->type[i]); j++) { }
+        if (j < a->n) continue;
+        for (k = 0; k < nt && t[k].type != b->type[i]; k++) { }
+        if (k == nt) { if (nt == 32) continue; t[nt].type = b->type[i]; t[nt].n = 0; t[nt].one = b->h[i]; nt++; }
+        t[k].n++;
+    }
+    for (k = 0; k < nt; k++) {
+        char name[64];
+        type_name(t[k].one, name, sizeof name);
+        printf("%s %s %d", k ? "," : "", name, t[k].n);
+    }
+    printf("%s\n", nt ? "" : " none");
 }
 
 /* --- a screen ---------------------------------------------------------------- */
@@ -284,8 +362,16 @@ static void case_displays(void) {
     printf("displays: the lists while the window thread runs\n");
     na = yscr_displays(a, 8);
     ka = yscr_modes(0, ma, 64);
+    /* v0.10.4: an id that yscr_displays() gave without a screen still names
+     * its display after SDL's video started again and numbered the
+     * displays anew (before: invalid at the next call). */
+    check("an id listed with no screen: yscr_modes() after SDL's video restarts",
+          na > 0 && yscr_modes(a[0].id, mb, 64) == ka);
     base_desc(&d, YSCR_WINDOW_THREAD_ON);
-    if (!open_screen(&s, &d)) { check("open (ON)", 0); return; }
+    d.display = na > 0 ? a[0].id : 0;
+    if (!open_screen(&s, &d)) { check("open (ON) on an id listed with no screen", 0); return; }
+    check("open (ON) on an id listed with no screen", 1);
+    check("... and yscr_modes() on it with the thread", yscr_modes(a[0].id, mb, 64) == ka);
     nb = yscr_displays(b, 8);
     kb = yscr_modes(0, mb, 64);
     printf("  before open: %d display(s), id %u %dx%d; with the thread: %d, id %u %dx%d\n", na, na > 0 ? a[0].id : 0,
@@ -500,43 +586,62 @@ static void case_two(void) {
     check("both closed: the thread is gone", yscr__wt.thread == NULL);
 }
 
-/* Open and close cycles: nothing grows with the cycles, and the window
- * thread adds nothing to what 0.9.0's path (OFF) leaves. Counted from the
- * second cycle, after the first opens have loaded ANGLE, D3D and SDL. */
-static int cycles(int32_t wt, int n, proc_counts* c1, proc_counts* c2) {
+/* Open and close cycles: nothing grows with the cycles on either Windows
+ * backend, with the window thread OFF or ON. Counted from the second
+ * cycle, after the first opens have loaded ANGLE, D3D and SDL. Before
+ * v0.10.4 each COMPOSITION open left 5 events (the presentation manager's
+ * statistics and lost events and the 3 buffers' available events). */
+static handle_set g_hs1, g_hs2;
+static int cycles(int32_t be, int32_t wt, int n, proc_counts* c1, proc_counts* c2) {
     static yscr_screen s;
     yscr_desc d;
     int i, ok = 1;
     base_desc(&d, wt);
+    d.backend = be;
     for (i = 0; i < n && ok; i++) {
         ok = open_screen(&s, &d) && frames(&s, 20, NULL, NULL) == YSCR_OK;
         yscr_close(&s);
-        if (i == 1) counts(c1);
+        if (i == 1) { counts(c1); handles_of_process(&g_hs1); }
     }
     counts(c2);
+    handles_of_process(&g_hs2);
     return ok;
 }
 
 static void case_cycles(void) {
-    proc_counts a1, a2, b1, b2;
+    static const struct { int32_t be; const char* name; } bes[2] = {
+        { YSCR_BACKEND_COMPOSITION, "COMPOSITION" }, { YSCR_BACKEND_DXGI_FLIP, "DXGI_FLIP" } };
     const int n = 10;
-    int ok_off, ok_on;
-    double h_off, h_on;
-    printf("cycles: %d opens and closes, window thread OFF, then ON\n", n);
-    ok_off = cycles(YSCR_WINDOW_THREAD_OFF, n, &a1, &a2);
-    ok_on = cycles(YSCR_WINDOW_THREAD_ON, n, &b1, &b2);
-    h_off = ((double)a2.handles - (double)a1.handles) / (n - 2);
-    h_on = ((double)b2.handles - (double)b1.handles) / (n - 2);
-    printf("  OFF, cycle 2 to %d: handles %+ld (%+.2f a cycle), threads %+ld, SDL allocations %+ld, private %+.2f MB\n", n,
-           (long)a2.handles - (long)a1.handles, h_off, (long)a2.threads - (long)a1.threads, (long)(a2.sdl - a1.sdl),
-           ((double)a2.priv - (double)a1.priv) / 1048576.0);
-    printf("  ON,  cycle 2 to %d: handles %+ld (%+.2f a cycle), threads %+ld, SDL allocations %+ld, private %+.2f MB\n", n,
-           (long)b2.handles - (long)b1.handles, h_on, (long)b2.threads - (long)b1.threads, (long)(b2.sdl - b1.sdl),
-           ((double)b2.priv - (double)b1.priv) / 1048576.0);
-    check("every cycle opened and ran", ok_off && ok_on);
-    check("ON: no more handles a cycle than OFF (+0.5)", h_on <= h_off + 0.5);
-    check("ON: no thread left behind", b2.threads <= b1.threads);
-    check("ON: no SDL allocation left behind", b2.sdl <= b1.sdl);
+    int b, wt;
+    printf("cycles: %d opens and closes a backend, window thread OFF, then ON\n", n);
+    for (b = 0; b < 2; b++) {
+        double h[2] = { 0, 0 };
+        for (wt = 0; wt < 2; wt++) {
+            proc_counts c1, c2;
+            char what[160];
+            int ok = cycles(bes[b].be, wt ? YSCR_WINDOW_THREAD_ON : YSCR_WINDOW_THREAD_OFF, n, &c1, &c2);
+            h[wt] = ((double)c2.handles - (double)c1.handles) / (n - 2);
+            printf("  %s %s, cycle 2 to %d: handles %+ld (%+.2f a cycle), threads %+ld, SDL allocations %+ld, private %+.2f MB\n",
+                   bes[b].name, wt ? "ON " : "OFF", n, (long)c2.handles - (long)c1.handles, h[wt],
+                   (long)c2.threads - (long)c1.threads, (long)(c2.sdl - c1.sdl), ((double)c2.priv - (double)c1.priv) / 1048576.0);
+            snprintf(what, sizeof what, "%s %s:", bes[b].name, wt ? "ON" : "OFF");
+            print_new_handles(what, &g_hs1, &g_hs2);
+            snprintf(what, sizeof what, "%s %s: every cycle opened and ran", bes[b].name, wt ? "ON" : "OFF");
+            check(what, ok);
+            /* A leak of 1 a cycle is +8 here; the OS's own pools move by
+             * a few handles at most. */
+            snprintf(what, sizeof what, "%s %s: handles flat (under +0.5 a cycle)", bes[b].name, wt ? "ON" : "OFF");
+            check(what, h[wt] < 0.5);
+            snprintf(what, sizeof what, "%s %s: no SDL allocation left behind", bes[b].name, wt ? "ON" : "OFF");
+            check(what, c2.sdl <= c1.sdl);
+            /* OFF printed only: the OS's thread pool came and went by one
+             * thread between the counts (+1 once, COMPOSITION OFF). */
+            if (wt) {
+                snprintf(what, sizeof what, "%s ON: no thread left behind", bes[b].name);
+                check(what, c2.threads <= c1.threads);
+            }
+        }
+    }
 }
 
 /* Fullscreen off and on again while open, through the window call. */
@@ -863,6 +968,88 @@ static void case_between(void) {
     }
 }
 
+/* No free buffer after a present (v0.10.4). COMPOSITION binds a free
+ * buffer after each present (v0.10.3); with none free no surface is
+ * current, so GL into framebuffer 0 does nothing until yscr_bind() or
+ * begin() finds one. The hook above reports every buffer busy. */
+typedef unsigned int (__stdcall *gl_status_fn)(unsigned int);
+typedef unsigned int (__stdcall *gl_error_fn)(void);
+/* One frame whose present finds every buffer busy. Set after begin(): set
+ * before it, begin() itself finds none and waits. Leaves the hook set. */
+static int frame_none_free(yscr_screen* s) {
+    yscr_frame f;
+    int rc = yscr_begin(s, &f);
+    if (rc != YSCR_OK) return rc;
+    g_cc(0.12f, 0.12f, 0.12f, 1.0f);
+    g_cl(0x4000u);
+    g_comp_busy = 1;
+    return yscr_flip(s);
+}
+static void case_nofree(void) {
+    static yscr_screen s;
+    yscr_desc d;
+    int wt;
+    printf("nofree: COMPOSITION with no free buffer after a present\n");
+    for (wt = 0; wt < 2; wt++) {
+        const char* on = wt ? "ON" : "OFF";
+        unsigned char px[4];
+        char what[128];
+        int64_t t0, t1;
+        HANDLE th;
+        yscr_frame f;
+        unsigned int st, err;
+        int rc;
+        gl_read_fn rd;
+        gl_status_fn fbs;
+        gl_error_fn ge;
+        base_desc(&d, wt ? YSCR_WINDOW_THREAD_ON : YSCR_WINDOW_THREAD_OFF);
+        d.backend = YSCR_BACKEND_COMPOSITION;
+        if (!open_screen(&s, &d)) { check("nofree: open", 0); continue; }
+        rd = (gl_read_fn)yscr_gl_proc(&s, "glReadPixels");
+        fbs = (gl_status_fn)yscr_gl_proc(&s, "glCheckFramebufferStatus");
+        ge = (gl_error_fn)yscr_gl_proc(&s, "glGetError");
+        frames(&s, 30, NULL, NULL);
+        snprintf(what, sizeof what, "%s: a frame whose present finds no buffer free", on);
+        check(what, frame_none_free(&s) == YSCR_OK);
+        st = fbs(0x8D40u);   /* GL_FRAMEBUFFER */
+        snprintf(what, sizeof what, "%s: no surface after the present (status 0x%04x)", on, st);
+        check(what, st == 0x8219u);   /* GL_FRAMEBUFFER_UNDEFINED: no default framebuffer */
+        while (ge() != 0) { }
+        memset(px, 0x5a, sizeof px);
+        g_between_armed = 1;
+        th = CreateThread(NULL, 0, between_dog, NULL, 0, NULL);
+        t0 = yrt_now_ns();
+        g_cc(0.5f, 0.5f, 0.5f, 1.0f);
+        g_cl(0x4000u);
+        rd(0, 0, 1, 1, 0x1908u, 0x1401u, px);
+        t1 = yrt_now_ns();
+        g_between_armed = 0;
+        WaitForSingleObject(th, INFINITE);
+        CloseHandle(th);
+        err = ge();
+        snprintf(what, sizeof what, "%s: a draw and a read between frames return (%.1f ms)", on, (double)(t1 - t0) / 1e6);
+        check(what, t1 - t0 < 1000000000);
+        snprintf(what, sizeof what, "%s: ... and do nothing (error 0x%04x, pixel unchanged)", on, err);
+        check(what, err == 0x0506u && px[0] == 0x5a && px[3] == 0x5a);   /* GL_INVALID_FRAMEBUFFER_OPERATION */
+        yscr_bind(&s);
+        st = fbs(0x8D40u);
+        snprintf(what, sizeof what, "%s: yscr_bind() with none free: still no surface", on);
+        check(what, st == 0x8219u);
+        g_comp_busy = 0;
+        yscr_bind(&s);
+        st = fbs(0x8D40u);
+        snprintf(what, sizeof what, "%s: yscr_bind() when one is free: a surface (status 0x%04x)", on, st);
+        check(what, st == 0x8CD5u);   /* GL_FRAMEBUFFER_COMPLETE */
+        rc = frame_none_free(&s);
+        g_comp_busy = 0;
+        snprintf(what, sizeof what, "%s: begin() right after a present with none free", on);
+        check(what, rc == YSCR_OK && yscr_begin(&s, &f) == YSCR_OK && fbs(0x8D40u) == 0x8CD5u && yscr_flip(&s) == YSCR_OK);
+        snprintf(what, sizeof what, "%s: frames after it", on);
+        check(what, frames(&s, 30, NULL, NULL) == YSCR_OK && yscr_wait_flip(&s, NULL) == YSCR_OK);
+        yscr_close(&s);
+    }
+}
+
 typedef struct { const char* name; void (*fn)(void); int default_on; } test_case;
 static const test_case g_cases[] = {
     { "idle", case_idle, 1 }, { "call", case_call, 1 }, { "displays", case_displays, 1 },
@@ -870,7 +1057,7 @@ static const test_case g_cases[] = {
     { "kill", case_kill, 1 }, { "two", case_two, 1 }, { "cycles", case_cycles, 1 },
     { "fullscreen", case_fullscreen, 1 }, { "gamepads", case_gamepads, 1 }, { "mice", case_mice, 1 },
     { "triggers", case_triggers, 1 }, { "sequence", case_sequence, 1 }, { "between", case_between, 1 },
-    { "mode", case_mode, 0 }
+    { "nofree", case_nofree, 1 }, { "mode", case_mode, 0 }
 };
 
 int main(int argc, char** argv) {

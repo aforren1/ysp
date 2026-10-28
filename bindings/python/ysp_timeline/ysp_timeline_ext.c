@@ -41,7 +41,7 @@
  * ytl_evaluate is tl_api_evaluate(): Timeline.evaluate() without the report.
  */
 #ifndef Py_LIMITED_API
-#define Py_LIMITED_API 0x03080000
+#define Py_LIMITED_API 0x030A0000
 #endif
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
@@ -64,7 +64,7 @@
 /* The distribution's version is the header's; a change to this binding
  * alone adds a fourth number. tests/test_timeline.py checks this against
  * pyproject.toml. */
-#define TL_VERSION YTL_VERSION_STRING ".1"   /* .1: the shared table (_C_API), pins, BusyError */
+#define TL_VERSION YTL_VERSION_STRING ".2"   /* .1: the shared table (_C_API), pins, BusyError; .2: the CPython 3.10 floor */
 
 /* Seconds at or above this are refused: the header's range is |t| < 2^62
  * ns (TIME), and 4611686018 s is the largest whole second below it. */

@@ -2,7 +2,7 @@
  *
  * A thin, dependency-free binding: it needs only Python.h and compiles the
  * header's implementation (and ysp/json.h's, which ysp/pack.h requires) into
- * the module. Built against the stable ABI / Limited API (CPython 3.8+), so
+ * the module. Built against the stable ABI / Limited API (CPython 3.10+), so
  * the Pack type is a heap type made with PyType_FromSpec.
  *
  *     import ysp.pack as yp
@@ -27,7 +27,7 @@
  * closed; the last running call unmaps it when it returns.
  */
 #ifndef Py_LIMITED_API
-#define Py_LIMITED_API 0x03080000
+#define Py_LIMITED_API 0x030A0000
 #endif
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
@@ -657,7 +657,7 @@ PyMODINIT_FUNC PyInit_pack(void) {
     if (!EntryType) goto fail;
     Py_INCREF(EntryType);
     if (PyModule_AddObject(m, "Entry", EntryType) < 0) { Py_DECREF(EntryType); goto fail; }
-    if (PyModule_AddStringConstant(m, "__version__", YPAK_VERSION_STRING) < 0) goto fail;
+    if (PyModule_AddStringConstant(m, "__version__", YPAK_VERSION_STRING ".1") < 0) goto fail;   /* .1: the CPython 3.10 floor (2026-10-27) */
     PyModule_AddIntConstant(m, "FORMAT", YPAK_FORMAT);
     PyModule_AddIntConstant(m, "ALIGN", YPAK_ALIGN);
     PyModule_AddIntConstant(m, "CHUNK", (long)YPAK_CHUNK);
