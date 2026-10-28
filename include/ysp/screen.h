@@ -429,7 +429,8 @@
  *     defined. On COMPOSITION, when no buffer is free at the flip, no surface
  *     is current until bind() or begin() finds one: draws to framebuffer
  *     0 then do nothing (measured: a buffer was free at every present;
- *     docs/screen.md, "Between frames").
+ *     docs/screen.md, "Between frames"; the case without one is tested
+ *     through a hook since v0.10.4).
  *
  *   TIERS (yscr_tier, record.tier, caps.worst_tier, desc.min_tier)
  *     Each flip gets a tier from its backend, its path and the source of its
@@ -1833,7 +1834,15 @@
  *          groups, input restamping, mode lists and the parameter table.
  *          The other swap paths are stubs that refuse to open.
  *
- *   STATUS: v0.10.3 (GL between frames; docs/screen.md, "Between
+ *   STATUS: v0.10.4 (docs/screen.md, "Handles, no free buffer, display
+ *   ids"): on the laptop below, 10 opens and closes a backend gained 40
+ *   handles (Event 40) on COMPOSITION before, ON and OFF, and 0 after on
+ *   COMPOSITION and DXGI_FLIP; the no-free-buffer case (a hook) in front:
+ *   no surface, a draw and a read return at once and do nothing, the next
+ *   begin() runs (16 of 16 checks); an id listed with no screen opens its
+ *   display after SDL's video restarted (one display). MSVC x86 compile
+ *   checks and the core test pass; no x86 window was opened.
+ *   v0.10.3 (GL between frames; docs/screen.md, "Between
  *   frames"): on the laptop below, AC, COMPOSITION in front, a prime or a
  *   clear and read of framebuffer 0 after flip() waited more than 90 s
  *   before (4 of 4 C runs, 3 of 3 Python) and took 0.7 to 102 ms after

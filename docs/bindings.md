@@ -255,7 +255,7 @@ clock the binding's frames and decisions equal the C path's line by line
   open, and the file finds its handles again when it loads again. Verified
   in MATLAB R2023a and Octave 10.1 (`test_mex_vis.m`,
   `test_mex_vis_gfx.m`; `test_mex_vis_window.m` with a window).
-- **Versions.** `ysp-vis` tracks `ysp/screen.h`'s version (0.10.3;
+- **Versions.** `ysp-vis` tracks `ysp/screen.h`'s version (0.10.4;
   0.10.2.1 was 0.10.2 with phase C, text, a binding-only change; 0.10.1.1
   was 0.10.1 and phase B, gfx and movies), and
   `ysp.screen.HEADER_VERSION`, `ysp.gfx.HEADER_VERSION` and
@@ -520,7 +520,7 @@ v0.8.1), and `ysp-audio` is 0.7.2, the header's. The adaptive MEX
 functions and `ysp_color` have no number of their own: `'version'`
 returns the header's.
 
-`ysp-vis` is 0.10.3 (2026-10-27): one distribution for three headers,
+`ysp-vis` is 0.10.4 (2026-10-27): one distribution for three headers,
 so its version tracks `ysp/screen.h`'s, and a release for a change of
 `ysp/gfx.h` or `ysp/video.h` alone, or of the binding alone, adds the
 fourth number ([ysp-vis](#display-stimuli-movies-ysp-vis)); 0.10.1.1 was

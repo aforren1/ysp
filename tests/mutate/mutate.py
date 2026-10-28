@@ -18,6 +18,7 @@ in-tree headers while a run is in progress.
 See tests/mutate/README.md.
 """
 import argparse
+import json
 import os
 import re
 import shlex
@@ -179,7 +180,12 @@ def run(exe, test, mutant, cwd):
         # the test, so the timeout is applied inside it, by this script.
         fwd = lambda p: p.replace("\\", "/")   # a path bash runs as it is
         cmd = GUARD + [fwd(sys.executable), fwd(os.path.abspath(__file__)), "--run-one", str(t), fwd(exe)]
-        r = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=cwd, errors="replace")
+        # The test's environment goes to the test only: a test's PATH (the
+        # window test's names SDL3.dll's directory and System32) would hide
+        # the guard's own tools.
+        genv = dict(os.environ)
+        genv["YSP_MUT_RUN_ENV"] = json.dumps(env)
+        r = subprocess.run(cmd, capture_output=True, text=True, env=genv, cwd=cwd, errors="replace")
         out = r.stdout + r.stderr
         if TIMEOUT_MARK in out:
             return None, set(), ""
@@ -195,8 +201,9 @@ def run(exe, test, mutant, cwd):
 
 def run_one(seconds, exe):
     """--run-one: runs exe with a timeout, under the guard."""
+    env = json.loads(os.environ.get("YSP_MUT_RUN_ENV", "null")) or None
     try:
-        r = subprocess.run([exe], timeout=float(seconds))
+        r = subprocess.run([exe], timeout=float(seconds), env=env)
     except subprocess.TimeoutExpired:
         print(TIMEOUT_MARK, flush=True)
         return 124
