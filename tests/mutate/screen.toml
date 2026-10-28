@@ -1350,7 +1350,7 @@ name = "a live thread counted as hung"
 test = "window"
 why = "v0.10.0: a heartbeat within 1 s means the thread answers: release, not end the process."
 find = '''    return yscr__wt.thread && !yscr__wt.stuck &&
-           yscr__now() - InterlockedCompareExchange64(&yscr__wt.beat, 0, 0) < YSCR__WT_ALIVE_NS;'''
+           yscr__now() - yscr__a_load64(&yscr__wt.beat) < YSCR__WT_ALIVE_NS;'''
 replace = '''    return 0;'''
 env = { YSCR_WINDOW_TEST_ONLY = "release" }
 
@@ -1467,3 +1467,55 @@ why = "v0.10.3: after a present the shown buffer stayed framebuffer 0, and a dra
 find = '''    yscr__comp_park(c);'''
 replace = '''    (void)0;'''
 env = { YSCR_WINDOW_TEST_ONLY = "between" }
+
+# --- v0.10.4: handles, no free buffer, display ids (lk-, bf-, ds-), on real
+# windows.
+
+[[mutant]]
+id = "lk-01"
+name = "the buffers' available events left open"
+test = "window"
+why = "v0.10.4: each COMPOSITION open left the 3 buffers' available events open; a program that opens a screen per block gains handles without end."
+find = '''    for (i = 0; i < YSCR__COMP_BUFFERS; i++) if (c->avail[i]) CloseHandle(c->avail[i]);
+'''
+replace = ''
+env = { YSCR_WINDOW_TEST_ONLY = "cycles" }
+
+[[mutant]]
+id = "lk-02"
+name = "the statistics and lost events left open"
+test = "window"
+why = "v0.10.4: each COMPOSITION open left the presentation manager's statistics and lost events open."
+find = '''    if (c->stat_event) CloseHandle(c->stat_event);
+    if (c->lost_event) CloseHandle(c->lost_event);
+'''
+replace = ''
+env = { YSCR_WINDOW_TEST_ONLY = "cycles" }
+
+[[mutant]]
+id = "bf-02"
+name = "no free buffer: the shown buffer stays bound"
+test = "window"
+why = "With no free buffer after a present, the shown buffer must not stay framebuffer 0: a draw into it waits until a newer present releases it (v0.10.3, more than 90 s in front)."
+find = '''    c->parked = -1;
+    yscr__egl.MakeCurrent(c->dpy, NULL, NULL, c->ctx);'''
+replace = '''    c->parked = -1;'''
+env = { YSCR_WINDOW_TEST_ONLY = "nofree" }
+
+[[mutant]]
+id = "bf-03"
+name = "yscr_bind() does not look again"
+test = "window"
+why = "With no buffer free at the present, yscr_bind() must look again: ygfx_prime() binds and then draws, and with nothing current its draw is lost."
+find = '''    if (c->parked < 0) yscr__comp_park(c);   /* a buffer may be free now */'''
+replace = '''    if (c->parked < 0) return;'''
+env = { YSCR_WINDOW_TEST_ONLY = "nofree" }
+
+[[mutant]]
+id = "ds-01"
+name = "a listed id not mapped after SDL's video restarts"
+test = "window"
+why = "v0.10.4: SDL numbers the displays anew at each start of its video, so an id from yscr_displays() without a screen named no display at the next call or open."
+find = '''    if (!e) return out;   /* not from yscr_displays(): SDL judges it */'''
+replace = '''    return out;'''
+env = { YSCR_WINDOW_TEST_ONLY = "displays" }

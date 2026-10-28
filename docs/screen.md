@@ -3237,6 +3237,8 @@ callback it stayed off. Both with the window thread ON and OFF.
   (COMPOSITION, 480 x 300 window, settling off). No thread and no SDL
   allocation was left. The handles are not the window thread's; whose
   they are was not traced (ANGLE, D3D11 or DComp are candidates).
+  Fixed in v0.10.4: 5 events of COMPOSITION's open
+  ([Handles, no free buffer, display ids](#handles-no-free-buffer-display-ids-v0104)).
 - **SDL's display ids change with each start of SDL's video.** A
   `yscr_displays()` before the first open returned id 1 for the panel;
   with a screen open, id 3. SDL numbers displays anew at each video
@@ -3244,8 +3246,9 @@ callback it stayed off. Both with the window thread ON and OFF.
   for the call. So a `desc.display` taken from `yscr_displays()` before
   the first open does not name a display at that open (v0.9.0 too; one
   display here, so `desc.display` 0 was used throughout). With the
-  window thread running, the ids stay valid between opens. Not fixed:
-  a fix would match displays by name or bounds; to be decided.
+  window thread running, the ids stay valid between opens. Fixed in
+  v0.10.4: an id that is no longer current is matched by name and bounds
+  ([Handles, no free buffer, display ids](#handles-no-free-buffer-display-ids-v0104)).
 
 ## The grid after a gap (v0.10.1)
 
@@ -3750,18 +3753,13 @@ unchanged: a record costs it 0.35 us (above).
 
 ## Not measured
 
-Open findings (v0.10.0, `tests/adapt/screen_window_test.c`; not fixed):
+The open findings of v0.10.0 (5 handles an open and close, SDL's
+display ids) are fixed in v0.10.4
+([Handles, no free buffer, display ids](#handles-no-free-buffer-display-ids-v0104)).
 
-- **5 handles leak per open and close**, with the window thread OFF and
-  ON alike: from the second to the tenth cycle the process gained 40 and
-  41 handles (COMPOSITION, a 480 x 300 window, settling off). Whose they
-  are (ANGLE, D3D11, DComp) was not traced.
-- **SDL's display ids change at each start of SDL's video.** A
-  `desc.display` taken from `yscr_displays()` before the first open does
-  not name the display at that open, because `yscr_displays()` without a
-  screen starts and stops SDL's video for the call and SDL numbers the
-  displays anew (id 1, then 3; v0.9.0 too). With a screen open the ids
-  stay valid. A fix would match displays by name or bounds.
+- The display-id match with two or more displays (one display here), and
+  after a display is added, removed or moved between the list and the
+  open.
 - The window thread (v0.10.0) with two displays, a display that turns
   off while a screen is open, MATLAB's desktop (only `-batch` ran), a MEX
   file cleared with `clear mex` while a screen is open, a static SDL3

@@ -1,4 +1,4 @@
-/* ysp/screen.h - v0.10.3 - public domain single-header display library
+/* ysp/screen.h - v0.10.4 - public domain single-header display library
  *
  *   The window, the GL ES 3.0 context, the display mode and the swap path
  *   of a stimulus display, with flip at a time: each frame learns the
@@ -1498,6 +1498,16 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.10.4 - COMPOSITION closes the 5 events its open got (the
+ *          presentation manager's statistics and lost events, the 3
+ *          buffers' available events): each open and close left 5 handles.
+ *          An id from yscr_displays() names its display after SDL's video
+ *          starts again (SDL numbers the displays anew each time, so an id
+ *          listed with no screen open was invalid at the next call or
+ *          open). x86: the 64-bit atomic stores use compare-exchange
+ *          (MSVC x86 has no InterlockedExchange64), and COMPOSITION
+ *          refuses x86 as it refuses ARM64. A test hook makes the case of
+ *          no free buffer after a present happen (YSCR__COMP_IS_AVAILABLE).
  *   v0.10.3 - GL STATE between frames, COMPOSITION: after a present the
  *          shown buffer stayed framebuffer 0, and a draw into it between
  *          flip() and the next begin() (ygfx_prime()) waited until a newer
@@ -2044,7 +2054,7 @@
  *   tests/compile/screen_com.cpp checks every COM slot and struct the
  *   header declares against the Windows SDK (MSVC; MinGW for DComp only).
  *   NOT done: any rate but 60 Hz, any other GPU, Windows 10 (COMPOSITION
- *   needs 11), ARM64 (COMPOSITION refuses it: the hidden-pointer returns
+ *   needs 11), ARM64 and x86 (COMPOSITION refuses them: the hidden-pointer returns
  *   are checked only on x64), two physical displays, variable refresh
  *   (refused), macOS, X11 and Wayland swap paths (stubs). Linux runs the
  *   core and the simulated display only.
@@ -2056,8 +2066,8 @@
 
 #define YSCR_VERSION_MAJOR 0
 #define YSCR_VERSION_MINOR 10
-#define YSCR_VERSION_PATCH 3
-#define YSCR_VERSION_STRING "0.10.3"
+#define YSCR_VERSION_PATCH 4
+#define YSCR_VERSION_STRING "0.10.4"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -3508,7 +3518,20 @@ static int yscr__a_cas(volatile int32_t* p, int32_t want, int32_t v) {
     return InterlockedCompareExchange((volatile LONG*)p, (LONG)v, (LONG)want) == (LONG)want;
 }
 static int64_t yscr__a_load64(volatile int64_t* p) { return (int64_t)InterlockedCompareExchange64((volatile LONG64*)p, 0, 0); }
-static void yscr__a_store64(volatile int64_t* p, int64_t v) { (void)InterlockedExchange64((volatile LONG64*)p, (LONG64)v); }
+/* x86 MSVC has no InterlockedExchange64 (CI's 32-bit build, v0.10.4);
+ * its 64-bit compare-exchange (cmpxchg8b) is the one 64-bit atomic there. */
+static void yscr__a_store64(volatile int64_t* p, int64_t v) {
+#if defined(_M_IX86) || defined(__i386__)
+    LONG64 old = *(volatile LONG64*)p;
+    for (;;) {
+        LONG64 seen = InterlockedCompareExchange64((volatile LONG64*)p, (LONG64)v, old);
+        if (seen == old) break;
+        old = seen;
+    }
+#else
+    (void)InterlockedExchange64((volatile LONG64*)p, (LONG64)v);
+#endif
+}
 #else
 static int32_t yscr__a_inc(volatile int32_t* p) { return __atomic_add_fetch(p, 1, __ATOMIC_SEQ_CST); }
 static int32_t yscr__a_load(volatile int32_t* p) { return __atomic_load_n(p, __ATOMIC_SEQ_CST); }
@@ -4296,8 +4319,50 @@ static void yscr__pad_close(yscr_screen* s, SDL_JoystickID id, bool all);
 static void yscr__devices_at_open(yscr_screen* s);
 static void yscr__device_event(yscr_screen* s, const SDL_Event* ev);
 
+/* SDL numbers the displays anew at each start of its video, and
+ * yscr_displays() without a screen starts and stops it for the call, so its
+ * ids were stale at the next call (v0.10.4; id 1, then 3 at open). SDL
+ * never gives an id out twice in a process, so an id that is not current
+ * names the display yscr_displays() listed under it: the current one with
+ * the same name and bounds, else the only one with the same bounds or the
+ * same name. SDL video calls run on one thread (WINDOW THREAD), so the
+ * list needs no lock. */
+typedef struct { uint32_t id; char name[64]; int32_t x, y, w, h; } yscr__listed_display;
+static yscr__listed_display yscr__listed[16];
+static unsigned yscr__n_listed;
+static void yscr__display_listed(const yscr_display_info* d) {
+    unsigned i, n = yscr__n_listed < 16 ? yscr__n_listed : 16;
+    yscr__listed_display* e;
+    for (i = 0; i < n && yscr__listed[i].id != d->id; i++) { }
+    e = i < n ? &yscr__listed[i] : &yscr__listed[yscr__n_listed++ % 16];
+    e->id = d->id;
+    memcpy(e->name, d->name, sizeof e->name);
+    e->x = d->x; e->y = d->y; e->w = d->w; e->h = d->h;
+}
 static SDL_DisplayID yscr__display_id(uint32_t display) {
-    return display ? (SDL_DisplayID)display : SDL_GetPrimaryDisplay();
+    const yscr__listed_display* e = NULL;
+    SDL_DisplayID* ids;
+    SDL_DisplayID out = (SDL_DisplayID)display, by_rect = 0, by_name = 0;
+    int i, n = 0, n_rect = 0, n_name = 0;
+    unsigned k, n_listed = yscr__n_listed < 16 ? yscr__n_listed : 16;
+    if (!display) return SDL_GetPrimaryDisplay();
+    for (k = 0; k < n_listed; k++) if (yscr__listed[k].id == display) e = &yscr__listed[k];
+    if (!e) return out;   /* not from yscr_displays(): SDL judges it */
+    ids = SDL_GetDisplays(&n);
+    for (i = 0; ids && i < n; i++) {
+        SDL_Rect r;
+        int same_rect, same_name;
+        if (ids[i] == (SDL_DisplayID)display) { SDL_free(ids); return out; }   /* current */
+        same_rect = SDL_GetDisplayBounds(ids[i], &r) && r.x == e->x && r.y == e->y && r.w == e->w && r.h == e->h;
+        same_name = SDL_GetDisplayName(ids[i]) && !strncmp(SDL_GetDisplayName(ids[i]), e->name, sizeof e->name - 1);
+        if (same_rect && same_name) { out = ids[i]; n_rect = n_name = -1; break; }
+        if (same_rect) { by_rect = ids[i]; n_rect++; }
+        if (same_name) { by_name = ids[i]; n_name++; }
+    }
+    if (n_rect == 1) out = by_rect;
+    else if (n_rect == 0 && n_name == 1) out = by_name;
+    SDL_free(ids);
+    return out;
 }
 
 /* yscr_displays(), yscr_modes() and the desktop size for
@@ -4357,6 +4422,7 @@ static int yscr__displays_here(yscr_display_info* out, int cap) {
             if (SDL_GetDisplayBounds(ids[i], &r)) { d->x = r.x; d->y = r.y; d->w = r.w; d->h = r.h; }
             if (dm) yscr__mode_from_sdl(dm, &d->desktop);
             d->primary = ids[i] == primary;
+            yscr__display_listed(d);
         }
         count++;
     }
@@ -5986,6 +6052,16 @@ static void yscr__comp_close(void* vctx);
  * concurrent (MEMORY AND THREADS). */
 static int yscr__comp_auto;
 
+#if defined(_M_ARM64) || defined(__aarch64__) || defined(_M_IX86) || defined(__i386__)
+static int yscr__comp_open(void* vctx, const yscr_presenter_open* in, yscr_caps* caps,
+                             char* err, size_t err_cap) {
+    memset(vctx, 0, sizeof(yscr__comp));
+    (void)in; (void)caps;
+    yscr__set_error(err, err_cap, "ysp_screen: COMPOSITION is x64 only: the struct-return ABI it depends on "
+                      "differs on ARM64 and x86 and has not been tested there");
+    return YSCR_ERR_NOT_IMPLEMENTED;
+}
+#else
 static int yscr__comp_open(void* vctx, const yscr_presenter_open* in, yscr_caps* caps,
                              char* err, size_t err_cap) {
     yscr__comp* c = (yscr__comp*)vctx;
@@ -6007,12 +6083,6 @@ static int yscr__comp_open(void* vctx, const yscr_presenter_open* in, yscr_caps*
     RECT src;
 
     memset(c, 0, sizeof *c);
-#if defined(_M_ARM64) || defined(__aarch64__)
-    (void)in; (void)caps;
-    yscr__set_error(err, err_cap, "ysp_screen: COMPOSITION is x64 only: the struct-return ABI it depends on "
-                      "differs on ARM64 and has not been tested there");
-    return YSCR_ERR_NOT_IMPLEMENTED;
-#else
     if (!in->window) { yscr__set_error(err, err_cap, "ysp_screen: no window"); return YSCR_ERR_ARG; }
     c->hwnd = (HWND)SDL_GetPointerProperty(SDL_GetWindowProperties(in->window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
     SDL_GetWindowSizeInPixels(in->window, &c->w, &c->h);
@@ -6174,8 +6244,8 @@ static int yscr__comp_open(void* vctx, const yscr_presenter_open* in, yscr_caps*
     c->last_resolved = 1;
     yscr__d3d_codes_open(c->dev, c->dctx, c->dctx1, in, &c->q);
     return YSCR_OK;
-#endif
 }
+#endif
 
 static void yscr__comp_close(void* vctx) {
     yscr__comp* c = (yscr__comp*)vctx;
@@ -6202,6 +6272,12 @@ static void yscr__comp_close(void* vctx) {
     YSCR__CREL(c->pm);
     YSCR__CREL(c->pf);
     if (c->surface_handle) CloseHandle(c->surface_handle);
+    /* The Get*Event calls return a new handle each; releasing the manager
+     * and the buffers does not close them (5 handles an open before
+     * v0.10.4, measured). */
+    for (i = 0; i < YSCR__COMP_BUFFERS; i++) if (c->avail[i]) CloseHandle(c->avail[i]);
+    if (c->stat_event) CloseHandle(c->stat_event);
+    if (c->lost_event) CloseHandle(c->lost_event);
     YSCR__RELEASE(c->dctx1);
     YSCR__RELEASE(c->dctx);
     YSCR__RELEASE(c->dev);
@@ -6214,12 +6290,18 @@ static void yscr__comp_close(void* vctx) {
  * in front, more than 90 s (docs/screen.md, "Between frames"). So after a
  * present framebuffer 0 is a buffer no present holds; with none free,
  * no surface (draws to framebuffer 0 do nothing; reads of it fail). */
+/* Whether buffer k is free. A free buffer was found at every present in
+ * testing, so the window test replaces this to make the case without one
+ * happen (tests/adapt/screen_window_test.c, "nofree"). */
+#ifndef YSCR__COMP_IS_AVAILABLE
+#define YSCR__COMP_IS_AVAILABLE(c, k, ok) YSCR__C((c)->buf[k], IsAvailable, (ok))
+#endif
 static void yscr__comp_park(yscr__comp* c) {
     int i;
     for (i = 1; i < YSCR__COMP_BUFFERS; i++) {
         unsigned char ok = 0;
         int k = (c->cur + i) % YSCR__COMP_BUFFERS;
-        if (SUCCEEDED(YSCR__C(c->buf[k], IsAvailable, &ok)) && ok) {
+        if (SUCCEEDED(YSCR__COMP_IS_AVAILABLE(c, k, &ok)) && ok) {
             c->cur = k;
             c->parked = 1;
             yscr__egl.MakeCurrent(c->dpy, c->pb[k], c->pb[k], c->ctx);
@@ -6275,7 +6357,7 @@ static int yscr__comp_acquire(void* vctx, int64_t deadline_ns, yscr_vblank* newe
         for (i = 0; i < YSCR__COMP_BUFFERS; i++) {
             unsigned char ok = 0;
             int k = (c->cur + (c->parked > 0 ? 0 : 1) + i) % YSCR__COMP_BUFFERS;
-            if (SUCCEEDED(YSCR__C(c->buf[k], IsAvailable, &ok)) && ok) {
+            if (SUCCEEDED(YSCR__COMP_IS_AVAILABLE(c, k, &ok)) && ok) {
                 c->cur = k;
                 c->parked = 0;
                 yscr__comp_bind(c);
@@ -6803,11 +6885,11 @@ static struct {
     volatile LONG    quit;
     volatile LONG    video;         /* screens whose SDL video it holds: it pumps */
     volatile LONG    pads;          /* screens with gamepads                      */
-    volatile LONG64  beat;          /* the loop's last pass, rt ns                */
+    volatile int64_t beat;          /* the loop's last pass, rt ns                */
     volatile LONG    release_req;   /* panics that asked for a release            */
     volatile LONG    release_start; /* ... the last one it began                  */
     volatile LONG    release_done;  /* ... the last one it served                 */
-    volatile LONG64  t_release;     /* when the last release ran, rt ns           */
+    volatile int64_t t_release;     /* when the last release ran, rt ns           */
     volatile LONG    stuck;         /* a command or the stop timed out            */
     int              users;         /* screens whose window it owns               */
     SDL_Window*      wins[YSCR__SLOTS];   /* its windows; this thread only        */
@@ -6824,7 +6906,7 @@ static void yscr__wt_do_release(LONG req) {
     InterlockedExchange(&yscr__wt.release_start, req);
     for (i = 0; i < YSCR__SLOTS; i++) if (yscr__wt.wins[i]) SDL_MinimizeWindow(yscr__wt.wins[i]);
     SDL_ShowCursor();
-    InterlockedExchange64(&yscr__wt.t_release, yscr__now());
+    yscr__a_store64(&yscr__wt.t_release, yscr__now());
     InterlockedExchange(&yscr__wt.release_done, req);
 }
 
@@ -6832,7 +6914,7 @@ static DWORD WINAPI yscr__wt_main(LPVOID arg) {
     MSG m;
     (void)arg;
     yscr__win.peek_message(&m, NULL, WM_USER, WM_USER, PM_NOREMOVE);   /* the queue, before ready */
-    InterlockedExchange64(&yscr__wt.beat, yscr__now());
+    yscr__a_store64(&yscr__wt.beat, yscr__now());
     SetEvent(yscr__wt.done_ev);
     while (!yscr__wt.quit) {
         LONG req;
@@ -6847,7 +6929,7 @@ static DWORD WINAPI yscr__wt_main(LPVOID arg) {
         req = InterlockedCompareExchange(&yscr__wt.release_req, 0, 0);
         if (req != yscr__wt.release_done) yscr__wt_do_release(req);
         if (yscr__wt.video > 0) SDL_PumpEvents();
-        InterlockedExchange64(&yscr__wt.beat, yscr__now());
+        yscr__a_store64(&yscr__wt.beat, yscr__now());
     }
     SDL_CleanupTLS();   /* SDL's per-thread memory of this thread */
     return 0;
@@ -6937,7 +7019,7 @@ static void yscr__wt_release(void) {
 /* The thread answered within the last second: its heartbeat is newer. */
 static int yscr__wt_alive(void) {
     return yscr__wt.thread && !yscr__wt.stuck &&
-           yscr__now() - InterlockedCompareExchange64(&yscr__wt.beat, 0, 0) < YSCR__WT_ALIVE_NS;
+           yscr__now() - yscr__a_load64(&yscr__wt.beat) < YSCR__WT_ALIVE_NS;
 }
 
 static int yscr__wt_running(void) { return yscr__wt.thread != NULL; }

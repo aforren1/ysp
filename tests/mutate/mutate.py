@@ -20,6 +20,7 @@ See tests/mutate/README.md.
 import argparse
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -165,16 +166,41 @@ def fail_keys(text, ignore):
     return keys
 
 
+TIMEOUT_MARK = "mutate.py: the test did not end in its timeout"
+GUARD = []   # --guard: the command that each test run goes through
+
+
 def run(exe, test, mutant, cwd):
     wait_quiet()
     env = run_env(test, mutant)
+    t = test.get("timeout", 600)
+    if GUARD:
+        # The guard can wait many minutes for the machine before it starts
+        # the test, so the timeout is applied inside it, by this script.
+        fwd = lambda p: p.replace("\\", "/")   # a path bash runs as it is
+        cmd = GUARD + [fwd(sys.executable), fwd(os.path.abspath(__file__)), "--run-one", str(t), fwd(exe)]
+        r = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=cwd, errors="replace")
+        out = r.stdout + r.stderr
+        if TIMEOUT_MARK in out:
+            return None, set(), ""
+        return r.returncode, fail_keys(out, test.get("ignore", [])), out
     try:
         r = subprocess.run([exe], capture_output=True, text=True, env=env, cwd=cwd,
-                           timeout=test.get("timeout", 600), errors="replace")
+                           timeout=t, errors="replace")
     except subprocess.TimeoutExpired:
         return None, set(), ""
     out = r.stdout + r.stderr
     return r.returncode, fail_keys(out, test.get("ignore", [])), out
+
+
+def run_one(seconds, exe):
+    """--run-one: runs exe with a timeout, under the guard."""
+    try:
+        r = subprocess.run([exe], timeout=float(seconds))
+    except subprocess.TimeoutExpired:
+        print(TIMEOUT_MARK, flush=True)
+        return 124
+    return r.returncode
 
 
 # --- mutants -----------------------------------------------------------------
@@ -251,7 +277,14 @@ def main():
     ap.add_argument("--jobs", "-j", type=int, default=1, help="mutants built and run at once (default 1)")
     ap.add_argument("--work", help="work directory (default: a new temporary directory)")
     ap.add_argument("--keep", action="store_true", help="keep the work directory")
+    ap.add_argument("--guard", help="a command that each test run goes through, one run at a time, e.g. "
+                    "'bash C:/tmp/psy-guard.sh time mutate-window' (see README.md, Shared machine)")
     a = ap.parse_args()
+    if a.guard:
+        GUARD[:] = shlex.split(a.guard)
+        # By the PATH, as a shell finds it: CreateProcess looks in System32
+        # first, where bash.exe is WSL's.
+        GUARD[0] = shutil.which(GUARD[0]) or GUARD[0]
 
     paths = a.lists or sorted(os.path.join(HERE, f) for f in os.listdir(HERE) if f.endswith(".toml"))
     paths = [p if os.path.exists(p) else os.path.join(HERE, p) for p in paths]
@@ -392,4 +425,6 @@ def main():
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 4 and sys.argv[1] == "--run-one":
+        sys.exit(run_one(sys.argv[2], sys.argv[3]))
     sys.exit(main())
