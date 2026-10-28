@@ -2,8 +2,9 @@
 
 Status: proposal of 2026-09-24, revised 2026-10-06. It records the
 decisions made while planning the move from the transport and adaptive
-headers into graphics, audio, video and the tooling above them. Steps 1 to
-6 of section 11 have started; section 11 gives the state of each step.
+headers into graphics, audio, video and the tooling above them. Section
+11 gives the state of each step (updated 2026-10-28) and what comes
+next.
 Each header's design note in `docs/` records what was built and measured.
 When a note and this document disagree, the note is newer.
 
@@ -1173,74 +1174,56 @@ test first and Windows 10 second. The work went to Windows 11 first, on
 the one development machine, and Windows 10 became best effort
 (section 9).
 
-### State on 2026-10-07
+### State on 2026-10-28
+
+Details, versions and measurements per header are in
+[status.md](status.md). This table gives the state of each step.
 
 | Step | State |
 |---|---|
-| 1. `ysp/rt.h`: event ring, clock correlation | Done, v0.5.0, with the instrumentation macros. |
-| 2. `ysp/timeline.h` | v0.4.0: events, tracks, tweens, `ytl_skip`, `ytl_lead`, `ytl_peek`, exact rational base rates (`ytl_rate`), `ytl_window`, `ytl_rt_time`, the `ytl_seq` builder with op tables, `ytl_run`, `ytl_check_ops` and the key arena (4.5.1). |
-| 3. `ysp/screen.h` | v0.3.2 on Windows: DXGI_FLIP and COMPOSITION, flip hooks (codes, triggers, after-flip callbacks), the OS gamma ramp, the Shift+Esc abort and the triple-press panic, the window icon, text input for a text box with a ring record and a flip flag while keys are off the raw path, D3D11 video support on the device. X11, Wayland and macOS are stubs. v0.7.0: the web backend (WebGL2, requestAnimationFrame, the lowest tier; docs/web.md) and the demos on GitHub Pages. No photodiode run. |
-| 4. `ysp/audio.h` | v0.2.0 on WASAPI shared mode: onsets from a fit of device positions, tier 2. Streams (ring-fed voices, the soundtrack path) and WAV streaming. The other backends compile and have never run. No line-in run. |
-| 5. `ysp/gfx.h` | v0.10.0: stimuli, the signed-distance vector program and kind-specialized programs, strokes, sprites, groups, render targets and setup passes, curve runs from Slug-form curve sets (exact area on resolved unturned glyphs, rays elsewhere and chosen automatically for turned runs), the blur pass, NOISE (uniform, Gaussian, integer simplex fBm, each with a bit-exact CPU twin; v0.9 replaced the nested noise hash, which repeated rows), the output stage; a program binary cache, NV12 and I420 video in linear light, texture import (GL, D3D11 through ANGLE), instanced stimuli, and draws reordered where they do not overlap. It requires `ysp/color.h` (v0.1.0). Text layout (Skribidi) belongs to the pack tool and the player (5.2), not to the header. Missed bars: full text pages (docs/gfx.md; a page drawn once into a target costs 0.5 ms a frame), the text program's cold compile, and some of v0.3's GPU bars. |
-| 6. `ysp/video.h` | v0.2.0: scheduler, frame sequence, pl_mpeg, decode-ahead; Media Foundation (DXVA by default), planar upload to the gfx shader by default, the shared D3D11 GPU path as an option, the soundtrack on `ysp/audio.h` streams, base rates. Not built: AVFoundation, capture. |
-| Also built | `ysp/outline.h` v0.2.1 (item 3), `ysp/rdk.h` v0.1.0 (random dot kinematograms, integer state, Python binding), `ysp/table.h` v0.1.0 and `ysp/trials.h` v0.2.0 (CSV and pack tables, order lists, sampling, units, transition balance, rules text). |
-| 7 to 10 | Not started. |
+| 1. `ysp/rt.h` | Done, v0.9.1. |
+| 2. `ysp/timeline.h` | Done for now, v0.8.1. Since v0.4.0: trigger channels (`ytl_trigger_ch()`), parameter tables for the ops and the desc. |
+| 3. `ysp/screen.h` | v0.10.4 on Windows: DXGI_FLIP and COMPOSITION, the window thread (on by default for native Windows), flip records, the abort and the panic, the web backend (v0.7.0). X11, Wayland and macOS are stubs. The X11 probe (docs/screen_x11_probe.md) has not run on the Linux rig. No photodiode run. |
+| 4. `ysp/audio.h` | v0.7.3 on WASAPI: onsets from a fit of device positions, tier 2, streams, WAV, capture. CoreAudio, ALSA and PulseAudio ran only as miniaudio's null device, in CI. No line-in run. |
+| 5. `ysp/gfx.h` | v0.17.2: stimuli, curve runs (text and artwork), batched text runs, parameter tables, frame capture. Open items in docs/gfx.md "Next". |
+| 6. `ysp/video.h` | v0.6.0: Media Foundation and pl_mpeg, the soundtrack on audio streams, UTF-8 paths, error codes. Not built: AVFoundation, capture. |
+| Also built | `ysp/outline.h` v0.4.1, `ysp/rdk.h` v0.3.0, `ysp/color.h` v0.4.0, `ysp/trials.h` v0.6.0, `ysp/table.h` v0.3.0, `ysp/dataset.h` v0.2.0, `ysp/json.h` v0.2.1, `ysp/pack.h` v0.4.0 and the pack tool v0.7.0 (item 6), the device headers of docs/devices_spec.md (input, response, box, device, rigfile, serial, parallel, net). The experiment format (docs/experiment_format.md) with its gaps G1 to G13 closed. |
+| Host bindings | Python wheels and MATLAB/Octave MEX for the headers above (docs/bindings.md); ysp-vis 0.10.4 (screen, gfx, video, text) on ysp-audio 0.7.3 and ysp-timeline through function tables (section 12). |
+| 7 and 8 | Not started. |
+| 9 | `ysp/net.h` v0.3.1 (Lab Streaming Layer) is built. Build jobs are not started. |
 
 ### Next, in order
 
 1. **Hardware verification on Windows 11.** Run the photodiode test on
-   DXGI_FLIP and COMPOSITION, and the line-in test for `ysp/audio.h`.
-   The "one vblank early" flips of the windowed DXGI runs were measured
-   again on 2026-10-09 with the scanout as reference: they remain, and
-   come from the depth rule when a window leaves the composed path, not
-   from the grid (section 13). Every later
-   step builds on onset claims that are software timestamps until this
-   step is done. It needs the photodiode and a line-out to line-in
-   cable on the development machine.
-2. **`ysp/gfx.h`**: done for now (v0.10.0). Slug curve runs, the blur
-   pass, setup passes, kind-specialized programs and gradient noise are
-   built; sampler-filtered chroma was measured and deleted. The open
-   items are in docs/gfx.md "Next".
-3. **The outline builder**: curves and bands in the Slug form from font
-   outlines and paths, stroke expansion, the exact-area alpha
-   rasterizer. It is the core of the pack tool's text and artwork
-   (item 6) and runs in parallel with item 2. State on 2026-10-07:
-   `ysp/outline.h` v0.2.1 (docs/outline.md): a bounded TrueType and
-   CFF reader that places glyphs as HarfBuzz does, overlap removal (curve sets carry the RESOLVED flag),
-   strokes without the probe's fold, exact alpha, curve sets in format
-   v1, and the SVG subset reader of 5.2 (Artwork). Missed bars: a Latin
-   stroke (289 to 303 us a glyph against 200; CJK meets its 1 ms) and the
-   sets of the heaviest fonts (Source Han Sans 94 to 103 us a glyph
-   against 66).
-4. **`ysp/timeline.h`**: done for now (v0.4.0: base rates,
-   `ytl_window()`, sequences). `ysp/video.h` applies the rates for any
-   rate other than 1.
-5. **Other platforms.** `ysp/screen.h` on Linux X11 (GLX sync control)
-   and Wayland (presentation-time), then macOS through ANGLE's Metal
-   backend. `ysp/audio.h` on ALSA, PulseAudio and CoreAudio. A platform
-   gets its tier from a photodiode or line-in run on that platform, not
-   from CI.
-6. The pack tool as a library, and its CLI, with Skribidi, the outline
-   builder (item 3) and the SVG subset reader (5.2, Artwork). State on
-   2026-10-07: the first piece of its text half is built
-   (docs/layout.md). Skribidi `dee63d6` with two local bidi patches (run merge; rule L1 per line, 2026-10-08), HarfBuzz
-   14.6.0, SheenBidi, libunibreak 6.1 and budouxc are vendored in
-   `third_party/` (7.7 MB, verified byte for byte by
-   `tools/vendor_layout.py`); `pack/layout` v0.1.0 lays text out into
-   curve-run items over on-demand curve sets and stamps each block with
-   the versions and font hashes; it gives Chromium's glyph ids on all 15
-   corpus lines (`tests/layout/`), on MSVC, MinGW and emcc.
-   `examples/layout/gfx_layout.c` shows paragraphs in seven scripts, the bidi bug
-   strings, BudouX breaking and Skribidi's editor (on `ysp/screen.h`
-   v0.3.2's `yscr_text_input()`). Not started: the pack format, the
-   CLI, serialized glyph runs.
-7. The player, native and WebAssembly, and the runner protocol.
-8. The designer.
-9. Build jobs, `ysp/net.h`.
+   DXGI_FLIP and COMPOSITION, and the line-in test for `ysp/audio.h`
+   (`tests/loopback/screen_loopback.c`, `audio_loopback.c`). Every
+   later step builds on onset claims that are software timestamps until
+   this step is done. It needs a photodiode board (docs/devices_spec.md)
+   and a line-out to line-in cable on the development machine. The held
+   frames that DXGI_FLIP showed a vblank early were fixed in
+   `ysp/screen.h` v0.4.3 against the scanout (docs/screen.md); a
+   photodiode run is the check.
+2. **The queue-ahead probe** (section 13): a host queues K frames on
+   COMPOSITION with target times, then sleeps. Branch `probe-queue`,
+   docs/queue_probe.md. K stays at 29 or less: one presentation manager
+   holds at most 31 buffers, and the runs at 60 and 120 buffers crashed
+   the development machine twice (bug check 0x133).
+3. **The player** (section 6), native and WebAssembly, and the runner
+   protocol. The format's gaps are closed. First: map each table name to
+   its definition key, and give the loader the defaults that a
+   canonical definition leaves out (D2).
+4. **Other platforms.** `ysp/screen.h` on Linux X11: run the probe on
+   the Linux rig, then build the GLX backend from its results. Then
+   Wayland (presentation-time), then macOS through ANGLE's Metal
+   backend. `ysp/audio.h` on ALSA, PulseAudio and CoreAudio with real
+   devices. A platform gets its tier from a photodiode or line-in run on
+   that platform, not from CI.
+5. The designer.
+6. Build jobs.
 
-Items 2 and 3 run in parallel. Measurements on the development
-machine run one at a time: on 2026-10-05 a second measuring job's load
-showed up as a false regression in the first.
+Measurements on the development machine run one at a time: on
+2026-10-05 a second measuring job's load showed up as a false
+regression in the first.
 
 ## 12. Extensions
 
