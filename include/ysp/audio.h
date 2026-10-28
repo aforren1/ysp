@@ -1,4 +1,4 @@
-/* ysp/audio.h - v0.7.2 - public domain single-header audio library
+/* ysp/audio.h - v0.7.3 - public domain single-header audio library
  *
  *   Sound at a time on the ysp/rt.h clock. A buffer is played with
  *   yau_play_at(buf, t); the header plans its first sample on the device
@@ -167,6 +167,17 @@
  *     far ahead; ysp/timeline.h's look-ahead for audio is this number.
  *     On WASAPI shared mode it is mostly the queue (QUEUE) and the
  *     engine's own period and pipeline.
+ *     From callback times alone (the null device) the lead is
+ *     fit_time(w + period) - now, w the first frame of the next block:
+ *     two periods just after a callback on the fit's line, less after a
+ *     late one. It is negative while the next callback is more than a
+ *     period late on the fit; the sound still starts on its frame, as
+ *     the device is behind its fit. It is more than two periods while a
+ *     callback came before the fit's line: the fit takes the least late
+ *     callback of each 50 ms and refits once a second after the warm-up,
+ *     so in the first second after yau_open() a callback less late than
+ *     all of the warm-up's adds the difference. (docs/audio.md, "The lead
+ *     on the null device".)
  *
  *   QUEUE (desc.queue, WASAPI shared mode)
  *     The periods of sound queued in the WASAPI buffer ahead of the
@@ -916,6 +927,11 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.7.3 - Builds for 32-bit Windows with MSVC: the 64-bit atomic store
+ *          is a compare-exchange loop on x86, which has no
+ *          _InterlockedExchange64 (LNK2001 in the cp39-win32 wheel). LEAD
+ *          and yau_lead_ns() say when the lead is negative or above two
+ *          periods. No API or behavior change elsewhere.
  *   v0.7.2 - yau_wait() with a timeout near INT64_MAX ("forever") waits:
  *          its deadline is now plus the timeout, saturated at INT64_MAX.
  *          The plain sum overflowed (undefined behavior) and in practice
@@ -1068,6 +1084,9 @@
  *          positions, miniaudio's null device, the device and source
  *          interfaces, synthesis, the records, the parameter table.
  *
+ *   STATUS: v0.7.3, 2026-10-27 (docs/audio.md, "32-bit Windows"): the
+ *   compile check, tests/adapt/audio_test.c and the ysp-audio wheel's
+ *   tests build and pass with MSVC for x86 (Win32) and 32-bit CPython.
  *   STATUS: v0.7.2, 2026-10-27 (docs/audio.md, "A wait without end"):
  *   tests/adapt/audio_test.c waits with INT64_MAX and INT64_MAX - 1 ms on
  *   a pending sound of the virtual null device; MSVC, MinGW-w64, WSL2 gcc
@@ -1242,8 +1261,8 @@
 
 #define YAU_VERSION_MAJOR 0
 #define YAU_VERSION_MINOR 7
-#define YAU_VERSION_PATCH 2
-#define YAU_VERSION_STRING "0.7.2"
+#define YAU_VERSION_PATCH 3
+#define YAU_VERSION_STRING "0.7.3"
 
 #include "ysp/rt.h"
 
@@ -2148,7 +2167,9 @@ YAU_API int  yau_result(yau_audio* au, yau_id id, yau_onset* out);
 YAU_API int  yau_wait(yau_audio* au, yau_id id, int64_t timeout_ns, yau_onset* out);
 
 /* The shortest lead a sound handed over now can still meet (LEAD); 0 before
- * the first callback. */
+ * the first callback. It is negative while the next callback is more than a
+ * period late on the fit, and above two periods while a callback the fit
+ * does not hold yet came before the fit's line (LEAD). */
 YAU_API int64_t yau_lead_ns(const yau_audio* au);
 
 /* The fit (THE FIT): the stream frame on which time t_ns falls (the
@@ -2487,8 +2508,14 @@ static void yau__st64(int64_t* p, int64_t v) { __stlr64((unsigned __int64 volati
     #elif defined(_M_IX86)
 static uint32_t yau__ld32(const uint32_t* p) { uint32_t v = *(const volatile uint32_t*)p; _ReadWriteBarrier(); return v; }
 static void yau__st32(uint32_t* p, uint32_t v) { _ReadWriteBarrier(); *(volatile uint32_t*)p = v; }
+/* x86 has no 64-bit exchange intrinsic (_InterlockedExchange64 is x64 and
+ * ARM only: LNK2001 in a 32-bit build), so the store is a compare-exchange
+ * loop (lock cmpxchg8b), as in ysp/rt.h. The plain read only seeds it. */
 static int64_t yau__ld64(const int64_t* p) { return _InterlockedCompareExchange64((volatile __int64*)(uintptr_t)p, 0, 0); }
-static void yau__st64(int64_t* p, int64_t v) { (void)_InterlockedExchange64((volatile __int64*)p, v); }
+static void yau__st64(int64_t* p, int64_t v) {
+    int64_t o = *(volatile int64_t*)p;
+    while (_InterlockedCompareExchange64((volatile __int64*)p, v, o) != o) o = *(volatile int64_t*)p;
+}
     #else
 static uint32_t yau__ld32(const uint32_t* p) { uint32_t v = *(const volatile uint32_t*)p; _ReadWriteBarrier(); return v; }
 static void yau__st32(uint32_t* p, uint32_t v) { _ReadWriteBarrier(); *(volatile uint32_t*)p = v; }

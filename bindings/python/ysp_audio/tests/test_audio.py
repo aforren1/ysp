@@ -67,14 +67,16 @@ def test_open_caps(au):
     assert c["period_frames"] == 480 and c["period"] == pytest.approx(0.01)
     assert c["pos_source"] == "callback" and c["os_latency"] is None
     assert "backend=Null" in au.describe()
-    # The lead is the time of the frame after the next block, minus now: at
-    # most two periods, and below 0 while the next callback is more than a
-    # period late on the fit. The null device's callbacks wait in Sleep(10)
-    # steps, 15 ms on Windows' default timer tick: under load 1 to 5 % of
-    # the leads read just after open were negative (docs/audio.md, "The
-    # lead on the null device"). A broken clock or fit is far off.
+    # The lead is the time of the frame after the next block, minus now:
+    # below 0 while the next callback is more than a period late on the
+    # fit, and above two periods while a callback the fit does not hold yet
+    # came before its line (the warm-up's callbacks all late, then one on
+    # time: 35 ms on a macOS runner). The null device's callbacks wait in
+    # Sleep(10) steps, 15 ms on Windows' default timer tick: under load 1
+    # to 5 % of the leads read just after open were negative (docs/audio.md,
+    # "The lead on the null device"). A broken clock or fit is far off.
     assert c["lead_ns"] != 0 and c["lead"] == c["lead_ns"] / 1e9
-    assert -0.5 < au.lead <= 2 * c["period"] + TOL_NS / 1e9 and au.lead_ns != 0
+    assert -0.5 < au.lead < 0.5 and au.lead_ns != 0
 
 
 def test_strict_open_refuses():

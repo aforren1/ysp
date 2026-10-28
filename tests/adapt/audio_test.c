@@ -932,6 +932,49 @@ static void test_lead_late_callback(void) {
     yau_close(&g_au);
 }
 
+/* v0.7.3: the lead is above two periods while a callback the fit does not
+ * hold yet came before the fit's line. Every warm-up callback 8 ms late,
+ * then one on time: the fit (no refit for a second after the warm-up)
+ * still puts the next blocks 8 ms later, so the lead is 2 periods + 8 ms.
+ * ysp-audio's test read 35 ms after open on a macOS CI runner (run
+ * 40613569249). A sound at now + lead still starts on its frame. */
+static void test_lead_early_callback(void) {
+    sdev* s = &g_sd;
+    yau_buf b;
+    yau_onset r;
+    yau_id id;
+    int64_t W, e, lead;
+    int i;
+    sd_default(s);
+    s->pos_source = YAU_POS_CALLBACK;
+    s->tier = YAU_TIER_SIM;
+    s->drift_ppm = 0;
+    s->jitter_ns = 0;
+    CHECK(open_dev(s, NULL));
+    for (i = 0; i < 60; i++) { s->late_ns = YRT_MS(8); sd_block(s); }   /* 0.6 s */
+    yau_update(&g_au);
+    CHECK(g_au.fit_ft.ready);
+    W = s->W;
+    e = sd_event(s, W);
+    CHECK(llabs(yau_time_of(&g_au, W) - (e + YRT_MS(8))) <= 1);
+    sd_block(s);                              /* block W, on time */
+    CHECK_I(g_vt, e);
+    yau_update(&g_au);
+    lead = yau_lead_ns(&g_au);
+    CHECK(llabs(lead - YRT_MS(28)) <= 1);
+    CHECK(lead > 2 * YRT_MS(10));
+    memset(&b, 0, sizeof b);
+    b.frames = g_buf; b.n = 100; b.channels = 1;
+    id = yau_play_at(&g_au, b, g_vt + lead);
+    sd_run_s(s, 0.2);
+    yau_update(&g_au);
+    memset(&r, 0, sizeof r);
+    CHECK_I(yau_result(&g_au, id, &r), YAU_OK);
+    CHECK(!(r.flags & YAU_ONSET_LATE));
+    CHECK_I(r.start_frame, W + 960);
+    yau_close(&g_au);
+}
+
 /* v0.4.1: a browser's device (BACKENDS, WEB): tier WEB, a report in one
  * block of 4, and entry times of 0 (an AudioWorklet has no clock). The fit
  * is of the reports only, so the sound lands on the truth's frame; its
@@ -2900,6 +2943,7 @@ int main(int argc, char** argv) {
     test_halt();
     test_callback_source();
     test_lead_late_callback();
+    test_lead_early_callback();
     test_web_tier();
     test_report_less_start();
     test_ring();

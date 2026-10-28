@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ysp-audio"
-version = "0.7.2"  # must equal ysp/audio.h's YAU_VERSION_STRING; tests/test_audio.py checks it
+version = "0.7.3"  # must equal ysp/audio.h's YAU_VERSION_STRING; tests/test_audio.py checks it
 description = "Sound at a time on the ysp clock (ysp/audio.h): buffers, streams and WAV files with onset records and tiers"
 readme = "README.md"
 requires-python = ">=3.8"

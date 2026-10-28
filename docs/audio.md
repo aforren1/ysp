@@ -2283,10 +2283,18 @@ callback that comes `late` after its envelope time makes the lead
 `period - late` just before it. Just after it, the lead is
 `2 * period - late`. Thus:
 
-- The lead is at most two periods (20 ms here). A refit that moves the
-  envelope can add a little: up to 0.15 ms was measured.
+- The lead is at most two periods (20 ms here) while every callback is
+  on or after the fit's line. A refit that moves the envelope can add a
+  little: up to 0.15 ms was measured.
 - The lead is negative while the next callback is more than one period
   late on the fit.
+- The lead is more than two periods while a callback that the fit does
+  not hold yet came before the fit's line (v0.7.3 corrects this list). The
+  fit takes the least late callback of each 50 ms and, after the
+  warm-up, refits once a second. In the first second after the open, a
+  callback less late than all callbacks of the warm-up thus adds the
+  difference to the lead. On a macOS CI runner (run 40613569249,
+  `ysp-audio` 0.7.2) the lead read 35.4 ms just after the open.
 
 A negative lead is still the shortest lead that can be met. The device
 is behind its fit, so a sound at `now + lead` starts on its frame. The
@@ -2348,6 +2356,30 @@ The header does not change. The tests now check what the lead must be:
   that comes late with no silence before it, as from a timer thread.
 - Mutants `le-01` (the lead clamped at 0) and `le-02` (the lead with no
   period of margin) in `tests/mutate/audio.toml` are killed.
+
+
+## 32-bit Windows (v0.7.3)
+
+CI's `ysp-audio` wheel for 32-bit Windows (cibuildwheel's `cp39-win32`,
+run 40613569249) did not link: `LNK2001: unresolved external symbol
+__InterlockedExchange64`. MSVC has `_InterlockedExchange64` on x64 and
+ARM64 only. The x86 branch of the atomics now stores a 64-bit value with
+a `_InterlockedCompareExchange64` loop (`lock cmpxchg8b`), as ysp/rt.h
+does; the load was already a compare-exchange. x64 and ARM64 are
+unchanged.
+
+The other lines of the CI failure were in the tests: the lead above two
+periods ("The lead on the null device", above). `test_lead_early_callback`
+in `tests/adapt/audio_test.c` gives the scripted device warm-up callbacks
+8 ms late and then one on time, and checks that the lead is two periods
+plus 8 ms and that a sound at `now + lead` starts on its frame. The
+Python and MEX tests now check only that the lead is between -0.5 s and
+0.5 s.
+
+Verification, Windows 11, MSVC 19.44 (Visual Studio 2022) for x86
+(`cmake -A Win32`): every target that does not need SDL3 builds, and
+`test_audio` passes. CPython 3.10 for x86 builds the `ysp-audio` wheel
+and passes its tests.
 
 ## Bindings
 
