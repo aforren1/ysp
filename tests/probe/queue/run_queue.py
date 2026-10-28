@@ -48,6 +48,8 @@ class Probe:
         d.pq_reserve.argtypes = [i32, p64]
         d.pq_mem.argtypes = [p64, p64]
         d.pq_alloc_test.argtypes = [i32, i32, p64, p64, p64]
+        d.pq_alloc_private.argtypes = [p64, p64]
+        d.pq_private_now.restype = i64
         d.pq_records.argtypes = [C.POINTER(Rec), i32, i32]
         d.pq_subs.argtypes = [C.POINTER(Sub), i32, i32]
         d.pq_cancel_info.argtypes = [p64, p64, C.POINTER(C.c_int), p64]
@@ -408,9 +410,12 @@ def mode_cost(p, a, out):
             b, af, ns = C.c_int64(0), C.c_int64(0), C.c_int64(0)
             made = p.d.pq_alloc_test(fmt, n, C.byref(b), C.byref(af), C.byref(ns))
             mb = (af.value - b.value) / 2**20
-            print("alloc %-7s n=%2d made=%2d: +%.1f MB (%.2f MB each), %.1f ms" %
-                  (name, n, made, mb, mb / max(made, 1), ns.value / 1e6))
-            res["%s_%d" % (name, n)] = {"made": made, "mb": mb, "ms": ns.value / 1e6}
+            pb, pa = C.c_int64(0), C.c_int64(0)
+            p.d.pq_alloc_private(C.byref(pb), C.byref(pa))
+            pmb = (pa.value - pb.value) / 2**20
+            print("alloc %-7s n=%2d made=%2d: DXGI local +%.1f MB, private +%.1f MB (%.2f MB each), %.1f ms" %
+                  (name, n, made, mb, pmb, pmb / max(made, 1), ns.value / 1e6))
+            res["%s_%d" % (name, n)] = {"made": made, "mb": mb, "private_mb": pmb, "ms": ns.value / 1e6}
     p.frames(60)
     s0 = p.d.pq_nsub()
     p.frames(300, a.load)
@@ -418,25 +423,33 @@ def mode_cost(p, a, out):
     one = p.subs(s0)
     cpu1 = [s["cpu_ns"] / 1e3 for s in one]
     wall1 = [(s["t_flipped"] - s["t_begun"]) / 1e3 for s in one]
-    print("one in flight, 300 frames: CPU/frame p50 %.0f us p99 %.0f us; begin-return to flip-return p50 %.0f us" %
-          (pct(cpu1, 50), pct(cpu1, 99), pct(wall1, 50)))
+    print("one in flight, 300 frames: CPU/frame p50 %.0f us p99 %.0f us; begin-return to flip-return p50 %.0f us p99 %.0f us" %
+          (pct(cpu1, 50), pct(cpu1, 99), pct(wall1, 50), pct(wall1, 99)))
     res["one"] = {"cpu_us_p50": pct(cpu1, 50), "cpu_us_p99": pct(cpu1, 99), "draw_flip_us_p50": pct(wall1, 50)}
     for k in a.ks:
         m0 = p.mem()
+        q0 = p.d.pq_private_now()
         ns = p.reserve(k)
+        p.frames(k + 4)   # one in flight: each new buffer drawn once (commits it)
         m1 = p.mem()
-        cpus, walls, totals = [], [], []
+        q1 = p.d.pq_private_now()
+        cpus, walls, totals, waits = [], [], [], []
         for rep in range(a.reps):
             s0 = p.d.pq_nsub()
             r, s, t_sub, t0 = run_queue_once(p, k, 1, 0, a.load)
             cpus += [x["cpu_ns"] / 1e3 for x in s[:k]]
             walls += [(x["t_flipped"] - x["t_begun"]) / 1e3 for x in s[:k]]
+            waits += [(x["t_begun"] - x["t_begin"]) / 1e3 for x in s[:k]]
             totals.append((s[k - 1]["t_flipped"] - s[0]["t_begin"]) / 1e6)
             p.frames(10)
-        print("K=%2d: reserve %.1f ms, local %.0f -> %.0f MB; CPU/frame p50 %.0f us p99 %.0f us; "
-              "submit all K p50 %.2f ms max %.2f ms" % (k, ns / 1e6, m0[0] / 2**20, m1[0] / 2**20, pct(cpus, 50),
-                                                         pct(cpus, 99), pct(totals, 50), max(totals)))
-        res["K%d" % k] = {"reserve_ms": ns / 1e6, "mem_mb": [m0[0] / 2**20, m1[0] / 2**20],
+        print("K=%2d: reserve %.1f ms, local %.0f -> %.0f MB, private +%.0f MB; CPU/frame p50 %.0f us p99 %.0f us; "
+              "draw+flip p50 %.0f p99 %.0f max %.0f us; begin wait p50 %.0f p99 %.0f max %.0f us; submit all K p50 %.2f ms max %.2f ms"
+              % (k, ns / 1e6, m0[0] / 2**20, m1[0] / 2**20, (q1 - q0) / 2**20, pct(cpus, 50), pct(cpus, 99),
+                 pct(walls, 50), pct(walls, 99), max(walls), pct(waits, 50), pct(waits, 99), max(waits),
+                 pct(totals, 50), max(totals)))
+        res["K%d" % k] = {"reserve_ms": ns / 1e6, "mem_mb": [m0[0] / 2**20, m1[0] / 2**20], "private_mb": (q1 - q0) / 2**20,
+                          "draw_flip_us": [pct(walls, 50), pct(walls, 99), max(walls)],
+                          "begin_wait_us": [pct(waits, 50), pct(waits, 99), max(waits)],
                           "cpu_us_p50": pct(cpus, 50), "cpu_us_p99": pct(cpus, 99),
                           "submit_ms_p50": pct(totals, 50), "submit_ms_max": max(totals)}
     out["summary"] = res

@@ -13,5 +13,5 @@ call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\v
 if not exist "%OUT%" mkdir "%OUT%"
 cl /nologo /O2 /W3 /MD /LD /I"%HERE%include" /I"%HERE%..\..\..\include" /I"%SDL%\include" ^
    "%HERE%probe_queue.c" /Fo"%OUT%\\" /Fe"%OUT%\probe_queue.dll" /link ^
-   /LIBPATH:"%SDL%\lib\x64" SDL3.lib user32.lib dxgi.lib d3d11.lib dxguid.lib || exit /b 1
+   /LIBPATH:"%SDL%\lib\x64" SDL3.lib user32.lib dxgi.lib d3d11.lib dxguid.lib psapi.lib || exit /b 1
 copy /y "%SDL%\lib\x64\SDL3.dll" "%OUT%\" >nul || exit /b 1

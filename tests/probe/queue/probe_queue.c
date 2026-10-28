@@ -134,6 +134,17 @@ PQ_API int pq_mem(int64_t* local, int64_t* nonlocal) {
  * RGBA16F), each added to a new presentation manager as a buffer; the
  * memory before and after, then all released. What K queued frames would
  * cost in that format. */
+#include <psapi.h>
+static int64_t pq_priv0, pq_priv1;
+static int64_t pq_private(void) {
+    PROCESS_MEMORY_COUNTERS_EX m;
+    m.cb = sizeof m;
+    return GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&m, sizeof m) ? (int64_t)m.PrivateUsage : 0;
+}
+/* the process's private bytes before and after the last pq_alloc_test() */
+PQ_API void pq_alloc_private(int64_t* before, int64_t* after) { *before = pq_priv0; *after = pq_priv1; }
+PQ_API int64_t pq_private_now(void) { return pq_private(); }
+
 PQ_API int pq_alloc_test(int fmt, int n, int64_t* before, int64_t* after, int64_t* ns) {
     yscr_native_info ni;
     yscr__comp* c = (yscr__comp*)g_scr.pr_ctx;
@@ -151,19 +162,31 @@ PQ_API int pq_alloc_test(int fmt, int n, int64_t* before, int64_t* after, int64_
     td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
     td.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE | 0x100000;
     pq_mem(before, &nl);
+    pq_priv0 = pq_private();
     t0 = yrt_now_ns();
     for (i = 0; i < n; i++) {
         tex[i] = NULL; buf[i] = NULL;
         if (FAILED(ID3D11Device_CreateTexture2D((ID3D11Device*)ni.d3d11_device, &td, NULL, &tex[i]))) break;
         if (FAILED(YSCR__C(pm, AddBufferFromResource, (void*)tex[i], (void**)&buf[i]))) { made = i + 1; break; }
         made = i + 1;
+        {   /* a clear commits the memory, as a drawn frame would */
+            ID3D11RenderTargetView* v = NULL;
+            static const float k0[4] = { 0, 0, 0, 1 };
+            if (SUCCEEDED(ID3D11Device_CreateRenderTargetView((ID3D11Device*)ni.d3d11_device, (ID3D11Resource*)tex[i], NULL, &v))) {
+                ID3D11DeviceContext_ClearRenderTargetView((ID3D11DeviceContext*)ni.d3d11_context, v, k0);
+                ID3D11RenderTargetView_Release(v);
+            }
+        }
     }
+    ID3D11DeviceContext_Flush((ID3D11DeviceContext*)ni.d3d11_context);
     *ns = yrt_now_ns() - t0;
+    Sleep(200);
     pq_mem(after, &nl);
     for (i = 0; i < made; i++) {
         if (buf[i]) YSCR__CREL(buf[i]);
         if (tex[i]) ID3D11Texture2D_Release(tex[i]);
     }
+    pq_priv1 = pq_private();
     YSCR__CREL(pm);
     return made;
 }
@@ -177,11 +200,21 @@ PQ_API int pq_reserve(int n, int64_t* ns) {
     return rc;
 }
 
+/* The thread's CPU time from its cycle count (GetThreadTimes ticks at
+ * 15.6 ms here): cycles per ns from a 50 ms spin against the rt clock. */
+static double pq_cyc_per_ns;
 static int64_t pq_thread_cpu(void) {
-    FILETIME a, b, k, u;
-    GetThreadTimes(GetCurrentThread(), &a, &b, &k, &u);
-    return ((int64_t)(((uint64_t)k.dwHighDateTime << 32) | k.dwLowDateTime) +
-            (int64_t)(((uint64_t)u.dwHighDateTime << 32) | u.dwLowDateTime)) * 100;
+    ULONG64 c = 0;
+    if (pq_cyc_per_ns == 0) {
+        ULONG64 c0 = 0, c1 = 0;
+        int64_t t0 = yrt_now_ns();
+        QueryThreadCycleTime(GetCurrentThread(), &c0);
+        while (yrt_now_ns() - t0 < 50000000) { }
+        QueryThreadCycleTime(GetCurrentThread(), &c1);
+        pq_cyc_per_ns = (double)(c1 - c0) / (double)(yrt_now_ns() - t0);
+    }
+    QueryThreadCycleTime(GetCurrentThread(), &c);
+    return (int64_t)((double)c / pq_cyc_per_ns);
 }
 
 /* What a frame draws: a gray level and a square that moves with the
@@ -223,7 +256,13 @@ PQ_API int64_t pq_queue(int K, int spacing, int lead, int load, int64_t* t0_out,
         pq_sub* s = g_nsub < PQ_MAX ? &g_sub[g_nsub] : NULL;
         int64_t c0 = pq_thread_cpu(), tb = yrt_now_ns(), target;
         int rc = yscr_begin(&g_scr, &f);
-        if (rc == YSCR_QUIT) { *quit_abort = f.abort; c->qmax = 1; return first >= 0 ? first : -100; }
+        if (rc == YSCR_QUIT) {
+            /* PQ_RECANCEL=1: cancel again on the frame thread when begin()
+             * reports the abort (a present made just before the first
+             * cancel escaped it in 3 of 10 runs) */
+            if (getenv("PQ_RECANCEL")) yscr_queue_cancel(&g_scr, 0);
+            *quit_abort = f.abort; c->qmax = 1; return first >= 0 ? first : -100;
+        }
         if (rc != YSCR_OK) { snprintf(g_err, sizeof g_err, "begin rc %d at k %d", rc, k); return rc; }
         if (k == 0) { t0 = f.onset + (int64_t)lead * f.period; first = f.index; }
         target = t0 + (int64_t)k * spacing * f.period;
