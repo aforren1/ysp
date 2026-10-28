@@ -24,5 +24,11 @@ build = "cp310-* cp314-*"
 skip = "*-musllinux_*"
 test-command = "python -c \"import ysp.stair as st; s = st.Staircase(start=1.0, steps=0.1, stop_trials=2); s.update(s.next(), 1); print('ok', s.next())\""
 
+[tool.cibuildwheel.windows]
+# 64-bit only: no 32-bit Windows 11, MATLAB and ysp-vis are 64-bit, and
+# a 32-bit CPython on a lab rig is rare (docs/bindings.md); cibuildwheel's
+# default would add an x86 wheel.
+archs = ["AMD64"]
+
 [tool.cibuildwheel.macos]
 archs = ["universal2"]

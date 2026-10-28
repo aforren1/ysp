@@ -30,5 +30,11 @@ skip = "*-musllinux_*"
 test-requires = ["pytest", "numpy"]
 test-command = "pytest {package}/tests -q"
 
+[tool.cibuildwheel.windows]
+# 64-bit only: no 32-bit Windows 11, MATLAB and ysp-vis are 64-bit, and
+# a 32-bit CPython on a lab rig is rare (docs/bindings.md); cibuildwheel's
+# default would add an x86 wheel.
+archs = ["AMD64"]
+
 [tool.cibuildwheel.macos]
 archs = ["universal2"]

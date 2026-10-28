@@ -5,7 +5,10 @@ This page is reference: the language bindings of the headers.
 - **Python**: one distribution per library under
   [bindings/python/](../bindings/python/), each a dependency-free CPython
   extension on the Limited API (one abi3 wheel per platform for CPython
-  3.10+). Each one compiles its header into the extension, with the headers
+  3.10+). On Windows the wheels are 64-bit only (`AMD64`): there is no
+  32-bit Windows 11, MATLAB and ysp-vis are 64-bit, and a 32-bit CPython
+  on a rig is rare. The headers still build for 32-bit Windows (C99,
+  x86 atomics), but no binding is built or tested there. Each one compiles its header into the extension, with the headers
   it includes. They share the `ysp` namespace (PEP 420, no `__init__.py`),
   so `pip install ysp-parallel ysp-serial` gives `import ysp.parallel` and
   `import ysp.serial`, and either installs alone. The adaptive headers have

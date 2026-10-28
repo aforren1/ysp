@@ -25,5 +25,11 @@ skip = "*-musllinux_*"
 # Smoke test: a Psi grid opens, selects, and the Async thread starts and stops.
 test-command = "python -c \"import ysp.quest as pq; q = pq.Quest([(-3.0, 0.0, 31)], [(-3.0, 0.0, 61), (0.5, 6.0, 12), 0.5, 0.02], stop_trials=5); a = pq.Async(q); a.start(); print('ok', a.poll()[1].proposed); a.stop()\""
 
+[tool.cibuildwheel.windows]
+# 64-bit only: no 32-bit Windows 11, MATLAB and ysp-vis are 64-bit, and
+# a 32-bit CPython on a lab rig is rare (docs/bindings.md); cibuildwheel's
+# default would add an x86 wheel.
+archs = ["AMD64"]
+
 [tool.cibuildwheel.macos]
 archs = ["universal2"]
