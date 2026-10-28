@@ -124,7 +124,15 @@ uv run tests/mutate/mutate.py screen.toml -j 1 \
 
 - The runner appends its own command to CMD: the test with its
   `timeout`. The timeout starts when the guard starts the test, not
-  while the guard waits for a quiet machine.
+  while the guard waits for a quiet machine. The times that the runner
+  prints include the guard's wait.
+- Do not run the runner under `psy-guard.sh build` with `--guard`: the
+  time mode of the guard waits for the builds that are queued or
+  running, so each test run would wait up to 15 minutes for the runner's
+  own build mark.
+- Give `--guard` only for the window mutants (select them with
+  `--only`). Run the other mutants without it: they need no turn on the
+  machine, and the guard adds its wait to each run.
 - The runner finds the first word of CMD on the `PATH`. On Windows,
   Git's `bash.exe` must come before `C:\Windows\System32\bash.exe`
   (WSL), as it does in a Git Bash shell.
