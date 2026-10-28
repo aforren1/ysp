@@ -3729,6 +3729,25 @@ as C11 and with `YRT_NO_THREADS`, `screen.cpp` as C++17, and
 `tests/adapt/screen_test.c` built and run (all checks pass). No x86
 program opened a window: there is no x86 ANGLE here.
 
+### Tests and mutants
+
+On v0.10.4, this laptop: `screen_window_test` 110 of 110 checks (every
+default case, launched in front, through `psy-guard.sh time`); MSVC
+full ctest 97 of 97; MinGW ctest 80 of 80 (no SDL3 there) and the MinGW
+gcc 16.1 `-Werror` compile checks with SDL3's headers; WSL2 gcc 11.4
+`screen_test` with ASan and UBSan.
+
+The window-thread, foreground and gap mutants and the 5 new ones, 37 in
+all, ran through `tests/mutate/mutate.py`: the 20 on the core test
+(`wt-01` to `wt-09`, `fg-01` to `fg-07`, `gp-01` to `gp-04`) with `-j 4`,
+and the 17 on the window test (`wt-20` to `wt-29`, `fg-08`, `bf-01`,
+`bf-02`, `bf-03`, `lk-01`, `lk-02`, `ds-01`) one at a time with
+`--guard` (each run under `psy-guard.sh time`; see
+[tests/mutate/README.md](../tests/mutate/README.md)). 37 of 37 killed.
+`bf-02` (the shown buffer left bound when none is free) made the draw
+between frames wait until the test's 10 s watchdog ended it: the case
+the fallback exists for.
+
 ## Bindings
 
 `ysp/screen.h` is bound in `ysp-vis` with `ysp/gfx.h` and `ysp/video.h`:
