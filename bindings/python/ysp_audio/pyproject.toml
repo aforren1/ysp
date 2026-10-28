@@ -34,3 +34,8 @@ archs = ["AMD64"]
 
 [tool.cibuildwheel.macos]
 archs = ["universal2"]
+# Below 10.12, miniaudio 0.11.25's timer counts whole seconds and its null
+# device, which the tests use, hands over a second of frames at once
+# (docs/audio.md, "The null device on macOS"). setup.py raises a lower
+# target too; the extension refuses to compile below 10.12.
+environment = { MACOSX_DEPLOYMENT_TARGET = "10.13" }
