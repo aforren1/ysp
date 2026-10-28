@@ -6293,18 +6293,19 @@ static void yscr__comp_close(void* vctx) {
     memset(c, 0, sizeof *c);
 }
 
-/* Between frames no presented buffer stays bound (v0.10.3). A shown
- * buffer is released only by a newer present or a covered window, and a
- * draw into it waited until then: ygfx_prime() between flip() and begin()
- * in front, more than 90 s (docs/screen.md, "Between frames"). So after a
- * present framebuffer 0 is a buffer no present holds; with none free,
- * no surface (draws to framebuffer 0 do nothing; reads of it fail). */
 /* Whether buffer k is free. A free buffer was found at every present in
  * testing, so the window test replaces this to make the case without one
  * happen (tests/adapt/screen_window_test.c, "nofree"). */
 #ifndef YSCR__COMP_IS_AVAILABLE
 #define YSCR__COMP_IS_AVAILABLE(c, k, ok) YSCR__C((c)->buf[k], IsAvailable, (ok))
 #endif
+
+/* Between frames no presented buffer stays bound (v0.10.3). A shown
+ * buffer is released only by a newer present or a covered window, and a
+ * draw into it waited until then: ygfx_prime() between flip() and begin()
+ * in front, more than 90 s (docs/screen.md, "Between frames"). So after a
+ * present framebuffer 0 is a buffer no present holds; with none free,
+ * no surface (draws to framebuffer 0 do nothing; reads of it fail). */
 static void yscr__comp_park(yscr__comp* c) {
     int i;
     for (i = 1; i < YSCR__COMP_BUFFERS; i++) {
