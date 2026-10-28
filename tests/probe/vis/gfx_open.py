@@ -47,8 +47,9 @@ for r in range(a.rounds):
             shutil.rmtree(d, ignore_errors=True)
             os.makedirs(d)
             t, mode, ld, cp = one(started, d)            # a cold cache: an empty folder
-            print("round %d %-8s cold: %.3f s (%s; %d loaded, %d compiled)" % (r, "started" if started else "after", t, mode, ld, cp))
+            when = "started" if started else "after"
+            print(f"round {r:d} {when:<8} cold: {t:.3f} s ({mode}; {ld:d} loaded, {cp:d} compiled)")
             t, mode, ld, cp = one(started, d)            # the same folder again: warm
-            print("round %d %-8s warm: %.3f s (%s; %d loaded, %d compiled)" % (r, "started" if started else "after", t, mode, ld, cp))
+            print(f"round {r:d} {when:<8} warm: {t:.3f} s ({mode}; {ld:d} loaded, {cp:d} compiled)")
     finally:
         shutil.rmtree(d, ignore_errors=True)

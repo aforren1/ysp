@@ -52,7 +52,7 @@ with yscr.Screen(gfx={"background": 0.5, "max_draws": 4096}, **opts) as s, ygfx.
         items.append(label)
     scene = g.list(items)
     g.prime()
-    line = "%s; gfx %s; %s n %d" % (s.describe(), ygfx.__version__, a.mode, a.n)
+    line = f"{s.describe()}; gfx {ygfx.__version__}; {a.mode} n {a.n:d}"
     gc.freeze()
     t_end = None
     try:
@@ -65,22 +65,22 @@ with yscr.Screen(gfx={"background": 0.5, "max_draws": 4096}, **opts) as s, ygfx.
                 s.flip()
                 break
             if label is not None:
-                label.text = "frame %d" % f.index              # a layout in the frame's work
+                label.text = f"frame {f.index:d}"              # a layout in the frame's work
             g.frame(scene)
             s.flip()
     except yscr.Abort as e:
-        print("abort 0x%x" % e.reasons)
+        print(f"abort 0x{e.reasons:x}")
     s.wait_flip()
     last = rows[-1].index if rows else -1
     rows.extend(r for r in s.records() if r.index > last)
 
 with open(a.csv, "w", newline="\n") as out:
-    out.write("# python %s\n" % line)
+    out.write(f"# python {line}\n")
     out.write("index,target_ns,planned_ns,onset_ns,residual_ns,dropped,path,tier,flags,draw_ns,swap_ns\n")
     for r in rows:
         ph = r.phases
-        out.write("%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n" % (
-            r.index, r.target_ns, r.planned_ns, r.onset_ns, r.residual_ns, r.dropped, r.path, r.tier, r.flags,
-            -1 if ph[yscr.PHASE_DRAW] is None else round(ph[yscr.PHASE_DRAW] * 1e9),
-            -1 if ph[yscr.PHASE_SWAP] is None else round(ph[yscr.PHASE_SWAP] * 1e9)))
-print("%d records -> %s" % (len(rows), a.csv))
+        draw = -1 if ph[yscr.PHASE_DRAW] is None else round(ph[yscr.PHASE_DRAW] * 1e9)
+        swap = -1 if ph[yscr.PHASE_SWAP] is None else round(ph[yscr.PHASE_SWAP] * 1e9)
+        out.write(f"{r.index:d},{r.target_ns:d},{r.planned_ns:d},{r.onset_ns:d},{r.residual_ns:d},{r.dropped:d},"
+                  f"{r.path:d},{r.tier:d},{r.flags:d},{draw:d},{swap:d}\n")
+print(f"{len(rows):d} records -> {a.csv}")

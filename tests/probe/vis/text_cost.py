@@ -74,13 +74,16 @@ with yscr.Screen(backend="sim") as s:
     first = time.perf_counter() - t0
     g.close()
 
-print("%-10s %6s %5s  %-28s %-28s" % ("text", "chars", "lines", "call us p50/p90/max", "layout_time us p50/p90/max"))
+print(f"{'text':<10} {'chars':>6} {'lines':>5}  {'call us p50/p90/max':<28} {'layout_time us p50/p90/max':<28}")
 for name, n, nl, c, l in rows:
-    print("%-10s %6d %5d  %8.1f %8.1f %9.1f  %8.1f %8.1f %9.1f" % (name, n, nl, *(1e6 * x for x in c), *(1e6 * x for x in l)))
-print("first paragraph in a new font (Arial): %.2f ms, of it layout %.3f ms, glyph builds %.3f ms, upload %.3f ms, %d glyphs"
-      % (1e3 * first, 1e3 * p.layout_time, 1e3 * p.build_time, 1e3 * p.upload_time, p.new_glyphs))
+    c50, c90, cmax = (1e6 * x for x in c)
+    l50, l90, lmax = (1e6 * x for x in l)
+    print(f"{name:<10} {n:6d} {nl:5d}  {c50:8.1f} {c90:8.1f} {cmax:9.1f}  {l50:8.1f} {l90:8.1f} {lmax:9.1f}")
+print(f"first paragraph in a new font (Arial): {1e3 * first:.2f} ms, of it layout {1e3 * p.layout_time:.3f} ms, "
+      f"glyph builds {1e3 * p.build_time:.3f} ms, upload {1e3 * p.upload_time:.3f} ms, {p.new_glyphs:d} glyphs")
 if a.csv:
     with open(a.csv, "w", newline="\n") as out:
         out.write("host,text,chars,lines,call_p50_us,call_p90_us,call_max_us,layout_p50_us,layout_p90_us,layout_max_us\n")
         for name, n, nl, c, l in rows:
-            out.write("python,%s,%d,%d,%s\n" % (name, n, nl, ",".join("%.2f" % (1e6 * x) for x in c + l)))
+            cols = ",".join(f"{1e6 * x:.2f}" for x in c + l)
+            out.write(f"python,{name},{n:d},{nl:d},{cols}\n")

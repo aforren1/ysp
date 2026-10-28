@@ -21,15 +21,15 @@ for t, chunk in capture:
     r = d.decode(chunk, t)
     for e in r.events:
         what = {box.PRESS: "press", box.RELEASE: "release", box.SAMPLE: "sample"}[e.type]
-        print("read at %.3f s: %s of channel %d at board tick %d" % (e.t, what, e.control, e.ticks))
+        print(f"read at {e.t:.3f} s: {what} of channel {e.control:d} at board tick {e.ticks:d}")
     for o in r.outputs:
-        print("the board set its outputs to %d at tick %d" % (o.code, o.ticks))
+        print(f"the board set its outputs to {o.code:d} at tick {o.ticks:d}")
     for s in r.text:
         print("identity:", s)
     pairs += [(t, p.ticks, p.probe) for p in r.pairs]
 
 print("clock pairs (read time, board ticks, probe):", pairs)
-print("one tick is %g s; %d frames, %d garbage bytes" % (box.tick("line"), d.frames, d.garbage))
+print(f"one tick is {box.tick('line'):g} s; {d.frames:d} frames, {d.garbage:d} garbage bytes")
 
 # The bytes a host writes: a trigger code on a Brain Products TriggerBox and
 # a 2 ms pulse that a line board times itself.

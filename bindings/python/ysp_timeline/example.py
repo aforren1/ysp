@@ -35,12 +35,12 @@ def run_trial(first_frame):
         # draw(fix, grating, contrast, dot.value) would go here
         for e in fired:
             name = {ytl.ONSET: "onset", ytl.OFFSET: "offset", ytl.TRIGGER: "trigger"}.get(e.kind, e.kind)
-            print("frame %3d  %-7s ch %d code %2d  %.1f us late" % (e.frame, name, e.target, e.code, e.residual * 1e6))
+            print(f"frame {e.frame:3d}  {name!s:<7} ch {e.target:d} code {e.code:2d}  {e.residual * 1e6:.1f} us late")
         if i - first_frame in (30, 33, 36, 60, 72):
-            print("frame %3d  contrast %.4f  dot x %.2f" % (i, contrast, dot.value[0]))
+            print(f"frame {i:3d}  contrast {contrast:.4f}  dot x {dot.value[0]:.2f}")
 
 
 run_trial(0)
 print("-- the same trial again, anchored at frame 200 --")
 run_trial(200)
-print("%d events in the record" % len(tl.events(TRIAL)))
+print(f"{len(tl.events(TRIAL)):d} events in the record")

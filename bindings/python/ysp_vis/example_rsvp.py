@@ -77,9 +77,10 @@ with yscr.Screen(gfx={"background": 0.5}, **opts) as s:
         k = int((r.target - start + 0.002) // SOA)
         firsts.setdefault(k, r)
     soas = [firsts[k + 1].onset - firsts[k].onset for k in range(N - 1) if k in firsts and k + 1 in firsts]
-    print("%d items, target at %d; measured SOA %.4f to %.4f s; %d missed frames"
-          % (len(firsts), target, min(soas), max(soas), sum(r.missed for r in shown)))
+    missed = sum(r.missed for r in shown)
+    print(f"{len(firsts):d} items, target at {target:d}; measured SOA {min(soas):.4f} to {max(soas):.4f} s; "
+          f"{missed:d} missed frames")
     if presses and target in firsts:
-        print("Space %.3f s after the target's onset" % (presses[0] - firsts[target].onset))
+        print(f"Space {presses[0] - firsts[target].onset:.3f} s after the target's onset")
     gfx.unbind()
     gfx.close()
