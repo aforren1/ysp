@@ -5886,6 +5886,10 @@ typedef struct yscr__comp {
     volatile LONG64       cancel_t0, cancel_t1;  /* the last cancel call, rt ns */
     volatile LONG         cancel_n;
     uint64_t              cancel_from;
+    int64_t               cancel_first_t0;  /* the first cancel since open */
+    DWORD                 cancel_first_tid, cancel_tid;
+    LONG                  acq_cancel_n;     /* cancel_n when the frame's buffer was taken */
+    volatile LONG         dropped_after_cancel;  /* presents not made: a cancel came mid-frame */
     int                   cur;
     int                   parked;           /* between frames: 1 a free buffer bound, -1 none */
     void*                 edev;
@@ -6374,6 +6378,7 @@ static int yscr__comp_acquire(void* vctx, int64_t deadline_ns, yscr_vblank* newe
             if (SUCCEEDED(YSCR__C(c->buf[k], IsAvailable, &ok)) && ok) {
                 c->cur = k;
                 c->parked = 0;
+                c->acq_cancel_n = c->cancel_n;
                 yscr__comp_bind(c);
                 return YSCR_OK;
             }
@@ -6403,6 +6408,22 @@ static int yscr__comp_present(void* vctx, const yscr_present_req* req) {
      * persists across presents, so it is set on every one. */
     target.value = req->target_count ? (uint64_t)(req->target_ns / 100) : 0;
     EnterCriticalSection(&c->pmlock);
+    /* A cancel came while this frame was drawn (an abort on another
+     * thread): presenting it would show a frame after the cancel. It
+     * completes as CANCELED, never presented. */
+    if (c->cancel_n != c->acq_cancel_n) {
+        yscr_vblank v;
+        memset(&v, 0, sizeof v);
+        v.present_id = req->present_id;
+        v.flags = YSCR_FLIP_CANCELED;
+        v.path = c->path;
+        yscr__comp_push(c, &v);
+        c->acq_cancel_n = c->cancel_n;
+        InterlockedIncrement(&c->dropped_after_cancel);
+        LeaveCriticalSection(&c->pmlock);
+        yscr__comp_park(c);
+        return YSCR_OK;
+    }
     if (FAILED(YSCR__C(c->ps, SetBuffer, (void*)c->buf[c->cur]))) { LeaveCriticalSection(&c->pmlock); return YSCR_ERR_LOST; }
     if (FAILED(YSCR__C(c->pm, SetTargetTime, target))) { LeaveCriticalSection(&c->pmlock); return YSCR_ERR_LOST; }
     sys = YSCR__C0(c->pm, GetNextPresentId);
@@ -6495,6 +6516,8 @@ static int yscr__comp_cancel(yscr__comp* c, int blank) {
     if (!c->pmlock_ok) return YSCR_ERR_CLOSED;
     EnterCriticalSection(&c->pmlock);
     InterlockedExchange64(&c->cancel_t0, yscr__now());
+    if (!c->cancel_n) { c->cancel_first_t0 = c->cancel_t0; c->cancel_first_tid = GetCurrentThreadId(); }
+    c->cancel_tid = GetCurrentThreadId();
     k = yscr__comp_oldest(c);
     c->cancel_from = k >= 0 ? c->sys_id[k] : c->last_sys_id + 1;
     hr = YSCR__C(c->pm, CancelPresentsFrom, c->cancel_from);

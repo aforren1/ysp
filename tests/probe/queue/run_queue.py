@@ -54,6 +54,7 @@ class Probe:
         d.pq_keys_join.argtypes = [p64, C.POINTER(C.c_int), C.POINTER(C.c_int)]
         d.pq_watch_stop.argtypes = [p64]
         d.pq_panic_state.argtypes = [C.POINTER(C.c_int), p64, p64]
+        d.pq_cancel_who.argtypes = [p64, C.POINTER(C.c_int), C.POINTER(C.c_int), C.POINTER(C.c_int)]
         d.pq_begin_abort.argtypes = [C.POINTER(C.c_uint32), C.POINTER(C.c_int32), p64, C.POINTER(C.c_int)]
         self.angle = angle.encode() if angle else None
 
@@ -115,6 +116,11 @@ class Probe:
         a, b, n, s = C.c_int64(0), C.c_int64(0), C.c_int(0), C.c_int64(0)
         self.d.pq_cancel_info(C.byref(a), C.byref(b), C.byref(n), C.byref(s))
         return a.value, b.value, n.value, s.value
+
+    def cancel_who(self):
+        t, a, b, n = C.c_int64(0), C.c_int(0), C.c_int(0), C.c_int(0)
+        self.d.pq_cancel_who(C.byref(t), C.byref(a), C.byref(b), C.byref(n))
+        return t.value, a.value, b.value, n.value
 
     def begin_abort(self):
         ab, pr, t, n = C.c_uint32(0), C.c_int32(0), C.c_int64(0), C.c_int(0)
@@ -309,6 +315,8 @@ def mode_cancel(p, a, out):
                "shown_after_cancel": len(after),
                "blank_after_cancel_ms": (blank - c1) / 1e6 if blank > 1 else None,
                "flags": sorted({flagnames(r["flags"] & ~1) for r in recs})}
+        ft, fw, lw, dropped = p.cancel_who()
+        row.update({"first_who": fw, "last_who": lw, "not_presented_total": dropped})
         rows.append(row)
         print(json.dumps(row))
         p.frames(60)
@@ -335,7 +343,9 @@ def mode_panic(p, a, out):
     shown = [r for r in recs if not r["flags"] & 0xC0]
     last_on = max((r["onset"] for r in shown), default=0)
     rc, abort, presses, abort_ns = p.begin_abort()
-    row = {"bits": a.bits, "sent": sent, "skipped": skipped, "abort_in_submit": ab, "released": released,
+    ft, fw, lw, dropped = p.cancel_who()
+    row = {"bits": a.bits, "sent": sent, "key1_to_first_cancel_ms": (ft - keys[0]) / 1e6 if keys and ft else None,
+           "first_who": fw, "last_who": lw, "not_presented": dropped, "skipped": skipped, "abort_in_submit": ab, "released": released,
            "key1_to_cancel_ms": (c0 - keys[0]) / 1e6 if keys and n else None,
            "key3_to_release_ms": (t_rel - keys[-1]) / 1e6 if keys and t_rel else None,
            "panic_to_release_ms": (t_rel - t_panic) / 1e6 if t_rel and t_panic else None,

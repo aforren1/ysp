@@ -269,7 +269,9 @@ PQ_API int pq_collect(void) {
 /* One begin(), to read an abort; a frame is not drawn or flipped. */
 PQ_API int pq_begin_abort(uint32_t* abort, int32_t* presses, int64_t* abort_ns, int* n_done) {
     yscr_frame f;
-    int rc = yscr_begin(&g_scr, &f);
+    int rc;
+    memset(&f, 0, sizeof f);
+    rc = yscr_begin(&g_scr, &f);
     *abort = f.abort; *presses = f.abort_presses; *abort_ns = f.abort_ns; *n_done = f.n_done;
     if (rc == YSCR_OK) {
         pq_draw(f.index, 0);
@@ -305,6 +307,21 @@ PQ_API void pq_cancel_info(int64_t* t0, int64_t* t1, int* n, int64_t* blank_show
 PQ_API void pq_drain(void) {
     yscr__comp* c = (yscr__comp*)g_scr.pr_ctx;
     yscr__comp_drain(c);
+}
+/* the first cancel: its time, and who called it (1 window thread, 2 the
+ * watchdog's hook thread, 3 the frame thread, 0 another); the last one's
+ * caller; frames not presented because a cancel came mid-frame */
+PQ_API void pq_cancel_who(int64_t* first_t0, int* first_who, int* last_who, int* dropped) {
+    yscr__comp* c = (yscr__comp*)g_scr.pr_ctx;
+    DWORD ids[2];
+    int i;
+    ids[0] = c->cancel_first_tid; ids[1] = c->cancel_tid;
+    for (i = 0; i < 2; i++) {
+        int w = ids[i] == yscr__wt.tid ? 1 : ids[i] == yscr__wd.tid ? 2 : ids[i] == GetCurrentThreadId() ? 3 : 0;
+        if (i == 0) *first_who = w; else *last_who = w;
+    }
+    *first_t0 = c->cancel_first_t0;
+    *dropped = (int)c->dropped_after_cancel;
 }
 PQ_API int pq_inflight(void) { return ((yscr__comp*)g_scr.pr_ctx)->n_out; }
 
