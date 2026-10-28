@@ -3,7 +3,7 @@
  * A thin, dependency-free binding: it needs only Python.h, and compiles the
  * header's implementation into the module (with ysp/input.h, which the
  * header includes). Built against the stable ABI / Limited API (CPython
- * 3.8+), so the types are heap types made with PyType_FromSpec and
+ * 3.10+), so the types are heap types made with PyType_FromSpec and
  * PyStructSequence_NewType.
  *
  *     import ysp.response as yr
@@ -24,7 +24,7 @@
  * guards. A reader thread queues its events; the frame thread feeds them.
  */
 #ifndef Py_LIMITED_API
-#define Py_LIMITED_API 0x03080000
+#define Py_LIMITED_API 0x030A0000
 #endif
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
@@ -1258,7 +1258,7 @@ PyMODINIT_FUNC PyInit_response(void) {
     Py_DECREF(base2);
     RspStateError = rsp_add_exc(m, "ysp.response.StateError", "StateError", RspError);
     if (!RspArgumentError || !RspStateError) goto fail;
-    if (PyModule_AddStringConstant(m, "__version__", yrsp_version()) < 0) goto fail;
+    if (PyModule_AddStringConstant(m, "__version__", YRSP_VERSION_STRING ".1") < 0) goto fail;   /* .1: the CPython 3.10 floor (2026-10-27) */
     if (PyModule_AddStringConstant(m, "INPUT_VERSION", YIN_VERSION_STRING) < 0) goto fail;
 #define C(name, v) if (PyModule_AddIntConstant(m, name, (long)(v)) < 0) goto fail;
     /* ysp/input.h */

@@ -5,7 +5,7 @@
  * library implementation is compiled directly into this module.
  *
  * Built against the stable ABI / Limited API (Py_LIMITED_API), so one compiled
- * .abi3.so works across CPython >= 3.8 without recompiling per version. That
+ * .abi3.so works across CPython >= 3.10 without recompiling per version. That
  * rules out the static PyTypeObject layout, so the Port type is a heap type
  * created with PyType_FromSpec.
  *
@@ -32,7 +32,7 @@
  * in flight never stalls unrelated Python code.
  */
 #ifndef Py_LIMITED_API
-#define Py_LIMITED_API 0x03080000   /* target the CPython 3.8+ stable ABI */
+#define Py_LIMITED_API 0x030A0000   /* target the CPython 3.10+ stable ABI */
 #endif
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
@@ -46,7 +46,7 @@
  * a change gets a new version without naming a header that does not exist.
  * When the header's version moves, drop the suffix here and in
  * pyproject.toml; tests/test_parallel.py checks that the two agree. */
-#define PP_VERSION YPAR_VERSION_STRING
+#define PP_VERSION YPAR_VERSION_STRING ".1"   /* .1: the CPython 3.10 floor (2026-10-27) */
 
 /* An OS mutex, not PyThread_type_lock: the PyThread_* functions are listed
  * in the stable ABI, but python3.dll did not export them before CPython 3.10

@@ -3,7 +3,7 @@
 A CPython extension that wraps [ysp/device.h](../../../include/ysp/device.h):
 response boxes, trigger boxes and microcontroller boards as events on the
 ysp_rt clock, and as outputs for trigger codes. It uses the Limited API
-(one abi3 wheel per platform for CPython 3.8+) and has no run-time
+(one abi3 wheel per platform for CPython 3.10+) and has no run-time
 dependencies. The distribution is `ysp-device`, the module `ysp.device`
 (PEP 420 namespace `ysp`, no `__init__.py`). Its version is the header's.
 

@@ -8,8 +8,8 @@ a C thread from the shared [ysp/rt.h](../../../include/ysp/rt.h).
 
 The binding uses the plain CPython C API and has no dependencies: no NumPy, no
 PyTorch, no pybind. It targets the **Limited API / stable ABI**
-(`Py_LIMITED_API = 0x03080000`), so one `ysp/aep.abi3.so` (`aep.pyd` on
-Windows) works on CPython 3.8 and later.
+(`Py_LIMITED_API = 0x030A0000`), so one `ysp/aep.abi3.so` (`aep.pyd` on
+Windows) works on CPython 3.10 and later.
 
 The distribution is `ysp-aep` and the module is `ysp.aep`. `ysp` is a
 [PEP 420](https://peps.python.org/pep-0420/) implicit namespace package (no

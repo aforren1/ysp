@@ -9,8 +9,8 @@ the fields and the events that landed on the frame, with their landing
 records.
 
 The extension uses the **Limited API / stable ABI**
-(`Py_LIMITED_API = 0x03080000`), so one `ysp/timeline.abi3.so` works on
-CPython 3.8 and later. It has no run-time dependencies.
+(`Py_LIMITED_API = 0x030A0000`), so one `ysp/timeline.abi3.so` works on
+CPython 3.10 and later. It has no run-time dependencies.
 
 The distribution is `ysp-timeline` and the module is `ysp.timeline`. `ysp`
 is a [PEP 420](https://peps.python.org/pep-0420/) implicit namespace

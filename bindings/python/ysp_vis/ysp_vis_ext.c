@@ -31,7 +31,7 @@
  * are beside this file, and desc.angle_dir is always this file's directory.
  */
 #ifndef Py_LIMITED_API
-#define Py_LIMITED_API 0x03080000
+#define Py_LIMITED_API 0x030A0000
 #endif
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>

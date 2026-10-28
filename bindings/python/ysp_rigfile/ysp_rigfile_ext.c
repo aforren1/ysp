@@ -18,7 +18,7 @@
  * are mm, as in the file.
  */
 #ifndef Py_LIMITED_API
-#define Py_LIMITED_API 0x03080000
+#define Py_LIMITED_API 0x030A0000
 #endif
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
@@ -30,7 +30,7 @@
 #include <string.h>
 #include <stdlib.h>
 
-#define RG_VERSION YRIG_VERSION_STRING
+#define RG_VERSION YRIG_VERSION_STRING ".1"   /* .1: the CPython 3.10 floor (2026-10-27) */
 
 static PyObject* RgError;
 static PyObject* RgMissing;

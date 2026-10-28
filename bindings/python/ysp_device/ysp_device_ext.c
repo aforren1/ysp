@@ -28,7 +28,7 @@
  * the order the header needs (box, rule, output).
  */
 #ifndef Py_LIMITED_API
-#define Py_LIMITED_API 0x03080000   /* the CPython 3.8+ stable ABI */
+#define Py_LIMITED_API 0x030A0000   /* the CPython 3.10+ stable ABI */
 #endif
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
@@ -48,7 +48,7 @@
 #include <math.h>
 #include <string.h>
 
-#define DV_VERSION YDEV_VERSION_STRING
+#define DV_VERSION YDEV_VERSION_STRING ".1"   /* .1: the CPython 3.10 floor (2026-10-27) */
 #define DV_QUEUE_DEFAULT 1024
 #define DV_QUEUE_MAX (1u << 20)
 

@@ -9,8 +9,8 @@ the onset (the fit's time, never an observed time), the residual, the
 stream frame, and a tier.
 
 The extension uses the **Limited API / stable ABI**
-(`Py_LIMITED_API = 0x03080000`), so one `ysp/audio.abi3.so` works on
-CPython 3.8 and later. It has no run-time dependencies. miniaudio 0.11.25
+(`Py_LIMITED_API = 0x030A0000`), so one `ysp/audio.abi3.so` works on
+CPython 3.10 and later. It has no run-time dependencies. miniaudio 0.11.25
 (one public-domain file) is compiled in.
 
 The distribution is `ysp-audio` and the module is `ysp.audio`. Its version

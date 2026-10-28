@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ysp-rdk"
-version = "0.3.0"  # ysp/rdk.h v0.3.0; tests/test_rdk.py checks it against __version__
+version = "0.3.0.1"  # ysp/rdk.h v0.3.0, binding change 1 (the CPython 3.10 floor); tests/test_rdk.py checks it against __version__
 description = "Random dot kinematograms that regenerate bit for bit: the analysis side of ysp/rdk.h"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 license = "MIT-0"
 # The outputs are NumPy arrays (numpy.frombuffer over the extension's bytes);
 # the module imports NumPy on the first output, not at import.
@@ -19,10 +19,11 @@ dependencies = ["numpy"]
 # distributions install next to this one without either owning the namespace.
 
 [tool.cibuildwheel]
-# abi3 (Limited API): setup.py forces a cp38-abi3 wheel tag, so one build per
-# platform serves every supported CPython. cibuildwheel >= 4 has no cp38 build
-# interpreter, so build on cp39; the wheel is still cp38-abi3.
-build = "cp39-*"
+# abi3 (Limited API): setup.py forces a cp310-abi3 wheel tag, so one build per
+# platform serves every supported CPython. The wheel is built on cp310 and
+# tested there and on cp314: cibuildwheel tests an abi3 wheel it has built on
+# the later versions it is asked for instead of building again.
+build = "cp310-* cp314-*"
 skip = "*-musllinux_*"
 # The whole test runs on every platform: the golden digests must be equal on
 # Linux, macOS arm64 and Windows, or the binding (or the header) has a bug.

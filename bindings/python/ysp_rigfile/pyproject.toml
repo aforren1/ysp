@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ysp-rigfile"
-version = "0.5.1"  # must equal ysp/rigfile.h's YRIG_VERSION_STRING; tests/test_rigfile.py checks it
+version = "0.5.1.1"  # ysp/rigfile.h v0.5.1, binding change 1 (the CPython 3.10 floor); tests/test_rigfile.py checks it against __version__
 description = "The rig profile: the device of each role, loopback results, viewing geometry"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 license = "MIT-0"
 
 # The C extension is declared in setup.py as ysp.rigfile. ysp-device opens a
@@ -15,7 +15,11 @@ license = "MIT-0"
 # does not need it to read, check and write a profile.
 
 [tool.cibuildwheel]
-build = "cp39-*"
+# abi3 (Limited API): setup.py forces a cp310-abi3 wheel tag, so one build per
+# platform serves every supported CPython. The wheel is built on cp310 and
+# tested there and on cp314: cibuildwheel tests an abi3 wheel it has built on
+# the later versions it is asked for instead of building again.
+build = "cp310-* cp314-*"
 skip = "*-musllinux_*"
 test-requires = ["pytest"]
 test-command = "pytest {package}/tests -q"

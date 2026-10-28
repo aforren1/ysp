@@ -30,7 +30,7 @@
  * refuses while it is pinned (BusyError).
  */
 #ifndef Py_LIMITED_API
-#define Py_LIMITED_API 0x03080000
+#define Py_LIMITED_API 0x030A0000
 #endif
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>

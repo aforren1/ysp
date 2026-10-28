@@ -24,7 +24,7 @@ soundtrack on a `ysp.audio.Audio`, the frame sequence writer and the index
 maker (How to play a movie, below).
 
 **Windows only.** The other screen backends of ysp/screen.h are stubs.
-The wheel is `cp38-abi3-win_amd64`: one build for CPython 3.8 and later.
+The wheel is `cp310-abi3-win_amd64`: one build for CPython 3.10 and later.
 
 ## What the wheel holds
 

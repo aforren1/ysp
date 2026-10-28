@@ -5,7 +5,7 @@ A small CPython extension wrapping the
 on the shared [ysp/rt.h](../../../include/ysp/rt.h). It uses the plain CPython C API
 (no nanobind/pybind/Cython) to stay dependency-free, and is built against the
 **Limited API / stable ABI** (`Py_LIMITED_API =
-0x03080000`), so a single `ysp/parallel.abi3.so` works on CPython 3.8+ without
+0x030A0000`), so a single `ysp/parallel.abi3.so` works on CPython 3.10+ without
 a rebuild per version.
 
 The distribution is `ysp-parallel` and the module is `ysp.parallel`. `ysp` is a
@@ -164,7 +164,7 @@ The tests need no port:
 
 ```sh
 uv build --wheel -o dist
-uv run --no-project --with pytest --with dist/ysp_parallel-0.4.0.1-cp38-abi3-<platform>.whl pytest tests
+uv run --no-project --with pytest --with dist/ysp_parallel-0.4.0.1-cp310-abi3-<platform>.whl pytest tests
 ```
 
 Platform setup (ppdev permissions, the Windows inpout DLL) is documented in

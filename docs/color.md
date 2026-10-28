@@ -614,7 +614,7 @@ before the change.
 ### Python: `ysp-color`, module `ysp.color`
 
 `bindings/python/ysp_color/`, the Limited API (one abi3 wheel per
-platform, CPython 3.8 and later), PEP 420 `ysp` namespace, added to the CI
+platform, CPython 3.10 and later), PEP 420 `ysp` namespace, added to the CI
 wheel matrix. `Calibration`, `Lum` and `Context` are types; `Color` and
 `Gamut` are namedtuples; each space has a constructor with the header's
 field names (`pc.dkl(elev=0, azim=90, contrast=0.1)`); `convert_n` takes a

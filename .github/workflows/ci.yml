@@ -512,7 +512,7 @@ jobs:
           node lo/test_layout.js
 
   # --------------------------------------------------------------------- #
-  # Python: cibuildwheel builds one abi3 wheel (Limited API, cp38+) per     #
+  # Python: cibuildwheel builds one abi3 wheel (Limited API, cp310+) per    #
   # platform for each binding package. Add a directory to the matrix when  #
   # a binding lands; exclude the platforms its header does not support.    #
   # --------------------------------------------------------------------- #

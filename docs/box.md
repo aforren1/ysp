@@ -218,7 +218,7 @@ The analysis side decodes a raw capture without the device layer
 
 - **Python**: `ysp-box` (`bindings/python/ysp_box`, the module
   `ysp.box`), a C extension on the Limited API (one abi3 wheel for
-  CPython 3.8 and later), no run-time dependencies.
+  CPython 3.10 and later), no run-time dependencies.
   `Decoder(family, kind, device).decode(data, t)` and the one-shot
   `decode(family, data, t)` return `Decoded(events, pairs, outputs, text,
   garbage)`. An event is the structseq `Event` with the fields of

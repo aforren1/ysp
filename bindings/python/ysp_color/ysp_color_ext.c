@@ -2,7 +2,7 @@
  *
  * A thin, dependency-free binding: it needs only Python.h, and compiles the
  * header's implementation into the module. Built against the stable ABI /
- * Limited API (CPython 3.8+), so the types are heap types made with
+ * Limited API (CPython 3.10+), so the types are heap types made with
  * PyType_FromSpec, and arrays come in through memoryview and bytes (a copy)
  * and go out as bytes cast to a 'd' memoryview, as ysp.aep does.
  *
@@ -23,7 +23,7 @@
  * header keeps stay valid.
  */
 #ifndef Py_LIMITED_API
-#define Py_LIMITED_API 0x03080000
+#define Py_LIMITED_API 0x030A0000
 #endif
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
@@ -1028,7 +1028,7 @@ PyMODINIT_FUNC PyInit_color(void) {
     if (!(ColorType = col_namedtuple(m, "Color", "space a b c"))) goto fail;
     if (!(GamutType = col_namedtuple(m, "Gamut", "status in_gamut below above margin distance scale kept why"))) goto fail;
     if (!(ShownType = col_namedtuple(m, "Shown", "gain scene max shown Y_bg Y_peak Y_trough peak trough gamut"))) goto fail;
-    if (PyModule_AddStringConstant(m, "__version__", ycol_version()) < 0) goto fail;
+    if (PyModule_AddStringConstant(m, "__version__", YCOL_VERSION_STRING ".1") < 0) goto fail;   /* .1: the CPython 3.10 floor (2026-10-27) */
     si = ycol_spaces(&n);
     for (i = 0; i < n; i++) {   /* SPACE_DKL = 16 and so on, as the header */
         char name[48], *p;

@@ -293,7 +293,8 @@ def test_format_functions():
     tr.left = 0
     t.update(ytr.INVALID)
     assert t.format_row(1) == "1,0,-1,-1,0,0,0,0,0,-1,,,\n"
-    assert t.format_meta().startswith("ysp_trials=" + ytr.__version__ + " conditions=6 factors=3 levels=2x3x1")
+    header = ".".join(ytr.__version__.split(".")[:3])   # the meta line has the header's version
+    assert t.format_meta().startswith("ysp_trials=" + header + " conditions=6 factors=3 levels=2x3x1")
     with pytest.raises(ytr.ArgumentError):
         t.format_row(9)
 

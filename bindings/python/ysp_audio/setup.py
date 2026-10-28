@@ -51,9 +51,9 @@ if sys.platform != "win32":
     extra_link_args.append("-pthread")
     libraries += ["m"] + (["dl"] if sys.platform.startswith("linux") else [])
 
-# Target the CPython 3.8+ stable ABI (Limited API): one .abi3.so works across
+# Target the CPython 3.10+ stable ABI (Limited API): one .abi3.so works across
 # Python versions. The macro must match Py_LIMITED_API in the C source.
-PY_LIMITED = 0x03080000
+PY_LIMITED = 0x030A0000
 
 ext = Extension(
     name="ysp.audio",
@@ -71,5 +71,5 @@ ext = Extension(
 setup(
     ext_modules=[ext],
     packages=[],
-    options={"bdist_wheel": {"py_limited_api": "cp38"}},
+    options={"bdist_wheel": {"py_limited_api": "cp310"}},
 )

@@ -10,9 +10,9 @@ REPO_ROOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 # ysp/trials.h and ysp/table.h, which it includes.
 HEADER_DIR = os.path.join(REPO_ROOT, "include") if os.path.exists(os.path.join(REPO_ROOT, "include", "ysp", "trials.h")) else os.path.join(HERE, "include")
 
-# Target the CPython 3.8+ stable ABI (Limited API): one .abi3.so works across
+# Target the CPython 3.10+ stable ABI (Limited API): one .abi3.so works across
 # Python versions. The macro must match Py_LIMITED_API in the C source.
-PY_LIMITED = 0x03080000
+PY_LIMITED = 0x030A0000
 
 # Dotted name: the extension is built as ysp/trials.abi3.so. There is no
 # ysp/__init__.py anywhere, so `ysp` is a PEP 420 implicit namespace package and
@@ -36,6 +36,6 @@ setup(
     # explicit empty list also stops setuptools auto-discovery from treating
     # the ysp/ directory (kept for in-place builds) as a package.
     packages=[],
-    # Build a cp38-abi3 wheel rather than a version-specific one.
-    options={"bdist_wheel": {"py_limited_api": "cp38"}},
+    # Build a cp310-abi3 wheel rather than a version-specific one.
+    options={"bdist_wheel": {"py_limited_api": "cp310"}},
 )
