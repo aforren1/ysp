@@ -72,7 +72,7 @@
 
 /* The distribution's version tracks screen.h's, with a fourth number for a
  * change of the binding alone (docs/bindings.md, ysp-vis). */
-#define YV_VERSION YSCR_VERSION_STRING   /* no fourth number: no change of the binding alone since 0.10.3 */
+#define YV_VERSION YSCR_VERSION_STRING ".1"   /* .1: the CPython 3.10 floor (2026-10-27) */
 
 #define YV_RECORDS 4096   /* flip records kept between records() calls */
 #define YV_EVENTS  1024   /* input events kept between poll() calls    */

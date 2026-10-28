@@ -8,8 +8,8 @@ port or thread. It also gives the bytes a host writes: timer and identity
 queries, and output codes for trigger lines.
 
 The extension uses the **Limited API / stable ABI**
-(`Py_LIMITED_API = 0x03080000`), so one `ysp/box.abi3.so` works on
-CPython 3.8 and later. It has no run-time dependencies.
+(`Py_LIMITED_API = 0x030A0000`), so one `ysp/box.abi3.so` works on
+CPython 3.10 and later. It has no run-time dependencies.
 
 The distribution is `ysp-box` and the module is `ysp.box`. `ysp` is a
 [PEP 420](https://peps.python.org/pep-0420/) implicit namespace package (no

@@ -76,10 +76,10 @@ with yscr.Screen(gfx={"background": 0.5}, **opts) as s:
 
 print("trial word  ink    congruent response rt_s   correct change_ms layout_ms")
 for n, w, ink, c, r, rt, ok, ch, lay in rows:
-    print("%5d %-5s %-6s %-9s %-8s %-6s %-7s %9.3f %9.3f" % (n, w, ink, c, r, "%.3f" % rt if rt else "-", ok,
-                                                            1e3 * ch, 1e3 * lay))
+    rt_s = f"{rt:.3f}" if rt else "-"
+    print(f"{n:5d} {w!s:<5} {ink!s:<6} {c!s:<9} {r!s:<8} {rt_s:<6} {ok!s:<7} {1e3 * ch:9.3f} {1e3 * lay:9.3f}")
 done = [r for r in rows if r[5] is not None and r[6]]
 for label, cong in (("congruent", True), ("incongruent", False)):
     rts = sorted(r[5] for r in done if r[3] == cong)
     if rts:
-        print("%s: median RT %.3f s over %d correct trials" % (label, rts[len(rts) // 2], len(rts)))
+        print(f"{label}: median RT {rts[len(rts) // 2]:.3f} s over {len(rts):d} correct trials")

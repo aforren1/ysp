@@ -14,7 +14,7 @@ if "--user" in sys.argv:
     try:
         prof = yrig.load()
     except yrig.Missing as e:
-        sys.exit("no rig profile: %s (make one with rigfile_profile --new NAME)" % e.args[0])
+        sys.exit(f"no rig profile: {e.args[0]} (make one with rigfile_profile --new NAME)")
     print("rig", prof.rig, "written", prof.written, "hash", prof.hash)
     for note in prof.notes:
         print("note:", note)
@@ -28,7 +28,7 @@ prof.bind("resp", "line", "serial:16C0:0483:B1:")
 prof.bind("trig", "triggerbox", "serial:0403:6001:TB0123:")
 prof.set_view(570, 518.4, 1920)
 print(prof.text)
-print("ppd %.4f, hash %s" % (prof.ppd, prof.hash))
+print(f"ppd {prof.ppd:.4f}, hash {prof.hash}")
 
 with tempfile.TemporaryDirectory() as d:
     path = os.path.join(d, "profile.json")

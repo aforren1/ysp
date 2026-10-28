@@ -22,10 +22,10 @@
  * reservation caps the interpreter thread's CPU), virtual timers, the
  * instrumentation macros.
  *
- * Limited API (abi3, CPython 3.8+), so the Fit type is a heap type.
+ * Limited API (abi3, CPython 3.10+), so the Fit type is a heap type.
  */
 #ifndef Py_LIMITED_API
-#define Py_LIMITED_API 0x03080000   /* target the CPython 3.8+ stable ABI */
+#define Py_LIMITED_API 0x030A0000   /* target the CPython 3.10+ stable ABI */
 #endif
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
@@ -580,7 +580,7 @@ PyMODINIT_FUNC PyInit_rt(void) {
     }
     Py_INCREF(CorrType);
     if (PyModule_AddObject(m, "Corr", CorrType) < 0) { Py_DECREF(CorrType); goto fail; }
-    if (PyModule_AddStringConstant(m, "__version__", YRT_VERSION_STRING) < 0) goto fail;
+    if (PyModule_AddStringConstant(m, "__version__", YRT_VERSION_STRING ".1") < 0) goto fail;   /* .1: the CPython 3.10 floor (2026-10-27) */
     if (rt_add_obj(m, "DEFAULT_SPIN", rt_s(YRT_DEFAULT_SPIN_NS)) < 0 ||
         rt_add_obj(m, "VIRTUAL_T0", rt_s(YRT_VIRTUAL_T0_NS)) < 0)
         goto fail;

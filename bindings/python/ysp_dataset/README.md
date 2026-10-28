@@ -7,8 +7,8 @@ writes (`session.json`, `trials.csv`, `frames.csv`, `events.csv`,
 from a PsychoPy script, or from any Python experiment, to write the session
 in the ysp data set format, so that the same analysis reads it. It uses the
 plain CPython C API and has no dependencies. It is built against the
-**Limited API / stable ABI** (`Py_LIMITED_API = 0x03080000`), so one
-`ysp/dataset.abi3.so` works on CPython 3.8 and later.
+**Limited API / stable ABI** (`Py_LIMITED_API = 0x030A0000`), so one
+`ysp/dataset.abi3.so` works on CPython 3.10 and later.
 
 The distribution is `ysp-dataset` and the module is `ysp.dataset`. `ysp` is
 a [PEP 420](https://peps.python.org/pep-0420/) implicit namespace package

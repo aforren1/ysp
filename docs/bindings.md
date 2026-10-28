@@ -5,7 +5,7 @@ This page is reference: the language bindings of the headers.
 - **Python**: one distribution per library under
   [bindings/python/](../bindings/python/), each a dependency-free CPython
   extension on the Limited API (one abi3 wheel per platform for CPython
-  3.8+). Each one compiles its header into the extension, with the headers
+  3.10+). Each one compiles its header into the extension, with the headers
   it includes. They share the `ysp` namespace (PEP 420, no `__init__.py`),
   so `pip install ysp-parallel ysp-serial` gives `import ysp.parallel` and
   `import ysp.serial`, and either installs alone. The adaptive headers have
@@ -498,6 +498,19 @@ number as a release segment, and 0.5.0.1 sorts after 0.5.0 and before
 changed", and this change breaks the API. Each package's tests check that
 `__version__` equals the version in `pyproject.toml`.
 
+On 2026-10-27 the floor moved from CPython 3.8 to 3.10 (3.8 is past its
+end of life): `Py_LIMITED_API` 0x030A0000, `cp310-abi3` wheels and
+`requires-python >= 3.10`. CI builds each wheel on CPython 3.10 and tests
+it there and on 3.14 (ysp-vis on 3.10 only). This is a change of the binding alone, so every
+package whose header did not move got the next fourth number:
+`ysp-aep` 0.16.0.1, `ysp-box` 0.3.1.1, `ysp-color` 0.4.0.1,
+`ysp-dataset` 0.2.0.1, `ysp-device` 0.5.1.1, `ysp-pack` 0.4.0.1,
+`ysp-parallel` 0.4.1.1, `ysp-quest` 0.7.0.1, `ysp-rdk` 0.3.0.1,
+`ysp-response` 0.7.0.1, `ysp-rigfile` 0.5.1.1, `ysp-rt` 0.9.1.1,
+`ysp-serial` 0.6.2.1, `ysp-stair` 0.3.0.1, `ysp-timeline` 0.8.1.2,
+`ysp-trials` 0.6.0.1 and `ysp-vis` 0.10.3.1. `ysp-audio` is 0.7.3, the
+header's (32-bit Windows, the same day). The MEX files did not change.
+
 A MEX function that reports a version has its own number, apart from
 its header's. `ysp_serial('version')` returns 2.2.0 (2.0.0, 2026-10-11:
 seconds and the async reader; v1 took milliseconds and microseconds and had
@@ -509,7 +522,9 @@ build. The MEX functions of 2026-10-25 (`ysp_rt`, `ysp_box`, `ysp_rdk`,
 `ysp_dataset`, `ysp_pack`) do the same: `'version'` returns 1.0.0, and
 its second output is the version of the header. `ysp_pack` is 1.1.0 since
 2026-10-26: `'verify'` of one entry hashes it under `'none'` too
-(`ypak_verify_entry()`, ysp/pack.h 0.4.0). `ysp_audio` is 1.0.1 since
+(`ypak_verify_entry()`, ysp/pack.h 0.4.0). `ysp_audio` is 1.0.2 since
+2026-10-27: WAV paths are passed as UTF-8 (`mxArrayToUTF8String()`;
+ysp/audio.h 0.7.3). It was 1.0.1 since
 2026-10-27: `Inf` as the timeout of `'wait'` is `INT64_MAX` ns (ysp/audio.h
 0.7.2; 1.0.0 passed 2^62 ns). `ysp_device` is 1.0.1 since 2026-10-27:
 `Inf` as the timeout of `'wait_running'` is `INT64_MAX` ns (ysp/device.h

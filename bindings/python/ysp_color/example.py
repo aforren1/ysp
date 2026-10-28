@@ -25,11 +25,12 @@ print(cx.describe())
 for h in ("#3366cc", "#ff8800", "#808080"):
     rgb, gam = cx.to_rgb(ycol.hex(h))
     lch, _, _ = cx.convert(ycol.hex(h), "oklch")
-    print(h, "rgb %.4f %.4f %.4f" % rgb, "in gamut" if gam.in_gamut else "OUT", ycol.format(lch))
+    print(h, f"rgb {rgb[0]:.4f} {rgb[1]:.4f} {rgb[2]:.4f}", "in gamut" if gam.in_gamut else "OUT", ycol.format(lch))
 
 for azim in range(0, 360, 45):
-    print("DKL azimuth %3d: largest contrast %.4f" % (azim, cx.max_scale(ycol.dkl(azim=azim, contrast=1), symmetric=True)))
+    largest = cx.max_scale(ycol.dkl(azim=azim, contrast=1), symmetric=True)
+    print(f"DKL azimuth {azim:3d}: largest contrast {largest:.4f}")
 
 for method in ("scale", "chroma_oklch", "chroma_cielch", "chroma_dkl", "clip"):
     rgb, gam = cx.map(ycol.oklch(0.7, 0.3, 150), method)
-    print("%-13s rgb %.4f %.4f %.4f kept %.4f" % ((method,) + rgb + (gam.kept,)))
+    print(f"{method:<13} rgb {rgb[0]:.4f} {rgb[1]:.4f} {rgb[2]:.4f} kept {gam.kept:.4f}")

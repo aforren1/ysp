@@ -1916,7 +1916,7 @@ Decisions:
   (the coordinator's review found it; two tests now check both views after
   `del` and after `close()`, and the old build fails them). A buffer
   protocol on the Timeline would be cleaner, but `Py_bf_getbuffer` is in
-  the Limited API only from 3.11, and the wheel is cp38-abi3.
+  the Limited API only from 3.11, and the wheel is cp310-abi3.
 - **Times are seconds,** rounded to the nearest ns at the call, and a
   negative or NaN time is refused (docs/bindings.md). A record gives the
   exact ns beside the seconds. A replay gets the same ns from the same

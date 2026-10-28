@@ -5,7 +5,7 @@
  * library implementation is compiled directly into this module.
  *
  * Built against the stable ABI / Limited API (Py_LIMITED_API), so one compiled
- * ysp/stair.abi3.so works across CPython >= 3.8 without recompiling per
+ * ysp/stair.abi3.so works across CPython >= 3.10 without recompiling per
  * version. That rules out the static PyTypeObject layout, so the Staircase
  * type is a heap type created with PyType_FromSpec.
  *
@@ -23,7 +23,7 @@
  * keeps two Python threads from racing on one handle.
  */
 #ifndef Py_LIMITED_API
-#define Py_LIMITED_API 0x03080000   /* target the CPython 3.8+ stable ABI */
+#define Py_LIMITED_API 0x030A0000   /* target the CPython 3.10+ stable ABI */
 #endif
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
@@ -562,7 +562,7 @@ PyMODINIT_FUNC PyInit_stair(void) {
 
     /* From the compiled implementation, so it names the header actually built
      * in; the tests check pyproject.toml against it. */
-    if (PyModule_AddStringConstant(m, "__version__", yst_version()) < 0) goto fail;
+    if (PyModule_AddStringConstant(m, "__version__", YST_VERSION_STRING ".1") < 0) goto fail;   /* .1: the CPython 3.10 floor (2026-10-27) */
     PyModule_AddIntConstant(m, "ERR_ARG", YST_ERR_ARG);
     PyModule_AddIntConstant(m, "ERR_CLOSED", YST_ERR_CLOSED);
     PyModule_AddIntConstant(m, "ERR_FULL", YST_ERR_FULL);

@@ -5,8 +5,8 @@ single-header library: the clock that every ysp stamp is on, the deadline
 waits, the clock correlation, the device clock fit, the virtual clock and the
 per-user folders. It uses the plain CPython C API and has no dependencies.
 It is built against the **Limited API / stable ABI**
-(`Py_LIMITED_API = 0x03080000`), so one `ysp/rt.abi3.so` works on CPython
-3.8 and later.
+(`Py_LIMITED_API = 0x030A0000`), so one `ysp/rt.abi3.so` works on CPython
+3.10 and later.
 
 The distribution is `ysp-rt` and the module is `ysp.rt`. `ysp` is a
 [PEP 420](https://peps.python.org/pep-0420/) implicit namespace package (no

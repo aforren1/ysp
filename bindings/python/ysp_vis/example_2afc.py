@@ -74,9 +74,10 @@ with yscr.Screen(gfx={"background": 0.5}, **opts) as s:
             fix.color = (0.0, 0.8, 0.0) if correct else (0.8, 0.0, 0.0)
             g.frame(scene)
             s.flip()
-            print("trial %d: delta %.2f, %s, %s, RT %.3f s, onset residual %+.1f us"
-                  % (trial, delta, "left" if side == 0 else "right", "correct" if correct else "wrong",
-                     answer[1] - onset.onset, onset.residual * 1e6))
+            where = "left" if side == 0 else "right"
+            verdict = "correct" if correct else "wrong"
+            print(f"trial {trial:d}: delta {delta:.2f}, {where}, {verdict}, RT {answer[1] - onset.onset:.3f} s, "
+                  f"onset residual {onset.residual * 1e6:+.1f} us")
             for _ in range(30):                 # 0.5 s of feedback
                 s.begin()
                 g.frame(scene)

@@ -10,8 +10,8 @@ the rig (C, MSVC) and the analysis (Python, any platform) compute the same
 bits.
 
 The extension uses the **Limited API / stable ABI**
-(`Py_LIMITED_API = 0x03080000`), so one `ysp/yrdk.abi3.so` works on
-CPython 3.8 and later. It needs NumPy at run time: the outputs are NumPy
+(`Py_LIMITED_API = 0x030A0000`), so one `ysp/yrdk.abi3.so` works on
+CPython 3.10 and later. It needs NumPy at run time: the outputs are NumPy
 arrays (`numpy.frombuffer` over bytes that the C code fills, with no
 Python work per dot).
 
@@ -125,7 +125,7 @@ Log both. A row with `ns` replays from it at any magnitude.
 
 ```sh
 uv build --wheel -o dist
-uv run --no-project --with pytest --with numpy --with dist/ysp_rdk-0.3.0-cp38-abi3-<platform>.whl pytest tests
+uv run --no-project --with pytest --with numpy --with dist/ysp_rdk-0.3.0-cp310-abi3-<platform>.whl pytest tests
 ```
 
 The tests check the 8 golden digests of `tests/adapt/rdk_test.c` and

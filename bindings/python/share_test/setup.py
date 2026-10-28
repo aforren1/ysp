@@ -15,9 +15,9 @@ setup(
         name="ysp_share_test",
         sources=["ysp_share_test.c"],
         include_dirs=[INC, SHARE],
-        define_macros=[("Py_LIMITED_API", "0x03080000")],
+        define_macros=[("Py_LIMITED_API", "0x030A0000")],
         py_limited_api=True,
     )],
     packages=[],
-    options={"bdist_wheel": {"py_limited_api": "cp38"}},
+    options={"bdist_wheel": {"py_limited_api": "cp310"}},
 )

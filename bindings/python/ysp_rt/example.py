@@ -21,14 +21,14 @@ for i in range(200):
     t += 0.005
     late.append(rt.sleep_until(t))
 late.sort()
-print("lateness over 200 waits: median %.1f us, p99 %.1f us, max %.1f us"
-      % (statistics.median(late) * 1e6, late[197] * 1e6, late[-1] * 1e6))
+print(f"lateness over 200 waits: median {statistics.median(late) * 1e6:.1f} us, p99 {late[197] * 1e6:.1f} us, "
+      f"max {late[-1] * 1e6:.1f} us")
 
 # Another clock (here Python's perf_counter; PsychoPy's core.getTime works
 # the same way) as one pair of readings.
 c = rt.correlate(time.perf_counter)
-print("perf_counter %.9f s was ysp time %.9f s, +- %.0f ns" % (c.other, c.t, c.width / 2 * 1e9))
-print("so a perf_counter stamp s maps to s + %.9f" % (c.t - c.other))
+print(f"perf_counter {c.other:.9f} s was ysp time {c.t:.9f} s, +- {c.width / 2 * 1e9:.0f} ns")
+print(f"so a perf_counter stamp s maps to s + {c.t - c.other:.9f}")
 
 # A board's micros() clock, read over a USB link that delivers each report 0
 # to 1 ms late (simulated). It runs 50 ppm fast, so its tick is 50 ppm short:
@@ -41,6 +41,5 @@ for i in range(2000):
     fit.add(true_us % (1 << 32), host + rng.random() * 0.001)
     host += 0.01
 info = fit.info()
-print("fit: %d points over %.1f s, %+.1f ppm, spread %.0f us"
-      % (info["points"], info["span"], info["ppm"], info["spread"] * 1e6))
-print("an event at micros() = 4010000500 happened at ysp time %.6f s (truth 110 s)" % fit.map(4010000500))
+print(f"fit: {info['points']:d} points over {info['span']:.1f} s, {info['ppm']:+.1f} ppm, spread {info['spread'] * 1e6:.0f} us")
+print(f"an event at micros() = 4010000500 happened at ysp time {fit.map(4010000500):.6f} s (truth 110 s)")

@@ -4,8 +4,8 @@ A CPython extension for the [ysp/color.h](../../../include/ysp/color.h)
 single-header library: the display calibration, conversions through it,
 gamut questions, gamut mapping and a participant's luminance. It uses the
 plain CPython C API and has no dependencies. It is built against the
-**Limited API / stable ABI** (`Py_LIMITED_API = 0x03080000`), so one
-`ysp/color.abi3.so` works on CPython 3.8 and later.
+**Limited API / stable ABI** (`Py_LIMITED_API = 0x030A0000`), so one
+`ysp/color.abi3.so` works on CPython 3.10 and later.
 
 The distribution is `ysp-color` and the module is `ysp.color`. `ysp` is a
 [PEP 420](https://peps.python.org/pep-0420/) implicit namespace package (no

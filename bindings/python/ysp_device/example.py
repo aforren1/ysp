@@ -43,14 +43,14 @@ for trial in range(3):
         events += box.wait(1.0)
     press = events[0]
     info = rule.info()
-    print("trial %d: button %d, rt %.4f s, unc %.1f us; code %d written %.1f us after the press"
-          % (trial, press.control, press.t - onset, press.unc * 1e6, info["code"],
-             (info["t_before"] - info["t_event"]) * 1e6))
+    written = (info["t_before"] - info["t_event"]) * 1e6
+    print(f"trial {trial:d}: button {press.control:d}, rt {press.t - onset:.4f} s, unc {press.unc * 1e6:.1f} us; "
+          f"code {info['code']:d} written {written:.1f} us after the press")
     rule.disarm()
 
 st = box.stats()
-print("box: %d events, %d timer queries answered, fit ppm %.1f, dropped %d"
-      % (st["events"], st["answers"], st["fit"]["ppm"], st["queue_dropped"]))
+print(f"box: {st['events']:d} events, {st['answers']:d} timer queries answered, fit ppm {st['fit']['ppm']:.1f}, "
+      f"dropped {st['queue_dropped']:d}")
 box.close()      # the input first, then the rule, then the output
 rule.close()
 trig.close()

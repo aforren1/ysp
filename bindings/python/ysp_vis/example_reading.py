@@ -66,8 +66,8 @@ for r in records:
         first.setdefault(k, r)
 on = [first[k].onset for k in sorted(first)]
 soas = [b - a for a, b in zip(on, on[1:])]
-print("%d words; measured SOA %.4f to %.4f s; %d missed frames" % (len(first), min(soas), max(soas),
-                                                                   sum(r.missed for r in records)))
+missed = sum(r.missed for r in records)
+print(f"{len(first):d} words; measured SOA {min(soas):.4f} to {max(soas):.4f} s; {missed:d} missed frames")
 print("the sentence's words, screen px (x0, y0, x1, y1):")
 for w, a, b, line, x0, y0, x1, y1 in boxes:
-    print("  %-10s chars %2d-%2d line %d  (%6.1f, %6.1f, %6.1f, %6.1f)" % (w, a, b, line, x0, y0, x1, y1))
+    print(f"  {w!s:<10} chars {a:2d}-{b:2d} line {line:d}  ({x0:6.1f}, {y0:6.1f}, {x1:6.1f}, {y1:6.1f})")

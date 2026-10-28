@@ -35,9 +35,9 @@ except ValueError:
 if not 16 <= MAX_TRIALS <= 65536:
     sys.exit(f"YSP_AEP_MAX_TRIALS must be in 16..65536, not {MAX_TRIALS}")
 
-# Target the CPython 3.8+ stable ABI (Limited API): one .abi3.so works across
+# Target the CPython 3.10+ stable ABI (Limited API): one .abi3.so works across
 # Python versions. The macro must match Py_LIMITED_API in the C source.
-PY_LIMITED = 0x03080000
+PY_LIMITED = 0x030A0000
 
 # Dotted name: the extension is built as ysp/aep.abi3.so. There is no
 # ysp/__init__.py anywhere, so `ysp` is a PEP 420 implicit namespace package and
@@ -67,10 +67,10 @@ setup(
     # explicit empty list also stops setuptools auto-discovery from treating
     # the ysp/ directory (kept for in-place builds) or tests/ as a package.
     packages=[],
-    # Build a cp38-abi3 wheel rather than a version-specific one.
+    # Build a cp310-abi3 wheel rather than a version-specific one.
     # build_ext decides whether to recompile by file dates alone, so an object
     # left in build/ from another YSP_AEP_MAX_TRIALS (or another header) would
     # be linked as is. One C file is cheap to compile; always compile it.
-    options={"bdist_wheel": {"py_limited_api": "cp38"},
+    options={"bdist_wheel": {"py_limited_api": "cp310"},
              "build_ext": {"force": True}},
 )

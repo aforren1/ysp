@@ -22,7 +22,7 @@ def test_version_matches_pyproject():
     text = open(os.path.join(HERE, "pyproject.toml")).read()
     m = re.search(r'^version = "([^"]+)"', text, re.M)
     assert m and yr.__version__ == m.group(1)
-    assert yr.version() == yr.__version__
+    assert yr.__version__.startswith(yr.version() + ".")
 
 
 @pytest.mark.skipif(not os.path.exists(HEADER), reason="needs the repository's include/")

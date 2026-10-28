@@ -6,7 +6,7 @@ Psi and Psi-marginal as configurations. It also wraps the header's `YQST_ASYNC`
 layer, a background C thread that runs the inference between trials. It uses
 the plain CPython C API and has no dependencies; NumPy is optional. It is
 built against the **Limited API / stable ABI** (`Py_LIMITED_API =
-0x03080000`), so one `ysp/quest.abi3.so` works on CPython 3.8 and later.
+0x030A0000`), so one `ysp/quest.abi3.so` works on CPython 3.10 and later.
 
 The distribution is `ysp-quest` and the module is `ysp.quest`. `ysp` is a
 [PEP 420](https://peps.python.org/pep-0420/) implicit namespace package (no

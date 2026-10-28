@@ -4,7 +4,7 @@ A CPython extension that wraps [ysp/rigfile.h](../../../include/ysp/rigfile.h):
 the rig profile ("ysp-rig 1"), the file on a rig that says which device
 plays each role, what the rig's loopbacks measured, and the viewing
 geometry. It uses the Limited API (one abi3 wheel per platform for CPython
-3.8+) and has no run-time dependencies. The distribution is `ysp-rigfile`,
+3.10+) and has no run-time dependencies. The distribution is `ysp-rigfile`,
 the module `ysp.rigfile`. Its version is the header's.
 
 The device layer is the separate distribution `ysp-device`

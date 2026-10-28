@@ -423,7 +423,7 @@ The API is made for a binding: plain structs, no callbacks, caller memory
 runs a logged trial in one call.
 
 The Python binding (`bindings/python/ysp_rdk`, the module `ysp.rdk`) is a
-C extension on the Limited API, so one abi3 wheel serves CPython 3.8 and
+C extension on the Limited API, so one abi3 wheel serves CPython 3.10 and
 later. An analysis opens a field with the rig's desc as keyword
 arguments and calls `trajectory(seed, t0, steps)`: one C loop replays the
 trial and gives the shown dots after each update as NumPy arrays

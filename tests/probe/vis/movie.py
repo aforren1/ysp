@@ -57,20 +57,20 @@ try:
                 if not playing:
                     break
         except yscr.Abort as e:
-            lines.append("abort 0x%x" % e.reasons)
+            lines.append(f"abort 0x{e.reasons:x}")
         s.wait_flip()
         last = flips[-1].index if flips else -1
         flips.extend(r for r in s.records() if r.index > last)
         frames = m.records()
         events = m.events()
         lines.append(m.describe())
-        lines.append("records_lost %d events_lost %d" % (m.records_lost, m.events_lost))
+        lines.append(f"records_lost {m.records_lost:d} events_lost {m.events_lost:d}")
     for e in events:
         lines.append("event " + repr(e))
         if au and e["kind"] == "sound" and e["action"] == "start":
             o = au.wait(e["play_id"], 2.0)
-            lines.append("sound onset: target %d ns, onset %d ns, residual %d ns, tier %d, flags 0x%x" % (
-                o.target_ns, o.onset_ns, o.residual_ns, o.tier, o.flags))
+            lines.append(f"sound onset: target {o.target_ns:d} ns, onset {o.onset_ns:d} ns, residual {o.residual_ns:d} ns, "
+                         f"tier {o.tier:d}, flags 0x{o.flags:x}")
 finally:
     if au:
         au.close()
@@ -80,17 +80,17 @@ with open(a.out + ".txt", "w", newline="\n") as out:
 with open(a.out + ".frames.csv", "w", newline="\n") as out:
     out.write("display,frame,decision,why,flags,onset_ns,due_ns,residual_ns,movie_t_ns,ahead,tier\n")
     for r in frames:
-        out.write("%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n" % (r.display, r.frame, r.decision, r.why, r.flags, r.onset_ns,
-                                                          r.due_ns, r.residual_ns, r.movie_t_ns, r.ahead, r.tier))
+        out.write(f"{r.display:d},{r.frame:d},{r.decision:d},{r.why:d},{r.flags:d},{r.onset_ns:d},"
+                  f"{r.due_ns:d},{r.residual_ns:d},{r.movie_t_ns:d},{r.ahead:d},{r.tier:d}\n")
 with open(a.out + ".flips.csv", "w", newline="\n") as out:
-    out.write("# %s\n" % lines[0])
+    out.write(f"# {lines[0]}\n")
     out.write("index,target_ns,planned_ns,onset_ns,residual_ns,dropped,path,tier,flags,draw_ns,swap_ns,upload_ns\n")
     for r in flips:
         ph = [-1 if x is None else round(x * 1e9) for x in r.phases]
-        out.write("%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n" % (
-            r.index, r.target_ns, r.planned_ns, r.onset_ns, r.residual_ns, r.dropped, r.path, r.tier, r.flags,
-            ph[yscr.PHASE_DRAW], ph[yscr.PHASE_SWAP], ph[yscr.PHASE_UPLOAD]))
+        draw, swap, upload = ph[yscr.PHASE_DRAW], ph[yscr.PHASE_SWAP], ph[yscr.PHASE_UPLOAD]
+        out.write(f"{r.index:d},{r.target_ns:d},{r.planned_ns:d},{r.onset_ns:d},{r.residual_ns:d},{r.dropped:d},"
+                  f"{r.path:d},{r.tier:d},{r.flags:d},{draw:d},{swap:d},{upload:d}\n")
 with open(a.out + ".update.csv", "w", newline="\n") as out:
     out.write("index,update_ns\n")
-    out.write("".join("%d,%d\n" % u for u in upd))
-print("%d frame records, %d flip records -> %s.*" % (len(frames), len(flips), a.out))
+    out.write("".join(f"{i:d},{ns:d}\n" for i, ns in upd))
+print(f"{len(frames):d} frame records, {len(flips):d} flip records -> {a.out}.*")

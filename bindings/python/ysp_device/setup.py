@@ -27,7 +27,7 @@ else:
     extra_compile_args.append("-pthread")
     extra_link_args.append("-pthread")
 
-PY_LIMITED = 0x03080000
+PY_LIMITED = 0x030A0000
 
 # Dotted name: built as ysp/device.abi3.so. `ysp` is a PEP 420 namespace (no
 # __init__.py), shared with the other ysp-* distributions.
@@ -47,5 +47,5 @@ ext = Extension(
 setup(
     ext_modules=[ext],
     packages=[],
-    options={"bdist_wheel": {"py_limited_api": "cp38"}},
+    options={"bdist_wheel": {"py_limited_api": "cp310"}},
 )

@@ -38,7 +38,8 @@ def cx(cal):
 def test_version_matches_pyproject():
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     text = open(os.path.join(here, "pyproject.toml")).read()
-    assert re.search(r'^version = "([^"]+)"', text, re.M).group(1) == ycol.__version__ == ycol.version()
+    assert re.search(r'^version = "([^"]+)"', text, re.M).group(1) == ycol.__version__
+    assert ycol.__version__.startswith(ycol.version() + ".")
 
 
 def test_calibration_round_trip(cal):

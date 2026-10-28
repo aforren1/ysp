@@ -7,8 +7,8 @@ valid keys or buttons, the window, the minimum RT), give the stimulus
 onset and the input events, and get the response, the RT from the onset,
 and the timing quality of both. It uses the plain CPython C API and has
 no dependencies. It is built against the **Limited API / stable ABI**
-(`Py_LIMITED_API = 0x03080000`), so one `ysp/response.abi3.so` works on
-CPython 3.8 and later.
+(`Py_LIMITED_API = 0x030A0000`), so one `ysp/response.abi3.so` works on
+CPython 3.10 and later.
 
 The distribution is `ysp-response` and the module is `ysp.response`. `ysp`
 is a [PEP 420](https://peps.python.org/pep-0420/) implicit namespace

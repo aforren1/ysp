@@ -5,8 +5,8 @@ single-header library: it opens a ysp pack (docs/pack.md: one store-only
 zip file, entries aligned to 4096 bytes, XXH64 hashes over 1 MiB chunks, a
 SHA-256 manifest), lists its entries, reads them, and verifies them. It
 uses the plain CPython C API and has no dependencies. It is built against
-the **Limited API / stable ABI** (`Py_LIMITED_API = 0x03080000`), so one
-`ysp/pack.abi3.so` works on CPython 3.8 and later.
+the **Limited API / stable ABI** (`Py_LIMITED_API = 0x030A0000`), so one
+`ysp/pack.abi3.so` works on CPython 3.10 and later.
 
 The distribution is `ysp-pack` and the module is `ysp.pack`. `ysp` is a
 [PEP 420](https://peps.python.org/pep-0420/) implicit namespace package (no
