@@ -5896,6 +5896,8 @@ typedef struct yscr__comp {
     DWORD                 cancel_first_tid, cancel_tid;
     LONG                  acq_cancel_n;     /* cancel_n when the frame's buffer was taken */
     volatile LONG         dropped_after_cancel;  /* presents not made: a cancel came mid-frame */
+    uint64_t              held_cancel[8];   /* their records, held until the presents before settle */
+    int                   n_held_cancel;
     int                   cur;
     int                   parked;           /* between frames: 1 a free buffer bound, -1 none */
     void*                 edev;
@@ -6066,6 +6068,22 @@ static void yscr__comp_drain(yscr__comp* c) {
             }
         }
         YSCR__CREL(st);
+    }
+    /* A frame dropped by a cancel completes after the presents before it:
+     * the core reads a completion for a newer present as "the older ones
+     * were skipped" and estimates them (seen: every older record
+     * ESTIMATED, their CANCELED statistics then stale). */
+    if (c->n_held_cancel && c->n_out == 0) {
+        int k;
+        for (k = 0; k < c->n_held_cancel; k++) {
+            yscr_vblank v;
+            memset(&v, 0, sizeof v);
+            v.present_id = c->held_cancel[k];
+            v.flags = YSCR_FLIP_CANCELED;
+            v.path = c->path;
+            yscr__comp_push(c, &v);
+        }
+        c->n_held_cancel = 0;
     }
 }
 
@@ -6418,12 +6436,7 @@ static int yscr__comp_present(void* vctx, const yscr_present_req* req) {
      * thread): presenting it would show a frame after the cancel. It
      * completes as CANCELED, never presented. */
     if (c->cancel_n != c->acq_cancel_n) {
-        yscr_vblank v;
-        memset(&v, 0, sizeof v);
-        v.present_id = req->present_id;
-        v.flags = YSCR_FLIP_CANCELED;
-        v.path = c->path;
-        yscr__comp_push(c, &v);
+        if (c->n_held_cancel < 8) c->held_cancel[c->n_held_cancel++] = req->present_id;
         c->acq_cancel_n = c->cancel_n;
         InterlockedIncrement(&c->dropped_after_cancel);
         LeaveCriticalSection(&c->pmlock);
