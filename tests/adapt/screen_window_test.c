@@ -39,10 +39,14 @@
  * for the kill case. */
 #define YSCR__PANIC_WINDOWED 1
 /* The nofree case: COMPOSITION's buffers all report busy while set, so a
- * present finds none free, which never happened in testing. */
+ * present finds none free, which never happened in testing. Windows only:
+ * elsewhere the test is a stub, and clang's -Wunused-variable would stop
+ * the build. */
+#if defined(_WIN32)
 static volatile long g_comp_busy;
 #define YSCR__COMP_IS_AVAILABLE(c, k, ok) \
     (g_comp_busy ? (*(ok) = 0, (HRESULT)0) : YSCR__C((c)->buf[k], IsAvailable, (ok)))
+#endif
 #define YSP_SCREEN_IMPLEMENTATION
 #include "ysp/screen.h"
 

@@ -67,3 +67,5 @@ CMakeUserPresets.json
 /ysp_beam_race_*/
 /ysp_x11_probe_*/
 /.claude/worktrees/
+# The rigfile tests write here when run from the repo root.
+rig_test_work/
