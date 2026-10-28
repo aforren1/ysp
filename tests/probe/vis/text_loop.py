@@ -34,7 +34,7 @@ a = ap.parse_args()
 
 opts = {"windowed": True, "size": (1280, 720)} if a.windowed else {}
 rows = []
-with yscr.Screen(gfx={"background": 0.5, "max_draws": 4096}, **opts) as s, ygfx.Gfx(s) as g:   # a text run takes 3 of the 1024 blocks by default
+with yscr.Screen(gfx={"background": 0.5, "max_draws": 4096}, **opts) as s, ygfx.Gfx(s) as g:   # 4096: a text run took 3 blocks before ysp/gfx.h 0.17.2 (1 now); kept for comparison
     s.title("ysp-vis text probe")
     font = g.font(os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts", "segoeui.ttf"))
     w, h = g.size
