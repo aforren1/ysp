@@ -2293,8 +2293,10 @@ callback that comes `late` after its envelope time makes the lead
   fit takes the least late callback of each 50 ms and, after the
   warm-up, refits once a second. In the first second after the open, a
   callback less late than all callbacks of the warm-up thus adds the
-  difference to the lead. On a macOS CI runner (run 40613569249,
-  `ysp-audio` 0.7.2) the lead read 35.4 ms just after the open.
+  difference to the lead. A macOS CI runner (run 40613569249,
+  `ysp-audio` 0.7.2) read 35.4 ms just after the open. That reading has
+  another cause: the wheel's whole-second null-device timer ("The null
+  device on macOS" below).
 
 A negative lead is still the shortest lead that can be met. The device
 is behind its fit, so a sound at `now + lead` starts on its frame. The
@@ -2344,7 +2346,8 @@ The header does not change. The tests now check what the lead must be:
 - `bindings/python/ysp_audio/tests/test_audio.py` `test_open_caps` and
   `bindings/mex/test_mex_audio.m` check that the lead is not 0 (the
   fit exists), that its seconds equal its ns, and that it is between
-  -0.5 s and two periods plus 5 ms. A broken clock or fit is far
+  -0.5 s and 0.5 s (v0.7.3 raised the upper bound from two periods plus
+  5 ms, after the macOS reading above). A broken clock or fit is far
   outside that range.
 - `tests/adapt/audio_test.c` `test_lead_late_callback` runs the scripted
   device as the null device (callback times, tier SIM, no jitter). The
@@ -2356,6 +2359,67 @@ The header does not change. The tests now check what the lead must be:
   that comes late with no silence before it, as from a timer thread.
 - Mutants `le-01` (the lead clamped at 0) and `le-02` (the lead with no
   period of margin) in `tests/mutate/audio.toml` are killed.
+
+
+## The null device on macOS (2026-10-28)
+
+The `ysp-audio` wheel's tests failed on macOS CI runners with
+`input 'NULL Capture Device' gave no steady blocks within 3 s (lost=0,
+fit points=1, fits=1)` in `test_capture_null`. This happened in run
+40523167077 (x86_64 under Rosetta) and in run 40681676973 (arm64).
+macOS runners also read leads of -50.5 ms (run 40523167077) and 35.4 ms
+(run 40613569249) just after the open. The header was not the cause.
+
+### Cause
+
+miniaudio 0.11.25 selects its timer at compile time. With
+`MAC_OS_X_VERSION_MIN_REQUIRED < 101200` it divides
+`mach_absolute_time()` ticks by an integer number of ticks per second,
+in integer arithmetic. `ma_timer_get_time_in_seconds()` thus returns
+whole seconds. Only the null device uses this timer. It hands over a
+block when the timer says that the block's time has come. With whole
+seconds, it hands over nothing for a second, then 100 blocks of 10 ms
+in a burst.
+
+cibuildwheel built the wheel for macOS 10.9 (tag
+`macosx_10_9_universal2`). clang 11 gives
+`__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__` 1090 for both
+`x86_64-apple-macos10.9` and `arm64-apple-macos10.9`, and 101300 for
+10.13. CMake builds on a macOS runner set no target, so they target the
+runner's own macOS version and use the other timer.
+
+The capture open waits for 0.5 s of fit (`YAU__WARM_NS`), with one fit
+point per 50 ms of callbacks. A burst is shorter than 50 ms. The first
+bucket thus closes at the burst after 2 s (one point) and the second at
+the burst after 3 s. That is the open's limit, so the open passes or
+fails on which comes first.
+
+### Reproduction
+
+Windows 11, MinGW-w64 gcc (Octave 10.1), the measurement lock held. A
+copy of miniaudio.h had the Windows timer changed to the same integer
+division. A C program opened a null capture (1 channel, 24000-frame
+ring) and then a null output, and read the lead every 100 ms. Three
+runs of each:
+
+| miniaudio timer | Capture open | Output open | Lead, 20 reads |
+|---|---|---|---|
+| as released | 0.58 to 0.66 s, passed | 0.56 to 0.63 s | -2.7 to 17.6 ms |
+| whole seconds | failed at 3.03 s, "fit points=1, fits=1" (3 of 3) | 2.02 to 2.03 s | 0.3 to 21.6 ms after the open, then down by 100 ms per read to -908 ms, once a second |
+
+Source: `repro.c` outside the repository (not kept).
+
+### The fix
+
+The header does not change. `bindings/python/ysp_audio` builds for
+macOS 10.13: `pyproject.toml` sets `MACOSX_DEPLOYMENT_TARGET` for
+cibuildwheel, `setup.py` raises a lower or missing target for a source
+build, and `ysp_audio_ext.c` stops the compile below 10.12. 10.13 is the
+target of CPython 3.12 and later on python.org. A C program that uses
+the null device on macOS must also target 10.12 or later. Real devices
+(Core Audio) do not use this timer.
+
+Not yet confirmed on a macOS runner: the next CI run is the check.
 
 
 ## 32-bit Windows (v0.7.3)

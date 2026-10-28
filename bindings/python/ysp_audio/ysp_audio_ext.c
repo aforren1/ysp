@@ -37,6 +37,13 @@
 
 #define YSP_AUDIO_IMPLEMENTATION
 #include "ysp/audio.h"
+/* Below macOS 10.12 miniaudio's timer counts whole seconds, and the null
+ * device would deliver a second of frames at once: the tests' open and
+ * lead would fail at random. The compiler's own macro, so the check does
+ * not depend on what miniaudio includes. */
+#if defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 101200
+#error "ysp-audio: build with MACOSX_DEPLOYMENT_TARGET=10.12 or later (miniaudio's null-device timer; docs/audio.md)"
+#endif
 #define YSP_AUDIO_API_OWNER
 #include "ysp_audio_api.h"
 
