@@ -115,11 +115,10 @@ function pixel_check(granted)
         I = ysp_gfx('instances', g, ysp_gfx('gabor', g, 'sf', 1 / 12, 'sigma', 8, 'contrast', 0.4), 3, 'fields', {'xy', 'ori'});
         ysp_gfx('elements', I, 'xy', xy);
         ysp_gfx('elements', I, 'ori', oris);
-        % On COMPOSITION a prime right after a flip waits until the flipped
-        % frame leaves the screen (docs/screen.md, "Not measured"); with the
-        % window in front (v0.10.2) that was more than 90 s.
-        ysp_screen('wait_flip', h);
+        % right after a flip, in front: no wait for the screen (screen.h 0.10.3)
+        t = tic;
         ysp_gfx('prime', g);
+        check(toc(t) < 1, 'prime between frames in under 1 s (%.3f s)', toc(t));
         a = scene(h, g, L);
         b = scene(h, g, I);
         check(max(abs(a(:) - b(:))) < 2e-5 && max(abs(a(:) - 0.5)) > 0.1, 'instances match single stimuli (within 2e-5)');

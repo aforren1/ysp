@@ -4374,18 +4374,18 @@ inside the glyph and word boxes (`test_text_window.py`).
   windowed and one fullscreen run; after `wait_flip()`, or before any
   frame, it took 1 to 3 ms, and a second prime after a slow one 2 to 3 ms.
   Repro: open a screen, draw one frame, flip, sleep 1 s (or draw 60 more
-  frames), then `g.prime()`. The cause was not traced (the pixel
-  `ygfx__prime()` reads back waits on the GPU while the flip is pending).
-  The binding primes the text program after its first curve set, so it
-  calls `yscr_wait_flip()` first (at most one frame, once per gfx). Other
-  calls that read back between frames (`read_scene()` after a flip, not
-  before) would meet the same; the phase B tests read before the flip.
+  frames), then `g.prime()`. The cause was in ysp/screen.h, fixed in
+  v0.10.3 (docs/screen.md, "Between frames"): on COMPOSITION the shown
+  buffer stayed framebuffer 0 after a flip, and the prime's output pass
+  drew into it, which waited until the frame left the screen. The binding
+  called `yscr_wait_flip()` before it primed the text program; since
+  v0.10.3 it does not.
 - `YGFX_MAX_CSETS` is 8 in the header, and a binding's text needs a set
   per font file of each fallback list. The core defines it as 32 before
   it includes ysp/gfx.h (the header allows it: `#ifndef`); 32 sets cost
   an array of 32 small records in `ygfx_gfx`.
 
-Neither is a change of the header.
+The first was a change of ysp/screen.h (v0.10.3), the second is none.
 
 ### Text: what is not bound, and why
 

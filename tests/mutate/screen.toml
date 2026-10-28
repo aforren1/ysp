@@ -5,7 +5,7 @@
 # v0.3.5's 5 (raw mice; the 2 on its queue went with the queue),
 # v0.4.0's 6 (the input bridge), v0.4.1's 15 (the key filter, kd-) and
 # v0.4.2's 3 (kd-16 to kd-18, the key-up fix) and 13 (the sync guard,
-# sg-), v0.4.3's 9 (eg-, held frames), v0.4.4's 20 (dp-, the depth policy, the guessed grid, early flips), v0.5.0's 20 (st-, settling at open), v0.5.1's 7 (fg-, the foreground and the slot held after settling), v0.5.2's 7 (ch-, the context hook; ch-06 runs the gfx test), v0.6.0's 2 (cv-, the messages), v0.10.0's 19 (wt-, the window thread; wt-20 on run tests/adapt/screen_window_test.c on real windows), v0.10.1's 4 (gp-, the grid after a gap), v0.10.2's 1 (fg-08, the next screen's raise, on real windows). The 29 earlier mutants (docs/screen.md,
+# sg-), v0.4.3's 9 (eg-, held frames), v0.4.4's 20 (dp-, the depth policy, the guessed grid, early flips), v0.5.0's 20 (st-, settling at open), v0.5.1's 7 (fg-, the foreground and the slot held after settling), v0.5.2's 7 (ch-, the context hook; ch-06 runs the gfx test), v0.6.0's 2 (cv-, the messages), v0.10.0's 19 (wt-, the window thread; wt-20 on run tests/adapt/screen_window_test.c on real windows), v0.10.1's 4 (gp-, the grid after a gap), v0.10.2's 1 (fg-08, the next screen's raise, on real windows), v0.10.3's 1 (bf-01, GL between frames on COMPOSITION). The 29 earlier mutants (docs/screen.md,
 # "Mutations") were run from scripts that were not kept.
 header = "ysp/screen.h"
 
@@ -1454,3 +1454,16 @@ why = "v0.10.2: with the window thread the next open's window belongs to a new t
 find = '''        yscr__win.allow_foreground(GetCurrentProcessId());'''
 replace = '''        (void)0;'''
 env = { YSCR_WINDOW_TEST_ONLY = "sequence" }
+
+# --- v0.10.3: GL between frames on COMPOSITION (bf-), on real windows. The
+# case raises its window with FORCE; a window that is not in front does not
+# show the wait.
+
+[[mutant]]
+id = "bf-01"
+name = "the presented buffer stays bound"
+test = "window"
+why = "v0.10.3: after a present the shown buffer stayed framebuffer 0, and a draw into it between flip() and begin() waited until a newer present or a covered window released it (more than 90 s in front)."
+find = '''    yscr__comp_park(c);'''
+replace = '''    (void)0;'''
+env = { YSCR_WINDOW_TEST_ONLY = "between" }

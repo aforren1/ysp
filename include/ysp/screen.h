@@ -1,4 +1,4 @@
-/* ysp/screen.h - v0.10.2 - public domain single-header display library
+/* ysp/screen.h - v0.10.3 - public domain single-header display library
  *
  *   The window, the GL ES 3.0 context, the display mode and the swap path
  *   of a stimulus display, with flip at a time: each frame learns the
@@ -421,6 +421,15 @@
  *                               YSCR_ERR_LOST, so it is constant from
  *                               open to close.
  *     YSCR_HAS_GL_EPOCH is defined when both exist.
+ *     Between flip() and the next begin() (v0.10.3), framebuffer 0 is a
+ *     buffer that no present holds: GL work there (ygfx_prime(), uploads,
+ *     a clear) does not wait for the screen, and shows nothing until a
+ *     frame draws it. Read framebuffer 0 after your drawing and before
+ *     flip() (ygfx_read_output()); after flip() what it holds is not
+ *     defined. On COMPOSITION, when no buffer is free at the flip, no surface
+ *     is current until bind() or begin() finds one: draws to framebuffer
+ *     0 then do nothing (measured: a buffer was free at every present;
+ *     docs/screen.md, "Between frames").
  *
  *   TIERS (yscr_tier, record.tier, caps.worst_tier, desc.min_tier)
  *     Each flip gets a tier from its backend, its path and the source of its
@@ -1489,6 +1498,12 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.10.3 - GL STATE between frames, COMPOSITION: after a present the
+ *          shown buffer stayed framebuffer 0, and a draw into it between
+ *          flip() and the next begin() (ygfx_prime()) waited until a newer
+ *          present or a covered window released it: more than 90 s in
+ *          front. flip() now leaves a buffer that no present holds bound
+ *          (one that is free; none free: no surface). See STATUS.
  *   v0.10.2 - FOREGROUND, the next screen: with the window thread, the
  *          second and later screens that one process opened after a
  *          close got no foreground in a window (refused: the window opened
@@ -1808,7 +1823,15 @@
  *          groups, input restamping, mode lists and the parameter table.
  *          The other swap paths are stubs that refuse to open.
  *
- *   STATUS: v0.10.2 (the next screen's raise; docs/screen.md, "The next
+ *   STATUS: v0.10.3 (GL between frames; docs/screen.md, "Between
+ *   frames"): on the laptop below, AC, COMPOSITION in front, a prime or a
+ *   clear and read of framebuffer 0 after flip() waited more than 90 s
+ *   before (4 of 4 C runs, 3 of 3 Python) and took 0.7 to 102 ms after
+ *   (7 of 7 primes, 24 of 24 window-test checks; Python 9 of 9). The park
+ *   costs 13 to 16 us at p50, 97 us at p99, after the present call; no
+ *   drop and every record tier 1 in 1800-frame runs before and after.
+ *   tests/adapt/screen_window_test.c --only between; 1 new mutant, killed.
+ *   v0.10.2 (the next screen's raise; docs/screen.md, "The next
  *   screen's raise"): on the laptop below, AC, screens one after another
  *   in one process with the window thread ON, every screen after the first
  *   was refused in a window before (7 of 7 in C, every record OCCLUDED; 4
@@ -2033,8 +2056,8 @@
 
 #define YSCR_VERSION_MAJOR 0
 #define YSCR_VERSION_MINOR 10
-#define YSCR_VERSION_PATCH 2
-#define YSCR_VERSION_STRING "0.10.2"
+#define YSCR_VERSION_PATCH 3
+#define YSCR_VERSION_STRING "0.10.3"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -5820,6 +5843,7 @@ typedef struct yscr__comp {
     ID3D11RenderTargetView* rtv[YSCR__COMP_BUFFERS];
     yscr__EGLSurface    pb[YSCR__COMP_BUFFERS];
     int                   cur;
+    int                   parked;           /* between frames: 1 a free buffer bound, -1 none */
     void*                 edev;
     yscr__EGLDisplay    dpy;
     yscr__EGLContext    ctx;
@@ -6184,9 +6208,32 @@ static void yscr__comp_close(void* vctx) {
     memset(c, 0, sizeof *c);
 }
 
+/* Between frames no presented buffer stays bound (v0.10.3). A shown
+ * buffer is released only by a newer present or a covered window, and a
+ * draw into it waited until then: ygfx_prime() between flip() and begin()
+ * in front, more than 90 s (docs/screen.md, "Between frames"). So after a
+ * present framebuffer 0 is a buffer no present holds; with none free,
+ * no surface (draws to framebuffer 0 do nothing; reads of it fail). */
+static void yscr__comp_park(yscr__comp* c) {
+    int i;
+    for (i = 1; i < YSCR__COMP_BUFFERS; i++) {
+        unsigned char ok = 0;
+        int k = (c->cur + i) % YSCR__COMP_BUFFERS;
+        if (SUCCEEDED(YSCR__C(c->buf[k], IsAvailable, &ok)) && ok) {
+            c->cur = k;
+            c->parked = 1;
+            yscr__egl.MakeCurrent(c->dpy, c->pb[k], c->pb[k], c->ctx);
+            return;
+        }
+    }
+    c->parked = -1;
+    yscr__egl.MakeCurrent(c->dpy, NULL, NULL, c->ctx);
+}
+
 static void yscr__comp_bind(void* vctx) {
     yscr__comp* c = (yscr__comp*)vctx;
-    yscr__egl.MakeCurrent(c->dpy, c->pb[c->cur], c->pb[c->cur], c->ctx);
+    if (c->parked < 0) yscr__comp_park(c);   /* a buffer may be free now */
+    else yscr__egl.MakeCurrent(c->dpy, c->pb[c->cur], c->pb[c->cur], c->ctx);
 }
 
 /* One frame in flight: wait until the newest present is settled by a
@@ -6224,11 +6271,13 @@ static int yscr__comp_acquire(void* vctx, int64_t deadline_ns, yscr_vblank* newe
     for (;;) {
         DWORD rc;
         int64_t left;
+        /* the parked buffer first: it is current already */
         for (i = 0; i < YSCR__COMP_BUFFERS; i++) {
             unsigned char ok = 0;
-            int k = (c->cur + 1 + i) % YSCR__COMP_BUFFERS;
+            int k = (c->cur + (c->parked > 0 ? 0 : 1) + i) % YSCR__COMP_BUFFERS;
             if (SUCCEEDED(YSCR__C(c->buf[k], IsAvailable, &ok)) && ok) {
                 c->cur = k;
+                c->parked = 0;
                 yscr__comp_bind(c);
                 return YSCR_OK;
             }
@@ -6260,6 +6309,7 @@ static int yscr__comp_present(void* vctx, const yscr_present_req* req) {
     c->last_sys_id = sys;
     c->last_resolved = 0;
     c->last_target_ns = req->target_count ? req->target_ns : 0;
+    yscr__comp_park(c);
     return YSCR_OK;
 }
 

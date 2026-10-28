@@ -289,13 +289,10 @@ static int yv_font_sync(yv_font* f, char* err, size_t cap) {
         }
         /* The first set made the text program: prime it, so the first
          * frame that draws text does not pay its first draw (TEXT, PRIME).
-         * ygfx_prime() reads a pixel back; between a flip and its
-         * completion that read blocked 19 s to more than 5 min (measured,
-         * docs/gfx.md "Bindings", text), so the flips complete first. */
-        if (first && g->prime) {
-            if (g->scr && !g->scr->in_frame) yscr_wait_flip(&g->scr->s, NULL);   /* ORDER before any flip: nothing to wait for */
-            if (ygfx_prime(&g->g) < 0) return yv_gfx_err(g, YGFX_ERR_GL, err, cap);
-        }
+         * Between frames too: since ysp/screen.h 0.10.3 no presented
+         * buffer stays bound after a flip, so the prime no longer waits
+         * for the screen (it did, 19 s to more than 5 min). */
+        if (first && g->prime && ygfx_prime(&g->g) < 0) return yv_gfx_err(g, YGFX_ERR_GL, err, cap);
     }
     return 0;
 }

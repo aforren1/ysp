@@ -255,9 +255,9 @@ clock the binding's frames and decisions equal the C path's line by line
   open, and the file finds its handles again when it loads again. Verified
   in MATLAB R2023a and Octave 10.1 (`test_mex_vis.m`,
   `test_mex_vis_gfx.m`; `test_mex_vis_window.m` with a window).
-- **Versions.** `ysp-vis` tracks `ysp/screen.h`'s version (0.10.2.1:
-  0.10.2 with phase C, text, a binding-only change; 0.10.1.1 was 0.10.1
-  and phase B, gfx and movies), and
+- **Versions.** `ysp-vis` tracks `ysp/screen.h`'s version (0.10.3;
+  0.10.2.1 was 0.10.2 with phase C, text, a binding-only change; 0.10.1.1
+  was 0.10.1 and phase B, gfx and movies), and
   `ysp.screen.HEADER_VERSION`, `ysp.gfx.HEADER_VERSION` and
   `ysp.video.HEADER_VERSION` give the three headers' own. A change to
   `ysp/gfx.h` or `ysp/video.h` alone that changes the binding adds the
@@ -520,11 +520,11 @@ v0.8.1), and `ysp-audio` is 0.7.2, the header's. The adaptive MEX
 functions and `ysp_color` have no number of their own: `'version'`
 returns the header's.
 
-`ysp-vis` is 0.10.2.1 (2026-10-27): one distribution for three headers,
+`ysp-vis` is 0.10.3 (2026-10-27): one distribution for three headers,
 so its version tracks `ysp/screen.h`'s, and a release for a change of
 `ysp/gfx.h` or `ysp/video.h` alone, or of the binding alone, adds the
 fourth number ([ysp-vis](#display-stimuli-movies-ysp-vis)); 0.10.1.1 was
-0.10.1 with phase B (the gfx and the movies), and 0.10.2.1 is 0.10.2
+0.10.1 with phase B (the gfx and the movies), and 0.10.2.1 was 0.10.2
 with phase C (the text). The MEX files of ysp-vis (`ysp_vis`,
 `ysp_screen`, `ysp_gfx`, `ysp_video`) are 1.2.0 (1.0.0 was phase A, 1.1.0
 phase B), one number for the four, because the thin files refuse a core

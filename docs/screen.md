@@ -3210,7 +3210,13 @@ callback it stayed off. Both with the window thread ON and OFF.
   `SendInput`, 20 events), `triggers` (60 of 60 fired), and with
   `--mode` a display-mode switch at open (1920 x 1200 to 1680 x 1050 and
   back after close). 43 of 43 checks passed on 2026-10-26, `--mode`
-  included.
+  included. Later cases: `sequence` (v0.10.2) and `between` (v0.10.3).
+  From v0.10.3 the checks that need the window in front (the typed
+  text, the raw mice, `sequence`) skip with a message when the OS did not
+  give the process the foreground, and the last line counts the skips;
+  with another program that took the foreground every 50 ms, `text`,
+  `mice` and `sequence` skipped and none failed. 81 of 81 checks passed
+  on 2026-10-27, from a launcher in front and from a background shell.
 - `examples/screen/abort.c` sends the keys: `live` (AUTO, so the window
   thread), `hang`, `ghost` and `held` with the thread OFF (the process
   ends, as in v0.3.1), `release` and `kill` with it ON, and with
@@ -3523,6 +3529,98 @@ background, or input to another program). Mutant `fg-08` (the call
 removed) fails 11 of its 17 checks from the launcher. `bindings/mex/test_mex_vis_window.m`
 checks that its second window gets the foreground as the first did.
 
+## Between frames (v0.10.3)
+
+Found 2026-10-27 by the ysp-vis text work: `ygfx_prime()` called after
+`flip()` and before the next `begin()` or `wait_flip()` blocked for 18 s
+to more than 5 minutes. The binding called `yscr_wait_flip()` first as a
+workaround.
+
+### The cause
+
+On COMPOSITION, `begin()` binds a free presentation buffer as
+framebuffer 0, and `flip()` presents it. The buffer then stayed bound. A
+buffer on the screen is released only when a newer present replaces it
+or when another window covers ours. `ygfx_prime()` draws its output pass
+into framebuffer 0 and then reads a pixel, so the GPU waited for the
+release. A read alone did not wait; a write did. DXGI_FLIP draws into
+its own texture and copies it at the present, so it did not wait. Not
+the foreground (v0.10.2): a window that was refused and covered did not
+wait, and a window in front did.
+
+On v0.10.2, this laptop, AC, `prime_c.c` (not in the repository: one
+frame, then the prime; 800 x 600 or fullscreen; in front means raised
+with FORCE and still in front at the prime):
+
+| Before the prime | In front, COMPOSITION | Other |
+|---|---|---|
+| nothing (at once), 1 s of sleep, or 60 more frames | more than 90 s in 4 of 4 (window and fullscreen, window thread ON and OFF); 47 and 56 s in 2 more, until another window covered ours | covered: 45 ms to 1.8 s (40 runs); DXGI_FLIP: 100 and 137 ms |
+| `yscr_wait_flip()` | 64 ms | |
+
+`ygfx_read_scene()`, `ygfx_read_output()` and `glFinish()` at the same
+point took 1.4 to 2.8 ms. The text worker's Python repro (ysp-vis
+0.10.2): more than 90 s in 3 of 3 runs in front, 4 to 6 ms in 5 covered
+ones.
+
+### The fix
+
+`flip()` binds a buffer that no present holds right after the present:
+the first free one of the other two, by `IsAvailable`, as `begin()`
+does. `begin()` takes that buffer first when it is still free, so it is
+current already. When no buffer is free, no surface is current until
+`yscr_bind()` or `begin()` finds one, and draws into framebuffer 0 then
+do nothing. Over 7200 presents in front (4 runs of 1800 frames) and all
+the runs below, a buffer was free at every present.
+
+- **What a draw between frames shows:** nothing. The buffer is not
+  presented until a `begin()` takes it, and a frame draws every pixel.
+- **The reads.** `ygfx_read_output()` reads framebuffer 0 after `end()`
+  and before `flip()`, as documented; after `flip()` it reads the parked
+  buffer, which holds an older frame on COMPOSITION and the last frame on
+  DXGI_FLIP. GL STATE now says that framebuffer 0 holds nothing defined
+  after `flip()`. `ygfx_read_scene()` reads the gfx's own target, and
+  `ygfx_prime()` draws into the parked buffer and reads its own target.
+  Capture copies in `end()`, before the flip.
+- **Not changed:** DXGI_FLIP, the web backend and SIM. The code is in the
+  COMPOSITION presenter only.
+
+Rejected: binding a free buffer only in `yscr_bind()`, which
+`ygfx_prime()` calls. That costs nothing in the frame, but GL from the
+caller between frames without `yscr_bind()` would still wait for
+minutes.
+
+### Cost
+
+The park, timed with QPC around it (`flipstats --backend composition`,
+1800 frames a run): p50 13.2 to 16.2 us, p99 42 to 97 us, max 165 to
+252 us, in 4 runs in a window in front, 4 fullscreen and 2 covered. It
+runs after the present call has returned, so the frame is queued
+already. In 4 runs of 1800 frames each, before and after: no drop, every
+record tier 1; the present zone p50 554 to 632 us before and 588 to
+616 us after; the header's own cost at p50 inside the run-to-run spread
+(in `begin()` 10.5 to 12.3 us before, 10.3 to 11.7 after; in `flip()`
+5.3 to 6.2 before, 5.1 to 5.9 after).
+
+### After
+
+On v0.10.3, the same machine:
+
+- C, `prime_c.c` in front: 38.7 to 101.7 ms in 7 of 7 primes after a
+  flip (window and fullscreen, ON and OFF; at once and after 60 frames).
+- `tests/adapt/screen_window_test.c --only between`: a clear and a pixel
+  read of framebuffer 0 between `flip()` and `begin()` in front, at once,
+  after 1 s and after `wait_flip()`, window and fullscreen, ON and OFF:
+  0.7 to 1.8 ms in 24 of 24 on COMPOSITION, 0.9 to 17.0 ms in 12 of 12
+  on DXGI_FLIP (two runs). With the park removed (mutant `bf-01`) the first one did not
+  return in 10 s, and the test's watchdog ended it with a FAIL line.
+- Python, ysp-vis 0.10.3, CPython 3.14.3, in front: the text worker's
+  repro 3 of 3 (prime 2 to 3 ms) and `prime_repro3.py` 6 of 6 (window and
+  fullscreen, ON and OFF; 1 to 3 ms). The ysp-vis window tests: 87
+  passed, with the text binding's `yscr_wait_flip()` before its prime
+  removed.
+- MATLAB R2023a: `test_mex_vis_window.m` primes right after a flip in
+  front, without the `wait_flip` it had: under 1 s, 17 checks pass.
+
 ## Bindings
 
 `ysp/screen.h` is bound in `ysp-vis` with `ysp/gfx.h` and `ysp/video.h`:
@@ -3664,24 +3762,6 @@ Open findings (v0.10.0, `tests/adapt/screen_window_test.c`; not fixed):
   screen starts and stops SDL's video for the call and SDL numbers the
   displays anew (id 1, then 3; v0.9.0 too). With a screen open the ids
   stay valid. A fix would match displays by name or bounds.
-- **On COMPOSITION, a draw into framebuffer 0 between `flip()` and the
-  next `begin()` waits until the flipped frame leaves the screen**
-  (found 2026-10-27 by the text worker with `ygfx_prime()`; measured on
-  v0.10.2). After a present the presented buffer stays bound, and a
-  shown buffer is released only by a newer present or when the window is
-  covered. `ygfx_prime()` draws its output pass there. In front, one frame
-  then 1 s of sleep, then the prime: more than 90 s in 4 of 4 C runs
-  (window and fullscreen, window thread ON and OFF), 47 and 56 s in two
-  more until another window covered it; with `yscr_wait_flip()` first, or
-  DXGI_FLIP, or a covered window, 45 ms to 1.8 s. The text worker's Python
-  repro (ysp-vis 0.10.2): more than 90 s in 3 of 3 runs in front, 4 to
-  6 ms in 5 covered ones. `ygfx_read_scene()`,
-  `ygfx_read_output()` and `glFinish()` at the same point took 1.4 to
-  2.8 ms. An experiment that binds a free buffer right after the present
-  (as `acquire` does) removed it: 37 to 76 ms in 7 of 7 runs in front. Not
-  in v0.10.2; until then, call `yscr_wait_flip()` before a prime between
-  frames.
-
 - The window thread (v0.10.0) with two displays, a display that turns
   off while a screen is open, MATLAB's desktop (only `-batch` ran), a MEX
   file cleared with `clear mex` while a screen is open, a static SDL3
