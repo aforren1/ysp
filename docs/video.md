@@ -38,7 +38,7 @@ that a restart loses nothing.
 | Round 2: not built | `YVID_PATH_SHARED`; HEVC's VUI |
 | v0.2.1 (2026-10-08): recovery after a decoder outage | Fixed: after `YVID_PENDING` the decode thread slept until the next seek. Tested (a deterministic threaded case and the real-time one); 2 of 2 mutations caught. See "Recovery after a decoder outage" |
 | Bindings, phase B (2026-10-27) | Done: `ysp.video` and `ysp_video` in ysp-vis 0.10.1.1 (MEX 1.1.0); frames equal to the C path on the simulated display; 60 s fullscreen runs with sound in Python and MATLAB. See "Bindings" |
-| v0.6.0 (2026-10-27): UTF-8 paths, error codes | Done: every path is UTF-8 (`_wfsopen` on Windows); `mv.error_code` and `w.error_code`; a missing file is `YVID_ERR_NOT_FOUND` from the probe; x86 MSVC atomics. 7 of 7 mutants caught. ysp-vis 0.10.3.1, MEX 1.2.1. See "UTF-8 paths and error codes (v0.6.0)" |
+| v0.6.0 (2026-10-27): UTF-8 paths, error codes | Done: every path is UTF-8 (`_wfsopen` on Windows); `mv.error_code` and `w.error_code`; a missing file is `YVID_ERR_NOT_FOUND` from the probe; x86 MSVC atomics. 7 of 7 mutants caught. ysp-vis 0.10.4, MEX 1.2.1. See "UTF-8 paths and error codes (v0.6.0)" |
 | Not in this task | Capture, FFmpeg, AVFoundation |
 
 ## Decisions that changed the design
@@ -1257,7 +1257,7 @@ detaches, then gives back the owners' modules.
 - MEX: `test_mex_video.m`, 67 checks on the simulated display and the null
   device, and `example_video.m`, in MATLAB R2023a and Octave 10.1
   (MinGW-w64 gcc 14.2, the static SDL3 built with it).
-- v0.6.0 (ysp-vis 0.10.3.1, MEX 1.2.1, 2026-10-27): `test_unicode_paths`
+- v0.6.0 (ysp-vis 0.10.4, MEX 1.2.1, 2026-10-27): `test_unicode_paths`
   in `test_video_sim.py` (now 25 tests): a folder named U+03A9, U+0416,
   U+6620 and U+1F3AC holds a frame sequence written, probed (`str`,
   `os.PathLike`, `bytes`) and played, an MPEG-1 file indexed there and
@@ -1341,7 +1341,7 @@ What the runs show:
 ### Header limits found
 
 Three limits, found by phase B and fixed in ysp/video.h 0.6.0 ("UTF-8
-paths and error codes (v0.6.0)"), with ysp-vis 0.10.3.1 and MEX 1.2.1:
+paths and error codes (v0.6.0)"), with ysp-vis 0.10.4 and MEX 1.2.1:
 
 - `yvid_open()` returned false without a code. The binding raised the
   base error class (`ysp.screen.Error`, MEX `ysp_video:open`) and checked

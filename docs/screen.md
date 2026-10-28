@@ -3237,6 +3237,8 @@ callback it stayed off. Both with the window thread ON and OFF.
   (COMPOSITION, 480 x 300 window, settling off). No thread and no SDL
   allocation was left. The handles are not the window thread's; whose
   they are was not traced (ANGLE, D3D11 or DComp are candidates).
+  Fixed in v0.10.4: 5 events of COMPOSITION's open
+  ([Handles, no free buffer, display ids](#handles-no-free-buffer-display-ids-v0104)).
 - **SDL's display ids change with each start of SDL's video.** A
   `yscr_displays()` before the first open returned id 1 for the panel;
   with a screen open, id 3. SDL numbers displays anew at each video
@@ -3244,8 +3246,9 @@ callback it stayed off. Both with the window thread ON and OFF.
   for the call. So a `desc.display` taken from `yscr_displays()` before
   the first open does not name a display at that open (v0.9.0 too; one
   display here, so `desc.display` 0 was used throughout). With the
-  window thread running, the ids stay valid between opens. Not fixed:
-  a fix would match displays by name or bounds; to be decided.
+  window thread running, the ids stay valid between opens. Fixed in
+  v0.10.4: an id that is no longer current is matched by name and bounds
+  ([Handles, no free buffer, display ids](#handles-no-free-buffer-display-ids-v0104)).
 
 ## The grid after a gap (v0.10.1)
 
@@ -3621,6 +3624,130 @@ On v0.10.3, the same machine:
 - MATLAB R2023a: `test_mex_vis_window.m` primes right after a flip in
   front, without the `wait_flip` it had: under 1 s, 17 checks pass.
 
+## Handles, no free buffer, display ids (v0.10.4)
+
+Three open findings of v0.10.0 and v0.10.3, and a CI failure on 32-bit
+Windows. Laptop of the measurements above (Iris Xe, Windows 11, AC), 2026-10-27.
+
+### 5 handles an open and close
+
+The cause: COMPOSITION's `open()` gets 5 event handles from DComp's
+presentation API: `GetPresentStatisticsAvailableEvent` and `GetLostEvent`
+of the presentation manager, and `GetAvailableEvent` of each of the 3
+buffers. Each call returns a new handle that the caller owns. Release of
+the manager and the buffers does not close them, and `close()` did not.
+DXGI_FLIP closes its one waitable object, and had no leak.
+
+`screen_window_test --only cycles` now lists the process's handles by
+type (`NtQueryInformationProcess`, ProcessHandleInformation, and
+`NtQueryObject` for the type name) after the second cycle and after the
+tenth, and prints the new ones. 10 opens and closes of a 480 x 300
+window a backend, settling off:
+
+| | COMPOSITION OFF | COMPOSITION ON | DXGI_FLIP OFF | DXGI_FLIP ON |
+|---|---|---|---|---|
+| v0.10.3, cycles 2 to 10 | +40 (Event 40) | +40 (Event 40) | +0 | +0 |
+| v0.10.4 | +0 | +0 | +0 | +0 |
+
+The fix: `close()` closes the 5 events after it releases the objects.
+The test checks that the count grows by less than 0.5 a cycle on both
+backends, with the window thread ON and OFF. It checks the threads only
+with the window thread ON: with it OFF, the thread count of the process
+was 1 higher once at the end (COMPOSITION OFF, before and after the
+fix), with no thread handle among the new ones. That is the OS's thread
+pool, not the header. Mutants `lk-01` and `lk-02` (one close each removed).
+
+### No free buffer after a present
+
+v0.10.3 binds a free buffer after each present. With none free, no
+surface is current until `yscr_bind()` or `begin()` finds one. That case
+never came in the runs. The window test now makes it come:
+`YSCR__COMP_IS_AVAILABLE(c, k, ok)` is the buffer query, and the test
+defines it before it includes the header, to report every buffer busy
+while a flag is set. The header's default is `IsAvailable`; nothing else
+changes.
+
+`screen_window_test --only nofree`, COMPOSITION in front, window thread
+OFF and ON: a frame whose present finds no buffer free (the flag is set
+after `begin()`: set before it, `begin()` itself finds none and waits),
+then:
+
+- framebuffer 0 is `GL_FRAMEBUFFER_UNDEFINED`: no surface is current;
+- a clear and a pixel read return at once (0.0 ms; a 10 s watchdog ends
+  the test with a FAIL line otherwise), the read sets
+  `GL_INVALID_FRAMEBUFFER_OPERATION`, and the pixel buffer is unchanged;
+- `yscr_bind()` while every buffer is busy leaves no surface current;
+  with the flag cleared, `yscr_bind()` binds a buffer
+  (`GL_FRAMEBUFFER_COMPLETE`);
+- a `begin()` right after a present with none free returns `YSCR_OK`
+  with a complete framebuffer 0, and 30 more frames and `wait_flip()`
+  run.
+
+16 of 16 checks pass. Mutants: `bf-02` (with none free, the shown buffer
+stays bound) and `bf-03` (`yscr_bind()` does not look again).
+
+### Display ids
+
+`yscr_displays()` without a screen starts SDL's video for the call and
+stops it after. SDL numbers the displays anew at each start (here id 1,
+then 4 with the window thread), so an id from that list named no display
+at the next `yscr_modes()` or `open()`. Two fixes were possible: document
+0 (the primary display) as the only stable id, or match an id that is
+no longer current. 0 alone does not let a program pick a second display
+by a list, which is what the list is for. So the header matches:
+
+- SDL never gives an id out twice in one process (`SDL_GetNextObjectID`),
+  so a current id is used as it is, and a stale one cannot name another
+  display by accident.
+- `yscr_displays()` keeps the name and bounds of each id it gives out
+  (the last 16).
+- `open()`, `yscr_modes()` and `yscr_mode_multiple()` map an id that is
+  no longer current to the current display with the same name and
+  bounds, else to the only one with the same bounds, else to the only one
+  with the same name. With no match, the id goes to SDL as before, and
+  `open()` fails with SDL's message.
+
+A custom presenter still gets `desc.display` as given
+(`yscr_presenter_open.display`). `screen_window_test --only displays`:
+an id listed with no screen gives the same mode list after SDL's video
+started again, opens a screen, and gives the same list while the window
+thread runs. Mutant `ds-01` (the match removed). One display here: the
+match among two or more displays was not run.
+
+### 32-bit Windows
+
+CI's 32-bit MSVC build failed: MSVC has no `InterlockedExchange64` for
+x86. The 64-bit stores (the abort state, the window thread's heartbeat
+and release time) now go through one helper that uses
+`InterlockedCompareExchange64` in a loop on x86 and
+`InterlockedExchange64` elsewhere. COMPOSITION now refuses x86 as it
+refuses ARM64: its C declarations of the COM methods that return a
+struct by a hidden pointer were checked on x64 only
+(`tests/compile/screen_com.cpp`), and AUTO falls back to DXGI_FLIP.
+Checked with MSVC 19.51 x86 (vcvars32), `/W4 /WX`: `tests/compile/screen.c`
+as C11 and with `YRT_NO_THREADS`, `screen.cpp` as C++17, and
+`tests/adapt/screen_test.c` built and run (all checks pass). No x86
+program opened a window: there is no x86 ANGLE here.
+
+### Tests and mutants
+
+On v0.10.4, this laptop: `screen_window_test` 110 of 110 checks (every
+default case, launched in front, through `psy-guard.sh time`); MSVC
+full ctest 97 of 97; MinGW ctest 80 of 80 (no SDL3 there) and the MinGW
+gcc 16.1 `-Werror` compile checks with SDL3's headers; WSL2 gcc 11.4
+`screen_test` with ASan and UBSan.
+
+The window-thread, foreground and gap mutants and the 5 new ones, 37 in
+all, ran through `tests/mutate/mutate.py`: the 20 on the core test
+(`wt-01` to `wt-09`, `fg-01` to `fg-07`, `gp-01` to `gp-04`) with `-j 4`,
+and the 17 on the window test (`wt-20` to `wt-29`, `fg-08`, `bf-01`,
+`bf-02`, `bf-03`, `lk-01`, `lk-02`, `ds-01`) one at a time with
+`--guard` (each run under `psy-guard.sh time`; see
+[tests/mutate/README.md](../tests/mutate/README.md)). 37 of 37 killed.
+`bf-02` (the shown buffer left bound when none is free) made the draw
+between frames wait until the test's 10 s watchdog ended it: the case
+the fallback exists for.
+
 ## Bindings
 
 `ysp/screen.h` is bound in `ysp-vis` with `ysp/gfx.h` and `ysp/video.h`:
@@ -3750,18 +3877,13 @@ unchanged: a record costs it 0.35 us (above).
 
 ## Not measured
 
-Open findings (v0.10.0, `tests/adapt/screen_window_test.c`; not fixed):
+The open findings of v0.10.0 (5 handles an open and close, SDL's
+display ids) are fixed in v0.10.4
+([Handles, no free buffer, display ids](#handles-no-free-buffer-display-ids-v0104)).
 
-- **5 handles leak per open and close**, with the window thread OFF and
-  ON alike: from the second to the tenth cycle the process gained 40 and
-  41 handles (COMPOSITION, a 480 x 300 window, settling off). Whose they
-  are (ANGLE, D3D11, DComp) was not traced.
-- **SDL's display ids change at each start of SDL's video.** A
-  `desc.display` taken from `yscr_displays()` before the first open does
-  not name the display at that open, because `yscr_displays()` without a
-  screen starts and stops SDL's video for the call and SDL numbers the
-  displays anew (id 1, then 3; v0.9.0 too). With a screen open the ids
-  stay valid. A fix would match displays by name or bounds.
+- The display-id match with two or more displays (one display here), and
+  after a display is added, removed or moved between the list and the
+  open.
 - The window thread (v0.10.0) with two displays, a display that turns
   off while a screen is open, MATLAB's desktop (only `-batch` ran), a MEX
   file cleared with `clear mex` while a screen is open, a static SDL3

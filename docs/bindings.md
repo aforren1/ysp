@@ -255,10 +255,10 @@ clock the binding's frames and decisions equal the C path's line by line
   open, and the file finds its handles again when it loads again. Verified
   in MATLAB R2023a and Octave 10.1 (`test_mex_vis.m`,
   `test_mex_vis_gfx.m`; `test_mex_vis_window.m` with a window).
-- **Versions.** `ysp-vis` tracks `ysp/screen.h`'s version (0.10.3.1:
-  0.10.3 with `ysp/video.h` 0.6.0, UTF-8 paths and error codes, a change
-  of video.h alone; 0.10.2.1 was 0.10.2 with phase C, text, a binding-only
-  change; 0.10.1.1 was 0.10.1 and phase B, gfx and movies), and
+- **Versions.** `ysp-vis` tracks `ysp/screen.h`'s version (0.10.4:
+  `ysp/screen.h` 0.10.4 with the CPython 3.10 floor, `ysp/gfx.h` 0.17.2
+  and `ysp/video.h` 0.6.0; 0.10.2.1 was 0.10.2 with phase C, text, a
+  binding-only change; 0.10.1.1 was 0.10.1 and phase B, gfx and movies), and
   `ysp.screen.HEADER_VERSION`, `ysp.gfx.HEADER_VERSION` and
   `ysp.video.HEADER_VERSION` give the three headers' own. A change to
   `ysp/gfx.h` or `ysp/video.h` alone that changes the binding adds the
@@ -509,7 +509,7 @@ package whose header did not move got the next fourth number:
 `ysp-parallel` 0.4.1.1, `ysp-quest` 0.7.0.1, `ysp-rdk` 0.3.0.1,
 `ysp-response` 0.7.0.1, `ysp-rigfile` 0.5.1.1, `ysp-rt` 0.9.1.1,
 `ysp-serial` 0.6.2.1, `ysp-stair` 0.3.0.1, `ysp-timeline` 0.8.1.2,
-`ysp-trials` 0.6.0.1 and `ysp-vis` 0.10.3.1. `ysp-audio` is 0.7.3, the
+`ysp-trials` 0.6.0.1, and `ysp-vis` went to 0.10.4 with `ysp/screen.h`. `ysp-audio` is 0.7.3, the
 header's (32-bit Windows, the same day). The MEX files did not change.
 
 A MEX function that reports a version has its own number, apart from
@@ -536,13 +536,14 @@ v0.8.1), and `ysp-audio` is 0.7.2, the header's. The adaptive MEX
 functions and `ysp_color` have no number of their own: `'version'`
 returns the header's.
 
-`ysp-vis` is 0.10.3.1 (2026-10-27): one distribution for three headers,
+`ysp-vis` is 0.10.4 (2026-10-27): one distribution for three headers,
 so its version tracks `ysp/screen.h`'s, and a release for a change of
 `ysp/gfx.h` or `ysp/video.h` alone, or of the binding alone, adds the
 fourth number ([ysp-vis](#display-stimuli-movies-ysp-vis)); 0.10.1.1 was
 0.10.1 with phase B (the gfx and the movies), 0.10.2.1 was 0.10.2
-with phase C (the text), and 0.10.3.1 is 0.10.3 with `ysp/video.h` 0.6.0
-(UTF-8 paths, error codes). The MEX files of ysp-vis (`ysp_vis`,
+with phase C (the text), and 0.10.4 is `ysp/screen.h` 0.10.4 with the
+CPython 3.10 floor, `ysp/gfx.h` 0.17.2 (text runs batched) and
+`ysp/video.h` 0.6.0 (UTF-8 paths, error codes). The MEX files of ysp-vis (`ysp_vis`,
 `ysp_screen`, `ysp_gfx`, `ysp_video`) are 1.2.1 (1.0.0 was phase A, 1.1.0
 phase B, 1.2.0 phase C), one number for the four, because the thin files refuse a core
 of another build.
