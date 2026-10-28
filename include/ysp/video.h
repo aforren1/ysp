@@ -1,4 +1,4 @@
-/* ysp/video.h - v0.5.1 - public domain single-header video playback library
+/* ysp/video.h - v0.6.0 - public domain single-header video playback library
  *
  *   A movie as a stimulus. On each display frame the header takes the
  *   frame's PREDICTED ONSET, asks the movie clock for the movie time at
@@ -59,7 +59,16 @@
  *
  *   The loop ends at the movie's end (YVID_ENDED), or when yscr_begin()
  *   stops (Shift+Esc by default, ysp/screen.h's abort). Every call on the
- *   movie that fails writes yvid_error() before it returns its code.
+ *   movie that fails writes yvid_error() and mv.error_code (the code)
+ *   before it returns; yvid_open() returns false, and mv.error_code says
+ *   why (YVID_ERR_NOT_FOUND for a file that is not there). The frame
+ *   sequence writer keeps w.error_code the same way.
+ *
+ *   PATHS. Every path is UTF-8 on every platform: desc.path, the index
+ *   beside it (path + ".yspvi"), the writer's, yvid_index_make()'s and the
+ *   soundtrack's. On Windows it is converted to UTF-16 for _wfsopen, at
+ *   most 1023 characters; a path that is not UTF-8 is YVID_ERR_ARG. Media
+ *   Foundation never gets a path: it reads through the header's IStream.
  *
  *   Psychtoolbox and PsychoPy, for comparison (from their documentation):
  *
@@ -433,6 +442,28 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.6.0 - PATHS: every path is UTF-8, converted to UTF-16 for _wfsopen
+ *          on Windows, as ysp/dataset.h and ysp/pack.h take paths. fopen()
+ *          read them in the ANSI code page, so a folder named with a
+ *          character outside it (U+03A9 on Windows-1252) could not be
+ *          opened. Also the index beside a file, the writer's file,
+ *          yvid_index_make()'s files, pl_mpeg's file under
+ *          YVID_PL_MPEG_EXTERNAL (through plm_create_with_file()), and the
+ *          soundtrack's WAV, which this header now opens and gives to
+ *          ysp/audio.h as a reader (audio.h's own path open reads the ANSI
+ *          code page). Breaking: a path in the ANSI code page with a byte
+ *          above 127 that is not UTF-8 is YVID_ERR_ARG. mv.error_code and
+ *          w.error_code: the YVID_ERR_* of the last failure, set by every
+ *          failing call and by yvid_open() and yvid_seq_open() (bool),
+ *          cleared by an open that succeeds. A file that is not there is
+ *          YVID_ERR_NOT_FOUND from yvid_probe() (it was YVID_ERR_REFUSED),
+ *          from open and from the soundtrack (it was YVID_ERR_IO); a file
+ *          that is none of the three kinds is YVID_ERR_FORMAT from probe
+ *          (it was REFUSED). Messages say why a file did not open. Fixed:
+ *          yvid_seq_open() leaked its buffers when the first write of the
+ *          file failed. x86 MSVC:
+ *          a compare-exchange loop stands in for _InterlockedExchange64 and
+ *          _InterlockedIncrement64, which it lacks.
  *   v0.5.1 - The soundtrack's close waits on this header's clock
  *          (YVID__NOW) and a sleep of its own, not on ysp/audio.h's
  *          private YAU__NOW and YAU__SLEEP_UNTIL, which only audio.h's
@@ -553,9 +584,9 @@
 #define YSP_VIDEO_H_INCLUDED
 
 #define YVID_VERSION_MAJOR 0
-#define YVID_VERSION_MINOR 5
-#define YVID_VERSION_PATCH 1
-#define YVID_VERSION_STRING "0.5.1"
+#define YVID_VERSION_MINOR 6
+#define YVID_VERSION_PATCH 0
+#define YVID_VERSION_STRING "0.6.0"
 
 #include "ysp/gfx.h"
 #include "ysp/timeline.h"
@@ -917,7 +948,8 @@ typedef struct yvid_seq_meta {     /* per frame, for capture; NULL = zeros  */
     int64_t t_ns, trial, event, camera_ns;
 } yvid_seq_meta;
 
-/* Writer handle. Caller-allocated and zeroed; private fields. */
+/* Writer handle. Caller-allocated and zeroed; private fields but
+ * error_code. */
 typedef struct yvid_seq {
     void*    fh;
     yvid_seq_desc d;
@@ -926,6 +958,7 @@ typedef struct yvid_seq {
     uint8_t* scratch;
     size_t   scratch_bytes;
     int      open;
+    int32_t  error_code;     /* YVID_ERR_* of the last failure, 0 if none (v0.6) */
     char     error[256];
 } yvid_seq;
 
@@ -1043,6 +1076,9 @@ typedef struct yvid_movie {
     int                 snd_ctl;             /* the pending control has its sound */
     int32_t             rate_num, rate_den;  /* the movie base's rate, as last seen */
     int                 nom_resync;          /* the nominal schedule starts again here */
+    /* YVID_ERR_* of the last failure, 0 if none; with yvid_error()'s
+     * message. Read it; the header writes it (v0.6). */
+    int32_t             error_code;
     char                error[512];
 #if !defined(YRT_NO_THREADS)
     yrt_pump          pump;
@@ -1063,13 +1099,15 @@ YVID_API int64_t yvid_lead_ns(double lead, int64_t period_ns);
 
 /* Reads the description (a frame sequence's header, or the index of a
  * codec file) without opening a movie. 0, or a negative code with the
- * reason in err (may be NULL). */
+ * reason in err (may be NULL): YVID_ERR_NOT_FOUND for a file that is not
+ * there, YVID_ERR_FORMAT for one that is none of the three kinds. */
 YVID_API int         yvid_probe(const yvid_desc* d, yvid_info* out, char* err, size_t cap);
 
 /* Opens the movie on a gfx (NULL: decode and schedule, no texture). The
- * handle must be zeroed or closed. False with yvid_error() set. Every
- * later call on the movie that returns a negative code writes yvid_error()
- * first; the calls on a const movie read it and return the code only. */
+ * handle must be zeroed or closed. False with yvid_error() and
+ * mv.error_code set; true clears both. Every later call on the movie that
+ * returns a negative code writes yvid_error() and mv.error_code first; the
+ * calls on a const movie read it and return the code only. */
 YVID_API bool        yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* d);
 YVID_API void        yvid_close(yvid_movie* mv);
 YVID_API const char* yvid_error(const yvid_movie* mv);
@@ -1103,13 +1141,14 @@ typedef int64_t (*yvid_unit_at_fn)(void* ctx, int64_t t);
 YVID_API int yvid_follow(yvid_movie* mv, const yscr_frame* f,
                              yvid_unit_at_fn unit_at, void* ctx, uint32_t rate);
 
-/* Frame sequences. open creates the file (false with yvid_seq_error());
+/* Frame sequences. open creates the file (false with yvid_seq_error() and
+ * w.error_code);
  * write appends a frame; finish writes the index and the header and
  * closes the file, and returns 0 or a negative code: the file is complete
  * only after a finish that returned 0. close releases the writer: safe on
  * a zeroed writer, after a failed open, after finish and twice; a writer
  * not finished is finished first, its outcome in yvid_seq_error(). Each
- * failing call writes yvid_seq_error(). */
+ * failing call writes yvid_seq_error() and w.error_code. */
 YVID_API bool yvid_seq_open(yvid_seq* w, const yvid_seq_desc* d);
 YVID_API int  yvid_seq_write(yvid_seq* w, const void* const planes[3],
                                  const int32_t strides[3], const yvid_seq_meta* meta);
@@ -1231,6 +1270,11 @@ YVID_API int yvid_soundtrack(yvid_movie* mv, yau_audio* au, const yvid_soundtrac
 #else
     #define YVID__MF 0
 #endif
+#include <errno.h>
+#if defined(_WIN32)
+    #include <windows.h>   /* MultiByteToWideChar: paths are UTF-8 */
+    #include <share.h>     /* _SH_DENYNO, _SH_DENYWR */
+#endif
 
 #ifndef YVID_MALLOC
 #define YVID_MALLOC(n)     malloc(n)
@@ -1256,9 +1300,23 @@ YVID_API int yvid_soundtrack(yvid_movie* mv, yau_audio* au, const yvid_soundtrac
 static uint32_t yvid__ld32(const uint32_t* p) { uint32_t v = *(const volatile uint32_t*)p; _ReadWriteBarrier(); return v; }
 static void yvid__st32(uint32_t* p, uint32_t v) { _ReadWriteBarrier(); *(volatile uint32_t*)p = v; }
 static int64_t yvid__ld64(const int64_t* p) { return _InterlockedCompareExchange64((volatile __int64*)(uintptr_t)p, 0, 0); }
-static void yvid__st64(int64_t* p, int64_t v) { (void)_InterlockedExchange64((volatile __int64*)p, v); }
 static uint32_t yvid__xchg32(uint32_t* p, uint32_t v) { return (uint32_t)_InterlockedExchange((volatile long*)p, (long)v); }
+#if defined(_M_IX86)
+/* x86 MSVC has no _InterlockedExchange64 or _InterlockedIncrement64; a
+ * compare-exchange loop (cmpxchg8b) does both. */
+static void yvid__st64(int64_t* p, int64_t v) {
+    __int64 o;
+    do { o = *(volatile __int64*)p; } while (_InterlockedCompareExchange64((volatile __int64*)p, v, o) != o);
+}
+static uint64_t yvid__inc64(uint64_t* p) {
+    __int64 o;
+    do { o = *(volatile __int64*)p; } while (_InterlockedCompareExchange64((volatile __int64*)p, o + 1, o) != o);
+    return (uint64_t)o + 1u;
+}
+#else
+static void yvid__st64(int64_t* p, int64_t v) { (void)_InterlockedExchange64((volatile __int64*)p, v); }
 static uint64_t yvid__inc64(uint64_t* p) { return (uint64_t)_InterlockedIncrement64((volatile __int64*)p); }
+#endif
 #elif defined(__GNUC__) || defined(__clang__)
 static uint32_t yvid__ld32(const uint32_t* p) { return __atomic_load_n(p, __ATOMIC_ACQUIRE); }
 static void yvid__st32(uint32_t* p, uint32_t v) { __atomic_store_n(p, v, __ATOMIC_RELEASE); }
@@ -1378,10 +1436,12 @@ static char yvid__hold(char* e) {
 }
 
 /* A failure that wrote nothing gets the call's name and the code's text;
- * a success leaves the message of the last failure as it was. */
-static int64_t yvid__done(char* e, char c0, int64_t rc, const char* what) {
+ * a success leaves the message of the last failure as it was. ec is the
+ * handle's error_code: the code of the last failure, with its message. */
+static int64_t yvid__done(char* e, int32_t* ec, char c0, int64_t rc, const char* what) {
     if (!e) return rc;
     if (rc < 0) {
+        *ec = (int32_t)rc;
         if (!e[0]) yvid__fmt(e, 256, "ysp_video: %s: %s", what, yvid_strerror((int)rc));
     } else if (!e[0]) {
         e[0] = c0;
@@ -1901,22 +1961,48 @@ static int yvid__fseek(FILE* f, int64_t off) {
 #endif
 }
 
-static FILE* yvid__fopen(const char* path, const char* mode) {
-#if defined(_MSC_VER)
-    FILE* f = NULL;
-    if (fopen_s(&f, path, mode) != 0) return NULL;
-    return f;
+/* Paths are UTF-8 on every platform, as ysp/dataset.h and ysp/pack.h take
+ * them. Until v0.6.0 fopen() on Windows read them in the ANSI code page, so
+ * a folder named with a character outside it (U+03A9, omega, on Windows-1252) could
+ * not be opened. A read denies no one and a write denies other writers, as
+ * ysp/dataset.h opens its files. 0, or YVID_ERR_ARG (not UTF-8, or longer
+ * than YVID__PATH_MAX - 1 characters), YVID_ERR_NOT_FOUND or YVID_ERR_IO. */
+#define YVID__PATH_MAX 1024
+static int yvid__fopen(FILE** out, const char* path, const char* mode) {
+    FILE* f;
+    *out = NULL;
+#if defined(_WIN32)
+    {
+        wchar_t w[YVID__PATH_MAX], m[8];
+        int i;
+        if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, w, YVID__PATH_MAX) <= 0) return YVID_ERR_ARG;
+        for (i = 0; mode[i] && i < 7; i++) m[i] = (wchar_t)mode[i];
+        m[i] = 0;
+        errno = 0;
+        f = _wfsopen(w, m, mode[0] == 'r' ? _SH_DENYNO : _SH_DENYWR);
+    }
 #else
-    return fopen(path, mode);
+    errno = 0;
+    f = fopen(path, mode);
 #endif
+    if (!f) return errno == ENOENT || errno == ENOTDIR ? YVID_ERR_NOT_FOUND : YVID_ERR_IO;
+    *out = f;
+    return YVID_OK;
+}
+
+/* Why a path did not open, for a message. */
+static const char* yvid__open_why(int rc) {
+    return rc == YVID_ERR_NOT_FOUND ? "no such file"
+         : rc == YVID_ERR_ARG ? "the path is not valid UTF-8 or longer than 1023 characters"
+         : yvid_strerror(rc);
 }
 
 static int yvid__src_open(yvid__src* s, const char* path, const void* data, size_t size,
                             const yvid_reader* rd, void* rd_ctx) {
     memset(s, 0, sizeof *s);
     if (path) {
-        s->fh = yvid__fopen(path, "rb");
-        if (!s->fh) return YVID_ERR_NOT_FOUND;
+        int rc = yvid__fopen(&s->fh, path, "rb");
+        if (rc < 0) return rc;
 #if defined(_WIN32)
         if (_fseeki64(s->fh, 0, SEEK_END) != 0) { fclose(s->fh); s->fh = NULL; return YVID_ERR_IO; }
         s->size = _ftelli64(s->fh);
@@ -2075,13 +2161,16 @@ static int yvid__index_load(const yvid_desc* d, yvid__index* out, int want_hashe
     }
     if (!d->path) { yvid__fmt(err, cap, "no index: give desc.index, or a path with its .yspvi beside it"); return YVID_ERR_NOT_FOUND; }
     {
-        char ip[1024];
+        char ip[YVID__PATH_MAX + 8];
         yvid__src s;
+        if (strlen(d->path) >= YVID__PATH_MAX) { yvid__fmt(err, cap, "%s", yvid__open_why(YVID_ERR_ARG)); return YVID_ERR_ARG; }
         yvid__fmt(ip, sizeof ip, "%s.yspvi", d->path);
-        if (yvid__src_open(&s, ip, NULL, 0, NULL, NULL) != YVID_OK) {
+        rc = yvid__src_open(&s, ip, NULL, 0, NULL, NULL);
+        if (rc == YVID_ERR_NOT_FOUND) {
             yvid__fmt(err, cap, "%s has no index (%s); make it with yvid_index_make(), the pack tool's step", d->path, ip);
-            return YVID_ERR_NOT_FOUND;
+            return rc;
         }
+        if (rc < 0) { yvid__fmt(err, cap, "cannot open %s: %s", ip, yvid__open_why(rc)); return rc; }
         n = (size_t)s.size;
         buf = (uint8_t*)yvid__malloc(n ? n : 1);
         if (!buf) { yvid__src_close(&s); return YVID_ERR_FULL; }
@@ -2168,13 +2257,28 @@ static const uint8_t yvid__zeros[YVID__SEQ_ALIGN] = { 0 };
 
 YVID_API const char* yvid_seq_error(const yvid_seq* w) { return w ? w->error : ""; }
 
+/* A writer's open that failed: the message, the code (v0.6.0), and the
+ * memory back, since a writer that is not open is never finished. */
+static bool yvid__seq_ofail(yvid_seq* w, int code, const char* fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(w->error, sizeof w->error, fmt, ap);
+    va_end(ap);
+    yvid__free(w->scratch); yvid__free(w->index);
+    w->scratch = w->index = NULL;
+    w->error_code = (int32_t)code;
+    return false;
+}
+
 YVID_API bool yvid_seq_open(yvid_seq* w, const yvid_seq_desc* d) {
     yvid__canon c;
     yvid_planes pl;
     char e[200];
+    FILE* f;
+    int rc;
     if (!w) return false;
     memset(w, 0, sizeof *w);
-    if (!d || !d->path) { yvid__fmt(w->error, sizeof w->error, "ysp_video: seq: desc.path is required"); return false; }
+    if (!d || !d->path) return yvid__seq_ofail(w, YVID_ERR_ARG, "ysp_video: seq: desc.path is required");
     w->d = *d;
     if (w->d.fps_den == 0) w->d.fps_den = 1;
     memset(&c, 0, sizeof c);
@@ -2182,21 +2286,22 @@ YVID_API bool yvid_seq_open(yvid_seq* w, const yvid_seq_desc* d) {
     c.frames = 1; c.gop = 1; c.codec = YVID_CODEC_SEQ;
     c.matrix = d->matrix; c.range = d->range; c.transfer = d->transfer; c.primaries = d->primaries; c.siting = d->siting;
     if (yvid__is_rgb(c.format)) yvid__rgb_color(&c);
-    if (yvid__canon_check(&c, e, sizeof e) < 0) { yvid__fmt(w->error, sizeof w->error, "ysp_video: seq: %s", e); return false; }
-    if (d->compression == YVID_SEQ_QOI && d->format != YVID_FMT_RGBA8) { yvid__fmt(w->error, sizeof w->error, "ysp_video: seq: QOI needs RGBA8"); return false; }
-    if (d->compression != YVID_SEQ_RAW && d->compression != YVID_SEQ_QOI) { yvid__fmt(w->error, sizeof w->error, "ysp_video: seq: unknown compression %d", (int)d->compression); return false; }
+    if ((rc = yvid__canon_check(&c, e, sizeof e)) < 0) return yvid__seq_ofail(w, rc, "ysp_video: seq: %s", e);
+    if (d->compression == YVID_SEQ_QOI && d->format != YVID_FMT_RGBA8) return yvid__seq_ofail(w, YVID_ERR_ARG, "ysp_video: seq: QOI needs RGBA8");
+    if (d->compression != YVID_SEQ_RAW && d->compression != YVID_SEQ_QOI) return yvid__seq_ofail(w, YVID_ERR_ARG, "ysp_video: seq: unknown compression %d", (int)d->compression);
     w->d.matrix = c.matrix; w->d.range = c.range; w->d.transfer = c.transfer; w->d.primaries = c.primaries; w->d.siting = c.siting;
     w->scratch_bytes = yvid__planes_layout(d->format, d->w, d->h, NULL, &pl);
     if (d->compression == YVID_SEQ_QOI) w->scratch_bytes = yvid_qoi_max_bytes(d->w, d->h, 4) + (size_t)d->w * (size_t)d->h * 4;
     w->scratch = (uint8_t*)yvid__malloc(w->scratch_bytes);
     w->cap = d->max_frames > 0 ? d->max_frames : 1024;
     w->index = (uint8_t*)yvid__malloc((size_t)w->cap * YVID__SEQ_ENTRY);
-    if (!w->scratch || !w->index) { yvid__free(w->scratch); yvid__free(w->index); w->scratch = w->index = NULL; yvid__fmt(w->error, sizeof w->error, "ysp_video: seq: out of memory"); return false; }
-    w->fh = yvid__fopen(d->path, "wb");
-    if (!w->fh) { yvid__free(w->scratch); yvid__free(w->index); w->scratch = w->index = NULL; yvid__fmt(w->error, sizeof w->error, "ysp_video: seq: cannot create %s", d->path); return false; }
+    if (!w->scratch || !w->index) return yvid__seq_ofail(w, YVID_ERR_FULL, "ysp_video: seq: out of memory");
+    rc = yvid__fopen(&f, d->path, "wb");
+    if (rc < 0) return yvid__seq_ofail(w, rc, "ysp_video: seq: cannot create %s: %s", d->path, yvid__open_why(rc));
+    w->fh = f;
     /* the header is written at close; until then the file has none, so a
      * reader refuses a file whose writer died (the frame headers rebuild it) */
-    if (fwrite(yvid__zeros, 1, YVID__SEQ_HDR, (FILE*)w->fh) != YVID__SEQ_HDR) { fclose((FILE*)w->fh); w->fh = NULL; yvid__fmt(w->error, sizeof w->error, "ysp_video: seq: write failed"); return false; }
+    if (fwrite(yvid__zeros, 1, YVID__SEQ_HDR, f) != YVID__SEQ_HDR) { fclose(f); w->fh = NULL; return yvid__seq_ofail(w, YVID_ERR_IO, "ysp_video: seq: write failed"); }
     w->offset = YVID__SEQ_HDR;
     w->open = 1;
     return true;
@@ -2284,7 +2389,7 @@ YVID_API int yvid_seq_write(yvid_seq* w, const void* const planes[3], const int3
                             const yvid_seq_meta* meta) {
     char* e = w ? w->error : NULL;
     char c0 = yvid__hold(e);
-    return (int)yvid__done(e, c0, yvid__seq_write(w, planes, strides, meta), "seq_write");
+    return (int)yvid__done(e, w ? &w->error_code : NULL, c0, yvid__seq_write(w, planes, strides, meta), "seq_write");
 }
 
 static int yvid__seq_finish(yvid_seq* w) {
@@ -2314,7 +2419,7 @@ static int yvid__seq_finish(yvid_seq* w) {
 YVID_API int yvid_seq_finish(yvid_seq* w) {
     char* e = w ? w->error : NULL;
     char c0 = yvid__hold(e);
-    return (int)yvid__done(e, c0, yvid__seq_finish(w), "seq_finish");
+    return (int)yvid__done(e, w ? &w->error_code : NULL, c0, yvid__seq_finish(w), "seq_finish");
 }
 
 YVID_API void yvid_seq_close(yvid_seq* w) {
@@ -2342,7 +2447,7 @@ static int yvid__seqr_open(void* ctx, const yvid_decoder_open* in, yvid_stream* 
     int64_t index_offset, i, prev = 0;
     int rc;
     rc = yvid__src_open(&s->src, in->path, in->data, in->size, in->reader, in->reader_ctx);
-    if (rc < 0) { yvid__fmt(err, cap, "cannot open %s", in->path ? in->path : "the source"); return rc; }
+    if (rc < 0) { yvid__fmt(err, cap, "cannot open %s: %s", in->path ? in->path : "the source", yvid__open_why(rc)); return rc; }
     if (s->src.size < YVID__SEQ_HDR || yvid__src_read(&s->src, 0, hdr, sizeof hdr) != YVID_OK) { yvid__fmt(err, cap, "too short for a frame sequence"); return YVID_ERR_FORMAT; }
     rc = yvid__seq_parse(hdr, &s->c, &s->compression, &index_offset, err, cap);
     if (rc < 0) return rc;
@@ -2495,12 +2600,17 @@ static int yvid__plm_open(void* ctx, const yvid_decoder_open* in, yvid_stream* o
 #if !defined(YVID_PL_MPEG_EXTERNAL)
         plm_buffer_t* b;
         rc = yvid__src_open(&p->src, in->path, NULL, 0, in->reader, in->reader_ctx);
-        if (rc < 0) { yvid__fmt(err, cap, "cannot open %s", in->path ? in->path : "the reader"); return rc; }
+        if (rc < 0) { yvid__fmt(err, cap, "cannot open %s: %s", in->path ? in->path : "the reader", yvid__open_why(rc)); return rc; }
         b = plm_buffer_create_with_callbacks(yvid__plm_bload, yvid__plm_bseek, yvid__plm_btell, (size_t)p->src.size, p);
         if (b) p->plm = plm_create_with_buffer(b, TRUE);
 #else
+        FILE* fh;
         if (!in->path) { yvid__fmt(err, cap, "pl_mpeg is external: a path or memory only"); return YVID_ERR_NOT_IMPLEMENTED; }
-        p->plm = plm_create_with_filename(in->path);
+        /* not plm_create_with_filename(): its fopen() reads the path in the
+         * ANSI code page on Windows */
+        rc = yvid__fopen(&fh, in->path, "rb");
+        if (rc < 0) { yvid__fmt(err, cap, "cannot open %s: %s", in->path, yvid__open_why(rc)); return rc; }
+        p->plm = plm_create_with_file(fh, TRUE);
 #endif
     }
     if (!p->plm) { yvid__fmt(err, cap, "pl_mpeg could not open the stream"); return YVID_ERR_DECODER; }
@@ -3143,7 +3253,7 @@ static int yvid__mf_open_ex(yvid__mf* m, const yvid_decoder_open* in, yvid_strea
     s->refs = 1;
     InitializeSRWLock(&s->lock);
     rc = yvid__src_open(&s->src, in->path, in->data, in->size, in->reader, in->reader_ctx);
-    if (rc < 0) { yvid__free(s); yvid__fmt(err, cap, "cannot open %s", in->path ? in->path : "the source"); return rc; }
+    if (rc < 0) { yvid__free(s); yvid__fmt(err, cap, "cannot open %s: %s", in->path ? in->path : "the source", yvid__open_why(rc)); return rc; }
     hr = yvid__mfl.ByteStreamOnStream((IStream*)(void*)s, &bs);
     yvid__stm_release(s);   /* the byte stream holds its own reference */
     if (FAILED(hr)) { yvid__fmt(err, cap, "MFCreateMFByteStreamOnStream failed (0x%08lx)", (unsigned long)hr); return YVID_ERR_DECODER; }
@@ -3634,7 +3744,7 @@ static int yvid__index_write(const char* media_path, const char* index_path, con
     yvid__src s;
     uint64_t head = 0, tail = 0;
     uint8_t hdr[YVID__IDX_HDR];
-    char ip[1024];
+    char ip[YVID__PATH_MAX + 8];
     int64_t size, i;
     FILE* f;
     int rc = yvid__src_open(&s, media_path, NULL, 0, NULL, NULL);
@@ -3643,9 +3753,13 @@ static int yvid__index_write(const char* media_path, const char* index_path, con
     yvid__src_close(&s);
     if (rc < 0) { yvid__fmt(err, cap, "%s: cannot read it again", media_path); return rc; }
     yvid__index_header(hdr, c, size, head, tail);
-    if (!index_path) { yvid__fmt(ip, sizeof ip, "%s.yspvi", media_path); index_path = ip; }
-    f = yvid__fopen(index_path, "wb");
-    if (!f) { yvid__fmt(err, cap, "cannot create %s", index_path); return YVID_ERR_IO; }
+    if (!index_path) {
+        if (strlen(media_path) >= YVID__PATH_MAX) { yvid__fmt(err, cap, "%s", yvid__open_why(YVID_ERR_ARG)); return YVID_ERR_ARG; }
+        yvid__fmt(ip, sizeof ip, "%s.yspvi", media_path);
+        index_path = ip;
+    }
+    rc = yvid__fopen(&f, index_path, "wb");
+    if (rc < 0) { yvid__fmt(err, cap, "cannot create %s: %s", index_path, yvid__open_why(rc)); return rc; }
     rc = fwrite(hdr, 1, sizeof hdr, f) == sizeof hdr ? YVID_OK : YVID_ERR_IO;
     for (i = 0; i < n && rc == YVID_OK; i++) {
         uint8_t b8[8];
@@ -4048,7 +4162,7 @@ YVID_API int64_t yvid_index_make(const char* media_path, const char* index_path,
         memset(&q, 0, sizeof q);
         q.path = media_path;
         b = yvid__backend_for(&q);
-        if (b == -1) { yvid__fmt(err, cap, "cannot open %s", media_path); return YVID_ERR_NOT_FOUND; }
+        if (b < 0 && b != YVID_ERR_FORMAT) { yvid__fmt(err, cap, "cannot open %s: %s", media_path, yvid__open_why(b)); return b; }
     }
     if (b == YVID_BACKEND_PLMPEG) {
 #if !defined(YVID_NO_PL_MPEG) && !defined(YVID_PL_MPEG_EXTERNAL)
@@ -4523,14 +4637,22 @@ static int yvid__backend_for(const yvid_desc* d) {
     yvid__src s;
     if (d->backend != YVID_BACKEND_AUTO) return d->backend;
     if (d->decoder) return YVID_BACKEND_CUSTOM;
-    if (yvid__src_open(&s, d->path, d->data, d->size, d->reader, d->reader_ctx) != YVID_OK) return -1;
+    int rc = yvid__src_open(&s, d->path, d->data, d->size, d->reader, d->reader_ctx);
+    if (rc < 0) return rc;   /* NOT_FOUND, IO or ARG: never FORMAT */
     memset(b, 0, sizeof b);
     if (s.size >= 8) yvid__src_read(&s, 0, b, 8);
     yvid__src_close(&s);
     if (memcmp(b, "YSPVSEQ1", 8) == 0) return YVID_BACKEND_SEQ;
     if (b[0] == 0 && b[1] == 0 && b[2] == 1 && (b[3] == 0xBA || b[3] == 0xB3)) return YVID_BACKEND_PLMPEG;
     if (memcmp(b + 4, "ftyp", 4) == 0) return YVID_BACKEND_MF;
-    return -2;   /* none of the three */
+    return YVID_ERR_FORMAT;   /* none of the three */
+}
+
+/* A failure of yvid__backend_for() as a message. */
+static void yvid__backend_why(const yvid_desc* d, int b, char* err, size_t cap) {
+    const char* p = d->path ? d->path : "the source";
+    if (b == YVID_ERR_FORMAT) yvid__fmt(err, cap, "%s is not a frame sequence, MPEG-PS or MP4 file", p);
+    else yvid__fmt(err, cap, "cannot open %s: %s", p, yvid__open_why(b));
 }
 
 YVID_API int yvid_probe(const yvid_desc* d, yvid_info* out, char* err, size_t cap) {
@@ -4540,13 +4662,16 @@ YVID_API int yvid_probe(const yvid_desc* d, yvid_info* out, char* err, size_t ca
     if (!d || !out) { yvid__fmt(err, cap, "ysp_video: probe: no desc or no info"); return YVID_ERR_ARG; }
     memset(out, 0, sizeof *out);
     b = yvid__backend_for(d);
+    /* v0.6.0: a file that is not there is NOT_FOUND (it was REFUSED) */
+    if (b < 0) { yvid__backend_why(d, b, err, cap); return b; }
     if (b == YVID_BACKEND_SEQ) {
         yvid__src s;
         uint8_t hdr[128];
         int32_t comp;
         int64_t io;
-        if (yvid__src_open(&s, d->path, d->data, d->size, d->reader, d->reader_ctx) != YVID_OK ||
-            yvid__src_read(&s, 0, hdr, sizeof hdr) != YVID_OK) { yvid__src_close(&s); yvid__fmt(err, cap, "cannot read the file"); return YVID_ERR_IO; }
+        rc = yvid__src_open(&s, d->path, d->data, d->size, d->reader, d->reader_ctx);
+        if (rc < 0) { yvid__fmt(err, cap, "cannot open %s: %s", d->path ? d->path : "the source", yvid__open_why(rc)); return rc; }
+        if (yvid__src_read(&s, 0, hdr, sizeof hdr) != YVID_OK) { yvid__src_close(&s); yvid__fmt(err, cap, "cannot read the file"); return YVID_ERR_IO; }
         yvid__src_close(&s);
         if ((rc = yvid__seq_parse(hdr, &c, &comp, &io, err, cap)) < 0) return rc;
     } else if (b == YVID_BACKEND_PLMPEG || b == YVID_BACKEND_MF) {
@@ -4602,6 +4727,13 @@ static void yvid__close_partial(yvid_movie* mv) {
     mv->tex.id = 0;
 }
 
+/* An open that failed: the code beside the message (v0.6.0). Before it a
+ * binding told a missing file from a bad option only by the message. */
+static bool yvid__ofail(yvid_movie* mv, int code) {
+    mv->error_code = (int32_t)code;
+    return false;
+}
+
 YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
     yvid_decoder_open in;
     yvid_stream st;
@@ -4611,57 +4743,56 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
     int backend, rc, i;
     int32_t rn, rd;
     if (!mv) return false;
-    if (mv->open) { yvid__err(mv, "ysp_video: already open"); return false; }
+    if (mv->open) { yvid__err(mv, "ysp_video: already open"); return yvid__ofail(mv, YVID_ERR_ORDER); }
     memset(mv, 0, sizeof *mv);
-    if (!desc) { yvid__err(mv, "ysp_video: no desc"); return false; }
+    if (!desc) { yvid__err(mv, "ysp_video: no desc"); return yvid__ofail(mv, YVID_ERR_ARG); }
     mv->d = *desc;
     mv->gfx = g;
     mv->screen = ygfx_screen(g);
-    if (!(desc->lead == YVID_LEAD_NONE || (desc->lead >= 0.0 && desc->lead < 1.0))) { yvid__err(mv, "ysp_video: desc.lead must be in [0, 1) or YVID_LEAD_NONE"); return false; }
+    if (!(desc->lead == YVID_LEAD_NONE || (desc->lead >= 0.0 && desc->lead < 1.0))) { yvid__err(mv, "ysp_video: desc.lead must be in [0, 1) or YVID_LEAD_NONE"); return yvid__ofail(mv, YVID_ERR_ARG); }
     mv->info.lead = desc->lead == 0.0 ? 0.5 : desc->lead == YVID_LEAD_NONE ? 0.0 : desc->lead;
     if (desc->timeline) {
         /* one rule for video and annotations: the timeline's own lead */
         double tl_lead = ytl_lead(desc->timeline);
-        if (!ytl_is_open(desc->timeline)) { yvid__err(mv, "ysp_video: desc.timeline is not open"); return false; }
-        if (desc->base < 1 || desc->base >= YTL_MAX_BASES) { yvid__err(mv, "ysp_video: desc.base must be 1..%d with a timeline", YTL_MAX_BASES - 1); return false; }
-        if (desc->lead != 0.0 && mv->info.lead != tl_lead) { yvid__err(mv, "ysp_video: desc.lead (%g) differs from the timeline's (%g): video and annotations must share one rule", mv->info.lead, tl_lead); return false; }
+        if (!ytl_is_open(desc->timeline)) { yvid__err(mv, "ysp_video: desc.timeline is not open"); return yvid__ofail(mv, YVID_ERR_CLOSED); }
+        if (desc->base < 1 || desc->base >= YTL_MAX_BASES) { yvid__err(mv, "ysp_video: desc.base must be 1..%d with a timeline", YTL_MAX_BASES - 1); return yvid__ofail(mv, YVID_ERR_ARG); }
+        if (desc->lead != 0.0 && mv->info.lead != tl_lead) { yvid__err(mv, "ysp_video: desc.lead (%g) differs from the timeline's (%g): video and annotations must share one rule", mv->info.lead, tl_lead); return yvid__ofail(mv, YVID_ERR_ARG); }
         mv->info.lead = tl_lead;
     }
     if (desc->hw_decode != YVID_HW_AUTO && desc->hw_decode != YVID_HW_OFF && desc->hw_decode != YVID_HW_DXVA) {
         yvid__err(mv, "ysp_video: desc.hw_decode %d is not AUTO, OFF or DXVA", (int)desc->hw_decode);
-        return false;
+        return yvid__ofail(mv, YVID_ERR_ARG);
     }
-    if (desc->ahead < 0 || desc->ahead > YVID_MAX_SLOTS - 2) { yvid__err(mv, "ysp_video: desc.ahead must be 0..%d", YVID_MAX_SLOTS - 2); return false; }
+    if (desc->ahead < 0 || desc->ahead > YVID_MAX_SLOTS - 2) { yvid__err(mv, "ysp_video: desc.ahead must be 0..%d", YVID_MAX_SLOTS - 2); return yvid__ofail(mv, YVID_ERR_ARG); }
     if (desc->gpu_path == YVID_PATH_SHARED) {
         yvid__err(mv, "ysp_video: the SHARED GPU path is not built; YVID_PATH_GPU is (docs/video.md)");
-        return false;
+        return yvid__ofail(mv, YVID_ERR_NOT_IMPLEMENTED);
     }
 
     backend = yvid__backend_for(desc);
-    if (backend == -2) { yvid__err(mv, "ysp_video: %s is not a frame sequence, MPEG-PS or MP4 file", desc->path ? desc->path : "the source"); return false; }
-    if (backend < 0) { yvid__err(mv, "ysp_video: cannot open %s", desc->path ? desc->path : "the source"); return false; }
+    if (backend < 0) { yvid__backend_why(desc, backend, e, sizeof e); yvid__err(mv, "ysp_video: %s", e); return yvid__ofail(mv, backend); }
     if ((backend == YVID_BACKEND_MF && !YVID__MF) || backend == YVID_BACKEND_AVF || backend == YVID_BACKEND_FFMPEG) {
         yvid__err(mv, "ysp_video: %s: H.264 and HEVC need Media Foundation (Windows, without YVID_NO_MF); AVFoundation and FFmpeg are not built", desc->path ? desc->path : "the source");
-        return false;
+        return yvid__ofail(mv, YVID_ERR_NOT_IMPLEMENTED);
     }
     if (backend == YVID_BACKEND_CUSTOM) {
         if (!desc->decoder || desc->decoder->version != YVID_DECODER_VERSION || !desc->decoder->open ||
-            !desc->decoder->next || !desc->decoder->seek) { yvid__err(mv, "ysp_video: desc.decoder is missing or of another version"); return false; }
+            !desc->decoder->next || !desc->decoder->seek) { yvid__err(mv, "ysp_video: desc.decoder is missing or of another version"); return yvid__ofail(mv, YVID_ERR_ARG); }
         mv->dec = desc->decoder;
         mv->dec_ctx = desc->decoder_ctx;
     } else if (backend == YVID_BACKEND_SEQ) {
         mv->be_mem = yvid__malloc(sizeof(yvid__seqr));
-        if (!mv->be_mem) { yvid__err(mv, "ysp_video: out of memory"); return false; }
+        if (!mv->be_mem) { yvid__err(mv, "ysp_video: out of memory"); return yvid__ofail(mv, YVID_ERR_FULL); }
         memset(mv->be_mem, 0, sizeof(yvid__seqr));
         mv->dec = &yvid__seq_decoder;
         mv->dec_ctx = mv->be_mem;
     } else if (backend == YVID_BACKEND_PLMPEG) {
 #ifdef YVID_NO_PL_MPEG
         yvid__err(mv, "ysp_video: MPEG-1 needs pl_mpeg; this build has YVID_NO_PL_MPEG");
-        return false;
+        return yvid__ofail(mv, YVID_ERR_NOT_IMPLEMENTED);
 #else
         mv->be_mem = yvid__malloc(sizeof(yvid__plm));
-        if (!mv->be_mem) { yvid__err(mv, "ysp_video: out of memory"); return false; }
+        if (!mv->be_mem) { yvid__err(mv, "ysp_video: out of memory"); return yvid__ofail(mv, YVID_ERR_FULL); }
         memset(mv->be_mem, 0, sizeof(yvid__plm));
         mv->dec = &yvid__plm_decoder;
         mv->dec_ctx = mv->be_mem;
@@ -4670,10 +4801,10 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
     } else if (backend == YVID_BACKEND_MF) {
         yvid__mf* m = (yvid__mf*)yvid__malloc(sizeof(yvid__mf));
         yvid__index hx;
-        if (!m) { yvid__err(mv, "ysp_video: out of memory"); return false; }
+        if (!m) { yvid__err(mv, "ysp_video: out of memory"); return yvid__ofail(mv, YVID_ERR_FULL); }
         memset(m, 0, sizeof *m);
         /* the rate is the index's (MF's is a 100 ns approximation) */
-        if (yvid__index_load(desc, &hx, 0, e, sizeof e) < 0) { yvid__free(m); yvid__err(mv, "ysp_video: %s", e); return false; }
+        if ((rc = yvid__index_load(desc, &hx, 0, e, sizeof e)) < 0) { yvid__free(m); yvid__err(mv, "ysp_video: %s", e); return yvid__ofail(mv, rc); }
         m->req_num = hx.c.fps_num; m->req_den = hx.c.fps_den;
         m->req_hw = desc->hw_decode == YVID_HW_AUTO ? YVID__HW_DEFAULT : (int)desc->hw_decode;
         m->req_auto = desc->hw_decode == YVID_HW_AUTO;
@@ -4684,7 +4815,7 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
             else if (!m->req_nat.d3d11_device) why = "the screen has no D3D11 device (DXGI_FLIP or COMPOSITION)";
             else if (!yvid__mf_video_device(m->req_nat.d3d11_device)) why = "the screen's D3D11 device needs D3D11_CREATE_DEVICE_VIDEO_SUPPORT and multithread protection (ysp/screen.h's desc.d3d11_video)";
             else if (desc->hw_decode != YVID_HW_AUTO && desc->hw_decode != YVID_HW_DXVA) why = "hw_decode must be AUTO or DXVA";
-            if (why) { yvid__free(m); yvid__err(mv, "ysp_video: YVID_PATH_GPU: %s", why); return false; }
+            if (why) { yvid__free(m); yvid__err(mv, "ysp_video: YVID_PATH_GPU: %s", why); return yvid__ofail(mv, YVID_ERR_REFUSED); }
             m->req_hw = YVID_HW_DXVA;
             m->req_gpu = 1;
         }
@@ -4694,13 +4825,13 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
 #endif
     } else {
         yvid__err(mv, "ysp_video: unknown backend %d", backend);
-        return false;
+        return yvid__ofail(mv, YVID_ERR_ARG);
     }
     mv->info.backend = (yvid_backend)backend;
     if (desc->gpu_path == YVID_PATH_GPU && backend != YVID_BACKEND_MF) {
         yvid__err(mv, "ysp_video: YVID_PATH_GPU is for Media Foundation movies (MP4)");
         yvid__close_partial(mv);
-        return false;
+        return yvid__ofail(mv, YVID_ERR_REFUSED);
     }
     memset(&in, 0, sizeof in);
     in.path = desc->path; in.data = desc->data; in.size = desc->size;
@@ -4715,7 +4846,7 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
         if (mv->dec->close) mv->dec->close(mv->dec_ctx);
         mv->dec = NULL;
         yvid__close_partial(mv);
-        return false;
+        return yvid__ofail(mv, rc);
     }
     /* the description: the stream's values, checked against the index's */
     memset(&c, 0, sizeof c);
@@ -4728,7 +4859,7 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
     if (backend == YVID_BACKEND_PLMPEG || backend == YVID_BACKEND_MF || desc->index || (backend == YVID_BACKEND_CUSTOM && desc->path)) {
         int32_t v;
         rc = yvid__index_load(desc, &ix, 1, e, sizeof e);
-        if (rc < 0) { yvid__err(mv, "ysp_video: %s", e); yvid__close_partial(mv); return false; }
+        if (rc < 0) { yvid__err(mv, "ysp_video: %s", e); yvid__close_partial(mv); return yvid__ofail(mv, rc); }
         mv->hashes = ix.hashes;
         if (backend == YVID_BACKEND_PLMPEG || backend == YVID_BACKEND_MF || desc->path) {
             yvid__src s;
@@ -4739,7 +4870,7 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
                 if (rc < 0 || head != ix.head || tail != ix.tail) {
                     yvid__err(mv, "ysp_video: the index does not belong to this file (size or hash of its ends differ); make it again");
                     yvid__close_partial(mv);
-                    return false;
+                    return yvid__ofail(mv, YVID_ERR_FORMAT);
                 }
             }
         }
@@ -4758,11 +4889,11 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
         v = c.siting; if (rc == YVID_OK) rc = yvid__fill(&v, ix.c.siting, "siting", e, sizeof e); c.siting = (uint8_t)v;
         if (rc == YVID_OK && c.frames > 0 && c.frames != ix.c.frames) { yvid__fmt(e, sizeof e, "the stream says %lld frames, the index says %lld", (long long)c.frames, (long long)ix.c.frames); rc = YVID_ERR_FORMAT; }
         if (c.frames <= 0) c.frames = ix.c.frames;
-        if (rc < 0) { yvid__err(mv, "ysp_video: %s: %s", desc->path ? desc->path : "the source", e); yvid__close_partial(mv); return false; }
+        if (rc < 0) { yvid__err(mv, "ysp_video: %s: %s", desc->path ? desc->path : "the source", e); yvid__close_partial(mv); return yvid__ofail(mv, rc); }
     }
     if (yvid__is_rgb(c.format)) yvid__rgb_color(&c);
     rc = yvid__canon_check(&c, e, sizeof e);
-    if (rc < 0) { yvid__err(mv, "ysp_video: %s: not the canonical form: %s", desc->path ? desc->path : "the source", e); yvid__close_partial(mv); return false; }
+    if (rc < 0) { yvid__err(mv, "ysp_video: %s: not the canonical form: %s", desc->path ? desc->path : "the source", e); yvid__close_partial(mv); return yvid__ofail(mv, rc); }
     mv->info.w = c.w; mv->info.h = c.h; mv->info.format = c.format;
     mv->info.fps_num = c.fps_num; mv->info.fps_den = c.fps_den;
     mv->info.frames = c.frames; mv->info.gop = c.gop; mv->info.codec = c.codec;
@@ -4776,7 +4907,7 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
     if (backend == YVID_BACKEND_MF && ((yvid__mf*)mv->be_mem)->gpu) {
         yvid__mf* m = (yvid__mf*)mv->be_mem;
         rc = yvid__mf_peek(m);
-        if (rc < 0) { yvid__err(mv, "ysp_video: YVID_PATH_GPU: the first frame (0x%08lx)", (unsigned long)m->last_hr); yvid__close_partial(mv); return false; }
+        if (rc < 0) { yvid__err(mv, "ysp_video: YVID_PATH_GPU: the first frame (0x%08lx)", (unsigned long)m->last_hr); yvid__close_partial(mv); return yvid__ofail(mv, YVID_ERR_DECODER); }
         mv->info.path = YVID_PATH_GPU;
         mv->gpu_w = m->tw; mv->gpu_h = m->th;
         mv->gpu_ax = m->ax; mv->gpu_ay = m->ay;
@@ -4790,7 +4921,7 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
     if (!yvid__is_yuv(c.format) && desc->light == YVID_LIGHT_EOTF) {
         yvid__err(mv, "ysp_video: light EOTF is for YUV movies; an RGB frame sequence holds device values (light CODES)");
         yvid__close_partial(mv);
-        return false;
+        return yvid__ofail(mv, YVID_ERR_REFUSED);
     }
     mv->timescale = st.timescale;
     mv->dec_caps = st.caps;
@@ -4810,7 +4941,7 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
                         "Re-encode at a rate it divides, choose a mode with yscr_mode_multiple(), or leave desc.strict_cadence off to accept the cadence",
                         desc->path ? desc->path : "the movie", (int)c.fps_num, (int)c.fps_den, R, ratio);
             yvid__close_partial(mv);
-            return false;
+            return yvid__ofail(mv, YVID_ERR_REFUSED);
         }
     }
     /* slots and scratch */
@@ -4827,11 +4958,11 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
         size_t need = stride * (size_t)mv->n_slots + 4096;
         unsigned char* base;
         if (desc->mem) {
-            if (desc->mem_bytes < need) { yvid__err(mv, "ysp_video: desc.mem holds %zu bytes; %zu needed", desc->mem_bytes, need); yvid__close_partial(mv); return false; }
+            if (desc->mem_bytes < need) { yvid__err(mv, "ysp_video: desc.mem holds %zu bytes; %zu needed", desc->mem_bytes, need); yvid__close_partial(mv); return yvid__ofail(mv, YVID_ERR_ARG); }
             base = (unsigned char*)desc->mem;
         } else {
             mv->mem_raw = (unsigned char*)yvid__malloc(need);
-            if (!mv->mem_raw) { yvid__err(mv, "ysp_video: out of memory for %zu bytes of slots", need); yvid__close_partial(mv); return false; }
+            if (!mv->mem_raw) { yvid__err(mv, "ysp_video: out of memory for %zu bytes of slots", need); yvid__close_partial(mv); return yvid__ofail(mv, YVID_ERR_FULL); }
             base = mv->mem_raw;
         }
         base = (unsigned char*)(((uintptr_t)base + 4095) & ~(uintptr_t)4095);
@@ -4858,13 +4989,13 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
             td.enc.chroma_nearest = desc->chroma == YVID_CHROMA_NEAREST;
         }
         mv->tex = ygfx_texture(g, &td);
-        if (mv->tex.id == 0) { yvid__err(mv, "ysp_video: ysp/gfx.h refused the texture: %s", ygfx_error(g)); yvid__close_partial(mv); return false; }
+        if (mv->tex.id == 0) { yvid__err(mv, "ysp_video: ysp/gfx.h refused the texture: %s", ygfx_error(g)); yvid__close_partial(mv); return yvid__ofail(mv, YVID_ERR_REFUSED); }
 #if YVID__MF
         if (mv->info.path == YVID_PATH_GPU) {
             /* the slots' textures, made and imported once: nothing per frame */
             yvid__mf* m = (yvid__mf*)mv->be_mem;
             mv->gpu = 1;
-            if (yvid__mf_textures(m, mv) < 0) { yvid__err(mv, "ysp_video: YVID_PATH_GPU: CreateTexture2D NV12 %dx%d (0x%08lx)", (int)m->tw, (int)m->th, (unsigned long)m->last_hr); yvid__close_partial(mv); return false; }
+            if (yvid__mf_textures(m, mv) < 0) { yvid__err(mv, "ysp_video: YVID_PATH_GPU: CreateTexture2D NV12 %dx%d (0x%08lx)", (int)m->tw, (int)m->th, (unsigned long)m->last_hr); yvid__close_partial(mv); return yvid__ofail(mv, YVID_ERR_DECODER); }
             for (i = 0; i < mv->n_slots; i++) {
                 ygfx_import_desc d;
                 memset(&d, 0, sizeof d);
@@ -4874,7 +5005,7 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
                 d.enc = td.enc;
                 d.d3d11_tex = mv->slots[i].gtex;
                 mv->slots[i].gimp = ygfx_texture_import(g, &d);
-                if (!mv->slots[i].gimp.id) { yvid__err(mv, "ysp_video: YVID_PATH_GPU: ysp/gfx.h refused the texture: %s", ygfx_error(g)); yvid__close_partial(mv); return false; }
+                if (!mv->slots[i].gimp.id) { yvid__err(mv, "ysp_video: YVID_PATH_GPU: ysp/gfx.h refused the texture: %s", ygfx_error(g)); yvid__close_partial(mv); return yvid__ofail(mv, YVID_ERR_REFUSED); }
             }
         }
 #endif
@@ -4986,7 +5117,7 @@ static int64_t yvid__play_at_body(yvid_movie* mv, int64_t t) {
 YVID_API int64_t yvid_play_at(yvid_movie* mv, int64_t t) {
     char* e = mv ? mv->error : NULL;
     char c0 = yvid__hold(e);
-    return yvid__done(e, c0, yvid__play_at_body(mv, t), "play_at");
+    return yvid__done(e, mv ? &mv->error_code : NULL, c0, yvid__play_at_body(mv, t), "play_at");
 }
 
 static int64_t yvid__pause_at_body(yvid_movie* mv, int64_t t) {
@@ -5003,7 +5134,7 @@ static int64_t yvid__pause_at_body(yvid_movie* mv, int64_t t) {
 YVID_API int64_t yvid_pause_at(yvid_movie* mv, int64_t t) {
     char* e = mv ? mv->error : NULL;
     char c0 = yvid__hold(e);
-    return yvid__done(e, c0, yvid__pause_at_body(mv, t), "pause_at");
+    return yvid__done(e, mv ? &mv->error_code : NULL, c0, yvid__pause_at_body(mv, t), "pause_at");
 }
 
 static int64_t yvid__seek_frame_body(yvid_movie* mv, int64_t frame, int64_t resume_at) {
@@ -5031,7 +5162,7 @@ static int64_t yvid__seek_frame_body(yvid_movie* mv, int64_t frame, int64_t resu
 YVID_API int64_t yvid_seek_frame(yvid_movie* mv, int64_t frame, int64_t resume_at) {
     char* e = mv ? mv->error : NULL;
     char c0 = yvid__hold(e);
-    return yvid__done(e, c0, yvid__seek_frame_body(mv, frame, resume_at), "seek_frame");
+    return yvid__done(e, mv ? &mv->error_code : NULL, c0, yvid__seek_frame_body(mv, frame, resume_at), "seek_frame");
 }
 
 static int64_t yvid__seek_body(yvid_movie* mv, int64_t movie_t, int64_t resume_at) {
@@ -5043,7 +5174,7 @@ static int64_t yvid__seek_body(yvid_movie* mv, int64_t movie_t, int64_t resume_a
 YVID_API int64_t yvid_seek(yvid_movie* mv, int64_t movie_t, int64_t resume_at) {
     char* e = mv ? mv->error : NULL;
     char c0 = yvid__hold(e);
-    return yvid__done(e, c0, yvid__seek_body(mv, movie_t, resume_at), "seek");
+    return yvid__done(e, mv ? &mv->error_code : NULL, c0, yvid__seek_body(mv, movie_t, resume_at), "seek");
 }
 
 static int yvid__show_body(yvid_movie* mv, int64_t frame) {
@@ -5065,7 +5196,7 @@ static int yvid__show_body(yvid_movie* mv, int64_t frame) {
 YVID_API int yvid_show(yvid_movie* mv, int64_t frame) {
     char* e = mv ? mv->error : NULL;
     char c0 = yvid__hold(e);
-    return (int)yvid__done(e, c0, yvid__show_body(mv, frame), "show");
+    return (int)yvid__done(e, mv ? &mv->error_code : NULL, c0, yvid__show_body(mv, frame), "show");
 }
 
 YVID_API int yvid_result(const yvid_movie* mv, int64_t id, yrt_event* out) {
@@ -5807,7 +5938,7 @@ static int yvid__update_body(yvid_movie* mv, const yscr_frame* f) {
 YVID_API int yvid_update(yvid_movie* mv, const yscr_frame* f) {
     char* e = mv ? mv->error : NULL;
     char c0 = yvid__hold(e);
-    return (int)yvid__done(e, c0, yvid__update_body(mv, f), "update");
+    return (int)yvid__done(e, mv ? &mv->error_code : NULL, c0, yvid__update_body(mv, f), "update");
 }
 
 /* --- following another clock ------------------------------------------------------- */
@@ -5857,7 +5988,7 @@ static int yvid__follow_body(yvid_movie* mv, const yscr_frame* f, yvid_unit_at_f
 YVID_API int yvid_follow(yvid_movie* mv, const yscr_frame* f, yvid_unit_at_fn unit_at, void* ctx, uint32_t rate) {
     char* e = mv ? mv->error : NULL;
     char c0 = yvid__hold(e);
-    return (int)yvid__done(e, c0, yvid__follow_body(mv, f, unit_at, ctx, rate), "follow");
+    return (int)yvid__done(e, mv ? &mv->error_code : NULL, c0, yvid__follow_body(mv, f, unit_at, ctx, rate), "follow");
 }
 
 /* --- describe and params ---------------------------------------------------------- */
@@ -6008,7 +6139,17 @@ typedef struct yvid__snd {
     int64_t             seek_to;     /* decode thread: a refill waiting for the
                                       * play to end (yau_wav_seek is BUSY
                                       * until then); -1 none                 */
+    yvid__src           file;        /* desc.path, opened here (UTF-8)       */
+    yau_reader          file_rd;
 } yvid__snd;
+
+/* A WAV named by path is opened here and read through ysp/audio.h's reader:
+ * audio.h's own path open reads the ANSI code page on Windows, and this
+ * header takes UTF-8 paths (v0.6.0). Called on the decode thread only, as
+ * audio.h reads its own file. */
+static int64_t yvid__snd_read(void* ctx, int64_t off, void* dst, int64_t n) {
+    return yvid__src_read((yvid__src*)ctx, off, dst, n) == YVID_OK ? n : (int64_t)YVID_ERR_IO;
+}
 
 static bool yvid__snd_step(void* v) {
     yvid__snd* s = (yvid__snd*)v;
@@ -6077,8 +6218,10 @@ static void yvid__snd_close(void* v) {
         }
         if (done) yau_wav_close(s->au, &s->w);
     }
-    /* a stream the device still holds keeps its ring: leaked, not freed
-     * under the callback */
+    /* the file is read on the decode thread, never by the device's
+     * callback, so it closes either way; a stream the device still holds
+     * keeps its ring: leaked, not freed under the callback */
+    yvid__src_close(&s->file);
     if (done) { yvid__free(s->ring); yvid__free(s); }
 }
 
@@ -6116,9 +6259,25 @@ static int yvid__soundtrack_body(yvid_movie* mv, yau_audio* au, const yvid_sound
     s->ring = (float*)yvid__malloc((size_t)cap * c.channels * sizeof(float));
     if (!s->ring) { yvid__free(s); yvid__err(mv, "ysp_video: out of memory for the soundtrack's ring"); return YVID_ERR_FULL; }
     memset(&wd, 0, sizeof wd);
-    wd.path = d->path; wd.data = d->data; wd.size = d->size;
-    wd.reader = (const yau_reader*)(const void*)d->reader;   /* the same layout */
-    wd.reader_ctx = d->reader_ctx;
+    if (d->path) {
+        rc = yvid__src_open(&s->file, d->path, NULL, 0, NULL, NULL);
+        if (rc < 0) {
+            yvid__err(mv, "ysp_video: the soundtrack: cannot open %s: %s", d->path, yvid__open_why(rc));
+            yvid__free(s->ring); yvid__free(s);
+            return rc;
+        }
+        /* no stdio buffer: the C runtime would allocate one on the first
+         * read, as ysp/audio.h says of its own files */
+        setvbuf(s->file.fh, NULL, _IONBF, 0);
+        s->file_rd.read = yvid__snd_read;
+        s->file_rd.size = s->file.size;
+        wd.reader = &s->file_rd;
+        wd.reader_ctx = &s->file;
+    } else {
+        wd.data = d->data; wd.size = d->size;
+        wd.reader = (const yau_reader*)(const void*)d->reader;   /* the same layout */
+        wd.reader_ctx = d->reader_ctx;
+    }
     wd.loops = mv->d.loop ? YAU_FOREVER : 0;   /* a loop counts samples on: sample s is frame s mod A */
     wd.ring = cap;
     wd.memory = s->ring;
@@ -6127,6 +6286,7 @@ static int yvid__soundtrack_body(yvid_movie* mv, yau_audio* au, const yvid_sound
     if (rc < 0) {
         /* rate, channels, sample type and damage: ysp_audio's refusals */
         yvid__err(mv, "ysp_video: the soundtrack: %s", yau_wav_error(&s->w));
+        yvid__src_close(&s->file);
         yvid__free(s->ring); yvid__free(s);
         return rc == YAU_ERR_NOT_FOUND || rc == YAU_ERR_IO ? YVID_ERR_IO : YVID_ERR_REFUSED;
     }
@@ -6149,7 +6309,7 @@ static int yvid__soundtrack_body(yvid_movie* mv, yau_audio* au, const yvid_sound
             rc = YVID_ERR_REFUSED;
         }
     }
-    if (rc < 0) { yau_wav_close(au, &s->w); yvid__free(s->ring); yvid__free(s); return rc; }
+    if (rc < 0) { yau_wav_close(au, &s->w); yvid__src_close(&s->file); yvid__free(s->ring); yvid__free(s); return rc; }
     s->au = au;
     s->db = d->db;
     s->mask = d->channels;
@@ -6168,7 +6328,7 @@ static int yvid__soundtrack_body(yvid_movie* mv, yau_audio* au, const yvid_sound
 YVID_API int yvid_soundtrack(yvid_movie* mv, yau_audio* au, const yvid_soundtrack_desc* d) {
     char* e = mv ? mv->error : NULL;
     char c0 = yvid__hold(e);
-    return (int)yvid__done(e, c0, yvid__soundtrack_body(mv, au, d), "soundtrack");
+    return (int)yvid__done(e, mv ? &mv->error_code : NULL, c0, yvid__soundtrack_body(mv, au, d), "soundtrack");
 }
 
 /* Sample s's time on the movie clock, counted from the first cycle. */
@@ -6205,7 +6365,7 @@ static int yvid__follow_audio_body(yvid_movie* mv, yau_audio* au, const yscr_fra
 YVID_API int yvid_follow_audio(yvid_movie* mv, yau_audio* au, const yscr_frame* f) {
     char* e = mv ? mv->error : NULL;
     char c0 = yvid__hold(e);
-    return (int)yvid__done(e, c0, yvid__follow_audio_body(mv, au, f), "follow_audio");
+    return (int)yvid__done(e, mv ? &mv->error_code : NULL, c0, yvid__follow_audio_body(mv, au, f), "follow_audio");
 }
 #ifdef __cplusplus
 }
