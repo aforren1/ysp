@@ -548,6 +548,12 @@
  *          ysp/gfx.h, I420 and NV12 converted to RGBA8 on the decode
  *          thread, manual mode, seek, loop, the records.
  *
+ *   STATUS: v0.6.0: tests/adapt/video_test.c opens, probes, writes and
+ *   plays files in a folder named with non-Latin, CJK and non-BMP
+ *   characters, and checks every open refusal's code; it passes on MSVC
+ *   19.44 x64 and x86 (C, C++17), MinGW gcc 16.1, WSL2 gcc 11.4 (ASan,
+ *   UBSan) and emcc 6.0.12. Mutations: 7 of 7. Media Foundation's clips
+ *   not run for v0.6.0.
  *   STATUS: v0.5.1: tests/compile/share_shims.c builds this implementation
  *   beside audio.h's declarations only (MSVC 19.44 C and C++17, MinGW-w64
  *   gcc C11, warnings as errors); the core test passes as before.

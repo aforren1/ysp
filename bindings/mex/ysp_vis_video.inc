@@ -21,8 +21,9 @@
  * PINS: a ysp_audio handle given to 'soundtrack' or 'follow_audio' and a
  * ysp_timeline handle given to 'open' are pinned through their owners'
  * tables until the movie closes: ysp_audio('close', a) is ysp_audio:busy
- * meanwhile. PATHS: char arrays as mxGetString gives them; ysp/video.h opens
- * them with fopen().
+ * meanwhile. PATHS: UTF-8, as ysp/video.h (0.6.0) takes them: MATLAB's
+ * UTF-16 char converted (vx_utf8), Octave's char bytes as they are. Errors
+ * by the header's code: a missing file is ysp_video:not_found.
  */
 
 enum { VX_MOVIE = 3 };
@@ -275,7 +276,7 @@ static int64_t vx_write_seq(const char* path, const mxArray* a, int32_t num, int
     d.compression = qoi ? YVID_SEQ_QOI : YVID_SEQ_RAW;
     d.max_frames = (int64_t)n;
     row = (uint8_t*)mxMalloc(w * h * c * es);
-    if (!yvid_seq_open(&sq, &d)) { mxFree(row); vx_err("arg", "%s", yvid_seq_error(&sq)); }
+    if (!yvid_seq_open(&sq, &d)) { mxFree(row); vx_err(vx_video_code(sq.error_code), "%s", yvid_seq_error(&sq)); }
     for (i = 0; i < n && rc == 0; i++) {
         const uint8_t* src = (const uint8_t*)mxGetData(a) + i * h * w * c * es;
         const void* planes[3] = { row, NULL, NULL };
@@ -312,15 +313,15 @@ static void vx_video_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, c
         yv_movie* mv;
         yvid_desc d;
         vx_open_args oa;
-        char path[1024];
-        int first = 3, k, i;
+        const char* path = "";
+        char* ip = NULL;
+        int first = 3, k, i, rc;
         uint64_t id;
         vx_nargs(nrhs, 3, "m = ysp_video('open', g, path, name, value, ...)  (path '' with 'data')");
         g = vx_gfx(prhs[1]);
         memset(&d, 0, sizeof d);
         memset(&oa, 0, sizeof oa);
-        path[0] = 0;
-        if (mxIsChar(prhs[2])) vx_string(prhs[2], path, sizeof path, "path");
+        if (mxIsChar(prhs[2])) path = vx_utf8(prhs[2], NULL, "path");
         else if (mxIsStruct(prhs[2])) first = 2;
         else vx_err("arg", "open: a path, or '' with 'data', then name-value pairs or a struct");
         if (nrhs > first && mxIsStruct(prhs[first])) {
@@ -336,20 +337,21 @@ static void vx_video_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, c
             }
         }
         if ((path[0] != 0) == (oa.data != NULL)) vx_err("arg", "open: a path, or '' with 'data' (uint8), not both");
-        if (path[0] && !yvv_exists(path)) vx_err("not_found", "cannot open %s", path);
+        if (oa.index && mxIsChar(oa.index)) ip = vx_utf8(oa.index, NULL, "index");
         if (oa.timeline) vx_import(0);
         /* from here every failure frees mv (and its pins) before it raises */
         mv = (yv_movie*)calloc(1, sizeof *mv);
         if (!mv) vx_err("memory", "out of memory");
         err[0] = 0;
+        rc = YVID_ERR_ARG;
         if (path[0]) d.path = path;
         if (oa.data && vx_owned_copy(mv, 0, oa.data, &d.data, &d.size) < 0) snprintf(err, sizeof err, "out of memory");
         if (!err[0] && oa.index) {
-            if (mxIsChar(oa.index)) {
-                char ip[1024];
+            if (ip) {
                 void* b = NULL;
-                if (mxGetString(oa.index, ip, sizeof ip) != 0) snprintf(err, sizeof err, "index: a path of at most 1023 characters");
-                else if (yvv_read_file(ip, &b, &d.index_size, err, sizeof err) == 0) { mv->owned[1] = b; d.index = b; }
+                int e = yvv_read_file(ip, &b, &d.index_size, err, sizeof err);
+                if (e == 0) { mv->owned[1] = b; d.index = b; }
+                else rc = e;
             } else if (vx_owned_copy(mv, 1, oa.index, &d.index, &d.index_size) < 0) {
                 snprintf(err, sizeof err, "out of memory");
             }
@@ -360,12 +362,15 @@ static void vx_video_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, c
             if (p) { mv->tl = (ytl_timeline*)p; d.timeline = mv->tl; err[0] = 0; }
             else if (!err[0]) snprintf(err, sizeof err, "timeline: not an open ysp_timeline handle");
         }
-        if (err[0]) { yv_movie_free(mv); vx_err("arg", "%s", err); }
-        if (!yv_movie_open(mv, g, &d, oa.records, err, sizeof err)) {
+        if (err[0]) { yv_movie_free(mv); vx_err(vx_video_code(rc), "%s", err); }
+        /* ysp/video.h 0.6.0 gives the code (mv->m.error_code): a missing file
+         * is not_found, a file not in the canonical form format, and so on */
+        rc = yv_movie_open(mv, g, &d, oa.records, err, sizeof err);
+        if (rc < 0) {
             char msg[640];
             snprintf(msg, sizeof msg, "%s", err[0] ? err : "open failed");
             yv_movie_free(mv);
-            vx_err("open", "%s", msg);
+            vx_err(vx_video_code(rc), "%s", msg);
         }
         id = vx_register(VX_MOVIE, mv);
         if (!id) { yv_movie_free(mv); vx_err("memory", "out of memory"); }
@@ -505,7 +510,6 @@ static void vx_video_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, c
         yv_movie* mv;
         yvid_soundtrack_desc sd;
         yau_audio* au;
-        char wav[1024];
         int i, follow = 1, rc;
         double ring = -1;
         vx_nargs(nrhs, 4, "ysp_video('soundtrack', m, audio, wav, name, value, ...)  (wav a path or uint8 bytes)");
@@ -524,8 +528,7 @@ static void vx_video_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, c
             else vx_err("arg", "soundtrack: unknown option '%s' (db, channels, ramp, ring, follow)", name);
         }
         if (mxIsChar(prhs[3])) {
-            vx_string(prhs[3], wav, sizeof wav, "wav");
-            sd.path = wav;
+            sd.path = vx_utf8(prhs[3], NULL, "wav");
         } else if (!mxIsUint8(prhs[3]) || mxIsComplex(prhs[3])) {
             vx_err("arg", "soundtrack: the WAV, a path or uint8 bytes");
         }
@@ -587,21 +590,15 @@ static void vx_video_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, c
         yvid_desc d;
         yvid_info i;
         yv_fields f;
-        char path[1024];
         void* idx = NULL;
         size_t n = 0;
         int rc;
         vx_nargs(nrhs, 2, "i = ysp_video('probe', path, index)");
-        vx_string(prhs[1], path, sizeof path, "probe: path");
-        /* yvid_probe() answers a missing file with REFUSED ("reads frame
-         * sequences and indexed ... files only"): found here first */
-        if (!yvv_exists(path)) vx_err("not_found", "cannot open %s", path);
         memset(&d, 0, sizeof d);
-        d.path = path;
+        d.path = vx_utf8(prhs[1], NULL, "probe: path");
         if (nrhs > 2 && mxIsChar(prhs[2])) {
-            char ip[1024];
-            vx_string(prhs[2], ip, sizeof ip, "probe: index");
-            if (yvv_read_file(ip, &idx, &n, err, sizeof err) < 0) vx_err("not_found", "%s", err);
+            rc = yvv_read_file(vx_utf8(prhs[2], NULL, "probe: index"), &idx, &n, err, sizeof err);
+            if (rc < 0) vx_err(vx_video_code(rc), "%s", err);
             d.index = idx;
             d.index_size = n;
         }
@@ -613,13 +610,12 @@ static void vx_video_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, c
         plhs[0] = vx_fields(&f);
     } else if (!strcmp(cmd, "make_index")) {
         yvid_index_desc d;
-        char media[1024], index[1024];
+        const char *media, *index = "";
         int i, v;
         int64_t k;
         vx_nargs(nrhs, 2, "n = ysp_video('make_index', media, index, name, value, ...)  (index '' = media + '.yspvi')");
-        vx_string(prhs[1], media, sizeof media, "make_index: media");
-        index[0] = 0;
-        if (nrhs > 2) vx_string(prhs[2], index, sizeof index, "make_index: index ('' = beside the media)");
+        media = vx_utf8(prhs[1], NULL, "make_index: media");
+        if (nrhs > 2) index = vx_utf8(prhs[2], NULL, "make_index: index ('' = beside the media)");
         memset(&d, 0, sizeof d);
         if (nrhs > 3 && (nrhs - 3) % 2) vx_err("usage", "make_index: name-value pairs after the index");
         for (i = 3; i < nrhs; i += 2) {
@@ -646,12 +642,12 @@ static void vx_video_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, c
         if (k < 0) vx_err(vx_video_code((int)k), "%s", err[0] ? err : yvid_strerror((int)k));
         plhs[0] = vx_d((double)k);
     } else if (!strcmp(cmd, "write_seq")) {
-        char path[1024];
+        const char* path;
         double fps[2] = { 0, 1 };
         int qoi = 0;
         int64_t n = 0;
         vx_nargs(nrhs, 4, "n = ysp_video('write_seq', path, frames, fps, 'qoi')  (fps a number or [num den])");
-        vx_string(prhs[1], path, sizeof path, "write_seq: path");
+        path = vx_utf8(prhs[1], NULL, "write_seq: path");
         if (!mxIsDouble(prhs[3]) || (mxGetNumberOfElements(prhs[3]) != 1 && mxGetNumberOfElements(prhs[3]) != 2))
             vx_err("arg", "write_seq: fps, a whole number or [num den]");
         fps[0] = mxGetPr(prhs[3])[0];

@@ -25,8 +25,9 @@
  * draw() keep it: yvid_update() never waits. While a call runs without the
  * GIL the Screen is busy, so another thread's call raises BusyError.
  *
- * PATHS: the header opens files with fopen(), so a path goes in the ANSI
- * code page ("mbcs"); a path outside it is refused before the call.
+ * PATHS: UTF-8, as ysp/video.h (0.6.0) takes them: str and os.PathLike go
+ * through PyUnicode_FSConverter (UTF-8 on Windows, PEP 529), bytes as they
+ * are. Errors by the header's code: a missing file is NotFoundError.
  */
 
 /* ysp_vis_ext.c's, defined after this file */
@@ -62,18 +63,11 @@ static PyObject* vv_exc(int code) {
     }
 }
 
-/* A path (str, bytes, os.PathLike) as bytes in the ANSI code page. */
+/* A path (str, bytes, os.PathLike) as the file system's bytes: UTF-8 on
+ * Windows (PEP 529), which is what the header converts. */
 static PyObject* vv_path(PyObject* p) {
-    PyObject *fp = PyOS_FSPath(p), *b;
-    if (!fp) return NULL;
-    if (PyBytes_Check(fp)) return fp;
-    b = PyUnicode_AsEncodedString(fp, "mbcs", "strict");
-    Py_DECREF(fp);
-    if (!b) {
-        PyErr_Clear();
-        PyErr_SetString(VsArgumentError, "ysp_video: the path has a character outside the ANSI code page, which "
-                                         "ysp/video.h's fopen() cannot open (pass the bytes as data= instead)");
-    }
+    PyObject* b = NULL;
+    if (!PyUnicode_FSConverter(p, &b)) return NULL;
     return b;
 }
 
@@ -268,7 +262,7 @@ static int Movie_init(PyObject* self, PyObject* args, PyObject* kw) {
     yvid_desc d;
     int64_t records = 0;
     char err[640];
-    bool ok;
+    int rc;
     if (o->mv) { PyErr_SetString(VsError, "Movie.__init__ called twice"); return -1; }
     if (na < 1 || na > 2) {
         PyErr_SetString(PyExc_TypeError, "Movie(gfx, path=None, *, data=None, index=None, timeline=None, records=36000, **options)");
@@ -300,11 +294,11 @@ static int Movie_init(PyObject* self, PyObject* args, PyObject* kw) {
                 PyObject* b = vv_path(val);
                 void* buf = NULL;
                 size_t n = 0;
-                int rc;
+                int e;
                 if (!b) return -1;
-                rc = yvv_read_file(PyBytes_AsString(b), &buf, &n, err, sizeof err);
+                e = yvv_read_file(PyBytes_AsString(b), &buf, &n, err, sizeof err);
                 Py_DECREF(b);
-                if (rc < 0) { PyErr_SetString(VvNotFoundError, err); return -1; }
+                if (e < 0) { PyErr_SetString(vv_exc(e), err); return -1; }
                 free(o->mv->owned[1]);
                 o->mv->owned[1] = buf;
                 d.index = buf;
@@ -329,7 +323,6 @@ static int Movie_init(PyObject* self, PyObject* args, PyObject* kw) {
         d.path = PyBytes_AsString(b);
     }
     if (!d.path && !d.data) { PyErr_SetString(VsArgumentError, "Movie(): a path, or data=bytes"); return -1; }
-    if (d.path && !yvv_exists(d.path)) { PyErr_Format(VvNotFoundError, "ysp_video: cannot open %s", d.path); return -1; }
     if (d.path && d.data) { PyErr_SetString(VsArgumentError, "Movie(): a path or data=, not both"); return -1; }
     if (tlobj) {
         void* p = ysp_timeline_api_ptr->head.acquire(tlobj, err, sizeof err);
@@ -340,16 +333,15 @@ static int Movie_init(PyObject* self, PyObject* args, PyObject* kw) {
     err[0] = 0;
     so->busy = 1;
     Py_BEGIN_ALLOW_THREADS
-    ok = yv_movie_open(o->mv, go->g, &d, records, err, sizeof err);
+    rc = yv_movie_open(o->mv, go->g, &d, records, err, sizeof err);
     Py_END_ALLOW_THREADS
     so->busy = 0;
-    if (!ok) {
-        /* yvid_open() returns false without a code (its message names the
-         * cause), so the class is the base one; a missing file was found
-         * before the call */
+    if (rc < 0) {
+        /* the header's code (ysp/video.h 0.6.0): NotFoundError for a
+         * missing file, FormatError for one not in the canonical form */
         yv_movie_free(o->mv);
         o->mv = NULL;
-        PyErr_SetString(VsError, err[0] ? err : "ysp_video: open failed");
+        PyErr_SetString(vv_exc(rc), err[0] ? err : yvid_strerror(rc));
         return -1;
     }
     Py_INCREF(gfx);
@@ -825,7 +817,7 @@ static int Seq_init(PyObject* self, PyObject* args, PyObject* kw) {
     Py_END_ALLOW_THREADS
     Py_DECREF(pb);
     if (!ok) {
-        PyErr_SetString(VsArgumentError, yvid_seq_error(o->w));
+        PyErr_SetString(vv_exc(o->w->error_code), yvid_seq_error(o->w));
         free(o->w);
         o->w = NULL;
         return -1;
@@ -981,19 +973,12 @@ static PyObject* vm_probe(PyObject* m, PyObject* args, PyObject* kw) {
             if (!ib) { Py_XDECREF(pb); return NULL; }
             rc = yvv_read_file(PyBytes_AsString(ib), &owned, &len, err, sizeof err);
             Py_DECREF(ib);
-            if (rc < 0) { Py_XDECREF(pb); PyErr_SetString(VvNotFoundError, err); return NULL; }
+            if (rc < 0) { Py_XDECREF(pb); PyErr_SetString(vv_exc(rc), err); return NULL; }
             d.index = owned;
             d.index_size = len;
         }
     }
     if ((d.path != NULL) == (d.data != NULL)) { Py_XDECREF(pb); free(owned); PyErr_SetString(VsArgumentError, "probe(path) or probe(data=bytes)"); return NULL; }
-    /* yvid_probe() answers a missing file with REFUSED: found here first */
-    if (d.path && !yvv_exists(d.path)) {
-        PyErr_Format(VvNotFoundError, "ysp_video: cannot open %s", d.path);
-        Py_XDECREF(pb);
-        free(owned);
-        return NULL;
-    }
     err[0] = 0;
     Py_BEGIN_ALLOW_THREADS
     rc = yvid_probe(&d, &i, err, sizeof err);

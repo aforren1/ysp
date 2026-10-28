@@ -1617,7 +1617,7 @@ directory ANGLE is loaded from and the SDL version. Handles start at
 
 | Command | Returns | Notes |
 |---|---|---|
-| `ysp_screen('version')` | `'1.2.0'`, and the header's | the same for `ysp_gfx`, `ysp_video`, `ysp_vis`; 1.1.0 added `ysp_gfx`'s stimuli and `ysp_video`'s movies, 1.2.0 the text |
+| `ysp_screen('version')` | `'1.2.1'`, and the header's | the same for `ysp_gfx`, `ysp_video`, `ysp_vis`; 1.1.0 added `ysp_gfx`'s stimuli and `ysp_video`'s movies, 1.2.0 the text, 1.2.1 `ysp_video`'s UTF-8 paths and error ids |
 | `'displays'`, `'modes' [, display]`, `'mode_multiple', num, den, [w h], tol_ppm, display` | struct rows; `[k, mode, err_ppm]` | `'open'` takes a display's `id` and a mode struct |
 | `'options'`, `'constants'` | struct | the options with a line each; `TIER_*`, `PATH_*`, `FLIP_*`, `ABORT_*`, `KIND_*`, `PRESS` ... |
 | `'open' [, opts]` | `uint64` handle | a struct or name-value pairs: `windowed`, `size`, `display`, `mode`, `backend` (`'auto'`, `'dxgi_flip'`, `'composition'`, `'sim'`), `window_thread`, `lead`, `onset_offset` (s), `depth`, `depth_learn`, `settle`, `settle_flips`, `settle_min`, `settle_max` (s), `foreground`, `panic`, `panic_presses`, `panic_window`, `panic_grace` (s), `patch`, `patch_size`, `patch_corner`, `show_cursor`, `keep_os_gamma`, `key_dedup` (s), `gamepads`, `min_tier`, `sim_period` (s). Settles: 0.5 to 0.8 s fullscreen, 2.5 s in a window. Two options of the binding: `gfx` (`true` or a struct of `ysp_gfx('open')` options: the gfx starts while the screen settles, and `ysp_gfx('open', h)` finishes it) and `frame` (`'struct'`, the default, or `'row'`: see `'begin'`) |
@@ -1770,8 +1770,13 @@ due`: with the audio clock the frame's A/V error), `movie_t` (each with
 `'cadence'`, `'display_late'`, `'decode_late'`, `'drift'`, `'seek'`,
 `'loop'`, `'manual'`), `tier`, `path`, `flags`, `ahead` and `shows`. A
 dropped frame has a `drop` event. Errors are `ysp_video:arg`, `:format`,
-`:closed`, `:order`, `:refused`, `:io`, `:not_found`, `:decoder`, `:open`,
-`:handle`, `:shared` and `:usage`. The `ysp_audio` handle of a soundtrack
+`:closed`, `:order`, `:refused`, `:io`, `:not_found`, `:decoder`,
+`:not_implemented`, `:handle`, `:shared` and `:usage`, by the header's
+code: since 1.2.1 (ysp/video.h 0.6.0) `'open'` raises the code of its
+failure (`:not_found` for a file that is not there, `:format` for one not
+in the canonical form), not `:open`. Paths are UTF-8 for the header:
+MATLAB's char (UTF-16) is converted, Octave's char bytes go as they are,
+so any folder name works. The `ysp_audio` handle of a soundtrack
 and a `ysp_timeline` handle are pinned through their owners' tables until
 the movie closes: `ysp_audio('close', a)` is `ysp_audio:busy` meanwhile.
 A closed gfx or screen closes its movies first; `'records'` still reads

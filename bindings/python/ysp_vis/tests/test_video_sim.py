@@ -200,6 +200,63 @@ def test_probe_and_open_errors(sim, clips, tmp_path):
         yvid.Movie(s, clips["s30"])                  # a Screen is not a Gfx
 
 
+# ysp/video.h 0.6.0 takes UTF-8 paths (UTF-16 for _wfsopen on Windows); before it the
+# binding encoded paths as "mbcs" and a folder outside the ANSI code page did not open.
+UNI = "\u03a9_\u0416_\u6620_\U0001f3ac"     # Omega, Zhe, a CJK ideograph, an emoji (outside the BMP)
+
+
+def test_unicode_paths(sim, mpeg_or_none, tmp_path):
+    s, g = sim
+    d = tmp_path / UNI
+    d.mkdir()
+    p = write_seq(str(d / "clip.yspseq"), 16, 8, 30, 10)
+    assert yvid.probe(p)["frames"] == 10
+    assert yvid.probe(d / "clip.yspseq")["frames"] == 10          # os.PathLike
+    assert yvid.probe(os.fsencode(p))["frames"] == 10            # bytes: UTF-8 on Windows
+    with yvid.Movie(g, p) as m:
+        m.play()
+        assert play_all(s, g, m)[-1] is False
+        assert m.records()[-1].frame == 9
+    with open(p, "rb") as f:
+        data = f.read()
+    with yvid.Movie(g, data=data) as m:
+        assert m.info["frames"] == 10
+    # a missing file: the header's NOT_FOUND, no check of the binding's own
+    with pytest.raises(yvid.NotFoundError):
+        yvid.Movie(g, str(d / "missing.yspseq"))
+    with pytest.raises(yvid.NotFoundError):
+        yvid.probe(d / "missing.yspseq")
+    with pytest.raises(yvid.NotFoundError):
+        yvid.SeqWriter(str(d / "no_such_folder" / "x.yspseq"), 4, 2, 30)
+    with pytest.raises(yvid.NotFoundError):                      # an index named by path
+        yvid.Movie(g, data=data, index=str(d / "missing.yspvi"))
+    # the soundtrack's WAV, opened by ysp/video.h (not audio.h's ANSI open)
+    a = yau.Audio(backend="null")
+    try:
+        wav = write_wav(str(d / "s.wav"), a.caps()["rate"] // 3)  # 10 frames at 30 fps
+        with yvid.Movie(g, p) as m:
+            with pytest.raises(yvid.NotFoundError):
+                m.soundtrack(a, str(d / "missing.wav"))
+            m.soundtrack(a, wav)
+    finally:
+        a.close()
+    if mpeg_or_none:                                              # an index made and read in the folder
+        q = str(d / "m30.mpg")
+        with open(mpeg_or_none["m30"], "rb") as fi, open(q, "wb") as fo:
+            fo.write(fi.read())
+        assert yvid.make_index(q) == 60 and os.path.exists(q + ".yspvi")
+        assert yvid.probe(q)["frames"] == 60
+        with yvid.Movie(g, q) as m:
+            assert m.info["backend"] == "plmpeg"
+        with yvid.Movie(g, data=open(q, "rb").read(), index=q + ".yspvi") as m:
+            assert m.info["frames"] == 60
+
+
+@pytest.fixture
+def mpeg_or_none(request):
+    return request.getfixturevalue("mpeg") if FFMPEG else None
+
+
 # --- playing ------------------------------------------------------------------------------
 
 
