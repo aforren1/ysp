@@ -31,3 +31,9 @@ test-command = "pytest {package}/tests -q"
 # Ensure the Linux UAPI headers (<linux/ppdev.h>) are present in the manylinux
 # image; they normally are (glibc-headers pulls them in), this is belt-and-braces.
 before-all = "yum install -y kernel-headers || dnf install -y kernel-headers || true"
+
+[tool.cibuildwheel.windows]
+# 64-bit only: no 32-bit Windows 11, MATLAB and ysp-vis are 64-bit, and
+# a 32-bit CPython on a lab rig is rare (docs/bindings.md); cibuildwheel's
+# default would add an x86 wheel.
+archs = ["AMD64"]

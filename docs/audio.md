@@ -2381,6 +2381,10 @@ Verification, Windows 11, MSVC 19.44 (Visual Studio 2022) for x86
 `test_audio` passes. CPython 3.10 for x86 builds the `ysp-audio` wheel
 and passes its tests.
 
+Since 2026-10-28 CI builds no 32-bit Windows wheel (64-bit only; see
+docs/bindings.md). The header keeps its x86 path, because the headers
+stay portable C99.
+
 ## UTF-8 paths (v0.7.3)
 
 A WAV path (`yau_wav_desc.path`, `yau_wavw_desc.path`) is UTF-8 on every
