@@ -1203,11 +1203,12 @@ Details, versions and measurements per header are in
    frames that DXGI_FLIP showed a vblank early were fixed in
    `ysp/screen.h` v0.4.3 against the scanout (docs/screen.md); a
    photodiode run is the check.
-2. **The queue-ahead probe** (section 13): a host queues K frames on
-   COMPOSITION with target times, then sleeps. Branch `probe-queue`,
-   docs/queue_probe.md. K stays at 29 or less: one presentation manager
-   holds at most 31 buffers, and the runs at 60 and 120 buffers crashed
-   the development machine twice (bug check 0x133).
+2. **The queue-ahead mode** (section 13): a host queues K frames on
+   COMPOSITION with target times, then sleeps. The probe
+   (docs/queue_probe.md) found it feasible and recommends an opt-in in
+   `ysp/screen.h`, depth set at open, 28 at most: one presentation
+   manager holds at most 31 buffers, and the probe's runs at 62 to 122
+   buffers crashed the development machine twice (bug check 0x133).
 3. **The player** (section 6), native and WebAssembly, and the runner
    protocol. The format's gaps are closed. First: map each table name to
    its definition key, and give the loader the defaults that a
