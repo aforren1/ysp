@@ -463,11 +463,13 @@ and `L.set("color", ...)`, `L.set("y", ...)` work across texts. A timeline
 channel binds to a text's `x`, `y`, `ori`, `opacity`, `color`, `visible`,
 ... as to any stimulus. `size`, `text` and the other own parameters do
 not bind (each change is a layout): animate the size with a group's
-`scale`. A text takes 3 of the gfx's `max_draws` blocks a frame per run
-(per font and size in it): past about 340 texts a frame, open the `Gfx`
-with a larger `max_draws`. Many words that do not move are cheaper as one
-text: 100 one-word texts cost 1.0 to 1.3 ms of host work a frame, a page
-of 520 characters as one text 0.4 to 0.6 ms (docs/gfx.md, Text: measured).
+`scale`. A text takes one of the gfx's `max_draws` blocks a frame per run
+(per font and size in it), three with a colored span: the default 1024
+holds 1024 plain texts a frame (ysp/gfx.h 0.17.2; 3 blocks a run before).
+Texts drawn one after another share a draw, up to 16: 500 one-word texts
+cost 0.8 ms of host work a frame at the median, 1.8 ms at p99, and a page
+of 520 characters as one text 0.4 to 0.6 ms (docs/gfx.md, Text: measured
+and v0.17.2).
 
 **Memory.** Making a font or a text, and each layout, allocate (Skribidi
 allocates inside every layout). Drawing a text allocates nothing.

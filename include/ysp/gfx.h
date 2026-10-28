@@ -1,4 +1,4 @@
-/* ysp/gfx.h - v0.17.1 - public domain single-header stimulus graphics library
+/* ysp/gfx.h - v0.17.2 - public domain single-header stimulus graphics library
  *   (with MIT-licensed parts: see below)
  *
  *   Stimuli on GL ES 3.0, on top of ysp/screen.h: signed-distance shapes
@@ -690,9 +690,17 @@
  *   { y: 40, opacity: 0, stagger: 0.05 }), is one channel per letter field.
  *   Items given by .items are copied at each draw into INSTANCES' element
  *   buffers (desc.max_instances a frame); a page of text goes in a
- *   ygfx_buffer once (.buf, .first) and costs no copy. Artwork is the same
- *   call, one item per layer at (0, 0) with a palette color: layers stack
- *   in item order, as GL blends one draw in order.
+ *   ygfx_buffer once (.buf, .first) and costs no copy. A run takes one of
+ *   desc.max_draws' blocks, three with YGFX_I_COLOR (the palette).
+ *   Batches (v0.17.2): runs drawn one after another in a pass share one
+ *   instanced draw, up to 16, when each is one block and they have the
+ *   same program, set, blend and aliased flag and their items follow each
+ *   other in one buffer (copied items always do; runs from one buffer when
+ *   their ranges meet). 500 one-word runs are 32 draws, not 500. On the
+ *   Iris Xe 500 draws cost 2.6 ms more CPU and 2.8 ms more GPU a frame
+ *   than one run of the same glyphs (docs/gfx.md, "v0.17.2").
+ *   Artwork is the same call, one item per layer at (0, 0) with a palette
+ *   color: layers stack in item order, as GL blends one draw in order.
  *   Coverage is the pixel's box filter, in linear light (text looks thinner
  *   than text blended in sRGB; nothing corrects it):
  *     exact     where the glyph is resolved (format flag bit 2: no contours
@@ -1335,6 +1343,16 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.17.2 - CURVE RUNS: a run without YGFX_I_COLOR takes one of
+ *          desc.max_draws' blocks (it took 3, so the default 1024 refused
+ *          the 342nd run of a frame), and runs of one block next to each
+ *          other share one instanced draw, up to 16 (CURVE RUNS). 500
+ *          one-word runs a frame missed 4 % of the frames at 60 Hz on the
+ *          Iris Xe: ygfx_end() submitted 500 draws through ANGLE (1 to 5
+ *          ms of CPU) ahead of most of the frame's GPU work (about 9 ms);
+ *          after, 1 of 3601 (docs/gfx.md, "v0.17.2"). Pixels unchanged
+ *          (tested bit for bit). The text program's vertex stage changed,
+ *          so a program cache made by an earlier version misses once.
  *   v0.17.1 - Fixed: ygfx_text_make() cut a font path longer than 511
  *          bytes to 511 and opened that, another file; it now does not
  *          open it (YGFX_ERR_IO). The error's list of the paths tried
@@ -1865,8 +1883,8 @@
 
 #define YGFX_VERSION_MAJOR 0
 #define YGFX_VERSION_MINOR 17
-#define YGFX_VERSION_PATCH 1
-#define YGFX_VERSION_STRING "0.17.1"
+#define YGFX_VERSION_PATCH 2
+#define YGFX_VERSION_STRING "0.17.2"
 
 #include "ysp/screen.h"
 #include "ysp/color.h"
@@ -5643,7 +5661,16 @@ static const char ygfx__glsl_text_vs[] =
     YGFX__GLSL_CSD
     "uvec4 ysp_w4_(int t, int L) { return texelFetch(ysp_utex0, ivec2(t & ((1 << L) - 1), t >> L), 0); }\n"
     "void main() {\n"
-    "    vec4 B0 = ysp_v[0], B1 = ysp_v[1], B2 = ysp_v[2], B3 = ysp_v[3], B4 = ysp_v[4];\n"
+    /* a draw holds up to 16 runs of one block each (CURVE RUNS), their
+     * items one after another: the instance's run is the first whose item
+     * count (B4.w) the instance index does not reach */
+    "    int r = 0, ii = gl_InstanceID;\n"
+    "    for (int j = 0; j < 15; j++) {\n"
+    "        int nj = int(ysp_v[r + 4].w);\n"
+    "        if (ii < nj) break;\n"
+    "        ii -= nj; r += 16;\n"
+    "    }\n"
+    "    vec4 B0 = ysp_v[r], B1 = ysp_v[r + 1], B2 = ysp_v[r + 2], B3 = ysp_v[r + 3], B4 = ysp_v[r + 4];\n"
     "    int m = int(B2.z), L = int(B4.x);\n"
     "    vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;\n"
     "    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);\n"
@@ -5662,13 +5689,13 @@ static const char ygfx__glsl_text_vs[] =
      * pack's, ysp_v[6]), not the pass's GL px: a target pass (rows top
      * first) and the scene then compute a pixel's em point from the same
      * bits, so a run cached in a target at 1:1 has the scene's coverage */
-    "    vec4 B6 = ysp_v[6];\n"
+    "    vec4 B6 = ysp_v[r + 6];\n"
     "    vec2 ax = B6.zw, ay = vec2(-B6.w, B6.z);\n"
     "    vec2 cs = (m & 2) != 0 ? ysp_csd_(ysp_a0.z) : vec2(1.0, 0.0);\n"
     "    vec2 ex = cs.x * ax + cs.y * ay, ey = cs.x * ay - cs.y * ax;\n"
     "    float sp = B1.w * k;\n"
     "    vec2 ce = 0.5 * (bb.xy + bb.zw), hb = 0.5 * (bb.zw - bb.xy);\n"
-    "    vec2 lc = (ysp_a0.xy - ysp_v[5].zw) * B1.z - B1.xy + B1.w * ce;\n"
+    "    vec2 lc = (ysp_a0.xy - ysp_v[r + 5].zw) * B1.z - B1.xy + B1.w * ce;\n"
     "    vec2 Q = B6.xy + lc.x * ax + lc.y * ay;\n"
     /* grown by what a pixel can reach past the outline: half its diagonal */
     "    vec2 w = Q + (c.x * (sp * hb.x + B4.y)) * ex + (c.y * (sp * hb.y + B4.y)) * ey;\n"
@@ -8280,6 +8307,31 @@ static int ygfx__draw_n(ygfx_gfx* g, const ygfx_stim* s, int n) {
     return first;
 }
 
+/* Curve runs that one instanced draw can take (CURVE RUNS): the same
+ * program, set, blend and item buffer, one block each (so their blocks are
+ * one after another, in call order and after the reorder), items one after
+ * another, and the same aliased flag (the fragment stage reads it from the
+ * first run's block). How many follow cmds[i] in [i, end), at most max - 1;
+ * *n gets their items. */
+static int ygfx__text_batch(const ygfx_gfx* g, int i, int end, int max, uint32_t* n) {
+    const ygfx__cmd* a = &g->cmds[i];
+    const float* ba = (const float*)(g->staging + YGFX__FRAME_BYTES + (size_t)a->block * YGFX__BLOCK);
+    int j;
+    *n = a->count;
+    if (!a->inst || a->nblk != 1 || (a->pipe != g->text_pipe && a->pipe != g->text_rays_pipe)) return 0;
+    for (j = i + 1; j < end && j - i < max; j++) {
+        const ygfx__cmd* p = &g->cmds[j - 1];
+        const ygfx__cmd* b = &g->cmds[j];
+        const float* bb = (const float*)(g->staging + YGFX__FRAME_BYTES + (size_t)b->block * YGFX__BLOCK);
+        if (b->pipe != a->pipe || b->nblk != 1 || b->inst != a->inst || b->blend != a->blend ||
+            b->inst_off != p->inst_off + p->count * (uint32_t)sizeof(ygfx_citem) || memcmp(a->tex, b->tex, sizeof a->tex) != 0 ||
+            bb[11] != ba[11])
+            break;
+        *n += b->count;
+    }
+    return j - i - 1;
+}
+
 static int ygfx__same_batch(const ygfx__cmd* a, const ygfx__cmd* b) {
     return a->pipe == b->pipe && a->inst == 0 && b->inst == 0 && a->nblk == 1 && b->nblk == 1 && a->blend == b->blend &&
            memcmp(a->tex, b->tex, sizeof a->tex) == 0;
@@ -8492,7 +8544,10 @@ static int ygfx__end(ygfx_gfx* g, int setup) {
         bd.frame_off = (uint32_t)sg->frame_slot * YGFX__BLOCK;
         for (i = sg->first; i < sg->end; i = j) {
             const ygfx__cmd* c = &g->cmds[i];
-            for (j = i + 1; j < sg->end && j - i < g->max_batch && ygfx__same_batch(c, &g->cmds[j]); j++) {}
+            uint32_t n_text = 0;
+            int more = ygfx__text_batch(g, i, sg->end, g->max_batch, &n_text);
+            if (more) j = i + 1 + more;
+            else for (j = i + 1; j < sg->end && j - i < g->max_batch && ygfx__same_batch(c, &g->cmds[j]); j++) {}
             bd.pipeline = c->pipe;
             bd.stim_off = YGFX__FRAME_BYTES + c->block * YGFX__BLOCK;
             memcpy(bd.tex, c->tex, sizeof bd.tex);
@@ -8500,7 +8555,7 @@ static int ygfx__end(ygfx_gfx* g, int setup) {
             bd.instances_off = c->inst_off;
             bd.blend = c->blend;
             g->be->apply(g->bctx, &bd);
-            g->be->draw(g->bctx, 4, c->inst ? (int)c->count : j - i);
+            g->be->draw(g->bctx, 4, more ? (int)n_text : (c->inst ? (int)c->count : j - i));
             g->draws++;
         }
         g->be->pass_end(g->bctx);
@@ -10046,7 +10101,7 @@ static uint32_t ygfx__text_pack(ygfx_gfx* g, const ygfx_stim* s, float* b, ygfx_
     b[11] = (s->flags & YGFX_STIM_ALIASED) ? 1.0f : 0.0f;
     ygfx__copy3(b + 12, s->color);
     b[15] = (float)s->n_palette;
-    b[16] = (float)c->lt; b[17] = 0.75f; b[18] = (float)c->G; b[19] = 0.0f;
+    b[16] = (float)c->lt; b[17] = 0.75f; b[18] = (float)c->G; b[19] = (float)s->count;   /* a batch finds its runs by it */
     b[20] = ygfx__text_cap; b[21] = ygfx__text_e;
     b[22] = s->shape_p[0]; b[23] = s->shape_p[1];   /* the box's top-left in item units */
     {   /* the placement in px with y down, the same in every pass (the text program) */
@@ -10054,7 +10109,7 @@ static uint32_t ygfx__text_pack(ygfx_gfx* g, const ygfx_stim* s, float* b, ygfx_
         ygfx__frame_px(g, s, (double)g->cur_w, (double)g->cur_h, a, m, &cs, &sn);
         b[24] = (float)m[0]; b[25] = (float)m[1]; b[26] = (float)cs; b[27] = (float)sn;
     }
-    memset(b + 64, 0, 2 * YGFX__BLOCK);
+    if (f & YGFX_I_COLOR) memset(b + 64, 0, 2 * YGFX__BLOCK);   /* the palette's blocks */
     for (k = 0; k < 3; k++)
         if (s->color[k] < 0.0f || s->color[k] > 1.0f) { g->clipped++; break; }
     if ((f & YGFX_I_COLOR) && s->palette)
@@ -10103,7 +10158,9 @@ static uint32_t ygfx__text_pack(ygfx_gfx* g, const ygfx_stim* s, float* b, ygfx_
         cmd->inst_off = s->first * (uint32_t)sizeof(ygfx_citem);
     }
     cmd->count = s->count;
-    cmd->nblk = 3;
+    /* the palette, when there is one, is vec4 32 on: blocks 2 and 3. A run
+     * of one block batches with its neighbors (ygfx__text_batch) */
+    cmd->nblk = (f & YGFX_I_COLOR) ? 3u : 1u;
     cmd->tex[0] = c->tex_t;
     cmd->tex[3] = c->tex_w;
     if ((s->flags & YGFX_STIM_RAYS) && !g->text_rays_pipe)
