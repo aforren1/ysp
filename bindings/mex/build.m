@@ -211,12 +211,6 @@ function build(name)
             % ysp_rt.c use pthreads on Linux/macOS.
             args{end+1} = '-lpthread';   %#ok<AGROW>
         end
-        % An options file for mex -f, for a compiler that mex -setup does
-        % not accept (README.md, Build).
-        opts = getenv('YSP_MEX_OPTS');
-        if ~isempty(opts)
-            args = [{'-f', opts}, args];   %#ok<AGROW>
-        end
         mex(args{:});
         fprintf('built %s (%s) in %s\n', srcs{i}, mexext, here);
     end
