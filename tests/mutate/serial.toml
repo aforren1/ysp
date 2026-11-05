@@ -1,0 +1,23 @@
+# ysp/serial.h mutants that tests/adapt/serial_test.c (a pseudo-terminal)
+# can see. The pulse rule's mutants are in device.toml (dev-33 and on),
+# which reaches them through ysp/device.h.
+header = "ysp/serial.h"
+
+[test.serial]
+source = "tests/adapt/serial_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O2", "-w"]
+libs = []
+timeout = 60
+
+# v0.6.3: desc.exclusive on macOS (docs/serial.md, "macOS on a
+# pseudo-terminal pair").
+
+[[mutant]]
+id = "ser-01"
+name = "exclusive is TIOCEXCL alone on macOS"
+test = "serial"
+platform = "darwin"
+why = "A second exclusive open of the same port succeeds: two programs write one trigger line."
+find = '''    if (d->exclusive && flock(p->fd, LOCK_EX | LOCK_NB) != 0 && errno == EWOULDBLOCK) {'''
+replace = '''    if (0) {'''

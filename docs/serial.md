@@ -833,11 +833,28 @@ about a real port:
 - DTR, RTS and the line states: `TIOCMBIS`, `TIOCMBIC` and `TIOCMGET`
   fail with `ENOTTY`, so `yser_set_dtr()`, `yser_set_rts()` and
   `yser_get_lines()` return `YSER_ERR_IO`, with `misc_oserr` set.
-- `exclusive`: `TIOCEXCL` succeeds on a macOS pseudo-terminal slave, but a
-  second `open()` of it still succeeds. On Linux the same ioctl refuses
-  the second open. Whether a macOS USB-serial driver refuses it is not
-  known here. A lab that relies on `exclusive` on a Mac must check it on its
-  port.
+- `exclusive` before v0.6.3: `TIOCEXCL` succeeds on a macOS
+  pseudo-terminal slave, but a second `open()` of it still succeeds. On
+  Linux the same ioctl refuses the second open.
+
+### Exclusive on macOS (v0.6.3)
+
+| Question | Decision | Why |
+|---|---|---|
+| The lock | On macOS, `desc.exclusive` also takes `flock(fd, LOCK_EX \| LOCK_NB)` after `TIOCEXCL`; `EWOULDBLOCK` fails `yser_open()` with "`<port>` is open with exclusive in another handle or process" | `TIOCEXCL` let a second open of a pseudo-terminal through, and what each macOS serial driver does is not known here. The lock refuses every opener that also locks (this header, pyserial's `exclusive=True`, which does the same) on any driver. `TIOCEXCL` stays for openers that do not lock, where the driver honors it |
+| Another `flock()` error | Ignored; `TIOCEXCL` is all there is | A device whose file system cannot lock should still open |
+| Linux | Unchanged | `TIOCEXCL` refuses the second open there |
+| The release | The descriptor's close at `yser_close()` | A `flock()` lock belongs to the open file |
+| One port twice | Unaffected | The TX-to-RX loopback opens one name twice without `exclusive`; with `exclusive` the second open was meant to fail |
+
+Checked on 2026-11-04 on the M2 Mac mini: `tests/adapt/serial_test.c`
+(new, in ctest; a pseudo-terminal from `posix_openpt()`, so no device)
+passes, 12 checks, Release and under ASan and UBSan: bytes both ways, a
+read that times out, a second exclusive open refused with the message, an
+exclusive open after the close, and `YSER_ERR_DISCONNECTED` after the
+master closes. Mutant `ser-01` in the new `tests/mutate/serial.toml`
+(platform darwin): killed. Linux and Windows did not run the new test
+here; on Windows it prints a note and passes.
 
 ## Compared with MATLAB serialport and IOPort
 
