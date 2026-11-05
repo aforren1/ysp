@@ -16,6 +16,11 @@
  *   sync     the same in a minimized window: no frame is shown, so nothing
  *            paces the frames, and a missing wait reads frames ANGLE has
  *            not drawn (on a shown screen it went unseen in 180 frames).
+ *   vrr      open() refuses a display in a variable refresh mode (the two
+ *            NSScreen refresh intervals apart, injected through the
+ *            YSCR__MTL_SCREEN_INTERVALS seam: no ProMotion or variable-mode
+ *            display was attached) and says how to set a fixed rate; it
+ *            opens with equal intervals, and the real screen's are equal.
  *   gfx      ysp/gfx.h on a METAL screen writes rows top-down (GL's row 0
  *            is the top of the drawable, as on Windows).
  *   tenbit   the same as sync at desc.color_depth 10 (a BGR10A2Unorm layer,
@@ -40,6 +45,12 @@
 #include <stdint.h>
 static void sync_pixel(uint64_t id, uint32_t px);
 #define YSCR__MTL_SYNC_PIXEL(id, px) sync_pixel((id), (px))
+/* The refresh intervals open() reads from the window's NSScreen, replaced
+ * while g_iv_min is not 0, as a ProMotion panel in its variable mode would
+ * give them (no such panel was attached). */
+static long long g_iv_min, g_iv_max;
+#define YSCR__MTL_SCREEN_INTERVALS(m, mn, mx) \
+    do { (void)(m); if (g_iv_min) { *(mn) = g_iv_min; *(mx) = g_iv_max; } } while (0)
 #define YSP_SCREEN_IMPLEMENTATION
 #include "ysp/screen.h"
 #define YSP_GFX_IMPLEMENTATION
@@ -291,6 +302,39 @@ static void gfx_origin(const yscr_desc* d) {
     yscr_close(&s);
 }
 
+/* Variable refresh: refused, with the fix in the message; fixed: opens. */
+static void vrr(const yscr_desc* d) {
+    static yscr_screen s;
+    char line[1024];
+    const char* e;
+    memset(&s, 0, sizeof s);
+    g_iv_min = 8333333; g_iv_max = 33333333;   /* ProMotion: 120 down to 30 Hz */
+    check(!yscr_open(&s, d), "vrr: a variable mode is refused");
+    e = yscr_error(&s);
+    printf("     %s\n", e);
+    check(strstr(e, "variable refresh mode") && strstr(e, "8.333 to 33.333 ms") && strstr(e, "its variable refresh off") &&
+          strstr(e, "System Settings > Displays > Refresh Rate"), "vrr: the message names the intervals and the fix");
+    if (yscr_is_open(&s)) yscr_close(&s);
+    g_iv_min = 8333333; g_iv_max = 8333333;    /* ProMotion set to a fixed 120 Hz */
+    memset(&s, 0, sizeof s);
+    if (!yscr_open(&s, d)) { check(0, "vrr: a fixed mode opens"); g_iv_min = 0; return; }
+    yscr_describe(&s, line, sizeof line);
+    check(strstr(line, "refresh_interval=8333333..8333333ns") != NULL, "vrr: a fixed mode opens, its intervals described");
+    yscr_close(&s);
+    g_iv_min = 0;                              /* the real screen */
+    memset(&s, 0, sizeof s);
+    if (!yscr_open(&s, d)) { check(0, "vrr: the real screen opens"); return; }
+    yscr_describe(&s, line, sizeof line);
+    {
+        const char* r = strstr(line, "refresh_interval=");
+        long long a = 0, b = 0;
+        if (r) sscanf(r, "refresh_interval=%lld..%lldns", &a, &b);
+        printf("     the real screen: refresh_interval=%lld..%lldns\n", a, b);
+        check(r && a > 0 && a == b, "vrr: the real screen's intervals are equal (a fixed mode)");
+    }
+    yscr_close(&s);
+}
+
 int main(int argc, char** argv) {
     yscr_desc d;
     const char* angle = argc > 1 ? argv[1] : getenv("YSCR_ANGLE_DIR");
@@ -306,6 +350,7 @@ int main(int argc, char** argv) {
      * on a shown screen the missing wait went unseen (0 of 180 frames) */
     run("sync", &d, 120, 400, 0, 1);
     gfx_origin(&d);
+    vrr(&d);
     d.color_depth = 10;
     run("tenbit", &d, 30, 400, 1, 0);
     d.color_depth = 0;

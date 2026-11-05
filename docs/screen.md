@@ -3912,10 +3912,60 @@ window kind instead. The probe's runs decide each row: `present`'s
   Cocoa key times are not measured: posting keys needs the Accessibility
   permission, which the machine did not grant (probe, section 5.8).
 
+### Variable refresh refused (v0.13.0)
+
+A ProMotion MacBook, or an external display in an Adaptive-Sync mode,
+varies the time between frames on its own. The core's grid assumes a
+fixed period, so every planned onset, every snap and every record would
+be wrong, and no flag would say so; Psychtoolbox's users on 120 Hz
+ProMotion MacBooks missed 341 to 401 of 600 deadlines
+(psychtoolbox.discourse.group, thread 5767).
+
+The header already refuses variable refresh (VARIABLE REFRESH):
+`desc.vrr` fails the open until the panel has passed the photodiode
+interval sweep and the luminance-versus-interval sweep. A display that is
+in a variable mode is that same variable refresh, chosen by the system
+instead of the caller, so METAL refuses it the same way. The other
+options were weighed against the existing rules:
+
+- Open with every record flagged and tier 3: the header does that only for
+  what it finds while running (the sync guard, off-grid times), never for a
+  condition it knows at open; and a run whose every onset is wrong in a
+  known way is not a run to make.
+- Report `caps.vrr_capable` and open: the field says what a panel could
+  do; it does not make the fixed grid right.
+
+So `open()` reads the window's `NSScreen.minimumRefreshInterval` and
+`maximumRefreshInterval` (macOS 12 and later, each behind
+`respondsToSelector:`), and when they are more than 0.1% apart it fails
+with:
+
+```
+ysp_screen: METAL: the display is in a variable refresh mode (8.333 to 33.333 ms a frame), refused as desc.vrr is. Set a fixed rate: System Settings > Displays > Refresh Rate, not ProMotion; on an external display, its variable refresh off
+```
+
+The intervals are in the describe line as `refresh_interval=min..maxns`;
+the M27Q at its "60 Hz" reads `refresh_interval=16680416..16680416ns`
+(measured, 2026-11-05). The display link's nominal period is no help: it
+is a single number. A mode change or a move to another screen while the
+screen is open is not watched (the backend tracks neither).
+
+**Not tested on a variable display.** No ProMotion or variable-mode display
+was attached. `tests/adapt/screen_metal_test.c` injects the intervals
+through a test seam (`YSCR__MTL_SCREEN_INTERVALS`): 8.333 to 33.333 ms is
+refused with the message above, 8.333 and 8.333 ms (ProMotion set to a
+fixed 120 Hz) opens, and the real screen's intervals are equal. The core
+test checks the rule and that the message fits the screen's error buffer
+(255 characters) at the widest numbers. Mutants `mt-14` to `mt-16`, 3 of
+3 killed. Whether a ProMotion panel at a fixed rate in System Settings
+reports equal intervals is how Apple documents the properties, not
+something measured here.
+
 ### Tests and mutants
 
 - The core test (`tests/adapt/screen_test.c`): the rules without a Mac
-  (target, period, completion, pixels, tier, in flight, margin) and, from
+  (target, period, completion, pixels, tier, in flight, margin, variable
+  refresh) and, from
   v0.12.0, a scripted display that behaves as the timing session measured:
   the first vblank at or after the target, a commit deadline of a period
   plus 0.275 period, the handler 0.125 period after the vblank; 60 frames
@@ -4100,7 +4150,8 @@ display ids) are fixed in v0.10.4
   the GPU did not cause one, so whether the record shows it is unknown.
 - COMPOSITION on a machine whose QPC does not run at 10 MHz, on ARM64
   (refused), and on Windows 10 (not available).
-- Variable refresh: refused.
+- Variable refresh: refused (`desc.vrr`; on METAL also a display in a
+  variable mode, v0.13.0, checked only through a test seam).
 - Two physical displays. The group calls ran on two windows on one display.
 - The keyboard itself: its scan, USB polling and the HID stack are not in
   the input times above.

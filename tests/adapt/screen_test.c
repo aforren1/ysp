@@ -2862,6 +2862,23 @@ static void test_metal_rules(void) {
     CHECK(!strcmp(yscr__mtl_kind_name(YSCR__MTL_KIND_SPACE), "space"));
     CHECK(!strcmp(yscr__mtl_kind_name(YSCR__MTL_KIND_FULLSCREEN), "fullscreen"));
     CHECK(!strcmp(yscr__mtl_kind_name(YSCR__MTL_KIND_WINDOW), "window"));
+    /* variable refresh: NSScreen's two refresh intervals apart (VARIABLE REFRESH) */
+    CHECK(!yscr__mtl_variable(16680416, 16680416));   /* the M27Q at "60 Hz", measured */
+    CHECK(!yscr__mtl_variable(8333333, 8333340));     /* rounding is not a variable mode */
+    CHECK(!yscr__mtl_variable(0, 0));                 /* before macOS 12: no answer */
+    CHECK(!yscr__mtl_variable(0, 16666667));
+    CHECK(yscr__mtl_variable(8333333, 33333333));     /* ProMotion's variable mode */
+    CHECK(yscr__mtl_variable(6944444, 20833333));     /* Adaptive-Sync, 48 to 144 Hz */
+    CHECK(yscr__mtl_variable(16666667, 16700000));    /* 0.2% apart */
+    {
+        char m[512];
+        yscr__mtl_vrr_message(m, sizeof m, 8333333, 33333333);
+        CHECK(strstr(m, "8.333 to 33.333 ms") != NULL);
+        CHECK(strstr(m, "System Settings > Displays > Refresh Rate") != NULL);
+        CHECK(strstr(m, "refused as desc.vrr is") != NULL);
+        /* it fits the screen's error buffer whole, at the widest numbers */
+        CHECK(yscr__mtl_vrr_message(m, sizeof m, 41666667, 1000000000) < (int)sizeof(((yscr_screen*)0)->error));
+    }
     /* not shown: no time; OCCLUDED only when the window was hidden; the core
      * makes such a flip estimated, tier 3 */
     yscr__mtl_vblank(8, 0, 1, YSCR__MTL_KIND_SPACE, T, P_NS, &v);
