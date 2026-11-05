@@ -269,7 +269,7 @@ clock the binding's frames and decisions equal the C path's line by line
   number 1.2.1 of their own (1.0.0 was phase A; 1.1.0 adds `ysp_gfx`'s stimuli and `ysp_video`'s movies; 1.2.0 the text; 1.2.1 `ysp_video`'s UTF-8 paths and its error ids by the header's code); their `'version'` gives it
   and the header's as the second output. `ysp-audio` and `ysp-timeline` are dependencies
   of the same major.minor as the headers ysp-vis was built against
-  (`>=0.7,<0.8` and `>=0.8.1,<0.9`), the rule of the tables (below).
+  (`>=0.8,<0.9` and `>=0.8.1,<0.9`), the rule of the tables (below).
 - **The frame in MATLAB and Octave.** Since 1.1.0 `ysp_screen('begin')`
   returns the frame without its records; they come as a third output when
   asked for, or from `'records'` per trial. A screen opened with

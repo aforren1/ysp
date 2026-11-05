@@ -2614,17 +2614,11 @@ v0.6.0, before the merges with v0.5.0 (capture), v0.5.1 (exclusive start)
 and v0.5.2 to v0.7.3 above. The work is v0.8.0, and the sections say
 v0.8.0. Capture on Linux is in "Linux: capture".
 
-After the merge with v0.7.3 (2026-11-04, the same desktop),
+After the merge with v0.7.3 (2026-11-05, the same desktop),
 `test_audio_pulse`, `test_audio_alsa`, `test_audio_alsa_capture` and
-`test_audio_pulse_capture` in the output profile pass, and 43 of the 44
-Linux mutants give the expected result.
-
-The analog source's check fails: 39 to 104 us sd from a line, against a
-limit of 30 us and the 0.8 and 3.6 us of 2026-10-13, in 8 alternating runs
-each of the code before and after the merge, built the same way (median
-74 and 63 us; PulseAudio 17.0, the source at 44100 Hz, duplex profile, idle
-desktop). The merge did not cause it; the cause is not known. `pulse-06` needs
-that check, so it is not confirmed after the merge.
+`test_audio_pulse_capture` pass in the output profile, and
+`test_audio_pulse_capture` passes in the duplex profile ("Clamped latencies").
+The 46 Linux mutants give the expected result.
 
 The machine: Debian 12, kernel 6.11.5 liquorix, PulseAudio 16 (not
 PipeWire), the Intel HDA codec's analog output (ALC3246) as the default
@@ -3061,6 +3055,48 @@ header asks the server, through a connection of its own at open, whether
 the source it got is a monitor (`monitor_of_sink`, not the name, which
 depends on the locale); with no `desc.device` it refuses one, naming
 `desc.device`. By name it opens.
+
+### Clamped latencies
+
+On 2026-11-04, `test_audio_pulse_capture` failed on the analog source in the
+duplex profile: 39 to 104 us sd from a line, against a limit of 30 us and the
+3.6 us of the table above. The merge with v0.7.3 did not cause it: 8
+alternating runs each of the code before and after it, built the same way, gave
+a median of 74 and 63 us. `pulse_record_probe.c`, with no header code, gave 69
+to 104 us.
+
+PulseAudio gives a source latency of 0 when its estimate is below 0. In the
+runs below the probe asked in each callback, 30 s a run (25 s with a delay),
+on the same desktop:
+
+| Replies | Source latency, median | Replies at 0 | sd from a line |
+|---|---|---|---|
+| All, no delay | 0 to 76 us | 45 to 52% | 69 to 104 us |
+| Those above 0, no delay, source settled | | | 2.6 to 5.2 us |
+| Those at 0, off that line | | | -108 to -179 us mean, -392 us at most |
+| All, the request 500 us later | 603 and 634 us | 0% | 5.6 and 9.1 us |
+| All, the request 1 ms later | 1090 us | 0% | 6.0 and 13.8 us |
+| All, the request 3 ms later | 3105 and 3161 us | 0% | 82 and 83 us |
+
+So a reply soon after the source's read has an estimate near 0. With the request
+500 us later the median is that of 2026-10-13, 555 to 608 us. What moved the
+request by 500 us between those dates is not known. Load and a suspended sink
+did not change the result. A sleep in the device's callback is not a solution,
+so the header drops the replies at 0. It does this only on a source on an ALSA
+card that is not a monitor: a monitor's latency is 0 in every reply, and no other
+source was measured. About half of the replies remain.
+
+A source woken from suspend has a second error. Its reports were up to 218 us
+before their later line in the first second, then up to 101 us after it, and
+they settled over about 15 s. A capture opened on a source that was running
+moved at most 18 us. The header does not correct it. To record
+in the first 15 s through PulseAudio, open the capture 15 s before you need it.
+ALSA exclusive on the card's `hw:` device has its own position.
+
+`test_audio_pulse_capture` part 2b wakes the source with one capture for 20 s
+and measures a second. 6 of 6 runs in the duplex profile passed: 7.1 to 9.3 us
+sd, the fit's spread 5.2 to 8.7 us. The check does not see the settling. `pulse-14`
+keeps the replies at 0, and `pulse-15` drops a monitor's.
 
 ### Duplex
 

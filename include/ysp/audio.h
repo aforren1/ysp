@@ -1109,7 +1109,10 @@
  *          a pipeline's lateness as a loss when reports were sparse), and
  *          REPORTS ONLY: such a block adds no point to the input's fit, as
  *          v0.5.1 made it for the output (WASAPI, which reports with every
- *          block, is unchanged).
+ *          block, is unchanged). CLAMPED LATENCIES: on an ALSA source that
+ *          is no monitor, a reply whose source latency is 0 is no report
+ *          (docs/audio.md, "Clamped latencies"). A source woken from suspend
+ *          gives reports up to 218 us off for about 15 s.
  *          Tier 3 on every Linux input: no line-in run.
  *   v0.7.3 - Builds for 32-bit Windows with MSVC: the 64-bit atomic store
  *          is a compare-exchange loop on x86, which has no
@@ -1322,15 +1325,14 @@
  *   Tier 3 on every Linux input: no line-in or
  *   photodiode run (the Teensy needs a TRRS breakout and a divider into
  *   the combo jack's microphone contact, which this machine lacks).
- *   STATUS: v0.8.0, 2026-11-04, after the merge with v0.7.3: the same
- *   desktop. test_audio_pulse, test_audio_alsa, test_audio_alsa_capture and
- *   test_audio_pulse_capture (output profile) pass; 43 of the 44 Linux mutants
- *   give the expected result. The analog source's check fails: 39 to 104 us sd from a line, against a
- *   limit of 30 us and the 0.8 and 3.6 us of 2026-10-13, in 8 alternating runs
- *   each of the code before and after the merge, built the same way (median
- *   74 and 63 us; PulseAudio 17.0, the source at 44100 Hz, duplex profile, idle
- *   desktop). The merge did not cause it; the cause is not known. pulse-06 needs
- *   that check, so it is not confirmed after the merge.
+ *   STATUS: v0.8.0, 2026-11-05, after the merge with v0.7.3: the same
+ *   desktop (PulseAudio 17.0, the source at 44100 Hz). test_audio_pulse,
+ *   test_audio_alsa, test_audio_alsa_capture and test_audio_pulse_capture
+ *   pass, in the output profile and in 6 of 6 runs in the duplex profile
+ *   (the analog source's reports 7.1 to 9.3 us sd from a line, the fit's
+ *   spread 5.2 to 8.7 us). The 46 Linux mutants give the expected result:
+ *   test_audio_pulse_capture's 11 after this fix (pulse-14 and pulse-15
+ *   new), the others on the merge before it, which changed no code of theirs.
  *   STATUS: v0.7.3, 2026-10-27 (docs/audio.md, "32-bit Windows" and
  *   "UTF-8 paths"): the compile check, tests/adapt/audio_test.c and the
  *   ysp-audio wheel's tests build and pass with MSVC for x86 (Win32) and
@@ -5546,6 +5548,8 @@ typedef struct yau__mac {
     int64_t    pa_next, pa_last;
     uint32_t   pa_bpf;
     int        pa_card;     /* the source's ALSA card + 1, counted in yau__pas */
+    int        pa_clamps;   /* an ALSA source that is no monitor: a latency of
+                             * 0 is the server's clamp, not a value          */
 #endif
 } yau__mac;
 typedef char yau__mac_fits[sizeof(yau__mac) <= sizeof(((yau_capture*)0)->backend_mem) ? 1 : -1];
@@ -5691,7 +5695,10 @@ static ma_uint32 yau__mac_periods(int32_t period, uint32_t rate) {
 /* PulseAudio's record stream timing info as a capture position (docs/audio.md,
  * "Linux: capture"): the bytes the server has written into the stream, plus
  * the source's latency, is the frame at the source at the reply's
- * timestamp. Asked for at most every 50 ms, as for the output. */
+ * timestamp. Asked for at most every 50 ms, as for the output. The server
+ * gives 0 for a latency it estimates below 0, which a reply soon after the
+ * source's read often is: such a reply is no point on the line (45 to 52% of
+ * them, up to 392 us off it, measured; docs/audio.md, "Clamped latencies"). */
 static void yau__mac_pulse_pos(yau__mac* m, ma_device* d, yau_tick* tk) {
     void* s = d->pulse.pStreamCapture;
     const yau__pa_timing_info* ti;
@@ -5706,7 +5713,7 @@ static void yau__mac_pulse_pos(yau__mac* m, ma_device* d, yau_tick* tk) {
         int64_t ts = (int64_t)ti->timestamp.tv_sec * 1000000000 + (int64_t)ti->timestamp.tv_usec * 1000;
         int64_t pos = ti->write_index / m->pa_bpf +
                       (int64_t)((double)ti->source_usec * (double)d->capture.internalSampleRate / 1e6 + 0.5);
-        if (ts != m->pa_last) {
+        if (ts != m->pa_last && !(m->pa_clamps && ti->source_usec == 0)) {
             struct timespec r;
             clock_gettime(CLOCK_REALTIME, &r);
             m->pa_last = ts;
@@ -5788,6 +5795,7 @@ static int yau__mac_pulse_check(yau__mac* m, const char* asked, char* err, size_
             return YAU_ERR_LOST;
         }
         if (card >= 0 && card < YAU__PA_CARDS) { yau__pas.caps[card]++; m->pa_card = card + 1; }
+        m->pa_clamps = card >= 0 && !monitor;
     }
     return 0;
 }
@@ -5796,7 +5804,11 @@ static int yau__mac_pulse_check(yau__mac* m, const char* asked, char* err, size_
 static int yau__mac_pulse_post(yau__mac* m, const char* asked, yau_device_caps* caps, char* err, size_t err_cap) {
     void* so = m->ctx.pulse.pulseSO;
 #if YAU__LINUX
-    int rc = yau__mac_pulse_check(m, asked, err, err_cap);
+    int rc;
+#endif
+    m->pa_clamps = 0;
+#if YAU__LINUX
+    rc = yau__mac_pulse_check(m, asked, err, err_cap);
     if (rc != 0) return rc;
 #else
     (void)asked; (void)err; (void)err_cap;

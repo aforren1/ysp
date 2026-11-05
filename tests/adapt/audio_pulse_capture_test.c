@@ -198,7 +198,7 @@ int main(void) {
         CHECK(fabs(in.drift_ppm) < 100);
         CHECK(nfound == 20);
         {
-            double s[20];
+            double s[20] = { 0 };
             int a, b;
             for (a = 0; a < nfound; a++) s[a] = diff[a];
             for (a = 1; a < nfound; a++) for (b = a; b > 0 && s[b - 1] > s[b]; b--) { double t = s[b]; s[b] = s[b - 1]; s[b - 1] = t; }
@@ -229,6 +229,21 @@ int main(void) {
             cd.format.sample = YAU_S16;
             cd.format.rate = (uint32_t)atoi(in_rate);
             cd.device = in_src;
+            g_nrep = 0;
+            g_last_t = -1;
+            g_keep = 0;
+            /* A source woken from suspend has reports up to 218 us off their
+             * later line, settling over about 15 s (measured). The check is
+             * of the settled line, so a first capture wakes the source and a
+             * second, whose fit never saw the settling, is measured. */
+            if (yau_capture_open(&g_cap, &cd)) {
+                int64_t settle = yrt_now_ns() + 20000000000LL, first;
+                while (yrt_now_ns() < settle) {
+                    while (yau_capture_read(&g_cap, 0, g_buf, 24000, &first) > 0) {}
+                    yrt_sleep_ns(YRT_MS(10));
+                }
+                yau_capture_close(&g_cap);
+            }
             g_nrep = 0;
             g_last_t = -1;
             g_keep = 1;

@@ -38,7 +38,7 @@ source = "tests/adapt/audio_pulse_capture_test.c"
 compiler = "gcc"
 flags = ["-std=c11", "-O2", "-w", "-I$YSP_MINIAUDIO"]
 libs = ["-ldl", "-lpthread", "-lm"]
-timeout = 90
+timeout = 120
 env = { YAU_PULSE_TEST_REQUIRE = "1" }
 
 [[mutant]]
@@ -1137,6 +1137,22 @@ test = "audio_pulse_capture"
 why = "After the capture's close an AUTO output on the card would still be refused."
 find = "    if (m->pa_card) { yau__pas.caps[m->pa_card - 1]--; m->pa_card = 0; }"
 replace = "    if (m->pa_card) { m->pa_card = 0; }"
+
+[[mutant]]
+id = "pulse-14"
+name = "a clamped latency taken as a report"
+test = "audio_pulse_capture"
+why = "PulseAudio gives 0 for a source latency it estimates below 0: 45 to 52% of the replies, up to 392 us off the line of the others. Only part 2b, a card in an input or duplex profile, kills it."
+find = "        if (ts != m->pa_last && !(m->pa_clamps && ti->source_usec == 0)) {"
+replace = "        if (ts != m->pa_last) {"
+
+[[mutant]]
+id = "pulse-15"
+name = "a monitor's latency of 0 taken as a clamp"
+test = "audio_pulse_capture"
+why = "A monitor has no latency of its own: every report of it is 0, and dropping them leaves the capture with no position."
+find = "        m->pa_clamps = card >= 0 && !monitor;"
+replace = "        m->pa_clamps = card >= 0;"
 
 [[mutant]]
 id = "cap-26"
