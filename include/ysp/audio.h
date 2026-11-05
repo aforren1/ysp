@@ -762,10 +762,10 @@
  *     render whose time has passed: the frame has reached the IO point,
  *     and the fit and the confirmation come from those. mHostTime is
  *     mach_absolute_time(): with ysp/rt.h 0.10.0 or later it maps to the
- *     ysp_rt clock by yrt_ticks_to_ns() alone; with an older ysp/rt.h
- *     (CLOCK_MONOTONIC, whole microseconds, frequency-adjusted) by the
- *     offset of the two clocks read at the callback's entry, within a
- *     microsecond. The position counts the frames the HAL skipped after
+ *     ysp_rt clock by the timebase alone (yrt_ticks_to_ns()'s arithmetic);
+ *     with an older ysp/rt.h (CLOCK_MONOTONIC, whole microseconds,
+ *     frequency-adjusted) by the offset of the two clocks read at the
+ *     callback's entry, within a microsecond. The position counts the frames the HAL skipped after
  *     a late callback (measured: a 30 ms stall moved the sample time 1464
  *     frames past the frames handed), so a skip is an underrun whose gap
  *     is exactly those frames, and the fit shifts by them and stays
@@ -1175,7 +1175,14 @@
  *   periods 480, 128, 32 and hog mode); every onset on its planned frame,
  *   confirmed, tier 3; a 30 ms stall one XRUN record of the skipped frames;
  *   a default change kept the stream; the HDMI device's going away made it
- *   LOST. No timing table yet (docs/audio.md lists the runs). The core test
+ *   LOST. Timed on the speakers, quiet machine, ysp/rt.h 0.10.0: 0 XRUN
+ *   records in 22 min at IO buffers of 480, 128 and 32 frames, idle and
+ *   under load; the HAL's reports on a line to 0.2 to 0.5 us p99 within
+ *   10 s, the device +2.0 to +2.8 ppm against mach time; each 30 ms stall
+ *   one XRUN record of 1468 to 1476 frames with the fit kept; residuals
+ *   -7.6 to +10.2 us, shortest safe lead 20 to 25 ms at 480 frames and
+ *   8 ms at 128; the time line 0.2 to 1.0 us a callback at the median;
+ *   hog mode no different. HDMI not timed (its device was gone). The core test
  *   runs the time line's arithmetic and a scripted HAL; 9 of 9 new mutants
  *   killed; ASan, UBSan and ThreadSanitizer clean on the device. No input
  *   on that Mac: CoreAudio capture has not run. Every number there is from
@@ -3806,7 +3813,7 @@ static void yau__ca_tick(yau__cat* c, uint64_t now, int32_t n, yau_tick* tk, uin
     #include <mach/mach_time.h>
     #include <unistd.h>
     /* ysp/rt.h 0.10.0 and later count yrt_now_ns() in mach_absolute_time()
-     * units scaled to ns, so a HAL host time maps by yrt_ticks_to_ns()
+     * units scaled to ns, so a HAL host time maps by the timebase
      * alone; before, the clock was CLOCK_MONOTONIC (whole microseconds,
      * counting sleep, frequency-adjusted), and each block maps its reports
      * through the offset of the two clocks read at its entry. */
