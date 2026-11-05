@@ -636,7 +636,7 @@ jobs:
           path: |
             ~/ysp-vis-downloads
             third_party/vis
-          key: vis-natives-${{ hashFiles('tools/vendor_vis.py', 'tools/vis_layout/CMakeLists.txt', 'third_party/CMakeLists.txt', 'third_party/MANIFEST.sha256', 'third_party/patches/*', 'pack/layout.c', 'pack/ysp/layout.h', 'include/ysp/outline.h') }}-v2
+          key: vis-natives-${{ hashFiles('tools/vendor_vis.py', 'tools/vis_layout/CMakeLists.txt', 'third_party/CMakeLists.txt', 'third_party/MANIFEST.sha256', 'third_party/patches/*', 'pack/layout.c', 'pack/ysp/layout.h', 'include/ysp/outline.h') }}-macos${{ env.MACOSX_DEPLOYMENT_TARGET }}-v2
 
       - name: Natives (static SDL3 and text layout with MSVC; ANGLE from the Electron zip; pl_mpeg)
         if: steps.viscache.outputs.cache-hit != 'true'
@@ -1065,7 +1065,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/sdl3
-          key: sdl3-${{ env.SDL_VERSION }}-${{ runner.os }}-${{ runner.arch }}-v1
+          key: sdl3-${{ env.SDL_VERSION }}-${{ runner.os }}-${{ runner.arch }}-macos${{ env.MACOSX_DEPLOYMENT_TARGET }}-v1
 
       # A console build on Linux: the checks and the simulated display need no
       # X11 or Wayland, and the runner has neither's development packages.
