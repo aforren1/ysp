@@ -1329,11 +1329,34 @@ The measurements are in docs/av_probe.md and docs/winthread_probe.md.
 ## 13. Open questions, to be measured or verified, not decided
 
 - Does SDL3 create an EGL context on Cocoa against ANGLE's Metal
-  backend, and what present timing does that backend expose?
+  backend, and what present timing does that backend expose? Answered in
+  part (2026-11-05, docs/screen_macos_probe.md; Apple M2, macOS 27.0.1,
+  ANGLE from Electron 43.8.3, SDL 3.4.0): yes, with
+  `SDL_GL_EGL_PLATFORM` and a platform attribute callback that asks for
+  the Metal back end (this ANGLE's default on macOS is OpenGL). ANGLE then
+  owns a CAMetalLayer under SDL's view and exposes no timing: no sync
+  control, no frame timestamps, no presentation time. A header-owned
+  CAMetalLayer on ANGLE's own MTLDevice works: ANGLE draws into the
+  drawable's IOSurface (or an EGLImage of its texture), and an
+  `EGL_ANGLE_metal_shared_event_sync` event orders ANGLE's queue before
+  the header's (without it, 2 to 5 of 120 frames were read unfinished
+  under GPU load). The recommended design is that one, with
+  `presentDrawable:atTime:` and `MTLDrawable.presentedTime` as the onset.
+  Waiting on the timing runs, which need an unlocked screen and a quiet
+  machine: depth per window kind, presentAtTime quantization, late frames,
+  the vblank sources' agreement, direct against composed, a 120 or 144 Hz
+  mode, key timestamps (posting keys needs the Accessibility permission,
+  not granted), and so the tier.
 - ANGLE's 10-bit surface configurations on D3D11 and Metal. Answered
   for D3D11 (2026-10-05, docs/gfx.md): RGBA 10/10/10/2 and RGBA16F
   configurations exist, and a client-buffer pbuffer on an
-  `R10G10B10A2` texture works. Metal: not run.
+  `R10G10B10A2` texture works. Metal (2026-11-05,
+  docs/screen_macos_probe.md): no 10-bit or half-float EGL configuration
+  exists, so SDL's EGL path cannot make a 10-bit window; but GL textures,
+  EGLImages of RGB10A2, BGR10A2 and RGBA16Float MTLTextures, and 'l10r'
+  and 'RGhA' IOSurface pbuffers keep 1024 levels of a 1024-step ramp, and
+  CAMetalLayer accepts BGR10A2Unorm, RGBA16Float and BGR10_XR. Whether
+  10 bits reach the M27Q (8 bits per sample by NSScreen): not measured.
 - Composition swapchain: how a target time between two vblanks is
   quantized, how far ahead the queue accepts presents, and whether a
   borderless fullscreen composition window gets independent flip on the
