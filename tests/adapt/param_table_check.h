@@ -181,14 +181,16 @@ PTC_INLINE double ptc_get(const void* base, const ptc_field* f) {
 
 PTC_INLINE void ptc_set(void* base, const ptc_field* f, double v) {
     unsigned char* p = (unsigned char*)base + f->off;
-    int i = (int)v;
-    unsigned u = (unsigned)v;
-    bool b = v != 0.0;
+    int i;
+    unsigned u;
+    bool b;
+    /* Each conversion only for its own kind: a negative value converted to
+     * unsigned is undefined behavior (clang's UBSan stops on it). */
     switch (f->kind) {
     case 'd': memcpy(p, &v, sizeof v); break;
-    case 'i': case 'e': memcpy(p, &i, sizeof i); break;
-    case 'u': memcpy(p, &u, sizeof u); break;
-    case 'b': memcpy(p, &b, sizeof b); break;
+    case 'i': case 'e': i = (int)v; memcpy(p, &i, sizeof i); break;
+    case 'u': u = (unsigned)v; memcpy(p, &u, sizeof u); break;
+    case 'b': b = v != 0.0; memcpy(p, &b, sizeof b); break;
     default: break;
     }
 }

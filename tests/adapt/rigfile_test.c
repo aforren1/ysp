@@ -177,7 +177,7 @@ static void sha_hex(const char* s, size_t n, char out[65]) {
     uint8_t d[32];
     int i;
     yrig_sha256(s, n, d);
-    for (i = 0; i < 32; i++) sprintf(out + 2 * i, "%02x", d[i]);
+    for (i = 0; i < 32; i++) snprintf(out + 2 * i, 3, "%02x", d[i]);
 }
 
 /* ------------------------------------------------------------ the format */
@@ -389,16 +389,16 @@ static void check_refusals(void) {
     {
         char t[8192];
         int k, p = 0;
-        p += sprintf(t + p, "{\"format\":\"ysp-rig 1\",\"rig\":\"r\",\"written\":\"2026-01-01T00:00:00Z\",\"roles\":{");
-        for (k = 0; k < 33; k++) p += sprintf(t + p, "%s\"r%d\":{\"family\":\"line\",\"key\":\"k\"}", k ? "," : "", k);
-        p += sprintf(t + p, "}}");
+        p += snprintf(t + p, sizeof t - (size_t)p, "{\"format\":\"ysp-rig 1\",\"rig\":\"r\",\"written\":\"2026-01-01T00:00:00Z\",\"roles\":{");
+        for (k = 0; k < 33; k++) p += snprintf(t + p, sizeof t - (size_t)p, "%s\"r%d\":{\"family\":\"line\",\"key\":\"k\"}", k ? "," : "", k);
+        p += snprintf(t + p, sizeof t - (size_t)p, "}}");
         CHECK_I(yrig_parse(&g_q, t, (size_t)p, NULL, g_err, sizeof g_err), YRIG_ERR_FORMAT);
         CHECK_HAS(g_err, "roles: more than 32 roles");
         /* 32 is fine */
         p = 0;
-        p += sprintf(t + p, "{\"format\":\"ysp-rig 1\",\"rig\":\"r\",\"written\":\"2026-01-01T00:00:00Z\",\"roles\":{");
-        for (k = 0; k < 32; k++) p += sprintf(t + p, "%s\"r%d\":{\"family\":\"line\",\"key\":\"k\"}", k ? "," : "", k);
-        p += sprintf(t + p, "}}");
+        p += snprintf(t + p, sizeof t - (size_t)p, "{\"format\":\"ysp-rig 1\",\"rig\":\"r\",\"written\":\"2026-01-01T00:00:00Z\",\"roles\":{");
+        for (k = 0; k < 32; k++) p += snprintf(t + p, sizeof t - (size_t)p, "%s\"r%d\":{\"family\":\"line\",\"key\":\"k\"}", k ? "," : "", k);
+        p += snprintf(t + p, sizeof t - (size_t)p, "}}");
         CHECK_I(yrig_parse(&g_q, t, (size_t)p, NULL, g_err, sizeof g_err), YRIG_OK);
         CHECK_I(g_q.n_roles, 32);
     }
@@ -430,7 +430,7 @@ static void check_edit(void) {
     CHECK(yrig_add(&g_q, "bad name") == NULL);
     CHECK(yrig_add(&g_q, "") == NULL);
     for (k = 0; k < YRIG_MAX_ROLES; k++) {
-        sprintf(name, "r%d", k);
+        snprintf(name, sizeof name, "r%d", k);
         CHECK(yrig_add(&g_q, name) != NULL);
     }
     CHECK(yrig_add(&g_q, "r5") == &g_q.role[5]);        /* found, not added */
@@ -606,7 +606,7 @@ static void check_files(void) {
         yrig_init(&g_p, "many");
         for (k = 0; k < 20; k++) {
             char name[8];
-            sprintf(name, "r%d", k);
+            snprintf(name, sizeof name, "r%d", k);
             CHECK_I(yrig_bind(&g_p, name, YBOX_XID, "k"), YRIG_OK);
             r = ROLE(&g_p, name);
             r->bounds.set = true;

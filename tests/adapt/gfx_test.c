@@ -1015,10 +1015,12 @@ static unsigned char* t_slurp(const char* path, size_t* n) {
     fseek(f, 0, SEEK_END);
     k = ftell(f);
     fseek(f, 0, SEEK_SET);
-    b = (unsigned char*)malloc(k > 0 ? (size_t)k : 1);
+    /* One byte more, a NUL: t_read_ppm() sscanf()s the header, and the
+     * pixels after it are not text. macOS's sscanf() runs strlen() first. */
+    b = (unsigned char*)malloc(k > 0 ? (size_t)k + 1 : 1);
     if (b && k > 0 && fread(b, 1, (size_t)k, f) != (size_t)k) { free(b); b = NULL; }
     fclose(f);
-    if (b) *n = (size_t)k;
+    if (b) { *n = k > 0 ? (size_t)k : 0; b[*n] = 0; }
     return b;
 }
 
