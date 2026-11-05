@@ -1,4 +1,4 @@
-/* Section link: frames driven by CAMetalDisplayLink (macOS 14 and later),
+/* Section link: frames driven by CAMetalDisplayLink,
  * Apple's pacing model, against presentDrawable:atTime: (section present).
  *
  * The question (docs/screen_macos_probe.md, 4.8): does the link schedule
@@ -85,7 +85,7 @@ static EGLSurface lk_pbuffer(link_run* L, IOSurfaceRef ios) {
 /* One frame: ANGLE draws into the update's drawable, the shared event
  * orders it before the probe's command buffer, which reads the center
  * pixel back and presents (at `at` when not 0). */
-static void lk_frame(link_run* L, id<CAMetalDrawable> d, link_rec* f, int index, int64_t at) API_AVAILABLE(macos(14.0)) {
+static void lk_frame(link_run* L, id<CAMetalDrawable> d, link_rec* f, int index, int64_t at) {
     IOSurfaceRef ios = d.texture.iosurface;
     EGLSurface s = ios ? lk_pbuffer(L, ios) : EGL_NO_SURFACE;
     uint8_t lv = lk_level(index);
@@ -129,7 +129,6 @@ static void lk_frame(link_run* L, id<CAMetalDrawable> d, link_rec* f, int index,
     f->t_commit = mach_ns_now();
 }
 
-API_AVAILABLE(macos(14.0))
 @interface LinkDelegate : NSObject <CAMetalDisplayLinkDelegate>
 @property(nonatomic) link_run* run;
 @end
@@ -230,11 +229,6 @@ static void lk_report(link_run* L, const char* name, double latency, FILE* csv) 
 }
 
 int sec_link(void) {
-    if (@available(macOS 14.0, *)) {
-    } else {
-        P("RESULT link: CAMetalDisplayLink needs macOS 14\n");
-        return 1;
-    }
     if (!egl_load(g_opt.angle)) return 1;
     EGLDisplay dpy = angle_display("metal");
     if (dpy == EGL_NO_DISPLAY) return 1;
@@ -262,61 +256,59 @@ int sec_link(void) {
                                          "pres_arrive,readback,expect");
     static const double lats[3] = { 1, 2, 0 };   /* 0: the link's own default */
     run_worker(^{
-        if (@available(macOS 14.0, *)) {
-            E.MakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx);
-            gl_load(egl_proc);
-            unsigned prog = g_opt.heavy ? gl_program(1) : 0;
-            for (int k = 0; k < 3 && !quit_requested(); k++) {
-                for (int kind = 0; kind < 3 && !quit_requested(); kind++) {
-                    char want[16];
-                    snprintf(want, sizeof want, "%s", link_run_name[kind]);
-                    if (g_opt.runs && !strstr(g_opt.runs, want)) continue;
-                    link_run L = { 0 };
-                    L.p = p; L.dpy = dpy; L.cfg = cfg; L.ctx = ctx; L.bind_target = bind; L.prog = prog;
-                    L.kind = kind;
-                    L.max = kind == LINK_FREE ? g_opt.frames : g_opt.reps;
-                    L.heavy = g_opt.heavy;
-                    L.ahead = 3;
-                    L.w = (int)p.layer.drawableSize.width;
-                    L.h = (int)p.layer.drawableSize.height;
-                    L.r = (link_rec*)calloc((size_t)L.max + 1, sizeof(link_rec));   /* never freed: late handlers */
-                    L.rb = [dev newBufferWithLength:(NSUInteger)(L.max + 1) * 4 options:MTLResourceStorageModeShared];
-                    L.ev = [dev newSharedEvent];
-                    L.create_sync = (lk_create_sync_fn)egl_proc("eglCreateSync");
-                    L.destroy_sync = (lk_destroy_sync_fn)egl_proc("eglDestroySync");
-                    CAMetalDisplayLink* link = [[CAMetalDisplayLink alloc] initWithMetalLayer:p.layer];
-                    LinkDelegate* del = [LinkDelegate new];
-                    del.run = &L;
-                    link.delegate = del;
-                    float def = link.preferredFrameLatency;
-                    if (lats[k] > 0) link.preferredFrameLatency = (float)lats[k];
-                    P("  link: preferredFrameLatency %.1f (default %.1f)\n", link.preferredFrameLatency, def);
-                    [link addToRunLoop:[NSRunLoop currentRunLoop] forMode:NSDefaultRunLoopMode];
-                    int64_t end = mach_ns_now() + secs_to_ns(kind == LINK_FREE ? 2.0 + g_opt.frames / 30.0
-                                                                              : 2.0 + g_opt.reps * 0.2);
-                    while (!L.done && mach_ns_now() < end && !quit_requested()) {
-                        if (L.want == -1) {   /* target runs: wait for the frame, then a new trial */
-                            link_rec* f = &L.r[L.n - 1];
-                            if (__atomic_load_n(&f->complete, __ATOMIC_ACQUIRE) ||
-                                mach_ns_now() - f->t_commit > 500000000)
-                                L.want = 0;
-                        }
-                        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.002, true);
+        E.MakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx);
+        gl_load(egl_proc);
+        unsigned prog = g_opt.heavy ? gl_program(1) : 0;
+        for (int k = 0; k < 3 && !quit_requested(); k++) {
+            for (int kind = 0; kind < 3 && !quit_requested(); kind++) {
+                char want[16];
+                snprintf(want, sizeof want, "%s", link_run_name[kind]);
+                if (g_opt.runs && !strstr(g_opt.runs, want)) continue;
+                link_run L = { 0 };
+                L.p = p; L.dpy = dpy; L.cfg = cfg; L.ctx = ctx; L.bind_target = bind; L.prog = prog;
+                L.kind = kind;
+                L.max = kind == LINK_FREE ? g_opt.frames : g_opt.reps;
+                L.heavy = g_opt.heavy;
+                L.ahead = 3;
+                L.w = (int)p.layer.drawableSize.width;
+                L.h = (int)p.layer.drawableSize.height;
+                L.r = (link_rec*)calloc((size_t)L.max + 1, sizeof(link_rec));   /* never freed: late handlers */
+                L.rb = [dev newBufferWithLength:(NSUInteger)(L.max + 1) * 4 options:MTLResourceStorageModeShared];
+                L.ev = [dev newSharedEvent];
+                L.create_sync = (lk_create_sync_fn)egl_proc("eglCreateSync");
+                L.destroy_sync = (lk_destroy_sync_fn)egl_proc("eglDestroySync");
+                CAMetalDisplayLink* link = [[CAMetalDisplayLink alloc] initWithMetalLayer:p.layer];
+                LinkDelegate* del = [LinkDelegate new];
+                del.run = &L;
+                link.delegate = del;
+                float def = link.preferredFrameLatency;
+                if (lats[k] > 0) link.preferredFrameLatency = (float)lats[k];
+                P("  link: preferredFrameLatency %.1f (default %.1f)\n", link.preferredFrameLatency, def);
+                [link addToRunLoop:[NSRunLoop currentRunLoop] forMode:NSDefaultRunLoopMode];
+                int64_t end = mach_ns_now() + secs_to_ns(kind == LINK_FREE ? 2.0 + g_opt.frames / 30.0
+                                                                          : 2.0 + g_opt.reps * 0.2);
+                while (!L.done && mach_ns_now() < end && !quit_requested()) {
+                    if (L.want == -1) {   /* target runs: wait for the frame, then a new trial */
+                        link_rec* f = &L.r[L.n - 1];
+                        if (__atomic_load_n(&f->complete, __ATOMIC_ACQUIRE) ||
+                            mach_ns_now() - f->t_commit > 500000000)
+                            L.want = 0;
                     }
-                    [link invalidate];
-                    /* the last handlers */
-                    int64_t lim = mach_ns_now() + 1000000000;
-                    while (L.n > 0 && !__atomic_load_n(&L.r[L.n - 1].complete, __ATOMIC_ACQUIRE) && mach_ns_now() < lim)
-                        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.005, true);
-                    char name[48];
-                    snprintf(name, sizeof name, "%s", link_run_name[kind]);
-                    lk_report(&L, name, lats[k], csv);
-                    E.MakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx);
-                    for (int j = 0; j < L.npb; j++) E.DestroySurface(dpy, L.pb[j]);
+                    CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.002, true);
                 }
+                [link invalidate];
+                /* the last handlers */
+                int64_t lim = mach_ns_now() + 1000000000;
+                while (L.n > 0 && !__atomic_load_n(&L.r[L.n - 1].complete, __ATOMIC_ACQUIRE) && mach_ns_now() < lim)
+                    CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.005, true);
+                char name[48];
+                snprintf(name, sizeof name, "%s", link_run_name[kind]);
+                lk_report(&L, name, lats[k], csv);
+                E.MakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx);
+                for (int j = 0; j < L.npb; j++) E.DestroySurface(dpy, L.pb[j]);
             }
-            E.MakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         }
+        E.MakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     });
     if (csv) fclose(csv);
     cv_report(p.cv, tagged("link_cv"));

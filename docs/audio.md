@@ -2413,12 +2413,13 @@ Source: `repro.c` outside the repository (not kept).
 ### The fix
 
 The header does not change. `bindings/python/ysp_audio` builds for
-macOS 10.13: `pyproject.toml` sets `MACOSX_DEPLOYMENT_TARGET` for
-cibuildwheel, `setup.py` raises a lower or missing target for a source
-build, and `ysp_audio_ext.c` stops the compile below 10.12. 10.13 is the
-target of CPython 3.12 and later on python.org. A C program that uses
-the null device on macOS must also target 10.12 or later. Real devices
-(Core Audio) do not use this timer.
+macOS 14, ysp's floor (it built for 10.13 before the floor):
+`pyproject.toml` sets `MACOSX_DEPLOYMENT_TARGET` for cibuildwheel,
+`setup.py` raises a lower or missing target for a source build, and
+`ysp_audio_ext.c` stops the compile below 10.12. A C program that uses
+the null device on macOS must also target 10.12 or later; the `macos`
+CMake presets target 14.0. Real devices (Core Audio) do not use this
+timer.
 
 Not yet confirmed on a macOS runner: the next CI run is the check.
 

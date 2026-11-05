@@ -44,12 +44,8 @@ int sec_links(void) {
     LinkTarget* lt = [LinkTarget new];
     NSView* view = (__bridge NSView*)p.view;
     CADisplayLink* dl = nil;
-    if (@available(macOS 14.0, *)) {
-        dl = [view displayLinkWithTarget:lt selector:@selector(tick:)];
-        [dl addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
-    } else {
-        P("  CADisplayLink needs macOS 14\n");
-    }
+    dl = [view displayLinkWithTarget:lt selector:@selector(tick:)];
+    [dl addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
     int nf = (int)(g_opt.seconds * 250) + 100;
     frame_rec* r = frames_new(nf);
     __block int n = 0;

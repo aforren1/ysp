@@ -19,7 +19,7 @@ static void usage(void) {
          "  present  CAMetalLayer present timing: depth, presentAtTime, queue, late frames\n"
          "  bits     10-bit and half-float configurations through ANGLE and CAMetalLayer\n"
          "  input    key timestamps from CGEventPost: SDL, NSEvent and mach time\n"
-         "  link     frames from CAMetalDisplayLink (macOS 14+), preferredFrameLatency 1, 2, default\n"
+         "  link     frames from CAMetalDisplayLink, preferredFrameLatency 1, 2, default\n"
          "options:\n"
          "  --out DIR        output folder (default ./ysp_macos_probe_<date>)\n"
          "  --angle DIR      ANGLE's libEGL.dylib and libGLESv2.dylib (or YSP_ANGLE_DIR)\n"
