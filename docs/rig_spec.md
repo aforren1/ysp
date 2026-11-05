@@ -1184,7 +1184,7 @@ Details, versions and measurements per header are in
 | 1. `ysp/rt.h` | Done, v0.9.1. |
 | 2. `ysp/timeline.h` | Done for now, v0.8.1. Since v0.4.0: trigger channels (`ytl_trigger_ch()`), parameter tables for the ops and the desc. |
 | 3. `ysp/screen.h` | v0.10.4 on Windows: DXGI_FLIP and COMPOSITION, the window thread (on by default for native Windows), flip records, the abort and the panic, the web backend (v0.7.0). X11, Wayland and macOS are stubs. The X11 probe (docs/screen_x11_probe.md) has not run on the Linux rig. No photodiode run. |
-| 4. `ysp/audio.h` | v0.7.3 on WASAPI: onsets from a fit of device positions, tier 2, streams, WAV, capture. v0.8.0 on CoreAudio (one Mac, 2026-11-05): reports from the HAL's render time stamps, hog mode, the driver stack in the describe line; tier 3; timed on the built-in speakers (0 underruns in 22 min, residuals within the half frame, 8 ms shortest safe lead at a 128-frame IO buffer), HDMI not timed. ALSA and PulseAudio ran only as miniaudio's null device, in CI. No line-in run. |
+| 4. `ysp/audio.h` | v0.7.3 on WASAPI: onsets from a fit of device positions, tier 2, streams, WAV, capture. v0.8.0 on CoreAudio (one Mac, 2026-11-05): reports from the HAL's render time stamps, hog mode, the driver stack in the describe line; tier 3; timed on the built-in speakers and HDMI (0 underruns in 38 min; shortest safe lead 8 and 12 ms at a 128-frame IO buffer; the HDMI claim ends at the link, so the monitor's own delay needs a line-in or microphone run). ALSA and PulseAudio ran only as miniaudio's null device, in CI. No line-in run. |
 | 5. `ysp/gfx.h` | v0.17.2: stimuli, curve runs (text and artwork), batched text runs, parameter tables, frame capture. Open items in docs/gfx.md "Next". |
 | 6. `ysp/video.h` | v0.6.0: Media Foundation and pl_mpeg, the soundtrack on audio streams, UTF-8 paths, error codes. Not built: AVFoundation, capture. |
 | Also built | `ysp/outline.h` v0.4.1, `ysp/rdk.h` v0.3.0, `ysp/color.h` v0.4.0, `ysp/trials.h` v0.6.0, `ysp/table.h` v0.3.0, `ysp/dataset.h` v0.2.0, `ysp/json.h` v0.2.1, `ysp/pack.h` v0.4.0 and the pack tool v0.7.0 (item 6), the device headers of docs/devices_spec.md (input, response, box, device, rigfile, serial, parallel, net). The experiment format (docs/experiment_format.md) with its gaps G1 to G13 closed. |
@@ -1216,8 +1216,7 @@ Details, versions and measurements per header are in
 4. **Other platforms.** `ysp/screen.h` on Linux X11: run the probe on
    the Linux rig, then build the GLX backend from its results. Then
    Wayland (presentation-time), then macOS through ANGLE's Metal
-   backend. `ysp/audio.h` on ALSA and PulseAudio with real devices, and
-   the CoreAudio timing runs on HDMI (docs/audio.md, "CoreAudio"). A platform gets its tier from a photodiode or line-in run on
+   backend. `ysp/audio.h` on ALSA and PulseAudio with real devices. A platform gets its tier from a photodiode or line-in run on
    that platform, not from CI.
 5. The designer.
 6. Build jobs.

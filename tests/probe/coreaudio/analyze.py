@@ -6,8 +6,10 @@ Reads the per-callback rows (t_entry_ns, pos, pos_t_ns, w, getpos_ns,
 render_ns) and prints one Markdown row: callbacks, the callback interval,
 the HAL reports' residual from one least-squares line over the run and from
 lines over 10 s pieces, the device rate against the ysp_rt clock, how old a
-report is at the call that gives it, and the time line's cost per callback
-(the column audio_clockstats calls GetPosition). The first 0.5 s (the
+report is at the call that gives it, the time line's cost per callback
+(the column audio_clockstats calls GetPosition), the steps in the HAL's
+line (a report's time step more than 1 us off the line's for its frames),
+and the bend (the range of the 10 s means of the one line's residual). The first 0.5 s (the
 warm-up) is left out. Standard library only.
 """
 import argparse
@@ -71,18 +73,30 @@ def main():
             c2, k2 = line(px[i:j], py[i:j])
             loc += [(py[m] - (c2 + k2 * px[m])) / 1e3 for m in range(i, j)]
         i = j
+    # steps: a report's time step against the line's for its frames; the
+    # HAL moves its line in steps on some devices (HDMI on the test Mac)
+    steps = [abs((t1 - t0) - (p1 - p0) * k) / 1e3 for (p0, t0), (p1, t1) in zip(pts, pts[1:])]
+    nstep = sum(1 for x in steps if x > 1.0)
+    # bend: the mean residual of each 10 s of the run, from the one line
+    win = {}
+    for (p, t), r in zip(pts, res):
+        win.setdefault((t - pts[0][1]) // 10_000_000_000, []).append(r)
+    means = [sum(v) / len(v) for v in win.values() if len(v) >= 20]
+    bend = max(means) - min(means) if means else float("nan")
     age = [(r["t_entry_ns"] - r["pos_t_ns"]) / 1e6 for r in rep]
     cost = [r["getpos_ns"] / 1e3 for r in rows]
     sd = math.sqrt(sum(x * x for x in res) / len(res)) if res else float("nan")
     print("| Run | Callbacks | Interval p1 / p50 / p99 / max ms | Reports | Residual, one line: sd / p99 abs / max abs us"
-          " | Residual, 10 s lines: p99 abs / max abs us | Drift ppm | Report age p50 / max ms | Time line cost p50 / p99 us |")
-    print("|---|---|---|---|---|---|---|---|---|")
+          " | Residual, 10 s lines: p99 abs / max abs us | Drift ppm | Report age p50 / max ms | Time line cost p50 / p99 us"
+          " | Steps over 1 us: count / max us | Bend: range of 10 s means us |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|")
     ab = [abs(x) for x in res]
     lb = [abs(x) for x in loc]
     print(f"| {a.label} | {len(rows)} | {pct(iv, 0.01):.2f} / {pct(iv, 0.5):.2f} / {pct(iv, 0.99):.2f} / {max(iv):.2f}"
           f" | {len(pts)} | {sd:.2f} / {pct(ab, 0.99):.2f} / {max(ab):.2f}"
           f" | {pct(lb, 0.99):.2f} / {max(lb) if lb else float('nan'):.2f} | {drift:+.2f}"
-          f" | {pct(age, 0.5):.2f} / {max(age):.2f} | {pct(cost, 0.5):.2f} / {pct(cost, 0.99):.2f} |")
+          f" | {pct(age, 0.5):.2f} / {max(age):.2f} | {pct(cost, 0.5):.2f} / {pct(cost, 0.99):.2f}"
+          f" | {nstep} / {max(steps):.2f} | {bend:.2f} |")
 
 
 if __name__ == "__main__":
