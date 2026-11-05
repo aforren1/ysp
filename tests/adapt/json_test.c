@@ -107,13 +107,16 @@ static void check_grammar(void) {
     ACCEPT("{}", "{}");
     ACCEPT("\xEF\xBB\xBF{\"a\":1}", "{\"a\":1}");
     ACCEPT("[true,false,null]", "[true,false,null]");
-    ACCEPT("[1.5e-3, -2E+10, 0.0, 1e0]", "[1.5e-3,-2E+10,0.0,1e0]");
+    ACCEPT("[1.5e-3, -2E+10, 0.0, 1e0]", "[0.0015,-20000000000,0,1]");
     ACCEPT("\"\\\"\\\\\\/\\b\\f\\n\\r\\t\"", "\"\\\"\\\\/\\u0008\\u000c\\u000a\\u000d\\u0009\"");
     ACCEPT("\"\\u00e9\\u20AC\\ud83d\\ude00\"", "\"\xC3\xA9\xE2\x82\xAC\xF0\x9F\x98\x80\"");
     ACCEPT("\"\xC3\xA9\xE2\x82\xAC\xF0\x9F\x98\x80\xF4\x8F\xBF\xBF\xEF\xBF\xBF\"", NULL);
     ACCEPT("{\"b\":1,\"a\":{\"d\":[],\"c\":{}},\"ab\":2,\"\":0}", "{\"\":0,\"a\":{\"c\":{},\"d\":[]},\"ab\":2,\"b\":1}");
     ACCEPT("[[[[[[[[[[1]]]]]]]]]]", "[[[[[[[[[[1]]]]]]]]]]");
-    ACCEPT("123456789012345678901234567890", "123456789012345678901234567890");
+    ACCEPT("123456789012345678901234567890", "1.2345678901234567890123456789e+29");
+    ACCEPT("[1e999999999, -2E-000000000999999999]", "[1e+999999999,-2e-999999999]");
+    ACCEPT("[0e99999999999999999999, -0.0E-99999999999999999999]", "[0,0]");
+    ACCEPT("[0.0001e1000000003, 1000e-1000000002]", "[1e+999999999,1e-999999999]");
     ACCEPT("\"\x7F\"", "\"\x7F\"");
 
     REFUSE("", YJS_ERR_SYNTAX, 1, 1, "missing");
@@ -134,6 +137,11 @@ static void check_grammar(void) {
     REFUSE("1.", YJS_ERR_SYNTAX, 1, 1, "after '.'");
     REFUSE("1e", YJS_ERR_SYNTAX, 1, 1, "exponent");
     REFUSE("1e+", YJS_ERR_SYNTAX, 1, 1, "exponent");
+    REFUSE("1e1000000000", YJS_ERR_SYNTAX, 1, 1, "past 999999999");
+    REFUSE("[0, -1.5E+0001234567890]", YJS_ERR_SYNTAX, 1, 5, "past 999999999");
+    REFUSE("1234567890e999999999", YJS_ERR_SYNTAX, 1, 1, "past 999999999");    /* 1.23456789e+1000000008 */
+    REFUSE("0.001e-999999997", YJS_ERR_SYNTAX, 1, 1, "past 999999999");
+    REFUSE("1e99999999999999999999999999999", YJS_ERR_SYNTAX, 1, 1, "past 999999999");
     REFUSE("-", YJS_ERR_SYNTAX, 1, 1, "no digits");
     REFUSE("[-]", YJS_ERR_SYNTAX, 1, 2, "no digits");
     REFUSE("NaN", YJS_ERR_SYNTAX, 1, 1, NULL);
@@ -563,7 +571,7 @@ static void check_builder(void) {
             "  \"b\": 0,\n"
             "  \"c\": true,\n"
             "  \"inner\": {\n"
-            "    \"big\": 1e300,\n"
+            "    \"big\": 1e+300,\n"
             "    \"dbl\": 0.1,\n"
             "    \"fixed\": 0.0015,\n"
             "    \"int\": 100,\n"
@@ -572,12 +580,12 @@ static void check_builder(void) {
             "    \"obj\": {},\n"
             "    \"small\": -0.000000001,\n"
             "    \"third\": 0.3333333333333333,\n"
-            "    \"tiny\": -4.94065645841247e-324,\n"
-            "    \"txt\": 1.50E+3\n"
+            "    \"tiny\": -5e-324,\n"
+            "    \"txt\": 1500\n"
             "  },\n"
             "  \"mixed\": [\n"
             "    {\n"
-            "      \"big\": 1e300,\n"
+            "      \"big\": 1e+300,\n"
             "      \"dbl\": 0.1,\n"
             "      \"fixed\": 0.0015,\n"
             "      \"int\": 100,\n"
@@ -586,8 +594,8 @@ static void check_builder(void) {
             "      \"obj\": {},\n"
             "      \"small\": -0.000000001,\n"
             "      \"third\": 0.3333333333333333,\n"
-            "      \"tiny\": -4.94065645841247e-324,\n"
-            "      \"txt\": 1.50E+3\n"
+            "      \"tiny\": -5e-324,\n"
+            "      \"txt\": 1500\n"
             "    },\n"
             "    \"\\u0001\"\n"
             "  ]\n"
@@ -732,12 +740,12 @@ static void check_writer(void) {
         CHECK_I(yjs_write(s, YJS_WRITE_PRETTY, fail_third, NULL), YJS_ERR_WRITE);
         CHECK_I(g_calls, 3);
     }
-    /* -0 and integer text in canonical decimal; other numbers as written */
+    /* every number as its exact value, respelled (v0.2.0) */
     yjs_arena_free(&a);
     CHECK_I(parse_heap(&a, "[-0, 0, -0.0, 1E5, 007e0]", &v, &e), YJS_ERR_SYNTAX);
     yjs_arena_free(&a);
     CHECK_I(parse_heap(&a, "[-0, 0, -0.0, 1E5, 7e0, 18446744073709551616]", &v, &e), YJS_OK);
-    CHECK_S(canon(v, YJS_WRITE_PRETTY), "[0, 0, -0.0, 1E5, 7e0, 18446744073709551616]");
+    CHECK_S(canon(v, YJS_WRITE_PRETTY), "[0, 0, 0, 100000, 7, 18446744073709551616]");
     yjs_arena_free(&a);
 }
 
@@ -870,6 +878,380 @@ static void check_damage(void) {
     printf("damage: 40000 edits of a profile-like document, %d still JSON, each canonical and stable\n", ok);
 }
 
+/* -------------------------------------------------------- canonical numbers */
+
+/* tests/adapt/json_dtoa_ref.py's streams: Python's repr (David Gay's dtoa)
+ * spelled the same way gives these digests; the streams below must match
+ * it draw for draw. */
+#define DTOA_DEFAULT_N        200000
+#define DTOA_DIGEST_DOUBLES   0x9e776768cb748954ULL
+#define DTOA_DIGEST_TEXTS     0xa4a8542f30f55efcULL
+#define DTOA_MULT_CHECKSUM    0xaa3bf4ed42fba9b4ULL
+
+static uint64_t g_sm;
+static uint64_t sm_next(void) {
+    uint64_t z;
+    g_sm += 0x9E3779B97F4A7C15ULL;
+    z = g_sm;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+}
+static uint64_t fnv_add(uint64_t h, const char* s, size_t n) {
+    size_t i;
+    for (i = 0; i < n; i++) h = (h ^ (unsigned char)s[i]) * 0x100000001b3ULL;
+    return (h ^ '\n') * 0x100000001b3ULL;
+}
+static uint64_t bits_of(double x) { uint64_t b; memcpy(&b, &x, sizeof b); return b; }
+static double of_bits(uint64_t b) { double x; memcpy(&x, &b, sizeof x); return x; }
+static uint64_t pow10u(int k) { uint64_t p = 1; while (k-- > 0) p *= 10u; return p; }
+
+static uint64_t decimal_born(uint64_t d, int e) {
+    char t[64];
+    double x;
+    snprintf(t, sizeof t, "%llue%d", (unsigned long long)d, e);
+    if (yjs_parse_double(t, strlen(t), &x) != YJS_OK) x = 1.0;   /* past either end */
+    return bits_of(x);
+}
+
+static uint64_t dtoa_stream(uint64_t i) {
+    uint64_t b, mag;
+    switch (i % 8) {
+    case 0: case 1:
+        b = sm_next();
+        if (((b >> 52) & 0x7FF) == 0x7FF) b ^= (uint64_t)1 << 62;
+        return b;
+    case 2:
+        return sm_next() & 0x800FFFFFFFFFFFFFULL;
+    case 3: case 4: {
+        int k = 1 + (int)(sm_next() % 17);
+        uint64_t d = sm_next() % pow10u(k);
+        int e = (int)(sm_next() % 650) - 340;
+        b = decimal_born(d, e);
+        if (i % 8 == 4) {
+            int64_t step = (sm_next() & 1) ? 1 : -1;
+            mag = b & ~((uint64_t)1 << 63);
+            if (mag == 0) step = 1;
+            if (((mag + (uint64_t)step) >> 52) == 0x7FF) step = -1;
+            b = (b & ((uint64_t)1 << 63)) | (mag + (uint64_t)step);
+        }
+        if (sm_next() & 1) b ^= (uint64_t)1 << 63;
+        return b;
+    }
+    case 5: {
+        int p = (int)(sm_next() % 2098) - 1074;
+        int64_t delta;
+        mag = p >= -1022 ? (uint64_t)(p + 1023) << 52 : (uint64_t)1 << (p + 1074);
+        delta = (int64_t)(sm_next() % 3) - 1;
+        if ((int64_t)mag + delta >= 1 && (int64_t)mag + delta <= (int64_t)0x7FEFFFFFFFFFFFFFLL) mag = (uint64_t)((int64_t)mag + delta);
+        return mag | ((sm_next() & 1) << 63);
+    }
+    case 6: {
+        uint64_t m = sm_next();
+        m >>= 11 + sm_next() % 53;
+        b = bits_of((double)(int64_t)m);
+        return b | ((sm_next() & 1) << 63);
+    }
+    default: {
+        int k = 15 + (int)(sm_next() % 3);
+        uint64_t d = pow10u(k - 1) + sm_next() % (9 * pow10u(k - 1));
+        int e = (int)(sm_next() % 650) - 340;
+        b = decimal_born(d, e);
+        return b | ((sm_next() & 1) << 63);
+    }
+    }
+}
+
+static size_t text_stream(char* t) {
+    size_t p = 0;
+    uint64_t n1, k;
+    if (sm_next() & 1) t[p++] = '-';
+    n1 = sm_next() % 25;
+    if (n1 == 0) {
+        t[p++] = '0';
+    } else {
+        t[p++] = (char)('1' + sm_next() % 9);
+        for (k = 1; k < n1; k++) { uint64_t z = sm_next(); t[p++] = z % 3 == 0 ? '0' : (char)('0' + (z >> 8) % 10); }
+    }
+    if (sm_next() & 1) {
+        uint64_t n2 = 1 + sm_next() % 25;
+        t[p++] = '.';
+        for (k = 0; k < n2; k++) { uint64_t z = sm_next(); t[p++] = z % 3 == 0 ? '0' : (char)('0' + (z >> 8) % 10); }
+    }
+    if (sm_next() & 1) {
+        uint64_t s, z, ev;
+        t[p++] = (sm_next() & 1) ? 'e' : 'E';
+        s = sm_next() % 3;
+        if (s) t[p++] = s == 1 ? '+' : '-';
+        for (z = sm_next() % 3; z > 0; z--) t[p++] = '0';
+        ev = sm_next() % 8 == 0 ? sm_next() % 1000000000 : sm_next() % 400;
+        p += (size_t)sprintf(t + p, "%llu", (unsigned long long)ev);
+    }
+    t[p] = 0;
+    return p;
+}
+
+/* No decimal with one digit fewer reads back to x: the two candidates are
+ * the output's digits without the last, and that plus one. */
+static bool dtoa_shortest(const char* t, double x) {
+    char dig[24], c[48];
+    int nd = 0, e10 = 0, k, pass;
+    const char* s = t;
+    bool frac = false, seen = false;
+    if (*s == '-') s++;
+    for (; *s && *s != 'e'; s++) {
+        if (*s == '.') { frac = true; continue; }
+        if (*s == '0' && !seen) { if (frac) e10--; continue; }
+        seen = true;
+        dig[nd++] = *s;
+        if (frac) e10--;
+    }
+    if (*s == 'e') e10 += atoi(s + 1);
+    /* strip trailing zeros of an integer's text */
+    while (nd > 1 && dig[nd - 1] == '0') { nd--; e10++; }
+    if (nd < 2) return true;
+    for (pass = 0; pass < 2; pass++) {
+        unsigned long long a = 0;
+        double y;
+        for (k = 0; k < nd - 1; k++) a = a * 10u + (unsigned)(dig[k] - '0');
+        a += (unsigned)pass;
+        snprintf(c, sizeof c, "%s%llue%d", x < 0 ? "-" : "", a, e10 + 1);
+        if (yjs_parse_double(c, strlen(c), &y) == YJS_OK && bits_of(y) == bits_of(x)) return false;
+    }
+    return true;
+}
+
+static void check_canonical(void) {
+    static const struct { uint64_t bits; const char* text; } edges[] = {
+        /* tests/adapt/json_dtoa_ref.py edges */
+        { 0x0000000000000000u, "0" },
+        { 0x8000000000000000u, "0" },
+        { 0x0000000000000001u, "5e-324" },
+        { 0x8000000000000001u, "-5e-324" },
+        { 0x0000000000000002u, "1e-323" },
+        { 0x000fffffffffffffu, "2.225073858507201e-308" },
+        { 0x0010000000000000u, "2.2250738585072014e-308" },
+        { 0x7fefffffffffffffu, "1.7976931348623157e+308" },
+        { 0xffefffffffffffffu, "-1.7976931348623157e+308" },
+        { 0x3ff0000000000000u, "1" },
+        { 0xbff0000000000000u, "-1" },
+        { 0x3fb999999999999au, "0.1" },
+        { 0x3fc999999999999au, "0.2" },
+        { 0x3fd3333333333333u, "0.3" },
+        { 0x3fd3333333333334u, "0.30000000000000004" },
+        { 0x3fd5555555555555u, "0.3333333333333333" },
+        { 0x3fe5555555555555u, "0.6666666666666666" },
+        { 0x4059000000000000u, "100" },
+        { 0x3ff8000000000000u, "1.5" },
+        { 0x433fffffffffffffu, "9007199254740991" },
+        { 0x4340000000000000u, "9007199254740992" },
+        { 0x4340000000000001u, "9007199254740994" },
+        { 0x43e0000000000000u, "9223372036854776000" },
+        { 0x43f0000000000000u, "18446744073709552000" },
+        { 0x430c6bf526340000u, "1000000000000000" },
+        { 0x4341c37937e08000u, "10000000000000000" },
+        { 0x4376345785d8a000u, "100000000000000000" },
+        { 0x4415af1d78b58c40u, "100000000000000000000" },
+        { 0x444b1ae4d6e2ef50u, "1e+21" },
+        { 0x4480f0cf064dd592u, "1e+22" },
+        { 0x44b52d02c7e14af6u, "1e+23" },
+        { 0x3eb0c6f7a0b5ed8du, "0.000001" },
+        { 0x3e7ad7f29abcaf48u, "0.0000001" },
+        { 0x3c32725dd1d243acu, "0.000000000000000001" },
+        { 0x3c3bab8cbabb6581u, "0.0000000000000000015" },
+        { 0x3c326da4e4cfc005u, "9.99e-19" },
+        { 0x3bfd83c94fb6d2acu, "1e-19" },
+        { 0x441ac53a7e04bcdau, "123456789012345680000" },
+        { 0x7e37e43c8800759cu, "1e+300" },
+        { 0x01a56e1fc2f8f359u, "1e-300" },
+        { 0x3e60000000000000u, "0.000000029802322387695312" },
+        { 0x4830f0cf064dd592u, "5.764607523034235e+39" },
+        { 0x4840f0cf064dd592u, "1.152921504606847e+40" },
+        { 0x4850f0cf064dd592u, "2.305843009213694e+40" },
+        { 0xc352bd2668e077c4u, "-21098088986959630" },
+        { 0x00000000000f4240u, "4.940656e-318" },
+        { 0x00000000016e3600u, "1.18575755e-316" },
+        { 0x0000008cdcdea440u, "2.989102097996e-312" },
+        { 0x434018601510c000u, "9060801153433600" },
+        { 0x43d055dc36f24000u, "4708356024711512000" },
+        { 0x43e052961c6f8000u, "9409340012568248000" },
+        { 0x3ff3c0ca2a5b1d5du, "1.2345678" },
+        { 0x345e0ffed391517eu, "1.9156918820264798e-56" },
+        { 0x76ea6c767640cd71u, "6.6564021122018745e+264" },
+        { 0x3ed4981285e98e79u, "0.00000491" },
+        { 0x3ed7440bbff418b9u, "0.000005547" },
+        { 0x0040000000000000u, "1.7800590868057611e-307" },
+        { 0x0080000000000000u, "2.848094538889218e-306" },
+        { 0x0290000000000000u, "2.446494580089078e-296" },
+        { 0x00566462f671a587u, "4.982415433709969e-307" },
+        { 0x40fe240c9fbe76c9u, "123456.789" },
+        { 0x3fe0000000000000u, "0.5" },
+        { 0x3fd0000000000000u, "0.25" },
+        { 0x3fc0000000000000u, "0.125" },
+        { 0x0028000000000000u, "6.675221575521604e-308" },
+        { 0x7fe0000000000000u, "8.98846567431158e+307" },
+        { 0x4330000000000000u, "4503599627370496" },
+        { 0x3f589374bc6a7efau, "0.0015" },
+        { 0x4097700000000000u, "1500" },
+        { 0x3e112e0be826d695u, "0.000000001" },
+    };
+    /* source text -> canonical text: the exact value, respelled */
+    static const char* const texts[][2] = {
+        { "1.50", "1.5" }, { "1.5e0", "1.5" }, { "15e-1", "1.5" }, { "0.15E1", "1.5" }, { "0.015e+2", "1.5" },
+        { "-0", "0" }, { "-0.0", "0" }, { "0e10", "0" }, { "0.000e-5", "0" }, { "-0E+0", "0" },
+        { "1E2", "100" }, { "100e-2", "1" }, { "1.0", "1" }, { "0.0012300", "0.00123" }, { "-1.2300e-19", "-1.23e-19" },
+        { "1e20", "100000000000000000000" }, { "1e21", "1e+21" }, { "1e-18", "0.000000000000000001" }, { "1e-19", "1e-19" },
+        { "10e-19", "0.000000000000000001" }, { "10e-20", "1e-19" }, { "0.1e22", "1e+21" }, { "99.9e18", "99900000000000000000" },
+        { "123456789012345678901234567890", "1.2345678901234567890123456789e+29" },
+        { "0.1000000000000000000001", "0.1000000000000000000001" },
+        { "9223372036854775807", "9223372036854775807" }, { "-9223372036854775808", "-9223372036854775808" },
+        { "9223372036854775808", "9223372036854775808" }, { "-99999999999999999999.5", "-99999999999999999999.5" },
+        { "1e999999999", "1e+999999999" }, { "1e-999999999", "1e-999999999" }, { "1e0000000000999999999", "1e+999999999" },
+        { "12.5e-999999999", "1.25e-999999998" }, { "0.00125e999999999", "1.25e+999999996" },
+        { "5e-324", "5e-324" }, { "2.50e+300", "2.5e+300" }, { "0.000001", "0.000001" }, { "1.5e-7", "0.00000015" },
+    };
+    yjs_arena a;
+    char t[96], c[256];
+    size_t k;
+    int n, nfmt, bad_rt = 0, bad_short = 0, bad_spell = 0, bad_exact = 0, bad_fixed = 0;
+    uint64_t total = DTOA_DEFAULT_N, i, h;
+    const char* env = getenv("YJS_TEST_DOUBLES");
+    if (env) total = (uint64_t)strtoull(env, NULL, 10);
+
+    /* every multiplier the small tables give, against the exact ones */
+    h = 0xcbf29ce484222325ULL;
+    for (i = 0; i <= 325; i++) {
+        uint64_t lo, hi;
+        yjs__pow5((uint32_t)i, &lo, &hi);
+        h = (h ^ lo) * 0x100000001b3ULL;
+        h = (h ^ hi) * 0x100000001b3ULL;
+    }
+    for (i = 0; i <= 290; i++) {
+        uint64_t lo, hi;
+        yjs__pow5_inv((uint32_t)i, &lo, &hi);
+        h = (h ^ lo) * 0x100000001b3ULL;
+        h = (h ^ hi) * 0x100000001b3ULL;
+    }
+    CHECK(h == DTOA_MULT_CHECKSUM);
+
+    yjs_arena_init_heap(&a, 0);
+    for (k = 0; k < sizeof edges / sizeof edges[0]; k++) {
+        yjs_value* v = yjs_new_double(&a, of_bits(edges[k].bits));
+        n = yjs_format_double(of_bits(edges[k].bits), t, sizeof t);
+        CHECK_S(n > 0 ? t : "(error)", edges[k].text);
+        CHECK_S(v ? v->u.s : "(null)", edges[k].text);
+        CHECK_S(canon(v, YJS_WRITE_COMPACT), edges[k].text);
+    }
+    /* the API's edges */
+    CHECK_I(yjs_format_double(HUGE_VAL, t, sizeof t), YJS_ERR_RANGE);
+    CHECK_I(yjs_format_double(-HUGE_VAL, t, sizeof t), YJS_ERR_RANGE);
+    CHECK_I(yjs_format_double(of_bits(0x7FF8000000000001ULL), t, sizeof t), YJS_ERR_RANGE);
+    CHECK_I(yjs_format_double(-1.7976931348623157e308, NULL, 0), 24);
+    CHECK_I(yjs_format_double(-1.2345678901234567e-18, t, sizeof t), 37);   /* the longest */
+    CHECK_S(t, "-0.0000000000000000012345678901234566");
+    memset(c, 'x', sizeof c);
+    CHECK_I(yjs_format_double(0.25, c, 4), 4);                              /* no room for the NUL */
+    CHECK(c[0] == 'x');
+    CHECK_I(yjs_format_double(0.25, c, 5), 4);
+    CHECK_S(c, "0.25");
+
+    for (k = 0; k < sizeof texts / sizeof texts[0]; k++) {
+        yjs_value* v = yjs_new_number(&a, texts[k][0], strlen(texts[k][0]));
+        CHECK(v != NULL);
+        if (v) CHECK_S(canon(v, YJS_WRITE_COMPACT), texts[k][1]);
+    }
+
+    /* random doubles: read back, shortest, one spelling; the digest is Python's */
+    g_sm = 0x5953504A534F4E31ULL;
+    h = 0xcbf29ce484222325ULL;
+    for (i = 0; i < total; i++) {
+        double x = of_bits(dtoa_stream(i)), y = 0;
+        unsigned f;
+        nfmt = yjs_format_double(x, t, sizeof t);
+        if (nfmt <= 0 || nfmt > 37) { bad_spell++; continue; }
+        h = fnv_add(h, t, (size_t)nfmt);
+        if (yjs_parse_double(t, (size_t)nfmt, &y) != YJS_OK ? x != 0.0 : (bits_of(y) != bits_of(x) && x != 0.0)) {
+            if (bad_rt++ < 5) fprintf(stderr, "json_test: %016llx -> %s does not read back\n", (unsigned long long)bits_of(x), t);
+        }
+        if (!dtoa_shortest(t, x)) {
+            if (bad_short++ < 5) fprintf(stderr, "json_test: %016llx -> %s is not the shortest\n", (unsigned long long)bits_of(x), t);
+        }
+        if (!yjs_number_ok(t, (size_t)nfmt, &f)) bad_spell++;
+        else if (i % 16 == 0) {
+            /* the writer's spelling of the text is the text */
+            yjs_value* v = yjs_new_number(&a, t, (size_t)nfmt);
+            if (!v || strcmp(canon(v, YJS_WRITE_COMPACT), t) != 0) bad_spell++;
+            yjs_arena_reset(&a);
+        }
+    }
+    CHECK_I(bad_rt, 0);
+    CHECK_I(bad_short, 0);
+    CHECK_I(bad_spell, 0);
+    if (total == DTOA_DEFAULT_N) CHECK(h == DTOA_DIGEST_DOUBLES);
+    printf("canonical doubles: %llu, each reads back and is shortest; digest 0x%016llx\n", (unsigned long long)total,
+           (unsigned long long)h);
+
+    /* random number texts: every accessor reads the canonical text as the
+     * source, and the canonical text is its own canonical text */
+    g_sm = 0x5953504A534F4E32ULL;
+    h = 0xcbf29ce484222325ULL;
+    for (i = 0; i < total / 2; i++) {
+        size_t tn = text_stream(t), cn, c2n;
+        static const int dec[] = { 0, 3, 9, 18 };
+        double d1 = 0, d2 = 0;
+        int r1, r2, j;
+        yjs_value* v = yjs_new_number(&a, t, tn);
+        yjs_value* w;
+        if (!v) {
+            /* only a first digit past 10^+-999999999 is refused */
+            const char* e = strpbrk(t, "eE");
+            h = fnv_add(h, "refused", 7);
+            if (!e || strlen(e) < 10) bad_exact++;
+            continue;
+        }
+        cn = yjs_write_mem(v, YJS_WRITE_COMPACT, c, sizeof c);
+        h = fnv_add(h, c, cn);
+        r1 = yjs_parse_double(t, tn, &d1);
+        r2 = yjs_parse_double(c, cn, &d2);
+        if (r1 != r2 || (r1 == YJS_OK && bits_of(d1) != bits_of(d2) && d1 != 0.0)) {
+            if (bad_exact++ < 5) fprintf(stderr, "json_test: [%s] -> [%s] reads %d %.17g, then %d %.17g\n", t, c, r1, d1, r2, d2);
+        }
+        for (j = 0; j < 4; j++) {
+            int64_t f1 = 0, f2 = 0;
+            r1 = yjs_parse_fixed(t, tn, dec[j], &f1);
+            r2 = yjs_parse_fixed(c, cn, dec[j], &f2);
+            if (r1 != r2 || (r1 == YJS_OK && f1 != f2)) {
+                if (bad_fixed++ < 5) fprintf(stderr, "json_test: [%s] -> [%s] fixed %d: %d %lld, then %d %lld\n", t, c, dec[j], r1,
+                                             (long long)f1, r2, (long long)f2);
+            }
+        }
+        w = yjs_new_number(&a, c, cn);
+        c2n = w ? yjs_write_mem(w, YJS_WRITE_COMPACT, t, sizeof t) : 0;
+        if (!w || c2n != cn || memcmp(t, c, cn) != 0) bad_exact++;
+        if (i % 1024 == 0) yjs_arena_reset(&a);
+    }
+    CHECK_I(bad_exact, 0);
+    CHECK_I(bad_fixed, 0);
+    if (total == DTOA_DEFAULT_N) CHECK(h == DTOA_DIGEST_TEXTS);
+    printf("canonical texts: %llu, each exact and stable; digest 0x%016llx\n", (unsigned long long)(total / 2), (unsigned long long)h);
+
+    /* what was canonical before stays byte for byte: yjs_new_int(), yjs_new_fixed() */
+    {
+        int bad = 0;
+        for (i = 0; i < 100000; i++) {
+            int64_t x = (int64_t)rnd64() >> rnd(64);
+            int d = rnd(19);
+            yjs_value* v = i % 4 == 0 ? yjs_new_int(&a, x) : yjs_new_fixed(&a, x, d);
+            if (!v || strcmp(canon(v, YJS_WRITE_COMPACT), v->u.s) != 0) {
+                if (bad++ < 5) fprintf(stderr, "json_test: fixed %lld/10^%d [%s] written [%s]\n", (long long)x, d, v ? v->u.s : "", g_out);
+            }
+            if (i % 1024 == 0) yjs_arena_reset(&a);
+        }
+        CHECK_I(bad, 0);
+    }
+    yjs_arena_free(&a);
+}
+
 int main(void) {
     printf("ysp_json %s\n", yjs_version());
     CHECK_S(yjs_version(), YJS_VERSION_STRING);
@@ -878,6 +1260,7 @@ int main(void) {
     check_values();
     check_numbers();
     check_builder();
+    check_canonical();
     check_writer();
     check_arena();
     check_damage();

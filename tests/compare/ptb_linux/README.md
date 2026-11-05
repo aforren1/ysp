@@ -41,7 +41,8 @@ uinput`).
 Conditions: Debian 12, kernel 6.11.5-liquorix (PDS, HZ=1000), Intel Core
 i5-14500, AMD RX 6600, Mesa 22.3.6, Xorg with Xfwm4 (compositor off), one
 1920 x 1080 output at 60 Hz (1125 lines a frame). PTB 3.0.19.14 under GNU
-Octave 7.3.0; ysp/screen.h v0.8.0 (`examples/screen/flipstats.c`, SDL
+Octave 7.3.0; ysp/screen.h v0.8.0, its branch's number before the merge
+that made it v0.11.0 (`examples/screen/flipstats.c`, SDL
 3.4.18). Both frame threads on SCHED_FIFO 1 under the `psychtoolbox`
 group's `rtprio` 50. Load: one `while :` shell loop per hardware thread
 (20). Files in `results/2026-10-12/`.

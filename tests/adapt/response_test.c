@@ -1405,6 +1405,170 @@ static void check_quality(void) {
     CHECK_I(r.stamp_hi_ns, 0);
 }
 
+/* v0.6: the parameter table. The switches have no default, so -Wswitch
+ * (CI's -Wall -Werror) stops the build when an enum gains a value, and the
+ * value check below then fails until the table lists it. */
+static const char* choices_name(int v) {
+    switch ((yrsp_choices)v) {
+    case YRSP_CHOICES_ALL: return "all";
+    case YRSP_CHOICES_LIST: return "list";
+    case YRSP_CHOICES_NONE: return "none";
+    }
+    return NULL;
+}
+static const char* kind_name(int v) {
+    switch ((yin_kind)v) {
+    case YIN_KIND_KEYBOARD: return "keyboard";
+    case YIN_KIND_MOUSE: return "mouse";
+    case YIN_KIND_TOUCH: return "touch";
+    case YIN_KIND_PEN: return "pen";
+    case YIN_KIND_GAMEPAD: return "gamepad";
+    case YIN_KIND_BOX: return "box";
+    case YIN_KIND_EYE: return "eye";
+    case YIN_KIND_SYNC: return "sync";
+    case YIN_KIND_USER: return "user";
+    }
+    return NULL;
+}
+static const char* match_name(int v) {
+    switch ((yrsp_match)v) {
+    case YRSP_MATCH_SCANCODE: return "scancode";
+    case YRSP_MATCH_KEYCODE: return "keycode";
+    }
+    return NULL;
+}
+static const char* cross_name(int v) {
+    switch ((yrsp_cross)v) {
+    case YRSP_CROSS_NONE: return "none";
+    case YRSP_CROSS_RISING: return "rising";
+    case YRSP_CROSS_FALLING: return "falling";
+    case YRSP_CROSS_DISTANCE: return "distance";
+    }
+    return NULL;
+}
+
+/* An enum row's "name=value" list: values rising, each the C enum's own
+ * name for it, inside min..max, and every value of the enum listed. */
+static void check_values(const yrsp_param* p, const char* (*name_of)(int)) {
+    const char* s = p->values;
+    int prev = -1, seen[64], v, bad = 0;
+    memset(seen, 0, sizeof seen);
+    CHECK(s != NULL);
+    while (s && *s && !bad) {
+        const char* eq = strchr(s, '=');
+        const char* end = strchr(s, ',');
+        char name[48];
+        if (!end) end = s + strlen(s);
+        if (!eq || eq > end || (size_t)(eq - s) >= sizeof name) { bad = 1; break; }
+        memcpy(name, s, (size_t)(eq - s));
+        name[eq - s] = '\0';
+        v = atoi(eq + 1);
+        if (v <= prev || v >= 64 || v < p->min || v > p->max || !name_of(v) || strcmp(name_of(v), name)) bad = 1;
+        else seen[v] = 1;
+        prev = v;
+        s = *end ? end + 1 : end;
+    }
+    for (v = 0; v < 64 && !bad; v++)
+        if (name_of(v) && !seen[v]) bad = 1;
+    g_checks++;
+    if (bad) {
+        fprintf(stderr, "response_test: FAIL: %s's values [%s] are not its enum's\n", p->name, p->values ? p->values : "");
+        g_failures++;
+    }
+}
+
+typedef struct rsp_field { const char* name; size_t off, size; int choice; } rsp_field;
+#define RSP_F(f) { #f, offsetof(yrsp_desc, f), sizeof(((yrsp_desc*)0)->f), 0 }
+#define RSP_C(f) { "choices." #f, offsetof(yrsp_choice, f), sizeof(((yrsp_choice*)0)->f), 1 }
+static const rsp_field g_rsp_fields[] = {
+    RSP_F(mode), RSP_F(kinds), RSP_F(min_rt_ns), RSP_F(duration_ns), RSP_F(persist), RSP_F(max_responses),
+    RSP_F(allow_held_key), RSP_F(wait_for_key_release), RSP_F(max_hold_ns), RSP_F(trace_cap), RSP_F(trace_kinds),
+    RSP_C(key), RSP_C(name), RSP_C(kind), RSP_C(match), RSP_C(cross), RSP_C(device), RSP_C(control), RSP_C(code),
+    RSP_C(level), RSP_C(hysteresis),
+};
+
+static double rsp_read(const void* base, const rsp_field* f, const char* type) {
+    const unsigned char* b = (const unsigned char*)base + f->off;
+    if (!strcmp(type, "f32")) { float x; memcpy(&x, b, 4); return x; }
+    if (!strcmp(type, "i32") || (!strcmp(type, "enum") && f->size == 4)) { int32_t x; memcpy(&x, b, 4); return x; }
+    if (f->size == 1) return *b;
+    if (f->size == 2) { uint16_t x; memcpy(&x, b, 2); return x; }
+    if (f->size == 4) { uint32_t x; memcpy(&x, b, 4); return x; }
+    { int64_t x; memcpy(&x, b, 8); return (double)x; }
+}
+
+static void check_params(void) {
+    static yrsp_collector z;
+    int n = -1, i, j, k, rows_of[sizeof g_rsp_fields / sizeof g_rsp_fields[0]];
+    const yrsp_param* p = yrsp_params(&n);
+    const int nf = (int)(sizeof g_rsp_fields / sizeof g_rsp_fields[0]);
+    yrsp_desc d;
+    yrsp_choice ch;
+    memset(rows_of, 0, sizeof rows_of);
+    CHECK(p != NULL && n == nf);
+    CHECK(yrsp_params(NULL) == p);
+    /* zero fields, one key: what open makes of them */
+    memset(&d, 0, sizeof d);
+    memset(&ch, 0, sizeof ch);
+    ch.key = "f";
+    d.choices = &ch;
+    d.n_choices = 1;
+    CHECK(yrsp_open(&z, &d));
+    for (i = 0; i < n; i++) {
+        const rsp_field* f = NULL;
+        size_t want = 0;
+        for (j = 0; j < nf; j++)
+            if (!strcmp(p[i].name, g_rsp_fields[j].name)) { f = &g_rsp_fields[j]; rows_of[j]++; }
+        g_checks++;
+        if (!f) { fprintf(stderr, "response_test: FAIL: row %s names no field\n", p[i].name); g_failures++; continue; }
+        CHECK(p[i].type && p[i].unit && p[i].doc && p[i].doc[0]);
+        CHECK(p[i].min <= p[i].def && p[i].def <= p[i].max);
+        for (k = 0; k < i; k++) CHECK(strcmp(p[i].name, p[k].name) != 0);
+        /* the unit follows the name: x_ns is ns, and nothing else is */
+        CHECK((strcmp(p[i].unit, "ns") == 0) == (strlen(p[i].name) > 3 && !strcmp(p[i].name + strlen(p[i].name) - 3, "_ns")));
+        if (!strcmp(p[i].type, "bool")) want = sizeof(bool);
+        else if (!strcmp(p[i].type, "u16")) want = 2;
+        else if (!strcmp(p[i].type, "u32") || !strcmp(p[i].type, "i32") || !strcmp(p[i].type, "f32")) want = 4;
+        else if (!strcmp(p[i].type, "i64")) want = 8;
+        else if (!strcmp(p[i].type, "str")) want = sizeof(const char*);
+        else if (!strcmp(p[i].type, "enum")) want = f->size;
+        g_checks++;
+        if (want != f->size) { fprintf(stderr, "response_test: FAIL: row %s: type %s, field of %d bytes\n",
+                                       p[i].name, p[i].type, (int)f->size); g_failures++; }
+        CHECK((p[i].values != NULL) == (strcmp(p[i].type, "enum") == 0));
+        if (!strcmp(p[i].name, "mode")) check_values(&p[i], choices_name);
+        else if (!strcmp(p[i].name, "choices.kind")) check_values(&p[i], kind_name);
+        else if (!strcmp(p[i].name, "choices.match")) check_values(&p[i], match_name);
+        else if (!strcmp(p[i].name, "choices.cross")) check_values(&p[i], cross_name);
+        else CHECK(p[i].values == NULL);
+        /* the default: a zero field after open (the key sets control and
+         * names the choice; strings have no number) */
+        if (!strcmp(p[i].type, "str") || !strcmp(p[i].name, "choices.control")) continue;
+        {
+            double got;
+            if (!strcmp(p[i].name, "min_rt_ns")) got = (double)z.min_rt_ns;
+            else if (!strcmp(p[i].name, "duration_ns")) got = (double)z.duration_ns;
+            else if (!strcmp(p[i].name, "max_hold_ns")) got = (double)z.max_hold_ns;
+            else if (!strcmp(p[i].name, "mode")) continue;   /* the key made it LIST: below */
+            else got = rsp_read(f->choice ? (const void*)&z.ch[0] : (const void*)&z.d, f, p[i].type);
+            g_checks++;
+            if (got != p[i].def) {
+                fprintf(stderr, "response_test: FAIL: row %s: a zero field is %.17g, the table says %.17g\n",
+                        p[i].name, got, p[i].def);
+                g_failures++;
+            }
+        }
+    }
+    for (j = 0; j < nf; j++) CHECK(rows_of[j] == 1);
+    yrsp_close(&z);
+    /* mode without choices */
+    memset(&d, 0, sizeof d);
+    CHECK(yrsp_open(&z, &d));
+    CHECK_I(z.d.mode, p[0].def);
+    CHECK_S(p[0].name, "mode");
+    yrsp_close(&z);
+}
+
 static void check_strerror(void) {
     CHECK_S(yrsp_strerror(YRSP_ENDED), "ended");
     CHECK_S(yrsp_strerror(YRSP_ERR_ARG), "bad argument");
@@ -1583,7 +1747,7 @@ static void check_frame_loop(void) {
     dd.cols = cols;
     dd.n_cols = (int)(sizeof cols / sizeof cols[0]);
     CHECK(ytr_data_open(&w, &dd));
-    CHECK_S(mo.buf, "trial,response,rt,rt_key_duration,onset_src,onset_tier,onset_residual,landing_residual,"
+    CHECK_S(mo.buf, "trial,response,rt_s,rt_key_duration_s,onset_src,onset_tier,onset_residual_s,landing_residual_s,"
                     "onset_frame,rsp_tier,rsp_flags,n_anticipations,n_early\n");
     yrsp_arm(&g_c, 0);
     yrsp_set_landing(&g_c, fired, 3, 2);
@@ -1877,6 +2041,186 @@ static void check_close_messages(void) {
     CHECK_S(yrsp_error(&g_c), "ysp_response: yrsp_update: the collector is not open");
 }
 
+/* v0.7, CODES SENT: a code sent at the press (ysp/device.h's rule) against
+ * the final responses. */
+static yrsp_sent sent_for(int64_t t, uint32_t sc, int choice, int written) {
+    yrsp_sent x;
+    memset(&x, 0, sizeof x);
+    x.t = t;
+    x.kind = YRSP_KIND_KEYBOARD;
+    x.control = sc;
+    x.choice = (int16_t)choice;
+    x.written = (uint8_t)written;
+    return x;
+}
+
+/* One window: plan onset at 1 s, a press at press_t of sc, the given codes
+ * sent, the final onset (0 = none), then the result's flags. */
+static uint32_t sent_case(int64_t press_t, uint32_t sc, const yrsp_sent* x, int n, int total, int64_t final_onset,
+                          int32_t* n_sent) {
+    yrsp_result r;
+    yrsp_arm(&g_c, 0);
+    onset(MS(1000), 0);
+    if (press_t) key(press_t, sc, 1);
+    CHECK_I(yrsp_set_sent(&g_c, x, n, total), 0);
+    if (final_onset) onset(final_onset, 1);
+    yrsp_update(&g_c, MS(5000));
+    r = finish();
+    if (press_t) key(press_t + MS(50), sc, 0);
+    if (n_sent) *n_sent = r.n_sent;
+    return r.flags;
+}
+
+static void check_sent(void) {
+    yrsp_desc d = fj_desc(1.0, 0.1);
+    yrsp_sent x[3];
+    int32_t ns = -1;
+    uint32_t fl;
+    CHECK(yrsp_open(&g_c, &d));
+    /* agree: the code for F at 1.2 s, F the response */
+    x[0] = sent_for(MS(1200), SC_F, 0, 1);
+    fl = sent_case(MS(1200), SC_F, x, 1, 1, MS(1017), &ns);
+    CHECK(!(fl & YRSP_R_SENT_MISMATCH) && (fl & YRSP_R_RESPONDED));
+    CHECK_I(ns, 1);
+    /* no codes told: no check */
+    yrsp_arm(&g_c, 0);
+    onset(MS(1000), 1);
+    key(MS(1200), SC_F, 1);
+    {
+        yrsp_result r = finish();
+        CHECK(!(r.flags & YRSP_R_SENT_MISMATCH) && r.n_sent == 0);
+    }
+    key(MS(1250), SC_F, 0);
+    /* an anticipation once the final onset came: fired at 1.15 s on the
+     * plan (150 ms), 90 ms from the final onset */
+    x[0] = sent_for(MS(1150), SC_F, 0, 1);
+    fl = sent_case(MS(1150), SC_F, x, 1, 1, MS(1060), NULL);
+    CHECK((fl & YRSP_R_SENT_MISMATCH) && !(fl & YRSP_R_RESPONDED));
+    /* late: 1.0 s from the onset */
+    x[0] = sent_for(MS(2000), SC_F, 0, 1);
+    fl = sent_case(MS(2000), SC_F, x, 1, 1, 0, NULL);
+    CHECK((fl & YRSP_R_SENT_MISMATCH) && !(fl & YRSP_R_RESPONDED));
+    /* early: before the onset */
+    x[0] = sent_for(MS(900), SC_F, 0, 1);
+    fl = sent_case(MS(900), SC_F, x, 1, 1, 0, NULL);
+    CHECK(fl & YRSP_R_SENT_MISMATCH);
+    /* another choice's code: J's code for an F press */
+    x[0] = sent_for(MS(1200), SC_F, 1, 1);
+    fl = sent_case(MS(1200), SC_F, x, 1, 1, 0, NULL);
+    CHECK((fl & YRSP_R_SENT_MISMATCH) && (fl & YRSP_R_RESPONDED));
+    /* a press that is no choice */
+    x[0] = sent_for(MS(1200), SC_K, 0, 1);
+    fl = sent_case(MS(1200), SC_K, x, 1, 1, 0, NULL);
+    CHECK(fl & YRSP_R_SENT_MISMATCH);
+    /* a press the collector never got */
+    x[0] = sent_for(MS(1300), SC_F, 0, 1);
+    fl = sent_case(MS(1200), SC_F, x, 1, 1, 0, NULL);
+    CHECK((fl & YRSP_R_SENT_MISMATCH) && (fl & YRSP_R_RESPONDED));
+    /* the response's code and one for a press the collector never got */
+    x[0] = sent_for(MS(1200), SC_F, 0, 1);
+    x[1] = sent_for(MS(1300), SC_F, 0, 1);
+    fl = sent_case(MS(1200), SC_F, x, 2, 2, 0, NULL);
+    CHECK(fl & YRSP_R_SENT_MISMATCH);
+    /* the response without its code: none sent, or its write failed */
+    fl = sent_case(MS(1200), SC_F, NULL, 0, 0, 0, &ns);
+    CHECK((fl & YRSP_R_SENT_MISMATCH) && ns == 0);
+    x[0] = sent_for(MS(1200), SC_F, 0, 0);
+    fl = sent_case(MS(1200), SC_F, x, 1, 1, 0, &ns);
+    CHECK((fl & YRSP_R_SENT_MISMATCH) && ns == 0);
+    /* no response and no code: agree */
+    fl = sent_case(0, SC_F, NULL, 0, 0, 0, NULL);
+    CHECK(!(fl & YRSP_R_SENT_MISMATCH) && (fl & YRSP_R_TIMEOUT));
+    /* a code not kept cannot be checked */
+    x[0] = sent_for(MS(1200), SC_F, 0, 1);
+    fl = sent_case(MS(1200), SC_F, x, 1, 2, 0, NULL);
+    CHECK(fl & YRSP_R_SENT_MISMATCH);
+    /* the collector refused the fired press: an earlier-stamped J arrived
+     * after the F the code went out for, and J is the response */
+    yrsp_arm(&g_c, 0);
+    onset(MS(1000), 1);
+    key(MS(1300), SC_F, 1);
+    key(MS(1250), SC_J, 1);
+    x[0] = sent_for(MS(1300), SC_F, 0, 1);
+    CHECK_I(yrsp_set_sent(&g_c, x, 1, 1), 0);
+    {
+        yrsp_result r = finish();
+        CHECK(r.response == 1 && (r.flags & YRSP_R_SENT_MISMATCH));
+    }
+    /* both coded: F's code marks a press that is not the response */
+    x[1] = sent_for(MS(1250), SC_J, 1, 1);
+    CHECK_I(yrsp_set_sent(&g_c, x, 2, 2), 0);
+    {
+        yrsp_result r = finish();
+        CHECK(r.response == 1 && r.n_responses == 2 && (r.flags & YRSP_R_SENT_MISMATCH));
+    }
+    key(MS(1400), SC_F, 0);
+    key(MS(1400), SC_J, 0);
+    /* two codes for one press */
+    x[0] = x[1] = sent_for(MS(1200), SC_F, 0, 1);
+    fl = sent_case(MS(1200), SC_F, x, 2, 2, 0, &ns);
+    CHECK((fl & YRSP_R_SENT_MISMATCH) && ns == 2);
+    /* arm clears the codes: a window with no set_sent is not checked */
+    yrsp_arm(&g_c, 0);
+    onset(MS(1000), 1);
+    key(MS(1200), SC_F, 1);
+    {
+        yrsp_result r = finish();
+        CHECK(!(r.flags & YRSP_R_SENT_MISMATCH) && r.n_sent == 0);
+    }
+    key(MS(1250), SC_F, 0);
+    /* arguments */
+    CHECK_I(yrsp_set_sent(&g_c, x, -1, 0), YRSP_ERR_ARG);
+    CHECK_I(yrsp_set_sent(&g_c, x, 2, 1), YRSP_ERR_ARG);
+    CHECK_I(yrsp_set_sent(&g_c, NULL, 1, 1), YRSP_ERR_ARG);
+    CHECK_HAS(yrsp_error(&g_c), "yrsp_set_sent");
+    yrsp_close(&g_c);
+    CHECK_I(yrsp_set_sent(&g_c, x, 1, 1), YRSP_ERR_STATE);
+    /* ALL mode has no choice index: the code's choice is not compared */
+    {
+        yrsp_desc all = d;
+        all.choices = NULL;
+        all.n_choices = 0;
+        CHECK(yrsp_open(&g_c, &all));
+        x[0] = sent_for(MS(1200), SC_K, 0, 1);
+        fl = sent_case(MS(1200), SC_K, x, 1, 1, 0, NULL);
+        CHECK(!(fl & YRSP_R_SENT_MISMATCH) && (fl & YRSP_R_RESPONDED));
+        yrsp_close(&g_c);
+    }
+    /* persist: every response needs its code, and only responses */
+    d.persist = true;
+    CHECK(yrsp_open(&g_c, &d));
+    yrsp_arm(&g_c, 0);
+    onset(MS(1000), 1);
+    key(MS(1200), SC_F, 1);
+    key(MS(1250), SC_F, 0);
+    key(MS(1400), SC_J, 1);
+    key(MS(1450), SC_J, 0);
+    x[0] = sent_for(MS(1200), SC_F, 0, 1);
+    x[1] = sent_for(MS(1400), SC_J, 1, 1);
+    CHECK_I(yrsp_set_sent(&g_c, x, 2, 2), 0);
+    {
+        yrsp_result r = finish();
+        CHECK(r.n_responses == 2 && !(r.flags & YRSP_R_SENT_MISMATCH) && r.n_sent == 2);
+    }
+    /* persist: a code for an anticipation beside the two responses' */
+    key(MS(1050), SC_F, 1);
+    key(MS(1060), SC_F, 0);
+    x[2] = sent_for(MS(1050), SC_F, 0, 1);
+    CHECK_I(yrsp_set_sent(&g_c, x, 3, 3), 0);
+    {
+        yrsp_result r = finish();
+        CHECK(r.n_anticipations == 1 && (r.flags & YRSP_R_SENT_MISMATCH));
+    }
+    CHECK_I(yrsp_set_sent(&g_c, x, 1, 1), 0);    /* J's code missing */
+    {
+        yrsp_result r = finish();
+        CHECK(r.flags & YRSP_R_SENT_MISMATCH);
+    }
+    yrsp_close(&g_c);
+    printf("  codes sent: agree, anticipation, late, early, other choice, not a choice, unseen, missing, failed, "
+           "refused, doubled, persist: ok\n");
+}
+
 int main(void) {
     printf("ysp_response %s\n", yrsp_version());
     check_names();
@@ -1899,8 +2243,10 @@ int main(void) {
     check_capacity();
     check_quality();
     check_strerror();
+    check_params();
     check_helpers();
     check_frame_loop();
+    check_sent();
 #if defined(YRSP_TEST_SDL)
     check_sdl();
 #endif

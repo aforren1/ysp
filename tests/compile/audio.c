@@ -78,7 +78,7 @@ int main(void) {
 #if defined(YAU_NO_MINIAUDIO)
     rc = yau_open(au, &d) ? 1 : 0;   /* must refuse: no backend */
     free(au);
-    if (yau_list_devices(YAU_BACKEND_AUTO, NULL, 0) != YAU_ERR_ARG) return 17;   /* v0.6.0 */
+    if (yau_list_devices(YAU_BACKEND_AUTO, NULL, 0) != YAU_ERR_ARG) return 17;   /* v0.8.0 */
     if (yau_list_inputs(YAU_BACKEND_AUTO, NULL, 0) != YAU_ERR_ARG) return 18;
     if (!g_api.stream_open || !g_api.wav_close || !g_api.sample_at || !g_api.wav_open) return 11;
     return rc == 0 && yau_params(&n) && n > 0 ? 0 : 2;
@@ -92,7 +92,7 @@ int main(void) {
         memset(&dummy, 0, sizeof dummy);
         (void)touch_fields(&dummy);
     }
-    {   /* v0.6.0: the null backend lists its one device and its one input;
+    {   /* v0.8.0: the null backend lists its one device and its one input;
          * CUSTOM has none */
         yau_device_entry e[4];
         if (yau_list_devices(YAU_BACKEND_NULL, e, 4) < 1 || yau_list_devices(YAU_BACKEND_CUSTOM, e, 4) != YAU_ERR_ARG) {
@@ -154,6 +154,12 @@ int main(void) {
         if (yau_capture_is_open(&cap)) { free(au); return 16; }
     }
     free(au);
+    {   /* v0.7.0: values, the last field; set on the enum rows only */
+        const yau_param* t = yau_params(&n);
+        int i, k = 0;
+        for (i = 0; t && i < n; i++) k += (t[i].values != NULL) == !strcmp(t[i].type, "enum");
+        if (!t || k != n) return 17;
+    }
     return yau_params(&n) && n > 0 ? 0 : 7;
 #endif
 }

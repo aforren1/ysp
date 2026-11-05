@@ -1,7 +1,7 @@
 /* rt_test.c - self-checking test for yrt_pump, the event ring, the
  * trace macros, the clock correlation, the device clock fit
- * (rt_test_fit.h) and the per-user folders (rt_test_userdir.h) in
- * ysp/rt.h. No framework: it returns 0 when every check passed and 1 after
+ * (rt_test_fit.h), the per-user folders (rt_test_userdir.h) and the
+ * virtual clock (rt_test_virtual.h) in ysp/rt.h. No framework: it returns 0 when every check passed and 1 after
  * printing each failure. With YRT_TEST_FIT_ONLY it runs the fit and the
  * folders only, as tests/mutate/rt.toml does.
  *
@@ -51,6 +51,7 @@
 #include "ysp/rt.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ---------------------------------------------------------------- harness */
@@ -1141,10 +1142,15 @@ static void test_correlate(void) {
     CHECK(abs_diff(c.other - off, (uint64_t)c.rt_ns) <= (uint64_t)c.width_ns / 2u + 1u, "offset recovered");
 
     /* Edge mode on a 1 ms clock made from ours: the edge is exactly at
-     * value * 1e6 on our clock, so it must lie within half the width. */
+     * value * 1e6 on our clock, so it must lie within half the width. The
+     * default timeout (100 ms) is a wall-clock limit: with 128 busy threads
+     * on 16 cores it ran out after 3 edges (2026-10-22), so this case sets
+     * 30 s, and the frozen clock below checks the default. 4 edges of a
+     * 1 ms clock take at least 3 ms; no upper bound holds under load. */
     memset(&d, 0, sizeof(d));
     d.read_ctx = ms_clock;
     d.edge = true;
+    d.timeout_ns = YRT_S(30);
     t0 = yrt_now_ns();
     rc = yrt_correlate(&d, &c);
     el = yrt_now_ns() - t0;
@@ -1152,7 +1158,7 @@ static void test_correlate(void) {
     CHECK(abs_diff(c.other * 1000000u, (uint64_t)c.rt_ns) <= (uint64_t)c.width_ns / 2u + 1u,
           "edge mode finds the tick boundary within half the width");
     CHECK(c.width_ns < 1000000u, "an edge is far tighter than the tick");
-    CHECK(el < 50000000u, "4 edges of a 1 ms clock take about 4 ms");
+    CHECK(el >= 3000000, "4 edges of a 1 ms clock take at least 3 ms");
     printf("  correlate: self width %llu ns, 1 ms edge width %llu ns, 4 edges in %.1f ms\n",
            (unsigned long long)self_w, (unsigned long long)c.width_ns, (double)el / 1e6);
 
@@ -1162,6 +1168,11 @@ static void test_correlate(void) {
     d.edge = true;
     d.timeout_ns = 2000000u;
     CHECK_I(yrt_correlate(&d, &c), YRT_ERR_TIMEOUT, "edge mode times out");
+    d.timeout_ns = 0;
+    t0 = yrt_now_ns();
+    CHECK_I(yrt_correlate(&d, &c), YRT_ERR_TIMEOUT, "edge mode times out at its default");
+    el = yrt_now_ns() - t0;
+    CHECK(el >= 100000000, "the default timeout is 100 ms");
 
 #if defined(_WIN32)
     {
@@ -1534,6 +1545,7 @@ static void test_version(void) {
 
 #include "rt_test_fit.h"
 #include "rt_test_userdir.h"
+#include "rt_test_virtual.h"
 
 /* -------------------------------------------------------------------- main */
 
@@ -1546,10 +1558,11 @@ int main(void) {
 #if defined(__linux__) && !defined(__EMSCRIPTEN__)
     test_rtprio();
 #endif
+    test_virtual();
 #ifdef YRT_TEST_FIT_ONLY
     /* the mutation runs of tests/mutate/rt.toml: the fit, the per-user
-     * folders and the rtprio checks alone, in seconds */
-    printf("ysp_rt_pump_test: %s (%d failures, fit, folders and rtprio only)\n",
+     * folders, the rtprio checks and the virtual clock alone, in seconds */
+    printf("ysp_rt_pump_test: %s (%d failures, fit, folders, rtprio and virtual clock only)\n",
            g_failures ? "FAILED" : "all checks passed", g_failures);
     (void)caller_ring;
     return g_failures ? 1 : 0;

@@ -1,4 +1,4 @@
-/* ysp/pack.h - v0.2.0 - public domain single-header pack reader
+/* ysp/pack.h - v0.4.0 - public domain single-header pack reader
  *
  *   Reads a ysp pack (docs/pack.md): one zip file in store-only mode, every
  *   entry's data aligned to 4096 bytes, a JSON manifest first, a private
@@ -14,7 +14,9 @@
  *   writes packs; this header only reads them.
  *
  *   Written in the single-header style of the stb / sokol libraries. No
- *   heap after open, no threads, no dependency. File mapping uses the OS
+ *   heap after open, no threads. REQUIRES ysp/json.h beside it (for
+ *   ypak_runs_key()'s numbers); the implementation implements ysp/json.h
+ *   unless the translation unit already does. File mapping uses the OS
  *   (Windows or POSIX) unless YPAK_NO_FILE is defined; everything else is
  *   pure computation. C99 is the floor: it builds as C99, C11 and C++17.
  *
@@ -81,6 +83,9 @@
  *                       when ypak_check() gets it.
  *     YPAK_VERIFY_OPEN  every entry at open: the whole pack is read.
  *     YPAK_VERIFY_NONE  no data hashes after open; ypak_describe() says so.
+ *   Whatever the policy, ypak_verify_all() hashes every entry now and
+ *   ypak_verify_entry() one entry (from the mapping, memory or range
+ *   reader; an incremental pack has no bytes of its own to hash).
  *   Each entry's local header is checked against its central record (and
  *   its padding against zeros) on first access in every policy. An entry
  *   or chunk is hashed once per open pack. A mismatch is YPAK_ERR_CORRUPT
@@ -91,9 +96,10 @@
  *   THREADS AND COST
  *   ---------------------------------------------------------------------
  *   After open, any number of threads may call the lookups, ypak_data(),
- *   ypak_check() and their own cursors; verified flags are bytes stored
- *   with release semantics, so two threads that verify one chunk both
- *   store 1. A cursor belongs to one thread.
+ *   ypak_check(), ypak_verify_entry(), ypak_verify_all() and their own
+ *   cursors; verified flags are bytes stored with release semantics, so
+ *   two threads that verify one chunk or one entry both store the same
+ *   value (each may hash it). A cursor belongs to one thread.
  *   MESSAGES are the exception README.md (Conventions) names for this
  *   header: every failing call writes ypak_error() and pk.error_code, also
  *   the calls that several threads may make at once. Each write first takes
@@ -129,6 +135,21 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.4.0 - ypak_verify_entry(): hashes and checks one entry whatever the
+ *          policy. Under YPAK_VERIFY_NONE, ypak_data() skips the hash and
+ *          ypak_check() returns 0 after the header, so before this no call
+ *          verified a single entry (only ypak_verify_all(), every entry).
+ *          An entry already hashed in this open pack is not hashed again,
+ *          as in ypak_verify_all(). No format change; every other call is
+ *          unchanged.
+ *   v0.3.0 - ypak_runs_key() and ypak_text_style: the key of a glyph-run
+ *          block the pack tool derives from a text stimulus, built here so
+ *          the tool and the player agree byte for byte (docs/pack.md 4.5;
+ *          gap G9 of docs/experiment_format.md). Its numbers come from
+ *          ysp/json.h's yjs_format_double(), so this header now requires
+ *          ysp/json.h, and its implementation implements ysp/json.h unless
+ *          the translation unit already does. No format change; every
+ *          other call is unchanged.
  *   v0.2.0 - the repository conventions (README.md, Conventions). Breaks
  *          the API: ypak_open() returns bool (true also for an incremental
  *          open that wants bytes: pk.need_len > 0 then; ypak_feed() still
@@ -146,7 +167,17 @@
  *          set, artwork, glyph runs, shader, texture, QOI), XXH64,
  *          SHA-256 and CRC-32.
  *
- *   STATUS: v0.2.0 on 2026-10-10: tests/adapt/pack_test.c, the pack tool's
+ *   STATUS: v0.4.0 on 2026-10-26: tests/adapt/pack_test.c checks
+ *   ypak_verify_entry() under each policy and source and on two threads
+ *   (515 checks with MSVC 19.44, MinGW gcc 16.1 and Linux gcc 11.4 under
+ *   ASan and UBSan); 4 of 4 new mutations caught; the Python and MEX
+ *   bindings verify one entry with it (docs/pack.md section 17).
+ *   v0.3.0 on 2026-10-21: tests/adapt/pack_test.c checks
+ *   ypak_runs_key() (468 checks with MSVC 19.44 and MinGW gcc 16.1; quick
+ *   mode under Linux gcc ASan and UBSan); 8 of 8 new mutations caught;
+ *   the pack tool's test builds every derived key with it on MSVC and
+ *   Linux gcc, with the same pack bytes.
+ *   v0.2.0 on 2026-10-10: tests/adapt/pack_test.c, the pack tool's
  *   test and the fuzz target build and pass with MSVC 19.44 /W4 /WX and
  *   MinGW-w64 gcc -Werror, with a test of the claim (two threads failing
  *   lookups at once, every message whole). The rest is v0.1.0's:
@@ -182,9 +213,9 @@
 #define YSP_PACK_H_INCLUDED
 
 #define YPAK_VERSION_MAJOR 0
-#define YPAK_VERSION_MINOR 2
+#define YPAK_VERSION_MINOR 4
 #define YPAK_VERSION_PATCH 0
-#define YPAK_VERSION_STRING "0.2.0"
+#define YPAK_VERSION_STRING "0.4.0"
 
 /* The file source's mmap(), open() and fstat() under -std=c11: the same
  * feature-test macro, for the same reasons, as ysp/rt.h's (set before the
@@ -367,6 +398,12 @@ YPAK_API const void* ypak_data(ypak_pack* p, const ypak_entry* e);
 YPAK_API int ypak_check(ypak_pack* p, const ypak_entry* e, const void* bytes, size_t n);
 /* Verifies every entry now (a preflight), whatever the policy. */
 YPAK_API int ypak_verify_all(ypak_pack* p);
+/* Verifies one entry now, whatever the policy: its local header and its
+ * hashes (each chunk's and the entry hash), from the mapping, memory or
+ * range reader. 0, YPAK_ERR_CORRUPT or another YPAK_ERR_*; YPAK_ERR_ARG for
+ * an incremental pack (fetch the bytes and ypak_check() them). An entry
+ * already hashed in this open pack returns 0 without a second hash. */
+YPAK_API int ypak_verify_entry(ypak_pack* p, const ypak_entry* e);
 
 typedef struct ypak_cursor {
     ypak_pack* p;
@@ -503,6 +540,33 @@ YPAK_API int ypak_runs_find(const ypak_runs* r, const char* key);
 /* A pool string by offset; the view proved it in bounds and NUL-ended. */
 YPAK_API const char* ypak_runs_str(const ypak_runs* r, uint32_t off);
 
+/* The style of a text stimulus: every input of its layout that can differ
+ * between blocks of one entry (docs/pack.md 4.5, "The block key"). The
+ * entry's fallback fonts are one list for the whole entry, so they are not
+ * in it. align and dir number as a block record's. */
+enum { YPAK_ALIGN_START = 0, YPAK_ALIGN_END = 1, YPAK_ALIGN_CENTER = 2 };
+enum { YPAK_DIR_AUTO = 0, YPAK_DIR_LTR = 1, YPAK_DIR_RTL = 2 };
+typedef struct ypak_text_style {
+    const char* font;          /* the FONT entry's name                     */
+    int32_t     face;          /* >= 0                                      */
+    double      size;          /* > 0, units per em                         */
+    double      width;         /* >= 0; 0: no wrapping                      */
+    double      line_height;   /* >= 0; 0: the font's own line              */
+    int32_t     align;         /* YPAK_ALIGN_*                              */
+    int32_t     dir;           /* YPAK_DIR_*                                */
+    const char* lang;          /* BCP 47: A-Z a-z 0-9 '-'; NULL: ""         */
+} ypak_text_style;
+/* The key of the block the pack tool lays out for a text stimulus's text
+ * (n bytes; no NUL inside): the tool and the player both build it here, so
+ * the bytes agree. Format, every field in ASCII but the text:
+ *     FONT#FACE|SIZE|WIDTH|LINE_HEIGHT|ALIGN|DIR|LANG|TEXT
+ * FACE in decimal; numbers as ysp/json.h's yjs_format_double() spells the
+ * double (72 and 72.0 are "72"); ALIGN start, end or center; DIR auto,
+ * ltr or rtl. Returns the key's length in bytes; when it is below cap, buf
+ * holds the key and a NUL (cap 0 sizes the buffer). YPAK_ERR_ARG for a
+ * style outside the comments above or a font name with '#' or '|'. */
+YPAK_API int64_t ypak_runs_key(const ypak_text_style* st, const char* text, size_t n, char* buf, size_t cap);
+
 #ifdef __cplusplus
 }
 #endif
@@ -515,6 +579,16 @@ YPAK_API const char* ypak_runs_str(const ypak_runs* r, uint32_t off);
 #ifdef YSP_PACK_IMPLEMENTATION
 #ifndef YSP_PACK_IMPLEMENTATION_GUARD
 #define YSP_PACK_IMPLEMENTATION_GUARD
+
+/* ypak_runs_key() spells its numbers with yjs_format_double(), so the
+ * player and the tool share one spelling; implemented here unless this
+ * translation unit already implements ysp/json.h. */
+#ifndef YSP_JSON_IMPLEMENTATION_GUARD
+    #define YSP_JSON_IMPLEMENTATION
+    #include "ysp/json.h"
+#else
+    #include "ysp/json.h"
+#endif
 
 #include <string.h>
 #include <stdio.h>
@@ -1800,6 +1874,21 @@ YPAK_API int ypak_verify_all(ypak_pack* p) {
     return 0;
 }
 
+YPAK_API int ypak_verify_entry(ypak_pack* p, const ypak_entry* e) {
+    uint32_t i;
+    ypak__src w;
+    int rc;
+    if (!ypak__valid_entry(p, e)) return p ? ypak__fail(p, YPAK_ERR_ARG, "ypak_verify_entry: not an entry of this open pack") : YPAK_ERR_ARG;
+    if (!p->base_ && !p->rd_)
+        return ypak__fail(p, YPAK_ERR_ARG, "ypak_verify_entry: an incremental pack has no bytes to read; use ypak_check()");
+    i = e->index;
+    memset(&w, 0, sizeof(w));
+    rc = ypak__header_from(p, i, &w);
+    if (rc == 0 && !(YPAK__LOAD(&p->ok_[i]) & 2))
+        rc = ypak__hash(p, i, &w, p->base_ ? p->base_ + p->ent_[i].data : NULL, NULL, 0, ypak_chunk_count(p->ent_[i].size));
+    return rc;
+}
+
 /* --- cursors --------------------------------------------------------------- */
 
 YPAK_API int ypak_cursor_init(ypak_cursor* c, ypak_pack* p, const ypak_entry* e, void* scratch, size_t cap) {
@@ -2251,6 +2340,53 @@ YPAK_API int ypak_runs_view(const void* data, int64_t size, ypak_runs* out, char
         }
     }
     return 0;
+}
+
+YPAK_API int64_t ypak_runs_key(const ypak_text_style* st, const char* text, size_t n, char* buf, size_t cap) {
+    static const char* const al[3] = { "start", "end", "center" };
+    static const char* const di[3] = { "auto", "ltr", "rtl" };
+    char num[3][YJS_DOUBLE_TEXT], face[16];
+    int nn[3], k;
+    const char* lang;
+    const char* parts[9];
+    size_t lens[9], i, total = 0;
+    double x[3];
+    if (!st || !st->font || !st->font[0] || (!text && n) || st->face < 0 || st->align < 0 || st->align > 2 || st->dir < 0 ||
+        st->dir > 2)
+        return YPAK_ERR_ARG;
+    if (!ypak_name_ok(st->font, strlen(st->font)) || strchr(st->font, '#') || strchr(st->font, '|')) return YPAK_ERR_ARG;
+    lang = st->lang ? st->lang : "";
+    for (i = 0; lang[i]; i++) {
+        char c = lang[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-')) return YPAK_ERR_ARG;
+    }
+    if (n && memchr(text, 0, n)) return YPAK_ERR_ARG;
+    x[0] = st->size; x[1] = st->width; x[2] = st->line_height;
+    /* NaN fails every comparison, so each test is written to fail on it */
+    if (!(x[0] > 0 && x[0] <= 1.7976931348623157e308) || !(x[1] >= 0 && x[1] <= 1.7976931348623157e308) ||
+        !(x[2] >= 0 && x[2] <= 1.7976931348623157e308))
+        return YPAK_ERR_ARG;
+    for (k = 0; k < 3; k++) {
+        nn[k] = yjs_format_double(x[k], num[k], sizeof num[k]);
+        if (nn[k] <= 0 || nn[k] >= (int)sizeof num[k]) return YPAK_ERR_ARG;
+    }
+    snprintf(face, sizeof face, "%d", (int)st->face);
+    parts[0] = st->font; parts[1] = face; parts[2] = num[0]; parts[3] = num[1]; parts[4] = num[2];
+    parts[5] = al[st->align]; parts[6] = di[st->dir]; parts[7] = lang; parts[8] = text;
+    for (i = 0; i < 9; i++) {
+        lens[i] = i == 8 ? n : i >= 2 && i <= 4 ? (size_t)nn[i - 2] : strlen(parts[i]);
+        total += lens[i] + (i < 8);
+    }
+    if (buf && total < cap) {
+        size_t at = 0;
+        for (i = 0; i < 9; i++) {
+            if (lens[i]) memcpy(buf + at, parts[i], lens[i]);
+            at += lens[i];
+            if (i < 8) buf[at++] = i == 0 ? '#' : '|';
+        }
+        buf[at] = 0;
+    }
+    return (int64_t)total;
 }
 
 YPAK_API int ypak_runs_find(const ypak_runs* r, const char* key) {

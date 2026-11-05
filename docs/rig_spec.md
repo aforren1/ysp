@@ -2,8 +2,9 @@
 
 Status: proposal of 2026-09-24, revised 2026-10-06. It records the
 decisions made while planning the move from the transport and adaptive
-headers into graphics, audio, video and the tooling above them. Steps 1 to
-6 of section 11 have started; section 11 gives the state of each step.
+headers into graphics, audio, video and the tooling above them. Section
+11 gives the state of each step (updated 2026-10-28) and what comes
+next.
 Each header's design note in `docs/` records what was built and measured.
 When a note and this document disagree, the note is newer.
 
@@ -719,6 +720,10 @@ pack and interprets the experiment definition. Deploy is player plus
 pack. Web deploy is `player.wasm` plus pack. No compile step in the
 common case.
 
+The experiment definition's format, with its open decisions and the
+gaps it found in the C APIs, is in
+[experiment_format.md](experiment_format.md) (decided 2026-10-14).
+
 - **Runner protocol.** A localhost WebSocket with a session token
   carrying control, resource updates, live parameters, status and the
   log stream. The designer, a future desktop shell, the operator
@@ -1169,75 +1174,58 @@ test first and Windows 10 second. The work went to Windows 11 first, on
 the one development machine, and Windows 10 became best effort
 (section 9).
 
-### State on 2026-10-07
+### State on 2026-10-28
+
+Details, versions and measurements per header are in
+[status.md](status.md). This table gives the state of each step.
 
 | Step | State |
 |---|---|
-| 1. `ysp/rt.h`: event ring, clock correlation | Done, v0.5.0, with the instrumentation macros. |
-| 2. `ysp/timeline.h` | v0.4.0: events, tracks, tweens, `ytl_skip`, `ytl_lead`, `ytl_peek`, exact rational base rates (`ytl_rate`), `ytl_window`, `ytl_rt_time`, the `ytl_seq` builder with op tables, `ytl_run`, `ytl_check_ops` and the key arena (4.5.1). |
-| 3. `ysp/screen.h` | v0.3.2 on Windows: DXGI_FLIP and COMPOSITION, flip hooks (codes, triggers, after-flip callbacks), the OS gamma ramp, the Shift+Esc abort and the triple-press panic, the window icon, text input for a text box with a ring record and a flip flag while keys are off the raw path, D3D11 video support on the device. Wayland and macOS are stubs. v0.7.0: the web backend (WebGL2, requestAnimationFrame, the lowest tier; docs/web.md) and the demos on GitHub Pages. v0.8.0 (2026-10-12): Linux X11, GLX with OML target vblanks and Present's per-flip events, X11 key times from the kernel's evdev time, else the X server's (docs/screen.md). No photodiode run. |
-| 4. `ysp/audio.h` | v0.2.0 on WASAPI shared mode: onsets from a fit of device positions, tier 2. Streams (ring-fed voices, the soundtrack path) and WAV streaming. The other backends compile and have never run. No line-in run. |
-| 5. `ysp/gfx.h` | v0.10.0: stimuli, the signed-distance vector program and kind-specialized programs, strokes, sprites, groups, render targets and setup passes, curve runs from Slug-form curve sets (exact area on resolved unturned glyphs, rays elsewhere and chosen automatically for turned runs), the blur pass, NOISE (uniform, Gaussian, integer simplex fBm, each with a bit-exact CPU twin; v0.9 replaced the nested noise hash, which repeated rows), the output stage; a program binary cache, NV12 and I420 video in linear light, texture import (GL, D3D11 through ANGLE), instanced stimuli, and draws reordered where they do not overlap. It requires `ysp/color.h` (v0.1.0). Text layout (Skribidi) belongs to the pack tool and the player (5.2), not to the header. Missed bars: full text pages (docs/gfx.md; a page drawn once into a target costs 0.5 ms a frame), the text program's cold compile, and some of v0.3's GPU bars. |
-| 6. `ysp/video.h` | v0.2.0: scheduler, frame sequence, pl_mpeg, decode-ahead; Media Foundation (DXVA by default), planar upload to the gfx shader by default, the shared D3D11 GPU path as an option, the soundtrack on `ysp/audio.h` streams, base rates. Not built: AVFoundation, capture. |
-| Also built | `ysp/outline.h` v0.2.1 (item 3), `ysp/rdk.h` v0.1.0 (random dot kinematograms, integer state, Python binding), `ysp/table.h` v0.1.0 and `ysp/trials.h` v0.2.0 (CSV and pack tables, order lists, sampling, units, transition balance, rules text). |
-| 7 to 10 | Not started. |
+| 1. `ysp/rt.h` | Done, v0.9.2. |
+| 2. `ysp/timeline.h` | Done for now, v0.8.1. Since v0.4.0: trigger channels (`ytl_trigger_ch()`), parameter tables for the ops and the desc. |
+| 3. `ysp/screen.h` | v0.11.0. On Windows: DXGI_FLIP and COMPOSITION, the window thread (on by default for native Windows), flip records, the abort and the panic, the web backend (v0.7.0). On Linux X11: GLX with OML target vblanks and Present events (GLX_OML, section 16.4); one X screen per process. Wayland and macOS are stubs. |
+| 4. `ysp/audio.h` | v0.8.0. On WASAPI: onsets from a fit of device positions, tier 2, streams, WAV, capture. On Linux: ALSA exclusive on a card's hw: device (AUTO there) and PulseAudio, output and capture, tier 3. CoreAudio ran only as miniaudio's null device, in CI. No line-in run. |
+| 5. `ysp/gfx.h` | v0.17.2: stimuli, curve runs (text and artwork), batched text runs, parameter tables, frame capture. Open items in docs/gfx.md "Next". |
+| 6. `ysp/video.h` | v0.6.0: Media Foundation and pl_mpeg, the soundtrack on audio streams, UTF-8 paths, error codes. Not built: AVFoundation, capture. |
+| Also built | `ysp/outline.h` v0.4.1, `ysp/rdk.h` v0.3.1, `ysp/color.h` v0.4.0, `ysp/trials.h` v0.6.0, `ysp/table.h` v0.3.0, `ysp/dataset.h` v0.2.0, `ysp/json.h` v0.2.1, `ysp/pack.h` v0.4.0 and the pack tool v0.7.0 (item 6), the device headers of docs/devices_spec.md (input, response, box, device, rigfile, serial, parallel, net). The experiment format (docs/experiment_format.md) with its gaps G1 to G13 closed. |
+| Host bindings | Python wheels and MATLAB/Octave MEX for the headers above (docs/bindings.md); ysp-vis 0.11.0 (screen, gfx, video, text) on ysp-audio 0.8.0 and ysp-timeline through function tables (section 12). |
+| 7 and 8 | Not started. |
+| 9 | `ysp/net.h` v0.3.1 (Lab Streaming Layer) is built. Build jobs are not started. |
 
 ### Next, in order
 
 1. **Hardware verification on Windows 11.** Run the photodiode test on
-   DXGI_FLIP and COMPOSITION, and the line-in test for `ysp/audio.h`.
-   The "one vblank early" flips of the windowed DXGI runs were measured
-   again on 2026-10-09 with the scanout as reference: they remain, and
-   come from the depth rule when a window leaves the composed path, not
-   from the grid (section 13). Every later
-   step builds on onset claims that are software timestamps until this
-   step is done. It needs the photodiode and a line-out to line-in
-   cable on the development machine.
-2. **`ysp/gfx.h`**: done for now (v0.10.0). Slug curve runs, the blur
-   pass, setup passes, kind-specialized programs and gradient noise are
-   built; sampler-filtered chroma was measured and deleted. The open
-   items are in docs/gfx.md "Next".
-3. **The outline builder**: curves and bands in the Slug form from font
-   outlines and paths, stroke expansion, the exact-area alpha
-   rasterizer. It is the core of the pack tool's text and artwork
-   (item 6) and runs in parallel with item 2. State on 2026-10-07:
-   `ysp/outline.h` v0.2.1 (docs/outline.md): a bounded TrueType and
-   CFF reader that places glyphs as HarfBuzz does, overlap removal (curve sets carry the RESOLVED flag),
-   strokes without the probe's fold, exact alpha, curve sets in format
-   v1, and the SVG subset reader of 5.2 (Artwork). Missed bars: a Latin
-   stroke (289 to 303 us a glyph against 200; CJK meets its 1 ms) and the
-   sets of the heaviest fonts (Source Han Sans 94 to 103 us a glyph
-   against 66).
-4. **`ysp/timeline.h`**: done for now (v0.4.0: base rates,
-   `ytl_window()`, sequences). `ysp/video.h` applies the rates for any
-   rate other than 1.
-5. **Other platforms.** `ysp/screen.h` on Linux X11 (GLX sync control;
-   v0.8.0 on one X screen; separate X screens, the panic watchdog and
-   the CRTC gamma ramp are next) and Wayland (presentation-time), then
-   macOS through ANGLE's Metal backend. `ysp/audio.h` on ALSA, PulseAudio and CoreAudio. A platform
-   gets its tier from a photodiode or line-in run on that platform, not
-   from CI.
-6. The pack tool as a library, and its CLI, with Skribidi, the outline
-   builder (item 3) and the SVG subset reader (5.2, Artwork). State on
-   2026-10-07: the first piece of its text half is built
-   (docs/layout.md). Skribidi `dee63d6` with two local bidi patches (run merge; rule L1 per line, 2026-10-08), HarfBuzz
-   14.6.0, SheenBidi, libunibreak 6.1 and budouxc are vendored in
-   `third_party/` (7.7 MB, verified byte for byte by
-   `tools/vendor_layout.py`); `pack/layout` v0.1.0 lays text out into
-   curve-run items over on-demand curve sets and stamps each block with
-   the versions and font hashes; it gives Chromium's glyph ids on all 15
-   corpus lines (`tests/layout/`), on MSVC, MinGW and emcc.
-   `examples/layout/gfx_layout.c` shows paragraphs in seven scripts, the bidi bug
-   strings, BudouX breaking and Skribidi's editor (on `ysp/screen.h`
-   v0.3.2's `yscr_text_input()`). Not started: the pack format, the
-   CLI, serialized glyph runs.
-7. The player, native and WebAssembly, and the runner protocol.
-8. The designer.
-9. Build jobs, `ysp/net.h`.
+   DXGI_FLIP and COMPOSITION, and the line-in test for `ysp/audio.h`
+   (`tests/loopback/screen_loopback.c`, `audio_loopback.c`). Every
+   later step builds on onset claims that are software timestamps until
+   this step is done. It needs a photodiode board (docs/devices_spec.md)
+   and a line-out to line-in cable on the development machine. The held
+   frames that DXGI_FLIP showed a vblank early were fixed in
+   `ysp/screen.h` v0.4.3 against the scanout (docs/screen.md); a
+   photodiode run is the check.
+2. **The queue-ahead mode** (section 13): a host queues K frames on
+   COMPOSITION with target times, then sleeps. The probe
+   (docs/queue_probe.md) found it feasible and recommends an opt-in in
+   `ysp/screen.h`, depth set at open, 28 at most: one presentation
+   manager holds at most 31 buffers, and the probe's runs at 62 to 122
+   buffers crashed the development machine twice (bug check 0x133).
+3. **The player** (section 6), native and WebAssembly, and the runner
+   protocol. The format's gaps are closed. First: map each table name to
+   its definition key, and give the loader the defaults that a
+   canonical definition leaves out (D2).
+4. **Other platforms.** `ysp/screen.h` on Linux X11 (GLX sync control)
+   is built: v0.11.0, one X screen per process; it needs a photodiode
+   run for its tier. `ysp/audio.h` on ALSA and PulseAudio is built, tier 3
+   until a line-in run. Next: Wayland (presentation-time), then macOS
+   through ANGLE's Metal backend, and `ysp/audio.h` on CoreAudio with
+   real devices. A platform gets its tier from a photodiode or line-in
+   run on that platform, not from CI.
+5. The designer.
+6. Build jobs.
 
-Items 2 and 3 run in parallel. Measurements on the development
-machine run one at a time: on 2026-10-05 a second measuring job's load
-showed up as a false regression in the first.
+Measurements on the development machine run one at a time: on
+2026-10-05 a second measuring job's load showed up as a false
+regression in the first.
 
 ## 12. Extensions
 
@@ -1284,6 +1272,61 @@ extension implements one of these kinds, each a versioned C vtable:
   each module's license beside its hash. A lab that distributes a
   player with a GPL module distributes under the GPL.
 
+### Host-language bindings (Python, MATLAB, Octave)
+
+Decided with the user on 2026-10-26 and 2026-10-27. The bindings of the
+other headers are in docs/bindings.md. This part is about the rendering
+stack: `ysp/screen.h`, `ysp/gfx.h`, `ysp/video.h` and `ysp/audio.h`.
+The measurements are in docs/av_probe.md and docs/winthread_probe.md.
+
+- **ysp owns the window.** A Python, MATLAB or Octave experiment opens a
+  ysp screen, draws ysp stimuli and gets ysp flip records. ysp does not
+  draw into a PsychoPy, pyglet, Psychtoolbox or MATLAB window: gfx is
+  GL ES 3.0 and those hosts use desktop GL, and the timing claim would
+  end at the host's flip (Presenter, above).
+- **One module for screen, gfx and video: `ysp-vis`.** Their handles
+  point at each other, and screen keeps state per process (EGL, abort,
+  Raw Input). So one compiled extension (`ysp._vis`) implements them,
+  and three thin modules give the imports that match the headers:
+  `ysp.screen`, `ysp.gfx`, `ysp.video`. In MATLAB and Octave the plan is
+  one core library and three thin MEX files, `ysp_screen`, `ysp_gfx` and
+  `ysp_video`, that call into it (to verify).
+- **One implementation of audio and of timeline.** `ysp-audio` and
+  `ysp-timeline` own them. Each exports a table of its C functions (a
+  capsule in Python, an exported function in a MEX file), and `ysp-vis`
+  calls video's audio functions and gfx's timeline functions through
+  forwarders (`bindings/share/`). So a `ysp.audio` device is a movie's
+  soundtrack, and a `ysp.timeline` Timeline drives gfx bindings. A
+  forwarded call costs about 1 ns. A consumer accepts another patch
+  version and refuses another major.minor, ABI, layout setting or struct
+  size; a change to a struct's layout or to a table's function bumps at
+  least the minor version (CLAUDE.md). nanobind's shared types were
+  rejected: a C++ dependency, the stable ABI only from CPython 3.12, the
+  same version coupling, and no help for MEX. `ysp-audio` alone, without
+  SDL3 or ANGLE, serves a PsychoPy or Psychtoolbox experiment that needs
+  only sound at a time.
+- **The window has a thread of its own** (`ysp/screen.h` 0.10.0). A host
+  may wait between trials for any time (`time.sleep`, `input`, `pause`)
+  without a hung window, so the bindings need no pumping wait. A panic
+  releases the screen and the program can then only close it.
+- **Natives in the package.** SDL3 is linked statically, because a
+  `SDL3.dll` binds to the first copy in the process. The ANGLE DLLs
+  (`libEGL.dll`, `libGLESv2.dll`, about 9 MB) ship beside the module,
+  and the binding always passes `desc.angle_dir`, because without it
+  `libEGL.dll` binds to whichever copy is loaded (MATLAB ships an older
+  one). `d3dcompiler_47.dll` is not needed on Windows 10 and 11.
+- **Calls.** The cost is per call: about 1.1 us in Python, 3.7 us in
+  MATLAB and 8.9 us in Octave. So the API takes many stimuli in one call
+  (a draw list, a bound group), and a frame is a few calls. The docs
+  advise `gc.freeze()` after setup in Python. No binding runs a host
+  callback on a C thread (triggers, the audio source, the capture
+  writer, the panic function).
+- **Platforms.** Windows first: the other screen backends are stubs.
+  Octave is a target through the MEX source; a native `.oct` interface
+  is not planned unless a measurement shows that it removes Octave's
+  host stalls (13 to 48 ms, docs/av_probe.md).
+- **Open:** a queue-ahead mode for hosts (section 13).
+
 ## 13. Open questions, to be measured or verified, not decided
 
 - Does SDL3 create an EGL context on Cocoa against ANGLE's Metal
@@ -1313,7 +1356,7 @@ extension implements one of these kinds, each a versioned C vtable:
   than the default (`:0.1`). Answered 2026-10-12 (SDL 3.4.18, Xorg,
   docs/screen.md "Two X screens"): with `DISPLAY=:0.1` yes; from a
   process on `:0.0`, no, the window lands on screen 0. So
-  `ysp/screen.h` v0.8.0's `desc.x_display` picks the X screen per
+  `ysp/screen.h` v0.11.0's `desc.x_display` picks the X screen per
   process.
 - Whether the composition swapchain's present-at-time removes the need
   for the spin-wait under variable refresh.
@@ -1356,7 +1399,7 @@ extension implements one of these kinds, each a versioned C vtable:
   test with `screen_sync_check` (docs/screen.md, "Hand test: the Intel
   setting"). AMD, NVIDIA: not run. Mesa on X11, `vblank_mode=0` in the
   environment (2026-10-12, Mesa 22.3.6): the swap interval reads back 0
-  after asking for 1, and the GLX backend (screen.h v0.8.0) refuses to
+  after asking for 1, and the GLX backend (screen.h v0.11.0) refuses to
   open, so the guard never sees that case; a driconf file setting was
   not tried.
 - Exclusive-mode audio on hardware other than the development laptop
@@ -1411,6 +1454,26 @@ extension implements one of these kinds, each a versioned C vtable:
   microphone at the speaker, and compare onset time and level. If a path
   gates, add an opt-in noise floor (dither near -90 dBFS) so that the sink
   never gets pure zeros; off by default, because it changes the signal.
+- A queue-ahead mode on COMPOSITION (added 2026-10-26, after
+  docs/winthread_probe.md). **Measured 2026-10-27 and 2026-10-28**
+  (docs/queue_probe.md; Iris Xe, driver 32.0.101.7088, 1920 x 1200 at
+  60 Hz, independent flip, no photodiode). Queues of 2 to 28 frames, each
+  for its own vblank, landed 580 of 580 fullscreen and 580 of 580 in a
+  window, all tier 1, as one held frame does (300 of 300); targets up to
+  10 s ahead landed. A Python host slept 1.5 and 6 s through a 28-frame
+  RSVP: all frames on time, no hung window, the records read after the
+  sleep. An abort cancels the queue 0.3 to 1.7 ms after the key; the
+  frame committed for the next vblank still shows, nothing after it. The
+  limit is Microsoft's 31 presentation buffers per manager: runs with 62
+  to 122 buffers stopped the laptop twice (bugcheck 0x133). Cost: 8.8 MB
+  per frame of depth at 1920 x 1200 RGBA8, 0.23 to 0.49 ms of CPU per
+  queued frame. **Recommendation:** build it in `ysp/screen.h` as an
+  opt-in on COMPOSITION (`desc.queue_max`, at most 28; buffers made at
+  open, because buffers added later spoiled the next queue), with the
+  cancel at each abort and at the panic's release plus a second cancel on
+  the frame thread (a present made just before the cancel escaped it in
+  3 of 40 runs). One frame in flight stays the default: a queued frame
+  cannot react to input. Not on DXGI_FLIP, which has no present time.
 
 ## 14. Coverage of jsPsych
 
@@ -1671,7 +1734,10 @@ definition:
   `response_allowed_while_playing`, `frame_time`, `frame_isi`,
   `sequence_reps`, `target_present`, `set_size`.
 - Data columns: `rt`, `response`, `stimulus`, `correct`, `trial_index`,
-  `trial_type`, `time_elapsed`, `rt_key_duration`.
+  `trial_type`, `time_elapsed`, `rt_key_duration`. A time column is
+  seconds and gets `_s` (`rt_s`, `time_elapsed_s`,
+  `rt_key_duration_s`): jsPsych writes ms, and a bare name read with the
+  wrong habit is off by 1000 (decided 2026-10-20; conventions.md, Units).
 - From jspsych-psychophysics, for timed stimulus objects:
   `show_start_time`, `show_end_time`, `motion_start_time`,
   `motion_end_time`, `response_start_time`.
@@ -1789,10 +1855,13 @@ A Builder demo is a C program for a ysp user today. For a user who does
 not write C, every Builder demo needs the player (rank 1 in 15.4). The
 status columns below give the C status.
 
-Totals: 140 demos (97 Coder, 43 Builder). Example 50 (36 + 14), Possible
-44 (29 + 15), Gap 24 (12 + 12), Out 22 (20 + 2). Updated 2026-10-09 for
+Totals: 140 demos (97 Coder, 43 Builder). Example 57 (40 + 17), Possible
+37 (25 + 12), Gap 24 (12 + 12), Out 22 (20 + 2). Updated 2026-10-09 for
 `gfx_gratings`, `trial_2afc_adaptive`, `trial_rdk`, `trial_stroop`,
-`trial_sternberg` and `trial_images` (15 demos from Possible to Example).
+`trial_sternberg` and `trial_images` (15 demos from Possible to Example),
+and 2026-10-13 for `trial_eeg_triggers`, `trial_scanner_sync`,
+`gfx_gamma_null`, `trial_movie`, `color_patch` and `trial_instructions`
+(7 more).
 
 ### 15.2 Coder demos
 
@@ -1802,7 +1871,7 @@ Paths are from `psychopy/demos/coder/`.
 
 | Demo | What it shows | ysp headers | Status |
 |---|---|---|---|
-| `basic/hello_world.py` | Two lines of text, one with an accented capital | gfx, outline | Example: `gfx_text` |
+| `basic/hello_world.py` | Two lines of text, one with an accented capital | gfx, outline | Example: `gfx_text`; `trial_instructions` (paragraph pages) |
 | `stimuli/gabor.py` | A gabor with drifting phase | gfx | Example: `gfx_hello` |
 | `stimuli/counterphase.py` | A grating whose contrast follows a sine (counterphase flicker) | gfx, timeline | Example: `gfx_gratings` tile 1 (a contrast track; the achieved frequency from the flip records) |
 | `stimuli/plaid.py` | Two gratings summed into a drifting plaid | gfx | Example: `gfx_gallery` page 1 (plaid tile) |
@@ -1824,21 +1893,21 @@ Paths are from `psychopy/demos/coder/`.
 | `stimuli/imagesAndPatches.py` | Images at pixel size, mirrored; an image as a mask; frame intervals | gfx, pack, screen | Possible, with the same mask question |
 | `stimuli/bufferImageStim.py` | Many static stimuli captured into one image, and the speed gain | gfx (targets, setup passes) | Example: `gfx_gallery` page 5 (target drawn once), page 7 (static text rendered at setup) |
 | `stimuli/variousVisualStims.py` | A gabor, a movie, text and an image turned by the mouse | gfx, video, screen | Possible |
-| `stimuli/MovieStim.py` | A movie with sound; play, pause, stop by keys | video, audio | Example: `video_play` (keys for pause not shown) |
+| `stimuli/MovieStim.py` | A movie with sound; play, pause, stop by keys | video, audio | Example: `trial_movie` (pause and seek by keys, the soundtrack as a stream); `video_play` |
 | `stimuli/soundStimuli.py` | Tones by note name and by frequency | audio | Example: `audio_tone` |
 | `stimuli/ratingScale.py` | Rating scales: choices, a line, an accept button | None | Gap: widget layer (14.7 rank 4) |
 | `stimuli/screensAndWindows.py` | Two windows, on one screen or on two | screen (one `yscr_screen` per display) | Possible on two displays. Two windows on one display: gap, untimed screens (4.2 proposal) |
 | `stimuli/embeddedOpenGL.py` | Raw OpenGL calls among stimuli | gfx (USER pipeline) | Possible through the shader contract; raw GL in the frame is not supported. A Renderer extension (12) draws into a target |
 | `stimuli/stim3d.py` | Lit, textured 3D boxes and spheres | None | Out: 3D is a Renderer extension (12), not a header |
-| `stimuli/colors/colors.py` | Type a value in a color space, see the color | color, gfx | Possible: a key cycles the space in place of the slider. `color_convert` shows the conversions without a display |
-| `stimuli/colors/hsvColorPalette.py` | An HSV color picker | color | Out: HSV is device RGB with no calibration, and every `ysp/color.h` conversion goes through one. A lightness and hue picker in CIELAB or Oklab is possible |
+| `stimuli/colors/colors.py` | Type a value in a color space, see the color | color, gfx | Example: `color_patch` (CIELAB, xyY or DKL; Tab cycles the space in place of the slider). `color_convert` shows the conversions without a display |
+| `stimuli/colors/hsvColorPalette.py` | An HSV color picker | color | Out: HSV is device RGB with no calibration, and every `ysp/color.h` conversion goes through one. `color_patch` is a lightness, chroma and hue picker in CIELAB |
 
 #### Text
 
 | Demo | What it shows | ysp headers | Status |
 |---|---|---|---|
 | `stimuli/text/textStimuli.py` | Fonts, Unicode, turned and mirrored text, bidi Arabic | pack/layout, outline, gfx | Example: `gfx_layout` (seven scripts, bidi), `gfx_gallery` page 8 (turning text) |
-| `stimuli/text/textbox_simple.py` | Two text boxes with options | pack/layout, gfx | Example: `gfx_text`, `gfx_layout` |
+| `stimuli/text/textbox_simple.py` | Two text boxes with options | pack/layout, gfx | Example: `gfx_text`, `gfx_layout`, `trial_instructions` |
 | `stimuli/text/textbox_editable.py` | An editable text box | pack/layout, screen (`yscr_text_input()`) | Example: `gfx_layout` (Skribidi's editor) |
 | `stimuli/text/textbox_glyph_placement.py` | The box of the glyph at a string index, checked by the mouse | pack/layout, gfx (`ygfx_hit_index()` on a curve run) | Possible |
 | `stimuli/text/fontLayout.py` | A diagram of the font metrics that place lines | outline (`yol_font_hmetrics()`, font metrics), gfx | Possible |
@@ -1860,7 +1929,7 @@ Paths are from `psychopy/demos/coder/`.
 |---|---|---|---|
 | `timing/timeByFrames.py` | Frame intervals: histogram, drops | screen | Example: `screen_flipstats` |
 | `timing/timeByFramesEx.py` | The same with process priority and no garbage collection | screen, rt | Example: `screen_flipstats --load N` (no GC in C) |
-| `timing/callOnFlip.py` | A function called at the flip, for a trigger | screen (flip hooks), device | Example: `device_trigger_flip` |
+| `timing/callOnFlip.py` | A function called at the flip, for a trigger | screen (flip hooks), device | Example: `device_trigger_flip`; `trial_eeg_triggers` (codes at a stimulus's flip, at a key, at the trial's end) |
 | `timing/clocksAndTimers.py` | Clocks, count-down timers | rt | Possible; `rt_jitter` shows what the waits are worth |
 | `timing/millikeyKeyboardTimingTest.py` | Keyboard stamp error against key presses a MilliKey generates on command | serial (the command), screen (the key) | Possible: a MilliKey is a keyboard-mode box (docs/devices_spec.md 10.1). `screen_input` measures injected keys in software |
 
@@ -1885,11 +1954,11 @@ Paths are from `psychopy/demos/coder/`.
 
 | Demo | What it shows | ysp headers | Status |
 |---|---|---|---|
-| `hardware/parallelPortOutput.py` | A pin held high for N frames with a stimulus | parallel, device, screen | Example: `parallel_trigger`, `device_trigger_flip` |
+| `hardware/parallelPortOutput.py` | A pin held high for N frames with a stimulus | parallel, device, screen | Example: `parallel_trigger`, `device_trigger_flip`, `trial_eeg_triggers` (a stimulus code at its flip) |
 | `hardware/cedrusRB730.py` | A Cedrus RB-730: info, round trip, keys | device (XID), box | Possible (no box on hand; docs/devices_spec.md) |
-| `hardware/fMRI_launchScan.py` | Wait for scanner sync pulses, or emulate them | screen (a pulse as a key), device (`YIN_KIND_SYNC` from a board), timeline | Possible; the pulse emulator is caller code |
-| `hardware/monitorDemo.py` | Monitor profiles: distance, calibration by name | color (`ycol_cal` load), gfx (`ygfx_view`) | Possible |
-| `hardware/gammaMotionNull.py` | Display gamma by motion nulling (Ledgeway and Smith 1994) | gfx, stair, response | Possible (proposed: `gfx_gamma_null`, 15.5) |
+| `hardware/fMRI_launchScan.py` | Wait for scanner sync pulses, or emulate them | screen (a pulse as a key), device (`YIN_KIND_SYNC` from a board), timeline | Example: `trial_scanner_sync` (pulses from a key, a line board or an emulator thread) |
+| `hardware/monitorDemo.py` | Monitor profiles: distance, calibration by name | color (`ycol_cal` load), gfx (`ygfx_view`) | Example: `color_patch` (a `.yspcal` by path, or a nominal one, flagged; no viewing distance) |
+| `hardware/gammaMotionNull.py` | Display gamma by motion nulling (Ledgeway and Smith 1994) | gfx, stair, response | Example: `gfx_gamma_null` (a staircase on the output stage's table; the readback checks the codes) |
 | `hardware/gammaMotionAnalysis.py` | Plots of the nulling staircases | None | Out: offline analysis (4.8) |
 | `hardware/testSoundLatency.py` | Sound onset latency measured by a LabJack | audio | Possible by line-in: `tests/loopback/audio_loopback.c` (a test, not an example) |
 | `hardware/VSHD_Distortion.py` | Barrel distortion for an in-scanner display | gfx (target, USER shader) | Example: `gfx_gratings` tile 5 (a target through a USER shader, ysp/gfx.h v0.10.4) |
@@ -1962,7 +2031,7 @@ Paths are from `psychopy/demos/builder/`. `Experiments/GoNoGo/` and
 |---|---|---|---|
 | `Feature Demos/gratings/` | Contrast-modulated sine and noise, beats | gfx (USER shader) | Example: `gfx_gratings` |
 | `Feature Demos/noise/` | Binary, filtered (band-pass), Gabor and image noise; new samples per repeat | gfx (NOISE) | Gap: filtered noise. Binary, uniform, Gaussian and simplex exist; `ysp/gfx.h` lists filtered noise on the GPU as not done |
-| `Feature Demos/movies/` | A movie with play, pause and seek by a button and a slider | video, gfx | Possible with keys for the controls (the widgets: 14.7 rank 4) |
+| `Feature Demos/movies/` | A movie with play, pause and seek by a button and a slider | video, gfx | Example: `trial_movie`, with keys for the controls (the widgets: 14.7 rank 4) |
 | `Feature Demos/panorama/` | A 360 degree image, looked around by mouse or keys | gfx (USER shader, IMAGE) | Possible (texture size and target sampling not verified, 15.6) |
 | `Feature Demos/sliders/` | Slider styles, vertical and horizontal | None | Gap: widget layer (14.7 rank 4) |
 | `Feature Demos/progress/` | A progress bar | gfx | Possible |
@@ -1975,10 +2044,10 @@ Paths are from `psychopy/demos/builder/`. `Experiments/GoNoGo/` and
 
 | Demo | What it shows | ysp headers | Status |
 |---|---|---|---|
-| `Hardware/EEG_parallel_component/` | Parallel port codes at a stimulus, a key, a click | device (parallel), screen, response | Example: `device_trigger_flip`, `parallel_trigger`. Response-locked codes are caller code (proposed: `trial_eeg_triggers`) |
-| `Hardware/EEG_serial_component/` | The same through a serial trigger device | device, screen | Example: `device_trigger_flip --out` |
-| `Hardware/EEG_serial_code/` | Serial triggers written from code | serial, device | Example: `serial_trigger`, `device_trigger_flip` |
-| `Hardware/fMRI/` | Wait for the scanner's key, then non-slip timing | screen, input, timeline | Possible (proposed: `trial_scanner_sync`) |
+| `Hardware/EEG_parallel_component/` | Parallel port codes at a stimulus, a key, a click | device (parallel), screen, response | Example: `trial_eeg_triggers` (stimulus, response and end codes through the rig profile's trigger role; no click), `device_trigger_flip`, `parallel_trigger` |
+| `Hardware/EEG_serial_component/` | The same through a serial trigger device | device, screen | Example: `trial_eeg_triggers` (a serial trigger box as the rig profile's role), `device_trigger_flip --out` |
+| `Hardware/EEG_serial_code/` | Serial triggers written from code | serial, device | Example: `serial_trigger`, `device_trigger_flip`, `trial_eeg_triggers` |
+| `Hardware/fMRI/` | Wait for the scanner's key, then non-slip timing | screen, input, timeline | Example: `trial_scanner_sync` |
 | `Hardware/EGI_netstation/` | Stroop with NetStation tags | None | Gap: `ysp/net.h` and the NetStation protocol |
 | `Hardware/lab_streaming_layer/` (and `lab_streaming_layer_legacy/`) | LSL markers at a stimulus and a key | None | Gap: `ysp/net.h` LSL outlet (4.7) |
 | `Hardware/eyetracking/` | Calibration, recording, an ROI and a gaze cursor | None | Gap: eye-tracker input source (14.7 rank 6) |
@@ -1995,7 +2064,7 @@ Paths are from `psychopy/demos/builder/`. `Experiments/GoNoGo/` and
 | `Helper Tools/keyNameFinder/` | Key names | screen | Example: `screen_input --hand` |
 | `Helper Tools/spatialUnits/` | One square in several units | gfx (`ygfx_view`, `YGFX_DEG`) | Possible |
 | `Helper Tools/clockFace/` | Clock hands turned by routine time | gfx, timeline | Possible |
-| `Helper Tools/colors/` | Type a color in a space, see it | color, gfx | Possible with keys; `color_convert` |
+| `Helper Tools/colors/` | Type a color in a space, see it | color, gfx | Example: `color_patch` (keys); `color_convert` |
 | `Helper Tools/drawPolygon/` | Click vertices, then change size, position and angle by sliders | gfx (POLYGON to 16 vertices, POLYLINE to 224 points), screen | Possible with keys in place of the sliders |
 | `Helper Tools/achorVSalignment/` | Text anchor against text alignment, set by sliders | gfx (`anchor`), pack/layout | Possible with keys |
 
@@ -2018,7 +2087,7 @@ user can do today, but with work each time or with a conversion. The
 | 9 | Untimed screens: an operator window beside the stimulus | None (new) | `ysp/screen.h` (4.2 proposal) | 1: `dualWindow/` | 1: `screensAndWindows.py` (two windows on one display) | Small |
 | 10 | Bit-state box decoder (PST SRBox) | None | `ysp/box.h` (docs/devices_spec.md 10.1) | 1: `pstbox.py` | None | Small |
 | 11 | LabJack glue | None | `ysp/labjack.h` (docs/devices_spec.md) | 1: `labjack_u3.py` | None | Small |
-| Burden | Source formats: `.xlsx` conditions, JPEG, MP3 | 5 (images) | Pack tool importers (docs/pack.md takes CSV, PNG, WAV) | None | 16 demos load `.xlsx` conditions; 11 use JPEG; 1 uses MP3 | Small each |
+| Burden | Source formats: `.xlsx` conditions, JPEG, MP3 | 5 (images) | Pack tool importers (docs/pack.md takes CSV, PNG, WAV; `.xlsx` and JPEG from tool v0.4.0, 2026-10-13: all 23 demo workbooks read, 14 of 15 demo photographs; MP3 not taken) | None | 16 demos load `.xlsx` conditions; 11 use JPEG; 1 uses MP3 | Small each |
 | Burden | Text in C | 3 | Done for C: `pack/layout` v0.1.0 (Skribidi, `YSP_BUILD_LAYOUT`); the player's text is not built | None | Every Builder demo with instructions or word stimuli | None left in C; a build option and `third_party/` |
 
 Notes on the merge with 14.7:
@@ -2029,7 +2098,8 @@ Notes on the merge with 14.7:
 - 14.7 rank 3 (text) is closed for C programs since `pack/layout`
   v0.1.0. It stays open for the player.
 - 14.7 rank 5 (image decode) is closed for PNG by the pack tool
-  (lodepng). JPEG is not taken; PsychoPy's demos use it for photographs.
+  (lodepng), and for JPEG by pack tool v0.4.0 (stb_image; docs/pack.md
+  4.9).
 - Ranks 4, 5, 8, 9, 10 and 11 have no jsPsych counterpart. Ranks 4,
   10 and 11 are already in docs/devices_spec.md.
 
@@ -2050,21 +2120,24 @@ the response examples (330 to 500 lines).
 | 1 | `trial_2afc_adaptive` (`examples/response/`), built | `psychophysicsStairsInterleaved/`, `psychophysicsStaircase/`, `JND_staircase_exp.py` | gfx, color, trials, stair, quest, response, timeline | A spatial 2AFC gabor detection on a display: two staircases and one QUEST+ track interleaved in `ysp/trials.h`; contrast set through the calibration with its gamut check; sizes in deg. Today the adaptive headers run only against simulated observers | 450 | None (a nominal calibration unless a `.yspcal` is given) |
 | 2 | `trial_rdk` (`examples/rdk/`), built | `dots.py`, `dot_gabors.py`; contrib `plugin-rdk` (14.4) | rdk, gfx, timeline, trials, response | An RDK direction discrimination with RT from the motion onset's flip record, coherence per trial from a factor, and the field's replay digest in each data row | 350 | None |
 | 3 | `trial_stroop` (`examples/response/`), built | `stroop/`, `stroopExtended/`, `EGI_netstation/` (task part) | pack/layout, outline, gfx, table, trials, response | Words as text in a timed trial: color words in an ink color, conditions from a CSV through `ysp/table.h`, a practice block with feedback text, congruency in the row | 400 | None; needs `YSP_BUILD_LAYOUT` (or one-line words by advances, as `outline_font`) |
-| 4 | `trial_movie` (`examples/video/`) | `Feature Demos/movies/`, `MovieStim.py`; jsPsych `video-keyboard-response` (14.3) | video, audio, timeline, gfx, response | RT from a video frame's flip record (the frame named in the trial row); pause and seek by key; each trial's shown, repeated and dropped counts | 350 | A sound device for the soundtrack (none with `--sim`) |
+| 4 | `trial_movie` (`examples/video/`), built | `Feature Demos/movies/`, `MovieStim.py`; jsPsych `video-keyboard-response` (14.3) | video, audio, timeline, gfx, response | RT from a video frame's flip record (the frame named in the trial row); pause and seek by key; each trial's shown, repeated and dropped counts | 350 | A sound device for the soundtrack (none with `--sim`) |
 | 5 | `gfx_gratings` (`examples/gfx/`), built | `counterphase.py`, `secondOrderGratings.py`, `rotatingFlashingWedge.py`, `Feature Demos/gratings/` | gfx (GRATING, GABOR, USER), timeline | Phase drift on a timeline track; counterphase flicker as a contrast track, with the achieved frequency from the flip records; contrast-modulated gratings and a noise-carrier envelope in USER shaders; a flashing checkerboard wedge | 400 | None |
 | 6 | `trial_sternberg` (`examples/timeline/`), built | `sternberg/`; jsPsych `animation` (14.3) | timeline (`ytl_seq` op tables), gfx, outline, trials, response | A timed sequence: a memory set of 1 to 6 digits at a fixed SOA, a probe, and the landing record of each item; the SOAs measured from the flip records; set size as a factor | 350 | None |
-| 7 | `color_patch` (`examples/color/`) | `monitorDemo.py`, `colors/colors.py`, `Helper Tools/colors/`, `hsvColorPalette.py` (as a CIELAB picker) | color, gfx, screen | A calibrated patch: a `.yspcal` loaded; a color given in CIELAB, xyY or DKL; keys walk hue and chroma; the device RGB, the gamut distance and refusals printed; the OS gamma ramp left alone | 250 | A calibration of the display for a claim about light; a nominal one otherwise (flagged) |
-| 8 | `trial_eeg_triggers` (`examples/device/`) | `EEG_parallel_component/`, `EEG_serial_component/`, `EEG_serial_code/`, `parallelPortOutput.py`, `callOnFlip.py` | device, screen, gfx, timeline, trials, response | A stimulus code at the flip through the trigger channel, a response code at the key event, and an end code; each write's record beside the flip and response records in the row. `device_trigger_flip` has no stimulus or response | 350 | A trigger output for real lines; the in-process box without one |
+| 7 | `color_patch` (`examples/color/`), built | `monitorDemo.py`, `colors/colors.py`, `Helper Tools/colors/`, `hsvColorPalette.py` (as a CIELAB picker) | color, gfx, screen | A calibrated patch: a `.yspcal` loaded; a color given in CIELAB, xyY or DKL; keys walk hue and chroma; the device RGB, the gamut distance and refusals printed; the OS gamma ramp left alone | 250 | A calibration of the display for a claim about light; a nominal one otherwise (flagged) |
+| 8 | `trial_eeg_triggers` (`examples/device/`), built | `EEG_parallel_component/`, `EEG_serial_component/`, `EEG_serial_code/`, `parallelPortOutput.py`, `callOnFlip.py` | device, screen, gfx, timeline, trials, response | A stimulus code at the flip through the trigger channel, a response code at the key event, and an end code; each write's record beside the flip and response records in the row. `device_trigger_flip` has no stimulus or response | 350 | A trigger output for real lines; the in-process box without one |
 | 9 | `trial_images` (`examples/pack/`), built | `randomisedBlocks/`, `GoNoGo/`, `navon/`, `mentalRotation/`, `face_jpg.py` | pack, gfx (IMAGE), table, trials (groups), response | The pack path end to end: textures and the conditions table read from a pack built by `ypak`; blocks in random order; images turned for mental rotation | 350 | None; needs a pack (`ypak build`, `YSP_BUILD_PACK`) |
-| 10 | `trial_instructions` (`examples/layout/`) | `hello_world.py`, `textbox_simple.py`; jsPsych `instructions` (14.3) | pack/layout, outline, gfx (setup passes, targets), screen | Paragraph pages laid out once and rendered into targets at setup, turned by keys; the time each page was shown, from the flip records | 250 | None; needs `YSP_BUILD_LAYOUT` |
-| 11 | `trial_scanner_sync` (`examples/timeline/`) | `Hardware/fMRI/`, `fMRI_launchScan.py` | input (`YIN_KIND_SYNC`), device or screen, timeline, trials | Trials on a base anchored at a scanner pulse (non-slip timing): pulses from a key or a line board, each onset as an offset from the volume pulse; an emulator thread for runs without a scanner | 300 | A scanner or a line board for real pulses; the emulator without |
-| 12 | `gfx_gamma_null` (`examples/gfx/`) | `gammaMotionNull.py` | gfx (square-wave gratings, output stage), stair, response, timeline | A psychophysical check of the display's linearization by motion nulling, through the output stage's lookup table, with no photometer | 300 | None |
+| 10 | `trial_instructions` (`examples/layout/`), built | `hello_world.py`, `textbox_simple.py`; jsPsych `instructions` (14.3) | pack/layout, outline, gfx (setup passes, targets), screen | Paragraph pages laid out once and rendered into targets at setup, turned by keys; the time each page was shown, from the flip records | 250 | None; needs `YSP_BUILD_LAYOUT` |
+| 11 | `trial_scanner_sync` (`examples/timeline/`), built | `Hardware/fMRI/`, `fMRI_launchScan.py` | input (`YIN_KIND_SYNC`), device or screen, timeline, trials | Trials on a base anchored at a scanner pulse (non-slip timing): pulses from a key or a line board, each onset as an offset from the volume pulse; an emulator thread for runs without a scanner | 300 | A scanner or a line board for real pulses; the emulator without |
+| 12 | `gfx_gamma_null` (`examples/gfx/`), built | `gammaMotionNull.py` | gfx (square-wave gratings, output stage), stair, response, timeline | A psychophysical check of the display's linearization by motion nulling, through the output stage's lookup table, with no photometer | 300 | None |
 
 Examples 1 to 4 close the first-order holes: adaptive methods, RDK and
 video are built and tested but no example runs them with a participant.
 Examples 8 and 11 need hardware for their claims and run without it.
-Built by 2026-10-09: 1, 2, 3, 5, 6 and 9 ("built" in the Program
-column); 15.2 and 15.3 name them.
+Built by 2026-10-09: 1, 2, 3, 5, 6 and 9; by 2026-10-13: 4, 7, 8, 10, 11
+and 12 ("built" in the Program column; 4, 7 and 10 at 520, 526 and 472
+lines against the estimates of 350, 250 and 250: each has a `--sim`
+self-check and an `--auto` run of the same script in a window); 15.2
+and 15.3 name them.
 
 ### 15.6 Not verified
 
@@ -2237,7 +2310,7 @@ folder.
 | `MouseMotionRecordingDemo.m` | Raw mouse movement, no pointer acceleration | screen (raw mice), input | Example: `screen_input --mice`, `trial_mouse_tracking --raw-mice` |
 | `MouseTraceDemo.m` | Draw a curve with the mouse | gfx (POLYLINE), screen | Possible (224 points a path; a longer trace is several paths) |
 | `MouseTraceDemo2.m` | The same; the flip does not clear the framebuffer | gfx (strokes kept in a target) | Possible |
-| `MouseTraceDemo3.m` | Several people draw with several mice (Linux Multi-Pointer X) | screen (raw mice per device), gfx | Possible on Windows through raw mice (positions summed from counts). Multi-Pointer X is X11, a stub |
+| `MouseTraceDemo3.m` | Several people draw with several mice (Linux Multi-Pointer X) | screen (raw mice per device), gfx | Possible on Windows through raw mice (positions summed from counts). Multi-Pointer X is X11 and not built |
 | `MultiTouchDemo.m`, `MultiTouchMinimalDemo.m`, `MultiTouchPinchDemo.m` (3) | Touch contacts as blobs; a two-finger pinch task | screen, input (`YIN_KIND_TOUCH`), gfx | Possible (no touchscreen tested; touch is tier 3, docs/devices_spec.md 10.1) |
 
 #### Top level: sound
@@ -2376,7 +2449,7 @@ display, input, sound or clock timing, or output precision. The other 61
 | `FlipTimingWithRTBoxPhotoDiodeTest.m` | Onset stamps against a photodiode on an RTBox, DataPixx or similar | screen, device, net | Example: `photodiode_check`, `net_labstreamer_flip` (both never run with the device) |
 | `HighColorPrecisionDrawingTest.m` | Drawing precision read back against a double reference | gfx | Example (a test): `tests/adapt/gfx_test.c` |
 | `BeampositionTest.m` | Scanout position queries | None | Out: ysp takes onsets from DXGI and DComp statistics; `D3DKMTGetScanLine` was polled once to check what they are (`ysp/screen.h` STATUS) |
-| `OMLBasicTest.m` | OML_sync_control flip stamps against the vblank and the clock (Linux) | screen (GLX, a stub) | Gap: the X11 backend. `tests/probe/screen_x11/` measures the same stamps |
+| `OMLBasicTest.m` | OML_sync_control flip stamps against the vblank and the clock (Linux) | screen (GLX_OML) | Match: each flip's vblank and time from Present events; `tests/compare/ptb_linux/` runs both on one machine |
 | `GraphicsDisplaySyncAcrossDualHeadsTest.m`, `GraphicsDisplaySyncAcrossDualHeadsTestLinux.m` (2) | The scanout phase of two display heads | screen | Gap: two physical displays not run; no scanout query |
 | `FrameSequentialStereoTest.m` | Frame-sequential stereo order and onset | None | Gap: stereo output modes |
 | `VRRTest.m`, `VRRFixedRateSwitchingTest.m` (2) | Variable refresh: flips at varying intervals; fast rate switching | screen | Gap: variable refresh (refused until the two sweeps, 4.2) |
@@ -2407,12 +2480,12 @@ unless stated. No ysp number is a measurement of light or sound at the
 display or the jack: no photodiode or line-in run has been made
 (11, item 1). PTB numbers were measured on one machine only: the Linux
 desktop, 2026-10-12, PTB 3.0.19.14 under Octave against ysp/screen.h
-v0.8.0, both against the kernel's vblank and evdev times
+v0.11.0, both against the kernel's vblank and evdev times
 (`tests/compare/ptb_linux/README.md`).
 
 | Topic | PTB | ysp today | Verdict |
 |---|---|---|---|
-| `Screen('Flip')` timing and its tests | Flip blocks to the vblank and returns the vblank time, the onset estimate and a miss flag. Stamps from beamposition queries, from OML_sync_control, and from the kernel's vblank and flip events on Linux; VBLSyncTest, PerceptualVBLSyncTest, BeampositionTest, OMLBasicTest; FlipTimingWithRTBoxPhotoDiodeTest against a photodiode. Linux, Windows, macOS | A record per flip: planned and shown vblank, residual, drops, path, tier, phases (`ysp/screen.h`). DXGI_FLIP fullscreen: onset within 2.3 us of the prediction at p99 over 7200 frames, no drop; COMPOSITION independent flip: DisplayedTime 13 us p50, 77 us p99 after the vblank entry polled with D3DKMTGetScanLine. `screen_flipstats` is the VBLSyncTest analog. Linux X11 (GLX_OML, v0.8.0): beside PTB on one machine, 9600 flips (next vblank and held 1 to 5 frames, idle and with 20 spinning processes), both on the vblank asked for every time, both stamps the kernel's vblank time (PTB within 2 us, ysp exactly). Open: PTB 1.5 s with its sync tests, ysp 0.55 s for the whole process with its settle check. Wayland and macOS are stubs | Match on Linux X11 timing; exceeds in what each flip records (path, tier, the phase that was late, with no tool attached). Lacks macOS and Wayland, a photodiode run, and any rate but 60 Hz |
+| `Screen('Flip')` timing and its tests | Flip blocks to the vblank and returns the vblank time, the onset estimate and a miss flag. Stamps from beamposition queries, from OML_sync_control, and from the kernel's vblank and flip events on Linux; VBLSyncTest, PerceptualVBLSyncTest, BeampositionTest, OMLBasicTest; FlipTimingWithRTBoxPhotoDiodeTest against a photodiode. Linux, Windows, macOS | A record per flip: planned and shown vblank, residual, drops, path, tier, phases (`ysp/screen.h`). DXGI_FLIP fullscreen: onset within 2.3 us of the prediction at p99 over 7200 frames, no drop; COMPOSITION independent flip: DisplayedTime 13 us p50, 77 us p99 after the vblank entry polled with D3DKMTGetScanLine. `screen_flipstats` is the VBLSyncTest analog. Linux X11 (GLX_OML, v0.11.0): beside PTB on one machine, 9600 flips (next vblank and held 1 to 5 frames, idle and with 20 spinning processes), both on the vblank asked for every time, both stamps the kernel's vblank time (PTB within 2 us, ysp exactly). Open: PTB 1.5 s with its sync tests, ysp 0.55 s for the whole process with its settle check. Wayland and macOS are stubs | Match on Linux X11 timing; exceeds in what each flip records (path, tier, the phase that was late, with no tool attached). Lacks macOS and Wayland, a photodiode run, and any rate but 60 Hz |
 | `when` scheduling | `Flip(win, when)`: the first vblank at or after `when`; the manual's idiom is `vbl + (n - 0.5) * ifi`. Async flips are separate calls | `yscr_flip_at(t)` never blocks. It snaps to the nearest vblank (lead 0.5), or never early (`YSCR_LEAD_NONE`); a late caller gets `LATE_TARGET`. Holds 0 to 4 vblanks ahead: 1800 of 1800 fullscreen and 2979 of 2998 windowed on the vblank asked for, 19 late, 0 early; overruns of 17 and 20 ms: 84 of 84 flagged | Match. The half-period lead is PTB's idiom made the default |
 | High-precision luminance | PseudoGray (bit-stealing); native 10, 11 and 16 bit framebuffers; Bits++, Bits# Mono++ and Color++; DataPixx M16 and C48; VideoSwitcher and attenuators; checked by HighPrecisionLuminanceOutputDriversImagingPipelineTest, BitsPlusIdentityClutTest | A float scene (RGBA16F, 11-bit mantissa), a CLUT of 2 to 4096 entries per channel, then rounding, an 8 x 8 ordered dither or a noise dither to 8 bits. All 256 codes, and 10-bit codes written as k/1023, read back exact; an `R10G10B10A2` swapchain and pbuffer work on D3D11 (docs/gfx.md). `YGFX_OUT_10`, `MONO_PP` and `COLOR_PP` are refused: the panel link is 8 bits and no device was there to verify | Lacks a path past 8 bits on the link. In caller code (`gfx_luminance_bits`, 2026-10-09, Iris Xe, nominal calibration, not photometered): PseudoGray reaches 1696 levels (10.7 bits) with uneven sub-steps of 0.13 to 0.78 % and a chromaticity shift up to 0.017 in x, y; a 0.40 % grating shows as 0.63 % undithered, 0.38 % ordered, 0.40 % noise, 0.455 % PseudoGray; 3,532,030 read-back codes matched |
 | Color and gamma calibration | PsychCal, PsychColorimetric, DKL, `LoadNormalizedGammaTable`; photometer drivers (MeasXYZ meters) | `ysp/color.h`: calibration from readings (monotone cubic CLUT), XYZ, LMS, DKL, cone contrast, gamut distance never clipped. Against PTB in MATLAB R2023a: `ComputeDKL_M` within 6.2e-16, `SensorToPrimary` within 1.5e-8, `MaximizeGamutContrast` within 7.3e-16, out-of-gamut flags equal on 500 colors. The CLUT is in the frame's shader; the OS ramp is set to identity | Match for the math (measured agreement). Lacks photometer drivers: `gfx_calib` takes readings typed in |
@@ -2421,7 +2494,7 @@ v0.8.0, both against the kernel's vblank and evdev times
 | Imaging pipeline, procedural shaders | PsychImaging: float framebuffers, procedural gabors, gratings and noise, GLSL operators, convolution, geometry correction, panel fitter, gain correction | Linear-light float scene; GRATING, GABOR, NOISE, DOTS, instances (16384 a frame), targets, the blur pass, the USER shader contract. Gabor pixels within 1.2e-6 of a double CPU reference (Iris Xe); 10000 instanced gabors 1.26 to 1.33 ms of GPU and 177 to 191 us of CPU; 1000 gabors of 256 x 256 9.3 to 11 ms of GPU | Match for procedural stimuli; exceeds in measured pixel accuracy on four renderers. Lacks GPU filtered noise, convolution operators, built-in geometry and gain correction |
 | Movies | GStreamer: most formats, rate and direction, gapless playback, HDR movies, frame stamps; movie sound goes through GStreamer, outside PsychPortAudio (docs/audio.md) | Canonical form through Media Foundation (DXVA), pl_mpeg or the frame sequence; a record per frame decision; the soundtrack on `ysp/audio.h`'s clock: each start within 14 us of its target on the fit, flips within -0.42 to +0.08 ms (p1 to p99) of each frame's time | Exceeds in records and in sound and picture on one clock (measured in a composed window). Lacks formats outside the canonical form, Linux and macOS decode, reverse play |
 | Audio | PsychPortAudio: low-latency classes (WASAPI exclusive, ASIO, Core Audio, ALSA), scheduled starts, schedules, slave voices, AM modulators, capture and full duplex; its help says sub-ms onsets and below 10 ms latency are possible; PsychPortAudioTimingTest by oscilloscope | `yau_play_at()` with onsets from a fit of device positions, tier 2: placement 67.3 us p99 from the median idle through WASAPI's loopback tap (bar 20.8 us, missed), 19.8 us under load. Shared mode only (10 ms period); the shortest lead with no late onset was 43.5 to 54.5 ms; exclusive mode delivered callbacks in bursts. No capture | Lacks low latency, capture and modulators. Scheduling matches in kind; its accuracy at the jack is not measured |
-| Keyboard | KbCheck, KbQueue per device with press and release times; KeyboardLatencyTest by microphone; HIDIntervalTest | SDL's raw keyboard path on Windows, a device id per keyboard, double reports dropped. Injected keys stamped 0.18 to 0.67 ms after `SendInput()` (the message path: 6.2 ms before to 12.1 ms after). Raw mice per device. Linux X11 (v0.8.0): the kernel's evdev time when the keyboard's node is readable (uinput keys: 0 error), else the X server's (1 to 2 ms early). PTB's KbQueue on the same uinput keys: 0.03 to 0.40 ms after the kernel's time idle, up to 2.0 ms under load | Match on Windows; exceeds on Linux X11 with the udev rule (the kernel's time, independent of load), lacks without it (1 to 2 ms early against KbQueue's 0.1 ms late). The physical key latency is not measured (no capture) |
+| Keyboard | KbCheck, KbQueue per device with press and release times; KeyboardLatencyTest by microphone; HIDIntervalTest | SDL's raw keyboard path on Windows, a device id per keyboard, double reports dropped. Injected keys stamped 0.18 to 0.67 ms after `SendInput()` (the message path: 6.2 ms before to 12.1 ms after). Raw mice per device. Linux X11 (v0.11.0): the kernel's evdev time when the keyboard's node is readable (uinput keys: 0 error), else the X server's (1 to 2 ms early). PTB's KbQueue on the same uinput keys: 0.03 to 0.40 ms after the kernel's time idle, up to 2.0 ms under load | Match on Windows; exceeds on Linux X11 with the udev rule (the kernel's time, independent of load), lacks without it (1 to 2 ms early against KbQueue's 0.1 ms late). The physical key latency is not measured (no capture) |
 | `GetSecs` clock | QPC on Windows; GetSecsTest checks it against another timer | `yrt_now_ns()` on QPC (10 MHz here, 100 ns steps); SDL's clock correlated within 0.1 us; device clocks fitted | Match |
 | IOPort serial | A reader thread per port, one stamp per read; device protocols in M-files (PsychRTBox clock sync, CedrusResponseBox) | `ysp/serial.h`; `ysp/device.h` reader threads with clock fits (FIT, BRACKET); `ysp/box.h` decoders (XID, the line protocol, photodiode frame, trigger boxes). On simulated devices: a wrapping us counter mapped within -12 to +46 us. On a Teensy 4.0 echo board (Windows usbser, Linux cdc_acm), beside IOPort from PTB's MATLAB and Python builds: round trips at the raw OS floor, as IOPort with its latency options (IOPort's defaults 2 to 6 times slower); pulses from `yser_pulse` and `ydev_out_pulse` within 1 us of the request at the median on Linux, -65 to -4 us on Windows; IOPort has no timed pulse call (docs/serial.md) | Exceeds in design (device clocks fitted, not stamped on read) and in timed pulses; matches IOPort's tuned reads. Lacks a vendor response box run and an RTBox decoder |
 | Datapixx and VPixx | PsychDataPixx: clock sync, M16 and C48 output, scanline readback, audio, Pixel Mode triggers | `ysp/screen.h` draws Pixel Mode codes and PTB's 8-pixel pixel sync (1800 read-backs through D3D, 0 differences); `ysp/dpx.h` is planned (docs/devices_spec.md) | Lacks |
@@ -2442,7 +2515,7 @@ that piece. A demo with two missing pieces counts for each. The 14.7 and
 | 2 | HDR output and HDR image files | None | None (new) | `ysp/screen.h` (an HDR swap chain), `ysp/gfx.h` output stage | 4 demos, `HDRTest.m` | Medium; needs a colorimeter and an HDR panel |
 | 3 | Stereo output modes: frame-sequential, side by side, interleaved, dual display | None | None (new) | `ysp/gfx.h` output stage (4.3) | 3 demos (`StereoDemo.m`, `ImagingStereoDemo.m`, `SimpleHDRLinuxStereoDemo.m`), `FrameSequentialStereoTest.m`; outside PsychDemos, 4 BitsPlusDemos | Small for anaglyph and side by side; frame-sequential needs a 120 Hz panel and glasses |
 | 4 | High-precision luminance output: native 10 bit, PseudoGray, Bits# Mono++ and Color++, VPixx M16 and C48 | None | 5 | `ysp/gfx.h` output stage; `ysp/screen.h` 10-bit back buffer | 0 demos outright (the output half of `AdditiveBlendingForLinearSuperpositionTutorial.m`), 1 test; outside PsychDemos, all 8 BitsPlusDemos files. Ranked by count; by reputation it is PTB's first feature, and 16.6 puts it second | Small in code; needs a device, a 10-bit panel or a photometer to verify |
-| 5 | Linux X11 backend with OML and kernel stamps | None | None | `ysp/screen.h` GLX (11, item 5) | `OMLBasicTest.m`, `GraphicsDisplaySyncAcrossDualHeadsTestLinux.m`, `SimpleHDRLinuxStereoDemo.m` | Large; the probe exists |
+| 5 | Linux X11 backend with OML and kernel stamps | None | None | `ysp/screen.h` GLX (11, item 4) | `OMLBasicTest.m`, `GraphicsDisplaySyncAcrossDualHeadsTestLinux.m`, `SimpleHDRLinuxStereoDemo.m` | Built: `ysp/screen.h` v0.11.0, one X screen per process |
 | 6 | Eye-tracker input source and calibration | 6 | 2 | `ysp/eyelink.h`, `ysp/tobii.h` | 0 in PsychDemos (the mouse stands in for gaze); the 10 SR Research demos outside | Medium per tracker |
 | 7 | GPU filters: filtered noise, convolution, mipmaps | None | 8 | `ysp/gfx.h` (fragment passes on targets) | `FastFilteredNoiseDemo.m`, `BlurredVideoCaptureDemo.m`, `BlurredMipmapDemo.m` (the last two also need capture) | Small to medium |
 | 8 | Two physical displays: scanout phase, groups verified | None | 9 (untimed screens) | `ysp/screen.h` | 2 tests | A second display and two photodiodes |

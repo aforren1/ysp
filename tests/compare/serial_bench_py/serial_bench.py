@@ -627,20 +627,20 @@ class YspApi:
     clock_name = "ysp.serial.now"
 
     def __init__(self, cfg):
-        import ysp.serial as ps
-        self.ps = ps
+        import ysp.serial as yser
+        self.yser = yser
         self.cfg = cfg
-        self.clock = ps.now
-        self.version = "ysp.serial %s from %s" % (ps.__version__, os.path.dirname(ps.__file__))
+        self.clock = yser.now
+        self.version = "ysp.serial %s from %s" % (yser.__version__, os.path.dirname(yser.__file__))
 
     def floor_call(self):
-        return self.ps.now, "ysp.serial.now()"
+        return self.yser.now, "ysp.serial.now()"
 
     def list_ports(self):
-        return self.ps.list_ports()
+        return self.yser.list_ports()
 
     def open(self, port):
-        return self.ps.Port(port, baud=self.cfg["baud"])
+        return self.yser.Port(port, baud=self.cfg["baud"])
 
     def open_note(self):
         return "Port(port, baud=baud): 8N1, DTR and RTS asserted"

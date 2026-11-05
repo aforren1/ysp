@@ -75,6 +75,9 @@
 #define COUNT(a) (int)(sizeof(a) / sizeof((a)[0]))
 
 static yscr_screen scr;
+/* SDL calls on the window go through yscr_window_call(): with the window
+ * thread (ysp/screen.h, WINDOW THREAD) another thread owns the window. */
+static void title_on_window(void* title) { SDL_SetWindowTitle(yscr_window(&scr), (const char*)title); }
 static ygfx_gfx gfx;
 static ycol_cal cal;
 static yol_ctx ol;
@@ -587,7 +590,7 @@ static void ed_refresh(int64_t t0) {
             fail("text input", yscr_error(&scr));
     }
     if (t0) {
-        ed_last_us = (double)(yrt_now_ns() - t0) * 1e-3;
+        ed_last_us = (double)(yrt_real_ns() - t0) * 1e-3;
         ed_edits++;
     }
     if (ed_edits)
@@ -713,12 +716,12 @@ static void ed_script(void) {
     static const char* const typed[3] = { "x", "\xd8\xb3", "1" };
     int64_t t0;
     int i;
-    for (i = 0; i < 3; i++) { t0 = yrt_now_ns(); ed_text_input(typed[i]); ed_refresh(t0); }
-    t0 = yrt_now_ns(); ed_editing("\xe3\x81\x8b\xe3\x81\xaa", 2); ed_refresh(t0);
-    t0 = yrt_now_ns(); ed_text_input("\xe4\xbb\xae\xe5\x90\x8d"); ed_refresh(t0);
-    for (i = 0; i < 4; i++) { t0 = yrt_now_ns(); ed_key(SDLK_LEFT, SDL_KMOD_NONE); ed_refresh(t0); }
-    t0 = yrt_now_ns(); ed_key(SDLK_RIGHT, SDL_KMOD_SHIFT); ed_refresh(t0);
-    t0 = yrt_now_ns(); ed_key(SDLK_Z, SDL_KMOD_CTRL); ed_refresh(t0);
+    for (i = 0; i < 3; i++) { t0 = yrt_real_ns(); ed_text_input(typed[i]); ed_refresh(t0); }
+    t0 = yrt_real_ns(); ed_editing("\xe3\x81\x8b\xe3\x81\xaa", 2); ed_refresh(t0);
+    t0 = yrt_real_ns(); ed_text_input("\xe4\xbb\xae\xe5\x90\x8d"); ed_refresh(t0);
+    for (i = 0; i < 4; i++) { t0 = yrt_real_ns(); ed_key(SDLK_LEFT, SDL_KMOD_NONE); ed_refresh(t0); }
+    t0 = yrt_real_ns(); ed_key(SDLK_RIGHT, SDL_KMOD_SHIFT); ed_refresh(t0);
+    t0 = yrt_real_ns(); ed_key(SDLK_Z, SDL_KMOD_CTRL); ed_refresh(t0);
     printf("page 4 script: %lld changes, the last (an undo) %.0f us; %u glyphs\n", (long long)ed_edits, ed_last_us, ed_text.b.n_items);
 }
 
@@ -755,7 +758,7 @@ static void show_page(int p, int prev) {
     char title[160];
     /* SDL and printf may allocate: only here, on a page change */
     snprintf(title, sizeof title, "gfx_layout %d/%d: %s", p + 1, N_PAGES, page_names[p]);
-    if (yscr_window(&scr)) SDL_SetWindowTitle(yscr_window(&scr), title);
+    if (yscr_window(&scr)) yscr_window_call(&scr, title_on_window, title);
     printf("page %d/%d: %s\n", p + 1, N_PAGES, page_names[p]);
     fflush(stdout);
     if (prev == 3) yscr_text_input(&scr, false, 0, 0, 0, 0);
@@ -809,6 +812,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     /* The per-user folder unless told otherwise, so that a second run loads
      * the programs instead of compiling them (PROGRAM CACHE). */
     if (no_cache) cache = NULL;
@@ -850,12 +855,12 @@ int main(int argc, char** argv) {
     /* Setup: every page's static text, laid out once; the glyphs they use
      * become the first curve sets. */
     {
-        int64_t t0 = yrt_now_ns();
+        int64_t t0 = yrt_real_ns();
         p1_layout();
         p2_setup();
         p3_layout();
         if (ed_setup() < 0) { fprintf(stderr, "gfx_layout: the editor did not open\n"); return 1; }
-        printf("setup: every page laid out, glyphs built and uploaded in %.0f ms\n", (double)(yrt_now_ns() - t0) * 1e-6);
+        printf("setup: every page laid out, glyphs built and uploaded in %.0f ms\n", (double)(yrt_real_ns() - t0) * 1e-6);
     }
     if (n_fonts) {
         int k;
@@ -889,7 +894,7 @@ int main(int argc, char** argv) {
                     if (key == SDLK_PAGEUP) { next = (cur + N_PAGES - 1) % N_PAGES; continue; }
                     if (key >= SDLK_F1 && key < SDLK_F1 + (SDL_Keycode)N_PAGES) { next = (int)(key - SDLK_F1); continue; }
                     if (cur == 3 && editor) {
-                        int64_t t0 = yrt_now_ns();
+                        int64_t t0 = yrt_real_ns();
                         if (!ed_composing && ed_key(key, ev.key.mod)) ed_refresh(t0);
                         continue;
                     }
@@ -905,18 +910,18 @@ int main(int argc, char** argv) {
                         if (cur == 0) p1_layout(); else p3_layout();
                     }
                 } else if (ev.type == SDL_EVENT_TEXT_INPUT && cur == 3 && editor) {
-                    int64_t t0 = yrt_now_ns();
+                    int64_t t0 = yrt_real_ns();
                     ed_text_input(ev.text.text);
                     ed_refresh(t0);
                 } else if (ev.type == SDL_EVENT_TEXT_EDITING && cur == 3 && editor) {
-                    int64_t t0 = yrt_now_ns();
+                    int64_t t0 = yrt_real_ns();
                     ed_editing(ev.edit.text, ev.edit.start);
                     ed_refresh(t0);
                 } else if (ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN && ev.button.button == SDL_BUTTON_LEFT) {
                     float hx = 24 + p1_width + 2;
                     if (cur == 0 && ev.button.x >= hx - 6 && ev.button.x <= hx + 14 && ev.button.y >= P1_TOP) { p1_drag = 1; p1_layout(); }
                     if (cur == 3 && editor) {
-                        int64_t t0 = yrt_now_ns();
+                        int64_t t0 = yrt_real_ns();
                         skb_editor_process_mouse_click(editor, ev.button.x - ED_X, ev.button.y - ED_Y, sdl_mods(SDL_GetModState()),
                                                        (double)ev.button.timestamp * 1e-9);
                         ed_dragging = 1;
@@ -933,7 +938,7 @@ int main(int argc, char** argv) {
                         if (w != p1_width) { p1_width = w; p1_layout(); }
                     }
                     if (ed_dragging && cur == 3 && editor) {
-                        int64_t t0 = yrt_now_ns();
+                        int64_t t0 = yrt_real_ns();
                         skb_editor_process_mouse_drag(editor, ev.motion.x - ED_X, ev.motion.y - ED_Y);
                         ed_refresh(t0);
                     }

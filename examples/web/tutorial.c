@@ -203,6 +203,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     if (reps == 0) reps = sim ? SIM_TRIALS / 2 : 5;
     if (reps < 1 || reps > 50) { fprintf(stderr, "web_tutorial: --reps takes 1..50\n"); return 2; }
     if (sim) sd.backend = YSCR_BACKEND_SIM;

@@ -46,6 +46,8 @@ table (version, status word), its entry in `docs/status.md`, the tests,
 the compile checks, and its mutation list
 (`uv run tests/mutate/mutate.py tests/mutate/<name>.toml --check`, then
 run the mutants you add). Parsers of untrusted input get a fuzz target.
+A change to a struct's layout or to a function a bindings/share table
+carries bumps at least the minor version (consumers accept another patch).
 CI is `.github/workflows/ci.yml`.
 
 ## Building
@@ -64,7 +66,7 @@ other machines, run nothing else while measuring.
 
 ## Linux X11 work
 
-`ysp/screen.h` v0.8.0 has the GLX backend (`YSCR_BACKEND_GLX_OML`;
+`ysp/screen.h` v0.11.0 has the GLX backend (`YSCR_BACKEND_GLX_OML`;
 design and numbers in `docs/screen.md`, "Linux X11: GLX_OML"; its basis
 in `docs/screen_x11_probe.md` section 5). Wayland is a stub. On a new
 rig, run the probe first (`sh tests/probe/screen_x11/run.sh` from the

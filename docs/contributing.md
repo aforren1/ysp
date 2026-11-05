@@ -15,7 +15,8 @@ tests/adapt/              self-checking tests for ysp/rt.h's pump, the adaptive-
                           headers, ysp/trials.h, ysp/table.h and ysp/timeline.h, run by ctest
 tests/compare/            side-by-side runs against PsychoPy, questplus, AEPsych,
                           mQUESTPlus and Palamedes; by hand, not CI
-tests/fuzz/               libFuzzer targets for ysp/table.h, ysp/trials.h, ysp/json.h and ysp/pack.h;
+tests/fuzz/               libFuzzer targets for ysp/table.h, ysp/trials.h, ysp/json.h, ysp/pack.h and
+                          the snapshot readers of ysp/stair.h, ysp/quest.h and ysp/aep.h;
                           by hand, not CI
 tests/loopback/           opt-in hardware tests (-DYSP_BUILD_LOOPBACK=ON), run by hand
 docs/status.md            per-header status, hardware verified, files to copy

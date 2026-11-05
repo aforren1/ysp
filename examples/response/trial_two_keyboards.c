@@ -25,7 +25,7 @@
  * and J for player 2, from any keyboard.
  *
  * The data file has one row per trial, times in seconds: trial_index,
- * target, foreperiod, onset_tier, winner, p1_rt, p2_rt, p2_minus_p1,
+ * target, foreperiod_s, onset_tier, winner, p1_rt_s, p2_rt_s, p2_minus_p1_s,
  * p1_device, p2_device, p1_tier, p2_tier, p1_n_early, p2_n_early,
  * p1_n_anticipations, p2_n_anticipations, n_other (presses from another
  * keyboard), n_device0, key_doubles and key_double_ups (second key reports
@@ -40,7 +40,7 @@
  * key-up comes while player 2 holds the same key) beside a third keyboard's
  * press (ignored), an early press, a timeout. It checks its own results,
  * key_doubles and key_double_ups included, and exits 1 on a mismatch.
- * About 20 s.
+ * Under a second: the virtual clock does not wait.
  *
  * Usage: trial_two_keyboards [--sim] [--one-keyboard] [--fullscreen] [--reps N] [--seed N] [--out FILE]
  * Exit code: 0 (also after Shift+Esc), 1 when something did not open or a
@@ -203,6 +203,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     if (reps == 0) reps = sim ? SIM_TRIALS / 2 : 10;
     if (reps < 1 || reps > 100 || (sim && one)) { fprintf(stderr, "trial_two_keyboards: --reps 1..100; --sim plays two keyboards\n"); return 2; }
     if (sim) sd.backend = YSCR_BACKEND_SIM;
@@ -235,7 +237,7 @@ int main(int argc, char** argv) {
     rd.order = YTR_ORDER_RANDOM;
     rd.rng = ytr_splitmix;
     rd.rng_ctx = &seed;
-    rd.jitters[0] = ytr_frames(ytr_uniform("foreperiod", YRT_MS(600), YRT_MS(1200)), rate_num, rate_den);
+    rd.jitters[0] = ytr_frames(ytr_uniform("foreperiod_s", YRT_MS(600), YRT_MS(1200)), rate_num, rate_den);
     rd.n_jitters = 1;
     if (!ytr_open(&trials, &rd)) { fprintf(stderr, "trial_two_keyboards: %s\n", ytr_error(&trials)); return 1; }
 
@@ -337,7 +339,7 @@ int main(int argc, char** argv) {
             meta[strcspn(meta, "\r\n")] = 0;
             fprintf(out, "# %s\n# %s\n# ysp_response %s; keyboards: player 1 %u, player 2 %u%s\n", meta, line,
                     yrsp_version(), (unsigned)dev[0], (unsigned)dev[1], one ? " (one keyboard: F and J)" : sim ? " (synthetic)" : "");
-            fprintf(out, "trial_index,target,foreperiod,onset_tier,winner,p1_rt,p2_rt,p2_minus_p1,p1_device,p2_device,"
+            fprintf(out, "trial_index,target,foreperiod_s,onset_tier,winner,p1_rt_s,p2_rt_s,p2_minus_p1_s,p1_device,p2_device,"
                          "p1_tier,p2_tier,p1_n_early,p2_n_early,p1_n_anticipations,p2_n_anticipations,n_other,n_device0,"
                          "key_doubles,key_double_ups\n");
         }

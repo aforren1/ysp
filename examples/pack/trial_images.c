@@ -36,7 +36,7 @@
  *
  * The data file has one row per trial (ysp/trials.h's data writer):
  * trial_index, block, stimulus, ori, kind, answer, correct (jsPsych-style
- * names first), then the response's (YRSP_DATA_COLS: response, rt,
+ * names first), then the response's (YRSP_DATA_COLS: response, rt_s,
  * onset_src, onset_tier, the residuals, onset_frame, rsp_tier, rsp_flags,
  * n_anticipations, n_early). No session columns: the table's block column
  * (navon, rotation) has the name of the session's block number. Times in
@@ -48,7 +48,8 @@
  * per degree of turn and 0.1 s more for a mirror image, one wrong key and
  * one timeout. It checks the rows, that each block ran whole, and the RTs
  * (the script runs from the image's planned onset, the RT from its flip
- * record), and exits 1 on a mismatch. About 22 s.
+ * record), and exits 1 on a mismatch.
+ * Under a second: the virtual clock does not wait.
  *
  * Usage: trial_images [--sim] [--fullscreen] [--reps N] [--seed N] [--out FILE] [--pack PATH]
  *   --reps N    repetitions of each row (default 2; --sim: 1)
@@ -110,6 +111,9 @@ static yrsp_input sim_ev[2];
 static int n_sim_ev, sim_next;
 
 static yscr_screen scr;
+/* SDL calls on the window go through yscr_window_call(): with the window
+ * thread (ysp/screen.h, WINDOW THREAD) another thread owns the window. */
+static void title_on_window(void* title) { SDL_SetWindowTitle(yscr_window(&scr), (const char*)title); }
 static ygfx_gfx gfx;
 static ypak_pack pk;
 static ytl_timeline tl;
@@ -228,6 +232,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     if (reps == 0) reps = sim ? 1 : 2;
     if (reps < 1 || reps > 50) { fprintf(stderr, "trial_images: --reps takes 1..50\n"); return 2; }
 
@@ -310,7 +316,7 @@ int main(int argc, char** argv) {
                 const char* task = rotation ? "Rotation: F if the R is normal, J if it is mirrored"
                                             : "Navon: F if the large letter is H, J if it is S";
                 printf("%s\n", task);   /* SDL and printf may allocate: only here, between blocks */
-                if (yscr_window(&scr)) SDL_SetWindowTitle(yscr_window(&scr), task);
+                if (yscr_window(&scr)) yscr_window_call(&scr, title_on_window, (void*)(uintptr_t)task);
                 ytl_on(&q, CUE_ON);
                 ytl_wait(&q, YRT_S(CUE_S));
                 ytl_off(&q, CUE_ON);

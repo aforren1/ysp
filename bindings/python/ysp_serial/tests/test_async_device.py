@@ -21,7 +21,7 @@ import time
 
 import pytest
 
-import ysp.serial as ps
+import ysp.serial as yser
 
 PORT = os.environ.get("YSP_SERIAL_PORT")
 pytestmark = pytest.mark.skipif(not PORT, reason="set YSP_SERIAL_PORT to a ysp_echo board")
@@ -36,7 +36,7 @@ ECHO = 35          # "R <10> <10> <10>\n"
 
 def setup_module(module):
     RESULTS["conditions"] = {
-        "port": PORT, "version": ps.__version__, "date": time.strftime("%Y-%m-%d %H:%M"),
+        "port": PORT, "version": yser.__version__, "date": time.strftime("%Y-%m-%d %H:%M"),
         "stream_hz": STREAM_HZ, "stream_s": STREAM_S, "n_probe": N_PROBE,
     }
 
@@ -65,12 +65,12 @@ def show(name, s, unit="us"):
 
 @pytest.fixture
 def port():
-    p = ps.Port(PORT)
+    p = yser.Port(PORT)
     quiet(p)
     p.write(b"i\n")
     ident = b""
-    t_end = ps.now() + 1.0
-    while not ident.endswith(b"\n") and ps.now() < t_end:
+    t_end = yser.now() + 1.0
+    while not ident.endswith(b"\n") and yser.now() < t_end:
         ident += p.read(64, 0.1)    # the line can arrive in more than one read
     if b"echo" not in ident:
         p.close()
@@ -89,7 +89,7 @@ def quiet(p):
 
 
 def spin_until(t):
-    while ps.now() < t:
+    while yser.now() < t:
         pass
 
 
@@ -109,11 +109,11 @@ def probes(p, n, seq0):
         # span more than two of the fit's 200 ms buckets: Python sends
         # faster than the MATLAB bench, and a fit of two points falls back
         # to a slope of 1.
-        spin_until(ps.now() + 2e-3 + random.random() * 1e-3)
-        t0 = ps.now()
+        spin_until(yser.now() + 2e-3 + random.random() * 1e-3)
+        t0 = yser.now()
         p.write(b"e %010d\n" % seq)
         r = p.read(ECHO, 1.0, all=True)
-        t2 = ps.now()
+        t2 = yser.now()
         b = parse_echo(r, seq)
         if b:
             out.append((t0 * 1e6, t2 * 1e6, b[0], b[1]))
@@ -164,10 +164,10 @@ def write_costs(p, n, gap):
     line), gap seconds apart, in us."""
     dw = []
     for _ in range(n):
-        spin_until(ps.now() + gap)
-        a = ps.now()
+        spin_until(yser.now() + gap)
+        a = yser.now()
         p.write(b"\n")
-        dw.append((ps.now() - a) * 1e6)
+        dw.append((yser.now() - a) * 1e6)
     return dw
 
 
@@ -175,23 +175,23 @@ def write_costs(p, n, gap):
 
 def test_lifecycle(port):
     port.async_start()
-    with pytest.raises(ps.Error, match="already running"):
+    with pytest.raises(yser.Error, match="already running"):
         port.async_start()
     for call in (lambda: port.read(1, 0), port.available, port.interrupt,
                  lambda: port.purge(rx=True)):
-        with pytest.raises(ps.Error, match="owns the input"):
+        with pytest.raises(yser.Error, match="owns the input"):
             call()
     port.purge(rx=False, tx=True)              # writer role stays allowed
     assert port.async_read() == []
     assert port.async_wait(0) == 0
-    t = ps.now()
+    t = yser.now()
     assert port.async_wait(0.05) == 0
-    assert ps.now() - t >= 0.045
+    assert yser.now() - t >= 0.045
     st = port.async_stop()
     assert st["running"] is False and st["error"] is None
     assert port.async_stop() is None
     assert port.async_stats == st              # kept until the next start
-    with pytest.raises(ps.Error, match="not running"):
+    with pytest.raises(yser.Error, match="not running"):
         port.async_read()
     assert port.read(64, 0.01) == b""          # the reader role is back
     port.async_start(terminator=None)          # restart, one record per read
@@ -202,15 +202,15 @@ def test_lifecycle(port):
     assert parse_echo(got, 7)
     port.close()                                # stops the reader
     assert port.async_stats["running"] is False
-    with pytest.raises(ps.Closed):
+    with pytest.raises(yser.Closed):
         port.async_read()
 
 
 def read_line_report(p, timeout=0.5):
     """The board's next "L <t> <dtr> <rts>" report as (dtr, rts), or None."""
     buf = b""
-    t_end = ps.now() + timeout
-    while ps.now() < t_end:
+    t_end = yser.now() + timeout
+    while yser.now() < t_end:
         buf += p.read(64, 0.05)
         i = buf.find(b"L ")
         if i >= 0 and len(buf) >= i + 17:
@@ -247,7 +247,7 @@ def test_wait_is_interrupted_by_stop_from_another_thread(port):
     def waiter():
         try:
             port.async_wait(math.inf)
-        except ps.Interrupted as e:
+        except yser.Interrupted as e:
             caught.append(e)
 
     th = threading.Thread(target=waiter)
@@ -277,22 +277,22 @@ def test_echo_round_trips_with_async_on(port):
     # so only a baseline from the same open compares.
     base = []
     for seq in range(1000):
-        spin_until(ps.now() + random.random() * 1e-3)
-        t0 = ps.now()
+        spin_until(yser.now() + random.random() * 1e-3)
+        t0 = yser.now()
         port.write(b"e %010d\n" % seq)
         r = port.read(ECHO, 1.0, all=True)
-        base.append((ps.now() - t0) * 1e6)
+        base.append((yser.now() - t0) * 1e6)
         assert parse_echo(r, seq), r
     port.async_start()
     time.sleep(0.05)
     rtt, host = [], []
     for seq in range(1000):
-        spin_until(ps.now() + random.random() * 1e-3)
-        t0 = ps.now()
+        spin_until(yser.now() + random.random() * 1e-3)
+        t0 = yser.now()
         port.write(b"e %010d\n" % seq)
         assert port.async_wait(1.0) == 1
         (r, t), = port.async_read()
-        t2 = ps.now()
+        t2 = yser.now()
         assert parse_echo(r, seq), r
         rtt.append((t - t0) * 1e6)
         host.append((t2 - t0) * 1e6)
@@ -323,13 +323,13 @@ def stream(port, mode, seq0):
         time.sleep(0.05)
     recs, host = [], []
     c0 = time.process_time()
-    w0 = ps.now()
+    w0 = yser.now()
     port.write(b"s %d %d\n" % (STREAM_HZ, nlines))
     deadline = w0 + STREAM_S + 2
-    while len(recs) < nlines and ps.now() < deadline:
+    while len(recs) < nlines and yser.now() < deadline:
         if mode == "line":
             r = port.read(LINE, 0.2, all=True)
-            t = ps.now()
+            t = yser.now()
             if r:
                 recs.append((r, t))
                 host.append(t)
@@ -339,10 +339,10 @@ def stream(port, mode, seq0):
         elif port.async_wait(1.0) == 0:
             continue
         got = port.async_read()
-        t = ps.now()
+        t = yser.now()
         recs += got
         host += [t] * len(got)
-    w1 = ps.now()
+    w1 = yser.now()
     c1 = time.process_time()
     st = port.async_stop() or {"overflows": 0, "max_used": 0, "reads": len(recs), "policy": None}
     quiet(port)

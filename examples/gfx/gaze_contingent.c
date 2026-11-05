@@ -41,8 +41,8 @@
  * Usage: gfx_gaze_contingent [--sim] [--fullscreen] [--seconds S] [--raw-mice]
  *                            [--inject] [--out FILE]
  *   --seconds S  run S seconds (default: until Shift+Esc)
- *   --out FILE   one row per frame with a new sample: frame, stamp, read,
- *                onset (s from the first frame's onset), latency (s)
+ *   --out FILE   one row per frame with a new sample: frame, stamp_s, read_s,
+ *                onset_s (from the first frame's onset), latency_s
  * Exit code: 0; 1 when something did not open or a check failed; 2 for a bad
  * argument. On Windows set YSCR_ANGLE_DIR.
  */
@@ -66,6 +66,11 @@
 #define MAXS 65536
 
 static yscr_screen scr;
+/* SDL calls on the window go through yscr_window_call(): with the window
+ * thread (ysp/screen.h, WINDOW THREAD) another thread owns the window. */
+#if defined(_WIN32)
+static void position_on_window(void* xy) { SDL_GetWindowPosition(yscr_window(&scr), (int*)xy, (int*)xy + 1); }
+#endif
 static ygfx_gfx gfx;
 static uint8_t sharp[WW * WH * 4], blurred[WW * WH * 4];
 static float tmp[WW * WH];
@@ -168,6 +173,8 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--out") && i + 1 < argc) out_path = argv[++i];
         else { fprintf(stderr, "usage: gfx_gaze_contingent [--sim] [--fullscreen] [--seconds S] [--raw-mice] [--inject] [--out FILE]\n"); return 2; }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
 #if !defined(YSCR__DXGI)
     if (inject || raw) { fprintf(stderr, "gfx_gaze_contingent: --inject and --raw-mice are Windows only\n"); return 2; }
 #endif
@@ -197,7 +204,7 @@ int main(int argc, char** argv) {
     win = ygfx_image(&gfx, &id);
     win.shape = YGFX_CIRCLE; win.edge = YGFX_EDGE_GAUSSIAN; win.edge_width = EDGE_SD;
     if (out_path && !(out = fopen(out_path, "w"))) { fprintf(stderr, "gfx_gaze_contingent: cannot write %s\n", out_path); return 1; }
-    if (out) fprintf(out, "frame,stamp,read,onset,latency\n");
+    if (out) fprintf(out, "frame,stamp_s,read_s,onset_s,latency_s\n");
 #if defined(YSCR__DXGI)
     if (inject) {
         /* SendInput reaches the foreground window only; a program started
@@ -209,7 +216,12 @@ int main(int argc, char** argv) {
         zero.mi.dwFlags = MOUSEEVENTF_MOVE;
         SendInput(1, &zero, sizeof zero);
         SetForegroundWindow(hw);
-        SDL_GetWindowPosition(yscr_window(&scr), &inject_wx, &inject_wy);
+        {
+            int xy[2] = { 0, 0 };
+            yscr_window_call(&scr, position_on_window, xy);
+            inject_wx = xy[0];
+            inject_wy = xy[1];
+        }
         th = CreateThread(NULL, 0, inject_main, NULL, 0, NULL);
     }
 #endif

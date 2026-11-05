@@ -1,6 +1,7 @@
 # ysp/color.h design notes
 
-Status: v0.1.0, 2026-10-06. ysp/gfx.h v0.5.0 takes its calibration,
+Status: v0.4.0, 2026-10-21 (`ycol_michelson()`, section "Michelson
+contrast in light"); v0.1.0, 2026-10-06. ysp/gfx.h v0.5.0 takes its calibration,
 PAINT's spaces and VIDEO's primaries from this header (stages A to C
 below, each checked bit for bit). The Python and MATLAB/Octave bindings
 exist, and a MATLAB run compares the header with Psychtoolbox. The design
@@ -555,24 +556,80 @@ per-frame one.
 | colour-science | `source_to_target` names; an explicit white; one `convert` entry; its data and functions as the test reference | path-finding through a conversion graph with hidden adaptation defaults; a global domain-range scale |
 | Color.js, culori | gamut mapping named by space and channel; `inGamut` and `displayable` as plain queries; the hex constructor | CSS Color 4's final clip; CSS `lab()`'s D50 white |
 
+## Enum values in the parameter table (v0.3.0)
+
+Every ysp parameter table has one row shape: `name`, `type`, `min`, `max`, `def`, `unit`, `doc`, `values` ([conventions.md](conventions.md), "Parameter tables"; gap G6 of [experiment_format.md](experiment_format.md)). `ycol_param` gained `values` after `offset`: `cones` lists
+`ss2=0,ss10=1` and `adapt` lists `none=0,bradford=1`; the other rows have
+NULL. The first seven fields are the shared shape's, and a reader by
+field name does not see that `offset` sits between `doc` and `values`.
+Moving `offset` to the end instead would change it for every reader
+that knows it, for no gain.
+
+The test (`test_params()` in `tests/adapt/color_test.c`) checks every
+row against the `ycol_ctx_desc` field at its offset, the names against
+`switch`es on `ycol_cones` and `ycol_adapt` without a `default`, every
+default (all 0: a value, or the display's white and the relative D65
+scale the doc names) against a context opened with a zero desc, and that
+a context opened with the defaults written in has the zero desc's id.
+2 of 2 new mutants killed (`tests/mutate/color.toml`, pv-). No conversion changed.
+
+## Michelson contrast in light (v0.4.0)
+
+Gap G5 of [experiment_format.md](experiment_format.md): a contrast
+threshold is a statement about light, ysp/gfx.h's contrast is about linear
+device RGB, and the 8-bit codes show a third value. The 2AFC example
+(`examples/response/trial_2afc_adaptive.c`) did the arithmetic in about 20
+lines of its own; a definition's `{"michelson": ...}` needs it in the
+header.
+
+| Question | Decision | Why |
+|---|---|---|
+| One call or two | One, `ycol_michelson(cx, m, dir, bits, &r)`, with every number in `ycol_shown`: `gain`, `scene`, `max`, `shown`, the light of the background, peak and trough, the codes, the gamut | The caller needs all of them on every trial (the stimulus takes `scene`, the method takes `shown`, the row takes the codes) and they share the luminance row and the codes. A second call for gfx's contrast back to light is `scene * gain`, which the result already holds |
+| Light from what | Y of the readings: each gun's level-1 reading less the black's, and the black's | A photometer gives Y only. The context's XYZ matrix needs chromaticities, so a contrast study on a luminance meter's calibration would be refused for no reason. With chromaticities, these equal row 1 of `rgb_to_xyz` and `black_xyz[1]`, so the call agrees with the xyY path (test: within 1.1e-16) |
+| Which luminance | Photometric Y, not the context's `lum` record | Michelson contrast is CIE photometry. A participant's luminance (flicker photometry) sets the DKL isoluminant plane; it is not a contrast in cd/m2 |
+| The direction | `dir` in linear RGB per unit contrast, all 0 meaning the background, as ysp/gfx.h's `dir` | The same field means the same thing in both headers. A colored grating's luminance contrast comes from the same call; a direction with no luminance is refused, not divided by 0 |
+| The gamut | `max` is the largest Michelson contrast with both extremes in the cube; past it, `scene` is not clipped and `gamut` (`ycol_to_dir()`'s check of bg + scene dir and bg - scene dir) says by how much; `shown` is what the output stage's clamp gives | The header's rule: report, never clip. The display does clip, so the contrast shown is the clipped one; a method that hears `shown` sees the ceiling |
+| The codes | `ycol_output_code()` of the nominal peak and trough, dither NONE, at `bits` (8 to 16) | The output stage's arithmetic, already checked against ysp/gfx.h. An RGBA16F scene rounds a value first, and a gabor's drawn extremes sit at or inside the nominal ones (its envelope, the pixel grid); the manual says so instead of modelling a pixel the caller did not name |
+| The sign | A negative contrast is the opposite phase: the codes swap and `shown` is negated, exactly | ysp/gfx.h's contrast takes a sign; a method may step through 0 |
+
+Results (2026-10-21; MinGW-w64 gcc 16.1 `-std=c99 -O2 -Wall -Wextra
+-Wpedantic -Wshadow -Werror`, MSVC 19.44 through ctest; arithmetic only,
+nothing measured with light). `test_michelson()` in
+`tests/adapt/color_test.c`:
+
+| Check | Result |
+|---|---|
+| The 2AFC example's arithmetic (xyY luminance, `Y_bg / (Y_bg - Y_black)`, codes of 0.5 (1 +- c), their light through DEVICE), 401 contrasts 0 to 0.2 on a display with chromaticities and 0.4 cd/m2 of black | 0 of 2406 codes differ; scene, shown, max and the three luminances within 1.1e-16; `shown` never decreases as the contrast rises |
+| Quantization, a mid-gray background, gamma 2.2 | `shown` minus the contrast asked, in gamut: at most 0.00561 at 8 bits (one code step there is about 0.0067) and 2.08e-5 at 16 bits |
+| Edges | 0 gives the background's code twice and 0; 0.0005 gives a nonzero scene and 0 shown; `max` gives codes 255 and 0 (1023 and 0 at 10 bits), in gamut, and shows itself within 1e-15; 1.25 max gives scene 1.25 (not clipped), `gamut.scale` 0.8, `distance` 0.125, below and above on every channel, and shows max; the opposite phase swaps the codes and negates `shown` |
+| Directions and calibrations | the red gun alone: gain from its luminance, max from its room, the green and blue codes unchanged; a luminance-only calibration (no chromaticities) gives Y from the readings; at a background of 0.2 with no black, contrast 1 puts the trough at code 0 and shows 1 |
+| Refusals | no context (also a closed one), bits 7 and 17, a contrast or a dir that is not finite, a background with no light (also along a colored dir), a dir with no luminance |
+| Mutants | 10 of 10 killed (`tests/mutate/color.toml`, `mi-01` to `mi-10`) |
+
+The 2AFC example now calls it; its `--sim` run gives the same rows as
+before the change.
+
 ## Bindings
 
 ### Python: `ysp-color`, module `ysp.color`
 
 `bindings/python/ysp_color/`, the Limited API (one abi3 wheel per
-platform, CPython 3.8 and later), PEP 420 `ysp` namespace, added to the CI
+platform, CPython 3.10 and later), PEP 420 `ysp` namespace, added to the CI
 wheel matrix. `Calibration`, `Lum` and `Context` are types; `Color` and
 `Gamut` are namedtuples; each space has a constructor with the header's
 field names (`pc.dkl(elev=0, azim=90, contrast=0.1)`); `convert_n` takes a
 buffer of doubles or a sequence of triples and returns a `'d'` memoryview,
-as ysp.aep does. A Context keeps references to its Calibration and Lum, so
+as ysp.aep does. `Context.michelson(m, dir=(0, 0, 0), bits=8)` (v0.4.0)
+returns a `Shown` namedtuple. A Context keeps references to its Calibration and Lum, so
 the pointers in the header's context stay valid. Errors: `Error`, and
 `ArgumentError`, `RefusedError`, `FormatError`, `RangeError`, which are
-also `ValueError`. `tests/test_color.py`: 10 tests (the file round trip,
+also `ValueError`. `tests/test_color.py`: 11 tests (the file round trip,
 refusals with their messages, conversions, gamut edges, sRGB primaries in
 gamut on a nominal display, `convert_n` against single calls, mapping and
-rings, the luminance fit, the tables); all pass on CPython 3.14 (Windows,
-MSVC).
+rings, the luminance fit, the tables, and since v0.4.0 `michelson()`: its
+values against their definitions, the gamut's edge, 16 bits, the opposite
+phase, a colored and an isoluminant dir); all pass on CPython 3.14
+(Windows, MSVC).
 
 ### MATLAB and Octave: `ysp_color` MEX
 
@@ -591,12 +648,16 @@ Calibrations and luminance records travel as their canonical bytes.
 | `r = ysp_color('ring', h, plane, fixed, n, sides)` | 'dkl', 'cone', 'oklch', 'cielch' |
 | `[rgb, g] = ysp_color('map', h, space, X, method)` | 'scale', 'chroma_oklch', 'chroma_cielch', 'chroma_dkl', 'clip' |
 | `lum = ysp_color('lum_derive', settings, cal, opts)`, `ysp_color('lum_stated', w, cones)`, `ysp_color('lum_info', lum)` | settings N x 6 (a, b) |
+| `sh = ysp_color('michelson', h, m, [dir], [bits])` | a Michelson contrast in light (v0.4.0): a struct with `gain`, `scene` (ysp/gfx.h's contrast), `max`, `shown`, `Y_bg`, `Y_peak`, `Y_trough`, `peak` and `trough` (1 x 3 output codes) and `gamut` (as `to_dir`'s). `dir` defaults to `[0 0 0]` (the background), `bits` to 8. Past the gamut it is reported, not clipped; a `dir` with no luminance raises `ysp_color:range` |
 | `ysp_color('lum_pair', h, azim, elev, contrast)`, `'info'`, `'describe'`, `'set_background'`, `'close'` | the rest |
 | `ysp_color('output_code', cal, RGB, bits)`, `ysp_color('cone_fundamentals', nm, cones)`, `ysp_color('version')` | without a handle |
 
 Errors carry `ysp_color:arg`, `:refused`, `:format`, `:range`, `:handle`.
 `bindings/mex/test_mex_color.m` passes in MATLAB R2023a and Octave 10.1
-(Windows); CI runs it on Octave 7.3 and MATLAB.
+(Windows); CI runs it on Octave 7.3 and MATLAB. Its `michelson` checks
+(v0.4.0, the Python test's cases, and the codes against `output_code`;
+70 checks in all, 53 before) passed in Octave 10.1 and MATLAB R2023a
+(MSVC 2022) on Windows on 2026-10-22.
 
 ### Against Psychtoolbox
 

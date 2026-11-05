@@ -530,20 +530,27 @@ static void check_errors(void) {
         CHECK(!ytb_open_csv(&t, &d));
         CHECK_HAS(ytb_error(&t), "a NUL byte");
     }
-    /* 64 columns fit, 65 do not; names are full length. */
+    /* YTB_MAX_COLUMNS (256) columns fit, one more does not. */
+    CHECK_I(YTB_MAX_COLUMNS, 256);
     k = 0;
-    for (i = 0; i < 65; i++) k += sprintf(big + k, "%sc%d", i ? "," : "", i);
+    for (i = 0; i < YTB_MAX_COLUMNS + 1; i++) k += sprintf(big + k, "%sc%d", i ? "," : "", i);
     big[k++] = '\n';
     big[k] = '\0';
     CHECK(!parse(&t, big, NULL));
-    CHECK_HAS(ytb_error(&t), "more than 64 columns");
+    CHECK_HAS(ytb_error(&t), "more than 256 columns");
     k = 0;
-    for (i = 0; i < 64; i++) k += sprintf(big + k, "%sc%d", i ? "," : "", i);
+    for (i = 0; i < YTB_MAX_COLUMNS; i++) k += sprintf(big + k, "%sc%d", i ? "," : "", i);
     k += sprintf(big + k, "\n");
-    for (i = 0; i < 64; i++) k += sprintf(big + k, "%s%d", i ? "," : "", i);
+    for (i = 0; i < YTB_MAX_COLUMNS; i++) k += sprintf(big + k, "%s%d", i ? "," : "", i);
     k += sprintf(big + k, "\n");
     CHECK(parse(&t, big, NULL));
-    CHECK_I(t.n_cols, 64);
+    CHECK_I(t.n_cols, YTB_MAX_COLUMNS);
+    CHECK_I(ytb_int(&t, 0, YTB_MAX_COLUMNS - 1), YTB_MAX_COLUMNS - 1);
+    {   /* the widest block views again */
+        ytb_table v;
+        CHECK(ytb_open_view(&v, t.base, t.size));
+        CHECK_I(v.n_cols, YTB_MAX_COLUMNS);
+    }
     /* A name of 63 bytes is a name, 64 is not. */
     memset(big, 'n', 63);
     strcpy(big + 63, "\n1\n");

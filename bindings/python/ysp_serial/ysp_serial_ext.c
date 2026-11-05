@@ -5,7 +5,7 @@
  * library implementation is compiled directly into this module.
  *
  * Built against the stable ABI / Limited API (Py_LIMITED_API), so one compiled
- * ysp/serial.abi3.so works across CPython >= 3.8 without recompiling per
+ * ysp/serial.abi3.so works across CPython >= 3.10 without recompiling per
  * version. That rules out the static PyTypeObject layout, so the Port type is
  * a heap type created with PyType_FromSpec.
  *
@@ -34,7 +34,7 @@
  * Python side only copies finished records out of its ring.
  */
 #ifndef Py_LIMITED_API
-#define Py_LIMITED_API 0x03080000   /* target the CPython 3.8+ stable ABI */
+#define Py_LIMITED_API 0x030A0000   /* target the CPython 3.10+ stable ABI */
 #endif
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>

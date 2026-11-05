@@ -99,6 +99,8 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--csv") && i + 1 < argc) csvp = argv[++i];
         else { fprintf(stderr, "audio_first_sound: unknown argument %s (see the top of the file)\n", argv[i]); return 2; }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     if (!gapbuf[0]) snprintf(gapbuf, sizeof gapbuf, "%s", sim ? "0.3,1,2" : "1,10,60");
     {
         char* p = gapbuf;

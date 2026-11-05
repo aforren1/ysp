@@ -1158,9 +1158,11 @@ touch the core.
   of a line; Firefox 157's spread over 6 ms (its `contextTime` steps with
   its 512-frame callback, its `performanceTime` follows the read) and are
   stamped `outputLatency` before the read. The device keeps the lower
-  envelope (a pair at most 0.5 ms above the least late of the last 32)
-  and puts `outputLatency` back where a pair is that old. Both rules are
-  in the device's JavaScript and C, not the core: a core rule on report
+  envelope (a read at most 0.5 ms above the least late of the last 32
+  reads; v0.5.2 moved it from the blocks to the reader, see
+  [Web envelope](#web-envelope-v052)) and puts `outputLatency` back where
+  a pair is that old. Both rules are in the device's JavaScript, not the
+  core: a core rule on report
   spread (the halt rule's half period, 1.3 ms at 128 frames) restarted
   Firefox's fit 41 times in one run before them.
 - **One tier.** Every web onset is `YAU_TIER_WEB` (5), confirmed or not
@@ -1621,7 +1623,55 @@ builds only. In a browser an input has `YAU_TIER_WEB` (`test_capture_web_tier`,
 mutant `cap-23`). No page has opened an input: web capture never ran
 ([web.md](web.md), "Not measured").
 
-### Not measured (capture)
+### The null device on a virtual clock (v0.6.0)
+
+`YAU_BACKEND_NULL` was miniaudio's null device only: a timer thread on
+real time, tier SIM. On a loaded CI runner its callbacks came late and
+early, the fit of callback times spread by milliseconds (3.8 ms on a
+macOS runner), and the `--sim` checks of `audio_schedule`,
+`audio_av_sync`, `trial_audio_keyboard` and `trial_stop_signal` allowed 1
+to 10 ms, each widened after a failure.
+
+On ysp/rt.h's virtual clock (rt.h v0.9.0) `BACKEND_NULL` is now a device
+of the header's own, "virtual null". Decisions:
+
+- **A virtual timer per device, on the driver thread.** Each block is
+  rendered when the frame thread's wait passes the block's time
+  (`t0 + frames * 1e9 / rate`), with that time as `tick.t_entry`. The
+  fit's points are then on one line: drift 0, spread 0. A real thread
+  in lockstep with the clock would give the same times with a handshake
+  per block.
+- **The render runs on the frame thread.** The command and completion
+  queues are single-producer single-consumer rings, and producer and
+  consumer are then the same thread, at different times. Nothing in
+  `yau_render()` waits, so it is safe inside a wait.
+- **Its caps copy miniaudio's null device:** the project format, a
+  period of `desc.period` (10 ms by default), a buffer of three periods,
+  callback positions, tier SIM. One block lives in the handle's backend
+  memory (8 KB), so the period is capped at 1024 stereo float frames;
+  the caps say so. The capture side and DUPLEX get the same device,
+  which hands the input silence.
+- **A real backend is refused on the virtual clock**, with a message.
+  Its callbacks come on real time, so their stamps would mean nothing.
+
+Measured on 2026-10-14 (Windows 11 test laptop, MSVC 19.44 Release, and
+MinGW-w64 gcc 16.1): every onset of the four examples is on its plan
+within half a sample (at most 10.4 us at 48 kHz, where the plan falls
+between two samples), and their checks now say so. `audio_schedule
+--null`'s stop is on its plan within half a sample, and its four starts
+are exactly 9600 frames apart. The same records in three idle runs and
+two runs beside 24 CPU-bound processes.
+
+Tests: `tests/adapt/audio_test_vnull.h` opens the null device on the
+virtual clock, checks the caps, the exact fit and frame 0 at the open's
+time, plays three clicks at times off the sample grid (each on its plan
+within half a sample), repeats the run later on the clock and compares
+it to the nanosecond from its own start, opens a virtual null input and
+a DUPLEX pair (a 4-channel input: exactly 48000 frames in a virtual
+second), and checks the refusal of a real backend for output and input.
+Mutants vn-01 to vn-08 are caught (8 of 8).
+
+## Not measured (capture)
 
 - Capture times against a reference: no line-in cable and no TTL into an
   input, so every capture time is tier 3 and the input's share of a
@@ -1770,12 +1820,799 @@ several times, because one open shows one state.
 `audio_clockstats --exclusive --seconds 12`, 8 times in a row, must give
 0 XRUN records in every run.
 
+## Web envelope (v0.5.2)
+
+The problem: the sound demo (`av.html`) on the ScriptProcessorNode path
+sometimes opened with no sound. A session before this one saw it in 2 of
+6 Firefox runs and 1 Chrome run. Conditions below: the laptop of this
+note, 2026-10-14, Windows 11, Realtek speakers, Firefox 157.0.1 and
+Chrome 155, both headless unless a row says headed, emsdk 6.0.12,
+`av.html --n 4` with the 2048-frame period the page asks for, each batch
+under the measurement lock (load at the lock 0 to 19 %).
+
+### How the opens were counted
+
+The harness that is now `tests/probe/web_audio` opens the page as a
+visitor does: a new browser and profile for each open, a trusted click on
+Start, no autoplay flag or preference. `probe.js` wraps `AudioContext` and taps each
+connection to the destination with an `AnalyserNode`, read every 100 ms.
+An open is silent when `yau_open()` failed or when no context the program
+kept carried a sample above 0.005 (the click peaks at 0.050). The probe
+also records each context's states, its `resume()` and `suspend()` calls
+with the page's user activation, and its callbacks.
+
+### The cause
+
+Every silent open had the same record: the first `yau_open()`, inside
+the Start click, failed with `gave no steady callbacks within 3 s
+(fit points=1 to 3)`, and the program ran its flashes with no sound.
+The context was not the problem: it was allowed to start, it ran (0.44 to
+0.74 s after `new AudioContext()`, after miniaudio's `suspend()` and
+`resume()`), and it made 54 to 62 callbacks before the open gave up.
+
+The reports were the problem. A debug build logged each block's report
+and each read of `getOutputTimestamp()`. In Firefox, `contextTime` steps
+with the browser's audio callback (8, 10.7 and 21.3 ms steps headless),
+and `performanceTime` is the read's time, so a pair's offset
+(`performanceTime` less `contextTime`) is a sawtooth 12 ms wide. v0.4.1
+kept the lower envelope in the block's C code, over the pairs the blocks
+saw. A ScriptProcessorNode block sees the pair that its own handler read
+just before it, at a phase locked to the browser's audio callback. When
+one lucky pair set the envelope low, every block's pair was above it by
+more than 0.5 ms until that pair left the last 32 blocks, 1.4 s at 43 ms
+a block. In 3 failing opens with the debug build, the reports stood still
+for 0.4 to 0.7 s, moved, then stood still from 0.9 to 1.2 s after the
+first block to the end of the open. The fit got 1 to 3 points and no
+500 ms span. On the AudioWorklet path a block runs every 2.7 ms
+and sees every pair, so the envelope held there.
+
+### The fix
+
+The reader keeps the envelope, over every read: the 10 ms timer's and the
+ScriptProcessorNode handler's. It publishes only reads on the envelope
+(at most 0.5 ms above the least late of its last 32 reads, about 0.3 s),
+and the block takes each new published pair. The rule is the one v0.4.1
+measured; only the samples it sees changed. The describe line's
+`passed` count is now the reader's.
+
+### One context
+
+`av_sync.c` opens the sound in the Start tap, then closes it and opens it
+again after the screen's setup (a stall of seconds with a
+ScriptProcessorNode running left its timing wrong). Before this change
+the second open made a new AudioContext, about 2 s after the tap.
+Chrome and Firefox let it start (the page had a user activation once),
+but WebKit starts audio only from a gesture, so on iOS Safari it may wait
+suspended, and the open fails.
+
+The web device now keeps the page's AudioContext on the ScriptProcessorNode
+path. Around miniaudio's device init it puts a wrapper in place of
+`AudioContext`: the first context made is the kept one when it is free and
+at the asked rate, else a new one that is kept. miniaudio's sample-rate
+queries in the same init get the same context, and the kept context's
+`close()` does nothing. `yau_close()` suspends it (miniaudio's stop), the
+next `yau_open()` resumes it with a new ScriptProcessorNode. No API
+changed; a program that reopens needs no change. A second output open at
+the same time, another rate, a DUPLEX device and the AudioWorklet path
+(whose worklet module a context registers once) made their own context.
+v0.6.1 brings the AudioWorklet path in: see
+[One context on the AudioWorklet path](#one-context-on-the-audioworklet-path-v061).
+
+### The warm-up limit
+
+`yau_open()` waited at most 3 s from the device's start for the fit to
+span 0.5 s. A browser's context runs some time after it is made (0.23 to
+0.72 s in Chrome 155, 0.40 to 0.79 s in Firefox 157 on the
+ScriptProcessorNode path, measured by the probe), and that time came out
+of the 3 s. Now the 3 s run from the first callback the frame thread
+sees, and the whole wait is at most 5 s from the start. The cap lets the
+first callback come 2 s late, 2.5 times the latest measured, with the
+full 3 s after it; a device that never calls back fails after 5 s, not 3.
+The error says which: no callback, or no steady callbacks.
+
+### Measurements
+
+The v0.5.1 and v0.5.2 builds of the same `av_sync.c`. Headless rows: one
+batch of 30 per cell. Headed rows: the two builds interleaved, 15 each.
+
+| Opens with no sound | v0.5.1 | v0.5.2 |
+|---|---|---|
+| Firefox, ScriptProcessorNode, headless | 8 of 30 | 0 of 30 |
+| Firefox, ScriptProcessorNode, headed | 3 of 15 | 0 of 15 |
+| Firefox, AudioWorklet, headless | 0 of 30 | 0 of 30 |
+| Chrome, ScriptProcessorNode, headless | 0 of 30 | 0 of 30 |
+| Chrome, ScriptProcessorNode, headed | 0 of 15 | 0 of 15 |
+| Chrome, AudioWorklet, headless | 0 of 30 | 0 of 30 |
+
+A debug build of each timed the first `yau_open()` in Firefox
+(ScriptProcessorNode, headless, 10 opens each, interleaved): 2.0 to 3.0 s
+with v0.5.1, 1.4 to 2.3 s with v0.5.2, of which the context's start took
+0.42 to 0.75 s. The open's 3 s limit runs from the device's start, after
+the context is made, so v0.5.2 leaves about 0.7 s of it. With sound, the
+other figures did not move: blocks with a report per run 173 to 229
+(v0.5.1) and 172 to 198 (v0.5.2) on the ScriptProcessorNode path, 0 XRUN
+records there; each trial's sound within -0.74 to +0.82 ms of its plan in
+the headed Firefox runs of both builds.
+
+The Chrome failure of the earlier session did not come back in 75 Chrome
+opens of v0.5.1. In Chrome a pair spreads 0.15 ms, so the 0.5 ms rule
+passed nearly every block's pair; a single pair far below the line, as
+headless Chrome once gave (34 ms off, [web.md](web.md)), would have held
+v0.5.1's reports for 32 blocks (1.4 s), and holds v0.5.2's for 32 reads
+(0.3 s). That is a reading of the rule, not a measurement.
+
+With one context and the warm-up limit (the final v0.5.2), headless, the
+same conditions, one batch per cell, `tests/probe/web_audio/run.sh`. A
+driver failure (a timeout or a detached frame before the page gave a
+result; 3 in 128 runs) is not an open, so two cells got extra opens:
+
+| | Opens | Silent | AudioContexts made per open | Sound after the reopen |
+|---|---|---|---|---|
+| Firefox, ScriptProcessorNode | 30 | 0 | 1 | 30 of 30 |
+| Firefox, AudioWorklet | 31 | 0 | 3 (the device's, 2 rate queries) | no reopen |
+| Chrome, ScriptProcessorNode | 31 | 0 | 1 | 31 of 31 |
+| Chrome, AudioWorklet | 30 | 0 | 3 | no reopen |
+
+On the ScriptProcessorNode path the reopen's `resume()` came 4.1 to 9.7 s
+after the tap and ran the kept context in both browsers. Firefox reported
+no transient activation at that call in all 30 opens; headless Chrome
+under the driver reported one even 9.7 s after the tap, so Chrome's runs
+do not show the case without one. 0 XRUN records on that path.
+
+In the headless Firefox ScriptProcessorNode runs with sound, every
+trial's flash record was 16.7 or 33.3 ms (one or two frames) before its
+plan while the sound's was on it, in both builds. That is the headless
+screen's record, not the sound's, and it is not a timing figure.
+
+### Tests
+
+The envelope is JavaScript in the device; it runs only in a browser, so
+no native test or mutant reaches it. `tests/probe/web_audio/run.sh` is
+the check: 30 opens per browser and path, 0 silent.
+
+## One context on the AudioWorklet path (v0.6.1)
+
+The problem: iOS Safari starts audio only in a context made or resumed
+inside a user gesture, and v0.6.0 kept the page's AudioContext only on the
+ScriptProcessorNode path. On the AudioWorklet path each `yau_open()` made
+new contexts, so a reopen after the Start tap (`av_sync.c` closes and
+opens its sound after the screen's setup) asked for audio from a context
+made outside the gesture. Conditions below: the laptop of this note,
+2026-10-21, Windows 11, Realtek speakers, Chrome 155 and Firefox 158,
+headless unless a row says headed, emsdk 6.0.12, miniaudio 0.11.25,
+`av.html --n 4`, `tests/probe/web_audio/run.sh` under the measurement
+lock.
+
+### Where the 3 contexts came from
+
+`probe.js` now records the first stack frames at each
+`new AudioContext()`. A build with `--profiling-funcs` names the C
+functions. One AudioWorklet open, in both browsers, made:
+
+| Context | Made by | Life |
+|---|---|---|
+| 1 | Emscripten's `emscripten_create_audio_context()` (`libwebaudio.js`), from miniaudio's `ma_device_init__webaudio()` | the device's; suspended, never closed, at `yau_close()` (`emscripten_destroy_audio_context()` only suspends) |
+| 2 | miniaudio's `ma_context_get_device_info__webaudio()`, an `EM_ASM` that makes a context to read `sampleRate` and closes it, called through `ma_device_get_info()` for the device name in `ma_device_init()` | closed at once |
+| 3 | the same function through `ma_device_get_name()`, from the "Log device information" block at the end of `ma_device_init()`; the log level does not gate the call | closed at once |
+
+None came from `ysp/audio.h`'s own code, the page glue or the probe.
+v0.5.2's wrapper had given 2 and 3 the device's context on the
+ScriptProcessorNode path only, so that path made 1. Each reopen made 3
+more: 6 a page with `av_sync.c`'s reopen.
+
+### What blocked one context
+
+The wrapper alone does not do: a context's worklet scope boots once.
+miniaudio's init calls `emscripten_start_wasm_audio_worklet_thread_async()`
+at each open, which adds Emscripten's module to the context's
+`audioWorklet`, posts a boot message that instantiates the Wasm module in
+the scope, and registers the processor `miniaudio`. On a context that
+booted, the second boot would instantiate the module again in the same
+scope, and `registerProcessor()` throws for a name the scope has.
+
+A node per open does not do either. An `AudioWorkletNode` whose
+`process()` returns true stays alive after `disconnect()`
+([MDN, return value](https://developer.mozilla.org/en-US/docs/Web/API/AudioWorkletProcessor/process#return_value)).
+Measured with a page that counts a processor's calls: after
+`disconnect()` it was called 379 times in 1 s in Chrome 155 and 383 in
+Firefox 158 (48 kHz, 375 render quanta a second). Emscripten's processor
+returns what miniaudio's callback returns, always true. Its processor holds the device pointer of its
+open. After a close and a reopen of the same handle the pointer is the
+new device's, so 2 processors would call miniaudio's callback for one
+device, and the stream would advance twice a quantum. On a new handle
+the old processor would call a device that is gone.
+
+Three options were weighed. Keeping miniaudio's device across opens
+needs the device outside the handle, and every use of it in the backend
+changed. Owning the worklet setup in the header means its own copy of
+miniaudio's backend. Both are larger than the third, which was chosen:
+`yau__web_hold()` wraps two constructors during the device init. The
+reasoning, not a measurement, decided it.
+
+### The fix
+
+- The `AudioContext` wrapper (v0.5.2) now runs on both paths. On a kept
+  context that booted, it puts a stand-in `audioWorklet` on the context
+  object: `addModule()` resolves, the boot message is dropped, and the
+  processor's registration is answered as the scope answers it (a
+  `_wsc` message with success). Emscripten's own message names are
+  read from emsdk 6.0.12's `libwebaudio.js` and `audio_worklet.js`.
+- An `AudioWorkletNode` wrapper gives the kept context one node for the
+  page's life. The node calls a trampoline in the header with a slot
+  that holds miniaudio's callback and the open device. `yau_close()`
+  sets the device to 0 and waits out a call in flight; between opens the
+  node writes silence. A reopen gets the same node, connected again.
+- miniaudio's 2 sample-rate queries get the device's context, or, when
+  that context is not kept, a stand-in with its `sampleRate`. Every
+  output open makes 1 context or none.
+- A context is reused at the same rate and, on the AudioWorklet path,
+  the same channel count (the node's output count is fixed). Another
+  rate or count makes a new kept context, and the old one is closed.
+  A second output open at the same time, a DUPLEX device and a capture
+  make their own context, as before (`context=own` on the describe
+  line, which now says `kept`, `reused` or `own`).
+
+miniaudio 0.11.25 never stores the worklet stack it allocates
+(`pDevice->webaudio.pStackBuffer` stays 0, so `ma_device_uninit()`
+frees nothing): 128 KB leak at each open, before and after this change.
+The kept scope runs on its first open's stack, so the header clears that
+field before the uninit: a later miniaudio that frees it must not free
+the kept one.
+
+### Measurements
+
+The v0.6.0 and v0.6.1 headers with the same `av_sync.c`, which now
+reopens on both builds. One batch of 30 per cell.
+
+| | Opens | Silent | Contexts made a page, v0.6.0 | v0.6.1 | Sound after the reopen, v0.6.1 |
+|---|---|---|---|---|---|
+| Chrome, AudioWorklet | 30, 30 | 0, 0 | 6 (2 used) | 1 | 30 of 30 |
+| Chrome, ScriptProcessorNode | 30, 30 | 0, 0 | 1 | 1 | 30 of 30 |
+| Firefox, AudioWorklet | 30, 30 | 0, 0 | 6 (2 used) | 1 | 30 of 30 |
+| Firefox, ScriptProcessorNode | 30, 30 | 0, 0 | 1 | 1 | 30 of 30 |
+
+Every v0.6.1 open's describe line said `context=reused`. The reopen's
+`resume()` came 3.1 to 5.2 s (Chrome) and 5.1 to 6.2 s (Firefox) after
+the tap. Firefox reported no transient user activation at that call in
+60 of 60 opens; headless Chrome under the driver reported one in all,
+as in v0.5.2, so Chrome's runs do not show the case without one. v0.6.0
+also played after its reopen in Chrome and Firefox: these browsers start
+a context made after the tap once the page had a user activation. The
+case this fixes is WebKit's, which no run here reached.
+
+Sound minus plan (the browser's estimates, 120 trials a cell), v0.6.0
+against v0.6.1, headless:
+
+| | v0.6.0 | v0.6.1 |
+|---|---|---|
+| Chrome, AudioWorklet | -0.010 to +0.051 ms | -0.363 to +0.015 ms |
+| Chrome, ScriptProcessorNode | -0.010 to +0.033 ms | -0.019 to +0.520 ms |
+| Firefox, AudioWorklet | -1.72 to +1.61 ms, p5 to p95 -0.66 to +0.28 | -1.87 to +2.12 ms, p5 to p95 -0.49 to +0.65 |
+| Firefox, ScriptProcessorNode | -1.06 to +0.72 ms, p5 to p95 -0.77 to +0.40 | -1.21 to +1.17 ms, p5 to p95 -0.55 to +0.66 |
+
+Headed Firefox, the two builds alternated in batches of 5 opens:
+
+| | v0.6.0 | v0.6.1 |
+|---|---|---|
+| AudioWorklet, 30 opens each | -1.30 to +1.71 ms, p5 to p95 -0.79 to +0.54, 11 of 120 beyond 0.8 ms | -1.67 to +2.07 ms, p5 to p95 -0.75 to +0.54, 11 of 120 |
+| ScriptProcessorNode, 15 opens each | -0.78 to +1.02 ms, 4 of 60 beyond 0.8 ms | -0.75 to +1.44 ms, 1 of 60 |
+
+No difference that these counts can show. The v0.5.2 note's -0.74 to
++0.82 ms was 15 headed Firefox 157 ScriptProcessorNode opens; Firefox 158
+here gives a few trials beyond 0.8 ms in both versions, on both paths.
+0 silent opens in the headed runs; 1 context a page with v0.6.1, 6 with
+v0.6.0 on the AudioWorklet path. XRUN records (`yau_caps.xruns`), over
+every run above: 0 to 9 an open on the AudioWorklet path with v0.6.0, 0
+to 4 with v0.6.1, 0 on the ScriptProcessorNode path.
+
+### Tests
+
+The wrappers and the trampoline run only in a browser: no native test or
+mutant reaches them. CI compiles the header with
+`-DMA_ENABLE_AUDIO_WORKLETS -pthread` as C and C++.
+`tests/probe/web_audio/run.sh` is the check: 30 opens per browser and
+path, 0 silent, 1 context made a page (`summary.py`'s last line;
+`--from` lists where the contexts were made).
+
+## Enum values in the parameter table (v0.7.0)
+
+Every ysp parameter table has one row shape: `name`, `type`, `min`, `max`, `def`, `unit`, `doc`, `values` ([conventions.md](conventions.md), "Parameter tables"; gap G6 of [experiment_format.md](experiment_format.md)). `yau_param` gained `values` as its last field. `format.sample`
+lists `f32=0,s16=1,s24=2` and `backend` lists every `yau_backend`, from
+`auto=0` to `custom=7`. Before, the names were in the doc text only, in
+a style of their own. Every other row has `values` NULL.
+
+The test (`test_params()` in `tests/adapt/audio_test.c`) found two rows
+that did not match their fields, and both changed:
+
+| Row | Was | Now | Why |
+|---|---|---|---|
+| `format.channels` | `u32` | `u16` | The field is a `uint16_t` |
+| `stream.preroll` default | 0 | 12000 | A zero preroll waits for a quarter of the ring; at the default ring (48000 frames, as `stream.frames` says) that is 12000 frames |
+
+`min_tier` stays `i32`: it is an ordinal (0 off, 1 to 3), compared with
+"worse than", and its 0 is not `YAU_TIER_UNKNOWN`'s meaning.
+
+The test opens the scripted device with a zero desc (backend CUSTOM, the
+one field it must set) and compares every row's default with the
+resolved desc, the arena that open allocates (`arena_bytes`) and the
+ring of a zero stream desc (`stream.frames`, `stream.preroll`). Each
+enum row's values come from a `switch` on the C enum without a
+`default`, so gcc and clang `-Wall -Werror` stop the build when the enum
+gains a value. 4 of 4 new mutants killed (`tests/mutate/audio.toml`, pv-).
+
+## Windows headers in one translation unit (v0.7.1)
+
+`examples/audio/av_sync.c` implements ysp/audio.h and then ysp/screen.h
+in one file, the order ysp/video.h asks for. With miniaudio found, MSVC
+stopped the build under `/W4 /WX`:
+
+```
+combaseapi.h(287): warning C4005: 'CLSCTX_ALL': macro redefinition
+miniaudio.h(11584): note: see previous definition of 'CLSCTX_ALL'
+```
+
+### The cause
+
+Both headers include `<windows.h>` with `WIN32_LEAN_AND_MEAN`, which
+leaves out the COM headers. miniaudio then defines `CLSCTX_ALL` as `23`
+when no header has. ysp/screen.h's `<d3d11_4.h>` (and ysp/video.h's
+Media Foundation headers) include `<combaseapi.h>`, which defines it
+again as an expression. The two have the same value but not the same
+tokens, so MSVC warns. With ysp/screen.h first, the SDK's definition
+comes first and miniaudio keeps it: no warning. MinGW-w64 gcc does not
+warn in either order, because the second definition is in a system
+header.
+
+### The fix
+
+On Windows, the implementation includes `<objbase.h>` after
+`<windows.h>` and before miniaudio.h. miniaudio then finds the SDK's
+`CLSCTX_ALL` (and `STGM_READ`) and defines neither. This holds for any
+order of the ysp headers and for a user's own COM headers. A
+`#undef` after miniaudio was the other option; it would also remove the
+SDK's definition when a user's COM header came first.
+
+### Tests
+
+`tests/compile/order_audio_screen.c` (and its `.cpp`) implements
+ysp/audio.h, ysp/screen.h and ysp/video.h in one translation unit:
+audio first, and screen first with `YSP_TEST_SCREEN_FIRST`. CMake builds
+the four programs (`compile_order_audio_screen_c`, `_cxx`,
+`compile_order_screen_audio_c`, `_cxx`) when SDL3 and miniaudio are
+found, with the project's warnings as errors. CI builds them in the
+Screen job with MSVC and with MinGW-w64.
+
+| Compiler | Audio first, v0.7.0 | Audio first, v0.7.1 | Screen first |
+|---|---|---|---|
+| MSVC 19.44 `/W4 /WX` | C4005, fails | builds, runs | builds, runs |
+| MinGW-w64 gcc 16.1 `-Wall -Wextra -Wpedantic -Werror` | builds, runs | builds, runs | builds, runs |
+
+With the fix, the `msvc-full-local` build (SDL3 3.4.0, miniaudio 0.11.25,
+`/W4 /WX`) builds `examples/audio/av_sync.c` and every other target, and
+ctest passes 97 of 97, the four order checks included; `audio_av_sync
+--sim` passes. gcc 11.4 on WSL2 compiles both orders as C11 and C++17
+with `-Werror` (compiled, not linked: no SDL3 install there for CMake).
+
+The fix has no mutant in `tests/mutate/audio.toml`: removing the
+include breaks the build of the compile check, and the mutation runner
+counts a build that fails as a bad mutant, not as a kill. The table's
+v0.7.0 column is that mutant, run by hand.
+
+## Real-thread tests under load (2026-10-22)
+
+Three cases in `tests/adapt/audio_test.c` run the scripted device on a
+real thread: `test_threads`, `test_stream_threads` and `test_wav_pump`.
+Their waits counted sleeps of 1 ms. On a loaded machine one sleep takes
+much longer, and the device thread can miss many sleeps of the frame
+thread in a row. The header had no fault.
+
+### The failure
+
+`test_wav_pump` failed with "play did not start at its seek (got -1)":
+
+1. The test played the stream and stopped it after 30 sleeps of 1 ms.
+2. Under load the device thread rendered no block in those 30 sleeps, so
+   the play was still QUEUED at the stop.
+3. The header canceled the play, which is correct. A CANCELED record has
+   sample -1 and no end frame.
+4. The result wait (3000 sleeps) waited for an end frame that did not
+   come. It ran out, and the test then compared sample -1 with the seek.
+
+The test was instrumented to fail at each wait. In 7 failed runs of 10,
+every failure was "not started at the stop" with the state QUEUED. The
+readiness wait before the play did not run out in any run, so the first
+guess (that wait ran out) was wrong.
+
+### The fix
+
+Each wait counts the steps of the thread that it waits for: device
+blocks, producer loops, or pump steps (on_msg and on_idle calls, through
+wrappers). A wait fails at the wait, with its own message, only after
+that thread made enough steps without the event. A wall-clock limit of
+300 s stops a hang and is not a pass condition. `test_wav_pump` waits
+for the play to start before it stops it, and plays 30 device blocks,
+not 30 ms. A CANCELED play there is a failure. The readiness wait also
+fails when the pump ran every message and the WAV wants nothing, because
+then no further step comes.
+
+### Measurements
+
+Windows 11, 16 logical processors. Load: 128 threads that spin at normal
+priority. MinGW gcc 16.1 -O2 build of the test.
+
+| Build | Runs | Failed |
+|---|---|---|
+| Before | 10 | 5 |
+| Before, waits instrumented | 10 | 7 |
+| After | 20 | 0 |
+| After, MSVC Debug under ctest | 10 | 0 |
+
+With 32 busy threads, the test before the fix did not fail in 10 runs.
+Mutants `ld-01` to `ld-04` in `tests/mutate/audio.toml` check that the
+three cases still see a wrong read position, a lost seek, a wrong first
+sample and a wrong recorded sample.
+
+## A wait without end (v0.7.2)
+
+`yau_wait(au, id, timeout_ns, out)` computed its deadline as
+`YAU__NOW() + timeout_ns`. With `INT64_MAX`, the "forever" of the bindings'
+`math.inf` and `Inf`, the sum overflows: undefined behavior in C, and in
+practice a negative deadline, so the wait returned `YAU_ERR_TIMEOUT` at
+once. The bindings passed 2^62 ns (146 years) instead
+([Bindings](#bindings)).
+
+The deadline is now the sum saturated at `INT64_MAX`
+(`yau__deadline()`). The clock is never negative, so a negative timeout
+cannot overflow; it gives a past deadline and `YAU_ERR_TIMEOUT` at once,
+as before. The other sums of a time and a duration in the header add
+constants of at most 5 s to the clock (`yau_stream_close()`, the open's
+warm-up, the capture's start).
+
+`ysp-audio` 0.7.2 and `ysp_audio` 1.0.1 pass `INT64_MAX` for `Inf` again.
+
+Tests: the virtual null device case of `tests/adapt/audio_test.c` plays a
+sound 50 ms ahead and waits with `INT64_MAX`, then with
+`INT64_MAX - 1 ms`; both return `YAU_OK` with the onset on its plan
+within half a sample. A wait with `INT64_MIN` returns `YAU_ERR_TIMEOUT`
+without a sleep. The bindings' tests wait with `math.inf` and `Inf` on a
+pending sound. Mutants `wt-01` (the plain sum) and `wt-02` (only
+`INT64_MAX` itself saturates) in `tests/mutate/audio.toml` are killed.
+
+## The lead on the null device (2026-10-27)
+
+The binding test `test_open_caps` (`ysp-audio` 0.7.2, Python 3.12,
+Windows, null device) failed once: `lead` read -60 us just after the
+open. Three reruns passed. The test was wrong, not the header: the lead
+can be negative.
+
+### Why the lead can be negative
+
+`yau_lead_ns()` is the time of the frame after the next block, minus
+now (LEAD in the header):
+
+    lead = fit_time(w + period) - now
+
+`w` is the first frame of the next block. With callback times only, as
+on the null device, the fit is the lower envelope of the callback entry
+times, so `fit_time(w)` is the earliest time for the next callback. A
+callback that comes `late` after its envelope time makes the lead
+`period - late` just before it. Just after it, the lead is
+`2 * period - late`. Thus:
+
+- The lead is at most two periods (20 ms here) while every callback is
+  on or after the fit's line. A refit that moves the envelope can add a
+  little: up to 0.15 ms was measured.
+- The lead is negative while the next callback is more than one period
+  late on the fit.
+- The lead is more than two periods while a callback that the fit does
+  not hold yet came before the fit's line (v0.7.3 corrects this list). The
+  fit takes the least late callback of each 50 ms and, after the
+  warm-up, refits once a second. In the first second after the open, a
+  callback less late than all callbacks of the warm-up thus adds the
+  difference to the lead. A macOS CI runner (run 40613569249,
+  `ysp-audio` 0.7.2) read 35.4 ms just after the open. That reading has
+  another cause: the wheel's whole-second null-device timer ("The null
+  device on macOS" below).
+
+A negative lead is still the shortest lead that can be met. The device
+is behind its fit, so a sound at `now + lead` starts on its frame. The
+period of margin in the lead covers one more callback between the read
+and the handover.
+
+miniaudio's null device (0.11.25, `ma_device_write__null()`) polls its
+timer and waits in `ma_sleep(10)` steps for each block of 10 ms. On
+Windows, `Sleep(10)` waits until the next timer tick: 15 ms at the
+default resolution of 15.6 ms, and 10 to 11.6 ms after
+`timeBeginPeriod(1)`. So its callbacks come up to 15 ms late, and the
+lead goes down to about -5 ms. `yau_open()` returns at its first check
+(every 10 ms) after the callback that completes the warm-up. A reading
+just after the open is thus `2 * period` minus that callback's lateness
+minus the check's delay, which is negative only when the two add up to
+more than 20 ms. Load makes both longer.
+
+### Measurements
+
+Windows 11 Enterprise (10.0.26200), Intel Core i7-1360P (16 logical
+processors), AC power, MSVC 19.44 Release and CPython 3.12.11, miniaudio
+0.11.25. "Load" is 16 busy loops at normal priority. Each open reads the
+lead at once, then reads it every 0.5 ms (C: 1 s per open, Python: 0.3 s
+per open). Lateness is the callback entry time minus `yau_time_of()` of
+the block's first frame at the end of the open. Source:
+`leadrepro.c` and `pyrepro.py`, outside the repository (not kept).
+
+| Run | Opens | Negative just after the open | Min just after the open | Sampled leads negative | Sampled min, median, max | Callback lateness p50, p99 |
+|---|---|---|---|---|---|---|
+| C, idle, default timer | 100 | 0 | 2.8 ms | 7.0 % | -5.5, 7.9, 20.0 ms | 7.5, 15.0 ms |
+| C, idle, `timeBeginPeriod(1)` | 100 | 0 | 1.3 ms | 0.17 % | -1.0, 9.8, 20.1 ms | 5.0, 10.4 ms |
+| Python, idle | 300 | 0 | 1.0 ms | 7.2 % | -5.6, 7.8, 20.0 ms | not measured |
+| C, load, default timer | 100 | 5 | -1.6 ms | 8.2 % | -5.3, 7.5, 20.0 ms | 7.6, 15.0 ms |
+| Python, load | 300 | 4 | -3.8 ms | 7.3 % | -11.6, 7.8, 20.1 ms | not measured |
+
+`Sleep(10)` in the same process took 14.6 to 16.3 ms at the default
+timer and 10.1 to 11.6 ms after `timeBeginPeriod(1)`. The header does
+not call `timeBeginPeriod()`, and neither does Python.
+
+With 500 more opens under load, the old check (`0 < lead < 0.5`) failed
+7 times and the new checks 0 times.
+
+### The fix
+
+The header does not change. The tests now check what the lead must be:
+
+- `bindings/python/ysp_audio/tests/test_audio.py` `test_open_caps` and
+  `bindings/mex/test_mex_audio.m` check that the lead is not 0 (the
+  fit exists), that its seconds equal its ns, and that it is between
+  -0.5 s and 0.5 s (v0.7.3 raised the upper bound from two periods plus
+  5 ms, after the macOS reading above). A broken clock or fit is far
+  outside that range.
+- `tests/adapt/audio_test.c` `test_lead_late_callback` runs the scripted
+  device as the null device (callback times, tier SIM, no jitter). The
+  lead is 10 ms just before an on-time callback and -2 ms while that
+  callback is 12 ms late. A sound at `now + lead` handed over before the
+  late callback, and another one handed over between it and the next,
+  both start on frame `w + period`, not LATE. A third one handed over
+  after both is LATE. The scripted device has a new `late_ns`: a block
+  that comes late with no silence before it, as from a timer thread.
+- Mutants `le-01` (the lead clamped at 0) and `le-02` (the lead with no
+  period of margin) in `tests/mutate/audio.toml` are killed.
+
+
+## The null device on macOS (2026-10-28)
+
+The `ysp-audio` wheel's tests failed on macOS CI runners with
+`input 'NULL Capture Device' gave no steady blocks within 3 s (lost=0,
+fit points=1, fits=1)` in `test_capture_null`. This happened in run
+40523167077 (x86_64 under Rosetta) and in run 40681676973 (arm64).
+macOS runners also read leads of -50.5 ms (run 40523167077) and 35.4 ms
+(run 40613569249) just after the open. The header was not the cause.
+
+### Cause
+
+miniaudio 0.11.25 selects its timer at compile time. With
+`MAC_OS_X_VERSION_MIN_REQUIRED < 101200` it divides
+`mach_absolute_time()` ticks by an integer number of ticks per second,
+in integer arithmetic. `ma_timer_get_time_in_seconds()` thus returns
+whole seconds. Only the null device uses this timer. It hands over a
+block when the timer says that the block's time has come. With whole
+seconds, it hands over nothing for a second, then 100 blocks of 10 ms
+in a burst.
+
+cibuildwheel built the wheel for macOS 10.9 (tag
+`macosx_10_9_universal2`). clang 11 gives
+`__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__` 1090 for both
+`x86_64-apple-macos10.9` and `arm64-apple-macos10.9`, and 101300 for
+10.13. CMake builds on a macOS runner set no target, so they target the
+runner's own macOS version and use the other timer.
+
+The capture open waits for 0.5 s of fit (`YAU__WARM_NS`), with one fit
+point per 50 ms of callbacks. A burst is shorter than 50 ms. The first
+bucket thus closes at the burst after 2 s (one point) and the second at
+the burst after 3 s. That is the open's limit, so the open passes or
+fails on which comes first.
+
+### Reproduction
+
+Windows 11, MinGW-w64 gcc (Octave 10.1), the measurement lock held. A
+copy of miniaudio.h had the Windows timer changed to the same integer
+division. A C program opened a null capture (1 channel, 24000-frame
+ring) and then a null output, and read the lead every 100 ms. Three
+runs of each:
+
+| miniaudio timer | Capture open | Output open | Lead, 20 reads |
+|---|---|---|---|
+| as released | 0.58 to 0.66 s, passed | 0.56 to 0.63 s | -2.7 to 17.6 ms |
+| whole seconds | failed at 3.03 s, "fit points=1, fits=1" (3 of 3) | 2.02 to 2.03 s | 0.3 to 21.6 ms after the open, then down by 100 ms per read to -908 ms, once a second |
+
+Source: `repro.c` outside the repository (not kept).
+
+### The fix
+
+The header does not change. `bindings/python/ysp_audio` builds for
+macOS 10.13: `pyproject.toml` sets `MACOSX_DEPLOYMENT_TARGET` for
+cibuildwheel, `setup.py` raises a lower or missing target for a source
+build, and `ysp_audio_ext.c` stops the compile below 10.12. 10.13 is the
+target of CPython 3.12 and later on python.org. A C program that uses
+the null device on macOS must also target 10.12 or later. Real devices
+(Core Audio) do not use this timer.
+
+Not yet confirmed on a macOS runner: the next CI run is the check.
+
+
+## 32-bit Windows (v0.7.3)
+
+CI's `ysp-audio` wheel for 32-bit Windows (cibuildwheel's `cp39-win32`,
+run 40613569249) did not link: `LNK2001: unresolved external symbol
+__InterlockedExchange64`. MSVC has `_InterlockedExchange64` on x64 and
+ARM64 only. The x86 branch of the atomics now stores a 64-bit value with
+a `_InterlockedCompareExchange64` loop (`lock cmpxchg8b`), as ysp/rt.h
+does; the load was already a compare-exchange. x64 and ARM64 are
+unchanged.
+
+The other lines of the CI failure were in the tests: the lead above two
+periods ("The lead on the null device", above). `test_lead_early_callback`
+in `tests/adapt/audio_test.c` gives the scripted device warm-up callbacks
+8 ms late and then one on time, and checks that the lead is two periods
+plus 8 ms and that a sound at `now + lead` starts on its frame. The
+Python and MEX tests now check only that the lead is between -0.5 s and
+0.5 s.
+
+Verification, Windows 11, MSVC 19.44 (Visual Studio 2022) for x86
+(`cmake -A Win32`): every target that does not need SDL3 builds, and
+`test_audio` passes. CPython 3.10 for x86 builds the `ysp-audio` wheel
+and passes its tests.
+
+Since 2026-10-28 CI builds no 32-bit Windows wheel (64-bit only; see
+docs/bindings.md). The header keeps its x86 path, because the headers
+stay portable C99.
+
+## UTF-8 paths (v0.7.3)
+
+A WAV path (`yau_wav_desc.path`, `yau_wavw_desc.path`) is UTF-8 on every
+platform, as ysp/dataset.h, ysp/pack.h and ysp/video.h 0.6.0 take paths.
+Before v0.7.3, `fopen()` on Windows read the path in the ANSI code page,
+so a folder named with a character outside it (Omega on Windows-1252)
+did not open. The video-paths work found this: ysp/video.h 0.6.0 opens
+a soundtrack's WAV file itself and hands this header a reader.
+
+On Windows the path is converted with `MultiByteToWideChar(CP_UTF8,
+MB_ERR_INVALID_CHARS)` and opened with `_wfsopen()`: a read shares every
+access, a write denies other writers, as ysp/dataset.h opens its files.
+Codes:
+
+- A path that is not UTF-8, or longer than 1023 UTF-16 units:
+  `YAU_ERR_ARG` (Windows only; a POSIX name is any bytes).
+- A missing file or folder: `YAU_ERR_IO`, as before, with "no such
+  file" in the message. ysp/video.h gives `YVID_ERR_NOT_FOUND` here, but
+  in this header `YAU_ERR_NOT_FOUND` means a sound id that is not among
+  the last 256, and a missing file always was `YAU_ERR_IO`.
+
+The bindings pass UTF-8: Python's `PyUnicode_FSConverter()` (UTF-8 on
+Windows, PEP 529), and the MEX `ysp_audio` 1.0.2 `mxArrayToUTF8String()`
+in MATLAB (1.0.1 used `mxArrayToString()`, the local code page; Octave
+keeps char as UTF-8).
+
+Tests: `test_wav_paths` in `tests/adapt/audio_test.c` writes a WAV file
+with `yau_wavw` in a folder named with Omega, Zhe, a CJK ideograph and
+U+1F3AC (a surrogate pair in UTF-16), probes it, and checks the codes and
+messages above. It passes with MSVC 19.44 x64 and x86, MinGW-w64 gcc
+(the mutation runner) and WSL2 gcc 11.4 and clang 11. Mutants `pa-01`
+(the path in the ANSI code page), `pa-02` (no "no such file") and
+`pa-03` (a path that is not UTF-8 tried as a file) are killed.
+`test_wav_utf8_path` (Python) and `test_mex_audio.m` (MATLAB, Octave)
+open a file in such a folder through the bindings. In Octave 10.1 the
+folder has Omega, Zhe and the CJK ideograph only: Octave's own `fopen`
+and `copyfile` fail on a character outside the BMP (`fopen` gives -1),
+so the test cannot make the file there.
+
+## Bindings
+
+`ysp-audio` 0.7.3 (Python `ysp.audio`) and the MEX function `ysp_audio`
+1.0.2 bind this header for a PsychoPy or Psychtoolbox experiment, and own
+the one audio implementation that `ysp-vis` shares through a C table
+([bindings.md](bindings.md#sharing-one-implementation-across-modules)).
+Both compile miniaudio 0.11.25 in. The Python reference is
+[bindings/python/ysp_audio/README.md](../bindings/python/ysp_audio/README.md);
+the MEX commands are in [bindings/mex/README.md](../bindings/mex/README.md#ysp_audio).
+
+### What is bound
+
+- The device: `Audio(...)` / `'open'` with every desc field a user sets
+  (device name part, backend, rate, channels, sample, exclusive, period in
+  seconds, voices, queue, min_tier, onset_offset, arena size,
+  device_index); `caps()`, `describe()`, `lead`, `frame_at()`,
+  `time_of()`, `update()`, `close()`. `devices()` lists the names the open
+  matches.
+- Buffers in the arena: `tone()`, `noise()`, `click()`, a host buffer
+  (float32 or float64; NumPy, `array.array`, a list; a MATLAB matrix of
+  frames x channels), `load_wav()`, `arena_reset()`; a buffer from before
+  a reset is refused.
+- Playing: `play_at(buffer, t)`, `play()` with gain, a channel list,
+  offset, frames and loops, `cancel()`, `stop()` with a ramp, `gain()`.
+- The record (`Onset`, a MEX struct): every field of `yau_onset`, times in
+  seconds with the exact ns beside them, the tier and the flags, and
+  `pending`. `wait()` releases the GIL; another thread's call on the same
+  `Audio` meanwhile raises `BusyError`, because the handle has one frame
+  thread.
+- Streams fed by the host (`Stream.write()`, `'stream_write'`) and WAV
+  files streamed (`Wav.feed()`, `'wav_feed'`): the producer is a host
+  thread or the frame loop, never the device thread. `sample_at()` and
+  `time_of()` give the lock of a started stream.
+- Capture: `Capture(...)` / `'capture_open'`, `read()` (frames x
+  channels and the capture frame of the first row), `time_of()` (an int
+  frame, or a float from a detector), `frame_at()`, `info()`.
+- `wav_info()` (`yau_wav_probe()`), `db()`, `now()`.
+
+### What is not bound, and why
+
+- `desc.source` and `desc.dev` (the Audio source and Audio device
+  extensions): their functions run on miniaudio's real-time thread, which
+  must not take the GIL or enter MATLAB ([rt.md](rt.md#bindings) set this
+  rule). A host producer fills a stream instead.
+- `desc.ring` and its records: the handle's records (`result()`, `wait()`)
+  carry the same fields, and a binding of `yrt_ring` is open in
+  [rt.md](rt.md#bindings).
+- DUPLEX (`desc.capture`): an `Audio` and a `Capture` open apart; one
+  duplex device would need a second owner of the capture handle.
+- The detectors (`yau_vkey`, `yau_edge`) and the WAV writer: pure
+  functions that NumPy, MATLAB's `audiowrite()` and the analysis already
+  do on the captured frames; `yau_capture_save()` needs the writer.
+- The arena given by the caller (`desc.arena`), `yau_alloc()` without
+  data, the mixing helpers (`yau_fill_tone()`, `yau_ramp()`, `yau_mix()`):
+  the buffer calls cover them.
+- The parameter table (`yau_params()`): for a player's loader.
+- No device list in the header: `devices()` calls miniaudio's
+  `ma_context_get_devices()` with the same backend, the list whose names
+  `desc.device` is matched against.
+
+### Header limit found
+
+`yau_wait()` added the timeout to now, so `INT64_MAX` overflowed and timed
+out at once. `ysp-audio` 0.7.1 and `ysp_audio` 1.0.0 passed 2^62 ns (146
+years) for "forever" (`math.inf`, `Inf`). Fixed in v0.7.2
+([A wait without end](#a-wait-without-end-v072)); the bindings pass
+`INT64_MAX` again.
+
+### Tests
+
+On miniaudio's null device, so CI needs no sound card:
+
+| Host | Result |
+|---|---|
+| Python 3.14, Windows 11, MSVC 19.44 | `ysp_audio` 22 tests, `share_test` 23 tests: pass (0.7.2) |
+| Python 3.12, Ubuntu 22.04 on WSL2, gcc 11.4 | the same 22 and 23: pass (0.7.2) |
+| Python 3.10.20 x64 and x86, Windows 11, MSVC 19.44 | `ysp_audio` 23 tests: pass (0.7.3) |
+| MATLAB R2023a, Windows 11, MSVC 19.44 | `test_mex_audio` 58 checks: pass (1.0.2); `test_mex_share` 26 checks: pass (1.0.1) |
+| Octave 10.1, Windows 11, MinGW-w64 gcc | `test_mex_audio` 58 checks: pass (1.0.2; its UTF-8 folder has no character outside the BMP, which Octave's `fopen` refuses); `test_mex_share` 26: pass (1.0.1) |
+| Octave 6.4, Ubuntu 22.04 on WSL2 | 54 and 22 checks: pass (1.0.0; not run for 1.0.1) |
+
+One manual run on the default device (Speakers (Realtek(R) Audio), WASAPI
+shared, 48 kHz): `example.py --device` and the same tone from MATLAB
+R2023a gave confirmed onsets at tier 2, residuals 1.6 to 8.6 us, lead 47
+to 48 ms. Not run: CoreAudio, ALSA or PulseAudio hardware through the
+bindings, capture from a real input through the bindings, macOS.
+
+### Cost
+
+The i7-1360P laptop above, Windows 11, on AC, the measurement lock held
+(load 4 to 20 % at the start), miniaudio's null device, 200 batches of 60
+calls, a batch's mean per call:
+
+| Host | `play_at(buffer, t)` p50 / p99 | An empty call (`now`) p50 / p99 |
+|---|---|---|
+| Python 3.14 | 343 / 922 ns | 78 / 332 ns |
+| MATLAB R2023a | 5.9 / 11.1 us | 3.2 / 7.5 us |
+| Octave 10.1 | 15.4 / 27.8 us | 12.6 / 23.6 us |
+
+`play_at()` allocates nothing in the binding but the returned int (Python)
+or double (MEX). A forwarded call through the shared table costs about
+1 ns ([bindings.md](bindings.md#cost)).
+
 ## Linux: first runs (2026-10-12)
 
-The Linux sections were measured on this work's first numbering,
-v0.5.0, before the merge with v0.5.0 (capture) and v0.5.1 (exclusive
-start) above. The work is v0.6.0, and the sections say v0.6.0. Capture
-on Linux is in "Linux: capture".
+The Linux sections were measured on this work's own numbering, v0.5.0 and
+v0.6.0, before the merges with v0.5.0 (capture), v0.5.1 (exclusive start)
+and v0.5.2 to v0.7.3 above. The work is v0.8.0, and the sections say
+v0.8.0. Capture on Linux is in "Linux: capture".
 
 The machine: Debian 12, kernel 6.11.5 liquorix, PulseAudio 16 (not
 PipeWire), the Intel HDA codec's analog output (ALC3246) as the default
@@ -1815,10 +2652,10 @@ spreads 0.36 to 0.61 ms).
 - Next: a position source. PulseAudio gives stream timing info (a
   timestamp with the sink's latency); ALSA gives status timestamps, but
   only on a `hw:` device, which PulseAudio holds while it runs. The
-  PulseAudio one is built in v0.6.0 (next section). A line-in run then
+  PulseAudio one is built in v0.8.0 (next section). A line-in run then
   gives the tier.
 
-## Linux: a position from PulseAudio (v0.6.0)
+## Linux: a position from PulseAudio (v0.8.0)
 
 PulseAudio answers `pa_stream_update_timing_info()` with a
 `pa_timing_info`: the bytes the server has read from the stream
@@ -1846,7 +2683,7 @@ The device rate came out +3.8 ppm in both runs from the reports, and
 -9.2 and +4.8 ppm from the callbacks. `sink_usec` was 2.7 to 3.5 ms, and
 the transport delay 30 to 104 us.
 
-So from v0.6.0 a PulseAudio report is (`read_index` / bytes per frame
+So from v0.8.0 a PulseAudio report is (`read_index` / bytes per frame
 minus `sink_usec` in frames, the reply's timestamp mapped from
 CLOCK_REALTIME to the ysp_rt clock). The header asks at most every 50 ms:
 each request costs libpulse an allocation and a round trip, and the fit
@@ -1893,7 +2730,7 @@ for the callback feed), all killed: the clock left on CLOCK_REALTIME, bytes take
 the source not declared, and the sink's latency not subtracted (the
 spread passes 50 us, as the probe's `read_index` row says).
 
-## Linux: ALSA exclusive (v0.6.0)
+## Linux: ALSA exclusive (v0.8.0)
 
 For the shortest periods, ALSA can open the card's own PCM (`hw:`), past
 the sound server: the Linux counterpart of WASAPI exclusive mode. Two
@@ -1923,7 +2760,7 @@ through both. At 64-frame periods with three periods (10 s), the status
 stayed RUNNING, the line's sd was 19 us and its largest residual 107 us,
 with no jump.
 
-From v0.6.0, on ALSA in exclusive mode:
+From v0.8.0, on ALSA in exclusive mode:
 
 - `desc.device` must name a card's device, an id like `:0,0` or
   `hw:0,0`; `open()` refuses otherwise ("ALSA exclusive mode needs a
@@ -1984,13 +2821,13 @@ device position, no underrun, a spread under 50 us (5.1 us here).
 Mutants `alsa-00` to `alsa-05`, all killed. Tier 3: no loopback can
 capture an exclusive stream, as on WASAPI.
 
-## Choosing a device (v0.6.0)
+## Choosing a device (v0.8.0)
 
 `desc.device` was a part of the device's name, and the first device whose
 name had it was taken. Names repeat: on this machine ALSA lists 26
 playback devices, among them "HDA Intel PCH, HDMI 1" twice (`:0,7`,
 `:0,1`) and "HDA ATI HDMI, HDMI 0" twice; a rig with an interface, a
-headphone amplifier and HDMI has several plausible outputs. From v0.6.0:
+headphone amplifier and HDMI has several plausible outputs. From v0.8.0:
 
 - `desc.device` is first compared with each device's id: the WASAPI
   endpoint id, ALSA's `:card,device` (or `hw:card,device`), the
@@ -2007,14 +2844,14 @@ headphone amplifier and HDMI has several plausible outputs. From v0.6.0:
 A capture's `desc.device` follows the same rules, and
 `yau_list_inputs()` lists the inputs ("Linux: capture").
 
-## AUTO on Linux (v0.6.0)
+## AUTO on Linux (v0.8.0)
 
 Of the three Linux paths measured here (ALSA exclusive, PulseAudio, and
 ALSA's `"default"`, which on a desktop is PulseAudio's plugin), ALSA
 exclusive has the shortest safe lead (4 to 6 ms at 64-frame periods,
 against 15 to 17 ms through PulseAudio) and a device position as good as
 PulseAudio's; `"default"` has neither a position nor a short lead. AUTO
-until v0.6.0 was ALSA's `"default"`, the worst of the three. So AUTO on
+until v0.8.0 was ALSA's `"default"`, the worst of the three. So AUTO on
 Linux is ALSA exclusive, and a program that wants the sound server (an
 operator's machine, a demo beside a browser) says `YAU_BACKEND_PULSE`.
 This is the strict choice elsewhere in ysp (STRICT OPEN; ysp/screen.h's
@@ -2058,7 +2895,7 @@ default card's first device), and the refusal under
 not exclusive, no suspension, no resume, no 32-bit request, the card's
 last device.
 
-## Linux: capture (v0.6.0)
+## Linux: capture (v0.8.0)
 
 Until this section the capture had not run on Linux. v0.5.0's code there
 fitted callback times on every Linux path, and under AUTO it opened ALSA's

@@ -8,17 +8,27 @@
  *           yscr_poll() before begin(). Esc alone must not abort; one
  *           Shift+Esc is one abort; Shift+Esc held with 8 repeats is one
  *           press; 3 presses in 1 s are 3 aborts and no panic, because the
- *           loop reported the first. The child exits 0.
+ *           loop reported the first. The child exits 0. desc.window_thread
+ *           AUTO: the window thread runs (WINDOW THREAD, v0.10.0).
  *   hang    the frame loop stops (a hang) 1 s after it started; 3 presses
  *           must end the child with YSCR_PANIC_EXIT_CODE, after its panic
- *           callback ran and the gamma entry was restored.
+ *           callback ran and the gamma entry was restored. The window
+ *           thread OFF: the frame thread owns the window, as in v0.9.0.
  *   ghost   the same after a 7 s hang, when Windows has put a ghost window
  *           in front of the hung one.
  *   held    a hung child gets Shift+Esc held with 8 repeats: no panic.
+ *   release the window thread ON, the frame loop idle for 4 s (a MATLAB
+ *           pause): 3 presses must release the display (the window
+ *           minimized) and the child must live; its next begin() reports
+ *           0x21 (KEY | PANIC), the one after 0x20, and it exits 0.
+ *   kill    the window thread ON and blocked (a window call of 8 s): 3
+ *           presses must end the child with YSCR_PANIC_EXIT_CODE.
  *   mode    (--mode-test only) fullscreen in a mode other than the
- *           desktop's, hung: after the panic the desktop mode must be
- *           back. Prints when it came back, while the child still lived.
- *           The display shows the other mode for about 3 s.
+ *           desktop's, hung, window thread OFF: after the panic the
+ *           desktop mode must be back. Prints when it came back, while
+ *           the child still lived. Then the same with the window thread ON
+ *           and the release: the mode must come back while the child lives
+ *           on. The display shows the other mode for about 3 s each.
  * Keys go out only while the child's window (or its ghost) is the
  * foreground window, so they cannot reach another program; when another
  * window takes the foreground, the case fails without sending. The
@@ -85,10 +95,32 @@ static void fake_gamma(void) {
     if (dc) yscr__win.delete_dc(dc);
 }
 
+static void block_fn(void* ms) { Sleep((DWORD)(uintptr_t)ms); }
+
+/* After the release: begin() reports the panic, every time, until close. */
+static int child_after_release(void) {
+    yscr_frame f;
+    int64_t until = yrt_now_ns() + 1000000000LL;
+    int rc;
+    printf("released=%d release_ms=%.1f iconic=%d\n", (int)yscr__released,
+           (double)(yscr__wt.t_release - yscr__wd.t_panic) / 1e6, IsIconic((HWND)g_scr.hwnd) ? 1 : 0);
+    while (yrt_now_ns() < until) {
+        rc = yscr_begin(&g_scr, &f);
+        if (rc == YSCR_QUIT) printf("abort mask=0x%x presses=%d\n", f.abort, f.abort_presses);
+        else { printf("child: begin %s after the release\n", yscr_strerror(rc)); break; }
+        Sleep(200);
+    }
+    printf("lived\n");
+    fflush(stdout);
+    yscr_close(&g_scr);
+    return 0;
+}
+
 static int child(int argc, char** argv) {
     yscr_desc d;
     yscr_frame f;
-    int i, hang = 0, aborts = 0, presses = 0;
+    int i, hang = 0, idle = 0, block = 0, aborts = 0, presses = 0;
+    DWORD idle_ms = 4000;
     int64_t hang_after = 1000000000LL, until, t0;
     void (GLCALL *clear_color)(float, float, float, float);
     void (GLCALL *clear)(unsigned int);
@@ -109,6 +141,14 @@ static int child(int argc, char** argv) {
     d.panic_fn = last_words;
     for (i = 2; i < argc; i++) {
         if (!strcmp(argv[i], "hang")) hang = 1;
+        else if (!strcmp(argv[i], "idle")) hang = idle = 1;
+        else if (!strcmp(argv[i], "block")) hang = block = 1;
+        else if (!strcmp(argv[i], "--idle-ms") && i + 1 < argc) idle_ms = (DWORD)atol(argv[++i]);
+        else if (!strcmp(argv[i], "--wt") && i + 1 < argc) {
+            i++;
+            d.window_thread = !strcmp(argv[i], "on") ? YSCR_WINDOW_THREAD_ON
+                            : !strcmp(argv[i], "off") ? YSCR_WINDOW_THREAD_OFF : YSCR_WINDOW_THREAD_AUTO;
+        }
         else if (!strcmp(argv[i], "--hang-ms") && i + 1 < argc) hang_after = atoll(argv[++i]) * 1000000LL;
         else if (!strcmp(argv[i], "--mode") && i + 4 < argc) {
             d.windowed = false;
@@ -158,6 +198,20 @@ static int child(int argc, char** argv) {
         clear_color(0.12f, 0.12f, 0.12f, 1.0f);
         clear(0x4000u);
         yscr_flip(&g_scr);
+    }
+    if (block) {   /* the window thread does not answer: the panic ends the process */
+        printf("hanging\n");
+        fflush(stdout);
+        yscr_window_call(&g_scr, block_fn, (void*)(uintptr_t)8000);
+        printf("child: the block ended and the process lived\n");
+        fflush(stdout);
+        for (;;) Sleep(1000);
+    }
+    if (idle) {    /* a host that waits (MATLAB's pause): the release */
+        printf("hanging\n");
+        fflush(stdout);
+        Sleep(idle_ms);
+        return child_after_release();
     }
     if (hang) {
         printf("hanging\n");
@@ -363,7 +417,7 @@ static void case_hang(const char* name, const char* args, DWORD wait_ms) {
 static void case_held(void) {
     kid k;
     DWORD code = 0;
-    if (!start(&k, "hang") || !wait_line(&k, "ready", 8000) || !in_front(&k) || !wait_line(&k, "hanging", 15000)) {
+    if (!start(&k, "hang --wt off") || !wait_line(&k, "ready", 8000) || !in_front(&k) || !wait_line(&k, "hanging", 15000)) {
         verdict("held", 0); finish(&k); return;
     }
     Sleep(300);
@@ -372,6 +426,67 @@ static void case_held(void) {
     verdict("held: no panic", WaitForSingleObject(k.pi.hProcess, 0) == WAIT_TIMEOUT);
     three(&k, &code);   /* and end it */
     verdict("held: then 3 presses panic", code == YSCR_PANIC_EXIT_CODE);
+    finish(&k);
+}
+
+/* 3 presses 300 ms apart to a child whose window thread answers: it must
+ * live, with its window minimized; later it reports the panic and exits 0.
+ * Returns the time from the third press to the child's exit, or -1. */
+static double three_release(kid* k, DWORD* code, double* lived_ms) {
+    int64_t t = 0;
+    int i;
+    for (i = 0; i < 3; i++) { if (i) Sleep(300); t = press(k, 1, 0); }
+    *code = 0;
+    *lived_ms = -1;
+    g_mode_back_ms = -1;
+    if (!t) return -1;
+    while (WaitForSingleObject(k->pi.hProcess, 2) == WAIT_TIMEOUT) {
+        DEVMODEW m;
+        memset(&m, 0, sizeof m);
+        m.dmSize = sizeof m;
+        if (g_mode_back_ms < 0 && g_desk_w && EnumDisplaySettingsW(NULL, ENUM_CURRENT_SETTINGS, &m) &&
+            m.dmPelsWidth == g_desk_w)
+            g_mode_back_ms = (double)(yrt_now_ns() - t) / 1e6;
+        if (yrt_now_ns() - t > 12000000000LL) return -1;
+    }
+    *lived_ms = (double)(yrt_now_ns() - t) / 1e6;
+    GetExitCodeProcess(k->pi.hProcess, code);
+    return *lived_ms;
+}
+
+static void case_release(const char* name, const char* args, int mode_case) {
+    kid k;
+    DWORD code = 7;
+    double lived;
+    DEVMODEW before, after;
+    memset(&before, 0, sizeof before);
+    if (mode_case) {
+        before.dmSize = sizeof before;
+        EnumDisplaySettingsW(NULL, ENUM_CURRENT_SETTINGS, &before);
+        g_desk_w = before.dmPelsWidth;
+    }
+    if (!start(&k, args) || !wait_line(&k, "ready", 8000) || !in_front(&k) || !wait_line(&k, "hanging", 15000)) {
+        printf("%s", k.buf); verdict(name, 0); finish(&k); return;
+    }
+    Sleep(300);
+    three_release(&k, &code, &lived);
+    g_desk_w = 0;
+    drain(&k);
+    printf("%s", k.buf);
+    printf("  the child lived %.1f ms after press 3, exit code %lu\n", lived, (unsigned long)code);
+    if (mode_case) {
+        printf("  desktop width back %.1f ms after press 3, while the process lived\n", g_mode_back_ms);
+        memset(&after, 0, sizeof after);
+        after.dmSize = sizeof after;
+        EnumDisplaySettingsW(NULL, ENUM_CURRENT_SETTINGS, &after);
+        if (after.dmPelsWidth != before.dmPelsWidth || after.dmPelsHeight != before.dmPelsHeight) {
+            ChangeDisplaySettingsExW(NULL, NULL, NULL, 0, NULL);
+            printf("  the mode was put back by the parent\n");
+        }
+    }
+    verdict(name, code == 0 && lived > 1000 && strstr(k.buf, "released=1") != NULL && strstr(k.buf, "iconic=1") != NULL &&
+                  strstr(k.buf, "abort mask=0x21 presses=3") != NULL && strstr(k.buf, "abort mask=0x20 presses=0") != NULL &&
+                  strstr(k.buf, "lived") != NULL && (!mode_case || g_mode_back_ms >= 0));
     finish(&k);
 }
 
@@ -398,7 +513,7 @@ static void case_mode(void) {
     if (pick < 0) { printf("mode: no other mode at the desktop's refresh\n"); return; }
     mode_now(&before);
     g_desk_w = before.dmPelsWidth;
-    snprintf(args, sizeof args, "hang --hang-ms 1500 --mode %d %d %d %d", modes[pick].w, modes[pick].h,
+    snprintf(args, sizeof args, "hang --wt off --hang-ms 1500 --mode %d %d %d %d", modes[pick].w, modes[pick].h,
              modes[pick].refresh_num, modes[pick].refresh_den);
     printf("mode: desktop %lux%lu, switching to %dx%d for about 3 s\n", (unsigned long)before.dmPelsWidth,
            (unsigned long)before.dmPelsHeight, modes[pick].w, modes[pick].h);
@@ -427,6 +542,14 @@ static void case_mode(void) {
         ChangeDisplaySettingsExW(NULL, NULL, NULL, 0, NULL);   /* never leave it changed */
         printf("  the mode was put back by the parent\n");
     }
+    /* the same mode with the window thread: released, not ended */
+    snprintf(args, sizeof args, "idle --wt on --hang-ms 1500 --idle-ms 4000 --mode %d %d %d %d", modes[pick].w,
+             modes[pick].h, modes[pick].refresh_num, modes[pick].refresh_den);
+    /* the panel takes a while after the mode came back: a switch at once
+     * gave no flip statistics for 3 s, and settling failed (2026-10-27) */
+    Sleep(3000);
+    printf("mode-release: switching to %dx%d for about 3 s\n", modes[pick].w, modes[pick].h);
+    case_release("mode-release", args, 1);
 }
 
 int main(int argc, char** argv) {
@@ -437,9 +560,11 @@ int main(int argc, char** argv) {
         else { fprintf(stderr, "usage: screen_abort [--mode-test]\n"); return 2; }
     }
     case_live();
-    case_hang("hang", "hang", 300);
-    case_hang("ghost", "hang", 7000);
+    case_hang("hang", "hang --wt off", 300);
+    case_hang("ghost", "hang --wt off", 7000);
     case_held();
+    case_release("release", "idle --wt on --idle-ms 4000", 0);
+    case_hang("kill", "block --wt on", 300);
     if (mode_test) case_mode();
     return g_fail;
 }

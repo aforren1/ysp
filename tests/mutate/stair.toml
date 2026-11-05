@@ -1,0 +1,151 @@
+# ysp/stair.h mutants: the v0.3.0 snapshot (yst_save, yst_open_saved) and the
+# parameter table (yst_params). Mutant 00 is a control with no effect; it
+# must survive.
+header = "ysp/stair.h"
+
+[test.stair]
+source = "tests/adapt/stair_test.c"
+compiler = "gcc"
+flags = ["-std=c99", "-O2", "-w", "-DYST_MAX_TRIALS=128", "-DYST_MAX_REVERSALS=32"]
+libs = ["-lm"]
+timeout = 120
+
+[[mutant]]
+id = "00"
+name = "control: no change (must pass)"
+test = "stair"
+expect = "survived"
+why = "Control: a change with no effect. The test must pass, so a failure here means the setup is wrong, not the header."
+find = '#define YST_VERSION_PATCH  0'
+replace = '#define YST_VERSION_PATCH  0 '
+
+[[mutant]]
+id = "01"
+name = "save: direction without its sign"
+test = "stair"
+why = "A resumed history would record every step as upward; the snapshot no longer holds the session."
+find = 'yst__put(w, (uint64_t)(uint8_t)t->direction, 1, "history.direction");'
+replace = 'yst__put(w, (uint64_t)(t->direction != 0), 1, "history.direction");'
+
+[[mutant]]
+id = "02"
+name = "desc: stop_trials not compared"
+test = "stair"
+why = "A resume with another stop rule would load silently and end at another trial than the saved session."
+find = '    yst__put_i32(w, d->stop_trials, "stop_trials");'
+replace = ''
+
+[[mutant]]
+id = "03"
+name = "load: bytes after the end accepted"
+test = "stair"
+why = "A snapshot glued to other data, or two written over each other, would load as if whole."
+find = '''if (r.pos != r.len) return yst__load_fail(s, "bytes after the snapshot's end");'''
+replace = '''if (0) return yst__load_fail(s, "bytes after the snapshot's end");'''
+
+[[mutant]]
+id = "04"
+name = "load: no YST_MAX_TRIALS bound"
+test = "stair"
+why = "A snapshot with more trials than the handle holds would write past the history array."
+find = '    if (!r.bad && n > YST_MAX_TRIALS)'
+replace = '    if (0)'
+
+[[mutant]]
+id = "05"
+name = "load: recorded reversal count not checked"
+test = "stair"
+why = "A snapshot from a build with a larger YST_MAX_REVERSALS would write past the reversal arrays."
+find = '    if (!r.bad && rec != yst__n_recorded(s))'
+replace = '    if (0)'
+
+[[mutant]]
+id = "06"
+name = "load: step_index not bounded by n_steps"
+test = "stair"
+why = "The next step would read desc.steps past the schedule."
+find = '        s->step_index < 0 || s->step_index >= s->desc.n_steps ||'
+replace = '        s->step_index < 0 ||'
+
+[[mutant]]
+id = "07"
+name = "load: a failed load leaves the handle open"
+test = "stair"
+why = "A caller that ignores the return value would run a half-restored staircase."
+find = '''    snprintf(msg, sizeof(msg), "ysp_stair: yst_open_saved: %s", why);
+    yst_close(s);'''
+replace = '''    snprintf(msg, sizeof(msg), "ysp_stair: yst_open_saved: %s", why);'''
+
+[[mutant]]
+id = "08"
+name = "save: one byte short accepted"
+test = "stair"
+why = "yst_save() would write past the caller's buffer by a byte."
+find = '    if (!buf || cap < need || need > 0x7fffffffu) return YST_ERR_ARG;'
+replace = '    if (!buf || cap + 1 < need || need > 0x7fffffffu) return YST_ERR_ARG;'
+
+[[mutant]]
+id = "09"
+name = "load: a response of 2 accepted"
+test = "stair"
+why = "A corrupt history would feed the trial estimate a response that is not 0 or 1."
+find = '            (logs && !(t->shown > 0.0)) || resp > 1 || rev > 1 ||'
+replace = '            (logs && !(t->shown > 0.0)) || rev > 1 ||'
+
+[[mutant]]
+id = "10"
+name = "load: a non-finite level accepted"
+test = "stair"
+why = "A NaN level would propose NaN on every later trial."
+find = '        v < (int)YST_STOP_NONE || v > (int)YST_STOP_FULL || !yst__finite(s->level))'
+replace = '        v < (int)YST_STOP_NONE || v > (int)YST_STOP_FULL)'
+
+[[mutant]]
+id = "11"
+name = "load: a reversal trial past the history accepted"
+test = "stair"
+why = "yst_reversal_trial() would name a trial that does not exist."
+find = '''            s->reversal_trial[i] >= n)'''
+replace = '''            s->reversal_trial[i] > n)'''
+
+[[mutant]]
+id = "12"
+name = "params: n_up's default 0"
+test = "stair"
+why = "A designer would show 0 for n_up, and a loader writing defaults would write a value the header never runs."
+find = '''    { "n_up", "i32", 0, INT_MAX, 1, "",'''
+replace = '''    { "n_up", "i32", 0, INT_MAX, 0, "",'''
+
+[[mutant]]
+id = "13"
+name = "params: step_type lists two of its three values"
+test = "stair"
+why = "A loader would refuse \"db\", a step the header has."
+find = '"lin=0,log=1,db=2" },'
+replace = '"lin=0,log=1" },'
+
+[[mutant]]
+id = "14"
+name = "params: est_trials has no row"
+test = "stair"
+why = "A loader that checks keys against the table would refuse a field the header has."
+find = '''    { "est_trials", "i32", 0, INT_MAX, 0, "",
+      "trials the trial estimate averages; 0 = all after the schedule ran out", NULL },
+'''
+replace = ''
+
+[[mutant]]
+id = "15"
+name = "params: a row names no field"
+test = "stair"
+why = "A loader would accept a key that sets nothing."
+find = '''    { "initial_rule", "bool", 0, 1, 0, "",'''
+replace = '''    { "initial_rules", "bool", 0, 1, 0, "",'''
+
+[[mutant]]
+id = "16"
+name = "params: n_steps not marked required"
+test = "stair"
+why = "A designer would offer 0, which open() refuses."
+find = '"required: the entries in steps; 1 = a fixed step", NULL },'
+replace = '"the entries in steps; 1 = a fixed step", NULL },'

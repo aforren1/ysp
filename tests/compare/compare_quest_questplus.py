@@ -37,7 +37,7 @@ from importlib.metadata import version
 import numpy as np
 import questplus as qp
 
-import ysp.quest as pq
+import ysp.quest as yqst
 
 SEED = 20260922
 N_TRIALS = 60
@@ -63,8 +63,8 @@ def make_qp(guess, lapse):
 
 
 def make_pq(guess, lapse, nuisance):
-    return pq.Quest([STIM], [THRESH, SLOPE, pq.values(guess, nuisance=nuisance),
-                             pq.values(lapse, nuisance=nuisance)], stop_trials=10000)
+    return yqst.Quest([STIM], [THRESH, SLOPE, yqst.values(guess, nuisance=nuisance),
+                             yqst.values(lapse, nuisance=nuisance)], stop_trials=10000)
 
 
 def p_correct(x, a, b, g, lam):
@@ -128,7 +128,7 @@ def run(label, guess, lapse, nuisance, rng):
         dpost = float(np.max(np.abs(post_ours - post_ref)))
         rows.append((trial, i, j, kind, k_ours, k_ref, dpost, abs(eh[i] - eh[j])))
     return dict(label=label, rows=rows, P=q.n_param, t_ours=t_ours, t_qp=t_qp,
-                est_ours=q.estimate(pq.EST_MEAN),
+                est_ours=q.estimate(yqst.EST_MEAN),
                 est_ref=[ref.param_estimate[k] for k in
                          ("threshold", "slope", "lower_asymptote", "lapse_rate")])
 

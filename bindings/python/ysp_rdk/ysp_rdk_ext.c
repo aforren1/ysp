@@ -4,7 +4,7 @@
  * bit: the same desc as keyword arguments, start and update, replay from
  * the logged inputs (rdk.last records), the whole trial's positions in one
  * call, snapshots, and the outputs as NumPy arrays. Built against the
- * stable ABI / Limited API (CPython 3.8+): the type is a heap type made
+ * stable ABI / Limited API (CPython 3.10+): the type is a heap type made
  * with PyType_FromSpec, and an output is a bytearray that numpy.frombuffer
  * views (no per-dot Python work). NumPy is imported on the first output.
  *
@@ -24,7 +24,7 @@
  * own.
  */
 #ifndef Py_LIMITED_API
-#define Py_LIMITED_API 0x03080000
+#define Py_LIMITED_API 0x030A0000
 #endif
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
@@ -36,11 +36,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* The distribution's version is the header's, plus a fourth number that
- * counts changes to this binding alone (0.2.0.1 was times in seconds). The
- * header moved to 0.2.1, so there is no suffix until the binding alone
- * changes again; tests/test_rdk.py checks that this and pyproject.toml
- * agree. */
+/* The distribution's version is the header's. A change to this binding
+ * alone adds a fourth number (0.3.0.1 was the CPython 3.10 floor), which goes
+ * when the header's version moves; tests/test_rdk.py checks that this and
+ * pyproject.toml agree. */
 #define RDK_VERSION YRDK_VERSION_STRING
 
 /* The largest time in seconds that converts back to its ns exactly. With

@@ -1,13 +1,13 @@
-/* ysp/rigfile.h - v0.3.0 - public domain single-header rig profile
+/* ysp/rigfile.h - v0.5.1 - public domain single-header rig profile
  *
  *   The file on a rig that says which device plays each role and what the
  *   rig's loopbacks measured, kept outside every pack (docs/devices_spec.md
  *   11.2, decided 2026-10-09): "ysp-rig 1", JSON in one canonical form,
  *   in the user's config folder. Load it with errors that name the field,
  *   check every loopback file it names by SHA-256, give a role's desc for
- *   ysp/device.h and open the instance, change a binding, store a
- *   loopback result, write it back canonically, and give its hash for the
- *   data file header.
+ *   ysp/device.h and open the instance, give the viewing geometry,
+ *   change a binding, store a loopback result, write it back canonically,
+ *   and give its hash for the data file header.
  *
  *   REQUIRES ysp/device.h (and so ysp/rt.h, ysp/input.h, ysp/box.h,
  *   ysp/serial.h) and ysp/json.h beside it; this header includes them, and
@@ -49,7 +49,9 @@
  *     written   when it was last written                       required
  *     roles     { NAME: role, ... }, at most 32; NAME is 1 to 31 of
  *               A-Z a-z 0-9 _ . - (the ydev_roles name)         required
- *     display   { onset_offset_s, calibration: { file, sha256 } }
+ *     display   { onset_offset_s, latency, calibration: { file, sha256 } }
+ *     view      { distance_mm, width_mm, width_px }, all required
+ *               (v0.5.0, VIEWING GEOMETRY)
  *   A role:
  *     family    a ysp/box.h family name: xid, line, photo, triggerbox,
  *               biosemi, mmbts, lines, parallel; or lsl, a Lab
@@ -69,6 +71,9 @@
  *               <= max
  *     bounds    an input's stamp minus event: { n, lo_s, hi_s, date,
  *               sha256 }, all required, lo <= hi
+ *   display.onset_offset_s is desc.onset_offset_ns of ysp/screen.h, -1 to
+ *   1 s, required; display.latency (v0.4.0) is the photodiode run it came
+ *   from, light minus flip onset, in a role latency's shape.
  *   sha256 names the loopback's own result file, kept beside the profile
  *   in loopback/<sha256>.txt (yrig_store_loopback() puts it there), 64
  *   lowercase hex digits. display.calibration.file is a plain file name in
@@ -77,10 +82,46 @@
  *   CANONICAL FORM. yrig_write() gives the bytes: ysp/json.h's
  *   YJS_WRITE_PRETTY (keys in bytewise order, two spaces, LF) and one
  *   final LF; seconds as exact decimals of the nanoseconds with no
- *   trailing zeros (0.000577, 2); a default is left out (options with no
- *   option, latched false, an unset pulse, an empty button map). The
- *   profile's hash, yrig_hash(), is the SHA-256 of these bytes, so it does
- *   not change with the whitespace or number spelling of a hand edit.
+ *   trailing zeros (0.000577, 2); millimeters as the shortest decimal that
+ *   reads back as the same double (570, 518.4); a default is left out
+ *   (options with no option, latched false, an unset pulse, an empty
+ *   button map, no view). The profile's hash, yrig_hash(), is the SHA-256
+ *   of these bytes, so it does not change with the whitespace or number
+ *   spelling of a hand edit. A profile without view has the bytes, and so
+ *   the hash, that v0.4.0 gave it; adding or changing view changes the
+ *   hash, as it changes every size in degrees.
+ *
+ *   ---------------------------------------------------------------------
+ *   VIEWING GEOMETRY
+ *   ---------------------------------------------------------------------
+ *   view says what a degree of visual angle is on this rig: distance_mm
+ *   from the eye to the screen's center (the chin rest), width_mm the
+ *   width of the lit image on the screen, and width_px the pixels across
+ *   it (the mode it was measured in), each from a tape or a ruler. Each mm
+ *   value is above 0 and at most 100000; width_px is 1 to 100000.
+ *   yrig_ppd() gives the pixels per degree at the center, width_px /
+ *   width_mm * distance_mm * tan(1 deg), the scale ysp/gfx.h's YGFX_DEG
+ *   uses. For ysp/gfx.h's ygfx_view of a drawable w pixels wide:
+ *       view.distance_mm = p.view.distance_mm;
+ *       view.width_mm    = w * p.view.width_mm / p.view.width_px;
+ *   which holds for a window too, because the pitch, width_mm / width_px,
+ *   does not change with the window. A full-screen mode of another width
+ *   scales the image: measure again in that mode. The geometry is the
+ *   rig's, never a pack's (docs/experiment_format.md, D4).
+ *
+ *   ---------------------------------------------------------------------
+ *   LOOPBACK FILES
+ *   ---------------------------------------------------------------------
+ *   Text, "name value" lines, durations in seconds read exactly to the ns;
+ *   other lines (comments, samples_s, the tool's notes) are in the hash, not
+ *   read. One "format" line says which file it is:
+ *     ysp-out-latency 1    n p5_s median_s p95_s max_s date
+ *                          (examples/device/out_latency.c; role latency)
+ *     ysp-in-bounds 1      n lo_s hi_s date
+ *                          (examples/rigfile/bounds.c; role bounds)
+ *     ysp-display-onset 1  n p5_s median_s p95_s max_s date onset_offset_s
+ *                          (examples/rigfile/onset.c; display.latency)
+ *   yrig_read_loopback() reads any of them and returns which.
  *
  *   ---------------------------------------------------------------------
  *   WHERE IT LIVES
@@ -103,8 +144,10 @@
  *   dir), each latency and bounds file and the calibration file is read
  *   and hashed: check is YRIG_CHECK_OK, MISSING, CHANGED (another hash), or
  *   DIFFERS (the hash is right, but the profile's summary is not the
- *   file's; the output latency files of examples/device/out_latency.c are
- *   compared field by field). Every check that is not OK adds a line to
+ *   file's, or the file is another kind: a file with a LOOPBACK FILES
+ *   format line is compared field by field, and display.onset_offset_s
+ *   with the file's onset_offset_s; a file without one is checked by its
+ *   hash only). Every check that is not OK adds a line to
  *   notes, and yrig_source() gives that role YIN_TIER_UNKNOWN: the numbers
  *   stay in the struct for the log, never for a tier. Without a folder
  *   every check is YRIG_CHECK_NOT_RUN. A file that fails its check is not
@@ -141,6 +184,30 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.5.1 - Held files. yrig_save_file(), yrig_save() and
+ *          yrig_store_loopback() try the rename 5 times, 10 ms apart, when
+ *          another program has the file open (ERROR_ACCESS_DENIED,
+ *          ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION), as
+ *          ysp/dataset.h does: under ctest -j 4 a save failed in about 1
+ *          run of 150 with ERROR_ACCESS_DENIED. The message names the step
+ *          that failed and the OS error. Files open shared as in
+ *          ysp/dataset.h, a reader denying no one: MSVC builds used
+ *          _wfopen_s, which denied every other open, so a load failed
+ *          while another program had the profile open. No API change.
+ *   v0.5.0 - view: the viewing geometry (distance_mm, width_mm, width_px;
+ *          yrig_view, VIEWING GEOMETRY) and yrig_ppd(). A profile without
+ *          view writes and hashes as in v0.4.0; a v0.4.0 reader refuses
+ *          view (an unknown key). Closes gap G2 of
+ *          docs/experiment_format.md.
+ *   v0.4.0 - display.latency: the photodiode run behind onset_offset_s,
+ *          checked at load like a role's latency (yrig_display.latency).
+ *          yrig_read_loopback() reads the three LOOPBACK FILES formats:
+ *          the new "ysp-in-bounds 1" (examples/rigfile/bounds.c) and
+ *          "ysp-display-onset 1" (examples/rigfile/onset.c) beside
+ *          "ysp-out-latency 1"; yrig_loopback.offset_ns. Bounds files, like
+ *          the display's file, are now compared with the profile's summary
+ *          (DIFFERS), and a file of the wrong kind DIFFERS. Profiles of
+ *          v0.3.0 load unchanged; a v0.3.0 reader refuses display.latency.
  *   v0.3.0 - The ysp conventions (README.md, Conventions); breaks the API.
  *          yrig_start(dev, p, role, base, err, cap) is
  *          bool yrig_open_device(dev, p, role, base): it opens a device,
@@ -157,7 +224,11 @@
  *   v0.1.0 - first version: the "ysp-rig 1" format, load, check, write,
  *          hash, bind, store a loopback result.
  *
- *   STATUS: v0.2.0, 2026-10-09. docs/device.md ("The rig profile") has the
+ *   STATUS: v0.5.1, 2026-10-27 (docs/device.md, "A held profile"):
+ *   tests/adapt/rigfile_test.c holds the profile without
+ *   FILE_SHARE_DELETE during a save and lets go during another; 4 copies
+ *   at a time, 1200 runs each with MSVC and MinGW-w64.
+ *   STATUS: v0.5.0, 2026-10-21. docs/device.md ("The rig profile") has the
  *   how-to, the reference and the test counts.
  *
  *   ---------------------------------------------------------------------
@@ -167,9 +238,9 @@
 #define YSP_RIGFILE_H_INCLUDED
 
 #define YRIG_VERSION_MAJOR 0
-#define YRIG_VERSION_MINOR 3
-#define YRIG_VERSION_PATCH 0
-#define YRIG_VERSION_STRING "0.3.0"
+#define YRIG_VERSION_MINOR 5
+#define YRIG_VERSION_PATCH 1
+#define YRIG_VERSION_STRING "0.5.1"
 
 #include "ysp/device.h"
 #include "ysp/json.h"
@@ -214,13 +285,21 @@ extern "C" {
 #define YRIG_CHECK_DIFFERS 4   /* the summary is not the file's             */
 #define YRIG_CHECK_NOT_RUN 5   /* parsed without a folder                   */
 
-/* A loopback's summary: latency (an output) uses n, p5, median, p95, max;
- * bounds (an input) uses n, lo, hi. */
+/* The kinds of loopback file (LOOPBACK FILES): yrig_read_loopback()'s
+ * result. */
+#define YRIG_FILE_OUT_LATENCY   1   /* "ysp-out-latency 1"                     */
+#define YRIG_FILE_IN_BOUNDS     2   /* "ysp-in-bounds 1"                       */
+#define YRIG_FILE_DISPLAY_ONSET 3   /* "ysp-display-onset 1"                   */
+
+/* A loopback's summary: latency (an output, the display) uses n, p5,
+ * median, p95, max; bounds (an input) uses n, lo, hi. */
 typedef struct yrig_loopback {
     bool     set;
     int32_t  n;
     int64_t  p5_ns, median_ns, p95_ns, max_ns;
     int64_t  lo_ns, hi_ns;
+    int64_t  offset_ns;          /* a display onset file's onset_offset_s;
+                                  * not in the profile's JSON               */
     char     date[24];
     char     sha256[65];
     int      check;              /* YRIG_CHECK_*                              */
@@ -249,10 +328,21 @@ typedef struct yrig_role {
 typedef struct yrig_display {
     bool     set;
     int64_t  onset_offset_ns;
+    yrig_loopback latency;       /* the photodiode run (v0.4.0)              */
     char     calibration[64];    /* a file in the rig folder; "" = none      */
     char     calibration_sha256[65];
     int      check;              /* the calibration file's                   */
 } yrig_display;
+
+/* The viewing geometry (v0.5.0): what degrees of visual angle are on this
+ * rig. width_px is the pixel count across width_mm, so the pixel pitch
+ * holds for a window as for the full screen. */
+typedef struct yrig_view {
+    bool     set;
+    double   distance_mm;        /* eye to screen, at the screen's center     */
+    double   width_mm;           /* the image's width on the screen           */
+    int32_t  width_px;           /* the pixels across width_mm                */
+} yrig_view;
 
 typedef struct yrig_profile {
     char         rig[64];
@@ -260,6 +350,7 @@ typedef struct yrig_profile {
     int          n_roles;
     yrig_role    role[YRIG_MAX_ROLES];
     yrig_display display;
+    yrig_view    view;           /* v0.5.0                                    */
     char         dir[512];       /* the folder of loopback/; "" = none       */
     int          n_notes;
     char         notes[YRIG_MAX_NOTES][160];   /* what the checks found      */
@@ -295,12 +386,19 @@ YRIG_API yrig_role* yrig_add(yrig_profile* p, const char* role);
 YRIG_API bool yrig_remove(yrig_profile* p, const char* role);
 /* Binds role to a device: family, key; clears its latency and bounds. */
 YRIG_API int  yrig_bind(yrig_profile* p, const char* role, int family, const char* key);
+/* Pixels per degree of visual angle at the screen's center, from view;
+ * 0 when the profile has none (VIEWING GEOMETRY). */
+YRIG_API double yrig_ppd(const yrig_profile* p);
 
 /* --- loopback files ------------------------------------------------------------ */
 /* Writes data to dir/loopback/<sha256>.txt; sha_hex gets the name. */
 YRIG_API int  yrig_store_loopback(const char* dir, const void* data, size_t n, char sha_hex[65], char* err, size_t cap);
 /* The summary of an output latency file ("format ysp-out-latency 1"). */
 YRIG_API int  yrig_read_latency(const char* text, size_t n, yrig_loopback* out, char* err, size_t cap);
+/* The summary of a file of any LOOPBACK FILES format: its YRIG_FILE_*
+ * kind, or a YRIG_ERR_*. out gets that kind's fields, the date and the
+ * text's SHA-256. */
+YRIG_API int  yrig_read_loopback(const char* text, size_t n, yrig_loopback* out, char* err, size_t cap);
 YRIG_API void yrig_sha256(const void* data, size_t n, uint8_t out[32]);
 
 /* --- binding (ysp/device.h) ---------------------------------------------------- */
@@ -344,6 +442,7 @@ YRIG_API yin_source yrig_source_role(const yrig_profile* p, const char* role, yi
 #include <stdlib.h>
 #include <stdarg.h>
 #include <errno.h>
+#include <math.h>
 #include <time.h>
 
 #if defined(_WIN32)
@@ -351,6 +450,7 @@ YRIG_API yin_source yrig_source_role(const yrig_profile* p, const char* role, yi
     #define WIN32_LEAN_AND_MEAN
     #endif
     #include <windows.h>
+    #include <share.h>     /* _SH_DENYNO, _SH_DENYWR */
 #else
     #include <sys/stat.h>
     #include <sys/types.h>
@@ -463,16 +563,30 @@ static void yrig__sha_hex(const void* data, size_t n, char hex[65]) {
 static bool yrig__wide(const char* s, wchar_t* w, int cap) {
     return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, w, cap) > 0;
 }
-/* 0, or the errno of the failure. */
+/* 0, or the errno of the failure. A read denies no one and a write denies
+ * other writers, as ysp/dataset.h opens its files. _wfopen_s (MSVC builds
+ * until v0.5.1) denied every other open, so a load failed while another
+ * program, or a second rig program loading the profile, had it open. */
 static int yrig__wopen(const wchar_t* w, const wchar_t* mode, FILE** f) {
-#if defined(_MSC_VER)
-    errno_t e = _wfopen_s(f, w, mode);
-    if (e) *f = NULL;
-    return (int)e;
-#else
-    *f = _wfopen(w, mode);
+    *f = _wfsopen(w, mode, mode[0] == L'r' ? _SH_DENYNO : _SH_DENYWR);
     return *f ? 0 : errno;
-#endif
+}
+
+/* MoveFileExW of tmp over path; 0 or the Windows error. A program that
+ * has either file open without FILE_SHARE_DELETE (a virus scanner, an
+ * indexer) makes it fail for a moment: 9 of 1200 runs of
+ * tests/adapt/rigfile_test.c, 4 at a time, saw ERROR_ACCESS_DENIED
+ * (2026-10-27). 5 tries, 10 ms apart, as ysp/dataset.h does. */
+static unsigned long yrig__replace(const wchar_t* wt, const wchar_t* w) {
+    int tries;
+    DWORD e = 0;
+    for (tries = 0; tries < 5; tries++) {
+        if (tries) Sleep(10);
+        if (MoveFileExW(wt, w, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) return 0;
+        e = GetLastError();
+        if (e != ERROR_ACCESS_DENIED && e != ERROR_SHARING_VIOLATION && e != ERROR_LOCK_VIOLATION) break;
+    }
+    return e ? (unsigned long)e : 1ul;
 }
 #endif
 
@@ -541,31 +655,49 @@ static bool yrig__mkdirs(const char* path) {
 }
 
 /* path through path.tmp and a rename, so a reader sees the old file or the
- * new one, never a part. */
-static int yrig__write_file(const char* path, const void* data, size_t n) {
+ * new one, never a part. On failure the old file stays, the temporary goes,
+ * and why says what failed (the OS error number in the message). */
+static int yrig__write_file(const char* path, const void* data, size_t n, char* why, size_t cap) {
     char tmp[1040];
     FILE* f;
     bool ok;
+    why[0] = '\0';
     if (strlen(path) + 5 >= sizeof tmp) return YRIG_ERR_ARG;
     snprintf(tmp, sizeof tmp, "%s.tmp", path);
 #if defined(_WIN32)
     {
         wchar_t w[1040], wt[1040];
+        unsigned long e;
+        int oe;
         if (!yrig__wide(path, w, 1040) || !yrig__wide(tmp, wt, 1040)) return YRIG_ERR_ARG;
-        if (yrig__wopen(wt, L"wb", &f) != 0 || !f) return YRIG_ERR_IO;
+        if ((oe = yrig__wopen(wt, L"wb", &f)) != 0 || !f) {
+            snprintf(why, cap, "cannot create its .tmp (errno %d)", oe);
+            return YRIG_ERR_IO;
+        }
         ok = fwrite(data, 1, n, f) == n;
         ok = fclose(f) == 0 && ok;
-        if (ok) ok = MoveFileExW(wt, w, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+        if (!ok) snprintf(why, cap, "cannot write its .tmp");
+        else if ((e = yrig__replace(wt, w)) != 0) {
+            ok = false;
+            snprintf(why, cap, "cannot replace it (Windows error %lu; another program has it open?); the old file stays", e);
+        }
         if (!ok) DeleteFileW(wt);
     }
 #else
     f = fopen(tmp, "wb");
-    if (!f) return YRIG_ERR_IO;
+    if (!f) {
+        snprintf(why, cap, "cannot create its .tmp (errno %d)", errno);
+        return YRIG_ERR_IO;
+    }
     ok = fwrite(data, 1, n, f) == n;
     ok = fflush(f) == 0 && ok;
     ok = fsync(fileno(f)) == 0 && ok;
     ok = fclose(f) == 0 && ok;
-    if (ok) ok = rename(tmp, path) == 0;
+    if (!ok) snprintf(why, cap, "cannot write its .tmp");
+    else if (rename(tmp, path) != 0) {
+        ok = false;
+        snprintf(why, cap, "cannot replace it (errno %d); the old file stays", errno);
+    }
     if (!ok) remove(tmp);
 #endif
     return ok ? YRIG_OK : YRIG_ERR_IO;
@@ -859,7 +991,7 @@ static bool yrig__file_name_ok(const char* s) {
 }
 
 static int yrig__display(yrig__rd* r, const yjs_value* o, yrig_display* d) {
-    static const char* const keys[] = { "onset_offset_s", "calibration", NULL };
+    static const char* const keys[] = { "onset_offset_s", "latency", "calibration", NULL };
     static const char* const ckeys[] = { "file", "sha256", NULL };
     const yjs_value* c;
     int rc;
@@ -874,7 +1006,31 @@ static int yrig__display(yrig__rd* r, const yjs_value* o, yrig_display* d) {
             return yrig__bad(r, yjs_get(c, "file"), "display.calibration.file", "must be a file name in the rig folder, with no separator");
         if ((rc = yrig__sha(r, c, "display.calibration", d->calibration_sha256)) != YRIG_OK) return rc;
     }
+    if ((c = yjs_get(o, "latency")) != NULL && (rc = yrig__loopback(r, c, "display.latency", &d->latency, true)) != YRIG_OK) return rc;
     d->set = true;
+    return YRIG_OK;
+}
+
+/* A length in mm, above 0 and at most 100 m: a double, so a hand edit's
+ * spelling (570.0, 5.7e2) gives the same canonical bytes. */
+static int yrig__mm(yrig__rd* r, const yjs_value* o, const char* key, const char* field, double* out) {
+    const yjs_value* v = yjs_get(o, key);
+    if (!v) return yrig__bad(r, o, field, "is missing");
+    if (v->type != YJS_NUMBER || yjs_double(v, out) != YJS_OK) return yrig__bad(r, v, field, "must be a number (mm)");
+    if (!(*out > 0.0 && *out <= 100000.0)) return yrig__bad(r, v, field, "%s is out of range (above 0, at most 100000)", v->u.s);
+    return YRIG_OK;
+}
+
+static int yrig__view(yrig__rd* r, const yjs_value* o, yrig_view* w) {
+    static const char* const keys[] = { "distance_mm", "width_mm", "width_px", NULL };
+    int64_t px = 0;
+    int rc;
+    if ((rc = yrig__keys(r, o, "view", keys)) != YRIG_OK) return rc;
+    if ((rc = yrig__mm(r, o, "distance_mm", "view.distance_mm", &w->distance_mm)) != YRIG_OK) return rc;
+    if ((rc = yrig__mm(r, o, "width_mm", "view.width_mm", &w->width_mm)) != YRIG_OK) return rc;
+    if ((rc = yrig__int(r, o, "width_px", "view.width_px", &px, 1, 100000, true)) != YRIG_OK) return rc;
+    w->width_px = (int32_t)px;
+    w->set = true;
     return YRIG_OK;
 }
 
@@ -886,11 +1042,19 @@ static void yrig__note(yrig_profile* p, const char* fmt, ...) {
     va_end(ap);
 }
 
-YRIG_API int yrig_read_latency(const char* text, size_t n, yrig_loopback* out, char* err, size_t cap) {
+static const char* const yrig__formats[4] = { "", "ysp-out-latency 1", "ysp-in-bounds 1", "ysp-display-onset 1" };
+static const char* const yrig__kinds[4] = { "a loopback file", "an output latency file", "an input bounds file", "a display onset file" };
+
+/* The fields each kind must have: format 1, n 2, p5 4, median 8, p95 16,
+ * max 32, date 64, lo 128, hi 256, onset_offset 512. */
+static const int yrig__need[4] = { 0, 127, 1 | 2 | 64 | 128 | 256, 127 | 512 };
+
+/* A LOOPBACK FILES summary: the kind, a YRIG_ERR_*, or 0 when no line names
+ * a known format (err says which). want 0 takes any kind. */
+static int yrig__read_lb(const char* text, size_t n, int want, yrig_loopback* out, char* err, size_t cap) {
     size_t i = 0;
-    int have = 0;
+    int have = 0, kind = 0;
     yrig_loopback lb;
-    if (!text || !out) return YRIG_ERR_ARG;
     memset(&lb, 0, sizeof lb);
     while (i < n) {
         size_t e = i, sp;
@@ -905,21 +1069,34 @@ YRIG_API int yrig_read_latency(const char* text, size_t n, yrig_loopback* out, c
         if (vl && val[vl - 1] == '\r') vl--;
 #define YRIG__IS(lit) (nl == sizeof(lit) - 1 && memcmp(name, lit, nl) == 0)
         if (YRIG__IS("format")) {
-            if (!(vl == 17 && memcmp(val, "ysp-out-latency 1", 17) == 0))
-                return yrig__err(err, cap, YRIG_ERR_FORMAT, "not an output latency file (format %.*s)", (int)(vl < 40 ? vl : 40), val);
+            int k;
+            for (k = 1; k <= 3; k++)
+                if (vl == strlen(yrig__formats[k]) && memcmp(val, yrig__formats[k], vl) == 0) break;
+            if (k > 3) {
+                yrig__err(err, cap, YRIG_ERR_FORMAT, "not %s (format %.*s)", yrig__kinds[want], (int)(vl < 40 ? vl : 40), val);
+                return want ? YRIG_ERR_FORMAT : 0;
+            }
+            if (want && k != want)
+                return yrig__err(err, cap, YRIG_ERR_FORMAT, "not %s (format %.*s)", yrig__kinds[want], (int)(vl < 40 ? vl : 40), val);
+            if (kind && k != kind) return yrig__err(err, cap, YRIG_ERR_FORMAT, "two format lines");
+            kind = k;
             have |= 1;
         } else if (YRIG__IS("n")) {
             int64_t v;
             if (yjs_parse_fixed(val, vl, 0, &v) != YJS_OK || v < 0 || v > 100000000) return yrig__err(err, cap, YRIG_ERR_FORMAT, "bad n");
             lb.n = (int32_t)v;
             have |= 2;
-        } else if (YRIG__IS("p5_s") || YRIG__IS("median_s") || YRIG__IS("p95_s") || YRIG__IS("max_s")) {
+        } else if (YRIG__IS("p5_s") || YRIG__IS("median_s") || YRIG__IS("p95_s") || YRIG__IS("max_s") || YRIG__IS("lo_s") ||
+                   YRIG__IS("hi_s") || YRIG__IS("onset_offset_s")) {
             int64_t v;
             if (yjs_parse_fixed(val, vl, 9, &v) != YJS_OK) return yrig__err(err, cap, YRIG_ERR_FORMAT, "bad %.*s", (int)nl, name);
             if (YRIG__IS("p5_s")) { lb.p5_ns = v; have |= 4; }
             else if (YRIG__IS("median_s")) { lb.median_ns = v; have |= 8; }
             else if (YRIG__IS("p95_s")) { lb.p95_ns = v; have |= 16; }
-            else { lb.max_ns = v; have |= 32; }
+            else if (YRIG__IS("max_s")) { lb.max_ns = v; have |= 32; }
+            else if (YRIG__IS("lo_s")) { lb.lo_ns = v; have |= 128; }
+            else if (YRIG__IS("hi_s")) { lb.hi_ns = v; have |= 256; }
+            else { lb.offset_ns = v; have |= 512; }
         } else if (YRIG__IS("date")) {
             if (vl >= sizeof lb.date) return yrig__err(err, cap, YRIG_ERR_FORMAT, "bad date");
             yrig__copy(lb.date, sizeof lb.date, val, vl);
@@ -928,17 +1105,38 @@ YRIG_API int yrig_read_latency(const char* text, size_t n, yrig_loopback* out, c
 #undef YRIG__IS
         i = e + 1;
     }
-    if (!(have & 1)) return yrig__err(err, cap, YRIG_ERR_FORMAT, "not an output latency file (no format line)");
-    if (have != 127) return yrig__err(err, cap, YRIG_ERR_FORMAT, "an output latency file without its summary (no edges?)");
+    if (!kind) {
+        yrig__err(err, cap, YRIG_ERR_FORMAT, "not %s (no format line)", yrig__kinds[want]);
+        return want ? YRIG_ERR_FORMAT : 0;
+    }
+    if ((have & yrig__need[kind]) != yrig__need[kind])
+        return yrig__err(err, cap, YRIG_ERR_FORMAT, "%s without its summary (no edges?)", yrig__kinds[kind]);
     yrig__sha_hex(text, n, lb.sha256);
     lb.set = true;
     lb.check = YRIG_CHECK_OK;
     *out = lb;
-    return YRIG_OK;
+    return kind;
 }
 
-/* The check of one file the profile names. */
-static int yrig__check_file(const char* dir, const char* sub, const char* name, const char* sha, const yrig_loopback* lb) {
+YRIG_API int yrig_read_latency(const char* text, size_t n, yrig_loopback* out, char* err, size_t cap) {
+    int rc;
+    if (!text || !out) return YRIG_ERR_ARG;
+    rc = yrig__read_lb(text, n, YRIG_FILE_OUT_LATENCY, out, err, cap);
+    return rc < 0 ? rc : YRIG_OK;
+}
+
+YRIG_API int yrig_read_loopback(const char* text, size_t n, yrig_loopback* out, char* err, size_t cap) {
+    int rc;
+    if (!text || !out) return YRIG_ERR_ARG;
+    rc = yrig__read_lb(text, n, 0, out, err, cap);
+    return rc == 0 ? YRIG_ERR_FORMAT : rc;
+}
+
+/* The check of one file the profile names. With lb, a file in a LOOPBACK
+ * FILES format must be of kind want and hold lb's summary (and, for the
+ * display, the profile's onset offset). */
+static int yrig__check_file(const char* dir, const char* sub, const char* name, const char* sha, const yrig_loopback* lb, int want,
+                            int64_t offset_ns) {
     char path[1100], hex[65];
     char* data;
     size_t n;
@@ -950,18 +1148,29 @@ static int yrig__check_file(const char* dir, const char* sub, const char* name, 
     if (rc != YRIG_OK) return rc == YRIG_ERR_MISSING ? YRIG_CHECK_MISSING : YRIG_CHECK_CHANGED;
     yrig__sha_hex(data, n, hex);
     rc = strcmp(hex, sha) == 0 ? YRIG_CHECK_OK : YRIG_CHECK_CHANGED;
-    if (rc == YRIG_CHECK_OK && lb && n >= 24 && strstr(data, "\nformat ysp-out-latency 1") != NULL) {
+    if (rc == YRIG_CHECK_OK && lb) {
         yrig_loopback f;
-        if (yrig_read_latency(data, n, &f, NULL, 0) != YRIG_OK || f.n != lb->n || f.p5_ns != lb->p5_ns || f.median_ns != lb->median_ns ||
-            f.p95_ns != lb->p95_ns || f.max_ns != lb->max_ns || strcmp(f.date, lb->date) != 0)
-            rc = YRIG_CHECK_DIFFERS;
+        int kind = yrig__read_lb(data, n, 0, &f, NULL, 0);
+        if (kind != 0) {   /* a file with no known format line is checked by its hash only */
+            bool same = kind == want && f.n == lb->n && strcmp(f.date, lb->date) == 0;
+            if (same && want == YRIG_FILE_IN_BOUNDS) same = f.lo_ns == lb->lo_ns && f.hi_ns == lb->hi_ns;
+            else if (same)
+                same = f.p5_ns == lb->p5_ns && f.median_ns == lb->median_ns && f.p95_ns == lb->p95_ns && f.max_ns == lb->max_ns &&
+                       (want != YRIG_FILE_DISPLAY_ONSET || f.offset_ns == offset_ns);
+            if (!same) rc = YRIG_CHECK_DIFFERS;
+        }
     }
     free(data);
     return rc;
 }
 
+static const char* yrig__check_says(int check) {
+    return check == YRIG_CHECK_MISSING ? "is missing" : check == YRIG_CHECK_CHANGED ? "has changed" : "does not match the profile's summary";
+}
+
 static void yrig__checks(yrig_profile* p, const char* dir) {
     int i;
+    yrig_loopback* dl = &p->display.latency;
     for (i = 0; i < p->n_roles; i++) {
         yrig_role* ro = &p->role[i];
         int k;
@@ -971,17 +1180,26 @@ static void yrig__checks(yrig_profile* p, const char* dir) {
             if (!lb->set) { lb->check = YRIG_CHECK_NONE; continue; }
             if (!dir) { lb->check = YRIG_CHECK_NOT_RUN; continue; }
             snprintf(name, sizeof name, "%s.txt", lb->sha256);
-            lb->check = yrig__check_file(dir, "loopback", name, lb->sha256, k ? NULL : lb);
+            lb->check = yrig__check_file(dir, "loopback", name, lb->sha256, lb, k ? YRIG_FILE_IN_BOUNDS : YRIG_FILE_OUT_LATENCY, 0);
             if (lb->check != YRIG_CHECK_OK)
                 yrig__note(p, "roles.%s.%s: loopback/%.12s....txt %s: the role's tier is UNKNOWN", ro->name, k ? "bounds" : "latency",
-                           lb->sha256, lb->check == YRIG_CHECK_MISSING ? "is missing" : lb->check == YRIG_CHECK_CHANGED ? "has changed"
-                                                                                         : "does not match the profile's summary");
+                           lb->sha256, yrig__check_says(lb->check));
         }
+    }
+    if (!dl->set) dl->check = YRIG_CHECK_NONE;
+    else if (!dir) dl->check = YRIG_CHECK_NOT_RUN;
+    else {
+        char name[80];
+        snprintf(name, sizeof name, "%s.txt", dl->sha256);
+        dl->check = yrig__check_file(dir, "loopback", name, dl->sha256, dl, YRIG_FILE_DISPLAY_ONSET, p->display.onset_offset_ns);
+        if (dl->check != YRIG_CHECK_OK)
+            yrig__note(p, "display.latency: loopback/%.12s....txt %s: the onset offset is not checked", dl->sha256,
+                       yrig__check_says(dl->check));
     }
     if (p->display.set && p->display.calibration[0]) {
         if (!dir) p->display.check = YRIG_CHECK_NOT_RUN;
         else {
-            p->display.check = yrig__check_file(dir, NULL, p->display.calibration, p->display.calibration_sha256, NULL);
+            p->display.check = yrig__check_file(dir, NULL, p->display.calibration, p->display.calibration_sha256, NULL, 0, 0);
             if (p->display.check != YRIG_CHECK_OK)
                 yrig__note(p, "display.calibration: %.40s %s", p->display.calibration,
                            p->display.check == YRIG_CHECK_MISSING ? "is missing" : "has changed");
@@ -990,7 +1208,7 @@ static void yrig__checks(yrig_profile* p, const char* dir) {
 }
 
 static int yrig__parse(yrig_profile* p, const char* text, size_t n, const char* dir, const char* what, char* err, size_t cap) {
-    static const char* const keys[] = { "format", "rig", "written", "roles", "display", NULL };
+    static const char* const keys[] = { "format", "rig", "written", "roles", "display", "view", NULL };
     yjs_arena a;
     yjs_value* root;
     yjs_error e;
@@ -1035,6 +1253,7 @@ static int yrig__parse(yrig_profile* p, const char* text, size_t n, const char* 
         if (rc == YRIG_OK) p->n_roles = (int)v->n;
     }
     if (rc == YRIG_OK && (v = yjs_get(root, "display")) != NULL) rc = yrig__display(&r, v, &p->display);
+    if (rc == YRIG_OK && (v = yjs_get(root, "view")) != NULL) rc = yrig__view(&r, v, &p->view);
     yjs_arena_free(&a);
     if (rc != YRIG_OK) {
         memset(p, 0, sizeof *p);
@@ -1148,7 +1367,14 @@ static yjs_value* yrig__json(yjs_arena* a, const yrig_profile* p) {
             ok = c && yrig__set_str(a, c, "file", p->display.calibration) && yrig__set_str(a, c, "sha256", p->display.calibration_sha256) &&
                  yjs_set(a, d, "calibration", c) == YJS_OK;
         }
+        if (ok && p->display.latency.set) ok = yjs_set(a, d, "latency", yrig__lb_json(a, &p->display.latency, true)) == YJS_OK;
         if (ok) ok = yjs_set(a, root, "display", d) == YJS_OK;
+    }
+    if (ok && p->view.set) {
+        yjs_value* w = yjs_new(a, YJS_OBJECT);
+        ok = w && yjs_set(a, w, "distance_mm", yjs_new_double(a, p->view.distance_mm)) == YJS_OK &&
+             yjs_set(a, w, "width_mm", yjs_new_double(a, p->view.width_mm)) == YJS_OK &&
+             yjs_set(a, w, "width_px", yjs_new_int(a, p->view.width_px)) == YJS_OK && yjs_set(a, root, "view", w) == YJS_OK;
     }
     return ok ? root : NULL;
 }
@@ -1229,7 +1455,7 @@ static void yrig__now_utc(char out[24]) {
 YRIG_API int yrig_save_file(yrig_profile* p, const char* path, char* err, size_t cap) {
     char* b;
     size_t n, k;
-    char dir[1024];
+    char dir[1024], why[160];
     int rc;
     if (!p || !path || !path[0]) return yrig__err(err, cap, YRIG_ERR_ARG, "yrig_save_file: no path");
     yrig__now_utc(p->written);
@@ -1243,9 +1469,9 @@ YRIG_API int yrig_save_file(yrig_profile* p, const char* path, char* err, size_t
         dir[k - 1] = '\0';
         if (!yrig__mkdirs(dir)) { free(b); return yrig__err(err, cap, YRIG_ERR_IO, "%s: cannot make the folder", dir); }
     }
-    rc = yrig__write_file(path, b, n);
+    rc = yrig__write_file(path, b, n, why, sizeof why);
     free(b);
-    if (rc != YRIG_OK) return yrig__err(err, cap, rc, "%s: cannot write it", path);
+    if (rc != YRIG_OK) return yrig__err(err, cap, rc, "%s: %s", path, why[0] ? why : "cannot write it");
     return YRIG_OK;
 }
 
@@ -1314,6 +1540,13 @@ YRIG_API int yrig_bind(yrig_profile* p, const char* role, int family, const char
     return YRIG_OK;
 }
 
+YRIG_API double yrig_ppd(const yrig_profile* p) {
+    if (!p || !p->view.set || !(p->view.width_mm > 0.0) || !(p->view.distance_mm > 0.0) || p->view.width_px < 1) return 0.0;
+    /* ysp/gfx.h's YGFX_DEG scale, the same expression: one factor, exact
+     * at the center, where a degree spans distance * tan(1 deg) mm */
+    return (double)p->view.width_px / p->view.width_mm * p->view.distance_mm * tan(3.14159265358979323846 / 180.0);
+}
+
 YRIG_API int yrig_store_loopback(const char* dir, const void* data, size_t n, char sha_hex[65], char* err, size_t cap) {
     char sub[600], path[700];
     int rc;
@@ -1322,8 +1555,11 @@ YRIG_API int yrig_store_loopback(const char* dir, const void* data, size_t n, ch
     if (snprintf(sub, sizeof sub, "%s" YRIG__SEP "loopback", dir) >= (int)sizeof sub) return yrig__err(err, cap, YRIG_ERR_ARG, "path too long");
     if (!yrig__mkdirs(sub)) return yrig__err(err, cap, YRIG_ERR_IO, "%s: cannot make the folder", sub);
     snprintf(path, sizeof path, "%s" YRIG__SEP "%s.txt", sub, sha_hex);
-    rc = yrig__write_file(path, data, n);
-    if (rc != YRIG_OK) return yrig__err(err, cap, rc, "%s: cannot write it", path);
+    {
+        char why[160];
+        rc = yrig__write_file(path, data, n, why, sizeof why);
+        if (rc != YRIG_OK) return yrig__err(err, cap, rc, "%s: %s", path, why[0] ? why : "cannot write it");
+    }
     return YRIG_OK;
 }
 

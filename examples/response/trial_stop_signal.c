@@ -18,14 +18,14 @@
  * go stimulus is not used: a frame loop that falls behind plans a later
  * vblank, and the tone came one period early (measured in --sim under
  * load, 4 of 10 runs). The data row
- * has the SSD as shown (ssd_actual: the tone's onset record minus the go
+ * has the SSD as shown (ssd_actual_s: the tone's onset record minus the go
  * stimulus's flip onset), and the staircase records that value. RT runs
  * from the go stimulus's flip onset.
  *
  * The data file has one row per trial (ysp/trials.h's data writer): the
  * session's columns (index, ..., stimulus, key_answer, signal: go or
- * stop), then trial_index, correct, ssd, ssd_actual, stopped, tone_tier,
- * then the response's (YRSP_DATA_COLS: response, rt, onset_tier and the
+ * stop), then trial_index, correct, ssd_s, ssd_actual_s, stopped, tone_tier,
+ * then the response's (YRSP_DATA_COLS: response, rt_s, onset_tier and the
  * rest for the go stimulus). Times in seconds; the settings go to
  * FILE.meta. The run
  * ends with p(respond | signal), the mean SSD, the mean go RT and the
@@ -34,9 +34,10 @@
  * are kept.
  *
  * --sim runs one block of 8 trials (2 with a signal) on the simulated
- * display and miniaudio's null device with a synthetic participant who
- * stops on the first signal and fails on the second. It checks its own
- * results and exits 1 on a mismatch. About 16 s.
+ * display and the null device, on ysp/rt.h's virtual clock, with a
+ * synthetic participant who stops on the first signal and fails on the
+ * second. It checks its own results and exits 1 on a mismatch. Under a
+ * second: the virtual clock does not wait.
  *
  * Usage: trial_stop_signal [--sim] [--fullscreen] [--reps N] [--seed N] [--out FILE]
  *   --reps N   blocks of 8 trials, 2 with a signal (default 8; --sim: 1)
@@ -127,10 +128,10 @@ static ygfx_stim shape(ygfx_shape_kind kind, float w, float p0, float c) {
 /* The program's columns, after the session's; then YRSP_DATA_COLS. The
  * SSDs are the staircase's seconds; NaN and YTR_MISSING_INT are empty on a
  * go trial. */
-typedef struct row { int trial_index, stopped, tone_tier; bool correct; double ssd, ssd_actual; } row;
+typedef struct row { int trial_index, stopped, tone_tier; bool correct; double ssd_s, ssd_actual_s; } row;
 static const ytr_col cols[] = {
     YTR_COL(row, trial_index, YTR_COL_INT), YTR_COL(row, correct, YTR_COL_BOOL),
-    YTR_COL_D(row, ssd, YTR_COL_DOUBLE, 9), YTR_COL_D(row, ssd_actual, YTR_COL_DOUBLE, 9),
+    YTR_COL_D(row, ssd_s, YTR_COL_DOUBLE, 9), YTR_COL_D(row, ssd_actual_s, YTR_COL_DOUBLE, 9),
     YTR_COL(row, stopped, YTR_COL_INT), YTR_COL(row, tone_tier, YTR_COL_INT), YRSP_DATA_COLS,
 };
 
@@ -170,6 +171,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     if (reps == 0) reps = sim ? 1 : 8;
     if (reps < 1 || reps > 100) { fprintf(stderr, "trial_stop_signal: --reps takes 1..100\n"); return 2; }
     if (sim) ad.backend = YAU_BACKEND_NULL;
@@ -348,18 +351,18 @@ int main(int argc, char** argv) {
                 responded = (res.flags & YRSP_R_RESPONDED) != 0;
                 r.trial_index = ti.index;
                 r.correct = stop ? !responded : responded && !strcmp(res.response_name, key_answer);
-                r.ssd = ssd;
-                r.ssd_actual = NAN;
+                r.ssd_s = ssd;
+                r.ssd_actual_s = NAN;
                 r.stopped = r.tone_tier = YTR_MISSING_INT;
                 if (stop) {
-                    r.ssd_actual = (double)(rec.onset - res.t_onset) / 1e9;
+                    r.ssd_actual_s = (double)(rec.onset - res.t_onset) / 1e9;
                     r.stopped = !responded;
                     r.tone_tier = rec.tier;
-                    yst_update(&stair, r.ssd_actual, r.stopped);
-                    if (n_stop < 2) { sim_stopped[n_stop] = r.stopped; sim_ssd[n_stop] = ssd; sim_ssd_actual[n_stop] = r.ssd_actual; }
+                    yst_update(&stair, r.ssd_actual_s, r.stopped);
+                    if (n_stop < 2) { sim_stopped[n_stop] = r.stopped; sim_ssd[n_stop] = ssd; sim_ssd_actual[n_stop] = r.ssd_actual_s; }
                     n_stop++;
                     n_respond += responded;
-                    sum_ssd += r.ssd_actual;
+                    sum_ssd += r.ssd_actual_s;
                 } else if (r.correct) {
                     sum_go_rt += YRT_TO_S(res.rt_ns);
                     n_go_rt++;
@@ -372,7 +375,7 @@ int main(int argc, char** argv) {
                 }
                 if (stop)
                     printf("trial %2d %-6s stop ssd %.3f s (shown %.6f s), %s\n", ti.index,
-                           ytb_text(&tab, ti.condition, stim_col), ssd, r.ssd_actual, r.stopped ? "stopped" : "failed stop");
+                           ytb_text(&tab, ti.condition, stim_col), ssd, r.ssd_actual_s, r.stopped ? "stopped" : "failed stop");
                 else
                     printf("trial %2d %-6s go, %s\n", ti.index, ytb_text(&tab, ti.condition, stim_col),
                            r.correct ? "correct" : responded ? "wrong" : "miss");
@@ -401,12 +404,13 @@ int main(int argc, char** argv) {
 
     if (sim && !failed && reps != 1) printf("--sim: the self-check needs the default --reps\n");
     else if (sim && !failed) {
-        /* the SSD 0.25 then 0.30 s; shown within the null device's 10 ms
-         * period of it (the go stimulus is on the plan's frame there) */
+        /* the SSD 0.25 then 0.30 s; on the virtual clock the stop tone is
+         * on it within half a sample at 48 kHz, where the plan meets the
+         * sample grid */
         int bad = rows != 8 || n_stop != 2 || n_go_rt != 6 || fabs(sim_go_rt - SIM_GO_RT) > 1e-6;
         for (i = 0; i < 2; i++)
             if (sim_stopped[i] != !i || fabs(sim_ssd[i] - 0.25 - 0.05 * i) > 1e-9 ||
-                fabs(sim_ssd_actual[i] - sim_ssd[i]) > 0.010)
+                fabs(sim_ssd_actual[i] - sim_ssd[i]) > 0.5 / 48000)
                 bad = 1;
         if (bad) {
             fprintf(stderr, "trial_stop_signal: --sim: %d rows, %d signals, %d go rts (last %.9f); stopped %d %d, ssd %.3f "

@@ -19,7 +19,7 @@ import math
 import random
 import time
 
-import ysp.aep as pg
+import ysp.aep as yaep
 
 # The observer: a 75% threshold that rises linearly with the context
 # dimension, and a probit psychometric function along the intensity.
@@ -30,13 +30,13 @@ def p_yes(x):
 
 def observe(x, u):
     p = p_yes(x)
-    return pg.simulate_outcome([1.0 - p, p], u.random())
+    return yaep.simulate_outcome([1.0 - p, p], u.random())
 
 
 DESC = dict(
     lo=[0.0, 0.0], hi=[1.0, 1.0],   # context, intensity
     intensity_dim=1,
-    acq=pg.ACQ_EAVC,                # look-ahead level set
+    acq=yaep.ACQ_EAVC,                # look-ahead level set
     target_p=0.75,
     grid=[15, 25],                  # 375 candidates
     n_init=8,                       # Halton trials first
@@ -49,7 +49,7 @@ def log_threshold(g, ctx):
     """What to keep with a threshold: the value, its band, the fit behind it."""
     try:
         thr, lo, hi = g.threshold([ctx])
-    except pg.NoCross:
+    except yaep.NoCross:
         print(f"  ctx {ctx:.2f}: no crossing inside the box")
         return
     truth = 0.3 + 0.3 * ctx + 0.67449 / 8.0
@@ -59,7 +59,7 @@ def log_threshold(g, ctx):
 
 def plain_loop():
     u = random.Random(1)
-    g = pg.GP(**DESC)
+    g = yaep.GP(**DESC)
     t0 = time.perf_counter()
     while not g.done:
         _, x = g.next()
@@ -76,10 +76,10 @@ def frame_loop():
     """What a PsychoPy loop looks like with the inference on a thread. The
     sleep stands in for win.flip(); the stimulus is 'shown' for 3 frames."""
     u = random.Random(1)
-    g = pg.GP(**DESC)
+    g = yaep.GP(**DESC)
     frame = 1.0 / 60.0
     late = 0
-    with pg.Async(g, context=[0.5], fit_in_idle=True, below_normal=True) as a:
+    with yaep.Async(g, context=[0.5], fit_in_idle=True, below_normal=True) as a:
         print(f"async: thread policy {a.policy}")
         _, snap = a.poll()                      # seq 0: the first stimulus
         while not snap.done:
@@ -90,7 +90,7 @@ def frame_loop():
                 try:
                     seq = a.submit(x, observe(x, u))
                     break
-                except pg.Busy:
+                except yaep.Busy:
                     time.sleep(frame)
             time.sleep(frame)                   # the response frame
             got, snap = a.poll()

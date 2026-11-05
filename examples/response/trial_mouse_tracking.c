@@ -25,14 +25,15 @@
  *                timing or its unaccelerated shape matters.
  *
  * Two data files. The trial file (--out) has one row per trial:
- * trial_index, color, answer, response, correct, init_time (movement
- * onset from the disc's flip onset), rt (the response click from the
+ * trial_index, color, answer, response, correct, init_time_s (movement
+ * onset from the disc's flip onset), rt_s (the response click from the
  * same onset), max_deviation (px from the straight line, start to click),
  * n_samples; then onset_tier, onset_src, init_tier, rsp_flags, early_move
  * (1 when the pointer moved 10 px before the disc's onset: that crossing
  * is EARLY, and the next one needs a return to within 10 px of the start,
- * so init_time is empty). The trajectory file (--traj) has one row per sample: trial_index, t (from
- * the onset), x, y (px from the window's top-left). The header lines give
+ * so init_time_s is empty). The trajectory file (--traj) has one row per
+ * sample: trial_index, t_s (from the onset), x, y (px from the window's
+ * top-left). The header lines give
  * the targets' boxes and the pointer path. Times in seconds. Shift+Esc
  * stops the session; the rows so far are kept.
  *
@@ -40,7 +41,7 @@
  * a straight path to the correct box, and a path curved toward the other
  * box first. With --raw-mice too, it feeds the same paths as raw counts
  * through the drawn cursor. It checks its own results and exits 1 on a
- * mismatch. About 5 s.
+ * mismatch. Under a second: the virtual clock does not wait.
  *
  * Usage: trial_mouse_tracking [--sim] [--raw-mice] [--reps N] [--seed N] [--out FILE] [--traj FILE]
  *   --reps N   repetitions of each color (default 10; --sim: 1)
@@ -83,6 +84,13 @@ static const yrsp_choice moved[] = { { .name = "moved", .kind = YRSP_KIND_MOUSE,
                                        .control = YRSP_AXIS_POSITION, .level = ONSET_PX } };
 
 static yscr_screen scr;
+/* SDL calls on the window go through yscr_window_call(): with the window
+ * thread (ysp/screen.h, WINDOW THREAD) another thread owns the window. */
+static void grab_on_window(void* unused) {
+    (void)unused;
+    SDL_HideCursor();
+    SDL_SetWindowMouseGrab(yscr_window(&scr), true);
+}
 static ygfx_gfx gfx;
 static ytl_timeline tl;
 static ytl_event storage[64];
@@ -219,6 +227,7 @@ int main(int argc, char** argv) {
     int n_sim_ev = 0, sim_next = 0, color_col, answer_col;
     float W, H, cx, cy;
     double sim_init[2], sim_dev[2];
+    int64_t sim_t0[2] = { 0, 0 }, sim_rt_ns[2] = { 0, 0 }, sim_onset[2] = { 0, 0 };
     int sim_correct[2], sim_samples[2];
 
     memset(&sd, 0, sizeof sd);
@@ -234,6 +243,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     seed0 = seed;
     if (reps == 0) reps = sim ? 1 : 10;
     if (reps < 1 || reps > 100) { fprintf(stderr, "trial_mouse_tracking: --reps takes 1..100\n"); return 2; }
@@ -264,8 +275,7 @@ int main(int argc, char** argv) {
     if (raw && !sim) {
         /* the hidden system cursor still moves, with acceleration, and a
          * click goes to whatever window is under it: keep it in ours */
-        SDL_HideCursor();
-        SDL_SetWindowMouseGrab(yscr_window(&scr), true);
+        yscr_window_call(&scr, grab_on_window, NULL);
     }
 
     memset(&cd, 0, sizeof cd);
@@ -316,9 +326,9 @@ int main(int argc, char** argv) {
         fprintf(out, "# target %s: x %.0f..%.0f, y %.0f..%.0f px\n", i == 0 ? "left" : i == 1 ? "right" : "start", x0, x1,
                 y0, y1);
     }
-    fprintf(out, "trial_index,color,answer,response,correct,init_time,rt,max_deviation,n_samples,onset_tier,onset_src,"
+    fprintf(out, "trial_index,color,answer,response,correct,init_time_s,rt_s,max_deviation,n_samples,onset_tier,onset_src,"
                  "init_tier,rsp_flags,early_move\n");
-    fprintf(traj, "trial_index,t,x,y\n");
+    fprintf(traj, "trial_index,t_s,x,y\n");
     printf("%s\n", line);
 
     for (;;) {
@@ -352,6 +362,7 @@ int main(int argc, char** argv) {
                 ygfx_resolve(&gfx, &start, &sx, &sy);
                 ygfx_resolve(&gfx, &boxes[!strcmp(ytb_text(&tab, ti.condition, answer_col), "right")], &bx, &by);
                 n_sim_ev = sim_path(f.onset, ti.index, sx, sy, bx, by, bx < cx ? W - 100 : 100);
+                if (ti.index < 2) sim_t0[ti.index] = f.onset;
                 sim_next = 0;
             }
         }
@@ -431,6 +442,8 @@ int main(int argc, char** argv) {
                 ytr_update(&trials, correct, NULL);
                 if (ti.index < 2) {
                     sim_init[ti.index] = res.rt_ns == YRSP_NO_TIME ? NAN : YRT_TO_S(res.rt_ns);
+                    sim_rt_ns[ti.index] = res.rt_ns;
+                    sim_onset[ti.index] = res.t_onset;
                     sim_dev[ti.index] = dev;
                     sim_correct[ti.index] = correct;
                     sim_samples[ti.index] = n_samples;
@@ -460,14 +473,20 @@ int main(int argc, char** argv) {
 
     if (sim && !failed && reps != 1) printf("--sim: the self-check needs the default --reps\n");
     else if (sim && !failed) {
-        /* 64 samples after the start click; the movement onset 0.30 s
-         * after the click, less the wait for the disc's frame, plus a
-         * sample or two to pass 10 px. The low bound allows 3 frames of
-         * wait: a slow CI runner (macOS) shows 2 */
+        /* 64 samples after the start click. The movement onset is the
+         * sample that passes 10 px: trial 0's first step is 8.7 px, so its
+         * second sample; trial 1 bends, so its first. Samples run from
+         * 0.3 s after the click (0.6 s after the script's t0), one per
+         * 8 ms; the init is from the disc's flip record, the first vblank
+         * at or after the click. On the virtual clock all of it is exact,
+         * with raw counts too. */
+        static const int cross[2] = { 2, 1 };
         int bad = rows != 2;
         if (bad) fprintf(stderr, "trial_mouse_tracking: --sim: %d rows, not 2\n", rows);
         for (i = 0; i < rows && i < 2; i++) {
-            int ok = sim_correct[i] && sim_samples[i] == 64 && sim_init[i] > 0.24 && sim_init[i] < 0.34;
+            int64_t click = sim_t0[i] + YRT_MS(300), sample = click + YRT_MS(300) + (cross[i] - 1) * YRT_MS(8);
+            int ok = sim_correct[i] && sim_samples[i] == 64 && sim_onset[i] >= click && sim_onset[i] - click < f.period &&
+                     sim_rt_ns[i] == sample - sim_onset[i];
             if (i == 1) ok = ok && sim_dev[1] > sim_dev[0] + 50;
             if (!ok) {
                 fprintf(stderr, "trial_mouse_tracking: --sim: trial %d: correct %d, %d samples, init %.9f, deviation %.1f\n",

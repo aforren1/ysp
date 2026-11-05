@@ -142,6 +142,11 @@ jobs:
           expect 0 "$bin/trials_mocs"
           expect 0 "$bin/trials_interleave"
           expect 0 "$bin/trials_save_rows" --sim   # writes its data file and reads it back
+          # The session data set: a simulated session's folder, its zip, the
+          # read-back; the same folder again is refused (it exists).
+          expect 0 "$bin/dataset_session" --out "$RUNNER_TEMP/ds_session"
+          expect 1 "$bin/dataset_session" --out "$RUNNER_TEMP/ds_session"
+          expect 2 "$bin/dataset_session" --bogus
           # The timeline's examples simulate their display.
           expect 0 "$bin/timeline_trial"
           expect 0 "$bin/timeline_tracking"    # checks its own errors
@@ -185,6 +190,21 @@ jobs:
           expect 2 "$bin/rigfile_profile" --bogus
           expect 0 "$bin/rigfile_profile" --dir "$rig" --bind ref lsl lsl:Data::LabStreamer:
           expect 2 "$bin/rigfile_profile" --dir "$rig" --bind ref lsl serial:0403:6001::
+          # The rig profile tools (ysp/rigfile.h v0.4.0): an input's bounds on
+          # two simulated line boards, and the onset offset from a generated
+          # photodiode CSV (300 edges, light 12.0 to 12.6 ms after the onset),
+          # both stored; the profile then checks both files.
+          awk 'BEGIN { print "frame,level,onset_ns,photodiode_ns,diff_us,path,flags"; s = 1;
+            for (i = 1; i <= 300; i++) { s = (s * 1103515245 + 12345) % 2147483648; d = 12000000 + s % 600000; o = 1000000000 + i * 33333333;
+              printf "%d,%d,%.0f,%.0f,%.1f,3,0\n", 2 * i, i % 2, o, o + d, d / 1000 } }' > "$RUNNER_TEMP/photodiode.csv"
+          expect 0 "$bin/rigfile_profile" --dir "$rig" --bind photo line serial:16C0:0483:SIM:
+          expect 0 "$bin/rigfile_bounds" --sim --role photo --n 50 --warmup 2 --file "$RUNNER_TEMP/in_bounds.txt" --store --rig-dir "$rig"
+          expect 0 "$bin/rigfile_onset" "$RUNNER_TEMP/photodiode.csv" --file "$RUNNER_TEMP/display_onset.txt" --store --rig-dir "$rig"
+          expect 0 "$bin/rigfile_profile" --dir "$rig"
+          expect 1 "$bin/rigfile_onset" "$RUNNER_TEMP/photodiode.csv" --min-n 301 --file "$RUNNER_TEMP/x.txt"
+          expect 2 "$bin/rigfile_bounds" --role photo
+          # 1 when the bounds do not contain the simulated truth: a heavy USB tail and another seed.
+          expect 0 "$bin/rigfile_bounds" --sim --sim-seed 3 --sim-tail-us 500 --n 50 --warmup 2 --file "$RUNNER_TEMP/b2.txt"
           # ysp/net.h loads liblsl at run time; the fetched copy is not on the
           # loader's path, so each program must say so and exit with its
           # code, not crash.
@@ -204,6 +224,11 @@ jobs:
   #                  command-line define reaches ysp/rt.h first in the     #
   #                  compile check that includes it directly, so name all  #
   #                  three: define both of a pair, or neither.             #
+  #   gcc-O1       - gcc's flow warnings (-Wmaybe-uninitialized,          #
+  #                  -Wformat-truncation) differ by -O level: ysp/gfx.h    #
+  #                  0.17.0 and ysp/outline.h 0.4.0 failed -Werror at -O1  #
+  #                  (gfx also -Os, -Og; gcc 11.4, 16.1), which Release    #
+  #                  (-O3) and Debug (-O0) both miss.                      #
   # --------------------------------------------------------------------- #
   linux-extra:
     name: Linux ${{ matrix.name }}
@@ -227,6 +252,11 @@ jobs:
             cxx: g++
             cflags: ""
             cxxflags: "-DYSER_NO_THREADS -DYPAR_NO_THREADS -DYRT_NO_THREADS"
+          - name: gcc-O1
+            cc: gcc
+            cxx: g++
+            cflags: "-O1"
+            cxxflags: "-O1"
     env:
       CC: ${{ matrix.cc }}
       CXX: ${{ matrix.cxx }}
@@ -278,6 +308,7 @@ jobs:
           expect 0 build/trials_mocs
           expect 0 build/trials_interleave
           expect 0 build/trials_save_rows --sim
+          expect 0 build/dataset_session --out dataset_session_ci
           expect 0 build/timeline_trial
           expect 0 build/timeline_tracking
           expect 0 build/color_convert
@@ -350,8 +381,8 @@ jobs:
         run: |
           set -eu
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DYSP_BUILD_PACK=ON -DYSP_BUILD_EXAMPLES=OFF
-          cmake --build build --config Release --target ypak test_pack_tool
-          ctest --test-dir build -C Release -R pack_tool --output-on-failure
+          cmake --build build --config Release --target ypak test_pack_tool test_pack_import test_pack_derive
+          ctest --test-dir build -C Release -R "pack_tool|pack_import|pack_derive" --output-on-failure
           if [ "$RUNNER_OS" = Windows ]; then bin=build/pack/Release; else bin=build/pack; fi
           "$bin/ypak" verify build/pack/pack_tool_work/corpus.ysppak
           "$bin/ypak" verify build/pack/pack_tool_work/core.ysppak
@@ -360,7 +391,7 @@ jobs:
 
   # --------------------------------------------------------------------- #
   # WebAssembly: the computation headers (stair, quest, aep, trials,       #
-  # timeline, color, pack, json)                                           #
+  # dataset, timeline, color, pack, json)                                  #
   # claim to need nothing but libm, and ysp/rt.h claims a platform branch  #
   # is all wasm needs. Compile the compile checks with emcc, threads off,  #
   # and run them under node. Nothing here is a timing claim.               #
@@ -394,7 +425,7 @@ jobs:
           emcc $W $T -o rt_test.js tests/adapt/rt_test.c && node rt_test.js
           emcc $W $T -o rt_pump.js examples/rt/pump.c && node rt_pump.js 40
           emcc $W $T -o rt_ring_csv.js examples/rt/ring_csv.c && node rt_ring_csv.js 30 > /dev/null
-          for h in stair quest aep table json pack trials timeline color; do
+          for h in stair quest aep table json pack trials dataset timeline color; do
             emcc $W -o "compile_$h.js" "tests/compile/$h.c" && node "compile_$h.js"
             emcc $W -o "test_$h.js" "tests/adapt/${h}_test.c" && node "test_$h.js"
           done
@@ -408,6 +439,11 @@ jobs:
           curl -sL -o miniaudio.h https://raw.githubusercontent.com/mackron/miniaudio/0.11.25/miniaudio.h
           echo "ac7af4de748b7e26b777f37e01cee313a308a7296a3eb080e2906b320cc55c89  miniaudio.h" | sha256sum -c -
           emcc -O2 -std=gnu11 -Wall -Wextra -Wpedantic -Wshadow -Wfloat-conversion -Werror -Iinclude -I. -c -o compile_audio.o tests/compile/audio.c
+          # the AudioWorklet path's own code (ONE CONTEXT, v0.6.1), as C and C++
+          emcc -O2 -std=gnu11 -Wall -Wextra -Wpedantic -Wshadow -Wfloat-conversion -Werror -Iinclude -I. -pthread \
+               -DMA_ENABLE_AUDIO_WORKLETS -c -o compile_audio_wl.o tests/compile/audio.c
+          em++ -O2 -std=gnu++17 -x c++ -Wall -Wextra -Wshadow -Werror -Iinclude -I. -pthread \
+               -DMA_ENABLE_AUDIO_WORKLETS -c -o compile_audio_wl_cxx.o tests/compile/audio.c
           # ysp/gfx.h without SDL: the compile check on the simulated display
           # and the test's CPU half run; node has no GL, so its GL half says so.
           emcc $W -DYSCR_NO_SDL -o compile_gfx.js tests/compile/gfx.c && node compile_gfx.js
@@ -417,6 +453,9 @@ jobs:
           emcc $W $T -DYSCR_NO_SDL -DYVID_NO_PL_MPEG -o compile_video.js tests/compile/video.c && node compile_video.js
           emcc $W -DYSCR_NO_SDL -DYVID_NO_PL_MPEG -o compile_video_inline.js tests/compile/video.c && node compile_video_inline.js
           emcc $W $T -o test_video.js tests/adapt/video_test.c && node test_video.js
+          # ysp/video.h's soundtrack beside audio.h's declarations only (the
+          # ysp-vis build): compiles the close's main-thread sleep that yields.
+          emcc -O2 -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wfloat-conversion -Werror -Iinclude -Ibindings/share -DYSCR_NO_SDL -c -o share_shims.o tests/compile/share_shims.c
           curl -sL -o pl_mpeg.h https://raw.githubusercontent.com/phoboslab/pl_mpeg/c871f2be022ece7ef4f64230b4fb8e1fb9eb6023/pl_mpeg.h
           echo "3a8cb30c83c2a1147719c30fe0c8b93da2987aa43140077c575b39aaa75fc2c9  pl_mpeg.h" | sha256sum -c -
           emcc -O2 -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wfloat-conversion -Werror -Iinclude -I. -DYSCR_NO_SDL -c -o compile_video_plm.o tests/compile/video.c
@@ -473,7 +512,7 @@ jobs:
           node lo/test_layout.js
 
   # --------------------------------------------------------------------- #
-  # Python: cibuildwheel builds one abi3 wheel (Limited API, cp38+) per     #
+  # Python: cibuildwheel builds one abi3 wheel (Limited API, cp310+) per    #
   # platform for each binding package. Add a directory to the matrix when  #
   # a binding lands; exclude the platforms its header does not support.    #
   # --------------------------------------------------------------------- #
@@ -483,7 +522,9 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        package: [ysp_parallel, ysp_serial, ysp_stair, ysp_quest, ysp_aep, ysp_trials, ysp_color, ysp_rdk]
+        package: [ysp_parallel, ysp_serial, ysp_stair, ysp_quest, ysp_aep, ysp_trials, ysp_color, ysp_rdk,
+                  ysp_box, ysp_pack, ysp_rt, ysp_device, ysp_rigfile, ysp_response, ysp_timeline, ysp_dataset,
+                  ysp_audio]
         exclude:
           - os: macos-latest      # ysp/parallel.h #errors on macOS
             package: ysp_parallel
@@ -492,14 +533,22 @@ jobs:
       - uses: actions/checkout@v7
 
       # cibuildwheel builds from the package directory alone, so every header
-      # the extension compiles must sit in include/ysp/ next to setup.py: the package's header
-      # and ysp/rt.h, which the transport headers include and the adaptive
-      # headers' async layers include, and ysp/table.h, which ysp/trials.h
-      # includes. A package gets the ones it never reads; staging them
-      # unconditionally keeps this step one line.
+      # the extension compiles must sit in include/ysp/ next to setup.py. The
+      # packages now include from up to seven headers (ysp/device.h: input,
+      # box, serial, parallel, rt), so every header is staged: one rule that
+      # cannot fall behind an #include, and one copy of each file (cp refuses
+      # a source named twice, which ysp_rt hit with rt.h).
+      # The shared tables (bindings/share/) go to include/share/; ysp-audio
+      # also needs miniaudio.h 0.11.25 in include/, whose SHA-256 value
+      # setup.py checks.
       - name: Stage headers into the package (isolated build needs them locally)
         shell: bash
-        run: p=${{ matrix.package }} && d=bindings/python/$p/include/ysp && mkdir -p $d && cp include/ysp/${p#ysp_}.h include/ysp/rt.h include/ysp/table.h $d/
+        run: |
+          d=bindings/python/${{ matrix.package }}/include
+          mkdir -p $d/ysp $d/share && cp include/ysp/*.h $d/ysp/ && cp bindings/share/*.h $d/share/
+          if [ "${{ matrix.package }}" = ysp_audio ]; then
+            curl -sSfL -o $d/miniaudio.h https://raw.githubusercontent.com/mackron/miniaudio/0.11.25/miniaudio.h
+          fi
 
       - name: Build & test wheels
         uses: pypa/cibuildwheel@v4.1.0
@@ -511,6 +560,138 @@ jobs:
         with:
           name: wheels-${{ matrix.package }}-${{ matrix.os }}
           path: wheelhouse/*.whl
+
+  # --------------------------------------------------------------------- #
+  # The shared C tables (docs/bindings.md, "Sharing one implementation   #
+  # across modules"): ysp-audio and ysp-timeline, and the test consumer   #
+  # bindings/python/share_test built against them, in one environment.    #
+  # --------------------------------------------------------------------- #
+  python-share:
+    name: Python shared tables (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Build and test (null device)
+        shell: bash
+        run: |
+          python -m pip install pytest
+          python -m pip install ./bindings/python/ysp_audio ./bindings/python/ysp_timeline
+          python -m pip install ./bindings/python/share_test
+          python -m pytest -q bindings/python/share_test/tests bindings/python/ysp_audio/tests
+
+  # --------------------------------------------------------------------- #
+  # ysp-vis (docs/bindings.md): ysp/screen.h, ysp/gfx.h and ysp/video.h   #
+  # in one Python extension and one MEX core, Windows only (the other     #
+  # screen backends are stubs). The natives come from tools/vendor_vis.py #
+  # (a static SDL3 built from the 3.4.0 tarball, ANGLE from the Electron  #
+  # zip of the screen job; every download checked by SHA-256; the text    #
+  # layout as static libraries from third_party/'s pinned trees), cached  #
+  # by the hash of what makes them. The wheel is built with cibuildwheel  #
+  # and its tests run on the simulated display; MATLAB builds the MEX     #
+  # files and runs test_mex_vis.m, test_mex_vis_gfx.m, test_mex_video.m   #
+  # and test_mex_vis_text.m (simulated display too). Octave               #
+  # on Windows is not run here (local only: bindings/mex/README.md).      #
+  # Nothing here is a timing claim.                                       #
+  # --------------------------------------------------------------------- #
+  vis:
+    name: ysp-vis (Windows)
+    runs-on: windows-latest
+    env:
+      MLM_LICENSE_TOKEN: ${{ secrets.MLM_LICENSE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # The text layout's sources (Skribidi, HarfBuzz, ...): fetched by commit,
+      # patched and checked against third_party/MANIFEST.sha256, as the build job does.
+      - name: Layout sources cache
+        uses: actions/cache@v6
+        with:
+          path: ~/ysp-layout-tarballs
+          key: layout-${{ hashFiles('third_party/MANIFEST.sha256', 'third_party/patches/*', 'tools/vendor_layout.py') }}
+
+      - name: Layout sources
+        shell: bash
+        run: |
+          PY=$(command -v python3 || command -v python)
+          "$PY" tools/vendor_layout.py --write --cache ~/ysp-layout-tarballs
+
+      - name: Natives cache
+        id: viscache
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/ysp-vis-downloads
+            third_party/vis
+          key: vis-natives-${{ hashFiles('tools/vendor_vis.py', 'tools/vis_layout/CMakeLists.txt', 'third_party/CMakeLists.txt', 'third_party/MANIFEST.sha256', 'third_party/patches/*', 'pack/layout.c', 'pack/ysp/layout.h', 'include/ysp/outline.h') }}-v2
+
+      - name: Natives (static SDL3 and text layout with MSVC; ANGLE from the Electron zip; pl_mpeg)
+        if: steps.viscache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          PY=$(command -v python3 || command -v python)
+          "$PY" tools/vendor_vis.py --write --angle --sdl msvc --pl-mpeg --layout msvc --cache ~/ysp-vis-downloads
+
+      # The DLLs again by SHA-256, cached or not.
+      - name: Natives check
+        shell: bash
+        run: |
+          PY=$(command -v python3 || command -v python)
+          "$PY" tools/vendor_vis.py
+
+      # cibuildwheel builds from the package directory: stage the headers,
+      # the shared tables and the natives there, as for the other wheels.
+      # The tests install ysp-audio and ysp-timeline from this checkout
+      # (pyproject.toml, before-test), so they are staged too.
+      - name: Stage headers and natives
+        shell: bash
+        run: |
+          set -eu
+          for p in ysp_vis ysp_audio ysp_timeline ysp_color; do
+            d=bindings/python/$p/include
+            mkdir -p $d/ysp $d/share && cp include/ysp/*.h $d/ysp/ && cp bindings/share/*.h $d/share/
+          done
+          curl -sSfL -o bindings/python/ysp_audio/include/miniaudio.h https://raw.githubusercontent.com/mackron/miniaudio/0.11.25/miniaudio.h
+          echo "ac7af4de748b7e26b777f37e01cee313a308a7296a3eb080e2906b320cc55c89  bindings/python/ysp_audio/include/miniaudio.h" | sha256sum -c -
+          mkdir -p bindings/mex/miniaudio && cp bindings/python/ysp_audio/include/miniaudio.h bindings/mex/miniaudio/
+          mkdir -p bindings/python/ysp_vis/natives && cp -r third_party/vis/angle third_party/vis/sdl3 third_party/vis/pl_mpeg third_party/vis/layout bindings/python/ysp_vis/natives/
+
+      - name: Build & test the wheel (simulated display)
+        uses: pypa/cibuildwheel@v4.1.0
+        with:
+          package-dir: bindings/python/ysp_vis
+          output-dir: wheelhouse
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheels-ysp_vis-windows
+          path: wheelhouse/*.whl
+
+      - name: Set up MATLAB
+        uses: matlab-actions/setup-matlab@v3
+
+      - name: MEX build and test (simulated display)
+        uses: matlab-actions/run-command@v3
+        with:
+          command: |
+            cd('bindings/mex');
+            build('audio'); build('timeline'); build('vis'); build('screen'); build('gfx'); build('video');
+            test_mex_vis; test_mex_vis_gfx; test_mex_video; test_mex_vis_text
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: matlab-mex-ysp-vis-windows
+          path: |
+            bindings/mex/ysp_*.mexw64
+            bindings/mex/libEGL.dll
+            bindings/mex/libGLESv2.dll
+            bindings/mex/ysp_vis-LICENSE.*.txt
 
   # --------------------------------------------------------------------- #
   # Octave: build every MEX with mkoctfile and smoke-test.                #
@@ -534,6 +715,14 @@ jobs:
           octave-cli --version | head -1
 
       - uses: actions/checkout@v7
+
+      # ysp_audio.c needs miniaudio.h 0.11.25 (the pin of YSP_FETCH_MINIAUDIO).
+      - name: Fetch miniaudio.h
+        run: |
+          apt-get install -y --no-install-recommends curl
+          mkdir -p bindings/mex/miniaudio
+          curl -sSfL -o bindings/mex/miniaudio/miniaudio.h https://raw.githubusercontent.com/mackron/miniaudio/0.11.25/miniaudio.h
+          echo "ac7af4de748b7e26b777f37e01cee313a308a7296a3eb080e2906b320cc55c89  bindings/mex/miniaudio/miniaudio.h" | sha256sum -c -
 
       - name: Build MEX
         working-directory: bindings/mex
@@ -606,6 +795,44 @@ jobs:
         working-directory: bindings/mex
         run: octave-cli -q --eval "test_mex_color"
 
+      - name: Box binding test (test_mex_box.m)
+        working-directory: bindings/mex
+        run: octave-cli -q --eval "test_mex_box"
+
+      - name: RDK binding test (test_mex_rdk.m)
+        working-directory: bindings/mex
+        run: octave-cli -q --eval "test_mex_rdk"
+      - name: Pack binding test (test_mex_pack.m)
+        working-directory: bindings/mex
+        run: octave-cli -q --eval "test_mex_pack"
+      - name: Clock binding test (test_mex_rt.m)
+        working-directory: bindings/mex
+        run: octave-cli -q --eval "test_mex_rt"
+      # Simulated boards (ysp_device('sim_open', ...)): no hardware.
+      - name: Device and rig profile binding test (test_mex_device.m)
+        working-directory: bindings/mex
+        run: octave-cli -q --eval "test_mex_device"
+      - name: Response binding test (test_mex_response.m)
+        working-directory: bindings/mex
+        run: octave-cli -q --eval "test_mex_response"
+      - name: Timeline binding test (test_mex_timeline.m)
+        working-directory: bindings/mex
+        run: octave-cli -q --eval "test_mex_timeline"
+      # miniaudio's null device: no sound hardware.
+      - name: Audio binding test (test_mex_audio.m)
+        working-directory: bindings/mex
+        run: octave-cli -q --eval "test_mex_audio"
+      # Builds tests/share_consumer.c and drives ysp_audio and ysp_timeline
+      # handles through their exported tables.
+      - name: Shared tables test (test_mex_share.m)
+        working-directory: bindings/mex
+        run: octave-cli -q --eval "test_mex_share"
+      # Writes a data set in a temporary folder; its crash check starts a
+      # second octave-cli and kills it.
+      - name: Data set binding test (test_mex_dataset.m)
+        working-directory: bindings/mex
+        run: octave-cli -q --eval "test_mex_dataset"
+
       - uses: actions/upload-artifact@v7
         with:
           name: octave-mex-bookworm
@@ -629,6 +856,12 @@ jobs:
 
       - name: Set up MATLAB
         uses: matlab-actions/setup-matlab@v3
+
+      - name: Fetch miniaudio.h
+        run: |
+          mkdir -p bindings/mex/miniaudio
+          curl -sSfL -o bindings/mex/miniaudio/miniaudio.h https://raw.githubusercontent.com/mackron/miniaudio/0.11.25/miniaudio.h
+          echo "ac7af4de748b7e26b777f37e01cee313a308a7296a3eb080e2906b320cc55c89  bindings/mex/miniaudio/miniaudio.h" | sha256sum -c -
 
       - name: Build MEX + smoke test
         uses: matlab-actions/run-command@v3
@@ -696,6 +929,48 @@ jobs:
         uses: matlab-actions/run-command@v3
         with:
           command: cd('bindings/mex'); test_mex_color
+
+      - name: Box binding test (test_mex_box.m)
+        uses: matlab-actions/run-command@v3
+        with:
+          command: cd('bindings/mex'); test_mex_box
+
+      - name: RDK binding test (test_mex_rdk.m)
+        uses: matlab-actions/run-command@v3
+        with:
+          command: cd('bindings/mex'); test_mex_rdk
+      - name: Pack binding test (test_mex_pack.m)
+        uses: matlab-actions/run-command@v3
+        with:
+          command: cd('bindings/mex'); test_mex_pack
+      - name: Clock binding test (test_mex_rt.m)
+        uses: matlab-actions/run-command@v3
+        with:
+          command: cd('bindings/mex'); test_mex_rt
+      - name: Device and rig profile binding test (test_mex_device.m)
+        uses: matlab-actions/run-command@v3
+        with:
+          command: cd('bindings/mex'); test_mex_device
+      - name: Response binding test (test_mex_response.m)
+        uses: matlab-actions/run-command@v3
+        with:
+          command: cd('bindings/mex'); test_mex_response
+      - name: Timeline binding test (test_mex_timeline.m)
+        uses: matlab-actions/run-command@v3
+        with:
+          command: cd('bindings/mex'); test_mex_timeline
+      - name: Audio binding test (test_mex_audio.m)
+        uses: matlab-actions/run-command@v3
+        with:
+          command: cd('bindings/mex'); test_mex_audio
+      - name: Shared tables test (test_mex_share.m)
+        uses: matlab-actions/run-command@v3
+        with:
+          command: cd('bindings/mex'); test_mex_share
+      - name: Data set binding test (test_mex_dataset.m)
+        uses: matlab-actions/run-command@v3
+        with:
+          command: cd('bindings/mex'); test_mex_dataset
 
       - uses: actions/upload-artifact@v7
         with:
@@ -827,7 +1102,7 @@ jobs:
           PY=$(command -v python3 || command -v python)
           "$PY" tools/vendor_layout.py --write --cache ~/ysp-layout-tarballs
 
-      # lodepng for the pack tool (docs/pack.md): three files at a commit,
+      # lodepng, stb_image and pl_mpeg for the pack tool (docs/pack.md), each at a commit,
       # each checked by SHA-256 (tools/vendor_pack.py).
       - name: lodepng cache (Windows, Linux)
         if: runner.os != 'macOS'
@@ -852,7 +1127,7 @@ jobs:
       # out of this list is compiled nowhere on CI. ctest below runs every
       # test that matches its pattern, built or not.
       - name: Build
-        run: cmake --build build --config Release --target compile_screen_c compile_screen_cxx compile_screen_com compile_screen_glx compile_audio_pulse test_screen screen_hello screen_flipstats screen_input screen_abort screen_gamma screen_sync_check screen_loopback compile_gfx_c compile_gfx_cxx test_gfx gfx_hello gfx_trial gfx_load gfx_calib gfx_bench gfx_gallery gfx_text gfx_gratings gfx_luminance_bits gfx_clut_sync gfx_filtered_noise gfx_gaze_contingent gfx_capture gfx_rdk gfx_rdk_bench trial_rdk compile_video_c compile_video_cxx compile_video_com test_video video_play video_bench video_check test_response_sdl test_input_sdl trial_keyboard trial_same_different trial_srt trial_adjustment trial_mouse_tracking trial_audio_keyboard trial_stop_signal trial_sternberg trial_2afc_adaptive trial_two_keyboards audio_av_sync web_tutorial web_rdk_staircase web_selftest web_av_sync
+        run: cmake --build build --config Release --target compile_screen_c compile_screen_cxx compile_screen_com compile_screen_glx compile_audio_pulse test_screen test_screen_window screen_hello screen_flipstats screen_input screen_abort screen_gamma screen_sync_check screen_loopback compile_gfx_c compile_gfx_cxx test_gfx gfx_hello gfx_trial gfx_load gfx_calib gfx_bench gfx_gallery gfx_text gfx_gratings gfx_luminance_bits gfx_clut_sync gfx_filtered_noise gfx_gaze_contingent gfx_capture gfx_rdk gfx_rdk_bench trial_rdk compile_video_c compile_video_cxx compile_video_com compile_order_audio_screen_c compile_order_audio_screen_cxx compile_order_screen_audio_c compile_order_screen_audio_cxx compile_share_shims_c compile_share_shims_cxx test_video video_play video_bench video_check test_response_sdl test_input_sdl trial_keyboard trial_same_different trial_srt trial_adjustment trial_mouse_tracking trial_audio_keyboard trial_stop_signal trial_sternberg trial_2afc_adaptive trial_two_keyboards trial_eeg_triggers response_lag trial_scanner_sync gfx_gamma_null trial_movie color_patch audio_av_sync web_tutorial web_rdk_staircase web_selftest web_av_sync
 
       # ysp/gfx.h's pixel checks must run where software GL exists; macOS has
       # no EGL, so its test runs the CPU checks only.
@@ -860,7 +1135,7 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" != macOS ]; then export YGFX_TEST_REQUIRE_GL=1; fi
-          ctest --test-dir build -C Release -R "screen|gfx|video|response_sdl|input_sdl|audio_pulse" --output-on-failure
+          ctest --test-dir build -C Release -R "screen|gfx|video|share_shims|response_sdl|input_sdl|audio_pulse" --output-on-failure
 
       - name: Run examples (simulated display)
         shell: bash
@@ -905,10 +1180,43 @@ jobs:
           # or an estimate is off (about 35 s).
           expect 0 "$bin/trial_2afc_adaptive" --sim --out "$RUNNER_TEMP/trial_2afc_adaptive.csv"
           expect 2 "$bin/trial_2afc_adaptive" --method bogus
+          # The same with a rig profile's view (ysp/rigfile.h v0.5.0): the sizes in deg and the
+          # profile's hash come from the profile; a named folder without one is an error.
+          mkdir -p "$RUNNER_TEMP/rig2afc"
+          printf '{"format": "ysp-rig 1", "rig": "ci", "roles": {}, "view": {"distance_mm": 570, "width_mm": 518.4, "width_px": 1920}, "written": "2026-10-21T00:00:00Z"}\n' > "$RUNNER_TEMP/rig2afc/profile.json"
+          expect 0 "$bin/trial_2afc_adaptive" --sim --rig-dir "$RUNNER_TEMP/rig2afc" --out "$RUNNER_TEMP/trial_2afc_rig.csv"
+          expect 0 grep -q "^view=rig profile ci: 570 mm away, 518.4 mm across 1920 px" "$RUNNER_TEMP/trial_2afc_rig.csv.meta"
+          expect 0 cmp "$RUNNER_TEMP/trial_2afc_adaptive.csv" "$RUNNER_TEMP/trial_2afc_rig.csv"
+          expect 1 "$bin/trial_2afc_adaptive" --sim --rig-dir "$RUNNER_TEMP/no-such-rig"
+          expect 2 "$bin/trial_2afc_adaptive" --no-rig --rig ci
           # PsychoPy's dots.py as a trial; 1 if a row is off or a replay from the steps file differs (about 15 s).
           expect 0 "$bin/trial_rdk" --sim --out "$RUNNER_TEMP/trial_rdk.csv" --steps "$RUNNER_TEMP/trial_rdk_steps.csv"
+          # PsychoPy's movie demos: RT from a video frame's flip record, pause and seek by keys, the soundtrack on
+          # the null device; 1 if a row is off (under a second, virtual clock).
+          expect 0 "$bin/trial_movie" --sim --out "$RUNNER_TEMP/trial_movie.csv"
+          expect 2 "$bin/trial_movie" --bogus
+          # PsychoPy's color demos: a walk in CIELAB, xyY and DKL through a nominal calibration; 1 if a step is off (under a second, virtual clock).
+          expect 0 "$bin/color_patch" --sim --out "$RUNNER_TEMP/color_patch.csv"
+          expect 2 "$bin/color_patch" --space hsv
           # PsychoPy's Sternberg demo: digits from a font or the bitmap font, SOAs from flip records (about 27 s).
           expect 0 "$bin/trial_sternberg" --sim --out "$RUNNER_TEMP/trial_sternberg.csv"
+          # PsychoPy's EEG demos: stimulus, response and end codes into the in-process box; 1 if a row,
+          # a write's deadline or a byte is off (virtual clock).
+          expect 0 "$bin/trial_eeg_triggers" --sim --out "$RUNNER_TEMP/trial_eeg_triggers.csv"
+          expect 2 "$bin/trial_eeg_triggers" --pulse 0
+          # A response's code from the frame loop and from ysp/device.h's response rule: one write per press
+          # on each path, the rule's record with the press's t (no window, real clock: about 3 s).
+          expect 0 "$bin/response_lag" --sim
+          expect 2 "$bin/response_lag" --sim --pace window
+          # PsychoPy's fMRI demos: trials on a base anchored at a scripted or emulated scanner pulse; 1 if an
+          # onset, a volume or a pulse is off (virtual clock).
+          expect 0 "$bin/trial_scanner_sync" --sim --out "$RUNNER_TEMP/trial_scanner_sync.csv" --pulses "$RUNNER_TEMP/trial_scanner_sync_pulses.csv"
+          expect 0 "$bin/trial_scanner_sync" --sim --sync emulate --out "$RUNNER_TEMP/trial_scanner_sync_emulate.csv"
+          expect 2 "$bin/trial_scanner_sync" --sim --sync board
+          # gammaMotionNull.py: two staircases on the output stage's table against a simulated observer;
+          # 1 if a row or the null is off (virtual clock).
+          expect 0 "$bin/gfx_gamma_null" --sim --out "$RUNNER_TEMP/gfx_gamma_null.csv"
+          expect 2 "$bin/gfx_gamma_null" --trials 1
           # The web demos, natively (docs/web.md): scripted rows, a staircase against an observer, the loop.
           expect 0 "$bin/web_tutorial" --sim --out "$RUNNER_TEMP/web_tutorial.csv"
           expect 0 "$bin/web_rdk_staircase" --sim
@@ -962,7 +1270,7 @@ jobs:
         shell: bash
         run: |
           set -eu
-          cmake --build build --config Release --target test_layout gfx_layout trial_stroop
+          cmake --build build --config Release --target test_layout gfx_layout trial_stroop trial_instructions
           ctest --test-dir build -C Release -R layout --output-on-failure
           if [ "$RUNNER_OS" = Windows ]; then bin=build/pack/Release; else bin=build/pack; fi
           "$bin/gfx_layout" --sim
@@ -971,6 +1279,9 @@ jobs:
           # PsychoPy's Stroop demos with a synthetic participant (about 30 s);
           # without a font (Linux runners) the trials run with no text drawn.
           "$bin/trial_stroop" --sim --out "$RUNNER_TEMP/trial_stroop.csv"
+          # Instruction pages turned by a scripted reader, viewing times from flip records (under a second, virtual clock);
+          # without a font (Linux runners) the views run with no text drawn.
+          "$bin/trial_instructions" --sim --out "$RUNNER_TEMP/trial_instructions.csv"
 
       # The pack tool (docs/pack.md): its test builds a pack of every kind,
       # verifies, rebuilds and appends it, and compares every entry with
@@ -981,8 +1292,8 @@ jobs:
         shell: bash
         run: |
           set -eu
-          cmake --build build --config Release --target test_pack_tool ypak trial_images
-          ctest --test-dir build -C Release -R pack_tool --output-on-failure
+          cmake --build build --config Release --target test_pack_tool test_pack_import test_pack_derive ypak trial_images
+          ctest --test-dir build -C Release -R "pack_tool|pack_import|pack_derive" --output-on-failure
           if [ "$RUNNER_OS" = Windows ]; then bin=build/pack/Release; else bin=build/pack; fi
           "$bin/ypak" verify build/pack/pack_tool_work/corpus.ysppak
           "$bin/ypak" list build/pack/pack_tool_work/corpus.ysppak > /dev/null
@@ -1001,8 +1312,8 @@ jobs:
         run: |
           set -eu
           cmake -B build-core -DCMAKE_BUILD_TYPE=Release -DYSP_BUILD_PACK=ON -DYSP_BUILD_EXAMPLES=OFF
-          cmake --build build-core --config Release --target ypak test_pack_tool
-          ctest --test-dir build-core -C Release -R pack_tool --output-on-failure
+          cmake --build build-core --config Release --target ypak test_pack_tool test_pack_import test_pack_derive
+          ctest --test-dir build-core -C Release -R "pack_tool|pack_import|pack_derive" --output-on-failure
           if [ "$RUNNER_OS" = Windows ]; then full=build/pack/Release core=build-core/pack/Release; else full=build/pack core=build-core/pack; fi
           cmp build/pack/pack_tool_work/core.ysppak build-core/pack/pack_tool_work/core.ysppak
           "$full/ypak" verify build-core/pack/pack_tool_work/corpus.ysppak
@@ -1037,3 +1348,10 @@ jobs:
           gcc -std=c11 $W -o mingw_video_test.exe tests/adapt/video_test.c
           g++ -std=c++17 $W -o mingw_video_com.exe tests/compile/video_com.cpp -L"$SDL3_MINGW/lib" -lSDL3
           ./mingw_video_c.exe; ./mingw_video_cxx.exe; ./mingw_video_test.exe; ./mingw_video_com.exe
+          # audio.h, screen.h and video.h in one unit, both orders (miniaudio from the configure's fetch)
+          MA="-Ibuild/_deps/miniaudio-src"
+          gcc -std=c11 $W $MA -o mingw_order_as_c.exe tests/compile/order_audio_screen.c -L"$SDL3_MINGW/lib" -lSDL3
+          g++ -std=c++17 $W $MA -o mingw_order_as_cxx.exe tests/compile/order_audio_screen.cpp -L"$SDL3_MINGW/lib" -lSDL3
+          gcc -std=c11 $W $MA -DYSP_TEST_SCREEN_FIRST -o mingw_order_sa_c.exe tests/compile/order_audio_screen.c -L"$SDL3_MINGW/lib" -lSDL3
+          g++ -std=c++17 $W $MA -DYSP_TEST_SCREEN_FIRST -o mingw_order_sa_cxx.exe tests/compile/order_audio_screen.cpp -L"$SDL3_MINGW/lib" -lSDL3
+          ./mingw_order_as_c.exe; ./mingw_order_as_cxx.exe; ./mingw_order_sa_c.exe; ./mingw_order_sa_cxx.exe

@@ -5,8 +5,18 @@ left open (the coordinator approved them, with the recommendations of
 section 10 as defaults); phase 2 built them: `include/ysp/pack.h` v0.1.0
 (the reader), `pack/ysp/pack_tool.h` v0.1.0 (the tool library) and the
 `ypak` CLI. Section 9.1 has the phase 1 probes and the phase 2
-measurements. Where the build changed the design, the text says so. When
-this page and rig_spec 5 disagree, this page is newer.
+measurements. Phase 3 (2026-10-13, tool v0.4.0, section 13) added video
+with its index, frame sequences, tables from `.xlsx` workbooks and
+textures from JPEG files; the reader did not change. Tool v0.5.0
+(2026-10-20, section 14) runs the ffmpeg step on a recorded thread count
+instead of one thread. Tool v0.6.0 (2026-10-21, section 15) lays out
+the texts of the experiment definition's text stimuli itself, so a
+description lists no glyph runs for them (gap G9 of
+experiment_format.md). Tool v0.7.0 (2026-10-22, section 16) stores a
+definition's canonical bytes (D2) and refuses a lookup whose map lacks a
+level of its `by`. Where the build
+changed the design, the text says so. When this page and rig_spec 5
+disagree, this page is newer.
 
 Settled before this page, in rig_spec 5, and not reopened here: one zip
 file in store-only mode; entries aligned to 4 KB; readable by any zip
@@ -291,10 +301,10 @@ hostile:
 | 11 | AUDIO | `.wav` | WAV at the project rate | 2 |
 | 12 | SHADER | `.yspshd` | the fragment body, mode and reflection | 2 |
 | 13 | TEXTURE | `.ysptex` | ysp/gfx.h planes, raw or QOI | 2 |
-| 14 | VIDEO | `.mpg`, `.mp4` | the media file, CFR, closed GOPs, no B-frames | 3 |
-| 15 | VIDEO_INDEX | `.yspvi` | ysp/video.h's index | 3 |
-| 16 | FRAMESEQ | `.yspvseq` | ysp/video.h's frame sequence | 3 |
-| 17 | ALPHA | `.yspalpha` | exact alpha coverage at stated sizes | 3 |
+| 14 | VIDEO | `.mpg`, `.mp4` | the media file, CFR, closed GOPs, no B-frames | 3 (tool v0.4.0) |
+| 15 | VIDEO_INDEX | `.yspvi` | ysp/video.h's index | 3 (tool v0.4.0) |
+| 16 | FRAMESEQ | `.yspvseq` | ysp/video.h's frame sequence | 3 (tool v0.4.0) |
+| 17 | ALPHA | `.yspalpha` | exact alpha coverage at stated sizes | not built (4.11) |
 | 18 | SCRIPT | | reserved (Luau source and bytecode) | later |
 | 19 | EXTENSION | | reserved (native modules by hash, rig_spec 12) | later |
 
@@ -316,6 +326,7 @@ allocated after open. The header's manual is the reference; in short:
 | `ypak_check(&pk, &e, bytes, n)` | Checks bytes the caller fetched: exactly `[header_off, data_off + size)` |
 | `ypak_cursor_init`, `ypak_cursor_read` | A stream: `ypak_cursor_read` has the signature of `yau_reader.read` and `yvid_reader.read`; verifies each 1 MiB chunk on its first read |
 | `ypak_verify_all` | Every entry now (a preflight) |
+| `ypak_verify_entry(&pk, &e)` | One entry now, whatever the policy (v0.4.0); `YPAK_ERR_ARG` for an incremental pack |
 | `ypak_id`, `ypak_describe` | `sha256:<hex>`, and one log line that names the policy |
 | `ypak_xxh64*`, `ypak_entry_hash`, `ypak_sha256*`, `ypak_crc32` | The hashes, for the tool and for callers |
 | `ypak_cset_view`, `ypak_art_view`, `ypak_runs_view` (`ypak_runs_find`, `ypak_runs_str`), `ypak_shader_view`, `ypak_texture_view`, `ypak_qoi_decode`, `ypak_qoi_encode` | The pack's own forms (section 4): bounds of their headers only |
@@ -427,8 +438,12 @@ Rules:
   `ysp/chunks` included. `size`, `sha256`, `xxh64`, `crc32` and `stream`
   equal the container's (`ypak verify`).
 - `sources`: each input file, by its path relative to the source
-  description, `/` separators, and its SHA-256. `from`: entries of this
-  pack that the entry is made from (a curve set's font, glyph runs' fonts).
+  description, `/` separators, and its SHA-256. For a definition, the
+  SHA-256 of its canonical bytes, which is the entry's too (4.12; tool
+  v0.7.0). `from`: entries of this
+  pack that the entry is made from (a curve set's font, glyph runs' fonts;
+  for the experiment's glyph runs also the experiment entry and the
+  tables whose levels gave texts, 4.5).
 - `derivation`: `op` (the step), `by` (the library and version that did
   it; for glyph runs, `ylay_stamp()`'s line with every font's SHA-256), and
   the parameters: the resource's keys from the source description plus the
@@ -436,7 +451,11 @@ Rules:
   documentation. Some values are records only and are not taken back by a
   rebuild: `faces` and `fs_type` (font), `role` (calibration), `resolve`
   and `backward` (curve set), `contract` and `validated` (shader),
-  `convert` (audio).
+  `convert` (audio), `formulas` and `text_columns` (a table from a
+  workbook), `icc` (texture), `command` (video), `experiment` and
+  `derived` (the experiment's glyph runs: a rebuild derives them again),
+  every key of a frame sequence's and a video index's derivation. A VIDEO_INDEX entry is not a
+  resource of the description: its video makes it again.
 - Numbers are integers. A real-valued parameter is a JSON string with the
   decimal text the tool parsed (`"1e-4"`), read by ysp/table.h's
   locale-free, correctly rounded parser. The tool refuses a JSON number
@@ -468,6 +487,39 @@ The PSTB block (docs/table.md, format 1), unchanged; `ytb_open_view()` reads
 it in place. Source: CSV or TSV through `ytb_open_csv()`. Parameters:
 `delimiter` (`","`, `";"` or `"\t"`; default `","`), `types` (column name
 to `"integer"`, `"number"` or `"string"`), `allow_empty` (default false).
+
+Source `.xlsx` or `.xlsm` (tool v0.4.0, `op` `"xlsx"`): one worksheet
+becomes CSV text (`ypt_xlsx_read()`, `pack/import.c`), and
+`ytb_open_csv()` reads that text, so a workbook and the CSV that Excel
+would write give the same table, with full precision. Parameter `sheet`:
+the sheet's name; the first sheet when not given. The manifest records
+the sheet read. The rules:
+
+- Row 1 names the columns; its cells must be text. A column without a
+  name in row 1 must be empty: a value there is refused by its cell
+  reference (PsychoPy drops such a column without a word).
+- A number keeps the text the workbook stores (`0.25`,
+  `1.0000000000000001E-2`); ysp/table.h's parser reads it. A boolean is
+  `TRUE` or `FALSE`. A formula gives its saved value; the manifest counts
+  them (`formulas`). A formula with no saved value is refused: the tool
+  computes no formula.
+- A column whose every value is a text cell is `"string"`, so `007` keeps
+  its zeros as the workbook shows it; the manifest lists these columns
+  (`text_columns`). `types` in the description comes first.
+- Refused by cell reference: a date or a time (a cell format with day,
+  month, year, hour or second, or a built-in date format), an error value
+  (`#N/A`), a cell type the reader does not know. A date in a conditions
+  file is a datetime in PsychoPy and a serial number in the file; a table
+  holds numbers and text, so the author picks one.
+- Refused by name: a password-protected workbook (an OLE file, not a
+  zip), an old `.xls`, zip64, a part that inflates past 64 MiB, a part
+  whose CRC-32 or size does not match, a DOCTYPE, an entity other than
+  XML's five.
+- Shared strings with rich text are joined; phonetic guides (`rPh`) are
+  left out; `_xHHHH_` escapes (ECMA-376) are decoded.
+
+Measured on PsychoPy's 23 demo workbooks (9.1, phase 3): every one reads,
+and every cell equals openpyxl's value.
 
 ### 4.2 CALIBRATION (decided 2026-10-09: open question 1)
 
@@ -546,6 +598,76 @@ Parameters: `fonts` (FONT entry names in fallback order, or
 decimal strings, default `"0"`; `dir` `auto`, `ltr` or `rtl`; `align`
 `start`, `end` or `center`; `lang`, BCP 47). Spans are not built yet.
 
+#### The experiment's glyph runs (tool v0.6.0)
+
+When the experiment entry is a definition (JSON with `"format":
+"ysp-experiment"`, experiment_format.md), the tool lays out every text
+its `text` stimuli can show. Nothing in the description asks for it.
+
+- Entry: one GLYPHRUNS entry, the experiment entry's name with
+  `.ysprun` for its extension: `experiment/main.json` gives
+  `experiment/main.ysprun`. No entry when no stimulus is a text.
+- Block key: the text and its style (D14), built by `ypak_runs_key()`
+  in ysp/pack.h, which the tool and the player both call (below). Two
+  stimuli of one style that show one text share one block.
+- Style: the stimulus's `font` (face 0), `size`, `width`,
+  `line_height`, `align`, `dir` and `lang`; defaults as for a listed
+  block; color 0. These are every input of a block's layout that can
+  differ between blocks of one entry. Not in the key: the entry's
+  fallback fonts (one list for the whole entry), color (the palette
+  position, 0 in every derived block), and the draw properties (`x`,
+  `y`, `layer`, the color the stimulus draws in).
+- Texts: a literal string (`"$$..."` is the literal `"$..."`); the
+  levels of a string column of every table any node's
+  `timeline_variables` names (`"$word"`); a node's `vars` value or each
+  of its `choice` items; every value of a lookup's `map`, whichever keys
+  the trials can reach. Each recursively, at most 8 variables deep.
+- Fonts: each stimulus's font needs a FONT entry and a CURVESET entry
+  made from it. Each derived text is laid out with its stimulus's font
+  first, so two stimuli in two fonts are each shaped in their own.
+- A GLYPHRUNS resource with the entry's name adds to it: its `blocks`
+  are laid out with its `fonts`, and its `fonts` are fallbacks after
+  each stimulus's font (a font for characters the stimulus's font
+  lacks). Its `fonts` and `blocks` may then be empty. A listed block
+  may not take a derived key. The entry's fonts are the listed fonts in
+  order, then the stimuli's by name.
+- `derivation`: `fonts` and `blocks` as listed (a rebuild takes them
+  back), `experiment`, and `derived`, each derived block with its
+  `stimuli` (every stimulus that shows it, sorted) and `font` (records:
+  a rebuild derives them again and the byte comparison checks them).
+- A text that the tool cannot know is refused, with the stimulus's
+  name (section 15 lists each form and its message). A definition of
+  another version is refused; bytes that are not JSON, or JSON of
+  another format, stay opaque, but bytes that name `"ysp-experiment"`
+  and do not parse are refused with the line and column.
+
+##### The block key
+
+`ypak_runs_key(&style, text, n, buf, cap)` (ysp/pack.h v0.3.0) gives
+the key's bytes; this is their exact format, so a player in another
+language (the web) can build the same bytes:
+
+```
+FONT#FACE|SIZE|WIDTH|LINE_HEIGHT|ALIGN|DIR|LANG|TEXT
+```
+
+| Field | Bytes |
+|---|---|
+| FONT | the FONT entry's name, as in the pack (writer rule, 2.7); it has no `#` and no `|` |
+| FACE | the face in decimal, no sign, no leading zeros (`0`) |
+| SIZE, WIDTH, LINE_HEIGHT | the double's shortest decimal that reads back to it, as `yjs_format_double()` writes it (json.md, Canonical numbers): `72`, `0.8`, `0.30000000000000004`; plain from 10^-18 to below 10^21, else `d.ddde+E` or `d.ddde-E`; `-0` and `0` are `0`. WIDTH and LINE_HEIGHT are `0` when the stimulus omits them |
+| ALIGN | `start`, `end` or `center` |
+| DIR | `auto`, `ltr` or `rtl` |
+| LANG | the BCP 47 tag as written (`A`-`Z`, `a`-`z`, `0`-`9`, `-`), or empty |
+| TEXT | the text's UTF-8 bytes, unchanged, to the end of the key (no NUL); it may hold `|` and `#`, since every field before it is free of them |
+
+The separators are `#` (0x23) after FONT and `|` (0x7C) after every
+other field but TEXT. A loader reads the numbers as doubles (ysp/json.h
+`yjs_double()`), so `72`, `72.0` and `7.2e1` give one key. Example, the
+Stroop word RED: `fonts/NotoSans-Regular.ttf#0|72|1000|0|start|auto||RED`.
+Blocks are in bytewise order of their keys, so `ypak_runs_find()` finds
+one by binary search.
+
 ### 4.6 ARTWORK
 
 | Offset | Size | Field |
@@ -576,6 +698,22 @@ integers whose low byte is 0 to 24 in 32, 64-bit floats that are exact in
 only). Anything else, and any rate other than the project's, is refused
 with a message that says what to export. Parameter: `stream` (flag
 STREAM).
+
+Parameter `resample` (tool v0.4.0, open question 4): `"sinc_best"`
+resamples a file at another rate to the project rate with libsamplerate
+0.2.2's best sinc converter (`SRC_SINC_BEST_QUALITY`; BSD-2-Clause,
+pinned, `tools/vendor_pack.py`), offline, so the player still never
+resamples. The samples are widened to float exactly first, as ysp/audio.h
+does at load, and the result is a 32-bit float WAV (`op` `"resample"`).
+The derivation records `from_rate` and `clipped`, the count of samples
+past full scale (a resampled peak can pass it; float holds it, and the
+author sees the count). Without `resample`, a rate other than the
+project's is refused as before, and the message names the parameter.
+libsamplerate is compiled without FMA contraction (`-ffp-contract=off`),
+so every compiler gives the same samples (the test corpus pins a
+resampled file). Measured (section 9.1, phase 3): a 997 Hz sine at
+44.1 kHz comes out at 48 kHz within 5.2e-8 of the ideal sine, 140 dB
+below its amplitude, away from the file's first and last 200 samples.
 
 ### 4.8 SHADER
 
@@ -618,10 +756,40 @@ type: 8-bit gray to R8, gray and alpha to RG8, RGB, RGBA and palette to
 RGBA8 (RGB gets alpha 255), 16-bit gray to R16UI (little-endian); 16-bit
 color needs `"format": "rgba32f"` (k / 65535 as f32). A `format` that
 would drop or round values is refused. `encoding`: `srgb` (the default
-for 8-bit), `linear` or `device`; a 16-bit PNG has no default. An `iCCP`
-chunk, a `gAMA` other than 45455 and a `cHRM` other than sRGB's are
-refused by name. `compression`: `raw` (default) or `qoi`; the reader's
+for 8-bit), `linear` or `device`; a 16-bit PNG has no default. A `gAMA`
+other than 45455 and a `cHRM` other than sRGB's are refused by name.
+`compression`: `raw` (default) or `qoi`; the reader's
 `ypak_qoi_decode()` checks the raw hash.
+
+An ICC profile (a PNG's `iCCP`, a JPEG's `APP2` chunks) is accepted when
+it is sRGB's and refused otherwise (`ypt_icc_srgb()`): an RGB
+matrix-and-curves profile whose colorants are within 0.002 of sRGB's D50
+values and whose three curves are within half a code of 255 of sRGB's at
+every code. The manifest records `"icc": "srgb"`. Changed in tool v0.4.0:
+v0.3.0 refused every `iCCP`, but 3 of the 4 profiles in PsychoPy's demo
+photographs are sRGB's (two `sRGB IEC61966-2.1`, one compact `c2`); the
+fourth, a laptop panel's profile (`Color LCD`, colorants 0.04 off, a
+gamma of 1.8), is refused. The tool still converts no color: an sRGB
+profile says what `"encoding": "srgb"` says.
+
+Source JPEG (tool v0.4.0, `op` `"jpeg"`): decoded by stb_image 2.30
+(pinned, `tools/vendor_pack.py`), after `ypt_jpeg_read()` checks the
+frame and the segments. Gray to R8, color to RGBA8 (alpha 255); `rgba8`
+for gray and `rgba32f` (k / 255, as an 8-bit PNG gives) widen exactly;
+`r8` from color, `rg8` and `r16ui` are refused. `encoding` defaults to
+`srgb`, so color needs `primaries` as an RGB PNG does. Refused by name:
+an EXIF orientation other than 1 (programs disagree on whether to turn
+the picture: save it turned, with orientation 1), CMYK, 12-bit samples,
+lossless, hierarchical and arithmetic coding, two frame headers, ICC
+chunks out of order or missing, a profile that is not sRGB's, a file
+with no end marker, and a file too short for its frame (every 8x8 block
+costs at least one bit): stb_image would decode a cut file with zeros in
+place of the missing data. The fuzzer found the second case: 1,450 bytes
+that claimed 512 x 62977 and decoded. JPEG decoders do not agree to the bit: on
+PsychoPy's photographs stb_image and libjpeg-turbo differ by at most 3
+codes, except the second-to-last column of an image with horizontally
+halved chroma (up to 20 codes; 9.1, phase 3). The texture holds
+stb_image's bytes, and the manifest names the decoder.
 
 The encoding bytes are the `enc` of `ygfx_texture_desc` (ysp/gfx.h
 v0.10.5), copied unchanged: the tool refuses at build every texture that
@@ -651,23 +819,121 @@ or shader texture is built `linear`. Changed in tool v0.2.0 (2026-10-09):
 v0.1.1 wrote matrix, range and transfer on every texture with primaries
 0, which `ygfx_texture()` refused, and refused any encoding on R8 and RG8.
 
-### 4.10 VIDEO, VIDEO_INDEX, FRAMESEQ (phase 3, not built)
+### 4.10 VIDEO, VIDEO_INDEX, FRAMESEQ (tool v0.4.0)
 
-The design of the first page stands: the media file unchanged with flag
-STREAM, the `.yspvi` index from `yvid_index_make()`, a `YSPVSEQ1` file
-unchanged; ffmpeg's argument vector and version recorded. The reader
-already reads these kinds (a cursor feeds `yvid_desc.reader`); the tool
-refuses them.
+The design of the first page, built: the media file unchanged with flag
+STREAM, its `.yspvi` index from `yvid_index_make()`, a `YSPVSEQ1` file
+unchanged with flag STREAM; ffmpeg's argument vector and version
+recorded. The reader did not change (a cursor feeds `yvid_desc.reader`,
+the index entry `yvid_desc.index`).
 
-### 4.11 ALPHA (phase 3, not built)
+A `video` resource makes two entries: the media file, named by `name`
+(it ends in `.mp4` or `.mpg`, and the bytes must be that form), and
+`name` + `.yspvi`, the index, as ysp/video.h finds an index beside a
+file. Parameters:
+
+- `source`: the media file, or ffmpeg's input.
+- `ffmpeg`: the arguments between the input and the output. With it, the
+  tool runs `ffmpeg -nostdin -hide_banner -loglevel error -y
+  [ffmpeg_input] -i SOURCE [ffmpeg] -threads N OUTPUT` (no shell; each
+  argument as given) and stores the output. The tool sets the encode's
+  thread count N (tool v0.5.0, decided 2026-10-20; section 14): `-threads
+  N` before the output, and for libx265 `pools=N:frame-threads=F`
+  appended to the author's `-x265-params` (or added as `-x265-params`
+  when there is none), where F is x265's own rule for a pool of N
+  threads (1 below 4, 2 from 4, 3 from 8, 4 from 16, 5 from 32). Every
+  encoder measured gives other bytes with another thread count, and the
+  same bytes with the same count under any CPU affinity, on Windows and
+  on Linux (9.1, 2026-10-20). So the count is recorded like any other
+  parameter, and a rebuild runs ffmpeg with the recorded count. A thread
+  setting of the author's (`-threads`, or `threads=`, `pools=`,
+  `frame-threads=`, `lookahead-threads=` in `-x264-params`,
+  `-x265-params` or `-x264opts`) is refused by name: `threads` is the
+  only way to set the count. Tool v0.4.0 encoded on one thread (decided
+  2026-10-14), 3 to 4 times slower at 1080p than 16 threads (14).
+
+  The tool also adds the flags that keep an encoder's bytes the same on
+  another CPU and another build of the same ffmpeg version (decided
+  2026-10-20, open question 12): `info=0` in libx265's `-x265-params`
+  (x265's info message names the build's OS and compiler and the CPU
+  flags it found), and `-flags +bitexact -dct int -idct simple` for
+  mpeg1video and mpeg2video (their SIMD DCTs give other bytes than the C
+  ones). `+bitexact` is appended to the author's `-flags` when there is
+  one. The encoder is the last `-c:v` (or `-vcodec`, `-codec:v`, `-c`,
+  `-codec`); without one, ffmpeg's default for the form: mpeg1video for
+  `.mpg`. The author's `info` in `-x265-params`, and `-dct`, `-idct` or a
+  `-flags` value with `-bitexact` for an MPEG encoder, are refused by
+  name. The command records the flags. mpeg2video is refused before the
+  encode runs (decided 2026-10-20, tool v0.5.1): the video index
+  (pl_mpeg) reads MPEG-1 only and misread mpeg2video's output ("GOP
+  length changes"), so the step failed after the encode. Use mpeg1video
+  for `.mpg`, or libx264 or libx265 for `.mp4`.
+
+  **libx264 has no such flag.** A libx264 entry rebuilds byte for byte
+  only on a CPU on which x264 takes the same instruction-set path: its
+  AVX2 code and its AVX code gave different bytes (9.1, 2026-10-20), at
+  every thread count, and no x264 option removes the difference. A
+  rebuild on another CPU fails and names the first entry that differs.
+  An author who needs a pack that any machine rebuilds encodes with
+  mpeg1video (an `.mpg` entry) or libx265 (an `.mp4` entry).
+
+  Input options in `ffmpeg_input` are not touched: decoding gives the
+  same frames on any thread count. `ffmpeg_input`: input options, before
+  `-i` (a raw source: `-f rawvideo -pix_fmt gray -s 64x48 -framerate
+  30`). The derivation's `by` is the first line of `ffmpeg -version`, and
+  `command` is the vector with `{source}` and `{output}` for the paths, so
+  the manifest names no path of the machine. The same text is the index's
+  note. `ypak --ffmpeg PATH` names the program; the default is `ffmpeg` on
+  the PATH.
+- `threads` (tool v0.5.0): the encode's thread count N, an integer from 1
+  to 64, with `ffmpeg` only. Default: the building machine's logical
+  processors (`GetActiveProcessorCount()`, `sysconf(_SC_NPROCESSORS_ONLN)`),
+  at most 64. The derivation records the count
+  used, so a pack built without `threads` rebuilds with the count of the
+  machine that built it. Two machines with other counts build two packs
+  with two IDs from one description; give `threads` when the pack ID must
+  not depend on the machine that builds it first.
+- `color`: `matrix`, `range`, `transfer`, `primaries`, `siting`, by
+  ysp/video.h's names (`bt709`, `limited`, `bt1886`, `bt709`, `left`).
+  What the stream states wins; a field that contradicts it is refused
+  (`yvid_index_make()`). MPEG-1 defaults to BT.601, limited, BT.1886,
+  BT.709, center.
+
+The index is made by decoding every frame: MPEG-1 with pl_mpeg (pinned,
+`tools/vendor_pack.py`), on every platform; H.264 and HEVC in MP4 with
+Media Foundation's software decoder, on Windows only (H.264 decoding is
+exact by the standard, so every decoder gives the index's hashes,
+docs/video.md). ysp/video.h refuses what is not canonical, by name: a
+variable rate, B-frames, a GOP that changes, an edit list, 10-bit, and
+the rest of its CANONICAL FORM. The index's derivation records codec,
+size, rate, frames, GOP and color.
+
+`frameseq`: the file from `yvid_seq_open()`, unchanged, after every byte
+is checked: the header and its hash, the canonical color (RGB formats as
+device values, YUV formats with every field stated), each frame's header
+against the index, its data against its XXH64 (QOI frames decoded), the
+zero padding, and the index at the file's end. Only a frame header's
+capture fields (times, trial, event) are free. The derivation records
+frames, size, format, compression and rate.
+
+### 4.11 ALPHA (not built)
 
 Exact alpha coverage at stated sizes; the form follows the first
-experiment that needs it.
+experiment that needs it. No experiment has needed it, so the tool
+refuses `"kind": "alpha"` with that reason (tool v0.4.0).
 
 ### 4.12 EXPERIMENT and FILE
 
-Bytes, unchanged. The experiment comes from the description's top-level
-`"experiment": {"entry", "source", "media_type"}`.
+A FILE entry holds its source's bytes, unchanged. The experiment comes
+from the description's top-level `"experiment": {"entry", "source",
+"media_type"}`. When the source is a definition (JSON with `"format":
+"ysp-experiment"`, experiment_format.md), the entry holds its canonical
+bytes (tool v0.7.0): ysp/json.h's canonical form (json.md) and one LF
+after it, with the derivation `{"op": "canonical", "by": "ysp/json.h
+VERSION"}`. The entry's SHA-256 is then the experiment ID (D2). Other
+experiment bytes stay as they are (`"op": "copy"`). A definition also
+gives the experiment's glyph runs (4.5), and the tool checks its lookups
+(section 16).
 
 ## 5. Reference: the tool
 
@@ -678,18 +944,23 @@ Bytes, unchanged. The experiment comes from the description's top-level
 `pack_impl.c` compiles the implementations of ysp/pack.h, ysp/json.h,
 ysp/table.h, ysp/outline.h, ysp/gfx.h (without SDL: the shader wrapper
 and the curve set check), ysp/color.h, ysp/audio.h (without miniaudio:
-the WAV probe) and ysp/rt.h once, so a program that links the library
-defines none of them. It also links lodepng (compiled as C from a copy,
-its warnings off) and, in the full tool only, `pack/layout` (Skribidi and
-HarfBuzz). It builds with MSVC, MinGW, Linux gcc and emcc, so the designer
-can run the same code in the browser (the tool test passes under node).
+the WAV probe), ysp/video.h (from tool v0.4.0: `yvid_index_make()` with
+pl_mpeg, and Media Foundation on Windows), ysp/timeline.h and ysp/rt.h
+once, so a program that links the library defines none of them.
+`pack/import.c` holds the readers of other formats (`.xlsx`, JPEG, ICC).
+It also links lodepng and stb_image (each compiled as C from the fetched
+file, its warnings off) and, in the full tool only, `pack/layout`
+(Skribidi and HarfBuzz). It builds with MSVC, MinGW, Linux gcc and emcc,
+so the designer can run the same code in the browser (the tool test
+passed under node in phase 2; phase 3 was not run there, and the ffmpeg
+step cannot run in a browser).
 
 Two builds of one tool (decided 2026-10-10, review decision E). The CLI,
 the library's calls and the pack format are the same in both:
 
 | Build | CMake | Fetch once | Kinds |
 |---|---|---|---|
-| Core | `YSP_BUILD_PACK=ON` | `tools/vendor_pack.py --write` (lodepng) | every kind but GLYPHRUNS: tables, calibrations, fonts, curve sets, artwork, audio, shaders, textures, files, the experiment; and verify, list, info, extract, cat, rebuild, append |
+| Core | `YSP_BUILD_PACK=ON` | `tools/vendor_pack.py --write` (lodepng, stb_image, pl_mpeg) | every kind but GLYPHRUNS: tables, calibrations, fonts, curve sets, artwork, audio, shaders, textures, video, frame sequences, files, the experiment; and verify, list, info, extract, cat, rebuild, append |
 | Full | `YSP_BUILD_PACK=ON` and `YSP_BUILD_LAYOUT=ON` | also `tools/vendor_layout.py --write` | all, GLYPHRUNS too |
 
 Configure stops with the fetch command when a file set is missing. The
@@ -697,7 +968,10 @@ core build compiles the library with `YPT_NO_LAYOUT` (a public definition
 of the `ysp_pack_tool` target) and links no layout code. It refuses a
 GLYPHRUNS resource by name ("glyph runs need the layout library; this
 ypak was built without it"), so `ypak rebuild` of a pack with glyph runs
-also fails there. `ypak` with no arguments prints "core build" on its
+also fails there. From tool v0.6.0 it also refuses a definition with
+text stimuli, whose glyph runs it would derive ("the experiment's texts
+need glyph runs, and glyph runs need the layout library"); a definition
+without text stimuli builds. `ypak` with no arguments prints "core build" on its
 second line.
 
 The manifest names the layout library (`tool.libraries.layout`) only when
@@ -715,13 +989,13 @@ Sizes and build times: section 8.1.
 
 | Command | What it does |
 |---|---|
-| `ypak build SRC.json -o OUT.ysppak` | Builds a pack from a source description |
+| `ypak build SRC.json -o OUT.ysppak [--ffmpeg PATH]` | Builds a pack from a source description. Warnings (`warning: ...`, from tool v0.7.0) go to standard error and do not stop the build |
 | `ypak verify PACK` | Every check: structure, canonical container, CRC-32, XXH64 tree, SHA-256 per entry against the manifest, the manifest against the 0x7379 records, the pack ID. Exit 0 only when all pass |
 | `ypak list PACK` | Name, kind, size, data offset, flags |
 | `ypak info PACK` | Pack ID, format, tool, experiment, project audio |
 | `ypak extract PACK [NAME...] -C DIR` | Writes entries, applying the writer's name rule; does not overwrite without `--force` |
 | `ypak cat PACK NAME` | One entry to standard output |
-| `ypak rebuild PACK --sources DIR [-o OUT]` | 5.3; a pack appended to a program is refused (rebuild the pack it was made from) |
+| `ypak rebuild PACK --sources DIR [-o OUT] [--ffmpeg PATH]` | 5.3; a pack appended to a program is refused (rebuild the pack it was made from) |
 | `ypak append PLAYER PACK -o OUT` | Pads the player to 4096, appends the pack with absolute offsets, rewrites the comment's directory hash. The pack ID does not change. A pack already appended is refused |
 
 Exit codes: 0, 1 with the message on standard error, 2 for a usage
@@ -757,7 +1031,14 @@ kind's extension.
     { "name": "art/fixation.yspart", "kind": "artwork", "source": "art/fixation.svg" },
     { "name": "audio/beep.wav", "kind": "audio", "source": "audio/beep.wav" },
     { "name": "shaders/plaid.yspshd", "kind": "shader", "source": "shaders/plaid.glsl", "mode": "modulation" },
-    { "name": "faces/f01.ysptex", "kind": "texture", "source": "faces/f01.png", "compression": "qoi" }
+    { "name": "faces/f01.ysptex", "kind": "texture", "source": "faces/f01.png", "compression": "qoi" },
+    { "name": "faces/f02.ysptex", "kind": "texture", "source": "faces/f02.jpg", "primaries": "device" },
+    { "name": "blocks.pstb", "kind": "table", "source": "blocks.xlsx", "sheet": "Conditions" },
+    { "name": "video/intro.mp4", "kind": "video", "source": "raw/intro.mov",
+      "ffmpeg": ["-an", "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-bf", "0", "-g", "30",
+                 "-keyint_min", "30", "-sc_threshold", "0", "-x264-params", "open-gop=0:scenecut=0",
+                 "-video_track_timescale", "30000"] },
+    { "name": "video/gratings.yspvseq", "kind": "frameseq", "source": "video/gratings.yspvseq" }
   ]
 }
 ```
@@ -772,13 +1053,22 @@ A methods section cites the pack ID. A reviewer checks it:
 1. Get the sources and the `ypak` release that the manifest names
    (`tool.version`, `tool.build`).
 2. `ypak rebuild PACK --sources DIR`. The tool reads the manifest, checks
-   the SHA-256 of each source and names the first that differs, runs every
+   the SHA-256 of each source (of a definition: of its canonical bytes,
+   section 16) and names the first that differs, runs every
    derivation again, writes a new pack, and compares it with the original
    byte for byte. It prints `identical` or the first entry and offset that
    differ, and exits 0 only on `identical`.
 3. An `exec` step (ffmpeg) runs again only when the same program version
    is present; otherwise the tool says so, checks the recorded output by
-   its hash, and rebuilds everything downstream of it.
+   its hash, and rebuilds everything downstream of it. Built in tool
+   v0.4.0: when `ffmpeg -version` gives another first line than the
+   derivation's `by`, or ffmpeg does not run, the video entry's bytes come
+   from the pack (read through ysp/pack.h, so checked by their hashes),
+   the report prints a `note:` line, and the index is made again from
+   them. An index that cannot be made here (an MP4 index off Windows) is
+   taken from the pack the same way. The source's SHA-256 is checked in
+   either case. With the same version, the step runs with the
+   derivation's `threads` (tool v0.5.0), whatever this machine's count.
 
 Phase 2 CI builds one corpus pack with the MSVC, MinGW and emcc builds of
 the tool and requires the same bytes (open question 2).
@@ -795,12 +1085,14 @@ the tool and requires the same bytes (open question 2).
 | AUDIO | `yau_wav_load()` from data, or `yau_wav_open()` with a cursor | widened to float (load) or streamed |
 | SHADER | view, `ygfx_pipeline()` | none |
 | TEXTURE | view, `ygfx_texture()` with the stored `enc` bytes unchanged (4.9); QOI decoded first | none raw; one buffer for QOI |
-| VIDEO | `yvid_desc.reader` = cursor, `.index` = index entry | streamed |
+| VIDEO | `yvid_desc.reader` = cursor, `.index` = the VIDEO_INDEX entry (`name.yspvi`) | streamed |
+| FRAMESEQ | `yvid_desc.reader` = cursor (no index entry: the file holds its own) | streamed |
 
 ## 7. Determinism
 
 The same sources, source description and tool version give the same
-bytes. What makes it so:
+bytes; for an ffmpeg step without `threads`, so does the same logical
+processor count (4.10). What makes it so:
 
 - **Order**: entry 0 is the manifest; the rest are in bytewise name
   order; `ysp/chunks` lists hashes in that order. Work can run on many
@@ -816,6 +1108,18 @@ bytes. What makes it so:
   floats (reals are strings, section 3).
 - **Paths**: relative to the source description, `/` separators; no
   absolute path enters the pack.
+- **Derived glyph runs** (tool v0.6.0): the blocks are sorted by key,
+  each key once; the entry's fonts are the listed ones in order, then
+  the stimuli's by name; numbers take their canonical spelling. So the
+  order of the description's resources and the whitespace and number
+  spelling of the definition do not change the entry (tested, section
+  15), nor does the order of the definition's members (ysp/json.h sorts
+  each object when it parses it).
+- **The definition** (tool v0.7.0): stored as its canonical bytes, and
+  its source's SHA-256 in the manifest is the canonical bytes'. So the
+  whitespace, key order, number spelling and string escapes of the source
+  change neither the entry, nor the experiment ID, nor (for one source
+  path) the pack ID (tested, section 16).
 - **Numbers in, bits out**: decimal text is parsed by ysp/table.h's
   correctly rounded parser, never `strtod` (locale) or `printf("%f")`.
 - **Pinned code**: the manifest records every library version, the
@@ -837,6 +1141,28 @@ bytes. What makes it so:
   arcs, strokes, skews, CFF cubics, a TrueType collection and glyph runs
   in four scripts. Open question 2 stays open only for platforms not run
   (macOS, ARM).
+- **Decoders** (tool v0.4.0): stb_image's JPEG path is integer
+  arithmetic, and its SSE2 code gives the scalar code's bytes (measured:
+  the 15 PsychoPy photographs, MinGW gcc 16.1 with and without
+  `STBI_NO_SIMD`, 15 of 15 identical). pl_mpeg's MPEG-1 decode and Media
+  Foundation's H.264 decode give one index per file; H.264 is exact by the
+  standard (docs/video.md). The xlsx reader is integer and text only.
+- **ffmpeg**: its output is the same bytes for the same ffmpeg build,
+  arguments and input (measured: section 9.1, phase 3). The encoders'
+  output also depends on their thread count, so the tool sets the count
+  (the description's `threads`, or the machine's logical processors),
+  passes it to ffmpeg and records it; a rebuild uses the recorded count
+  (4.10, decided 2026-10-20). With a fixed count, the bytes did not change
+  with the CPU affinity or between Windows and Linux builds of one ffmpeg
+  version (9.1, 2026-10-20). They can change with the CPU's instruction
+  set, at any thread count, one included. The tool adds `info=0` for
+  libx265 and `-flags +bitexact -dct int -idct simple` for mpeg1video
+  (4.10; mpeg2video is refused), and with them the tool's output was the same at
+  every SIMD level and on Windows and Linux (9.1, section 14). libx264
+  has no such flag: its AVX2 and AVX code gave other bytes, so a libx264
+  entry rebuilds the same only on a CPU with the same instruction-set
+  path (4.10). A rebuild with another ffmpeg takes the recorded output
+  (5.3).
 
 ## 8. Costs: targets and measurements
 
@@ -889,6 +1215,53 @@ fetched sources were already on disk, so no time is download time.
 The core `ypak` from MSVC and from MinGW and the full `ypak` from
 both compilers wrote the same `core.ysppak` (the tool test's description
 without glyph runs), byte for byte.
+
+### 8.2 The tool's throughput per kind (tool v0.4.0)
+
+`tests/pack/throughput.py`, 2026-10-13, the same laptop (i7-1360P), AC,
+under the measurement lock (load 17 % at the start, 16 % at the end),
+`ypak.exe` MSVC 19.44 Release, core build. Each row is one `ypak build` of
+every file of that kind, so it includes the process start, the source's
+SHA-256, the derivation, the entry hashes and the write; median of 5
+rounds (3 for the panorama), min to max in brackets. The corpus is
+realistic: PsychoPy's demo workbooks and photographs (section 9.1, phase
+3), their sheets saved as CSV by the tool's reader, the photographs saved
+as PNG by Pillow, two H.264 clips made as `tests/media/make_video_clips.sh`
+makes them (1280 x 720 and 1920 x 1080, 300 frames each, 30 fps) and one
+MPEG-1 clip (1280 x 720, 300 frames), two 1920 x 1080 frame sequences of
+60 frames (RGBA8 as QOI, 5.9 MB; I420 raw, 186.8 MB), and two WAV files at
+48 kHz (60 s of 16-bit stereo, 10 s of float stereo).
+
+| Kind | Files | Source | Pack | Time | Source rate | Per file |
+|---|---|---|---|---|---|---|
+| TABLE from `.xlsx` | 23 | 0.6 MB | 0.1 MB | 0.051 s (0.047 to 0.053) | 12.2 MB/s | 2.2 ms |
+| TABLE from CSV (the same sheets) | 23 | 0.02 MB | 0.1 MB | 0.044 s (0.035 to 0.047) | | 1.9 ms |
+| TEXTURE from JPEG | 14 | 2.6 MB | 30.1 MB | 0.270 s (0.245 to 0.311) | 9.7 MB/s; 111 MB/s of texels | 19.3 ms |
+| TEXTURE from PNG (the same photographs) | 14 | 11.4 MB | 30.1 MB | 0.415 s (0.354 to 0.429) | 27.6 MB/s | 29.6 ms |
+| TEXTURE from JPEG, the 10240 x 5120 panorama | 1 | 14.1 MB | 209.7 MB | 1.228 s (1.208 to 1.453) | 11.5 MB/s; 171 MB/s of texels | |
+| TEXTURE from PNG, the same panorama | 1 | 77.6 MB | 209.7 MB | 2.615 s (2.601 to 2.634) | 29.7 MB/s | |
+| VIDEO and its index (copy; every frame decoded) | 3 | 31.7 MB | 31.7 MB | 3.342 s (3.296 to 3.519) | 9.5 MB/s | 3.7 ms a frame |
+| FRAMESEQ (every frame checked) | 2 | 192.7 MB | 192.7 MB | 1.741 s (1.410 to 1.747) | 110.7 MB/s | |
+| AUDIO (copy) | 2 | 15.4 MB | 15.4 MB | 0.159 s (0.153 to 0.171) | 96.5 MB/s | |
+| TEXTURE from PNG as QOI (the 14 photographs; second session) | 14 | 11.4 MB | 13.6 MB (45 % of raw) | 0.331 s (0.324 to 0.333); raw 0.354 s (0.343 to 0.410) in the same session | | |
+| AUDIO resampled 44.1 to 48 kHz, 60 s of 16-bit stereo (second session) | 1 | 10.6 MB | 23.1 MB | 2.043 s (2.023 to 2.061); a 48 kHz copy 0.107 s | 1.3 million frames a second, 29 times real time | |
+| VIDEO through the ffmpeg step: PsychoPy's demo movie, 640 x 480, 173 frames, x264 on one thread, then its index (second session, 3 rounds) | 1 | 0.8 MB | 0.5 MB | 1.651 s (1.615 to 1.812) | | |
+
+The second session (QOI, resampling, ffmpeg) ran later the same night
+under the lock, with the full build's `ypak.exe`; its load was not
+recorded. QOI answers the first half of open question 6: on these
+photographs it stores 45 % of the raw bytes and builds no slower; its
+decode at load was not timed.
+
+What this shows: a conditions workbook costs 2.2 ms, 0.3 ms more than its
+CSV; neither matters beside the process start. A JPEG photograph builds
+1.5 times faster than the same photograph as PNG; the PNG is 4.4 times
+larger to read, hash and inflate (the parts were not timed apart). The
+index dominates video: it decodes every frame on one thread to hash it,
+3.7 ms a frame over the three clips. Frame sequences and copies are bound
+by the two SHA-256 passes (the source's and the entry's) in portable C at
+0.31 to 0.38 GB/s (9.1): for the 193 MB of frame sequences that is about
+1.1 s of the 1.7 s, for the 15 MB of audio about half of the 0.16 s.
 
 ## 9. Explanation
 
@@ -1020,6 +1393,197 @@ reported 4.3 to 5.3 GB/s; its owner may want the same change (not
 measured there). One `fwrite` of 4.3 GB under MinGW's msvcrt ran for
 minutes and wrote 5 MB; the tool now reads and writes in 16 MiB pieces.
 
+**Phase 3: the readers against other readers**, 2026-10-13, the same
+laptop (i7-1360P), on PsychoPy's demo files (`psychopy/psychopy` branch
+`release` at `051482a`: 23 workbooks, 16 JPEG files, one MP4).
+
+- Workbooks: all 23 read. Every cell of each first sheet's named columns
+  (2,305 cells) equals openpyxl 3.1's value with `data_only=True`: text
+  equal, numbers equal as doubles, booleans `TRUE` or `FALSE`, no row
+  more or less.
+- JPEG: 14 of the 15 distinct photographs decode; the 15th
+  (`stimuli/beach.jpg`) carries a laptop panel's ICC profile (`Color LCD`,
+  rXYZ 0.3949 0.2251 0.0296, a gamma of 1.8) and is refused. Against
+  Pillow 12.3 (libjpeg-turbo): at most 3 codes apart on 13 files, 0.005 to
+  0.14 codes on average; on `canal.jpg` (progressive, chroma halved across
+  only) up to 20 codes, all in the second-to-last column (224 of 786,432
+  texels above 3 codes): the two decoders treat the right edge of
+  horizontally halved chroma differently. 3 of the 4 profiles in the set
+  are sRGB's: two `sRGB IEC61966-2.1` (a 1024-entry curve, 0.00 codes from
+  sRGB's), one compact `c2` (26 entries, 0.11 codes).
+- stb_image's SSE2 code against `STBI_NO_SIMD` (MinGW gcc 16.1 `-O2`):
+  the same bytes on all 15 files.
+- The MP4 (`stimuli/jwpIntro.mp4`, 173 frames at 2997/100 fps, no color
+  stated) is refused as given: its frame times fit no constant rate.
+  Through the ffmpeg step (x264, `-vf fps=30000/1001`, stated BT.601
+  color, one thread) it builds in 1.65 s (8.2), and its index reads 173
+  frames at 30000/1001.
+
+**Phase 3: ffmpeg's bytes.** ffmpeg N-122953-g7b15039cdb-20260223
+(gcc 15.2), the movie above through libx264 `-preset medium -crf 18`,
+twice for each thread count: each count gives the same bytes run to run;
+`threads=1`, `threads=4`, `threads=8` and the default (16 logical
+processors here) give four different files.
+
+2026-10-14, the encoders the tool is likely to be asked for, 120 frames
+of the same movie, twice each with the default threads and with
+`-threads 1`, `-threads 4`, `-threads 8`:
+
+| Encoder | Run to run | Thread counts | With `-threads 1` |
+|---|---|---|---|
+| libx264 | same | default, 4 and 8 all differ | same run to run; equal to `-x264-params threads=1` |
+| libx265 | same | default, 1 and 8 differ (4 happened to equal the default) | depends still on x265's own pool: `pools=1`, `pools=4` and the default pool give three files; `pools=1:frame-threads=1` is pinned, `lookahead-threads` changes nothing |
+| mpeg1video | same | default, 1, 4 and 8 all differ | same run to run |
+| mpeg2video | same | default, 1, 4 and 8 all differ | same run to run |
+
+Hence the rule of 4.10 (decided 2026-10-14): `-threads 1` for every
+encode, and `pools=1:frame-threads=1` for libx265. The tool test's
+MPEG-1, H.264 and HEVC clips are the same bytes on a second build, the
+HEVC clip's command shows the pools appended to the author's
+`-x265-params`, and `ypak rebuild` with this ffmpeg and with no ffmpeg
+gives the pack byte for byte.
+
+**Phase 3: the thread rule's mutants, by hand** (the runner cannot
+build the tool), 2026-10-14, MSVC 19.44, `test_pack_tool`: no
+`-threads 1` (killed, 2 checks), libx265's pools not merged into the
+author's `-x265-params` (killed: ffmpeg's second `-x265-params` replaces
+the author's, B-frames return and the index refuses them), the author's
+thread settings taken (killed, 3 checks). 3 of 3.
+
+**Phase 3: the cost of one thread**, 2026-10-14, under the measurement
+lock (load 41 % when it ended; other workers' jobs started after it), the
+same ffmpeg, median of 3 encodes (min to max), the encode alone:
+
+| Source | Encoder | Default threads | One thread | Ratio |
+|---|---|---|---|---|
+| PsychoPy's demo movie, 640 x 480, 173 frames | libx264 medium, crf 18 | 0.76 s (0.73 to 0.92) | 1.34 s (1.19 to 1.56) | 1.8 |
+| the same | libx265 medium, crf 20 | 1.69 s (1.52 to 1.79) | 3.14 s (2.42 to 3.59) | 1.9 |
+| the same | mpeg1video, q 3 | 0.23 s (0.22 to 0.25) | 0.33 s (0.32 to 0.57) | 1.4 |
+| testsrc2, 1920 x 1080, 300 frames (10 s) | libx264 medium, crf 18 | 2.89 s (2.89 to 3.45) | 29.43 s (24.23 to 31.23) | 10.2 |
+| the same | libx265 medium, crf 20 | 13.45 s (11.48 to 16.59) | 73.80 s (66.66 to 81.92) | 5.5 |
+| the same | mpeg1video, q 3 | 0.83 s (0.81 to 0.89) | 1.36 s (1.31 to 1.43) | 1.6 |
+
+What this costs: short clips at stimulus sizes pay under a factor of 2;
+1080p H.264 pays 10 times, about 3 s of encode a second of film here, so
+a two-hour 1080p film would take about 6 hours to pack once. The
+encode runs once per pack; a rebuild with another ffmpeg takes the
+recorded output instead. A faster `-preset` is the author's lever, and it
+is recorded like any argument.
+
+**2026-10-20: a fixed thread count on other machines** (tool v0.5.0,
+section 14). Does an encode with N threads give the same bytes whatever
+machine runs it? BtbN's static builds of ffmpeg n9.0.2-28-g669f5ab083
+(2026-10-19; libx264 core 165, x265 4.3+49), the Windows and the Linux
+build of one commit, on the i7-1360P (4 P-cores with 2 threads each, 8
+E-cores; AVX2, no AVX-512). Sources: PsychoPy's demo movie through `-vf
+fps=30000/1001` (640 x 480, 173 frames), and `testsrc2` at 1920 x 1080,
+300 frames. Encoders as the tool runs them: libx264 `-preset medium -crf
+18`, libx265 `-preset medium -crf 20` with `pools=N:frame-threads=F`
+(4.10), mpeg1video and mpeg2video `-q:v 3`; `-threads N` for every one.
+N = 1, 4, 8, 16. Each configuration 3 times, the SHA-256 of the output
+file compared: 936 encodes, every one under the build guard.
+
+| Configuration | What it stands for | libx264 | libx265 (`info=0`) | libx265 (its default info message) | mpeg1video, mpeg2video | the same with `-flags +bitexact -dct int -idct simple` |
+|---|---|---|---|---|---|---|
+| Affinity 2 logical processors (one P-core), set before the process runs | a smaller machine | same | same | same | same | same |
+| Affinity 4 E-cores | a slower machine | same | same | same | same | same |
+| WSL2, the Linux build, 8 logical processors | another OS, compiler and C library | same | same | differs at every N | same | same |
+| x264 limited to AVX (no FMA3, BMI2, AVX2), x265 `asm=avx`, ffmpeg's flags to AVX | a CPU without AVX2 | differs at N = 1, 4, 8 on the movie and at N = 16 at 1080p; same in the other 4 | same | differs at every N | same | same |
+| x264 `asm=0`, x265 `asm=0`, ffmpeg `-cpuflags 0` | a CPU whose code paths differ (another architecture) | differs at every N | same | differs at every N | differs at every N | same |
+
+"Same": all 3 repeats equal the unrestricted Windows encode with the same
+N, for both sources (x265 with its info message: the movie only). Every
+configuration gave the same bytes in all 3 repeats, and the 4 values of N
+gave 4 different files for every encoder but libx265, whose N = 4, 8 and
+16 gave one file (frame threads 2, 3 and 4 code alike on these clips).
+
+What this shows:
+
+- **The thread count adds no dependence on the machine.** With N fixed,
+  no encoder changed its bytes with the processors it ran on or between
+  Windows and Linux, at any N. Where a configuration differed, it differed
+  at N = 1 too. One thread for every encode (tool v0.4.0) therefore bought
+  nothing that N threads lose; 4.10 now records N.
+- **libx264 depends on the instruction set** at every N. Its AVX2 code
+  gives other bytes than its AVX code (the decoded frames differ too, so
+  it is the coding, not a header); x264 has no option that makes its
+  output independent of the CPU. A one-thread probe on the movie located
+  it: the masks with and without FMA3 at the AVX level gave one file, and
+  the AVX2 mask (with BMI2) another; SSE4.2 equaled AVX, SSE2 equaled no
+  SIMD. AVX-512 (AMD Zen 4 and 5) could not be run here.
+- **libx265's coded pictures do not depend on the instruction set** (the
+  same bytes with every SIMD path off), but its info message (an SEI)
+  holds `[Windows][GCC 16.2.0]` and `cpuid=1111039`, so the file differs
+  with the build's OS and the CPU unless the author sets `info=0`.
+- **mpeg1video and mpeg2video** gave one file from SSE2 up to AVX2 (the
+  levels x86-64 CPUs have) and another with every SIMD path off: the SIMD
+  forward DCT and IDCT are not the C ones. `-flags +bitexact -dct int
+  -idct simple` gave one file at every level, 0 included.
+
+Decided by the user the same day (open question 12): the tool adds
+`info=0` and the three MPEG flags itself (4.10); libx264 stays as it is,
+documented.
+
+**2026-10-20: the tool's own output with the forced flags** (tool v0.5.0,
+the same ffmpeg builds and sources; the 1080p source as a lossless FFV1
+file). `ypak build` of mpeg1video (`-q:v 3 -g 15 -bf 0`) and libx265
+(`-preset medium -crf 20`, no B-frames, a fixed GOP) entries with
+`"threads"` 4 and 16, each 3 times; the same with every SIMD path off
+(`"-cpuflags", "0"` in `ffmpeg_input`, and `asm=0` in libx265's
+parameters), whose video entry (`ypak cat`) was compared with the
+first's; then `ypak rebuild` of each first pack 3 times on WSL2 with the
+Linux builds of ypak (gcc 11.4) and ffmpeg, 8 logical processors against
+the recorded 4 and 16:
+
+| Entry | N | Windows, 3 builds | SIMD off, 3 builds | WSL2 rebuild, 3 times |
+|---|---|---|---|---|
+| mpeg1video, the movie | 4, 16 | one file per N | the same files | `identical` |
+| mpeg1video, 1080p | 4, 16 | one file per N | the same files | `identical` |
+| libx265, the movie | 4, 16 | one file (N = 4 and 16 code alike) | the same file | `identical` |
+| libx265, 1080p | 4, 16 | one file (likewise) | the same file | `identical` |
+
+mpeg2video could not be packed: its output is not MPEG-1, and the
+index (pl_mpeg) misreads it ("GOP length changes"). Tool v0.5.1 refuses
+it before the encode (4.10).
+Its flags stand on the ffmpeg-level measurement above (one file at every
+SIMD level and on WSL2, at every N). The hand test of section 14 also
+passed again with these flags (`identical` for its MPEG-1, libx264 and
+libx265 packs on WSL2).
+
+**Phase 3: resampling.** A 997 Hz sine at 44.1 kHz (float, amplitude
+0.5) through `"resample": "sinc_best"` to 48 kHz: 48,000 frames, the
+largest difference from the ideal sine 5.2e-8 (140 dB below the
+amplitude) between frame 200 and the last 200 frames (MSVC 19.44).
+
+**Phase 3: tests**, 2026-10-13.
+
+| Build | Tool test | Import test | Notes |
+|---|---|---|---|
+| MSVC 19.44 `/W4 /WX`, full (`YSP_BUILD_LAYOUT`) | 255 checks, 0 failed (2026-10-14) | 89, 0 failed | video through ffmpeg: MPEG-1, H.264 and HEVC in MP4 |
+| MSVC 19.44 `/W4 /WX`, core | 246, 0 failed | 89, 0 failed | the same `core.ysppak` as the full build, byte for byte |
+| Linux gcc 11.4 (WSL2), ASan and UBSan, core | 242, 0 failed | 89, 0 failed | MPEG-1 through ffmpeg 4.4.2; no MP4 index off Windows; the corpus pack, manifest included, is the MSVC core build's byte for byte (`sha256:013f3079...`), the resampled WAV and the sine's error too |
+| MinGW gcc 16.1, `-Wall -Wextra -Wpedantic -Wshadow -Wfloat-conversion` | | 89, 0 failed | `pack/import.c` without a warning |
+
+**Phase 3: mutations.** `tests/mutate/import.toml`, 38 mutants of
+`pack/import.c` (zip 9, XML 5, cells 11, JPEG 10, ICC 3), MinGW gcc 16.1:
+37 of 37 killed on the first run, after the test gained a repeated row
+number, a comma without a quote and a column of numbers and text while
+the list was written; the 38th (j-10, the frame-size check the fuzzer
+led to) killed too.
+
+**Phase 3: fuzzing.** `tests/fuzz/import_fuzz.c` under MSVC 19.51
+`/fsanitize=address /fsanitize=fuzzer`, from 97 seeds (PsychoPy's
+workbooks and photographs, their ICC profiles, the tool test's workbooks
+and JPEG files), in 10-minute pieces under the build guard. A first run
+without a length bound (about 150,000 inputs) found one timeout: 1,450
+bytes whose frame claimed 512 x 62977, which the reader passed and
+stb_image decoded (0.3 s without sanitizers, 13 s under them). The
+reader now refuses a file too short for its frame (4.9, mutant j-10),
+and the target decodes frames up to 4 megapixels only. Then, with
+`-max_len=40000`: 922,080 inputs in 3,600 s, no crash, no timeout, no
+leak; 6,272 coverage features, 3,499 corpus files, peak RSS 519 MB. The
+3,499 files replayed on Linux gcc 11.4 under ASan and UBSan: no report.
+
 ### 9.2 Why zip64 only where needed
 
 Two hours of 1080p H.264 at 8 Mbit/s is 7.2 GB; MPEG-1 for pl_mpeg needs
@@ -1150,14 +1714,17 @@ one function in the tool.
    ASCII set; the reader accepts UTF-8, so a later tool can widen the set
    (NFC, the tool normalizing names) with no format change.
 4. **Audio resampling. Default: refuse.** Built: the refusal names the
-   rate and the project rate. Not built: opt-in resampling with
-   libsamplerate (BSD-2-Clause) at `SRC_SINC_BEST_QUALITY` to 32-bit float.
+   rate and the project rate. Built in tool v0.4.0: opt-in resampling with
+   libsamplerate 0.2.2 (BSD-2-Clause) at `SRC_SINC_BEST_QUALITY` to 32-bit
+   float (`"resample": "sinc_best"`, 4.7). The default stays refuse: the
+   author decides that a file is resampled, and the manifest says so.
 5. **glslang. Default: optional, not linked.** The shader entry records
    `"validated": false` and flag bit 2 stays 0; ANGLE compiles at load and
    names the body's lines.
 6. **Texture compression. Default: raw and QOI.** Built. LZ4 and deflate
-   are not built. QOI's ratio and decode rate on a real stimulus set are
-   not measured yet.
+   are not built. QOI's ratio on a real stimulus set, measured in phase 3
+   (8.2): 45 % of the raw bytes on PsychoPy's 14 demo photographs, built
+   no slower than raw. Its decode rate at load is not measured yet.
 7. **Font licenses. Decided 2026-10-09 (user).** The tool refuses a face whose
    OS/2 `fsType` says restricted license embedding (bits 0 to 3 equal 2)
    unless the description sets `"private": true`, which the manifest
@@ -1177,6 +1744,30 @@ one function in the tool.
     in ysp/gfx.h v0.10.5 (the user, 2026-10-09): v0.10.4 binds `stim.tex`
     as `ysp_tex0`, and a body that samples it reads garbage on a contract-1
     player. No pack existed outside the repository.
+12. **ffmpeg's bytes on another CPU. Decided 2026-10-20 (user): option
+    (b), and libx264 documented** (4.10; built in tool v0.5.0, section
+    14). Found 2026-10-20 (9.1) while measuring the thread count:
+    with the thread count and the ffmpeg build fixed, the bytes can still
+    change with the instruction set that the encoder uses, at one thread
+    too. libx264 gave other bytes with its AVX2 code off, and it has no
+    switch that makes its output independent of the CPU. mpeg1video and
+    mpeg2video gave one set of bytes from the SSE2 level to AVX2 and
+    another with every SIMD path off (a proxy for a CPU with other code
+    paths, such as ARM); with `-flags +bitexact -dct int -idct simple`
+    they gave one set at every level. libx265 gave one set of coded
+    pictures at every level, but its info message (an SEI) holds the
+    build's OS, compiler and the CPU flags x265 detected, so a pack from
+    Windows does not rebuild on Linux unless the author sets `info=0`.
+    Options: (a) leave the author's arguments alone and document it; (b,
+    chosen) the tool adds `info=0` for libx265 and `-flags +bitexact
+    -dct int -idct simple` for mpeg1video and mpeg2video, and records them
+    in the command; (c) for libx264, also limit `asm=` to one level that
+    every rig has. (c) costs speed and is not proven: x264's AVX-512 code
+    (AMD Zen 4 and 5, recent Intel Xeons) and differences between vendors
+    could not be measured on this machine, so (c) was not taken: a libx264
+    entry rebuilds the same only on a CPU with the same instruction-set
+    path, and the hand test of section 14 shows whether the user's AMD rig
+    is one.
 
 ## 11. Phase 2: what was built
 
@@ -1205,9 +1796,10 @@ when `YSP_BUILD_LAYOUT=ON` too (5.1).
 ### Not done
 
 - VIDEO, VIDEO_INDEX, FRAMESEQ and ALPHA in the tool (phase 3); the
-  reader reads them.
+  reader reads them. Built in phase 3 but ALPHA (section 13).
 - Audio resampling, glslang validation, LZ4, JPEG, ELAN and Praat
-  imports, spans in glyph runs, BIDS `n/a` cells.
+  imports, spans in glyph runs, BIDS `n/a` cells. Phase 3 built
+  resampling and JPEG, and `.xlsx` tables (section 13).
 - Signed players (question 10).
 - The bench's cold-SSD number: the phase 1 probe measured it (9.1); the
   bench measures the mapped first touch.
@@ -1246,3 +1838,559 @@ prefix; the message after them is one whole text, the code is
 failure that leaves no code) and `conv-02` (a claim never released) are
 killed. The tool's test and the fuzz target build against the new open;
 `pack/` changed in one line (`open_pack()` reads `pk.error_code`).
+
+## 13. Phase 3: what was built (tool v0.4.0, 2026-10-13)
+
+Phase 3 is the tool's half of the kinds that phase 2 left to it, in the
+order of section 11's list, and the source formats that PsychoPy's demos
+use (rig_spec 15.4). The reader, `include/ysp/pack.h` v0.2.0, did not
+change: it already read every kind.
+
+| File | Version | What |
+|---|---|---|
+| `pack/ysp/pack_tool.h`, `pack/pack_tool.c` | 0.4.0 | VIDEO with its VIDEO_INDEX, the ffmpeg step and its rebuild (4.10, 5.3); FRAMESEQ (4.10); TABLE from `.xlsx` (4.1); TEXTURE from JPEG, ICC profiles that are sRGB's (4.9); audio resampling (4.7); `ypt_rebuild_ex()` with `ypt_options.ffmpeg` |
+| `pack/import.c` | new | The readers of other formats: `ypt_xlsx_read()`, `ypt_jpeg_read()`, `ypt_icc_srgb()` |
+| `pack/stb_image.c`, `pack/pack_impl.c` | | stb_image compiled JPEG only; the ysp/video.h implementation in the tool |
+| `pack/ypak.c` | 0.4.0 | `--ffmpeg PATH` for `build` and `rebuild` |
+| `tools/vendor_pack.py` | | Fetches and checks stb_image, pl_mpeg and libsamplerate beside lodepng |
+| `tests/adapt/import_test.c`, `tests/adapt/import_gen.h` | | The readers on their own; writers of ICC profiles, JPEG files and workbooks that the tool test shares |
+| `tests/pack/tool_test.c`, `tests/pack/corpus.sha256` | | New kinds and sources in the pinned corpus (30 entries), 34 new refusals, video through ffmpeg, the resampled sine |
+| `tests/fuzz/import_fuzz.c` | | libFuzzer: two workbook targets, JPEG, ICC |
+| `tests/mutate/import.toml`, `tests/mutate/mutate.py` | | 38 mutants of `pack/import.c`; the runner can now mutate a `pack/*.c` file |
+| `tests/pack/throughput.py` | | Section 8.2 |
+
+Third-party code added, each fetched at a commit and checked by SHA-256
+(`tools/vendor_pack.py`), none committed:
+
+| Code | License | Pin | Use |
+|---|---|---|---|
+| stb_image.h 2.30 | public domain or MIT | nothings/stb `2c980bb`, `stb_image.h` SHA-256 `594c2fe3...` | JPEG |
+| pl_mpeg.h | MIT | phoboslab/pl_mpeg `c871f2b`, SHA-256 `3a8cb30c...` (the top-level `YSP_FETCH_PL_MPEG` pin) | MPEG-1 indexes |
+| libsamplerate 0.2.2 | BSD-2-Clause | libsndfile/libsamplerate `c96f5e3` (tag 0.2.2), 10 files, `src_sinc.c` SHA-256 `8e59137d...` | resampling |
+
+The manifest names each (`tool.libraries`), with `,tree-differs` when
+the fetched file is not the pinned one.
+
+### Decided (the user, 2026-10-14)
+
+- **ICC profiles.** A profile is accepted in PNG and JPEG only once it is
+  identified as sRGB's, and refused otherwise (4.9). It is identified by
+  its content, never by its name: an RGB matrix-and-curves profile whose
+  three colorants (rXYZ, gXYZ, bXYZ) are each within 0.002 of sRGB's D50
+  values and whose three curves (rTRC, gTRC, bTRC, a table or a
+  parametric curve) are each within half a code of 255 of sRGB's curve at
+  all 256 codes. v0.3.0 refused every `iCCP`.
+- **EXIF orientation.** Anything but 1 is refused, not applied: browsers
+  apply it and PIL does not, so either choice would surprise someone.
+- **Workbooks.** Dates and times are refused; a value in a column without
+  a name is refused (PsychoPy drops the column); a column of text cells
+  stays text. Booleans are `TRUE` and `FALSE` as text.
+- **ffmpeg.** Changed from the proposal: the tool encodes on one thread
+  itself (`-threads 1`; for libx265 also `pools=1:frame-threads=1`), so a
+  pack rebuilds byte for byte on any machine without the author asking,
+  and the command records it (4.10). The author's thread settings are
+  refused. The cost is measured in 9.1, phase 3. Replaced on 2026-10-20
+  by a recorded thread count (section 14).
+- **MP4 indexes** are made on Windows only (Media Foundation), for now;
+  MPEG-1 on every platform. A rebuild elsewhere takes the recorded index.
+
+Proposed in phase 3 and not reviewed:
+- **Resampling** is opt-in (`"resample": "sinc_best"`); refusal stays the
+  default (open question 4).
+- **ALPHA** stays unbuilt (4.11).
+
+### Left
+
+- ALPHA, until an experiment needs it.
+- glslang validation of shaders (open question 5) and LZ4 or deflate
+  textures (open question 6): not built, the defaults stand.
+- MP4 indexes off Windows: ysp/video.h has no FFmpeg or AVFoundation
+  backend.
+- A video source is read whole into memory, hashed and copied; a two-hour
+  film needs its size in memory. Streaming the copy and the hashes is not
+  built.
+- The ffmpeg step takes one source file; an image sequence
+  (`frames/%04d.png`) as ffmpeg's input is not taken, because the manifest
+  hashes one source file.
+- MP3 sources, ELAN and Praat imports, BIDS `n/a` cells, spans in glyph
+  runs.
+- emcc (the designer's build) and macOS: phase 3 was not run there. The
+  ffmpeg step cannot run in a browser.
+
+## 14. Tool v0.5.0: the encode's thread count (2026-10-20)
+
+Decided by the user on 2026-10-20 (option c of three: one thread, a
+fixed count, or a recorded count): the tool picks the ffmpeg step's
+thread count, passes it, records it, and `ypak rebuild` runs ffmpeg with
+the recorded count. The decision waited on one measurement: does a fixed
+count give the same bytes on any machine? It does, for every encoder
+measured (9.1, 2026-10-20). The same measurement found that the bytes
+can depend on the CPU's instruction set at any count, one included.
+Decided by the user the same day (open question 12): the tool adds
+`info=0` for libx265 and `-flags +bitexact -dct int -idct simple` for
+mpeg1video and mpeg2video, refuses the author's contrary settings, and
+records the flags in the command; libx264, which has no such flag,
+rebuilds the same only on a CPU with the same instruction-set path, and
+4.10 says so.
+
+| File | Version | What |
+|---|---|---|
+| `pack/ysp/pack_tool.h`, `pack/pack_tool.c` | 0.5.0 | `threads` (4.10): `-threads N`, libx265's `pools=N:frame-threads=F`, `"threads": N` in the derivation, which a rebuild takes back; `info=0` for libx265 and `-flags +bitexact -dct int -idct simple` for mpeg1video and mpeg2video (merged into the author's `-flags`), the author's `info`, `-dct`, `-idct` and `-bitexact` refused; ffmpeg's version line refused past 255 bytes instead of cut |
+| `pack/ypak.c` | 0.5.0 | unchanged but for the version |
+| `tests/pack/tool_test.c` | | 4 refusals of `threads` and 5 of the flags (x265 `info=1` and a bare `info`, `-dct`, `-idct:v` with the default encoder of `.mpg`, `-flags +cgop-bitexact`); the author's 3 for MPEG-1 and the machine's count for H.264 in the command and the derivation; `+bitexact` merged into the author's `-flags +psnr` and the DCTs for MPEG-1; libx265's pool, frame threads and `info=0` for `"threads": 4`; the rebuild with the recorded 3 |
+| `tests/pack/rebuild_threads/` | | The hand test below: three descriptions and `run.sh` |
+
+Every entry of the test corpus but the manifest is byte-identical to
+v0.4.0's; a video entry made by ffmpeg differs (its command and count).
+
+### Measured
+
+The bytes: 9.1, 2026-10-20. The cost, 2026-10-20, the i7-1360P on AC,
+under the measurement lock (load 14 % at the start), ffmpeg
+n9.0.2-28-g669f5ab083 (Windows), the encode alone as the tool runs it
+(`-threads N`; libx265 `pools=N:frame-threads=F`), median of 3 rounds
+(min to max), the counts interleaved in each round:
+
+| Source | Encoder | 1 thread | 8 threads | 16 threads (this machine's default) | 1 thread / 16 |
+|---|---|---|---|---|---|
+| PsychoPy's demo movie, 640 x 480, 173 frames | libx264 medium, crf 18 | 1.17 s (1.14 to 1.47) | 0.51 s (0.51 to 0.63) | 0.48 s (0.47 to 0.58) | 2.4 |
+| the same | libx265 medium, crf 20 | 2.31 s (2.18 to 3.10) | 1.17 s (1.05 to 1.45) | 1.32 s (1.09 to 1.43) | 1.7 |
+| the same | mpeg1video, q 3 | 0.25 s (0.24 to 0.27) | 0.19 s (0.17 to 0.19) | 0.21 s (0.17 to 0.21) | 1.2 |
+| the same | mpeg2video, q 3 | 0.24 s (0.24 to 0.27) | 0.19 s (0.18 to 0.21) | 0.20 s (0.18 to 0.20) | 1.2 |
+| testsrc2, 1920 x 1080, 300 frames | libx264 medium, crf 18 | 17.39 s (12.02 to 25.04) | 4.51 s (4.17 to 8.13) | 4.50 s (3.53 to 5.07) | 3.9 |
+| the same | libx265 medium, crf 20 | 28.89 s (28.08 to 31.74) | 9.55 s (9.38 to 20.71) | 9.41 s (8.63 to 23.40) | 3.1 |
+| the same | mpeg1video, q 3 | 1.21 s (1.18 to 1.59) | 0.80 s (0.78 to 0.85) | 0.68 s (0.61 to 0.77) | 1.8 |
+| the same | mpeg2video, q 3 | 1.18 s (1.16 to 1.20) | 0.66 s (0.64 to 0.67) | 0.59 s (0.56 to 0.60) | 2.0 |
+| the hand test's `x264.json`, the whole `ypak build` (encode, index, hashes, write) | libx264 | 1.60 s (1.50 to 1.62) | | 0.94 s (0.89 to 1.03) | 1.7 |
+
+The forced flags of mpeg1video and mpeg2video (`-flags +bitexact -dct
+int -idct simple`) in the same session, against the default flags:
+
+| Source | Encoder | 1 thread | 16 threads |
+|---|---|---|---|
+| the movie | mpeg1video | 0.32 s against 0.25 s (1.3 times) | 0.23 s against 0.21 s (1.1 times) |
+| the movie | mpeg2video | 0.38 s against 0.24 s (1.6 times) | 0.24 s against 0.20 s (1.2 times) |
+| 1080p | mpeg1video | 1.59 s against 1.21 s (1.3 times) | 0.74 s against 0.68 s (1.1 times) |
+| 1080p | mpeg2video | 1.77 s against 1.18 s (1.5 times) | 0.98 s against 0.59 s (1.7 times) |
+
+At most 0.4 s on 10 s of 1080p film here; `info=0` costs nothing (it
+drops one SEI).
+
+The ranges are wide at 1080p (libx264 on one thread 12 to 25 s; one round
+of libx265 on 8 and on 16 threads 2.2 times its median): this laptop
+changes its clock with temperature, and the medians are the numbers to
+use. The 2026-10-14 table (9.1) measured another ffmpeg build and
+ffmpeg's default threads (libx264 picks 1.5 times the logical processors
+itself), so its ratios of 10.2 and 5.5 are not this table's 3.9 and 3.1.
+At 1080p, 16 threads cut the encode to a quarter (libx264) or a third
+(libx265); 8 threads did as well as 16 on this machine of 4 P-cores.
+
+Tests, 2026-10-20: MSVC 19.44 `/W4 /WX`, core build, 265 checks, 0
+failed (MPEG-1, H.264 and HEVC through ffmpeg N-122953); Linux gcc 11.4
+(WSL2), Release and ASan with UBSan, core build, 260 checks, 0 failed
+each (MPEG-1 through ffmpeg 4.4.2); MinGW gcc 16.1 compiles
+`pack/pack_tool.c` with CI's warnings and `-Werror`.
+
+Mutants by hand (the runner cannot build the tool), MSVC 19.44,
+`test_pack_tool`, 17 of 17 killed: no `-threads N` (3 checks); the count
+not recorded (4); the author's count ignored (2); 1 as the default
+instead of the machine's count (1); a rebuild that drops the recorded
+count (2); libx265's pool as a second `-x265-params` (1: B-frames return,
+the index refuses them); libx265's frame threads equal to N (1); no range
+check (2); `threads` without `ffmpeg` taken (1); the author's thread
+and flag settings taken (8); `info=0` not added (1); the MPEG flags not
+added (1); `+bitexact` as a second `-flags` (1: it replaces the author's);
+the author's `info` taken (2); the author's `-dct` or `-idct` taken (3);
+no MPEG default for `.mpg` without `-c:v` (1); a bare `info` not seen as a
+setting (1).
+
+The hand test below, run with WSL2 standing in for the second machine
+(the Linux build of ypak at gcc 11.4, 8 logical processors, the packs'
+recorded 16): `identical` for all three packs.
+
+### Hand test: a pack from Windows rebuilt on the Linux rig
+
+The question it answers: does a pack built on the Windows laptop with 16
+threads rebuild byte for byte on the AMD rig, with the same ffmpeg
+version? It also shows whether libx264 takes the same instruction-set
+path on that rig's CPU (4.10).
+
+1. Get one BtbN FFmpeg-Builds release (github.com/BtbN/FFmpeg-Builds,
+   one `autobuild-...` tag): its `win64-gpl` build for Windows and its
+   `linux64-gpl` build of the same version for the rig. The two must
+   print the same first line of `ffmpeg -version`. Measured with
+   `ffmpeg-n9.0.2-28-g669f5ab083-{win64,linux64}-gpl-9.0` from
+   `autobuild-2026-10-19-13-06`.
+2. On Windows, build `ypak` (`YSP_BUILD_PACK=ON`), then in Git Bash:
+
+   ```sh
+   sh tests/pack/rebuild_threads/run.sh build build/pk/pack/Release/ypak.exe \
+       /path/to/win64/bin/ffmpeg.exe \
+       /path/to/psychopy/demos/coder/stimuli/jwpIntro.mp4 /c/tmp/threads-pack
+   ```
+
+   It writes `mpeg1.ysppak`, `x264.ysppak` and `x265.ysppak` (each
+   records `"threads": 16`), their descriptions and the movie.
+3. Copy `/c/tmp/threads-pack` to the rig.
+4. On the rig, fetch the sources (`tools/vendor_pack.py --write`), build
+   `ypak` (`cmake -S . -B build/pk -DYSP_BUILD_PACK=ON
+   -DCMAKE_BUILD_TYPE=Release`, then `cmake --build build/pk --target
+   ypak`), and run:
+
+   ```sh
+   sh tests/pack/rebuild_threads/run.sh rebuild build/pk/pack/ypak \
+       /path/to/linux64/bin/ffmpeg /path/to/threads-pack
+   ```
+
+5. Expected: `identical` three times, and exit 0. The MP4 indexes come
+   from the packs (a `note:` line says so): there is no MP4 index off
+   Windows. `mpeg1` and `x265` must be `identical` on any x86-64 CPU
+   (the tool's flags, 4.10). `x264` is `identical` only when x264 takes
+   the same instruction-set path as on the laptop (AVX2, no AVX-512); if
+   it differs and the script prints `AVX-512: yes`, that is the libx264
+   limit of 4.10, not the thread count. Record the outcome and the CPU
+   line in 9.1.
+
+### Left
+
+- The hand test on the AMD rig.
+- ARM (macOS, a Raspberry Pi): the flags were measured with every x86
+  SIMD path off as the proxy, not on an ARM CPU.
+
+## 15. Tool v0.6.0: the experiment's glyph runs (gap G9, 2026-10-21)
+
+Gap G9 of experiment_format.md: glyph-run blocks were listed by hand in
+the source description, so the Stroop definition's 9 texts had to be
+copied, with their sizes, into the description, and a text the author
+forgot was found by the player in the middle of a session. D14 decided
+that the pack tool lays out every text a text stimulus can show. 4.5
+("The experiment's glyph runs") is the reference; this section gives
+the decisions and the results.
+
+### Decisions (the user to confirm)
+
+| Question | Options | Choice and why |
+|---|---|---|
+| How a description asks for the runs | (a) a `"derive": true` resource; (b) always, for a definition with text stimuli | (b). The player needs the runs whenever a stimulus is a text, so a switch could only be set wrong. A description without a definition (the test corpus's opaque `main.json`) is unchanged |
+| Where they go | (a) one entry per font; (b) one entry, its name from the experiment entry's | (b): `experiment/main.ysprun`. The player finds it by a rule, with no list. One ylay library per fallback list keeps each stimulus in its own font (4.5); a run's font index is the entry's |
+| The block key | (a) text and style, as D14 says; (b) `<stimulus>/<text>` | (a), the user's decision of 2026-10-21 (the first build had (b)). Two stimuli of one style and one text share one block. One function builds the key, `ypak_runs_key()` in ysp/pack.h, for the tool and the player; its numbers come from `yjs_format_double()`, so ysp/pack.h v0.3.0 requires ysp/json.h. The byte format is in 4.5 |
+| Listed blocks | (a) union with the derived ones; (b) an explicit override that turns derivation off | (a). A GLYPHRUNS resource with the derived entry's name adds blocks (for example a text a future script shows) and fallback fonts; a listed block may not take a derived key, so neither can replace the other unseen. Listed GLYPHRUNS resources of other names are unchanged |
+| A text the tool cannot know | (a) a warning, and the player lays it out at run time; (b) an error at build | (b). D14: the player lays out text at run time only for a script, and version 1 has no scripts. A warning would let a pack build that stops at load or mid-session; every refusal names the stimulus and the way out |
+| A layout key from a variable (`"size": "$size"`) | (a) lay out the cross product of its values and the texts; (b) refuse | (b), for now: no worked example needs it, and the key would have to carry the style. Open |
+| Definition bytes that do not parse | (a) opaque, as any experiment; (b) refuse | (b) when the bytes contain `"ysp-experiment"`, with the line and column; (a) otherwise. A typo would otherwise drop every run silently |
+
+### What cannot be derived, and what the tool says
+
+Each is an error; the build stops and leaves no pack. The message
+starts `ypak: experiment 'NAME': stimulus 'S':`.
+
+| Form | Example | Message (after the prefix) |
+|---|---|---|
+| A built-in variable used directly | `"text": "$outcome"`, `"$trial_index"`, `"$rt_s"` | `'$outcome' is a built-in variable, whose text is not known at pack build; give each text with a lookup: {"by": "$outcome", "map": {...}}` |
+| A session field | `"$participant"`, a field of `session.fields` | `'$group' is a session field, given at session start; its text cannot be laid out at pack build` |
+| A name that is nothing (a jitter, a typo, a column of no table a node names) | `"$soa_s"` | `'$soa_s' names no table column, 'vars' entry or built-in variable (a jitter is a duration, not a text)` |
+| A number or integer column | `"$weight"` | `'$weight' is a column of 'stroop.pstb' of type integer; a text comes from a string column ("types": {"weight": "string"} in the table's resource) or from a lookup` |
+| Text from a script | `{"lua": "..."}` | `text from a script ({"lua": ...}) is laid out by the player at run time, and version 1 has no scripts (D6)` |
+| A value that is not a text | a number, a bool, an array, `linspace` | `a text is a string, a "$variable" or a lookup {"by": ..., "map": {...}}; this value is none of them` |
+| A layout key from a variable or a lookup | `"size": "$size"` | `'size' must be a number: glyph runs are laid out at pack build (D14), so a text's font, size, width, line_height, align, dir and lang are literal values` |
+| A layout key out of range | `"size": 0`, `"width": -1`, `"align": "middle"` | `'size' is 0; it is above 0 and at most 1e9`; `'align' is "middle"; it is start, end or center` |
+| vars that name each other | `"a": "$b", "b": "$a"` | `'$a': variables nest more than 8 deep; is there a loop?` |
+| A node's table that is not in the pack | `"timeline_variables": "x.pstb"` | `node 'main': 'timeline_variables' is 'x.pstb', which is not a table entry of this pack` (only when a text reads it) |
+| A character no font has | `"mail@example"` in a font without `@` | `'exp/x.ysprun' block 's/mail@example': 1 characters no font maps; add a font that has them (a fallback in 'fonts' of a glyphruns resource of this name)` |
+| A stimulus's font that is not in the pack | | `font 'fonts/x.ttf' is not a font entry of this pack` (or `no curveset entry is made from 'fonts/x.ttf' face 0; add one`) |
+
+The core tool refuses a definition with text stimuli by name, and
+builds one without.
+
+### Built
+
+| File | Version | What |
+|---|---|---|
+| `include/ysp/pack.h` | 0.3.0 | `ypak_runs_key()` and `ypak_text_style`: the block key, for the tool and the player (4.5); the header now requires ysp/json.h |
+| `pack/derive.c` | new | `ypt_derive_texts()`: the definition's texts, keyed by `ypak_runs_key()`, no layout (the core tool runs it too) |
+| `pack/ysp/pack_tool.h`, `pack/pack_tool.c` | 0.6.0 | The experiment's GLYPHRUNS entry; one ylay library per fallback list; the stamp over the entry's fonts in entry order; a listed block without `size` is refused by name (v0.5.1 crashed: a NULL string to `strlen`) |
+| `pack/ypak.c` | 0.6.0 | unchanged; it prints the library's version |
+| `examples/pack/stroop/` | | The Stroop definition of experiment_format.md 2.14, its CSV, and a description with no glyph runs |
+| `tests/adapt/derive_test.c` | | The texts on their own: every form, every refusal, order, keys, shared styles, the bounds |
+| `tests/adapt/pack_test.c`, `tests/mutate/pack.toml` | | `ypak_runs_key()`: the format, the refusals, 8 mutants |
+| `tests/pack/tool_test.c` | | The Stroop pack end to end; union, fallback, two-font and shared-style packs; the player's key for every derived block; 11 refusals; the core tool's refusal |
+| `tests/fuzz/derive_fuzz.c` | | libFuzzer: a definition against two fixed tables |
+| `tests/mutate/derive.toml` | | 35 mutants of `pack/derive.c` |
+
+Every entry of the test corpus is byte-identical to v0.5.1's; the
+manifest differs by the tool version only (`ypak rebuild` of the
+v0.5.1 corpus pack with v0.6.0: 31 entries, 30 identical, the manifest
+6 lines). The tool's corpus pin (`tests/pack/corpus.sha256`) is
+unchanged.
+
+### Results
+
+On 2026-10-21, Windows 11 on the i7-1360P laptop, and WSL2 Ubuntu 22.04
+on the same machine. These are the results with the key by text and
+style (`ypak_runs_key()`, ysp/pack.h 0.3.0); the cost was measured with
+the first build's `<stimulus>/<text>` keys, which lay out the same 9
+texts.
+
+| Check | Result |
+|---|---|
+| `tests/adapt/derive_test.c` | 168 checks, 0 failed: MSVC 19.44 (Release), MinGW gcc 16.1 (`-O1 -Wall -Wextra -Wshadow`, and the mingw preset with CI's `-Werror`), Linux gcc 11.4 (Release, and ASan with UBSan). Each derived text's key is checked against `ypak_runs_key()` of its style; two stimuli of one style share a text, with both named |
+| `tests/adapt/pack_test.c` | 468 checks, 0 failed (MSVC, MinGW); quick mode under Linux ASan and UBSan, 456. The key's byte format, shortest doubles, the refusals, sizing with cap 0 and a short buffer |
+| `tests/pack/tool_test.c` | MSVC, full tool: 331 checks, 0 failed (276 before v0.6.0). Linux gcc, full tool: 326, 0 failed, Release and ASan with UBSan (no sanitizer report; fewer checks: no MP4 or HEVC off Windows). MinGW, core tool: 272, 0 failed (the Stroop pack refused by name, a definition without texts built). The player's side: for the Stroop, union, two-font and shared-style packs, a loader's reading of the definition (`yjs_double()`) and `ypak_runs_key()` give the key of every derived block (9 of 9, 9 of 10 with the listed block, 6 of 6, 4 of 4) |
+| The whole tree | MSVC `msvc-full` with the pack tool: 90 of 90 ctest tests. MinGW `mingw` preset with the pack tool: 79 of 79 |
+| Determinism | MSVC and Linux gcc give the same bytes: Stroop pack `c413cb38de6f3b41...`, union `de45e4b81328be8c...`, two fonts `1052c75e30f4c0ef...`, shared style `48b21e7315fc5660...` (SHA-256 of the files). The Stroop pack built 3 times: the same bytes. A reordered description gives the same pack; a definition with other whitespace and `72.0` for `72` gives the same glyph runs entry. `ypak rebuild` gives `identical` for all four |
+| Before and after | ypak 0.5.1 builds the same Stroop description into 6 entries: no glyph runs, and the `"used"` curve set holds .notdef only (752 bytes). 0.6.0: 7 entries, `experiment/stroop.ysprun` with 9 blocks (7072 bytes), and a curve set of the texts' glyphs (8704 bytes) |
+| Mutants of `pack/derive.c` (`tests/mutate/derive.toml`) | 35 of 35 killed (d-18, no nesting bound, by a stack overflow: the step bound comes too late for recursion). The first build's d-10 became equivalent with the key change (the number's text now comes from the double) and was removed |
+| Mutants of `ypak_runs_key()` (`tests/mutate/pack.toml`, rk-01 to rk-08) | 8 of 8 killed |
+| Hand mutants of `pack/pack_tool.c` (the runner cannot build the tool) | 15 of 15 killed with MSVC: a run's font index not remapped; used glyphs marked in the library's slot; no fallbacks after a stimulus's font; the record keys taken back by a rebuild; a listed block on a derived key not named; the experiment not in `from`; a font's hash from the wrong library slot; derived fonts not by name; listed blocks without listed fonts; no derivation; the runs keeping the experiment's extension; the runs' name not checked without case; another kind on the runs' name; one library for every derived font (these 14 with the first build's keys); one stimulus recorded per shared block. A mutant that made the rebuild skip an auto-made entry's resource was equivalent, so that code was deleted |
+| Fuzzing (`tests/fuzz/derive_fuzz.c`) | MSVC libFuzzer with ASan, 4 seeds: 362,488 inputs in 600 s, 2022 new units, no finding (the first build's keys). With the key change the target also checks each key against `ypak_runs_key()`; the 345-file corpus replayed with MinGW and under Linux gcc ASan and UBSan, no report |
+| `trial_stroop --sim` (CI's step) | Every trial as scripted; the program does not read packs and did not change |
+| Cost | The whole `ypak build` of the Stroop description with Arial (1 MB) as the font, MSVC builds, under the measurement lock (load 0 % at its start, AC), the two versions interleaved, 21 rounds: 0.6.0 61.8 ms median (56.6 to 96.1), 0.5.1 52.9 ms (49.5 to 70.2). The 9 ms buys the derivation, the 9 layouts and the glyphs they use; 0.5.1 made a curve set of .notdef only. Build time, never on the frame path: the player looks the blocks up |
+
+### Left
+
+- A layout key from a variable (above).
+- Text that a script shows, when the script layer exists: the player
+  lays it out at run time (D14); the tool will skip a script's text
+  instead of refusing it.
+- Closed in tool v0.7.0 (section 16): the check that a lookup's map has
+  every level its `by` can take, and the definition's canonical bytes.
+
+## 16. Tool v0.7.0: the definition's canonical bytes and its lookups (2026-10-22)
+
+Two gaps that tool v0.6.0 left (section 15, Left). The tool copied the
+definition's bytes, so two definitions that differ only in layout had
+two experiment IDs and two pack IDs, against D2. And nothing checked
+that a lookup's map has a key for every level its `by` can take
+(experiment_format.md 2.2), so a missing key stopped the session that
+met it.
+
+### Decisions (the user to confirm)
+
+| Question | Options | Choice and why |
+|---|---|---|
+| What the pack stores | (a) the source's bytes (v0.6.0); (b) the canonical bytes; (c) both, the source text in a second entry | (b). D2: "The pack tool writes the canonical bytes into the pack and records `"op": "canonical"` in the entry's derivation, so the entry's SHA-256 in the manifest is the experiment ID." (c) puts the source's hash in the manifest, so the pack ID depends on the layout again. The canonical form loses no value: JSON has no comments (D1: ysp/json.h refuses them, and `note` is a value, which the form keeps), object order has no meaning (D3), and the writer keeps each number's exact value and each string's code points (json.md). What it drops is layout, key order, number spelling and escapes. The author's text stays in the sources folder, which `ypak rebuild` reads; a diff of canonical bytes (one member per line, keys in a fixed order) shows changes of value only |
+| The last byte | none (`yjs_write()`'s output); one LF | One LF, as the manifest, the rig profile (`yrig_write()`) and `session.json` end. The experiment ID covers it; a loader that hashes `yjs_write()`'s output adds the LF |
+| The source's SHA-256 in the manifest | (a) the file's; (b) its canonical bytes' | (b). With (a) a reformatted source gives another manifest, so another pack ID, which the task and D2 rule out. The cost: `sha256sum` of the source file matches the manifest only when the source is canonical, as the designer writes it (experiment_format.md 2.12). `ypak rebuild` hashes the canonical bytes of a source whose entry has `"op": "canonical"`, and its message says so |
+| Which experiment bytes | (a) every experiment entry; (b) definitions only | (b): JSON whose `format` is `"ysp-experiment"`, any version. Other media types stay opaque (rig_spec 6), so the test corpus's `main.json` and its pin do not change. A definition of another version is still refused by the derivation of its texts (4.5) |
+| A key at its default (D2: "left out") | (a) the tool drops it; (b) kept | (b), for now. Dropping a default needs the format's defaults per version, which the loader will hold; the tool has no such table. Open |
+| A level without a key | (a) a warning; (b) an error | (b). 2.2: "The loader checks that `map` has every level that `by` can take"; section 15's rule: what would stop a session in its middle is refused at build. The player meets the level with no value to draw |
+| A key no level reaches | (a) nothing; (b) a warning; (c) an error | (b). The key is never read, so the session runs, and a key can be there on purpose: one map pasted into two stimuli of different tables, or a level a pilot's table dropped. But it is often a typo (`"gren"`); then the error names the level (`"green"`) and the warning the key, so the author sees both halves |
+| Where the levels come from | (a) every table any node names, as for the texts (4.5); (b) each leaf's own scope | (b). Per leaf node: its tables and `vars` and its ancestors' (the nearest first), its template's response, the leaf's `tracks`; checked in its template, the stimuli that template names (steps, also inside `if`; the response's `from`; `record`), and the `vars` and `data` of its nodes. (a) would refuse a definition whose two leaves share a column name but not its levels. The texts stay wide: an extra block costs bytes, a refused build costs the author |
+| Which `by` has known levels | | `"$name"` of a table column, a number as its canonical text (`0.50` is the key `"0.5"`, `007` is `"7"`, as a `vars` choice's values, 2.4); a `vars` value or choice, through variables and lookups; the boolean built-ins (`"false"`, and `"true"` when the leaf can make it: below); `outcome` (`"correct"`, `"wrong"`, and `"timeout"` when the response has a `duration_s` that is not 0); `response` (each choice's `key`, 2.3); `method` (the leaf's tracks); a literal. Not checked: a session field, a jitter, another built-in, a name that is nothing (the loader's to refuse); their values exist only at run time |
+| A boolean built-in (the user's decision of 2026-10-22) | (a) `"false"` and `"true"` always; (b) the values the leaf's rules can make | (b). A key is required only for a value some trial can take; a key for a value the rules never make is a key no level reaches (a warning). From the leaf's own `rules` (the leaf opens the `ytr_trials`), read as `ytr_rules()` splits them (blanks and tabs, `#` comments, quotes, several lines in one element), per trials.h BLOCKS, BREAKS, PRACTICE, WARMUP: `practice` is true only with `practice N`, N above 0; `warmup` only with `warmup N`, N above 0; `after_break` only with `block_size N`, N above 0, or `groups COLUMN blocked`. Without them each is `"false"` only. Rules this cannot read (not an array of strings, a count that is not digits, `groups` without its mode) keep both values. `first_in_block` (true on every first trial; false needs a block of two trials, which the tool does not count), `responded` and `correct` keep both |
+| Where a warning goes | | One line per lookup on `ypt_options.warn` (new, NULL: quiet); `ypak build` and `ypak rebuild` give standard error. The error is the build's message, as every refusal |
+
+### What the tool says
+
+| Case | Message (after `ypak: experiment 'NAME': `) |
+|---|---|
+| A level without a key (error) | `stimulus 'word': 'text': the lookup's map has no key for "blue", which '$word' can take in node 'main'; a lookup needs a key for every level of its 'by'` (at most 8 levels, then `and N more`) |
+| A key no level reaches (warning) | `warning: experiment 'experiment/stroop.json': stimulus 'word': 'text': no level of '$word' reaches the map's key "purple"; a typo, or a level the trials no longer have?` |
+
+The place is `stimulus 'S'`, `template 'T'` or `node 'a/b'`, and the
+key is its path inside (`text`, `columns.feedback`,
+`response.trigger.code`, `events[1].props.x`, `x.map.false` for a lookup
+inside a map). A control byte in a name, key or level prints as `?`, so
+a message stays one line.
+
+### Built
+
+| File | Version | What |
+|---|---|---|
+| `pack/ysp/pack_tool.h`, `pack/pack_tool.c` | 0.7.0 | The experiment entry of a definition as its canonical bytes and one LF (`"op": "canonical"`, by ysp/json.h); the source's SHA-256 is the canonical bytes'; `ypak rebuild` checks such a source the same way. `ypt_options.warn`. The lookup check before the texts' derivation, in the core tool too |
+| `pack/derive.c` | | `ypt_check_lookups()`: every lookup of the stimuli, templates and nodes against the levels its `by` takes in each leaf that reaches it |
+| `pack/ypak.c` | 0.7.0 | Warnings to standard error in `build` and `rebuild` |
+| `include/ysp/pack.h` | 0.3.0 | Unchanged |
+| `tests/adapt/derive_test.c` | | Every source of levels, each boolean built-in with and without the rules that make it true (comments, quotes, tabs, lines, counts of 0, unreadable rules, a container's rules, two leaves), scope per leaf (two leaves, a container's table and vars, the nearest first, 31 nodes deep), each refusal and warning by its whole message, control bytes, repeated levels, loops of vars, the work bound |
+| `tests/pack/tool_test.c` | | The Stroop entry against the canonical bytes the test computes; the entry's and the source's SHA-256 in the manifest; the player's keys from the stored definition; a respelled definition (compact, keys reordered, `7.2e1`, `RED`) at the same path gives the same pack file; a rebuild from it is identical, and from another value is refused by name; a missing level, a missing `"timeout"`, the warning to a file in a build and a rebuild, in both tools |
+| `tests/fuzz/derive_fuzz.c` | | The lookup check on every input: a refusal has a message, a warning is one non-empty line |
+| `tests/mutate/derive.toml` | | 47 mutants of the check (lk-01 to lk-47; lk-32 to lk-47 for the booleans' rules) |
+
+### Hashes that moved
+
+- `tests/pack/corpus.sha256`: none. The corpus's experiment is opaque,
+  so `experiment/main.json` keeps its bytes; every other entry is
+  byte-identical to v0.6.0's. The manifest differs by the tool version,
+  as in every version (it is not pinned).
+- A pack with a definition: its experiment entry (now the canonical
+  bytes), the source's SHA-256 in the manifest, so its pack ID. The
+  Stroop pack of the tool test: `9305c394073a20e4...` with v0.6.0 (built at a6c7ef1),
+  `d3f9ad80a8f13f74...` with v0.7.0 (SHA-256 of the file). Its glyph runs and
+  curve set entries are byte-identical to v0.6.0's: the derivation reads
+  the same values from the canonical bytes.
+
+### Results
+
+On 2026-10-22, Windows 11 on the i7-1360P laptop, and WSL2 Ubuntu 22.04
+on the same machine.
+
+| Check | Result |
+|---|---|
+| `tests/adapt/derive_test.c` | 284 checks, 0 failed (168 in v0.6.0): MSVC 19.44 (Release), MinGW gcc 16.1 (`-O1 -Wall -Wextra -Wshadow`, and the mingw preset), Linux gcc 11.4 (Release, and ASan with UBSan) |
+| `tests/pack/tool_test.c` | MSVC, full tool: 346 checks, 0 failed (331 in v0.6.0). Linux gcc, full tool: 341, 0 failed, Release and ASan with UBSan. MinGW, core tool: 277, 0 failed (the lookups checked and the warning written before the core tool refuses the runs) |
+| The whole tree | MSVC `msvc-full` with the pack tool: 93 of 93 ctest tests. MinGW `mingw` preset with the pack tool: 81 of 82 under load from two other jobs; the one, `test_audio`, passed alone (8.8 s against 40 s under the load) |
+| CI's lines | `ypak verify` of the corpus and core packs, `list`, the bogus command refused, `trial_images --sim`, `gfx_layout --sim` and `trial_stroop --sim` (every trial as scripted) on the MSVC build |
+| Canonical bytes | The Stroop entry (3572 bytes; the source is 2729) is the test's own canonical bytes of the source; its SHA-256 is the entry's and the source's in the manifest. A respelled source at the same path (compact, keys in another order, `7.2e1` for `72`, `\u0052ED` for `RED`) gives the same pack file, so the same pack ID, and `ypak rebuild` from it says `identical`; a source with another value is refused, the message naming its canonical bytes |
+| Against v0.6.0 | The same Stroop description: every entry but the experiment byte-identical to v0.6.0's (glyph runs, curve set, font, table); the manifest differs in the experiment's record and the tool version |
+| Determinism | MSVC and Linux gcc (Release and ASan) give the same files: Stroop `d3f9ad80a8f13f74...`, union `3c18cde932f73810...`, two fonts `a8b338aca8eb78b9...`, shared style `7b894fdb4ef1a9a2...`, fallback `e2158f8cbae45ff3...` (SHA-256 of the files). MinGW builds the core tool, whose texts are refused; its corpus and core packs match the pin as before |
+| Mutants of `pack/derive.c` (`tests/mutate/derive.toml`) | 82 of 82 killed: the 35 of v0.6.0 and 47 new (lk-01 to lk-47); lk-17, no nesting bound, by a stack overflow. Seven code spellings changed so the old anchors stay unique |
+| Hand mutants of `pack/pack_tool.c` | 10 of 10 killed with MSVC: a definition copied; no LF; the source's hash of the file; the rebuild hashing the file; the derivation `copy`; no lookup check; build warnings dropped; rebuild warnings dropped; `warn_line` silent; the compact form |
+| Fuzzing (`tests/fuzz/derive_fuzz.c`) | MSVC libFuzzer with ASan, 6 seeds (the four worked examples, the Stroop example, one on the fixed tables): 1,095,940 inputs in 601 s, 2623 new units, no finding. The 506 files replayed under Linux gcc ASan and UBSan, no report |
+| Cost | Not measured: build time, never on the frame path. The check parses the definition once more and walks each leaf's template and stimuli; the work bound is 5,000,000 steps |
+
+### Left
+
+- A key at its default left out of the canonical bytes (D2): needs the
+  format's defaults table, which the loader will have.
+- D2's open case: two texts of one double past its 17th digit still
+  give two IDs; that is the loader's choice, not the tool's.
+- `$response` on a timeout, a session field and the other built-ins are
+  not checked; the player has their values at run time only.
+- A lookup in a stimulus that no template names is not checked (no leaf
+  reaches it).
+
+## 17. Bindings (2026-10-25)
+
+`ysp-pack` (Python, `import ysp.pack`) and the MEX function `ysp_pack`
+bind the reader for an analysis or lab script: open a pack, list it, read
+an entry, read the manifest and the experiment definition, verify the pack
+or one entry. Both compile ysp/pack.h and the
+ysp/json.h it requires; neither needs a library.
+
+### What is bound
+
+| Need | Python | MATLAB and Octave |
+|---|---|---|
+| Open | `Pack(path, verify="use")`, `Pack.from_bytes(data)` | `ysp_pack('open', path_or_uint8 [, verify])` |
+| List | `entries()`, `names()`, `entry(name)`, `len`, `in` | `'list'`, `'entry'`, `'has'` |
+| Read | `read(name, offset=0, size=-1)`, `pk[name]` | `'read', h, name [, offset, n]` |
+| Manifest, definition | `manifest()` (a dict), `definition()`, `experiment` | `'manifest'`, `'definition'` (char), `'info'` |
+| Verify | `verify()`, `verify(name)` | `'verify', h [, name]`, raising or `[ok, msg]` |
+| Describe | `id`, `describe()`, `policy`, `hashed_bytes`, ... | `'info'` |
+| Hashes | `xxh64()`, `entry_hash()` | `'xxh64'`, `'entry_hash'` |
+
+The whole entry goes through `ypak_data()`, so the policy hashes it on
+first use; a range goes through a cursor, which hashes only the 1 MiB
+chunks it touches. `verify()` is `ypak_verify_all()`. `verify(name)` is
+`ypak_verify_entry()` (header 0.4.0), which hashes the entry under every
+policy, `"none"` included. Up to header 0.3.0 it was `ypak_data()` and was
+refused under `"none"`, because no header call hashed one entry there.
+
+### Copies and lifetime
+
+Both bindings return copies: Python `bytes`, MATLAB a `uint8` column. The
+copy is one `memcpy` from the mapping into the new object, and the result
+outlives `close`. A zero-copy `memoryview` of the mapping was rejected:
+the Limited API before 3.11 has no buffer export that keeps the `Pack`
+alive, and `memoryview.release()` does not reach a slice or a NumPy array
+made from the view, which would then read unmapped memory after `close`.
+`Pack.from_bytes()` keeps a `bytes` object (copying it once only when its
+data is not 8-byte aligned, which the header needs); a `bytearray` or a
+`memoryview` is copied once. The MEX `'open'` of a `uint8` array copies it
+once, because a MEX function cannot keep the caller's array.
+
+### Threads
+
+The Python calls that hash or copy entry data (open, `read`, `verify`,
+`definition`, `manifest`, the hashes) release the GIL; the header lets
+several threads read one pack. A `close()` while such a call runs on
+another thread marks the pack closed, and the last running call unmaps
+it. An error's text is the header's message when `pk.error_code` is this
+failure's code; when another thread's failure holds the message claim, it
+is the code's name (`ypak_strerror()`). The MEX function is one thread.
+
+### Not bound, and why
+
+- The range-reader and incremental sources: a browser's (the designer's
+  WebAssembly build reads the header directly). A script reads files.
+- The views of the pack's own forms (curve sets, artwork, glyph runs,
+  shaders, textures, QOI) and `ypak_runs_key()`: the player's and the
+  tool's. `read()` gives their bytes.
+- SHA-256 and CRC-32: `hashlib` and `zlib` have them; MATLAB scripts that
+  need SHA-256 have Java's `MessageDigest`. XXH64 and the entry hash are
+  bound, because the manifest's `"xxh64"` needs them and the standard
+  libraries do not have them.
+- The arena (`desc.arena`): open allocates once, and a script does not
+  care where.
+- A file-like stream over an entry: `read(name, offset, size)` covers it.
+
+### Tests
+
+The fixture is `tests/pack/fixtures/small.ysppak` (21,113 bytes), which
+`ypak` 0.7.0 (core build) made from `tests/pack/fixtures/small/` (a table,
+a file, and a definition stored as its canonical bytes). The Python tests
+also build packs with `tests/packwriter.py`, a writer independent of the
+tool (docs/pack.md 2, as tests/adapt/pack_test.c's), for a three-chunk
+entry, an appended pack and a format-2 comment.
+
+| Test | Result |
+|---|---|
+| `bindings/python/ysp_pack/tests` | 16 of 16 pass on Windows 11 (CPython 3.14.3 and 3.9.25, MSVC 14.51; the extension also compiles clean at `/W4`) and on WSL2 Ubuntu 22.04 (CPython 3.12.14, gcc 11.4; `-std=c99 -Wall -Wextra -Wshadow -Werror` clean), the tool test's 5.3 MB corpus pack included (`YSP_PACK_CORPUS`) |
+| Truncations | every length of a 25,296-byte writer pack refused at open, and six lengths of the file through the mapping |
+| Flipped bytes | every byte of the writer pack and of the tool fixture, each with bit 0 and bit 7: 50,592 and 42,226 damaged packs; 20,460 and 22,834 refused at open, 30,132 and 19,392 at a read or at `verify()`, 0 read different bytes |
+| Policies | a damaged entry: `"use"` reads the others and refuses it by name; `"open"` refuses the pack; `"none"` reads the damage, and `verify()` and `verify(name)` still refuse it (`verify(name)` since 0.4.0; an entry that passes is hashed once). A damaged chunk: ranges in the other chunks read, the chunk is refused as "chunk 1" |
+| Threads | four readers and a `verify()` on one pack; `close()` during a 48 MiB `verify()`: the call finished and the pack closed after it in 20 of 20 runs (a separate run of the test's case) |
+| `bindings/mex/test_mex_pack.m` | PASS, 60 checks, in MATLAB R2023a (MSVC 2022) and Octave 10.1 (its MinGW) on Windows 11; `example_pack.m` runs in both |
+
+### Measured
+
+One 256 MiB entry in a file in the page cache, `ysp.pack` on CPython
+3.14.3 (MSVC 14.51 build), Windows 11, i7-1360P laptop on AC, through
+the measurement guard (`psy-guard.sh time`), 7 runs each, median (min to
+max). Each read allocates a new `bytes` object, so its page faults are in
+the number.
+
+| Call | Time | Rate |
+|---|---|---|
+| `Pack(path)` (5 entries) | 0.36 ms (0.30 to 0.85) | |
+| `read(name, 100 MiB, 1 MiB)`, first | 0.86 ms (0.75 to 1.40) | 1.22 GB/s (one chunk hashed and copied) |
+| `read(name)`, first | 220 ms (167 to 280) | 1.22 GB/s (hash and copy) |
+| `read(name)`, again | 75 ms (61 to 97) | 3.58 GB/s (copy only) |
+| `verify()`, first | 125 ms (105 to 190) | 2.15 GB/s (hash only) |
+
+The copy costs about a third of a first read. A script reads at load
+time, so the copy stays; a range read of a long entry costs only its
+chunks.
+
+### ypak_verify_entry() (header 0.4.0, 2026-10-26)
+
+Under `YPAK_VERIFY_NONE`, `ypak_data()` checks the local header and
+skips the hash, and `ypak_check()` returns 0 after the header. Only
+`ypak_verify_all()` hashed under that policy, and it hashes every entry.
+`ypak_verify_entry(pk, e)` hashes one: the local header against the
+central record, each chunk against the chunk table, and the entry hash,
+from the mapping, the memory or the range reader. An incremental pack has
+no bytes of its own, so there it returns `YPAK_ERR_ARG` and names
+`ypak_check()`. An entry already hashed in this open pack returns 0
+without a second hash, as `ypak_verify_all()` does: the verified flag is
+set only on success, so a damaged entry is refused at every call.
+
+Threads (THREADS AND COST in the header): several threads may call it on
+one pack. Two threads that verify one entry may both hash it and both
+store the same flag; a failure writes the message under the claim.
+
+Tests: `test_verify_entry()` and `test_verify_threads()` in
+`tests/adapt/pack_test.c`. Under each policy an undamaged entry passes and
+is hashed once (`hashed_bytes`); under `"none"`, from memory and from a
+range reader, a damaged one-chunk entry and a damaged chunk 1 are
+`YPAK_ERR_CORRUPT` by name and chunk; a damaged local header is
+`YPAK_ERR_FORMAT`; an incremental pack is `YPAK_ERR_ARG`; two threads
+verify a damaged entry each and a shared good one 200 times, every result
+right and the message one failure's, whole. `pack_test` passes 515
+checks with MSVC 19.44, MinGW-w64 gcc 16.1 and gcc 11.4 on WSL2 under ASan
+and UBSan (full mode, the bit flips included). The bindings: `ysp-pack`
+0.4.0, 15 tests pass and the corpus test skips (no `YSP_PACK_CORPUS`), on
+CPython 3.14.3 (Windows 11, MSVC) and 3.12.14 (WSL2, gcc 11.4);
+`test_mex_pack.m` PASS, 62 checks, in MATLAB R2023a and Octave 10.1.
+`tests/fuzz/pack_fuzz.c` target 0 calls `ypak_verify_entry()` on every
+other entry before its data; its seeds from the fixture replay clean
+(MinGW gcc 16.1); libFuzzer was not run. Mutants `ve-01` to `ve-04`
+in `tests/mutate/pack.toml` (the policy followed, a second hash, the
+header skipped, the incremental refusal removed): 4 of 4 caught.
+
+### Left
+
+- A pack file that another process truncates while it is mapped: by
+  POSIX mmap rules a read of a lost page raises SIGBUS, in C as in the
+  bindings. Not tested.
+- macOS and CPython 3.8 to 3.13 not run here; CI builds the abi3 wheels.

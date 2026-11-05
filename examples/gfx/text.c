@@ -102,6 +102,7 @@ static void take_foreground(SDL_Window* w) {
     SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
     SetForegroundWindow(h);
 }
+static void take_foreground_on_window(void* w) { take_foreground((SDL_Window*)w); }
 #endif
 
 #define WIN_W 1200
@@ -112,6 +113,9 @@ static void take_foreground(SDL_Window* w) {
 #define COUNT(a) (int)(sizeof(a) / sizeof((a)[0]))
 
 static yscr_screen scr;
+/* SDL calls on the window go through yscr_window_call(): with the window
+ * thread (ysp/screen.h, WINDOW THREAD) another thread owns the window. */
+static void title_on_window(void* title) { SDL_SetWindowTitle(yscr_window(&scr), (const char*)title); }
 static ygfx_gfx gfx;
 static ycol_cal cal;
 static ytl_timeline tl;
@@ -288,7 +292,7 @@ static int tf_build(tfont* t, const uint32_t* gids, int n) {
     yol_cset s;
     yol_cset_desc od;
     ygfx_cset_desc d;
-    int64_t t0 = yrt_now_ns();
+    int64_t t0 = yrt_real_ns();
     int rc = 0, i;
     memset(&od, 0, sizeof od);
     od.n_glyphs = t->G; od.backward = true;
@@ -310,7 +314,7 @@ static int tf_build(tfont* t, const uint32_t* gids, int n) {
     memset(&d, 0, sizeof d);
     d.texels = s.texels; d.n_texels = s.n_texels; d.words = s.words; d.n_words = s.n_words;
     t->set = ygfx_cset_make(&gfx, &d);
-    t->build_ms = (double)(yrt_now_ns() - t0) * 1e-6;
+    t->build_ms = (double)(yrt_real_ns() - t0) * 1e-6;
     t->n_texels = s.n_texels; t->n_words = s.n_words;
     printf("%s: %u glyphs into a curve set in %.0f ms (%u texels, %u words)\n", t->real ? t->name : "the bitmap font",
            t->n_built, t->build_ms, s.n_texels, s.n_words);
@@ -829,7 +833,7 @@ static int fx_setup(void) {
     static unsigned char seen[65536];
     const char* words[2] = { W_OUT, W_BOLD };
     int w, rc = 0;
-    int64_t t0 = yrt_now_ns();
+    int64_t t0 = yrt_real_ns();
     memset(&od, 0, sizeof od);
     od.n_glyphs = 2 * ui.G; od.backward = true;
     if (ui.G > 32768 || !yol_cset_open(&s, &ol, &od)) return -1;
@@ -858,7 +862,7 @@ static int fx_setup(void) {
     d.texels = s.texels; d.n_texels = s.n_texels; d.words = s.words; d.n_words = s.n_words;
     fx_set = ygfx_cset_make(&gfx, &d);
     printf("page 3: strokes and bolds of %d glyphs in %.0f ms\n", (int)(strlen(W_OUT) + strlen(W_BOLD)),
-           (double)(yrt_now_ns() - t0) * 1e-6);
+           (double)(yrt_real_ns() - t0) * 1e-6);
     yol_cset_close(&s);
     return fx_set.id ? 0 : -1;
 }
@@ -1077,13 +1081,13 @@ static void cjk_bench(void) {
         for (m = 0; m < 2; m++) {
             int64_t t0;
             glFinish_();
-            t0 = yrt_now_ns();
+            t0 = yrt_real_ns();
             if (ygfx_begin_setup(&gfx) != YGFX_OK || ygfx_begin_target(&gfx, lab_tex, zero4) != YGFX_OK) { fail("page 4: timing"); return; }
             put(m ? &cjk_img : &cjk_run);
             ygfx_end_target(&gfx);
             ygfx_end_setup(&gfx);
             glFinish_();
-            if (rep >= 4) sum[m] += (double)(yrt_now_ns() - t0) * 1e-6;   /* the first ones warm up */
+            if (rep >= 4) sum[m] += (double)(yrt_real_ns() - t0) * 1e-6;   /* the first ones warm up */
         }
     cjk_setup_n = 20;
     for (m = 0; m < 2; m++) cjk_setup_ms[m] = sum[m] / cjk_setup_n;
@@ -1351,7 +1355,7 @@ static void show_page(int p, const yscr_frame* f) {
     click_x = click_y = -1;                       /* a click belongs to its page */
     /* SDL and printf may allocate: only here, on a page change */
     snprintf(title, sizeof title, "gfx_text %d/%d: %s", p + 1, N_PAGES, pages[p].name);
-    if (yscr_window(&scr)) SDL_SetWindowTitle(yscr_window(&scr), title);
+    if (yscr_window(&scr)) yscr_window_call(&scr, title_on_window, title);
     printf("page %d/%d: %s\n", p + 1, N_PAGES, pages[p].name);
     fflush(stdout);
     page_static(p);
@@ -1443,6 +1447,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     /* The per-user folder unless told otherwise, so that a second run loads
      * the programs instead of compiling them (PROGRAM CACHE). */
     if (no_cache) cache = NULL;
@@ -1473,7 +1479,7 @@ int main(int argc, char** argv) {
     printf("%s\n", line);
     glFinish_ = (void (GLCALL*)(void))yscr_gl_proc(&scr, "glFinish");
 #if defined(_WIN32)
-    if (topmost && yscr_window(&scr)) take_foreground(yscr_window(&scr));
+    if (topmost && yscr_window(&scr)) yscr_window_call(&scr, take_foreground_on_window, yscr_window(&scr));
 #else
     if (topmost) printf("--topmost acts on Win32 windows; ignored here\n");
 #endif
@@ -1535,7 +1541,7 @@ int main(int argc, char** argv) {
         yscr_mark(&scr, YSCR_PHASE_EVALUATE);
 
         timing = cur == 3 && glFinish_ != NULL;
-        if (timing) { glFinish_(); t0 = yrt_now_ns(); }
+        if (timing) { glFinish_(); t0 = yrt_real_ns(); }
         ygfx_begin(&gfx, &f);
         for (k = 0; k < N_TS; k++) dyn_n[k] = 0;
         cur_what = pages[cur].name;
@@ -1548,9 +1554,9 @@ int main(int argc, char** argv) {
         }
         ygfx_end(&gfx);
         if (timing) {
-            t1 = yrt_now_ns();
+            t1 = yrt_real_ns();
             glFinish_();
-            t2 = yrt_now_ns();
+            t2 = yrt_real_ns();
             if (f.index % 30 > 2 || cjk_mode) cjk_record(cjk_drawn_cached, (double)(t1 - t0) * 1e-6, (double)(t2 - t0) * 1e-6);
         }
         on_page++;

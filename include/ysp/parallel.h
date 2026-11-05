@@ -1,4 +1,4 @@
-/* ysp/parallel.h - v0.4.0 - public domain single-header parallel-port library
+/* ysp/parallel.h - v0.4.1 - public domain single-header parallel-port library
  *
  *   A small C library for reading and writing the PC parallel port (LPT).
  *   Built for low-latency 8-bit trigger output of the kind used in
@@ -292,6 +292,14 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.4.1 - A pulse width near INT64_MAX: the trailing edge's deadline
+ *          is the onset write's time plus the width, saturated at
+ *          INT64_MAX. ypar_pulse_async() then holds the value until the
+ *          next write or ypar_close(), and ypar_pulse() waits without end.
+ *          The plain sum overflowed (undefined behavior) and in practice
+ *          wrote the 0 at once. New tests/adapt/parallel_test.c, on a
+ *          handle with stand-in Out32 and Inp32 (Windows; the deadline
+ *          alone elsewhere). No API change.
  *   v0.4.0 - The ysp conventions (README.md, Conventions); breaks the API.
  *          ypar_pulse() and ypar_pulse_async() take int64_t width_ns
  *          instead of uint32_t usec. ypar_write_data(),
@@ -348,8 +356,8 @@
  * The string always matches the three numbers. */
 #define YPAR_VERSION_MAJOR  0
 #define YPAR_VERSION_MINOR  4
-#define YPAR_VERSION_PATCH  0
-#define YPAR_VERSION_STRING "0.4.0"
+#define YPAR_VERSION_PATCH  1
+#define YPAR_VERSION_STRING "0.4.1"
 
 /* Feature-test macro for the Linux implementation. This header's own needs
  * are modest, but the ysp/rt.h implementation it pulls in below wants
@@ -631,7 +639,8 @@ YPAR_API int ypar_set_data_dir(ypar_port* p, bool input);
  * precise than ypar_pulse_async's. Timing is best-effort and bounded by OS
  * scheduling; expect microsecond-to-millisecond jitter on a non-RT kernel,
  * and measure with examples/rt/jitter.c. Returns 0 or a YPAR_ERR_* code
- * (YPAR_ERR_ARG for a negative width, before any write). */
+ * (YPAR_ERR_ARG for a negative width, before any write). A width whose
+ * deadline passes INT64_MAX waits without end (the deadline saturates). */
 YPAR_API int ypar_pulse(ypar_port* p, uint8_t value, int64_t width_ns);
 
 /* Non-blocking pulse. Writes `value` to the data lines immediately on the
@@ -665,7 +674,8 @@ YPAR_API int ypar_pulse(ypar_port* p, uint8_t value, int64_t width_ns);
  * Returns 0, or YPAR_ERR_ASYNC if the worker could not be started (e.g.
  * built with YPAR_NO_THREADS), YPAR_ERR_CLOSED, YPAR_ERR_ARG for a negative
  * width or YPAR_ERR_IO; ypar_error() says more. With -DYPAR_NO_THREADS it
- * always returns YPAR_ERR_ASYNC and writes nothing. */
+ * always returns YPAR_ERR_ASYNC and writes nothing. A width whose deadline
+ * passes INT64_MAX holds the value until the next write or ypar_close(). */
 YPAR_API int ypar_pulse_async(ypar_port* p, uint8_t value, int64_t width_ns);
 
 /* --- status register (base+1, read-only) ------------------------------- */
@@ -1260,6 +1270,15 @@ int ypar_list_ports(ypar_port_info* out, int max) {
 
 #endif /* YPAR__WINDOWS */
 
+/* A pulse's trailing-edge deadline: t + width_ns (width_ns >= 0),
+ * saturated at INT64_MAX. The width has no upper bound, and the plain sum
+ * of a width near INT64_MAX overflowed (undefined behavior); in practice
+ * the deadline was in the past and the 0 came at once. Saturated, the 0
+ * comes never: a later write or ypar_close() ends the pulse. */
+static int64_t ypar__off_at(int64_t t, int64_t width_ns) {
+    return t > INT64_MAX - width_ns ? INT64_MAX : t + width_ns;
+}
+
 /* ======================================================================= *
  *  ASYNC PULSE
  *
@@ -1443,7 +1462,7 @@ static int ypar__async_submit(ypar_port* p, uint8_t value, int64_t width_ns) {
     int wrc = ypar__write_data_nolock(p, value);
     /* The width is measured from the onset write, not from entry, so the
      * ioctl round trip is not subtracted from it. */
-    int64_t off_at = yrt_now_ns() + width_ns;
+    int64_t off_at = ypar__off_at(yrt_now_ns(), width_ns);
     a->token++;
     a->job_token = a->token;
     /* Replaces any pending job, earlier deadline or later, and the worker
@@ -1532,7 +1551,7 @@ int ypar_pulse(ypar_port* p, uint8_t value, int64_t width_ns) {
      * priority, which is why PULSES AND TIMING calls this edge the less
      * precise of the two. */
     if (width_ns)
-        (void)yrt_sleep_until(yrt_now_ns() + width_ns, YRT_DEFAULT_SPIN_NS);
+        (void)yrt_sleep_until(ypar__off_at(yrt_now_ns(), width_ns), YRT_DEFAULT_SPIN_NS);
     return ypar_write_data(p, 0);
 }
 

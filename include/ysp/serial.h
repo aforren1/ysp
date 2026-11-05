@@ -1,4 +1,4 @@
-/* ysp/serial.h - v0.6.2 - public domain single-header serial-port library
+/* ysp/serial.h - v0.6.3 - public domain single-header serial-port library
  *
  *   REQUIRES ysp/rt.h, its sibling in this collection, on the include path.
  *   This header includes it for the clock, the waits, the scheduling ladder
@@ -397,11 +397,17 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
- *   v0.6.2 - Documentation only: TIMING and STATUS give the first Linux
+ *   v0.6.3 - Documentation only: TIMING and STATUS give the first Linux
  *          run (a Teensy 4.0 on cdc_acm), where a byte write returns
  *          before the byte reaches the device, so a bracket does not bound
  *          the onset there. YSER_ASYNC_FIFO's priority is ysp/rt.h's (1
  *          under a limits.conf grant of 50 or less), not always 80.
+ *   v0.6.2 - yser_pulse_off_at_ns() saturates start + width and
+ *          return + hold at INT64_MAX, so yser_pulse() and
+ *          yser_pulse_async() with a width near INT64_MAX hold `on` until
+ *          the next write (yser_pulse() waits without end). The plain sum
+ *          overflowed (undefined behavior) and in practice wrote `off` at
+ *          once. No API change.
  *   v0.6.1 - yser_open() reads the port's driver on Windows (SetupAPI,
  *          SPDRP_SERVICE) into the new yser_port.driver, and
  *          yser_set_rts() sets DTR again only where it is usbser.sys (the
@@ -484,7 +490,7 @@
  *   yser_purge, yser_send_break, yser_set_dtr and yser_set_rts return int
  *   (0 or a YSER_ERR_* code), not bool, because they can be called from a
  *   thread that does not own the message buffer. See RETURN VALUES. It also
- *   added yser_pulse_async() and its worker thread. (Since v0.6.2 STATUS
+ *   added yser_pulse_async() and its worker thread. (Since v0.6.3 STATUS
  *   says which rungs of its ladder have run.)
  *   docs/serial.md holds the design rationale.
  *
@@ -510,8 +516,8 @@
  * The string always matches the three numbers. */
 #define YSER_VERSION_MAJOR  0
 #define YSER_VERSION_MINOR  6
-#define YSER_VERSION_PATCH  2
-#define YSER_VERSION_STRING "0.6.2"
+#define YSER_VERSION_PATCH  3
+#define YSER_VERSION_STRING "0.6.3"
 
 /* CancelIoEx (Vista) is what lets yser_interrupt() end a pending overlapped
  * read. The MSVC SDK targets a recent Windows by default, but MinGW headers
@@ -953,7 +959,8 @@ YSER_API int yser_pulse_async(yser_port* p, uint8_t on, uint8_t off, int64_t wid
  * yser_pulse_async(), for a pulse the caller times itself (a DTR or RTS
  * pulse, a byte on another thread): take start_ns just before the onset
  * call, return_ns just after it, and yrt_sleep_until() the result. Pass
- * p->min_hold_ns for the port's floor. Pure; no port needed. */
+ * p->min_hold_ns for the port's floor. Both sums saturate at INT64_MAX, so
+ * a width near it holds `on` until the next write. Pure; no port needed. */
 YSER_API int64_t yser_pulse_off_at_ns(int64_t start_ns, int64_t return_ns, int64_t width_ns,
                                       int64_t min_hold_ns);
 
@@ -1147,9 +1154,16 @@ static int yser__write_nolock(yser_port* p, const void* buf, int len) {
 
 /* The width from the onset write's start, but never sooner than min_hold_ns
  * after that write returned. yser_pulse() says why. */
+/* t + d, saturated at INT64_MAX for a d >= 0: neither the width nor the
+ * hold has an upper bound, and the plain sum of one near INT64_MAX
+ * overflowed (undefined behavior); in practice the 0 came at once. */
+static int64_t yser__after(int64_t t, int64_t d) {
+    return d > 0 && t > INT64_MAX - d ? INT64_MAX : t + d;
+}
+
 YSER_API int64_t yser_pulse_off_at_ns(int64_t start_ns, int64_t return_ns, int64_t width_ns,
                                       int64_t min_hold_ns) {
-    int64_t a = start_ns + width_ns, b = return_ns + min_hold_ns;
+    int64_t a = yser__after(start_ns, width_ns), b = yser__after(return_ns, min_hold_ns);
     return a > b ? a : b;
 }
 

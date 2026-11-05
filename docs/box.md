@@ -102,7 +102,7 @@ Why:
 
 | Question | Decision | Why |
 |---|---|---|
-| Output | The caller's arrays of events and pairs; the decoder stops when one is full, and after one LINE `O` report, and returns the bytes it used | No allocation, and a bounded output per call. A byte finishes at most one frame (a broken frame shows by its ninth byte at the latest, and the eight bytes fed again hold at most one frame of 6 bytes or more), so arrays of one entry suffice; mutant `box-11` writes one past them and the test catches it |
+| Output | The caller's arrays of events and pairs; the decoder stops when one is full, and after one LINE `O` report or `I` identity line (v0.3.1), and returns the bytes it used | No allocation, and a bounded output per call. A byte finishes at most one frame (a broken frame shows by its ninth byte at the latest, and the eight bytes fed again hold at most one frame of 6 bytes or more), so arrays of one entry suffice; mutant `box-11` writes one past them and the test catches it |
 | A broken frame | Drop its first byte and feed the rest again | A frame that starts inside a broken one is still found. XID frames with port bits 2 or 3 set are broken, as pyxid2 says |
 | Garbage | Counted per call and in total, never an event | A misaligned stream must not give a press. The device layer logs the total at most once a second |
 | Event time | The read time given; `ticks` the device time with `YIN_DEVTICKS` | The decoder reads no clock; the device layer maps `ticks` through the fit |
@@ -145,6 +145,47 @@ every entry point by type, MSVC 19.44 (/W4 /WX) and MinGW-w64 gcc 16.1
 pulse rounded up instead of to the nearest microsecond) are new; both were
 caught, and so were the moved anchors `box-15`, `box-16` and `box-23`.
 
+## One identity line per call (v0.3.1)
+
+`ybox_out` holds one identity line (`has_text`, `text`) and one `O`
+report (`has_out`). Up to v0.3.0, `ybox_decode()` stopped after an `O`
+report but not after an `I` line, so a second `I` line in the same call
+replaced the first. The Python binding's test found it:
+`ysp.box.decode("line", b"I first\nI second\n").text` was `["second"]`.
+
+v0.3.1 stops the call after an identity line too and returns the bytes it
+used, up to and including that line's newline. A caller that loops while
+bytes remain (USAGE in the header) gets every line. No byte is decoded
+differently.
+
+Callers in this repository:
+
+- `ysp/device.h` identifies a line board by decoding its answer in a loop
+  and stops at the first identity line; the reader thread loops over each
+  read until every byte is used and ignores identity lines. Neither
+  changes. `tests/adapt/device_test.c` passes.
+- `ysp.box` and the MEX `ysp_box` already loop and gather every identity
+  line, so they now return both. The binding tests check two and three
+  identity lines in one decode: `ysp-box` 0.3.1, 88 tests pass (CPython
+  3.14.3 with MSVC on Windows 11, CPython 3.12.14 with gcc 11.4 on WSL2);
+  `test_mex_box.m` PASS, 71 checks, in MATLAB R2023a and Octave 10.1.
+  `test_mex_device.m` PASS, 59 checks, in both.
+
+Tests: `tests/adapt/box_test.c` puts identity lines (`I board <n>`) in
+about 1 of 7 frames of every generated line stream and compares each, in
+order, whole, byte by byte, in random chunks, one entry per call and with
+garbage. `test_line_ident()` checks the bytes each call uses for three
+identity lines (one bare `I`), then a pair, and an `O` report followed by
+an identity line. 256 checks pass (MSVC 19.44, MinGW-w64 gcc 16.1, gcc
+11.4 on WSL2 with ASan and UBSan); `device_test` passes its 1,951 checks
+on all three. Against v0.3.0 the generated streams
+fail: 128 to 156 frames wrong per pass. Mutant `box-27` (no stop after an
+identity line) is new and caught; `box-11` and `box-20` moved with the
+line and are caught; 27 of 27 in all.
+
+There is no fuzz target for this header: `box_test.c` decodes 200,000
+random bytes per family against a counting model instead.
+
 ## Verification
 
 On 2026-10-08, MSVC 19.44 (`/W4 /WX`, C11, C++17), MinGW-w64 gcc 16.1 and
@@ -169,3 +210,64 @@ Not checked:
   come from open-source drivers, not from Neurospec's manual.
 - The firmware on a board: not flashed, not run.
 - XID1 devices, which have no timer query and use `ah` for outputs.
+
+## Bindings
+
+The analysis side decodes a raw capture without the device layer
+(docs/devices_spec.md, section 5). Two bindings do that, added 2026-10-25:
+
+- **Python**: `ysp-box` (`bindings/python/ysp_box`, the module
+  `ysp.box`), a C extension on the Limited API (one abi3 wheel for
+  CPython 3.10 and later), no run-time dependencies.
+  `Decoder(family, kind, device).decode(data, t)` and the one-shot
+  `decode(family, data, t)` return `Decoded(events, pairs, outputs, text,
+  garbage)`. An event is the structseq `Event` with the fields of
+  `yin_event` in the order that `ysp.device` and `ysp.response` also use:
+  `t` (s), `t_ns`, `device`, `control`, `code`, `mods`, `kind`, `type`,
+  `flags`, `stamp`, `unc` (s), `x`, `y`, `value`, `aux`, `ticks`.
+- **MATLAB and Octave**: the MEX function `ysp_box`
+  (`bindings/mex/ysp_box.c`). `'decode'` on a handle or on a family name
+  returns the events as a 1 x N struct array with the same field names,
+  the pairs as `uint64` and double columns, and the identity lines, the
+  output reports and the garbage count.
+
+What each binding does with the header:
+
+- It feeds every byte of a call through `ybox_decode()`, in calls that
+  fill 64-entry arrays in the decoder's own memory, and gathers the
+  results. A frame split across two calls waits in the decoder, as in C.
+- A read time is seconds; the binding rounds the exact product t x 1e9 to
+  the nearest ns (as `ysp.rdk` does), so `t = ns / 1e9` gives back `ns`,
+  and refuses a negative time, NaN and infinity. Device times stay counts;
+  `tick()` is the nominal unit in seconds.
+- It refuses an unknown family, an op, code, kind, device, sequence
+  number or width out of its range, and data that is not bytes, before
+  the C call. The header's `YBOX_ERR_ARG` from `ybox_encode()` raises
+  `ArgumentError` (`ysp_box:arg`).
+- The encoders, the queries and the family facts (`caps`, `code_max`,
+  `fixed_pulse`, `default_baud`, `tick`, `slow_write`) are bound, so a
+  PsychoPy or Psychtoolbox script can write trigger codes through its own
+  serial library.
+
+Not bound: `ybox_out_clear()` and the `ybox_out` arrays (the binding owns
+them), and `ybox_strerror()` (the exceptions carry the message).
+
+Tests (2026-10-25, Windows 11, i7-1360P):
+
+| Test | Platforms | Result |
+|---|---|---|
+| `bindings/python/ysp_box/tests/test_box.py`: each family's frames to fields; a stream of 2,000 frames whole, byte by byte and in random chunks; 200,000 random bytes per family in random chunks (the line protocol's from random lines of random fields); encoder bytes; 49 refused calls and 25,000 calls with random arguments | CPython 3.14 and 3.9 with MSVC 19.44; CPython 3.10 with gcc 11.4 on WSL2 (`-Wall -Wextra -Wshadow -Werror` clean) | 87 pass, 1 expected failure (fixed in v0.3.1, below) |
+| `bindings/mex/test_mex_box.m`: the same groups, 600-frame streams, 1,000 read times | MATLAB R2023a (MSVC 19.44), Octave 10.1 (MinGW-w64) | 69 checks pass |
+
+Cost of `ysp.box` (CPython 3.14, Windows 11, i7-1360P on AC power, the
+shared timing guard, best of 5): a 1-hour line-board capture (517 kB:
+36,000 syncs and 3,600 edges) decodes in 12.0 ms whole and 19.8 ms in
+64-byte reads; 100,000 XID key frames (600 kB) in 69.0 ms whole and 44.7
+ms in 64-byte reads. That is 0.22 to 0.46 us per event or pair, almost
+all of it in making the Python objects. Not measured: the MEX function's
+cost.
+
+The expected failure was a limit of the header up to v0.3.0: two `I`
+lines in one `ybox_decode()` call kept only the second. v0.3.1 fixed it
+([One identity line per call](#one-identity-line-per-call-v031)); the
+test is now a normal one, and the MEX test has the same check.

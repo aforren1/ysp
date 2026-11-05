@@ -11,12 +11,13 @@
  *     [rgb, g] = ysp_color('to_rgb', h, 'dkl', [0 90 0.1]);    % rows of colors
  *     X   = ysp_color('convert', h, 'rgb', 'cielab', RGB);       % N x 3
  *     k   = ysp_color('max_scale', h, 'dkl', [0 90 1], 'symmetric');
+ *     sh  = ysp_color('michelson', h, 0.03);   % gfx's contrast, codes, contrast shown
  *     ysp_color('close', h);
  *
  * Colors are rows: an N x 3 matrix in the space named by a string ("dkl",
  * "cielab", ...). A gamut comes back as a struct of columns (in, below,
  * above, margin, distance, scale, kept). A refusal raises ysp_color:refused
- * with the header's reason.
+ * with the header's reason. 'michelson' returns ycol_shown as a struct.
  *
  * Build with build.m. See README.md for the command reference.
  */
@@ -439,6 +440,31 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         plhs[0] = mxCreateDoubleMatrix(1, (size_t)n, mxREAL);
         col_check(ycol_max_ring(&h->cx, plane, pm_finite(prhs[3], "fixed"), sides, n, mxGetPr(plhs[0])),
                   h->cx.why_no_bg ? h->cx.why_no_bg : NULL);
+    } else if (strcmp(cmd, "michelson") == 0) {
+        static const char* f[] = { "gain", "scene", "max", "shown", "Y_bg", "Y_peak", "Y_trough", "peak", "trough", "gamut" };
+        double d[3] = { 0.0, 0.0, 0.0 }, pk[3], tr[3];
+        ycol_rgb dir;
+        ycol_shown r;
+        int bits = 8, k;
+        mxArray* s;
+        pm_nargs(nrhs, 3, "sh = ysp_color('michelson', h, m, [dir], [bits])");
+        if (nrhs > 3 && !mxIsEmpty(prhs[3])) pm_vector_n(prhs[3], "dir", d, 3);
+        if (nrhs > 4) bits = pm_int(prhs[4], "bits");
+        dir.r = d[0]; dir.g = d[1]; dir.b = d[2];
+        if (ycol_michelson(&h->cx, pm_scalar(prhs[2], "m"), dir, bits, &r) < 0) col_check(r.status, r.why);
+        for (k = 0; k < 3; k++) { pk[k] = r.peak[k]; tr[k] = r.trough[k]; }
+        s = mxCreateStructMatrix(1, 1, 10, f);
+        mxSetField(s, 0, "gain", mxCreateDoubleScalar(r.gain));
+        mxSetField(s, 0, "scene", mxCreateDoubleScalar(r.scene));
+        mxSetField(s, 0, "max", mxCreateDoubleScalar(r.max));
+        mxSetField(s, 0, "shown", mxCreateDoubleScalar(r.shown));
+        mxSetField(s, 0, "Y_bg", mxCreateDoubleScalar(r.Y_bg));
+        mxSetField(s, 0, "Y_peak", mxCreateDoubleScalar(r.Y_peak));
+        mxSetField(s, 0, "Y_trough", mxCreateDoubleScalar(r.Y_trough));
+        mxSetField(s, 0, "peak", pm_row(pk, 3));
+        mxSetField(s, 0, "trough", pm_row(tr, 3));
+        mxSetField(s, 0, "gamut", col_gamut_out(&r.gamut, 1));
+        plhs[0] = s;
     } else if (strcmp(cmd, "describe") == 0) {
         char line[1024];
         ycol_ctx_describe(&h->cx, line, sizeof line);

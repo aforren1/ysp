@@ -1278,6 +1278,226 @@ hash, the other five differ.
 The compile check `tests/compile/timeline.c` reads the set's record and
 calls `ytl_prune()` and `ytl_horizon()`, as C99 and as C++17.
 
+## Trigger channels and parameter tables (v0.8.0)
+
+v0.8.0 closes two gaps that block the player
+([experiment_format.md](experiment_format.md) 1.4, G1 and the timeline
+part of G6).
+
+### A trigger names its channel
+
+Until v0.7.0, `ytl_trigger()` and `YTL_OP_TRIGGER` took a code only, and
+the builder wrote target 0. A definition with two output roles (an EEG
+amplifier and a second marker line) could not say in an op table which
+role fires. The fired event had no field that told the frame loop where
+to send the code.
+
+Decisions:
+
+- **The op's `ch` is the trigger channel.** `ytl_op` already has `ch`, and
+  a TRIGGER did not read it. The event's `target` was free for a TRIGGER
+  ("the caller's"). So the builder copies `ch` to `target`, and the report
+  carries it unchanged: `yscr_trigger(&scr, e.target, e.code)`. No new op
+  kind, no new field, and `ytl_op` stays 96 bytes.
+- **A trigger channel is not a timeline channel.** It indexes the caller's
+  outputs (`yscr_trigger()`'s channel, a role), so it drives no value, binds
+  nothing and has no bound at `desc.n_channels`. A tween and a trigger can
+  use the same number. Its range is 0 to `INT32_MAX`. The player checks it
+  against its own roles.
+- **Existing callers keep channel 0.** `ytl_trigger(&q, code)` and
+  `YTL_TRIGGER(code)` are unchanged and give 0. The new forms are
+  `ytl_trigger_ch(&q, ch, code)` and `YTL_TRIGGER_CH(ch, code)`. C has no
+  default arguments, so a second name is the cost of not breaking the
+  callers.
+- **Negative is refused in sequences, not in `ytl_add()`.** The sequence
+  calls, `ytl_run()` and `ytl_check_ops()` return `YTL_ERR_ARG` for a
+  negative channel, so the table's `min` is a bound the check enforces.
+  `ytl_add()` keeps any target for a TRIGGER, as before: the blind test's
+  model adds TRIGGERs with targets from -1000 to 1000, and a caller of the
+  raw event API can have done the same. (v0.8.1 reverses this: see
+  [the next section](#ytl_add-refuses-a-negative-trigger-channel-v081).)
+  One behavior changes: an op table
+  that set a nonzero `ch` on a TRIGGER ran with target 0 before, and now
+  carries `ch` (or is refused when `ch` is negative). No caller in the
+  repository set it.
+
+### One table per op kind
+
+rig_spec.md principle 8 asks for a table of every parameter a designer
+sets. For the timeline, that is the fields of an op table (4.5.1, "The
+same sequence as data"), which a definition's `events` and `after` steps
+lower to (experiment_format.md 2.5), and the plain fields of `ytl_desc`.
+
+The row is the older tables' row (`name`, `type`, `min`, `max`, `def`,
+`unit`, `doc`) plus `values`, the names and numbers of an enum. Every
+new table of this round uses it, so the tables read alike. Three
+choices:
+
+- **`ytl_op_params(kind, &n)`, not one flat table.** A kind reads a subset
+  of `ytl_op`: WAIT reads `t_ns` only, TRIGGER `ch` and `code`. A flat
+  table would need a kind mask in every row, a field the shared shape does
+  not have. Per-kind tables give the loader its key check directly ("is
+  this key a row of this kind?") and give the designer one panel per kind.
+  TO and THEN share a table, and so do ON and OFF, and WAIT and AT have
+  the same field with two docs.
+- **The list of kinds is a row, not a second struct.** `YTL_OP_NONE` (0,
+  which the op enum did not name before) gives one row, `op`, of type
+  `enum` with values `none=0,on=1,...,then=9`. So the kinds' names and
+  numbers come from the same row shape as every other enum (the ease's
+  values), and a loader parses one format. The names are the C suffixes
+  in lower case (`set_value`), not the definition's step keys (`set`):
+  the mapping from a step to an op is the player's (one step can give
+  several ops), and the shared rule keeps names the same in every header.
+- **`def` is the value in use for a zero field, not another spelling of
+  zero.** `tween.cycles` 0 plays once, so `def` is 1; `lead` 0 is half a
+  frame, so `def` is 0.5. The test checks both ways: the field at 0 and at
+  `def` give the same bytes, and for these two the value in use (the
+  tween's end, `ytl_lead()`) equals `def`.
+
+What is not a row: a tween's `start_ns` and `start_set` (a sequence
+refuses `start_set`, and `start_ns` is unused without it), the desc's
+pointers, and targets (`ytl_anim`), which have no op form because a
+pack's table cannot hold an address.
+
+Bounds are inclusive and are the checks of `ytl_check_ops()` and
+`ytl_open()`, field by field. Three details:
+
+- A time's bound is 2^62 - 512, the largest double below 2^62. 2^62 - 1
+  rounds to 2^62 as a double, which the check refuses, so that bound
+  would lie. The 511 ns below 2^62 pass the check and are outside the
+  table.
+- `lead` is [0, 1) in the table. `YTL_LEAD_NONE` (-1) is a sentinel
+  outside it, named in the row's doc.
+- A rule that joins fields (a tween's end below 2^62, LOG with a positive
+  `from`, a channel below `desc.n_channels`, `keep_velocity` only on a
+  channel's first tween) is in the row's doc, not in `min` and `max`.
+
+### Verification
+
+The writer of the implementation also wrote the checks, in
+`tests/adapt/timeline_test.c` (11e and 11f):
+
+- **Trigger channels.** Channels 0, 3, `INT32_MAX`, 0 and 5 from
+  `ytl_trigger()`, `ytl_trigger_ch()`, `YTL_TRIGGER()` and
+  `YTL_TRIGGER_CH()` come back in the report's `target` and in
+  `ytl_peek()`'s. A negative channel is refused by the call (sticky, the
+  calls before it kept), by `ytl_check_ops()` and by `ytl_run()` with the
+  handle, storage and arena unchanged. A channel past `n_channels`, and
+  one equal to a tweened channel, pass. `ytl_add()` still takes target -5
+  (until v0.8.1).
+  The random sequence model now gives a TRIGGER's `ch` as its target and
+  draws a negative channel for about 1 trigger in 29 (from the drawn code,
+  so the random stream is unchanged): the builder, `ytl_run()` and the
+  hand-built events agree on 600 tables.
+- **Tables.** For every kind: the rows are exactly the fields the manual
+  says the kind reads, in `ytl_op` order; every name is a field of
+  `ytl_op` (a map written in the test from the declarations, with
+  `offsetof`) and its `type` is the field's; `min` <= `def` <= `max`; `unit`
+  is `"ns"` exactly for the `_ns` fields; `values` is set exactly for
+  enums, in value order, contiguous from `min` to `max`, and each name
+  gives its C constant (`trigger=4` is `YTL_OP_TRIGGER`, `bezier=6` is
+  `YTL_EASE_BEZIER`). The field at 0 and at `def` give the same storage,
+  arena and 40 frames of values. Every field that is not a row, set to a
+  nonzero value, changes nothing. Each field at `min` and at `max` passes
+  `ytl_check_ops()` (or fails for another reason than `YTL_ERR_ARG`:
+  `tween.cycles` at its max fills the arena), and just past them is
+  refused (integers: min - 1 and max + 1; times: +-2^62; floats: 0.25 past
+  a finite bound, or an infinity). The desc: the same, by `ytl_open()`,
+  and the handles from a zero field and from `def` are the same bytes.
+
+Mutations of the new code, one at a time: 14, all caught (`v08-00` to
+`v08-13` in [tests/mutate/timeline.toml](../tests/mutate/timeline.toml)):
+a trigger that loses its channel (op and call), a negative channel taken
+(call and check), a trigger channel checked against `n_channels`, a MARK
+that reads `ch`, `def` 0 for `tween.cycles` and `lead`, and five wrong
+rows (a channel's max, the ease's max, two kind names swapped, THEN with
+no rows, a negative duration's min, a time bound of 2^62). A comparison
+of a zero field with `def` alone cannot catch the two `def` mutants (0
+and 1 cycles both play once), so the test also checks the value in use. The anchors of the whole list
+(106) match; the earlier 92 were not run again this round.
+
+Built and run on 2026-10-21: MinGW-w64 gcc 16.1 (the test at C11 with
+`-Wall -Wextra -Wpedantic -Wshadow -Wfloat-conversion -Werror`; the
+compile checks as C99, C++17 and, for the op macros, C++20); the `msvc`
+preset (MSVC, no warning): the timeline, video and response tests, the
+compile checks (C, C++17, C++20), `timeline_trial`, `timeline_tracking`
+and `timeline_bench 500`; and the `msvc-full` preset (no warning): every
+program of CI's "Run examples (simulated display)" step, with its
+expected exit code, `screen_hello`, `gfx_trial` and `trial_eeg_triggers`
+included. The sequence model now reports 600
+tables: 164 clean, 394 refused with `YTL_ERR_ARG` and 42 with
+`YTL_ERR_BOUND`.
+
+## ytl_add() refuses a negative trigger channel (v0.8.1)
+
+v0.8.0 refused a negative trigger channel in the sequence calls and the op
+tables, but `ytl_add()` and `ytl_add_n()` still took one. So a fired
+TRIGGER's `target` was a channel of 0 to `INT32_MAX` or any value,
+depending on the path that added it. A frame loop that indexes its outputs
+with `target` had to check for a negative value that most paths could not
+give.
+
+Decisions:
+
+- **`ytl_add()` refuses it as the other paths do.** A TRIGGER with a
+  negative `target` is `YTL_ERR_ARG`, with the message, and `ytl_add_n()`
+  adds none of the batch. The check is in the one function that checks
+  every event, so `ytl_trigger_ch()` lost its own copy of it: the call
+  gives the same error, call index and message through `ytl_add()`.
+- **No upper bound below `INT32_MAX`.** A trigger channel indexes the
+  caller's outputs, and the timeline does not know how many there are
+  (`yscr_trigger()` has 8, a player maps roles to several devices). The
+  op table's row has `max` `INT32_MAX`, and the player checks a channel
+  against its own roles (v0.8.0). A bound here would be a second, wrong
+  copy of the player's.
+- **The other reported-only kinds keep any target.** A MARK's and a user
+  kind's `target` are the caller's.
+
+Callers checked: every `YTL_TRIGGER` event and call in `examples/`,
+`tests/` and `bindings/` gives channel 0 or a positive one.
+`yds_event_from_timeline()` (ysp/dataset.h) copies `target` to
+`control` and reads no sign; ysp/response.h reads `target` of ONSET
+events only; ysp/screen.h, ysp/video.h and ysp/device.h read no
+timeline event's target. Two places in the timeline test relied on the
+old behavior: the v0.8.0 check that `ytl_add()` takes target -5, now a
+check that it refuses it, and the random model, whose TRIGGERs drew
+targets from -1000 to 1000. The model now flips a negative draw to
+positive for 7 triggers in 8 (from the drawn code, so the random stream
+is the same) and predicts `YTL_ERR_ARG` for the rest: its rejected adds
+go from 1431 to 1491, every one predicted.
+
+### Verification
+
+In `tests/adapt/timeline_test.c` (4 and 11e): `ytl_add()` refuses
+channels -1, -5 and `INT32_MIN` with `YTL_ERR_ARG` and the message
+`ysp_timeline: ytl_add: invalid argument`; `ytl_add_n()` refuses a batch
+with one such event and adds nothing; channels 0, 999 and `INT32_MAX`
+pass; a MARK keeps targets -7 and -5. The v0.8.0 checks of the sequence
+call (refused, sticky, call index 1, the call before it kept) pass with
+the call's own check gone.
+
+Mutations of the new check, one at a time: 4, all caught (`v081-00` to
+`v081-03` in [tests/mutate/timeline.toml](../tests/mutate/timeline.toml)):
+the check removed, -1 taken, 0 refused, and a MARK's negative target
+refused. `v08-02`, the call's own check removed, went with that check.
+
+The whole list ran again on 2026-10-22, MinGW-w64 gcc 16.1, `-O2`, 4 jobs,
+on the Windows development machine with other workers building (CPU load
+sampled every 20 s: median 99 %, mean 86 %, 1 to 5 builds live):
+109 mutants, 106 caught and the 3 known equivalents (`rate-01`,
+`rate-03`, `rate-15`) survived, no timeout, 609 s. The 3 survivors, run
+again alone under the timing guard (load 1 %, AC), pass every check, as
+does the unmutated test: they are equivalents, not load artifacts.
+
+Built and run on 2026-10-22: the `msvc` preset (76 of 76 tests) and
+`msvc-full` with `YSP_BUILD_PACK=ON` and layout off (92 of 92; GitHub was
+unreachable, so Skribidi and HarfBuzz could not be fetched), no warning;
+every program of CI's "Run examples (simulated display)" step on
+`msvc-full`, 78 of 78 with the expected exit code; the `mingw` preset
+with pack (82 of 82); WSL Ubuntu gcc 11.4 (`linux` preset, the Tracy
+check off for the same reason; 79 of 79); and the timeline's compile
+check and test under emscripten (CI's wasm flags) in node.
+
 ## Animate a stimulus field
 
 This how-to animates the fields of ysp/gfx.h stimuli with targets. The
@@ -1661,8 +1881,169 @@ sequence by calls and by an op table, and `timeline_ops.cpp`, the
 table as C++20 (with `-Wno-missing-field-initializers` on g++). Both are
 clean on MinGW gcc 16.1, MSVC 19.44 (C++20) and gcc 11.4.
 
+## Bindings
+
+`ysp-timeline` 0.8.1 (`import ysp.timeline`) and the MEX `ysp_timeline`
+1.0.0 bind this header for a PsychoPy or Psychtoolbox experiment that draws
+its own stimuli. The reference is in
+[bindings/python/ysp_timeline/README.md](../bindings/python/ysp_timeline/README.md)
+and [bindings/mex/README.md](../bindings/mex/README.md#ysp_timeline).
+
+What is bound: the time bases (anchor, pause, resume, stop, skip, rate and
+the queries), events (add, remove, prune, clear, the record, peek), tracks
+(keys with Bezier eases, samples, repeats), channel tweens, sequences with
+every builder call, op tables (`run`, `check_ops`), and target tweens (to,
+from, fromTo, set, animate with stagger, overwrite and callbacks, kill).
+`evaluate()` returns the events that fired with their landing records.
+
+Decisions:
+
+- **The binding owns the fields.** A target tween writes C memory, and a
+  Python attribute or a MATLAB variable has no fixed address. So the
+  binding allocates the field slots at open, 4 words each, and a `Field`
+  (or a MEX field index) names one. The frame loop reads them as one
+  float32 view (`field_values`) or a 4 x slots matrix, or one at a time.
+  The Python Timeline keeps every Field alive until `free()` or
+  `close()`: the first version freed a slot when its Field object died,
+  and a trial built in a function lost its tweens when the function
+  returned (the seek test found it).
+- **A view owns what it shows.** `values` and `field_values` are views of
+  bytearrays that hold the handle and the field slots, never resized, so
+  a view the caller keeps after `close()` or after the Timeline is gone
+  reads the last values, and a write through it lands in memory no tween
+  reads. The first version made the views with `PyMemoryView_FromMemory()`
+  over memory the Timeline freed, and a kept view read and wrote freed heap
+  (the coordinator's review found it; two tests now check both views after
+  `del` and after `close()`, and the old build fails them). A buffer
+  protocol on the Timeline would be cleaner, but `Py_bf_getbuffer` is in
+  the Limited API only from 3.11, and the wheel is cp310-abi3.
+- **Times are seconds,** rounded to the nearest ns at the call, and a
+  negative or NaN time is refused (docs/bindings.md). A record gives the
+  exact ns beside the seconds. A replay gets the same ns from the same
+  seconds; a time past 2^23 s (97 days of a clock that counts from boot)
+  no longer holds every ns as a double, so pass the logged `onset_ns / 1e9`
+  only below that.
+- **`YTL_MAX_CHANNELS` is 1024** in both builds, not 256: a Python
+  experiment with a channel per dot or grid element needs more. The handle
+  grows to about 270 KB; an evaluate scans only `n_channels`.
+- **The report is never cut.** The binding gives `ytl_evaluate()` a report
+  buffer as large as the event storage, allocated at open, so every fired
+  event comes back and a frame with none allocates nothing in Python.
+- **Callbacks.** Python takes a callable (called with no arguments after
+  the frame's fields are written) or `True` (the event only). MEX takes a
+  logical only: the event in the report serves the frame loop, and a call
+  into the interpreter from inside the evaluate would cost more than the
+  frame's work. An exception in a Python callback is raised after the
+  evaluate, with the frame already in the record.
+- **`bind(obj, attr, source)`** sets a Python attribute from a channel or
+  a field after each evaluate. It stays because it costs little: 18 ns per
+  attribute at 1000, against 30 ns for `tolist()` and the same loop in
+  Python (below). With
+  PsychoPy, whose attribute setters run Python code, the setter dominates
+  either way.
+- Channels and fields are 0-based in Python and 1-based in MEX
+  (bindings/mex/ysp_mex_util.h). A base keeps its number in both, and so
+  does a trigger channel, which names an output of the caller.
+
+Not bound: `ytl_sample()`, which does not validate its track, so a bad
+track reads out of bounds (a spare timeline gives the same values with the
+checks); the parameter tables, which serve a player's loader and a
+designer; a negative wait or stagger (refused as negative times; use
+`at(t - dt)` or reverse the field list); a Python object as a mark's
+payload (`user` is a 64-bit integer, as in C).
+
+### Shared with other modules (2026-10-26)
+
+`ysp-timeline` 0.8.1.1 and the MEX `ysp_timeline` 1.1.0 export a C table
+(`ysp.timeline._C_API`, `ysp_timeline_api_table()`) with the frame-time
+functions, so `ysp-vis` drives a movie's clock and a frame loop from a
+timeline built here, with one copy of the implementation
+([bindings.md](bindings.md#sharing-one-implementation-across-modules)).
+While another module holds a timeline, `close` raises `BusyError`
+(`ysp_timeline:busy`). Through the Python table `ytl_evaluate` is the
+binding's evaluate: tween callbacks run and `bind()` targets are written.
+A MEX timeline handle is a number from `0x544C * 2^32 + 1` up.
+
+### Measured cost
+
+The per-frame cost through the binding of an evaluate and a read of N
+values, every value a CUBIC_OUT tween over 1000 s, so in progress on each
+frame. Machine: Intel i7-1360P, Windows 11, on AC power, through the
+measurement lock (load 20% or less at the start), 2026-10-25. Python:
+CPython 3.14.3, the abi3 wheel built by MSVC 19.51 (Visual Studio 18), each
+frame timed with `perf_counter_ns` (100 ns resolution on Windows), 20,000
+frames per cell, the smallest median of 3 interleaved rounds:
+
+| N | evaluate only | + `values.tolist()` | + `v[i]` per value | + `setattr` in Python | `bind()` | fields + `field_values.tolist()` | fields + `f.value` each |
+|---|---|---|---|---|---|---|---|
+| 0 | 0.1 | 0.2 | 0.2 | 0.3 | 0.1 | 0.2 | 0.2 |
+| 10 | 0.2 | 0.3 | 0.6 | 0.6 | 0.4 | 0.6 | 0.6 |
+| 100 | 0.9 | 1.6 | 4.0 | 4.2 | 3.1 | 5.5 | 4.5 |
+| 1000 | 9.3 | 20.4 | 42.0 | 39.7 | 27.5 | 57.3 | 42.9 |
+
+Median us per frame. The p99 of the 1000 rows is 31 to 215 us, the
+worst `fields_tolist` (it reads all 4 words of every slot). MEX: the mean
+per frame over blocks of 100 frames (Octave's `tic` and `toc` on Windows
+step in 0.5 ms, too coarse for one frame), the median block of 100, the
+smallest of 3 rounds; `values` asks for the value row only, `+ events`
+also for the event struct, `fields` for the 4 x slots matrix too:
+
+| N | MATLAB R2023a values | + events | fields | Octave 10.1 values | + events | fields |
+|---|---|---|---|---|---|---|
+| 0 | 1.0 | 1.9 | 2.0 | 10.8 | 23.2 | 25.1 |
+| 10 | 1.0 | 2.0 | 2.3 | 10.8 | 23.6 | 23.4 |
+| 100 | 1.9 | 2.7 | 3.6 | 11.2 | 23.5 | 26.1 |
+| 1000 | 9.5 | 10.5 | 15.3 | 17.7 | 31.0 | 33.7 |
+
+What the tables show:
+
+- **1000 values cost 9.5 to 34 us a frame**, at most 0.2% of a 16.7 ms
+  frame and 1.7% of a 2 ms frame at 500 Hz, on every path but the
+  per-value loops in Python (40 to 57 us). At 10 or 100 values the binding costs under 5 us
+  in Python and MATLAB.
+- The C evaluate is most of the 1000-value cost in Python and MATLAB: 9.3
+  us, the 8 ns per tween of "Targets". Reading the view with `tolist()`
+  adds 11 us; a Python loop over the values adds 30 us.
+- Octave's MEX call costs about 11 us, and an output struct (the events,
+  even with none) about 12 us more. In Octave, ask for the events output
+  only on the frames that need it, or use `'events'` after the trial.
+
+### Verification
+
+- Python, `tests/test_timeline.py`, 23 tests (25 since the view fix): the manual's trial by calls
+  and as an op table (the same values and records on 90 frames), landing
+  frames and residuals against the quantization rule, every ease against
+  its formula, a rewind that replays 100 frames bit for bit (values,
+  fields and records), seeks to 6 frames that give continuous play, two
+  timelines given the same calls, fields (to, from, fromTo, set with its
+  record, int32, stagger, overwrite, kill, free), callbacks (order, rewind,
+  an exception), keyed, Bezier, sampled and repeating tracks, the takeover
+  of a channel tween, times in seconds and their refusals, every error
+  class, late events, peek, rate, pause, prune with the callback sweep,
+  `bind()`, and (since the view fix) the views after `del` and `close()`.
+  Pass on Windows 11 with CPython 3.14.3 and 3.9 (MSVC) and in
+  WSL2 Ubuntu 22.04 with CPython 3.10.12 (gcc 11.4, which also builds the
+  extension with `-Wall -Wextra` and no warning but `-Wpedantic`'s on the
+  Python slot casts).
+- After the view fix: 25 tests (the 23 and the two view checks) pass on
+  Windows (CPython 3.14.3, `uv --no-cache`), in WSL2, and in WSL2 with the
+  extension built with gcc 11.4 `-fsanitize=address,undefined` (no
+  report). The bench again, same conditions: N = 1000, evaluate 7.4 us and
+  with `tolist()` 16.7 us (the table's run: 9.3 and 20.4), inside the
+  spread between runs, so the views did not add cost.
+- MEX, `test_mex_timeline.m`, 44 checks of the same kinds: pass in MATLAB
+  R2023a (MSVC) and Octave 10.1 (MinGW gcc).
+- The Linux build first failed two queries: `tl_time_out(call(&out), out)`
+  read `out` before the call wrote it under gcc. MSVC evaluated the call
+  first. Both bindings now make the call in its own statement.
+
 ## Not done
 
+- Parameter tables (v0.8.0): the names are the C fields. The map from a
+  definition's step keys to ops and rows (`set` to `set_value`, `wait_s`
+  to WAIT's `t_ns`, a role to a trigger channel) is the player's, and
+  nothing checks it yet. The tables do not list a target tween's fields,
+  a track (`ytl_track`) or a key (`ytl_key`): none is a step.
 - No snapshot format. The storage is the record. A resume after a crash
   adds the events again and anchors again.
 - One timeline is for one display. A second display that flips on its own
@@ -1683,7 +2064,7 @@ clean on MinGW gcc 16.1, MSVC 19.44 (C++20) and gcc 11.4.
     until a kill; `YTL_OVERWRITE_ALL` is the way to retarget there.
   - A set changes a field and leaves no landing record. A mark or a
     trigger at the same time gives one.
-  - No target form of the op tables, and no binding from Python, MATLAB
-    or a script layer.
+  - No target form of the op tables, and no binding from a script layer.
+    Python and MATLAB have one since 2026-10-25 (see "Bindings").
   - Not run on clang or emscripten. This round ran MinGW gcc 16.1, MSVC
     19.44 and gcc 11.4 under WSL2 (ASan and UBSan).

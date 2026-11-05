@@ -104,7 +104,7 @@ def folds(n, k, seed):
 # Each returns (p_test, lengthscales in raw units or None, notes dict).
 
 def fit_ysp(Xtr, ytr, Xte, variant):
-    import ysp.aep as pg
+    import ysp.aep as yaep
     desc = dict(lo=list(LO), hi=list(HI), intensity_dim=0, target_p=0.75,
                 acq="lse", n_candidates=64, max_trials=MAX_TRIALS,
                 stop_trials=MAX_TRIALS, fit=True, fit_every=0,
@@ -116,13 +116,13 @@ def fit_ysp(Xtr, ytr, Xte, variant):
     if variant == "psychometric":
         desc["model"] = "psychometric"
         del desc["refit_every"]   # the psychometric model always refits
-    g = pg.GP(**desc)
+    g = yaep.GP(**desc)
     t0 = time.perf_counter()
     numeric = 0
     for x, y in zip(Xtr, ytr):
         try:
             g.update(list(x), int(y))
-        except pg.Numeric:
+        except yaep.Numeric:
             numeric += 1
     g.refit()
     # One fit is at most 40 objective evaluations, and on 500 trials in six

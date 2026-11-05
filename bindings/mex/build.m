@@ -4,6 +4,7 @@ function build(name)
 %   build()             builds every ysp_*.c in this directory
 %   build('parallel')   builds only ysp_parallel.c
 %   build('quest')      builds only ysp_quest.c
+%   build('rt')         builds only ysp_rt.c
 %
 %   Run it from any directory:  run('.../bindings/mex/build.m')
 %   Each MEX file is written next to its source as ysp_<name>.<mexext>.
@@ -13,6 +14,13 @@ function build(name)
 
     here = fileparts(mfilename('fullpath'));
     root = fullfile(here, '..', '..', 'include'); % include/ysp/ holds the headers
+    share = fullfile(here, '..', 'share');        % the shared tables (ysp_audio, ysp_timeline)
+    % ysp_audio.c needs miniaudio.h 0.11.25 (CMakeLists.txt's YSP_FETCH_MINIAUDIO
+    % pin): from YSP_MINIAUDIO_DIR, or in bindings/mex/miniaudio/.
+    ma = getenv('YSP_MINIAUDIO_DIR');
+    if isempty(ma) || ~exist(fullfile(ma, 'miniaudio.h'), 'file')
+        ma = fullfile(here, 'miniaudio');
+    end
 
     if nargin < 1
         d = dir(fullfile(here, 'ysp_*.c'));
@@ -30,8 +38,38 @@ function build(name)
     % The adaptive-method sources (ysp_stair.c, ysp_quest.c, ysp_aep.c,
     % ysp_trials.c) are pure computation and build everywhere; ysp_quest.c
     % and ysp_aep.c define YQST_ASYNC / YAEP_ASYNC themselves, so they
-    % compile ysp/rt.h and need only the thread library below.
-    unsupported = {'ysp_parallel.c', ismac};
+    % compile ysp/rt.h and need only the thread library below. ysp_rt.c
+    % (ysp/rt.h itself) is the same: no gate, the thread library only.
+    % ysp_pack.c compiles ysp/pack.h and the ysp/json.h it requires; it maps
+    % files through the OS (Windows, POSIX) and needs no library.
+    % ysp_response.c (ysp/response.h with ysp/input.h) is pure computation
+    % too and needs no library.
+    % ysp-vis (ysp_vis.c, the core, and the thin ysp_screen.c, ysp_gfx.c,
+    % ysp_video.c; docs/bindings.md) is Windows only: the other screen
+    % backends are stubs.
+    unsupported = {'ysp_parallel.c', ismac; 'ysp_vis.c', ~ispc; 'ysp_screen.c', ~ispc; ...
+                   'ysp_gfx.c', ~ispc; 'ysp_video.c', ~ispc};
+    % ysp_vis.c links a static SDL3 3.4.0 and the static text layout
+    % (pack/layout.c, Skribidi, HarfBuzz, SheenBidi, libunibreak, budouxc),
+    % and gets ANGLE's libEGL.dll and libGLESv2.dll beside it, all from
+    % third_party/vis/, which tools/vendor_vis.py makes (after
+    % tools/vendor_layout.py --write): --sdl msvc --layout msvc for MATLAB,
+    % --sdl mingw --layout mingw with Octave's own gcc for Octave.
+    vis = fullfile(here, '..', '..', 'third_party', 'vis');
+    is_octave = exist('OCTAVE_VERSION', 'builtin') ~= 0;
+    if is_octave
+        vis_sdl = fullfile(vis, 'sdl3', 'mingw');
+        vis_lib = 'libSDL3.a';
+        vis_lay = fullfile(vis, 'layout', 'mingw');
+        vis_lay_lib = 'libysp_harfbuzz.a';
+        vis_tc = 'mingw --mingw-bin <Octave>/mingw64/bin';
+    else
+        vis_sdl = fullfile(vis, 'sdl3', 'msvc');
+        vis_lib = 'SDL3-static.lib';
+        vis_lay = fullfile(vis, 'layout', 'msvc');
+        vis_lay_lib = 'ysp_harfbuzz.lib';
+        vis_tc = 'msvc';
+    end
 
     % mex writes its output to the current directory; build next to the
     % sources so the result lands in bindings/mex regardless of the caller's cwd.
@@ -44,7 +82,70 @@ function build(name)
             fprintf('skipping %s: not supported on this platform\n', srcs{i});
             continue;
         end
-        args = {['-I' root], srcs{i}};
+        if strcmp(srcs{i}, 'ysp_vis.c') && (~exist(fullfile(vis_sdl, 'lib', vis_lib), 'file') || ...
+                                            ~exist(fullfile(vis, 'angle', 'libEGL.dll'), 'file') || ...
+                                            ~exist(fullfile(vis, 'pl_mpeg', 'pl_mpeg.h'), 'file') || ...
+                                            ~exist(fullfile(vis_lay, 'lib', vis_lay_lib), 'file'))
+            fprintf('skipping ysp_vis.c: no static SDL3, ANGLE, pl_mpeg or text layout in %s (tools/vendor_layout.py --write, then tools/vendor_vis.py --write --angle --pl-mpeg --sdl %s --layout %s)\n', ...
+                    vis, vis_tc, strtok(vis_tc));
+            continue;
+        end
+        if strcmp(srcs{i}, 'ysp_audio.c') && ~exist(fullfile(ma, 'miniaudio.h'), 'file')
+            fprintf('skipping ysp_audio.c: no miniaudio.h (set YSP_MINIAUDIO_DIR or put it in %s)\n', fullfile(here, 'miniaudio'));
+            continue;
+        end
+        args = {['-I' root], ['-I' share], srcs{i}};
+        % The owners of a shared table export ysp_<name>_api_table() too
+        % (docs/bindings.md, "Sharing one implementation across modules").
+        % MATLAB on Linux and macOS links a MEX file with a list that exports
+        % mexFunction alone; this list adds the table function.
+        if any(strcmp(srcs{i}, {'ysp_audio.c', 'ysp_timeline.c'})) && ~ispc && ~exist('OCTAVE_VERSION', 'builtin')
+            sym = [srcs{i}(1:end-2) '_api_table'];
+            lst = [tempname() '.map'];
+            fid = fopen(lst, 'w');
+            if ismac
+                fprintf(fid, '_mexFunction\n_mexfilerequiredapiversion\n_%s\n', sym);
+                flag = ['-Wl,-exported_symbols_list,' lst];
+            else
+                fprintf(fid, 'MEX { global: mexFunction; mexfilerequiredapiversion; %s; local: *; };\n', sym);
+                flag = ['-Wl,--version-script,' lst];
+            end
+            fclose(fid);
+            args(end+1:end+2) = {['LINKEXPORT=' flag], ['LINKEXPORTVER=' flag]};   %#ok<AGROW>
+        end
+        if strcmp(srcs{i}, 'ysp_audio.c')
+            args{end+1} = ['-I' ma];   %#ok<AGROW>
+            if ~ispc
+                % miniaudio loads its backends with dlopen.
+                args(end+1:end+2) = {'-ldl', '-lm'};   %#ok<AGROW>
+            end
+        end
+        if strcmp(srcs{i}, 'ysp_vis.c')
+            % The system libraries SDL3.dll imports itself (tools/vendor_vis.py).
+            sys = {'-luser32', '-lgdi32', '-lwinmm', '-limm32', '-lole32', '-loleaut32', '-lversion', ...
+                   '-luuid', '-ladvapi32', '-lsetupapi', '-lshell32', '-ldinput8'};
+            args = [args, {['-I' fullfile(vis_sdl, 'include')], ['-I' fullfile(vis, 'pl_mpeg')], ['-L' fullfile(vis_sdl, 'lib')], ...
+                           ['-I' fullfile(vis_lay, 'include')], ['-L' fullfile(vis_lay, 'lib')]}];   %#ok<AGROW>
+            % The text layout, in link order (tools/vendor_vis.py, LAYOUT_LIBS).
+            lay = {'-lysp_vis_layout', '-lysp_skribidi', '-lysp_harfbuzz', '-lysp_sheenbidi', '-lysp_unibreak', '-lysp_budoux'};
+            if is_octave
+                % Stripped: about 10 MB to 5 MB (docs/winthread_probe.md, section 6).
+                args = [args, lay, {'-lSDL3'}, sys, {'-s'}];   %#ok<AGROW>
+            else
+                args = [args, lay, {'-lSDL3-static'}, sys];   %#ok<AGROW>
+            end
+            % Beside the core: ysp/screen.h loads libEGL.dll from the core's own
+            % directory (desc.angle_dir), and libEGL loads libGLESv2.dll from its own.
+            copyfile(fullfile(vis, 'angle', 'libEGL.dll'), here);
+            copyfile(fullfile(vis, 'angle', 'libGLESv2.dll'), here);
+            copyfile(fullfile(vis, 'angle', 'LICENSE.ANGLE.txt'), fullfile(here, 'ysp_vis-LICENSE.ANGLE.txt'));
+            copyfile(fullfile(vis, 'sdl3', 'LICENSE.txt'), fullfile(here, 'ysp_vis-LICENSE.SDL3.txt'));
+            copyfile(fullfile(vis, 'pl_mpeg', 'LICENSE.txt'), fullfile(here, 'ysp_vis-LICENSE.pl_mpeg.txt'));
+            lic = {'Skribidi', 'HarfBuzz', 'SheenBidi', 'libunibreak', 'budouxc'};
+            for k = 1:numel(lic)
+                copyfile(fullfile(vis, 'layout', ['LICENSE.' lic{k} '.txt']), fullfile(here, ['ysp_vis-LICENSE.' lic{k} '.txt']));
+            end
+        end
         if ispc
             % Windows async-pulse workers use Win32 threads, so no thread
             % library. ysp/serial.h does need SetupAPI and the registry for
@@ -53,12 +154,14 @@ function build(name)
             % link with undefined SetupDi*. mex takes -l<name> on both
             % toolchains (it becomes <name>.lib for MSVC), so one spelling
             % covers them.
-            if strcmp(srcs{i}, 'ysp_serial.c')
+            % ysp_device.c and ysp_rigfile.c compile ysp/serial.h too.
+            if any(strcmp(srcs{i}, {'ysp_serial.c', 'ysp_device.c', 'ysp_rigfile.c'}))
                 args(end+1:end+2) = {'-lsetupapi', '-ladvapi32'};   %#ok<AGROW>
             end
         else
-            % The async-pulse workers, and the async inference threads of
-            % ysp_quest.c and ysp_aep.c, use pthreads on Linux/macOS.
+            % The async-pulse workers, the async inference threads of
+            % ysp_quest.c and ysp_aep.c, and ysp/rt.h's worker and pump in
+            % ysp_rt.c use pthreads on Linux/macOS.
             args{end+1} = '-lpthread';   %#ok<AGROW>
         end
         mex(args{:});

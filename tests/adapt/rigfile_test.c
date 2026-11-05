@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #if defined(_WIN32)
 #include <direct.h>
 #define getcwd _getcwd
@@ -54,6 +55,22 @@ static uint64_t rnd64(void) {
 static int rnd(int n) { return (int)(rnd64() % (uint64_t)n); }
 
 static yrig_profile g_p, g_q;
+
+/* yrig_find() for a role the check needs: a missing role is a failure,
+ * and the check goes on with a scratch role instead of a NULL. A save that
+ * failed (YRIG_ERR_IO, a held file) then a load that found no file left
+ * g_q empty, and the next yrig_find(...)-> crashed the test (2026-10-27,
+ * MSVC ctest -j 4). */
+static yrig_role g_no_role;
+static yrig_role* role_at(yrig_profile* p, const char* name, int line) {
+    yrig_role* r = yrig_find(p, name);
+    if (r) return r;
+    fprintf(stderr, "rigfile_test: FAIL at line %d: no role \"%s\"\n", line, name ? name : "(null)");
+    g_failures++;
+    memset(&g_no_role, 0, sizeof g_no_role);
+    return &g_no_role;
+}
+#define ROLE(p, name) role_at((p), (name), __LINE__)
 static char g_buf[1 << 16];
 static char g_err[512];
 
@@ -123,7 +140,7 @@ static void build_golden(yrig_profile* p) {
     yrig_init(p, "booth-2 \xC3\xA9");
     strcpy(p->written, "2026-10-09T14:03:00Z");
     CHECK_I(yrig_bind(p, "trig", YBOX_TRIGGERBOX, "serial:0403:6001:TB0123:"), YRIG_OK);
-    r = yrig_find(p, "trig");
+    r = ROLE(p, "trig");
     r->pulse_ns = 2000000000;
     r->latency.set = true;
     r->latency.n = 200;
@@ -134,7 +151,7 @@ static void build_golden(yrig_profile* p) {
     strcpy(r->latency.date, "2026-10-09T13:58:12Z");
     strcpy(r->latency.sha256, C64);
     CHECK_I(yrig_bind(p, "resp", YBOX_XID, "serial:0403:6001:FT4ABC12:"), YRIG_OK);
-    r = yrig_find(p, "resp");
+    r = ROLE(p, "resp");
     r->baud = 115200;
     r->ftdi_latency_ns = 1000000;
     r->n_buttons = 2;
@@ -149,7 +166,7 @@ static void build_golden(yrig_profile* p) {
     strcpy(r->bounds.date, "2026-10-08T09:00:00Z");
     strcpy(r->bounds.sha256, B64);
     CHECK_I(yrig_bind(p, "mm", YBOX_MMBTS, "serial:2341:0043::"), YRIG_OK);
-    yrig_find(p, "mm")->latched = true;
+    ROLE(p, "mm")->latched = true;
     p->display.set = true;
     p->display.onset_offset_ns = 12300000;
     strcpy(p->display.calibration, "display.yspcal");
@@ -431,11 +448,11 @@ static void check_edit(void) {
     CHECK_I(yrig_bind(&g_q, "bad name", YBOX_LINE, "k"), YRIG_ERR_ARG);
     /* a binding clears what was measured on the old device */
     build_golden(&g_q);
-    r = yrig_find(&g_q, "mm");
+    r = ROLE(&g_q, "mm");
     CHECK(r && r->latched);
     CHECK_I(yrig_bind(&g_q, "mm", YBOX_LINES, "serial:0403:6001:AD1:"), YRIG_OK);
     CHECK(!r->latched);
-    r = yrig_find(&g_q, "trig");
+    r = ROLE(&g_q, "trig");
     CHECK(r->latency.set);
     CHECK_I(yrig_bind(&g_q, "trig", YBOX_TRIGGERBOX, "serial:0403:6001:TB9999:"), YRIG_OK);
     CHECK(!r->latency.set && r->pulse_ns == 2000000000);
@@ -518,9 +535,9 @@ static void check_files(void) {
     CHECK(write_text(path, "a calibration"));
     sha_hex("a calibration", 13, csha);
     build_golden(&g_p);
-    r = yrig_find(&g_p, "trig");
+    r = ROLE(&g_p, "trig");
     r->latency = lb;
-    r = yrig_find(&g_p, "resp");
+    r = ROLE(&g_p, "resp");
     strcpy(r->bounds.sha256, bsha);
     strcpy(g_p.display.calibration_sha256, csha);
     snprintf(path, sizeof path, "%s" YRIG__SEP "profile.json", g_dir);
@@ -529,9 +546,9 @@ static void check_files(void) {
     CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
     CHECK_S(g_q.dir, g_dir);
     CHECK_I(g_q.n_notes, 0);
-    CHECK_I(yrig_find(&g_q, "trig")->latency.check, YRIG_CHECK_OK);
-    CHECK_I(yrig_find(&g_q, "resp")->bounds.check, YRIG_CHECK_OK);
-    CHECK_I(yrig_find(&g_q, "mm")->latency.check, YRIG_CHECK_NONE);
+    CHECK_I(ROLE(&g_q, "trig")->latency.check, YRIG_CHECK_OK);
+    CHECK_I(ROLE(&g_q, "resp")->bounds.check, YRIG_CHECK_OK);
+    CHECK_I(ROLE(&g_q, "mm")->latency.check, YRIG_CHECK_NONE);
     CHECK_I(g_q.display.check, YRIG_CHECK_OK);
     /* the file holds the canonical bytes */
     {
@@ -547,19 +564,19 @@ static void check_files(void) {
         free(text);
     }
     /* the summary edited by hand: DIFFERS */
-    yrig_find(&g_p, "trig")->latency.median_ns = 578000;
+    ROLE(&g_p, "trig")->latency.median_ns = 578000;
     CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
     CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
-    CHECK_I(yrig_find(&g_q, "trig")->latency.check, YRIG_CHECK_DIFFERS);
+    CHECK_I(ROLE(&g_q, "trig")->latency.check, YRIG_CHECK_DIFFERS);
     CHECK_I(g_q.n_notes, 1);
     CHECK_HAS(g_q.notes[0], "roles.trig.latency");
     CHECK_HAS(g_q.notes[0], "does not match the profile's summary: the role's tier is UNKNOWN");
-    yrig_find(&g_p, "trig")->latency.median_ns = 577000;
+    ROLE(&g_p, "trig")->latency.median_ns = 577000;
     CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
     /* a loopback file changed: CHANGED */
     CHECK(write_text(lp, "format ysp-out-latency 1\nn 1\n"));
     CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
-    CHECK_I(yrig_find(&g_q, "trig")->latency.check, YRIG_CHECK_CHANGED);
+    CHECK_I(ROLE(&g_q, "trig")->latency.check, YRIG_CHECK_CHANGED);
     CHECK_HAS(g_q.notes[0], "has changed");
     /* removed: MISSING; the calibration too */
     CHECK(remove(lp) == 0);
@@ -567,8 +584,8 @@ static void check_files(void) {
     CHECK(write_text(path, "another calibration"));
     snprintf(path, sizeof path, "%s" YRIG__SEP "profile.json", g_dir);
     CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
-    CHECK_I(yrig_find(&g_q, "trig")->latency.check, YRIG_CHECK_MISSING);
-    CHECK_I(yrig_find(&g_q, "resp")->bounds.check, YRIG_CHECK_OK);
+    CHECK_I(ROLE(&g_q, "trig")->latency.check, YRIG_CHECK_MISSING);
+    CHECK_I(ROLE(&g_q, "resp")->bounds.check, YRIG_CHECK_OK);
     CHECK_I(g_q.display.check, YRIG_CHECK_CHANGED);
     CHECK_I(g_q.n_notes, 2);
     CHECK_HAS(g_q.notes[0], "is missing");
@@ -579,7 +596,7 @@ static void check_files(void) {
         size_t n;
         CHECK_I(yrig__read(path, YRIG_MAX_BYTES, &text, &n), YRIG_OK);
         CHECK_I(yrig_parse(&g_q, text, n, NULL, g_err, sizeof g_err), YRIG_OK);
-        CHECK_I(yrig_find(&g_q, "trig")->latency.check, YRIG_CHECK_NOT_RUN);
+        CHECK_I(ROLE(&g_q, "trig")->latency.check, YRIG_CHECK_NOT_RUN);
         CHECK_I(g_q.n_notes, 0);
         CHECK_S(g_q.dir, "");
         free(text);
@@ -591,7 +608,7 @@ static void check_files(void) {
             char name[8];
             sprintf(name, "r%d", k);
             CHECK_I(yrig_bind(&g_p, name, YBOX_XID, "k"), YRIG_OK);
-            r = yrig_find(&g_p, name);
+            r = ROLE(&g_p, name);
             r->bounds.set = true;
             r->bounds.n = 1;
             strcpy(r->bounds.date, "2026-10-09T00:00:00Z");
@@ -617,6 +634,106 @@ static void check_files(void) {
     CHECK_S(g_q.dir, ".");
     remove("rig_test_here.json");
     printf("  files and checks: ok\n");
+}
+
+/* ------------------------------------------------------------ held files */
+
+/* v0.5.1: another program holds the profile. Under MSVC ctest -j 4 a save
+ * failed with YRIG_ERR_IO in about 1 run of 150 (ERROR_ACCESS_DENIED from
+ * MoveFileExW; the holder is outside the test, likely a scanner), and the
+ * test crashed after it. Now the rename tries 5 times, 10 ms apart. */
+#if defined(_WIN32)
+static HANDLE g_held, g_releaser_up;
+static wchar_t g_held_tmp[900];
+
+/* Closes g_held 1 ms after the save's temporary file exists: by then the
+ * first rename has failed, and a later try must succeed. It runs at
+ * TIME_CRITICAL and spins, and the save starts only once it runs: with a
+ * Sleep() in it, it let go too late for the 40 ms of tries in 5 of 1200
+ * runs, 4 copies at a time beside ctest -j 4. */
+static DWORD WINAPI release_when_saving(LPVOID arg) {
+    LARGE_INTEGER t0, t, fq;
+    (void)arg;
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+    QueryPerformanceFrequency(&fq);
+    QueryPerformanceCounter(&t0);
+    SetEvent(g_releaser_up);
+    do QueryPerformanceCounter(&t);
+    while (GetFileAttributesW(g_held_tmp) == INVALID_FILE_ATTRIBUTES && t.QuadPart - t0.QuadPart < 2 * fq.QuadPart);
+    t0 = t;
+    do QueryPerformanceCounter(&t);
+    while ((t.QuadPart - t0.QuadPart) * 1000 < fq.QuadPart);
+    CloseHandle(g_held);
+    return 0;
+}
+
+static HANDLE hold(const char* path) {
+    wchar_t w[900];
+    MultiByteToWideChar(CP_UTF8, 0, path, -1, w, 900);
+    /* as a scanner or Python's open() does: no FILE_SHARE_DELETE */
+    return CreateFileW(w, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+                       FILE_ATTRIBUTE_NORMAL, NULL);
+}
+#endif
+
+static void check_held(void) {
+#if defined(_WIN32)
+    char path[900], tmp[920];
+    char* before;
+    char* after;
+    size_t nb, na;
+    LARGE_INTEGER t0, t1, fq;
+    HANDLE th;
+    int rc;
+    snprintf(path, sizeof path, "%s" YRIG__SEP "held.json", g_dir);
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    MultiByteToWideChar(CP_UTF8, 0, tmp, -1, g_held_tmp, 900);
+    build_golden(&g_p);
+    CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig__read(path, YRIG_MAX_BYTES, &before, &nb), YRIG_OK);
+    /* held for the whole save: the tries end, the old file stays, the
+     * temporary goes, and the message says why */
+    g_held = hold(path);
+    CHECK(g_held != INVALID_HANDLE_VALUE);
+    QueryPerformanceFrequency(&fq);
+    QueryPerformanceCounter(&t0);
+    CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_ERR_IO);
+    QueryPerformanceCounter(&t1);
+    CHECK_HAS(g_err, "cannot replace it (Windows error 5");
+    CHECK_HAS(g_err, "the old file stays");
+    CHECK((t1.QuadPart - t0.QuadPart) * 1000 / fq.QuadPart >= 35);   /* 5 tries, 4 waits of 10 ms */
+    /* a load meanwhile: a reader denies no one (v0.5.1; _wfopen_s did) */
+    CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
+    CloseHandle(g_held);
+    CHECK(!file_exists(tmp));
+    CHECK_I(yrig__read(path, YRIG_MAX_BYTES, &after, &na), YRIG_OK);
+    CHECK(before && after && na == nb && memcmp(before, after, nb) == 0);
+    free(after);
+    /* held, and let go during the save: a later try replaces it */
+    g_held = hold(path);
+    CHECK(g_held != INVALID_HANDLE_VALUE);
+    g_p.display.onset_offset_ns = 4500000;
+    g_releaser_up = CreateEventW(NULL, TRUE, FALSE, NULL);
+    th = CreateThread(NULL, 0, release_when_saving, NULL, 0, NULL);
+    CHECK(th != NULL && g_releaser_up != NULL);
+    if (th) WaitForSingleObject(g_releaser_up, INFINITE);
+    rc = yrig_save_file(&g_p, path, g_err, sizeof g_err);
+    CHECK_I(rc, YRIG_OK);
+    if (rc != YRIG_OK) fprintf(stderr, "rigfile_test: %s\n", g_err);
+    if (th) {
+        WaitForSingleObject(th, INFINITE);
+        CloseHandle(th);
+    }
+    if (g_releaser_up) CloseHandle(g_releaser_up);
+    CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(g_q.display.onset_offset_ns, 4500000);
+    CHECK(!file_exists(tmp));
+    free(before);
+    remove(path);
+    printf("  held files: the old file stays, a later try replaces it, a load reads it: ok\n");
+#else
+    printf("  held files: Windows only (POSIX rename replaces an open file)\n");
+#endif
 }
 
 /* --------------------------------------------------------- the user folder */
@@ -812,7 +929,7 @@ static void check_binding(void) {
     CHECK_I(yrig_desc(NULL, "trig", &d, g_err, sizeof g_err), YRIG_ERR_ARG);
     /* start the output from the profile: the key reaches the transport,
      * the role its index, and the box gets its bytes */
-    g_p.role[yrig_find(&g_p, "trig") - g_p.role].pulse_ns = 2000000;
+    ROLE(&g_p, "trig")->pulse_ns = 2000000;
     memset(&g_fb, 0, sizeof g_fb);
     CHECK(yrig_open_device(&dev, &g_p, "trig", &base));
     CHECK_I(ydev_wait_running(&dev, YRT_MS(5)), YDEV_RUNNING);
@@ -832,7 +949,7 @@ static void check_binding(void) {
     {
         /* bounds on an output family, checked: still no tier (tier 1 is a
          * device clock's, and a trigger box has none) */
-        yrig_role* tr = yrig_find(&g_p, "trig");
+        yrig_role* tr = ROLE(&g_p, "trig");
         tr->bounds.set = true;
         tr->bounds.check = YRIG_CHECK_OK;
         CHECK_I(yrig_source(&g_p, &dev).tier, YIN_TIER_UNKNOWN);
@@ -844,17 +961,17 @@ static void check_binding(void) {
     CHECK(yrig_open_device(&dev, &g_p, "resp", &base));
     s = yrig_source(&g_p, &dev);
     CHECK_I(s.tier, YIN_TIER_UNKNOWN);                  /* NOT_RUN: no folder */
-    yrig_find(&g_p, "resp")->bounds.check = YRIG_CHECK_OK;
+    ROLE(&g_p, "resp")->bounds.check = YRIG_CHECK_OK;
     s = yrig_source(&g_p, &dev);
     CHECK_I(s.tier, YIN_TIER_1);
     CHECK_I(s.lo_ns, -300000);
     CHECK_I(s.hi_ns, 1100000);
     CHECK_I(s.device, (int)dev.d.device);
     CHECK_HAS(s.note, "checked by SHA-256");
-    yrig_find(&g_p, "resp")->bounds.check = YRIG_CHECK_CHANGED;
+    ROLE(&g_p, "resp")->bounds.check = YRIG_CHECK_CHANGED;
     s = yrig_source(&g_p, &dev);
     CHECK(s.tier == YIN_TIER_UNKNOWN && s.lo_ns == 0 && s.hi_ns == 0);
-    yrig_find(&g_p, "resp")->bounds.check = YRIG_CHECK_OK;
+    ROLE(&g_p, "resp")->bounds.check = YRIG_CHECK_OK;
     CHECK_I(yrig_source(&g_q, &dev).tier, YIN_TIER_UNKNOWN);   /* another profile without the role */
     ydev_close(&dev);
     /* a start that the device layer refuses names the role */
@@ -966,8 +1083,8 @@ static void check_lsl(void) {
     /* read, written back to the same bytes */
     CHECK_I(yrig_parse(&g_q, T, strlen(T), NULL, g_err, sizeof g_err), YRIG_OK);
     CHECK_I(g_q.n_roles, 2);
-    CHECK_I(yrig_find(&g_q, "ref")->family_id, YRIG_FAMILY_LSL);
-    CHECK_S(yrig_find(&g_q, "ref")->family, "lsl");
+    CHECK_I(ROLE(&g_q, "ref")->family_id, YRIG_FAMILY_LSL);
+    CHECK_S(ROLE(&g_q, "ref")->family, "lsl");
     n = yrig_write(&g_q, g_buf, sizeof g_buf);
     CHECK(n == strlen(T) && memcmp(g_buf, T, n) == 0);
     /* the binding: refused for ysp/device.h, with the header to use */
@@ -981,7 +1098,7 @@ static void check_lsl(void) {
     s.tier = YIN_TIER_2;
     s.note = "the inlet's";
     CHECK_I(yrig_source_role(&g_q, "ref", s).tier, YIN_TIER_UNKNOWN);   /* NOT_RUN */
-    yrig_find(&g_q, "ref")->bounds.check = YRIG_CHECK_OK;
+    ROLE(&g_q, "ref")->bounds.check = YRIG_CHECK_OK;
     s = yrig_source_role(&g_q, "ref", s);
     CHECK(s.tier == YIN_TIER_1 && s.lo_ns == -100000 && s.hi_ns == 200000 && s.kind == YIN_KIND_SYNC);
     CHECK_I(yrig_source_role(&g_q, "lat", s).tier, YIN_TIER_UNKNOWN);   /* no bounds */
@@ -1011,18 +1128,340 @@ static void check_lsl(void) {
     /* bind: family and key must agree; a new lsl binding drops serial options */
     yrig_init(&g_q, "r");
     CHECK_I(yrig_bind(&g_q, "ref", YRIG_FAMILY_LSL, "lsl:Data::"), YRIG_OK);
-    CHECK_S(yrig_find(&g_q, "ref")->family, "lsl");
+    CHECK_S(ROLE(&g_q, "ref")->family, "lsl");
     CHECK_I(yrig_bind(&g_q, "ref", YRIG_FAMILY_LSL, "serial:0403:6001::"), YRIG_ERR_ARG);
     CHECK_I(yrig_bind(&g_q, "ref", YBOX_LINE, "lsl:Data::"), YRIG_ERR_ARG);
     CHECK_I(yrig_bind(&g_q, "ref", YRIG_FAMILY_LSL, "lsl:it's"), YRIG_ERR_ARG);
     CHECK_I(yrig_bind(&g_q, "ref", 63, "lsl:Data::"), YRIG_ERR_ARG);
     CHECK_I(yrig_bind(&g_q, "x", YBOX_XID, "serial:0403:6001:FT1:"), YRIG_OK);
-    yrig_find(&g_q, "x")->baud = 115200;
-    yrig_find(&g_q, "x")->pulse_ns = 2000000;
+    ROLE(&g_q, "x")->baud = 115200;
+    ROLE(&g_q, "x")->pulse_ns = 2000000;
     CHECK_I(yrig_bind(&g_q, "x", YRIG_FAMILY_LSL, "lsl:Markers"), YRIG_OK);
-    CHECK(yrig_find(&g_q, "x")->baud == 0 && yrig_find(&g_q, "x")->pulse_ns == -1);
+    CHECK(ROLE(&g_q, "x")->baud == 0 && ROLE(&g_q, "x")->pulse_ns == -1);
     n = yrig_write(&g_q, g_buf, sizeof g_buf);
     CHECK(n > 0 && yrig_parse(&g_p, g_buf, n, NULL, g_err, sizeof g_err) == YRIG_OK);
+}
+
+/* ------------------------------------- bounds and display onset (v0.4.0) */
+
+/* An input bounds file as examples/rigfile/bounds.c writes it. */
+static const char BNDFILE[] =
+    "# ysp input bounds: the input's event time minus the reference board's edge (docs/devices_spec.md 12)\n"
+    "format ysp-in-bounds 1\n"
+    "date 2026-10-13T10:00:00Z\n"
+    "in_family xid\n"
+    "n 398\n"
+    "missed 2\n"
+    "lo_s -0.000312000\n"
+    "median_s 0.000101000\n"
+    "hi_s 0.001104000\n"
+    "samples_s -0.000312000 0.001104000\n";
+
+/* A display onset file as examples/rigfile/onset.c writes it. */
+static const char ONSFILE[] =
+    "# ysp display onset: photodiode edge minus flip onset (docs/devices_spec.md 12)\n"
+    "format ysp-display-onset 1\n"
+    "date 2026-10-13T10:05:00Z\n"
+    "n 1180\n"
+    "min_s 0.011900000\n"
+    "p5_s 0.012010000\n"
+    "median_s 0.012300000\n"
+    "p95_s 0.012610000\n"
+    "max_s 0.013000000\n"
+    "onset_offset_s 0.012300000\n";
+
+/* text with one edit, parsed without a folder: the result and a substring */
+static void refuse_in(int line, const char* text, const char* find, const char* repl, int code, const char* says) {
+    static char t[1 << 16];
+    const char* at = strstr(text, find);
+    size_t fl = strlen(find), rl = strlen(repl), pre;
+    int rc;
+    g_checks++;
+    if (!at) { fprintf(stderr, "rigfile_test: FAIL at line %d: '%s' is not in the text\n", line, find); g_failures++; return; }
+    pre = (size_t)(at - text);
+    memcpy(t, text, pre);
+    memcpy(t + pre, repl, rl);
+    strcpy(t + pre + rl, at + fl);
+    g_err[0] = '\0';
+    rc = yrig_parse(&g_q, t, strlen(t), NULL, g_err, sizeof g_err);
+    if (rc != code || !strstr(g_err, says)) {
+        fprintf(stderr, "rigfile_test: FAIL at line %d: %d '%s' (want %d '%s')\n", line, rc, g_err, code, says);
+        g_failures++;
+    }
+}
+
+static void check_v04(void) {
+    char dir[900], path[1000], bsha[65], osha[65], lsha[65], op[1100];
+    yrig_loopback lb, ob;
+    yrig_role* r;
+    yin_source s, base;
+    /* the readers of the three formats */
+    CHECK_I(yrig_read_loopback(BNDFILE, strlen(BNDFILE), &lb, g_err, sizeof g_err), YRIG_FILE_IN_BOUNDS);
+    CHECK(lb.set && lb.n == 398 && lb.lo_ns == -312000 && lb.hi_ns == 1104000 && lb.check == YRIG_CHECK_OK);
+    CHECK_S(lb.date, "2026-10-13T10:00:00Z");
+    sha_hex(BNDFILE, strlen(BNDFILE), bsha);
+    CHECK_S(lb.sha256, bsha);
+    CHECK_I(yrig_read_loopback(ONSFILE, strlen(ONSFILE), &ob, g_err, sizeof g_err), YRIG_FILE_DISPLAY_ONSET);
+    CHECK(ob.n == 1180 && ob.p5_ns == 12010000 && ob.median_ns == 12300000 && ob.p95_ns == 12610000 && ob.max_ns == 13000000);
+    CHECK_I(ob.offset_ns, 12300000);
+    CHECK_I(yrig_read_loopback(LATFILE, strlen(LATFILE), &lb, g_err, sizeof g_err), YRIG_FILE_OUT_LATENCY);
+    CHECK_I(yrig_read_latency(BNDFILE, strlen(BNDFILE), &lb, g_err, sizeof g_err), YRIG_ERR_FORMAT);
+    CHECK_HAS(g_err, "not an output latency file (format ysp-in-bounds 1)");
+    CHECK_I(yrig_read_loopback("format other 1\n", 15, &lb, g_err, sizeof g_err), YRIG_ERR_FORMAT);
+    CHECK_HAS(g_err, "not a loopback file (format other 1)");
+    CHECK_I(yrig_read_loopback("n 5\n", 4, &lb, g_err, sizeof g_err), YRIG_ERR_FORMAT);
+    CHECK_HAS(g_err, "not a loopback file (no format line)");
+    CHECK_I(yrig_read_loopback("format ysp-in-bounds 1\nn 3\nlo_s 0\ndate 2026-10-13T10:00:00Z\n", 59, &lb, g_err, sizeof g_err),
+            YRIG_ERR_FORMAT);
+    CHECK_HAS(g_err, "an input bounds file without its summary");
+    {
+        /* the onset file without its onset_offset_s line */
+        char t[1024];
+        const char* f = strstr(ONSFILE, "onset_offset_s");
+        memcpy(t, ONSFILE, (size_t)(f - ONSFILE));
+        t[f - ONSFILE] = '\0';
+        CHECK_I(yrig_read_loopback(t, strlen(t), &lb, g_err, sizeof g_err), YRIG_ERR_FORMAT);
+        CHECK_HAS(g_err, "a display onset file without its summary");
+    }
+    CHECK_I(yrig_read_loopback("format ysp-in-bounds 1\nformat ysp-out-latency 1\n", 47, &lb, g_err, sizeof g_err), YRIG_ERR_FORMAT);
+    CHECK_HAS(g_err, "two format lines");
+    CHECK_I(yrig_read_loopback("format ysp-in-bounds 1\nlo_s 1 ms\n", 34, &lb, g_err, sizeof g_err), YRIG_ERR_FORMAT);
+    CHECK_HAS(g_err, "bad lo_s");
+    CHECK_I(yrig_read_loopback(NULL, 0, &lb, g_err, sizeof g_err), YRIG_ERR_ARG);
+
+    /* a profile that names both files: stored, checked OK, canonical */
+    snprintf(dir, sizeof dir, "%s" YRIG__SEP "rig_test_work" YRIG__SEP "rig4", g_cwd);
+    CHECK_I(yrig_store_loopback(dir, BNDFILE, strlen(BNDFILE), bsha, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig_store_loopback(dir, ONSFILE, strlen(ONSFILE), osha, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig_store_loopback(dir, LATFILE, strlen(LATFILE), lsha, g_err, sizeof g_err), YRIG_OK);
+    yrig_init(&g_p, "v04");
+    CHECK_I(yrig_bind(&g_p, "resp", YBOX_XID, "serial:0403:6001:FT4ABC12:"), YRIG_OK);
+    r = ROLE(&g_p, "resp");
+    CHECK_I(yrig_read_loopback(BNDFILE, strlen(BNDFILE), &r->bounds, g_err, sizeof g_err), YRIG_FILE_IN_BOUNDS);
+    g_p.display.set = true;
+    g_p.display.onset_offset_ns = ob.offset_ns;
+    g_p.display.latency = ob;
+    snprintf(path, sizeof path, "%s" YRIG__SEP "profile.json", dir);
+    CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(g_q.n_notes, 0);
+    CHECK_I(ROLE(&g_q, "resp")->bounds.check, YRIG_CHECK_OK);
+    CHECK_I(g_q.display.latency.check, YRIG_CHECK_OK);
+    CHECK(g_q.display.latency.set && g_q.display.latency.median_ns == 12300000 && g_q.display.latency.n == 1180);
+    CHECK_S(g_q.display.latency.sha256, osha);
+    {
+        size_t n = yrig_write(&g_q, g_buf, sizeof g_buf);
+        CHECK(n > 0 && n < sizeof g_buf);
+        CHECK_HAS(g_buf, "  \"display\": {\n    \"latency\": {\n      \"date\": \"2026-10-13T10:05:00Z\",\n      \"max_s\": 0.013,\n"
+                         "      \"median_s\": 0.0123,\n      \"n\": 1180,\n      \"p5_s\": 0.01201,\n      \"p95_s\": 0.01261,\n");
+        CHECK_HAS(g_buf, "\n    },\n    \"onset_offset_s\": 0.0123\n  },\n");
+    }
+    /* tier 1 from the checked bounds file, through the role's name */
+    memset(&base, 0, sizeof base);
+    s = yrig_source_role(&g_q, "resp", base);
+    CHECK(s.tier == YIN_TIER_1 && s.lo_ns == -312000 && s.hi_ns == 1104000);
+
+    /* a bounds summary edited by hand: DIFFERS, tier UNKNOWN */
+    ROLE(&g_p, "resp")->bounds.hi_ns = 1000000;
+    CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(ROLE(&g_q, "resp")->bounds.check, YRIG_CHECK_DIFFERS);
+    CHECK_I(g_q.n_notes, 1);
+    CHECK_HAS(g_q.notes[0], "roles.resp.bounds: loopback/");
+    CHECK_HAS(g_q.notes[0], "does not match the profile's summary: the role's tier is UNKNOWN");
+    CHECK_I(yrig_source_role(&g_q, "resp", base).tier, YIN_TIER_UNKNOWN);
+    ROLE(&g_p, "resp")->bounds.hi_ns = 1104000;
+    ROLE(&g_p, "resp")->bounds.lo_ns = -300000;
+    CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(ROLE(&g_q, "resp")->bounds.check, YRIG_CHECK_DIFFERS);
+    ROLE(&g_p, "resp")->bounds.lo_ns = -312000;
+    /* the display's offset edited by hand, its file genuine: DIFFERS */
+    g_p.display.onset_offset_ns = 12000000;
+    CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(ROLE(&g_q, "resp")->bounds.check, YRIG_CHECK_OK);
+    CHECK_I(g_q.display.latency.check, YRIG_CHECK_DIFFERS);
+    CHECK_I(g_q.n_notes, 1);
+    CHECK_HAS(g_q.notes[0], "display.latency: loopback/");
+    CHECK_HAS(g_q.notes[0], "does not match the profile's summary: the onset offset is not checked");
+    g_p.display.onset_offset_ns = 12300000;
+    /* the display's summary edited: DIFFERS */
+    g_p.display.latency.p95_ns = 12620000;
+    CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(g_q.display.latency.check, YRIG_CHECK_DIFFERS);
+    g_p.display.latency.p95_ns = 12610000;
+    g_p.display.latency.date[3] = '7';
+    CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(g_q.display.latency.check, YRIG_CHECK_DIFFERS);
+    g_p.display.latency.date[3] = '6';
+    /* a genuine file of the wrong kind: the onset file named as the bounds,
+     * the bounds file as the display's, an output latency file as either */
+    r = ROLE(&g_p, "resp");
+    strcpy(r->bounds.sha256, osha);
+    strcpy(g_p.display.latency.sha256, bsha);
+    CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(ROLE(&g_q, "resp")->bounds.check, YRIG_CHECK_DIFFERS);
+    CHECK_I(g_q.display.latency.check, YRIG_CHECK_DIFFERS);
+    CHECK_I(g_q.n_notes, 2);
+    strcpy(r->bounds.sha256, lsha);
+    strcpy(g_p.display.latency.sha256, lsha);
+    CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(ROLE(&g_q, "resp")->bounds.check, YRIG_CHECK_DIFFERS);
+    CHECK_I(g_q.display.latency.check, YRIG_CHECK_DIFFERS);
+    strcpy(r->bounds.sha256, bsha);
+    strcpy(g_p.display.latency.sha256, osha);
+    {
+        /* the display's file named as an output's latency, every field the
+         * same: only its kind tells it apart */
+        yrig_role* t;
+        CHECK_I(yrig_bind(&g_p, "trig", YBOX_TRIGGERBOX, "serial:0403:6001:TB0123:"), YRIG_OK);
+        t = ROLE(&g_p, "trig");
+        t->latency = g_p.display.latency;
+        CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
+        CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
+        CHECK_I(ROLE(&g_q, "trig")->latency.check, YRIG_CHECK_DIFFERS);
+        CHECK_I(g_q.display.latency.check, YRIG_CHECK_OK);
+        CHECK(yrig_remove(&g_p, "trig"));
+    }
+    /* the display's file removed: MISSING, with a note; without a folder: NOT_RUN */
+    snprintf(op, sizeof op, "%s" YRIG__SEP "loopback" YRIG__SEP "%s.txt", dir, osha);
+    CHECK(remove(op) == 0);
+    CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(g_q.display.latency.check, YRIG_CHECK_MISSING);
+    CHECK_I(ROLE(&g_q, "resp")->bounds.check, YRIG_CHECK_OK);
+    CHECK_I(g_q.n_notes, 1);
+    CHECK_HAS(g_q.notes[0], "is missing: the onset offset is not checked");
+    {
+        size_t n = yrig_write(&g_p, g_buf, sizeof g_buf);
+        CHECK_I(yrig_parse(&g_q, g_buf, n, NULL, g_err, sizeof g_err), YRIG_OK);
+        CHECK_I(g_q.display.latency.check, YRIG_CHECK_NOT_RUN);
+        CHECK_I(g_q.n_notes, 0);
+        /* the refusals of display.latency, by field */
+        refuse_in(__LINE__, g_buf, "\"max_s\": 0.013,\n", "", YRIG_ERR_FORMAT, "display.latency.max_s: is missing");
+        refuse_in(__LINE__, g_buf, "\"max_s\": 0.013,\n", "\"max_s\": 0.013,\n      \"lo_s\": 0,\n", YRIG_ERR_FORMAT,
+                  "display.latency: unknown key \"lo_s\"");
+        refuse_in(__LINE__, g_buf, "\"median_s\": 0.0123", "\"median_s\": 0.0127", YRIG_ERR_FORMAT,
+                  "display.latency: p5_s <= median_s <= p95_s <= max_s");
+        refuse_in(__LINE__, g_buf, "\"n\": 1180", "\"n\": 0", YRIG_ERR_FORMAT, "display.latency.n: 0 is out of range");
+        refuse_in(__LINE__, g_buf, "\"display\": {\n", "\"display\": {\n    \"latencies\": 1,\n", YRIG_ERR_FORMAT,
+                  "display: unknown key \"latencies\"");
+    }
+    printf("  bounds and display onset files (v0.4.0): ok\n");
+}
+
+/* ------------------------------------------- the viewing geometry (v0.5.0) */
+
+static const char VIEW_BLOCK[] =
+    "  \"view\": {\n"
+    "    \"distance_mm\": 570,\n"
+    "    \"width_mm\": 518.4,\n"
+    "    \"width_px\": 1920\n"
+    "  },\n"
+    "  \"written\": \"2026-10-09T14:03:00Z\"\n"
+    "}\n";
+
+static void check_view(void) {
+    size_t n;
+    char h0[65], h1[65], h2[65], want[65];
+    const char* at;
+    double ppd;
+    /* GOLDEN has no view: its bytes and hash are v0.4.0's */
+    build_golden(&g_p);
+    CHECK(!g_p.view.set);
+    CHECK_I(yrig_hash(&g_p, h0), YRIG_OK);
+    sha_hex(GOLDEN, sizeof GOLDEN - 1, want);
+    CHECK_S(h0, want);
+    CHECK(yrig_ppd(&g_p) == 0.0);
+    CHECK(yrig_ppd(NULL) == 0.0);
+    /* with a view: the block before written, numbers in their shortest form */
+    g_p.view.set = true;
+    g_p.view.distance_mm = 570.0;
+    g_p.view.width_mm = 518.4;
+    g_p.view.width_px = 1920;
+    n = yrig_write(&g_p, g_buf, sizeof g_buf);
+    at = strstr(g_buf, "  \"view\"");
+    CHECK(at != NULL && strcmp(at, VIEW_BLOCK) == 0);
+    CHECK(n == sizeof GOLDEN - 1 + strlen("  \"view\": {\n    \"distance_mm\": 570,\n    \"width_mm\": 518.4,\n    \"width_px\": 1920\n  },\n"));
+    CHECK_I(yrig_hash(&g_p, h1), YRIG_OK);
+    CHECK(strcmp(h1, h0) != 0);
+    /* parse back: the same values, bytes and hash */
+    CHECK_I(yrig_parse(&g_q, g_buf, n, NULL, g_err, sizeof g_err), YRIG_OK);
+    CHECK(g_q.view.set && g_q.view.distance_mm == 570.0 && g_q.view.width_mm == 518.4 && g_q.view.width_px == 1920);
+    CHECK_I(yrig_hash(&g_q, h2), YRIG_OK);
+    CHECK_S(h2, h1);
+    /* pixels per degree: 0.27 mm a pixel at 570 mm, the 2AFC example's old
+     * constants, and ysp/gfx.h's expression */
+    ppd = yrig_ppd(&g_q);
+    CHECK(fabs(ppd - 570.0 * tan(3.14159265358979323846 / 180.0) / 0.27) < 1e-12);
+    CHECK(fabs(ppd - 36.84958) < 1e-5);
+    CHECK(ppd == (double)1920 / 518.4 * 570.0 * tan(3.14159265358979323846 / 180.0));
+    /* a hand edit in another spelling: the same canonical bytes */
+    {
+        static char t[1 << 16];
+        static const char hand[] = "  \"view\": {\"width_px\": 1920, \"width_mm\": 518.40, \"distance_mm\": 5.7e2},\n"
+                                   "  \"written\": \"2026-10-09T14:03:00Z\"\n}\n";
+        size_t pre = (size_t)(strstr(GOLDEN, "  \"written\"") - GOLDEN);
+        memcpy(t, GOLDEN, pre);
+        strcpy(t + pre, hand);
+        CHECK_I(yrig_parse(&g_q, t, strlen(t), NULL, g_err, sizeof g_err), YRIG_OK);
+        CHECK_I(yrig_hash(&g_q, h2), YRIG_OK);
+        CHECK_S(h2, h1);
+    }
+    /* view alone, without display or roles */
+    {
+        static const char t[] = "{\"format\":\"ysp-rig 1\",\"rig\":\"r\",\"written\":\"2026-01-01T00:00:00Z\",\"roles\":{},"
+                                "\"view\":{\"distance_mm\":600,\"width_mm\":600,\"width_px\":2400}}";
+        CHECK_I(yrig_parse(&g_q, t, sizeof t - 1, NULL, g_err, sizeof g_err), YRIG_OK);
+        CHECK(!g_q.display.set && g_q.view.set && g_q.view.width_px == 2400);
+        CHECK(fabs(yrig_ppd(&g_q) - 4.0 * 600.0 * tan(3.14159265358979323846 / 180.0)) < 1e-12);
+    }
+    /* refusals, by field */
+    yrig_write(&g_p, g_buf, sizeof g_buf);
+    refuse_in(__LINE__, g_buf, "\"distance_mm\": 570,\n", "", YRIG_ERR_FORMAT, "view.distance_mm: is missing");
+    refuse_in(__LINE__, g_buf, "    \"width_mm\": 518.4,\n", "", YRIG_ERR_FORMAT, "view.width_mm: is missing");
+    refuse_in(__LINE__, g_buf, ",\n    \"width_px\": 1920", "", YRIG_ERR_FORMAT, "view.width_px: is missing");
+    refuse_in(__LINE__, g_buf, "\"distance_mm\": 570", "\"distance_mm\": 0", YRIG_ERR_FORMAT, "view.distance_mm: 0 is out of range");
+    refuse_in(__LINE__, g_buf, "\"distance_mm\": 570", "\"distance_mm\": -570", YRIG_ERR_FORMAT, "view.distance_mm: -570 is out of range");
+    refuse_in(__LINE__, g_buf, "\"distance_mm\": 570", "\"distance_mm\": 100000.5", YRIG_ERR_FORMAT,
+              "view.distance_mm: 100000.5 is out of range");
+    refuse_in(__LINE__, g_buf, "\"distance_mm\": 570", "\"distance_mm\": 100000", YRIG_OK, "");
+    refuse_in(__LINE__, g_buf, "\"distance_mm\": 570", "\"distance_mm\": \"570\"", YRIG_ERR_FORMAT, "view.distance_mm: must be a number (mm)");
+    refuse_in(__LINE__, g_buf, "\"width_mm\": 518.4", "\"width_mm\": 0", YRIG_ERR_FORMAT, "view.width_mm: 0 is out of range");
+    refuse_in(__LINE__, g_buf, "\"width_mm\": 518.4", "\"width_mm\": 1e400", YRIG_ERR_FORMAT, "view.width_mm");
+    refuse_in(__LINE__, g_buf, "\"width_mm\": 518.4", "\"width_mm\": null", YRIG_ERR_FORMAT, "view.width_mm: must be a number (mm)");
+    refuse_in(__LINE__, g_buf, "\"width_px\": 1920", "\"width_px\": 0", YRIG_ERR_FORMAT, "view.width_px: 0 is out of range");
+    refuse_in(__LINE__, g_buf, "\"width_px\": 1920", "\"width_px\": 100001", YRIG_ERR_FORMAT, "view.width_px: 100001 is out of range");
+    refuse_in(__LINE__, g_buf, "\"width_px\": 1920", "\"width_px\": 1920.5", YRIG_ERR_FORMAT, "view.width_px: must be an integer");
+    refuse_in(__LINE__, g_buf, "\"width_px\": 1920", "\"width_px\": 1920, \"height_px\": 1080", YRIG_ERR_FORMAT,
+              "view: unknown key \"height_px\"");
+    refuse_in(__LINE__, g_buf, "\"view\": {", "\"view\": [], \"v2\": {", YRIG_ERR_FORMAT, "unknown key \"v2\"");
+    refuse_in(__LINE__, g_buf, "  \"view\": {\n    \"distance_mm\": 570,\n    \"width_mm\": 518.4,\n    \"width_px\": 1920\n  },\n",
+              "  \"view\": 570,\n", YRIG_ERR_FORMAT, "view: must be an object");
+    /* a view in memory that the format cannot hold is not written or hashed */
+    g_q = g_p;
+    g_q.view.distance_mm = -1.0;
+    CHECK_I(yrig_hash(&g_q, h2), YRIG_ERR_FORMAT);
+    g_q.view.distance_mm = 570.0;
+    g_q.view.width_px = 0;
+    CHECK_I(yrig_hash(&g_q, h2), YRIG_ERR_FORMAT);
+    CHECK(yrig_ppd(&g_q) == 0.0);
+    g_q.view.width_px = 1920;
+    g_q.view.width_mm = HUGE_VAL - HUGE_VAL;   /* NaN */
+    CHECK_I(yrig_write(&g_q, g_buf, sizeof g_buf), 0);
+    CHECK_I(yrig_hash(&g_q, h2), YRIG_ERR_FORMAT);
+    CHECK(yrig_ppd(&g_q) == 0.0);
+    /* unset again: the v0.4.0 bytes */
+    g_p.view.set = false;
+    CHECK(yrig_ppd(&g_p) == 0.0);   /* the numbers are still there; unset is unset */
+    CHECK_I(yrig_hash(&g_p, h2), YRIG_OK);
+    CHECK_S(h2, h0);
+    printf("  viewing geometry (v0.5.0): %.5f px/deg\n", ppd);
 }
 
 int main(void) {
@@ -1033,10 +1472,13 @@ int main(void) {
     check_refusals();
     check_edit();
     check_files();
+    check_held();
     check_user_folder();
     check_binding();
     check_lsl();
+    check_v04();
     check_damage();
+    check_view();
     if (g_failures) {
         fprintf(stderr, "rigfile_test: %d of %d checks FAILED\n", g_failures, g_checks);
         return 1;

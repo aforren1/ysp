@@ -48,8 +48,8 @@ headers include, and the libraries an implementation file needs:
 - `ysp::core` holds `ysp/rt.h`, `ysp/timeline.h`, `ysp/table.h`,
   `ysp/json.h` and `ysp/pack.h`, and links pthreads on POSIX and `libm` on
   Linux.
-- `ysp::methods` holds `ysp/stair.h`, `ysp/quest.h`, `ysp/aep.h` and
-  `ysp/trials.h`, and links `ysp::core`.
+- `ysp::methods` holds `ysp/stair.h`, `ysp/quest.h`, `ysp/aep.h`,
+  `ysp/trials.h` and `ysp/dataset.h`, and links `ysp::core`.
 - `ysp::devices` holds `ysp/serial.h`, `ysp/parallel.h`, `ysp/input.h`,
   `ysp/response.h`, `ysp/box.h`, `ysp/device.h`, `ysp/rigfile.h` and
   `ysp/net.h`, and links `ysp::core`, `setupapi` on Windows and `libdl`

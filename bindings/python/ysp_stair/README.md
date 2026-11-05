@@ -4,8 +4,8 @@ A CPython extension for the [ysp/stair.h](../../../include/ysp/stair.h)
 single-header library: transformed and weighted up/down staircases and
 accelerated stochastic approximation. It uses the plain CPython C API and has
 no dependencies. It is built against the **Limited API / stable ABI**
-(`Py_LIMITED_API = 0x03080000`), so one `ysp/stair.abi3.so` works on CPython
-3.8 and later.
+(`Py_LIMITED_API = 0x030A0000`), so one `ysp/stair.abi3.so` works on CPython
+3.10 and later.
 
 The distribution is `ysp-stair` and the module is `ysp.stair`. `ysp` is a
 [PEP 420](https://peps.python.org/pep-0420/) implicit namespace package (no
@@ -42,9 +42,9 @@ ysp/rt.h, so no other header is necessary.
 ## How to run a staircase
 
 ```python
-import ysp.stair as st
+import ysp.stair as yst
 
-s = st.Staircase(start=0.5, n_down=3, step_type=st.STEP_LOG,
+s = yst.Staircase(start=0.5, n_down=3, step_type=yst.STEP_LOG,
                  steps=[0.3, 0.15, 0.075], min=0.001, max=1.0,
                  stop_reversals=10)
 
@@ -53,7 +53,7 @@ while not s.done:
     shown = display.quantize(level)  # what you can show
     s.update(shown, run_trial(shown))
 
-print(s.estimate(st.EST_REVERSALS), s.estimate_count(st.EST_REVERSALS))
+print(s.estimate(yst.EST_REVERSALS), s.estimate_count(yst.EST_REVERSALS))
 ```
 
 Give `update()` the level that you showed. The rule steps from its own
@@ -65,7 +65,7 @@ To simulate an observer, draw `u` from your own generator:
 ```python
 import random
 rng = random.Random(1)
-r = st.simulate_response(p_correct, rng.random())
+r = yst.simulate_response(p_correct, rng.random())
 ```
 
 See [example.py](example.py) for a complete simulated run.
@@ -106,6 +106,11 @@ An invalid desc raises `ArgumentError` with the library's message.
 | `history()` | a list of `Trial` named tuples: `(proposed, shown, response, reversal, direction, step_index)` |
 | `reversal_level(i)`, `reversal_trial(i)` | reversal `i`; `IndexError` out of range |
 | `reversals()` | a list of `(trial, level)` tuples |
+| `save()` | the snapshot as `bytes` (`yst_save()`) |
+| `Staircase.load(data, **desc)` | a new `Staircase` resumed from `save()`; the keywords are the constructor's and must open the same staircase. A mismatch or a bad snapshot raises `ArgumentError` with the library's message, which names the first field that differs. |
+
+A resumed staircase makes the same proposals and has the same history and
+estimates as one that was not interrupted, with no replay of the updates.
 
 ### Module functions
 

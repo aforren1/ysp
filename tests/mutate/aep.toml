@@ -1,0 +1,94 @@
+# ysp/aep.h mutants: the v0.16.0 parameter table (yaep_params) and the
+# snapshot reader's outcome check. The test runs with YAEP_TEST_ONLY=params,
+# which runs those checks alone (seconds instead of minutes). Mutant 00 is a
+# control with no effect; it must survive.
+header = "ysp/aep.h"
+
+[test.aep]
+source = "tests/adapt/aep_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O2", "-w"]
+libs = ["-lm"]
+timeout = 300
+env = { YAEP_TEST_ONLY = "params" }
+
+[[mutant]]
+id = "00"
+name = "control: no change (must pass)"
+test = "aep"
+expect = "survived"
+why = "Control: a change with no effect. The test must pass, so a failure here means the setup is wrong, not the header."
+find = '#define YAEP_VERSION_PATCH  0'
+replace = '#define YAEP_VERSION_PATCH  0 '
+
+[[mutant]]
+id = "01"
+name = "params: acq_beta's default 1.64"
+test = "aep"
+why = "A loader writing defaults would narrow the straddle and change every LSE proposal."
+find = '    YAEP__HP("acq_beta", 0, 1.96, "the straddle width of lse and the sd weight of ucb"),'
+replace = '    YAEP__HP("acq_beta", 0, 1.64, "the straddle width of lse and the sd weight of ucb"),'
+
+[[mutant]]
+id = "02"
+name = "params: hyper_max.outputscale's default 5"
+test = "aep"
+why = "The fit's bound a designer shows would not be the one the fit uses."
+find = '''    YAEP__HP("hyper_max.outputscale", 0, 10,'''
+replace = '''    YAEP__HP("hyper_max.outputscale", 0, 5,'''
+
+[[mutant]]
+id = "03"
+name = "params: priors.mean_g.ceiling's default 1/128"
+test = "aep"
+why = "The steepest slope a designer is told about would be twice the one the fit allows."
+find = '''    YAEP__HP("priors.mean_g.ceiling", 0, 1.0 / 256.0,'''
+replace = '''    YAEP__HP("priors.mean_g.ceiling", 0, 1.0 / 128.0,'''
+
+[[mutant]]
+id = "04"
+name = "params: acq lists eight of its nine values"
+test = "aep"
+why = "A loader would refuse \"thompson\", an acquisition the header has."
+find = '"lse=0,eavc=1,localmi=2,balv=3,bald=4,random=5,ucb=6,ei=7,thompson=8" },'
+replace = '"lse=0,eavc=1,localmi=2,balv=3,bald=4,random=5,ucb=6,ei=7" },'
+
+[[mutant]]
+id = "05"
+name = "params: dim_kind as a scalar enum"
+test = "aep"
+why = "A loader would take one kind for a field that has one per dimension."
+find = '''    { "dim_kind", "enum[]", 0, 2, 0, "",'''
+replace = '''    { "dim_kind", "enum", 0, 2, 0, "",'''
+
+[[mutant]]
+id = "06"
+name = "params: fit_pcg has no row"
+test = "aep"
+why = "A loader that checks keys against the table would refuse a field the header has."
+find = '''    { "fit_pcg", "bool", 0, 1, 0, "",'''
+replace = '''    { "fit_pgc", "bool", 0, 1, 0, "",'''
+
+[[mutant]]
+id = "07"
+name = "params: target_p not marked required"
+test = "aep"
+why = "A designer would offer 0 under the default acquisition, which open() refuses."
+find = '''      "required by the level-set acquisitions (lse, the default, eavc, localmi) but under "'''
+replace = '''      "needed by the level-set acquisitions (lse, the default, eavc, localmi) but under "'''
+
+[[mutant]]
+id = "08"
+name = "load: outcomes not checked"
+test = "aep"
+why = "An ordinal outcome outside 0..K-1 read back from a snapshot indexed the cutpoints outside the array."
+find = '''        if (!yaep__y_ok(g, g->y[i]) || !yaep__y_ok(g, g->history[i].y)) r.bad = true;'''
+replace = '''        if (0) r.bad = true;'''
+
+[[mutant]]
+id = "09"
+name = "load: a fractional outcome accepted"
+test = "aep"
+why = "0.5 would be truncated to an outcome the session never recorded."
+find = '''    return y >= 0.0 && y <= (double)(k - 1) && y == floor(y);'''
+replace = '''    return y >= 0.0 && y <= (double)(k - 1);'''

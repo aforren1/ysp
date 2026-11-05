@@ -26,5 +26,16 @@ int main(void) {
     ycol_ctx cx;
     memset(&cx, 0, sizeof cx);
     g_ctx_api.close(&cx);   /* safe on a zeroed context */
+    {   /* v0.3.0: values, after offset; set on the enum rows only */
+        int n = 0, i, k = 0;
+        const ycol_param* t = ycol_desc_params(&n);
+        for (i = 0; t && i < n; i++) k += (t[i].values != NULL) == !strcmp(t[i].type, "enum");
+        if (!t || k != n) return 2;
+    }
+    {   /* v0.4.0: a Michelson contrast; refused without a context */
+        ycol_shown r;
+        ycol_rgb dir = { 0.0, 0.0, 0.0 };
+        if (ycol_michelson(NULL, 0.1, dir, 8, &r) != YCOL_ERR_ARG || r.status != YCOL_ERR_ARG || !r.why) return 3;
+    }
     return ycol_version()[0] == '0' && g_ctx_api.error(&cx)[0] == '\0' ? 0 : 1;
 }

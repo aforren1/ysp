@@ -76,6 +76,8 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--save") && i + 1 < argc) save = argv[++i];
         else { fprintf(stderr, "audio_voice_rt: unknown argument %s (see the top of the file)\n", argv[i]); return 2; }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     if (trials < 1 || trials > 64 || on_db >= 0 || channel < 0) { fprintf(stderr, "audio_voice_rt: --trials 1..64, --on-db < 0\n"); return 2; }
     d.device = out;
     d.arena_bytes = 1 << 20;

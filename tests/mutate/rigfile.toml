@@ -89,8 +89,8 @@ id = "rig-10"
 name = "the summary not compared"
 test = "rig"
 why = "A hand-edited median with a genuine file would pass as measured."
-find = '''            rc = YRIG_CHECK_DIFFERS;'''
-replace = '''            rc = YRIG_CHECK_OK;'''
+find = '''            if (!same) rc = YRIG_CHECK_DIFFERS;'''
+replace = '''            if (!same) rc = YRIG_CHECK_OK;'''
 
 [[mutant]]
 id = "rig-11"
@@ -205,8 +205,9 @@ id = "rig-24"
 name = "the summary of a file without its format line"
 test = "rig"
 why = "Only an output latency file has these fields with these meanings."
-find = '''    if (!(have & 1)) return yrig__err(err, cap, YRIG_ERR_FORMAT, "not an output latency file (no format line)");'''
-replace = '''    have |= 1;'''
+find = '''    if (!kind) {'''
+replace = '''    if (!kind) { kind = want ? want : YRIG_FILE_OUT_LATENCY; have |= 1; }
+    if (0) {'''
 
 # v0.2.0: lsl roles.
 
@@ -251,3 +252,196 @@ test = "rig"
 why = "yrig_open_device() has no err buffer: a role the profile refuses must still say why, in ydev_error(dev)."
 find = '''    if (yrig_desc(p, role, &d, dev->err, sizeof dev->err) != YRIG_OK) return false;'''
 replace = '''    if (yrig_desc(p, role, &d, NULL, 0) != YRIG_OK) return false;'''
+
+# v0.4.0: the bounds and display onset files, display.latency.
+
+[[mutant]]
+id = "rig-30"
+name = "a bounds file's range not compared"
+test = "rig"
+why = "A hand-edited bound with a genuine file would give tier 1 to a range nobody measured."
+find = '''            if (same && want == YRIG_FILE_IN_BOUNDS) same = f.lo_ns == lb->lo_ns && f.hi_ns == lb->hi_ns;'''
+replace = '''            if (same && want == YRIG_FILE_IN_BOUNDS) same = true;'''
+
+[[mutant]]
+id = "rig-31"
+name = "the display's offset not compared with its file"
+test = "rig"
+why = "The offset is the number the screen uses; a genuine file behind an edited offset proves nothing."
+find = '''                       (want != YRIG_FILE_DISPLAY_ONSET || f.offset_ns == offset_ns);'''
+replace = '''                       (want != YRIG_FILE_DISPLAY_ONSET || 1);'''
+
+[[mutant]]
+id = "rig-32"
+name = "a file of another kind passes"
+test = "rig"
+why = "A display onset file named as an output's latency is not that output's measurement, whatever its numbers."
+find = '''            bool same = kind == want && f.n == lb->n && strcmp(f.date, lb->date) == 0;'''
+replace = '''            bool same = f.n == lb->n && strcmp(f.date, lb->date) == 0;'''
+
+[[mutant]]
+id = "rig-33"
+name = "display.latency not checked at load"
+test = "rig"
+why = "A missing or changed photodiode run must show in the notes."
+find = '''        dl->check = yrig__check_file(dir, "loopback", name, dl->sha256, dl, YRIG_FILE_DISPLAY_ONSET, p->display.onset_offset_ns);'''
+replace = '''        dl->check = YRIG_CHECK_OK;'''
+
+[[mutant]]
+id = "rig-34"
+name = "display.latency not written"
+test = "rig"
+why = "A profile written back would lose the run behind its onset offset."
+find = '''        if (ok && p->display.latency.set) ok = yjs_set(a, d, "latency", yrig__lb_json(a, &p->display.latency, true)) == YJS_OK;'''
+replace = '''        if (0) ok = yjs_set(a, d, "latency", yrig__lb_json(a, &p->display.latency, true)) == YJS_OK;'''
+
+[[mutant]]
+id = "rig-35"
+name = "a bounds file without hi_s"
+test = "rig"
+why = "A bound read as 0 from a missing line is a false bound."
+find = '''static const int yrig__need[4] = { 0, 127, 1 | 2 | 64 | 128 | 256, 127 | 512 };'''
+replace = '''static const int yrig__need[4] = { 0, 127, 1 | 2 | 64 | 128, 127 | 512 };'''
+
+[[mutant]]
+id = "rig-36"
+name = "a display onset file without onset_offset_s"
+test = "rig"
+why = "The profile's offset is compared with the file's; a missing line would read as 0."
+find = '''static const int yrig__need[4] = { 0, 127, 1 | 2 | 64 | 128 | 256, 127 | 512 };'''
+replace = '''static const int yrig__need[4] = { 0, 127, 1 | 2 | 64 | 128 | 256, 127 };'''
+
+[[mutant]]
+id = "rig-37"
+name = "yrig_read_latency() takes any kind"
+test = "rig"
+why = "out_latency's --store would take a bounds file's numbers as an output's latency."
+find = '''            if (want && k != want)'''
+replace = '''            if (0)'''
+
+# v0.5.0: the viewing geometry (check_view).
+
+[[mutant]]
+id = "rig-38"
+name = "view is an unknown key"
+test = "rig"
+why = "v0.5.0: a profile with the geometry would be refused, so no program gets degrees from it."
+find = '''    static const char* const keys[] = { "format", "rig", "written", "roles", "display", "view", NULL };'''
+replace = '''    static const char* const keys[] = { "format", "rig", "written", "roles", "display", NULL };'''
+
+[[mutant]]
+id = "rig-39"
+name = "view not read"
+test = "rig"
+why = "v0.5.0: the geometry would load as absent, and a deg definition would run on nominal numbers."
+find = '''    if (rc == YRIG_OK && (v = yjs_get(root, "view")) != NULL) rc = yrig__view(&r, v, &p->view);'''
+replace = '''    if (rc == YRIG_OK && (v = yjs_get(root, "view")) != NULL) rc = YRIG_OK;'''
+
+[[mutant]]
+id = "rig-40"
+name = "view not written"
+test = "rig"
+why = "v0.5.0: a profile saved by a tool would lose its geometry, and its hash would not cover it."
+find = '''    if (ok && p->view.set) {'''
+replace = '''    if (ok && p->view.set && 0) {'''
+
+[[mutant]]
+id = "rig-41"
+name = "a length of 0 mm"
+test = "rig"
+why = "v0.5.0: width_mm 0 divides by 0 in the pixels per degree."
+find = '''    if (!(*out > 0.0 && *out <= 100000.0)) return yrig__bad'''
+replace = '''    if (!(*out >= 0.0 && *out <= 100000.0)) return yrig__bad'''
+
+[[mutant]]
+id = "rig-42"
+name = "width_px 0"
+test = "rig"
+why = "v0.5.0: a pitch from 0 pixels is no pitch."
+find = '''&px, 1, 100000, true)'''
+replace = '''&px, 0, 100000, true)'''
+
+[[mutant]]
+id = "rig-43"
+name = "pixels per degree from the pitch upside down"
+test = "rig"
+why = "v0.5.0: mm per pixel where pixels per mm belongs gives every size in degrees wrong by the square of the pitch."
+find = '''    return (double)p->view.width_px / p->view.width_mm * p->view.distance_mm * tan('''
+replace = '''    return p->view.width_mm / (double)p->view.width_px * p->view.distance_mm * tan('''
+
+[[mutant]]
+id = "rig-44"
+name = "yrig_ppd() ignores set"
+test = "rig"
+why = "v0.5.0: a view a caller cleared would still give degrees."
+find = '''    if (!p || !p->view.set || !(p->view.width_mm > 0.0)'''
+replace = '''    if (!p || !(p->view.width_mm > 0.0)'''
+
+[[mutant]]
+id = "rig-45"
+name = "a parsed view not marked set"
+test = "rig"
+why = "v0.5.0: the geometry read from the file would be dropped on the next write and give no degrees."
+find = '''    w->width_px = (int32_t)px;
+    w->set = true;'''
+replace = '''    w->width_px = (int32_t)px;'''
+
+# v0.5.1: held files (docs/device.md, "A held profile").
+
+[[mutant]]
+id = "rig-46"
+name = "the rename is tried once"
+test = "rig"
+why = "v0.5.1: a program that holds the profile for a moment failed a save (ERROR_ACCESS_DENIED, 1 run of 150 under ctest -j 4); the test lets go during the save."
+find = '''    for (tries = 0; tries < 5; tries++) {
+        if (tries) Sleep(10);'''
+replace = '''    for (tries = 0; tries < 1; tries++) {
+        if (tries) Sleep(10);'''
+
+[[mutant]]
+id = "rig-47"
+name = "no wait between tries"
+test = "rig"
+why = "v0.5.1: 5 tries at once are over before a scanner lets go; the test checks the tries take 35 ms or more."
+find = '''        if (tries) Sleep(10);'''
+replace = '''        if (tries) Sleep(0);'''
+
+[[mutant]]
+id = "rig-48"
+name = "an access error is not tried again"
+test = "rig"
+why = "v0.5.1: the held file gives ERROR_ACCESS_DENIED, the error the stress runs saw."
+find = '''        if (e != ERROR_ACCESS_DENIED && e != ERROR_SHARING_VIOLATION && e != ERROR_LOCK_VIOLATION) break;'''
+replace = '''        if (e != ERROR_SHARING_VIOLATION && e != ERROR_LOCK_VIOLATION) break;'''
+
+[[mutant]]
+id = "rig-49"
+name = "a failed save keeps its temporary file"
+test = "rig"
+why = "v0.5.1: the temporary file goes when the rename fails."
+find = '''        if (!ok) DeleteFileW(wt);'''
+replace = '''        (void)0;'''
+
+[[mutant]]
+id = "rig-50"
+name = "a load denies other readers"
+test = "rig"
+why = "v0.5.1: a load while another program has the profile open must read it (MSVC's _wfopen_s denied every other open)."
+find = '''    *f = _wfsopen(w, mode, mode[0] == L'r' ? _SH_DENYNO : _SH_DENYWR);'''
+replace = '''    *f = _wfsopen(w, mode, _SH_DENYRW);'''
+
+[[mutant]]
+id = "rig-51"
+name = "the message without the reason"
+test = "rig"
+why = "v0.5.1: a failed save says which step failed and the OS error."
+find = '''    if (rc != YRIG_OK) return yrig__err(err, cap, rc, "%s: %s", path, why[0] ? why : "cannot write it");
+    return YRIG_OK;
+}
+
+YRIG_API int yrig_save('''
+replace = '''    if (rc != YRIG_OK) return yrig__err(err, cap, rc, "%s: cannot write it", path);
+    return YRIG_OK;
+}
+
+YRIG_API int yrig_save('''

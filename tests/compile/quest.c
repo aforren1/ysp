@@ -14,10 +14,12 @@ typedef struct quest_api {
     const char* (*error)(const yqst_quest*);
     int (*prior_normal)(const yqst_axis*, double, double, double*);
     int (*save)(const yqst_quest*, void*, size_t);
+    const yqst_param* (*params)(int*);
 } quest_api;
 
 static const quest_api g_quest_api = {
-    yqst_open, yqst_open_saved, yqst_close, yqst_error, yqst_prior_normal, yqst_save
+    yqst_open, yqst_open_saved, yqst_close, yqst_error, yqst_prior_normal, yqst_save,
+    yqst_params
 };
 
 #ifdef YQST_ASYNC
@@ -41,6 +43,10 @@ int main(void) {
     if (g_quest_api.open(&q, NULL)) return 2;
     if (g_quest_api.open_saved(&q, NULL, NULL, 0)) return 3;
     if (g_quest_api.save(&q, NULL, 0) >= 0) return 4;
+    {
+        int n = 0;
+        if (!g_quest_api.params(&n) || n < 1) return 8;
+    }
     g_quest_api.close(&q);
 #ifdef YQST_ASYNC
     {

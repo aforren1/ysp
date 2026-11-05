@@ -15,7 +15,7 @@ pinned build. SDL3 is 3.4.0. The frame thread ran at
 `THREAD_PRIORITY_TIME_CRITICAL`. No photodiode was attached, so every
 onset below is a software timestamp: the vblank time DXGI reports, not
 light on the panel. The Linux X11 numbers come from a second machine,
-described in [Linux X11: GLX_OML](#linux-x11-glx_oml-v080).
+described in [Linux X11: GLX_OML](#linux-x11-glx_oml-v0110).
 
 ## Windows: the header owns the swapchain
 
@@ -2659,39 +2659,120 @@ message, and the refusal of a negative `panic_grace_ns`.
 Mutants cv-01 (a failure that writes nothing) and cv-02 (a success that
 drops the message) are caught.
 
-## SIM on a virtual clock (design note; not built)
+## Enum values in the parameter table (v0.9.0)
 
-`--sim` self-checks flaked on slow CI hosts (macOS, twice): the SIM
-presenter sleeps to a vblank grid on the real clock, so a slow host drops
-whole frames. A virtual clock would advance one period per flip and never
-sleep. What reads the real clock in a `--sim` run:
+Every ysp parameter table has one row shape: `name`, `type`, `min`, `max`, `def`, `unit`, `doc`, `values` ([conventions.md](conventions.md), "Parameter tables"; gap G6 of [experiment_format.md](experiment_format.md)). `yscr_param` gained `values` as its last field. ysp/gfx.h's
+`ygfx_desc_params()` and ysp/video.h's `yvid_params()` return
+`yscr_param` too, so their enum rows have values from gfx v0.17.0 and
+video v0.5.0.
 
-- ysp/screen.h: `yscr__now()` at about 60 places through one compile-time
-  macro (`YSCR__NOW`), for every screen at once: the SIM presenter, the
-  core's prediction (`yscr__count_at(s, now + margin)`), `flip_at()`, the
-  waits, the trigger worker's deadlines, ring stamps. A virtual SIM
-  needs a clock per screen threaded through the core; a CUSTOM presenter
-  (`screen_sync_check --sim-vsync-off`) and the abort and raw-input state,
-  which have no screen, must stay real.
-- ysp/audio.h: the null device is miniaudio's real-time thread, and the
-  callback stamp reads `yrt_now_ns()` with no hook. `trial_audio_keyboard`,
-  `trial_stop_signal` and `audio_av_sync` compare audio onsets with flip
-  onsets (10 ms and 2 ms limits), so they break unless the audio null
-  device runs on the same virtual clock.
-- ysp/video.h: decode-ahead runs on its own thread; a frame loop that
-  never sleeps outruns it (more repeats). `video_play --sim` checks only
-  for no error, so it should pass.
-- ysp/gfx.h: shader time 0 is `yrt_now_ns()` at open; a virtual epoch
-  must start there.
-- ysp/timeline.h, ysp/response.h, ysp/trials.h, ysp/input.h: no clock;
-  nothing to change. The response examples stamp their synthetic events
-  from `f.onset`, so they would become exact.
-- ysp/rt.h has no clock override at all.
+| Row | values |
+|---|---|
+| `backend` | `auto=0,dxgi_flip=1,composition=2,glx_oml=3,wayland=4,metal=5,web=6,sim=7,custom=8` |
+| `patch.corner` | `top_left=0,top_right=1,bottom_left=2,bottom_right=3` |
+| `settle` | `auto=0,strict=1,warn=2,off=3` |
 
-So it is not contained: it changes the core's clock in every function,
-and three examples need a virtual audio device. Until then, the
-examples tolerate whole-frame drops (`trial_same_different`,
-`trial_sternberg`).
+The doc text of `backend` listed 0, 1, 2, 7 and 8, and its range said 0
+to 8, so a reader could not tell whether 3 to 6 exist. They do: the C
+enum has them, and `open()` refuses the stubs (at v0.9.0 GLX_OML, WAYLAND
+and METAL; GLX_OML is built since v0.11.0) with a message and WEB outside Emscripten. `values` lists the C enum,
+not what opens here; the doc says which are stubs. `patch.corner` and
+`settle` are `YSCR_` macros, not a C enum, so the test's names of them
+need a case by review when a macro is added.
+
+`key_dedup_ns`'s default changed from 0 to 5e7: a zero field filters a
+key's second report within 50 ms, and a designer that showed 0 suggested
+no filter. The other zero defaults are the zero itself or a sentinel the
+doc names (`display` 0 is the primary display, `depth` 0 the path's).
+
+The test (`test_params()` in `tests/adapt/screen_test.c`) opens a SIM
+screen with a zero desc and compares each default with what the screen
+holds (`lead`, the patch size, the abort key and modifiers, the settle
+flips, minimum and cap, the SIM period) or with the constant open puts
+in where the screen keeps none (`window_w` 800, `window_h` 600,
+`refresh_den` 1, the panic presses, window and grace, the key filter's
+`YSCR__KEY_DEDUP_NS`). 4 of 4 new mutants killed; 2 more, run against `tests/adapt/param_tables_test.c`, show that the cross-header check sees a name twice and a default that is not a value (`tests/mutate/screen.toml`, pv-).
+
+## SIM on a virtual clock (v0.8.0)
+
+`--sim` self-checks failed on loaded CI runners (macOS most often): the
+SIM presenter sleeps to a vblank grid on the real clock, so a slow host
+dropped whole frames, and a check that compared with the script failed
+or was widened to allow the drop. Ten examples were widened that way:
+`trial_adjustment`, `trial_srt`, `trial_stroop`, `trial_rdk`,
+`trial_same_different`, `trial_sternberg`, `trial_mouse_tracking`,
+`web_av_sync`, `audio_av_sync` and `audio_schedule`.
+
+The note that stood here (v0.5.1) judged the change not contained: the
+core reads its clock at about 60 places through one compile-time macro,
+and three examples compare audio onsets from miniaudio's real-time null
+device with flip onsets. The built design does not touch those 60
+places. It moves the clock under them:
+
+- **ysp/rt.h v0.9.0 owns the virtual clock.** `yrt_virtual_begin()`
+  makes `yrt_now_ns()` virtual for the whole process. The thread that
+  called it is the driver: its `yrt_sleep_until()` jumps the clock to the
+  deadline at once. Other threads wait in real time until the driver gets
+  there. Virtual timers run on the driver, in time order, inside its
+  waits. rt.h's VIRTUAL CLOCK has the rules.
+- **The SIM presenter needs no change.** Its sleep to the vblank is a
+  `yrt_sleep_until()`, which on the virtual clock is the jump. So the
+  core's prediction, `flip_at()`, the waits and the ring stamps all read
+  one clock, and no frame can drop. A CUSTOM presenter that times itself
+  with `yrt_now_ns()` (`screen_sync_check --sim-vsync-off`) runs on it
+  too.
+- **The screen refuses a real backend on the virtual clock.** A display
+  flips on real time; its records against a virtual prediction would be
+  nonsense. The describe line says `clock=virtual`, so a log of a dry run
+  cannot pass for a measurement.
+- **The audio null device is virtual too** (ysp/audio.h v0.6.0). On the
+  virtual clock `YAU_BACKEND_NULL` is the header's own device: a virtual
+  timer renders one block a period at the block's own time. The fit is
+  exact, and an onset is on its plan within half a sample.
+- **Video decodes inline** (ysp/video.h v0.4.0). A decode thread on real
+  time could not keep up with a frame loop that never waits: `video_play
+  --sim` showed 6 frames and dropped 54, a different count each run.
+- **Costs stay real.** A record's phases (DRAW, UPLOAD, SWAP) are costs:
+  they read `yrt_real_ns()`, the real counter on either clock, through
+  the seam `YSCR__COST_NOW()`. Through `yrt_now_ns()` they read 0 for
+  DRAW and the 16.7 ms jump for SWAP. The instrumentation zones are real
+  too, so `screen_flipstats --sim` reports the header's CPU cost and the
+  draw phase in real microseconds. Times that feed a plan or a record
+  (onsets, the prediction, the flip's call and return) stay on
+  `yrt_now_ns()`.
+
+The examples call `yrt_virtual_begin(0)` right after they parse `--sim`.
+The checks that allowed whole frames are exact again: an onset is the
+plan, an RT is the script's to the nanosecond (or within 1 us where the
+script times from a plan that is off the 16666667 ns grid), and an audio
+onset is on its plan within half a sample. `trial_mouse_tracking
+--raw-mice` (CI run 38410242460: init 0.2247 s against 0.2913 s without
+`--raw-mice`) now gives the init of the sample that passes 10 px, exactly,
+with and without raw counts.
+
+Determinism, measured on 2026-10-14 on the Windows 11 test laptop (Iris
+Xe, 16 logical CPUs): the CI list of 49 `--sim` and `--null` runs.
+
+| Build | Runs | Exit codes as CI expects | Output of the virtual-clock runs |
+|---|---|---|---|
+| MSVC 19.44 Release | 2 idle, 1 beside 24 CPU-bound processes (`burn.exe`) | 49 of 49 in each | data files and standard output identical in all 3 |
+| MinGW-w64 gcc 16.1 Release | 1 idle | 49 of 49 | data files and standard output the same as MSVC's (paths aside) |
+| WSL2 Ubuntu 22.04, gcc 11.4, SDL 3.4.0 console | 2 idle | 49 of 49 in each | identical between the 2 (paths aside) |
+
+The lines that differ between runs print a real cost (the phases and
+header costs of `screen_flipstats`, the build, draw, decode and upload
+times of the gfx and video examples, the battery level), and the frames
+of `gfx_capture`, which stays on the real clock: its writer thread is
+real, and on the virtual clock the frame loop outran it (6 of 21 chosen
+frames read, against 21 of 21 on the real clock). Every other run but
+`trials_save_rows` (it reads no clock) is on the virtual clock. The MSVC
+list took 25 s idle and 29 s under the load.
+
+Tests: `test_sim_virtual` in `tests/adapt/screen_test.c` runs 120 frames
+of SIM on the virtual clock through the header's own clock calls: every
+onset on the grid and on the prediction, no drop, no late target, a real
+backend refused. Mutants sv-01 (a real backend opens) and sv-02 (the
+describe line hides the clock) are caught.
 
 ## The web backend (v0.7.0)
 
@@ -2751,7 +2832,1051 @@ design decisions that touch the core.
   after the create. Evidence and the page's side are in
   [web.md](web.md#fullscreen).
 
-## Linux X11: GLX_OML (v0.8.0)
+## The window thread (v0.10.0)
+
+A host that waits between trials leaves the window without a message
+pump: Python's `time.sleep()` and `input()`, Octave's `pause`, C's
+`Sleep()`. Windows marks such a window hung after 4.2 to 4.6 s and puts a
+"Ghost" window in front of it 50 ms later, and the first 2 to 20 frames
+after the wait go wrong (`docs/av_probe.md`). The window-thread probe
+(`docs/winthread_probe.md`, branch `probe-winthread`) gave the window, its
+messages and every SDL video call to a thread of the header's own, kept
+the D3D11 device, the swap path and ANGLE on the frame thread, and found
+no hung window, no ghost, and no cost in the frame loop. v0.10.0 lands it.
+The user decided the shape on 2026-10-26: a desc field with AUTO on,
+a public window call, and a panic that releases the display while the
+window thread answers.
+
+### What the window thread owns
+
+| On the window thread | On the frame thread | Any thread |
+|---|---|---|
+| `SDL_InitSubSystem(VIDEO)` and its quit, gamepads, the window, the mode switch, the icon, the raise, the cursor, text input, the device lists at open, gamepad hot-plug, `yscr_displays()` and `yscr_modes()` | the D3D11 device, DXGI_FLIP's swapchain or COMPOSITION's target on the window's HWND, ANGLE, `begin()`, `flip_at()`, settling, records, the grid | SDL's queue (`SDL_PeepEvents`, `SDL_PushEvent`), the abort watch (it runs on the thread that queues the event), the panic watchdog, the raw mouse reader, the idle-wake waiter, the trigger worker, SDL's raw keyboard thread |
+| the pump: `SDL_PumpEvents()` | `yscr_poll()` with `SDL_PeepEvents()`: no pump | the gamma ramp (GDI, by the display's name) |
+| the program's window calls (`yscr_window_call()`) | two window flags read each frame (below) | |
+
+The thread waits in `MsgWaitForMultipleObjectsEx` on its command event
+and on any message for its windows (`QS_ALLINPUT`), at most 100 ms (4 ms
+while a screen has gamepads, because SDL polls XInput in its pump), then
+runs a waiting command, a waiting release, and `SDL_PumpEvents()`. The
+100 ms wake is the heartbeat the panic reads. When the thread ends it
+calls `SDL_CleanupTLS()`, so a thread per session leaves no SDL memory.
+
+### Decisions
+
+Each item below was open after the probe (its section 5 and its open
+questions); the reason is the one that decided it.
+
+1. **`desc.window_thread`: AUTO (0), ON, OFF.** AUTO is ON for DXGI_FLIP
+   and COMPOSITION (user, 2026-10-26: the bindings need it, and C
+   programs route their few SDL calls). AUTO is OFF where the thread
+   cannot run or should not: the web and `YRT_NO_THREADS` (one thread), a
+   custom presenter (it may call SDL on the window from the frame
+   thread), and a program that started SDL's video on its own thread
+   before the first open (SDL made that thread its main thread, and
+   `SDL_IsMainThread()` would be false on ours). ON fails `open()` with a
+   message where it cannot run. OFF is v0.9.0's path, line for line: the
+   window code moved into two functions that both paths call.
+2. **One mode per process, while screens with a window are open.** SDL
+   has one main thread. An OFF window beside the window thread would be
+   pumped by no thread, and an ON window beside an OFF one would put SDL's
+   video calls on two threads. So `open()` refuses an ON or OFF that
+   differs from the open screens', and AUTO takes theirs, except that a
+   custom presenter's AUTO beside the window thread fails (AUTO would be
+   OFF for it; the message says to set ON and route its SDL calls).
+3. **`yscr_window_call(s, fn, ctx)` is public** (user, 2026-10-26). It is
+   the one door for SDL calls on `yscr_window()`, so the header does not
+   grow a wrapper per SDL call (title, cursor, grab, a console window,
+   Dear ImGui). Without a window thread it runs `fn` at once, so code
+   written for the thread runs on every backend and platform. A call
+   from inside `fn` runs at once (the window thread would wait on
+   itself). Any thread may call it; calls run one at a time under one
+   lock.
+4. **The time limit on a command.** A command the window thread has not
+   taken in 5 s is withdrawn before it runs, and the call fails
+   (`YSCR_ERR_TIMEOUT`). Why 5 s: Windows calls a window hung after 5 s
+   without a message read, so a window thread that takes no command in
+   that time is hung by the OS's own rule. Once taken:
+   - `open()`'s command and a window call run to their end. Both use the
+     caller's memory (the desc, the handle, `ctx`); returning while the
+     window thread still writes there would corrupt it. A driver call
+     that never returns hangs v0.9.0's `open()` the same way.
+   - `close()`'s command works on a copy of what it needs (the window,
+     the icons, the gamepads, the flags), held by the header. `close()`
+     waits at most 5 s more and then returns: the window stays until the
+     process ends, `yscr_error()` says "the window thread did not answer
+     in 5 s", and the thread is left behind. Why 5 s: the destroy of a
+     fullscreen window in a switched mode put the desktop mode back in 1.2
+     s (measured, v0.3.1). Close must not hang the host.
+   - After a thread is left behind, `open()` refuses a window: SDL's
+     video belongs to that thread, and no other thread may take it.
+5. **The display lists run on the window thread while it runs.**
+   `yscr_displays()`, `yscr_modes()` and `yscr_mode_multiple()` call
+   SDL's video functions; without a window thread they bring SDL's video
+   up for the call on the calling thread, as before. Measured with the
+   thread: the same displays and modes as before the open.
+6. **`begin()` no longer pumps; `yscr_poll()` takes events with
+   `SDL_PeepEvents()`**, which any thread may call. `SDL_PollEvent()`
+   pumps, and SDL 3.4.0 asserts in debug builds that the pump runs on
+   its main thread (`SDL_PumpEventsInternal`). Events come into SDL's
+   queue as the window thread reads messages, also while the host waits.
+7. **SDL's strings for the frame thread.** SDL keeps the string of a
+   text, IME, drop or clipboard event in the memory of the thread that
+   takes the event, and frees it at that thread's next pump
+   (`SDL_FreeTemporaryMemory()` in `SDL_PumpEventsInternal`, SDL 3.4.0
+   `src/events/SDL_events.c`). The frame thread never pumps, so nothing
+   freed them. Measured with `tests/adapt/screen_window_test.c --only
+   text` (500 characters typed with `SendInput` as UTF-16 into a window
+   with text input on, each polled; SDL's allocations counted through
+   `SDL_SetMemoryFunctions`): without a fix 2.00 SDL allocations stayed
+   per character (the string and its list entry), with the fix 0.01.
+   The fix: `yscr_poll()` notes when it returned such an event, and the
+   next `begin()` or `close()` calls `SDL_CleanupTLS()` on that thread.
+   It also frees the strings SDL returned before on that thread
+   (`SDL_GetKeyName()` and the like); the manual says to copy them. A
+   rewrite of the event's pointer in an event watch, to a copy the
+   header holds, was considered and not taken: it relies on SDL linking
+   the memory by pointer value, and a full copy store needs a size limit
+   that a long drop of files can exceed.
+8. **One window thread per process, with a user count.** The first
+   `open()` that needs it starts it, the last `close()` stops it; each
+   screen's window is on it. A per-screen thread would put SDL's video
+   calls on several threads.
+9. **Two flags stay on the frame thread.** `flip_at()` reads
+   `SDL_TextInputActive()` and the raw mouse guard reads
+   `SDL_GetWindowRelativeMouseMode()` on every frame. Both are field
+   reads after SDL's object check in SDL 3.4.0 (`SDL_video.c`); a window
+   call cost 6.5 and 11.4 us at the median and 27 and 44 us at p99 in two
+   runs of 1000 (`screen_window_test --only call`, a 480 x 300 window),
+   too much for each frame. The HWND and the window's pixel size (read
+   at open with `GetClientRect` inside SDL) also stay. Everything that
+   changes a window goes to the window thread.
+
+### The panic's release
+
+Before v0.10.0, three presses with no abort reported for the grace time
+ended the process (exit code 99). With the window thread a host that
+only waits never hangs its window, so the rule would end a MATLAB
+session in `pause` (the av probe saw it). Decided (user, 2026-10-26):
+keep the trigger, change what it does by who answers.
+
+- **The window thread answers** (its heartbeat is newer than 1 s): the
+  watchdog asks it for a release and waits up to 5 s (v0.10.1; 1 s in v0.10.0, see below). The window thread
+  minimizes every window it owns and shows the cursor; the watchdog puts
+  back the gamma ramps, writes `YSCR_EV_PANIC` with `u.u32[1]` 1 and adds
+  an abort with the new reason `YSCR_ABORT_PANIC` (0x20). The next
+  `begin()` reports it with the presses (0x21), and every `begin()` after
+  that returns `YSCR_QUIT` with `YSCR_ABORT_PANIC`. The program may only
+  close; `open()` refuses a window until every screen has closed.
+  `panic_fn` does not run: the process lives and saves after its next
+  `begin()`.
+- **The window thread does not answer** (no heartbeat for 1 s, or the
+  release not begun in 1 s or not done in 5 s): the process ends as
+  before.
+
+No call gets a released session back (user, 2026-10-26): a released
+window would have to be restored, made fullscreen again and settled, and
+a program that wants that can close and open.
+
+Measured (`examples/screen/abort.c`, keys by `SendInput`, a 320 x 200
+window with the watchdog armed through its test seam, AC): with the
+window thread ON and the host in `Sleep(4000)`, the release ran 7.7 ms
+after the panic began, the window was minimized, the child lived, its
+next `begin()` returned 0x21 with 3 presses and the following ones 0x20,
+and it exited 0 after close. With the window thread blocked by an 8 s
+window call, the third press ended the child (exit code 99) after 1.1 s:
+the heartbeat was 0.9 s old at the panic, so the watchdog asked for a
+release, waited the 1 s and then ended the process. With the thread OFF,
+"hang" and "ghost" ended the child 51 to 52 ms after the third press, as
+in v0.3.1. `tests/adapt/screen_window_test.c` calls the panic as the
+watchdog does: release 9.9 ms, and a child whose window thread is blocked
+ended with exit code 99 after 2.4 s.
+
+### Measured on v0.10.0: the window thread against v0.9.0's path
+
+The harness is [tests/probe/screen_winthread/](../tests/probe/screen_winthread/)
+(its README says how to build, run and make these tables): the
+window-thread probe's `probe_c`, abi3 module for CPython 3.12.11 and MEX
+file, built against this header in place of the probe's copy, with
+`desc.window_thread` from `YSCR_WINDOW_THREAD` in the environment, so
+each comparison is one binary per host; static SDL3 3.4.0 (MSVC 19.51
+`/MD` for C, Python and MATLAB; Octave 10.1's MinGW gcc 14.2 for
+Octave). The laptop and panel of the top of this note (Iris Xe, 1920 x
+1200 at 60.0008 Hz, one display), AUTO backend (COMPOSITION in every
+run), AC (the battery status read 2 at the start and end of the series),
+the Balanced plan. Every run went through `psy-guard.sh time`, one at a
+time; other workers built between runs. No photodiode: every tier is the
+record's. The scene is the av probe's: N stimuli, one parameter set and
+one draw each per frame. OFF ran first in each pair.
+
+**The frame loop, 10 minutes per run** (2026-10-26 21:55 to 2026-10-27
+02:39, and the four reruns of 05:11 to 05:53). Columns as in
+`docs/winthread_probe.md` section 3.1.
+
+| Host | N | Window | Design | Frames | Missed (vblanks) | Late target | Occluded | Residual us p50 / p99 | Work ms p50 / p99 / max | Path, tier | Window thread CPU |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| C | 10 | fullscreen | OFF | 36002 | 0 (0) | 0 | 0 | 0.7 / 2.5 | 0.24 / 0.61 / 1.0 | independent 36002; t1 36002 | - |
+| C | 10 | fullscreen | ON | 36002 | 0 (0) | 0 | 0 | 0.8 / 2.1 | 0.21 / 0.59 / 2.2 | independent 36002; t1 36002 | 266 ms in 600 s |
+| C | 100 | fullscreen | OFF | 35929 | 16 (20) | 0 | 18 | 0.7 / 60.1 | 0.47 / 1.69 / 2.8 | independent 35926, overlay 3; t1 35906, t2 2, t3 21 | - |
+| C | 100 | fullscreen | ON | 36001 | 1 (1) | 0 | 0 | 0.7 / 25.5 | 0.42 / 1.33 / 3.3 | independent 36001; t1 36001 | 297 ms in 600 s |
+| C | 10 | 1280 x 720 | OFF | 36002 | 0 (0) | 0 | 0 | 0.7 / 1.9 | 0.20 / 0.53 / 1.3 | independent 36002; t1 36002 | - |
+| C | 10 | 1280 x 720 | ON | 36001 | 1 (1) | 0 | 0 | 0.7 / 2.2 | 0.23 / 0.59 / 2.4 | independent 36001; t1 36001 | 359 ms in 600 s |
+| C | 100 | 1280 x 720 | OFF | 36000 | 2 (2) | 0 | 0 | 0.7 / 2.2 | 0.49 / 1.55 / 3.1 | independent 36000; t1 36000 | - |
+| C | 100 | 1280 x 720 | ON | 36002 | 0 (0) | 0 | 0 | 0.7 / 2.5 | 0.66 / 1.79 / 3.4 | independent 36002; t1 36002 | 484 ms in 600 s |
+| Python 3.12 | 10 | fullscreen | OFF | 35998 | 1 (1) | 0 | 1 | 0.7 / 2.2 | 0.28 / 0.71 / 2.3 | independent 35998; t1 35997, t3 1 | - |
+| Python 3.12 | 10 | fullscreen | ON | 36003 | 0 (0) | 0 | 0 | 1.0 / 86.3 | 0.28 / 0.74 / 1.3 | independent 36003; t1 35995, t2 8 | 406 ms in 600 s |
+| Python 3.12 | 100 | fullscreen | OFF | 36000 | 3 (3) | 0 | 0 | 0.7 / 2.0 | 0.73 / 2.34 / 6.0 | independent 36000; t1 36000 | - |
+| Python 3.12 | 100 | fullscreen | ON | 35939 | 44 (64) | 0 | 0 | 0.6 / 2.2 | 0.77 / 2.38 / 3.6 | independent 35939; t1 35939 | 469 ms in 600 s |
+| Python 3.12 | 10 | 1280 x 720 | OFF | 36000 | 2 (2) | 0 | 0 | 0.6 / 2.1 | 0.29 / 0.75 / 2.1 | independent 36000; t1 36000 | - |
+| Python 3.12 | 10 | 1280 x 720 | ON | 35999 | 3 (3) | 0 | 0 | 0.7 / 2.1 | 0.29 / 0.74 / 2.5 | independent 35999; t1 35999 | 391 ms in 600 s |
+| Python 3.12 | 100 | 1280 x 720 | OFF | 36002 | 0 (0) | 0 | 0 | 0.8 / 2.4 | 1.24 / 2.67 / 5.1 | independent 36002; t1 36002 | - |
+| Python 3.12 | 100 | 1280 x 720 | ON | 36002 | 0 (0) | 1 | 0 | 0.7 / 2.4 | 1.29 / 2.65 / 5.7 | independent 36002; t1 36002 | 531 ms in 600 s |
+| MATLAB R2023a | 10 | fullscreen | OFF | 36002 | 0 (0) | 0 | 0 | 1.0 / 95.8 | 0.51 / 1.00 / 5.8 | independent 36002; t1 35990, t2 12 | - |
+| MATLAB R2023a | 10 | fullscreen | ON | 36002 | 0 (0) | 1 | 0 | 1.2 / 104.2 | 0.50 / 0.99 / 3.2 | independent 36002; t1 35979, t2 23 | - |
+| Octave 10.1 | 10 | fullscreen | OFF | 36002 | 0 (0) | 1 | 0 | 1.4 / 106.1 | 0.79 / 1.59 / 3.4 | independent 36002; t1 35944, t2 58 | - |
+| Octave 10.1 | 10 | fullscreen | ON | 36002 | 0 (0) | 0 | 0 | 1.2 / 104.1 | 0.84 / 1.60 / 4.4 | independent 36002; t1 35973, t2 29 | - |
+
+Reruns of the fullscreen N = 100 pairs: the first C OFF run had 18
+OCCLUDED records (another window over ours for a while) and the first
+Python ON run 37 of its 44 misses between 529 and 578 s, with the work per
+frame up from 0.8 to 1.2 to 1.7 ms in the same stretch (the machine, not
+the screen). Again, 05:11 to 05:53:
+
+| C | 100 | fullscreen | OFF | 36001 | 1 (1) | 0 | 0 | 1.2 / 103.7 | 0.68 / 1.57 / 2.8 | independent 36001; t1 35962, t2 39 | - |
+| C | 100 | fullscreen | ON | 36003 | 0 (0) | 0 | 0 | 1.0 / 95.2 | 0.77 / 1.58 / 2.8 | independent 36003; t1 35972, t2 31 | - |
+| Python 3.12 | 100 | fullscreen | OFF | 36002 | 0 (0) | 0 | 0 | 0.9 / 88.0 | 1.22 / 2.61 / 7.1 | independent 36002; t1 35978, t2 24 | - |
+| Python 3.12 | 100 | fullscreen | ON | 36001 | 1 (1) | 1 | 0 | 1.3 / 108.0 | 1.33 / 2.63 / 5.4 | independent 36001; t1 35954, t2 47 | - |
+
+(Window thread CPU in the reruns: 328 and 344 ms in 600 s.) Reading the
+tables: no difference follows the design. Away from the two disturbed
+runs, 0 to 3 missed frames per 36,000 in either design; residual p99 2 to
+2.5 us in a window and 2 to 108 us fullscreen in both (the fullscreen
+tails are the grid-jitter stretches the probe described); every frame on
+independent flip; the host's work per frame within 0.2 ms at p50 and p99
+between the designs of a pair. MATLAB and Octave, 10 minutes each: no
+missed frame in either design. The window thread used 0.27 to 0.53 s of
+CPU in 600 s.
+
+**Idle gaps with no pump** (2026-10-27 03:24 to 04:57): 120
+frames, then no call for the gap (C `Sleep()`, Python `time.sleep()`),
+then 120 frames; N = 10; a thread polled `IsHungAppWindow()` and the
+foreground every 50 ms. "Bad" frames are those before the first 10 in a
+row with tier 1, no drop and no flag.
+
+| Gap | Window | Host | OFF: hung, ghost | OFF: frame 120; bad frames | ON: hung, ghost | ON: frame 120; bad frames |
+|---|---|---|---|---|---|---|
+| 5 s | fullscreen | C | 4.21 s, 4.26 s | frame 120: drop 1, overlay, tier 3, flags 0x100; bad 3 (133 ms), max begin wait 81.1 ms, flags 0x10a, drops 1 | never, never | frame 120: drop 0, independent, tier 1, flags 0x4; bad 1 (17 ms), max begin wait 0.1 ms, flags 0x4, drops 0 |
+| 5 s | fullscreen | Python | 4.26 s, 4.31 s | frame 120: drop 1, overlay, tier 3, flags 0x100; bad 3 (133 ms), max begin wait 80.1 ms, flags 0x10a, drops 1 | never, never | frame 120: drop 0, independent, tier 1, flags 0x0; bad 0 (0 ms), max begin wait 0.0 ms, flags 0x0, drops 0 |
+| 5 s | 1280 x 720 | C | 4.05 s, 4.10 s | frame 120: drop 1, overlay, tier 3, flags 0x100; bad 2 (50 ms), max begin wait 14.2 ms, flags 0x100, drops 1 | never, never | frame 120: drop 0, independent, tier 1, flags 0x0; bad 0 (0 ms), max begin wait 0.0 ms, flags 0x0, drops 0 |
+| 5 s | 1280 x 720 | Python | 4.46 s, 4.51 s | frame 120: drop 1, overlay, tier 3, flags 0x100; bad 3 (67 ms), max begin wait 16.7 ms, flags 0x100, drops 1 | never, never | frame 120: drop 0, independent, tier 2, flags 0x10; bad 17 (283 ms), max begin wait 15.8 ms, flags 0x10, drops 0 |
+| 10 s | fullscreen | C | 4.30 s, 4.36 s | frame 120: drop 1, overlay, tier 3, flags 0x100; bad 3 (133 ms), max begin wait 80.0 ms, flags 0x10a, drops 1 | never, never | frame 120: drop 0, independent, tier 2, flags 0x10; bad 17 (283 ms), max begin wait 16.3 ms, flags 0x10, drops 0 |
+| 10 s | fullscreen | Python | 4.26 s, 4.31 s | frame 120: drop 0, composed, tier 3, flags 0xe; bad 19 (467 ms), max begin wait 83.0 ms, flags 0x1e, drops 0 | never, never | frame 120: drop 0, independent, tier 2, flags 0x10; bad 17 (283 ms), max begin wait 16.8 ms, flags 0x10, drops 0 |
+| 10 s | 1280 x 720 | C | 4.04 s, 4.09 s | frame 120: drop 1, overlay, tier 3, flags 0x100; bad 3 (67 ms), max begin wait 17.7 ms, flags 0x100, drops 1 | never, never | frame 120: drop 0, independent, tier 1, flags 0x0; bad 0 (0 ms), max begin wait 0.0 ms, flags 0x0, drops 0 |
+| 10 s | 1280 x 720 | Python | 4.21 s, 4.26 s | frame 120: drop 1, overlay, tier 3, flags 0x110; bad 10 (183 ms), max begin wait 30.9 ms, flags 0x110, drops 1 | never, never | frame 120: drop 0, independent, tier 2, flags 0x10; bad 17 (283 ms), max begin wait 16.4 ms, flags 0x10, drops 0 |
+| 30 s | fullscreen | C | 4.31 s, 4.36 s | frame 120: drop 1, overlay, tier 3, flags 0x110; bad 19 (467 ms), max begin wait 81.8 ms, flags 0x11a, drops 1 | never, never | frame 120: drop 0, independent, tier 2, flags 0x10; bad 17 (283 ms), max begin wait 16.5 ms, flags 0x10, drops 0 |
+| 30 s | fullscreen | Python | 4.31 s, 4.36 s | frame 120: drop 0, composed, tier 3, flags 0xa; bad 19 (450 ms), max begin wait 81.5 ms, flags 0x1a, drops 0 | never, never | frame 120: drop 0, independent, tier 2, flags 0x10; bad 17 (283 ms), max begin wait 16.2 ms, flags 0x10, drops 0 |
+| 30 s | 1280 x 720 | C | 4.46 s, 4.51 s | frame 120: drop 1, overlay, tier 3, flags 0x110; bad 15 (267 ms), max begin wait 29.9 ms, flags 0x110, drops 1 | never, never | frame 120: drop 1, independent, tier 2, flags 0x10; bad 17 (300 ms), max begin wait 17.0 ms, flags 0x10, drops 1 |
+| 30 s | 1280 x 720 | Python | 4.41 s, 4.46 s | frame 120: drop 1, overlay, tier 3, flags 0x114; bad 16 (300 ms), max begin wait 28.7 ms, flags 0x114, drops 1 | never, never | frame 120: drop 0, independent, tier 2, flags 0x10; bad 17 (283 ms), max begin wait 16.5 ms, flags 0x10, drops 0 |
+
+With the thread OFF every window was marked hung after 4.04 to 4.46 s
+and a ghost took the foreground 50 ms later; the first frame after the
+gap dropped a vblank or went composed at tier 3, and `begin()` waited up
+to 82 ms. With the thread ON: never hung, no ghost, the first frame on
+independent flip with no drop (one 30 s window run dropped one vblank).
+The 17 bad frames ON after gaps of 10 s and more are GRID_UNSTABLE only:
+the grid after a gap, below (v0.10.1).
+
+**MATLAB R2023a and Octave 10.1** (MEX, static SDL3; `pause(30)` with no
+pump):
+
+| Case | MATLAB OFF | MATLAB ON | Octave OFF | Octave ON |
+|---|---|---|---|---|
+| hung, ghost (fullscreen; window) | never; never | never; never | 4.21 s, 4.26 s; 4.41 s, 4.46 s | never; never |
+| frame 120, fullscreen | dropped 1, independent, GRID_UNSTABLE | on time, independent, GRID_UNSTABLE | composed, tier 3, `begin()` waits up to 82 ms | on time, independent, GRID_UNSTABLE |
+| frame 120, window | dropped 1, independent | on time, independent | 2 dropped, overlay, tier 3 | on time, independent |
+| Shift+Esc in frames | | QUIT, 0x1 | | QUIT, 0x1 |
+| 3 presses during `pause(10)` | | lives; minimized; release 8.1 ms; next `begin()` 0x21, 3 presses | | lives; minimized; release 10.7 ms; 0x21, 3 presses |
+| open, 1 s of frames, close, 3 times in one session | | done, exit 0 | | done, exit 0 |
+
+MATLAB's `pause` pumps its main thread, so OFF did not hang there either
+(as the av probe found). C and Python with the thread ON: Shift+Esc in
+frames gave QUIT 0x1 with 1 press in both designs; 3 presses while the host
+slept 10 s released the display (8.7 and 9.5 ms) and the next `begin()`
+returned 0x21 with 3 presses.
+
+**Input and the command cost** (C, fullscreen, ON): 50 keys by scan
+code while the frame thread spun on `yscr_poll()`: available 0.48 ms
+after `SendInput()` at p50 and 0.90 ms at p99, stamped 0.48 and 0.89 ms;
+an empty window call: 6.3 us median, 30 us max over 1000.
+
+### Dear ImGui
+
+Dear ImGui's SDL3 backend calls SDL's window, mouse, cursor, gamepad,
+text input and clipboard functions from the thread that runs it, and
+ImGui calls the backend's platform callbacks (`Platform_SetImeDataFn`,
+the clipboard, `Platform_OpenInShellFn`) from `ImGui::EndFrame()` and its
+text widgets. With the window thread all of them must run there. The
+pattern, in C through cimgui:
+
+```c
+static yscr_screen scr;
+static SDL_Event im_ev[256];
+static int im_n;
+
+/* the frame's events and NewFrame, in one call per frame */
+static void im_frame(void* u) {
+    (void)u;
+    for (int i = 0; i < im_n; i++) ImGui_ImplSDL3_ProcessEvent(&im_ev[i]);
+    im_n = 0;
+    ImGui_ImplSDL3_NewFrame();
+}
+
+/* each platform callback through the window call */
+static void (*ime_fn)(ImGuiContext*, ImGuiViewport*, ImGuiPlatformImeData*);
+typedef struct { ImGuiContext* c; ImGuiViewport* v; ImGuiPlatformImeData* d; } ime_arg;
+static void ime_cb(void* p) { ime_arg* a = p; ime_fn(a->c, a->v, a->d); }
+static void ime_routed(ImGuiContext* c, ImGuiViewport* v, ImGuiPlatformImeData* d) {
+    ime_arg a = { c, v, d };
+    yscr_window_call(&scr, ime_cb, &a);
+}
+/* the same for Platform_GetClipboardTextFn, _SetClipboardTextFn, _OpenInShellFn */
+
+/* at setup, after ImGui_ImplSDL3_InitForOther() ran in a window call: */
+ImGuiPlatformIO* pio = igGetPlatformIO_Nil();
+ime_fn = pio->Platform_SetImeDataFn;
+pio->Platform_SetImeDataFn = ime_routed;
+
+/* each frame */
+while (yscr_poll(&scr, &ev, NULL)) if (im_n < 256) im_ev[im_n++] = ev;
+ImGui_ImplOpenGL3_NewFrame();          /* GL: the frame thread */
+yscr_window_call(&scr, im_frame, NULL);
+igNewFrame();
+/* ... the panels ... */
+igRender();                            /* may call ime_routed */
+```
+
+`ImGui_ImplSDL3_InitForOther()` and `ImGui_ImplSDL3_Shutdown()` go
+through the window call too. An operator console in a second SDL window
+(docs/imgui_probe.md, configuration a) is made and destroyed in a window
+call, so the window thread reads its messages; its D3D11 device,
+swapchain and ANGLE context stay on the frame thread. The GL renderer
+(`ImGui_ImplOpenGL3_*`) stays on the frame thread with the context.
+
+The ImGui probe of docs/imgui_probe.md (`C:\tmp\psy-work\imgui`, not in
+the repository) was ported to the ysp names and routed this way
+(scratch copy of the window-thread worker, `imgui-wt`). On this laptop,
+COMPOSITION, a 800 x 600 timed window, AC, 2026-10-27 03:2x, each run
+through the timing guard (ON first in each pair):
+
+| Mode | Window thread | Frames | Long intervals | ImGui frame on the frame thread, mean / p99 us | Window calls |
+|---|---|---|---|---|---|
+| console, 12 s | ON | 839 | 0 of 718 | 275 / 712 | 843 |
+| console, 12 s | OFF | 839 | 0 of 718 | 217 / 522 | 843 (inline) |
+| overlay, 8 s | ON | 599 | 0 of 478 | 288 / 645 | 604 |
+| overlay, 8 s | OFF | 599 | 0 of 478 | 256 / 533 | 604 (inline) |
+
+The ImGui frame (events, NewFrame, the panels, Render) took 32 to 58 us
+more at the mean with the window thread (80 to 90 us in a first pair of
+runs on 2026-10-26 outside the timing guard): two window calls a frame (`im_frame` and
+the IME callback in `Render()`), each a wake of the window thread. One
+call a frame, with the IME data applied at the next frame's call, would
+save one. The probe's input test (console mode, F24 by `SendInput`)
+gave the same routing as on v0.3.2: with the stock IME callback, an
+active ImGui text field turned on text input on the timed window once it
+had the focus (keys off the raw path); with the probe's routed IME
+callback it stayed off. Both with the window thread ON and OFF.
+
+### Tests
+
+- `tests/adapt/screen_test.c`, `test_window_thread()`, without SDL: the
+  mode rule in every case (AUTO on, off for each reason, AUTO following
+  the open screens, ON and OFF refused), `desc.window_thread`'s range,
+  the window call without a thread (inline; a NULL `fn` fails with a
+  message), and a released screen: the release's abort once (0x21), then
+  0x20 from every `begin()`, a group with a released member begins no
+  member, and a screen the thread does not own sees the abort once.
+- `tests/adapt/screen_window_test.c` (new; Windows, a display; CMake
+  builds `test_screen_window` and does not run it, because CI has no
+  display) runs the thread on real windows: `idle` (5 s of `Sleep()`
+  with no pump: not hung, no ghost, AUTO's describe token), `call` (a
+  title through the window call, a nested call, 600 calls from 3 threads
+  each run once, the round trip, the thread gone after close),
+  `displays`, `mixed` (one mode per process), `text` (above), `release`
+  (the panic called as the watchdog calls it while the host sleeps),
+  `kill` (a child with a blocked window thread: exit code 99), `two`
+  (two screens, a group, one closed first), `cycles` (10 opens and
+  closes OFF, then ON: handles, threads, SDL allocations), `fullscreen`
+  (fullscreen off and on again through window calls while frames run),
+  `gamepads` (beside a screen without), `mice` (raw mice: 20 moves by
+  `SendInput`, 20 events), `triggers` (60 of 60 fired), and with
+  `--mode` a display-mode switch at open (1920 x 1200 to 1680 x 1050 and
+  back after close). 43 of 43 checks passed on 2026-10-26, `--mode`
+  included. Later cases: `sequence` (v0.10.2) and `between` (v0.10.3).
+  From v0.10.3 the checks that need the window in front (the typed
+  text, the raw mice, `sequence`) skip with a message when the OS did not
+  give the process the foreground, and the last line counts the skips;
+  with another program that took the foreground every 50 ms, `text`,
+  `mice` and `sequence` skipped and none failed. 81 of 81 checks passed
+  on 2026-10-27, from a launcher in front and from a background shell.
+- `examples/screen/abort.c` sends the keys: `live` (AUTO, so the window
+  thread), `hang`, `ghost` and `held` with the thread OFF (the process
+  ends, as in v0.3.1), `release` and `kill` with it ON, and with
+  `--mode-test` the mode case OFF and ON.
+- Mutants `wt-01` to `wt-09` (the core test) and `wt-20` to `wt-29`
+  (`tests/adapt/screen_window_test.c`, one case each through
+  `YSCR_WINDOW_TEST_ONLY`): 19 of 19 killed. The whole list, 164 with
+  v0.10.1's, ran again with `-j 3`: 162 killed, 1 timeout (st-11), and
+  `wt-25` survived because its baseline failed (another test's window
+  had the foreground, so the typed keys missed); alone it was killed. Run
+  the window mutants one at a time.
+
+### Findings that are not the window thread's
+
+- **5 handles per open and close.** `screen_window_test --only cycles`:
+  from the second cycle to the tenth the process gained 40 handles, 5 a
+  cycle, with the window thread OFF and the same with it ON
+  (COMPOSITION, 480 x 300 window, settling off). No thread and no SDL
+  allocation was left. The handles are not the window thread's; whose
+  they are was not traced (ANGLE, D3D11 or DComp are candidates).
+  Fixed in v0.10.4: 5 events of COMPOSITION's open
+  ([Handles, no free buffer, display ids](#handles-no-free-buffer-display-ids-v0104)).
+- **SDL's display ids change with each start of SDL's video.** A
+  `yscr_displays()` before the first open returned id 1 for the panel;
+  with a screen open, id 3. SDL numbers displays anew at each video
+  init, and `yscr_displays()` without a screen starts and stops video
+  for the call. So a `desc.display` taken from `yscr_displays()` before
+  the first open does not name a display at that open (v0.9.0 too; one
+  display here, so `desc.display` 0 was used throughout). With the
+  window thread running, the ids stay valid between opens. Fixed in
+  v0.10.4: an id that is no longer current is matched by name and bounds
+  ([Handles, no free buffer, display ids](#handles-no-free-buffer-display-ids-v0104)).
+
+## The grid after a gap (v0.10.1)
+
+The window-thread probe (`docs/winthread_probe.md` section 3.2) found,
+in both designs and with the av probe's pump: after a gap of 10 s or more
+without presents, the first 16 records carry `YSCR_FLIP_GRID_UNSTABLE` at
+tier 2, the 17th shows the grid moving to the OS's vblank times, and the
+onsets of the flagged records are up to 1 ms late against the OS's times.
+
+### The cause
+
+`gapdiag.c` ([tests/probe/screen_gap/](../tests/probe/screen_gap/); its
+README says how to build and run it and make these tables) wraps a
+screen's presenter, so each OS vblank time is logged with the
+grid's state before the core used it. It runs frames for a time, sleeps
+the gap with no call, and runs 120 frames. COMPOSITION, fullscreen,
+window thread ON, the laptop of this note, AC, 2026-10-26 23:2x to
+2026-10-27 01:0x, through the timing guard:
+
+| Frames before the gap | Gap | The grid's period before the gap, against the mode | The first OS time after the gap, off the grid | GRID_UNSTABLE after |
+|---|---|---|---|---|
+| 2 s | 30 s | -17.1 ppm | +530 us | 17 |
+| 2 s | 10 s | +14.4 ppm | -154 us | 0 (within 1% of a period) |
+| 60 s | 30 s | -0.4 ppm | +3 us | 0 |
+| 2 s, DXGI_FLIP | 30 s | -12.0 ppm | +336 us | 17 |
+| 60 s, DXGI_FLIP | 30 s | -0.2 ppm | -16 us | 0 |
+
+The offset after the gap is the period's error times the gap. The grid
+fits its period from the OS's times since its anchor (THE GRID); over the
+first 2 s that fit was 1 to 41 ppm off the long-run rate, of either sign,
+in 60 runs. The OS's times themselves wander: least-squares periods over
+windows of the 60 s run (residuals 2 to 5 us within 1 s windows, 37 to 56
+us within 10 s windows):
+
+| Window of the run | Period against the mode |
+|---|---|
+| 0.0 to 1.0 s | -35.5 ppm |
+| 1.0 to 2.0 s | -5.2 ppm |
+| 2.0 to 3.0 s | +2.6 ppm |
+| 3.0 to 4.0 s | +50.7 ppm |
+| 4.0 to 5.0 s | +20.2 ppm |
+| 5.0 to 7.5 s | -14.9 ppm |
+| 7.5 to 10.0 s | +6.4 ppm |
+| 10.0 to 20.0 s | -3.1 ppm |
+| 20.0 to 30.0 s | -0.1 ppm |
+| 30.0 to 40.0 s | +4.0 ppm |
+| 40.0 to 50.0 s | +6.7 ppm |
+| 50.0 to 60.0 s | +3.2 ppm |
+
+So no fit over a few seconds predicts the vblanks 30 s later to the 1%
+of a period (167 us) that keeps a time on the grid, and the rule that
+protects the grid from DXGI's off-grid times (16 in a row before it
+moves, v0.4.3) then flags 16 records and moves on the 17th.
+
+### What the system knows during a gap
+
+The same runs logged two other vblank sources every 20 ms or at each
+vblank, from threads of the probe:
+
+- The idle-wake waiter's wakes (COMPOSITION's `D3DKMTWaitForVerticalBlankEvent`):
+  they track the vblanks through the gap, but each wake comes 7 to 173 us
+  after the vblank (p10 to p90 in frames) and with a different spread
+  while the host idles; a phase from them would need a latency model.
+- DWM's vblank time (`DwmGetCompositionTimingInfo(NULL)`, `qpcVBlank`):
+  within 4 us of the flip statistics' times before and after the gap on
+  both backends (p10 to p90: -4.3 to +4.7 us fullscreen, -19 to +20 us in
+  a window while the window was still composed, -8 to +7 us after), never
+  older than 2 periods in 6,682 samples, and moving with the vblanks
+  through the gap (the last sample of a gap within 1 to 19 us of the line
+  of the OS's times after it). `qpcVBlank` is the next vblank, up to a
+  period after the call (measured: 1 to 16 ms ahead), so the header takes
+  it back one `qpcRefreshPeriod`.
+
+### The fix
+
+The candidate (feed the idle-wake waiter's times into the grid during the
+gap) was not taken: the wakes carry a latency of tens of us that varies
+with the CPU's load, they exist on COMPOSITION only, and the grid would
+need a lock with the waiter's thread. DWM's time has no latency, works on
+both backends, and is read once, on the frame thread:
+
+- In `begin()`, after the completions and before the prediction, when the
+  grid's newest OS time is 0.5 s old or more (a gap: within 0.5 s the
+  grid holds to tens of us), the header reads DWM's vblank once for that
+  gap.
+- It takes it as an OS time (the anchor moves there, and the period's fit
+  gains the gap as baseline) when it is newer than the grid's newest,
+  at most 2 periods old, and within 1% of a period plus 100 ppm of the
+  gap of the grid's vblank, at most a quarter period. Else it counts as
+  refused and the grid extrapolates as before.
+- DWM's timing is the primary display's: a screen on another display, or
+  a refresh 0.5% off DWM's, does not ask. Two displays were not tried.
+- `gap_anchors=N(max ...us, refused M)` in the describe line.
+
+### Before and after
+
+`gapdiag` again, 2 s of frames, then the gap, then 120 frames; fullscreen
+unless stated; the before runs twice (0.10.0, and "(b)" from a build of
+the first fix, which never anchored: it took DWM's next vblank, ahead of
+now, as stale); 2026-10-27 02:4x to 06:09, through the timing guard, AC.
+
+| Backend | Window | Gap s | Window thread | Header | Period before the gap, ppm | First OS time after the gap, us off the grid | GRID_UNSTABLE records after | Largest onset error, us | Gap anchors (move) |
+|---|---|---|---|---|---|---|---|---|---|
+| COMPOSITION | fullscreen | 5 | OFF | 0.10.0 | +28.14 | -151 | 0 | 0 | 0 |
+| COMPOSITION | fullscreen | 5 | OFF | 0.10.0 (b) | +22.49 | -135 | 0 | 0 | 0 |
+| COMPOSITION | fullscreen | 5 | OFF | 0.10.1 | +41.04 | -0 | 0 | 0 | 1 (334 us) |
+| COMPOSITION | fullscreen | 5 | ON | 0.10.0 | +33.76 | -211 | 17 | 212 | 0 |
+| COMPOSITION | fullscreen | 5 | ON | 0.10.0 (b) | +35.20 | -210 | 17 | 219 | 0 |
+| COMPOSITION | fullscreen | 5 | ON | 0.10.1 | +24.96 | -0 | 0 | 0 | 1 (227 us) |
+| COMPOSITION | fullscreen | 10 | OFF | 0.10.0 | +19.17 | -239 | 17 | 268 | 0 |
+| COMPOSITION | fullscreen | 10 | OFF | 0.10.0 (b) | +18.92 | -197 | 17 | 197 | 0 |
+| COMPOSITION | fullscreen | 10 | OFF | 0.10.1 | +18.66 | -1 | 0 | 0 | 1 (201 us) |
+| COMPOSITION | fullscreen | 10 | ON | 0.10.0 | +22.02 | -245 | 17 | 253 | 0 |
+| COMPOSITION | fullscreen | 10 | ON | 0.10.0 (b) | +37.10 | -392 | 17 | 407 | 0 |
+| COMPOSITION | fullscreen | 10 | ON | 0.10.1 | +21.98 | -1 | 0 | 0 | 1 (220 us) |
+| COMPOSITION | fullscreen | 30 | OFF | 0.10.0 | +26.87 | -862 | 17 | 871 | 0 |
+| COMPOSITION | fullscreen | 30 | OFF | 0.10.0 (b) | +15.13 | -499 | 17 | 501 | 0 |
+| COMPOSITION | fullscreen | 30 | OFF | 0.10.1 | +28.44 | -0 | 0 | 0 | 1 (895 us) |
+| COMPOSITION | fullscreen | 30 | ON | 0.10.0 | +28.70 | -896 | 17 | 901 | 0 |
+| COMPOSITION | fullscreen | 30 | ON | 0.10.0 (b) | +19.72 | -675 | 17 | 682 | 0 |
+| COMPOSITION | fullscreen | 30 | ON | 0.10.1 | +15.64 | -1 | 0 | 0 | 1 (480 us) |
+| COMPOSITION | fullscreen | 30 (again) | ON | 0.10.0 | +8.74 | -274 | 17 | 291 | 0 |
+| COMPOSITION | fullscreen | 30 (again) | ON | 0.10.0 (b) | -1.43 | 15 | 0 | 0 | 0 |
+| COMPOSITION | fullscreen | 30 (again) | ON | 0.10.1 | +22.28 | 2 | 0 | 0 | 1 (726 us) |
+| COMPOSITION | fullscreen | 60 | OFF | 0.10.0 | +23.34 | -1495 | 17 | 1501 | 0 |
+| COMPOSITION | fullscreen | 60 | OFF | 0.10.0 (b) | +12.38 | -727 | 17 | 731 | 0 |
+| COMPOSITION | fullscreen | 60 | OFF | 0.10.1 | +16.02 | -0 | 0 | 0 | 1 (1036 us) |
+| COMPOSITION | fullscreen | 60 | ON | 0.10.0 | +15.89 | -1013 | 17 | 1024 | 0 |
+| COMPOSITION | fullscreen | 60 | ON | 0.10.0 (b) | +30.06 | -1904 | 17 | 1921 | 0 |
+| COMPOSITION | fullscreen | 60 | ON | 0.10.1 | +15.04 | 0 | 0 | 0 | 1 (991 us) |
+| COMPOSITION | 1280 x 720 | 30 | ON | 0.10.0 | +12.67 | -382 | 17 | 391 | 0 |
+| COMPOSITION | 1280 x 720 | 30 | ON | 0.10.0 (b) | +20.06 | -659 | 17 | 660 | 0 |
+| COMPOSITION | 1280 x 720 | 30 | ON | 0.10.1 | +5.93 | -0 | 0 | 0 | 1 (208 us) |
+| DXGI_FLIP | fullscreen | 5 | OFF | 0.10.0 | +24.08 | -132 | 0 | 0 | 0 |
+| DXGI_FLIP | fullscreen | 5 | OFF | 0.10.0 (b) | +33.93 | -214 | 17 | 225 | 0 |
+| DXGI_FLIP | fullscreen | 5 | OFF | 0.10.1 | +19.35 | 1 | 0 | 0 | 1 (125 us) |
+| DXGI_FLIP | fullscreen | 5 | ON | 0.10.0 | +20.45 | -126 | 0 | 0 | 0 |
+| DXGI_FLIP | fullscreen | 5 | ON | 0.10.0 (b) | +27.38 | -140 | 0 | 0 | 0 |
+| DXGI_FLIP | fullscreen | 5 | ON | 0.10.1 | +15.85 | 1 | 0 | 0 | 1 (89 us) |
+| DXGI_FLIP | fullscreen | 10 | OFF | 0.10.0 | +22.86 | -252 | 17 | 255 | 0 |
+| DXGI_FLIP | fullscreen | 10 | OFF | 0.10.0 (b) | +7.77 | -72 | 0 | 0 | 0 |
+| DXGI_FLIP | fullscreen | 10 | OFF | 0.10.1 | +13.10 | -1 | 0 | 0 | 1 (153 us) |
+| DXGI_FLIP | fullscreen | 10 | ON | 0.10.0 | +13.66 | -119 | 0 | 0 | 0 |
+| DXGI_FLIP | fullscreen | 10 | ON | 0.10.0 (b) | +25.31 | -328 | 17 | 331 | 0 |
+| DXGI_FLIP | fullscreen | 10 | ON | 0.10.1 | +28.78 | 0 | 0 | 0 | 1 (286 us) |
+| DXGI_FLIP | fullscreen | 30 | OFF | 0.10.0 | +19.86 | -594 | 17 | 595 | 0 |
+| DXGI_FLIP | fullscreen | 30 | OFF | 0.10.0 (b) | +24.97 | -766 | 17 | 774 | 0 |
+| DXGI_FLIP | fullscreen | 30 | OFF | 0.10.1 | +12.04 | 1 | 0 | 0 | 1 (412 us) |
+| DXGI_FLIP | fullscreen | 30 | ON | 0.10.0 | +37.52 | -1164 | 17 | 1184 | 0 |
+| DXGI_FLIP | fullscreen | 30 | ON | 0.10.0 (b) | +28.56 | -949 | 17 | 956 | 0 |
+| DXGI_FLIP | fullscreen | 30 | ON | 0.10.1 | +25.86 | -0 | 0 | 0 | 1 (766 us) |
+| DXGI_FLIP | fullscreen | 30 (again) | ON | 0.10.0 | -5.14 | 156 | 0 | 0 | 0 |
+| DXGI_FLIP | fullscreen | 30 (again) | ON | 0.10.0 (b) | -6.55 | 247 | 17 | 248 | 0 |
+| DXGI_FLIP | fullscreen | 30 (again) | ON | 0.10.1 | +30.89 | -1 | 0 | 0 | 1 (968 us) |
+| DXGI_FLIP | fullscreen | 60 | OFF | 0.10.0 | -23.96 | 1334 | 17 | 1334 | 0 |
+| DXGI_FLIP | fullscreen | 60 | OFF | 0.10.0 (b) | -4.64 | 228 | 17 | 228 | 0 |
+| DXGI_FLIP | fullscreen | 60 | OFF | 0.10.1 | +29.49 | -1 | 0 | 0 | 1 (1864 us) |
+| DXGI_FLIP | fullscreen | 60 | ON | 0.10.0 | +20.11 | -1213 | 17 | 1219 | 0 |
+| DXGI_FLIP | fullscreen | 60 | ON | 0.10.0 (b) | +30.72 | -1961 | 17 | 1981 | 0 |
+| DXGI_FLIP | fullscreen | 60 | ON | 0.10.1 | +23.58 | -2 | 0 | 0 | 1 (1431 us) |
+| DXGI_FLIP | 1280 x 720 | 30 | ON | 0.10.0 | +4.57 | -129 | 0 | 0 | 0 |
+| DXGI_FLIP | 1280 x 720 | 30 | ON | 0.10.0 (b) | -1.84 | 75 | 0 | 0 | 0 |
+| DXGI_FLIP | 1280 x 720 | 30 | ON | 0.10.1 | +8.61 | 1 | 0 | 0 | 1 (282 us) |
+
+Before: 17 GRID_UNSTABLE records after the gap in 29 of 40 runs, each
+run whose drift passed 167 us (3 of 8 at 5 s, 6 of 8 at 10 s, 12 of 16
+at 30 s, 8 of 8 at 60 s), onsets up to 1.98 ms late. After: none in 20 of 20; the first OS time
+after the gap 0 to 2 us off the grid; DWM's time moved the grid 89 us to
+1.86 ms. The fix lands.
+
+The core test plays it on its scripted display (`test_gap_anchor()`):
+the vblanks move 0.5 ms during a 30 s gap; without the system's vblank
+16 to 17 records are flagged, with it none and every onset a vblank; a
+system vblank 2 ms off is refused once; a 0.3 s gap does not ask. Mutants
+`gp-01` to `gp-04`, all killed.
+
+Not run: a second display (DWM's timing is the primary's), another
+refresh, a gap longer than 60 s (at 30 ppm the drift passes a quarter
+period after about 140 s and the anchor is refused), a display that
+turned off during the gap.
+
+### The release in a switched mode (fixed in v0.10.1)
+
+`examples/screen/abort.c --mode-test` on v0.10.0: fullscreen at 1680 x
+1050 on the 1920 x 1200 desktop, the window thread ON, the host in
+`Sleep()`: the panic ended the process (exit code 99) instead of the
+release. Minimizing a fullscreen window in a switched mode puts the
+desktop mode back first; that took 1.2 to 1.4 s, and the watchdog waited
+1 s for the release. Now it waits 1 s for the window thread to begin the
+release and 5 s for it to end, and reads the hook's messages meanwhile
+(the hook runs on the watchdog's thread). After, in two runs: the release
+took 1.43 and 1.49 s on the window thread, the child lived and exited 0,
+and the desktop mode was back 1.23 and 1.29 s after the third press. The `kill` case (a
+blocked window thread) still ended the process, 1.1 s after the third
+press: the blocked thread never began the release.
+
+## The next screen's raise (v0.10.2)
+
+Found by the ysp-vis real-window tests (2026-10-27, main a0d3dcc): one
+Python process opened a 1280 x 720 window three times, one after
+another. With `window_thread` ON, the first window got
+`foreground=granted`, the second and the third `foreground=refused`, and
+each of their 120 records was `PATH_UNKNOWN`, `ESTIMATED|OCCLUDED`,
+tier 3. With OFF, all three were granted.
+
+### The cause
+
+Windows lets a thread that has the foreground window give the foreground
+to its next window. With the window thread OFF, the caller's thread
+makes every window, so the right goes from one screen to the next. With
+ON, the window thread ends at the last close, and the next open's window
+belongs to a new thread, which has no right of its own. The raise was
+refused, the window opened behind the other programs, and DWM gave its
+flips no statistics because another window covered it. Fullscreen
+(AUTO is FORCE there) the second and the third raise were refused too,
+and the forced raise took the foreground: `foreground=forced`, the
+records good.
+
+Two fixes, each measured with `seq.c` (not in the repository; three
+1280 x 720 windows, 120 frames each, the window thread ON), two runs
+each on this laptop, AC:
+
+| Header | Screen 1 | Screens 2 and 3 |
+|---|---|---|
+| v0.10.1 | granted | refused, 119 of 119 records OCCLUDED and PATH_UNKNOWN |
+| A: the window thread lives on after the last close | granted | granted, 0 OCCLUDED |
+| B: close() calls `AllowSetForegroundWindow` for its own process while its window has the foreground | granted | granted, 0 OCCLUDED |
+
+B is v0.10.2. A keeps a thread and a hidden window after the last
+screen, and a MEX file that a host unloads would have to stop it; B
+keeps no state, and the right belongs to the process, so it holds across
+a module unload. The right goes only from a screen that has the
+foreground: when the user gave input to another program, or a forced
+raise gave the foreground back at close (FOREGROUND), the next screen in
+a window is refused as before.
+
+### Before and after
+
+All runs on this laptop, AC, through the timing guard. Only runs whose
+first screen got the foreground count: the process has the right only
+when a program in front started it and no input went to another program
+since. Some runs came from the shell of the tool, which had it; the
+others from a launcher (not in the repository) that took the foreground
+and then started the program, as a terminal in front does. C: `seq.c`
+(three 1280 x 720 windows, 120 frames each) and `fgdbg.c` (four, 60
+frames each). Python: the ysp-vis repro (three 1280 x 720 windows with a
+gfx, 120 frames each), 0.10.1.1 from main against 0.10.2 from this
+branch, CPython 3.14.3.
+
+| Program | Header | Window thread | Runs | Screens 2 and later |
+|---|---|---|---|---|
+| C | v0.10.1 | ON | 3 | refused in 7 of 7; every record OCCLUDED (119 of 119, 59 of 59) |
+| C | v0.10.2 | ON | 3 | granted in 8 of 8; no OCCLUDED record |
+| C | v0.10.1 | OFF | 3 | granted in 7 of 7 |
+| C | v0.10.2 | OFF | 2 | granted in 5 of 5 (13 of 59 records OCCLUDED in one screen, which lost the foreground to another program's window during the run) |
+| Python | 0.10.1.1 | ON | 2 | refused in 4 of 4; 120 of 120 records PATH_UNKNOWN in 3 of them |
+| Python | 0.10.2 | ON | 3 | granted in 6 of 6; no PATH_UNKNOWN record |
+| Python | 0.10.1.1 | OFF | 5 | granted in 10 of 10 |
+| Python | 0.10.2 | OFF | 6 | granted in 8 of 12; refused, with no PATH_UNKNOWN record, in the other 4 (2 runs) |
+
+The two Python runs with OFF and refusals ran while another worker's
+window tests ran outside the guard; the three later runs, two from the
+launcher and one from the shell, and one before them were granted in every screen. The C
+runs with OFF and v0.10.2 do not show it.
+
+In MATLAB R2023a (`test_mex_vis_window.m`, ysp-vis MEX 1.1.0 on
+v0.10.2, from the launcher) the second window got `foreground=granted`
+and its records path 3, tier 1.
+
+Fullscreen with v0.10.1: screens 2 and 3 were `forced`, the records good;
+with v0.10.2 `granted`.
+
+### Tests
+
+`tests/adapt/screen_window_test.c --only sequence`: three screens in a
+window and three fullscreen, one after another, then two at once and one
+more after both closed; each screen is in front, not refused, and has no
+OCCLUDED record in 60 frames. The case is skipped when the OS refused the
+process the foreground at the first screen (a launch from the
+background, or input to another program). Mutant `fg-08` (the call
+removed) fails 11 of its 17 checks from the launcher. `bindings/mex/test_mex_vis_window.m`
+checks that its second window gets the foreground as the first did.
+
+## Between frames (v0.10.3)
+
+Found 2026-10-27 by the ysp-vis text work: `ygfx_prime()` called after
+`flip()` and before the next `begin()` or `wait_flip()` blocked for 18 s
+to more than 5 minutes. The binding called `yscr_wait_flip()` first as a
+workaround.
+
+### The cause
+
+On COMPOSITION, `begin()` binds a free presentation buffer as
+framebuffer 0, and `flip()` presents it. The buffer then stayed bound. A
+buffer on the screen is released only when a newer present replaces it
+or when another window covers ours. `ygfx_prime()` draws its output pass
+into framebuffer 0 and then reads a pixel, so the GPU waited for the
+release. A read alone did not wait; a write did. DXGI_FLIP draws into
+its own texture and copies it at the present, so it did not wait. Not
+the foreground (v0.10.2): a window that was refused and covered did not
+wait, and a window in front did.
+
+On v0.10.2, this laptop, AC, `prime_c.c` (not in the repository: one
+frame, then the prime; 800 x 600 or fullscreen; in front means raised
+with FORCE and still in front at the prime):
+
+| Before the prime | In front, COMPOSITION | Other |
+|---|---|---|
+| nothing (at once), 1 s of sleep, or 60 more frames | more than 90 s in 4 of 4 (window and fullscreen, window thread ON and OFF); 47 and 56 s in 2 more, until another window covered ours | covered: 45 ms to 1.8 s (40 runs); DXGI_FLIP: 100 and 137 ms |
+| `yscr_wait_flip()` | 64 ms | |
+
+`ygfx_read_scene()`, `ygfx_read_output()` and `glFinish()` at the same
+point took 1.4 to 2.8 ms. The text worker's Python repro (ysp-vis
+0.10.2): more than 90 s in 3 of 3 runs in front, 4 to 6 ms in 5 covered
+ones.
+
+### The fix
+
+`flip()` binds a buffer that no present holds right after the present:
+the first free one of the other two, by `IsAvailable`, as `begin()`
+does. `begin()` takes that buffer first when it is still free, so it is
+current already. When no buffer is free, no surface is current until
+`yscr_bind()` or `begin()` finds one, and draws into framebuffer 0 then
+do nothing. Over 7200 presents in front (4 runs of 1800 frames) and all
+the runs below, a buffer was free at every present.
+
+- **What a draw between frames shows:** nothing. The buffer is not
+  presented until a `begin()` takes it, and a frame draws every pixel.
+- **The reads.** `ygfx_read_output()` reads framebuffer 0 after `end()`
+  and before `flip()`, as documented; after `flip()` it reads the parked
+  buffer, which holds an older frame on COMPOSITION and the last frame on
+  DXGI_FLIP. GL STATE now says that framebuffer 0 holds nothing defined
+  after `flip()`. `ygfx_read_scene()` reads the gfx's own target, and
+  `ygfx_prime()` draws into the parked buffer and reads its own target.
+  Capture copies in `end()`, before the flip.
+- **Not changed:** DXGI_FLIP, the web backend and SIM. The code is in the
+  COMPOSITION presenter only.
+
+Rejected: binding a free buffer only in `yscr_bind()`, which
+`ygfx_prime()` calls. That costs nothing in the frame, but GL from the
+caller between frames without `yscr_bind()` would still wait for
+minutes.
+
+### Cost
+
+The park, timed with QPC around it (`flipstats --backend composition`,
+1800 frames a run): p50 13.2 to 16.2 us, p99 42 to 97 us, max 165 to
+252 us, in 4 runs in a window in front, 4 fullscreen and 2 covered. It
+runs after the present call has returned, so the frame is queued
+already. In 4 runs of 1800 frames each, before and after: no drop, every
+record tier 1; the present zone p50 554 to 632 us before and 588 to
+616 us after; the header's own cost at p50 inside the run-to-run spread
+(in `begin()` 10.5 to 12.3 us before, 10.3 to 11.7 after; in `flip()`
+5.3 to 6.2 before, 5.1 to 5.9 after).
+
+### After
+
+On v0.10.3, the same machine:
+
+- C, `prime_c.c` in front: 38.7 to 101.7 ms in 7 of 7 primes after a
+  flip (window and fullscreen, ON and OFF; at once and after 60 frames).
+- `tests/adapt/screen_window_test.c --only between`: a clear and a pixel
+  read of framebuffer 0 between `flip()` and `begin()` in front, at once,
+  after 1 s and after `wait_flip()`, window and fullscreen, ON and OFF:
+  0.7 to 1.8 ms in 24 of 24 on COMPOSITION, 0.9 to 17.0 ms in 12 of 12
+  on DXGI_FLIP (two runs). With the park removed (mutant `bf-01`) the first one did not
+  return in 10 s, and the test's watchdog ended it with a FAIL line.
+- Python, ysp-vis 0.10.3, CPython 3.14.3, in front: the text worker's
+  repro 3 of 3 (prime 2 to 3 ms) and `prime_repro3.py` 6 of 6 (window and
+  fullscreen, ON and OFF; 1 to 3 ms). The ysp-vis window tests: 87
+  passed, with the text binding's `yscr_wait_flip()` before its prime
+  removed.
+- MATLAB R2023a: `test_mex_vis_window.m` primes right after a flip in
+  front, without the `wait_flip` it had: under 1 s, 17 checks pass.
+
+## Handles, no free buffer, display ids (v0.10.4)
+
+Three open findings of v0.10.0 and v0.10.3, and a CI failure on 32-bit
+Windows. Laptop of the measurements above (Iris Xe, Windows 11, AC), 2026-10-27.
+
+### 5 handles an open and close
+
+The cause: COMPOSITION's `open()` gets 5 event handles from DComp's
+presentation API: `GetPresentStatisticsAvailableEvent` and `GetLostEvent`
+of the presentation manager, and `GetAvailableEvent` of each of the 3
+buffers. Each call returns a new handle that the caller owns. Release of
+the manager and the buffers does not close them, and `close()` did not.
+DXGI_FLIP closes its one waitable object, and had no leak.
+
+`screen_window_test --only cycles` now lists the process's handles by
+type (`NtQueryInformationProcess`, ProcessHandleInformation, and
+`NtQueryObject` for the type name) after the second cycle and after the
+tenth, and prints the new ones. 10 opens and closes of a 480 x 300
+window a backend, settling off:
+
+| | COMPOSITION OFF | COMPOSITION ON | DXGI_FLIP OFF | DXGI_FLIP ON |
+|---|---|---|---|---|
+| v0.10.3, cycles 2 to 10 | +40 (Event 40) | +40 (Event 40) | +0 | +0 |
+| v0.10.4 | +0 | +0 | +0 | +0 |
+
+The fix: `close()` closes the 5 events after it releases the objects.
+The test checks that the count grows by less than 0.5 a cycle on both
+backends, with the window thread ON and OFF. It checks the threads only
+with the window thread ON: with it OFF, the thread count of the process
+was 1 higher once at the end (COMPOSITION OFF, before and after the
+fix), with no thread handle among the new ones. That is the OS's thread
+pool, not the header. Mutants `lk-01` and `lk-02` (one close each removed).
+
+### No free buffer after a present
+
+v0.10.3 binds a free buffer after each present. With none free, no
+surface is current until `yscr_bind()` or `begin()` finds one. That case
+never came in the runs. The window test now makes it come:
+`YSCR__COMP_IS_AVAILABLE(c, k, ok)` is the buffer query, and the test
+defines it before it includes the header, to report every buffer busy
+while a flag is set. The header's default is `IsAvailable`; nothing else
+changes.
+
+`screen_window_test --only nofree`, COMPOSITION in front, window thread
+OFF and ON: a frame whose present finds no buffer free (the flag is set
+after `begin()`: set before it, `begin()` itself finds none and waits),
+then:
+
+- framebuffer 0 is `GL_FRAMEBUFFER_UNDEFINED`: no surface is current;
+- a clear and a pixel read return at once (0.0 ms; a 10 s watchdog ends
+  the test with a FAIL line otherwise), the read sets
+  `GL_INVALID_FRAMEBUFFER_OPERATION`, and the pixel buffer is unchanged;
+- `yscr_bind()` while every buffer is busy leaves no surface current;
+  with the flag cleared, `yscr_bind()` binds a buffer
+  (`GL_FRAMEBUFFER_COMPLETE`);
+- a `begin()` right after a present with none free returns `YSCR_OK`
+  with a complete framebuffer 0, and 30 more frames and `wait_flip()`
+  run.
+
+16 of 16 checks pass. Mutants: `bf-02` (with none free, the shown buffer
+stays bound) and `bf-03` (`yscr_bind()` does not look again).
+
+### Display ids
+
+`yscr_displays()` without a screen starts SDL's video for the call and
+stops it after. SDL numbers the displays anew at each start (here id 1,
+then 4 with the window thread), so an id from that list named no display
+at the next `yscr_modes()` or `open()`. Two fixes were possible: document
+0 (the primary display) as the only stable id, or match an id that is
+no longer current. 0 alone does not let a program pick a second display
+by a list, which is what the list is for. So the header matches:
+
+- SDL never gives an id out twice in one process (`SDL_GetNextObjectID`),
+  so a current id is used as it is, and a stale one cannot name another
+  display by accident.
+- `yscr_displays()` keeps the name and bounds of each id it gives out
+  (the last 16).
+- `open()`, `yscr_modes()` and `yscr_mode_multiple()` map an id that is
+  no longer current to the current display with the same name and
+  bounds, else to the only one with the same bounds, else to the only one
+  with the same name. With no match, the id goes to SDL as before, and
+  `open()` fails with SDL's message.
+
+A custom presenter still gets `desc.display` as given
+(`yscr_presenter_open.display`). `screen_window_test --only displays`:
+an id listed with no screen gives the same mode list after SDL's video
+started again, opens a screen, and gives the same list while the window
+thread runs. Mutant `ds-01` (the match removed). One display here: the
+match among two or more displays was not run.
+
+### 32-bit Windows
+
+CI's 32-bit MSVC build failed: MSVC has no `InterlockedExchange64` for
+x86. The 64-bit stores (the abort state, the window thread's heartbeat
+and release time) now go through one helper that uses
+`InterlockedCompareExchange64` in a loop on x86 and
+`InterlockedExchange64` elsewhere. COMPOSITION now refuses x86 as it
+refuses ARM64: its C declarations of the COM methods that return a
+struct by a hidden pointer were checked on x64 only
+(`tests/compile/screen_com.cpp`), and AUTO falls back to DXGI_FLIP.
+Checked with MSVC 19.51 x86 (vcvars32), `/W4 /WX`: `tests/compile/screen.c`
+as C11 and with `YRT_NO_THREADS`, `screen.cpp` as C++17, and
+`tests/adapt/screen_test.c` built and run (all checks pass). No x86
+program opened a window: there is no x86 ANGLE here.
+
+### Tests and mutants
+
+On v0.10.4, this laptop: `screen_window_test` 110 of 110 checks (every
+default case, launched in front, through `psy-guard.sh time`); MSVC
+full ctest 97 of 97; MinGW ctest 80 of 80 (no SDL3 there) and the MinGW
+gcc 16.1 `-Werror` compile checks with SDL3's headers; WSL2 gcc 11.4
+`screen_test` with ASan and UBSan.
+
+The window-thread, foreground and gap mutants and the 5 new ones, 37 in
+all, ran through `tests/mutate/mutate.py`: the 20 on the core test
+(`wt-01` to `wt-09`, `fg-01` to `fg-07`, `gp-01` to `gp-04`) with `-j 4`,
+and the 17 on the window test (`wt-20` to `wt-29`, `fg-08`, `bf-01`,
+`bf-02`, `bf-03`, `lk-01`, `lk-02`, `ds-01`) one at a time with
+`--guard` (each run under `psy-guard.sh time`; see
+[tests/mutate/README.md](../tests/mutate/README.md)). 37 of 37 killed.
+`bf-02` (the shown buffer left bound when none is free) made the draw
+between frames wait until the test's 10 s watchdog ended it: the case
+the fallback exists for.
+
+## Bindings
+
+`ysp/screen.h` is bound in `ysp-vis` with `ysp/gfx.h` and `ysp/video.h`:
+Python `ysp.screen` (one extension, `ysp._vis`) and the MEX `ysp_screen`
+on the core `ysp_vis` ([bindings.md](bindings.md#display-stimuli-movies-ysp-vis)
+has the packaging, the natives and the lifetime rule). Windows only, phase
+A, 2026-10-27.
+
+Bound: the display and mode lists, `yscr_mode_multiple()`, open with every
+desc field a host sets (the option table of `bindings/share/ysp_vis_core.h`,
+one for both hosts, times in seconds), begin (the frame with its completed
+records), flip, flip at a time, wait_flip, marks, a ring of the last 4096
+records (`records()`), the input events of `yscr_event_input()` in the
+shared event layout (drained into a ring of 1024 at each begin, so a loop
+that never polls does not fill SDL's queue), aborts (Python `Abort`, MEX
+`ysp_screen:abort` or `[f, quit]`), the window's title, cursor and mouse
+grab through `yscr_window_call()`, describe, caps, settle, sync, the patch,
+`yscr_request_abort()`, the input bridge's counters. The window thread is
+on (AUTO). `desc.angle_dir` is always the module's own directory.
+
+Not bound, and why: triggers, `yscr_on_flip()`, `yscr_on_present()` and
+`desc.panic_fn` run a callback on a C thread or inside the header's frame,
+and no binding runs a host function there (rig_spec.md, section 12);
+codes, text input, raw mice, groups, the native handles and
+`desc.abort_keys`: not needed by a phase A frame loop. `desc.on_context`
+is not a host callback either: since phase B the binding sets it itself,
+to a C hook that starts the gfx while the screen settles (the open option
+`gfx`; [gfx.md](gfx.md#bindings)).
+
+Tests: 19 Python tests on the simulated display (CPython 3.12.11 and
+3.14.3, fresh `--no-cache` builds), `test_window.py` with a real window
+(both Pythons, local); 91 checks of `test_mex_vis.m` and 6 of
+`test_mex_vis_window.m` in MATLAB R2023a and Octave 10.1.
+
+### Measured on the binding: the minimal frame for 10 minutes
+
+The laptop of [av_probe.md](av_probe.md) (i7-1360P, Iris Xe, internal
+panel 1920 x 1200 at 60 Hz, Windows 11 26200), AUTO (COMPOSITION),
+fullscreen, ANGLE 2.1.25848 from the wheel or the MEX directory, static
+SDL3 3.4.0; every run through the timing guard; no photodiode, so every
+tier is the record's. Each frame: begin, gfx begin, one rect, gfx end,
+flip, and the frame's records kept as a script keeps its data
+(`tests/probe/vis/`). Work is the DRAW phase: from the return of
+`yscr_begin()` to the call of `yscr_flip()`, everything the host does in
+the frame through the binding. 2026-10-27, 07:34 to 08:30.
+
+| Host | Records | Missed (vblanks) | Late target | Occluded | Residual us p50 / p99 | Work ms p50 / p99 / max | Work > 8 ms | Path; tier |
+|---|---|---|---|---|---|---|---|---|
+| Python 3.12, AC | 36001 | 0 (0) | 1 | 0 | 3.9 / 116.4 | 0.25 / 0.57 / 4.78 | 0 | independent 36001; t1 35940, t2 61 |
+| Python 3.12, battery, final build | 35997 | 2 (3) | 2 | 0 | 0.8 / 79.7 | 0.24 / 0.69 / 22.42 | 1 | independent 35997; t1 35986, t2 11 |
+| MATLAB R2023a, AC | 36001 | 1 (1) | 0 | 0 | 2.0 / 113.0 | 0.49 / 1.01 / 6.25 | 0 | independent 36001; t1 35951, t2 50 |
+| Octave 10.1, AC | 36002 | 0 (0) | 0 | 0 | 0.8 / 85.1 | 0.98 / 1.92 / 5.36 | 0 | independent 36002; t1 35988, t2 14 |
+
+- **Against the probe** (av_probe.md, fullscreen, N = 1: work p50 / p99
+  0.14 to 0.24 / 0.31 to 0.58 ms in Python 3.12, 0.24 / 0.57 ms in MATLAB,
+  0.45 / 1.15 ms in Octave): Python's work is the probe's, MATLAB's and
+  Octave's about twice it, all under 2 ms at p99 against a 16.7 ms frame.
+  The difference is the frame the binding returns: a struct with its
+  records (`done` and `last`), where the probe returned two numbers.
+  Measured per call on the simulated display (battery, guard): a record
+  costs 0.35 us more than a bare call in Python (0.42 against 0.07 us), 4.5
+  us in MATLAB (6.1 against 1.7) and 45 us in Octave (49 against 4.4).
+- **Misses.** MATLAB's one miss was frame 0 (work 6.3 ms: first-use costs
+  while its planned vblank is the nearest, as in the probe); Python's late
+  target on AC was frame 0 too. The battery run (the laptop was off AC
+  for it) had 2 misses with work under 0.7 ms (the system's)
+  and one frame of 22.4 ms host work at 105 s (`gc.freeze()` was on; the
+  cause was not traced), flagged LATE_TARGET with no vblank dropped.
+- **Residual p99 of 80 to 116 us** come from stretches flagged
+  GRID_UNSTABLE (11 to 61 records a run), the OS's vblank jitter that the
+  probes saw too; the p50 differed by the hour (0.8 to 3.9 us).
+- The Python rows before and after the final build differ by one Record
+  object per frame (frame.last shared with done's last) and the power
+  source; the work did not change beyond the run-to-run spread.
+
+### Measured on the binding: 30 s without a call
+
+120 frames fullscreen, then 30 s with no call into the module (Python
+`time.sleep`, MATLAB and Octave `pause`), then 120 frames; a watcher process
+polled `IsHungAppWindow()` and the foreground window's class every 50 ms
+(about 674 polls a run).
+
+| Host | Hung | Ghost | Frame 120 (the first after the gap) | The 20 frames after it |
+|---|---|---|---|---|
+| Python 3.12 | never | never | on time, independent, tier 1, no flag | the same |
+| Octave 10.1 | never | never | on time, independent, tier 1, no flag | the same |
+| MATLAB R2023a | never | never | on time, independent, tier 1, no flag | the same |
+
+With the window thread no host needs a pumping wait, and with v0.10.1's
+anchor after a gap no record after it carried GRID_UNSTABLE (v0.10.0's
+17 flagged records, [The grid after a gap](#the-grid-after-a-gap-v0101)).
+
+### The frame in MATLAB and Octave (MEX 1.1.0)
+
+Phase A's `'begin'` returned the frame as a struct with its records
+(`done`) and the newest record again (`last`). A record is a struct of 17
+fields, and each field is an array that MATLAB and Octave allocate. Since
+1.1.0 `'begin'` returns the frame without records; the records come as
+a third output when asked for (`[f, quit, done] = ...`) or from
+`'records'` once per trial. A screen opened with `'frame', 'row'` gives
+the frame as one row, `[onset period index vblank n_done done_lost]`, and
+the records (the third output and `'records'`) as one n x 15 double
+matrix. The exact ns are then not in the row or the matrix; seconds as
+doubles hold every ns below 2^53 ns (104 days of a clock that counts from
+boot).
+
+Measured per call with the hidden command `'_frame'` (the last frame
+converted by each form, no begin), a frame with one record, on the
+simulated display: the i7-1360P laptop, Windows 11, AC, the measurement
+lock held, 2026-10-27; best of 5 rounds of 20000 calls, the median of 3
+runs. `'now'` is a bare call for the scale.
+
+| us per call | `'now'` | phase A frame (`done`, `last`) | frame struct (1.1.0) | frame row | records struct | records matrix |
+|---|---|---|---|---|---|---|
+| MATLAB R2023a | 3.7 | 22.5 | 9.3 | 3.8 | 13.6 | 4.1 |
+| Octave 10.1 | 3.6 | 191.0 | 55.0 | 13.5 | 104.3 | 13.1 |
+
+So the default frame costs 2.4 (MATLAB) and 3.5 (Octave) times less than
+phase A's with one record a frame, and the row costs about a bare call
+in MATLAB and 10 us more in Octave. A first run the same day, under the
+lock too, gave MATLAB numbers 3.3 to 5.8 times smaller (`'now'` 0.67 us,
+phase A's frame 6.3, the struct 2.8, the row 0.65) and Octave numbers 1.1
+to 2.7 times smaller (phase A's frame 120, the struct 22, the row 5.1);
+the order of the forms held. The cause of the difference between the runs
+was not found. Python's `Frame` is
+unchanged: a record costs it 0.35 us (above).
+
+## Linux X11: GLX_OML (v0.11.0)
 
 The design comes from the X11 probe ([screen_x11_probe.md](screen_x11_probe.md),
 section 5.6). This section records what the backend itself does and
@@ -2841,7 +3966,7 @@ error handler. When the window manager destroys its frame window between
 the two calls, Xlib's default handler ends the process. SDL 3.4.18 puts
 a handler around the calls (3.4.16 does not): 0 of 20 bare runs and 0 of
 20 GLX runs failed. The describe line warns when SDL is older than
-3.4.18. CI pins 3.4.18 since v0.8.0.
+3.4.18. CI pins 3.4.18 since v0.11.0.
 
 ### Mesa sets _VARIABLE_REFRESH at the first swap
 
@@ -2869,7 +3994,7 @@ the stamp with the injection time:
 |---|---|---|
 | SDL's (`SDL_GetTicksNS()` at the pump) | 199 | 8.59 / 12.67 / 16.63 |
 | The X event's server time, as ms of CLOCK_MONOTONIC | 199 | -1.97 / -1.40 / -0.97 |
-| `yscr_poll()` from v0.8.0 (the server time) | 200 | -1.96 / -1.47 / -0.99 |
+| `yscr_poll()` from v0.11.0 (the server time) | 200 | -1.96 / -1.47 / -0.99 |
 
 The server time sits 1 to 2 ms before the injection, always: Xorg's
 millisecond clock lags by up to a tick (HZ=1000 here) and the
@@ -2911,7 +4036,7 @@ not checked). A keyboard's key gets the same 1 to 2 ms early stamp as an
 XTEST key, and the kernel's microsecond time is lost. With the reader on SCHED_FIFO 1 under the same
 load the X column was -1.990 / -1.460 / -0.637 / -0.334.
 
-From v0.8.0 the X11 key hook reads the keyboards' evdev nodes itself.
+From v0.11.0 the X11 key hook reads the keyboards' evdev nodes itself.
 Every reader of a node gets every event with the kernel's time, buffered
 until it reads, and the kernel queues an event for all readers before
 Xorg can read it. So when SDL's X11 hook sees a KeyPress or KeyRelease,
@@ -3000,7 +4125,7 @@ ran at half the rate for the rest of the run, with no frame counted as
 dropped. Slack measures when the present call returns, not when the GPU
 finishes, so at depth 2 the evidence for depth 1 never came.
 
-With the depth from the path (v0.8.0 on GLX_OML):
+With the depth from the path (v0.11.0 on GLX_OML):
 
 | Layers | Dropped | Slow frames (2+ vblanks after the one before) | Depth |
 |---|---|---|---|
@@ -3046,7 +4171,7 @@ manager: in `test_screen_glx` no injected key reached it. With an
 explicit `XSetInputFocus()` on the window after open, all 20 keys
 arrived with the X server's time.
 
-On v0.8.0, settling (v0.5.0, SETTLE) is strict in fullscreen and needs
+On v0.11.0, settling (v0.5.0, SETTLE) is strict in fullscreen and needs
 tier 1, so the default fullscreen window under Xfwm4's compositor does
 not open: "the display did not settle in 3.0 s (fullscreen, strict):
 tier ...". `desc.x11_override_redirect` (opt-in) asks SDL for an
@@ -3076,7 +4201,7 @@ xcb programs:
   ms after the mode set, it was lost; set 20, 34, 50 or 100 ms after, it
   stayed. SDL's fullscreen window in the desktop mode did not reset it.
 
-So on GLX_OML (v0.8.0) the header does what OS GAMMA does on Windows,
+So on GLX_OML (v0.11.0) the header does what OS GAMMA does on Windows,
 through RandR on a short-lived connection of its own, and more: before a
 `desc.mode` switch it keeps every active CRTC's mode and ramp; close,
 `exit()` and the panic put the modes back, wait 150 ms, put the ramps
@@ -3209,6 +4334,19 @@ commands.
 
 ## Not measured
 
+The open findings of v0.10.0 (5 handles an open and close, SDL's
+display ids) are fixed in v0.10.4
+([Handles, no free buffer, display ids](#handles-no-free-buffer-display-ids-v0104)).
+
+- The display-id match with two or more displays (one display here), and
+  after a display is added, removed or moved between the list and the
+  open.
+- The window thread (v0.10.0) with two displays, a display that turns
+  off while a screen is open, MATLAB's desktop (only `-batch` ran), a MEX
+  file cleared with `clear mex` while a screen is open, a static SDL3
+  beside another package's SDL3 in one process, a gamepad (none was
+  attached), a custom presenter with ON, and Windows 10. The grid after a
+  gap (v0.10.1) on a second display (DWM's timing is the primary's).
 - Light. No photodiode was attached. `tests/loopback/screen_loopback.c`
   is built, not run. Every onset here is DXGI's vblank time.
 - Any refresh other than 60 Hz; any GPU other than the Iris Xe; Windows 10.

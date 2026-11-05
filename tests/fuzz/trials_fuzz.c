@@ -2,7 +2,9 @@
  * and a run. The first input byte is the participant number, the rest is
  * rules text applied with ytr_rules() against a fixed table; when the
  * rules parse, ytr_open() runs with a small repair budget, then up to 300
- * trials with re-queues, every jitter's draw (v0.2.1), ytr_format_rules()
+ * trials with re-queues, every jitter's draw (v0.2.1), every variable and
+ * the trial seed (v0.6; the seed is the first byte, the display's rate
+ * 60000/1001 for rate=display), ytr_format_rules()
  * and ytr_format_meta(), and a save and load of the session. Every input must return without a
  * sanitizer report; a refusal is a correct answer.
  *
@@ -71,6 +73,9 @@ int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     if (ytr_rules(&d, &rd, err, sizeof(err)) != 0) return 0;
     d.rng = ytr_splitmix;
     d.rng_ctx = &seed;
+    d.seed = data[0];                    /* v0.6: the trial streams */
+    d.display_rate_num = 60000;          /* for rate=display */
+    d.display_rate_den = 1001;
     if (d.max_swaps == 0 || d.max_swaps > 2000) d.max_swaps = 2000;   /* keep an input fast */
     if (!ytr_open(&g_t, &d)) return 0;
     g_sink += (unsigned)ytr_format_rules(&g_t, g_buf, sizeof(g_buf));
@@ -78,6 +83,11 @@ int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     for (i = 0; i < 300 && ytr_next(&g_t, &ti) >= 0; i++) {
         int j;
         for (j = 0; j < 4; j++) g_sink += (unsigned)ytr_jitter(&g_t, ti.index, j).ns;
+        for (j = 0; j < 4; j++) {
+            const char* v = ytr_var_text(&g_t, ti.index, j);
+            g_sink += (unsigned)ytr_var(&g_t, ti.index, j) + (v ? (unsigned)v[0] : 0u);
+        }
+        g_sink += (unsigned)ytr_trial_seed(&g_t, ti.index);
         if (i == 40) {
             /* A save and a load mid-run, then the loaded copy continues. */
             len = ytr_save(&g_t, g_snap, sizeof(g_snap));
@@ -116,6 +126,8 @@ int main(int argc, char** argv) {
         "order full_random\nreps 2\njitter iti uniform 0.8 1.2 rate=60000/1001\njitter fp exponential 0.5 2 0.4\n",
         "order random\nreps 2\njitter soa choice 0.1 0.2 0.4 rate=60\njitter w exponential contrast 1 0.2 rate=120\n",
         "order sequential\nreps 1\npractice 2\njitter a uniform contrast n\nrequeue_gap 1\n",
+        "order random\nweight n\nreps 3\nvar side choice left right\njitter soa uniform 0.8 1.2 rate=display\n",
+        "order full_random\nreps 2\nvar a choice \"x y\" \"c,d\" \"q\"\"t\" e\nvar b choice 1 2 3 1\n",
     };
     size_t i;
     char path[1024];

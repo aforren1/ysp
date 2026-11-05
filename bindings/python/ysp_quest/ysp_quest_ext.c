@@ -4,8 +4,8 @@
  * needs only Python.h. The library implementation, with its YQST_ASYNC layer
  * and the ysp/rt.h that layer brings, is compiled directly into this module.
  *
- * Built against the stable ABI / Limited API (Py_LIMITED_API 3.8), so one
- * compiled ysp/quest.abi3.so works across CPython >= 3.8. That rules out the
+ * Built against the stable ABI / Limited API (Py_LIMITED_API 3.10), so one
+ * compiled ysp/quest.abi3.so works across CPython >= 3.10. That rules out the
  * static PyTypeObject layout (Quest and Async are heap types made with
  * PyType_FromSpec) and, before 3.11, the buffer protocol: arrays come in as
  * any object memoryview() accepts, or as a sequence, and go out as a COPY in a
@@ -36,7 +36,7 @@
  * the GIL.
  */
 #ifndef Py_LIMITED_API
-#define Py_LIMITED_API 0x03080000   /* target the CPython 3.8+ stable ABI */
+#define Py_LIMITED_API 0x030A0000   /* target the CPython 3.10+ stable ABI */
 #endif
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
@@ -2009,7 +2009,7 @@ PyMODINIT_FUNC PyInit_quest(void) {
 
     /* From the compiled implementation, so it names the header actually built
      * in; the tests check pyproject.toml against it. */
-    if (PyModule_AddStringConstant(m, "__version__", yqst_version()) < 0) goto fail;
+    if (PyModule_AddStringConstant(m, "__version__", YQST_VERSION_STRING ".1") < 0) goto fail;   /* .1: the CPython 3.10 floor (2026-10-27) */
     PyModule_AddIntConstant(m, "ERR_ARG", YQST_ERR_ARG);
     PyModule_AddIntConstant(m, "ERR_CLOSED", YQST_ERR_CLOSED);
     PyModule_AddIntConstant(m, "ERR_FULL", YQST_ERR_FULL);

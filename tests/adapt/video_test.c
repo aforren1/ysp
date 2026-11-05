@@ -39,11 +39,13 @@ static int g_virtual = 1;
 static long long g_vt = 1000000000000LL;
 static long long vnow(void);
 #define YVID__NOW() ((int64_t)vnow())
+#define YVID__COST_NOW() ((int64_t)vnow())   /* scripted decode times */
+static void vsleep_until(long long t);
+#define YVID__SLEEP_UNTIL(t) vsleep_until((long long)(t))   /* the soundtrack's close */
 
 /* ysp/audio.h first, on the same virtual clock, with no miniaudio: the
  * soundtrack's cases drive its scripted device */
 #define YAU_NO_MINIAUDIO
-static void vsleep_until(long long t);
 #define YAU__NOW() ((int64_t)vnow())
 #define YAU__SLEEP_UNTIL(t) vsleep_until((long long)(t))
 #define YSP_AUDIO_IMPLEMENTATION
@@ -68,6 +70,11 @@ static void vsleep_until(long long t);
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <errno.h>
+#if !defined(_WIN32)
+#include <sys/stat.h>   /* mkdir: test_paths */
+#include <unistd.h>     /* rmdir */
+#endif
 
 static long long vnow(void) { return g_virtual ? g_vt : (long long)yrt_now_ns(); }
 static void vsleep_until(long long t) {
@@ -1466,28 +1473,30 @@ static void test_open_refusals(void) {
     sd_default(&g_sd, 30, 1, 100, 1);
     desc_default(&vd);
     CHECK(open_mv(&vd)); yvid_close(&g_mv);
-#define REFUSE(setup, needle) do { sd_default(&g_sd, 30, 1, 100, 1); desc_default(&vd); setup; \
+    /* v0.6.0: each refusal's code in g_mv.error_code, beside the message */
+#define REFUSE(setup, needle, code) do { sd_default(&g_sd, 30, 1, 100, 1); desc_default(&vd); setup; \
         if (yvid_open(&g_mv, &g_gfx, &vd)) { fail(__LINE__, "opened: " #setup); yvid_close(&g_mv); } \
-        else if (!strstr(yvid_error(&g_mv), needle)) { fprintf(stderr, "  message: %s\n", yvid_error(&g_mv)); fprintf(stderr, "  wanted: %s\n", needle); fail(__LINE__, "message lacks the reason"); } } while (0)
-    REFUSE(g_sd.format = YVID_FMT_P010, "10-bit");
-    REFUSE(g_sd.format = YVID_FMT_I420, "matrix is unspecified");
-    REFUSE((g_sd.format = YVID_FMT_I420, g_sd.matrix = 2, g_sd.range = 1, g_sd.transfer = 2, g_sd.primaries = 2), "siting is unspecified");
-    REFUSE((g_sd.format = YVID_FMT_NV12, g_sd.matrix = 2, g_sd.range = 0, g_sd.transfer = 2, g_sd.primaries = 2, g_sd.siting = 2), "range is unspecified");
-    REFUSE(g_sd.num = 0, "rate");
-    REFUSE((g_sd.num = 1000000, g_sd.den = 1), "rate");
-    REFUSE(g_sd.gop = 0, "GOP");
-    REFUSE(g_sd.report_frames = 0, "no frames");
-    REFUSE(g_sd.fail_open = 1, "scripted failure");
-    REFUSE(vd.gpu_path = YVID_PATH_SHARED, "SHARED GPU path is not built");
-    REFUSE(vd.gpu_path = YVID_PATH_GPU, "YVID_PATH_GPU is for Media Foundation");
-    REFUSE(vd.hw_decode = (yvid_hw)7, "hw_decode");
-    REFUSE(vd.light = YVID_LIGHT_EOTF, "for YUV movies");
-    REFUSE(vd.ahead = 99, "ahead");
-    REFUSE(vd.lead = 1.5, "lead");
+        else { if (!strstr(yvid_error(&g_mv), needle)) { fprintf(stderr, "  message: %s\n", yvid_error(&g_mv)); fprintf(stderr, "  wanted: %s\n", needle); fail(__LINE__, "message lacks the reason"); } \
+               CHECK_I(g_mv.error_code, code); } } while (0)
+    REFUSE(g_sd.format = YVID_FMT_P010, "10-bit", YVID_ERR_REFUSED);
+    REFUSE(g_sd.format = YVID_FMT_I420, "matrix is unspecified", YVID_ERR_FORMAT);
+    REFUSE((g_sd.format = YVID_FMT_I420, g_sd.matrix = 2, g_sd.range = 1, g_sd.transfer = 2, g_sd.primaries = 2), "siting is unspecified", YVID_ERR_FORMAT);
+    REFUSE((g_sd.format = YVID_FMT_NV12, g_sd.matrix = 2, g_sd.range = 0, g_sd.transfer = 2, g_sd.primaries = 2, g_sd.siting = 2), "range is unspecified", YVID_ERR_FORMAT);
+    REFUSE(g_sd.num = 0, "rate", YVID_ERR_FORMAT);
+    REFUSE((g_sd.num = 1000000, g_sd.den = 1), "rate", YVID_ERR_FORMAT);
+    REFUSE(g_sd.gop = 0, "GOP", YVID_ERR_FORMAT);
+    REFUSE(g_sd.report_frames = 0, "no frames", YVID_ERR_FORMAT);
+    REFUSE(g_sd.fail_open = 1, "scripted failure", YVID_ERR_DECODER);
+    REFUSE(vd.gpu_path = YVID_PATH_SHARED, "SHARED GPU path is not built", YVID_ERR_NOT_IMPLEMENTED);
+    REFUSE(vd.gpu_path = YVID_PATH_GPU, "YVID_PATH_GPU is for Media Foundation", YVID_ERR_REFUSED);
+    REFUSE(vd.hw_decode = (yvid_hw)7, "hw_decode", YVID_ERR_ARG);
+    REFUSE(vd.light = YVID_LIGHT_EOTF, "for YUV movies", YVID_ERR_REFUSED);
+    REFUSE(vd.ahead = 99, "ahead", YVID_ERR_ARG);
+    REFUSE(vd.lead = 1.5, "lead", YVID_ERR_ARG);
 #if YVID__MF
-    REFUSE(vd.backend = YVID_BACKEND_MF, "no index");
+    REFUSE(vd.backend = YVID_BACKEND_MF, "no index", YVID_ERR_NOT_FOUND);
 #else
-    REFUSE(vd.backend = YVID_BACKEND_MF, "Media Foundation");
+    REFUSE(vd.backend = YVID_BACKEND_MF, "Media Foundation", YVID_ERR_NOT_IMPLEMENTED);
 #endif
     /* an index that disagrees with the stream, field by field */
     memset(&c, 0, sizeof c);
@@ -1517,15 +1526,15 @@ static void test_open_refusals(void) {
             memcpy(bad, idx, sizeof idx);
             yvid__w32(bad + fields[k].off, yvid__r32(bad + fields[k].off) + (fields[k].off == 40 ? (uint32_t)-1 : 1u));
             yvid__w64(bad + 120, yvid_xxh64(bad, 120, 0));
-            REFUSE((vd.index = bad, vd.index_size = sizeof bad), fields[k].needle);
+            REFUSE((vd.index = bad, vd.index_size = sizeof bad), fields[k].needle, YVID_ERR_FORMAT);
         }
         {
             uint8_t bad[sizeof idx];
             memcpy(bad, idx, sizeof idx);
             bad[30] ^= 1;   /* without fixing the hash */
-            REFUSE((vd.index = bad, vd.index_size = sizeof bad), "damaged");
+            REFUSE((vd.index = bad, vd.index_size = sizeof bad), "damaged", YVID_ERR_FORMAT);
             memcpy(bad, idx, sizeof idx);
-            REFUSE((vd.index = bad, vd.index_size = 100), "not a ysp_video index");
+            REFUSE((vd.index = bad, vd.index_size = 100), "not a ysp_video index", YVID_ERR_FORMAT);
         }
     }
 #undef REFUSE
@@ -1862,6 +1871,30 @@ static void test_reader(void) {
         CHECK_I(g_up_copy[sizeof px - 1], k + 1);
     }
     yvid_close(&g_mv);
+}
+
+/* v0.4.0: on ysp/rt.h's virtual clock a movie decodes inline, whatever
+ * desc.inline_decode says: a real decode thread cannot keep up with a
+ * frame loop that never waits. */
+static void test_virtual_inline(void) {
+    yvid_desc vd;
+    char line[1024];
+    g_case = "virtual inline";
+    g_virtual = 0;
+    CHECK_I(yrt_virtual_begin(0), 0);
+    rec_reset();
+    sd_default(&g_sd, 60, 1, 1000, 5);
+    desc_default(&vd);
+    vd.inline_decode = false;
+    vd.refresh_num = 60;
+    if (open_mv(&vd)) {
+        CHECK_I(g_mv.inline_mode, 1);
+        yvid_describe(&g_mv, line, sizeof line);
+        CHECK(strstr(line, "decoded inline") != NULL);
+        yvid_close(&g_mv);
+    }
+    yrt_virtual_end();
+    g_virtual = 1;
 }
 
 /* The decode thread for real, against the frame thread, on the ysp_rt clock. */
@@ -2549,6 +2582,208 @@ static void run_agree_rate(const char* name, int32_t num, int32_t den, double hz
     yvid_close(&g_mv);
 }
 
+/* v0.6.0: paths are UTF-8 (on Windows converted for _wfsopen), so a
+ * folder named outside the ANSI code page opens: a non-Latin name and a
+ * character outside the BMP (a surrogate pair in UTF-16). Every file the
+ * header opens by path: a frame sequence written and read, the probe, the
+ * index beside a media file, the soundtrack's WAV. And the codes: a missing
+ * file is NOT_FOUND from probe (it was REFUSED) and from open, in
+ * mv.error_code and w.error_code, cleared by the next open. */
+#define TP_DIR "ysp_video_test_\xCE\xA9_\xD0\x96_\xE6\x98\xA0_\xF0\x9F\x8E\xAC"   /* Omega, Zhe, a CJK ideograph, U+1F3AC */
+static int tp_mkdir(const char* p) {
+#if defined(_WIN32)
+    wchar_t w[512];
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, p, -1, w, 512) <= 0) return 0;
+    return CreateDirectoryW(w, NULL) || GetLastError() == ERROR_ALREADY_EXISTS;
+#else
+    return mkdir(p, 0777) == 0 || errno == EEXIST;
+#endif
+}
+static void tp_remove(const char* p) {
+#if defined(_WIN32)
+    wchar_t w[512];
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, p, -1, w, 512) > 0) DeleteFileW(w);
+#else
+    remove(p);
+#endif
+}
+static void tp_rmdir(const char* p) {
+#if defined(_WIN32)
+    wchar_t w[512];
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, p, -1, w, 512) > 0) RemoveDirectoryW(w);
+#else
+    rmdir(p);
+#endif
+}
+static int tp_write(const char* p, const void* b, size_t n) {
+    FILE* f;
+    int ok;
+    if (yvid__fopen(&f, p, "wb") != YVID_OK) return 0;
+    ok = fwrite(b, 1, n, f) == n;
+    return fclose(f) == 0 && ok;
+}
+
+static void test_paths(void) {
+    static const char seq[] = TP_DIR "/clip.yspseq";
+    static const char media[] = TP_DIR "/media.bin";
+    static const char media_ix[] = TP_DIR "/media.bin.yspvi";
+    static const char wav[] = TP_DIR "/sound.wav";
+    static const char missing[] = TP_DIR "/missing.yspseq";
+    static const char no_dir[] = TP_DIR "/no_such_folder/clip.yspseq";
+    static uint8_t px[9 * 7 * 4];
+    static char longp[1100];
+    const void* planes[3] = { px, NULL, NULL };
+    int32_t strides[3] = { 9 * 4, 0, 0 };
+    yvid_seq w;
+    yvid_seq_desc sd;
+    yvid_desc vd;
+    yvid_info info;
+    disp d;
+    yscr_frame f;
+    char e[300];
+    int k;
+    g_case = "UTF-8 paths";
+    if (!tp_mkdir(TP_DIR)) { fail(__LINE__, "cannot make the test folder"); return; }
+
+    /* the writer: create, write, finish */
+    memset(&sd, 0, sizeof sd);
+    sd.path = seq; sd.w = 9; sd.h = 7; sd.format = YVID_FMT_RGBA8; sd.fps_num = 30;
+    CHECK(yvid_seq_open(&w, &sd));
+    CHECK_I(w.error_code, 0);
+    for (k = 0; k < 3; k++) { memset(px, k + 1, sizeof px); CHECK_I(yvid_seq_write(&w, planes, strides, NULL), YVID_OK); }
+    CHECK_I(yvid_seq_finish(&w), YVID_OK);
+    CHECK_I(yvid_seq_write(&w, planes, strides, NULL), YVID_ERR_CLOSED);
+    CHECK_I(w.error_code, YVID_ERR_CLOSED);   /* a failing call sets it */
+    yvid_seq_close(&w);
+    sd.path = no_dir;
+    CHECK(!yvid_seq_open(&w, &sd));
+    CHECK_I(w.error_code, YVID_ERR_NOT_FOUND);
+    CHECK(strstr(yvid_seq_error(&w), "no such file") != NULL);
+    yvid_seq_close(&w);
+
+    /* the probe and the movie read it back */
+    memset(&vd, 0, sizeof vd);
+    vd.path = seq;
+    CHECK_I(yvid_probe(&vd, &info, e, sizeof e), YVID_OK);
+    CHECK_I(info.frames, 3);
+    vd.inline_decode = true; vd.refresh_num = 60; vd.ahead = 2;
+    g_up_bytes = sizeof px;
+    if (yvid_open(&g_mv, &g_gfx, &vd)) {
+        CHECK_I(g_mv.error_code, 0);
+        disp_init(&d, 60.0, 0);
+        CHECK_I(yvid_show(&g_mv, 2), YVID_OK);
+        disp_next(&d, &f);
+        CHECK_I(yvid_update(&g_mv, &f), YVID_OK);
+        CHECK_I(g_up_copy[0], 3);
+        CHECK_I(yvid_show(&g_mv, 99), YVID_ERR_ARG);
+        CHECK_I(g_mv.error_code, YVID_ERR_ARG);   /* a later call's failure */
+        yvid_close(&g_mv);
+        CHECK_I(yvid_play_at(&g_mv, YVID_ASAP), YVID_ERR_CLOSED);
+        CHECK_I(g_mv.error_code, YVID_ERR_CLOSED);
+    } else fail(__LINE__, yvid_error(&g_mv));
+
+    /* missing: NOT_FOUND from the probe (v0.5: REFUSED) and from open */
+    vd.path = missing;
+    e[0] = '\0';
+    CHECK_I(yvid_probe(&vd, &info, e, sizeof e), YVID_ERR_NOT_FOUND);
+    CHECK(strstr(e, "no such file") != NULL && strstr(e, "missing.yspseq") != NULL);
+    vd.path = no_dir;
+    CHECK_I(yvid_probe(&vd, &info, e, sizeof e), YVID_ERR_NOT_FOUND);
+    vd.path = missing;
+    CHECK(!yvid_open(&g_mv, &g_gfx, &vd));
+    CHECK_I(g_mv.error_code, YVID_ERR_NOT_FOUND);
+    CHECK(strstr(yvid_error(&g_mv), "no such file") != NULL);
+    /* not UTF-8: refused on Windows; a POSIX name is any bytes */
+    vd.path = TP_DIR "/\xFF\xFE.yspseq";
+#if defined(_WIN32)
+    CHECK_I(yvid_probe(&vd, &info, e, sizeof e), YVID_ERR_ARG);
+    CHECK(strstr(e, "not valid UTF-8") != NULL);
+#else
+    CHECK_I(yvid_probe(&vd, &info, e, sizeof e), YVID_ERR_NOT_FOUND);
+#endif
+    memset(longp, 'a', sizeof longp - 1);
+    longp[sizeof longp - 1] = '\0';
+    vd.path = longp;
+#if defined(_WIN32)
+    CHECK_I(yvid_probe(&vd, &info, e, sizeof e), YVID_ERR_ARG);
+#else
+    CHECK(yvid_probe(&vd, &info, e, sizeof e) < 0);   /* ENAMETOOLONG: IO */
+#endif
+    /* a file that is none of the three: FORMAT, from probe and open */
+    CHECK(tp_write(media, "not a movie at all", 18));
+    vd.path = media;
+    CHECK_I(yvid_probe(&vd, &info, e, sizeof e), YVID_ERR_FORMAT);
+    CHECK(!yvid_open(&g_mv, &g_gfx, &vd));
+    CHECK_I(g_mv.error_code, YVID_ERR_FORMAT);
+    /* the next open clears the code */
+    vd.path = seq;
+    CHECK(yvid_open(&g_mv, &g_gfx, &vd));
+    CHECK_I(g_mv.error_code, 0);
+    yvid_close(&g_mv);
+
+    /* the index beside a media file: path + ".yspvi" */
+    {
+        static uint8_t idx[YVID__IDX_HDR + 8 * 100];
+        yvid__canon c;
+        yvid__src src;
+        uint64_t head = 0, tail = 0;
+        int64_t size = 0;
+        sd_default(&g_sd, 30, 1, 100, 1);
+        desc_default(&vd);
+        vd.path = media;
+        CHECK(!yvid_open(&g_mv, &g_gfx, &vd));   /* no index yet */
+        CHECK_I(g_mv.error_code, YVID_ERR_NOT_FOUND);
+        CHECK(strstr(yvid_error(&g_mv), "has no index") != NULL);
+        if (yvid__src_open(&src, media, NULL, 0, NULL, NULL) == YVID_OK) {
+            CHECK_I(yvid__src_ends(&src, &head, &tail), YVID_OK);
+            size = src.size;
+            yvid__src_close(&src);
+        } else fail(__LINE__, "the media file");
+        memset(&c, 0, sizeof c);
+        c.codec = YVID_CODEC_CUSTOM; c.w = FW; c.h = FH; c.format = YVID_FMT_RGBA8;
+        c.fps_num = 30; c.fps_den = 1; c.frames = 100; c.gop = 1;
+        c.matrix = 1; c.range = 2; c.transfer = 1; c.primaries = 1; c.siting = 1;
+        yvid__index_header(idx, &c, size, head, tail);
+        memset(idx + YVID__IDX_HDR, 0, 800);
+        CHECK(tp_write(media_ix, idx, sizeof idx));
+        CHECK(open_mv(&vd));
+        CHECK_I(g_mv.error_code, 0);
+        CHECK_I(g_mv.info.frames, 100);
+
+        /* the soundtrack's WAV by path */
+        {
+            yvid_soundtrack_desc sdd;
+            yvid_close(&g_mv);
+            disp_init(&d, 60.0, 0);
+            g_vt = d.T0 - 3000000000LL;
+            if (au_open(0.0, g_vt + 1000000)) {
+                sd_default(&g_sd, 30, 1, 150, 1);
+                desc_default(&vd);
+                if (open_mv(&vd)) {
+                    make_wav(48000, 2, 240000);
+                    CHECK(tp_write(wav, g_wav, g_wav_n));
+                    memset(&sdd, 0, sizeof sdd);
+                    sdd.path = missing;
+                    CHECK_I(yvid_soundtrack(&g_mv, &g_au, &sdd), YVID_ERR_NOT_FOUND);
+                    CHECK_I(g_mv.error_code, YVID_ERR_NOT_FOUND);
+                    sdd.path = wav;
+                    k = yvid_soundtrack(&g_mv, &g_au, &sdd);
+                    if (k != YVID_OK) fprintf(stderr, "  soundtrack: %s\n", yvid_error(&g_mv));
+                    CHECK_I(k, YVID_OK);
+                    CHECK_I(g_mv.snd_frames, 240000);
+                    yvid_close(&g_mv);
+                }
+                yau_close(&g_au);
+            } else fail(__LINE__, "audio open");
+        }
+    }
+    tp_remove(seq);
+    tp_remove(media);
+    tp_remove(media_ix);
+    tp_remove(wav);
+    tp_rmdir(TP_DIR);
+}
+
 static void test_rates(void) {
     run_agree_rate("rate 1/2: 30 on 60, 20 us noise", 30, 1, 60.0, 20000, 1, 2, -1);
     run_agree_rate("rate 1001/1000: 23.976 on 60", 24000, 1001, 60.0, 20000, 1001, 1000, -1);
@@ -3199,6 +3434,93 @@ static void test_mf(void) {
 static void test_mf(void) { printf("video_test: Media Foundation cases skipped: not Windows, or YVID_NO_MF\n"); }
 #endif
 
+/* ------------------------------------------------- parameter table (v0.5) */
+
+#include "param_table_check.h"
+
+static void ptc_fail(int line, const char* what) { fail(line, what); }
+
+/* No default, so -Wswitch (gcc and clang -Wall; CI's -Werror) stops the
+ * build when an enum gains a value. */
+static const char* vid_light_name(int v) {
+    switch ((yvid_light)v) {
+    case YVID_LIGHT_AUTO: return "auto";
+    case YVID_LIGHT_CODES: return "codes";
+    case YVID_LIGHT_EOTF: return "eotf";
+    }
+    return NULL;
+}
+static const char* vid_path_name(int v) {
+    switch ((yvid_path)v) {
+    case YVID_PATH_AUTO: return "auto";
+    case YVID_PATH_UPLOAD: return "upload";
+    case YVID_PATH_SHARED: return "shared";
+    case YVID_PATH_GPU: return "gpu";
+    }
+    return NULL;
+}
+static const char* vid_hw_name(int v) {
+    switch ((yvid_hw)v) {
+    case YVID_HW_AUTO: return "auto";
+    case YVID_HW_OFF: return "off";
+    case YVID_HW_DXVA: return "dxva";
+    }
+    return NULL;
+}
+static const char* vid_chroma_name(int v) {
+    switch ((yvid_chroma)v) {
+    case YVID_CHROMA_SITED: return "sited";
+    case YVID_CHROMA_NEAREST: return "nearest";
+    }
+    return NULL;
+}
+
+#define VID_D(f, e) { #f, offsetof(yvid_desc, f), sizeof(((yvid_desc*)0)->f), e }
+static const ptc_slot g_vid_fields[] = {
+    VID_D(ahead, NULL), VID_D(preroll, NULL), VID_D(loop, NULL), VID_D(strict_cadence, NULL), VID_D(lead, NULL),
+    VID_D(light, vid_light_name), VID_D(gpu_path, vid_path_name), VID_D(hw_decode, vid_hw_name),
+    VID_D(chroma, vid_chroma_name), VID_D(base, NULL), VID_D(min_tier, NULL), VID_D(movie_index, NULL),
+    VID_D(pin_cpu, NULL),
+};
+#undef VID_D
+#define VID_NF ((int)(sizeof g_vid_fields / sizeof g_vid_fields[0]))
+
+/* Every row is a real field with its C enum's values, and its default is
+ * what open() makes of a zero field: ahead and lead from the movie's info,
+ * preroll from the rule that start applies. The other rows' zero stays 0
+ * (a value, or the AUTO their doc names). */
+static void test_params(void) {
+    static ptc_row rows[64];
+    yvid_desc vd;
+    int n = -1, i, checked = 0;
+    const yscr_param* p = yvid_params(&n);
+    g_case = "params";
+    CHECK(p != NULL && n == VID_NF && yvid_params(NULL) == p);
+    if (!p || n > 64) return;
+    for (i = 0; i < n; i++) PTC_ROW(rows[i], p[i]);
+    ptc_check_slots(rows, n, g_vid_fields, VID_NF);
+    rec_reset();
+    sd_default(&g_sd, 30, 1, 400, 1);
+    desc_default(&vd);
+    vd.ahead = 0;   /* the harness's 6, zeroed: the table's rows are all 0 now */
+    if (!open_mv(&vd)) return;
+    for (i = 0; i < n; i++) {
+        double want = 0;
+        if (!strcmp(p[i].name, "ahead")) want = g_mv.info.ahead;
+        else if (!strcmp(p[i].name, "preroll")) want = g_mv.d.preroll > 0 ? g_mv.d.preroll : g_mv.info.ahead;
+        else if (!strcmp(p[i].name, "lead")) want = g_mv.info.lead;
+        checked++;
+        if (want != p[i].def) {
+            char msg[160];
+            snprintf(msg, sizeof msg, "row %s: a zero field means %.17g, the table says %.17g", p[i].name, want, p[i].def);
+            fail(__LINE__, msg);
+        }
+    }
+    CHECK_I(checked, VID_NF);
+    yvid_close(&g_mv);
+}
+#undef VID_NF
+
 int main(void) {
     gfx_open();
     test_pure();
@@ -3217,14 +3539,17 @@ int main(void) {
     test_follow();
     test_records();
     test_open_refusals();
+    test_params();
     test_decoder_faults();
     test_replay_and_heap();
     test_seq();
     test_reader();
+    test_virtual_inline();
     test_threaded();
     test_threaded_stall();
     test_soundtrack();
     test_rates();
+    test_paths();
     test_mf();
     ygfx_close(&g_gfx);
     yscr_close(&g_scr);

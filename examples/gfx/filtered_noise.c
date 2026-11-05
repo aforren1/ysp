@@ -126,21 +126,21 @@ static void setup(void) {
 static void make(int kind, uint32_t seed, float* out, double* sd_out) {
     int i;
     double s = 0, s2 = 0, sd;
-    int64_t t0 = yrt_now_ns(), t1, t2;
+    int64_t t0 = yrt_real_ns(), t1, t2;
     ygfx_noise_gauss(re, N, N, seed);
     memset(im, 0, (size_t)N * N * sizeof im[0]);
-    t1 = yrt_now_ns();
+    t1 = yrt_real_ns();
     fft2(-1);
     for (i = 0; i < N * N; i++) { re[i] *= filt[kind][i]; im[i] *= filt[kind][i]; }
     fft2(1);
-    t2 = yrt_now_ns();
+    t2 = yrt_real_ns();
     for (i = 0; i < N * N; i++) { s += re[i]; s2 += (double)re[i] * re[i]; }
     sd = sqrt(s2 / (N * N) - (s / (N * N)) * (s / (N * N)));
     for (i = 0; i < N * N; i++) {
         float g = (float)((re[i] - s / (N * N)) / sd / CLIP);
         out[i] = g < -1 ? -1 : g > 1 ? 1 : g;
     }
-    part_ms[0] += (double)(t1 - t0) / 1e6; part_ms[1] += (double)(t2 - t1) / 1e6; part_ms[2] += (double)(yrt_now_ns() - t2) / 1e6;
+    part_ms[0] += (double)(t1 - t0) / 1e6; part_ms[1] += (double)(t2 - t1) / 1e6; part_ms[2] += (double)(yrt_real_ns() - t2) / 1e6;
     if (sd_out) {   /* the SD after scaling, before the clip */
         double q = 0;
         for (i = 0; i < N * N; i++) { double x = (re[i] - s / (N * N)) / sd; q += x * x; }
@@ -207,6 +207,8 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--trial-frames") && i + 1 < argc) trial_frames = atoi(argv[++i]);
         else { fprintf(stderr, "usage: gfx_filtered_noise [--sim] [--fullscreen] [--seconds S] [--size N] [--trial-frames N] [--every-frame]\n"); return 2; }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     for (LOG2N = 0; (1 << LOG2N) < N; LOG2N++) { }
     if (N < 64 || N > NMAX || (1 << LOG2N) != N || trial_frames < 1 || !(seconds > 0)) {
         fprintf(stderr, "gfx_filtered_noise: --size takes 64 to 512, a power of 2; --trial-frames >= 1; --seconds > 0\n");
@@ -269,15 +271,15 @@ int main(int argc, char** argv) {
             else { drop_other += r->dropped != 0; swap_other += r->phase_ns[YSCR_PHASE_SWAP] / 1e6; n_rec_other++; }
         }
         if (trial && n_trials < MAXT) {   /* a new trial: both fields made and uploaded in this frame */
-            int64_t a = yrt_now_ns(), b;
+            int64_t a = yrt_real_ns(), b;
             for (k = 0; k < 2; k++) make(k, (uint32_t)(2 * n_trials + k), field[k], NULL);
-            b = yrt_now_ns();
+            b = yrt_real_ns();
             yscr_mark(&scr, YSCR_PHASE_EVALUATE);
             for (k = 0; k < 2; k++)
                 if (ygfx_texture_update(&gfx, tex[k], 0, 0, N, N, field[k], 0) != YGFX_OK) failed = 1;
             yscr_mark(&scr, YSCR_PHASE_UPLOAD);
             gen_ms[n_trials] = (double)(b - a) / 1e6;
-            up_ms[n_trials++] = (double)(yrt_now_ns() - b) / 1e6;
+            up_ms[n_trials++] = (double)(yrt_real_ns() - b) / 1e6;
         }
         ygfx_begin(&gfx, &f);
         for (k = 0; k < 4; k++)

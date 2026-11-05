@@ -1,4 +1,4 @@
-/* ysp/aep.h - v0.15.0 - public domain single-header Gaussian-process adaptive library
+/* ysp/aep.h - v0.16.0 - public domain single-header Gaussian-process adaptive library
  *
  *   Nonparametric and semiparametric Bayesian adaptive psychophysics: a
  *   Gaussian-process model over a multidimensional stimulus space with
@@ -1513,7 +1513,7 @@
  *     compilers and platforms of the same YAEP_REAL; an f64 is the IEEE 754
  *     bit pattern as a u64, and a yaep_real is its own bit pattern (8 bytes,
  *     or 4 in a float build).
- *       magic     4 bytes "PSGP", then u32 format (1), u8 sizeof(yaep_real)
+ *       magic     4 bytes "YAEP", then u32 format (1), u8 sizeof(yaep_real)
  *       desc      every number of yaep_desc in field order, arrays to
  *                 n_dims (hyper, hyper_min and hyper_max each as
  *                 lengthscale, outputscale, mean, lengthscale_b,
@@ -1549,8 +1549,39 @@
  *     yaep_open_saved() compares the desc section with the desc it is given and
  *     names the first field that differs, range-checks the counters, and
  *     fails a wrong, truncated or corrupt snapshot with a message and the
- *     handle closed. Nothing but the bytes is checked: a snapshot edited to
+ *     handle closed. The recorded outcomes must be outcomes of the
+ *     likelihood (an integer in 0..K-1, or a finite value under GAUSSIAN;
+ *     v0.16.0). Nothing else but the bytes is checked: a snapshot edited to
  *     hold other finite numbers loads, and the session continues from them.
+ *
+ *   PARAMETERS (yaep_params)
+ *     yaep_params() lists every yaep_desc field that an experiment
+ *     definition or a designer sets (rig_spec principle 8), in the shape
+ *     ysp/stair.h and ysp/quest.h use: name, type, inclusive range, the
+ *     value a zero field means, unit, a line of text, and an enum's values.
+ *       name    the desc field; "a.b" is member b of a ("hyper.outputscale",
+ *               "priors.mean_g.ceiling")
+ *       type    "i32", "u32", "f64", "bool", "enum", or an array of one of
+ *               them: "f64[]", "i32[]" and "enum[]" have one entry per
+ *               dimension (n_dims), except hyper.cutpoint and its bounds
+ *               (n_outcomes - 1) and candidates (n_candidates x n_dims, row
+ *               by row). An "enum[]" row has values too.
+ *       def     what a zero field means when every other field is at its
+ *               default. A zero whose meaning depends on another field (a
+ *               lengthscale is a quarter of its dimension's range; the
+ *               psychometric model derives its scales from the intensity
+ *               axis) has def 0, and the doc says the rule after "0 = ".
+ *               A required field has 0, which can be outside [min, max],
+ *               and its doc starts with "required". jitter's def is the
+ *               build's: 1e-6, or 1e-4 under a float YAEP_REAL.
+ *       values  for an enum, "name=value" pairs joined by ',' in value
+ *               order, the C enum's suffix in lower case; NULL otherwise
+ *     The rows of a hyperparameter say what a zero means with desc.fit
+ *     off; with it on, a zero hyper field is fitted between its hyper_min
+ *     and hyper_max rows. The pointers a definition cannot hold are not
+ *     rows: rng and rng_ctx (the player's generator; YAEP_ACQ_THOMPSON
+ *     needs one, and its row says so) and memory and memory_size. The table
+ *     is static and the same for every handle.
  *
  *   ---------------------------------------------------------------------
  *   SIMULATION
@@ -1768,6 +1799,16 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.16.0 - yaep_params(), the table of the desc's fields for a loader's
+ *          key check and a designer's panel (gap G6 of
+ *          docs/experiment_format.md); see PARAMETERS under SNAPSHOTS. Adds
+ *          API; changes none. yaep_open_saved() now refuses a snapshot
+ *          whose recorded outcome is not one of the likelihood's outcomes
+ *          (or, under GAUSSIAN, not finite): the next update indexed the
+ *          cutpoints with it and read outside them. Found by the new fuzz
+ *          target, tests/fuzz/adapt_fuzz.c. The snapshot magic is "YAEP";
+ *          the psy-era "PSGP" is refused as not a snapshot (no saved data
+ *          existed). No number changed.
  *   v0.15.0 - the repository conventions (README.md, Conventions). Breaks
  *          the API: yaep_async_start() / yaep_async_stop() are
  *          yaep_async_open() / yaep_async_close(), yaep_load() is
@@ -1939,7 +1980,8 @@
  *          gradient under CATEGORICAL is central differences, not analytic.
  *   v0.0 - specification. Declarations and the manual, no implementation.
  *
- *   STATUS: v0.15.0. Implemented and checked by tests/adapt/aep_test.c,
+ *   STATUS: v0.16.0 (its check is at the end of this section). Implemented
+ *   and checked by tests/adapt/aep_test.c,
  *   which builds and passes as C11, C99 and C++17 under gcc with -Wall
  *   -Wextra -Wpedantic -Wshadow -Werror, with and without YAEP_ASYNC, as
  *   MSVC's default C dialect with /W4 /WX both ways, and is clean under
@@ -2209,6 +2251,20 @@
  *   inside the fold noise. docs/adapt.md,
  *   "Verification", and docs/adapt_comparison.md have the details.
  *
+ *   v0.16.0 on 2026-10-21 (MSVC 19.44 /W4 /WX as C and C++17 with and
+ *   without YAEP_ASYNC, MinGW-w64 gcc 16.1 -Werror, WSL2 gcc 11.4 under
+ *   -fsanitize=address,undefined for the new checks, emcc): the test checks
+ *   every row of yaep_params() against the desc field it names (by
+ *   offsetof), each enum's values against the C enum, that a zero refused by
+ *   open() is documented as required, and that each zero field and its def
+ *   run the same 10-trial session (state bytes, resolved priors and fit
+ *   bounds) in six contexts with the fit off and on: 363 comparisons over 83
+ *   rows. A snapshot with an outcome outside the likelihood's (5 values each
+ *   in the trials and the history under ORDINAL; a NaN under GAUSSIAN) is
+ *   refused. 9 of 9 mutants killed (tests/mutate/aep.toml, the test run with
+ *   YAEP_TEST_ONLY=params). tests/fuzz/adapt_fuzz.c found the outcome read
+ *   in its first 60 s; docs/adapt.md has its run.
+ *
  *   NOT verified: the Laplace band's 95% coverage is unmeasured, and the
  *   categorical one-against-the-rest acquisitions have no Monte Carlo check.
  *   The timings vary by tens of percent between runs of the same binary, so
@@ -2233,9 +2289,9 @@
 /* The version of this header, for a log line or a compile-time check. The
  * string is the three numbers, and the test asserts that it stays so. */
 #define YAEP_VERSION_MAJOR  0
-#define YAEP_VERSION_MINOR  15
+#define YAEP_VERSION_MINOR  16
 #define YAEP_VERSION_PATCH  0
-#define YAEP_VERSION_STRING "0.15.0"
+#define YAEP_VERSION_STRING "0.16.0"
 
 /* The one optional dependency, and it comes FIRST: ysp/rt.h sets a
  * feature-test macro for the Linux clock calls and can only do that before the
@@ -2785,6 +2841,25 @@ YAEP_API size_t yaep_save_size(const yaep_gp* g);
 YAEP_API int    yaep_save(const yaep_gp* g, void* buf, size_t cap);
 YAEP_API bool   yaep_open_saved(yaep_gp* g, const yaep_desc* desc, const void* buf,
                             size_t len);
+
+/* --- parameters -------------------------------------------------------- */
+
+/* One settable yaep_desc field. PARAMETERS in the manual gives the rules;
+ * ysp/stair.h and ysp/quest.h have tables of the same shape. */
+typedef struct yaep_param {
+    const char* name;    /* the desc field; "a.b" a member                   */
+    const char* type;    /* "i32", "u32", "f64", "bool", "enum", "f64[]",
+                          * "i32[]", "enum[]"                                */
+    double      min, max;/* inclusive                                        */
+    double      def;     /* the value a zero field means                     */
+    const char* unit;    /* "" for the caller's units or a count             */
+    const char* doc;
+    const char* values;  /* "enum", "enum[]": "name=value,..."; NULL         */
+} yaep_param;
+
+/* The table of desc fields a definition or a designer sets; *n gets the
+ * count. Static: the pointer stays valid for the life of the program. */
+YAEP_API const yaep_param* yaep_params(int* n);
 
 /* --- simulation -------------------------------------------------------- */
 
@@ -8944,9 +9019,9 @@ static void yaep__put_state(yaep__w* w, const yaep_gp* g) {
 }
 
 static void yaep__put_all(yaep__w* w, const yaep_gp* g) {
-    yaep__put(w, 'P', 1, "magic");
-    yaep__put(w, 'S', 1, "magic");
-    yaep__put(w, 'G', 1, "magic");
+    yaep__put(w, 'Y', 1, "magic");
+    yaep__put(w, 'A', 1, "magic");
+    yaep__put(w, 'E', 1, "magic");
     yaep__put(w, 'P', 1, "magic");
     yaep__put(w, YAEP__SNAP_FORMAT, 4, "format");
     yaep__put(w, (uint64_t)sizeof(yaep_real), 1, "YAEP_REAL");
@@ -9048,6 +9123,12 @@ static void yaep__get_hyper(yaep__r* r, yaep_hyper* h, int nd) {
     h->mean_g = yaep__get_f64(r);
 }
 
+static bool yaep__y_ok(const yaep_gp* g, double y) {
+    int k = yaep__bern(g) ? 2 : g->desc.n_outcomes;
+    if (g->desc.lik == YAEP_LIK_GAUSSIAN) return y > -HUGE_VAL && y < HUGE_VAL;
+    return y >= 0.0 && y <= (double)(k - 1) && y == floor(y);
+}
+
 static bool yaep__load_fail(yaep_gp* g, const char* msg, const char* field) {
     char buf[256];
     if (field) yaep__err(buf, sizeof(buf), msg, field);
@@ -9068,7 +9149,7 @@ YAEP_API bool yaep_open_saved(yaep_gp* g, const yaep_desc* desc, const void* buf
     if (!yaep_open(g, desc)) return false;
     if (!in)
         return yaep__load_fail(g, "yaep_open_saved: null snapshot", NULL);
-    if (len < 9 || in[0] != 'P' || in[1] != 'S' || in[2] != 'G' || in[3] != 'P')
+    if (len < 9 || in[0] != 'Y' || in[1] != 'A' || in[2] != 'E' || in[3] != 'P')
         return yaep__load_fail(g, "yaep_open_saved: not a ysp_aep snapshot", NULL);
     memset(&r, 0, sizeof(r));
     r.in = in;
@@ -9135,6 +9216,12 @@ YAEP_API bool yaep_open_saved(yaep_gp* g, const yaep_desc* desc, const void* buf
     yaep__get_f64s(&r, g->X, n * nd);
     if (pair) yaep__get_f64s(&r, g->X2, n * nd);
     yaep__get_f64s(&r, g->y, n);
+    /* A discrete outcome is an index into the cutpoints and the latents, so
+     * one that is not a valid outcome would read outside them (found by
+     * tests/fuzz/adapt_fuzz.c, v0.16.0); a GAUSSIAN one only has to be a
+     * number. */
+    for (int i = 0; i < n && !r.bad; i++)
+        if (!yaep__y_ok(g, g->y[i]) || !yaep__y_ok(g, g->history[i].y)) r.bad = true;
     if (!g->desc.candidates) yaep__get_f64s(&r, g->cand, M * nd);
     for (int k = 0; k < K; k++) {
         yaep__get_f64s(&r, g->f + (size_t)k * ld, n);
@@ -9174,6 +9261,203 @@ YAEP_API bool yaep_open_saved(yaep_gp* g, const yaep_desc* desc, const void* buf
     g->cand_valid = false;
     g->error[0] = '\0';
     return true;
+}
+
+/* --- public: parameters ------------------------------------------------- */
+
+/* The ranges are what yaep_open() accepts on its own; where another field
+ * bounds one (intensity_dim below n_dims), the row gives the widest range
+ * and the doc the rest. */
+#define YAEP__BIG 1.7976931348623157e308
+#define YAEP__INT 2147483647.0
+#define YAEP__HP(f, mn, def, doc) { f, "f64", mn, YAEP__BIG, def, "", doc, NULL }
+#define YAEP__HA(f, mn, def, doc) { f, "f64[]", mn, YAEP__BIG, def, "", doc, NULL }
+static const yaep_param yaep__params_table[] = {
+    { "n_dims", "i32", 1, YAEP_MAX_DIMS, 0, "", "required: stimulus dimensions", NULL },
+    { "lo", "f64[]", -YAEP__BIG, YAEP__BIG, 0, "",
+      "required: each dimension's lower bound, below its hi", NULL },
+    { "hi", "f64[]", -YAEP__BIG, YAEP__BIG, 0, "",
+      "required: each dimension's upper bound", NULL },
+    { "intensity_dim", "i32", 0, YAEP_MAX_DIMS - 1, 0, "",
+      "the dimension thresholds are along (the semiparametric kernel's and the "
+      "psychometric model's intensity); below n_dims, continuous", NULL },
+    { "lik", "enum", 0, 4, 0, "", "the outcome model",
+      "bernoulli=0,ordinal=1,categorical=2,gaussian=3,pairwise=4" },
+    { "n_outcomes", "i32", 0, YAEP_MAX_OUTCOMES, 2, "",
+      "outcome count: ordinal 2 or more, categorical 3 or more; the others take 0 or 2", NULL },
+    { "kernel", "enum", 0, 1, 0, "",
+      "the GP model's kernel: RBF-ARD, or semiparametric (linear in intensity_dim)",
+      "rbf=0,semip=1" },
+    { "link", "enum", 0, 1, 0, "", "maps the latent to a probability", "probit=0,logit=1" },
+    { "guess", "f64", 0, 1, 0, "",
+      "the floor on p (0.5 for a two-alternative task); bernoulli and ordinal; "
+      "guess + lapse below 1", NULL },
+    { "lapse", "f64", 0, 1, 0, "", "the gap below 1 at the top of p", NULL },
+
+    YAEP__HA("hyper.lengthscale", 0, 0,
+             "per dimension, fixed; 0 = a quarter of the dimension's range (4 levels for a "
+             "categorical one), or fitted"),
+    YAEP__HP("hyper.outputscale", 0, 1,
+             "the GP's variance, fixed; 0 = 1 (psychometric: (span / 4)^2 of the intensity "
+             "axis), or fitted"),
+    { "hyper.mean", "f64", -YAEP__BIG, YAEP__BIG, 0, "",
+      "the GP's constant mean, fixed; 0 = 0 (psychometric: the intensity axis's middle), "
+      "or fitted", NULL },
+    YAEP__HA("hyper.lengthscale_b", 0, 0,
+             "the semiparametric slope GP's, per dimension; 0 = a quarter of the range, or fitted"),
+    YAEP__HP("hyper.outputscale_b", 0, 1,
+             "the semiparametric slope GP's variance; 0 = 1, or fitted"),
+    { "hyper.cutpoint", "f64[]", -YAEP__BIG, YAEP__BIG, 0, "",
+      "ordinal: n_outcomes - 1 increasing cutpoints; 0 = 0, 1, 2, ..., or fitted with the "
+      "first at 0", NULL },
+    YAEP__HP("hyper.noise_sd", 0, 0.1,
+             "gaussian: the noise sd, in the outcome's units; 0 = 0.1, or fitted"),
+    YAEP__HA("hyper.lengthscale_g", 0, 0,
+             "psychometric: the log-slope GP's, per dimension; 0 = a quarter of the range, or "
+             "fitted"),
+    YAEP__HP("hyper.outputscale_g", 0, 0.3,
+             "psychometric: the log-slope GP's variance; 0 = priors.outputscale_g.center, or "
+             "fitted"),
+    { "hyper.mean_g", "f64", -YAEP__BIG, YAEP__BIG, 0, "",
+      "psychometric: the mean log-slope; 0 = log(1 / (priors.mean_g.center x span)), or "
+      "fitted", NULL },
+    { "fit", "bool", 0, 1, 0, "", "fit the hyper fields that are 0 (maximum a posteriori)", NULL },
+    { "fit_every", "i32", 0, YAEP__INT, 0, "",
+      "trials between fits after n_init; 0 = only when the program calls yaep_fit()", NULL },
+    { "no_hyper_prior", "bool", 0, 1, 0, "",
+      "drop every weak prior and fit maximum likelihood", NULL },
+    { "refit_every", "i32", 0, YAEP__INT, 1, "",
+      "1 = an exact refit at every update; k > 1 = a rank-one update a trial and an exact "
+      "refit every k (bernoulli and ordinal)", NULL },
+
+    YAEP__HA("hyper_min.lengthscale", 0, 0, "the fit's lower bound; 0 = 0.05 of the range"),
+    YAEP__HP("hyper_min.outputscale", 0, 0.1,
+             "the fit's lower bound; 0 = 0.1 (psychometric: 0.1 (span / 4)^2)"),
+    { "hyper_min.mean", "f64", -YAEP__BIG, YAEP__BIG, -5, "",
+      "the fit's lower bound; 0 = -5 (psychometric: the intensity axis's lo)", NULL },
+    YAEP__HA("hyper_min.lengthscale_b", 0, 0, "the fit's lower bound; 0 = 0.05 of the range"),
+    YAEP__HP("hyper_min.outputscale_b", 0, 0.1, "the fit's lower bound"),
+    YAEP__HA("hyper_min.cutpoint", 0, 0.01,
+             "the fit's lower bound on the gap below cutpoint m (entry 0 unused)"),
+    YAEP__HP("hyper_min.noise_sd", 0, 1e-3, "the fit's lower bound"),
+    YAEP__HA("hyper_min.lengthscale_g", 0, 0, "the fit's lower bound; 0 = 0.05 of the range"),
+    YAEP__HP("hyper_min.outputscale_g", 0, 0.01, "the fit's lower bound"),
+    { "hyper_min.mean_g", "f64", -YAEP__BIG, YAEP__BIG, 0, "",
+      "the fit's lower bound; 0 = log(0.25 / span)", NULL },
+    YAEP__HA("hyper_max.lengthscale", 0, 0, "the fit's upper bound; 0 = 2 ranges"),
+    YAEP__HP("hyper_max.outputscale", 0, 10,
+             "the fit's upper bound; 0 = 10 (psychometric: 10 (span / 4)^2)"),
+    { "hyper_max.mean", "f64", -YAEP__BIG, YAEP__BIG, 5, "",
+      "the fit's upper bound; 0 = 5 (psychometric: the intensity axis's hi)", NULL },
+    YAEP__HA("hyper_max.lengthscale_b", 0, 0, "the fit's upper bound; 0 = 2 ranges"),
+    YAEP__HP("hyper_max.outputscale_b", 0, 10, "the fit's upper bound"),
+    YAEP__HA("hyper_max.cutpoint", 0, 10,
+             "the fit's upper bound on the gap below cutpoint m (entry 0 unused)"),
+    YAEP__HP("hyper_max.noise_sd", 0, 10, "the fit's upper bound"),
+    YAEP__HA("hyper_max.lengthscale_g", 0, 0, "the fit's upper bound; 0 = 2 ranges"),
+    YAEP__HP("hyper_max.outputscale_g", 0, 10, "the fit's upper bound"),
+    { "hyper_max.mean_g", "f64", -YAEP__BIG, YAEP__BIG, 0, "",
+      "the fit's upper bound; 0 = log(1 / (priors.mean_g.ceiling x span))", NULL },
+
+    YAEP__HP("jitter", 0, (sizeof(yaep_real) == sizeof(double) ? 1e-6 : 1e-4),
+             "added to the kernel diagonal; 1e-4 under a float YAEP_REAL"),
+    { "acq", "enum", 0, 8, 0, "",
+      "acquisition: level set (lse, eavc, localmi), global (balv, bald), random, or "
+      "optimization (ucb, ei, thompson; thompson needs the player's generator)",
+      "lse=0,eavc=1,localmi=2,balv=3,bald=4,random=5,ucb=6,ei=7,thompson=8" },
+    { "target_p", "f64", 0, 1, 0, "",
+      "required by the level-set acquisitions (lse, the default, eavc, localmi) but under "
+      "gaussian: the level-set probability, in (guess, 1 - lapse)", NULL },
+    { "target_value", "f64", -YAEP__BIG, YAEP__BIG, 0, "",
+      "gaussian: the level-set value, in the outcome's units", NULL },
+    { "target_outcome", "i32", 0, YAEP_MAX_OUTCOMES - 1, 0, "",
+      "ordinal: the level set is of P(y >= this), 0 = 1; categorical: of P(y == this)", NULL },
+    YAEP__HP("acq_beta", 0, 1.96, "the straddle width of lse and the sd weight of ucb"),
+    { "n_init", "i32", 0, YAEP__INT, 0, "",
+      "space-filling trials before the acquisition runs; 0 = 2 n_dims + 2", NULL },
+    { "candidates", "f64[]", -YAEP__BIG, YAEP__BIG, 0, "",
+      "n_candidates x n_dims points to choose from, row by row; empty = the product grid, "
+      "or Halton points", NULL },
+    { "n_candidates", "i32", 0, YAEP__M_CAP, 512, "",
+      "Halton points, or the rows of candidates; at most 4096 under eavc, thompson and "
+      "pairwise", NULL },
+    { "grid", "i32[]", 0, YAEP__M_CAP, 0, "",
+      "points per dimension of a product grid instead of Halton; all 0 = no grid, else "
+      "each at least 1", NULL },
+    { "stop_trials", "i32", 0, YAEP__INT, 0, "",
+      "stop after this many trials; 0 = off (set this or stop_threshold_sd)", NULL },
+    { "stop_threshold_sd", "f64", 0, YAEP__BIG, 0, "",
+      "stop when the threshold band at stop_context is narrower than this, in intensity "
+      "units; 0 = off", NULL },
+    { "stop_context", "f64[]", -YAEP__BIG, YAEP__BIG, 0, "",
+      "the point whose threshold stop_threshold_sd watches; its intensity entry is unused", NULL },
+    { "max_trials", "i32", 0, YAEP_MAX_TRIALS, YAEP_MAX_TRIALS, "",
+      "trials the handle holds; sizes its memory", NULL },
+    { "refine_steps", "i32", 0, YAEP__REFINE_MAX, 0, "",
+      "rounds of golden-section refinement of the winning candidate; 0 = off", NULL },
+    { "model", "enum", 0, 1, 0, "",
+      "one GP over the box, or threshold and log-slope GPs over the context",
+      "gp=0,psychometric=1" },
+
+    YAEP__HP("priors.lengthscale.center", 0, 0.25,
+             "the lengthscale prior's median, a fraction of the dimension's range"),
+    { "priors.lengthscale.sd", "f64", -YAEP__BIG, YAEP__BIG, 1, "",
+      "the sd of its logarithm; negative = this prior off", NULL },
+    YAEP__HP("priors.outputscale.center", 0, 1,
+             "the output scale prior's median; 0 = 1 (psychometric: (span / 4)^2)"),
+    { "priors.outputscale.sd", "f64", -YAEP__BIG, YAEP__BIG, 0.7, "",
+      "the sd of its logarithm; negative = off", NULL },
+    YAEP__HP("priors.outputscale_b.center", 0, 1, "the slope GP's output scale prior's median"),
+    { "priors.outputscale_b.sd", "f64", -YAEP__BIG, YAEP__BIG, 0.7, "",
+      "the sd of its logarithm; negative = off", NULL },
+    YAEP__HP("priors.outputscale_g.center", 0, 0.3,
+             "the log-slope GP's output scale prior's median, and hyper.outputscale_g's default"),
+    { "priors.outputscale_g.sd", "f64", -YAEP__BIG, YAEP__BIG, 0.7, "",
+      "the sd of its logarithm; negative = off", NULL },
+    { "priors.mean.center", "f64", -YAEP__BIG, YAEP__BIG, 0, "",
+      "the GP model's mean prior (discrete outcomes), in latent units", NULL },
+    { "priors.mean.sd", "f64", -YAEP__BIG, YAEP__BIG, 0.7, "",
+      "its sd; negative = off", NULL },
+    YAEP__HP("priors.mean_g.center", 0, 0.25,
+             "psychometric: the mean slope prior, as the rise's fraction of the intensity axis"),
+    { "priors.mean_g.sd", "f64", -YAEP__BIG, YAEP__BIG, 1, "",
+      "the sd of log(slope); negative = off", NULL },
+    YAEP__HP("priors.mean_g.ceiling", 0, 1.0 / 256.0,
+             "the steepest mean slope a fit may reach, as a rise fraction"),
+    YAEP__HP("priors.noise_sd.center", 0, 0,
+             "gaussian: the noise sd prior's median; off unless center and sd are both set"),
+    { "priors.noise_sd.sd", "f64", -YAEP__BIG, YAEP__BIG, 0, "",
+      "the sd of its logarithm; off unless center and sd are both set", NULL },
+
+    { "minimize", "bool", 0, 1, 0, "",
+      "the optimization acquisitions and yaep_argmax() minimize instead", NULL },
+    { "dim_kind", "enum[]", 0, 2, 0, "",
+      "per dimension: any value, the integers in [lo, hi], or levels 0 .. dim_levels - 1; "
+      "intensity_dim stays continuous", "continuous=0,integer=1,categorical=2" },
+    { "dim_levels", "i32[]", 0, YAEP__INT, 0, "",
+      "a categorical dimension's level count, at least 2; its box is [0, levels - 1]", NULL },
+    { "monotone_dims", "u32", 0, (double)((1u << YAEP_MAX_DIMS) - 1u), 0, "",
+      "bit d: the posterior mean is projected to increase along dimension d (GP model; not "
+      "categorical or pairwise)", NULL },
+    { "pcg_threshold", "i32", -1, YAEP__INT, 512, "",
+      "trials past which an update's Newton steps solve by conjugate gradients; "
+      "negative = never", NULL },
+    { "fit_max_evals", "i32", 0, YAEP__INT, YAEP__FIT_EVALS, "",
+      "objective evaluations a fit may take", NULL },
+    YAEP__HP("fit_tol", 0, 1e-8,
+             "a fit has converged when no gradient component of its objective exceeds this"),
+    { "fit_pcg", "bool", 0, 1, 0, "",
+      "conjugate-gradient Newton steps in the fits and the psychometric model's mode search",
+      NULL },
+};
+#undef YAEP__HP
+#undef YAEP__HA
+#undef YAEP__BIG
+#undef YAEP__INT
+
+YAEP_API const yaep_param* yaep_params(int* n) {
+    if (n) *n = (int)(sizeof yaep__params_table / sizeof yaep__params_table[0]);
+    return yaep__params_table;
 }
 
 /* --- public: simulation ------------------------------------------------- */

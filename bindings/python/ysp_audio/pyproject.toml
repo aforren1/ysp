@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ysp-audio"
+version = "0.8.0"  # must equal ysp/audio.h's YAU_VERSION_STRING; tests/test_audio.py checks it
+description = "Sound at a time on the ysp clock (ysp/audio.h): buffers, streams and WAV files with onset records and tiers"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT-0"
+
+# The C extension is declared in setup.py (Extension) as ysp.audio; this file
+# just pins the build backend so `pip install .` works. `ysp` is a PEP 420
+# implicit namespace package: no __init__.py is shipped, so the other ysp-*
+# distributions install next to this one without either owning the namespace.
+
+[tool.cibuildwheel]
+# abi3 (Limited API): setup.py forces a cp310-abi3 wheel tag, so one build per
+# platform serves every supported CPython. The wheel is built on cp310 and
+# tested there and on cp314: cibuildwheel tests an abi3 wheel it has built on
+# the later versions it is asked for instead of building again.
+build = "cp310-* cp314-*"
+skip = "*-musllinux_*"
+# The tests open miniaudio's null device: no sound hardware.
+test-requires = ["pytest"]
+test-command = "pytest {package}/tests -q"
+
+[tool.cibuildwheel.windows]
+# 64-bit only: no 32-bit Windows 11, MATLAB and ysp-vis are 64-bit, and
+# a 32-bit CPython on a lab rig is rare (docs/bindings.md); cibuildwheel's
+# default would add an x86 wheel.
+archs = ["AMD64"]
+
+[tool.cibuildwheel.macos]
+archs = ["universal2"]
+# Below 10.12, miniaudio 0.11.25's timer counts whole seconds and its null
+# device, which the tests use, hands over a second of frames at once
+# (docs/audio.md, "The null device on macOS"). setup.py raises a lower
+# target too; the extension refuses to compile below 10.12.
+environment = { MACOSX_DEPLOYMENT_TARGET = "10.13" }

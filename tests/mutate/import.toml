@@ -1,0 +1,329 @@
+# pack/import.c mutants: the pack tool's readers of other formats (the
+# .xlsx reader, the JPEG reader, the ICC check). The test compiles the
+# mutated file into itself (tests/adapt/import_test.c, YPT_TEST_UNITY), with
+# lodepng and stb_image from third_party/ (tools/vendor_pack.py --write).
+# docs/pack.md lists the results.
+header = "import.c"
+
+[test.import]
+source = "tests/adapt/import_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O1", "-w", "-DYPT_TEST_UNITY", "-I{repo}/third_party/lodepng", "-I{repo}/third_party/stb"]
+libs = ["-lm"]
+timeout = 120
+
+# --- the zip ----------------------------------------------------------------------
+
+[[mutant]]
+id = "z-01"
+name = "an OLE file read as a zip"
+test = "import"
+why = "A password-protected workbook is an OLE file; the message must say so, not 'not a zip'."
+find = 'if (n >= 8 && rbe32(d) == 0xD0CF11E0u)'
+replace = 'if (0)'
+
+[[mutant]]
+id = "z-02"
+name = "zip64 not refused"
+test = "import"
+why = "0xFFFFFFFF in the end record means zip64; read as an offset it points outside the file."
+find = 'if (ne == 0xFFFFu || cds == 0xFFFFFFFFu || cdo == 0xFFFFFFFFu)'
+replace = 'if (0)'
+
+[[mutant]]
+id = "z-03"
+name = "encrypted entries read"
+test = "import"
+why = "An encrypted entry's bytes are not deflate data."
+find = 'if (e->flags & 1u) return'
+replace = 'if (0) return'
+
+[[mutant]]
+id = "z-04"
+name = "no bound on a part's size"
+test = "import"
+why = "A zip bomb states a huge size; the bound stops it before the allocation."
+find = 'if (e->usize > XL_MAX_PART) return'
+replace = 'if (0) return'
+
+[[mutant]]
+id = "z-05"
+name = "compressed size past the end"
+test = "import"
+why = "A compressed size past the file's end makes inflate read outside the buffer."
+find = 'if (data > z->n || e->csize > z->n - data) return'
+replace = 'if (data > z->n) return'
+
+[[mutant]]
+id = "z-06"
+name = "stored entry with two sizes"
+test = "import"
+why = "A stored entry copies usize bytes from csize bytes of data."
+find = 'if (e->csize != e->usize) return'
+replace = 'if (0) return'
+
+[[mutant]]
+id = "z-07"
+name = "an unknown method inflated"
+test = "import"
+why = "Method 12 (bzip2) is not deflate; the message must name the method."
+find = '} else if (e->method == 8) {'
+replace = '} else if (e->method == 8 || e->method == 12) {'
+
+[[mutant]]
+id = "z-08"
+name = "inflated size not checked"
+test = "import"
+why = "A part that inflates to another size than its record is damaged."
+find = 'if (un != e->usize) {'
+replace = 'if (0) {'
+
+[[mutant]]
+id = "z-09"
+name = "CRC-32 not checked"
+test = "import"
+why = "The CRC-32 is the only check of a part's bytes."
+find = 'if (ypak_crc32(0, u, un) != e->crc) {'
+replace = 'if (0) {'
+
+# --- XML ----------------------------------------------------------------------------
+
+[[mutant]]
+id = "x-01"
+name = "a DOCTYPE read as a tag"
+test = "import"
+why = "A DOCTYPE can declare entities; no workbook part has one."
+find = "if (x->e - p >= 2 && p[1] == '!') return"
+replace = "if (0) return"
+
+[[mutant]]
+id = "x-02"
+name = "unknown entities become a character"
+test = "import"
+why = "XML has five entities; any other is an error, not text."
+find = '''return ferr(err, cap, YPAK_ERR_FORMAT, "XML: the entity '&%.*s;' is not one of XML's five", (int)(k - 1), s + i + 1);'''
+replace = "c = '?';"
+
+[[mutant]]
+id = "x-03"
+name = "character references to NUL and surrogates"
+test = "import"
+why = "U+0000 and surrogates are not characters; ysp/table.h would refuse the UTF-8 later or cut the text."
+find = 'if (c == 0 || (c >= 0xD800 && c <= 0xDFFF)) return ferr(err, cap, YPAK_ERR_FORMAT, "XML: a character reference to U+%04X", c);'
+replace = 'if (0) return 0;'
+
+[[mutant]]
+id = "x-04"
+name = "_xHHHH_ escapes kept as text"
+test = "import"
+why = "ECMA-376 writes characters XML cannot hold as _xHHHH_; Excel shows the character."
+find = "if (ooxml && ch == '_' && n - i >= 7"
+replace = "if (0 && ooxml && ch == '_' && n - i >= 7"
+
+[[mutant]]
+id = "x-05"
+name = "phonetic text in shared strings"
+test = "import"
+why = "rPh holds a reading guide (furigana); the cell's value is without it."
+find = 'else if (t.t == XT_TEXT && in_t && !in_rph) {'
+replace = 'else if (t.t == XT_TEXT && in_t) {'
+
+# --- cells --------------------------------------------------------------------------
+
+[[mutant]]
+id = "c-01"
+name = "dates read as numbers"
+test = "import"
+why = "A date cell is a serial number that the workbook shows as a date; PsychoPy reads a datetime."
+find = 'if (is_date && style < n_styles && is_date[style]) {'
+replace = 'if (0) {'
+
+[[mutant]]
+id = "c-02"
+name = "built-in date format 14 missed"
+test = "import"
+why = "Format 14 is the short date of every locale."
+find = 'return (id >= 14 && id <= 22)'
+replace = 'return (id >= 15 && id <= 22)'
+
+[[mutant]]
+id = "c-03"
+name = "a formula without a saved value"
+test = "import"
+why = "Without the saved value the cell has no value the tool can know; it does not compute formulas."
+find = 'if (has_f) { rc = ferr('
+replace = 'if (0) { rc = ferr('
+
+[[mutant]]
+id = "c-04"
+name = "formulas not counted"
+test = "import"
+why = "The manifest records how many values came from formulas."
+find = 'if (has_f) sh->formulas++;'
+replace = ';'
+
+[[mutant]]
+id = "c-05"
+name = "error cells as unknown types"
+test = "import"
+why = "An error value is named (#N/A) so the author knows which cell to fix."
+find = '} else if (!strcmp(ctype, "e")) {'
+replace = '} else if (!strcmp(ctype, "E")) {'
+
+[[mutant]]
+id = "c-06"
+name = "booleans swapped"
+test = "import"
+why = "1 is TRUE."
+find = '''val[0] == '1' ? "TRUE" : "FALSE", val[0] == '1' ? 4 : 5'''
+replace = '''val[0] == '1' ? "FALSE" : "TRUE", val[0] == '1' ? 5 : 4'''
+
+[[mutant]]
+id = "c-07"
+name = "a row number repeated"
+test = "import"
+why = "Two rows with one number would put two cells in one place."
+find = '(int64_t)r - 1 <= last_row'
+replace = '(int64_t)r - 1 < last_row'
+
+[[mutant]]
+id = "c-08"
+name = "a number in row 1"
+test = "import"
+why = "Row 1 names the columns; a number is no name."
+find = 'if (sh->c[i].kind != CV_TEXT) {'
+replace = 'if (0) {'
+
+[[mutant]]
+id = "c-09"
+name = "a value past the named columns dropped"
+test = "import"
+why = "PsychoPy drops a column without a name silently; the tool says which cell holds a value."
+find = '''        if (i < sh->n && sh->c[i].row == r) {
+            char ref[16];'''
+replace = '''        if (0) {
+            char ref[16];'''
+
+[[mutant]]
+id = "c-10"
+name = "a comma left unquoted"
+test = "import"
+why = "A comma in a text is data, not a delimiter."
+find = "if (s[i] == ',' || s[i] == '\"'"
+replace = "if (s[i] == '\"'"
+
+[[mutant]]
+id = "c-11"
+name = "mixed columns typed as text"
+test = "import"
+why = "Only a column whose every value is a text cell keeps its text; numbers stay numbers."
+find = 'if (any_text[k] && !any_other[k])'
+replace = 'if (any_text[k])'
+
+# --- JPEG ----------------------------------------------------------------------------
+
+[[mutant]]
+id = "j-01"
+name = "EXIF orientation 6 accepted"
+test = "import"
+why = "A picture stored turned would be shown turned by the player and upright by a browser."
+find = 'if (o > 1) {'
+replace = 'if (o > 6) {'
+
+[[mutant]]
+id = "j-02"
+name = "ICC chunks out of order"
+test = "import"
+why = "Chunks concatenated out of order give another profile."
+find = 'if (seq != (uint32_t)icc_seen) {'
+replace = 'if (0) {'
+
+[[mutant]]
+id = "j-03"
+name = "a missing ICC chunk"
+test = "import"
+why = "A profile with a chunk missing is another profile."
+find = 'if (rc == 0 && icc_parts && icc_seen != icc_parts)'
+replace = 'if (0)'
+
+[[mutant]]
+id = "j-04"
+name = "a profile that is not sRGB accepted"
+test = "import"
+why = "Principle 5: ysp converts no color, so a profile other than sRGB's is refused."
+find = 'if (s <= 0) rc = ferr('
+replace = 'if (s < 0) rc = ferr('
+
+[[mutant]]
+id = "j-05"
+name = "CMYK named as 4 components"
+test = "import"
+why = "The message says what the file is: CMYK."
+find = 'if (comp == 4) {'
+replace = 'if (0) {'
+
+[[mutant]]
+id = "j-06"
+name = "12-bit samples passed on"
+test = "import"
+why = "Textures from JPEG are 8-bit; the message names the precision."
+find = 'if (s[0] != 8) {'
+replace = 'if (0) {'
+
+[[mutant]]
+id = "j-07"
+name = "a file cut short decoded"
+test = "import"
+why = "stb_image pads a cut stream with zeros and decodes it; the end marker finds the cut."
+find = 'if (!eoi) rc = ferr('
+replace = 'if (0) rc = ferr('
+
+[[mutant]]
+id = "j-08"
+name = "arithmetic coding passed on"
+test = "import"
+why = "The message names the coding and what to do."
+find = 'if (m != 0xC0 && m != 0xC1 && m != 0xC2) {'
+replace = 'if (m != 0xC0 && m != 0xC1 && m != 0xC2 && m != 0xC9) {'
+
+[[mutant]]
+id = "j-09"
+name = "two frame headers"
+test = "import"
+why = "A second frame header changes the image the decoder makes."
+find = 'if (sof) { rc = ferr(err, cap, YPAK_ERR_FORMAT, "JPEG: two frame headers"); break; }'
+replace = ';'
+
+[[mutant]]
+id = "j-10"
+name = "a large frame on little data decoded"
+test = "import"
+why = "Every block costs at least a bit; a 4096 x 4096 frame on 300 bytes is a cut or damaged file that stb_image would pad with zeros."
+find = 'if ((int64_t)n * 8 < blocks)'
+replace = 'if (0)'
+
+# --- ICC ------------------------------------------------------------------------------
+
+[[mutant]]
+id = "i-01"
+name = "colorants within 0.2"
+test = "import"
+why = "A display's colorants differ from sRGB's by 0.04; 0.002 is the profiles' rounding."
+find = '- want[k][m]) > 0.002)'
+replace = '- want[k][m]) > 0.2)'
+
+[[mutant]]
+id = "i-02"
+name = "curves within half of full scale"
+test = "import"
+why = "Half a code of 255 is the profiles' rounding; a linear curve is 53 codes off."
+find = 'if (e > 0.5 / 255.0) return'
+replace = 'if (e > 0.5) return'
+
+[[mutant]]
+id = "i-03"
+name = "a pure gamma read as a table"
+test = "import"
+why = "A curve of one entry is a gamma, not a table of one point."
+find = 'if (cnt < 2 || (size_t)cnt > (n - 12) / 2) return -1;'
+replace = 'if (cnt < 1 || (size_t)cnt > (n - 12) / 2) return -1;'

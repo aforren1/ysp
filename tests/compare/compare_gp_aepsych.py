@@ -193,11 +193,11 @@ def to_box(unit):
 # --- the two runners ------------------------------------------------------------
 
 def run_ysp(method, rep, args):
-    import ysp.aep as pg
+    import ysp.aep as yaep
     field = Field(args.pheno, args.beta)
     u = stream(args.seed, rep, args.trials)
     init, _ = sobol_init(rep)
-    g = pg.GP(lo=list(LO), hi=list(HI), intensity_dim=1, kernel=pg.KERNEL_RBF,
+    g = yaep.GP(lo=list(LO), hi=list(HI), intensity_dim=1, kernel=yaep.KERNEL_RBF,
               acq=method, target_p=TARGET_P, grid=list(args.grid), n_init=N_INIT,
               fit=True, fit_every=args.fit_every, stop_trials=args.trials,
               max_trials=args.trials, refine_steps=args.refine, model=args.model)
@@ -211,7 +211,7 @@ def run_ysp(method, rep, args):
         y = respond(float(field.p(x[0], x[1])), u[t])
         try:
             g.update(x, y)
-        except pg.Numeric:
+        except yaep.Numeric:
             numeric += 1        # recorded; the previous posterior stays
         spent += time.perf_counter() - t0
         n = t + 1
@@ -320,9 +320,9 @@ def same_sequence(source, rep, args):
         return np.asarray(xs), np.asarray(ys, dtype=float)
     # ysp-lse: the trials ysp.aep LSE with refine_steps = 2 chose in the
     # adaptive protocol, replayed as they were answered.
-    import ysp.aep as pg
+    import ysp.aep as yaep
     init, _ = sobol_init(rep)
-    g = pg.GP(lo=list(LO), hi=list(HI), intensity_dim=1, acq="lse",
+    g = yaep.GP(lo=list(LO), hi=list(HI), intensity_dim=1, acq="lse",
               target_p=TARGET_P, grid=list(args.grid), n_init=N_INIT, fit=True,
               fit_every=args.fit_every, stop_trials=args.trials,
               max_trials=args.trials, refine_steps=2)
@@ -331,7 +331,7 @@ def same_sequence(source, rep, args):
         y = respond(float(field.p(x[0], x[1])), u[t])
         try:
             g.update(x, y)
-        except pg.Numeric:
+        except yaep.Numeric:
             pass
     h = g.history()
     return np.array([r["x"] for r in h]), np.array([r["y"] for r in h])
@@ -339,15 +339,15 @@ def same_sequence(source, rep, args):
 
 def fit_ysp(xs, ys, args):
     """ysp.aep fitted once from its defaults to these trials, as AEPsych is."""
-    import ysp.aep as pg
+    import ysp.aep as yaep
     n = len(ys)
-    g = pg.GP(lo=list(LO), hi=list(HI), intensity_dim=1, target_p=TARGET_P,
+    g = yaep.GP(lo=list(LO), hi=list(HI), intensity_dim=1, target_p=TARGET_P,
               grid=list(args.grid), n_init=N_INIT, fit=True, fit_every=0,
               stop_trials=n, max_trials=n)
     for x, y in zip(xs, ys):
         try:
             g.update(list(x), int(y))
-        except pg.Numeric:
+        except yaep.Numeric:
             pass
     g.fit()
     field = Field(args.pheno, args.beta)

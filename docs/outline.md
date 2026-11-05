@@ -585,6 +585,56 @@ compile checks and `test_gfx` on Linux are the test. It has no mutant:
 on Windows, where the mutants of this list run, the macro changes
 nothing.
 
+## v0.4.0: enum values in the parameter tables
+
+Every ysp parameter table has one row shape: `name`, `type`, `min`, `max`, `def`, `unit`, `doc`, `values` ([conventions.md](conventions.md), "Parameter tables"; gap G6 of [experiment_format.md](experiment_format.md)). `yol_param` gained `values` after `offset`, as `ycol_param`
+did: `join` (`round=0,miter=1,bevel=2`), `cap` (`butt=0,round=1,square=2`),
+`mode` (`stroke=0,bold=1,inset=2`, the suffixes of `YOL_STROKE`,
+`YOL_BOLD`, `YOL_INSET`) and `format` (`u8=0,u16=1,f32=2,f64=3`). Every
+other row has NULL.
+
+`t12_params()` in `tests/adapt/outline_test.c` checks the four tables
+against their desc fields and offsets and the enum rows against
+`switch`es without a `default`. A default that is not 0 must give what a
+zero field gives: a stroke with `miter_limit` 0 and 4 (two corners whose
+miter ratios are 3.9 and 4.1) and with `tol` 0 and 1e-4 are the same paths,
+byte for byte, and a CFF glyph with `size` 0 and 1 and `tol` 0 and 1e-4
+is the same outline. The checks are not empty: a limit of 3 bevels the
+first corner and a limit of 5 miters the second, a tolerance of 1e-9 splits the curve further, and a size of 2
+changes the outline. 3 of 3 new mutants killed (`tests/mutate/outline.toml`, pv-); the first `miter_limit` mutant (default 3) survived a 60 degree corner, whose miter ratio 2 is under both limits, so the test now strokes the two corners either side of 4. No output changed.
+
+## v0.4.1: gcc 11 at -O1
+
+The compile checks and `outline_test.c` did not build with Ubuntu
+22.04's gcc 11.4 at -O1 with the CI warning set (`-Wall -Wextra
+-Wpedantic -Wshadow -Wfloat-conversion -Werror`):
+
+    include/ysp/outline.h:1465:21: error: 'v' may be used uninitialized
+    in this function [-Werror=maybe-uninitialized]
+                 st[n++] = v;
+
+In `yol__dict_get()`, `v` is the operand that `yol__dict_num()` reads.
+That function writes `*v` on every path that returns 0, and the caller
+stores `v` only after a 0. A false positive: at -O1 gcc 11.4 inlines the
+reader (called once) and loses that link. Measured on the same file:
+
+| Compiler | -O0 | -O1 | -O2 | -O3 | -Os | -Og |
+|---|---|---|---|---|---|---|
+| gcc 11.4 (WSL2, Ubuntu 22.04), C99, C11, C++17 | clean | warns | clean | clean | clean | clean |
+| MinGW-w64 gcc 16.1, C11 | | clean | clean | clean | clean | clean |
+| clang 11 (WSL2), C99, C11, C++17 | clean | clean | clean | clean | clean | |
+
+The reader now writes 0 to `*v` first, so every path writes it. No
+pragma: the change states the contract in code and costs one store per
+DICT number. No output changed: the resolve, alpha and SVG goldens and
+`outline_test.c` give the same results. There is no mutant, because the
+change has no behavior to remove.
+
+CI's Release build is -O3 and its Debug builds are -O0, so neither saw
+this. The `linux-extra` job has a `gcc-O1` entry now: the whole tree,
+Debug with `-O1`. With gcc 11.4 on WSL2 it builds and passes ctest (79
+of 79).
+
 ## Next
 
 1. The Latin stroke bar (Cost): the sweep's per-strip positions are what

@@ -22,6 +22,12 @@
  *     end
  *     ysp_trials('close', h);
  *
+ *     % v0.6: a category per trial from the trial's own stream, and its seed
+ *     d.seed = uint64(20261021);
+ *     d.vars = ysp_trials('var_choice', 'side', {'left', 'right'});
+ *     side = ysp_trials('var', h, ti.index, 'side');     % 'left' or 'right'
+ *     s = ysp_trials('trial_seed', h, ti.index);         % uint64
+ *
  * Build with build.m. See README.md for the command reference.
  *
  * TRACKS. A track is {'stair', h}, {'quest', h} or {'aep', h}, a handle of one
@@ -65,6 +71,11 @@ typedef struct tn {
     uint64_t*    rules_arena; /* ytr_rules() output, read at open            */
     char*        jit_str[YTR_MAX_JITTERS][4];   /* name and column names     */
     int64_t      jit_vals[YTR_MAX_JITTERS][YTR_MAX_JITTER_VALUES];
+    /* v0.6 variables: the header copies the texts at open, but t->desc keeps
+     * these pointers, so they live as long as the handle. */
+    char*        var_name[YTR_MAX_VARS];
+    char*        var_text[YTR_MAX_VARS][YTR_MAX_VAR_VALUES];
+    const char*  var_ptr[YTR_MAX_VARS][YTR_MAX_VAR_VALUES];
     tn_track     tracks[YTR_MAX_TRACKS];
     int          n_tracks;
     mxArray*     done_str;    /* persistent 'done', the command a track gets  */
@@ -91,6 +102,10 @@ static void tn_destroy(void* obj) {
         int j, k;
         for (j = 0; j < YTR_MAX_JITTERS; j++)
             for (k = 0; k < 4; k++) free(n->jit_str[j][k]);
+        for (j = 0; j < YTR_MAX_VARS; j++) {
+            free(n->var_name[j]);
+            for (k = 0; k < YTR_MAX_VAR_VALUES; k++) free(n->var_text[j][k]);
+        }
     }
     free(n);
 }
@@ -158,12 +173,14 @@ static mxArray* t_con_make(int rule, const mxArray* factor, const mxArray* level
     return s;
 }
 
+static char* t_utf8(const mxArray* a, const char* what);
+
 /* Factor: a 1-based index, a factor or table column name, or 'condition'
  * for the row. */
 static int t_factor(const mxArray* a, const ytr_desc* d, tn* n) {
     int i;
     if (mxIsChar(a)) {
-        char* v = mxArrayToString(a);
+        char* v = t_utf8(a, "constraint factor");
         if (pm_lower_eq(v, "condition")) return YTR_CONDITION;
         if (d->table) {
             i = ytb_col(d->table, v);
@@ -183,7 +200,7 @@ static int t_factor(const mxArray* a, const ytr_desc* d, tn* n) {
 static int t_level(const mxArray* a, const ytr_desc* d, int factor) {
     int i;
     if (mxIsChar(a)) {
-        char* v = mxArrayToString(a);
+        char* v = t_utf8(a, "constraint level");
         if (pm_lower_eq(v, "any")) return YTR_ANY_LEVEL;
         if (d->table && factor >= 0) {
             i = ytb_find(d->table, factor, v);
@@ -221,7 +238,7 @@ static const char* const t_fields[] = {
     "block_size", "constraints_span_blocks", "n_practice", "n_warmup",
     "warmup_conditions", "requeue_gap", "rng", "record_size",
     "table", "order_list", "draws", "weights", "subset", "groups", "rules", "participant",
-    "jitters"
+    "jitters", "seed", "vars", "display_rate"
 };
 
 /* ---- jitter ------------------------------------------------------------- */
@@ -229,9 +246,36 @@ static const char* const t_fields[] = {
 static const char* const t_jit_dists[] = { "uniform", "choice", "exponential" };
 static const char* t_jit_fields[] = { "name", "dist", "lo", "hi", "scale", "values", "rate" };
 
-/* A malloc'd copy of a char argument, or NULL when empty. */
+/* Text as UTF-8, the header's encoding; mxMalloc'd. HAVE_OCTAVE as
+ * ysp_mex_util.h uses it: OCTMEX_API exists only in newer Octave (10.1 has
+ * it, CI's 7.3 does not), and mxArrayToUTF8String is MATLAB's alone. */
+static char* t_utf8(const mxArray* a, const char* what) {
+    char* v;
+    if (!mxIsChar(a)) pm_err("arg", "%s must be a string", what);
+#if defined(HAVE_OCTAVE) || defined(OCTMEX_API)
+    v = mxArrayToString(a);             /* Octave's char arrays hold UTF-8 */
+#else
+    v = mxArrayToUTF8String(a);         /* MATLAB's hold UTF-16          */
+#endif
+    if (!v) pm_err("arg", "%s is not convertible to UTF-8", what);
+    return v;
+}
+
+/* A rate in Hz: NUM or [NUM DEN], positive whole numbers. */
+static void t_rate(const mxArray* f, const char* what, int* num, int* den) {
+    double r[2] = { 0.0, 1.0 };
+    int m = (int)mxGetNumberOfElements(f);
+    if (m < 1 || m > 2) pm_err("arg", "%s is NUM or [NUM DEN]", what);
+    pm_vector(f, what, r, m);
+    if (r[0] < 1 || r[1] < 1 || r[0] != floor(r[0]) || r[1] != floor(r[1]) || r[0] > 2147483647.0 || r[1] > 2147483647.0)
+        pm_err("arg", "%s needs positive whole NUM and DEN", what);
+    *num = (int)r[0];
+    *den = (int)r[1];
+}
+
+/* A malloc'd copy of a char argument (UTF-8). */
 static char* t_dup(const mxArray* a, const char* what) {
-    char* v = pm_string(a, what);
+    char* v = t_utf8(a, what);
     size_t n = strlen(v);
     char* c = (char*)malloc(n + 1);
     if (!c) pm_err("memory", "out of memory");
@@ -276,14 +320,15 @@ static void t_jitter_desc(const mxArray* s, size_t e, ytr_jitter_desc* j, char**
         j->n_values = m;
     }
     if ((f = mxGetField(s, e, "rate")) && !mxIsEmpty(f)) {
-        double r[2] = { 0.0, 1.0 };
-        int m = (int)mxGetNumberOfElements(f);
-        if (m < 1 || m > 2) pm_err("arg", "rate is NUM or [NUM DEN]");
-        pm_vector(f, "rate", r, m);
-        if (r[0] < 1 || r[1] < 1 || r[0] != floor(r[0]) || r[1] != floor(r[1]) || r[0] > 2147483647.0 || r[1] > 2147483647.0)
-            pm_err("arg", "rate needs positive whole NUM and DEN");
-        j->rate_num = (int)r[0];
-        j->rate_den = (int)r[1];
+        if (mxIsChar(f)) {
+            /* The rig's refresh, which desc.display_rate gives at open. */
+            if (!pm_lower_eq(pm_string(f, "rate"), "display"))
+                pm_err("arg", "rate is NUM, [NUM DEN] or 'display'");
+            j->rate_num = YTR_RATE_DISPLAY;
+            j->rate_den = 0;
+        } else {
+            t_rate(f, "rate", &j->rate_num, &j->rate_den);
+        }
     }
 }
 
@@ -352,15 +397,7 @@ static uint64_t* t_parse_table(const mxArray* a, ytb_table* out) {
         }
     }
     if (!mxIsChar(f)) pm_err("arg", "desc.table is CSV text or struct('csv', text, ...)");
-    /* HAVE_OCTAVE as ysp_mex_util.h uses it: OCTMEX_API exists only in newer
-     * Octave (10.1 has it, CI's 7.3 does not), and mxArrayToUTF8String is
-     * MATLAB's alone. */
-#if defined(HAVE_OCTAVE) || defined(OCTMEX_API)
-    text = mxArrayToString(f);           /* Octave's char arrays hold UTF-8 */
-#else
-    text = mxArrayToUTF8String(f);       /* MATLAB's hold UTF-16          */
-#endif
-    if (!text) pm_err("arg", "the CSV text is not convertible to UTF-8");
+    text = t_utf8(f, "the CSV text");
     cd.text = text;
     cd.len = strlen(text);
     ytb_open_csv(&t, &cd);                       /* sizing */
@@ -596,15 +633,47 @@ static void t_read_desc(const mxArray* s, ytr_desc* d, tn* n, int** cond_reps, i
         for (e = 0; e < m; e++) t_jitter_desc(f, e, &d->jitters[e], n->jit_str[e], n->jit_vals[e]);
         d->n_jitters = (int)m;
     }
+    /* v0.6: the trial streams' seed, the variables drawn from them, and the
+     * display's rate for a jitter with rate 'display'. */
+    if ((f = pm_field(s, "seed"))) d->seed = pm_u64(f, "seed");
+    if ((f = pm_field(s, "vars"))) {
+        size_t m = mxGetNumberOfElements(f), e, k;
+        if (!mxIsStruct(f)) pm_err("arg", "desc.vars must be a struct array (ysp_trials('var_choice', ...))");
+        if (m > YTR_MAX_VARS) pm_err("arg", "desc.vars holds %d; the maximum is %d", (int)m, YTR_MAX_VARS);
+        for (e = 0; e < m; e++) {
+            const mxArray* nm = mxGetField(f, e, "name");
+            const mxArray* vl = mxGetField(f, e, "values");
+            size_t nv;
+            if (!nm || !mxIsChar(nm)) pm_err("arg", "desc.vars(%d) needs a name", (int)e + 1);
+            if (!vl || (!mxIsCell(vl) && !mxIsEmpty(vl)))
+                pm_err("arg", "desc.vars(%d).values must be a cell of strings", (int)e + 1);
+            nv = mxGetNumberOfElements(vl);
+            if (nv > YTR_MAX_VAR_VALUES)
+                pm_err("arg", "desc.vars(%d) has %d values; the maximum is %d", (int)e + 1, (int)nv, YTR_MAX_VAR_VALUES);
+            n->var_name[e] = t_dup(nm, "var name");
+            for (k = 0; k < nv; k++) {
+                const mxArray* x = mxGetCell(vl, k);
+                if (!x || !mxIsChar(x)) pm_err("arg", "desc.vars(%d).values{%d} must be a string", (int)e + 1, (int)k + 1);
+                n->var_text[e][k] = t_dup(x, "var value");
+                n->var_ptr[e][k] = n->var_text[e][k];
+            }
+            d->vars[e].name = n->var_name[e];
+            d->vars[e].values = n->var_ptr[e];
+            d->vars[e].n_values = (int)nv;
+        }
+        d->n_vars = (int)m;
+    }
+    if ((f = pm_field(s, "display_rate"))) t_rate(f, "display_rate", &d->display_rate_num, &d->display_rate_den);
     if ((f = pm_field(s, "rules"))) {
         /* Rules text over the fields above (ytr_rules); its arrays live in
          * the node until open() has read them. */
         ytr_rules_desc rd;
         char err[512];
-        char* txt = pm_string(f, "rules");
+        char* txt = t_utf8(f, "rules");
         int rows = t_rows(d);
         size_t sz = (size_t)4 * YTR_MAX_TRIALS + (size_t)32 * (size_t)(rows > 0 ? rows : YTR_MAX_CONDITIONS) + 1024 +
-                    (size_t)320 * YTR_MAX_JITTERS;
+                    (size_t)320 * YTR_MAX_JITTERS +
+                    (size_t)(48 + 8 * YTR_MAX_VAR_VALUES + (YTR_MAX_VAR_TEXT + 9) * YTR_MAX_VAR_VALUES) * YTR_MAX_VARS;
         n->rules_arena = (uint64_t*)malloc(sz);
         if (!n->rules_arena) pm_err("memory", "out of memory");
         memset(&rd, 0, sizeof(rd));
@@ -897,6 +966,32 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         plhs[0] = t_jitter_make(2, prhs[1], prhs[2], prhs[3], prhs[4], NULL, nrhs > 5 ? prhs[5] : NULL);
         return;
     }
+    if (strcmp(cmd, "var_choice") == 0) {
+        /* A variable for desc.vars (v0.6); open() checks it, so a bad one is
+         * refused there with the header's message. */
+        static const char* vf[] = { "name", "values" };
+        pm_nargs(nrhs, 3, "v = ysp_trials('var_choice', name, values)");
+        if (!mxIsChar(prhs[1])) pm_err("arg", "name must be a string");
+        if (!mxIsCell(prhs[2])) pm_err("arg", "values must be a cell of strings, for example {'left', 'right'}");
+        plhs[0] = mxCreateStructMatrix(1, 1, 2, vf);
+        mxSetField(plhs[0], 0, "name", mxDuplicateArray(prhs[1]));
+        mxSetField(plhs[0], 0, "values", mxDuplicateArray(prhs[2]));
+        return;
+    }
+    if (strcmp(cmd, "limits") == 0) {
+        /* The compile-time bounds of this build, which Python exposes as
+         * MAX_* constants. */
+        static const char* lf[] = { "max_trials", "max_conditions", "max_factors", "max_constraints", "max_tracks",
+                                    "max_jitters", "max_jitter_values", "max_vars", "max_var_values", "max_var_text",
+                                    "max_columns" };
+        static const int lv[] = { YTR_MAX_TRIALS, YTR_MAX_CONDITIONS, YTR_MAX_FACTORS, YTR_MAX_CONSTRAINTS,
+                                  YTR_MAX_TRACKS, YTR_MAX_JITTERS, YTR_MAX_JITTER_VALUES, YTR_MAX_VARS,
+                                  YTR_MAX_VAR_VALUES, YTR_MAX_VAR_TEXT, YTB_MAX_COLUMNS };
+        int k;
+        plhs[0] = mxCreateStructMatrix(1, 1, 11, lf);
+        for (k = 0; k < 11; k++) mxSetField(plhs[0], 0, lf[k], mxCreateDoubleScalar(lv[k]));
+        return;
+    }
     if (strcmp(cmd, "jitter_map") == 0) {
         ytr_jitter_desc j;
         char* str[4] = { NULL, NULL, NULL, NULL };
@@ -1082,6 +1177,33 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
             j = pm_index(prhs[3], "jitter", t->n_jit);
         }
         plhs[0] = t_jitter_out(ytr_jitter(t, i, j));
+    } else if (strcmp(cmd, "var") == 0 || strcmp(cmd, "var_index") == 0) {
+        /* 1-based trial and variable (or the variable's name). */
+        int i, j;
+        pm_nargs(nrhs, 4, cmd[3] ? "k = ysp_trials('var_index', h, trial, var)" : "text = ysp_trials('var', h, trial, var)");
+        i = pm_index(prhs[2], "trial", ytr_n_run(t));
+        if (mxIsChar(prhs[3])) {
+            j = ytr_var_index(t, pm_string(prhs[3], "var"));
+            if (j < 0) pm_err("arg", "no variable of that name");
+        } else {
+            j = pm_index(prhs[3], "var", t->n_var);
+        }
+        if (cmd[3]) {
+            int k = ytr_var(t, i, j);
+            t_check(k);
+            plhs[0] = mxCreateDoubleScalar(k + 1.0);
+        } else {
+            const char* v = ytr_var_text(t, i, j);
+            if (!v) pm_err("arg", "no value for that trial");
+            plhs[0] = mxCreateString(v);
+        }
+    } else if (strcmp(cmd, "var_names") == 0) {
+        int j;
+        plhs[0] = mxCreateCellMatrix(1, (size_t)t->n_var);
+        for (j = 0; j < t->n_var; j++) mxSetCell(plhs[0], (size_t)j, mxCreateString(t->var[j].name));
+    } else if (strcmp(cmd, "trial_seed") == 0) {
+        pm_nargs(nrhs, 3, "s = ysp_trials('trial_seed', h, trial)");
+        plhs[0] = pm_u64_out(ytr_trial_seed(t, pm_index(prhs[2], "trial", ytr_n_run(t))));
     } else if (strcmp(cmd, "jitter_names") == 0) {
         int j;
         plhs[0] = mxCreateCellMatrix(1, (size_t)t->n_jit);

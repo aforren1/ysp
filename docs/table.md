@@ -1,6 +1,7 @@
 # ysp/table.h design notes
 
-Status: v0.1.0, 2026-10-07. Written with ysp/trials.h v0.2.0, which takes
+Status: v0.3.0, 2026-10-21: 256 columns (see "256 columns (v0.3.0)").
+v0.1.0, 2026-10-07. Written with ysp/trials.h v0.2.0, which takes
 its conditions from a table (`desc.table`). The coordinator approved the
 design on 2026-10-07 and asked for the table code to be its own header, so
 the pack tool and ysp/timeline.h can read tables through it later. The
@@ -192,6 +193,29 @@ hash in `tests/adapt/table_test.c` did not change. Checked on 2026-10-10
 (Windows 11, MSVC 19.44 /W4 /WX as C and C++17, MinGW-w64 gcc -Werror),
 with new checks for `ytb_close()` on a zeroed handle, after a failed open
 and twice. The fuzz target builds against the new names.
+
+## 256 columns (v0.3.0)
+
+- Problem: a trial row of the experiment definition
+  ([experiment_format.md](experiment_format.md) 2.10, gap G10) has seven
+  columns per recorded stimulus beside the session's, the response's and
+  the template's, so a template with many recorded stimuli passes 64
+  columns. ysp/trials.h's data writer keeps to this header's bound, so
+  its files read back.
+- Options: remove the bound (the parse's column state and the declared
+  types into the arena, `types[]` a pointer); raise it.
+- Decision: raise `YTB_MAX_COLUMNS` to 256. The block format already
+  stores the column count in 32 bits, so no byte of a block changes and
+  a block of up to 64 columns hashes as before. What grows with the
+  bound: `ytb_csv_desc.types[]` (1072 to 4144 bytes), the parse's stack
+  (16 bytes a column, 1 to 4 KB) and ysp/trials.h's level pointers (8
+  bytes a column). Removing the bound would change the desc's API for
+  every caller, and nothing yet asks for more than 256.
+- Checked on 2026-10-21: 256 columns parse, view, and read back by name;
+  257 are refused with the bound in the message (tests/adapt/
+  table_test.c). Mutants b-01 (one column past the bound parses) and b-02
+  (the view refuses the widest block) are caught. The pinned block hash
+  did not move.
 
 ## Not done
 

@@ -169,9 +169,9 @@ int main(int argc, char** argv) {
         if (mark && f.index % mark == 0) ygfx_capture_mark(&gfx);
         ygfx_draw_n(&gfx, gab, n_gab);
         ygfx_draw(&gfx, &bar);
-        a = yrt_now_ns();
+        a = yrt_real_ns();
         ygfx_end(&gfx);
-        end_us[ran] = (double)(yrt_now_ns() - a) * 1e-3;
+        end_us[ran] = (double)(yrt_real_ns() - a) * 1e-3;
         yscr_flip(&scr);
         ran++;
     }

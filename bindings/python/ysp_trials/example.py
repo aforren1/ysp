@@ -7,6 +7,8 @@
 2. Three staircases interleaved with catch trials: a catch condition on about
    one trial in ten, never two in a row, and each staircase's level stored as
    the trial record.
+3. A 2AFC side drawn per trial from the trial's own stream (a variable), so a
+   replay gives the same sides.
 
 Install first (from this directory; part 2 also needs ysp-stair):
     uv pip install . ../ysp_stair
@@ -21,7 +23,7 @@ import random
 import struct
 import sys
 
-import ysp.trials as pt
+import ysp.trials as ytr
 
 CONTRASTS = [0.01, 0.02, 0.04, 0.08, 0.16]
 
@@ -32,9 +34,9 @@ def p_correct(contrast, threshold=0.04, slope=3.0):
 
 
 def constant_stimuli(seed, rng):
-    t = pt.Trials(factors=[("orientation", 2), ("contrast", len(CONTRASTS))], reps=20,
-                  order=pt.ORDER_CONSTRAINED,
-                  constraints=[pt.max_run("orientation", pt.ANY_LEVEL, 3)],
+    t = ytr.Trials(factors=[("orientation", 2), ("contrast", len(CONTRASTS))], reps=20,
+                  order=ytr.ORDER_CONSTRAINED,
+                  constraints=[ytr.max_run("orientation", ytr.ANY_LEVEL, 3)],
                   rng=seed)               # the header's splitmix64; log the seed
     print(t.format_meta(), end="")
     while (ti := t.next()) is not None:
@@ -48,16 +50,16 @@ def constant_stimuli(seed, rng):
 
 def interleaved(seed, rng):
     try:
-        import ysp.stair as st
+        import ysp.stair as yst
     except ImportError:
         print("ysp-stair is not installed; skipping the interleaved example")
         return
-    stairs = [st.Staircase(start=0.3, n_down=n_down, step_type=st.STEP_LOG, steps=[0.2, 0.1],
+    stairs = [yst.Staircase(start=0.3, n_down=n_down, step_type=yst.STEP_LOG, steps=[0.2, 0.1],
                            min=0.001, max=1.0, stop_reversals=8)
               for n_down in (2, 3, 4)]   # 70.7%, 79.4%, 84.1% correct
-    t = pt.Trials(n_conditions=1, reps=10,            # the catch trial
-                  order=pt.ORDER_CONSTRAINED,
-                  constraints=[pt.min_gap(pt.CONDITION, 0, 1)],
+    t = ytr.Trials(n_conditions=1, reps=10,            # the catch trial
+                  order=ytr.ORDER_CONSTRAINED,
+                  constraints=[ytr.min_gap(ytr.CONDITION, 0, 1)],
                   tracks=stairs,                      # a Staircase is a track as is
                   track_rate=0.9, rng=seed, record_size=8)
     print()
@@ -81,17 +83,32 @@ def interleaved(seed, rng):
           f"{violations} ran against the gap rule (only possible once the staircases end)")
 
 
+def sides(seed):
+    desc = dict(n_conditions=len(CONTRASTS), reps=4, order=ytr.ORDER_RANDOM, rng=seed, seed=seed,
+                vars=[ytr.var_choice("side", ["left", "right"])])
+    t = ytr.Trials(**desc)
+    print()
+    while (ti := t.next()) is not None:
+        t.update(1)
+    print("sides:", " ".join(t.var(i, "side")[0] for i in range(t.n_run)))
+    again = ytr.Trials(**desc)
+    again.restore([h.outcome for h in t.history()])
+    same = all(again.var(i, "side") == t.var(i, "side") for i in range(t.n_run))
+    print(f"replayed: {'the same sides' if same else 'DIFFERENT SIDES'}")
+    return 0 if same else 1
+
+
 def main():
     seed = int(sys.argv[1]) if len(sys.argv) > 1 else 20260923
     rng = random.Random(seed)      # the simulated observer's generator
     constant_stimuli(seed, rng)
     interleaved(seed, rng)
-    return 0
+    return sides(seed)
 
 
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except pt.Error as e:
+    except ytr.Error as e:
         print(f"ysp.trials error: {e}", file=sys.stderr)
         sys.exit(1)

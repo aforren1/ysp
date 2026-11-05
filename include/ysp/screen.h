@@ -1,4 +1,4 @@
-/* ysp/screen.h - v0.8.0 - public domain single-header display library
+/* ysp/screen.h - v0.11.0 - public domain single-header display library
  *
  *   The window, the GL ES 3.0 context, the display mode and the swap path
  *   of a stimulus display, with flip at a time: each frame learns the
@@ -79,6 +79,13 @@
  *   yscr_wait_flip() does the same here, at the cost of one frame of
  *   pipelining.
  *
+ *   SDL calls on the window go through yscr_window_call(), because on
+ *   Windows a thread of the header's own owns the window (WINDOW THREAD):
+ *
+ *       static void title(void* t) { SDL_SetWindowTitle(yscr_window(&scr), (const char*)t); }
+ *       static char text[] = "block 2";
+ *       yscr_window_call(&scr, title, text);
+ *
  *   Present at a later time, and mark the phases of a frame:
  *
  *       yscr_begin(&scr, &f);
@@ -124,6 +131,20 @@
  *     grid follows each time and takes the OS's count, as before v0.4.3,
  *     until 16 of 64 or fewer are off it (DXGI's held frames: at most 34
  *     of 64).
+ *     After a gap (v0.10.1): when no OS time came for 0.5 s (the host
+ *     waited between trials), the first begin() reads DWM's vblank time
+ *     (DwmGetCompositionTimingInfo) and anchors the grid there, as an OS
+ *     time, when it is within 1% of a period plus 100 ppm of the gap of
+ *     the grid's vblank (at most a quarter period). Why: the OS's vblank
+ *     times wander by tens of us over seconds, so a period fitted over the
+ *     first seconds of a run was 1 to 41 ppm off, and across a gap of 10
+ *     to 60 s the grid ended 0.2 to 2 ms off the vblanks; the next 17
+ *     records were GRID_UNSTABLE with onsets that late. DWM's time sat
+ *     within 4 us of the flip statistics' and is never older than a
+ *     period (measured; docs/screen.md, "The grid after a gap"). The
+ *     primary display only, at the screen's refresh: elsewhere the grid
+ *     extrapolates as before. The describe line says
+ *     gap_anchors=N(max move, refused M).
  *
  *   DEPTH
  *     The depth is the number of vblanks from a present call to the flip
@@ -236,6 +257,13 @@
  *     the raise was forced and the screen still has the foreground. A
  *     refused foreground does not fail open(); settling decides that.
  *     Other platforms and a screen without a window report n/a.
+ *     The next screen of the process (v0.10.2): a close() while the
+ *     screen has the foreground keeps the right for the process
+ *     (AllowSetForegroundWindow), so the next open() gets the foreground
+ *     as this one did. With the window thread each run of screens has a
+ *     new thread, and Windows had refused the raise of every screen after
+ *     the first one in a window (docs/screen.md, "The next screen's
+ *     raise").
  *
  *   CONTEXT HOOK (v0.5.2)
  *     open() settles for 0.5 to 0.8 s fullscreen and 2.5 s in a window.
@@ -395,6 +423,16 @@
  *                               YSCR_ERR_LOST, so it is constant from
  *                               open to close.
  *     YSCR_HAS_GL_EPOCH is defined when both exist.
+ *     Between flip() and the next begin() (v0.10.3), framebuffer 0 is a
+ *     buffer that no present holds: GL work there (ygfx_prime(), uploads,
+ *     a clear) does not wait for the screen, and shows nothing until a
+ *     frame draws it. Read framebuffer 0 after your drawing and before
+ *     flip() (ygfx_read_output()); after flip() what it holds is not
+ *     defined. On COMPOSITION, when no buffer is free at the flip, no surface
+ *     is current until bind() or begin() finds one: draws to framebuffer
+ *     0 then do nothing (measured: a buffer was free at every present;
+ *     docs/screen.md, "Between frames"; the case without one is tested
+ *     through a hook since v0.10.4).
  *
  *   TIERS (yscr_tier, record.tier, caps.worst_tier, desc.min_tier)
  *     Each flip gets a tier from its backend, its path and the source of its
@@ -434,7 +472,8 @@
  *     YSCR_AUTO_NAMED, _COMPOSITION or _FALLBACK. A backend named in
  *     desc.backend is opened or fails, as before.
  *   YSCR_BACKEND_DXGI_FLIP (Windows 10 and 11)
- *     SDL3 makes the window. The header makes a D3D11 device on the adapter
+ *     SDL3 makes the window, on the window thread (WINDOW THREAD). The
+ *     header makes a D3D11 device on the adapter
  *     whose output shows the window (on a laptop with two GPUs, the one
  *     wired to the panel; any other means a copy between adapters and a
  *     composed path), a DXGI_SWAP_EFFECT_FLIP_DISCARD swapchain on the
@@ -488,8 +527,18 @@
  *     No window, no GL: a vblank grid on the ysp_rt clock with
  *     desc.sim_period_ns (default 1/60 s), which shows every frame on the
  *     vblank it was planned for. For tests, CI and dry runs of a timeline.
+ *     On the real clock it sleeps to each vblank, so a loaded host drops
+ *     frames as a real display does. On ysp/rt.h's virtual clock
+ *     (yrt_virtual_begin(), v0.8.0) the sleep jumps the clock to the
+ *     vblank: no frame drops, the records are the same on every run, and a
+ *     run takes the CPU time of its frames, not their display time. The
+ *     describe line then says clock=virtual. Only SIM and CUSTOM open on
+ *     the virtual clock; a real backend is refused.
  *   YSCR_BACKEND_CUSTOM
  *     desc.presenter and desc.presenter_ctx: your swap path (PRESENTER).
+ *     AUTO leaves the window thread off for it; with desc.window_thread
+ *     ON its window belongs to the window thread, and the presenter calls
+ *     SDL on it only through yscr_window_call() (WINDOW THREAD).
  *   YSCR_BACKEND_WEB (Emscripten, v0.7.0; docs/web.md)
  *     SDL3's Emscripten port makes the window: a canvas, "#canvas" unless
  *     SDL's hint or window property names another. The header makes the
@@ -896,12 +945,105 @@
  *               that. Off by default.
  *
  *   ---------------------------------------------------------------------
+ *   WINDOW THREAD (desc.window_thread, yscr_window_call; v0.10.0)
+ *   ---------------------------------------------------------------------
+ *   On Windows a thread of the header's own makes every window, reads its
+ *   messages and makes every SDL video call. The frame thread (the one that
+ *   calls begin() and flip_at()) keeps the D3D11 device, the swap path and
+ *   ANGLE. Why: Windows marks a window hung when its thread reads no
+ *   message for 4.2 to 4.6 s (measured), and puts a "Ghost" window in
+ *   front of it. A host that waits between trials (Python's time.sleep()
+ *   or input(), Octave's pause, C's Sleep()) did that, and the first 2 to
+ *   20 frames after the wait went wrong. With the window thread no window
+ *   was marked hung and the first frame after a wait of 5 to 30 s was on
+ *   time; the frame loop's misses, residuals, paths and tiers did not
+ *   change (measured; docs/screen.md, "The window thread").
+ *   desc.window_thread:
+ *     AUTO  (0, default) ON for DXGI_FLIP and COMPOSITION. OFF on the web,
+ *           with YRT_NO_THREADS, for a custom presenter, and when the
+ *           program started SDL's video on its own thread before the first
+ *           open() (SDL made that thread its main thread).
+ *     ON    the window thread, or open() fails with a message.
+ *     OFF   the frame thread owns the window, as in v0.9.0.
+ *   One mode per process, because SDL has one main thread: while screens
+ *   with a window are open, open() refuses ON or OFF when it differs from
+ *   theirs, and AUTO takes theirs (a custom presenter's AUTO beside the
+ *   window thread fails). The describe line says window_thread=on(auto),
+ *   on, off, off(auto,backend), off(auto,platform), off(auto,other-screen),
+ *   off(auto,sdl-video-up), or n/a for a screen with no window.
+ *   The thread: one per process, started by the first open() that needs
+ *   it and stopped by the last close(); every screen's window is on it.
+ *   It waits in MsgWaitForMultipleObjectsEx for a command or a message, at
+ *   most 100 ms (4 ms while a screen has gamepads: SDL polls XInput in its
+ *   pump), then calls SDL_PumpEvents(). The 100 ms wake is the heartbeat
+ *   that tells the panic watchdog the thread answers (PANIC).
+ *   What changes for the program:
+ *     - SDL calls on yscr_window() go through yscr_window_call(s, fn,
+ *       ctx): fn(ctx) runs on the window thread and the call returns when
+ *       fn returns (an empty call: 6.5 to 11.4 us median, 27 to 44 us p99,
+ *       measured).
+ *       Without the window thread fn runs at once on the calling thread,
+ *       so the same code runs either way. Do not call SDL on the window
+ *       from your own thread: SDL's video calls belong to SDL's main
+ *       thread, which is the window thread. That includes the title, the
+ *       cursor, the mouse grab, text input, more SDL windows (make them in
+ *       a window call, so the window thread reads their messages), Win32
+ *       windows of your own, SDL_PumpEvents(), SDL_PollEvent() and Dear
+ *       ImGui's SDL3 backend (docs/screen.md, "Dear ImGui"). Inside fn a
+ *       yscr_window_call() runs at once. fn must not wait for the frame
+ *       thread, which waits for fn.
+ *     - Read events with yscr_poll(). begin() no longer pumps; the window
+ *       thread pumps as messages come, so mouse, focus and close events
+ *       reach SDL's queue while the host waits.
+ *     - SDL keeps the string of a text, IME, drop or clipboard event in the
+ *       memory of the thread that takes the event, and frees it at that
+ *       thread's next pump. The frame thread does not pump, so after
+ *       yscr_poll() returned such an event, the next begin() or close()
+ *       calls SDL_CleanupTLS() on the calling thread (without it each typed
+ *       character held 2 SDL allocations, measured). That also frees the
+ *       strings SDL returned earlier on that thread (SDL_GetKeyName() and
+ *       the like): copy one you keep.
+ *     - The panic releases the display, and the process lives, while the
+ *       window thread answers (PANIC).
+ *   Commands and their time limit. The frame thread waits for the window
+ *   thread only for a command (open, close, text input, a gamepad plugged
+ *   in or out, the display lists, a window call), never in a frame. A
+ *   command the window thread does not take within 5 s is withdrawn
+ *   before it runs, and the call fails (YSCR_ERR_TIMEOUT; open() with a
+ *   message): Windows calls a window hung after 5 s without a message
+ *   read, so the thread is hung. Once taken, open()'s command and a window
+ *   call run to their end, because they use the caller's memory (open()
+ *   waits as long as v0.9.0's open() did on the same driver call).
+ *   close()'s command works on a copy of what it needs: close() waits at
+ *   most 5 s more, then returns with "the window thread did not answer" in
+ *   yscr_error() and the window left until the process ends, so close()
+ *   never hangs the host. After that open() refuses a window, because
+ *   SDL's video belongs to the stuck thread. yscr_displays(), yscr_modes()
+ *   and yscr_mode_multiple() run on the window thread while it runs (they
+ *   are SDL video calls), else on the calling thread, as before.
+ *   What stays on other threads: the frame thread reads two window flags
+ *   each frame (SDL_TextInputActive(), SDL_GetWindowRelativeMouseMode():
+ *   plain reads in SDL 3.4.0) and the HWND. DXGI and DirectComposition
+ *   present from the frame thread to the window another thread of the
+ *   process owns (measured at tier 1 on the overlay and independent-flip
+ *   paths). SDL's raw keyboard thread stamps keys as before. DXGI's rule
+ *   "never have the message-pump thread wait on the render thread" holds:
+ *   the window thread never waits on the frame thread, and the header
+ *   makes no exclusive fullscreen swapchain.
+ *   Other platforms: macOS keeps Cocoa windows on the process's main thread
+ *   (not planned here); X11 keeps the frame thread's path (GLX_OML, AUTO is
+ *   off: the thread has not been measured there); Wayland is a stub; the web
+ *   has one thread.
+ *
+ *   ---------------------------------------------------------------------
  *   INPUT
  *   ---------------------------------------------------------------------
- *   yscr_poll() is SDL_PollEvent() plus the event's time on the ysp_rt
- *   clock: SDL's event timestamp (SDL_GetTicksNS() units) moved onto the
- *   ysp_rt clock through a yrt_correlate() made at open and again every
- *   10 s. The correlation is exact to its width (0.1 us here); the event's
+ *   yscr_poll() is the next SDL event plus its time on the ysp_rt clock.
+ *   It takes the event with SDL_PollEvent(), or, with the window thread,
+ *   with SDL_PeepEvents(), which does not pump (WINDOW THREAD). The time:
+ *   SDL's event timestamp (SDL_GetTicksNS() units) moved onto the ysp_rt
+ *   clock through a yrt_correlate() made at open and again every 10 s.
+ *   The correlation is exact to its width (0.1 us here); the event's
  *   own timestamp is what SDL gives.
  *   On Windows the header turns on SDL's raw keyboard path
  *   (SDL_HINT_WINDOWS_RAW_KEYBOARD, at default priority, so your own setting
@@ -916,7 +1058,7 @@
  *   before to 12.1 ms after the call. On Wayland the compositor's time
  *   (not built). Keyboards are not response boxes; use ysp/serial.h for
  *   reaction times.
- *   X11 key times (GLX_OML, v0.8.0). SDL stamps an X11 key when it reads
+ *   X11 key times (GLX_OML, v0.11.0). SDL stamps an X11 key when it reads
  *   the X socket, which is in begin()'s pump, once per frame: measured,
  *   keys injected through XTEST at a random point in the frame were
  *   stamped 8.6 to 16.6 ms after the injection (mean 12.7, 199 keys). The
@@ -931,7 +1073,7 @@
  *   used. SDL has one X11 hook per process: setting your own replaces this
  *   one, and keys then keep SDL's stamps. Mouse buttons keep SDL's stamps
  *   (not measured).
- *   Kernel key times (v0.8.0). Xorg stamps a keyboard's key the same way,
+ *   Kernel key times (v0.11.0). Xorg stamps a keyboard's key the same way,
  *   with its own clock when it reads the key, not with the kernel's time:
  *   measured with a uinput keyboard, 0.97 to 1.99 ms before the kernel's
  *   time. When the user can read the keyboards' evdev nodes, the hook
@@ -1038,7 +1180,7 @@
  *   for two physical mice): reports stamped 0.15 to 0.40 ms after
  *   SendInput (means of three runs), no report lost or doubled with SDL's
  *   raw keyboard running.
- *   Raw mice on Linux X11 (GLX_OML, v0.8.0). One thread per process
+ *   Raw mice on Linux X11 (GLX_OML, v0.11.0). One thread per process
  *   (started SCHED_OTHER) reads every mouse's evdev node the user can read
  *   (relative X and Y and a left button; tablets and touchpads are not
  *   read), the uaccess rule's mouse line (tools/linux/70-ysp-input.rules),
@@ -1202,6 +1344,10 @@
  *                           logoff, the last window closed (with CLOSE)
  *     YSCR_ABORT_REQUEST  yscr_request_abort(), from any thread: an
  *                           operator console, a response-box button
+ *     YSCR_ABORT_PANIC    the panic released the display (PANIC, with
+ *                           the window thread): from then on every
+ *                           begin() reports it, and the program may only
+ *                           close
  *   desc.abort_keys sets the combination: .key is an SDL keycode (0 =
  *   Esc); .mods are the YSCR_MOD_* that must be held (0 = Shift;
  *   YSCR_MOD_NONE = the key alone, for development; more modifiers held
@@ -1239,12 +1385,35 @@
  *   within a frame, so presses 2 and 3 are more aborts, and a program that
  *   saves after press 1 is not killed. A program outside its frame loop
  *   (loading, saving) for longer than the grace time looks hung.
- *   The panic, on the watchdog thread: it removes the hook, so no key of
- *   the session waits on it; writes a YSCR_EV_PANIC record to each armed
- *   screen's ring (t_ns the panic, u.u32[0] the presses needed, u.i64[1]
- *   the last report); puts back each gamma ramp the header set; calls
+ *   With the window thread (v0.10.0), the panic depends on who answers.
+ *   While the window thread answers (its heartbeat is newer than 1 s),
+ *   the panic releases the display and the process lives: the window
+ *   thread minimizes every screen's window (SDL leaves fullscreen, which
+ *   puts back a switched mode) and shows the cursor; the watchdog puts
+ *   back the gamma ramps, writes YSCR_EV_PANIC with u.u32[1] 1 (released)
+ *   and adds an abort with YSCR_ABORT_PANIC. The next begin() reports it
+ *   with the presses (f.abort 0x21), and every begin() after that returns
+ *   YSCR_QUIT with f.abort YSCR_ABORT_PANIC (WARNING=panic-released in
+ *   the describe line): the program may only close. No call gets the
+ *   session back, and open() refuses a window until every screen has
+ *   closed. panic_fn does not run: the program saves after its next
+ *   begin(). Why (decided 2026-10-26): the frame thread may only be
+ *   waiting (MATLAB's pause, Python's input()), the window, the cursor,
+ *   the mode and the gamma are what the operator needs back, and a false
+ *   release costs a minimized window and an abort, not a session. Measured
+ *   (examples/screen/abort.c): the release took 7.7 ms on the window
+ *   thread, the program lived, and its next begin() reported 0x21 with 3
+ *   presses. When the window thread does not answer (no heartbeat for 1
+ *   s, or the release not begun within 1 s or not done within 5 s), the panic ends the process as
+ *   follows; tests/adapt/screen_window_test.c and abort.c's "kill" case
+ *   block the window thread to run that path.
+ *   The end of the process, on the watchdog thread: it removes the hook,
+ *   so no key of the session waits on it; writes a YSCR_EV_PANIC record
+ *   to each armed screen's ring (t_ns the panic, u.u32[0] the presses
+ *   needed, u.u32[1] 0, u.i64[1] the last report); puts back each gamma ramp the header set; calls
  *   desc.panic_fn(desc.panic_ctx) on a thread of its own, at most 1 s; and
  *   ends the process with TerminateProcess(YSCR_PANIC_EXIT_CODE = 99).
+ *   Without the window thread (OFF) every panic ends the process so.
  *   Windows puts back a display mode the screen switched as the process
  *   ends (measured: 1.2 s after press 3, teardown included).
  *   ChangeDisplaySettingsExW from the watchdog was measured too: it waited
@@ -1278,7 +1447,7 @@
  *   stamped later with the hook armed (STATUS).
  *   Measured (examples/screen/abort.c; a window armed through a test
  *   seam, and fullscreen in a switched mode): see STATUS.
- *   X11 (GLX_OML, v0.8.0): the watchdog is a thread with its own X
+ *   X11 (GLX_OML, v0.11.0): the watchdog is a thread with its own X
  *   connection that selects XInput 2's raw key events (libxcb-xinput,
  *   loaded at run time) on X screen 0's root: they come whatever window
  *   has the focus, are not taken from it, and come while the frame thread
@@ -1407,8 +1576,11 @@
  *   PARAMETERS
  *   ---------------------------------------------------------------------
  *   yscr_params() returns a table of the desc fields a designer sets:
- *   name, type, range, the value a zero field means, unit and one line of
- *   text.
+ *   name, type, range, the value a zero field means, unit, one line of
+ *   text and, for an enum, its values: "name=value" pairs joined by ',',
+ *   in value order. A name is the C constant's suffix in lower case
+ *   ("dxgi_flip" is YSCR_BACKEND_DXGI_FLIP, "top_left" YSCR_TOP_LEFT).
+ *   backend lists every yscr_backend; open() refuses the stubs (BACKENDS).
  *
  *   ---------------------------------------------------------------------
  *   MEMORY AND THREADS
@@ -1421,11 +1593,15 @@
  *   fails writes yscr_error() before it returns its code. The calls for
  *   any thread take no screen (yscr_push_input(), yscr_request_abort()). open() and close() of different
  *   screens must not run at the same time, because ANGLE's libEGL is
- *   loaded once per process and never unloaded. open() starts a thread
- *   only when desc.n_triggers > 0: the trigger worker (TRIGGERS), which
- *   close() stops; and, once per process, the panic watchdog when an armed
- *   screen opens (PANIC), which the last armed screen's close() stops. The
- *   abort state is one per process (ABORT). Raise the frame thread with
+ *   loaded once per process and never unloaded, and the window thread
+ *   takes one command at a time. The threads open() starts: once per
+ *   process, the window thread (WINDOW THREAD) for the first screen with a
+ *   window, which the last such close() stops; the trigger worker
+ *   (TRIGGERS) when desc.n_triggers > 0, which close() stops; on
+ *   COMPOSITION the idle-wake waiter (BACKENDS), which close() stops; once
+ *   per process, the raw mouse reader (INPUT) and the panic watchdog
+ *   (PANIC), which the last screen that uses them stops. The abort state
+ *   is one per process (ABORT). Raise the frame thread with
  *   yrt_thread_elevate() before open. On Linux the threads the GL driver
  *   makes in open() then inherit its SCHED_FIFO (measured: Mesa's
  *   command-submission, shader compiler and driver threads; ysp/rt.h,
@@ -1469,7 +1645,9 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
- *   v0.8.0 - Linux X11: YSCR_BACKEND_GLX_OML (BACKENDS), and AUTO picks it
+ *   v0.11.0 - Linux X11, numbered v0.8.0 on its branch, measured there
+ *          and merged over v0.8.0 to v0.10.4 (STATUS):
+ *          YSCR_BACKEND_GLX_OML (BACKENDS), and AUTO picks it
  *          in an X session. SDL3 makes the window; the header makes a GL ES
  *          3.0 GLX context on its own X connection, holds each frame with
  *          glXSwapBuffersMscOML's target vblank (native_target), and takes
@@ -1493,8 +1671,88 @@
  *          X11: evdev mice with kernel times and SDL's ids (INPUT).
  *          On GLX_OML the copy path (a window) is depth
  *          1: X11's Present copies on the next vblank (DEPTH's table gave
- *          it DWM's 2). New enum values only; nothing changes on Windows
+ *          it DWM's 2). New enum values and desc fields; nothing changes on Windows
  *          or the web.
+ *   v0.10.4 - COMPOSITION closes the 5 events its open got (the
+ *          presentation manager's statistics and lost events, the 3
+ *          buffers' available events): each open and close left 5 handles.
+ *          An id from yscr_displays() names its display after SDL's video
+ *          starts again (SDL numbers the displays anew each time, so an id
+ *          listed with no screen open was invalid at the next call or
+ *          open). x86: the 64-bit atomic stores use compare-exchange
+ *          (MSVC x86 has no InterlockedExchange64), and COMPOSITION
+ *          refuses x86 as it refuses ARM64. A test hook makes the case of
+ *          no free buffer after a present happen (YSCR__COMP_IS_AVAILABLE).
+ *   v0.10.3 - GL STATE between frames, COMPOSITION: after a present the
+ *          shown buffer stayed framebuffer 0, and a draw into it between
+ *          flip() and the next begin() (ygfx_prime()) waited until a newer
+ *          present or a covered window released it: more than 90 s in
+ *          front. flip() now leaves a buffer that no present holds bound
+ *          (one that is free; none free: no surface). See STATUS.
+ *   v0.10.2 - FOREGROUND, the next screen: with the window thread, the
+ *          second and later screens that one process opened after a
+ *          close got no foreground in a window (refused: the window opened
+ *          behind, and where another window covered it every record was
+ *          OCCLUDED at tier 3), and fullscreen only by a forced raise.
+ *          Windows let the thread that had the foreground window raise
+ *          the next one, and the window thread ends at the last close.
+ *          close() now calls AllowSetForegroundWindow for its own process
+ *          while the screen has the foreground. Measured: STATUS.
+ *          Found by the ysp-vis real-window tests.
+ *   v0.10.1 - THE GRID after a gap: when no OS time came for 0.5 s, the
+ *          first begin() anchors the grid on DWM's vblank time, so the
+ *          records after a wait between trials are not GRID_UNSTABLE.
+ *          Measured (docs/screen.md, "The grid after a gap"): gaps of 5 to
+ *          60 s, COMPOSITION and DXGI_FLIP, window thread ON and OFF: 17
+ *          GRID_UNSTABLE records with onsets up to 1.98 ms late in 29 of 40
+ *          runs before, none in 20 of 20 after, the first OS time after
+ *          the gap within 2 us of the grid. The describe line's
+ *          gap_anchors=. Fixed (PANIC, with the window thread): a release
+ *          in a switched display mode ended the process, because
+ *          minimizing put the desktop mode back first (1.2 to 1.4 s,
+ *          measured) and the watchdog waited 1 s; it now waits 1 s for the
+ *          release to begin and 5 s for it to end, reading the hook's
+ *          messages meanwhile.
+ *   v0.10.0 - The window thread (WINDOW THREAD; decided 2026-10-26 on
+ *          docs/winthread_probe.md): on Windows a thread of the header's own
+ *          makes the windows, reads their messages and makes every SDL
+ *          video call, so a host that waits between frames no longer
+ *          leaves a hung window and a ghost in front of it.
+ *          desc.window_thread (AUTO, ON, OFF; AUTO is on for DXGI_FLIP and
+ *          COMPOSITION, OFF is v0.9.0's path); yscr_window_call() runs SDL
+ *          calls on the window there; the describe line's window_thread=.
+ *          begin() no longer pumps and yscr_poll() takes events without a
+ *          pump; yscr_displays() and yscr_modes() run on the window thread
+ *          while it runs; a command not taken in 5 s is withdrawn, and
+ *          close() returns after 5 s more. The panic releases the display
+ *          (the windows minimized, the gamma put back, the process alive)
+ *          while the window thread answers, and ends the process only when
+ *          it does not: the new abort reason YSCR_ABORT_PANIC (0x20), from
+ *          every begin() after a release; YSCR_EV_PANIC's u.u32[1] 1 for a
+ *          release. Text and drop strings SDL keeps for the frame thread
+ *          are freed at the next begin(). Breaking: SDL calls on
+ *          yscr_window() from the program's own thread (the examples' title
+ *          and cursor calls, Dear ImGui's SDL3 backend) must go through
+ *          yscr_window_call(), or set desc.window_thread OFF.
+ *   v0.9.0 - PARAMETERS: yscr_param gains a last field, values: for an
+ *          enum row the names and values of its C enum or YSCR_ macro set
+ *          ("top_left=0,top_right=1,..."), NULL for every other row.
+ *          backend, patch.corner and settle list them, and backend lists
+ *          every yscr_backend (min and max cannot say which values exist).
+ *          The doc text no longer lists them. key_dedup_ns's default
+ *          is 5e7 (50 ms, what a zero field means; was 0). ysp/gfx.h's and
+ *          ysp/video.h's tables are yscr_param too. A positional
+ *          initializer of a yscr_param gets values NULL.
+ *   v0.8.0 - BACKENDS, SIM on ysp/rt.h's virtual clock (rt.h v0.9.0): the
+ *          presenter's sleep to a vblank jumps the clock there, so a
+ *          --sim run drops no frame and gives the same records on every
+ *          run. The describe line says clock=virtual. open() refuses
+ *          every backend but SIM and CUSTOM on the virtual clock. The
+ *          examples' --sim checks that allowed whole-frame slips on a
+ *          loaded CI runner are exact again. A record's phases are costs
+ *          and read yrt_real_ns(), so they stay real on the virtual clock
+ *          (they read 0 for DRAW and the jump for SWAP through
+ *          yrt_now_ns()). The real clock: no change.
  *   v0.7.2 - BACKENDS, WEB: open() and close() no longer leave a
  *          fullscreen the page entered (Fullscreen, in BACKENDS, WEB). A
  *          program that yielded between the page's request and open() (the
@@ -1750,8 +2008,50 @@
  *          groups, input restamping, mode lists and the parameter table.
  *          The other swap paths are stubs that refuse to open.
  *
- *   STATUS: v0.8.0 (GLX_OML, at the end of this block). v0.7.2 (WEB
- *   fullscreen; docs/web.md): every demo of
+ *   STATUS: v0.11.0 (GLX_OML, at the end of this block).
+ *   STATUS: v0.10.4 (docs/screen.md, "Handles, no free buffer, display
+ *   ids"): on the laptop below, 10 opens and closes a backend gained 40
+ *   handles (Event 40) on COMPOSITION before, ON and OFF, and 0 after on
+ *   COMPOSITION and DXGI_FLIP; the no-free-buffer case (a hook) in front:
+ *   no surface, a draw and a read return at once and do nothing, the next
+ *   begin() runs (16 of 16 checks); an id listed with no screen opens its
+ *   display after SDL's video restarted (one display). MSVC x86 compile
+ *   checks and the core test pass; no x86 window was opened.
+ *   v0.10.3 (GL between frames; docs/screen.md, "Between
+ *   frames"): on the laptop below, AC, COMPOSITION in front, a prime or a
+ *   clear and read of framebuffer 0 after flip() waited more than 90 s
+ *   before (4 of 4 C runs, 3 of 3 Python) and took 0.7 to 102 ms after
+ *   (7 of 7 primes, 24 of 24 window-test checks; Python 9 of 9). The park
+ *   costs 13 to 16 us at p50, 97 us at p99, after the present call; no
+ *   drop and every record tier 1 in 1800-frame runs before and after.
+ *   tests/adapt/screen_window_test.c --only between; 1 new mutant, killed.
+ *   v0.10.2 (the next screen's raise; docs/screen.md, "The next
+ *   screen's raise"): on the laptop below, AC, screens one after another
+ *   in one process with the window thread ON, every screen after the first
+ *   was refused in a window before (7 of 7 in C, every record OCCLUDED; 4
+ *   of 4 in Python) and granted after (8 of 8 in C, 6 of 6 in Python, no
+ *   OCCLUDED or PATH_UNKNOWN record); OFF was granted before and after.
+ *   tests/adapt/screen_window_test.c --only sequence: 17 checks (windowed,
+ *   fullscreen, two at once); 1 new mutant, killed (11 checks fail).
+ *   v0.10.1 (the grid after a gap; docs/screen.md, "The grid
+ *   after a gap"): 60 runs with a gap of 5 to 60 s on the laptop below,
+ *   AC, both backends, window thread ON and OFF; the core test plays a
+ *   0.5 ms move during a 30 s gap with and without the system's vblank,
+ *   a vblank too far off, and a short gap; 4 new mutants, all killed.
+ *   examples/screen/abort.c --mode-test released a switched mode with the
+ *   window thread (1.4 to 1.5 s, the process alive).
+ *   v0.10.0 (the window thread; docs/screen.md, "The window
+ *   thread"): measured on the laptop below, AC, no photodiode; the numbers
+ *   and their conditions are in docs/screen.md. tests/adapt/screen_test.c
+ *   checks the mode rule and a released screen without SDL;
+ *   tests/adapt/screen_window_test.c runs the thread on real windows (a
+ *   host that sleeps, window calls from 3 threads, the display lists, text
+ *   input and its memory, the release, a blocked window thread ended by
+ *   the panic, two screens, open and close cycles, a fullscreen change
+ *   while open, gamepads (none attached), raw mice, triggers, and a mode
+ *   switch); examples/screen/abort.c sends the keys for the release and
+ *   the end; 19 new mutants, all killed.
+ *   v0.7.2 (WEB fullscreen; docs/web.md): every demo of
  *   examples/web ran with fullscreen asked in headed Chrome 154 and
  *   Firefox 157, isolated and not; each page stayed fullscreen until it
  *   left fullscreen itself at the end (before: av.html lost it when SDL
@@ -1937,8 +2237,8 @@
  *   drawn (read back, 96 dpi).
  *   tests/compile/screen_com.cpp checks every COM slot and struct the
  *   header declares against the Windows SDK (MSVC; MinGW for DComp only).
- *   GLX_OML (v0.8.0; measured on the same code before the v0.6 to v0.7.2
- *   changes came in; after them, on 2026-10-13, test_screen_glx passed and
+ *   GLX_OML (v0.11.0; measured as v0.8.0 on its branch, on the same code
+ *   before the v0.6 to v0.10.4 changes came in; after v0.7.2, on 2026-10-13, test_screen_glx passed and
  *   its 31 glx- mutants gave the expected results, 30 killed and glx-21
  *   survived as listed, with SDL 3.4.18): one machine, Debian 12, kernel
  *   6.11.5-liquorix,
@@ -1968,7 +2268,7 @@
  *   display (not in ctest); tests/compile/screen_glx.cpp checks the
  *   header's own X11, GLX and xcb declarations against the system's.
  *   NOT done: any rate but 60 Hz, any other GPU, Windows 10 (COMPOSITION
- *   needs 11), ARM64 (COMPOSITION refuses it: the hidden-pointer returns
+ *   needs 11), ARM64 and x86 (COMPOSITION refuses them: the hidden-pointer returns
  *   are checked only on x64), two physical displays, variable refresh
  *   (refused), macOS and Wayland swap paths (stubs). On X11: a
  *   compositing manager other than Xfwm4's, two X screens in one process
@@ -1983,9 +2283,9 @@
 #define YSP_SCREEN_H_INCLUDED
 
 #define YSCR_VERSION_MAJOR 0
-#define YSCR_VERSION_MINOR 8
+#define YSCR_VERSION_MINOR 11
 #define YSCR_VERSION_PATCH 0
-#define YSCR_VERSION_STRING "0.8.0"
+#define YSCR_VERSION_STRING "0.11.0"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -2081,7 +2381,8 @@ typedef enum yscr_tier {
 #define YSCR_EV_TRIGGER   5u   /* one at-onset trigger (TRIGGERS)         */
 #define YSCR_EV_CODE      6u   /* the codes in one flip (CODES)           */
 #define YSCR_EV_ABORT     7u   /* one abort, as begin() reports it (ABORT) */
-#define YSCR_EV_PANIC     8u   /* the watchdog ends the process (PANIC)   */
+#define YSCR_EV_PANIC     8u   /* the watchdog ends the process, or releases
+                                * the display (u.u32[1] 1; PANIC)           */
 #define YSCR_EV_TEXT_INPUT 9u  /* text input on or off (INPUT)            */
 #define YSCR_EV_DEVICE    10u  /* an input device present, added, removed (INPUT) */
 
@@ -2203,6 +2504,11 @@ typedef yin_mouse_report yscr_mouse_event;
  * hidden; written by the begin() after the change. */
 #define YSCR_EV_VISIBILITY 17u
 
+/* desc.window_thread (WINDOW THREAD, v0.10.0). */
+#define YSCR_WINDOW_THREAD_AUTO 0  /* on for DXGI_FLIP and COMPOSITION         */
+#define YSCR_WINDOW_THREAD_ON   1  /* on, or open() fails                      */
+#define YSCR_WINDOW_THREAD_OFF  2  /* the frame thread owns the window (0.9.0) */
+
 /* desc.foreground (FOREGROUND). */
 #define YSCR_FOREGROUND_AUTO  0   /* FORCE fullscreen, HONOR in a window */
 #define YSCR_FOREGROUND_HONOR 1   /* take what the OS policy gives       */
@@ -2276,6 +2582,8 @@ typedef struct yscr_input_stats {
 #define YSCR_ABORT_QUIT    0x08u /* SDL's quit event: Ctrl+C in the console,
                                     * logoff, the last window closed          */
 #define YSCR_ABORT_REQUEST 0x10u /* yscr_request_abort()                   */
+#define YSCR_ABORT_PANIC   0x20u /* the panic released the display: close
+                                    * the screen (PANIC; v0.10.0)             */
 
 /* yscr_abort_keys.mods. Either side's key counts. */
 #define YSCR_MOD_SHIFT 0x01u
@@ -2676,6 +2984,8 @@ typedef struct yscr_desc {
     /* work that overlaps settling (CONTEXT HOOK) */
     yscr_context_fn on_context;     /* once, before the warm-up; NULL = none */
     void*          on_context_ctx;
+    /* the window's own thread (WINDOW THREAD) */
+    int32_t        window_thread;    /* YSCR_WINDOW_THREAD_*; 0 = AUTO         */
 } yscr_desc;
 
 /* Private. One flip between flip_at() and its completion. */
@@ -2892,6 +3202,16 @@ typedef struct yscr_screen {
     void*                   wake;         /* the waiter's state; NULL = none     */
     int32_t                 hooked;       /* desc.on_context ran (CONTEXT HOOK)  */
     int64_t                 hook_ns;      /* ... for this long                   */
+    /* the window thread (WINDOW THREAD) */
+    int32_t                 wt;           /* 1: the window thread owns the window */
+    int32_t                 wt_mode;      /* YSCR_WINDOW_THREAD_ON or _OFF as applied */
+    int32_t                 wt_why;       /* AUTO's reason for off: YSCR__WT_WHY_* */
+    int32_t                 wt_user;      /* holds the process's window-thread mode */
+    /* the grid after a gap (THE GRID) */
+    uint32_t                gap_anchors;  /* gaps the system's vblank closed */
+    uint32_t                gap_refused;  /* ... it was too far off the grid */
+    int64_t                 gap_shift_max;/* the largest move, ns            */
+    int64_t                 gap_asked;    /* vb_t when the system was asked  */
 } yscr_screen;
 
 /* --- API ----------------------------------------------------------------- */
@@ -2965,7 +3285,8 @@ YSCR_API void        yscr_sync_check(const yscr_screen* s, yscr_sync_info* out);
  * and a message for the operator. Zeroes when the screen is not open. */
 YSCR_API void        yscr_settle_check(const yscr_screen* s, yscr_settle_info* out);
 
-/* Starts a frame. Pumps SDL's events (read them with yscr_poll()), waits
+/* Starts a frame. Without the window thread, pumps SDL's events (read
+ * them with yscr_poll(); WINDOW THREAD). Waits
  * until the swap path takes a frame (at most one is in flight), completes
  * the records of the flips that happened, binds the context and its back
  * buffer, and fills *f with the predicted onset of the first vblank this
@@ -3070,15 +3391,29 @@ YSCR_API int  yscr_flip_group_at(yscr_screen* const* s, int n, int64_t t_ns);
  * Cast it to the function's type. */
 YSCR_API yscr_proc yscr_gl_proc(const yscr_screen* s, const char* name);
 
-/* The SDL window; NULL on SIM and on presenters that need none. */
+/* The SDL window; NULL on SIM and on presenters that need none. With the
+ * window thread (WINDOW THREAD), call SDL on it only inside
+ * yscr_window_call(). */
 YSCR_API struct SDL_Window* yscr_window(const yscr_screen* s);
+
+/* Runs fn(ctx) on the thread that owns the screens' windows and waits for
+ * it to return (WINDOW THREAD): the one door for SDL video calls (title,
+ * cursor, mouse grab, more windows, Dear ImGui's SDL3 backend). Without a
+ * window thread it runs fn here. s may be NULL: the process's window
+ * thread. Any thread; calls run one at a time. YSCR_OK; YSCR_ERR_ARG for
+ * a NULL fn; YSCR_ERR_TIMEOUT when the window thread took no call for
+ * 5 s (fn did not run). */
+typedef void (*yscr_window_fn)(void* ctx);
+YSCR_API int yscr_window_call(yscr_screen* s, yscr_window_fn fn, void* ctx);
 
 /* Makes this screen's context current on this thread, with its back
  * buffer. begin() does it; call it to draw to one screen of a group. */
 YSCR_API void  yscr_bind(yscr_screen* s);
 
-/* SDL_PollEvent(), and the event's time on the ysp_rt clock in *t_rt (may
- * be NULL). See INPUT for what that time is worth. */
+/* The next SDL event, and its time on the ysp_rt clock in *t_rt (may be
+ * NULL): SDL_PollEvent(), or with the window thread SDL_PeepEvents(),
+ * which does not pump (WINDOW THREAD). See INPUT for what the time is
+ * worth. */
 YSCR_API bool    yscr_poll(yscr_screen* s, union SDL_Event* ev, int64_t* t_rt);
 
 /* The next raw mouse report (desc.raw_mice), oldest first: true and *out,
@@ -3142,6 +3477,8 @@ typedef struct yscr_param {
     double      def;      /* the value a zero field means                   */
     const char* unit;     /* "", "px", "ns", "ms", "Hz", "frame"            */
     const char* doc;      /* one line                                       */
+    const char* values;   /* v0.9, "enum": "name=value" pairs joined by ',',
+                           * in value order; NULL for the other types       */
 } yscr_param;
 
 /* The table of desc fields a designer sets; *n gets the count. The pointer,
@@ -3199,6 +3536,10 @@ YSCR_API const yscr_param* yscr_params(int* n);
     #include <windows.h>
     #include <d3d11_4.h>
     #include <dxgi1_5.h>
+    #include <dwmapi.h>   /* the types only: dwmapi.dll is loaded at run time */
+    #if !defined(YRT_NO_THREADS)
+        #define YSCR__WT 1   /* the window thread (WINDOW THREAD) */
+    #endif
 #endif
 
 /* Linux X11: libX11, libGL and libxcb are loaded at run time and declared
@@ -3279,6 +3620,11 @@ enum {
 #endif
 #ifndef YSCR__SLEEP_UNTIL
 #define YSCR__SLEEP_UNTIL(t, spin) yrt_sleep_until((int64_t)(t), (spin))
+#endif
+/* The phases are costs: the real clock, also on ysp/rt.h's virtual clock,
+ * where a draw read with yrt_now_ns() takes 0 and a wait is the jump. */
+#ifndef YSCR__COST_NOW
+#define YSCR__COST_NOW() (yrt_real_ns())
 #endif
 /* Whether SDL text input is on for the screen's window now: another
  * library (a GUI) can start it, so the header reads it instead of trusting
@@ -3419,7 +3765,20 @@ static int yscr__a_cas(volatile int32_t* p, int32_t want, int32_t v) {
     return InterlockedCompareExchange((volatile LONG*)p, (LONG)v, (LONG)want) == (LONG)want;
 }
 static int64_t yscr__a_load64(volatile int64_t* p) { return (int64_t)InterlockedCompareExchange64((volatile LONG64*)p, 0, 0); }
-static void yscr__a_store64(volatile int64_t* p, int64_t v) { (void)InterlockedExchange64((volatile LONG64*)p, (LONG64)v); }
+/* x86 MSVC has no InterlockedExchange64 (CI's 32-bit build, v0.10.4);
+ * its 64-bit compare-exchange (cmpxchg8b) is the one 64-bit atomic there. */
+static void yscr__a_store64(volatile int64_t* p, int64_t v) {
+#if defined(_M_IX86) || defined(__i386__)
+    LONG64 old = *(volatile LONG64*)p;
+    for (;;) {
+        LONG64 seen = InterlockedCompareExchange64((volatile LONG64*)p, (LONG64)v, old);
+        if (seen == old) break;
+        old = seen;
+    }
+#else
+    (void)InterlockedExchange64((volatile LONG64*)p, (LONG64)v);
+#endif
+}
 #else
 static int32_t yscr__a_inc(volatile int32_t* p) { return __atomic_add_fetch(p, 1, __ATOMIC_SEQ_CST); }
 static int32_t yscr__a_load(volatile int32_t* p) { return __atomic_load_n(p, __ATOMIC_SEQ_CST); }
@@ -3467,6 +3826,85 @@ static struct {
     int32_t  presses;          /* the panic rule; 0 = no watchdog armed          */
     int64_t  window_ns, grace_ns;
 } yscr__ab;
+
+/* The panic released the display (PANIC, v0.10.0): every later begin() of a
+ * screen whose window the window thread owns returns YSCR_QUIT with
+ * YSCR_ABORT_PANIC, until the last such screen closes. */
+static volatile int32_t yscr__released;
+/* The panic released the display of this screen: begin() returns
+ * YSCR_QUIT from now on. */
+static int yscr__released_on(const yscr_screen* s) { return s->wt && yscr__a_load(&yscr__released); }
+
+/* With the window thread, SDL keeps the string of a text, IME, drop or
+ * clipboard event in the memory of the thread that takes the event, and
+ * frees it at that thread's next pump (SDL_FreeTemporaryMemory, SDL 3.4.0's
+ * SDL_events.c). The frame thread never pumps, so yscr_poll() notes such
+ * an event and the next begin() or close() frees the thread's SDL memory. */
+static int yscr__tls_dirty;
+/* Test seam: 0 keeps the strings, to measure what they cost
+ * (examples/screen/window_thread.c --text). */
+#ifndef YSCR__TLS_CLEANUP
+#define YSCR__TLS_CLEANUP 1
+#endif
+
+/* The window thread's mode (WINDOW THREAD): one per process while screens
+ * with a window are open, because SDL has one main thread. */
+#define YSCR__WT_WHY_NONE     0   /* AUTO chose on                              */
+#define YSCR__WT_WHY_NAMED    1   /* desc.window_thread ON or OFF               */
+#define YSCR__WT_WHY_BACKEND  2   /* AUTO: not DXGI_FLIP or COMPOSITION         */
+#define YSCR__WT_WHY_PLATFORM 3   /* AUTO: not Windows, or YRT_NO_THREADS       */
+#define YSCR__WT_WHY_PROCESS  4   /* AUTO: the mode of the screens already open */
+#define YSCR__WT_WHY_SDL      5   /* AUTO: SDL video was up on another thread   */
+static int32_t yscr__wt_mode_now;    /* YSCR_WINDOW_THREAD_ON or _OFF; 0 = none open */
+static int32_t yscr__wt_mode_users;  /* open screens with a window                  */
+
+/* The mode for a screen with a window: YSCR_WINDOW_THREAD_ON or _OFF and
+ * *why, or 0 with *err when open() must fail. want is desc.window_thread;
+ * native: DXGI_FLIP or COMPOSITION; available: the build has the window
+ * thread; process: the open screens' mode (0 none); sdl_elsewhere: SDL's
+ * video is up and no screen holds it, so another thread is SDL's main
+ * thread. Pure: tests/adapt/screen_test.c calls it. */
+static int32_t yscr__wt_decide(int32_t want, int native, int available, int32_t process, int sdl_elsewhere,
+                               int32_t* why, const char** err) {
+    int32_t natural, nwhy;
+    *err = NULL;
+    *why = YSCR__WT_WHY_NAMED;
+    if (want == YSCR_WINDOW_THREAD_ON) {
+        if (!available) *err = "desc.window_thread ON needs Windows and threads (not the web, not YRT_NO_THREADS)";
+        else if (process == YSCR_WINDOW_THREAD_OFF) *err = "desc.window_thread differs from another open screen's: one mode per process";
+        else if (sdl_elsewhere) *err = "desc.window_thread ON: SDL's video is up on another thread, which SDL made its main thread";
+        return *err ? 0 : YSCR_WINDOW_THREAD_ON;
+    }
+    if (want == YSCR_WINDOW_THREAD_OFF) {
+        if (process == YSCR_WINDOW_THREAD_ON) *err = "desc.window_thread differs from another open screen's: one mode per process";
+        return *err ? 0 : YSCR_WINDOW_THREAD_OFF;
+    }
+    natural = YSCR_WINDOW_THREAD_ON;
+    nwhy = YSCR__WT_WHY_NONE;
+    if (!available) { natural = YSCR_WINDOW_THREAD_OFF; nwhy = YSCR__WT_WHY_PLATFORM; }
+    else if (!native) { natural = YSCR_WINDOW_THREAD_OFF; nwhy = YSCR__WT_WHY_BACKEND; }
+    else if (sdl_elsewhere) { natural = YSCR_WINDOW_THREAD_OFF; nwhy = YSCR__WT_WHY_SDL; }
+    *why = nwhy;
+    if (process == 0 || process == natural) return natural;
+    if (process == YSCR_WINDOW_THREAD_OFF) { *why = YSCR__WT_WHY_PROCESS; return YSCR_WINDOW_THREAD_OFF; }
+    /* the window thread runs, and AUTO would leave this window off it */
+    *err = nwhy == YSCR__WT_WHY_BACKEND
+         ? "desc.window_thread AUTO is off for this backend, and another open screen has the window thread: "
+           "set desc.window_thread ON (call SDL on the window only through yscr_window_call) or close that screen"
+         : "desc.window_thread AUTO cannot join the window thread of the open screens";
+    return 0;
+}
+
+static int yscr__win_call(yscr_screen* s, yscr_window_fn fn, void* ctx);
+#if defined(YSCR__WT)
+static int yscr__wt_running(void);
+static int yscr__wt_call(yscr_window_fn fn, void* ctx);
+#else
+/* No window thread in this build: everything runs on the caller's thread. */
+static int yscr__wt_running(void) { return 0; }
+static int yscr__wt_call(yscr_window_fn fn, void* ctx) { fn(ctx); return YSCR_OK; }
+#endif
+
 
 static int32_t yscr__abort_push(uint32_t reason, uint32_t flags, uint32_t key, uint32_t mods, int64_t t) {
     int32_t n = yscr__a_inc(&yscr__ab.seq);
@@ -4128,15 +4566,95 @@ static void yscr__pad_close(yscr_screen* s, SDL_JoystickID id, bool all);
 static void yscr__devices_at_open(yscr_screen* s);
 static void yscr__device_event(yscr_screen* s, const SDL_Event* ev);
 
+/* SDL numbers the displays anew at each start of its video, and
+ * yscr_displays() without a screen starts and stops it for the call, so its
+ * ids were stale at the next call (v0.10.4; id 1, then 3 at open). SDL
+ * never gives an id out twice in a process, so an id that is not current
+ * names the display yscr_displays() listed under it: the current one with
+ * the same name and bounds, else the only one with the same bounds or the
+ * same name. SDL video calls run on one thread (WINDOW THREAD), so the
+ * list needs no lock. */
+typedef struct { uint32_t id; char name[64]; int32_t x, y, w, h; } yscr__listed_display;
+static yscr__listed_display yscr__listed[16];
+static unsigned yscr__n_listed;
+static void yscr__display_listed(const yscr_display_info* d) {
+    unsigned i, n = yscr__n_listed < 16 ? yscr__n_listed : 16;
+    yscr__listed_display* e;
+    for (i = 0; i < n && yscr__listed[i].id != d->id; i++) { }
+    e = i < n ? &yscr__listed[i] : &yscr__listed[yscr__n_listed++ % 16];
+    e->id = d->id;
+    memcpy(e->name, d->name, sizeof e->name);
+    e->x = d->x; e->y = d->y; e->w = d->w; e->h = d->h;
+}
 static SDL_DisplayID yscr__display_id(uint32_t display) {
-    return display ? (SDL_DisplayID)display : SDL_GetPrimaryDisplay();
+    const yscr__listed_display* e = NULL;
+    SDL_DisplayID* ids;
+    SDL_DisplayID out = (SDL_DisplayID)display, by_rect = 0, by_name = 0;
+    int i, n = 0, n_rect = 0, n_name = 0;
+    unsigned k, n_listed = yscr__n_listed < 16 ? yscr__n_listed : 16;
+    if (!display) return SDL_GetPrimaryDisplay();
+    for (k = 0; k < n_listed; k++) if (yscr__listed[k].id == display) e = &yscr__listed[k];
+    if (!e) return out;   /* not from yscr_displays(): SDL judges it */
+    ids = SDL_GetDisplays(&n);
+    for (i = 0; ids && i < n; i++) {
+        SDL_Rect r;
+        int same_rect, same_name;
+        if (ids[i] == (SDL_DisplayID)display) { SDL_free(ids); return out; }   /* current */
+        same_rect = SDL_GetDisplayBounds(ids[i], &r) && r.x == e->x && r.y == e->y && r.w == e->w && r.h == e->h;
+        same_name = SDL_GetDisplayName(ids[i]) && !strncmp(SDL_GetDisplayName(ids[i]), e->name, sizeof e->name - 1);
+        if (same_rect && same_name) { out = ids[i]; n_rect = n_name = -1; break; }
+        if (same_rect) { by_rect = ids[i]; n_rect++; }
+        if (same_name) { by_name = ids[i]; n_name++; }
+    }
+    if (n_rect == 1) out = by_rect;
+    else if (n_rect == 0 && n_name == 1) out = by_name;
+    SDL_free(ids);
+    return out;
+}
+
+/* yscr_displays(), yscr_modes() and the desktop size for
+ * yscr_mode_multiple(): SDL video calls, so on the window thread while it
+ * runs (WINDOW THREAD); else here, with SDL's video up for the call. */
+typedef struct { int what; yscr_display_info* d; yscr_mode* m; int cap; uint32_t display; int32_t w, h; int rc; } yscr__dmcall;
+static int yscr__displays_here(yscr_display_info* out, int cap);
+static int yscr__modes_here(uint32_t display, yscr_mode* out, int cap);
+static void yscr__dm_cb(void* p) {
+    yscr__dmcall* a = (yscr__dmcall*)p;
+    if (a->what == 0) a->rc = yscr__displays_here(a->d, a->cap);
+    else if (a->what == 1) a->rc = yscr__modes_here(a->display, a->m, a->cap);
+    else if (!yscr__video_up()) a->rc = YSCR_ERR_LOST;
+    else {
+        const SDL_DisplayMode* dm = SDL_GetDesktopDisplayMode(yscr__display_id(a->display));
+        if (dm) { a->w = dm->w; a->h = dm->h; }
+        yscr__video_down();
+        a->rc = YSCR_OK;
+    }
+}
+static int yscr__dm(yscr__dmcall* a) {
+    int rc = yscr__wt_call(yscr__dm_cb, a);
+    return rc < 0 ? rc : a->rc;
 }
 
 YSCR_API int yscr_displays(yscr_display_info* out, int cap) {
+    yscr__dmcall a;
+    if (cap < 0 || (cap > 0 && !out)) return YSCR_ERR_ARG;
+    memset(&a, 0, sizeof a);
+    a.what = 0; a.d = out; a.cap = cap;
+    return yscr__dm(&a);
+}
+
+YSCR_API int yscr_modes(uint32_t display, yscr_mode* out, int cap) {
+    yscr__dmcall a;
+    if (cap < 0 || (cap > 0 && !out)) return YSCR_ERR_ARG;
+    memset(&a, 0, sizeof a);
+    a.what = 1; a.m = out; a.cap = cap; a.display = display;
+    return yscr__dm(&a);
+}
+
+static int yscr__displays_here(yscr_display_info* out, int cap) {
     int i, n = 0, count = 0;
     SDL_DisplayID* ids;
     SDL_DisplayID primary;
-    if (cap < 0 || (cap > 0 && !out)) return YSCR_ERR_ARG;
     if (!yscr__video_up()) return YSCR_ERR_LOST;
     ids = SDL_GetDisplays(&n);
     primary = SDL_GetPrimaryDisplay();
@@ -4151,6 +4669,7 @@ YSCR_API int yscr_displays(yscr_display_info* out, int cap) {
             if (SDL_GetDisplayBounds(ids[i], &r)) { d->x = r.x; d->y = r.y; d->w = r.w; d->h = r.h; }
             if (dm) yscr__mode_from_sdl(dm, &d->desktop);
             d->primary = ids[i] == primary;
+            yscr__display_listed(d);
         }
         count++;
     }
@@ -4159,10 +4678,9 @@ YSCR_API int yscr_displays(yscr_display_info* out, int cap) {
     return count;
 }
 
-YSCR_API int yscr_modes(uint32_t display, yscr_mode* out, int cap) {
+static int yscr__modes_here(uint32_t display, yscr_mode* out, int cap) {
     int i, n = 0;
     SDL_DisplayMode** modes;
-    if (cap < 0 || (cap > 0 && !out)) return YSCR_ERR_ARG;
     if (!yscr__video_up()) return YSCR_ERR_LOST;
     modes = SDL_GetFullscreenDisplayModes(yscr__display_id(display), &n);
     if (!modes) { yscr__video_down(); return YSCR_ERR_ARG; }
@@ -4180,11 +4698,11 @@ YSCR_API int yscr_mode_multiple(uint32_t display, int32_t num, int32_t den,
     if (n < 0) return n;
     if (n > 256) n = 256;
     if (w == 0 && h == 0) {
-        const SDL_DisplayMode* dm;
-        if (!yscr__video_up()) return YSCR_ERR_LOST;
-        dm = SDL_GetDesktopDisplayMode(yscr__display_id(display));
-        if (dm) { w = dm->w; h = dm->h; }
-        yscr__video_down();
+        yscr__dmcall a;
+        memset(&a, 0, sizeof a);
+        a.what = 2; a.display = display;
+        if ((rc = yscr__dm(&a)) < 0) return rc;
+        w = a.w; h = a.h;
     }
     rc = yscr_mode_multiple_in(list, n, num, den, w, h, tol_ppm, out, err_ppm);
     return rc;
@@ -5638,6 +6156,7 @@ typedef struct yscr__comp {
     ID3D11RenderTargetView* rtv[YSCR__COMP_BUFFERS];
     yscr__EGLSurface    pb[YSCR__COMP_BUFFERS];
     int                   cur;
+    int                   parked;           /* between frames: 1 a free buffer bound, -1 none */
     void*                 edev;
     yscr__EGLDisplay    dpy;
     yscr__EGLContext    ctx;
@@ -5780,6 +6299,16 @@ static void yscr__comp_close(void* vctx);
  * concurrent (MEMORY AND THREADS). */
 static int yscr__comp_auto;
 
+#if defined(_M_ARM64) || defined(__aarch64__) || defined(_M_IX86) || defined(__i386__)
+static int yscr__comp_open(void* vctx, const yscr_presenter_open* in, yscr_caps* caps,
+                             char* err, size_t err_cap) {
+    memset(vctx, 0, sizeof(yscr__comp));
+    (void)in; (void)caps;
+    yscr__set_error(err, err_cap, "ysp_screen: COMPOSITION is x64 only: the struct-return ABI it depends on "
+                      "differs on ARM64 and x86 and has not been tested there");
+    return YSCR_ERR_NOT_IMPLEMENTED;
+}
+#else
 static int yscr__comp_open(void* vctx, const yscr_presenter_open* in, yscr_caps* caps,
                              char* err, size_t err_cap) {
     yscr__comp* c = (yscr__comp*)vctx;
@@ -5801,12 +6330,6 @@ static int yscr__comp_open(void* vctx, const yscr_presenter_open* in, yscr_caps*
     RECT src;
 
     memset(c, 0, sizeof *c);
-#if defined(_M_ARM64) || defined(__aarch64__)
-    (void)in; (void)caps;
-    yscr__set_error(err, err_cap, "ysp_screen: COMPOSITION is x64 only: the struct-return ABI it depends on "
-                      "differs on ARM64 and has not been tested there");
-    return YSCR_ERR_NOT_IMPLEMENTED;
-#else
     if (!in->window) { yscr__set_error(err, err_cap, "ysp_screen: no window"); return YSCR_ERR_ARG; }
     c->hwnd = (HWND)SDL_GetPointerProperty(SDL_GetWindowProperties(in->window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
     SDL_GetWindowSizeInPixels(in->window, &c->w, &c->h);
@@ -5968,8 +6491,8 @@ static int yscr__comp_open(void* vctx, const yscr_presenter_open* in, yscr_caps*
     c->last_resolved = 1;
     yscr__d3d_codes_open(c->dev, c->dctx, c->dctx1, in, &c->q);
     return YSCR_OK;
-#endif
 }
+#endif
 
 static void yscr__comp_close(void* vctx) {
     yscr__comp* c = (yscr__comp*)vctx;
@@ -5996,15 +6519,51 @@ static void yscr__comp_close(void* vctx) {
     YSCR__CREL(c->pm);
     YSCR__CREL(c->pf);
     if (c->surface_handle) CloseHandle(c->surface_handle);
+    /* The Get*Event calls return a new handle each; releasing the manager
+     * and the buffers does not close them (5 handles an open before
+     * v0.10.4, measured). */
+    for (i = 0; i < YSCR__COMP_BUFFERS; i++) if (c->avail[i]) CloseHandle(c->avail[i]);
+    if (c->stat_event) CloseHandle(c->stat_event);
+    if (c->lost_event) CloseHandle(c->lost_event);
     YSCR__RELEASE(c->dctx1);
     YSCR__RELEASE(c->dctx);
     YSCR__RELEASE(c->dev);
     memset(c, 0, sizeof *c);
 }
 
+/* Whether buffer k is free. A free buffer was found at every present in
+ * testing, so the window test replaces this to make the case without one
+ * happen (tests/adapt/screen_window_test.c, "nofree"). */
+#ifndef YSCR__COMP_IS_AVAILABLE
+#define YSCR__COMP_IS_AVAILABLE(c, k, ok) YSCR__C((c)->buf[k], IsAvailable, (ok))
+#endif
+
+/* Between frames no presented buffer stays bound (v0.10.3). A shown
+ * buffer is released only by a newer present or a covered window, and a
+ * draw into it waited until then: ygfx_prime() between flip() and begin()
+ * in front, more than 90 s (docs/screen.md, "Between frames"). So after a
+ * present framebuffer 0 is a buffer no present holds; with none free,
+ * no surface (draws to framebuffer 0 do nothing; reads of it fail). */
+static void yscr__comp_park(yscr__comp* c) {
+    int i;
+    for (i = 1; i < YSCR__COMP_BUFFERS; i++) {
+        unsigned char ok = 0;
+        int k = (c->cur + i) % YSCR__COMP_BUFFERS;
+        if (SUCCEEDED(YSCR__COMP_IS_AVAILABLE(c, k, &ok)) && ok) {
+            c->cur = k;
+            c->parked = 1;
+            yscr__egl.MakeCurrent(c->dpy, c->pb[k], c->pb[k], c->ctx);
+            return;
+        }
+    }
+    c->parked = -1;
+    yscr__egl.MakeCurrent(c->dpy, NULL, NULL, c->ctx);
+}
+
 static void yscr__comp_bind(void* vctx) {
     yscr__comp* c = (yscr__comp*)vctx;
-    yscr__egl.MakeCurrent(c->dpy, c->pb[c->cur], c->pb[c->cur], c->ctx);
+    if (c->parked < 0) yscr__comp_park(c);   /* a buffer may be free now */
+    else yscr__egl.MakeCurrent(c->dpy, c->pb[c->cur], c->pb[c->cur], c->ctx);
 }
 
 /* One frame in flight: wait until the newest present is settled by a
@@ -6042,11 +6601,13 @@ static int yscr__comp_acquire(void* vctx, int64_t deadline_ns, yscr_vblank* newe
     for (;;) {
         DWORD rc;
         int64_t left;
+        /* the parked buffer first: it is current already */
         for (i = 0; i < YSCR__COMP_BUFFERS; i++) {
             unsigned char ok = 0;
-            int k = (c->cur + 1 + i) % YSCR__COMP_BUFFERS;
-            if (SUCCEEDED(YSCR__C(c->buf[k], IsAvailable, &ok)) && ok) {
+            int k = (c->cur + (c->parked > 0 ? 0 : 1) + i) % YSCR__COMP_BUFFERS;
+            if (SUCCEEDED(YSCR__COMP_IS_AVAILABLE(c, k, &ok)) && ok) {
                 c->cur = k;
+                c->parked = 0;
                 yscr__comp_bind(c);
                 return YSCR_OK;
             }
@@ -6078,6 +6639,7 @@ static int yscr__comp_present(void* vctx, const yscr_present_req* req) {
     c->last_sys_id = sys;
     c->last_resolved = 0;
     c->last_target_ns = req->target_count ? req->target_ns : 0;
+    yscr__comp_park(c);
     return YSCR_OK;
 }
 
@@ -6179,11 +6741,13 @@ typedef HWND (WINAPI *yscr__CreateWindowExW_fn)(DWORD, LPCWSTR, LPCWSTR, DWORD, 
 typedef BOOL (WINAPI *yscr__DestroyWindow_fn)(HWND);
 typedef LRESULT (WINAPI *yscr__DefWindowProcW_fn)(HWND, UINT, WPARAM, LPARAM);
 typedef DWORD (WINAPI *yscr__MsgWaitForMultipleObjects_fn)(DWORD, const HANDLE*, BOOL, DWORD, DWORD);
+typedef DWORD (WINAPI *yscr__MsgWaitForMultipleObjectsEx_fn)(DWORD, const HANDLE*, DWORD, DWORD, DWORD);
 typedef BOOL (WINAPI *yscr__PostMessageW_fn)(HWND, UINT, WPARAM, LPARAM);
 typedef BOOL (WINAPI *yscr__PostThreadMessageW_fn)(DWORD, UINT, WPARAM, LPARAM);
 typedef SHORT (WINAPI *yscr__GetAsyncKeyState_fn)(int);
 typedef HWND (WINAPI *yscr__GetForegroundWindow_fn)(void);
 typedef BOOL (WINAPI *yscr__SetForegroundWindow_fn)(HWND);
+typedef BOOL (WINAPI *yscr__AllowSetForegroundWindow_fn)(DWORD);
 typedef BOOL (WINAPI *yscr__IsWindow_fn)(HWND);
 typedef DWORD (WINAPI *yscr__GetWindowThreadProcessId_fn)(HWND, LPDWORD);
 typedef BOOL (WINAPI *yscr__IsHungAppWindow_fn)(HWND);
@@ -6219,6 +6783,7 @@ static struct yscr__winapi {
     yscr__GetAsyncKeyState_fn            key_state;
     yscr__GetForegroundWindow_fn         foreground;
     yscr__SetForegroundWindow_fn         set_foreground;
+    yscr__AllowSetForegroundWindow_fn    allow_foreground;
     yscr__IsWindow_fn                    is_window;
     yscr__GetWindowThreadProcessId_fn    window_pid;
     yscr__IsHungAppWindow_fn             is_hung;
@@ -6241,6 +6806,7 @@ static struct yscr__winapi {
     yscr__DestroyWindow_fn               destroy_window;
     yscr__DefWindowProcW_fn              def_proc;
     yscr__MsgWaitForMultipleObjects_fn   msg_wait;
+    yscr__MsgWaitForMultipleObjectsEx_fn msg_wait_ex;
     yscr__PostMessageW_fn                post_message;
 } yscr__win;
 
@@ -6265,6 +6831,7 @@ static void yscr__win_load(void) {
         yscr__win.key_state = (yscr__GetAsyncKeyState_fn)(yscr_proc)GetProcAddress(u, "GetAsyncKeyState");
         yscr__win.foreground = (yscr__GetForegroundWindow_fn)(yscr_proc)GetProcAddress(u, "GetForegroundWindow");
         yscr__win.set_foreground = (yscr__SetForegroundWindow_fn)(yscr_proc)GetProcAddress(u, "SetForegroundWindow");
+        yscr__win.allow_foreground = (yscr__AllowSetForegroundWindow_fn)(yscr_proc)GetProcAddress(u, "AllowSetForegroundWindow");
         yscr__win.is_window = (yscr__IsWindow_fn)(yscr_proc)GetProcAddress(u, "IsWindow");
         yscr__win.window_pid = (yscr__GetWindowThreadProcessId_fn)(yscr_proc)GetProcAddress(u, "GetWindowThreadProcessId");
         yscr__win.is_hung = (yscr__IsHungAppWindow_fn)(yscr_proc)GetProcAddress(u, "IsHungAppWindow");
@@ -6282,6 +6849,7 @@ static void yscr__win_load(void) {
         yscr__win.destroy_window = (yscr__DestroyWindow_fn)(yscr_proc)GetProcAddress(u, "DestroyWindow");
         yscr__win.def_proc = (yscr__DefWindowProcW_fn)(yscr_proc)GetProcAddress(u, "DefWindowProcW");
         yscr__win.msg_wait = (yscr__MsgWaitForMultipleObjects_fn)(yscr_proc)GetProcAddress(u, "MsgWaitForMultipleObjects");
+        yscr__win.msg_wait_ex = (yscr__MsgWaitForMultipleObjectsEx_fn)(yscr_proc)GetProcAddress(u, "MsgWaitForMultipleObjectsEx");
         yscr__win.post_message = (yscr__PostMessageW_fn)(yscr_proc)GetProcAddress(u, "PostMessageW");
     }
     if (g) {
@@ -6524,6 +7092,188 @@ static void yscr__win_icons(yscr_screen* s) {
     }
 }
 
+/* --- the window thread (WINDOW THREAD) -------------------------------------
+ * One thread per process makes every window, runs its messages and makes
+ * every SDL video call, so a host that idles between frames (time.sleep,
+ * input(), Octave's pause) never leaves a window without a pump: Windows
+ * marks a window hung after about 4.2 s without one and puts a ghost in
+ * front (docs/winthread_probe.md). The frame thread keeps the D3D11 device,
+ * the swap path and ANGLE. What keeps the two free of deadlocks (DXGI
+ * overview, "Multithread considerations"): the window thread never waits on
+ * the frame thread; the frame thread waits on it only for a command, never
+ * in a frame. SDL makes the thread that starts its video subsystem its main
+ * thread (SDL.c, SDL_InitSubSystem), so this thread starts and stops it. */
+#if defined(YSCR__WT)
+/* A command the thread has not taken in 5 s is withdrawn before it runs:
+ * by the OS's own rule a window whose thread reads no message for 5 s is
+ * hung. */
+#define YSCR__WT_TAKE_MS  5000u
+/* close()'s command, once taken: the destroy of a fullscreen window in a
+ * switched mode put the desktop mode back in 1.2 s (measured). */
+#define YSCR__WT_CLOSE_MS 5000u
+/* The heartbeat: the thread wakes at least this often, so the panic tells a
+ * live thread (a beat within 1 s) from a hung one. 4 ms while gamepads are
+ * open: SDL polls XInput in its pump. */
+#define YSCR__WT_BEAT_MS  100u
+#define YSCR__WT_PADS_MS  4u
+#define YSCR__WT_ALIVE_NS 1000000000LL
+
+enum { YSCR__WTC_IDLE = 0, YSCR__WTC_POSTED, YSCR__WTC_RUNNING, YSCR__WTC_DONE, YSCR__WTC_CANCELED };
+
+static struct {
+    HANDLE           thread;
+    DWORD            tid;
+    HANDLE           cmd_ev;        /* auto-reset: a command, a release, the stop */
+    HANDLE           done_ev;       /* auto-reset: the command ran                */
+    CRITICAL_SECTION lock;          /* one command at a time; never deleted       */
+    int              lock_ok;
+    yscr_window_fn   fn;
+    void*            ctx;
+    volatile LONG    state;         /* YSCR__WTC_*                                */
+    volatile LONG    quit;
+    volatile LONG    video;         /* screens whose SDL video it holds: it pumps */
+    volatile LONG    pads;          /* screens with gamepads                      */
+    volatile int64_t beat;          /* the loop's last pass, rt ns                */
+    volatile LONG    release_req;   /* panics that asked for a release            */
+    volatile LONG    release_start; /* ... the last one it began                  */
+    volatile LONG    release_done;  /* ... the last one it served                 */
+    volatile int64_t t_release;     /* when the last release ran, rt ns           */
+    volatile LONG    stuck;         /* a command or the stop timed out            */
+    int              users;         /* screens whose window it owns               */
+    SDL_Window*      wins[YSCR__SLOTS];   /* its windows; this thread only        */
+} yscr__wt;
+
+static int yscr__wt_on_thread(void) { return yscr__wt.thread && GetCurrentThreadId() == yscr__wt.tid; }
+
+/* The panic's release (PANIC): the display goes back to the operator and
+ * the process lives. Minimized, not destroyed: the frame thread still holds
+ * a swap path on each window. SDL leaves fullscreen when a fullscreen
+ * window is minimized, which puts back a switched mode. */
+static void yscr__wt_do_release(LONG req) {
+    int i;
+    InterlockedExchange(&yscr__wt.release_start, req);
+    for (i = 0; i < YSCR__SLOTS; i++) if (yscr__wt.wins[i]) SDL_MinimizeWindow(yscr__wt.wins[i]);
+    SDL_ShowCursor();
+    yscr__a_store64(&yscr__wt.t_release, yscr__now());
+    InterlockedExchange(&yscr__wt.release_done, req);
+}
+
+static DWORD WINAPI yscr__wt_main(LPVOID arg) {
+    MSG m;
+    (void)arg;
+    yscr__win.peek_message(&m, NULL, WM_USER, WM_USER, PM_NOREMOVE);   /* the queue, before ready */
+    yscr__a_store64(&yscr__wt.beat, yscr__now());
+    SetEvent(yscr__wt.done_ev);
+    while (!yscr__wt.quit) {
+        LONG req;
+        DWORD r = yscr__win.msg_wait_ex(1, &yscr__wt.cmd_ev, yscr__wt.pads ? YSCR__WT_PADS_MS : YSCR__WT_BEAT_MS,
+                                        QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+        if (r == WAIT_OBJECT_0 &&
+            InterlockedCompareExchange(&yscr__wt.state, YSCR__WTC_RUNNING, YSCR__WTC_POSTED) == YSCR__WTC_POSTED) {
+            yscr__wt.fn(yscr__wt.ctx);
+            InterlockedExchange(&yscr__wt.state, YSCR__WTC_DONE);
+            SetEvent(yscr__wt.done_ev);
+        }
+        req = InterlockedCompareExchange(&yscr__wt.release_req, 0, 0);
+        if (req != yscr__wt.release_done) yscr__wt_do_release(req);
+        if (yscr__wt.video > 0) SDL_PumpEvents();
+        yscr__a_store64(&yscr__wt.beat, yscr__now());
+    }
+    SDL_CleanupTLS();   /* SDL's per-thread memory of this thread */
+    return 0;
+}
+
+/* Runs fn(ctx) on the window thread and waits; on that thread, or with no
+ * thread, runs it here. A command not taken in 5 s is withdrawn
+ * (YSCR_ERR_TIMEOUT; fn did not run). Once taken: run_ms 0 waits as long as
+ * fn runs, because fn uses the caller's memory; else at most run_ms, then
+ * the thread is left behind (stuck) and YSCR_ERR_TIMEOUT. */
+static int yscr__wt_run(yscr_window_fn fn, void* ctx, DWORD run_ms) {
+    if (!yscr__wt.thread || yscr__wt_on_thread()) { fn(ctx); return YSCR_OK; }
+    if (yscr__wt.stuck) return YSCR_ERR_LOST;
+    EnterCriticalSection(&yscr__wt.lock);
+    yscr__wt.fn = fn;
+    yscr__wt.ctx = ctx;
+    InterlockedExchange(&yscr__wt.state, YSCR__WTC_POSTED);
+    SetEvent(yscr__wt.cmd_ev);
+    if (WaitForSingleObject(yscr__wt.done_ev, YSCR__WT_TAKE_MS) != WAIT_OBJECT_0) {
+        if (InterlockedCompareExchange(&yscr__wt.state, YSCR__WTC_CANCELED, YSCR__WTC_POSTED) == YSCR__WTC_POSTED) {
+            LeaveCriticalSection(&yscr__wt.lock);
+            return YSCR_ERR_TIMEOUT;
+        }
+        if (WaitForSingleObject(yscr__wt.done_ev, run_ms ? run_ms : INFINITE) != WAIT_OBJECT_0) {
+            InterlockedExchange(&yscr__wt.stuck, 1);
+            LeaveCriticalSection(&yscr__wt.lock);
+            return YSCR_ERR_TIMEOUT;
+        }
+    }
+    InterlockedExchange(&yscr__wt.state, YSCR__WTC_IDLE);
+    LeaveCriticalSection(&yscr__wt.lock);
+    return YSCR_OK;
+}
+
+/* A screen that uses the thread; the first starts it. NULL or why not. */
+static const char* yscr__wt_acquire(void) {
+    if (yscr__wt.stuck)
+        return "the window thread did not answer at an earlier close; SDL's video belongs to it until the process ends";
+    if (yscr__wt.users > 0) { yscr__wt.users++; return NULL; }
+    yscr__win_load();
+    if (!yscr__win.msg_wait_ex || !yscr__win.peek_message) return "window thread: user32.dll lacks MsgWaitForMultipleObjectsEx";
+    if (!yscr__wt.lock_ok) { InitializeCriticalSection(&yscr__wt.lock); yscr__wt.lock_ok = 1; }
+    yscr__wt.cmd_ev = CreateEventW(NULL, FALSE, FALSE, NULL);
+    yscr__wt.done_ev = CreateEventW(NULL, FALSE, FALSE, NULL);
+    yscr__wt.quit = 0;
+    yscr__wt.state = YSCR__WTC_IDLE;
+    yscr__wt.video = yscr__wt.pads = 0;
+    yscr__wt.release_req = yscr__wt.release_start = yscr__wt.release_done = 0;
+    memset(yscr__wt.wins, 0, sizeof yscr__wt.wins);
+    yscr__wt.thread = yscr__wt.cmd_ev && yscr__wt.done_ev ? CreateThread(NULL, 0, yscr__wt_main, NULL, 0, &yscr__wt.tid) : NULL;
+    if (!yscr__wt.thread || WaitForSingleObject(yscr__wt.done_ev, YSCR__WT_TAKE_MS) != WAIT_OBJECT_0) {
+        if (yscr__wt.thread) {   /* its loop never ran: nothing of SDL's is on it */
+            InterlockedExchange(&yscr__wt.quit, 1);
+            SetEvent(yscr__wt.cmd_ev);
+            WaitForSingleObject(yscr__wt.thread, YSCR__WT_TAKE_MS);
+            CloseHandle(yscr__wt.thread);
+        }
+        if (yscr__wt.cmd_ev) CloseHandle(yscr__wt.cmd_ev);
+        if (yscr__wt.done_ev) CloseHandle(yscr__wt.done_ev);
+        yscr__wt.thread = yscr__wt.cmd_ev = yscr__wt.done_ev = NULL;
+        yscr__wt.tid = 0;
+        return "window thread: CreateThread failed, or the thread did not start in 5 s";
+    }
+    yscr__wt.users = 1;
+    return NULL;
+}
+
+/* The last screen stops the thread. One that does not stop in 5 s is left
+ * behind with its handles (stuck), and close() returns. */
+static void yscr__wt_release(void) {
+    if (yscr__wt.users <= 0 || --yscr__wt.users > 0) return;
+    if (yscr__wt.stuck) return;
+    InterlockedExchange(&yscr__wt.quit, 1);
+    SetEvent(yscr__wt.cmd_ev);
+    if (WaitForSingleObject(yscr__wt.thread, YSCR__WT_CLOSE_MS) != WAIT_OBJECT_0) {
+        InterlockedExchange(&yscr__wt.stuck, 1);
+        return;
+    }
+    CloseHandle(yscr__wt.thread);
+    CloseHandle(yscr__wt.cmd_ev);
+    CloseHandle(yscr__wt.done_ev);
+    yscr__wt.thread = yscr__wt.cmd_ev = yscr__wt.done_ev = NULL;
+    yscr__wt.tid = 0;
+    yscr__a_store(&yscr__released, 0);   /* the next open is a new session */
+}
+
+/* The thread answered within the last second: its heartbeat is newer. */
+static int yscr__wt_alive(void) {
+    return yscr__wt.thread && !yscr__wt.stuck &&
+           yscr__now() - yscr__a_load64(&yscr__wt.beat) < YSCR__WT_ALIVE_NS;
+}
+
+static int yscr__wt_running(void) { return yscr__wt.thread != NULL; }
+static int yscr__wt_call(yscr_window_fn fn, void* ctx) { return yscr__wt_run(fn, ctx, 0); }
+#endif /* YSCR__WT */
+
 /* --- the panic watchdog (PANIC) ------------------------------------------- */
 
 static struct {
@@ -6613,13 +7363,8 @@ static void yscr__wd_bounded(LPTHREAD_START_ROUTINE fn) {
  * owns. Windows puts back a switched display mode as the process ends
  * (measured: ChangeDisplaySettingsExW from here blocked over 1 s on the
  * hung window and the mode came back no sooner). */
-static void yscr__panic(void) {
+static void yscr__panic_records(int64_t now, uint32_t released) {
     int i;
-    int64_t now = yscr__now();
-    if (InterlockedCompareExchange(&yscr__wd.panicking, 1, 0) != 0) return;
-    yscr__wd.t_panic = now;
-    /* no key of the session waits on this thread from here */
-    if (yscr__wd.hook) { yscr__win.unhook(yscr__wd.hook); yscr__wd.hook = NULL; }
     for (i = 0; i < YSCR__SLOTS; i++) {
         yscr_screen* s = yscr__slot[i].s;
         if (s && s->panic_armed == 1 && s->ring) {
@@ -6630,10 +7375,52 @@ static void yscr__panic(void) {
             ev.t_ns = (uint64_t)now;
             ev.aux = s->display_index;
             ev.u.u32[0] = (uint32_t)yscr__ab.presses;
+            ev.u.u32[1] = released;
             ev.u.i64[1] = yscr__a_load64(&yscr__ab.ack);
             yrt_ring_push(s->ring, &ev);
         }
     }
+}
+
+static void yscr__panic(void) {
+    int64_t now = yscr__now();
+    if (InterlockedCompareExchange(&yscr__wd.panicking, 1, 0) != 0) return;
+    yscr__wd.t_panic = now;
+#if defined(YSCR__WT)
+    /* Release, not end, while the window thread answers (decided
+     * 2026-10-26): the frame thread may only be idle (MATLAB's pause,
+     * Python's input()), and only the windows, the cursor, the mode and the
+     * gamma ramps are the operator's to get back. The program learns it at
+     * its next begin() and may only close. */
+    if (yscr__wt_alive()) {
+        LONG req = InterlockedIncrement(&yscr__wt.release_req);
+        int k, quit = 0;
+        SetEvent(yscr__wt.cmd_ev);
+        /* 1 s for the window thread to begin the release, then up to 5 s
+         * for it to end: minimizing a fullscreen window in a switched mode
+         * puts the desktop mode back first, which took 1.2 to 1.4 s
+         * (measured; v0.10.0's 1 s in all ended the process). The hook
+         * runs on this thread, so its messages are read meanwhile; a later
+         * press is the same panic. */
+        for (k = 0; k < 500 && yscr__wt.release_done != req && (k < 100 || yscr__wt.release_start == req); k++) {
+            MSG m;
+            while (yscr__win.peek_message(&m, NULL, 0, 0, PM_REMOVE)) if (m.message == WM_QUIT) quit = 1;
+            Sleep(10);
+        }
+        if (quit) yscr__win.post_thread(yscr__wd.tid, WM_QUIT, 0, 0);
+        if (yscr__wt.release_done == req) {
+            yscr__gamma_restore_all();
+            yscr__panic_records(now, 1);
+            yscr__abort_push(YSCR_ABORT_PANIC, YSCR__AB_HOOK, 0, 0, now);
+            yscr__a_store(&yscr__released, 1);
+            InterlockedExchange(&yscr__wd.panicking, 0);
+            return;
+        }
+    }
+#endif
+    /* no key of the session waits on this thread from here */
+    if (yscr__wd.hook) { yscr__win.unhook(yscr__wd.hook); yscr__wd.hook = NULL; }
+    yscr__panic_records(now, 0);
     yscr__gamma_restore_all();
     if (yscr__wd.fn) yscr__wd_bounded(yscr__wd_last_words);
     TerminateProcess(GetCurrentProcess(), YSCR_PANIC_EXIT_CODE);
@@ -9075,6 +9862,88 @@ static void yscr__anchor(yscr_screen* s, int64_t t, int64_t count, int restart) 
     }
 }
 
+/* --- the grid after a gap (THE GRID, v0.10.1) ---------------------------------
+ * With no OS time for a while (the host waited between trials) the grid
+ * extrapolates its period across the gap. Measured on this laptop's panel
+ * (docs/screen.md, "The grid after a gap"): the period fitted over the
+ * first 2 s of a run was 1 to 41 ppm off the long-run rate, because the
+ * OS's vblank times wander by tens of us over seconds, so after a gap of
+ * 10 to 60 s the grid was 0.2 to 2 ms off the vblanks and the next 17
+ * records had GRID_UNSTABLE. DWM's vblank time (DwmGetCompositionTimingInfo)
+ * sat within 4 us of the flip statistics' times, before, during and after
+ * a gap, and is never older than a period. So the first begin() after a
+ * gap reads it and anchors the grid there, as an OS time: the phase
+ * follows the vblanks, and the period gains the gap as baseline. */
+#define YSCR__GAP_NS 500000000   /* no OS time for 0.5 s: a gap */
+
+/* DWM's last vblank, for the screen's display: 1 and *t, else 0. DWM's
+ * timing is the primary display's, so a screen elsewhere gets none, nor
+ * one whose display refreshes at another rate. */
+#if defined(YSCR__DXGI)
+typedef HRESULT (WINAPI *yscr__DwmGetCompositionTimingInfo_fn)(HWND, DWM_TIMING_INFO*);
+static int yscr__dwm_vblank(const yscr_screen* s, int64_t* t) {
+    static yscr__DwmGetCompositionTimingInfo_fn get;
+    static int tried;
+    DWM_TIMING_INFO ti;
+    MONITORINFO mi;
+    HMONITOR mon;
+    double p;
+    if (!tried) {
+        HMODULE m = LoadLibraryW(L"dwmapi.dll");
+        tried = 1;
+        get = m ? (yscr__DwmGetCompositionTimingInfo_fn)(yscr_proc)GetProcAddress(m, "DwmGetCompositionTimingInfo") : NULL;
+    }
+    yscr__win_load();
+    if (!get || !s->hwnd || !yscr__win.monitor_from_window || !yscr__win.monitor_info) return 0;
+    mon = yscr__win.monitor_from_window((HWND)s->hwnd, MONITOR_DEFAULTTONEAREST);
+    memset(&mi, 0, sizeof mi);
+    mi.cbSize = sizeof mi;
+    if (!mon || !yscr__win.monitor_info(mon, &mi) || !(mi.dwFlags & MONITORINFOF_PRIMARY)) return 0;
+    memset(&ti, 0, sizeof ti);
+    ti.cbSize = sizeof ti;
+    if (get(NULL, &ti) != S_OK || !ti.qpcVBlank || !ti.qpcRefreshPeriod) return 0;
+    p = (double)yrt_ticks_to_ns((int64_t)ti.qpcRefreshPeriod);
+    if (p < s->period_f * 0.995 || p > s->period_f * 1.005) return 0;
+    /* qpcVBlank is the next vblank's time, up to a period ahead (measured):
+     * the last one is a period before it */
+    *t = yrt_ticks_to_ns((int64_t)ti.qpcVBlank);
+    if (*t > yscr__now()) *t -= (int64_t)llround(p);
+    return 1;
+}
+#endif
+/* The system's last vblank time for the screen: 1 and *t, else 0. The core
+ * test replaces it. */
+#ifndef YSCR__SYS_VBLANK
+#if defined(YSCR__DXGI)
+#define YSCR__SYS_VBLANK(s, t) yscr__dwm_vblank((s), (t))
+#else
+#define YSCR__SYS_VBLANK(s, t) ((void)(s), (void)(t), 0)
+#endif
+#endif
+
+/* After a gap, before the prediction, once per gap: the system's vblank,
+ * when it is newer than the grid's, fresh (within 2 periods of now), and
+ * within what the period's error and the times' wander can explain (1% of
+ * a period, plus 100 ppm of the time since the grid's last OS time, at
+ * most a quarter period), becomes the grid's newest OS time. */
+static void yscr__gap_anchor(yscr_screen* s, int64_t now) {
+    int64_t t = 0, nc, off, span;
+    double bound;
+    if (!s->have_anchor || s->anchor_guessed || s->grid_follow || now - s->vb_t < YSCR__GAP_NS) return;
+    if (s->gap_asked == s->vb_t) return;   /* once per gap: a refusal stands */
+    s->gap_asked = s->vb_t;
+    if (!YSCR__SYS_VBLANK(s, &t) || t <= s->vb_t || t > now || now - t > (int64_t)(2 * s->period_f)) return;
+    span = t - s->vb_t;
+    nc = s->vb_count + (int64_t)llround((double)span / s->period_f);
+    off = t - yscr__time_of(s, nc);
+    bound = s->period_f / 100 + (double)span * 1e-4;
+    if (bound > s->period_f / 4) bound = s->period_f / 4;
+    if ((double)(off < 0 ? -off : off) > bound) { s->gap_refused++; return; }
+    s->gap_anchors++;
+    if ((off < 0 ? -off : off) > s->gap_shift_max) s->gap_shift_max = off < 0 ? -off : off;
+    yscr__anchor(s, t, nc, 0);
+}
+
 static int yscr__slack_bin(const yscr_screen* s, int64_t slack) {
     double b = (double)slack * 32.0 / s->period_f;
     if (b < 0) return 0;
@@ -10420,20 +11289,27 @@ static const char* yscr__set_icon(yscr_screen* s, const yscr_desc* d) {
 
 /* desc.raw_mice at open: a window on Windows, no SDL relative mode on any
  * window (it would take the registration), then the process's reader. */
+#if defined(YSCR__DXGI) && !defined(YSCR_NO_SDL)
+/* 1 when any SDL window is in relative mouse mode. SDL's window list is
+ * its main thread's (WINDOW THREAD). */
+static void yscr__rel_any_cb(void* p) {
+    int i, n = 0;
+    SDL_Window** wins = SDL_GetWindows(&n);
+    *(int*)p = 0;
+    for (i = 0; wins && i < n; i++) if (SDL_GetWindowRelativeMouseMode(wins[i])) *(int*)p = 1;
+    SDL_free(wins);
+}
+#endif
+
 static const char* yscr__rm_open(yscr_screen* s) {
 #if defined(YSCR__DXGI) && !defined(YSCR_NO_SDL)
     const char* why;
-    int i, n = 0;
-    SDL_Window** wins;
+    int rel = 0;
     if (!s->window) return "desc.raw_mice needs a window";
-    wins = SDL_GetWindows(&n);
-    for (i = 0; wins && i < n; i++)
-        if (SDL_GetWindowRelativeMouseMode(wins[i])) {
-            SDL_free(wins);
-            return "desc.raw_mice: SDL relative mouse mode is on for a window; both read mice through one "
-                   "Raw Input registration";
-        }
-    SDL_free(wins);
+    if (yscr__win_call(s, yscr__rel_any_cb, &rel) < 0) return "desc.raw_mice: the window thread did not answer";
+    if (rel)
+        return "desc.raw_mice: SDL relative mouse mode is on for a window; both read mice through one "
+               "Raw Input registration";
     why = yscr__rm_start();
     if (why) return why;
     s->raw_mice = 1;
@@ -10508,6 +11384,370 @@ static void yscr__context_hook(yscr_screen* s, const yscr_desc* desc) {
         ((yscr__glBindFramebuffer_fn)s->gl[YSCR__GL_BINDFRAMEBUFFER])(YSCR__GL_DRAW_FRAMEBUFFER, 0);
 }
 
+#if !defined(YSCR_NO_SDL)
+/* What the window part of close() needs, taken from the screen by value, so
+ * close() can return while the window thread still runs it (WINDOW THREAD:
+ * close must not hang the host). */
+typedef struct yscr__wclose {
+    SDL_Window* window;
+    void*       icon[2];
+    void*       pads[YSCR__MAX_PADS];
+    int32_t     cursor_hidden, gamepad, video, on_wt;
+} yscr__wclose;
+
+static void yscr__wclose_take(yscr_screen* s, yscr__wclose* c) {
+    int k;
+    memset(c, 0, sizeof *c);
+    c->window = s->window;
+    for (k = 0; k < 2; k++) { c->icon[k] = s->win_icon[k]; s->win_icon[k] = NULL; }
+    for (k = 0; k < YSCR__MAX_PADS; k++) { c->pads[k] = s->pads[k]; s->pads[k] = NULL; }
+    c->cursor_hidden = s->cursor_hidden;
+    c->gamepad = s->sdl_gamepad;
+    c->video = s->sdl_video;
+    c->on_wt = s->wt;
+    s->sdl_gamepad = 0;
+}
+
+/* The window part of close(), on the thread that made the window. */
+static void yscr__window_close(void* p) {
+    yscr__wclose* c = (yscr__wclose*)p;
+    int k;
+    if (c->cursor_hidden) SDL_ShowCursor();
+#if defined(YSCR__WEB)
+    if (c->window) {   /* the page leaves its fullscreen itself */
+        yscr__web_fs_hold(1);
+        SDL_DestroyWindow(c->window);
+        yscr__web_fs_hold(0);
+    }
+#else
+    if (c->window) SDL_DestroyWindow(c->window);
+#endif
+#if defined(YSCR__DXGI)
+    /* after the window that showed them */
+    for (k = 0; k < 2; k++) if (c->icon[k] && yscr__win.destroy_icon) yscr__win.destroy_icon((HICON)c->icon[k]);
+#endif
+    if (c->gamepad) {
+        for (k = 0; k < YSCR__MAX_PADS; k++) if (c->pads[k]) SDL_CloseGamepad((SDL_Gamepad*)c->pads[k]);
+        SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
+    }
+    if (c->video) yscr__video_down();
+    (void)k;
+}
+#endif
+
+#if !defined(YSCR_NO_SDL)
+/* The window part of open(): on the window thread when there is one
+ * (WINDOW THREAD), else on the caller's. A failure leaves the message in
+ * s->error; the caller closes, never this function, which may run on the
+ * thread that close() would wait for. */
+static bool yscr__window_open(yscr_screen* s, const yscr_desc* desc, yscr_mode* want, yscr_presenter_open* in) {
+    SDL_DisplayID id;
+    const SDL_DisplayMode* dm;
+    SDL_DisplayMode match;
+    bool explicit_mode = desc->mode.w || desc->mode.h || desc->mode.refresh_num;
+    SDL_PropertiesID props;
+    /* The raw-input keyboard: stamped when Raw Input delivers the key,
+     * not with the message time, which counts in the system tick and was
+     * measured up to 15.7 ms early. Default priority, so a caller's own
+     * setting of the hint wins. */
+    SDL_SetHintWithPriority(SDL_HINT_WINDOWS_RAW_KEYBOARD, "1", SDL_HINT_DEFAULT);
+    /* SDL would turn Alt+F4 into a close request; the header reports it
+     * as its own reason (ABORT). */
+    SDL_SetHintWithPriority(SDL_HINT_WINDOWS_CLOSE_ON_ALT_F4, "0", SDL_HINT_DEFAULT);
+    /* GLX draws into SDL's X window; SDL 3 may pick Wayland when both
+     * run. Default priority, so the caller's setting wins (and open()
+     * then says which driver SDL took). */
+    if (s->backend == YSCR_BACKEND_GLX_OML) SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, "x11", SDL_HINT_DEFAULT);
+#if defined(YSCR__GLX)
+    /* SDL 3 opens $DISPLAY and puts every window on its screen
+     * (measured: a display of the other X screen still got a window on
+     * the default one); naming ":0.1" there before SDL's video starts
+     * is what puts the window, its events and mode switches on screen 1 */
+    if (desc->x_display && desc->x_display[0]) {
+        const char* cur = getenv("DISPLAY");
+        if (SDL_WasInit(SDL_INIT_VIDEO) && !(cur && strcmp(cur, desc->x_display) == 0)) {
+            yscr__set_error(s->error, sizeof s->error, "ysp_screen: desc.x_display %s: SDL's video is already up on "
+                            "%s; SDL 3 drives one X screen per process", desc->x_display, cur ? cur : "(unset)");
+            return false;
+        }
+        setenv("DISPLAY", desc->x_display, 1);
+    }
+#endif
+    if (!yscr__video_up()) {
+        yscr__set_error(s->error, sizeof s->error, "ysp_screen: SDL video: %s", SDL_GetError());
+        return false;
+    }
+    s->sdl_video = 1;
+    /* the input bridge's doorbell, once per process (SDL keeps it) */
+    if (!yscr__in.type) {
+        Uint32 type = SDL_RegisterEvents(1);
+        if (type) yscr__in.type = type;
+    }
+    if (desc->gamepads) {
+        int k, n_pads = 0;
+        SDL_JoystickID* ids;
+        if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) {
+            yscr__set_error(s->error, sizeof s->error, "ysp_screen: SDL gamepads: %s", SDL_GetError());
+            return false;
+        }
+        s->sdl_gamepad = 1;
+        ids = SDL_GetGamepads(&n_pads);
+        for (k = 0; ids && k < n_pads; k++) yscr__pad_open(s, ids[k]);
+        SDL_free(ids);
+    }
+    id = yscr__display_id(desc->display);
+    dm = SDL_GetDesktopDisplayMode(id);
+    if (!dm) {
+        yscr__set_error(s->error, sizeof s->error, "ysp_screen: display %u: %s", (unsigned)desc->display, SDL_GetError());
+        return false;
+    }
+    match = *dm;
+    if (explicit_mode) {
+        /* An exact listed mode or nothing: no implicit conversion. */
+        int i, n = 0, found = 0;
+        SDL_DisplayMode** modes = SDL_GetFullscreenDisplayModes(id, &n);
+        for (i = 0; modes && i < n; i++) {
+            const SDL_DisplayMode* m = modes[i];
+            if ((desc->mode.w && m->w != desc->mode.w) || (desc->mode.h && m->h != desc->mode.h)) continue;
+            if (desc->mode.refresh_num &&
+                (int64_t)m->refresh_rate_numerator * (desc->mode.refresh_den ? desc->mode.refresh_den : 1) !=
+                (int64_t)desc->mode.refresh_num * m->refresh_rate_denominator) continue;
+            match = *m; found = 1; break;
+        }
+        SDL_free(modes);
+        if (!found) {
+            yscr__copy(s->error, sizeof s->error, "ysp_screen: desc.mode is not a mode of this display "
+                         "(yscr_modes lists them)");
+            return false;
+        }
+    }
+#if defined(YSCR__DXGI)
+    yscr__win_load();   /* the window a forced raise gives the foreground back to */
+    s->fg_prev = yscr__win.foreground ? (void*)yscr__win.foreground() : NULL;
+#endif
+#if defined(YSCR__WEB)
+    /* A page goes fullscreen only from a user gesture (a button), so
+     * the header never asks: a "fullscreen" screen is a canvas the size
+     * of the page's viewport at open, which the page may have made
+     * fullscreen before (BACKENDS, WEB). */
+    if (!desc->windowed) {
+        match.w = yscr__web_query(4);
+        match.h = yscr__web_query(5);
+    }
+#endif
+    props = SDL_CreateProperties();
+    SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, "ysp_screen");
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_X_NUMBER, (Sint64)SDL_WINDOWPOS_CENTERED_DISPLAY(id));
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_Y_NUMBER, (Sint64)SDL_WINDOWPOS_CENTERED_DISPLAY(id));
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER,
+                          desc->windowed ? (desc->window_w ? desc->window_w : 800) : match.w);
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER,
+                          desc->windowed ? (desc->window_h ? desc->window_h : 600) : match.h);
+#if defined(YSCR__WEB)
+    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN, false);
+#else
+    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN, !desc->windowed);
+#endif
+    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_HIGH_PIXEL_DENSITY_BOOLEAN, true);
+#if defined(YSCR__WEB)
+    yscr__web_fs_hold(1);
+    s->window = SDL_CreateWindowWithProperties(props);
+    yscr__web_fs_hold(0);
+    /* SDL's visibility handler re-applies the window's flags when the
+     * page is shown again, which leaves the page's fullscreen; the
+     * header has its own listener (yscr__web_query) */
+    if (s->window) emscripten_set_visibilitychange_callback(NULL, 0, NULL);
+#else
+    {   /* SDL's hint is process-wide: set for this window only, then
+         * put back, so an operator window made later is managed */
+        char or_prev[16] = "";
+        const char* h;
+        int or_set = s->backend == YSCR_BACKEND_GLX_OML && desc->x11_override_redirect, had = 0;
+        if (or_set) {
+            h = SDL_GetHint(SDL_HINT_X11_FORCE_OVERRIDE_REDIRECT);
+            if (h) { yscr__copy(or_prev, sizeof or_prev, h); had = 1; }
+            SDL_SetHint(SDL_HINT_X11_FORCE_OVERRIDE_REDIRECT, "1");
+        }
+        s->window = SDL_CreateWindowWithProperties(props);
+        if (or_set) {
+            if (had) SDL_SetHint(SDL_HINT_X11_FORCE_OVERRIDE_REDIRECT, or_prev);
+            else SDL_ResetHint(SDL_HINT_X11_FORCE_OVERRIDE_REDIRECT);
+        }
+    }
+#endif
+    SDL_DestroyProperties(props);
+    if (!s->window) {
+        yscr__set_error(s->error, sizeof s->error, "ysp_screen: window: %s", SDL_GetError());
+        return false;
+    }
+    if (!desc->windowed && explicit_mode &&
+        (match.w != dm->w || match.h != dm->h || match.refresh_rate_numerator != dm->refresh_rate_numerator)) {
+#if defined(YSCR__GLX)
+        /* the X server keeps a switched mode after the process dies
+         * (measured): a snapshot for exit() and the panic */
+        if (s->backend == YSCR_BACKEND_GLX_OML && yscr__x_load()) {
+            void* xd = SDL_GetPointerProperty(SDL_GetWindowProperties(s->window), SDL_PROP_WINDOW_X11_DISPLAY_POINTER, NULL);
+            yscr__xm_take(s, xd ? yscr__x.DisplayString(xd) : NULL);
+        }
+#endif
+        if (!SDL_SetWindowFullscreenMode(s->window, &match)) {
+            yscr__set_error(s->error, sizeof s->error, "ysp_screen: mode switch: %s", SDL_GetError());
+            return false;
+        }
+    }
+    {
+        const char* e = yscr__set_icon(s, desc);
+        if (e) {
+            yscr__set_error(s->error, sizeof s->error, "ysp_screen: %s: %s", e, SDL_GetError());
+            return false;
+        }
+#if defined(YSCR__DXGI)
+        if (!desc->icon_sdl && !desc->icon_rgba) {
+            s->hwnd = SDL_GetPointerProperty(SDL_GetWindowProperties(s->window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
+            yscr__win_icons(s);
+        }
+#endif
+    }
+    if (!desc->windowed) SDL_SyncWindow(s->window);
+    SDL_RaiseWindow(s->window);
+    /* SDL routes keys through the message path while text input runs. */
+    SDL_StopTextInput(s->window);
+    if (!desc->windowed && !desc->show_cursor) { SDL_HideCursor(); s->cursor_hidden = 1; }
+    {   /* the mode obtained, from the OS, not from the request */
+        const SDL_DisplayMode* got = desc->windowed ? SDL_GetDesktopDisplayMode(SDL_GetDisplayForWindow(s->window))
+                                                    : SDL_GetWindowFullscreenMode(s->window);
+        if (!got) got = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(s->window));
+        if (got) yscr__mode_from_sdl(got, want);
+        {
+            int pw = 0, ph = 0;
+            SDL_GetWindowSizeInPixels(s->window, &pw, &ph);
+            want->w = pw; want->h = ph;
+        }
+    }
+    in->window = s->window;
+    yscr__restamp_correlate(s);
+    s->hwnd = SDL_GetPointerProperty(SDL_GetWindowProperties(s->window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
+    yscr__slot_take(s, (uint32_t)SDL_GetWindowID(s->window));
+    if (s->abort_slot && yscr__abort_windows++ == 0 && !SDL_AddEventWatch(yscr__abort_watch, NULL)) {
+        yscr__set_error(s->error, sizeof s->error, "ysp_screen: SDL_AddEventWatch: %s", SDL_GetError());
+        return false;
+    }
+    return true;
+}
+#endif
+
+/* Runs fn(ctx) on the thread that owns the screen's window (WINDOW THREAD). */
+static int yscr__win_call(yscr_screen* s, yscr_window_fn fn, void* ctx) {
+#if defined(YSCR__WT)
+    if (s && s->wt) return yscr__wt_run(fn, ctx, 0);
+#else
+    (void)s;
+#endif
+    fn(ctx);
+    return YSCR_OK;
+}
+
+#if !defined(YSCR_NO_SDL)
+typedef struct { yscr_screen* s; const yscr_desc* d; yscr_mode* want; yscr_presenter_open* in; bool ok; } yscr__wopen;
+
+static void yscr__window_open_cb(void* p) {
+    yscr__wopen* w = (yscr__wopen*)p;
+    w->ok = yscr__window_open(w->s, w->d, w->want, w->in);
+#if defined(YSCR__WT)
+    if (yscr__wt_on_thread()) {   /* what the thread's loop and a release need */
+        yscr_screen* s = w->s;
+        int i;
+        if (s->sdl_video) InterlockedIncrement(&yscr__wt.video);
+        if (s->sdl_gamepad) InterlockedIncrement(&yscr__wt.pads);
+        for (i = 0; s->window && i < YSCR__SLOTS; i++)
+            if (!yscr__wt.wins[i]) { yscr__wt.wins[i] = s->window; break; }
+    }
+#endif
+}
+
+/* The window part of close(), as a command: on the window thread it also
+ * takes the window off the thread's lists. */
+static void yscr__window_close_cb(void* p) {
+#if defined(YSCR__WT)
+    yscr__wclose* c = (yscr__wclose*)p;
+    if (yscr__wt_on_thread()) {
+        int i;
+        for (i = 0; c->window && i < YSCR__SLOTS; i++) if (yscr__wt.wins[i] == c->window) yscr__wt.wins[i] = NULL;
+        if (c->gamepad) InterlockedDecrement(&yscr__wt.pads);
+        if (c->video) InterlockedDecrement(&yscr__wt.video);
+    }
+#endif
+    yscr__window_close(p);
+}
+
+/* open()'s window: the window thread's mode, the thread for the first
+ * screen that uses it, and the window, made there or here. NULL, or why
+ * not (s->error may hold SDL's message already). */
+static const char* yscr__wt_open(yscr_screen* s, const yscr_desc* desc, yscr_mode* want, yscr_presenter_open* in) {
+    yscr__wopen w;
+    const char* e;
+    int native = s->backend == YSCR_BACKEND_DXGI_FLIP || s->backend == YSCR_BACKEND_COMPOSITION;
+    int avail = 0, elsewhere;
+#if defined(YSCR__WT)
+    avail = 1;
+#endif
+    if (yscr__a_load(&yscr__released) && yscr__wt_mode_users > 0)
+        return "the panic released the display (PANIC): close every screen before the next open";
+    elsewhere = yscr__wt_mode_users == 0 && SDL_WasInit(SDL_INIT_VIDEO) != 0;
+    s->wt_mode = yscr__wt_decide(desc->window_thread, native, avail, yscr__wt_mode_users ? yscr__wt_mode_now : 0,
+                                 elsewhere, &s->wt_why, &e);
+    if (e) return e;
+    yscr__wt_mode_now = s->wt_mode;
+    yscr__wt_mode_users++;
+    s->wt_user = 1;
+    w.s = s; w.d = desc; w.want = want; w.in = in; w.ok = false;
+#if defined(YSCR__WT)
+    if (s->wt_mode == YSCR_WINDOW_THREAD_ON) {
+        e = yscr__wt_acquire();
+        if (e) return e;
+        s->wt = 1;
+        if (yscr__wt_run(yscr__window_open_cb, &w, 0) < 0) return "window thread: it took no command in 5 s";
+        return w.ok ? NULL : "the window";
+    }
+#endif
+    yscr__window_open_cb(&w);
+    return w.ok ? NULL : "the window";
+}
+
+/* close()'s window, on the thread that made it. With the window thread
+ * close() waits at most 5 s for the command to be taken and 5 s for it to
+ * run, then returns with the thread left behind: close must not hang the
+ * host (a driver call that never returns). The command works on a copy,
+ * so the screen may be freed while it runs. */
+static void yscr__wt_close(yscr_screen* s) {
+    yscr__wclose c;
+    yscr__wclose_take(s, &c);
+#if defined(YSCR__WT)
+    if (s->wt) {
+        static yscr__wclose held;   /* one close at a time (MEMORY AND THREADS) */
+        int rc = YSCR_ERR_LOST;
+        if (!yscr__wt.stuck) {
+            held = c;
+            rc = yscr__wt_run(yscr__window_close_cb, &held, YSCR__WT_CLOSE_MS);
+        }
+        if (rc < 0)
+            yscr__copy(s->error, sizeof s->error, "ysp_screen: close: the window thread did not answer in 5 s; "
+                       "its window stays until the process ends");
+        yscr__wt_release();
+        s->wt = 0;
+    } else
+#endif
+    yscr__window_close_cb(&c);
+    if (s->wt_user) {
+        s->wt_user = 0;
+        if (--yscr__wt_mode_users == 0) yscr__wt_mode_now = 0;
+    }
+}
+
+static void yscr__fg_cb(void* p) { yscr_screen* s = (yscr_screen*)p; s->fg = YSCR__FOREGROUND(s); }
+static void yscr__devices_cb(void* p) { yscr__devices_at_open((yscr_screen*)p); }
+#endif
+
 YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
     yscr_presenter_open in;
     yscr_mode want;
@@ -10557,6 +11797,10 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
         yscr__copy(s->error, sizeof s->error, "ysp_screen: desc.key_dedup_ns must be at most 1 s (< 0 turns the key filter off)");
         return false;
     }
+    if (desc->window_thread < YSCR_WINDOW_THREAD_AUTO || desc->window_thread > YSCR_WINDOW_THREAD_OFF) {
+        yscr__copy(s->error, sizeof s->error, "ysp_screen: desc.window_thread must be 0 (AUTO), 1 (ON) or 2 (OFF)");
+        return false;
+    }
     if (desc->panic && desc->abort_keys.off) {
         yscr__copy(s->error, sizeof s->error, "ysp_screen: desc.panic needs the abort combination (desc.abort_keys.off is set)");
         return false;
@@ -10595,6 +11839,13 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
                      "(Wayland and macOS are stubs); BACKEND_SIM runs without a display");
         return false;
 #endif
+    }
+    /* VIRTUAL CLOCK: a display's flips happen on real time, so a frame
+     * loop on virtual time would predict and record nonsense */
+    if (yrt_is_virtual() && s->backend != YSCR_BACKEND_SIM && s->backend != YSCR_BACKEND_CUSTOM) {
+        yscr__copy(s->error, sizeof s->error, "ysp_screen: the clock is virtual (yrt_virtual_begin); only "
+                     "BACKEND_SIM and BACKEND_CUSTOM run on it");
+        return false;
     }
     switch (s->backend) {
     case YSCR_BACKEND_SIM:
@@ -10675,203 +11926,9 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
 
 #if !defined(YSCR_NO_SDL)
     if (s->pr->needs_window) {
-        SDL_DisplayID id;
-        const SDL_DisplayMode* dm;
-        SDL_DisplayMode match;
-        bool explicit_mode = desc->mode.w || desc->mode.h || desc->mode.refresh_num;
-        SDL_PropertiesID props;
-        /* The raw-input keyboard: stamped when Raw Input delivers the key,
-         * not with the message time, which counts in the system tick and was
-         * measured up to 15.7 ms early. Default priority, so a caller's own
-         * setting of the hint wins. */
-        SDL_SetHintWithPriority(SDL_HINT_WINDOWS_RAW_KEYBOARD, "1", SDL_HINT_DEFAULT);
-        /* SDL would turn Alt+F4 into a close request; the header reports it
-         * as its own reason (ABORT). */
-        SDL_SetHintWithPriority(SDL_HINT_WINDOWS_CLOSE_ON_ALT_F4, "0", SDL_HINT_DEFAULT);
-        /* GLX draws into SDL's X window; SDL 3 may pick Wayland when both
-         * run. Default priority, so the caller's setting wins (and open()
-         * then says which driver SDL took). */
-        if (s->backend == YSCR_BACKEND_GLX_OML) SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, "x11", SDL_HINT_DEFAULT);
-#if defined(YSCR__GLX)
-        /* SDL 3 opens $DISPLAY and puts every window on its screen
-         * (measured: a display of the other X screen still got a window on
-         * the default one); naming ":0.1" there before SDL's video starts
-         * is what puts the window, its events and mode switches on screen 1 */
-        if (desc->x_display && desc->x_display[0]) {
-            const char* cur = getenv("DISPLAY");
-            if (SDL_WasInit(SDL_INIT_VIDEO) && !(cur && strcmp(cur, desc->x_display) == 0)) {
-                yscr__set_error(s->error, sizeof s->error, "ysp_screen: desc.x_display %s: SDL's video is already up on "
-                                "%s; SDL 3 drives one X screen per process", desc->x_display, cur ? cur : "(unset)");
-                yscr_close(s);
-                return false;
-            }
-            setenv("DISPLAY", desc->x_display, 1);
-        }
-#endif
-        if (!yscr__video_up()) {
-            yscr__set_error(s->error, sizeof s->error, "ysp_screen: SDL video: %s", SDL_GetError());
-            yscr_close(s);
-            return false;
-        }
-        s->sdl_video = 1;
-        /* the input bridge's doorbell, once per process (SDL keeps it) */
-        if (!yscr__in.type) {
-            Uint32 type = SDL_RegisterEvents(1);
-            if (type) yscr__in.type = type;
-        }
-        if (desc->gamepads) {
-            int k, n_pads = 0;
-            SDL_JoystickID* ids;
-            if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) {
-                yscr__set_error(s->error, sizeof s->error, "ysp_screen: SDL gamepads: %s", SDL_GetError());
-                yscr_close(s);
-                return false;
-            }
-            s->sdl_gamepad = 1;
-            ids = SDL_GetGamepads(&n_pads);
-            for (k = 0; ids && k < n_pads; k++) yscr__pad_open(s, ids[k]);
-            SDL_free(ids);
-        }
-        id = yscr__display_id(desc->display);
-        dm = SDL_GetDesktopDisplayMode(id);
-        if (!dm) {
-            yscr__set_error(s->error, sizeof s->error, "ysp_screen: display %u: %s", (unsigned)desc->display, SDL_GetError());
-            yscr_close(s);
-            return false;
-        }
-        match = *dm;
-        if (explicit_mode) {
-            /* An exact listed mode or nothing: no implicit conversion. */
-            int i, n = 0, found = 0;
-            SDL_DisplayMode** modes = SDL_GetFullscreenDisplayModes(id, &n);
-            for (i = 0; modes && i < n; i++) {
-                const SDL_DisplayMode* m = modes[i];
-                if ((desc->mode.w && m->w != desc->mode.w) || (desc->mode.h && m->h != desc->mode.h)) continue;
-                if (desc->mode.refresh_num &&
-                    (int64_t)m->refresh_rate_numerator * (desc->mode.refresh_den ? desc->mode.refresh_den : 1) !=
-                    (int64_t)desc->mode.refresh_num * m->refresh_rate_denominator) continue;
-                match = *m; found = 1; break;
-            }
-            SDL_free(modes);
-            if (!found) {
-                yscr__copy(s->error, sizeof s->error, "ysp_screen: desc.mode is not a mode of this display "
-                             "(yscr_modes lists them)");
-                yscr_close(s);
-                return false;
-            }
-        }
-#if defined(YSCR__DXGI)
-        yscr__win_load();   /* the window a forced raise gives the foreground back to */
-        s->fg_prev = yscr__win.foreground ? (void*)yscr__win.foreground() : NULL;
-#endif
-#if defined(YSCR__WEB)
-        /* A page goes fullscreen only from a user gesture (a button), so
-         * the header never asks: a "fullscreen" screen is a canvas the size
-         * of the page's viewport at open, which the page may have made
-         * fullscreen before (BACKENDS, WEB). */
-        if (!desc->windowed) {
-            match.w = yscr__web_query(4);
-            match.h = yscr__web_query(5);
-        }
-#endif
-        props = SDL_CreateProperties();
-        SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, "ysp_screen");
-        SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_X_NUMBER, (Sint64)SDL_WINDOWPOS_CENTERED_DISPLAY(id));
-        SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_Y_NUMBER, (Sint64)SDL_WINDOWPOS_CENTERED_DISPLAY(id));
-        SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER,
-                              desc->windowed ? (desc->window_w ? desc->window_w : 800) : match.w);
-        SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER,
-                              desc->windowed ? (desc->window_h ? desc->window_h : 600) : match.h);
-#if defined(YSCR__WEB)
-        SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN, false);
-#else
-        SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN, !desc->windowed);
-#endif
-        SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_HIGH_PIXEL_DENSITY_BOOLEAN, true);
-#if defined(YSCR__WEB)
-        yscr__web_fs_hold(1);
-        s->window = SDL_CreateWindowWithProperties(props);
-        yscr__web_fs_hold(0);
-        /* SDL's visibility handler re-applies the window's flags when the
-         * page is shown again, which leaves the page's fullscreen; the
-         * header has its own listener (yscr__web_query) */
-        if (s->window) emscripten_set_visibilitychange_callback(NULL, 0, NULL);
-#else
-        {   /* SDL's hint is process-wide: set for this window only, then
-             * put back, so an operator window made later is managed */
-            char or_prev[16] = "";
-            const char* h;
-            int or_set = s->backend == YSCR_BACKEND_GLX_OML && desc->x11_override_redirect, had = 0;
-            if (or_set) {
-                h = SDL_GetHint(SDL_HINT_X11_FORCE_OVERRIDE_REDIRECT);
-                if (h) { yscr__copy(or_prev, sizeof or_prev, h); had = 1; }
-                SDL_SetHint(SDL_HINT_X11_FORCE_OVERRIDE_REDIRECT, "1");
-            }
-            s->window = SDL_CreateWindowWithProperties(props);
-            if (or_set) {
-                if (had) SDL_SetHint(SDL_HINT_X11_FORCE_OVERRIDE_REDIRECT, or_prev);
-                else SDL_ResetHint(SDL_HINT_X11_FORCE_OVERRIDE_REDIRECT);
-            }
-        }
-#endif
-        SDL_DestroyProperties(props);
-        if (!s->window) {
-            yscr__set_error(s->error, sizeof s->error, "ysp_screen: window: %s", SDL_GetError());
-            yscr_close(s);
-            return false;
-        }
-        if (!desc->windowed && explicit_mode &&
-            (match.w != dm->w || match.h != dm->h || match.refresh_rate_numerator != dm->refresh_rate_numerator)) {
-#if defined(YSCR__GLX)
-            /* the X server keeps a switched mode after the process dies
-             * (measured): a snapshot for exit() and the panic */
-            if (s->backend == YSCR_BACKEND_GLX_OML && yscr__x_load()) {
-                void* xd = SDL_GetPointerProperty(SDL_GetWindowProperties(s->window), SDL_PROP_WINDOW_X11_DISPLAY_POINTER, NULL);
-                yscr__xm_take(s, xd ? yscr__x.DisplayString(xd) : NULL);
-            }
-#endif
-            if (!SDL_SetWindowFullscreenMode(s->window, &match)) {
-                yscr__set_error(s->error, sizeof s->error, "ysp_screen: mode switch: %s", SDL_GetError());
-                yscr_close(s);
-                return false;
-            }
-        }
-        {
-            const char* e = yscr__set_icon(s, desc);
-            if (e) {
-                yscr__set_error(s->error, sizeof s->error, "ysp_screen: %s: %s", e, SDL_GetError());
-                yscr_close(s);
-                return false;
-            }
-#if defined(YSCR__DXGI)
-            if (!desc->icon_sdl && !desc->icon_rgba) {
-                s->hwnd = SDL_GetPointerProperty(SDL_GetWindowProperties(s->window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
-                yscr__win_icons(s);
-            }
-#endif
-        }
-        if (!desc->windowed) SDL_SyncWindow(s->window);
-        SDL_RaiseWindow(s->window);
-        /* SDL routes keys through the message path while text input runs. */
-        SDL_StopTextInput(s->window);
-        if (!desc->windowed && !desc->show_cursor) { SDL_HideCursor(); s->cursor_hidden = 1; }
-        {   /* the mode obtained, from the OS, not from the request */
-            const SDL_DisplayMode* got = desc->windowed ? SDL_GetDesktopDisplayMode(SDL_GetDisplayForWindow(s->window))
-                                                        : SDL_GetWindowFullscreenMode(s->window);
-            if (!got) got = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(s->window));
-            if (got) yscr__mode_from_sdl(got, &want);
-            {
-                int pw = 0, ph = 0;
-                SDL_GetWindowSizeInPixels(s->window, &pw, &ph);
-                want.w = pw; want.h = ph;
-            }
-        }
-        in.window = s->window;
-        yscr__restamp_correlate(s);
-        s->hwnd = SDL_GetPointerProperty(SDL_GetWindowProperties(s->window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
-        yscr__slot_take(s, (uint32_t)SDL_GetWindowID(s->window));
-        if (s->abort_slot && yscr__abort_windows++ == 0 && !SDL_AddEventWatch(yscr__abort_watch, NULL)) {
-            yscr__set_error(s->error, sizeof s->error, "ysp_screen: SDL_AddEventWatch: %s", SDL_GetError());
+        const char* e = yscr__wt_open(s, desc, &want, &in);
+        if (e) {
+            if (!s->error[0]) yscr__set_error(s->error, sizeof s->error, "ysp_screen: %s", e);
             yscr_close(s);
             return false;
         }
@@ -10906,7 +11963,11 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
     }
     s->caps.backend = s->backend;
     hw_onset = s->caps.hw_onset;
+#if !defined(YSCR_NO_SDL)
+    yscr__win_call(s, yscr__fg_cb, s);
+#else
     s->fg = YSCR__FOREGROUND(s);
+#endif
 #if defined(YSCR__DXGI)
     if (s->backend == YSCR_BACKEND_COMPOSITION) yscr__wake_start(s);
 #endif
@@ -10918,7 +11979,7 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
     s->ring = desc->ring;
     s->display_index = desc->display_index;
 #if !defined(YSCR_NO_SDL)
-    if (s->window) yscr__devices_at_open(s);
+    if (s->window) yscr__win_call(s, yscr__devices_cb, s);
 #endif
     if (desc->raw_mice) {
         const char* why = yscr__rm_open(s);
@@ -11102,6 +12163,15 @@ YSCR_API void yscr_close(yscr_screen* s) {
     yscr__wd_disarm(s);
     yscr__win_gamma_release(s);
     yscr__wake_stop(s);
+    /* The next screen's raise (v0.10.2): Windows let the thread that had the
+     * foreground window raise the next one, and with the window thread the
+     * next open's window belongs to a new thread, so its raise was refused
+     * and the window opened behind (runs 2 and 3 of 3 in a window: every
+     * record OCCLUDED, tier 3). While this window has the foreground, the
+     * process keeps the right for its next window; as before, input
+     * the user gives another program takes it away. */
+    if (s->hwnd && yscr__win.foreground && yscr__win.allow_foreground && yscr__win.foreground() == (HWND)s->hwnd)
+        yscr__win.allow_foreground(GetCurrentProcessId());
     /* A forced raise took the foreground from another window: give it back
      * while this one still has it (measured: else the system picked a
      * third program in 9 of 9 forced opens). */
@@ -11128,34 +12198,14 @@ YSCR_API void yscr_close(yscr_screen* s) {
     s->pr = NULL;
     s->pr_open = 0;
 #if !defined(YSCR_NO_SDL)
-    if (s->cursor_hidden) SDL_ShowCursor();
-#if defined(YSCR__WEB)
-    if (s->window) {   /* the page leaves its fullscreen itself */
-        yscr__web_fs_hold(1);
-        SDL_DestroyWindow(s->window);
-        yscr__web_fs_hold(0);
-    }
-#else
-    if (s->window) SDL_DestroyWindow(s->window);
-#endif
+    yscr__wt_close(s);
 #if defined(YSCR__GLX)
     yscr__xm_release(s);   /* after SDL put the desktop mode back */
 #endif
-#if defined(YSCR__DXGI)
-    {   /* after the window that showed them */
-        int k;
-        for (k = 0; k < 2; k++) {
-            if (s->win_icon[k] && yscr__win.destroy_icon) yscr__win.destroy_icon((HICON)s->win_icon[k]);
-            s->win_icon[k] = NULL;
-        }
+    if (yscr__tls_dirty && YSCR__TLS_CLEANUP) {
+        yscr__tls_dirty = 0;
+        SDL_CleanupTLS();
     }
-#endif
-    if (s->sdl_gamepad) {
-        yscr__pad_close(s, 0, true);
-        SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
-    }
-    s->sdl_gamepad = 0;
-    if (s->sdl_video) yscr__video_down();
 #endif
     s->window = NULL;
     s->sdl_video = 0;
@@ -11232,6 +12282,20 @@ YSCR_API void yscr_sync_check(const yscr_screen* s, yscr_sync_info* out) {
     }
 }
 
+/* The describe line's window_thread token (WINDOW THREAD). */
+static const char* yscr__wt_name(const yscr_screen* s) {
+    if (s->wt_mode == YSCR_WINDOW_THREAD_ON) return s->wt_why == YSCR__WT_WHY_NAMED ? "on" : "on(auto)";
+    if (s->wt_mode != YSCR_WINDOW_THREAD_OFF) return "n/a";
+    switch (s->wt_why) {
+    case YSCR__WT_WHY_NAMED: return "off";
+    case YSCR__WT_WHY_BACKEND: return "off(auto,backend)";
+    case YSCR__WT_WHY_PLATFORM: return "off(auto,platform)";
+    case YSCR__WT_WHY_PROCESS: return "off(auto,other-screen)";
+    case YSCR__WT_WHY_SDL: return "off(auto,sdl-video-up)";
+    default: return "off(auto)";
+    }
+}
+
 static const char* yscr__fg_name(uint32_t fg) {
     return fg == YSCR_FG_GRANTED ? "granted" : fg == YSCR_FG_FORCED ? "forced" : fg == YSCR_FG_REFUSED ? "refused" : "n/a";
 }
@@ -11268,6 +12332,12 @@ YSCR_API int yscr_describe(const yscr_screen* s, char* buf, size_t cap) {
                      cpus, !s->trig_fence ? "off" : (s->pr->gpu_done ? "on" : "unavailable"));
         }
     }
+    if (s->gap_anchors || s->gap_refused) {   /* THE GRID: gaps the system's vblank closed */
+        size_t n = strlen(extra);
+        if (n < sizeof extra)
+            snprintf(extra + n, sizeof extra - n, " gap_anchors=%u(max %.0fus, refused %u)", (unsigned)s->gap_anchors,
+                     (double)s->gap_shift_max / 1e3, (unsigned)s->gap_refused);
+    }
     {   /* the abort combination, as an operator reads it */
         uint32_t k = yscr__ab.key;
         size_t n = 0;
@@ -11282,19 +12352,21 @@ YSCR_API int yscr_describe(const yscr_screen* s, char* buf, size_t cap) {
             else snprintf(abort_s + n, sizeof abort_s - n, "key0x%x", (unsigned)k);
         }
     }
-    return snprintf(buf, cap, "ysp_screen %s: backend=%s%s%s%s %s mode=%dx%d@%d/%d measured=%.4fHz(%+.0fppm) "
-                    "path=%s depth=%d(%s,%u changes) settle=%s foreground=%s%s lead=%.2f worst_tier=%d abort=%s panic=%s%s%s%s%s%s",
+    return snprintf(buf, cap, "ysp_screen %s: backend=%s%s%s%s %s%s mode=%dx%d@%d/%d measured=%.4fHz(%+.0fppm) "
+                    "path=%s depth=%d(%s,%u changes) settle=%s foreground=%s%s window_thread=%s lead=%.2f worst_tier=%d abort=%s "
+                    "panic=%s%s%s%s%s%s%s",
                     YSCR_VERSION_STRING, s->pr->name,
                     s->auto_pick == YSCR_AUTO_COMPOSITION ? "(auto)"
                         : s->auto_pick == YSCR_AUTO_FALLBACK ? "(auto,composition-refused:\"" : "",
                     s->auto_pick == YSCR_AUTO_FALLBACK ? s->auto_why : "",
-                    s->auto_pick == YSCR_AUTO_FALLBACK ? "\")" : "", extra, s->caps.mode.w, s->caps.mode.h,
+                    s->auto_pick == YSCR_AUTO_FALLBACK ? "\")" : "", extra,
+                    yrt_is_virtual() ? " clock=virtual" : "", s->caps.mode.w, s->caps.mode.h,
                     s->caps.mode.refresh_num, s->caps.mode.refresh_den, hz, ppm,
                     yscr__path_name(s->path), s->depth,
                     s->depth_pin ? "pin" : s->depth_learn ? "learner" : "path", (unsigned)s->depth_changes,
                     settle_s, yscr__fg_name(s->fg),
                     s->backend != YSCR_BACKEND_COMPOSITION ? "" : s->wake ? " idle_wake=on" : " idle_wake=off",
-                    s->lead < 0 ? -1.0 : s->lead, s->worst_tier, abort_s,
+                    yscr__wt_name(s), s->lead < 0 ? -1.0 : s->lead, s->worst_tier, abort_s,
                     s->panic_armed == 1 ? "armed" : s->panic_armed == 2 ? "idle(windowed)" : s->panic_armed == 3 ? "n/a" : "off",
                     s->sync_off ? " WARNING=not-vsynced(driver-setting?)" : "",
                     /* a browser's callback times jitter about the grid, and its
@@ -11302,7 +12374,8 @@ YSCR_API int yscr_describe(const yscr_screen* s, char* buf, size_t cap) {
                     s->unstable && s->backend != YSCR_BACKEND_WEB ? " WARNING=off-grid-vblanks" : "",
                     (ppm > 200 || ppm < -200) && s->backend != YSCR_BACKEND_WEB ? " WARNING=period-differs-from-mode" : "",
                     s->st_result == YSCR_SETTLE_FAILED ? " WARNING=not-settled" : "",
-                    s->fg == YSCR_FG_REFUSED ? " WARNING=not-foreground" : "");
+                    s->fg == YSCR_FG_REFUSED ? " WARNING=not-foreground" : "",
+                    yscr__released_on(s) ? " WARNING=panic-released" : "");
 }
 
 YSCR_API void yscr_settle_check(const yscr_screen* s, yscr_settle_info* out) {
@@ -11328,7 +12401,13 @@ YSCR_API void yscr_settle_check(const yscr_screen* s, yscr_settle_info* out) {
 
 static void yscr__pump(yscr_screen* s) {
 #if !defined(YSCR_NO_SDL)
-    if (s->window && !s->polled) {   /* yscr_poll() pumped already this frame */
+    if (yscr__tls_dirty && YSCR__TLS_CLEANUP) {
+        yscr__tls_dirty = 0;
+        SDL_CleanupTLS();
+    }
+    /* The window thread pumps: SDL_PumpEvents belongs to SDL's main thread
+     * (SDL_events.c asserts it), which that thread is. */
+    if (s->window && !s->polled && !s->wt) {   /* yscr_poll() pumped already this frame */
         YRT_ZONE(z_pump, "yscr.pump");
         SDL_PumpEvents();
         YRT_ZONE_END(z_pump);
@@ -11338,7 +12417,7 @@ static void yscr__pump(yscr_screen* s) {
 }
 
 static int yscr__begin(yscr_screen* s, yscr_frame* f) {
-    int64_t t0, now, wait, prev_pred;
+    int64_t t0, now, wait, prev_pred, c0;
     int rc;
     YRT_ZONE(z_begin, "yscr.begin");
     if (!s || !f) { YRT_ZONE_END(z_begin); return YSCR_ERR_ARG; }
@@ -11364,7 +12443,14 @@ static int yscr__begin(yscr_screen* s, yscr_frame* f) {
     if (s->raw_mice) yscr__rm_check(s);
     yscr__in_log(s);
     if (yscr__abort_take(s, f)) { YRT_ZONE_END(z_begin); return YSCR_QUIT; }
+    if (yscr__released_on(s)) {   /* only close() is left */
+        memset(f, 0, sizeof *f);
+        f->abort = YSCR_ABORT_PANIC;
+        YRT_ZONE_END(z_begin);
+        return YSCR_QUIT;
+    }
     t0 = yscr__now();
+    c0 = YSCR__COST_NOW();
     if (!s->slot_held) {
         yscr_vblank newest;
         YRT_ZONE(z_wait, "yscr.wait");
@@ -11384,7 +12470,7 @@ static int yscr__begin(yscr_screen* s, yscr_frame* f) {
         s->pr->bind(s->pr_ctx);
     }
     s->slot_held = 0;
-    wait = yscr__now() - t0;
+    wait = YSCR__COST_NOW() - c0;
     {
         YRT_ZONE(z_stats, "yscr.stats");
         yscr__drain(s);
@@ -11399,6 +12485,7 @@ static int yscr__begin(yscr_screen* s, yscr_frame* f) {
     if (s->window && t0 - s->sdl_corr_t > 10000000000LL) yscr__restamp_correlate(s);
 #endif
     now = yscr__now();
+    yscr__gap_anchor(s, now);
     prev_pred = s->pred_count;
     s->pred_count = yscr__count_at(s, now + s->margin_ns) + s->depth;
     if (s->pred_count <= s->prev_shown) s->pred_count = s->prev_shown + 1;
@@ -11434,7 +12521,7 @@ static int yscr__begin(yscr_screen* s, yscr_frame* f) {
     memset(s->acc, 0, sizeof s->acc);
     s->acc[YSCR_PHASE_SWAP] = yscr__sat32(wait);
     s->acc[YSCR_PHASE_GPU] = YSCR_PHASE_UNKNOWN;
-    s->mark_t = yscr__now();
+    s->mark_t = YSCR__COST_NOW();
     s->begun = 1;
     YRT_ZONE_END(z_begin);
     return YSCR_OK;
@@ -11443,13 +12530,13 @@ static int yscr__begin(yscr_screen* s, yscr_frame* f) {
 YSCR_API void yscr_mark(yscr_screen* s, int phase) {
     int64_t now;
     if (!s || !s->begun || phase < 0 || phase >= YSCR_PHASE_GPU) return;
-    now = yscr__now();
+    now = YSCR__COST_NOW();
     s->acc[phase] = yscr__sat32((int64_t)s->acc[phase] + (now - s->mark_t));
     s->mark_t = now;
 }
 
 static int yscr__flip_at(yscr_screen* s, int64_t t, yscr_record* out) {
-    int64_t now, tg, count_t, earliest, planned, t_call;
+    int64_t now, tg, count_t, earliest, planned, t_call, c_call;
     yscr__pend* p = NULL;
     yscr_present_req req;
     const yscr_code_draw* codes = NULL;
@@ -11460,8 +12547,9 @@ static int yscr__flip_at(yscr_screen* s, int64_t t, yscr_record* out) {
     if (!s) { YRT_ZONE_END(z_flip); return YSCR_ERR_ARG; }
     if (!s->open) { YRT_ZONE_END(z_flip); return YSCR_ERR_CLOSED; }
     if (!s->begun) { YRT_ZONE_END(z_flip); return YSCR_ERR_ORDER; }
-    now = yscr__now();
+    now = YSCR__COST_NOW();
     s->acc[YSCR_PHASE_DRAW] = yscr__sat32((int64_t)s->acc[YSCR_PHASE_DRAW] + (now - s->mark_t));
+    now = yscr__now();
     if (s->on_present) {
         yscr_present_info pi;
         memset(&pi, 0, sizeof pi);
@@ -11568,6 +12656,7 @@ static int yscr__flip_at(yscr_screen* s, int64_t t, yscr_record* out) {
     }
     if (codes) memcpy(p->code_vals, code_vals, sizeof(uint32_t) * (size_t)s->n_codes);
     yscr__drain_overdue(s);
+    c_call = YSCR__COST_NOW();
     t_call = yscr__now();
     p->t_call = t_call;
     p->count_at_present = yscr__count_at(s, t_call);
@@ -11577,7 +12666,7 @@ static int yscr__flip_at(yscr_screen* s, int64_t t, yscr_record* out) {
         YRT_ZONE_END(z_present);
     }
     p->t_ret = yscr__now();
-    s->acc[YSCR_PHASE_SWAP] = yscr__sat32((int64_t)s->acc[YSCR_PHASE_SWAP] + (yscr__now() - t_call));
+    s->acc[YSCR_PHASE_SWAP] = yscr__sat32((int64_t)s->acc[YSCR_PHASE_SWAP] + (YSCR__COST_NOW() - c_call));
     memcpy(p->rec.phase_ns, s->acc, sizeof s->acc);
     if (rc < 0) {
         p->used = 0;
@@ -11830,9 +12919,13 @@ YSCR_API int yscr_begin_group(yscr_screen* const* s, int n, yscr_frame* f) {
     for (i = 0; i < n && !s[i]->window; i++) { }
     if (i < n) yscr__pump(s[i]);
     for (i = 0; i < n; i++) s[i]->polled = 1;
-    for (i = 0; i < n && !yscr__abort_pending(s[i]); i++) { }
+    for (i = 0; i < n && !yscr__abort_pending(s[i]) && !yscr__released_on(s[i]); i++) { }
     if (i < n) {
-        for (i = 0; i < n; i++) if (!yscr__abort_take(s[i], &f[i])) memset(&f[i], 0, sizeof f[i]);
+        for (i = 0; i < n; i++)
+            if (!yscr__abort_take(s[i], &f[i])) {
+                memset(&f[i], 0, sizeof f[i]);
+                if (yscr__released_on(s[i])) f[i].abort = YSCR_ABORT_PANIC;
+            }
         return YSCR_QUIT;
     }
     /* Each wait is on its own kernel object, so waiting in turn costs the
@@ -11960,11 +13053,37 @@ static void yscr__pad_close(yscr_screen* s, SDL_JoystickID id, bool all) {
         }
 }
 
+typedef struct { yscr_screen* s; const SDL_Event* ev; } yscr__padev;
+/* Gamepads open and close on SDL's main thread: the window thread's. */
+static void yscr__pad_event_cb(void* p) {
+    yscr__padev* a = (yscr__padev*)p;
+    if (a->ev->type == SDL_EVENT_GAMEPAD_ADDED) yscr__pad_open(a->s, a->ev->gdevice.which);
+    else yscr__pad_close(a->s, a->ev->gdevice.which, false);
+}
+
+static void yscr__device_event_cb(void* p) {
+    yscr__padev* a = (yscr__padev*)p;
+    yscr__device_event(a->s, a->ev);
+}
+
+/* One event from SDL's queue without a pump (WINDOW THREAD): any thread may
+ * take events; SDL_PollEvent pumps, which belongs to SDL's main thread. */
+static bool yscr__take(SDL_Event* ev) {
+    if (SDL_PeepEvents(ev, 1, SDL_GETEVENT, SDL_EVENT_FIRST, SDL_EVENT_LAST) <= 0) return false;
+    if ((ev->type >= SDL_EVENT_TEXT_EDITING && ev->type <= SDL_EVENT_TEXT_INPUT) ||
+        ev->type == SDL_EVENT_TEXT_EDITING_CANDIDATES || ev->type == SDL_EVENT_CLIPBOARD_UPDATE ||
+        (ev->type >= SDL_EVENT_DROP_FILE && ev->type <= SDL_EVENT_DROP_POSITION))
+        yscr__tls_dirty = 1;
+    return true;
+}
+
 YSCR_API bool yscr_poll(yscr_screen* s, union SDL_Event* ev, int64_t* t_rt) {
     if (!ev) return false;
     if (s) s->polled = 1;
     /* doorbells SDL refused go in again once its queue is empty */
-    if (!SDL_PollEvent(ev) && (!yscr__in_rebell() || !SDL_PollEvent(ev))) return false;
+    if (yscr__wt_running()) {
+        if (!yscr__take(ev) && (!yscr__in_rebell() || !yscr__take(ev))) return false;
+    } else if (!SDL_PollEvent(ev) && (!yscr__in_rebell() || !SDL_PollEvent(ev))) return false;
 #if defined(YSCR__GLX)
     /* the X server's time of a key, in SDL's units, so every consumer of
      * the event (yscr_event_input(), ysp/response.h) gets it */
@@ -11975,11 +13094,21 @@ YSCR_API bool yscr_poll(yscr_screen* s, union SDL_Event* ev, int64_t* t_rt) {
     }
 #endif
     if (t_rt) *t_rt = yscr_restamp(s, ev->common.timestamp);
-    if (s && s->sdl_gamepad) {
-        if (ev->type == SDL_EVENT_GAMEPAD_ADDED) yscr__pad_open(s, ev->gdevice.which);
-        else if (ev->type == SDL_EVENT_GAMEPAD_REMOVED) yscr__pad_close(s, ev->gdevice.which, false);
+    if (s && s->sdl_gamepad && (ev->type == SDL_EVENT_GAMEPAD_ADDED || ev->type == SDL_EVENT_GAMEPAD_REMOVED)) {
+        yscr__padev a;
+        a.s = s;
+        a.ev = ev;
+        yscr__win_call(s, yscr__pad_event_cb, &a);
     }
-    if (s && s->window) yscr__device_event(s, ev);
+    if (s && s->window) {
+        if (s->wt && (ev->type == SDL_EVENT_KEYBOARD_ADDED || ev->type == SDL_EVENT_MOUSE_ADDED ||
+                      ev->type == SDL_EVENT_GAMEPAD_ADDED || ev->type == SDL_EVENT_FINGER_DOWN)) {
+            yscr__padev a;   /* the names are SDL's main thread's */
+            a.s = s;
+            a.ev = ev;
+            yscr__win_call(s, yscr__device_event_cb, &a);
+        } else yscr__device_event(s, ev);
+    }
     return true;
 }
 #else
@@ -11991,6 +13120,9 @@ YSCR_API bool yscr_poll(yscr_screen* s, union SDL_Event* ev, int64_t* t_rt) {
      * without SDL only tests/adapt/screen_test.c calls them */
     (void)&yscr__abort_key; (void)&yscr__icon_decode; (void)&yscr__abort_edge;
     (void)&yscr__device_log; (void)&yscr__in_rebell;
+    /* the window thread's rule; no window without SDL */
+    (void)&yscr__wt_decide; (void)&yscr__wt_running; (void)yscr__wt_mode_now; (void)yscr__wt_mode_users;
+    (void)yscr__tls_dirty;
     (void)s; (void)ev; (void)t_rt; return false;
 }
 #endif
@@ -12099,23 +13231,37 @@ YSCR_API bool yscr_event_input(yscr_screen* s, const union SDL_Event* ev, yin_ev
 #endif
 }
 
+#if !defined(YSCR_NO_SDL)
+typedef struct { yscr_screen* s; bool on; SDL_Rect r; int rc; } yscr__ti;
+/* SDL's text input calls belong to its main thread (WINDOW THREAD). */
+static void yscr__text_input_cb(void* p) {
+    yscr__ti* a = (yscr__ti*)p;
+    yscr_screen* s = a->s;
+    a->rc = YSCR_OK;
+    if (a->on) {
+        if (!SDL_SetTextInputArea(s->window, &a->r, 0) || (!SDL_TextInputActive(s->window) && !SDL_StartTextInput(s->window))) {
+            yscr__set_error(s->error, sizeof s->error, "ysp_screen: text input: %s", SDL_GetError());
+            a->rc = YSCR_ERR_LOST;
+        }
+    } else if (SDL_TextInputActive(s->window) && !SDL_StopTextInput(s->window)) {
+        yscr__set_error(s->error, sizeof s->error, "ysp_screen: text input: %s", SDL_GetError());
+        a->rc = YSCR_ERR_LOST;
+    }
+}
+#endif
+
 static int yscr__text_input(yscr_screen* s, bool on, int x, int y, int w, int h) {
     if (!s) return YSCR_ERR_ARG;
     if (!s->open) return YSCR_ERR_CLOSED;
     if (w < 0 || h < 0) return YSCR_ERR_ARG;
 #if !defined(YSCR_NO_SDL)
     if (s->window) {
-        if (on) {
-            SDL_Rect r;
-            r.x = x; r.y = y; r.w = w; r.h = h;
-            if (!SDL_SetTextInputArea(s->window, &r, 0) || (!SDL_TextInputActive(s->window) && !SDL_StartTextInput(s->window))) {
-                yscr__set_error(s->error, sizeof s->error, "ysp_screen: text input: %s", SDL_GetError());
-                return YSCR_ERR_LOST;
-            }
-        } else if (SDL_TextInputActive(s->window) && !SDL_StopTextInput(s->window)) {
-            yscr__set_error(s->error, sizeof s->error, "ysp_screen: text input: %s", SDL_GetError());
-            return YSCR_ERR_LOST;
-        }
+        yscr__ti a;
+        int rc;
+        a.s = s; a.on = on; a.r.x = x; a.r.y = y; a.r.w = w; a.r.h = h; a.rc = YSCR_OK;
+        rc = yscr__win_call(s, yscr__text_input_cb, &a);
+        if (rc < 0) return rc;
+        if (a.rc != YSCR_OK) return a.rc;
     }
 #endif
     yscr__text_input_set(s, on ? 1 : 0, 0, x, y, w, h);
@@ -12194,6 +13340,15 @@ YSCR_API int yscr_native(yscr_screen* s, yscr_native_info* out) {
     return yscr__done(s, c0, yscr__native(s, out), "native");
 }
 
+YSCR_API int yscr_window_call(yscr_screen* s, yscr_window_fn fn, void* ctx) {
+    char c0 = yscr__hold(s);
+    int rc;
+    if (!fn) rc = YSCR_ERR_ARG;
+    else if (s) rc = yscr__win_call(s, fn, ctx);
+    else rc = yscr__wt_call(fn, ctx);
+    return yscr__done(s, c0, rc, "window_call");
+}
+
 YSCR_API int yscr_text_input(yscr_screen* s, bool on, int x, int y, int w, int h) {
     char c0 = yscr__hold(s);
     return yscr__done(s, c0, yscr__text_input(s, on, x, y, w, h), "text_input");
@@ -12201,43 +13356,45 @@ YSCR_API int yscr_text_input(yscr_screen* s, bool on, int x, int y, int w, int h
 
 YSCR_API const yscr_param* yscr_params(int* n) {
     static const yscr_param table[] = {
-        { "display",         "u32",  0, 4294967295.0, 0, "",      "SDL display id; 0 = the primary display" },
-        { "mode.w",          "i32",  0, 65535, 0, "px",           "mode width; 0 = the desktop mode" },
-        { "mode.h",          "i32",  0, 65535, 0, "px",           "mode height; 0 = the desktop mode" },
-        { "mode.refresh_num","i32",  0, 2147483647.0, 0, "Hz",    "refresh numerator; 0 = the desktop mode" },
-        { "mode.refresh_den","i32",  0, 2147483647.0, 1, "",      "refresh denominator" },
-        { "windowed",        "bool", 0, 1, 0, "",                 "a window instead of borderless fullscreen" },
-        { "window_w",        "i32",  0, 65535, 800, "px",         "window width" },
-        { "window_h",        "i32",  0, 65535, 600, "px",         "window height" },
-        { "backend",         "enum", 0, 8, 0, "",                 "0 auto, 1 dxgi_flip, 2 composition, 7 sim, 8 custom" },
-        { "lead",            "f64", -1, 0.999, 0.5, "frame",      "snap window; -1 = never before the target" },
-        { "display_index",   "u32",  0, 4294967295.0, 0, "",      "display number in the flip records" },
-        { "patch.on",        "bool", 0, 1, 0, "",                 "draw the photodiode patch" },
-        { "patch.size",      "i32",  0, 4096, YSCR_PATCH_DEFAULT_SIZE, "px", "patch side" },
-        { "patch.corner",    "enum", 0, 3, 0, "",                 "0 top left, 1 top right, 2 bottom left, 3 bottom right" },
-        { "show_cursor",     "bool", 0, 1, 0, "",                 "keep the cursor visible in fullscreen" },
-        { "abort_keys.off",  "bool", 0, 1, 0, "",                 "no key combination aborts the frame loop" },
-        { "abort_keys.key",  "u32",  0, 4294967295.0, 27, "",     "SDL keycode of the abort combination; 0 = Esc" },
-        { "abort_keys.mods", "u32",  0, 255, 1, "",               "modifiers held: 1 shift, 2 ctrl, 4 alt, 8 gui, 128 none; 0 = shift" },
-        { "panic",           "bool", 0, 1, 0, "",                 "arm the panic watchdog in fullscreen (Windows)" },
-        { "panic_presses",   "i32",  0, 16, 3, "",                "abort presses that end a hung program" },
-        { "panic_window_ns", "i64",  0, 6e10, 2e9, "ns",          "the time those presses must fall in" },
-        { "panic_grace_ns",  "i64",  0, 6e11, 1e10, "ns",         "no panic this long after the frame loop reported an abort" },
-        { "icon_sdl",        "bool", 0, 1, 0, "",                 "keep SDL's window icon instead of the header's" },
-        { "d3d11_video",     "bool", 0, 1, 0, "",                 "D3D11 device with video support and multithread protection" },
-        { "gamepads",        "bool", 0, 1, 0, "",                 "start SDL's gamepad subsystem and open every gamepad" },
-        { "raw_mice",        "bool", 0, 1, 0, "",                 "read each mouse's Raw Input on a thread: per device, raw-timed (Windows)" },
-        { "key_dedup_ns",    "i64", -1, 1e9, 0, "ns",             "drop a key's second report within this time; 0 = 50 ms, -1 = off" },
-        { "onset_offset_ns", "i64", -1e9, 1e9, 0, "ns",           "added to every onset; from the photodiode test" },
-        { "min_tier",        "i32",  0, 3, 0, "",                 "flag flips whose tier is worse; 0 = off" },
-        { "depth",           "i32",  0, 8, 0, "vblank",           "vblanks from a present to its flip; 0 = from the path, else pinned" },
-        { "depth_learn",     "bool", 0, 1, 0, "",                 "let misses raise the depth (adds latency; not with a pin)" },
-        { "settle",          "enum", 0, 3, 0, "",                 "settling at open: 0 auto (strict fullscreen, warn window), 1 strict, 2 warn, 3 off" },
-        { "settle_flips",    "i32",  0, 64, 6, "frame",           "clean flips in a row that settle the start" },
-        { "settle_min_ns",   "i64", -1, 6e10, 0, "ns",            "settle no sooner; 0 = 2.5 s in a window, none fullscreen; -1 = none" },
-        { "settle_max_ns",   "i64",  0, 6e10, 3000000000.0, "ns", "the settle cap from the open() call; 0 = 3 s fullscreen, 4 s window" },
-        { "x11_override_redirect", "bool", 0, 1, 0, "",           "Linux X11 fullscreen: an override-redirect window with the keyboard focus (flips under a compositor)" },
-        { "sim_period_ns",   "i64",  0, 1e10, 16666667, "ns",     "frame period of the simulated display" }
+        { "display",         "u32",  0, 4294967295.0, 0, "",      "SDL display id; 0 = the primary display", NULL },
+        { "mode.w",          "i32",  0, 65535, 0, "px",           "mode width; 0 = the desktop mode", NULL },
+        { "mode.h",          "i32",  0, 65535, 0, "px",           "mode height; 0 = the desktop mode", NULL },
+        { "mode.refresh_num","i32",  0, 2147483647.0, 0, "Hz",    "refresh numerator; 0 = the desktop mode", NULL },
+        { "mode.refresh_den","i32",  0, 2147483647.0, 1, "",      "refresh denominator", NULL },
+        { "windowed",        "bool", 0, 1, 0, "",                 "a window instead of borderless fullscreen", NULL },
+        { "window_w",        "i32",  0, 65535, 800, "px",         "window width", NULL },
+        { "window_h",        "i32",  0, 65535, 600, "px",         "window height", NULL },
+        { "backend",         "enum", 0, 8, 0, "",                 "the presenting path; open() refuses the stubs wayland, metal",
+          "auto=0,dxgi_flip=1,composition=2,glx_oml=3,wayland=4,metal=5,web=6,sim=7,custom=8" },
+        { "lead",            "f64", -1, 0.999, 0.5, "frame",      "snap window; -1 = never before the target", NULL },
+        { "display_index",   "u32",  0, 4294967295.0, 0, "",      "display number in the flip records", NULL },
+        { "patch.on",        "bool", 0, 1, 0, "",                 "draw the photodiode patch", NULL },
+        { "patch.size",      "i32",  0, 4096, YSCR_PATCH_DEFAULT_SIZE, "px", "patch side", NULL },
+        { "patch.corner",    "enum", 0, 3, 0, "",                 "the patch's corner", "top_left=0,top_right=1,bottom_left=2,bottom_right=3" },
+        { "show_cursor",     "bool", 0, 1, 0, "",                 "keep the cursor visible in fullscreen", NULL },
+        { "abort_keys.off",  "bool", 0, 1, 0, "",                 "no key combination aborts the frame loop", NULL },
+        { "abort_keys.key",  "u32",  0, 4294967295.0, 27, "",     "SDL keycode of the abort combination; 0 = Esc", NULL },
+        { "abort_keys.mods", "u32",  0, 255, 1, "",               "modifiers held: 1 shift, 2 ctrl, 4 alt, 8 gui, 128 none; 0 = shift", NULL },
+        { "panic",           "bool", 0, 1, 0, "",                 "arm the panic watchdog in fullscreen (Windows)", NULL },
+        { "panic_presses",   "i32",  0, 16, 3, "",                "abort presses that end a hung program", NULL },
+        { "panic_window_ns", "i64",  0, 6e10, 2e9, "ns",          "the time those presses must fall in", NULL },
+        { "panic_grace_ns",  "i64",  0, 6e11, 1e10, "ns",         "no panic this long after the frame loop reported an abort", NULL },
+        { "icon_sdl",        "bool", 0, 1, 0, "",                 "keep SDL's window icon instead of the header's", NULL },
+        { "d3d11_video",     "bool", 0, 1, 0, "",                 "D3D11 device with video support and multithread protection", NULL },
+        { "gamepads",        "bool", 0, 1, 0, "",                 "start SDL's gamepad subsystem and open every gamepad", NULL },
+        { "raw_mice",        "bool", 0, 1, 0, "",                 "read each mouse's Raw Input on a thread: per device, raw-timed (Windows)", NULL },
+        { "key_dedup_ns",    "i64", -1, 1e9, 5e7, "ns",           "drop a key's second report within this time; 0 = 50 ms, -1 = off", NULL },
+        { "onset_offset_ns", "i64", -1e9, 1e9, 0, "ns",           "added to every onset; from the photodiode test", NULL },
+        { "min_tier",        "i32",  0, 3, 0, "",                 "flag flips whose tier is worse; 0 = off", NULL },
+        { "depth",           "i32",  0, 8, 0, "vblank",           "vblanks from a present to its flip; 0 = from the path, else pinned", NULL },
+        { "depth_learn",     "bool", 0, 1, 0, "",                 "let misses raise the depth (adds latency; not with a pin)", NULL },
+        { "settle",          "enum", 0, 3, 0, "",                 "settling at open; auto: strict fullscreen, warn in a window",
+          "auto=0,strict=1,warn=2,off=3" },
+        { "settle_flips",    "i32",  0, 64, 6, "frame",           "clean flips in a row that settle the start", NULL },
+        { "settle_min_ns",   "i64", -1, 6e10, 0, "ns",            "settle no sooner; 0 = 2.5 s in a window, none fullscreen; -1 = none", NULL },
+        { "settle_max_ns",   "i64",  0, 6e10, 3000000000.0, "ns", "the settle cap from the open() call; 0 = 3 s fullscreen, 4 s window", NULL },
+        { "x11_override_redirect", "bool", 0, 1, 0, "",           "Linux X11 fullscreen: an override-redirect window with the keyboard focus (flips under a compositor)", NULL },
+        { "sim_period_ns",   "i64",  0, 1e10, 16666667, "ns",     "frame period of the simulated display", NULL }
     };
     if (n) *n = (int)(sizeof table / sizeof table[0]);
     return table;

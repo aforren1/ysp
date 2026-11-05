@@ -13,10 +13,11 @@ typedef struct aep_api {
     void (*close)(yaep_gp*);
     const char* (*error)(const yaep_gp*);
     int (*save)(const yaep_gp*, void*, size_t);
+    const yaep_param* (*params)(int*);
 } aep_api;
 
 static const aep_api g_aep_api = {
-    yaep_open, yaep_open_saved, yaep_close, yaep_error, yaep_save
+    yaep_open, yaep_open_saved, yaep_close, yaep_error, yaep_save, yaep_params
 };
 
 #ifdef YAEP_ASYNC
@@ -38,6 +39,10 @@ int main(void) {
     if (g_aep_api.open_saved(&g, NULL, NULL, 0)) return 2;
     if (g_aep_api.save(&g, NULL, 0) >= 0) return 3;
     if (g_aep_api.error(&g)[0] == '\0') return 4;
+    {
+        int n = 0;
+        if (!g_aep_api.params(&n) || n < 1) return 7;
+    }
     g_aep_api.close(&g);
 #ifdef YAEP_ASYNC
     {

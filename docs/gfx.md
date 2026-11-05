@@ -3325,6 +3325,17 @@ index) survived the first run: SIM's records came before a newer copy
 waited, so no record could go astray. A frame with another frame's record
 in its `done` list now checks it.
 
+On 2026-10-22 the threaded case (every frame, 3 slots) failed under load
+with no fault in the header. It ran 40 frames and wanted 10 written, but
+the writer is a normal thread: it wrote 15 of 40 when it kept up and 8
+or 9 with 128 busy threads on 16 logical processors (6 of 20 runs
+failed). Now the frames run on until 10 are written, and the case fails
+at 4000 frames. Frames 0 to 2 fill the 3 slots and frame 3 drops whatever
+the writer does, so `dropped >= 1` and `busy_max == 3` stay exact. Under
+the same load: 0 of 20 runs failed, 40 to 105 frames. Mutants `cp-18`
+(no slot comes back from the writer) and `cp-19` (a slot comes back
+before the writer is done) check the case.
+
 ### Builds
 
 MSVC 19.44 (msvc-full: the test, the compile checks as C11 and C++17, the
@@ -3944,3 +3955,728 @@ SEE", show the bands and the two dither patterns.
   programs' GPU time on renderers other than the Iris Xe.
 - Curve runs on real fonts against an exact reference: the pixel tests use
   the test builder's glyphs; the probe's font tables are not repeated.
+
+## v0.15.1: costs on the real clock
+
+On ysp/rt.h's virtual clock (rt.h v0.9.0) `yrt_now_ns()` stands still
+between waits, so the program cache's open and store times and a text's
+build time read 0 in a `--sim` run. They are costs, so they read
+`yrt_real_ns()`, the real counter on either clock. `gfx_text --sim`
+then prints 5 ms for Segoe UI's 95 glyphs and 171 ms for Microsoft YaHei's
+1728 (Windows 11 test laptop, MSVC 19.44 Release, 2026-10-14). Shader time
+stays on `yrt_now_ns()`: it is a stimulus time.
+
+## v0.16.0: every stimulus field in a table
+
+The experiment loader checks a stimulus's keys and the designer builds
+its panels from the parameter tables ([rig_spec.md](rig_spec.md),
+principle 8; gap G6 of [experiment_format.md](experiment_format.md)).
+`ygfx_params()` listed the bindable floats only. A definition also sets
+`shape`, `edge`, `aperture`, `place` and the other fields that are not
+floats, and nothing listed them or their values.
+
+### Decision: the `values` field on `ygfx_param`, and a second table
+
+| Option | For | Against |
+|---|---|---|
+| A new struct in the shared shape (`name` to `doc`, then `values`) for an enum table | The exact shape of the new tables | No `offset` and no `kinds`. The loader needs `kinds` to know that `aperture` is a key of a grating and not of a gabor; the float table has it and the new one would not |
+| Enum rows appended to `ygfx_params()` | One table | `YGFX_P_COUNT`, the `YGFX_P_*` indices and `ygfx_apply()` assume every row is a float. A binding to an enum row would write a float into a `uint16_t` |
+| **`values` added as the last field of `ygfx_param`, and a new table `ygfx_enum_params()` of that type** (chosen) | One row type for every gfx table, with `offset` and `kinds`. `values` is last, as in the shared shape, so its first seven fields are the shared shape's. Code that reads the tables compiles unchanged. The float tables keep their indices and their meaning | `ygfx_param` grew 8 bytes (an ABI change, so a minor version). A positional initializer of a `ygfx_param` outside the header gets `values` NULL, and g++ `-Wextra` warns about it; none exists in the repository |
+
+`ygfx_desc_params()` (the gfx's own desc: `units`, `dither`, `output`,
+`stereo`, `cones`) returns `yscr_param`, ysp/screen.h's struct, which had
+no `values` in this version, so its enum values stayed in the doc text.
+v0.17.0 gives them `values` (below).
+
+### The rows
+
+21 rows, indexed by `YGFX_E_*`:
+
+| Rows | Type | Field |
+|---|---|---|
+| `place`, `anchor` | enum, `center=0` to `bottom_right=8` | `place`; `anchor` sets `ax` and `ay` |
+| `shape` | enum, all 18 `ygfx_shape_kind` values | `shape`, SHAPE |
+| `aperture` | enum, `rect=0` to `mask_tex=7` (the apertures of v0.1) | `shape`, GRATING, NOISE, USER |
+| `aperture` | enum, `rect=0,circle=1,no_aperture=6`, default `no_aperture` | `shape`, DOTS |
+| `edge`, `stroke_align` | enum | `edge`, `stroke_align` |
+| `join`, `cap`, `blend` | enum | SHAPE; `blend` also TEXT |
+| `square`, `dist` | bool, enum | both `wave`: GRATING, NOISE |
+| `octaves` | i32, 1 to 8 | `gn_octaves` |
+| `dash_snap` | bool | `dash_snap` |
+| `modulation`, `linear`, `add`, `premultiplied`, `coverage`, `aliased`, `rays` | bool | a `YGFX_STIM_*` flag: IMAGE, and TEXT for the last two |
+
+Names are the desc fields, so `aperture` and `square` are the keys a
+definition writes, not the stimulus fields (`shape`, `wave`) that hold
+them. `aperture` has two rows because a dot field takes three apertures
+and has another default. No kind reads two rows of one name; a loader
+looks a key up with the stimulus's kind.
+
+`ygfx_enum_get()` and `ygfx_enum_set()` read and write a row on a
+stimulus. The loader then needs no knowledge of the field widths, the
+flag bits or the nine anchor points: it finds the row by name and kind,
+the value by name in `values`, and calls `ygfx_enum_set()`, which refuses
+a kind that the row does not take and a value that it does not list. The
+`offset` of a flag row is that of `flags` and of `anchor` that of `ax`;
+the doc names the flag.
+
+Not in a table: the desc pointers (`fx`, `paint`, `prims`, `path`,
+`palette`, `items`, `vertices`) and the enums of the structs they point to
+(`ygfx_paint.kind` and `.space`, `ygfx_prim.shape` and `.op`). The
+definition format (version 1) has no key for them.
+
+### Tests
+
+`test_enum_params()` in the CPU half of `tests/adapt/gfx_test.c`:
+
+- Each row's `offset` and `kinds` equal the test's own list, taken from
+  the descs that have the field.
+- For each kind that reads a row, the stimulus from a zero desc
+  (`ygfx_shape()` to `ygfx_user()`, `ygfx_crun()` without a gfx) holds the
+  row's default, read by `ygfx_enum_get()` and by the test from the field.
+- Every value from min - 1 to max + 1: a listed value lands in the field
+  and is read back, and setting the default again gives the zero desc's
+  stimulus byte for byte; any other value, and every kind the row does not
+  take, is refused and changes nothing.
+- An enum row lists every value of its C enum (the aperture rows: their
+  stated sets), in order, with the enum's own names, and its `max` is the
+  last value. The names come from a `switch` without a `default` in the
+  test, so gcc and clang (`-Wall -Werror`, as CI builds) stop when an enum
+  gains a value, and the check fails until the row lists it.
+- The float tables: `values` NULL and type `f32` in every row.
+
+Checked on 2026-10-21: 21 rows, 46 row and kind pairs, with MinGW-w64
+gcc 16.1 (`-Werror`), MSVC 19.44 (`msvc-full`, ctest 89 of 89) and gcc
+11.4 on WSL2; the CI `--sim` list passes. Mutants `en-01` to `en-08`
+(CPU half only, `YGFX_TEST_PARTS=none`) caught, 8 of 8.
+
+## v0.17.0: values in the desc table
+
+Every ysp parameter table has one row shape: `name`, `type`, `min`, `max`, `def`, `unit`, `doc`, `values` ([conventions.md](conventions.md), "Parameter tables"; gap G6 of [experiment_format.md](experiment_format.md)). ysp/screen.h v0.9.0 gave `yscr_param` its `values`, so
+`ygfx_desc_params()` fills it:
+
+| Row | values |
+|---|---|
+| `units` | `px=0,deg=1` |
+| `dither` | `none=0,ordered=1,noise=2` |
+| `output` | `out_8=0,out_10=1,out_mono_pp=2,out_color_pp=3` |
+| `stereo` | `mono=0,side_by_side=1,row_interleaved=2,frame_sequential=3` |
+| `cones` | `ss2=0,ss10=1` (ysp/color.h's `ycol_cones`) |
+
+`output` and `stereo` listed 0 only, with `max` 0, because `open()`
+takes `OUT_8` and `MONO` only. Now they list every value of the C enum
+and `max` is the last one; the doc says what opens. The list follows the
+C enum, as `backend`'s in ysp/screen.h does.
+`output`'s names keep `out_`: the enum's suffix after `OUT_` is `8` or
+`10`, and a name never starts with a digit, so that a loader can tell a
+name from a number.
+
+`test_desc_params()` in the CPU half of `tests/adapt/gfx_test.c` checks
+each row against its `ygfx_desc` field and the names against `switch`es
+without a `default`, and opens a gfx on a SIM screen with the null
+backend and a zero desc: `max_draws` is 1024 there, the other defaults
+are 0. 2 of 2 new mutants killed (`tests/mutate/gfx.toml`, pv-).
+
+## v0.17.1: font paths that do not fit
+
+gcc refused `ygfx_text_make()` under `-Werror` at -O1, -Os and -Og:
+
+    include/ysp/gfx.h:12373:54: error: '%s' directive output may be
+    truncated writing up to 511 bytes into a region of size between 398
+    and 400 [-Werror=format-truncation=]
+        snprintf(tried + u, sizeof tried - u, "%s%s", u ? ", " : "", path);
+
+| Compiler | -O0 | -O1 | -O2 | -O3 | -Os | -Og |
+|---|---|---|---|---|---|---|
+| gcc 11.4 (WSL2, Ubuntu 22.04), C99, C11, C++17 | clean | warns | clean | clean | warns | warns |
+| MinGW-w64 gcc 16.1, C11 | | warns | clean | clean | warns | warns |
+| MinGW-w64 gcc 16.1, C11, `-D_FORTIFY_SOURCE=2` | | clean | clean | clean | clean | clean |
+| clang 11 (WSL2), C99, C11, C++17 | clean | clean | clean | clean | clean | |
+
+The warning is right: the error message's list of the paths tried
+(`tried`, 400 bytes) cut a path of 398 bytes or more without a mark.
+Next to it was a real defect that no compiler named. The path itself
+was cut to 511 bytes by `snprintf()` and then opened, so a path of 512
+bytes or more opened another file, its first 511 bytes.
+
+The fix:
+
+- A path that does not fit its 511 bytes is not opened (YGFX_ERR_IO,
+  "no font file opened").
+- `ygfx__tried_add()` appends to the list by length and `memcpy()`. A
+  path that does not fit is cut and ends in "...". gcc sees the lengths,
+  so it has nothing to warn about. No pragma.
+
+A path that fits gives the same bytes as before, error messages
+included.
+
+`test_v17_text_paths_cpu()` in the CPU half of `tests/adapt/gfx_test.c`
+runs on a SIM screen with the null backend. A missing font of 450 bytes
+gives YGFX_ERR_IO, and the message has its start and "...". It makes a
+file (not a font) whose path is exactly 511 bytes, in folders of 200
+bytes under the temporary folder. On Windows the path is extended-length
+(`\\?\`), past MAX_PATH. That path gives YGFX_ERR_FORMAT, so it opens.
+The same path with 1 more byte gives YGFX_ERR_IO, where v0.17.0 opened
+the 511-byte file and gave YGFX_ERR_FORMAT. Then the test removes the file
+and the folders. 2 of 2 new mutants killed on MSVC (`tests/mutate/gfx.toml`,
+tp-). CI's new `gcc-O1` entry (`linux-extra`) builds the tree at -O1, where
+the warning showed.
+
+## v0.17.2: text runs batched
+
+The problem ([Text: measured](#text-measured)): 500 one-word texts a
+frame, fullscreen at 60 Hz, missed 4 to 7 % of the frames in Python,
+MATLAB and Octave, with the host's work at p99 8.4 to 9.6 ms. Each text
+also took 3 of the 1024 default draw blocks, so the 342nd text of a frame
+failed ("pool or frame full").
+
+### Conditions
+
+The laptop of [av_probe.md](av_probe.md): i7-1360P, Iris Xe, internal
+panel 1920 x 1200 at 60 Hz, Windows 11 26200, AC, the Balanced power
+plan. ANGLE 2.1.25848 (D3D11), AUTO: COMPOSITION on the independent-flip
+path, depth 1. 2026-10-27, every run through the timing guard. The scene
+is the words scene of `tests/probe/vis/text_loop.py`: 500 one-word texts,
+3668 glyphs, Segoe UI at 28 px, 20 a row, each text one curve run with its
+items copied at each draw. `tests/probe/vis/text_gpu.c` draws the same
+scene from C, ysp/gfx.h with no binding, and `gfx_bench --only words`
+(examples/gfx/bench.c) draws it headless at 1920 x 1200 with frames back
+to back. Work is the record's DRAW phase, as in Text: measured.
+
+### The cause
+
+Fullscreen, ysp/gfx.h 0.17.1:
+
+| Run | Records | Missed (vblanks) | Work p50 / p99, ms | `ygfx_end()` p50 / p99, ms |
+|---|---|---|---|---|
+| C, 500 runs, 60 s | 3459 | 140 (143), 4.0 % | 1.68 / 5.05 | 1.55 / 4.82 |
+| C, the 3668 glyphs as one run, 30 s | 1801 | 1 (1) | 0.40 / 0.96 | 0.36 / 0.87 |
+| Python, 500 texts, 60 s | 3433 | 164 (166), 4.8 % | 2.89 / 8.45 | |
+
+- C misses as the hosts do, so the binding is not the cause. Python's
+  work is 1.2 ms more at the median than C's.
+- The misses follow the time of `ygfx_end()`, which submits the frame's
+  draws through ANGLE. It took 1 to 2 ms in most frames and 4 to 5 ms in
+  13 % of them (a second mode, cause not traced). Frames whose `ygfx_end()`
+  took 4 ms or more missed 111 of 450 times; the others 29 of 3009.
+- The draws themselves (`ygfx_begin()` and 500 `ygfx_draw()` calls) took
+  0.10 ms at the median: the cost is in the submission, 500 instanced
+  draws, each with its own block range and item offset.
+- The same glyphs as one run missed 1 frame of 1801 (frame 0 to 29): the
+  glyphs' GPU work alone is not the cause. A timer query around the frame's GPU work (`--gpu`, a
+  diagnostic: GL_EXT_disjoint_timer_query, TIME_ELAPSED from
+  `ygfx_begin()` to `ygfx_end()`, read 4 frames later) gave 9.2 ms p50 for
+  500 runs, 9.9 ms for one run and 3.1 ms for 100 runs. With a timed
+  `glFinish()` after `ygfx_end()` (`--finish`), the GPU finished the
+  frame 9.7 ms p50 after `ygfx_end()` returned. So the GPU did most of the
+  frame's work after the CPU had submitted it, and the CPU's submission
+  and the GPU's work add up in the frame: a 4 to 5 ms submission plus
+  about 9 ms of GPU work plus the present call is near the 16.7 ms.
+- Headless with frames back to back, the GPU took less: 5.5 ms over an
+  empty frame for 500 runs, 2.7 ms for one run (below). Why the GPU took
+  about 9 ms on screen was not traced; its clock was not read.
+
+`gfx_bench --only words`, headless, 25 rounds of 12 frames interleaved;
+GPU and CPU over an empty frame, the median of the rounds:
+
+| Workload | 0.17.1 GPU, ms | 0.17.1 CPU, us | 0.17.2 GPU, ms | 0.17.2 CPU, us |
+|---|---|---|---|---|
+| 100 runs | 1.14 | 501 | 0.45 | 85 |
+| 500 runs | 5.50 | 2634 | 2.03 | 324 |
+| 500 runs of 1 glyph each | 3.66 | 2468 | 0.54 | 249 |
+| 500 runs off the screen (no fragment) | 2.84 | 2219 | 0.43 | 365 |
+| 500 runs, `.rays` | 4.68 | 2211 | 1.82 | 329 |
+| the 3668 glyphs as one run, items copied | 2.71 | 53 | 1.99 | 116 |
+| the same in a buffer | 2.67 | 30 | 1.79 | 35 |
+| the same as one run, `.rays` | 2.28 | 71 | 1.61 | 69 |
+
+Each 0.17.1 run cost about 4.4 us of CPU and 5.7 us of GPU as a draw of
+its own (500 runs off the screen: 2.2 ms and 2.8 ms, with no pixel
+drawn). The one-run rows differ between the two sessions (2.71 against
+1.99 ms) with no change to their path: compare within a column, not
+across. A first bench session the same day had empty frames 3 times as
+slow (1.90 ms against 0.59) and is not used. Paced by a `glFinish()`
+after each frame, 500 runs' `ygfx_end()` took 2.42 / 3.86 ms (p50 / p99)
+in 0.17.1 and 0.49 / 0.82 ms in 0.17.2; one run 0.30 / 0.43 and 0.36 /
+0.73 ms.
+
+### The fix
+
+- A run without YGFX_I_COLOR is one block. Blocks 2 and 3 hold the
+  palette only, so a run without one does not need them. The default
+  `max_draws` now holds 1024 such runs a frame.
+- Runs drawn one after another in a pass share one instanced draw, up to
+  16 (`ygfx__text_batch()` in `ygfx_end()`), when each is one block and
+  they have the same program, set, blend and aliased flag, and their
+  items follow each other in one buffer. Items copied at each draw always
+  do; runs from one buffer do when their ranges meet. A run's item count
+  is in its block (vec4 4, w). The vertex stage finds an instance's run
+  as the first whose count the instance index does not reach, at most 16
+  reads of the stim block. The fragment stage reads the set's texture
+  width, the cap, e and the aliased flag from the first block, which is
+  why those must agree.
+- The aliased flag is compared because two `.rays` runs, one aliased,
+  take the same program.
+- The reorder does not move a run, as before (an instanced draw's bounds
+  are the whole pass).
+- Not done: runs with a palette (3 blocks) stay a draw each; a text with
+  a colored span has one.
+
+After, fullscreen, ysp/gfx.h 0.17.2 (Python: ysp-vis built from this
+tree):
+
+| Run | Records | Missed (vblanks) | Of them in frames 0 to 29 | Work p50 / p99, ms | `ygfx_end()` p50 / p99, ms |
+|---|---|---|---|---|---|
+| C, 500 runs, 60 s | 3601 | 1 (1) | 1 | 0.57 / 1.43 | 0.47 / 1.16 |
+| Python 3.12, 500 texts, 60 s | 3586 | 15 (16), 0.4 % | 6 | 0.77 / 1.80 | |
+| Python 3.12, 100 texts, 60 s | 3601 | 1 (1) | 0 | 0.49 / 1.09 | |
+| MATLAB R2023a, 500 texts, 60 s | 3584 | 17 (18), 0.5 % | 14 | 0.95 / 2.08 | |
+| Octave 10.1, 500 texts, 60 s | 3589 | 12 (13), 0.3 % | 10 | 1.16 / 2.44 | |
+
+- Most misses that remain are at a run's start (frames 0 to 29). After
+  it, Python missed 9 frames in a minute, MATLAB 3 and Octave 2, each
+  with 0.6 to 2.4 ms of work; their cause was not traced. Before, 500
+  words missed 156 to 244 frames a minute in these hosts (Text:
+  measured, an earlier session).
+- The host's share: MATLAB 0.2 ms and Octave 0.4 ms over Python at the
+  median, Python 0.2 ms over C.
+- The timer query on 0.17.2's 500 runs gave 9.0 ms p50: the GPU's work
+  is the glyphs' and did not change. That is the budget left: on this
+  machine 500 one-word texts at 28 px take about 9 ms of GPU a frame on
+  screen. More text, larger text or another GPU can still miss; a page of
+  static text belongs in a target drawn once (CURVE RUNS).
+
+### Tests
+
+`gl_v06_text()` in `tests/adapt/gfx_test.c`, on ANGLE D3D11 on the Iris
+Xe (MSVC, and MinGW gcc 16.1 with CI's `-Werror` flags), ANGLE's WARP and
+SwiftShader, and Mesa llvmpipe (WSL2, gcc 11.4, `-Werror`):
+
+- 40 runs of one item each, each with its own opacity, against the same
+  40 items in one run with the opacity in their contrast: 0 difference,
+  batched (3 draws), one draw each (`max_batch` 1, 40 draws) and in call
+  order (reorder off), on the exact-area program and on `.rays`.
+- Runs from one buffer with gaps (every other item) against one run of
+  those items: 0. `.rays` runs aliased every other one, batched against
+  one draw each: 0.
+- 40 runs take 40 blocks; 1024 runs draw at the default `max_draws` and
+  the 1025th is refused.
+
+The bindings: `test_a_thousand_texts_a_frame` in
+`bindings/python/ysp_vis/tests/test_text_sim.py` (1024 texts in a frame,
+the 1025th refused; it fails on 0.17.1), and the same 2 checks in
+`bindings/mex/test_mex_vis_text.m` (55 checks in MATLAB R2023a, 54 in
+Octave 10.1). 7 new mutants (`tests/mutate/gfx.toml`, tb-): 7 of 7
+killed on the Iris Xe.
+
+## Bindings
+
+`ysp/gfx.h` is bound in `ysp-vis` with `ysp/screen.h` and `ysp/video.h`
+(Python `ysp.gfx`, MEX `ysp_gfx`; [bindings.md](bindings.md#display-stimuli-movies-ysp-vis)).
+Phase A (2026-10-27) bound a gfx with a background and filled rectangles.
+Phase B (2026-10-27, `ysp-vis` 0.10.1.1, MEX 1.1.0) binds the stimuli
+for a PsychoPy or Psychtoolbox user. The host-independent part is
+`bindings/share/ysp_vis_gfx.h`; `bindings/python/ysp_vis/vis_gfx.c` and
+`bindings/mex/ysp_vis_gfx.inc` turn host values into it. The references
+are [the Python README](../bindings/python/ysp_vis/README.md#stimuli-yspgfx)
+and [the MEX README](../bindings/mex/README.md#ysp_gfx).
+
+### What is bound
+
+- **Stimuli** as objects the binding owns: shapes (rect, circle, annulus,
+  line, polygon, cross, rrect, arc, pie, capsule, ngon, star, ellipse,
+  qbezier, polyline), gratings, gabors, noise (uniform, binary, Gaussian,
+  simplex), images of textures (from NumPy arrays or MATLAB matrices,
+  8-bit values linear or sRGB), dot fields and instances. A `ygfx_stim`
+  holds pointers (a path, the elements, a palette, a group) that must stay
+  valid while it is drawn; each one points into memory the binding owns.
+  A maker fills the constructor's desc with what the constructor reads
+  (the box, the shape and its parameters, the vertices, the path, the
+  texture), so what it derives is the C path's: `h` 0 is `w`, a polygon's
+  box is its vertices' extent, a star's inner ratio 0 is 0.5, a gabor's box
+  is 8 sigma. The rest is set by name after it, so `contrast=0` is 0, not
+  the desc's default 1.
+- **Parameters by name**, from the header's tables (`ygfx_params()`,
+  `ygfx_enum_params()`): every float field, the enums by their names
+  (`edge="gaussian"`), the vectors (`color`, `dir`, `tint`, `src`,
+  `shape_p`, `trim`), `anchor` as a name or `(ax, ay)`, and the shape
+  parameters by their meaning per kind (`radius`, `inner`, `sweep`,
+  `points`, ...). A name the kind does not read is refused, so a typo is
+  an error, not a field that nothing reads. `params(kind)` lists them.
+- **Units and color**: the gfx's units (`px`, or `deg` with the viewing
+  geometry); colors are linear device RGB, or any ysp/color.h space
+  through the gfx's color context (`space=`, a hex sRGB color,
+  `color()` and `dir()`), which needs a calibration (`cal=`, the bytes of a
+  .yspcal file or a `ysp.color.Calibration`).
+- **Batching**: draw lists (one call draws N stimuli in order), bulk sets
+  and gets of a list (`L.set("x", xs)`: one call for N values), groups,
+  and instances, whose elements are a float32 view in Python (NumPy writes
+  them, no call per element) and `'elements'` in MEX. `frame(*items)` is
+  begin, the bindings, the draws and end in one call, so a frame is three
+  calls (screen begin, gfx frame, screen flip) whatever the stimulus count.
+- **Timeline bindings** to channels of a `ysp.timeline.Timeline` (or a
+  `ysp_timeline` handle) through the owner's table: a stimulus's float
+  field (`color` takes three channels), a list (a channel per item or one
+  for all), a group's field, or elements of instances. The gfx writes them
+  with `ygfx_apply()` in its begin, so a tweened stimulus costs no host call
+  per frame; with `timeline(tl)` it also evaluates the timeline at the
+  screen frame's predicted onset. The gfx pins each timeline once and gives
+  the pin back when its last binding goes, at unbind, and at close.
+  Binding a field again replaces its binding.
+- **The open started while the screen settles**: `Screen(gfx={...})` and
+  `ysp_screen('open', ..., 'gfx', struct(...))` set the screen's
+  `desc.on_context` to a hook in C that calls `ygfx_open_start()`, so the
+  built-in programs compile during the settling (OPEN START); `Gfx(screen)`
+  finishes the open. The gfx primes its programs at open (`prime=False`
+  skips it) and uses the per-user program cache unless `cache=False`.
+- **Hit tests** (`ygfx_hit()`, `ygfx_hit_index()`; a list's topmost
+  visible item), bounds and anchors, **capture** to PPM files (no
+  callback: the writer is ysp/rt.h's thread, and nothing calls the host),
+  and the reads (`read_scene`, `read_output`) for tests.
+
+One gfx per screen stays: its output stage writes every pixel of the frame,
+so a second gfx would draw over the first. Nothing needed more.
+
+### What is not bound, and why
+
+- Text: bound in phase C ([Text](#text), below). Curve sets and curve runs
+  as objects of their own are not: a text makes and holds its own.
+- Compounds, effects (`fx`), paint (gradients), MSDF glyph runs, user
+  shaders, render targets, setup passes, blur and the LUT: each needs
+  memory or GL objects with a lifetime of its own (a primitive array, a
+  pipeline, a target that a stimulus samples), and no phase B experiment
+  needed them.
+- Video textures, planes and imports: ysp.video's.
+- Image files: ysp/gfx.h reads none (and ysp/pack.h decodes none); a host
+  reads the file (PIL, `imread`) and gives the pixels to `texture()`.
+- `on_frame` of capture: a host function on the writer thread.
+
+### Lifetime
+
+A Python stimulus, list, group or texture holds its `Gfx`, so the C gfx
+outlives them; when the gfx or its screen closes, a set, a draw or a hit
+test raises `ClosedError`, and a read gives the last value. In MEX,
+closing a gfx (or its screen, or the last clear) frees its objects and
+their handles, so a kept handle is refused (`ysp_gfx:handle`). `free`
+refuses a stimulus a list holds, a group or texture a stimulus uses
+(`ysp_gfx:busy`); a binding goes with its object. GL frees inside a frame
+wait for its end. The instances' `elements` view owns its memory, as the
+timeline's views do (timeline.md, "A view owns what it shows").
+
+### Tests
+
+On the simulated display (gfx's null backend draws nothing), in CI:
+`tests/test_gfx_sim.py` (22 tests) and `test_mex_vis_gfx.m` (105 checks).
+They check every shape kind and what its constructor derives, parameters
+by name and their refusals, lists and bulk sets, groups and hit tests,
+instances and the element view after its stimulus is gone, dot fields,
+textures, a tween bound to a gabor's contrast and position (the stimulus
+follows the channels each frame; a rewind replays the values bit for bit
+and a seek gives the first run's value), list, group and element
+bindings, the pins given back, the open started while the screen
+settles, capture on the null backend, and the lifetime rules. In a real
+window, local only (`YSP_VIS_WINDOW=1 pytest tests/test_window.py`,
+`test_mex_vis_window.m`): five stimuli made through the binding (a gabor,
+a grating in a cosine-edged circle, a stroked rounded rect, a star placed
+by its corner, binary noise) draw the same scene, bit for bit, as the same
+stimuli made with the constructors in C (`yv_gfx_c_scene()`), and
+instances match the same gabors drawn one by one within 2e-5.
+
+### Measured on the binding: N gabors and a bound tween for 10 minutes
+
+`tests/probe/vis/gfx_loop.py` and `gfx_loop_mex.m` (`gfx_run.sh`): N
+gabors (sigma 6 px, 48 px across) on a grid over the screen, as one
+DrawList of N stimuli or one instances stimulus of N elements; a
+`ysp.timeline` Timeline (a `ysp_timeline` handle in MEX) drives every
+gabor's contrast (a yoyo tween, 0.1 to 0.5 in 1 s) and phase (1 cycle/s)
+through `bind()`, and the gfx evaluates it at each frame's predicted onset.
+A frame is three calls whatever N: the screen's begin, `frame(scene)`,
+the screen's flip. The records are kept for the run (Python `f.done`; MEX
+a `'frame', 'row'` screen and the records matrix). The laptop of
+[av_probe.md](av_probe.md) (i7-1360P, Iris Xe, internal panel 1920 x 1200
+at 60 Hz, Windows 11 26200), fullscreen, AUTO (COMPOSITION), AC, every run
+through the timing guard (load 0 to 15 % at its start), ysp-vis 0.10.1.1
+(CPython 3.12.11) and MEX 1.1.0 (MATLAB R2023a, Octave 10.1), 2026-10-27,
+11:50 to 14:32. No photodiode: every tier is the record's. Work is the
+DRAW phase: from the return of `yscr_begin()` to the call of
+`yscr_flip()`, everything the host does in the frame through the binding.
+
+| Host | N, as | Records | Missed (vblanks) | Late target | Residual us p50 / p99 | Work ms p50 / p99 / max | Path; tier |
+|---|---|---|---|---|---|---|---|
+| Python 3.12 | 100, list | 36001 | 0 (0) | 1 | 4.3 / 111.4 | 0.30 / 0.78 / 4.65 | independent; t1 35919, t2 82 |
+| MATLAB R2023a | 100, list | 36002 | 0 (0) | 0 | 2.0 / 113.6 | 0.43 / 1.03 / 14.74 | independent; t1 35944, t2 58 |
+| Octave 10.1 | 100, list | 36000 | 1 (2) | 0 | 1.1 / 100.3 | 0.54 / 1.26 / 2.53 | independent; t1 35973, t2 27 |
+| Python 3.12 | 1000, list | 35998 | 2 (2) | 2 | 1.0 / 89.7 | 1.08 / 1.89 / 12.82 | independent; t1 35990, t2 8 |
+| MATLAB R2023a | 1000, list | 36000 | 2 (2) | 0 | 1.9 / 108.8 | 1.30 / 2.30 / 4.15 | independent; t1 35962, t2 38 |
+| Octave 10.1 | 1000, list | 36001 | 1 (1) | 0 | 1.4 / 106.8 | 1.71 / 2.58 / 6.18 | independent; t1 35977, t2 24 |
+| Python 3.12 | 100, instances | 36002 | 0 (0) | 0 | 2.2 / 116.8 | 0.28 / 0.63 / 2.43 | independent; t1 35949, t2 53 |
+| MATLAB R2023a | 100, instances | 36002 | 0 (0) | 0 | 2.0 / 116.5 | 0.41 / 0.88 / 4.78 | independent; t1 35943, t2 59 |
+| Octave 10.1 | 100, instances | 36002 | 0 (0) | 0 | 2.6 / 113.8 | 0.54 / 1.07 / 3.10 | independent; t1 35955, t2 47 |
+| Python 3.12 | 1000, instances | 36002 | 0 (0) | 0 | 1.0 / 93.1 | 0.29 / 0.69 / 2.25 | independent; t1 35975, t2 27 |
+| MATLAB R2023a | 1000, instances | 36002 | 0 (0) | 0 | 1.5 / 108.6 | 0.45 / 0.97 / 3.18 | independent; t1 35971, t2 31 |
+| Octave 10.1 | 1000, instances | 36002 | 0 (0) | 0 | 1.2 / 102.1 | 0.62 / 1.18 / 2.45 | independent; t1 35961, t2 41 |
+
+No frame was occluded. What the table shows:
+
+- **The host is out of the per-stimulus work.** With the stimuli in a list
+  or in instances, a frame is three calls, and the work grows with what C
+  does, not with host calls: 1000 instances cost what 100 do (one draw,
+  one bound template), and 1000 list items cost 0.8 to 1.2 ms more than
+  100 at the median (1000 draws packed, 2000 bindings written) in every
+  host. The host's own share is the difference between the hosts: 0.1 to
+  0.2 ms in MATLAB and 0.25 to 0.65 ms in Octave over Python.
+- **Against av_probe.md** (N = 100, a call per stimulus, fullscreen: work
+  p99 1.4 to 2.5 ms in Python 3.12, 2.8 ms in MATLAB, 5.1 ms in Octave):
+  100 stimuli in a list here have p99 0.78, 1.03 and 1.26 ms, and 1000
+  stimuli in a list 1.89, 2.30 and 2.58 ms, under the probe's 100. Every
+  p99 is under 2.6 ms against a 16.7 ms frame.
+- **Misses.** 6 frames missed in 432,014 records, each with host work
+  under 1.8 ms: the system's (Octave's frame 492 had 0.44 ms). The two
+  frames with host work over 8 ms dropped no vblank: MATLAB's frame 0
+  (14.7 ms, first-use costs) and one Python frame (12.8 ms at frame
+  17432, with `gc.freeze()` on; the cause was not traced), which its record
+  flags LATE_TARGET. The other late targets were Python's frame 0 (1.9 ms)
+  and one frame of 1.6 ms.
+- **Residuals** as in screen.md's minimal frame: p50 1 to 4 us, p99 90 to
+  117 us from stretches flagged GRID_UNSTABLE.
+
+### Measured: the open started while the screen settles
+
+`tests/probe/vis/gfx_open.py`: the time from `Screen()` to the end of
+`Gfx()` (prime included), the gfx opened after the screen (phase A's way)
+or started in the screen's hook (`Screen(gfx=...)`), with a cold program
+cache (an empty folder) and a warm one (the same folder again); 3 rounds.
+The i7-1360P laptop, Iris Xe, Windows 11, AC, the measurement lock held,
+ysp-vis 0.10.1.1 in CPython 3.12, 2026-10-27.
+
+| s from Screen() to a Gfx that draws | after, cold | started, cold | after, warm | started, warm |
+|---|---|---|---|---|
+| fullscreen | 2.50, 3.15, 3.25 | 2.28, 2.41, 3.00 | 0.65, 0.74, 0.77 | 0.69, 0.70, 0.71 |
+| 1280 x 720 window | 4.93, 9.76, 10.67 | 6.10, 6.15, 7.45 | 4.25, 4.29, 4.30 | 4.28, 4.29, 4.36 |
+
+With a cold cache the start in the hook saved 0.7 s fullscreen and 3.6 s
+in a window at the median; with a warm cache (the default after the first
+run on a machine) the two do not differ beyond the spread. A window took
+4.2 to 4.4 s warm, against the 2.5 s of settling the screen states; the
+rest was not traced. The 14 programs came from the cache in every warm
+open.
+
+### Text
+
+Phase C (2026-10-27, `ysp-vis` 0.10.2.1, MEX 1.2.0) binds text:
+`Gfx.font()` and `Gfx.text()` in Python, `ysp_gfx('font')` and
+`('text')` in MATLAB and Octave. The host-independent part is
+`bindings/share/ysp_vis_text.h`; `bindings/python/ysp_vis/vis_text.c` and
+`bindings/mex/ysp_vis_text.inc` turn host values into it. The references
+are [the Python README](../bindings/python/ysp_vis/README.md#text-yspgfx)
+and [the MEX README](../bindings/mex/README.md#text-in-ysp_gfx).
+
+**The layout is pack/layout's, not `ygfx_text_make()`'s.** The header's
+own text lays out by advances (no shaping, no kerning, no bidi) and makes a
+curve set per text; the binding takes the layout that the pack tool and the
+player use ([layout.md](layout.md): Skribidi with HarfBuzz 14.6.0, pinned
+and patched), so a text in Python or MATLAB is shaped, ordered and broken
+as the same text in a pack, and every script the fonts hold works. The
+glue (`ylay_`) gives each block as curve-run items over ysp/outline.h
+curve sets; the binding uploads new glyphs with `ygfx_cset_add()` after
+each layout, as `examples/layout/gfx_layout.c` does.
+
+**One module, the layout linked in.** The layout stack is built as static
+libraries by `tools/vendor_vis.py --layout` (`tools/vis_layout/CMakeLists.txt`,
+MSVC `/MD` for the wheel and MATLAB, Octave's MinGW gcc for Octave) and
+linked into the core. HarfBuzz builds without exceptions and RTTI, so
+neither module imports a C++ runtime (`dumpbin /dependents`: no
+`msvcp140.dll`; the Octave file links without `-lstdc++`). The cost in
+size, against phase B's build (MSVC 19.44, MinGW gcc of Octave 10.1):
+
+| File | Phase B | With text | Added |
+|---|---|---|---|
+| `ysp/_vis.pyd` (Python, abi3) | 3,376,128 | 4,874,752 | 1.50 MB |
+| the wheel (compressed) | 5,101,792 | 5,759,470 | 0.66 MB (13 %) |
+| `ysp_vis.mexw64` (MATLAB) | 3,332,608 | 4,830,720 | 1.50 MB |
+| `ysp_vis.mex` (Octave, stripped) | 4,525,568 | 6,501,888 | 1.98 MB |
+
+ANGLE's two DLLs are 8.6 MB beside these. Text as a separate optional
+module was not built: it would save at most these 1.5 to 2 MB, and a text
+must reach the gfx's curve sets, its object list, its lifetime and the
+frame's draw path, which a second module would take through another
+shared table (Sharing one implementation, [bindings.md](bindings.md)).
+The vendored sources are not in the wheel; `tools/vendor_layout.py`
+fetches them by commit and checks them file by file. Their license files
+ship beside the module.
+
+**No bundled font.** The default is the system's sans font (Segoe UI,
+else Arial: the files `ygfx_text_make()` takes on Windows, the only
+platform). A bundled file (Noto Sans and DejaVu Sans allow it) would be
+another pin and another license for a default that every Windows machine
+has; a text's `stamp` records the SHA-256 of the fonts it used, so a data
+file says which glyphs a participant saw.
+
+**A text is a stimulus.** A text is a `yv_stim` of its own kind whose
+`ygfx_stim` is its first run (one font at one size); a text with more
+runs (a fallback font, a span of another size) draws the others as copies
+of it with their run's set, items and size. Every run has the block's
+box, so they stay in register whatever the transform, and lists, bulk
+sets, timeline bindings (`x`, `y`, `ori`, `opacity`, `color`, `visible`,
+...) and hit tests take a text unchanged. Its own parameters (`text`,
+`font`, `size`, `width`, `align`, `line_height`, `dir`, `lang`, `spans`)
+lay it out again: between frames, never bound to a channel; a refused
+change restores the old parameters and layout. The box is the laid-out
+block, or the wrap box when `width` is set, placed by `place` and
+`anchor`. Spans with a color use the run's palette (`YGFX_I_COLOR`):
+entry 0 is the text's color, synced at each draw, so binding `color`
+still works.
+
+**Boxes for reading experiments.** `glyphs()` gives each glyph's
+character index, line and ink box (the curve set's glyph box times the
+size, at the pen); `words()` the runs of characters between white space,
+across from the leftmost glyph's pen to the next pen on the line to the
+right of its last glyph (the layout's advance, kerning included), down
+the line's box; `lines()` each line. All are screen px, axis-aligned,
+through the inverse of `ygfx_local()`. In a real window the drawn ink lay
+inside the glyph and word boxes (`test_text_window.py`).
+
+**Two limits found.**
+
+- `ygfx_prime()` right after a flip: in a window (composition) and
+  fullscreen (independent flip), on the Iris Xe with ANGLE 2.1.25848,
+  `Gfx.prime()` called after `Screen.flip()` and before the next
+  `begin()` or `wait_flip()` blocked for 18.4 s, 19.6 s, 40.8 s and 51.4 s
+  in four windowed runs, and for more than 300 s (ended by a timer) in one
+  windowed and one fullscreen run; after `wait_flip()`, or before any
+  frame, it took 1 to 3 ms, and a second prime after a slow one 2 to 3 ms.
+  Repro: open a screen, draw one frame, flip, sleep 1 s (or draw 60 more
+  frames), then `g.prime()`. The cause was in ysp/screen.h, fixed in
+  v0.10.3 (docs/screen.md, "Between frames"): on COMPOSITION the shown
+  buffer stayed framebuffer 0 after a flip, and the prime's output pass
+  drew into it, which waited until the frame left the screen. The binding
+  called `yscr_wait_flip()` before it primed the text program; since
+  v0.10.3 it does not.
+- `YGFX_MAX_CSETS` is 8 in the header, and a binding's text needs a set
+  per font file of each fallback list. The core defines it as 32 before
+  it includes ysp/gfx.h (the header allows it: `#ifndef`); 32 sets cost
+  an array of 32 small records in `ygfx_gfx`.
+
+The first was a change of ysp/screen.h (v0.10.3), the second is none.
+
+### Text: what is not bound, and why
+
+- OpenType feature switches and a language per span: `ylay_style` and
+  `ylay_span` take neither (pack/layout v0.1.0); HarfBuzz's defaults
+  apply (kerning, ligatures, marks).
+- Vertical text, justification, color glyphs, Skribidi's editor (caret,
+  selection, IME): pack/layout has the editor; a typed response in a
+  host needs `yscr_text_input()` and a design of its own.
+- Outlines and faux bold (ysp/outline.h's strokes into a set of their
+  own), glow and soft shadows (BLUR: a render target and passes in the
+  frame), MSDF glyph runs, curve sets and runs as objects of their own:
+  not needed by the Stroop and reading examples; a hard shadow is a
+  second text, offset and recolored.
+- Curve-run fields per letter (`YGFX_I_*` for `y`, `gate`, `ori` per
+  glyph, GSAP-style staggers): a text's items are the layout's; a
+  per-letter animation needs a run of its own items, which the binding
+  does not expose.
+
+### Text: tests
+
+On the simulated display, in CI: `tests/test_text_sim.py` (13 tests) and
+`test_mex_vis_text.m` (53 checks in MATLAB R2023a, 52 in Octave 10.1,
+which has no UTF-16 surrogate check). They check fonts by path, bytes and
+fallback list (the SHA-256 against Python's hashlib; CJK missing in Segoe
+UI and present with YaHei after it), Arabic right to left, wrapping at a
+width (every word inside, the lines in order), spans and their refusals, a
+change of text between trials (no glyph built again), the refusal inside
+a frame and the restore after a refused change, glyph, word and line
+boxes inside the bounds, hit tests at each glyph's ink center (turned 90
+degrees too), lists, bulk sets and bindings of texts (`size` refused),
+degrees, empty text and newlines, non-ASCII strings in and out of MATLAB
+(UTF-16, an emoji as a surrogate pair) and Octave (UTF-8 bytes), with
+`strfind` giving the same indices as `words()`, and the lifetime rules (a
+Font outlives the texts that hold it; after the gfx or the screen closes,
+`ClosedError` and `ysp_gfx:handle`; `free` refuses a font in use).
+
+In a real window, local only (`YSP_VIS_WINDOW=1 pytest
+tests/test_text_window.py`, `test_mex_vis_window.m`): two texts made
+through the binding draw the same scene, bit for bit, as the same texts
+made in C with pack/layout and `ygfx_crun()` (`yv_ctext_setup()`): "Hello,
+world" in Segoe UI at 40 px; and Latin, CJK and Arabic from a Segoe UI
+and YaHei list, wrapped at 220 px, line height 1.2, a green span, turned
+20 degrees about its top-left. The ink drawn lies inside the boxes of
+`glyphs()` and `words()`; a text changed and changed back draws its first
+scene again.
+
+### Text: measured
+
+The laptop of [av_probe.md](av_probe.md) (i7-1360P, 4 P and 8 E cores,
+Iris Xe, internal panel 1920 x 1200 at 60 Hz, Windows 11 26200, AC),
+every run through the timing guard (load 0 to 20 % at its start),
+ysp-vis 0.10.1.2 (CPython 3.12) and MEX 1.2.0 (MATLAB R2023a, Octave
+10.1), 2026-10-27, 16:34 to 17:06. No photodiode: every tier is the
+record's. No timing tier is claimed for text.
+
+**A layout** (`tests/probe/vis/text_cost.py`, `text_cost_mex.m`, on the
+simulated display: CPU time). One text set alternately to two strings of
+its class whose glyphs are built, Segoe UI: the call (`t.text = s`;
+`ysp_gfx('set', t, 'text', s)`) and the layout's own `layout_time`
+(Skribidi and the conversion into runs). Python: per call, 3000 calls in
+3 rounds interleaved over the cases; MATLAB and Octave: the mean of 2000
+calls in one tic and toc (Octave's toc on Windows resolves about 1 ms),
+and `layout_time` per call from the C clock. Microseconds:
+
+| Text | Python call p50 / p90 | MATLAB call mean | Octave call mean | `layout_time` p50, Python / MATLAB / Octave |
+|---|---|---|---|---|
+| a word, 5 characters, 64 px | 2.6 / 2.7 | 9.8 | 13.3 | 2.0 / 4.6 / 6.3 |
+| a sentence, 44 characters, 32 px | 8.0 / 8.8 | 16.0 | 16.3 | 7.4 / 12.9 / 6.9 |
+| a paragraph, 520 characters, 20 px, wrapped at 600 px (8 lines) | 73.9 / 77.1 | 129.7 | 61.5 | 72.7 / 93.6 / 59.4 |
+| an Arabic sentence, 34 characters | 10.7 / 11.0 | 14.6 | 14.5 | 9.9 / 11.8 / 8.7 |
+
+The largest single call: 22 to 499 us for a word, 168 to 871 us for the
+paragraph. The same C work spread by up to 2 times between the runs (the
+first Python run, not interleaved: word 12.0 us, paragraph 78.2 us at the
+median), which this machine's P and E cores and clocks can explain; the
+cause was not traced. What it means: a word or sentence changed between
+trials costs 3 to 16 us of a 16.7 ms frame, a page 0.06 to 0.13 ms. The
+first layout of the paragraph in a font with no glyph built took 0.92 ms:
+0.26 ms layout, 0.55 ms building 29 glyphs, 0.07 ms uploading them.
+
+**Texts in a frame** (`tests/probe/vis/text_loop.py`, `text_loop_mex.m`,
+`text_run.sh`): 60 s fullscreen, AUTO (an independent flip), a frame is
+the screen's begin, `frame(scene)`, the screen's flip; work is the DRAW
+phase (the host's time from begin's return to the flip call). `words`:
+N one-word texts (6 to 9 letters, 28 px, Segoe UI) in one DrawList;
+`page`: one text of 520 characters, 20 px, wrapped at 600 px; `label`: 10
+words and a label laid out again every frame ("frame 123", inside the
+work).
+
+| Scene | Host | Records | Missed (vblanks) | Work ms p50 / p99 / max | Tier |
+|---|---|---|---|---|---|
+| 100 words | Python 3.12 | 3601 | 1 (1) | 0.99 / 2.29 / 2.74 | t1 all |
+| 100 words | MATLAB R2023a | 3601 | 1 (1) | 1.22 / 2.67 / 6.46 | t1 all |
+| 100 words | Octave 10.1 | 3602 | 0 (0) | 1.31 / 2.89 / 5.10 | t1 all |
+| 500 words | Python 3.12 | 3446 | 156 (156) | 3.65 / 8.43 / 12.03 | t1 all |
+| 500 words | MATLAB R2023a | 3426 | 176 (176) | 4.21 / 8.94 / 11.91 | t1 all |
+| 500 words | Octave 10.1 | 3357 | 244 (244) | 4.72 / 9.59 / 26.37 | t1 all |
+| a page | Python 3.12 | 3601 | 1 (1) | 0.39 / 0.92 / 1.49 | t1 all |
+| a page | MATLAB R2023a | 3602 | 0 (0) | 0.51 / 1.26 / 3.82 | t1 all |
+| a page | Octave 10.1 | 3602 | 0 (0) | 0.63 / 1.38 / 1.76 | t1 all |
+| label + 10 words | Python 3.12 | 3602 | 0 (0) | 0.51 / 1.23 / 3.52 | t1 all |
+| label + 10 words | MATLAB R2023a | 3602 | 0 (0) | 0.72 / 1.69 / 3.01 | t1 all |
+| label + 10 words | Octave 10.1 | 3602 | 0 (0) | 0.79 / 1.75 / 2.95 | t1 all |
+
+- 100 words, a page, and a label laid out every frame fit the frame in
+  every host: work p99 under 3 ms, at most one missed frame a minute.
+- 500 words missed 4 to 7 % of the frames in every host, with the
+  host's work at p99 8.4 to 9.6 ms. The cause was ysp/gfx.h's: 500 runs
+  were 500 instanced draws, whose submission in `ygfx_end()` (1 to 5 ms)
+  came before most of the frame's GPU work (about 9 ms). 500 texts were
+  also 1500 of the gfx's draw blocks: past 341 a frame, `max_draws` had
+  to be raised (the default 1024 refused item 341, "pool or frame full").
+  ysp/gfx.h 0.17.2 makes a run without a palette one block and draws up
+  to 16 runs in one draw: 500 words then missed 0.3 to 0.5 % of the
+  frames in every host, most at the run's start, with work p99 1.8 to
+  2.4 ms; see
+  [v0.17.2](#v0172-text-runs-batched). Text that does not move can
+  still go in one text (the page: 0.39 to 0.63 ms) or, static, in a
+  target drawn once (ysp/gfx.h CURVE RUNS: 0.5 ms a page), which the
+  binding does not expose.
+- The host's share is the difference between the hosts: MATLAB 0.1 to 0.6
+  ms and Octave 0.2 to 1.1 ms over Python at the median.

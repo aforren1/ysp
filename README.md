@@ -9,30 +9,31 @@ C11 or C++17, and its top comment is its manual.
 
 | Header | Prefix | Purpose | Version | Status |
 |---|---|---|---|---|
-| [rt](docs/rt.md) | `yrt_` | Clock, deadline waits, worker, pump, event ring, clock fit | 0.8.1 | 2 machines |
-| [parallel](docs/parallel.md) | `ypar_` | Parallel port trigger output and line input | 0.4.0 | no device |
-| [serial](docs/serial.md) | `yser_` | Serial port byte I/O for trigger and response boxes | 0.6.2 | 2 machines |
-| [trials](docs/trials.md) | `ytr_` | Trial orders, blocks, adaptive tracks, jitter, replay, a CSV row per trial | 0.4.1 | tested |
-| [table](docs/table.md) | `ytb_` | Typed tables and a bounded CSV parser | 0.2.0 | tested |
-| [pack](docs/pack.md) | `ypak_` | Read and verify ysp packs (store-only zip) | 0.2.0 | tested |
-| [json](docs/json.md) | `yjs_` | Strict JSON reader and canonical writer | 0.1.1 | tested |
-| [stair](docs/adapt.md) | `yst_` | Adaptive staircases | 0.2.0 | tested |
-| [quest](docs/adapt.md) | `yqst_` | QUEST+, QUEST, Psi and Psi-marginal on a grid | 0.6.0 | tested |
-| [aep](docs/adapt.md) | `yaep_` | Gaussian-process adaptive estimation (AEPsych features) | 0.15.0 | tested |
-| [timeline](docs/timeline.md) | `ytl_` | Events, tracks and keyframes on the clock | 0.7.0 | tested |
+| [rt](docs/rt.md) | `yrt_` | Clock, deadline waits, worker, pump, event ring, clock fit, virtual clock | 0.9.2 | 2 machines |
+| [parallel](docs/parallel.md) | `ypar_` | Parallel port trigger output and line input | 0.4.1 | no device |
+| [serial](docs/serial.md) | `yser_` | Serial port byte I/O for trigger and response boxes | 0.6.3 | 2 machines |
+| [trials](docs/trials.md) | `ytr_` | Trial orders, blocks, adaptive tracks, jitter, variables per trial, replay, a CSV row per trial | 0.6.0 | tested |
+| [dataset](docs/dataset.md) | `yds_` | A session's data set: session.json, trial, frame, event, clock and stream tables, a zip for the web | 0.2.0 | tested |
+| [table](docs/table.md) | `ytb_` | Typed tables and a bounded CSV parser | 0.3.0 | tested |
+| [pack](docs/pack.md) | `ypak_` | Read and verify ysp packs (store-only zip) | 0.4.0 | tested |
+| [json](docs/json.md) | `yjs_` | Strict JSON reader and canonical writer | 0.2.1 | tested |
+| [stair](docs/adapt.md) | `yst_` | Adaptive staircases | 0.3.0 | tested |
+| [quest](docs/adapt.md) | `yqst_` | QUEST+, QUEST, Psi and Psi-marginal on a grid | 0.7.0 | tested |
+| [aep](docs/adapt.md) | `yaep_` | Gaussian-process adaptive estimation (AEPsych features) | 0.16.0 | tested |
+| [timeline](docs/timeline.md) | `ytl_` | Events, tracks and keyframes on the clock | 0.8.1 | tested |
 | [input](docs/input.md) | `yin_` | The input event that every device shares | 0.4.0 | 1 machine |
-| [response](docs/response.md) | `yrsp_` | Trial responses and RT from any input device | 0.4.0 | 1 machine |
-| [box](docs/box.md) | `ybox_` | Response and trigger box protocols, bytes to events | 0.3.0 | no device |
-| [device](docs/device.md) | `ydev_` | Boxes and boards on the rig clock, with outputs | 0.3.2 | 2 machines |
-| [rigfile](docs/device.md#how-to-keep-a-rigs-devices-and-latencies-in-its-rig-profile) | `yrig_` | Rig profile: devices per role, loopback results | 0.3.0 | no device |
-| [net](docs/net.md) | `ynet_` | Lab Streaming Layer markers and streams | 0.3.0 | no device |
-| [color](docs/color.md) | `ycol_` | Display calibration and color space conversions | 0.2.0 | tested |
-| [rdk](docs/rdk.md) | `yrdk_` | Random dot kinematograms, reproducible bit for bit | 0.2.1 | tested |
-| [outline](docs/outline.md) | `yol_` | Paths, font glyphs and SVG into curve sets | 0.3.2 | tested |
-| [screen](docs/screen.md) | `yscr_` | Stimulus window, flip at a time, flip records; Linux X11 and web backends | 0.8.0 | 2 machines |
-| [audio](docs/audio.md) | `yau_` | Sound at a time and its capture on the rig clock; Linux ALSA exclusive, output and input; Web Audio in a browser | 0.6.0 | 2 machines |
-| [gfx](docs/gfx.md) | `ygfx_` | GL ES 3.0 stimuli: shapes, gratings, gabors, text, frame capture | 0.15.0 | 1 machine |
-| [video](docs/video.md) | `yvid_` | Movies as stimuli, frame by predicted onset | 0.3.1 | 1 machine |
+| [response](docs/response.md) | `yrsp_` | Trial responses and RT from any input device | 0.7.0 | 1 machine |
+| [box](docs/box.md) | `ybox_` | Response and trigger box protocols, bytes to events | 0.3.1 | no device |
+| [device](docs/device.md) | `ydev_` | Boxes and boards on the rig clock, with outputs and response rules | 0.5.2 | 2 machines |
+| [rigfile](docs/device.md#how-to-keep-a-rigs-devices-and-latencies-in-its-rig-profile) | `yrig_` | Rig profile: devices per role, loopback results, viewing geometry | 0.5.1 | no device |
+| [net](docs/net.md) | `ynet_` | Lab Streaming Layer markers and streams | 0.3.1 | no device |
+| [color](docs/color.md) | `ycol_` | Display calibration and color space conversions | 0.4.0 | tested |
+| [rdk](docs/rdk.md) | `yrdk_` | Random dot kinematograms, reproducible bit for bit | 0.3.1 | tested |
+| [outline](docs/outline.md) | `yol_` | Paths, font glyphs and SVG into curve sets | 0.4.1 | tested |
+| [screen](docs/screen.md) | `yscr_` | Stimulus window, flip at a time, flip records; Linux X11 and web backends | 0.11.0 | 2 machines |
+| [audio](docs/audio.md) | `yau_` | Sound at a time and its capture on the rig clock; Linux ALSA exclusive, output and input; Web Audio in a browser | 0.8.0 | 2 machines |
+| [gfx](docs/gfx.md) | `ygfx_` | GL ES 3.0 stimuli: shapes, gratings, gabors, text, frame capture | 0.17.2 | 1 machine |
+| [video](docs/video.md) | `yvid_` | Movies as stimuli, frame by predicted onset | 0.6.0 | 1 machine |
 
 Each header is `include/ysp/<name>.h`; macros use the uppercase prefix
 (`YRT_`). Status: **tested** is pure computation, checked by tests;
@@ -78,7 +79,7 @@ To build the examples and tests in this repository:
 cmake --preset msvc          # or msvc-full, mingw, linux, clang, sanitizers, nothreads-cxx
 cmake --build --preset msvc
 ctest --preset msvc
-uv run --no-project python tools/vendor_pack.py --write     # lodepng, for -DYSP_BUILD_PACK=ON
+uv run --no-project python tools/vendor_pack.py --write     # lodepng, stb_image, pl_mpeg, libsamplerate, for -DYSP_BUILD_PACK=ON
 uv run --no-project python tools/vendor_layout.py --write   # HarfBuzz, Skribidi, for -DYSP_BUILD_LAYOUT=ON
 ```
 
@@ -118,4 +119,6 @@ return values, errors, units, threads) are in
 ## License
 
 MIT-0 (public domain equivalent). See [LICENSE](LICENSE) and the end of each
-header.
+header. One exception: the shortest-double section of `ysp/json.h`
+(`yjs_format_double()`) may derive from Ryu and is under the Boost Software
+License 1.0; the header marks it and carries the license text.

@@ -13,7 +13,7 @@ import re
 
 import pytest
 
-import ysp.aep as pg
+import ysp.aep as yaep
 
 try:
     import numpy as np
@@ -37,20 +37,20 @@ def run_1d(acq, stream, trials=100):
     """The C test's run_observer(): same desc, same observer, a different
     uniform stream (Python's Mersenne Twister, not splitmix64)."""
     u = random.Random(1000 + stream)
-    g = pg.GP(lo=[0.0], hi=[1.0], acq=acq, target_p=0.75, grid=[65],
+    g = yaep.GP(lo=[0.0], hi=[1.0], acq=acq, target_p=0.75, grid=[65],
               n_init=8, fit=True, fit_every=10, stop_trials=trials)
     while not g.done:
         idx, x = g.next()
         assert idx >= -1
         p = phi(SLOPE * (x[0] - X50))
-        g.update(x, pg.simulate_outcome([1.0 - p, p], u.random()))
+        g.update(x, yaep.simulate_outcome([1.0 - p, p], u.random()))
     assert g.n_trials == trials
     thr, lo, hi = g.threshold()
     assert lo <= thr + 1e-9 and thr <= hi + 1e-9
     return abs(thr - THR75)
 
 
-@pytest.mark.parametrize("acq", [pg.ACQ_LSE, pg.ACQ_EAVC])
+@pytest.mark.parametrize("acq", [yaep.ACQ_LSE, yaep.ACQ_EAVC])
 def test_1d_threshold_recovery(acq):
     errs = [run_1d(acq, s) for s in range(8)]
     mean = sum(errs) / len(errs)
@@ -59,9 +59,9 @@ def test_1d_threshold_recovery(acq):
 
 
 def test_string_enum_names_match_constants():
-    a = pg.GP(lo=[0], hi=[1], acq="EAVC", kernel="rbf", link="probit",
+    a = yaep.GP(lo=[0], hi=[1], acq="EAVC", kernel="rbf", link="probit",
               target_p=0.75, stop_trials=5)
-    b = pg.GP(lo=[0], hi=[1], acq=pg.ACQ_EAVC, target_p=0.75, stop_trials=5)
+    b = yaep.GP(lo=[0], hi=[1], acq=yaep.ACQ_EAVC, target_p=0.75, stop_trials=5)
     assert a.next() == b.next()
 
 
@@ -70,8 +70,8 @@ def test_string_enum_names_match_constants():
 def test_ordinal_40_trials():
     u = random.Random(55)
     cut = [0.0, 1.0, 2.0]
-    g = pg.GP(lo=[0.0], hi=[1.0], lik=pg.LIK_ORDINAL, n_outcomes=4,
-              target_outcome=2, target_p=0.5, acq=pg.ACQ_BALD, grid=[33],
+    g = yaep.GP(lo=[0.0], hi=[1.0], lik=yaep.LIK_ORDINAL, n_outcomes=4,
+              target_outcome=2, target_p=0.5, acq=yaep.ACQ_BALD, grid=[33],
               n_init=8, fit=True, fit_every=20, hyper={"cutpoint": cut},
               stop_trials=40)
     while not g.done:
@@ -79,7 +79,7 @@ def test_ordinal_40_trials():
         f = 4.0 * (x[0] - 0.5)
         c = [phi(cj - f) for cj in cut]
         p = [c[0], c[1] - c[0], c[2] - c[1], 1.0 - c[2]]
-        g.update(x, pg.simulate_outcome(p, u.random()))
+        g.update(x, yaep.simulate_outcome(p, u.random()))
     lo, hi = g.predict_p(0.05), g.predict_p(0.95)   # P(y >= 2)
     assert 0.0 <= lo < hi <= 1.0
     assert hi - lo > 0.3
@@ -92,14 +92,14 @@ def test_ordinal_40_trials():
 
 def test_categorical_40_trials():
     u = random.Random(66)
-    g = pg.GP(lo=[0.0], hi=[1.0], lik="categorical", n_outcomes=3,
-              target_outcome=1, target_p=0.5, acq=pg.ACQ_BALV, grid=[25],
+    g = yaep.GP(lo=[0.0], hi=[1.0], lik="categorical", n_outcomes=3,
+              target_outcome=1, target_p=0.5, acq=yaep.ACQ_BALV, grid=[25],
               n_init=10, stop_trials=40)
     while not g.done:
         _, x = g.next()
         fs = [2.0 - 4.0 * x[0], 0.0, -2.0 + 4.0 * x[0]]
         e = [math.exp(v) for v in fs]
-        g.update(x, pg.simulate_outcome([v / sum(e) for v in e], u.random()))
+        g.update(x, yaep.simulate_outcome([v / sum(e) for v in e], u.random()))
     left, right = g.predict_outcomes(0.0), g.predict_outcomes(1.0)
     assert abs(sum(left) - 1.0) < 1e-9 and abs(sum(right) - 1.0) < 1e-9
     assert max(range(3), key=lambda k: left[k]) == 0
@@ -111,7 +111,7 @@ def test_categorical_40_trials():
 
 def test_gaussian_40_trials():
     u = random.Random(44)
-    g = pg.GP(lo=[0.0], hi=[1.0], lik=pg.LIK_GAUSSIAN, acq=pg.ACQ_BALV,
+    g = yaep.GP(lo=[0.0], hi=[1.0], lik=yaep.LIK_GAUSSIAN, acq=yaep.ACQ_BALV,
               target_value=0.5, grid=[33], n_init=6, fit=True, fit_every=20,
               stop_trials=40)
     while not g.done:
@@ -120,9 +120,9 @@ def test_gaussian_40_trials():
     xs = [i / 20 for i in range(21)]
     rms = math.sqrt(sum((g.predict_p(x) - math.sin(4 * x)) ** 2 for x in xs) / len(xs))
     assert rms < 0.05
-    with pytest.raises(pg.Error):
+    with pytest.raises(yaep.Error):
         g.update([0.5], 1)          # the discrete update under GAUSSIAN
-    with pytest.raises(pg.Error):
+    with pytest.raises(yaep.Error):
         g.predict_outcomes(0.5)     # no outcome probabilities under GAUSSIAN
 
 
@@ -134,11 +134,11 @@ def fitted_2d(trials=40, seed=3, **extra):
                 grid=[9, 17], n_init=6, fit=True, fit_every=10,
                 stop_trials=trials)
     desc.update(extra)
-    g = pg.GP(**desc)
+    g = yaep.GP(**desc)
     while not g.done:
         _, x = g.next()
         p = phi(8.0 * (x[1] - (0.3 + 0.3 * x[0])))
-        g.update(x, pg.simulate_outcome([1 - p, p], u.random()))
+        g.update(x, yaep.simulate_outcome([1 - p, p], u.random()))
     return g
 
 
@@ -183,7 +183,7 @@ def responder(seed):
 
     def respond(x):
         p = phi(8.0 * (x[1] - (0.3 + 0.3 * x[0])))
-        return pg.simulate_outcome([1 - p, p], u.random())
+        return yaep.simulate_outcome([1 - p, p], u.random())
     return respond
 
 
@@ -194,7 +194,7 @@ ASYNC_DESC = dict(lo=[0.0, 0.0], hi=[1.0, 1.0], intensity_dim=1,
 
 def test_async_reproduces_sync():
     respond = responder(7)
-    g1 = pg.GP(**ASYNC_DESC)
+    g1 = yaep.GP(**ASYNC_DESC)
     sync_x = []
     while not g1.done:
         _, x = g1.next()
@@ -202,14 +202,14 @@ def test_async_reproduces_sync():
         g1.update(x, respond(x))
 
     respond = responder(7)
-    g2 = pg.GP(**ASYNC_DESC)
+    g2 = yaep.GP(**ASYNC_DESC)
     async_x = []
-    with pg.Async(g2, context=[0.5]) as a:
+    with yaep.Async(g2, context=[0.5]) as a:
         assert a.running
-        assert a.policy in (pg.POLICY_NORMAL, pg.POLICY_BELOW_NORMAL)
+        assert a.policy in (yaep.POLICY_NORMAL, yaep.POLICY_BELOW_NORMAL)
         seq, snap = a.poll()
         assert seq == 0
-        with pytest.raises(pg.Busy):
+        with pytest.raises(yaep.Busy):
             g2.predict_p([0.5, 0.5])   # the thread owns the handle
         while not snap.done:
             async_x.append(snap.x)
@@ -225,30 +225,30 @@ def test_async_reproduces_sync():
     thr = g2.threshold([0.5])
     assert thr == g1.threshold([0.5])
     assert (last.threshold, last.threshold_lo, last.threshold_hi) == thr
-    assert last.n_trials == 40 and last.stop == pg.STOP_TRIALS
+    assert last.n_trials == 40 and last.stop == yaep.STOP_TRIALS
 
 
 def test_async_busy_timeout_and_rules():
-    g = pg.GP(lo=[0.0, 0.0], hi=[1.0, 1.0], intensity_dim=1, target_p=0.75,
+    g = yaep.GP(lo=[0.0, 0.0], hi=[1.0, 1.0], intensity_dim=1, target_p=0.75,
               acq="eavc", grid=[33, 33], n_init=2, stop_trials=200)
-    a = pg.Async(g, context=0.5)
+    a = yaep.Async(g, context=0.5)
     a.start()
     try:
-        with pytest.raises(pg.Busy):
+        with pytest.raises(yaep.Busy):
             a.start()
         busy = 0
         seqs = []
         for k in range(40):     # far faster than an EAVC update at M = 1089
             try:
                 seqs.append(a.submit([0.5, (k % 10) / 10], k % 2))
-            except pg.Busy as e:
-                assert e.code == pg.ERR_BUSY
+            except yaep.Busy as e:
+                assert e.code == yaep.ERR_BUSY
                 busy += 1
         assert busy > 0
-        assert a.pending <= pg.ASYNC_QUEUE
-        with pytest.raises(pg.Timeout):
+        assert a.pending <= yaep.ASYNC_QUEUE
+        with pytest.raises(yaep.Timeout):
             a.wait(seqs[-1] + 100, timeout_s=0.01)
-        with pytest.raises(pg.Error):
+        with pytest.raises(yaep.Error):
             a.submit([2.0, 0.5], 1)     # outside the box
     finally:
         a.stop()
@@ -258,75 +258,75 @@ def test_async_busy_timeout_and_rules():
 
 
 def test_async_refuses_python_rng():
-    g = pg.GP(lo=[0], hi=[1], target_p=0.75, stop_trials=5,
+    g = yaep.GP(lo=[0], hi=[1], target_p=0.75, stop_trials=5,
               rng=random.Random(1).random)
     with pytest.raises(ValueError):
-        pg.Async(g).start()
+        yaep.Async(g).start()
     with pytest.raises(ValueError):
-        pg.Async(g, context=[0.5])           # a 1-D GP has no context
+        yaep.Async(g, context=[0.5])           # a 1-D GP has no context
 
 
 # --- errors -------------------------------------------------------------------
 
 def test_error_hierarchy():
-    for e in (pg.Numeric, pg.NoCross, pg.Full, pg.Busy, pg.Timeout):
-        assert issubclass(e, pg.Error)
+    for e in (yaep.Numeric, yaep.NoCross, yaep.Full, yaep.Busy, yaep.Timeout):
+        assert issubclass(e, yaep.Error)
 
 
 def test_bad_desc():
-    with pytest.raises(pg.Error):
-        pg.GP(lo=[0], hi=[1], target_p=0.75)          # no stop criterion
+    with pytest.raises(yaep.Error):
+        yaep.GP(lo=[0], hi=[1], target_p=0.75)          # no stop criterion
     with pytest.raises(TypeError):
-        pg.GP(lo=[0], hi=[1], stop_trials=5, bogus=1)
+        yaep.GP(lo=[0], hi=[1], stop_trials=5, bogus=1)
     with pytest.raises(TypeError):
-        pg.GP([0], [1])
+        yaep.GP([0], [1])
     with pytest.raises(ValueError):
-        pg.GP(lo=[0, 0], hi=[1], stop_trials=5)
+        yaep.GP(lo=[0, 0], hi=[1], stop_trials=5)
     with pytest.raises(ValueError):
-        pg.GP(lo=[0], hi=[1], stop_trials=5, acq="nope")
+        yaep.GP(lo=[0], hi=[1], stop_trials=5, acq="nope")
 
 
 def test_nocross_and_full():
-    g = pg.GP(lo=[0.0], hi=[1.0], target_p=0.75, stop_trials=3, max_trials=3)
-    with pytest.raises(pg.NoCross) as ei:
+    g = yaep.GP(lo=[0.0], hi=[1.0], target_p=0.75, stop_trials=3, max_trials=3)
+    with pytest.raises(yaep.NoCross) as ei:
         g.threshold()                  # the prior is flat at p = 0.5
-    assert ei.value.code == pg.ERR_NOCROSS
+    assert ei.value.code == yaep.ERR_NOCROSS
     for k in range(3):
         g.update([0.5], k % 2)
-    assert g.done and g.stop_reason in (pg.STOP_TRIALS, pg.STOP_FULL)
-    with pytest.raises(pg.Full):
+    assert g.done and g.stop_reason in (yaep.STOP_TRIALS, yaep.STOP_FULL)
+    with pytest.raises(yaep.Full):
         g.update([0.5], 1)
-    with pytest.raises(pg.Full):
+    with pytest.raises(yaep.Full):
         g.next()
 
 
 def test_numeric_keeps_the_trial():
     # A noiseless Gaussian model with duplicate stimuli: the kernel matrix is
     # singular, which is the one reliable way to make a Cholesky fail.
-    g = pg.GP(lo=[0.0], hi=[1.0], lik="gaussian", acq="balv", stop_trials=10,
+    g = yaep.GP(lo=[0.0], hi=[1.0], lik="gaussian", acq="balv", stop_trials=10,
               hyper={"noise_sd": 1e-200, "outputscale": 1.0,
                      "lengthscale": [0.5], "mean": 1e-12}, jitter=1e-300)
     g.update_real([0.5], 0.0)
-    with pytest.raises(pg.Numeric) as ei:
+    with pytest.raises(yaep.Numeric) as ei:
         g.update_real([0.5], 1.0)
-    assert ei.value.code == pg.ERR_NUMERIC
+    assert ei.value.code == yaep.ERR_NUMERIC
     assert g.n_trials == 2
     assert math.isfinite(g.predict_p(0.5))
 
 
 def test_argument_errors_and_close():
-    g = pg.GP(lo=[0.0], hi=[1.0], target_p=0.75, stop_trials=5)
-    with pytest.raises(pg.Error) as ei:
+    g = yaep.GP(lo=[0.0], hi=[1.0], target_p=0.75, stop_trials=5)
+    with pytest.raises(yaep.Error) as ei:
         g.update([1.5], 1)
-    assert ei.value.code == pg.ERR_ARG
+    assert ei.value.code == yaep.ERR_ARG
     with pytest.raises(ValueError):
         g.update([0.1, 0.2], 1)
-    with pytest.raises(pg.Error):
+    with pytest.raises(yaep.Error):
         g.predict_p(2.0)
     g.close()
-    with pytest.raises(pg.Error) as ei:
+    with pytest.raises(yaep.Error) as ei:
         g.next()
-    assert ei.value.code == pg.ERR_CLOSED
+    assert ei.value.code == yaep.ERR_CLOSED
 
 
 # --- odds and ends --------------------------------------------------------------
@@ -334,18 +334,18 @@ def test_argument_errors_and_close():
 def test_memory_size_is_the_layout():
     base = dict(lo=[0, 0], hi=[1, 1], n_candidates=512, max_trials=512,
                 target_p=0.75, stop_trials=5)
-    lse = pg.GP.memory_size(**base)
-    eavc = pg.memory_size(acq="eavc", **base)
+    lse = yaep.GP.memory_size(**base)
+    eavc = yaep.memory_size(acq="eavc", **base)
     # EAVC adds exactly the M x M look-ahead covariance and its M x N block.
     assert eavc - lse == 512 * 512 * 8 + 512 * 512 * 8
-    with pytest.raises(pg.Error):
-        pg.GP.memory_size(lo=[0], hi=[1])
+    with pytest.raises(yaep.Error):
+        yaep.GP.memory_size(lo=[0], hi=[1])
 
 
 def test_hyper_object_and_candidates():
-    h = pg.Hyper(lengthscale=[0.2], outputscale=2.0, mean=0.5)
+    h = yaep.Hyper(lengthscale=[0.2], outputscale=2.0, mean=0.5)
     cand = [[i / 20] for i in range(21)]
-    g = pg.GP(lo=[0.0], hi=[1.0], hyper=h, candidates=cand, target_p=0.75,
+    g = yaep.GP(lo=[0.0], hi=[1.0], hyper=h, candidates=cand, target_p=0.75,
               n_init=2, stop_trials=10)
     assert g.hyper()["lengthscale"] == [0.2]
     assert g.hyper()["outputscale"] == 2.0
@@ -365,13 +365,13 @@ def test_hyper_object_and_candidates():
 
 def test_rng_callable():
     r = random.Random(5)
-    g = pg.GP(lo=[0.0], hi=[1.0], acq="random", stop_trials=10, rng=r.random)
+    g = yaep.GP(lo=[0.0], hi=[1.0], acq="random", stop_trials=10, rng=r.random)
     idx, x = g.next()
     assert idx == -1 and 0.0 <= x[0] <= 1.0
 
     def broken():
         raise RuntimeError("generator failed")
-    g = pg.GP(lo=[0.0], hi=[1.0], acq="random", stop_trials=10, rng=broken,
+    g = yaep.GP(lo=[0.0], hi=[1.0], acq="random", stop_trials=10, rng=broken,
               n_init=0)
     for k in range(4):
         g.update([k / 4], k % 2)
@@ -392,20 +392,20 @@ def test_fit_step_and_refit():
 
 
 def test_simulate_outcome():
-    assert pg.simulate_outcome([0.25, 0.75], 0.2) == 0
-    assert pg.simulate_outcome([0.25, 0.75], 0.3) == 1
-    assert pg.GP.simulate_outcome([0.1, 0.2, 0.7], 0.25) == 1
+    assert yaep.simulate_outcome([0.25, 0.75], 0.2) == 0
+    assert yaep.simulate_outcome([0.25, 0.75], 0.3) == 1
+    assert yaep.GP.simulate_outcome([0.1, 0.2, 0.7], 0.25) == 1
 
 
 def test_second_async_cannot_take_or_release_the_gp():
-    g = pg.GP(lo=[0.0], hi=[1.0], target_p=0.75, stop_trials=20)
-    a, b = pg.Async(g), pg.Async(g)
+    g = yaep.GP(lo=[0.0], hi=[1.0], target_p=0.75, stop_trials=20)
+    a, b = yaep.Async(g), yaep.Async(g)
     a.start()
     try:
-        with pytest.raises(pg.Busy):
+        with pytest.raises(yaep.Busy):
             b.start()
         b.stop()                        # never started: must not free the GP
-        with pytest.raises(pg.Busy):
+        with pytest.raises(yaep.Busy):
             g.next()
         seq = a.submit([0.5], 1)
         got, snap = a.wait(seq, timeout_s=10.0)
@@ -424,14 +424,14 @@ def test_version_matches_pyproject():
     with open(path, encoding="utf-8") as f:
         m = re.search(r'^version\s*=\s*"([^"]+)"', f.read(), re.M)
     assert m, "no version in pyproject.toml"
-    assert pg.__version__ == m.group(1)
+    assert yaep.__version__ == m.group(1)
 
 
 def test_refine_steps():
-    with pytest.raises(pg.Error):
-        pg.GP(lo=[0], hi=[1], target_p=0.75, stop_trials=5, refine_steps=33)
+    with pytest.raises(yaep.Error):
+        yaep.GP(lo=[0], hi=[1], target_p=0.75, stop_trials=5, refine_steps=33)
     u = random.Random(9)
-    g = pg.GP(lo=[0.0], hi=[1.0], target_p=0.75, grid=[9], n_init=4,
+    g = yaep.GP(lo=[0.0], hi=[1.0], target_p=0.75, grid=[9], n_init=4,
               stop_trials=30, refine_steps=2)
     off_grid = 0
     while not g.done:
@@ -439,7 +439,7 @@ def test_refine_steps():
         if g.n_trials >= 4 and idx == -1:
             off_grid += 1
         p = phi(SLOPE * (x[0] - X50))
-        g.update(x, pg.simulate_outcome([1 - p, p], u.random()))
+        g.update(x, yaep.simulate_outcome([1 - p, p], u.random()))
     # The refined proposals leave the 9-point grid (0.125 apart).
     assert off_grid > 0
     assert any(abs(h["x"][0] * 8 - round(h["x"][0] * 8)) > 1e-9 for h in g.history())
@@ -451,26 +451,26 @@ def test_psychometric_model():
                 stop_trials=60, model="psychometric")
     for bad in (dict(kernel="semip"), dict(lik="categorical", n_outcomes=3),
                 dict(lik="gaussian")):
-        with pytest.raises(pg.Error):
-            pg.GP(**dict(base, **bad))
+        with pytest.raises(yaep.Error):
+            yaep.GP(**dict(base, **bad))
     # The look-ahead acquisitions are accepted since ysp/aep.h 0.4.0.
     for ok in ("eavc", "localmi"):
-        la = pg.GP(**dict(base, acq=ok, grid=[5, 9], n_init=4, stop_trials=8))
+        la = yaep.GP(**dict(base, acq=ok, grid=[5, 9], n_init=4, stop_trials=8))
         uu = random.Random(3)
         while not la.done:
             _, x = la.next()
             p = phi(8.0 * (x[1] - 0.5))
-            la.update(x, pg.simulate_outcome([1 - p, p], uu.random()))
+            la.update(x, yaep.simulate_outcome([1 - p, p], uu.random()))
         assert la.n_trials == 8
-    assert pg.MODEL_PSYCHOMETRIC != pg.MODEL_GP
+    assert yaep.MODEL_PSYCHOMETRIC != yaep.MODEL_GP
 
     u = random.Random(21)
-    g = pg.GP(grid=[9, 17], n_init=8, fit=True, fit_every=20, acq="lse",
-              **dict(base, model=pg.MODEL_PSYCHOMETRIC, stop_trials=100))
+    g = yaep.GP(grid=[9, 17], n_init=8, fit=True, fit_every=20, acq="lse",
+              **dict(base, model=yaep.MODEL_PSYCHOMETRIC, stop_trials=100))
     while not g.done:
         _, x = g.next()
         p = phi(8.0 * (x[1] - (0.3 + 0.3 * x[0])))
-        g.update(x, pg.simulate_outcome([1 - p, p], u.random()))
+        g.update(x, yaep.simulate_outcome([1 - p, p], u.random()))
     h = g.hyper()
     assert {"lengthscale_g", "outputscale_g", "mean_g"} <= set(h)
     assert len(h["lengthscale_g"]) == 2 and h["outputscale_g"] > 0.0
@@ -500,14 +500,14 @@ def test_max_trials_is_the_compiled_ceiling():
     # time). max_trials = 0 means that ceiling, and one more is refused.
     base = dict(lo=[0, 0], hi=[1, 1], n_candidates=64, target_p=0.75,
                 stop_trials=5)
-    assert pg.MAX_TRIALS >= 16
-    assert (pg.memory_size(max_trials=0, **base)
-            == pg.memory_size(max_trials=pg.MAX_TRIALS, **base))
-    assert (pg.memory_size(max_trials=pg.MAX_TRIALS, **base)
-            > pg.memory_size(max_trials=pg.MAX_TRIALS - 1, **base))
-    with pytest.raises(pg.Error):
-        pg.memory_size(max_trials=pg.MAX_TRIALS + 1, **base)
-    g = pg.GP(max_trials=pg.MAX_TRIALS, **base)
+    assert yaep.MAX_TRIALS >= 16
+    assert (yaep.memory_size(max_trials=0, **base)
+            == yaep.memory_size(max_trials=yaep.MAX_TRIALS, **base))
+    assert (yaep.memory_size(max_trials=yaep.MAX_TRIALS, **base)
+            > yaep.memory_size(max_trials=yaep.MAX_TRIALS - 1, **base))
+    with pytest.raises(yaep.Error):
+        yaep.memory_size(max_trials=yaep.MAX_TRIALS + 1, **base)
+    g = yaep.GP(max_trials=yaep.MAX_TRIALS, **base)
     assert g.is_open
 
 
@@ -521,7 +521,7 @@ def bump(x, cx=0.3, cy=0.7, w=0.12):
 def test_ucb_finds_the_maximum_of_a_bump(minimize):
     u = random.Random(31)
     sign = -1.0 if minimize else 1.0
-    g = pg.GP(lo=[0.0, 0.0], hi=[1.0, 1.0], lik="gaussian", acq="ucb",
+    g = yaep.GP(lo=[0.0, 0.0], hi=[1.0, 1.0], lik="gaussian", acq="ucb",
               minimize=minimize, grid=[21, 21], n_init=8, fit=True,
               fit_every=10, stop_trials=40)
     while not g.done:
@@ -535,7 +535,7 @@ def test_ucb_finds_the_maximum_of_a_bump(minimize):
 def test_ei_and_thompson_run():
     for acq, extra in (("ei", {}), ("thompson", {"rng": random.Random(4).random})):
         u = random.Random(32)
-        g = pg.GP(lo=[0.0, 0.0], hi=[1.0, 1.0], lik="gaussian", acq=acq,
+        g = yaep.GP(lo=[0.0, 0.0], hi=[1.0, 1.0], lik="gaussian", acq=acq,
                   grid=[15, 15], n_init=8, fit=True, fit_every=10,
                   stop_trials=30, **extra)
         while not g.done:
@@ -543,13 +543,13 @@ def test_ei_and_thompson_run():
             g.update_real(x, bump(x) + 0.02 * (u.random() - 0.5))
         x, v = g.argmax()
         assert math.hypot(x[0] - 0.3, x[1] - 0.7) < 0.1, acq
-    with pytest.raises(pg.Error):     # THOMPSON needs a generator
-        pg.GP(lo=[0], hi=[1], lik="gaussian", acq="thompson", stop_trials=5)
+    with pytest.raises(yaep.Error):     # THOMPSON needs a generator
+        yaep.GP(lo=[0], hi=[1], lik="gaussian", acq="thompson", stop_trials=5)
 
 
 def test_pairwise_session():
     u = random.Random(33)
-    g = pg.GP(lo=[0.0, 0.0], hi=[1.0, 1.0], lik="pairwise", acq="bald",
+    g = yaep.GP(lo=[0.0, 0.0], hi=[1.0, 1.0], lik="pairwise", acq="bald",
               grid=[15, 15], n_init=8, fit=True, fit_every=10, stop_trials=80)
     while not g.done:
         x1, x2 = g.next_pair()
@@ -562,29 +562,29 @@ def test_pairwise_session():
     a, b = [0.3, 0.7], [0.9, 0.1]
     assert g.predict_pair(a, b) > 0.8
     assert abs(g.predict_pair(a, b) + g.predict_pair(b, a) - 1.0) < 1e-9
-    with pytest.raises(pg.Error):
+    with pytest.raises(yaep.Error):
         g.next()                     # a comparison needs next_pair()
     with pytest.raises(ValueError):
-        pg.Async(g).start()
+        yaep.Async(g).start()
 
 
 def test_categorical_dimension():
     thr = {0: 0.3, 1: 0.6, 2: 0.45}   # an unordered context: level 1 is far
     u = random.Random(34)
-    g = pg.GP(lo=[0.0, 0.0], hi=[2.0, 1.0], intensity_dim=1,
-              dim_kind=["categorical", pg.DIM_CONTINUOUS], dim_levels=[3, 0],
+    g = yaep.GP(lo=[0.0, 0.0], hi=[2.0, 1.0], intensity_dim=1,
+              dim_kind=["categorical", yaep.DIM_CONTINUOUS], dim_levels=[3, 0],
               target_p=0.75, grid=[3, 21], n_init=8, fit=True, fit_every=10,
               refine_steps=2, stop_trials=90)
     while not g.done:
         _, x = g.next()
         assert x[0] in (0.0, 1.0, 2.0)
         p = phi(10.0 * (x[1] - thr[int(x[0])]))
-        g.update(x, pg.simulate_outcome([1 - p, p], u.random()))
+        g.update(x, yaep.simulate_outcome([1 - p, p], u.random()))
     for level, t50 in thr.items():
         est, lo, hi = g.threshold([level])
         assert abs(est - (t50 + 0.67449 / 10.0)) < 0.1, level
-    with pytest.raises(pg.Error):     # the box of a categorical dimension is 0..levels-1
-        pg.GP(lo=[0.0, 0.0], hi=[3.0, 1.0], intensity_dim=1,
+    with pytest.raises(yaep.Error):     # the box of a categorical dimension is 0..levels-1
+        yaep.GP(lo=[0.0, 0.0], hi=[3.0, 1.0], intensity_dim=1,
               dim_kind=["categorical", "continuous"], dim_levels=[3, 0],
               target_p=0.75, stop_trials=5)
 
@@ -597,18 +597,18 @@ def snapshot_desc():
 
 def snapshot_run(cut=None):
     u = random.Random(35)
-    g = pg.GP(**snapshot_desc())
+    g = yaep.GP(**snapshot_desc())
     proposals = []
     while not g.done:
         _, x = g.next()
         if cut is not None and g.n_trials == cut:
             # cut with the proposal pending: the resumed GP hands it out again
-            g = pg.GP.load(g.save(), **snapshot_desc())
+            g = yaep.GP.load(g.save(), **snapshot_desc())
             _, again = g.next()
             assert again == x
         proposals.append(x)
         p = phi(8.0 * (x[1] - (0.3 + 0.3 * x[0])))
-        g.update(x, pg.simulate_outcome([1 - p, p], u.random()))
+        g.update(x, yaep.simulate_outcome([1 - p, p], u.random()))
     return proposals, g.save(), g
 
 
@@ -620,21 +620,21 @@ def test_snapshot_resume_matches_uninterrupted_run():
         assert final == ref_bytes, cut          # byte for byte
         assert g.threshold([0.5]) == ref.threshold([0.5])
     snap = ref.save()
-    with pytest.raises(pg.Error):               # the desc must agree
-        pg.GP.load(snap, **dict(snapshot_desc(), target_p=0.7))
-    with pytest.raises(pg.Error):               # a truncated image is refused
-        pg.GP.load(snap[:-3], **snapshot_desc())
+    with pytest.raises(yaep.Error):               # the desc must agree
+        yaep.GP.load(snap, **dict(snapshot_desc(), target_p=0.7))
+    with pytest.raises(yaep.Error):               # a truncated image is refused
+        yaep.GP.load(snap[:-3], **snapshot_desc())
 
 
 def test_fit_return_values_and_delta():
-    g = pg.GP(lo=[0.0, 0.0], hi=[1.0, 1.0], target_p=0.75, n_candidates=64,
+    g = yaep.GP(lo=[0.0, 0.0], hi=[1.0, 1.0], target_p=0.75, n_candidates=64,
               stop_trials=60, fit_max_evals=2)
     assert g.fit() == 1                         # nothing to fit yet
     u = random.Random(36)
     for _ in range(60):
         x = [u.random(), u.random()]
         p = phi(8.0 * (x[1] - 0.5))
-        g.update(x, pg.simulate_outcome([1 - p, p], u.random()))
+        g.update(x, yaep.simulate_outcome([1 - p, p], u.random()))
     assert g.fit() == 0                         # two evaluations do not converge
     assert g.fit_delta() > 0.0
     rounds, rc = 0, 0
@@ -647,43 +647,43 @@ def test_fit_return_values_and_delta():
 
 def test_priors_and_other_desc_fields():
     base = dict(lo=[0.0, 0.0], hi=[1.0, 1.0], target_p=0.75, stop_trials=5)
-    d = pg.GP(**base).get_priors()
+    d = yaep.GP(**base).get_priors()
     assert set(d) == {"lengthscale", "outputscale", "outputscale_b",
                       "outputscale_g", "mean", "mean_g", "noise_sd"}
     assert d["outputscale"]["center"] == 1.0 and d["outputscale"]["sd"] > 0.0
-    got = pg.GP(priors={"outputscale": (2.0, 0.5)}, **base).get_priors()
+    got = yaep.GP(priors={"outputscale": (2.0, 0.5)}, **base).get_priors()
     assert got["outputscale"]["center"] == 2.0 and got["outputscale"]["sd"] == 0.5
-    obj = pg.Priors(mean={"center": 0.5, "sd": 0.3})
-    assert pg.GP(priors=obj, **base).get_priors()["mean"]["center"] == 0.5
-    off = pg.GP(no_hyper_prior=True, **base).get_priors()
+    obj = yaep.Priors(mean={"center": 0.5, "sd": 0.3})
+    assert yaep.GP(priors=obj, **base).get_priors()["mean"]["center"] == 0.5
+    off = yaep.GP(no_hyper_prior=True, **base).get_priors()
     assert off["lengthscale"]["sd"] == -1.0
     with pytest.raises(TypeError):
-        pg.GP(priors={"bogus": (1, 1)}, **base)
+        yaep.GP(priors={"bogus": (1, 1)}, **base)
 
     # monotone_dims: a mask or a list of dimensions, the same thing
-    a = pg.GP(monotone_dims=[1], intensity_dim=1, grid=[5, 9], **base)
-    b = pg.GP(monotone_dims=2, intensity_dim=1, grid=[5, 9], **base)
+    a = yaep.GP(monotone_dims=[1], intensity_dim=1, grid=[5, 9], **base)
+    b = yaep.GP(monotone_dims=2, intensity_dim=1, grid=[5, 9], **base)
     for x, y in (([0.2, 0.3], 0), ([0.8, 0.9], 1), ([0.5, 0.5], 1)):
         a.update(x, y)
         b.update(x, y)
     assert a.predict_p_many(grid_points(5)).tolist() == b.predict_p_many(grid_points(5)).tolist()
-    with pytest.raises(pg.Error):     # the psychometric model is monotone already
-        pg.GP(monotone_dims=[1], intensity_dim=1, model="psychometric", **base)
-    pg.GP(pcg_threshold=-1, fit_tol=1e-6, **base)
-    pg.GP(pcg_threshold=64, **base)
+    with pytest.raises(yaep.Error):     # the psychometric model is monotone already
+        yaep.GP(monotone_dims=[1], intensity_dim=1, model="psychometric", **base)
+    yaep.GP(pcg_threshold=-1, fit_tol=1e-6, **base)
+    yaep.GP(pcg_threshold=64, **base)
 
 
 @pytest.mark.parametrize("model", ["gp", "psychometric"])
 def test_fit_pcg_reaches_the_same_fit(model):
     def session(pcg):
         u = random.Random(37)
-        g = pg.GP(lo=[0.0, 0.0], hi=[1.0, 1.0], intensity_dim=1, target_p=0.75,
+        g = yaep.GP(lo=[0.0, 0.0], hi=[1.0, 1.0], intensity_dim=1, target_p=0.75,
                   model=model, grid=[9, 17], n_init=8, fit=True, fit_every=0,
                   stop_trials=60, fit_pcg=pcg)
         for _ in range(60):
             x = [u.random(), u.random()]
             p = phi(8.0 * (x[1] - (0.3 + 0.3 * x[0])))
-            g.update(x, pg.simulate_outcome([1 - p, p], u.random()))
+            g.update(x, yaep.simulate_outcome([1 - p, p], u.random()))
         for _ in range(50):          # converge through the evaluation budget
             if g.fit() == 1:
                 break

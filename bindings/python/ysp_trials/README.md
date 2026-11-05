@@ -11,8 +11,8 @@ follows a"), balances transitions, and takes the header's rules text. From
 0.2.1 it draws a random duration per trial (a foreperiod, an ITI, an SOA),
 logs it and replays it. It uses the plain CPython C API
 and has no dependencies. It is built against the **Limited API / stable ABI**
-(`Py_LIMITED_API = 0x03080000`), so one `ysp/trials.abi3.so` works on CPython
-3.8 and later.
+(`Py_LIMITED_API = 0x030A0000`), so one `ysp/trials.abi3.so` works on CPython
+3.10 and later.
 
 The distribution is `ysp-trials` and the module is `ysp.trials`. `ysp` is a
 [PEP 420](https://peps.python.org/pep-0420/) implicit namespace package (no
@@ -47,12 +47,12 @@ no other header of the collection.
 ## How to run the method of constant stimuli
 
 ```python
-import ysp.trials as pt
+import ysp.trials as ytr
 
-t = pt.Trials(factors=[("orientation", 2), ("contrast", 5)],   # 10 conditions
+t = ytr.Trials(factors=[("orientation", 2), ("contrast", 5)],   # 10 conditions
               reps=20,                                           # 200 trials
-              order=pt.ORDER_CONSTRAINED,
-              constraints=[pt.max_run("orientation", pt.ANY_LEVEL, 3)],
+              order=ytr.ORDER_CONSTRAINED,
+              constraints=[ytr.max_run("orientation", ytr.ANY_LEVEL, 3)],
               rng=20260923)                                      # log the seed
 
 while (ti := t.next()) is not None:
@@ -72,11 +72,11 @@ the header's message, not at trial 190.
 ## How to run a conditions file
 
 ```python
-import ysp.trials as pt
+import ysp.trials as ytr
 
 with open("conditions.csv", encoding="utf-8") as f:
-    tab = pt.Table(f.read())               # the binding reads; the header does not
-t = pt.Trials(table=tab, participant=7, rng=20261007, rules="""
+    tab = ytr.Table(f.read())               # the binding reads; the header does not
+t = ytr.Trials(table=tab, participant=7, rng=20261007, rules="""
     order constrained
     reps 4
     where list=@participant
@@ -90,7 +90,7 @@ print(t.format_rules())                    # the settings, as rules text
 ```
 
 A table's rows are the conditions and its columns the factors. A constraint
-names a column and a level by value (`pt.max_run("target", "catch", 1)`). The
+names a column and a level by value (`ytr.max_run("target", "catch", 1)`). The
 rules text is the header's (ysp/trials.h, GRAMMAR); `format_rules()` writes a
 session's settings in it, so a logged session pastes back in. A CSV fault
 raises `ArgumentError` with the line, the row and the column. A `Table` keeps
@@ -100,35 +100,61 @@ its own copy of the block; `to_bytes()` is the block a pack stores, and
 ## How to jitter a foreperiod and an ITI
 
 ```python
-t = pt.Trials(n_conditions=4, reps=25, order=pt.ORDER_FULL_RANDOM, rng=20261007,
-              jitters=[pt.exponential("fp", 0.5, 2.0, 0.4, rate=(60000, 1001)),  # non-aging
-                       pt.uniform("iti", 0.8, 1.2)])
+t = ytr.Trials(n_conditions=4, reps=25, order=ytr.ORDER_FULL_RANDOM, rng=20261007,
+              jitters=[ytr.exponential("fp_s", 0.5, 2.0, 0.4, rate=(60000, 1001)),  # non-aging
+                       ytr.uniform("iti_s", 0.8, 1.2)])
 while (ti := t.next()) is not None:
-    fp = t.jitter(ti.index, "fp")            # Jitter(s, ns, frames)
+    fp = t.jitter(ti.index, "fp_s")           # Jitter(s, ns, frames)
     show_cue(); wait_frames(fp.frames); t.update(run_target(ti.condition))
-    wait_ns(t.jitter(ti.index, "iti").ns)
+    wait_ns(t.jitter(ti.index, "iti_s").ns)
 ```
 
 The durations come from the session's generator, one draw per jitter per
 trial in a fixed order, so `restore()` and `load()` reproduce them, and
-`format_row()` logs each in its own column (seconds to the nanosecond). A
+`format_row()` logs each in its own column (seconds to the nanosecond), so name
+a jitter with `_s` at the end, as ysp/trials.h's data writer requires. A
 jitter's `lo`, `hi` and `scale` can name table columns, for an interval per
-condition: `pt.uniform("fp", "fp_lo", "fp_hi")`. The rules text takes
-`jitter fp exponential 0.5 2.0 0.4 rate=60000/1001`. `pt.jitter_map(spec, u)`
+condition: `ytr.uniform("fp_s", "fp_lo_s", "fp_hi_s")`. The rules text takes
+`jitter fp_s exponential 0.5 2.0 0.4 rate=60000/1001`. `ytr.jitter_map(spec, u)`
 maps a variate of your own with no session, and nothing replays it.
+
+To snap a jitter to the rig's refresh, give `rate="display"` (rules text:
+`rate=display`) and set the rate the screen reports with
+`display_rate=(num, den)`, for example `(60000, 1001)`. Without
+`display_rate` the session refuses to open. `format_rules()` keeps
+`rate=display`; `format_meta()` gives the rate the draws used.
+
+## How to draw a category per trial (v0.6)
+
+```python
+t = ytr.Trials(tracks=[stair], rng=20261021, seed=20261021,
+              vars=[ytr.var_choice("side", ["left", "right"])])
+while (ti := t.next()) is not None:
+    side = t.var(ti.index, "side")            # "left" or "right"
+    noise_seed = t.trial_seed(ti.index)       # for a stimulus generator
+    ...
+```
+
+A variable's value comes from the trial's own stream, which `seed` and the
+trial index make. It draws nothing from `rng`, so adding a variable does not
+change the schedule. `restore()` and `load()` give every value again, and
+`format_row()` logs it in a column named for the variable. Each value is
+equally likely; repeat a value to weight it. The rules text takes `var side
+choice left right`. In the rules text, `weight COLUMN` with `reps N` gives
+each row the column's count times N.
 
 ## How to interleave adaptive tracks
 
 ```python
 import struct
-import ysp.stair as st
+import ysp.stair as yst
 
-stairs = [st.Staircase(start=0.3, n_down=k, step_type=st.STEP_LOG,
+stairs = [yst.Staircase(start=0.3, n_down=k, step_type=yst.STEP_LOG,
                        steps=[0.2, 0.1], min=0.001, max=1.0, stop_reversals=8)
           for k in (2, 3, 4)]
-t = pt.Trials(n_conditions=1, reps=10,                 # a catch condition
-              order=pt.ORDER_CONSTRAINED,
-              constraints=[pt.min_gap(pt.CONDITION, 0, 1)],
+t = ytr.Trials(n_conditions=1, reps=10,                 # a catch condition
+              order=ytr.ORDER_CONSTRAINED,
+              constraints=[ytr.min_gap(ytr.CONDITION, 0, 1)],
               tracks=stairs, track_rate=0.9, rng=seed, record_size=8)
 
 while (ti := t.next()) is not None:
@@ -152,7 +178,7 @@ ask your own handle for the level. See [example.py](example.py).
 ```python
 snap, state = t.save(), t.rng_state          # write both to disk
 ...
-t = pt.Trials.load(snap, rng=state, **same_desc)
+t = ytr.Trials.load(snap, rng=state, **same_desc)
 ```
 
 `load` needs the same desc as the saved session (every number is checked, and
@@ -197,6 +223,9 @@ default.
 | `rules` | rules text, applied after the other arguments (v0.2) |
 | `participant` | the participant number for `@participant` and the Latin orders (v0.2) |
 | `jitters` | from `uniform()`, `choice()` and `exponential()`: a duration drawn per trial (v0.2.1) |
+| `seed` | an int in [0, 2^64): the seed of the trial streams that `vars` and `trial_seed()` use (v0.6) |
+| `vars` | from `var_choice()`: a category drawn per trial from the trial's stream (v0.6) |
+| `display_rate` | an int or `(num, den)` Hz: the rate a jitter with `rate="display"` snaps to (v0.6) |
 
 | Method or property | Returns |
 |---|---|
@@ -214,6 +243,8 @@ default.
 | `format_rules()` | the session's settings as rules text (v0.2) |
 | `values(c)`, `table` | condition `c`'s table row as a dict; the `Table` or None (v0.2) |
 | `jitter(i, j)`, `jitters` | trial `i`'s draw of jitter `j` (index or name) as `Jitter(s, ns, frames)`; the names (v0.2.1) |
+| `var(i, j)`, `var_index(i, j)`, `vars` | trial `i`'s value of variable `j` (index or name) as str, and its index in the values; the names (v0.6) |
+| `trial_seed(i)` | trial `i`'s 64-bit seed, a function of `seed` and `i` only (v0.6). The data line's `trial_seed` column writes it as `x` and 16 hex digits; `int(s[1:], 16)` gives it back |
 | `save()`, `Trials.load(data, **desc)`, `restore(outcomes, records=None)` | snapshot, resume, replay. `records` is one bytes object or a list of records. |
 | `rng_state` | the splitmix state for an int seed (read and write); None for a callable |
 | `n_conditions`, `n_factors`, `n_run`, `n_done`, `swaps`, `is_open`, `record_size` | counts and state |
@@ -247,9 +278,13 @@ odd n).
 `uniform(name, lo, hi, *, rate=None)`, `choice(name, values, *, rate=None)` and
 `exponential(name, lo, hi, scale, *, rate=None)` make the `jitters` entries
 (v0.2.1): seconds, or a table column's name for `lo`, `hi` or `scale`; `rate`
-is an int or `(num, den)` Hz that snaps the draws to whole frames. `frames` is
--1 for a jitter that does not snap. `jitter_map(spec, u)` maps a variate in
-[0, 1) with no session.
+is an int or `(num, den)` Hz that snaps the draws to whole frames, or
+`"display"` for the session's `display_rate` (v0.6). `frames` is -1 for a
+jitter that does not snap. `jitter_map(spec, u)` maps a variate in [0, 1)
+with no session.
+
+`var_choice(name, values)` makes a `vars` entry (v0.6): 1 to 32 str values of
+1 to 63 bytes each.
 
 `Table(csv, *, types=None, delimiter=',', allow_empty=False)` parses CSV text
 (str or bytes); `types` maps column names to `'integer'`, `'number'` or
@@ -262,7 +297,7 @@ generator. `strerror(code)` names an `ERR_*` code. Enums (standard-library
 `IntEnum`): `Order`, `Interleave`, `Rule`, also as `ORDER_*`, `INTERLEAVE_*`,
 `RULE_*`. Constants: `INVALID` (-1), `REQUEUE` (-2), `CONDITION`,
 `ANY_LEVEL`, `FLAG_*`, `ERR_*`, `MAX_TRIALS` (4096), `MAX_CONDITIONS`,
-`MAX_FACTORS`, `MAX_CONSTRAINTS`, `MAX_TRACKS`.
+`MAX_FACTORS`, `MAX_CONSTRAINTS`, `MAX_TRACKS`, `MAX_VARS`.
 
 `__version__` is `ytr_version()` from the compiled header, and the tests
 check that `pyproject.toml` carries the same string.
@@ -318,3 +353,8 @@ gives the same schedule as the equivalent arguments and survives a round
 trip through `format_rules()`. The 0.2.1 tests draw jitters in a session and
 replay them, read per-condition intervals from a table, and check
 `jitter_map()` against the inverse CDFs written from their definitions.
+The 0.6 tests check each variable's value and each trial seed against the
+stream written in Python from the manual, the data line, replay by
+`restore()`, a snapshot refused under another seed, the `var` statement's
+round trip, `weight` times `reps`, and `rate="display"` against the same
+fixed rate.

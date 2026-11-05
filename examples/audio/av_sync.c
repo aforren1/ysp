@@ -40,13 +40,14 @@
  * --db may then go up to -6 dBFS, for the comparator; without a board it
  * stays at -30 or lower.
  *
- * --sim: the simulated display and miniaudio's null device, and synthetic
- * board edges (the light 5 ms after each flip onset, the sound 12 ms after
- * each click's onset, with a ringing edge 0.3 ms after it) fed to the same
- * matcher. It checks its own results and exits 1 on a mismatch. About 12 s.
+ * --sim: the simulated display and the null device on ysp/rt.h's virtual
+ * clock, and synthetic board edges (the light 5 ms after each flip onset,
+ * the sound 12 ms after each click's onset, with a ringing edge 0.3 ms
+ * after it) fed to the same matcher. It checks its own results and exits
+ * 1 on a mismatch. Under a second: the virtual clock does not wait.
  *
- * CSV (--csv): one row per trial; planned in seconds on the ysp_rt clock,
- * every other time in seconds after planned.
+ * CSV (--csv): one row per trial; planned_s on the ysp_rt clock, every
+ * other time after planned_s; the columns of seconds end in _s.
  * Exit: 0, 1 when something did not open, a board was not running after
  * the warm-up, a trial had no edge or a --sim check failed, 2 usage.
  */
@@ -179,6 +180,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     if (n == 0) n = sim ? 12 : 30;
     if (sound_board) sound_dev = 2;
     if (!sound_ch) sound_ch = sound_board ? 1 : 2;
@@ -220,8 +223,8 @@ int main(int argc, char** argv) {
                 board ? board : (sim ? "synthetic (--sim)" : "none"), sound_board ? ", sound board " : "",
                 sound_board ? sound_board : "", (unsigned)light_dev, (unsigned)light_ch, (unsigned)sound_dev,
                 (unsigned)sound_ch);
-        fprintf(csv, "trial,frame,planned,flip_onset,flip_tier,flip_dropped,audio_onset,audio_tier,audio_flags,"
-                     "audio_minus_flip,light,sound,sound_minus_light\n");
+        fprintf(csv, "trial,frame,planned_s,flip_onset_s,flip_tier,flip_dropped,audio_onset_s,audio_tier,audio_flags,"
+                     "audio_minus_flip_s,light_s,sound_s,sound_minus_light_s\n");
     }
     (void)yrt_thread_elevate(NULL);
 
@@ -342,10 +345,12 @@ int main(int argc, char** argv) {
             fputc('\n', csv);
         }
         if (sim) {
-            /* the null device's fit is of callback times, so its onsets
-             * wander by up to a few ms (audio_schedule --null) */
+            /* On the virtual clock the null device's blocks keep their
+             * times: the sound is on the flash within half a sample (the
+             * default 48 kHz), where the plan meets the sample grid. */
             int ok = t->flip.tier == YSCR_TIER_SIM && t->a.tier == YAU_TIER_SIM &&
-                     !(t->a.flags & (YAU_ONSET_LATE | YAU_ONSET_XRUN)) && llabs(t->a.onset - t->flip.onset) <= YRT_MS(2) &&
+                     !(t->a.flags & (YAU_ONSET_LATE | YAU_ONSET_XRUN)) &&
+                     llabs(t->a.onset - t->flip.onset) <= 1000000000 / 48000 / 2 &&
                      t->light == t->flip.onset + SIM_LIGHT_NS && t->sound == t->a.onset + SIM_SOUND_NS;
             if (!ok) { fprintf(stderr, "audio_av_sync: --sim: trial %d is off\n", i); bad = 1; }
         }

@@ -95,5 +95,24 @@ int main(void) {
     ygfx_close(&g);
     yscr_close(&s);
     remove(path);
+    {   /* v0.6.0: the code beside the message, by type: a missing file is
+         * NOT_FOUND from the open, the probe and the writer */
+        yvid_info info;
+        int32_t* codes[2];
+        codes[0] = &mv.error_code;
+        codes[1] = &w.error_code;
+        memset(&mv, 0, sizeof mv);
+        vd.path = path;   /* removed above */
+        if (yvid_open(&mv, NULL, &vd) || *codes[0] != YVID_ERR_NOT_FOUND) return 16;
+        if (yvid_probe(&vd, &info, line, sizeof line) != YVID_ERR_NOT_FOUND) return 17;
+        sd.path = "ysp_video_compile_no_such_folder/x.yspseq";
+        if (yvid_seq_open(&w, &sd) || *codes[1] != YVID_ERR_NOT_FOUND) return 18;
+    }
+    {   /* v0.5.0: values on the enum rows only */
+        const yscr_param* t = yvid_params(&n);
+        int r, k = 0;
+        for (r = 0; t && r < n; r++) k += (t[r].values != NULL) == !strcmp(t[r].type, "enum");
+        if (!t || k != n) return 15;
+    }
     return yvid_params(&n) && n > 0 && yvid_xxh64("", 0, 0) == UINT64_C(0xEF46DB3751D8E999) ? 0 : 14;
 }

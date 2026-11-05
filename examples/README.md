@@ -6,21 +6,27 @@ program `<lib>_<name>` (for example `examples/gfx/gallery.c` is
 show but use another header's build; they keep their own file name as
 their program name (`YSP_EXAMPLES_ACROSS` in `CMakeLists.txt`):
 `rdk/gfx_rdk.c`, `rdk/gfx_rdk_bench.c`, `rdk/trial_rdk.c`, `timeline/gfx_trial.c`,
-`layout/gfx_layout.c`, `device/photodiode_check.c` and the
-`response/trial_*.c`; `net/labstreamer_flip.c` is `net_labstreamer_flip`
-and `audio/av_sync.c` is `audio_av_sync`.
+`layout/gfx_layout.c`, `layout/trial_instructions.c`,
+`video/trial_movie.c`, `device/photodiode_check.c`,
+`device/trial_eeg_triggers.c`, `timeline/trial_scanner_sync.c` and the
+`response/trial_*.c`; `net/labstreamer_flip.c` is `net_labstreamer_flip`,
+`audio/av_sync.c` is `audio_av_sync`, `color/patch.c` is `color_patch`
+and `gfx/gamma_null.c` is `gfx_gamma_null`.
 
 Run a program from the build folder (`build/<preset>/Release/` with MSVC,
 `build/<preset>/` otherwise). "Needs" says what a run needs beyond the
 build: SDL3 (a window), ANGLE (GL ES on Windows), a font, a device, or
 nothing. `--sim` runs a windowed example on the simulated display, which
-needs nothing; CI runs the commands marked "CI". The simulated display
-runs on the host's clock: while a loaded host's frame loop is behind,
-`yscr_begin()` plans later vblanks, as on a real display. So a `--sim`
-script times its synthetic input from the stimulus's flip record, not
-from a frame count, and checks onsets to whole periods (measured
-2026-10-10 under 12 CPU-bound processes: a target up to 550 ms after its
-frame count's time).
+needs nothing; CI runs the commands marked "CI". A `--sim` run calls
+`yrt_virtual_begin()` first (ysp/rt.h v0.9.0, VIRTUAL CLOCK): the
+simulated display, the null audio device and the synthetic input then
+run on a virtual clock, so the run gives the same records and output on
+any host, loaded or not, and takes the CPU time of its frames, not their
+display time. Its checks are exact: no frame slips. Costs (a draw, a
+decode, a build) read `yrt_real_ns()`, the real clock, so they print real
+times on either clock. `gfx_capture` stays on the real clock: its writer
+thread is real, and on the virtual clock the frame loop outran it. A script still times its synthetic input from the stimulus's flip
+record, not from a frame count, so it also runs on a real display.
 
 ## aep
 
@@ -49,6 +55,7 @@ frame count's time).
 |---|---|---|---|---|
 | `color_convert` | Conversions, gamut questions and gamut mapping on a calibration | color | `color_convert` (CI) | nothing |
 | `color_bench` | The cost of the conversions | rt, color | `color_bench` | nothing |
+| `color_patch` | PsychoPy's color and monitor demos: a patch through a `.yspcal` (or a nominal calibration, flagged) in the output stage, the OS gamma ramp untouched; a color in CIELAB, xyY or DKL walked in hue, chroma and lightness by keys; device RGB, gamut distance, refusals and 8-bit codes per step, the codes checked against the output pixel in a window | color, gfx, trials | `color_patch --sim` (CI); `color_patch --cal display.yspcal`; `color_patch --auto` (the walk in a window) | SDL3, ANGLE; a photometer's calibration for a claim about light |
 
 ## device
 
@@ -57,6 +64,7 @@ frame count's time).
 | `photodiode_check` | The MCU photodiode on the device layer: ports and keys, a console monitor, or edge minus flip onset in a window | device, screen | `photodiode_check --list`; `photodiode_check --key serial:16C0:0483:: --monitor 10`; `photodiode_check --key <key>` | SDL3; the board of `firmware/ysp_line/` (none for `--list`) |
 | `device_out_latency` | An output's write-to-edge latency by loopback: pulses on an output role, edges on an input board, the distribution in seconds and a file named by its SHA-256; `--store` keeps the file in the rig profile's `loopback/` and writes the role's binding and summary into the profile | device, rig (parallel) | `device_out_latency --sim` and `--sim --self` (no hardware); `device_out_latency --sim --n 20 --warmup 1 --store --rig-dir <folder>` (CI); `device_out_latency --out lines:<adapter key> --in <board key> --store` | nothing for `--sim`; else an output and a board of `firmware/ysp_line/` wired to it |
 | `device_trigger_flip` | An output role as a ysp/screen.h trigger channel: codes at planned vblanks, written by the device layer, deadline to write in the log | device, screen (no SDL) | `device_trigger_flip` (an in-process box); `device_trigger_flip --out lines:<adapter key>` | nothing; a trigger output with `--out` |
+| `trial_eeg_triggers` | PsychoPy's EEG demos: a stimulus code at the disc's flip (the trigger channel), a response code at the key, an end code at the trial's last flip, through the rig profile's role `trig` or an in-process TriggerBox; each write's start minus its flip onset or key stamp in the row | device, rigfile, gfx, timeline, trials, response | `trial_eeg_triggers --sim` (CI: every row, deadline and byte); `trial_eeg_triggers` | SDL3, ANGLE; a trigger output bound as `trig` in the rig profile for real lines |
 
 ## gfx
 
@@ -73,6 +81,7 @@ frame count's time).
 | `gfx_clut_sync` | Psychtoolbox's ClutAnimDemo and SyncedCLUTUpdateTest: a palette turned by `ygfx_set_lut()` each frame, a cancel test (image and table swapped on the same flip), both read back; then the OS gamma ramp set once a frame, timed against the vblank grid | gfx, screen | `gfx_clut_sync --sim` (CI); `gfx_clut_sync`; `gfx_clut_sync --fullscreen --os-ramp` (watch for flicker) | SDL3, ANGLE; Windows for the ramp phase |
 | `gfx_filtered_noise` | Psychtoolbox's FastFilteredNoiseDemo on the CPU: band-pass oriented and 1/f noise by FFT each trial, uploaded as R32F images, beside NOISE GAUSSIAN and SIMPLEX; the power in the band for each, and the make and upload cost per trial against the frame | gfx | `gfx_filtered_noise --sim` (CI); `gfx_filtered_noise --every-frame` | SDL3, ANGLE |
 | `gfx_gaze_contingent` | Psychtoolbox's GazeContingentDemo with the mouse as the gaze: a sharp Gaussian window on a blurred image; per frame the sample's stamp, the read and the flip onset (input to photon in software); `--inject` moves the pointer by SendInput | gfx, screen, input | `gfx_gaze_contingent --sim` (CI); `gfx_gaze_contingent`; `gfx_gaze_contingent --inject --out lat.csv` | SDL3, ANGLE; Windows for `--inject` and `--raw-mice` |
+| `gfx_gamma_null` | PsychoPy's gammaMotionNull: luminance and binary-noise texture gratings in quarter-cycle steps; two interleaved staircases set the output stage's table until the motion nulls; the display's gamma (or with `--cal`, the calibration's error) without a photometer; one readback checks the codes | gfx, stair, trials, timeline, response | `gfx_gamma_null --sim` (CI: a simulated observer, the null within 0.02 log10); `gfx_gamma_null`; `gfx_gamma_null --cal display.yspcal` | SDL3, ANGLE |
 | `gfx_capture` | Stimulus capture during a trial: every Nth or marked frame of 100 drifting gabors and a bar to PPM files, by the writer thread or by `ygfx_capture_pump()`; flip records and `end()` cost with capture on and off | gfx | `gfx_capture --sim --frames 60 --every 3 --out capture_sim/f` and `--mark 5 --manual` (CI); `gfx_capture --fullscreen --every 1 --out cap/f` | SDL3, ANGLE |
 
 ## layout
@@ -80,6 +89,7 @@ frame count's time).
 | Program | Shows | Headers | Run | Needs |
 |---|---|---|---|---|
 | `gfx_layout` | Paragraphs in seven scripts, bidi strings, BudouX breaking and an editor, through pack/layout | gfx, outline, pack/layout | `gfx_layout` | SDL3, ANGLE, `YSP_BUILD_LAYOUT=ON`, Windows fonts |
+| `trial_instructions` | jsPsych's instructions and PsychoPy's text demos: paragraph pages laid out once, rendered into targets in a setup pass, turned by Left and Right; each view's viewing time from two flip records, the key's RT from the view's | gfx, outline, pack/layout, trials, response | `trial_instructions --sim` (CI); `trial_instructions`; `trial_instructions --auto` (the scripted reader in a window) | SDL3, ANGLE, `YSP_BUILD_LAYOUT=ON`; a font for a window run |
 
 ## net
 
@@ -105,6 +115,7 @@ All three load liblsl at run time (docs/net.md, "How-to: get liblsl"); without i
 | `pack_bench` | The reader's costs (docs/pack.md 8): open, lookup, verification, a chunk through a cursor, allocations after open | rt, pack | `pack_bench <pack> [rounds]` | a pack; `ypak build` makes one |
 | `trial_images` | The pack path end to end (PsychoPy's randomisedBlocks, navon, mentalRotation): textures and the conditions table from a pack the build makes with `ypak` from generated PNGs (`trial_images_assets`); Navon and rotation blocks in random order; a grating through a graded mask image (a target and MULTIPLY) | pack, gfx, timeline, trials, response | `trial_images --sim`; `trial_images` | SDL3, ANGLE, `YSP_BUILD_PACK=ON` (the core tool is enough: no glyph runs) |
 | `ypak` (`pack/ypak.c`) | The pack tool: build a pack from a source description, verify, list, info, extract, cat, rebuild from the manifest, append to a player | pack, the tool library | `ypak build study.json -o study.ysppak` (the description: docs/pack.md 5.2); `ypak verify study.ysppak` (CI verifies the tool test's pack) | `YSP_BUILD_PACK=ON` and lodepng (`tools/vendor_pack.py --write`); glyph runs also need `YSP_BUILD_LAYOUT=ON` (docs/pack.md 5.1) |
+| `stroop/` (data, no program) | The Stroop definition of docs/experiment_format.md 2.14 as a pack source: the definition, its conditions CSV and a description that lists no glyph runs; `ypak` lays out the 9 texts of its 4 text stimuli into `experiment/stroop.ysprun` (gap G9) | the tool library | `ypak build examples/pack/stroop/pack.json -o stroop.ysppak` (the tool test builds it with a test font) | `YSP_BUILD_PACK=ON` and `YSP_BUILD_LAYOUT=ON`; Noto Sans Regular (OFL) as `examples/pack/stroop/fonts/NotoSans-Regular.ttf` |
 
 ## parallel
 
@@ -150,6 +161,8 @@ All three load liblsl at run time (docs/net.md, "How-to: get liblsl"); without i
 | Program | Shows | Headers | Run | Needs |
 |---|---|---|---|---|
 | `rigfile_profile` | The rig profile: load and check it (each loopback file by SHA-256), its roles, notes and hash; list profiles; a new profile; a binding by hand, also of an LSL stream (family `lsl`) | rigfile | `rigfile_profile`; `rigfile_profile --rig booth2`; `rigfile_profile --list`; `rigfile_profile --new booth-2`; `rigfile_profile --bind resp xid serial:0403:6001:FT4ABC12:`; `rigfile_profile --bind ref lsl lsl:Data::` (CI, in a folder of the runner's with `--dir`) | nothing |
+| `rigfile_bounds` | An input's bounds (stamp minus event) by loopback: a reference line board's pin into the input, each change against the board's own report, widened by that board's clock bracket; the range stored in the profile with `--store` | rigfile, device | `rigfile_bounds --sim --role photo --store --rig-dir DIR` (CI); `rigfile_bounds --role photo --ref serial:16C0:0483:<serial>: --store` | a second board with `firmware/ysp_line/` for a hardware run |
+| `rigfile_onset` | The display's onset offset from a photodiode run's CSV (`photodiode_check --csv`): the median of light minus flip onset, stored in the profile with its run | rigfile | `rigfile_onset run.csv --store` (CI, on a generated CSV) | a photodiode run for a real offset |
 | `rigfile_bench` | The costs of reading, checking, writing and hashing a profile, and ysp/json.h on a 1 MB document | rt, json, rigfile | `rigfile_bench` (under the measurement lock) | nothing |
 
 ## rt
@@ -196,6 +209,7 @@ The X11 display-timing probe for the GLX backend is in `tests/probe/screen_x11/`
 | `timeline_bench_targets` | The cost of target tweens per field, against channel tweens and a binding copy | rt, timeline | `timeline_bench_targets` | nothing |
 | `gfx_trial` | The timeline trial with gfx stimuli, whose fields the timeline writes itself (targets: GSAP-style sets and tweens) | gfx, timeline | `gfx_trial --sim` (CI); `gfx_trial` | SDL3, ANGLE |
 | `trial_sternberg` | PsychoPy's Sternberg demo: 2, 4 or 6 digits at a 0.5 s SOA from one op table (`ytl_run()`), a probe after 1 s; each digit's SOA from its flip record | gfx, outline, timeline, trials, response | `trial_sternberg --sim` (CI); `trial_sternberg` | SDL3, ANGLE; a font (the 5 x 7 bitmap digits without one) |
+| `trial_scanner_sync` | PsychoPy's fMRI demos: trials on a base anchored at the volume pulse after the dummies (non-slip timing), each onset on the first frame at or after its plan (`YTL_LEAD_NONE`), so none comes before its pulse; pulses as SYNC events from a key, the rig profile's line board `scanner` or an emulator thread; each onset's volume and its offset from that pulse; the TR the PC measured | input, device, rigfile, gfx, timeline, trials, response | `trial_scanner_sync --sim` (CI); `trial_scanner_sync --sync emulate`; `trial_scanner_sync` (the scanner's key 5) | SDL3, ANGLE; a scanner, or a line board on its TTL output |
 
 ## trials
 
@@ -206,6 +220,13 @@ The X11 display-timing probe for the GLX backend is in `tests/probe/screen_x11/`
 | `trials_interleave` | Three staircases and catch trials, interleaved | trials, stair | `trials_interleave` (CI) | nothing |
 | `trials_bench` | CSV parse rate, block views, open and next() costs | rt, trials | `trials_bench` | nothing |
 
+## dataset
+
+| Program | Shows | Headers | Run | Needs |
+|---|---|---|---|---|
+| `dataset_session` | A simulated 2AFC session's data set: session.json, trial, frame, event, clock and stream tables, the zip; trials.csv read back with ysp/table.h; a folder that exists is refused | dataset, trials, table, json | `dataset_session --out DIR` (CI) | nothing |
+| `dataset_bench` | The cost of a row of each table (flushed to the OS, or to the disk), of session.json's atomic rewrite, of the finish and the zip | rt, dataset | `dataset_bench NAME` | nothing |
+
 ## video
 
 | Program | Shows | Headers | Run | Needs |
@@ -213,6 +234,7 @@ The X11 display-timing probe for the GLX backend is in `tests/probe/screen_x11/`
 | `video_play` | A movie in a window, and the frame-thread cost | video | `video_play --sim` (CI); `video_play --file movie.mpg` | SDL3, ANGLE; a frame sequence or MPEG-1 file for `--file` |
 | `video_bench` | The decode thread's cost per frame | video | `video_bench --size 64x48 --reps 3` (CI); `video_bench --mpg clip.mpg` | SDL3 to build; a clip for MPEG-1 |
 | `video_check` | The GPU paths against the upload path, frame by frame | video | `video_check --file clip.mp4` | SDL3, ANGLE; Windows (Media Foundation); the test clips |
+| `trial_movie` | PsychoPy's movie demos and jsPsych's video-keyboard-response: RT from the flip record of the display frame that first showed a video frame (an event on the movie's timeline base), pause and seek by keys, each trial's shown, repeated and dropped counts, the soundtrack as a ysp/audio.h stream | video, audio, timeline, gfx, trials, response | `trial_movie --sim` (CI); `trial_movie`; `trial_movie --auto` (the scripted participant in a window) | SDL3, ANGLE, miniaudio; a sound device without `--sim` or `--no-sound` |
 
 ## web
 

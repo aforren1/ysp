@@ -443,6 +443,271 @@ static void test_cones_dkl(void) {
     }
 }
 
+/* v0.16: the enum table. The name switches have no default, so -Wswitch
+ * (gcc and clang -Wall; CI's -Werror) stops the build when an enum gains a
+ * value, and the value check then fails until its row lists it. */
+static const char* align_name(int v) {
+    switch ((ygfx_align)v) {
+    case YGFX_CENTER: return "center";
+    case YGFX_TOP_LEFT: return "top_left";
+    case YGFX_TOP: return "top";
+    case YGFX_TOP_RIGHT: return "top_right";
+    case YGFX_LEFT: return "left";
+    case YGFX_RIGHT: return "right";
+    case YGFX_BOTTOM_LEFT: return "bottom_left";
+    case YGFX_BOTTOM: return "bottom";
+    case YGFX_BOTTOM_RIGHT: return "bottom_right";
+    }
+    return NULL;
+}
+static const char* shape_name(int v) {
+    switch ((ygfx_shape_kind)v) {
+    case YGFX_RECT: return "rect";
+    case YGFX_CIRCLE: return "circle";
+    case YGFX_ANNULUS: return "annulus";
+    case YGFX_LINE: return "line";
+    case YGFX_POLYGON: return "polygon";
+    case YGFX_CROSS: return "cross";
+    case YGFX_NO_APERTURE: return "no_aperture";
+    case YGFX_MASK_TEX: return "mask_tex";
+    case YGFX_RRECT: return "rrect";
+    case YGFX_ARC: return "arc";
+    case YGFX_PIE: return "pie";
+    case YGFX_CAPSULE: return "capsule";
+    case YGFX_NGON: return "ngon";
+    case YGFX_STAR: return "star";
+    case YGFX_ELLIPSE: return "ellipse";
+    case YGFX_QBEZIER: return "qbezier";
+    case YGFX_POLYLINE: return "polyline";
+    case YGFX_COMPOUND: return "compound";
+    }
+    return NULL;
+}
+static const char* edge_name(int v) {
+    switch ((ygfx_edge)v) {
+    case YGFX_EDGE_HARD: return "hard";
+    case YGFX_EDGE_COSINE: return "cosine";
+    case YGFX_EDGE_GAUSSIAN: return "gaussian";
+    }
+    return NULL;
+}
+static const char* dist_name(int v) {
+    switch ((ygfx_noise_dist)v) {
+    case YGFX_UNIFORM: return "uniform";
+    case YGFX_BINARY: return "binary";
+    case YGFX_GAUSSIAN: return "gaussian";
+    case YGFX_SIMPLEX: return "simplex";
+    }
+    return NULL;
+}
+static const char* stroke_align_name(int v) {
+    switch ((ygfx_stroke_align)v) {
+    case YGFX_STROKE_CENTER: return "center";
+    case YGFX_STROKE_INSIDE: return "inside";
+    case YGFX_STROKE_OUTSIDE: return "outside";
+    }
+    return NULL;
+}
+static const char* join_name(int v) {
+    switch ((ygfx_join)v) {
+    case YGFX_JOIN_ROUND: return "round";
+    case YGFX_JOIN_MITER: return "miter";
+    case YGFX_JOIN_BEVEL: return "bevel";
+    }
+    return NULL;
+}
+static const char* cap_name(int v) {
+    switch ((ygfx_cap)v) {
+    case YGFX_CAP_BUTT: return "butt";
+    case YGFX_CAP_ROUND: return "round";
+    case YGFX_CAP_SQUARE: return "square";
+    }
+    return NULL;
+}
+static const char* blend_name(int v) {
+    switch ((ygfx_blend_mode)v) {
+    case YGFX_BLEND_MODE_OVER: return "over";
+    case YGFX_BLEND_MODE_ADD: return "add";
+    case YGFX_BLEND_MODE_MULTIPLY: return "multiply";
+    }
+    return NULL;
+}
+
+/* A row's "name=value" list: rising, each the C enum's name, the values in
+ * want (bit v) and nothing else. want 0: every value name_of knows. */
+static int enum_values_ok(const ygfx_param* p, const char* (*name_of)(int), uint64_t want) {
+    const char* s = p->values;
+    uint64_t seen = 0;
+    int prev = -1, v;
+    if (!want)
+        for (v = 0; v < 64; v++)
+            if (name_of(v)) want |= 1ull << v;
+    if (!s) return 0;
+    while (*s) {
+        const char* eq = strchr(s, '=');
+        const char* end = strchr(s, ',');
+        char name[48];
+        if (!end) end = s + strlen(s);
+        if (!eq || eq > end || (size_t)(eq - s) >= sizeof name) return 0;
+        memcpy(name, s, (size_t)(eq - s));
+        name[eq - s] = '\0';
+        v = atoi(eq + 1);
+        if (v <= prev || v >= 64 || v < p->min || v > p->max || !name_of(v) || strcmp(name_of(v), name)) return 0;
+        seen |= 1ull << v;
+        prev = v;
+        s = *end ? end + 1 : end;
+    }
+    return seen == want && prev == (int)p->max;
+}
+
+/* What row e must name: its ygfx_stim field and, for a flag, the bit; the
+ * kinds whose descs have the field. */
+typedef struct enum_field {
+    size_t off; uint32_t flag; const char* (*name_of)(int); uint64_t want; uint32_t kinds;
+} enum_field;
+
+static int enum_read(const ygfx_stim* s, int e, uint32_t flag) {
+    switch (e) {
+    case YGFX_E_PLACE: return s->place;
+    case YGFX_E_ANCHOR: {
+        int i;
+        for (i = 0; i < 9; i++) {
+            ygfx_stim t;
+            ygfx_shape_desc sd;
+            memset(&sd, 0, sizeof sd);
+            sd.anchor = (ygfx_align)i;
+            t = ygfx_shape(&sd);
+            if (t.ax == s->ax && t.ay == s->ay) return i;
+        }
+        return -1;
+    }
+    case YGFX_E_SHAPE: case YGFX_E_APERTURE: case YGFX_E_DOTS_APERTURE: return s->shape;
+    case YGFX_E_EDGE: return s->edge;
+    case YGFX_E_SQUARE: case YGFX_E_DIST: return s->wave;
+    case YGFX_E_OCTAVES: return s->gn_octaves;
+    case YGFX_E_STROKE_ALIGN: return s->stroke_align;
+    case YGFX_E_JOIN: return s->join;
+    case YGFX_E_CAP: return s->cap;
+    case YGFX_E_BLEND: return s->blend;
+    case YGFX_E_DASH_SNAP: return s->dash_snap;
+    default: return (s->flags & flag) != 0;
+    }
+}
+
+static void test_enum_params(void) {
+#define EK(k) (1u << (k))
+#define EK_APT (EK(YGFX_SHAPE) | EK(YGFX_GRATING) | EK(YGFX_NOISE) | EK(YGFX_DOTS) | EK(YGFX_USER))
+    static const enum_field want[YGFX_E_COUNT] = {
+        { offsetof(ygfx_stim, place), 0, align_name, 0, 0x1FEu },
+        { offsetof(ygfx_stim, ax), 0, align_name, 0, 0x1FEu },
+        { offsetof(ygfx_stim, shape), 0, shape_name, 0, EK(YGFX_SHAPE) },
+        { offsetof(ygfx_stim, shape), 0, shape_name, 0xFFull,   /* RECT to MASK_TEX: v0.1's apertures */
+          EK(YGFX_GRATING) | EK(YGFX_NOISE) | EK(YGFX_USER) },
+        { offsetof(ygfx_stim, shape), 0, shape_name, (1ull << YGFX_RECT) | (1ull << YGFX_CIRCLE) | (1ull << YGFX_NO_APERTURE),
+          EK(YGFX_DOTS) },
+        { offsetof(ygfx_stim, edge), 0, edge_name, 0, EK_APT },
+        { offsetof(ygfx_stim, wave), 0, NULL, 0, EK(YGFX_GRATING) },
+        { offsetof(ygfx_stim, wave), 0, dist_name, 0, EK(YGFX_NOISE) },
+        { offsetof(ygfx_stim, gn_octaves), 0, NULL, 0, EK(YGFX_NOISE) },
+        { offsetof(ygfx_stim, stroke_align), 0, stroke_align_name, 0, EK_APT },
+        { offsetof(ygfx_stim, join), 0, join_name, 0, EK(YGFX_SHAPE) },
+        { offsetof(ygfx_stim, cap), 0, cap_name, 0, EK(YGFX_SHAPE) },
+        { offsetof(ygfx_stim, blend), 0, blend_name, 0, EK(YGFX_SHAPE) | EK(YGFX_TEXT) },
+        { offsetof(ygfx_stim, dash_snap), 0, NULL, 0, EK(YGFX_SHAPE) },
+        { offsetof(ygfx_stim, flags), YGFX_STIM_MODULATION, NULL, 0, EK(YGFX_IMAGE) },
+        { offsetof(ygfx_stim, flags), YGFX_STIM_LINEAR, NULL, 0, EK(YGFX_IMAGE) },
+        { offsetof(ygfx_stim, flags), YGFX_STIM_ADD, NULL, 0, EK(YGFX_IMAGE) },
+        { offsetof(ygfx_stim, flags), YGFX_STIM_PREMULTIPLIED, NULL, 0, EK(YGFX_IMAGE) },
+        { offsetof(ygfx_stim, flags), YGFX_STIM_COVERAGE, NULL, 0, EK(YGFX_IMAGE) },
+        { offsetof(ygfx_stim, flags), YGFX_STIM_ALIASED, NULL, 0, EK(YGFX_TEXT) },
+        { offsetof(ygfx_stim, flags), YGFX_STIM_RAYS, NULL, 0, EK(YGFX_TEXT) },
+    };
+#undef EK
+#undef EK_APT
+    ygfx_stim zero[YGFX_KIND_COUNT];
+    int n = -1, e, k, j, v, rows = 0;
+    const ygfx_param* p = ygfx_enum_params(&n);
+    g_where = "enum_params";
+    CHECK(p != NULL && n == YGFX_E_COUNT && ygfx_enum_params(NULL) == p);
+    /* each kind's stimulus from a zero desc: what a zero field gives */
+    memset(zero, 0, sizeof zero);
+    {
+        ygfx_shape_desc a; ygfx_grating_desc b; ygfx_gabor_desc c; ygfx_dots_desc d; ygfx_image_desc i;
+        ygfx_noise_desc o; ygfx_crun_desc t; ygfx_user_desc u;
+        memset(&a, 0, sizeof a); memset(&b, 0, sizeof b); memset(&c, 0, sizeof c); memset(&d, 0, sizeof d);
+        memset(&i, 0, sizeof i); memset(&o, 0, sizeof o); memset(&t, 0, sizeof t); memset(&u, 0, sizeof u);
+        zero[YGFX_SHAPE] = ygfx_shape(&a);
+        zero[YGFX_GRATING] = ygfx_grating(&b);
+        zero[YGFX_GABOR] = ygfx_gabor(&c);
+        zero[YGFX_DOTS] = ygfx_dots(&d);
+        zero[YGFX_IMAGE] = ygfx_image(NULL, &i);
+        zero[YGFX_NOISE] = ygfx_noise(&o);
+        zero[YGFX_TEXT] = ygfx_crun(NULL, &t);
+        zero[YGFX_USER] = ygfx_user(&u);
+    }
+    for (k = 1; k < YGFX_KIND_COUNT; k++) CHECK(zero[k].kind == k);
+    CHECK(ygfx_enum_get(NULL, 0) == YGFX_ERR_ARG && ygfx_enum_set(NULL, 0, 0) == YGFX_ERR_ARG);
+    CHECK(ygfx_enum_get(&zero[YGFX_SHAPE], -1) == YGFX_ERR_ARG && ygfx_enum_get(&zero[YGFX_SHAPE], YGFX_E_COUNT) == YGFX_ERR_ARG);
+    for (e = 0; e < n; e++) {
+        const ygfx_param* r = &p[e];
+        int is_enum = !strcmp(r->type, "enum");
+        CHECK(r->name && r->type && r->unit && r->doc && r->doc[0]);
+        CHECK(r->min <= r->def && r->def <= r->max);
+        CHECK(r->offset == want[e].off);
+        CHECK(r->kinds == want[e].kinds);
+        CHECK(is_enum || !strcmp(r->type, "bool") || !strcmp(r->type, "i32"));
+        CHECK(is_enum == (r->values != NULL) && is_enum == (want[e].name_of != NULL));
+        if (is_enum && !enum_values_ok(r, want[e].name_of, want[e].want)) {
+            fprintf(stderr, "gfx_test [%s]: FAIL: %s's values [%s] are not its enum's\n", g_where, r->name, r->values);
+            g_failures++;
+        }
+        /* no kind reads two rows of one name */
+        for (j = 0; j < e; j++) CHECK(strcmp(p[j].name, r->name) != 0 || (p[j].kinds & r->kinds) == 0);
+        for (k = 1; k < YGFX_KIND_COUNT; k++) {
+            ygfx_stim s = zero[k];
+            if (!(r->kinds & (1u << k))) {
+                CHECK(ygfx_enum_get(&s, e) == YGFX_ERR_ARG && ygfx_enum_set(&s, e, (int)r->def) == YGFX_ERR_ARG);
+                continue;
+            }
+            rows++;
+            /* the default is what a zero desc field gives */
+            if (ygfx_enum_get(&s, e) != (int)r->def || enum_read(&s, e, want[e].flag) != (int)r->def) {
+                fprintf(stderr, "gfx_test [%s]: FAIL: %s on kind %d: a zero field gives %d, the table says %g\n",
+                        g_where, r->name, k, enum_read(&s, e, want[e].flag), r->def);
+                g_failures++;
+            }
+            /* every value it takes lands in its field, and nothing else */
+            for (v = (int)r->min - 1; v <= (int)r->max + 1; v++) {
+                int takes = v >= r->min && v <= r->max;
+                if (is_enum) {
+                    char key[16];
+                    snprintf(key, sizeof key, "=%d", v);
+                    takes = 0;
+                    {
+                        const char* f = r->values;
+                        size_t kl = strlen(key);
+                        while ((f = strstr(f, key)) != NULL) {
+                            if (f[kl] == ',' || f[kl] == '\0') takes = 1;
+                            f += kl;
+                        }
+                    }
+                }
+                s = zero[k];
+                if (!takes) { CHECK(ygfx_enum_set(&s, e, v) == YGFX_ERR_ARG && !memcmp(&s, &zero[k], sizeof s)); continue; }
+                CHECK(ygfx_enum_set(&s, e, v) == YGFX_OK);
+                CHECK(ygfx_enum_get(&s, e) == v && enum_read(&s, e, want[e].flag) == v);
+                CHECK(ygfx_enum_set(&s, e, (int)r->def) == YGFX_OK && !memcmp(&s, &zero[k], sizeof s));
+            }
+        }
+    }
+    {   /* an anchor between the nine points is no value */
+        ygfx_stim s = zero[YGFX_SHAPE];
+        s.ax = 0.25f;
+        CHECK(ygfx_enum_get(&s, YGFX_E_ANCHOR) == YGFX_ERR_ARG);
+    }
+    printf("enum params: %d rows, %d row-kind pairs: ok\n", n, rows);
+}
+
 static void test_tables(void) {
     int n = 0, m = 0, i, j;
     const ygfx_param* p = ygfx_params(&n);
@@ -454,6 +719,7 @@ static void test_tables(void) {
     CHECK(n == YGFX_P_COUNT && m > 5 && d);
     for (i = 0; i < n; i++) {
         CHECK(p[i].offset + sizeof(float) <= sizeof(ygfx_stim));
+        CHECK(p[i].values == NULL && !strcmp(p[i].type, "f32"));   /* v0.16: floats only */
         CHECK(p[i].min <= p[i].def && p[i].def <= p[i].max);
         for (j = 0; j < i; j++) CHECK(strcmp(p[i].name, p[j].name) != 0);
     }
@@ -501,6 +767,104 @@ static void test_tables(void) {
         }
     }
 }
+
+/* v0.17: the gfx's own desc table (yscr_param's shape, with values). */
+#include "param_table_check.h"
+
+static void ptc_fail(int line, const char* what) {
+    fprintf(stderr, "gfx_test [%s]: FAIL line %d: %s\n", g_where, line, what);
+    g_failures++;
+}
+
+/* No default, so -Wswitch (CI's -Werror) stops the build when an enum
+ * gains a value. cones is ysp/color.h's. */
+static const char* desc_units_name(int v) {
+    switch ((ygfx_units)v) {
+    case YGFX_PX: return "px";
+    case YGFX_DEG: return "deg";
+    }
+    return NULL;
+}
+static const char* desc_dither_name(int v) {
+    switch ((ygfx_dither)v) {
+    case YGFX_DITHER_NONE: return "none";
+    case YGFX_DITHER_ORDERED: return "ordered";
+    case YGFX_DITHER_NOISE: return "noise";
+    }
+    return NULL;
+}
+static const char* desc_output_name(int v) {
+    switch ((ygfx_output)v) {
+    case YGFX_OUT_8: return "out_8";
+    case YGFX_OUT_10: return "out_10";
+    case YGFX_OUT_MONO_PP: return "out_mono_pp";
+    case YGFX_OUT_COLOR_PP: return "out_color_pp";
+    }
+    return NULL;
+}
+static const char* desc_stereo_name(int v) {
+    switch ((ygfx_stereo)v) {
+    case YGFX_MONO: return "mono";
+    case YGFX_SIDE_BY_SIDE: return "side_by_side";
+    case YGFX_ROW_INTERLEAVED: return "row_interleaved";
+    case YGFX_FRAME_SEQUENTIAL: return "frame_sequential";
+    }
+    return NULL;
+}
+static const char* desc_cones_name(int v) {
+    switch ((ycol_cones)v) {
+    case YCOL_CONES_SS2: return "ss2";
+    case YCOL_CONES_SS10: return "ss10";
+    }
+    return NULL;
+}
+
+#define GD_F(n, f, e) { n, offsetof(ygfx_desc, f), sizeof(((ygfx_desc*)0)->f), e }
+static const ptc_slot g_gd_fields[] = {
+    GD_F("background.r", background[0], NULL), GD_F("background.g", background[1], NULL),
+    GD_F("background.b", background[2], NULL), GD_F("units", units, desc_units_name),
+    GD_F("view.distance_mm", view.distance_mm, NULL), GD_F("view.width_mm", view.width_mm, NULL),
+    GD_F("dither", dither, desc_dither_name), GD_F("seed", seed, NULL), GD_F("output", output, desc_output_name),
+    GD_F("stereo", stereo, desc_stereo_name), GD_F("max_draws", max_draws, NULL), GD_F("cones", cones, desc_cones_name),
+};
+#undef GD_F
+#define GD_NF ((int)(sizeof g_gd_fields / sizeof g_gd_fields[0]))
+
+/* Every row is a real field with its C enum's values, and its default is
+ * what open() makes of a zero field: max_draws from the open gfx (a SIM
+ * screen and the null backend); every other zero stays 0. */
+static void test_desc_params(void) {
+    static yscr_screen scr;
+    static ygfx_gfx g;
+    ptc_row rows[16];
+    yscr_desc d;
+    ygfx_desc gd;
+    int n = -1, i;
+    const yscr_param* p = ygfx_desc_params(&n);
+    g_where = "desc_params";
+    CHECK(p != NULL && n == GD_NF && ygfx_desc_params(NULL) == p);
+    if (!p || n > 16) return;
+    for (i = 0; i < n; i++) PTC_ROW(rows[i], p[i]);
+    ptc_check_slots(rows, n, g_gd_fields, GD_NF);
+    memset(&d, 0, sizeof d);
+    d.backend = YSCR_BACKEND_SIM;
+    d.sim_period_ns = 1000000;
+    CHECK(yscr_open(&scr, &d));
+    memset(&gd, 0, sizeof gd);
+    gd.screen = &scr;
+    CHECK(ygfx_open(&g, &gd));
+    for (i = 0; i < n; i++) {
+        double want = !strcmp(p[i].name, "max_draws") ? (double)g.max_draws : 0.0;
+        if (want != p[i].def) {
+            fprintf(stderr, "gfx_test [%s]: FAIL: row %s: a zero field means %g, the table says %g\n", g_where, p[i].name,
+                    want, p[i].def);
+            g_failures++;
+        }
+    }
+    ygfx_close(&g);
+    yscr_close(&scr);
+}
+#undef GD_NF
 
 /* The transform, without GL: a 800 x 600 simulated screen and the null backend. */
 static void test_coordinates(void) {
@@ -875,28 +1239,40 @@ static void test_v12_capture_cpu(void) {
 
 #if !defined(YRT_NO_THREADS) && (!defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__))
     /* the writer thread: every frame, 3 slots, each copy done after 2 polls;
-     * no files. Every chosen frame is written or counted as dropped. */
+     * no files. Every chosen frame is written or counted as dropped. Frames
+     * 0 to 2 fill the slots and frame 3 drops, whatever the writer does. How
+     * many the writer gets through depends on the scheduler: 15 of 40 when
+     * it keeps up, 8 with 128 busy threads on 16 cores (2026-10-22). So the
+     * frames run on until 10 are written, and a writer that never frees a
+     * slot fails at 4000 frames. */
     ygfx__test_cap_delay = 2;
     memset(&seen, 0, sizeof seen);
     memset(&cd, 0, sizeof cd);
     cd.every = 1; cd.slots = 3;
     cd.on_frame = cap_on_frame; cd.ctx = &seen;
     CHECK(ygfx_capture_start(&g, &cd) == YGFX_OK);
-    for (i = 0; i < 40; i++) {
+    memset(&st, 0, sizeof st);
+    for (i = 0; i < 40 || (st.written < 10 && i < 4000); i++) {
         CHECK(yscr_begin(&scr, &f) == YSCR_OK);
         CHECK(ygfx_begin(&g, &f) == YGFX_OK);
         CHECK(ygfx_end(&g) == YGFX_OK);
         CHECK(yscr_flip(&scr) == YSCR_OK);
+        ygfx_capture_get_stats(&g, &st);
+    }
+    if (st.written < 10) {
+        fprintf(stderr, "gfx_test [%s]: FAIL line %d: the capture writer wrote %llu frames in %d\n", g_where, __LINE__,
+                (unsigned long long)st.written, i);
+        g_failures++;
     }
     k = ygfx_capture_stop(&g, &st);
     CHECK(k == (int)st.written);
-    CHECK(st.manual == 0 && st.chosen == 40 && st.written + st.dropped == 40 && st.failed == 0);
-    CHECK(st.written >= 10 && st.dropped >= 1 && st.busy_max == 3);
+    CHECK(st.manual == 0 && st.chosen == (uint64_t)i && st.written + st.dropped == (uint64_t)i && st.failed == 0);
+    CHECK(st.dropped >= 1 && st.busy_max == 3);
     CHECK(seen.n == (int)st.written && seen.bad_order == 0 && seen.rec_mismatch == 0);
     CHECK(st.no_record <= 3 && seen.with_record == seen.n - (int)st.no_record);
-    printf("v0.12 capture on SIM, every frame, 3 slots, copies done after 2 polls: %llu written, %llu dropped, %llu without a record; "
+    printf("v0.12 capture on SIM, every frame, 3 slots, copies done after 2 polls: %d frames, %llu written, %llu dropped, %llu without a record; "
            "the capture's state %u bytes\n",
-           (unsigned long long)st.written, (unsigned long long)st.dropped, (unsigned long long)st.no_record, (unsigned)sizeof(ygfx__cap));
+           i, (unsigned long long)st.written, (unsigned long long)st.dropped, (unsigned long long)st.no_record, (unsigned)sizeof(ygfx__cap));
 #endif
     ygfx__test_cap_delay = 0;
     ygfx__test_cap_fill = 0;
@@ -5687,6 +6063,9 @@ typedef struct stats8 {
     double mean[2][4];         /* rays, exact + rays: the mean edge error per size, worst rotation */
     double max_edge, off, exact, alone, buffer, target, added, jump, jump_ray, jump_corner, pal_frac, cpu;
     double rays_exact, rays_same;   /* .rays against the exact area; against the program without it */
+    double batch[2];                /* v0.17.2: runs of one block, batched, against one run: exact area, rays */
+    double batch_gap, batch_alias;  /* buffer runs with gaps against one run; rays runs, aliased every other, against max_batch 1 */
+    long   batch_draws[3], batch_blocks, batch_full;   /* draws batched, max_batch 1, reordered off; blocks; FULL at max_draws */
     double ol_exact, ol_same;       /* ysp/outline.h's set: against the exact coverage; against the test builder's */
     int    ol_ran;
     double cached[4];               /* a run cached in a target against drawn: RGBA16F over black, gray;
@@ -6205,6 +6584,21 @@ static int gl_suite(const char* name, ygfx_hl_device dev) {
         CHECK_LE(S8.off, 0.3);
         CHECK(S8.alone == 0.0);
         CHECK(S8.buffer == 0.0);
+        printf("  v0.17.2 curve runs of one block: 40 runs against one run %.2e (exact area), %.2e (rays); draws %ld batched, "
+               "%ld at max_batch 1, %ld in call order; %ld blocks; 1024 runs at the default max_draws: %s\n", S8.batch[0],
+               S8.batch[1], S8.batch_draws[0], S8.batch_draws[1], S8.batch_draws[2], S8.batch_blocks,
+               S8.batch_full == 0 ? "drawn, the 1025th refused" : "WRONG");
+        printf("  v0.17.2 curve runs: buffer runs with gaps against one run %.2e; rays runs aliased every other, batched against "
+               "one draw each %.2e\n", S8.batch_gap, S8.batch_alias);
+        CHECK(S8.batch[0] == 0.0);
+        CHECK(S8.batch[1] == 0.0);
+        CHECK(S8.batch_gap == 0.0);
+        CHECK(S8.batch_alias == 0.0);
+        CHECK(S8.batch_draws[0] == 3);    /* 16 + 16 + 8 */
+        CHECK(S8.batch_draws[1] == 40);
+        CHECK(S8.batch_draws[2] == 3);
+        CHECK(S8.batch_blocks == 40);
+        CHECK(S8.batch_full == 0);
         CHECK_LE(S8.target, 1e-3);   /* the target holds RGBA16F */
         CHECK(S8.added == 0.0);
         CHECK(S8.pal_bad == 0);
@@ -7219,6 +7613,106 @@ static void gl_v06_text(stats* st) {
         fromb = ygfx_crun(&R->g, &rd);
         gl_frame(&fromb, 1);
         S8.buffer = cs_rdiff(ref);
+        /* v0.17.2: a run without a palette is one block, and runs of one
+         * block batch, 16 a draw: 40 runs of one item each (the items over
+         * and over, so the order of the blending counts), each run with its
+         * own opacity, against the same 40 items in one run with that
+         * opacity in their contrast (a product either way: the same bits),
+         * batched, one draw each and in call order */
+        {
+            ygfx_citem it40[40], it40c[40];
+            ygfx_stim one40, many40[40];
+            ygfx_crun_desc bd;
+            int r;
+            for (k = 0; k < 40; k++) {
+                it40[k] = it[k % n];
+                it40c[k] = it40[k];
+                it40c[k].contrast = it40[k].contrast * (0.5f + 0.0625f * (float)(k % 5));
+            }
+            for (r = 0; r < 2; r++) {
+                int64_t d0;
+                bd = cs_rd(set, it40c, 40, 24);
+                bd.fields = YGFX_I_ORI | YGFX_I_SCALE | YGFX_I_CONTRAST;
+                bd.rays = r == 1;
+                one40 = ygfx_crun(&R->g, &bd);
+                gl_frame(&one40, 1);
+                cs_red(ref2);
+                for (k = 0; k < 40; k++) {
+                    bd.items = &it40[k]; bd.n = 1; bd.opacity = 0.5f + 0.0625f * (float)(k % 5);
+                    many40[k] = ygfx_crun(&R->g, &bd);
+                }
+                d0 = R->g.draws;
+                gl_frame(many40, 40);
+                if (r == 0) { S8.batch_draws[0] = (long)(R->g.draws - d0); S8.batch_blocks = R->g.n_blocks; }
+                S8.batch[r] = cs_rdiff(ref2);
+                R->g.max_batch = 1;
+                d0 = R->g.draws;
+                gl_frame(many40, 40);
+                if (r == 0) S8.batch_draws[1] = (long)(R->g.draws - d0);
+                S8.batch[r] = maxd(S8.batch[r], cs_rdiff(ref2));
+                R->g.max_batch = YGFX__BATCH;
+                R->g.no_reorder = 1;
+                d0 = R->g.draws;
+                gl_frame(many40, 40);
+                if (r == 0) S8.batch_draws[2] = (long)(R->g.draws - d0);
+                S8.batch[r] = maxd(S8.batch[r], cs_rdiff(ref2));
+                R->g.no_reorder = 0;
+            }
+            /* runs from one buffer whose items are not one after another
+             * (every other item) do not batch: against the same items in
+             * one run */
+            {
+                ygfx_citem odd[CS_N];
+                ygfx_stim gap[CS_N];
+                int m = 0;
+                for (k = 0; k < n; k += 2) {
+                    odd[m] = it[k];
+                    bd = cs_rd(set, it, 1, 24);
+                    bd.fields = YGFX_I_ORI | YGFX_I_SCALE | YGFX_I_CONTRAST;
+                    bd.items = NULL; bd.buf = b; bd.first = (uint32_t)k;
+                    gap[m++] = ygfx_crun(&R->g, &bd);
+                }
+                bd = cs_rd(set, odd, m, 24);
+                bd.fields = YGFX_I_ORI | YGFX_I_SCALE | YGFX_I_CONTRAST;
+                one40 = ygfx_crun(&R->g, &bd);
+                gl_frame(&one40, 1);
+                cs_red(ref2);
+                gl_frame(gap, m);
+                S8.batch_gap = cs_rdiff(ref2);
+            }
+            /* rays runs, every other one aliased: one program, but the
+             * fragment stage reads the flag from the draw's first block, so
+             * they must not share a draw. Against one draw each */
+            {
+                for (k = 0; k < 40; k++) {
+                    bd = cs_rd(set, &it40[k], 1, 24);
+                    bd.rays = true; bd.aliased = (k & 1) != 0;
+                    many40[k] = ygfx_crun(&R->g, &bd);
+                }
+                R->g.max_batch = 1;
+                gl_frame(many40, 40);
+                cs_red(ref2);
+                R->g.max_batch = YGFX__BATCH;
+                gl_frame(many40, 40);
+                S8.batch_alias = cs_rdiff(ref2);
+            }
+            /* max_draws counts blocks: the default 1024 takes 1024 such
+             * runs (each 3 blocks before 0.17.2) and refuses the next */
+            {
+                static ygfx_stim lots[1025];
+                int rc;
+                bd = cs_rd(set, it40, 1, 24);
+                for (k = 0; k < 1025; k++) lots[k] = ygfx_crun(&R->g, &bd);
+                CHECK(yscr_begin(&R->scr, &R->f) == YSCR_OK);
+                CHECK(ygfx_begin(&R->g, &R->f) == YGFX_OK);
+                rc = ygfx_draw_n(&R->g, lots, 1024);
+                S8.batch_full = rc == YGFX_OK ? 0 : 1;
+                rc = ygfx_draw(&R->g, &lots[1024]);
+                S8.batch_full += rc == YGFX_ERR_FULL ? 0 : 2;
+                CHECK(ygfx_end(&R->g) == YGFX_OK);
+                CHECK(yscr_flip(&R->scr) == YSCR_OK);
+            }
+        }
         /* the palette: an integer is its entry, bit for bit; a fraction mixes
          * two; contrast scales alpha. A rect glyph's interior over black. */
         {
@@ -8562,6 +9056,119 @@ static int wanted(const char* name, int ran) {
     return cs_full() || ran == 0;
 }
 
+/* v0.17.1: ygfx_text_make()'s font paths, on the null backend. A path
+ * longer than its 511-byte buffer is not opened: cut, it named another
+ * file, here one whose name is 1 byte shorter (not a font, so the old code
+ * said YGFX_ERR_FORMAT, not YGFX_ERR_IO). The error marks a path it cuts
+ * with "..."; it showed a cut path as a whole one. gcc 11.4 and 16.1 at
+ * -O1 warned about the cut (-Wformat-truncation). */
+#if defined(_WIN32)
+static int v17_wide(const char* p, wchar_t* w) { return MultiByteToWideChar(CP_UTF8, 0, p, -1, w, 600) > 0; }
+static int v17_mkdir(const char* p) { wchar_t w[600]; return v17_wide(p, w) && CreateDirectoryW(w, NULL); }
+static void v17_rmdir(const char* p) { wchar_t w[600]; if (v17_wide(p, w)) RemoveDirectoryW(w); }
+static void v17_unlink(const char* p) { wchar_t w[600]; if (v17_wide(p, w)) DeleteFileW(w); }
+static FILE* v17_create(const char* p) { return ygfx__wopen(p, L"wb"); }
+#else
+#include <sys/stat.h>
+static int v17_mkdir(const char* p) { return mkdir(p, 0700) == 0; }
+static void v17_rmdir(const char* p) { rmdir(p); }
+static void v17_unlink(const char* p) { unlink(p); }
+static FILE* v17_create(const char* p) { return fopen(p, "wb"); }
+#endif
+
+static void test_v17_text_paths_cpu(void) {
+    static yscr_screen scr;
+    static ygfx_gfx g;
+    static char p[600];
+    size_t ends[8];   /* each folder's length, to remove them */
+    int nd = 0, made = 1, filed = 0, i;
+    size_t k, n;
+    yscr_desc d;
+    ygfx_desc gd;
+    ygfx_text t;
+    ygfx_text_desc td;
+    const char* e;
+    FILE* fp;
+#if defined(_WIN32)
+    const char* base = getenv("TEMP");
+    const char sep = '\\';
+    unsigned long pid = (unsigned long)GetCurrentProcessId();
+#else
+    const char* base = getenv("TMPDIR");
+    const char sep = '/';
+    unsigned long pid = (unsigned long)getpid();
+#endif
+    g_where = "cpu v0.17.1 text paths";
+    memset(&d, 0, sizeof d);
+    d.backend = YSCR_BACKEND_SIM;
+    d.sim_period_ns = 1000000;
+    CHECK(yscr_open(&scr, &d));
+    memset(&gd, 0, sizeof gd);
+    gd.screen = &scr;
+    CHECK(ygfx_open(&g, &gd));
+    memset(&td, 0, sizeof td);
+    td.text = "Ab";
+
+    /* a missing font of 450 bytes: named, cut, marked */
+    memcpy(p, "no/such/", 8);
+    for (k = 8; k < 450; k++) p[k] = 'a';
+    p[450] = '\0';
+    td.font = p;
+    CHECK(ygfx_text_make(&g, &t, &td) == YGFX_ERR_IO);
+    e = ygfx_error(&g);
+    CHECK(strstr(e, "no/such/aaaa") != NULL && strstr(e, "a...)") != NULL && strstr(e, p) == NULL);
+    ygfx_text_free(&g, &t);
+
+    /* a file whose path is 511 bytes, in folders of 200 (an extended-length
+     * path on Windows, past MAX_PATH) */
+#if defined(_WIN32)
+    snprintf(p, sizeof p, "\\\\?\\%s%cysp_gfx_v17_%lu", base ? base : "C:\\Windows\\Temp", sep, pid);
+    for (k = 4; p[k]; k++) if (p[k] == '/') p[k] = '\\';
+#else
+    snprintf(p, sizeof p, "%s%cysp_gfx_v17_%lu", base && base[0] ? base : "/tmp", sep, pid);
+#endif
+    n = strlen(p);
+    if (n > 250 || !v17_mkdir(p)) made = 0;
+    else ends[nd++] = n;
+    while (made && 511 - n - 1 > 250) {
+        p[n++] = sep;
+        for (k = 0; k < 200; k++) p[n++] = 'd';
+        p[n] = '\0';
+        if (!v17_mkdir(p)) { made = 0; break; }
+        ends[nd++] = n;
+    }
+    if (made) {
+        p[n++] = sep;
+        while (n < 511) p[n++] = 'f';
+        p[n] = '\0';
+        fp = v17_create(p);
+        filed = fp != NULL;
+        if (!fp || fputs("not a font", fp) < 0) made = 0;
+        if (fp && fclose(fp) != 0) made = 0;
+    }
+    td.font = p;
+    if (!made) {
+        printf("  v0.17.1 text paths: no file made at 511 bytes: the long-path check did not run\n");
+    } else if (ygfx_text_make(&g, &t, &td) != YGFX_ERR_FORMAT) {
+        fprintf(stderr, "gfx_test [%s]: FAIL line %d: the file at 511 bytes: %s\n", g_where, __LINE__, ygfx_error(&g));
+        g_failures++;
+    } else {
+        ygfx_text_free(&g, &t);
+        p[511] = 'f';
+        p[512] = '\0';
+        CHECK(ygfx_text_make(&g, &t, &td) == YGFX_ERR_IO);   /* cut, it opened the file above */
+        CHECK(strstr(ygfx_error(&g), "...)") != NULL);
+        ygfx_text_free(&g, &t);
+        p[511] = '\0';
+        printf("  v0.17.1 text paths: a file at 511 bytes opens; 512 bytes are refused\n");
+    }
+    if (filed) v17_unlink(p);
+    for (i = nd - 1; i >= 0; i--) { p[ends[i]] = '\0'; v17_rmdir(p); }
+    ygfx_close(&g);
+    yscr_close(&scr);
+    g_where = "cpu";
+}
+
 int main(void) {
     int ran = 0;
     const char* req = getenv("YGFX_TEST_REQUIRE_GL");
@@ -8570,6 +9177,8 @@ int main(void) {
     test_cal_srgb();
     test_cones_dkl();
     test_tables();
+    test_enum_params();
+    test_desc_params();
     test_coordinates();
     test_null_and_ring();
     test_v12_capture_cpu();
@@ -8580,6 +9189,7 @@ int main(void) {
     test_v04_inst_cpu();
     test_v06_cset_cpu();
     test_v10_simplex_cpu();
+    test_v17_text_paths_cpu();
     printf("v0.4 instances: the shader's cosine and sine of degrees, -720 to 720, against double: max %.2e\n", S6.csd_err);
     printf("v0.7 ellipse: the quarter perimeter against Simpson's rule, aspect 1 to 20: max relative %.2e\n", S4.ell_quarter);
     R = (rig*)calloc(1, sizeof *R);

@@ -26,7 +26,7 @@ import sys
 
 import numpy as np
 
-import ysp.stair as st
+import ysp.stair as yst
 
 try:
     from psychopy import logging as pp_logging
@@ -42,7 +42,7 @@ pp_logging.console.setLevel(pp_logging.CRITICAL)
 # the antilog, so the two agree to a few ulp per step, not bit for bit.
 REL_TOL = 1e-9
 
-STEP = {"lin": st.STEP_LIN, "log": st.STEP_LOG, "db": st.STEP_DB}
+STEP = {"lin": yst.STEP_LIN, "log": yst.STEP_LOG, "db": yst.STEP_DB}
 
 CASES = [
     # name, start, n_up, n_down, step_type, steps, initial_rule, min, max, p_correct
@@ -65,7 +65,7 @@ def run_case(case, responses):
               initial_rule=initial, stop_trials=len(responses), est_reversals=EST_WINDOW)
     if lo is not None:
         kw.update(min=lo, max=hi)
-    ours = st.Staircase(**kw)
+    ours = yst.Staircase(**kw)
     theirs = StairHandler(startVal=start, nReversals=None, stepSizes=list(steps),
                           nTrials=len(responses), nUp=n_up, nDown=n_down,
                           applyInitialRule=initial, stepType=step_type,
@@ -92,7 +92,7 @@ def run_case(case, responses):
     # The customary PsychoPy estimate is the arithmetic mean of the last few
     # reversal intensities. ysp_stair's EST_REVERSALS is that mean in the
     # step's units, so it is comparable directly for LIN only.
-    est_ours = ours.estimate(st.EST_REVERSALS)
+    est_ours = ours.estimate(yst.EST_REVERSALS)
     est_theirs = float(np.mean(their_rev_lev[-EST_WINDOW:])) if their_rev_lev else math.nan
     if step_type != "lin":
         est_theirs = float(10 ** np.mean(np.log10(their_rev_lev[-EST_WINDOW:])))

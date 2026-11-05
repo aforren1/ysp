@@ -14,10 +14,11 @@ typedef struct pack_api {
     const char* (*error)(const ypak_pack*);
     const char* (*strerror)(int);
     int (*cursor_init)(ypak_cursor*, ypak_pack*, const ypak_entry*, void*, size_t);
+    int (*verify_entry)(ypak_pack*, const ypak_entry*);
 } pack_api;
 
 static const pack_api g_pack_api = {
-    ypak_open, ypak_feed, ypak_close, ypak_error, ypak_strerror, ypak_cursor_init
+    ypak_open, ypak_feed, ypak_close, ypak_error, ypak_strerror, ypak_cursor_init, ypak_verify_entry
 };
 
 int main(void) {
@@ -39,5 +40,6 @@ int main(void) {
     if (g_pack_api.feed(&pk, NULL, 0) >= 0) return 6;
     (void)g_pack_api.strerror;
     (void)g_pack_api.cursor_init;
+    if (g_pack_api.verify_entry(&pk, NULL) != YPAK_ERR_ARG) return 7;
     return ypak_kind_id("table") == YPAK_KIND_TABLE ? 0 : 4;
 }

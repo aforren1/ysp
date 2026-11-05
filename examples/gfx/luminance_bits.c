@@ -333,6 +333,8 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--cal") && i + 1 < argc) cal_path = argv[++i];
         else { fprintf(stderr, "usage: gfx_luminance_bits [--sim] [--fullscreen] [--seconds S] [--cal FILE]\n"); return 2; }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sim) yrt_virtual_begin(0);
     if (!(seconds > 0)) { fprintf(stderr, "gfx_luminance_bits: --seconds takes a number above 0\n"); return 2; }
     if (cal_path ? !load_cal(cal_path) : ycol_cal_nominal(&cal, srgb_xy, 100.0f, 2.2) < 0) return 1;
     memset(&xd, 0, sizeof xd);

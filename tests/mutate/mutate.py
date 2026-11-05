@@ -18,8 +18,10 @@ in-tree headers while a run is in progress.
 See tests/mutate/README.md.
 """
 import argparse
+import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -129,8 +131,8 @@ def build(test, inc, src_dir, out_dir, tag):
         gcc = find_gcc()
         # $VARS in flags and libs: a test that links a library outside the
         # system paths (SDL3 for screen_glx) names its prefix this way.
-        flags = [os.path.expandvars(f) for f in test.get("flags", [])]
-        libs = [os.path.expandvars(f) for f in test.get("libs", [])]
+        flags = [os.path.expandvars(f).replace("{repo}", REPO) for f in test.get("flags", [])]
+        libs = [os.path.expandvars(f).replace("{repo}", REPO) for f in test.get("libs", [])]
         cmd = [gcc] + flags + ["-I" + inc, "-o", exe, src] + libs
         env = dict(os.environ)
         env["PATH"] = os.path.dirname(gcc) + os.pathsep + env.get("PATH", "")
@@ -168,16 +170,47 @@ def fail_keys(text, ignore):
     return keys
 
 
+TIMEOUT_MARK = "mutate.py: the test did not end in its timeout"
+GUARD = []   # --guard: the command that each test run goes through
+
+
 def run(exe, test, mutant, cwd):
     wait_quiet()
     env = run_env(test, mutant)
+    t = test.get("timeout", 600)
+    if GUARD:
+        # The guard can wait many minutes for the machine before it starts
+        # the test, so the timeout is applied inside it, by this script.
+        fwd = lambda p: p.replace("\\", "/")   # a path bash runs as it is
+        cmd = GUARD + [fwd(sys.executable), fwd(os.path.abspath(__file__)), "--run-one", str(t), fwd(exe)]
+        # The test's environment goes to the test only: a test's PATH (the
+        # window test's names SDL3.dll's directory and System32) would hide
+        # the guard's own tools.
+        genv = dict(os.environ)
+        genv["YSP_MUT_RUN_ENV"] = json.dumps(env)
+        r = subprocess.run(cmd, capture_output=True, text=True, env=genv, cwd=cwd, errors="replace")
+        out = r.stdout + r.stderr
+        if TIMEOUT_MARK in out:
+            return None, set(), ""
+        return r.returncode, fail_keys(out, test.get("ignore", [])), out
     try:
         r = subprocess.run([exe], capture_output=True, text=True, env=env, cwd=cwd,
-                           timeout=test.get("timeout", 600), errors="replace")
+                           timeout=t, errors="replace")
     except subprocess.TimeoutExpired:
         return None, set(), ""
     out = r.stdout + r.stderr
     return r.returncode, fail_keys(out, test.get("ignore", [])), out
+
+
+def run_one(seconds, exe):
+    """--run-one: runs exe with a timeout, under the guard."""
+    env = json.loads(os.environ.get("YSP_MUT_RUN_ENV", "null")) or None
+    try:
+        r = subprocess.run([exe], timeout=float(seconds), env=env)
+    except subprocess.TimeoutExpired:
+        print(TIMEOUT_MARK, flush=True)
+        return 124
+    return r.returncode
 
 
 # --- mutants -----------------------------------------------------------------
@@ -212,9 +245,17 @@ def load(path):
     return d
 
 
+def repo_file(f):
+    """A mutated file's path in the repository: a header under include/
+    ("ysp/pack.h"), or a pack tool source under pack/ ("import.c")."""
+    p = os.path.join(REPO, "include", f)
+    return p if os.path.exists(p) else os.path.join(REPO, "pack", f)
+
+
 def snapshot(work):
-    """Copies the headers and tests/adapt once, so a header someone edits
-    during the run cannot mix two versions into one result."""
+    """Copies the headers, the pack tool's C sources and tests/adapt once,
+    so a file someone edits during the run cannot mix two versions into
+    one result."""
     hdr = os.path.join(work, "hdr")
     tdir = os.path.join(work, "test")
     os.makedirs(hdr, exist_ok=True)
@@ -223,6 +264,14 @@ def snapshot(work):
     for f in os.listdir(os.path.join(REPO, "include", "ysp")):
         if f.endswith(".h"):
             shutil.copy2(os.path.join(REPO, "include", "ysp", f), os.path.join(hdr, "ysp"))
+    # pack/*.c beside the headers' folder: a test that includes "import.c"
+    # finds the copy, mutated or not, before any -I of the repository
+    for f in os.listdir(os.path.join(REPO, "pack")):
+        if f.endswith(".c"):
+            shutil.copy2(os.path.join(REPO, "pack", f), hdr)
+    for f in os.listdir(os.path.join(REPO, "pack", "ysp")):
+        if f.endswith(".h"):
+            shutil.copy2(os.path.join(REPO, "pack", "ysp", f), os.path.join(hdr, "ysp"))
     adapt = os.path.join(REPO, "tests", "adapt")
     for f in os.listdir(adapt):
         if f.endswith((".h", ".c")):
@@ -238,7 +287,14 @@ def main():
     ap.add_argument("--jobs", "-j", type=int, default=1, help="mutants built and run at once (default 1)")
     ap.add_argument("--work", help="work directory (default: a new temporary directory)")
     ap.add_argument("--keep", action="store_true", help="keep the work directory")
+    ap.add_argument("--guard", help="a command that each test run goes through, one run at a time, e.g. "
+                    "'bash C:/tmp/psy-guard.sh time mutate-window' (see README.md, Shared machine)")
     a = ap.parse_args()
+    if a.guard:
+        GUARD[:] = shlex.split(a.guard)
+        # By the PATH, as a shell finds it: CreateProcess looks in System32
+        # first, where bash.exe is WSL's.
+        GUARD[0] = shutil.which(GUARD[0]) or GUARD[0]
 
     paths = a.lists or sorted(os.path.join(HERE, f) for f in os.listdir(HERE) if f.endswith(".toml"))
     paths = [p if os.path.exists(p) else os.path.join(HERE, p) for p in paths]
@@ -250,7 +306,7 @@ def main():
             for m in L.get("mutant", []):
                 if a.only and m["id"] not in a.only:
                     continue
-                r = apply(m, L["header"], lambda f: open(os.path.join(REPO, "include", f), encoding="utf-8").read())
+                r = apply(m, L["header"], lambda f: open(repo_file(f), encoding="utf-8").read())
                 if isinstance(r, str):
                     bad += 1
                     say("%s %s: %s" % (os.path.basename(L["path"]), m["id"], r))
@@ -379,4 +435,6 @@ def main():
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 4 and sys.argv[1] == "--run-one":
+        sys.exit(run_one(sys.argv[2], sys.argv[3]))
     sys.exit(main())

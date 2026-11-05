@@ -1,4 +1,4 @@
-/* ysp/gfx.h - v0.15.0 - public domain single-header stimulus graphics library
+/* ysp/gfx.h - v0.17.2 - public domain single-header stimulus graphics library
  *   (with MIT-licensed parts: see below)
  *
  *   Stimuli on GL ES 3.0, on top of ysp/screen.h: signed-distance shapes
@@ -690,9 +690,17 @@
  *   { y: 40, opacity: 0, stagger: 0.05 }), is one channel per letter field.
  *   Items given by .items are copied at each draw into INSTANCES' element
  *   buffers (desc.max_instances a frame); a page of text goes in a
- *   ygfx_buffer once (.buf, .first) and costs no copy. Artwork is the same
- *   call, one item per layer at (0, 0) with a palette color: layers stack
- *   in item order, as GL blends one draw in order.
+ *   ygfx_buffer once (.buf, .first) and costs no copy. A run takes one of
+ *   desc.max_draws' blocks, three with YGFX_I_COLOR (the palette).
+ *   Batches (v0.17.2): runs drawn one after another in a pass share one
+ *   instanced draw, up to 16, when each is one block and they have the
+ *   same program, set, blend and aliased flag and their items follow each
+ *   other in one buffer (copied items always do; runs from one buffer when
+ *   their ranges meet). 500 one-word runs are 32 draws, not 500. On the
+ *   Iris Xe 500 draws cost 2.6 ms more CPU and 2.8 ms more GPU a frame
+ *   than one run of the same glyphs (docs/gfx.md, "v0.17.2").
+ *   Artwork is the same call, one item per layer at (0, 0) with a palette
+ *   color: layers stack in item order, as GL blends one draw in order.
  *   Coverage is the pixel's box filter, in linear light (text looks thinner
  *   than text blended in sRGB; nothing corrects it):
  *     exact     where the glyph is resolved (format flag bit 2: no contours
@@ -1047,6 +1055,42 @@
  *   and cos are coarse): within 4.4e-7 of double.
  *
  *   ---------------------------------------------------------------------
+ *   PARAMETERS
+ *   ---------------------------------------------------------------------
+ *   Every stimulus field a definition or a designer sets is in a table
+ *   (docs/rig_spec.md, principle 8), so a loader checks its keys and a
+ *   designer builds its panels from one source:
+ *     ygfx_params()        the float fields of ygfx_stim, YGFX_P_*: the
+ *                          ones ygfx_apply() binds to timeline channels
+ *     ygfx_enum_params()   v0.16: the rest, YGFX_E_*: enums (place,
+ *                          anchor, shape, aperture, edge, dist,
+ *                          stroke_align, join, cap, blend), bools (square,
+ *                          dash_snap, and the desc bools that are flags:
+ *                          modulation, linear, add, premultiplied,
+ *                          coverage, aliased, rays) and octaves
+ *     ygfx_group_params(), ygfx_prim_params(), ygfx_fx_params(),
+ *     ygfx_paint_params()  the float fields of the other structs
+ *     ygfx_desc_params()   the gfx's own desc (yscr_param's shape; its
+ *                          enums units, dither, output, stereo and cones
+ *                          have values from v0.17)
+ *   A row: name, type, inclusive range, the value a zero desc field gives,
+ *   unit, a line of doc, the offset in its struct, kinds (bit 1 << kind
+ *   for each kind that reads it) and values: for an enum the names and
+ *   values ("hard=0,cosine=1,gaussian=2"), NULL for the rest. An enum row
+ *   is named by the desc field: aperture is the shape field of GRATING,
+ *   NOISE, DOTS and USER, so it has two rows, one for DOTS (which take
+ *   RECT, CIRCLE or NO_APERTURE, and NO_APERTURE by default) and one for
+ *   the rest; look a name up with the stimulus's kind. Its offset is the
+ *   ygfx_stim field it sets: flags for a flag (the bit is in its doc),
+ *   ax for anchor (ax and ay). ygfx_enum_get(s, e) and ygfx_enum_set(s, e,
+ *   v) read and write row e on a stimulus, so a loader needs no layout:
+ *   set refuses (YGFX_ERR_ARG) a kind the row does not take and a value it
+ *   does not list; get gives YGFX_ERR_ARG for those, and for an anchor that
+ *   is none of the nine points. The desc pointers (fx, paint, prims, path,
+ *   palette, items) and the enums of the structs they point to are not in
+ *   the tables.
+ *
+ *   ---------------------------------------------------------------------
  *   OUTPUT STAGE
  *   ---------------------------------------------------------------------
  *   CLUT     n entries per channel from linear to device value (2 to
@@ -1299,6 +1343,43 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.17.2 - CURVE RUNS: a run without YGFX_I_COLOR takes one of
+ *          desc.max_draws' blocks (it took 3, so the default 1024 refused
+ *          the 342nd run of a frame), and runs of one block next to each
+ *          other share one instanced draw, up to 16 (CURVE RUNS). 500
+ *          one-word runs a frame missed 4 % of the frames at 60 Hz on the
+ *          Iris Xe: ygfx_end() submitted 500 draws through ANGLE (1 to 5
+ *          ms of CPU) ahead of most of the frame's GPU work (about 9 ms);
+ *          after, 1 of 3601 (docs/gfx.md, "v0.17.2"). Pixels unchanged
+ *          (tested bit for bit). The text program's vertex stage changed,
+ *          so a program cache made by an earlier version misses once.
+ *   v0.17.1 - Fixed: ygfx_text_make() cut a font path longer than 511
+ *          bytes to 511 and opened that, another file; it now does not
+ *          open it (YGFX_ERR_IO). The error's list of the paths tried
+ *          ends a path it cuts with "..." (it showed a cut path as a
+ *          whole one). Found by gcc's -Wformat-truncation at -O1, -Os
+ *          and -Og (gcc 11.4 and 16.1), which broke -Werror builds. No
+ *          change for a path that fits.
+ *   v0.17.0 - PARAMETERS: ygfx_desc_params() fills yscr_param's new last
+ *          field, values (ysp/screen.h v0.9.0): units, dither, output,
+ *          stereo and cones list their C enum's names and values
+ *          ("px=0,deg=1"), every other row NULL. output and stereo list
+ *          every value, and their max is the last one (was 0); open()
+ *          still takes OUT_8 and MONO only. output's names keep "out_"
+ *          ("out_8"), because a name never starts with a digit. The doc
+ *          text no longer lists the values. Needs ysp/screen.h v0.9.0.
+ *   v0.16.0 - PARAMETERS: ygfx_enum_params(), the stimulus fields that
+ *          are not floats (place, anchor, shape, aperture, edge, square,
+ *          dist, octaves, stroke_align, join, cap, blend, dash_snap and
+ *          the IMAGE and TEXT flags), with their kinds and enum values;
+ *          YGFX_E_* indices; ygfx_enum_get() and ygfx_enum_set().
+ *          ygfx_param has a last field, values (NULL in the float
+ *          tables): code that reads the tables compiles unchanged; one
+ *          that initializes a ygfx_param by position gets values NULL.
+ *   v0.15.1 - The program cache's open and store times and a text's build
+ *          time read yrt_real_ns() (ysp/rt.h v0.9.0): on the virtual clock
+ *          yrt_now_ns() stands still between waits, so they read 0. Shader
+ *          time stays on yrt_now_ns(). No other change.
  *   v0.15.0 - FIRST TRIAL and TEXT: ygfx_open_screen() (the screen and
  *          the gfx opened with OPEN START's overlap, then primed, in one
  *          call), ygfx_show_until_key() (an instruction or break screen:
@@ -1801,9 +1882,9 @@
 #define YSP_GFX_H_INCLUDED
 
 #define YGFX_VERSION_MAJOR 0
-#define YGFX_VERSION_MINOR 15
-#define YGFX_VERSION_PATCH 0
-#define YGFX_VERSION_STRING "0.15.0"
+#define YGFX_VERSION_MINOR 17
+#define YGFX_VERSION_PATCH 2
+#define YGFX_VERSION_STRING "0.17.2"
 
 #include "ysp/screen.h"
 #include "ysp/color.h"
@@ -2636,6 +2717,16 @@ enum {
     YGFX_P_COUNT
 };
 
+/* v0.16: indices into ygfx_enum_params() (PARAMETERS): the stimulus
+ * fields that are not floats. */
+enum {
+    YGFX_E_PLACE, YGFX_E_ANCHOR, YGFX_E_SHAPE, YGFX_E_APERTURE, YGFX_E_DOTS_APERTURE, YGFX_E_EDGE,
+    YGFX_E_SQUARE, YGFX_E_DIST, YGFX_E_OCTAVES, YGFX_E_STROKE_ALIGN, YGFX_E_JOIN, YGFX_E_CAP,
+    YGFX_E_BLEND, YGFX_E_DASH_SNAP, YGFX_E_MODULATION, YGFX_E_LINEAR, YGFX_E_ADD,
+    YGFX_E_PREMULTIPLIED, YGFX_E_COVERAGE, YGFX_E_ALIASED, YGFX_E_RAYS,
+    YGFX_E_COUNT
+};
+
 typedef struct ygfx_bind {
     ygfx_stim*  stim;
     uint16_t      param;    /* YGFX_P_*, or YGFX_G_* with group              */
@@ -2656,6 +2747,8 @@ typedef struct ygfx_param {
     const char* doc;
     uint32_t    offset;   /* in ygfx_stim                                      */
     uint32_t    kinds;    /* bit (1 << ygfx_kind) for each kind that reads it  */
+    const char* values;   /* v0.16, enum rows: "name=value" pairs joined by
+                           * ',', in value order; NULL for other types       */
 } ygfx_param;
 
 /* --- backend (the gfx backend interface) ------------------------------------ */
@@ -3264,6 +3357,13 @@ YGFX_API const ygfx_param* ygfx_fx_params(int* n);
 YGFX_API const ygfx_param* ygfx_paint_params(int* n);
 /* The desc fields a designer sets (yscr_param's shape). */
 YGFX_API const yscr_param* ygfx_desc_params(int* n);
+/* v0.16 (PARAMETERS): the stimulus fields that are not floats; *n gets
+ * YGFX_E_COUNT. Row e of a stimulus: get returns its value, set writes
+ * value and returns YGFX_OK; both YGFX_ERR_ARG for a kind the row does not
+ * take or a value it does not list (get: an anchor between the points). */
+YGFX_API const ygfx_param* ygfx_enum_params(int* n);
+YGFX_API int ygfx_enum_get(const ygfx_stim* s, int e);
+YGFX_API int ygfx_enum_set(ygfx_stim* s, int e, int value);
 
 /* Noise, bit for bit what the NOISE stimulus draws for check (cx, cy) from
  * its top-left corner. ygfx_noise_fill() writes w x h checks, rows top
@@ -3335,7 +3435,8 @@ extern "C" {
 /* A block of text. A zero field is the default. */
 typedef struct ygfx_text_desc {
     const char* text;          /* UTF-8; a newline ends a line; required */
-    const char* font;          /* a TrueType or CFF font file (face 0);
+    const char* font;          /* a TrueType or CFF font file (face 0), a
+                                * UTF-8 path of 511 bytes or fewer;
                                 * NULL: the system's sans font (TEXT)      */
     float       size;          /* px per em; 0 = 32                        */
     float       max_w;         /* wrap width, px; 0 = 0.8 x screen width   */
@@ -3364,8 +3465,9 @@ typedef struct ygfx_text {
  * ysp/outline.h, uploads it, and makes the run. When that made the text
  * program, it calls ygfx_prime(), so the text's first frame does not pay
  * for it. Setup work: it reads a file and allocates. YGFX_OK, or a code
- * with ygfx_error() set: YGFX_ERR_IO when no font file opens (the message
- * names the paths tried), YGFX_ERR_FORMAT when the font is refused. */
+ * with ygfx_error() set: YGFX_ERR_IO when no font file opens or the path
+ * is longer than 511 bytes (the message names the paths tried, a long one
+ * cut and ended with "..."), YGFX_ERR_FORMAT when the font is refused. */
 YGFX_API int  ygfx_text_make(ygfx_gfx* g, ygfx_text* t, const ygfx_text_desc* d);
 /* Frees the set and the items. Safe on a zeroed text and twice. */
 YGFX_API void ygfx_text_free(ygfx_gfx* g, ygfx_text* t);
@@ -5559,7 +5661,16 @@ static const char ygfx__glsl_text_vs[] =
     YGFX__GLSL_CSD
     "uvec4 ysp_w4_(int t, int L) { return texelFetch(ysp_utex0, ivec2(t & ((1 << L) - 1), t >> L), 0); }\n"
     "void main() {\n"
-    "    vec4 B0 = ysp_v[0], B1 = ysp_v[1], B2 = ysp_v[2], B3 = ysp_v[3], B4 = ysp_v[4];\n"
+    /* a draw holds up to 16 runs of one block each (CURVE RUNS), their
+     * items one after another: the instance's run is the first whose item
+     * count (B4.w) the instance index does not reach */
+    "    int r = 0, ii = gl_InstanceID;\n"
+    "    for (int j = 0; j < 15; j++) {\n"
+    "        int nj = int(ysp_v[r + 4].w);\n"
+    "        if (ii < nj) break;\n"
+    "        ii -= nj; r += 16;\n"
+    "    }\n"
+    "    vec4 B0 = ysp_v[r], B1 = ysp_v[r + 1], B2 = ysp_v[r + 2], B3 = ysp_v[r + 3], B4 = ysp_v[r + 4];\n"
     "    int m = int(B2.z), L = int(B4.x);\n"
     "    vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;\n"
     "    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);\n"
@@ -5578,13 +5689,13 @@ static const char ygfx__glsl_text_vs[] =
      * pack's, ysp_v[6]), not the pass's GL px: a target pass (rows top
      * first) and the scene then compute a pixel's em point from the same
      * bits, so a run cached in a target at 1:1 has the scene's coverage */
-    "    vec4 B6 = ysp_v[6];\n"
+    "    vec4 B6 = ysp_v[r + 6];\n"
     "    vec2 ax = B6.zw, ay = vec2(-B6.w, B6.z);\n"
     "    vec2 cs = (m & 2) != 0 ? ysp_csd_(ysp_a0.z) : vec2(1.0, 0.0);\n"
     "    vec2 ex = cs.x * ax + cs.y * ay, ey = cs.x * ay - cs.y * ax;\n"
     "    float sp = B1.w * k;\n"
     "    vec2 ce = 0.5 * (bb.xy + bb.zw), hb = 0.5 * (bb.zw - bb.xy);\n"
-    "    vec2 lc = (ysp_a0.xy - ysp_v[5].zw) * B1.z - B1.xy + B1.w * ce;\n"
+    "    vec2 lc = (ysp_a0.xy - ysp_v[r + 5].zw) * B1.z - B1.xy + B1.w * ce;\n"
     "    vec2 Q = B6.xy + lc.x * ax + lc.y * ay;\n"
     /* grown by what a pixel can reach past the outline: half its diagonal */
     "    vec2 w = Q + (c.x * (sp * hb.x + B4.y)) * ex + (c.y * (sp * hb.y + B4.y)) * ey;\n"
@@ -6016,9 +6127,9 @@ static void ygfx__prog_store2(ygfx_gfx* g, uint32_t id, const ygfx__prec* r) {
 static void ygfx__prog_store(ygfx_gfx* g, uint32_t id, const ygfx__prec* r) {
     int64_t t0;
     if (!r->store || !id) return;
-    t0 = yrt_now_ns();
+    t0 = yrt_real_ns();
     ygfx__prog_store2(g, id, r);
-    g->progs.store_ns += yrt_now_ns() - t0;
+    g->progs.store_ns += yrt_real_ns() - t0;
 }
 
 /* Builds one program from its text, from desc.cache when an entry there is
@@ -6509,7 +6620,7 @@ static bool ygfx__open_c(ygfx_gfx* g, const ygfx_desc* d, int64_t t_start) {
         uint32_t u[10];
         u[0] = (uint32_t)g->lut_n; u[1] = (uint32_t)g->dither; u[2] = (uint32_t)d->output;
         u[3] = g->cal_crc; u[4] = d->cal ? d->cal->flags : 0u; u[5] = (uint32_t)g->w; u[6] = (uint32_t)g->h;
-        g->progs.open_ns += yrt_now_ns() - t_start;
+        g->progs.open_ns += yrt_real_ns() - t_start;
         u[7] = g->progs.loaded; u[8] = g->progs.compiled; u[9] = (uint32_t)(g->progs.open_ns / 1000000);
         ygfx__push(g, (uint16_t)YGFX_EV_OPEN, 0, (uint32_t)g->scene_format, u, 10, 0);
         if (g->has_color) {
@@ -6530,7 +6641,7 @@ fail:
 }
 
 YGFX_API bool ygfx_open(ygfx_gfx* g, const ygfx_desc* d) {
-    int64_t t_start = yrt_now_ns();
+    int64_t t_start = yrt_real_ns();
     if (!g) return false;
     if (g->started) {   /* after ygfx_open_start(): its desc, not this one */
         int st = g->started;
@@ -6553,7 +6664,7 @@ YGFX_API bool ygfx_open(ygfx_gfx* g, const ygfx_desc* d) {
 }
 
 YGFX_API bool ygfx_open_start(ygfx_gfx* g, const ygfx_desc* d) {
-    int64_t t_start = yrt_now_ns();
+    int64_t t_start = yrt_real_ns();
     if (!g) return false;
     if (!ygfx__open_a(g, d)) return false;
     g->sdesc = *d;
@@ -6565,7 +6676,7 @@ YGFX_API bool ygfx_open_start(ygfx_gfx* g, const ygfx_desc* d) {
     }
     g->start_mode = g->started;
     g->open = 0;   /* nothing but ygfx_open() and ygfx_close() until it finishes */
-    g->progs.open_ns = yrt_now_ns() - t_start;
+    g->progs.open_ns = yrt_real_ns() - t_start;
     return true;
 }
 
@@ -6721,7 +6832,7 @@ static int ygfx__fc_store(void* user, uint64_t key, const void* data, size_t n) 
     char tmp[620], path[600], ext[40];
     FILE* f;
     int ok;
-    snprintf(ext, sizeof ext, "tmp%08x", (unsigned)(yrt_now_ns() & 0xFFFFFFFFu));
+    snprintf(ext, sizeof ext, "tmp%08x", (unsigned)(yrt_real_ns() & 0xFFFFFFFFu));
     ygfx__fc_path(fc, key, ext, tmp, sizeof tmp);
     ygfx__fc_path(fc, key, "yspprog", path, sizeof path);
 #if defined(_WIN32)
@@ -6790,14 +6901,16 @@ static void ygfx__stim_defaults(ygfx_stim* s, int kind) {
 
 static void ygfx__copy3(float* dst, const float* src) { dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2]; }
 
+/* The nine points of ygfx_align as fractions of a box. */
+static const float ygfx__align_fx[9] = { 0.5f, 0.0f, 0.5f, 1.0f, 0.0f, 1.0f, 0.0f, 0.5f, 1.0f };
+static const float ygfx__align_fy[9] = { 0.5f, 0.0f, 0.0f, 0.0f, 0.5f, 0.5f, 1.0f, 1.0f, 1.0f };
+
 /* A desc's place and anchor into the stimulus. */
 static void ygfx__align(ygfx_stim* s, ygfx_align place, ygfx_align anchor) {
-    static const float fx[9] = { 0.5f, 0.0f, 0.5f, 1.0f, 0.0f, 1.0f, 0.0f, 0.5f, 1.0f };
-    static const float fy[9] = { 0.5f, 0.0f, 0.0f, 0.0f, 0.5f, 0.5f, 1.0f, 1.0f, 1.0f };
     int a = (int)anchor >= 0 && (int)anchor < 9 ? (int)anchor : 0;
     s->place = (uint8_t)((int)place >= 0 && (int)place < 9 ? (int)place : 0);
-    s->ax = fx[a];
-    s->ay = fy[a];
+    s->ax = ygfx__align_fx[a];
+    s->ay = ygfx__align_fy[a];
 }
 
 YGFX_API ygfx_stim ygfx_shape(const ygfx_shape_desc* d) {
@@ -6994,14 +7107,12 @@ YGFX_API ygfx_stim ygfx_user(const ygfx_user_desc* d) {
 }
 
 YGFX_API ygfx_group ygfx_group_make(const ygfx_group_desc* d) {
-    static const float fx[9] = { 0.5f, 0.0f, 0.5f, 1.0f, 0.0f, 1.0f, 0.0f, 0.5f, 1.0f };
-    static const float fy[9] = { 0.5f, 0.0f, 0.0f, 0.0f, 0.5f, 0.5f, 1.0f, 1.0f, 1.0f };
     ygfx_group gr;
     memset(&gr, 0, sizeof gr);
     gr.visible = 1.0f; gr.ax = 0.5f; gr.ay = 0.5f; gr.scale = 1.0f; gr.opacity = 1.0f;
     if (!d) return gr;
     gr.place = (uint8_t)((int)d->place >= 0 && (int)d->place < 9 ? (int)d->place : 0);
-    if ((int)d->anchor > 0 && (int)d->anchor < 9) { gr.ax = fx[d->anchor]; gr.ay = fy[d->anchor]; }
+    if ((int)d->anchor > 0 && (int)d->anchor < 9) { gr.ax = ygfx__align_fx[d->anchor]; gr.ay = ygfx__align_fy[d->anchor]; }
     gr.x = d->x; gr.y = d->y; gr.w = d->w; gr.h = d->h; gr.ori = d->ori;
     if (d->scale != 0.0f) gr.scale = d->scale;
     if (d->opacity != 0.0f) gr.opacity = d->opacity;
@@ -8196,6 +8307,31 @@ static int ygfx__draw_n(ygfx_gfx* g, const ygfx_stim* s, int n) {
     return first;
 }
 
+/* Curve runs that one instanced draw can take (CURVE RUNS): the same
+ * program, set, blend and item buffer, one block each (so their blocks are
+ * one after another, in call order and after the reorder), items one after
+ * another, and the same aliased flag (the fragment stage reads it from the
+ * first run's block). How many follow cmds[i] in [i, end), at most max - 1;
+ * *n gets their items. */
+static int ygfx__text_batch(const ygfx_gfx* g, int i, int end, int max, uint32_t* n) {
+    const ygfx__cmd* a = &g->cmds[i];
+    const float* ba = (const float*)(g->staging + YGFX__FRAME_BYTES + (size_t)a->block * YGFX__BLOCK);
+    int j;
+    *n = a->count;
+    if (!a->inst || a->nblk != 1 || (a->pipe != g->text_pipe && a->pipe != g->text_rays_pipe)) return 0;
+    for (j = i + 1; j < end && j - i < max; j++) {
+        const ygfx__cmd* p = &g->cmds[j - 1];
+        const ygfx__cmd* b = &g->cmds[j];
+        const float* bb = (const float*)(g->staging + YGFX__FRAME_BYTES + (size_t)b->block * YGFX__BLOCK);
+        if (b->pipe != a->pipe || b->nblk != 1 || b->inst != a->inst || b->blend != a->blend ||
+            b->inst_off != p->inst_off + p->count * (uint32_t)sizeof(ygfx_citem) || memcmp(a->tex, b->tex, sizeof a->tex) != 0 ||
+            bb[11] != ba[11])
+            break;
+        *n += b->count;
+    }
+    return j - i - 1;
+}
+
 static int ygfx__same_batch(const ygfx__cmd* a, const ygfx__cmd* b) {
     return a->pipe == b->pipe && a->inst == 0 && b->inst == 0 && a->nblk == 1 && b->nblk == 1 && a->blend == b->blend &&
            memcmp(a->tex, b->tex, sizeof a->tex) == 0;
@@ -8408,7 +8544,10 @@ static int ygfx__end(ygfx_gfx* g, int setup) {
         bd.frame_off = (uint32_t)sg->frame_slot * YGFX__BLOCK;
         for (i = sg->first; i < sg->end; i = j) {
             const ygfx__cmd* c = &g->cmds[i];
-            for (j = i + 1; j < sg->end && j - i < g->max_batch && ygfx__same_batch(c, &g->cmds[j]); j++) {}
+            uint32_t n_text = 0;
+            int more = ygfx__text_batch(g, i, sg->end, g->max_batch, &n_text);
+            if (more) j = i + 1 + more;
+            else for (j = i + 1; j < sg->end && j - i < g->max_batch && ygfx__same_batch(c, &g->cmds[j]); j++) {}
             bd.pipeline = c->pipe;
             bd.stim_off = YGFX__FRAME_BYTES + c->block * YGFX__BLOCK;
             memcpy(bd.tex, c->tex, sizeof bd.tex);
@@ -8416,7 +8555,7 @@ static int ygfx__end(ygfx_gfx* g, int setup) {
             bd.instances_off = c->inst_off;
             bd.blend = c->blend;
             g->be->apply(g->bctx, &bd);
-            g->be->draw(g->bctx, 4, c->inst ? (int)c->count : j - i);
+            g->be->draw(g->bctx, 4, more ? (int)n_text : (c->inst ? (int)c->count : j - i));
             g->draws++;
         }
         g->be->pass_end(g->bctx);
@@ -9962,7 +10101,7 @@ static uint32_t ygfx__text_pack(ygfx_gfx* g, const ygfx_stim* s, float* b, ygfx_
     b[11] = (s->flags & YGFX_STIM_ALIASED) ? 1.0f : 0.0f;
     ygfx__copy3(b + 12, s->color);
     b[15] = (float)s->n_palette;
-    b[16] = (float)c->lt; b[17] = 0.75f; b[18] = (float)c->G; b[19] = 0.0f;
+    b[16] = (float)c->lt; b[17] = 0.75f; b[18] = (float)c->G; b[19] = (float)s->count;   /* a batch finds its runs by it */
     b[20] = ygfx__text_cap; b[21] = ygfx__text_e;
     b[22] = s->shape_p[0]; b[23] = s->shape_p[1];   /* the box's top-left in item units */
     {   /* the placement in px with y down, the same in every pass (the text program) */
@@ -9970,7 +10109,7 @@ static uint32_t ygfx__text_pack(ygfx_gfx* g, const ygfx_stim* s, float* b, ygfx_
         ygfx__frame_px(g, s, (double)g->cur_w, (double)g->cur_h, a, m, &cs, &sn);
         b[24] = (float)m[0]; b[25] = (float)m[1]; b[26] = (float)cs; b[27] = (float)sn;
     }
-    memset(b + 64, 0, 2 * YGFX__BLOCK);
+    if (f & YGFX_I_COLOR) memset(b + 64, 0, 2 * YGFX__BLOCK);   /* the palette's blocks */
     for (k = 0; k < 3; k++)
         if (s->color[k] < 0.0f || s->color[k] > 1.0f) { g->clipped++; break; }
     if ((f & YGFX_I_COLOR) && s->palette)
@@ -10019,7 +10158,9 @@ static uint32_t ygfx__text_pack(ygfx_gfx* g, const ygfx_stim* s, float* b, ygfx_
         cmd->inst_off = s->first * (uint32_t)sizeof(ygfx_citem);
     }
     cmd->count = s->count;
-    cmd->nblk = 3;
+    /* the palette, when there is one, is vec4 32 on: blocks 2 and 3. A run
+     * of one block batches with its neighbors (ygfx__text_batch) */
+    cmd->nblk = (f & YGFX_I_COLOR) ? 3u : 1u;
     cmd->tex[0] = c->tex_t;
     cmd->tex[3] = c->tex_w;
     if ((s->flags & YGFX_STIM_RAYS) && !g->text_rays_pipe)
@@ -11546,7 +11687,7 @@ static int ygfx__vpack(const ygfx_gfx* g, const ygfx_stim* s, float* b, double e
 #define YGFX__APT  (YGFX__K(YGFX_SHAPE) | YGFX__K(YGFX_GRATING) | YGFX__K(YGFX_NOISE) | \
                       YGFX__K(YGFX_USER) | YGFX__K(YGFX_DOTS))
 #define YGFX__F(name, field, lo, hi, def, unit, doc, kinds) \
-    { name, "f32", lo, hi, def, unit, doc, (uint32_t)offsetof(ygfx_stim, field), kinds }
+    { name, "f32", lo, hi, def, unit, doc, (uint32_t)offsetof(ygfx_stim, field), kinds, NULL }
 #define YGFX__P(i) YGFX__F("p" #i, p[i], -1e30, 1e30, 0, "", "user parameter; POLYGON vertex coordinate", \
                                YGFX__K(YGFX_USER) | YGFX__K(YGFX_SHAPE))
 
@@ -11608,7 +11749,7 @@ static const ygfx_param ygfx__params[YGFX_P_COUNT] = {
 };
 
 #define YGFX__GF(name, field, lo, hi, def, unit, doc) \
-    { name, "f32", lo, hi, def, unit, doc, (uint32_t)offsetof(ygfx_group, field), 0u }
+    { name, "f32", lo, hi, def, unit, doc, (uint32_t)offsetof(ygfx_group, field), 0u, NULL }
 static const ygfx_param ygfx__group_params[YGFX_G_COUNT] = {
     YGFX__GF("visible", visible, 0, 1, 1, "", "members drawn when 0.5 or more"),
     YGFX__GF("x", x, -1e6, 1e6, 0, "u", "anchor offset from the place point, +x right"),
@@ -11623,7 +11764,7 @@ static const ygfx_param ygfx__group_params[YGFX_G_COUNT] = {
 };
 
 #define YGFX__XF(T, name, field, lo, hi, def, unit, doc) \
-    { name, "f32", lo, hi, def, unit, doc, (uint32_t)offsetof(T, field), 0u }
+    { name, "f32", lo, hi, def, unit, doc, (uint32_t)offsetof(T, field), 0u, NULL }
 static const ygfx_param ygfx__prim_params[] = {
     YGFX__XF(ygfx_prim, "x", x, -1e6, 1e6, 0, "u", "center in the compound's box frame, +x right"),
     YGFX__XF(ygfx_prim, "y", y, -1e6, 1e6, 0, "u", "center, +y down"),
@@ -11750,23 +11891,154 @@ YGFX_API int ygfx_apply(const ygfx_bind* b, int n, const float* values) {
 }
 
 static const yscr_param ygfx__desc_params[] = {
-    { "background.r", "f32", 0, 1, 0, "rgb", "background, linear device red" },
-    { "background.g", "f32", 0, 1, 0, "rgb", "background, linear device green" },
-    { "background.b", "f32", 0, 1, 0, "rgb", "background, linear device blue" },
-    { "units", "enum", 0, 1, 0, "", "0 pixels, 1 degrees (one scale factor at the screen center)" },
-    { "view.distance_mm", "f32", 0, 1e5, 0, "mm", "viewing distance, degrees only" },
-    { "view.width_mm", "f32", 0, 1e5, 0, "mm", "width of the drawable area, degrees only" },
-    { "dither", "enum", 0, 2, 0, "", "0 none (round), 1 ordered 8x8, 2 noise per frame" },
-    { "seed", "u32", 0, 4294967295.0, 0, "", "noise dither seed" },
-    { "output", "enum", 0, 0, 0, "", "0 8-bit (the only one in v0.1)" },
-    { "stereo", "enum", 0, 0, 0, "", "0 mono (the only one in v0.1)" },
-    { "max_draws", "i32", 0, 65536, 1024, "", "draws per frame" },
-    { "cones", "enum", 0, 1, 0, "", "cones for DKL paint and ygfx_color(): 0 2 degree (SS2), 1 10 degree (SS10)" },
+    { "background.r", "f32", 0, 1, 0, "rgb", "background, linear device red", NULL },
+    { "background.g", "f32", 0, 1, 0, "rgb", "background, linear device green", NULL },
+    { "background.b", "f32", 0, 1, 0, "rgb", "background, linear device blue", NULL },
+    { "units", "enum", 0, 1, 0, "", "pixels, or degrees (one scale factor at the screen center)",
+      "px=0,deg=1" },
+    { "view.distance_mm", "f32", 0, 1e5, 0, "mm", "viewing distance, degrees only", NULL },
+    { "view.width_mm", "f32", 0, 1e5, 0, "mm", "width of the drawable area, degrees only", NULL },
+    { "dither", "enum", 0, 2, 0, "", "none (round), ordered 8x8, or noise per frame",
+      "none=0,ordered=1,noise=2" },
+    { "seed", "u32", 0, 4294967295.0, 0, "", "noise dither seed", NULL },
+    { "output", "enum", 0, 3, 0, "", "the output stage; open() takes out_8 only",
+      "out_8=0,out_10=1,out_mono_pp=2,out_color_pp=3" },
+    { "stereo", "enum", 0, 3, 0, "", "the stereo mode; open() takes mono only",
+      "mono=0,side_by_side=1,row_interleaved=2,frame_sequential=3" },
+    { "max_draws", "i32", 0, 65536, 1024, "", "draws per frame", NULL },
+    { "cones", "enum", 0, 1, 0, "", "cones for DKL paint and ygfx_color(): 2 degree (SS2) or 10 degree (SS10)",
+      "ss2=0,ss10=1" },
 };
 
 YGFX_API const yscr_param* ygfx_desc_params(int* n) {
     if (n) *n = (int)(sizeof ygfx__desc_params / sizeof ygfx__desc_params[0]);
     return ygfx__desc_params;
+}
+
+/* The enums' names are their C suffixes, lower case, so a definition's
+ * "top_left" is YGFX_TOP_LEFT. */
+#define YGFX__V_ALIGN "center=0,top_left=1,top=2,top_right=3,left=4,right=5,bottom_left=6,bottom=7,bottom_right=8"
+#define YGFX__V_APERTURE "rect=0,circle=1,annulus=2,line=3,polygon=4,cross=5,no_aperture=6,mask_tex=7"
+#define YGFX__E(name, type, lo, hi, def, doc, field, kinds, values) \
+    { name, type, lo, hi, def, "", doc, (uint32_t)offsetof(ygfx_stim, field), kinds, values }
+#define YGFX__TXT YGFX__K(YGFX_TEXT)
+#define YGFX__IMG YGFX__K(YGFX_IMAGE)
+static const ygfx_param ygfx__enum_params[YGFX_E_COUNT] = {
+    YGFX__E("place", "enum", 0, 8, 0, "the screen's point that x, y are from", place, YGFX__ALL, YGFX__V_ALIGN),
+    YGFX__E("anchor", "enum", 0, 8, 0, "the box's point at x, y: sets ax and ay", ax, YGFX__ALL, YGFX__V_ALIGN),
+    YGFX__E("shape", "enum", 0, 17, 0, "the SDF shape", shape, YGFX__K(YGFX_SHAPE),
+            YGFX__V_APERTURE ",rrect=8,arc=9,pie=10,capsule=11,ngon=12,star=13,ellipse=14,qbezier=15,polyline=16,"
+            "compound=17"),
+    YGFX__E("aperture", "enum", 0, 7, 0, "the carrier's SDF aperture (the shape field)", shape,
+            YGFX__K(YGFX_GRATING) | YGFX__K(YGFX_NOISE) | YGFX__K(YGFX_USER), YGFX__V_APERTURE),
+    YGFX__E("aperture", "enum", 0, 6, 6, "the dot field's aperture (the shape field); RECT needs a box", shape,
+            YGFX__K(YGFX_DOTS), "rect=0,circle=1,no_aperture=6"),
+    YGFX__E("edge", "enum", 0, 2, 0, "the edge profile; edge_width is its width", edge, YGFX__APT,
+            "hard=0,cosine=1,gaussian=2"),
+    YGFX__E("square", "bool", 0, 1, 0, "a square wave, not a sine (the wave field)", wave, YGFX__K(YGFX_GRATING), NULL),
+    YGFX__E("dist", "enum", 0, 3, 0, "the noise's distribution (the wave field)", wave, YGFX__K(YGFX_NOISE),
+            "uniform=0,binary=1,gaussian=2,simplex=3"),
+    YGFX__E("octaves", "i32", 1, 8, 1, "SIMPLEX: octaves of the fBm", gn_octaves, YGFX__K(YGFX_NOISE), NULL),
+    YGFX__E("stroke_align", "enum", 0, 2, 0, "where the stroke band lies about the boundary", stroke_align, YGFX__APT,
+            "center=0,inside=1,outside=2"),
+    YGFX__E("join", "enum", 0, 2, 0, "a stroke's corners", join, YGFX__K(YGFX_SHAPE), "round=0,miter=1,bevel=2"),
+    YGFX__E("cap", "enum", 0, 2, 0, "the ends of dashes, trims and open paths", cap, YGFX__K(YGFX_SHAPE),
+            "butt=0,round=1,square=2"),
+    YGFX__E("blend", "enum", 0, 2, 0, "how the color meets the scene, in linear light", blend,
+            YGFX__K(YGFX_SHAPE) | YGFX__TXT, "over=0,add=1,multiply=2"),
+    YGFX__E("dash_snap", "bool", 0, 1, 0, "closed boundaries: a whole number of dash periods", dash_snap,
+            YGFX__K(YGFX_SHAPE), NULL),
+    YGFX__E("modulation", "bool", 0, 1, 0, "the red channel modulates along dir (flag YGFX_STIM_MODULATION)", flags,
+            YGFX__IMG, NULL),
+    YGFX__E("linear", "bool", 0, 1, 0, "bilinear sampling (flag YGFX_STIM_LINEAR)", flags, YGFX__IMG, NULL),
+    YGFX__E("add", "bool", 0, 1, 0, "add the texels to the scene (flag YGFX_STIM_ADD)", flags, YGFX__IMG, NULL),
+    YGFX__E("premultiplied", "bool", 0, 1, 0, "rgb is times alpha; a target's image sets it (flag "
+            "YGFX_STIM_PREMULTIPLIED)", flags, YGFX__IMG, NULL),
+    YGFX__E("coverage", "bool", 0, 1, 0, "red is coverage of the tint (flag YGFX_STIM_COVERAGE)", flags, YGFX__IMG,
+            NULL),
+    YGFX__E("aliased", "bool", 0, 1, 0, "coverage 0 or 1 at the pixel center (flag YGFX_STIM_ALIASED)", flags,
+            YGFX__TXT, NULL),
+    YGFX__E("rays", "bool", 0, 1, 0, "the rays program also where the exact area applies (flag YGFX_STIM_RAYS)",
+            flags, YGFX__TXT, NULL),
+};
+#undef YGFX__E
+#undef YGFX__TXT
+#undef YGFX__IMG
+
+/* The flag of each bool row from YGFX_E_MODULATION on. */
+static const uint32_t ygfx__enum_flags[YGFX_E_COUNT - YGFX_E_MODULATION] = {
+    YGFX_STIM_MODULATION, YGFX_STIM_LINEAR, YGFX_STIM_ADD, YGFX_STIM_PREMULTIPLIED, YGFX_STIM_COVERAGE,
+    YGFX_STIM_ALIASED, YGFX_STIM_RAYS
+};
+
+YGFX_API const ygfx_param* ygfx_enum_params(int* n) {
+    if (n) *n = YGFX_E_COUNT;
+    return ygfx__enum_params;
+}
+
+/* Whether row e takes v: an enum's listed values, else min..max. */
+static bool ygfx__enum_takes(int e, int v) {
+    const ygfx_param* p = &ygfx__enum_params[e];
+    const char* s = p->values;
+    if (!s) return v >= p->min && v <= p->max;
+    while ((s = strchr(s, '=')) != NULL) {
+        char* end;
+        long x = strtol(s + 1, &end, 10);
+        if (x == v) return true;
+        s = end;
+    }
+    return false;
+}
+
+/* Whether row e exists and s's kind reads it. */
+static bool ygfx__enum_row(const ygfx_stim* s, int e) {
+    return s && e >= 0 && e < YGFX_E_COUNT && s->kind < YGFX_KIND_COUNT &&
+           (ygfx__enum_params[e].kinds & (1u << s->kind)) != 0;
+}
+
+YGFX_API int ygfx_enum_get(const ygfx_stim* s, int e) {
+    int v = -1, i;
+    if (!ygfx__enum_row(s, e)) return YGFX_ERR_ARG;
+    switch (e) {
+    case YGFX_E_PLACE: v = s->place; break;
+    case YGFX_E_ANCHOR:
+        for (i = 0; i < 9; i++)
+            if (s->ax == ygfx__align_fx[i] && s->ay == ygfx__align_fy[i]) v = i;
+        break;
+    case YGFX_E_SHAPE: case YGFX_E_APERTURE: case YGFX_E_DOTS_APERTURE: v = s->shape; break;
+    case YGFX_E_EDGE: v = s->edge; break;
+    case YGFX_E_SQUARE: case YGFX_E_DIST: v = s->wave; break;
+    case YGFX_E_OCTAVES: v = s->gn_octaves; break;
+    case YGFX_E_STROKE_ALIGN: v = s->stroke_align; break;
+    case YGFX_E_JOIN: v = s->join; break;
+    case YGFX_E_CAP: v = s->cap; break;
+    case YGFX_E_BLEND: v = s->blend; break;
+    case YGFX_E_DASH_SNAP: v = s->dash_snap; break;
+    default: v = (s->flags & ygfx__enum_flags[e - YGFX_E_MODULATION]) ? 1 : 0; break;
+    }
+    return ygfx__enum_takes(e, v) ? v : YGFX_ERR_ARG;
+}
+
+YGFX_API int ygfx_enum_set(ygfx_stim* s, int e, int value) {
+    if (!ygfx__enum_row(s, e) || !ygfx__enum_takes(e, value)) return YGFX_ERR_ARG;
+    switch (e) {
+    case YGFX_E_PLACE: s->place = (uint8_t)value; break;
+    case YGFX_E_ANCHOR: s->ax = ygfx__align_fx[value]; s->ay = ygfx__align_fy[value]; break;
+    case YGFX_E_SHAPE: case YGFX_E_APERTURE: case YGFX_E_DOTS_APERTURE: s->shape = (uint16_t)value; break;
+    case YGFX_E_EDGE: s->edge = (uint16_t)value; break;
+    case YGFX_E_SQUARE: case YGFX_E_DIST: s->wave = (uint16_t)value; break;
+    case YGFX_E_OCTAVES: s->gn_octaves = value; break;
+    case YGFX_E_STROKE_ALIGN: s->stroke_align = (uint8_t)value; break;
+    case YGFX_E_JOIN: s->join = (uint8_t)value; break;
+    case YGFX_E_CAP: s->cap = (uint8_t)value; break;
+    case YGFX_E_BLEND: s->blend = (uint8_t)value; break;
+    case YGFX_E_DASH_SNAP: s->dash_snap = (uint8_t)value; break;
+    default:
+        if (value) s->flags |= ygfx__enum_flags[e - YGFX_E_MODULATION];
+        else s->flags &= ~ygfx__enum_flags[e - YGFX_E_MODULATION];
+        break;
+    }
+    return YGFX_OK;
 }
 
 /* --- the calls on a gfx: a failure always leaves a message ------------------ */
@@ -12103,6 +12375,23 @@ static uint8_t* ygfx__read_file(const char* path, size_t* n) {
     return b;
 }
 
+/* The error's list of the font paths tried: a path that does not fit is
+ * cut and ends in "...", so the message never shows a cut path as a whole
+ * one (v0.17.1). */
+static void ygfx__tried_add(char* list, size_t cap, const char* s) {
+    size_t u = strlen(list), m = strlen(s), sep = u ? 2 : 0;
+    if (u + sep + 4 > cap) return;   /* not even "..." fits */
+    memcpy(list + u, ", ", sep);
+    u += sep;
+    if (u + m >= cap) {
+        m = cap - u - 4;
+        memcpy(list + u + m, "...", 4);
+    } else {
+        list[u + m] = '\0';
+    }
+    memcpy(list + u, s, m);
+}
+
 /* One code point; a malformed byte is U+FFFD, one byte at a time. */
 static uint32_t ygfx__utf8(const unsigned char** p) {
     const unsigned char* s = *p;
@@ -12130,7 +12419,7 @@ static int ygfx__u32_cmp(const void* a, const void* b) {
 typedef struct ygfx__tglyph { uint32_t cp, gid; float adv; } ygfx__tglyph;
 
 static int ygfx__text_make(ygfx_gfx* g, ygfx_text* t, const ygfx_text_desc* d) {
-    int64_t t_start = (int64_t)yrt_now_ns();
+    int64_t t_start = yrt_real_ns();
     char path[512], tried[400], err[160];
     uint8_t* bytes = NULL;
     size_t nbytes = 0, len, i, a, n = 0, nl = 0, nu = 0, k;
@@ -12151,21 +12440,20 @@ static int ygfx__text_make(ygfx_gfx* g, ygfx_text* t, const ygfx_text_desc* d) {
     path[0] = '\0';
     for (k = 0; !bytes && (d->font ? k < 1 : ygfx__text_fonts[k] != NULL); k++) {
         const char* f = d->font ? d->font : ygfx__text_fonts[k];
+        int pn;
         if (!strncmp(f, "%WINDIR%", 8)) {
             char w[260] = "C:/Windows";
 #if defined(_WIN32)
             DWORD wn = GetEnvironmentVariableA("WINDIR", w, (DWORD)sizeof w);
             if (wn == 0 || wn >= sizeof w) snprintf(w, sizeof w, "C:/Windows");
 #endif
-            snprintf(path, sizeof path, "%s%s", w, f + 8);
+            pn = snprintf(path, sizeof path, "%s%s", w, f + 8);
         } else {
-            snprintf(path, sizeof path, "%s", f);
+            pn = snprintf(path, sizeof path, "%s", f);
         }
-        bytes = ygfx__read_file(path, &nbytes);
-        if (!bytes) {
-            size_t u = strlen(tried);
-            snprintf(tried + u, sizeof tried - u, "%s%s", u ? ", " : "", path);
-        }
+        /* a path cut to fit names another file, which must not open (v0.17.1) */
+        if (pn > 0 && (size_t)pn < sizeof path) bytes = ygfx__read_file(path, &nbytes);
+        if (!bytes) ygfx__tried_add(tried, sizeof tried, path);
     }
     if (!bytes) {
         ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: text_make: no font file opened (%s)", tried);
@@ -12290,7 +12578,7 @@ static int ygfx__text_make(ygfx_gfx* g, ygfx_text* t, const ygfx_text_desc* d) {
             t->primed = ygfx_prime(g);
             if (t->primed < 0) { rc = t->primed; t->primed = 0; goto done; }
         }
-        t->build_ns = (int64_t)yrt_now_ns() - t_start;
+        t->build_ns = yrt_real_ns() - t_start;
     }
 done:
     free(bytes);

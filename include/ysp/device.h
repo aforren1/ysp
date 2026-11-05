@@ -1,4 +1,4 @@
-/* ysp/device.h - v0.3.2 - public domain single-header device layer
+/* ysp/device.h - v0.5.2 - public domain single-header device layer
  *
  *   A response box, a trigger box or a microcontroller board as a producer
  *   of ysp/input.h events with times on the ysp_rt clock, and as a target
@@ -137,7 +137,8 @@
  *   yrt_thread_elevate() unless desc.no_elevate. It blocks in the
  *   transport's read for at most read_timeout_ns (20 ms) and calls
  *   desc.sink on that thread for each event: a sink must be quick and
- *   thread-safe; yscr_push_input() is. ydev_close() asks the transport to
+ *   thread-safe; yscr_push_input() is. desc.rule (RESPONSE RULES) comes
+ *   before the sink. ydev_close() asks the transport to
  *   interrupt, joins the thread and closes the port.
  *   desc.manual: no thread. The caller calls ydev_poll() (one step: open,
  *   identify, read, decode, sink) from its own loop. With desc.now the
@@ -224,8 +225,8 @@
  *   YDEV_REC_OUT: t_ns = i64[0]; i64[0] the time just before the write
  *   (REPORTED: the mapped board time), i64[1] just after (REPORTED: the read
  *   time), i64[2] the width (the device's or the requested one; TRAILING:
- *   the host width between the two writes), i64[3] the flip deadline (FLIP)
- *   or the board ticks (REPORTED), u32[8] the code, u16[18] the YDEV_OUT_*
+ *   the host width between the two writes), i64[3] the flip deadline (FLIP),
+ *   the board ticks (REPORTED) or the press's t (RULE), u32[8] the code, u16[18] the YDEV_OUT_*
  *   flags, u16[19] the output's number (a pulse and its TRAILING record
  *   share it). MARK text follows as TEXT records "mark <text>", 34
  *   characters each. ydev_out_last() gives the last call's times.
@@ -250,6 +251,71 @@
  *   No second scheduler: the screen's worker is the clock.
  *
  *   ---------------------------------------------------------------------
+ *   RESPONSE RULES (v0.5)
+ *   ---------------------------------------------------------------------
+ *   A response trigger (an EEG code for the button pressed) sent from the
+ *   frame loop waits for the loop to see the press: up to a frame. A rule
+ *   sends it where the press is read. The frame thread arms it with a
+ *   window; the input's reader thread tries each event on it, before the
+ *   sink, and writes the code to the output at once:
+ *       ydev_rule_choice ch[2] = { 0 };
+ *       ch[0].kind = YIN_KIND_BOX; ch[0].control = 1; ch[0].code = 101;
+ *       ch[1].kind = YIN_KIND_BOX; ch[1].control = 2; ch[1].code = 102;
+ *       ydev_rule_desc rd = { 0 };
+ *       rd.out = &trig;                     // open, before the rule
+ *       rd.choices = ch; rd.n_choices = 2;
+ *       static ydev_rule rule;
+ *       if (!ydev_rule_open(&rule, &rd)) die(ydev_rule_error(&rule));
+ *       d.rule = &rule;                     // the response box's desc
+ *       ... ydev_open(&resp, &d) ...
+ *       // each trial, on the frame thread:
+ *       ydev_rule_arm(&rule, onset + min_rt, onset + duration);
+ *       ... ydev_rule_window(&rule, from, until);   // the onset moved
+ *       ydev_rule_get(&rule, &info);       // the fire, for the data row
+ *       ydev_rule_fires(&rule, f, 8);      // or each fire of the arm
+ *       // at the end: close the box, then the rule, then the output
+ *   ysp/response.h, included after this header, sets the window from a
+ *   collector (yrsp_rule_arm(), yrsp_rule_window()) and the choices from
+ *   its choices (yrsp_rule_choices()), so the rule and the collector agree;
+ *   yrsp_rule_sent() hands the fires to the collector, whose result flags
+ *   a code that its final responses do not match (its CODES SENT).
+ *   ydev_rule_fires() gives each fire of the arm (YDEV_RULE_FIRES, 8,
+ *   kept; more counted): the press, the code, the choice and the write's
+ *   result (YDEV_RULE_PENDING while it runs).
+ *   The rule: a PRESS, not a REPEAT, of a choice (kind exact, device and
+ *   control 0 = any; the first choice that matches gives the code), whose
+ *   t is in [from, until), while the arm has fires left (desc.max_fires:
+ *   0 = 1, as the first response ends a trial; < 0 no limit). Times are
+ *   the events' own t, so a box's mapped time decides, not its arrival.
+ *   The code is a pulse of desc.width_ns, or of the output's
+ *   desc.pulse_ns when 0 (a set when that is 0 too). Its YDEV_REC_OUT
+ *   record has the RULE flag and the press's t in i64[3]: write start
+ *   minus press is i64[0] - i64[3].
+ *   Threads: ydev_rule_input() is for any thread (a reader, a sink of your
+ *   own for a device on another layer); arm, window, disarm and get for
+ *   one thread. A small lock guards the window and the count; the fire is
+ *   claimed under it and written outside it, under the output's own lock,
+ *   so the rule's code and the frame loop's codes (the trigger channel,
+ *   ydev_out_pulse()) reach the output one write at a time, in the order
+ *   the records show. A rule's pulse while another pulse is pending moves
+ *   that pulse's end (REPLACED), as any pulse does. Nothing allocates.
+ *   The reader thread waits for the write: a USB write takes about 0.4 ms
+ *   (OUTPUTS), and the input's next read waits that long. Its events keep
+ *   their times.
+ *   The rule decides with the window it has when the press comes: when
+ *   the final onset moves the window after a press fired (a frame shown
+ *   late), the collector can call that press an anticipation (its
+ *   RECLASSIFIED flags) while the code went out.
+ *   Not hooked: ysp/screen.h's keys and raw mice (SDL's threads); call
+ *   ydev_rule_input() from a producer of your own.
+ *   Measured (examples/device/response_lag.c, in-process box and output,
+ *   Windows 11, i7-1360P, AC, the timing guard): press stamp to write
+ *   start through the frame loop at 60 Hz, p50 8.7 ms, max 16.7 ms (a
+ *   frame); through the rule, p50 5.2 us, p99 19.3 us, max 38.7 us, 600
+ *   presses each (docs/device.md). A real box adds its USB delivery
+ *   before the stamp and its write after the start, on both paths.
+ *
+ *   ---------------------------------------------------------------------
  *   ROLES
  *   ---------------------------------------------------------------------
  *   A role is the experiment's name for an instance ("resp", "trig"). With
@@ -264,12 +330,48 @@
  *   open or close runs.
  *
  *   ---------------------------------------------------------------------
+ *   PARAMETERS
+ *   ---------------------------------------------------------------------
+ *   ydev_params(family, &n) lists the desc fields that a rig profile or a
+ *   definition's role sets for one YBOX_ family: only the fields that
+ *   family reads, each with the value a zero field means for it (baud
+ *   9600 for the MMBT-S, max_width_ns 20 ms for XID, kind SYNC for PHOTO,
+ *   no min_hold_ns on the parallel port), so a loader checks a role's
+ *   keys and a designer builds its panel from one source
+ *   (docs/rig_spec.md, principle 8). NULL and *n 0 for another family.
+ *   Each row: the field's name, its type ("enum", "bool", "u32", "i64",
+ *   "str"), the inclusive range, the default, the unit ("ns" for int64
+ *   ns: a profile's x_s for x_ns), a line of doc, and for an enum its
+ *   names and values. Not in it: the program's fields (device, sink,
+ *   ring, transport, manual, now, roles, rule). ybox_family_name() names the
+ *   family.
+ *
+ *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
- *   v0.3.2 - POSIX: the reader thread starts SCHED_OTHER, not with its
+ *   v0.5.2 - POSIX: the reader thread starts SCHED_OTHER, not with its
  *          creator's policy, so a no_elevate reader opened by an elevated
- *          frame thread is not SCHED_FIFO (ysp/rt.h v0.8.1, the same
+ *          frame thread is not SCHED_FIFO (ysp/rt.h v0.9.2, the same
  *          change). STATUS: the first Linux runs. No other change.
+ *   v0.5.1 - Times near INT64_MAX. ydev_wait_running() with INT64_MAX
+ *          ("forever", the bindings' inf) waits, and a desc.retry_ns or
+ *          desc.probe_ns near INT64_MAX is "never": now plus the time
+ *          saturates at INT64_MAX. The plain sum overflowed (undefined
+ *          behavior) and in practice gave a time in the past: the wait
+ *          timed out at once, and a reopen or a query came at every poll.
+ *          A host-timed pulse near INT64_MAX wide holds its code until the
+ *          next output (ysp/serial.h v0.6.2). XID's width is capped at
+ *          4294967 ms before it is rounded, and a device-timed width that
+ *          the wire refuses is not rounded: both sums overflowed. Needs
+ *          ysp/serial.h v0.6.2. No API change.
+ *   v0.5.0 - RESPONSE RULES: ydev_rule, ydev_rule_open() and the others,
+ *          ydev_rule_fires() and ydev_rule_fire, desc.rule, YDEV_OUT_RULE: a response's code written on the
+ *          input's reader thread, not a frame later from the frame loop
+ *          (docs/experiment_format.md, gap G8).
+ *   v0.4.0 - PARAMETERS: ydev_params() and ydev_param, a table per family
+ *          of the desc fields it reads, with that family's defaults.
+ *          ydev_open() writes the family's baud into the handle's desc
+ *          for a desc.baud of 0 (the rate opened is unchanged).
  *   v0.3.1 - A host-timed pulse's width runs from the START of the leading
  *          write, not from its return: the trailing 0 is written at
  *          yser_pulse_off_at_ns() (ysp/serial.h v0.6.1), at least the new
@@ -303,6 +405,16 @@
  *          thread or manual polling, BRACKET fits with timer queries,
  *          match keys, identify, reconnect, records in a ysp/rt.h ring.
  *
+ *   STATUS: v0.5.1, 2026-10-27 (docs/device.md, "Times without end"):
+ *   tests/adapt/device_test.c waits with INT64_MAX and INT64_MAX - 1 ms,
+ *   and runs retry_ns, probe_ns and pulse widths of INT64_MAX; MSVC,
+ *   MinGW-w64, WSL2 gcc with ASan and UBSan.
+ *   STATUS: v0.5.0, 2026-10-21: the response rule checked on a virtual
+ *   clock (window bounds, fire counts, choices, repeats, a re-arm during a
+ *   write, the reader's hook, the response.h glue) and on the real clock
+ *   with 4 producer threads against arms, window moves and the frame
+ *   loop's own pulses, also under ThreadSanitizer on WSL2; 18 new mutants
+ *   caught. Lag measured on in-process devices only (RESPONSE RULES).
  *   STATUS: v0.2.0, 2026-10-08. Built with MSVC 19.44 (/W4 /WX, C11 and
  *   C++17), MinGW-w64 gcc 16.1 and gcc 11.4 on WSL2 (C99, C11, C++17,
  *   -Werror). tests/adapt/device_test.c runs simulated devices through a
@@ -318,7 +430,7 @@
  *   adapter and board. v0.3.1, 2026-10-12: the host-timed outputs (the
  *   TriggerBox byte path, DTR, RTS) into a Teensy 4.0 echo board on
  *   Windows' usbser.sys (tests/compare/serial_pulse/device_pulse.c), width
- *   error -65 to -16 us median, 0 of 2400 missed. v0.3.2, 2026-10-12, Linux
+ *   error -65 to -16 us median, 0 of 2400 missed. v0.5.2, 2026-10-12, Linux
  *   (Debian 12, kernel 6.11 liquorix, i5-14500): the same outputs into the
  *   same board on cdc_acm, width error -1.0 to +0.1 us median, p99 within
  *   +39 us, 0 of 2400 missed, the worker on SCHED_FIFO 1; and
@@ -334,18 +446,18 @@
 #define YSP_DEVICE_H_INCLUDED
 
 #define YDEV_VERSION_MAJOR 0
-#define YDEV_VERSION_MINOR 3
+#define YDEV_VERSION_MINOR 5
 #define YDEV_VERSION_PATCH 2
-#define YDEV_VERSION_STRING "0.3.2"
+#define YDEV_VERSION_STRING "0.5.2"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
 #include "ysp/box.h"
 #include "ysp/serial.h"
 
-/* yser_pulse_off_at_ns() came with v0.6.1 */
-#if YSER_VERSION_MAJOR == 0 && (YSER_VERSION_MINOR < 6 || (YSER_VERSION_MINOR == 6 && YSER_VERSION_PATCH < 1))
-#error "ysp/device.h v0.3.1 needs ysp/serial.h v0.6.1 or later"
+/* yser_pulse_off_at_ns() came with v0.6.1 and saturates since v0.6.2 */
+#if YSER_VERSION_MAJOR == 0 && (YSER_VERSION_MINOR < 6 || (YSER_VERSION_MINOR == 6 && YSER_VERSION_PATCH < 2))
+#error "ysp/device.h v0.5.1 needs ysp/serial.h v0.6.2 or later"
 #endif
 
 #include <stdint.h>
@@ -410,6 +522,7 @@ typedef enum ydev_lifecycle {
 #define YDEV_OUT_REPORTED     0x0040u /* the board's own report of a change  */
 #define YDEV_OUT_REPLACED     0x0080u /* moved a pending trailing edge       */
 #define YDEV_OUT_PULSE        0x0100u /* a pulse (else a set)                */
+#define YDEV_OUT_RULE         0x0200u /* from a response rule; i64[3] the press's t */
 
 /* How bytes move. Every function is called on the reader thread except
  * interrupt (from ydev_close()). */
@@ -435,6 +548,8 @@ typedef struct ydev_transport {
  * threads (the reader and an output). */
 
 typedef void (*ydev_sink)(void* ctx, const yin_event* e);
+
+struct ydev_rule;   /* RESPONSE RULES */
 
 /* Roles (ROLES): the caller's table, zeroed once. */
 #define YDEV_MAX_ROLES 32
@@ -494,6 +609,9 @@ typedef struct ydev_desc {
                                      * leading write returned; 0 = 0.25 ms
                                      * (YSER_DEFAULT_MIN_HOLD_NS), none for
                                      * YBOX_PARALLEL; < 0 fails ydev_open()   */
+    struct ydev_rule* rule;         /* v0.5: tried on the reader thread with
+                                     * each event, before the sink (RESPONSE
+                                     * RULES); NULL = none                     */
 } ydev_desc;
 
 typedef struct ydev_stats {
@@ -572,8 +690,8 @@ YDEV_API void ydev_close(ydev_device* dev);
  * state. */
 YDEV_API int  ydev_poll(ydev_device* dev, int64_t timeout_ns);
 
-/* Wait at most timeout_ns (ns; 0 or less: look once) for the instance to
- * be RUNNING (LIFECYCLE). Returns YDEV_RUNNING; YDEV_ERR_TIMEOUT; or
+/* Wait at most timeout_ns (ns; 0 or less: look once; INT64_MAX: without
+ * end) for the instance to be RUNNING (LIFECYCLE). Returns YDEV_RUNNING; YDEV_ERR_TIMEOUT; or
  * YDEV_ERR_STATE when it ends FAILED or CLOSED. On failure ydev_error()
  * says why. In manual mode it calls ydev_poll() itself; with desc.now it
  * gives up (YDEV_ERR_TIMEOUT) when a poll does not advance that clock,
@@ -614,6 +732,100 @@ YDEV_API int  ydev_out_trigger(ydev_device* dev, uint32_t code, int64_t deadline
 /* The last output call of any thread on dev. */
 YDEV_API void ydev_out_last(ydev_device* dev, ydev_out_info* out);
 
+/* --- response rules (RESPONSE RULES, v0.5) ----------------------------------- */
+
+#define YDEV_RULE_CHOICES 32
+/* A window bound that no press reaches: from = YDEV_RULE_NEVER closes the
+ * window; until = YDEV_RULE_NEVER gives it no end. */
+#define YDEV_RULE_NEVER INT64_MAX
+
+/* A press that fires a code: kind exact, device and control 0 = any. */
+typedef struct ydev_rule_choice {
+    uint8_t  kind;          /* yin_kind                                   */
+    uint8_t  reserved_[3];
+    uint32_t device;        /* yin_event.device; 0 = any                  */
+    uint32_t control;       /* button, channel or scancode; 0 = any       */
+    uint32_t code;          /* the output code                            */
+} ydev_rule_choice;
+
+/* Zero-initialize, then set out and the choices. */
+typedef struct ydev_rule_desc {
+    struct ydev_device*     out;        /* the output; must outlive the rule */
+    const ydev_rule_choice* choices;    /* copied at open                    */
+    int                     n_choices;  /* 1 to YDEV_RULE_CHOICES            */
+    int64_t                 width_ns;   /* > 0 a pulse this wide; 0 = the
+                                         * output's desc.pulse_ns (a set when
+                                         * that is 0), as ydev_out_mark()    */
+    int                     max_fires;  /* per arm: 0 = 1; < 0 = no limit    */
+} ydev_rule_desc;
+
+/* The rule's state for the frame thread (ydev_rule_get()). */
+typedef struct ydev_rule_info {
+    int      armed;
+    int      fired;         /* fires since the last arm                   */
+    int      over;          /* presses of a choice in the window after the
+                             * last fire it allowed; not written          */
+    int      result;        /* the last fire's write: YDEV_OK or YDEV_ERR_* */
+    int64_t  t_event;       /* the last fire's press: its t               */
+    int64_t  t_before;      /* its write: just before                     */
+    int64_t  t_after;       /* and just after                             */
+    uint32_t device, control;   /* the press                              */
+    uint32_t code;          /* the code written                           */
+    uint32_t seq;           /* its YDEV_REC_OUT record's u16[19]          */
+    int      choice;        /* the choice's index; -1 = no fire yet       */
+} ydev_rule_info;
+
+/* One fire of the current arm (ydev_rule_fires()). */
+#define YDEV_RULE_FIRES   8   /* fires an arm keeps; more are counted    */
+#define YDEV_RULE_PENDING 1   /* result: the write is still running      */
+typedef struct ydev_rule_fire {
+    int64_t  t;             /* the press's t                              */
+    uint32_t device, control;
+    uint32_t code;
+    uint8_t  kind;
+    uint8_t  reserved_[3];
+    int      choice;        /* the rule's choice index                    */
+    int      result;        /* YDEV_OK, a YDEV_ERR_*, or YDEV_RULE_PENDING */
+} ydev_rule_fire;
+
+/* Caller-allocated; every field is private. */
+typedef struct ydev_rule {
+    ydev_rule_desc   d;
+    ydev_rule_choice ch[YDEV_RULE_CHOICES];
+    ydev_rule_fire   fires[YDEV_RULE_FIRES];   /* this arm's, under the lock */
+    int64_t          from, until;   /* the window, under the lock          */
+    uint32_t         arms;          /* each arm's number                   */
+    int              open;
+    ydev_rule_info   info;          /* under the lock                      */
+    union { unsigned char b[64]; void* p; int64_t i; double f; } lock_mem;
+    char             err[128];
+} ydev_rule;
+
+/* Validate desc and copy the choices. false with a message in
+ * ydev_rule_error(). The rule starts disarmed. */
+YDEV_API bool ydev_rule_open(ydev_rule* r, const ydev_rule_desc* desc);
+/* After every input instance that names it is closed. Safe on a zeroed
+ * rule, after a failed open, and twice. */
+YDEV_API void ydev_rule_close(ydev_rule* r);
+YDEV_API const char* ydev_rule_error(const ydev_rule* r);
+/* The frame thread. arm: a new window [from_ns, until_ns) on the press's
+ * t, its fire count 0. window: move the bounds of the armed window, its
+ * count kept (nothing when disarmed). disarm: no fire until the next arm;
+ * the info stays. */
+YDEV_API void ydev_rule_arm(ydev_rule* r, int64_t from_ns, int64_t until_ns);
+YDEV_API void ydev_rule_window(ydev_rule* r, int64_t from_ns, int64_t until_ns);
+YDEV_API void ydev_rule_disarm(ydev_rule* r);
+/* Any thread: fire the code of the first choice that e matches, when e is
+ * a PRESS (not a REPEAT) whose t is in the armed window and the arm has
+ * fires left. 1 written, 0 no fire, or a YDEV_ERR_* of the write. Takes
+ * the output's lock for the write; never allocates. */
+YDEV_API int  ydev_rule_input(ydev_rule* r, const yin_event* e);
+YDEV_API void ydev_rule_get(ydev_rule* r, ydev_rule_info* out);
+/* The current arm's fires in claim order, at most cap of them (and at most
+ * YDEV_RULE_FIRES: an arm keeps that many). Returns the arm's fire count,
+ * which can be larger. A disarm keeps them; an arm clears them. */
+YDEV_API int  ydev_rule_fires(ydev_rule* r, ydev_rule_fire* out, int cap);
+
 /* --- roles (ROLES) ------------------------------------------------------------ */
 
 /* The role's index (1 to YDEV_MAX_ROLES), or 0 when the table has none. */
@@ -621,6 +833,25 @@ YDEV_API int  ydev_role_index(const ydev_roles* r, const char* name);
 /* The running instance of a role, or NULL. */
 YDEV_API ydev_device* ydev_role_device(const ydev_roles* r, int index);
 YDEV_API const char*  ydev_role_name(const ydev_roles* r, int index);
+
+/* --- parameters (PARAMETERS) --------------------------------------------------- */
+
+/* v0.4: one desc field a family reads. The shape of every ysp parameter
+ * table. */
+typedef struct ydev_param {
+    const char* name;     /* the desc field                                 */
+    const char* type;     /* "enum", "bool", "u32", "i64", "str"            */
+    double      min, max; /* inclusive                                      */
+    double      def;      /* the value a zero field means for this family   */
+    const char* unit;     /* "", "ns", "baud"                               */
+    const char* doc;      /* one line                                       */
+    const char* values;   /* enum: "name=value" pairs joined by ',', in
+                           * value order; NULL for other types              */
+} ydev_param;
+
+/* The fields family (a YBOX_ family) reads; *n gets the count. NULL and
+ * *n 0 for anything else. */
+YDEV_API const ydev_param* ydev_params(int family, int* n);
 
 #ifdef __cplusplus
 }
@@ -753,6 +984,13 @@ YDEV_API const char* ydev_state_name(int state) {
 
 static int64_t ydev__now(const ydev_device* dev) {
     return dev->d.now ? dev->d.now(dev->d.now_ctx) : yrt_now_ns();
+}
+
+/* t + d for a d >= 0, saturated at INT64_MAX: INT64_MAX is a caller's
+ * "forever", and a desc time near it is "never". The plain sum overflowed
+ * (undefined behavior) and in practice gave a time in the past. */
+static int64_t ydev__after(int64_t t, int64_t d) {
+    return d > 0 && t > INT64_MAX - d ? INT64_MAX : t + d;
 }
 
 /* --- keys ---------------------------------------------------------------------- */
@@ -1084,7 +1322,9 @@ static bool ydev__host_pulse(const ydev_device* dev) {
 
 /* XID's mp is in whole ms and 0 means hold: a pulse is never 0 ms. */
 static uint32_t ydev__xid_ms(int64_t width_ns) {
-    int64_t ms = (width_ns + 500000) / 1000000;
+    int64_t ms;
+    if (width_ns >= (int64_t)4294967 * 1000000) return 4294967u;   /* and no overflow below */
+    ms = (width_ns + 500000) / 1000000;
     /* ybox_encode() takes at most 2^32 - 1 us: 4294967 ms */
     return ms < 1 ? 1u : ms > 4294967 ? 4294967u : (uint32_t)ms;
 }
@@ -1177,8 +1417,10 @@ static void ydev__trail_job(void* ctx, const yrt_job_info* info) {
 #endif
 
 /* Every output call. width_ns < 0: a set; else a pulse (0 = the family's
- * fixed width). */
-static int ydev__out(ydev_device* dev, uint32_t code, int64_t width_ns, uint32_t flags, int64_t extra) {
+ * fixed width). info: this call's own result, which last_out may no longer
+ * hold when the caller reads it. */
+static int ydev__out(ydev_device* dev, uint32_t code, int64_t width_ns, uint32_t flags, int64_t extra,
+                     ydev_out_info* info) {
     int64_t t0 = 0, t1 = 0, w = 0, fixed;
     uint32_t seq;
     int rc = YDEV_OK;
@@ -1197,6 +1439,7 @@ static int ydev__out(ydev_device* dev, uint32_t code, int64_t width_ns, uint32_t
     if (rc != YDEV_OK) {
         t0 = t1 = ydev__now(dev);
         ydev__out_done(dev, rc, flags, code, t0, t1, 0, extra, seq);
+        if (info) *info = dev->last_out;
         ydev__unlock(ydev__omx(dev));
         return rc;
     }
@@ -1214,7 +1457,9 @@ static int ydev__out(ydev_device* dev, uint32_t code, int64_t width_ns, uint32_t
         flags |= YDEV_OUT_DEVICE_TIMED;
     } else if (pulse && !ydev__host_pulse(dev)) {
         rc = ydev__put(dev, code, width_ns, &t0, &t1);
-        w = dev->d.family == YBOX_XID ? (int64_t)ydev__xid_ms(width_ns) * 1000000 : (width_ns + 500) / 1000 * 1000;
+        /* a refused width (over 2^32 us) is not rounded: the sum could overflow */
+        w = dev->d.family == YBOX_XID ? (int64_t)ydev__xid_ms(width_ns) * 1000000
+            : rc == YDEV_OK ? (width_ns + 500) / 1000 * 1000 : width_ns;
         flags |= YDEV_OUT_DEVICE_TIMED;
     } else {
         rc = ydev__put(dev, code, 0, &t0, &t1);
@@ -1241,28 +1486,29 @@ static int ydev__out(ydev_device* dev, uint32_t code, int64_t width_ns, uint32_t
     /* what the lines hold now: a device-timed pulse ends by itself */
     if (rc == YDEV_OK) dev->out_code = (flags & YDEV_OUT_DEVICE_TIMED) ? 0u : code;
     ydev__out_done(dev, rc, flags, code, t0, t1, w, extra, seq);
+    if (info) *info = dev->last_out;
     ydev__unlock(ydev__omx(dev));
     return rc;
 }
 
-YDEV_API int ydev_out_set(ydev_device* dev, uint32_t code) { return ydev__out(dev, code, -1, 0u, 0); }
+YDEV_API int ydev_out_set(ydev_device* dev, uint32_t code) { return ydev__out(dev, code, -1, 0u, 0, NULL); }
 
 YDEV_API int ydev_out_pulse(ydev_device* dev, uint32_t code, int64_t width_ns) {
     if (width_ns < 0) width_ns = 0;
-    return ydev__out(dev, code, width_ns, 0u, 0);
+    return ydev__out(dev, code, width_ns, 0u, 0, NULL);
 }
 
 YDEV_API int ydev_out_trigger(ydev_device* dev, uint32_t code, int64_t deadline_ns) {
     if (!dev) return YDEV_ERR_STATE;
     return ydev__out(dev, code, dev->d.pulse_ns > 0 || ydev__fixed_ns(dev) > 0 ? dev->d.pulse_ns : -1,
-                     YDEV_OUT_FLIP, deadline_ns);
+                     YDEV_OUT_FLIP, deadline_ns, NULL);
 }
 
 YDEV_API int ydev_out_mark(ydev_device* dev, uint32_t code, const char* text) {
     int rc;
     if (!dev) return YDEV_ERR_STATE;
     rc = ydev__out(dev, code, dev->d.pulse_ns > 0 || ydev__fixed_ns(dev) > 0 ? dev->d.pulse_ns : -1,
-                   text && text[0] ? YDEV_OUT_MARK : 0u, 0);
+                   text && text[0] ? YDEV_OUT_MARK : 0u, 0, NULL);
     if (text && text[0] && dev->started && dev->d.ring) {
         /* the text after its record, 34 characters a record */
         size_t n = strlen(text), i;
@@ -1283,6 +1529,145 @@ YDEV_API void ydev_out_last(ydev_device* dev, ydev_out_info* out) {
     ydev__lock(ydev__omx(dev));
     *out = dev->last_out;
     ydev__unlock(ydev__omx(dev));
+}
+
+/* --- response rules --------------------------------------------------------------- */
+
+static ydev__mutex* ydev__rmx(ydev_rule* r) { return (ydev__mutex*)(void*)r->lock_mem.b; }
+
+YDEV_API bool ydev_rule_open(ydev_rule* r, const ydev_rule_desc* desc) {
+    int i;
+    if (!r) return false;
+    memset(r, 0, sizeof *r);
+#define YDEV__RFAIL(msg) do { snprintf(r->err, sizeof r->err, "ysp_device: rule: %s", msg); return false; } while (0)
+    if (!desc) YDEV__RFAIL("NULL desc");
+    if (!desc->out) YDEV__RFAIL("desc.out is required");
+    if (!(ybox_caps(desc->out->d.family) & YBOX_CAP_OUT)) YDEV__RFAIL("desc.out's family has no outputs");
+    if (!desc->choices || desc->n_choices < 1 || desc->n_choices > YDEV_RULE_CHOICES)
+        YDEV__RFAIL("desc.choices: 1 to 32 (YDEV_RULE_CHOICES)");
+    if (desc->width_ns < 0) YDEV__RFAIL("desc.width_ns must be >= 0");
+    for (i = 0; i < desc->n_choices; i++) {
+        if (desc->choices[i].kind > 15) YDEV__RFAIL("a choice's kind is not a yin_kind");
+        if (desc->choices[i].code > ybox_code_max(desc->out->d.family)) YDEV__RFAIL("a choice's code is above the output's ybox_code_max()");
+    }
+#undef YDEV__RFAIL
+    r->d = *desc;
+    memcpy(r->ch, desc->choices, (size_t)desc->n_choices * sizeof r->ch[0]);
+    r->d.choices = r->ch;
+    r->from = r->until = YDEV_RULE_NEVER;
+    r->info.choice = -1;
+    ydev__lock_init(ydev__rmx(r));
+    r->open = 1;
+    return true;
+}
+
+YDEV_API void ydev_rule_close(ydev_rule* r) {
+    if (!r || !r->open) return;
+    ydev__lock_free(ydev__rmx(r));
+    r->open = 0;
+}
+
+YDEV_API const char* ydev_rule_error(const ydev_rule* r) { return r ? r->err : "ysp_device: NULL rule"; }
+
+static void ydev__rule_set(ydev_rule* r, int64_t from, int64_t until, int arm) {
+    if (!r || !r->open) return;
+    ydev__lock(ydev__rmx(r));
+    if (arm) {
+        if (++r->arms == 0) r->arms = 1;   /* 0 means no claim in ydev_rule_input() */
+        r->info.armed = 1;
+        r->info.fired = 0;
+        r->info.over = 0;
+    }
+    if (r->info.armed) { r->from = from; r->until = until; }
+    ydev__unlock(ydev__rmx(r));
+}
+YDEV_API void ydev_rule_arm(ydev_rule* r, int64_t from_ns, int64_t until_ns) { ydev__rule_set(r, from_ns, until_ns, 1); }
+YDEV_API void ydev_rule_window(ydev_rule* r, int64_t from_ns, int64_t until_ns) { ydev__rule_set(r, from_ns, until_ns, 0); }
+YDEV_API void ydev_rule_disarm(ydev_rule* r) {
+    if (!r || !r->open) return;
+    ydev__lock(ydev__rmx(r));
+    r->info.armed = 0;
+    r->from = r->until = YDEV_RULE_NEVER;
+    ydev__unlock(ydev__rmx(r));
+}
+
+YDEV_API int ydev_rule_input(ydev_rule* r, const yin_event* e) {
+    int i, k = -1, rc, slot = 0;
+    uint32_t arm = 0;
+    ydev_device* out;
+    ydev_out_info oi;
+    int64_t w;
+    if (!r || !r->open || !e || e->type != YIN_PRESS || (e->flags & YIN_REPEAT)) return 0;
+    for (i = 0; i < r->d.n_choices && k < 0; i++) {
+        const ydev_rule_choice* c = &r->ch[i];
+        if (c->kind == e->kind && (!c->device || c->device == e->device) && (!c->control || c->control == e->control))
+            k = i;
+    }
+    if (k < 0) return 0;
+    /* claim the fire under the rule's lock and write outside it: the
+     * write takes the output's lock and can take a USB write's time */
+    ydev__lock(ydev__rmx(r));
+    if (r->info.armed && e->t >= r->from && e->t < r->until) {
+        if (r->d.max_fires < 0 || r->info.fired < (r->d.max_fires ? r->d.max_fires : 1)) {
+            slot = r->info.fired++;
+            arm = r->arms;
+            if (slot < YDEV_RULE_FIRES) {
+                ydev_rule_fire* f = &r->fires[slot];
+                memset(f, 0, sizeof *f);
+                f->t = e->t;
+                f->device = e->device;
+                f->control = e->control;
+                f->code = r->ch[k].code;
+                f->kind = e->kind;
+                f->choice = k;
+                f->result = YDEV_RULE_PENDING;
+            }
+        } else {
+            r->info.over++;
+        }
+    }
+    ydev__unlock(ydev__rmx(r));
+    if (!arm) return 0;
+    out = r->d.out;
+    w = r->d.width_ns > 0 ? r->d.width_ns
+      : out->d.pulse_ns > 0 || ydev__fixed_ns(out) > 0 ? out->d.pulse_ns : -1;
+    memset(&oi, 0, sizeof oi);
+    rc = ydev__out(out, r->ch[k].code, w, YDEV_OUT_RULE, e->t, &oi);
+    ydev__lock(ydev__rmx(r));
+    if (arm == r->arms) {
+        if (slot < YDEV_RULE_FIRES) r->fires[slot].result = rc;
+        r->info.result = rc;
+        r->info.t_event = e->t;
+        r->info.t_before = oi.t_before;
+        r->info.t_after = oi.t_after;
+        r->info.device = e->device;
+        r->info.control = e->control;
+        r->info.code = r->ch[k].code;
+        r->info.seq = oi.seq;
+        r->info.choice = k;
+    }
+    ydev__unlock(ydev__rmx(r));
+    return rc == YDEV_OK ? 1 : rc;
+}
+
+YDEV_API int ydev_rule_fires(ydev_rule* r, ydev_rule_fire* out, int cap) {
+    int n, i;
+    if (!r || !r->open) return 0;
+    ydev__lock(ydev__rmx(r));
+    n = r->info.fired;
+    for (i = 0; out && i < cap && i < n && i < YDEV_RULE_FIRES; i++) out[i] = r->fires[i];
+    ydev__unlock(ydev__rmx(r));
+    return n;
+}
+
+YDEV_API void ydev_rule_get(ydev_rule* r, ydev_rule_info* out) {
+    if (!out) return;
+    memset(out, 0, sizeof *out);
+    out->choice = -1;
+    if (!r || !r->open) return;
+    ydev__lock(ydev__rmx(r));
+    *out = r->info;
+    ydev__unlock(ydev__rmx(r));
 }
 
 /* After an open: outputs usable, the width of an XID box unknown, and a 0
@@ -1332,6 +1717,85 @@ YDEV_API const char* ydev_role_name(const ydev_roles* r, int index) {
     return r->name[index - 1];
 }
 
+/* --- parameters --------------------------------------------------------------------- */
+
+/* Rows in ydev_desc's order; each family takes the rows it reads, with its
+ * own defaults (ydev_open()'s). Upper bounds of times are a sanity range
+ * (1e6 s), not a limit of the header; a pulse's 10 s is the rig profile's. */
+#define YDEV__P_ROLE { "role", "str", 0, 0, 0, "", "the experiment's name for the device; required, < 32 characters", NULL }
+#define YDEV__P_KEY  { "key", "str", 0, 0, 0, "", "the match key (MATCH KEYS); required, < 160 characters", NULL }
+#define YDEV__P_KIND(def) { "kind", "enum", 1, 15, def, "", "yin_event.kind of its events; 0 = the family's; 8 to 15 are the user's", \
+    "mouse=1,touch=2,pen=3,gamepad=4,box=5,eye=6,sync=7,user=8" }
+#define YDEV__P_BAUD(def) { "baud", "u32", 1, 10000000, def, "baud", "the serial rate; 0 = the family's", NULL }
+#define YDEV__P_PROBE { "probe_ns", "i64", -1, 1e15, 1e8, "ns", "timer queries this far apart; < 0 = none", NULL }
+#define YDEV__P_RETRY { "retry_ns", "i64", 1, 1e15, 1e9, "ns", "reopen by key this often while OPENING or LOST", NULL }
+#define YDEV__P_SILENT { "silent_ns", "i64", -1, 1e15, 2e9, "ns", "LOST after this long with no byte; < 0 = never", NULL }
+#define YDEV__P_WIDTH(def) { "max_width_ns", "i64", 1, 1e15, def, "ns", "clock pairs from wider query brackets are refused", NULL }
+#define YDEV__P_READ { "read_timeout_ns", "i64", 1, 1e15, 2e7, "ns", "the reader's longest read", NULL }
+#define YDEV__P_NO_ID { "no_identify", "bool", 0, 1, 0, "", "skip the identity query (IDENTIFY)", NULL }
+#define YDEV__P_NO_EL { "no_elevate", "bool", 0, 1, 0, "", "the reader and the pulse worker keep normal priority", NULL }
+#define YDEV__P_PULSE(max, doc) { "pulse_ns", "i64", 0, max, 0, "ns", doc, NULL }
+#define YDEV__P_LATCH { "latched", "bool", 0, 1, 0, "", "the switch is at S: a byte holds (default P: 8 ms pulses)", NULL }
+#define YDEV__P_HOLD(min, def) { "min_hold_ns", "i64", min, 1e15, def, "ns", \
+    "a host-timed trailing write starts no sooner after the leading one returned", NULL }
+#define YDEV__PULSE_DOC "ydev_out_mark() and trigger channels: a pulse this wide; 0 = a set"
+
+static const ydev_param ydev__params_xid[] = {
+    YDEV__P_ROLE, YDEV__P_KEY, YDEV__P_KIND(YIN_KIND_BOX), YDEV__P_BAUD(115200), YDEV__P_PROBE, YDEV__P_RETRY,
+    YDEV__P_SILENT, YDEV__P_WIDTH(2e7), YDEV__P_READ, YDEV__P_NO_ID, YDEV__P_NO_EL,
+    YDEV__P_PULSE(1e10, YDEV__PULSE_DOC "; the box times it in whole ms"),
+};
+static const ydev_param ydev__params_line[] = {
+    YDEV__P_ROLE, YDEV__P_KEY, YDEV__P_KIND(YIN_KIND_BOX), YDEV__P_BAUD(115200), YDEV__P_PROBE, YDEV__P_RETRY,
+    YDEV__P_SILENT, YDEV__P_WIDTH(1.3e6), YDEV__P_READ, YDEV__P_NO_ID, YDEV__P_NO_EL,
+    YDEV__P_PULSE(1e10, YDEV__PULSE_DOC "; the board times it in us"),
+};
+static const ydev_param ydev__params_photo[] = {
+    YDEV__P_ROLE, YDEV__P_KEY, YDEV__P_KIND(YIN_KIND_SYNC), YDEV__P_BAUD(115200), YDEV__P_RETRY, YDEV__P_SILENT,
+    YDEV__P_READ, YDEV__P_NO_EL,
+};
+static const ydev_param ydev__params_triggerbox[] = {
+    YDEV__P_ROLE, YDEV__P_KEY, YDEV__P_BAUD(115200), YDEV__P_RETRY, YDEV__P_READ, YDEV__P_NO_EL,
+    YDEV__P_PULSE(1e10, YDEV__PULSE_DOC), YDEV__P_HOLD(1, 250000),
+};
+static const ydev_param ydev__params_biosemi[] = {
+    YDEV__P_ROLE, YDEV__P_KEY, YDEV__P_BAUD(115200), YDEV__P_RETRY, YDEV__P_READ, YDEV__P_NO_EL,
+    YDEV__P_PULSE(9e6, "0, or 7 to 9 ms: the interface ends every code after 8 ms"),
+};
+static const ydev_param ydev__params_mmbts[] = {
+    YDEV__P_ROLE, YDEV__P_KEY, YDEV__P_BAUD(9600), YDEV__P_RETRY, YDEV__P_READ, YDEV__P_NO_EL,
+    YDEV__P_PULSE(1e10, "switch P: 0, or 7 to 9 ms (the box ends every code after 8 ms); S: " YDEV__PULSE_DOC),
+    YDEV__P_LATCH, YDEV__P_HOLD(1, 250000),
+};
+static const ydev_param ydev__params_lines[] = {
+    YDEV__P_ROLE, YDEV__P_KEY, YDEV__P_BAUD(115200), YDEV__P_RETRY, YDEV__P_READ, YDEV__P_NO_EL,
+    YDEV__P_PULSE(1e10, YDEV__PULSE_DOC), YDEV__P_HOLD(1, 250000),
+};
+static const ydev_param ydev__params_parallel[] = {
+    YDEV__P_ROLE, YDEV__P_KEY, YDEV__P_RETRY, YDEV__P_READ, YDEV__P_NO_EL,
+    YDEV__P_PULSE(1e10, YDEV__PULSE_DOC), YDEV__P_HOLD(0, 0),
+};
+
+YDEV_API const ydev_param* ydev_params(int family, int* n) {
+#define YDEV__ROWS(a) t = a; k = (int)(sizeof a / sizeof a[0]); break
+    const ydev_param* t = NULL;
+    int k = 0;
+    switch (family) {
+    case YBOX_XID:        YDEV__ROWS(ydev__params_xid);
+    case YBOX_LINE:       YDEV__ROWS(ydev__params_line);
+    case YBOX_PHOTO:      YDEV__ROWS(ydev__params_photo);
+    case YBOX_TRIGGERBOX: YDEV__ROWS(ydev__params_triggerbox);
+    case YBOX_BIOSEMI:    YDEV__ROWS(ydev__params_biosemi);
+    case YBOX_MMBTS:      YDEV__ROWS(ydev__params_mmbts);
+    case YBOX_LINES:      YDEV__ROWS(ydev__params_lines);
+    case YBOX_PARALLEL:   YDEV__ROWS(ydev__params_parallel);
+    default: break;
+    }
+#undef YDEV__ROWS
+    if (n) *n = k;
+    return t;
+}
+
 /* --- the step ----------------------------------------------------------------------- */
 
 static void ydev__close_conn(ydev_device* dev) {
@@ -1350,7 +1814,7 @@ static void ydev__lose(ydev_device* dev, uint32_t why) {
     ydev__close_conn(dev);
     dev->lost_at = dev->st.last_rx_ns ? dev->st.last_rx_ns : ydev__now(dev);
     ydev__set_state(dev, YDEV_LOST, why);
-    dev->next_try = ydev__now(dev) + dev->d.retry_ns;
+    dev->next_try = ydev__after(ydev__now(dev), dev->d.retry_ns);
 }
 
 static void ydev__fit_start(ydev_device* dev) {
@@ -1374,7 +1838,7 @@ static void ydev__try_open(ydev_device* dev) {
     int r;
     int64_t now = ydev__now(dev);
     if (now < dev->next_try) return;
-    dev->next_try = now + dev->d.retry_ns;
+    dev->next_try = ydev__after(now, dev->d.retry_ns);
     found[0] = '\0';
     c = dev->tr.open(dev->tr.user, dev->d.key, found, sizeof found);
     if (!c) return;
@@ -1417,7 +1881,7 @@ static void ydev__probe(ydev_device* dev) {
     int n;
     int64_t now = ydev__now(dev), t0 = 0;
     if (dev->d.probe_ns < 0 || now < dev->next_probe) return;
-    dev->next_probe = now + dev->d.probe_ns;
+    dev->next_probe = ydev__after(now, dev->d.probe_ns);
     if (++dev->probe_seq == 0) dev->probe_seq = 1;
     n = ybox_probe(dev->d.family, dev->probe_seq, q, (int)sizeof q);
     if (n <= 0) return;
@@ -1493,6 +1957,9 @@ static void ydev__read(ydev_device* dev, int64_t timeout_ns) {
                 e->unc_us = ydev__unc(dev, &fi);
             }
             dev->st.events++;
+            /* the rule first: its write is the time-critical one, and the
+             * sink only queues */
+            if (dev->d.rule) (void)ydev_rule_input(dev->d.rule, e);
             if (dev->d.sink) dev->d.sink(dev->d.sink_ctx, e);
         }
         if (o.has_out) {
@@ -1597,6 +2064,8 @@ YDEV_API bool ydev_open(ydev_device* dev, const ydev_desc* desc) {
         dev->d.device = (uint32_t)i;
     }
     if (dev->d.kind == 0) dev->d.kind = dev->d.family == YBOX_PHOTO ? YIN_KIND_SYNC : YIN_KIND_BOX;
+    /* the handle states the rate it opens (PARAMETERS) */
+    if (dev->d.baud == 0 && dev->d.family != YBOX_PARALLEL) dev->d.baud = ybox_default_baud(dev->d.family);
     if (dev->d.probe_ns == 0) dev->d.probe_ns = 100000000;
     if (dev->d.retry_ns <= 0) dev->d.retry_ns = 1000000000;
     if (dev->d.silent_ns == 0) dev->d.silent_ns = 2000000000;
@@ -1738,7 +2207,7 @@ YDEV_API int ydev_wait_running(ydev_device* dev, int64_t timeout_ns) {
         snprintf(dev->err, sizeof dev->err, "ysp_device: ydev_wait_running: not open");
         return YDEV_ERR_STATE;
     }
-    end = ydev__now(dev) + (timeout_ns > 0 ? timeout_ns : 0);
+    end = ydev__after(ydev__now(dev), timeout_ns > 0 ? timeout_ns : 0);
     for (;;) {
         int64_t before = ydev__now(dev), now;
         /* a poll (manual mode) steps the instance; its timeout only bounds

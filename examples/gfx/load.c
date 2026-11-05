@@ -40,6 +40,9 @@ static void take_foreground(SDL_Window* w) {
     SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
     SetForegroundWindow(h);
 }
+/* SDL calls on the window go through yscr_window_call(): with the window
+ * thread (ysp/screen.h, WINDOW THREAD) another thread owns the window. */
+static void take_foreground_on_window(void* w) { take_foreground((SDL_Window*)w); }
 #endif
 
 static volatile long g_allocs;
@@ -109,6 +112,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
+    if (sd.backend == YSCR_BACKEND_SIM) yrt_virtual_begin(0);
     /* The per-user folder unless told otherwise, so that a second run loads
      * the programs instead of compiling them (PROGRAM CACHE). */
     if (no_cache) cache = NULL;
@@ -145,7 +150,7 @@ int main(int argc, char** argv) {
     ygfx_describe(&gfx, line, sizeof line);
     printf("%s\n", line);
 #if defined(_WIN32)
-    if (topmost && yscr_window(&scr)) take_foreground(yscr_window(&scr));
+    if (topmost && yscr_window(&scr)) yscr_window_call(&scr, take_foreground_on_window, yscr_window(&scr));
 #else
     if (topmost) printf("--topmost acts on Win32 windows; ignored here\n");
 #endif

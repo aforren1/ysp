@@ -236,3 +236,21 @@ test = "table"
 why = "A closed handle must answer like a zeroed one, not keep reading the block."
 find = 'if (tab) memset(tab, 0, sizeof(*tab));'
 replace = 'if (tab) tab->error[0] = 0;'
+
+# --- v0.3.0: 256 columns --------------------------------------------------------
+
+[[mutant]]
+id = "b-01"
+name = "one column past the bound parses"
+test = "table"
+why = "The bound is the trial row's and the writer's; past it the parse writes past its column array."
+find = 'if (nc == 0 && field >= YTB_MAX_COLUMNS)'
+replace = 'if (nc == 0 && field > YTB_MAX_COLUMNS)'
+
+[[mutant]]
+id = "b-02"
+name = "the view refuses the widest block"
+test = "table"
+why = "A block of 256 columns from the parse must view, or a pack of it would not load."
+find = 'if (nr > YTB_MAX_ROWS || nc < 1 || nc > YTB_MAX_COLUMNS)'
+replace = 'if (nr > YTB_MAX_ROWS || nc < 1 || nc >= YTB_MAX_COLUMNS)'

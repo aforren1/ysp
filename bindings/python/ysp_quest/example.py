@@ -15,7 +15,7 @@ import random
 import sys
 import time
 
-import ysp.quest as pq
+import ysp.quest as yqst
 
 TRUTH = [-1.72, 3.1, 0.5, 0.02]   # threshold (log10 contrast), slope, guess, lapse
 FRAME_S = 1.0 / 60.0
@@ -25,28 +25,28 @@ def desc():
     return dict(
         stim=[(-3.0, 0.0, 31)],
         params=[(-3.0, 0.0, 61), (0.5, 6.0, 12),
-                pq.values([0.45, 0.475, 0.5, 0.525, 0.55], nuisance=True),
-                pq.values([0.0, 0.015, 0.03, 0.045, 0.06], nuisance=True)],
+                yqst.values([0.45, 0.475, 0.5, 0.525, 0.55], nuisance=True),
+                yqst.values([0.0, 0.015, 0.03, 0.045, 0.06], nuisance=True)],
         stop_trials=40)
 
 
 def synchronous(rng):
-    q = pq.Quest(**desc())
+    q = yqst.Quest(**desc())
     t0 = time.perf_counter()
     while not q.done:
         i = q.next()
         q.update(i, q.simulate(i, TRUTH, rng.random()))
     dt = (time.perf_counter() - t0) / q.n_trials
-    est = q.estimate(pq.EST_MEAN)
+    est = q.estimate(yqst.EST_MEAN)
     print(f"synchronous: threshold {est[0]:+.3f} (sd {q.sd(0):.3f}), slope {est[1]:.2f}; "
           f"{dt * 1e3:.2f} ms per next + update on this thread")
 
 
 def on_a_thread(rng):
-    q = pq.Quest(**desc())
+    q = yqst.Quest(**desc())
     frames_waited = 0
-    with pq.Async(q) as a:
-        names = {pq.ASYNC_NORMAL: "NORMAL", pq.ASYNC_BELOW_NORMAL: "BELOW_NORMAL"}
+    with yqst.Async(q) as a:
+        names = {yqst.ASYNC_NORMAL: "NORMAL", yqst.ASYNC_BELOW_NORMAL: "BELOW_NORMAL"}
         print(f"async thread policy: {names.get(a.policy, a.policy)}")   # log it
         seq, snap = a.poll()                 # seq 0: the proposal made at start
         while not snap.done:
@@ -62,12 +62,12 @@ def on_a_thread(rng):
                     break
                 frames_waited += 1
                 time.sleep(FRAME_S)
-    est = q.estimate(pq.EST_MEAN)            # the Quest is ours again
+    est = q.estimate(yqst.EST_MEAN)            # the Quest is ours again
     print(f"async:       threshold {est[0]:+.3f} (sd {q.sd(0):.3f}) after {q.n_trials} "
           f"trials; {frames_waited} frames waited for a proposal")
 
 
-observer = pq.Quest(**desc())
+observer = yqst.Quest(**desc())
 
 
 def main():
@@ -80,6 +80,6 @@ def main():
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except pq.Error as e:
+    except yqst.Error as e:
         print(f"ysp.quest error: {e}", file=sys.stderr)
         sys.exit(1)

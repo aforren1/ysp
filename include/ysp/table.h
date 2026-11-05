@@ -1,4 +1,4 @@
-/* ysp/table.h - v0.2.0 - public domain single-header typed tables
+/* ysp/table.h - v0.3.0 - public domain single-header typed tables
  *
  *   A table of rows and named, typed columns, as one read-only block of
  *   bytes: conditions files, trial lists, event lists. A CSV parser with
@@ -114,7 +114,7 @@
  *                 separators, hex, inf, nan, n/a, spaces around numbers,
  *                 other encodings.
  *   BOUNDS, each an error that names the line, row and column:
- *     YTB_MAX_COLUMNS (64) columns, YTB_MAX_ROWS (32767) data rows
+ *     YTB_MAX_COLUMNS (256) columns, YTB_MAX_ROWS (32767) data rows
  *     (row and level numbers are 16-bit), YTB_MAX_FIELD (4096) bytes in
  *     a field after unquoting, 2 GiB of input.
  *   TYPES. A column named in desc.types[] has that type and each of its
@@ -228,6 +228,13 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.3.0 - YTB_MAX_COLUMNS is 256 (was 64): a trial row with many
+ *          recorded stimuli is wider than 64 columns (docs/
+ *          experiment_format.md, gap G10), and ysp/trials.h's writer keeps
+ *          to this bound so its files read back. The block format, the
+ *          parser and the hash are v0.2.0's; a block of up to 64 columns is
+ *          the same bytes. ytb_csv_desc (types[]) grew from 1 KB to 4 KB
+ *          and the parse's stack by 3 KB.
  *   v0.2.0 - the repository conventions (README.md, Conventions). Breaks
  *          the API: ytb_csv() is ytb_open_csv(), ytb_csv_file() is
  *          ytb_open_csv_file(), ytb_view() is ytb_open_view(), and
@@ -241,6 +248,9 @@
  *          CSV parser, the block format (1), the view and its checks, the
  *          number parser, the lookups, the opt-in file loader.
  *
+ *   STATUS: v0.3.0 on 2026-10-21: 256 columns parse, view and read back
+ *   by name, 257 are refused (tests/adapt/table_test.c); mutants b-01 and
+ *   b-02 at the bound. The pinned block hash is unchanged.
  *   STATUS: v0.2.0 on 2026-10-10: built and tested with MSVC 19.44 /W4 /WX
  *   (C and C++17) and MinGW-w64 gcc -Werror; the test adds ytb_close() on a
  *   zeroed handle, after a failed open and twice. The rest is v0.1.0's:
@@ -280,9 +290,9 @@
 #define YSP_TABLE_H_INCLUDED
 
 #define YTB_VERSION_MAJOR 0
-#define YTB_VERSION_MINOR 2
+#define YTB_VERSION_MINOR 3
 #define YTB_VERSION_PATCH 0
-#define YTB_VERSION_STRING "0.2.0"
+#define YTB_VERSION_STRING "0.3.0"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -296,7 +306,7 @@ extern "C" {
 #define YTB_API extern
 #endif
 
-#define YTB_MAX_COLUMNS 64
+#define YTB_MAX_COLUMNS 256     /* v0.3.0: was 64 (a trial row is wider) */
 #define YTB_MAX_ROWS    32767   /* row and level numbers are 16-bit       */
 #define YTB_MAX_FIELD   4096    /* bytes in one field after unquoting     */
 #define YTB_MAX_NAME    63      /* bytes in a column name                 */

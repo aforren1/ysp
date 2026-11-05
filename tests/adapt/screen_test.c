@@ -36,6 +36,8 @@ static long long vnow(void);
 static void vsleep_until(long long t);
 #define YSCR__NOW() ((int64_t)vnow())
 #define YSCR__SLEEP_UNTIL(t, spin) vsleep_until((long long)(t))
+/* the phases too: scripted costs are on the same clock */
+#define YSCR__COST_NOW() ((int64_t)vnow())
 /* The trigger worker's wake-up: recorded here, and run by the clock as it
  * passes, through the same function the worker thread calls. */
 struct yscr_screen;
@@ -68,6 +70,13 @@ static int test_getenv(const char* name, char* out, int cap);
  * -1 = the header's own answer (n/a without a window). */
 static int g_fg = -1;
 #define YSCR__FOREGROUND(s) (g_fg >= 0 ? (uint32_t)g_fg : yscr__foreground(s))
+/* The system's last vblank time (DWM's on Windows), for the grid after a
+ * gap: 0 none, 1 the scripted display's newest vblank, 2 one 2 ms before
+ * it (too far off the grid). */
+static int g_sysvb_mode, g_sysvb_asked;
+static void* g_sysvb_script;
+static int test_sys_vblank(void* t);
+#define YSCR__SYS_VBLANK(s, t) ((void)(s), test_sys_vblank((void*)(t)))
 
 #define YSP_SCREEN_IMPLEMENTATION
 #include "ysp/screen.h"
@@ -388,6 +397,14 @@ static int sc_completions(void* ctx, yscr_vblank* out, int cap) {
         n++;
     }
     return n;
+}
+
+static int test_sys_vblank(void* t) {
+    script* c = (script*)g_sysvb_script;
+    g_sysvb_asked++;
+    if (!c || !g_sysvb_mode) return 0;
+    *(int64_t*)t = sc_vt(c, sc_count(c, now_ns())) - (g_sysvb_mode == 2 ? 2000000 : 0);
+    return 1;
 }
 
 static uint64_t sc_gpu_done(void* ctx) {
@@ -2966,22 +2983,129 @@ static void test_mode_multiple(void) {
     CHECK_I(yscr_mode_multiple_in(NULL, 6, 60, 1, 0, 0, 0, &out, &ppm), YSCR_ERR_ARG);
 }
 
+#include "param_table_check.h"
+
+static void ptc_fail(int line, const char* what) { fail(line, what); }
+
+/* The names of the enum rows' values. backend's switch has no default, so
+ * -Wswitch (gcc and clang -Wall; CI's -Werror) stops the build when
+ * yscr_backend gains a value. corner and settle are YSCR_ macros, not a C
+ * enum: a new macro needs a case here by review. */
+static const char* scr_backend_name(int v) {
+    switch ((yscr_backend)v) {
+    case YSCR_BACKEND_AUTO: return "auto";
+    case YSCR_BACKEND_DXGI_FLIP: return "dxgi_flip";
+    case YSCR_BACKEND_COMPOSITION: return "composition";
+    case YSCR_BACKEND_GLX_OML: return "glx_oml";
+    case YSCR_BACKEND_WAYLAND: return "wayland";
+    case YSCR_BACKEND_METAL: return "metal";
+    case YSCR_BACKEND_WEB: return "web";
+    case YSCR_BACKEND_SIM: return "sim";
+    case YSCR_BACKEND_CUSTOM: return "custom";
+    }
+    return NULL;
+}
+static const char* scr_corner_name(int v) {
+    switch (v) {
+    case YSCR_TOP_LEFT: return "top_left";
+    case YSCR_TOP_RIGHT: return "top_right";
+    case YSCR_BOTTOM_LEFT: return "bottom_left";
+    case YSCR_BOTTOM_RIGHT: return "bottom_right";
+    default: return NULL;
+    }
+}
+static const char* scr_settle_name(int v) {
+    switch (v) {
+    case YSCR_SETTLE_AUTO: return "auto";
+    case YSCR_SETTLE_STRICT: return "strict";
+    case YSCR_SETTLE_WARN: return "warn";
+    case YSCR_SETTLE_OFF: return "off";
+    default: return NULL;
+    }
+}
+
+#define SCR_D(n, f, e) { n, offsetof(yscr_desc, f), sizeof(((yscr_desc*)0)->f), e }
+static const ptc_slot g_scr_fields[] = {
+    SCR_D("display", display, NULL), SCR_D("mode.w", mode.w, NULL), SCR_D("mode.h", mode.h, NULL),
+    SCR_D("mode.refresh_num", mode.refresh_num, NULL), SCR_D("mode.refresh_den", mode.refresh_den, NULL),
+    SCR_D("windowed", windowed, NULL), SCR_D("window_w", window_w, NULL), SCR_D("window_h", window_h, NULL),
+    SCR_D("backend", backend, scr_backend_name), SCR_D("lead", lead, NULL), SCR_D("display_index", display_index, NULL),
+    SCR_D("patch.on", patch.on, NULL), SCR_D("patch.size", patch.size, NULL),
+    SCR_D("patch.corner", patch.corner, scr_corner_name), SCR_D("show_cursor", show_cursor, NULL),
+    SCR_D("abort_keys.off", abort_keys.off, NULL), SCR_D("abort_keys.key", abort_keys.key, NULL),
+    SCR_D("abort_keys.mods", abort_keys.mods, NULL), SCR_D("panic", panic, NULL),
+    SCR_D("panic_presses", panic_presses, NULL), SCR_D("panic_window_ns", panic_window_ns, NULL),
+    SCR_D("panic_grace_ns", panic_grace_ns, NULL), SCR_D("icon_sdl", icon_sdl, NULL),
+    SCR_D("d3d11_video", d3d11_video, NULL), SCR_D("gamepads", gamepads, NULL), SCR_D("raw_mice", raw_mice, NULL),
+    SCR_D("key_dedup_ns", key_dedup_ns, NULL), SCR_D("onset_offset_ns", onset_offset_ns, NULL),
+    SCR_D("min_tier", min_tier, NULL), SCR_D("depth", depth, NULL), SCR_D("depth_learn", depth_learn, NULL),
+    SCR_D("settle", settle, scr_settle_name), SCR_D("settle_flips", settle_flips, NULL),
+    SCR_D("settle_min_ns", settle_min_ns, NULL), SCR_D("settle_max_ns", settle_max_ns, NULL),
+    SCR_D("x11_override_redirect", x11_override_redirect, NULL),
+    SCR_D("sim_period_ns", sim_period_ns, NULL),
+};
+#undef SCR_D
+#define SCR_NF ((int)(sizeof g_scr_fields / sizeof g_scr_fields[0]))
+
+/* Every row is a real field with its values, and its default is what a
+ * zero field means: from a SIM screen opened with a zero desc where the
+ * screen keeps the value, else from the constant that open() puts in.
+ * Every other row's zero stays 0 (a value, or a sentinel such as display
+ * 0, the primary display). */
 static void test_params(void) {
-    int n = 0, i, j, gamepads = 0;
+    static ptc_row rows[64];
+    static yscr_screen s;
+    yscr_desc d;
+    int n = 0, i, gamepads = 0, checked = 0;
     const yscr_param* p = yscr_params(&n);
-    CHECK(p != NULL);
-    CHECK(n >= 15);
+    CHECK(p != NULL && n == SCR_NF && yscr_params(NULL) == p);
+    if (!p || n > 64) return;
     for (i = 0; i < n; i++)   /* v0.3.3: off by default */
         if (!strcmp(p[i].name, "gamepads")) gamepads += p[i].def == 0 && !strcmp(p[i].type, "bool");
     CHECK_I(gamepads, 1);
+    for (i = 0; i < n; i++) PTC_ROW(rows[i], p[i]);
+    ptc_check_slots(rows, n, g_scr_fields, SCR_NF);
+    memset(&s, 0, sizeof s);
+    memset(&d, 0, sizeof d);
+    d.backend = YSCR_BACKEND_SIM;   /* backend's own zero is AUTO */
+    CHECK(yscr_open(&s, &d));
+    if (!yscr_is_open(&s)) { fprintf(stderr, "screen_test: %s\n", yscr_error(&s)); return; }
     for (i = 0; i < n; i++) {
-        CHECK(p[i].name && p[i].type && p[i].unit && p[i].doc);
-        CHECK(p[i].min <= p[i].def && p[i].def <= p[i].max);
-        for (j = 0; j < i; j++) CHECK(strcmp(p[i].name, p[j].name) != 0);
+        const char* m = rows[i].name;
+        double want;
+        int x, y, size;
+        if (!strcmp(m, "backend")) continue;
+        if (!strcmp(m, "lead")) want = s.lead;
+        else if (!strcmp(m, "patch.size")) { yscr__patch_rect(&s, &x, &y, &size); want = size; }
+        else if (!strcmp(m, "abort_keys.key")) want = yscr__ab.key;
+        else if (!strcmp(m, "abort_keys.mods")) want = yscr__ab.mods;
+        else if (!strcmp(m, "settle_flips")) want = s.st_need;
+        else if (!strcmp(m, "settle_min_ns")) want = (double)s.st_min;   /* fullscreen: none */
+        else if (!strcmp(m, "settle_max_ns")) want = (double)s.st_max;
+        else if (!strcmp(m, "sim_period_ns")) want = s.period_f;
+        else if (!strcmp(m, "key_dedup_ns")) want = YSCR__KEY_DEDUP_NS;
+        /* the literals of open(), which the screen does not keep */
+        else if (!strcmp(m, "mode.refresh_den")) want = 1;
+        else if (!strcmp(m, "window_w")) want = 800;
+        else if (!strcmp(m, "window_h")) want = 600;
+        else if (!strcmp(m, "panic_presses")) want = 3;
+        else if (!strcmp(m, "panic_window_ns")) want = 2e9;
+        else if (!strcmp(m, "panic_grace_ns")) want = 1e10;
+        else want = 0;
+        checked++;
+        if (want != rows[i].def) {
+            char msg[160];
+            snprintf(msg, sizeof msg, "row %s: a zero field means %.17g, the table says %.17g", m, want, rows[i].def);
+            fail(__LINE__, msg);
+        }
+    }
+    CHECK_I(checked, n - 1);
+    yscr_close(&s);
+    for (i = 0; i < n; i++)
         CHECK(strcmp(p[i].name, "presenter") != 0 && strcmp(p[i].name, "ring") != 0 &&
               strcmp(p[i].name, "angle_dir") != 0);
-    }
 }
+#undef SCR_NF
 
 /* Smoke test: the simulated backend in real time, the one test here that
  * the host's scheduling can touch. Its bounds hold on a loaded runner:
@@ -3034,6 +3158,51 @@ static void test_sim(void) {
     g_virtual = 1;
     CHECK(completed >= 1);
     if (late || onset_ok < completed) printf("  sim: %d of 120 frames late, %d of %d on the prediction\n", late, onset_ok, completed);
+}
+
+/* v0.8.0: the simulated backend on ysp/rt.h's virtual clock, through the
+ * header's own clock calls (the test's seam off). Exact where test_sim
+ * allows a loaded host: no frame late or dropped, every onset on the
+ * grid and on the prediction, and a real backend refused. */
+static void test_sim_virtual(void) {
+    yscr_screen s;
+    yscr_desc d;
+    static yscr_frame f;
+    char line[512];
+    int i, completed = 0;
+    int64_t grid0 = 0;
+    g_virtual = 0;
+    CHECK_I(yrt_virtual_begin(0), 0);
+    memset(&s, 0, sizeof s);
+    memset(&d, 0, sizeof d);
+    d.backend = YSCR_BACKEND_DXGI_FLIP;
+    CHECK(!yscr_open(&s, &d));
+    CHECK(strstr(yscr_error(&s), "virtual") != NULL);
+    memset(&s, 0, sizeof s);
+    d.backend = YSCR_BACKEND_SIM;
+    d.sim_period_ns = P_NS;
+    CHECK(yscr_open(&s, &d));
+    if (!yscr_is_open(&s)) { yrt_virtual_end(); g_virtual = 1; return; }
+    for (i = 0; i < 120; i++) {
+        yscr_record out;
+        CHECK_I(yscr_begin(&s, &f), YSCR_OK);
+        if (!grid0) grid0 = f.onset;
+        CHECK(f.onset == grid0 + (int64_t)i * P_NS);
+        if (i && f.last) {
+            completed++;
+            CHECK_I(f.last->index, i - 1);
+            CHECK_I(f.last->dropped, 0);
+            CHECK(f.last->onset == f.last->planned && f.last->onset == grid0 + (int64_t)(i - 1) * P_NS);
+        }
+        CHECK_I(yscr_flip_at(&s, f.onset, &out), YSCR_OK);
+        CHECK(!(out.flags & YSCR_FLIP_LATE_TARGET));
+    }
+    CHECK_I(completed, 119);
+    CHECK(yscr_describe(&s, line, sizeof line) > 0);
+    CHECK(strstr(line, "backend=sim") != NULL && strstr(line, " clock=virtual ") != NULL);
+    yscr_close(&s);
+    yrt_virtual_end();
+    g_virtual = 1;
 }
 
 /* --------------------------------------------------------- the sync guard */
@@ -4122,6 +4291,197 @@ static void test_web_rules(void) {
     CHECK(!yscr__web_steady(&w));
 }
 
+/* v0.10.0 (WINDOW THREAD): the mode rule, desc.window_thread's check, the
+ * window call without a window thread, and a released screen. The thread
+ * itself needs SDL and a display: examples/screen/window_thread.c and
+ * examples/screen/abort.c run it. */
+static int g_wcalls;
+static void wcall(void* ctx) { g_wcalls += *(int*)ctx; }
+
+static void test_window_thread(void) {
+    static script c, c2;
+    static yscr_screen s, s2;
+    yscr_screen* sp[2];
+    static yscr_frame f, fg[2];
+    yscr_desc d;
+    const char* e;
+    int32_t why;
+    int one = 1;
+    char line[1024];
+    const int32_t A = YSCR_WINDOW_THREAD_AUTO, ON = YSCR_WINDOW_THREAD_ON, OFF = YSCR_WINDOW_THREAD_OFF;
+
+    /* AUTO: on for the native backends where the build has the thread */
+    CHECK_I(yscr__wt_decide(A, 1, 1, 0, 0, &why, &e), ON);
+    CHECK(e == NULL);
+    CHECK_I(why, YSCR__WT_WHY_NONE);
+    CHECK_I(yscr__wt_decide(A, 0, 1, 0, 0, &why, &e), OFF);   /* CUSTOM */
+    CHECK_I(why, YSCR__WT_WHY_BACKEND);
+    CHECK_I(yscr__wt_decide(A, 1, 0, 0, 0, &why, &e), OFF);   /* the web, YRT_NO_THREADS */
+    CHECK_I(why, YSCR__WT_WHY_PLATFORM);
+    CHECK_I(yscr__wt_decide(A, 1, 1, 0, 1, &why, &e), OFF);   /* SDL video is another thread's */
+    CHECK_I(why, YSCR__WT_WHY_SDL);
+    CHECK(e == NULL);
+    /* AUTO follows the open screens; it cannot put a CUSTOM window on the thread */
+    CHECK_I(yscr__wt_decide(A, 1, 1, OFF, 0, &why, &e), OFF);
+    CHECK_I(why, YSCR__WT_WHY_PROCESS);
+    CHECK_I(yscr__wt_decide(A, 1, 1, ON, 0, &why, &e), ON);
+    CHECK_I(why, YSCR__WT_WHY_NONE);
+    CHECK_I(yscr__wt_decide(A, 0, 1, ON, 0, &why, &e), 0);
+    CHECK(e && strstr(e, "yscr_window_call") != NULL);
+    CHECK_I(yscr__wt_decide(A, 0, 1, OFF, 0, &why, &e), OFF);
+    CHECK(e == NULL);
+    /* ON and OFF: as named, or open() fails */
+    CHECK_I(yscr__wt_decide(ON, 0, 1, 0, 0, &why, &e), ON);   /* CUSTOM may ask */
+    CHECK_I(why, YSCR__WT_WHY_NAMED);
+    CHECK_I(yscr__wt_decide(ON, 1, 0, 0, 0, &why, &e), 0);
+    CHECK(e && strstr(e, "YRT_NO_THREADS") != NULL);
+    CHECK_I(yscr__wt_decide(ON, 1, 1, OFF, 0, &why, &e), 0);
+    CHECK(e && strstr(e, "one mode per process") != NULL);
+    CHECK_I(yscr__wt_decide(ON, 1, 1, 0, 1, &why, &e), 0);
+    CHECK(e && strstr(e, "main thread") != NULL);
+    CHECK_I(yscr__wt_decide(ON, 1, 1, ON, 0, &why, &e), ON);
+    CHECK_I(yscr__wt_decide(OFF, 1, 1, 0, 1, &why, &e), OFF);
+    CHECK_I(why, YSCR__WT_WHY_NAMED);
+    CHECK_I(yscr__wt_decide(OFF, 1, 1, ON, 0, &why, &e), 0);
+    CHECK(e && strstr(e, "one mode per process") != NULL);
+
+    /* desc.window_thread is checked on every backend */
+    memset(&d, 0, sizeof d);
+    d.backend = YSCR_BACKEND_SIM;
+    d.window_thread = 3;
+    memset(&s, 0, sizeof s);
+    CHECK(!yscr_open(&s, &d));
+    CHECK(strstr(yscr_error(&s), "desc.window_thread") != NULL);
+    d.window_thread = -1;
+    CHECK(!yscr_open(&s, &d));
+    d.window_thread = ON;   /* no window on SIM: nothing to own */
+    CHECK(yscr_open(&s, &d));
+    yscr_describe(&s, line, sizeof line);
+    CHECK(strstr(line, " window_thread=n/a ") != NULL);
+    /* the window call runs here without a window thread */
+    g_wcalls = 0;
+    CHECK_I(yscr_window_call(&s, wcall, &one), YSCR_OK);
+    CHECK_I(yscr_window_call(NULL, wcall, &one), YSCR_OK);
+    CHECK_I(g_wcalls, 2);
+    CHECK_I(yscr_window_call(&s, NULL, NULL), YSCR_ERR_ARG);
+    CHECK(strcmp(yscr_error(&s), "ysp_screen: window_call: bad argument") == 0);
+    yscr_close(&s);
+
+    /* A released screen (PANIC): the abort that the release pushes, then
+     * YSCR_ABORT_PANIC from every begin() until close. A screen whose window
+     * the thread does not own reports the abort once, as any abort. */
+    memset(&c, 0, sizeof c);
+    c.depth = 1;
+    memset(&c2, 0, sizeof c2);
+    c2.depth = 1;
+    ring_reset();
+    CHECK(open_scripted(&s, &c, 0, 1));
+    CHECK(open_scripted(&s2, &c2, 0, 2));
+    CHECK_I(one_frame(&s, &f), YSCR_OK);
+    CHECK_I(one_frame(&s2, &f), YSCR_OK);
+    s.wt = 1;   /* as if the window thread owned its window */
+    vlose(400000000);
+    yscr__abort_key(YSCR_KEY_ESCAPE, YSCR_MOD_SHIFT, vnow(), YSCR__AB_HOOK);
+    yscr__abort_push(YSCR_ABORT_PANIC, YSCR__AB_HOOK, 0, 0, vnow());
+    yscr__a_store(&yscr__released, 1);
+    CHECK_I(yscr_begin(&s, &f), YSCR_QUIT);
+    CHECK_I(f.abort, YSCR_ABORT_KEY | YSCR_ABORT_PANIC);
+    CHECK_I(f.abort_presses, 1);
+    CHECK_I(yscr_begin(&s, &f), YSCR_QUIT);
+    CHECK_I(f.abort, YSCR_ABORT_PANIC);
+    CHECK_I(f.abort_presses, 0);
+    CHECK_I(f.index, 0);
+    CHECK_I(yscr_begin(&s, &f), YSCR_QUIT);
+    CHECK_I(f.abort, YSCR_ABORT_PANIC);
+    CHECK_I(yscr_flip(&s), YSCR_ERR_ORDER);
+    yscr_describe(&s, line, sizeof line);
+    CHECK(strstr(line, "WARNING=panic-released") != NULL);
+    CHECK_I(yscr_begin(&s2, &f), YSCR_QUIT);                  /* once */
+    CHECK_I(f.abort, YSCR_ABORT_KEY | YSCR_ABORT_PANIC);
+    CHECK_I(one_frame(&s2, &f), YSCR_OK);
+    yscr_describe(&s2, line, sizeof line);
+    CHECK(strstr(line, "panic-released") == NULL);
+    sp[0] = &s2; sp[1] = &s;   /* the released one last: no member may begin first */
+    CHECK_I(yscr_begin_group(sp, 2, fg), YSCR_QUIT);
+    CHECK_I(fg[0].abort, 0);
+    CHECK_I(fg[1].abort, YSCR_ABORT_PANIC);
+    CHECK(!s.begun && !s2.begun);
+    s.wt = 0;
+    yscr__a_store(&yscr__released, 0);
+    CHECK_I(one_frame(&s, &f), YSCR_OK);
+    yscr_close(&s);
+    yscr_close(&s2);
+}
+
+/* v0.10.1 (THE GRID): the grid after a gap. The scripted vblanks move
+ * 0.5 ms later during a 30 s gap, as this laptop's moved against a period
+ * fitted over 2 s. Without the system's vblank the next 16 to 17 records
+ * are GRID_UNSTABLE with the grid's late onset; with it (the seam stands
+ * for DWM's last vblank) none is, and each onset is the vblank's time.
+ * mode: 0 no system vblank, 1 the true one, 2 one 1.5 ms off (refused),
+ * 3 a short gap (0.3 s: not consulted). */
+static void test_gap_anchor(int mode) {
+    static script c;
+    yscr_screen s;
+    static yscr_frame f;
+    int i, j, n, unstable = 0, checked = 0, asked;
+    const int pre = 100, post = 100;
+    int64_t gap = mode == 3 ? 300000000LL : 30000000000LL;
+    memset(&c, 0, sizeof c);
+    c.depth = 1;
+    c.path = YSCR_PATH_INDEPENDENT;
+    ring_reset();
+    g_sysvb_mode = 0;
+    CHECK(open_scripted(&s, &c, 0.5, 6));
+    if (!yscr_is_open(&s)) return;
+    for (i = 0; i < pre; i++) CHECK_I(one_frame(&s, &f), YSCR_OK);
+    CHECK_I(yscr_wait_flip(&s, NULL), YSCR_OK);
+    /* the gap: no call; the vblanks after it come 0.5 ms later (or 0.03 ms
+     * after a short gap, within the 1% that keeps a time on the grid) */
+    {
+        int64_t k0 = sc_count(&c, now_ns()) + 2;
+        for (i = (int)k0; i < MAX_ID; i++) c.vb_off[i] = mode == 3 ? 30000 : 500000;
+    }
+    vlose(gap);
+    g_sysvb_script = &c;
+    g_sysvb_mode = mode == 0 ? 0 : mode == 2 ? 2 : 1;
+    g_sysvb_asked = 0;
+    for (i = 0; i < post; i++) CHECK_I(one_frame(&s, &f), YSCR_OK);
+    asked = g_sysvb_asked;
+    CHECK_I(yscr_wait_flip(&s, NULL), YSCR_OK);
+    if (mode == 1) {
+        CHECK_I(s.gap_anchors, 1);
+        CHECK_I(s.gap_refused, 0);
+        CHECK(s.gap_shift_max >= 490000 && s.gap_shift_max <= 510000);
+    } else if (mode == 2) {
+        CHECK_I(s.gap_anchors, 0);
+        CHECK_I(s.gap_refused, 1);
+    } else {
+        CHECK_I(s.gap_anchors, 0);
+    }
+    if (mode == 3) CHECK_I(asked, 0);    /* a short gap: not consulted */
+    else if (mode != 0) CHECK(asked >= 1);
+    yscr_close(&s);
+    g_sysvb_mode = 0;
+    g_sysvb_script = NULL;
+    n = ring_drain();
+    for (j = 0; j < n; j++) {
+        const yrt_event* e = &g_ev[j];
+        uint32_t idx, flags;
+        if (e->source != YRT_SRC_SCREEN || e->kind != YSCR_EV_FLIP) continue;
+        idx = e->u.u32[9];
+        if ((int)idx < pre) continue;
+        flags = YSCR_EV_FLAGS_OF(e->u.u16[5]);
+        checked++;
+        if (flags & YSCR_FLIP_GRID_UNSTABLE) unstable++;
+        else CHECK_I(((int64_t)e->t_ns - c.t0 - (int64_t)c.vb_off[MAX_ID - 1]) % P_NS, 0);   /* on a vblank */
+        CHECK_I(e->u.u16[4], 0);   /* no drop */
+    }
+    CHECK(checked >= post - 2);
+    if (mode == 0 || mode == 2) CHECK(unstable >= 16 && unstable <= 17);
+    else CHECK_I(unstable, 0);
+}
+
 int main(void) {
     yrt_thread_elevate(NULL);
     test_web_rules();
@@ -4183,6 +4543,7 @@ int main(void) {
     test_panic_rule();
     test_icon();
     test_sim();
+    test_sim_virtual();
     test_sync_forced_off(1);
     test_sync_forced_off(2);
     test_sync_forced_off(3);
@@ -4205,6 +4566,11 @@ int main(void) {
     test_foreground();
     test_stale_statistics();
     test_context_hook();
+    test_window_thread();
+    test_gap_anchor(0);
+    test_gap_anchor(1);
+    test_gap_anchor(2);
+    test_gap_anchor(3);
     /* no case but the forced-off ones fired the guard */
     CHECK_I(g_unsynced_fires, g_unsynced_want);
     if (g_failures) {

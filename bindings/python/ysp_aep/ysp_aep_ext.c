@@ -6,7 +6,7 @@
  * ysp/rt.h pump that layer runs on, is compiled directly into this module.
  *
  * Built against the stable ABI / Limited API (Py_LIMITED_API), so one compiled
- * ysp/aep.abi3.so works across CPython >= 3.8 without recompiling per version.
+ * ysp/aep.abi3.so works across CPython >= 3.10 without recompiling per version.
  * That rules out the static PyTypeObject layout, so GP and Async are heap types
  * created with PyType_FromSpec. It also rules out the buffer protocol before
  * 3.11: arrays come in through memoryview + bytes (a copy) and go out as bytes
@@ -31,7 +31,7 @@
  * struct, and Async refuses a GP that has a Python rng for that reason.
  */
 #ifndef Py_LIMITED_API
-#define Py_LIMITED_API 0x03080000   /* target the CPython 3.8+ stable ABI */
+#define Py_LIMITED_API 0x030A0000   /* target the CPython 3.10+ stable ABI */
 #endif
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
@@ -2058,7 +2058,7 @@ PyMODINIT_FUNC PyInit_aep(void) {
 
     /* From the compiled header, not a copy: the drift test compares it with
      * pyproject.toml. */
-    if (PyModule_AddStringConstant(m, "__version__", yaep_version()) < 0) goto fail;
+    if (PyModule_AddStringConstant(m, "__version__", YAEP_VERSION_STRING ".1") < 0) goto fail;   /* .1: the CPython 3.10 floor (2026-10-27) */
 
 #define C(name, v) if (PyModule_AddIntConstant(m, name, (long)(v)) < 0) goto fail
     C("LIK_BERNOULLI", YAEP_LIK_BERNOULLI);

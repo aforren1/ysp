@@ -1,4 +1,4 @@
-/* ysp/audio.h - v0.6.0 - public domain single-header audio library
+/* ysp/audio.h - v0.8.0 - public domain single-header audio library
  *
  *   Sound at a time on the ysp/rt.h clock. A buffer is played with
  *   yau_play_at(buf, t); the header plans its first sample on the device
@@ -15,7 +15,7 @@
  *   device and Audio source extensions. v0.5.0: CAPTURE, an input on the
  *   same clock, each captured frame mapped to ysp_rt time by a fit of the
  *   input's own clock, alone or as one duplex device; a voice key and a
- *   click finder (DETECTORS); a WAV writer (WAV OUT). v0.6.0: on Linux,
+ *   click finder (DETECTORS); a WAV writer (WAV OUT). v0.8.0: on Linux,
  *   ALSA exclusive on a card's hw: device with a device position (AUTO
  *   there) and PulseAudio's stream timing info as its position.
  *
@@ -107,7 +107,7 @@
  *     A device position report (P, t) says that stream frame P was at the
  *     device's output at ysp_rt time t. On WASAPI it is
  *     IAudioClock::GetPosition(), read at every callback. On PulseAudio
- *     (v0.6.0) it is the stream's timing info: the bytes the server has
+ *     (v0.8.0) it is the stream's timing info: the bytes the server has
  *     read from the stream, less the sink's latency, at the reply's
  *     timestamp. The header asks for it at most every 50 ms; the reply
  *     comes in a later callback, and the callbacks between replies carry
@@ -174,6 +174,17 @@
  *     far ahead; ysp/timeline.h's look-ahead for audio is this number.
  *     On WASAPI shared mode it is mostly the queue (QUEUE) and the
  *     engine's own period and pipeline.
+ *     From callback times alone (the null device) the lead is
+ *     fit_time(w + period) - now, w the first frame of the next block:
+ *     two periods just after a callback on the fit's line, less after a
+ *     late one. It is negative while the next callback is more than a
+ *     period late on the fit; the sound still starts on its frame, as
+ *     the device is behind its fit. It is more than two periods while a
+ *     callback came before the fit's line: the fit takes the least late
+ *     callback of each 50 ms and refits once a second after the warm-up,
+ *     so in the first second after yau_open() a callback less late than
+ *     all of the warm-up's adds the difference. (docs/audio.md, "The lead
+ *     on the null device".)
  *
  *   QUEUE (desc.queue, WASAPI shared mode)
  *     The periods of sound queued in the WASAPI buffer ahead of the
@@ -247,7 +258,7 @@
  *     3  unconfirmed (no report past the frame), or a path no loopback
  *        checked (WASAPI exclusive, which the loopback capture cannot see), or
  *        callback times only (CoreAudio, ALSA, Web Audio), or PulseAudio's
- *        position, which no loopback has checked yet (v0.6.0)
+ *        position, which no loopback has checked yet (v0.8.0)
  *     YAU_TIER_SIM  the null device, or a device that says so
  *     desc.min_tier (1 to 3) flags BELOW_TIER on each onset worse than it;
  *     the run goes on.
@@ -308,7 +319,7 @@
  *     IAudioClient::GetStreamLatency, "the maximum latency for the current
  *     stream". On CoreAudio (compiled, not run): kAudioDevicePropertyLatency
  *     plus kAudioDevicePropertySafetyOffset, and the buffer frame size on
- *     top for the stream figure. PulseAudio (v0.6.0): the position already
+ *     top for the stream figure. PulseAudio (v0.8.0): the position already
  *     subtracts the sink's latency, so the claim is 0
  *     ("pulse:timing-info"). ALSA: no claim.
  *     PortAudio's equivalents are Pa_GetStreamInfo()->outputLatency and a
@@ -567,7 +578,7 @@
  *   array may have 4 channels; the rate is the endpoint's Default Format
  *   under Sound > Recording. open() starts the input and waits until the
  *   fit spans 0.5 s, as yau_open() does. Backends: WASAPI reads the capture
- *   client's IAudioClock (shared and exclusive); on Linux (v0.6.0) ALSA
+ *   client's IAudioClock (shared and exclusive); on Linux (v0.8.0) ALSA
  *   exclusive reads the hw: PCM's status and PulseAudio its record
  *   stream's timing info (BACKENDS); every other backend fits callback
  *   times; the null backend's input is silence on a timer, tier SIM.
@@ -584,7 +595,7 @@
  *   the capture client's IAudioClock, fitted by least squares), else the
  *   callback times (the frame after the block, at the callback's entry,
  *   fitted by the lower envelope); a device with reports adds no callback
- *   point for a block without one (REPORTS ONLY, v0.6.0). A report is used only when its stamp is
+ *   point for a block without one (REPORTS ONLY, v0.8.0). A report is used only when its stamp is
  *   new: measured on the test laptop's microphone, WASAPI's capture clock
  *   moves the position every 10 ms but the stamp every 20 ms, and only
  *   the pair read when the stamp changes lies on the line. Once the fit is
@@ -656,7 +667,7 @@
  *   the first of them. A device that flags an underrun in its tick
  *   (YAU_TICK_XRUN) restarts the fit with no count. Every loss counts in
  *   .xruns; counts in .lost.
- *     RESTART (Linux, ALSA hw:, v0.6.0): miniaudio recovers an overrun
+ *     RESTART (Linux, ALSA hw:, v0.8.0): miniaudio recovers an overrun
  *     inside its read (the buffer is dropped, the PCM started again) and
  *     says nothing. The PCM's trigger stamp moves; the frames lost are the
  *     frame the last report puts at the new status stamp less the frame
@@ -665,7 +676,7 @@
  *     64-frame periods: each stall of 45 and 60 ms lost 46.4 to 47.3 and
  *     61.0 to 62.2 ms, found with the first block after the stall; the
  *     frames after a 70 ms stall lay within 30 us of the fit from before.
- *   WATCHDOG (v0.6.0): a device that stops calling back says nothing
+ *   WATCHDOG (v0.8.0): a device that stops calling back says nothing
  *   (a stalled PCM, a sound server suspended under its source). While no
  *   block has come for 200 ms or 4 buffers, whichever is longer,
  *   yau_capture_update() returns YAU_ERR_LOST and says so in
@@ -684,7 +695,7 @@
  *   input paces the device thread (miniaudio reads the input, then writes
  *   the output), so the output has no queue gate (desc.queue does not
  *   apply; caps.queue is 0). Not with YAU_BACKEND_CUSTOM: a custom device
- *   records through its own yau_capture (DEVICE). On Linux (v0.6.0) only
+ *   records through its own yau_capture (DEVICE). On Linux (v0.8.0) only
  *   with the output on a card's hw: device (AUTO, or ALSA exclusive) and
  *   the input on the same card (one converter clock): the capture desc's
  *   device, else the card's first input. Six periods per buffer and four
@@ -763,7 +774,7 @@
  *     silent buffer written before Start (EXCLUSIVE START: without it the
  *     test laptop's driver underran for the whole run in half the opens).
  *     Positions: IAudioClock, called in each callback.
- *   YAU_BACKEND_ALSA (Linux; AUTO there, exclusive, v0.6.0)
+ *   YAU_BACKEND_ALSA (Linux; AUTO there, exclusive, v0.8.0)
  *     AUTO on Linux is ALSA exclusive on the default card's first playback
  *     device (ALSA_CARD, as alsa-lib reads it, else card 0) unless
  *     desc.device names one, at 32 bits for a project of 24 bits or more:
@@ -771,7 +782,7 @@
  *     server says YAU_BACKEND_PULSE. Shared (YAU_BACKEND_ALSA without
  *     desc.exclusive): the device desc.device names, "default" without
  *     one (often a sound server's plugin); callback times only. Exclusive
- *     (desc.exclusive, v0.6.0): the card's own device (hw:), past any
+ *     (desc.exclusive, v0.8.0): the card's own device (hw:), past any
  *     sound server, with the shortest periods and a device position (the
  *     frames handed over less snd_pcm_status()'s delay, at its timestamp).
  *     desc.device must name it (an id like ":0,0" or "hw:0,0"); open()
@@ -805,13 +816,13 @@
  *     and the position counts only the frames the header handed over, so
  *     the start adds no frames to it (docs/audio.md, "Linux: ALSA
  *     exclusive").
- *   YAU_BACKEND_PULSE (Linux, v0.6.0)
+ *   YAU_BACKEND_PULSE (Linux, v0.8.0)
  *     Shared through the sound server, which keeps the desktop's sound:
  *     the choice for an operator's machine. Positions: the stream's timing
  *     info (THE STREAM), asked for at most every 50 ms; a fit spread of 3
  *     to 4 us, the shortest safe lead 15 to 17 ms here. Tier 3: no
  *     loopback.
- *   CAPTURE on Linux (v0.6.0; docs/audio.md, "Linux: capture")
+ *   CAPTURE on Linux (v0.8.0; docs/audio.md, "Linux: capture")
  *     AUTO: ALSA exclusive on the default card's first capture device
  *     (hw:0,0 here), 32 bits for a desc of 24 bits or more (16 for
  *     YAU_S16), the desc's rate, as the output. ALSA exclusive needs a
@@ -875,6 +886,23 @@
  *     after a user gesture (a tap or click on the page; on iOS Safari the
  *     gesture must come first): open from the gesture's handler, or the
  *     context waits for miniaudio's next tap.
+ *     ONE CONTEXT (v0.5.2; AudioWorklet path v0.6.1): the page keeps the
+ *     first output's AudioContext. yau_close() suspends it (its close()
+ *     does nothing), and a later yau_open() at the same rate (and, on the
+ *     AudioWorklet path, the same channel count) resumes it, so a reopen
+ *     after the gesture needs no new gesture. The ScriptProcessorNode path
+ *     attaches a new ScriptProcessorNode; the AudioWorklet path keeps its
+ *     one worklet scope and AudioWorkletNode and points the node at the
+ *     new open (a scope boots once per context, and an old node's
+ *     processor runs on after a disconnect). An output open makes one
+ *     context or none: miniaudio's two sample-rate queries get the
+ *     device's (they made 2 more an open before v0.6.1). A second output
+ *     open at the same time gets a context of its own, kept by nobody;
+ *     another rate or channel count gets a new context that the page then
+ *     keeps (the old one is closed). A DUPLEX device or a capture makes
+ *     its own context and miniaudio's query contexts at each open, as
+ *     before. The describe line says which: context=kept (the page's,
+ *     made by this open), reused, or own.
  *     Positions: a timer on the main thread reads getOutputTimestamp()
  *     every 10 ms (and the ScriptProcessorNode's handler each block):
  *     contextTime, the context frame the browser says is at the output,
@@ -884,10 +912,11 @@
  *     AudioWorklet's currentFrame, exact, or the ScriptProcessorNode
  *     block's playbackTime, which Chrome 154 gives as currentTime plus the
  *     buffer: late by up to the audio device's chunk (10 ms there). A
- *     block that moves it (a skipped block) is an XRUN. A pair more than
- *     0.5 ms later, against its contextTime, than the least late of the
- *     last 32 is passed over: Firefox 157's pairs spread -3.3 to +3.1 ms
- *     (p1 to p99), its contextTime stepping with its 512-frame callback
+ *     block that moves it (a skipped block) is an XRUN. The reader passes
+ *     over a read more than 0.5 ms later, against its contextTime, than
+ *     the least late of its last 32 reads (v0.5.2: of every read, not of
+ *     the pairs the blocks saw): Firefox 157's pairs spread -3.3 to
+ *     +3.1 ms (p1 to p99), its contextTime stepping with its callback
  *     while performanceTime follows the read. Firefox 157 also gives
  *     performanceTime outputLatency before the read; where a pair is that
  *     old, outputLatency goes back on, so the frame its own claim puts at
@@ -909,17 +938,28 @@
  *     docs/web.md, "Audio".
  *   YAU_BACKEND_NULL
  *     miniaudio's null device: a timer, no hardware. Tier SIM.
+ *     VIRTUAL CLOCK (v0.6.0): on ysp/rt.h's virtual clock
+ *     (yrt_virtual_begin) it is the header's own device instead, named
+ *     "virtual null": a virtual timer on the driver thread renders one
+ *     block a period (desc.period, 10 ms by default; at most 8 KB a
+ *     block, 1024 stereo float frames), at the block's own time, and
+ *     fills a capture or DUPLEX input with silence the same way. The fit
+ *     is then exact (drift 0, spread 0) and an onset is on its plan
+ *     within half a sample, the same on every run whatever the host's
+ *     load. Every other backend is refused on the virtual clock: its
+ *     callbacks come on real time. Without miniaudio (YAU_NO_MINIAUDIO)
+ *     it opens too.
  *   YAU_BACKEND_CUSTOM
  *     desc.dev and desc.dev_ctx: your device (DEVICE).
  *
  *   ---------------------------------------------------------------------
- *   DEVICES (desc.device, yau_list_devices(), v0.6.0)
+ *   DEVICES (desc.device, yau_list_devices(), v0.8.0)
  *   ---------------------------------------------------------------------
  *   desc.device is a device's id (WASAPI endpoint id, ALSA ":card,device"
  *   or "hw:card,device", PulseAudio sink name, CoreAudio UID), or a part of
  *   its name that only one device has. A part that two devices share is
  *   refused, and the message lists their ids: names repeat (one Linux
- *   desktop lists "HDA Intel PCH, HDMI 1" twice). Until v0.6.0 the first
+ *   desktop lists "HDA Intel PCH, HDMI 1" twice). Until v0.8.0 the first
  *   match was taken. yau_list_devices() gives each playback device's name,
  *   id and whether it is the backend's default; yau_list_inputs() the
  *   same for capture devices, and a capture desc.device follows the same
@@ -1009,7 +1049,10 @@
  *   -ldl -lpthread -lm on Linux. Windows links nothing: miniaudio loads its
  *   DLLs at run time. Define YAU_NO_MINIAUDIO to build the core with
  *   YAU_BACKEND_CUSTOM only. Include ysp/audio.h (or ysp/rt.h) before
- *   any system header in the implementation file. Define YAU_API to
+ *   any system header in the implementation file. On Windows the
+ *   implementation includes <windows.h> (WIN32_LEAN_AND_MEAN) and
+ *   <objbase.h>, so the other ysp headers' COM headers may come before or
+ *   after it. Define YAU_API to
  *   change the linkage of every function.
  *   Hot paths carry ysp/rt.h's instrumentation macros: zones yau.render,
  *   yau.mix, yau.fit, yau.capture, yau.cap.fit; a plot of the queue depth in
@@ -1020,7 +1063,7 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
- *   v0.6.0 - PulseAudio: the stream's timing info is a device position
+ *   v0.8.0 - PulseAudio: the stream's timing info is a device position
  *          (THE STREAM), so the fit uses reports instead of callback times
  *          (spread 3 us against 0.5 ms). PulseAudio reports every few
  *          callbacks; v0.5.1's report-only fit keeps the callback times
@@ -1068,6 +1111,70 @@
  *          v0.5.1 made it for the output (WASAPI, which reports with every
  *          block, is unchanged).
  *          Tier 3 on every Linux input: no line-in run.
+ *   v0.7.3 - Builds for 32-bit Windows with MSVC: the 64-bit atomic store
+ *          is a compare-exchange loop on x86, which has no
+ *          _InterlockedExchange64 (LNK2001 in the cp39-win32 wheel). LEAD
+ *          and yau_lead_ns() say when the lead is negative or above two
+ *          periods. WAV paths (yau_wav_desc.path, yau_wavw_desc.path) are
+ *          UTF-8 on Windows too: converted to UTF-16 for _wfsopen(), read
+ *          sharing every access and a write denying other writers, as
+ *          ysp/dataset.h opens its files. fopen() read them in the ANSI
+ *          code page, so a folder named with Omega failed. A path that is
+ *          not UTF-8 is YAU_ERR_ARG; a missing file stays YAU_ERR_IO, now
+ *          with "no such file" in the message.
+ *   v0.7.2 - yau_wait() with a timeout near INT64_MAX ("forever") waits:
+ *          its deadline is now plus the timeout, saturated at INT64_MAX.
+ *          The plain sum overflowed (undefined behavior) and in practice
+ *          gave YAU_ERR_TIMEOUT at once. No API change.
+ *   v0.7.1 - On Windows the implementation includes <objbase.h> before
+ *          miniaudio.h. Under WIN32_LEAN_AND_MEAN miniaudio defined
+ *          CLSCTX_ALL itself, and a COM header later in the same
+ *          translation unit (ysp/screen.h's D3D11, ysp/video.h's Media
+ *          Foundation) redefined it: MSVC C4005, an error under /WX, so
+ *          audio.h before screen.h (the order ysp/video.h asks for) did
+ *          not build. No API or behavior change.
+ *   v0.7.0 - PARAMETERS: yau_param gains a last field, values: for an enum
+ *          row the C enum's names and values ("f32=0,s16=1,s24=2"), NULL
+ *          for every other row. format.sample and backend list them; the
+ *          doc text no longer does. format.channels is "u16", the
+ *          field's type (was "u32"). stream.preroll's default is 12000,
+ *          a quarter of the default ring, as stream.frames's is that
+ *          ring (was 0). A positional initializer of a
+ *          yau_param gets values NULL.
+ *   v0.6.1 - ONE CONTEXT on the AudioWorklet path too: the page keeps the
+ *          AudioContext of its first output open, made in the user's tap,
+ *          with one worklet scope and one AudioWorkletNode; a later open
+ *          at the same rate and channel count resumes it and points the
+ *          node at the new device (was: 3 contexts an open, the device's
+ *          and 2 of miniaudio's sample-rate queries, so a reopen asked a
+ *          context made after the tap for sound, which iOS Safari may
+ *          keep suspended). The queries get the device's context on both
+ *          paths. The describe line says context=kept, reused or own.
+ *          A failed init frees only its own context (was: the kept one,
+ *          also when another open held it).
+ *   v0.6.0 - VIRTUAL CLOCK (ysp/rt.h v0.9.0): BACKEND_NULL on the virtual
+ *          clock is a device of the header's own, its blocks on a virtual
+ *          timer at their own times, for output, capture and DUPLEX; every
+ *          other backend is refused there. miniaudio's null device is a
+ *          real-time thread: its onsets moved with the host's load, and
+ *          the --sim checks of audio_schedule, audio_av_sync,
+ *          trial_audio_keyboard and trial_stop_signal allowed 2 to 10 ms.
+ *          Now within half a sample. The real clock: no change.
+ *   v0.5.2 - WEB: the reader on the main thread keeps the lower envelope
+ *          of getOutputTimestamp() over every read and publishes only the
+ *          pairs on it (was: the block kept it over the pairs it saw). A
+ *          ScriptProcessorNode block sees one pair, read at a phase locked
+ *          to the browser's audio callback; in Firefox 157 those stayed
+ *          above the envelope for up to a second, the fit did not warm
+ *          up in 3 s, and yau_open() failed: 8 of 30 opens of av.html had
+ *          no sound, 0 of 30 with the fix (docs/audio.md, "Web
+ *          envelope"). The describe line's passed count is the reader's.
+ *          ONE CONTEXT: on the ScriptProcessorNode path a reopen resumes
+ *          the page's kept AudioContext instead of making one after the
+ *          user's tap, which iOS Safari may keep suspended (no iPhone
+ *          tested; docs/web.md has the hand test). WARM-UP:
+ *          open() gives the fit 3 s from the first callback, at most 5 s
+ *          from the start (was 3 s from the start).
  *   v0.5.1 - EXCLUSIVE START: WASAPI exclusive mode writes one silent
  *          buffer before Start, and position reports count stream frames
  *          from after it. miniaudio started the stream on an empty buffer;
@@ -1167,7 +1274,7 @@
  *          positions, miniaudio's null device, the device and source
  *          interfaces, synthesis, the records, the parameter table.
  *
- *   STATUS: v0.6.0, 2026-10-12 (docs/audio.md, "Linux: a position from
+ *   STATUS: v0.8.0, 2026-10-12 (docs/audio.md, "Linux: a position from
  *   PulseAudio", "Linux: ALSA exclusive", "AUTO on Linux"): the Linux
  *   desktop below (Debian 12, PulseAudio 16, Intel HDA analog output),
  *   gcc 12.2. ALSA exclusive on hw:0,0 with snd_pcm_status() positions
@@ -1181,7 +1288,7 @@
  *   web-02) were killed, on this work's first numbering (v0.5.0), and
  *   again after the merge with v0.5.0 (capture) and v0.5.1 (exclusive
  *   start), 2026-10-13. Tier 3: no loopback.
- *   STATUS: v0.6.0, 2026-10-13, capture on Linux (docs/audio.md, "Linux:
+ *   STATUS: v0.8.0, 2026-10-13, capture on Linux (docs/audio.md, "Linux:
  *   capture"): the same desktop (i5-14500, PulseAudio 17.0, the HDA
  *   codec's input, nothing plugged in), gcc 12.2. hw:0,0 capture's status
  *   position: 3.0 to 9.4 us sd from a line over 30 s at 64, 128 and 480
@@ -1215,6 +1322,47 @@
  *   Tier 3 on every Linux input: no line-in or
  *   photodiode run (the Teensy needs a TRRS breakout and a divider into
  *   the combo jack's microphone contact, which this machine lacks).
+ *   STATUS: v0.7.3, 2026-10-27 (docs/audio.md, "32-bit Windows" and
+ *   "UTF-8 paths"): the compile check, tests/adapt/audio_test.c and the
+ *   ysp-audio wheel's tests build and pass with MSVC for x86 (Win32) and
+ *   32-bit CPython. test_wav_paths writes and probes a WAV file in a
+ *   folder named with Omega, Zhe, a CJK ideograph and U+1F3AC (MSVC x64
+ *   and x86, MinGW-w64, WSL2 gcc and clang); mutants pa-01 to pa-03.
+ *   STATUS: v0.7.2, 2026-10-27 (docs/audio.md, "A wait without end"):
+ *   tests/adapt/audio_test.c waits with INT64_MAX and INT64_MAX - 1 ms on
+ *   a pending sound of the virtual null device; MSVC, MinGW-w64, WSL2 gcc
+ *   with ASan and UBSan.
+ *   STATUS: v0.7.1, 2026-10-26 (docs/audio.md, "Windows headers in one
+ *   translation unit"): tests/compile/order_audio_screen.c builds the
+ *   audio, screen and video implementations in one unit in both orders,
+ *   C11 and C++17, warnings as errors, with MSVC 19.44 and MinGW-w64 gcc
+ *   16.1; it failed before the fix on MSVC (audio first), not on MinGW.
+ *   STATUS: v0.7.0, 2026-10-21 (docs/audio.md, "Enum values in the
+ *   parameter table"): every row checked against its desc field and C
+ *   enum, every default against a scripted device opened with a zero desc
+ *   (MinGW-w64 gcc 16.1, MSVC 19.44, gcc 11.4 on WSL2, emcc); 4 of 4 new
+ *   mutants killed. No timing changed.
+ *   STATUS: v0.6.1, 2026-10-21 (docs/audio.md, "One context on the
+ *   AudioWorklet path"): av.html with a reopen after setup on both builds,
+ *   the test laptop, emsdk 6.0.12, Chrome 155 and Firefox 158 headless,
+ *   30 opens a cell under the measurement lock: 0 silent; AudioContexts
+ *   made a page 6 (v0.6.0) against 1 on the AudioWorklet path, 1 and 1 on
+ *   the ScriptProcessorNode path; sound after the reopen 120 of 120,
+ *   context=reused in all. Headed Firefox, AudioWorklet, 30 opens each:
+ *   sound minus plan p5 to p95 -0.79 to +0.54 ms (v0.6.0), -0.75 to
+ *   +0.54 ms (v0.6.1). Not run in Safari or on a phone.
+ *   STATUS: v0.5.2, 2026-10-14 (docs/audio.md, "Web envelope"): av.html
+ *   on the test laptop, emsdk 6.0.12, Firefox 157 and Chrome 155, each
+ *   open a new browser and a trusted click, batches under the
+ *   measurement lock. Opens with no sound, v0.5.1 against v0.5.2: Firefox
+ *   ScriptProcessorNode 8 of 30 against 0 of 30 headless and 3 of 15
+ *   against 0 of 15 headed; Firefox AudioWorklet, Chrome on both paths:
+ *   none in either. Firefox's first open took 1.4 to 2.3 s (was 2.0 to
+ *   3.0 s). With ONE CONTEXT and the WARM-UP limit, headless: 0 silent
+ *   in 30, 31, 31 and 30 opens (Firefox and Chrome, ScriptProcessorNode
+ *   and AudioWorklet); one AudioContext per ScriptProcessorNode page, and
+ *   the reopen played in 61 of 61. Core test test_warm_end; mutants
+ *   warm-01 and warm-02 killed. Not run on a phone or in Safari.
  *   STATUS: v0.5.1, 2026-10-13 (docs/audio.md, "Exclusive start"): WASAPI
  *   exclusive on the test laptop's speakers (Realtek behind Intel SST, 480
  *   frames), MinGW gcc 16.1, interleaved with v0.5.0 under the measurement
@@ -1349,7 +1497,7 @@
  *   STRICT OPEN says; with a 16-bit project both ran 10 s idle and 30 s
  *   beside 20 spinning threads with 0 xruns and 0 gaps. ALSA reads no
  *   position, so its fit uses callback times (spread 0.45 to 0.61 ms).
- *   PulseAudio from v0.6.0 reads its stream timing info: fit spread 2.7 to
+ *   PulseAudio from v0.8.0 reads its stream timing info: fit spread 2.7 to
  *   3.9 us, 0 xruns, idle and with 20 spinning threads, 30 s each; the
  *   reports lie within 2.1 us sd (0.9 us loaded) of a straight line over
  *   60 s (tests/probe/audio_pulse). tests/adapt/audio_pulse_test.c checks
@@ -1364,9 +1512,9 @@
 #define YSP_AUDIO_H_INCLUDED
 
 #define YAU_VERSION_MAJOR 0
-#define YAU_VERSION_MINOR 6
+#define YAU_VERSION_MINOR 8
 #define YAU_VERSION_PATCH 0
-#define YAU_VERSION_STRING "0.6.0"
+#define YAU_VERSION_STRING "0.8.0"
 
 #include "ysp/rt.h"
 
@@ -1691,11 +1839,14 @@ typedef struct yau_caps {
 
 typedef struct yau_param {
     const char* name;
-    const char* type;           /* "u32", "i32", "i64", "f64", "bool", "enum" */
+    const char* type;           /* "u16", "u32", "i32", "i64", "f64", "bool",
+                                 * "enum"                                   */
     double      min, max;
     double      def;            /* the value a zero field means              */
     const char* unit;
     const char* doc;
+    const char* values;         /* v0.7, "enum": "name=value" pairs joined by
+                                 * ',', in value order; NULL otherwise      */
 } yau_param;
 
 typedef struct yau_tone_desc {
@@ -1801,7 +1952,7 @@ typedef struct yau_reader {
 } yau_reader;
 
 typedef struct yau_wav_desc {
-    const char*         path;   /* a file; or                                */
+    const char*         path;   /* a file (UTF-8); or                        */
     const void*         data;   /* the file in memory, kept by you; or       */
     size_t              size;
     const yau_reader* reader; /* bytes by range (a pack entry)             */
@@ -1982,7 +2133,7 @@ typedef struct yau_edge {
 /* --- WAV writer (CAPTURE, v0.5.0) ------------------------------------------- */
 
 typedef struct yau_wavw_desc {
-    const char* path;           /* required                                  */
+    const char* path;           /* required, UTF-8                           */
     uint32_t    rate;           /* required                                  */
     uint16_t    channels;       /* required                                  */
     uint16_t    format;         /* YAU_WAV_F32 (0), YAU_WAV_S16, YAU_WAV_S24 */
@@ -2250,9 +2401,10 @@ YAU_API const char* yau_version(void);
 YAU_API const char* yau_strerror(int code);
 
 /* Opens the device in the project format or fails (STRICT OPEN), starts it
- * silent, and waits until the fit spans 0.5 s (at most 3 s; not for a
- * CUSTOM device, whose render calls are the caller's). The handle must be
- * zeroed or closed. On false, yau_error() says why. */
+ * silent, and waits until the fit spans 0.5 s (at most 3 s from the first
+ * callback and 5 s from the start; not for a CUSTOM device, whose render
+ * calls are the caller's). The handle must be zeroed or closed. On false,
+ * yau_error() says why. */
 YAU_API bool        yau_open(yau_audio* au, const yau_desc* desc);
 
 /* Stops the device, completes every record (sounds that never played are
@@ -2270,7 +2422,7 @@ YAU_API void        yau_get_caps(const yau_audio* au, yau_caps* out);
  * Returns snprintf's count. */
 YAU_API int         yau_describe(const yau_audio* au, char* buf, size_t cap);
 
-/* One playback device of a backend (DEVICES, v0.6.0). desc.device takes
+/* One playback device of a backend (DEVICES, v0.8.0). desc.device takes
  * the id exactly, or a part of the name that only one device has. */
 typedef struct yau_device_entry {
     char name[256];     /* the backend's name for it (miniaudio's length) */
@@ -2284,7 +2436,7 @@ typedef struct yau_device_entry {
  * YAU_ERR_ARG for CUSTOM or a build with YAU_NO_MINIAUDIO. */
 YAU_API int         yau_list_devices(yau_backend backend, yau_device_entry* out, int cap);
 
-/* The capture devices of a backend, the same way (DEVICES, v0.6.0). A
+/* The capture devices of a backend, the same way (DEVICES, v0.8.0). A
  * capture desc.device takes an input's id or a part of its name that only
  * one input has. On PulseAudio the list holds the sinks' monitors too. */
 YAU_API int         yau_list_inputs(yau_backend backend, yau_device_entry* out, int cap);
@@ -2306,11 +2458,14 @@ YAU_API int  yau_update(yau_audio* au);
 YAU_API int  yau_result(yau_audio* au, yau_id id, yau_onset* out);
 
 /* yau_result() until it is not PENDING, for at most timeout_ns
- * (YAU_ERR_TIMEOUT). Sleeps on the ysp_rt clock in 1 ms steps. */
+ * (YAU_ERR_TIMEOUT); INT64_MAX waits without end. Sleeps on the ysp_rt
+ * clock in 1 ms steps. */
 YAU_API int  yau_wait(yau_audio* au, yau_id id, int64_t timeout_ns, yau_onset* out);
 
 /* The shortest lead a sound handed over now can still meet (LEAD); 0 before
- * the first callback. */
+ * the first callback. It is negative while the next callback is more than a
+ * period late on the fit, and above two periods while a callback the fit
+ * does not hold yet came before the fit's line (LEAD). */
 YAU_API int64_t yau_lead_ns(const yau_audio* au);
 
 /* The fit (THE FIT): the stream frame on which time t_ns falls (the
@@ -2477,7 +2632,8 @@ YAU_API int64_t     yau_wavw_write(yau_wavw* w, const float* x, int64_t frames);
 YAU_API void        yau_wavw_close(yau_wavw* w);
 YAU_API const char* yau_wavw_error(const yau_wavw* w);
 
-/* The table of desc fields a designer sets; *n gets the count. */
+/* The table of desc fields a designer sets; *n gets the count. An enum
+ * row's names are its C enum's suffixes in lower case ("s16" is YAU_S16). */
 YAU_API const yau_param* yau_params(int* n);
 
 #ifdef __cplusplus
@@ -2521,6 +2677,12 @@ YAU_API const yau_param* yau_params(int* n);
             #define WIN32_LEAN_AND_MEAN
         #endif
         #include <windows.h>
+        /* Under WIN32_LEAN_AND_MEAN, <windows.h> leaves out COM, so
+         * miniaudio defines CLSCTX_ALL itself as 23; a COM header later in
+         * the translation unit (ysp/screen.h's D3D11, ysp/video.h's Media
+         * Foundation) then redefines it, which MSVC's C4005 reports and /WX
+         * fails. With the SDK's definition first, miniaudio keeps it. */
+        #include <objbase.h>
     #endif
     #if !defined(YAU_MINIAUDIO_EXTERNAL) && !defined(MINIAUDIO_IMPLEMENTATION)
         #define MINIAUDIO_IMPLEMENTATION
@@ -2559,6 +2721,22 @@ YAU_API const yau_param* yau_params(int* n);
     #if MA_VERSION_MAJOR != 0 || MA_VERSION_MINOR != 11 || MA_VERSION_REVISION < 25
         #error "ysp_audio: needs miniaudio 0.11.25 or a later 0.11 release"
     #endif
+    /* miniaudio's AudioWorklet path (BACKENDS, WEB). MA_USE_AUDIO_WORKLETS
+     * is set only where miniaudio's implementation is compiled, so not
+     * under YAU_MINIAUDIO_EXTERNAL; the build's own macro is. */
+    #if defined(MA_HAS_WEBAUDIO) && defined(MA_ENABLE_AUDIO_WORKLETS)
+        #define YAU__WEB_WORKLET 1
+        #include <emscripten/webaudio.h>
+    #endif
+#endif
+
+#include <errno.h>
+#if defined(_WIN32)
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+    #endif
+    #include <windows.h>   /* MultiByteToWideChar: WAV paths are UTF-8 */
+    #include <share.h>     /* _SH_DENYNO, _SH_DENYWR */
 #endif
 
 #ifdef __cplusplus
@@ -2607,6 +2785,20 @@ static void yau__web_sleep_until(int64_t t) {
 #define YAU__BUCKET_POS_NS 200000000LL /* and per 200 ms of reports         */
 #define YAU__REFIT_NS 1000000000LL    /* refit once a second                */
 #define YAU__WARM_NS   500000000LL    /* open() waits for this much fit     */
+/* WARM-UP (v0.5.2): open() gives the fit 3 s from the device's first
+ * callback, and waits at most 5 s from its start. A browser's context ran
+ * 0.23 to 0.79 s after it was made (Chrome 155, Firefox 157, docs/audio.md,
+ * "Web envelope"), and a 3 s limit from the start left Firefox's
+ * ScriptProcessorNode fit 2.2 s. The cap lets the first callback come 2 s
+ * late, 2.5 times the latest measured, with the full 3 s after it. */
+#define YAU__WARM_LIMIT_NS 3000000000LL
+#define YAU__START_CAP_NS  5000000000LL
+/* When open() stops waiting: t_first is the first callback seen, -1 none. */
+static int64_t yau__warm_end(int64_t t_start, int64_t t_first) {
+    int64_t cap = t_start + YAU__START_CAP_NS;
+    if (t_first < 0) return cap;
+    return t_first + YAU__WARM_LIMIT_NS < cap ? t_first + YAU__WARM_LIMIT_NS : cap;
+}
 #define YAU__SLOPE_NS  5000000000LL   /* fit the slope from this span on    */
 #define YAU__REANCHOR_NS 2000000000LL /* reports early this long: start over */
 #define YAU__HALT_REPORTS 3           /* late reports in a row that make a halt */
@@ -2632,8 +2824,14 @@ static void yau__st64(int64_t* p, int64_t v) { __stlr64((unsigned __int64 volati
     #elif defined(_M_IX86)
 static uint32_t yau__ld32(const uint32_t* p) { uint32_t v = *(const volatile uint32_t*)p; _ReadWriteBarrier(); return v; }
 static void yau__st32(uint32_t* p, uint32_t v) { _ReadWriteBarrier(); *(volatile uint32_t*)p = v; }
+/* x86 has no 64-bit exchange intrinsic (_InterlockedExchange64 is x64 and
+ * ARM only: LNK2001 in a 32-bit build), so the store is a compare-exchange
+ * loop (lock cmpxchg8b), as in ysp/rt.h. The plain read only seeds it. */
 static int64_t yau__ld64(const int64_t* p) { return _InterlockedCompareExchange64((volatile __int64*)(uintptr_t)p, 0, 0); }
-static void yau__st64(int64_t* p, int64_t v) { (void)_InterlockedExchange64((volatile __int64*)p, v); }
+static void yau__st64(int64_t* p, int64_t v) {
+    int64_t o = *(volatile int64_t*)p;
+    while (_InterlockedCompareExchange64((volatile __int64*)p, v, o) != o) o = *(volatile int64_t*)p;
+}
     #else
 static uint32_t yau__ld32(const uint32_t* p) { uint32_t v = *(const volatile uint32_t*)p; _ReadWriteBarrier(); return v; }
 static void yau__st32(uint32_t* p, uint32_t v) { _ReadWriteBarrier(); *(volatile uint32_t*)p = v; }
@@ -3814,10 +4012,12 @@ typedef struct yau__alc {
 #endif
 
 #if defined(MA_HAS_WEBAUDIO)
-/* What the page's timer last read from the AudioContext, on the main
- * thread, for the callback (BACKENDS, WEB): seq is odd while it writes. */
+/* The newest pair on the lower envelope of the main thread's reads of
+ * the AudioContext, for the callback (BACKENDS, WEB): seq is odd while it
+ * writes. */
 typedef struct yau__web_pub {
-    uint32_t seq, reserved_;
+    uint32_t seq;
+    uint32_t passed;         /* reads above the envelope, not published     */
     double   ctx_s;          /* getOutputTimestamp().contextTime            */
     double   perf_ms;        /* its performanceTime                         */
     double   base_s, out_s;  /* baseLatency, outputLatency; -1 = none      */
@@ -3855,14 +4055,15 @@ typedef struct yau__ma {
     int64_t    web_c0;      /* the context frame of stream frame 0; -1 = none */
     int64_t    web_ctx;     /* the newest report's context frame            */
     int64_t    web_est[8];  /* ScriptProcessorNode: the last estimates of web_c0 */
-    int32_t    web_n_est, web_n_off;
-    double     web_off_ms[32];  /* the last pairs' performanceTime less contextTime */
-    double     web_seen;    /* the newest pair read, used or not             */
-    uint32_t   web_passed;  /* pairs passed over (above the lower envelope)  */
+    int32_t    web_n_est, web_n_off;   /* web_n_off: pairs taken            */
     double     web_last;    /* the newest report's performanceTime; 0 = none */
     double     web_date_off;/* Date.now() minus performance.now(), ms       */
     uint32_t   web_moves;   /* times web_c0 moved: blocks the context skipped */
     int        web_idx, web_worklet, web_reports;
+    int        web_kept;    /* 0 the open's own context, 1 the page's kept one made now, 2 reused */
+#if defined(YAU__WEB_WORKLET)
+    struct yau__web_slot* web_slot;   /* the kept node's slot; NULL = none */
+#endif
 #endif
 #if defined(MA_SUPPORT_ALSA)
     yau__al    al;
@@ -4083,17 +4284,28 @@ static int yau__al_card(const char* id) {
 #if defined(MA_HAS_WEBAUDIO)
 /* Attaches the reader to miniaudio's device (its window.miniaudio list,
  * miniaudio 0.11.25's JavaScript): a timer every 10 ms, and on the
- * ScriptProcessorNode path each callback too, writes the context's
- * getOutputTimestamp() into *pub; the ScriptProcessorNode's handler also
- * keeps the block's playbackTime. Returns -1 when the device is not there,
- * else (1 when getOutputTimestamp exists) | (2 on the AudioWorklet path). */
+ * ScriptProcessorNode path each callback too, reads the context's
+ * getOutputTimestamp() and writes the pairs on its lower envelope into
+ * *pub; the ScriptProcessorNode's handler also keeps the block's
+ * playbackTime. Returns -1 when the device is not there, else (1 when
+ * getOutputTimestamp exists) | (2 on the AudioWorklet path) | (4 when the
+ * context is the page's kept one, ONE CONTEXT) | (8 when an earlier open
+ * made it).
+ * The envelope is kept here, over every read, not in the callback: a
+ * ScriptProcessorNode's callback sees only the pair its own handler read,
+ * at a phase locked to the browser's audio callback. In Firefox 157
+ * (headless, ScriptProcessorNode, 2048 frames) that pair stayed above the
+ * envelope of the callback's last 32 for 0.5 to 1 s at a time, the fit got
+ * 1 to 3 points in 2.3 s, and yau_open() failed in 8 of 30 opens (0 of 30
+ * with the envelope here; docs/audio.md, "Web envelope"). */
 EM_JS(int, yau__web_attach, (int idx, void* pub), {
     var ma = typeof window !== 'undefined' ? window.miniaudio : null;
     var d = ma ? ma.get_device_by_index(idx) : null;
     if (!d || !d.webaudio) return -1;
     var ctx = d.webaudio, ok = typeof ctx.getOutputTimestamp === 'function', p = pub;
+    var offs = [], nread = 0, passed = 0;
     function publish() {
-        var o, s, pt, lat, now = performance.now();
+        var o, s, pt, lat, off, lo, i, now = performance.now();
         if (!ok || ctx.state !== 'running') return;
         o = ctx.getOutputTimestamp();
         pt = o.performanceTime;
@@ -4108,6 +4320,16 @@ EM_JS(int, yau__web_attach, (int idx, void* pub), {
         /* none yet, or one the browser has not renewed for 100 ms (seen
          * once, 1 s old, right after the context started) */
         if (!(o.contextTime > 0) || !(pt > 0) || now - pt > 100) return;
+        /* the lower envelope: a read whose time is more than 0.5 ms later,
+         * against its context time, than the least late of the last 32
+         * reads (about 0.3 s) is passed over. Firefox 157 gives
+         * performanceTime from the read but contextTime from its last
+         * callback: its pairs spread -3.3 to +3.1 ms (p1 to p99) about
+         * their line, Chrome 154's -0.15 to +0.14 ms. */
+        off = pt - o.contextTime * 1e3;
+        offs[nread++ & 31] = off;
+        for (lo = off, i = 0; i < offs.length; i++) if (offs[i] < lo) lo = offs[i];
+        if (off > lo + 0.5) { passed++; Atomics.store(HEAP32, (p + 4) >> 2, passed | 0); return; }
         s = Atomics.load(HEAP32, p >> 2);
         Atomics.store(HEAP32, p >> 2, (s + 1) | 0);
         HEAPF64[(p + 8) >> 3] = o.contextTime;
@@ -4122,14 +4344,163 @@ EM_JS(int, yau__web_attach, (int idx, void* pub), {
         d.scriptNode.onaudioprocess = function(e) { d.yauPT = e.playbackTime; publish(); f(e); };
     }
     d.yauTimer = setInterval(publish, 10);
-    return (ok ? 1 : 0) | (d.scriptNode ? 0 : 2);
+    return (ok ? 1 : 0) | (d.scriptNode ? 0 : 2) | (ctx.yauKept ? 4 : 0) | (ctx.yauOpens > 1 ? 8 : 0);
 })
 
 EM_JS(void, yau__web_detach, (int idx), {
     var ma = typeof window !== 'undefined' ? window.miniaudio : null;
     var d = ma ? ma.get_device_by_index(idx) : null;
     if (d && d.yauTimer) { clearInterval(d.yauTimer); d.yauTimer = 0; }
+    if (d && d.webaudio && d.webaudio.yauKept) d.webaudio.yauBusy = 0;
 })
+
+/* ONE CONTEXT (v0.5.2; AudioWorklet path v0.6.1): around miniaudio's
+ * device init (playback only), the first AudioContext made is the
+ * device's: the page's kept context when it is free, open, at that rate
+ * and (AudioWorklet) at that channel count, else a new one, which is kept
+ * when the kept one is free. Later ones in the same init are miniaudio's
+ * sample-rate queries (3 contexts an open before, call sites traced in
+ * docs/audio.md); they get the device's context, or a stand-in with its
+ * sampleRate when it is not kept. A kept context's close() does nothing:
+ * yau_close() suspends it and the next yau_open() resumes it. So only the
+ * first open makes a context, inside the user's tap; a new context made
+ * after the tap may stay suspended on iOS Safari (WebKit starts audio only
+ * from a gesture).
+ * AudioWorklet path (tramp != 0): a context's worklet scope boots once
+ * (Emscripten's module, miniaudio's "miniaudio" processor), and a second
+ * boot on the same context would instantiate the module again and
+ * register the processor name twice, which throws. So a reused context
+ * gets a stand-in audioWorklet: addModule() resolves, the boot message is
+ * dropped, and the processor's registration is answered as the scope
+ * answers it. The kept context also keeps its one AudioWorkletNode: its
+ * processor keeps running after a disconnect (process() returns true), so
+ * a node per open would leave an old processor calling miniaudio with the
+ * device pointer of a closed open, the same address when the handle is
+ * reopened. The node calls tramp (yau__web_node_cb) with a slot, and the
+ * slot holds miniaudio's callback and the open device, or 0 between opens.
+ * slots: 2 slots of 16 bytes; a new kept context takes the one the last
+ * did not. on = 0 puts the page's constructors back; 2 does that and
+ * frees this init's context (the init failed). */
+EM_JS(void, yau__web_hold, (int on, int ch, int tramp, void* slots), {
+    if (typeof window === 'undefined') return;
+    var w = window, AC = w.yauRealAC || w.AudioContext || w.webkitAudioContext, dev = null;
+    var AWN = w.yauRealAWN || w.AudioWorkletNode;
+    if (!AC) return;
+    if (on !== 1) {
+        dev = w.yauDev;
+        if (on === 2 && dev && dev.yauKept) {
+            dev.yauBusy = 0;
+            if (dev.yauSlot) Atomics.store(HEAP32, (dev.yauSlot >> 2) + 1, 0);
+            /* a worklet scope that may be half booted is not reused */
+            if (tramp && !dev.yauNode) { w.yauCtx = null; dev.yauClose(); }
+        }
+        if (w.yauRealAC) { w.AudioContext = w.yauRealAC; if (w.yauRealWAC) w.webkitAudioContext = w.yauRealWAC; }
+        if (w.yauRealAWN) w.AudioWorkletNode = w.yauRealAWN;
+        w.yauRealAC = w.yauRealWAC = w.yauRealAWN = w.yauDev = null;
+        return;
+    }
+    w.yauRealAC = w.AudioContext || AC;
+    w.yauRealWAC = w.webkitAudioContext || null;
+    w.yauDev = null;
+    function quiet(k) {
+        var onm = null, port = { postMessage: function(d) {
+            if (d && d['_wpn']) Promise.resolve().then(function() {
+                if (onm) onm({ data: { '_wsc': d['callback'], 'args': [d['contextHandle'], 1, d['userData']] } });
+            });
+        } };
+        Object.defineProperty(port, 'onmessage', { get: function() { return onm; }, set: function(f) { onm = f; } });
+        Object.defineProperty(k, 'audioWorklet', { configurable: true,
+            value: { addModule: function() { return Promise.resolve(); }, port: port } });
+        k.yauQuiet = 1;
+    }
+    function held(opts) {
+        var k = w.yauCtx, rate = opts && opts.sampleRate;
+        if (dev) return dev.yauKept ? dev : { sampleRate: dev.sampleRate, close: function() { return Promise.resolve(); } };
+        if (k && !k.yauBusy && k.state !== 'closed' && (!rate || k.sampleRate === rate)
+            && (!k.yauNode || k.yauNodeCh === ch)) {
+            dev = k;
+            if (k.yauNode && !k.yauQuiet) quiet(k);
+            k.audioWorkletInitialized = 0;   /* an ASSERTIONS build checks it */
+            k.yauOpens++;
+        } else {
+            dev = opts === undefined ? new AC() : new AC(opts);
+            if (!k || !k.yauBusy) {
+                if (k && k.state !== 'closed') k.yauClose();
+                dev.yauKept = 1;
+                dev.yauOpens = 1;
+                dev.yauClose = dev.close;
+                dev.close = function() { return Promise.resolve(); };
+                w.yauCtx = dev;
+            }
+        }
+        dev.yauBusy = 1;
+        w.yauDev = dev;
+        return dev;
+    }
+    held.prototype = AC.prototype;
+    w.AudioContext = held;
+    if (w.yauRealWAC) w.webkitAudioContext = held;
+    if (!tramp || !AWN) return;
+    w.yauRealAWN = AWN;
+    function node(c, name, o) {
+        var po = o && o.processorOptions, s;
+        if (!(c === dev && c.yauKept && po && name === 'miniaudio')) return new AWN(c, name, o);
+        if (!c.yauNode) {
+            s = c.yauSlot = w.yauSlotLast === slots ? slots + 16 : slots;
+            w.yauSlotLast = s;
+        }
+        s = c.yauSlot;
+        Atomics.store(HEAP32, s >> 2, po.callback | 0);
+        Atomics.store(HEAP32, (s >> 2) + 1, po.userData | 0);
+        if (c.yauNode) return c.yauNode;
+        po.callback = tramp;
+        po.userData = s;
+        c.yauNode = new AWN(c, name, o);
+        c.yauNodeCh = ch;
+        return c.yauNode;
+    }
+    node.prototype = AWN.prototype;
+    w.AudioWorkletNode = node;
+})
+
+#if defined(YAU__WEB_WORKLET)
+/* ONE CONTEXT, AudioWorklet path: the kept node's processor calls this on
+ * the audio thread (yau__web_hold). fn is miniaudio's process callback and
+ * dev its device, written by the main thread; dev 0 between opens gives
+ * silence. busy lets yau__ma_close() wait out a call in flight before the
+ * device goes away. */
+typedef struct yau__web_slot { uint32_t fn, dev, busy, pad_; } yau__web_slot;
+#if defined(MA_SUPPORT_AUDIO_WORKLETS_VARIABLE_BUFFER_SIZE)
+#define YAU__WEB_QUANTUM(f) ((size_t)(f).samplesPerChannel)
+#else
+#define YAU__WEB_QUANTUM(f) ((size_t)128)   /* Emscripten before 3.1.70 */
+#endif
+static yau__web_slot yau__web_slots[2];
+
+static bool yau__web_node_cb(int n_in, const AudioSampleFrame* in, int n_out, AudioSampleFrame* out,
+                             int n_par, const AudioParamFrame* par, void* ud) {
+    yau__web_slot* s = (yau__web_slot*)ud;
+    uint32_t dev, fn;
+    int i;
+    /* seq_cst both sides: either close sees busy, or this call sees dev 0 */
+    __atomic_store_n(&s->busy, 1u, __ATOMIC_SEQ_CST);
+    dev = __atomic_load_n(&s->dev, __ATOMIC_SEQ_CST);
+    fn = __atomic_load_n(&s->fn, __ATOMIC_SEQ_CST);
+    if (dev && fn) {
+        ((EmscriptenWorkletNodeProcessCallback)(uintptr_t)fn)(n_in, in, n_out, out, n_par, par, (void*)(uintptr_t)dev);
+    } else {
+        for (i = 0; i < n_out; i++)
+            memset(out[i].data, 0, (size_t)out[i].numberOfChannels * YAU__WEB_QUANTUM(out[i]) * sizeof(float));
+    }
+    __atomic_store_n(&s->busy, 0u, __ATOMIC_SEQ_CST);
+    return true;   /* the node is the page's, for every later open */
+}
+#define YAU__WEB_TRAMP ((int)(uintptr_t)&yau__web_node_cb)
+#define YAU__WEB_SLOTS ((void*)yau__web_slots)
+#else
+#define YAU__WEB_TRAMP 0
+#define YAU__WEB_SLOTS NULL
+#endif
 
 /* The context frame the block now rendered plays at: the AudioWorklet's
  * currentFrame in its own scope, or the ScriptProcessorNode block's
@@ -4153,8 +4524,9 @@ EM_JS(double, yau__web_now_ms, (double date_minus_perf), {
     return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now() - date_minus_perf;
 })
 
-/* The block's tick. The newest getOutputTimestamp() is the report of
- * every block: the context frame at the output, less the context frame of
+/* The block's tick. The newest getOutputTimestamp() pair on the envelope
+ * (yau__web_attach) is the report of every block: the context frame at
+ * the output, less the context frame of
  * stream frame 0, is the stream frame at the output, at performanceTime.
  * A report that has not moved since the last block is given again; the
  * core takes it as one that has not moved, which feeds nothing.
@@ -4177,24 +4549,11 @@ static void yau__web_tick(yau__ma* m, ma_uint32 n, yau_tick* tk) {
         perf = *(volatile double*)&m->pub.perf_ms;
         __atomic_thread_fence(__ATOMIC_ACQUIRE);
         s1 = yau__ld32(&m->pub.seq);
-        if (s0 == s1 && perf > m->web_last && perf != m->web_seen) {
-            /* the lower envelope: a pair whose time is more than 0.5 ms
-             * later, against its context time, than the least late of the
-             * last 32 is passed over. Firefox 157 gives performanceTime
-             * from the read but contextTime from its last callback, 512
-             * frames apart: its pairs spread -3.3 to +3.1 ms (p1 to p99)
-             * about their line, Chrome 154's -0.15 to +0.14 ms. */
-            double off = perf - ctx_s * 1e3, lo = off;
-            int i;
-            m->web_seen = perf;
-            m->web_off_ms[m->web_n_off++ & 31] = off;
-            for (i = 0; i < 32 && i < m->web_n_off; i++) if (m->web_off_ms[i] < lo) lo = m->web_off_ms[i];
-            if (off <= lo + 0.5) {
-                m->web_last = perf;
-                m->web_ctx = (int64_t)floor(ctx_s * (double)m->dev.playback.internalSampleRate + 0.5);
-            } else {
-                m->web_passed++;
-            }
+        /* the main thread published only pairs on the envelope */
+        if (s0 == s1 && perf > m->web_last) {
+            m->web_n_off++;
+            m->web_last = perf;
+            m->web_ctx = (int64_t)floor(ctx_s * (double)m->dev.playback.internalSampleRate + 0.5);
         }
     }
     if (blk >= 0) {
@@ -4834,7 +5193,16 @@ static int yau__ma_open(void* ctx, const yau_device_open* in, yau_device_caps* c
      * p99 callback interval error under load, with no underrun in any
      * (docs/audio.md) */
     dc.wasapi.usage = ma_wasapi_usage_pro_audio;
+#if defined(MA_HAS_WEBAUDIO)
+    /* ONE CONTEXT: an output reuses the page's context */
+    if (m->backend == ma_backend_webaudio && !m->cap)
+        yau__web_hold(1, (int)in->format->channels, YAU__WEB_TRAMP, YAU__WEB_SLOTS);
     r = ma_device_init(&m->ctx, &dc, &m->dev);
+    if (m->backend == ma_backend_webaudio && !m->cap)
+        yau__web_hold(r == MA_SUCCESS ? 0 : 2, 0, YAU__WEB_TRAMP, YAU__WEB_SLOTS);
+#else
+    r = ma_device_init(&m->ctx, &dc, &m->dev);
+#endif
 #if YAU__LINUX
     if (yau__ma_suspend_on(r) && m->backend == ma_backend_alsa && excl && !m->keep_server)
         r = yau__ma_busy(&m->ctx, &dc, &m->dev, pick, &m->suspended, &held_by_cap);
@@ -4850,6 +5218,13 @@ static int yau__ma_open(void* ctx, const yau_device_open* in, yau_device_caps* c
         return r == MA_BUSY || r == MA_ACCESS_DENIED ? YAU_ERR_LOST : YAU_ERR_FORMAT;
     }
     m->dev_up = 1;
+#if defined(YAU__WEB_WORKLET)
+    if (m->backend == ma_backend_webaudio) {   /* the kept node's slot, which the init pointed here */
+        int s;
+        for (s = 0; s < 2; s++)
+            if (yau__ld32(&yau__web_slots[s].dev) == (uint32_t)(uintptr_t)&m->dev) m->web_slot = &yau__web_slots[s];
+    }
+#endif
     memset(caps, 0, sizeof *caps);
     caps->rate = m->dev.playback.internalSampleRate;
     caps->channels = (uint16_t)m->dev.playback.internalChannels;
@@ -4925,6 +5300,7 @@ static int yau__ma_open(void* ctx, const yau_device_open* in, yau_device_caps* c
         a = yau__web_attach(m->web_idx, &m->pub);
         m->web_reports = a > 0 && (a & 1);
         m->web_worklet = a > 0 && (a & 2);
+        m->web_kept = a > 0 ? (a & 4 ? 1 : 0) + (a & 8 ? 1 : 0) : 0;
         caps->tier = YAU_TIER_WEB;
         caps->buffer = caps->period;
         if (m->web_reports) {
@@ -5088,6 +5464,19 @@ static void yau__ma_close(void* ctx) {
 #if defined(MA_HAS_WEBAUDIO)
     if (m->dev_up && m->backend == ma_backend_webaudio) yau__web_detach(m->web_idx);
 #endif
+#if defined(YAU__WEB_WORKLET)
+    if (m->web_slot) {   /* the kept node goes silent before the device goes */
+        int k;
+        __atomic_store_n(&m->web_slot->dev, 0u, __ATOMIC_SEQ_CST);
+        for (k = 0; k < 1000000 && __atomic_load_n(&m->web_slot->busy, __ATOMIC_SEQ_CST); k++) { }
+        m->web_slot = NULL;
+        /* The kept context's worklet scope runs on the stack its first
+         * open gave it. miniaudio 0.11.25 never stores that stack (it
+         * leaks it, 128 KB an open); a release that frees it must not
+         * free the kept one. */
+        m->dev.webaudio.pStackBuffer = NULL;
+    }
+#endif
     if (m->dev_up) { ma_device_uninit(&m->dev); m->dev_up = 0; }
     if (m->ctx_up) { ma_context_uninit(&m->ctx); m->ctx_up = 0; }
 #if YAU__LINUX
@@ -5100,11 +5489,13 @@ static int yau__ma_describe(void* ctx, char* buf, size_t cap) {
 #if defined(MA_HAS_WEBAUDIO)
     if (m->backend == ma_backend_webaudio) {
         double base = m->pub.base_s, lat = m->pub.out_s;
-        return snprintf(buf, cap, "%s path=%s reports=%s(%d,%u passed) base_latency=%.1fms output_latency=%.1fms "
-                        "block_moves=%u",
+        static const char* const kept[3] = { "own", "kept", "reused" };
+        return snprintf(buf, cap, "%s path=%s context=%s reports=%s(%d,%u passed) base_latency=%.1fms "
+                        "output_latency=%.1fms block_moves=%u",
                         ma_get_backend_name(m->backend), m->web_worklet ? "audioworklet" : "scriptprocessor",
-                        m->web_reports ? "getOutputTimestamp" : "none", (int)m->web_n_off, (unsigned)m->web_passed,
-                        base >= 0 ? base * 1e3 : -1.0, lat >= 0 ? lat * 1e3 : -1.0, (unsigned)m->web_moves);
+                        kept[m->web_kept], m->web_reports ? "getOutputTimestamp" : "none", (int)m->web_n_off,
+                        (unsigned)yau__ld32(&m->pub.passed), base >= 0 ? base * 1e3 : -1.0, lat >= 0 ? lat * 1e3 : -1.0,
+                        (unsigned)m->web_moves);
     }
 #endif
     /* the describe line's backend= field: one token on the native backends */
@@ -6142,8 +6533,16 @@ static int yau__result_rc(yau_audio* au, yau_id id, yau_onset* out) {
     return r->used == 2 ? YAU_OK : YAU_PENDING;
 }
 
+/* now + timeout_ns, saturated: INT64_MAX is a caller's "forever", and the
+ * plain sum overflows. The clock is never negative, so a negative timeout
+ * cannot. */
+static int64_t yau__deadline(int64_t now, int64_t timeout_ns) {
+    if (timeout_ns > 0 && now > INT64_MAX - timeout_ns) return INT64_MAX;
+    return now + timeout_ns;
+}
+
 static int yau__wait_rc(yau_audio* au, yau_id id, int64_t timeout_ns, yau_onset* out) {
-    int64_t end = YAU__NOW() + timeout_ns;
+    int64_t end = yau__deadline(YAU__NOW(), timeout_ns);
     for (;;) {
         int rc = yau__result_rc(au, id, out);
         if (rc != YAU_PENDING) return rc;
@@ -6247,6 +6646,122 @@ static int yau__resolution(int out, int bits) {
     }
 }
 
+/* --- the null device on a virtual clock (VIRTUAL CLOCK) -------------------------- */
+
+/* miniaudio's null device is a real-time timer thread: on ysp/rt.h's
+ * virtual clock its blocks would land at whatever virtual time the frame
+ * thread had reached, so a loaded host changed the onsets. This one renders
+ * each block on a virtual timer at its own time, on the driver thread. */
+typedef struct yau__vnull {
+    yau_render_fn fn;
+    void*         host;
+    void*         cap_host;     /* DUPLEX: the capture fed before each block */
+    uint32_t      rate;
+    int32_t       period, channels, bytes, timer, inited;
+    int64_t       t0, w;
+    float         buf[2048];    /* one block, in floats or s16 pairs       */
+} yau__vnull;
+
+static int64_t yau__vnull_tick(void* ctx, int64_t now) {
+    yau__vnull* v = (yau__vnull*)ctx;
+    yau_tick tk;
+    tk.t_entry = now;
+    tk.pos = -1;
+    tk.pos_t = 0;
+    tk.flags = 0;
+    tk.reserved_ = 0;
+    if (!v->inited) {
+        if (v->fn == yau_capture_block) yau_capture_thread_init(v->host);
+        else yau_rt_thread_init(v->host);
+        if (v->cap_host) yau_capture_thread_init(v->cap_host);
+        v->inited = 1;
+    }
+    memset(v->buf, 0, (size_t)v->bytes);
+    if (v->cap_host) yau_capture_block(v->cap_host, v->buf, v->period, &tk);
+    v->fn(v->host, v->buf, v->period, &tk);
+    v->w += v->period;
+    return v->t0 + (int64_t)((double)v->w * 1e9 / (double)v->rate + 0.5);
+}
+
+static int yau__vnull_open(void* ctx, const yau_device_open* in, yau_device_caps* caps, char* err, size_t err_cap) {
+    yau__vnull* v = (yau__vnull*)ctx;
+    int32_t obps = in->format->sample == YAU_S16 ? 2 : 4, bps = obps;
+    int32_t ch = in->capture == 1 ? (in->format->channels ? in->format->channels : 2) : in->format->channels;
+    int32_t wide = ch, most;
+    if (in->capture == 2 && in->capture_host) {
+        /* DUPLEX: the input reads the same silent block in its own
+         * channel count, as floats */
+        const yau_capture* c = (const yau_capture*)in->capture_host;
+        int32_t cc = c->desc.format.channels ? c->desc.format.channels : 2;
+        if (cc > wide) wide = cc;
+        bps = 4;
+    }
+    most = (int32_t)(sizeof v->buf / (size_t)(bps * (wide > 0 ? wide : 1)));
+    memset(v, 0, sizeof *v);
+    v->rate = in->format->rate;
+    v->channels = ch;
+    v->period = in->period > 0 ? in->period : (int32_t)(v->rate / 100);
+    if (v->period > most) v->period = most;   /* caps say what it runs at */
+    if (v->period <= 0 || v->rate == 0) {
+        snprintf(err, err_cap, "ysp_audio: the virtual null device needs a rate and a period");
+        return YAU_ERR_ARG;
+    }
+    v->bytes = v->period * wide * bps;
+    v->cap_host = in->capture == 2 ? in->capture_host : NULL;
+    v->timer = -1;
+    memset(caps, 0, sizeof *caps);
+    caps->rate = v->rate;
+    caps->channels = (uint16_t)ch;
+    caps->out = (uint16_t)(obps == 2 ? YAU_OUT_S16 : YAU_OUT_F32);
+    caps->period = v->period;
+    caps->buffer = 3 * v->period;   /* miniaudio's null device: 3 periods */
+    caps->pos_source = YAU_POS_CALLBACK;
+    caps->tier = YAU_TIER_SIM;
+    snprintf(caps->name, sizeof caps->name, "virtual null");
+    if (v->cap_host) {
+        /* DUPLEX: the device fills the input's caps, as miniaudio's does */
+        yau_capture* c = (yau_capture*)v->cap_host;
+        yau_device_caps* k = &c->dcaps;
+        memset(k, 0, sizeof *k);
+        k->rate = v->rate;
+        k->channels = (uint16_t)(c->desc.format.channels ? c->desc.format.channels : 2);
+        k->out = (uint16_t)(c->desc.format.sample == YAU_S16 ? YAU_OUT_S16 : YAU_OUT_F32);
+        k->period = v->period;
+        k->buffer = 3 * v->period;
+        k->pos_source = YAU_POS_CALLBACK;
+        k->tier = YAU_TIER_SIM;
+        k->os_latency_ns = -1;
+        k->os_stream_latency_ns = -1;
+        snprintf(k->name, sizeof k->name, "virtual null");
+    }
+    return 0;
+}
+
+static int yau__vnull_start(void* ctx, yau_render_fn render, void* host) {
+    yau__vnull* v = (yau__vnull*)ctx;
+    v->fn = render;
+    v->host = host;
+    v->t0 = yrt_now_ns();
+    v->w = 0;
+    v->timer = yrt_virtual_timer(yau__vnull_tick, v, v->t0);
+    return v->timer >= 0 ? 0 : YAU_ERR_LOST;
+}
+
+static void yau__vnull_stop(void* ctx) {
+    yau__vnull* v = (yau__vnull*)ctx;
+    if (v->timer >= 0) yrt_virtual_cancel(v->timer);
+    v->timer = -1;
+}
+
+static void yau__vnull_close(void* ctx) { yau__vnull_stop(ctx); }
+
+typedef char yau__vnull_fits[sizeof(yau__vnull) <= sizeof(((yau_audio*)0)->backend_mem)
+                             && sizeof(yau__vnull) <= sizeof(((yau_capture*)0)->backend_mem) ? 1 : -1];
+
+static const yau_device yau__vnull_device = {
+    YAU_DEVICE_VERSION, "null (virtual clock)", yau__vnull_open, yau__vnull_start, yau__vnull_stop, yau__vnull_close, NULL
+};
+
 /* CAPTURE, defined with the capture below: yau_open() sets up a DUPLEX
  * capture with them */
 static int  yau__cap_desc(yau_capture* c, const yau_capture_desc* d);
@@ -6294,6 +6809,14 @@ YAU_API bool yau_open(yau_audio* au, const yau_desc* desc) {
         }
         au->dev = d.dev;
         au->dev_ctx = d.dev_ctx;
+    } else if (d.backend == YAU_BACKEND_NULL && yrt_is_virtual()) {
+        au->dev = &yau__vnull_device;
+        au->dev_ctx = au->backend_mem;
+    } else if (yrt_is_virtual()) {
+        /* a device's callbacks come on real time: on the virtual clock
+         * their stamps would say nothing */
+        yau__err(au, "ysp_audio: the clock is virtual (yrt_virtual_begin); only BACKEND_NULL and BACKEND_CUSTOM run on it");
+        return false;
     } else {
 #if defined(YAU_NO_MINIAUDIO)
         yau__err(au, "ysp_audio: built with YAU_NO_MINIAUDIO: only BACKEND_CUSTOM opens");
@@ -6411,16 +6934,22 @@ YAU_API bool yau_open(yau_audio* au, const yau_desc* desc) {
     au->started = 1;
     if (d.capture) d.capture->started = 1;
     if (d.backend != YAU_BACKEND_CUSTOM) {
-        int64_t end = YAU__NOW() + 3000000000LL;
+        int64_t t_start = YAU__NOW(), t_first = -1;
         while (!au->fit_ft.ready) {
             (void)yau__update_rc(au);
             if (au->fit_ft.ready) break;
-            if (yau__ld32(&au->lost) || YAU__NOW() > end) {
+            if (t_first < 0 && yau__ld64(&au->w_pub) > 0) t_first = YAU__NOW();
+            if (yau__ld32(&au->lost) || YAU__NOW() > yau__warm_end(t_start, t_first)) {
                 /* which of three failures: a lost device, no callbacks at
                  * all, or callbacks too irregular for the fit to warm up */
-                yau__err(au, "ysp_audio: device '%s' gave no steady callbacks within 3 s "
-                           "(lost=%u, fit points=%u, fits=%u)", au->dcaps.name,
-                           (unsigned)yau__ld32(&au->lost), (unsigned)au->fit_ft.n, (unsigned)au->fit_ft.gen);
+                if (t_first < 0)
+                    yau__err(au, "ysp_audio: device '%s' gave no callback within %d s of its start (lost=%u)",
+                             au->dcaps.name, (int)(YAU__START_CAP_NS / 1000000000LL), (unsigned)yau__ld32(&au->lost));
+                else
+                    yau__err(au, "ysp_audio: device '%s' gave no steady callbacks (%d s from the first, %d s from "
+                               "the start; lost=%u, fit points=%u, fits=%u)", au->dcaps.name,
+                               (int)(YAU__WARM_LIMIT_NS / 1000000000LL), (int)(YAU__START_CAP_NS / 1000000000LL),
+                               (unsigned)yau__ld32(&au->lost), (unsigned)au->fit_ft.n, (unsigned)au->fit_ft.gen);
                 yau_close(au);
                 return false;
             }
@@ -6655,6 +7184,44 @@ static int yau__arena_reset_rc(yau_audio* au) {
 
 /* --- WAV files ---------------------------------------------------------------- */
 
+/* WAV paths are UTF-8 on every platform, as ysp/dataset.h and ysp/pack.h
+ * take them. Until v0.7.3 fopen() on Windows read them in the ANSI code
+ * page, so a folder named with a character outside it (U+03A9, omega, on
+ * Windows-1252) could not be opened. A read denies no one and a write
+ * denies other writers, as ysp/dataset.h opens its files. 0, YAU_ERR_ARG
+ * (not UTF-8, or longer than YAU__PATH_MAX - 1 UTF-16 units) or
+ * YAU_ERR_IO (no such file, or it could not be opened: the code a missing
+ * file always had); *why says which, for a message. */
+#define YAU__PATH_MAX 1024
+static int yau__fopen(FILE** out, const char* path, const char* mode, const char** why) {
+    FILE* f;
+    *out = NULL;
+    *why = "cannot open";
+#if defined(_WIN32)
+    {
+        wchar_t w[YAU__PATH_MAX], m[8];
+        int i;
+        if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, w, YAU__PATH_MAX) <= 0) {
+            *why = "the path is not valid UTF-8 or longer than 1023 characters";
+            return YAU_ERR_ARG;
+        }
+        for (i = 0; mode[i] && i < 7; i++) m[i] = (wchar_t)mode[i];
+        m[i] = 0;
+        errno = 0;
+        f = _wfsopen(w, m, mode[0] == 'r' ? _SH_DENYNO : _SH_DENYWR);
+    }
+#else
+    errno = 0;
+    f = fopen(path, mode);
+#endif
+    if (!f) {
+        if (errno == ENOENT || errno == ENOTDIR) *why = "no such file";
+        return YAU_ERR_IO;
+    }
+    *out = f;
+    return 0;
+}
+
 static int yau__wsrc_open(yau__wsrc* s, const yau_wav_desc* d, char* err, size_t cap) {
     int kinds = (d->path != NULL) + (d->data != NULL) + (d->reader != NULL);
     memset(s, 0, sizeof *s);
@@ -6672,12 +7239,9 @@ static int yau__wsrc_open(yau__wsrc* s, const yau_wav_desc* d, char* err, size_t
         s->size = d->reader->size;
     } else {
         FILE* f = NULL;
-#if defined(_MSC_VER)
-        if (fopen_s(&f, d->path, "rb") != 0) f = NULL;
-#else
-        f = fopen(d->path, "rb");
-#endif
-        if (!f) { snprintf(err, cap, "ysp_audio: cannot open '%s'", d->path); return YAU_ERR_IO; }
+        const char* why;
+        int rc = yau__fopen(&f, d->path, "rb", &why);
+        if (rc < 0) { snprintf(err, cap, "ysp_audio: '%s': %s", d->path, why); return rc; }
         /* No stdio buffer: the C runtime would allocate one on the first
          * read, on the producer thread. Reads go straight to the OS (which
          * still caches the file); they are 16 KB at a time. */
@@ -7846,6 +8410,12 @@ YAU_API bool yau_capture_open(yau_capture* c, const yau_capture_desc* d) {
         }
         c->dev = c->desc.dev;
         c->dev_ctx = c->desc.dev_ctx;
+    } else if (c->desc.backend == YAU_BACKEND_NULL && yrt_is_virtual()) {
+        c->dev = &yau__vnull_device;
+        c->dev_ctx = c->backend_mem;
+    } else if (yrt_is_virtual()) {
+        yau__cerr(c, "ysp_audio: the clock is virtual (yrt_virtual_begin); only BACKEND_NULL and BACKEND_CUSTOM run on it");
+        return false;
     } else {
 #if defined(YAU_NO_MINIAUDIO)
         yau__cerr(c, "ysp_audio: built with YAU_NO_MINIAUDIO: only a CUSTOM capture opens");
@@ -8105,12 +8675,13 @@ YAU_API bool yau_wavw_open(yau_wavw* w, const yau_wavw_desc* d) {
     w->rate_ = d->rate;
     w->ch_ = d->channels;
     w->format_ = d->format ? d->format : (uint16_t)YAU_WAV_F32;
-#if defined(_MSC_VER)
-    if (fopen_s(&f, d->path, "wb") != 0) f = NULL;
-#else
-    f = fopen(d->path, "wb");
-#endif
-    if (!f) { snprintf(w->error_, sizeof w->error_, "ysp_audio: cannot create '%s'", d->path); return false; }
+    {
+        const char* why;
+        if (yau__fopen(&f, d->path, "wb", &why) < 0) {
+            snprintf(w->error_, sizeof w->error_, "ysp_audio: cannot create '%s': %s", d->path, why);
+            return false;
+        }
+    }
     /* no stdio buffer: the C runtime would allocate one at the first write */
     setvbuf(f, NULL, _IONBF, 0);
     yau__wavw_header(w, h, 0);
@@ -8188,22 +8759,23 @@ YAU_API void yau_wavw_close(yau_wavw* w) {
 
 YAU_API const yau_param* yau_params(int* n) {
     static const yau_param table[] = {
-        { "format.rate",     "u32",  8000, 768000, 48000, "Hz",   "project sample rate; the device must run at it" },
-        { "format.channels", "u32",  1, YAU_MAX_CHANNELS, 2, "",  "project channel count; the device must have it" },
-        { "format.sample",   "enum", 0, 2, 0, "",                  "project resolution: 0 f32, 1 s16, 2 s24" },
-        { "backend",         "enum", 0, 7, 0, "",                  "0 auto, 1 wasapi, 2 coreaudio, 3 alsa, 4 pulse, 5 web, 6 null, 7 custom" },
-        { "exclusive",       "bool", 0, 1, 0, "",                  "WASAPI exclusive mode; silences every other program" },
-        { "period",          "i32",  0, 65536, 480, "frame",       "frames per callback; 0 = 10 ms" },
-        { "queue",           "i32",  0, 2, 2, "period",            "WASAPI shared: periods queued ahead of the engine; 1 saves a period of lead and a period of stall margin" },
-        { "keep_sound_server", "bool", 0, 1, 0, "",                "ALSA exclusive: fail rather than suspend a sound server that holds the card" },
-        { "voices",          "i32",  1, YAU_MAX_VOICES, 32, "",  "sounds playing or waiting at once" },
-        { "device_index",    "u32",  0, 7, 0, "",                  "device number in the records" },
-        { "min_tier",        "i32",  0, 3, 0, "",                  "flag onsets whose tier is worse; 0 = off" },
-        { "onset_offset_ns", "i64",  -1e9, 1e9, 0, "ns",           "added to every onset; from a line-in loopback test" },
-        { "arena_bytes",     "u32",  0, 4294967295.0, 8388608, "B", "synthesis arena when desc.arena is NULL" },
-        { "stream.frames",   "i64",  0, 1e9, 48000, "frame",       "ring capacity of a stream (yau_stream_desc); 0 = 1 s" },
-        { "stream.preroll",  "i64",  -1, 1e9, 0, "frame",          "frames a stream played at 0 waits for; 0 = a quarter ring, -1 = none" },
-        { "wav.loops",       "i32",  -1, 2147483647.0, 0, "",      "passes of a WAV stream after the first; -1 = forever" }
+        { "format.rate",     "u32",  8000, 768000, 48000, "Hz",   "project sample rate; the device must run at it", NULL },
+        { "format.channels", "u16",  1, YAU_MAX_CHANNELS, 2, "",  "project channel count; the device must have it", NULL },
+        { "format.sample",   "enum", 0, 2, 0, "",                  "project resolution", "f32=0,s16=1,s24=2" },
+        { "backend",         "enum", 0, 7, 0, "",                  "the audio API; web only in a browser",
+          "auto=0,wasapi=1,coreaudio=2,alsa=3,pulse=4,web=5,null=6,custom=7" },
+        { "exclusive",       "bool", 0, 1, 0, "",                  "WASAPI exclusive mode; silences every other program", NULL },
+        { "period",          "i32",  0, 65536, 480, "frame",       "frames per callback; 0 = 10 ms", NULL },
+        { "queue",           "i32",  0, 2, 2, "period",            "WASAPI shared: periods queued ahead of the engine; 1 saves a period of lead and a period of stall margin", NULL },
+        { "keep_sound_server", "bool", 0, 1, 0, "",                "ALSA exclusive: fail rather than suspend a sound server that holds the card", NULL },
+        { "voices",          "i32",  1, YAU_MAX_VOICES, 32, "",  "sounds playing or waiting at once", NULL },
+        { "device_index",    "u32",  0, 7, 0, "",                  "device number in the records", NULL },
+        { "min_tier",        "i32",  0, 3, 0, "",                  "flag onsets whose tier is worse; 0 = off", NULL },
+        { "onset_offset_ns", "i64",  -1e9, 1e9, 0, "ns",           "added to every onset; from a line-in loopback test", NULL },
+        { "arena_bytes",     "u32",  0, 4294967295.0, 8388608, "B", "synthesis arena when desc.arena is NULL", NULL },
+        { "stream.frames",   "i64",  0, 1e9, 48000, "frame",       "ring capacity of a stream (yau_stream_desc); 0 = 1 s", NULL },
+        { "stream.preroll",  "i64",  -1, 1e9, 12000, "frame",      "frames a stream played at 0 waits for; 0 = a quarter ring, -1 = none", NULL },
+        { "wav.loops",       "i32",  -1, 2147483647.0, 0, "",      "passes of a WAV stream after the first; -1 = forever", NULL }
     };
     if (n) *n = (int)(sizeof table / sizeof table[0]);
     return table;

@@ -84,6 +84,11 @@ find = '''    rc = yau__wav_scan(&src, info, err, cap);
 replace = '''    rc = yau__wav_scan(&src, info, err, cap);
     return rc;'''
 
+# v0.7.1: <objbase.h> before miniaudio.h on Windows. No mutant: without
+# it, tests/compile/order_audio_screen.c fails to build under MSVC /WX,
+# and this runner counts a build failure as a bad mutant (docs/audio.md,
+# "Windows headers in one translation unit").
+
 # v0.3.0: the WASAPI shared queue (docs/audio.md, "Periods and buffers").
 # The gate's wait on the WASAPI event and the exclusive one-period buffer
 # run only on hardware; audio_clockstats --queue and --exclusive measure
@@ -264,7 +269,7 @@ replace = '''
                 st->au_ = NULL;
                 return;'''
 
-# PulseAudio's position source (v0.6.0). These need a running PulseAudio
+# PulseAudio's position source (v0.8.0). These need a running PulseAudio
 # server, the test_audio_pulse program, and YSP_MINIAUDIO set to the folder
 # that holds miniaudio.h. The callback feed (pulse-00 before the merge with
 # v0.5.1) is web-02's edit; test_sparse_reports kills it too.
@@ -305,7 +310,7 @@ find = '''        int64_t pos = ti->read_index / m->pa_bpf -
                       (int64_t)((double)ti->sink_usec * (double)d->playback.internalSampleRate / 1e6 + 0.5);'''
 replace = '''        int64_t pos = ti->read_index / m->pa_bpf;'''
 
-# ALSA exclusive and device choice (v0.6.0): test_audio_alsa on hw:0,0,
+# ALSA exclusive and device choice (v0.8.0): test_audio_alsa on hw:0,0,
 # which runs itself under pasuspender when PulseAudio is up.
 
 [[mutant]]
@@ -359,7 +364,7 @@ why = "Users write hw:0,0; miniaudio's id is :0,0."
 find = "    if (b == ma_backend_alsa && strncmp(want, \"hw:\", 3) == 0) {   /* hw:0,0 is \":0,0\" */"
 replace = "    if (0) {"
 
-# v0.6.0, AUTO on Linux: ALSA exclusive on the default card, the sound
+# v0.8.0, AUTO on Linux: ALSA exclusive on the default card, the sound
 # server suspended and resumed (BACKENDS).
 
 [[mutant]]
@@ -422,6 +427,29 @@ test = "audio"
 why = "A browser reports every 10 ms, and an AudioWorklet's entry time has no clock; such points in a fit of reports move every plan off its frame."
 find = '''    } else if (au->dcaps.pos_source != YAU_POS_DEVICE) {'''
 replace = '''    } else {'''
+
+# v0.5.2: open()'s warm-up limit (docs/audio.md, "Web envelope"). The
+# envelope and the kept context are the web device's JavaScript, which only
+# a browser runs (tests/probe/web_audio). So is v0.6.1's AudioWorklet half
+# of ONE CONTEXT (the kept node's slot and its trampoline): no mutant here.
+
+[[mutant]]
+id = "warm-01"
+name = "the warm-up limit runs from the start"
+test = "audio"
+why = "A browser's context runs up to 0.8 s after it is made; 3 s from the start left a Firefox ScriptProcessorNode fit too little time, and the open failed."
+find = '''    if (t_first < 0) return cap;
+    return t_first + YAU__WARM_LIMIT_NS < cap ? t_first + YAU__WARM_LIMIT_NS : cap;'''
+replace = '''    if (t_first < 0) return cap;
+    return t_start + YAU__WARM_LIMIT_NS;'''
+
+[[mutant]]
+id = "warm-02"
+name = "no cap on the wait from the start"
+test = "audio"
+why = "A device whose first callback comes late must still fail in bounded time: the cap is 5 s from the start."
+find = '''    return t_first + YAU__WARM_LIMIT_NS < cap ? t_first + YAU__WARM_LIMIT_NS : cap;'''
+replace = '''    return t_first + YAU__WARM_LIMIT_NS;'''
 
 # v0.5.1: the exclusive start (docs/audio.md, "Exclusive start"). The prefill
 # runs only on hardware; the core rule it needs has a mutant.
@@ -627,7 +655,238 @@ why = "A browser's capture times are its estimates: tier 3 would rank them above
 find = '''    if (c->dcaps.tier == YAU_TIER_SIM || c->dcaps.tier == YAU_TIER_WEB) return c->dcaps.tier;'''
 replace = '''    if (c->dcaps.tier == YAU_TIER_SIM) return c->dcaps.tier;'''
 
-# v0.6.0, capture on Linux (docs/audio.md, "Linux: capture"): ALSA
+# v0.6.0: BACKEND_NULL on ysp/rt.h's virtual clock (tests/adapt/audio_test_vnull.h).
+
+[[mutant]]
+id = "vn-01"
+name = "blocks stamped a sample late"
+test = "audio"
+why = "A block's callback time is its own virtual time; a stamp off by a sample moves every onset off its plan."
+find = '''    tk.t_entry = now;
+    tk.pos = -1;
+    tk.pos_t = 0;
+    tk.flags = 0;
+    tk.reserved_ = 0;
+    if (!v->inited) {'''
+replace = '''    tk.t_entry = now + 20833;
+    tk.pos = -1;
+    tk.pos_t = 0;
+    tk.flags = 0;
+    tk.reserved_ = 0;
+    if (!v->inited) {'''
+
+[[mutant]]
+id = "vn-02"
+name = "the blocks drift"
+test = "audio"
+why = "Blocks at the nominal rate keep the fit exact (drift 0); one more frame of time per block is a device 2083 ppm slow."
+find = '''    return v->t0 + (int64_t)((double)v->w * 1e9 / (double)v->rate + 0.5);'''
+replace = '''    return v->t0 + (int64_t)((double)(v->w + v->w / v->period) * 1e9 / (double)v->rate + 0.5);'''
+
+[[mutant]]
+id = "vn-03"
+name = "miniaudio's null device on the virtual clock"
+test = "audio"
+why = "miniaudio's null device is a real-time thread; on the virtual clock the header's own device must open instead."
+find = '''    } else if (d.backend == YAU_BACKEND_NULL && yrt_is_virtual()) {
+        au->dev = &yau__vnull_device;'''
+replace = '''    } else if (0) {
+        au->dev = &yau__vnull_device;'''
+
+[[mutant]]
+id = "vn-04"
+name = "a real device on the virtual clock"
+test = "audio"
+why = "A real device's callbacks come on real time; on the virtual clock its open must fail and say why."
+find = '''    } else if (yrt_is_virtual()) {
+        /* a device's callbacks come on real time: on the virtual clock'''
+replace = '''    } else if (0) {
+        /* a device's callbacks come on real time: on the virtual clock'''
+
+[[mutant]]
+id = "vn-05"
+name = "a virtual null input stays real"
+test = "audio"
+why = "The capture side opens the same virtual device; without it a null input on the virtual clock has no device."
+find = '''    } else if (c->desc.backend == YAU_BACKEND_NULL && yrt_is_virtual()) {
+        c->dev = &yau__vnull_device;'''
+replace = '''    } else if (0) {
+        c->dev = &yau__vnull_device;'''
+
+[[mutant]]
+id = "vn-06"
+name = "close leaves the timer set"
+test = "audio"
+why = "A closed handle's timer would render into a closed handle at the next wait, and the second run would find the table fuller."
+find = '''    if (v->timer >= 0) yrt_virtual_cancel(v->timer);
+    v->timer = -1;'''
+replace = '''    v->timer = -1;'''
+
+[[mutant]]
+id = "vn-07"
+name = "DUPLEX without the input's caps"
+test = "audio"
+why = "In DUPLEX the device fills the input's caps; without them the input's strict open sees 0 Hz and refuses."
+find = '''    if (v->cap_host) {
+        /* DUPLEX: the device fills the input's caps, as miniaudio's does */'''
+replace = '''    if (0) {
+        /* DUPLEX: the device fills the input's caps, as miniaudio's does */'''
+
+[[mutant]]
+id = "vn-08"
+name = "DUPLEX input never fed"
+test = "audio"
+why = "In DUPLEX each block hands the input its frames first; without it the input's frame count stands still."
+find = '''    if (v->cap_host) yau_capture_block(v->cap_host, v->buf, v->period, &tk);'''
+replace = '''    (void)0;'''
+
+# v0.7.0: the parameter table's values (test_params).
+
+[[mutant]]
+id = "pv-01"
+name = "backend lists seven of its eight values"
+test = "audio"
+why = "v0.7.0: a loader would refuse \"custom\", a backend the header has."
+find = '"auto=0,wasapi=1,coreaudio=2,alsa=3,pulse=4,web=5,null=6,custom=7" },'
+replace = '"auto=0,wasapi=1,coreaudio=2,alsa=3,pulse=4,web=5,null=6" },'
+
+[[mutant]]
+id = "pv-02"
+name = "format.sample without values"
+test = "audio"
+why = "v0.7.0: an enum row without values leaves the names in the doc text only, where no loader reads them."
+find = '"project resolution", "f32=0,s16=1,s24=2" },'
+replace = '"project resolution", NULL },'
+
+[[mutant]]
+id = "pv-03"
+name = "stream.preroll's default 0"
+test = "audio"
+why = "v0.7.0: a zero preroll waits for a quarter of the ring; a designer would show 0 frames."
+find = '{ "stream.preroll",  "i64",  -1, 1e9, 12000, "frame",'
+replace = '{ "stream.preroll",  "i64",  -1, 1e9, 0, "frame",'
+
+[[mutant]]
+id = "pv-04"
+name = "values on a bool"
+test = "audio"
+why = "v0.7.0: values belong to enum rows only; a loader would take names for a bool."
+find = '"WASAPI exclusive mode; silences every other program", NULL },'
+replace = '"WASAPI exclusive mode; silences every other program", "off=0,on=1" },'
+
+# The real-thread cases on a loaded machine (2026-10-22): their waits count
+# the other thread's progress, not wall time. These mutants check that each
+# case still sees its faults, and that a wait that cannot end fails at the
+# wait instead of hanging.
+
+[[mutant]]
+id = "ld-01"
+name = "a seek leaves the WAV read position"
+test = "audio"
+why = "The stream restarts at the seek but the file is read from where it was: every frame of the play is wrong."
+find = '''    w->pos_ = sample;
+    yau__st64(&w->seek_, -1);'''
+replace = '''    yau__st64(&w->seek_, -1);'''
+
+[[mutant]]
+id = "ld-02"
+name = "the pump's message ignores a seek"
+test = "audio"
+why = "A seek through yau_wav_on_msg must reach the stream; the wav pump case waits for it and fails at the wait."
+find = '''        yau__st64(&w->seek_, m.seek);
+        (void)yau__wav_seek_now(w, m.seek);'''
+replace = ''
+
+[[mutant]]
+id = "ld-03"
+name = "a reset keeps the old first sample"
+test = "audio"
+why = "A play must start at the sample of the last reset or seek, which yau_stream_get_info reports as first."
+find = '''    yau__st64(&st->first_, first);
+    yau__st64(&st->id_, 0);'''
+replace = '''    yau__st64(&st->id_, 0);'''
+
+[[mutant]]
+id = "ld-04"
+name = "a stream play's sample is one late"
+test = "audio"
+why = "Each play of the wav pump case must record the sample it started at: its seek."
+find = '''    if (yau__is_stream(v) && v->start < 0) return -1;
+    return v->first;'''
+replace = '''    if (yau__is_stream(v) && v->start < 0) return -1;
+    return yau__is_stream(v) ? v->first + 1 : v->first;'''
+
+# v0.7.2: a wait without end (docs/audio.md, "A wait without end").
+
+[[mutant]]
+id = "wt-01"
+name = "the wait's deadline is the plain sum"
+test = "audio"
+why = "now + INT64_MAX overflows: the virtual null case's wait with INT64_MAX must wait for the onset, not time out at once."
+find = '''    int64_t end = yau__deadline(YAU__NOW(), timeout_ns);'''
+replace = '''    int64_t end = YAU__NOW() + timeout_ns;'''
+
+[[mutant]]
+id = "wt-02"
+name = "only INT64_MAX itself is forever"
+test = "audio"
+why = "Any timeout whose sum passes INT64_MAX saturates: the case waits with INT64_MAX - 1 ms too."
+find = '''    if (timeout_ns > 0 && now > INT64_MAX - timeout_ns) return INT64_MAX;'''
+replace = '''    if (timeout_ns == INT64_MAX) return INT64_MAX;'''
+
+# 2026-10-27: the lead on the null device (docs/audio.md, "The lead on the
+# null device"). The header did not change; these keep the lead's
+# definition under test.
+
+[[mutant]]
+id = "le-01"
+name = "the lead is clamped at 0"
+test = "audio"
+why = "A late callback makes the lead negative, and a sound at now + lead still starts on its frame: the late-callback case reads -2 ms."
+find = '''    w = yau__ld64(&au->w_pub);
+    return yau__fit_time(&au->fit_ft, w + au->dcaps.period) - YAU__NOW();'''
+replace = '''    w = yau__ld64(&au->w_pub);
+    w = yau__fit_time(&au->fit_ft, w + au->dcaps.period) - YAU__NOW();
+    return w < 0 ? 0 : w;'''
+
+[[mutant]]
+id = "le-02"
+name = "the lead has no period of margin"
+test = "audio"
+why = "The lead leaves one period for a callback that runs between the read and the handover: the late-callback case reads 10 ms just before an on-time callback."
+find = '''    return yau__fit_time(&au->fit_ft, w + au->dcaps.period) - YAU__NOW();'''
+replace = '''    return yau__fit_time(&au->fit_ft, w) - YAU__NOW();'''
+
+# v0.7.3: WAV paths are UTF-8 (docs/audio.md, "UTF-8 paths").
+
+[[mutant]]
+id = "pa-01"
+name = "a WAV path in the ANSI code page"
+test = "audio"
+why = "fopen() on Windows reads the path in the ANSI code page: the writer and the probe must open a file in a folder named with Omega, Zhe, a CJK ideograph and U+1F3AC."
+find = '''        f = _wfsopen(w, m, mode[0] == 'r' ? _SH_DENYNO : _SH_DENYWR);'''
+replace = '''        (void)w; (void)m;
+        f = fopen(path, mode);'''
+
+[[mutant]]
+id = "pa-02"
+name = "a missing file is not named as one"
+test = "audio"
+why = "A missing WAV file says \"no such file\" in the message, from the probe and from the writer."
+find = '''        if (errno == ENOENT || errno == ENOTDIR) *why = "no such file";'''
+replace = '''        if (errno == ENOENT && errno == ENOTDIR) *why = "no such file";'''
+
+[[mutant]]
+id = "pa-03"
+name = "a path that is not UTF-8 is opened anyway"
+test = "audio"
+why = "On Windows a path that is not UTF-8 is refused with YAU_ERR_ARG, not tried as a file."
+find = '''            *why = "the path is not valid UTF-8 or longer than 1023 characters";
+            return YAU_ERR_ARG;'''
+replace = '''            *why = "cannot open";
+            return YAU_ERR_IO;'''
+
+# v0.8.0, capture on Linux (docs/audio.md, "Linux: capture"): ALSA
 # exclusive on hw:, PulseAudio's record stream, the suspension narrowed to
 # one card, and the core's watchdog and device loss count. alsa-1x need
 # hw:0,0's input; pulse-05 to pulse-12 a running PulseAudio and, for part
@@ -809,7 +1068,7 @@ find = """    if (c->dev_lost > 0) {
     }"""
 replace = """    c->dev_lost = 0;"""
 
-# Review fixes (v0.6.0): split duplex reads, the suspension held by every
+# Review fixes (v0.8.0): split duplex reads, the suspension held by every
 # hw: device on the card, the busy-only suspension,
 # the duplex buffer and its silence, the input's keep_sound_server in
 # duplex, the watchdog's buffer scaling, the PULSE capture count, and the
@@ -897,7 +1156,7 @@ why = "A device with a 100 ms buffer can deliver 400 ms apart without being lost
 find = "            if (b4 > lim) lim = b4;"
 replace = "            (void)b4;"
 
-# Second review (v0.6.0): an overrun in a split duplex read, the output's
+# Second review (v0.8.0): an overrun in a split duplex read, the output's
 # hold on a card the input suspended (only in an input or duplex profile,
 # where the input suspends the card), the message's field, and REPORTS
 # ONLY for the capture fit. Not listed: the suspension's rollback, which

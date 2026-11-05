@@ -405,6 +405,17 @@ as the committed `tests/c_trial.bin`. The USAGE blocks compile as C99 and
 C++17. Mutants `conv-01` (no message from a failing write) and `conv-02`
 (a negative `lifetime_ns` accepted) are caught; control `00` survives.
 
+## The shared row shape (v0.3.0)
+
+Every ysp parameter table has one row shape: `name`, `type`, `min`, `max`, `def`, `unit`, `doc`, `values` ([conventions.md](conventions.md), "Parameter tables"; gap G6 of [experiment_format.md](experiment_format.md)). `yrdk_param` gained `values` after `offset`. No row is an enum,
+so it is NULL in all three; the field is there so one reader reads every
+table. The rules and the digests do not change. The test
+(`test_params()` in `tests/adapt/rdk_test.c`) checks the three rows
+against the `yrdk_field` floats at their offsets and their defaults
+against a field opened with them at 0. 1 of 1 new mutant killed (`tests/mutate/rdk.toml`, pv-01). The Python binding's
+version is 0.3.0 (the header's; the fourth number went with the header's
+move).
+
 ## Bindings
 
 The API is made for a binding: plain structs, no callbacks, caller memory
@@ -412,7 +423,7 @@ The API is made for a binding: plain structs, no callbacks, caller memory
 runs a logged trial in one call.
 
 The Python binding (`bindings/python/ysp_rdk`, the module `ysp.rdk`) is a
-C extension on the Limited API, so one abi3 wheel serves CPython 3.8 and
+C extension on the Limited API, so one abi3 wheel serves CPython 3.10 and
 later. An analysis opens a field with the rig's desc as keyword
 arguments and calls `trajectory(seed, t0, steps)`: one C loop replays the
 trial and gives the shown dots after each update as NumPy arrays
@@ -463,3 +474,29 @@ Its test (`bindings/python/ysp_rdk/tests/test_rdk.py`) checks:
 
 The wheel's NumPy dependency is the one cost: the outputs are
 `numpy.frombuffer` views of bytes that the C code fills.
+
+### MATLAB and Octave (`ysp_rdk`)
+
+The MEX function `ysp_rdk` (`bindings/mex/ysp_rdk.c`, added 2026-10-25)
+has the surface of `ysp.rdk` in command form. `'open'` takes the desc as
+a struct with the keyword names of `Field()` (`lifetime` and
+`frame_period` in seconds; an enum by name or value), and
+`'trajectory'` gives `xy` as n x 2 x K `single`, the directions as n x K
+`single` and the signal flags as n x K `uint8`. The steps are a K x 4
+double matrix `[t coherence direction speed]` with `t` in seconds, or a
+struct array such as the `last` field of `'get'` after each update, which
+has `ns` (int64) beside `t`. The time conversion, its bound (2^23 s) and
+the rounding of `lifetime` to float32 first are the Python binding's, so
+one desc gives one field in both. `'set'` and `'get'` take the place of
+the Python attributes. Not bound: `yrdk_params()` (a designer's table, not
+an analysis call) and caller memory (`desc.mem`).
+
+`bindings/mex/test_mex_rdk.m` (57 checks; MATLAB R2023a with MSVC 19.44 and
+Octave 10.1 with MinGW-w64 on Windows 11, 2026-10-25) checks:
+
+| Check | Result |
+|---|---|
+| the 8 golden digests, by `'update'`, by `'replay'` and by `'trajectory'` | equal to the C test's |
+| `tests/c_trial.bin` (in `bindings/python/ysp_rdk/tests/`) replayed by `'trajectory'` | x, y, direction and signal equal bit for bit on all 150 updates; the digest equal |
+| a live run's `'get'` log | `last.ns` equal to the C log's ns and `last.t == ns / 1e9`; the log replays to the digest with and without `ns` |
+| the exact pieces, snapshot and restore, outputs, the refusals and their ids (`ysp_rdk:arg`, `:order`, `:handle`, `:usage`) | as the header |

@@ -4,7 +4,7 @@ project(ysp LANGUAGES C CXX)
 # Consumers: add_subdirectory(ysp), then link the group whose headers the
 # program includes:
 #   ysp::core     rt, timeline, table, json, pack
-#   ysp::methods  stair, quest, aep, trials
+#   ysp::methods  stair, quest, aep, trials, dataset
 #   ysp::devices  serial, parallel, input, response, box, device, rigfile, net
 #   ysp::rig      screen, gfx, color, outline, rdk, video, audio
 # or ysp::ysp, all four. Each group carries the include path, the groups its
@@ -95,7 +95,7 @@ option(YSP_TRACY_CHECK "Fetch Tracy and build the YRT_TRACY compile check" OFF)
 # tests/layout/). About 8 MB of sources that no header needs.
 option(YSP_BUILD_LAYOUT "Build the layout library (pack/, third_party/), its test and gfx_layout" OFF)
 # Off by default: the pack tool (pack/pack_tool.c, the ypak CLI, tests/pack/).
-# It needs lodepng in third_party/lodepng/ (tools/vendor_pack.py fetches it).
+# It needs lodepng, stb_image, pl_mpeg and libsamplerate in third_party/ (tools/vendor_pack.py fetches them).
 # With YSP_BUILD_LAYOUT also ON it builds glyph runs; without, it is the core
 # tool, which refuses them and builds every other kind to the same bytes, so
 # a pack of tables, sounds and images does not need HarfBuzz. ysp/pack.h
@@ -175,7 +175,7 @@ endif()
 # program registered with ctest too, and one with YSP_ASYNC_<name> ON gets
 # the compile check and that test built a second time with
 # Y<X>_ASYNC defined, which is the opt-in layer that pulls in ysp/rt.h.
-set(YSP_LIBS rt parallel serial stair quest aep table json pack trials timeline input response box device rigfile net color rdk outline screen audio gfx video)
+set(YSP_LIBS rt parallel serial stair quest aep table json pack trials dataset timeline input response box device rigfile net color rdk outline screen audio gfx video)
 
 # Examples that sit in the folder of the header they mainly show but need
 # another header's build: path, program name (the file's own name, kept from
@@ -198,12 +198,19 @@ set(YSP_EXAMPLES_ACROSS
     rdk/trial_rdk.c            -
     response/trial_stroop.c    -
     timeline/trial_sternberg.c -
+    device/trial_eeg_triggers.c -
+    timeline/trial_scanner_sync.c -
+    gfx/gamma_null.c           -
     pack/trial_images.c        -
     pack/trial_images_assets.c -
     device/photodiode_check.c  -
+    device/response_lag.c      -
     net/labstreamer_flip.c     -
     audio/av_sync.c            -
-    response/trial_two_keyboards.c -)
+    response/trial_two_keyboards.c -
+    video/trial_movie.c        -
+    color/patch.c              -
+    layout/trial_instructions.c -)
 
 set(YSP_PREFIX_rt          YRT)
 set(YSP_GROUP_rt           core)
@@ -267,6 +274,14 @@ set(YSP_PREFIX_trials      YTR)
 set(YSP_GROUP_trials       methods)
 set(YSP_PLATFORMS_trials   Windows Linux Darwin)
 set(YSP_THREADS_trials     OFF)
+
+# The session data set (docs/experiment_format.md D9) writes its tables
+# through ysp/trials.h and session.json through ysp/json.h, so it sits with
+# the trial sequencer. Folders and renames are the OS's (kernel32, libc).
+set(YSP_PREFIX_dataset     YDS)
+set(YSP_GROUP_dataset      methods)
+set(YSP_PLATFORMS_dataset  Windows Linux Darwin)
+set(YSP_THREADS_dataset    OFF)
 
 # The input event: types and inline adapters only, nothing to link. Its test
 # reads ysp/screen.h's raw mouse struct and needs none of its deps.
@@ -629,12 +644,30 @@ if(TARGET ysp::miniaudio AND YSP_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Lin
     ysp_add_program(test_audio_alsa_capture tests/adapt/audio_alsa_capture_test.c rig)
     ysp_add_program(test_audio_pulse_capture tests/adapt/audio_pulse_capture_test.c rig)
 endif()
+# ysp/screen.h's window thread on real windows (WINDOW THREAD): built with
+# the tests and not registered with ctest, because it needs a display; run
+# by hand and by tests/mutate/screen.toml's window test. Windows only: elsewhere
+# it says so and returns 0.
+if(TARGET SDL3::SDL3 AND YSP_BUILD_TESTS)
+    ysp_add_program(test_screen_window tests/adapt/screen_window_test.c rig)
+endif()
+# Every header's parameter table against the one row shape (name, type,
+# min, max, def, unit, doc, values; docs/experiment_format.md, G6): one
+# program that includes them all, as the player's loader will, without
+# SDL, miniaudio or pl_mpeg.
+if(YSP_BUILD_TESTS)
+    ysp_add_program(test_param_tables tests/adapt/param_tables_test.c core methods devices rig)
+    add_test(NAME test_param_tables COMMAND test_param_tables)
+endif()
 if(TARGET SDL3::SDL3 AND YSP_BUILD_EXAMPLES)
     # The jsPsych-style trials of examples/response/ (docs/response.md,
     # "What the examples show"); the two with a sound need miniaudio.
-    foreach(_t keyboard same_different srt adjustment mouse_tracking 2afc_adaptive two_keyboards)
+    foreach(_t keyboard same_different srt adjustment mouse_tracking two_keyboards)
         ysp_add_program(trial_${_t} examples/response/trial_${_t}.c rig methods)
     endforeach()
+    # The 2AFC staircase reads its viewing geometry from the rig profile
+    # (ysp/rigfile.h), which brings ysp/device.h.
+    ysp_add_program(trial_2afc_adaptive examples/response/trial_2afc_adaptive.c rig methods devices)
     # PsychoPy's dots.py as a trial (docs/rig_spec.md 15.5): RDK direction
     # discrimination, each row with the field's replay digest.
     ysp_add_program(trial_rdk examples/rdk/trial_rdk.c rig methods)
@@ -652,14 +685,33 @@ if(TARGET SDL3::SDL3 AND YSP_BUILD_EXAMPLES)
         ysp_add_program(audio_av_sync examples/audio/av_sync.c rig devices)
         # its web form (docs/web.md): the records and the audio callbacks
         ysp_add_program(web_av_sync examples/web/av_sync.c rig)
+        # PsychoPy's movie demos (docs/rig_spec.md 15.5): RT from a video
+        # frame's flip record, pause and seek by keys, a soundtrack stream.
+        ysp_add_program(trial_movie examples/video/trial_movie.c rig methods)
     endif()
+    # PsychoPy's color and monitor demos (docs/rig_spec.md 15.5): a patch
+    # through the calibration, walked in hue and chroma by keys.
+    ysp_add_program(color_patch examples/color/patch.c rig)
     # PsychoPy's Sternberg demo (docs/rig_spec.md 15.5): a timed sequence as
     # an op table, digits from ysp/outline.h. trial_stroop and trial_images
     # are in pack/CMakeLists.txt: they need the layout library and ypak.
     ysp_add_program(trial_sternberg examples/timeline/trial_sternberg.c rig methods)
+    # PsychoPy's EEG demos (docs/rig_spec.md 15.5): stimulus, response and
+    # end codes through the rig profile's trigger role, each write's record
+    # in the row.
+    ysp_add_program(trial_eeg_triggers examples/device/trial_eeg_triggers.c rig methods devices)
+    # PsychoPy's fMRI demos: trials on a base anchored at a scanner pulse,
+    # pulses from a key, a line board or an emulator thread.
+    ysp_add_program(trial_scanner_sync examples/timeline/trial_scanner_sync.c rig methods devices)
+    # gammaMotionNull.py: the display's gamma by motion nulling through the
+    # output stage's table, a staircase on the null.
+    ysp_add_program(gfx_gamma_null examples/gfx/gamma_null.c rig methods devices)
     # The MCU photodiode on ysp/device.h, its events over ysp/screen.h's
     # input bridge: the first real device's hand test.
     ysp_add_program(photodiode_check examples/device/photodiode_check.c rig devices)
+    # A response box's press to its trigger's write (docs/experiment_format.md,
+    # G8): the measurement behind the input-thread rule.
+    ysp_add_program(response_lag examples/device/response_lag.c rig devices)
     # The LabStreamer against flip records over LSL (docs/net.md): the hand
     # test of ysp/net.h.
     ysp_add_program(net_labstreamer_flip examples/net/labstreamer_flip.c rig devices)
@@ -669,10 +721,47 @@ endif()
 # without MPEG-1. The test has its own scripted decoder; it compares QOI
 # bytes with qoi.h when that was fetched.
 if(NOT TARGET ysp::pl_mpeg)
-    foreach(t compile_video_c compile_video_cxx video_play video_bench)
+    foreach(t compile_video_c compile_video_cxx video_play video_bench trial_movie)
         if(TARGET ${t})
             target_compile_definitions(${t} PRIVATE YVID_NO_PL_MPEG)
         endif()
+    endforeach()
+endif()
+
+# ysp/audio.h, ysp/screen.h and ysp/video.h implemented in one translation
+# unit, audio first and screen first, as C and as C++: their Windows headers
+# must not redefine each other's macros under /WX (audio.h 0.7.1, C4005 on
+# CLSCTX_ALL). Each header's own checks have one header per unit.
+if(YSP_BUILD_TESTS AND TARGET SDL3::SDL3 AND TARGET ysp::miniaudio
+   AND CMAKE_SYSTEM_NAME IN_LIST YSP_PLATFORMS_video)
+    foreach(lang c cxx)
+        if(lang STREQUAL "c")
+            set(_src tests/compile/order_audio_screen.c)
+        else()
+            set(_src tests/compile/order_audio_screen.cpp)
+        endif()
+        ysp_add_program(compile_order_audio_screen_${lang} ${_src} rig)
+        add_test(NAME compile_order_audio_screen_${lang} COMMAND compile_order_audio_screen_${lang})
+        ysp_add_program(compile_order_screen_audio_${lang} ${_src} rig)
+        target_compile_definitions(compile_order_screen_audio_${lang} PRIVATE YSP_TEST_SCREEN_FIRST)
+        add_test(NAME compile_order_screen_audio_${lang} COMMAND compile_order_screen_audio_${lang})
+    endforeach()
+endif()
+# ysp/video.h's and ysp/screen.h's implementations linked against the
+# shims of bindings/share/ instead of audio.h's and timeline.h's, as
+# ysp-vis builds them: a call to a function the tables do not forward, or
+# a private name of audio.h's implementation (video.h 0.5.0), fails here.
+# With SDL3, as the other video checks; CI builds it in the Screen job.
+if(YSP_BUILD_TESTS AND TARGET SDL3::SDL3 AND CMAKE_SYSTEM_NAME IN_LIST YSP_PLATFORMS_video)
+    foreach(lang c cxx)
+        if(lang STREQUAL "c")
+            set(_src tests/compile/share_shims.c)
+        else()
+            set(_src tests/compile/share_shims.cpp)
+        endif()
+        ysp_add_program(compile_share_shims_${lang} ${_src} rig)
+        target_include_directories(compile_share_shims_${lang} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/bindings/share)
+        add_test(NAME compile_share_shims_${lang} COMMAND compile_share_shims_${lang})
     endforeach()
 endif()
 if(TARGET test_video AND YSP_QOI_DIR)
@@ -696,8 +785,11 @@ if(YSP_BUILD_LAYOUT)
     endforeach()
     add_subdirectory(third_party)
 endif()
-if(YSP_BUILD_PACK AND NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lodepng/lodepng.cpp)
-    message(FATAL_ERROR "YSP_BUILD_PACK: third_party/lodepng is missing. Fetch and verify it once, from the "
+if(YSP_BUILD_PACK AND (NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lodepng/lodepng.cpp OR
+                        NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb/stb_image.h OR
+                        NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/pl_mpeg/pl_mpeg.h OR
+                        NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/libsamplerate/src_sinc.c))
+    message(FATAL_ERROR "YSP_BUILD_PACK: third_party/lodepng, stb, pl_mpeg or libsamplerate is missing. Fetch and verify them once, from the "
         "repository root:\n"
         "    uv run --no-project python tools/vendor_pack.py --write\n"
         "(or python3 tools/vendor_pack.py --write)")

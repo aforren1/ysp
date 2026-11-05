@@ -1,8 +1,9 @@
 # ysp/json.h
 
-Status: v0.1.0, 2026-10-09. The header's manual is the reference (THE
-READER, VALUES, THE BUILDER, THE WRITER, THE ARENA). This page records
-why the header exists, the decisions, and the results.
+Status: v0.2.0, 2026-10-21 (canonical numbers); v0.1.0, 2026-10-09.
+The header's manual is the reference (THE READER, VALUES, THE BUILDER,
+THE WRITER, CANONICAL NUMBERS, THE ARENA). This page records why the
+header exists, the decisions, and the results.
 
 ## Why a header
 
@@ -31,8 +32,8 @@ and the pack tool reads through it: one parser in the repository.
 ## How-to: write canonical bytes
 
 1. Build values in an arena: `yjs_new(&a, YJS_OBJECT)`, `yjs_set()`,
-   `yjs_push()`, `yjs_new_int()`, `yjs_new_fixed(ns, 9)`,
-   `yjs_new_stringz()`.
+   `yjs_push()`, `yjs_new_int()`, `yjs_new_fixed(ns, 9)` for a duration,
+   `yjs_new_double(x)` for any other real, `yjs_new_stringz()`.
 2. `yjs_write_mem(root, YJS_WRITE_PRETTY, buf, cap)` gives the length;
    call it with `buf` NULL first to size the buffer. `yjs_write()` gives
    the text to a callback instead.
@@ -50,7 +51,7 @@ and the pack tool reads through it: one parser in the repository.
 | `\u0000` | Refused | Every string is then a C string; the pack tool refused it already |
 | A byte order mark | Skipped at the start | RFC 8259 lets a reader ignore it; Windows editors write it |
 | The canonical form | The pack manifest's (docs/pack.md 7): keys in bytewise order, two spaces, one member per line, an array of scalars on one line, `\u00XX` lowercase for control bytes, int64 integers in plain decimal | It existed, and the corpus of the pack tool pins it |
-| Other numbers in the canonical form | Written as their text | A shortest round-trip form for every double needs Ryu or Grisu; the profile and the manifest build their numbers from integers (`yjs_new_fixed()`, `yjs_new_int()`), so their text is canonical already |
+| Other numbers in the canonical form | v0.1: written as their text. v0.2.0: their exact value in one spelling (Canonical numbers, below) | v0.1's profile and manifest built every number from integers; the experiment definition (experiment_format.md D2, gap G7) has reals written by hand |
 
 ## Results
 
@@ -86,6 +87,79 @@ once per session, so its cost is not a frame-budget question; the numbers
 say a profile check costs less than one display frame by three orders of
 magnitude.
 
+## Canonical numbers (v0.2.0)
+
+The experiment ID is the SHA-256 of the definition's canonical bytes
+(experiment_format.md D2). v0.1 wrote a number's source text, so `0.5`
+and `0.50` gave two IDs for one experiment (gap G7). v0.2.0 gives each
+value one spelling.
+
+### Decisions
+
+| Question | Decision | Why |
+|---|---|---|
+| What the writer writes for a parsed number | Its exact decimal value, respelled; never a value rounded through a double | Every accessor reads the canonical text as it read the source: `yjs_double()` the same bits, `yjs_fixed()` the same int64 at every scale, `yjs_int64()` the same integer. A round through a double would change a duration of 17 or more digits (`yjs_fixed()` reads up to 19) and could not keep `yjs_new_fixed()` text. Respelling is text work only, so no platform's floating point is involved |
+| `1.0`, `1e2` | Written `1` and `100`: integer text | One value, one spelling. `yjs_int64()` refused the source text and reads the canonical text; a loader that checks integers checks the canonical bytes, which are what the pack holds |
+| Plain or exponent | Plain when the first digit's exponent E is from -18 to 20; else `d.ddde+E` or `d.ddde-E` | -18 keeps every `yjs_new_fixed()` text (at most 18 decimals) and 20 keeps every int64 integer, so no byte that was canonical in v0.1 changes. 21 is JavaScript's switch (`1e+21`). A double's text is at most 37 bytes. D2 asked for no exponent; a bound is needed, because without one `5e-324` is 326 bytes and `1e999999999` a gigabyte |
+| The exponent's spelling | `e`, then `+` or `-`, no leading zeros | JavaScript's `String(x)`, so a web player can compare text with no rule of its own outside 10^-18 to 10^-6 |
+| Zero | `0`, also for `-0`, `-0.0`, `0e5`, and `yjs_format_double(-0.0)` | D2. The sign of a zero is lost; nothing in a definition depends on it |
+| A double's digits | The shortest decimal that reads back to the double; of those, the nearest; an exact tie to the even digit | Python's `repr`, V8's `String(x)` and Ryu all give these digits (measured below), so three implementations agree |
+| The algorithm | Ryu (Adams 2018), small-table variant, integer arithmetic only | No printf, no strtod, no FPU mode: the digits cannot depend on the compiler or the C library. The full Ryu tables are 10.7 KB; the small ones 780 bytes (13 + 13 multipliers of 125 bits, 26 powers of 5, 2-bit corrections), at one extra 64 x 128-bit multiply. Grisu needs a bignum fallback for 0.5 % of doubles, two algorithms to test. A bignum-only Dragon4 is simple but costs microseconds per number |
+| The exponent limit | The reader refuses a nonzero number whose first digit is past 10^+-999999999 | RFC 8259 section 9 lets a reader limit the range of numbers. With the limit, every canonical exponent has at most 9 digits and reads back; without it, `1234567890e999999999` respells to an exponent the reader then refuses (the fuzz target found this) |
+
+### How D2 is met
+
+D2 asks that numbers stay JSON numbers in a canonical decimal form. The
+writer spells every number canonically, so the canonical bytes of a
+definition depend on its values, not on how a person typed them: `0.5`,
+`0.50`, `5e-1` and `0.5E0` give one ID. A duration written through
+`yjs_new_fixed(ns, 9)` and a real written through `yjs_new_double(x)`
+are canonical too, and stay so through any number of parses and writes.
+One case stays open: two texts of one double that differ past its 17th
+digit (`0.1` and `0.1000000000000000055`) are different exact values and
+give different IDs, though the player reads one double. A loader that
+writes each real back through `yjs_double()` and `yjs_new_double()`
+makes them one ID; that choice belongs to the loader
+(experiment_format.md D2).
+
+### Results
+
+On 2026-10-21, Windows 11, MSVC 19.44 (x64, /O2), MinGW-w64 gcc 16.1
+(-O2), WSL2 Ubuntu 22.04 gcc 11.4 (-O2; -O2 -march=native
+-ffp-contract=fast; -O1 ASan with UBSan), emcc with node 24.19 (wasm32).
+
+| Check | Result |
+|---|---|
+| The reference | Python's `repr` (David Gay's correctly rounded shortest conversion) respelled by `tests/adapt/json_dtoa_ref.py`, which shares no code with the header |
+| 10,000,000 doubles in 8 classes (random bits, subnormals, decimals of 1 to 17 digits and their neighbors 1 ulp away, powers of two and their neighbors, integers below 2^53, 15 to 17 digit decimals) | FNV-1a digest of the texts equal to Python's on MSVC, MinGW, WSL2 gcc, gcc with fused multiply-adds, and wasm: `0xde6a84779f6a9401`. Every text reads back to its double through `yjs_parse_double()`, and no decimal one digit shorter does |
+| 2,000,000 of them against V8 | `String(x)` respelled gives the same text for all; `String(x)` itself is the canonical text for 98.6 % (the rest are below 10^-6 or -0) |
+| 70 edge doubles (0, -0, the smallest subnormal, the largest subnormal and double, powers of 2 and 10, 2^53 and its neighbors, the plain/exponent boundaries, Ryu's regression list, 2.98023223876953125e-8, an exact tie) | Each equal to Python's text |
+| Every multiplier of the small tables (326 + 291) | FNV-1a checksum equal to the exact values' (Python integers) |
+| 5,000,000 random number texts (runs of zeros, exponents with leading zeros, up to 10^9) | Digest equal to Python's on every compiler above; the canonical text reads the same through `yjs_parse_double()` (bits and code) and `yjs_parse_fixed()` at 0, 3, 9 and 18 decimals; it is its own canonical text |
+| v0.1 canonical bytes | 100,000 random `yjs_new_int()` and `yjs_new_fixed()` values (0 to 18 decimals) written byte for byte as their v0.1 text; `tests/adapt/rigfile_test.c` (golden profiles) passes unchanged |
+| `/fp:fast` (MSVC) | Not supported: the reader's own checks fail (a signed zero, values near 10^300, `HUGE_VAL` folded to 10^300); the formatter uses no floating point |
+| Fuzzing (`tests/fuzz/json_fuzz.c`) | Targets 0 and 1 also check that every number of the canonical text reads the same through each accessor; target 3 formats the input's first 8 bytes as a double and checks the round trip. MSVC libFuzzer with ASan, the 17 seeds: one finding after 68,711 inputs (`1234567890e999999999` respells to a 10-digit exponent that the reader refused; the reader now limits the first digit's exponent), then 3,405,771 inputs in 1201 s with no finding |
+| Mutants (`tests/mutate/json.toml`) | 40 in all, 39 killed. 12 new (j-29 to j-40); j-37 survives as an equivalent mutant (its note says why; 300,000 targeted doubles give Python's text). j-24 (skip the int64 path) became equivalent, because the respelling writes the same bytes; it now drops the path's minus sign, and is killed |
+
+Costs (`examples/rigfile/bench.c`, Iris Xe laptop on AC, under the measurement lock (load 0 % at its start), 21 rounds of 4096 calls, medians; MSVC 19.44 /O2 and MinGW-w64 gcc 16.1 -O2):
+
+| Cost per number | MSVC | MinGW |
+|---|---|---|
+| `yjs_format_double()`, random bits (mostly 17 digits) | 68.7 ns | 68.7 ns |
+| `yjs_format_double()`, k/1000 (1 to 3 digits) | 60.4 ns | 61.5 ns |
+| `snprintf("%.17g")` beside it, random bits | 813 ns | 1615 ns |
+| `snprintf("%.17g")`, k/1000 | 229 ns | 689 ns |
+| `yjs_write()` of a parsed real (`0.2500`), respelled | 22.1 ns | 29.9 ns |
+
+v0.1.1 against v0.2.0, MinGW, the same flags, two alternating runs in
+one timing session (load 20 % at its start, so the spread is wide): the
+rig profile's `yrig_write()` 8.4 and 8.5 us against 12.0 and 9.0 us (its
+durations are now respelled, about 20 ns each); the 1 MB manifest-like
+document, integers and strings only, writes at 631 and 599 MB/s against
+742 and 523 MB/s, no change outside the spread.
+
+A definition with a thousand reals spends at most 0.1 ms (70 us to format them, 30 us to respell them) on them per write.
+
 ## Conventions check (v0.1.1)
 
 v0.1.1 checks this header against the repository conventions (README.md,
@@ -106,6 +180,6 @@ Checked on 2026-10-10 with MSVC 19.44 /W4 /WX and MinGW-w64 gcc -Werror:
 - No run on macOS or a big-endian host.
 - No streaming (SAX) reader: a document is parsed whole. The largest one
   in view, a pack manifest, is a few MB.
-- No shortest round-trip form for a double in the writer (see
-  Decisions).
+- No run on macOS arm64 of v0.2.0 here; CI runs `json_test.c` there,
+  and its digests must equal the constants in the test.
 - The fuzz target is not in CI, as the other fuzz targets.

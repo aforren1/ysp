@@ -8,8 +8,15 @@
  *      the second byte
  *   2  yrig_parse() of a rig profile; on success its canonical bytes are
  *      parsed again and must give the same bytes
- *   3  yrig_read_latency() of an output latency file, and
- *      yjs_parse_fixed() / yjs_parse_double() on the whole input
+ *   3  yrig_read_latency() of an output latency file and
+ *      yrig_read_loopback() of any loopback file (ysp/rigfile.h v0.4.0),
+ *      which must agree on an output latency file; and
+ *      yjs_parse_fixed() / yjs_parse_double() on the whole input, and
+ *      yjs_format_double() of its first 8 bytes as a double (ysp/json.h
+ *      v0.2.0): the text reads back to the double and is canonical
+ * Targets 0 and 1 also check that the canonical text holds the same values:
+ * every number reads the same through yjs_double(), yjs_fixed() and
+ * yjs_int64() before and after (v0.2.0).
  * Every input must return without a sanitizer report. A refusal is a
  * correct answer to a bad input; only a broken round trip is a finding of
  * its own.
@@ -71,7 +78,45 @@ static void touch(const yjs_value* v, int depth) {
     }
 }
 
-/* The canonical text of v parses to itself. */
+/* v and its canonical text's parse w hold the same values: every number
+ * reads the same through each accessor (canonical numbers are exact). */
+static void same_values(const yjs_value* v, const yjs_value* w, int depth) {
+    uint32_t k;
+    if (!v || !w || depth > YJS_MAX_DEPTH) return;
+    if (v->type != w->type || ((v->type == YJS_ARRAY || v->type == YJS_OBJECT) && v->n != w->n)) abort();
+    switch (v->type) {
+    case YJS_NUMBER: {
+        static const int dec[] = { 0, 3, 9, 18 };
+        double d1 = 0, d2 = 0;
+        int64_t i1 = 0, i2 = 0;
+        int r1 = yjs_double(v, &d1), r2 = yjs_double(w, &d2), j;
+        if (r1 != r2 || (r1 == YJS_OK && memcmp(&d1, &d2, sizeof d1) != 0 && d1 != 0.0)) abort();
+        for (j = 0; j < 4; j++) {
+            r1 = yjs_fixed(v, dec[j], &i1);
+            r2 = yjs_fixed(w, dec[j], &i2);
+            if (r1 != r2 || (r1 == YJS_OK && i1 != i2)) abort();
+        }
+        /* integer text stays integer text with the same value */
+        if (yjs_int64(v, &i1) == YJS_OK && (yjs_int64(w, &i2) != YJS_OK || i1 != i2)) abort();
+    } break;
+    case YJS_STRING:
+        if (v->n != w->n || memcmp(v->u.s, w->u.s, v->n) != 0) abort();
+        break;
+    case YJS_ARRAY:
+        for (k = 0; k < v->n; k++) same_values(v->u.items[k], w->u.items[k], depth + 1);
+        break;
+    case YJS_OBJECT:
+        for (k = 0; k < v->n; k++) {
+            if (strcmp(v->u.members[k].key, w->u.members[k].key) != 0) abort();
+            same_values(v->u.members[k].value, w->u.members[k].value, depth + 1);
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+/* The canonical text of v parses to itself and to v's values. */
 static void round_trip(const yjs_value* v) {
     yjs_arena a;
     yjs_value* w;
@@ -85,6 +130,7 @@ static void round_trip(const yjs_value* v) {
     }
     n2 = yjs_write_mem(w, YJS_WRITE_PRETTY, g_t2, sizeof g_t2);
     if (n1 != n2 || memcmp(g_t1, g_t2, n1) != 0) abort();
+    same_values(v, w, 0);
     n2 = yjs_write_mem(w, YJS_WRITE_COMPACT, g_t2, sizeof g_t2);
     if (n2 == 0 || n2 > n1) abort();
 }
@@ -136,8 +182,37 @@ int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
         yrig_loopback lb;
         int64_t i;
         double d;
-        g_sink += (unsigned)yrig_read_latency(t, n, &lb, err, sizeof err);
+        yrig_loopback lb2;
+        int r1 = yrig_read_latency(t, n, &lb, err, sizeof err);
+        int r2 = yrig_read_loopback(t, n, &lb2, err, sizeof err);
+        /* one parser behind both: an output latency file reads the same through each */
+        if ((r1 == YRIG_OK) != (r2 == YRIG_FILE_OUT_LATENCY)) abort();
+        if (r1 == YRIG_OK && (lb.n != lb2.n || lb.median_ns != lb2.median_ns || lb.max_ns != lb2.max_ns || strcmp(lb.sha256, lb2.sha256) != 0))
+            abort();
+        if (r2 > YRIG_FILE_DISPLAY_ONSET || (r2 < 0 && r2 != YRIG_ERR_FORMAT)) abort();
+        g_sink += (unsigned)r1 + (unsigned)r2;
         g_sink += (unsigned)yjs_parse_fixed(t, n, data[1] % 19, &i) + (unsigned)yjs_parse_double(t, n, &d);
+        /* the input's first 8 bytes as a double: its canonical text reads
+         * back to it, is one JSON number and is its own canonical text */
+        if (n >= 8) {
+            char c[YJS_DOUBLE_TEXT], c2[64];
+            double x, y = 0;
+            unsigned f;
+            int len;
+            yjs_arena a2;
+            yjs_value* nv;
+            memcpy(&x, t, sizeof x);
+            len = yjs_format_double(x, c, sizeof c);
+            if (x != x || x - x != 0.0) {
+                if (len != YJS_ERR_RANGE) abort();
+                break;
+            }
+            if (len <= 0 || len >= YJS_DOUBLE_TEXT || !yjs_number_ok(c, (size_t)len, &f)) abort();
+            if (yjs_parse_double(c, (size_t)len, &y) != YJS_OK ? x != 0.0 : (memcmp(&x, &y, sizeof x) != 0 && x != 0.0)) abort();
+            yjs_arena_init(&a2, g_mem, sizeof g_mem);
+            nv = yjs_new_number(&a2, c, (size_t)len);
+            if (!nv || yjs_write_mem(nv, YJS_WRITE_COMPACT, c2, sizeof c2) != (size_t)len || memcmp(c, c2, (size_t)len) != 0) abort();
+        }
     } break;
     }
     return 0;
@@ -174,7 +249,17 @@ int main(int argc, char** argv) {
         "\"triggerbox\", \"key\": \"serial:0403:6001:TB0123:\", \"latency\": {\"date\": \"2026-10-09T13:58:12Z\", \"max_s\": 0.0021, "
         "\"median_s\": 0.000577, \"n\": 200, \"p5_s\": 0.000201, \"p95_s\": 0.000983, \"sha256\": "
         "\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"}, \"pulse_s\": 0.002}}, \"written\": \"2026-10-09T14:03:00Z\"}";
-    static const char lat[] = "format ysp-out-latency 1\ndate 2026-10-09T13:58:12Z\nn 200\np5_s 0.0002010\nmedian_s 0.0005770\n"
+    static const char profile4[] =
+        "{\"display\": {\"latency\": {\"date\": \"2026-10-13T10:05:00Z\", \"max_s\": 0.013, \"median_s\": 0.0123, \"n\": 1180, "
+        "\"p5_s\": 0.01201, \"p95_s\": 0.01261, \"sha256\": \"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"}, "
+        "\"onset_offset_s\": 0.0123}, \"format\": \"ysp-rig 1\", \"rig\": \"v04\", \"roles\": {}, \"written\": \"2026-10-13T10:05:00Z\"}";
+    static const char profile5[] =   /* ysp/rigfile.h v0.5.0: the viewing geometry */
+        "{\"format\": \"ysp-rig 1\", \"rig\": \"v05\", \"roles\": {}, \"view\": {\"distance_mm\": 570, \"width_mm\": 518.4, "
+        "\"width_px\": 1920}, \"written\": \"2026-10-21T10:00:00Z\"}";
+    static const char bnd[] = "format ysp-in-bounds 1\ndate 2026-10-13T10:00:00Z\nn 398\nlo_s -0.000312000\nhi_s 0.001104000\n";
+    static const char ons[] = "format ysp-display-onset 1\ndate 2026-10-13T10:05:00Z\nn 1180\np5_s 0.012010000\nmedian_s 0.012300000\n"
+                              "p95_s 0.012610000\nmax_s 0.013000000\nonset_offset_s 0.012300000\n";
+    static const char lat[] ="format ysp-out-latency 1\ndate 2026-10-09T13:58:12Z\nn 200\np5_s 0.0002010\nmedian_s 0.0005770\n"
                               "p95_s 0.0009830\nmax_s 0.0021000\n";
     char name[32];
     size_t i;
@@ -189,7 +274,13 @@ int main(int argc, char** argv) {
     put(argv[1], "profile_json", 0, 0, profile);
     put(argv[1], "latency", 3, 9, lat);
     put(argv[1], "fixed", 3, 9, "-1.5e-3");
-    printf("json_fuzz: wrote %u seeds to %s\n", (unsigned)(2 * (sizeof docs / sizeof docs[0]) + 4), argv[1]);
+    put(argv[1], "double", 3, 9, "¹?");       /* 0.1 */
+    put(argv[1], "numbers", 0, 0, "[1.50, 1.5e0, -0.0, 15E-1, 0.00012300e-7, 1e999999999, 123456789012345678901234567890, 9223372036854775808]");
+    put(argv[1], "profile4", 2, 0, profile4);
+    put(argv[1], "bounds", 3, 9, bnd);
+    put(argv[1], "onset", 3, 9, ons);
+    put(argv[1], "profile5", 2, 0, profile5);
+    printf("json_fuzz: wrote %u seeds to %s\n", (unsigned)(2 * (sizeof docs / sizeof docs[0]) + 10), argv[1]);
     return 0;
 }
 #elif defined(YSP_FUZZ_REPLAY)

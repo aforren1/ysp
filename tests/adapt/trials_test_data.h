@@ -180,7 +180,7 @@ static void test_data_time(void) {
     static const int64_t vals[] = { 0, 1, -1, 4, 5, -5, 499999999, 500000000, 999999999,
                                     1000000000, -1000000000, 1499999999, 1500000000,
                                     -1500000000, INT64_MAX, INT64_MIN + 1 };
-    ytr_col col = YTR_COL_SET("t", YTR_COL_TIME_NS);
+    ytr_col col = YTR_COL_SET("t_s", YTR_COL_TIME_NS);
     ytr_data_desc dd;
     int dec, v, bad = 0;
     for (dec = 1; dec <= 9; dec++) {
@@ -399,7 +399,7 @@ static void test_data_session(void) {
     d.n_practice = 2;
     d.rng = ytr_splitmix;
     d.rng_ctx = &g_rng_state;
-    d.jitters[0] = ytr_uniform("iti", YRT_MS(500), YRT_S(1));
+    d.jitters[0] = ytr_uniform("iti_s", YRT_MS(500), YRT_S(1));
     d.n_jitters = 1;
     d.records = levels;
     d.record_size = sizeof(double);
@@ -415,7 +415,7 @@ static void test_data_session(void) {
     CHECK(ytr_data_open(&g_w, &dd));
     g_sink[g_sink_len] = '\0';
     CHECK_S(g_sink, "index,block,rep,condition,track,practice,warmup,requeued,after_break,outcome,"
-                    "ori,contrast,iti,rt_s,level\n");
+                    "ori,contrast,iti_s,rt_s,level\n");
     CHECK_I(ytr_data_write(&g_w, &r), YTR_ERR_ORDER);   /* nothing completed */
     CHECK_HAS(ytr_data_error(&g_w), "a trial is pending, or its row is written already");
     i = 0;
@@ -454,7 +454,7 @@ static void test_data_session(void) {
     if (g_back.base) {
         CHECK_I(g_back.n_rows, rows);
         CHECK_I(g_back.n_cols, 15);
-        CHECK_S(ytb_col_name(&g_back, 12), "iti");
+        CHECK_S(ytb_col_name(&g_back, 12), "iti_s");
         /* The quoted table text came back whole. */
         CHECK(ytb_find(&g_back, ytb_col(&g_back, "ori"), "up, high") >= 0);
     }
@@ -505,7 +505,30 @@ static void test_data_refusals(void) {
     c[0] = (ytr_col)YTR_COL(brow, i, YTR_COL_DOUBLE);   /* an int field as DOUBLE */
     CHECK(!ytr_data_open(&g_w, &dd));
     CHECK_HAS(ytr_data_error(&g_w), "'i' is DOUBLE but its field is 4 bytes");
+    /* A TIME_NS column is seconds in the file, so its name ends in _s or
+     * _ns (v0.5); the message names the column and the name to use. */
     c[0] = (ytr_col)YTR_COL(brow, x, YTR_COL_TIME_NS);
+    CHECK(!ytr_data_open(&g_w, &dd));
+    CHECK_HAS(ytr_data_error(&g_w), "column 'x' is TIME_NS, written in seconds, so its name ends in _s or _ns ('x_s')");
+    c[0] = (ytr_col)YTR_COL_SET("rt", YTR_COL_TIME_NS);
+    CHECK(!ytr_data_open(&g_w, &dd));
+    CHECK_HAS(ytr_data_error(&g_w), "column 'rt' is TIME_NS");
+    c[0] = (ytr_col)YTR_COL_SET("rts", YTR_COL_TIME_NS);      /* "s" without the "_" */
+    CHECK(!ytr_data_open(&g_w, &dd));
+    CHECK_HAS(ytr_data_error(&g_w), "column 'rts' is TIME_NS");
+    c[0] = (ytr_col)YTR_COL_SET("rt_ms", YTR_COL_TIME_NS);
+    CHECK(!ytr_data_open(&g_w, &dd));
+    CHECK_HAS(ytr_data_error(&g_w), "column 'rt_ms' is TIME_NS");
+    c[0] = (ytr_col)YTR_COL_SET("rt_s", YTR_COL_TIME_NS);
+    CHECK(ytr_data_open(&g_w, &dd));
+    ytr_data_close(&g_w);
+    c[0] = (ytr_col)YTR_COL_SET("_s", YTR_COL_TIME_NS);       /* the shortest */
+    CHECK(ytr_data_open(&g_w, &dd));
+    ytr_data_close(&g_w);
+    c[0] = (ytr_col)YTR_COL_SET("rt", YTR_COL_DOUBLE);        /* not TIME_NS: the caller's rule */
+    CHECK(ytr_data_open(&g_w, &dd));
+    ytr_data_close(&g_w);
+    c[0] = (ytr_col)YTR_COL_SET("x_s", YTR_COL_TIME_NS);
     c[0].decimals = 10;
     CHECK(!ytr_data_open(&g_w, &dd));
     CHECK_HAS(ytr_data_error(&g_w), "decimals 10");
@@ -549,6 +572,26 @@ static void test_data_refusals(void) {
     CHECK(!ytr_data_open(&g_w, &dd));
     CHECK_HAS(ytr_data_error(&g_w), "the session's column");
     d.factors[0] = ytr_factor("ori", 2);
+    /* A jitter's column holds seconds, so its name ends in _s (v0.5). */
+    d.rng = ytr_splitmix;
+    d.rng_ctx = &g_rng_state;
+    d.jitters[0] = ytr_uniform("iti", YRT_MS(500), YRT_S(1));
+    d.n_jitters = 1;
+    CHECK(ytr_open(&g_t, &d));
+    c[0] = (ytr_col)YTR_COL_SET("x", YTR_COL_INT);
+    CHECK(!ytr_data_open(&g_w, &dd));
+    CHECK_HAS(ytr_data_error(&g_w), "the jitter column 'iti' holds seconds, so its name ends in _s ('iti_s')");
+    d.jitters[0] = ytr_uniform("iti_s", YRT_MS(500), YRT_S(1));
+    CHECK(ytr_open(&g_t, &d));
+    CHECK(ytr_data_open(&g_w, &dd));
+    ytr_data_close(&g_w);
+    d.jitters[0] = ytr_uniform("is", YRT_MS(500), YRT_S(1));   /* "s" without the "_" */
+    CHECK(ytr_open(&g_t, &d));
+    CHECK(!ytr_data_open(&g_w, &dd));
+    CHECK_HAS(ytr_data_error(&g_w), "'is'");
+    d.n_jitters = 0;
+    d.rng = NULL;
+    d.rng_ctx = NULL;
     CHECK(ytr_open(&g_t, &d));
     c[0] = (ytr_col)YTR_COL_SET("outcome", YTR_COL_INT);
     CHECK(!ytr_data_open(&g_w, &dd));
@@ -584,23 +627,82 @@ static void test_data_refusals(void) {
     CHECK_I(ytr_data_col(&g_w, "x"), -1);
     CHECK_I((long)ytr_data_rows(&g_w), 0);
 
-    /* 64 columns open; 65 with a session do not. */
+    /* YTR_DATA_MAX_COLS (256, v0.6; was 64) columns open, with 63-byte
+     * names, so the header line (16 KB) is longer than the row buffer
+     * (8 KB): it goes out in pieces and reads back. One more with a
+     * session does not open; the session's columns plus the caller's up to
+     * the bound do. */
+    CHECK_I(YTR_DATA_MAX_COLS, 256);
     {
-        static char nm[YTR_DATA_MAX_COLS][8];
+        static char nm[YTR_DATA_MAX_COLS][YTB_MAX_NAME + 1];
         static ytr_col many[YTR_DATA_MAX_COLS];
+        char hdr[512];
+        int n_sess = 0, k, hl;
         for (i = 0; i < YTR_DATA_MAX_COLS; i++) {
-            snprintf(nm[i], sizeof(nm[i]), "c%d", i);
+            k = snprintf(nm[i], sizeof(nm[i]), "c%d_", i);
+            memset(nm[i] + k, 'x', (size_t)(YTB_MAX_NAME - k));
+            nm[i][YTB_MAX_NAME] = '\0';
             many[i] = (ytr_col)YTR_COL_SET(nm[i], YTR_COL_INT);
         }
         dd.cols = many;
         dd.n_cols = YTR_DATA_MAX_COLS;
+        sink_reset();
         CHECK(ytr_data_open(&g_w, &dd));
-        ytr_data_close(&g_w);
+        for (i = 0; i < YTR_DATA_MAX_COLS; i++) CHECK_I(ytr_data_set_int(&g_w, i, 1000 + i), 0);
+        CHECK_I(ytr_data_write(&g_w, NULL), 0);
+        CHECK_I(ytr_data_col(&g_w, nm[YTR_DATA_MAX_COLS - 1]), YTR_DATA_MAX_COLS - 1);
+        CHECK_I(ytr_data_finish(&g_w), 0);
+        CHECK(g_sink_len > (size_t)YTR_DATA_BUF);
+        if (read_back(g_sink, g_sink_len, false)) {
+            CHECK_I(g_back.n_cols, YTR_DATA_MAX_COLS);
+            CHECK_I(g_back.n_rows, 1);
+            CHECK(strcmp(ytb_col_name(&g_back, YTR_DATA_MAX_COLS - 1), nm[YTR_DATA_MAX_COLS - 1]) == 0);
+            CHECK_I(ytb_int(&g_back, 0, YTR_DATA_MAX_COLS - 1), 1000 + YTR_DATA_MAX_COLS - 1);
+        } else {
+            CHECK(0);
+        }
         d.factors[0] = ytr_factor("ori", 2);
         CHECK(ytr_open(&g_t, &d));
         dd.trials = &g_t;
         CHECK(!ytr_data_open(&g_w, &dd));
-        CHECK_HAS(ytr_data_error(&g_w), "more than 64 columns");
+        CHECK_HAS(ytr_data_error(&g_w), "more than 256 columns");
+        hl = ytr_format_header(&g_t, hdr, sizeof(hdr));
+        for (k = 0; k < hl; k++) n_sess += hdr[k] == ',' || hdr[k] == '\n';
+        dd.n_cols = YTR_DATA_MAX_COLS - n_sess;
+        CHECK(ytr_data_open(&g_w, &dd));
+        ytr_data_close(&g_w);
+        dd.trials = NULL;
+    }
+    /* A session alone past the bound: a table of 247 columns gives the
+     * 10 fixed columns and 247 more, one too many, with no caller column. */
+    {
+        static char csv[YTR_DATA_MAX_COLS * 8 + 64];
+        static uint64_t arena[(1u << 18) / 8];
+        static ytb_table wide;
+        ytb_csv_desc cd;
+        ytr_desc wd;
+        int k = 0, ncol = YTR_DATA_MAX_COLS - 9;
+        for (i = 0; i < ncol; i++) k += snprintf(csv + k, sizeof(csv) - (size_t)k, "%sw%d", i ? "," : "", i);
+        k += snprintf(csv + k, sizeof(csv) - (size_t)k, "\n");
+        for (i = 0; i < ncol; i++) k += snprintf(csv + k, sizeof(csv) - (size_t)k, "%s%d", i ? "," : "", i);
+        k += snprintf(csv + k, sizeof(csv) - (size_t)k, "\n");
+        memset(&cd, 0, sizeof(cd));
+        cd.text = csv;
+        cd.len = (size_t)k;
+        cd.arena = arena;
+        cd.arena_size = sizeof(arena);
+        CHECK(ytb_open_csv(&wide, &cd));
+        memset(&wd, 0, sizeof(wd));
+        wd.table = &wide;
+        wd.reps = 1;
+        CHECK(ytr_open(&g_t, &wd));
+        memset(&dd, 0, sizeof(dd));
+        dd.write = sink_write;
+        dd.trials = &g_t;
+        sink_reset();
+        CHECK(!ytr_data_open(&g_w, &dd));
+        CHECK_HAS(ytr_data_error(&g_w), "more than 256 columns");
+        ytr_close(&g_t);
     }
 }
 
@@ -770,6 +872,6 @@ static void test_data(void) {
     test_data_file();
     printf("  data writer: every type and missing value, times at 1 to 9 decimals, 400 random "
            "strings (commas, quotes, CR, LF, UTF-8, invalid bytes) read back by ytb_open_csv; a "
-           "session's rows equal format_row; 34 refusals; a failing write; a UTF-8 path and "
+           "session's rows equal format_row; 40 refusals; a failing write; a UTF-8 path and "
            "its sidecar; sizeof(ytr_data) = %lu\n", (unsigned long)sizeof(ytr_data));
 }

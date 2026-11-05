@@ -131,6 +131,7 @@ static int memc_store(void* u, uint64_t key, const void* data, size_t n) {
 }
 static const ygfx_cache memc_cache = { memc_load, memc_store, NULL };
 
+static int bench_max_draws = 1100;   /* the words workload needs more */
 static bool reopen(ygfx_format fmt, ygfx_dither dither, int lut);
 static bool reopen(ygfx_format fmt, ygfx_dither dither, int lut) {
     ygfx_desc gd;
@@ -140,7 +141,7 @@ static bool reopen(ygfx_format fmt, ygfx_dither dither, int lut) {
     gd.background[0] = gd.background[1] = gd.background[2] = 0.5f;
     ygfx__test_scene32 = fmt == YGFX_RGBA32F;   /* a private seam: measured, then removed from the API */
     gd.dither = dither;
-    gd.max_draws = 1100;
+    gd.max_draws = bench_max_draws;
     gd.cache = cache_desc;
     if (!ygfx_open(&gfx, &gd)) { fprintf(stderr, "gfx_bench: %s\n", ygfx_error(&gfx)); return false; }
     if (lut) {
@@ -708,6 +709,127 @@ static void bench_v06_text(void) {
     yol_cset_close(&sl); yol_cset_close(&sc);
     yol_close(&tt_cx);
     free(fl.d); free(fc.d);
+}
+
+/* Many short texts: N one-word runs at 28 px (ysp-vis's text loop,
+ * tests/probe/vis/text_loop.py: 20 a row, 40 px apart), items copied at each
+ * draw as the bindings' texts are, against the same glyphs as one run. */
+static const char* const bw_words[9] = { "reading", "fixation", "saccade", "parafovea", "lexical", "syntax", "meaning",
+                                         "context", "stimulus" };
+static ygfx_citem bw_items[500][12], bw_all[500 * 12];
+static ygfx_stim bw_runs[500], bw_one[3], bw_x[3][500];
+static int bw_len[500];
+
+static void bench_words(void) {
+    static int lat[95];
+    tt_font fl;
+    yol_cset sl;
+    ygfx_cset set;
+    ygfx_cset_desc d;
+    ygfx_buf buf;
+    bench_work w[CMP_MAX];
+    int i, k, nl = 0, n_all = 0;
+    const double px = 28.0;
+    const int cols = 20;
+    if (!run("words")) return;
+    if (!tt_open(&fl, "C:/Windows/Fonts/segoeui.ttf")) { printf("words: needs Segoe UI (C:/Windows/Fonts)\n"); return; }
+    bench_max_draws = 4096;
+    if (!reopen(scene_fmt, YGFX_DITHER_NONE, 0)) return;
+    for (i = 33; i < 127; i++) { int g = tt_gid(&fl, i); if (g) lat[nl++] = g; }
+    if (!yol_open(&tt_cx, NULL) || !tt_build(&fl, &sl, lat, nl, 0, 1, 0)) { printf("words: build failed\n"); return; }
+    memset(&d, 0, sizeof d);
+    d.texels = sl.texels; d.n_texels = sl.n_texels; d.words = sl.words; d.n_words = sl.n_words;
+    set = ygfx_cset_make(&gfx, &d);
+    if (!set.id) { printf("words: %s\n", ygfx_error(&gfx)); return; }
+    for (i = 0; i < 500; i++) {
+        const char* s = bw_words[i % 9];
+        double x = 0, cx = (i % cols) * ((double)W / cols) + (double)W / cols / 2, cy = (i / cols) * 40.0 + 40.0;
+        ygfx_crun_desc rd;
+        for (k = 0; s[k]; k++) {
+            int g = tt_gid(&fl, s[k]);
+            memset(&bw_items[i][k], 0, sizeof bw_items[i][k]);
+            bw_items[i][k].x = (float)x; bw_items[i][k].glyph = (float)g;
+            bw_all[n_all] = bw_items[i][k];   /* the one run: page px from the top-left */
+            bw_all[n_all].x = (float)(cx - 50.0 + x); bw_all[n_all].y = (float)(cy + 10.0);
+            n_all++;
+            x += tt_adv(&fl, g) * px;
+        }
+        bw_len[i] = k;
+        memset(&rd, 0, sizeof rd);
+        rd.set = set; rd.items = bw_items[i]; rd.n = k; rd.size = (float)px;
+        rd.x = (float)(cx - W / 2.0); rd.y = (float)(cy - H / 2.0);
+        rd.color[0] = rd.color[1] = rd.color[2] = 0.1f;
+        bw_runs[i] = ygfx_crun(&gfx, &rd);
+        rd.n = 1;
+        bw_x[0][i] = ygfx_crun(&gfx, &rd);   /* the word's first letter */
+        rd.n = k; rd.x += 100000.0f;
+        bw_x[1][i] = ygfx_crun(&gfx, &rd);   /* off screen: no fragment */
+        rd.x -= 100000.0f; rd.rays = true;
+        bw_x[2][i] = ygfx_crun(&gfx, &rd);
+    }
+    {
+        ygfx_crun_desc rd;
+        memset(&rd, 0, sizeof rd);
+        rd.place = YGFX_TOP_LEFT; rd.anchor = YGFX_TOP_LEFT; rd.set = set; rd.items = bw_all; rd.n = n_all;
+        rd.size = (float)px; rd.w = (float)W; rd.h = (float)H;
+        rd.color[0] = rd.color[1] = rd.color[2] = 0.1f;
+        bw_one[0] = ygfx_crun(&gfx, &rd);
+        buf = ygfx_buffer(&gfx, (size_t)n_all * sizeof(ygfx_citem));
+        ygfx_buffer_update(&gfx, buf, 0, bw_all, (size_t)n_all * sizeof(ygfx_citem));
+        rd.items = NULL; rd.buf = buf;
+        bw_one[1] = ygfx_crun(&gfx, &rd);
+        rd.items = bw_all; rd.buf.id = 0; rd.rays = true;
+        bw_one[2] = ygfx_crun(&gfx, &rd);
+    }
+    memset(w, 0, sizeof w);
+    w[0].name = "empty frame";
+    w[1].name = "100 words, 100 runs, items copied"; w[1].s = bw_runs; w[1].n = 100;
+    w[2].name = "500 words, 500 runs, items copied"; w[2].s = bw_runs; w[2].n = 500;
+    w[3].name = "500 words as one run, items copied"; w[3].s = &bw_one[0]; w[3].n = 1;
+    w[4].name = "500 words as one run in a buffer"; w[4].s = &bw_one[1]; w[4].n = 1;
+    w[5].name = "500 runs of 1 glyph, items copied"; w[5].s = bw_x[0]; w[5].n = 500;
+    w[6].name = "500 runs off screen, items copied"; w[6].s = bw_x[1]; w[6].n = 500;
+    w[7].name = "500 runs, .rays"; w[7].s = bw_x[2]; w[7].n = 500;
+    w[8].name = "500 words as one run, .rays"; w[8].s = &bw_one[2]; w[8].n = 1;
+    printf("\nwords: %d glyphs in 500 words, Segoe UI 28 px\n", n_all);
+    bench_cmp("words", w, 9);
+    {   /* where the time goes, each frame finished before the next:
+         * begin and the draws, end(), then glFinish (the GPU's rest) */
+        yscr_frame f;
+        static double tdraw[200], tend[200], tfin[200];
+        int r;
+        memset(&f, 0, sizeof f);
+        f.period = 16666667;
+        for (r = 0; r < 2; r++) {
+            const ygfx_stim* s0 = r ? &bw_one[0] : bw_runs;
+            int ns = r ? 1 : 500;
+            for (i = 0; i < 200; i++) {
+                uint64_t a, b, c, e;
+                f.index = i;
+                a = yrt_now_ns();
+                ygfx_begin(&gfx, &f);
+                ygfx_draw_n(&gfx, s0, ns);
+                b = yrt_now_ns();
+                ygfx_end(&gfx);
+                c = yrt_now_ns();
+                glFinish_();
+                e = yrt_now_ns();
+                tdraw[i] = (double)(b - a) * 1e-3; tend[i] = (double)(c - b) * 1e-3; tfin[i] = (double)(e - c) * 1e-3;
+            }
+            {
+                double d99 = p99(tdraw + 20, 180), e99 = p99(tend + 20, 180), f99 = p99(tfin + 20, 180);   /* sorted now */
+                printf("%s, paced by glFinish, 180 frames, us p50 / p99: begin + draws %.1f / %.1f; end %.1f / %.1f; "
+                       "glFinish after end %.1f / %.1f\n", r ? "500 words as one run" : "500 runs", tdraw[20 + 90], d99,
+                       tend[20 + 90], e99, tfin[20 + 90], f99);
+            }
+        }
+    }
+    ygfx_buffer_free(&gfx, buf);
+    ygfx_cset_free(&gfx, set);
+    yol_cset_close(&sl);
+    yol_close(&tt_cx);
+    free(fl.d);
+    bench_max_draws = 1100;
 }
 
 static void bench_v06_blur(void) {
@@ -1631,7 +1753,7 @@ int main(int argc, char** argv) {
     if (run("v0.2")) bench_v02(g);
     if (run("v0.3")) bench_v03();
     bench_v04_video(); bench_v04_inst(); bench_v04_mixed();   /* each checks --only */
-    bench_v06_text(); bench_v06_blur(); bench_v07_noise(); bench_v10_simplex();
+    bench_v06_text(); bench_words(); bench_v06_blur(); bench_v07_noise(); bench_v10_simplex();
     bench_v12_capture(g);
     ygfx_close(&gfx);
     yscr_close(&scr);

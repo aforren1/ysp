@@ -25,14 +25,17 @@
 #endif
 #include "ysp/pack_tool.h"
 #include "ysp/pack.h"
+#include "ysp/json.h"
 #include "ysp/table.h"
 #include "ysp/gfx.h"
 #include "ysp/color.h"
 #include "ysp/audio.h"
+#include "ysp/video.h"
 #ifndef YPT_NO_LAYOUT
 #include "ysp/layout.h"
 #endif
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -53,20 +56,7 @@ static int g_fail, g_checks;
 
 #define W "pack_tool_work"
 
-typedef struct bb { uint8_t* d; size_t n, cap; } bb;
-static void b_need(bb* b, size_t k) {
-    if (b->n + k > b->cap) {
-        while (b->n + k > b->cap) b->cap = b->cap ? 2 * b->cap : 256;
-        b->d = (uint8_t*)realloc(b->d, b->cap);
-        if (!b->d) { printf("out of memory\n"); exit(1); }
-    }
-}
-static void b8(bb* b, uint32_t v) { b_need(b, 1); b->d[b->n++] = (uint8_t)v; }
-static void b16(bb* b, uint32_t v) { b8(b, v >> 8 & 255); b8(b, v & 255); }
-static void b32(bb* b, uint32_t v) { b16(b, v >> 16); b16(b, v & 0xffff); }
-static void bput(bb* b, const void* p, size_t n) { b_need(b, n); memcpy(b->d + b->n, p, n); b->n += n; }
-static void le16(bb* b, uint32_t v) { b8(b, v & 255); b8(b, v >> 8 & 255); }
-static void le32(bb* b, uint32_t v) { le16(b, v & 0xffff); le16(b, v >> 16); }
+#include "../adapt/import_gen.h"
 static void bpad4(bb* b) { while (b->n & 3) b8(b, 0); }
 
 static int write_file(const char* path, const void* d, size_t n) {
@@ -109,32 +99,32 @@ static void copy_in(const char* rel) {
 static const uint32_t font_ranges[][2] = { { 0x21, 0x3f }, { 0x41, 0x5f }, { 0x61, 0x7e }, { 0x05b0, 0x05ea } };
 #define N_RANGES 4
 
-static void make_font(bb* out, int fs_type) {
+static void make_font_r(bb* out, int fs_type, const uint32_t (*rg)[2], uint32_t nr) {
     bb t[8];
     static const char* tags[8] = { "OS/2", "cmap", "glyf", "head", "hhea", "hmtx", "loca", "maxp" };
     uint32_t ng = 2, g, i, r, nt = fs_type >= 0 ? 8 : 7, first = fs_type >= 0 ? 0 : 1;
     size_t dir;
     memset(t, 0, sizeof t);
-    for (r = 0; r < N_RANGES; r++) ng += font_ranges[r][1] - font_ranges[r][0] + 1;
+    for (r = 0; r < nr; r++) ng += rg[r][1] - rg[r][0] + 1;
     for (i = 0; i < 78; i++) b8(&t[0], 0);
     if (fs_type >= 0) { t[0].d[8] = (uint8_t)(fs_type >> 8); t[0].d[9] = (uint8_t)fs_type; }
     {
         bb* c = &t[1];
-        uint32_t nseg = N_RANGES + 2, base = 2, sr = 1, es = 0;
+        uint32_t nseg = nr + 2, base = 2, sr = 1, es = 0;
         while (sr * 2 <= nseg) { sr *= 2; es++; }
         b16(c, 0); b16(c, 1); b16(c, 3); b16(c, 1); b32(c, 12);
         b16(c, 4); b16(c, 16 + 8 * nseg); b16(c, 0);
         b16(c, 2 * nseg); b16(c, 2 * sr); b16(c, es); b16(c, 2 * nseg - 2 * sr);
         b16(c, 0x20);
-        for (r = 0; r < N_RANGES; r++) b16(c, font_ranges[r][1]);
+        for (r = 0; r < nr; r++) b16(c, rg[r][1]);
         b16(c, 0xffff); b16(c, 0);
         b16(c, 0x20);
-        for (r = 0; r < N_RANGES; r++) b16(c, font_ranges[r][0]);
+        for (r = 0; r < nr; r++) b16(c, rg[r][0]);
         b16(c, 0xffff);
         b16(c, (1 - 0x20) & 0xffff);
-        for (r = 0; r < N_RANGES; r++) {
-            b16(c, (base - font_ranges[r][0]) & 0xffff);
-            base += font_ranges[r][1] - font_ranges[r][0] + 1;
+        for (r = 0; r < nr; r++) {
+            b16(c, (base - rg[r][0]) & 0xffff);
+            base += rg[r][1] - rg[r][0] + 1;
         }
         b16(c, 1);
         for (i = 0; i < nseg; i++) b16(c, 0);
@@ -182,6 +172,8 @@ static void make_font(bb* out, int fs_type) {
     for (i = 0; i < 8; i++) free(t[i].d);
     bpad4(out);
 }
+
+static void make_font(bb* out, int fs_type) { make_font_r(out, fs_type, font_ranges, N_RANGES); }
 
 /* --- WAV and PNG files ------------------------------------------------------- */
 
@@ -254,14 +246,83 @@ static void make_png(const char* path, uint32_t w, uint32_t h, int ct, int depth
     ih[4] = (uint8_t)(h >> 24); ih[5] = (uint8_t)(h >> 16); ih[6] = (uint8_t)(h >> 8); ih[7] = (uint8_t)h;
     ih[8] = (uint8_t)depth; ih[9] = (uint8_t)ct; ih[10] = 0; ih[11] = 0; ih[12] = 0;
     chunk(&b, "IHDR", ih, 13);
-    if (iccp) {
+    if (iccp == 1) {
         static const uint8_t pr[] = { 'x', 0, 0, 0x78, 0x01, 0x01, 0x00, 0x00, 0xff, 0xff, 0x00, 0x00, 0x00, 0x01 };
         chunk(&b, "iCCP", pr, sizeof pr);
+    } else if (iccp) {
+        /* a real profile, zlib with one stored block */
+        bb pf, c;
+        uint32_t a2 = 1, t2 = 0;
+        memset(&pf, 0, sizeof pf);
+        memset(&c, 0, sizeof c);
+        make_icc(&pf, iccp == 2);
+        for (i = 0; i < pf.n; i++) { a2 = (a2 + pf.d[i]) % 65521; t2 = (t2 + a2) % 65521; }
+        bput(&c, "icc", 4);   /* name and its NUL */
+        b8(&c, 0);            /* compression method */
+        b8(&c, 0x78); b8(&c, 0x01); b8(&c, 1);
+        le16(&c, (uint32_t)pf.n); le16(&c, (uint32_t)(~pf.n & 0xffff));
+        bput(&c, pf.d, pf.n);
+        b32(&c, (t2 << 16) | a2);
+        chunk(&b, "iCCP", c.d, c.n);
+        free(pf.d); free(c.d);
     }
     chunk(&b, "IDAT", z.d, z.n);
     chunk(&b, "IEND", NULL, 0);
     write_file(path, b.d, b.n);
     free(b.d); free(z.d); free(raw);
+}
+
+static void jpeg_file(const char* path, int w, int h, int nc, int sub, int marker, int prec, int flat_chroma, const bb* app) {
+    bb b;
+    make_jpeg(&b, w, h, nc, sub, marker, prec, flat_chroma, app);
+    write_file(path, b.d, b.n);
+    free(b.d);
+}
+
+static void xlsx_file(const char* path, const char* sheet1) {
+    bb b;
+    make_xlsx(&b, sheet1);
+    write_file(path, b.d, b.n);
+    free(b.d);
+}
+
+/* --- frame sequences (ysp/video.h's writer) ---------------------------------- */
+
+static int make_seq(const char* path, int32_t fmt, int32_t comp, int frames) {
+    static uint8_t px[16 * 8 * 4];
+    yvid_seq w;
+    yvid_seq_desc d;
+    int i, k;
+    memset(&d, 0, sizeof d);
+    d.path = path;
+    d.w = 16;
+    d.h = 8;
+    d.format = fmt;
+    d.compression = comp;
+    d.fps_num = 30;
+    d.fps_den = 1;
+    if (fmt == YVID_FMT_I420) {
+        d.matrix = YVID_MATRIX_BT709; d.range = YVID_RANGE_LIMITED; d.transfer = YVID_TRC_BT1886; d.primaries = YVID_PRIM_BT709;
+        d.siting = YVID_SITING_LEFT;
+    }
+    memset(&w, 0, sizeof w);
+    if (!yvid_seq_open(&w, &d)) return -1;
+    for (i = 0; i < frames; i++) {
+        const void* planes[3];
+        int32_t strides[3];
+        for (k = 0; k < (int)sizeof px; k++) px[k] = (uint8_t)(k * 7 + i * 31 + (k % 4 == 3 ? 255 : 0));
+        if (fmt == YVID_FMT_I420) {
+            planes[0] = px; planes[1] = px + 128; planes[2] = px + 160;
+            strides[0] = 16; strides[1] = 8; strides[2] = 8;
+        } else {
+            planes[0] = px; planes[1] = planes[2] = NULL;
+            strides[0] = 64; strides[1] = strides[2] = 0;
+        }
+        if (yvid_seq_write(&w, planes, strides, NULL) < 0) { yvid_seq_close(&w); return -1; }
+    }
+    if (yvid_seq_finish(&w) < 0) return -1;
+    yvid_seq_close(&w);
+    return 0;
 }
 
 static uint8_t g_rgba[33 * 21 * 4], g_gray[17 * 9], g_g16[11 * 7 * 2], g_c16[5 * 4 * 6];
@@ -270,6 +331,7 @@ static void make_sources(void) {
     bb f;
     uint32_t i;
     MKDIR(W); MKDIR(W "/fonts"); MKDIR(W "/audio"); MKDIR(W "/img"); MKDIR(W "/art"); MKDIR(W "/shaders"); MKDIR(W "/data");
+    MKDIR(W "/video"); MKDIR(W "/tables");
     memset(&f, 0, sizeof f);
     make_font(&f, -1);
     write_file(W "/fonts/box.ttf", f.d, f.n);
@@ -317,6 +379,21 @@ static void make_sources(void) {
     copy_in("shaders/plaid.glsl");
     copy_in("main.json");
     copy_in("readme.txt");
+    /* phase 3 sources (docs/pack.md 13) */
+    {
+        bb app;
+        xlsx_file(W "/tables/cond.xlsx", g_sheet1);
+        jpeg_file(W "/img/grayj.jpg", 20, 12, 1, 1, 0xC0, 8, 0, NULL);
+        memset(&app, 0, sizeof app);
+        app_exif(&app, 1);
+        app_icc(&app, 1, 2);   /* an sRGB profile in two chunks */
+        jpeg_file(W "/img/photo.jpg", 40, 24, 3, 2, 0xC0, 8, 0, &app);
+        free(app.d);
+        jpeg_file(W "/img/flat.jpg", 24, 16, 3, 1, 0xC2, 8, 1, NULL);
+        make_png(W "/img/icc.png", 33, 21, 6, 8, g_rgba, 2);
+        CHECK(make_seq(W "/video/bars.yspvseq", YVID_FMT_RGBA8, YVID_SEQ_QOI, 3) == 0, "frame sequence (QOI)");
+        CHECK(make_seq(W "/video/yuv.yspvseq", YVID_FMT_I420, YVID_SEQ_RAW, 2) == 0, "frame sequence (I420)");
+    }
 }
 
 #define DESC_HEAD \
@@ -350,7 +427,16 @@ static void make_sources(void) {
     "    {\"kind\": \"texture\", \"source\": \"img/gray16.png\", \"encoding\": \"linear\"},\n" \
     "    {\"kind\": \"texture\", \"source\": \"img/rgb16.png\", \"format\": \"rgba32f\", \"encoding\": \"linear\"},\n" \
     "    {\"kind\": \"file\", \"source\": \"readme.txt\"},\n" \
-    "    {\"kind\": \"file\", \"source\": \"data/big.bin\"}\n" \
+    "    {\"kind\": \"file\", \"source\": \"data/big.bin\"},\n" \
+    "    {\"kind\": \"table\", \"source\": \"tables/cond.xlsx\", \"types\": {\"contrast\": \"number\"}},\n" \
+    "    {\"kind\": \"table\", \"name\": \"tables/sheet2.pstb\", \"source\": \"tables/cond.xlsx\", \"sheet\": \"Sheet2\"},\n" \
+    "    {\"kind\": \"texture\", \"source\": \"img/grayj.jpg\"},\n" \
+    "    {\"kind\": \"texture\", \"source\": \"img/photo.jpg\", \"primaries\": \"bt709\"},\n" \
+    "    {\"kind\": \"texture\", \"source\": \"img/flat.jpg\", \"primaries\": \"device\", \"compression\": \"qoi\"},\n" \
+    "    {\"kind\": \"texture\", \"source\": \"img/icc.png\", \"primaries\": \"device\"},\n" \
+    "    {\"kind\": \"frameseq\", \"source\": \"video/bars.yspvseq\"},\n" \
+    "    {\"kind\": \"frameseq\", \"source\": \"video/yuv.yspvseq\"},\n" \
+    "    {\"kind\": \"audio\", \"name\": \"audio/at44_48k.wav\", \"source\": \"audio/at44.wav\", \"resample\": \"sinc_best\"}\n" \
     "  ]\n" \
     "}\n"
 
@@ -358,10 +444,10 @@ static void make_sources(void) {
 static const char* g_desc_core = DESC_HEAD DESC_TAIL;
 #ifdef YPT_NO_LAYOUT
 static const char* g_desc = DESC_HEAD DESC_TAIL;
-#define N_ENTRIES 21u
+#define N_ENTRIES 30u
 #else
 static const char* g_desc = DESC_HEAD DESC_RUNS DESC_TAIL;
-#define N_ENTRIES 22u
+#define N_ENTRIES 31u
 #endif
 
 static int build_text(const char* text, const char* out, char* err, size_t cap) {
@@ -459,6 +545,16 @@ static void check_entries(const char* path) {
                   memcmp(got, src, n) == 0, "cursor reads long.wav");
             free(src); free(got);
         }
+        /* resampled from 44.1 kHz: float at the project rate */
+        if ((x = entry(&p, "audio/at44_48k.wav", &e)) != NULL) {
+            yau_wav_desc wd;
+            yau_wav_info wi;
+            memset(&wd, 0, sizeof wd);
+            wd.data = x;
+            wd.size = (size_t)e.size;
+            CHECK(yau_wav_probe(&wd, &wi, err, sizeof err) == 0 && wi.rate == 48000 && wi.format == YAU_WAV_F32 && wi.channels == 2 &&
+                  wi.frames >= 1088 && wi.frames <= 1089, "resampled WAV: %s (%u Hz, %lld frames)", err, wi.rate, (long long)wi.frames);
+        }
         /* the u8 conversion: exact */
         if ((x = entry(&p, "audio/u8.wav", &e)) != NULL) {
             const uint8_t* s = (const uint8_t*)x + 44;
@@ -515,6 +611,79 @@ static void check_entries(const char* path) {
         uint8_t* src = read_all(W "/data/big.bin", &n);
         CHECK(src && n == (size_t)e.size && memcmp(src, x, n) == 0 && e.chunk_first != YPAK_NO_CHUNK, "big file");
         free(src);
+    }
+    /* phase 3: an .xlsx sheet as a table */
+    if ((x = entry(&p, "tables/cond.pstb", &e)) != NULL) {
+        ytb_table t;
+        int ok = ytb_open_view(&t, x, (size_t)e.size);
+        int cw = ytb_col(&t, "word"), cc = ytb_col(&t, "contrast"), cd = ytb_col(&t, "code"), cf = ytb_col(&t, "flag"), cn = ytb_col(&t, "note");
+        CHECK(ok && t.n_rows == 3 && t.n_cols == 5, "xlsx table: %s (%u rows)", ytb_error(&t), ok ? t.n_rows : 0);
+        if (ok && t.n_rows == 3) {
+            CHECK(!strcmp(ytb_text(&t, 0, cw), "cat") && !strcmp(ytb_text(&t, 1, cw), "d<og") && !strcmp(ytb_text(&t, 2, cw), "\xce\xb1\xce\xb2"),
+                  "xlsx shared strings: rich text, phonetic text left out, character references");
+            CHECK(ytb_num(&t, 0, cc) == 0.25 && ytb_num(&t, 1, cc) == 1.0 && ytb_num(&t, 2, cc) == 0.01, "xlsx numbers and a cached formula");
+            CHECK(ytb_col_type(&t, cd) == YTB_STRING && !strcmp(ytb_text(&t, 0, cd), "007") && !strcmp(ytb_text(&t, 1, cd), "xAy"),
+                  "xlsx text cells stay text ('007'), _xHHHH_ escapes");
+            CHECK(!strcmp(ytb_text(&t, 0, cf), "TRUE") && !strcmp(ytb_text(&t, 1, cf), "FALSE"), "xlsx booleans");
+            CHECK(!strcmp(ytb_text(&t, 0, cn), "a, \"b\"") && !strcmp(ytb_text(&t, 1, cn), "") && !strcmp(ytb_text(&t, 2, cn), "xy"),
+                  "xlsx inline rich text with a comma and quotes, a formula string");
+        }
+    }
+    if ((x = entry(&p, "tables/sheet2.pstb", &e)) != NULL) {
+        ytb_table t;
+        CHECK(ytb_open_view(&t, x, (size_t)e.size) && t.n_rows == 1 && ytb_int(&t, 0, ytb_col(&t, "n")) == 3, "xlsx sheet by name");
+    }
+    /* phase 3: JPEG textures */
+    if ((x = entry(&p, "img/grayj.ysptex", &e)) != NULL) {
+        ypak_texture t;
+        int bad = 0, xx, yy;
+        CHECK(ypak_texture_view(x, e.size, &t, err, sizeof err) == 0 && t.format == YPAK_TEX_R8 && t.w == 20 && t.h == 12 && enc_is(t.enc, 1, 2, 3, 1),
+              "gray JPEG texture: %s", err);
+        for (yy = 0; yy < 12 && t.data; yy++)
+            for (xx = 0; xx < 20; xx++) bad += t.data[yy * 20 + xx] != jpeg_val(0, xx / 8, yy / 8, 0);
+        CHECK(bad == 0, "gray JPEG: every texel is its block's value (%d differ)", bad);
+    }
+    if ((x = entry(&p, "img/photo.ysptex", &e)) != NULL) {
+        ypak_texture t;
+        CHECK(ypak_texture_view(x, e.size, &t, err, sizeof err) == 0 && t.format == YPAK_TEX_RGBA8 && t.w == 40 && t.h == 24 &&
+              enc_is(t.enc, 1, 2, 3, 2) && t.data[3] == 255, "4:2:0 JPEG with EXIF and an sRGB profile: %s", err);
+    }
+    if ((x = entry(&p, "img/flat.ysptex", &e)) != NULL) {
+        ypak_texture t;
+        static uint8_t dec[24 * 16 * 4];
+        int bad = 0, k;
+        CHECK(ypak_texture_view(x, e.size, &t, err, sizeof err) == 0 && t.compression == YPAK_TEX_QOI && ypak_qoi_decode(&t, dec, sizeof dec, err, sizeof err) == 0,
+              "progressive JPEG as QOI: %s", err);
+        for (k = 0; k < 24 * 16; k++) {
+            int v = jpeg_val(0, (k % 24) / 8, (k / 24) / 8, 1);
+            bad += dec[4 * k] != v || dec[4 * k + 1] != v || dec[4 * k + 2] != v || dec[4 * k + 3] != 255;
+        }
+        CHECK(bad == 0, "progressive JPEG without chroma: R = G = B = Y (%d texels differ)", bad);
+    }
+    if ((x = entry(&p, "img/icc.ysptex", &e)) != NULL) {
+        ypak_texture t;
+        CHECK(ypak_texture_view(x, e.size, &t, err, sizeof err) == 0 && memcmp(t.data, g_rgba, sizeof g_rgba) == 0, "PNG with an sRGB profile");
+    }
+    /* phase 3: frame sequences, unchanged, streamed */
+    {
+        static const char* const seqs[2] = { "video/bars.yspvseq", "video/yuv.yspvseq" };
+        int k;
+        for (k = 0; k < 2; k++)
+            if ((x = entry(&p, seqs[k], &e)) != NULL) {
+                char src[256];
+                size_t n;
+                uint8_t* s;
+                yvid_desc vd;
+                yvid_info vi;
+                snprintf(src, sizeof src, W "/%s", seqs[k]);
+                s = read_all(src, &n);
+                CHECK(e.kind == YPAK_KIND_FRAMESEQ && (e.flags & YPAK_F_STREAM) && s && n == (size_t)e.size && memcmp(s, x, n) == 0, "%s unchanged", seqs[k]);
+                memset(&vd, 0, sizeof vd);
+                vd.data = x;
+                vd.size = (size_t)e.size;
+                CHECK(yvid_probe(&vd, &vi, err, sizeof err) == 0 && vi.frames == (k ? 2 : 3) && vi.w == 16, "%s probes: %s", seqs[k], err);
+                free(s);
+            }
     }
     ypak_close(&p);
 }
@@ -619,7 +788,113 @@ static void test_refusals(void) {
     expect_refusal("shader mode", "{\"kind\": \"shader\", \"source\": \"shaders/plaid.glsl\", \"mode\": \"blend\"}", "mode must be", 0);
     expect_refusal("csv", "{\"kind\": \"table\", \"source\": \"readme.txt\", \"types\": {\"A\": \"integer\"}}", "", 0);
     expect_refusal("curveset from", "{\"kind\": \"curveset\", \"from\": \"readme.txt\"}, {\"kind\": \"file\", \"source\": \"readme.txt\"}", "not a font entry", 0);
-    expect_refusal("kind", "{\"kind\": \"video\", \"source\": \"readme.txt\"}", "not one this tool builds", 0);
+    expect_refusal("kind", "{\"kind\": \"glyphs\", \"source\": \"readme.txt\"}", "not one this tool builds", 0);
+    expect_refusal("alpha", "{\"kind\": \"alpha\", \"name\": \"a.yspalpha\"}", "alpha is not built yet", 0);
+    expect_refusal("video index", "{\"kind\": \"video_index\", \"name\": \"a.yspvi\"}", "made with its video", 0);
+    /* phase 3 refusals: workbooks */
+    {
+        static const char* const bad_cells[] = {
+            "<row r=\"2\"><c r=\"A2\" t=\"s\"><v>4</v></c><c r=\"B2\" s=\"1\"><v>45000</v></c></row>",
+            "<row r=\"2\"><c r=\"A2\" t=\"s\"><v>4</v></c><c r=\"B2\" s=\"2\"><v>45000</v></c></row>",
+            "<row r=\"2\"><c r=\"A2\" t=\"s\"><v>4</v></c><c r=\"B2\"><f>1+1</f></c></row>",
+            "<row r=\"2\"><c r=\"A2\" t=\"s\"><v>4</v></c><c r=\"B2\" t=\"e\"><v>#DIV/0!</v></c></row>",
+            "<row r=\"2\"><c r=\"A2\" t=\"s\"><v>4</v></c><c r=\"G2\"><v>1</v></c></row>",
+            "<row r=\"2\"><c r=\"A2\" t=\"s\"><v>99</v></c></row>",
+            "<row r=\"3\"><c r=\"A3\" t=\"s\"><v>4</v></c></row><row r=\"2\"><c r=\"A2\" t=\"s\"><v>4</v></c></row>",
+        };
+        static const char* const says[] = { "is a date or a time", "is a date or a time", "no saved value", "holds the error #DIV/0!",
+                                            "cell G2 has a value, but its column has no name", "shared string '99'", "out of order" };
+        int k;
+        char res[256];
+        for (k = 0; k < 7; k++) {
+            char sheet[4096], path[256];
+            snprintf(sheet, sizeof sheet, "%s%s</sheetData></worksheet>", XL_SHEET_HEAD, bad_cells[k]);
+            snprintf(path, sizeof path, W "/tables/bad%d.xlsx", k);
+            xlsx_file(path, sheet);
+            snprintf(res, sizeof res, "{\"kind\": \"table\", \"name\": \"t.pstb\", \"source\": \"tables/bad%d.xlsx\"}", k);
+            expect_refusal(says[k], res, says[k], 0);
+        }
+        {
+            static const uint8_t ole[16] = { 0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1 };
+            write_file(W "/tables/ole.xlsx", ole, sizeof ole);
+        }
+        expect_refusal("encrypted workbook", "{\"kind\": \"table\", \"name\": \"t.pstb\", \"source\": \"tables/ole.xlsx\"}", "password-protected", 0);
+        expect_refusal("not a zip", "{\"kind\": \"table\", \"name\": \"t.pstb\", \"source\": \"readme.xlsx\"}", "cannot open", 0);
+        write_file(W "/tables/text.xlsx", "hello", 5);
+        expect_refusal("not a zip", "{\"kind\": \"table\", \"name\": \"t.pstb\", \"source\": \"tables/text.xlsx\"}", "not a zip", 0);
+        expect_refusal("no such sheet", "{\"kind\": \"table\", \"source\": \"tables/cond.xlsx\", \"sheet\": \"Nope\"}",
+                       "no worksheet named 'Nope'; the workbook has 'Conditions', 'Sheet2'", 0);
+        expect_refusal("delimiter on a workbook", "{\"kind\": \"table\", \"source\": \"tables/cond.xlsx\", \"delimiter\": \";\"}", "not a workbook", 0);
+        expect_refusal("sheet on a CSV", "{\"kind\": \"table\", \"source\": \"conditions.csv\", \"sheet\": \"A\"}", "for .xlsx workbooks", 0);
+        /* a damaged deflate stream or CRC */
+        {
+            size_t n;
+            uint8_t* d = read_all(W "/tables/cond.xlsx", &n);
+            if (d) {
+                size_t at;
+                /* the sheet's data: the last local entry before Sheet2's; flip a byte inside it */
+                for (at = 0; at + 24 < n && memcmp(d + at, "xl/worksheets/sheet1.xml", 24) != 0; at++) {}
+                CHECK(at + 24 < n, "find the sheet in the zip");
+                d[at + 24 + 40] ^= 0x10;
+                write_file(W "/tables/damaged.xlsx", d, n);
+                free(d);
+                expect_refusal("damaged sheet", "{\"kind\": \"table\", \"name\": \"t.pstb\", \"source\": \"tables/damaged.xlsx\"}", "sheet1.xml", 0);
+            }
+        }
+    }
+    /* phase 3 refusals: images */
+    {
+        bb app;
+        memset(&app, 0, sizeof app);
+        app_exif(&app, 6);
+        jpeg_file(W "/img/turned.jpg", 16, 16, 1, 1, 0xC0, 8, 0, &app);
+        app.n = 0;
+        app_icc(&app, 0, 1);
+        jpeg_file(W "/img/panel.jpg", 16, 16, 3, 1, 0xC0, 8, 0, &app);
+        free(app.d);
+        jpeg_file(W "/img/cmyk.jpg", 16, 16, 4, 1, 0xC0, 8, 0, NULL);
+        jpeg_file(W "/img/arith.jpg", 16, 16, 1, 1, 0xC9, 8, 0, NULL);
+        jpeg_file(W "/img/twelve.jpg", 16, 16, 1, 1, 0xC1, 12, 0, NULL);
+        make_png(W "/img/panel.png", 17, 9, 0, 8, g_gray, 3);
+        expect_refusal("exif orientation", "{\"kind\": \"texture\", \"source\": \"img/turned.jpg\"}", "EXIF orientation is 6", 0);
+        expect_refusal("jpeg icc", "{\"kind\": \"texture\", \"source\": \"img/panel.jpg\", \"primaries\": \"device\"}", "primaries are not sRGB's", 0);
+        expect_refusal("png icc", "{\"kind\": \"texture\", \"source\": \"img/panel.png\"}", "primaries are not sRGB's", 0);
+        expect_refusal("cmyk", "{\"kind\": \"texture\", \"source\": \"img/cmyk.jpg\"}", "CMYK", 0);
+        expect_refusal("arithmetic", "{\"kind\": \"texture\", \"source\": \"img/arith.jpg\"}", "arithmetic coding", 0);
+        expect_refusal("12-bit", "{\"kind\": \"texture\", \"source\": \"img/twelve.jpg\"}", "12-bit samples", 0);
+        expect_refusal("jpeg r8 from color", "{\"kind\": \"texture\", \"source\": \"img/photo.jpg\", \"format\": \"r8\"}", "would drop or round", 0);
+        expect_refusal("jpeg rg8", "{\"kind\": \"texture\", \"source\": \"img/grayj.jpg\", \"format\": \"rg8\"}", "does not hold a JPEG's values", 0);
+        expect_refusal("jpeg primaries", "{\"kind\": \"texture\", \"source\": \"img/photo.jpg\"}", "need \"primaries\"", 0);
+    }
+    /* phase 3 refusals: video and frame sequences */
+    {
+        size_t n;
+        uint8_t* d = read_all(W "/video/yuv.yspvseq", &n);
+        if (d) {
+            d[4096 + 64 + 5] ^= 0x01;   /* frame 0's texels */
+            write_file(W "/video/damaged.yspvseq", d, n);
+            d[4096 + 64 + 5] ^= 0x01;
+            write_file(W "/video/short.yspvseq", d, n - 24);
+            free(d);
+        }
+        expect_refusal("damaged frame", "{\"kind\": \"frameseq\", \"source\": \"video/damaged.yspvseq\"}", "frame 0 does not match its hash", 0);
+        expect_refusal("short sequence", "{\"kind\": \"frameseq\", \"source\": \"video/short.yspvseq\"}", "the index does not end the file", 0);
+        expect_refusal("not a sequence", "{\"kind\": \"frameseq\", \"source\": \"readme.txt\"}", "not a ysp/video.h frame sequence", 0);
+        expect_refusal("video name", "{\"kind\": \"video\", \"source\": \"readme.txt\"}", "ends in .mp4 or .mpg", 0);
+        expect_refusal("video bytes", "{\"kind\": \"video\", \"name\": \"v.mp4\", \"source\": \"readme.txt\"}", "neither MP4 nor MPEG-1", 0);
+        expect_refusal("video color", "{\"kind\": \"video\", \"name\": \"v.mp4\", \"source\": \"readme.txt\", \"color\": {\"matrix\": \"bt999\"}}",
+                       "color matrix 'bt999'", 0);
+        expect_refusal("ffmpeg_input alone", "{\"kind\": \"video\", \"name\": \"v.mp4\", \"source\": \"readme.txt\", \"ffmpeg_input\": [\"-f\"]}",
+                       "'ffmpeg_input' needs 'ffmpeg'", 0);
+        {
+            static const char t[] = "{\"format\": \"ysp-pack-source\", \"version\": 1, \"resources\": [{\"kind\": \"video\", \"name\": \"v.mp4\", "
+                                    "\"source\": \"readme.txt\", \"ffmpeg\": [\"-c:v\", \"libx264\"]}]}";
+            ypt_options o;
+            memset(&o, 0, sizeof o);
+            o.ffmpeg = "ypak-test-no-such-ffmpeg";
+            CHECK(ypt_build_text(t, strlen(t), W, W "/refused.ysppak", &o, err, sizeof err) < 0 && strstr(err, "cannot run"), "no ffmpeg: %s", err);
+        }
+    }
     /* open question 7's default: a restricted font is accepted in a private pack */
     {
         static const char t[] = "{\"format\": \"ysp-pack-source\", \"version\": 1, \"private\": true, \"resources\": "
@@ -637,6 +912,10 @@ static void test_refusals(void) {
     expect_refusal("runs without set",
                    "{\"kind\": \"font\", \"source\": \"fonts/box.ttf\"}, {\"kind\": \"glyphruns\", \"name\": \"t.ysprun\", \"fonts\": [\"fonts/box.ttf\"], "
                    "\"blocks\": [{\"key\": \"a\", \"text\": \"hi\", \"size\": \"10\"}]}", "no curveset entry", 0);
+    expect_refusal("block without size",
+                   "{\"kind\": \"font\", \"source\": \"fonts/box.ttf\"}, {\"kind\": \"curveset\", \"from\": \"fonts/box.ttf\"}, {\"kind\": \"glyphruns\", "
+                   "\"name\": \"t.ysprun\", \"fonts\": [\"fonts/box.ttf\"], \"blocks\": [{\"key\": \"a\", \"text\": \"hi\"}]}",
+                   "block 0 needs 'key', 'text' and 'size'", 0);
     expect_refusal("missing glyph",
                    "{\"kind\": \"font\", \"source\": \"fonts/box.ttf\"}, {\"kind\": \"curveset\", \"from\": \"fonts/box.ttf\"}, {\"kind\": \"glyphruns\", "
                    "\"name\": \"t.ysprun\", \"fonts\": [\"fonts/box.ttf\"], \"blocks\": [{\"key\": \"a\", \"text\": \"mail@example\", \"size\": \"10\"}]}",
@@ -707,6 +986,915 @@ static int names_layout(const char* path) {
     }
     ypak_close(&p);
     return r;
+}
+
+/* The opt-in resampling against the signal itself: a 997 Hz sine at
+ * 44.1 kHz (32-bit float, amplitude 0.5) resampled to 48 kHz must be the
+ * same sine at 48 kHz, away from the ends, where the filter has no data on
+ * one side. libsamplerate's best converter states 97 dB of SNR. */
+static void test_resample(void) {
+    static const char t[] = "{\"format\": \"ysp-pack-source\", \"version\": 1, \"audio\": {\"rate\": 48000, \"channels\": 1}, \"resources\": ["
+                            "{\"kind\": \"audio\", \"name\": \"sine48.wav\", \"source\": \"audio/sine441.wav\", \"resample\": \"sinc_best\"}]}";
+    static float in[44100];
+    bb b;
+    char err[512];
+    int i, rc;
+    ypak_pack p;
+    ypak_desc d;
+    ypak_entry e;
+    memset(&b, 0, sizeof b);
+    for (i = 0; i < 44100; i++) in[i] = (float)(0.5 * sin(2.0 * 3.14159265358979323846 * 997.0 * i / 44100.0));
+    bput(&b, "RIFF", 4); le32(&b, 36 + 4 * 44100); bput(&b, "WAVEfmt ", 8); le32(&b, 16); le16(&b, 3); le16(&b, 1); le32(&b, 44100);
+    le32(&b, 44100 * 4); le16(&b, 4); le16(&b, 32); bput(&b, "data", 4); le32(&b, 4 * 44100); bput(&b, in, sizeof in);
+    write_file(W "/audio/sine441.wav", b.d, b.n);
+    free(b.d);
+    rc = build_text(t, W "/sine.ysppak", err, sizeof err);
+    CHECK(rc == 0, "resample: %s", err);
+    memset(&d, 0, sizeof d);
+    d.path = W "/sine.ysppak";
+    if (rc == 0 && ypak_open(&p, &d)) {
+        const uint8_t* x = (const uint8_t*)entry(&p, "sine48.wav", &e);
+        yau_wav_desc wd;
+        yau_wav_info wi;
+        memset(&wd, 0, sizeof wd);
+        wd.data = x;
+        wd.size = (size_t)e.size;
+        if (x && yau_wav_probe(&wd, &wi, err, sizeof err) == 0) {
+            double worst = 0;
+            int64_t k;
+            for (k = 200; k < wi.frames - 200; k++) {
+                float v;
+                double want = 0.5 * sin(2.0 * 3.14159265358979323846 * 997.0 * (double)k / 48000.0);
+                memcpy(&v, x + wi.data_offset + 4 * k, 4);
+                if (fabs(v - want) > worst) worst = fabs(v - want);
+            }
+            CHECK(wi.rate == 48000 && wi.frames >= 47999 && wi.frames <= 48001 && worst < 1e-4,
+                  "resampled sine: %lld frames, largest error %.2e (%.1f dB below the amplitude)", (long long)wi.frames, worst, 20 * log10(0.5 / worst));
+            printf("tool_test: resampled sine, largest error %.2e (%.1f dB below the amplitude)\n", worst, 20 * log10(0.5 / worst));
+        } else {
+            CHECK(0, "resampled sine reads: %s", err);
+        }
+        ypak_close(&p);
+    }
+    expect_refusal("resample name", "{\"kind\": \"audio\", \"source\": \"audio/at44.wav\", \"resample\": \"linear\"}", "resample is \"sinc_best\"", 0);
+}
+
+/* The author's thread settings in an ffmpeg step are refused (decided
+ * 2026-10-14, kept 2026-10-20): the tool sets the count, from "threads" or
+ * the machine, and records it. No ffmpeg needed. */
+static void test_ffmpeg_refusals(void) {
+    expect_refusal("threads without ffmpeg", "{\"kind\": \"video\", \"name\": \"v.mpg\", \"source\": \"readme.txt\", \"threads\": 4}",
+                   "'threads' needs 'ffmpeg'", 0);
+    expect_refusal("threads 0", "{\"kind\": \"video\", \"name\": \"v.mpg\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-q:v\", \"3\"], \"threads\": 0}",
+                   "'threads' is 0; it is 1 to 64", 0);
+    expect_refusal("threads 65", "{\"kind\": \"video\", \"name\": \"v.mpg\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-q:v\", \"3\"], \"threads\": 65}",
+                   "'threads' is 65; it is 1 to 64", 0);
+    expect_refusal("threads text", "{\"kind\": \"video\", \"name\": \"v.mpg\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-q:v\", \"3\"], \"threads\": \"4\"}",
+                   "'threads' must be an integer", 0);
+    expect_refusal("ffmpeg threads", "{\"kind\": \"video\", \"name\": \"v.mpg\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-threads\", \"4\"]}",
+                   "remove the thread setting from 'ffmpeg' (-threads)", 0);
+    expect_refusal("x264 threads", "{\"kind\": \"video\", \"name\": \"v.mp4\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-x264-params\", \"bframes=0:threads=8\"]}",
+                   "(-x264-params bframes=0:threads=8)", 0);
+    expect_refusal("x265 pools", "{\"kind\": \"video\", \"name\": \"v.mp4\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-x265-params\", \"pools=4\"]}",
+                   "(-x265-params pools=4)", 0);
+    /* the CPU-independence flags (decided 2026-10-20): the author's
+     * contrary settings refused, the encoder found by name or by default */
+    expect_refusal("x265 info", "{\"kind\": \"video\", \"name\": \"v.mp4\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-c:v\", \"libx265\", \"-x265-params\", \"bframes=0:info=1\"]}",
+                   "remove info from 'ffmpeg' (-x265-params bframes=0:info=1)", 0);
+    expect_refusal("x265 bare info", "{\"kind\": \"video\", \"name\": \"v.mp4\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-c:v\", \"libx265\", \"-x265-params\", \"info\"]}",
+                   "remove info from 'ffmpeg'", 0);
+    expect_refusal("mpeg dct", "{\"kind\": \"video\", \"name\": \"v.mpg\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-c:v\", \"mpeg1video\", \"-dct\", \"fastint\"]}",
+                   "remove '-dct fastint' from 'ffmpeg'", 0);
+    expect_refusal("mpeg2video", "{\"kind\": \"video\", \"name\": \"v.mpg\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-c:v\", \"mpeg2video\"]}",
+                   "mpeg2video cannot be packed", 0);
+    expect_refusal("mpeg default encoder idct", "{\"kind\": \"video\", \"name\": \"v.mpg\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-idct:v\", \"auto\"]}",
+                   "remove '-idct:v auto' from 'ffmpeg'", 0);
+    expect_refusal("mpeg bitexact off", "{\"kind\": \"video\", \"name\": \"v.mpg\", \"source\": \"readme.txt\", \"ffmpeg\": [\"-c:v\", \"mpeg1video\", \"-flags\", \"+cgop-bitexact\"]}",
+                   "remove '-flags +cgop-bitexact' from 'ffmpeg'", 0);
+}
+
+/* VIDEO and VIDEO_INDEX through the ffmpeg step, when ffmpeg runs here: a
+ * raw gray clip made in code becomes MPEG-1 (pl_mpeg indexes it on every
+ * platform) and, on Windows, H.264 in MP4 (Media Foundation indexes it).
+ * The build is repeated (ffmpeg's bytes must not change), the pack is
+ * rebuilt with this ffmpeg (the step runs again) and with no ffmpeg (the
+ * recorded output is used), both identical. Skipped without ffmpeg; CI
+ * runners may not have it. */
+static void test_video(void) {
+    static const char t[] =
+        "{\"format\": \"ysp-pack-source\", \"version\": 1, \"resources\": [\n"
+        "  {\"kind\": \"video\", \"name\": \"video/clip.mpg\", \"source\": \"video/raw.gray\",\n"
+        "   \"ffmpeg_input\": [\"-f\", \"rawvideo\", \"-pix_fmt\", \"gray\", \"-s\", \"64x48\", \"-framerate\", \"30\"],\n"
+        "   \"ffmpeg\": [\"-c:v\", \"mpeg1video\", \"-q:v\", \"3\", \"-flags\", \"+psnr\", \"-g\", \"10\", \"-bf\", \"0\", \"-pix_fmt\", \"yuv420p\", \"-f\", \"mpeg\"],\n"
+        "   \"threads\": 3}"
+#if defined(_WIN32)
+        ",\n  {\"kind\": \"video\", \"name\": \"video/clip.mp4\", \"source\": \"video/raw.gray\",\n"
+        "   \"ffmpeg_input\": [\"-f\", \"rawvideo\", \"-pix_fmt\", \"gray\", \"-s\", \"64x48\", \"-framerate\", \"30\"],\n"
+        "   \"ffmpeg\": [\"-c:v\", \"libx264\", \"-preset\", \"fast\", \"-crf\", \"20\", \"-pix_fmt\", \"yuv420p\", \"-bf\", \"0\", \"-g\", \"10\",\n"
+        "               \"-keyint_min\", \"10\", \"-sc_threshold\", \"0\", \"-x264-params\",\n"
+        "               \"bframes=0:scenecut=0:open-gop=0:colorprim=bt709:transfer=bt709:colormatrix=bt709:range=tv:chromaloc=0\",\n"
+        "               \"-video_track_timescale\", \"30\", \"-an\"]}"
+#endif
+        "\n]}\n";
+    static uint8_t raw[64 * 48 * 30];
+    char err[1024];
+    int k, rc;
+    FILE* rep;
+#if defined(_WIN32)
+    if (system("ffmpeg -version > NUL 2>&1") != 0) { printf("tool_test: video through ffmpeg skipped (no ffmpeg on the PATH)\n"); return; }
+#else
+    if (system("ffmpeg -version > /dev/null 2>&1") != 0) { printf("tool_test: video through ffmpeg skipped (no ffmpeg on the PATH)\n"); return; }
+#endif
+    for (k = 0; k < (int)sizeof raw; k++) raw[k] = (uint8_t)((k % 64) * 3 + ((k / 64) % 48) * 5 + (k / (64 * 48)) * 7);
+    write_file(W "/video/raw.gray", raw, sizeof raw);
+    rc = build_text(t, W "/video.ysppak", err, sizeof err);
+    CHECK(rc == 0, "video through ffmpeg: %s", err);
+    if (rc) return;
+    {
+        ypak_pack p;
+        ypak_desc d;
+        static const char* const names[2] = { "video/clip.mpg", "video/clip.mp4" };
+        memset(&d, 0, sizeof d);
+        d.path = W "/video.ysppak";
+        d.verify = YPAK_VERIFY_OPEN;
+        if (ypak_open(&p, &d)) {
+            for (k = 0; k < 2; k++) {
+                ypak_entry e, ie;
+                char in[64];
+                yvid_desc vd;
+                yvid_info vi;
+                const void* v;
+                const void* iv;
+#if !defined(_WIN32)
+                if (k == 1) break;
+#endif
+                snprintf(in, sizeof in, "%s.yspvi", names[k]);
+                v = entry(&p, names[k], &e);
+                iv = entry(&p, in, &ie);
+                CHECK(v && iv && e.kind == YPAK_KIND_VIDEO && (e.flags & YPAK_F_STREAM) && ie.kind == YPAK_KIND_VIDEO_INDEX, "%s and its index", names[k]);
+                if (!v || !iv) continue;
+                memset(&vd, 0, sizeof vd);
+                vd.data = v;
+                vd.size = (size_t)e.size;
+                vd.index = iv;
+                vd.index_size = (size_t)ie.size;
+                CHECK(yvid_probe(&vd, &vi, err, sizeof err) == 0 && vi.frames == 30 && vi.w == 64 && vi.h == 48 && vi.fps_num == 30 * vi.fps_den,
+                      "%s: the index describes 30 frames of 64 x 48 at 30 fps: %s", names[k], err);
+            }
+            ypak_close(&p);
+        } else {
+            CHECK(0, "video pack opens: %s", ypak_error(&p));
+        }
+    }
+    CHECK(build_text(t, W "/video_again.ysppak", err, sizeof err) == 0 && same_file(W "/video.ysppak", W "/video_again.ysppak"),
+          "video through ffmpeg twice: same bytes (%s)", err);
+    CHECK(ypt_verify(W "/video.ysppak", NULL, err, sizeof err) == 0, "video pack verifies: %s", err);
+    rc = ypt_rebuild(W "/video.ysppak", W, W "/video_rebuilt.ysppak", NULL, err, sizeof err);
+    CHECK(rc == 0 && same_file(W "/video.ysppak", W "/video_rebuilt.ysppak"), "video rebuild with this ffmpeg: %s", err);
+    {
+        ypt_options o;
+        size_t n;
+        uint8_t* text;
+        memset(&o, 0, sizeof o);
+        o.ffmpeg = "ypak-test-no-such-ffmpeg";
+        rep = fopen(W "/video_rebuild.txt", "w");
+        rc = ypt_rebuild_ex(W "/video.ysppak", W, W "/video_rebuilt2.ysppak", &o, rep, err, sizeof err);
+        if (rep) fclose(rep);
+        text = read_all(W "/video_rebuild.txt", &n);
+        CHECK(rc == 0 && same_file(W "/video.ysppak", W "/video_rebuilt2.ysppak") && text && strstr((const char*)text, "recorded output is used"),
+              "video rebuild without ffmpeg takes the recorded output: %s", err);
+        free(text);
+    }
+    /* the thread count (decided 2026-10-20) in the command and as a
+     * parameter: the author's 3 for MPEG-1, the machine's for H.264. The
+     * rebuild above was identical, so it ran with the recorded 3, not the
+     * machine's count (on a machine with 3 logical processors that check
+     * would not tell). */
+    {
+        ypak_pack p;
+        ypak_desc d;
+        ypak_entry e;
+        memset(&d, 0, sizeof d);
+        d.path = W "/video.ysppak";
+        if (ypak_open(&p, &d)) {
+            const char* m = (const char*)entry(&p, "ysp/manifest.json", &e);
+            char* z = (char*)malloc((size_t)e.size + 1);
+            if (m && z) {
+                memcpy(z, m, (size_t)e.size);
+                z[e.size] = 0;
+                CHECK(strstr(z, "-flags +psnr+bitexact -g 10") != NULL && strstr(z, "-f mpeg -dct int -idct simple -threads 3 {output}") != NULL && strstr(z, "\"threads\": 3\n") != NULL,
+                      "MPEG-1: bitexact merged into the author's -flags, the DCTs and the author's count in the command, the count in the derivation");
+#if defined(_WIN32)
+                {
+                    /* the logical processors, as GetActiveProcessorCount() counts them on a machine of one group */
+                    const char* np = getenv("NUMBER_OF_PROCESSORS");
+                    int mt = np ? atoi(np) : 0;
+                    char want[64], want2[64];
+                    if (mt > 64) mt = 64;
+                    snprintf(want, sizeof want, "-an -threads %d {output}", mt);
+                    snprintf(want2, sizeof want2, "\"threads\": %d\n", mt);
+                    CHECK(mt > 0 && strstr(z, want) != NULL && strstr(z, want2) != NULL, "H.264: the machine's count (%d) in the command and the derivation", mt);
+                }
+#endif
+            }
+            free(z);
+            ypak_close(&p);
+        }
+    }
+#if defined(_WIN32)
+    /* libx265: its pools forced into the author's x265-params. Media
+     * Foundation's HEVC decoder is a Store extension; without it the index
+     * cannot be made, and only the command is checked by the refusal. */
+    {
+        static const char t5[] =
+            "{\"format\": \"ysp-pack-source\", \"version\": 1, \"resources\": [\n"
+            "  {\"kind\": \"video\", \"name\": \"video/clip265.mp4\", \"source\": \"video/raw.gray\",\n"
+            "   \"ffmpeg_input\": [\"-f\", \"rawvideo\", \"-pix_fmt\", \"gray\", \"-s\", \"64x48\", \"-framerate\", \"30\"],\n"
+            "   \"ffmpeg\": [\"-c:v\", \"libx265\", \"-crf\", \"24\", \"-pix_fmt\", \"yuv420p\", \"-x265-params\",\n"
+            "               \"bframes=0:keyint=10:min-keyint=10:scenecut=0:log-level=error:colorprim=bt709:transfer=bt709:colormatrix=bt709:range=limited\",\n"
+            "               \"-video_track_timescale\", \"30\", \"-an\"], \"threads\": 4,\n"
+            "   \"color\": {\"matrix\": \"bt709\", \"range\": \"limited\", \"transfer\": \"bt1886\", \"primaries\": \"bt709\", \"siting\": \"left\"}}]}\n";
+        rc = build_text(t5, W "/video265.ysppak", err, sizeof err);
+        if (rc == 0) {
+            ypak_pack p;
+            ypak_desc d;
+            ypak_entry e;
+            memset(&d, 0, sizeof d);
+            d.path = W "/video265.ysppak";
+            if (ypak_open(&p, &d)) {
+                const char* m = (const char*)entry(&p, "ysp/manifest.json", &e);
+                char* z = (char*)malloc((size_t)e.size + 1);
+                if (m && z) {
+                    memcpy(z, m, (size_t)e.size);
+                    z[e.size] = 0;
+                    CHECK(strstr(z, "range=limited:pools=4:frame-threads=2:info=0 -video_track_timescale") && strstr(z, "-an -threads 4 {output}"),
+                          "libx265: the pool, its frame threads and info=0 in the author's x265-params, in the recorded command");
+                }
+                free(z);
+                ypak_close(&p);
+            }
+            CHECK(build_text(t5, W "/video265_again.ysppak", err, sizeof err) == 0 && same_file(W "/video265.ysppak", W "/video265_again.ysppak"),
+                  "libx265 twice: same bytes");
+        } else if (strstr(err, "Unknown encoder") || strstr(err, "Media Foundation")) {
+            /* an ffmpeg without libx265, or no HEVC decoder in Media Foundation */
+            printf("tool_test: the libx265 pack was not built here (%s)\n", err);
+        } else {
+            CHECK(0, "libx265 through ffmpeg: %s", err);
+        }
+    }
+#endif
+}
+
+/* --- glyph runs from the experiment's texts (gap G9) ----------------------------
+ * The Stroop example's pack source (examples/pack/stroop) with the box font
+ * standing in for Noto Sans: the test needs the texts' glyphs, not the
+ * design. Its description lists no glyph runs; the tool derives them. */
+
+#ifndef YPT_STROOP_DIR
+#define YPT_STROOP_DIR "examples/pack/stroop"
+#endif
+#define WS W "/stroop"
+
+static void put_text(const char* path, const char* text) { write_file(path, text, strlen(text)); }
+
+static int build_ws(const char* desc, const char* out, char* err, size_t cap) {
+    return ypt_build_text(desc, strlen(desc), WS, out, NULL, err, cap);
+}
+
+#ifndef YPT_NO_LAYOUT   /* the core tool refuses the runs before these are needed */
+static char* text_file(const char* path) {
+    size_t n;
+    uint8_t* d = read_all(path, &n);
+    if (d) d[n] = 0;
+    return (char*)d;
+}
+
+/* The bytes of one entry of a pack, malloc'd. */
+static uint8_t* entry_bytes(const char* pack, const char* name, size_t* n) {
+    ypak_pack p;
+    ypak_desc d;
+    ypak_entry e;
+    uint8_t* r = NULL;
+    memset(&d, 0, sizeof d);
+    d.path = pack;
+    if (!ypak_open(&p, &d)) return NULL;
+    if (ypak_find(&p, name, &e) == 0) {
+        const void* x = ypak_data(&p, &e);
+        r = (uint8_t*)malloc((size_t)e.size + 1);
+        if (r && x) { memcpy(r, x, (size_t)e.size); r[e.size] = 0; *n = (size_t)e.size; }
+        else { free(r); r = NULL; }
+    }
+    ypak_close(&p);
+    return r;
+}
+
+#define STROOP_DESC(extra) \
+    "{\"format\": \"ysp-pack-source\", \"version\": 1,\n" \
+    " \"experiment\": {\"entry\": \"experiment/stroop.json\", \"source\": \"stroop.json\", \"media_type\": \"application/vnd.ysp.experiment\"},\n" \
+    " \"resources\": [\n" \
+    "  {\"name\": \"stroop.pstb\", \"kind\": \"table\", \"source\": \"stroop.csv\"},\n" \
+    "  {\"kind\": \"font\", \"source\": \"fonts/NotoSans-Regular.ttf\", \"license\": \"OFL-1.1\"},\n" \
+    "  {\"kind\": \"curveset\", \"from\": \"fonts/NotoSans-Regular.ttf\", \"glyphs\": \"used\"}" extra "]}\n"
+
+/* A one-stimulus definition in WS/defs/NAME.json and a description for it. */
+static int build_def(const char* name, const char* text_stim, const char* extra_resources, const char* out, char* err, size_t cap) {
+    char path[256], def[2048], desc[2048];
+    snprintf(path, sizeof path, WS "/defs/%s.json", name);
+    snprintf(def, sizeof def,
+             "{\"format\": \"ysp-experiment\", \"version\": 1, \"stimuli\": {%s}, \"trials\": {\"t\": {}},\n"
+             " \"timeline\": [{\"name\": \"main\", \"timeline_variables\": \"stroop.pstb\", \"trial\": \"t\"}]}\n", text_stim);
+    put_text(path, def);
+    snprintf(desc, sizeof desc,
+             "{\"format\": \"ysp-pack-source\", \"version\": 1, \"experiment\": {\"entry\": \"exp/%s.json\", \"source\": \"defs/%s.json\"},\n"
+             " \"resources\": [{\"name\": \"stroop.pstb\", \"kind\": \"table\", \"source\": \"stroop.csv\"},\n"
+             "  {\"kind\": \"font\", \"source\": \"fonts/NotoSans-Regular.ttf\"}, {\"kind\": \"curveset\", \"from\": \"fonts/NotoSans-Regular.ttf\"}%s]}\n",
+             name, name, extra_resources);
+    return build_ws(desc, out, err, cap);
+}
+
+/* The box font's glyph of a printable ASCII character (make_font's cmap). */
+static int box_glyph(int c) {
+    int r, base = 2;
+    for (r = 0; r < N_RANGES; r++) {
+        if (c >= (int)font_ranges[r][0] && c <= (int)font_ranges[r][1]) return base + c - (int)font_ranges[r][0];
+        base += (int)(font_ranges[r][1] - font_ranges[r][0] + 1);
+    }
+    return c == ' ' ? 1 : 0;
+}
+#endif
+
+#ifndef YPT_NO_LAYOUT
+/* The key of a derived block for a stimulus of this font, size and width
+ * (the other keys at their defaults), from ysp/pack.h as the player builds
+ * it. Four buffers in turn, so a call can use a few at once. */
+static const char* skey(const char* font, double size, double width, const char* text) {
+    static char buf[4][512];
+    static int at;
+    ypak_text_style st;
+    char* b = buf[at++ & 3];
+    memset(&st, 0, sizeof st);
+    st.font = font;
+    st.size = size;
+    st.width = width;
+    if (ypak_runs_key(&st, text, strlen(text), b, sizeof buf[0]) < 0) b[0] = 0;
+    return b;
+}
+
+/* The player's side of the key: read the definition's text stimuli as a
+ * loader would (ysp/json.h, doubles), and for every block of the entry
+ * find the stimulus whose ypak_runs_key() of the block's text is the
+ * block's key. Returns the blocks matched; *n_blocks gets the count. */
+static int player_matches(const char* pack, const char* runs_name, const char* def_path, uint32_t* n_blocks) {
+    size_t n, dn;
+    uint8_t* x = entry_bytes(pack, runs_name, &n);
+    char* def = text_file(def_path);
+    yjs_arena a;
+    yjs_value* root = NULL;
+    yjs_error je;
+    ypak_runs r;
+    int matched = 0;
+    uint32_t i;
+    *n_blocks = 0;
+    yjs_arena_init_heap(&a, 0);
+    memset(&r, 0, sizeof r);
+    dn = def ? strlen(def) : 0;
+    if (x && def && yjs_parse(&a, def, dn, NULL, &root, &je) == YJS_OK && ypak_runs_view(x, (int64_t)n, &r, NULL, 0) == 0) {
+        const yjs_value* stim = yjs_get(root, "stimuli");
+        *n_blocks = r.n_blocks;
+        for (i = 0; i < r.n_blocks; i++) {
+            const char* key = ypak_runs_str(&r, r.blocks[i].key_off);
+            const char* text = ypak_runs_str(&r, r.blocks[i].text_off);
+            uint32_t k;
+            for (k = 0; stim && k < stim->n; k++) {
+                const yjs_value* o = stim->u.members[k].value;
+                const yjs_value* v;
+                ypak_text_style st;
+                char kb[1024];
+                const char* s;
+                if (!yjs_get(o, "kind") || strcmp(yjs_get(o, "kind")->u.s, "text")) continue;
+                memset(&st, 0, sizeof st);
+                st.font = yjs_get(o, "font")->u.s;
+                yjs_double(yjs_get(o, "size"), &st.size);
+                if ((v = yjs_get(o, "width")) != NULL) yjs_double(v, &st.width);
+                if ((v = yjs_get(o, "line_height")) != NULL) yjs_double(v, &st.line_height);
+                s = (v = yjs_get(o, "align")) != NULL ? v->u.s : "start";
+                st.align = !strcmp(s, "end") ? YPAK_ALIGN_END : !strcmp(s, "center") ? YPAK_ALIGN_CENTER : YPAK_ALIGN_START;
+                s = (v = yjs_get(o, "dir")) != NULL ? v->u.s : "auto";
+                st.dir = !strcmp(s, "ltr") ? YPAK_DIR_LTR : !strcmp(s, "rtl") ? YPAK_DIR_RTL : YPAK_DIR_AUTO;
+                st.lang = (v = yjs_get(o, "lang")) != NULL ? v->u.s : "";
+                if (ypak_runs_key(&st, text, strlen(text), kb, sizeof kb) > 0 && !strcmp(kb, key)) { matched++; break; }
+            }
+        }
+    }
+    yjs_arena_free(&a);
+    free(x);
+    free(def);
+    return matched;
+}
+
+#endif
+
+static void test_stroop_pack(void) {
+    static const char* const texts[9] = { "R red     G green     B blue", "Practice. Name the ink color, not the word.",
+                                          "Test. No feedback from here on.", "Correct", "Too slow", "Wrong", "BLUE", "GREEN", "RED" };
+    static const float sizes[9] = { 22, 30, 30, 32, 32, 32, 72, 72, 72 };
+    char err[1024];
+    int rc, i;
+    bb f;
+    MKDIR(WS); MKDIR(WS "/fonts"); MKDIR(WS "/defs");
+    {
+        static const char* const files[3] = { "stroop.json", "stroop.csv", "pack.json" };
+        for (i = 0; i < 3; i++) {
+            char a[1024], b2[256];
+            size_t n;
+            uint8_t* d;
+            snprintf(a, sizeof a, "%s/%s", YPT_STROOP_DIR, files[i]);
+            snprintf(b2, sizeof b2, WS "/%s", files[i]);
+            d = read_all(a, &n);
+            CHECK(d != NULL, "Stroop example file %s", a);
+            if (d) { write_file(b2, d, n); free(d); }
+        }
+    }
+    memset(&f, 0, sizeof f);
+    make_font(&f, -1);
+    write_file(WS "/fonts/NotoSans-Regular.ttf", f.d, f.n);
+    make_font(&f, 8);
+    write_file(WS "/fonts/other.ttf", f.d, f.n);
+    {
+        static const uint32_t at_only[2][2] = { { 0x40, 0x5a }, { 0x61, 0x7a } };   /* with '@', which the box font lacks */
+        make_font_r(&f, -1, at_only, 2);
+        write_file(WS "/fonts/at.ttf", f.d, f.n);
+    }
+    free(f.d);
+    rc = ypt_build(WS "/pack.json", WS "/stroop.ysppak", NULL, err, sizeof err);
+#ifdef YPT_NO_LAYOUT
+    CHECK(rc < 0 && strstr(err, "'experiment/stroop.ysprun': the experiment's texts need glyph runs, and glyph runs need the layout library"),
+          "the core tool refuses the Stroop pack by name: %s", err);
+    /* a definition without text stimuli still builds in the core tool */
+    put_text(WS "/defs/notext.json", "{\"format\": \"ysp-experiment\", \"version\": 1, \"stimuli\": {\"dot\": {\"kind\": \"shape\"}}}\n");
+    rc = build_ws("{\"format\": \"ysp-pack-source\", \"version\": 1, \"experiment\": {\"entry\": \"exp/notext.json\", \"source\": \"defs/notext.json\"},"
+                  " \"resources\": []}", WS "/notext.ysppak", err, sizeof err);
+    CHECK(rc == 0, "core tool, a definition without texts: %s", err);
+    (void)texts;
+    (void)sizes;
+    return;
+#else
+    CHECK(rc == 0, "the Stroop pack, its runs derived: %s", err);
+    if (rc) return;
+    {
+        ypak_pack p;
+        ypak_desc d;
+        ypak_entry e;
+        const void* x;
+        memset(&d, 0, sizeof d);
+        d.path = WS "/stroop.ysppak";
+        d.verify = YPAK_VERIFY_OPEN;
+        if (!ypak_open(&p, &d)) { CHECK(0, "Stroop pack opens: %s", ypak_error(&p)); return; }
+        if ((x = entry(&p, "experiment/stroop.ysprun", &e)) != NULL) {
+            ypak_runs r;
+            memset(&r, 0, sizeof r);
+            CHECK(e.kind == YPAK_KIND_GLYPHRUNS && ypak_runs_view(x, e.size, &r, err, sizeof err) == 0 && r.n_blocks == 9 && r.n_fonts == 1,
+                  "Stroop runs: %s (%u blocks)", err, r.n_blocks);
+            for (i = 0; i < 9 && r.n_blocks == 9; i++) {
+                const char* key = skey("fonts/NotoSans-Regular.ttf", sizes[i], 1000, texts[i]);
+                int k = ypak_runs_find(&r, key);
+                CHECK(k == i && !strcmp(ypak_runs_str(&r, r.blocks[k].text_off), texts[i]) && r.blocks[k].size == sizes[i] &&
+                      r.blocks[k].width == 1000.0f && r.blocks[k].n_items == (uint32_t)strlen(texts[i]) && r.blocks[k].n_lines >= 1,
+                      "Stroop block %s: index %d", key, k);
+            }
+            CHECK(!strcmp(ypak_runs_str(&r, r.fonts[0].cset_off), "fonts/NotoSans-Regular.yspcset") &&
+                  !strcmp(ypak_runs_str(&r, r.fonts[0].font_off), "fonts/NotoSans-Regular.ttf"), "Stroop runs name the font and its set");
+        }
+        /* "glyphs": "used" holds the glyphs of the derived texts and no other */
+        if ((x = entry(&p, "fonts/NotoSans-Regular.yspcset", &e)) != NULL) {
+            ypak_cset s;
+            if (ypak_cset_view(x, e.size, &s, err, sizeof err) == 0) {
+                /* glyph of a printable ASCII character in the box font */
+                int gz = box_glyph('z'), gR = box_glyph('R'), ga = box_glyph('a');
+                CHECK(!(s.flags & YPAK_CSET_ALL) && s.words[8 + gR] && s.words[8 + ga] && !s.words[8 + gz],
+                      "Stroop set: R and a present, z absent (%u %u %u)", s.words[8 + gR], s.words[8 + ga], s.words[8 + gz]);
+            } else CHECK(0, "Stroop cset view: %s", err);
+        }
+        ypak_close(&p);
+    }
+    {
+        size_t n;
+        uint8_t* m = entry_bytes(WS "/stroop.ysppak", "ysp/manifest.json", &n);
+        CHECK(m && strstr((char*)m, "\"experiment\": \"experiment/stroop.json\"") && strstr((char*)m, "\"stimuli\": [\"word\"]") &&
+              strstr((char*)m, "\"key\": \"fonts/NotoSans-Regular.ttf#0|72|1000|0|start|auto||RED\"") && strstr((char*)m, "\"derived\": ["),
+              "the manifest records the derived blocks and their experiment");
+        CHECK(m && strstr((char*)m, "\"from\": [\"fonts/NotoSans-Regular.ttf\", \"experiment/stroop.json\"]"),
+              "the runs' 'from': the font and the experiment (no table: the Stroop texts come from lookups)");
+        free(m);
+    }
+    {
+        uint32_t nb;
+        int m = player_matches(WS "/stroop.ysppak", "experiment/stroop.ysprun", WS "/stroop.json", &nb);
+        CHECK(nb == 9 && m == 9, "Stroop: the player's key, from the definition's values, matches every block (%d of %u)", m, nb);
+    }
+    /* deterministic: again, verified, rebuilt from the manifest */
+    CHECK(ypt_build(WS "/pack.json", WS "/stroop_again.ysppak", NULL, err, sizeof err) == 0 && same_file(WS "/stroop.ysppak", WS "/stroop_again.ysppak"),
+          "Stroop pack twice: same bytes (%s)", err);
+    CHECK(ypt_verify(WS "/stroop.ysppak", NULL, err, sizeof err) == 0, "Stroop pack verifies: %s", err);
+    rc = ypt_rebuild(WS "/stroop.ysppak", WS, WS "/stroop_rebuilt.ysppak", NULL, err, sizeof err);
+    CHECK(rc == 0 && same_file(WS "/stroop.ysppak", WS "/stroop_rebuilt.ysppak"), "Stroop rebuild: %s", err);
+    /* the resources in another order: the same pack */
+    put_text(WS "/pack_rev.json",
+             "{\"format\": \"ysp-pack-source\", \"version\": 1, \"resources\": [\n"
+             "  {\"kind\": \"curveset\", \"from\": \"fonts/NotoSans-Regular.ttf\", \"glyphs\": \"used\"},\n"
+             "  {\"kind\": \"font\", \"source\": \"fonts/NotoSans-Regular.ttf\", \"license\": \"OFL-1.1\"},\n"
+             "  {\"name\": \"stroop.pstb\", \"kind\": \"table\", \"source\": \"stroop.csv\"}],\n"
+             " \"experiment\": {\"media_type\": \"application/vnd.ysp.experiment\", \"source\": \"stroop.json\", \"entry\": \"experiment/stroop.json\"}}\n");
+    CHECK(ypt_build(WS "/pack_rev.json", WS "/stroop_rev.ysppak", NULL, err, sizeof err) == 0 && same_file(WS "/stroop.ysppak", WS "/stroop_rev.ysppak"),
+          "Stroop pack from a reordered description: same bytes (%s)", err);
+    /* the definition respelled (other whitespace, 72.0 for 72) at another
+     * source path: the manifest names the path, so the packs differ; the
+     * glyph runs do not */
+    {
+        char* def = text_file(WS "/stroop.json");
+        char* at = def ? strstr(def, "\"size\": 72,") : NULL;
+        CHECK(at != NULL, "the Stroop definition has \"size\": 72,");
+        if (at) {
+            char* re = (char*)malloc(strlen(def) + 64);
+            char d2[2048];
+            size_t n1 = 0, n2 = 0;
+            uint8_t* r1;
+            uint8_t* r2;
+            const char* desc = STROOP_DESC("");
+            const char* src = strstr(desc, "\"source\": \"stroop.json\"");
+            sprintf(re, "\n  %.*s\"size\": 72.0,%s", (int)(at - def), def, at + 11);
+            put_text(WS "/stroop_respelled.json", re);
+            snprintf(d2, sizeof d2, "%.*s\"source\": \"stroop_respelled.json\"%s", (int)(src - desc), desc, src + 23);
+            rc = build_ws(d2, WS "/stroop_respelled.ysppak", err, sizeof err);
+            r1 = entry_bytes(WS "/stroop.ysppak", "experiment/stroop.ysprun", &n1);
+            r2 = entry_bytes(WS "/stroop_respelled.ysppak", "experiment/stroop.ysprun", &n2);
+            CHECK(rc == 0 && r1 && r2 && n1 == n2 && !memcmp(r1, r2, n1) && !same_file(WS "/stroop.ysppak", WS "/stroop_respelled.ysppak"),
+                  "a respelled definition gives the same glyph runs: %s", err);
+            free(r1); free(r2); free(re);
+        }
+        free(def);
+    }
+    /* the definition respelled: compact, its keys in another order, 72 as
+     * 7.2e1 and RED as \u0052ED. Its canonical bytes are the same, so the
+     * experiment entry, the experiment ID and the pack ID are too (D2), and
+     * a rebuild from it is identical */
+    {
+        size_t dn = 0, n1 = 0, n2 = 0;
+        char* def = text_file(WS "/stroop.json");
+        yjs_arena a;
+        yjs_value* root = NULL;
+        yjs_error je;
+        char* canon = NULL;
+        char* re = NULL;
+        yjs_arena_init_heap(&a, 0);
+        if (def) dn = strlen(def);
+        if (def && yjs_parse(&a, def, dn, NULL, &root, &je) == YJS_OK) {
+            size_t k = yjs_write_mem(root, YJS_WRITE_PRETTY, NULL, 0), rn = yjs_write_mem(root, YJS_WRITE_COMPACT, NULL, 0);
+            canon = (char*)malloc(k + 2);
+            re = (char*)malloc(rn + 64);
+            yjs_write_mem(root, YJS_WRITE_PRETTY, canon, k + 1);
+            canon[k] = '\n';
+            canon[k + 1] = 0;
+            yjs_write_mem(root, YJS_WRITE_COMPACT, re, rn + 1);
+        }
+        CHECK(canon && re, "the Stroop definition parses");
+        if (canon && re) {
+            uint8_t* x = entry_bytes(WS "/stroop.ysppak", "experiment/stroop.json", &n1);
+            uint8_t* m = entry_bytes(WS "/stroop.ysppak", "ysp/manifest.json", &n2);
+            uint8_t sha[32];
+            char hx[65];
+            const char* at;
+            int k, seen = 0;
+            ypak_sha256(canon, strlen(canon), sha);
+            for (k = 0; k < 32; k++) snprintf(hx + 2 * k, 3, "%02x", sha[k]);
+            CHECK(x && n1 == strlen(canon) && !memcmp(x, canon, n1) && memcmp(x, def, dn < n1 ? dn : n1),
+                  "the experiment entry is the definition's canonical bytes, not its source's");
+            for (at = m ? strstr((char*)m, hx) : NULL; at; at = strstr(at + 1, hx)) seen++;
+            CHECK(m && strstr((char*)m, "\"op\": \"canonical\"") && strstr((char*)m, "\"by\": \"ysp/json.h " YJS_VERSION_STRING "\"") && seen == 2,
+                  "the manifest: op canonical by ysp/json.h, and the entry's and the source's SHA-256 are the canonical bytes' (%d of 2)", seen);
+            /* the player's key from the stored definition */
+            if (x) {
+                uint32_t nb;
+                int mt;
+                write_file(WS "/stroop_entry.json", x, n1);
+                mt = player_matches(WS "/stroop.ysppak", "experiment/stroop.ysprun", WS "/stroop_entry.json", &nb);
+                CHECK(nb == 9 && mt == 9, "the player's key from the pack's definition matches every block (%d of %u)", mt, nb);
+            }
+            free(x);
+            free(m);
+            {
+                char* p72 = strstr(re, "\"size\":72,");
+                char* pred = strstr(re, "\"RED\"");
+                CHECK(p72 && pred && p72 < pred, "the compact definition has size 72 before RED");
+                if (p72 && pred && p72 < pred) {
+                    char* re2 = (char*)malloc(strlen(re) + 64);
+                    sprintf(re2, "\n%.*s\"size\":7.2e1,%.*s\"\\u0052ED\"%s\n", (int)(p72 - re), re, (int)(pred - (p72 + 10)), p72 + 10, pred + 5);
+                    MKDIR(WS "/re"); MKDIR(WS "/re/fonts");
+                    put_text(WS "/re/stroop.json", re2);
+                    free(re2);
+                    {
+                        static const char* const files[3] = { "stroop.csv", "pack.json", "fonts/NotoSans-Regular.ttf" };
+                        int fi;
+                        for (fi = 0; fi < 3; fi++) {
+                            char a1[256], a2[256];
+                            size_t fn;
+                            uint8_t* fd;
+                            snprintf(a1, sizeof a1, WS "/%s", files[fi]);
+                            snprintf(a2, sizeof a2, WS "/re/%s", files[fi]);
+                            fd = read_all(a1, &fn);
+                            if (fd) { write_file(a2, fd, fn); free(fd); }
+                        }
+                    }
+                    rc = ypt_build(WS "/re/pack.json", WS "/stroop_re.ysppak", NULL, err, sizeof err);
+                    CHECK(rc == 0 && same_file(WS "/stroop.ysppak", WS "/stroop_re.ysppak"),
+                          "a respelled definition gives the same pack, byte for byte (the same pack ID): %s", err);
+                    rc = ypt_rebuild(WS "/stroop.ysppak", WS "/re", WS "/stroop_rebuilt_re.ysppak", NULL, err, sizeof err);
+                    CHECK(rc == 0 && same_file(WS "/stroop.ysppak", WS "/stroop_rebuilt_re.ysppak"),
+                          "a rebuild from the respelled source is identical: %s", err);
+                    /* another value is another source */
+                    {
+                        char* other = text_file(WS "/re/stroop.json");
+                        char* p = other ? strstr(other, "7.2e1") : NULL;
+                        if (p) {
+                            p[2] = '3';
+                            put_text(WS "/re/stroop.json", other);
+                            rc = ypt_rebuild(WS "/stroop.ysppak", WS "/re", NULL, NULL, err, sizeof err);
+                            CHECK(rc < 0 && strstr(err, "source 'stroop.json' of 'experiment/stroop.json' is not the one") &&
+                                  strstr(err, "of its canonical bytes"), "a changed definition: the rebuild names it: %s", err);
+                        } else CHECK(0, "the respelled definition has 7.2e1");
+                        free(other);
+                    }
+                }
+            }
+        }
+        free(canon);
+        free(re);
+        free(def);
+        yjs_arena_free(&a);
+    }
+    /* union: a glyphruns resource of the experiment's runs name adds blocks
+     * and fallback fonts; a rebuild takes it back */
+    rc = build_ws(STROOP_DESC(",\n  {\"kind\": \"font\", \"source\": \"fonts/other.ttf\"}, {\"kind\": \"curveset\", \"from\": \"fonts/other.ttf\"},\n"
+                              "  {\"kind\": \"glyphruns\", \"name\": \"experiment/stroop.ysprun\", \"fonts\": [\"fonts/other.ttf\"],\n"
+                              "   \"blocks\": [{\"key\": \"pause\", \"text\": \"Take a break.\", \"size\": \"30\"}]}"),
+                  WS "/union.ysppak", err, sizeof err);
+    CHECK(rc == 0, "union with a listed block: %s", err);
+    if (rc == 0) {
+        size_t n;
+        uint8_t* x = entry_bytes(WS "/union.ysppak", "experiment/stroop.ysprun", &n);
+        ypak_runs r;
+        memset(&r, 0, sizeof r);
+        if (x && ypak_runs_view(x, (int64_t)n, &r, err, sizeof err) == 0) {
+            int kp = ypak_runs_find(&r, "pause"), kw = ypak_runs_find(&r, skey("fonts/NotoSans-Regular.ttf", 72, 1000, "RED"));
+            CHECK(r.n_blocks == 10 && r.n_fonts == 2 && kp >= 0 && kw >= 0, "union: %u blocks, %u fonts", r.n_blocks, r.n_fonts);
+            /* entry fonts: the listed one first, then the stimuli's; each
+             * block's runs name the font that shaped it */
+            CHECK(!strcmp(ypak_runs_str(&r, r.fonts[0].font_off), "fonts/other.ttf") &&
+                  !strcmp(ypak_runs_str(&r, r.fonts[1].font_off), "fonts/NotoSans-Regular.ttf"), "union: font order");
+            if (kp >= 0 && kw >= 0)
+                CHECK(r.runs[r.blocks[kp].run_first].font == 0 && r.runs[r.blocks[kw].run_first].font == 1,
+                      "union: the listed block in its font, the derived one in its stimulus's (%u, %u)", r.runs[r.blocks[kp].run_first].font,
+                      r.runs[r.blocks[kw].run_first].font);
+        } else CHECK(0, "union runs view: %s", err);
+        free(x);
+        rc = ypt_rebuild(WS "/union.ysppak", WS, WS "/union_rebuilt.ysppak", NULL, err, sizeof err);
+        CHECK(rc == 0 && same_file(WS "/union.ysppak", WS "/union_rebuilt.ysppak"), "union rebuild: %s", err);
+        {
+            uint32_t nb;
+            int m = player_matches(WS "/union.ysppak", "experiment/stroop.ysprun", WS "/stroop.json", &nb);
+            CHECK(nb == 10 && m == 9, "union: the player's key matches the 9 derived blocks (%d of %u)", m, nb);
+        }
+        /* the layout stamp names every font of the entry, in its order */
+        x = entry_bytes(WS "/union.ysppak", "ysp/manifest.json", &n);
+        {
+            char want[160], hx[65];
+            uint8_t sha[32];
+            size_t fn;
+            uint8_t* fb = read_all(WS "/fonts/NotoSans-Regular.ttf", &fn);
+            const char* a = x ? strstr((char*)x, " fonts=fonts/other.ttf#0=") : NULL;
+            const char* q = a ? strchr(a, '"') : NULL;
+            const char* b2;
+            int k;
+            if (fb) ypak_sha256(fb, fn, sha);
+            for (k = 0; k < 32; k++) snprintf(hx + 2 * k, 3, "%02x", sha[k]);
+            snprintf(want, sizeof want, ",fonts/NotoSans-Regular.ttf#0=%s", hx);
+            b2 = a ? strstr(a, want) : NULL;
+            CHECK(fb && a && q && b2 && b2 < q, "union: the stamp lists both fonts in the entry's order, each with its own SHA-256");
+            free(fb);
+        }
+        free(x);
+        /* the glyphs a derived text uses are marked in its own font's set */
+        x = entry_bytes(WS "/union.ysppak", "fonts/NotoSans-Regular.yspcset", &n);
+        {
+            ypak_cset s;
+            CHECK(x && ypak_cset_view(x, (int64_t)n, &s, err, sizeof err) == 0 && s.words[8 + box_glyph('R')] && s.words[8 + box_glyph('G')],
+                  "union: the Stroop words' glyphs are in the stimulus font's set");
+        }
+        free(x);
+    }
+    /* two stimuli in two fonts: each shaped in its own (one library each) */
+    rc = build_def("twofonts",
+                   "\"a\": {\"kind\": \"text\", \"font\": \"fonts/other.ttf\", \"size\": 20, \"text\": \"$word\"},"
+                   " \"b\": {\"kind\": \"text\", \"font\": \"fonts/NotoSans-Regular.ttf\", \"size\": 20, \"text\": \"$word\"}",
+                   ", {\"kind\": \"font\", \"source\": \"fonts/other.ttf\"}, {\"kind\": \"curveset\", \"from\": \"fonts/other.ttf\"}",
+                   WS "/twofonts.ysppak", err, sizeof err);
+    CHECK(rc == 0, "two fonts: %s", err);
+    if (rc == 0) {
+        size_t n;
+        uint8_t* x = entry_bytes(WS "/twofonts.ysppak", "exp/twofonts.ysprun", &n);
+        ypak_runs r;
+        memset(&r, 0, sizeof r);
+        if (x && ypak_runs_view(x, (int64_t)n, &r, err, sizeof err) == 0) {
+            static const char* const w[3] = { "blue", "green", "red" };
+            int k, ok = r.n_blocks == 6 && r.n_fonts == 2 && !strcmp(ypak_runs_str(&r, r.fonts[0].font_off), "fonts/NotoSans-Regular.ttf");
+            for (k = 0; ok && k < 3; k++) {
+                int ia = ypak_runs_find(&r, skey("fonts/other.ttf", 20, 0, w[k]));
+                int ib = ypak_runs_find(&r, skey("fonts/NotoSans-Regular.ttf", 20, 0, w[k]));
+                ok = ia >= 0 && ib >= 0 && r.runs[r.blocks[ia].run_first].font == 1 && r.runs[r.blocks[ib].run_first].font == 0;
+            }
+            CHECK(ok, "two fonts: the levels of $word per stimulus, each in its stimulus's font (%u blocks)", r.n_blocks);
+        } else CHECK(0, "two fonts runs view: %s", err);
+        free(x);
+        rc = ypt_rebuild(WS "/twofonts.ysppak", WS, WS "/twofonts_rebuilt.ysppak", NULL, err, sizeof err);
+        CHECK(rc == 0 && same_file(WS "/twofonts.ysppak", WS "/twofonts_rebuilt.ysppak"), "two fonts rebuild: %s", err);
+        {
+            uint32_t nb;
+            int m = player_matches(WS "/twofonts.ysppak", "exp/twofonts.ysprun", WS "/defs/twofonts.json", &nb);
+            CHECK(nb == 6 && m == 6, "two fonts: the player's key matches all %u blocks (%d)", nb, m);
+        }
+    }
+    /* two stimuli of one style that show one text share its block */
+    rc = build_def("shared",
+                   "\"a\": {\"kind\": \"text\", \"font\": \"fonts/NotoSans-Regular.ttf\", \"size\": 20, \"text\": \"$word\"},"
+                   " \"b\": {\"kind\": \"text\", \"font\": \"fonts/NotoSans-Regular.ttf\", \"size\": 20.0, \"x\": 9, \"text\": \"$word\"},"
+                   " \"c\": {\"kind\": \"text\", \"font\": \"fonts/NotoSans-Regular.ttf\", \"size\": 24, \"text\": \"red\"}", "",
+                   WS "/shared.ysppak", err, sizeof err);
+    CHECK(rc == 0, "shared style: %s", err);
+    if (rc == 0) {
+        uint32_t nb;
+        size_t n;
+        int m = player_matches(WS "/shared.ysppak", "exp/shared.ysprun", WS "/defs/shared.json", &nb);
+        uint8_t* x = entry_bytes(WS "/shared.ysppak", "ysp/manifest.json", &n);
+        CHECK(nb == 4 && m == 4, "shared style: 3 blocks for a and b, 1 for c, every key the player's (%u blocks, %d matched)", nb, m);
+        CHECK(x && strstr((char*)x, "\"stimuli\": [\"a\", \"b\"]") && strstr((char*)x, "\"stimuli\": [\"c\"]"),
+              "shared style: the record names both stimuli of a shared block");
+        free(x);
+        rc = ypt_rebuild(WS "/shared.ysppak", WS, WS "/shared_rebuilt.ysppak", NULL, err, sizeof err);
+        CHECK(rc == 0 && same_file(WS "/shared.ysppak", WS "/shared_rebuilt.ysppak"), "shared style rebuild: %s", err);
+    }
+    /* a fallback from the description's 'fonts': '@' from at.ttf after the
+     * stimulus's font, in one block of two runs */
+    rc = build_def("fallback", "\"s\": {\"kind\": \"text\", \"font\": \"fonts/NotoSans-Regular.ttf\", \"size\": 20, \"text\": \"mail@example\"}",
+                   ", {\"kind\": \"font\", \"source\": \"fonts/at.ttf\"}, {\"kind\": \"curveset\", \"from\": \"fonts/at.ttf\"},"
+                   " {\"kind\": \"glyphruns\", \"name\": \"exp/fallback.ysprun\", \"fonts\": [\"fonts/at.ttf\"]}",
+                   WS "/fallback.ysppak", err, sizeof err);
+    CHECK(rc == 0, "a fallback font for a derived text: %s", err);
+    if (rc == 0) {
+        size_t n;
+        uint8_t* x = entry_bytes(WS "/fallback.ysppak", "exp/fallback.ysprun", &n);
+        ypak_runs r;
+        memset(&r, 0, sizeof r);
+        if (x && ypak_runs_view(x, (int64_t)n, &r, err, sizeof err) == 0 && r.n_blocks == 1) {
+            /* the font of each character, by its cluster; Skribidi may keep
+             * the fallback after '@', so only 'm' and '@' are pinned */
+            int font_of[12], k2;
+            uint32_t k, i2;
+            const ypak_runs_block_rec* bk = &r.blocks[0];
+            for (k2 = 0; k2 < 12; k2++) font_of[k2] = -1;
+            for (k = 0; k < bk->n_runs; k++) {
+                const ypak_runs_run* ru = &r.runs[bk->run_first + k];
+                for (i2 = 0; i2 < ru->n; i2++) {
+                    uint32_t cl = r.clusters[bk->item_first + ru->first + i2];
+                    if (cl < 12) font_of[cl] = (int)ru->font;
+                }
+            }
+            CHECK(r.n_fonts == 2 && !strcmp(ypak_runs_str(&r, r.fonts[0].font_off), "fonts/at.ttf") && font_of[0] == 1 && font_of[4] == 0,
+                  "fallback: 'm' in the stimulus's font (%d), '@' in the listed fallback (%d)", font_of[0], font_of[4]);
+        } else CHECK(0, "fallback runs view: %s", err);
+        free(x);
+    }
+    /* refusals, each by its message; none may leave a pack (a file from
+     * an earlier run is removed first, so the last check sees this run) */
+    remove(WS "/x.ysppak");
+    {
+        char desc[4096], says[256];
+        const char* k = skey("fonts/NotoSans-Regular.ttf", 72, 1000, "RED");
+        snprintf(desc, sizeof desc, STROOP_DESC(",\n  {\"kind\": \"glyphruns\", \"name\": \"experiment/stroop.ysprun\", \"fonts\": [\"fonts/NotoSans-Regular.ttf\"],\n"
+                                                "   \"blocks\": [{\"key\": \"%s\", \"text\": \"Red\", \"size\": \"30\"}]}"), k);
+        snprintf(says, sizeof says, "key '%s' is a text of stimulus 'word', derived from the experiment", k);
+        CHECK(build_ws(desc, WS "/x.ysppak", err, sizeof err) < 0 && strstr(err, says), "a listed block with a derived key: %s", err);
+    }
+    CHECK(build_ws(STROOP_DESC(",\n  {\"kind\": \"glyphruns\", \"name\": \"experiment/stroop.ysprun\", \"blocks\": [{\"key\": \"p\", \"text\": \"P\", \"size\": \"30\"}]}"),
+                   WS "/x.ysppak", err, sizeof err) < 0 && strstr(err, "'fonts' lists 1 to 64 font entries"),
+          "listed blocks without listed fonts: %s", err);
+    CHECK(build_ws(STROOP_DESC(",\n  {\"kind\": \"file\", \"name\": \"experiment/stroop.ysprun\", \"source\": \"stroop.csv\"}"), WS "/x.ysppak", err,
+                   sizeof err) < 0 && strstr(err, "'experiment/stroop.ysprun': the experiment's glyph runs take this name; give the file another"),
+          "a resource on the runs' name: %s", err);
+    CHECK(build_ws(STROOP_DESC(",\n  {\"kind\": \"file\", \"name\": \"experiment/Stroop.ysprun\", \"source\": \"stroop.csv\"}"), WS "/x.ysppak", err,
+                   sizeof err) < 0 && strstr(err, "the experiment's glyph runs: the same name without regard to case"),
+          "a resource on the runs' name in another case: %s", err);
+    {
+        char desc[2048];
+        snprintf(desc, sizeof desc, "%s", STROOP_DESC(""));
+        *strstr(desc, ",\n  {\"kind\": \"curveset\"") = 0;
+        strcat(desc, "]}\n");
+        CHECK(build_ws(desc, WS "/x.ysppak", err, sizeof err) < 0 && strstr(err, "no curveset entry is made from 'fonts/NotoSans-Regular.ttf' face 0"),
+              "no curve set for the stimuli's font: %s", err);
+        *strstr(desc, ",\n  {\"kind\": \"font\"") = 0;
+        strcat(desc, "]}\n");
+        CHECK(build_ws(desc, WS "/x.ysppak", err, sizeof err) < 0 &&
+              strstr(err, "experiment 'experiment/stroop.json': stimulus 'keys': font 'fonts/NotoSans-Regular.ttf' is not a font entry"),
+              "no font entry for the stimuli's font: %s", err);
+    }
+    CHECK(build_def("builtin", "\"s\": {\"kind\": \"text\", \"font\": \"fonts/NotoSans-Regular.ttf\", \"size\": 20, \"text\": \"$trial_index\"}", "",
+                    WS "/x.ysppak", err, sizeof err) < 0 &&
+          strstr(err, "experiment 'exp/builtin.json': stimulus 's': '$trial_index' is a built-in variable"), "a built-in as text: %s", err);
+    CHECK(build_def("number_column", "\"s\": {\"kind\": \"text\", \"font\": \"fonts/NotoSans-Regular.ttf\", \"size\": 20, \"text\": \"$weight\"}", "",
+                    WS "/x.ysppak", err, sizeof err) < 0 && strstr(err, "'$weight' is a column of 'stroop.pstb' of type integer"),
+          "a number column as text: %s", err);
+    CHECK(build_def("missing", "\"s\": {\"kind\": \"text\", \"font\": \"fonts/NotoSans-Regular.ttf\", \"size\": 20, \"text\": \"mail@example\"}", "",
+                    WS "/x.ysppak", err, sizeof err) < 0 && strstr(err, "'exp/missing.ysprun' block 'fonts/NotoSans-Regular.ttf#0|20|0|0|start|auto||mail@example': 1 characters no font maps") &&
+          strstr(err, "a fallback in 'fonts'"), "a derived text the font lacks: %s", err);
+    CHECK(fopen(WS "/x.ysppak", "rb") == NULL, "a refused build left a file");
+#endif
+}
+
+/* --- the lookups' keys at build (ypt_check_lookups) ---------------------------
+ * The Stroop definition with a level missing from a map, and with a key no
+ * level reaches. Both tools check, before any layout. */
+
+/* WS/defs/NAME.json: the Stroop definition with one text replaced; a
+ * description for it at WS/NAME.desc.json. */
+static int stroop_variant(const char* name, const char* find, const char* repl, const ypt_options* o, char* err, size_t cap) {
+    size_t n;
+    uint8_t* d = read_all(WS "/stroop.json", &n);
+    char* at;
+    char path[256], desc[2048];
+    char* out;
+    int rc;
+    if (!d) { CHECK(0, "%s: no Stroop definition", name); return -1; }
+    d[n] = 0;
+    at = strstr((char*)d, find);
+    if (!at) { CHECK(0, "%s: the Stroop definition has '%s'", name, find); free(d); return -1; }
+    out = (char*)malloc(n + strlen(repl) + 1);
+    sprintf(out, "%.*s%s%s", (int)(at - (char*)d), (char*)d, repl, at + strlen(find));
+    snprintf(path, sizeof path, WS "/defs/%s.json", name);
+    put_text(path, out);
+    free(out);
+    free(d);
+    snprintf(desc, sizeof desc,
+             "{\"format\": \"ysp-pack-source\", \"version\": 1,\n"
+             " \"experiment\": {\"entry\": \"experiment/stroop.json\", \"source\": \"defs/%s.json\"},\n"
+             " \"resources\": [{\"name\": \"stroop.pstb\", \"kind\": \"table\", \"source\": \"stroop.csv\"},\n"
+             "  {\"kind\": \"font\", \"source\": \"fonts/NotoSans-Regular.ttf\"}, {\"kind\": \"curveset\", \"from\": \"fonts/NotoSans-Regular.ttf\"}]}\n",
+             name);
+    rc = ypt_build_text(desc, strlen(desc), WS, WS "/variant.ysppak", o, err, cap);
+    return rc;
+}
+
+static void test_lookup_pack(void) {
+    char err[1024];
+    ypt_options o;
+    FILE* wf;
+    size_t n;
+    uint8_t* w;
+    int rc;
+    remove(WS "/variant.ysppak");
+    rc = stroop_variant("nomap", ", \"blue\": \"BLUE\"", "", NULL, err, sizeof err);
+    CHECK(rc < 0 && strstr(err, "experiment 'experiment/stroop.json': stimulus 'word': 'text': the lookup's map has no key for \"blue\", "
+                                "which '$word' can take in node 'main'"), "a map without a level: %s", err);
+    CHECK(fopen(WS "/variant.ysppak", "rb") == NULL, "a map without a level left a pack");
+    rc = stroop_variant("nooutcome", "\"timeout\": \"Too slow\"", "\"slow\": \"Too slow\"", NULL, err, sizeof err);
+    CHECK(rc < 0 && strstr(err, "stimulus 'feedback': 'text': the lookup's map has no key for \"timeout\""), "outcome without timeout: %s", err);
+    /* a key no level reaches: a warning, and the pack builds */
+    memset(&o, 0, sizeof o);
+    wf = fopen(WS "/warn.txt", "wb");
+    o.warn = wf;
+    rc = stroop_variant("purple", "\"blue\": \"BLUE\"", "\"blue\": \"BLUE\", \"purple\": \"PURPLE\"", &o, err, sizeof err);
+    if (wf) fclose(wf);
+    w = read_all(WS "/warn.txt", &n);
+    if (w) w[n] = 0;
+    CHECK(w && !strcmp((char*)w, "warning: experiment 'experiment/stroop.json': stimulus 'word': 'text': no level of '$word' reaches the "
+                                 "map's key \"purple\"; a typo, or a level the trials no longer have?\n"), "the warning: '%s'", w ? (char*)w : "");
+    free(w);
+#ifdef YPT_NO_LAYOUT
+    CHECK(rc < 0 && strstr(err, "glyph runs need the layout library"), "the core tool: the lookups first, then the runs: %s", err);
+#else
+    CHECK(rc == 0, "a key no level reaches builds: %s", err);
+    /* a rebuild checks again, and says so */
+    wf = fopen(WS "/warn2.txt", "wb");
+    o.warn = wf;
+    rc = ypt_rebuild_ex(WS "/variant.ysppak", WS, NULL, &o, NULL, err, sizeof err);
+    if (wf) fclose(wf);
+    w = read_all(WS "/warn2.txt", &n);
+    if (w) w[n] = 0;
+    CHECK(rc == 0 && w && strstr((char*)w, "warning: experiment 'experiment/stroop.json': stimulus 'word': 'text': no level of '$word' reaches"),
+          "the rebuild's warning: %s '%s'", err, w ? (char*)w : "");
+    free(w);
+    /* quiet without a warn file */
+    rc = stroop_variant("purple", "\"blue\": \"BLUE\"", "\"blue\": \"BLUE\", \"purple\": \"PURPLE\"", NULL, err, sizeof err);
+    CHECK(rc == 0, "a key no level reaches, no warn file: %s", err);
+#endif
 }
 
 /* The pack both builds make: the core and the full tool must give the same
@@ -797,7 +1985,7 @@ int main(void) {
             CHECK(rep && ypt_list(W "/corpus.ysppak", rep, err, sizeof err) == 0 && ypt_info(W "/corpus.ysppak", rep, err, sizeof err) == 0, "list, info");
             if (rep) fclose(rep);
             x = read_all(W "/list.txt", &n);
-            CHECK(x && strstr((const char*)x, N_ENTRIES == 22u ? "glyphruns" : "curveset") && strstr((const char*)x, "experiment: experiment/main.json") &&
+            CHECK(x && strstr((const char*)x, N_ENTRIES == 31u ? "glyphruns" : "curveset") && strstr((const char*)x, "experiment: experiment/main.json") &&
                   strstr((const char*)x, "audio: 48000 Hz"), "list and info text");
             free(x);
         }
@@ -873,7 +2061,7 @@ int main(void) {
                                     name, got, hx, pin_path);
                     }
                     if (pin) fclose(pin);
-                    CHECK(lines == (int)p.n - 1 - (N_ENTRIES == 22u ? 0 : 1) && same == lines, "corpus pin: %d of %d entries as pinned (%u in the pack besides the manifest)",
+                    CHECK(lines == (int)p.n - 1 - (N_ENTRIES == 31u ? 0 : 1) && same == lines, "corpus pin: %d of %d entries as pinned (%u in the pack besides the manifest)",
                           same, lines, p.n - 1);
                 }
                 ypak_close(&p);
@@ -882,6 +2070,11 @@ int main(void) {
         }
     }
     test_core_pack();
+    test_stroop_pack();
+    test_lookup_pack();
+    test_resample();
+    test_ffmpeg_refusals();
+    test_video();
     test_refusals();
     printf("tool_test: %d checks, %d failed\n", g_checks, g_fail);
     return g_fail ? 1 : 0;

@@ -21,10 +21,12 @@
 #include "ysp/gfx.h"
 #include "ysp/color.h"
 #include "ysp/audio.h"
+#include "ysp/video.h"
 #ifndef YPT_NO_LAYOUT
 #include "ysp/layout.h"
 #endif
 #include "lodepng.h"
+#include "samplerate.h"
 
 #include <stdarg.h>
 #include <stdlib.h>
@@ -40,10 +42,25 @@
 #else
 #include <sys/stat.h>
 #include <unistd.h>
+#if !defined(__EMSCRIPTEN__)
+#include <fcntl.h>
+#include <spawn.h>
+#include <sys/wait.h>
+extern char** environ;
+#endif
 #endif
 
 #ifndef YPT_LODEPNG
 #define YPT_LODEPNG "unknown"
+#endif
+#ifndef YPT_STB_IMAGE
+#define YPT_STB_IMAGE "unknown"
+#endif
+#ifndef YPT_LIBSAMPLERATE
+#define YPT_LIBSAMPLERATE "unknown"
+#endif
+#ifndef YPT_PL_MPEG
+#define YPT_PL_MPEG "unknown"
 #endif
 
 /* --- context: errors and every allocation, freed at the end ----------------- */
@@ -54,6 +71,7 @@ typedef struct C {
     void** blk;
     size_t nb, cb;
     FILE*  log;
+    FILE*  warn;       /* warnings, one line each; NULL: quiet             */
     const char* base;
     yjs_arena ja;      /* the JSON values (jar())                          */
     int    jfail;      /* a JSON builder failed: no manifest from this call */
@@ -393,6 +411,8 @@ typedef struct E {
     /* fonts: the face count; glyphs that glyph runs use, per face (a bitmap) */
     int      faces;
     uint8_t* used[16]; uint32_t n_glyphs[16];
+    /* a video's index entry, made with it; on the index, its video */
+    struct E* idx;
 } E;
 
 typedef struct B {     /* a build */
@@ -405,6 +425,14 @@ typedef struct B {     /* a build */
     char     src_dir[1024];
     yol_ctx  ol;
     int      ol_ok;
+    const char* tmp;        /* a path prefix for the build's own files      */
+    const char* ffmpeg;     /* the ffmpeg program                           */
+    ypak_pack*  prior;      /* rebuild: the pack, for outputs of steps that  */
+    jv*         prior_man;  /* cannot run again here, and its manifest       */
+    FILE*       report;
+    E*          exp;        /* the experiment entry, or NULL                 */
+    ypt_texts   tx;         /* the texts its text stimuli can show           */
+    E*          runs;       /* the glyph runs that hold them, or NULL        */
 } B;
 
 static E* add_entry(B* b) {
@@ -461,6 +489,7 @@ static const char* ext_of(uint32_t kind) {
     case YPAK_KIND_ARTWORK: return ".yspart";
     case YPAK_KIND_SHADER: return ".yspshd";
     case YPAK_KIND_TEXTURE: return ".ysptex";
+    case YPAK_KIND_FRAMESEQ: return ".yspvseq";
     default: return NULL;
     }
 }
@@ -504,59 +533,193 @@ static int build_copy(B* b, E* e, const char* by) {
     return 0;
 }
 
+/* An experiment definition (docs/experiment_format.md D2) as its
+ * canonical bytes: ysp/json.h's canonical form and one LF, as the manifest,
+ * the rig profile and session.json end. Its SHA-256 is the experiment ID,
+ * so it must depend on the values alone, not on whitespace, key order,
+ * number spelling or escapes. The form drops nothing a reader sees: JSON
+ * has no comments (a note is a value, D1), object order has no meaning
+ * (D3) and a number keeps its exact value. 1 with the bytes in *out (the
+ * call's memory), 0 when the bytes are not a definition (opaque, copied;
+ * ypt_derive_texts() refuses a definition that does not parse), < 0 on an
+ * error. */
+static int exp_canonical(C* c, const uint8_t* d, int64_t n, uint8_t** out, int64_t* on) {
+    yjs_arena a;
+    yjs_value* root;
+    yjs_error je;
+    const yjs_value* fmt;
+    int rc = 0;
+    yjs_arena_init_heap(&a, 0);
+    if (yjs_parse(&a, (const char*)d, (size_t)n, NULL, &root, &je) == YJS_OK && (fmt = yjs_get(root, "format")) != NULL &&
+        fmt->type == YJS_STRING && !strcmp(fmt->u.s, "ysp-experiment")) {
+        size_t k = yjs_write_mem(root, YJS_WRITE_PRETTY, NULL, 0);
+        uint8_t* b = k ? (uint8_t*)calloc_c(c, k + 2) : NULL;
+        if (!b || yjs_write_mem(root, YJS_WRITE_PRETTY, (char*)b, k + 2) != k) {
+            rc = cfail(c, YPAK_ERR_NOMEM, "out of memory writing the definition's canonical bytes");
+        } else {
+            b[k] = '\n';
+            *out = b;
+            *on = (int64_t)k + 1;
+            rc = 1;
+        }
+    }
+    yjs_arena_free(&a);
+    return rc;
+}
+
+/* The experiment entry: a definition's canonical bytes, other bytes as
+ * they are. The source's SHA-256 in the manifest is the canonical bytes'
+ * too, so the pack ID does not depend on the source's layout either;
+ * `ypak rebuild` checks the source the same way. */
+static int build_experiment(B* b, E* e) {
+    uint8_t* canon = NULL;
+    int64_t cn = 0;
+    uint8_t sha[32];
+    char hx[65];
+    int rc = build_copy(b, e, "ypak " YPT_VERSION_STRING);
+    if (rc) return rc;
+    rc = exp_canonical(b->c, e->data, e->size, &canon, &cn);
+    if (rc <= 0) return rc;
+    e->data = canon;
+    e->size = cn;
+    e->deriv = deriv_new(b, "canonical", "ysp/json.h " YJS_VERSION_STRING);
+    ypak_sha256(canon, (size_t)cn, sha);
+    hex(sha, 32, hx);
+    jset(b->c, jat(e->sources, jn(e->sources) - 1), "sha256", jstrz(b->c, hx));
+    return 0;
+}
+
+/* 1 when path ends with ext, without regard to ASCII case. */
+static int ends_with_i(const char* path, const char* ext) {
+    size_t n = strlen(path), k = strlen(ext), i;
+    if (n < k) return 0;
+    for (i = 0; i < k; i++) {
+        char a = path[n - k + i], x = ext[i];
+        if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
+        if (a != x) return 0;
+    }
+    return 1;
+}
+
+/* The header line's names (the first CSV record), for types by column. */
+static int csv_header_names(C* c, const char* csv, size_t n, char** names, int max) {
+    size_t i = 0;
+    int k = 0;
+    while (i <= n && k < max) {
+        size_t j = i;
+        while (j < n && csv[j] != ',' && csv[j] != '\n') j++;
+        names[k++] = cdup(c, csv + i, j - i);
+        if (j >= n || csv[j] == '\n') break;
+        i = j + 1;
+    }
+    return k;
+}
+
 static int build_table(B* b, E* e) {
-    static const char* const keys[] = { "name", "kind", "source", "license", "delimiter", "types", "allow_empty", NULL };
+    static const char* const keys[] = { "name", "kind", "source", "license", "delimiter", "types", "allow_empty", "sheet", NULL };
     const char* src = str_of(e->res, "source", NULL);
     const char* delim = str_of(e->res, "delimiter", ",");
+    const char* want_sheet = str_of(e->res, "sheet", NULL);
     jv* types = jget(e->res, "types");
     jv* ae = jget(e->res, "allow_empty");
+    jv* text_cols = NULL;
     ytb_csv_desc d;
     ytb_table t;
     int64_t n;
     const uint8_t* text;
     void* arena;
-    int i;
-    char ver[64];
+    int i, xlsx;
+    char ver[160];
+    ypt_sheet sh;
     if (keys_ok(b->c, e->res, keys, e->name) || want_type(b->c, e->res, "types", J_OBJ, e->name) ||
-        want_type(b->c, e->res, "allow_empty", J_TRUE, e->name) || want_type(b->c, e->res, "delimiter", J_STR, e->name))
+        want_type(b->c, e->res, "allow_empty", J_TRUE, e->name) || want_type(b->c, e->res, "delimiter", J_STR, e->name) ||
+        want_type(b->c, e->res, "sheet", J_STR, e->name))
         return YPAK_ERR_FORMAT;
-    if (!src) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': no 'source' (a CSV or TSV file)", e->name);
+    if (!src) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': no 'source' (a CSV, TSV or .xlsx file)", e->name);
+    xlsx = ends_with_i(src, ".xlsx") || ends_with_i(src, ".xlsm");
+    if (xlsx && jget(e->res, "delimiter")) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': 'delimiter' is for CSV and TSV files, not a workbook", e->name);
+    if (!xlsx && want_sheet) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': 'sheet' is for .xlsx workbooks", e->name);
     text = load_source(b, e, src, &n);
     if (!text) return YPAK_ERR_IO;
     memset(&d, 0, sizeof d);
-    d.text = text;
-    d.len = (size_t)n;
-    if (!strcmp(delim, ",")) d.delimiter = ',';
-    else if (!strcmp(delim, ";")) d.delimiter = ';';
-    else if (!strcmp(delim, "\t")) d.delimiter = '\t';
-    else return cfail(b->c, YPAK_ERR_FORMAT, "'%s': delimiter must be \",\", \";\" or \"\\t\"", e->name);
+    memset(&sh, 0, sizeof sh);
+    if (xlsx) {
+        char msg[512];
+        if (ypt_xlsx_read(text, (size_t)n, want_sheet, &sh, msg, sizeof msg) < 0)
+            return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s%s%s%s: %s", e->name, src, sh.sheet[0] ? ", sheet '" : "", sh.sheet, sh.sheet[0] ? "'" : "", msg);
+        d.text = (const uint8_t*)cdup(b->c, sh.csv, sh.csv_len);
+        d.len = sh.csv_len;
+        if (!d.text) { ypt_sheet_free(&sh); return cfail(b->c, YPAK_ERR_NOMEM, "out of memory"); }
+    } else {
+        d.text = text;
+        d.len = (size_t)n;
+        if (!strcmp(delim, ",")) d.delimiter = ',';
+        else if (!strcmp(delim, ";")) d.delimiter = ';';
+        else if (!strcmp(delim, "\t")) d.delimiter = '\t';
+        else return cfail(b->c, YPAK_ERR_FORMAT, "'%s': delimiter must be \",\", \";\" or \"\\t\"", e->name);
+    }
     d.allow_empty = ae && ae->type == J_TRUE;
     if (types) {
-        if (jn(types) > YTB_MAX_COLUMNS) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': more than %d types", e->name, YTB_MAX_COLUMNS);
+        if (jn(types) > YTB_MAX_COLUMNS) { ypt_sheet_free(&sh); return cfail(b->c, YPAK_ERR_FORMAT, "'%s': more than %d types", e->name, YTB_MAX_COLUMNS); }
         for (i = 0; i < jn(types); i++) {
             const jv* tv = jat(types, i);
             d.types[i].name = jkey(types, i);
-            if (tv->type != J_STR) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': a type must be a string", e->name);
+            if (tv->type != J_STR) { ypt_sheet_free(&sh); return cfail(b->c, YPAK_ERR_FORMAT, "'%s': a type must be a string", e->name); }
             if (!strcmp(tv->u.s, "integer")) d.types[i].type = YTB_INTEGER;
             else if (!strcmp(tv->u.s, "number")) d.types[i].type = YTB_NUMBER;
             else if (!strcmp(tv->u.s, "string")) d.types[i].type = YTB_STRING;
-            else return cfail(b->c, YPAK_ERR_FORMAT, "'%s': type '%s' is not integer, number or string", e->name, tv->u.s);
+            else { ypt_sheet_free(&sh); return cfail(b->c, YPAK_ERR_FORMAT, "'%s': type '%s' is not integer, number or string", e->name, tv->u.s); }
         }
         d.n_types = jn(types);
     }
+    if (xlsx) {
+        /* A column whose every value the workbook stores as text stays text
+         * ("007" keeps its zeros), as the workbook shows it; the types the
+         * description names come first. */
+        char* names[YTB_MAX_COLUMNS];
+        int nn = csv_header_names(b->c, sh.csv, sh.csv_len, names, YTB_MAX_COLUMNS), k;
+        text_cols = jnew(b->c, J_ARR);
+        for (k = 0; k < nn && k < sh.n_cols; k++) {
+            int named = 0;
+            if (!(sh.text_cols & ((uint64_t)1 << k)) || !names[k]) continue;
+            for (i = 0; i < d.n_types; i++) if (!strcmp(d.types[i].name, names[k])) named = 1;
+            if (named || d.n_types >= YTB_MAX_COLUMNS) continue;
+            d.types[d.n_types].name = names[k];
+            d.types[d.n_types].type = YTB_STRING;
+            d.n_types++;
+            jpush(b->c, text_cols, jstrz(b->c, names[k]));
+        }
+    }
     memset(&t, 0, sizeof t);
     (void)ytb_open_csv(&t, &d);
-    if (!t.need) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s", e->name, ytb_error(&t));
+    if (!t.need) {
+        int rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s%s", e->name, ytb_error(&t), xlsx ? " (line k is sheet row k)" : "");
+        ypt_sheet_free(&sh);
+        return rc;
+    }
     arena = calloc_c(b->c, t.need + 16);
-    if (!arena) return cfail(b->c, YPAK_ERR_NOMEM, "'%s': out of memory", e->name);
+    if (!arena) { ypt_sheet_free(&sh); return cfail(b->c, YPAK_ERR_NOMEM, "'%s': out of memory", e->name); }
     d.arena = arena;
     d.arena_size = t.need;
-    if (!ytb_open_csv(&t, &d)) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s", e->name, ytb_error(&t));
+    if (!ytb_open_csv(&t, &d)) {
+        int rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s%s", e->name, ytb_error(&t), xlsx ? " (line k is sheet row k)" : "");
+        ypt_sheet_free(&sh);
+        return rc;
+    }
     e->data = t.base;
     e->size = (int64_t)t.size;
-    snprintf(ver, sizeof ver, "ysp/table.h %s", YTB_VERSION_STRING);
-    e->deriv = deriv_new(b, "csv", ver);
-    jset(b->c, e->deriv, "delimiter", jstrz(b->c, delim));
+    if (xlsx) {
+        snprintf(ver, sizeof ver, "ysp/table.h %s; ypak %s xlsx; lodepng %s", YTB_VERSION_STRING, YPT_VERSION_STRING, YPT_LODEPNG);
+        e->deriv = deriv_new(b, "xlsx", ver);
+        jset(b->c, e->deriv, "sheet", jstrz(b->c, sh.sheet));
+        jset(b->c, e->deriv, "formulas", jint(b->c, sh.formulas));
+        jset(b->c, e->deriv, "text_columns", text_cols);
+    } else {
+        snprintf(ver, sizeof ver, "ysp/table.h %s", YTB_VERSION_STRING);
+        e->deriv = deriv_new(b, "csv", ver);
+        jset(b->c, e->deriv, "delimiter", jstrz(b->c, delim));
+    }
+    ypt_sheet_free(&sh);
     jset(b->c, e->deriv, "allow_empty", jbool(b->c, d.allow_empty));
     jset(b->c, e->deriv, "types", types ? jcopy(b->c, types) : jnew(b->c, J_OBJ));
     return 0;
@@ -883,18 +1046,68 @@ static int wav_convert(B* b, E* e, const uint8_t* d, int64_t n, const char** wha
     return 1;
 }
 
+/* Open question 4 of docs/pack.md, opt-in (tool v0.4.0): a WAV at another
+ * rate becomes 32-bit float at the project rate through libsamplerate's
+ * best sinc converter, offline, so the player never resamples. The samples
+ * are widened to float exactly first (as ysp/audio.h does at load); a
+ * resampled peak can pass full scale, and the manifest counts the samples
+ * that do. */
+static int wav_resample(B* b, E* e, const yau_wav_info* in, int64_t* clipped) {
+    int64_t ns = in->frames * (int64_t)in->channels, i, cap_frames;
+    const uint8_t* s = e->data + in->data_offset;
+    float* fi;
+    float* fo;
+    SRC_DATA sd;
+    int err;
+    if (in->frames <= 0 || in->frames > 0x7FFFFFFFLL / 4) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %lld frames to resample", e->name, (long long)in->frames);
+    cap_frames = (in->frames * (int64_t)b->rate + in->rate - 1) / in->rate + 64;
+    fi = (float*)calloc_c(b->c, (size_t)ns * 4 + 16);
+    fo = (float*)calloc_c(b->c, (size_t)(cap_frames * in->channels) * 4 + 16);
+    if (!fi || !fo) return cfail(b->c, YPAK_ERR_NOMEM, "out of memory");
+    for (i = 0; i < ns; i++) {
+        if (in->format == YAU_WAV_S16) fi[i] = (float)(int16_t)r16(s + 2 * i) / 32768.0f;
+        else if (in->format == YAU_WAV_F32) memcpy(&fi[i], s + 4 * i, 4);
+        else {
+            int bpb = in->format == YAU_WAV_S24 ? 3 : 4, o = in->format == YAU_WAV_S24 ? 0 : 1;
+            const uint8_t* p = s + bpb * i + o;   /* the low byte of 24 in 32 is padding */
+            int32_t v = (int32_t)((uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16));
+            if (v & 0x800000) v -= 0x1000000;
+            fi[i] = (float)v / 8388608.0f;
+        }
+    }
+    memset(&sd, 0, sizeof sd);
+    sd.data_in = fi;
+    sd.input_frames = (long)in->frames;
+    sd.data_out = fo;
+    sd.output_frames = (long)cap_frames;
+    sd.end_of_input = 1;
+    sd.src_ratio = (double)b->rate / (double)in->rate;
+    err = src_simple(&sd, SRC_SINC_BEST_QUALITY, (int)in->channels);
+    if (err) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': libsamplerate: %s", e->name, src_strerror(err));
+    *clipped = 0;
+    for (i = 0; i < (int64_t)sd.output_frames_gen * in->channels; i++)
+        if (fo[i] > 1.0f || fo[i] < -1.0f) (*clipped)++;
+    e->data = wav_write(b, 3, 32, 32, in->channels, (uint32_t)b->rate, (const uint8_t*)fo, (int64_t)sd.output_frames_gen * in->channels * 4, &e->size);
+    return e->data ? 0 : cfail(b->c, YPAK_ERR_NOMEM, "out of memory");
+}
+
 static int build_audio(B* b, E* e) {
-    static const char* const keys[] = { "name", "kind", "source", "license", "stream", NULL };
+    static const char* const keys[] = { "name", "kind", "source", "license", "stream", "resample", NULL };
     const char* src = str_of(e->res, "source", NULL);
+    const char* rs = str_of(e->res, "resample", NULL);
     jv* st = jget(e->res, "stream");
     yau_wav_desc wd;
     yau_wav_info info;
-    char msg[256], ver[64];
+    char msg[256], ver[128];
     const char* conv = NULL;
-    int64_t n, k;
+    int64_t n, k, clipped = 0;
+    uint32_t from_rate = 0;
     const uint8_t* d;
     int rc;
-    if (keys_ok(b->c, e->res, keys, e->name) || want_type(b->c, e->res, "stream", J_TRUE, e->name)) return YPAK_ERR_FORMAT;
+    if (keys_ok(b->c, e->res, keys, e->name) || want_type(b->c, e->res, "stream", J_TRUE, e->name) ||
+        want_type(b->c, e->res, "resample", J_STR, e->name))
+        return YPAK_ERR_FORMAT;
+    if (rs && strcmp(rs, "sinc_best")) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': resample is \"sinc_best\" (libsamplerate's best converter) or absent", e->name);
     if (!src) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': no 'source' (a WAV file)", e->name);
     if (!b->rate) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': audio needs the project's \"audio\": {\"rate\", \"channels\"} in the description", e->name);
     d = load_source(b, e, src, &n);
@@ -914,9 +1127,9 @@ static int build_audio(B* b, E* e) {
         rc = yau_wav_probe(&wd, &info, msg, sizeof msg);
         if (rc < 0) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': after converting: %s", e->name, msg);
     }
-    if ((int)info.rate != b->rate)
-        return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %u Hz; the project rate is %d Hz. ysp never resamples at play, and this "
-                     "tool does not resample yet: export the file at %d Hz", e->name, info.rate, b->rate, b->rate);
+    if ((int)info.rate != b->rate && !rs)
+        return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %u Hz; the project rate is %d Hz. ysp never resamples at play: export the file "
+                     "at %d Hz, or set \"resample\": \"sinc_best\" to resample it here", e->name, info.rate, b->rate, b->rate);
     if (info.channels != 1 && (int)info.channels != b->channels)
         return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %u channels; the project has %d (1 is also accepted)", e->name, info.channels, b->channels);
     if (info.format == YAU_WAV_F32) {
@@ -927,10 +1140,23 @@ static int build_audio(B* b, E* e) {
                 return cfail(b->c, YPAK_ERR_FORMAT, "'%s': float sample %lld is not a number (NaN or infinity)", e->name, (long long)k);
         }
     }
+    if ((int)info.rate != b->rate) {
+        from_rate = info.rate;
+        rc = wav_resample(b, e, &info, &clipped);
+        if (rc) return rc;
+    }
     if (st && st->type == J_TRUE) e->flags |= YPAK_F_STREAM;
-    snprintf(ver, sizeof ver, "ysp/audio.h %s", YAU_VERSION_STRING);
-    e->deriv = deriv_new(b, conv ? "convert" : "copy", ver);
+    if (from_rate) {
+        snprintf(ver, sizeof ver, "libsamplerate 0.2.2 SRC_SINC_BEST_QUALITY; ysp/audio.h %s", YAU_VERSION_STRING);
+        e->deriv = deriv_new(b, "resample", ver);
+        jset(b->c, e->deriv, "from_rate", jint(b->c, from_rate));
+        jset(b->c, e->deriv, "clipped", jint(b->c, clipped));
+    } else {
+        snprintf(ver, sizeof ver, "ysp/audio.h %s", YAU_VERSION_STRING);
+        e->deriv = deriv_new(b, conv ? "convert" : "copy", ver);
+    }
     if (conv) jset(b->c, e->deriv, "convert", jstrz(b->c, conv));
+    if (rs) jset(b->c, e->deriv, "resample", jstrz(b->c, rs));
     jset(b->c, e->deriv, "stream", jbool(b->c, (e->flags & YPAK_F_STREAM) != 0));
     return 0;
 }
@@ -1001,6 +1227,19 @@ static int build_shader(B* b, E* e) {
     return 0;
 }
 
+/* The ICC rule of principle 5 (no color conversion), for PNG and JPEG
+ * alike: a profile is accepted when it is sRGB's, which the default and
+ * the "encoding" name already say, and refused otherwise. v0.3.0 refused
+ * every iCCP; 3 of the 4 profiles in PsychoPy's demo photographs are
+ * sRGB's (docs/pack.md 13). */
+static int icc_ok(B* b, const E* e, const char* what, const void* p, size_t n) {
+    char why[256];
+    int s = ypt_icc_srgb(p, n, why, sizeof why);
+    if (s > 0) return 0;
+    return cfail(b->c, YPAK_ERR_FORMAT, "'%s': the %s has %s; ysp converts no color: export it without a profile, or as sRGB", e->name, what,
+                 s < 0 ? "a damaged ICC profile" : why);
+}
+
 static int build_texture(B* b, E* e) {
     static const char* const keys[] = { "name", "kind", "source", "license", "compression", "encoding", "primaries", "format", NULL };
     const char* src = str_of(e->res, "source", NULL);
@@ -1011,48 +1250,71 @@ static int build_texture(B* b, E* e) {
     LodePNGState st;
     unsigned w = 0, h = 0, err;
     unsigned char* px = NULL;
-    const uint8_t* png;
+    const uint8_t* file;
     int64_t n;
     uint32_t fmt = 0, tb, trc = 0, prim = 0;
     uint8_t* raw;
     uint64_t raw_n;
-    char ver[96];
+    char ver[160];
+    int jpeg, icc = 0;
+    ypt_jpeg jp;
     if (keys_ok(b->c, e->res, keys, e->name)) return YPAK_ERR_FORMAT;
-    if (!src) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': no 'source' (a PNG file)", e->name);
-    png = load_source(b, e, src, &n);
-    if (!png) return YPAK_ERR_IO;
+    if (!src) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': no 'source' (a PNG or JPEG file)", e->name);
+    file = load_source(b, e, src, &n);
+    if (!file) return YPAK_ERR_IO;
+    jpeg = n >= 3 && file[0] == 0xFF && file[1] == 0xD8 && file[2] == 0xFF;
+    memset(&jp, 0, sizeof jp);
     lodepng_state_init(&st);
-    err = lodepng_inspect(&w, &h, &st, png, (size_t)n);
-    if (err) { lodepng_state_cleanup(&st); return cfail(b->c, YPAK_ERR_FORMAT, "'%s': not a PNG (%s); phase 2 reads PNG only", e->name, lodepng_error_text(err)); }
-    {
-        LodePNGColorType ct = st.info_png.color.colortype;
-        unsigned bd = st.info_png.color.bitdepth;
+    if (jpeg) {
+        char msg[512];
         const char* def;
-        if (bd == 16 && ct == LCT_GREY) def = "r16ui";
-        else if (bd == 16) def = NULL;
-        else if (ct == LCT_GREY) def = "r8";
-        else if (ct == LCT_GREY_ALPHA) def = "rg8";
-        else def = "rgba8";
+        if (ypt_jpeg_read(file, (size_t)n, 0, &jp, msg, sizeof msg) < 0) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s", e->name, msg);
+        w = (unsigned)jp.w;
+        h = (unsigned)jp.h;
+        def = jp.components == 1 ? "r8" : "rgba8";
         if (!fmts) fmts = def;
-        if (!fmts)
-            return lodepng_state_cleanup(&st), cfail(b->c, YPAK_ERR_FORMAT, "'%s': a 16-bit color PNG; set \"format\": \"rgba32f\" "
-                                                     "to store k / 65535 as float", e->name);
-        if (!strcmp(fmts, "r8")) { fmt = YPAK_TEX_R8; st.info_raw.colortype = LCT_GREY; st.info_raw.bitdepth = 8; }
-        else if (!strcmp(fmts, "rg8")) { fmt = YPAK_TEX_RG8; st.info_raw.colortype = LCT_GREY_ALPHA; st.info_raw.bitdepth = 8; }
-        else if (!strcmp(fmts, "rgba8")) { fmt = YPAK_TEX_RGBA8; st.info_raw.colortype = LCT_RGBA; st.info_raw.bitdepth = 8; }
-        else if (!strcmp(fmts, "r16ui")) { fmt = YPAK_TEX_R16UI; st.info_raw.colortype = LCT_GREY; st.info_raw.bitdepth = 16; }
-        else if (!strcmp(fmts, "rgba32f")) { fmt = YPAK_TEX_RGBA32F; st.info_raw.colortype = LCT_RGBA; st.info_raw.bitdepth = 16; }
-        else return lodepng_state_cleanup(&st), cfail(b->c, YPAK_ERR_FORMAT, "'%s': format '%s' is not r8, rg8, rgba8, r16ui or rgba32f", e->name, fmts);
-        if (strcmp(fmts, def ? def : "") != 0) {
-            /* asked for another form than the file's: only widening that is exact */
-            int ok = (fmt == YPAK_TEX_RGBA8 && bd <= 8) || (fmt == YPAK_TEX_RGBA32F) || (fmt == YPAK_TEX_R8 && ct == LCT_GREY && bd < 8);
-            if (!ok) return lodepng_state_cleanup(&st), cfail(b->c, YPAK_ERR_FORMAT, "'%s': format '%s' would drop or round values of this "
-                                                              "PNG (color type %d, %u bits)", e->name, fmts, (int)ct, bd);
-        }
-        if (!encs) {
-            if (bd == 16) return lodepng_state_cleanup(&st), cfail(b->c, YPAK_ERR_FORMAT, "'%s': a 16-bit PNG has no default encoding; set "
-                                                                   "\"encoding\": \"linear\", \"srgb\" or \"device\"", e->name);
-            encs = "srgb";
+        if (!strcmp(fmts, "r8")) fmt = YPAK_TEX_R8;
+        else if (!strcmp(fmts, "rgba8")) fmt = YPAK_TEX_RGBA8;
+        else if (!strcmp(fmts, "rgba32f")) fmt = YPAK_TEX_RGBA32F;
+        else if (!strcmp(fmts, "rg8") || !strcmp(fmts, "r16ui"))
+            return cfail(b->c, YPAK_ERR_FORMAT, "'%s': format '%s' does not hold a JPEG's values (r8 for gray; rgba8 or rgba32f)", e->name, fmts);
+        else return cfail(b->c, YPAK_ERR_FORMAT, "'%s': format '%s' is not r8, rg8, rgba8, r16ui or rgba32f", e->name, fmts);
+        if (fmt == YPAK_TEX_R8 && jp.components != 1)
+            return cfail(b->c, YPAK_ERR_FORMAT, "'%s': format 'r8' would drop or round values of this JPEG (3 components)", e->name);
+        if (!encs) encs = "srgb";
+    } else {
+        err = lodepng_inspect(&w, &h, &st, file, (size_t)n);
+        if (err) { lodepng_state_cleanup(&st); return cfail(b->c, YPAK_ERR_FORMAT, "'%s': not a PNG (%s) and not a JPEG", e->name, lodepng_error_text(err)); }
+        {
+            LodePNGColorType ct = st.info_png.color.colortype;
+            unsigned bd = st.info_png.color.bitdepth;
+            const char* def;
+            if (bd == 16 && ct == LCT_GREY) def = "r16ui";
+            else if (bd == 16) def = NULL;
+            else if (ct == LCT_GREY) def = "r8";
+            else if (ct == LCT_GREY_ALPHA) def = "rg8";
+            else def = "rgba8";
+            if (!fmts) fmts = def;
+            if (!fmts)
+                return lodepng_state_cleanup(&st), cfail(b->c, YPAK_ERR_FORMAT, "'%s': a 16-bit color PNG; set \"format\": \"rgba32f\" "
+                                                         "to store k / 65535 as float", e->name);
+            if (!strcmp(fmts, "r8")) { fmt = YPAK_TEX_R8; st.info_raw.colortype = LCT_GREY; st.info_raw.bitdepth = 8; }
+            else if (!strcmp(fmts, "rg8")) { fmt = YPAK_TEX_RG8; st.info_raw.colortype = LCT_GREY_ALPHA; st.info_raw.bitdepth = 8; }
+            else if (!strcmp(fmts, "rgba8")) { fmt = YPAK_TEX_RGBA8; st.info_raw.colortype = LCT_RGBA; st.info_raw.bitdepth = 8; }
+            else if (!strcmp(fmts, "r16ui")) { fmt = YPAK_TEX_R16UI; st.info_raw.colortype = LCT_GREY; st.info_raw.bitdepth = 16; }
+            else if (!strcmp(fmts, "rgba32f")) { fmt = YPAK_TEX_RGBA32F; st.info_raw.colortype = LCT_RGBA; st.info_raw.bitdepth = 16; }
+            else return lodepng_state_cleanup(&st), cfail(b->c, YPAK_ERR_FORMAT, "'%s': format '%s' is not r8, rg8, rgba8, r16ui or rgba32f", e->name, fmts);
+            if (strcmp(fmts, def ? def : "") != 0) {
+                /* asked for another form than the file's: only widening that is exact */
+                int ok = (fmt == YPAK_TEX_RGBA8 && bd <= 8) || (fmt == YPAK_TEX_RGBA32F) || (fmt == YPAK_TEX_R8 && ct == LCT_GREY && bd < 8);
+                if (!ok) return lodepng_state_cleanup(&st), cfail(b->c, YPAK_ERR_FORMAT, "'%s': format '%s' would drop or round values of this "
+                                                                  "PNG (color type %d, %u bits)", e->name, fmts, (int)ct, bd);
+            }
+            if (!encs) {
+                if (bd == 16) return lodepng_state_cleanup(&st), cfail(b->c, YPAK_ERR_FORMAT, "'%s': a 16-bit PNG has no default encoding; set "
+                                                                       "\"encoding\": \"linear\", \"srgb\" or \"device\"", e->name);
+                encs = "srgb";
+            }
         }
     }
     if (!strcmp(encs, "srgb")) trc = 3;
@@ -1088,35 +1350,60 @@ static int build_texture(B* b, E* e) {
         return lodepng_state_cleanup(&st), cfail(b->c, YPAK_ERR_FORMAT, "'%s': compression must be raw or qoi", e->name);
     if (!strcmp(comp, "qoi") && fmt != YPAK_TEX_RGBA8)
         return lodepng_state_cleanup(&st), cfail(b->c, YPAK_ERR_FORMAT, "'%s': QOI is for rgba8 only", e->name);
-    err = lodepng_decode(&px, &w, &h, &st, png, (size_t)n);
-    if (err) { lodepng_state_cleanup(&st); return cfail(b->c, YPAK_ERR_FORMAT, "'%s': PNG decode: %s", e->name, lodepng_error_text(err)); }
-    /* principle 5: no color conversion, so a profile other than sRGB is refused */
-    if (st.info_png.iccp_defined) { free(px); lodepng_state_cleanup(&st); return cfail(b->c, YPAK_ERR_FORMAT, "'%s': the PNG has an ICC profile (iCCP); ysp converts no color: export it without one", e->name); }
-    if (st.info_png.gama_defined && st.info_png.gama_gamma != 45455) { free(px); lodepng_state_cleanup(&st); return cfail(b->c, YPAK_ERR_FORMAT, "'%s': the PNG's gAMA is %u/100000, not sRGB's 45455", e->name, st.info_png.gama_gamma); }
-    if (st.info_png.chrm_defined && !(st.info_png.chrm_white_x == 31270 && st.info_png.chrm_white_y == 32900 && st.info_png.chrm_red_x == 64000 &&
-                                      st.info_png.chrm_red_y == 33000 && st.info_png.chrm_green_x == 30000 && st.info_png.chrm_green_y == 60000 &&
-                                      st.info_png.chrm_blue_x == 15000 && st.info_png.chrm_blue_y == 6000)) {
-        free(px); lodepng_state_cleanup(&st);
-        return cfail(b->c, YPAK_ERR_FORMAT, "'%s': the PNG's cHRM primaries are not sRGB's", e->name);
-    }
-    lodepng_state_cleanup(&st);
     tb = fmt == YPAK_TEX_R8 ? 1 : fmt == YPAK_TEX_RG8 ? 2 : fmt == YPAK_TEX_R16UI ? 2 : fmt == YPAK_TEX_RGBA8 ? 4 : 16;
     raw_n = (uint64_t)w * h * tb;
-    raw = (uint8_t*)calloc_c(b->c, (size_t)raw_n + 16);
-    if (!raw) { free(px); return cfail(b->c, YPAK_ERR_NOMEM, "out of memory"); }
-    if (fmt == YPAK_TEX_R16UI) {
-        uint64_t i;
-        for (i = 0; i < (uint64_t)w * h; i++) { raw[2 * i] = px[2 * i + 1]; raw[2 * i + 1] = px[2 * i]; }   /* PNG is big-endian */
-    } else if (fmt == YPAK_TEX_RGBA32F) {
-        uint64_t i;
-        for (i = 0; i < (uint64_t)w * h * 4; i++) {
-            float f = (float)(((unsigned)px[2 * i] << 8) | px[2 * i + 1]) / 65535.0f;
-            memcpy(raw + 4 * i, &f, 4);
+    if (jpeg) {
+        char msg[512];
+        uint64_t i, np = (uint64_t)w * h;
+        if (ypt_jpeg_read(file, (size_t)n, 1, &jp, msg, sizeof msg) < 0) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s", e->name, msg);
+        icc = jp.icc_srgb;
+        raw = (uint8_t*)calloc_c(b->c, (size_t)raw_n + 16);
+        if (!raw) { ypt_jpeg_free(&jp); return cfail(b->c, YPAK_ERR_NOMEM, "out of memory"); }
+        if (fmt == YPAK_TEX_R8 || (fmt == YPAK_TEX_RGBA8 && jp.channels == 4)) {
+            memcpy(raw, jp.px, (size_t)raw_n);
+        } else if (fmt == YPAK_TEX_RGBA8) {   /* gray widened: R = G = B, alpha 255 */
+            for (i = 0; i < np; i++) { raw[4 * i] = raw[4 * i + 1] = raw[4 * i + 2] = jp.px[i]; raw[4 * i + 3] = 255; }
+        } else {                              /* rgba32f: k / 255, as an 8-bit PNG gives */
+            for (i = 0; i < np * 4; i++) {
+                unsigned v = jp.channels == 4 ? jp.px[i] : (i % 4 == 3 ? 255u : jp.px[i / 4]);
+                float f = (float)v / 255.0f;
+                memcpy(raw + 4 * i, &f, 4);
+            }
         }
+        ypt_jpeg_free(&jp);
     } else {
-        memcpy(raw, px, (size_t)raw_n);
+        err = lodepng_decode(&px, &w, &h, &st, file, (size_t)n);
+        if (err) { lodepng_state_cleanup(&st); return cfail(b->c, YPAK_ERR_FORMAT, "'%s': PNG decode: %s", e->name, lodepng_error_text(err)); }
+        /* principle 5: no color conversion, so a profile other than sRGB is refused */
+        if (st.info_png.iccp_defined) {
+            int rc = icc_ok(b, e, "PNG", st.info_png.iccp_profile, st.info_png.iccp_profile_size);
+            if (rc) { free(px); lodepng_state_cleanup(&st); return rc; }
+            icc = 1;
+        }
+        if (st.info_png.gama_defined && st.info_png.gama_gamma != 45455) { free(px); lodepng_state_cleanup(&st); return cfail(b->c, YPAK_ERR_FORMAT, "'%s': the PNG's gAMA is %u/100000, not sRGB's 45455", e->name, st.info_png.gama_gamma); }
+        if (st.info_png.chrm_defined && !(st.info_png.chrm_white_x == 31270 && st.info_png.chrm_white_y == 32900 && st.info_png.chrm_red_x == 64000 &&
+                                          st.info_png.chrm_red_y == 33000 && st.info_png.chrm_green_x == 30000 && st.info_png.chrm_green_y == 60000 &&
+                                          st.info_png.chrm_blue_x == 15000 && st.info_png.chrm_blue_y == 6000)) {
+            free(px); lodepng_state_cleanup(&st);
+            return cfail(b->c, YPAK_ERR_FORMAT, "'%s': the PNG's cHRM primaries are not sRGB's", e->name);
+        }
+        lodepng_state_cleanup(&st);
+        raw = (uint8_t*)calloc_c(b->c, (size_t)raw_n + 16);
+        if (!raw) { free(px); return cfail(b->c, YPAK_ERR_NOMEM, "out of memory"); }
+        if (fmt == YPAK_TEX_R16UI) {
+            uint64_t i;
+            for (i = 0; i < (uint64_t)w * h; i++) { raw[2 * i] = px[2 * i + 1]; raw[2 * i + 1] = px[2 * i]; }   /* PNG is big-endian */
+        } else if (fmt == YPAK_TEX_RGBA32F) {
+            uint64_t i;
+            for (i = 0; i < (uint64_t)w * h * 4; i++) {
+                float f = (float)(((unsigned)px[2 * i] << 8) | px[2 * i + 1]) / 65535.0f;
+                memcpy(raw + 4 * i, &f, 4);
+            }
+        } else {
+            memcpy(raw, px, (size_t)raw_n);
+        }
+        free(px);
     }
-    free(px);
     {
         uint64_t stored = raw_n, total;
         uint8_t* q = NULL;
@@ -1138,12 +1425,720 @@ static int build_texture(B* b, E* e) {
         e->data = d;
         e->size = (int64_t)total;
     }
-    snprintf(ver, sizeof ver, "lodepng %s", YPT_LODEPNG);
-    e->deriv = deriv_new(b, "png", ver);
+    if (jpeg) {
+        snprintf(ver, sizeof ver, "stb_image %s", YPT_STB_IMAGE);
+        e->deriv = deriv_new(b, "jpeg", ver);
+    } else {
+        snprintf(ver, sizeof ver, "lodepng %s", YPT_LODEPNG);
+        e->deriv = deriv_new(b, "png", ver);
+    }
     jset(b->c, e->deriv, "compression", jstrz(b->c, comp));
     jset(b->c, e->deriv, "encoding", jstrz(b->c, encs));
     jset(b->c, e->deriv, "format", jstrz(b->c, fmts));
     if (prims) jset(b->c, e->deriv, "primaries", jstrz(b->c, prims));
+    if (icc) jset(b->c, e->deriv, "icc", jstrz(b->c, "srgb"));
+    return 0;
+}
+
+/* --- programs: the ffmpeg step ------------------------------------------------- */
+
+/* Runs argv (argv[0] found on the PATH unless it is a path), its standard
+ * output and error into out (the last cap - 1 bytes). Returns the exit
+ * code, or -1 when the program does not start. No shell: every argument
+ * reaches the program as given. */
+static int run_program(const char* const* argv, char* out, size_t cap) {
+    size_t kept = 0;
+    if (out && cap) out[0] = 0;
+#if defined(_WIN32)
+    {
+        /* one command line, quoted as the C runtime splits it again */
+        sb cl;
+        wchar_t* w;
+        int i, wn;
+        SECURITY_ATTRIBUTES sa;
+        HANDLE rd = NULL, wr = NULL, nul;
+        STARTUPINFOW si;
+        PROCESS_INFORMATION pi;
+        DWORD code = 0;
+        memset(&cl, 0, sizeof cl);
+        for (i = 0; argv[i]; i++) {
+            const char* a = argv[i];
+            size_t k, bs = 0;
+            int q = !*a || strpbrk(a, " \t\n\v\"") != NULL;
+            if (i) sb_put(&cl, " ", 1);
+            if (!q) { sb_put(&cl, a, strlen(a)); continue; }
+            sb_put(&cl, "\"", 1);
+            for (k = 0; a[k]; k++) {
+                if (a[k] == '\\') { bs++; continue; }
+                if (a[k] == '"') { while (bs) { sb_put(&cl, "\\\\", 2); bs--; } sb_put(&cl, "\\\"", 2); continue; }
+                while (bs) { sb_put(&cl, "\\", 1); bs--; }
+                sb_put(&cl, a + k, 1);
+            }
+            while (bs) { sb_put(&cl, "\\\\", 2); bs--; }
+            sb_put(&cl, "\"", 1);
+        }
+        if (cl.bad || !cl.p) { free(cl.p); return -1; }
+        wn = MultiByteToWideChar(CP_UTF8, 0, cl.p, -1, NULL, 0);
+        w = wn > 0 ? (wchar_t*)malloc(sizeof(wchar_t) * (size_t)wn) : NULL;
+        if (!w || !MultiByteToWideChar(CP_UTF8, 0, cl.p, -1, w, wn)) { free(w); free(cl.p); return -1; }
+        free(cl.p);
+        memset(&sa, 0, sizeof sa);
+        sa.nLength = sizeof sa;
+        sa.bInheritHandle = TRUE;
+        if (!CreatePipe(&rd, &wr, &sa, 0)) { free(w); return -1; }
+        SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
+        nul = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, NULL);
+        memset(&si, 0, sizeof si);
+        si.cb = sizeof si;
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdInput = nul;
+        si.hStdOutput = wr;
+        si.hStdError = wr;
+        memset(&pi, 0, sizeof pi);
+        if (!CreateProcessW(NULL, w, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+            free(w); CloseHandle(rd); CloseHandle(wr); if (nul != INVALID_HANDLE_VALUE) CloseHandle(nul);
+            return -1;
+        }
+        free(w);
+        CloseHandle(wr);
+        if (nul != INVALID_HANDLE_VALUE) CloseHandle(nul);
+        for (;;) {
+            char t[4096];
+            DWORD got = 0;
+            if (!ReadFile(rd, t, sizeof t, &got, NULL) || !got) break;
+            if (out && cap > 1) {
+                size_t g = got;
+                if (g >= cap - 1) { memcpy(out, t + g - (cap - 1), cap - 1); kept = cap - 1; }
+                else {
+                    if (kept + g > cap - 1) { memmove(out, out + (kept + g - (cap - 1)), kept - (kept + g - (cap - 1))); kept = cap - 1 - g; }
+                    memcpy(out + kept, t, g);
+                    kept += g;
+                }
+                out[kept] = 0;
+            }
+        }
+        CloseHandle(rd);
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        GetExitCodeProcess(pi.hProcess, &code);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        return (int)code;
+    }
+#elif !defined(__EMSCRIPTEN__)
+    {
+        int fd[2], st = 0;
+        pid_t pid;
+        posix_spawn_file_actions_t fa;
+        if (pipe(fd) != 0) return -1;
+        posix_spawn_file_actions_init(&fa);
+        posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0);
+        posix_spawn_file_actions_adddup2(&fa, fd[1], 1);
+        posix_spawn_file_actions_adddup2(&fa, fd[1], 2);
+        posix_spawn_file_actions_addclose(&fa, fd[0]);
+        posix_spawn_file_actions_addclose(&fa, fd[1]);
+        if (posix_spawnp(&pid, argv[0], &fa, NULL, (char* const*)argv, environ) != 0) {
+            posix_spawn_file_actions_destroy(&fa);
+            close(fd[0]); close(fd[1]);
+            return -1;
+        }
+        posix_spawn_file_actions_destroy(&fa);
+        close(fd[1]);
+        for (;;) {
+            char t[4096];
+            ssize_t got = read(fd[0], t, sizeof t);
+            if (got <= 0) { if (got < 0 && errno == EINTR) continue; break; }
+            if (out && cap > 1) {
+                size_t g = (size_t)got;
+                if (g >= cap - 1) { memcpy(out, t + g - (cap - 1), cap - 1); kept = cap - 1; }
+                else {
+                    if (kept + g > cap - 1) { memmove(out, out + (kept + g - (cap - 1)), kept - (kept + g - (cap - 1))); kept = cap - 1 - g; }
+                    memcpy(out + kept, t, g);
+                    kept += g;
+                }
+                out[kept] = 0;
+            }
+        }
+        close(fd[0]);
+        while (waitpid(pid, &st, 0) < 0 && errno == EINTR) {}
+        if (!WIFEXITED(st)) return -1;
+        /* exec failed in the child: the shell's convention */
+        return WEXITSTATUS(st) == 127 ? -1 : WEXITSTATUS(st);
+    }
+#else
+    (void)argv; (void)kept;
+    return -1;   /* WebAssembly runs no programs */
+#endif
+}
+
+/* "ffmpeg version N-..." from ffmpeg -version's first line; 0, or -1 when
+ * the program does not run. */
+static int ffmpeg_version(const char* prog, char* out, size_t cap) {
+    const char* argv[3];
+    char text[8192];
+    char* nl;
+    char* cp;
+    argv[0] = prog; argv[1] = "-version"; argv[2] = NULL;
+    if (run_program(argv, text, sizeof text) != 0) return -1;
+    /* the first line, without the copyright */
+    nl = strchr(text, '\n');
+    if (nl) *nl = 0;
+    if (nl && nl > text && nl[-1] == '\r') nl[-1] = 0;
+    cp = strstr(text, " Copyright");
+    if (cp) *cp = 0;
+    if (strncmp(text, "ffmpeg version ", 15) != 0) return -1;
+    /* a cut line could equal another version's: refused, not truncated
+     * (gcc's -Wformat-truncation stopped the Linux Release build here) */
+    {
+        size_t n = strlen(text);
+        if (n >= cap) return -1;
+        memcpy(out, text, n + 1);
+    }
+    return 0;
+}
+
+/* Every encoder measured gives other bytes with another thread count
+ * (libx264, libx265, mpeg1video, mpeg2video), and ffmpeg's default count
+ * is the machine's, so the tool sets the count and records it. Decided
+ * 2026-10-20 (docs/pack.md 4.10, 9.1), replacing one thread for every
+ * encode (2026-10-14), 3 to 4 times slower at 1080p than 16 threads: with the count
+ * fixed, each encoder gave one set of bytes under every CPU affinity and
+ * on Windows and Linux, so the count is a parameter like any other, and a
+ * rebuild runs ffmpeg with the recorded one. libx265 needs its pool and
+ * frame threads set too: ffmpeg's -threads sets only its frame threads,
+ * and the pool's size changes the bytes. A thread setting of the author's
+ * is refused, so the recorded count is the only one. */
+#define YPT_MAX_THREADS 64
+
+/* The default count: the logical processors, as ffmpeg's own default. */
+static int machine_threads(void) {
+#if defined(_WIN32)
+    long n = (long)GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+#elif !defined(__EMSCRIPTEN__)
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+#else
+    long n = 1;
+#endif
+    if (n < 1) n = 1;
+    return n > YPT_MAX_THREADS ? YPT_MAX_THREADS : (int)n;
+}
+
+/* x265's own rule for a pool of n threads (encoder.cpp, measured with
+ * pools=1, 4, 8 and 16), written out so the command states it. */
+static int x265_frame_threads(int n) { return n >= 32 ? 5 : n >= 16 ? 4 : n >= 8 ? 3 : n >= 4 ? 2 : 1; }
+
+/* Decided 2026-10-20 (docs/pack.md 10, question 12): flags that keep an
+ * encoder's bytes the same on another CPU and another build of the same
+ * ffmpeg version. libx265's info message (an SEI) names the build's OS and
+ * compiler and the CPU flags x265 detected; with info=0 its bytes were one
+ * set at every SIMD level and on Windows and Linux. mpeg1video and
+ * mpeg2video use SIMD DCTs whose results differ from the C ones; with
+ * these flags they gave one set at every level, SIMD off included. libx264
+ * has no such switch (its AVX2 and AVX code give other bytes). */
+enum { ENC_OTHER, ENC_X265, ENC_MPEG, ENC_MPEG2 };
+
+/* The video encoder the arguments select (the last one, as ffmpeg takes
+ * it); without one, ffmpeg's default for the output's form: mpeg1video
+ * for .mpg, libx264 (no forced flags) for .mp4. */
+static int encoder_of(const jv* ff, int is_mp4) {
+    static const char* const opts[] = { "-c:v", "-vcodec", "-codec:v", "-c", "-codec", "-c:v:0", "-codec:v:0", NULL };
+    const char* c = NULL;
+    int i, k;
+    for (i = 0; i + 1 < jn(ff); i++)
+        for (k = 0; opts[k]; k++)
+            if (!strcmp(jat(ff, i)->u.s, opts[k])) c = jat(ff, i + 1)->u.s;
+    if (!c) return is_mp4 ? ENC_OTHER : ENC_MPEG;
+    if (!strcmp(c, "libx265")) return ENC_X265;
+    if (!strcmp(c, "mpeg1video")) return ENC_MPEG;
+    if (!strcmp(c, "mpeg2video")) return ENC_MPEG2;
+    return ENC_OTHER;
+}
+
+/* 1 when x264 or x265 parameter text a sets key: key=..., the bare key,
+ * or no-key, as a whole item of the ':' or ',' list. */
+static int param_sets(const char* a, const char* key) {
+    size_t kl = strlen(key);
+    const char* p = a;
+    while (*p) {
+        const char* t = strncmp(p, "no-", 3) ? p : p + 3;
+        if (!strncmp(t, key, kl) && (t[kl] == '=' || t[kl] == ':' || t[kl] == ',' || !t[kl])) return 1;
+        p += strcspn(p, ":,");
+        if (*p) p++;
+    }
+    return 0;
+}
+
+static int thread_setting(const char* a) {
+    return param_sets(a, "threads") || param_sets(a, "pools") || param_sets(a, "frame-threads") || param_sets(a, "lookahead-threads");
+}
+
+/* An option name with or without a stream specifier ("-dct", "-dct:v"). */
+static int is_opt(const char* a, const char* name) {
+    size_t n = strlen(name);
+    return !strncmp(a, name, n) && (!a[n] || a[n] == ':');
+}
+
+/* The author's settings that the tool's own would contradict, refused by
+ * name: thread counts (every encoder), x265's info, the MPEG DCTs and a
+ * flag that turns bitexact off. */
+static int ffmpeg_args_ok(B* b, E* e, const jv* ff, int enc) {
+    int i;
+    /* Refused here, not at the index: pl_mpeg reads MPEG-1 only and
+     * misreads mpeg2video's output ("GOP length changes"), so the encode
+     * would run, then fail (decided 2026-10-20). */
+    if (enc == ENC_MPEG2)
+        return cfail(b->c, YPAK_ERR_FORMAT, "'%s': mpeg2video cannot be packed: the video index reads MPEG-1 only; use mpeg1video "
+                     "for .mpg, or libx264 or libx265 for .mp4", e->name);
+    for (i = 0; i < jn(ff); i++) {
+        const char* a = jat(ff, i)->u.s;
+        const char* v = i + 1 < jn(ff) ? jat(ff, i + 1)->u.s : "";
+        int params = !strcmp(a, "-x264-params") || !strcmp(a, "-x265-params") || !strcmp(a, "-x264opts");
+        if (!strncmp(a, "-threads", 8) || (params && thread_setting(v)))
+            return cfail(b->c, YPAK_ERR_FORMAT, "'%s': remove the thread setting from 'ffmpeg' (%s%s%s): the tool sets the thread count "
+                         "itself (-threads N, and pools=N with its frame threads for libx265) and records it, because the bytes change with "
+                         "the count; give \"threads\": N to choose it", e->name, a, params ? " " : "", params ? v : "");
+        if (enc == ENC_X265 && !strcmp(a, "-x265-params") && param_sets(v, "info"))
+            return cfail(b->c, YPAK_ERR_FORMAT, "'%s': remove info from 'ffmpeg' (-x265-params %s): the tool sets info=0 for libx265, because "
+                         "x265's info message names the build's OS, compiler and CPU, so the bytes would differ on another machine", e->name, v);
+        if (enc == ENC_MPEG && (is_opt(a, "-dct") || is_opt(a, "-idct") || (is_opt(a, "-flags") && strstr(v, "-bitexact"))))
+            return cfail(b->c, YPAK_ERR_FORMAT, "'%s': remove '%s %s' from 'ffmpeg': the tool sets -flags +bitexact -dct int -idct simple "
+                         "for mpeg1video and mpeg2video, because their SIMD DCTs give other bytes on another CPU", e->name, a, v);
+    }
+    return 0;
+}
+
+/* The recorded derivation of an entry of the pack being rebuilt. */
+static const jv* prior_deriv(B* b, const char* name) {
+    jv* ents = b->prior_man ? jget(b->prior_man, "entries") : NULL;
+    int i;
+    for (i = 0; ents && i < jn(ents); i++)
+        if (!strcmp(str_of(jat(ents, i), "name", ""), name)) return jget(jat(ents, i), "derivation");
+    return NULL;
+}
+
+/* An entry's bytes from the pack being rebuilt, verified by its hashes. */
+static const uint8_t* prior_bytes(B* b, const char* name, size_t nl, int64_t* n) {
+    ypak_entry pe;
+    const uint8_t* d;
+    if (!b->prior || ypak_find_n(b->prior, name, nl, &pe) != 0) return NULL;
+    d = (const uint8_t*)ypak_data(b->prior, &pe);
+    if (!d && pe.size) return NULL;
+    *n = pe.size;
+    return d;
+}
+
+static int write_whole(C* c, const char* path, const void* d, int64_t n) {
+    FILE* f = ufopen(path, "wb");
+    const uint8_t* q = (const uint8_t*)d;
+    int bad = 0;
+    if (!f) return cfail(c, YPAK_ERR_IO, "cannot create '%s'", path);
+    while (n > 0 && !bad) {   /* in pieces, as sk_put() writes */
+        size_t k = n > ((int64_t)16 << 20) ? ((size_t)16 << 20) : (size_t)n;
+        if (fwrite(q, 1, k, f) != k) bad = 1;
+        q += k;
+        n -= (int64_t)k;
+    }
+    if (fclose(f) != 0 || bad) return cfail(c, YPAK_ERR_IO, "cannot write '%s'", path);
+    return 0;
+}
+
+/* --- kinds: video, its index, frame sequences ------------------------------------ */
+
+static const char* const vid_matrix[] = { "", "rgb", "bt601", "bt709", "bt2020", NULL };
+static const char* const vid_range[] = { "", "limited", "full", NULL };
+static const char* const vid_transfer[] = { "", "device", "bt1886", "srgb", "linear", "gamma22", NULL };
+static const char* const vid_primaries[] = { "", "device", "bt709", "bt601_525", "bt601_625", "bt2020", NULL };
+static const char* const vid_siting[] = { "", "none", "left", "center", NULL };
+static const char* const vid_codec[] = { "", "frameseq", "mpeg1", "h264", "hevc", "custom", NULL };
+
+static const char* vid_name(const char* const* t, int v) {
+    int k;
+    for (k = 0; t[k]; k++) if (k == v) return t[k];
+    return "?";
+}
+
+/* The description's "color": names of ysp/video.h's values (0 where not
+ * given: then the stream's own, or for MPEG-1 the MPEG-1 defaults). */
+static int video_color(B* b, E* e, const jv* col, yvid_index_desc* d) {
+    static const char* const keys[] = { "matrix", "range", "transfer", "primaries", "siting", NULL };
+    static const char* const* const tabs[5] = { vid_matrix, vid_range, vid_transfer, vid_primaries, vid_siting };
+    uint8_t* outs[5];
+    int k;
+    outs[0] = &d->matrix; outs[1] = &d->range; outs[2] = &d->transfer; outs[3] = &d->primaries; outs[4] = &d->siting;
+    if (!col) return 0;
+    if (keys_ok(b->c, col, keys, e->name)) return YPAK_ERR_FORMAT;
+    for (k = 0; k < 5; k++) {
+        const char* v = str_of(col, keys[k], NULL);
+        int m, found = 0;
+        if (want_type(b->c, col, keys[k], J_STR, e->name)) return YPAK_ERR_FORMAT;
+        if (!v) continue;
+        for (m = 1; tabs[k][m]; m++) if (!strcmp(v, tabs[k][m])) { *outs[k] = (uint8_t)m; found = 1; }
+        if (!found) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': color %s '%s' is not one ysp/video.h names", e->name, keys[k], v);
+    }
+    return 0;
+}
+
+static int build_video(B* b, E* e) {
+    static const char* const keys[] = { "name", "kind", "source", "license", "ffmpeg", "ffmpeg_input", "threads", "color", NULL };
+    const char* src = str_of(e->res, "source", NULL);
+    jv* ff = jget(e->res, "ffmpeg");
+    jv* tv = jget(e->res, "threads");
+    jv* fin = jget(e->res, "ffmpeg_input");
+    jv* col = jget(e->res, "color");
+    E* ix = e->idx;
+    yvid_index_desc xd;
+    yvid_desc vd;
+    yvid_info info;
+    char media[2300], idxp[2300], srcpath[2100], by[300], msg[512];
+    sb note;
+    int is_mp4, rc = 0, made_media = 0, k, vi = 0, threads = 0, enc = ENC_OTHER;
+    int64_t frames, n;
+    const char* prog = b->ffmpeg ? b->ffmpeg : "ffmpeg";
+    if (keys_ok(b->c, e->res, keys, e->name) || want_type(b->c, e->res, "ffmpeg", J_ARR, e->name) ||
+        want_type(b->c, e->res, "ffmpeg_input", J_ARR, e->name) || want_type(b->c, e->res, "color", J_OBJ, e->name) ||
+        want_type(b->c, e->res, "threads", J_INT, e->name))
+        return YPAK_ERR_FORMAT;
+    if (fin && !ff) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': 'ffmpeg_input' needs 'ffmpeg'", e->name);
+    if (tv && !ff) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': 'threads' needs 'ffmpeg'", e->name);
+    if (tv && (tv->i < 1 || tv->i > YPT_MAX_THREADS))
+        return cfail(b->c, YPAK_ERR_FORMAT, "'%s': 'threads' is %lld; it is 1 to %d", e->name, (long long)tv->i, YPT_MAX_THREADS);
+    /* A rebuild takes the count from the manifest: it is a resource key, so
+     * it comes back as tv. */
+    if (ff) threads = tv ? (int)tv->i : machine_threads();
+    if (!src) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': no 'source' (an MPEG-1 or MP4 file, or ffmpeg's input)", e->name);
+    is_mp4 = ends_with_i(e->name, ".mp4");
+    if (!is_mp4 && !ends_with_i(e->name, ".mpg") && !ends_with_i(e->name, ".mpeg"))
+        return cfail(b->c, YPAK_ERR_FORMAT, "'%s': a video entry's name ends in .mp4 or .mpg (its form)", e->name);
+    memset(&xd, 0, sizeof xd);
+    if (video_color(b, e, col, &xd)) return YPAK_ERR_FORMAT;
+    snprintf(srcpath, sizeof srcpath, "%s%s%s", b->src_dir, b->src_dir[0] ? "/" : "", src);
+    for (k = 0; k < b->n; k++) if (b->e[k] == e) vi = k;
+    snprintf(idxp, sizeof idxp, "%s.v%d.yspvi", b->tmp, vi);
+    memset(&note, 0, sizeof note);
+    by[0] = 0;
+    if (ff) {
+        const jv* rec = prior_deriv(b, e->name);
+        const char* rec_by = rec ? str_of(rec, "by", NULL) : NULL;
+        char have[256];
+        int hv = ffmpeg_version(prog, have, sizeof have);
+        char tn[16], pools[64];
+        const char** argv;
+        int na = jn(ff), ni = fin ? jn(fin) : 0, i, at_src;
+        if (!na) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': 'ffmpeg' lists no arguments", e->name);
+        for (i = 0; i < na + ni; i++) {
+            const jv* a = i < na ? jat(ff, i) : jat(fin, i - na);
+            if (a->type != J_STR || !a->n) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': each ffmpeg argument is a non-empty string", e->name);
+        }
+        enc = encoder_of(ff, is_mp4);
+        if (ffmpeg_args_ok(b, e, ff, enc)) return YPAK_ERR_FORMAT;
+        /* the source's SHA-256 goes into the manifest whatever makes the bytes */
+        if (!load_source(b, e, src, &n)) return YPAK_ERR_IO;
+        argv = (const char**)calloc_c(b->c, sizeof(char*) * (size_t)(na + ni + 24));
+        if (!argv) return cfail(b->c, YPAK_ERR_NOMEM, "out of memory");
+        snprintf(media, sizeof media, "%s.v%d%s", b->tmp, vi, is_mp4 ? ".mp4" : ".mpg");
+        k = 0;
+        argv[k++] = prog; argv[k++] = "-nostdin"; argv[k++] = "-hide_banner"; argv[k++] = "-loglevel"; argv[k++] = "error";
+        argv[k++] = "-y";
+        for (i = 0; i < ni; i++) argv[k++] = jat(fin, i)->u.s;
+        argv[k++] = "-i";
+        at_src = k;
+        argv[k++] = srcpath;
+        snprintf(tn, sizeof tn, "%d", threads);
+        snprintf(pools, sizeof pools, "pools=%d:frame-threads=%d:info=0", threads, x265_frame_threads(threads));
+        {
+            int merged = 0;
+            for (i = 0; i < na; i++) {
+                const char* a = jat(ff, i)->u.s;
+                const char* add = NULL;
+                char sep = ':';
+                /* appended to the author's value: a second -x265-params or
+                 * -flags would replace the author's */
+                if (i > 0 && enc == ENC_X265 && !strcmp(jat(ff, i - 1)->u.s, "-x265-params")) add = pools;
+                if (i > 0 && enc == ENC_MPEG && is_opt(jat(ff, i - 1)->u.s, "-flags")) { add = "bitexact"; sep = '+'; }
+                if (add) {
+                    size_t al = strlen(a), pl = strlen(add);
+                    char* m = (char*)calloc_c(b->c, al + pl + 2);
+                    if (!m) return cfail(b->c, YPAK_ERR_NOMEM, "out of memory");
+                    memcpy(m, a, al);
+                    m[al] = sep;
+                    memcpy(m + al + 1, add, pl);
+                    a = m;
+                    merged = 1;
+                }
+                argv[k++] = a;
+            }
+            if (enc == ENC_X265 && !merged) { argv[k++] = "-x265-params"; argv[k++] = pools; }
+            if (enc == ENC_MPEG) {
+                if (!merged) { argv[k++] = "-flags"; argv[k++] = "+bitexact"; }
+                argv[k++] = "-dct"; argv[k++] = "int"; argv[k++] = "-idct"; argv[k++] = "simple";
+            }
+            argv[k++] = "-threads";
+            argv[k++] = tn;
+        }
+        argv[k++] = media;
+        argv[k] = NULL;
+        /* the recorded command: the program's name and placeholders for the
+         * paths, so the manifest holds no path of this machine */
+        sb_put(&note, "ffmpeg", 6);
+        for (i = 1; i < k; i++) {
+            const char* a = i == at_src ? "{source}" : i == k - 1 ? "{output}" : argv[i];
+            sb_put(&note, " ", 1);
+            sb_put(&note, a, strlen(a));
+        }
+        if (b->prior && rec_by && (hv < 0 || strcmp(have, rec_by))) {
+            /* rig_spec 5.1, docs/pack.md 5.3: the step cannot run again as it
+             * ran, so its recorded output stands, checked by its hashes */
+            const uint8_t* pd = prior_bytes(b, e->name, e->nl, &n);
+            if (!pd) { free(note.p); return cfail(b->c, YPAK_ERR_CORRUPT, "'%s': the pack's own copy does not read back", e->name); }
+            if (b->report)
+                fprintf(b->report, "note: '%s': the pack was made with %s; %s; the recorded output is used (checked by its hash), "
+                        "and its index is made again from it\n", e->name, rec_by, hv < 0 ? "no ffmpeg runs here" : have);
+            e->data = pd;
+            e->size = n;
+            snprintf(by, sizeof by, "%s", rec_by);
+            rc = write_whole(b->c, media, pd, n);
+            made_media = 1;
+        } else {
+            char tail[1024];
+            int code;
+            if (hv < 0) {
+                free(note.p);
+                return cfail(b->c, YPAK_ERR_IO, "'%s': cannot run '%s -version'; install ffmpeg, put it on the PATH, or give its path "
+                             "(ypak --ffmpeg PATH)", e->name, prog);
+            }
+            code = run_program(argv, tail, sizeof tail);
+            made_media = 1;
+            if (code != 0) {
+                uremove(media);
+                free(note.p);
+                return cfail(b->c, YPAK_ERR_FORMAT, "'%s': ffmpeg exited with %d: %s", e->name, code, tail[0] ? tail : "(no message)");
+            }
+            e->data = read_file(b->c, media, &e->size);
+            if (!e->data) { uremove(media); free(note.p); return YPAK_ERR_IO; }
+            snprintf(by, sizeof by, "%s", have);
+        }
+    } else {
+        e->data = load_source(b, e, src, &e->size);
+        if (!e->data) return YPAK_ERR_IO;
+        snprintf(media, sizeof media, "%s", srcpath);
+        snprintf(by, sizeof by, "ypak %s", YPT_VERSION_STRING);
+    }
+    if (rc == 0) {
+        int mp4 = e->size >= 8 && !memcmp(e->data + 4, "ftyp", 4);
+        int mpg = e->size >= 4 && e->data[0] == 0 && e->data[1] == 0 && e->data[2] == 1 && (e->data[3] == 0xBA || e->data[3] == 0xB3);
+        if (is_mp4 ? !mp4 : !mpg)
+            rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s': the bytes are %s, not what the name's extension says", e->name, mp4 ? "MP4" : mpg ? "MPEG-1" : "neither MP4 nor MPEG-1");
+    }
+    if (rc == 0) {
+        sb_put(&note, "", 0);
+        xd.note = note.p && note.n ? cdup(b->c, note.p, note.n) : NULL;
+        frames = yvid_index_make(media, idxp, &xd, msg, sizeof msg);
+        if (frames == YVID_ERR_NOT_IMPLEMENTED && b->prior) {
+            int64_t in = 0;
+            const uint8_t* pd = prior_bytes(b, ix->name, ix->nl, &in);
+            if (!pd) rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s", e->name, msg);
+            else {
+                if (b->report) fprintf(b->report, "note: '%s': %s; the recorded index is used (checked by its hash)\n", ix->name, msg);
+                ix->data = pd;
+                ix->size = in;
+            }
+        } else if (frames < 0) {
+            rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s", e->name, msg);
+        } else {
+            ix->data = read_file(b->c, idxp, &ix->size);
+            if (!ix->data) rc = YPAK_ERR_IO;
+        }
+        uremove(idxp);
+    }
+    if (made_media) uremove(media);
+    free(note.p);
+    if (rc) return rc;
+    memset(&vd, 0, sizeof vd);
+    vd.data = e->data;
+    vd.size = (size_t)e->size;
+    vd.index = ix->data;
+    vd.index_size = (size_t)ix->size;
+    if (yvid_probe(&vd, &info, msg, sizeof msg) < 0) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': its index: %s", e->name, msg);
+    e->flags |= YPAK_F_STREAM;
+    e->deriv = deriv_new(b, ff ? "ffmpeg" : "copy", by);
+    if (ff) {
+        jset(b->c, e->deriv, "ffmpeg", jcopy(b->c, ff));
+        if (fin) jset(b->c, e->deriv, "ffmpeg_input", jcopy(b->c, fin));
+        jset(b->c, e->deriv, "threads", jint(b->c, threads));
+        jset(b->c, e->deriv, "command", jstrz(b->c, xd.note ? xd.note : ""));
+    }
+    if (col) jset(b->c, e->deriv, "color", jcopy(b->c, col));
+    {
+        char v[96], rate[48];
+        jv* c2 = jnew(b->c, J_OBJ);
+        ix->from = jnew(b->c, J_ARR);
+        jpush(b->c, ix->from, jstr(b->c, e->name, e->nl));
+        snprintf(v, sizeof v, "ysp/video.h %s; %s", YVID_VERSION_STRING, info.codec == YVID_CODEC_MPEG1 ? "pl_mpeg " YPT_PL_MPEG : "Media Foundation, software decoder");
+        ix->deriv = deriv_new(b, "index", v);
+        jset(b->c, ix->deriv, "codec", jstrz(b->c, vid_name(vid_codec, info.codec)));
+        jset(b->c, ix->deriv, "frames", jint(b->c, info.frames));
+        jset(b->c, ix->deriv, "gop", jint(b->c, info.gop));
+        jset(b->c, ix->deriv, "w", jint(b->c, info.w));
+        jset(b->c, ix->deriv, "h", jint(b->c, info.h));
+        snprintf(rate, sizeof rate, "%d/%d", info.fps_num, info.fps_den);
+        jset(b->c, ix->deriv, "rate", jstrz(b->c, rate));
+        jset(b->c, c2, "matrix", jstrz(b->c, vid_name(vid_matrix, info.matrix)));
+        jset(b->c, c2, "range", jstrz(b->c, vid_name(vid_range, info.range)));
+        jset(b->c, c2, "transfer", jstrz(b->c, vid_name(vid_transfer, info.transfer)));
+        jset(b->c, c2, "primaries", jstrz(b->c, vid_name(vid_primaries, info.primaries)));
+        jset(b->c, c2, "siting", jstrz(b->c, vid_name(vid_siting, info.siting)));
+        jset(b->c, ix->deriv, "color", c2);
+    }
+    return 0;
+}
+
+/* Every byte of a frame sequence (ysp/video.h FRAME SEQUENCE) checked: the
+ * header and its hash, the canonical color, each frame's header, data and
+ * zero padding, every frame's texels against its XXH64, and the index. The
+ * capture fields of a frame header (times, trial, event) are free. */
+static int check_frameseq(B* b, E* e, const uint8_t* d, int64_t n, yvid_info* info) {
+    yvid_desc vd;
+    char msg[256];
+    int64_t io, at = YPAK_ALIGN, i, raw;
+    uint32_t comp;
+    uint8_t* scratch = NULL;
+    int rgb;
+    memset(&vd, 0, sizeof vd);
+    vd.data = d;
+    vd.size = (size_t)n;
+    if (n < 4096 + 64 || memcmp(d, "YSPVSEQ1", 8)) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': not a ysp/video.h frame sequence", e->name);
+    if (yvid_probe(&vd, info, msg, sizeof msg) < 0) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s", e->name, msg);
+    comp = r32(d + 28);
+    io = (int64_t)(r32(d + 64) | ((uint64_t)r32(d + 68) << 32));
+    rgb = info->format >= YVID_FMT_R8 && info->format <= YVID_FMT_R16;
+    if (info->w < 1 || info->h < 1 || info->w > 65536 || info->h > 65536 || info->fps_num < 1 || info->fps_den < 1 || info->frames < 1)
+        return cfail(b->c, YPAK_ERR_FORMAT, "'%s': size %d x %d, rate %d/%d, %lld frames", e->name, info->w, info->h, info->fps_num, info->fps_den, (long long)info->frames);
+    if (!rgb && info->format != YVID_FMT_I420 && info->format != YVID_FMT_NV12)
+        return cfail(b->c, YPAK_ERR_FORMAT, "'%s': frame format %d is not one ysp/video.h plays", e->name, info->format);
+    if (rgb ? !(info->matrix == YVID_MATRIX_RGB && info->range == YVID_RANGE_FULL && info->transfer == YVID_TRC_DEVICE &&
+                info->primaries == YVID_PRIM_DEVICE && info->siting == YVID_SITING_NONE)
+            : !(info->matrix && info->range && info->transfer && info->primaries && info->siting))
+        return cfail(b->c, YPAK_ERR_FORMAT, "'%s': the color is not stated as ysp/video.h's canonical form asks", e->name);
+    for (i = 128; i < 4096; i++) if (d[i]) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': header byte %lld is not zero", e->name, (long long)i);
+    if (rgb) {
+        static const int bpt[9] = { 0, 1, 2, 4, 4, 16, 4, 16, 2 };
+        raw = (int64_t)info->w * info->h * bpt[info->format];
+    } else {
+        raw = (int64_t)info->w * info->h + 2 * (int64_t)((info->w + 1) / 2) * ((info->h + 1) / 2);
+    }
+    if (io < 4096 || io % YPAK_ALIGN || info->frames > (n - io) / 24 || io + 24 * info->frames != n)
+        return cfail(b->c, YPAK_ERR_FORMAT, "'%s': the index does not end the file", e->name);
+    if (comp == 1) {
+        scratch = (uint8_t*)malloc((size_t)raw + 16);
+        if (!scratch) return cfail(b->c, YPAK_ERR_NOMEM, "out of memory");
+    }
+    for (i = 0; i < info->frames; i++) {
+        const uint8_t* x = d + io + 24 * i;
+        int64_t off = (int64_t)(r32(x) | ((uint64_t)r32(x + 4) << 32)), size = r32(x + 8), end, k;
+        uint64_t hash = r32(x + 16) | ((uint64_t)r32(x + 20) << 32), got;
+        const uint8_t* f = d + at;
+        if (off != at || r32(x + 12) != 0 || at + 64 + size > io) { free(scratch); return cfail(b->c, YPAK_ERR_FORMAT, "'%s': index entry %lld does not name the next frame", e->name, (long long)i); }
+        if (memcmp(f, "YSPF", 4) || r32(f + 4) != 64 || r32(f + 8) != (uint32_t)i || r32(f + 12) != (uint32_t)((uint64_t)i >> 32) ||
+            r32(f + 16) != (uint32_t)size || r32(f + 20) != 0 || (r32(f + 24) | ((uint64_t)r32(f + 28) << 32)) != hash) {
+            free(scratch);
+            return cfail(b->c, YPAK_ERR_FORMAT, "'%s': frame %lld's header does not match the index", e->name, (long long)i);
+        }
+        if (comp == 0) {
+            if (size != raw) { free(scratch); return cfail(b->c, YPAK_ERR_FORMAT, "'%s': frame %lld holds %lld bytes; %lld expected", e->name, (long long)i, (long long)size, (long long)raw); }
+            got = ypak_xxh64(f + 64, (size_t)size, 0);
+        } else {
+            if (yvid_qoi_decode(f + 64, (size_t)size, scratch, info->w, info->h) < 0) { free(scratch); return cfail(b->c, YPAK_ERR_FORMAT, "'%s': frame %lld is not valid QOI", e->name, (long long)i); }
+            got = ypak_xxh64(scratch, (size_t)raw, 0);
+        }
+        if (got != hash) { free(scratch); return cfail(b->c, YPAK_ERR_FORMAT, "'%s': frame %lld does not match its hash", e->name, (long long)i); }
+        end = (at + 64 + size + YPAK_ALIGN - 1) & ~(int64_t)(YPAK_ALIGN - 1);
+        for (k = at + 64 + size; k < end; k++) if (d[k]) { free(scratch); return cfail(b->c, YPAK_ERR_FORMAT, "'%s': frame %lld's padding is not zero", e->name, (long long)i); }
+        at = end;
+    }
+    free(scratch);
+    if (at != io) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': bytes between the last frame and the index", e->name);
+    return 0;
+}
+
+static int build_frameseq(B* b, E* e) {
+    static const char* const keys[] = { "name", "kind", "source", "license", NULL };
+    static const char* const fmt_names[9] = { "", "r8", "rg8", "rgba8", "r16f", "rgba16f", "r32f", "rgba32f", "r16" };
+    const char* src = str_of(e->res, "source", NULL);
+    yvid_info info;
+    char ver[64], rate[48];
+    int rc;
+    if (keys_ok(b->c, e->res, keys, e->name)) return YPAK_ERR_FORMAT;
+    if (!src) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': no 'source' (a frame sequence from yvid_seq_open())", e->name);
+    e->data = load_source(b, e, src, &e->size);
+    if (!e->data) return YPAK_ERR_IO;
+    rc = check_frameseq(b, e, e->data, e->size, &info);
+    if (rc) return rc;
+    e->flags |= YPAK_F_STREAM;
+    snprintf(ver, sizeof ver, "ysp/video.h %s", YVID_VERSION_STRING);
+    e->deriv = deriv_new(b, "copy", ver);
+    jset(b->c, e->deriv, "frames", jint(b->c, info.frames));
+    jset(b->c, e->deriv, "w", jint(b->c, info.w));
+    jset(b->c, e->deriv, "h", jint(b->c, info.h));
+    jset(b->c, e->deriv, "format", jstrz(b->c, info.format == YVID_FMT_I420 ? "i420" : info.format == YVID_FMT_NV12 ? "nv12"
+                                                : info.format >= 1 && info.format <= 8 ? fmt_names[info.format] : "?"));
+    jset(b->c, e->deriv, "compression", jstrz(b->c, r32(e->data + 28) ? "qoi" : "raw"));
+    snprintf(rate, sizeof rate, "%d/%d", info.fps_num, info.fps_den);
+    jset(b->c, e->deriv, "rate", jstrz(b->c, rate));
+    return 0;
+}
+
+/* The texts of the experiment's text stimuli (docs/experiment_format.md
+ * D14, gap G9) go into one GLYPHRUNS entry named after the experiment
+ * entry: "experiment/main.json" gives "experiment/main.ysprun". The player
+ * finds it by that rule and a text by ypak_runs_key() of its style and text, so
+ * neither needs a list in the description. A glyph runs resource of that
+ * name adds its blocks and its fonts (fallbacks after each stimulus's font). */
+static const void* table_bytes(void* ctx, const char* name, size_t* n) {
+    E* t = find_entry((B*)ctx, name);
+    if (!t || t->kind != YPAK_KIND_TABLE || !t->data) return NULL;
+    *n = (size_t)t->size;
+    return t->data;
+}
+
+static void warn_line(void* ctx, const char* line) {
+    B* b = (B*)ctx;
+    if (b->c->warn) fprintf(b->c->warn, "warning: experiment '%s': %s\n", b->exp->name, line);
+}
+
+static int derive_runs(B* b) {
+    char msg[600], name[1100];
+    const char* dot;
+    const char* sl;
+    size_t stem;
+    E* e;
+    int i, rc;
+    if (!b->exp || !b->exp->data) return 0;
+    /* a lookup without a key for a level stops the session that meets it */
+    rc = ypt_check_lookups(b->exp->data, (size_t)b->exp->size, table_bytes, b, warn_line, b, msg, sizeof msg);
+    if (rc) return cfail(b->c, rc, "experiment '%s': %s", b->exp->name, msg);
+    rc = ypt_derive_texts(b->exp->data, (size_t)b->exp->size, table_bytes, b, &b->tx, msg, sizeof msg);
+    if (rc) return cfail(b->c, rc, "experiment '%s': %s", b->exp->name, msg);
+    if (!b->tx.n_texts) return 0;
+    dot = strrchr(b->exp->name, '.');
+    sl = strrchr(b->exp->name, '/');
+    stem = dot && (!sl || dot > sl) ? (size_t)(dot - b->exp->name) : b->exp->nl;
+    snprintf(name, sizeof name, "%.*s.ysprun", (int)stem, b->exp->name);
+    e = find_entry(b, name);
+    if (e && e->kind != YPAK_KIND_GLYPHRUNS)
+        return cfail(b->c, YPAK_ERR_FORMAT, "'%s': the experiment's glyph runs take this name; give the %s another", name, ypak_kind_name(e->kind));
+    if (!e) {
+        if (!ypt_name_ok(name, strlen(name)))
+            return cfail(b->c, YPAK_ERR_FORMAT, "'%s', the experiment's glyph runs: not a portable entry name", name);
+        for (i = 0; i < b->n; i++)
+            if (!name_icmp(name, strlen(name), b->e[i]->name, b->e[i]->nl))
+                return cfail(b->c, YPAK_ERR_FORMAT, "'%s' and '%s', the experiment's glyph runs: the same name without regard to case",
+                             b->e[i]->name, name);
+        e = add_entry(b);
+        if (!e) return cfail(b->c, YPAK_ERR_NOMEM, "out of memory");
+        e->name = cdup(b->c, name, strlen(name));
+        e->nl = strlen(name);
+        e->kind = YPAK_KIND_GLYPHRUNS;
+    }
+    b->runs = e;
     return 0;
 }
 
@@ -1152,82 +2147,180 @@ static int build_texture(B* b, E* e) {
  * about 8 MB of sources), which a pack of tables, sounds and images should
  * not have to build. Refused by name, so a rebuild says what to install. */
 static int build_glyphruns(B* b, E* e) {
-    return cfail(b->c, YPAK_ERR_FORMAT, "'%s': glyph runs need the layout library; this ypak was built without it "
-                 "(configure with -DYSP_BUILD_LAYOUT=ON)", e->name);
+    return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %sglyph runs need the layout library; this ypak was built without it "
+                 "(configure with -DYSP_BUILD_LAYOUT=ON)", e->name, e == b->runs ? "the experiment's texts need glyph runs, and " : "");
 }
 #else
-typedef struct blk { const char* key; jv* v; } blk;
+/* A block to lay out: from the description (derived 0) or from the
+ * experiment (derived 1, with its stimulus). Reals are decimal text. */
+typedef struct blk {
+    const char* key; const char* text; const char* size; const char* width; const char* lh; const char* color;
+    const char* dir; const char* align; const char* lang;
+    const char* stim; const char* font;
+    const ypt_text* t;   /* derived: the text, for its stimuli */
+    int lib, derived;
+} blk;
 static int blk_cmp(const void* a, const void* b2) {
     const blk* x = (const blk*)a;
     const blk* y = (const blk*)b2;
     return strcmp(x->key, y->key);
 }
 
+/* A layout library over a fallback list of the entry's fonts. */
+typedef struct runlib { int font[65]; int n; ylay_lib* L; } runlib;
+
+static int real_text(B* b, const E* e, const blk* k, const char* field, const char* s, double* out) {
+    if (ytb_parse_number(s, strlen(s), out) != YTB_NUM_OK)
+        return cfail(b->c, YPAK_ERR_FORMAT, "'%s' block '%s': '%s' is \"%s\", not a decimal number", e->name, k->key, field, s);
+    return 0;
+}
+
 static int build_glyphruns(B* b, E* e) {
     static const char* const keys[] = { "name", "kind", "license", "fonts", "blocks", NULL };
     static const char* const bkeys[] = { "key", "text", "size", "width", "line_height", "dir", "align", "lang", "color", NULL };
-    jv* fonts = jget(e->res, "fonts");
-    jv* blocks = jget(e->res, "blocks");
-    ylay_lib* L = NULL;
-    ylay_desc ld;
+    const ypt_texts* tx = e == b->runs ? &b->tx : NULL;
+    jv* fonts = e->res ? jget(e->res, "fonts") : NULL;
+    jv* blocks = e->res ? jget(e->res, "blocks") : NULL;
     ylay_block lb;
     E* fe[64];
     E* ce[64];
-    int ff[64], nf, i, rc = 0;
+    int ff[64], nf = 0, nh, nhb, nd, nb, i, rc = 0, nl = 0, L0 = -1;
+    runlib lib[65];
     blk* bl;
     sb pool, runs, items, clus, lines, brec;
     uint32_t n_runs = 0, n_items = 0, n_lines = 0;
-    char stamp[2048];
-    if (keys_ok(b->c, e->res, keys, e->name) || want_type(b->c, e->res, "fonts", J_ARR, e->name) ||
-        want_type(b->c, e->res, "blocks", J_ARR, e->name))
+    char stamp[8192];
+    if (e->res && (keys_ok(b->c, e->res, keys, e->name) || want_type(b->c, e->res, "fonts", J_ARR, e->name) ||
+                   want_type(b->c, e->res, "blocks", J_ARR, e->name)))
         return YPAK_ERR_FORMAT;
-    if (!fonts || !jn(fonts) || jn(fonts) > 64) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': 'fonts' lists 1 to 64 font entries", e->name);
-    if (!blocks || !jn(blocks)) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': 'blocks' is empty", e->name);
-    nf = jn(fonts);
+    nh = fonts ? jn(fonts) : 0;
+    nhb = blocks ? jn(blocks) : 0;
+    nd = tx ? tx->n_texts : 0;
+    /* derived texts need no list; listed blocks need listed fonts */
+    if (nh > 64 || ((nhb || !nd) && !nh)) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': 'fonts' lists 1 to 64 font entries", e->name);
+    if (!nd && !nhb) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': 'blocks' is empty", e->name);
     e->from = jnew(b->c, J_ARR);
-    for (i = 0; i < nf; i++) {
-        const jv* f = jat(fonts, i);
-        const char* fname = f->type == J_STR ? f->u.s : str_of(f, "font", NULL);
-        jv* fv = f->type == J_OBJ ? jget(f, "face") : NULL;
-        int face = fv && fv->type == J_INT ? (int)fv->i : 0, k;
-        if (!fname) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': a font is a name or {\"font\", \"face\"}", e->name);
-        fe[i] = find_entry(b, fname);
-        if (!fe[i] || fe[i]->kind != YPAK_KIND_FONT) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': '%s' is not a font entry of this pack", e->name, fname);
-        if (face < 0 || face >= fe[i]->faces) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': '%s' has no face %d", e->name, fname, face);
-        ff[i] = face;
-        ce[i] = NULL;
+    /* the entry's fonts: the description's in its order, then each derived
+     * stimulus's font that it lacks, by name */
+    for (i = 0; i < nh + nd; i++) {
+        const char* fname;
+        int face = 0, k;
+        if (i < nh) {
+            const jv* f = jat(fonts, i);
+            jv* fv = f->type == J_OBJ ? jget(f, "face") : NULL;
+            fname = f->type == J_STR ? f->u.s : str_of(f, "font", NULL);
+            face = fv && fv->type == J_INT ? (int)fv->i : 0;
+            if (!fname) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': a font is a name or {\"font\", \"face\"}", e->name);
+        } else {
+            const char* best = NULL;
+            /* the smallest derived font name not in the list yet */
+            for (k = 0; k < nd; k++) {
+                const char* fn = tx->texts[k].font;
+                int have = 0, j;
+                for (j = 0; j < nf; j++) if (ff[j] == 0 && !strcmp(fe[j]->name, fn)) have = 1;
+                if (!have && (!best || strcmp(fn, best) < 0)) best = fn;
+            }
+            if (!best) break;
+            fname = best;
+        }
+        if (nf == 64) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': more than 64 fonts", e->name);
+        fe[nf] = find_entry(b, fname);
+        if (!fe[nf] || fe[nf]->kind != YPAK_KIND_FONT) {
+            if (i >= nh) {
+                for (k = 0; k < nd && strcmp(tx->texts[k].font, fname); k++) {}
+                return cfail(b->c, YPAK_ERR_FORMAT, "experiment '%s': stimulus '%s': font '%s' is not a font entry of this pack", b->exp->name,
+                             tx->texts[k].stimulus, fname);
+            }
+            return cfail(b->c, YPAK_ERR_FORMAT, "'%s': '%s' is not a font entry of this pack", e->name, fname);
+        }
+        if (face < 0 || face >= fe[nf]->faces) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': '%s' has no face %d", e->name, fname, face);
+        ff[nf] = face;
+        ce[nf] = NULL;
         for (k = 0; k < b->n; k++) {
             E* q = b->e[k];
             jv* qf;
             if (q->kind != YPAK_KIND_CURVESET) continue;
             qf = jget(q->res, "face");
-            if (!strcmp(str_of(q->res, "from", ""), fname) && (qf && qf->type == J_INT ? (int)qf->i : 0) == face) { ce[i] = q; break; }
+            if (!strcmp(str_of(q->res, "from", ""), fname) && (qf && qf->type == J_INT ? (int)qf->i : 0) == face) { ce[nf] = q; break; }
         }
-        if (!ce[i]) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': no curveset entry is made from '%s' face %d; add one", e->name, fname, face);
+        if (!ce[nf]) return cfail(b->c, YPAK_ERR_FORMAT, "'%s': no curveset entry is made from '%s' face %d; add one", e->name, fname, face);
         jpush(b->c, e->from, jstrz(b->c, fname));
+        nf++;
     }
-    memset(&ld, 0, sizeof ld);
-    ld.ol = &b->ol;
-    if (ylay_create(&L, &ld) < 0) return cfail(b->c, YPAK_ERR_NOMEM, "'%s': ylay_create failed", e->name);
-    for (i = 0; i < nf; i++)
-        if (ylay_add_font(L, fe[i]->data, (size_t)fe[i]->size, ff[i], fe[i]->name) < 0) {
-            rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s", e->name, ylay_error(L));
-            ylay_destroy(L);
-            return rc;
-        }
-    bl = (blk*)calloc_c(b->c, sizeof(blk) * (size_t)jn(blocks));
-    for (i = 0; bl && i < jn(blocks); i++) {
-        if (keys_ok(b->c, jat(blocks, i), bkeys, e->name) || !str_of(jat(blocks, i), "key", NULL) || !str_of(jat(blocks, i), "text", NULL)) {
-            ylay_destroy(L);
-            return cfail(b->c, YPAK_ERR_FORMAT, "'%s': block %d needs 'key' and 'text'", e->name, i);
-        }
-        bl[i].key = str_of(jat(blocks, i), "key", "");
-        bl[i].v = jat(blocks, i);
+    if (tx) {
+        jpush(b->c, e->from, jstrz(b->c, b->exp->name));
+        for (i = 0; i < tx->n_tables; i++) jpush(b->c, e->from, jstrz(b->c, tx->tables[i]));
     }
-    if (!bl) { ylay_destroy(L); return cfail(b->c, YPAK_ERR_NOMEM, "out of memory"); }
-    qsort(bl, (size_t)jn(blocks), sizeof(blk), blk_cmp);
-    for (i = 1; i < jn(blocks); i++)
-        if (!strcmp(bl[i].key, bl[i - 1].key)) { ylay_destroy(L); return cfail(b->c, YPAK_ERR_FORMAT, "'%s': key '%s' twice", e->name, bl[i].key); }
+    /* one library per fallback list: the description's list for its blocks;
+     * a stimulus's font, then the description's others, for derived ones */
+    nb = nhb + nd;
+    bl = (blk*)calloc_c(b->c, sizeof(blk) * (size_t)(nb ? nb : 1));
+    if (!bl) return cfail(b->c, YPAK_ERR_NOMEM, "out of memory");
+    for (i = 0; i < nhb; i++) {
+        const jv* v = jat(blocks, i);
+        if (keys_ok(b->c, v, bkeys, e->name)) return YPAK_ERR_FORMAT;
+        if (want_type(b->c, v, "size", J_STR, e->name) || want_type(b->c, v, "width", J_STR, e->name) ||
+            want_type(b->c, v, "line_height", J_STR, e->name) || want_type(b->c, v, "color", J_STR, e->name))
+            return YPAK_ERR_FORMAT;
+        if (!str_of(v, "key", NULL) || !str_of(v, "text", NULL) || !str_of(v, "size", NULL))
+            return cfail(b->c, YPAK_ERR_FORMAT, "'%s': block %d needs 'key', 'text' and 'size'", e->name, i);
+        bl[i].key = str_of(v, "key", ""); bl[i].text = str_of(v, "text", ""); bl[i].size = str_of(v, "size", "");
+        bl[i].width = str_of(v, "width", "0"); bl[i].lh = str_of(v, "line_height", "0"); bl[i].color = str_of(v, "color", "0");
+        bl[i].dir = str_of(v, "dir", "auto"); bl[i].align = str_of(v, "align", "start"); bl[i].lang = str_of(v, "lang", "");
+        bl[i].lib = 0;
+    }
+    for (i = 0; i < nd; i++) {
+        const ypt_text* t = &tx->texts[i];
+        blk* k = &bl[nhb + i];
+        k->key = t->key; k->text = t->text; k->size = t->size; k->width = t->width; k->lh = t->line_height; k->color = "0";
+        k->dir = t->dir; k->align = t->align; k->lang = t->lang; k->stim = t->stimulus; k->font = t->font; k->t = t; k->derived = 1;
+    }
+    memset(lib, 0, sizeof lib);
+    if (nhb) {
+        for (i = 0; i < nh; i++) lib[0].font[i] = i;
+        lib[0].n = nh;
+        nl = 1;
+        L0 = 0;
+    }
+    for (i = nhb; i < nb; i++) {
+        int j, f = -1, li;
+        for (j = nh; j < nf; j++) if (!strcmp(fe[j]->name, bl[i].font)) f = j;
+        for (j = 0; f < 0 && j < nh; j++) if (ff[j] == 0 && !strcmp(fe[j]->name, bl[i].font)) f = j;
+        for (li = 0; li < nl; li++) if (li != L0 && lib[li].font[0] == f) break;
+        if (li == nl) {
+            lib[nl].font[lib[nl].n++] = f;
+            for (j = 0; j < nh; j++) if (j != f) lib[nl].font[lib[nl].n++] = j;
+            nl++;
+        }
+        bl[i].lib = li;
+    }
+    for (i = 0; i < nl; i++) {
+        ylay_desc ld;
+        int j;
+        memset(&ld, 0, sizeof ld);
+        ld.ol = &b->ol;
+        if (ylay_create(&lib[i].L, &ld) < 0) { rc = cfail(b->c, YPAK_ERR_NOMEM, "'%s': ylay_create failed", e->name); break; }
+        for (j = 0; rc == 0 && j < lib[i].n; j++) {
+            int f = lib[i].font[j];
+            if (ylay_add_font(lib[i].L, fe[f]->data, (size_t)fe[f]->size, ff[f], fe[f]->name) < 0)
+                rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s", e->name, ylay_error(lib[i].L));
+        }
+    }
+    if (rc == 0) {
+        qsort(bl, (size_t)nb, sizeof(blk), blk_cmp);
+        for (i = 1; rc == 0 && i < nb; i++)
+            if (!strcmp(bl[i].key, bl[i - 1].key)) {
+                const blk* d = bl[i].derived ? &bl[i] : &bl[i - 1];
+                if (d->derived && !(bl[i].derived && bl[i - 1].derived))
+                    rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s': key '%s' is a text of stimulus '%s', derived from the experiment; give the "
+                               "hand-listed block another key", e->name, bl[i].key, d->stim);
+                else rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s': key '%s' twice", e->name, bl[i].key);
+            }
+    }
+    if (rc) {
+        for (i = 0; i < nl; i++) if (lib[i].L) ylay_destroy(lib[i].L);
+        return rc;
+    }
     memset(&pool, 0, sizeof pool); memset(&runs, 0, sizeof runs); memset(&items, 0, sizeof items);
     memset(&clus, 0, sizeof clus); memset(&lines, 0, sizeof lines); memset(&brec, 0, sizeof brec);
     sb_put(&pool, "", 0);
@@ -1243,25 +2336,31 @@ static int build_glyphruns(B* b, E* e) {
         sb_put(&brec, fr, (size_t)16 * (size_t)nf);   /* parked in brec's head; moved below */
     }
     memset(&lb, 0, sizeof lb);
-    for (i = 0; rc == 0 && i < jn(blocks); i++) {
-        const jv* v = bl[i].v;
+    for (i = 0; rc == 0 && i < nb; i++) {
+        const blk* v = &bl[i];
+        const runlib* rl = &lib[v->lib];
+        ylay_lib* L = rl->L;
         ylay_style s;
         double size, width, lh, color;
-        const char* dir = str_of(v, "dir", "auto");
-        const char* align = str_of(v, "align", "start");
-        const char* lang = str_of(v, "lang", "");
-        const char* text = str_of(v, "text", "");
+        const char* dir = v->dir;
+        const char* align = v->align;
+        const char* lang = v->lang;
+        const char* text = v->text;
         uint8_t r[96];
         uint32_t k;
         memset(&s, 0, sizeof s);
-        if (real_of(b->c, v, "size", NULL, &size, e->name) || real_of(b->c, v, "width", "0", &width, e->name) ||
-            real_of(b->c, v, "line_height", "0", &lh, e->name) || real_of(b->c, v, "color", "0", &color, e->name)) { rc = YPAK_ERR_FORMAT; break; }
+        if (real_text(b, e, v, "size", v->size, &size) || real_text(b, e, v, "width", v->width, &width) ||
+            real_text(b, e, v, "line_height", v->lh, &lh) || real_text(b, e, v, "color", v->color, &color)) { rc = YPAK_ERR_FORMAT; break; }
         s.size = (float)size; s.width = (float)width; s.line_height = (float)lh; s.color = (float)color; s.lang = lang;
         s.dir = !strcmp(dir, "ltr") ? YLAY_DIR_LTR : !strcmp(dir, "rtl") ? YLAY_DIR_RTL : !strcmp(dir, "auto") ? YLAY_DIR_AUTO : -1;
         s.align = !strcmp(align, "start") ? YLAY_ALIGN_START : !strcmp(align, "end") ? YLAY_ALIGN_END : !strcmp(align, "center") ? YLAY_ALIGN_CENTER : -1;
         if (s.dir < 0 || s.align < 0) { rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s' block '%s': dir is auto, ltr or rtl; align is start, end or center", e->name, bl[i].key); break; }
         if (ylay_layout(L, text, -1, &s, NULL, 0, &lb) < 0) { rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s' block '%s': %s", e->name, bl[i].key, ylay_error(L)); break; }
-        if (lb.n_missing) { rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s' block '%s': %u characters no font maps; add a font that has them", e->name, bl[i].key, lb.n_missing); break; }
+        if (lb.n_missing) {
+            rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s' block '%s': %u characters no font maps; add a font that has them%s", e->name, bl[i].key,
+                       lb.n_missing, v->derived ? " (a fallback in 'fonts' of a glyphruns resource of this name)" : "");
+            break;
+        }
         memset(r, 0, sizeof r);
         w32(r, (uint32_t)pool.n); w32(r + 4, (uint32_t)strlen(bl[i].key)); sb_puts(&pool, bl[i].key); sb_put(&pool, "\0", 1);
         w32(r + 8, (uint32_t)pool.n); w32(r + 12, (uint32_t)strlen(text)); sb_puts(&pool, text); sb_put(&pool, "\0", 1);
@@ -1274,7 +2373,7 @@ static int build_glyphruns(B* b, E* e) {
         for (k = 0; k < lb.n_runs; k++) {
             uint8_t q[16];
             const ylay_run* ru = &lb.runs[k];
-            w32(q, (uint32_t)ru->font); memcpy(q + 4, &ru->size, 4); w32(q + 8, ru->first); w32(q + 12, ru->n);
+            w32(q, (uint32_t)rl->font[ru->font]); memcpy(q + 4, &ru->size, 4); w32(q + 8, ru->first); w32(q + 12, ru->n);
             sb_put(&runs, q, 16);
         }
         for (k = 0; k < lb.n_items; k++) {
@@ -1285,7 +2384,7 @@ static int build_glyphruns(B* b, E* e) {
             w32(cl, lb.cluster[k]);
             sb_put(&clus, cl, 4);
             for (rr = 0; rr < lb.n_runs; rr++)
-                if (k >= lb.runs[rr].first && k < lb.runs[rr].first + lb.runs[rr].n) fi = (uint32_t)lb.runs[rr].font;
+                if (k >= lb.runs[rr].first && k < lb.runs[rr].first + lb.runs[rr].n) fi = (uint32_t)rl->font[lb.runs[rr].font];
             if (fi < (uint32_t)nf) {
                 E* f = fe[fi];
                 int face = ff[fi];
@@ -1305,25 +2404,44 @@ static int build_glyphruns(B* b, E* e) {
         n_items += lb.n_items;
         n_lines += lb.n_lines;
     }
-    ylay_stamp(L, NULL, stamp, sizeof stamp);
+    /* ylay_stamp()'s line over the entry's fonts in entry order: the
+     * versions from one library, each font's hash from one that has it */
+    {
+        size_t at;
+        char* f;
+        ylay_stamp(lib[0].L, NULL, stamp, sizeof stamp);
+        f = strstr(stamp, " fonts=");
+        at = f ? (size_t)(f - stamp) + 7 : strlen(stamp);
+        for (i = 0; i < nf; i++) {
+            ylay_font_info fi;
+            int li, j, got = 0;
+            memset(&fi, 0, sizeof fi);
+            for (li = 0; li < nl && !got; li++)
+                for (j = 0; j < lib[li].n && !got; j++)
+                    if (lib[li].font[j] == i && ylay_font(lib[li].L, j, &fi) == 0) got = 1;
+            if (got && at < sizeof stamp)
+                at += (size_t)snprintf(stamp + at, sizeof stamp - at, "%s%s#%d=%s", i ? "," : "", fe[i]->name, ff[i], fi.sha256);
+        }
+        if (at >= sizeof stamp) rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s': the layout stamp of %d fonts is past %d bytes", e->name, nf, (int)sizeof stamp);
+    }
     ylay_block_free(&lb);
-    ylay_destroy(L);
+    for (i = 0; i < nl; i++) ylay_destroy(lib[i].L);
     if (rc == 0 && (pool.bad || runs.bad || items.bad || clus.bad || lines.bad || brec.bad)) rc = cfail(b->c, YPAK_ERR_NOMEM, "out of memory");
     if (rc == 0) {
 #define A16(x) (((x) + 15u) & ~(uint64_t)15u)
-        uint64_t fo = 112, bo = A16(fo + 16u * (uint64_t)nf), ro = A16(bo + 96u * (uint64_t)jn(blocks)), io = A16(ro + 16u * n_runs);
+        uint64_t fo = 112, bo = A16(fo + 16u * (uint64_t)nf), ro = A16(bo + 96u * (uint64_t)nb), io = A16(ro + 16u * n_runs);
         uint64_t co = A16(io + 32u * (uint64_t)n_items), lo = A16(co + 4u * (uint64_t)n_items), po = A16(lo + 32u * (uint64_t)n_lines);
         uint64_t total = A16(po + pool.n);
         uint8_t* d = (uint8_t*)calloc_c(b->c, (size_t)total + 16);
         if (!d) rc = cfail(b->c, YPAK_ERR_NOMEM, "out of memory");
         else {
             memcpy(d, "YSPGRUN1", 8);
-            w32(d + 8, 1); w32(d + 12, 112); w32(d + 16, (uint32_t)nf); w32(d + 20, (uint32_t)jn(blocks)); w32(d + 24, n_runs);
+            w32(d + 8, 1); w32(d + 12, 112); w32(d + 16, (uint32_t)nf); w32(d + 20, (uint32_t)nb); w32(d + 24, n_runs);
             w32(d + 28, n_items); w32(d + 32, n_lines);
             w64(d + 40, fo); w64(d + 48, bo); w64(d + 56, ro); w64(d + 64, io); w64(d + 72, co); w64(d + 80, lo); w64(d + 88, po);
             w64(d + 96, pool.n);
             memcpy(d + fo, brec.p, (size_t)16 * (size_t)nf);
-            memcpy(d + bo, brec.p + 16 * nf, (size_t)96 * (size_t)jn(blocks));
+            memcpy(d + bo, brec.p + 16 * nf, (size_t)96 * (size_t)nb);
             if (runs.n) memcpy(d + ro, runs.p, runs.n);
             if (items.n) memcpy(d + io, items.p, items.n);
             if (clus.n) memcpy(d + co, clus.p, clus.n);
@@ -1337,25 +2455,40 @@ static int build_glyphruns(B* b, E* e) {
     free(pool.p); free(runs.p); free(items.p); free(clus.p); free(lines.p); free(brec.p);
     if (rc) return rc;
     {
-        /* the stamp without the font list: the fonts are this entry's 'from' */
+        /* the description's blocks, which a rebuild takes back; the
+         * derived ones are a record: a rebuild derives them again */
         jv* bs = jnew(b->c, J_ARR);
+        jv* ds = jnew(b->c, J_ARR);
         e->deriv = deriv_new(b, "layout", stamp);
-        jset(b->c, e->deriv, "fonts", jcopy(b->c, fonts));
-        for (i = 0; i < jn(blocks); i++) {
-            const jv* v = bl[i].v;
+        jset(b->c, e->deriv, "fonts", fonts ? jcopy(b->c, fonts) : jnew(b->c, J_ARR));
+        for (i = 0; i < nb; i++) {
+            const blk* v = &bl[i];
             jv* o = jnew(b->c, J_OBJ);
-            jset(b->c, o, "key", jstrz(b->c, bl[i].key));
-            jset(b->c, o, "text", jstrz(b->c, str_of(v, "text", "")));
-            jset(b->c, o, "size", jstrz(b->c, str_of(v, "size", "")));
-            jset(b->c, o, "width", jstrz(b->c, str_of(v, "width", "0")));
-            jset(b->c, o, "line_height", jstrz(b->c, str_of(v, "line_height", "0")));
-            jset(b->c, o, "dir", jstrz(b->c, str_of(v, "dir", "auto")));
-            jset(b->c, o, "align", jstrz(b->c, str_of(v, "align", "start")));
-            jset(b->c, o, "lang", jstrz(b->c, str_of(v, "lang", "")));
-            jset(b->c, o, "color", jstrz(b->c, str_of(v, "color", "0")));
-            jpush(b->c, bs, o);
+            jset(b->c, o, "key", jstrz(b->c, v->key));
+            jset(b->c, o, "text", jstrz(b->c, v->text));
+            jset(b->c, o, "size", jstrz(b->c, v->size));
+            jset(b->c, o, "width", jstrz(b->c, v->width));
+            jset(b->c, o, "line_height", jstrz(b->c, v->lh));
+            jset(b->c, o, "dir", jstrz(b->c, v->dir));
+            jset(b->c, o, "align", jstrz(b->c, v->align));
+            jset(b->c, o, "lang", jstrz(b->c, v->lang));
+            if (v->derived) {
+                jv* sa = jnew(b->c, J_ARR);
+                int q;
+                for (q = 0; q < v->t->n_stimuli; q++) jpush(b->c, sa, jstrz(b->c, v->t->stimuli[q]));
+                jset(b->c, o, "stimuli", sa);
+                jset(b->c, o, "font", jstrz(b->c, v->font));
+                jpush(b->c, ds, o);
+            } else {
+                jset(b->c, o, "color", jstrz(b->c, v->color));
+                jpush(b->c, bs, o);
+            }
         }
         jset(b->c, e->deriv, "blocks", bs);
+        if (tx) {
+            jset(b->c, e->deriv, "experiment", jstrz(b->c, b->exp->name));
+            jset(b->c, e->deriv, "derived", ds);
+        }
     }
     return 0;
 }
@@ -1565,6 +2698,10 @@ static void lib_versions(C* c, jv* tool, int laid_out) {
     jset(c, l, "ysp/gfx.h", jstrz(c, YGFX_VERSION_STRING));
     jset(c, l, "ysp/color.h", jstrz(c, YCOL_VERSION_STRING));
     jset(c, l, "ysp/audio.h", jstrz(c, YAU_VERSION_STRING));
+    jset(c, l, "ysp/video.h", jstrz(c, YVID_VERSION_STRING));
+    jset(c, l, "stb_image", jstrz(c, YPT_STB_IMAGE));
+    jset(c, l, "pl_mpeg", jstrz(c, YPT_PL_MPEG));
+    jset(c, l, "libsamplerate", jstrz(c, YPT_LIBSAMPLERATE));
 #ifndef YPT_NO_LAYOUT
     if (laid_out) {
         const ylay_versions* v = ylay_get_versions();
@@ -1602,9 +2739,12 @@ static jv* entry_obj(C* c, const E* e) {
     return o;
 }
 
-typedef int (*kind_fn)(B*, E*);
+/* What a build needs besides the description: a prefix for its own files
+ * (the ffmpeg output, the index), the ffmpeg program, and in a rebuild the
+ * pack and its manifest. */
+typedef struct bopt { const char* tmp; const char* ffmpeg; ypak_pack* prior; jv* prior_man; FILE* report; } bopt;
 
-static int build_desc(C* c, jv* desc, const char* base_dir, sink* out) {
+static int build_desc(C* c, jv* desc, const char* base_dir, const bopt* bo, sink* out) {
     static const char* const tkeys[] = { "format", "version", "experiment", "audio", "private", "resources", NULL };
     static const char* const ekeys[] = { "entry", "source", "media_type", NULL };
     static const char* const akeys[] = { "rate", "channels", "map", NULL };
@@ -1622,6 +2762,11 @@ static int build_desc(C* c, jv* desc, const char* base_dir, sink* out) {
     memset(&b, 0, sizeof b);
     b.c = c;
     b.desc = desc;
+    b.tmp = bo->tmp;
+    b.ffmpeg = bo->ffmpeg;
+    b.prior = bo->prior;
+    b.prior_man = bo->prior_man;
+    b.report = bo->report;
     snprintf(b.src_dir, sizeof b.src_dir, "%s", base_dir ? base_dir : "");
     if (keys_ok(c, desc, tkeys, "the source description")) return YPAK_ERR_FORMAT;
     if (strcmp(str_of(desc, "format", ""), "ysp-pack-source") != 0 || !jget(desc, "version") || jget(desc, "version")->type != J_INT ||
@@ -1651,8 +2796,10 @@ static int build_desc(C* c, jv* desc, const char* base_dir, sink* out) {
             goto done;
         }
         e = add_entry(&b);
+        if (!e) { rc = cfail(c, YPAK_ERR_NOMEM, "out of memory"); goto done; }
         e->res = ex;
         e->kind = YPAK_KIND_EXPERIMENT;
+        b.exp = e;
         e->name = cdup(c, str_of(ex, "entry", ""), strlen(str_of(ex, "entry", "")));
         e->nl = strlen(e->name);
     }
@@ -1662,15 +2809,35 @@ static int build_desc(C* c, jv* desc, const char* base_dir, sink* out) {
         const char* name = str_of(r, "name", NULL);
         E* e;
         uint32_t k = kind ? ypak_kind_id(kind) : 0;
-        if (r->type != J_OBJ || !k || k == YPAK_KIND_MANIFEST || k == YPAK_KIND_CHUNKS || k == YPAK_KIND_EXPERIMENT || k >= YPAK_KIND_VIDEO) {
+        if (k == YPAK_KIND_VIDEO_INDEX) {
+            rc = cfail(c, YPAK_ERR_FORMAT, "resource %d: a video_index is made with its video; give the video", i);
+            goto done;
+        }
+        if (k == YPAK_KIND_ALPHA) {
+            /* docs/pack.md 4.11: the form follows the first experiment that needs it */
+            rc = cfail(c, YPAK_ERR_FORMAT, "resource %d: alpha is not built yet: its form waits for the first experiment that needs it", i);
+            goto done;
+        }
+        if (r->type != J_OBJ || !k || k == YPAK_KIND_MANIFEST || k == YPAK_KIND_CHUNKS || k == YPAK_KIND_EXPERIMENT || k > YPAK_KIND_FRAMESEQ) {
             rc = cfail(c, YPAK_ERR_FORMAT, "resource %d: kind '%s' is not one this tool builds (file, table, calibration, font, curveset, "
-                       "glyphruns, artwork, audio, shader, texture; the experiment is the top-level \"experiment\")", i, kind ? kind : "");
+                       "glyphruns, artwork, audio, shader, texture, video, frameseq; the experiment is the top-level \"experiment\")", i, kind ? kind : "");
             goto done;
         }
         e = add_entry(&b);
+        if (!e) { rc = cfail(c, YPAK_ERR_NOMEM, "out of memory"); goto done; }
         e->res = r;
         e->kind = k;
         if (name) e->name = cdup(c, name, strlen(name));
+        else if (k == YPAK_KIND_VIDEO && jget(r, "ffmpeg") && str_of(r, "source", NULL)) {
+            /* made by ffmpeg: an MP4 unless the name says otherwise */
+            const char* s = str_of(r, "source", "");
+            const char* dot = strrchr(s, '.');
+            const char* sl = strrchr(s, '/');
+            size_t stem = dot && (!sl || dot > sl) ? (size_t)(dot - s) : strlen(s);
+            char t[1100];
+            snprintf(t, sizeof t, "%.*s.mp4", (int)stem, s);
+            e->name = cdup(c, t, strlen(t));
+        }
         else if (str_of(r, "source", NULL)) e->name = default_name(&b, str_of(r, "source", ""), k);
         else if (k == YPAK_KIND_CURVESET && str_of(r, "from", NULL)) {
             char t[1100];
@@ -1686,6 +2853,18 @@ static int build_desc(C* c, jv* desc, const char* base_dir, sink* out) {
             goto done;
         }
         e->nl = strlen(e->name);
+        if (k == YPAK_KIND_VIDEO) {
+            /* its index, named as ysp/video.h finds an index beside a file */
+            E* x = add_entry(&b);
+            char t[1100];
+            if (!x) { rc = cfail(c, YPAK_ERR_NOMEM, "out of memory"); goto done; }
+            snprintf(t, sizeof t, "%s.yspvi", e->name);
+            x->name = cdup(c, t, strlen(t));
+            x->nl = strlen(x->name);
+            x->kind = YPAK_KIND_VIDEO_INDEX;
+            e->idx = x;
+            x->idx = e;
+        }
     }
     /* names: the writer's rule, reserved, unique without regard to case */
     for (i = 0; i < b.n; i++) {
@@ -1703,8 +2882,10 @@ static int build_desc(C* c, jv* desc, const char* base_dir, sink* out) {
                 goto done;
             }
     }
-    /* build in dependency order: fonts before glyph runs before curve sets */
+    /* build in dependency order: fonts, tables and the experiment before
+     * glyph runs (which the experiment's texts may add) before curve sets */
     for (pass = 0; pass < 3 && rc == 0; pass++) {
+        if (pass == 1) rc = derive_runs(&b);
         for (i = 0; i < b.n && rc == 0; i++) {
             E* e = b.e[i];
             uint32_t k = e->kind;
@@ -1713,7 +2894,7 @@ static int build_desc(C* c, jv* desc, const char* base_dir, sink* out) {
             if (pass == 2 && k != YPAK_KIND_CURVESET) continue;
             e->sources = jnew(c, J_ARR);
             switch (k) {
-            case YPAK_KIND_EXPERIMENT: rc = build_copy(&b, e, "ypak " YPT_VERSION_STRING); break;
+            case YPAK_KIND_EXPERIMENT: rc = build_experiment(&b, e); break;
             case YPAK_KIND_FILE: {
                 static const char* const keys[] = { "name", "kind", "source", "license", NULL };
                 rc = keys_ok(c, e->res, keys, e->name);
@@ -1728,6 +2909,10 @@ static int build_desc(C* c, jv* desc, const char* base_dir, sink* out) {
             case YPAK_KIND_AUDIO: rc = build_audio(&b, e); break;
             case YPAK_KIND_SHADER: rc = build_shader(&b, e); break;
             case YPAK_KIND_TEXTURE: rc = build_texture(&b, e); break;
+            case YPAK_KIND_VIDEO: rc = build_video(&b, e); break;
+            /* made by its video, which comes right before it */
+            case YPAK_KIND_VIDEO_INDEX: rc = e->data ? 0 : cfail(c, YPAK_ERR_FORMAT, "'%s': no index was made", e->name); break;
+            case YPAK_KIND_FRAMESEQ: rc = build_frameseq(&b, e); break;
             default: rc = cfail(c, YPAK_ERR_FORMAT, "'%s': kind not built", e->name); break;
             }
             if (rc == 0) rc = hash_entry(c, e);
@@ -1783,6 +2968,7 @@ static int build_desc(C* c, jv* desc, const char* base_dir, sink* out) {
     if (rc == 0) rc = write_pack(c, out, all, b.n + 2, 0, 0);
 done:
     if (b.ol_ok) yol_close(&b.ol);
+    ypt_texts_free(&b.tx);
     return rc;
 }
 
@@ -1804,17 +2990,20 @@ static int finish_file(C* c, sink* s, const char* tmp, const char* out_path, int
     return rc;
 }
 
-int ypt_build_text(const char* json, size_t n, const char* base_dir, const char* out_path, const ypt_options* o, char* err, size_t cap) {
+static int build_text_ex(const char* json, size_t n, const char* base_dir, const char* out_path, const ypt_options* o,
+                         ypak_pack* prior, jv* prior_man, FILE* report, char* err, size_t cap) {
     C c;
     jv* desc;
     sink s;
     char tmp[2100];
     int rc;
+    bopt bo;
     memset(&c, 0, sizeof c);
     c.err = err;
     c.cap = cap;
     if (err && cap) err[0] = 0;
     c.log = o ? o->log : NULL;
+    c.warn = o ? o->warn : NULL;
     desc = jparse(&c, json, n, "the source description");
     if (!desc) { cfree_all(&c); return YPAK_ERR_FORMAT; }
     memset(&s, 0, sizeof s);
@@ -1822,10 +3011,20 @@ int ypt_build_text(const char* json, size_t n, const char* base_dir, const char*
     snprintf(tmp, sizeof tmp, "%s.tmp", out_path);
     s.f = ufopen(tmp, "wb");
     if (!s.f) { rc = cfail(&c, YPAK_ERR_IO, "cannot create '%s'", tmp); cfree_all(&c); return rc; }
-    rc = build_desc(&c, desc, o && o->sources ? o->sources : base_dir, &s);
+    memset(&bo, 0, sizeof bo);
+    bo.tmp = tmp;
+    bo.ffmpeg = o ? o->ffmpeg : NULL;
+    bo.prior = prior;
+    bo.prior_man = prior_man;
+    bo.report = report;
+    rc = build_desc(&c, desc, o && o->sources ? o->sources : base_dir, &bo, &s);
     rc = finish_file(&c, &s, tmp, out_path, rc);
     cfree_all(&c);
     return rc;
+}
+
+int ypt_build_text(const char* json, size_t n, const char* base_dir, const char* out_path, const ypt_options* o, char* err, size_t cap) {
+    return build_text_ex(json, n, base_dir, out_path, o, NULL, NULL, NULL, err, cap);
 }
 
 int ypt_build(const char* desc_path, const char* out_path, const ypt_options* o, char* err, size_t cap) {
@@ -2117,7 +3316,7 @@ static jv* manifest_to_desc(C* c, const jv* m) {
         jv* dv = jget(o, "derivation");
         jv* r;
         int k;
-        if (!strcmp(kind, "chunks")) continue;
+        if (!strcmp(kind, "chunks") || !strcmp(kind, "video_index")) continue;   /* the index comes with its video */
         if (!strcmp(kind, "experiment")) {
             jv* x = jnew(c, J_OBJ);
             jset(c, x, "entry", jstrz(c, str_of(o, "name", "")));
@@ -2139,8 +3338,13 @@ static jv* manifest_to_desc(C* c, const jv* m) {
             if ((!strcmp(kind, "font") && (!strcmp(key, "faces") || !strcmp(key, "fs_type"))) ||
                 (!strcmp(kind, "calibration") && !strcmp(key, "role")) ||
                 (!strcmp(kind, "curveset") && (!strcmp(key, "resolve") || !strcmp(key, "backward"))) ||
+                (!strcmp(kind, "glyphruns") && (!strcmp(key, "experiment") || !strcmp(key, "derived"))) ||
                 (!strcmp(kind, "shader") && (!strcmp(key, "contract") || !strcmp(key, "validated"))) ||
-                (!strcmp(kind, "audio") && !strcmp(key, "convert")))
+                (!strcmp(kind, "audio") && (!strcmp(key, "convert") || !strcmp(key, "from_rate") || !strcmp(key, "clipped"))) ||
+                (!strcmp(kind, "table") && (!strcmp(key, "formulas") || !strcmp(key, "text_columns"))) ||
+                (!strcmp(kind, "texture") && !strcmp(key, "icc")) ||
+                (!strcmp(kind, "video") && !strcmp(key, "command")) ||
+                (!strcmp(kind, "frameseq") && strcmp(key, "license")))
                 continue;
             jset(c, r, key, jcopy(c, jat(dv, k)));
         }
@@ -2151,7 +3355,13 @@ static jv* manifest_to_desc(C* c, const jv* m) {
 }
 
 int ypt_rebuild(const char* pack_path, const char* sources_dir, const char* out_path, FILE* report, char* err, size_t cap) {
+    return ypt_rebuild_ex(pack_path, sources_dir, out_path, NULL, report, err, cap);
+}
+
+int ypt_rebuild_ex(const char* pack_path, const char* sources_dir, const char* out_path, const ypt_options* o, FILE* report,
+                   char* err, size_t cap) {
     C c;
+    ypt_options bo;
     ypak_pack p, q;
     jv* m;
     jv* desc;
@@ -2190,15 +3400,20 @@ int ypt_rebuild(const char* pack_path, const char* sources_dir, const char* out_
                 uint8_t sha[32];
                 int64_t n;
                 uint8_t* d;
+                int canon;
                 snprintf(path, sizeof path, "%s/%s", sources_dir, rel);
                 d = read_file(&c, path, &n);
                 if (!d) { ypak_close(&p); rc = c.err && c.err[0] ? YPAK_ERR_IO : cfail(&c, YPAK_ERR_IO, "cannot read '%s'", path); cfree_all(&c); return rc; }
+                /* a definition's source is its canonical bytes (build_experiment) */
+                canon = !strcmp(str_of(jget(jat(ents, i), "derivation"), "op", ""), "canonical");
+                if (canon && exp_canonical(&c, d, n, &d, &n) < 0) { ypak_close(&p); cfree_all(&c); return YPAK_ERR_NOMEM; }
                 ypak_sha256(d, (size_t)n, sha);
                 hex(sha, 32, hx);
                 if (strcmp(hx, str_of(jat(src, k), "sha256", ""))) {
                     ypak_close(&p);
-                    rc = cfail(&c, YPAK_ERR_CORRUPT, "source '%s' of '%s' is not the one the pack was built from (SHA-256 %s, the "
-                               "manifest says %s)", rel, str_of(jat(ents, i), "name", ""), hx, str_of(jat(src, k), "sha256", ""));
+                    rc = cfail(&c, YPAK_ERR_CORRUPT, "source '%s' of '%s' is not the one the pack was built from (SHA-256 %s%s, the "
+                               "manifest says %s)", rel, str_of(jat(ents, i), "name", ""), hx, canon ? " of its canonical bytes" : "",
+                               str_of(jat(src, k), "sha256", ""));
                     if (report) fprintf(report, "%s\n", err);
                     cfree_all(&c);
                     return rc;
@@ -2213,7 +3428,10 @@ int ypt_rebuild(const char* pack_path, const char* sources_dir, const char* out_
     if (text.bad) { free(text.p); ypak_close(&p); cfree_all(&c); return YPAK_ERR_NOMEM; }
     if (out_path) snprintf(tmp, sizeof tmp, "%s", out_path);
     else snprintf(tmp, sizeof tmp, "%s.rebuild", pack_path);
-    rc = ypt_build_text(text.p, text.n, sources_dir, tmp, NULL, err, cap);
+    memset(&bo, 0, sizeof bo);
+    bo.ffmpeg = o ? o->ffmpeg : NULL;
+    bo.warn = o ? o->warn : NULL;
+    rc = build_text_ex(text.p, text.n, sources_dir, tmp, &bo, &p, m, report, err, cap);
     free(text.p);
     if (rc) { ypak_close(&p); cfree_all(&c); return rc; }
     rc = open_pack(&c, &q, tmp, YPAK_VERIFY_NONE);
