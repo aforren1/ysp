@@ -51,7 +51,7 @@ int sec_links(void) {
         P("  CADisplayLink needs macOS 14\n");
     }
     int nf = (int)(g_opt.seconds * 250) + 100;
-    frame_rec* r = calloc((size_t)nf, sizeof(frame_rec));
+    frame_rec* r = frames_new(nf);
     __block int n = 0;
     int64_t t0 = mach_ns_now();
     int64_t end = t0 + secs_to_ns(g_opt.seconds);
@@ -122,7 +122,6 @@ int sec_links(void) {
     FILE* csv = open_csv(tagged("links_frames"), frames_header());
     write_frames(csv, "links_asap", r, n, &gcv);
     if (csv) fclose(csv);
-    free(r);
     free(ca_r);
     [p close];
     return 0;

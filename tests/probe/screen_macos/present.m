@@ -105,7 +105,7 @@ int sec_present(void) {
          * frame spreads the commit over the whole refresh, so the depth shows
          * its dependence on the phase. */
         if (want("asap", true) && !quit_requested()) {
-            run_ctx c = { p, calloc((size_t)N, sizeof(frame_rec)), N, mach_ns_now(), 0 };
+            run_ctx c = { p, frames_new(N), N, mach_ns_now(), 0 };
             for (int i = 0; i < N && !quit_requested(); i++) {
                 last_vblank(p, &per);
                 sleep_until(mach_ns_now() + (int64_t)(frand() * per));
@@ -123,24 +123,22 @@ int sec_present(void) {
                     if (d >= 0 && d < 8) h[d]++;
                 }
             for (int d = 1; d < 8; d++) if (h[d] > h[depth_seen]) depth_seen = d;
-            free(c.r);
         }
         /* pipe: no wait but nextDrawable's; the queue the layer allows */
         if (want("pipe", true) && !quit_requested()) {
-            run_ctx c = { p, calloc((size_t)N, sizeof(frame_rec)), N, mach_ns_now(), 0 };
+            run_ctx c = { p, frames_new(N), N, mach_ns_now(), 0 };
             for (int i = 0; i < N && !quit_requested(); i++) {
                 c.r[i].frame = i;
                 [p frame:&c.r[i] level:0.3f mindur:0];
             }
             finish("pipe", &c, csv);
-            free(c.r);
         }
         /* quant: target V + frac x period with V `lead` vblanks after the last one */
         if (want("quant", true) && !quit_requested()) {
             static const int leads[] = { 1, 2, 3, 5 };
             static const double fr[] = { -0.5, -0.45, -0.25, 0.0, 0.25, 0.45, 0.5 };
             int n = 4 * 7 * g_opt.reps, k = 0;
-            run_ctx c = { p, calloc((size_t)n, sizeof(frame_rec)), n, mach_ns_now(), 0 };
+            run_ctx c = { p, frames_new(n), n, mach_ns_now(), 0 };
             for (int rep = 0; rep < g_opt.reps && !quit_requested(); rep++)
                 for (int li = 0; li < 4; li++)
                     for (int fi = 0; fi < 7; fi++) {
@@ -159,13 +157,12 @@ int sec_present(void) {
             finish("quant", &c, csv);
             grid g = cv_grid(p.cv, c.t0 - 100000000, c.t1);
             quant_table(c.r, c.n, &g, leads, 4, fr, 7);
-            free(c.r);
         }
         /* ahead: how far ahead a target holds */
         if (want("ahead", false) && !quit_requested()) {
             static const double ahead[] = { 0.1, 0.25, 0.5, 1.0, 2.0, 5.0 };
             int n = 6 * 3, k = 0;
-            run_ctx c = { p, calloc((size_t)n, sizeof(frame_rec)), n, mach_ns_now(), 0 };
+            run_ctx c = { p, frames_new(n), n, mach_ns_now(), 0 };
             for (int rep = 0; rep < 3; rep++)
                 for (int i = 0; i < 6 && !quit_requested(); i++) {
                     frame_rec* f = &c.r[k];
@@ -192,12 +189,11 @@ int sec_present(void) {
                 }
             }
             finish("ahead", &c, csv);
-            free(c.r);
         }
         /* late: frames held 2 vblanks; every 10th is committed 0.3 period after
          * its target vblank */
         if (want("late", true) && !quit_requested()) {
-            run_ctx c = { p, calloc((size_t)N, sizeof(frame_rec)), N, mach_ns_now(), 0 };
+            run_ctx c = { p, frames_new(N), N, mach_ns_now(), 0 };
             for (int i = 0; i < N && !quit_requested(); i++) {
                 frame_rec* f = &c.r[i];
                 int64_t v = last_vblank(p, &per);
@@ -211,11 +207,10 @@ int sec_present(void) {
                 wait_presented(p, f);
             }
             finish("late", &c, csv);
-            free(c.r);
         }
         /* sleep: hold by sleeping until 1 ms after vblank (V - depth), then present at once */
         if (want("sleep", true) && !quit_requested()) {
-            run_ctx c = { p, calloc((size_t)N, sizeof(frame_rec)), N, mach_ns_now(), 0 };
+            run_ctx c = { p, frames_new(N), N, mach_ns_now(), 0 };
             P(" sleep run uses depth %d (from asap, else 1)\n", depth_seen);
             for (int i = 0; i < N && !quit_requested(); i++) {
                 frame_rec* f = &c.r[i];
@@ -228,13 +223,12 @@ int sec_present(void) {
                 wait_presented(p, f);
             }
             finish("sleep", &c, csv);
-            free(c.r);
         }
         /* queue: drawables - 1 presents in flight, each for its own vblank */
         if (want("queue", true) && !quit_requested()) {
             int K = g_opt.drawables - 1 > 0 ? g_opt.drawables - 1 : 1;
             int n = K * g_opt.reps, k = 0;
-            run_ctx c = { p, calloc((size_t)n, sizeof(frame_rec)), n, mach_ns_now(), 0 };
+            run_ctx c = { p, frames_new(n), n, mach_ns_now(), 0 };
             for (int rep = 0; rep < g_opt.reps && !quit_requested(); rep++) {
                 int64_t v = last_vblank(p, &per);
                 for (int j = 0; j < K; j++) {
@@ -250,11 +244,10 @@ int sec_present(void) {
             }
             c.n = k;
             finish("queue", &c, csv);
-            free(c.r);
         }
         /* mindur: each frame at least 2 periods after the one before */
         if (want("mindur", true) && !quit_requested()) {
-            run_ctx c = { p, calloc((size_t)N, sizeof(frame_rec)), N, mach_ns_now(), 0 };
+            run_ctx c = { p, frames_new(N), N, mach_ns_now(), 0 };
             last_vblank(p, &per);
             for (int i = 0; i < N && !quit_requested(); i++) {
                 c.r[i].frame = i;
@@ -262,7 +255,6 @@ int sec_present(void) {
                 [p frame:&c.r[i] level:0.6f mindur:2.0 * per / 1e9];
             }
             finish("mindur", &c, csv);
-            free(c.r);
         }
     });
     if (csv) fclose(csv);

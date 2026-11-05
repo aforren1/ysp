@@ -2,7 +2,7 @@
 
 This note describes a probe that measures what macOS, Metal and ANGLE
 give a display backend. Its results decide how the macOS backend of
-`ysp/screen.h` (`YSCR_BACKEND_METAL`, a stub today) is built. The plan
+`ysp/screen.h` (`YSCR_BACKEND_METAL`, built in v0.11.0) is built. The plan
 that asks for the backend is [rig_spec.md](rig_spec.md) section 4.2
 ("macOS: whatever ANGLE's Metal backend exposes, measured before it is
 claimed"), section 8 (timing model, tiers) and section 13 (SDL3's EGL
@@ -10,11 +10,10 @@ path on Cocoa; ANGLE's 10-bit configurations on Metal). The Windows
 measurements that the probe mirrors are in [screen.md](screen.md). The
 house pattern for a probe is [screen_x11_probe.md](screen_x11_probe.md).
 
-State: the functional part ran on 2026-11-04 and 2026-11-05 (section 5).
-The timing runs have not run: other jobs compiled on the machine, and the
-console session was locked the whole time, so no frame reached the panel
-(section 5.1). Section 6 is the template for their numbers. Section 7
-recommends a design from what is known now and names what waits.
+State: the functional part ran on 2026-11-04 and 2026-11-05 with the
+session locked (section 5). The timing session ran on 2026-11-05, unlocked,
+with a Screen Sharing session open (section 6). Section 7 is the design,
+built in `ysp/screen.h` v0.11.0 and set from section 6 in v0.12.0.
 
 Code: `tests/probe/screen_macos/`
 
@@ -475,92 +474,236 @@ Not timing results, but they show what to look for:
 Whether either sits on the scanout's vblank is what `links-window` and
 `links-space` measure, against `presentedTime`.
 
-## 6. Results of the timing runs (template)
+## 6. Results of the timing session, 2026-11-05
 
-Fill from `summary.txt`. Leave a cell empty when the probe did not report
-it.
+Run by the coordinator with `sh tests/probe/screen_macos/run.sh all` from
+the mac-integration worktree (the probe sources as merged there, the
+same as this branch's at the time), results in
+`.claude/worktrees/mac-integration/build/macos/screen_probe_20261105/`.
+Analysis on this branch; the depth and grid numbers on the presentedTime
+grid come from the CSVs (a script in the session notes, not kept).
 
 ### 6.1 Conditions
 
 | Item | Value |
 |---|---|
-| Date; macOS; load (processes.txt) | |
-| Display mode and period (CVDisplayLink nominal, fit) | |
-| Session unlocked, display on, AC | |
+| Date; macOS | 2026-11-05 05:24 to 05:38; macOS 27.0.1 (26A434) |
+| Machine | Mac mini (Mac14,3), Apple M2, AC (a Mac mini has no battery) |
+| Display | M27Q over HDMI; desktop 1920 x 1080, labeled 60 Hz; CVDisplayLink 400330/24000000 s = 16.680417 ms (59.9505 Hz); 120 and 144 Hz in the `exclusive` conditions |
+| Session | Unlocked, display on. **A macOS Screen Sharing session was open** (screensharingd 4.4% CPU in the process list at the start, about 11% by the coordinator's reading; replayd; WindowServer 15.9 to 30%). Screen Sharing captures the screen and may force every window through the compositor; nothing in the data tells either way |
+| ANGLE, SDL | Electron 43.8.3's (SHA-256 as in section 5), SDL 3.4.0 |
+| Other load | Other agents' builds had stopped; the HDMI audio runs came after, not during |
 
 ### 6.2 SDL3's EGL path
 
-| Condition | swaps/s | swap call p50 / p99, us | return phase p50 | depth histogram | `presentedTime` minus swap p50, ms | `|presentedTime - grid|` p99, us |
-|---|---|---|---|---|---|---|
-| window, interval 1 | | | | | | |
-| window, interval 0 | | | | | | |
-| space, interval 1 | | | | | | |
+The swap times come from the swizzled drawables (section 4.2).
 
-### 6.3 Shared presenter
+| Condition | swaps/s | swap call p50 / p99, us | depth (vblanks after the one before the call) | presentedTime minus swap call p50, ms | shown / 600 |
+|---|---|---|---|---|---|
+| window, interval 1 | 70.5 | 97.5 / 141 | 3: 509 of 509 | 48.2 | 509 |
+| window, interval 0 | 361 | 45.0 / 140 | 1: 247, 2: 16, <=0: 24 (no vsync) | 7.5 | 288 |
+| space, interval 1 | 62.4 | 117 / 220 | 3: 576 of 576 | 48.6 | 576 |
+| window, 10 bits | `SDL_CreateWindow`: "Could not create GLES window surface" | | | | |
 
-Copy the `RESULT share` lines and the `asap` rows of each run (depth,
-shown).
+`eglSwapBuffers` does not block on the vblank (p50 under 0.12 ms); the
+loop is paced by ANGLE's `nextDrawable`, three drawables deep, so every
+frame shows three vblanks after its swap (48 ms). No extension exposes any
+of it. The 10-bit failure is the missing config (6.8).
 
-### 6.4 Vblank sources
+### 6.3 Shared presenter (question 1b)
+
+`share_heavy` (`--heavy 400`), 300 frames per run, window: every run but
+the first showed 300 of 300 frames, 2 distinct drawable surfaces. The
+first run of each process (`drawable_ios_none`) stopped at 8 distinct
+surfaces with 2 of 8 shown: the layer's first drawables after the window
+opens (reruns of the light condition alone, 60 frames, did the same: 0
+of 8, then 56 to 60 of 60 in every run).
+
+| Run (heavy) | mismatches | GL draw + sync p50 / p99, us | depth 2 of 300 | presented minus commit p50, ms |
+|---|---|---|---|---|
+| drawable_ios_finish | 0 | 5062 / 5703 | 289 | 26.4 |
+| drawable_ios_event | 0 | 142 / 257 | 300 | 31.3 |
+| drawable_ios_scheduled | 0 | 252 / 389 | 300 | 31.3 |
+| drawable_image_none | **3** | 119 / 223 | 300 | 31.5 |
+| drawable_image_event | 0 | 145 / 245 | 300 | 31.3 |
+| iosurface_event | 0 | 175 / 256 | 300 | 31.1 |
+
+The light `share` condition showed no frame at all: the drawable runs
+stopped at 8 distinct surfaces with 0 of 8 shown, and the `iosurface` runs
+showed 0 of 300, with `nextDrawable` waiting its 1 s timeout at p99. Two
+reruns of `egl --kind space` followed by `share` (2026-11-05, 05:5x, one
+with a 5 s pause between) did the same (0 shown in every run); `share`
+alone, twice, did not. In the session the light `share` also came right
+after `egl_space_i1` (and `egl_window_10bit`, which opened no window). So
+a window opened just after another process left a fullscreen space was
+not shown, while it said `occlusion visible 1` at open. Why, is not known:
+the probe now prints the window's visibility after each run, and the next
+rerun was refused because the session had locked. In that state:
+
+- Core Animation hands out a new drawable, on a new IOSurface, for nearly
+  every frame (8 distinct in 8 frames), because none is consumed. The
+  header's 6-slot pbuffer cache would then make a pbuffer each frame (3.6
+  to 34 us each, kept to 6): bounded, and only while no frame is shown,
+  whose records are estimated anyway. Shown runs used 2 surfaces.
+- `iosurface_event` had 28 readback mismatches in 300: in the `iosurface`
+  target one IOSurface is drawn by ANGLE and read by the probe's blit, and
+  nothing orders ANGLE's next frame after the probe's blit of the frame
+  before (a write after read). Unpaced frames make it likely. The header
+  does not use that target: ANGLE draws into the drawable itself.
+- Presented handlers came after the probe's 1 s drain for 11 to 21 of 300
+  frames, and wrote into the run's frame array after the probe freed it:
+  the exit 139 at the end of the condition. Fixed in the probe (`a79e04c`):
+  frame arrays are never freed.
+
+### 6.4 Vblank sources (question 2)
 
 | Item | window | space |
 |---|---|---|
-| CV: period fit, |residual| p50 / p99 / max, us; missed | | |
-| CV: callback minus `inNow` p50 / p99, us | | |
-| CA: period fit, |residual| p99, us; missed | | |
-| CA timestamp minus nearest CV `inNow`, p50, us | | |
-| `presentedTime`: phase after CV grid, us; |residual| p99, us | | |
-| presented handler minus `presentedTime`, p50 / p99, us | | |
+| CVDisplayLink: period fit; \|residual\| p50 / p99 / max, us | 16.680380 ms; 270 / 668 / 742 | 16.680368 ms; 263 / 692 / 753 |
+| CV callback minus `inNow` p50 / p99, us | 4.4 / 12.4 | 4.6 / 10.0 |
+| CV `inOutputTime` minus `inNow` | 24.0 ms (1.44 periods) | 24.0 ms |
+| CADisplayLink: period fit; \|residual\| p99 | 16.680375 ms; 0.00 us | 16.680375 ms; 0.00 us |
+| CADisplayLink callback minus timestamp p50 / p99, us | 55 / 97 | 47 / 87 |
+| CADisplayLink grid minus CV grid | +7591.7 us | +7569.0 us |
+| presentedTime: period fit; \|residual\| p99 / max | 16.680371 ms; 0.23 / 0.42 us | 16.680370 ms; 0.29 / 0.37 us |
+| presentedTime grid minus CV grid | +7591.8 us | +7568.5 us |
+| presented handler minus presentedTime p50 / p99, us | 567 / 653 | 576 / 678 |
+
+- presentedTime and CADisplayLink's timestamp lie on one grid (0.1 us
+  apart), computed (residual under 1 us everywhere; 0.64 us max over every
+  `present` run with display sync), 0.45 period after CVDisplayLink's
+  `inNow` at 59.95 Hz (0.40 at 120 and 144 Hz: 3.3 and 2.8 ms).
+  CVDisplayLink's `inNow` jitters by up to 0.9 ms. Which one is the
+  scanout's vblank, or where the light is, only a photodiode says.
+- The handler always came after presentedTime (0.30 to 0.76 ms over every
+  run, all rates).
+- The frame loop of `links` waits for each frame's handler before the next
+  frame, so it showed every other vblank (window: 1896 frames in 60 s,
+  1701 steps of 2; space: 1801, 1797 steps of 2).
 
 ### 6.5 Depth and latency per window kind
 
-| Kind | depth histogram (asap) | presented minus commit p50 / p99, ms | handler minus `presentedTime` p50, us | pipe: `nextDrawable` p50, ms; steps | HUD says |
-|---|---|---|---|---|---|
-| window | | | | | |
-| borderless | | | | | |
-| space | | | | | |
-| fullscreen | | | | | |
-| exclusive 120 Hz | | | | | |
-| exclusive 144 Hz | | | | | |
+Depth here is on the presentedTime grid: the shown vblank minus the last
+presentedTime vblank before the commit returned (section 3.1's depth is on
+the CV grid and reads one less for half the commits).
+
+| Kind (rate) | asap: depth 2 / 3 | asap: latest commit phase that showed at depth 2 | asap presented minus commit min / p50, ms | pipe: depth 3, latency p50 ms, `nextDrawable` p50 ms |
+|---|---|---|---|---|
+| window (59.95 Hz) | 277 / 21 | 0.938 | 17.72 / 25.95 | 299 of 300, 47.4, 16.4 |
+| borderless | 275 / 23 | 0.940 | 17.68 / 26.06 | 299, 48.1, 16.4 |
+| space | 270 / 28 | 0.929 | 17.86 / 26.10 | 299, 48.4, 16.5 |
+| fullscreen (a space too, 6.10) | 275 / 23 | 0.931 | 17.83 / 26.08 | 299, 48.5, 16.5 |
+| exclusive 120 Hz | 266 / 33 (4: 1) | 0.914 | 9.05 / | 299, 24.1 max, |
+| exclusive 144 Hz | 261 / 39 | 0.907 | 7.60 / | 299, 19.9 max, |
+
+A commit shows two presentedTime vblanks later when it comes at least a
+period plus 1.0 to 1.18 ms (59.95 Hz), 0.72 ms (120 Hz) or 0.65 ms (144 Hz)
+before that vblank, else three. `pipe` (no wait but `nextDrawable`) keeps
+three drawables queued: 47 to 48 ms at 59.95 Hz. `asap`'s steps of 2 and 3
+vblanks are its loop (one frame in flight and a random wait of up to a
+period after the handler), not drops: 298 of 300 shown in every kind. The
+numbers do not differ by kind, so the data cannot tell a direct path from
+a composed one; `HUD=1` was not used.
 
 ### 6.6 presentAtTime, late frames, holds
 
-Copy each kind's quantization table. Then:
+The probe plans targets on the CVDisplayLink grid, so a target "V + frac"
+is (frac - 0.45) period from presentedTime's vblank V at 59.95 Hz, (frac
+- 0.40) at 120 and 144 Hz. Quantization, shown vblank minus V, for leads
+2, 3 and 5 (20 presents per cell):
 
-| Kind | ahead: largest target that held | late: on / late (injected late of 10%) and does `presentedTime` move | sleep: on / early / late | queue: on / late | mindur: steps |
-|---|---|---|---|---|---|
-| window | | | | | |
-| space | | | | | |
-| exclusive 120 Hz | | | | | |
+| frac (from presentedTime's V, 59.95 Hz) | -0.5 (-0.95) | -0.45 (-0.9) | -0.25 (-0.7) | 0 (-0.45) | 0.25 (-0.2) | 0.45 (0.0) | 0.5 (+0.05) |
+|---|---|---|---|---|---|---|---|
+| window, borderless, space, fullscreen | 0 (60 of 60 each) | 0 | 0 | 0 | 0 | 0 | +1 (60 of 60) |
+| 120 Hz (from V: -0.9 ... +0.05, +0.1) | 0 | 0 | 0 | 0 | 0 | 0 in 55, +1 in 5 | +1 |
+| 144 Hz (-0.9 ... +0.05, +0.1) | 0 | 0 | 0 | 0 | 0 | 0 | +1 |
+
+Lead 1 (V the next CV vblank, so V is 0.45 to 1.45 periods after the
+commit) showed a vblank late in 134 to 140 of 140 per kind: the commit deadline
+of 6.5. So Core Animation shows a drawable at the first presentedTime
+vblank at or after its target, less about 0.4 ms, and not at the nearest
+vblank (a target 0.95 period before V showed on V). The header's target is
+the planned vblank minus half a period (7).
+
+| Run | window | borderless | space | fullscreen | 120 Hz | 144 Hz |
+|---|---|---|---|---|---|---|
+| late: shown; the 30 injected late frames late | 0 of 300 (below) | 300; 30 of 30 | 300; 30 of 30 | 300; 30 of 30 | 300; 30 of 30 | 300; 30 of 30 |
+| queue (2 in flight, own vblanks): on target | 40 of 40 | 40 of 40 | 40 of 40 | 40 of 40 | 40 of 40 | 40 of 40 |
+| mindur (2 periods): steps of 2 | 299 of 299 | 299 | 299 | 299 | 299 | 299 |
+| ahead (window only) | 0.1 to 1.0 s: on target, 1 of 1 each; 2 and 5 s: not shown | | | | | |
+
+- **late.** A frame committed 0.3 period after its target's CV vblank
+  (target already past) showed at the first vblank it could make, one
+  later than planned, and its presentedTime moved with it: 30 of 30 in
+  every kind and rate. A past target behaves as no target.
+- **The window's late and ahead.** `ahead` runs only in the window
+  condition (`--runs` names it there). Its 2 s target was not shown and
+  its handler came when the next present was committed 1.5 s later; the
+  5 s target's handler came 0.48 s after its commit with presentedTime 0;
+  every later present in that layer (the rest of `ahead`, all 300 of
+  `late`, the first 121 of `sleep`) was dropped (presentedTime 0, the
+  handler at once) until 6.5 s after the 5 s present, then `sleep`
+  showed again. So the window's `late` says nothing about past targets;
+  the other kinds' `late` does. The header holds a target more than 0.5 s
+  ahead until it is 0.5 s ahead.
+- **sleep** is a probe artefact for "early": it planned on the CV grid and
+  slept to a depth measured on the CV grid; every frame showed at depth 2
+  on the presentedTime grid.
 
 ### 6.7 Drawable count and display sync
 
-| Condition | depth histogram | pipe: `nextDrawable` p50 | pipe: steps 0 / 1 / 2 | notes |
-|---|---|---|---|---|
-| window, 2 drawables | | | | |
-| space, 2 drawables | | | | |
-| window, sync off | | | | |
-| space, sync off | | | | |
+| Condition | asap depth 2 / 3, shown | pipe: depth, latency p50 | notes |
+|---|---|---|---|
+| window, 3 drawables | 277 / 21, 298 of 300 | 3, 47.4 ms | |
+| window, 2 drawables | 275 / 23 (1: 2), 300 of 300 | 2, 31.2 ms | `nextDrawable` p50 16.5 ms in pipe |
+| space, 2 drawables | 276 / 24, 300 of 300 | 2, 31.9 ms | |
+| window, sync off | depth 1 (CV grid) in 271; presentedTime off its grid by up to 2 ms | 150 of 300 shown | 28 frames shared a vblank |
+| space, sync off | depth 1 (CV grid) in 276 | 150 of 300 shown | |
 
-### 6.8 10-bit layers
+With one frame in flight the drawable count changed nothing. With display
+sync off, presentedTime leaves its grid (residual about the fit 1 to 2 ms)
+and two frames can share a vblank: not a timed configuration.
 
-| Format | frames shown of 30 |
-|---|---|
+### 6.8 10 bits
+
+`bits` repeated section 5.7: no 10-bit or half-float EGL config; GL
+textures, EGLImages and 'l10r' / 'RGhA' IOSurfaces keep 1024 levels. The
+layer took every format. Frames shown in the layer test: BGRA8 22 of 30,
+BGR10A2 0, RGB10A2 4, RGBA16Float 0, BGR10_XR 10. The test presents 30
+frames at once right after the window opens, the case that showed few or
+no frames in 6.3, so these counts do not test the formats; a 10-bit
+layer's frames reaching the panel is open. NSScreen: 8 bits per sample.
 
 ### 6.9 Input
 
-| Path | keys seen | NSEvent.timestamp minus post p50 / p99, us | SDL timestamp minus post p50 / p99, us | SDL minus NSEvent p50, us | sub-ms stamps |
-|---|---|---|---|---|---|
-| `CGEventPost` (HID) | | | | | |
-| `CGEventPostToPid` | | | | | |
+`AXIsProcessTrusted` 0, `CGPreflightPostEventAccess` 0: the 200 keys of
+each pass reached neither the NSEvent monitor nor SDL. Not measured.
+
+### 6.10 Other findings
+
+- `--kind fullscreen` made a fullscreen space as well (style mask 0x400f):
+  SDL's `SDL_HINT_VIDEO_MAC_FULLSCREEN_SPACES` "0" set before the window
+  did not take. Only `exclusive` (a mode change, level 25) and
+  `borderless` (level 25) avoided a space; all kinds measured alike.
+- The mode change to 120 and 144 Hz worked through SDL, and the desktop
+  mode came back.
 
 ## 7. Recommended design for `YSCR_BACKEND_METAL`
 
-From section 5, with the open items marked. Section 6 decides them.
 Built in `ysp/screen.h` v0.11.0 (docs/screen.md, "macOS: the header owns
-the CAMetalLayer"), with one change: the target of item 3 is the planned
-vblank minus a quarter period, which suits both quantization rules
-without a measurement.
+the CAMetalLayer"); its constants set from section 6 in v0.12.0:
+
+| Constant | Value | Rows it rests on |
+|---|---|---|
+| `YSCR__MTL_TARGET_LEAD` (item 3) | 0.5 period before the planned vblank | 6.6: targets from 0.9 or 0.95 period before a vblank to the vblank showed on it, 2155 of 2160; 0.05 to 0.1 period after it, a vblank late, 360 of 360. 0.5 is the window's middle |
+| `YSCR__MTL_IN_FLIGHT` (item 5) | 2 | 6.4, 6.5: the handler comes 0.30 to 0.76 ms after presentedTime and a commit needs a period plus up to 1.18 ms; one frame in flight showed every other vblank (1701 of 1896 steps of 2) |
+| depth (item 5) | 2 (the composed path's table) | 6.5: depth 2 for every commit up to phase 0.907 to 0.940 of the period, every kind and rate |
+| `YSCR__MTL_MARGIN_NS` (item 5) | 2 ms (`caps.margin_ns`) | 6.5: a period plus 0.65 to 1.18 ms; the present call (encode and commit) p99 0.45 ms, max 0.93 ms (6.4's links) |
+| `YSCR__MTL_DRAWABLES` | 3 | 6.7: 2 or 3 changed nothing with one frame in flight; with two in flight and one drawn, 3 leave one free |
+| `YSCR__MTL_AHEAD_MAX_NS` | 0.5 s | 6.6: 0.1 to 1.0 s ahead on target (1 of 1 each), 2 and 5 s not shown and the layer's presents dropped for 6.5 s |
+| `yscr__mtl_tier()` (item 2) | 2 for a shown flip, every kind | 6.4, 6.6: presentedTime moved with 30 of 30 late frames per kind and rate, came before its handler every time, and sits on its grid to under 1 us; that is an OS time for the vblank shown, DXGI_FLIP's composed tier. Tier 1 needs a photodiode (CVDisplayLink disagrees by 0.40 to 0.45 period) |
+
+Items 2 to 5 below are the plan as written before section 6.
 
 1. **Path: the header owns the CAMetalLayer** (question 1b). SDL3 makes
    the window; the header makes the layer with `SDL_Metal_CreateView`,
@@ -639,12 +782,17 @@ Checked on 2026-11-04 and 2026-11-05 on the machine of section 5:
   `links`, `present` with `--allow-locked` and short runs; `input`.
 - The share readback check catches unsynchronized frames (5.6).
 
+Checked in the timing session (section 6): every section on a shown
+screen at 59.95 Hz, and `present` at 120 and 144 Hz.
+
 Not verified:
 
-- Every number of section 6: the screen was locked and other jobs ran.
+- A timing run of the header's own frame loop. Its functional test ran
+  on the shown screen: 120 of 120 frames a vblank apart, 0 dropped, tier 2
+  (docs/screen.md). The held far target did not run.
+- Why a window opened just after a process left a fullscreen space showed
+  nothing (6.3).
+- Every number with Screen Sharing closed.
 - That `MTL_HUD_LOG_ENABLED=1` writes the present mode to the unified log:
   `log show` returned nothing for the probe's process here.
-- The fullscreen kinds' transitions (space animation, mode change) and
-  the restore of the desktop mode after `exclusive`; SDL restores it when
-  the window leaves fullscreen.
-- The `queue` run with real presents (it had 2 frames in the smoke run).
+- SDL's fullscreen without a space (`--kind fullscreen` made a space).

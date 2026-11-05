@@ -3748,7 +3748,7 @@ and the 17 on the window test (`wt-20` to `wt-29`, `fg-08`, `bf-01`,
 between frames wait until the test's 10 s watchdog ended it: the case
 the fallback exists for.
 
-## macOS: the header owns the CAMetalLayer (v0.11.0)
+## macOS: the header owns the CAMetalLayer (v0.11.0, v0.12.0)
 
 `YSCR_BACKEND_METAL` is the macOS swap path, and AUTO there. The probe of
 [screen_macos_probe.md](screen_macos_probe.md) chose its shape; this note
@@ -3851,13 +3851,31 @@ finds its slot orphaned and frees it. A handler touches only that table.
 Nothing measured contradicts the choice; the read-backs above and the
 code self test went through it.
 
-### Unmeasured, each in one place
+### The constants, measured (v0.12.0)
 
-| Item | Where | Value | Why this value |
-|---|---|---|---|
-| (a) the time passed to `presentDrawable:atTime:` | `YSCR__MTL_TARGET_LEAD` | the planned vblank minus a quarter period | Core Animation's rule is not measured. If it shows a frame at the vblank nearest its time, any lead from 0 to half a period lands on the planned vblank; half a period exactly is a tie, which COMPOSITION gave to the earlier vblank ([Quantization](#quantization)), so "minus half a period" can show a frame one early. If it shows the first vblank at or after the time, any lead from 0 up lands. A quarter period is the middle of the range that suits both, so the grid may be a quarter period off either way. The core test plays both rules (`test_metal_records`) |
-| (b) depth and drawables | `yscr__path_table` (COMPOSED: 2), `YSCR__MTL_DRAWABLES` | depth 2, 3 drawables, one frame in flight | On a backend that holds frames to a target, a depth too large costs latency only, one too small drops every frame |
-| (c) the tier per window kind | `yscr__mtl_tier()` | 3 for window, fullscreen and space | `presentedTime` is not yet shown to be an observation of the scanout; it may be WindowServer's plan, as COMPOSITION's composed time was ([Is the onset an observation?](#is-the-onset-an-observation-condition-c)) |
+v0.11.0 shipped three unmeasured constants. The probe's timing session of
+2026-11-05 ([screen_macos_probe.md](screen_macos_probe.md), section 6:
+the M27Q at 59.9505, 120 and 144 Hz, unlocked, AC, **a Screen Sharing
+session open**) set them, and found two more. The numbers below are the
+probe's, on its own CAMetalLayer. This header's own frame loop then ran
+in `tests/adapt/screen_metal_test.c` on the unlocked screen (800 x 600
+window at 59.95 Hz, about 4.5 ms of GPU time a frame): 120 of 120 frames
+shown, 119 of 119 a vblank after the one before, 0 dropped, tier 2; at 10
+bits 30 of 30 and 29 of 29. That is a functional test, not a timing run.
+
+| Item | Where | v0.11.0 | v0.12.0 | The rows |
+|---|---|---|---|---|
+| (a) the target passed to `presentDrawable:atTime:` | `YSCR__MTL_TARGET_LEAD` | planned vblank minus 0.25 period | minus 0.5 period | A drawable shows at the first presentedTime vblank at or after its target, less about 0.4 ms, not at the nearest: targets from 0.9 or 0.95 period before a vblank up to it showed on it (2155 of 2160, every kind and rate), 0.05 to 0.1 period after it a vblank late (360 of 360). Half a period is that window's middle. The tie that made "minus half a period" a risk is a rule of COMPOSITION's, not Core Animation's |
+| (b) frames in flight | `YSCR__MTL_IN_FLIGHT`, `caps.max_in_flight` | 1 | 2 | The presented handler comes 0.30 to 0.76 ms after presentedTime, and a commit needs a period plus 0.65 to 1.18 ms before its vblank. So waiting for the frame before showed every other vblank (the probe's `links`: 1896 frames in 60 s, 1701 of 1896 steps of 2 vblanks); `begin()` now waits for the frame two before |
+| (b) depth | `yscr__path_table` (COMPOSED) | 2 | 2 | Every commit up to phase 0.907 to 0.940 of a period showed two vblanks later, every kind and rate |
+| (b) margin before a vblank | `YSCR__MTL_MARGIN_NS`, new `caps.margin_ns` | the core's, at most 1 ms | 2 ms | The deadline's excess over a period (up to 1.18 ms) plus the present call (encode and commit p99 0.45 ms, max 0.93 ms). `caps.margin_ns` is new in `yscr_caps`: a presenter states its own, and the core takes the larger |
+| (b) drawables | `YSCR__MTL_DRAWABLES` | 3 | 3 | 2 or 3 changed nothing with one frame in flight (300 of 300 shown both); with two in flight and one drawn, 3 keep one free |
+| a target far ahead | `YSCR__MTL_AHEAD_MAX_NS` | none | held until 0.5 s ahead | 0.1 to 1.0 s ahead showed on target (1 of 1 each); 2 and 5 s ahead did not show, and every later present in that layer was dropped for 6.5 s. `flip_at()` sleeps until such a target is 0.5 s ahead (`held_far=`) |
+| (c) the tier | `yscr__mtl_tier()` | 3 | 2 for a shown flip, every kind | presentedTime moved with every late frame (30 of 30 per kind and rate), always came before its handler, and sits on its own grid to under 1 us (0.64 us max): an OS time for the vblank the frame showed on, not a plan. That is DXGI_FLIP's composed tier ([Tiers](#tiers)). Not tier 1: no photodiode has run, CVDisplayLink's `inNow` puts the vblank 0.40 to 0.45 period earlier (one of the two is not the scanout's vblank, or neither is), and the window kinds measured alike, so no path is known. An estimated flip (presentedTime 0) stays tier 3 |
+
+A planned vblank is on presentedTime's grid: the header's grid comes from
+the onsets it records, which are presentedTime. CADisplayLink's timestamp
+lies on the same grid (0.1 us apart); CVDisplayLink's `inNow` does not.
 
 macOS has no public call that says a window goes direct to the display,
 so every Metal flip's path is COMPOSED and the describe line names the
@@ -3897,20 +3915,30 @@ window kind instead. The probe's runs decide each row: `present`'s
 ### Tests and mutants
 
 - The core test (`tests/adapt/screen_test.c`): the rules without a Mac
-  (target, period, completion, pixels, tier) and a scripted Metal display
-  under both quantization rules, with hidden frames.
+  (target, period, completion, pixels, tier, in flight, margin) and, from
+  v0.12.0, a scripted display that behaves as the timing session measured:
+  the first vblank at or after the target, a commit deadline of a period
+  plus 0.275 period, the handler 0.125 period after the vblank; 60 frames
+  with targets a third of a period off the grid, work that ends late in a
+  period on every 10th frame, and 3 hidden frames: every shown frame on
+  its planned vblank, tier 2, nearly all one vblank apart.
 - `tests/adapt/screen_metal_test.c`: the real presenter (above); built on
   macOS as `test_screen_metal`, not registered with ctest (it needs a
-  window server session and ANGLE).
-- 10 mutants (`mt-01` to `mt-10`), 10 killed: 7 by the core test, 3 by
+  window server session and ANGLE). A shown flip must be tier 2 and an
+  estimated one tier 3; the last frame's read-back is checked at close.
+- 13 mutants (`mt-01` to `mt-13`), 13 killed: 10 by the core test, 3 by
   the Metal test (no wait on the signal, codes compared raw, the pbuffer
-  cache off).
+  cache off). The far-target hold has no mutant: no test can show a frame
+  far ahead without a shown screen.
 
 ### Not done
 
-Everything about a shown frame: the three rows above, direct against
-composed, a 120 or 144 Hz mode, the panel's 10 bits, the light, key
-times on macOS. The panic watchdog, raw mice and the OS gamma ramp are
+A timing run of this header's own frame loop (only the functional test
+above ran), the light (tier 1), direct against composed, every
+number without Screen Sharing, the panel's 10 bits, key times on macOS
+(posting keys needs the Accessibility permission), and why a window
+opened just after a process left a fullscreen space showed no frame in
+the probe (2 of 2 reruns; probe, 6.3). The panic watchdog, raw mice and the OS gamma ramp are
 Windows only. Not exercised by a test: a presented handler given up 1 s
 after its target (`late_handler=`; no way to withhold one was found), a
 frame with no drawable (`no_drawable=`; every drawable came at once
@@ -4064,8 +4092,9 @@ display ids) are fixed in v0.10.4
   is built, not run. Every onset here is DXGI's vblank time.
 - Any refresh other than 60 Hz; any GPU other than the Iris Xe; Windows 10.
 - X11 and Wayland: stubs. macOS (METAL, v0.11.0): run only with the
-  session locked, so no shown frame; see
-  [macOS: the header owns the CAMetalLayer](#macos-the-header-owns-the-cametallayer-v0110).
+  session locked; its constants set in v0.12.0 from the probe's timing
+  session, not from a run of the header itself; see
+  [macOS: the header owns the CAMetalLayer](#macos-the-header-owns-the-cametallayer-v0110-v0120).
   The web: no light measured (web.md).
 - A DWM miss on the composed path of COMPOSITION: a second window loading
   the GPU did not cause one, so whether the record shows it is unknown.

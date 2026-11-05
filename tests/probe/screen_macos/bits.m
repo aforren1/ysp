@@ -268,7 +268,7 @@ int sec_bits(void) {
             p.layer.colorspace = cs;
             CGColorSpaceRelease(cs);
         }
-        frame_rec* r = calloc(30, sizeof(frame_rec));
+        frame_rec* r = frames_new(30);
         run_worker(^{
             for (int i = 0; i < 30; i++) { r[i].frame = i; [p frame:&r[i] level:0.5f mindur:0]; }
             [p drain];
@@ -278,7 +278,6 @@ int sec_bits(void) {
         P("  RESULT layer %s: pixelFormat after set %lu (asked %lu), %d of 30 frames shown\n", lf[k].name,
           (unsigned long)p.layer.pixelFormat, (unsigned long)lf[k].f, shown);
         [p printLayer];
-        free(r);
         [p close];
     }
     for (NSScreen* s in [NSScreen screens])

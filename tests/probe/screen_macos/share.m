@@ -158,7 +158,7 @@ int sec_share(void) {
                 if (sy == S_SCHEDULED && !wait_sched) continue;
                 char name[64];
                 snprintf(name, sizeof name, "%s_%s", tname[tg], sname[sy]);
-                frame_rec* r = calloc((size_t)N, sizeof(frame_rec));
+                frame_rec* r = frames_new(N);
                 double *mc = calloc((size_t)N, sizeof(double)), *dr = calloc((size_t)N, sizeof(double));
                 id<MTLBuffer> rb = [dev newBufferWithLength:(NSUInteger)N * 4 options:MTLResourceStorageModeShared];
                 target_cache tc;
@@ -277,11 +277,17 @@ int sec_share(void) {
                 P("RESULT share %s: %d frames, readback mismatches %d, distinct drawable surfaces %d (made in %.1f us each), "
                   "shared-event syncs failed %d\n",
                   name, n, bad, tc.n, tc.made ? tc.create_us / tc.made : 0.0, sync_fail);
+                {   /* a window not shown makes every presentedTime 0 */
+                    NSWindow* nw = (__bridge NSWindow*)SDL_GetPointerProperty(SDL_GetWindowProperties(p.window),
+                                                                              SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, NULL);
+                    P("  after the run: window occlusion visible %d, on the active space %d, app active %d\n",
+                      (nw.occlusionState & NSWindowOcclusionStateVisible) != 0, nw.onActiveSpace, NSApp.active);
+                }
                 P_stats("eglMakeCurrent (+ bind)", mc, n, "us");
                 P_stats("GL draw + sync", dr, n, "us");
                 analyze_run(name, r, n, &g);
                 write_frames(csv, name, r, n, &g);
-                free(r); free(mc); free(dr);
+                free(mc); free(dr);   /* r stays: frames_new() */
             }
             if (fixed != EGL_NO_SURFACE) E.DestroySurface(dpy, fixed);
             if (ios) CFRelease(ios);

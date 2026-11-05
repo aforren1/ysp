@@ -58,6 +58,13 @@ typedef struct frame_rec {
  * loop, so the window stays responsive and fullscreen transitions finish. */
 void run_worker(void (^work)(void));
 
+/* Frame records for a run. Never freed: Metal can call a drawable's
+ * presented handler (and the command buffer's handlers) after the run's
+ * drain gave up on it, and each handler writes into its record; freeing the
+ * array made a late handler write into freed memory (exit 139 after the
+ * light share condition, 2026-11-05). */
+frame_rec* frames_new(int n);
+
 /* Depth etc. for one run of frame records against the CVDisplayLink grid. */
 void analyze_run(const char* name, frame_rec* r, int n, const grid* g);
 grid presented_grid(const grid* g, const frame_rec* r, int n, double* phase_us);
