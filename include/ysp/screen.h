@@ -1,4 +1,4 @@
-/* ysp/screen.h - v0.13.0 - public domain single-header display library
+/* ysp/screen.h - v0.13.1 - public domain single-header display library
  *
  *   The window, the GL ES 3.0 context, the display mode and the swap path
  *   of a stimulus display, with flip at a time: each frame learns the
@@ -635,9 +635,14 @@
  *     open and every 10 s before it). A presentedTime of 0 means the
  *     drawable was not shown: the record is estimated, and OCCLUDED when
  *     the window was hidden or the session locked (locked= in the describe
- *     line). caps.period_ns is CVDisplayLink's nominal period (a "60 Hz"
- *     HDMI mode measured 16.680417 ms, 59.9505 Hz), never the mode's
- *     rounded rate; the flips refine it. nextDrawable gives up after its
+ *     line). caps.period_ns comes from CADisplayLink's timestamps at
+ *     open (macOS 14 and later; the step of up to 6 callbacks, which lie
+ *     on presentedTime's grid: 16.680375 ms on a "60 Hz" HDMI mode, where
+ *     the link's duration and CVDisplayLink's nominal period say 16.680417
+ *     ms), else CVDisplayLink's nominal period (deprecated in macOS 15;
+ *     before 14, or no callback in 250 ms, as with a display asleep), else
+ *     the mode; never the mode's rounded rate. The describe line names the
+ *     source (period=...ns(cadisplaylink)). The flips refine it. nextDrawable gives up after its
  *     own 1 s timeout; a frame without a drawable draws into a 1 x 1
  *     pbuffer and is estimated (no_drawable= in the describe line). A
  *     presented handler that has not come 1 s after its target is given up
@@ -1574,6 +1579,10 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.13.1 - METAL's period at open comes from CADisplayLink's
+ *          timestamps (macOS 14 and later), not CVDisplayLink's nominal
+ *          period, which stays as the fallback; caps.mode's refresh is then
+ *          1e9 / period. The describe line names the source.
  *   v0.13.0 - METAL refuses to open on a display in a variable refresh
  *          mode (NSScreen's minimum and maximum refresh intervals more
  *          than 0.1% apart): an open that succeeded before now fails, with
@@ -1930,6 +1939,13 @@
  *          groups, input restamping, mode lists and the parameter table.
  *          The other swap paths are stubs that refuse to open.
  *
+ *   STATUS: v0.13.1 (METAL, the period): CADisplayLink's timestamps
+ *   stepped by 16680375 ns (+-1) on the M27Q's "60 Hz", on presentedTime's
+ *   grid, where its duration said 16680417 (the probe, 2026-11-05). The
+ *   header's own read did not get a callback here: the display was asleep
+ *   (the session locked), so every real open took the CVDisplayLink
+ *   fallback (16680417 ns); the CADisplayLink path ran only with its
+ *   timestamps injected through a test seam. 2 of 2 new mutants killed.
  *   STATUS: v0.13.0 (METAL, variable refresh): no ProMotion or variable-
  *   mode display was attached. tests/adapt/screen_metal_test.c injects the
  *   two intervals through a seam (YSCR__MTL_SCREEN_INTERVALS): 8.333 and
@@ -2206,8 +2222,8 @@
 
 #define YSCR_VERSION_MAJOR 0
 #define YSCR_VERSION_MINOR 13
-#define YSCR_VERSION_PATCH 0
-#define YSCR_VERSION_STRING "0.13.0"
+#define YSCR_VERSION_PATCH 1
+#define YSCR_VERSION_STRING "0.13.1"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -5247,10 +5263,30 @@ static int yscr__mtl_vrr_message(char* err, size_t cap, int64_t min_ns, int64_t 
 
 /* CVDisplayLink's nominal period, value / scale seconds, in ns; 0 when it
  * has none. The mode's refresh rate is a rounded label (60.000 for a
- * 59.9505 Hz HDMI mode, measured), never the period. */
+ * 59.9505 Hz HDMI mode, measured), never the period. The fallback before
+ * macOS 14 (yscr__mtl_link_period is the source from macOS 14 on). */
 static int64_t yscr__mtl_period(int64_t value, int32_t scale) {
     if (value <= 0 || scale <= 0) return 0;
     return (int64_t)llround((double)value * 1e9 / (double)scale);
+}
+
+/* The period from CADisplayLink's timestamps at open: the span of n
+ * callbacks over the whole periods in it, counted on the link's duration.
+ * The timestamps lie on presentedTime's grid (0.1 us apart, fit residual
+ * 0.00 us) and step by the display's real period, 16680375 ns on the M27Q's
+ * "60 Hz"; duration and targetTimestamp - timestamp give the nominal
+ * timing, 16680417 ns, 2.5 ppm off it (measured, docs/screen_macos_probe.md
+ * 6.4). A missed callback (a gap of two periods) keeps its count. 0 when
+ * the timestamps do not span a period within 1% of the duration's. */
+static int64_t yscr__mtl_link_period(const int64_t* ts, int n, int64_t duration_ns) {
+    int64_t span, k, per;
+    if (n < 2 || duration_ns <= 0) return 0;
+    span = ts[n - 1] - ts[0];
+    k = (int64_t)llround((double)span / (double)duration_ns);
+    if (k < 1) return 0;
+    per = (int64_t)llround((double)span / (double)k);
+    if ((double)(per > duration_ns ? per - duration_ns : duration_ns - per) > 0.01 * (double)duration_ns) return 0;
+    return per;
 }
 
 /* One presented handler's report as a completion. presented_ns is
@@ -5379,6 +5415,12 @@ static struct {
     yscr_proc msg;                         /* objc_msgSend                     */
     void* (*sel)(const char*);
     yscr__id (*cls)(const char*);          /* objc_getClass                    */
+    yscr__id (*allocClass)(yscr__id, const char*, size_t);
+    unsigned char (*addMethod)(yscr__id, void*, yscr_proc, const char*);
+    void  (*registerClass)(yscr__id);
+    int32_t (*CFRunLoopRunInMode)(const void*, double, unsigned char);
+    const void* cfDefaultMode;             /* kCFRunLoopDefaultMode            */
+    const void* cfCommonModes;             /* kCFRunLoopCommonModes            */
     void* (*pool_push)(void);
     void  (*pool_pop)(void*);
     void*  global_block;                   /* _NSConcreteGlobalBlock           */
@@ -5420,6 +5462,8 @@ static struct {
     void *contents, *occlusionState, *styleMask, *waitUntilCompleted, *newTexture, *texDesc;
     void *setUsage, *setStorageMode, *setTimeout;
     void *screen_, *respondsTo, *minRefresh, *maxRefresh;
+    void *linkWithTarget, *addToRunLoop, *currentRunLoop, *invalidate, *timestamp, *duration, *alloc, *init, *tick;
+    yscr__id cls_runloop, cls_target;
     yscr__id cls_texdesc;
 } yscr__mac;
 
@@ -5459,6 +5503,10 @@ static int yscr__mac_load(const char* angle_dir, char* err, size_t cap) {
         if (!yscr__mac.msg && !miss) miss = "objc_msgSend";
         YSCR__F(0, sel, "sel_registerName");
         YSCR__F(0, cls, "objc_getClass");
+        YSCR__F(0, allocClass, "objc_allocateClassPair");
+        YSCR__F(0, addMethod, "class_addMethod");
+        YSCR__F(0, registerClass, "objc_registerClassPair");
+        YSCR__F(1, CFRunLoopRunInMode, "CFRunLoopRunInMode");
         YSCR__F(0, pool_push, "objc_autoreleasePoolPush");
         YSCR__F(0, pool_pop, "objc_autoreleasePoolPop");
         YSCR__F(1, CFRelease, "CFRelease");
@@ -5470,6 +5518,14 @@ static int yscr__mac_load(const char* angle_dir, char* err, size_t cap) {
         YSCR__F(3, CVDisplayLinkCreateWithCGDisplay, "CVDisplayLinkCreateWithCGDisplay");
         YSCR__F(3, CVDisplayLinkGetNominalOutputVideoRefreshPeriod, "CVDisplayLinkGetNominalOutputVideoRefreshPeriod");
         YSCR__F(3, CVDisplayLinkRelease, "CVDisplayLinkRelease");
+        {   /* a CFStringRef constant: the value at the symbol */
+            void* p = yscr__mac.lib[1] ? dlsym(yscr__mac.lib[1], "kCFRunLoopDefaultMode") : NULL;
+            if (p) memcpy((void*)&yscr__mac.cfDefaultMode, p, sizeof(void*));
+            else if (!miss) miss = "kCFRunLoopDefaultMode";
+            p = yscr__mac.lib[1] ? dlsym(yscr__mac.lib[1], "kCFRunLoopCommonModes") : NULL;
+            if (p) memcpy((void*)&yscr__mac.cfCommonModes, p, sizeof(void*));
+            else if (!miss) miss = "kCFRunLoopCommonModes";
+        }
 #undef YSCR__F
         yscr__mac.global_block = dlsym(RTLD_DEFAULT, "_NSConcreteGlobalBlock");
         {
@@ -5508,6 +5564,11 @@ static int yscr__mac_load(const char* angle_dir, char* err, size_t cap) {
         YSCR__S(setTimeout, "setAllowsNextDrawableTimeout:");
         YSCR__S(screen_, "screen"); YSCR__S(respondsTo, "respondsToSelector:");
         YSCR__S(minRefresh, "minimumRefreshInterval"); YSCR__S(maxRefresh, "maximumRefreshInterval");
+        YSCR__S(linkWithTarget, "displayLinkWithTarget:selector:"); YSCR__S(addToRunLoop, "addToRunLoop:forMode:");
+        YSCR__S(currentRunLoop, "currentRunLoop"); YSCR__S(invalidate, "invalidate");
+        YSCR__S(timestamp, "timestamp"); YSCR__S(duration, "duration");
+        YSCR__S(alloc, "alloc"); YSCR__S(init, "init"); YSCR__S(tick, "yscrTick:");
+        yscr__mac.cls_runloop = yscr__mac.cls("NSRunLoop");
 #undef YSCR__S
         yscr__mac.cls_texdesc = yscr__mac.cls("MTLTextureDescriptor");
         yscr__mac.locked_key = yscr__mac.CFStringCreateWithCString(NULL, "CGSSessionScreenIsLocked", 0x08000100u);
@@ -5649,6 +5710,7 @@ typedef struct yscr__mtl {
     int32_t   w, h, bits10, region, bind_target;
     int32_t   kind, locked, hidden;
     int64_t   min_iv_ns, max_iv_ns; /* NSScreen's refresh intervals at open; 0 = n/a */
+    int32_t   period_src;          /* YSCR__MTL_SRC_*                         */
     int64_t   hidden_t;
     uint32_t  not_shown, no_drawable, no_slot, sync_failed, pbuffers, late_handlers, held_far;
     char      angle[48];
@@ -5786,6 +5848,88 @@ static int yscr__mtl_selftest(yscr__mtl* m) {
     yscr__v0(tex, yscr__mac.release);
     yscr__mac.pool_pop(pool);
     return bad ? -1 : 1;
+}
+
+/* The period's source, for the describe line. */
+#define YSCR__MTL_SRC_LINK  1   /* CADisplayLink's timestamps (macOS 14 and later) */
+#define YSCR__MTL_SRC_CV    2   /* CVDisplayLink's nominal period (before 14)     */
+#define YSCR__MTL_SRC_MODE  3   /* the mode's rate, a rounded label               */
+static const char* const yscr__mtl_src_name[4] = { "default", "cadisplaylink", "cvdisplaylink", "mode" };
+
+/* CADisplayLink's callbacks at open: open() runs on the main thread, and
+ * nothing else reads these, so a plain state is enough. */
+#define YSCR__MTL_LINK_N 6
+static int64_t yscr__mtl_link_ts[YSCR__MTL_LINK_N];
+static int     yscr__mtl_link_n;
+static double  yscr__mtl_link_dur;
+
+static void yscr__mtl_link_tick(yscr__id self, void* cmd, yscr__id link) {
+    (void)self; (void)cmd;
+    if (yscr__mtl_link_n < YSCR__MTL_LINK_N) {
+        yscr__mtl_link_ts[yscr__mtl_link_n++] = yscr__mtl_secs(YSCR__MSG(double, yscr__id, void*)(link, yscr__mac.timestamp));
+        yscr__mtl_link_dur = YSCR__MSG(double, yscr__id, void*)(link, yscr__mac.duration);
+    }
+}
+
+/* The period from CADisplayLink (macOS 14 and later), or 0. There is no
+ * read without a callback: before its first callback the link's duration,
+ * timestamp and targetTimestamp are 0, and duration alone is the nominal
+ * timing (above). The callbacks come through the main run loop, and open()
+ * runs on the main thread, so it adds the link in the common modes (as the
+ * probe did when it measured them) and runs the run loop in its default
+ * mode in 10 ms steps, pumping SDL's events as the probe's loop did (they
+ * stay in SDL's queue for begin()), for up to YSCR__MTL_LINK_N callbacks or
+ * 250 ms, then invalidates the link. Nothing waits on another thread, so
+ * it cannot deadlock against SDL's pump: SDL's pump is this thread. With
+ * fewer than 2 callbacks in 250 ms the caller falls back to CVDisplayLink:
+ * a display asleep gave CADisplayLink no callback at all (0 in 2 s, while
+ * CVDisplayLink went on, 2026-11-05). Test seam, not API:
+ * tests/adapt/screen_metal_test.c defines YSCR__MTL_LINK_TIMESTAMPS(ts, n,
+ * duration) to replace the callbacks' timestamps (mach ns), their count
+ * and the duration (s). */
+static int64_t yscr__mtl_link_read(yscr__mtl* m) {
+    yscr__id target, link, loop;
+    int64_t end;
+    void* pool;
+    yscr__mtl_link_n = 0;
+    yscr__mtl_link_dur = 0;
+    if (!m->view || !yscr__mac.allocClass || !yscr__mac.CFRunLoopRunInMode || !yscr__mac.cfDefaultMode ||
+        !yscr__mac.cfCommonModes ||
+        !YSCR__MSG(signed char, yscr__id, void*, void*)((yscr__id)m->view, yscr__mac.respondsTo, yscr__mac.linkWithTarget))
+        return 0;   /* before macOS 14 */
+    if (!yscr__mac.cls_target) {   /* the callback's object: a class made once per process */
+        yscr__id c = yscr__mac.cls("YSCRLinkTarget");
+        if (!c) {
+            yscr_proc imp;
+            void (*f)(yscr__id, void*, yscr__id) = yscr__mtl_link_tick;
+            memcpy(&imp, &f, sizeof imp);
+            c = yscr__mac.allocClass(yscr__mac.cls("NSObject"), "YSCRLinkTarget", 0);
+            if (!c) return 0;
+            yscr__mac.addMethod(c, yscr__mac.tick, imp, "v@:@");
+            yscr__mac.registerClass(c);
+        }
+        yscr__mac.cls_target = c;
+    }
+    pool = yscr__mac.pool_push();
+    target = yscr__o0(yscr__o0(yscr__mac.cls_target, yscr__mac.alloc), yscr__mac.init);
+    link = YSCR__MSG(yscr__id, yscr__id, void*, yscr__id, void*)((yscr__id)m->view, yscr__mac.linkWithTarget, target,
+                                                                    yscr__mac.tick);
+    loop = yscr__o0(yscr__mac.cls_runloop, yscr__mac.currentRunLoop);
+    if (link && loop) {
+        YSCR__MSG(void, yscr__id, void*, yscr__id, const void*)(link, yscr__mac.addToRunLoop, loop, yscr__mac.cfCommonModes);
+        end = yscr__now() + 250000000;
+        while (yscr__mtl_link_n < YSCR__MTL_LINK_N && yscr__now() < end) {
+            SDL_PumpEvents();
+            yscr__mac.CFRunLoopRunInMode(yscr__mac.cfDefaultMode, 0.01, 1);
+        }
+        yscr__v0(link, yscr__mac.invalidate);
+    }
+    if (target) yscr__v0(target, yscr__mac.release);
+    yscr__mac.pool_pop(pool);
+#if defined(YSCR__MTL_LINK_TIMESTAMPS)
+    YSCR__MTL_LINK_TIMESTAMPS(yscr__mtl_link_ts, &yscr__mtl_link_n, &yscr__mtl_link_dur);
+#endif
+    return yscr__mtl_link_period(yscr__mtl_link_ts, yscr__mtl_link_n, yscr__mtl_secs(yscr__mtl_link_dur));
 }
 
 /* NSScreen's refresh intervals for the window's screen (macOS 12 and
@@ -5927,9 +6071,15 @@ static int yscr__mtl_open(void* vctx, const yscr_presenter_open* in, yscr_caps* 
             }
         }
     }
-    /* the period from the display link's nominal timing, the rate the flips
-     * then refine; the mode's refresh rate is only a label */
-    {
+    /* the period: CADisplayLink's timestamps (macOS 14 and later), else
+     * CVDisplayLink's nominal timing (deprecated in macOS 15, kept for the
+     * systems before 14), else the mode's rate; the flips then refine it */
+    m->period_ns = yscr__mtl_link_read(m);
+    if (m->period_ns > 0) {
+        m->period_src = YSCR__MTL_SRC_LINK;
+        caps->mode.refresh_num = 1000000000;
+        caps->mode.refresh_den = (int32_t)(m->period_ns > 0x7fffffff ? 0x7fffffff : m->period_ns);
+    } else {
         int x = 0, y = 0, w = 0, h = 0;
         uint32_t ids[4], nd = 0;
         yscr__cgpoint c;
@@ -5941,6 +6091,7 @@ static int yscr__mtl_open(void* vctx, const yscr_presenter_open* in, yscr_caps* 
             yscr__mac.CVDisplayLinkCreateWithCGDisplay(ids[0], &link) == 0 && link) {
             yscr__cvtime t = yscr__mac.CVDisplayLinkGetNominalOutputVideoRefreshPeriod(link);
             m->period_ns = yscr__mtl_period(t.value, t.scale);
+            if (m->period_ns > 0) m->period_src = YSCR__MTL_SRC_CV;
             if (m->period_ns > 0 && t.value <= 0x7fffffff && t.scale > 0) {
                 caps->mode.refresh_num = t.scale;
                 caps->mode.refresh_den = (int32_t)t.value;
@@ -5948,7 +6099,10 @@ static int yscr__mtl_open(void* vctx, const yscr_presenter_open* in, yscr_caps* 
             yscr__mac.CVDisplayLinkRelease(link);
         }
     }
-    if (m->period_ns <= 0 && in->mode && in->mode->period_ns > 0) m->period_ns = in->mode->period_ns;
+    if (m->period_ns <= 0 && in->mode && in->mode->period_ns > 0) {
+        m->period_ns = in->mode->period_ns;
+        m->period_src = YSCR__MTL_SRC_MODE;
+    }
     if (m->period_ns <= 0) m->period_ns = 16666667;
     if (in->mode) {
         caps->mode.w = in->mode->w;
@@ -6308,10 +6462,11 @@ static int yscr__mtl_completions(void* vctx, yscr_vblank* out, int cap) {
 static int yscr__mtl_describe(void* vctx, char* buf, size_t cap) {
     yscr__mtl* m = (yscr__mtl*)vctx;
     m->kind = yscr__mtl_kind_now(m);
-    return snprintf(buf, cap, "angle=%s kind=%s layer=%s period=%lldns refresh_interval=%lld..%lldns locked=%d not_shown=%u no_drawable=%u "
+    return snprintf(buf, cap, "angle=%s kind=%s layer=%s period=%lldns(%s) refresh_interval=%lld..%lldns locked=%d not_shown=%u no_drawable=%u "
                     "no_handler=%u late_handler=%u held_far=%u sync_failed=%u pbuffers=%u mach_off=%lldns(%lldns) target_lead=%.2f "
                     "tier=%d(no photodiode)",
                     m->angle, yscr__mtl_kind_name(m->kind), m->bits10 ? "bgr10a2" : "bgra8", (long long)m->period_ns,
+                    yscr__mtl_src_name[m->period_src & 3],
                     (long long)m->min_iv_ns, (long long)m->max_iv_ns, m->locked, m->not_shown, m->no_drawable, m->no_slot, m->late_handlers, m->held_far, m->sync_failed, m->pbuffers,
                     (long long)m->mach_off, (long long)m->corr_w, YSCR__MTL_TARGET_LEAD, (int)yscr__mtl_tier(m->kind));
 }
@@ -10990,7 +11145,7 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
 #if !defined(YSCR__METAL)
     (void)&yscr__mtl_target; (void)&yscr__mtl_vblank; (void)&yscr__mtl_period;   /* the core test calls them */
     (void)&yscr__mtl_pixel; (void)&yscr__mtl_code_of; (void)&yscr__mtl_kind_name;
-    (void)&yscr__mtl_variable; (void)&yscr__mtl_vrr_message;
+    (void)&yscr__mtl_variable; (void)&yscr__mtl_vrr_message; (void)&yscr__mtl_link_period;
 #endif
     if (desc->color_depth != 0 && desc->color_depth != 8 && desc->color_depth != 10) {
         yscr__copy(s->error, sizeof s->error, "ysp_screen: desc.color_depth must be 0, 8 or 10");

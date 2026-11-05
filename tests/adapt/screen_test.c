@@ -2850,6 +2850,20 @@ static void test_metal_rules(void) {
     CHECK_I(yscr__mtl_period(1, 60), 16666667);
     CHECK_I(yscr__mtl_period(0, 24000000), 0);
     CHECK_I(yscr__mtl_period(400330, 0), 0);
+    {   /* the period from CADisplayLink's timestamps: their step, not the
+         * duration's nominal timing (the M27Q: 16680375 against 16680417 ns) */
+        int64_t ts[6];
+        int j;
+        for (j = 0; j < 6; j++) ts[j] = T + j * 16680375LL + (j & 1);
+        CHECK_I(yscr__mtl_link_period(ts, 6, 16680417), 16680375);
+        ts[3] = ts[4] - 2 * 16680375LL;   /* a missed callback: a gap of two periods */
+        for (j = 4; j < 6; j++) ts[j - 1] = ts[j];
+        CHECK_I(yscr__mtl_link_period(ts, 5, 16680417), 16680375);
+        CHECK_I(yscr__mtl_link_period(ts, 1, 16680417), 0);   /* one callback: no period */
+        CHECK_I(yscr__mtl_link_period(ts, 6, 0), 0);
+        for (j = 0; j < 6; j++) ts[j] = T + j * 17100000LL;     /* 2.5% off the duration */
+        CHECK_I(yscr__mtl_link_period(ts, 6, 16680417), 0);
+    }
     /* a shown drawable: its time, counted from t0; composed, tier 2 (c) */
     yscr__mtl_vblank(7, T + 3 * P_NS + 1000, 0, YSCR__MTL_KIND_WINDOW, T, P_NS, &v);
     CHECK_I((int64_t)v.present_id, 7);

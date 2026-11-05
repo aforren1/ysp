@@ -21,6 +21,12 @@
  *            YSCR__MTL_SCREEN_INTERVALS seam: no ProMotion or variable-mode
  *            display was attached) and says how to set a fixed rate; it
  *            opens with equal intervals, and the real screen's are equal.
+ *   period   the period comes from CADisplayLink's timestamps (injected
+ *            through YSCR__MTL_LINK_TIMESTAMPS: 16680375 ns, not the
+ *            duration's 16680417), from CVDisplayLink when no callback
+ *            came, and the describe line names the source; the real read
+ *            is printed (a display asleep gives no callback: then the
+ *            fallback).
  *   gfx      ysp/gfx.h on a METAL screen writes rows top-down (GL's row 0
  *            is the top of the drawable, as on Windows).
  *   tenbit   the same as sync at desc.color_depth 10 (a BGR10A2Unorm layer,
@@ -49,6 +55,13 @@ static void sync_pixel(uint64_t id, uint32_t px);
  * while g_iv_min is not 0, as a ProMotion panel in its variable mode would
  * give them (no such panel was attached). */
 static long long g_iv_min, g_iv_max;
+/* CADisplayLink's callbacks at open, replaced while g_link is 1 (six
+ * timestamps a 16680375 ns step apart, duration 16.680417 ms, as measured
+ * on the M27Q) or 2 (none: the fallback to CVDisplayLink). */
+static int g_link;
+#define YSCR__MTL_LINK_TIMESTAMPS(ts, n, dur) \
+    do { if (g_link == 1) { int j_; for (j_ = 0; j_ < 6; j_++) (ts)[j_] = 5000000000000LL + j_ * 16680375LL; \
+             *(n) = 6; *(dur) = 0.016680417; } else if (g_link == 2) *(n) = 0; } while (0)
 #define YSCR__MTL_SCREEN_INTERVALS(m, mn, mx) \
     do { (void)(m); if (g_iv_min) { *(mn) = g_iv_min; *(mx) = g_iv_max; } } while (0)
 #define YSP_SCREEN_IMPLEMENTATION
@@ -302,6 +315,37 @@ static void gfx_origin(const yscr_desc* d) {
     yscr_close(&s);
 }
 
+/* The period's source in the describe line. */
+static void period(const yscr_desc* d) {
+    static yscr_screen s;
+    char line[1024];
+    const char* p;
+    long long per = 0;
+    char src[32] = "";
+    int k;
+    for (k = 1; k >= 0; k--) {
+        g_link = k == 1 ? 1 : 2;
+        memset(&s, 0, sizeof s);
+        if (!yscr_open(&s, d)) { check(0, "period: open"); g_link = 0; return; }
+        yscr_describe(&s, line, sizeof line);
+        yscr_close(&s);
+        p = strstr(line, "period=");
+        if (p) sscanf(p, "period=%lldns(%31[a-z])", &per, src);
+        if (k == 1) check(per == 16680375 && !strcmp(src, "cadisplaylink"),
+                          "period: from CADisplayLink's timestamps, named in the describe line");
+        else check(per > 0 && !strcmp(src, "cvdisplaylink"), "period: CVDisplayLink when no callback came");
+    }
+    g_link = 0;
+    memset(&s, 0, sizeof s);
+    if (!yscr_open(&s, d)) { check(0, "period: open"); return; }
+    yscr_describe(&s, line, sizeof line);
+    yscr_close(&s);
+    p = strstr(line, "period=");
+    if (p) sscanf(p, "period=%lldns(%31[a-z])", &per, src);
+    printf("     the real read: period=%lldns(%s)%s\n", per, src,
+           strcmp(src, "cadisplaylink") ? " (no CADisplayLink callback: a display asleep, or before macOS 14)" : "");
+}
+
 /* Variable refresh: refused, with the fix in the message; fixed: opens. */
 static void vrr(const yscr_desc* d) {
     static yscr_screen s;
@@ -351,6 +395,7 @@ int main(int argc, char** argv) {
     run("sync", &d, 120, 400, 0, 1);
     gfx_origin(&d);
     vrr(&d);
+    period(&d);
     d.color_depth = 10;
     run("tenbit", &d, 30, 400, 1, 0);
     d.color_depth = 0;

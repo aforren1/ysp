@@ -1521,7 +1521,8 @@ replace = '''    return out;'''
 env = { YSCR_WINDOW_TEST_ONLY = "displays" }
 
 # v0.11.0's 10 (mt-, the METAL backend), v0.12.0's 3 (mt-11 to mt-13, the
-# measured constants) and v0.13.0's 3 (mt-14 to mt-16, variable refresh). mt-01 to mt-07 and mt-11 to mt-13 run the core test
+# measured constants) and v0.13.0's 3 (mt-14 to mt-16, variable refresh) and v0.13.1's 2 (mt-17, mt-18, the
+# period from CADisplayLink). mt-01 to mt-07 and mt-11 to mt-13 run the core test
 # on any platform; mt-08 to mt-10 run tests/adapt/screen_metal_test.c on
 # this Mac's window server with ANGLE (the screen may be locked: the sync
 # and code read-backs run without a shown frame).
@@ -1661,3 +1662,20 @@ test = "metal"
 why = "The METAL presenter must refuse a display in a variable refresh mode at open, as desc.vrr is refused, and say how to set a fixed rate (v0.13.0)."
 find = '    if (yscr__mtl_variable(m->min_iv_ns, m->max_iv_ns)) {'
 replace = '    if (0) {'
+
+# v0.13.1's 2 (mt-17, mt-18: the period from CADisplayLink).
+[[mutant]]
+id = "mt-17"
+name = "the link's nominal duration as the period"
+test = "screen"
+why = "CADisplayLink's duration is the nominal timing (16680417 ns on the M27Q); its timestamps step by the display's real period (16680375 ns), on presentedTime's grid (v0.13.1)."
+find = '    per = (int64_t)llround((double)span / (double)k);'
+replace = '    per = duration_ns;'
+
+[[mutant]]
+id = "mt-18"
+name = "open() skips CADisplayLink"
+test = "metal"
+why = "From macOS 14 the period comes from CADisplayLink; CVDisplayLink (deprecated in macOS 15) is the fallback only (v0.13.1)."
+find = '    m->period_ns = yscr__mtl_link_read(m);'
+replace = '    m->period_ns = 0;'
