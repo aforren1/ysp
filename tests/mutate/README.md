@@ -78,12 +78,6 @@ values change from run to run.
 | `rigfile.toml` | gcc | `gcc -std=c11 -O2 -w -I<copy> tests/adapt/rigfile_test.c -lsetupapi -lm` (Windows) |
 | `parallel.toml` | gcc | `gcc -std=c11 -O2 -w -I<copy> tests/adapt/parallel_test.c -lm` (Windows: the pulses run on stand-in `Out32` and `Inp32`) |
 | `net.toml` | gcc | `gcc -std=c11 -O2 -w -I<copy> tests/adapt/net_test.c -lsetupapi -lm` (Windows; `YNET_TEST_SECONDS=1`; a fake liblsl, none needed) |
-
-The runner leaves out `-lsetupapi` on Linux and macOS. On macOS `gcc` is
-Apple clang. The `mac-*` mutants of `trials.toml`, `dataset.toml` and
-`rt.toml` and `rig-52` and `rig-53` of `rigfile.toml` change code that only
-macOS compiles (`platform = "darwin"`): they run on a Mac, where they were
-killed (2026-11-04), and are `skipped` elsewhere.
 | `stair.toml` | gcc | `gcc -std=c99 -O2 -w -DYST_MAX_TRIALS=128 -DYST_MAX_REVERSALS=32 -I<copy> tests/adapt/stair_test.c -lm` |
 | `quest.toml` | gcc | `gcc -std=c11 -O2 -w -I<copy> tests/adapt/quest_test.c -lm` |
 | `aep.toml` | gcc | `gcc -std=c11 -O2 -w -I<copy> tests/adapt/aep_test.c -lm` (`YAEP_TEST_ONLY=params`: the parameter table and snapshot outcome checks only) |
@@ -92,6 +86,12 @@ These are the compilers of the original runs. The runner finds gcc in
 this order: the `YSP_MUT_GCC` environment variable,
 `C:\tmp\winlibs\mingw64\bin\gcc.exe`, then `gcc` on the `PATH`. To use a
 different `vcvars64.bat`, set `YSP_MUT_VCVARS`.
+
+The runner leaves out `-lsetupapi` on Linux and macOS. On macOS `gcc` is
+Apple clang. The `mac-*` mutants of `trials.toml`, `dataset.toml` and
+`rt.toml` and `rig-52` and `rig-53` of `rigfile.toml` change code that only
+macOS compiles (`platform = "darwin"`): they run on a Mac, where they were
+killed (2026-11-04), and are `skipped` elsewhere.
 
 ### Environment
 
