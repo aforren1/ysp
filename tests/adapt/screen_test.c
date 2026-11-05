@@ -2839,31 +2839,34 @@ static void test_metal_rules(void) {
     yscr_vblank v;
     int i, k, b;
     const int64_t T = 5000000000LL;
-    /* (a) the target: a quarter period before the planned vblank */
-    CHECK_I(yscr__mtl_target(T, 16000000), T - 4000000);
-    CHECK_I(yscr__mtl_target(T, P_NS), T - P_NS / 4);
+    /* (a) the target: half a period before the planned vblank (measured) */
+    CHECK_I(yscr__mtl_target(T, 16000000), T - 8000000);
+    CHECK_I(yscr__mtl_target(T, P_NS), T - P_NS / 2);
+    /* (b) two frames in flight; the margin covers Core Animation's deadline */
+    CHECK_I(YSCR__MTL_IN_FLIGHT, 2);
+    CHECK(YSCR__MTL_MARGIN_NS >= 1180000 + 450000);
     /* the display link's nominal period, as measured on the M27Q's "60 Hz" */
     CHECK_I(yscr__mtl_period(400330, 24000000), 16680417);
     CHECK_I(yscr__mtl_period(1, 60), 16666667);
     CHECK_I(yscr__mtl_period(0, 24000000), 0);
     CHECK_I(yscr__mtl_period(400330, 0), 0);
-    /* a shown drawable: its time, counted from t0; composed, tier 3 (c) */
+    /* a shown drawable: its time, counted from t0; composed, tier 2 (c) */
     yscr__mtl_vblank(7, T + 3 * P_NS + 1000, 0, YSCR__MTL_KIND_WINDOW, T, P_NS, &v);
     CHECK_I((int64_t)v.present_id, 7);
     CHECK_I(v.t_ns, T + 3 * P_NS + 1000);
     CHECK_I(v.count, 3);
     CHECK_I(v.path, YSCR_PATH_COMPOSED);
-    CHECK_I(v.tier, YSCR_TIER_3);
+    CHECK_I(v.tier, YSCR_TIER_2);
     CHECK_I(v.flags, 0);
-    for (k = 0; k < 3; k++) CHECK_I(yscr__mtl_tier(k), YSCR_TIER_3);
+    for (k = 0; k < 3; k++) CHECK_I(yscr__mtl_tier(k), YSCR_TIER_2);
     CHECK(!strcmp(yscr__mtl_kind_name(YSCR__MTL_KIND_SPACE), "space"));
     CHECK(!strcmp(yscr__mtl_kind_name(YSCR__MTL_KIND_FULLSCREEN), "fullscreen"));
     CHECK(!strcmp(yscr__mtl_kind_name(YSCR__MTL_KIND_WINDOW), "window"));
-    /* not shown: no time; OCCLUDED only when the window was hidden */
+    /* not shown: no time; OCCLUDED only when the window was hidden; the core
+     * makes such a flip estimated, tier 3 */
     yscr__mtl_vblank(8, 0, 1, YSCR__MTL_KIND_SPACE, T, P_NS, &v);
     CHECK_I(v.t_ns, 0);
     CHECK_I(v.flags, YSCR_FLIP_OCCLUDED);
-    CHECK_I(v.tier, YSCR_TIER_3);
     yscr__mtl_vblank(9, 0, 0, YSCR__MTL_KIND_WINDOW, T, P_NS, &v);
     CHECK_I(v.t_ns, 0);
     CHECK_I(v.flags, 0);
@@ -2896,27 +2899,36 @@ static void test_metal_rules(void) {
     }
 }
 
-/* A display that shows a drawable as Core Animation might: at the vblank
- * nearest its presentAtTime target (rule 0), or at the first vblank at or
- * after it (rule 1), never before the vblank after the present call. The
- * presenter's target and completion rules are the header's own. */
+/* A display that shows a drawable as Core Animation did in the probe's
+ * timing session (docs/screen_macos_probe.md): at the first vblank at or
+ * after its target less 0.4 ms (here 0.1 ms; not the nearest vblank: a
+ * target 0.95 period before a vblank showed on it), but never before the first vblank that comes at least a
+ * period plus 1.1 ms (here 0.275 period) after the commit; the presented
+ * handler comes 0.5 ms (here 0.125 period) after the vblank. acquire()
+ * waits as the header's does: for the handler of the frame
+ * YSCR__MTL_IN_FLIGHT before. The target and completion rules are the
+ * header's own. */
+#define MS_DEADLINE (P_NS + P_NS * 275 / 1000)
+#define MS_HANDLER  (P_NS / 8)
 typedef struct mtl_script {
-    int      rule, hide_from, hide_to, n;
-    int64_t  t0, target, made;
-    uint64_t id;
-    int      has, has_done;
-    yscr_vblank done;
+    int      hide_from, hide_to, n, nq;
+    int64_t  t0, last_count;
+    uint64_t id[8];
+    int64_t  shown[8], target[8];
+    int      hidden[8];
 } mtl_script;
 
 static int ms_open(void* ctx, const yscr_presenter_open* in, yscr_caps* caps, char* err, size_t cap) {
     mtl_script* c = (mtl_script*)ctx;
     (void)in; (void)err; (void)cap;
     c->t0 = now_ns();
+    c->last_count = -1;
     caps->kind = YSCR_FIXED_GRID;
     caps->period_ns = P_NS;
     caps->native_target = true;
     caps->hw_onset = true;
-    caps->max_in_flight = 1;
+    caps->max_in_flight = YSCR__MTL_IN_FLIGHT;
+    caps->margin_ns = MS_DEADLINE - P_NS + P_NS / 8;   /* the deadline's excess and the call */
     caps->mode.refresh_num = 250;
     caps->mode.refresh_den = 1;
     caps->mode.period_ns = P_NS;
@@ -2927,50 +2939,60 @@ static int ms_acquire(void* ctx, int64_t deadline_ns, yscr_vblank* newest) {
     mtl_script* c = (mtl_script*)ctx;
     (void)deadline_ns;
     newest->t_ns = 0;
-    if (c->has) {
-        double k = (double)(c->target - c->t0) / (double)P_NS;
-        int64_t shown = c->rule == 0 ? (int64_t)llround(k) : (int64_t)ceil(k);
-        int64_t first = (c->made - c->t0) / P_NS + 1;
-        int64_t t;
-        int hidden = c->n >= c->hide_from && c->n < c->hide_to;
-        if (shown < first) shown = first;
-        t = c->t0 + shown * P_NS;
+    if (c->nq >= YSCR__MTL_IN_FLIGHT) {
+        int64_t t = c->shown[c->nq - YSCR__MTL_IN_FLIGHT] + MS_HANDLER;
         if (t > now_ns()) vsleep_until(t);
-        yscr__mtl_vblank(c->id, hidden ? 0 : t, hidden, YSCR__MTL_KIND_WINDOW, c->t0, P_NS, &c->done);
-        c->has_done = 1;
-        c->has = 0;
-        c->n++;
     }
     return YSCR_OK;
 }
 static int ms_present(void* ctx, const yscr_present_req* req) {
     mtl_script* c = (mtl_script*)ctx;
-    c->id = req->present_id;
-    c->made = now_ns();
-    c->target = req->target_ns > 0 ? yscr__mtl_target(req->target_ns, P_NS) : c->made;
-    c->has = 1;
+    int64_t made = now_ns(), tg = req->target_ns > 0 ? yscr__mtl_target(req->target_ns, P_NS) : made;
+    int64_t want = (int64_t)ceil((double)(tg - 100000 - c->t0) / (double)P_NS);
+    int64_t first = (int64_t)ceil((double)(made + MS_DEADLINE - c->t0) / (double)P_NS);
+    if (c->nq >= 8) return YSCR_ERR_LOST;
+    if (want < first) want = first;
+    if (want <= c->last_count) want = c->last_count + 1;
+    c->last_count = want;
+    c->id[c->nq] = req->present_id;
+    c->target[c->nq] = tg;
+    c->shown[c->nq] = c->t0 + want * P_NS;
+    c->hidden[c->nq] = c->n >= c->hide_from && c->n < c->hide_to;
+    c->nq++;
+    c->n++;
     return YSCR_OK;
 }
 static int ms_completions(void* ctx, yscr_vblank* out, int cap) {
     mtl_script* c = (mtl_script*)ctx;
-    if (!c->has_done || cap < 1) return 0;
-    out[0] = c->done;
-    c->has_done = 0;
-    return 1;
+    int n = 0;
+    while (n < cap && c->nq > 0 && c->shown[0] + MS_HANDLER <= now_ns()) {
+        yscr__mtl_vblank(c->id[0], c->hidden[0] ? 0 : c->shown[0], c->hidden[0], YSCR__MTL_KIND_WINDOW, c->t0, P_NS, &out[n++]);
+        c->nq--;
+        memmove(c->id, c->id + 1, sizeof c->id[0] * (size_t)c->nq);
+        memmove(c->shown, c->shown + 1, sizeof c->shown[0] * (size_t)c->nq);
+        memmove(c->target, c->target + 1, sizeof c->target[0] * (size_t)c->nq);
+        memmove(c->hidden, c->hidden + 1, sizeof c->hidden[0] * (size_t)c->nq);
+    }
+    return n;
 }
 static const yscr_presenter g_mtl_scripted = {
     YSCR_PRESENTER_VERSION, "metal-scripted", false, false, true,
     ms_open, ms_close, ms_acquire, ms_present, ms_completions, NULL, NULL, NULL, NULL
 };
 
-static void test_metal_records(int rule) {
+/* 60 frames on the scripted Metal display: every target a third of a period
+ * off the grid, every 10th frame committed 0.8 period after a vblank (late
+ * in the period, inside the commit's deadline), 3 frames hidden. Every frame
+ * is shown on its planned vblank, one a vblank (full rate with two in
+ * flight), tier 2; the hidden ones are estimated and OCCLUDED. */
+static void test_metal_records(void) {
     static mtl_script c;
     static yscr_screen s;
     static yscr_frame f;
     yscr_desc d;
-    int i, j, n, shown = 0, hidden = 0;
+    int i, j, n, shown = 0, hidden = 0, steps1 = 0;
+    int64_t prev = 0;
     memset(&c, 0, sizeof c);
-    c.rule = rule;
     c.hide_from = 1000000;
     memset(&s, 0, sizeof s);
     memset(&d, 0, sizeof d);
@@ -2985,9 +3007,13 @@ static void test_metal_records(int rule) {
     c.hide_to = c.n + 23;
     for (i = 0; i < 60; i++) {
         CHECK_I(yscr_begin(&s, &f), YSCR_OK);
-        /* every target a third of a period off the grid, both ways */
+        if (i % 10 == 5) {   /* work that ends late in a period */
+            int64_t t = now_ns() - c.t0;
+            vsleep_until(c.t0 + (t / P_NS) * P_NS + P_NS * 8 / 10 + (t % P_NS > P_NS * 8 / 10 ? P_NS : 0));
+        }
         CHECK_I(yscr_flip_at(&s, f.onset + ((i & 1) ? P_NS / 3 : -P_NS / 3), NULL), YSCR_OK);
     }
+    yscr_wait_flip(&s, NULL);
     yscr_close(&s);
     n = ring_drain();
     for (j = 0; j < n; j++) {
@@ -2996,21 +3022,23 @@ static void test_metal_records(int rule) {
         if (e->source != YRT_SRC_SCREEN || e->kind != YSCR_EV_FLIP) continue;
         flags = YSCR_EV_FLAGS_OF(e->u.u16[5]);
         tier = YSCR_EV_TIER_OF(e->u.u16[5]);
-        CHECK_I(tier, YSCR_TIER_3);   /* (c): no kind claims more */
-        /* the target snapped to the vblank a third of a period away */
-        CHECK_I(llabs((long long)((int64_t)e->t_ns - e->u.i64[0])), P_NS / 3);
         if (flags & YSCR_FLIP_ESTIMATED) {
             CHECK(flags & YSCR_FLIP_OCCLUDED);   /* onset: the planned vblank */
+            CHECK_I(tier, YSCR_TIER_3);
             hidden++;
         } else {
-            /* shown on the vblank planned: neither early nor late, under either rule */
-            CHECK(!(flags & (YSCR_FLIP_EARLY | YSCR_FLIP_LATE_TARGET)));
+            /* shown on the vblank planned: neither early nor dropped */
+            CHECK_I(tier, YSCR_TIER_2);
+            CHECK(!(flags & YSCR_FLIP_EARLY));
             CHECK_I(e->u.u16[4], 0);
+            if (prev && (int64_t)e->t_ns - prev == P_NS) steps1++;
             shown++;
         }
+        prev = (int64_t)e->t_ns;
     }
     CHECK_I(hidden, 3);
     CHECK(shown >= 55);
+    CHECK(steps1 >= 40);   /* full rate but for the frames with work and after the hidden ones */
 }
 
 /* Two screens as a group. */
@@ -4664,8 +4692,7 @@ int main(void) {
     yrt_thread_elevate(NULL);
     test_web_rules();
     test_metal_rules();
-    test_metal_records(0);
-    test_metal_records(1);
+    test_metal_records();
     test_errors();
     test_mode_multiple();
     test_params();

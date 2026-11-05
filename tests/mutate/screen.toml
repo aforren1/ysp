@@ -1520,7 +1520,8 @@ find = '''    if (!e) return out;   /* not from yscr_displays(): SDL judges it *
 replace = '''    return out;'''
 env = { YSCR_WINDOW_TEST_ONLY = "displays" }
 
-# v0.11.0's 10 (mt-, the METAL backend). mt-01 to mt-07 run the core test
+# v0.11.0's 10 (mt-, the METAL backend) and v0.11.1's 3 (mt-11 to mt-13, the
+# measured constants). mt-01 to mt-07 and mt-11 to mt-13 run the core test
 # on any platform; mt-08 to mt-10 run tests/adapt/screen_metal_test.c on
 # this Mac's window server with ANGLE (the screen may be locked: the sync
 # and code read-backs run without a shown frame).
@@ -1534,26 +1535,26 @@ env_default = { YSCR_ANGLE_DIR = "/Users/brainworks/ysp-deps/angle-electron-43.8
 
 [[mutant]]
 id = "mt-01"
-name = "target three quarters of a period early"
+name = "target a whole period early"
 test = "screen"
-why = "presentAtTime's target must lie less than half a period before the planned vblank, or a display that shows the nearest vblank shows the frame one early (BACKENDS, METAL, (a))."
-find = '#define YSCR__MTL_TARGET_LEAD 0.25'
-replace = '#define YSCR__MTL_TARGET_LEAD 0.75'
+why = "Core Animation shows a drawable at the first vblank at or after its target (measured, v0.11.1): a target a period before the planned vblank shows a vblank early (BACKENDS, METAL, (a))."
+find = '#define YSCR__MTL_TARGET_LEAD 0.5'
+replace = '#define YSCR__MTL_TARGET_LEAD 1.0'
 
 [[mutant]]
 id = "mt-02"
 name = "target after the planned vblank"
 test = "screen"
 why = "A target after the planned vblank shows a vblank late on a display that shows the first vblank at or after it."
-find = '#define YSCR__MTL_TARGET_LEAD 0.25'
+find = '#define YSCR__MTL_TARGET_LEAD 0.5'
 replace = '#define YSCR__MTL_TARGET_LEAD -0.25'
 
 [[mutant]]
 id = "mt-03"
-name = "tier 1 before a measurement"
+name = "tier 1 without a photodiode"
 test = "screen"
-why = "No Metal window kind claims a tier better than 3 until presentedTime is shown to be an observation (TIERS; docs/screen_macos_probe.md)."
-find = '    return (uint8_t)YSCR_TIER_3;'
+why = "presentedTime is an OS time for the vblank shown (tier 2); tier 1 needs a photodiode run and a path the header can verify (TIERS; docs/screen_macos_probe.md)."
+find = '    return (uint8_t)YSCR_TIER_2;'
 replace = '    return (uint8_t)YSCR_TIER_1;'
 
 [[mutant]]
@@ -1611,3 +1612,27 @@ test = "metal"
 why = "One pbuffer per drawable IOSurface, kept: the layer cycles 3 or 4, and a pbuffer made per frame churns ANGLE's surfaces (the describe line's pbuffers count)."
 find = '        if (m->key[k] == ios && m->pb[k]) { m->used[k] = ++m->use; return m->pb[k]; }'
 replace = ''
+
+[[mutant]]
+id = "mt-11"
+name = "one frame in flight"
+test = "screen"
+why = "The presented handler comes about 0.5 ms after its vblank and a commit needs a period and about 1 ms before its own: waiting for the frame before shows every other vblank (measured, v0.11.1)."
+find = '#define YSCR__MTL_IN_FLIGHT 2'
+replace = '#define YSCR__MTL_IN_FLIGHT 1'
+
+[[mutant]]
+id = "mt-12"
+name = "the presenter's margin ignored"
+test = "screen"
+why = "A commit made in the last part of a period misses the vblank two later unless the core plans it one later (caps.margin_ns, v0.11.1)."
+find = '    if (s->caps.margin_ns > s->margin_ns) s->margin_ns = s->caps.margin_ns;'
+replace = ''
+
+[[mutant]]
+id = "mt-13"
+name = "METAL's margin of 1 ms"
+test = "screen"
+why = "Core Animation's deadline was up to 1.18 ms past one period and the present call up to 0.45 ms at p99: the margin must cover both (v0.11.1)."
+find = '#define YSCR__MTL_MARGIN_NS 2000000'
+replace = '#define YSCR__MTL_MARGIN_NS 1000000'

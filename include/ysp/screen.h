@@ -1,4 +1,4 @@
-/* ysp/screen.h - v0.11.0 - public domain single-header display library
+/* ysp/screen.h - v0.12.0 - public domain single-header display library
  *
  *   The window, the GL ES 3.0 context, the display mode and the swap path
  *   of a stimulus display, with flip at a time: each frame learns the
@@ -621,7 +621,7 @@
  *     page; not tested), codes (drawn through GL, always at risk:
  *     CODE_RISK_COMPOSED), the gamma ramp, raw mice and the panic watchdog
  *     (panic=n/a).
- *   YSCR_BACKEND_METAL (v0.11.0; macOS; AUTO there): SDL makes the
+ *   YSCR_BACKEND_METAL (v0.11.0, measured in v0.12.0; macOS; AUTO there): SDL makes the
  *     window; the header makes its CAMetalLayer (SDL_Metal_CreateView) on
  *     the MTLDevice that ANGLE's Metal display reports. ANGLE draws each
  *     frame straight into the drawable, through a pbuffer on the drawable's
@@ -656,17 +656,29 @@
  *     refuses another thread. There is no window thread on macOS
  *     (window_thread=off(auto,platform)). The presented handlers run on
  *     Metal's threads and touch only a process-wide table of 64 slots.
- *     Not measured, each behind one constant with a conservative value
- *     (docs/screen_macos_probe.md has the runs that decide them):
- *     (a) the target: the planned vblank minus a quarter period
- *     (YSCR__MTL_TARGET_LEAD), right whether Core Animation shows a frame
- *     at the vblank nearest its time or at the first at or after it;
- *     (b) the depth, 2 (the composed path's table), with 3 drawables and
- *     one frame in flight; (c) the tier: 3 for every window kind
- *     (window, fullscreen, space in the describe line), because
- *     presentedTime is not yet shown to be an observation of the scanout.
- *     macOS has no public call that says a window goes direct to the
- *     display, so every flip's path is COMPOSED.
+ *     Measured (v0.12.0; the probe's timing session, docs/screen_macos_probe.md
+ *     section 6; one machine, a Screen Sharing session open), each one
+ *     constant beside its rows: (a) a drawable shows at the first
+ *     presentedTime vblank at or after its target (less about 0.4 ms), so
+ *     the target is the planned vblank minus half a period
+ *     (YSCR__MTL_TARGET_LEAD), the middle of the window that showed on it;
+ *     (b) a commit needs a period plus up to 1.2 ms before its vblank and
+ *     the presented handler comes 0.3 to 0.8 ms after it, so the depth is 2
+ *     with two frames in flight (caps.max_in_flight 2: begin() waits for
+ *     the frame two before) and a margin of 2 ms (caps.margin_ns); one in
+ *     flight showed every other vblank; (c) tier 2 for a shown flip in
+ *     every window kind (window, fullscreen, space in the describe line):
+ *     presentedTime moved with every late frame and comes before its
+ *     handler, so it is an OS time for the vblank shown, as DXGI_FLIP's
+ *     composed onset; tier 1 waits for a photodiode, because CVDisplayLink
+ *     puts the vblank 0.40 to 0.45 period before presentedTime and macOS
+ *     has no public call that says a window goes direct to the display.
+ *     Every flip's path is COMPOSED. A target more than 0.5 s ahead is
+ *     held by a sleep in flip_at() until it is 0.5 s ahead (held_far= in
+ *     the describe line): 2 and 5 s ahead did not show and broke the
+ *     layer's presents for about 6.5 s. A frame loop faster than the
+ *     display while no frame is shown (a hidden window: handlers at once)
+ *     is held there too, because flip_at() plans one frame a vblank.
  *     desc.color_depth 10 gives a BGR10A2Unorm layer and 'l10r' IOSurfaces
  *     (ANGLE's Metal display has no 10-bit config; the pbuffer takes the
  *     IOSurface's format); 8-bit code values are spread over 10 bits
@@ -1550,6 +1562,14 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.12.0 - METAL's constants from the probe's timing session: target
+ *          the planned vblank minus half a period (was a quarter); two
+ *          frames in flight (one showed every other vblank); a 2 ms margin
+ *          before a vblank, through the new caps.margin_ns (yscr_caps'
+ *          layout changes; the core takes the larger of its own and the
+ *          presenter's); tier 2 for a shown flip (was 3); a target more
+ *          than 0.5 s ahead held until it is near. The last frame's code
+ *          read-back is checked at close.
  *   v0.11.0 - YSCR_BACKEND_METAL (macOS; AUTO there): a header-owned
  *          CAMetalLayer, ANGLE drawing into the drawable's IOSurface, an
  *          MTLSharedEvent between ANGLE's queue and the header's, onsets
@@ -1893,7 +1913,20 @@
  *          groups, input restamping, mode lists and the parameter table.
  *          The other swap paths are stubs that refuse to open.
  *
- *   STATUS: v0.11.0 (METAL; docs/screen.md, "macOS: the header owns the
+ *   STATUS: v0.12.0 (METAL; docs/screen_macos_probe.md section 6, timing
+ *   session of 2026-11-05 on the probe, not on this header): Apple M2, M27Q
+ *   over HDMI at 59.9505 Hz (also 120 and 144 Hz), AC, a Screen Sharing
+ *   session open (screensharingd about 11% CPU), unlocked. presentedTime
+ *   sat on its own grid to 0.64 us (max over every run) and moved with 30
+ *   of 30 late frames per kind and rate; presentAtTime 2 to 5 vblanks
+ *   ahead showed on the planned vblank from 0.9 or 0.95 period before it
+ *   up to it (2155 of 2160); a frame loop waiting for the frame before
+ *   showed every other vblank (1701 of 1896 steps of 2). This header's own
+ *   frame loop afterwards (tests/adapt/screen_metal_test.c, unlocked, 800
+ *   x 600 window at 59.95 Hz, about 4.5 ms of GPU time a frame): 120 of 120
+ *   shown, 119 of 119 a vblank after the one before, 0 dropped, tier 2; 10
+ *   bits 30 of 30 and 29 of 29. No timing run of the header's own.
+ *   v0.11.0 (METAL; docs/screen.md, "macOS: the header owns the
  *   CAMetalLayer"): built and run on an Apple M2 Mac mini, macOS 27.0.1,
  *   ANGLE from Electron 43.8.3, SDL 3.4.0, with the console session locked
  *   the whole time, so no frame was shown: every presentedTime was 0, and
@@ -2149,9 +2182,9 @@
 #define YSP_SCREEN_H_INCLUDED
 
 #define YSCR_VERSION_MAJOR 0
-#define YSCR_VERSION_MINOR 11
+#define YSCR_VERSION_MINOR 12
 #define YSCR_VERSION_PATCH 0
-#define YSCR_VERSION_STRING "0.11.0"
+#define YSCR_VERSION_STRING "0.12.0"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -2538,10 +2571,13 @@ typedef struct yscr_caps {
     bool     native_target;    /* the OS takes a target vblank or time        */
     bool     hw_onset;         /* onsets are OS vblank timestamps             */
     bool     vrr_capable;      /* necessary, not sufficient                   */
-    int32_t  max_in_flight;    /* 1                                           */
+    int32_t  max_in_flight;    /* 1; METAL 2                                  */
     yscr_mode mode;          /* the mode obtained, read back from the OS    */
     yscr_tier worst_tier;    /* the worst tier of any flip since open       */
     bool     raw_keyboard;     /* keys come on SDL's raw path now (INPUT)     */
+    int64_t  margin_ns;        /* the presenter's: the least time before a
+                                * vblank at which a present can still make
+                                * it; 0 = the core's (P/8, at most 1 ms)    */
 } yscr_caps;
 
 typedef struct yscr_patch {
@@ -5096,25 +5132,46 @@ static const yscr_presenter yscr__web_presenter = {
  * owns the CAMetalLayer"). These few rules compile on every platform, so the
  * core test checks them without a Mac; the presenter itself is macOS's.
  *
- * Unmeasured, each in one place with a conservative value until the timing
- * runs of docs/screen_macos_probe.md decide it:
- *   (a) the time passed to presentDrawable:atTime: for a planned vblank;
- *   (b) the depth and maximumDrawableCount;
- *   (c) the tier of each window kind. */
+ * The constants come from the probe's timing session of 2026-11-05
+ * (docs/screen_macos_probe.md, section 6; Apple M2, M27Q over HDMI at
+ * 59.9505, 120 and 144 Hz, a Screen Sharing session open), each with the
+ * row it rests on. The grid is presentedTime's: Core Animation's
+ * presentedTime and CADisplayLink's timestamp lie on one computed grid
+ * (residual under 1 us), 0.40 to 0.45 period after CVDisplayLink's inNow,
+ * which jitters by up to 0.9 ms. */
 
-/* (a) The target is the planned vblank minus a quarter period. Core
- * Animation's rule is not measured. Under "the vblank nearest the target"
- * any lead from 0 to half a period lands on the planned vblank, and half a
- * period exactly is the tie, which COMPOSITION gave to the earlier vblank
- * (docs/screen.md, "Quantization"); under "the first vblank at or after
- * the target" any lead from 0 up does. A quarter period is the middle of
- * the range that suits both, so the grid may be off by a quarter period
- * either way. */
-#define YSCR__MTL_TARGET_LEAD 0.25
-/* (b) Three drawables, one frame in flight, depth 2: the composed path's
- * table depth (DEPTH); on a backend that holds frames to a target a depth
- * too large costs latency only, one too small drops every frame. */
+/* (a) The target is the planned vblank minus half a period. Measured: a
+ * drawable shows at the first presentedTime vblank at or after its target
+ * less about 0.4 ms. presentAtTime from 0.9 or 0.95 period before a
+ * vblank 2, 3 or 5 vblanks ahead up to that vblank showed on it: 1440 of
+ * 1440 at 59.95 Hz (four window kinds), 360 of 360 at 144 Hz; at 120 Hz
+ * 355 of 360, the 5 others at 0.05 period after the vblank. 0.05 (59.95
+ * Hz) to 0.1 period (120, 144 Hz) after it showed a vblank late, 60 of 60
+ * per kind and rate. Half a period is the middle of the window that shows
+ * on the vblank, so the grid may be off by close to half a period either
+ * way. */
+#define YSCR__MTL_TARGET_LEAD 0.5
+/* (b) Two frames in flight, three drawables, depth 2 (the composed path's
+ * table depth). Measured: a commit shows two vblanks later when it comes
+ * at least one period plus 0.65 to 1.18 ms before that vblank (asap,
+ * 60, 120, 144 Hz; one vblank later otherwise), and the presented handler
+ * comes 0.3 to 0.76 ms after presentedTime. So a frame loop that waits for
+ * the frame before to be shown runs at half rate (links: 1896 frames in
+ * 60 s at 59.95 Hz, 1701 of 1896 steps of 2 vblanks), and one that waits
+ * for the frame two before runs at full rate. With 2 drawables instead of
+ * 3 nothing changed with one frame in flight (asap 300 of 300 shown both);
+ * three leave one free while two are in flight. */
+#define YSCR__MTL_IN_FLIGHT 2
 #define YSCR__MTL_DRAWABLES 3
+/* The core's margin before a planned vblank, at least this on METAL: the
+ * commit's deadline (one period plus up to 1.18 ms, above) plus the
+ * present call (encode and commit: p99 0.45 ms, max 0.93 ms). */
+#define YSCR__MTL_MARGIN_NS 2000000
+/* A target more than this far ahead is held by a sleep until it is this
+ * far: targets 0.1 to 1.0 s ahead showed on their vblank (1 of 1 each),
+ * 2 and 5 s ahead did not show, and every present of the layer after them
+ * was dropped for about 6.5 s (presentedTime 0). */
+#define YSCR__MTL_AHEAD_MAX_NS 500000000
 /* Window kinds: macOS has no public call that says a window is shown
  * direct to the display, so the kind is what the header can see. */
 #define YSCR__MTL_KIND_WINDOW     0
@@ -5125,12 +5182,19 @@ static int64_t yscr__mtl_target(int64_t vblank_ns, int64_t period_ns) {
     return vblank_ns - (int64_t)llround(YSCR__MTL_TARGET_LEAD * (double)period_ns);
 }
 
-/* (c) Tier 3 on every kind: presentedTime is not yet shown to be an
- * observation of the scanout (it may be WindowServer's plan, as
- * COMPOSITION's composed time was), so no kind claims more (TIERS). */
+/* (c) Tier 2 on every kind: presentedTime is an OS time for the vblank a
+ * frame showed on, not a plan: it moved with every late frame (30 of 30
+ * per kind and rate), its handler comes after it (0.3 to 0.76 ms), and it
+ * sits on its grid to 1 us. That is DXGI_FLIP's composed onset (TIERS):
+ * good under the condition that the window is shown (else presentedTime
+ * is 0 and the flip estimated, tier 3). Not tier 1: no photodiode run says
+ * where the light is against presentedTime (CVDisplayLink puts the vblank
+ * 0.45 period earlier), and no public call says whether a window goes
+ * direct to the display; the same numbers came in a window, borderless,
+ * and in a fullscreen space. */
 static uint8_t yscr__mtl_tier(int kind) {
     (void)kind;
-    return (uint8_t)YSCR_TIER_3;
+    return (uint8_t)YSCR_TIER_2;
 }
 
 static const char* yscr__mtl_kind_name(int kind) {
@@ -5538,7 +5602,7 @@ typedef struct yscr__mtl {
     int32_t   w, h, bits10, region, bind_target;
     int32_t   kind, locked, hidden;
     int64_t   hidden_t;
-    uint32_t  not_shown, no_drawable, no_slot, sync_failed, pbuffers, late_handlers;
+    uint32_t  not_shown, no_drawable, no_slot, sync_failed, pbuffers, late_handlers, held_far;
     char      angle[48];
 } yscr__mtl;
 
@@ -5626,6 +5690,7 @@ static void* yscr__mtl_pbuffer(yscr__mtl* m, void* ios, int w, int h) {
 }
 
 static void yscr__mtl_close(void* vctx);
+static void yscr__mtl_rb_check(yscr__mtl* m);
 
 /* The code self test: every value of every channel, in the layer's format,
  * through the blits a present makes, into a 256 x 2 texture and back. */
@@ -5821,7 +5886,8 @@ static int yscr__mtl_open(void* vctx, const yscr_presenter_open* in, yscr_caps* 
     caps->kind = YSCR_FIXED_GRID;
     caps->hw_onset = true;
     caps->native_target = true;
-    caps->max_in_flight = 1;
+    caps->max_in_flight = YSCR__MTL_IN_FLIGHT;
+    caps->margin_ns = YSCR__MTL_MARGIN_NS;
     yscr__mtl_correlate(m);
     m->kind = yscr__mtl_kind_now(m);
     (void)yscr__mtl_hidden(m);
@@ -5839,6 +5905,10 @@ static void yscr__mtl_close(void* vctx) {
     }
     m->n_slot = 0;
     YSCR__MRELEASE(m->drawable);
+    if (m->rb_cb) {   /* the last frame's read-back: done at once, or soon */
+        yscr__v0(m->rb_cb, yscr__mac.waitUntilCompleted);
+        yscr__mtl_rb_check(m);
+    }
     YSCR__MRELEASE(m->rb_cb);
     m->tex = NULL;
     if (m->dpy) {
@@ -5864,17 +5934,21 @@ static void yscr__mtl_bind(void* vctx) {
     yscr__mac.eglMakeCurrent(m->dpy, m->surf, m->surf, m->ctx);
 }
 
-/* One frame in flight: wait for the handler of the frame before, up to its
- * target plus 3 periods (a hidden window's handlers can come late or not at
- * all, measured), then take the next drawable. nextDrawable blocks for at
- * most its own timeout (allowsNextDrawableTimeout, 1 s); without a drawable
- * the frame draws into a 1 x 1 pbuffer and its record is estimated. */
+/* YSCR__MTL_IN_FLIGHT frames in flight: wait for the handler of the frame
+ * that many before, up to its target plus 3 periods (a hidden window's
+ * handlers can come late or not at all, measured), then take the next
+ * drawable. The handler comes about 0.5 ms after its vblank and a commit
+ * needs a period and about 1 ms before its own, so waiting for the frame
+ * before would show every other vblank (measured). nextDrawable blocks for
+ * at most its own timeout (allowsNextDrawableTimeout, 1 s); without a
+ * drawable the frame draws into a 1 x 1 pbuffer and its record is
+ * estimated. */
 static int yscr__mtl_acquire(void* vctx, int64_t deadline_ns, yscr_vblank* newest) {
     yscr__mtl* m = (yscr__mtl*)vctx;
     void* pool;
     newest->t_ns = 0;
-    if (m->n_slot > 0) {
-        int last = m->n_slot - 1;
+    if (m->n_slot >= YSCR__MTL_IN_FLIGHT) {
+        int last = m->n_slot - YSCR__MTL_IN_FLIGHT;
         int64_t limit = m->slot_target[last] + 3 * m->period_ns;
         if (limit < yscr__now() + m->period_ns) limit = yscr__now() + m->period_ns;
         if (limit > deadline_ns) limit = deadline_ns;
@@ -5982,6 +6056,17 @@ static int yscr__mtl_present(void* vctx, const yscr_present_req* req) {
      * before; a header without it checks a read-back once it is done and
      * skips one still running at the next verify. */
     if (m->rb_cb && YSCR__MTL_SYNC_PIXEL_ON) yscr__v0(m->rb_cb, yscr__mac.waitUntilCompleted);
+    /* A target far ahead broke the layer for seconds (measured): hold the
+     * frame here, before ANGLE's frame is ended, until it is near. A loop
+     * that runs faster than the display (no frame shown: its handlers come
+     * at once) plans one frame a vblank and so is held here too. */
+    if (req->target_ns > 0) {
+        int64_t t = yscr__mtl_target(req->target_ns, m->period_ns);
+        if (t - yscr__now() > YSCR__MTL_AHEAD_MAX_NS) {
+            m->held_far++;
+            YSCR__SLEEP_UNTIL((int64_t)(t - YSCR__MTL_AHEAD_MAX_NS), YRT_DEFAULT_SPIN_NS);
+        }
+    }
     if (m->rb_cb) yscr__mtl_rb_check(m);
     pool = yscr__mac.pool_push();
     /* ANGLE's frame signals the event with the present id, after its work */
@@ -6148,10 +6233,10 @@ static int yscr__mtl_describe(void* vctx, char* buf, size_t cap) {
     yscr__mtl* m = (yscr__mtl*)vctx;
     m->kind = yscr__mtl_kind_now(m);
     return snprintf(buf, cap, "angle=%s kind=%s layer=%s period=%lldns locked=%d not_shown=%u no_drawable=%u "
-                    "no_handler=%u late_handler=%u sync_failed=%u pbuffers=%u mach_off=%lldns(%lldns) target_lead=%.2f(unmeasured) "
-                    "tier=%d(unmeasured)",
+                    "no_handler=%u late_handler=%u held_far=%u sync_failed=%u pbuffers=%u mach_off=%lldns(%lldns) target_lead=%.2f "
+                    "tier=%d(no photodiode)",
                     m->angle, yscr__mtl_kind_name(m->kind), m->bits10 ? "bgr10a2" : "bgra8", (long long)m->period_ns,
-                    m->locked, m->not_shown, m->no_drawable, m->no_slot, m->late_handlers, m->sync_failed, m->pbuffers,
+                    m->locked, m->not_shown, m->no_drawable, m->no_slot, m->late_handlers, m->held_far, m->sync_failed, m->pbuffers,
                     (long long)m->mach_off, (long long)m->corr_w, YSCR__MTL_TARGET_LEAD, (int)yscr__mtl_tier(m->kind));
 }
 
@@ -8614,6 +8699,9 @@ static void yscr__update_lead(yscr_screen* s) {
     s->lead_ns = s->lead < 0 ? 0 : (int64_t)(s->lead * s->period_f);
     s->margin_ns = (int64_t)(s->period_f / 8);
     if (s->margin_ns > 1000000) s->margin_ns = 1000000;
+    /* a presenter's own (METAL: Core Animation needs a commit a period and
+     * up to 1.2 ms before its vblank, measured) */
+    if (s->caps.margin_ns > s->margin_ns) s->margin_ns = s->caps.margin_ns;
 }
 
 static void yscr__push(yscr_screen* s, const yrt_event* ev) {
