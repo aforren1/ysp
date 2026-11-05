@@ -264,6 +264,15 @@ int sec_link(void) {
                 char want[16];
                 snprintf(want, sizeof want, "%s", link_run_name[kind]);
                 if (g_opt.runs && !strstr(g_opt.runs, want)) continue;
+                if (kind == LINK_TARGET_AT) {
+                    /* macOS 27.0.1 throws CAMetalDrawableInvalidOperation from the
+                     * command buffer's schedule ("-presentAtTime should not be
+                     * called when using CAMetalDisplayLink") and the process
+                     * aborts (measured 2026-11-05): the link has no present time */
+                    P(" run target_at, preferredFrameLatency %.0f: skipped, presentDrawable:atTime: on a link's "
+                      "drawable throws CAMetalDrawableInvalidOperation\n", lats[k]);
+                    continue;
+                }
                 link_run L = { 0 };
                 L.p = p; L.dpy = dpy; L.cfg = cfg; L.ctx = ctx; L.bind_target = bind; L.prog = prog;
                 L.kind = kind;
