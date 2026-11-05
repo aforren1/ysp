@@ -792,8 +792,8 @@ In both timing sessions `AXIsProcessTrusted` and
 `CGPreflightPostEventAccess` were 0 and no key arrived. On macOS 27 the
 Accessibility list showed no entry until a process asked for access
 (`AXIsProcessTrustedWithOptions` with the prompt option, or
-`CGRequestPostEventAccess`); after that, the permission applied to the
-running VS Code without a restart.
+`CGRequestPostEventAccess`). VS Code was restarted after the grant; this
+run does not show whether the restart was necessary.
 
 Run 2026-11-05 11:33, clean session, `--kind window`, 200 keys per pass,
 all three permissions 1. Every key reached the NSEvent monitor and SDL in
