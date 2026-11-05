@@ -13,7 +13,7 @@ set -x
 "$cc" -std=gnu11 -O2 -g -fobjc-arc -DSDL_USE_BUILTIN_OPENGL_DEFINITIONS -Wall -Wextra -Wshadow -Wno-unused-parameter \
     -I"$sdl/include" -I"$here" \
     "$here/main.m" "$here/common.m" "$here/env.m" "$here/egl.m" "$here/metal.m" "$here/share.m" \
-    "$here/links.m" "$here/present.m" "$here/bits.m" "$here/input.m" \
+    "$here/links.m" "$here/present.m" "$here/bits.m" "$here/input.m" "$here/link.m" \
     -L"$sdl/lib" -lSDL3 -Wl,-rpath,"$sdl/lib" \
     -framework Cocoa -framework Metal -framework QuartzCore -framework CoreVideo \
     -framework IOSurface -framework ApplicationServices \

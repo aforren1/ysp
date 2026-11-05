@@ -238,5 +238,6 @@ int sec_links(void);     /* 2: timing sources                               */
 int sec_present(void);   /* 3 and 4: present timing per window kind         */
 int sec_bits(void);      /* 5: 10-bit and half float                        */
 int sec_input(void);     /* 6: key timestamps                               */
+int sec_link(void);      /* CAMetalDisplayLink's pacing (macOS 14+)         */
 
 #endif

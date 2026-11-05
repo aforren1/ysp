@@ -29,6 +29,7 @@ Code: `tests/probe/screen_macos/`
 | `present.m` | Section `present` (questions 3 and 4) |
 | `bits.m` | Section `bits` (question 5) |
 | `input.m` | Section `input` (question 6) |
+| `link.m` | Section `link`: CAMetalDisplayLink's pacing (4.8) |
 | `build.sh` | Builds with the system clang; links SDL3, loads ANGLE at run time |
 | `run.sh` | One command per condition |
 
@@ -84,6 +85,10 @@ measured):
 | `bits` | 10-bit and half-float targets through ANGLE, five CAMetalLayer formats | 15 s | 6.8 |
 | `input` | 200 F19 presses by `CGEventPost` and 200 by `CGEventPostToPid` | 25 s | 6.9 |
 | `all` | Every condition above, in that order | 18 min | all |
+| `link-window` | CAMetalDisplayLink (4.8), 800 x 600 window: `free` 300 frames and `target_wait`, `target_at` 20 trials, each at preferredFrameLatency 1, 2 and the default | 45 s | 6.11 |
+| `link-space` | The same in a fullscreen space | 50 s | 6.11 |
+| `link-window-heavy`, `link-space-heavy` | The same with `--heavy 400` (about 4.5 ms of GPU time a frame at 800 x 600; more fullscreen) | 50 s each | 6.11 |
+| `link` | The four `link-` conditions, in that order (not in `all`) | 3.5 min | 6.11 |
 
 With `HUD=1` in front of the command, the script turns on Metal's
 performance HUD (`MTL_HUD_ENABLED=1`), which shows "Direct" or
@@ -276,6 +281,61 @@ sees it before SDL), as SDL's event timestamp moved to mach ns through a
 correlation of `SDL_GetTicksNS`, and as its arrival in the program. The
 HID pass runs only when the probe is the active app and the screen is
 unlocked: a HID key goes to the app with the keyboard focus.
+
+### 4.8 `link`: CAMetalDisplayLink (macOS 14 and later)
+
+The question. Apple's newer pacing model drives each frame from
+`CAMetalDisplayLink`'s update callback, which hands over a drawable, a
+`targetTimestamp` (the deadline to commit by) and a
+`targetPresentationTimestamp` (when the frame will be shown). The
+PsychMetal developer reported that it schedules about 3 refreshes ahead
+(2 with Game Mode), against about 1.7 when presenting inline
+(psychtoolbox.discourse.group, thread 5811). `ysp/screen.h`'s
+`presentDrawable:atTime:` path measured depth 2 (6.5). The knob nobody has
+measured is `preferredFrameLatency` (frames; its default read 2.0 on this
+machine).
+
+The condition. Frames are driven from the update callback on a thread of
+the probe's own, whose run loop the link is added to, and each frame is
+drawn the way `ysp/screen.h` draws: ANGLE into the update's drawable
+through a pbuffer kept per IOSurface, ended with an
+`EGL_ANGLE_metal_shared_event_sync` signal that the probe's command buffer
+waits on, then the center pixel read back and the drawable presented. Each
+run is made at preferredFrameLatency 1, 2 and the default:
+
+| Run | What it does |
+|---|---|
+| `free` | Draw in every update and present its drawable: 300 frames |
+| `target_wait` | Ask for a vblank 3 updates ahead (from the first update's targetPresentationTimestamp and the period of their steps), then draw only in the update whose targetPresentationTimestamp is that vblank: 20 trials, each after the trial before was shown. This is how the model targets a vblank: it has no call for a chosen vblank, only a choice of which update to draw in |
+| `target_at` | Draw in a trial's first update and present its drawable with `presentDrawable:atTime:` the vblank 3 updates ahead; whether the link takes a time on its own drawable is part of the finding (`refused` counts exceptions) |
+
+Per frame (`link_<tag>.csv`): the update's arrival, `targetTimestamp`,
+`targetPresentationTimestamp`, the commit, the vblank asked (target runs),
+`presentedTime`, the presented handler's arrival, the read-back pixel.
+Summary per run: shown and not shown, vblank steps between shown frames,
+presented minus commit, presented minus targetPresentationTimestamp (does
+the link's promise hold), the update to presentedTime in periods, the
+targets' hits (on, early, late), read-back mismatches; `--heavy` gives the
+drops under GPU load.
+
+The decision rule. Switch `ysp/screen.h`'s METAL backend to the link only
+if, at the same rates and kinds, its depth (update or commit to the shown
+vblank) is at most 2, it drops no more frames than `present`'s `asap` and
+two-in-flight runs, and `target_wait` (or `target_at`) hits its vblank at
+least as often as `quant` (6.6). Otherwise keep `presentDrawable:atTime:`.
+
+Run it at the Mac, unlocked, with no Screen Sharing session, nothing else
+running:
+
+```sh
+sh tests/probe/screen_macos/run.sh link build/macos/screen_probe_link_<date>
+```
+
+Built and checked on 2026-11-05 with the session locked and the display
+asleep, only for a clean exit: the link gave a few updates (the period
+of their steps, 16680.375 us, and 3 drawables in the first run), then none
+once its drawables were held unshown; every run ended at its time limit
+with no frame shown, and the process exited 0. No timing run.
 
 ## 5. Results so far: functional, 2026-11-04 and 2026-11-05
 
@@ -687,6 +747,19 @@ each pass reached neither the NSEvent monitor nor SDL. Not measured.
   `borderless` (level 25) avoided a space; all kinds measured alike.
 - The mode change to 120 and 144 Hz worked through SDL, and the desktop
   mode came back.
+
+### 6.11 CAMetalDisplayLink (`link`)
+
+Pending: the conditions of 4.8 have not run at the Mac.
+
+| Kind, load | preferredFrameLatency | free: shown, steps 1 / 2+, presented minus commit p50 | presented minus targetPresentationTimestamp p50 / p99 | update to presented, periods p50 | target_wait: on / early / late | target_at: on / refused |
+|---|---|---|---|---|---|---|
+| window | 1 | | | | | |
+| window | 2 | | | | | |
+| window | default | | | | | |
+| space | 1, 2, default | | | | | |
+| window, heavy | 1, 2, default | | | | | |
+| space, heavy | 1, 2, default | | | | | |
 
 ## 7. Recommended design for `YSCR_BACKEND_METAL`
 

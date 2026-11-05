@@ -18,6 +18,7 @@ if [ -z "$cond" ]; then
     echo "conditions: env egl share links-window links-space present-window present-borderless"
     echo "            present-space present-fullscreen present-exclusive-120 present-exclusive-144"
     echo "            present-drawables2 present-syncoff bits input all"
+    echo "            link (link-window, link-space, link-window-heavy, link-space-heavy; not in all)"
     exit 2
 fi
 out=${2:-"./ysp_macos_probe_$(date +%Y%m%d)"}
@@ -83,6 +84,13 @@ present-syncoff)    run present_window_syncoff present --kind window --sync-off 
                     run present_space_syncoff present --kind space --sync-off --runs asap,pipe ;;
 bits)               run bits bits ;;
 input)              run input input --kind window --keys 200 ;;
+link-window)        run link_window link --kind window --frames 300 --reps 20 ;;
+link-space)         run link_space link --kind space --frames 300 --reps 20 ;;
+link-window-heavy)  run link_window_heavy link --kind window --frames 300 --reps 20 --heavy 400 ;;
+link-space-heavy)   run link_space_heavy link --kind space --frames 300 --reps 20 --heavy 400 ;;
+link)               for c in link-window link-space link-window-heavy link-space-heavy; do
+                        sh "$0" "$c" "$out" || exit $?
+                    done ;;
 all)                for c in env egl share links-window links-space present-window present-borderless present-space \
                              present-fullscreen present-exclusive-120 present-exclusive-144 present-drawables2 \
                              present-syncoff bits input; do

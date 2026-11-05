@@ -19,6 +19,7 @@ static void usage(void) {
          "  present  CAMetalLayer present timing: depth, presentAtTime, queue, late frames\n"
          "  bits     10-bit and half-float configurations through ANGLE and CAMetalLayer\n"
          "  input    key timestamps from CGEventPost: SDL, NSEvent and mach time\n"
+         "  link     frames from CAMetalDisplayLink (macOS 14+), preferredFrameLatency 1, 2, default\n"
          "options:\n"
          "  --out DIR        output folder (default ./ysp_macos_probe_<date>)\n"
          "  --angle DIR      ANGLE's libEGL.dylib and libGLESv2.dylib (or YSP_ANGLE_DIR)\n"
@@ -27,7 +28,7 @@ static void usage(void) {
          "                   fullscreen (SDL fullscreen without a space), exclusive (mode change)\n"
          "  --hz HZ          exclusive: the refresh rate to switch to\n"
          "  --runs a,b,...   present: asap,pipe,quant,ahead,late,sleep,queue,mindur (default all but\n"
-         "                   ahead); egl: swap\n"
+         "                   ahead); egl: swap; link: free,target_wait,target_at (default all)\n"
          "  --frames N       frames per run (default 300)\n"
          "  --reps N         present quant: presents per cell (default 20)\n"
          "  --seconds S      links: length (default 20)\n"
@@ -113,6 +114,7 @@ int main(int argc, char** argv) {
         else if (strcmp(section, "present") == 0) rc = sec_present();
         else if (strcmp(section, "bits") == 0) rc = sec_bits();
         else if (strcmp(section, "input") == 0) rc = sec_input();
+        else if (strcmp(section, "link") == 0) rc = sec_link();
         else { fprintf(stderr, "unknown section %s\n", section); usage(); }
         SDL_Quit();
         if (g_sum) fclose(g_sum);
