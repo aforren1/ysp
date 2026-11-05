@@ -105,8 +105,10 @@ int main() {
     CHECK(offsetof(xcb_randr_get_crtc_gamma_reply_t, size) == 8);
     CHECK(offsetof(xcb_input_raw_key_press_event_t, event_type) == 8);
     CHECK(offsetof(xcb_input_raw_key_press_event_t, detail) == 16);
+#if !defined(YRT_NO_THREADS)   // the panic watchdog's thread is what reads them
     CHECK(YSCR__XI_RAW_KEY_PRESS == XCB_INPUT_RAW_KEY_PRESS && YSCR__XI_RAW_KEY_RELEASE == XCB_INPUT_RAW_KEY_RELEASE);
     CHECK((1u << YSCR__XI_RAW_KEY_PRESS) == XCB_INPUT_XI_EVENT_MASK_RAW_KEY_PRESS);
+#endif
     CHECK(XCB_INPUT_DEVICE_ALL_MASTER == 1);
     // desc.raw_mice's "Device Node" lookup reads the property reply by offset
     CHECK(offsetof(xcb_input_xi_get_property_reply_t, num_items) == 16);
