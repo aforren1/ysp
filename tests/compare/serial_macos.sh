@@ -66,6 +66,7 @@ if [ -z "$OUT" ]; then
     OUT=$ROOT/build/serial-macos/$(date +%Y%m%d-%H%M%S)$( [ $QUICK = 1 ] && echo -quick || true )
 fi
 mkdir -p "$OUT"
+OUT=$(cd "$OUT" && pwd)   # MATLAB runs in another folder
 BIN=$ROOT/build/serial-macos/bin
 mkdir -p "$BIN"
 LOG=$OUT/log.txt
@@ -113,15 +114,15 @@ if ! skipped matlab; then
         say "no MATLAB at $MATLAB: skipping step 3"
         SKIP="$SKIP,matlab"
     else
-        if [ -z "${YSP_MEXOPTS:-}" ]; then
+        if [ -z "${YSP_MEX_OPTS:-}" ]; then
             XML=$(dirname "$MATLAB")/maca64/mexopts/clang_maca64.xml
             if [ -f "$XML" ] && ! defaults read com.apple.dt.Xcode IDEXcodeVersionForAgreedToGMLicense >/dev/null 2>&1; then
                 sed '/<XCODE_AGREED_VERSION>/,/<\/XCODE_AGREED_VERSION>/d' "$XML" > "$BIN/clang_maca64_clt.xml"
-                YSP_MEXOPTS=$BIN/clang_maca64_clt.xml
-                export YSP_MEXOPTS
+                YSP_MEX_OPTS=$BIN/clang_maca64_clt.xml
+                export YSP_MEX_OPTS
             fi
         fi
-        say "building ysp_serial.mexmaca64${YSP_MEXOPTS:+ with $YSP_MEXOPTS}"
+        say "building ysp_serial.mexmaca64${YSP_MEX_OPTS:+ with $YSP_MEX_OPTS}"
         (cd "$ROOT/bindings/mex" && "$MATLAB" -batch "build('serial')") >> "$LOG" 2>&1
         echo "MATLAB: $("$MATLAB" -batch "disp(version)" 2>/dev/null | tail -1)" >> "$COND"
     fi

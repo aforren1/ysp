@@ -166,7 +166,7 @@ function build(name)
         end
         % An options file for mex -f, for a compiler that mex -setup does
         % not accept (README.md, Build).
-        opts = getenv('YSP_MEXOPTS');
+        opts = getenv('YSP_MEX_OPTS');
         if ~isempty(opts)
             args = [{'-f', opts}, args];   %#ok<AGROW>
         end

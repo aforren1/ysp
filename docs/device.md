@@ -683,9 +683,64 @@ call makes the leading write itself.
   return plus the hold. At 5 ms the p99 is +18 and +33 us.
 - Not measured: a real TriggerBox, BioSemi, MMBT-S, XID box or line board
   (`p`), whose edge is an output pin, not a receive time; the parallel
-  port (none here); an FTDI or other bridge; Linux and macOS. The
-  device-timed families (XID, line board, BioSemi, MMBT-S at P) do not
+  port (none here); an FTDI or other bridge; Linux. macOS: [the next
+  section](#host-timed-pulses-on-macos-v051). The device-timed families (XID, line board, BioSemi, MMBT-S at P) do not
   use the rule.
+
+### Host-timed pulses on macOS (v0.5.1)
+
+The same board and bench on a Mac: the Teensy 4.0 echo board on
+`AppleUSBACMData`, an M2 Mac mini, macOS 27.0.1, AC power, Apple clang 21
+`-O2`, 2026-11-05 13:41 to 13:46 EST, the 1-minute load 1.07 and 1.13
+before the two runs. These are the conditions of docs/serial.md's [macOS
+with the Teensy 4.0 echo board](serial.md#macos-with-the-teensy-40-echo-board-2026-11-05),
+whose script (`tests/compare/serial_macos.sh`) ran this step too.
+`device_pulse.c` now builds on POSIX. v0.5.1 with ysp/serial.h 0.6.3. Two
+runs in opposite orders, 200 pulses per cell, at 1 and 5 ms; the cell
+medians of the two runs agree within 6 us, so they are pooled. The
+instance's worker got `YRT_POLICY_TIME_CONSTRAINT`. Summaries:
+`tests/compare/serial_pulse/results/2026-11-05-teensy40-macos/`.
+
+Missed: 0 of 2400.
+
+Width error (board width minus requested), 400 pulses per cell,
+microseconds:
+
+| Family | Width | Median (p5 / p95 / p99 / max) | Windows v0.3.1, median (p5 / p95 / p99) |
+|---|---|---|---|
+| TriggerBox (a byte) | 1 ms | -37 (-114 / -7 / +1 / +8) | -65 (-137 / -6 / +87) |
+| | 5 ms | -31 (-92 / -6 / 0 / +17) | -47 (-149 / +18 / +60) |
+| LINES, DTR | 1 ms | -19 (-69 / 0 / +6 / +12) | -29 (-55 / +65 / +664) |
+| | 5 ms | -20 (-59 / 0 / +9 / +39) | -16 (-45 / +7 / +18) |
+| LINES, RTS | 1 ms | -19 (-59 / -1 / +8 / +11) | -34 (-72 / +503 / +4163) |
+| | 5 ms | -21 (-62 / 0 / +12 / +13) | -27 (-71 / +11 / +33) |
+
+Onset (the board's edge minus the time before `ydev_out_pulse()`), median
+(p99): byte 101 us (217), DTR 94 us (179), RTS 94 us (192). On Windows:
+212 (342), 88 (153) and 116 (187). `ydev_out_pulse()` returned in 59 us
+median (p99 129) for a byte and 197 to 198 us (p99 348 to 376) for a line:
+the call makes the leading write itself, and on this driver a `write()`
+returns before the transfer (docs/serial.md). The fit's bound was 65 to
+97 us.
+
+- **Every width is within -0.16 to +0.04 ms of the request** (min to max,
+  2400 pulses), and p99 is at most +12 us. On Windows the p99 of the line
+  pulses reached +0.66 and +4.2 ms at 1 ms. That tail was the DTR call tail
+  of docs/serial.md, which came with a load on that machine; this run was
+  quiet. So the difference in the tail is partly conditions, and this data
+  cannot say how much is the driver.
+- **The worker is why the width is right on macOS.** A width that a
+  caller's own thread times on macOS is a quarter to a half of its sleep
+  too long, because the kernel coalesces the timers of unprivileged
+  threads ([The wait on a normal
+  thread](serial.md#the-wait-on-a-normal-thread)). The instance's worker
+  runs at `TIME_CONSTRAINT`, and its trailing edges are on time.
+- **The byte arrives about 110 us sooner than on Windows** (101 against
+  212 us median), as in docs/serial.md: `write()` returns at once and the
+  bulk transfer follows. DTR and RTS arrive at the same time as on
+  Windows, within 6 to 22 us at the median.
+- Not measured, as before: a real TriggerBox, BioSemi, MMBT-S, XID box or
+  line board (`p`), an FTDI bridge and Linux.
 
 ### Response rules: the lag (v0.5.0)
 
@@ -921,4 +976,5 @@ compared: pair a reading of each clock before you mix their times.
   open-source code (docs/box.md).
 - A vendor device on this layer; inputs from a real board. The only
   timing numbers on a device are the host-timed outputs into the Teensy
-  4.0 echo board ([v0.3.1](#host-timed-pulses-on-a-teensy-40-v031)).
+  4.0 echo board, on Windows ([v0.3.1](#host-timed-pulses-on-a-teensy-40-v031))
+  and on macOS ([v0.5.1](#host-timed-pulses-on-macos-v051)).

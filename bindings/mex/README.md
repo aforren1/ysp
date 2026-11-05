@@ -74,12 +74,12 @@ build('parallel')      % builds one
   been accepted", because MATLAB's `clang_maca64.xml` reads the Xcode app's
   license record. The Command Line Tools' clang builds the bindings. Copy
   the options file without that check and name the copy in the environment
-  variable `YSP_MEXOPTS`; `build.m` then gives it to `mex -f`:
+  variable `YSP_MEX_OPTS`; `build.m` then gives it to `mex -f`:
 
   ```sh
   sed '/<XCODE_AGREED_VERSION>/,/<\/XCODE_AGREED_VERSION>/d' \
       /Applications/MATLAB_R2026b.app/bin/maca64/mexopts/clang_maca64.xml > /tmp/clang_maca64_clt.xml
-  YSP_MEXOPTS=/tmp/clang_maca64_clt.xml matlab -batch "run('bindings/mex/build.m')"
+  YSP_MEX_OPTS=/tmp/clang_maca64_clt.xml matlab -batch "run('bindings/mex/build.m')"
   ```
 
   Used on 2026-11-05 with MATLAB R2026b and Apple clang 21 (Command Line

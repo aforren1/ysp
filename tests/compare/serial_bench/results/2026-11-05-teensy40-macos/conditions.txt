@@ -1,0 +1,79 @@
+date: 2026-11-05 13:15:45 EST
+machine: Mac14,3, Apple M2, 8 cores
+OS: macOS 27.0.1 (26A434), arm64
+power: Now drawing from 'AC Power'
+compiler: Apple clang version 21.0.0 (clang-2100.4.1.1)
+tree: a631d23 (with local changes)
+headers: ysp/serial.h - v0.6.3 ysp/device.h - v0.5.1 ysp/rt.h - v0.10.0 
+port: /dev/cu.usbmodem75925601
+board (ioreg):
+    "idProduct" = 1155
+    "bcdDevice" = 633
+    "USB Product Name" = "USB Serial"
+    "locationID" = 1048576
+    "Device Speed" = 2
+    "idVendor" = 5824
+    "USB Serial Number" = "7592560"
+driver: AppleUSBACMData 
+load start: 13:15:45 loadavg { 1.26 2.05 2.35 }
+     12.8 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+     12.3 /Users/brainworks/.vscode/extensions/anthropic.claude-code-2.1.318-darwin-arm64/resources/native-binary/claude
+     12.2 /Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper (Renderer).app/Contents/MacOS/Code Helper (Renderer)
+      4.5 /Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper
+      2.7 sh
+MATLAB: 26.2.0.3433840 (R2026b) Update 1
+load raw1: 13:16:05 loadavg { 1.55 2.06 2.34 }
+     10.5 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared
+      3.5 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mds_stores
+      1.8 /Users/brainworks/Library/Application Support/MathWorks/ServiceHost/v2026.11.0.3/MathWorksServiceHost.app/Contents/MacOS/MathWorksServiceHost
+      1.4 /Users/brainworks/.vscode/extensions/anthropic.claude-code-2.1.318-darwin-arm64/resources/native-binary/claude
+      1.1 /usr/libexec/trustd
+load raw2: 13:16:49 loadavg { 1.71 2.03 2.32 }
+      3.1 /Users/brainworks/.vscode/extensions/anthropic.claude-code-2.1.318-darwin-arm64/resources/native-binary/claude
+      2.6 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared
+      2.1 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared
+      0.7 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mds_stores
+      0.5 /usr/libexec/runningboardd
+load matlab1: 13:17:34 loadavg { 1.98 2.06 2.31 }
+      2.5 /Users/brainworks/.vscode/extensions/anthropic.claude-code-2.1.318-darwin-arm64/resources/native-binary/claude
+      0.4 /Users/brainworks/Library/Application Support/MathWorks/ServiceHost/v2026.11.0.3/MathWorksServiceHost.app/Contents/Helpers/MathWorksServiceHost-Monitor.app/Contents/MacOS/MathWorksServiceHost-Monitor
+      0.1 ugrep
+      0.0 zsh
+      0.0 tail
+load matlab2: 13:19:10 loadavg { 2.27 2.16 2.32 }
+     12.7 /Users/brainworks/Library/Application Support/MathWorks/ServiceHost/v2026.11.0.3/MathWorksServiceHost.app/Contents/MacOS/MathWorksServiceHost
+      3.7 /System/Library/CoreServices/launchservicesd
+      2.5 /usr/libexec/opendirectoryd
+      1.9 /System/Library/CoreServices/MenuBarAgent.app/Contents/MacOS/MenuBarAgent
+      1.1 /Users/brainworks/Library/Application Support/MathWorks/ServiceHost/v2026.11.0.3/MathWorksServiceHost.app/Contents/Helpers/MathWorksServiceHost-Monitor.app/Contents/MacOS/MathWorksServiceHost-Monitor
+load pulse1: 13:20:47 loadavg { 2.75 2.34 2.38 }
+     14.0 /Users/brainworks/Library/Application Support/MathWorks/ServiceHost/v2026.11.0.3/MathWorksServiceHost.app/Contents/MacOS/MathWorksServiceHost
+      2.5 /usr/libexec/opendirectoryd
+      0.6 /usr/sbin/mDNSResponder
+      0.4 /Users/brainworks/Library/Application Support/MathWorks/ServiceHost/v2026.11.0.3/MathWorksServiceHost.app/Contents/Helpers/MathWorksServiceHost-Monitor.app/Contents/MacOS/MathWorksServiceHost-Monitor
+      0.4 /Users/brainworks/.vscode/extensions/anthropic.claude-code-2.1.318-darwin-arm64/resources/native-binary/claude
+load pulse2: 13:31:21 loadavg { 1.19 1.41 1.79 }
+      0.9 /Users/brainworks/.vscode/extensions/anthropic.claude-code-2.1.318-darwin-arm64/resources/native-binary/claude
+      0.3 /usr/libexec/opendirectoryd
+      0.3 /usr/libexec/airportd
+      0.2 /System/Library/CoreServices/WiFiAgent.app/Contents/MacOS/WiFiAgent
+      0.1 ugrep
+load device1: 13:41:48 loadavg { 1.07 1.14 1.42 }
+      0.8 /Users/brainworks/.vscode/extensions/anthropic.claude-code-2.1.318-darwin-arm64/resources/native-binary/claude
+      0.2 /System/Library/Frameworks/CoreMediaIO.framework/Versions/A/Resources/com.apple.cmio.registerassistantservice
+      0.1 ugrep
+      0.1 /usr/libexec/replayd
+      0.1 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+load device2: 13:43:58 loadavg { 1.13 1.13 1.37 }
+      1.0 /Users/brainworks/.vscode/extensions/anthropic.claude-code-2.1.318-darwin-arm64/resources/native-binary/claude
+      0.1 ugrep
+      0.0 zsh
+      0.0 tail
+      0.0 su
+load end: 13:46:09 loadavg { 1.21 1.13 1.33 }
+      0.3 /Users/brainworks/.vscode/extensions/anthropic.claude-code-2.1.318-darwin-arm64/resources/native-binary/claude
+      0.2 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+      0.1 /sbin/launchd
+      0.0 zsh
+      0.0 su
+duration: 30 min 24 s
